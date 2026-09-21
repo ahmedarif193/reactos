@@ -985,8 +985,8 @@ DbgkpMarkProcessPeb(IN PEPROCESS Process)
         BeingDebugged = (Process->DebugPort != NULL);
         Process->Peb->BeingDebugged = BeingDebugged;
 #ifdef _WIN64
-        if (Process->Wow64Process && Process->Wow64Process->Peb)
-            ((PEB32 *)Process->Wow64Process->Peb)->BeingDebugged = BeingDebugged;
+        if (Process->WoW64Process && Process->WoW64Process->Peb)
+            ((PEB32 *)Process->WoW64Process->Peb)->BeingDebugged = BeingDebugged;
 #endif
 
         /* Release lock */

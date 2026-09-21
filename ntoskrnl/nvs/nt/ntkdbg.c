@@ -35,6 +35,19 @@ MiKdbParseAddress(
     return TRUE;
 }
 
+BOOLEAN
+MmKdbIsSessionLeader(
+    _In_ PEPROCESS Snapshot)
+{
+    PMI_PROCESS Native = MI_PROCESS_OF(Snapshot);
+    BOOLEAN Leader = FALSE;
+
+    if (Native != NULL && !NT_SUCCESS(KdbpSafeReadMemory(&Leader, &Native->SessionLeader, sizeof(Leader))))
+        Leader = FALSE;
+
+    return Leader;
+}
+
 static
 PMI_ADDRESS_SPACE
 MiKdbSpaceFor(

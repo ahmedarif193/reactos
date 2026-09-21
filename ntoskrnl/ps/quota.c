@@ -302,18 +302,21 @@ PspChargeProcessQuotaSpecifiedPool(
         /* We're being given, check that's not a system one */
         ASSERT(Process != PsInitialSystemProcess);
 
-        InterlockedExchangeAddSizeT(&Process->QuotaUsage[QuotaType], Amount);
-
-        /*
-         * OK, we've now updated the quota usage of the process
-         * based upon the amount that the caller wanted to charge.
-         * Although the peak of process quota can be less than it was
-         * before so update the peaks as well accordingly.
-         */
-        if (Process->QuotaPeak[QuotaType] < Process->QuotaUsage[QuotaType])
+        if (QuotaType != PsPageFile)
         {
-            InterlockedExchangeSizeT(&Process->QuotaPeak[QuotaType],
-                                     Process->QuotaUsage[QuotaType]);
+            InterlockedExchangeAddSizeT(&Process->ProcessQuotaUsage[QuotaType], Amount);
+
+            /*
+             * OK, we've now updated the quota usage of the process
+             * based upon the amount that the caller wanted to charge.
+             * Although the peak of process quota can be less than it was
+             * before so update the peaks as well accordingly.
+             */
+            if (Process->ProcessQuotaPeak[QuotaType] < Process->ProcessQuotaUsage[QuotaType])
+            {
+                InterlockedExchangeSizeT(&Process->ProcessQuotaPeak[QuotaType],
+                                         Process->ProcessQuotaUsage[QuotaType]);
+            }
         }
     }
 
@@ -371,15 +374,15 @@ PspReturnProcessQuotaSpecifiedPool(
     KeAcquireSpinLock(&PspQuotaLock, &OldIrql);
 
     /* Does the caller return more quota than it was previously charged? */
-    if ((Process && Process->QuotaUsage[QuotaType] < Amount) ||
+    if ((Process && QuotaType != PsPageFile && Process->ProcessQuotaUsage[QuotaType] < Amount) ||
         QuotaBlock->QuotaEntry[QuotaType].Usage < Amount)
     {
         /* It does, crash the system! */
         KeBugCheckEx(QUOTA_UNDERFLOW,
                      (ULONG_PTR)Process,
                      (ULONG_PTR)QuotaType,
-                     Process ? (ULONG_PTR)Process->QuotaUsage[QuotaType] :
-                               QuotaBlock->QuotaEntry[QuotaType].Usage,
+                     (Process && QuotaType != PsPageFile) ? (ULONG_PTR)Process->ProcessQuotaUsage[QuotaType] :
+                                                            QuotaBlock->QuotaEntry[QuotaType].Usage,
                      (ULONG_PTR)Amount);
     }
 
@@ -429,7 +432,8 @@ PspReturnProcessQuotaSpecifiedPool(
         ASSERT(Process != PsInitialSystemProcess);
 
         /* Decrease the process' quota usage */
-        InterlockedExchangeAddSizeT(&Process->QuotaUsage[QuotaType], -(LONG_PTR)Amount);
+        if (QuotaType != PsPageFile)
+            InterlockedExchangeAddSizeT(&Process->ProcessQuotaUsage[QuotaType], -(LONG_PTR)Amount);
     }
 
     /* We're done, release the lock */
@@ -574,14 +578,14 @@ PspDereferenceQuotaBlock(
     /* Iterate over the process quota types if we have a process */
     if (Process)
     {
-        for (PsQuotaTypeIndex = PsNonPagedPool; PsQuotaTypeIndex < PsQuotaTypes; PsQuotaTypeIndex++)
+        for (PsQuotaTypeIndex = PsNonPagedPool; PsQuotaTypeIndex < PsPageFile; PsQuotaTypeIndex++)
         {
             /*
              * We need to make sure that the quota usage
              * uniquely associated with the process is 0
              * on that moment the process gets destroyed.
              */
-            ASSERT(Process->QuotaUsage[PsQuotaTypeIndex] == 0);
+            ASSERT(Process->ProcessQuotaUsage[PsQuotaTypeIndex] == 0);
         }
 
         /* As the process is now gone, decrement the process count */
@@ -1182,9 +1186,9 @@ PspSetQuotaLimits(
         /* Initialize the quota block */
         QuotaBlock->ReferenceCount = 1;
         QuotaBlock->ProcessCount = 1;
-        QuotaBlock->QuotaEntry[PsNonPagedPool].Peak = Process->QuotaPeak[PsNonPagedPool];
-        QuotaBlock->QuotaEntry[PsPagedPool].Peak = Process->QuotaPeak[PsPagedPool];
-        QuotaBlock->QuotaEntry[PsPageFile].Peak = Process->QuotaPeak[PsPageFile];
+        QuotaBlock->QuotaEntry[PsNonPagedPool].Peak = Process->ProcessQuotaPeak[PsNonPagedPool];
+        QuotaBlock->QuotaEntry[PsPagedPool].Peak = Process->ProcessQuotaPeak[PsPagedPool];
+        QuotaBlock->QuotaEntry[PsPageFile].Peak = Process->CommitChargePeak;
         QuotaBlock->QuotaEntry[PsNonPagedPool].Limit = PspDefaultQuotaBlock.QuotaEntry[PsNonPagedPool].Limit;
         QuotaBlock->QuotaEntry[PsPagedPool].Limit = PspDefaultQuotaBlock.QuotaEntry[PsPagedPool].Limit;
         QuotaBlock->QuotaEntry[PsPageFile].Limit = PspDefaultQuotaBlock.QuotaEntry[PsPageFile].Limit;

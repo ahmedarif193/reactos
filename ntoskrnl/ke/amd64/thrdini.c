@@ -207,7 +207,7 @@ KiSwapContextResume(
         KiSwapProcess(NewProcess, OldProcess);
     }
 
-    if (NewThread->Teb && THREAD_TO_PROCESS((PETHREAD)NewThread)->Wow64Process) CompatTeb = (PUCHAR)NewThread->Teb + ROUND_TO_PAGES(sizeof(TEB));
+    if (NewThread->Teb && THREAD_TO_PROCESS((PETHREAD)NewThread)->WoW64Process) CompatTeb = (PUCHAR)NewThread->Teb + ROUND_TO_PAGES(sizeof(TEB));
 
     /* Set TEB pointer and GS base */
     Pcr->NtTib.Self = (PVOID)NewThread->Teb;

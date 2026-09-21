@@ -131,7 +131,7 @@ MmCreateProcessAddressSpace(
     ULONG Attempts = 0;
     NTSTATUS Status;
 
-    ASSERT(Process->Vm.VmWorkingSetList == NULL);
+    ASSERT(Process->Vm.Instance.VmWorkingSetList == NULL);
 
     Native = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Native), 'rPmM');
     if (Native == NULL)
@@ -151,9 +151,9 @@ MmCreateProcessAddressSpace(
     if (MinWs != 0)
         Native->WorkingSetMinimum = MinWs;
 
-    Process->Vm.VmWorkingSetList = (PVOID)Native;
-    Process->Vm.MinimumWorkingSetSize = (ULONG)Native->WorkingSetMinimum;
-    Process->Vm.MaximumWorkingSetSize = (ULONG)Native->WorkingSetMaximum;
+    Process->Vm.Instance.VmWorkingSetList = (PVOID)Native;
+    Process->Vm.Instance.MinimumWorkingSetSize = (ULONG)Native->WorkingSetMinimum;
+    Process->Vm.Instance.MaximumWorkingSetSize = (ULONG)Native->WorkingSetMaximum;
     Process->AddressSpaceInitialized = 1;
     Native->Space.CommitOwner = Process;
 
@@ -175,7 +175,7 @@ MmInitializeHandBuiltProcess(
     DirectoryTableBase[1] = KPROCESS_DTB1(&Current->Pcb);
 
     ExInitializePushLock(&Process->AddressCreationLock);
-    Process->Vm.VmWorkingSetList = Current->Vm.VmWorkingSetList;
+    Process->Vm.Instance.VmWorkingSetList = Current->Vm.Instance.VmWorkingSetList;
     Process->HasAddressSpace = TRUE;
     return STATUS_SUCCESS;
 }
@@ -203,7 +203,10 @@ MiSelectBottomUpBase(
     ULONG Seed;
 
     if (!Control->Image || !(DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE))
+    {
+        Process->MitigationFlagsValues.StackRandomizationDisabled = 1;
         return;
+    }
 
     if (Control->Image64 && (DllCharacteristics & IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA))
     {
@@ -212,7 +215,13 @@ MiSelectBottomUpBase(
     }
 
     if (Floor < Space->LowestVa || Floor + Slots * MI_ALLOCATION_GRANULARITY > Space->HighestVa)
+    {
+        Process->MitigationFlagsValues.StackRandomizationDisabled = 1;
         return;
+    }
+
+    if (Floor == MI_NT_HIGH_ENTROPY_FLOOR)
+        Process->MitigationFlagsValues.HighEntropyASLREnabled = 1;
 
     Seed = KeQueryPerformanceCounter(NULL).LowPart ^ (ULONG)KeQueryInterruptTime() ^ (ULONG)(ULONG_PTR)Process;
     Space->BottomUpVa = Floor + (RtlRandomEx(&Seed) % Slots) * MI_ALLOCATION_GRANULARITY;
@@ -260,7 +269,7 @@ MmInitializeProcessAddressSpace(
             goto CloneDone;
         }
 #ifdef _WIN64
-        if (ProcessClone->Wow64Process != NULL)
+        if (ProcessClone->WoW64Process != NULL)
         {
             Status = STATUS_NOT_SUPPORTED;
             goto CloneDone;
@@ -321,7 +330,7 @@ CloneDone:
         PFILE_OBJECT FileObject = MmGetFileObjectForSection(Section);
         UNICODE_STRING FileName = FileObject->FileName;
         PWCHAR Source = (PWCHAR)((PCHAR)FileName.Buffer + FileName.Length);
-        PCHAR Destination = Process->ImageFileName;
+        PCHAR Destination = (PCHAR)Process->ImageFileName;
         USHORT Length = 0;
 
         if (FileName.Buffer != NULL)
@@ -372,7 +381,7 @@ MmCleanProcessAddressSpace(
     MiProcessQueryCounters(Native, &(MI_PROCESS_COUNTERS){0});
     MiSecureRangePurgeProcess(Process);
     MiCleanAddressSpace(&Native->Space);
-    Process->Vm.WorkingSetSize = 0;
+    Process->Vm.Instance.WorkingSetSize = 0;
     Process->VirtualSize = 0;
     Process->CommitCharge = 0;
 }
@@ -388,7 +397,7 @@ MmDeleteProcessAddressSpace(
         return;
 
     MiSessionRemoveProcess(Process);
-    Process->Vm.VmWorkingSetList = NULL;
+    Process->Vm.Instance.VmWorkingSetList = NULL;
     MiProcessDelete(&MiProcessManager, Native);
     ExFreePoolWithTag(Native, 'rPmM');
 
@@ -664,7 +673,7 @@ MmCreateTeb(
 #ifdef _WIN64
     ULONG Teb32Offset = ROUND_TO_PAGES(sizeof(TEB));
 
-    if (Process->Wow64Process != NULL)
+    if (Process->WoW64Process != NULL)
     {
         TebSize = Teb32Offset + ROUND_TO_PAGES(sizeof(TEB32));
         HighestAddress = MM_HIGHEST_USER_ADDRESS_WOW64;
@@ -711,7 +720,7 @@ MmCreateTeb(
         Teb->StaticUnicodeString.Buffer = Teb->StaticUnicodeBuffer;
 
 #ifdef _WIN64
-        if (Process->Wow64Process != NULL)
+        if (Process->WoW64Process != NULL)
         {
             TEB32 *Teb32 = (TEB32 *)((PUCHAR)Teb + Teb32Offset);
 
@@ -732,7 +741,7 @@ MmCreateTeb(
             Teb32->ClientId.UniqueProcess = HandleToUlong(ClientId->UniqueProcess);
             Teb32->ClientId.UniqueThread = HandleToUlong(ClientId->UniqueThread);
             Teb32->RealClientId = Teb32->ClientId;
-            Teb32->ProcessEnvironmentBlock = PtrToUlong(Process->Wow64Process->Peb);
+            Teb32->ProcessEnvironmentBlock = PtrToUlong(Process->WoW64Process->Peb);
             Teb32->CurrentLocale = PsDefaultThreadLocaleId;
             Teb32->StaticUnicodeString.MaximumLength = sizeof(Teb32->StaticUnicodeBuffer);
             Teb32->StaticUnicodeString.Buffer = PtrToUlong(Teb32->StaticUnicodeBuffer);
@@ -770,9 +779,9 @@ MmSetMemoryPriorityProcess(
     _In_ PEPROCESS Process,
     _In_ UCHAR MemoryPriority)
 {
-    UCHAR Old = (UCHAR)Process->Vm.Flags.MemoryPriority;
+    UCHAR Old = (UCHAR)Process->Vm.Instance.Flags.MemoryPriority;
 
-    Process->Vm.Flags.MemoryPriority = MemoryPriority;
+    Process->Vm.Instance.Flags.MemoryPriority = MemoryPriority;
     return Old;
 }
 
@@ -810,11 +819,11 @@ MmAdjustWorkingSetSize(
 
     Status = MiProcessSetWorkingSetLimits(Native, BYTES_TO_PAGES(WorkingSetMinimumInBytes),
                                           BYTES_TO_PAGES(WorkingSetMaximumInBytes),
-                                          (BOOLEAN)Process->Vm.Flags.MaximumWorkingSetHard);
+                                          (BOOLEAN)Process->Vm.Instance.Flags.MaximumWorkingSetHard);
     if (!NT_SUCCESS(Status))
         return STATUS_BAD_WORKING_SET_LIMIT;
 
-    Process->Vm.MinimumWorkingSetSize = (ULONG)Native->WorkingSetMinimum;
-    Process->Vm.MaximumWorkingSetSize = (ULONG)Native->WorkingSetMaximum;
+    Process->Vm.Instance.MinimumWorkingSetSize = (ULONG)Native->WorkingSetMinimum;
+    Process->Vm.Instance.MaximumWorkingSetSize = (ULONG)Native->WorkingSetMaximum;
     return STATUS_SUCCESS;
 }

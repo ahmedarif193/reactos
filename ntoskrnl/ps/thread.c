@@ -1069,7 +1069,7 @@ NtCreateThread(OUT PHANDLE ThreadHandle,
         {
             Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_CREATE_THREAD, PsProcessType, KeGetPreviousMode(), (PVOID *)&Process, NULL);
             if (!NT_SUCCESS(Status)) return Status;
-            if (Process->Wow64Process == NULL)
+            if (Process->WoW64Process == NULL)
             {
                 ObDereferenceObject(Process);
                 return STATUS_INVALID_PARAMETER;

@@ -1781,7 +1781,7 @@ KiSystemServiceHandler(IN PKTRAP_FRAME TrapFrame,
     DescriptorTable = (PVOID)((ULONG_PTR)Thread->ServiceTable + Offset);
 
     if ((Offset & SERVICE_TABLE_TEST) &&
-        (ReadAcquire(&PsGetCurrentProcess()->SystemCallDisablePolicy) & 1))
+        PsGetCurrentProcess()->MitigationFlagsValues.DisallowWin32kSystemCalls)
     {
         Status = STATUS_INVALID_SYSTEM_SERVICE;
         goto ExitCall;

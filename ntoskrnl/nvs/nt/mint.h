@@ -55,7 +55,7 @@ extern SIZE_T MmtotalCommitLimitMaximum;
 extern MI_SYSTEM MiSystem;
 extern MI_PROCESS_MANAGER MiProcessManager;
 
-#define MI_PROCESS_OF(Process)  ((PMI_PROCESS)(Process)->Vm.VmWorkingSetList)
+#define MI_PROCESS_OF(Process)  ((PMI_PROCESS)(Process)->Vm.Instance.VmWorkingSetList)
 #define MI_IS_SYSTEM_VA(Va)     ((ULONG_PTR)(Va) >= (ULONG_PTR)MmSystemRangeStart)
 
 FORCEINLINE
@@ -76,7 +76,7 @@ MiSpaceForAddress(
     if (!MI_IS_SYSTEM_VA(Address))
         return MiSpaceOfProcess(Process);
 
-    if (MiArchIsSelfMapAddress((ULONG64)(ULONG_PTR)Address) && Process->Vm.VmWorkingSetList != NULL)
+    if (MiArchIsSelfMapAddress((ULONG64)(ULONG_PTR)Address) && Process->Vm.Instance.VmWorkingSetList != NULL)
         return MiSpaceOfProcess(Process);
 
     return &MiSystem.SystemSpace;

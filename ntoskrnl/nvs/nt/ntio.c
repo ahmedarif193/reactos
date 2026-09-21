@@ -244,7 +244,7 @@ MmIsAddressValid(
 {
     ULONG64 Physical;
 
-    if (!MI_IS_SYSTEM_VA(VirtualAddress) && PsGetCurrentProcess()->Vm.VmWorkingSetList == NULL)
+    if (!MI_IS_SYSTEM_VA(VirtualAddress) && PsGetCurrentProcess()->Vm.Instance.VmWorkingSetList == NULL)
         return FALSE;
 
     return MiPtTranslate(MiSpaceForAddress(VirtualAddress), (ULONG64)(ULONG_PTR)VirtualAddress, &Physical, NULL);

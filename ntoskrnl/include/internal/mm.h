@@ -13,7 +13,6 @@ extern "C" {
 
 struct _EPROCESS;
 
-extern PMMSUPPORT MmKernelAddressSpace;
 extern PFN_COUNT MiFreeSwapPages;
 extern PFN_COUNT MiUsedSwapPages;
 extern PFN_COUNT MmNumberOfPhysicalPages;
@@ -1866,63 +1865,6 @@ MmGrowKernelStack(
 );
 
 
-FORCEINLINE
-VOID
-MmLockAddressSpace(PMMSUPPORT AddressSpace)
-{
-    ASSERT(!PsGetCurrentThread()->OwnsProcessWorkingSetExclusive);
-    ASSERT(!PsGetCurrentThread()->OwnsProcessWorkingSetShared);
-    ASSERT(!PsGetCurrentThread()->OwnsSystemWorkingSetExclusive);
-    ASSERT(!PsGetCurrentThread()->OwnsSystemWorkingSetShared);
-    ASSERT(!PsGetCurrentThread()->OwnsSessionWorkingSetExclusive);
-    ASSERT(!PsGetCurrentThread()->OwnsSessionWorkingSetShared);
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    /*
-     * At Vista+, AddressCreationLock is EX_PUSH_LOCK.
-     * Enter guarded region to disable APCs — callers downstream
-     * (MiLockProcessWorkingSetUnsafe) assert APCs are disabled.
-     * KeAcquireGuardedMutex did this implicitly at pre-Vista.
-     */
-    KeEnterGuardedRegion();
-    ExAcquirePushLockExclusive(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
-#else
-    KeAcquireGuardedMutex(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
-#endif
-}
-
-FORCEINLINE
-VOID
-MmUnlockAddressSpace(PMMSUPPORT AddressSpace)
-{
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    ExReleasePushLockExclusive(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
-    KeLeaveGuardedRegion();
-#else
-    KeReleaseGuardedMutex(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
-#endif
-}
-
-FORCEINLINE
-PEPROCESS
-MmGetAddressSpaceOwner(IN PMMSUPPORT AddressSpace)
-{
-    if (AddressSpace == MmKernelAddressSpace) return NULL;
-    return CONTAINING_RECORD(AddressSpace, EPROCESS, Vm);
-}
-
-FORCEINLINE
-PMMSUPPORT
-MmGetCurrentAddressSpace(VOID)
-{
-    return &((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->Vm;
-}
-
-FORCEINLINE
-PMMSUPPORT
-MmGetKernelAddressSpace(VOID)
-{
-    return MmKernelAddressSpace;
-}
 
 
 /* expool.c ******************************************************************/

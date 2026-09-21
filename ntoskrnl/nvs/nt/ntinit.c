@@ -331,13 +331,13 @@ MiInitializePhase0(
     MmWriteableSharedUserData->LargePageMinimum = MiSystem.Arch->SupportsLargePages
         ? (ULONG)MiSystem.Arch->LargePageSize : 0;
 
-    Process->Vm.VmWorkingSetList = (PVOID)&MiSystemProcess;
+    Process->Vm.Instance.VmWorkingSetList = (PVOID)&MiSystemProcess;
     KPROCESS_DTB0(&Process->Pcb) = (ULONG_PTR)(MiBootRootFrame << PAGE_SHIFT);
     KPROCESS_DTB1(&Process->Pcb) = (ULONG_PTR)(MiBootRootFrame << PAGE_SHIFT);
 
     if (PsIdleProcess != NULL && PsIdleProcess != Process)
     {
-        PsIdleProcess->Vm.VmWorkingSetList = (PVOID)&MiSystemProcess;
+        PsIdleProcess->Vm.Instance.VmWorkingSetList = (PVOID)&MiSystemProcess;
         KPROCESS_DTB0(&PsIdleProcess->Pcb) = KPROCESS_DTB0(&Process->Pcb);
         KPROCESS_DTB1(&PsIdleProcess->Pcb) = KPROCESS_DTB1(&Process->Pcb);
     }

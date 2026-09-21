@@ -54,7 +54,7 @@ PsConvertToGuiThread(VOID)
 
     /* Make sure win32k is here */
     if (!PspW32ProcessCallout) return STATUS_ACCESS_DENIED;
-    if (ReadAcquire(&Process->SystemCallDisablePolicy) & 1) return STATUS_INVALID_SYSTEM_SERVICE;
+    if (Process->MitigationFlagsValues.DisallowWin32kSystemCalls) return STATUS_INVALID_SYSTEM_SERVICE;
 
     /* Make sure it's not already win32 */
 #if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)

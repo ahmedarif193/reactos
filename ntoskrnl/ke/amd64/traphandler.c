@@ -258,7 +258,7 @@ KiSystemCallHandler(
 #endif
 
     if ((TableIndex == WIN32K_SERVICE_INDEX) &&
-        (ReadAcquire(&PsGetCurrentProcess()->SystemCallDisablePolicy) & 1))
+        PsGetCurrentProcess()->MitigationFlagsValues.DisallowWin32kSystemCalls)
     {
         TrapFrame->Rax = STATUS_INVALID_SYSTEM_SERVICE;
         return (PVOID)NtSyscallFailure;

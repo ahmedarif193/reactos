@@ -76,7 +76,7 @@ ObpProcessDosDeviceSymbolicLink(IN POBJECT_SYMBOLIC_LINK SymbolicLink,
         /* Otherwise, use the one in the process */
         else
         {
-            DeviceMap = PsGetCurrentProcess()->DeviceMap;
+            DeviceMap = PsGetCurrentProcess()->DeviceMap.Object;
         }
 
 ReparseTargetPath:

@@ -1237,7 +1237,7 @@ ExpQuerySystemProcessInformation(
             }
             if (!ImageNameLength && Process != PsIdleProcess)
             {
-              ImageNameLength = (USHORT)strlen(Process->ImageFileName) * sizeof(WCHAR);
+              ImageNameLength = (USHORT)strlen((PCHAR)Process->ImageFileName) * sizeof(WCHAR);
             }
 
             /* Round up the image name length as NT does */
@@ -1273,7 +1273,7 @@ ExpQuerySystemProcessInformation(
                     }
                     else
                     {
-                        RtlInitAnsiString(&ImageName, Process->ImageFileName);
+                        RtlInitAnsiString(&ImageName, (PCSZ)Process->ImageFileName);
                         Status = RtlAnsiStringToUnicodeString(&SpiCurrent->ImageName, &ImageName, FALSE);
                         if (!NT_SUCCESS(Status))
                         {
@@ -1297,17 +1297,17 @@ ExpQuerySystemProcessInformation(
 
                 SpiCurrent->PeakVirtualSize = Process->PeakVirtualSize;
                 SpiCurrent->VirtualSize = Process->VirtualSize;
-                SpiCurrent->PageFaultCount = Process->Vm.PageFaultCount;
-                SpiCurrent->PeakWorkingSetSize = Process->Vm.PeakWorkingSetSize;
-                SpiCurrent->WorkingSetSize = Process->Vm.WorkingSetSize;
-                SpiCurrent->QuotaPeakPagedPoolUsage = Process->QuotaPeak[PsPagedPool];
-                SpiCurrent->QuotaPagedPoolUsage = Process->QuotaUsage[PsPagedPool];
-                SpiCurrent->QuotaPeakNonPagedPoolUsage = Process->QuotaPeak[PsNonPagedPool];
-                SpiCurrent->QuotaNonPagedPoolUsage = Process->QuotaUsage[PsNonPagedPool];
+                SpiCurrent->PageFaultCount = Process->Vm.Instance.PageFaultCount;
+                SpiCurrent->PeakWorkingSetSize = Process->Vm.Instance.PeakWorkingSetSize;
+                SpiCurrent->WorkingSetSize = Process->Vm.Instance.WorkingSetSize;
+                SpiCurrent->QuotaPeakPagedPoolUsage = Process->ProcessQuotaPeak[PsPagedPool];
+                SpiCurrent->QuotaPagedPoolUsage = Process->ProcessQuotaUsage[PsPagedPool];
+                SpiCurrent->QuotaPeakNonPagedPoolUsage = Process->ProcessQuotaPeak[PsNonPagedPool];
+                SpiCurrent->QuotaNonPagedPoolUsage = Process->ProcessQuotaUsage[PsNonPagedPool];
                 /* Bytes on the wire; the page file quota and the commit
                  * charge are tracked in pages (see ProcessVmCounters) */
-                SpiCurrent->PagefileUsage = Process->QuotaUsage[PsPageFile] << PAGE_SHIFT;
-                SpiCurrent->PeakPagefileUsage = Process->QuotaPeak[PsPageFile] << PAGE_SHIFT;
+                SpiCurrent->PagefileUsage = Process->CommitCharge << PAGE_SHIFT;
+                SpiCurrent->PeakPagefileUsage = Process->CommitChargePeak << PAGE_SHIFT;
                 SpiCurrent->PrivatePageCount = Process->CommitCharge << PAGE_SHIFT;
 
                 /* Now do the threads */

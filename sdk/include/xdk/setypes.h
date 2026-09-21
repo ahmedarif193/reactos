@@ -343,6 +343,26 @@ $if (_NTDDK_)
 $endif (_NTDDK_)
 $if (_NTDDK_ || _WINNT_)
 
+typedef UCHAR SE_SIGNING_LEVEL, *PSE_SIGNING_LEVEL;
+
+#define SE_SIGNING_LEVEL_UNCHECKED         0x00000000
+#define SE_SIGNING_LEVEL_UNSIGNED          0x00000001
+#define SE_SIGNING_LEVEL_ENTERPRISE        0x00000002
+#define SE_SIGNING_LEVEL_CUSTOM_1          0x00000003
+#define SE_SIGNING_LEVEL_AUTHENTICODE      0x00000004
+#define SE_SIGNING_LEVEL_CUSTOM_2          0x00000005
+#define SE_SIGNING_LEVEL_STORE             0x00000006
+#define SE_SIGNING_LEVEL_CUSTOM_3          0x00000007
+#define SE_SIGNING_LEVEL_ANTIMALWARE       SE_SIGNING_LEVEL_CUSTOM_3
+#define SE_SIGNING_LEVEL_MICROSOFT         0x00000008
+#define SE_SIGNING_LEVEL_CUSTOM_4          0x00000009
+#define SE_SIGNING_LEVEL_CUSTOM_5          0x0000000A
+#define SE_SIGNING_LEVEL_DYNAMIC_CODEGEN   0x0000000B
+#define SE_SIGNING_LEVEL_WINDOWS           0x0000000C
+#define SE_SIGNING_LEVEL_CUSTOM_7          0x0000000D
+#define SE_SIGNING_LEVEL_WINDOWS_TCB       0x0000000E
+#define SE_SIGNING_LEVEL_CUSTOM_6          0x0000000F
+
 typedef enum _WELL_KNOWN_SID_TYPE {
   WinNullSid = 0,
   WinWorldSid = 1,
@@ -1363,6 +1383,14 @@ typedef struct _TOKEN_ACCESS_INFORMATION {
 #define TOKEN_UIACCESS                  0x1000
 #define TOKEN_NOT_LOW                   0x2000
 #define TOKEN_LOWBOX                    0x4000
+#define TOKEN_HAS_OWN_CLAIM_ATTRIBUTES  0x8000
+
+#define TOKEN_PRIVATE_NAMESPACE                     0x00010000
+#define TOKEN_DO_NOT_USE_GLOBAL_ATTRIBS_FOR_QUERY   0x00020000
+#define SPECIAL_ENCRYPTED_OPEN                      0x00040000
+#define TOKEN_NO_CHILD_PROCESS                      0x00080000
+#define TOKEN_NO_CHILD_PROCESS_UNLESS_SECURE        0x00100000
+#define TOKEN_AUDIT_NO_CHILD_PROCESS                0x00200000
 
 /* See: https://microsoft.github.io/windows-docs-rs/doc/windows/Wdk/Storage/FileSystem/struct.SE_EXPORTS.html */
 typedef struct _SE_EXPORTS {

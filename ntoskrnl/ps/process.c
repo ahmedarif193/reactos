@@ -313,7 +313,7 @@ PsChangeQuantumTable(IN BOOLEAN Immediate,
         while (Process)
         {
             /* Use the priority separation if this is a foreground process */
-            i = (Process->Vm.Flags.MemoryPriority ==
+            i = (Process->Vm.Instance.Flags.MemoryPriority ==
                  MEMORY_PRIORITY_BACKGROUND) ?
                  0: PsPrioritySeparation;
 
@@ -398,7 +398,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     if (Flags & ~PROCESS_CREATE_FLAGS_LEGAL_MASK) return STATUS_INVALID_PARAMETER;
 
     if ((PreviousMode != KernelMode) &&
-        (ReadAcquire(&CurrentProcess->ChildProcessPolicy) & 1))
+        (PsGetProcessMitigationPolicyFlags(CurrentProcess, PSP_CHILD_PROCESS_POLICY) & 1))
     {
         return STATUS_CHILD_PROCESS_BLOCKED;
     }
@@ -617,7 +617,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     InterlockedOr((PLONG)&Process->Flags, PSF_HAS_ADDRESS_SPACE_BIT);
 
     /* Set the maximum WS */
-    Process->Vm.MaximumWorkingSetSize = MaxWs;
+    Process->Vm.Instance.MaximumWorkingSetSize = MaxWs;
 
     /* Now initialize the Kernel Process */
     KeInitializeProcess(&Process->Pcb,
@@ -731,7 +731,6 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     /* Copy the process name now that we have it */
     memcpy(MiGetPfnEntry(KPROCESS_DTB0(&Process->Pcb) >> PAGE_SHIFT)->ProcessName, Process->ImageFileName, 16);
     if (KPROCESS_DTB1(&Process->Pcb)) memcpy(MiGetPfnEntry(KPROCESS_DTB1(&Process->Pcb) >> PAGE_SHIFT)->ProcessName, Process->ImageFileName, 16);
-    if (Process->WorkingSetPage) memcpy(MiGetPfnEntry(Process->WorkingSetPage)->ProcessName, Process->ImageFileName, 16);
 #endif
 
     /* Check if we have a section object and map the system DLL */
@@ -1164,7 +1163,7 @@ PVOID
 NTAPI
 PsGetProcessWow64Process(PEPROCESS Process)
 {
-    return Process->Wow64Process;
+    return Process->WoW64Process;
 }
 
 /*
@@ -1174,7 +1173,7 @@ struct _PEB32 *
 NTAPI
 PsGetProcessPeb32(PEPROCESS Process)
 {
-    return Process->Wow64Process ? Process->Wow64Process->Peb : NULL;
+    return Process->WoW64Process ? Process->WoW64Process->Peb : NULL;
 }
 
 /*
@@ -1184,7 +1183,7 @@ PVOID
 NTAPI
 PsGetCurrentProcessWow64Process(VOID)
 {
-    return PsGetCurrentProcess()->Wow64Process;
+    return PsGetCurrentProcess()->WoW64Process;
 }
 #endif
 
@@ -1401,7 +1400,7 @@ LOGICAL
 NTAPI
 PsIsProtectedProcess(_In_ PEPROCESS Process)
 {
-    return Process->ProtectedProcess != 0;
+    return Process->Protection.Type != PsProtectedTypeNone;
 }
 
 LOGICAL
@@ -1670,11 +1669,12 @@ static NTSTATUS
 PspInitializeWow64Process(IN PEPROCESS Process,
                           IN PSECTION_IMAGE_INFORMATION ImageInformation)
 {
-    PWOW64_PROCESS Wow64Process;
+    PEWOW64PROCESS Wow64Process;
+    struct _PEB32 *Peb32 = NULL;
     INITIAL_PEB InitialPeb;
     NTSTATUS Status;
 
-    if (Process->Wow64Process) return STATUS_SUCCESS;
+    if (Process->WoW64Process) return STATUS_SUCCESS;
     if ((ULONG_PTR)Process->SectionBaseAddress > MAXULONG) return STATUS_INVALID_IMAGE_FORMAT;
 
     Wow64Process = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Wow64Process), TAG_WOW64_PROCESS);
@@ -1683,15 +1683,16 @@ PspInitializeWow64Process(IN PEPROCESS Process,
     RtlZeroMemory(Wow64Process, sizeof(*Wow64Process));
     RtlZeroMemory(&InitialPeb, sizeof(InitialPeb));
     InitialPeb.Mutant = (HANDLE)-1;
-    Status = MmCreatePeb32(Process, &InitialPeb, ImageInformation, &Wow64Process->Peb);
+    Status = MmCreatePeb32(Process, &InitialPeb, ImageInformation, &Peb32);
     if (!NT_SUCCESS(Status))
     {
         ExFreePoolWithTag(Wow64Process, TAG_WOW64_PROCESS);
         return Status;
     }
 
-    Wow64Process->Machine = ImageInformation->Machine;
-    Process->Wow64Process = Wow64Process;
+    Wow64Process->Peb = Peb32;
+    Wow64Process->NtdllType = PsWowX86SystemDll;
+    Process->WoW64Process = Wow64Process;
     return STATUS_SUCCESS;
 }
 #endif
@@ -1982,6 +1983,196 @@ PspPrepareWow64Thread(IN HANDLE ProcessHandle,
 #define PSP_CHILD_PROCESS_RESTRICTED_UNLESS_SECURE 0x4
 #define PSP_ALL_APPLICATION_PACKAGES_OPT_OUT 0x1
 
+typedef struct _PSP_MITIGATION_BIT
+{
+    UCHAR Word;
+    UCHAR Bit;
+} PSP_MITIGATION_BIT;
+
+typedef struct _PSP_MITIGATION_MAP
+{
+    UCHAR Policy;
+    UCHAR Count;
+    PSP_MITIGATION_BIT Bits[12];
+} PSP_MITIGATION_MAP;
+
+static EX_PUSH_LOCK PspMitigationPolicyLock;
+
+static const PSP_MITIGATION_MAP PspMitigationMaps[] =
+{
+    { PSP_ASLR_POLICY, 4, { { 0, 6 }, { 0, 4 }, { 0, 5 }, { 0, 3 } } },
+    { PSP_DYNAMIC_CODE_POLICY, 4, { { 0, 8 }, { 0, 9 }, { 0, 10 }, { 0, 11 } } },
+    { PSP_SYSTEM_CALL_DISABLE_POLICY, 4, { { 0, 12 }, { 0, 13 }, { 2, 1 }, { 2, 2 } } },
+    { PSP_EXTENSION_POINT_DISABLE_POLICY, 1, { { 0, 7 } } },
+    { PSP_CONTROL_FLOW_GUARD_POLICY, 5, { { 0, 0 }, { 0, 1 }, { 0, 2 }, { 1, 25 }, { 1, 26 } } },
+    { PSP_SIGNATURE_POLICY, 5, { { 3, 0 }, { 3, 1 }, { 0, 23 }, { 0, 24 }, { 0, 25 } } },
+    { PSP_FONT_DISABLE_POLICY, 2, { { 0, 16 }, { 0, 17 } } },
+    { PSP_IMAGE_LOAD_POLICY, 5, { { 0, 19 }, { 0, 21 }, { 0, 18 }, { 0, 20 }, { 0, 22 } } },
+    { PSP_PAYLOAD_RESTRICTION_POLICY, 12,
+      { { 1, 0 }, { 1, 1 }, { 1, 2 }, { 1, 3 }, { 1, 10 }, { 1, 11 },
+        { 1, 4 }, { 1, 5 }, { 1, 6 }, { 1, 7 }, { 1, 8 }, { 1, 9 } } },
+    { PSP_SIDE_CHANNEL_ISOLATION_POLICY, 5, { { 0, 30 }, { 0, 31 }, { 1, 12 }, { 1, 13 }, { 2, 0 } } },
+};
+
+static
+volatile LONG *
+PspMitigationWord(
+    _In_ PEPROCESS Process,
+    _In_ UCHAR Word)
+{
+    if (Word == 0)
+        return (volatile LONG *)&Process->MitigationFlags;
+    if (Word == 1)
+        return (volatile LONG *)&Process->MitigationFlags2;
+    return (volatile LONG *)&Process->MitigationFlags3;
+}
+
+static
+const PSP_MITIGATION_MAP *
+PspFindMitigationMap(
+    _In_ ULONG Policy)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(PspMitigationMaps); Index++)
+    {
+        if (PspMitigationMaps[Index].Policy == Policy)
+            return &PspMitigationMaps[Index];
+    }
+    return NULL;
+}
+
+static
+BOOLEAN
+PspTestMitigationBit(
+    _In_ PEPROCESS Process,
+    _In_ PSP_MITIGATION_BIT Bit)
+{
+    if (Bit.Word == 3)
+    {
+        UCHAR Level = ReadUCharAcquire(&Process->SectionSignatureLevel);
+        return Bit.Bit == 0 ? Level == SE_SIGNING_LEVEL_MICROSOFT : Level == SE_SIGNING_LEVEL_STORE;
+    }
+    return (ReadAcquire(PspMitigationWord(Process, Bit.Word)) & (1L << Bit.Bit)) != 0;
+}
+
+static
+VOID
+PspSetMitigationBit(
+    _In_ PEPROCESS Process,
+    _In_ PSP_MITIGATION_BIT Bit,
+    _In_ BOOLEAN Set)
+{
+    if (Bit.Word == 3)
+    {
+        UCHAR Level = Bit.Bit == 0 ? SE_SIGNING_LEVEL_MICROSOFT : SE_SIGNING_LEVEL_STORE;
+
+        if (Set)
+            WriteUCharRelease(&Process->SectionSignatureLevel, Level);
+        else if (ReadUCharAcquire(&Process->SectionSignatureLevel) == Level)
+            WriteUCharRelease(&Process->SectionSignatureLevel, SE_SIGNING_LEVEL_UNCHECKED);
+        return;
+    }
+    if (Set)
+        InterlockedOr(PspMitigationWord(Process, Bit.Word), 1L << Bit.Bit);
+    else
+        InterlockedAnd(PspMitigationWord(Process, Bit.Word), ~(1L << Bit.Bit));
+}
+
+static
+ULONG
+PspQueryChildProcessPolicy(
+    _In_ PEPROCESS Process)
+{
+    PTOKEN Token = PsReferencePrimaryToken(Process);
+    ULONG TokenFlags = ReadAcquire((volatile LONG *)&Token->TokenFlags);
+    ULONG Flags = 0;
+
+    ObFastDereferenceObject(&Process->Token, Token);
+    if (TokenFlags & TOKEN_NO_CHILD_PROCESS)
+        Flags |= 1;
+    if (TokenFlags & TOKEN_AUDIT_NO_CHILD_PROCESS)
+        Flags |= 2;
+    if (TokenFlags & TOKEN_NO_CHILD_PROCESS_UNLESS_SECURE)
+        Flags |= 4;
+    return Flags;
+}
+
+static
+VOID
+PspStoreChildProcessPolicy(
+    _In_ PEPROCESS Process,
+    _In_ ULONG Flags)
+{
+    PTOKEN Token = PsReferencePrimaryToken(Process);
+    ULONG TokenFlags = 0;
+
+    if (Flags & 1)
+        TokenFlags |= TOKEN_NO_CHILD_PROCESS;
+    if (Flags & 2)
+        TokenFlags |= TOKEN_AUDIT_NO_CHILD_PROCESS;
+    if (Flags & 4)
+        TokenFlags |= TOKEN_NO_CHILD_PROCESS_UNLESS_SECURE;
+
+    SepAcquireTokenLockExclusive(Token);
+    Token->TokenFlags = (Token->TokenFlags &
+                         ~(TOKEN_NO_CHILD_PROCESS | TOKEN_AUDIT_NO_CHILD_PROCESS |
+                           TOKEN_NO_CHILD_PROCESS_UNLESS_SECURE)) | TokenFlags;
+    SepReleaseTokenLock(Token);
+    ObFastDereferenceObject(&Process->Token, Token);
+}
+
+VOID
+NTAPI
+PspLockMitigationPolicy(VOID)
+{
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&PspMitigationPolicyLock);
+}
+
+VOID
+NTAPI
+PspUnlockMitigationPolicy(VOID)
+{
+    ExReleasePushLockExclusive(&PspMitigationPolicyLock);
+    KeLeaveCriticalRegion();
+}
+
+VOID
+NTAPI
+PspStoreMitigationPolicy(
+    _In_ PEPROCESS Process,
+    _In_ ULONG Policy,
+    _In_ ULONG Flags)
+{
+    const PSP_MITIGATION_MAP *Map;
+    ULONG Index;
+
+    if (Policy == PSP_CHILD_PROCESS_POLICY)
+    {
+        PspStoreChildProcessPolicy(Process, Flags);
+        return;
+    }
+    if (Policy == PSP_SYSTEM_CALL_FILTER_POLICY)
+    {
+        WriteULongRelease(&Process->Win32KFilterSet, Flags & 0xF);
+        return;
+    }
+
+    Map = PspFindMitigationMap(Policy);
+    if (Map == NULL)
+        return;
+
+    for (Index = 0; Index < Map->Count; Index++)
+    {
+        BOOLEAN Set = (Flags & (1UL << Index)) != 0;
+
+        if (Policy == PSP_ASLR_POLICY && Index == 0)
+            Set = !Set;
+        PspSetMitigationBit(Process, Map->Bits[Index], Set);
+    }
+}
+
 static
 VOID
 PspApplyCreationMitigations(
@@ -1994,39 +2185,46 @@ PspApplyCreationMitigations(
 
     Value = (ULONG)((Options >> 28) & 3);
     if (Value == 1)
-        InterlockedExchange(&Process->SystemCallDisablePolicy, 1);
+        PspStoreMitigationPolicy(Process, PSP_SYSTEM_CALL_DISABLE_POLICY,
+                                 PsGetProcessMitigationPolicyFlags(Process, PSP_SYSTEM_CALL_DISABLE_POLICY) | 1);
 
     Value = (ULONG)((Options >> 36) & 3);
     if (Value == 1)
-        InterlockedExchange(&Process->DynamicCodeMitigationPolicy, 1);
+        PspStoreMitigationPolicy(Process, PSP_DYNAMIC_CODE_POLICY, 1);
     else if (Value == 3)
-        InterlockedExchange(&Process->DynamicCodeMitigationPolicy, 1 | 2);
+        PspStoreMitigationPolicy(Process, PSP_DYNAMIC_CODE_POLICY, 1 | 2);
 
     Value = (ULONG)((Options >> 44) & 3);
     if (Value == 1)
-        InterlockedExchange(&Process->SignatureMitigationPolicy, 5);
+        PspStoreMitigationPolicy(Process, PSP_SIGNATURE_POLICY, 5);
 
     if (((Options >> 8) & 3) == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_ASLR_POLICY], 2);
+        InterlockedOr((volatile LONG *)&Process->MitigationFlags, 1L << 4);
     if (((Options >> 16) & 3) == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_ASLR_POLICY], 1);
+        InterlockedAnd((volatile LONG *)&Process->MitigationFlags, ~(1L << 6));
     if (((Options >> 20) & 3) == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_ASLR_POLICY], 4);
+        InterlockedOr((volatile LONG *)&Process->MitigationFlags, 1L << 5);
     if (((Options >> 32) & 3) == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_EXTENSION_POINT_DISABLE_POLICY], 1);
+        PspStoreMitigationPolicy(Process, PSP_EXTENSION_POINT_DISABLE_POLICY, 1);
     if (((Options >> 40) & 3) == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_CONTROL_FLOW_GUARD_POLICY], 1);
+        PspStoreMitigationPolicy(Process, PSP_CONTROL_FLOW_GUARD_POLICY,
+                                 PsGetProcessMitigationPolicyFlags(Process, PSP_CONTROL_FLOW_GUARD_POLICY) | 1);
     Value = (ULONG)((Options >> 48) & 3);
     if (Value == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_FONT_DISABLE_POLICY], 1);
+        PspStoreMitigationPolicy(Process, PSP_FONT_DISABLE_POLICY,
+                                 PsGetProcessMitigationPolicyFlags(Process, PSP_FONT_DISABLE_POLICY) | 1);
     else if (Value == 3)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_FONT_DISABLE_POLICY], 2);
+        PspStoreMitigationPolicy(Process, PSP_FONT_DISABLE_POLICY,
+                                 PsGetProcessMitigationPolicyFlags(Process, PSP_FONT_DISABLE_POLICY) | 2);
     if (((Options >> 52) & 3) == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_IMAGE_LOAD_POLICY], 1);
+        PspStoreMitigationPolicy(Process, PSP_IMAGE_LOAD_POLICY,
+                                 PsGetProcessMitigationPolicyFlags(Process, PSP_IMAGE_LOAD_POLICY) | 1);
     if (((Options >> 56) & 3) == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_IMAGE_LOAD_POLICY], 2);
+        PspStoreMitigationPolicy(Process, PSP_IMAGE_LOAD_POLICY,
+                                 PsGetProcessMitigationPolicyFlags(Process, PSP_IMAGE_LOAD_POLICY) | 2);
     if (((Options >> 60) & 3) == 1)
-        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_IMAGE_LOAD_POLICY], 4);
+        PspStoreMitigationPolicy(Process, PSP_IMAGE_LOAD_POLICY,
+                                 PsGetProcessMitigationPolicyFlags(Process, PSP_IMAGE_LOAD_POLICY) | 4);
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN) && (defined(_M_ARM64) || defined(_M_IX86) || defined(_M_AMD64))
     if (((Options >> 24) & 3) == 1)
@@ -2044,13 +2242,17 @@ PspApplyCreationMitigations(
     {
         ULONGLONG Options2 = Map[1];
         if (((Options2 >> 8) & 3) == 1)
-            InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_CONTROL_FLOW_GUARD_POLICY], 4);
+            PspStoreMitigationPolicy(Process, PSP_CONTROL_FLOW_GUARD_POLICY,
+                                     PsGetProcessMitigationPolicyFlags(Process, PSP_CONTROL_FLOW_GUARD_POLICY) | 4);
         if (((Options2 >> 16) & 3) == 1)
-            InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_SIDE_CHANNEL_ISOLATION_POLICY], 1);
+            PspStoreMitigationPolicy(Process, PSP_SIDE_CHANNEL_ISOLATION_POLICY,
+                                     PsGetProcessMitigationPolicyFlags(Process, PSP_SIDE_CHANNEL_ISOLATION_POLICY) | 1);
         if (((Options2 >> 52) & 3) == 1)
-            InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_SIDE_CHANNEL_ISOLATION_POLICY], 0x10);
+            PspStoreMitigationPolicy(Process, PSP_SIDE_CHANNEL_ISOLATION_POLICY,
+                                     PsGetProcessMitigationPolicyFlags(Process, PSP_SIDE_CHANNEL_ISOLATION_POLICY) | 0x10);
         if (((Options2 >> 56) & 3) == 1)
-            InterlockedOr(&Process->SystemCallDisablePolicy, 4);
+            PspStoreMitigationPolicy(Process, PSP_SYSTEM_CALL_DISABLE_POLICY,
+                                     PsGetProcessMitigationPolicyFlags(Process, PSP_SYSTEM_CALL_DISABLE_POLICY) | 4);
     }
 }
 
@@ -2109,7 +2311,9 @@ PspSetExtendedMitigationPolicy(
         [PSP_PAYLOAD_RESTRICTION_POLICY] = 0xFFF,
         [PSP_SIDE_CHANNEL_ISOLATION_POLICY] = 0x1F,
     };
-    LONG OldPolicy;
+    ULONG Mutable = ValidMask[Policy < PSP_EXTENDED_POLICY_COUNT ? Policy : 0];
+    ULONG OldPolicy;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     if (Policy >= PSP_EXTENDED_POLICY_COUNT || (Flags & ~ValidMask[Policy]))
         return STATUS_INVALID_PARAMETER;
@@ -2126,15 +2330,19 @@ PspSetExtendedMitigationPolicy(
         Policy == PSP_PAYLOAD_RESTRICTION_POLICY)
         return STATUS_INVALID_PARAMETER;
 
-    do
-    {
-        OldPolicy = ReadAcquire(&Process->ExtendedMitigationPolicy[Policy]);
-        /* Mitigations can be strengthened, but established bits cannot clear. */
-        if (OldPolicy & ~(LONG)Flags)
-            return STATUS_ACCESS_DENIED;
-    } while (InterlockedCompareExchange(&Process->ExtendedMitigationPolicy[Policy], (LONG)Flags, OldPolicy) != OldPolicy);
+    if (Policy == PSP_ASLR_POLICY)
+        Mutable &= ~(1 | 4);
 
-    return STATUS_SUCCESS;
+    PspLockMitigationPolicy();
+    OldPolicy = PsGetProcessMitigationPolicyFlags(Process, Policy);
+    /* Mitigations can be strengthened, but established bits cannot clear. */
+    if (OldPolicy & Mutable & ~Flags)
+        Status = STATUS_ACCESS_DENIED;
+    else
+        PspStoreMitigationPolicy(Process, Policy, (OldPolicy & ~Mutable) | (Flags & Mutable));
+    PspUnlockMitigationPolicy();
+
+    return Status;
 }
 
 ULONG
@@ -2143,19 +2351,29 @@ PsGetProcessMitigationPolicyFlags(
     _In_ PEPROCESS Process,
     _In_ ULONG Policy)
 {
-    switch (Policy)
+    const PSP_MITIGATION_MAP *Map;
+    ULONG Flags = 0;
+    ULONG Index;
+
+    if (Policy == PSP_CHILD_PROCESS_POLICY)
+        return PspQueryChildProcessPolicy(Process);
+    if (Policy == PSP_SYSTEM_CALL_FILTER_POLICY)
+        return ReadULongAcquire(&Process->Win32KFilterSet) & 0xF;
+
+    Map = PspFindMitigationMap(Policy);
+    if (Map == NULL)
+        return 0;
+
+    for (Index = 0; Index < Map->Count; Index++)
     {
-        case PSP_DYNAMIC_CODE_POLICY:
-            return (ULONG)ReadAcquire(&Process->DynamicCodeMitigationPolicy);
-        case PSP_SYSTEM_CALL_DISABLE_POLICY:
-            return (ULONG)ReadAcquire(&Process->SystemCallDisablePolicy);
-        case PSP_SIGNATURE_POLICY:
-            return (ULONG)ReadAcquire(&Process->SignatureMitigationPolicy);
-        case PSP_CHILD_PROCESS_POLICY:
-            return (ULONG)ReadAcquire(&Process->ChildProcessPolicy);
-        default:
-            return Policy < PSP_EXTENDED_POLICY_COUNT ? (ULONG)ReadAcquire(&Process->ExtendedMitigationPolicy[Policy]) : 0;
+        BOOLEAN Set = PspTestMitigationBit(Process, Map->Bits[Index]);
+
+        if (Policy == PSP_ASLR_POLICY && Index == 0)
+            Set = !Set;
+        if (Set)
+            Flags |= 1UL << Index;
     }
+    return Flags;
 }
 
 NTSTATUS
@@ -2164,7 +2382,7 @@ PsCheckImageLoadPolicy(
     _In_ PFILE_OBJECT FileObject)
 {
     PEPROCESS Process = PsGetCurrentProcess();
-    ULONG Policy = (ULONG)ReadAcquire(&Process->ExtendedMitigationPolicy[PSP_IMAGE_LOAD_POLICY]);
+    ULONG Policy = PsGetProcessMitigationPolicyFlags(Process, PSP_IMAGE_LOAD_POLICY);
     PDEVICE_OBJECT DeviceObject;
     PSECURITY_DESCRIPTOR SecurityDescriptor;
     BOOLEAN MemoryAllocated = FALSE, SaclPresent = FALSE, SaclDefaulted = FALSE;
@@ -2841,15 +3059,17 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
             }
         }
 
+        PspLockMitigationPolicy();
         PspApplyCreationMitigations(Process, MitigationOptions, MitigationOptionsCount);
         if (ChildPolicyPresent)
         {
-            InterlockedExchange(&Process->ChildProcessPolicy,
-                                (ChildPolicy & PSP_CHILD_PROCESS_RESTRICTED) ? 1 : 0);
+            PspStoreMitigationPolicy(Process, PSP_CHILD_PROCESS_POLICY,
+                                     (ChildPolicy & PSP_CHILD_PROCESS_RESTRICTED) ? 1 : 0);
         }
+        PspUnlockMitigationPolicy();
         if (ComponentFilterPresent)
         {
-            InterlockedExchange(&Process->ComponentFilter, ComponentFilter);
+            WriteULongRelease(&Process->DisabledComponentFlags, ComponentFilter);
         }
         if (AllAppPackagesPolicy & PSP_ALL_APPLICATION_PACKAGES_OPT_OUT)
         {
@@ -2869,7 +3089,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
                 Process = NULL;
                 goto Cleanup;
             }
-            Wow64Peb = Process->Wow64Process->Peb;
+            Wow64Peb = Process->WoW64Process->Peb;
         }
 #endif
 
@@ -3585,28 +3805,16 @@ PsSetProcessFaultInformation(
     _In_ PVOID FaultInformation)
 {
     ULONG Information = *(volatile ULONG *)FaultInformation;
-    UCHAR Counts;
-    UCHAR Count;
 
     ExAcquirePushLockExclusive(&Process->ProcessLock);
-    Counts = Process->ProcessFaultCounts;
     if (Information & 0x1)
-        Process->ProcessFaultFlags |= 0x4;
-    if (Information & 0x2)
-    {
-        Count = Counts & 0x7;
-        if (Count != 0x7)
-            Counts = (Counts & ~0x7) | (Count + 1);
-    }
-    if (Information & 0x4)
-    {
-        Count = (Counts >> 3) & 0x7;
-        if (Count != 0x7)
-            Counts = (Counts & ~0x38) | ((Count + 1) << 3);
-    }
+        InterlockedOr((volatile LONG *)&Process->Flags3, 0x4);
+    if ((Information & 0x2) && Process->HangCount != 7)
+        Process->HangCount++;
+    if ((Information & 0x4) && Process->GhostCount != 7)
+        Process->GhostCount++;
     if (Information & 0x8)
-        Counts |= 0x40;
-    Process->ProcessFaultCounts = Counts;
+        Process->PrefilterException = 1;
     ExReleasePushLockExclusive(&Process->ProcessLock);
 }
 
@@ -3616,15 +3824,8 @@ PsSetProcessesWindowState(
     _In_ ULONG WindowState,
     _In_opt_ PVOID Context)
 {
-    PEPROCESS Process = NULL;
-
-    while ((Process = PsGetNextProcess(Process)) != NULL)
-    {
-        ExAcquirePushLockExclusive(&Process->ProcessLock);
-        Process->ProcessWindowState = WindowState;
-        Process->ProcessWindowStateContext = Context;
-        ExReleasePushLockExclusive(&Process->ProcessLock);
-    }
+    UNREFERENCED_PARAMETER(WindowState);
+    UNREFERENCED_PARAMETER(Context);
     return STATUS_SUCCESS;
 }
 

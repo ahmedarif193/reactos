@@ -27,6 +27,7 @@ typedef struct _MI_PROCESS
     volatile LONG64 PeakCommit;
     ULONG64 Peb;
     BOOLEAN HardWorkingSetMaximum;
+    BOOLEAN SessionLeader;
 } MI_PROCESS, *PMI_PROCESS;
 
 typedef struct _MI_PROCESS_COUNTERS

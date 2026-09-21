@@ -449,7 +449,7 @@ OFFSET(EpDebugPort, EPROCESS, DebugPort),
 #if defined(_M_IX86)
 OFFSET(EpVdmObjects, EPROCESS, VdmObjects),
 #elif defined(_M_AMD64)
-OFFSET(EpWow64Process, EPROCESS, Wow64Process),
+OFFSET(EpWow64Process, EPROCESS, WoW64Process),
 #endif
 SIZE(ExecutiveProcessObjectLength, EPROCESS),
 
