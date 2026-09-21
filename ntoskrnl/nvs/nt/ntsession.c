@@ -53,6 +53,14 @@ MiSessionLockAcquire(VOID)
 }
 
 static
+PMI_SESSION
+MiSessionOfProcess(
+    _In_ PEPROCESS Process)
+{
+    return (PMI_SESSION)Process->Session;
+}
+
+static
 VOID
 MiSessionJoinLocked(
     _Inout_ PMI_SESSION Session,
@@ -65,7 +73,7 @@ MiSessionJoinLocked(
     InsertTailList(&Session->Processes, &Native->SessionLink);
     Session->ReferenceCount++;
     Session->ProcessCount++;
-    Process->Session = Session;
+    Process->Session = (struct _PSP_SESSION_SPACE *)Session;
     PspSetProcessFlag(Process, PSF_PROCESS_IN_SESSION_BIT);
 }
 
@@ -75,7 +83,7 @@ MiSessionLeaveLocked(
     _Inout_ PEPROCESS Process)
 {
     PMI_PROCESS Native = MI_PROCESS_OF(Process);
-    PMI_SESSION Session = Process->Session;
+    PMI_SESSION Session = MiSessionOfProcess(Process);
 
     ASSERT(Native != NULL && Native->SessionProcess == Process && Session != NULL);
     RemoveEntryList(&Native->SessionLink);
@@ -119,10 +127,20 @@ MiSessionAddProcess(
     PMI_SESSION Session;
 
     MiSessionLockAcquire();
-    Session = Current->Session;
+    Session = MiSessionOfProcess(Current);
     if ((Current->Flags & PSF_PROCESS_IN_SESSION_BIT) && Session != NULL && NewProcess->Session == NULL)
         MiSessionJoinLocked(Session, NewProcess);
     KeReleaseGuardedMutex(&MiSessionLock);
+}
+
+static
+BOOLEAN
+MiIsSessionLeader(
+    _In_ PEPROCESS Process)
+{
+    PMI_PROCESS Native = MI_PROCESS_OF(Process);
+
+    return Native != NULL && Native->SessionLeader;
 }
 
 VOID
@@ -133,12 +151,12 @@ MiSessionRemoveProcess(
     BOOLEAN Free = FALSE;
 
     MiSessionLockAcquire();
-    Session = Process->Session;
+    Session = MiSessionOfProcess(Process);
     if (Session != NULL)
         Free = MiSessionLeaveLocked(Process);
-    if (Process->Vm.Flags.SessionLeader)
+    if (MiIsSessionLeader(Process))
     {
-        Process->Vm.Flags.SessionLeader = FALSE;
+        MI_PROCESS_OF(Process)->SessionLeader = FALSE;
         InterlockedExchange(&MiSessionLeaderExists, 0);
     }
     KeReleaseGuardedMutex(&MiSessionLock);
@@ -173,13 +191,13 @@ MmSessionCreate(
     MiSessionLockAcquire();
     if ((Process->Flags & PSF_PROCESS_IN_SESSION_BIT) || Process->Session != NULL)
         Status = STATUS_ALREADY_COMMITTED;
-    else if (!Process->Vm.Flags.SessionLeader && MiSessionLeaderExists != 0)
+    else if (!MiIsSessionLeader(Process) && MiSessionLeaderExists != 0)
         Status = STATUS_INVALID_SYSTEM_SERVICE;
     else if (MiNextSessionId == ~(ULONG)0)
         Status = STATUS_INSUFFICIENT_RESOURCES;
     else
     {
-        Process->Vm.Flags.SessionLeader = TRUE;
+        MI_PROCESS_OF(Process)->SessionLeader = TRUE;
         MiSessionLeaderExists = 1;
         Session->SessionId = MiNextSessionId++;
         Session->LocaleId = MiDefaultSessionLocale;
@@ -205,8 +223,8 @@ MmSessionDelete(
     NTSTATUS Status = STATUS_SUCCESS;
 
     MiSessionLockAcquire();
-    Session = Process->Session;
-    if (!(Process->Flags & PSF_PROCESS_IN_SESSION_BIT) || !Process->Vm.Flags.SessionLeader || Session == NULL)
+    Session = MiSessionOfProcess(Process);
+    if (!(Process->Flags & PSF_PROCESS_IN_SESSION_BIT) || !MiIsSessionLeader(Process) || Session == NULL)
         Status = STATUS_UNABLE_TO_FREE_VM;
     else if (Session->SessionId != SessionId)
         Status = STATUS_INVALID_PARAMETER;
@@ -227,8 +245,8 @@ MmGetSessionId(
     ULONG Id;
 
     MiSessionLockAcquire();
-    Session = Process->Session;
-    Id = Process->Vm.Flags.SessionLeader || Session == NULL ? 0 : Session->SessionId;
+    Session = MiSessionOfProcess(Process);
+    Id = MiIsSessionLeader(Process) || Session == NULL ? 0 : Session->SessionId;
     KeReleaseGuardedMutex(&MiSessionLock);
     return Id;
 }
@@ -242,8 +260,8 @@ MmGetSessionIdEx(
     ULONG Id;
 
     MiSessionLockAcquire();
-    Session = Process->Session;
-    Id = Process->Vm.Flags.SessionLeader || Session == NULL ? (ULONG)-1 : Session->SessionId;
+    Session = MiSessionOfProcess(Process);
+    Id = MiIsSessionLeader(Process) || Session == NULL ? (ULONG)-1 : Session->SessionId;
     KeReleaseGuardedMutex(&MiSessionLock);
     return Id;
 }
@@ -257,8 +275,8 @@ MmGetSessionLocaleId(VOID)
     LCID Locale;
 
     MiSessionLockAcquire();
-    Session = Process->Session;
-    Locale = Process->Vm.Flags.SessionLeader || Session == NULL ? PsDefaultThreadLocaleId : Session->LocaleId;
+    Session = MiSessionOfProcess(Process);
+    Locale = MiIsSessionLeader(Process) || Session == NULL ? PsDefaultThreadLocaleId : Session->LocaleId;
     KeReleaseGuardedMutex(&MiSessionLock);
     return Locale;
 }
@@ -272,8 +290,8 @@ MmSetSessionLocaleId(
     PMI_SESSION Session;
 
     MiSessionLockAcquire();
-    Session = Process->Session;
-    if (Process->Vm.Flags.SessionLeader || Session == NULL)
+    Session = MiSessionOfProcess(Process);
+    if (MiIsSessionLeader(Process) || Session == NULL)
     {
         PsDefaultThreadLocaleId = LocaleId;
         PsDefaultSystemLocaleId = LocaleId;
@@ -338,7 +356,7 @@ MmAttachSession(
         PMI_PROCESS Native = CONTAINING_RECORD(Entry, MI_PROCESS, SessionLink);
         PEPROCESS Candidate = Native->SessionProcess;
 
-        if (Candidate->Vm.Flags.SessionLeader || Candidate->AddressSpaceInitialized < 2 ||
+        if (Native->SessionLeader || Candidate->AddressSpaceInitialized < 2 ||
             !ExAcquireRundownProtection(&Candidate->RundownProtect))
             continue;
         ObReferenceObject(Candidate);
@@ -360,7 +378,7 @@ MmDetachSession(
 {
     PEPROCESS Process = PsGetCurrentProcess();
 
-    ASSERT(Process->Session == SessionEntry);
+    ASSERT(MiSessionOfProcess(Process) == SessionEntry);
     KeUnstackDetachProcess(ApcState);
     ExReleaseRundownProtection(&Process->RundownProtect);
     ObDereferenceObject(Process);

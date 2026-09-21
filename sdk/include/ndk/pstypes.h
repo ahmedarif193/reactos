@@ -528,34 +528,24 @@ typedef struct _PS_CREATE_INFO
 #define PSF_NO_DEBUG_INHERIT_BIT                0x2
 #define PSF_PROCESS_EXITING_BIT                 0x4
 #define PSF_PROCESS_DELETE_BIT                  0x8
-#define PSF_WOW64_SPLIT_PAGES_BIT               0x10
+#define PSF_MANAGE_EXECUTABLE_MEMORY_WRITES_BIT 0x10
 #define PSF_VM_DELETED_BIT                      0x20
 #define PSF_OUTSWAP_ENABLED_BIT                 0x40
 #define PSF_OUTSWAPPED_BIT                      0x80
-#define PSF_FORK_FAILED_BIT                     0x100
 #define PSF_WOW64_VA_SPACE_4GB_BIT              0x200
 #define PSF_ADDRESS_SPACE_INITIALIZED_BIT       0x400
 #define PSF_SET_TIMER_RESOLUTION_BIT            0x1000
 #define PSF_BREAK_ON_TERMINATION_BIT            0x2000
-#define PSF_SESSION_CREATION_UNDERWAY_BIT       0x4000
 #define PSF_WRITE_WATCH_BIT                     0x8000
 #define PSF_PROCESS_IN_SESSION_BIT              0x10000
 #define PSF_OVERRIDE_ADDRESS_SPACE_BIT          0x20000
 #define PSF_HAS_ADDRESS_SPACE_BIT               0x40000
 #define PSF_LAUNCH_PREFETCHED_BIT               0x80000
-#define PSF_INJECT_INPAGE_ERRORS_BIT            0x100000
 #define PSF_VM_TOP_DOWN_BIT                     0x200000
 #define PSF_IMAGE_NOTIFY_DONE_BIT               0x400000
 #define PSF_PDE_UPDATE_NEEDED_BIT               0x800000
 #define PSF_VDM_ALLOWED_BIT                     0x1000000
-#define PSF_SWAP_ALLOWED_BIT                    0x2000000
-#define PSF_CREATE_FAILED_BIT                   0x4000000
 #define PSF_DEFAULT_IO_PRIORITY_BIT             0x8000000
-
-//
-// Vista Process Flags
-//
-#define PSF2_PROTECTED_BIT                      0x800
 #endif
 
 //
@@ -1775,6 +1765,139 @@ typedef struct _ETHREAD
 C_ASSERT(FIELD_OFFSET(ETHREAD, LegacyPowerObject) == 0x550);
 #endif
 
+typedef enum _PS_PROTECTED_TYPE
+{
+    PsProtectedTypeNone = 0,
+    PsProtectedTypeProtectedLight = 1,
+    PsProtectedTypeProtected = 2,
+    PsProtectedTypeMax = 3
+} PS_PROTECTED_TYPE;
+
+typedef enum _PS_PROTECTED_SIGNER
+{
+    PsProtectedSignerNone = 0,
+    PsProtectedSignerAuthenticode = 1,
+    PsProtectedSignerCodeGen = 2,
+    PsProtectedSignerAntimalware = 3,
+    PsProtectedSignerLsa = 4,
+    PsProtectedSignerWindows = 5,
+    PsProtectedSignerWinTcb = 6,
+    PsProtectedSignerWinSystem = 7,
+    PsProtectedSignerApp = 8,
+    PsProtectedSignerMax = 9
+} PS_PROTECTED_SIGNER;
+
+typedef struct _PS_PROTECTION
+{
+    union
+    {
+        UCHAR Level;
+        struct
+        {
+            UCHAR Type:3;
+            UCHAR Audit:1;
+            UCHAR Signer:4;
+        };
+    };
+} PS_PROTECTION, *PPS_PROTECTION;
+
+typedef enum _SYSTEM_DLL_TYPE
+{
+    PsNativeSystemDll = 0,
+    PsWowX86SystemDll = 1,
+    PsWowChpeX86SystemDll = 2,
+    PsChpeV2SystemDll = 3,
+    PsVsmEnclaveRuntimeDll = 4,
+    PsTrustedAppsRuntimeDll = 5,
+    PsSystemDllTotalTypes = 6
+} SYSTEM_DLL_TYPE;
+
+typedef struct _EWOW64PROCESS
+{
+    PVOID Peb;
+    SYSTEM_DLL_TYPE NtdllType;
+    PVOID KernelWriteToExecutableSignal;
+} EWOW64PROCESS, *PEWOW64PROCESS;
+
+typedef struct _ALPC_PROCESS_CONTEXT
+{
+    EX_PUSH_LOCK Lock;
+    LIST_ENTRY ViewListHead;
+    volatile ULONG_PTR PagedPoolQuotaCache;
+} ALPC_PROCESS_CONTEXT, *PALPC_PROCESS_CONTEXT;
+
+typedef union _PS_INTERLOCKED_TIMER_DELAY_VALUES
+{
+    struct
+    {
+        ULONGLONG DelayMs:30;
+        ULONGLONG CoalescingWindowMs:30;
+        ULONGLONG Reserved:1;
+        ULONGLONG NewTimerWheel:1;
+        ULONGLONG Retry:1;
+        ULONGLONG Locked:1;
+    };
+    ULONGLONG All;
+} PS_INTERLOCKED_TIMER_DELAY_VALUES, *PPS_INTERLOCKED_TIMER_DELAY_VALUES;
+
+typedef struct _WNF_STATE_NAME
+{
+    ULONG Data[2];
+} WNF_STATE_NAME, *PWNF_STATE_NAME;
+
+typedef struct _JOBOBJECT_WAKE_FILTER
+{
+    ULONG HighEdgeFilter;
+    ULONG LowEdgeFilter;
+} JOBOBJECT_WAKE_FILTER, *PJOBOBJECT_WAKE_FILTER;
+
+typedef struct _PS_PROCESS_WAKE_INFORMATION
+{
+    ULONGLONG NotificationChannel;
+    ULONG WakeCounters[7];
+    JOBOBJECT_WAKE_FILTER WakeFilter;
+    ULONG NoWakeCounter;
+} PS_PROCESS_WAKE_INFORMATION, *PPS_PROCESS_WAKE_INFORMATION;
+
+typedef struct _PS_DYNAMIC_ENFORCED_ADDRESS_RANGES
+{
+    RTL_AVL_TREE Tree;
+    EX_PUSH_LOCK Lock;
+} PS_DYNAMIC_ENFORCED_ADDRESS_RANGES, *PPS_DYNAMIC_ENFORCED_ADDRESS_RANGES;
+
+typedef union _PROCESS_EXECUTION_TRANSITION
+{
+    volatile SHORT TransitionState;
+    struct
+    {
+        USHORT InProgress:1;
+        USHORT Reserved:7;
+    };
+} PROCESS_EXECUTION_TRANSITION, *PPROCESS_EXECUTION_TRANSITION;
+
+typedef union _PROCESS_EXECUTION_STATE
+{
+    CHAR State;
+    struct
+    {
+        UCHAR ProcessFrozen:1;
+        UCHAR ProcessSwapped:1;
+        UCHAR ProcessGraphicsFreezeOptimized:1;
+        UCHAR Reserved:5;
+    };
+} PROCESS_EXECUTION_STATE, *PPROCESS_EXECUTION_STATE;
+
+typedef union _PROCESS_EXECUTION
+{
+    volatile LONG State;
+    struct
+    {
+        volatile PROCESS_EXECUTION_TRANSITION Transition;
+        PROCESS_EXECUTION_STATE Current;
+        PROCESS_EXECUTION_STATE Requested;
+    };
+} PROCESS_EXECUTION, *PPROCESS_EXECUTION;
+
 //
 // Executive Process (EPROCESS)
 //
@@ -1782,88 +1905,134 @@ typedef struct _EPROCESS
 {
     KPROCESS Pcb;
     EX_PUSH_LOCK ProcessLock;
-    LARGE_INTEGER CreateTime;
-    LARGE_INTEGER ExitTime;
-    EX_RUNDOWN_REF RundownProtect;
     HANDLE UniqueProcessId;
     LIST_ENTRY ActiveProcessLinks;
-    SIZE_T QuotaUsage[PsQuotaTypes];
-    SIZE_T QuotaPeak[PsQuotaTypes];
-    SIZE_T CommitCharge;
+    EX_RUNDOWN_REF RundownProtect;
+    union
+    {
+        ULONG Flags2;
+        struct
+        {
+            ULONG JobNotReallyActive : 1;
+            ULONG AccountingFolded : 1;
+            ULONG NewProcessReported : 1;
+            ULONG ExitProcessReported : 1;
+            ULONG ReportCommitChanges : 1;
+            ULONG LastReportMemory : 1;
+            ULONG ForceWakeCharge : 1;
+            ULONG CrossSessionCreate : 1;
+            ULONG NeedsHandleRundown : 1;
+            ULONG RefTraceEnabled : 1;
+            ULONG PicoCreated : 1;
+            ULONG EmptyJobEvaluated : 1;
+            ULONG DefaultPagePriority : 3;
+            ULONG PrimaryTokenFrozen : 1;
+            ULONG ProcessVerifierTarget : 1;
+            ULONG RestrictSetThreadContext : 1;
+            ULONG AffinityPermanent : 1;
+            ULONG AffinityUpdateEnable : 1;
+            ULONG PropagateNode : 1;
+            ULONG ExplicitAffinity : 1;
+            ULONG Flags2Available1 : 2;
+            ULONG EnableReadVmLogging : 1;
+            ULONG EnableWriteVmLogging : 1;
+            ULONG FatalAccessTerminationRequested : 1;
+            ULONG DisableSystemAllowedCpuSet : 1;
+            ULONG Flags2Available2 : 3;
+            ULONG InPrivate : 1;
+        };
+    };
+    union
+    {
+        ULONG Flags;
+        struct
+        {
+            ULONG CreateReported : 1;
+            ULONG NoDebugInherit : 1;
+            ULONG ProcessExiting : 1;
+            ULONG ProcessDelete : 1;
+            ULONG ManageExecutableMemoryWrites : 1;
+            ULONG VmDeleted : 1;
+            ULONG OutswapEnabled : 1;
+            ULONG Outswapped : 1;
+            ULONG FailFastOnCommitFail : 1;
+            ULONG Wow64VaSpace4Gb : 1;
+            ULONG AddressSpaceInitialized : 2;
+            ULONG SetTimerResolution : 1;
+            ULONG BreakOnTermination : 1;
+            ULONG DeprioritizeViews : 1;
+            ULONG WriteWatch : 1;
+            ULONG ProcessInSession : 1;
+            ULONG OverrideAddressSpace : 1;
+            ULONG HasAddressSpace : 1;
+            ULONG LaunchPrefetched : 1;
+            ULONG Reserved : 1;
+            ULONG VmTopDown : 1;
+            ULONG ImageNotifyDone : 1;
+            ULONG PdeUpdateNeeded : 1;
+            ULONG VdmAllowed : 1;
+            ULONG ProcessRundown : 1;
+            ULONG ProcessInserted : 1;
+            ULONG DefaultIoPriority : 3;
+            ULONG ProcessSelfDelete : 1;
+            ULONG SetTimerResolutionLink : 1;
+        };
+    };
+    LARGE_INTEGER CreateTime;
+    SIZE_T ProcessQuotaUsage[2];
+    SIZE_T ProcessQuotaPeak[2];
     SIZE_T PeakVirtualSize;
     SIZE_T VirtualSize;
     LIST_ENTRY SessionProcessLinks;
-    PVOID DebugPort;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
     union
     {
         PVOID ExceptionPortData;
-        ULONG ExceptionPortValue;
-        UCHAR ExceptionPortState:3;
+        ULONG_PTR ExceptionPortValue;
+        ULONG_PTR ExceptionPortState : 3;
     };
-#else
-    PVOID ExceptionPort;
-#endif
-    PHANDLE_TABLE ObjectTable;
     EX_FAST_REF Token;
-    PFN_NUMBER WorkingSetPage;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ULONG_PTR MmReserved;
     EX_PUSH_LOCK AddressCreationLock;
-    PETHREAD RotateInProgress;
-#else
-    KGUARDED_MUTEX AddressCreationLock;
-    KSPIN_LOCK HyperSpaceLock;
-#endif
-    PETHREAD ForkInProgress;
-    ULONG_PTR HardwareTrigger;
-    PMM_AVL_TABLE PhysicalVadRoot;
-    PVOID CloneRoot;
-    PFN_NUMBER NumberOfPrivatePages;
-    PFN_NUMBER NumberOfLockedPages;
-    PVOID *Win32Process;
+    EX_PUSH_LOCK PageTableCommitmentLock;
+    struct _ETHREAD *RotateInProgress;
+    struct _ETHREAD *ForkInProgress;
+    struct _EJOB *CommitChargeJob;
+    RTL_AVL_TREE CloneRoot;
+    volatile ULONG_PTR NumberOfPrivatePages;
+    volatile ULONG_PTR NumberOfLockedPages;
+    PVOID Win32Process;
     struct _EJOB *Job;
     PVOID SectionObject;
     PVOID SectionBaseAddress;
-    PEPROCESS_QUOTA_BLOCK QuotaBlock;
-    PPAGEFAULT_HISTORY WorkingSetWatch;
+    ULONG Cookie;
+    struct _PAGEFAULT_HISTORY *WorkingSetWatch;
     PVOID Win32WindowStation;
     HANDLE InheritedFromUniqueProcessId;
-    PVOID LdtInformation;
-    PVOID VadFreeHint;
-    PVOID VdmObjects;
-    PVOID DeviceMap;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    volatile ULONG_PTR OwnerProcessId;
+    struct _PEB *Peb;
+    struct _PSP_SESSION_SPACE *Session;
+    PVOID Spare1;
+    struct _EPROCESS_QUOTA_BLOCK *QuotaBlock;
+    struct _HANDLE_TABLE *ObjectTable;
+    PVOID DebugPort;
+    struct _EWOW64PROCESS *WoW64Process;
+    EX_FAST_REF DeviceMap;
     PVOID EtwDataSource;
-    PVOID FreeTebHint;
-#else
-    PVOID Spare0[3];
-#endif
-    union
-    {
-        HARDWARE_PTE PageDirectoryPte;
-        ULONGLONG Filler;
-    };
-    PVOID Session;
-    CHAR ImageFileName[16];
-    LIST_ENTRY JobLinks;
-    PVOID LockedPagesList;
-    LIST_ENTRY ThreadListHead;
+    ULONGLONG PageDirectoryPte;
+    struct _FILE_OBJECT *ImageFilePointer;
+    UCHAR ImageFileName[15];
+    UCHAR PriorityClass;
     PVOID SecurityPort;
-#if defined(_M_AMD64) || defined(_M_ARM64)
-    struct _WOW64_PROCESS *Wow64Process;
-#else
-    PVOID PaeTop;
-#endif
-    ULONG ActiveThreads;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    SE_AUDIT_PROCESS_CREATION_INFO SeAuditProcessCreationInfo;
+    LIST_ENTRY JobLinks;
+    PVOID HighestUserAddress;
+    LIST_ENTRY ThreadListHead;
+    volatile ULONG ActiveThreads;
     ULONG ImagePathHash;
-#else
-    ACCESS_MASK GrantedAccess;
-#endif
     ULONG DefaultHardErrorProcessing;
     NTSTATUS LastThreadExitStatus;
-    struct _PEB* Peb;
     EX_FAST_REF PrefetchTrace;
+    PVOID LockedPagesList;
     LARGE_INTEGER ReadOperationCount;
     LARGE_INTEGER WriteOperationCount;
     LARGE_INTEGER OtherOperationCount;
@@ -1871,134 +2040,451 @@ typedef struct _EPROCESS
     LARGE_INTEGER WriteTransferCount;
     LARGE_INTEGER OtherTransferCount;
     SIZE_T CommitChargeLimit;
-    SIZE_T CommitChargePeak;
-    PVOID AweInfo;
-    SE_AUDIT_PROCESS_CREATION_INFO SeAuditProcessCreationInfo;
-    MMSUPPORT Vm;
-#ifdef _M_AMD64
-    ULONG Spares[2];
-#else
+    volatile SIZE_T CommitCharge;
+    volatile SIZE_T CommitChargePeak;
+    MMSUPPORT_FULL Vm;
     LIST_ENTRY MmProcessLinks;
-#endif
-    ULONG ModifiedPageCount;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    union
-    {
-        struct
-        {
-            ULONG JobNotReallyActive:1;
-            ULONG AccountingFolded:1;
-            ULONG NewProcessReported:1;
-            ULONG ExitProcessReported:1;
-            ULONG ReportCommitChanges:1;
-            ULONG LastReportMemory:1;
-            ULONG ReportPhysicalPageChanges:1;
-            ULONG HandleTableRundown:1;
-            ULONG NeedsHandleRundown:1;
-            ULONG RefTraceEnabled:1;
-            ULONG NumaAware:1;
-            ULONG ProtectedProcess:1;
-            ULONG DefaultPagePriority:3;
-            ULONG ProcessDeleteSelf:1;
-            ULONG ProcessVerifierTarget:1;
-            ULONG RestrictSetThreadContext:1;
-        };
-        ULONG Flags2;
-    };
-#else
-    ULONG JobStatus;
-#endif
-    union
-    {
-        struct
-        {
-            ULONG CreateReported:1;
-            ULONG NoDebugInherit:1;
-            ULONG ProcessExiting:1;
-            ULONG ProcessDelete:1;
-            ULONG Wow64SplitPages:1;
-            ULONG VmDeleted:1;
-            ULONG OutswapEnabled:1;
-            ULONG Outswapped:1;
-            ULONG ForkFailed:1;
-            ULONG Wow64VaSpace4Gb:1;
-            ULONG AddressSpaceInitialized:2;
-            ULONG SetTimerResolution:1;
-            ULONG BreakOnTermination:1;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
-            ULONG DeprioritizeViews:1;
-#else
-            ULONG SessionCreationUnderway:1;
-#endif
-            ULONG WriteWatch:1;
-            ULONG ProcessInSession:1;
-            ULONG OverrideAddressSpace:1;
-            ULONG HasAddressSpace:1;
-            ULONG LaunchPrefetched:1;
-            ULONG InjectInpageErrors:1;
-            ULONG VmTopDown:1;
-            ULONG ImageNotifyDone:1;
-            ULONG PdeUpdateNeeded:1;
-            ULONG VdmAllowed:1;
-            ULONG SmapAllowed:1;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
-            ULONG ProcessInserted:1;
-#else
-            ULONG CreateFailed:1;
-#endif
-            ULONG DefaultIoPriority:3;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
-            ULONG SparePsFlags1:2;
-#else
-            ULONG Spare1:1;
-            ULONG Spare2:1;
-#endif
-        };
-        ULONG Flags;
-    };
+    volatile ULONG ModifiedPageCount;
     NTSTATUS ExitStatus;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    USHORT Spare7;
-#else
-    USHORT NextPageColor;
-#endif
+    RTL_AVL_TREE VadRoot;
+    PVOID VadHint;
+    ULONG_PTR VadCount;
+    volatile ULONG_PTR VadPhysicalPages;
+    ULONG_PTR VadPhysicalPagesLimit;
+    ALPC_PROCESS_CONTEXT AlpcContext;
+    LIST_ENTRY TimerResolutionLink;
+    struct _PO_DIAG_STACK_RECORD *TimerResolutionStackRecord;
+    ULONG RequestedTimerResolution;
+    ULONG SmallestTimerResolution;
+    LARGE_INTEGER ExitTime;
+    struct _INVERTED_FUNCTION_TABLE_KERNEL_MODE *InvertedFunctionTable;
+    EX_PUSH_LOCK InvertedFunctionTableLock;
+    ULONG ActiveThreadsHighWatermark;
+    ULONG LargePrivateVadCount;
+    EX_PUSH_LOCK ThreadListLock;
+    PVOID WnfContext;
+    struct _EJOB *ServerSilo;
+    UCHAR SignatureLevel;
+    UCHAR SectionSignatureLevel;
+    PS_PROTECTION Protection;
+    UCHAR HangCount : 3;
+    UCHAR GhostCount : 3;
+    UCHAR PrefilterException : 1;
+    union
+    {
+        ULONG Flags3;
+        struct
+        {
+            ULONG Minimal : 1;
+            ULONG ReplacingPageRoot : 1;
+            ULONG Crashed : 1;
+            ULONG JobVadsAreTracked : 1;
+            ULONG VadTrackingDisabled : 1;
+            ULONG AuxiliaryProcess : 1;
+            ULONG SubsystemProcess : 1;
+            ULONG IndirectCpuSets : 1;
+            ULONG RelinquishedCommit : 1;
+            ULONG HighGraphicsPriority : 1;
+            ULONG CommitFailLogged : 1;
+            ULONG ReserveFailLogged : 1;
+            ULONG SystemProcess : 1;
+            ULONG AllImagesAtBasePristineBase : 1;
+            ULONG AddressPolicyFrozen : 1;
+            ULONG ProcessFirstResume : 1;
+            ULONG ForegroundExternal : 1;
+            ULONG ForegroundSystem : 1;
+            ULONG HighMemoryPriority : 1;
+            ULONG EnableProcessSuspendResumeLogging : 1;
+            ULONG EnableThreadSuspendResumeLogging : 1;
+            ULONG SecurityDomainChanged : 1;
+            ULONG SecurityFreezeComplete : 1;
+            ULONG VmProcessorHost : 1;
+            ULONG VmProcessorHostTransition : 1;
+            ULONG AltSyscall : 1;
+            ULONG TimerResolutionIgnore : 1;
+            ULONG DisallowUserTerminate : 1;
+            ULONG EnableProcessRemoteExecProtectVmLogging : 1;
+            ULONG EnableProcessLocalExecProtectVmLogging : 1;
+            ULONG MemoryCompressionProcess : 1;
+            ULONG EnableProcessImpersonationLogging : 1;
+        };
+    };
+    LONG DeviceAsid;
+    PVOID SvmData;
+    EX_PUSH_LOCK SvmProcessLock;
+    KSPIN_LOCK SvmLock;
+    LIST_ENTRY SvmProcessDeviceListHead;
+    ULONGLONG LastFreezeInterruptTime;
+    struct _PROCESS_DISK_COUNTERS *DiskCounters;
+    PVOID PicoContext;
+    PVOID EnclaveTable;
+    ULONG_PTR EnclaveNumber;
+    EX_PUSH_LOCK EnclaveLock;
+    ULONG HighPriorityFaultsAllowed;
+    struct _PO_PROCESS_ENERGY_CONTEXT *EnergyContext;
+    PVOID VmContext;
+    ULONGLONG SequenceNumber;
+    ULONGLONG CreateInterruptTime;
+    ULONGLONG CreateUnbiasedInterruptTime;
+    ULONGLONG TotalUnbiasedFrozenTime;
+    ULONGLONG LastAppStateUpdateTime;
+    ULONGLONG LastAppStateUptime : 61;
+    ULONGLONG LastAppState : 3;
+    volatile ULONG_PTR SharedCommitCharge;
+    EX_PUSH_LOCK SharedCommitLock;
+    LIST_ENTRY SharedCommitLinks;
     union
     {
         struct
         {
-            UCHAR SubSystemMinorVersion;
-            UCHAR SubSystemMajorVersion;
+            ULONGLONG AllowedCpuSets;
+            ULONGLONG DefaultCpuSets;
         };
-        USHORT SubSystemVersion;
+        struct
+        {
+            PULONGLONG AllowedCpuSetsIndirect;
+            PULONGLONG DefaultCpuSetsIndirect;
+        };
     };
-    UCHAR PriorityClass;
-    MM_AVL_TABLE VadRoot;
-    ULONG Cookie;
-#if defined(_M_ARM64)
-    volatile LONG ExecutableWriteExceptions;
-#endif
-#if defined(__REACTOS__)
-#if defined(_M_IX86)
-    /* There is no native WoW64 process on i386; keep a private NULL slot for
-       architecture-neutral process bookkeeping. */
-    struct _WOW64_PROCESS *Wow64Process;
-#endif
+    PVOID DiskIoAttribution;
     PVOID DxgProcess;
-    ULONGLONG SequenceNumber;
-    UCHAR ProcessFaultCounts;
+    ULONG Win32KFilterSet;
     USHORT Machine;
-    volatile ULONG ProcessFaultFlags;
-    ULONG ProcessWindowState;
-    PVOID ProcessWindowStateContext;
-    PROCESS_ENERGY_VALUES EnergyValues;
-    volatile LONG SignatureMitigationPolicy;
-    volatile LONG DynamicCodeMitigationPolicy;
-    volatile LONG SystemCallDisablePolicy;
-    volatile LONG ChildProcessPolicy;
-    volatile LONG ComponentFilter;
-    volatile LONG ExtendedMitigationPolicy[16];
+    UCHAR MmSlabIdentity;
+    UCHAR Spare0;
+    volatile PS_INTERLOCKED_TIMER_DELAY_VALUES ProcessTimerDelay;
+    volatile ULONG KTimerSets;
+    volatile ULONG KTimer2Sets;
+    volatile ULONG ThreadTimerSets;
+    KSPIN_LOCK VirtualTimerListLock;
+    LIST_ENTRY VirtualTimerListHead;
+    union
+    {
+        WNF_STATE_NAME WakeChannel;
+        PS_PROCESS_WAKE_INFORMATION WakeInfo;
+    };
+    union
+    {
+        ULONG MitigationFlags;
+        struct
+        {
+            ULONG ControlFlowGuardEnabled : 1;
+            ULONG ControlFlowGuardExportSuppressionEnabled : 1;
+            ULONG ControlFlowGuardStrict : 1;
+            ULONG DisallowStrippedImages : 1;
+            ULONG ForceRelocateImages : 1;
+            ULONG HighEntropyASLREnabled : 1;
+            ULONG StackRandomizationDisabled : 1;
+            ULONG ExtensionPointDisable : 1;
+            ULONG DisableDynamicCode : 1;
+            ULONG DisableDynamicCodeAllowOptOut : 1;
+            ULONG DisableDynamicCodeAllowRemoteDowngrade : 1;
+            ULONG AuditDisableDynamicCode : 1;
+            ULONG DisallowWin32kSystemCalls : 1;
+            ULONG AuditDisallowWin32kSystemCalls : 1;
+            ULONG EnableFilteredWin32kAPIs : 1;
+            ULONG AuditFilteredWin32kAPIs : 1;
+            ULONG DisableNonSystemFonts : 1;
+            ULONG AuditNonSystemFontLoading : 1;
+            ULONG PreferSystem32Images : 1;
+            ULONG ProhibitRemoteImageMap : 1;
+            ULONG AuditProhibitRemoteImageMap : 1;
+            ULONG ProhibitLowILImageMap : 1;
+            ULONG AuditProhibitLowILImageMap : 1;
+            ULONG SignatureMitigationOptIn : 1;
+            ULONG AuditBlockNonMicrosoftBinaries : 1;
+            ULONG AuditBlockNonMicrosoftBinariesAllowStore : 1;
+            ULONG LoaderIntegrityContinuityEnabled : 1;
+            ULONG AuditLoaderIntegrityContinuity : 1;
+            ULONG EnableModuleTamperingProtection : 1;
+            ULONG EnableModuleTamperingProtectionNoInherit : 1;
+            ULONG RestrictIndirectBranchPrediction : 1;
+            ULONG IsolateSecurityDomain : 1;
+        } MitigationFlagsValues;
+    };
+    union
+    {
+        ULONG MitigationFlags2;
+        struct
+        {
+            ULONG EnableExportAddressFilter : 1;
+            ULONG AuditExportAddressFilter : 1;
+            ULONG EnableExportAddressFilterPlus : 1;
+            ULONG AuditExportAddressFilterPlus : 1;
+            ULONG EnableRopStackPivot : 1;
+            ULONG AuditRopStackPivot : 1;
+            ULONG EnableRopCallerCheck : 1;
+            ULONG AuditRopCallerCheck : 1;
+            ULONG EnableRopSimExec : 1;
+            ULONG AuditRopSimExec : 1;
+            ULONG EnableImportAddressFilter : 1;
+            ULONG AuditImportAddressFilter : 1;
+            ULONG DisablePageCombine : 1;
+            ULONG SpeculativeStoreBypassDisable : 1;
+            ULONG CetUserShadowStacks : 1;
+            ULONG AuditCetUserShadowStacks : 1;
+            ULONG AuditCetUserShadowStacksLogged : 1;
+            ULONG UserCetSetContextIpValidation : 1;
+            ULONG AuditUserCetSetContextIpValidation : 1;
+            ULONG AuditUserCetSetContextIpValidationLogged : 1;
+            ULONG CetUserShadowStacksStrictMode : 1;
+            ULONG BlockNonCetBinaries : 1;
+            ULONG BlockNonCetBinariesNonEhcont : 1;
+            ULONG AuditBlockNonCetBinaries : 1;
+            ULONG AuditBlockNonCetBinariesLogged : 1;
+            ULONG XtendedControlFlowGuard_Deprecated : 1;
+            ULONG AuditXtendedControlFlowGuard_Deprecated : 1;
+            ULONG PointerAuthUserIp : 1;
+            ULONG AuditPointerAuthUserIp : 1;
+            ULONG AuditPointerAuthUserIpLogged : 1;
+            ULONG CetDynamicApisOutOfProcOnly : 1;
+            ULONG UserCetSetContextIpValidationRelaxedMode : 1;
+        } MitigationFlags2Values;
+    };
+    PVOID PartitionObject;
+    ULONGLONG SecurityDomain;
+    ULONGLONG ParentSecurityDomain;
+    PVOID CoverageSamplerContext;
+    PVOID MmHotPatchContext;
+    RTL_AVL_TREE DynamicEHContinuationTargetsTree;
+    EX_PUSH_LOCK DynamicEHContinuationTargetsLock;
+    ULONGLONG PointerAuthUserIpKey[2];
+    PS_DYNAMIC_ENFORCED_ADDRESS_RANGES DynamicEnforcedCetCompatibleRanges;
+    ULONG DisabledComponentFlags;
+    volatile LONG PageCombineSequence;
+    PULONG PathRedirectionHashes;
+    PVOID SyscallProviderReserved[4];
+    union
+    {
+        ULONG MitigationFlags3;
+        struct
+        {
+            ULONG RestrictCoreSharing : 1;
+            ULONG DisallowFsctlSystemCalls : 1;
+            ULONG AuditDisallowFsctlSystemCalls : 1;
+            ULONG MitigationFlags3Spare : 29;
+        } MitigationFlags3Values;
+    };
+    union
+    {
+        ULONG Flags4;
+        struct
+        {
+            ULONG ThreadWasActive : 1;
+            ULONG MinimalTerminate : 1;
+            ULONG ImageExpansionDisable : 1;
+            ULONG SessionFirstProcess : 1;
+        };
+    };
+    union
+    {
+        ULONG SyscallUsage;
+        struct
+        {
+            ULONG SystemModuleInformation : 1;
+            ULONG SystemModuleInformationEx : 1;
+            ULONG SystemLocksInformation : 1;
+            ULONG SystemStackTraceInformation : 1;
+            ULONG SystemHandleInformation : 1;
+            ULONG SystemExtendedHandleInformation : 1;
+            ULONG SystemObjectInformation : 1;
+            ULONG SystemBigPoolInformation : 1;
+            ULONG SystemExtendedProcessInformation : 1;
+            ULONG SystemSessionProcessInformation : 1;
+            ULONG SystemMemoryTopologyInformation : 1;
+            ULONG SystemMemoryChannelInformation : 1;
+            ULONG SystemUnused : 1;
+            ULONG SystemPlatformBinaryInformation : 1;
+            ULONG SystemFirmwareTableInformation : 1;
+            ULONG SystemBootMetadataInformation : 1;
+            ULONG SystemWheaIpmiHardwareInformation : 1;
+            ULONG SystemSuperfetchPrefetch : 1;
+            ULONG SystemSuperfetchPfnQuery : 1;
+            ULONG SystemSuperfetchPrivSourceQuery : 1;
+            ULONG SystemSuperfetchMemoryListQuery : 1;
+            ULONG SystemSuperfetchMemoryRangesQuery : 1;
+            ULONG SystemSuperfetchPfnSetPriority : 1;
+            ULONG SystemSuperfetchMovePages : 1;
+            ULONG SystemSuperfetchPfnSetPageHeat : 1;
+            ULONG SysDbgGetTriageDump : 1;
+            ULONG SysDbgGetLiveKernelDump : 1;
+            ULONG SyscallUsageValuesSpare : 5;
+        } SyscallUsageValues;
+    };
+    LONG SupervisorDeviceAsid;
+    PVOID SupervisorSvmData;
+    struct _PROCESS_NETWORK_COUNTERS *NetworkCounters;
+    PROCESS_EXECUTION Execution;
+    PVOID ThreadIndexTable;
+#if defined(_M_IX86)
+    PVOID LdtInformation;
+    PVOID VdmObjects;
 #endif
 } EPROCESS;
+
+#if defined(_M_ARM64) && !defined(__ASSEMBLER__)
+C_ASSERT(sizeof(EPROCESS) == 0x900);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Pcb) == 0x000);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ProcessLock) == 0x1B8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, UniqueProcessId) == 0x1C0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ActiveProcessLinks) == 0x1C8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, RundownProtect) == 0x1D8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Flags2) == 0x1E0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Flags) == 0x1E4);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CreateTime) == 0x1E8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ProcessQuotaUsage) == 0x1F0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ProcessQuotaPeak) == 0x200);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PeakVirtualSize) == 0x210);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VirtualSize) == 0x218);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SessionProcessLinks) == 0x220);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ExceptionPortData) == 0x230);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ExceptionPortValue) == 0x230);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Token) == 0x238);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MmReserved) == 0x240);
+C_ASSERT(FIELD_OFFSET(EPROCESS, AddressCreationLock) == 0x248);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PageTableCommitmentLock) == 0x250);
+C_ASSERT(FIELD_OFFSET(EPROCESS, RotateInProgress) == 0x258);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ForkInProgress) == 0x260);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CommitChargeJob) == 0x268);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CloneRoot) == 0x270);
+C_ASSERT(FIELD_OFFSET(EPROCESS, NumberOfPrivatePages) == 0x278);
+C_ASSERT(FIELD_OFFSET(EPROCESS, NumberOfLockedPages) == 0x280);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Win32Process) == 0x288);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Job) == 0x290);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SectionObject) == 0x298);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SectionBaseAddress) == 0x2A0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Cookie) == 0x2A8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, WorkingSetWatch) == 0x2B0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Win32WindowStation) == 0x2B8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, InheritedFromUniqueProcessId) == 0x2C0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, OwnerProcessId) == 0x2C8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Peb) == 0x2D0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Session) == 0x2D8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Spare1) == 0x2E0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, QuotaBlock) == 0x2E8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ObjectTable) == 0x2F0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DebugPort) == 0x2F8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, WoW64Process) == 0x300);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DeviceMap) == 0x308);
+C_ASSERT(FIELD_OFFSET(EPROCESS, EtwDataSource) == 0x310);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PageDirectoryPte) == 0x318);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ImageFilePointer) == 0x320);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ImageFileName) == 0x328);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PriorityClass) == 0x337);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SecurityPort) == 0x338);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SeAuditProcessCreationInfo) == 0x340);
+C_ASSERT(FIELD_OFFSET(EPROCESS, JobLinks) == 0x348);
+C_ASSERT(FIELD_OFFSET(EPROCESS, HighestUserAddress) == 0x358);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ThreadListHead) == 0x360);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ActiveThreads) == 0x370);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ImagePathHash) == 0x374);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DefaultHardErrorProcessing) == 0x378);
+C_ASSERT(FIELD_OFFSET(EPROCESS, LastThreadExitStatus) == 0x37C);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PrefetchTrace) == 0x380);
+C_ASSERT(FIELD_OFFSET(EPROCESS, LockedPagesList) == 0x388);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ReadOperationCount) == 0x390);
+C_ASSERT(FIELD_OFFSET(EPROCESS, WriteOperationCount) == 0x398);
+C_ASSERT(FIELD_OFFSET(EPROCESS, OtherOperationCount) == 0x3A0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ReadTransferCount) == 0x3A8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, WriteTransferCount) == 0x3B0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, OtherTransferCount) == 0x3B8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CommitChargeLimit) == 0x3C0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CommitCharge) == 0x3C8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CommitChargePeak) == 0x3D0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Vm) == 0x400);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MmProcessLinks) == 0x600);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ModifiedPageCount) == 0x610);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ExitStatus) == 0x614);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VadRoot) == 0x618);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VadHint) == 0x620);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VadCount) == 0x628);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VadPhysicalPages) == 0x630);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VadPhysicalPagesLimit) == 0x638);
+C_ASSERT(FIELD_OFFSET(EPROCESS, AlpcContext) == 0x640);
+C_ASSERT(FIELD_OFFSET(EPROCESS, TimerResolutionLink) == 0x660);
+C_ASSERT(FIELD_OFFSET(EPROCESS, TimerResolutionStackRecord) == 0x670);
+C_ASSERT(FIELD_OFFSET(EPROCESS, RequestedTimerResolution) == 0x678);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SmallestTimerResolution) == 0x67C);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ExitTime) == 0x680);
+C_ASSERT(FIELD_OFFSET(EPROCESS, InvertedFunctionTable) == 0x688);
+C_ASSERT(FIELD_OFFSET(EPROCESS, InvertedFunctionTableLock) == 0x690);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ActiveThreadsHighWatermark) == 0x698);
+C_ASSERT(FIELD_OFFSET(EPROCESS, LargePrivateVadCount) == 0x69C);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ThreadListLock) == 0x6A0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, WnfContext) == 0x6A8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ServerSilo) == 0x6B0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SignatureLevel) == 0x6B8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SectionSignatureLevel) == 0x6B9);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Protection) == 0x6BA);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Flags3) == 0x6BC);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DeviceAsid) == 0x6C0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SvmData) == 0x6C8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SvmProcessLock) == 0x6D0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SvmLock) == 0x6D8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SvmProcessDeviceListHead) == 0x6E0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, LastFreezeInterruptTime) == 0x6F0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DiskCounters) == 0x6F8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PicoContext) == 0x700);
+C_ASSERT(FIELD_OFFSET(EPROCESS, EnclaveTable) == 0x708);
+C_ASSERT(FIELD_OFFSET(EPROCESS, EnclaveNumber) == 0x710);
+C_ASSERT(FIELD_OFFSET(EPROCESS, EnclaveLock) == 0x718);
+C_ASSERT(FIELD_OFFSET(EPROCESS, HighPriorityFaultsAllowed) == 0x720);
+C_ASSERT(FIELD_OFFSET(EPROCESS, EnergyContext) == 0x728);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VmContext) == 0x730);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SequenceNumber) == 0x738);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CreateInterruptTime) == 0x740);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CreateUnbiasedInterruptTime) == 0x748);
+C_ASSERT(FIELD_OFFSET(EPROCESS, TotalUnbiasedFrozenTime) == 0x750);
+C_ASSERT(FIELD_OFFSET(EPROCESS, LastAppStateUpdateTime) == 0x758);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SharedCommitCharge) == 0x768);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SharedCommitLock) == 0x770);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SharedCommitLinks) == 0x778);
+C_ASSERT(FIELD_OFFSET(EPROCESS, AllowedCpuSets) == 0x788);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DefaultCpuSets) == 0x790);
+C_ASSERT(FIELD_OFFSET(EPROCESS, AllowedCpuSetsIndirect) == 0x788);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DefaultCpuSetsIndirect) == 0x790);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DiskIoAttribution) == 0x798);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DxgProcess) == 0x7A0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Win32KFilterSet) == 0x7A8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Machine) == 0x7AC);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MmSlabIdentity) == 0x7AE);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Spare0) == 0x7AF);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ProcessTimerDelay) == 0x7B0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, KTimerSets) == 0x7B8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, KTimer2Sets) == 0x7BC);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ThreadTimerSets) == 0x7C0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VirtualTimerListLock) == 0x7C8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, VirtualTimerListHead) == 0x7D0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, WakeChannel) == 0x7E0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, WakeInfo) == 0x7E0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MitigationFlags) == 0x810);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MitigationFlagsValues) == 0x810);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MitigationFlags2) == 0x814);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MitigationFlags2Values) == 0x814);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PartitionObject) == 0x818);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SecurityDomain) == 0x820);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ParentSecurityDomain) == 0x828);
+C_ASSERT(FIELD_OFFSET(EPROCESS, CoverageSamplerContext) == 0x830);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MmHotPatchContext) == 0x838);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DynamicEHContinuationTargetsTree) == 0x840);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DynamicEHContinuationTargetsLock) == 0x848);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PointerAuthUserIpKey) == 0x850);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DynamicEnforcedCetCompatibleRanges) == 0x860);
+C_ASSERT(FIELD_OFFSET(EPROCESS, DisabledComponentFlags) == 0x870);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PageCombineSequence) == 0x874);
+C_ASSERT(FIELD_OFFSET(EPROCESS, PathRedirectionHashes) == 0x878);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SyscallProviderReserved) == 0x880);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MitigationFlags3) == 0x8A0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, MitigationFlags3Values) == 0x8A0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Flags4) == 0x8A4);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SyscallUsage) == 0x8A8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SyscallUsageValues) == 0x8A8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SupervisorDeviceAsid) == 0x8AC);
+C_ASSERT(FIELD_OFFSET(EPROCESS, SupervisorSvmData) == 0x8B0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, NetworkCounters) == 0x8B8);
+C_ASSERT(FIELD_OFFSET(EPROCESS, Execution) == 0x8C0);
+C_ASSERT(FIELD_OFFSET(EPROCESS, ThreadIndexTable) == 0x8C8);
+#endif
 
 //
 // Job Token Filter Data

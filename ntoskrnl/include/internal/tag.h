@@ -147,6 +147,7 @@
 #define TAG_PS_TLS              'slTP'
 #define TAG_PS_API_SET          'sApP'
 #define TAG_WOW64_PROCESS       '46WP'
+#define TAG_PS_ENERGY           'nEsP'
 
 /* Run-Time Library Tags */
 #define TAG_HDTB    'BTDH'

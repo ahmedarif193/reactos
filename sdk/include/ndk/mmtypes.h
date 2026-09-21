@@ -983,18 +983,42 @@ typedef struct _MMWSL
 //
 typedef struct _MMSUPPORT_FLAGS
 {
-    ULONG SessionSpace:1;
-    ULONG BeingTrimmed:1;
-    ULONG SessionLeader:1;
-    ULONG TrimHard:1;
-    ULONG MaximumWorkingSetHard:1;
-    ULONG ForceTrim:1;
-    ULONG MinimumWorkingSetHard:1;
-    ULONG Available0:1;
-    ULONG MemoryPriority:8;
-    ULONG GrowWsleHash:1;
-    ULONG AcquiredUnsafe:1;
-    ULONG Available:14;
+    union
+    {
+        struct
+        {
+            union
+            {
+                struct
+                {
+                    UCHAR WorkingSetType:4;
+                    UCHAR Reserved0:2;
+                    UCHAR MaximumWorkingSetHard:1;
+                    UCHAR MinimumWorkingSetHard:1;
+                    UCHAR Reserved1:1;
+                    UCHAR TrimmerState:2;
+                    UCHAR LinearAddressProtected:1;
+                    UCHAR PageStealers:4;
+                };
+                USHORT u1;
+            };
+            UCHAR MemoryPriority;
+            union
+            {
+                struct
+                {
+                    UCHAR WsleDeleted:1;
+                    UCHAR SvmEnabled:1;
+                    UCHAR ForceAge:1;
+                    UCHAR ForceTrim:1;
+                    UCHAR CommitReleaseState:2;
+                    UCHAR Reserved2:2;
+                };
+                UCHAR u2;
+            };
+        };
+        ULONG EntireFlags;
+    };
 } MMSUPPORT_FLAGS, *PMMSUPPORT_FLAGS;
 
 //
@@ -1044,6 +1068,93 @@ typedef struct _MMSUPPORT
     PVOID AccessLog;
 #endif
 } MMSUPPORT, *PMMSUPPORT;
+
+typedef struct _MMSUPPORT_INSTANCE
+{
+    ULONG NextPageColor;
+    volatile ULONG PageFaultCount;
+    ULONG_PTR TrimmedPageCount;
+    struct _MMWSL_INSTANCE *VmWorkingSetList;
+    LIST_ENTRY WorkingSetExpansionLinks;
+    volatile ULONG_PTR AgeDistribution[8];
+    struct _KGATE *ExitOutswapGate;
+    SIZE_T MinimumWorkingSetSize;
+    SIZE_T MaximumWorkingSetSize;
+    volatile SIZE_T WorkingSetLeafSize;
+    volatile SIZE_T WorkingSetLeafPrivateSize;
+    volatile SIZE_T WorkingSetSize;
+    volatile SIZE_T WorkingSetPrivateSize;
+    volatile SIZE_T PeakWorkingSetSize;
+    ULONG HardFaultCount;
+    USHORT LastTrimStamp;
+    USHORT PartitionId;
+    ULONG_PTR SelfmapLock;
+    volatile MMSUPPORT_FLAGS Flags;
+    volatile ULONG InterlockedFlags;
+} MMSUPPORT_INSTANCE, *PMMSUPPORT_INSTANCE;
+
+typedef struct _MMSUPPORT_SHARED
+{
+    PVOID WorkingSetLockArray;
+    SIZE_T ReleasedCommitDebt;
+    ULONG_PTR ResetPagesRepurposedCount;
+    PVOID WsSwapSupport;
+    PVOID CommitReleaseContext;
+    PVOID AccessLog;
+    volatile ULONG_PTR ChargedWslePages;
+    volatile ULONG_PTR ActualWslePages;
+    DECLSPEC_CACHEALIGN volatile LONG WorkingSetCoreLock;
+    PVOID ShadowMapping;
+} MMSUPPORT_SHARED, *PMMSUPPORT_SHARED;
+
+typedef struct _MMSUPPORT_FULL
+{
+    MMSUPPORT_INSTANCE Instance;
+    MMSUPPORT_SHARED Shared;
+} MMSUPPORT_FULL, *PMMSUPPORT_FULL;
+
+#if defined(_M_ARM64)
+C_ASSERT(sizeof(MMSUPPORT_INSTANCE) == 0xC0);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, NextPageColor) == 0x000);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, PageFaultCount) == 0x004);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, TrimmedPageCount) == 0x008);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, VmWorkingSetList) == 0x010);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, WorkingSetExpansionLinks) == 0x018);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, AgeDistribution) == 0x028);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, ExitOutswapGate) == 0x068);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, MinimumWorkingSetSize) == 0x070);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, MaximumWorkingSetSize) == 0x078);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, WorkingSetLeafSize) == 0x080);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, WorkingSetLeafPrivateSize) == 0x088);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, WorkingSetSize) == 0x090);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, WorkingSetPrivateSize) == 0x098);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, PeakWorkingSetSize) == 0x0A0);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, HardFaultCount) == 0x0A8);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, LastTrimStamp) == 0x0AC);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, PartitionId) == 0x0AE);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, SelfmapLock) == 0x0B0);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, Flags) == 0x0B8);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_INSTANCE, InterlockedFlags) == 0x0BC);
+C_ASSERT(sizeof(MMSUPPORT_SHARED) == 0x100);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, WorkingSetLockArray) == 0x000);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, ReleasedCommitDebt) == 0x008);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, ResetPagesRepurposedCount) == 0x010);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, WsSwapSupport) == 0x018);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, CommitReleaseContext) == 0x020);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, AccessLog) == 0x028);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, ChargedWslePages) == 0x030);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, ActualWslePages) == 0x038);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, WorkingSetCoreLock) == 0x080);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_SHARED, ShadowMapping) == 0x088);
+C_ASSERT(sizeof(MMSUPPORT_FULL) == 0x200);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_FULL, Instance) == 0x000);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_FULL, Shared) == 0x100);
+C_ASSERT(sizeof(MMSUPPORT_FLAGS) == 0x4);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_FLAGS, u1) == 0x000);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_FLAGS, MemoryPriority) == 0x002);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_FLAGS, u2) == 0x003);
+C_ASSERT(FIELD_OFFSET(MMSUPPORT_FLAGS, EntireFlags) == 0x000);
+#endif
 
 //
 // Memory Information Types

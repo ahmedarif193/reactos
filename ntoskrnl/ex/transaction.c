@@ -31,7 +31,7 @@ NtCreateTransactionManager(
      * process observes the same denial as Windows and cannot reach future KTM
      * functionality accidentally.
      */
-    if (ReadAcquire(&PsGetCurrentProcess()->ComponentFilter) &
+    if (ReadULongAcquire(&PsGetCurrentProcess()->DisabledComponentFlags) &
         PSP_COMPONENT_FILTER_KTM)
     {
         return STATUS_ACCESS_DENIED;

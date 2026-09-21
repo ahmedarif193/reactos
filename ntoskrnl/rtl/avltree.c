@@ -11,13 +11,6 @@
 #define NDEBUG
 #include <debug.h>
 
-/* TYPES *********************************************************************/
-
-typedef struct _RTL_AVL_TREE
-{
-    PRTL_BALANCED_NODE Root;
-} RTL_AVL_TREE, *PRTL_AVL_TREE;
-
 /* PRIVATE FUNCTIONS *********************************************************/
 
 static

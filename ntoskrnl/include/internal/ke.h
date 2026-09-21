@@ -11,12 +11,6 @@ extern "C"
 
 /* INTERNAL KERNEL TYPES ****************************************************/
 
-typedef struct _WOW64_PROCESS
-{
-    struct _PEB32 *Peb;
-    USHORT Machine;
-} WOW64_PROCESS, *PWOW64_PROCESS;
-
 typedef struct _KPROFILE_SOURCE_OBJECT
 {
     KPROFILE_SOURCE Source;

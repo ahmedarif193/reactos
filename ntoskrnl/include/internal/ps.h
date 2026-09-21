@@ -707,6 +707,26 @@ PspSetExtendedMitigationPolicy(
     _In_ ULONG Policy,
     _In_ ULONG Flags);
 
+VOID
+NTAPI
+PspLockMitigationPolicy(VOID);
+
+VOID
+NTAPI
+PspUnlockMitigationPolicy(VOID);
+
+VOID
+NTAPI
+PspStoreMitigationPolicy(
+    _In_ PEPROCESS Process,
+    _In_ ULONG Policy,
+    _In_ ULONG Flags);
+
+typedef struct _PO_PROCESS_ENERGY_CONTEXT
+{
+    PROCESS_ENERGY_VALUES Values;
+} PO_PROCESS_ENERGY_CONTEXT, *PPO_PROCESS_ENERGY_CONTEXT;
+
 NTSTATUS
 NTAPI
 PsCheckImageLoadPolicy(

@@ -10,10 +10,6 @@
 
 typedef ULONG WNF_CHANGE_STAMP, *PWNF_CHANGE_STAMP;
 
-typedef struct _WNF_STATE_NAME
-{
-    ULONG Data[2];
-} WNF_STATE_NAME, *PWNF_STATE_NAME;
 typedef const WNF_STATE_NAME *PCWNF_STATE_NAME;
 
 typedef struct _WNF_TYPE_ID

@@ -33,7 +33,9 @@ PspCopyThreadWow64Context(IN PETHREAD Thread,
     BOOLEAN Attached = Process != PsGetCurrentProcess();
     NTSTATUS Status = STATUS_SUCCESS;
 
-    if (!Process->Wow64Process || Process->Wow64Process->Machine != IMAGE_FILE_MACHINE_I386) return STATUS_INVALID_PARAMETER;
+    if (!Process->WoW64Process ||
+        (Process->WoW64Process->NtdllType != PsWowX86SystemDll &&
+         Process->WoW64Process->NtdllType != PsWowChpeX86SystemDll)) return STATUS_INVALID_PARAMETER;
     if (!ExAcquireRundownProtection(&Thread->RundownProtect)) return STATUS_THREAD_IS_TERMINATING;
     if (Attached) KeStackAttachProcess(&Process->Pcb, &ApcState);
 
@@ -692,9 +694,9 @@ NtQueryInformationProcess(
 
             /* Get max/min working set sizes */
             QuotaLimits.MaximumWorkingSetSize =
-                Process->Vm.MaximumWorkingSetSize << PAGE_SHIFT;
+                Process->Vm.Instance.MaximumWorkingSetSize << PAGE_SHIFT;
             QuotaLimits.MinimumWorkingSetSize =
-                Process->Vm.MinimumWorkingSetSize << PAGE_SHIFT;
+                Process->Vm.Instance.MinimumWorkingSetSize << PAGE_SHIFT;
 
             /* Get default time limits */
             QuotaLimits.TimeLimit.QuadPart = -1LL;
@@ -721,9 +723,9 @@ NtQueryInformationProcess(
             /* Get additional information, if needed */
             if (Extended)
             {
-                QuotaLimits.Flags |= (Process->Vm.Flags.MaximumWorkingSetHard ?
+                QuotaLimits.Flags |= (Process->Vm.Instance.Flags.MaximumWorkingSetHard ?
                     QUOTA_LIMITS_HARDWS_MAX_ENABLE : QUOTA_LIMITS_HARDWS_MAX_DISABLE);
-                QuotaLimits.Flags |= (Process->Vm.Flags.MinimumWorkingSetHard ?
+                QuotaLimits.Flags |= (Process->Vm.Instance.Flags.MinimumWorkingSetHard ?
                     QUOTA_LIMITS_HARDWS_MIN_ENABLE : QUOTA_LIMITS_HARDWS_MIN_DISABLE);
 
                 /* FIXME: Get the correct information */
@@ -1017,15 +1019,15 @@ NtQueryInformationProcess(
                 /* Return data from EPROCESS */
                 VmCounters->PeakVirtualSize = Process->PeakVirtualSize;
                 VmCounters->VirtualSize = Process->VirtualSize;
-                VmCounters->PageFaultCount = Process->Vm.PageFaultCount;
-                VmCounters->PeakWorkingSetSize = Process->Vm.PeakWorkingSetSize;
-                VmCounters->WorkingSetSize = Process->Vm.WorkingSetSize;
-                VmCounters->QuotaPeakPagedPoolUsage = Process->QuotaPeak[PsPagedPool];
-                VmCounters->QuotaPagedPoolUsage = Process->QuotaUsage[PsPagedPool];
-                VmCounters->QuotaPeakNonPagedPoolUsage = Process->QuotaPeak[PsNonPagedPool];
-                VmCounters->QuotaNonPagedPoolUsage = Process->QuotaUsage[PsNonPagedPool];
-                VmCounters->PagefileUsage = Process->QuotaUsage[PsPageFile] << PAGE_SHIFT;
-                VmCounters->PeakPagefileUsage = Process->QuotaPeak[PsPageFile] << PAGE_SHIFT;
+                VmCounters->PageFaultCount = Process->Vm.Instance.PageFaultCount;
+                VmCounters->PeakWorkingSetSize = Process->Vm.Instance.PeakWorkingSetSize;
+                VmCounters->WorkingSetSize = Process->Vm.Instance.WorkingSetSize;
+                VmCounters->QuotaPeakPagedPoolUsage = Process->ProcessQuotaPeak[PsPagedPool];
+                VmCounters->QuotaPagedPoolUsage = Process->ProcessQuotaUsage[PsPagedPool];
+                VmCounters->QuotaPeakNonPagedPoolUsage = Process->ProcessQuotaPeak[PsNonPagedPool];
+                VmCounters->QuotaNonPagedPoolUsage = Process->ProcessQuotaUsage[PsNonPagedPool];
+                VmCounters->PagefileUsage = Process->CommitCharge << PAGE_SHIFT;
+                VmCounters->PeakPagefileUsage = Process->CommitChargePeak << PAGE_SHIFT;
                 //VmCounters->PrivateUsage = Process->CommitCharge << PAGE_SHIFT;
                 //
 
@@ -1459,25 +1461,14 @@ NtQueryInformationProcess(
             }
             if (!NT_SUCCESS(Status)) break;
 
-            if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_DYNAMIC_CODE_POLICY)
+            if (ProcessInformationClass == ProcessMitigationPolicy &&
+                (Information.Policy == PSP_DYNAMIC_CODE_POLICY ||
+                 Information.Policy == PSP_SIGNATURE_POLICY ||
+                 Information.Policy == PSP_SYSTEM_CALL_DISABLE_POLICY ||
+                 Information.Policy == PSP_CHILD_PROCESS_POLICY ||
+                 PspIsExtendedMitigationPolicy(Information.Policy)))
             {
-                Flags = ReadAcquire(&Process->DynamicCodeMitigationPolicy);
-            }
-            else if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_SIGNATURE_POLICY)
-            {
-                Flags = ReadAcquire(&Process->SignatureMitigationPolicy);
-            }
-            else if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_SYSTEM_CALL_DISABLE_POLICY)
-            {
-                Flags = ReadAcquire(&Process->SystemCallDisablePolicy);
-            }
-            else if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_CHILD_PROCESS_POLICY)
-            {
-                Flags = ReadAcquire(&Process->ChildProcessPolicy);
-            }
-            else if (ProcessInformationClass == ProcessMitigationPolicy && PspIsExtendedMitigationPolicy(Information.Policy))
-            {
-                Flags = ReadAcquire(&Process->ExtendedMitigationPolicy[Information.Policy]);
+                Flags = PsGetProcessMitigationPolicyFlags(Process, Information.Policy);
             }
             else
             {
@@ -1875,7 +1866,7 @@ NtQueryInformationProcess(
             if (ExAcquireRundownProtection(&Process->RundownProtect))
             {
                 /* Return the user-mode PEB32, not the kernel bookkeeping structure. */
-                if (Process->Wow64Process) Wow64 = (ULONG_PTR)Process->Wow64Process->Peb;
+                if (Process->WoW64Process) Wow64 = (ULONG_PTR)Process->WoW64Process->Peb;
                 /* Release the lock */
                 ExReleaseRundownProtection(&Process->RundownProtect);
             }
@@ -2016,7 +2007,12 @@ NtQueryInformationProcess(
 
             _SEH2_TRY
             {
-                RtlCopyMemory(ProcessInformation, &Process->EnergyValues, Length);
+                PPO_PROCESS_ENERGY_CONTEXT EnergyContext = ReadPointerAcquire((volatile PVOID *)&Process->EnergyContext);
+
+                if (EnergyContext != NULL)
+                    RtlCopyMemory(ProcessInformation, &EnergyContext->Values, Length);
+                else
+                    RtlZeroMemory(ProcessInformation, Length);
                 Status = STATUS_SUCCESS;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -2643,18 +2639,16 @@ NtSetInformationProcess(
                     Status = STATUS_NOT_SUPPORTED;
                     break;
                 }
-                do
-                {
-                    OldPolicy = ReadAcquire(&Process->SignatureMitigationPolicy);
-                    NewPolicy = Flags & 1 ? 5 : Flags | (OldPolicy & 4);
-                    if (NewPolicy)
-                        NewPolicy |= 4;
-                    if (((OldPolicy & 1) && !(NewPolicy & 1)) || ((OldPolicy & 8) && !(NewPolicy & 9)))
-                    {
-                        Status = STATUS_ACCESS_DENIED;
-                        break;
-                    }
-                } while (InterlockedCompareExchange(&Process->SignatureMitigationPolicy, NewPolicy, OldPolicy) != OldPolicy);
+                PspLockMitigationPolicy();
+                OldPolicy = PsGetProcessMitigationPolicyFlags(Process, PSP_SIGNATURE_POLICY);
+                NewPolicy = Flags & 1 ? 5 : Flags | (OldPolicy & 4);
+                if (NewPolicy)
+                    NewPolicy |= 4;
+                if (((OldPolicy & 1) && !(NewPolicy & 1)) || ((OldPolicy & 8) && !(NewPolicy & 9)))
+                    Status = STATUS_ACCESS_DENIED;
+                else
+                    PspStoreMitigationPolicy(Process, PSP_SIGNATURE_POLICY, NewPolicy);
+                PspUnlockMitigationPolicy();
                 break;
             }
             if (Information.Policy == PSP_DYNAMIC_CODE_POLICY)
@@ -2667,18 +2661,14 @@ NtSetInformationProcess(
                     break;
                 }
 
-                do
-                {
-                    OldPolicy = ReadAcquire(&Process->DynamicCodeMitigationPolicy);
-                    if ((OldPolicy & 1) && !(Flags & 1) &&
-                        ((Process == PsGetCurrentProcess()) || !(OldPolicy & 4)))
-                    {
-                        Status = STATUS_ACCESS_DENIED;
-                        break;
-                    }
-                } while (InterlockedCompareExchange(&Process->DynamicCodeMitigationPolicy,
-                                                    Flags,
-                                                    OldPolicy) != OldPolicy);
+                PspLockMitigationPolicy();
+                OldPolicy = PsGetProcessMitigationPolicyFlags(Process, PSP_DYNAMIC_CODE_POLICY);
+                if ((OldPolicy & 1) && !(Flags & 1) &&
+                    ((Process == PsGetCurrentProcess()) || !(OldPolicy & 4)))
+                    Status = STATUS_ACCESS_DENIED;
+                else
+                    PspStoreMitigationPolicy(Process, PSP_DYNAMIC_CODE_POLICY, Flags);
+                PspUnlockMitigationPolicy();
                 break;
             }
             if (Information.Policy == PSP_SYSTEM_CALL_DISABLE_POLICY)
@@ -2690,15 +2680,13 @@ NtSetInformationProcess(
                     Status = STATUS_INVALID_PARAMETER;
                     break;
                 }
-                do
-                {
-                    OldPolicy = ReadAcquire(&Process->SystemCallDisablePolicy);
-                    if ((OldPolicy & 1) && !(Flags & 1))
-                    {
-                        Status = STATUS_ACCESS_DENIED;
-                        break;
-                    }
-                } while (InterlockedCompareExchange(&Process->SystemCallDisablePolicy, Flags, OldPolicy) != OldPolicy);
+                PspLockMitigationPolicy();
+                OldPolicy = PsGetProcessMitigationPolicyFlags(Process, PSP_SYSTEM_CALL_DISABLE_POLICY);
+                if ((OldPolicy & 1) && !(Flags & 1))
+                    Status = STATUS_ACCESS_DENIED;
+                else
+                    PspStoreMitigationPolicy(Process, PSP_SYSTEM_CALL_DISABLE_POLICY, Flags);
+                PspUnlockMitigationPolicy();
                 break;
             }
             if (Information.Policy == PSP_CHILD_PROCESS_POLICY)
@@ -2710,15 +2698,13 @@ NtSetInformationProcess(
                     Status = STATUS_INVALID_PARAMETER;
                     break;
                 }
-                do
-                {
-                    OldPolicy = ReadAcquire(&Process->ChildProcessPolicy);
-                    if ((OldPolicy & 1) && !(Flags & 1))
-                    {
-                        Status = STATUS_ACCESS_DENIED;
-                        break;
-                    }
-                } while (InterlockedCompareExchange(&Process->ChildProcessPolicy, Flags, OldPolicy) != OldPolicy);
+                PspLockMitigationPolicy();
+                OldPolicy = PsGetProcessMitigationPolicyFlags(Process, PSP_CHILD_PROCESS_POLICY);
+                if ((OldPolicy & 1) && !(Flags & 1))
+                    Status = STATUS_ACCESS_DENIED;
+                else
+                    PspStoreMitigationPolicy(Process, PSP_CHILD_PROCESS_POLICY, Flags);
+                PspUnlockMitigationPolicy();
                 break;
             }
             if (PspIsExtendedMitigationPolicy(Information.Policy))
@@ -3249,7 +3235,10 @@ NtSetInformationProcess(
                 break;
             }
 
-            InterlockedExchange(&Process->ExecutableWriteExceptions, ManageWrites.ProcessEnableWriteExceptions != 0);
+            if (ManageWrites.ProcessEnableWriteExceptions)
+                PspSetProcessFlag(Process, PSF_MANAGE_EXECUTABLE_MEMORY_WRITES_BIT);
+            else
+                PspClearProcessFlag(Process, PSF_MANAGE_EXECUTABLE_MEMORY_WRITES_BIT);
             Status = STATUS_SUCCESS;
 #else
             Status = STATUS_NOT_SUPPORTED;
@@ -4078,7 +4067,7 @@ NtSetInformationThread(
             {
                 Process = THREAD_TO_PROCESS(Thread);
                 if (DynamicCodePolicy &&
-                    ((ReadAcquire(&Process->DynamicCodeMitigationPolicy) & 3) != 3))
+                    ((PsGetProcessMitigationPolicyFlags(Process, PSP_DYNAMIC_CODE_POLICY) & 3) != 3))
                 {
                     Status = STATUS_ACCESS_DENIED;
                 }

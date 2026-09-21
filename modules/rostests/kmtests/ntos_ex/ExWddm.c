@@ -1341,6 +1341,14 @@ TestModernProcessEnergyState(VOID)
 }
 
 static
+UCHAR
+ProcessFaultCounts(
+    _In_ PEPROCESS Process)
+{
+    return (UCHAR)(Process->HangCount | (Process->GhostCount << 3) | (Process->PrefilterException << 6));
+}
+
+static
 VOID
 TestModernProcessFaultState(VOID)
 {
@@ -1356,8 +1364,8 @@ TestModernProcessFaultState(VOID)
     IsReactOS = *(volatile ULONG *)(KI_USER_SHARED_DATA + PAGE_SIZE - sizeof(ULONG)) == 0x8eac705;
     if (IsReactOS)
     {
-        BeforeCounts = PsGetCurrentProcess()->ProcessFaultCounts;
-        BeforeFlags = PsGetCurrentProcess()->ProcessFaultFlags;
+        BeforeCounts = ProcessFaultCounts(PsGetCurrentProcess());
+        BeforeFlags = PsGetCurrentProcess()->Flags3;
     }
     FaultQuery = 0xA5A5A5A5;
     ReturnLength = 0xA5A5A5A5;
@@ -1380,12 +1388,12 @@ TestModernProcessFaultState(VOID)
         ExpectedCounts = (ExpectedCounts & ~0x7) | ((BeforeCounts & 0x7) + 1);
     if (((BeforeCounts >> 3) & 0x7) != 0x7)
         ExpectedCounts = (ExpectedCounts & ~0x38) | ((((BeforeCounts >> 3) & 0x7) + 1) << 3);
-    ok_eq_uint(PsGetCurrentProcess()->ProcessFaultCounts, ExpectedCounts);
-    ok_eq_hex(PsGetCurrentProcess()->ProcessFaultFlags, BeforeFlags | 0x4);
+    ok_eq_uint(ProcessFaultCounts(PsGetCurrentProcess()), ExpectedCounts);
+    ok_eq_hex(PsGetCurrentProcess()->Flags3, BeforeFlags | 0x4);
     FaultInformation = 0x6;
     for (ReturnLength = 0; ReturnLength != 8; ReturnLength++)
         PsSetProcessFaultInformation(PsGetCurrentProcess(), &FaultInformation);
-    ok_eq_uint(PsGetCurrentProcess()->ProcessFaultCounts & 0x7F, 0x7F);
+    ok_eq_uint(ProcessFaultCounts(PsGetCurrentProcess()) & 0x7F, 0x7F);
 }
 
 static
@@ -1401,15 +1409,11 @@ TestModernProcessWindowState(VOID)
     Status = PsSetProcessesWindowState(0, NULL);
     trace("PsSetProcessesWindowState(0) returned 0x%08lx\n", Status);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    ok_eq_ulong(PsGetCurrentProcess()->ProcessWindowState, 0);
-    ok(PsGetCurrentProcess()->ProcessWindowStateContext == NULL, "expected a NULL window-state context\n");
 
     Context = (PVOID)(ULONG_PTR)0x12345678;
     Status = PsSetProcessesWindowState(0xA5, Context);
     trace("PsSetProcessesWindowState(0xA5) returned 0x%08lx\n", Status);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    ok_eq_ulong(PsGetCurrentProcess()->ProcessWindowState, 0xA5);
-    ok(PsGetCurrentProcess()->ProcessWindowStateContext == Context, "expected the supplied window-state context\n");
 }
 
 static

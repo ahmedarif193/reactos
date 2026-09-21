@@ -192,12 +192,12 @@ MmAccessFaultEx(
 
     if (Process != NULL)
     {
-        Process->Vm.PageFaultCount++;
-        Process->Vm.WorkingSetSize = (ULONG)MI_ATOMIC_READ64(&Space->ResidentPages);
+        Process->Vm.Instance.PageFaultCount++;
+        Process->Vm.Instance.WorkingSetSize = (ULONG)MI_ATOMIC_READ64(&Space->ResidentPages);
         Process->NumberOfPrivatePages = (SIZE_T)MI_ATOMIC_READ64(&Space->PrivatePages);
 
-        if (Process->Vm.WorkingSetSize > Process->Vm.PeakWorkingSetSize)
-            Process->Vm.PeakWorkingSetSize = Process->Vm.WorkingSetSize;
+        if (Process->Vm.Instance.WorkingSetSize > Process->Vm.Instance.PeakWorkingSetSize)
+            Process->Vm.Instance.PeakWorkingSetSize = Process->Vm.Instance.WorkingSetSize;
     }
 
     if (Status == STATUS_GUARD_PAGE_VIOLATION && Process != NULL)

@@ -585,8 +585,8 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                               NULL);
 
     /* Copy the process names */
-    strcpy(PsIdleProcess->ImageFileName, "Idle");
-    strcpy(PsInitialSystemProcess->ImageFileName, "System");
+    strcpy((PCHAR)PsIdleProcess->ImageFileName, "Idle");
+    strcpy((PCHAR)PsInitialSystemProcess->ImageFileName, "System");
 
     /* Allocate a structure for the audit name */
     PsInitialSystemProcess->SeAuditProcessCreationInfo.ImageFileName =

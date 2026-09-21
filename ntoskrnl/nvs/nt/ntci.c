@@ -85,7 +85,7 @@ NTSTATUS
 MiValidateImageSigningPolicy(
     _In_ PFILE_OBJECT FileObject)
 {
-    ULONG Policy = ReadAcquire(&PsGetCurrentProcess()->SignatureMitigationPolicy);
+    ULONG Policy = PsGetProcessMitigationPolicyFlags(PsGetCurrentProcess(), PSP_SIGNATURE_POLICY);
     MI_CI_FILE File = { FileObject, NULL, STATUS_SUCCESS };
     SIZE_T Low = 0, High = RTL_NUMBER_OF(MiSystemImageCatalog), Middle;
     LARGE_INTEGER Size, Time;

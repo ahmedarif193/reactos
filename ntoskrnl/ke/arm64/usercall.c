@@ -190,7 +190,7 @@ KiSystemService(
     ServiceNumber = Instruction & SERVICE_NUMBER_MASK;
 
     if ((TableIndex == SERVICE_TABLE_TEST) &&
-        (ReadAcquire(&PsGetCurrentProcess()->SystemCallDisablePolicy) & 1))
+        PsGetCurrentProcess()->MitigationFlagsValues.DisallowWin32kSystemCalls)
     {
         TrapFrame->X0 = STATUS_INVALID_SYSTEM_SERVICE;
         return;

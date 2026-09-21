@@ -92,9 +92,9 @@ MiSyncProcessCounters(
         return;
 
     MiProcessQueryCounters(Native, &Counters);
-    Process->Vm.PageFaultCount = (ULONG)Counters.PageFaultCount;
-    Process->Vm.WorkingSetSize = (ULONG)(Counters.WorkingSetSize >> PAGE_SHIFT);
-    Process->Vm.PeakWorkingSetSize = (ULONG)(Counters.PeakWorkingSetSize >> PAGE_SHIFT);
+    Process->Vm.Instance.PageFaultCount = (ULONG)Counters.PageFaultCount;
+    Process->Vm.Instance.WorkingSetSize = (SIZE_T)(Counters.WorkingSetSize >> PAGE_SHIFT);
+    Process->Vm.Instance.PeakWorkingSetSize = (SIZE_T)(Counters.PeakWorkingSetSize >> PAGE_SHIFT);
     Process->CommitCharge = (SIZE_T)(Counters.PagefileUsage >> PAGE_SHIFT);
     Process->NumberOfPrivatePages = (SIZE_T)MI_ATOMIC_READ64(&Native->Space.PrivatePages);
 
@@ -176,15 +176,14 @@ BOOLEAN
 MiDynamicCodeBlocked(
     _In_ PEPROCESS Process)
 {
-    LONG Policy = ReadAcquire(&Process->DynamicCodeMitigationPolicy);
     PETHREAD Thread;
 
-    if (!(Policy & 1))
+    if (!Process->MitigationFlagsValues.DisableDynamicCode)
         return FALSE;
 
     Thread = PsGetCurrentThread();
     return !(THREAD_TO_PROCESS(Thread) == Process &&
-             (Policy & 2) &&
+             Process->MitigationFlagsValues.DisableDynamicCodeAllowOptOut &&
              ReadAcquire(&Thread->DynamicCodeOptOut));
 }
 

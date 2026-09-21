@@ -828,7 +828,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
                 /* Check if this is a foreground process */
                 if (CONTAINING_RECORD(Thread->ApcState.Process, EPROCESS, Pcb)->
-                    Vm.Flags.MemoryPriority == MEMORY_PRIORITY_FOREGROUND)
+                    Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_FOREGROUND)
                 {
                     /* Apply the foreground boost */
                     OldPriority += PsPrioritySeparation;

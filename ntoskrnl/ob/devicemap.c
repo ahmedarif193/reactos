@@ -98,9 +98,9 @@ ObSetDeviceMap(IN PEPROCESS Process,
     }
 
     /* Save old process device map */
-    OldDeviceMap = WorkProcess->DeviceMap;
+    OldDeviceMap = WorkProcess->DeviceMap.Object;
     /* Attach the device map to the process */
-    WorkProcess->DeviceMap = DeviceMap;
+    WorkProcess->DeviceMap.Object = DeviceMap;
 
     /* Release the device map lock */
     KeReleaseGuardedMutex(&ObpDeviceMapLock);
@@ -297,11 +297,11 @@ ObpSetCurrentProcessDeviceMap(VOID)
     KeAcquireGuardedMutex(&ObpDeviceMapLock);
 
     /* Save old device map attached to the process */
-    OldDeviceMap = CurrentProcess->DeviceMap;
+    OldDeviceMap = CurrentProcess->DeviceMap.Object;
 
     /* Set new device map & reference it */
     ++DeviceMap->ReferenceCount;
-    CurrentProcess->DeviceMap = DeviceMap;
+    CurrentProcess->DeviceMap.Object = DeviceMap;
 
     /* Release the device map lock */
     KeReleaseGuardedMutex(&ObpDeviceMapLock);
@@ -404,7 +404,7 @@ ObpReferenceDeviceMap(VOID)
          * Fall back case of the LUID mapping, make sure there's a
          * a device map attached to the current process
          */
-        if (PsGetCurrentProcess()->DeviceMap == NULL &&
+        if (PsGetCurrentProcess()->DeviceMap.Object == NULL &&
             !NT_SUCCESS(ObpSetCurrentProcessDeviceMap()))
         {
             /* We may have failed after we got impersonation token */
@@ -428,7 +428,7 @@ ObpReferenceDeviceMap(VOID)
     /* Otherwise, use current process device map */
     else
     {
-        DeviceMap = PsGetCurrentProcess()->DeviceMap;
+        DeviceMap = PsGetCurrentProcess()->DeviceMap.Object;
     }
 
     /* If we got one, reference it */
@@ -462,8 +462,8 @@ ObDereferenceDeviceMap(IN PEPROCESS Process)
     /* Get the pointer to this process devicemap and reset it
        holding the device map lock */
     KeAcquireGuardedMutex(&ObpDeviceMapLock);
-    DeviceMap = Process->DeviceMap;
-    Process->DeviceMap = NULL;
+    DeviceMap = Process->DeviceMap.Object;
+    Process->DeviceMap.Object = NULL;
     KeReleaseGuardedMutex(&ObpDeviceMapLock);
 
     /* Continue only if there is a device map */
@@ -519,14 +519,14 @@ ObInheritDeviceMap(IN PEPROCESS Parent,
     KeAcquireGuardedMutex(&ObpDeviceMapLock);
 
     /* Get the parent process device map or the system device map */
-    DeviceMap = (Parent != NULL) ? Parent->DeviceMap : ObSystemDeviceMap;
+    DeviceMap = (Parent != NULL) ? Parent->DeviceMap.Object : ObSystemDeviceMap;
     if (DeviceMap != NULL)
     {
         /* Reference the device map and attach it to the new process */
         DeviceMap->ReferenceCount++;
         DPRINT("ReferenceCount: %lu\n", DeviceMap->ReferenceCount);
 
-        Process->DeviceMap = DeviceMap;
+        Process->DeviceMap.Object = DeviceMap;
     }
 
     /* Release the device map lock */
@@ -585,7 +585,7 @@ ObQueryDeviceMapInformation(
     else
     {
         /* Get the process device map or the system device map */
-        DeviceMap = (Process != NULL) ? Process->DeviceMap : ObSystemDeviceMap;
+        DeviceMap = (Process != NULL) ? Process->DeviceMap.Object : ObSystemDeviceMap;
     }
 
     /* Fail if no device map */

@@ -1002,6 +1002,13 @@ typedef struct _ACTIVATION_CONTEXT_STACK_FRAMELIST
 
 #endif /* NTOS_MODE_USER */
 
+#ifndef NTOS_MODE_USER
+typedef struct _RTL_AVL_TREE
+{
+    PRTL_BALANCED_NODE Root;
+} RTL_AVL_TREE, *PRTL_AVL_TREE;
+#endif
+
 #if (NTDDI_VERSION >= NTDDI_WS03SP1)
 typedef struct _ACTIVATION_CONTEXT_STACK
 {

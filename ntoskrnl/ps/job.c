@@ -614,7 +614,7 @@ PspAssignProcessToJob(
         KeSetAffinityProcess(&Process->Pcb, Job->Affinity);
     if (Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
     {
-        (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
+        (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
         KeSetQuantumProcess(&Process->Pcb, Quantum);
     }
     if (Job->LimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
@@ -1303,7 +1303,7 @@ PspSetJobLimitsBasicOrExtended(
                 KeSetAffinityProcess(&Process->Pcb, Job->Affinity);
             if (UpdateScheduling)
             {
-                (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
+                (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
                 KeSetQuantumProcess(&Process->Pcb, Quantum);
             }
             if (Job->LimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)

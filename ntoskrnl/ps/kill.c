@@ -102,7 +102,7 @@ PspTerminateProcess(IN PEPROCESS Process,
         /* Break to debugger */
         PspCatchCriticalBreak("Terminating critical process 0x%p (%s)\n",
                               Process,
-                              Process->ImageFileName);
+                              (PCHAR)Process->ImageFileName);
     }
 
     /* Set the delete flag */
@@ -367,12 +367,18 @@ PspDeleteProcess(IN PVOID ObjectBody)
     }
 
 #ifdef _WIN64
-    if (Process->Wow64Process)
+    if (Process->WoW64Process)
     {
-        ExFreePoolWithTag(Process->Wow64Process, TAG_WOW64_PROCESS);
-        Process->Wow64Process = NULL;
+        ExFreePoolWithTag(Process->WoW64Process, TAG_WOW64_PROCESS);
+        Process->WoW64Process = NULL;
     }
 #endif
+
+    if (Process->EnergyContext)
+    {
+        ExFreePoolWithTag(Process->EnergyContext, TAG_PS_ENERGY);
+        Process->EnergyContext = NULL;
+    }
 
     /* See if we have a PID */
     if (Process->UniqueProcessId)
@@ -661,7 +667,7 @@ PspExitThread(IN NTSTATUS ExitStatus)
         /* Break to debugger */
         PspCatchCriticalBreak("Critical thread 0x%p (in %s) exited\n",
                               Thread,
-                              CurrentProcess->ImageFileName);
+                              (PCHAR)CurrentProcess->ImageFileName);
     }
 
     /* Check if it's the last thread and this is a Critical Process */
@@ -673,7 +679,7 @@ PspExitThread(IN NTSTATUS ExitStatus)
             /* Break to debugger */
             PspCatchCriticalBreak("Critical process 0x%p (%s) exited\n",
                                   CurrentProcess,
-                                  CurrentProcess->ImageFileName);
+                                  (PCHAR)CurrentProcess->ImageFileName);
         }
         else
         {
@@ -885,9 +891,6 @@ PspExitThread(IN NTSTATUS ExitStatus)
         /* Dereference the process token */
         ObFastDereferenceObject(&CurrentProcess->Token, PrimaryToken);
 
-        /* Check if this is a VDM Process and rundown the VDM DPCs if so */
-        if (CurrentProcess->VdmObjects) { /* VdmRundownDpcs(CurrentProcess); */ }
-
         /* Kill the process in the Object Manager */
         ObKillProcess(CurrentProcess);
 
@@ -1056,7 +1059,7 @@ PspTerminateThreadByPointer(IN PETHREAD Thread,
         /* Break to debugger */
         PspCatchCriticalBreak("Terminating critical thread 0x%p (in %s)\n",
                               Thread,
-                              ((PEPROCESS)Thread->ThreadsProcess)->ImageFileName);
+                              (PCHAR)((PEPROCESS)Thread->ThreadsProcess)->ImageFileName);
     }
 
     /* Check if we are already inside the thread */
@@ -1263,7 +1266,7 @@ NtTerminateProcess(IN HANDLE ProcessHandle OPTIONAL,
         /* Break to debugger */
         PspCatchCriticalBreak("Terminating critical process 0x%p (%s)\n",
                               Process,
-                              Process->ImageFileName);
+                              (PCHAR)Process->ImageFileName);
     }
 
     /* Lock the Process */
