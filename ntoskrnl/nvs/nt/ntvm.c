@@ -189,8 +189,10 @@ MiHighestAddressFromZeroBits(
     }
     else if (ZeroBits != 0)
     {
-#ifdef _WIN64
         ULONG Shift;
+
+        if (sizeof(ZeroBits) < sizeof(ULONG64))
+            return FALSE;
 
         for (Shift = 1; Shift < sizeof(ZeroBits) * 8; Shift <<= 1)
             ZeroBits |= ZeroBits >> Shift;
@@ -199,9 +201,6 @@ MiHighestAddressFromZeroBits(
             return FALSE;
 
         Highest = min(Highest, (ULONG64)ZeroBits);
-#else
-        return FALSE;
-#endif
     }
 
     *HighestAddress = Highest;
@@ -230,24 +229,24 @@ NtAllocateVirtualMemory(
     PAGED_CODE();
 
     if (!MiHighestAddressFromZeroBits(ZeroBits, &Highest))
-        return STATUS_INVALID_PARAMETER_3;
+        return STATUS_INVALID_PARAMETER;
 
     if (AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_RESET | MEM_PHYSICAL | MEM_TOP_DOWN | MEM_WRITE_WATCH |
                            MEM_LARGE_PAGES))
     {
-        return STATUS_INVALID_PARAMETER_5;
+        return STATUS_INVALID_PARAMETER;
     }
 
     if (!(AllocationType & (MEM_COMMIT | MEM_RESERVE | MEM_RESET)))
-        return STATUS_INVALID_PARAMETER_5;
+        return STATUS_INVALID_PARAMETER;
 
     if ((AllocationType & MEM_RESET) && AllocationType != MEM_RESET)
-        return STATUS_INVALID_PARAMETER_5;
+        return STATUS_INVALID_PARAMETER;
 
     if (AllocationType & MEM_PHYSICAL)
     {
         if (AllocationType != (MEM_RESERVE | MEM_PHYSICAL))
-            return STATUS_INVALID_PARAMETER_5;
+            return STATUS_INVALID_PARAMETER;
         if (Protect != PAGE_READWRITE)
             return STATUS_INVALID_PAGE_PROTECTION;
     }
@@ -257,10 +256,17 @@ NtAllocateVirtualMemory(
         if ((AllocationType & (MEM_RESERVE | MEM_COMMIT)) != (MEM_RESERVE | MEM_COMMIT) ||
             (AllocationType & MEM_WRITE_WATCH))
         {
-            return STATUS_INVALID_PARAMETER_5;
+            return STATUS_INVALID_PARAMETER;
         }
         if (!SeSinglePrivilegeCheck(SeLockMemoryPrivilege, ExGetPreviousMode()))
             return STATUS_PRIVILEGE_NOT_HELD;
+    }
+
+    if (Protect & (PAGE_GRAPHICS_NOACCESS | PAGE_GRAPHICS_READONLY | PAGE_GRAPHICS_READWRITE | PAGE_GRAPHICS_EXECUTE |
+                   PAGE_GRAPHICS_EXECUTE_READ | PAGE_GRAPHICS_EXECUTE_READWRITE | PAGE_GRAPHICS_COHERENT |
+                   PAGE_GRAPHICS_NOCACHE))
+    {
+        return STATUS_NOT_SUPPORTED;
     }
 
     if (!MiAllocationProtectionFromWin32(Protect, &Protection) || MI_PROT_IS_COPY(Protection))
@@ -271,10 +277,15 @@ NtAllocateVirtualMemory(
         return Status;
 
     if ((ULONG_PTR)BaseAddress > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
-        return STATUS_INVALID_PARAMETER_2;
+        return STATUS_INVALID_PARAMETER;
 
     if (RegionSize == 0 || (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - (ULONG_PTR)BaseAddress < RegionSize)
-        return STATUS_INVALID_PARAMETER_4;
+        return STATUS_INVALID_PARAMETER;
+
+    if (BaseAddress != NULL)
+        Highest = (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
+    else if (Highest + 1 < PAGE_SIZE)
+        return STATUS_INVALID_PARAMETER;
 
     if (AllocationType & MEM_RESET)
         return STATUS_SUCCESS;
@@ -374,10 +385,10 @@ NtFreeVirtualMemory(
         return Status;
 
     if ((ULONG_PTR)BaseAddress > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
-        return STATUS_INVALID_PARAMETER_2;
+        return STATUS_INVALID_PARAMETER;
 
     if ((ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - (ULONG_PTR)BaseAddress < RegionSize)
-        return STATUS_INVALID_PARAMETER_3;
+        return STATUS_INVALID_PARAMETER;
 
     Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
     if (!NT_SUCCESS(Status))
