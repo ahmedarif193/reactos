@@ -800,7 +800,6 @@ MmCreateSection(
     return STATUS_SUCCESS;
 }
 
-static
 BOOLEAN
 MiFrameIsRam(
     _In_ ULONG64 Frame)
