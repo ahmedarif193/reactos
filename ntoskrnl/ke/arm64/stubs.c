@@ -851,6 +851,8 @@ KeStartAllProcessors(
                 volatile ULONG ApWait;
                 for (ApWait = 0; ApWait < 10000000; ApWait++)
                 {
+                    if (KeBugCheckActive)
+                        HalHaltSystem();
                     if (KeLoaderBlock->Prcb == 0)
                         break;
                     KeMemoryBarrier();
