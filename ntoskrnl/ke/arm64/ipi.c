@@ -99,7 +99,7 @@ KiIpiSend(
         Prcb = KiProcessorBlock[Index];
         if (Prcb != NULL)
         {
-            InterlockedBitTestAndSet((PLONG)&Prcb->RequestSummary, IpiRequest);
+            InterlockedOr((PLONG)&Prcb->RequestSummary, (LONG)IpiRequest);
         }
     }
 
@@ -192,19 +192,19 @@ KiIpiServiceRoutine(
             KiProcessorFreezeHandler(TrapFrame, ExceptionFrame);
         }
 
-        if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_APC))
+        if (InterlockedAnd((PLONG)&Prcb->RequestSummary, ~IPI_APC) & IPI_APC)
         {
             HalRequestSoftwareInterrupt(APC_LEVEL);
         }
 
-        if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_DPC))
+        if (InterlockedAnd((PLONG)&Prcb->RequestSummary, ~IPI_DPC) & IPI_DPC)
         {
             SmpDbgRemoteDpc(Prcb->Number, SMPDBG_SOURCE_UNKNOWN);
             Prcb->DpcInterruptRequested = TRUE;
             HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
         }
 
-        if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_SYNCH_REQUEST))
+        if (InterlockedAnd((PLONG)&Prcb->RequestSummary, ~IPI_SYNCH_REQUEST) & IPI_SYNCH_REQUEST)
         {
             PKIPI_BROADCAST_WORKER Function = KiArm64IpiPacket.Function;
             ULONG_PTR Argument = KiArm64IpiPacket.Argument;
