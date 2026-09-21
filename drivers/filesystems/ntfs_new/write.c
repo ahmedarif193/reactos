@@ -126,6 +126,16 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
 
+    if (PagingIo)
+    {
+        LONGLONG FileSize = NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart;
+
+        if (ByteOffset.QuadPart >= FileSize)
+            Length = 0;
+        else if (ByteOffset.QuadPart + Length > FileSize)
+            Length = (ULONG)(FileSize - ByteOffset.QuadPart);
+    }
+
     ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
     /*
      * A paging write hands us the section's own pages. Passing them straight
