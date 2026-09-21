@@ -788,12 +788,13 @@ MiFreeVirtualMemory(
 }
 
 NTSTATUS
-MiProtectVirtualMemory(
+MiProtectVirtualMemoryEx(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _Inout_ PULONG64 BaseAddress,
     _Inout_ PULONG64 RegionSize,
     _In_ ULONG NewProtection,
-    _Out_ PULONG OldProtection)
+    _Out_ PULONG OldProtection,
+    _In_ BOOLEAN DenyDynamicCode)
 {
     ULONG64 Start = MI_PAGE_ALIGN_DOWN(*BaseAddress);
     ULONG64 End = MI_PAGE_ALIGN_UP(*BaseAddress + *RegionSize);
@@ -822,6 +823,12 @@ MiProtectVirtualMemory(
     {
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
         return STATUS_CONFLICTING_ADDRESSES;
+    }
+
+    if (DenyDynamicCode && MI_PROT_IS_EXECUTE(NewProtection) && Vad->Type != MiVadImage)
+    {
+        MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        return STATUS_DYNAMIC_CODE_BLOCKED;
     }
 
     if (Vad->Type == MiVadPrivate && MI_PROT_IS_COPY(NewProtection))
@@ -876,6 +883,17 @@ MiProtectVirtualMemory(
     *RegionSize = End - Start;
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
     return Status;
+}
+
+NTSTATUS
+MiProtectVirtualMemory(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _Inout_ PULONG64 BaseAddress,
+    _Inout_ PULONG64 RegionSize,
+    _In_ ULONG NewProtection,
+    _Out_ PULONG OldProtection)
+{
+    return MiProtectVirtualMemoryEx(Space, BaseAddress, RegionSize, NewProtection, OldProtection, FALSE);
 }
 
 NTSTATUS

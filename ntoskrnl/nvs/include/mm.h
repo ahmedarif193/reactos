@@ -243,6 +243,9 @@ NTSTATUS MiFreeVirtualMemory(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PULONG64 B
                              _Inout_ PULONG64 RegionSize, _In_ ULONG FreeType);
 NTSTATUS MiProtectVirtualMemory(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PULONG64 BaseAddress,
                                 _Inout_ PULONG64 RegionSize, _In_ ULONG NewProtection, _Out_ PULONG OldProtection);
+NTSTATUS MiProtectVirtualMemoryEx(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PULONG64 BaseAddress,
+                                  _Inout_ PULONG64 RegionSize, _In_ ULONG NewProtection, _Out_ PULONG OldProtection,
+                                  _In_ BOOLEAN DenyDynamicCode);
 NTSTATUS MiQueryVirtualMemory(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Address,
                               _Out_ PMI_MEMORY_INFORMATION Information);
 VOID MiCleanAddressSpace(_Inout_ PMI_ADDRESS_SPACE Space);
