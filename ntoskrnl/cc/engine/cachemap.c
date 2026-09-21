@@ -54,6 +54,8 @@ CcMapUninitialize(
     _Inout_ PCC_MAP Map)
 {
     ULONG i;
+    KIRQL OldIrql;
+    BOOLEAN Busy;
 
     if (CcBcbRangeBusy(Map, 0, (ULONG64)-1))
         return FALSE;
@@ -61,6 +63,12 @@ CcMapUninitialize(
     CcBcbCompleteFlush(Map, 0, (ULONG64)-1, (ULONG64)-1);
 
     if (!CcMapDetachViews(Map, 0, (ULONG64)-1))
+        return FALSE;
+
+    CC_LOCK_ACQUIRE(&Map->Cache->ReclaimLock, &OldIrql);
+    Busy = (Map->ReclaimsInProgress != 0);
+    CC_LOCK_RELEASE(&Map->Cache->ReclaimLock, OldIrql);
+    if (Busy)
         return FALSE;
 
     CcDirtyDiscard(Map, 0, (ULONG64)-1);

@@ -737,6 +737,77 @@ CcmmNtClose(ULONG64 FileSize, BOOLEAN PendingWrite, BOOLEAN DirtyPinned)
     WorldDestroy(&World);
 }
 
+static VOID
+CcmmCloseDuringUnmap(PVOID Context, PVOID Base)
+{
+    PCC_NT_MAP NtMap = Context;
+    CCMM_FILE *File = NtMap->FileObject->FsContext;
+
+    CHECK(MiHostIrql == 0);
+    if (!File->CloseStarted)
+    {
+        File->CloseStarted = TRUE;
+        CHECK(NtMap->Map.ReclaimsInProgress == 1);
+        CcNtDestroyMap(NtMap);
+        CHECK(NtMap->Map.ReclaimsDraining);
+        CHECK(NtMap->UninitializeEvent->State == 0);
+        CHECK(NtMap->FileObject->References == 1);
+        CHECK(File->Released == 0);
+        CHECK(CcCacheTrim(NtMap->Map.Cache, 1) == 0);
+    }
+    CcNtBackingOps.UnmapView(Context, Base);
+    CHECK(File->Released == 0);
+}
+
+static void
+CcmmNtCloseReclaim(BOOLEAN Trim)
+{
+    TEST_WORLD World;
+    CCMM_FILE File, Other;
+    CC_CACHE Cache;
+    FILE_OBJECT Object = { .References = 1, .FsContext = &File };
+    MI_CONTROL_AREA Control;
+    KEVENT Event = { .Context = &File };
+    PCC_NT_MAP NtMap = calloc(1, sizeof(*NtMap));
+    CC_VIEW_RANGE Range;
+    ULONG i;
+
+    WorldCreate(&World, 256, 1, 10000);
+    WorldAttach(&World, 0, NULL);
+    CHECK(NT_SUCCESS(CcCacheInitialize(&Cache, CC_MIN_VIEWS, 1024)));
+    CcmmFileCreate(&File, &World, &Cache, (ULONG64)Cache.ViewCount * CC_VIEW_SIZE);
+    CcmmFileCreate(&Other, &World, &Cache, PAGE_SIZE);
+    CHECK(CcMapUninitialize(&File.Map));
+    Control.Segment = File.Segment;
+    NtMap->Control = &Control;
+    NtMap->FileObject = &Object;
+    NtMap->UninitializeEvent = &Event;
+    CcMapInitialize(&NtMap->Map, &Cache, &CcNtBackingOps, NtMap,
+                    File.File.Size, File.File.Size, File.File.Size);
+    NtMap->Map.Ops.UnmapView = CcmmCloseDuringUnmap;
+    for (i = 0; i < Cache.ViewCount; i++)
+    {
+        CHECK(NT_SUCCESS(CcViewAcquire(&NtMap->Map, (ULONG64)i * CC_VIEW_SIZE, 1, &Range)));
+        CcViewRelease(&Range);
+    }
+    CHECK(File.Segment->MappedViews == (LONG)Cache.ViewCount);
+    if (Trim)
+        CHECK(CcCacheTrim(&Cache, 1) == 1);
+    else
+    {
+        CHECK(NT_SUCCESS(CcViewAcquire(&Other.Map, 0, 1, &Range)));
+        CcViewRelease(&Range);
+    }
+    CHECK(File.CloseStarted && File.Released == 1);
+    CHECK(Event.State == 1 && Object.References == 0);
+    CcmmFileDestroy(&Other);
+    CHECK(CcCacheCheck(&Cache) == 0);
+    CcCacheUninitialize(&Cache);
+    WorldExpectClean(&World, 256);
+    FileDestroy(&File.File);
+    WorldDestroy(&World);
+}
+
 static NTSTATUS
 CcmmReadAsync(PVOID Context, ULONG64 Offset, ULONG Frame, PVOID Buffer,
               MI_READ_COMPLETION Completion, PVOID CompletionContext)
@@ -1143,6 +1214,8 @@ TestCcOnMm(void)
     ULONG i;
 
     CcmmFaultableCopy();
+    CcmmNtCloseReclaim(FALSE);
+    CcmmNtCloseReclaim(TRUE);
     CcmmPurgeWithoutCache();
     CcmmBasic();
     CcmmGrow();

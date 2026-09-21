@@ -53,11 +53,21 @@ CcNtCompleteDestroyMap(
         KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
 }
 
+static
+VOID
+CcNtDrainMapReads(
+    _In_opt_ PVOID Context)
+{
+    PCC_NT_MAP NtMap = Context;
+
+    NtMap->ReadDrain.Complete = CcNtCompleteDestroyMap;
+    NtMap->ReadDrain.Context = NtMap;
+    MiSegmentDrainReads(NtMap->Control->Segment, &NtMap->ReadDrain);
+}
+
 VOID
 CcNtDestroyMap(
     _Inout_ PCC_NT_MAP NtMap)
 {
-    NtMap->ReadDrain.Complete = CcNtCompleteDestroyMap;
-    NtMap->ReadDrain.Context = NtMap;
-    MiSegmentDrainReads(NtMap->Control->Segment, &NtMap->ReadDrain);
+    CcMapDrainReclaims(&NtMap->Map, CcNtDrainMapReads, NtMap);
 }
