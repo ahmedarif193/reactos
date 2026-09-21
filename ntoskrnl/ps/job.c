@@ -605,6 +605,7 @@ PspAssignProcessToJob(
 
     Job->TotalProcesses++;
     Job->ActiveProcesses++;
+    Process->CommitCharge = MmQueryProcessCommitCharge(Process);
     InterlockedExchangeAdd((PLONG)&Job->CurrentJobMemoryUsed, (LONG)Process->CommitCharge);
     PspUpdateJobPeak(&Job->PeakProcessMemoryUsed, (ULONG)Process->CommitCharge);
     PspUpdateJobPeak(&Job->PeakJobMemoryUsed, Job->CurrentJobMemoryUsed);

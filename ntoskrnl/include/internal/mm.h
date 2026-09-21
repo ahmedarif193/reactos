@@ -1950,6 +1950,11 @@ MmAdjustWorkingSetSize(
     IN ULONG SystemCache,
     IN BOOLEAN IncreaseOkay);
 
+SIZE_T
+NTAPI
+MmQueryProcessCommitCharge(
+    _In_ PEPROCESS Process);
+
 
 /* session.c *****************************************************************/
 

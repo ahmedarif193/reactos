@@ -22,6 +22,13 @@ MiChargeCommit(
         return FALSE;
     }
 
+    if (Pages > 0 && Space->CommitOwner != NULL && System->ChargeOwnerCommit != NULL &&
+        !System->ChargeOwnerCommit(Space->CommitOwner, Pages))
+    {
+        MI_ATOMIC_ADD64(&System->CommittedPages, -Pages);
+        return FALSE;
+    }
+
     MI_ATOMIC_ADD64(&Space->CommittedPages, Pages);
     return TRUE;
 }
@@ -36,6 +43,9 @@ MiReturnCommit(
 
     MI_ATOMIC_ADD64(&Space->System->CommittedPages, -Pages);
     MI_ATOMIC_ADD64(&Space->CommittedPages, -Pages);
+
+    if (Space->CommitOwner != NULL && Space->System->ReturnOwnerCommit != NULL)
+        Space->System->ReturnOwnerCommit(Space->CommitOwner, Pages);
 }
 
 static
