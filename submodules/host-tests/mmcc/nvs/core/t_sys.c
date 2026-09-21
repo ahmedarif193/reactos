@@ -69,7 +69,7 @@ SysPteAllocator(void)
 
     SysWorldCreate(&World, 1024, 2);
     Ptes = World.System.SystemPtes;
-    CHECK(MI_ATOMIC_READ64(&World.System.SystemSpace.PageTablePages) >= SYSPTE_PAGES / 512);
+    CHECK(MI_ATOMIC_READ64(&World.System.SystemSpace.PageTablePages) <= 8);
     CHECK(Ptes->Base >= World.System.Arch->SystemAddressStart);
 
     for (i = 0; i < RTL_NUMBER_OF(Sizes); i++)
@@ -170,6 +170,101 @@ SysReservedMapping(void)
     MiReleaseSystemPtes(&World.System, Prefix, 511);
     SysWorldDestroy(&World, 1024);
     MiMappingTestSystem = NULL;
+}
+
+/* A failed lazy population must return its VA extent, even after creating
+ * some tables, and permit a retry when physical pages become available. */
+static
+void
+SysPtePopulationFailure(void)
+{
+    static TEST_WORLD World;
+    ULONG Held[128], Count = 0, Frame;
+    ULONG64 Va;
+    LONG64 Tables;
+    KIRQL OldIrql;
+
+    SysWorldCreate(&World, RTL_NUMBER_OF(Held), 1);
+    Tables = World.System.SystemSpace.PageTablePages;
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+        Held[Count++] = Frame;
+    CHECK(Count > 1);
+    MiPfnShareDecrement(&World.System.Pfn, Held[--Count], TRUE);
+
+    MI_RAISE_TO_DISPATCH(&OldIrql);
+    CHECK(MiReserveSystemPtes(&World.System, 2048) == 0);
+    CHECK(MiHostIrql == 2);
+    MI_RESTORE_IRQL(OldIrql);
+    CHECK(World.System.SystemPtes->Allocations.NodeCount == 0);
+    CHECK(World.System.SystemPtes->FreePages == SYSPTE_PAGES);
+    CHECK(World.System.SystemSpace.PageTablePages > Tables);
+
+    while (Count != 0)
+        MiPfnShareDecrement(&World.System.Pfn, Held[--Count], TRUE);
+    MI_RAISE_TO_DISPATCH(&OldIrql);
+    Va = MiReserveSystemPtes(&World.System, 2048);
+    CHECK(Va == World.System.SystemPtes->Base);
+    CHECK(MiPtLookup(&World.System.SystemSpace, Va + 2047ULL * PAGE_SIZE, NULL) != NULL);
+    MiReleaseSystemPtes(&World.System, Va, 2048);
+    CHECK(MiHostIrql == 2);
+    MI_RESTORE_IRQL(OldIrql);
+    SysWorldDestroy(&World, RTL_NUMBER_OF(Held));
+}
+
+/* Pi 3 desktop startup retains both miniports' contiguous slabs, then VidMm
+ * maps the real adapter's slab again. These are virtual reservations, not a
+ * second allocation of the underlying graphics RAM. */
+static
+void
+SysGraphicsMappingCapacity(void)
+{
+    static TEST_WORLD World;
+    const ULONG64 Capacities[] = { (468ULL << 20) >> PAGE_SHIFT, MI_SYSPTE_64BIT_PAGES };
+    const ULONG BasicPages = (0x5EEC000 >> PAGE_SHIFT) + 1;
+    const ULONG SlabPages = (192UL << 20) >> PAGE_SHIFT;
+    const ULONG64 Physical = 0x1DFA9000;
+    ULONG Case;
+
+    for (Case = 0; Case < RTL_NUMBER_OF(Capacities); Case++)
+    {
+        ULONG64 Basic, Slab, Mapping = 0;
+        NTSTATUS Status;
+
+        /* A 1 TiB VA reservation must not allocate tables for the whole arena. */
+        WorldCreate(&World, 4096, 1, 1000000);
+        WorldAttach(&World, 0, NULL);
+        CHECK(NT_SUCCESS(MiSystemPtesInitialize(&World.System, Capacities[Case], 1)));
+        CHECK(World.System.SystemSpace.PageTablePages <= 8);
+        Basic = MiReserveSystemPtes(&World.System, BasicPages);
+        Slab = MiReserveSystemPtes(&World.System, SlabPages + 1);
+        CHECK(Basic != 0 && Slab != 0);
+        Status = MiMapIoSpace(&World.System, Physical, (ULONG64)SlabPages << PAGE_SHIFT,
+                              MiCacheWriteCombined, &Mapping);
+        if (Case == 0)
+        {
+            CHECK(Status == STATUS_INSUFFICIENT_RESOURCES);
+            CHECK(Mapping == 0);
+        }
+        else
+        {
+            CHECK(NT_SUCCESS(Status));
+            CHECK(Mapping != 0);
+            if (NT_SUCCESS(Status))
+            {
+                CHECK(MiGetPhysicalAddress(&World.System.SystemSpace, Mapping) == Physical);
+                CHECK(MiGetPhysicalAddress(&World.System.SystemSpace,
+                                          Mapping + ((ULONG64)SlabPages << PAGE_SHIFT) - 1) ==
+                      Physical + ((ULONG64)SlabPages << PAGE_SHIFT) - 1);
+                MiUnmapIoSpace(&World.System, Mapping, (ULONG64)SlabPages << PAGE_SHIFT);
+                CHECK(MiGetPhysicalAddress(&World.System.SystemSpace, Mapping) == 0);
+            }
+        }
+        MiReleaseSystemPtes(&World.System, Slab, SlabPages + 1);
+        MiReleaseSystemPtes(&World.System, Basic, BasicPages);
+        MiSystemPtesUninitialize(&World.System);
+        WorldExpectClean(&World, 4096);
+        WorldDestroy(&World);
+    }
 }
 
 static
@@ -852,6 +947,8 @@ TestSys(void)
     SysBootAdoption();
     SysPteAllocator();
     SysReservedMapping();
+    SysPtePopulationFailure();
+    SysGraphicsMappingCapacity();
     SysKernelStacks();
     SysIoAndContiguous();
     SysMdl();

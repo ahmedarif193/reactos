@@ -244,6 +244,8 @@ WorldDestroy(TEST_WORLD *World)
         free(World->Paging.Store);
     }
 
+    MiVadFlushCache(&World->System.SystemSpace);
+
     MachineDestroy(&World->Machine);
     free(World->PfnArray);
 }
