@@ -101,6 +101,51 @@ typedef union _CC_RESOURCE
     ULONG64 Layout[13];
 } CC_RESOURCE;
 
+static inline BOOLEAN CcHostResourceInitialize(CC_RESOURCE *Resource)
+{
+    Resource->Native = malloc(sizeof(*Resource->Native));
+    Resource->Waiters = 0;
+    if (Resource->Native == NULL)
+        return FALSE;
+    if (pthread_rwlock_init(Resource->Native, NULL) != 0)
+    {
+        free(Resource->Native);
+        Resource->Native = NULL;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static inline void CcHostResourceDelete(CC_RESOURCE *Resource)
+{
+    if (Resource->Native == NULL || pthread_rwlock_destroy(Resource->Native) != 0)
+        abort();
+    free(Resource->Native);
+    Resource->Native = NULL;
+}
+
+static inline void CcHostResourceAcquireShared(CC_RESOURCE *Resource)
+{
+    __sync_fetch_and_add(&Resource->Waiters, 1);
+    if (pthread_rwlock_rdlock(Resource->Native) != 0)
+        abort();
+    __sync_fetch_and_add(&Resource->Waiters, -1);
+}
+
+static inline void CcHostResourceAcquireExclusive(CC_RESOURCE *Resource)
+{
+    __sync_fetch_and_add(&Resource->Waiters, 1);
+    if (pthread_rwlock_wrlock(Resource->Native) != 0)
+        abort();
+    __sync_fetch_and_add(&Resource->Waiters, -1);
+}
+
+static inline void CcHostResourceRelease(CC_RESOURCE *Resource)
+{
+    if (pthread_rwlock_unlock(Resource->Native) != 0)
+        abort();
+}
+
 static inline void CcHostLockAcquire(PCC_LOCK Lock)
 {
     unsigned Spins = 0;
@@ -122,6 +167,11 @@ extern _Thread_local ULONG CcHostProcessor;
 #define CC_LOCK_INIT(l)                 ((l)->Held = 0)
 #define CC_LOCK_ACQUIRE(l, i)           do { CcHostLockAcquire(l); *(i) = 0; } while (0)
 #define CC_LOCK_RELEASE(l, i)           do { __sync_lock_release(&(l)->Held); (void)(i); } while (0)
+#define CC_RESOURCE_INIT(r)             CcHostResourceInitialize(r)
+#define CC_RESOURCE_DELETE(r)           CcHostResourceDelete(r)
+#define CC_RESOURCE_ACQUIRE_SHARED(r)   CcHostResourceAcquireShared(r)
+#define CC_RESOURCE_ACQUIRE_EXCLUSIVE(r) CcHostResourceAcquireExclusive(r)
+#define CC_RESOURCE_RELEASE(r)          CcHostResourceRelease(r)
 #define CC_ALLOCATE(b)                  malloc(b)
 #define CC_FREE(p)                      free(p)
 #define CC_ATOMIC_ADD32(v, d)           __sync_fetch_and_add((v), (d))
