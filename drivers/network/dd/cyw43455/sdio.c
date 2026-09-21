@@ -897,6 +897,46 @@ CywBackplaneSetWindowLocked(
     return Status;
 }
 
+/* Function 2 shares the backplane window with function 1. Keep the chipcommon
+ * window selected for the entire FIFO request, as brcmfmac does under its host
+ * claim; register access on another thread must not retarget it midway. */
+NTSTATUS
+CywSdioFifo(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ BOOLEAN Write,
+    _Inout_updates_bytes_(Length) PUCHAR Buffer,
+    _In_ ULONG Length)
+{
+    ULONG BlockBytes, Rest;
+    NTSTATUS Status;
+
+    if (Adapter == NULL || Buffer == NULL || Length == 0 ||
+        Length > MAXULONG - (sizeof(ULONG) - 1))
+        return STATUS_INVALID_PARAMETER;
+
+    /* Callers reserve padding for the final word of an SDPCM frame. */
+    Length = ALIGN_UP(Length, ULONG);
+    KeWaitForSingleObject(&Adapter->BackplaneLock, Executive,
+                          KernelMode, FALSE, NULL);
+    Status = CywBackplaneSetWindowLocked(Adapter, SI_ENUM_BASE_DEFAULT);
+    BlockBytes = Length / CYW_F2_BLOCKSIZE * CYW_F2_BLOCKSIZE;
+    if (NT_SUCCESS(Status) && BlockBytes)
+    {
+        Status = CywSdioRw(Adapter, CYW_SDIO_FUNC_RADIO, Write,
+                           SBSDIO_SB_ACCESS_2_4B_FLAG, Buffer, BlockBytes,
+                           TRUE, CYW_F2_BLOCKSIZE);
+    }
+    Rest = Length - BlockBytes;
+    if (NT_SUCCESS(Status) && Rest)
+    {
+        Status = CywSdioRw(Adapter, CYW_SDIO_FUNC_RADIO, Write,
+                           SBSDIO_SB_ACCESS_2_4B_FLAG, Buffer + BlockBytes,
+                           Rest, FALSE, 0);
+    }
+    KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
+    return Status;
+}
+
 NTSTATUS
 CywBackplaneReadl(
     _In_ PCYW_ADAPTER Adapter,
