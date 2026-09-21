@@ -414,7 +414,7 @@ NTSTATUS MiProtectMappedView(_Inout_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, 
 VOID MiRemoveMappedView(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_VAD Vad);
 BOOLEAN MiTrimPrototypePage(_Inout_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, _In_ ULONG64 VirtualAddress,
                             _Inout_ PMI_PTE Slot, _In_ ULONG TableFrame);
-VOID MiWritePrototypePage(_Inout_ struct _MI_SYSTEM *System, _In_ ULONG Frame);
+NTSTATUS MiWritePrototypePage(_Inout_ struct _MI_SYSTEM *System, _In_ ULONG Frame);
 
 ULONG MiTrimAddressSpace(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG PageTarget, _In_ BOOLEAN Aggressive);
 ULONG MiWriteModifiedPages(_Inout_ PMI_SYSTEM System, _In_ ULONG MaximumPages);

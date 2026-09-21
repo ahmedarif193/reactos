@@ -160,7 +160,9 @@ MiWriteModifiedPages(
 
         if ((MI_PFN_FLAGS(Entry) & MI_PFN_FLAG_PROTOTYPE) && MiSoftKind(Entry->OriginalPte) == MiSoftSubsection)
         {
-            MiWritePrototypePage(System, Frame);
+            Status = MiWritePrototypePage(System, Frame);
+            if (!NT_SUCCESS(Status))
+                break;
             Written++;
             continue;
         }
