@@ -145,6 +145,36 @@ MiSystemAdoptBootMappings(
 }
 
 NTSTATUS
+MiSystemReserveTopLevelHole(
+    _Inout_ PMI_SYSTEM System)
+{
+    PMI_ADDRESS_SPACE Space = &System->SystemSpace;
+    const MI_ARCH_DESCRIPTOR *Arch = System->Arch;
+    PMI_VAD Vad;
+
+    if (Arch->SystemReservedEnd <= Arch->SystemAddressStart)
+        return STATUS_SUCCESS;
+
+    Vad = MI_ALLOCATE(sizeof(*Vad));
+    if (Vad == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Vad, sizeof(*Vad));
+    Vad->Type = MiVadSystem;
+    Vad->Protection = MI_PROT_NOACCESS;
+    Vad->Node.StartingVpn = Arch->SystemAddressStart >> PAGE_SHIFT;
+    Vad->Node.EndingVpn = (Arch->SystemReservedEnd >> PAGE_SHIFT) - 1;
+
+    if (!MiVadInsert(&Space->VadRoot, &Vad->Node))
+    {
+        MI_FREE(Vad);
+        return STATUS_CONFLICTING_ADDRESSES;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 MiSystemPopulateTopLevel(
     _Inout_ PMI_SYSTEM System)
 {
@@ -152,7 +182,9 @@ MiSystemPopulateTopLevel(
     const MI_ARCH_DESCRIPTOR *Arch = System->Arch;
     LONG Top = Arch->PagingLevels - 1;
     PMI_PTE Root = MiArchMapFrame(Space->RootFrame);
-    ULONG First = (ULONG)((Arch->SystemAddressStart >> Arch->Level[Top].Shift) & Arch->Level[Top].IndexMask);
+    ULONG64 Start = (Arch->SystemReservedEnd > Arch->SystemAddressStart) ? Arch->SystemReservedEnd
+                                                                         : Arch->SystemAddressStart;
+    ULONG First = (ULONG)((Start >> Arch->Level[Top].Shift) & Arch->Level[Top].IndexMask);
     ULONG Last = (ULONG)((Arch->SystemAddressEnd >> Arch->Level[Top].Shift) & Arch->Level[Top].IndexMask);
     ULONG Index;
 

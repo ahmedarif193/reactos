@@ -60,6 +60,8 @@ typedef struct _MI_ARCH_DESCRIPTOR
 
     const ULONG *ProtectionToPteMask;
     ULONG ProtectionToPteMaskCount;
+
+    ULONG64 SystemReservedEnd;
 } MI_ARCH_DESCRIPTOR, *PMI_ARCH_DESCRIPTOR;
 
 typedef struct _MI_PHYSICAL_RANGE

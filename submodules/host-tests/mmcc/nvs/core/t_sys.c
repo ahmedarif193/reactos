@@ -888,7 +888,10 @@ SysBootAdoption(void)
     WorldAttach(&World, 0, NULL);
 
     CHECK(System->SystemSpace.VadRoot.NodeCount == 2);
-    CHECK(MI_ATOMIC_READ64(&System->SystemSpace.PageTablePages) == (LONG64)(Top + 254));
+    CHECK(MI_ATOMIC_READ64(&System->SystemSpace.PageTablePages) ==
+          (LONG64)(Top + 254) - (LONG64)((Arch->SystemReservedEnd > Arch->SystemAddressStart)
+                                             ? (Arch->SystemReservedEnd - Arch->SystemAddressStart) / TopSpan
+                                             : 0));
     CHECK(MiArchPteFrame(Table[TopIndex - 2]) == 2);
     for (i = 3; i <= 2 + Top; i++)
     {
