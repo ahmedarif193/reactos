@@ -122,6 +122,7 @@ if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "i386")
             -DCMAKE_BUILD_TYPE=Release
             -DOPTIMIZE=6
             -DDBG=OFF
+            -DNVS:BOOL=ON
             -DSEPARATE_DBG=OFF
             -DWITH_DEBUG_SYMBOLS=OFF
             -DENABLE_FEX_ARM64EC=OFF

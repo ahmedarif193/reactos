@@ -2609,7 +2609,14 @@ HalpMapGicv3RuntimeMmioWindows(VOID)
     if (GicrLength == 0)
         GicrLength = HAL_ARM64_GICR_FRAME_LENGTH * MAXIMUM_PROCESSORS;
 
+    if (HalpGicRedistRegionCount != 0 &&
+        !HalpArm64MapRedistRegions())
+    {
+        return FALSE;
+    }
+
     if (HalpGicrRegionBase &&
+        HalpGicrRegionBase < HAL_ARM64_SYSTEM_RANGE_BASE &&
         !HalpMapRuntimeMmioWindow(&HalpGicrRegionBase, GicrLength, "GICR"))
     {
         return FALSE;

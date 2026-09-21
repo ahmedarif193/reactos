@@ -9,8 +9,8 @@
 #include <ntoskrnl.h>
 #include <debug.h>
 
-#define MODULE_INVOLVED_IN_VMM
-#include <vmm/vmm.h>
+#define MODULE_INVOLVED_IN_NVS
+#include <nvs/nt/mmkernel.h>
 
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 
@@ -183,6 +183,7 @@ ULONG_PTR MmGlobalKernelPageDirectory[4096];
  * descriptors look like invalid/leaf entries to the hardware. That caused
  * early faults when the kernel tried to touch the self-mapped page tables.
  */
+#ifndef NVS
 MMPTE ValidKernelPte = {
     .u.Hard = {
         .Valid = 1,
@@ -229,6 +230,7 @@ MMPDE ValidKernelPdeLocal = {
  * MM_DECOMMIT = MM_GUARDPAGE (0x10) creates unique value 0x20 that won't appear
  * in normal prototype PTEs, making the assertion in MiResolveProtoPteFault valid. */
 MMPTE MmDecommittedPte = {.u.Long = (MM_DECOMMIT << MM_PTE_SOFTWARE_PROTECTION_BITS)};
+#endif
 
 /* TODO(ARM64): The above globals mimic the legacy layouts purely to unblock
  * the build. Replace with real hardware descriptors once paging support is

@@ -25,14 +25,14 @@
 
 /* UTILITY FUNCTIONS *********************************************************/
 
-#include <vmm/vmm.h> // For MiIsMemoryTypeInvisible()
+#include <nvs/nt/mmkernel.h>
 
 /**
  * @brief
  * Retrieves the total size of the memory before Mm is initialized,
  * by counting the number of physical pages. Useful for debug logging.
  *
- * Adapted from vmm/mminit.c!MiScanMemoryDescriptors().
+ * Adapted from nvs/mminit.c!MiScanMemoryDescriptors().
  **/
 static
 SIZE_T

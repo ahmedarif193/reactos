@@ -191,15 +191,60 @@ HalpArm64InitRedistRegions(VOID)
 
 /*
  * HalpArm64MapRedistRegions - Map redistributor regions (for non-identity mapping)
- *
- * This function is a placeholder for systems that need explicit virtual
- * address mapping. In the current ReactOS ARM64 HAL, we use identity mapping.
  */
-VOID
+BOOLEAN
 HalpArm64MapRedistRegions(VOID)
 {
-    /* Currently using identity mapping - no explicit mapping needed */
-    DPRINT("[arm64][GICR] Using identity mapping for redistributor regions\n");
+    ULONG Index;
+
+    for (Index = 0; Index < HalpGicRedistRegionCount; Index++)
+    {
+        PHALP_GIC_REDIST_REGION Region = &HalpGicRedistRegions[Index];
+        ULONGLONG PhysicalBase = Region->PhysicalBase.QuadPart;
+        ULONGLONG PhysicalEnd;
+        ULONG_PTR VirtualBase;
+        PHYSICAL_ADDRESS PhysicalAddress;
+        ULONG Cpu;
+
+        if (PhysicalBase == 0 || Region->Length == 0)
+            return FALSE;
+
+        PhysicalEnd = PhysicalBase + Region->Length;
+        VirtualBase = Region->VirtualBase;
+
+        if (VirtualBase < HAL_ARM64_KSEG0_BASE)
+        {
+            PhysicalAddress.QuadPart = PhysicalBase;
+            VirtualBase = (ULONG_PTR)MmMapIoSpace(PhysicalAddress,
+                                                  Region->Length,
+                                                  MmNonCached);
+            if (VirtualBase == 0)
+                return FALSE;
+        }
+
+        Region->VirtualBase = VirtualBase;
+        Region->Mapped = TRUE;
+
+        if (HalpGicrRegionBase >= PhysicalBase &&
+            HalpGicrRegionBase < PhysicalEnd)
+        {
+            HalpGicrRegionBase = VirtualBase +
+                                 (HalpGicrRegionBase - PhysicalBase);
+        }
+
+        for (Cpu = 0; Cpu < RTL_NUMBER_OF(HalpGicrCpuBase); Cpu++)
+        {
+            ULONGLONG CpuBase = HalpGicrCpuBase[Cpu];
+
+            if (CpuBase >= PhysicalBase && CpuBase < PhysicalEnd)
+            {
+                HalpGicrCpuBase[Cpu] = VirtualBase +
+                                       (ULONG_PTR)(CpuBase - PhysicalBase);
+            }
+        }
+    }
+
+    return TRUE;
 }
 
 /*
@@ -368,6 +413,35 @@ HalpArm64FindGicrInRegion(
     return FALSE;
 }
 
+static
+ULONG_PTR
+HalpArm64GicrPhysicalToVirtual(
+    _In_ ULONGLONG PhysicalBase)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < HalpGicRedistRegionCount; Index++)
+    {
+        PHALP_GIC_REDIST_REGION Region = &HalpGicRedistRegions[Index];
+        ULONGLONG RegionBase = Region->PhysicalBase.QuadPart;
+        ULONGLONG RegionEnd = RegionBase + Region->Length;
+
+        if (PhysicalBase >= RegionBase && PhysicalBase < RegionEnd)
+        {
+            if (!Region->Mapped || Region->VirtualBase == 0)
+                return 0;
+
+            return Region->VirtualBase +
+                   (ULONG_PTR)(PhysicalBase - RegionBase);
+        }
+    }
+
+    if (HalpUseIdentityMapping)
+        return (ULONG_PTR)PhysicalBase;
+
+    return 0;
+}
+
 /*
  * HalpArm64FindGicrForMpidr - Find the Redistributor for a specific CPU
  *
@@ -435,7 +509,7 @@ HalpArm64FindGicrForMpidr(
             {
                 DPRINT("[arm64][GICR] CPU MPIDR 0x%llx: GICR at 0x%llx (from GICC entry)\n",
                        Mpidr, Entry->GicrBase);
-                return (ULONG_PTR)Entry->GicrBase;
+                return HalpArm64GicrPhysicalToVirtual(Entry->GicrBase);
             }
         }
     }

@@ -13,26 +13,6 @@
 
 extern BOOLEAN ExpArm64PoolBootstrapMode;
 
-/*
- * PFN-lock depth accounting (reader: MiArm64AllocatePageTablePage, which
- * checks its own CPU's slot to detect re-entry). The counter is only ever
- * updated by the owning CPU at >= DISPATCH_LEVEL, so a plain volatile
- * update is sufficient - no interlocked traffic on the PFN-lock hot path.
- */
-static
-VOID
-KiArm64AdjustPfnLockDepth(
-    _In_ PKPRCB Prcb,
-    _In_ LONG Delta)
-{
-    ULONG CpuIndex = Prcb->Number;
-
-    if (CpuIndex < MAXIMUM_PROCESSORS)
-    {
-        MiArm64PfnLockDepth[CpuIndex].Depth += Delta;
-    }
-}
-
 KIRQL
 FASTCALL
 KfAcquireSpinLock(
@@ -123,10 +103,6 @@ KeAcquireQueuedSpinLock(
     }
 
     KxAcquireQueuedSpinLock(LockQueue);
-    if (LockNumber == LockQueuePfnLock)
-    {
-        KiArm64AdjustPfnLockDepth(Prcb, 1);
-    }
     return OldIrql;
 }
 
@@ -137,20 +113,10 @@ KeAcquireQueuedSpinLockRaiseToSynch(
 {
     KIRQL OldIrql;
     PKIPCR Pcr;
-    PKPRCB Prcb;
 
     KeRaiseIrql(SYNCH_LEVEL, &OldIrql);
     Pcr = KeGetPcr();
-    Prcb = &Pcr->Prcb;
     KxAcquireQueuedSpinLock(&Pcr->LockArray[LockNumber]);
-
-    /* Keep PFN-lock depth accounting symmetric with KeReleaseQueuedSpinLock,
-     * which decrements it unconditionally for LockQueuePfnLock. Acquiring via
-     * the RaiseToSynch path without this increment underflows the depth. */
-    if (LockNumber == LockQueuePfnLock)
-    {
-        KiArm64AdjustPfnLockDepth(Prcb, 1);
-    }
     return OldIrql;
 }
 
@@ -178,10 +144,6 @@ KeReleaseQueuedSpinLock(
     }
 
     KxReleaseQueuedSpinLock(LockQueue);
-    if (LockNumber == LockQueuePfnLock)
-    {
-        KiArm64AdjustPfnLockDepth(Prcb, -1);
-    }
     KeLowerIrql(OldIrql);
 }
 
@@ -234,12 +196,7 @@ KeTryToAcquireQueuedSpinLock(
 #if defined(CONFIG_SMP) || DBG
     {
         PKIPCR Pcr = KeGetPcr();
-        PKPRCB Prcb = &Pcr->Prcb;
         Acquired = KxTryToAcquireQueuedSpinLock(&Pcr->LockArray[LockNumber]);
-        if (Acquired && (LockNumber == LockQueuePfnLock))
-        {
-            KiArm64AdjustPfnLockDepth(Prcb, 1);
-        }
     }
 #else
     KeMemoryBarrierWithoutFence();
@@ -267,13 +224,8 @@ KeTryToAcquireQueuedSpinLockRaiseToSynch(
 #if defined(CONFIG_SMP) || DBG
     {
         PKIPCR Pcr = KeGetPcr();
-        PKPRCB Prcb = &Pcr->Prcb;
         BOOLEAN Acquired = KxTryToAcquireQueuedSpinLock(
             &Pcr->LockArray[LockNumber]);
-        if (Acquired && (LockNumber == LockQueuePfnLock))
-        {
-            KiArm64AdjustPfnLockDepth(Prcb, 1);
-        }
         return Acquired;
     }
 #else

@@ -135,7 +135,6 @@ BOOLEAN ExpKdbgExtPoolUsed(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtPoolFind(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtFileCache(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtDefWrites(ULONG Argc, PCHAR Argv[]);
-BOOLEAN ExpKdbgExtIrpFind(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtPte(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtPfn(ULONG Argc, PCHAR Argv[]);
@@ -591,12 +590,11 @@ static const struct
     { "selftest", "selftest", "Run non-destructive KDB command-engine and decoder tests.", KdbpCmdSelfTest },
     { "help", "help [command]", "Display all commands or detailed help for one command.", KdbpCmdHelp },
 #if DBG
-    { "!pool", "!pool [Address [Flags]]", "Display information about pool allocations.", ExpKdbgExtPool },
-    { "!poolused", "!poolused [Flags [Tag]]", "Display pool usage.", ExpKdbgExtPoolUsed },
-    { "!poolfind", "!poolfind Tag [Pool]", "Search for pool tag allocations.", ExpKdbgExtPoolFind },
+    { "!pool", "!pool [Address]", "Describe the pool block holding an address, or summarize both heaps.", ExpKdbgExtPool },
+    { "!poolused", "!poolused [Tag]", "Display pool usage by tag; ? matches any character.", ExpKdbgExtPoolUsed },
+    { "!poolfind", "!poolfind Tag [Pool]", "List live allocations carrying a tag; ? matches any character.", ExpKdbgExtPoolFind },
     { "!filecache", "!filecache", "Display cache usage.", ExpKdbgExtFileCache },
     { "!defwrites", "!defwrites", "Display cache write values.", ExpKdbgExtDefWrites },
-    { "!irpfind", "!irpfind [Pool [startaddress [criteria data]]]", "Lists IRPs potentially matching criteria.", ExpKdbgExtIrpFind },
     { "!handle", "!handle [Handle]", "Displays info about handles.", ExpKdbgExtHandle },
     { "!pte", "!pte address", "Display the paging hierarchy for a virtual address.", ExpKdbgExtPte },
     { "!pfn", "!pfn page-frame-number", "Display a guarded PFN database entry.", ExpKdbgExtPfn },

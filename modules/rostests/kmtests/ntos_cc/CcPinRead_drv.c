@@ -506,8 +506,8 @@ PerformTest(
                                 ok(TestContext->Buffer >= (PVOID)0xC1000000 && TestContext->Buffer < (PVOID)0xDBFFFFFF,
                                    "Buffer %p not mapped in system space\n", TestContext->Buffer);
                             }
-#elif defined(_M_AMD64)
-                            ok(TestContext->Buffer >= (PVOID)0xFFFFF98000000000 && TestContext->Buffer < (PVOID)0xFFFFFA8000000000,
+#elif defined(_M_AMD64) || defined(_M_ARM64)
+                            ok((ULONG_PTR)TestContext->Buffer >= (ULONG_PTR)MmSystemRangeStart,
                                "Buffer %p not mapped in system space\n", TestContext->Buffer);
 #else
                             skip(FALSE, "System space mapping not defined\n");
@@ -549,13 +549,16 @@ PerformTest(
                     Ret = FALSE;
                     Offset.QuadPart = 0x1000;
                     KmtStartSeh();
-                    Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
+                    Ret = CcMapData(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (ok(Ret == TRUE, "CcPinRead failed\n"))
+                    if (ok(Ret == TRUE, "CcMapData failed with PinAccess FALSE\n"))
                     {
-                        ok_bcb(Bcb, 12288, Offset.QuadPart);
-                        ok_eq_ulong(Buffer[0x2000 / sizeof(ULONG)], 0);
+                        ok(Bcb != NULL, "CcMapData returned no BCB\n");
+                        ok_eq_ulong(Buffer[0], 0xBABABABA);
+                        ok_eq_ulong(Buffer[0x1000 / sizeof(ULONG)], 0xBABABABA);
+                        ok_eq_ulong(Buffer[0x2000 / sizeof(ULONG)], 0xDEADBABE);
+                        ok_eq_ulong(Buffer[0x2FFC / sizeof(ULONG)], 0xBABABABA);
 
                         CcUnpinData(Bcb);
                     }

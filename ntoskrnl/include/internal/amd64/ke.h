@@ -270,12 +270,9 @@ KeInvalidateTlbEntry(IN PVOID Address)
     __invlpg(Address);
 }
 
-VOID
-NTAPI
-KiIpiSendTbFlush(
-    _In_ KAFFINITY TargetSet,
-    _In_opt_ PVOID BaseAddress,
-    _In_ ULONG PageCount);
+VOID MiAmd64FlushTargets(ULONG64 Targets, ULONG64 Address, ULONG64 Pages);
+VOID MiAmd64ProcessTlbRequest(ULONG Source);
+VOID KiSendMemoryIpi(ULONG64 Targets);
 
 VOID
 NTAPI
@@ -290,10 +287,9 @@ KeFlushProcessTb(VOID)
     KAFFINITY TargetSet = KeGetCurrentThread()->ApcState.Process->ActiveProcessors |
                           Prcb->SetMember;
 
-    KiIpiSendTbFlush(TargetSet, NULL, 0);
+    MiAmd64FlushTargets((ULONG64)TargetSet, 0, 0);
 #else
-    /* Flush the TLB by resetting CR3 */
-    __writecr3(__readcr3());
+    MiAmd64FlushTargets(1ULL << KeGetCurrentProcessorNumber(), 0, 0);
 #endif
 }
 

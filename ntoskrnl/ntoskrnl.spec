@@ -1959,7 +1959,7 @@
 @ stdcall -arch=arm64 ZwLockProductActivationKeys()
 @ stdcall -arch=arm64 ZwLockVirtualMemory()
 @ stdcall -arch=arm64 ZwNotifyChangeDirectoryFile()
-@ stdcall -arch=arm64 ZwProtectVirtualMemory()
+@ stdcall -arch=x86_64,arm64 ZwProtectVirtualMemory(ptr ptr ptr long ptr)
 @ stdcall -arch=arm64 ZwQueryIntervalProfile()
 @ stdcall -arch=arm64 ZwQueryQuotaInformationFile()
 @ stdcall -arch=arm64 ZwQuerySystemEnvironmentValueEx()

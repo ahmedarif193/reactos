@@ -30,6 +30,37 @@ endif()
 
 include(ntos.cmake)
 
+option(NVS "Build the kernel with the NT Virtual Memory Subsystem and cache manager" ON)
+
+if(NOT NVS)
+    message(FATAL_ERROR "The legacy memory and cache managers are retired. Configure with NVS=ON.")
+endif()
+
+if(NVS)
+    file(GLOB NVS_SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/core/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/vad/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/fault/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/section/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/ws/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pagefile/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/vm/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/sys/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/proc/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/nt/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/backing/mmbacking.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/arch/${ARCH}/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/engine/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/api/*.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/backing/*.c)
+
+    list(APPEND SOURCE ${NVS_SOURCE})
+    include(nvs/check-standalone.cmake)
+    nvs_assert_standalone(${SOURCE} ${ASM_SOURCE})
+    add_compile_definitions(NVS)
+    include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/arch/${ARCH})
+endif()
+
 set(NTOSKRNL_SOURCE ${SOURCE})
 set(NTOSKRNL_ASM_SOURCE ${ASM_SOURCE})
 
@@ -102,7 +133,15 @@ endif()
 add_dependencies(ntoskrnl psdk asm)
 add_cd_file(TARGET ntoskrnl DESTINATION reactos/system32 NO_CAB FOR all)
 
+add_subdirectory(nvs)
+add_subdirectory(cc)
 add_subdirectory(ntkrnlmp)
+
+add_custom_target(nvs_check_standalone
+    COMMAND ${CMAKE_COMMAND} -DNVS_KERNEL_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/nvs/check-standalone.cmake)
+add_dependencies(ntoskrnl nvs_check_standalone)
+add_dependencies(ntkrnlmp nvs_check_standalone)
 
 add_asm_files(ntdllsys_asm ntdll.S)
 add_library(ntdllsys ${ntdllsys_asm})

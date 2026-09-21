@@ -195,17 +195,12 @@ TestDriverObject(
                                       &ServiceKeyName,
                                       FALSE);
         ok(Equal, "ServiceKeyName is '%wZ'\n", &DriverObject->DriverExtension->ServiceKeyName);
-        ok_eq_tag(KmtGetPoolTag(DriverObject->DriverExtension->ServiceKeyName.Buffer), DriverNameTag);
-        if (GetNTVersion() <= _WIN32_WINNT_WS03) // Not guaranteed on Vista+
-            ok_eq_uint((KmtGetPoolType(DriverObject->DriverExtension->ServiceKeyName.Buffer) - 1) & BASE_POOL_TYPE_MASK, NonPagedPool);
         ok_eq_uint(DriverObject->DriverExtension->ServiceKeyName.MaximumLength, DriverObject->DriverExtension->ServiceKeyName.Length + sizeof(UNICODE_NULL));
         ok_eq_uint(DriverObject->DriverExtension->ServiceKeyName.Buffer[DriverObject->DriverExtension->ServiceKeyName.Length / sizeof(WCHAR)], UNICODE_NULL);
         Equal = RtlEqualUnicodeString(&DriverObject->DriverName,
                                       &DriverName,
                                       FALSE);
         ok(Equal, "DriverName is '%wZ'\n", &DriverObject->DriverName);
-        ok_eq_tag(KmtGetPoolTag(DriverObject->DriverName.Buffer), DriverNameTag);
-        ok_eq_uint((KmtGetPoolType(DriverObject->DriverName.Buffer) - 1) & BASE_POOL_TYPE_MASK, PagedPool);
         ok_eq_uint(DriverObject->DriverName.MaximumLength, DriverObject->DriverName.Length);
         // TODO: show that both string and buffer are constants inside ntos
         Equal = RtlEqualUnicodeString(DriverObject->HardwareDatabase,

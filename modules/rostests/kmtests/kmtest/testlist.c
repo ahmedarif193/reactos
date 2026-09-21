@@ -25,6 +25,7 @@ KMT_TESTFUNC Test_MmMapLockedPagesSpecifyCache;
 KMT_TESTFUNC Test_NtCreateSection;
 KMT_TESTFUNC Test_NtSystemDebugControl;
 KMT_TESTFUNC Test_NtUserPhysicalPages;
+KMT_TESTFUNC Test_NtProcessClone;
 KMT_TESTFUNC Test_PoIrp;
 KMT_TESTFUNC Test_PoFxState;
 KMT_TESTFUNC Test_IoDeviceNumaNode;
@@ -66,6 +67,7 @@ const KMT_TEST TestList[] =
     { "NtCreateSection",              Test_NtCreateSection },
     { "NtSystemDebugControl",         Test_NtSystemDebugControl },
     { "NtUserPhysicalPages",          Test_NtUserPhysicalPages },
+    { "NtProcessClone",               Test_NtProcessClone },
     { "ExWddmPoFx",                    Test_ExWddmPoFx },
     { "PoFxState",                     Test_PoFxState },
     { "IoDeviceNumaNode",              Test_IoDeviceNumaNode },

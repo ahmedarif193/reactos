@@ -17,8 +17,7 @@
 
 #define NDEBUG
 #include <debug.h>
-/* vmm.h uses DPRINT, so it must follow debug.h. */
-#include <vmm/vmm.h>
+#include <nvs/nt/mmkernel.h>
 
 #define KI_BUGCHECK_BACKTRACE_FRAMES 8
 #define KI_BUGCHECK_MAX_MODULES 4096

@@ -13,7 +13,7 @@
 #include <arm64trap.h>
 #define NDEBUG
 #include <debug.h>
-#include <vmm/vmm.h>
+#include <nvs/nt/mmkernel.h>
 #ifdef KDBG
 #include <kdbg/kdb.h>
 #endif
@@ -48,9 +48,6 @@ KiArm64BugCheckOnPanicStack(
     _In_ ULONG_PTR BugCheckParameter2,
     _In_ ULONG_PTR BugCheckParameter3,
     _In_ ULONG_PTR BugCheckParameter4);
-
-#define KI_ARM64_POOL_BLOCK(x, i) \
-    ((PPOOL_HEADER)((ULONG_PTR)(x) + ((i) * POOL_BLOCK_SIZE)))
 
 static
 VOID
@@ -132,40 +129,6 @@ KiArm64SavePreviousModeForTrap(
 }
 
 static
-BOOLEAN
-KiArm64ValidatePoolHeader(
-    _In_ PVOID BaseVa,
-    _In_ PPOOL_HEADER Entry,
-    _In_ POOL_TYPE BasePoolType)
-{
-    if (Entry->BlockSize == 0)
-        return FALSE;
-
-    if ((Entry->BlockSize * POOL_BLOCK_SIZE) +
-        ((ULONG_PTR)Entry - (ULONG_PTR)BaseVa) > PAGE_SIZE)
-    {
-        return FALSE;
-    }
-
-    if ((Entry->PreviousSize == 0) && ((PVOID)Entry != BaseVa))
-        return FALSE;
-
-    if ((Entry->PreviousSize * POOL_BLOCK_SIZE) >
-        ((ULONG_PTR)Entry - (ULONG_PTR)BaseVa))
-    {
-        return FALSE;
-    }
-
-    if (((Entry->PoolType - 1) & BASE_POOL_TYPE_MASK) != BasePoolType)
-        return FALSE;
-
-    if ((Entry->PoolTag & 0x00808080) != 0)
-        return FALSE;
-
-    return TRUE;
-}
-
-static
 VOID
 KiArm64DumpPagedPoolPageByPfnAlias(
     _In_ ULONG64 Far,
@@ -177,10 +140,6 @@ KiArm64DumpPagedPoolPageByPfnAlias(
     PFN_NUMBER DataPfn;
     ULONG_PTR QwordOffset;
     ULONG64 PrevQword, ThisQword, NextQword;
-    PPOOL_HEADER Match = NULL;
-    ULONG_PTR MatchOffset = 0;
-    ULONG_PTR MatchEnd = 0;
-    ULONG ValidHeaders = 0;
 
     if ((PteValue & 1ULL) == 0)
         return;
@@ -221,54 +180,6 @@ KiArm64DumpPagedPoolPageByPfnAlias(
     KiArm64DumpKernelWalk("pool-far", PageVa);
     KiArm64DumpKernelWalk("pool-alias", AliasPage);
 
-    for (ULONG_PTR Offset = 0;
-         Offset + sizeof(POOL_HEADER) < PAGE_SIZE;
-         Offset += sizeof(ULONG64))
-    {
-        PPOOL_HEADER Entry = (PPOOL_HEADER)(AliasPage + Offset);
-        ULONG_PTR EntryStart = PageVa + Offset;
-        ULONG_PTR EntryEnd;
-
-        if (!KiArm64ValidatePoolHeader((PVOID)AliasPage, Entry, PagedPool))
-            continue;
-
-        ValidHeaders++;
-        EntryEnd = EntryStart + (Entry->BlockSize * POOL_BLOCK_SIZE);
-        if (((ULONG_PTR)Far >= EntryStart) && ((ULONG_PTR)Far < EntryEnd))
-        {
-            Match = Entry;
-            MatchOffset = Offset;
-            MatchEnd = EntryEnd;
-            break;
-        }
-    }
-
-    if (Match != NULL)
-    {
-        DPRINT1("[arm64][SErrorPool] match page=%p hdr=%p range=%p..%p "
-                "off=0x%03Ix bsz=%u prev=%u type=0x%x tag=%.4s billed=%p "
-                "u1=0x%08lx\n",
-                (PVOID)PageVa,
-                (PVOID)(PageVa + MatchOffset),
-                (PVOID)(PageVa + MatchOffset),
-                (PVOID)MatchEnd,
-                MatchOffset,
-                Match->BlockSize,
-                Match->PreviousSize,
-                Match->PoolType,
-                (PCHAR)&Match->PoolTag,
-                Match->ProcessBilled,
-                Match->Ulong1);
-    }
-    else
-    {
-        DPRINT1("[arm64][SErrorPool] no-small-pool-match page=%p pfn=%Ix "
-                "off=0x%03Ix validHeaders=%lu\n",
-                (PVOID)PageVa,
-                (ULONG_PTR)DataPfn,
-                FaultOffset,
-                ValidHeaders);
-    }
 }
 
 FORCEINLINE
@@ -468,7 +379,11 @@ KiArm64DumpUserAliasQwords(
     Qword0 = *(volatile ULONG64 *)(AliasVa + Offset0);
     Qword1 = *(volatile ULONG64 *)(AliasVa + Offset1);
     Qword2 = *(volatile ULONG64 *)(AliasVa + Offset2);
+#ifdef NVS
+    PfnEntry = NULL;
+#else
     PfnEntry = MI_PFN_ELEMENT(DataPfn);
+#endif
 
     DPRINT1("[arm64][UALIAS] %s va=%p pfn=%Ix pteframe=%Ix pteaddr=%p "
             "loc=%u cache=%u ref=%u share=%u q[%03x]=0x%016llx q[%03x]=0x%016llx "
@@ -500,6 +415,11 @@ KiArm64FixupUserAccessFlagFault(
     _In_ PVOID FaultAddress,
     _In_ ULONG FaultStatus)
 {
+#ifdef NVS
+    UNREFERENCED_PARAMETER(FaultAddress);
+    UNREFERENCED_PARAMETER(FaultStatus);
+    return FALSE;
+#else
     ULONG64 Ttbr0;
     ULONG64 Entries[4];
     volatile ULONG64 *Slots[4];
@@ -533,6 +453,7 @@ KiArm64FixupUserAccessFlagFault(
 
     KeInvalidateTlbEntry(FaultAddress);
     return TRUE;
+#endif
 }
 
 NTSTATUS
@@ -2627,7 +2548,11 @@ KiSErrorHandler(
 
     if (Far >= (ULONG64)(ULONG_PTR)MmSystemRangeStart)
     {
+#ifdef NVS
+        PMMPTE SelfMapPte = NULL;
+#else
         PMMPTE SelfMapPte = MiAddressToPte((PVOID)(ULONG_PTR)Far);
+#endif
         PMMPTE Kseg0Pte = MiArm64KernelPteKseg0((PVOID)(ULONG_PTR)Far);
         ULONG64 SelfMapValue = SelfMapPte ? SelfMapPte->u.Long : 0;
         ULONG64 Kseg0Value = Kseg0Pte ? Kseg0Pte->u.Long : 0;

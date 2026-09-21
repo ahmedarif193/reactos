@@ -11,7 +11,7 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
-#include <vmm/vmm.h>
+#include <nvs/nt/mmkernel.h>
 #undef MmSystemRangeStart
 
 VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
@@ -563,8 +563,8 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     PtrToUL64(&PsActiveProcessHead),
     PtrToUL64(&PspCidTable),
     PtrToUL64(&ExpSystemResourcesList),
-    PtrToUL64(ExpPagedPoolDescriptor),
-    PtrToUL64(&ExpNumberOfPagedPools),
+    0,
+    0,
     PtrToUL64(&KeTimeIncrement),
     PtrToUL64(&KeBugcheckCallbackListHead),
     PtrToUL64(KiBugCheckData),
@@ -605,8 +605,8 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     PtrToUL64(&MmModifiedNoWritePageListHead),
     PtrToUL64(&MmAvailablePages),
     PtrToUL64(&MmResidentAvailablePages),
-    PtrToUL64(&PoolTrackTable),
-    PtrToUL64(&NonPagedPoolDescriptor),
+    0,
+    0,
     PtrToUL64(&MmHighestUserAddress),
     PtrToUL64(&MmSystemRangeStart),
     PtrToUL64(&MmUserProbeAddress),

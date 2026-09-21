@@ -13,7 +13,7 @@
 #include <debug.h>
 #include <reactos/drivers/dumpstor.h>
 #if defined(_M_AMD64) || defined(_M_ARM64)
-#include <vmm/vmm.h>
+#include <nvs/nt/mmkernel.h>
 #endif
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
