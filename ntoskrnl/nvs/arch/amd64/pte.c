@@ -102,6 +102,18 @@ MiArchPteIsCopyOnWrite(_In_ MI_PTE Pte)
     return MiAmd64PteHas(Pte, MI_AMD64_PTE_COPY);
 }
 
+ULONG
+MiArchPteLeafFlags(_In_ MI_PTE Pte)
+{
+    if (MiAmd64PteHas(Pte, MI_AMD64_PTE_PCD))
+        return MI_LEAF_NOCACHE;
+
+    if (MiAmd64PteHas(Pte, MI_AMD64_PTE_PWT))
+        return MI_LEAF_WRITECOMBINE;
+
+    return 0;
+}
+
 BOOLEAN
 MiArchPteIsDirty(_In_ MI_PTE Pte)
 {

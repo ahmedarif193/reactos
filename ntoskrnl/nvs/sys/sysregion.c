@@ -164,13 +164,20 @@ MiSystemUnmap(
             continue;
 
         Pte = MiArchPteRead(Slot);
-        if (!MiArchPteIsValid(Pte))
-            continue;
+        if (MiArchPteIsValid(Pte))
+        {
+            MiPtWrite(Space, Va, Slot, TableFrame, 0);
 
-        MiPtWrite(Space, Va, Slot, TableFrame, 0);
+            if (FreeFrames)
+                MiPfnShareDecrement(&System->Pfn, (ULONG)MiArchPteFrame(Pte), TRUE);
+        }
+        else if (Pte != 0 && MiSoftKind(Pte) == MiSoftResident)
+        {
+            MiPtWrite(Space, Va, Slot, TableFrame, 0);
 
-        if (FreeFrames)
-            MiPfnShareDecrement(&System->Pfn, (ULONG)MiArchPteFrame(Pte), TRUE);
+            if (FreeFrames)
+                MiPfnShareDecrement(&System->Pfn, (ULONG)MiSoftValue(Pte), TRUE);
+        }
     }
 
     if (Count != 0)
@@ -317,12 +324,35 @@ MiSystemProtect(
         ULONG TableFrame;
         PMI_PTE Slot = MiPtLookup(Space, Va, &TableFrame);
         MI_PTE Pte = (Slot != NULL) ? MiArchPteRead(Slot) : 0;
+        ULONG64 Frame;
+        ULONG CacheFlags;
 
-        if (!MiArchPteIsValid(Pte))
+        if (MiArchPteIsValid(Pte))
+        {
+            Frame = MiArchPteFrame(Pte);
+            CacheFlags = MiArchPteLeafFlags(Pte);
+        }
+        else if (Pte != 0 && MiSoftKind(Pte) == MiSoftResident)
+        {
+            Frame = MiSoftValue(Pte);
+            CacheFlags = MiSoftFile(Pte) << 3;
+        }
+        else
+        {
             return STATUS_NOT_COMMITTED;
+        }
 
-        MiPtWrite(Space, Va, Slot, TableFrame,
-                  MiArchPteMakeLeaf(MiArchPteFrame(Pte), Protection, MI_LEAF_GLOBAL | MI_LEAF_DIRTY));
+        if ((Protection & MI_PROT_NOACCESS) == MI_PROT_NOACCESS)
+        {
+            MiPtWrite(Space, Va, Slot, TableFrame,
+                      MiSoftMake(MiSoftResident, MI_PROT_NOACCESS, Frame) |
+                          ((ULONG64)(CacheFlags >> 3) << MI_SOFT_FILE_SHIFT));
+        }
+        else
+        {
+            MiPtWrite(Space, Va, Slot, TableFrame,
+                      MiArchPteMakeLeaf(Frame, Protection, MI_LEAF_GLOBAL | MI_LEAF_DIRTY | CacheFlags));
+        }
     }
 
     MiArchTlbInvalidate(VirtualAddress, Count, TRUE);
