@@ -24,15 +24,36 @@ typedef struct _MI_RWLOCK
     KGUARDED_MUTEX Writers;
 } MI_RWLOCK, *PMI_RWLOCK;
 
+#define MI_KM_EXCLUSIVE_SPINS           4096
+
 FORCEINLINE
 VOID
 MiKmAcquireExclusive(PMI_RWLOCK Lock)
 {
-    KeEnterCriticalRegion();
-    if (InterlockedCompareExchangePointer(&Lock->Readers.Ptr, (PVOID)EX_PUSH_LOCK_LOCK, NULL) == NULL)
-        return;
+    ULONG Spins = (KeNumberProcessors > 1) ? MI_KM_EXCLUSIVE_SPINS : 0;
 
-    KeAcquireGuardedMutex(&Lock->Writers);
+    KeEnterCriticalRegion();
+    for (;;)
+    {
+        if (*(PVOID volatile *)&Lock->Readers.Ptr == NULL &&
+            InterlockedCompareExchangePointer(&Lock->Readers.Ptr, (PVOID)EX_PUSH_LOCK_LOCK, NULL) == NULL)
+        {
+            return;
+        }
+
+        if ((Lock->Writers.Count & GM_LOCK_BIT) && KeTryToAcquireGuardedMutex(&Lock->Writers))
+            break;
+
+        if (Spins == 0)
+        {
+            KeAcquireGuardedMutex(&Lock->Writers);
+            break;
+        }
+
+        Spins--;
+        YieldProcessor();
+    }
+
     ExAcquirePushLockExclusive(&Lock->Readers);
     KeReleaseGuardedMutex(&Lock->Writers);
 }
