@@ -110,6 +110,10 @@ typedef struct _CC_MAP
     volatile LONG64 DirtyPages;
     volatile LONG FlushesInProgress;
     LONG64 DirtyPageThreshold;
+    ULONG ReclaimsInProgress;
+    BOOLEAN ReclaimsDraining;
+    VOID (*ReclaimComplete)(PVOID Context);
+    PVOID ReclaimContext;
 } CC_MAP, *PCC_MAP;
 
 C_ASSERT(FIELD_OFFSET(CC_MAP, NodeTypeCode) == 0x00);
@@ -191,6 +195,7 @@ ULONG CcCacheCheck(_In_ PCC_CACHE Cache);
 VOID CcMapInitialize(_Out_ PCC_MAP Map, _In_ PCC_CACHE Cache, _In_ PCC_BACKING_OPS Ops, _In_ PVOID Context,
                      _In_ ULONG64 SectionSize, _In_ ULONG64 FileSize, _In_ ULONG64 ValidDataLength);
 BOOLEAN CcMapUninitialize(_Inout_ PCC_MAP Map);
+VOID CcMapDrainReclaims(_Inout_ PCC_MAP Map, _In_ VOID (*Complete)(PVOID), _In_opt_ PVOID Context);
 VOID CcMapSetSizes(_Inout_ PCC_MAP Map, _In_ ULONG64 SectionSize, _In_ ULONG64 FileSize,
                    _In_ ULONG64 ValidDataLength);
 

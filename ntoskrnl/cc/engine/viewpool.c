@@ -221,6 +221,12 @@ CcViewReclaim(
             continue;
         }
 
+        if (Map->ReclaimsDraining)
+        {
+            CcLruInsert(Cache, View);
+            continue;
+        }
+
         CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
 
         if (View->Map == Map && CC_ATOMIC_READ32(&View->ReferenceCount) == 0)
@@ -230,6 +236,7 @@ CcViewReclaim(
             CC_ASSERT(Slot != NULL && Slot->View == View);
             Slot->View = NULL;
             Map->ViewsAttached--;
+            Map->ReclaimsInProgress++;
             *OldMap = Map;
             *OldBase = View->BaseAddress;
             View->Map = NULL;
@@ -248,6 +255,56 @@ CcViewReclaim(
 
     CC_LOCK_RELEASE(&Cache->ReclaimLock, ReclaimIrql);
     return Claimed;
+}
+
+VOID
+CcMapDrainReclaims(
+    _Inout_ PCC_MAP Map,
+    _In_ VOID (*Complete)(PVOID),
+    _In_opt_ PVOID Context)
+{
+    PCC_CACHE Cache = Map->Cache;
+    BOOLEAN Ready;
+    KIRQL OldIrql;
+
+    CC_LOCK_ACQUIRE(&Cache->ReclaimLock, &OldIrql);
+    CC_ASSERT(!Map->ReclaimsDraining);
+    Map->ReclaimsDraining = TRUE;
+    Ready = (Map->ReclaimsInProgress == 0);
+    if (!Ready)
+    {
+        Map->ReclaimComplete = Complete;
+        Map->ReclaimContext = Context;
+    }
+    CC_LOCK_RELEASE(&Cache->ReclaimLock, OldIrql);
+
+    if (Ready)
+        Complete(Context);
+}
+
+static
+VOID
+CcMapReleaseReclaim(
+    _Inout_ PCC_MAP Map)
+{
+    PCC_CACHE Cache = Map->Cache;
+    VOID (*Complete)(PVOID) = NULL;
+    PVOID Context = NULL;
+    KIRQL OldIrql;
+
+    CC_LOCK_ACQUIRE(&Cache->ReclaimLock, &OldIrql);
+    CC_ASSERT(Map->ReclaimsInProgress != 0);
+    if (--Map->ReclaimsInProgress == 0 && Map->ReclaimsDraining)
+    {
+        Complete = Map->ReclaimComplete;
+        Context = Map->ReclaimContext;
+        Map->ReclaimComplete = NULL;
+        Map->ReclaimContext = NULL;
+    }
+    CC_LOCK_RELEASE(&Cache->ReclaimLock, OldIrql);
+
+    if (Complete != NULL)
+        Complete(Context);
 }
 
 VOID
@@ -313,6 +370,7 @@ CcViewGet(
     if (OldBase != NULL)
     {
         OldMap->Ops.UnmapView(OldMap->Context, OldBase);
+        CcMapReleaseReclaim(OldMap);
         CC_ATOMIC_ADD64(&Cache->ViewReclaims, 1);
     }
 
@@ -502,6 +560,7 @@ CcCacheTrim(
         if (OldBase != NULL)
         {
             OldMap->Ops.UnmapView(OldMap->Context, OldBase);
+            CcMapReleaseReclaim(OldMap);
             Trimmed++;
         }
 
