@@ -9,6 +9,11 @@
 
 #include "mmharness.h"
 #include <nvs/include/miproc.h>
+#include "ntmappingshim.h"
+
+PMI_SYSTEM MiMappingTestSystem;
+jmp_buf MiMappingTestBugCheck;
+ULONG_PTR MiMappingTestBugCheckCode;
 
 #define SYSPTE_PAGES 16384
 
@@ -103,6 +108,68 @@ SysPteAllocator(void)
     MiReleaseSystemPtes(&World.System, Va[0], 8000);
 
     SysWorldDestroy(&World, 1024);
+}
+
+static void
+SysReservedMapping(void)
+{
+    static TEST_WORLD World;
+    struct { MDL Mdl; PFN_NUMBER Frames[2]; } Buffer = {0};
+    ULONG Tag = 0x4E565354;
+    ULONG64 Prefix, Header, Physical;
+    PVOID Address;
+    PMI_PTE First, Second;
+    ULONG i;
+
+    SysWorldCreate(&World, 1024, 1);
+    MiMappingTestSystem = &World.System;
+    Prefix = MiReserveSystemPtes(&World.System, 511);
+    Address = MmAllocateMappingAddress(256 * PAGE_SIZE, Tag);
+    CHECK(Address != NULL);
+    Header = (ULONG64)(ULONG_PTR)Address - 2 * PAGE_SIZE;
+    CHECK(Header == Prefix + 511 * PAGE_SIZE);
+    First = MiPtLookup(&World.System.SystemSpace, Header, NULL);
+    Second = MiPtLookup(&World.System.SystemSpace, Header + PAGE_SIZE, NULL);
+    CHECK(((ULONG_PTR)First & (PAGE_SIZE - 1)) == PAGE_SIZE - sizeof(MI_PTE));
+    CHECK(Second != First + 1);
+    CHECK(MiArchPteRead(First) == (256 << 1));
+    CHECK(MiArchPteRead(Second) == (MI_PTE)Tag << 1);
+
+    MmInitializeMdl(&Buffer.Mdl, (PVOID)(ULONG_PTR)31, PAGE_SIZE);
+    for (i = 0; i < 2; i++)
+        Buffer.Frames[i] = MiPfnAllocatePage(&World.System.Pfn, 0);
+    if (setjmp(MiMappingTestBugCheck) == 0)
+    {
+        MmMapLockedPagesWithReservedMapping(Address, Tag + 1, &Buffer.Mdl, MmCached);
+        CHECK(FALSE);
+    }
+    CHECK(MiMappingTestBugCheckCode == 0x104);
+    CHECK(MmMapLockedPagesWithReservedMapping(Address, Tag, &Buffer.Mdl, MmCached) == (PUCHAR)Address + 31);
+    for (i = 0; i < 2; i++)
+    {
+        CHECK(MiPtTranslate(&World.System.SystemSpace, (ULONG_PTR)Address + i * PAGE_SIZE, &Physical, NULL));
+        CHECK((Physical >> PAGE_SHIFT) == Buffer.Frames[i]);
+    }
+    MmUnmapReservedMapping(Address, Tag, &Buffer.Mdl);
+    CHECK(Buffer.Mdl.MappedSystemVa == NULL);
+    CHECK(!(Buffer.Mdl.MdlFlags & MDL_MAPPED_TO_SYSTEM_VA));
+    Buffer.Mdl.ByteCount = 257 * PAGE_SIZE;
+    CHECK(MmMapLockedPagesWithReservedMapping(Address, Tag, &Buffer.Mdl, MmCached) == NULL);
+    if (setjmp(MiMappingTestBugCheck) == 0)
+    {
+        MmFreeMappingAddress(Address, Tag + 1);
+        CHECK(FALSE);
+    }
+    CHECK(MiMappingTestBugCheckCode == 0x101);
+    MmFreeMappingAddress(Address, Tag);
+    CHECK(MiArchPteRead(First) == 0 && MiArchPteRead(Second) == 0);
+    CHECK(MmAllocateMappingAddress(256 * PAGE_SIZE, Tag) == Address);
+    MmFreeMappingAddress(Address, Tag);
+    for (i = 0; i < 2; i++)
+        MiPfnShareDecrement(&World.System.Pfn, (ULONG)Buffer.Frames[i], TRUE);
+    MiReleaseSystemPtes(&World.System, Prefix, 511);
+    SysWorldDestroy(&World, 1024);
+    MiMappingTestSystem = NULL;
 }
 
 static
@@ -784,6 +851,7 @@ TestSys(void)
     SysSelfMapFault();
     SysBootAdoption();
     SysPteAllocator();
+    SysReservedMapping();
     SysKernelStacks();
     SysIoAndContiguous();
     SysMdl();
