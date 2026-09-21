@@ -27,6 +27,8 @@ typedef struct _ADDRESS_PUSH_LOCK_CONTEXT
     KAFFINITY WakerAffinity;
     KAFFINITY WakerSeedAffinity;
     KAFFINITY WakerProcessorMask;
+    KPRIORITY WakerPriorityMin;
+    KPRIORITY WakerPriorityMax;
     BOOLEAN UseAddressWait;
 } ADDRESS_PUSH_LOCK_CONTEXT, *PADDRESS_PUSH_LOCK_CONTEXT;
 
@@ -38,6 +40,7 @@ AddressPushLockWakeThread(
 {
     PADDRESS_PUSH_LOCK_CONTEXT Context = Parameter;
     KAFFINITY OldAffinity = 0;
+    KPRIORITY Priority;
     NTSTATUS Status;
     ULONG PreviousProcessor = MAXULONG, Processor, Round;
 
@@ -58,6 +61,9 @@ AddressPushLockWakeThread(
         }
 
         Processor = KeGetCurrentProcessorNumber();
+        Priority = KeQueryPriorityThread(KeGetCurrentThread());
+        if (Priority < Context->WakerPriorityMin) Context->WakerPriorityMin = Priority;
+        if (Priority > Context->WakerPriorityMax) Context->WakerPriorityMax = Priority;
         if ((ULONG)Context->MainProcessor != Processor) Context->ForwardRemoteRounds++;
         if ((PreviousProcessor != MAXULONG) && (PreviousProcessor != Processor)) Context->WakerMigrations++;
         PreviousProcessor = Processor;
@@ -165,6 +171,7 @@ TestAddressPushLockRoundTrips(
     NTSTATUS Status;
     ULONG MainMigrations = 0, MainProcessor, PreviousProcessor = MAXULONG, ReturnRemoteRounds = 0, Round, StatusFailures = 0, Timeouts = 0;
     ULONGLONG ElapsedMicroseconds;
+    KPRIORITY MainPriority, MainPriorityMin = HIGH_PRIORITY, MainPriorityMax = 0;
 
     RtlZeroMemory(&Context, sizeof(Context));
     KeInitializeEvent(&Context.ReadyEvent, SynchronizationEvent, FALSE);
@@ -173,6 +180,7 @@ TestAddressPushLockRoundTrips(
     Context.WakerAffinity = WakerAffinity;
     Context.WakerSeedAffinity = WakerSeedAffinity;
     Context.UseAddressWait = UseAddressWait;
+    Context.WakerPriorityMin = HIGH_PRIORITY;
     Compare = 0;
     Timeout.QuadPart = -100LL * 10 * 1000;
     WakerThread = KmtStartThread(AddressPushLockWakeThread, &Context);
@@ -196,6 +204,9 @@ TestAddressPushLockRoundTrips(
         }
         Status = KeWaitForSingleObject(&Context.DoneEvent, Executive, KernelMode, FALSE, NULL);
         if (!NT_SUCCESS(Status)) StatusFailures++;
+        MainPriority = KeQueryPriorityThread(KeGetCurrentThread());
+        if (MainPriority < MainPriorityMin) MainPriorityMin = MainPriority;
+        if (MainPriority > MainPriorityMax) MainPriorityMax = MainPriority;
         MainProcessor = KeGetCurrentProcessorNumber();
         if ((ULONG)Context.WakerProcessor != MainProcessor) ReturnRemoteRounds++;
     }
@@ -204,7 +215,7 @@ TestAddressPushLockRoundTrips(
     EndTime = KeQueryPerformanceCounter(NULL);
     if (MainAffinity) KeRevertToUserAffinityThreadEx(OldAffinity);
     ElapsedMicroseconds = Frequency.QuadPart > 0 ? (ULONGLONG)(EndTime.QuadPart - StartTime.QuadPart) * 1000000 / Frequency.QuadPart : 0;
-    trace("address push-lock %s: rounds=%lu elapsed-us=%I64u main-mask=%Ix waker-mask=%Ix forward-remote=%lu return-remote=%lu main-migrations=%lu waker-migrations=%lu\n", Label, Context.Rounds, ElapsedMicroseconds, MainProcessorMask, Context.WakerProcessorMask, Context.ForwardRemoteRounds, ReturnRemoteRounds, MainMigrations, Context.WakerMigrations);
+    trace("address push-lock %s: rounds=%lu elapsed-us=%I64u main-mask=%Ix waker-mask=%Ix forward-remote=%lu return-remote=%lu main-migrations=%lu waker-migrations=%lu main-prio=%ld-%ld waker-prio=%ld-%ld\n", Label, Context.Rounds, ElapsedMicroseconds, MainProcessorMask, Context.WakerProcessorMask, Context.ForwardRemoteRounds, ReturnRemoteRounds, MainMigrations, Context.WakerMigrations, MainPriorityMin, MainPriorityMax, Context.WakerPriorityMin, Context.WakerPriorityMax);
     if (MainAffinity && WakerAffinity)
     {
         ok_eq_ulong(Context.ForwardRemoteRounds, MainAffinity == WakerAffinity ? 0 : Context.Rounds);
