@@ -23,7 +23,7 @@ add_custom_command(
     COMMENT "Cataloging system images for code integrity"
     VERBATIM)
 add_custom_target(ci_catalog DEPENDS "${REACTOS_BINARY_DIR}/sdk/lib/ci/catalog.h")
-foreach(_ci_kernel ntoskrnl ntkrnlmp)
+foreach(_ci_kernel ntoskrnl ntkrnlmp nvs_neutral)
     if(TARGET ${_ci_kernel})
         add_dependencies(${_ci_kernel} ci_catalog)
         target_include_directories(${_ci_kernel} PRIVATE "${REACTOS_BINARY_DIR}/sdk/lib/ci")

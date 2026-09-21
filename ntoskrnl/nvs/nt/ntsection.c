@@ -737,7 +737,9 @@ MmCreateSection(
     }
     else if (AllocationAttributes & SEC_IMAGE)
     {
-        Status = MiCreateImageControlArea(File, &Control);
+        Status = MiValidateImageSigningPolicy(File);
+        if (NT_SUCCESS(Status))
+            Status = MiCreateImageControlArea(File, &Control);
         if (NT_SUCCESS(Status))
             Size = Control->ImageSize;
     }
@@ -1518,6 +1520,12 @@ NtCreateSection(
     if (SafeMaximumSize.QuadPart < 0)
         return STATUS_SECTION_TOO_BIG;
 
+    if (PreviousMode != KernelMode && !(AllocationAttributes & SEC_IMAGE) &&
+        (SectionPageProtection & PAGE_IS_EXECUTABLE) && MiDynamicCodeBlocked(PsGetCurrentProcess()))
+    {
+        return STATUS_DYNAMIC_CODE_BLOCKED;
+    }
+
     Status = MmCreateSection(&SectionObject, DesiredAccess, ObjectAttributes, &SafeMaximumSize,
                              SectionPageProtection, AllocationAttributes, FileHandle, NULL);
     if (!NT_SUCCESS(Status))
@@ -1663,8 +1671,13 @@ NtMapViewOfSection(
         return Status;
     }
 
-    if (!Section->Control->Physical && !(AllocationType & MEM_DOS_LIM) &&
-        (((ULONG_PTR)SafeBase | (ULONG64)SafeOffset.QuadPart) & (MI_ALLOCATION_GRANULARITY - 1)))
+    if (PreviousMode != KernelMode && (Protect & PAGE_IS_EXECUTABLE) && !Section->Control->Image &&
+        MiDynamicCodeBlocked(Process))
+    {
+        Status = STATUS_DYNAMIC_CODE_BLOCKED;
+    }
+    else if (!Section->Control->Physical && !(AllocationType & MEM_DOS_LIM) &&
+             (((ULONG_PTR)SafeBase | (ULONG64)SafeOffset.QuadPart) & (MI_ALLOCATION_GRANULARITY - 1)))
     {
         Status = STATUS_MAPPED_ALIGNMENT;
     }
@@ -1778,7 +1791,12 @@ NtExtendSection(
         LARGE_INTEGER FileSize;
 
         Status = FsRtlGetFileSize(Section->Control->FileObject, &FileSize);
-        if (NT_SUCCESS(Status) && SafeSize.QuadPart > FileSize.QuadPart)
+        if (NT_SUCCESS(Status) && SafeSize.QuadPart > FileSize.QuadPart &&
+            !MI_PROT_IS_WRITABLE(Section->Protection))
+        {
+            Status = STATUS_SECTION_NOT_EXTENDED;
+        }
+        else if (NT_SUCCESS(Status) && SafeSize.QuadPart > FileSize.QuadPart)
         {
             FILE_END_OF_FILE_INFORMATION EndOfFile;
 

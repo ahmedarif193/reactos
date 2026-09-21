@@ -156,20 +156,56 @@ MiReturnRegion(
     return Status;
 }
 
+BOOLEAN
+MiDynamicCodeBlocked(
+    _In_ PEPROCESS Process)
+{
+    LONG Policy = ReadAcquire(&Process->DynamicCodeMitigationPolicy);
+    PETHREAD Thread;
+
+    if (!(Policy & 1))
+        return FALSE;
+
+    Thread = PsGetCurrentThread();
+    return !(THREAD_TO_PROCESS(Thread) == Process &&
+             (Policy & 2) &&
+             ReadAcquire(&Thread->DynamicCodeOptOut));
+}
+
 static
-ULONG64
+BOOLEAN
 MiHighestAddressFromZeroBits(
-    _In_ ULONG_PTR ZeroBits)
+    _In_ ULONG_PTR ZeroBits,
+    _Out_ PULONG64 HighestAddress)
 {
     ULONG64 Highest = (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
 
-    if (ZeroBits == 0)
-        return Highest;
+    if (ZeroBits != 0 && ZeroBits < 32)
+    {
+        if (ZeroBits > 21)
+            return FALSE;
 
-    if (ZeroBits < 32)
-        return min(Highest, ~0ULL >> (ZeroBits + 32));
+        Highest = min(Highest, ~0ULL >> (ZeroBits + 32));
+    }
+    else if (ZeroBits != 0)
+    {
+#ifdef _WIN64
+        ULONG Shift;
 
-    return min(Highest, (ULONG64)ZeroBits);
+        for (Shift = 1; Shift < sizeof(ZeroBits) * 8; Shift <<= 1)
+            ZeroBits |= ZeroBits >> Shift;
+
+        if (ZeroBits < (MAXULONG_PTR >> MI_MAX_ZERO_BITS))
+            return FALSE;
+
+        Highest = min(Highest, (ULONG64)ZeroBits);
+#else
+        return FALSE;
+#endif
+    }
+
+    *HighestAddress = Highest;
+    return TRUE;
 }
 
 NTSTATUS
@@ -183,7 +219,7 @@ NtAllocateVirtualMemory(
     _In_ ULONG Protect)
 {
     MI_PROCESS_REFERENCE Target;
-    ULONG64 Base, Size;
+    ULONG64 Base, Size, Highest;
     ULONG Protection;
     ULONG Type = 0;
     ULONG Attempts = 0;
@@ -192,6 +228,9 @@ NtAllocateVirtualMemory(
     NTSTATUS Status;
 
     PAGED_CODE();
+
+    if (!MiHighestAddressFromZeroBits(ZeroBits, &Highest))
+        return STATUS_INVALID_PARAMETER_3;
 
     if (AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_RESET | MEM_PHYSICAL | MEM_TOP_DOWN | MEM_WRITE_WATCH |
                            MEM_LARGE_PAGES))
@@ -244,6 +283,13 @@ NtAllocateVirtualMemory(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    if (ExGetPreviousMode() != KernelMode && (Protect & PAGE_IS_EXECUTABLE) &&
+        MiDynamicCodeBlocked(Target.Process))
+    {
+        MiReleaseTargetProcess(&Target);
+        return STATUS_DYNAMIC_CODE_BLOCKED;
+    }
+
     if (AllocationType & MEM_COMMIT)
         Type |= MI_MEM_COMMIT;
     if (AllocationType & MEM_RESERVE)
@@ -264,7 +310,7 @@ NtAllocateVirtualMemory(
             Type |= MI_MEM_RESERVE;
 
         Status = MiAllocateVirtualMemoryEx(MiSpaceOfProcess(Target.Process), &Base, &Size, Type, Protection,
-                                           MiHighestAddressFromZeroBits(ZeroBits));
+                                           Highest);
     } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
 
     if (NT_SUCCESS(Status))
@@ -365,7 +411,8 @@ MiProtectVirtualMemoryNt(
     _Inout_ PVOID *BaseAddress,
     _Inout_ PSIZE_T NumberOfBytesToProtect,
     _In_ ULONG NewAccessProtection,
-    _Out_opt_ PULONG OldAccessProtection)
+    _Out_opt_ PULONG OldAccessProtection,
+    _In_ BOOLEAN DenyDynamicCode)
 {
     ULONG64 Base = (ULONG64)(ULONG_PTR)*BaseAddress;
     ULONG64 Size = *NumberOfBytesToProtect;
@@ -378,7 +425,8 @@ MiProtectVirtualMemoryNt(
 
     do
     {
-        Status = MiProtectVirtualMemory(MiSpaceOfProcess(Process), &Base, &Size, Protection, &Old);
+        Status = MiProtectVirtualMemoryEx(MiSpaceOfProcess(Process), &Base, &Size, Protection, &Old,
+                                          DenyDynamicCode);
     } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
 
     if (NT_SUCCESS(Status))
@@ -440,7 +488,9 @@ NtProtectVirtualMemory(
         return Status;
 
     Status = MiProtectVirtualMemoryNt(Target.Process, &BaseAddress, &RegionSize, NewAccessProtection,
-                                      &OldProtection);
+                                      &OldProtection,
+                                      (BOOLEAN)(ExGetPreviousMode() != KernelMode &&
+                                                MiDynamicCodeBlocked(Target.Process)));
     MiReleaseTargetProcess(&Target);
 
     if (!NT_SUCCESS(Status))
@@ -529,6 +579,9 @@ NtQueryVirtualMemory(
     NTSTATUS Status;
 
     PAGED_CODE();
+
+    if ((ULONG_PTR)BaseAddress > (ULONG_PTR)MmHighestUserAddress)
+        return STATUS_INVALID_PARAMETER;
 
     if (MemoryInformationClass == MemorySectionName)
     {
@@ -799,17 +852,30 @@ NtFlushInstructionCache(
         if (FlushSize == 0)
             return STATUS_SUCCESS;
 
-        if (ExGetPreviousMode() != KernelMode && BaseAddress > MmHighestUserAddress)
+        if (ExGetPreviousMode() != KernelMode &&
+            (BaseAddress > MmHighestUserAddress ||
+             (ULONG_PTR)MmHighestUserAddress - (ULONG_PTR)BaseAddress < FlushSize - 1))
+        {
             return STATUS_ACCESS_VIOLATION;
+        }
     }
 
     Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_WRITE, &Target);
     if (!NT_SUCCESS(Status))
         return Status;
 
-    KeSweepICache(BaseAddress, FlushSize);
+    _SEH2_TRY
+    {
+        KeSweepICache(BaseAddress, FlushSize);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
     MiReleaseTargetProcess(&Target);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 NTSTATUS
