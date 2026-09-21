@@ -571,7 +571,7 @@ MmProtectMdlSystemAddress(
         return STATUS_NOT_MAPPED_VIEW;
 
     if (!MiProtectionFromWin32(NewProtect, &Protection) || MI_PROT_IS_COPY(Protection) ||
-        (Protection & MI_PROT_GUARD))
+        (Protection & MI_PROT_NOACCESS) == MI_PROT_GUARD)
     {
         return STATUS_INVALID_PAGE_PROTECTION;
     }

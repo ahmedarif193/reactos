@@ -129,6 +129,7 @@ MI_PTE MiArchPteMakeBlock(_In_ ULONG64 Frame, _In_ ULONG Protection, _In_ ULONG 
 ULONG64 MiArchPteFrame(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsWritable(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsCopyOnWrite(_In_ MI_PTE Pte);
+ULONG MiArchPteLeafFlags(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsDirty(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsAccessed(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsUser(_In_ MI_PTE Pte);

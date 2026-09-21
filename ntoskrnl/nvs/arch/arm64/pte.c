@@ -124,6 +124,22 @@ MiArchPteIsCopyOnWrite(_In_ MI_PTE Pte)
     return (Pte & A64_SW_COPY) != 0;
 }
 
+ULONG
+MiArchPteLeafFlags(_In_ MI_PTE Pte)
+{
+    switch (Pte & (7ULL << A64_ATTR_SHIFT))
+    {
+        case A64_ATTR_DEVICE:
+            return MI_LEAF_DEVICE;
+        case A64_ATTR_NOCACHE:
+            return MI_LEAF_NOCACHE;
+        case A64_ATTR_WC:
+            return MI_LEAF_WRITECOMBINE;
+        default:
+            return 0;
+    }
+}
+
 BOOLEAN
 MiArchPteIsDirty(_In_ MI_PTE Pte)
 {
