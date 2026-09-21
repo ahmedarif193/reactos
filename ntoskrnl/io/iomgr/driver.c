@@ -2595,6 +2595,13 @@ IopAcquireDriverLoadSlot(
         return STATUS_SUCCESS;
     }
 
+    if (current->Owner == Thread)
+    {
+        KeReleaseSpinLock(&IopDriverLoadSlotLock, oldIrql);
+        ExFreePoolWithTag(newSlot, TAG_IO);
+        return STATUS_IMAGE_ALREADY_LOADED;
+    }
+
     /* Reject recursive and cross-thread dependency cycles instead of waiting
      * forever. Every slot owned by a blocked thread records the same edge. */
     Owner = current->Owner;
