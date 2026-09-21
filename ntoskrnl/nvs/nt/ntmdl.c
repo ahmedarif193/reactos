@@ -335,14 +335,17 @@ MmMapLockedPagesSpecifyCache(
         return Mdl->MappedSystemVa;
     }
 
-    Base = (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress);
+    if (BYTE_OFFSET(BaseAddress) != 0)
+        ExRaiseStatus(STATUS_INVALID_ADDRESS);
+
+    Base = (ULONG64)(ULONG_PTR)BaseAddress;
     Status = MiMapFramesUser(MiSpaceOfProcess(PsGetCurrentProcess()), (const MI_FRAME_NUMBER *)Pages, Count,
                              Protection,
                              (Mdl->MdlFlags & MDL_IO_SPACE)
                                  ? (((CacheType & 0xFF) == MmNonCached) ? MI_LEAF_NOCACHE
                                     : (((CacheType & 0xFF) == MmWriteCombined) ? MI_LEAF_WRITECOMBINE : 0))
                                  : (WriteCombinedRam ? MI_LEAF_WRITECOMBINE : 0),
-                             &Base);
+                             TRUE, &Base);
     if (!NT_SUCCESS(Status))
         ExRaiseStatus(Status);
 
@@ -370,7 +373,7 @@ MmUnmapLockedPages(
 
     if (!MI_IS_SYSTEM_VA(BaseAddress))
     {
-        MiUnmapFramesUser(MiSpaceOfProcess(PsGetCurrentProcess()), Base);
+        MiUnmapFramesUser(MiSpaceOfProcess(PsGetCurrentProcess()), Base, TRUE);
         return;
     }
 

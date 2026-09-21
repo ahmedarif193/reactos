@@ -717,8 +717,12 @@ MiFreeVirtualMemory(
 
     if (Vad->Type == MiVadLarge)
     {
-        if (Vad->Segment != NULL || FreeType != MI_MEM_RELEASE ||
-            *BaseAddress != MI_VAD_START(Vad) || *RegionSize != 0)
+        if (Vad->Segment != NULL)
+        {
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+            return STATUS_UNABLE_TO_DELETE_SECTION;
+        }
+        if (FreeType != MI_MEM_RELEASE || *BaseAddress != MI_VAD_START(Vad) || *RegionSize != 0)
         {
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
             return FreeType == MI_MEM_RELEASE ? STATUS_UNABLE_TO_FREE_VM : STATUS_UNABLE_TO_DECOMMIT_VM;
@@ -732,7 +736,7 @@ MiFreeVirtualMemory(
     if (Vad->Type != MiVadPrivate)
     {
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
-        return STATUS_UNABLE_TO_FREE_VM;
+        return STATUS_UNABLE_TO_DELETE_SECTION;
     }
 
     if (*RegionSize == 0)
@@ -991,7 +995,7 @@ MiQueryVirtualMemory(
     Information->State = Committed ? MI_MEM_COMMIT : MI_MEM_RESERVE;
     Information->Protect = Protection;
     Information->Type = (Vad->Type == MiVadPrivate || (Vad->Type == MiVadLarge && Vad->Segment == NULL) ||
-                         Vad->Type == MiVadAwe || Vad->Type == MiVadRotate) ? MI_MEM_PRIVATE
+                         Vad->Type == MiVadAwe || Vad->Type == MiVadRotate || Vad->LockedPages) ? MI_MEM_PRIVATE
                                                     : ((Vad->Type == MiVadImage) ? MI_MEM_IMAGE : MI_MEM_MAPPED);
 
     Va = Start + PAGE_SIZE;
@@ -1104,6 +1108,7 @@ MiMapFramesUser(
     _In_ ULONG PageCount,
     _In_ ULONG Protection,
     _In_ ULONG LeafFlags,
+    _In_ BOOLEAN LockedPages,
     _Inout_ PULONG64 BaseAddress)
 {
     NTSTATUS Status = STATUS_SUCCESS;
@@ -1142,6 +1147,8 @@ MiMapFramesUser(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    Vad->LockedPages = LockedPages;
+
     for (i = 0; i < PageCount; i++)
     {
         ULONG64 Va = Start + (ULONG64)i * PAGE_SIZE;
@@ -1171,7 +1178,8 @@ MiMapFramesUser(
 NTSTATUS
 MiUnmapFramesUser(
     _Inout_ PMI_ADDRESS_SPACE Space,
-    _In_ ULONG64 BaseAddress)
+    _In_ ULONG64 BaseAddress,
+    _In_ BOOLEAN LockedPages)
 {
     PMI_VAD Vad;
 
@@ -1182,6 +1190,12 @@ MiUnmapFramesUser(
     {
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
         return STATUS_NOT_MAPPED_VIEW;
+    }
+
+    if (Vad->LockedPages != LockedPages)
+    {
+        MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        return LockedPages ? STATUS_NOT_MAPPED_VIEW : STATUS_INVALID_PAGE_PROTECTION;
     }
 
     MiUnmapFramesUserLocked(Space, Vad);

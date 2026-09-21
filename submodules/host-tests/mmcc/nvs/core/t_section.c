@@ -388,7 +388,7 @@ SectionSharedDataFile(void)
     CHECK(UserRead(&World, 1, BaseB + 5, &Byte, 1) == STATUS_GUARD_PAGE_VIOLATION);
     CHECK(NT_SUCCESS(UserRead(&World, 1, BaseB + 5, &Byte, 1)) && Byte == File.Data[5]);
 
-    CHECK(MiFreeVirtualMemory(&A, &(ULONG64){BaseA}, &(ULONG64){0}, MI_MEM_RELEASE) == STATUS_UNABLE_TO_FREE_VM);
+    CHECK(MiFreeVirtualMemory(&A, &(ULONG64){BaseA}, &(ULONG64){0}, MI_MEM_RELEASE) == STATUS_UNABLE_TO_DELETE_SECTION);
     CHECK(MiSegmentPurge(Segment, 0, 0) == FALSE);
 
     CHECK(MiTrimAddressSpace(&A, 1000, TRUE) != 0);

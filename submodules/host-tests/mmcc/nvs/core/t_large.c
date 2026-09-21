@@ -287,7 +287,7 @@ LargeSectionLifecycle(void)
     CHECK(MiProtectVirtualMemory(&Peer, &Region, &Length, MI_PROT_READWRITE, &Old) == STATUS_SECTION_PROTECTION);
     Region = Base;
     Length = 0;
-    CHECK(MiFreeVirtualMemory(&Parent, &Region, &Length, MI_MEM_RELEASE) == STATUS_UNABLE_TO_FREE_VM);
+    CHECK(MiFreeVirtualMemory(&Parent, &Region, &Length, MI_MEM_RELEASE) == STATUS_UNABLE_TO_DELETE_SECTION);
     Region = Base;
     Length = Large;
     CHECK(NT_SUCCESS(MiProtectVirtualMemory(&Parent, &Region, &Length, MI_PROT_NOACCESS, &Old)));
