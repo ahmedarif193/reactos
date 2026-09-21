@@ -200,7 +200,7 @@ KiIpiServiceRoutine(
         if (InterlockedAnd((PLONG)&Prcb->RequestSummary, ~IPI_DPC) & IPI_DPC)
         {
             SmpDbgRemoteDpc(Prcb->Number, SMPDBG_SOURCE_UNKNOWN);
-            Prcb->DpcInterruptRequested = TRUE;
+            KiSetDpcInterruptRequested(Prcb);
             HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
         }
 
