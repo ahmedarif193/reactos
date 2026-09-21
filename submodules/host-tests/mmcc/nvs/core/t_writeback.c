@@ -105,6 +105,51 @@ WritebackSizeReentry(void)
     WorldDestroy(&World);
 }
 
+static NTSTATUS
+WritebackAttempt(PVOID Context, ULONG64 Offset, ULONG Length, PVOID Buffer)
+{
+    WRITEBACK_FILE *File = Context;
+
+    File->Calls++;
+    return TestFileOps.Write(&File->File, Offset, Length, Buffer);
+}
+
+static void
+WritebackFailureProgress(void)
+{
+    TEST_WORLD World;
+    WRITEBACK_FILE File = { .World = &World };
+    MI_FILE_OPS Ops = { .Read = TestFileOps.Read, .Write = WritebackAttempt };
+    ULONG i;
+
+    WorldCreate(&World, 256, 1, 10000);
+    FileCreate(&File.File, PAGE_SIZE);
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, PAGE_SIZE, MI_PROT_READWRITE,
+                                     &Ops, &File, NULL, 0, &File.Segment)));
+    CHECK(NT_SUCCESS(MiSegmentMarkDirty(File.Segment, 0, PAGE_SIZE)));
+    memset(File.File.Data, 0xCC, PAGE_SIZE);
+    File.File.FailWrites = TRUE;
+    for (i = 0; i < 2; i++)
+    {
+        CHECK(MiWriteModifiedPages(&World.System, 256) == 0);
+        CHECK(File.Calls == i + 1);
+        CHECK(File.Segment->PagesWritten == 0);
+        CHECK(MiPfnListCount(&World.System.Pfn, MiPageModified) == 1);
+        CHECK(WorldCheck(&World) == 0);
+    }
+    File.File.FailWrites = FALSE;
+    CHECK(MiWriteModifiedPages(&World.System, 256) == 1);
+    CHECK(File.Calls == 3 && File.Segment->PagesWritten == 1);
+    CHECK(MiWriteModifiedPages(&World.System, 256) == 0);
+    CHECK(MiPfnListCount(&World.System.Pfn, MiPageModified) == 0);
+    for (i = 0; i < PAGE_SIZE; i++)
+        CHECK(File.File.Data[i] == (UCHAR)i);
+    CHECK(MiSegmentDereferenceAndClose(File.Segment));
+    WorldExpectClean(&World, 256);
+    FileDestroy(&File.File);
+    WorldDestroy(&World);
+}
+
 void
 TestWriteback(void)
 {
@@ -118,6 +163,7 @@ TestWriteback(void)
     ULONG Calls;
 
     WritebackSizeReentry();
+    WritebackFailureProgress();
     WorldCreate(&World, 512, 1, 100000);
     FileCreate(&File.File, Size);
     CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, Size, MI_PROT_READWRITE,

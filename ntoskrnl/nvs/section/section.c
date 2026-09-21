@@ -2130,7 +2130,7 @@ MiSegmentMarkDirty(
     return Status;
 }
 
-VOID
+NTSTATUS
 MiWritePrototypePage(
     _Inout_ PMI_SYSTEM System,
     _In_ ULONG Frame)
@@ -2153,8 +2153,9 @@ MiWritePrototypePage(
         MI_SPIN_ACQUIRE(&System->SegmentListLock, &OldIrql);
         Segment->ActiveWriters--;
         MI_SPIN_RELEASE(&System->SegmentListLock, OldIrql);
-        return;
+        return Status;
     }
 
     MiPfnWriteComplete(&System->Pfn, Frame, Entry->OriginalPte, FALSE);
+    return Status;
 }
