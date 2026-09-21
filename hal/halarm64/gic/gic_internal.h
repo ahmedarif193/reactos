@@ -1322,7 +1322,7 @@ HalpArm64InitRedistRegions(VOID);
  *
  * Maps all discovered redistributor regions. Called after MM is available.
  */
-VOID
+BOOLEAN
 HalpArm64MapRedistRegions(VOID);
 
 /*

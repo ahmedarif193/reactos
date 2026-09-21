@@ -691,8 +691,12 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
             //
             NeedsPeb = TRUE;
 
-            /* This is a clone! */
-            ASSERTMSG("No support for cloning yet\n", FALSE);
+            Status = MmInitializeProcessAddressSpace(Process,
+                                                     Parent,
+                                                     NULL,
+                                                     &Flags,
+                                                     &Process->SeAuditProcessCreationInfo.ImageFileName);
+            if (!NT_SUCCESS(Status)) goto CleanupWithRef;
         }
         else
         {
@@ -731,7 +735,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 #endif
 
     /* Check if we have a section object and map the system DLL */
-    if (SectionObject) PspMapSystemDll(Process, NULL, FALSE);
+    if (SectionHandle) PspMapSystemDll(Process, NULL, FALSE);
 
     /* Create a handle for the Process */
     CidEntry.Object = Process;
@@ -803,14 +807,6 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
             Status = MmCreatePeb(Process, &InitialPeb, &Process->Peb);
             if (!NT_SUCCESS(Status)) goto CleanupWithRef;
         }
-        else
-        {
-            //
-            // We have to clone it
-            //
-            ASSERTMSG("No support for cloning yet\n", FALSE);
-        }
-
     }
 
     /* The process can now be activated */
@@ -2906,9 +2902,13 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
                                                NULL);
             if (NT_SUCCESS(Status))
             {
+#ifdef NVS
+                PVOID PreferredBase = MmGetImageBaseForSection(SectionObject);
+#else
                 PMM_IMAGE_SECTION_OBJECT ImageSectionObject =
                     (PMM_IMAGE_SECTION_OBJECT)SectionObject->Segment;
                 PVOID PreferredBase = ImageSectionObject->BasedAddress;
+#endif
                 LONG_PTR Delta = (LONG_PTR)ActualBase - (LONG_PTR)PreferredBase;
 
                 DPRINT("NtCreateUserProcess: PreferredBase=%p, ActualBase=%p, Delta=%p\n",

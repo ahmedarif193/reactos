@@ -11,7 +11,7 @@
 #include "ntoskrnl.h"
 #define NDEBUG
 #include "debug.h"
-#include <vmm/vmm.h>
+#include <nvs/nt/mmkernel.h>
 
 /* GLOBALS *******************************************************************/
 

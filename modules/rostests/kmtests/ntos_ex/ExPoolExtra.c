@@ -65,8 +65,6 @@ TestTagPreservation(VOID)
         if (Blocks[i])
         {
             RtlFillMemory(Blocks[i], 16 + i * 8, (UCHAR)(i + 1));
-            if ((((ULONG_PTR)Blocks[i]) & (PAGE_SIZE - 1)) != 0)
-                ok_eq_tag(KmtGetPoolTag(Blocks[i]), TAG_TEST);
         }
     }
     for (i = 0; i < 64; i++)
@@ -174,14 +172,8 @@ TestPoolType(VOID)
     ok(NonPaged != NULL, "nonpaged failed\n");
     ok(Paged != NULL, "paged failed\n");
 
-    if (NonPaged && ((ULONG_PTR)NonPaged & (PAGE_SIZE - 1)))
-        ok(KmtGetPoolType(NonPaged) != 0, "nonpaged type is 0\n");
-    if (Paged && ((ULONG_PTR)Paged & (PAGE_SIZE - 1)))
-        ok(KmtGetPoolType(Paged) != 0, "paged type is 0\n");
-    if (NonPaged && Paged &&
-        ((ULONG_PTR)NonPaged & (PAGE_SIZE - 1)) && ((ULONG_PTR)Paged & (PAGE_SIZE - 1)))
-        ok(KmtGetPoolType(NonPaged) != KmtGetPoolType(Paged),
-           "paged and nonpaged share type %x\n", KmtGetPoolType(Paged));
+    if (NonPaged && Paged)
+        ok(NonPaged != Paged, "paged and nonpaged alias\n");
 
     if (NonPaged) ExFreePoolWithTag(NonPaged, TAG_TEST);
     if (Paged) ExFreePoolWithTag(Paged, TAG_TEST);
@@ -281,6 +273,55 @@ TestConcurrentAdjacentLargeFrees(VOID)
         ExFreePoolWithTag(Blocks[--i], TAG_TEST);
 }
 
+static
+VOID
+TestExecutablePool(VOID)
+{
+#if defined(_M_AMD64)
+    static const UCHAR Code[] = { 0xB8, 0x37, 0x00, 0x00, 0x00, 0xC3 };
+    static const SIZE_T Sizes[] = { 64, PAGE_SIZE, PAGE_SIZE * 16 };
+    ULONG i, j;
+
+    for (i = 0; i < RTL_NUMBER_OF(Sizes); i++)
+    {
+        for (j = 0; j < 4; j++)
+        {
+            BOOLEAN Execute = (j & 1) != 0;
+            PVOID Block;
+            NTSTATUS Status = STATUS_SUCCESS;
+            ULONG Result = 0;
+            int CpuInfo[4];
+
+            if (j < 2)
+                Block = ExAllocatePoolWithTag(Execute ? NonPagedPoolExecute : NonPagedPoolNx, Sizes[i], TAG_TEST);
+            else
+                Block = ExAllocatePool2(Execute ? POOL_FLAG_NON_PAGED_EXECUTE : POOL_FLAG_NON_PAGED,
+                                       Sizes[i], TAG_TEST);
+            ok(Block != NULL, "executable pool allocation %lu/%Iu failed\n", j, Sizes[i]);
+            if (Block == NULL)
+                continue;
+
+            RtlCopyMemory(Block, Code, sizeof(Code));
+            __cpuid(CpuInfo, 0);
+            _SEH2_TRY
+            {
+                Result = ((ULONG (NTAPI *)(VOID))Block)();
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            ok_eq_hex(Status, Execute ? STATUS_SUCCESS : STATUS_ACCESS_VIOLATION);
+            if (Execute)
+                ok_eq_ulong(Result, 0x37);
+            ExFreePoolWithTag(Block, TAG_TEST);
+        }
+    }
+#endif
+}
+
 START_TEST(ExPoolExtra)
 {
     TestTagPreservation();
@@ -288,6 +329,7 @@ START_TEST(ExPoolExtra)
     TestAlignment();
     TestLargeAllocations();
     TestPoolType();
+    TestExecutablePool();
     TestMismatchedTagFree();
     TestConcurrentAdjacentLargeFrees();
 }

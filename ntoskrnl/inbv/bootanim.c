@@ -16,7 +16,6 @@
 #include "inbv/logo.h"
 #include "inbv/inbvgop.h"
 
-/* See also vmm/vmm.h */
 #define MM_READONLY     1   // PAGE_READONLY
 #define MM_READWRITE    4   // PAGE_WRITECOPY
 

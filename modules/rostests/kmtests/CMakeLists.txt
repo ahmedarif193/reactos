@@ -33,6 +33,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     if(NOT USE_DUMMY_PSEH)
         set_property(SOURCE
             ntos_mm/MmMapLockedPagesSpecifyCache_user.c
+            ntos_mm/NtUserPhysicalPages.c
             rtl/RtlException.c
             APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
     endif()
@@ -128,6 +129,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExInterlocked.c
     ntos_ex/ExLookaside.c
     ntos_ex/ExPoolExtra.c
+    ntos_ex/ExPoolBench.c
     ntos_ex/ExPools.c
     ntos_ex/ExPushLock.c
     ntos_ex/ExResource.c
@@ -197,6 +199,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeWaitMultiple.c
     ntos_mm/MmAllocateContiguousNode.c
     ntos_mm/MmMdl.c
+    ntos_mm/MmLargePages.c
     ntos_mm/MmMapReserve.c
     ntos_mm/MmPhysical.c
     ntos_mm/MmPrefetchPages.c
@@ -462,6 +465,7 @@ list(APPEND KMTEST_SOURCE
     ntos_mm/MmMapLockedPagesSpecifyCache_user.c
     ntos_mm/NtCreateSection_user.c
     ntos_mm/NtUserPhysicalPages.c
+    ntos_mm/NtProcessClone.c
     ntos_po/PoIrp_user.c
     ntos_po/PoFxState_user.c
     tcpip/TcpIp_user.c

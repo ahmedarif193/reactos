@@ -294,6 +294,9 @@ VOID
 NTAPI
 LdrpGuardInvalidateModuleCache(VOID);
 
+BOOLEAN
+LdrpGuardDynamicTargetIsExecutable(_In_ PVOID Target);
+
 #if (_WIN32_WINNT >= _WIN32_WINNT_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
 
 VOID

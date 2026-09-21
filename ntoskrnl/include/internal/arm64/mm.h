@@ -291,19 +291,6 @@ MiArm64ResolveSoftwareDirtyFault(
     _In_ PVOID FaultAddress,
     _Inout_ PMMPTE PointerPte);
 
-/*
- * Per-CPU PFN-lock recursion depth (writer: ke/arm64/spinlock.c on every
- * PFN-lock acquire/release; reader: MiArm64AllocatePageTablePage, own CPU
- * only). One slot per cache line so the hottest MM lock's accounting never
- * bounces a shared line between CPUs.
- */
-typedef struct DECLSPEC_CACHEALIGN _MI_ARM64_PFN_LOCK_DEPTH
-{
-    volatile LONG Depth;
-} MI_ARM64_PFN_LOCK_DEPTH;
-
-extern MI_ARM64_PFN_LOCK_DEPTH MiArm64PfnLockDepth[];
-
 VOID
 MiArm64IncrementUserLeafPteCount(
     _In_ PFN_NUMBER PteFrame);
@@ -1332,7 +1319,7 @@ MI_IS_PHYSICAL_ADDRESS(
  *   Kernel non-exec:    PXN=1, UXN=1  (neither can execute)
  *
  * The generic PTE_EXECUTE / PTE_EXECUTE_READ / PTE_EXECUTE_READWRITE macros
- * in vmm.h use USER semantics (PXN=1, UXN=0) because MmProtectToPteMask[]
+ * in nvs.h use USER semantics (PXN=1, UXN=0) because MmProtectToPteMask[]
  * is consumed by MI_MAKE_HARDWARE_PTE / MI_MAKE_HARDWARE_PTE_USER which
  * create user-mode page table entries.
  *

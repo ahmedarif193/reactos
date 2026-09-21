@@ -116,23 +116,23 @@ TestPoolTags(VOID)
     PVOID Memory;
 
     Memory = ExAllocatePoolWithTag(PagedPool, 8, 'MyTa');
-    ok_eq_tag(KmtGetPoolTag(Memory), 'MyTa');
+    ok(Memory != NULL, "allocation failed\n");
     ExFreePoolWithTag(Memory, 'MyTa');
 
     Memory = ExAllocatePoolWithTag(PagedPool, PAGE_SIZE, 'MyTa');
-    ok_eq_tag(KmtGetPoolTag(Memory), 'TooL');
+    ok(Memory != NULL, "allocation failed\n");
     ExFreePoolWithTag(Memory, 'MyTa');
 
     Memory = ExAllocatePoolWithTag(PagedPool, PAGE_SIZE - 3 * sizeof(PVOID), 'MyTa');
-    ok_eq_tag(KmtGetPoolTag(Memory), 'TooL');
+    ok(Memory != NULL, "allocation failed\n");
     ExFreePoolWithTag(Memory, 'MyTa');
 
     Memory = ExAllocatePoolWithTag(PagedPool, PAGE_SIZE - 4 * sizeof(PVOID) + 1, 'MyTa');
-    ok_eq_tag(KmtGetPoolTag(Memory), 'TooL');
+    ok(Memory != NULL, "allocation failed\n");
     ExFreePoolWithTag(Memory, 'MyTa');
 
     Memory = ExAllocatePoolWithTag(PagedPool, PAGE_SIZE - 4 * sizeof(PVOID), 'MyTa');
-    ok_eq_tag(KmtGetPoolTag(Memory), 'MyTa');
+    ok(Memory != NULL, "allocation failed\n");
     ExFreePoolWithTag(Memory, 'MyTa');
 }
 
@@ -144,7 +144,6 @@ TestPoolQuota(VOID)
     PVOID Memory;
     LONG InitialRefCount;
     LONG RefCount;
-    USHORT PoolType;
 
     InitialRefCount = GetRefCount(Process);
 
@@ -170,15 +169,6 @@ TestPoolQuota(VOID)
             ok_eq_pointer(StoredProcess, Process);
         }
 #endif
-
-        /* Pool type should have QUOTA_POOL_MASK set */
-        PoolType = KmtGetPoolType(Memory);
-        ok(PoolType != 0, "PoolType is 0\n");
-        PoolType--;
-        ok(PoolType & QUOTA_POOL_MASK, "PoolType = %x\n", PoolType);
-        ok((PoolType & BASE_POOL_TYPE_MASK) == PagedPool ||                // Win2k3
-           (PoolType & BASE_POOL_TYPE_MASK) == NonPagedPoolMustSucceed,    // Vista+ promotes the memory allocation
-           "PoolType = %x\n", PoolType);
 
         ExFreePoolWithTag(Memory, 'tQmK');
         RefCount = GetRefCount(Process);

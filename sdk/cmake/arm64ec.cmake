@@ -123,6 +123,7 @@ set(_fex_common_cmake_args
 set(_arm64ec_cmake_args
     -DARCH:STRING=arm64
     -DARM64EC_RUNTIME:BOOL=ON
+    -DNVS:BOOL=ON
     -DARM64EC_NATIVE_BINARY_DIR:PATH=${REACTOS_BINARY_DIR}
     ${_fex_common_cmake_args})
 

@@ -100,6 +100,7 @@ TestCreateSection(
     PVOID SectionObject;
     LARGE_INTEGER MaximumSize;
     ULONG PointerCount1, PointerCount2;
+    BOOLEAN NewDataControl;
 
     _SEH2_TRY
     {
@@ -508,6 +509,7 @@ TestCreateSection(
             ObDereferenceObject(SectionObject);
 
         /* data file section */
+        NewDataControl = (FileObject1->SectionObjectPointer->DataSectionObject == NULL);
         if (GetNTVersion() >= _WIN32_WINNT_WIN8)
             --PointerCount1;
         CheckObject(FileHandle1, PointerCount1, 1L);
@@ -522,6 +524,10 @@ TestCreateSection(
         ok(SectionObject != NULL, "Section object pointer NULL\n");
         if (GetNTVersion() >= _WIN32_WINNT_WIN8)
             PointerCount1 -= 2;
+        if (NewDataControl)
+            ++PointerCount1;
+        ok(FileObject1->SectionObjectPointer->DataSectionObject != NULL,
+           "Data section has no control area\n");
         CheckObject(FileHandle1, PointerCount1, 1L);
         if (GetNTVersion() < _WIN32_WINNT_WIN8)
             CheckSection(SectionObject, 0);
@@ -576,6 +582,16 @@ TestCreateSection(
         if (GetNTVersion() >= _WIN32_WINNT_WIN8)
             --PointerCount1;
         CheckObject(FileHandle1, PointerCount1, 1L);
+        if (NewDataControl)
+        {
+            ok_bool_true(MmForceSectionClosed(FileObject1->SectionObjectPointer, FALSE),
+                         "Closing the unused data section");
+            ok_eq_pointer(FileObject1->SectionObjectPointer->DataSectionObject, NULL);
+            --PointerCount1;
+            if (GetNTVersion() >= _WIN32_WINNT_WIN8)
+                --PointerCount1;
+            CheckObject(FileHandle1, PointerCount1, 1L);
+        }
     }
 }
 

@@ -71,6 +71,7 @@ KMT_TESTFUNC Test_ExHardError;
 KMT_TESTFUNC Test_ExHardErrorInteractive;
 KMT_TESTFUNC Test_ExHandleTable;
 KMT_TESTFUNC Test_ExInterlocked;
+KMT_TESTFUNC Test_ExPoolBench;
 KMT_TESTFUNC Test_ExPools;
 KMT_TESTFUNC Test_ExCallbackExtra;
 KMT_TESTFUNC Test_ExFastMutexExtra;
@@ -243,6 +244,7 @@ KMT_TESTFUNC Test_KeWaitMultiple;
 KMT_TESTFUNC Test_KernelType;
 KMT_TESTFUNC Test_MmAllocateContiguousNode;
 KMT_TESTFUNC Test_MmMdl;
+KMT_TESTFUNC Test_MmLargePages;
 KMT_TESTFUNC Test_MmSection;
 KMT_TESTFUNC Test_MmWddmRanges;
 KMT_TESTFUNC Test_MmPhysicalAddressRace;
@@ -375,6 +377,7 @@ const KMT_TEST TestList[] =
     { "-ExHardErrorInteractive",            Test_ExHardErrorInteractive },
     { "ExHandleTable",                      Test_ExHandleTable },
     { "ExInterlocked",                      Test_ExInterlocked },
+    { "-ExPoolBench",                       Test_ExPoolBench },
     { "ExPools",                            Test_ExPools },
     { "ExLookaside",                        Test_ExLookaside },
     { "ExCallbackExtra",                    Test_ExCallbackExtra },
@@ -523,6 +526,7 @@ const KMT_TEST TestList[] =
     { "KernelType",                         Test_KernelType },
     { "MmAllocateContiguousNode",           Test_MmAllocateContiguousNode },
     { "MmMdl",                              Test_MmMdl },
+    { "MmLargePages",                       Test_MmLargePages },
     { "MmSecureKM",                         Test_MmSecureKM },
     { "MmSection",                          Test_MmSection },
     { "MmWddmRanges",                       Test_MmWddmRanges },

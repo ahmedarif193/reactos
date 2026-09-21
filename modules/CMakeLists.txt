@@ -1,6 +1,7 @@
 
 option(ENABLE_ROSAPPS "Enable building the ReactOS extra applications" OFF)
 option(ENABLE_WALLPAPERS "Integrate wallpapers into the built ISOs" OFF)
+option(ENABLE_KMTESTS "Build kernel-mode tests without the full test suite" OFF)
 
 if(ENABLE_ROSAPPS)
     add_subdirectory(rosapps)
@@ -8,7 +9,7 @@ endif()
 
 if(ENABLE_ROSTESTS OR ENABLE_ROSAUTOTEST_BOOT_RUN)
     add_subdirectory(rostests)
-elseif(ENABLE_KMTEST_BOOT_RUN)
+elseif(ENABLE_KMTESTS OR ENABLE_KMTEST_BOOT_RUN)
     # The boot runner needs the kernel-mode harness, but not the complete
     # application and Wine test suites.
     add_subdirectory(rostests/kmtests)

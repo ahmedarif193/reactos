@@ -1,3 +1,5 @@
+include(host-tests/targets.cmake)
+
 set(FEX_ARM64EC_AVAILABLE OFF)
 if(ARCH STREQUAL "arm64" AND ENABLE_FEX_ARM64EC)
     include(fex-arm64ec.cmake)

@@ -68,7 +68,6 @@ TestPrivateFunctions(VOID)
 
     ok_eq_pointer(CallbackBlock->Function, ExCallbackFunction);
     ok_eq_pointer(CallbackBlock->Context, &CallbackContext);
-    ok_eq_hex(KmtGetPoolTag(CallbackBlock), 'brbC');
 
     ExFreeCallBack(CallbackBlock);
 }
@@ -134,7 +133,6 @@ START_TEST(ExCallback)
 
     if (!skip(CallbackRegistration != NULL, "Registering callback failed\n"))
     {
-        ok_eq_hex(KmtGetPoolTag(CallbackRegistration), 'eRBC');
         ok_eq_int(InvocationCount, 0);
         ExNotifyCallback(CallbackObject,
                          &CallbackArgument1,

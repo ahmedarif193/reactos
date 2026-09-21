@@ -1545,6 +1545,12 @@ NTAPI
 MmGetFileObjectForSection(
     IN PVOID Section
 );
+
+PVOID
+NTAPI
+MmGetImageBaseForSection(
+    IN PVOID Section
+);
 NTSTATUS
 NTAPI
 MmGetFileNameForAddress(

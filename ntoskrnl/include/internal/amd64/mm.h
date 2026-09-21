@@ -20,7 +20,9 @@
 #define MI_SESSION_SPACE_END                   0xFFFFF98000000000ULL
 //#define MM_HAL_VA_START                      0xFFFFFFFFFFC00000ULL // 4 MB HAL mappings, defined in NDK [MiVaHal]
 #define MI_HIGHEST_SYSTEM_ADDRESS       (PVOID)0xFFFFFFFFFFFFFFFFULL
+#ifndef NVS
 #define MmSystemRangeStart              ((PVOID)MI_REAL_SYSTEM_RANGE_START)
+#endif
 
 /* WOW64 address definitions */
 #define MM_HIGHEST_USER_ADDRESS_WOW64   0x7FFEFFFF

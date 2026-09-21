@@ -22,17 +22,6 @@ if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_ID STRE
 endif()
 
 list(APPEND SOURCE
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/cacheman.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/copy.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/fs.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/lazywrite.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/mdl.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/pin.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/view.c)
-
-list(APPEND SOURCE
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/sectionio.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/sectiontab.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmalloc.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmapi.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmboot.c
@@ -76,7 +65,6 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/lookas.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/mutant.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/partition.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/pool2.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/profile.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/pushlock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/resource.c
@@ -207,45 +195,19 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/timerobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/wait.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/awesup.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/contmem.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/drvmgmt.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/dynamic.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/expool.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/hypermap.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/iosup.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/kdbg.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/largepag.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/mdlsup.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/mmdbg.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/mminit.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/mmnt10.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/mmsup.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/ncache.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/pagfault.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/pfnlist.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/pool.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/procsup.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/section.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/session.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/special.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/sysldr.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/syspte.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/vadnode.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/virtual.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/wslist.cpp
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/zeropage.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/balance.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ci.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/freelist.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/marea.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/mmfault.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/mminit.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/pagefile.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/region.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/rmap.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/section.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/shutdown.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/va/varegion.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heapcore.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heapseg.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heaplfh.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heapvs.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heaplarge.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heapdebug.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/track/tagtable.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exinit.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exalloc.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exfree.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exquota.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exquery.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/devicemap.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obdir.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obhandle.c
@@ -379,9 +341,6 @@ if(ARCH STREQUAL "i386")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/traphdlr.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/usercall.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/v86vdm.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/i386/procsup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/i386/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/i386/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/i386/psldt.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/vdm/vdmmain.c
@@ -395,7 +354,6 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/zeropage.S)
     list(APPEND SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/config/i386/cmhardwr.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/page.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdcontrol.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/amd64/kdx64.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/context.c
@@ -410,9 +368,6 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/smpdbg.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/spinlock.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/thrdini.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/amd64/init.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/kvalayout.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/amd64/procsup.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/amd64/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/stubs.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/traphandler.c
@@ -435,8 +390,6 @@ elseif(ARCH STREQUAL "arm")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/thrdini.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/trapc.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm/usercall.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/arm/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/arm/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm/rtlexcpt.c)
 elseif(ARCH STREQUAL "arm64")
@@ -482,11 +435,6 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trapc.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trapdump.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/usercall.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/kvalayout.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm64/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/arm64/procsup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/arm64/init.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/arm64/maputils.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/arm64/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm64/ehandler.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm64/rtlexcpt.c
@@ -523,6 +471,7 @@ endif()
     if(KDBG)
         list(APPEND SOURCE
             ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdbg.c
+            ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/debug/poolkdbg.c
             ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb.c
             ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cli.c
             ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb_cmdhist.c

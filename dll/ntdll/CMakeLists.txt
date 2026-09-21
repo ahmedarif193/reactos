@@ -39,6 +39,7 @@ list(APPEND SOURCE
     rtl/capability.c
     dbg/dbgui.c
     ldr/ldrapi.c
+    ldr/ldrcfg.c
     ldr/ldrguard.c
     ldr/ldrinit.c
     ldr/ldrpe.c

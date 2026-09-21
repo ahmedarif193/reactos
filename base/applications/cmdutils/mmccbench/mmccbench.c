@@ -20,12 +20,14 @@ typedef enum
     UNIT_MBPS
 } UNIT;
 
+#define TRIALS 3
+
 typedef struct
 {
     const char *Name;
     UNIT Unit;
-    ULONGLONG Work;
-    ULONGLONG Ticks;
+    double Rate[TRIALS];
+    ULONG Trials;
     ULONG Status;
 } RESULT;
 
@@ -414,12 +416,31 @@ static ULONG RunPass(WORKER *Workers, WORKFN Work, ULONG Iterations, ULONGLONG *
     return Status;
 }
 
+static void ReportRow(RESULT *Row);
+
+static int CompareDouble(const void *A, const void *B)
+{
+    double L = *(const double *)A, R = *(const double *)B;
+    return (L > R) - (L < R);
+}
+
+static double RateOf(UNIT Unit, ULONGLONG Work, ULONGLONG Ticks)
+{
+    double Seconds = (double)Ticks / (double)Frequency.QuadPart;
+
+    if (Seconds <= 0.0)
+        Seconds = 1e-9;
+    if (Unit == UNIT_MBPS)
+        return ((double)Work / (1024.0 * 1024.0)) / Seconds;
+    return (double)Work / Seconds;
+}
+
 static void Measure(const char *Name, UNIT Unit, WORKER *Workers, WORKFN Work, ULONG StartIterations)
 {
     ULONGLONG TotalWork = 0, Ticks = 0;
     ULONG Iterations = StartIterations;
     ULONG Status;
-    ULONG Attempt;
+    ULONG Attempt, Trial;
 
     Status = RunPass(Workers, Work, 1, &TotalWork, &Ticks);
 
@@ -438,46 +459,56 @@ static void Measure(const char *Name, UNIT Unit, WORKER *Workers, WORKFN Work, U
 
     Results[ResultCount].Name = Name;
     Results[ResultCount].Unit = Unit;
-    Results[ResultCount].Work = TotalWork;
-    Results[ResultCount].Ticks = Ticks;
+    Results[ResultCount].Trials = 0;
     Results[ResultCount].Status = Status;
+
+    for (Trial = 0; Trial < TRIALS && Status == 0; Trial++)
+    {
+        Status = RunPass(Workers, Work, Iterations, &TotalWork, &Ticks);
+        if (Status != 0)
+        {
+            Results[ResultCount].Status = Status;
+            break;
+        }
+        Results[ResultCount].Rate[Results[ResultCount].Trials++] = RateOf(Unit, TotalWork, Ticks);
+    }
+
+    if (Results[ResultCount].Trials > 1)
+    {
+        qsort(Results[ResultCount].Rate, Results[ResultCount].Trials,
+              sizeof(double), CompareDouble);
+    }
+    ReportRow(&Results[ResultCount]);
+    fflush(stdout);
     ResultCount++;
 }
 
 static void ReportRow(RESULT *Row)
 {
-    double Seconds;
-    double Value;
     const char *Unit;
+    double Median, Low, High, Spread;
 
-    if (Row->Status != 0)
+    if (Row->Status != 0 || Row->Trials == 0)
     {
         printf("MMCC %-22s threads=%-2lu ERROR %lu\n", Row->Name, ThreadCount, Row->Status);
         return;
     }
 
-    Seconds = (double)Row->Ticks / (double)Frequency.QuadPart;
-    if (Seconds <= 0.0)
-        Seconds = 1e-9;
-
     switch (Row->Unit)
     {
-        case UNIT_MBPS:
-            Value = ((double)Row->Work / (1024.0 * 1024.0)) / Seconds;
-            Unit = "MB/s";
-            break;
-        case UNIT_PAGES:
-            Value = (double)Row->Work / Seconds;
-            Unit = "pages/s";
-            break;
-        default:
-            Value = (double)Row->Work / Seconds;
-            Unit = "ops/s";
-            break;
+        case UNIT_MBPS:  Unit = "MB/s"; break;
+        case UNIT_PAGES: Unit = "pages/s"; break;
+        default:         Unit = "ops/s"; break;
     }
-    printf("MMCC %-22s threads=%-2lu %14.1f %-8s (work=%I64u ms=%I64u)\n",
-           Row->Name, ThreadCount, Value, Unit,
-           Row->Work, TicksToMs(Row->Ticks));
+
+    Median = Row->Rate[Row->Trials / 2];
+    Low = Row->Rate[0];
+    High = Row->Rate[Row->Trials - 1];
+    Spread = (Low > 0.0) ? (High / Low) : 0.0;
+
+    printf("MMCC %-22s threads=%-2lu %14.1f %-8s (n=%lu min=%.1f max=%.1f spread=%.2fx)\n",
+           Row->Name, ThreadCount, Median, Unit,
+           (unsigned long)Row->Trials, Low, High, Spread);
 }
 
 int main(int argc, char *argv[])
@@ -487,6 +518,7 @@ int main(int argc, char *argv[])
     char TempPath[MAX_PATH];
     ULONG i, j;
     int Argument;
+    const char *Only = NULL;
 
     for (Argument = 1; Argument < argc; Argument++)
     {
@@ -498,11 +530,19 @@ int main(int argc, char *argv[])
             ArenaBytes = strtoul(argv[++Argument], NULL, 0) * 1024u * 1024u;
         else if (strcmp(argv[Argument], "-ms") == 0 && Argument + 1 < argc)
             TargetMs = strtoul(argv[++Argument], NULL, 0);
+        else if (strcmp(argv[Argument], "-only") == 0 && Argument + 1 < argc)
+            Only = argv[++Argument];
         else
         {
-            printf("usage: mmccbench [-t threads] [-f fileMB] [-a arenaMB] [-ms targetMs]\n");
+            printf("usage: mmccbench [-t threads] [-f fileMB] [-a arenaMB] [-ms targetMs] [-only cc|mm|commit]\n");
             return 1;
         }
+    }
+
+    if (Only != NULL && strcmp(Only, "cc") != 0 && strcmp(Only, "mm") != 0 && strcmp(Only, "commit") != 0)
+    {
+        printf("MMCC_ERROR invalid benchmark group %s\n", Only);
+        return 1;
     }
 
     if (ThreadCount == 0 || ThreadCount > MAX_THREADS)
@@ -554,9 +594,15 @@ int main(int argc, char *argv[])
            (unsigned long)PageSize, (unsigned long)(ArenaBytes / 1024u / 1024u),
            (unsigned long)(FileBytes / 1024u / 1024u), (unsigned long)TargetMs);
 
-    Measure("mm_fault_demand_zero", UNIT_PAGES, Workers, MmFaultDemandZero, 1);
-    Measure("mm_commit_decommit", UNIT_OPS, Workers, MmCommitDecommit, 64);
-    Measure("mm_reserve_release", UNIT_OPS, Workers, MmReserveRelease, 64);
+    if (Only != NULL)
+        printf("MMCC_FILTER group=%s\n", Only);
+
+    if (Only == NULL || strcmp(Only, "mm") == 0)
+        Measure("mm_fault_demand_zero", UNIT_PAGES, Workers, MmFaultDemandZero, 1);
+    if (Only == NULL || strcmp(Only, "mm") == 0 || strcmp(Only, "commit") == 0)
+        Measure("mm_commit_decommit", UNIT_OPS, Workers, MmCommitDecommit, 64);
+    if (Only == NULL || strcmp(Only, "mm") == 0)
+        Measure("mm_reserve_release", UNIT_OPS, Workers, MmReserveRelease, 64);
 
     for (i = 0; i < ThreadCount; i++)
     {
@@ -567,14 +613,15 @@ int main(int argc, char *argv[])
         }
     }
 
-    Measure("mm_section_map_unmap", UNIT_OPS, Workers, MmSectionMapUnmap, 16);
-    Measure("cc_write_cached", UNIT_MBPS, Workers, CcWriteCached, 1);
-    Measure("cc_read_hot", UNIT_MBPS, Workers, CcReadHot, 1);
-    Measure("cc_read_random_hot", UNIT_OPS, Workers, CcReadRandomHot, 256);
-    Measure("cc_mapped_read", UNIT_PAGES, Workers, CcMappedRead, 1);
-
-    for (i = 0; i < ResultCount; i++)
-        ReportRow(&Results[i]);
+    if (Only == NULL || strcmp(Only, "mm") == 0)
+        Measure("mm_section_map_unmap", UNIT_OPS, Workers, MmSectionMapUnmap, 16);
+    if (Only == NULL || strcmp(Only, "cc") == 0)
+    {
+        Measure("cc_write_cached", UNIT_MBPS, Workers, CcWriteCached, 1);
+        Measure("cc_read_hot", UNIT_MBPS, Workers, CcReadHot, 1);
+        Measure("cc_read_random_hot", UNIT_OPS, Workers, CcReadRandomHot, 256);
+        Measure("cc_mapped_read", UNIT_PAGES, Workers, CcMappedRead, 1);
+    }
 
     for (i = 0; i < ThreadCount; i++)
     {

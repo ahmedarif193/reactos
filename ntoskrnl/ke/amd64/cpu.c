@@ -35,7 +35,6 @@ ULONG KiDmaIoCoherency = 0;
 BOOLEAN KiSMTProcessorsPresent;
 
 /* Flush data */
-volatile LONG KiTbFlushTimeStamp;
 
 /* CPU Signatures */
 static const CHAR CmpIntelID[]       = "GenuineIntel";
@@ -636,22 +635,6 @@ KiGetCacheInformation(VOID)
 
 VOID
 NTAPI
-KeFlushCurrentTb(VOID)
-{
-    ULONG64 Cr4 = __readcr4();
-
-    if (Cr4 & CR4_PGE)
-    {
-        __writecr4(Cr4 & ~CR4_PGE);
-        __writecr4(Cr4);
-        return;
-    }
-
-    __writecr3(__readcr3());
-}
-
-VOID
-NTAPI
 KiRestoreProcessorControlState(PKPROCESSOR_STATE ProcessorState)
 {
     /* Restore the CR registers */
@@ -783,36 +766,6 @@ KiRestoreProcessorState(
 
     /* Restore control registers */
     KiRestoreProcessorControlState(&Prcb->ProcessorState);
-}
-
-VOID
-NTAPI
-KeFlushEntireTb(IN BOOLEAN Invalid,
-                IN BOOLEAN AllProcessors)
-{
-    KIRQL OldIrql;
-
-    /* Raise the IRQL for the TB Flush */
-    OldIrql = KeRaiseIrqlToSynchLevel();
-
-    /* Flush the requested processor set. */
-#ifdef CONFIG_SMP
-    if (AllProcessors)
-    {
-        KiIpiSendTbFlush((KAFFINITY)KeActiveProcessors, NULL, 0);
-    }
-    else
-    {
-        KeFlushCurrentTb();
-    }
-#else
-    KeFlushCurrentTb();
-#endif
-
-    /* Update the flush stamp and return to original IRQL */
-    InterlockedExchangeAdd(&KiTbFlushTimeStamp, 1);
-    KeLowerIrql(OldIrql);
-
 }
 
 NTSTATUS

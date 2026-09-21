@@ -1,0 +1,55 @@
+# PROJECT:     ReactOS host-native tests
+# FILE:        submodules/host-tests/mmcc/nvs/check-backends.cmake
+# PURPOSE:     Check memory manager architecture backend contracts
+#
+# SPDX-FileCopyrightText: 2026 Ahmed ARIF
+# SPDX-License-Identifier: GPL-3.0-only
+
+if(NOT DEFINED NVS_SOURCE_DIR)
+    message(FATAL_ERROR "NVS_SOURCE_DIR must name the NVS implementation directory")
+endif()
+
+set(REQUIRED MiInitializeKernelVaLayout)
+foreach(HEADER miarch.h mipte.h)
+    file(STRINGS "${NVS_SOURCE_DIR}/include/${HEADER}" DECLARATIONS
+        REGEX "^[A-Za-z_][A-Za-z0-9_ *]*MiArch[A-Za-z0-9_]+\\(")
+    foreach(DECLARATION IN LISTS DECLARATIONS)
+        string(REGEX MATCH "MiArch[A-Za-z0-9_]+" NAME "${DECLARATION}")
+        list(APPEND REQUIRED "${NAME}")
+    endforeach()
+endforeach()
+list(REMOVE_DUPLICATES REQUIRED)
+
+set(REMOVED "MiArchReadPte|MiArchWritePte|MiArchClearPte|MiArchMakeProtectionPte|MiArchPteIsResident|MiArchConsumeDirtyState|MiArchMapPageTable|MiArchUnmapPageTable|MiArchSyncPageTableWrite|MiArchCleanDataRange|MiArchInvalidateInstructionRange")
+foreach(ARCH arm64 amd64)
+    if(EXISTS "${NVS_SOURCE_DIR}/arch/${ARCH}/hooks.c")
+        message(FATAL_ERROR "${ARCH}: architecture operations must live in purpose-specific files")
+    endif()
+    file(GLOB SOURCES "${NVS_SOURCE_DIR}/arch/${ARCH}/*.c")
+    set(DEFINITIONS "")
+    foreach(SOURCE IN LISTS SOURCES)
+        file(STRINGS "${SOURCE}" LINES REGEX "^(Mi|Ke)[A-Za-z0-9_]+\\(")
+        foreach(LINE IN LISTS LINES)
+            string(REGEX MATCH "^[A-Za-z0-9_]+" NAME "${LINE}")
+            list(APPEND DEFINITIONS "${NAME}")
+        endforeach()
+        file(STRINGS "${SOURCE}" FORBIDDEN REGEX "(^|[^A-Za-z0-9_])(${REMOVED}|MMPTE|PMMPTE)([^A-Za-z0-9_]|$)")
+        if(FORBIDDEN)
+            message(FATAL_ERROR "${ARCH}: obsolete architecture interface in ${SOURCE}: ${FORBIDDEN}")
+        endif()
+    endforeach()
+    foreach(NAME IN LISTS REQUIRED)
+        set(MATCHES "${DEFINITIONS}")
+        list(FILTER MATCHES INCLUDE REGEX "^${NAME}$")
+        list(LENGTH MATCHES COUNT)
+        if(NOT COUNT EQUAL 1)
+            message(FATAL_ERROR "${ARCH}: ${NAME} requires one implementation, found ${COUNT}")
+        endif()
+    endforeach()
+endforeach()
+file(STRINGS "${NVS_SOURCE_DIR}/include/miarch.h" FORBIDDEN REGEX "${REMOVED}|MMPTE|PMMPTE")
+if(FORBIDDEN)
+    message(FATAL_ERROR "Obsolete architecture interface in shared declarations: ${FORBIDDEN}")
+endif()
+list(LENGTH REQUIRED COUNT)
+message(STATUS "ARM64 and AMD64 each implement the ${COUNT}-function architecture contract")
