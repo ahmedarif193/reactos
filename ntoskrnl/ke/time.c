@@ -276,30 +276,7 @@ KiUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     if ((Prcb->DpcData[0].DpcQueueDepth) && !(Prcb->DpcRoutineActive))
     {
         /* Request a DPC */
-        Prcb->AdjustDpcThreshold = KiAdjustDpcThreshold;
         HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
-
-        /* Fix the maximum queue depth */
-        if ((Prcb->DpcRequestRate < KiIdealDpcRate) &&
-            (Prcb->MaximumDpcQueueDepth > 1))
-        {
-            /* Make it smaller */
-            Prcb->MaximumDpcQueueDepth--;
-        }
-    }
-    else
-    {
-        /* Check if we've reached the adjustment limit */
-        if (!(--Prcb->AdjustDpcThreshold))
-        {
-            /* Reset it, and check the queue maximum */
-            Prcb->AdjustDpcThreshold = KiAdjustDpcThreshold;
-            if (KiMaximumDpcQueueDepth != Prcb->MaximumDpcQueueDepth)
-            {
-                /* Increase it */
-                Prcb->MaximumDpcQueueDepth++;
-            }
-        }
     }
 
 #if !defined(_M_AMD64) || (NTDDI_VERSION < NTDDI_LONGHORN)
