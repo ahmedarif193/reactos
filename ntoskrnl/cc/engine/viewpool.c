@@ -91,6 +91,20 @@ CcCacheInitialize(
     RtlZeroMemory(Cache->View, sizeof(CC_VIEW) * ViewCount);
     Cache->ViewCount = ViewCount;
     Cache->DirtyPageThreshold = DirtyPageThreshold;
+
+    for (i = 0; i < ViewCount; i++)
+    {
+        if (!CC_RESOURCE_INIT(&Cache->View[i].IoResource))
+        {
+            while (i != 0)
+                CC_RESOURCE_DELETE(&Cache->View[--i].IoResource);
+            CC_FREE(Cache->View);
+            Cache->View = NULL;
+            Cache->ViewCount = 0;
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+
     CC_LOCK_INIT(&Cache->ReclaimLock);
     CC_LOCK_INIT(&Cache->DirtyLock);
     InitializeListHead(&Cache->DirtyMaps);
@@ -118,8 +132,14 @@ VOID
 CcCacheUninitialize(
     _Inout_ PCC_CACHE Cache)
 {
+    ULONG i;
+
     if (Cache->View != NULL)
+    {
+        for (i = 0; i < Cache->ViewCount; i++)
+            CC_RESOURCE_DELETE(&Cache->View[i].IoResource);
         CC_FREE(Cache->View);
+    }
 
     Cache->View = NULL;
     Cache->ViewCount = 0;

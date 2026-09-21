@@ -35,6 +35,7 @@ typedef struct _CC_VIEW
     PVOID BaseAddress;
     struct _CC_MAP *Map;
     ULONG64 FileOffset;
+    CC_RESOURCE IoResource;
     LIST_ENTRY LruLink;
     volatile LONG ReferenceCount;
     UCHAR LruShard;
