@@ -29,7 +29,12 @@ MiPfnLockAtDispatch(
     volatile UCHAR *Flags = &Db->Pfn[Frame].Flags;
 
     while (MI_ATOMIC_OR8(Flags, MI_PFN_FLAG_LOCK) & MI_PFN_FLAG_LOCK)
-        MI_PAUSE();
+    {
+        do
+        {
+            MI_PAUSE();
+        } while (MI_ATOMIC_READ8(Flags) & MI_PFN_FLAG_LOCK);
+    }
 }
 
 static
