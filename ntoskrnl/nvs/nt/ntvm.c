@@ -248,7 +248,13 @@ NtAllocateVirtualMemory(
         return STATUS_INVALID_PARAMETER;
 
     if (AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_RESET | MEM_PHYSICAL | MEM_TOP_DOWN | MEM_WRITE_WATCH |
-                           MEM_LARGE_PAGES))
+                           MEM_LARGE_PAGES | MEM_ROTATE))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((AllocationType & MEM_ROTATE) &&
+        (!(AllocationType & MEM_RESERVE) || (AllocationType & (MEM_PHYSICAL | MEM_LARGE_PAGES | MEM_WRITE_WATCH))))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -327,6 +333,8 @@ NtAllocateVirtualMemory(
         Type |= MI_MEM_LARGE_PAGES;
     if (AllocationType & MEM_PHYSICAL)
         Type |= MI_MEM_PHYSICAL;
+    if (AllocationType & MEM_ROTATE)
+        Type |= MI_MEM_ROTATE;
 
     do
     {

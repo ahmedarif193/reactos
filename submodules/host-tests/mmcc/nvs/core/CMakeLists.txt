@@ -22,6 +22,7 @@ set(MM_CORE
     ${NVS_ROOT}/vm/vmops.c
     ${NVS_ROOT}/vm/large.c
     ${NVS_ROOT}/vm/awe.c
+    ${NVS_ROOT}/vm/rotate.c
     ${NVS_ROOT}/ws/trim.c
     ${NVS_ROOT}/section/section.c
     ${NVS_ROOT}/sys/sysregion.c

@@ -518,7 +518,8 @@ MiReserveVirtualMemory(
     Vad->Node.StartingVpn = Start >> PAGE_SHIFT;
     Vad->Node.EndingVpn = (End >> PAGE_SHIFT) - 1;
     Vad->Protection = Protection;
-    Vad->Type = (AllocationType & MI_MEM_PHYSICAL) ? MiVadAwe : MiVadPrivate;
+    Vad->Type = (AllocationType & MI_MEM_PHYSICAL) ? MiVadAwe
+                : (AllocationType & MI_MEM_ROTATE) ? MiVadRotate : MiVadPrivate;
     Vad->MemCommit = (BOOLEAN)((AllocationType & MI_MEM_COMMIT) != 0);
     Vad->CommitCharge = Charged;
     if (!MiVadInsert(&Space->VadRoot, &Vad->Node))
@@ -583,13 +584,19 @@ MiAllocateVirtualMemoryEx(
     }
 
     if (*RegionSize == 0 || !(AllocationType & (MI_MEM_COMMIT | MI_MEM_RESERVE)) ||
-        (AllocationType & ~(MI_MEM_COMMIT | MI_MEM_RESERVE | MI_MEM_TOP_DOWN | MI_MEM_PHYSICAL)))
+        (AllocationType & ~(MI_MEM_COMMIT | MI_MEM_RESERVE | MI_MEM_TOP_DOWN | MI_MEM_PHYSICAL | MI_MEM_ROTATE)) ||
+        ((AllocationType & MI_MEM_ROTATE) && (!(AllocationType & MI_MEM_RESERVE) || (AllocationType & MI_MEM_PHYSICAL))))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
     if (AllocationType & MI_MEM_RESERVE)
-        return MiReserveVirtualMemory(Space, BaseAddress, RegionSize, AllocationType, Protection, HighestAddress);
+    {
+        Status = MiReserveVirtualMemory(Space, BaseAddress, RegionSize, AllocationType, Protection, HighestAddress);
+        if (NT_SUCCESS(Status) && (AllocationType & MI_MEM_ROTATE) && (AllocationType & MI_MEM_COMMIT))
+            Status = MiRotatePopulate(Space, *BaseAddress, *RegionSize);
+        return Status;
+    }
 
     MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
 
@@ -664,6 +671,19 @@ MiFreeVirtualMemory(
         }
         *RegionSize = MI_VAD_END(Vad) - MI_VAD_START(Vad);
         MiAweReleaseWindowLocked(Space, Vad);
+        MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        return STATUS_SUCCESS;
+    }
+
+    if (Vad->Type == MiVadRotate)
+    {
+        if (FreeType != MI_MEM_RELEASE || *BaseAddress != MI_VAD_START(Vad) || *RegionSize != 0)
+        {
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+            return FreeType == MI_MEM_RELEASE ? STATUS_UNABLE_TO_FREE_VM : STATUS_UNABLE_TO_DECOMMIT_VM;
+        }
+        *RegionSize = MI_VAD_END(Vad) - MI_VAD_START(Vad);
+        MiRotateReleaseLocked(Space, Vad);
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
         return STATUS_SUCCESS;
     }
@@ -944,7 +964,7 @@ MiQueryVirtualMemory(
     Information->State = Committed ? MI_MEM_COMMIT : MI_MEM_RESERVE;
     Information->Protect = Protection;
     Information->Type = (Vad->Type == MiVadPrivate || (Vad->Type == MiVadLarge && Vad->Segment == NULL) ||
-                         Vad->Type == MiVadAwe) ? MI_MEM_PRIVATE
+                         Vad->Type == MiVadAwe || Vad->Type == MiVadRotate) ? MI_MEM_PRIVATE
                                                     : ((Vad->Type == MiVadImage) ? MI_MEM_IMAGE : MI_MEM_MAPPED);
 
     Va = Start + PAGE_SIZE;
@@ -1000,6 +1020,10 @@ MiCleanAddressSpace(
         else if (Vad->Type == MiVadPhysical)
         {
             MiUnmapFramesUserLocked(Space, Vad);
+        }
+        else if (Vad->Type == MiVadRotate)
+        {
+            MiRotateReleaseLocked(Space, Vad);
         }
         else if (Vad->Type == MiVadSystem)
         {
