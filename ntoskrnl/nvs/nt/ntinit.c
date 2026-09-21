@@ -323,6 +323,11 @@ MiInitializePhase0(
         }
     }
 
+    MmWriteableSharedUserData->NtProductType =
+        (MmProductType == (((ULONG)L'a' << 16) | L'L')) ? NtProductLanManNt :
+        (MmProductType == (((ULONG)L'e' << 16) | L'S')) ? NtProductServer : NtProductWinNt;
+    MmWriteableSharedUserData->ProductTypeIsValid = TRUE;
+
     MmWriteableSharedUserData->LargePageMinimum = MiSystem.Arch->SupportsLargePages
         ? (ULONG)MiSystem.Arch->LargePageSize : 0;
 
