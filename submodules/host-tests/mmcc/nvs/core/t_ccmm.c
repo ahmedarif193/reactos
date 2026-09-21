@@ -49,8 +49,7 @@ CcmmMapView(PVOID Context, ULONG64 Offset, SIZE_T Length, PVOID *Base)
     ULONG64 Address = 0;
     NTSTATUS Status;
 
-    Status = MiMapView(&File->World->System.SystemSpace, File->Segment, &Address, Offset, &Size, MI_PROT_READWRITE,
-                       MI_MEM_RESERVE);
+    Status = MiMapCacheView(File->Segment, &Address, Offset, &Size);
     if (NT_SUCCESS(Status))
     {
         *Base = (PVOID)(ULONG_PTR)Address;
@@ -808,6 +807,84 @@ CcmmNtCloseReclaim(BOOLEAN Trim)
     WorldDestroy(&World);
 }
 
+static void
+CcmmTruncation(void)
+{
+    TEST_WORLD World;
+    CCMM_FILE File;
+    CC_CACHE Cache;
+    CC_NT_MAP NtMap = {0};
+    FILE_OBJECT Object = { .FsContext = &File };
+    MI_CONTROL_AREA Control;
+    SECTION_OBJECT_POINTERS Pointers = { .DataSectionObject = &Control };
+    LARGE_INTEGER Size = { .QuadPart = PAGE_SIZE };
+    MI_ADDRESS_SPACE Process, Child;
+    CC_VIEW_RANGE Range;
+    UCHAR Data = 42;
+    CCMM_MOVE Move = { &World, 0, &Data, 0, TRUE };
+    ULONG64 Base = 0, ViewSize = PAGE_SIZE, Conflict;
+
+    WorldCreate(&World, 256, 1, 10000);
+    WorldAttach(&World, 0, NULL);
+    CHECK(NT_SUCCESS(CcCacheInitialize(&Cache, CC_MIN_VIEWS, 1024)));
+    CcmmFileCreate(&File, &World, &Cache, 3 * PAGE_SIZE);
+    CHECK(CcMapUninitialize(&File.Map));
+    Control.Segment = File.Segment;
+    NtMap.Control = &Control;
+    NtMap.FileObject = &Object;
+    CcMapInitialize(&NtMap.Map, &Cache, &CcNtBackingOps, &NtMap, File.File.Size, File.File.Size, File.File.Size);
+    NtMap.Map.Ops.MakeViewResident = CcmmNtMakeViewResident;
+    CHECK(NT_SUCCESS(CcCopyRange(&NtMap.Map, 0, 1, TRUE, CcmmMove, &Move, NULL)));
+    Move.ToCache = FALSE;
+    CHECK(NT_SUCCESS(CcCopyRange(&NtMap.Map, 0, 1, FALSE, CcmmMove, &Move, NULL)));
+    CHECK(Data == 42);
+    CHECK(NT_SUCCESS(CcViewAcquire(&NtMap.Map, 0, 1, &Range)));
+    CHECK(File.Segment->MappedViews == 1 && File.Segment->TruncationViews == 0);
+    CHECK(MmCanFileBeTruncated(&Pointers, &Size));
+    CcViewRelease(&Range);
+    CHECK(File.Segment->MappedViews == 1);
+    CHECK(MmCanFileBeTruncated(&Pointers, &Size));
+    CHECK(MmCanFileBeTruncated(&Pointers, NULL));
+
+    ProcessCreate(&World, &Process);
+    ProcessCreate(&World, &Child);
+    CHECK(NT_SUCCESS(MiMapView(&Process, File.Segment, &Base, 0, &ViewSize, MI_PROT_READONLY, 0)));
+    CHECK(File.Segment->TruncationViews == 1);
+    CHECK(!MmCanFileBeTruncated(&Pointers, &Size));
+    CHECK(!MmCanFileBeTruncated(&Pointers, NULL));
+    Size.QuadPart = File.File.Size;
+    CHECK(MmCanFileBeTruncated(&Pointers, &Size));
+    Conflict = Base;
+    CHECK(MiMapView(&Process, File.Segment, &Conflict, 0, &ViewSize, MI_PROT_READONLY, 0) == STATUS_CONFLICTING_ADDRESSES);
+    CHECK(File.Segment->TruncationViews == 1);
+    CHECK(NT_SUCCESS(MiCloneAddressSpace(&Process, &Child)));
+    CHECK(File.Segment->TruncationViews == 2);
+    CHECK(NT_SUCCESS(MiUnmapView(&Process, Base)));
+    Size.QuadPart = PAGE_SIZE;
+    CHECK(!MmCanFileBeTruncated(&Pointers, &Size));
+    ProcessDestroy(&World, &Child);
+    ProcessDestroy(&World, &Process);
+    CHECK(File.Segment->TruncationViews == 0);
+    CHECK(MmCanFileBeTruncated(&Pointers, &Size));
+    WorldAttach(&World, 0, NULL);
+    Base = 0;
+    CHECK(NT_SUCCESS(MiMapView(&World.System.SystemSpace, File.Segment, &Base, 0, &ViewSize, MI_PROT_READONLY, 0)));
+    CHECK(!MmCanFileBeTruncated(&Pointers, &Size));
+    CHECK(NT_SUCCESS(MiUnmapView(&World.System.SystemSpace, Base)));
+    CHECK(MmCanFileBeTruncated(&Pointers, &Size));
+    Pointers.ImageSectionObject = &Control;
+    CHECK(!MmCanFileBeTruncated(&Pointers, &Size));
+    Pointers.ImageSectionObject = NULL;
+    CHECK(NT_SUCCESS(CcDirtyFlush(&NtMap.Map, 0, File.File.Size, ~0u, NULL)));
+    CHECK(CcMapUninitialize(&NtMap.Map));
+    CHECK(File.Segment->MappedViews == 0 && File.Segment->TruncationViews == 0);
+    CHECK(MiSegmentDereferenceAndClose(File.Segment));
+    CcCacheUninitialize(&Cache);
+    WorldExpectClean(&World, 256);
+    FileDestroy(&File.File);
+    WorldDestroy(&World);
+}
+
 static NTSTATUS
 CcmmReadAsync(PVOID Context, ULONG64 Offset, ULONG Frame, PVOID Buffer,
               MI_READ_COMPLETION Completion, PVOID CompletionContext)
@@ -1133,6 +1210,13 @@ MiDereferenceControlArea(PMI_CONTROL_AREA Control)
     MiSegmentDereference(Control->Segment);
 }
 
+BOOLEAN
+MmFlushImageSection(PSECTION_OBJECT_POINTERS Pointers, ULONG Type)
+{
+    CHECK(Type == MmFlushForWrite);
+    return Pointers->ImageSectionObject == NULL;
+}
+
 PMI_CONTROL_AREA
 MiReferenceDataControlArea(PSECTION_OBJECT_POINTERS Pointers)
 {
@@ -1214,6 +1298,7 @@ TestCcOnMm(void)
     ULONG i;
 
     CcmmFaultableCopy();
+    CcmmTruncation();
     CcmmNtCloseReclaim(FALSE);
     CcmmNtCloseReclaim(TRUE);
     CcmmPurgeWithoutCache();

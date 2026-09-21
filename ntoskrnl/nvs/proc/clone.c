@@ -491,6 +491,8 @@ MiCloneRollback(PMI_ADDRESS_SPACE Target)
         if (Vad->Segment != NULL)
         {
             MI_ATOMIC_ADD32(&Vad->Segment->MappedViews, -1);
+            if (!Vad->CacheView)
+                MI_ATOMIC_ADD32(&Vad->Segment->TruncationViews, -1);
             MiSegmentDereference(Vad->Segment);
         }
         MiVadRemove(&Target->VadRoot, Node);
@@ -551,6 +553,8 @@ MiCloneAddressSpace(PMI_ADDRESS_SPACE Source, PMI_ADDRESS_SPACE Target)
         {
             MiSegmentReference(Vad->Segment);
             MI_ATOMIC_ADD32(&Vad->Segment->MappedViews, 1);
+            if (!Vad->CacheView)
+                MI_ATOMIC_ADD32(&Vad->Segment->TruncationViews, 1);
         }
         if (Vad->Type == MiVadLarge)
         {

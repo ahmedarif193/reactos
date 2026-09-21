@@ -163,6 +163,7 @@ typedef struct _MI_VAD
     BOOLEAN MemCommit;
     BOOLEAN CopyOnWrite;
     BOOLEAN Inherit;
+    BOOLEAN CacheView;
     volatile LONG PteTouched;
     struct _MI_SEGMENT *Segment;
     ULONG64 SegmentPageOffset;
@@ -341,6 +342,7 @@ typedef struct _MI_SEGMENT
     MI_MUTEX FlushLock;
     volatile LONG ReferenceCount;
     volatile LONG MappedViews;
+    volatile LONG TruncationViews;
     ULONG ActiveWriters;
     UCHAR Kind;
     ULONG Protection;
@@ -398,6 +400,8 @@ NTSTATUS MiMapViewEx(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_SEGMENT Segmen
                      _In_ ULONG AllocationType, _In_ ULONG64 HighestAddress, _In_ ULONG MaximumProtection,
                      _In_ BOOLEAN Inherit);
 NTSTATUS MiUnmapView(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress);
+NTSTATUS MiMapCacheView(_Inout_ PMI_SEGMENT Segment, _Inout_ PULONG64 BaseAddress,
+                        _In_ ULONG64 SectionOffset, _Inout_ PULONG64 ViewSize);
 NTSTATUS MiMapLargeSection(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_SEGMENT Segment,
                            _Inout_ PULONG64 BaseAddress, _In_ ULONG64 SectionOffset, _Inout_ PULONG64 ViewSize,
                            _In_ ULONG Protection, _In_ ULONG AllocationType, _In_ ULONG64 HighestAddress,

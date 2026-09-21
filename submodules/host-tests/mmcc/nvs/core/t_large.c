@@ -395,6 +395,7 @@ LargeSectionFailures(void)
         CHECK(MiMapView(&Space, Segment, &Base, 0, &Size, MI_PROT_READWRITE, MI_MEM_LARGE_PAGES) == STATUS_NO_MEMORY);
         CHECK(Space.VadRoot.NodeCount == 0 && Space.PageTablePages == 0 && Space.LargePages == 0);
         CHECK(Segment->MappedViews == 0 && Segment->ReferenceCount == 1);
+        CHECK(Segment->TruncationViews == 0);
         CHECK(MiPfnAvailablePages(&World.System.Pfn) == Keep);
         while (Count != 0)
             MiPfnShareDecrement(&World.System.Pfn, Held[--Count], TRUE);
@@ -416,14 +417,17 @@ LargeSectionFailures(void)
         CHECK(MiCloneAddressSpace(&Space, &Child) == STATUS_NO_MEMORY);
         CHECK(Child.VadRoot.NodeCount == 0 && Child.PageTablePages == 0 && Child.LargePages == 0);
         CHECK(Segment->MappedViews == 1 && Segment->ReferenceCount == 2);
+        CHECK(Segment->TruncationViews == 1);
         CHECK(MiPfnAvailablePages(&World.System.Pfn) == Keep);
         while (Count != 0)
             MiPfnShareDecrement(&World.System.Pfn, Held[--Count], TRUE);
         CHECK(MiPfnAvailablePages(&World.System.Pfn) == Before);
     }
     CHECK(NT_SUCCESS(MiCloneAddressSpace(&Space, &Child)));
+    CHECK(Segment->TruncationViews == 2);
     CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
     CHECK(NT_SUCCESS(MiUnmapView(&Child, Base)));
+    CHECK(Segment->TruncationViews == 0);
     MiSegmentDereferenceAndClose(Segment);
     CHECK(Releases == 1 && World.System.CommittedPages == 0);
     CHECK(MiPfnAvailablePages(&World.System.Pfn) == Available);

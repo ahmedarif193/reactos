@@ -34,7 +34,7 @@
 
 typedef LONG64 LONGLONG;
 typedef union _LARGE_INTEGER { LONG64 QuadPart; } LARGE_INTEGER, *PLARGE_INTEGER;
-typedef struct _SECTION_OBJECT_POINTERS { PVOID SharedCacheMap; PVOID DataSectionObject; } SECTION_OBJECT_POINTERS, *PSECTION_OBJECT_POINTERS;
+typedef struct _SECTION_OBJECT_POINTERS { PVOID SharedCacheMap; PVOID DataSectionObject; PVOID ImageSectionObject; } SECTION_OBJECT_POINTERS, *PSECTION_OBJECT_POINTERS;
 typedef struct _FILE_OBJECT
 {
     PSECTION_OBJECT_POINTERS SectionObjectPointer;
@@ -49,6 +49,9 @@ typedef struct _MI_CONTROL_AREA { PMI_SEGMENT Segment; PFILE_OBJECT FileObject; 
 VOID MiDereferenceControlArea(PMI_CONTROL_AREA Control);
 PMI_CONTROL_AREA MiReferenceDataControlArea(PSECTION_OBJECT_POINTERS Pointers);
 BOOLEAN CcPurgeCacheSection(PSECTION_OBJECT_POINTERS Pointers, PLARGE_INTEGER Offset, ULONG Length, ULONG Flags);
+#define MmFlushForWrite 0
+BOOLEAN MmFlushImageSection(PSECTION_OBJECT_POINTERS Pointers, ULONG Type);
+BOOLEAN MmCanFileBeTruncated(PSECTION_OBJECT_POINTERS Pointers, PLARGE_INTEGER NewFileSize);
 NTSTATUS MiWaitForMemory(NTSTATUS Status, PULONG Attempts);
 #else
 typedef struct _MI_CONTROL_AREA *PMI_CONTROL_AREA;

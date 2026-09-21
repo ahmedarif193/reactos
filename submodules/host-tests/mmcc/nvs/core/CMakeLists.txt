@@ -45,7 +45,7 @@ set(CC_ENGINE
 set(MM_TESTS mmharness.c t_core.c t_vm.c t_fault_smp.c t_section.c t_stress.c t_ccmm.c t_ntfile.c t_writeback.c t_ntpaging.c t_vad.c t_sys.c t_proc.c ../machine/machine.c ${CC_ENGINE} ${CC_ROOT}/api/ccclose.c ${CC_ROOT}/backing/mmbacking.c ${NVS_ROOT}/nt/ntfileio.c ${NVS_ROOT}/nt/ntpagingio.c)
 list(APPEND MM_TESTS t_async.c t_large.c t_awe.c t_clone.c t_session.c ${NVS_ROOT}/nt/ntsession.c ${CC_ROOT}/api/ccflush.c)
 list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntprotect.c)
-list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntmapping.c)
+list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntmapping.c ${NVS_ROOT}/nt/nttruncate.c)
 set(MM_AREAS pfn pagetable vad vm large awe clone session fault fault_smp paging section image stress ccmm ntfile writeback ntpaging async sys process)
 
 include(${NVS_ROOT}/check-standalone.cmake)
