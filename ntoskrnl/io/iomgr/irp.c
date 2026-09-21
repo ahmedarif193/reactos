@@ -1311,6 +1311,8 @@ IofCallDriver(IN PDEVICE_OBJECT DeviceObject,
 {
     PDRIVER_OBJECT DriverObject;
     PIO_STACK_LOCATION StackPtr;
+    NTSTATUS Status;
+    BOOLEAN PnpRemove;
 
     /* Make sure this is a valid IRP */
     ASSERT(Irp->Type == IO_TYPE_IRP);
@@ -1333,9 +1335,23 @@ IofCallDriver(IN PDEVICE_OBJECT DeviceObject,
     /* Get the Device Object */
     StackPtr->DeviceObject = DeviceObject;
 
-    /* Call it */
-    return DriverObject->MajorFunction[StackPtr->MajorFunction](DeviceObject,
-                                                                Irp);
+    /* A PnP driver normally deletes its last device object from its
+     * IRP_MN_REMOVE_DEVICE handler. Keep its unload routine from running
+     * reentrantly while that handler is still executing. Each forwarded
+     * dispatch is protected separately, so every driver in the stack gets
+     * the same guarantee. */
+    PnpRemove = (StackPtr->MajorFunction == IRP_MJ_PNP &&
+                 StackPtr->MinorFunction == IRP_MN_REMOVE_DEVICE);
+    if (PnpRemove)
+        IopAcquirePnpUnloadBarrier(DriverObject);
+
+    Status = DriverObject->MajorFunction[StackPtr->MajorFunction](DeviceObject,
+                                                                  Irp);
+
+    if (PnpRemove)
+        IopReleasePnpUnloadBarrier(DriverObject);
+
+    return Status;
 }
 
 FORCEINLINE

@@ -388,9 +388,69 @@ IopEditDeviceList(IN PDRIVER_OBJECT DriverObject,
 
 VOID
 NTAPI
+IopTryUnloadDriver(IN PDRIVER_OBJECT DriverObject)
+{
+    LONG OldFlags;
+
+    if (DriverObject->Flags & DRVO_LEGACY_DRIVER)
+    {
+        DPRINT("Not a PnP driver! '%wZ' will not be unloaded!\n", &DriverObject->DriverName);
+        return;
+    }
+
+    if (!DriverObject->DriverUnload)
+    {
+        DPRINT1("No DriverUnload function on PnP driver! '%wZ' will not be unloaded!\n", &DriverObject->DriverName);
+        return;
+    }
+
+    if (DriverObject->DeviceObject)
+    {
+        DPRINT("Devices still present! '%wZ' will not be unloaded!\n", &DriverObject->DriverName);
+        return;
+    }
+
+    OldFlags = InterlockedOr((volatile LONG *)&DriverObject->Flags, DRVO_UNLOAD_INVOKED);
+    if (OldFlags & DRVO_UNLOAD_INVOKED)
+        return;
+
+    DPRINT1("Unloading driver '%wZ' (automatic)\n", &DriverObject->DriverName);
+    DriverObject->DriverUnload(DriverObject);
+    ObMakeTemporaryObject(DriverObject);
+}
+
+VOID
+NTAPI
+IopAcquirePnpUnloadBarrier(IN PDRIVER_OBJECT DriverObject)
+{
+    PEXTENDED_DRIVER_EXTENSION Extension = IoGetDrvObjExtension(DriverObject);
+
+    ObReferenceObject(DriverObject);
+    InterlockedIncrement(&Extension->PnpUnloadBarrier);
+}
+
+VOID
+NTAPI
+IopReleasePnpUnloadBarrier(IN PDRIVER_OBJECT DriverObject)
+{
+    PEXTENDED_DRIVER_EXTENSION Extension = IoGetDrvObjExtension(DriverObject);
+
+    ASSERT(Extension->PnpUnloadBarrier > 0);
+    if (InterlockedDecrement(&Extension->PnpUnloadBarrier) == 0 &&
+        InterlockedExchange(&Extension->PnpUnloadPending, 0) != 0)
+    {
+        IopTryUnloadDriver(DriverObject);
+    }
+
+    ObDereferenceObject(DriverObject);
+}
+
+VOID
+NTAPI
 IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
 {
     PDRIVER_OBJECT DriverObject = DeviceObject->DriverObject;
+    PEXTENDED_DRIVER_EXTENSION DriverExtension = IoGetDrvObjExtension(DriverObject);
     PEXTENDED_DEVOBJ_EXTENSION ThisExtension = IoGetDevObjExtension(DeviceObject);
 
     /* Check if deletion is pending */
@@ -422,40 +482,21 @@ IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
         ObDereferenceObject(DeviceObject);
     }
 
-    /* We can't unload a non-PnP driver here */
-    if (DriverObject->Flags & DRVO_LEGACY_DRIVER)
+    /* REMOVE_DEVICE handlers may call IoDeleteDevice. Do not invoke the
+     * driver's unload routine until that dispatch has returned: KMDF still
+     * needs its driver object and globals to finish the last FxDevice. */
+    if (DriverExtension->PnpUnloadBarrier != 0)
     {
-        DPRINT("Not a PnP driver! '%wZ' will not be unloaded!\n", &DriverObject->DriverName);
-        return;
+        InterlockedExchange(&DriverExtension->PnpUnloadPending, 1);
+        KeMemoryBarrier();
+        if (DriverExtension->PnpUnloadBarrier != 0)
+            return;
+
+        if (InterlockedExchange(&DriverExtension->PnpUnloadPending, 0) == 0)
+            return;
     }
 
-    /* Return if we've already called unload (maybe we're in it?) */
-    if (DriverObject->Flags & DRVO_UNLOAD_INVOKED) return;
-
-    /* We can't unload unless there's an unload handler */
-    if (!DriverObject->DriverUnload)
-    {
-        DPRINT1("No DriverUnload function on PnP driver! '%wZ' will not be unloaded!\n", &DriverObject->DriverName);
-        return;
-    }
-
-    /* Bail if there are still devices present */
-    if (DriverObject->DeviceObject)
-    {
-        DPRINT("Devices still present! '%wZ' will not be unloaded!\n", &DriverObject->DriverName);
-        return;
-    }
-
-    DPRINT1("Unloading driver '%wZ' (automatic)\n", &DriverObject->DriverName);
-
-    /* Set the unload invoked flag */
-    DriverObject->Flags |= DRVO_UNLOAD_INVOKED;
-
-    /* Unload it */
-    DriverObject->DriverUnload(DriverObject);
-
-    /* Make object temporary so it can be deleted */
-    ObMakeTemporaryObject(DriverObject);
+    IopTryUnloadDriver(DriverObject);
 }
 
 VOID

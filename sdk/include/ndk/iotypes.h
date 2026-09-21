@@ -1165,6 +1165,8 @@ typedef struct _EXTENDED_DRIVER_EXTENSION
     UNICODE_STRING ServiceKeyName;
     PIO_CLIENT_EXTENSION ClientDriverExtension;
     PFS_FILTER_CALLBACKS FsFilterCallbacks;
+    LONG PnpUnloadBarrier;
+    LONG PnpUnloadPending;
 } EXTENDED_DRIVER_EXTENSION, *PEXTENDED_DRIVER_EXTENSION;
 
 #endif // !NTOS_MODE_USER
