@@ -265,7 +265,7 @@ BOOLEAN
 NTAPI
 MmIsThisAnNtAsSystem(VOID)
 {
-    return (BOOLEAN)(MmProductType != 0 && MmProductType != 1);
+    return (BOOLEAN)(SharedUserData->NtProductType != NtProductWinNt);
 }
 
 PPHYSICAL_MEMORY_RANGE
