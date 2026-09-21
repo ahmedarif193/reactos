@@ -512,6 +512,12 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
         }
 #endif
 
+        if ((ExceptionRecord->ExceptionCode == STATUS_BREAKPOINT) &&
+            KeBugCheckActive)
+        {
+            HalHaltSystem();
+        }
+
         KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED,
                      ExceptionRecord->ExceptionCode,
                      (ULONG_PTR)ExceptionRecord->ExceptionAddress,
