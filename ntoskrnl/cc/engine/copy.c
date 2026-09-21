@@ -36,9 +36,13 @@ CcCopyRange(
         else
             Status = CcViewMakeResident(Map, &Range, FALSE);
         if (NT_SUCCESS(Status))
+        {
+            CC_RESOURCE_ACQUIRE_SHARED(&Range.View->IoResource);
             Status = Move(MoveContext, Range.Address, Range.FileOffset, Range.Length);
-        if (NT_SUCCESS(Status) && ForWrite)
-            Status = CcDirtyMark(Map, Range.FileOffset, Range.Length);
+            if (NT_SUCCESS(Status) && ForWrite)
+                Status = CcDirtyMark(Map, Range.FileOffset, Range.Length);
+            CC_RESOURCE_RELEASE(&Range.View->IoResource);
+        }
 
         Chunk = Range.Length;
         CcViewRelease(&Range);

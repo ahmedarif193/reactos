@@ -216,6 +216,7 @@ CcDirtyFlush(
         {
             ULONG First;
             ULONG64 RunBits;
+            CC_VIEW_RANGE Range;
             NTSTATUS Status;
 
             if (((Bits >> Page) & 1) == 0)
@@ -229,9 +230,17 @@ CcDirtyFlush(
                 Page++;
 
             RunBits = CcDirtyBits(First, Page - 1);
-            Status = Map->Ops.Flush(Map->Context,
-                                    (Number << CC_VIEW_SHIFT) + ((ULONG64)First << PAGE_SHIFT),
-                                    (Page - First) << PAGE_SHIFT);
+            Status = CcViewAcquire(Map,
+                                   (Number << CC_VIEW_SHIFT) + ((ULONG64)First << PAGE_SHIFT),
+                                   (Page - First) << PAGE_SHIFT,
+                                   &Range);
+            if (NT_SUCCESS(Status))
+            {
+                CC_RESOURCE_ACQUIRE_EXCLUSIVE(&Range.View->IoResource);
+                Status = Map->Ops.Flush(Map->Context, Range.FileOffset, Range.Length);
+                CC_RESOURCE_RELEASE(&Range.View->IoResource);
+                CcViewRelease(&Range);
+            }
             CC_ATOMIC_ADD64(&Cache->FlushCalls, 1);
 
             if (!NT_SUCCESS(Status))
