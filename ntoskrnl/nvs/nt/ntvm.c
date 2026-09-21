@@ -575,6 +575,7 @@ MiQueryBasicInformation(
     _Out_ PMEMORY_BASIC_INFORMATION Basic)
 {
     MI_MEMORY_INFORMATION Info;
+    ULONG64 Lowest, Query;
     NTSTATUS Status;
 
     RtlZeroMemory(Basic, sizeof(*Basic));
@@ -582,29 +583,32 @@ MiQueryBasicInformation(
     if ((ULONG_PTR)BaseAddress > (ULONG_PTR)MmHighestUserAddress)
         return STATUS_INVALID_PARAMETER;
 
-    if ((ULONG_PTR)BaseAddress > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
-    {
-        Basic->BaseAddress = PAGE_ALIGN(BaseAddress);
-        Basic->AllocationBase = (PVOID)((ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1);
-        Basic->AllocationProtect = PAGE_NOACCESS;
-        Basic->RegionSize = (ULONG_PTR)MmHighestUserAddress + 1 - (ULONG_PTR)Basic->BaseAddress;
-        Basic->State = MEM_RESERVE;
-        Basic->Protect = PAGE_NOACCESS;
-        Basic->Type = MEM_PRIVATE;
-        return STATUS_SUCCESS;
-    }
-
-    Status = MiQueryVirtualMemory(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)BaseAddress, &Info);
+    Lowest = MiSpaceOfProcess(Process)->LowestVa;
+    Query = ((ULONG64)(ULONG_PTR)BaseAddress < Lowest) ? Lowest : (ULONG64)(ULONG_PTR)BaseAddress;
+    Status = MiQueryVirtualMemory(MiSpaceOfProcess(Process), Query, &Info);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if (Query != (ULONG64)(ULONG_PTR)BaseAddress && Info.State != MI_MEM_FREE)
+    {
+        Info.BaseAddress = Lowest;
+        Info.RegionSize = 0;
+        Info.State = MI_MEM_FREE;
+    }
+
+    if (Info.State == MI_MEM_FREE && Query != (ULONG64)(ULONG_PTR)BaseAddress)
+    {
+        Info.RegionSize += Info.BaseAddress - (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress);
+        Info.BaseAddress = (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress);
+    }
 
     Basic->BaseAddress = (PVOID)(ULONG_PTR)Info.BaseAddress;
     Basic->RegionSize = (SIZE_T)Info.RegionSize;
 
     if (Info.State == MI_MEM_FREE)
     {
-        if (Info.BaseAddress + Info.RegionSize > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1)
-            Basic->RegionSize = (SIZE_T)((ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - Info.BaseAddress);
+        if (Info.BaseAddress + Info.RegionSize > (ULONG64)(ULONG_PTR)MmHighestUserAddress + 1)
+            Basic->RegionSize = (SIZE_T)((ULONG64)(ULONG_PTR)MmHighestUserAddress + 1 - Info.BaseAddress);
 
         Basic->State = MEM_FREE;
         Basic->Protect = PAGE_NOACCESS;
@@ -615,7 +619,8 @@ MiQueryBasicInformation(
     Basic->AllocationProtect = MiProtectionToWin32(Info.AllocationProtect);
     Basic->State = (Info.State == MI_MEM_COMMIT) ? MEM_COMMIT : MEM_RESERVE;
     Basic->Protect = (Info.State == MI_MEM_COMMIT) ? MiProtectionToWin32(Info.Protect) : 0;
-    Basic->Type = (Info.Type == MI_MEM_PRIVATE) ? MEM_PRIVATE : ((Info.Type == MI_MEM_IMAGE) ? MEM_IMAGE : MEM_MAPPED);
+    Basic->Type = (Info.Type == MI_MEM_PRIVATE || Info.AllocationBase == MI_SHARED_USER_DATA_VA)
+                      ? MEM_PRIVATE : ((Info.Type == MI_MEM_IMAGE) ? MEM_IMAGE : MEM_MAPPED);
     return STATUS_SUCCESS;
 }
 
