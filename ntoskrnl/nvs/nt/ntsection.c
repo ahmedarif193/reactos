@@ -606,7 +606,8 @@ MiSectionInitialize(VOID)
     RtlZeroMemory(&Initializer, sizeof(Initializer));
     RtlInitUnicodeString(&Name, L"Section");
     Initializer.Length = sizeof(Initializer);
-    Initializer.DefaultPagedPoolCharge = sizeof(MI_SECTION_OBJECT);
+    Initializer.ObjectTypeCode = MI_NT_SECTION_TYPE_CODE;
+    Initializer.DefaultPagedPoolCharge = MI_NT_SECTION_PAGED_CHARGE;
     Initializer.PoolType = PagedPool;
     Initializer.UseDefaultObject = TRUE;
     Initializer.GenericMapping = MiSectionMapping;
