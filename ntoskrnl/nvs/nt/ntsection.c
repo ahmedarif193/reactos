@@ -1716,7 +1716,7 @@ NtUnmapViewOfSection(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if (MI_PROCESS_OF(Process) != NULL)
+    if (MiProcessHasSecureRanges(Process))
     {
         ULONG64 Start, End;
 
