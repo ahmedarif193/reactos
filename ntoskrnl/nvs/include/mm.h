@@ -107,6 +107,7 @@ NTSTATUS MiAddressSpaceAdopt(_Inout_ PMI_SYSTEM System, _Out_ PMI_ADDRESS_SPACE 
                              _In_ BOOLEAN IsSystem);
 NTSTATUS MiSystemAdoptBootMappings(_Inout_ PMI_SYSTEM System);
 NTSTATUS MiSystemPopulateTopLevel(_Inout_ PMI_SYSTEM System);
+NTSTATUS MiSystemReserveTopLevelHole(_Inout_ PMI_SYSTEM System);
 
 PMI_PTE MiPtLookup(_In_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _Out_opt_ PULONG TableFrame);
 PMI_PTE MiPtEnsure(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _Out_ PULONG TableFrame);

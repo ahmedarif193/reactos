@@ -234,7 +234,9 @@ MiInitializePhase0(
     DbgPrint("MM: boot tables adopted, root %I64x, %lu VADs, %I64d tables, %I64u pages free\n", MiBootRootFrame,
              (ULONG)MiSystem.SystemSpace.VadRoot.NodeCount, MiSystem.SystemSpace.PageTablePages,
              MiPfnAvailablePages(&MiSystem.Pfn));
-    Status = MiSystemPopulateTopLevel(&MiSystem);
+    Status = MiSystemReserveTopLevelHole(&MiSystem);
+    if (NT_SUCCESS(Status))
+        Status = MiSystemPopulateTopLevel(&MiSystem);
     if (!NT_SUCCESS(Status))
         KeBugCheckEx(MEMORY_MANAGEMENT, 0x544F504C, (ULONG_PTR)Status, 0, 0);
 
