@@ -1695,41 +1695,69 @@ CywRxData(
     return Nbl;
 }
 
+/* Poll status as a fallback for missed interrupts, not the F2 FIFO itself.
+ * Keep RxPending across receive budgets until the firmware returns no frame. */
 static
-VOID
-CywClearChipInterrupt(
+NTSTATUS
+CywReadChipInterrupt(
     _In_ PCYW_ADAPTER Adapter)
 {
-    ULONG Ist = 0;
+    ULONG Ist = 0, Hmb = 0;
+    NTSTATUS Status;
 
+    if (Adapter->FirmwareHalted)
+        return STATUS_DEVICE_HARDWARE_ERROR;
     if (Adapter->SdioCoreBase == 0)
-    {
-        return;
-    }
+        return STATUS_DEVICE_NOT_READY;
 
-    if (!NT_SUCCESS(CywBackplaneReadlSc(Adapter,
-                                        Adapter->SdioCoreBase + SD_REG_INTSTATUS,
-                                        &Ist, Adapter->RegScratch)))
-    {
-        return;
-    }
+    Status = CywBackplaneReadlSc(Adapter,
+                                Adapter->SdioCoreBase + SD_REG_INTSTATUS,
+                                &Ist, Adapter->RegScratch);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     Ist &= CYW_HOSTINTMASK;
+    /* Remember work before acknowledging, including a mailbox read which
+     * must be retried if the backplane fails after interrupt acknowledgement. */
+    if (Ist & I_HMB_FRAME_IND)
+        Adapter->RxPending = TRUE;
+
+    if (Ist & I_HMB_HOST_INT)
+        Adapter->HostMailboxPending = TRUE;
     if (Ist != 0)
     {
-        CywBackplaneWritelSc(Adapter, Adapter->SdioCoreBase + SD_REG_INTSTATUS,
-                             Ist, Adapter->RegScratch);
-        if (Ist & I_HMB_HOST_INT)
+        Status = CywBackplaneWritelSc(Adapter,
+                                     Adapter->SdioCoreBase + SD_REG_INTSTATUS,
+                                     Ist, Adapter->RegScratch);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    if (Adapter->HostMailboxPending)
+    {
+        Status = CywBackplaneReadlSc(Adapter,
+                                    Adapter->SdioCoreBase + SD_REG_TOHOSTMAILBOXDATA,
+                                    &Hmb, Adapter->RegScratch);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Status = CywBackplaneWritelSc(Adapter,
+                                     Adapter->SdioCoreBase + SD_REG_TOSBMAILBOX,
+                                     SMB_INT_ACK, Adapter->RegScratch);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Adapter->HostMailboxPending = FALSE;
+        if (Hmb & HMB_DATA_FWHALT)
         {
-            ULONG Hmb = 0;
-            CywBackplaneReadlSc(Adapter,
-                                Adapter->SdioCoreBase + SD_REG_TOHOSTMAILBOXDATA,
-                                &Hmb, Adapter->RegScratch);
-            CywBackplaneWritelSc(Adapter,
-                                 Adapter->SdioCoreBase + SD_REG_TOSBMAILBOX,
-                                 SMB_INT_ACK, Adapter->RegScratch);
+            Adapter->FirmwareHalted = TRUE;
+            return STATUS_DEVICE_HARDWARE_ERROR;
+        }
+        if (Hmb & HMB_DATA_NAKHANDLED)
+        {
+            Adapter->RxSkip = FALSE;
+            Adapter->RxPending = TRUE;
         }
     }
+    return STATUS_SUCCESS;
 }
 
 static
@@ -1784,58 +1812,68 @@ CywRxChainFlush(
 }
 
 static
-VOID
-CywSdioAbort(
-    _In_ PCYW_ADAPTER Adapter,
-    _In_ UCHAR Function)
-{
-    CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, SDIO_CCCR_IOABORT, Function);
-}
-
-static
-VOID
+NTSTATUS
 CywRxFail(
     _In_ PCYW_ADAPTER Adapter,
     _In_ BOOLEAN Abort,
     _In_ BOOLEAN SendNak)
 {
     ULONG Retries;
-    UCHAR Hi = 0;
-    UCHAR Lo = 0;
+    UCHAR Hi, Lo;
+    NTSTATUS Status;
 
     Adapter->RxFailCount++;
+    Adapter->RxRecoveryPending = TRUE;
+    Adapter->RxRecoveryNak = SendNak;
+    Adapter->RxSeqValid = FALSE;
+    Adapter->GlomCount = 0;
 
     if (Abort)
     {
-        CywSdioAbort(Adapter, CYW_SDIO_FUNC_RADIO);
+        Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
+                                  SDIO_CCCR_IOABORT, CYW_SDIO_FUNC_RADIO);
+        if (!NT_SUCCESS(Status))
+            return Status;
     }
 
-    CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM);
+    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                              SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     for (Retries = CYW_RXFLUSH_RETRIES; Retries > 0; Retries--)
     {
-        if (!NT_SUCCESS(CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_RFRAMEBCHI, &Hi)) || !NT_SUCCESS(CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_RFRAMEBCLO, &Lo)))
-        {
-            break;
-        }
-
+        Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                                 SBSDIO_FUNC1_RFRAMEBCHI, &Hi);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                                 SBSDIO_FUNC1_RFRAMEBCLO, &Lo);
+        if (!NT_SUCCESS(Status))
+            return Status;
         if (Hi == 0 && Lo == 0)
-        {
             break;
-        }
     }
-
     if (Retries == 0)
     {
         Adapter->RxFlushStuckCount++;
+        return STATUS_IO_TIMEOUT;
     }
 
-    if (SendNak && Adapter->SdioCoreBase != 0)
+    if (SendNak)
     {
-        CywBackplaneWritelSc(Adapter, Adapter->SdioCoreBase + SD_REG_TOSBMAILBOX, SMB_NAK, Adapter->RegScratch);
+        if (Adapter->SdioCoreBase == 0)
+            return STATUS_DEVICE_NOT_READY;
+        Status = CywBackplaneWritelSc(Adapter,
+                                     Adapter->SdioCoreBase + SD_REG_TOSBMAILBOX,
+                                     SMB_NAK, Adapter->RegScratch);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        /* Reading before NAKHANDLED would consume the retransmission early. */
+        Adapter->RxSkip = TRUE;
     }
-
-    Adapter->RxSeqValid = FALSE;
+    Adapter->RxRecoveryPending = FALSE;
+    return STATUS_SUCCESS;
 }
 
 /* Single owner of all F2 FIFO traffic: pumps the deferred TX queue, receives
@@ -1858,6 +1896,7 @@ CywBusThread(
     ULONG DataOffset;
     PNET_BUFFER_LIST ChainHead = NULL, ChainTail = NULL;
     ULONG ChainCount = 0;
+    ULONG ErrorDelayMs = 100;
 
     KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
 
@@ -1865,6 +1904,7 @@ CywBusThread(
     {
         BOOLEAN AnyFrame = FALSE;
         BOOLEAN HadInterrupt;
+        NTSTATUS PassStatus;
         LARGE_INTEGER RxWait;
         ULONG NextLen = 0;
         ULONG FirstRead;
@@ -1873,14 +1913,22 @@ CywBusThread(
 
         HadInterrupt =
             (InterlockedExchange(&Adapter->CardInterruptPending, 0) != 0);
-        if (HadInterrupt)
+        PassStatus = CywReadChipInterrupt(Adapter);
+        if (!NT_SUCCESS(PassStatus))
+            goto PassDone;
+        if (Adapter->RxRecoveryPending)
         {
-            CywClearChipInterrupt(Adapter);
+            KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
+            PassStatus = CywRxFail(Adapter, TRUE, Adapter->RxRecoveryNak);
+            KeReleaseMutex(&Adapter->F2Lock, FALSE);
+            if (!NT_SUCCESS(PassStatus))
+                goto PassDone;
         }
 
         CywDrainTxQueue(Adapter);
 
-        while (Adapter->BusThreadStop == 0 && RxLeft-- != 0)
+        while (Adapter->BusThreadStop == 0 && Adapter->RxPending &&
+               !Adapter->RxSkip && RxLeft-- != 0)
         {
             BOOLEAN ReadAhead = (NextLen != 0);
 
@@ -1898,7 +1946,9 @@ CywBusThread(
             if (!NT_SUCCESS(Status))
             {
                 NextLen = 0;
-                CywRxFail(Adapter, TRUE, FALSE);
+                PassStatus = CywRxFail(Adapter, TRUE, FALSE);
+                if (NT_SUCCESS(PassStatus))
+                    PassStatus = Status;
                 KeReleaseMutex(&Adapter->F2Lock, FALSE);
                 break;
             }
@@ -1908,6 +1958,7 @@ CywBusThread(
 
             if (HwLen == 0 && HwCheck == 0)
             {
+                Adapter->RxPending = FALSE;
                 NextLen = 0;
                 KeReleaseMutex(&Adapter->F2Lock, FALSE);
                 break;
@@ -1917,7 +1968,7 @@ CywBusThread(
             {
                 Adapter->RxBadHdrCount++;
                 NextLen = 0;
-                CywRxFail(Adapter, FALSE, FALSE);
+                PassStatus = CywRxFail(Adapter, FALSE, FALSE);
                 KeReleaseMutex(&Adapter->F2Lock, FALSE);
                 break;
             }
@@ -1927,7 +1978,7 @@ CywBusThread(
             {
                 Adapter->RxBadHdrCount++;
                 NextLen = 0;
-                CywRxFail(Adapter, FALSE, FALSE);
+                PassStatus = CywRxFail(Adapter, FALSE, FALSE);
                 KeReleaseMutex(&Adapter->F2Lock, FALSE);
                 break;
             }
@@ -1939,7 +1990,7 @@ CywBusThread(
             {
                 Adapter->RxBadHdrCount++;
                 NextLen = 0;
-                CywRxFail(Adapter, TRUE, TRUE);
+                PassStatus = CywRxFail(Adapter, TRUE, TRUE);
                 KeReleaseMutex(&Adapter->F2Lock, FALSE);
                 break;
             }
@@ -1962,7 +2013,9 @@ CywBusThread(
                 if (!NT_SUCCESS(Status))
                 {
                     NextLen = 0;
-                    CywRxFail(Adapter, TRUE, FALSE);
+                    PassStatus = CywRxFail(Adapter, TRUE, FALSE);
+                    if (NT_SUCCESS(PassStatus))
+                        PassStatus = Status;
                     KeReleaseMutex(&Adapter->F2Lock, FALSE);
                     break;
                 }
@@ -2122,6 +2175,7 @@ CywBusThread(
             }
         }
 
+PassDone:
         CywRxChainFlush(Adapter, &ChainHead, &ChainTail, &ChainCount);
 
         if (HadInterrupt && Adapter->SdBus.AcknowledgeInterrupt != NULL)
@@ -2129,6 +2183,20 @@ CywBusThread(
             Adapter->SdBus.AcknowledgeInterrupt(Adapter->SdBus.Context);
         }
 
+        if (!NT_SUCCESS(PassStatus))
+        {
+            if (ErrorDelayMs == 100)
+                DPRINT1("CYW: SDIO receive/status failed 0x%08lx; backing off bus polling\n",
+                        PassStatus);
+
+            /* A dead bus must not cause a new FIFO recovery sequence every
+             * 10 ms. TX wakeups must not bypass the error backoff either. */
+            RxWait.QuadPart = -(LONGLONG)ErrorDelayMs * 10000;
+            KeDelayExecutionThread(KernelMode, FALSE, &RxWait);
+            ErrorDelayMs = min(ErrorDelayMs * 2, 1000);
+            continue;
+        }
+        ErrorDelayMs = 100;
         if (AnyFrame)
             continue;
 
@@ -2150,6 +2218,12 @@ CywStartBusThread(
 
     Adapter->BusThreadStop = 0;
     Adapter->BusThread = NULL;
+    Adapter->RxPending = FALSE;
+    Adapter->RxSkip = FALSE;
+    Adapter->RxRecoveryPending = FALSE;
+    Adapter->RxRecoveryNak = FALSE;
+    Adapter->HostMailboxPending = FALSE;
+    Adapter->FirmwareHalted = FALSE;
     KeInitializeEvent(&Adapter->BusThreadExited, NotificationEvent, FALSE);
 
     if (!Adapter->TimerResSet)

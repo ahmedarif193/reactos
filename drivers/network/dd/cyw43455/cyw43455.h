@@ -131,6 +131,8 @@
 #define CYW_HOSTINTMASK                 (I_HMB_SW_MASK | I_CHIPACTIVE)
 #define SMB_NAK                         0x00000001
 #define SMB_INT_ACK                     0x00000002
+#define HMB_DATA_NAKHANDLED              0x00000001
+#define HMB_DATA_FWHALT                  0x00000010
 #define CYW_RXFLUSH_RETRIES             0xFFFF
 #define SDPCM_HDRLEN_BASE               12
 #define CYW_RX_TIMER_RES                10000
@@ -671,6 +673,12 @@ typedef struct _CYW_ADAPTER
     UCHAR TxFlow;
     UCHAR RxSeq;
     BOOLEAN RxSeqValid;
+    BOOLEAN RxPending;
+    BOOLEAN RxSkip;
+    BOOLEAN RxRecoveryPending;
+    BOOLEAN RxRecoveryNak;
+    BOOLEAN HostMailboxPending;
+    BOOLEAN FirmwareHalted;
     ULONG RxBadHdrCount;
     ULONG RxBadSeqCount;
     ULONG RxFailCount;
