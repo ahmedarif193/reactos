@@ -79,7 +79,8 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
-    if (!(FileCB->DesiredAccess &
+    if (!BooleanFlagOn(Irp->Flags, IRP_PAGING_IO) &&
+        !(FileCB->DesiredAccess &
           (FILE_WRITE_DATA | FILE_APPEND_DATA)))
     {
         Status = STATUS_ACCESS_DENIED;
