@@ -305,13 +305,13 @@ MiPfnCacheDrain(
             }
 
             Entry->State = MiPageFree;
-            Entry->Flink = MI_FRAME_INVALID;
-            Entry->Blink = List->Tail;
-            if (List->Tail != MI_FRAME_INVALID)
-                Db->Pfn[List->Tail].Flink = Candidate;
+            Entry->Blink = MI_FRAME_INVALID;
+            Entry->Flink = List->Head;
+            if (List->Head != MI_FRAME_INVALID)
+                Db->Pfn[List->Head].Blink = Candidate;
             else
-                List->Head = Candidate;
-            List->Tail = Candidate;
+                List->Tail = Candidate;
+            List->Head = Candidate;
             List->Count++;
 
             Cache->Frame[Index - 1] = Cache->Frame[Cache->Depth - 1];
