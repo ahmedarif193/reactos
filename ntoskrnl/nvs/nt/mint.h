@@ -115,6 +115,7 @@ extern SIZE_T MmPeakCommitment;
 VOID MiSyncProcessCounters(_Inout_ PEPROCESS Process);
 BOOLEAN MiDynamicCodeBlocked(_In_ PEPROCESS Process);
 NTSTATUS MiValidateImageSigningPolicy(_In_ PFILE_OBJECT FileObject);
+BOOLEAN MiFrameIsRam(_In_ ULONG64 Frame);
 NTSTATUS MiQuerySectionName(_In_ HANDLE ProcessHandle, _In_ PVOID BaseAddress, _Out_ PVOID MemoryInformation,
                             _In_ SIZE_T MemoryInformationLength, _Out_opt_ PSIZE_T ReturnLength);
 VOID MiSessionAddProcess(_Inout_ PEPROCESS NewProcess);

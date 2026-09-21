@@ -592,23 +592,21 @@ MmAllocateMdlForIoSpace(
     PMDL Mdl;
     SIZE_T i, Page = 0;
 
-    *NewMdl = NULL;
-
     for (i = 0; i < NumberOfEntries; i++)
     {
-        if ((PhysicalAddressList[i].PhysicalAddress.QuadPart & (PAGE_SIZE - 1)) ||
-            (PhysicalAddressList[i].NumberOfBytes & (PAGE_SIZE - 1)) || PhysicalAddressList[i].NumberOfBytes == 0)
+        SIZE_T Bytes = PhysicalAddressList[i].NumberOfBytes;
+
+        if ((Bytes & (PAGE_SIZE - 1)) || (PhysicalAddressList[i].PhysicalAddress.QuadPart & (PAGE_SIZE - 1)) ||
+            MiFrameIsRam((ULONG64)PhysicalAddressList[i].PhysicalAddress.QuadPart >> PAGE_SHIFT) ||
+            Total + Bytes < Total || Total + Bytes > MAXULONG)
         {
             return STATUS_INVALID_PARAMETER_1;
         }
 
-        Total += PhysicalAddressList[i].NumberOfBytes;
+        Total += Bytes;
     }
 
-    if (Total == 0 || Total > 0xFFFFFFFFULL - PAGE_SIZE)
-        return STATUS_INVALID_PARAMETER_2;
-
-    Mdl = MmCreateMdl(NULL, NULL, Total);
+    Mdl = IoAllocateMdl(NULL, (ULONG)Total, FALSE, FALSE, NULL);
     if (Mdl == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -624,7 +622,8 @@ MmAllocateMdlForIoSpace(
             Pages[Page++] = First + j;
     }
 
-    Mdl->MdlFlags |= MDL_PAGES_LOCKED | MDL_IO_SPACE;
+    Mdl->Process = NULL;
+    Mdl->MdlFlags |= MDL_PAGES_LOCKED;
     *NewMdl = Mdl;
     return STATUS_SUCCESS;
 }
