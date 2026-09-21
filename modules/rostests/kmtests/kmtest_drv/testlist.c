@@ -253,6 +253,7 @@ KMT_TESTFUNC Test_MmWddmRotate;
 KMT_TESTFUNC Test_MmWddmRotateValid;
 KMT_TESTFUNC Test_MmReservedMapping;
 KMT_TESTFUNC Test_MmSelfMap;
+KMT_TESTFUNC Test_MmUserLayout;
 KMT_TESTFUNC Test_NpfsConnect;
 KMT_TESTFUNC Test_NpfsCreate;
 KMT_TESTFUNC Test_NpfsFileInfo;
@@ -541,6 +542,7 @@ const KMT_TEST TestList[] =
     { "MmPrivatePages",                     Test_MmPrivatePages },
     { "MmReservedMapping",                  Test_MmReservedMapping },
     { "MmSelfMap",                          Test_MmSelfMap },
+    { "MmUserLayout",                       Test_MmUserLayout },
     { "NpfsConnect",                        Test_NpfsConnect },
     { "NpfsCreate",                         Test_NpfsCreate },
     { "NpfsFileInfo",                       Test_NpfsFileInfo },
