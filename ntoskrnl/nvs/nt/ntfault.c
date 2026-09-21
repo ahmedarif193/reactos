@@ -373,6 +373,39 @@ MmPrefetchPages(
     return STATUS_SUCCESS;
 }
 
+static EX_PUSH_LOCK MiRotateLock;
+
+static
+NTSTATUS
+MiRotateCopy(
+    _In_ PMDL Destination,
+    _In_ PMDL Source,
+    _In_ SIZE_T Bytes,
+    _In_opt_ PMM_ROTATE_COPY_CALLBACK_FUNCTION CopyFunction,
+    _In_opt_ PVOID Context)
+{
+    PVOID To, From;
+
+    if (CopyFunction != NULL)
+        return CopyFunction(Destination, Source, Context);
+
+    To = MmMapLockedPagesSpecifyCache(Destination, KernelMode, MmCached, NULL, FALSE, NormalPagePriority);
+    if (To == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    From = MmMapLockedPagesSpecifyCache(Source, KernelMode, MmCached, NULL, FALSE, NormalPagePriority);
+    if (From == NULL)
+    {
+        MmUnmapLockedPages(To, Destination);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlCopyMemory(To, From, Bytes);
+    MmUnmapLockedPages(From, Source);
+    MmUnmapLockedPages(To, Destination);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 MmRotatePhysicalView(
@@ -383,13 +416,104 @@ MmRotatePhysicalView(
     _In_ PMM_ROTATE_COPY_CALLBACK_FUNCTION CopyFunction,
     _In_opt_ PVOID Context)
 {
-    UNREFERENCED_PARAMETER(VirtualAddress);
-    UNREFERENCED_PARAMETER(NumberOfBytes);
-    UNREFERENCED_PARAMETER(NewMdl);
-    UNREFERENCED_PARAMETER(Direction);
-    UNREFERENCED_PARAMETER(CopyFunction);
-    UNREFERENCED_PARAMETER(Context);
-    return STATUS_NOT_IMPLEMENTED;
+    ULONG64 Va = (ULONG64)(ULONG_PTR)VirtualAddress;
+    PMI_FRAME_NUMBER Mapped = NULL, Regular;
+    PMDL Source = NULL, Destination = NULL;
+    SIZE_T Bytes = *NumberOfBytes;
+    const MI_FRAME_NUMBER *Target = NULL;
+    BOOLEAN ToFrameBuffer, Copy;
+    PMI_ADDRESS_SPACE Space;
+    ULONG LeafFlags = 0;
+    NTSTATUS Status;
+    ULONG64 Pages;
+
+    *NumberOfBytes = 0;
+
+    if (Va & (PAGE_SIZE - 1))
+        return STATUS_INVALID_PARAMETER_1;
+
+    if (Bytes == 0 || (Bytes & (PAGE_SIZE - 1)))
+        return STATUS_INVALID_PARAMETER_2;
+
+    if ((LONG)Direction >= (LONG)MmMaximumRotateDirection)
+        return STATUS_INVALID_PARAMETER_3;
+
+    if (MI_IS_SYSTEM_VA(VirtualAddress) || MI_PROCESS_OF(PsGetCurrentProcess()) == NULL)
+        return STATUS_ACCESS_VIOLATION;
+
+    Space = MiSpaceOfProcess(PsGetCurrentProcess());
+    Pages = Bytes >> PAGE_SHIFT;
+    Mapped = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Pages * 2 * sizeof(*Mapped), 'oRmM');
+    if (Mapped == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Regular = Mapped + Pages;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&MiRotateLock);
+
+    Status = MiRotateQuery(Space, Va, Bytes, Mapped, Regular);
+    if (NT_SUCCESS(Status) && (LONG)Direction < 0)
+        Status = STATUS_INVALID_PARAMETER_3;
+
+    ToFrameBuffer = (BOOLEAN)(Direction == MmToFrameBuffer || Direction == MmToFrameBufferNoCopy);
+    Copy = (BOOLEAN)(Direction == MmToFrameBuffer || Direction == MmToRegularMemory);
+
+    if (NT_SUCCESS(Status) && ToFrameBuffer)
+    {
+        if (NewMdl == NULL || MmGetMdlByteOffset(NewMdl) != 0 || MmGetMdlByteCount(NewMdl) < Bytes)
+        {
+            Status = STATUS_INVALID_PARAMETER_3;
+        }
+        else
+        {
+            Target = (const MI_FRAME_NUMBER *)MmGetMdlPfnArray(NewMdl);
+            LeafFlags = MiFrameIsRam(Target[0]) ? 0 : MI_LEAF_WRITECOMBINE;
+        }
+    }
+
+    if (NT_SUCCESS(Status) && Copy)
+    {
+        Source = IoAllocateMdl(NULL, (ULONG)Bytes, FALSE, FALSE, NULL);
+        Destination = ToFrameBuffer ? NewMdl : IoAllocateMdl(NULL, (ULONG)Bytes, FALSE, FALSE, NULL);
+
+        if (Source == NULL || Destination == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else
+        {
+            RtlCopyMemory(MmGetMdlPfnArray(Source), Mapped, (SIZE_T)Pages * sizeof(*Mapped));
+            Source->MdlFlags |= MDL_PAGES_LOCKED;
+
+            if (!ToFrameBuffer)
+            {
+                RtlCopyMemory(MmGetMdlPfnArray(Destination), Regular, (SIZE_T)Pages * sizeof(*Regular));
+                Destination->MdlFlags |= MDL_PAGES_LOCKED;
+            }
+
+            Status = MiRotateCopy(Destination, Source, Bytes, CopyFunction, Context);
+        }
+    }
+
+    if (NT_SUCCESS(Status))
+        Status = MiRotateApply(Space, Va, Bytes, Target, LeafFlags);
+
+    ExReleasePushLockExclusive(&MiRotateLock);
+    KeLeaveCriticalRegion();
+
+    if (Source != NULL)
+        IoFreeMdl(Source);
+
+    if (Destination != NULL && Destination != NewMdl)
+        IoFreeMdl(Destination);
+
+    ExFreePoolWithTag(Mapped, 'oRmM');
+
+    if (NT_SUCCESS(Status))
+        *NumberOfBytes = Bytes;
+
+    return Status;
 }
 
 ULONG

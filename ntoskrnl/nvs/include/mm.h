@@ -141,6 +141,7 @@ VOID MiPtUnpinRange(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress
 #define MI_MEM_PHYSICAL             0x00400000
 #define MI_MEM_IMAGE                0x01000000
 #define MI_MEM_LARGE_PAGES          0x20000000
+#define MI_MEM_ROTATE               0x00800000
 
 typedef enum _MI_VAD_KIND
 {
@@ -150,7 +151,8 @@ typedef enum _MI_VAD_KIND
     MiVadSystem,
     MiVadPhysical,
     MiVadLarge,
-    MiVadAwe
+    MiVadAwe,
+    MiVadRotate
 } MI_VAD_KIND;
 
 struct _MI_SEGMENT;
@@ -170,10 +172,11 @@ typedef struct _MI_VAD
     struct _MI_SEGMENT *Segment;
     ULONG64 SegmentPageOffset;
     volatile LONG64 CommitCharge;
+    PMI_FRAME_NUMBER RotateFrames;
 } MI_VAD, *PMI_VAD;
 
 #define MI_VAD_IS_DIRECT(v)   ((v)->Type == MiVadSystem || (v)->Type == MiVadPhysical || \
-                              (v)->Type == MiVadLarge || (v)->Type == MiVadAwe)
+                              (v)->Type == MiVadLarge || (v)->Type == MiVadAwe || (v)->Type == MiVadRotate)
 
 typedef struct _MI_CLONE_PAGE
 {
@@ -251,6 +254,12 @@ NTSTATUS MiProtectVirtualMemoryEx(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PULON
                                   _In_ BOOLEAN DenyDynamicCode);
 NTSTATUS MiQueryVirtualMemory(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Address,
                               _Out_ PMI_MEMORY_INFORMATION Information);
+NTSTATUS MiRotatePopulate(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress, _In_ ULONG64 RegionSize);
+VOID MiRotateReleaseLocked(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_VAD Vad);
+NTSTATUS MiRotateQuery(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ ULONG64 Size,
+                       _Out_ PMI_FRAME_NUMBER Mapped, _Out_ PMI_FRAME_NUMBER Regular);
+NTSTATUS MiRotateApply(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ ULONG64 Size,
+                       _In_opt_ const MI_FRAME_NUMBER *Frames, _In_ ULONG LeafFlags);
 VOID MiCleanAddressSpace(_Inout_ PMI_ADDRESS_SPACE Space);
 NTSTATUS MiMapFramesUser(_Inout_ PMI_ADDRESS_SPACE Space, _In_ const MI_FRAME_NUMBER *Frames, _In_ ULONG PageCount,
                          _In_ ULONG Protection, _In_ ULONG LeafFlags, _Inout_ PULONG64 BaseAddress);

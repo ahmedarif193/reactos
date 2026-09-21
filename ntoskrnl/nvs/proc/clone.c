@@ -528,7 +528,7 @@ MiCloneAddressSpace(PMI_ADDRESS_SPACE Source, PMI_ADDRESS_SPACE Target)
         ULONG64 Va = Node->StartingVpn << PAGE_SHIFT;
         ULONG64 End = (Node->EndingVpn + 1) << PAGE_SHIFT;
 
-        if (Original->Type == MiVadAwe || Original->Type == MiVadPhysical ||
+        if (Original->Type == MiVadAwe || Original->Type == MiVadPhysical || Original->Type == MiVadRotate ||
             (Original->Segment != NULL && !Original->Inherit))
             continue;
         if (MI_VAD_IS_DIRECT(Original) && !(Original->Type == MiVadLarge && Original->Segment != NULL))
