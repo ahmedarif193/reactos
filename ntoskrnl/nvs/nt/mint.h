@@ -64,7 +64,15 @@ PMI_ADDRESS_SPACE
 MiSpaceForAddress(
     _In_ PVOID Address)
 {
-    return MI_IS_SYSTEM_VA(Address) ? &MiSystem.SystemSpace : MiSpaceOfProcess(PsGetCurrentProcess());
+    PEPROCESS Process = PsGetCurrentProcess();
+
+    if (!MI_IS_SYSTEM_VA(Address))
+        return MiSpaceOfProcess(Process);
+
+    if (MiArchIsSelfMapAddress((ULONG64)(ULONG_PTR)Address) && Process->Vm.VmWorkingSetList != NULL)
+        return MiSpaceOfProcess(Process);
+
+    return &MiSystem.SystemSpace;
 }
 
 FORCEINLINE
