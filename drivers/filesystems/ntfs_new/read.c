@@ -22,6 +22,22 @@ static CACHE_MANAGER_CALLBACKS NtfsCacheManagerCallbacks =
     NtfsRelReadAhead
 };
 
+VOID
+NtfsInitializeStreamCache(_In_ PFileContextBlock FileCB,
+                          _In_ PFILE_OBJECT FileObject)
+{
+    PCC_FILE_SIZES FileSizes = (PCC_FILE_SIZES)&NtfsGetCommonFcbHeader(FileCB)->AllocationSize;
+
+    CcInitializeCacheMap(FileObject,
+                         FileSizes,
+                         FALSE,
+                         &NtfsCacheManagerCallbacks,
+                         FileCB);
+    CcSetFileSizes(FileObject, FileSizes);
+    CcSetReadAheadGranularity(FileObject, 0x40000);
+    FileObject->Flags |= FO_CACHE_SUPPORTED;
+}
+
 /*
  * NTFS proper refreshes a file's last-access time at most once per hour; a
  * driver that rewrites the record on every read pays an exclusive lock and a
@@ -415,16 +431,7 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         FileObject->SectionObjectPointer != NULL &&
         FileObject->PrivateCacheMap == NULL)
     {
-        PCC_FILE_SIZES FileSizes = (PCC_FILE_SIZES)&NtfsGetCommonFcbHeader(FileCB)->AllocationSize;
-
-        CcInitializeCacheMap(FileObject,
-                             FileSizes,
-                             FALSE,
-                             &NtfsCacheManagerCallbacks,
-                             FileCB);
-        CcSetFileSizes(FileObject, FileSizes);
-        CcSetReadAheadGranularity(FileObject, 0x40000);
-        FileObject->Flags |= FO_CACHE_SUPPORTED;
+        NtfsInitializeStreamCache(FileCB, FileObject);
     }
 
     /*
