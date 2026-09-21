@@ -346,6 +346,8 @@ MiInitializePhase0(
     MmResidentAvailablePages = MmAvailablePages;
     MiSystem.CommitLimit = (LONG64)MmAvailablePages + MI_ATOMIC_READ64(&MiSystem.CommittedPages);
     MiSystem.UnusedSegmentLimit = MI_NT_UNUSED_SEGMENT_LIMIT;
+    MiSystem.ChargeOwnerCommit = MiChargeProcessCommit;
+    MiSystem.ReturnOwnerCommit = MiReturnProcessCommit;
     MmTotalCommitLimit = (SIZE_T)MiSystem.CommitLimit;
     MmTotalCommitLimitMaximum = MmTotalCommitLimit;
     MmtotalCommitLimitMaximum = MmTotalCommitLimit;

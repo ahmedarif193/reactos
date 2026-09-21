@@ -59,6 +59,7 @@ typedef struct _MI_ADDRESS_SPACE
     ULONG64 HighestVa;
     ULONG64 BottomUpVa;
     ULONG64 TopDownVa;
+    PVOID CommitOwner;
 
     volatile LONG64 CommittedPages;
     volatile LONG64 ResidentPages;
@@ -99,6 +100,8 @@ typedef struct _MI_SYSTEM
     ULONG UnusedSegmentLimit;
     volatile LONG64 UnusedSegmentHits;
     PVOID Context;
+    BOOLEAN (*ChargeOwnerCommit)(_In_ PVOID Owner, _In_ LONG64 Pages);
+    VOID (*ReturnOwnerCommit)(_In_ PVOID Owner, _In_ LONG64 Pages);
 } MI_SYSTEM, *PMI_SYSTEM;
 
 NTSTATUS MiSystemInitialize(_Out_ PMI_SYSTEM System, _In_ PMI_PFN PfnArray, _In_ ULONG FrameCount,

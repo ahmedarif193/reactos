@@ -299,10 +299,91 @@ ProcAdoptedSharedPage(void)
     WorldDestroy(&World);
 }
 
+typedef struct _OWNER_BUDGET
+{
+    LONG64 Used;
+    LONG64 Limit;
+    ULONG Refusals;
+} OWNER_BUDGET;
+
+static
+BOOLEAN
+OwnerCharge(_In_ PVOID Owner, _In_ LONG64 Pages)
+{
+    OWNER_BUDGET *Budget = Owner;
+
+    if (Budget->Used + Pages > Budget->Limit)
+    {
+        Budget->Refusals++;
+        return FALSE;
+    }
+
+    Budget->Used += Pages;
+    return TRUE;
+}
+
+static
+VOID
+OwnerReturn(_In_ PVOID Owner, _In_ LONG64 Pages)
+{
+    OWNER_BUDGET *Budget = Owner;
+
+    Budget->Used -= Pages;
+}
+
+static
+void
+ProcCommitOwner(void)
+{
+    static TEST_WORLD World;
+    static MI_PROCESS_MANAGER Manager;
+    static MI_PROCESS Process;
+    OWNER_BUDGET Budget = { 0, 64, 0 };
+    ULONG64 First = 0, Second = 0, Size;
+    LONG64 SystemBefore;
+
+    WorldCreate(&World, 512, 1, 1000000);
+    CHECK(NT_SUCCESS(MiSystemPtesInitialize(&World.System, 1024, 1)));
+    CHECK(NT_SUCCESS(MiProcessManagerInitialize(&World.System, &Manager)));
+    CHECK(NT_SUCCESS(MiProcessCreate(&World.System, &Manager, &Process)));
+    World.System.ChargeOwnerCommit = OwnerCharge;
+    World.System.ReturnOwnerCommit = OwnerReturn;
+    Process.Space.CommitOwner = &Budget;
+
+    SystemBefore = MI_ATOMIC_READ64(&World.System.CommittedPages);
+    Size = 48 * 4096ULL;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&Process.Space, &First, &Size, MI_MEM_RESERVE | MI_MEM_COMMIT,
+                                             MI_PROT_READWRITE)));
+    CHECK(Budget.Used == 48);
+    Size = 32 * 4096ULL;
+    CHECK(MiAllocateVirtualMemory(&Process.Space, &Second, &Size, MI_MEM_RESERVE | MI_MEM_COMMIT,
+                                  MI_PROT_READWRITE) == STATUS_COMMITMENT_LIMIT);
+    CHECK(Budget.Refusals == 1 && Budget.Used == 48);
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == SystemBefore + 48);
+    Size = 0;
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&Process.Space, &First, &Size, MI_MEM_RELEASE)));
+    CHECK(Budget.Used == 0);
+    Second = 0;
+    Size = 32 * 4096ULL;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&Process.Space, &Second, &Size, MI_MEM_RESERVE | MI_MEM_COMMIT,
+                                             MI_PROT_READWRITE)));
+    CHECK(Budget.Used == 32);
+
+    MiProcessDelete(&Manager, &Process);
+    CHECK(Budget.Used == 0);
+    World.System.ChargeOwnerCommit = NULL;
+    World.System.ReturnOwnerCommit = NULL;
+    MiProcessManagerUninitialize(&World.System, &Manager);
+    MiSystemPtesUninitialize(&World.System);
+    WorldExpectClean(&World, 512);
+    WorldDestroy(&World);
+}
+
 void
 TestProcess(void)
 {
     ProcAdoptedSharedPage();
     ProcLifecycle();
     ProcBalanceAndCopy();
+    ProcCommitOwner();
 }

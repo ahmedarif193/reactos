@@ -126,6 +126,8 @@ extern SIZE_T MmTotalCommitLimitMaximum;
 extern SIZE_T MmTotalCommittedPages;
 extern SIZE_T MmPeakCommitment;
 VOID MiSyncProcessCounters(_Inout_ PEPROCESS Process);
+BOOLEAN MiChargeProcessCommit(_In_ PVOID Owner, _In_ LONG64 Pages);
+VOID MiReturnProcessCommit(_In_ PVOID Owner, _In_ LONG64 Pages);
 BOOLEAN MiDynamicCodeBlocked(_In_ PEPROCESS Process);
 NTSTATUS MiValidateImageSigningPolicy(_In_ PFILE_OBJECT FileObject);
 BOOLEAN MiFrameIsRam(_In_ ULONG64 Frame);

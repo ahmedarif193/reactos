@@ -82,6 +82,44 @@ MmGrowKernelStack(
     return MmGrowKernelStackEx(StackPointer, KERNEL_LARGE_STACK_COMMIT);
 }
 
+SIZE_T
+NTAPI
+MmQueryProcessCommitCharge(
+    _In_ PEPROCESS Process)
+{
+    PMI_PROCESS Native = MI_PROCESS_OF(Process);
+
+    if (Native == NULL)
+        return Process->CommitCharge;
+
+    return (SIZE_T)MI_ATOMIC_READ64(&Native->Space.CommittedPages);
+}
+
+BOOLEAN
+MiChargeProcessCommit(
+    _In_ PVOID Owner,
+    _In_ LONG64 Pages)
+{
+    PEPROCESS Process = Owner;
+
+    if (Process->Job == NULL)
+        return TRUE;
+
+    Process->CommitCharge = MmQueryProcessCommitCharge(Process);
+    return NT_SUCCESS(PsChargeJobCommitment(Process, (SIZE_T)Pages));
+}
+
+VOID
+MiReturnProcessCommit(
+    _In_ PVOID Owner,
+    _In_ LONG64 Pages)
+{
+    PEPROCESS Process = Owner;
+
+    if (Process->Job != NULL)
+        PsReturnJobCommitment(Process, (SIZE_T)Pages);
+}
+
 BOOLEAN
 NTAPI
 MmCreateProcessAddressSpace(
@@ -117,6 +155,7 @@ MmCreateProcessAddressSpace(
     Process->Vm.MinimumWorkingSetSize = (ULONG)Native->WorkingSetMinimum;
     Process->Vm.MaximumWorkingSetSize = (ULONG)Native->WorkingSetMaximum;
     Process->AddressSpaceInitialized = 1;
+    Native->Space.CommitOwner = Process;
 
     DirectoryTableBase[0] = (ULONG_PTR)Native->Space.RootFrame << PAGE_SHIFT;
     DirectoryTableBase[1] = (ULONG_PTR)MiSystem.SystemSpace.RootFrame << PAGE_SHIFT;
