@@ -1339,6 +1339,8 @@ MiDetachMappedView(
     MI_ATOMIC_ADD32(&Segment->MappedViews, -1);
     if (!Vad->CacheView)
         MI_ATOMIC_ADD32(&Segment->TruncationViews, -1);
+    if (Vad->WritableUser)
+        MI_ATOMIC_ADD32(&Segment->WritableUserViews, -1);
     return Segment;
 }
 
@@ -1463,6 +1465,7 @@ MiMapViewInternal(
     Vad->CopyOnWrite = (BOOLEAN)MI_PROT_IS_COPY(Protection);
     Vad->Inherit = Inherit;
     Vad->CacheView = CacheView;
+    Vad->WritableUser = (BOOLEAN)(!Space->IsSystem && !CacheView && MI_PROT_IS_WRITABLE(Protection));
     Vad->Segment = Segment;
     Vad->SegmentPageOffset = SectionOffset >> PAGE_SHIFT;
 
@@ -1474,6 +1477,8 @@ MiMapViewInternal(
 
     if (!CacheView)
         MI_ATOMIC_ADD32(&Segment->TruncationViews, 1);
+    if (Vad->WritableUser)
+        MI_ATOMIC_ADD32(&Segment->WritableUserViews, 1);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
 
     *BaseAddress = Start;

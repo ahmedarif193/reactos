@@ -397,8 +397,15 @@ NTAPI
 MmDoesFileHaveUserWritableReferences(
     _In_ PSECTION_OBJECT_POINTERS SectionPointer)
 {
-    UNREFERENCED_PARAMETER(SectionPointer);
-    return 0;
+    PMI_CONTROL_AREA Control = MiReferenceDataControlArea(SectionPointer);
+    ULONG Count;
+
+    if (Control == NULL)
+        return 0;
+
+    Count = (ULONG)MI_ATOMIC_READ32(&Control->Segment->WritableUserViews);
+    MiDereferenceControlArea(Control);
+    return Count;
 }
 
 MM_SYSTEMSIZE

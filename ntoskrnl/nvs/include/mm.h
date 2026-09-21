@@ -165,6 +165,7 @@ typedef struct _MI_VAD
     BOOLEAN CopyOnWrite;
     BOOLEAN Inherit;
     BOOLEAN CacheView;
+    BOOLEAN WritableUser;
     volatile LONG PteTouched;
     struct _MI_SEGMENT *Segment;
     ULONG64 SegmentPageOffset;
@@ -344,6 +345,7 @@ typedef struct _MI_SEGMENT
     volatile LONG ReferenceCount;
     volatile LONG MappedViews;
     volatile LONG TruncationViews;
+    volatile LONG WritableUserViews;
     ULONG ActiveWriters;
     UCHAR Kind;
     ULONG Protection;
