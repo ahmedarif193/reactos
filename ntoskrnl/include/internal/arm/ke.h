@@ -179,3 +179,43 @@ HalSweepIcache(
 
 #define KiGetPreviousMode(tf) \
     ((tf->Cpsr & CPSRM_MASK) == CPSRM_USER) ? UserMode: KernelMode
+
+FORCEINLINE
+BOOLEAN
+KiIsDpcInterruptRequested(
+    _In_ PKPRCB Prcb)
+{
+    return Prcb->DpcInterruptRequested != FALSE;
+}
+
+FORCEINLINE
+VOID
+KiSetDpcInterruptRequested(
+    _Inout_ PKPRCB Prcb)
+{
+    Prcb->DpcInterruptRequested = TRUE;
+}
+
+FORCEINLINE
+VOID
+KiClearDpcInterruptRequested(
+    _Inout_ PKPRCB Prcb)
+{
+    Prcb->DpcInterruptRequested = FALSE;
+}
+
+FORCEINLINE
+VOID
+KiSetDpcPresent(
+    _Inout_ PKPRCB Prcb)
+{
+    UNREFERENCED_PARAMETER(Prcb);
+}
+
+FORCEINLINE
+VOID
+KiClearDpcRequestState(
+    _Inout_ PKPRCB Prcb)
+{
+    Prcb->DpcInterruptRequested = FALSE;
+}

@@ -282,12 +282,13 @@ KiIdleLoop(VOID)
         Prcb->Sleeping = TRUE;
         __asm__ __volatile__("dmb ish" ::: "memory");
 
-        if (Prcb->DpcData[0].DpcQueueDepth || Prcb->TimerRequest || Prcb->DeferredReadyListHead.Next || Prcb->DpcInterruptRequested)
+        if (Prcb->DpcData[0].DpcQueueDepth || Prcb->TimerRequest || Prcb->DeferredReadyListHead.Next ||
+            KiIsDpcInterruptRequested(Prcb))
         {
             Prcb->Sleeping = FALSE;
 
             HalClearSoftwareInterrupt(DISPATCH_LEVEL);
-            Prcb->DpcInterruptRequested = FALSE;
+            KiClearDpcInterruptRequested(Prcb);
 
             if (Prcb->DeferredReadyListHead.Next != NULL)
             {
@@ -328,7 +329,7 @@ KiIdleLoop(VOID)
             Prcb->DpcData[0].DpcQueueDepth ||
             Prcb->TimerRequest ||
             Prcb->DeferredReadyListHead.Next ||
-            Prcb->DpcInterruptRequested)
+            KiIsDpcInterruptRequested(Prcb))
         {
             _enable();
             continue;

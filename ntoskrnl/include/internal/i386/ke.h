@@ -1022,6 +1022,46 @@ KiGetUserModeStackAddress(void)
     return &(KeGetCurrentThread()->TrapFrame->HardwareEsp);
 }
 
+FORCEINLINE
+BOOLEAN
+KiIsDpcInterruptRequested(
+    _In_ PKPRCB Prcb)
+{
+    return Prcb->DpcInterruptRequested != FALSE;
+}
+
+FORCEINLINE
+VOID
+KiSetDpcInterruptRequested(
+    _Inout_ PKPRCB Prcb)
+{
+    Prcb->DpcInterruptRequested = TRUE;
+}
+
+FORCEINLINE
+VOID
+KiClearDpcInterruptRequested(
+    _Inout_ PKPRCB Prcb)
+{
+    Prcb->DpcInterruptRequested = FALSE;
+}
+
+FORCEINLINE
+VOID
+KiSetDpcPresent(
+    _Inout_ PKPRCB Prcb)
+{
+    UNREFERENCED_PARAMETER(Prcb);
+}
+
+FORCEINLINE
+VOID
+KiClearDpcRequestState(
+    _Inout_ PKPRCB Prcb)
+{
+    Prcb->DpcInterruptRequested = FALSE;
+}
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

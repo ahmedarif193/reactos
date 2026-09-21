@@ -939,7 +939,7 @@ KiArm64InterruptDispatchExit(
             Prcb = KeGetCurrentPrcb();
             HalClearSoftwareInterrupt(DISPATCH_LEVEL);
             if (Prcb != NULL)
-                Prcb->DpcInterruptRequested = FALSE;
+                KiClearDpcInterruptRequested(Prcb);
 
             KfRaiseIrql(DISPATCH_LEVEL);
             _enable();

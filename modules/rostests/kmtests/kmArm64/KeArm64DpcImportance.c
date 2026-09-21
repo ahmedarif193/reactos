@@ -58,7 +58,8 @@ HoldTarget(PVOID Parameter)
     KeAcquireSpinLockAtDpcLevel(&Data->DpcLock);
     Context->Clean = !Data->DpcQueueDepth &&
                      !Context->Prcb->DpcRoutineActive &&
-                     !Context->Prcb->DpcInterruptRequested;
+                     !Context->Prcb->DpcNormalProcessingRequested &&
+                     !Context->Prcb->DpcNormalDpcPresent;
     Context->InitialCount = Data->DpcCount;
     Context->MaximumDepth = Context->Prcb->MaximumDpcQueueDepth;
     KeReleaseSpinLockFromDpcLevel(&Data->DpcLock);
@@ -87,7 +88,8 @@ CheckImportance(ULONG Cpu, KDPC_IMPORTANCE Importance, BOOLEAN CheckOrder)
     KIRQL OldIrql;
     LONGLONG Deadline;
     ULONG Attempt, Index, Queued = 0, Count = CheckOrder ? 4 : 1;
-    BOOLEAN Accepted = FALSE, Requested = FALSE;
+    ULONG DpcSummary = 0, IpiSummary = 0;
+    BOOLEAN Accepted = FALSE, Requested = FALSE, Present = FALSE, IpiRequested = FALSE, Expected;
     static const KDPC_IMPORTANCE OrderImportance[] = {
         LowImportance, MediumHighImportance, MediumImportance, HighImportance
     };
@@ -122,7 +124,11 @@ CheckImportance(ULONG Cpu, KDPC_IMPORTANCE Importance, BOOLEAN CheckOrder)
             }
             Data = &Context.Prcb->DpcData[0];
             KeAcquireSpinLockAtDpcLevel(&Data->DpcLock);
-            Requested = Context.Prcb->DpcInterruptRequested;
+            Requested = (BOOLEAN)Context.Prcb->DpcNormalProcessingRequested;
+            Present = (BOOLEAN)Context.Prcb->DpcNormalDpcPresent;
+            DpcSummary = (ULONG)Context.Prcb->DpcRequestSummary;
+            IpiSummary = (ULONG)Context.Prcb->RequestSummary;
+            IpiRequested = (IpiSummary & IPI_DPC) != 0;
             Accepted = Data->DpcCount == Context.InitialCount + Count &&
                        Data->DpcQueueDepth == (LONG)Count;
             KeReleaseSpinLockFromDpcLevel(&Data->DpcLock);
@@ -149,15 +155,20 @@ CheckImportance(ULONG Cpu, KDPC_IMPORTANCE Importance, BOOLEAN CheckOrder)
     {
         for (Index = 0; Index < Count; Index++)
             ok_eq_ulong(Context.Order[Index], ExpectedOrder[Index]);
+        ok_eq_bool(Requested, TRUE);
+        ok_eq_bool(Present, TRUE);
+        ok_eq_bool(IpiRequested, TRUE);
     }
     else
     {
-        ok(Requested == (Importance == HighImportance || Importance == MediumHighImportance),
-           "CPU %lu importance %u: dispatch requested = %u, queue depth = %lu, threshold = %lu\n",
-           Cpu, Importance, Requested, Count, Context.MaximumDepth);
+        Expected = (Importance == HighImportance || Importance == MediumHighImportance);
+        ok(Requested == Expected && Present == !Expected && IpiRequested == Expected,
+           "CPU %lu importance %u: requested = %u, present = %u, ipi = %u, queue depth = %lu, threshold = %lu\n",
+           Cpu, Importance, Requested, Present, IpiRequested, Count, Context.MaximumDepth);
     }
-    trace("DPC_IMPORTANCE cpu=%lu importance=%u order=%u requested=%u calls=%lu threshold=%lu attempts=%lu\n",
-          Cpu, Importance, CheckOrder, Requested, Context.Calls, Context.MaximumDepth, Attempt);
+    ok_eq_ulong(Context.MaximumDepth, 4UL);
+    trace("DPC_IMPORTANCE cpu=%lu importance=%u order=%u requested=%u dpcsummary=0x%lx ipisummary=0x%lx calls=%lu threshold=%lu attempts=%lu\n",
+          Cpu, Importance, CheckOrder, Requested, DpcSummary, IpiSummary, Context.Calls, Context.MaximumDepth, Attempt);
 }
 
 START_TEST(KeArm64DpcImportance)

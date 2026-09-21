@@ -837,3 +837,46 @@ KiRestoreVfpState(_In_ PKARM64_VFP_STATE State);
 #if DBG
 VOID KiReportCpuFeatures(IN PKPRCB Prcb);
 #endif
+
+#define KI_DPC_NORMAL_PROCESSING_REQUESTED 0x00000002L
+#define KI_DPC_NORMAL_DPC_PRESENT          0x00000010L
+
+FORCEINLINE
+BOOLEAN
+KiIsDpcInterruptRequested(
+    _In_ PKPRCB Prcb)
+{
+    return (Prcb->DpcRequestSummary & KI_DPC_NORMAL_PROCESSING_REQUESTED) != 0;
+}
+
+FORCEINLINE
+VOID
+KiSetDpcInterruptRequested(
+    _Inout_ PKPRCB Prcb)
+{
+    InterlockedOr(&Prcb->DpcRequestSummary, KI_DPC_NORMAL_PROCESSING_REQUESTED);
+}
+
+FORCEINLINE
+VOID
+KiClearDpcInterruptRequested(
+    _Inout_ PKPRCB Prcb)
+{
+    InterlockedAnd(&Prcb->DpcRequestSummary, ~KI_DPC_NORMAL_PROCESSING_REQUESTED);
+}
+
+FORCEINLINE
+VOID
+KiSetDpcPresent(
+    _Inout_ PKPRCB Prcb)
+{
+    InterlockedOr(&Prcb->DpcRequestSummary, KI_DPC_NORMAL_DPC_PRESENT);
+}
+
+FORCEINLINE
+VOID
+KiClearDpcRequestState(
+    _Inout_ PKPRCB Prcb)
+{
+    InterlockedAnd(&Prcb->DpcRequestSummary, ~(KI_DPC_NORMAL_PROCESSING_REQUESTED | KI_DPC_NORMAL_DPC_PRESENT));
+}

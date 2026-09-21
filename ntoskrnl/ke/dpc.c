@@ -777,7 +777,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
         /* Clear DPC Flags */
         Prcb->DpcRoutineActive = FALSE;
-        Prcb->DpcInterruptRequested = FALSE;
+        KiClearDpcRequestState(Prcb);
 
 #ifdef CONFIG_SMP
         /* Check if we have deferred threads */
@@ -805,9 +805,9 @@ KiRetireDpcList(IN PKPRCB Prcb)
     {
         KeAcquireSpinLockAtDpcLevel(&DpcData->DpcLock);
         if ((DpcData->DpcQueueDepth != 0) &&
-            (Prcb->DpcInterruptRequested == FALSE))
+            !KiIsDpcInterruptRequested(Prcb))
         {
-            Prcb->DpcInterruptRequested = TRUE;
+            KiSetDpcInterruptRequested(Prcb);
             RequestInterrupt = TRUE;
         }
         KeReleaseSpinLockFromDpcLevel(&DpcData->DpcLock);
@@ -969,7 +969,7 @@ KeInsertQueueDpc(IN PKDPC Dpc,
             KeMemoryBarrier();
 
             /* Make sure a DPC isn't executing already */
-            if (!(Prcb->DpcRoutineActive) && !(Prcb->DpcInterruptRequested))
+            if (!(Prcb->DpcRoutineActive) && !KiIsDpcInterruptRequested(Prcb))
             {
                 /* Check if this is the same CPU */
                 if (Prcb != CurrentPrcb)
@@ -983,10 +983,14 @@ KeInsertQueueDpc(IN PKDPC Dpc,
                          (Prcb->Sleeping)))
                     {
                         /* Set interrupt requested */
-                        Prcb->DpcInterruptRequested = TRUE;
+                        KiSetDpcInterruptRequested(Prcb);
 
                         /* Set DPC inserted */
                         DpcInserted = TRUE;
+                    }
+                    else
+                    {
+                        KiSetDpcPresent(Prcb);
                     }
                 }
                 else
@@ -998,10 +1002,14 @@ KeInsertQueueDpc(IN PKDPC Dpc,
                         (Prcb->DpcRequestRate < Prcb->MinimumDpcRate))
                     {
                         /* Set interrupt requested */
-                        Prcb->DpcInterruptRequested = TRUE;
+                        KiSetDpcInterruptRequested(Prcb);
 
                         /* Set DPC inserted */
                         DpcInserted = TRUE;
+                    }
+                    else
+                    {
+                        KiSetDpcPresent(Prcb);
                     }
                 }
             }

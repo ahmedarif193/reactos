@@ -501,7 +501,7 @@ typedef struct _KPRCB
     volatile ULONG64 TargetSet;                          // 0x7E8 [ReactOS]
     volatile LONG DpcSetEventRequest;                    // 0x7F0 [ReactOS]
     LONG Sleeping;                                       // 0x7F4 [ReactOS]
-    volatile UCHAR DpcInterruptRequested;                // 0x7F8 [ReactOS]
+    UCHAR PrcbPad4b;                                     // 0x7F8
     volatile UCHAR DpcThreadRequested;                   // 0x7F9 [ReactOS]
     volatile UCHAR DpcThreadActive;                      // 0x7FA [ReactOS]
     UCHAR PrcbPad4a[5];                                  // 0x7FB
