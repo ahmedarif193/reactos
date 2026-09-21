@@ -12,6 +12,72 @@
 
 /* FUNCTIONS ****************************************************************/
 
+static
+BOOLEAN
+NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
+                _In_ PFileContextBlock FileCB,
+                _In_ PFILE_OBJECT FileObj,
+                _In_ PIRP Irp,
+                _In_ PVOID Buffer,
+                _In_ ULONG Length,
+                _In_ PLARGE_INTEGER ByteOffset,
+                _Out_ PNTSTATUS Status)
+{
+    PFSRTL_ADVANCED_FCB_HEADER Header = NtfsGetCommonFcbHeader(FileCB);
+    BOOLEAN Handled = FALSE;
+
+    if (ByteOffset->QuadPart < 0 || !CcCanIWrite(FileObj, Length, TRUE, FALSE))
+        return FALSE;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
+
+    if (ByteOffset->QuadPart + Length <= Header->ValidDataLength.QuadPart)
+    {
+        if (FileObj->PrivateCacheMap == NULL)
+            NtfsInitializeStreamCache(FileCB, FileObj);
+
+        Handled = TRUE;
+        _SEH2_TRY
+        {
+            *Status = CcCopyWrite(FileObj, ByteOffset, Length, TRUE, Buffer) ? STATUS_SUCCESS
+                                                                              : STATUS_CANT_WAIT;
+        }
+        _SEH2_EXCEPT(FsRtlIsNtstatusExpected(_SEH2_GetExceptionCode()) ?
+                     EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            *Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (NT_SUCCESS(*Status))
+        {
+            FileObj->Flags |= FO_FILE_MODIFIED;
+            if (FileObj->Flags & FO_SYNCHRONOUS_IO)
+                FileObj->CurrentByteOffset.QuadPart = ByteOffset->QuadPart + Length;
+            Irp->IoStatus.Information = Length;
+        }
+    }
+
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+
+    if (Handled && NT_SUCCESS(*Status) && !FileCB->WriteTimesStamped)
+    {
+        FileCB->WriteTimesStamped = TRUE;
+        ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+        ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+        NtfsFileRecordUpdateAutomaticTimestamps(FileCB->FileRec,
+                                                NTFS_BASIC_INFO_LAST_WRITE_TIME |
+                                                NTFS_BASIC_INFO_CHANGE_TIME);
+        ExReleaseResourceLite(&VolCB->MetadataResource);
+        ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+        InterlockedIncrement(&VolCB->DirGeneration);
+    }
+
+    KeLeaveCriticalRegion();
+    return Handled;
+}
+
 _Function_class_(IRP_MJ_WRITE)
 _Function_class_(DRIVER_DISPATCH)
 NTSTATUS
@@ -116,6 +182,16 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
+    if (!BooleanFlagOn(Irp->Flags, IRP_PAGING_IO | IRP_NOCACHE) &&
+        !BooleanFlagOn(FileObj->Flags, FO_NO_INTERMEDIATE_BUFFERING | FO_WRITE_THROUGH) &&
+        Length != 0 &&
+        RequestedType == TypeData &&
+        FileObj->SectionObjectPointer != NULL &&
+        NtfsCachedWrite(VolCB, FileCB, FileObj, Irp, Buffer, Length, &ByteOffset, &Status))
+    {
+        goto Complete;
+    }
+
     /* Paging I/O is serviced while a caller may already hold MainResource,
      * so it synchronizes on PagingIoResource instead. */
     PagingIo = BooleanFlagOn(Irp->Flags, IRP_PAGING_IO);
@@ -134,6 +210,14 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             Length = 0;
         else if (ByteOffset.QuadPart + Length > FileSize)
             Length = (ULONG)(FileSize - ByteOffset.QuadPart);
+    }
+    else if (Length != 0 &&
+             FileObj->SectionObjectPointer != NULL &&
+             FileObj->SectionObjectPointer->SharedCacheMap != NULL)
+    {
+        IO_STATUS_BLOCK FlushStatus;
+
+        CcFlushCache(FileObj->SectionObjectPointer, NULL, 0, &FlushStatus);
     }
 
     ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);

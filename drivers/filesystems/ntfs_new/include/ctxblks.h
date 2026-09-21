@@ -239,6 +239,7 @@ typedef struct _FCB
     /* Set through FileDispositionInformation or FILE_DELETE_ON_CLOSE;
      * the name is removed when the handle goes away. */
     BOOLEAN DeletePending;
+    BOOLEAN WriteTimesStamped;
 
     /* Decided once at open: whether the first data read still owes a
      * last-access refresh. Checking the record on every read cost more
