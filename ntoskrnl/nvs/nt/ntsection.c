@@ -1389,37 +1389,6 @@ MmGetImageInformation(
     *ImageInformation = Section->Control->ImageInformation;
 }
 
-BOOLEAN
-NTAPI
-MmCanFileBeTruncated(
-    _In_ PSECTION_OBJECT_POINTERS SectionPointer,
-    _In_opt_ PLARGE_INTEGER NewFileSize)
-{
-    PMI_CONTROL_AREA Control;
-    BOOLEAN Allowed = TRUE;
-
-    if (SectionPointer->ImageSectionObject != NULL && !MmFlushImageSection(SectionPointer, MmFlushForWrite))
-        return FALSE;
-
-    Control = MiReferenceDataControlArea(SectionPointer);
-    if (Control == NULL)
-        return TRUE;
-
-    if (MI_ATOMIC_READ32(&Control->Segment->MappedViews) != 0)
-    {
-        ULONG64 NewSize = (NewFileSize != NULL) ? (ULONG64)NewFileSize->QuadPart : 0;
-
-        if (NewSize < (ULONG64)MI_ATOMIC_READ64(&Control->Segment->SizeInBytes))
-            Allowed = FALSE;
-    }
-
-    if (Allowed && NewFileSize != NULL)
-        MiSegmentPurge(Control->Segment, (ULONG64)NewFileSize->QuadPart, 0);
-
-    MiDereferenceControlArea(Control);
-    return Allowed;
-}
-
 static
 BOOLEAN
 MiCloseUnusedControlArea(

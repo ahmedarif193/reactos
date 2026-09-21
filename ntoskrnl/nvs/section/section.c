@@ -1337,6 +1337,8 @@ MiDetachMappedView(
     MiVadRemove(&Space->VadRoot, &Vad->Node);
 
     MI_ATOMIC_ADD32(&Segment->MappedViews, -1);
+    if (!Vad->CacheView)
+        MI_ATOMIC_ADD32(&Segment->TruncationViews, -1);
     return Segment;
 }
 
@@ -1364,8 +1366,9 @@ MiMapView(
     return MiMapViewEx(Space, Segment, BaseAddress, SectionOffset, ViewSize, Protection, AllocationType, ~0ULL, 0, TRUE);
 }
 
+static
 NTSTATUS
-MiMapViewEx(
+MiMapViewInternal(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _Inout_ PMI_SEGMENT Segment,
     _Inout_ PULONG64 BaseAddress,
@@ -1375,7 +1378,8 @@ MiMapViewEx(
     _In_ ULONG AllocationType,
     _In_ ULONG64 HighestAddress,
     _In_ ULONG MaximumProtection,
-    _In_ BOOLEAN Inherit)
+    _In_ BOOLEAN Inherit,
+    _In_ BOOLEAN CacheView)
 {
     ULONG64 Size = *ViewSize;
     ULONG64 Start = *BaseAddress;
@@ -1458,6 +1462,7 @@ MiMapViewEx(
     Vad->Type = (Segment->Kind == MiSegmentImage) ? MiVadImage : MiVadMapped;
     Vad->CopyOnWrite = (BOOLEAN)MI_PROT_IS_COPY(Protection);
     Vad->Inherit = Inherit;
+    Vad->CacheView = CacheView;
     Vad->Segment = Segment;
     Vad->SegmentPageOffset = SectionOffset >> PAGE_SHIFT;
 
@@ -1467,6 +1472,8 @@ MiMapViewEx(
         goto Fail;
     }
 
+    if (!CacheView)
+        MI_ATOMIC_ADD32(&Segment->TruncationViews, 1);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
 
     *BaseAddress = Start;
@@ -1478,6 +1485,34 @@ Fail:
     MI_ATOMIC_ADD32(&Segment->MappedViews, -1);
     MiSegmentDereference(Segment);
     return STATUS_NO_MEMORY;
+}
+
+NTSTATUS
+MiMapViewEx(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _Inout_ PMI_SEGMENT Segment,
+    _Inout_ PULONG64 BaseAddress,
+    _In_ ULONG64 SectionOffset,
+    _Inout_ PULONG64 ViewSize,
+    _In_ ULONG Protection,
+    _In_ ULONG AllocationType,
+    _In_ ULONG64 HighestAddress,
+    _In_ ULONG MaximumProtection,
+    _In_ BOOLEAN Inherit)
+{
+    return MiMapViewInternal(Space, Segment, BaseAddress, SectionOffset, ViewSize,
+                             Protection, AllocationType, HighestAddress, MaximumProtection, Inherit, FALSE);
+}
+
+NTSTATUS
+MiMapCacheView(
+    _Inout_ PMI_SEGMENT Segment,
+    _Inout_ PULONG64 BaseAddress,
+    _In_ ULONG64 SectionOffset,
+    _Inout_ PULONG64 ViewSize)
+{
+    return MiMapViewInternal(&Segment->System->SystemSpace, Segment, BaseAddress, SectionOffset, ViewSize,
+                             MI_PROT_READWRITE, MI_MEM_RESERVE, ~0ULL, 0, FALSE, TRUE);
 }
 
 NTSTATUS

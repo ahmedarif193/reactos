@@ -33,8 +33,7 @@ CcMmMapView(
         ULONG64 Address = 0;
         ULONG64 Size = Length;
 
-        Status = MiMapViewEx(&Segment->System->SystemSpace, Segment, &Address, Offset, &Size, MI_PROT_READWRITE,
-                             MI_MEM_RESERVE, ~0ULL, 0, FALSE);
+        Status = MiMapCacheView(Segment, &Address, Offset, &Size);
         if (NT_SUCCESS(Status))
             *Base = (PVOID)(ULONG_PTR)Address;
     } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
