@@ -23,6 +23,7 @@ MiPtWalk(
     _In_ ULONG64 VirtualAddress,
     _In_ BOOLEAN Create,
     _In_ ULONG TargetLevel,
+    _In_ ULONG AllocationFlags,
     _Out_opt_ PULONG TableFrame)
 {
     PMI_SYSTEM System = Space->System;
@@ -50,7 +51,7 @@ MiPtWalk(
             if (!Create || Entry != 0)
                 return NULL;
 
-            Table = MiPfnAllocatePage(&System->Pfn, MI_ALLOCATE_ZEROED);
+            Table = MiPfnAllocatePage(&System->Pfn, MI_ALLOCATE_ZEROED | AllocationFlags);
             if (Table == MI_FRAME_INVALID)
             {
                 Entry = MiArchPteRead(Slot);
@@ -139,7 +140,7 @@ MiPtLookup(
     _In_ ULONG64 VirtualAddress,
     _Out_opt_ PULONG TableFrame)
 {
-    return MiPtWalk(Space, VirtualAddress, FALSE, 0, TableFrame);
+    return MiPtWalk(Space, VirtualAddress, FALSE, 0, 0, TableFrame);
 }
 
 PMI_PTE
@@ -148,19 +149,19 @@ MiPtEnsure(
     _In_ ULONG64 VirtualAddress,
     _Out_ PULONG TableFrame)
 {
-    return MiPtWalk(Space, VirtualAddress, TRUE, 0, TableFrame);
+    return MiPtWalk(Space, VirtualAddress, TRUE, 0, 0, TableFrame);
 }
 
 PMI_PTE
 MiPtLookupLevel(PMI_ADDRESS_SPACE Space, ULONG64 VirtualAddress, ULONG Level, PULONG TableFrame)
 {
-    return MiPtWalk(Space, VirtualAddress, FALSE, Level, TableFrame);
+    return MiPtWalk(Space, VirtualAddress, FALSE, Level, 0, TableFrame);
 }
 
 PMI_PTE
 MiPtEnsureLevel(PMI_ADDRESS_SPACE Space, ULONG64 VirtualAddress, ULONG Level, PULONG TableFrame)
 {
-    return MiPtWalk(Space, VirtualAddress, TRUE, Level, TableFrame);
+    return MiPtWalk(Space, VirtualAddress, TRUE, Level, 0, TableFrame);
 }
 
 ULONG64
@@ -349,6 +350,32 @@ MiPtPinRange(
         ULONG TableFrame;
 
         if (MiPtEnsure(Space, Va, &TableFrame) == NULL)
+            return STATUS_NO_MEMORY;
+
+        MI_ATOMIC_OR8(&Space->System->Pfn.Pfn[TableFrame].Flags, MI_PFN_FLAG_PINNED);
+        Va = MiPtNextTableBoundary(Space, Va);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/* System PTE reservations may originate at DISPATCH_LEVEL. Their owner
+ * serializes population with a spin lock; do not enter standby reclamation
+ * (which can acquire address-space locks) while allocating these tables. */
+NTSTATUS
+MiPtPinSystemRange(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 VirtualAddress,
+    _In_ ULONG64 Length)
+{
+    ULONG64 End = VirtualAddress + Length;
+    ULONG64 Va = VirtualAddress;
+
+    while (Va < End)
+    {
+        ULONG TableFrame;
+
+        if (MiPtWalk(Space, Va, TRUE, 0, MI_ALLOCATE_NO_RECLAIM, &TableFrame) == NULL)
             return STATUS_NO_MEMORY;
 
         MI_ATOMIC_OR8(&Space->System->Pfn.Pfn[TableFrame].Flags, MI_PFN_FLAG_PINNED);

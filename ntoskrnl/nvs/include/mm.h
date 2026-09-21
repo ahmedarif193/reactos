@@ -125,6 +125,7 @@ BOOLEAN MiPtTranslate(_In_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress,
                       _Out_opt_ PMI_PTE LeafPte);
 ULONG MiPtCheck(_In_ PMI_ADDRESS_SPACE Space);
 NTSTATUS MiPtPinRange(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ ULONG64 Length);
+NTSTATUS MiPtPinSystemRange(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ ULONG64 Length);
 VOID MiPtUnpinRange(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ ULONG64 Length);
 
 #define MI_ALLOCATION_GRANULARITY   0x10000ULL

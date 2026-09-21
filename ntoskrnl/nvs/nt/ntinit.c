@@ -239,7 +239,10 @@ MiInitializePhase0(
         KeBugCheckEx(MEMORY_MANAGEMENT, 0x544F504C, (ULONG_PTR)Status, 0, 0);
 
     PhysicalBytes = (ULONG64)MmNumberOfPhysicalPages << PAGE_SHIFT;
-    SystemPteBytes = MiClampBytes(PhysicalBytes / 2, 128 * _1MB, 2 * _1GB);
+    if (MiSystem.Arch->VirtualAddressBits > 32)
+        SystemPteBytes = MI_SYSPTE_64BIT_PAGES << PAGE_SHIFT;
+    else
+        SystemPteBytes = MiClampBytes(PhysicalBytes / 2, 128 * _1MB, 2 * _1GB);
     NonPagedBytes = MiClampBytes(PhysicalBytes / 2, 64 * _1MB, 4ULL * _1GB);
     ExecutableBytes = NonPagedBytes / 2;
     PagedBytes = MiClampBytes(PhysicalBytes, 128 * _1MB, 4ULL * _1GB);

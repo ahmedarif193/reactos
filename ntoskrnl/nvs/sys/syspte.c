@@ -22,105 +22,58 @@ MiSysPteClass(
     return Class;
 }
 
-static
-BOOLEAN
-MiSysPteRunFree(
-    _In_ PMI_SYSTEM_PTES Ptes,
-    _In_ ULONG64 Start,
-    _In_ ULONG64 Count,
-    _Out_ PULONG64 Blocker)
-{
-    ULONG64 i;
-
-    for (i = Count; i != 0; i--)
-    {
-        ULONG64 Bit = Start + i - 1;
-
-        if ((Ptes->Bitmap[Bit >> 6] >> (Bit & 63)) & 1)
-        {
-            *Blocker = Bit;
-            return FALSE;
-        }
-    }
-
-    return TRUE;
-}
-
+/* Track allocated extents instead of allocating one bit for every possible
+ * kernel VA page. Small runs retain the existing per-CPU caches. */
 static
 ULONG64
-MiSysPteBitmapReserve(
+MiSysPteRangeReserve(
     _Inout_ PMI_SYSTEM_PTES Ptes,
     _In_ ULONG64 Count,
     _In_ ULONG64 Alignment)
 {
-    ULONG64 Result = ~0ULL;
-    ULONG Pass;
+    PMI_VAD_NODE Node = MI_ALLOCATE(sizeof(*Node));
+    ULONG64 Index = ~0ULL;
     KIRQL OldIrql;
 
+    if (Node == NULL)
+        return Index;
+    RtlZeroMemory(Node, sizeof(*Node));
+
     MI_SPIN_ACQUIRE(&Ptes->Lock, &OldIrql);
-
-    for (Pass = 0; Pass < 2 && Result == ~0ULL; Pass++)
+    if (MiVadFindEmptyRange(&Ptes->Allocations, Count, Alignment, &Index))
     {
-        ULONG64 Start = (Pass == 0) ? Ptes->Hint : 0;
-        ULONG64 Limit = (Pass == 0) ? Ptes->PageCount : Ptes->Hint + Count;
-
-        if (Limit > Ptes->PageCount)
-            Limit = Ptes->PageCount;
-
-        Start = (Start + Alignment - 1) & ~(Alignment - 1);
-
-        while (Start + Count <= Limit)
-        {
-            ULONG64 Blocker;
-
-            if ((Start & 63) == 0 && Count <= 64 && Ptes->Bitmap[Start >> 6] == ~0ULL)
-            {
-                Start += 64;
-                continue;
-            }
-
-            if (MiSysPteRunFree(Ptes, Start, Count, &Blocker))
-            {
-                ULONG64 i;
-
-                for (i = Start; i < Start + Count; i++)
-                    Ptes->Bitmap[i >> 6] |= 1ULL << (i & 63);
-
-                Ptes->Hint = Start + Count;
-                Result = Start;
-                break;
-            }
-
-            Start = (Blocker + 1 + Alignment - 1) & ~(Alignment - 1);
-        }
+        Node->StartingVpn = Index;
+        Node->EndingVpn = Index + Count - 1;
+        if (!MiVadInsert(&Ptes->Allocations, Node))
+            Index = ~0ULL;
     }
-
+    else
+    {
+        Index = ~0ULL;
+    }
     MI_SPIN_RELEASE(&Ptes->Lock, OldIrql);
-    return Result;
+
+    if (Index == ~0ULL)
+        MI_FREE(Node);
+    return Index;
 }
 
 static
 VOID
-MiSysPteBitmapRelease(
+MiSysPteRangeRelease(
     _Inout_ PMI_SYSTEM_PTES Ptes,
     _In_ ULONG64 Start,
     _In_ ULONG64 Count)
 {
+    PMI_VAD_NODE Node;
     KIRQL OldIrql;
-    ULONG64 i;
 
     MI_SPIN_ACQUIRE(&Ptes->Lock, &OldIrql);
-
-    for (i = Start; i < Start + Count; i++)
-    {
-        MI_ASSERT((Ptes->Bitmap[i >> 6] >> (i & 63)) & 1);
-        Ptes->Bitmap[i >> 6] &= ~(1ULL << (i & 63));
-    }
-
-    if (Start < Ptes->Hint)
-        Ptes->Hint = Start;
-
+    Node = MiVadFind(&Ptes->Allocations, Start);
+    MI_ASSERT(Node != NULL && Node->StartingVpn == Start && Node->EndingVpn == Start + Count - 1);
+    MiVadRemove(&Ptes->Allocations, Node);
     MI_SPIN_RELEASE(&Ptes->Lock, OldIrql);
+    MI_FREE(Node);
 }
 
 NTSTATUS
@@ -131,8 +84,10 @@ MiSystemPtesInitialize(
 {
     PMI_SYSTEM_PTES Ptes;
     NTSTATUS Status;
-    ULONG64 Words = (PageCount + 63) >> 6;
     ULONG i;
+
+    if (PageCount == 0 || PageCount > (~0ULL >> PAGE_SHIFT))
+        return STATUS_INVALID_PARAMETER;
 
     Ptes = MI_ALLOCATE(sizeof(*Ptes));
     if (Ptes == NULL)
@@ -145,27 +100,39 @@ MiSystemPtesInitialize(
     Ptes->CacheCount = (CpuCount == 0) ? 1 : ((CpuCount > MI_SYSPTE_CPU_CACHES) ? MI_SYSPTE_CPU_CACHES : CpuCount);
     Ptes->DefaultStackPages = 6;
     MI_SPIN_INIT(&Ptes->Lock);
+    MI_SPIN_INIT(&Ptes->PopulateLock);
+    MiVadRootInitialize(&Ptes->Allocations, 0, PageCount - 1);
 
     for (i = 0; i < MI_SYSPTE_CPU_CACHES; i++)
         MI_SPIN_INIT(&Ptes->Cache[i].Lock);
 
-    Ptes->Bitmap = MI_ALLOCATE(Words * sizeof(ULONG64));
-    if (Ptes->Bitmap == NULL)
-    {
-        MI_FREE(Ptes);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    RtlZeroMemory(Ptes->Bitmap, Words * sizeof(ULONG64));
-    if (PageCount & 63)
-        Ptes->Bitmap[Words - 1] = ~0ULL << (PageCount & 63);
-
-    Status = MiSystemRegionCreate(System, PageCount, TRUE, &Ptes->Vad, &Ptes->Base);
+    Status = MiSystemRegionCreate(System, PageCount, FALSE, &Ptes->Vad, &Ptes->Base);
     if (!NT_SUCCESS(Status))
     {
-        MI_FREE(Ptes->Bitmap);
         MI_FREE(Ptes);
         return Status;
+    }
+
+    /* Process roots copy the kernel's top-level entries on AMD64. Seed one
+     * leaf path per top-level span before processes can be created, so later
+     * table population remains visible through those shared entries. This
+     * needs only a few table pages, not tables for every page of the arena. */
+    {
+        ULONG64 Span = 1ULL << System->Arch->Level[System->Arch->PagingLevels - 1].Shift;
+        ULONG64 End = Ptes->Base + (PageCount << PAGE_SHIFT);
+        ULONG64 Va = Ptes->Base;
+
+        while (Va < End)
+        {
+            Status = MiPtPinSystemRange(&System->SystemSpace, Va, PAGE_SIZE);
+            if (!NT_SUCCESS(Status))
+            {
+                MiSystemRegionDelete(System, Ptes->Vad, TRUE);
+                MI_FREE(Ptes);
+                return Status;
+            }
+            Va = (Va & ~(Span - 1)) + Span;
+        }
     }
 
     System->SystemPtes = Ptes;
@@ -207,17 +174,17 @@ MiSystemPtesUninitialize(
             {
                 ULONG64 Va = Cache->Entry[Class][--Cache->Depth[Class]];
 
-                MiSysPteBitmapRelease(Ptes, (Va - Ptes->Base) >> PAGE_SHIFT, 1ULL << Class);
+                MiSysPteRangeRelease(Ptes, (Va - Ptes->Base) >> PAGE_SHIFT, 1ULL << Class);
                 MI_ATOMIC_ADD64(&Ptes->FreePages, (LONG64)(1ULL << Class));
             }
         }
     }
 
     MI_ASSERT(MI_ATOMIC_READ64(&Ptes->FreePages) == (LONG64)Ptes->PageCount);
+    MI_ASSERT(Ptes->Allocations.NodeCount == 0);
 
     System->SystemPtes = NULL;
     MiSystemRegionDelete(System, Ptes->Vad, TRUE);
-    MI_FREE(Ptes->Bitmap);
     MI_FREE(Ptes);
 }
 
@@ -275,10 +242,28 @@ MiReserveSystemPtes(
             return Va;
     }
 
-    Index = MiSysPteBitmapReserve(Ptes, Pages, (Pages <= MI_SYSPTE_CLASS_MAX_PAGES) ? Pages : 1);
+    Index = MiSysPteRangeReserve(Ptes, Pages, (Pages <= MI_SYSPTE_CLASS_MAX_PAGES) ? Pages : 1);
     if (Index == ~0ULL)
         return 0;
 
+    {
+        KIRQL OldIrql;
+        NTSTATUS Status;
+
+        /* Prepare only this reservation. Keep touched tables resident across
+         * releases so another CPU's mapping in the same table stays valid and
+         * cache hits never need a pageable lock or a table allocation. */
+        MI_SPIN_ACQUIRE(&Ptes->PopulateLock, &OldIrql);
+        Status = MiPtPinSystemRange(&System->SystemSpace,
+                                    Ptes->Base + (Index << PAGE_SHIFT),
+                                    Pages << PAGE_SHIFT);
+        MI_SPIN_RELEASE(&Ptes->PopulateLock, OldIrql);
+        if (!NT_SUCCESS(Status))
+        {
+            MiSysPteRangeRelease(Ptes, Index, Pages);
+            return 0;
+        }
+    }
     MI_ATOMIC_ADD64(&Ptes->FreePages, -(LONG64)Pages);
     return Ptes->Base + (Index << PAGE_SHIFT);
 }
@@ -317,6 +302,6 @@ MiReleaseSystemPtes(
             return;
     }
 
-    MiSysPteBitmapRelease(Ptes, (VirtualAddress - Ptes->Base) >> PAGE_SHIFT, Pages);
+    MiSysPteRangeRelease(Ptes, (VirtualAddress - Ptes->Base) >> PAGE_SHIFT, Pages);
     MI_ATOMIC_ADD64(&Ptes->FreePages, (LONG64)Pages);
 }

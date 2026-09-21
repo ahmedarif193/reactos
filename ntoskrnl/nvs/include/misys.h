@@ -18,6 +18,12 @@
 
 #define MI_KSTACK_CACHE_DEPTH     4
 
+/* Reserve virtual capacity independently of RAM. Populate tables on demand,
+ * apart from the initial paths needed to share kernel mappings across roots.
+ * There is no arena-sized bitmap or full-arena table allocation.
+ * This is an NVS layout choice, not a Windows implementation constant. */
+#define MI_SYSPTE_64BIT_PAGES     (1ULL << (40 - PAGE_SHIFT))
+
 typedef enum _MI_CACHE_TYPE
 {
     MiCacheNone = 0,
@@ -43,8 +49,8 @@ typedef struct _MI_SYSTEM_PTES
     ULONG64 Base;
     ULONG64 PageCount;
     MI_SPINLOCK Lock;
-    PULONG64 Bitmap;
-    ULONG64 Hint;
+    MI_VAD_ROOT Allocations;
+    MI_SPINLOCK PopulateLock;
     volatile LONG64 FreePages;
     ULONG CacheCount;
     ULONG DefaultStackPages;
