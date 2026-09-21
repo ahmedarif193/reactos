@@ -96,9 +96,8 @@ MiCreateLargeView(PMI_ADDRESS_SPACE Space, PULONG64 BaseAddress, PULONG64 Region
     if (Start == 0)
     {
         ULONG64 Vpn;
-        if (!MiVadFindEmptyRangeEx(&Space->VadRoot, Size >> PAGE_SHIFT, Pages,
-                                  Space->LowestVa >> PAGE_SHIFT, HighestAddress >> PAGE_SHIFT,
-                                  (BOOLEAN)((AllocationType & MI_MEM_TOP_DOWN) != 0), &Vpn))
+        if (!MiSpaceFindEmptyRange(Space, Size >> PAGE_SHIFT, Pages, HighestAddress >> PAGE_SHIFT,
+                                   (BOOLEAN)((AllocationType & MI_MEM_TOP_DOWN) != 0), &Vpn))
         {
             Status = STATUS_NO_MEMORY;
             goto Done;

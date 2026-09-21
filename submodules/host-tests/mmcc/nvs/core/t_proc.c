@@ -80,12 +80,53 @@ ProcLifecycle(void)
         CHECK(UserWrite64(&World, i, MI_SHARED_USER_DATA_VA + 0x320, 1) == STATUS_ACCESS_VIOLATION);
     }
 
+    Process[0].Space.BottomUpVa = 0x100030000ULL;
     CHECK(NT_SUCCESS(MiProcessCreatePeb(&Process[0], 0x1000, &Peb)));
     CHECK(MiProcessCreatePeb(&Process[0], 0x1000, &Other) == STATUS_INVALID_PARAMETER);
     CHECK(NT_SUCCESS(MiProcessCreateTeb(&Process[0], 0x2000, &Teb1)));
     CHECK(NT_SUCCESS(MiProcessCreateTeb(&Process[0], 0x2000, &Teb2)));
-    CHECK(Peb > Teb1 && Teb1 > Teb2 && Peb + 0x1000 - 1 <= Process[0].Space.HighestVa);
-    CHECK(Teb2 > MI_SHARED_USER_DATA_VA);
+    CHECK(Peb == Process[0].Space.BottomUpVa && Peb < Teb1 && Teb1 < Teb2);
+    CHECK(Teb2 + 0x2000 - 1 < Process[0].Space.HighestVa - 0x3FFFFFFFULL);
+
+    Base = 0;
+    Size = 0x10000;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemoryEx(&Process[1].Space, &Base, &Size, MI_MEM_RESERVE, MI_PROT_READWRITE,
+                                               ~0ULL)));
+    CHECK(Base == Process[1].Space.LowestVa);
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&Process[1].Space, &Base, &Size, MI_MEM_RELEASE)));
+    Process[1].Space.BottomUpVa = 0x2000010000ULL;
+    Base = 0;
+    Size = 0x10000;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemoryEx(&Process[1].Space, &Base, &Size, MI_MEM_RESERVE, MI_PROT_READWRITE,
+                                               ~0ULL)));
+    CHECK(Base == 0x2000010000ULL);
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&Process[1].Space, &Base, &Size, MI_MEM_RELEASE)));
+    Base = 0;
+    Size = 0x10000;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemoryEx(&Process[1].Space, &Base, &Size, MI_MEM_RESERVE, MI_PROT_READWRITE,
+                                               0xFFFFFFFFULL)));
+    CHECK(Base >= Process[1].Space.LowestVa && Base + Size - 1 <= 0xFFFFFFFFULL);
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&Process[1].Space, &Base, &Size, MI_MEM_RELEASE)));
+    Base = 0;
+    Size = 0x10000;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemoryEx(&Process[1].Space, &Base, &Size, MI_MEM_RESERVE | MI_MEM_TOP_DOWN,
+                                               MI_PROT_READWRITE, ~0ULL)));
+    CHECK(Base > Process[1].Space.BottomUpVa && Base + Size - 1 <= Process[1].Space.HighestVa);
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&Process[1].Space, &Base, &Size, MI_MEM_RELEASE)));
+    Process[1].Space.TopDownVa = 0x7FF5FFFEFFFFULL;
+    Base = 0;
+    Size = 0x10000;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemoryEx(&Process[1].Space, &Base, &Size, MI_MEM_RESERVE | MI_MEM_TOP_DOWN,
+                                               MI_PROT_READWRITE, ~0ULL)));
+    CHECK(Base == 0x7FF5FFFE0000ULL);
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&Process[1].Space, &Base, &Size, MI_MEM_RELEASE)));
+    Base = 0;
+    Size = 0x10000;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemoryEx(&Process[1].Space, &Base, &Size, MI_MEM_RESERVE | MI_MEM_TOP_DOWN,
+                                               MI_PROT_READWRITE, 0xFFFFFFFFULL)));
+    CHECK(Base == 0xFFFF0000ULL);
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&Process[1].Space, &Base, &Size, MI_MEM_RELEASE)));
+    Base = 0;
     CHECK(NT_SUCCESS(UserWrite64(&World, 0, Teb1 + 0x30, Teb1)));
     CHECK(NT_SUCCESS(MiProcessDeleteTeb(&Process[0], Teb1)));
     CHECK(UserRead64(&World, 0, Teb1 + 0x30, &Status) != Teb1 && Status == STATUS_ACCESS_VIOLATION);

@@ -1434,7 +1434,7 @@ MiMapViewInternal(
     if (Start == 0)
     {
         ULONG64 Vpn;
-        BOOLEAN Found = MiVadFindEmptyRangeEx(&Space->VadRoot, Pages, MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT, 0,
+        BOOLEAN Found = MiSpaceFindEmptyRange(Space, Pages, MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT,
                                               HighestAddress >> PAGE_SHIFT,
                                               (BOOLEAN)((AllocationType & MI_MEM_TOP_DOWN) != 0), &Vpn);
 

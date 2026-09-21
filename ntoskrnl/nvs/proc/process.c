@@ -175,7 +175,7 @@ MiProcessDelete(
 
 static
 NTSTATUS
-MiProcessAllocateTopDown(
+MiProcessAllocateBlock(
     _Inout_ PMI_PROCESS Process,
     _In_ ULONG64 Size,
     _Out_ PULONG64 Base)
@@ -184,7 +184,7 @@ MiProcessAllocateTopDown(
 
     *Base = 0;
     return MiAllocateVirtualMemory(&Process->Space, Base, &RegionSize,
-                                   MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_TOP_DOWN, MI_PROT_READWRITE);
+                                   MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE);
 }
 
 NTSTATUS
@@ -198,7 +198,7 @@ MiProcessCreatePeb(
     if (Process->Peb != 0)
         return STATUS_INVALID_PARAMETER;
 
-    Status = MiProcessAllocateTopDown(Process, Size, Peb);
+    Status = MiProcessAllocateBlock(Process, Size, Peb);
     if (NT_SUCCESS(Status))
         Process->Peb = *Peb;
 
@@ -211,7 +211,7 @@ MiProcessCreateTeb(
     _In_ ULONG64 Size,
     _Out_ PULONG64 Teb)
 {
-    return MiProcessAllocateTopDown(Process, Size, Teb);
+    return MiProcessAllocateBlock(Process, Size, Teb);
 }
 
 NTSTATUS

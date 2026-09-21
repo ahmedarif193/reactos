@@ -329,6 +329,7 @@ MiBuildImageControlArea(
     {
         PIMAGE_OPTIONAL_HEADER64 Optional = &((PIMAGE_NT_HEADERS64)NtHeaders)->OptionalHeader;
 
+        Control->Image64 = TRUE;
         Control->BasedAddress = (PVOID)(ULONG_PTR)Optional->ImageBase;
         SectionAlignment = Optional->SectionAlignment;
         FileAlignment = Optional->FileAlignment;

@@ -454,6 +454,33 @@ MiVadCreate(
     return Vad;
 }
 
+BOOLEAN
+MiSpaceFindEmptyRange(
+    _In_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 PageCount,
+    _In_ ULONG64 Alignment,
+    _In_ ULONG64 HighestVpn,
+    _In_ BOOLEAN TopDown,
+    _Out_ PULONG64 StartingVpn)
+{
+    if (!TopDown && Space->BottomUpVa > Space->LowestVa &&
+        MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Space->BottomUpVa >> PAGE_SHIFT, HighestVpn,
+                              FALSE, StartingVpn))
+    {
+        return TRUE;
+    }
+
+    if (TopDown && Space->TopDownVa != 0 && (Space->TopDownVa >> PAGE_SHIFT) < HighestVpn &&
+        MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Space->LowestVa >> PAGE_SHIFT,
+                              Space->TopDownVa >> PAGE_SHIFT, TRUE, StartingVpn))
+    {
+        return TRUE;
+    }
+
+    return MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Space->LowestVa >> PAGE_SHIFT, HighestVpn,
+                                 TopDown, StartingVpn);
+}
+
 static
 NTSTATUS
 MiReserveVirtualMemory(
@@ -481,9 +508,9 @@ MiReserveVirtualMemory(
         ULONG64 StartVpn;
 
         End = MI_PAGE_ALIGN_UP(*RegionSize);
-        if (!MiVadFindEmptyRangeEx(&Space->VadRoot, End >> PAGE_SHIFT,
-                                   MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT, 0, HighestAddress >> PAGE_SHIFT,
-                                   (BOOLEAN)((AllocationType & MI_MEM_TOP_DOWN) != 0), &StartVpn))
+        if (!MiSpaceFindEmptyRange(Space, End >> PAGE_SHIFT, MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT,
+                                   HighestAddress >> PAGE_SHIFT, (BOOLEAN)((AllocationType & MI_MEM_TOP_DOWN) != 0),
+                                   &StartVpn))
         {
             Status = STATUS_NO_MEMORY;
             goto Done;
@@ -1093,7 +1120,7 @@ MiMapFramesUser(
     {
         ULONG64 Vpn;
 
-        if (!MiVadFindEmptyRange(&Space->VadRoot, PageCount, MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT, &Vpn))
+        if (!MiSpaceFindEmptyRange(Space, PageCount, MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT, ~0ULL, FALSE, &Vpn))
         {
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
             return STATUS_NO_MEMORY;
