@@ -32,6 +32,31 @@
 
 #ifdef __REACTOS__
 W32KAPI BOOL WINAPI NtGdiInit(void);
+W32KAPI HANDLE WINAPI NtGdiGetStockObject( INT object );
+W32KAPI HBITMAP WINAPI NtGdiSetBitmapAttributes( HBITMAP bitmap, DWORD flags );
+W32KAPI HBITMAP WINAPI NtGdiClearBitmapAttributes( HBITMAP bitmap, DWORD flags );
+W32KAPI HBRUSH WINAPI NtGdiSetBrushAttributes( HBRUSH brush, DWORD flags );
+W32KAPI HBRUSH WINAPI NtGdiClearBrushAttributes( HBRUSH brush, DWORD flags );
+W32KAPI HANDLE WINAPI NtGdiCreateColorSpace( void *logcs );
+W32KAPI BOOL WINAPI NtGdiDeleteColorSpace( HANDLE colorspace );
+W32KAPI BOOL WINAPI NtGdiSetColorSpace( HDC hdc, HANDLE colorspace );
+W32KAPI DWORD WINAPI NtGdiGetCharSet( HDC hdc );
+W32KAPI HDC WINAPI NtGdiGetDCforBitmap( HBITMAP bitmap );
+W32KAPI BOOL WINAPI NtGdiGetDeviceCapsAll( HDC hdc, void *caps );
+W32KAPI LONG WINAPI NtGdiGetDeviceWidth( HDC hdc );
+W32KAPI BOOL WINAPI NtGdiGetETM( HDC hdc, void *etm );
+W32KAPI ULONG WINAPI NtGdiGetEudcTimeStampEx( WCHAR *face, ULONG count, BOOL system );
+W32KAPI LONG WINAPI NtGdiGetFontFamilyInfo( HDC hdc, const LOGFONTW *logfont, void *info, LONG *count );
+W32KAPI BOOL WINAPI NtGdiGetFontResourceInfoInternalW( const WCHAR *files, ULONG cwc, ULONG count, UINT size,
+                                                       DWORD *written, void *buffer, DWORD type );
+W32KAPI HBITMAP WINAPI NtGdiGetObjectBitmapHandle( HBRUSH brush, UINT *usage );
+W32KAPI UINT WINAPI NtGdiGetStringBitmapW( HDC hdc, WCHAR *str, UINT count, BYTE *buffer, UINT size );
+W32KAPI BOOL WINAPI NtGdiMirrorWindowOrg( HDC hdc );
+W32KAPI ULONG WINAPI NtGdiQueryFontAssocInfo( HDC hdc );
+W32KAPI HANDLE WINAPI NtGdiCreateServerMetaFile( DWORD type, ULONG size, BYTE *data, DWORD mm, DWORD xext, DWORD yext );
+W32KAPI ULONG WINAPI NtGdiGetServerMetaFileBits( HANDLE handle, ULONG size, BYTE *data, DWORD *type, DWORD *mm,
+                                                 DWORD *xext, DWORD *yext );
+W32KAPI BOOL WINAPI NtGdiPolyPatBlt( HDC hdc, DWORD rop, void *poly, DWORD count, DWORD mode );
 static inline HANDLE get_ros_gdi_handle( UINT **args ) { return ULongToHandle( *(*args)++ ); }
 #define get_handle get_ros_gdi_handle
 #endif
@@ -3088,3 +3113,220 @@ NTSTATUS WINAPI wow64_NtGdiWidenPath( UINT *args )
 
     return NtGdiWidenPath( hdc );
 }
+
+#ifdef __REACTOS__
+NTSTATUS WINAPI wow64_NtGdiGetStockObject( UINT *args )
+{
+    INT object = get_ulong( &args );
+
+    return HandleToUlong( NtGdiGetStockObject( object ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiSetBitmapAttributes( UINT *args )
+{
+    HBITMAP bitmap = get_handle( &args );
+    DWORD flags = get_ulong( &args );
+
+    return HandleToUlong( NtGdiSetBitmapAttributes( bitmap, flags ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiClearBitmapAttributes( UINT *args )
+{
+    HBITMAP bitmap = get_handle( &args );
+    DWORD flags = get_ulong( &args );
+
+    return HandleToUlong( NtGdiClearBitmapAttributes( bitmap, flags ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiSetBrushAttributes( UINT *args )
+{
+    HBRUSH brush = get_handle( &args );
+    DWORD flags = get_ulong( &args );
+
+    return HandleToUlong( NtGdiSetBrushAttributes( brush, flags ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiClearBrushAttributes( UINT *args )
+{
+    HBRUSH brush = get_handle( &args );
+    DWORD flags = get_ulong( &args );
+
+    return HandleToUlong( NtGdiClearBrushAttributes( brush, flags ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiCreateColorSpace( UINT *args )
+{
+    void *logcs = get_ptr( &args );
+
+    return HandleToUlong( NtGdiCreateColorSpace( logcs ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiDeleteColorSpace( UINT *args )
+{
+    HANDLE colorspace = get_handle( &args );
+
+    return NtGdiDeleteColorSpace( colorspace );
+}
+
+NTSTATUS WINAPI wow64_NtGdiSetColorSpace( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    HANDLE colorspace = get_handle( &args );
+
+    return NtGdiSetColorSpace( hdc, colorspace );
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetCharSet( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+
+    return NtGdiGetCharSet( hdc );
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetDCforBitmap( UINT *args )
+{
+    HBITMAP bitmap = get_handle( &args );
+
+    return HandleToUlong( NtGdiGetDCforBitmap( bitmap ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetDeviceCapsAll( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    void *caps = get_ptr( &args );
+
+    return NtGdiGetDeviceCapsAll( hdc, caps );
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetDeviceWidth( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+
+    return NtGdiGetDeviceWidth( hdc );
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetETM( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    void *etm = get_ptr( &args );
+
+    return NtGdiGetETM( hdc, etm );
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetEudcTimeStampEx( UINT *args )
+{
+    WCHAR *face = get_ptr( &args );
+    ULONG count = get_ulong( &args );
+    BOOL system = get_ulong( &args );
+
+    return NtGdiGetEudcTimeStampEx( face, count, system );
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetFontFamilyInfo( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    const LOGFONTW *logfont = get_ptr( &args );
+    void *info = get_ptr( &args );
+    LONG *count = get_ptr( &args );
+
+    return NtGdiGetFontFamilyInfo( hdc, logfont, info, count );
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetFontResourceInfoInternalW( UINT *args )
+{
+    const WCHAR *files = get_ptr( &args );
+    ULONG cwc = get_ulong( &args );
+    ULONG count = get_ulong( &args );
+    UINT size = get_ulong( &args );
+    DWORD *written = get_ptr( &args );
+    void *buffer = get_ptr( &args );
+    DWORD type = get_ulong( &args );
+
+    return NtGdiGetFontResourceInfoInternalW( files, cwc, count, size, written, buffer, type );
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetObjectBitmapHandle( UINT *args )
+{
+    HBRUSH brush = get_handle( &args );
+    UINT *usage = get_ptr( &args );
+
+    return HandleToUlong( NtGdiGetObjectBitmapHandle( brush, usage ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetStringBitmapW( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    WCHAR *str = get_ptr( &args );
+    UINT count = get_ulong( &args );
+    BYTE *buffer = get_ptr( &args );
+    UINT size = get_ulong( &args );
+
+    return NtGdiGetStringBitmapW( hdc, str, count, buffer, size );
+}
+
+NTSTATUS WINAPI wow64_NtGdiMirrorWindowOrg( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+
+    return NtGdiMirrorWindowOrg( hdc );
+}
+
+NTSTATUS WINAPI wow64_NtGdiQueryFontAssocInfo( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+
+    return NtGdiQueryFontAssocInfo( hdc );
+}
+
+NTSTATUS WINAPI wow64_NtGdiCreateServerMetaFile( UINT *args )
+{
+    DWORD type = get_ulong( &args );
+    ULONG size = get_ulong( &args );
+    BYTE *data = get_ptr( &args );
+    DWORD mm = get_ulong( &args );
+    DWORD xext = get_ulong( &args );
+    DWORD yext = get_ulong( &args );
+
+    return HandleToUlong( NtGdiCreateServerMetaFile( type, size, data, mm, xext, yext ));
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetServerMetaFileBits( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG size = get_ulong( &args );
+    BYTE *data = get_ptr( &args );
+    DWORD *type = get_ptr( &args );
+    DWORD *mm = get_ptr( &args );
+    DWORD *xext = get_ptr( &args );
+    DWORD *yext = get_ptr( &args );
+
+    return NtGdiGetServerMetaFileBits( handle, size, data, type, mm, xext, yext );
+}
+
+NTSTATUS WINAPI wow64_NtGdiPolyPatBlt( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    DWORD rop = get_ulong( &args );
+    const struct { INT x, y, cx, cy; ULONG brush; } *poly32 = get_ptr( &args );
+    DWORD count = get_ulong( &args );
+    DWORD mode = get_ulong( &args );
+
+    struct { INT x, y, cx, cy; HBRUSH brush; } *poly = NULL;
+    DWORD i;
+
+    if (poly32 && count)
+    {
+        if (!(poly = Wow64AllocateTemp( count * sizeof(*poly) ))) return FALSE;
+        for (i = 0; i < count; i++)
+        {
+            poly[i].x = poly32[i].x;
+            poly[i].y = poly32[i].y;
+            poly[i].cx = poly32[i].cx;
+            poly[i].cy = poly32[i].cy;
+            poly[i].brush = ULongToHandle( poly32[i].brush );
+        }
+    }
+
+    return NtGdiPolyPatBlt( hdc, rop, poly, count, mode );
+}
+#endif
