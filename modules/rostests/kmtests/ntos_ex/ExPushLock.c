@@ -223,8 +223,14 @@ TestAddressPushLockRoundTrips(
     }
     else
     {
-        ok(Context.ForwardRemoteRounds < Context.Rounds / 2, "forward remote wake count %lu of %lu\n", Context.ForwardRemoteRounds, Context.Rounds);
-        ok(ReturnRemoteRounds < Context.Rounds / 2, "return remote wake count %lu of %lu\n", ReturnRemoteRounds, Context.Rounds);
+        /* Unpinned wakeups may select any allowed CPU, including an idle CPU
+         * other than the signaling thread's CPU. Locality is a benchmark,
+         * not an address-wait correctness guarantee. */
+        KAFFINITY ActiveProcessors = KeQueryActiveProcessors();
+        ok((MainProcessorMask & ~(MainAffinity ? MainAffinity : ActiveProcessors)) == 0,
+           "main thread ran outside its affinity: %Ix\n", MainProcessorMask);
+        ok((Context.WakerProcessorMask & ~(WakerAffinity ? WakerAffinity : ActiveProcessors)) == 0,
+           "waker ran outside its affinity: %Ix\n", Context.WakerProcessorMask);
     }
     ok_eq_ulong(Context.WaitFailures, 0);
     ok_eq_ulong(StatusFailures, 0);
