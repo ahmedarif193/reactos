@@ -211,6 +211,35 @@ W32KAPI HBRUSH WINAPI NtUserGetControlBrush(HWND hwnd, HDC hdc, UINT ctlMsg);
 W32KAPI HBRUSH WINAPI NtUserGetControlColor(HWND hwndParent, HWND hwnd, HDC hdc, UINT ctlMsg);
 W32KAPI BOOL WINAPI NtUserDefSetText(HWND hwnd, ROS_LARGE_STRING64 *text);
 W32KAPI BOOL WINAPI NtUserGetClassInfo(HINSTANCE instance, UNICODE_STRING *name, WNDCLASSEXW *wc, WCHAR **menu_name, BOOL ansi);
+W32KAPI HWND WINAPI NtUserCallHwndOpt(HWND hwnd, DWORD routine);
+W32KAPI DWORD WINAPI NtUserCallHwndParamLock(HWND hwnd, DWORD_PTR param, DWORD routine);
+W32KAPI HDWP WINAPI NtUserDeferWindowPos(HDWP hdwp, HWND hwnd, HWND after, INT x, INT y, INT cx, INT cy, UINT flags);
+W32KAPI BOOL WINAPI NtUserDrawCaption(HWND hwnd, HDC hdc, const RECT *rect, UINT flags);
+W32KAPI BOOL WINAPI NtUserDrawAnimatedRects(HWND hwnd, INT id, RECT *from, RECT *to);
+W32KAPI DWORD WINAPI NtUserGetListBoxInfo(HWND hwnd);
+W32KAPI UINT WINAPI NtUserGetMenuIndex(HMENU menu, HMENU submenu);
+W32KAPI DWORD WINAPI NtUserMinMaximize(HWND hwnd, UINT cmd, BOOL hide);
+W32KAPI DWORD WINAPI NtUserSetThreadState(DWORD set, DWORD flags);
+W32KAPI DWORD WINAPI NtUserGetGuiResources(HANDLE process, DWORD flags);
+W32KAPI BOOL WINAPI NtUserUpdatePerUserSystemParameters(DWORD reserved, BOOL enable);
+W32KAPI BOOL WINAPI NtUserSetSystemCursor(HCURSOR cursor, DWORD id);
+W32KAPI BOOL WINAPI NtUserPaintDesktop(HDC hdc);
+W32KAPI BOOL WINAPI NtUserValidateTimerCallback(LPARAM lparam);
+W32KAPI BOOL WINAPI NtUserSetImeOwnerWindow(HWND ime, HWND focus);
+W32KAPI BOOL WINAPI NtUserLockWorkStation(void);
+W32KAPI BOOL WINAPI NtUserBlockInput(BOOL block);
+W32KAPI BOOL WINAPI NtUserUnloadKeyboardLayout(HKL hkl);
+W32KAPI BOOL WINAPI NtUserGetComboBoxInfo(HWND hwnd, COMBOBOXINFO *info);
+W32KAPI BOOL WINAPI NtUserSBGetParms(HWND hwnd, INT bar, void *data, SCROLLINFO *info);
+W32KAPI BOOL WINAPI NtUserSetScrollBarInfo(HWND hwnd, LONG id, void *info);
+W32KAPI HHOOK WINAPI NtUserSetWindowsHookAW(INT id, HOOKPROC proc, BOOL ansi);
+W32KAPI HANDLE WINAPI NtUserConvertMemHandle(void *data, DWORD size);
+W32KAPI NTSTATUS WINAPI NtUserCreateLocalMemHandle(HANDLE mem, void *data, DWORD size, DWORD *ret_size);
+W32KAPI BOOL WINAPI NtUserGetAltTabInfo(HWND hwnd, INT item, void *info, WCHAR *text, UINT count, BOOL ansi);
+W32KAPI BOOL WINAPI NtUserGetImeHotKey(DWORD id, UINT *modifiers, UINT *key, HKL *hkl);
+W32KAPI BOOL WINAPI NtUserSetImeHotKey(DWORD id, UINT modifiers, UINT key, HKL hkl, DWORD action);
+W32KAPI HKL WINAPI NtUserLoadKeyboardLayoutEx(HANDLE file, DWORD offset, void *tables, HKL old, UNICODE_STRING *klid,
+                                              DWORD hkl, UINT flags);
 
 static inline PVOID
 ros_large_str_32to64(ROS_LARGE_STRING64 *str, const ROS_LARGE_STRING32 *str32)
