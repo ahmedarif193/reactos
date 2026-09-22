@@ -1686,8 +1686,7 @@ IntAllowSetForegroundWindow(DWORD dwProcessId)
    }
    else
    {  // Rule #3, last input event in force.
-      ERR("ptiLastInput is SET!!\n");
-      //ptiLastInput = ppi->ptiList; // See CORE-6384 & CORE-7030.
+      ppi->W32PF_flags |= W32PF_ALLOWFOREGROUNDACTIVATE;
       ObDereferenceObject(Process);
    }
    return TRUE;
