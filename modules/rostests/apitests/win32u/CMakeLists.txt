@@ -30,12 +30,14 @@ list(APPEND SOURCE
     #ntgdi/NtGdiFlushUserBatch.c
     ntgdi/NtGdiGetBitmapBits.c
     ntgdi/NtGdiGetDIBitsInternal.c
+    ntgdi/NtGdiGetFontFamilyInfo.c
     #ntgdi/NtGdiGetFontResourceInfoInternalW.c
     ntgdi/NtGdiGetRandomRgn.c
     ntgdi/NtGdiGetStockObject.c
     ntgdi/NtGdiIntersectClipRect.c
     ntgdi/NtGdiLineTo.c
     ntgdi/NtGdiOffsetClipRgn.c
+    ntgdi/NtGdiPolyPatBlt.c
     ntgdi/NtGdiPolyPolyDraw.c
     ntgdi/NtGdiRestoreDC.c
     ntgdi/NtGdiSaveDC.c
@@ -59,7 +61,8 @@ list(APPEND SOURCE
     ntuser/NtUserCountClipboardFormats.c
     ntuser/NtUserCreateAcceleratorTable.c
     ntuser/NtUserCreateWindowEx.c
-#    ntuser/NtUserEnumDisplayMonitors.c
+    ntuser/NtUserDeferWindowPos.c
+    ntuser/NtUserEnumDisplayMonitors.c
     ntuser/NtUserEnumDisplaySettings.c
     ntuser/NtUserFindExistingCursorIcon.c
     ntuser/NtUserGetAsyncKeyState.c
@@ -71,6 +74,7 @@ list(APPEND SOURCE
     ntuser/NtUserGetTitleBarInfo.c
     ntuser/NtUserProcessConnect.c
     ntuser/NtUserRedrawWindow.c
+    ntuser/NtUserSBGetParms.c
     ntuser/NtUserScrollDC.c
     ntuser/NtUserSelectPalette.c
     ntuser/NtUserSetTimer.c

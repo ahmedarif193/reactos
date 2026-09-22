@@ -7,51 +7,23 @@
 
 #include "../win32nt.h"
 
-ULONG gMonitorCount = 0;
-HDC ghdcMonitor = 0;
-RECT grcMonitor = {0};
-
-BOOL
-NTAPI
-NtUserEnumDisplayMonitors1(
-    HDC hDC,
-    LPCRECT lprcClip,
-    MONITORENUMPROC lpfnEnum,
-    LPARAM dwData)
-{
-    return (INT)Syscall(L"NtUserEnumDisplayMonitors", 4, &hDC);
-}
-
-BOOL CALLBACK
-MonitorEnumProc(
-    HMONITOR hMonitor,
-    HDC hdcMonitor,
-    LPRECT lprcMonitor,
-    LPARAM dwData)
-{
-    gMonitorCount++;
-    if (gMonitorCount == 1)
-    {
-        ghdcMonitor = hdcMonitor;
-        grcMonitor = *lprcMonitor;
-    }
-    return TRUE;
-}
-
 START_TEST(NtUserEnumDisplayMonitors)
 {
-    BOOL ret;
+    HMONITOR Monitors[8];
+    MONITORINFO Info;
+    RECT Rects[8];
+    INT Count, Filled, Index;
 
-    // WILL crash!
-//  TEST(NtUserEnumDisplayMonitors1(NULL, NULL, NULL, 0) == 0);
+    Count = NtUserEnumDisplayMonitors(NULL, NULL, NULL, NULL, 0);
+    ok(Count > 0, "Monitor count is %d\n", Count);
+    if (Count <= 0) return;
 
-    ret = NtUserEnumDisplayMonitors(0, NULL, MonitorEnumProc, 0);
-    TEST(ret == TRUE);
-    TEST(gMonitorCount > 0);
-    TEST(ghdcMonitor == 0);
-    TEST(grcMonitor.left == 0);
-    TEST(grcMonitor.right > 0);
-    TEST(grcMonitor.top == 0);
-    TEST(grcMonitor.bottom > 0);
-
+    Filled = NtUserEnumDisplayMonitors(NULL, NULL, Monitors, Rects, RTL_NUMBER_OF(Monitors));
+    ok_int(Filled, min(Count, (INT)RTL_NUMBER_OF(Monitors)));
+    for (Index = 0; Index < Filled; ++Index)
+    {
+        Info.cbSize = sizeof(Info);
+        ok(GetMonitorInfoW(Monitors[Index], &Info), "GetMonitorInfoW(%p) failed\n", Monitors[Index]);
+        ok(EqualRect(&Info.rcMonitor, &Rects[Index]), "Monitor %d rectangle mismatch\n", Index);
+    }
 }
