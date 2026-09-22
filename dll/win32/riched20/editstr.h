@@ -386,7 +386,7 @@ typedef struct tagME_InStream ME_InStream;
 typedef struct tagME_TextEditor
 {
 #ifdef __REACTOS__
-  HWND hWnd, hwndParent;
+  HWND hWnd;
 #endif
   ITextHost2 *texthost;
   unsigned int bEmulateVersion10 : 1;
@@ -394,9 +394,6 @@ typedef struct tagME_TextEditor
   unsigned int have_texthost2 : 1;
   ME_TextBuffer *pBuffer;
   ME_Cursor *pCursors;
-#ifdef __REACTOS__
-  DWORD styleFlags;
-#endif
   DWORD props;
   DWORD scrollbars;
   int nCursors;
