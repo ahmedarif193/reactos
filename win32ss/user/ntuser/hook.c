@@ -1492,7 +1492,7 @@ NtUserSetWindowsHookEx( HINSTANCE Mod,
 
        if ( !(ptiHook = IntTID2PTI( UlongToHandle(ThreadId) )))
        {
-          ERR("Invalid thread id 0x%x\n", ThreadId);
+          WARN("Invalid thread id 0x%x\n", ThreadId);
           EngSetLastError(ERROR_INVALID_PARAMETER);
           goto Cleanup; // Return NULL
        }
