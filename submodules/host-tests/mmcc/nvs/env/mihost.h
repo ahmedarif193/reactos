@@ -161,6 +161,7 @@ VOID MiHostQueueDpc(MI_HOST_DPC_ROUTINE Routine, PVOID Context);
 #define MI_ATOMIC_ADD64(v, d)           __sync_fetch_and_add((v), (d))
 #define MI_ATOMIC_READ8(v)              __atomic_load_n((v), __ATOMIC_SEQ_CST)
 #define MI_ATOMIC_READ32(v)             __atomic_load_n((v), __ATOMIC_SEQ_CST)
+#define MI_ATOMIC_WRITE32(v, n)          __atomic_store_n((v), (n), __ATOMIC_SEQ_CST)
 #define MI_ATOMIC_READ64(v)             __atomic_load_n((v), __ATOMIC_SEQ_CST)
 #define MI_ATOMIC_WRITE64(v, n)          __atomic_store_n((v), (n), __ATOMIC_SEQ_CST)
 #define MI_ATOMIC_CAS32(v, n, o)        __sync_val_compare_and_swap((v), (o), (n))

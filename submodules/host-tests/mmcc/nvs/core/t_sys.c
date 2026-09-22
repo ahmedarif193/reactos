@@ -945,6 +945,87 @@ SysBootAdoption(void)
     WorldDestroy(&World);
 }
 
+/* The host models PTE attributes explicitly: checking just shared contents
+ * would miss the incoherent cached/uncached aliases seen on real hardware. */
+static
+void
+SysMdlCacheAttributes(void)
+{
+    static TEST_WORLD World;
+    MI_ADDRESS_SPACE Process;
+    MI_FRAME_NUMBER Frames[3];
+    ULONG64 Allocations[3], Kernel, User, Physical;
+    const MI_CACHE_TYPE Types[] = { MiCacheFull, MiCacheNone, MiCacheWriteCombined };
+    const ULONG Flags[] = { 0, MI_LEAF_NOCACHE, MI_LEAF_WRITECOMBINE };
+    struct { MDL Mdl; PFN_NUMBER Frames[3]; } Native;
+    PVOID Reserved;
+    MI_PTE Pte;
+    NTSTATUS Status;
+    ULONG i, Requested;
+
+    SysWorldCreate(&World, 1024, 2);
+    CHECK(NT_SUCCESS(MiAddressSpaceCreate(&World.System, &Process)));
+    WorldAttach(&World, 0, &Process);
+    MiMappingTestSystem = &World.System;
+    RtlZeroMemory(&Native, sizeof(Native));
+    Native.Mdl.ByteCount = sizeof(Frames) / sizeof(Frames[0]) * PAGE_SIZE;
+    Reserved = MmAllocateMappingAddress(Native.Mdl.ByteCount, 0x43414348);
+    CHECK(Reserved != NULL);
+
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+    {
+        CHECK(NT_SUCCESS(MiAllocateContiguousMemory(&World.System, PAGE_SIZE, 0, ~0ULL, 0,
+                                                    Types[i], &Allocations[i])));
+        CHECK(MiPtTranslate(&World.System.SystemSpace, Allocations[i], &Physical, &Pte));
+        CHECK(MiArchPteLeafFlags(Pte) == Flags[i]);
+        Frames[i] = Physical >> PAGE_SHIFT;
+        Native.Frames[i] = Frames[i];
+    }
+
+    /* Mixed-cache MDLs must resolve every PFN, not just the first one.
+     * A conflicting request must not change an existing RAM cache type. */
+    for (Requested = 0; Requested < RTL_NUMBER_OF(Types); Requested++)
+    {
+        User = 0;
+        CHECK(NT_SUCCESS(MiMapFrames(&World.System, Frames, 3, Types[Requested], MI_PROT_READWRITE, &Kernel)));
+        CHECK(NT_SUCCESS(MiMapFramesUser(&Process, Frames, 3, MI_PROT_READWRITE, Flags[Requested], TRUE, &User)));
+        CHECK(MmMapLockedPagesWithReservedMapping(Reserved, 0x43414348, &Native.Mdl,
+                  Requested == 0 ? MmCached : Requested == 1 ? MmNonCached : MmWriteCombined) == Reserved);
+        for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+        {
+            CHECK(MiPtTranslate(&World.System.SystemSpace, Kernel + i * PAGE_SIZE, &Physical, &Pte));
+            CHECK(Physical >> PAGE_SHIFT == Frames[i]);
+            CHECK(MiArchPteLeafFlags(Pte) == Flags[i]);
+            CHECK(MiPtTranslate(&Process, User + i * PAGE_SIZE, &Physical, &Pte));
+            CHECK(Physical >> PAGE_SHIFT == Frames[i]);
+            CHECK(MiArchPteLeafFlags(Pte) == Flags[i]);
+            CHECK(MiPtTranslate(&World.System.SystemSpace, (ULONG_PTR)Reserved + i * PAGE_SIZE, &Physical, &Pte));
+            CHECK(MiArchPteLeafFlags(Pte) == Flags[i]);
+            CHECK(NT_SUCCESS(UserWrite64(&World, 0, User + i * PAGE_SIZE, 0xA4A5A6A7)));
+            CHECK(KernelRead64(&World, 0, Allocations[i], &Status) == 0xA4A5A6A7 && NT_SUCCESS(Status));
+        }
+        MmUnmapReservedMapping(Reserved, 0x43414348, &Native.Mdl);
+        CHECK(NT_SUCCESS(MiUnmapFramesUser(&Process, User, TRUE)));
+        MiUnmapFrames(&World.System, Kernel, 3);
+    }
+
+    /* Raw I/O PFNs have no established RAM cache attributes. */
+    Frames[0] = World.System.Pfn.FrameCount + 1;
+    CHECK(NT_SUCCESS(MiMapFrames(&World.System, Frames, 1, MiCacheNone, MI_PROT_READWRITE, &Kernel)));
+    CHECK(MiPtTranslate(&World.System.SystemSpace, Kernel, &Physical, &Pte));
+    CHECK(MiArchPteLeafFlags(Pte) == MI_LEAF_NOCACHE);
+    MiUnmapFrames(&World.System, Kernel, 1);
+
+    MmFreeMappingAddress(Reserved, 0x43414348);
+    MiMappingTestSystem = NULL;
+    for (i = 0; i < RTL_NUMBER_OF(Allocations); i++)
+        MiFreeContiguousMemory(&World.System, Allocations[i]);
+    MiCleanAddressSpace(&Process);
+    WorldAttach(&World, 0, NULL);
+    MiAddressSpaceDestroy(&Process);
+    SysWorldDestroy(&World, 1024);
+}
+
 void
 TestSys(void)
 {
@@ -957,6 +1038,7 @@ TestSys(void)
     SysKernelStacks();
     SysIoAndContiguous();
     SysMdl();
+    SysMdlCacheAttributes();
     SysSmp();
 }
 
