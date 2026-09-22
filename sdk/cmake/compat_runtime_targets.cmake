@@ -61,6 +61,7 @@ set(COMPAT_RUNTIME_MODULES
     gdi32_vista
     gdiplus
     glu32
+    hhctrl
     hid
     hlink
     ieframe
@@ -76,6 +77,7 @@ set(COMPAT_RUNTIME_MODULES
     libjpeg
     libpng
     libtiff
+    libxslt
     lpk
     mbedtls
     mlang
@@ -90,6 +92,7 @@ set(COMPAT_RUNTIME_MODULES
     mspatcha
     msvcrt
     mswsock
+    msxml3
     ncrypt
     netapi32
     newdev
