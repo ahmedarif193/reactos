@@ -606,7 +606,7 @@ static void test_NtUserAlterWindowStyle(void)
     HWND hwnd;
 
     ret = NtUserAlterWindowStyle( 0, 0, 0 );
-    ok( ret == 0, "got %#Ix\n", ret );
+    ok( ret == 0, "got %#llx\n", (unsigned long long)ret );
 
     expect_style = WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL | WS_CLIPSIBLINGS;
     hwnd = CreateWindowW( L"static", L"static", expect_style, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0, 0, NULL, 0 );
@@ -617,37 +617,37 @@ static void test_NtUserAlterWindowStyle(void)
     ok( style == expect_style, "got %#x\n", style );
 
     ret = NtUserAlterWindowStyle( hwnd, 0, 0 );
-    ok( ret == 1, "got %#Ix\n", ret );
+    ok( ret == 1, "got %#llx\n", (unsigned long long)ret );
     style = GetWindowLongW( hwnd, GWL_STYLE );
     ok( style == expect_style, "got %#x\n", style );
 
     ret = NtUserAlterWindowStyle( hwnd, -1, -1 );
-    ok( ret == 1, "got %#Ix\n", ret );
+    ok( ret == 1, "got %#llx\n", (unsigned long long)ret );
     style = GetWindowLongW( hwnd, GWL_STYLE );
     ok( style == (expect_style | 0x23f), "got %#x\n", style );
 
     ret = NtUserAlterWindowStyle( hwnd, -1, 0 );
-    ok( ret == 1, "got %#Ix\n", ret );
+    ok( ret == 1, "got %#llx\n", (unsigned long long)ret );
     style = GetWindowLongW( hwnd, GWL_STYLE );
     todo_wine ok( style == (expect_style & ~(WS_VSCROLL | WS_HSCROLL)), "got %#x\n", style );
 
     ret = NtUserAlterWindowStyle( hwnd, 0, -1 );
-    ok( ret == 1, "got %#Ix\n", ret );
+    ok( ret == 1, "got %#llx\n", (unsigned long long)ret );
     style = GetWindowLongW( hwnd, GWL_STYLE );
     todo_wine ok( style == (expect_style & ~(WS_VSCROLL | WS_HSCROLL)), "got %#x\n", style );
 
     ret = NtUserAlterWindowStyle( hwnd, -1, 0xe1e1e1e1 );
-    ok( ret == 1, "got %#Ix\n", ret );
+    ok( ret == 1, "got %#llx\n", (unsigned long long)ret );
     style = GetWindowLongW( hwnd, GWL_STYLE );
     ok( style == ((expect_style & ~WS_HSCROLL) | 0x21), "got %#x\n", style );
 
     ret = NtUserAlterWindowStyle( hwnd, -1, 0 );
-    ok( ret == 1, "got %#Ix\n", ret );
+    ok( ret == 1, "got %#llx\n", (unsigned long long)ret );
     style = GetWindowLongW( hwnd, GWL_STYLE );
     todo_wine ok( style == (expect_style & ~(WS_VSCROLL | WS_HSCROLL)), "got %#x\n", style );
 
     ret = NtUserAlterWindowStyle( hwnd, 0x20, 0xe1e1e1e1 );
-    ok( ret == 1, "got %#Ix\n", ret );
+    ok( ret == 1, "got %#llx\n", (unsigned long long)ret );
     style = GetWindowLongW( hwnd, GWL_STYLE );
     todo_wine ok( style == ((expect_style & ~(WS_VSCROLL | WS_HSCROLL)) | 0x20), "got %#x\n", style );
 
@@ -1415,7 +1415,7 @@ static LRESULT WINAPI test_message_call_proc( HWND hwnd, UINT msg, WPARAM wparam
         return 6;
     case WM_USER:
         ok( wparam == 1, "wparam = %Iu\n", wparam );
-        ok( lparam == 2, "lparam = %Iu\n", lparam );
+        ok( lparam == 2, "lparam = %lld\n", (long long)lparam );
         return 3;
     case WM_USER + 1:
         return lparam;
@@ -1427,8 +1427,8 @@ static LRESULT WINAPI test_message_call_proc( HWND hwnd, UINT msg, WPARAM wparam
 static void WINAPI test_message_callback( HWND hwnd, UINT msg, ULONG_PTR data, LRESULT result )
 {
     ok( msg == WM_USER, "msg = %u\n", msg );
-    ok( data == 10, "data = %Iu\n", data );
-    ok( result == 3, "result = %Iu\n", result );
+    ok( data == 10, "data = %llu\n", (unsigned long long)data );
+    ok( result == 3, "result = %lld\n", (long long)result );
 }
 
 static void test_message_call(void)
@@ -1450,47 +1450,47 @@ static void test_message_call(void)
     hwnd = CreateWindowExW( 0, L"TestClass", NULL, WS_POPUP, 0,0,0,0,0,0,0, NULL );
 
     res = NtUserMessageCall( hwnd, WM_USER, 1, 2, NULL, NtUserSendMessage, FALSE );
-    ok( res == 3, "res = %Iu\n", res );
+    ok( res == 3, "res = %lld\n", (long long)res );
 
     res = NtUserMessageCall( hwnd, WM_USER, 1, 2, NULL, NtUserSendMessage, TRUE );
-    ok( res == 3, "res = %Iu\n", res );
+    ok( res == 3, "res = %lld\n", (long long)res );
 
     res = NtUserMessageCall( hwnd, WM_SETTEXT, 0, (LPARAM)L"test", NULL, NtUserSendMessage, FALSE );
-    ok( res == 6, "res = %Iu\n", res );
+    ok( res == 6, "res = %lld\n", (long long)res );
 
     res = NtUserMessageCall( hwnd, WM_SETTEXT, 0, (LPARAM)"test", NULL, NtUserSendMessage, TRUE );
-    ok( res == 6, "res = %Iu\n", res );
+    ok( res == 6, "res = %lld\n", (long long)res );
 
     SetLastError( 0xdeadbeef );
     res = NtUserMessageCall( UlongToHandle(0xdeadbeef), WM_USER, 1, 2, 0, NtUserSendMessage, TRUE );
-    ok( !res, "res = %Iu\n", res );
+    ok( !res, "res = %lld\n", (long long)res );
     ok( GetLastError() == ERROR_INVALID_WINDOW_HANDLE, "GetLastError() = %lu\n", GetLastError());
 
     res = NtUserMessageCall( hwnd, WM_USER + 1, 0, large_lparam, 0, NtUserSendMessage, FALSE );
-    ok( res == large_lparam, "res = %Iu\n", res );
+    ok( res == large_lparam, "res = %lld\n", (long long)res );
 
     smp.flags = 0;
     smp.timeout = 10;
     smp.result = 0xdeadbeef;
     res = NtUserMessageCall( hwnd, WM_USER, 1, 2, &smp, NtUserSendMessageTimeout, FALSE );
-    ok( res == 3, "res = %Iu\n", res );
-    ok( smp.result == 1, "smp.result = %Iu\n", smp.result );
+    ok( res == 3, "res = %lld\n", (long long)res );
+    ok( smp.result == 1, "smp.result = %llu\n", (unsigned long long)smp.result );
 
     smp.flags = 0;
     smp.timeout = 10;
     smp.result = 0xdeadbeef;
     res = NtUserMessageCall( hwnd, WM_USER + 1, 0, large_lparam,
                              &smp, NtUserSendMessageTimeout, FALSE );
-    ok( res == large_lparam, "res = %Iu\n", res );
-    ok( smp.result == 1, "smp.result = %Iu\n", smp.result );
+    ok( res == large_lparam, "res = %lld\n", (long long)res );
+    ok( smp.result == 1, "smp.result = %llu\n", (unsigned long long)smp.result );
 
     res = NtUserMessageCall( hwnd, WM_USER, 1, 2, (void *)0xdeadbeef,
                              NtUserSendNotifyMessage, FALSE );
-    ok( res == 1, "res = %Iu\n", res );
+    ok( res == 1, "res = %lld\n", (long long)res );
 
     res = NtUserMessageCall( hwnd, WM_USER, 1, 2, &callback_params,
                              NtUserSendMessageCallback, FALSE );
-    ok( res == 1, "res = %Iu\n", res );
+    ok( res == 1, "res = %lld\n", (long long)res );
 
     DestroyWindow( hwnd );
     UnregisterClassW( L"TestClass", NULL );
@@ -1511,7 +1511,7 @@ static void test_window_text(void)
     ok( !buf[0], "buf = %s\n", wine_dbgstr_w(buf) );
 
     res = NtUserMessageCall( hwnd, WM_SETTEXT, 0, (LPARAM)L"test", 0, NtUserDefWindowProc, FALSE );
-    ok( res == 1, "res = %Id\n", res );
+    ok( res == 1, "res = %lld\n", (long long)res );
 
     memset( buf, 0xcc, sizeof(buf) );
     len = NtUserInternalGetWindowText( hwnd, buf, ARRAYSIZE(buf) );
@@ -1519,13 +1519,13 @@ static void test_window_text(void)
     ok( !lstrcmpW( buf, L"test" ), "buf = %s\n", wine_dbgstr_w(buf) );
 
     res = NtUserMessageCall( hwnd, WM_GETTEXTLENGTH, 0, 0, 0, NtUserDefWindowProc, TRUE );
-    ok( res == 4, "res = %Id\n", res );
+    ok( res == 4, "res = %lld\n", (long long)res );
 
     res = NtUserMessageCall( hwnd, WM_GETTEXTLENGTH, 0, 0, 0, NtUserDefWindowProc, FALSE );
-    ok( res == 4, "res = %Id\n", res );
+    ok( res == 4, "res = %lld\n", (long long)res );
 
     res = NtUserMessageCall( hwnd, WM_SETTEXT, 0, (LPARAM)"TestA", 0, NtUserDefWindowProc, TRUE );
-    ok( res == 1, "res = %Id\n", res );
+    ok( res == 1, "res = %lld\n", (long long)res );
 
     memset( buf, 0xcc, sizeof(buf) );
     len = NtUserInternalGetWindowText( hwnd, buf, ARRAYSIZE(buf) );
@@ -1533,7 +1533,7 @@ static void test_window_text(void)
     ok( !lstrcmpW( buf, L"TestA" ), "buf = %s\n", wine_dbgstr_w(buf) );
 
     res = NtUserMessageCall( hwnd, WM_GETTEXTLENGTH, 0, 0, 0, NtUserDefWindowProc, TRUE );
-    ok( res == 5, "res = %Id\n", res );
+    ok( res == 5, "res = %lld\n", (long long)res );
 
     DestroyWindow( hwnd );
 }
@@ -1620,7 +1620,7 @@ static LRESULT WINAPI hook_proc( INT code, WPARAM wparam, LPARAM lparam )
     ok( code == 100, "code = %d\n", code );
     ok( msg_ptr->time == 1, "time = %lx\n", msg_ptr->time );
     ok( msg_ptr->wParam == 10, "wParam = %Ix\n", msg_ptr->wParam );
-    ok( msg_ptr->lParam == 20, "lParam = %Ix\n", msg_ptr->lParam );
+    ok( msg_ptr->lParam == 20, "lParam = %llx\n", (unsigned long long)msg_ptr->lParam );
     msg_ptr->time = 3;
     msg_ptr->wParam = 1;
     msg_ptr->lParam = 2;
@@ -1648,7 +1648,7 @@ static void test_message_filter(void)
     {
         ok( msg.time == 3, "time = %lx\n", msg.time );
         ok( msg.wParam == 1, "wParam = %Ix\n", msg.wParam );
-        ok( msg.lParam == 2, "lParam = %Ix\n", msg.lParam );
+        ok( msg.lParam == 2, "lParam = %llx\n", (unsigned long long)msg.lParam );
     }
 
     ret = NtUserUnhookWindowsHookEx( hook );
@@ -2345,10 +2345,10 @@ static void test_msg_output( const struct lparam_hook_test *test, LRESULT result
 
     if (test->check_result)
         todo_wine_if(test->todo_result)
-        ok( result == test->check_result, "unexpected result %Ix\n", result );
+        ok( result == test->check_result, "unexpected result %llx\n", (unsigned long long)result );
     else
         todo_wine_if(test->todo_result)
-        ok( result == test->msg_result, "unexpected result %Ix\n", result );
+        ok( result == test->msg_result, "unexpected result %llx\n", (unsigned long long)result );
 
     if (!test->lparam_size)
     {
@@ -2395,12 +2395,12 @@ static void test_msg_output( const struct lparam_hook_test *test, LRESULT result
      * are copied separatelly for each proc invocation. Poisoning their
      * content in hook procs has no effect on other calls.
      */
-    ok( wndproc_lparam == callwnd_hook_lparam, "wndproc_lparam %Ix != callwnd_hook_lparam %Ix\n",
-        wndproc_lparam, callwnd_hook_lparam);
+    ok( wndproc_lparam == callwnd_hook_lparam, "wndproc_lparam %llx != callwnd_hook_lparam %llx\n",
+        (unsigned long long)wndproc_lparam, (unsigned long long)callwnd_hook_lparam);
     todo_wine
     ok( callwnd_hook_lparam != callwnd_hook_lparam2, "wndproc_lparam == callwnd_hook_lparam2\n" );
-    ok( wndproc_lparam == retwnd_hook_lparam, "wndproc_lparam %Ix != retwnd_hook_lparam %Ix\n",
-        wndproc_lparam, retwnd_hook_lparam);
+    ok( wndproc_lparam == retwnd_hook_lparam, "wndproc_lparam %llx != retwnd_hook_lparam %llx\n",
+        (unsigned long long)wndproc_lparam, (unsigned long long)retwnd_hook_lparam);
     todo_wine
     ok( retwnd_hook_lparam != retwnd_hook_lparam2, "wndproc_lparam == retwnd_hook_lparam2\n"  );
 }
@@ -2742,9 +2742,9 @@ static void test_wndproc_hook(void)
         winetest_push_context( "sendmsg" );
         init_hook_test( test );
         res = SendMessageW( hwnd, test->message, test->wparam, (LPARAM)lparam_buffer );
-        ok( res == test->msg_result, "NtUserMessageCall returned %Ix\n", res );
-        ok( wndproc_lparam == (LPARAM)lparam_buffer, "unexpected wndproc_lparam %Ix, expected %p\n",
-            wndproc_lparam, lparam_buffer );
+        ok( res == test->msg_result, "NtUserMessageCall returned %llx\n", (unsigned long long)res );
+        ok( wndproc_lparam == (LPARAM)lparam_buffer, "unexpected wndproc_lparam %llx, expected %p\n",
+            (unsigned long long)wndproc_lparam, lparam_buffer );
         winetest_pop_context();
 
         /* NtUserMessageCall uses a copy of lparam even when not hooked. */

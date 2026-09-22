@@ -1802,11 +1802,11 @@ static LRESULT CALLBACK test_class_proc(HWND hwnd, UINT message, WPARAM wParam, 
             /* test that messages between WM_NCCREATE and WM_CREATE
                don't crash or cause unexpected behavior */
             r = SendMessageA(hwnd, EM_SETSEL, 0, 0);
-            ok(r == 1, "Returned %Id, expected 1.\n", r);
+            ok(r == 1, "Returned %lld, expected 1.\n", (long long)r);
             r = SendMessageA(hwnd, WM_SIZE, 0, 0x00100010);
-            todo_wine ok(r == 1, "Returned %Id, expected 1.\n", r);
+            todo_wine ok(r == 1, "Returned %lld, expected 1.\n", (long long)r);
             r = SendMessageA(hwnd, EM_LINESCROLL, 1, 1);
-            ok(r == 1, "Returned %Id, expected 1.\n", r);
+            ok(r == 1, "Returned %lld, expected 1.\n", (long long)r);
 
             return result;
 
@@ -1814,11 +1814,11 @@ static LRESULT CALLBACK test_class_proc(HWND hwnd, UINT message, WPARAM wParam, 
             /* test that messages between WM_NCCREATE and WM_CREATE
                don't crash or cause unexpected behavior */
             r = SendMessageA(hwnd, EM_SETSEL, 0, 0);
-            ok(r == 1, "Returned %Id, expected 1.\n", r);
+            ok(r == 1, "Returned %lld, expected 1.\n", (long long)r);
             r = SendMessageA(hwnd, WM_SIZE, 0, 0x00100010);
-            todo_wine ok(r == 1, "Returned %Id, expected 1.\n", r);
+            todo_wine ok(r == 1, "Returned %lld, expected 1.\n", (long long)r);
             r = SendMessageA(hwnd, EM_LINESCROLL, 1, 1);
-            ok(r == 1, "Returned %Id, expected 1.\n", r);
+            ok(r == 1, "Returned %lld, expected 1.\n", (long long)r);
 
             break;
     }
@@ -3366,13 +3366,13 @@ static void test_wordbreak_proc(void)
     ok(proc == NULL, "Unexpected wordbreak proc %p.\n", proc);
 
     ret = SendMessageA(hwnd, EM_SETWORDBREAKPROC, 0, (LPARAM)test_wordbreak_procA);
-    ok(ret == 1, "Unexpected return value %Id.\n", ret);
+    ok(ret == 1, "Unexpected return value %lld.\n", (long long)ret);
 
     proc = (void *)SendMessageA(hwnd, EM_GETWORDBREAKPROC, 0, 0);
     ok(proc == test_wordbreak_procA, "Unexpected wordbreak proc %p.\n", proc);
 
     ret = SendMessageA(hwnd, EM_SETWORDBREAKPROC, 0, 0);
-    ok(ret == 1, "Unexpected return value %Id.\n", ret);
+    ok(ret == 1, "Unexpected return value %lld.\n", (long long)ret);
 
     proc = (void *)SendMessageA(hwnd, EM_GETWORDBREAKPROC, 0, 0);
     ok(proc == NULL, "Unexpected wordbreak proc %p.\n", proc);

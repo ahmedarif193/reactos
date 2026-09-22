@@ -164,7 +164,7 @@ CreateCursorTestWindow(void)
     wc.cbSize        = sizeof(wc);
     wc.lpfnWndProc   = CursorTestWndProc;
     wc.hInstance     = GetModuleHandleW(NULL);
-    wc.hCursor       = LoadCursorW(NULL, IDC_ARROW);
+    wc.hCursor       = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = L"WddmCursorTestClass";
     if (RegisterClassExW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)

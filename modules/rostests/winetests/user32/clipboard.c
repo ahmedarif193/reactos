@@ -842,7 +842,7 @@ static void test_synthesized(void)
             {
                 UINT *ptr = GlobalLock( data );
                 DWORD layout = LOWORD( GetKeyboardLayout(0) );
-                ok( GlobalSize( data ) == sizeof(*ptr), "size %Iu\n", GlobalSize( data ));
+                ok( GlobalSize( data ) == sizeof(*ptr), "size %llu\n", (unsigned long long)GlobalSize( data ));
                 ok( *ptr == layout ||
                     broken( *ptr == MAKELANGID( LANG_ENGLISH, SUBLANG_DEFAULT )),
                     "CF_LOCALE %04x/%04lx\n", *ptr, layout );
@@ -851,10 +851,10 @@ static void test_synthesized(void)
             }
             case CF_TEXT:
             case CF_OEMTEXT:
-                ok( GlobalSize( data ) == 10, "wrong len %Id\n", GlobalSize( data ));
+                ok( GlobalSize( data ) == 10, "wrong len %llu\n", (unsigned long long)GlobalSize( data ));
                 break;
             case CF_UNICODETEXT:
-                ok( GlobalSize( data ) == 10 * sizeof(WCHAR), "wrong len %Id\n", GlobalSize( data ));
+                ok( GlobalSize( data ) == 10 * sizeof(WCHAR), "wrong len %llu\n", (unsigned long long)GlobalSize( data ));
                 break;
             }
             winetest_pop_context();
@@ -1482,11 +1482,11 @@ static void test_handles( HWND hwnd )
     hfixed = GlobalAlloc( GMEM_FIXED, 17 );
     hfixed2 = GlobalAlloc( GMEM_FIXED, 17 );
     ok( is_fixed( hfixed ), "expected fixed mem %p\n", hfixed );
-    ok( GlobalSize( hfixed ) == 17, "wrong size %Iu\n", GlobalSize( hfixed ));
+    ok( GlobalSize( hfixed ) == 17, "wrong size %llu\n", (unsigned long long)GlobalSize( hfixed ));
 
     hmoveable = GlobalAlloc( GMEM_MOVEABLE, 23 );
     ok( is_moveable( hmoveable ), "expected moveable mem %p\n", hmoveable );
-    ok( GlobalSize( hmoveable ) == 23, "wrong size %Iu\n", GlobalSize( hmoveable ));
+    ok( GlobalSize( hmoveable ) == 23, "wrong size %llu\n", (unsigned long long)GlobalSize( hmoveable ));
 
     empty_fixed = GlobalAlloc( GMEM_FIXED, 0 );
     ok( is_fixed( empty_fixed ), "expected fixed mem %p\n", empty_fixed );
@@ -1646,19 +1646,19 @@ static void test_handles( HWND hwnd )
 
         data = GetClipboardData( format_id2 );
         ok( is_fixed( data ), "expected fixed mem %p\n", data );
-        ok( GlobalSize( data ) == 1, "wrong size %Iu\n", GlobalSize( data ));
+        ok( GlobalSize( data ) == 1, "wrong size %llu\n", (unsigned long long)GlobalSize( data ));
 
         data = GetClipboardData( 0xdeadbeef );
         ok( is_fixed( data ), "expected fixed mem %p\n", data );
-        ok( GlobalSize( data ) == 17, "wrong size %Iu\n", GlobalSize( data ));
+        ok( GlobalSize( data ) == 17, "wrong size %llu\n", (unsigned long long)GlobalSize( data ));
 
         data = GetClipboardData( 0xdeadbabe );
         ok( is_fixed( data ), "expected fixed mem %p\n", data );
-        ok( GlobalSize( data ) == 23, "wrong size %Iu\n", GlobalSize( data ));
+        ok( GlobalSize( data ) == 23, "wrong size %llu\n", (unsigned long long)GlobalSize( data ));
 
         data = GetClipboardData( 0xdeadfade );
         ok( is_fixed( data ) || !ptr, "expected fixed mem %p\n", data );
-        if (ptr) ok( GlobalSize( data ) == 37, "wrong size %Iu\n", GlobalSize( data ));
+        if (ptr) ok( GlobalSize( data ) == 37, "wrong size %llu\n", (unsigned long long)GlobalSize( data ));
     }
     else
     {
@@ -1827,7 +1827,7 @@ static void test_handles_process( const char *str )
     h = GetClipboardData( CF_BITMAP );
     ok( GetObjectType( h ) == OBJ_BITMAP, "expected bitmap %p\n", h );
     ok( GetObjectW( h, sizeof(bm), &bm ) == sizeof(bm), "GetObject %p failed\n", h );
-    ok( bm.bmWidth == 13 && bm.bmHeight == 17, "wrong bitmap %ux%u\n", bm.bmWidth, bm.bmHeight );
+    ok( bm.bmWidth == 13 && bm.bmHeight == 17, "wrong bitmap %ldx%ld\n", bm.bmWidth, bm.bmHeight );
     trace( "bitmap %p\n", h );
     h = GetClipboardData( CF_DSPBITMAP );
     ok( !GetObjectType( h ), "expected invalid object %p\n", h );

@@ -43,7 +43,7 @@ static LRESULT WINAPI main_window_procA(HWND hwnd, UINT msg, WPARAM wparam, LPAR
             if (WaitForSingleObject(hevent, wparam) == WAIT_TIMEOUT)
                 SetEvent(hevent);
         }
-        trace("main_window_procA: Returning WM_NULL with parameter %08Ix\n", lparam);
+        trace("main_window_procA: Returning WM_NULL with parameter %08llx\n", (unsigned long long)lparam);
         return lparam;
     }
 

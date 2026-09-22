@@ -2586,14 +2586,14 @@ static HRESULT WINAPI SF_CreateViewObject(IShellFolder *iface,
 }
 
 static HRESULT WINAPI SF_GetAttributesOf(IShellFolder *iface,
-        UINT cidl, LPCITEMIDLIST *idl, SFGAOF *inOut)
+        UINT cidl, PCUITEMID_CHILD_ARRAY idl, SFGAOF *inOut)
 {
     ok(0, "Didn't expect GetAttributesOf\n");
     return E_NOTIMPL;
 }
 
 static HRESULT WINAPI SF_GetUIObjectOf(IShellFolder *iface,
-        HWND owner, UINT cidl, LPCITEMIDLIST *idls, REFIID riid, UINT *inOut,
+        HWND owner, UINT cidl, PCUITEMID_CHILD_ARRAY idls, REFIID riid, UINT *inOut,
         void **out)
 {
     ok(0, "Didn't expect GetUIObjectOf\n");

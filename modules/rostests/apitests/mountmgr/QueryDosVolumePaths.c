@@ -305,7 +305,7 @@ Test_QueryDosVolumePaths(
        VolumePaths->MultiSzLength / sizeof(WCHAR));
 
     /* Check for correct double-NUL-termination, if there is at least one string */
-    if (VolumePaths->MultiSzLength >= 2 * sizeof(UNICODE_NULL),
+    if (VolumePaths->MultiSzLength >= 2 * sizeof(UNICODE_NULL) &&
         VolumePaths->MultiSz[0] != UNICODE_NULL)
     {
         ok(VolumePaths->MultiSz[VolumePaths->MultiSzLength / sizeof(WCHAR) - 2] == UNICODE_NULL,

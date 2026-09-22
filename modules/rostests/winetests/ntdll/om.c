@@ -2406,7 +2406,7 @@ static void test_object_types(void)
             if (!wcscmp(tests[i].name, L"IoCompletionReserve") ||
                 !wcscmp(tests[i].name, L"UserApcReserve"))
             {
-                skip("%s not implemented before Win7\n", tests[i].name);
+                skip("%s not implemented before Win7\n", wine_dbgstr_w(tests[i].name));
                 break;
             }
         }

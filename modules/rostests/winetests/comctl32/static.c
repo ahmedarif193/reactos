@@ -167,8 +167,8 @@ static void test_image(HBITMAP image, BOOL is_dib, BOOL is_premult, BOOL is_alph
     BYTE bits[4];
 
     GetObjectW(image, sizeof(bm), &bm);
-    ok(bm.bmWidth == 1, "got %d\n", bm.bmWidth);
-    ok(bm.bmHeight == 1, "got %d\n", bm.bmHeight);
+    ok(bm.bmWidth == 1, "got %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == 1, "got %ld\n", bm.bmHeight);
     ok(bm.bmBitsPixel == 32, "got %d\n", bm.bmBitsPixel);
     if (is_dib)
     {

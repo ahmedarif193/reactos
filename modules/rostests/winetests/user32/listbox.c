@@ -265,7 +265,7 @@ static LRESULT WINAPI main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
         else
         {
             ok((void*)mi->itemData == strings[mi->itemID],
-                    "mi->itemData = %08Ix, expected %p\n", mi->itemData, strings[mi->itemID]);
+                    "mi->itemData = %08llx, expected %p\n", (unsigned long long)mi->itemData, strings[mi->itemID]);
         }
         break;
     }
@@ -274,7 +274,7 @@ static LRESULT WINAPI main_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
         RECT rc_item, rc_client, rc_clip;
         DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lparam;
 
-        trace("%p WM_DRAWITEM %08Ix %08Ix\n", hwnd, wparam, lparam);
+        trace("%p WM_DRAWITEM %08Ix %08llx\n", hwnd, wparam, (unsigned long long)lparam);
 
         ok(wparam == dis->CtlID, "got wParam=%08Ix instead of %08x\n",
 			wparam, dis->CtlID);
@@ -2303,14 +2303,14 @@ static void test_WM_MEASUREITEM(void)
     listbox = create_listbox(WS_CHILD | LBS_OWNERDRAWVARIABLE, parent);
 
     data = SendMessageA(listbox, LB_GETITEMDATA, 0, 0);
-    ok(data == (LRESULT)strings[0], "data = %08Ix, expected %p\n", data, strings[0]);
+    ok(data == (LRESULT)strings[0], "data = %08llx, expected %p\n", (unsigned long long)data, strings[0]);
     DestroyWindow(parent);
 
     parent = create_parent();
     listbox = create_listbox(WS_CHILD | LBS_OWNERDRAWVARIABLE | LBS_HASSTRINGS, parent);
 
     data = SendMessageA(listbox, LB_GETITEMDATA, 0, 0);
-    ok(!data, "data = %08Ix\n", data);
+    ok(!data, "data = %08llx\n", (unsigned long long)data);
     DestroyWindow(parent);
 }
 
@@ -2465,9 +2465,9 @@ static void test_LB_FINDSTRING(void)
     for (i = 0; i < ARRAY_SIZE(tests); i++)
     {
         ret = SendMessageW( listbox, LB_FINDSTRING, tests[i].from, (LPARAM)tests[i].str );
-        ok( ret == tests[i].res, "%u: wrong result %Id / %Id\n", i, ret, tests[i].res );
+        ok( ret == tests[i].res, "%u: wrong result %lld / %lld\n", i, (long long)ret, (long long)tests[i].res );
         ret = SendMessageW( listbox, LB_FINDSTRINGEXACT, tests[i].from, (LPARAM)tests[i].str );
-        ok( ret == tests[i].exact, "%u: wrong result %Id / %Id\n", i, ret, tests[i].exact );
+        ok( ret == tests[i].exact, "%u: wrong result %lld / %lld\n", i, (long long)ret, (long long)tests[i].exact );
     }
 
     SendMessageW( listbox, LB_RESETCONTENT, 0, 0 );
@@ -2477,9 +2477,9 @@ static void test_LB_FINDSTRING(void)
     for (i = 0; i < ARRAY_SIZE(tests); i++)
     {
         ret = SendMessageW( listbox, LB_FINDSTRING, tests[i].from, (LPARAM)tests[i].str );
-        ok( ret == tests[i].alt_res, "%u: wrong result %Id / %Id\n", i, ret, tests[i].alt_res );
+        ok( ret == tests[i].alt_res, "%u: wrong result %lld / %lld\n", i, (long long)ret, (long long)tests[i].alt_res );
         ret = SendMessageW( listbox, LB_FINDSTRINGEXACT, tests[i].from, (LPARAM)tests[i].str );
-        ok( ret == tests[i].alt_exact, "%u: wrong result %Id / %Id\n", i, ret, tests[i].alt_exact );
+        ok( ret == tests[i].alt_exact, "%u: wrong result %lld / %lld\n", i, (long long)ret, (long long)tests[i].alt_exact );
     }
 
     SendMessageW( listbox, LB_RESETCONTENT, 0, 0 );
@@ -2487,20 +2487,20 @@ static void test_LB_FINDSTRING(void)
     SendMessageW( listbox, LB_ADDSTRING, 0, (LPARAM)L"[abc]" );
     SendMessageW( listbox, LB_ADDSTRING, 0, (LPARAM)L"[-abc-]" );
     ret = SendMessageW( listbox, LB_FINDSTRING, -1, (LPARAM)L"abc" );
-    ok( ret == 0, "wrong result %Id\n", ret );
+    ok( ret == 0, "wrong result %lld\n", (long long)ret );
     ret = SendMessageW( listbox, LB_FINDSTRINGEXACT, -1, (LPARAM)L"abc" );
     todo_wine
-    ok( ret == 0, "wrong result %Id\n", ret );
+    ok( ret == 0, "wrong result %lld\n", (long long)ret );
     ret = SendMessageW( listbox, LB_FINDSTRING, 0, (LPARAM)L"abc" );
-    ok( ret == 1, "wrong result %Id\n", ret );
+    ok( ret == 1, "wrong result %lld\n", (long long)ret );
     ret = SendMessageW( listbox, LB_FINDSTRINGEXACT, 0, (LPARAM)L"abc" );
     todo_wine
-    ok( ret == 0, "wrong result %Id\n", ret );
+    ok( ret == 0, "wrong result %lld\n", (long long)ret );
     ret = SendMessageW( listbox, LB_FINDSTRING, 1, (LPARAM)L"abc" );
-    ok( ret == 2, "wrong result %Id\n", ret );
+    ok( ret == 2, "wrong result %lld\n", (long long)ret );
     ret = SendMessageW( listbox, LB_FINDSTRINGEXACT, 1, (LPARAM)L"abc" );
     todo_wine
-    ok( ret == 0, "wrong result %Id\n", ret );
+    ok( ret == 0, "wrong result %lld\n", (long long)ret );
     DestroyWindow( listbox );
 }
 

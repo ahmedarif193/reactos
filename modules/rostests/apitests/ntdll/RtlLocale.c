@@ -852,7 +852,7 @@ static void Test_RtlLocaleNameToLcid(void)
            "Line %lu: Status == 0x%lx, expected 0x%lx\n",
            Tests[i].Line, Status, ExpectedStatus);
         ok(Lcid == ExpectedLcid,
-           "Line %lu: Lcid == 0x%08X, expected 0x%08X\n",
+           "Line %lu: Lcid == 0x%08lX, expected 0x%08lX\n",
            Tests[i].Line, Lcid, ExpectedLcid);
 
         // Flags = 0x2
@@ -864,7 +864,7 @@ static void Test_RtlLocaleNameToLcid(void)
            "Line %lu: Status == 0x%lx, expected 0x%lx\n",
            Tests[i].Line, Status, ExpectedStatus);
         ok(Lcid == ExpectedLcid,
-           "Line %lu: Lcid == 0x%08X, expected 0x%08X\n",
+           "Line %lu: Lcid == 0x%08lX, expected 0x%08lX\n",
            Tests[i].Line, Lcid, ExpectedLcid);
     }
 }

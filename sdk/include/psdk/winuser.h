@@ -5288,6 +5288,8 @@ typedef struct tagCHANGEFILTERSTRUCT {
     DWORD ExtStatus;
 } CHANGEFILTERSTRUCT, *PCHANGEFILTERSTRUCT;
 BOOL WINAPI ChangeWindowMessageFilterEx(_In_ HWND, _In_ UINT, _In_ DWORD, _Inout_opt_ PCHANGEFILTERSTRUCT);
+BOOL WINAPI GetWindowDisplayAffinity(_In_ HWND, _Out_ DWORD*);
+BOOL WINAPI SetWindowDisplayAffinity(_In_ HWND, _In_ DWORD);
 #endif /* _WIN32_WINNT >= _WIN32_WINNT_WIN7 */
 
 #if (WINVER >= 0x0601)

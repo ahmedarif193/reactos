@@ -86,7 +86,7 @@ static void Test_GetDisplayModeList(void)
     }
     else if (NT_SUCCESS(Status))
     {
-        trace("GetDisplayModeList returned %lu modes\n", ModeList.ModeCount);
+        trace("GetDisplayModeList returned %u modes\n", ModeList.ModeCount);
     }
 
     /* Invalid adapter */
@@ -199,7 +199,7 @@ static void Test_GetScanLine(void)
     /* May succeed or return not-implemented */
     if (NT_SUCCESS(Status))
     {
-        trace("ScanLine: InVerticalBlank=%d, ScanLine=%lu\n",
+        trace("ScanLine: InVerticalBlank=%d, ScanLine=%u\n",
               ScanData.InVerticalBlank, ScanData.ScanLine);
     }
 

@@ -1263,7 +1263,7 @@ static INT_PTR CALLBACK getdlgitem_test_dialog_proc(HWND hdlg, UINT msg, WPARAM 
         ok(val == -1, "Unexpected id.\n");
 
         val = GetWindowLongPtrA(hwnd, GWLP_ID);
-        ok(val == -1, "Unexpected id %Id.\n", val);
+        ok(val == -1, "Unexpected id %lld.\n", (long long)val);
 
         hwnd = GetDlgItem(hdlg, -2);
         ok(hwnd != NULL, "Expected dialog item.\n");
@@ -1272,7 +1272,7 @@ static INT_PTR CALLBACK getdlgitem_test_dialog_proc(HWND hdlg, UINT msg, WPARAM 
         ok(val == -2, "Unexpected id.\n");
 
         val = GetWindowLongPtrA(hwnd, GWLP_ID);
-        ok(val == -2, "Unexpected id %Id.\n", val);
+        ok(val == -2, "Unexpected id %lld.\n", (long long)val);
 
         EndDialog(hdlg, 0xdead);
     }
@@ -1627,19 +1627,19 @@ static INT_PTR CALLBACK test_aw_conversion_dlgproc(HWND hdlg, UINT msg, WPARAM w
 
         /* WM_SETTEXT/WM_GETTEXT */
         originalproc = GetWindowLongPtrW(hdlg, DWLP_DLGPROC);
-        ok(originalproc == (ULONG_PTR)test_aw_conversion_dlgproc, "Unexpected dlg proc %#Ix.\n", originalproc);
+        ok(originalproc == (ULONG_PTR)test_aw_conversion_dlgproc, "Unexpected dlg proc %#llx.\n", (unsigned long long)originalproc);
 
         dlgproc = GetWindowLongPtrA(hdlg, DWLP_DLGPROC);
-        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgproc, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgproc, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         dlgproc = SetWindowLongPtrA(hdlg, DWLP_DLGPROC, (UINT_PTR)test_aw_conversion_dlgprocA);
         ok(IsWindowUnicode(hdlg), "Expected unicode window.\n");
 
         dlgproc = GetWindowLongPtrW(hdlg, DWLP_DLGPROC);
-        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgprocA, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgprocA, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         dlgproc = GetWindowLongPtrA(hdlg, DWLP_DLGPROC);
-        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgprocA, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgprocA, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         SetPropA(hdlg, "test_mode", ULongToHandle(DLGPROCTEXT_SETTEXTA));
         ret = SetWindowTextA(hdlg, testtext);
@@ -1672,10 +1672,10 @@ static INT_PTR CALLBACK test_aw_conversion_dlgproc(HWND hdlg, UINT msg, WPARAM w
         ok(IsWindowUnicode(hdlg), "Expected unicode window.\n");
 
         dlgproc = GetWindowLongPtrW(hdlg, DWLP_DLGPROC);
-        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgprocW, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgprocW, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         dlgproc = GetWindowLongPtrA(hdlg, DWLP_DLGPROC);
-        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgprocW, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgprocW, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         SetPropA(hdlg, "test_mode", ULongToHandle(DLGPROCTEXT_SETTEXTA));
         ret = SetWindowTextA(hdlg, testtext);
@@ -1734,19 +1734,19 @@ static INT_PTR CALLBACK test_aw_conversion_dlgproc2(HWND hdlg, UINT msg, WPARAM 
         dlg_test_aw_message(hdlg, WM_SETTEXT);
 
         originalproc = GetWindowLongPtrW(hdlg, DWLP_DLGPROC);
-        ok(originalproc != (ULONG_PTR)test_aw_conversion_dlgproc2, "Unexpected dlg proc %#Ix.\n", originalproc);
+        ok(originalproc != (ULONG_PTR)test_aw_conversion_dlgproc2, "Unexpected dlg proc %#llx.\n", (unsigned long long)originalproc);
 
         dlgproc = GetWindowLongPtrA(hdlg, DWLP_DLGPROC);
-        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgproc2, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgproc2, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         dlgproc = SetWindowLongPtrA(hdlg, DWLP_DLGPROC, (UINT_PTR)test_aw_conversion_dlgprocW);
         ok(!IsWindowUnicode(hdlg), "Unexpected unicode window.\n");
 
         dlgproc = GetWindowLongPtrW(hdlg, DWLP_DLGPROC);
-        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgprocW, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgprocW, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         dlgproc = GetWindowLongPtrA(hdlg, DWLP_DLGPROC);
-        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgprocW, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgprocW, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         SetPropA(hdlg, "test_mode", ULongToHandle(DLGPROCTEXT_SETTEXTA));
         ret = SetWindowTextA(hdlg, testtext);
@@ -1779,10 +1779,10 @@ static INT_PTR CALLBACK test_aw_conversion_dlgproc2(HWND hdlg, UINT msg, WPARAM 
         ok(!IsWindowUnicode(hdlg), "Unexpected unicode window.\n");
 
         dlgproc = GetWindowLongPtrW(hdlg, DWLP_DLGPROC);
-        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgprocA, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc == (ULONG_PTR)test_aw_conversion_dlgprocA, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         dlgproc = GetWindowLongPtrA(hdlg, DWLP_DLGPROC);
-        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgprocA, "Unexpected dlg proc %#Ix.\n", dlgproc);
+        ok(dlgproc != (ULONG_PTR)test_aw_conversion_dlgprocA, "Unexpected dlg proc %#llx.\n", (unsigned long long)dlgproc);
 
         SetPropA(hdlg, "test_mode", ULongToHandle(DLGPROCTEXT_SETTEXTA));
         ret = SetWindowTextA(hdlg, testtext);
@@ -2099,12 +2099,12 @@ static void test_SaveRestoreFocus(void)
     ok (hDlg != 0, "Failed to create test dialog.\n");
 
     foundId = GetWindowLongPtrA(GetFocus(), GWLP_ID);
-    ok (foundId == 1000, "First edit box should have gained focus on dialog creation. Expected: %d, Found: %Id\n", 1000, foundId);
+    ok (foundId == 1000, "First edit box should have gained focus on dialog creation. Expected: %d, Found: %lld\n", 1000, (long long)foundId);
 
     SetFocus(GetNextDlgTabItem(hDlg, GetFocus(), FALSE));
     SendMessageA(hDlg, WM_ACTIVATE, MAKEWPARAM(WA_ACTIVE, 0), 0);
     foundId = GetWindowLongPtrA(GetFocus(), GWLP_ID);
-    ok (foundId == 1001, "First edit box should have regained focus after dialog reactivation. Expected: %d, Found: %Id\n", 1001, foundId);
+    ok (foundId == 1001, "First edit box should have regained focus after dialog reactivation. Expected: %d, Found: %lld\n", 1001, (long long)foundId);
     SetFocus(GetNextDlgTabItem(hDlg, NULL, FALSE));
 
     /* de- then reactivate the dialog */
@@ -2112,38 +2112,38 @@ static void test_SaveRestoreFocus(void)
     SendMessageA(hDlg, WM_ACTIVATE, MAKEWPARAM(WA_ACTIVE, 0), 0);
 
     foundId = GetWindowLongPtrA(GetFocus(), GWLP_ID);
-    ok (foundId == 1000, "First edit box should have regained focus after dialog reactivation. Expected: %d, Found: %Id\n", 1000, foundId);
+    ok (foundId == 1000, "First edit box should have regained focus after dialog reactivation. Expected: %d, Found: %lld\n", 1000, (long long)foundId);
 
     /* select the next tabbable item */
     SetFocus(GetNextDlgTabItem(hDlg, GetFocus(), FALSE));
 
     foundId = GetWindowLongPtrA(GetFocus(), GWLP_ID);
-    ok (foundId == 1001, "Second edit box should have gained focus. Expected: %d, Found: %Id\n", 1001, foundId);
+    ok (foundId == 1001, "Second edit box should have gained focus. Expected: %d, Found: %lld\n", 1001, (long long)foundId);
 
     /* de- then reactivate the dialog */
     SendMessageA(hDlg, WM_ACTIVATE, MAKEWPARAM(WA_INACTIVE, 0), 0);
     SendMessageA(hDlg, WM_ACTIVATE, MAKEWPARAM(WA_ACTIVE, 0), 0);
 
     foundId = GetWindowLongPtrA(GetFocus(), GWLP_ID);
-    ok (foundId == 1001, "Second edit box should have gained focus after dialog reactivation. Expected: %d, Found: %Id\n", 1001, foundId);
+    ok (foundId == 1001, "Second edit box should have gained focus after dialog reactivation. Expected: %d, Found: %lld\n", 1001, (long long)foundId);
 
     /* set focus to the dialog */
     SetFocus(hDlg);
 
     foundId = GetWindowLongPtrA(GetFocus(), GWLP_ID);
-    ok (foundId == 1000, "First edit box should have gained focus on dialog focus. Expected: %d, Found: %Id\n", 1000, foundId);
+    ok (foundId == 1000, "First edit box should have gained focus on dialog focus. Expected: %d, Found: %lld\n", 1000, (long long)foundId);
 
     /* select second tabbable item */
     SetFocus(GetNextDlgTabItem(hDlg, GetNextDlgTabItem(hDlg, NULL, FALSE), FALSE));
 
     foundId = GetWindowLongPtrA(GetFocus(), GWLP_ID);
-    ok (foundId == 1001, "Second edit box should have gained focus. Expected: %d, Found: %Id\n", 1001, foundId);
+    ok (foundId == 1001, "Second edit box should have gained focus. Expected: %d, Found: %lld\n", 1001, (long long)foundId);
 
     /* send WM_ACTIVATE message to already active dialog */
     SendMessageA(hDlg, WM_ACTIVATE, MAKEWPARAM(WA_ACTIVE, 0), 0);
 
     foundId = GetWindowLongPtrA(GetFocus(), GWLP_ID);
-    ok (foundId == 1001, "Second edit box should have gained focus. Expected: %d, Found: %Id\n", 1001, foundId);
+    ok (foundId == 1001, "Second edit box should have gained focus. Expected: %d, Found: %lld\n", 1001, (long long)foundId);
 
     /* disable the 2nd box */
     EnableWindow(GetFocus(), FALSE);

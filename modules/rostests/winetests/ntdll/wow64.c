@@ -581,15 +581,15 @@ static CROSS_PROCESS_WORK_ENTRY *expect_cross_work_entry_( CROSS_PROCESS_WORK_LI
 
     ok_(__FILE__,line)( entry != NULL, "no more entries in list\n" );
     if (!entry) return NULL;
-    ok_(__FILE__,line)( entry->id == id, "wrong type %u / %u\n", entry->id, id );
+    ok_(__FILE__,line)( entry->id == id, "wrong type %lu / %u\n", entry->id, id );
     ok_(__FILE__,line)( entry->addr == (ULONG_PTR)addr, "wrong address %s / %p\n",
                         wine_dbgstr_longlong(entry->addr), addr );
     ok_(__FILE__,line)( entry->size == size, "wrong size %s / %Ix\n",
                         wine_dbgstr_longlong(entry->size), size );
-    ok_(__FILE__,line)( entry->args[0] == arg0, "wrong args[0] %x / %x\n", entry->args[0], arg0 );
-    ok_(__FILE__,line)( entry->args[1] == arg1, "wrong args[1] %x / %x\n", entry->args[1], arg1 );
-    ok_(__FILE__,line)( entry->args[2] == arg2, "wrong args[2] %x / %x\n", entry->args[2], arg2 );
-    ok_(__FILE__,line)( entry->args[3] == arg3, "wrong args[3] %x / %x\n", entry->args[3], arg3 );
+    ok_(__FILE__,line)( entry->args[0] == arg0, "wrong args[0] %lx / %x\n", entry->args[0], arg0 );
+    ok_(__FILE__,line)( entry->args[1] == arg1, "wrong args[1] %lx / %x\n", entry->args[1], arg1 );
+    ok_(__FILE__,line)( entry->args[2] == arg2, "wrong args[2] %lx / %x\n", entry->args[2], arg2 );
+    ok_(__FILE__,line)( entry->args[3] == arg3, "wrong args[3] %lx / %x\n", entry->args[3], arg3 );
     next = entry->next ? CROSS_PROCESS_LIST_ENTRY( &list->work_list, entry->next ) : NULL;
     memset( entry, 0xcc, sizeof(*entry) );
     push_onto_free_list( &list->free_list, entry );
@@ -2028,21 +2028,21 @@ static void test_cross_process_work_list(void)
         ok( res == TRUE, "%u: RtlWow64PushCrossProcessWorkOntoFreeList failed\n", i );
     }
 
-    ok( list->free_list.counter == count, "wrong counter %u\n", list->free_list.counter );
+    ok( list->free_list.counter == count, "wrong counter %lu\n", list->free_list.counter );
     ok( CROSS_PROCESS_LIST_ENTRY( &list->free_list, list->free_list.first ) == &list->entries[count - 1],
-        "wrong offset %u\n", list->free_list.first );
+        "wrong offset %lu\n", list->free_list.first );
     for (i = count; i > 1; i--)
         ok( CROSS_PROCESS_LIST_ENTRY( &list->free_list, list->entries[i - 1].next ) == &list->entries[i - 2],
-            "%u: wrong offset %x / %x\n", i, list->entries[i - 1].next,
+            "%u: wrong offset %lx / %x\n", i, list->entries[i - 1].next,
             (UINT)((char *)&list->entries[i - 2] - (char *)&list->free_list) );
-    ok( !list->entries[0].next, "wrong last offset %x\n", list->entries[0].next );
+    ok( !list->entries[0].next, "wrong last offset %lx\n", list->entries[0].next );
 
     next = list->entries[count - 1].next;
     ptr = pRtlWow64PopCrossProcessWorkFromFreeList( &list->free_list );
     ok( ptr == (void *)&list->entries[count - 1], "wrong ptr %p (%p)\n", ptr, list );
-    ok( !ptr->next, "next not reset %x\n", ptr->next );
-    ok( list->free_list.first == next, "wrong offset %x / %x\n", list->free_list.first, next );
-    ok( list->free_list.counter == count + 1, "wrong counter %u\n", list->free_list.counter );
+    ok( !ptr->next, "next not reset %lx\n", ptr->next );
+    ok( list->free_list.first == next, "wrong offset %lx / %x\n", list->free_list.first, next );
+    ok( list->free_list.counter == count + 1, "wrong counter %lu\n", list->free_list.counter );
 
     ptr->next = 0xdead;
     ptr->id = 3;
@@ -2053,30 +2053,30 @@ static void test_cross_process_work_list(void)
     res = pRtlWow64PushCrossProcessWorkOntoWorkList( &list->work_list, ptr, (void **)&ret );
     ok( res == TRUE, "RtlWow64PushCrossProcessWorkOntoWorkList failed\n" );
     ok( !ret, "got ret ptr %p\n", ret );
-    ok( list->work_list.counter == 1, "wrong counter %u\n", list->work_list.counter );
+    ok( list->work_list.counter == 1, "wrong counter %lu\n", list->work_list.counter );
     ok( ptr == CROSS_PROCESS_LIST_ENTRY( &list->work_list, list->work_list.first), "wrong ptr %p / %p\n",
         ptr, CROSS_PROCESS_LIST_ENTRY( &list->work_list, list->work_list.first ));
-    ok( !ptr->next, "got next %x\n", ptr->next );
+    ok( !ptr->next, "got next %lx\n", ptr->next );
 
     next = list->work_list.first;
     ptr = pRtlWow64PopCrossProcessWorkFromFreeList( &list->free_list );
-    ok( list->free_list.counter == count + 2, "wrong counter %u\n", list->free_list.counter );
+    ok( list->free_list.counter == count + 2, "wrong counter %lu\n", list->free_list.counter );
     ptr->id = 20;
     ptr->addr = 0x123456;
     ptr->size = 0x2345;
     res = pRtlWow64PushCrossProcessWorkOntoWorkList( &list->work_list, ptr, (void **)&ret );
     ok( res == TRUE, "RtlWow64PushCrossProcessWorkOntoWorkList failed\n" );
     ok( !ret, "got ret ptr %p\n", ret );
-    ok( list->work_list.counter == 2, "wrong counter %u\n", list->work_list.counter );
+    ok( list->work_list.counter == 2, "wrong counter %lu\n", list->work_list.counter );
     ok( list->work_list.first == (char *)ptr - (char *)&list->work_list, "wrong ptr %p / %p\n",
         ptr, (char *)list + list->work_list.first );
-    ok( ptr->next == next, "got wrong next %x / %x\n", ptr->next, next );
+    ok( ptr->next == next, "got wrong next %lx / %x\n", ptr->next, next );
 
     flush = 0xcc;
     ptr = pRtlWow64PopAllCrossProcessWorkFromWorkList( &list->work_list, &flush );
     ok( !flush, "RtlWow64PopAllCrossProcessWorkFromWorkList flush is TRUE\n" );
-    ok( list->work_list.counter == 3, "wrong counter %u\n", list->work_list.counter );
-    ok( !list->work_list.first, "list not empty %x\n", list->work_list.first );
+    ok( list->work_list.counter == 3, "wrong counter %lu\n", list->work_list.counter );
+    ok( !list->work_list.first, "list not empty %lx\n", list->work_list.first );
     ok( ptr->addr == 0xdeadbeef, "wrong addr %s\n", wine_dbgstr_longlong(ptr->addr) );
     ok( ptr->size == 0x1000, "wrong size %s\n", wine_dbgstr_longlong(ptr->size) );
     ok( ptr->next, "next not set\n" );
@@ -2089,20 +2089,20 @@ static void test_cross_process_work_list(void)
     res = pRtlWow64PushCrossProcessWorkOntoWorkList( &list->work_list, ptr, (void **)&ret );
     ok( res == TRUE, "RtlWow64PushCrossProcessWorkOntoWorkList failed\n" );
     ok( !ret, "got ret ptr %p\n", ret );
-    ok( list->work_list.counter == 4, "wrong counter %u\n", list->work_list.counter );
+    ok( list->work_list.counter == 4, "wrong counter %lu\n", list->work_list.counter );
 
     res = pRtlWow64RequestCrossProcessHeavyFlush( &list->work_list );
     ok( res == TRUE, "RtlWow64RequestCrossProcessHeavyFlush failed\n" );
-    ok( list->work_list.counter == 5, "wrong counter %u\n", list->work_list.counter );
-    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %x\n", list->work_list.first );
+    ok( list->work_list.counter == 5, "wrong counter %lu\n", list->work_list.counter );
+    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %lx\n", list->work_list.first );
     ok( ptr == CROSS_PROCESS_LIST_ENTRY( &list->work_list, list->work_list.first), "wrong ptr %p / %p\n",
         ptr, CROSS_PROCESS_LIST_ENTRY( &list->work_list, list->work_list.first ));
 
     flush = 0xcc;
     ptr = pRtlWow64PopAllCrossProcessWorkFromWorkList( &list->work_list, &flush );
     ok( flush == TRUE, "RtlWow64PopAllCrossProcessWorkFromWorkList flush not set\n" );
-    ok( list->work_list.counter == 6, "wrong counter %u\n", list->work_list.counter );
-    ok( !list->work_list.first, "list not empty %x\n", list->work_list.first );
+    ok( list->work_list.counter == 6, "wrong counter %lu\n", list->work_list.counter );
+    ok( !list->work_list.first, "list not empty %lx\n", list->work_list.first );
     ok( ptr->addr == 0x123456, "wrong addr %s\n", wine_dbgstr_longlong(ptr->addr) );
     ok( ptr->size == 0x2345, "wrong size %s\n", wine_dbgstr_longlong(ptr->size) );
     ok( !ptr->next, "next not set\n" );
@@ -2110,35 +2110,35 @@ static void test_cross_process_work_list(void)
     flush = 0xcc;
     ptr = pRtlWow64PopAllCrossProcessWorkFromWorkList( &list->work_list, &flush );
     ok( flush == FALSE, "RtlWow64PopAllCrossProcessWorkFromWorkList flush set\n" );
-    ok( list->work_list.counter == 6, "wrong counter %u\n", list->work_list.counter );
-    ok( !list->work_list.first, "list not empty %x\n", list->work_list.first );
+    ok( list->work_list.counter == 6, "wrong counter %lu\n", list->work_list.counter );
+    ok( !list->work_list.first, "list not empty %lx\n", list->work_list.first );
     ok( !ptr, "got ptr %p\n", ptr );
 
     res = pRtlWow64RequestCrossProcessHeavyFlush( &list->work_list );
     ok( res == TRUE, "RtlWow64RequestCrossProcessHeavyFlush failed\n" );
-    ok( list->work_list.counter == 7, "wrong counter %u\n", list->work_list.counter );
-    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %x\n", list->work_list.first );
+    ok( list->work_list.counter == 7, "wrong counter %lu\n", list->work_list.counter );
+    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %lx\n", list->work_list.first );
 
     res = pRtlWow64RequestCrossProcessHeavyFlush( &list->work_list );
     ok( res == TRUE, "RtlWow64RequestCrossProcessHeavyFlush failed\n" );
-    ok( list->work_list.counter == 8, "wrong counter %u\n", list->work_list.counter );
-    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %x\n", list->work_list.first );
+    ok( list->work_list.counter == 8, "wrong counter %lu\n", list->work_list.counter );
+    ok( list->work_list.first & CROSS_PROCESS_LIST_FLUSH, "flush flag not set %lx\n", list->work_list.first );
 
     flush = 0xcc;
     ptr = pRtlWow64PopAllCrossProcessWorkFromWorkList( &list->work_list, &flush );
     ok( flush == TRUE, "RtlWow64PopAllCrossProcessWorkFromWorkList flush set\n" );
-    ok( list->work_list.counter == 9, "wrong counter %u\n", list->work_list.counter );
-    ok( !list->work_list.first, "list not empty %x\n", list->work_list.first );
+    ok( list->work_list.counter == 9, "wrong counter %lu\n", list->work_list.counter );
+    ok( !list->work_list.first, "list not empty %lx\n", list->work_list.first );
     ok( !ptr, "got ptr %p\n", ptr );
 
     for (i = 0; i < count; i++)
     {
         ptr = pRtlWow64PopCrossProcessWorkFromFreeList( &list->free_list );
         if (!ptr) break;
-        ok( list->free_list.counter == count + 3 + i, "wrong counter %u\n", list->free_list.counter );
+        ok( list->free_list.counter == count + 3 + i, "wrong counter %lu\n", list->free_list.counter );
     }
-    ok( list->free_list.counter == count + 2 + i, "wrong counter %u\n", list->free_list.counter );
-    ok( !list->free_list.first, "first still set %x\n", list->free_list.first );
+    ok( list->free_list.counter == count + 2 + i, "wrong counter %lu\n", list->free_list.counter );
+    ok( !list->free_list.first, "first still set %lx\n", list->free_list.first );
 
     free( list );
 }

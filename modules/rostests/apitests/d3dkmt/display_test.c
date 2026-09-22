@@ -203,7 +203,7 @@ static void Test_GetDisplayModeList(void)
     }
 
     ok(ModeList.ModeCount >= 1,
-       "Expected at least 1 display mode, got %lu\n", ModeList.ModeCount);
+       "Expected at least 1 display mode, got %u\n", ModeList.ModeCount);
 
     if (ModeList.ModeCount >= 1 && ModeList.ModeCount < 1024)
     {
@@ -229,7 +229,7 @@ static void Test_GetDisplayModeList(void)
                 ok(pModes[0].Height > 0,
                    "First mode Height should be non-zero\n");
 
-                trace("First display mode: %lux%lu\n",
+                trace("First display mode: %ux%u\n",
                       pModes[0].Width, pModes[0].Height);
             }
             else if (!NT_SUCCESS(Status))
@@ -488,7 +488,7 @@ static void Test_GetDeviceState(void)
     /* Execution state is meaningful on a render device; a display-only device
      * may refuse the GPU-oriented EXECUTION query. Accept either outcome. */
     if (NT_SUCCESS(Status))
-        trace("Device execution state: %lu\n", DevState.ExecutionState);
+        trace("Device execution state: %u\n", DevState.ExecutionState);
     else
         skip("GetDeviceState(EXECUTION) not supported on this device (0x%lx)\n", Status);
 

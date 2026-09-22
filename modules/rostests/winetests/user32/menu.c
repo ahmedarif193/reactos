@@ -107,8 +107,8 @@ static LRESULT WINAPI menu_ownerdraw_wnd_proc(HWND hwnd, UINT msg,
             {
                 MEASUREITEMSTRUCT* pmis = (MEASUREITEMSTRUCT*)lparam;
                 if (winetest_debug > 1)
-                    trace("WM_MEASUREITEM received data %Ix size %dx%d\n",
-                            pmis->itemData, pmis->itemWidth, pmis->itemHeight);
+                    trace("WM_MEASUREITEM received data %llx size %dx%d\n",
+                            (unsigned long long)pmis->itemData, pmis->itemWidth, pmis->itemHeight);
                 ok( !wparam, "wrong wparam %Ix\n", wparam );
                 ok( pmis->CtlType == ODT_MENU, "wrong type %x\n", pmis->CtlType );
                 MOD_odheight = pmis->itemHeight;
@@ -128,8 +128,8 @@ static LRESULT WINAPI menu_ownerdraw_wnd_proc(HWND hwnd, UINT msg,
                 if (winetest_debug > 1) {
                     RECT rc;
                     GetMenuItemRect( hwnd, (HMENU)pdis->hwndItem, pdis->itemData ,&rc);
-                    trace("WM_DRAWITEM received hwnd %p hmenu %p itemdata %Id item %d rc %s itemrc:  %s\n",
-                            hwnd, pdis->hwndItem, pdis->itemData, pdis->itemID,
+                    trace("WM_DRAWITEM received hwnd %p hmenu %p itemdata %llu item %d rc %s itemrc:  %s\n",
+                            hwnd, pdis->hwndItem, (unsigned long long)pdis->itemData, pdis->itemID,
                             wine_dbgstr_rect(&pdis->rcItem), wine_dbgstr_rect(&rc));
                     oldpen=SelectObject( pdis->hDC, GetStockObject(
                                 pdis->itemState & ODS_SELECTED ? WHITE_PEN :BLACK_PEN));
@@ -997,7 +997,7 @@ static void test_menu_bmp_and_string(void)
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == SC_RESTORE, "expected SC_RESTORE, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0, "expected 0, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0, "expected 0, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == (LPSTR)bmfill, "expected %p, got %p\n", bmfill, mii.dwTypeData);
     ok(mii.cch != 0, "cch should not be 0\n");
     ok(mii.hbmpItem == HBMMENU_POPUP_RESTORE, "expected HBMMENU_POPUP_RESTORE, got %p\n", mii.hbmpItem);
@@ -1011,7 +1011,7 @@ static void test_menu_bmp_and_string(void)
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == SC_RESTORE, "expected SC_RESTORE, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0, "expected 0, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0, "expected 0, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == (LPSTR)bmfill, "expected %p, got %p\n", bmfill, mii.dwTypeData);
     ok(mii.cch != 0, "cch should not be 0\n");
     ok(mii.hbmpItem == HBMMENU_POPUP_CLOSE, "expected HBMMENU_POPUP_CLOSE, got %p\n", mii.hbmpItem);
@@ -1262,7 +1262,7 @@ static void check_menu_item_info( int line, HMENU hmenu, BOOL ansi, UINT mask, U
     }
     if (mask & MIIM_DATA)
         ok_(__FILE__, line)( info.dwItemData == data || info.dwItemData == LOWORD(data),
-                             "wrong item data %Ix/%Ix\n", info.dwItemData, data );
+                             "wrong item data %llx/%llx\n", (unsigned long long)info.dwItemData, (unsigned long long)data );
     if (mask & MIIM_BITMAP)
         ok_(__FILE__, line)( info.hbmpItem == item || (ULONG_PTR)info.hbmpItem == LOWORD(item),
                              "wrong bmpitem %p/%p\n", info.hbmpItem, item );
@@ -3748,7 +3748,7 @@ static void test_emptypopup(void)
     ok(gflag_enteridle == 0, "got %i\n", gflag_initmenu);
 
     ok(selectitem_wp == 0xdeadbeef, "got %Ix\n", selectitem_wp);
-    ok(selectitem_lp == 0xdeadbeef, "got %Ix\n", selectitem_lp);
+    ok(selectitem_lp == 0xdeadbeef, "got %llx\n", (unsigned long long)selectitem_lp);
 
     gflag_initmenupopup = gflag_entermenuloop = gflag_initmenu = gflag_enteridle = 0;
     selectitem_wp = 0xdeadbeef;
@@ -3763,7 +3763,7 @@ static void test_emptypopup(void)
     ok(gflag_enteridle == 0, "got %i\n", gflag_initmenu);
 
     ok(selectitem_wp == 0xdeadbeef, "got %Ix\n", selectitem_wp);
-    ok(selectitem_lp == 0xdeadbeef, "got %Ix\n", selectitem_lp);
+    ok(selectitem_lp == 0xdeadbeef, "got %llx\n", (unsigned long long)selectitem_lp);
 
     SetWindowLongPtrA( hwnd, GWLP_WNDPROC, (LONG_PTR)menu_fill_in_init);
 
@@ -3780,7 +3780,7 @@ static void test_emptypopup(void)
     ok(gflag_enteridle == 1, "got %i\n", gflag_initmenu);
 
     ok(selectitem_wp == 0xffff0000, "got %Ix\n", selectitem_wp);
-    ok(selectitem_lp == 0, "got %Ix\n", selectitem_lp);
+    ok(selectitem_lp == 0, "got %llx\n", (unsigned long long)selectitem_lp);
 
     DestroyWindow(hwnd);
 
@@ -3944,7 +3944,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == 0, "expected 0, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -3960,7 +3960,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == 0x81818181, "expected 0x81818181, got %#x\n", mii.fState);
     ok(mii.wID == 0x81818181, "expected 0x81818181, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == (LPSTR)hbmp, "expected %p, got %p\n", hbmp, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(mii.hbmpItem == hbmp, "expected %p, got %p\n", hbmp, mii.hbmpItem);
@@ -3978,7 +3978,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == 0, "expected 0, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0, "expected 0, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0, "expected 0, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == (LPSTR)hbmp, "expected %p, got %p\n", hbmp, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(mii.hbmpItem == hbmp, "expected %p, got %p\n", hbmp, mii.hbmpItem);
@@ -4011,7 +4011,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == 0, "expected 0, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4029,7 +4029,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == 0x81818181, "expected 0x81818181, got %#x\n", mii.fState);
     ok(mii.wID == 0x81818181, "expected 0x81818181, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4048,7 +4048,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == 0, "expected 0, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0, "expected 0, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0, "expected 0, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4083,7 +4083,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == 0, "expected 0, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == (ULONG_PTR)hbmp, "expected %p, got %#Ix\n", hbmp, mii.dwItemData);
+    ok(mii.dwItemData == (ULONG_PTR)hbmp, "expected %p, got %#llx\n", hbmp, (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4102,7 +4102,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == 0x81818181, "expected 0x81818181, got %#x\n", mii.fState);
     ok(mii.wID == 0x81818181, "expected 0x81818181, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4135,7 +4135,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == 0, "expected 0, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4159,7 +4159,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == 0, "expected 0, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4178,7 +4178,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == 0x81818181, "expected 0x81818181, got %#x\n", mii.fState);
     ok(mii.wID == 0x81818181, "expected 0x81818181, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4202,7 +4202,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == MF_ENABLED, "expected MF_ENABLED, got %#x\n", mii.fState);
     ok(mii.wID == 0, "expected 0, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == buf, "expected %p, got %p\n", buf, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(!strcmp(buf, string), "expected %s, got %s\n", string, buf);
@@ -4221,7 +4221,7 @@ if (0) /* FIXME: uncomment once Wine is fixed */ {
     ok(mii.fState == 0x81818181, "expected 0x81818181, got %#x\n", mii.fState);
     ok(mii.wID == 0x81818181, "expected 0x81818181, got %#x\n", mii.wID);
     ok(mii.hSubMenu == 0, "expected 0, got %p\n", mii.hSubMenu);
-    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#Ix\n", mii.dwItemData);
+    ok(mii.dwItemData == 0x81818181, "expected 0x81818181, got %#llx\n", (unsigned long long)mii.dwItemData);
     ok(mii.dwTypeData == (LPSTR)hbmp, "expected %p, got %p\n", hbmp, mii.dwTypeData);
     ok(mii.cch == 6, "expected 6, got %u\n", mii.cch);
     ok(mii.hbmpItem == hbmp, "expected %p, got %p\n", hbmp, mii.hbmpItem);
