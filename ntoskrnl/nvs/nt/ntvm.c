@@ -222,15 +222,18 @@ MiHighestAddressFromZeroBits(
     return TRUE;
 }
 
+static
 NTSTATUS
-NTAPI
-NtAllocateVirtualMemory(
+MiAllocateVirtualMemoryNt(
     _In_ HANDLE ProcessHandle,
     _Inout_ PVOID *UBaseAddress,
     _In_ ULONG_PTR ZeroBits,
     _Inout_ PSIZE_T URegionSize,
     _In_ ULONG AllocationType,
-    _In_ ULONG Protect)
+    _In_ ULONG Protect,
+    _In_ ULONG64 LowestAddress,
+    _In_ ULONG64 HighestEndingAddress,
+    _In_ ULONG64 Alignment)
 {
     MI_PROCESS_REFERENCE Target;
     ULONG64 Base, Size, Highest;
@@ -245,6 +248,9 @@ NtAllocateVirtualMemory(
 
     if (!MiHighestAddressFromZeroBits(ZeroBits, &Highest))
         return STATUS_INVALID_PARAMETER;
+
+    if (HighestEndingAddress != 0 && HighestEndingAddress < Highest)
+        Highest = HighestEndingAddress;
 
     if (AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_RESET | MEM_PHYSICAL | MEM_TOP_DOWN | MEM_WRITE_WATCH |
                            MEM_LARGE_PAGES | MEM_ROTATE))
@@ -303,7 +309,7 @@ NtAllocateVirtualMemory(
     if (RegionSize == 0 || (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - (ULONG_PTR)BaseAddress < RegionSize)
         return STATUS_INVALID_PARAMETER;
 
-    if (BaseAddress != NULL)
+    if (BaseAddress != NULL && HighestEndingAddress == 0)
         Highest = (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
     else if (Highest + 1 < PAGE_SIZE)
         return STATUS_INVALID_PARAMETER;
@@ -343,8 +349,8 @@ NtAllocateVirtualMemory(
         if (Base == 0)
             Type |= MI_MEM_RESERVE;
 
-        Status = MiAllocateVirtualMemoryEx(MiSpaceOfProcess(Target.Process), &Base, &Size, Type, Protection,
-                                           Highest);
+        Status = MiAllocateVirtualMemoryBounded(MiSpaceOfProcess(Target.Process), &Base, &Size, Type, Protection,
+                                                LowestAddress, Highest, Alignment);
     } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
 
     if (NT_SUCCESS(Status))
@@ -369,6 +375,111 @@ NtAllocateVirtualMemory(
 
 NTSTATUS
 NTAPI
+NtAllocateVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _Inout_ PVOID *UBaseAddress,
+    _In_ ULONG_PTR ZeroBits,
+    _Inout_ PSIZE_T URegionSize,
+    _In_ ULONG AllocationType,
+    _In_ ULONG Protect)
+{
+    return MiAllocateVirtualMemoryNt(ProcessHandle, UBaseAddress, ZeroBits, URegionSize, AllocationType, Protect,
+                                     0, 0, 0);
+}
+
+static
+NTSTATUS
+MiCaptureAddressRequirements(
+    _In_reads_(Count) PMEM_EXTENDED_PARAMETER Parameters,
+    _In_ ULONG Count,
+    _Out_ PULONG64 LowestAddress,
+    _Out_ PULONG64 HighestEndingAddress,
+    _Out_ PULONG64 Alignment)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Present = 0;
+    ULONG Index;
+
+    *LowestAddress = 0;
+    *HighestEndingAddress = 0;
+    *Alignment = 0;
+
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForRead(Parameters, Count * sizeof(MEM_EXTENDED_PARAMETER), sizeof(ULONG64));
+
+        for (Index = 0; Index < Count; Index++)
+        {
+            MEM_EXTENDED_PARAMETER Parameter = Parameters[Index];
+            PMEM_ADDRESS_REQUIREMENTS Requirements;
+            MEM_ADDRESS_REQUIREMENTS Captured;
+
+            if (Parameter.Reserved != 0 || Parameter.Type >= MemExtendedParameterMax ||
+                (Present & (1u << Parameter.Type)) != 0)
+            {
+                _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+            }
+            Present |= 1u << Parameter.Type;
+
+            if (Parameter.Type == MemExtendedParameterNumaNode)
+                continue;
+
+            if (Parameter.Type != MemExtendedParameterAddressRequirements)
+                _SEH2_YIELD(return STATUS_NOT_SUPPORTED);
+
+            Requirements = Parameter.Pointer;
+            if (Requirements == NULL)
+                _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+
+            if (ExGetPreviousMode() != KernelMode)
+                ProbeForRead(Requirements, sizeof(*Requirements), sizeof(PVOID));
+
+            Captured = *Requirements;
+            *LowestAddress = (ULONG64)(ULONG_PTR)Captured.LowestStartingAddress;
+            *HighestEndingAddress = (ULONG64)(ULONG_PTR)Captured.HighestEndingAddress;
+            *Alignment = (ULONG64)Captured.Alignment;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (*Alignment != 0 &&
+        ((*Alignment & (*Alignment - 1)) != 0 || *Alignment < MI_ALLOCATION_GRANULARITY))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (*LowestAddress != 0 &&
+        (*LowestAddress & (((*Alignment != 0) ? *Alignment : MI_ALLOCATION_GRANULARITY) - 1)) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (*HighestEndingAddress != 0)
+    {
+        if ((*HighestEndingAddress & (PAGE_SIZE - 1)) != PAGE_SIZE - 1 ||
+            *HighestEndingAddress > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS ||
+            *HighestEndingAddress < *LowestAddress)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    if (*LowestAddress > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
+        return STATUS_INVALID_PARAMETER;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
 NtAllocateVirtualMemoryEx(
     _In_ HANDLE ProcessHandle,
     _Inout_ PVOID *BaseAddress,
@@ -378,10 +489,30 @@ NtAllocateVirtualMemoryEx(
     _In_reads_opt_(ExtendedParameterCount) PMEM_EXTENDED_PARAMETER ExtendedParameters,
     _In_ ULONG ExtendedParameterCount)
 {
-    if (ExtendedParameters != NULL || ExtendedParameterCount != 0)
-        return STATUS_NOT_SUPPORTED;
+    ULONG64 LowestAddress = 0;
+    ULONG64 HighestEndingAddress = 0;
+    ULONG64 Alignment = 0;
+    NTSTATUS Status;
 
-    return NtAllocateVirtualMemory(ProcessHandle, BaseAddress, 0, RegionSize, AllocationType, PageProtection);
+    PAGED_CODE();
+
+    if (ExtendedParameterCount != 0)
+    {
+        if (ExtendedParameters == NULL || ExtendedParameterCount > MemExtendedParameterMax)
+            return STATUS_INVALID_PARAMETER;
+
+        Status = MiCaptureAddressRequirements(ExtendedParameters, ExtendedParameterCount, &LowestAddress,
+                                              &HighestEndingAddress, &Alignment);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    else if (ExtendedParameters != NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return MiAllocateVirtualMemoryNt(ProcessHandle, BaseAddress, 0, RegionSize, AllocationType, PageProtection,
+                                     LowestAddress, HighestEndingAddress, Alignment);
 }
 
 NTSTATUS
