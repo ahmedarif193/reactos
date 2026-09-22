@@ -459,11 +459,14 @@ MiSpaceFindEmptyRange(
     _In_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 PageCount,
     _In_ ULONG64 Alignment,
+    _In_ ULONG64 LowestVpn,
     _In_ ULONG64 HighestVpn,
     _In_ BOOLEAN TopDown,
     _Out_ PULONG64 StartingVpn)
 {
-    if (!TopDown && Space->BottomUpVa > Space->LowestVa &&
+    ULONG64 Lowest = max(LowestVpn, Space->LowestVa >> PAGE_SHIFT);
+
+    if (!TopDown && (Space->BottomUpVa >> PAGE_SHIFT) > Lowest &&
         MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Space->BottomUpVa >> PAGE_SHIFT, HighestVpn,
                               FALSE, StartingVpn))
     {
@@ -471,13 +474,13 @@ MiSpaceFindEmptyRange(
     }
 
     if (TopDown && Space->TopDownVa != 0 && (Space->TopDownVa >> PAGE_SHIFT) < HighestVpn &&
-        MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Space->LowestVa >> PAGE_SHIFT,
+        MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Lowest,
                               Space->TopDownVa >> PAGE_SHIFT, TRUE, StartingVpn))
     {
         return TRUE;
     }
 
-    return MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Space->LowestVa >> PAGE_SHIFT, HighestVpn,
+    return MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Lowest, HighestVpn,
                                  TopDown, StartingVpn);
 }
 
@@ -489,10 +492,13 @@ MiReserveVirtualMemory(
     _Inout_ PULONG64 RegionSize,
     _In_ ULONG AllocationType,
     _In_ ULONG Protection,
-    _In_ ULONG64 HighestAddress)
+    _In_ ULONG64 LowestAddress,
+    _In_ ULONG64 HighestAddress,
+    _In_ ULONG64 Alignment)
 {
     PMI_VAD Vad = NULL;
     ULONG64 Start, End;
+    ULONG64 Granularity = (Alignment != 0) ? Alignment : MI_ALLOCATION_GRANULARITY;
     LONG64 Charged = 0;
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -508,8 +514,9 @@ MiReserveVirtualMemory(
         ULONG64 StartVpn;
 
         End = MI_PAGE_ALIGN_UP(*RegionSize);
-        if (!MiSpaceFindEmptyRange(Space, End >> PAGE_SHIFT, MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT,
-                                   HighestAddress >> PAGE_SHIFT, (BOOLEAN)((AllocationType & MI_MEM_TOP_DOWN) != 0),
+        if (!MiSpaceFindEmptyRange(Space, End >> PAGE_SHIFT, Granularity >> PAGE_SHIFT,
+                                   MI_PAGE_ALIGN_UP(LowestAddress) >> PAGE_SHIFT, HighestAddress >> PAGE_SHIFT,
+                                   (BOOLEAN)((AllocationType & MI_MEM_TOP_DOWN) != 0),
                                    &StartVpn))
         {
             Status = STATUS_NO_MEMORY;
@@ -520,9 +527,10 @@ MiReserveVirtualMemory(
     }
     else
     {
-        Start = *BaseAddress & ~(MI_ALLOCATION_GRANULARITY - 1);
+        Start = *BaseAddress & ~(Granularity - 1);
         End = MI_PAGE_ALIGN_UP(*BaseAddress + *RegionSize);
-        if (End <= Start || Start < Space->LowestVa || End - 1 > Space->HighestVa || End - 1 > HighestAddress)
+        if (End <= Start || Start < Space->LowestVa || Start < LowestAddress ||
+            End - 1 > Space->HighestVa || End - 1 > HighestAddress)
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Done;
@@ -587,6 +595,21 @@ MiAllocateVirtualMemoryEx(
     _In_ ULONG Protection,
     _In_ ULONG64 HighestAddress)
 {
+    return MiAllocateVirtualMemoryBounded(Space, BaseAddress, RegionSize, AllocationType, Protection, 0,
+                                          HighestAddress, 0);
+}
+
+NTSTATUS
+MiAllocateVirtualMemoryBounded(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _Inout_ PULONG64 BaseAddress,
+    _Inout_ PULONG64 RegionSize,
+    _In_ ULONG AllocationType,
+    _In_ ULONG Protection,
+    _In_ ULONG64 LowestAddress,
+    _In_ ULONG64 HighestAddress,
+    _In_ ULONG64 Alignment)
+{
     ULONG64 Start;
     ULONG64 End;
     PMI_VAD Vad;
@@ -597,7 +620,12 @@ MiAllocateVirtualMemoryEx(
         return STATUS_INVALID_PAGE_PROTECTION;
 
     if (AllocationType & MI_MEM_LARGE_PAGES)
+    {
+        if (LowestAddress != 0 || Alignment != 0)
+            return STATUS_NOT_SUPPORTED;
+
         return MiAllocateLargePages(Space, BaseAddress, RegionSize, AllocationType, Protection, HighestAddress);
+    }
 
     if (AllocationType & MI_MEM_PHYSICAL)
     {
@@ -619,7 +647,8 @@ MiAllocateVirtualMemoryEx(
 
     if (AllocationType & MI_MEM_RESERVE)
     {
-        Status = MiReserveVirtualMemory(Space, BaseAddress, RegionSize, AllocationType, Protection, HighestAddress);
+        Status = MiReserveVirtualMemory(Space, BaseAddress, RegionSize, AllocationType, Protection, LowestAddress,
+                                        HighestAddress, Alignment);
         if (NT_SUCCESS(Status) && (AllocationType & MI_MEM_ROTATE) && (AllocationType & MI_MEM_COMMIT))
             Status = MiRotatePopulate(Space, *BaseAddress, *RegionSize);
         return Status;
@@ -1125,7 +1154,7 @@ MiMapFramesUser(
     {
         ULONG64 Vpn;
 
-        if (!MiSpaceFindEmptyRange(Space, PageCount, MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT, ~0ULL, FALSE, &Vpn))
+        if (!MiSpaceFindEmptyRange(Space, PageCount, MI_ALLOCATION_GRANULARITY >> PAGE_SHIFT, 0, ~0ULL, FALSE, &Vpn))
         {
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
             return STATUS_NO_MEMORY;
