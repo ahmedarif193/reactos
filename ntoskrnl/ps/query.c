@@ -3861,6 +3861,39 @@ NtSetInformationThread(
                 {
                     /* Get the TEB */
                     Teb = ProcThread->Tcb.Teb;
+#ifdef _WIN64
+                    if (Teb && Process->WoW64Process)
+                    {
+                        _SEH2_TRY
+                        {
+                            PTEB32 Teb32 = (PTEB32)((PUCHAR)Teb + Teb->WowTebOffset);
+                            PULONG Slot = NULL;
+
+                            if (Teb->WowTebOffset != 0 && TlsIndex < TLS_MINIMUM_AVAILABLE)
+                            {
+                                Slot = &Teb32->TlsSlots[TlsIndex];
+                            }
+                            else if (Teb->WowTebOffset != 0 &&
+                                     TlsIndex < (TLS_MINIMUM_AVAILABLE + TLS_EXPANSION_SLOTS) - 1 &&
+                                     Teb32->TlsExpansionSlots)
+                            {
+                                Slot = (PULONG)ULongToPtr(Teb32->TlsExpansionSlots) +
+                                       (TlsIndex - TLS_MINIMUM_AVAILABLE);
+                            }
+
+                            if (Slot)
+                            {
+                                ProbeForWriteUlong(Slot);
+                                *Slot = 0;
+                            }
+                        }
+                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                        {
+                        }
+                        _SEH2_END;
+                    }
+                    else
+#endif
                     if (Teb)
                     {
                         /* Check if we're in the expansion range */
