@@ -1544,6 +1544,19 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
 }
 
 
+#ifdef __REACTOS__
+static void probe_stack32( ULONG esp, ULONG bottom )
+{
+    ULONG page = esp & ~(wow64info->NativeSystemPageSize - 1);
+
+    while (bottom < page)
+    {
+        page -= wow64info->NativeSystemPageSize;
+        (void)*(volatile BYTE *)ULongToPtr( page );
+    }
+}
+#endif
+
 /**********************************************************************
  *           Wow64KiUserCallbackDispatcher  (wow64.@)
  */
@@ -1588,6 +1601,9 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
             orig_ctx = ctx;
 
             stack = ULongToPtr( (ctx.Esp - offsetof(struct callback_stack_layout32,args_data[len])) & ~15 );
+#ifdef __REACTOS__
+            probe_stack32( ctx.Esp, PtrToUlong( stack ) );
+#endif
             stack->eip  = ctx.Eip;
             stack->id   = id;
             stack->args = PtrToUlong( stack->args_data );
