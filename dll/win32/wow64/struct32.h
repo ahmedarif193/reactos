@@ -398,6 +398,14 @@ typedef struct
     SID_AND_ATTRIBUTES32 User;
 } TOKEN_USER32;
 
+#ifdef __REACTOS__
+typedef struct
+{
+    ULONG   IsolationPrefix;
+    BOOLEAN IsolationEnabled;
+} TOKEN_BNO_ISOLATION_INFORMATION32;
+#endif
+
 typedef struct
 {
     NTSTATUS    ExitStatus;
