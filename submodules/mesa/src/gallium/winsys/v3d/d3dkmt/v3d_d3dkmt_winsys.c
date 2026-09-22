@@ -70,6 +70,8 @@ typedef struct vc4kmt_fence {
    volatile const uint64_t *cpu_value;
 } VC4KMT_FENCE;
 
+/* WIRE format, parsed by dxgkrnl and the rpi5vc4 miniport from the list
+ * magic. Do not change its size without versioning all three. */
 typedef struct vc4kmt_resource {
    uint32_t allocation;
    uint32_t flags;

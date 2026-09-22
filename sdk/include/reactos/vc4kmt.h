@@ -45,6 +45,10 @@ typedef struct _VC4KMT_FENCE
 #define VC4KMT_CL_FLAG_BCL_INDEPENDENT 0x00000002u
 #define VC4KMT_BO_CREATE_CPU_CACHED 0x00000001u
 
+/* This is a WIRE format: it is copied verbatim into the submit escape and
+ * parsed by dxgkrnl (DXGK_VIRTGPU_RESOURCE_ENTRY) and by the rpi5vc4
+ * miniport, both of which derive the entry stride from the list magic.
+ * Do not change its size without versioning all three. */
 typedef struct _VC4KMT_RESOURCE
 {
     D3DKMT_HANDLE hAllocation;

@@ -116,6 +116,9 @@ typedef struct _VC4KMT_BO_RECORD
     HANDLE RuntimeResource;
     UINT Size;
     BOOL Mapped;
+    /* CPU-cached allocations need cache maintenance before the GPU reads
+     * them. Write-combined ones only need the store buffer drained. */
+    BOOL CpuCached;
 } VC4KMT_BO_RECORD;
 
 static VOID
@@ -202,7 +205,8 @@ Vc4KmtTrackBo(
     _Inout_ VC4KMT_DEVICE *Device,
     _In_ D3DKMT_HANDLE hAllocation,
     _In_opt_ HANDLE RuntimeResource,
-    _In_ UINT Size)
+    _In_ UINT Size,
+    _In_ BOOL CpuCached)
 {
     VC4KMT_BO_RECORD *Record;
 
@@ -213,6 +217,7 @@ Vc4KmtTrackBo(
     Record->hAllocation = hAllocation;
     Record->RuntimeResource = RuntimeResource;
     Record->Size = Size;
+    Record->CpuCached = CpuCached;
     Record->Next = Device->BoList;
     Device->BoList = Record;
     return STATUS_SUCCESS;
@@ -1084,7 +1089,8 @@ vc4kmt_bo_create_resource_private_ex(
         return STATUS_INVALID_DEVICE_STATE;
 
     Bo->Size = Size;
-    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, RuntimeResource, Size);
+    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, RuntimeResource, Size,
+                           (Flags & VC4KMT_BO_CREATE_CPU_CACHED) != 0);
     if (!NT_SUCCESS(Status))
         goto fail;
 
@@ -1148,7 +1154,7 @@ vc4kmt_bo_adopt_resource(
     Bo->hAllocation = hAllocation;
     Bo->Size = Size;
 
-    Status = Vc4KmtTrackBo(Device, hAllocation, RuntimeResource, Size);
+    Status = Vc4KmtTrackBo(Device, hAllocation, RuntimeResource, Size, TRUE);
     if (!NT_SUCCESS(Status))
     {
         RtlZeroMemory(Bo, sizeof(*Bo));
@@ -1527,7 +1533,7 @@ vc4kmt_bo_open_shared(
     }
 
     Bo->GpuVa = (ULONG)MapGpuVa.VirtualAddress;
-    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, NULL, Size);
+    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, NULL, Size, TRUE);
 
 Cleanup:
     if (!NT_SUCCESS(Status) && *hResource != 0)
@@ -1936,9 +1942,12 @@ static NTSTATUS
 Vc4KmtCleanSubmitResources(
     _In_ VC4KMT_DEVICE *Device,
     _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
-    _In_ UINT ResourceCount)
+    _In_ UINT ResourceCount,
+    _Out_ BOOL *NeedsBarrier)
 {
     UINT Index;
+
+    *NeedsBarrier = FALSE;
 
     for (Index = 0; Index < ResourceCount; ++Index)
     {
@@ -1962,6 +1971,16 @@ Vc4KmtCleanSubmitResources(
         /* A shared allocation can be CPU-written through another device. */
         if (Record == NULL || Record->Size == 0)
             return STATUS_INVALID_HANDLE;
+
+        /* A write-combined allocation is not held in the data caches, so the
+         * GPU sees these stores once the barrier below drains the write
+         * buffer. Only a CPU-cached mapping needs maintenance here, and
+         * cleaning every allocation cost far more than the submit itself. */
+        if (!Record->CpuCached)
+        {
+            *NeedsBarrier = TRUE;
+            continue;
+        }
 
         RtlZeroMemory(&Invalidate, sizeof(Invalidate));
         Invalidate.hAllocation = Record->hAllocation;
@@ -1992,6 +2011,7 @@ Vc4KmtSubmitVirtualPacket(
     UINT64 FenceValue;
     NTSTATUS Status;
     ULONG Tries;
+    BOOL NeedsBarrier = FALSE;
 
     if (Packet->Op == VC4KMT_DMA_OP_V3D_JOB)
     {
@@ -2024,9 +2044,22 @@ Vc4KmtSubmitVirtualPacket(
     if (CommandAddress == 0)
         return STATUS_INVALID_PARAMETER;
 
-    Status = Vc4KmtCleanSubmitResources(Device, Resources, ResourceCount);
+    Status = Vc4KmtCleanSubmitResources(Device, Resources, ResourceCount,
+                                        &NeedsBarrier);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    /* Publish this thread's write-combined stores before the GPU, a
+     * non-coherent DMA reader, takes ownership. A DSB drains only the
+     * issuing PE's write buffer, and this is the writer PE. */
+    if (NeedsBarrier)
+    {
+#if defined(_M_ARM64)
+        __dsb(_ARM64_BARRIER_SY);
+#else
+        MemoryBarrier();
+#endif
+    }
 
     RtlZeroMemory(&Submit, sizeof(Submit));
     Submit.Commands = CommandAddress;
