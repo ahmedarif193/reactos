@@ -801,7 +801,7 @@ NtAlpcAcceptConnectPort(
     if (Message->Connection.SectionToMap)
     {
         SectionOffset.QuadPart = Message->Connection.ClientView.SectionOffset;
-        Status = MmMapViewOfSection(Message->Connection.SectionToMap, PsGetCurrentProcess(), &ServerPort->ClientSectionBase, 0, 0, &SectionOffset, &Message->Connection.ClientView.ViewSize, ViewUnmap, 0, PAGE_READWRITE);
+        Status = MmMapViewOfSection(Message->Connection.SectionToMap, PsGetCurrentProcess(), &ServerPort->ClientSectionBase, Message->Connection.ClientWow64 ? 32 : 0, 0, &SectionOffset, &Message->Connection.ClientView.ViewSize, ViewUnmap, 0, PAGE_READWRITE);
         if (!NT_SUCCESS(Status))
         {
             ObDereferenceObject(ConnectionPort);
