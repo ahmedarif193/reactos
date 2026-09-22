@@ -30,6 +30,7 @@ typedef ULONG_PTR MI_FRAME_NUMBER, *PMI_FRAME_NUMBER;
 
 #define MI_ALLOCATE_ZEROED        0x01
 #define MI_ALLOCATE_NO_RECLAIM    0x02
+#define MI_PFN_CACHE_UNASSIGNED   (-1L)
 
 typedef enum _MI_PAGE_STATE
 {
@@ -63,7 +64,7 @@ typedef struct _MI_PFN
     union
     {
         volatile LONG UsedEntries; /* Page-table PFNs only. */
-        volatile LONG CacheFlags;  /* Data PFNs: MI_LEAF_CACHE_MASK. */
+        volatile LONG CacheFlags;  /* Data PFNs: MI_LEAF_CACHE_MASK or UNASSIGNED. */
     };
 } MI_PFN, *PMI_PFN;
 
@@ -122,6 +123,14 @@ MiPfnMappingFlags(_In_ PMI_PFN_DATABASE Db, _In_ MI_FRAME_NUMBER Frame, _In_ ULO
     {
         ULONG Cache = (MI_PFN_FLAGS(&Db->Pfn[Frame]) & MI_PFN_FLAG_PAGE_TABLE)
                           ? 0 : (ULONG)MI_ATOMIC_READ32(&Db->Pfn[Frame].CacheFlags);
+        if ((LONG)Cache == MI_PFN_CACHE_UNASSIGNED)
+        {
+            /* Legacy MmAllocatePagesForMdl leaves the choice to the first
+             * mapper. Publish it atomically so concurrent aliases agree. */
+            LONG Previous = MI_ATOMIC_CAS32(&Db->Pfn[Frame].CacheFlags,
+                                             Flags & MI_LEAF_CACHE_MASK, MI_PFN_CACHE_UNASSIGNED);
+            Cache = Previous == MI_PFN_CACHE_UNASSIGNED ? Flags : (ULONG)Previous;
+        }
         Flags = (Flags & ~MI_LEAF_CACHE_MASK) | (Cache & MI_LEAF_CACHE_MASK);
     }
     return Flags;
