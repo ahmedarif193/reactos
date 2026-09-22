@@ -1904,7 +1904,7 @@ KsServiceBusEnumCreateRequest(
 
     ASSERT(IoStack->FileObject->FileName.Buffer);
 
-    DPRINT1("KsServiceBusEnumCreateRequest IRP %p Name %wZ\n", Irp, &IoStack->FileObject->FileName);
+    DPRINT("KsServiceBusEnumCreateRequest IRP %p Name %wZ\n", Irp, &IoStack->FileObject->FileName);
 
     /* scan list and check if it is already present */
     Entry = BusDeviceExtension->Common.Entry.Flink;
