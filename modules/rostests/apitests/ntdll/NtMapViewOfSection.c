@@ -187,6 +187,29 @@ Test_PageFileSection(void)
             return;
     }
 
+#ifdef _WIN64
+    BaseAddress = NULL;
+    SectionOffset.QuadPart = 0;
+    ViewSize = 0x1000;
+    Status = NtMapViewOfSection(SectionHandle,
+                                NtCurrentProcess(),
+                                &BaseAddress,
+                                MAXULONG,
+                                0,
+                                &SectionOffset,
+                                &ViewSize,
+                                ViewShare,
+                                0,
+                                PAGE_READWRITE);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok((ULONG_PTR)BaseAddress + ViewSize - 1 <= MAXULONG, "View is not below 4 GB: %p\n", BaseAddress);
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtUnmapViewOfSection(NtCurrentProcess(), BaseAddress);
+        ok_ntstatus(Status, STATUS_SUCCESS);
+    }
+#endif
+
     /* Map 2 pages, without MEM_COMMIT */
     BaseAddress = (PVOID)0x30000000;
     SectionOffset.QuadPart = 0;
