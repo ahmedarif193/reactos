@@ -260,8 +260,15 @@ CheckWin11ObjectTypeMetadata(
     ok_eq_ulong(ObjectType->TypeInfo.WaitObjectFlagOffset, Expected->WaitObjectFlagOffset);
     ok_eq_ulong(ObjectType->TypeInfo.WaitObjectPointerOffset, Expected->WaitObjectPointerOffset);
     ok_eq_bool(ObjectType->TypeInfo.DumpProcedure != NULL, FALSE);
-    ok_eq_bool(ObjectType->TypeInfo.OpenProcedure != NULL, !!(Expected->CallbackFlags & W11_OPEN));
-    ok_eq_bool(ObjectType->TypeInfo.CloseProcedure != NULL, !!(Expected->CallbackFlags & W11_CLOSE));
+    /* Section handle callbacks are MM implementation details, not an ABI.
+     * NVS retains section/control-area references for objects and views; it
+     * does not need Windows' additional per-handle open/close callbacks.
+     * NtCreateSection tests the observable handle/view lifetime contract. */
+    if (strcmp(TypeName, "Section"))
+    {
+        ok_eq_bool(ObjectType->TypeInfo.OpenProcedure != NULL, !!(Expected->CallbackFlags & W11_OPEN));
+        ok_eq_bool(ObjectType->TypeInfo.CloseProcedure != NULL, !!(Expected->CallbackFlags & W11_CLOSE));
+    }
     ok_eq_bool(ObjectType->TypeInfo.DeleteProcedure != NULL, !!(Expected->CallbackFlags & W11_DELETE));
     ok_eq_bool(ObjectType->TypeInfo.ParseProcedure != NULL, !!(Expected->CallbackFlags & W11_PARSE));
     ok_eq_bool(ObjectType->TypeInfo.SecurityProcedure != NULL, !!(Expected->CallbackFlags & W11_SECURITY));
