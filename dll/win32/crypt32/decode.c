@@ -7038,13 +7038,6 @@ BOOL WINAPI CryptDecodeObjectEx(DWORD dwCertEncodingType, LPCSTR lpszStructType,
          debugstr_a(lpszStructType));
         decodeFunc = CRYPT_LoadDecoderExFunc(dwCertEncodingType, lpszStructType,
          &hFunc);
-        if (!decodeFunc)
-        {
-            if (IS_INTOID(lpszStructType))
-                FIXME("Unimplemented decoder for lpszStructType OID %d\n", LOWORD(lpszStructType));
-            else
-                FIXME("Unsupported decoder for lpszStructType %s\n", lpszStructType);
-        }
     }
     if (decodeFunc)
         ret = decodeFunc(dwCertEncodingType, lpszStructType, pbEncoded,
@@ -7077,6 +7070,10 @@ BOOL WINAPI CryptDecodeObjectEx(DWORD dwCertEncodingType, LPCSTR lpszStructType,
                 ret = pCryptDecodeObject(dwCertEncodingType, lpszStructType,
                  pbEncoded, cbEncoded, dwFlags, pvStructInfo, pcbStructInfo);
         }
+        else if (IS_INTOID(lpszStructType))
+            FIXME("Unimplemented decoder for lpszStructType OID %d\n", LOWORD(lpszStructType));
+        else
+            FIXME("Unsupported decoder for lpszStructType %s\n", lpszStructType);
     }
     if (hFunc)
         CryptFreeOIDFunctionAddress(hFunc, 0);
