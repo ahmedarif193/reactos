@@ -416,6 +416,93 @@ static VOID TestSectionUnmap(VOID)
     ok_hex(Status, STATUS_SUCCESS);
 }
 
+static HANDLE TlsCellReady;
+static HANDLE TlsCellContinue;
+
+static DWORD WINAPI TlsCellWorker(PVOID Parameter)
+{
+    DWORD Index = PtrToUlong(Parameter);
+
+    TlsSetValue(Index, (PVOID)0x5a5a);
+    SetEvent(TlsCellReady);
+    WaitForSingleObject(TlsCellContinue, INFINITE);
+    return PtrToUlong(TlsGetValue(Index));
+}
+
+static VOID TestTlsFreeKeepsNativeState(VOID)
+{
+    TEB64 *NativeTeb = UlongToPtr(NtCurrentTeb()->GdiBatchCount);
+    ULONG64 NativeSlots[64];
+    DWORD Indices[64], Index, ExitCode = MAXDWORD;
+    NTSTATUS Exception = STATUS_SUCCESS;
+    ULONG Count = 0, i;
+    HANDLE Thread;
+
+    ok(NativeTeb != NULL, "Missing native TEB\n");
+    if (!NativeTeb) return;
+    for (i = 0; i < RTL_NUMBER_OF(NativeSlots); ++i)
+        NativeSlots[i] = NativeTeb->TlsSlots[i];
+
+    while (Count < RTL_NUMBER_OF(Indices))
+    {
+        Index = TlsAlloc();
+        if (Index == TLS_OUT_OF_INDEXES) break;
+        Indices[Count++] = Index;
+        if (Index >= 32) break;
+    }
+    ok(Count != 0, "TlsAlloc failed: %lu\n", GetLastError());
+    if (!Count) return;
+
+    TlsCellReady = CreateEventW(NULL, FALSE, FALSE, NULL);
+    TlsCellContinue = CreateEventW(NULL, FALSE, FALSE, NULL);
+    Thread = CreateThread(NULL, 0, TlsCellWorker, UlongToPtr(Indices[0]), 0, NULL);
+    ok(Thread != NULL, "CreateThread failed: %lu\n", GetLastError());
+    if (Thread)
+        ok_hex(WaitForSingleObject(TlsCellReady, 10000), WAIT_OBJECT_0);
+
+    for (i = 0; i < Count; ++i)
+        ok(TlsFree(Indices[i]), "TlsFree(%lu) failed: %lu\n", Indices[i], GetLastError());
+
+    if (Thread)
+    {
+        SetEvent(TlsCellContinue);
+        ok_hex(WaitForSingleObject(Thread, 10000), WAIT_OBJECT_0);
+        ok(GetExitCodeThread(Thread, &ExitCode), "GetExitCodeThread failed: %lu\n", GetLastError());
+        ok_hex(ExitCode, 0);
+        CloseHandle(Thread);
+    }
+    CloseHandle(TlsCellContinue);
+    CloseHandle(TlsCellReady);
+
+    for (i = 0; i < Count; ++i)
+    {
+        if (Indices[i] < RTL_NUMBER_OF(NativeSlots) && NativeSlots[Indices[i]] != 0)
+            ok(NativeTeb->TlsSlots[Indices[i]] != 0, "TlsFree(%lu) cleared the native slot\n", Indices[i]);
+    }
+
+    _SEH2_TRY
+    {
+        RaiseException(0xE0001234, 0, 0, NULL);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Exception = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    ok_hex(Exception, 0xE0001234);
+}
+
+static VOID TestEmulatedSystemInfo(VOID)
+{
+    SYSTEM_INFO Info;
+
+    GetSystemInfo(&Info);
+    ok_hex(Info.wProcessorArchitecture, PROCESSOR_ARCHITECTURE_INTEL);
+    GetNativeSystemInfo(&Info);
+    ok_hex(Info.wProcessorArchitecture, PROCESSOR_ARCHITECTURE_AMD64);
+    ok_hex(Info.dwProcessorType, PROCESSOR_AMD_X8664);
+}
+
 #elif defined(_WIN64)
 static VOID TestNativeTlsBitmap(VOID)
 {
@@ -512,6 +599,8 @@ START_TEST(wow64_startup)
     TestNativePointerFields();
     TestSectionUnmap();
     TestNativeProcessorInformation();
+    TestEmulatedSystemInfo();
+    TestTlsFreeKeepsNativeState();
     TestDebugPrint();
 
     GetLocaleMapping = (GET_LOCALE_MAPPING)GetProcAddress(Ntdll, "RtlGetLocaleFileMappingAddress");
