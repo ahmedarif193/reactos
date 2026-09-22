@@ -1858,6 +1858,17 @@ NTSTATUS WINAPI wow64_NtUserChangeClipboardChain( UINT *args )
 
 NTSTATUS WINAPI wow64_NtUserChangeDisplaySettings( UINT *args )
 {
+#ifdef __REACTOS__
+    UNICODE_STRING32 *devname32 = get_ptr( &args );
+    DEVMODEW *devmode = get_ptr( &args );
+    DWORD flags = get_ulong( &args );
+    void *lparam = get_ptr( &args );
+
+    UNICODE_STRING devname;
+
+    return ((ROS_NTUSER_CHANGE_DISPLAY_SETTINGS)NtUserChangeDisplaySettings)( unicode_str_32to64( &devname, devname32 ),
+                                                                            devmode, flags, lparam );
+#else
     UNICODE_STRING32 *devname32 = get_ptr( &args );
     DEVMODEW *devmode = get_ptr( &args );
     HWND hwnd = get_handle( &args );
@@ -1867,6 +1878,7 @@ NTSTATUS WINAPI wow64_NtUserChangeDisplaySettings( UINT *args )
     UNICODE_STRING devname;
 
     return NtUserChangeDisplaySettings( unicode_str_32to64( &devname, devname32 ), devmode, hwnd, flags, lparam );
+#endif
 }
 
 NTSTATUS WINAPI wow64_NtUserCheckMenuItem( UINT *args )
@@ -2299,12 +2311,30 @@ NTSTATUS WINAPI wow64_NtUserEnumDisplayDevices( UINT *args )
 
 NTSTATUS WINAPI wow64_NtUserEnumDisplayMonitors( UINT *args )
 {
+#ifdef __REACTOS__
+    HDC hdc = get_handle( &args );
+    const RECT *rect = get_ptr( &args );
+    ULONG *monitors32 = get_ptr( &args );
+    RECT *rects = get_ptr( &args );
+    DWORD count = get_ulong( &args );
+
+    HMONITOR *monitors = NULL;
+    INT ret;
+    DWORD i;
+
+    if (monitors32 && count && !(monitors = Wow64AllocateTemp( count * sizeof(*monitors) ))) return -1;
+    ret = ((ROS_NTUSER_ENUM_DISPLAY_MONITORS)NtUserEnumDisplayMonitors)( hdc, rect, monitors, rects, count );
+    if (monitors && ret > 0)
+        for (i = 0; i < min( (DWORD)ret, count ); i++) monitors32[i] = HandleToUlong( monitors[i] );
+    return ret;
+#else
     HDC hdc = get_handle( &args );
     RECT *rect = get_ptr( &args );
     MONITORENUMPROC proc = get_ptr( &args );
     LPARAM lp = get_ulong( &args );
 
     return NtUserEnumDisplayMonitors( hdc, rect, proc, lp );
+#endif
 }
 
 NTSTATUS WINAPI wow64_NtUserEnumDisplaySettings( UINT *args )

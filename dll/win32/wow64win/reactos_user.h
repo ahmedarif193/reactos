@@ -241,6 +241,9 @@ W32KAPI BOOL WINAPI NtUserSetImeHotKey(DWORD id, UINT modifiers, UINT key, HKL h
 W32KAPI HKL WINAPI NtUserLoadKeyboardLayoutEx(HANDLE file, DWORD offset, void *tables, HKL old, UNICODE_STRING *klid,
                                               DWORD hkl, UINT flags);
 
+typedef INT (WINAPI *ROS_NTUSER_ENUM_DISPLAY_MONITORS)(HDC, const RECT *, HMONITOR *, RECT *, DWORD);
+typedef LONG (WINAPI *ROS_NTUSER_CHANGE_DISPLAY_SETTINGS)(UNICODE_STRING *, DEVMODEW *, DWORD, void *);
+
 static inline PVOID
 ros_large_str_32to64(ROS_LARGE_STRING64 *str, const ROS_LARGE_STRING32 *str32)
 {
