@@ -1014,9 +1014,9 @@ BCM_GPIO::BCM_GPIO (
     ULONG RegistersLength
     ) :
     registersPtr(RegistersPtr),
-    registersLength(RegistersLength),
     openIoPins(),
-    openInterruptPins()
+    openInterruptPins(),
+    registersLength(RegistersLength)
 {
     PAGED_CODE();
 

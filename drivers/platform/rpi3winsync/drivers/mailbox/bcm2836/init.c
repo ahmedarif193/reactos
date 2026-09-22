@@ -159,7 +159,7 @@ NTSTATUS RpiSetDeviceMacAddress (
         // read the status to ack
         reg = READ_REGISTER_NOFENCE_ULONG(&DeviceContextPtr->Mailbox->Status);
         reg = READ_REGISTER_NOFENCE_ULONG(&DeviceContextPtr->Mailbox->Read) & ~MAILBOX_CHANNEL_MASK;
-        if ((reg == (addrProperty.LowPart + OFFSET_DIRECT_SDRAM))) {
+        if (reg == (addrProperty.LowPart + OFFSET_DIRECT_SDRAM)) {
             // we check the if the request was a success
             if (macAddrProperty->Header.RequestResponse & RESPONSE_SUCCESS) {
                 break;

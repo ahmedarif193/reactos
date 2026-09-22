@@ -59,6 +59,7 @@ VOID VchiqIoDeviceControl (
     )
 {
     NTSTATUS status;
+    PVOID requestBufferPtr;
     VCHIQ_FILE_CONTEXT* vchiqFileContextPtr;
     WDFDEVICE device = WdfIoQueueGetDevice(Queue);
     DEVICE_CONTEXT* deviceContextPtr = VchiqGetDeviceContext(device);
@@ -146,7 +147,7 @@ VOID VchiqIoDeviceControl (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*clientConfigPtr),
-                &clientConfigPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -154,6 +155,7 @@ VOID VchiqIoDeviceControl (
                     status);
                 goto CompleteRequest;
             }
+            clientConfigPtr = requestBufferPtr;
 
             // Ensure that the buffer provided is not too big.
             if (clientConfigPtr->ConfigSize > sizeof(VCHIQ_CONFIG)) {
@@ -191,7 +193,7 @@ VOID VchiqIoDeviceControl (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*libVersion),
-                &libVersion,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -199,6 +201,7 @@ VOID VchiqIoDeviceControl (
                     status);
                 goto CompleteRequest;
             }
+            libVersion = requestBufferPtr;
 
             if (*libVersion < VCHIQ_VERSION_MIN) {
                 VCHIQ_LOG_ERROR(
@@ -264,7 +267,7 @@ VOID VchiqIoDeviceControl (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*createServicePtr),
-                &createServicePtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -272,6 +275,7 @@ VOID VchiqIoDeviceControl (
                     status);
                 goto CompleteRequest;
             }
+            createServicePtr = requestBufferPtr;
 
             vchiqFileContextPtr->IsVchi = createServicePtr->IsVchi;
 
@@ -413,7 +417,7 @@ VOID VchiqIoDeviceControl (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*messageBufferPtr),
-                &messageBufferPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -421,6 +425,7 @@ VOID VchiqIoDeviceControl (
                     status);
                 goto CompleteRequest;
             }
+            messageBufferPtr = requestBufferPtr;
 
             VCHIQ_ELEMENT* elementsPtr = WdfMemoryGetBuffer(
                 messageBufferPtr->WdfMemoryElementBuffer,
@@ -508,7 +513,7 @@ VOID VchiqIoDeviceControl (
             status = WdfRequestRetrieveOutputBuffer(
                 WdfRequest,
                 sizeof(*bulkTransferPtr),
-                &bulkTransferPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -516,6 +521,7 @@ VOID VchiqIoDeviceControl (
                     status);
                 goto CompleteRequest;
             }
+            bulkTransferPtr = requestBufferPtr;
 
             if (bulkTransferPtr->Size == 0 ||
                 bulkTransferPtr->Size != MmGetMdlByteCount(bufferMdl) ||
@@ -571,7 +577,7 @@ VOID VchiqIoDeviceControl (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*bulkTransferPtr),
-                &bulkTransferPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -579,6 +585,7 @@ VOID VchiqIoDeviceControl (
                     status);
                 goto CompleteRequest;
             }
+            bulkTransferPtr = requestBufferPtr;
 
             if (bulkTransferPtr->Size == 0 ||
                 bulkTransferPtr->Size != MmGetMdlByteCount(bufferMdl) ||
@@ -638,7 +645,7 @@ VOID VchiqIoDeviceControl (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*dequeueMsgPtr),
-                &dequeueMsgPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -646,6 +653,7 @@ VOID VchiqIoDeviceControl (
                     status);
                 goto CompleteRequest;
             }
+            dequeueMsgPtr = requestBufferPtr;
 
             ExAcquireFastMutex(&vchiqFileContextPtr->PendingVchiMsgMutex);
 
@@ -708,7 +716,7 @@ VOID VchiqIoDeviceControl (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*serviceOptionPtr),
-                &serviceOptionPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -716,6 +724,7 @@ VOID VchiqIoDeviceControl (
                     status);
                 goto CompleteRequest;
             }
+            serviceOptionPtr = requestBufferPtr;
 
             if ((serviceOptionPtr->Option < VCHIQ_SERVICE_OPTION_AUTOCLOSE) ||
                 (serviceOptionPtr->Option > VCHIQ_SERVICE_OPTION_TRACE)) {
@@ -877,6 +886,7 @@ VOID VchiqInCallerContext (
     )
 {
     NTSTATUS status;
+    PVOID requestBufferPtr;
     WDF_REQUEST_PARAMETERS  requestParams;
 
     WDF_REQUEST_PARAMETERS_INIT(&requestParams);
@@ -899,7 +909,7 @@ VOID VchiqInCallerContext (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*clientConfigPtr),
-                &clientConfigPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -907,6 +917,7 @@ VOID VchiqInCallerContext (
                     status);
                 goto CompleteRequest;
             }
+            clientConfigPtr = requestBufferPtr;
 
             BOOLEAN isUserMode = 
                 (WdfRequestGetRequestorMode(WdfRequest) == UserMode);
@@ -954,7 +965,7 @@ VOID VchiqInCallerContext (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*messageBufferPtr),
-                &messageBufferPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -962,6 +973,7 @@ VOID VchiqInCallerContext (
                     status);
                 goto CompleteRequest;
             }
+            messageBufferPtr = requestBufferPtr;
 
             BOOLEAN isUserMode =
                 (WdfRequestGetRequestorMode(WdfRequest) == UserMode);
@@ -1069,7 +1081,7 @@ VOID VchiqInCallerContext (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*awaitCompletionPtr),
-                &awaitCompletionPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -1077,6 +1089,7 @@ VOID VchiqInCallerContext (
                     status);
                 goto CompleteRequest;
             }
+            awaitCompletionPtr = requestBufferPtr;
 
             if (awaitCompletionPtr->Count == 0 ||
                 awaitCompletionPtr->MsgBufCount == 0 ||
@@ -1205,7 +1218,7 @@ VOID VchiqInCallerContext (
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*dequeueMsgPtr),
-                &dequeueMsgPtr,
+                &requestBufferPtr,
                 NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
@@ -1213,6 +1226,7 @@ VOID VchiqInCallerContext (
                     status);
                 goto CompleteRequest;
             }
+            dequeueMsgPtr = requestBufferPtr;
 
             BOOLEAN isUserMode =
                 (WdfRequestGetRequestorMode(WdfRequest) == UserMode);

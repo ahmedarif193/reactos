@@ -73,9 +73,23 @@ inline T&& Forward (typename IDENTITY<T>::TYPE& arg) throw()
 
 template <typename Fn>
 struct _FINALLY : public Fn {
-    __forceinline _FINALLY (Fn&& Func) : Fn(_DETAILS::Forward<Fn>(Func)) {}
-    __forceinline _FINALLY (const _FINALLY&); // generate link error if copy constructor is called
-    __forceinline ~_FINALLY () { this->operator()(); }
+    __forceinline _FINALLY (Fn&& Func) :
+        Fn(_DETAILS::Forward<Fn>(Func)), active(true) {}
+    __forceinline _FINALLY (_FINALLY&& Other) :
+        Fn(_DETAILS::Forward<Fn>(static_cast<Fn&>(Other))),
+        active(Other.active)
+    {
+        Other.active = false;
+    }
+    _FINALLY (const _FINALLY&) = delete;
+    __forceinline ~_FINALLY ()
+    {
+        if (active)
+            this->operator()();
+    }
+
+private:
+    bool active;
 };
 
 template <typename Fn>

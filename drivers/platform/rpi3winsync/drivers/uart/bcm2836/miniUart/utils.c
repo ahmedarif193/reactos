@@ -1348,6 +1348,7 @@ SerialGetDivisorFromBaud(
     ULONG remainder;
     ULONG ulAtualBaudRate=0;
     LONG lBaudRateDevPercBy10=0;
+    LONG fractionalBaudDeviation;
 
     // Allow up to a 1 percent error in baud rate
 
@@ -1454,13 +1455,17 @@ SerialGetDivisorFromBaud(
 
        ulAtualBaudRate=ClockRate/(8*(*AppropriateDivisor+1));
        lBaudRateDevPercBy10=((DesiredBaud*1000)/ulAtualBaudRate)-1000;
+       fractionalBaudDeviation = lBaudRateDevPercBy10 % 10;
+       if (fractionalBaudDeviation < 0) {
+           fractionalBaudDeviation = -fractionalBaudDeviation;
+       }
 
        TraceEvents(TRACE_LEVEL_INFORMATION, DBG_INIT,
-                    "SerialGetDivisorFromBaud() desired baudr=%lu, actual baudr=%lu, deviation=%ld.%u%%\r\n",
+                    "SerialGetDivisorFromBaud() desired baudr=%lu, actual baudr=%lu, deviation=%ld.%ld%%\r\n",
                     DesiredBaud,
                     ulAtualBaudRate,
                     lBaudRateDevPercBy10/10,
-                    abs(lBaudRateDevPercBy10%10));
+                    fractionalBaudDeviation);
    }
 
    TraceEvents(TRACE_LEVEL_VERBOSE, DBG_INIT,
