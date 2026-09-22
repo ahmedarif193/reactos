@@ -1,3 +1,10 @@
+/*
+ * PROJECT:     ReactOS API tests
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Tests for NtGdiGetFontFamilyInfo
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
 #include "../win32nt.h"
 #include <ntgdibad.h>
 

@@ -1,3 +1,10 @@
+/*
+ * PROJECT:     ReactOS API tests
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Tests for NtUserGetComboBoxInfo
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
 #include "../win32nt.h"
 
 START_TEST(NtUserGetComboBoxInfo)
