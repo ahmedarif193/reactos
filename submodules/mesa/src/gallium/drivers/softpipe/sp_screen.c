@@ -303,6 +303,7 @@ softpipe_init_screen_caps(struct softpipe_screen *sp_screen)
    caps->fragment_color_clamped = true;
    caps->vertex_color_unclamped = true; /* draw module */
    caps->vertex_color_clamped = true; /* draw module */
+   caps->polygon_offset_clamp = true;
    caps->glsl_feature_level =
    caps->glsl_feature_level_compatibility = 400;
    caps->compute = true;
