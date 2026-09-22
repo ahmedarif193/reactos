@@ -113,9 +113,63 @@ static const ACCESS_MASK MiSectionAccessForProtection[8] =
     SECTION_MAP_EXECUTE | SECTION_MAP_READ
 };
 
+static
+VOID
+MiNormalizeImageHeaderPage(
+    _Inout_ PUCHAR Page)
+{
+    PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)Page;
+    PIMAGE_SECTION_HEADER SectionHeader;
+    PIMAGE_NT_HEADERS NtHeaders;
+    ULONG64 First;
+    USHORT Count;
+    USHORT i;
+
+    if (DosHeader->e_magic != IMAGE_DOS_SIGNATURE || DosHeader->e_lfanew <= 0 ||
+        (ULONG)DosHeader->e_lfanew > PAGE_SIZE - FIELD_OFFSET(IMAGE_NT_HEADERS, OptionalHeader))
+    {
+        return;
+    }
+
+    NtHeaders = (PIMAGE_NT_HEADERS)(Page + DosHeader->e_lfanew);
+    if (NtHeaders->Signature != IMAGE_NT_SIGNATURE)
+        return;
+
+    First = (ULONG64)DosHeader->e_lfanew + FIELD_OFFSET(IMAGE_NT_HEADERS, OptionalHeader) +
+            NtHeaders->FileHeader.SizeOfOptionalHeader;
+    Count = NtHeaders->FileHeader.NumberOfSections;
+    SectionHeader = (PIMAGE_SECTION_HEADER)(Page + First);
+
+    for (i = 0; i < Count && First + ((ULONG64)i + 1) * sizeof(IMAGE_SECTION_HEADER) <= PAGE_SIZE; i++)
+    {
+        if (SectionHeader[i].SizeOfRawData == 0)
+            SectionHeader[i].PointerToRawData = 0;
+    }
+}
+
+static
+NTSTATUS
+MiControlImageRead(
+    _In_opt_ PVOID Context,
+    _In_ ULONG64 Offset,
+    _In_ ULONG Length,
+    _Out_ PVOID Buffer)
+{
+    NTSTATUS Status = MiControlRead(Context, Offset, Length, Buffer);
+
+    if (NT_SUCCESS(Status) && Offset == 0)
+        MiNormalizeImageHeaderPage(Buffer);
+
+    return Status;
+}
+
 static MI_FILE_OPS MiControlFileOps =
 {
     MiControlRead, MiControlWrite, MiControlRelease, MiControlWriteFrames, MiControlReadAsync
+};
+static MI_FILE_OPS MiControlImageOps =
+{
+    MiControlImageRead, MiControlWrite, MiControlRelease, MiControlWriteFrames, MiControlReadAsync
 };
 static MI_FILE_OPS MiControlAnonymousOps = { NULL, NULL, MiControlRelease, NULL, NULL };
 
@@ -464,7 +518,7 @@ MiBuildImageControlArea(
         }
     }
 
-    Status = MiSegmentCreate(&MiSystem, MiSegmentImage, Control->ImageSize, MI_PROT_EXECUTE_READ, &MiControlFileOps,
+    Status = MiSegmentCreate(&MiSystem, MiSegmentImage, Control->ImageSize, MI_PROT_EXECUTE_READ, &MiControlImageOps,
                              Control, Layout, LayoutCount, &Control->Segment);
 
 Done:
@@ -1327,7 +1381,7 @@ MiReferenceControlForAddress(
 
     Vad = MiVadLocate(Space, (ULONG64)(ULONG_PTR)Address);
     if (Vad != NULL && (Vad->Type == MiVadMapped || Vad->Type == MiVadImage) &&
-        Vad->Segment->FileOps.Read == MiControlRead)
+        (Vad->Segment->FileOps.Read == MiControlRead || Vad->Segment->FileOps.Read == MiControlImageRead))
     {
         Control = Vad->Segment->FileContext;
         MiSegmentReference(Vad->Segment);
