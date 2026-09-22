@@ -10,7 +10,122 @@
 
 /* GLOBALS *****************************************************************/
 
+#define NTFS_CACHED_GROWTH_LIMIT     (64 * 1024 * 1024)
+#define NTFS_RESIDENT_WRITE_LIMIT    512
+
 /* FUNCTIONS ****************************************************************/
+
+static
+BOOLEAN
+NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
+                       _In_ PFileContextBlock FileCB,
+                       _In_ PFILE_OBJECT FileObj,
+                       _In_ LONGLONG EndOffset)
+{
+    PFSRTL_ADVANCED_FCB_HEADER Header = NtfsGetCommonFcbHeader(FileCB);
+    LONGLONG Allocation = Header->AllocationSize.QuadPart;
+    PAttribute DataAttribute;
+    LONGLONG Target;
+    NTSTATUS Status;
+    BOOLEAN SizePersisted = FALSE;
+
+    if (EndOffset > Allocation)
+    {
+        Target = Allocation + ((Allocation < NTFS_CACHED_GROWTH_LIMIT) ? Allocation : NTFS_CACHED_GROWTH_LIMIT);
+        if (Target < EndOffset)
+            Target = EndOffset;
+
+        NtfsAcquireMetadata(VolCB);
+        if (Allocation == 0 && EndOffset <= PAGE_SIZE)
+        {
+            Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType,
+                                                   FileCB->RequestedStream, EndOffset);
+            SizePersisted = NT_SUCCESS(Status);
+        }
+        else
+        {
+            Status = NtfsFileRecordSetFileAllocationSize(FileCB->FileRec, FileCB->RequestedType,
+                                                         FileCB->RequestedStream, Target);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
+            if (DataAttribute && DataAttribute->IsNonResident)
+                Allocation = (LONGLONG)NtfsAttributeGetPhysicalAllocationSize(DataAttribute);
+            InterlockedIncrement(&VolCB->DirGeneration);
+        }
+        NtfsReleaseMetadata(VolCB);
+        if (Allocation < EndOffset)
+            return FALSE;
+        if (SizePersisted)
+            FileCB->WriteTimesStamped = TRUE;
+    }
+
+    ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+    Header->AllocationSize.QuadPart = Allocation;
+    if (Header->FileSize.QuadPart < EndOffset)
+        Header->FileSize.QuadPart = EndOffset;
+    FileCB->StreamCB->SizePending = !SizePersisted;
+    ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+
+    if (FileObj->PrivateCacheMap != NULL)
+        CcSetFileSizes(FileObj, (PCC_FILE_SIZES)&Header->AllocationSize);
+    FileObj->Flags |= FO_FILE_SIZE_CHANGED;
+    return TRUE;
+}
+
+NTSTATUS
+NtfsPersistPendingSize(_In_ PVolumeContextBlock VolCB,
+                       _In_ PFileContextBlock FileCB)
+{
+    PFSRTL_ADVANCED_FCB_HEADER Header;
+    PAttribute DataAttribute;
+    NTSTATUS Status = STATUS_SUCCESS;
+    LONGLONG Allocation = -1;
+    LONGLONG FileSize;
+
+    if (!FileCB->StreamCB || !FileCB->StreamCB->SizePending || !FileCB->FileRec)
+        return STATUS_SUCCESS;
+
+    Header = NtfsGetCommonFcbHeader(FileCB);
+    FileSize = Header->FileSize.QuadPart;
+
+    ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
+    DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
+    if (DataAttribute && DataAttribute->IsNonResident)
+    {
+        if (DataAttribute->NonResident.DataSize != (ULONGLONG)FileSize)
+        {
+            Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream,
+                                                   (ULONGLONG)FileSize);
+        }
+        else if (NtfsAttributeGetPhysicalAllocationSize(DataAttribute) > (ULONGLONG)FileSize)
+        {
+            Status = NtfsFileRecordSetFileAllocationSize(FileCB->FileRec, FileCB->RequestedType,
+                                                         FileCB->RequestedStream, (ULONGLONG)FileSize);
+        }
+        DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
+        if (NT_SUCCESS(Status) && DataAttribute && DataAttribute->IsNonResident)
+            Allocation = (LONGLONG)NtfsAttributeGetPhysicalAllocationSize(DataAttribute);
+        if (NT_SUCCESS(Status))
+            InterlockedIncrement(&VolCB->DirGeneration);
+    }
+    else
+    {
+        Status = STATUS_FILE_CORRUPT_ERROR;
+    }
+    NtfsReleaseMetadata(VolCB);
+
+    if (NT_SUCCESS(Status))
+    {
+        if (Allocation >= FileSize)
+            Header->AllocationSize.QuadPart = Allocation;
+        FileCB->StreamCB->SizePending = FALSE;
+    }
+    ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+    return Status;
+}
 
 static
 BOOLEAN
@@ -24,15 +139,39 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
                 _Out_ PNTSTATUS Status)
 {
     PFSRTL_ADVANCED_FCB_HEADER Header = NtfsGetCommonFcbHeader(FileCB);
+    LONGLONG EndOffset = ByteOffset->QuadPart + Length;
     BOOLEAN Handled = FALSE;
+    BOOLEAN Extending;
 
     if (ByteOffset->QuadPart < 0 || !CcCanIWrite(FileObj, Length, TRUE, FALSE))
         return FALSE;
 
+    if (Length >= 1024 * 1024 && EndOffset > Header->ValidDataLength.QuadPart &&
+        FileObj->SectionObjectPointer->SharedCacheMap == NULL)
+    {
+        return FALSE;
+    }
+
     KeEnterCriticalRegion();
     ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
+    Extending = EndOffset > Header->ValidDataLength.QuadPart;
+    if (Extending)
+    {
+        ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+        ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+        if (!FileCB->StreamCB ||
+            FileCB->StreamCB->Deleted ||
+            EndOffset <= NTFS_RESIDENT_WRITE_LIMIT ||
+            ByteOffset->QuadPart > Header->ValidDataLength.QuadPart ||
+            !NtfsGrowForCachedWrite(VolCB, FileCB, FileObj, EndOffset))
+        {
+            ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+            KeLeaveCriticalRegion();
+            return FALSE;
+        }
+    }
 
-    if (ByteOffset->QuadPart + Length <= Header->ValidDataLength.QuadPart)
+    if (EndOffset <= Header->ValidDataLength.QuadPart || Extending)
     {
         if (FileObj->PrivateCacheMap == NULL)
             NtfsInitializeStreamCache(FileCB, FileObj);
@@ -52,6 +191,8 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
 
         if (NT_SUCCESS(*Status))
         {
+            if (EndOffset > Header->ValidDataLength.QuadPart)
+                Header->ValidDataLength.QuadPart = EndOffset;
             FileObj->Flags |= FO_FILE_MODIFIED;
             if (FileObj->Flags & FO_SYNCHRONOUS_IO)
                 FileObj->CurrentByteOffset.QuadPart = ByteOffset->QuadPart + Length;
@@ -65,11 +206,11 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
     {
         FileCB->WriteTimesStamped = TRUE;
         ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
-        ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+        NtfsAcquireMetadata(VolCB);
         NtfsFileRecordUpdateAutomaticTimestamps(FileCB->FileRec,
                                                 NTFS_BASIC_INFO_LAST_WRITE_TIME |
                                                 NTFS_BASIC_INFO_CHANGE_TIME);
-        ExReleaseResourceLite(&VolCB->MetadataResource);
+        NtfsReleaseMetadata(VolCB);
         ExReleaseResourceLite(NtfsGetMainResource(FileCB));
         InterlockedIncrement(&VolCB->DirGeneration);
     }
@@ -206,6 +347,12 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         LONGLONG FileSize = NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart;
 
+        if (FileCB->StreamCB && FileCB->StreamCB->Deleted)
+        {
+            Status = STATUS_SUCCESS;
+            Irp->IoStatus.Information = Length;
+            goto Complete;
+        }
         if (ByteOffset.QuadPart >= FileSize)
             Length = 0;
         else if (ByteOffset.QuadPart + Length > FileSize)
@@ -218,9 +365,14 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         IO_STATUS_BLOCK FlushStatus;
 
         CcFlushCache(FileObj->SectionObjectPointer, NULL, 0, &FlushStatus);
+        if (!NT_SUCCESS(FlushStatus.Status))
+        {
+            Status = FlushStatus.Status;
+            goto Complete;
+        }
     }
 
-    ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+    NtfsAcquireMetadata(VolCB);
     /*
      * A paging write hands us the section's own pages. Passing them straight
      * through means the storage stack probes and locks pages that Mm has
@@ -308,12 +460,12 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         ExFreePoolWithTag(BounceBuffer, TAG_NTFS);
         BounceBuffer = NULL;
     }
-    ExReleaseResourceLite(&VolCB->MetadataResource);
+    NtfsReleaseMetadata(VolCB);
 
     if (NT_SUCCESS(Status))
     {
-        NtfsRefreshFileSizes(FileCB,
-                             FileObj);
+        if (!PagingIo)
+            NtfsRefreshFileSizes(FileCB, FileObj);
         if (!PagingIo && Length != 0 && RequestedType == TypeData)
             NtfsPurgeStreamCache(FileCB, FileObj, &ByteOffset, Length);
         FileObj->Flags |=

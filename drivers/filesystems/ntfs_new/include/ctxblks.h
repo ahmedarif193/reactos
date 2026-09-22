@@ -30,6 +30,7 @@ typedef struct _VolumeContextBlock
     PDEVICE_OBJECT StorageDevice;
     PFILE_OBJECT StreamFileObject;
     ERESOURCE MetadataResource;
+    EX_PUSH_LOCK MetadataGate;
     FAST_MUTEX VolumeStateMutex;
     SHARE_ACCESS VolumeShareAccess;
     LONG OpenHandleCount;
@@ -53,6 +54,7 @@ typedef struct _VolumeContextBlock
     FAST_MUTEX RecordCacheMutex;
     LIST_ENTRY RecordCacheList;
     LIST_ENTRY RecordCacheHash[256];
+    LIST_ENTRY RecordIdentityHash[256];
     ULONG RecordCacheCount;
 
     /* One stable parent record for repeated leaf lookups in a directory. */
@@ -96,6 +98,8 @@ typedef struct _NtfsCachedRecord
 {
     LIST_ENTRY Link;
     LIST_ENTRY HashLink;
+    LIST_ENTRY IdentityLink;
+    ULONGLONG FileReference;
     ULONG Hash;
     USHORT Length;
     LONG InUse;
@@ -199,6 +203,8 @@ typedef struct _SCB
     LONG ReferenceCount;
     FILE_LOCK FileLock;
     SECTION_OBJECT_POINTERS SectionObjectPointers;
+    BOOLEAN SizePending;
+    BOOLEAN Deleted;
 } StreamContextBlock, *PStreamContextBlock;
 
 typedef struct _FCB
@@ -323,3 +329,23 @@ VOID
 NtfsDereferenceStreamContext(
     _In_ PVolumeContextBlock VolCB,
     _In_ PStreamContextBlock StreamCB);
+
+static inline
+VOID
+NtfsAcquireMetadata(_In_ PVolumeContextBlock VolCB)
+{
+    if (!ExIsResourceAcquiredExclusiveLite(&VolCB->MetadataResource))
+        ExfAcquirePushLockExclusive(&VolCB->MetadataGate);
+    ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+}
+
+static inline
+VOID
+NtfsReleaseMetadata(_In_ PVolumeContextBlock VolCB)
+{
+    BOOLEAN Last = ExIsResourceAcquiredSharedLite(&VolCB->MetadataResource) == 1;
+
+    ExReleaseResourceLite(&VolCB->MetadataResource);
+    if (Last)
+        ExfReleasePushLockExclusive(&VolCB->MetadataGate);
+}

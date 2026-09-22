@@ -262,6 +262,7 @@ NtfsFsdWrite (_In_    PDEVICE_OBJECT VolumeDeviceObject,
 // io/fileinfo.cpp
 
 struct _FCB;
+struct _VolumeContextBlock;
 
 VOID
 NtfsRefreshFileSizes(_In_ struct _FCB* FileCB,
@@ -276,6 +277,10 @@ NtfsPurgeStreamCache(_In_ struct _FCB* FileCB,
                      _In_ PFILE_OBJECT FileObject,
                      _In_opt_ PLARGE_INTEGER Offset,
                      _In_ ULONG Length);
+
+NTSTATUS
+NtfsPersistPendingSize(_In_ struct _VolumeContextBlock* VolCB,
+                       _In_ struct _FCB* FileCB);
 
 _Function_class_(IRP_MJ_QUERY_INFORMATION)
 _Function_class_(DRIVER_DISPATCH)

@@ -388,12 +388,14 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
          BooleanFlagOn(Irp->Flags, IRP_NOCACHE) ||
          BooleanFlagOn(FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING)))
     {
+        NtfsAcquireMetadata(VolCB);
         Status = NtfsTryDirectRead(VolCB,
                                    FileCB,
                                    Irp,
                                    (ULONGLONG)ReadOffset.QuadPart,
                                    RequestedLength,
                                    &DirectRead);
+        NtfsReleaseMetadata(VolCB);
         if (DirectRead)
         {
             if (NT_SUCCESS(Status))
@@ -501,12 +503,14 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             : NULL;
 
         // Copy data from $DATA into file buffer.
+        NtfsAcquireMetadata(VolCB);
         Status = NtfsFileRecordCopyData(FileCB->FileRec,
                                         FileCB->RequestedType,
                                         FileCB->RequestedStream,
                                         Bounce ? (PUCHAR)Bounce : Buffer,
                                         &RequestedLength,
                                         ReadOffset.QuadPart);
+        NtfsReleaseMetadata(VolCB);
         if (Bounce)
         {
             if (NT_SUCCESS(Status) && OriginalLength > RequestedLength)
@@ -549,15 +553,12 @@ ReadDone:
              */
             KeEnterCriticalRegion();
             ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
-            ExAcquireResourceExclusiveLite(
-                &VolCB->MetadataResource,
-                TRUE);
+            NtfsAcquireMetadata(VolCB);
             TimestampStatus =
                 NtfsFileRecordUpdateAutomaticTimestamps(
                     FileCB->FileRec,
                     NTFS_BASIC_INFO_LAST_ACCESS_TIME);
-            ExReleaseResourceLite(
-                &VolCB->MetadataResource);
+            NtfsReleaseMetadata(VolCB);
             ExReleaseResourceLite(NtfsGetMainResource(FileCB));
             KeLeaveCriticalRegion();
             if (!NT_SUCCESS(TimestampStatus))

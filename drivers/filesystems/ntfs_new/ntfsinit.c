@@ -171,8 +171,7 @@ NTAPI
 NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
                  _Inout_ PIRP Irp)
 {
-    /* Last chance to commit metadata the library is still holding. */
-    NtfsDiskFlushKm();
+    NTSTATUS Status = NtfsDiskFlushKm();
 
     /* Overview:
      * Occurs when the system is being shutdown.
@@ -180,8 +179,10 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
      * See: https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/irp-mj-shutdown
      */
     UNREFERENCED_PARAMETER(VolumeDeviceObject);
-    UNREFERENCED_PARAMETER(Irp);
-    return STATUS_SUCCESS;
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
 }
 
 _Function_class_(DRIVER_UNLOAD)
@@ -291,6 +292,16 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                NULL);
         }
 
+        if (FileCB->StreamCB && FileCB->StreamCB->SizePending &&
+            !FileCB->DeletePending && !(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE))
+        {
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+            NtfsPersistPendingSize(VolCB, FileCB);
+            ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+            KeLeaveCriticalRegion();
+        }
+
         /* The handle is going away, so a requested delete happens now. */
         if ((FileCB->DeletePending ||
              (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE)) &&
@@ -307,6 +318,15 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              * before it does, or the cache manager keeps trying to write them
              * back to a record that has been freed.
              */
+            if (FileCB->StreamCB)
+            {
+                KeEnterCriticalRegion();
+                ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+                FileCB->StreamCB->Deleted = TRUE;
+                FileCB->StreamCB->SizePending = FALSE;
+                ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+                KeLeaveCriticalRegion();
+            }
             if (IrpSp->FileObject->SectionObjectPointer)
             {
                 IrpSp->FileObject->SectionObjectPointer->ImageSectionObject = NULL;
@@ -323,23 +343,22 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             }
 
             KeEnterCriticalRegion();
-            ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+            NtfsAcquireMetadata(VolCB);
             DeleteStatus = NtfsMasterFileTableDeleteFile(
                 NtfsVolumeGetMft(VolCB->DiskVolume),
                 FileCB->FileName.Buffer,
                 FileCB->FileName.Length / sizeof(WCHAR),
                 IsDirectory);
-            ExReleaseResourceLite(&VolCB->MetadataResource);
+            NtfsReleaseMetadata(VolCB);
             KeLeaveCriticalRegion();
 
-            /* On success the library has already released the record set. */
             InterlockedIncrement(&VolCB->DirGeneration);
             NtfsEvictCachedRecord(VolCB,
                                   FileCB->FileName.Buffer,
                                   (USHORT)(FileCB->FileName.Length / sizeof(WCHAR)),
                                   NT_SUCCESS(DeleteStatus));
-            if (NT_SUCCESS(DeleteStatus))
-                FileCB->FileRec = NULL;
+            if (!NT_SUCCESS(DeleteStatus) && FileCB->StreamCB)
+                FileCB->StreamCB->Deleted = FALSE;
 
             if (!NT_SUCCESS(DeleteStatus))
                 DPRINT1("NtfsFsdCleanup: delete failed 0x%08lx\n", DeleteStatus);

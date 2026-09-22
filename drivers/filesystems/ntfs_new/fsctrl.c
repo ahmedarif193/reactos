@@ -144,6 +144,7 @@ NtfsUpdateReparsePoint(
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
+    NtfsAcquireMetadata(VolCB);
     Status = Delete
         ? NtfsFileRecordDeleteReparsePoint(
             FileCB->FileRec,
@@ -153,6 +154,7 @@ NtfsUpdateReparsePoint(
             FileCB->FileRec,
             Input,
             InputLength);
+    NtfsReleaseMetadata(VolCB);
     if (NT_SUCCESS(Status))
         FileObject->Flags |= FO_FILE_MODIFIED;
 
@@ -208,8 +210,10 @@ NtfsDeleteExternalBacking(
 
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
     Status = NtfsFileRecordDeleteExternalBacking(
         FileCB->FileRec);
+    NtfsReleaseMetadata(VolCB);
     if (NT_SUCCESS(Status))
     {
         NtfsRefreshFileSizes(FileCB,
@@ -285,11 +289,13 @@ NtfsSetSparse(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
     Status = NtfsFileRecordSetSparse(
         FileCB->FileRec,
         FileCB->RequestedType,
         FileCB->RequestedStream,
         SetSparse);
+    NtfsReleaseMetadata(VolCB);
     if (NT_SUCCESS(Status))
     {
         NtfsRefreshFileSizes(FileCB,
@@ -387,6 +393,10 @@ NtfsSetZeroData(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
     }
 
+    Status = NtfsPersistPendingSize(VolCB, FileCB);
+    if (!NT_SUCCESS(Status))
+        goto Done;
+    NtfsAcquireMetadata(VolCB);
     Status = NtfsFileRecordSetZeroData(
         FileCB->FileRec,
         FileCB->RequestedType,
@@ -394,6 +404,7 @@ NtfsSetZeroData(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         (ULONGLONG)Input->FileOffset.QuadPart,
         (ULONGLONG)Input->
             BeyondFinalZero.QuadPart);
+    NtfsReleaseMetadata(VolCB);
     if (NT_SUCCESS(Status))
     {
         NtfsRefreshFileSizes(FileCB,
@@ -1294,9 +1305,8 @@ NtfsDismountVolume(
      * while CcFlushCache below commits them.
      */
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&VolCB->MetadataResource,
-                                   TRUE);
-    ExReleaseResourceLite(&VolCB->MetadataResource);
+    NtfsAcquireMetadata(VolCB);
+    NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
 
     Status = NtfsFlushVolume(VolCB, TRUE);
@@ -1530,15 +1540,25 @@ NtfsFsdFlushBuffers(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
+    if (FileCB->IsVolumeOpen)
+    {
+        KeEnterCriticalRegion();
+        Status = NtfsFlushVolume((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension, FALSE);
+        KeLeaveCriticalRegion();
+        goto Complete;
+    }
+
     /* Hold the file still so no new data lands while its pages are written. */
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
 
-    if (FileObject->PrivateCacheMap)
+    if (FileObject->SectionObjectPointer)
     {
         CcFlushCache(FileObject->SectionObjectPointer, NULL, 0, &IoStatus);
         Status = IoStatus.Status;
     }
+    if (NT_SUCCESS(Status))
+        Status = NtfsPersistPendingSize((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension, FileCB);
 
     /* Metadata the library is holding back has to reach the disk too. */
     if (NT_SUCCESS(Status))
