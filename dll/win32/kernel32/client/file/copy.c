@@ -36,7 +36,7 @@ CopyLoop (
     NTSTATUS errCode;
     IO_STATUS_BLOCK IoStatusBlock;
     UCHAR *lpBuffer = NULL;
-    SIZE_T RegionSize = 0x10000;
+    SIZE_T RegionSize = 0x40000;
     LARGE_INTEGER BytesCopied;
     DWORD CallbackReason;
     DWORD ProgressResult;
@@ -223,7 +223,8 @@ BasepCopyFileExW(IN LPCWSTR lpExistingFileName,
                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
                                    NULL,
                                    OPEN_EXISTING,
-                                   FILE_ATTRIBUTE_NORMAL|FILE_FLAG_NO_BUFFERING,
+                                   FILE_ATTRIBUTE_NORMAL |
+                                   ((dwCopyFlags & COPY_FILE_NO_BUFFERING) ? FILE_FLAG_NO_BUFFERING : 0),
                                    NULL);
     if (INVALID_HANDLE_VALUE != FileHandleSource)
     {
