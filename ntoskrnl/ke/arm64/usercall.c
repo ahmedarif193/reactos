@@ -628,6 +628,7 @@ KeUserModeCallback(
     NTSTATUS CallbackStatus;
     PTEB Teb;
     ULONG GdiBatchCount = 0;
+    ULONG_PTR Page;
 
     ASSERT(KeGetCurrentThread()->ApcState.KernelApcInProgress == FALSE);
     ASSERT(KeGetPreviousMode() == UserMode);
@@ -639,6 +640,12 @@ KeUserModeCallback(
     {
         UserArguments = (PUCHAR)ALIGN_DOWN_POINTER_BY(OldStack - ArgumentLength, 16);
         CalloutFrame = ((PUCALLOUT_FRAME)UserArguments) - 1;
+
+        for (Page = PAGE_ROUND_DOWN(OldStack); Page > (ULONG_PTR)CalloutFrame;)
+        {
+            Page -= PAGE_SIZE;
+            ProbeForWrite((PVOID)Page, sizeof(CHAR), sizeof(CHAR));
+        }
 
         ProbeForWrite(CalloutFrame,
                       sizeof(*CalloutFrame) + ArgumentLength,
