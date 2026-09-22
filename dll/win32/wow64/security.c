@@ -531,6 +531,32 @@ NTSTATUS WINAPI wow64_NtQueryInformationToken( UINT *args )
         return status;
     }
 
+#ifdef __REACTOS__
+    case TokenBnoIsolation:
+    {
+        TOKEN_BNO_ISOLATION_INFORMATION32 *bno32 = info;
+        TOKEN_BNO_ISOLATION_INFORMATION *bno;
+        ULONG str_len;
+
+        status = NtQueryInformationToken( handle, class, NULL, 0, &ret_size );
+        if (status != STATUS_BUFFER_TOO_SMALL) return status;
+        bno = Wow64AllocateTemp( ret_size );
+        status = NtQueryInformationToken( handle, class, bno, ret_size, &ret_size );
+        if (status) return status;
+        str_len = ret_size - sizeof(*bno);
+        ret_size = sizeof(*bno32) + str_len;
+        if (len >= ret_size)
+        {
+            bno32->IsolationPrefix = bno->IsolationPrefix ? PtrToUlong( bno32 + 1 ) : 0;
+            bno32->IsolationEnabled = bno->IsolationEnabled;
+            if (bno->IsolationPrefix) memcpy( bno32 + 1, bno->IsolationPrefix, str_len );
+        }
+        else status = STATUS_BUFFER_TOO_SMALL;
+        if (retlen) *retlen = ret_size;
+        return status;
+    }
+#endif
+
     default:
 #ifdef __REACTOS__
         FIXME( "wow64_NtQueryInformationToken: unsupported class %u\n", class );
