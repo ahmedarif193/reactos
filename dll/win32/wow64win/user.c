@@ -4704,6 +4704,13 @@ NTSTATUS WINAPI wow64_NtUserSetClassWord( UINT *args )
 
 NTSTATUS WINAPI wow64_NtUserSetClipboardData( UINT *args )
 {
+#ifdef __REACTOS__
+    UINT format = get_ulong( &args );
+    HANDLE handle = get_handle( &args );
+    ROS_SETCLIPBDATA *scd = get_ptr( &args );
+
+    return HandleToUlong( ((ROS_NTUSER_SET_CLIPBOARD_DATA)NtUserSetClipboardData)( format, handle, scd ));
+#else
     UINT format = get_ulong( &args );
     HANDLE handle = get_handle( &args );
     struct
@@ -4721,6 +4728,7 @@ NTSTATUS WINAPI wow64_NtUserSetClipboardData( UINT *args )
     params.seqno      = params32->seqno;
 
     return NtUserSetClipboardData( format, handle, &params );
+#endif
 }
 
 NTSTATUS WINAPI wow64_NtUserSetClipboardViewer( UINT *args )
