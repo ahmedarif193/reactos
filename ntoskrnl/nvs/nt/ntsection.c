@@ -1809,6 +1809,11 @@ NtMapViewOfSection(
     {
         Status = MmMapViewOfSection(Section, Process, &SafeBase, ZeroBits, CommitSize, &SafeOffset, &SafeSize,
                                     InheritDisposition, AllocationType, Protect);
+        if (NT_SUCCESS(Status) && Section->Control->Image && !Section->Control->Image64 &&
+            sizeof(ULONG_PTR) == sizeof(ULONG64) && PsGetProcessWow64Process(Process) == NULL)
+        {
+            Status = STATUS_IMAGE_MACHINE_TYPE_MISMATCH;
+        }
     }
 
     ObDereferenceObject(Section);
