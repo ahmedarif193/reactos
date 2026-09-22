@@ -225,38 +225,6 @@ UefiGetSmbiosEpsPointer(VOID)
     return LegacyEntry;
 }
 
-#if defined(_M_ARM) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
-
-static
-const CHAR*
-UefiSmbiosGetString(
-    _In_ PSMBIOS_HEADER Header,
-    _In_ UCHAR StringIndex)
-{
-    const CHAR *String;
-    UCHAR Index;
-
-    if ((StringIndex == 0) || (Header->Length < sizeof(SMBIOS_HEADER)))
-        return NULL;
-
-    String = (const CHAR*)((UINTN)Header + Header->Length);
-
-    for (Index = 1; Index < StringIndex; ++Index)
-    {
-        ULONG Guard = 0;
-
-        while ((String[0] != ANSI_NULL) && (++Guard < 1024))
-            ++String;
-
-        if ((Guard >= 1024) || (String[1] == ANSI_NULL))
-            return NULL;
-
-        ++String;
-    }
-
-    return (String[0] != ANSI_NULL) ? String : NULL;
-}
-
 static
 PSMBIOS_HEADER
 UefiSmbiosNextStructure(
@@ -323,6 +291,66 @@ UefiGetSmbiosTable(VOID)
     }
 
     return NULL;
+}
+
+BOOLEAN
+UefiGetSmbiosSystemUuid(
+    _Out_ PGUID SystemGuid)
+{
+    PSMBIOS_HEADER Header;
+    ULONG Count;
+
+    Header = UefiGetSmbiosTable();
+
+    for (Count = 0; Count < 256 && Header && Header->Type != 127; ++Count)
+    {
+        if (Header->Type == 1)
+        {
+            PSMBIOS_SYSTEM_INFO SystemInfo = (PSMBIOS_SYSTEM_INFO)Header;
+
+            if (Header->Length < FIELD_OFFSET(SMBIOS_SYSTEM_INFO, WakeUpType))
+                return FALSE;
+
+            RtlCopyMemory(SystemGuid, SystemInfo->UUID, sizeof(*SystemGuid));
+            return TRUE;
+        }
+
+        Header = UefiSmbiosNextStructure(Header);
+    }
+
+    return FALSE;
+}
+
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+
+static
+const CHAR*
+UefiSmbiosGetString(
+    _In_ PSMBIOS_HEADER Header,
+    _In_ UCHAR StringIndex)
+{
+    const CHAR *String;
+    UCHAR Index;
+
+    if ((StringIndex == 0) || (Header->Length < sizeof(SMBIOS_HEADER)))
+        return NULL;
+
+    String = (const CHAR*)((UINTN)Header + Header->Length);
+
+    for (Index = 1; Index < StringIndex; ++Index)
+    {
+        ULONG Guard = 0;
+
+        while ((String[0] != ANSI_NULL) && (++Guard < 1024))
+            ++String;
+
+        if ((Guard >= 1024) || (String[1] == ANSI_NULL))
+            return NULL;
+
+        ++String;
+    }
+
+    return (String[0] != ANSI_NULL) ? String : NULL;
 }
 
 static

@@ -49,7 +49,10 @@ VOID
 WinLdrLoadGUID(
     _Out_ PGUID SystemGuid)
 {
-#if (defined(_M_IX86) || defined(_M_AMD64)) && !defined(UEFIBOOT)
+#if defined(UEFIBOOT)
+    if (UefiGetSmbiosSystemUuid(SystemGuid))
+        return;
+#elif defined(_M_IX86) || defined(_M_AMD64)
     PSYSID_UUID_ENTRY CurrentAddress;
 
     CurrentAddress = (PSYSID_UUID_ENTRY)0xE0000;

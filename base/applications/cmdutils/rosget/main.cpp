@@ -274,7 +274,7 @@ Status SearchCommand(SourceManager &source, const CommandOptions &options)
     std::printf("%-*s  %-*s  %-*s  ------\n", static_cast<int>(nameWidth), std::string(nameWidth, '-').c_str(), static_cast<int>(idWidth), std::string(idWidth, '-').c_str(), static_cast<int>(versionWidth), std::string(versionWidth, '-').c_str());
     for (const PackageRecord &package : packages)
         std::printf("%-*.*s  %-*.*s  %-*.*s  winget\n", static_cast<int>(nameWidth), static_cast<int>(nameWidth), package.name.c_str(), static_cast<int>(idWidth), static_cast<int>(idWidth), package.id.c_str(), static_cast<int>(versionWidth), static_cast<int>(versionWidth), package.version.c_str());
-    std::printf("ROSGET_SEARCH_DONE count=%zu\n", packages.size());
+    std::printf("ROSGET_SEARCH_DONE count=%Iu\n", packages.size());
     return Status::Ok();
 }
 
@@ -287,7 +287,7 @@ void PrintPackage(const PackageRecord &package, const Manifest &manifest, const 
     std::printf("Installer type: %s\n", installer.type.c_str());
     std::printf("Installer URL:  %s\n", installer.url.c_str());
     std::printf("Installer SHA:  %s\n", installer.sha256.c_str());
-    std::printf("Manifest:       %s %s (%zu installer%s)\n", manifest.id.c_str(), manifest.version.c_str(), manifest.installers.size(), manifest.installers.size() == 1 ? "" : "s");
+    std::printf("Manifest:       %s %s (%Iu installer%s)\n", manifest.id.c_str(), manifest.version.c_str(), manifest.installers.size(), manifest.installers.size() == 1 ? "" : "s");
 }
 
 void PrintPackageAgreements(const Manifest &manifest)

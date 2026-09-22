@@ -43,7 +43,7 @@ typedef void (*DEBUGPRINTFUNC)(const char *fmt, ...);
 extern  DEBUGPRINTFUNC pDebugPrint;
 
 #define DEBUG_ENTRY(level)                ((void)0)
-#define DEBUG_EXIT_STATUS(level, status)  ((void)0)
+#define DEBUG_EXIT_STATUS(level, status)  ((void)(status))
 #define DPrintFunctionName(Level)         ((void)0)
 
 

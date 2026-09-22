@@ -209,7 +209,7 @@ const char * string, const char * control)
 
     // Load 16 bytes.  This will not cross a page boundary but will have spurious data
     __m128i search = _mm_loadu_si128((__m128i *) alignedControl);
-    __m128i zero = _mm_xor_si128(zero, zero);
+    __m128i zero = _mm_setzero_si128();
     __m128i temp, tempMask, smearedChar;
     unsigned int mask, terminatorSeen = 0;
     unsigned long bitCount;

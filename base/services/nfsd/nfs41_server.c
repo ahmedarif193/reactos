@@ -82,15 +82,6 @@ static int server_compare(
     return diff ? diff : strncmp(server->owner, info->owner, NFS4_OPAQUE_LIMIT);
 }
 
-static int server_entry_find(
-    IN struct server_list *servers,
-    IN const struct server_info *info,
-    OUT struct list_entry **entry_out)
-{
-    *entry_out = list_search(&servers->head, info, server_compare);
-    return *entry_out ? NO_ERROR : ERROR_FILE_NOT_FOUND;
-}
-
 static int server_create(
     IN const struct server_info *info,
     OUT nfs41_server **server_out)

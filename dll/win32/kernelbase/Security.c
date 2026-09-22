@@ -280,7 +280,7 @@ AddScopedPolicyIDAce(
     _In_ DWORD AccessMask,
     _In_ PSID Sid)
 {
-    static const SID_IDENTIFIER_AUTHORITY PolicyAuthority = SECURITY_SCOPED_POLICY_ID_AUTHORITY;
+    static const SID_IDENTIFIER_AUTHORITY PolicyAuthority = {SECURITY_SCOPED_POLICY_ID_AUTHORITY};
     ACL_SIZE_INFORMATION Size;
     PSYSTEM_SCOPED_POLICY_ID_ACE Ace;
     DWORD Length;
@@ -351,7 +351,7 @@ BOOL
 BasepIsWorldSid(
     _In_ PSID Sid)
 {
-    static const SID_IDENTIFIER_AUTHORITY WorldAuthority = SECURITY_WORLD_SID_AUTHORITY;
+    static const SID_IDENTIFIER_AUTHORITY WorldAuthority = {SECURITY_WORLD_SID_AUTHORITY};
 
     return IsValidSid(Sid) &&
            *GetSidSubAuthorityCount(Sid) == 1 &&

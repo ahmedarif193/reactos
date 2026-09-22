@@ -344,7 +344,7 @@ static void populate_ea_list(
     OUT PFILE_GET_EA_INFORMATION ea_list)
 {
     const nfs41_readdir_entry *entry;
-    PFILE_GET_EA_INFORMATION ea = ea_list, prev = NULL;
+    PFILE_GET_EA_INFORMATION ea = ea_list;
 
     for (;;) {
         entry = (const nfs41_readdir_entry*)position;
@@ -356,7 +356,6 @@ static void populate_ea_list(
             break;
         }
 
-        prev = ea;
         ea->NextEntryOffset = ALIGNED_EASIZE(ea->EaNameLength);
         ea = (PFILE_GET_EA_INFORMATION)NEXT_ENTRY(ea);
         position += entry->next_entry_offset;

@@ -441,7 +441,7 @@ VOID ServiceStart(DWORD argc, LPTSTR *argv)
 
 #ifdef _DEBUG
     /* dump memory leaks to stderr on exit; this requires the debug heap,
-    /* available only when built in debug mode under visual studio -cbodley */
+     * available only when built in debug mode under visual studio -cbodley */
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
     _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
 #pragma warning (push)

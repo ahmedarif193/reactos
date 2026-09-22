@@ -391,13 +391,14 @@ TdiDefaultSendPossibleHandler(
 #define TdiBuildBaseIrp(                                                  \
   bIrp, bDevObj, bFileObj, bCompRoutine, bContxt, bIrpSp, bMinor)         \
 {                                                                         \
+  PIO_COMPLETION_ROUTINE _TdiCompRoutine = (bCompRoutine);                \
   bIrpSp->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;                 \
   bIrpSp->MinorFunction = (bMinor);                                       \
   bIrpSp->DeviceObject  = (bDevObj);                                      \
   bIrpSp->FileObject    = (bFileObj);                                     \
-  if (bCompRoutine)                                                       \
+  if (_TdiCompRoutine != NULL)                                            \
   {                                                                       \
-    IoSetCompletionRoutine(bIrp, bCompRoutine, bContxt, TRUE, TRUE, TRUE);\
+    IoSetCompletionRoutine(bIrp, _TdiCompRoutine, bContxt, TRUE, TRUE, TRUE);\
   }                                                                       \
   else                                                                    \
     IoSetCompletionRoutine(bIrp, NULL, NULL, FALSE, FALSE, FALSE);        \

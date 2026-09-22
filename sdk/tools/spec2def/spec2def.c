@@ -1533,7 +1533,7 @@ ParseFile(char* pcStart, FILE *fileDest, unsigned *cExports)
         {
             /* Check whether the current export is not PRIVATE, or has an ordinal */
             int bIsNotPrivate = (!gbNotPrivateNoWarn && /*gbImportLib &&*/ !(exp.uFlags & FL_PRIVATE));
-            int bHasOrdinal = (exp.uFlags & FL_ORDINAL);
+            int bHasOrdinal = (exp.uFlags & FL_ORDINAL) && (gbImportLib || (exp.uFlags & FL_NONAME));
 
             /* Check whether the current export is an OLE export, in case any of these tests pass */
             if (bIsNotPrivate || bHasOrdinal)

@@ -144,6 +144,7 @@ ULONG MachGetBootSectorLoadAddress(IN UCHAR DriveNumber);
 
 #ifdef UEFIBOOT
 PVOID UefiGetSmbiosEpsPointer(VOID);
+BOOLEAN UefiGetSmbiosSystemUuid(_Out_ PGUID SystemGuid);
 BOOLEAN UefiFirmwareSetupSupported(VOID);
 VOID UefiBootToFirmware(VOID);
 #endif
