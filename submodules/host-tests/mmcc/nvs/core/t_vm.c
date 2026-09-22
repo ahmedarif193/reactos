@@ -929,6 +929,71 @@ PagingCleanPrivateAccounting(void)
     WorldDestroy(&World);
 }
 
+static ULONG ExpandCalls;
+static LONG64 ExpandMaximum;
+
+static
+BOOLEAN
+TestExpandCommit(PMI_SYSTEM System, LONG64 Pages, LONG64 Limit, BOOLEAN Wait)
+{
+    __sync_fetch_and_add(&ExpandCalls, 1);
+    if (Pages == 0 || !Wait || Limit + Pages > ExpandMaximum)
+        return FALSE;
+
+    if (!NT_SUCCESS(MiPageFileExtend(System->PageFile, System->PageFile->SlotCount + (ULONG64)Pages)))
+        return FALSE;
+
+    MI_ATOMIC_ADD64(&System->CommitLimit, Pages);
+    return TRUE;
+}
+
+static
+void
+PagingCommitExpansion(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    ULONG64 Base[4] = { 0, 0, 0, 0 };
+    ULONG64 Slots[64];
+    ULONG64 Slot;
+    ULONG Count = 0;
+    ULONG i;
+
+    WorldCreate(&World, 256, 1, 64);
+    WorldAttachPageFile(&World, 16);
+    World.System.ExpandCommit = TestExpandCommit;
+    ExpandCalls = 0;
+    ExpandMaximum = 128;
+
+    CHECK(NT_SUCCESS(MiAddressSpaceCreate(&World.System, &Space)));
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base[0], 32 * PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE)));
+    CHECK(ExpandCalls == 0);
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base[1], 40 * PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE)));
+    CHECK(ExpandCalls == 1);
+    CHECK(MI_ATOMIC_READ64(&World.System.CommitLimit) == 104);
+    CHECK(World.Paging.PageFile.SlotCount == 56);
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base[2], 28 * PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE)));
+    CHECK(ExpandCalls == 2);
+
+    CHECK(!NT_SUCCESS(Alloc(&Space, &Base[3], 40 * PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE)));
+    CHECK(MI_ATOMIC_READ64(&World.System.CommitLimit) == 104);
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 100);
+
+    while (Count < 64 && (Slot = MiPageFileReserveSlot(&World.Paging.PageFile)) != 0)
+        Slots[Count++] = Slot;
+    CHECK(Count == 55);
+    for (i = 0; i < Count; i++)
+        MiPageFileReleaseSlot(&World.Paging.PageFile, Slots[i]);
+    CHECK(World.Paging.PageFile.SlotsInUse == 0);
+
+    MiCleanAddressSpace(&Space);
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 0);
+    MiAddressSpaceDestroy(&Space);
+    WorldDestroy(&World);
+}
+
 void
 TestPaging(void)
 {
@@ -936,4 +1001,5 @@ TestPaging(void)
     PagingAgingAndSoftFaults();
     PagingInPageError();
     PagingCleanPrivateAccounting();
+    PagingCommitExpansion();
 }
