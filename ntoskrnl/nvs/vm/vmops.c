@@ -1153,6 +1153,7 @@ MiMapFramesUser(
     {
         ULONG64 Va = Start + (ULONG64)i * PAGE_SIZE;
         ULONG TableFrame;
+        ULONG PageFlags = LockedPages ? MiPfnMappingFlags(&Space->System->Pfn, Frames[i], LeafFlags) : LeafFlags;
         PMI_PTE Slot = MiPtEnsure(Space, Va, &TableFrame);
 
         if (Slot == NULL)
@@ -1163,7 +1164,7 @@ MiMapFramesUser(
 
         MiPtWrite(Space, Va, Slot, TableFrame,
                   MiArchPteMakeLeaf(Frames[i], Protection,
-                                    LeafFlags | MI_LEAF_DIRTY | (Space->IsSystem ? MI_LEAF_GLOBAL : MI_LEAF_USER)));
+                                    PageFlags | MI_LEAF_DIRTY | (Space->IsSystem ? MI_LEAF_GLOBAL : MI_LEAF_USER)));
     }
 
     if (!NT_SUCCESS(Status))

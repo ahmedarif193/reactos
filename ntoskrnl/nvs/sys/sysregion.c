@@ -113,6 +113,7 @@ MiSystemMapFrames(
     {
         ULONG64 Va = VirtualAddress + (ULONG64)i * PAGE_SIZE;
         ULONG TableFrame;
+        ULONG PageFlags = LeafFlags;
         PMI_PTE Slot = MiPtLookup(Space, Va, &TableFrame);
 
         if (Slot == NULL)
@@ -134,10 +135,15 @@ MiSystemMapFrames(
         {
             MiPfnInitializePage(&System->Pfn, (ULONG)Frames[i], MiPtSlotAddress(Slot, TableFrame, Va), TableFrame,
                                 MiSoftMake(MiSoftDemandZero, Protection, 0), 0);
+            System->Pfn.Pfn[Frames[i]].CacheFlags = (LeafFlags & MI_LEAF_CACHE_MASK) |
+                                                  ((Protection & MI_PROT_NOCACHE) ? MI_LEAF_NOCACHE : 0);
         }
 
+        if (LeafFlags & MI_LEAF_PFN_CACHE)
+            PageFlags = MiPfnMappingFlags(&System->Pfn, Frames[i], LeafFlags);
+
         MiPtWrite(Space, Va, Slot, TableFrame,
-                  MiArchPteMakeLeaf(Frames[i], Protection, LeafFlags | MI_LEAF_GLOBAL | MI_LEAF_DIRTY));
+                  MiArchPteMakeLeaf(Frames[i], Protection, PageFlags | MI_LEAF_GLOBAL | MI_LEAF_DIRTY));
     }
 
     return STATUS_SUCCESS;
