@@ -755,8 +755,8 @@ Rpi5Vc4DdiStartDevice(
         if (!Rpi5MboxSetClockState(DeviceExtension, RPI5_MBOX_CLOCK_V3D, TRUE))
             DPRINT1("RPI5VC4: V3D clock enable via mailbox failed\n");
 
-        /* Pin the clock: firmware DVFS transitions mid-vertex-fetch are a
-         * park suspect (500MHz experiment — parks vanish => clock root). */
+        /* Keep the existing conservative V3D clock request. Firmware mailbox
+         * readback alone does not establish the effective hardware clock. */
         if (!Rpi5MboxSetClockRate(DeviceExtension, RPI5_MBOX_CLOCK_V3D,
                                   500 * 1000 * 1000))
             DPRINT1("RPI5VC4: V3D clock pin failed\n");
