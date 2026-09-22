@@ -64,7 +64,7 @@ endif()
 
 set_module_type(comctl32 win32dll UNICODE)
 target_link_libraries(comctl32 uuid wine ${PSEH_LIB} oldnames)
-add_delay_importlibs(comctl32 oleacc winmm uxtheme)
+add_delay_importlibs(comctl32 oleacc winmm uxtheme ole32)
 add_importlibs(comctl32 user32 gdi32 advapi32 usp10 imm32 kernelbase_ros oleaut32 msvcrt kernel32 ntdll)
 add_pch(comctl32 precomp.h SOURCE)
 add_cd_file(TARGET comctl32 DESTINATION reactos/system32 FOR all)

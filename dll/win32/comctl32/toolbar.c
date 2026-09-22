@@ -68,6 +68,9 @@
  *
  */
 
+#ifdef __REACTOS__
+#define COBJMACROS
+#endif
 #include <stdarg.h>
 #include <string.h>
 
@@ -80,6 +83,9 @@
 #include "commctrl.h"
 #include "comctl32.h"
 #include "wine/debug.h"
+#ifdef __REACTOS__
+#include "ole2.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(toolbar);
 
@@ -176,6 +182,13 @@ typedef struct
     TBITMAP_INFO *bitmaps;
 #if __WINE_COMCTL32_VERSION == 6
     HTHEME   hTheme;            /* theme */
+#endif
+#ifdef __REACTOS__
+    IDropTarget IDropTarget_iface;
+    IDataObject *pDragData;
+    IDropTarget *pDropTarget;
+    INT      nDropItem;
+    BOOL     bDropRegistered;
 #endif
 } TOOLBAR_INFO, *PTOOLBAR_INFO;
 
@@ -390,12 +403,33 @@ static void free_string( TBUTTON_INFO *btn )
 * issues FIXMEs warning of possible problems. In a perfect world this
 * function should be null.
 */
+#ifdef __REACTOS__
+static void
+TOOLBAR_CheckStyle (TOOLBAR_INFO *infoPtr)
+{
+    BOOL bRegister = !!(infoPtr->dwStyle & TBSTYLE_REGISTERDROP);
+
+    if (bRegister == infoPtr->bDropRegistered)
+        return;
+
+    if (bRegister)
+    {
+        infoPtr->bDropRegistered = SUCCEEDED(RegisterDragDrop(infoPtr->hwndSelf, &infoPtr->IDropTarget_iface));
+    }
+    else
+    {
+        RevokeDragDrop(infoPtr->hwndSelf);
+        infoPtr->bDropRegistered = FALSE;
+    }
+}
+#else
 static void
 TOOLBAR_CheckStyle (const TOOLBAR_INFO *infoPtr)
 {
     if (infoPtr->dwStyle & TBSTYLE_REGISTERDROP)
 	FIXME("[%p] TBSTYLE_REGISTERDROP not implemented\n", infoPtr->hwndSelf);
 }
+#endif
 
 
 static INT
@@ -2011,6 +2045,156 @@ TOOLBAR_InternalHitTest (const TOOLBAR_INFO *infoPtr, const POINT *lpPt, BOOL *b
     TRACE(" NOWHERE\n");
     return TOOLBAR_NOWHERE;
 }
+
+#ifdef __REACTOS__
+static inline TOOLBAR_INFO *impl_from_IDropTarget(IDropTarget *iface)
+{
+    return CONTAINING_RECORD(iface, TOOLBAR_INFO, IDropTarget_iface);
+}
+
+static void
+TOOLBAR_DropLeave(TOOLBAR_INFO *infoPtr)
+{
+    if (infoPtr->pDropTarget)
+    {
+        IDropTarget_DragLeave(infoPtr->pDropTarget);
+        IDropTarget_Release(infoPtr->pDropTarget);
+        infoPtr->pDropTarget = NULL;
+    }
+    infoPtr->nDropItem = -1;
+}
+
+static void
+TOOLBAR_DropRelease(TOOLBAR_INFO *infoPtr)
+{
+    TOOLBAR_DropLeave(infoPtr);
+    if (infoPtr->pDragData)
+    {
+        IDataObject_Release(infoPtr->pDragData);
+        infoPtr->pDragData = NULL;
+    }
+}
+
+static HRESULT
+TOOLBAR_DropUpdate(TOOLBAR_INFO *infoPtr, DWORD grfKeyState, POINTL ptl, DWORD *pdwEffect)
+{
+    NMOBJECTNOTIFY nmo;
+    POINT pt = { ptl.x, ptl.y };
+    BOOL bButton;
+    INT nItem;
+
+    ScreenToClient(infoPtr->hwndSelf, &pt);
+    nItem = TOOLBAR_InternalHitTest(infoPtr, &pt, &bButton);
+    if (!bButton)
+        nItem = -1;
+
+    if (nItem == infoPtr->nDropItem)
+    {
+        if (infoPtr->pDropTarget)
+            return IDropTarget_DragOver(infoPtr->pDropTarget, grfKeyState, ptl, pdwEffect);
+        *pdwEffect = DROPEFFECT_NONE;
+        return S_OK;
+    }
+
+    TOOLBAR_DropLeave(infoPtr);
+    infoPtr->nDropItem = nItem;
+    *pdwEffect = DROPEFFECT_NONE;
+    if (nItem < 0)
+        return S_OK;
+
+    ZeroMemory(&nmo, sizeof(nmo));
+    nmo.iItem = infoPtr->buttons[nItem].idCommand;
+    nmo.piid = &IID_IDropTarget;
+    nmo.hResult = E_NOINTERFACE;
+    TOOLBAR_SendNotify(&nmo.hdr, infoPtr, TBN_GETOBJECT);
+    if (FAILED(nmo.hResult) || !nmo.pObject)
+        return S_OK;
+
+    infoPtr->pDropTarget = nmo.pObject;
+    return IDropTarget_DragEnter(infoPtr->pDropTarget, infoPtr->pDragData, grfKeyState, ptl, pdwEffect);
+}
+
+static HRESULT WINAPI
+ToolbarDropTarget_QueryInterface(IDropTarget *iface, REFIID riid, void **ppv)
+{
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDropTarget))
+    {
+        *ppv = iface;
+        IDropTarget_AddRef(iface);
+        return S_OK;
+    }
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI
+ToolbarDropTarget_AddRef(IDropTarget *iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI
+ToolbarDropTarget_Release(IDropTarget *iface)
+{
+    return 1;
+}
+
+static HRESULT WINAPI
+ToolbarDropTarget_DragEnter(IDropTarget *iface, IDataObject *pDataObj, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
+{
+    TOOLBAR_INFO *infoPtr = impl_from_IDropTarget(iface);
+
+    TOOLBAR_DropRelease(infoPtr);
+    infoPtr->pDragData = pDataObj;
+    if (pDataObj)
+        IDataObject_AddRef(pDataObj);
+    return TOOLBAR_DropUpdate(infoPtr, grfKeyState, pt, pdwEffect);
+}
+
+static HRESULT WINAPI
+ToolbarDropTarget_DragOver(IDropTarget *iface, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
+{
+    return TOOLBAR_DropUpdate(impl_from_IDropTarget(iface), grfKeyState, pt, pdwEffect);
+}
+
+static HRESULT WINAPI
+ToolbarDropTarget_DragLeave(IDropTarget *iface)
+{
+    TOOLBAR_DropRelease(impl_from_IDropTarget(iface));
+    return S_OK;
+}
+
+static HRESULT WINAPI
+ToolbarDropTarget_Drop(IDropTarget *iface, IDataObject *pDataObj, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
+{
+    TOOLBAR_INFO *infoPtr = impl_from_IDropTarget(iface);
+    HRESULT hr = S_OK;
+
+    if (infoPtr->pDropTarget)
+    {
+        hr = IDropTarget_Drop(infoPtr->pDropTarget, pDataObj, grfKeyState, pt, pdwEffect);
+        IDropTarget_Release(infoPtr->pDropTarget);
+        infoPtr->pDropTarget = NULL;
+    }
+    else
+    {
+        *pdwEffect = DROPEFFECT_NONE;
+    }
+    TOOLBAR_DropRelease(infoPtr);
+    return hr;
+}
+
+static const IDropTargetVtbl ToolbarDropTargetVtbl =
+{
+    ToolbarDropTarget_QueryInterface,
+    ToolbarDropTarget_AddRef,
+    ToolbarDropTarget_Release,
+    ToolbarDropTarget_DragEnter,
+    ToolbarDropTarget_DragOver,
+    ToolbarDropTarget_DragLeave,
+    ToolbarDropTarget_Drop
+};
+#endif
 
 
 /* worker for TB_ADDBUTTONS and TB_INSERTBUTTON */
@@ -5543,6 +5727,14 @@ TOOLBAR_Destroy (TOOLBAR_INFO *infoPtr)
 {
     INT i;
 
+#ifdef __REACTOS__
+    TOOLBAR_DropRelease(infoPtr);
+    if (infoPtr->bDropRegistered)
+    {
+        RevokeDragDrop(infoPtr->hwndSelf);
+        infoPtr->bDropRegistered = FALSE;
+    }
+#endif
     /* delete tooltip control */
     if (infoPtr->hwndToolTip)
 	DestroyWindow (infoPtr->hwndToolTip);
@@ -6328,6 +6520,10 @@ TOOLBAR_NCCreate (HWND hwnd, WPARAM wParam, const CREATESTRUCTW *lpcs)
     infoPtr->iVersion = 0;
 #endif
     infoPtr->hwndSelf = hwnd;
+#ifdef __REACTOS__
+    infoPtr->IDropTarget_iface.lpVtbl = &ToolbarDropTargetVtbl;
+    infoPtr->nDropItem = -1;
+#endif
     infoPtr->bDoRedraw = TRUE;
     infoPtr->clrBtnHighlight = CLR_DEFAULT;
     infoPtr->clrBtnShadow = CLR_DEFAULT;
