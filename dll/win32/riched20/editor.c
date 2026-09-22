@@ -2970,7 +2970,11 @@ static LONG ME_GetSelectionType(ME_TextEditor *editor)
 static BOOL ME_ShowContextMenu(ME_TextEditor *editor, int x, int y)
 {
     CHARRANGE selrange;
+#ifdef __REACTOS__
+    HMENU menu = NULL;
+#else
     HMENU menu;
+#endif
     int seltype;
     HWND hwnd, parent;
 
@@ -2981,7 +2985,11 @@ static BOOL ME_ShowContextMenu(ME_TextEditor *editor, int x, int y)
 
     ME_GetSelectionOfs( editor, &selrange.cpMin, &selrange.cpMax );
     seltype = ME_GetSelectionType( editor );
+#ifdef __REACTOS__
+    if (SUCCEEDED( IRichEditOleCallback_GetContextMenu( editor->lpOleCallback, seltype, NULL, &selrange, &menu ) ) && menu)
+#else
     if (SUCCEEDED( IRichEditOleCallback_GetContextMenu( editor->lpOleCallback, seltype, NULL, &selrange, &menu ) ))
+#endif
     {
         TrackPopupMenu( menu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, x, y, 0, parent, NULL );
         DestroyMenu( menu );
