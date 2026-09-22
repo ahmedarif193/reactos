@@ -37,6 +37,31 @@ FileRecord::FileRecord(_In_ PVolume DiskVolume,
 
 FileRecord::FileRecord(_In_ PVolume DiskVolume) : FileRecord(DiskVolume, DiskVolume->MFT->FileRecordSize) { }
 
+NTSTATUS
+FileRecord::RefreshFrom(_In_ const FileRecord& Record)
+{
+    if (!Data || !Record.Data || DiskVolume != Record.DiskVolume ||
+        RecordBufferSize != Record.RecordBufferSize ||
+        Header->MFTRecordNumber != Record.Header->MFTRecordNumber ||
+        Header->SequenceNumber != Record.Header->SequenceNumber ||
+        BaseRecordOwner || Record.BaseRecordOwner)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (this == &Record)
+        return STATUS_SUCCESS;
+
+    ClearDataRunCache();
+    ClearExtentCache();
+    delete[] AttributeListData;
+    AttributeListData = NULL;
+    AttributeListLength = 0;
+    InvalidateWofCompression();
+    RtlCopyMemory(Data, Record.Data, RecordBufferSize);
+    Header = reinterpret_cast<PFileRecordHeader>(Data);
+    return STATUS_SUCCESS;
+}
+
 FileRecord::~FileRecord()
 {
     ClearDataRunCache();
