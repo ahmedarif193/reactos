@@ -330,7 +330,7 @@ HRESULT CRegPropertyBag::Init(HKEY hKey, LPCWSTR lpSubKey)
 
     if (error != ERROR_SUCCESS)
     {
-        ERR("%p %s 0x%08X\n", hKey, debugstr_w(lpSubKey), error);
+        WARN("%p %s 0x%08X\n", hKey, debugstr_w(lpSubKey), error);
         return HRESULT_FROM_WIN32(error);
     }
 

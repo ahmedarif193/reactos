@@ -1653,7 +1653,7 @@ UserPostMessage( HWND Wnd,
 
         if ( pti->TIF_flags & TIF_INCLEANUP )
         {
-            ERR("Attempted to post message to window %p when the thread is in cleanup!\n", Wnd);
+            WARN("Attempted to post message to window %p when the thread is in cleanup!\n", Wnd);
             return FALSE;
         }
 

@@ -953,7 +953,7 @@ RtlGetFullPathName_Ustr(
                         goto Quit;
 
                     default:
-                        DPRINT1("RtlQueryEnvironmentVariable_U(\"%wZ\") returned 0x%08lx\n", &EnvVarName, Status);
+                        DPRINT("RtlQueryEnvironmentVariable_U(\"%wZ\") returned 0x%08lx\n", &EnvVarName, Status);
 
                         EnvVarNameBuffer[0] = NewDrive;
                         EnvVarNameBuffer[1] = L':';

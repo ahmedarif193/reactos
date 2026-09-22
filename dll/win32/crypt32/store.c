@@ -144,7 +144,11 @@ BOOL WINAPI I_CertUpdateStore(HCERTSTORE store1, HCERTSTORE store2, DWORD unk0,
     DWORD i;
 
     TRACE("(%p, %p, %08lx, %08lx)\n", store1, store2, unk0, unk1);
+#ifdef __REACTOS__
+    if ((unk0 || unk1) && !warned)
+#else
     if (!warned)
+#endif
     {
         FIXME("semi-stub\n");
         warned = TRUE;

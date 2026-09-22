@@ -4918,7 +4918,7 @@ SHPropertyBag_ReadType(IPropertyBag *ppb, LPCWSTR pszPropName, VARIANTARG *pvarg
     hr = IPropertyBag_Read(ppb, pszPropName, pvarg, NULL);
     if (FAILED(hr))
     {
-        ERR("%p %s\n", ppb, debugstr_w(pszPropName));
+        WARN("%p %s\n", ppb, debugstr_w(pszPropName));
         VariantInit(pvarg);
         return hr;
     }

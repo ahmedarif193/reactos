@@ -759,6 +759,9 @@ BOOL WINAPI ImpersonateLoggedOnUser( HANDLE token )
     BOOL ret;
     HANDLE dup;
     TOKEN_TYPE type;
+#ifdef __REACTOS__
+    TRACE( "(%p)\n", token );
+#else
     static BOOL warn = TRUE;
 
     if (warn)
@@ -766,6 +769,7 @@ BOOL WINAPI ImpersonateLoggedOnUser( HANDLE token )
         FIXME( "(%p)\n", token );
         warn = FALSE;
     }
+#endif
     if (!GetTokenInformation( token, TokenType, &type, sizeof(type), &size )) return FALSE;
 
     if (type == TokenPrimary)

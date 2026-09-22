@@ -1253,7 +1253,6 @@ NtUserEnableScrollBar(
    UINT wSBflags,
    UINT wArrows)
 {
-   UINT OrigArrows;
    PWND Window = NULL;
    PSCROLLBARINFO InfoV = NULL, InfoH = NULL;
    BOOL Chg = FALSE;
@@ -1270,8 +1269,6 @@ NtUserEnableScrollBar(
 
    if (!co_IntCreateScrollBars(Window))
       goto Cleanup; // Return FALSE
-
-   OrigArrows = Window->pSBInfo->WSBflags;
 
    if (wSBflags == SB_CTL)
    {
@@ -1317,20 +1314,7 @@ NtUserEnableScrollBar(
       Chg = (IntEnableScrollBar(TRUE, InfoH, wArrows) || Chg);
    }
 
-   ERR("FIXME: EnableScrollBar wSBflags %u wArrows %u Chg %d\n", wSBflags, wArrows, Chg);
-// Done in user32:
-//   SCROLL_RefreshScrollBar(hwnd, nBar, TRUE, TRUE);
-
    Ret = Chg;
-   goto Cleanup; // FIXME
-
-   if (OrigArrows == wArrows)
-   {
-      Ret = FALSE;
-      goto Cleanup;
-   }
-
-   Ret = TRUE;
 
 Cleanup:
    if (Window)
