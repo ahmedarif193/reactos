@@ -10,17 +10,41 @@
 #include <nvs/include/mm.h>
 
 BOOLEAN
+MiChargeSystemCommit(
+    _Inout_ PMI_SYSTEM System,
+    _In_ LONG64 Pages,
+    _In_ BOOLEAN Wait)
+{
+    LONG64 Committed;
+    LONG64 Limit;
+
+    for (;;)
+    {
+        Limit = MI_ATOMIC_READ64(&System->CommitLimit);
+        Committed = MI_ATOMIC_ADD64(&System->CommittedPages, Pages) + Pages;
+        if (Committed <= Limit)
+            break;
+
+        MI_ATOMIC_ADD64(&System->CommittedPages, -Pages);
+        if (Pages <= 0 || System->ExpandCommit == NULL || !System->ExpandCommit(System, Pages, Limit, Wait))
+            return FALSE;
+    }
+
+    if (Pages > 0 && System->ExpandCommit != NULL && Committed > Limit - Limit / 10)
+        System->ExpandCommit(System, 0, Limit, FALSE);
+
+    return TRUE;
+}
+
+BOOLEAN
 MiChargeCommit(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ LONG64 Pages)
 {
     PMI_SYSTEM System = Space->System;
 
-    if (MI_ATOMIC_ADD64(&System->CommittedPages, Pages) + Pages > System->CommitLimit)
-    {
-        MI_ATOMIC_ADD64(&System->CommittedPages, -Pages);
+    if (!MiChargeSystemCommit(System, Pages, (BOOLEAN)!Space->IsSystem))
         return FALSE;
-    }
 
     if (Pages > 0 && Space->CommitOwner != NULL && System->ChargeOwnerCommit != NULL &&
         !System->ChargeOwnerCommit(Space->CommitOwner, Pages))

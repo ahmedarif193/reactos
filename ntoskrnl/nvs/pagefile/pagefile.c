@@ -33,6 +33,42 @@ MiPageFileInitialize(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+MiPageFileExtend(
+    _Inout_ PMI_PAGEFILE PageFile,
+    _In_ ULONG64 SlotCount)
+{
+    SIZE_T Words = (SIZE_T)((SlotCount + 63) / 64);
+    PULONG64 Bitmap;
+    PULONG64 Old;
+    KIRQL OldIrql;
+
+    Bitmap = MI_ALLOCATE(Words * sizeof(ULONG64));
+    if (Bitmap == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Bitmap, Words * sizeof(ULONG64));
+
+    MI_SPIN_ACQUIRE(&PageFile->Lock, &OldIrql);
+
+    if (SlotCount <= PageFile->SlotCount)
+    {
+        MI_SPIN_RELEASE(&PageFile->Lock, OldIrql);
+        MI_FREE(Bitmap);
+        return STATUS_SUCCESS;
+    }
+
+    RtlCopyMemory(Bitmap, PageFile->Bitmap, (SIZE_T)((PageFile->SlotCount + 63) / 64) * sizeof(ULONG64));
+    Old = PageFile->Bitmap;
+    PageFile->Bitmap = Bitmap;
+    PageFile->SlotCount = SlotCount;
+
+    MI_SPIN_RELEASE(&PageFile->Lock, OldIrql);
+
+    MI_FREE(Old);
+    return STATUS_SUCCESS;
+}
+
 VOID
 MiPageFileUninitialize(
     _Inout_ PMI_PAGEFILE PageFile)
