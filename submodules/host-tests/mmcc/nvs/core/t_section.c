@@ -554,6 +554,101 @@ SectionPageFileBacked(void)
 
 static
 void
+SectionReservedPageFile(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE A;
+    MI_MEMORY_INFORMATION Info;
+    PMI_SEGMENT Segment;
+    ULONG64 Base = 0;
+    ULONG64 Limited = 0;
+    ULONG64 LimitedSize = 16 * 4096;
+    ULONG64 Commit;
+    ULONG64 CommitSize;
+    ULONG Old;
+    NTSTATUS Status;
+
+    WorldCreate(&World, 512, 1, 1000);
+    World.Machine.StrictTlb = TRUE;
+    WorldAttachPageFile(&World, 1024);
+    SpaceCreate(&World, 0, &A);
+
+    CHECK(NT_SUCCESS(MiSegmentCreateReserved(&World.System, 16 * 4096, MI_PROT_EXECUTE_READWRITE, NULL, NULL,
+                                             &Segment)));
+    CHECK(Segment->Reserved);
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 0);
+    CHECK(NT_SUCCESS(Map(&A, Segment, &Base, 0, 0, MI_PROT_READWRITE)));
+
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Base, &Info)));
+    CHECK(Info.State == MI_MEM_RESERVE && Info.RegionSize == 16 * 4096 && Info.Protect == 0);
+    UserRead64(&World, 0, Base, &Status);
+    CHECK(Status == STATUS_ACCESS_VIOLATION);
+
+    CHECK(NT_SUCCESS(MiSegmentCommitPages(Segment, 2, 4)));
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 4);
+    CHECK(NT_SUCCESS(MiSegmentCommitPages(Segment, 4, 4)));
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 6);
+    CHECK(NT_SUCCESS(MiSegmentCommitPages(Segment, 14, 100)));
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 8);
+    CHECK(NT_SUCCESS(MiSegmentCommitPages(Segment, 40, 1)));
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 8);
+
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Base + 2 * 4096, &Info)));
+    CHECK(Info.State == MI_MEM_COMMIT && Info.RegionSize == 6 * 4096 && Info.Protect == MI_PROT_READWRITE);
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Base + 8 * 4096, &Info)));
+    CHECK(Info.State == MI_MEM_RESERVE && Info.RegionSize == 6 * 4096);
+
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + 2 * 4096, 0x5EC0000000000002ULL)));
+    CHECK(UserRead64(&World, 0, Base + 2 * 4096, &Status) == 0x5EC0000000000002ULL);
+    CHECK(UserRead64(&World, 0, Base + 15 * 4096, &Status) == 0 && NT_SUCCESS(Status));
+    UserRead64(&World, 0, Base + 8 * 4096, &Status);
+    CHECK(Status == STATUS_ACCESS_VIOLATION);
+
+    Commit = Base + 8 * 4096;
+    CommitSize = 2 * 4096;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Commit, &CommitSize, MI_MEM_COMMIT, MI_PROT_READONLY)));
+    CHECK(Commit == Base + 8 * 4096 && CommitSize == 2 * 4096);
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 10);
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Base + 8 * 4096, &Info)));
+    CHECK(Info.State == MI_MEM_COMMIT && Info.RegionSize == 2 * 4096 && Info.Protect == MI_PROT_READONLY);
+    CHECK(UserRead64(&World, 0, Base + 9 * 4096, &Status) == 0 && NT_SUCCESS(Status));
+    CHECK(UserWrite64(&World, 0, Base + 9 * 4096, 1) == STATUS_ACCESS_VIOLATION);
+
+    CHECK(NT_SUCCESS(MiMapViewEx(&A, Segment, &Limited, 0, &LimitedSize, MI_PROT_NOACCESS, 0, ~0ULL,
+                                 MI_PROT_READWRITE, TRUE)));
+    Commit = Limited + 12 * 4096;
+    CommitSize = 4096;
+    Old = 0;
+    CHECK(MiProtectVirtualMemory(&A, &Commit, &CommitSize, MI_PROT_READWRITE, &Old) == STATUS_SECTION_PROTECTION);
+    CHECK(Old == MI_PROT_NOACCESS);
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Commit, &CommitSize, MI_MEM_COMMIT, MI_PROT_EXECUTE_READWRITE)));
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 11);
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Limited + 12 * 4096, &Info)));
+    CHECK(Info.State == MI_MEM_COMMIT && Info.RegionSize == 4096 && Info.Protect == MI_PROT_EXECUTE_READWRITE);
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Limited + 12 * 4096, 0x5EC000000000000CULL)));
+    CHECK(UserRead64(&World, 0, Base + 12 * 4096, &Status) == 0x5EC000000000000CULL);
+    Commit = Limited + 2 * 4096;
+    CommitSize = 4096;
+    CHECK(MiProtectVirtualMemory(&A, &Commit, &CommitSize, MI_PROT_EXECUTE_READWRITE, &Old) ==
+          STATUS_SECTION_PROTECTION);
+    CHECK(NT_SUCCESS(MiUnmapView(&A, Limited)));
+
+    CHECK(NT_SUCCESS(MiSegmentExtend(Segment, 32 * 4096)));
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 11);
+    CHECK(NT_SUCCESS(MiSegmentCommitPages(Segment, 30, 2)));
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 13);
+
+    CHECK(NT_SUCCESS(MiUnmapView(&A, Base)));
+    MiSegmentDereference(Segment);
+    CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == 0);
+
+    SpaceDestroy(&World, 0, &A);
+    WorldExpectClean(&World, 512);
+    WorldDestroy(&World);
+}
+
+static
+void
 SectionCopyOnWrite(void)
 {
     TEST_WORLD World;
@@ -923,6 +1018,7 @@ TestSection(void)
     SectionUnmapBatch();
     SectionSharedDataFile();
     SectionPageFileBacked();
+    SectionReservedPageFile();
     SectionCopyOnWrite();
     SectionSystemSpaceView();
     SectionViewOutlivesOwner();
