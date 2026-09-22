@@ -117,6 +117,7 @@ typedef struct _SMP_VOLUME_DESCRIPTOR
     USHORT PageFileCount;
     WCHAR DriveLetter;
     LARGE_INTEGER FreeSpace;
+    LARGE_INTEGER TotalSpace;
     FILE_FS_DEVICE_INFORMATION DeviceInfo;
 } SMP_VOLUME_DESCRIPTOR, *PSMP_VOLUME_DESCRIPTOR;
 
@@ -461,6 +462,9 @@ SmpGetVolumeFreeSpace(IN PSMP_VOLUME_DESCRIPTOR Volume)
     FreeSpace.QuadPart = SizeInfo.AvailableAllocationUnits.QuadPart *
                          SizeInfo.SectorsPerAllocationUnit;
     FinalFreeSpace.QuadPart = FreeSpace.QuadPart * SizeInfo.BytesPerSector;
+    Volume->TotalSpace.QuadPart = SizeInfo.TotalAllocationUnits.QuadPart *
+                                  SizeInfo.SectorsPerAllocationUnit *
+                                  SizeInfo.BytesPerSector;
 
     /* Check if there is less than 32 MB free so we don't starve the disk */
     if (FinalFreeSpace.QuadPart <= MINIMUM_TO_KEEP_FREE)
@@ -551,7 +555,7 @@ SmpCreatePagingFileOnFixedDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
     BOOLEAN ShouldDelete;
     BOOLEAN CorruptFileDeleted = FALSE;
     NTSTATUS Status;
-    LARGE_INTEGER PageFileSize;
+    LARGE_INTEGER PageFileSize, RequiredMinimum, VolumeLimit;
     ASSERT(Descriptor->Name.Buffer[STANDARD_DRIVE_LETTER_OFFSET] != L'?');
 
     /* Try to find the volume descriptor for this drive letter */
@@ -632,13 +636,24 @@ RetryPageFile:
     {
         Descriptor->ActualMaxSize = PageFileSize;
     }
+    RequiredMinimum = *MinimumSize;
+    if (Descriptor->Flags & SMP_PAGEFILE_SYSTEM_MANAGED)
+    {
+        VolumeLimit.QuadPart = Volume->TotalSpace.QuadPart / 8;
+        if (Descriptor->ActualMinSize.QuadPart > VolumeLimit.QuadPart)
+            Descriptor->ActualMinSize = VolumeLimit;
+        if (Descriptor->ActualMaxSize.QuadPart > VolumeLimit.QuadPart)
+            Descriptor->ActualMaxSize = VolumeLimit;
+        if (RequiredMinimum.QuadPart > VolumeLimit.QuadPart)
+            RequiredMinimum = VolumeLimit;
+    }
     DPRINT("SMSS:PFILE: min 0x%I64X, max 0x%I64X, real min 0x%I64X\n",
             Descriptor->ActualMinSize.QuadPart,
             Descriptor->ActualMaxSize.QuadPart,
-            MinimumSize->QuadPart);
+            RequiredMinimum.QuadPart);
 
     /* Keep going until we've created a pagefile of the right size */
-    while (Descriptor->ActualMinSize.QuadPart >= MinimumSize->QuadPart)
+    while (Descriptor->ActualMinSize.QuadPart >= RequiredMinimum.QuadPart)
     {
         /* Call NT to do it */
         Status = SmpCreatePagingFile(&Descriptor->Name,
@@ -662,7 +677,7 @@ RetryPageFile:
     }
 
     /* Check if we weren't able to create it */
-    if (Descriptor->ActualMinSize.QuadPart < MinimumSize->QuadPart)
+    if (Descriptor->ActualMinSize.QuadPart < RequiredMinimum.QuadPart)
     {
         /* Delete the current page file and fail */
         if (ShouldDelete)
@@ -673,7 +688,7 @@ RetryPageFile:
         DPRINT1("SMSS:PFILE: Failing for min 0x%I64X, max 0x%I64X, real min 0x%I64X\n",
                 Descriptor->ActualMinSize.QuadPart,
                 Descriptor->ActualMaxSize.QuadPart,
-                MinimumSize->QuadPart);
+                RequiredMinimum.QuadPart);
         Status = STATUS_DISK_FULL;
     }
 
@@ -750,12 +765,14 @@ SmpMakeSystemManagedPagingFileDescriptor(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor)
         return;
     }
 
-    /* Check how much RAM we have and set three times this amount as maximum */
-    Ram = BasicInfo.NumberOfPhysicalPages * BasicInfo.PageSize;
+    Ram = (ULONGLONG)BasicInfo.NumberOfPhysicalPages * BasicInfo.PageSize;
     MaximumSize = 3 * Ram;
+    if (MaximumSize < 4096ULL * MEGABYTE)
+        MaximumSize = 4096ULL * MEGABYTE;
 
-    /* If we have more than 1GB, use that as minimum, otherwise, use 1.5X RAM */
-    MinimumSize = (Ram >= 1024 * MEGABYTE) ? Ram : MaximumSize / 2;
+    MinimumSize = Ram / 8;
+    if (MinimumSize > 32768ULL * MEGABYTE)
+        MinimumSize = 32768ULL * MEGABYTE;
 
     /* Write the new sizes in the descriptor and mark it as system managed */
     Descriptor->MinSize.QuadPart = MinimumSize;
@@ -1040,6 +1057,9 @@ SmpCreateVolumeDescriptors(VOID)
         FreeSpace.QuadPart = SizeInfo.AvailableAllocationUnits.QuadPart *
                              SizeInfo.SectorsPerAllocationUnit;
         FinalFreeSpace.QuadPart = FreeSpace.QuadPart * SizeInfo.BytesPerSector;
+        Volume->TotalSpace.QuadPart = SizeInfo.TotalAllocationUnits.QuadPart *
+                                      SizeInfo.SectorsPerAllocationUnit *
+                                      SizeInfo.BytesPerSector;
 
         /* Check if there is less than 32 MB free so we don't starve the disk */
         if (FinalFreeSpace.QuadPart <= MINIMUM_TO_KEEP_FREE)
