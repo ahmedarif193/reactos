@@ -1763,6 +1763,9 @@ NtMapViewOfSection(
         return STATUS_INVALID_PARAMETER;
     }
 
+    if (ZeroBits >= 32 && (ULONG64)ZeroBits - (ULONG64)(ULONG_PTR)SafeBase < SafeSize)
+        return STATUS_INVALID_PARAMETER;
+
     DesiredAccess = MiSectionAccessForProtection[Protection & MI_PROT_ACCESS_MASK];
 
     Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_VM_OPERATION, PsProcessType, PreviousMode,
