@@ -2756,6 +2756,17 @@ BasepCreateUserProcess(IN HANDLE UserToken,
         ProcessParameters->ConsoleHandle = HANDLE_CREATE_NEW_CONSOLE;
     else if (CreationFlags & CREATE_NO_WINDOW)
         ProcessParameters->ConsoleHandle = HANDLE_CREATE_NO_WINDOW;
+    else if (!(StartupInfo->dwFlags & (STARTF_USESTDHANDLES | STARTF_USEHOTKEY | STARTF_SHELLPRIVATE)))
+    {
+        PRTL_USER_PROCESS_PARAMETERS Parent = NtCurrentPeb()->ProcessParameters;
+
+        if (InheritHandles || IsConsoleHandle(Parent->StandardInput))
+            ProcessParameters->StandardInput = Parent->StandardInput;
+        if (InheritHandles || IsConsoleHandle(Parent->StandardOutput))
+            ProcessParameters->StandardOutput = Parent->StandardOutput;
+        if (InheritHandles || IsConsoleHandle(Parent->StandardError))
+            ProcessParameters->StandardError = Parent->StandardError;
+    }
 
     if ((CreationFlags & CREATE_NEW_PROCESS_GROUP) && !(CreationFlags & CREATE_NEW_CONSOLE)) ProcessParameters->ConsoleFlags = 1;
     if (ParameterFlags & 1) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_LOCAL_DLL_PATH;
