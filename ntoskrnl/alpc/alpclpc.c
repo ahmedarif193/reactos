@@ -1530,15 +1530,59 @@ NtAcceptConnectPort(
     }
 
     AlpcpAcquireLock();
-    Message->State &= ~ALPC_MSG_STATE_ACCEPT_IN_PROGRESS;
-    Message->State |= ALPC_MSG_STATE_ACCEPTED;
-    AlpcpSignalWaiter(ClientThread);
+    ServerPort->ConnectMessage = Message;
+    ServerPort->ConnectThread = ClientThread;
+    if (!NT_SUCCESS(Status)) ClientThread = AlpcpCompleteLegacyConnect(ServerPort, TRUE);
+    else ClientThread = NULL;
     AlpcpReleaseLock();
-    ObDereferenceObject(ClientThread);
+    if (ClientThread) ObDereferenceObject(ClientThread);
 
     ObDereferenceObject(ServerPort);
     ObDereferenceObject(ConnectionPort);
     return Status;
+}
+
+PETHREAD
+NTAPI
+AlpcpCompleteLegacyConnect(
+    _In_ PALPC_PORT Port,
+    _In_ BOOLEAN Accept)
+{
+    PKALPC_MESSAGE Message = Port->ConnectMessage;
+    PETHREAD Thread = Port->ConnectThread;
+
+    Port->ConnectMessage = NULL;
+    Port->ConnectThread = NULL;
+    if (!Message) return Thread;
+
+    Message->State &= ~ALPC_MSG_STATE_ACCEPT_IN_PROGRESS;
+    if (Message->WaitingThread != Thread)
+    {
+        AlpcpFreeMessage(Message);
+    }
+    else if (Accept)
+    {
+        Message->State |= ALPC_MSG_STATE_ACCEPTED;
+        AlpcpSignalWaiter(Thread);
+    }
+    else
+    {
+        AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_REFUSED, STATUS_PORT_CONNECTION_REFUSED);
+    }
+    return Thread;
+}
+
+VOID
+NTAPI
+AlpcpAbandonLegacyConnect(
+    _In_ PALPC_PORT Port)
+{
+    PETHREAD Thread;
+
+    AlpcpAcquireLock();
+    Thread = AlpcpCompleteLegacyConnect(Port, FALSE);
+    AlpcpReleaseLock();
+    if (Thread) ObDereferenceObject(Thread);
 }
 
 NTSTATUS
@@ -1546,7 +1590,27 @@ NTAPI
 NtCompleteConnectPort(
     _In_ HANDLE PortHandle)
 {
-    UNREFERENCED_PARAMETER(PortHandle);
+    PALPC_PORT Port;
+    PETHREAD Thread;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Status = ObReferenceObjectByHandle(PortHandle, 0, AlpcPortObjectType, KeGetPreviousMode(), (PVOID*)&Port, NULL);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    if (AlpcpPortType(Port) != ALPC_PORT_TYPE_SERVER)
+    {
+        ObDereferenceObject(Port);
+        return STATUS_INVALID_PORT_HANDLE;
+    }
+
+    AlpcpAcquireLock();
+    Thread = AlpcpCompleteLegacyConnect(Port, TRUE);
+    AlpcpReleaseLock();
+
+    if (Thread) ObDereferenceObject(Thread);
+    ObDereferenceObject(Port);
     return STATUS_SUCCESS;
 }
 
