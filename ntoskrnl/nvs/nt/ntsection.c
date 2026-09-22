@@ -485,6 +485,12 @@ MiBuildImageControlArea(
             ULONG64 RawBytes = SectionHeader[i].SizeOfRawData;
             PMI_SEGMENT_LAYOUT Entry = &Layout[LayoutCount];
 
+            if ((ULONG64)SectionHeader[i].PointerToRawData + SectionHeader[i].SizeOfRawData > MAXULONG)
+            {
+                Status = STATUS_INVALID_IMAGE_FORMAT;
+                goto Done;
+            }
+
             if (VirtualSize == 0)
                 continue;
 
