@@ -1774,8 +1774,6 @@ DxgkpDestroyContextNoLock(
      * is left as-is until per-allocation reference fences make a precise wait
      * possible.  TODO: fix the ordering together with that tracking.
      */
-    DXGKRNL_TRACE("DxgkpDestroyContextNoLock: Context %p hMiniport %p\n", Context, Context->hMiniportContext);
-
     Status = DxgkpDestroyMiniportContext(Adapter, Context->hMiniportContext);
     if (!NT_SUCCESS(Status))
     {
@@ -2988,8 +2986,6 @@ DxgkDestroyContext(
 
     PAGED_CODE();
 
-    DXGKRNL_TRACE("DxgkDestroyContext: hContext=0x%08X\n", pDestroyContext->hContext);
-
     /* --- Validate handle ------------------------------------------------- */
 
     Status = DxgkpDetachOwnedContextByHandle(pDestroyContext->hContext, PsGetCurrentProcess(), &Context);
@@ -3000,11 +2996,6 @@ DxgkDestroyContext(
     }
 
     Device = Context->Device;
-    DXGKRNL_TRACE("DxgkDestroyContext: Context %p on Device %p\n", Context, Context->Device);
-    /* Fault attribution: a fault on a sibling context right after a destroy
-     * is only recognisable if the destroy is in the log with a sequence. */
-    DXGKRNL_INFO("DxgkDestroyContext: ctx=%p device=%p seq=#%I64d\n",
-                 Context, Device, DxgkDiagSequence());
 
     /* --- Call miniport destroy and free ---------------------------------- */
 
@@ -3017,7 +3008,6 @@ DxgkDestroyContext(
         return Status;
     }
 
-    DXGKRNL_TRACE("DxgkDestroyContext: done hContext=0x%08X\n", pDestroyContext->hContext);
     return Status;
 }
 
