@@ -2230,10 +2230,13 @@ Arm64MappingPlanApply(
         if (Size == 0)
             continue;
 
-        if (PhysicalStart >= map_limit)
-            continue;
-        if (PhysicalStart + Size > map_limit)
-            Size = map_limit - PhysicalStart;
+        if (Target != Arm64MappingPhysicalAlias)
+        {
+            if (PhysicalStart >= map_limit)
+                continue;
+            if (PhysicalStart + Size > map_limit)
+                Size = map_limit - PhysicalStart;
+        }
 
         if (Target == Arm64MappingIdentity)
         {
