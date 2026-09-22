@@ -2922,7 +2922,7 @@ RxCommonQueryInformation(
     PIRP Irp;
     PFOBX Fobx;
     BOOLEAN Locked;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIO_STACK_LOCATION Stack;
     FILE_INFORMATION_CLASS FileInfoClass;
 
@@ -3187,7 +3187,7 @@ RxCommonRead(
     PFCB Fcb;
     PIRP Irp;
     PFOBX Fobx;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PNET_ROOT NetRoot;
     PVOID SystemBuffer;
     PFILE_OBJECT FileObject;
@@ -3933,7 +3933,7 @@ RxCommonWrite(
     PIRP Irp;
     PFCB Fcb;
     PFOBX Fobx;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PNET_ROOT NetRoot;
     PSRV_OPEN SrvOpen;
     PFILE_OBJECT FileObject;
@@ -3943,7 +3943,7 @@ RxCommonWrite(
     PLOWIO_CONTEXT LowIoContext;
     PRDBSS_DEVICE_OBJECT RxDeviceObject;
     ULONG WriteLength, CapturedRxContextSerialNumber = RxContext->SerialNumber;
-    LONGLONG FileSize, ValidDataLength, InitialFileSize, InitialValidDataLength;
+    LONGLONG FileSize, ValidDataLength, InitialFileSize, InitialValidDataLength = 0;
     BOOLEAN CanWait, PagingIo, NoCache, Sync, NormalFile, WriteToEof, IsPipe, NoPreposting, InFsp, RecursiveWriteThrough, CalledByLazyWriter, SwitchBackToAsync, ExtendingFile, ExtendingValidData, UnwindOutstandingAsync, ResourceOwnerSet, PostIrp, ContextReferenced;
 
     PAGED_CODE();
@@ -7557,7 +7557,7 @@ RxNotifyChangeDirectory(
     PRX_CONTEXT RxContext)
 {
     PIRP Irp;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIO_STACK_LOCATION Stack;
 
     PAGED_CODE();
@@ -9046,7 +9046,7 @@ RxSetRenameInfo(
     PRX_CONTEXT RxContext)
 {
     ULONG Length;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PFCB RenameFcb, Fcb;
     PIO_STACK_LOCATION Stack;
     PFILE_RENAME_INFORMATION RenameInfo, UserInfo;
@@ -9231,7 +9231,7 @@ RxStartMinirdr(
     IN PRX_CONTEXT RxContext,
     OUT PBOOLEAN PostToFsp)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     BOOLEAN Wait, AlreadyStarted;
     PRDBSS_DEVICE_OBJECT DeviceObject;
 

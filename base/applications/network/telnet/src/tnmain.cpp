@@ -195,7 +195,7 @@ struct cmdHistory * cfgets (char *buf, unsigned int length, struct cmdHistory *c
 					break;
 				case VK_DELETE:
 					if (current > 0 && current > cursor) {
-						strcpy(&buf[cursor],&buf[cursor+1]);
+						memmove(&buf[cursor], &buf[cursor+1], strlen(&buf[cursor+1]) + 1);
 						current--;
 						buf[current] = 0;
 						printit("\r");
@@ -206,7 +206,7 @@ struct cmdHistory * cfgets (char *buf, unsigned int length, struct cmdHistory *c
 					break;
 				case VK_BACK:
 					if (cursor > 0 ) {
-						strcpy(&buf[cursor-1],&buf[cursor]);
+						memmove(&buf[cursor-1], &buf[cursor], strlen(&buf[cursor]) + 1);
 						current--;
 						cursor--;
 						buf[current] = 0;

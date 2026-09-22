@@ -235,7 +235,7 @@ NTAPI
 SamAddMemberToAlias(IN SAM_HANDLE AliasHandle,
                     IN PSID MemberId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamAddMemberToAlias(%p %p)\n",
           AliasHandle, MemberId);
@@ -261,7 +261,7 @@ SamAddMemberToGroup(IN SAM_HANDLE GroupHandle,
                     IN ULONG MemberId,
                     IN ULONG Attributes)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamAddMemberToGroup(%p %lu %lx)\n",
           GroupHandle, MemberId, Attributes);
@@ -289,7 +289,7 @@ SamAddMultipleMembersToAlias(IN SAM_HANDLE AliasHandle,
                              IN ULONG MemberCount)
 {
     SAMPR_PSID_ARRAY Buffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamAddMultipleMembersToAlias(%p %p %lu)\n",
           AliasHandle, MemberIds, MemberCount);
@@ -496,7 +496,7 @@ NTSTATUS
 NTAPI
 SamCloseHandle(IN SAM_HANDLE SamHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamCloseHandle(%p)\n", SamHandle);
 
@@ -522,7 +522,7 @@ SamConnect(IN OUT PUNICODE_STRING ServerName OPTIONAL,
            IN POBJECT_ATTRIBUTES ObjectAttributes)
 {
     PSAMPR_SERVER_NAME pServerName = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamConnect(%p %p 0x%08x %p)\n",
           ServerName, ServerHandle, DesiredAccess, ObjectAttributes);
@@ -565,7 +565,7 @@ SamCreateAliasInDomain(IN SAM_HANDLE DomainHandle,
                        OUT PSAM_HANDLE AliasHandle,
                        OUT PULONG RelativeId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamCreateAliasInDomain(%p %p 0x%08x %p %p)\n",
           DomainHandle, AccountName, DesiredAccess, AliasHandle, RelativeId);
@@ -599,7 +599,7 @@ SamCreateGroupInDomain(IN SAM_HANDLE DomainHandle,
                        OUT PSAM_HANDLE GroupHandle,
                        OUT PULONG RelativeId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamCreateGroupInDomain(%p %p 0x%08x %p %p)\n",
           DomainHandle, AccountName, DesiredAccess, GroupHandle, RelativeId);
@@ -635,7 +635,7 @@ SamCreateUser2InDomain(IN SAM_HANDLE DomainHandle,
                        OUT PULONG GrantedAccess,
                        OUT PULONG RelativeId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamCreateUser2InDomain(%p %p %lu 0x%08x %p %p %p)\n",
           DomainHandle, AccountName, AccountType, DesiredAccess,
@@ -673,7 +673,7 @@ SamCreateUserInDomain(IN SAM_HANDLE DomainHandle,
                       OUT PSAM_HANDLE UserHandle,
                       OUT PULONG RelativeId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamCreateUserInDomain(%p %p 0x%08x %p %p)\n",
           DomainHandle, AccountName, DesiredAccess, UserHandle, RelativeId);
@@ -704,7 +704,7 @@ NTAPI
 SamDeleteAlias(IN SAM_HANDLE AliasHandle)
 {
     SAMPR_HANDLE LocalAliasHandle;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamDeleteAlias(%p)\n", AliasHandle);
 
@@ -732,7 +732,7 @@ NTAPI
 SamDeleteGroup(IN SAM_HANDLE GroupHandle)
 {
     SAMPR_HANDLE LocalGroupHandle;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamDeleteGroup(%p)\n", GroupHandle);
 
@@ -760,7 +760,7 @@ NTAPI
 SamDeleteUser(IN SAM_HANDLE UserHandle)
 {
     SAMPR_HANDLE LocalUserHandle;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamDeleteUser(%p)\n", UserHandle);
 
@@ -792,7 +792,7 @@ SamEnumerateAliasesInDomain(IN SAM_HANDLE DomainHandle,
                             OUT PULONG CountReturned)
 {
     PSAMPR_ENUMERATION_BUFFER EnumBuffer = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamEnumerateAliasesInDomain(%p %p %p %lu %p)\n",
           DomainHandle, EnumerationContext, Buffer, PreferedMaximumLength,
@@ -842,7 +842,7 @@ SamEnumerateDomainsInSamServer(IN SAM_HANDLE ServerHandle,
                                OUT PULONG CountReturned)
 {
     PSAMPR_ENUMERATION_BUFFER EnumBuffer = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamEnumerateDomainsInSamServer(%p %p %p %lu %p)\n",
           ServerHandle, EnumerationContext, Buffer, PreferedMaximumLength,
@@ -892,7 +892,7 @@ SamEnumerateGroupsInDomain(IN SAM_HANDLE DomainHandle,
                            OUT PULONG CountReturned)
 {
     PSAMPR_ENUMERATION_BUFFER EnumBuffer = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamEnumerateGroupsInDomain(%p %p %p %lu %p)\n",
           DomainHandle, EnumerationContext, Buffer,
@@ -938,7 +938,7 @@ SamEnumerateUsersInDomain(IN SAM_HANDLE DomainHandle,
                           OUT PULONG CountReturned)
 {
     PSAMPR_ENUMERATION_BUFFER EnumBuffer = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamEnumerateUsersInDomain(%p %p %lx %p %lu %p)\n",
           DomainHandle, EnumerationContext, UserAccountControl, Buffer,
@@ -999,7 +999,7 @@ SamGetAliasMembership(IN SAM_HANDLE DomainHandle,
 {
     SAMPR_PSID_ARRAY SidArray;
     SAMPR_ULONG_ARRAY Membership;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamAliasMembership(%p %lu %p %p %p)\n",
           DomainHandle, PassedCount, Sids, MembershipCount, Aliases);
@@ -1063,7 +1063,7 @@ SamGetDisplayEnumerationIndex(IN SAM_HANDLE DomainHandle,
                               IN PUNICODE_STRING Prefix,
                               OUT PULONG Index)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamGetDisplayEnumerationIndex(%p %lu %wZ %p)\n",
            DomainHandle, DisplayInformation, Prefix, Index);
@@ -1096,7 +1096,7 @@ SamGetGroupsForUser(IN SAM_HANDLE UserHandle,
                     OUT PULONG MembershipCount)
 {
     PSAMPR_GET_GROUPS_BUFFER GroupsBuffer = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamGetGroupsForUser(%p %p %p)\n",
           UserHandle, Groups, MembershipCount);
@@ -1140,7 +1140,7 @@ SamGetMembersInAlias(IN SAM_HANDLE AliasHandle,
                      OUT PULONG MemberCount)
 {
     SAMPR_PSID_ARRAY_OUT SidArray;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamGetMembersInAlias(%p %p %p)\n",
           AliasHandle, MemberIds, MemberCount);
@@ -1183,7 +1183,7 @@ SamGetMembersInGroup(IN SAM_HANDLE GroupHandle,
                      OUT PULONG MemberCount)
 {
     PSAMPR_GET_MEMBERS_BUFFER MembersBuffer = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamGetMembersInGroup(%p %p %p %p)\n",
           GroupHandle, MemberIds, Attributes, MemberCount);
@@ -1230,7 +1230,7 @@ SamLookupDomainInSamServer(IN SAM_HANDLE ServerHandle,
                            IN PUNICODE_STRING Name,
                            OUT PSID *DomainId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamLookupDomainInSamServer(%p %p %p)\n",
           ServerHandle, Name, DomainId);
@@ -1262,7 +1262,7 @@ SamLookupIdsInDomain(IN SAM_HANDLE DomainHandle,
     SAMPR_RETURNED_USTRING_ARRAY NamesBuffer = {0, NULL};
     SAMPR_ULONG_ARRAY UseBuffer = {0, NULL};
     ULONG i;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamLookupIdsInDomain(%p %lu %p %p %p)\n",
           DomainHandle, Count, RelativeIds, Names, Use);
@@ -1376,7 +1376,7 @@ SamLookupNamesInDomain(IN SAM_HANDLE DomainHandle,
 {
     SAMPR_ULONG_ARRAY RidBuffer = {0, NULL};
     SAMPR_ULONG_ARRAY UseBuffer = {0, NULL};
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamLookupNamesInDomain(%p %lu %p %p %p)\n",
           DomainHandle, Count, Names, RelativeIds, Use);
@@ -1450,7 +1450,7 @@ SamOpenAlias(IN SAM_HANDLE DomainHandle,
              IN ULONG AliasId,
              OUT PSAM_HANDLE AliasHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamOpenAlias(%p 0x%08x %lx %p)\n",
           DomainHandle, DesiredAccess, AliasId, AliasHandle);
@@ -1479,7 +1479,7 @@ SamOpenDomain(IN SAM_HANDLE ServerHandle,
               IN PSID DomainId,
               OUT PSAM_HANDLE DomainHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamOpenDomain(%p 0x%08x %p %p)\n",
           ServerHandle, DesiredAccess, DomainId, DomainHandle);
@@ -1508,7 +1508,7 @@ SamOpenGroup(IN SAM_HANDLE DomainHandle,
              IN ULONG GroupId,
              OUT PSAM_HANDLE GroupHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamOpenGroup(%p 0x%08x %p %p)\n",
           DomainHandle, DesiredAccess, GroupId, GroupHandle);
@@ -1537,7 +1537,7 @@ SamOpenUser(IN SAM_HANDLE DomainHandle,
             IN ULONG UserId,
             OUT PSAM_HANDLE UserHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamOpenUser(%p 0x%08x %lx %p)\n",
           DomainHandle, DesiredAccess, UserId, UserHandle);
@@ -1572,7 +1572,7 @@ SamQueryDisplayInformation(IN SAM_HANDLE DomainHandle,
                            OUT PVOID *SortedBuffer)
 {
     SAMPR_DISPLAY_INFO_BUFFER LocalBuffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamQueryDisplayInformation(%p %lu %lu %lu %lu %p %p %p %p)\n",
           DomainHandle, DisplayInformation, Index, EntryCount,
@@ -1651,7 +1651,7 @@ SamQueryInformationAlias(IN SAM_HANDLE AliasHandle,
                          IN ALIAS_INFORMATION_CLASS AliasInformationClass,
                          OUT PVOID *Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamQueryInformationAlias(%p %lu %p)\n",
           AliasHandle, AliasInformationClass, Buffer);
@@ -1678,7 +1678,7 @@ SamQueryInformationDomain(IN SAM_HANDLE DomainHandle,
                           IN DOMAIN_INFORMATION_CLASS DomainInformationClass,
                           OUT PVOID *Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamQueryInformationDomain(%p %lu %p)\n",
           DomainHandle, DomainInformationClass, Buffer);
@@ -1705,7 +1705,7 @@ SamQueryInformationGroup(IN SAM_HANDLE GroupHandle,
                          IN GROUP_INFORMATION_CLASS GroupInformationClass,
                          OUT PVOID *Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamQueryInformationGroup(%p %lu %p)\n",
           GroupHandle, GroupInformationClass, Buffer);
@@ -1732,7 +1732,7 @@ SamQueryInformationUser(IN SAM_HANDLE UserHandle,
                         IN USER_INFORMATION_CLASS UserInformationClass,
                         OUT PVOID *Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamQueryInformationUser(%p %lu %p)\n",
           UserHandle, UserInformationClass, Buffer);
@@ -1760,7 +1760,7 @@ SamQuerySecurityObject(IN SAM_HANDLE ObjectHandle,
                        OUT PSECURITY_DESCRIPTOR *SecurityDescriptor)
 {
     PSAMPR_SR_SECURITY_DESCRIPTOR SamSecurityDescriptor = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamQuerySecurityObject(%p %lu %p)\n",
           ObjectHandle, SecurityInformation, SecurityDescriptor);
@@ -1800,7 +1800,7 @@ NTAPI
 SamRemoveMemberFromAlias(IN SAM_HANDLE AliasHandle,
                          IN PSID MemberId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamRemoveMemberFromAlias(%p %ul)\n",
           AliasHandle, MemberId);
@@ -1825,7 +1825,7 @@ NTAPI
 SamRemoveMemberFromForeignDomain(IN SAM_HANDLE DomainHandle,
                                  IN PSID MemberId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamRemoveMemberFromForeignDomain(%p %ul)\n",
           DomainHandle, MemberId);
@@ -1850,7 +1850,7 @@ NTAPI
 SamRemoveMemberFromGroup(IN SAM_HANDLE GroupHandle,
                          IN ULONG MemberId)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamRemoveMemberFromGroup(%p %ul)\n",
           GroupHandle, MemberId);
@@ -1877,7 +1877,7 @@ SamRemoveMultipleMembersFromAlias(IN SAM_HANDLE AliasHandle,
                                   IN ULONG MemberCount)
 {
     SAMPR_PSID_ARRAY Buffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamRemoveMultipleMembersFromAlias(%p %p %lu)\n",
           AliasHandle, MemberIds, MemberCount);
@@ -1920,7 +1920,7 @@ SamSetInformationAlias(IN SAM_HANDLE AliasHandle,
                        IN ALIAS_INFORMATION_CLASS AliasInformationClass,
                        IN PVOID Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamSetInformationAlias(%p %lu %p)\n",
           AliasHandle, AliasInformationClass, Buffer);
@@ -1947,7 +1947,7 @@ SamSetInformationDomain(IN SAM_HANDLE DomainHandle,
                         IN DOMAIN_INFORMATION_CLASS DomainInformationClass,
                         IN PVOID Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamSetInformationDomain(%p %lu %p)\n",
           DomainHandle, DomainInformationClass, Buffer);
@@ -1974,7 +1974,7 @@ SamSetInformationGroup(IN SAM_HANDLE GroupHandle,
                        IN GROUP_INFORMATION_CLASS GroupInformationClass,
                        IN PVOID Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamSetInformationGroup(%p %lu %p)\n",
           GroupHandle, GroupInformationClass, Buffer);
@@ -2006,7 +2006,7 @@ SamSetInformationUser(IN SAM_HANDLE UserHandle,
     USER_ALL_INFORMATION InternalAllBuffer;
     OEM_STRING LmPwdString;
     CHAR LmPwdBuffer[15];
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamSetInformationUser(%p %lu %p)\n",
           UserHandle, UserInformationClass, Buffer);
@@ -2206,7 +2206,7 @@ SamSetMemberAttributesOfGroup(IN SAM_HANDLE GroupHandle,
                               IN ULONG MemberId,
                               IN ULONG Attributes)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamSetMemberAttributesOfGroup(%p %lu 0x%lx)\n",
           GroupHandle, MemberId, Attributes);
@@ -2286,7 +2286,7 @@ NTSTATUS
 NTAPI
 SamShutdownSamServer(IN SAM_HANDLE ServerHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("SamShutdownSamServer(%p)\n", ServerHandle);
 

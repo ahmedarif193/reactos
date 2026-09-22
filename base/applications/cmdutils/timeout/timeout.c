@@ -50,7 +50,7 @@ INT InputWait(BOOL bNoBreak, INT timerValue)
     HANDLE hInput;
     BOOL bUseTimer = (timerValue != -1);
     HANDLE hTimer = NULL;
-    DWORD dwStartTime;
+    DWORD dwStartTime = 0;
     LONG timeElapsed;
     DWORD dwWaitState;
     INPUT_RECORD InputRecords[5];

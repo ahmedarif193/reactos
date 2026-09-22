@@ -1127,7 +1127,7 @@ NtQueryInformationProcess(
         /* DOS Device Map */
         case ProcessDeviceMap:
         {
-            ULONG Flags;
+            ULONG Flags = 0;
 
             if (ProcessInformationLength == sizeof(PROCESS_DEVICEMAP_INFORMATION_EX))
             {
@@ -1426,7 +1426,7 @@ NtQueryInformationProcess(
         case ProcessMitigationPolicy:
         case ProcessHandleCheckingMode:
         {
-            PSP_MITIGATION_POLICY_INFORMATION Information;
+            PSP_MITIGATION_POLICY_INFORMATION Information = {0};
             PHANDLE_TABLE HandleTable;
             ULONG Flags;
 
@@ -2101,7 +2101,7 @@ NtSetInformationProcess(
     PROCESS_PRIORITY_CLASS PriorityClass = {0};
     PROCESS_FOREGROUND_BACKGROUND Foreground = {0};
     PVOID ExceptionPort;
-    ULONG Break;
+    ULONG Break = 0;
     KAFFINITY ValidAffinity, Affinity = 0;
     KPRIORITY BasePriority = 0;
     UCHAR MemoryPriority = 0;
@@ -2589,9 +2589,9 @@ NtSetInformationProcess(
         case ProcessMitigationPolicy:
         case ProcessHandleCheckingMode:
         {
-            PSP_MITIGATION_POLICY_INFORMATION Information;
+            PSP_MITIGATION_POLICY_INFORMATION Information = {0};
             PHANDLE_TABLE HandleTable;
-            ULONG Flags;
+            ULONG Flags = 0;
 
             _SEH2_TRY
             {
@@ -2945,7 +2945,7 @@ NtSetInformationProcess(
 
         case ProcessPagePriority:
         {
-            PAGE_PRIORITY_INFORMATION PagePriority;
+            PAGE_PRIORITY_INFORMATION PagePriority = {0};
 
             if (ProcessInformationLength != sizeof(PagePriority))
             {
@@ -3275,7 +3275,7 @@ NtSetInformationThread(
     KPRIORITY Priority = 0;
     PEPROCESS Process;
     PTEB Teb;
-    THREAD_POWER_THROTTLING_STATE PowerThrottling;
+    THREAD_POWER_THROTTLING_STATE PowerThrottling = {0};
 #if defined(_M_ARM64)
     MANAGE_WRITES_TO_EXECUTABLE_MEMORY ManageWrites;
 #endif
@@ -3511,7 +3511,7 @@ NtSetInformationThread(
 
         case ThreadGroupInformation:
         {
-            GROUP_AFFINITY GroupAffinity;
+            GROUP_AFFINITY GroupAffinity = {0};
             KAFFINITY CombinedAffinity;
 
             if (ThreadInformationLength != sizeof(GROUP_AFFINITY))
@@ -3574,7 +3574,7 @@ NtSetInformationThread(
 
         case ThreadImpersonationToken:
         {
-            HANDLE TokenHandle;
+            HANDLE TokenHandle = NULL;
 
             /* Check buffer length */
             if (ThreadInformationLength != sizeof(HANDLE))
@@ -3617,7 +3617,7 @@ NtSetInformationThread(
 
         case ThreadQuerySetWin32StartAddress:
         {
-            PVOID Address;
+            PVOID Address = NULL;
 
             /* Check buffer length */
             if (ThreadInformationLength != sizeof(ULONG_PTR))
@@ -3660,7 +3660,7 @@ NtSetInformationThread(
 
         case ThreadIdealProcessor:
         {
-            ULONG_PTR IdealProcessor;
+            ULONG_PTR IdealProcessor = 0;
 
             /* Check buffer length */
             if (ThreadInformationLength != sizeof(ULONG_PTR))
@@ -3723,7 +3723,7 @@ NtSetInformationThread(
 
         case ThreadPriorityBoost:
         {
-            ULONG DisableBoost;
+            ULONG DisableBoost = 0;
 
             /* Check buffer length */
             if (ThreadInformationLength != sizeof(ULONG))
@@ -3766,7 +3766,7 @@ NtSetInformationThread(
 
         case ThreadPagePriority:
         {
-            PAGE_PRIORITY_INFORMATION PagePriority;
+            PAGE_PRIORITY_INFORMATION PagePriority = {0};
 
             if (ThreadInformationLength != sizeof(PagePriority))
             {
@@ -3806,7 +3806,7 @@ NtSetInformationThread(
 
         case ThreadZeroTlsCell:
         {
-            ULONG_PTR TlsIndex;
+            ULONG_PTR TlsIndex = 0;
             PETHREAD ProcThread;
 
             /* Check buffer length */
@@ -3900,7 +3900,7 @@ NtSetInformationThread(
 
         case ThreadBreakOnTermination:
         {
-            ULONG Break;
+            ULONG Break = 0;
 
             /* Check buffer length */
             if (ThreadInformationLength != sizeof(ULONG))
@@ -4031,7 +4031,7 @@ NtSetInformationThread(
 
         case ThreadDynamicCodePolicyInfo:
         {
-            ULONG DynamicCodePolicy;
+            ULONG DynamicCodePolicy = 0;
 
             _SEH2_TRY
             {
@@ -4211,7 +4211,7 @@ NtSetInformationThread(
 
         case ThreadIdealProcessorEx:
         {
-            PROCESSOR_NUMBER ProcessorNumber;
+            PROCESSOR_NUMBER ProcessorNumber = {0};
             UCHAR PreviousIdealProcessor;
 
             /* Check buffer length */

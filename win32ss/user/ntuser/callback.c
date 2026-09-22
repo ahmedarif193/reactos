@@ -143,7 +143,7 @@ co_IntClientLoadLibrary(PUNICODE_STRING pstrLibName,
    ULONG ArgumentLength;
    PCLIENT_LOAD_LIBRARY_ARGUMENTS pArguments;
    NTSTATUS Status;
-   BOOL bResult;
+   BOOL bResult = FALSE;
    ULONG_PTR pLibNameBuffer = 0, pInitFuncBuffer = 0;
 
    /* Do not allow the desktop thread to do callback to user mode */
@@ -1358,7 +1358,7 @@ co_ClientImmLoadLayout(
     _In_ HKL hKL,
     _Inout_ PIMEINFOEX pImeInfoEx)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
     NTSTATUS Status;
     IMMLOADLAYOUT_CALLBACK_ARGUMENTS Common = { hKL };
     ULONG ResultLength = sizeof(IMMLOADLAYOUT_CALLBACK_OUTPUT);

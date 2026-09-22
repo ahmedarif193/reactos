@@ -207,7 +207,7 @@ SymCryptSessionDecryptUpdateStateCAS128(
 {
     SYMCRYPT_ERROR scError = SYMCRYPT_NO_ERROR;
     SYMCRYPT_SESSION_REPLAY_STATE expectedState;
-    SYMCRYPT_SESSION_REPLAY_STATE desiredState;
+    SYMCRYPT_SESSION_REPLAY_STATE desiredState = {0};
 
     // Non-atomic read of pSession's replayState. We can use this initial value as a good guess of
     // the expected state, but we cannot fail based on it (as replayMask and messageNumber may have
@@ -249,7 +249,7 @@ SymCryptSessionDecryptUpdateStateLock(
             UINT64              messageNumber )
 {
     SYMCRYPT_ERROR scError = SYMCRYPT_NO_ERROR;
-    SYMCRYPT_SESSION_REPLAY_STATE desiredState;
+    SYMCRYPT_SESSION_REPLAY_STATE desiredState = {0};
 
     if ( pSession->pMutex == NULL )
     {

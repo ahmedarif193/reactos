@@ -37,7 +37,8 @@ vfat8Dot3ToString(
          StringA.Length++);
     StringA.MaximumLength = StringA.Length;
 
-    RtlOemStringToUnicodeString(NameU, &StringA, FALSE);
+    if (!NT_SUCCESS(RtlOemStringToUnicodeString(NameU, &StringA, FALSE)))
+        NameU->Length = 0;
 
     if (BooleanFlagOn(pEntry->lCase, VFAT_CASE_LOWER_BASE))
     {
@@ -62,7 +63,8 @@ vfat8Dot3ToString(
         StringA.Length < 3 && StringA.Buffer[StringA.Length] != ' ';
         StringA.Length++);
         StringA.MaximumLength = StringA.Length;
-        RtlOemStringToUnicodeString(NameU, &StringA, FALSE);
+        if (!NT_SUCCESS(RtlOemStringToUnicodeString(NameU, &StringA, FALSE)))
+            NameU->Length = 0;
         if (BooleanFlagOn(pEntry->lCase, VFAT_CASE_LOWER_EXT))
         {
             RtlDowncaseUnicodeString(NameU, NameU, FALSE);

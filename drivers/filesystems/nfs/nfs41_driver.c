@@ -511,7 +511,8 @@ INLINE ULONG length_as_utf8(
     PCUNICODE_STRING str)
 {
     ULONG ActualCount = 0;
-    RtlUnicodeToUTF8N(NULL, 0xffff, &ActualCount, str->Buffer, str->Length);
+    if (!NT_SUCCESS(RtlUnicodeToUTF8N(NULL, 0xffff, &ActualCount, str->Buffer, str->Length)))
+        ActualCount = 0;
     return sizeof(str->MaximumLength) + ActualCount + sizeof(UNICODE_NULL);
 }
 
@@ -1984,7 +1985,7 @@ out:
 NTSTATUS SharedMemoryInit(
     OUT PHANDLE phSection)
 {
-    NTSTATUS status;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
     HANDLE hSection;
     UNICODE_STRING SectionName;
     SECURITY_DESCRIPTOR SecurityDesc;
@@ -2034,7 +2035,7 @@ out:
 NTSTATUS SharedMemoryFree(
     IN HANDLE hSection)
 {
-    NTSTATUS status;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
     DbgEn();
     status = ZwClose(hSection);
     DbgEx();
@@ -2049,7 +2050,7 @@ NTSTATUS nfs41_Start(
     IN OUT PRX_CONTEXT RxContext,
     IN OUT PRDBSS_DEVICE_OBJECT dev)
 {
-    NTSTATUS status;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
     NFS41GetDeviceExtension(RxContext, DevExt);
 
     DbgEn();
@@ -2077,7 +2078,7 @@ NTSTATUS nfs41_Stop(
     IN OUT PRX_CONTEXT RxContext,
     IN OUT PRDBSS_DEVICE_OBJECT dev)
 {
-    NTSTATUS status;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
     NFS41GetDeviceExtension(RxContext, DevExt);
     DbgEn();
     status = SharedMemoryFree(DevExt->SharedMemorySection);
@@ -2091,7 +2092,7 @@ NTSTATUS GetConnectionHandle(
     IN ULONG EaLength,
     OUT PHANDLE Handle)
 {
-    NTSTATUS status;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
     IO_STATUS_BLOCK IoStatusBlock;
     OBJECT_ATTRIBUTES ObjectAttributes;
 
@@ -5859,7 +5860,7 @@ out:
 NTSTATUS nfs41_SetFileInformationAtCleanup(
       IN OUT PRX_CONTEXT RxContext)
 {
-    NTSTATUS status;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
     DbgEn();
     status = nfs41_SetFileInformation(RxContext);
     DbgEx();
@@ -7123,7 +7124,7 @@ NTSTATUS DriverEntry(
     IN PDRIVER_OBJECT drv,
     IN PUNICODE_STRING path)
 {
-    NTSTATUS status;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
     ULONG flags = 0, i;
     UNICODE_STRING dev_name, user_dev_name;
     PNFS41_DEVICE_EXTENSION dev_exts;

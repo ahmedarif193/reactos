@@ -252,7 +252,7 @@ ExFatSetBasicInformation(
     PFILE_BASIC_INFORMATION Information)
 {
     FILINFO FatInformation;
-    BYTE Attributes;
+    BYTE Attributes = 0;
     FRESULT Result = FR_OK;
 
     RtlZeroMemory(&FatInformation, sizeof(FatInformation));

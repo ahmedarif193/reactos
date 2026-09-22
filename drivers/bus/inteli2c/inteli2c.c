@@ -715,12 +715,14 @@ IntelI2cPnp(
 
         case IRP_MN_STOP_DEVICE:
         case IRP_MN_SURPRISE_REMOVAL:
-            IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
             IntelI2cStopHardware(DeviceExtension);
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
             Status = IoAcquireRemoveLock(&DeviceExtension->RemoveLock, Irp);
             if (NT_SUCCESS(Status))
                 IoReleaseRemoveLockAndWait(&DeviceExtension->RemoveLock, Irp);

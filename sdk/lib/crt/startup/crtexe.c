@@ -31,7 +31,7 @@ _CRTIMP extern char** __initenv;
 #endif
 
 /* This symbol is defined by ld.  */
-extern IMAGE_DOS_HEADER __ImageBase;
+extern IMAGE_DOS_HEADER __ImageBase[];
 
 extern void __cdecl _fpreset (void);
 #define SPACECHAR _T(' ')

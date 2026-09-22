@@ -243,7 +243,7 @@ APIENTRY
 DhcpAcquireParameters(
     _In_ PWSTR AdapterName)
 {
-    DWORD ret;
+    DWORD ret = 0;
 
     DPRINT("DhcpAcquireParameters(%S)\n", AdapterName);
 
@@ -275,7 +275,7 @@ APIENTRY
 DhcpAcquireParametersByBroadcast(
     _In_ PWSTR AdapterName)
 {
-    DWORD ret;
+    DWORD ret = 0;
 
     DPRINT("DhcpAcquireParametersByBroadcast(%S)\n", AdapterName);
 
@@ -350,7 +350,7 @@ APIENTRY
 DhcpFallbackRefreshParams(
     _In_ PWSTR AdapterName)
 {
-    DWORD ret;
+    DWORD ret = 0;
 
     DPRINT("DhcpFallbackRefreshParams(%S)\n", AdapterName);
 
@@ -611,7 +611,7 @@ APIENTRY
 DhcpReleaseParameters(
     _In_ PWSTR AdapterName)
 {
-    DWORD ret;
+    DWORD ret = 0;
 
     DPRINT("DhcpReleaseParameters(%S)\n", AdapterName);
 
@@ -637,7 +637,7 @@ DWORD
 APIENTRY
 DhcpRemoveDNSRegistrations(VOID)
 {
-    DWORD ret;
+    DWORD ret = 0;
 
     DPRINT("DhcpRemoveDNSRegistrations()\n");
 
@@ -720,7 +720,7 @@ DhcpStaticRefreshParams(DWORD AdapterIndex,
                         DWORD Address,
                         DWORD Netmask)
 {
-    DWORD ret;
+    DWORD ret = 0;
 
     DPRINT("DhcpStaticRefreshParams()\n");
 

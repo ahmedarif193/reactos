@@ -40,7 +40,7 @@ MxPagedLock::MxPagedLock(
     // so that we don't have to churn all of the KMDF code
     //
 #ifndef MERGE_COMPLETE
-    (VOID) MxPagedLock::Initialize();
+    (VOID)!MxPagedLock::Initialize();
 #endif
 }
 

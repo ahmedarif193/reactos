@@ -1569,7 +1569,7 @@ CmQueryKey(_In_ PCM_KEY_CONTROL_BLOCK Kcb,
            _In_ ULONG Length,
            _Out_ PULONG ResultLength)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PHHIVE Hive;
     PCM_KEY_NODE Parent;
     HV_TRACK_CELL_REF CellReferences = {0};
@@ -1695,7 +1695,7 @@ CmEnumerateKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
                IN ULONG Length,
                IN PULONG ResultLength)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PHHIVE Hive;
     PCM_KEY_NODE Parent, Child;
     HCELL_INDEX ChildCell;

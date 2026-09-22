@@ -89,7 +89,7 @@ BaseQuerySystemFirmware(
     ULONG Result = 0, ReturnedSize;
     /* The trailing array and structure padding are not caller buffer space. */
     ULONG TotalSize = BufferSize + FIELD_OFFSET(SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer);
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     SysFirmwareInfo = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, TotalSize);
     if (!SysFirmwareInfo)

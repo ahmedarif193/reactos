@@ -40,7 +40,7 @@ INT WINAPI IdnToUnicode(DWORD dwFlags, LPCWSTR lpASCIICharStr, INT cchASCIIChar,
     extern const unsigned short nameprep_char_type[];
 
     INT i, label_start, label_end, out_label, out = 0;
-    WCHAR ch;
+    WCHAR ch = 0;
 
     DPRINT("%x %p %d %p %d\n", dwFlags, lpASCIICharStr, cchASCIIChar,
            lpUnicodeCharStr, cchUnicodeChar);

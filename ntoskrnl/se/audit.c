@@ -633,7 +633,7 @@ SepAccessCheckAndAuditAlarm(
     SECURITY_SUBJECT_CONTEXT SubjectContext;
     ULONG ResultListLength;
     GENERIC_MAPPING LocalGenericMapping;
-    PTOKEN SubjectContextToken, ClientToken;
+    PTOKEN SubjectContextToken = NULL, ClientToken;
     BOOLEAN AllocatedResultLists;
     BOOLEAN HaveAuditPrivilege;
     PSECURITY_DESCRIPTOR CapturedSecurityDescriptor;

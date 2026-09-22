@@ -298,7 +298,7 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
 {
     UNICODE_STRING DllName;
     HINSTANCE hInst;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PWSTR SearchPath;
     ULONG DllCharacteristics = 0;
     DWORD SearchFlags;

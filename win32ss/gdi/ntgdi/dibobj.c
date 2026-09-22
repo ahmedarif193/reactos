@@ -1386,7 +1386,7 @@ NtGdiGetDIBitsInternal(
     HANDLE hSecure = NULL;
     INT iResult = 0;
     UINT cjAlloc;
-    UINT cjHeader;
+    UINT cjHeader = 0;
 
     /* Check for bad iUsage */
     if (iUsage > 2) return 0;

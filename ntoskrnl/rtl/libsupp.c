@@ -721,7 +721,7 @@ RtlImageNtHeaderEx(
     _In_ ULONG64 Size,
     _Out_ PIMAGE_NT_HEADERS *OutHeaders)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     /* Assume failure. This is also done in RtlpImageNtHeaderEx, but this is guarded by SEH. */
     if (OutHeaders != NULL)

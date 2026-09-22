@@ -68,7 +68,7 @@ UINT WINAPI MsiDoActionA( MSIHANDLE hInstall, LPCSTR szAction )
 UINT WINAPI MsiDoActionW( MSIHANDLE hInstall, LPCWSTR szAction )
 {
     MSIPACKAGE *package;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE("%s\n",debugstr_w(szAction));
 
@@ -127,7 +127,7 @@ UINT WINAPI MsiSequenceA( MSIHANDLE hInstall, LPCSTR szTable, INT iSequenceMode 
 UINT WINAPI MsiSequenceW( MSIHANDLE hInstall, LPCWSTR szTable, INT iSequenceMode )
 {
     MSIPACKAGE *package;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE("%s, %d\n", debugstr_w(szTable), iSequenceMode);
 
@@ -258,7 +258,7 @@ UINT WINAPI MsiGetTargetPathA(MSIHANDLE hinst, const char *folder, char *buf, DW
     MSIPACKAGE *package;
     const WCHAR *path;
     WCHAR *folderW;
-    UINT r;
+    UINT r = 0;
 
     TRACE("%s %p %p\n", debugstr_a(folder), buf, sz);
 
@@ -316,7 +316,7 @@ UINT WINAPI MsiGetTargetPathW(MSIHANDLE hinst, const WCHAR *folder, WCHAR *buf, 
 {
     MSIPACKAGE *package;
     const WCHAR *path;
-    UINT r;
+    UINT r = 0;
 
     TRACE("%s %p %p\n", debugstr_w(folder), buf, sz);
 
@@ -414,7 +414,7 @@ UINT WINAPI MsiGetSourcePathA(MSIHANDLE hinst, const char *folder, char *buf, DW
 {
     MSIPACKAGE *package;
     WCHAR *path, *folderW;
-    UINT r;
+    UINT r = 0;
 
     TRACE("%s %p %p\n", debugstr_a(folder), buf, sz);
 
@@ -473,7 +473,7 @@ UINT WINAPI MsiGetSourcePathW(MSIHANDLE hinst, const WCHAR *folder, WCHAR *buf, 
 {
     MSIPACKAGE *package;
     WCHAR *path;
-    UINT r;
+    UINT r = 0;
 
     TRACE("%s %p %p\n", debugstr_w(folder), buf, sz);
 
@@ -605,7 +605,7 @@ UINT WINAPI MsiSetTargetPathW(MSIHANDLE hInstall, LPCWSTR szFolder,
                              LPCWSTR szFolderPath)
 {
     MSIPACKAGE *package;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE("%s %s\n",debugstr_w(szFolder),debugstr_w(szFolderPath));
 
@@ -767,7 +767,7 @@ BOOL WINAPI MsiGetMode(MSIHANDLE hInstall, MSIRUNMODE iRunMode)
 UINT WINAPI MsiSetMode(MSIHANDLE hInstall, MSIRUNMODE iRunMode, BOOL fState)
 {
     MSIPACKAGE *package;
-    UINT r;
+    UINT r = 0;
 
     TRACE( "%lu, %d, %d\n", hInstall, iRunMode, fState );
 
@@ -1096,7 +1096,7 @@ UINT WINAPI MsiGetFeatureStateW( MSIHANDLE hInstall, const WCHAR *szFeature, INS
                                  INSTALLSTATE *piAction )
 {
     MSIPACKAGE* package;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE( "%lu, %s, %p, %p\n", hInstall, debugstr_w(szFeature), piInstalled, piAction );
 
@@ -1215,7 +1215,7 @@ UINT WINAPI MsiGetFeatureCostW( MSIHANDLE hInstall, const WCHAR *szFeature, MSIC
 {
     MSIPACKAGE *package;
     MSIFEATURE *feature;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE( "%lu, %s, %d, %d, %p\n", hInstall, debugstr_w(szFeature), iCostTree, iState, piCost );
 
@@ -1470,7 +1470,7 @@ UINT WINAPI MsiSetComponentStateW(MSIHANDLE hInstall, LPCWSTR szComponent,
                                   INSTALLSTATE iState)
 {
     MSIPACKAGE* package;
-    UINT ret;
+    UINT ret = 0;
 
     if (!szComponent)
         return ERROR_UNKNOWN_COMPONENT;
@@ -1508,7 +1508,7 @@ UINT WINAPI MsiGetComponentStateW( MSIHANDLE hInstall, const WCHAR *szComponent,
                                    INSTALLSTATE *piAction )
 {
     MSIPACKAGE* package;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE( "%lu, %s, %p, %p\n", hInstall, debugstr_w(szComponent), piInstalled, piAction );
 
@@ -1547,7 +1547,7 @@ UINT WINAPI MsiGetComponentStateW( MSIHANDLE hInstall, const WCHAR *szComponent,
 LANGID WINAPI MsiGetLanguage(MSIHANDLE hInstall)
 {
     MSIPACKAGE* package;
-    LANGID langid;
+    LANGID langid = 0;
 
     package = msihandle2msiinfo(hInstall, MSIHANDLETYPE_PACKAGE);
     if (!package)
@@ -1603,7 +1603,7 @@ UINT MSI_SetInstallLevel( MSIPACKAGE *package, int iInstallLevel )
 UINT WINAPI MsiSetInstallLevel(MSIHANDLE hInstall, int iInstallLevel)
 {
     MSIPACKAGE* package;
-    UINT r;
+    UINT r = 0;
 
     TRACE( "%lu %d\n", hInstall, iInstallLevel );
 

@@ -145,15 +145,13 @@ add_compile_options(
     -Wno-deprecated
     -Wno-deprecated-declarations
     -Wno-deprecated-non-prototype
-    -Wno-unused-result
     -Wno-missing-braces
     -Wno-unused-but-set-variable
     -Wno-inconsistent-missing-override
     -Wno-main
     "-Wno-#pragma-messages"
-    -Wno-error=implicit-function-declaration
-    -Wno-error=incompatible-library-redeclaration
-    -Wno-error=incompatible-pointer-types
+    -Wunused-comparison
+    -Wunused-result
 )
 
 if(ARCH STREQUAL "arm")

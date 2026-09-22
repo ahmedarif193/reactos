@@ -1085,7 +1085,7 @@ RegisterUncProvider(PDEVICE_OBJECT DeviceObject,
     BOOLEAN New;
     PMUP_FCB Fcb;
     PMUP_CCB Ccb;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PLIST_ENTRY Entry;
     PIO_STACK_LOCATION Stack;
     IO_STATUS_BLOCK IoStatusBlock;
@@ -1242,7 +1242,7 @@ NTAPI
 MupFsControl(PDEVICE_OBJECT DeviceObject,
              PIRP Irp)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIO_STACK_LOCATION Stack;
 
     Stack = IoGetCurrentIrpStackLocation(Irp);
@@ -2163,7 +2163,7 @@ OpenMupFileSystem(PMUP_VCB Vcb,
                   ACCESS_MASK DesiredAccess,
                   USHORT ShareAccess)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     DPRINT1("Opening MUP\n");
 
@@ -2193,7 +2193,7 @@ NTAPI
 MupCreate(PDEVICE_OBJECT DeviceObject,
           PIRP Irp)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIO_STACK_LOCATION Stack;
     PFILE_OBJECT FileObject, RelatedFileObject;
 
@@ -2277,7 +2277,7 @@ MupCleanup(PDEVICE_OBJECT DeviceObject,
     ULONG Type;
     PMUP_FCB Fcb;
     PMUP_CCB Ccb;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIO_STACK_LOCATION Stack;
 
     /* If DFS is enabled, check if that's for DFS and is so relay */
@@ -2399,7 +2399,7 @@ MupClose(PDEVICE_OBJECT DeviceObject,
 {
     PMUP_FCB Fcb;
     PMUP_CCB Ccb;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIO_STACK_LOCATION Stack;
 
     /* If DFS is enabled, check if that's for DFS and is so relay */

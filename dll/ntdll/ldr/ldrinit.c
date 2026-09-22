@@ -845,7 +845,7 @@ LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL)
     RTL_CALLER_ALLOCATED_ACTIVATION_CONTEXT_STACK_FRAME_EXTENDED ActCtx;
     ULONG BreakOnDllLoad;
     PTEB OldTldTeb;
-    BOOLEAN DllStatus;
+    BOOLEAN DllStatus = FALSE;
 
     DPRINT("LdrpRunInitializeRoutines() called for %wZ (%p/%p)\n",
         &LdrpImageEntry->BaseDllName,

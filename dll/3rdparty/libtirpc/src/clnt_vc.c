@@ -208,7 +208,7 @@ static unsigned int WINAPI clnt_cb_thread(void *args)
     struct rpc_msg reply_msg;    
     char cred_area[2 * MAX_AUTH_BYTES + RQCRED_SIZE];
 
-    fprintf(stderr/*stdout*/, "%04x: Creating callback thread\n", GetCurrentThreadId());
+    fprintf(stderr/*stdout*/, "%04lx: Creating callback thread\n", GetCurrentThreadId());
     while(1) {
         cb_req header;
         void *res = NULL;
@@ -227,7 +227,7 @@ static unsigned int WINAPI clnt_cb_thread(void *args)
 	    mutex_unlock(&clnt_fd_lock);
 
         if (cl->shutdown) {
-            fprintf(stdout, "%04x: callback received shutdown signal\n", GetCurrentThreadId());
+            fprintf(stdout, "%04lx: callback received shutdown signal\n", GetCurrentThreadId());
             release_fd_lock(ct->ct_fd, mask);
             goto out;
         }
@@ -261,10 +261,10 @@ process_rpc_call:
         ct->reply_msg.rm_call.cb_cred.oa_base = cred_area;
         ct->reply_msg.rm_call.cb_verf.oa_base = &(cred_area[MAX_AUTH_BYTES]);
         if (!xdr_getcallbody(xdrs, &ct->reply_msg)) {
-            fprintf(stderr, "%04x: xdr_getcallbody failed\n", GetCurrentThreadId());            
+            fprintf(stderr, "%04lx: xdr_getcallbody failed\n", GetCurrentThreadId());            
             goto skip_process;
         } else 
-            fprintf(stdout, "%04x: callbody: rpcvers %d cb_prog %d cb_vers %d cb_proc %d\n", 
+            fprintf(stdout, "%04lx: callbody: rpcvers %d cb_prog %d cb_vers %d cb_proc %d\n", 
                 GetCurrentThreadId(), 
                 ct->reply_msg.rm_call.cb_rpcvers, ct->reply_msg.rm_call.cb_prog,
                 ct->reply_msg.rm_call.cb_vers, ct->reply_msg.rm_call.cb_proc);
@@ -274,13 +274,13 @@ process_rpc_call:
         header.xdr = xdrs;
         status = (*cl->cb_fn)(cl->cb_args, &header, &res);
         if (status) {
-            fprintf(stderr, "%04x: callback function failed with %d\n", status);
+            fprintf(stderr, "%04lx: callback function failed with %d\n", GetCurrentThreadId(), status);
         }
         
         xdrs->x_op = XDR_ENCODE;
         __xdrrec_setblock(xdrs);
         reply_msg.rm_xid = ct->reply_msg.rm_xid;
-        fprintf(stdout, "%04x: cb: replying to xid %d\n", GetCurrentThreadId(), 
+        fprintf(stdout, "%04lx: cb: replying to xid %d\n", GetCurrentThreadId(), 
             ct->reply_msg.rm_xid);
         ct->reply_msg.rm_xid = 0;
         reply_msg.rm_direction = REPLY;
@@ -296,7 +296,7 @@ process_rpc_call:
             (*cl->cb_xdr)(xdrs, res); /* free the results */
         }
         if (! xdrrec_endofrecord(xdrs, 1)) {
-            fprintf(stderr, "%04x: failed to send REPLY\n", GetCurrentThreadId());
+            fprintf(stderr, "%04lx: failed to send REPLY\n", GetCurrentThreadId());
         }
 skip_process:
         ct->reply_msg.rm_direction = -1;
@@ -483,13 +483,15 @@ clnt_vc_create(fd, raddr, prog, vers, sendsz, recvsz, cb_xdr, cb_fn, cb_args)
         cl->cb_thread = (HANDLE)_beginthreadex(NULL,
             0, clnt_cb_thread, cl, 0, NULL);
         if (cl->cb_thread == INVALID_HANDLE_VALUE) {
-            fprintf(stderr, "_beginthreadex failed %d\n", GetLastError());
+            fprintf(stderr, "_beginthreadex failed %lu\n", GetLastError());
             goto err;
-        } else
-            fprintf(stdout, "%04x: started the callback thread %04x\n", 
+        } else {
+            fprintf(stdout, "%04lx: started the callback thread %p\n", 
                 GetCurrentThreadId(), cl->cb_thread);
-    } else
+        }
+    } else {
         cl->cb_thread = INVALID_HANDLE_VALUE;
+    }
 	return (cl);
 
 err:
@@ -921,13 +923,13 @@ clnt_vc_destroy(cl)
 
     if (cl->cb_thread != INVALID_HANDLE_VALUE) {
         int status;
-        fprintf(stdout, "%04x: sending shutdown to callback thread %04x\n", 
+        fprintf(stdout, "%04lx: sending shutdown to callback thread %p\n", 
             GetCurrentThreadId(), cl->cb_thread);
         cl->shutdown = 1;
         mutex_unlock(&clnt_fd_lock);
         cond_signal(&vc_cv[WINSOCK_HANDLE_HASH(ct_fd)]);
         status = WaitForSingleObject(cl->cb_thread, INFINITE);
-        fprintf(stdout, "%04x: terminated callback thread\n", GetCurrentThreadId());
+        fprintf(stdout, "%04lx: terminated callback thread\n", GetCurrentThreadId());
         mutex_lock(&clnt_fd_lock);
         while (vc_fd_locks[WINSOCK_HANDLE_HASH(ct_fd)])
             cond_wait(&vc_cv[WINSOCK_HANDLE_HASH(ct_fd)], &clnt_fd_lock);

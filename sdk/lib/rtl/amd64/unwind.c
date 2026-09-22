@@ -1038,7 +1038,7 @@ RtlpWalkFrameChain(OUT PVOID *Callers,
     ULONG64 ControlPc, ImageBase, EstablisherFrame;
     ULONG64 StackLow, StackHigh;
     PVOID HandlerData;
-    ULONG i, FramesToSkip;
+    ULONG i = 0, FramesToSkip;
     PRUNTIME_FUNCTION FunctionEntry;
     MODE CurrentMode = RtlpGetMode();
 

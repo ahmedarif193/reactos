@@ -860,17 +860,20 @@ IntelGpioPnp(
             return Status;
 
         case IRP_MN_STOP_DEVICE:
-            IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
             IntelGpioUnmapCommunities(DeviceExtension);
             break;
 
         case IRP_MN_SURPRISE_REMOVAL:
-            IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
             IntelGpioUnmapCommunities(DeviceExtension);
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
             DeviceExtension->Started = FALSE;
             KeSetEvent(&DeviceExtension->InterruptEvent, IO_NO_INCREMENT, FALSE);
             Status = IoAcquireRemoveLock(&DeviceExtension->RemoveLock, Irp);

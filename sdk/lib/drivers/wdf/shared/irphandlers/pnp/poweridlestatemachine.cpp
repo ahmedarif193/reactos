@@ -1342,7 +1342,7 @@ Return Value:
         //
         // Ignore potential failure, power ref tracking is not an essential feature.
         //
-        (void)FxTagTracker::CreateAndInitialize(&m_TagTracker,
+        (void)!FxTagTracker::CreateAndInitialize(&m_TagTracker,
                                                 pFxDriverGlobals,
                                                 FxTagTrackerTypePower,
                                                 pFxDriverGlobals->DebugExtension->TrackPower == FxTrackPowerRefsAndStack,

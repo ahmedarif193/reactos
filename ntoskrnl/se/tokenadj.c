@@ -254,7 +254,7 @@ SepAdjustGroups(
     _Out_ PULONG ChangedGroups)
 {
     ULONG GroupsInToken, GroupsInList;
-    ULONG ChangeCount, GroupsCount, NewAttributes;
+    ULONG ChangeCount, GroupsCount, NewAttributes = 0;
 
     PAGED_CODE();
 
@@ -338,7 +338,7 @@ SepAdjustGroups(
                     /* Copy the attributes and stop searching */
                     NewAttributes = NewState[GroupsInList].Attributes;
                     NewAttributes &= SE_GROUP_ENABLED;
-                    NewAttributes = Token->UserAndGroups[GroupsInToken].Attributes & ~SE_GROUP_ENABLED;
+                    NewAttributes |= Token->UserAndGroups[GroupsInToken].Attributes & ~SE_GROUP_ENABLED;
                     break;
                 }
 
@@ -457,7 +457,7 @@ NtAdjustPrivilegesToken(
         PTOKEN_PRIVILEGES PreviousState,
     _When_(PreviousState!=NULL, _Out_) PULONG ReturnLength)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     KPROCESSOR_MODE PreviousMode;
     PTOKEN Token;
     PLUID_AND_ATTRIBUTES CapturedPrivileges = NULL;
@@ -702,7 +702,7 @@ NtAdjustGroupsToken(
     _When_(PreviousState != NULL, _Out_) PULONG ReturnLength)
 {
     PTOKEN Token;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     KPROCESSOR_MODE PreviousMode;
     ULONG ChangeCount, RequiredLength;
     ULONG CapturedCount = 0;

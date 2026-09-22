@@ -58,7 +58,7 @@ AtaWait(
     _In_ UCHAR Mask,
     _In_ UCHAR Value)
 {
-    UCHAR IdeStatus;
+    UCHAR IdeStatus = 0;
     ULONG i;
 
     for (i = 0; i < Timeout; ++i)

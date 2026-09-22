@@ -91,6 +91,7 @@ class FxTransactionedList : public FxStump {
 public:
     FxTransactionedList();
 
+    virtual
     ~FxTransactionedList();
 
     VOID

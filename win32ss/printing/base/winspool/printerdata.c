@@ -498,7 +498,7 @@ GetPrinterDataExW(HANDLE hPrinter, LPCWSTR pKeyName, LPCWSTR pValueName, LPDWORD
     const WCHAR wszEmptyString[] = L"";
 
     BYTE DummyData;
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     DWORD dwType = REG_NONE;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
@@ -627,7 +627,7 @@ SetPrinterDataExW(HANDLE hPrinter, LPCWSTR pKeyName, LPCWSTR pValueName, DWORD T
 {
     const WCHAR wszEmptyString[] = L"";
 
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     TRACE("SetPrinterDataExW(%p, %S, %S, %lu, %p, %lu)\n", hPrinter, pKeyName, pValueName, Type, pData, cbData);

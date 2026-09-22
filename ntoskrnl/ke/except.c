@@ -217,7 +217,7 @@ NtContinueEx(
     _In_ PCONTEXT Context,
     _In_opt_ PKCONTINUE_ARGUMENT ContinueArgument)
 {
-    KCONTINUE_ARGUMENT CapturedArgument;
+    KCONTINUE_ARGUMENT CapturedArgument = {0};
     BOOLEAN TestAlert;
 
     if ((ULONG_PTR)ContinueArgument <= 0xff)

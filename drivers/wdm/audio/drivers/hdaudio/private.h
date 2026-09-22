@@ -535,7 +535,8 @@ class CMiniportWaveRTStream : public CUnknownImpl<IMiniportWaveRTStreamNotificat
     }
     virtual ~CMiniportWaveRTStream()
     {
-        m_Interface.FreeDmaEngine(m_Interface.Context, m_DmaEngine);
+        if (!NT_SUCCESS(m_Interface.FreeDmaEngine(m_Interface.Context, m_DmaEngine)))
+            DbgPrint("HDAUDIO: FreeDmaEngine failed\n");
     }
 
     IMP_IMiniportWaveRTStream;

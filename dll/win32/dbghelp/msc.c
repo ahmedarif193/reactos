@@ -4150,7 +4150,7 @@ BOOL pe_load_debug_directory(struct module* module,
                              const IMAGE_SECTION_HEADER* sectp, DWORD nsect,
                              const IMAGE_DEBUG_DIRECTORY* dbg, int nDbg)
 {
-    BOOL                        ret;
+    BOOL                        ret = FALSE;
     int                         i;
     struct msc_debug_info       msc_dbg;
 

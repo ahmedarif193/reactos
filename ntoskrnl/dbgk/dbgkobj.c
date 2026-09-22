@@ -2018,7 +2018,7 @@ NtWaitForDebugEvent(IN HANDLE DebugHandle,
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     LARGE_INTEGER LocalTimeOut;
     PEPROCESS Process;
-    LARGE_INTEGER StartTime;
+    LARGE_INTEGER StartTime = {0};
     PETHREAD Thread;
     BOOLEAN GotEvent;
     LARGE_INTEGER NewTime;

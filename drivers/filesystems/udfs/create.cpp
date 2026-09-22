@@ -50,7 +50,7 @@ UDFCreate(
     PIRP                    Irp)                // I/O Request Packet
 {
     NTSTATUS            RC = STATUS_SUCCESS;
-    PtrUDFIrpContext    PtrIrpContext;
+    PtrUDFIrpContext    PtrIrpContext = NULL;
     BOOLEAN             AreWeTopLevel = FALSE;
 
     TmPrint(("UDFCreate:\n"));
@@ -195,13 +195,13 @@ UDFCommonCreate(
     PFILE_OBJECT                PtrRelatedFileObject = NULL;
     LONGLONG                    AllocationSize;     // if we create a new file
     PFILE_FULL_EA_INFORMATION   PtrExtAttrBuffer = NULL;
-    ULONG                       RequestedOptions;
+    ULONG                       RequestedOptions = 0;
     ULONG                       RequestedDisposition;
     USHORT                      FileAttributes;
     USHORT                      TmpFileAttributes;
     USHORT                      ShareAccess;
     ULONG                       ExtAttrLength = 0;
-    ACCESS_MASK                 DesiredAccess;
+    ACCESS_MASK                 DesiredAccess = 0;
     PACCESS_STATE               AccessState;
 
     _SEH2_VOLATILE PVCB         Vcb = NULL;
@@ -214,7 +214,7 @@ UDFCommonCreate(
 //  BOOLEAN                     DirectoryOnlyRequested;
 //  BOOLEAN                     FileOnlyRequested;
 //  BOOLEAN                     NoBufferingSpecified;
-    BOOLEAN                     WriteThroughRequested;
+    BOOLEAN                     WriteThroughRequested = FALSE;
     BOOLEAN                     DeleteOnCloseSpecified;
 //  BOOLEAN                     NoExtAttrKnowledge;
 //  BOOLEAN                     CreateTreeConnection = FALSE;

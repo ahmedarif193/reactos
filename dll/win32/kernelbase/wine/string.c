@@ -149,7 +149,7 @@ LPWSTR WINAPI KERNELBASE_lstrcpynW( LPWSTR dst, LPCWSTR src, INT n )
 
 INT WINAPI KERNELBASE_lstrlenA( LPCSTR str )
 {
-    INT ret;
+    INT ret = 0;
     __TRY
     {
         ret = strlen(str);
@@ -165,7 +165,7 @@ INT WINAPI KERNELBASE_lstrlenA( LPCSTR str )
 
 INT WINAPI KERNELBASE_lstrlenW( LPCWSTR str )
 {
-    INT ret;
+    INT ret = 0;
     __TRY
     {
         ret = wcslen(str);

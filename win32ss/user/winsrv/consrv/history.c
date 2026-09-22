@@ -450,8 +450,8 @@ CON_API(SrvGetConsoleCommandHistory,
     {
         ULONG i;
 
-        LPSTR  TargetBufferA;
-        LPWSTR TargetBufferW;
+        LPSTR  TargetBufferA = NULL;
+        LPWSTR TargetBufferW = NULL;
         ULONG BufferSize = GetCommandHistoryRequest->HistoryLength;
 
         ULONG Offset = 0;

@@ -2263,7 +2263,7 @@ IntCheckImeShowStatus(
     BOOL ret = FALSE, bDifferent;
     PWINDOWLIST pwl;
     HWND *phwnd;
-    PWND pwndNode, pwndIMC;
+    PWND pwndNode, pwndIMC = NULL;
     PTHREADINFO ptiCurrent = GetW32ThreadInfo();
     PIMEUI pimeui;
     IMEUI SafeImeUI;
@@ -2361,7 +2361,7 @@ IntSendMessageToUI(
     _In_ WPARAM wParam,
     _In_ LPARAM lParam)
 {
-    PWND pwndUI;
+    PWND pwndUI = NULL;
     LRESULT ret = 0;
     IMEUI SafeImeUI;
     BOOL bDifferent = FALSE;

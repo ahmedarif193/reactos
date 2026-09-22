@@ -194,7 +194,7 @@ ldap_modify_ext( LDAP *ld,
 int
 ldap_modify( LDAP *ld, LDAP_CONST char *dn, LDAPMod **mods )
 {
-	int rc, msgid;
+	int rc, msgid = 0;
 
 	Debug0( LDAP_DEBUG_TRACE, "ldap_modify\n" );
 

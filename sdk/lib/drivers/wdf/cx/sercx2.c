@@ -669,7 +669,7 @@ SerCx2NonPioFinish(
     KeReleaseSpinLock(&Device->Lock, OldIrql);
 
     if (Transaction->Type == SerCx2TransactionTypeSystemDma)
-        WdfRequestUnmarkCancelable(Request);
+        (VOID)!WdfRequestUnmarkCancelable(Request);
     WdfRequestCompleteWithInformation(Request, Status, Information);
     SerCx2NonPioRequestDone(Device, Transaction);
 }

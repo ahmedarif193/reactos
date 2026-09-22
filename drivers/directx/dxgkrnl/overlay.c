@@ -174,7 +174,7 @@ DxgkpInvokeCreateOverlay(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _Inout_ PDXGKARG_CREATEOVERLAY Args)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiCreateOverlay) == NULL)
         return STATUS_NOT_SUPPORTED;
@@ -216,7 +216,7 @@ DxgkpInvokeUpdateOverlay(
     _In_ CONST DXGKARG_UPDATEOVERLAY *Args)
 {
     PDXGKRNL_ADAPTER Adapter = Overlay->Device->Adapter;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiUpdateOverlay) == NULL)
         return STATUS_NOT_SUPPORTED;
@@ -258,7 +258,7 @@ DxgkpInvokeFlipOverlay(
     _In_ CONST DXGKARG_FLIPOVERLAY *Args)
 {
     PDXGKRNL_ADAPTER Adapter = Overlay->Device->Adapter;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiFlipOverlay) == NULL)
         return STATUS_NOT_SUPPORTED;
@@ -299,7 +299,7 @@ DxgkpInvokeDestroyOverlay(
     _In_ PDXGKRNL_OVERLAY Overlay)
 {
     PDXGKRNL_ADAPTER Adapter = Overlay->Device->Adapter;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (Overlay->hMiniportOverlay == NULL ||
         DXGK_CB_FULL(Adapter, DxgkDdiDestroyOverlay) == NULL ||

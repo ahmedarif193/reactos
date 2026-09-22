@@ -2911,7 +2911,7 @@ static int get_utf8_len(unsigned char code)
 
 HRESULT WINAPI UrlUnescapeW(WCHAR *url, WCHAR *unescaped, DWORD *unescaped_len, DWORD flags)
 {
-    WCHAR *dst, next, utf16_buf[4];
+    WCHAR *dst, next = 0, utf16_buf[4];
     BOOL stop_unescaping = FALSE;
     int utf8_len, utf16_len, i;
     const WCHAR *src;

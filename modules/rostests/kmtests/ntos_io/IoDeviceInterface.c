@@ -165,7 +165,8 @@ Test_IoGetDeviceInterfaces(
 
     Status = IoGetDeviceInterfaces(Guid, NULL, DEVICE_INTERFACE_INCLUDE_NONACTIVE, &SymbolicLinkList);
 
-    RtlStringFromGUID(Guid, &GuidString);
+    if (!NT_SUCCESS(RtlStringFromGUID(Guid, &GuidString)))
+        RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
     if (skip(NT_SUCCESS(Status), "IoGetDeviceInterfaces failed with status 0x%x for '%wZ'\n", Status, &GuidString))
     {
         RtlFreeUnicodeString(&GuidString);

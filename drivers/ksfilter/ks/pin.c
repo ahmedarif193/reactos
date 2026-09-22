@@ -2360,7 +2360,8 @@ IKsPin_DispatchDeviceIoControl(
     ASSERT(IoStack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(KSIDENTIFIER));
     ASSERT(This->Pin.Descriptor->AutomationTable);
 
-    RtlStringFromGUID(&Property->Set, &GuidString);
+    if (!NT_SUCCESS(RtlStringFromGUID(&Property->Set, &GuidString)))
+        RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
     DPRINT("IKsPin_DispatchDeviceIoControl property Set |%S| Id %u Flags %x\n", GuidString.Buffer, Property->Id, Property->Flags);
     RtlFreeUnicodeString(&GuidString);
 
@@ -2425,7 +2426,8 @@ IKsPin_DispatchDeviceIoControl(
         }
     }
 
-    RtlStringFromGUID(&Property->Set, &GuidString);
+    if (!NT_SUCCESS(RtlStringFromGUID(&Property->Set, &GuidString)))
+        RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
     DPRINT("IKsPin_DispatchDeviceIoControl property Set |%S| Id %u Flags %x Status %lx ResultLength %lu\n", GuidString.Buffer, Property->Id, Property->Flags, Status, Irp->IoStatus.Information);
     RtlFreeUnicodeString(&GuidString);
 
@@ -2682,13 +2684,21 @@ KspCreatePin(
      {
          UNICODE_STRING GuidString;
          /* convert the guid to string */
-         RtlStringFromGUID(&Descriptor->PinDescriptor.DataRanges[Index]->MajorFormat, &GuidString);
-         DPRINT("Index %lu MajorFormat %S\n", Index, GuidString.Buffer);
-         RtlStringFromGUID(&Descriptor->PinDescriptor.DataRanges[Index]->SubFormat, &GuidString);
-         DPRINT("Index %lu SubFormat %S\n", Index, GuidString.Buffer);
-         RtlStringFromGUID(&Descriptor->PinDescriptor.DataRanges[Index]->Specifier, &GuidString);
-         DPRINT("Index %lu Specifier %S\n", Index, GuidString.Buffer);
-         RtlStringFromGUID(&Descriptor->PinDescriptor.DataRanges[Index]->Specifier, &GuidString);
+         if (NT_SUCCESS(RtlStringFromGUID(&Descriptor->PinDescriptor.DataRanges[Index]->MajorFormat, &GuidString)))
+         {
+             DPRINT("Index %lu MajorFormat %S\n", Index, GuidString.Buffer);
+             RtlFreeUnicodeString(&GuidString);
+         }
+         if (NT_SUCCESS(RtlStringFromGUID(&Descriptor->PinDescriptor.DataRanges[Index]->SubFormat, &GuidString)))
+         {
+             DPRINT("Index %lu SubFormat %S\n", Index, GuidString.Buffer);
+             RtlFreeUnicodeString(&GuidString);
+         }
+         if (NT_SUCCESS(RtlStringFromGUID(&Descriptor->PinDescriptor.DataRanges[Index]->Specifier, &GuidString)))
+         {
+             DPRINT("Index %lu Specifier %S\n", Index, GuidString.Buffer);
+             RtlFreeUnicodeString(&GuidString);
+         }
          DPRINT("Index %lu FormatSize %lu Flags %lu SampleSize %lu Reserved %lu KSDATAFORMAT %lu\n", Index,
                 Descriptor->PinDescriptor.DataRanges[Index]->FormatSize, Descriptor->PinDescriptor.DataRanges[Index]->Flags, Descriptor->PinDescriptor.DataRanges[Index]->SampleSize, Descriptor->PinDescriptor.DataRanges[Index]->Reserved, sizeof(KSDATAFORMAT));
 

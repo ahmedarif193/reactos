@@ -2006,7 +2006,7 @@ Return Value:
     //
     // Purge non power managed queues now
     //
-    m_Device->m_PkgIo->StopProcessingForPower(
+    (VOID)!m_Device->m_PkgIo->StopProcessingForPower(
         FxIoStopProcessingForPowerPurgeNonManaged
         );
 
@@ -2246,7 +2246,7 @@ Return Value:
 
 
     // Flush/purge top-edge queues
-    m_Device->m_PkgIo->StopProcessingForPower(
+    (VOID)!m_Device->m_PkgIo->StopProcessingForPower(
         FxIoStopProcessingForPowerPurgeManaged
         );
 
@@ -2866,7 +2866,7 @@ Return Value:
     //
     // Invoke EvtDeviceReleaseHardware
     //
-    (void) This->PnpReleaseHardware();
+    (void)!This->PnpReleaseHardware();
 
     return WdfDevStatePnpFailed;
 }

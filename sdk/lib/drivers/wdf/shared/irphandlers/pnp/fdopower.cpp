@@ -489,7 +489,7 @@ FxPkgFdo::PowerReleasePendingDeviceIrp(
             //
             // This will also release the remove lock
             //
-            (void) _PowerPassDown(this, &irp);
+            (void)!_PowerPassDown(this, &irp);
         }
     }
 }

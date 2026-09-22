@@ -279,7 +279,7 @@ int nfs41_session_create(
     IN nfs41_client *client,
     IN nfs41_session **session_out)
 {
-    nfs41_session *session;
+    nfs41_session *session = NULL;
     int status;
 
     status = session_alloc(client, &session);

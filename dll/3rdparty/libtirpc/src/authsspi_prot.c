@@ -153,7 +153,7 @@ xdr_rpc_sspi_wrap_data(XDR *xdrs, xdrproc_t xdr_func, caddr_t xdr_ptr,
 		maj_stat = gss_wrap(&min_stat, ctx, TRUE, qop, &databuf,
 				    &conf_state, &wrapbuf);
 #else
-        maj_stat = sspi_wrap(ctx, 0, &databuf, &wrapbuf, &conf_state);
+        maj_stat = sspi_wrap(ctx, 0, &databuf, &wrapbuf, (u_int *)&conf_state);
 #endif
 		if (maj_stat != SEC_E_OK) {
 			log_debug("xdr_rpc_sspi_wrap_data: sspi_wrap failed with %x", maj_stat);
@@ -246,7 +246,7 @@ xdr_rpc_sspi_unwrap_data(XDR *xdrs, xdrproc_t xdr_func, caddr_t xdr_ptr,
 		maj_stat = gss_unwrap(&min_stat, ctx, &wrapbuf, &databuf,
 				      &conf_state, &qop_state);
 #else
-        maj_stat = sspi_unwrap(ctx, seq, &wrapbuf, &databuf, &conf_state, &qop_state);
+        maj_stat = sspi_unwrap(ctx, seq, &wrapbuf, &databuf, (u_int *)&conf_state, &qop_state);
 #endif
 #if 0
 		gss_release_buffer(&min_stat, &wrapbuf);

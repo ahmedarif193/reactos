@@ -649,8 +649,8 @@ inet_ntop(INT af, const VOID *src, PSTR dst, size_t cnt)
 	if (af == AF_INET) {
 		memcpy(&in.s_addr, src, sizeof(in.s_addr));
 		text_addr = inet_ntoa(in);
-		if (text_addr && dst) {
-			strncpy(dst, text_addr, cnt);
+		if (text_addr && dst && strlen(text_addr) < cnt) {
+			strcpy(dst, text_addr);
 			return dst;
 		}
 	}

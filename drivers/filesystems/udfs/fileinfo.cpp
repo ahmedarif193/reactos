@@ -128,7 +128,7 @@ UDFCommonFileInfo(
     BOOLEAN                 PagingIoResourceAcquired = FALSE;
     PVOID                   PtrSystemBuffer = NULL;
     LONG                    BufferLength = 0;
-    FILE_INFORMATION_CLASS  FunctionalityRequested;
+    FILE_INFORMATION_CLASS  FunctionalityRequested = (FILE_INFORMATION_CLASS)0;
     BOOLEAN                 CanWait = FALSE;
     BOOLEAN                 PostRequest = FALSE;
     BOOLEAN                 AcquiredVcb = FALSE;
@@ -2504,7 +2504,7 @@ UDFHardLink(
     // Overwite Flag
     BOOLEAN Replace = PtrSp->Parameters.SetFile.ReplaceIfExists &&
                       PtrBuffer->ReplaceIfExists;
-    NTSTATUS RC;
+    NTSTATUS RC = STATUS_UNSUCCESSFUL;
     PVCB Vcb = Fcb1->Vcb;
     PtrUDFFCB Fcb2;
     BOOLEAN ic;

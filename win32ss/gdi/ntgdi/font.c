@@ -1184,11 +1184,11 @@ NtGdiGetFontResourceInfoInternalW(
     _In_ DWORD dwType)
 {
     NTSTATUS Status = STATUS_SUCCESS;
-    DWORD dwBytes, dwBytesRequested;
+    DWORD dwBytes, dwBytesRequested = 0;
     UNICODE_STRING SafeFileNames;
     BOOL bRet = FALSE;
     ULONG cbStringSize;
-    LPVOID Buffer;
+    LPVOID Buffer = NULL;
 
     /* FIXME: Handle cFiles > 0 */
 
@@ -1371,7 +1371,7 @@ NtGdiGetFontFileData(
     _In_ SIZE_T cjBuf)
 {
     PVOID Buffer = NULL;
-    ULONGLONG Offset;
+    ULONGLONG Offset = 0;
     NTSTATUS Status = STATUS_SUCCESS;
     BOOL Ret;
 

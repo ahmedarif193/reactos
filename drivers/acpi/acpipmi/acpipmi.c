@@ -772,7 +772,8 @@ AcpiPmiStop(
                           NULL);
     if (DeviceExtension->InterfaceEnabled)
     {
-        IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
         DeviceExtension->InterfaceEnabled = FALSE;
     }
     AcpiPmiDrainAllEvents(DeviceExtension, PendingStatus);

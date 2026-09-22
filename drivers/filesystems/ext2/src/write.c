@@ -1354,7 +1354,7 @@ Ext2WriteComplete (IN PEXT2_IRP_CONTEXT IrpContext)
 NTSTATUS
 Ext2Write (IN PEXT2_IRP_CONTEXT IrpContext)
 {
-    NTSTATUS            Status;
+    NTSTATUS            Status = STATUS_UNSUCCESSFUL;
     PEXT2_FCBVCB        FcbOrVcb;
     PDEVICE_OBJECT      DeviceObject;
     PFILE_OBJECT        FileObject;

@@ -306,8 +306,6 @@ GetFilterFromEvents(DWORD fEvents)
 // Restart a watch by using ReadDirectoryChangesW function
 BOOL CDirectoryWatcher::RestartWatching()
 {
-    assert(this != NULL);
-
     if (IsDead())
     {
         delete this;
@@ -347,8 +345,6 @@ BOOL CDirectoryWatcher::CreateAPCThread()
 
 BOOL CDirectoryWatcher::RequestAddWatcher()
 {
-    assert(this != NULL);
-
     // create an APC thread for directory watching
     if (!CreateAPCThread())
         return FALSE;
@@ -360,8 +356,6 @@ BOOL CDirectoryWatcher::RequestAddWatcher()
 
 BOOL CDirectoryWatcher::RequestTermination()
 {
-    assert(this != NULL);
-
     if (s_hThreadAPC)
     {
         QueueUserAPC(_RequestTerminationAPC, s_hThreadAPC, (ULONG_PTR)this);
@@ -382,8 +376,6 @@ BOOL CDirectoryWatcher::RequestTermination()
 
 void CDirectoryWatcher::QuitWatching()
 {
-    assert(this != NULL);
-
     m_fDead = TRUE;
     m_hNotifyWnd = NULL;
     CancelIo(m_hDirectory);

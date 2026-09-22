@@ -61,7 +61,7 @@ AtapWait(
     _In_ UCHAR Mask,
     _In_ UCHAR Value)
 {
-    UCHAR IdeStatus;
+    UCHAR IdeStatus = 0;
     ULONG i;
 
     ASSERT(Timeout != 0);

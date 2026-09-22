@@ -148,7 +148,8 @@ KspRemoveDeviceAssociations(
          ASSERT(CurEntry->SymbolicLink.Buffer);
 
          /* de-register interface */
-         IoSetDeviceInterfaceState(&CurEntry->SymbolicLink, FALSE);
+         if (!NT_SUCCESS(IoSetDeviceInterfaceState(&CurEntry->SymbolicLink, FALSE)))
+             DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &CurEntry->SymbolicLink);
 
          /* free symbolic link buffer */
          FreeItem(CurEntry->SymbolicLink.Buffer);
@@ -272,7 +273,8 @@ KspCreateDeviceAssociation(
     RtlInitUnicodeString(&DeviceName, InterfaceString);
 
     /* first convert device name to guid */
-    RtlGUIDFromString(&DeviceName, &InterfaceGUID);
+    if (!NT_SUCCESS(RtlGUIDFromString(&DeviceName, &InterfaceGUID)))
+        return STATUS_INVALID_PARAMETER;
 
     /* check if the device is already present */
     Entry = DeviceEntry->DeviceInterfaceList.Flink;
@@ -400,7 +402,12 @@ KspCreateDeviceReference(
 
         /* copy device guid */
         RtlInitUnicodeString(&String, DeviceId);
-        RtlGUIDFromString(&String, &DeviceEntry->DeviceGuid);
+        if (!NT_SUCCESS(RtlGUIDFromString(&String, &DeviceEntry->DeviceGuid)))
+        {
+            FreeItem(DeviceEntry);
+            FreeItem(DeviceName);
+            return STATUS_INVALID_PARAMETER;
+        }
 
         /* copy device names */
         DeviceEntry->DeviceName = DeviceName;
@@ -1623,7 +1630,8 @@ KsCreateBusEnumObject(
             DPRINT1("IoAttachDeviceToDeviceStack failed with %x\n", Status);
             if (BusDeviceExtension->DeviceInterfaceLink.Buffer)
             {
-                IoSetDeviceInterfaceState(&BusDeviceExtension->DeviceInterfaceLink, FALSE);
+                if (!NT_SUCCESS(IoSetDeviceInterfaceState(&BusDeviceExtension->DeviceInterfaceLink, FALSE)))
+                    DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &BusDeviceExtension->DeviceInterfaceLink);
                 RtlFreeUnicodeString(&BusDeviceExtension->DeviceInterfaceLink);
             }
 
@@ -1652,7 +1660,8 @@ KsCreateBusEnumObject(
         /* failed to scan bus */
         if (BusDeviceExtension->DeviceInterfaceLink.Buffer)
         {
-            IoSetDeviceInterfaceState(&BusDeviceExtension->DeviceInterfaceLink, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&BusDeviceExtension->DeviceInterfaceLink, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &BusDeviceExtension->DeviceInterfaceLink);
             RtlFreeUnicodeString(&BusDeviceExtension->DeviceInterfaceLink);
         }
 

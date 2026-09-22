@@ -138,7 +138,7 @@ Ext2LockVolume (IN PEXT2_IRP_CONTEXT IrpContext)
     PIO_STACK_LOCATION IrpSp;
     PDEVICE_OBJECT  DeviceObject;
     PEXT2_VCB       Vcb = NULL;
-    NTSTATUS        Status;
+    NTSTATUS        Status = STATUS_UNSUCCESSFUL;
     BOOLEAN VcbResourceAcquired = FALSE;
 
     _SEH2_TRY {
@@ -206,7 +206,7 @@ NTSTATUS
 Ext2UnlockVcb ( IN PEXT2_VCB    Vcb,
                 IN PFILE_OBJECT FileObject )
 {
-    NTSTATUS        Status;
+    NTSTATUS        Status = STATUS_UNSUCCESSFUL;
 
     _SEH2_TRY {
 
@@ -245,7 +245,7 @@ Ext2UnlockVolume (
     PIO_STACK_LOCATION IrpSp = NULL;
     PDEVICE_OBJECT  DeviceObject = NULL;
     PEXT2_VCB       Vcb = NULL;
-    NTSTATUS        Status;
+    NTSTATUS        Status = STATUS_UNSUCCESSFUL;
     BOOLEAN         VcbResourceAcquired = FALSE;
 
     _SEH2_TRY {
@@ -295,7 +295,7 @@ Ext2UnlockVolume (
 NTSTATUS
 Ext2InvalidateVolumes ( IN PEXT2_IRP_CONTEXT IrpContext )
 {
-    NTSTATUS            Status;
+    NTSTATUS            Status = STATUS_UNSUCCESSFUL;
     PIRP                Irp;
     PIO_STACK_LOCATION  IrpSp;
 
@@ -452,7 +452,7 @@ Ext2OplockRequest (
     IN PEXT2_IRP_CONTEXT IrpContext
 )
 {
-    NTSTATUS    Status;
+    NTSTATUS    Status = STATUS_UNSUCCESSFUL;
 
     ULONG       FsCtrlCode;
     PDEVICE_OBJECT DeviceObject;

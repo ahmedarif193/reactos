@@ -413,7 +413,8 @@ AtaFdoStopDevice(
     AtaFdoDetachChannel(ChanExt);
 
     if (ChanExt->StorageInterfaceName.Buffer)
-        IoSetDeviceInterfaceState(&ChanExt->StorageInterfaceName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&ChanExt->StorageInterfaceName, FALSE)))
+            ERR("IoSetDeviceInterfaceState(%wZ) failed\n", &ChanExt->StorageInterfaceName);
 
     return STATUS_SUCCESS;
 }
@@ -432,7 +433,8 @@ AtaFdoRemoveDevice(
 
     if (ChanExt->StorageInterfaceName.Buffer)
     {
-        IoSetDeviceInterfaceState(&ChanExt->StorageInterfaceName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&ChanExt->StorageInterfaceName, FALSE)))
+            ERR("IoSetDeviceInterfaceState(%wZ) failed\n", &ChanExt->StorageInterfaceName);
 
         RtlFreeUnicodeString(&ChanExt->StorageInterfaceName);
         ChanExt->StorageInterfaceName.Buffer = NULL;

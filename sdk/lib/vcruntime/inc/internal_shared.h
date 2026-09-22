@@ -243,7 +243,7 @@ struct __crt_seh_guarded_call
     template<typename Init, typename Action, typename Cleanup>
     T operator()(Init init, Action action, Cleanup cleanup)
     {
-        T result;
+        T result{};
         init();
         __try
         {

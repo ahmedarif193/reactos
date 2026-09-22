@@ -443,8 +443,17 @@ USBAudioStartDevice(
         return Status;
     }
 
-    KsAddItemToObjectBag(Device->Bag, DeviceDescriptor, ExFreePool);
-    KsAddItemToObjectBag(Device->Bag, ConfigurationDescriptor, ExFreePool);
+    if (!NT_SUCCESS(KsAddItemToObjectBag(Device->Bag, DeviceDescriptor, ExFreePool)))
+    {
+        FreeFunction(DeviceDescriptor);
+        FreeFunction(ConfigurationDescriptor);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    if (!NT_SUCCESS(KsAddItemToObjectBag(Device->Bag, ConfigurationDescriptor, ExFreePool)))
+    {
+        FreeFunction(ConfigurationDescriptor);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     DeviceExtension->DeviceDescriptor = DeviceDescriptor;
     DeviceExtension->ConfigurationDescriptor = ConfigurationDescriptor;
@@ -505,7 +514,12 @@ USBAudioPnPStart(
         Device->Context = DeviceExtension;
         DeviceExtension->LowerDevice = Device->NextDeviceObject;
 
-        KsAddItemToObjectBag(Device->Bag, Device->Context, ExFreePool);
+        if (!NT_SUCCESS(KsAddItemToObjectBag(Device->Bag, Device->Context, ExFreePool)))
+        {
+            Device->Context = NULL;
+            FreeFunction(DeviceExtension);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
 
         Status = USBAudioStartDevice(Device);
         if (NT_SUCCESS(Status))

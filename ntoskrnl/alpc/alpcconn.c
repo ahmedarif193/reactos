@@ -213,7 +213,7 @@ AlpcpConnectPortInternal(
     PETHREAD Thread = PsGetCurrentThread();
     PALPC_PORT ClientPort = NULL;
     PKALPC_MESSAGE Message = NULL;
-    PORT_MESSAGE Header;
+    PORT_MESSAGE Header = {0};
     SIZE_T AvailableLength = MAXULONG_PTR;
     ULONG DataLength = 0;
     PALPC_MESSAGE_ATTRIBUTES InAttributes = NULL, OutAttributes = NULL;
@@ -539,7 +539,7 @@ NtAlpcConnectPortEx(
     BOOLEAN Present;
     PALPC_PORT ConnectionPort;
     LARGE_INTEGER CapturedTimeout;
-    PUNICODE_STRING PortName;
+    PUNICODE_STRING PortName = NULL;
     PSECURITY_DESCRIPTOR CapturedSecurityRequirements = NULL;
 
     PAGED_CODE();
@@ -619,8 +619,8 @@ NtAlpcAcceptConnectPort(
     PVOID Buffer = NULL;
     PVOID RequestData;
     ULONG DataLength;
-    ULONG RequestHeaderSize;
-    ULONG RequestTotalLength;
+    ULONG RequestHeaderSize = 0;
+    ULONG RequestTotalLength = 0;
     PALPC_MESSAGE_ATTRIBUTES SendAttributes = NULL;
     PETHREAD ClientThread;
     LARGE_INTEGER SectionOffset;

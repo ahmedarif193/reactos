@@ -2638,7 +2638,7 @@ IopCreateFile(OUT PHANDLE FileHandle,
 {
     KPROCESSOR_MODE AccessMode;
     HANDLE LocalHandle = 0;
-    LARGE_INTEGER SafeAllocationSize;
+    LARGE_INTEGER SafeAllocationSize = {0};
     NTSTATUS Status = STATUS_SUCCESS;
     PNAMED_PIPE_CREATE_PARAMETERS NamedPipeCreateParameters;
     POPEN_PACKET OpenPacket;

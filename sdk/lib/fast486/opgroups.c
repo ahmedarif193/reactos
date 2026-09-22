@@ -168,7 +168,7 @@ Fast486RotateOperation(PFAST486_STATE State,
 {
     ULONG HighestBit = 1 << (Bits - 1);
     ULONG MaxValue = HighestBit | (HighestBit - 1);
-    ULONG Result;
+    ULONG Result = 0;
 
     /* Normalize the count */
     Count &= 0x1F;

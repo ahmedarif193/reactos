@@ -165,7 +165,7 @@ UDFVerifyVolume(
     PVCB NewVcb = NULL;
     IO_STATUS_BLOCK Iosb;
     ULONG MediaChangeCount = 0;
-    NTSTATUS RC;
+    NTSTATUS RC = STATUS_UNSUCCESSFUL;
     ULONG Mode;
     BOOLEAN UnsafeIoctl = (Vcb->VCBFlags & UDF_VCB_FLAGS_UNSAFE_IOCTL) ? TRUE : FALSE;
 

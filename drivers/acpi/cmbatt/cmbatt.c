@@ -1638,7 +1638,8 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
             /* Convert it to Unicode */
             InfoString.Buffer = InfoBuffer;
             InfoString.MaximumLength = sizeof(InfoBuffer);
-            RtlAnsiStringToUnicodeString(&InfoString, &TempString, 0);
+            if (!NT_SUCCESS(RtlAnsiStringToUnicodeString(&InfoString, &TempString, 0)))
+                InfoString.Length = 0;
 
             /* Setup a temporary string for concatenation */
             TempString2.Buffer = TempBuffer;
@@ -1659,8 +1660,8 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
                 }
 
                 /* Convert it to Unicode and append it */
-                RtlAnsiStringToUnicodeString(&TempString2, &TempString, 0);
-                RtlAppendUnicodeStringToString(&InfoString, &TempString2);
+                if (NT_SUCCESS(RtlAnsiStringToUnicodeString(&TempString2, &TempString, 0)))
+                    RtlAppendUnicodeStringToString(&InfoString, &TempString2);
             }
 
             /* Build the model number string */
@@ -1674,8 +1675,8 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
             }
 
             /* Convert it to Unicode and append it */
-            RtlAnsiStringToUnicodeString(&TempString2, &TempString, 0);
-            RtlAppendUnicodeStringToString(&InfoString, &TempString2);
+            if (NT_SUCCESS(RtlAnsiStringToUnicodeString(&TempString2, &TempString, 0)))
+                RtlAppendUnicodeStringToString(&InfoString, &TempString2);
 
             /* Return the final appended string */
             QueryData = InfoString.Buffer;

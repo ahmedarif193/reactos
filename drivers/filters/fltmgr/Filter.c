@@ -177,7 +177,7 @@ FltRegisterFilter(_In_ PDRIVER_OBJECT DriverObject,
     Filter->Base.Flags = FLT_OBFL_TYPE_FILTER;
     Filter->Base.PointerCount = 1;
     FltpExInitializeRundownProtection(&Filter->Base.RundownRef);
-    FltObjectReference(&Filter->Base);
+    NT_VERIFY(NT_SUCCESS(FltObjectReference(&Filter->Base)));
     InitializeListHead(&Filter->Base.PrimaryLink);
 
     /* Set the callback addresses */

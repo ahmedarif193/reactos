@@ -335,7 +335,8 @@ IKsClock_DispatchDeviceIoControl(
     /* get property from input buffer */
     Property = (PKSPROPERTY)IoStack->Parameters.DeviceIoControl.Type3InputBuffer;
 
-    RtlStringFromGUID(&Property->Set, &GuidString);
+    if (!NT_SUCCESS(RtlStringFromGUID(&Property->Set, &GuidString)))
+        RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
     DPRINT("IKsClock_DispatchDeviceIoControl property Set |%S| Id %u Flags %x Status %lx ResultLength %lu\n", GuidString.Buffer, Property->Id, Property->Flags, Status, Irp->IoStatus.Information);
     RtlFreeUnicodeString(&GuidString);
 

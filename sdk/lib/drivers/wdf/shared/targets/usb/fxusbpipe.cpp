@@ -713,7 +713,7 @@ FxUsbPipeContinuousReader::FormatRepeater(
 
     WDF_REQUEST_REUSE_PARAMS_INIT(&params, 0, STATUS_NOT_SUPPORTED);
 
-    pRequest->Reuse(&params);
+    (VOID)!pRequest->Reuse(&params);
 
     //
     // pMemory will be deleted when either

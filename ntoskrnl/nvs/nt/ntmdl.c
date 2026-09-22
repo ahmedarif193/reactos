@@ -192,7 +192,7 @@ VOID
 NTAPI
 MmProbeAndLockSelectedPages(
     _Inout_ PMDL Mdl,
-    _In_ LARGE_INTEGER PageList[],
+    _In_ PFILE_SEGMENT_ELEMENT PageList,
     _In_ KPROCESSOR_MODE AccessMode,
     _In_ LOCK_OPERATION Operation)
 {

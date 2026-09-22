@@ -42,7 +42,7 @@ UDFFSControl(
     )
 {
     NTSTATUS            RC = STATUS_SUCCESS;
-    PtrUDFIrpContext    PtrIrpContext;
+    PtrUDFIrpContext    PtrIrpContext = NULL;
     BOOLEAN             AreWeTopLevel = FALSE;
 
     UDFPrint(("\nUDFFSControl: \n\n"));
@@ -317,7 +317,7 @@ UDFMountVolume(
     IN PIRP Irp
     )
 {
-    NTSTATUS                RC;
+    NTSTATUS                RC = STATUS_UNSUCCESSFUL;
     PIO_STACK_LOCATION      IrpSp = IoGetCurrentIrpStackLocation(Irp);
     PDEVICE_OBJECT          TargetDeviceObject = NULL;
     PFILTER_DEV_EXTENSION   filterDevExt;
@@ -329,7 +329,7 @@ UDFMountVolume(
     IO_STATUS_BLOCK         Iosb;
     ULONG                   MediaChangeCount = 0;
     ULONG                   Characteristics;
-    DEVICE_TYPE             FsDeviceType;
+    DEVICE_TYPE             FsDeviceType = 0;
     BOOLEAN                 RestoreDoVerify = FALSE;
     BOOLEAN                 WrongMedia = FALSE;
     BOOLEAN                 RemovableMedia = TRUE;
@@ -1663,7 +1663,7 @@ UDFIsPathnameValid(
     )
 {
     PEXTENDED_IO_STACK_LOCATION IrpSp = (PEXTENDED_IO_STACK_LOCATION)IoGetCurrentIrpStackLocation( Irp );
-    NTSTATUS                    RC;
+    NTSTATUS                    RC = STATUS_UNSUCCESSFUL;
     PPATHNAME_BUFFER            PathnameBuffer;
     UNICODE_STRING              PathName;
     UNICODE_STRING              CurName;
@@ -1944,7 +1944,7 @@ UDFDismountVolume(
     IN PIRP Irp
     )
 {
-    NTSTATUS RC;
+    NTSTATUS RC = STATUS_UNSUCCESSFUL;
 
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation( Irp );
 
@@ -2208,7 +2208,7 @@ UDFGetRetrievalPointers(
     IN ULONG Special
     )
 {
-    NTSTATUS RC;
+    NTSTATUS RC = STATUS_UNSUCCESSFUL;
 
     PEXTENDED_IO_STACK_LOCATION IrpSp =
         (PEXTENDED_IO_STACK_LOCATION)IoGetCurrentIrpStackLocation( Irp );

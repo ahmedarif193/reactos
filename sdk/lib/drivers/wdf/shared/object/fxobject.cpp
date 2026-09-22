@@ -286,7 +286,7 @@ FxObject::AllocateTagTracker(
         // don't track references.
         //
 
-        (void) FxTagTracker::CreateAndInitialize(
+        (void)!FxTagTracker::CreateAndInitialize(
             &GetDebugExtension()->TagTracker,
             m_Globals,
             FxTagTrackerTypeHandle,

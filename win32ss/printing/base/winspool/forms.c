@@ -86,7 +86,7 @@ AddFormA(HANDLE hPrinter, DWORD Level, PBYTE pForm)
 BOOL WINAPI
 AddFormW(HANDLE hPrinter, DWORD Level, PBYTE pForm)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     WINSPOOL_FORM_CONTAINER FormInfoContainer;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
@@ -145,7 +145,7 @@ DeleteFormA(HANDLE hPrinter, PSTR pFormName)
 BOOL WINAPI
 DeleteFormW(HANDLE hPrinter, PWSTR pFormName)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     TRACE("DeleteFormW(%p, %S)\n", hPrinter, pFormName);
@@ -227,7 +227,7 @@ Cleanup:
 BOOL WINAPI
 EnumFormsW(HANDLE hPrinter, DWORD Level, PBYTE pForm, DWORD cbBuf, PDWORD pcbNeeded, PDWORD pcReturned)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     TRACE("EnumFormsW(%p, %lu, %p, %lu, %p, %p)\n", hPrinter, Level, pForm, cbBuf, pcbNeeded, pcReturned);
@@ -329,7 +329,7 @@ Cleanup:
 BOOL WINAPI
 GetFormW(HANDLE hPrinter, PWSTR pFormName, DWORD Level, PBYTE pForm, DWORD cbBuf, PDWORD pcbNeeded)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     TRACE("GetFormW(%p, %S, %lu, %p, %lu, %p)\n", hPrinter, pFormName, Level, pForm, cbBuf, pcbNeeded);
@@ -463,7 +463,7 @@ SetFormA(HANDLE hPrinter, PSTR pFormName, DWORD Level, PBYTE pForm)
 BOOL WINAPI
 SetFormW(HANDLE hPrinter, PWSTR pFormName, DWORD Level, PBYTE pForm)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     WINSPOOL_FORM_CONTAINER FormInfoContainer;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 

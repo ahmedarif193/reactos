@@ -1148,7 +1148,7 @@ CsrConnectToUser(VOID)
     STRING StartupName;
     PTEB Teb = NtCurrentTeb();
     PCSR_THREAD CsrThread;
-    BOOLEAN Connected;
+    BOOLEAN Connected = FALSE;
 
     /* Check if we didn't already find it */
     if (!CsrClientThreadSetup)
@@ -1323,17 +1323,17 @@ CsrpCaptureArguments32(PCSR_THREAD CsrThread, PCSR_API_MESSAGE ApiMessage)
     PCSR_CAPTURE_BUFFER32 ClientCaptureBuffer = (PCSR_CAPTURE_BUFFER32)ApiMessage->CsrCaptureData;
     PCSR_CAPTURE_BUFFER ServerCaptureBuffer;
     ULONG_PTR ClientBufferAddress = (ULONG_PTR)ClientCaptureBuffer;
-    ULONG_PTR EndOfClientBuffer;
+    ULONG_PTR EndOfClientBuffer = 0;
     ULONG_PTR ClientDataAddress;
     ULONG_PTR ServerDataAddress;
-    SIZE_T ClientHeaderSize;
+    SIZE_T ClientHeaderSize = 0;
     SIZE_T ClientDataLength;
     SIZE_T ServerHeaderSize;
     SIZE_T ServerDataLength;
     SIZE_T ServerLength;
     BOOLEAN ConsoleConnect;
-    ULONG Length;
-    ULONG PointerCount;
+    ULONG Length = 0;
+    ULONG PointerCount = 0;
     ULONG Index;
 
     _SEH2_TRY
@@ -1512,11 +1512,11 @@ CsrCaptureArguments(IN PCSR_THREAD CsrThread,
 {
     PCSR_PROCESS CsrProcess = CsrThread->Process;
     PCSR_CAPTURE_BUFFER ClientCaptureBuffer, ServerCaptureBuffer = NULL;
-    ULONG_PTR EndOfClientBuffer;
-    SIZE_T SizeOfBufferThroughOffsetsArray;
+    ULONG_PTR EndOfClientBuffer = 0;
+    SIZE_T SizeOfBufferThroughOffsetsArray = 0;
     SIZE_T BufferDistance;
-    ULONG Length;
-    ULONG PointerCount;
+    ULONG Length = 0;
+    ULONG PointerCount = 0;
     PULONG_PTR OffsetPointer;
     ULONG_PTR CurrentOffset;
 

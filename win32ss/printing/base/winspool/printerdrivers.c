@@ -423,7 +423,7 @@ DeletePrinterDriverExA(PSTR pName, PSTR pEnvironment, PSTR pDriverName, DWORD dw
 BOOL WINAPI
 DeletePrinterDriverExW(PWSTR pName, PWSTR pEnvironment, PWSTR pDriverName, DWORD dwDeleteFlag, DWORD dwVersionFlag)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
 
     TRACE("DeletePrinterDriverExW(%S, %S, %S, %lu, %lu)\n", pName, pEnvironment, pDriverName, dwDeleteFlag, dwVersionFlag);
 
@@ -632,7 +632,7 @@ Cleanup:
 BOOL WINAPI
 EnumPrinterDriversW(PWSTR pName, PWSTR pEnvironment, DWORD Level, PBYTE pDriverInfo, DWORD cbBuf, PDWORD pcbNeeded, PDWORD pcReturned)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
 
     FIXME("EnumPrinterDriversW(%S, %S, %lu, %p, %lu, %p, %p)\n", pName, pEnvironment, Level, pDriverInfo, cbBuf, pcbNeeded, pcReturned);
 
@@ -872,7 +872,7 @@ Cleanup:
 BOOL WINAPI
 GetPrinterDriverW(HANDLE hPrinter, LPWSTR pEnvironment, DWORD Level, LPBYTE pDriverInfo, DWORD cbBuf, LPDWORD pcbNeeded)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     TRACE("GetPrinterDriverW(%p, %S, %lu, %p, %lu, %p)\n", hPrinter, pEnvironment, Level, pDriverInfo, cbBuf, pcbNeeded);
@@ -981,7 +981,7 @@ GetPrinterDriverDirectoryA(PSTR pName, PSTR pEnvironment, DWORD Level, PBYTE pDr
 BOOL WINAPI
 GetPrinterDriverDirectoryW(PWSTR pName, PWSTR pEnvironment, DWORD Level, PBYTE pDriverDirectory, DWORD cbBuf, PDWORD pcbNeeded)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
 
     TRACE("GetPrinterDriverDirectoryW(%S, %S, %lu, %p, %lu, %p)\n", pName, pEnvironment, Level, pDriverDirectory, cbBuf, pcbNeeded);
 

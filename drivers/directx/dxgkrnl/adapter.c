@@ -737,11 +737,11 @@ VOID
 DxgkpRegisterBugCheckCallback(VOID)
 {
     KeInitializeCallbackRecord(&g_DxgkBugCheckRecord);
-    KeRegisterBugCheckCallback(&g_DxgkBugCheckRecord,
-                               DxgkpBugCheckCallback,
-                               NULL,
-                               0,
-                               (PUCHAR)"dxgkrnl");
+    NT_VERIFY(KeRegisterBugCheckCallback(&g_DxgkBugCheckRecord,
+                                         DxgkpBugCheckCallback,
+                                         NULL,
+                                         0,
+                                         (PUCHAR)"dxgkrnl"));
 }
 
 /* ========================================================================
@@ -5044,7 +5044,7 @@ DxgkpQueryPowerComponentCount(
 {
     DXGKARG_QUERYADAPTERINFO Query;
     UINT Count = 0;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
 
@@ -5083,7 +5083,7 @@ DxgkpQueryPowerComponentInfo(
 {
     DXGKARG_QUERYADAPTERINFO Query;
     UINT ComponentIndex = (UINT)Component;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
 
@@ -5120,7 +5120,7 @@ DxgkpSetPowerComponentFState(
     _In_ ULONG Component,
     _In_ ULONG FState)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
 
@@ -5349,7 +5349,7 @@ DxgkpPowerRuntimeControlCallback(
     _Out_opt_ PSIZE_T BytesReturned)
 {
     PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeControlRequest) == NULL)
         return STATUS_NOT_SUPPORTED;
@@ -11554,7 +11554,7 @@ DxgkpQueryGpuMmuCaps(
     PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
     DXGKARG_QUERYADAPTERINFO QueryArgs;
     DXGK_QUERYGPUMMUCAPSIN CapsIn;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (Caps == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -11607,7 +11607,7 @@ DxgkpQueryPageTableLevelDesc(
     PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
     DXGKARG_QUERYADAPTERINFO QueryArgs;
     DXGK_QUERYPAGETABLELEVELDESCIN Input;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (Desc == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -12248,7 +12248,7 @@ DxgkpCollectAdapterDiagnosticInfo(
     PDXGKDDI_COLLECTDIAGNOSTICINFO CollectDiagnosticInfo;
     DXGKARG_COLLECTDIAGNOSTICINFO Args;
     PVOID Buffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     BOOLEAN CallbackAcquired;
 
     PAGED_CODE();
@@ -12362,7 +12362,7 @@ DxgkpSetVsyncInterruptState(
     DXGKARG_CONTROLINTERRUPT3 Args3;
     DXGKARG_CONTROLINTERRUPT2 Args2;
     ULONG Version;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
 
@@ -13092,7 +13092,7 @@ DxgkAdapterStart(
     {
         DXGKARG_QUERYADAPTERINFO QueryArgs;
         DXGK_QUERYPHYSICALADAPTERCAPSIN CapsIn;
-        NTSTATUS CapsStatus;
+        NTSTATUS CapsStatus = STATUS_UNSUCCESSFUL;
 
         RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
         RtlZeroMemory(&CapsIn, sizeof(CapsIn));
@@ -13473,7 +13473,7 @@ DxgkpResetMiniportForTeardown(
 {
     BOOLEAN SchedulerPrepared = FALSE;
     NTSTATUS SchedulerStatus;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     SchedulerStatus = VidSchPrepareAdapterReset(Adapter);
     if (NT_SUCCESS(SchedulerStatus))
@@ -13686,7 +13686,7 @@ DxgkpStopMiniportPostDisplayOwner(
     _Out_opt_ PDXGK_DISPLAY_INFORMATION ReleasedPostDisplayInformation,
     _Out_opt_ PBOOLEAN ReleasedByDriver)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (!Adapter->MiniportDeviceStopped)
     {
@@ -14144,7 +14144,8 @@ DxgkAdapterRemove(
     /* Disable and free the GUID_DISPLAY_DEVICE_ARRIVAL device interface. */
     if (Adapter->DeviceInterfaceEnabled)
     {
-        IoSetDeviceInterfaceState(&Adapter->DeviceInterfaceName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&Adapter->DeviceInterfaceName, FALSE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &Adapter->DeviceInterfaceName);
         Adapter->DeviceInterfaceEnabled = FALSE;
     }
     if (Adapter->DeviceInterfaceName.Buffer != NULL)
@@ -14653,7 +14654,7 @@ DxgkpMiniportPnpDispatch(
             DXGKRNL_ADAPTER_STATE PreviousState;
             BOOLEAN NotifyRunningRemoval;
             BOOLEAN WaitForStop;
-            NTSTATUS NotifyStatus;
+            NTSTATUS NotifyStatus = STATUS_UNSUCCESSFUL;
             NTSTATUS StopStatus = STATUS_SUCCESS;
 
             DxgkpAcquireAdapterMutexAfterStart(Adapter);

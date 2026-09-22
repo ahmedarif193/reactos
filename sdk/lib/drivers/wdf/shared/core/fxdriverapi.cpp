@@ -234,7 +234,7 @@ WDFEXPORT(WdfDriverCreate)(
     //
     // FxDriver stores the driver wide configuration
     //
-    FxInitialize(pFxDriverGlobals, DriverObject, RegistryPath, DriverConfig);
+    (VOID)!FxInitialize(pFxDriverGlobals, DriverObject, RegistryPath, DriverConfig);
 
     //
     // FxDriver stores the driver wide configuration

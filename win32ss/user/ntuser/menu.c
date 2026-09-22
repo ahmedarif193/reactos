@@ -200,7 +200,7 @@ IntGetMenuObject(HMENU hMenu)
 
 PMENU FASTCALL VerifyMenu(PMENU pMenu)
 {
-   HMENU hMenu;
+   HMENU hMenu = NULL;
    PITEM pItem;
    ULONG Error;
    UINT i;
@@ -4740,7 +4740,7 @@ PopupMenuWndProc(
    LPARAM lParam,
    LRESULT *lResult)
 {
-  PPOPUPMENU pPopupMenu;
+  PPOPUPMENU pPopupMenu = NULL;
 
   *lResult = 0;
 

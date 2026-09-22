@@ -1533,7 +1533,7 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
                    OUT PVOID OutputBuffer  OPTIONAL,
                    IN ULONG OutputBufferLength)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
 
     PAGED_CODE();

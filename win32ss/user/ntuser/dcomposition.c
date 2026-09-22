@@ -661,7 +661,7 @@ NtDCompositionCreateChannel(UINT *Identifier, UINT *SectionSize, PVOID *SectionB
     DCOMP_CONNECTION *Connection;
     DCOMP_CHANNEL *Channel;
     PLIST_ENTRY Entry;
-    UINT Size, Value;
+    UINT Size = 0, Value;
     NTSTATUS Status;
 
     if (Identifier == NULL || SectionSize == NULL || SectionBase == NULL)

@@ -2242,7 +2242,8 @@ SpiProcessTimeout(PVOID ServiceContext)
 
         for (Bus = 0; Bus < DeviceExtension->NumberOfBuses; Bus++)
         {
-            DeviceExtension->HwResetBus(DeviceExtension->MiniPortDeviceExtension, Bus);
+            if (!DeviceExtension->HwResetBus(DeviceExtension->MiniPortDeviceExtension, Bus))
+                DPRINT1("HwResetBus failed for bus %lu\n", Bus);
 
             /* Reset flags and set reset timeout to 4 seconds */
             DeviceExtension->InterruptData.Flags |= SCSI_PORT_RESET;
@@ -2267,8 +2268,9 @@ SpiResetBus(PVOID ServiceContext)
 
     /* Perform the bus reset */
     DeviceExtension = (PSCSI_PORT_DEVICE_EXTENSION)ResetParams->DeviceExtension;
-    DeviceExtension->HwResetBus(DeviceExtension->MiniPortDeviceExtension,
-                                ResetParams->PathId);
+    if (!DeviceExtension->HwResetBus(DeviceExtension->MiniPortDeviceExtension,
+                                     ResetParams->PathId))
+        DPRINT1("HwResetBus failed for path %u\n", ResetParams->PathId);
 
     /* Set flags and start the timer */
     DeviceExtension->InterruptData.Flags |= SCSI_PORT_RESET;

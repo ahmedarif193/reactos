@@ -381,7 +381,10 @@ Return Value:
     // attempt to determine the BIOS reported geometry.
     //
 
-    (VOID)ClassReadDriveCapacity(Fdo);
+    if (!NT_SUCCESS(ClassReadDriveCapacity(Fdo)))
+    {
+        NOTHING;
+    }
 
     //
     // Set up sector size fields.

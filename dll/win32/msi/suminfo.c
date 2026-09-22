@@ -511,7 +511,7 @@ UINT WINAPI MsiGetSummaryInformationW( MSIHANDLE hDatabase, const WCHAR *szDatab
 {
     MSISUMMARYINFO *si;
     MSIDATABASE *db;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE( "%lu, %s, %u, %p\n", hDatabase, debugstr_w(szDatabase), uiUpdateCount, pHandle );
 
@@ -608,7 +608,7 @@ UINT WINAPI MsiSummaryInfoGetPropertyCount( MSIHANDLE hSummaryInfo, UINT *pCount
     if( !si )
     {
         MSIHANDLE remote;
-        UINT ret;
+        UINT ret = 0;
 
         if (!(remote = msi_get_remote( hSummaryInfo )))
             return ERROR_INVALID_HANDLE;
@@ -734,7 +734,7 @@ UINT WINAPI MsiSummaryInfoGetPropertyA( MSIHANDLE handle, UINT uiProperty, UINT 
 {
     MSISUMMARYINFO *si;
     awstring str;
-    UINT r;
+    UINT r = 0;
 
     TRACE( "%lu, %u, %p, %p, %p, %p, %p\n", handle, uiProperty, puiDataType, piValue, pftValue, szValueBuf,
            pcchValueBuf );
@@ -785,7 +785,7 @@ UINT WINAPI MsiSummaryInfoGetPropertyW( MSIHANDLE handle, UINT uiProperty, UINT 
 {
     MSISUMMARYINFO *si;
     awstring str;
-    UINT r;
+    UINT r = 0;
 
     TRACE( "%lu, %u, %p, %p, %p, %p, %p\n", handle, uiProperty, puiDataType, piValue, pftValue, szValueBuf,
            pcchValueBuf );

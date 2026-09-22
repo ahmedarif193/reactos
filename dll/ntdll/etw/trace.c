@@ -39,7 +39,7 @@ EtwpRegisterClassicProvider(WMIDPREQUEST Callback, PVOID Context, LPCGUID Contro
     for (i = 0; i < GuidCount; ++i)
         if (!TraceGuidReg[i].Guid) return ERROR_INVALID_PARAMETER;
 
-    if (GuidCount > (MAXULONG_PTR - FIELD_OFFSET(ETW_CLASSIC_PROVIDER, ClassGuids)) / sizeof(GUID))
+    if ((ULONG_PTR)GuidCount > (MAXULONG_PTR - FIELD_OFFSET(ETW_CLASSIC_PROVIDER, ClassGuids)) / sizeof(GUID))
         return ERROR_NOT_ENOUGH_MEMORY;
     Provider = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY,
                               FIELD_OFFSET(ETW_CLASSIC_PROVIDER, ClassGuids) + (SIZE_T)GuidCount * sizeof(GUID));

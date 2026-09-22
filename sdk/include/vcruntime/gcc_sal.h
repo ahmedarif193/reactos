@@ -16,7 +16,7 @@
 #define __has_attribute(__x) 0
 #endif
 
-#ifndef _GCC_NO_SAL_ATTRIIBUTES
+#if !defined(_GCC_NO_SAL_ATTRIIBUTES) && defined(_GCC_SAL_CHECK_RETURN)
 #if __has_attribute(warn_unused_result)
 # undef _Must_inspect_result_
 /* FIXME: Not really equivalent */

@@ -117,7 +117,7 @@ wWinMain(HINSTANCE hThisInstance,
     HWND hMainWnd;
     MSG msg;
     WNDCLASSEXW wincl;
-    LPCWSTR fileName;
+    LPCWSTR fileName = NULL;
 
     switch (GetUserDefaultUILanguage())
     {

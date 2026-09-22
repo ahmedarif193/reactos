@@ -53,7 +53,7 @@ START_TEST(RtlIsValidOemCharacter)
 
     _SEH2_TRY
     {
-        RtlIsValidOemCharacter(NULL);
+        (VOID)!RtlIsValidOemCharacter(NULL);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {

@@ -624,7 +624,7 @@ SetupCommitFileQueueW(
 {
     BOOL Success = TRUE; // Suppose success
     UINT Result;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PFILEQUEUEHEADER QueueHeader;
     PLIST_ENTRY ListEntry;
     PQUEUEENTRY Entry;

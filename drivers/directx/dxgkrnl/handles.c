@@ -69,7 +69,7 @@ DxgkpAllocateHandleLocked(
     _In_ DXGKRNL_HANDLE_TYPE Type)
 {
     ULONG Generation;
-    D3DKMT_HANDLE Handle;
+    D3DKMT_HANDLE Handle = 0;
 
     do
     {

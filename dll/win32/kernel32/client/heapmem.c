@@ -755,7 +755,7 @@ NTAPI
 GlobalLock(HGLOBAL hMem)
 {
     PBASE_HEAP_HANDLE_ENTRY HandleEntry;
-    LPVOID Ptr;
+    LPVOID Ptr = NULL;
 
     /* Check if this was a simple allocated heap entry */
     if (!((ULONG_PTR)hMem & BASE_HEAP_IS_HANDLE_ENTRY))

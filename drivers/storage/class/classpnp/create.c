@@ -190,7 +190,7 @@ Return Value:
 
             status = AllocateDictionaryEntry(
                         &commonExtension->FileObjectDictionary,
-                        (ULONGLONG) irpStack->FileObject,
+                        (ULONGLONG)(ULONG_PTR) irpStack->FileObject,
                         sizeof(FILE_OBJECT_EXTENSION),
                         CLASS_TAG_FILE_OBJECT_EXTENSION,
                         (PVOID *)&fsContext);
@@ -1018,5 +1018,5 @@ ClassGetFsContext(
 {
     PAGED_CODE();
     return GetDictionaryEntry(&(CommonExtension->FileObjectDictionary),
-                              (ULONGLONG) FileObject);
+                              (ULONGLONG)(ULONG_PTR) FileObject);
 }

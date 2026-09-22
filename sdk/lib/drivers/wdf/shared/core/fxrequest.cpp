@@ -384,7 +384,7 @@ FX_VF_METHOD(FxRequest, VerifyCompleteInternal)(
     Lock(&irql);
 
     if (GetDriverGlobals()->FxVerifierIO ) {
-        (VOID) VerifyRequestIsNotCompleted(GetDriverGlobals());
+        (VOID)!VerifyRequestIsNotCompleted(GetDriverGlobals());
     } else {
         ASSERT(m_Completed == FALSE);
     }
@@ -2498,7 +2498,7 @@ Return Value:
 
         Lock(&irql);
 
-        (VOID)VerifyRequestIsNotCompleted(pFxDriverGlobals);
+        (VOID)!VerifyRequestIsNotCompleted(pFxDriverGlobals);
 
         Unlock(irql);
     }

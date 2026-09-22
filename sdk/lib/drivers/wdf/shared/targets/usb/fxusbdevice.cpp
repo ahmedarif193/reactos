@@ -561,7 +561,7 @@ FxUsbDevice::Start(
             pUsbInterface = m_Interfaces[iInterface];
 
             for (i = 0; i < pUsbInterface->m_NumberOfConfiguredPipes; i++) {
-                pUsbInterface->m_ConfiguredPipes[i]->GotoStartState(&head);
+                (VOID)!pUsbInterface->m_ConfiguredPipes[i]->GotoStartState(&head);
             }
         }
         Unlock(irql);

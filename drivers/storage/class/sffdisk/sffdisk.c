@@ -1195,7 +1195,8 @@ SffdiskStopDevice(
 
     if (DeviceExtension->DiskInterfaceEnabled)
     {
-        IoSetDeviceInterfaceState(&DeviceExtension->DiskInterfaceName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->DiskInterfaceName, FALSE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->DiskInterfaceName);
         DeviceExtension->DiskInterfaceEnabled = FALSE;
     }
 

@@ -2894,7 +2894,7 @@ SdBusHandleDeviceCommand(
     BOOLEAN HasData;
     ULONG Retry;
     ULONG MaxRetries;
-    ULONG BlockSize;
+    ULONG BlockSize = 0;
     SDCMD_DESCRIPTOR EffectiveCmdDesc;
 
     RtlZeroMemory(Response, sizeof(Response));

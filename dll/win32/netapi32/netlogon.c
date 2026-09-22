@@ -218,7 +218,7 @@ DsAddressToSiteNamesW(
     PNL_SITE_NAME_ARRAY SiteNameArray = NULL;
     PWSTR *SiteNamesBuffer = NULL, Ptr;
     ULONG BufferSize, i;
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("DsAddressToSiteNamesW(%s, %lu, %p, %p)\n",
           debugstr_w(ComputerName), EntryCount, SocketAddresses, SiteNames);
@@ -452,7 +452,7 @@ DsAddressToSiteNamesExW(
     PNL_SITE_NAME_EX_ARRAY SiteNameArray = NULL;
     PWSTR *SiteNamesBuffer = NULL, *SubnetNamesBuffer = NULL, Ptr;
     ULONG SiteNameBufferSize, SubnetNameBufferSize, i;
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("DsAddressToSiteNamesExW(%s, %lu, %p, %p, %p)\n",
           debugstr_w(ComputerName), EntryCount, SocketAddresses,
@@ -611,7 +611,7 @@ DsDeregisterDnsHostRecordsW(
     _In_opt_ GUID *DsaGuid,
     _In_ LPWSTR DnsHostName)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("DsDeregisterDnsHostRecordsW(%s, %s, %p, %p, %s)\n",
           debugstr_w(ServerName), debugstr_w(DnsDomainName),
@@ -790,7 +790,7 @@ DsEnumerateDomainTrustsW(
     _Out_ PULONG DomainCount)
 {
     NETLOGON_TRUSTED_DOMAIN_ARRAY DomainsArray = {0, NULL};
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("DsEnumerateDomainTrustsW(%s, %x, %p, %p)\n",
           debugstr_w(ServerName), Flags, Domains, DomainCount);
@@ -1141,7 +1141,7 @@ DsGetDcNameWithAccountW(
     _In_ ULONG Flags,
     _Out_ PDOMAIN_CONTROLLER_INFOW *DomainControllerInfo)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("DsGetDcNameWithAccountW(%s, %s, %08lx, %s, %s, %s, %08lx, %p): stub\n",
           debugstr_w(ComputerName), debugstr_w(AccountName), AccountControlBits,
@@ -1269,7 +1269,7 @@ DsGetDcSiteCoverageW(
     PNL_SITE_NAME_ARRAY SiteNameArray = NULL;
     PWSTR *SiteNamesBuffer = NULL, Ptr;
     ULONG BufferSize, i;
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("DsGetDcSiteCoverageW(%s, %p, %p)\n",
           debugstr_w(ServerName), EntryCount, SiteNames);
@@ -1335,7 +1335,7 @@ DsGetForestTrustInformationW(
     _In_ DWORD Flags,
     _Out_ PLSA_FOREST_TRUST_INFORMATION *ForestTrustInfo)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("DsGetForestTrustInformationW(%s, %s, 0x%08lx, %p)\n",
           debugstr_w(ServerName), debugstr_w(TrustedDomainName),
@@ -1409,7 +1409,7 @@ DsGetSiteNameW(
     _In_opt_ LPCWSTR ComputerName,
     _Out_ LPWSTR *SiteName)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("DsGetSiteNameW(%s, %p)\n",
           debugstr_w(ComputerName), SiteName);
@@ -1503,7 +1503,7 @@ NetGetAnyDCName(
     _In_opt_ LPCWSTR DomainName,
     _Out_ LPBYTE *BufPtr)
 {
-    NET_API_STATUS Status;
+    NET_API_STATUS Status = 0;
 
     TRACE("NetGetAnyDCName(%s, %s, %p)\n",
           debugstr_w(ServerName), debugstr_w(DomainName), BufPtr);
@@ -1581,7 +1581,7 @@ NetLogonGetTimeServiceParentDomain(
     _Out_ LPWSTR *DomainName,
     _Out_ LPBOOL PdcSameSite)
 {
-    NET_API_STATUS Status;
+    NET_API_STATUS Status = 0;
 
     TRACE("NetLogonGetTimeServiceParentDomain(%s, %p, %p)\n",
           debugstr_w(ServerName), DomainName, PdcSameSite);
@@ -1609,7 +1609,7 @@ NetLogonSetServiceBits(
     _In_ DWORD ServiceBitsOfInterest,
     _In_ DWORD ServiceBits)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("NetLogonSetServiceBits(%s 0x%lx 0x%lx)\n",
           debugstr_w(ServerName), ServiceBitsOfInterest, ServiceBits);

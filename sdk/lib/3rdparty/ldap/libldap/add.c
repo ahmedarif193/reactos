@@ -74,7 +74,7 @@ int
 ldap_add( LDAP *ld, LDAP_CONST char *dn, LDAPMod **attrs )
 {
 	int rc;
-	int msgid;
+	int msgid = 0;
 
 	rc = ldap_add_ext( ld, dn, attrs, NULL, NULL, &msgid );
 

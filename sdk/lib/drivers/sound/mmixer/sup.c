@@ -836,9 +836,12 @@ MMixerGetDeviceNameWithComponentId(
         Status = MixerContext->OpenKey(NULL, L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\MediaCategories", KEY_READ, &hMediaKey);
         if (Status == MM_STATUS_SUCCESS)
         {
-            RtlStringFromGUID(&ComponentId.Name, &GuidString);
-            Status = MixerContext->OpenKey(hMediaKey, GuidString.Buffer, KEY_READ, &hGuidKey);
-            RtlFreeUnicodeString(&GuidString);
+            Status = MM_STATUS_UNSUCCESSFUL;
+            if (NT_SUCCESS(RtlStringFromGUID(&ComponentId.Name, &GuidString)))
+            {
+                Status = MixerContext->OpenKey(hMediaKey, GuidString.Buffer, KEY_READ, &hGuidKey);
+                RtlFreeUnicodeString(&GuidString);
+            }
             if (Status == MM_STATUS_SUCCESS)
             {
                 Status = MixerContext->QueryKeyValue(hGuidKey, L"Name", (PVOID*)&DeviceName, &ResultLength, &KeyType);

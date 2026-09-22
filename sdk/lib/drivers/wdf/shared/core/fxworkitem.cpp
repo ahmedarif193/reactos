@@ -223,7 +223,7 @@ FxWorkItem::Initialize(
     // Allocate the PIO_WORKITEM we will re-use
     //
 #if (FX_CORE_MODE == FX_CORE_KERNEL_MODE)
-    m_WorkItem.Allocate(m_Device->GetDeviceObject());
+    (VOID)!m_WorkItem.Allocate(m_Device->GetDeviceObject());
 #elif (FX_CORE_MODE == FX_CORE_USER_MODE)
     m_WorkItem.Allocate(
         m_Device->GetDeviceObject(),

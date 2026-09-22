@@ -627,7 +627,7 @@ svcunix_create(sock, sendsize, recvsize, path)
 
 	memset(&sun, 0, sizeof sun);
 	sun.sun_family = AF_UNIX;
-	strncpy(sun.sun_path, path, sizeof(sun.sun_path));
+	strncpy(sun.sun_path, path, sizeof(sun.sun_path) - 1);
 	addrlen = sizeof(struct sockaddr_un);
 	sa = (struct sockaddr *)&sun;
 

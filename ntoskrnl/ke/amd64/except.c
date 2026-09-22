@@ -635,7 +635,7 @@ KiGeneralProtectionFaultUserMode(
 {
     BOOLEAN Wow64 = TrapFrame->SegCs == KGDT64_R3_CMCODE;
     PUCHAR InstructionPointer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     /* We need to decode the instruction at RIP */
     InstructionPointer = (PUCHAR)TrapFrame->Rip;

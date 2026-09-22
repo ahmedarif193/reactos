@@ -236,7 +236,6 @@ neq_vert( REAL	*v1, REAL *v2 )
 int
 Arc::check( void )
 {
-    if( this == 0 ) return 1;
     Arc_ptr jarc = this;
     do {
 	assert( (jarc->pwlArc != 0) || (jarc->bezierArc != 0) );

@@ -275,7 +275,7 @@ SC_HANDLE WINAPI DECLSPEC_HOTPATCH OpenSCManagerA( const char *machine, const ch
 SC_HANDLE WINAPI DECLSPEC_HOTPATCH OpenSCManagerW( const WCHAR *machine, const WCHAR *database, DWORD access )
 {
     SC_RPC_HANDLE handle = NULL;
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%s %s %#lx\n", debugstr_w(machine), debugstr_w(database), access );
 
@@ -315,7 +315,7 @@ SC_HANDLE WINAPI DECLSPEC_HOTPATCH OpenServiceA( SC_HANDLE manager, const char *
 SC_HANDLE WINAPI DECLSPEC_HOTPATCH OpenServiceW( SC_HANDLE manager, const WCHAR *name, DWORD access )
 {
     SC_RPC_HANDLE handle = NULL;
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p %s %#lx\n", manager, debugstr_w(name), access );
 
@@ -386,7 +386,7 @@ SC_HANDLE WINAPI DECLSPEC_HOTPATCH CreateServiceW( SC_HANDLE manager, const WCHA
                                                    const WCHAR *password )
 {
     SC_RPC_HANDLE handle = NULL;
-    DWORD err;
+    DWORD err = 0;
     SIZE_T password_size = 0;
 
     TRACE( "%p %s %s\n", manager, debugstr_w(name), debugstr_w(display_name) );
@@ -430,7 +430,7 @@ SC_HANDLE WINAPI DECLSPEC_HOTPATCH CreateServiceW( SC_HANDLE manager, const WCHA
  */
 BOOL WINAPI DECLSPEC_HOTPATCH DeleteService( SC_HANDLE service )
 {
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p\n", service );
 
@@ -452,7 +452,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH DeleteService( SC_HANDLE service )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH CloseServiceHandle( SC_HANDLE handle )
 {
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p\n", handle );
 
@@ -521,7 +521,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH ChangeServiceConfig2A( SC_HANDLE service, DWORD le
 BOOL WINAPI DECLSPEC_HOTPATCH ChangeServiceConfig2W( SC_HANDLE service, DWORD level, void *info )
 {
     SERVICE_RPC_REQUIRED_PRIVILEGES_INFO rpc_privinfo;
-    DWORD err;
+    DWORD err = 0;
 
     __TRY
     {
@@ -593,7 +593,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH ChangeServiceConfigW( SC_HANDLE service, DWORD ser
                                                     const WCHAR *password, const WCHAR *display_name )
 {
     DWORD password_size;
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p %ld %ld %ld %s %s %p %p %s %s %s\n", service, service_type, start_type,
            error_control, debugstr_w(path), debugstr_w(group), tag, dependencies,
@@ -710,7 +710,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH QueryServiceConfigW( SC_HANDLE service, QUERY_SERV
 {
     QUERY_SERVICE_CONFIGW config;
     DWORD total;
-    DWORD err;
+    DWORD err = 0;
     BYTE *bufpos;
 
     TRACE( "%p %p %ld %p\n", service, ret_config, size, ret_size );
@@ -824,7 +824,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH QueryServiceConfig2W( SC_HANDLE service, DWORD lev
                                                     DWORD size, DWORD *ret_size )
 {
     BYTE *bufptr;
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p %lu %p %lu %p\n", service, level, buffer, size, ret_size );
 
@@ -927,7 +927,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH QueryServiceConfig2W( SC_HANDLE service, DWORD lev
 BOOL WINAPI DECLSPEC_HOTPATCH GetServiceDisplayNameW( SC_HANDLE manager, const WCHAR *service,
                                                       WCHAR *display_name, DWORD *len )
 {
-    DWORD err;
+    DWORD err = 0;
     DWORD size;
     WCHAR buffer[2];
 
@@ -974,7 +974,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetServiceDisplayNameW( SC_HANDLE manager, const W
 BOOL WINAPI DECLSPEC_HOTPATCH GetServiceKeyNameW( SC_HANDLE manager, const WCHAR *display_name,
                                                   WCHAR *key_name, DWORD *len )
 {
-    DWORD err;
+    DWORD err = 0;
     WCHAR buffer[2];
     DWORD size;
 
@@ -1045,7 +1045,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH StartServiceA( SC_HANDLE service, DWORD argc, cons
  */
 BOOL WINAPI DECLSPEC_HOTPATCH StartServiceW( SC_HANDLE service, DWORD argc, const WCHAR **argv )
 {
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p %lu %p\n", service, argc, argv );
 
@@ -1067,7 +1067,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH StartServiceW( SC_HANDLE service, DWORD argc, cons
  */
 BOOL WINAPI DECLSPEC_HOTPATCH ControlService( SC_HANDLE service, DWORD control, SERVICE_STATUS *status )
 {
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p %ld %p\n", service, control, status );
 
@@ -1110,7 +1110,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH QueryServiceStatus( SC_HANDLE service, SERVICE_STA
 BOOL WINAPI DECLSPEC_HOTPATCH QueryServiceStatusEx( SC_HANDLE service, SC_STATUS_TYPE level,
                                                     BYTE *buffer, DWORD size, DWORD *ret_size )
 {
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p %d %p %ld %p\n", service, level, buffer, size, ret_size );
 
@@ -1142,7 +1142,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH EnumServicesStatusExW( SC_HANDLE manager, SC_ENUM_
                                                      BYTE *buffer, DWORD size, DWORD *needed, DWORD *returned,
                                                      DWORD *resume_handle, const WCHAR *group )
 {
-    DWORD err, i, offset, buflen, count, total_size = 0;
+    DWORD err = 0, i, offset, buflen, count, total_size = 0;
     ENUM_SERVICE_STATUS_PROCESSW *services = (ENUM_SERVICE_STATUS_PROCESSW *)buffer;
     struct enum_service_status_process *entry;
     const WCHAR *str;
@@ -1288,7 +1288,7 @@ BOOL WINAPI SetServiceObjectSecurity(SC_HANDLE hService,
 
 static DWORD WINAPI notify_thread(void *user)
 {
-    DWORD err;
+    DWORD err = 0;
     struct notify_data *data = user;
     SC_RPC_NOTIFY_PARAMS_LIST *list = NULL;
     SERVICE_NOTIFY_STATUS_CHANGE_PARAMS_2 *cparams;
@@ -1357,7 +1357,7 @@ static DWORD WINAPI notify_thread(void *user)
 DWORD WINAPI DECLSPEC_HOTPATCH NotifyServiceStatusChangeW( SC_HANDLE service, DWORD mask,
                                                            SERVICE_NOTIFYW *notify_buffer )
 {
-    DWORD err;
+    DWORD err = 0;
     BOOL b_dummy = FALSE;
     GUID g_dummy = {0};
     struct notify_data *data;
@@ -1496,7 +1496,7 @@ SERVICE_STATUS_HANDLE WINAPI DECLSPEC_HOTPATCH RegisterServiceCtrlHandlerExW(
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetServiceStatus( SERVICE_STATUS_HANDLE service, SERVICE_STATUS *status )
 {
-    DWORD err;
+    DWORD err = 0;
 
     TRACE( "%p %#lx %#lx %#lx %#lx %#lx %#lx %#lx\n", service, status->dwServiceType,
            status->dwCurrentState, status->dwControlsAccepted, status->dwWin32ExitCode,

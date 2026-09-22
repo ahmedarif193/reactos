@@ -2365,7 +2365,7 @@ NtQueryInformationJobObject(
 )
 {
     PEJOB Job;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     BOOLEAN NoOutput;
     PVOID JobInfoBuffer;
     PKTHREAD CurrentThread;
@@ -2730,7 +2730,7 @@ NtSetInformationJobObject(
     }
     case JobObjectBasicUIRestrictions:
     {
-        JOBOBJECT_BASIC_UI_RESTRICTIONS UiRestrictions;
+        JOBOBJECT_BASIC_UI_RESTRICTIONS UiRestrictions = {0};
 
         _SEH2_TRY
         {

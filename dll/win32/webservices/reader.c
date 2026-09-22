@@ -6431,7 +6431,7 @@ static HRESULT read_type_struct( struct reader *reader, WS_TYPE_MAPPING mapping,
                                  WS_HEAP *heap, void *ret, ULONG size, BOOL *found )
 {
     ULONG i, offset;
-    HRESULT hr;
+    HRESULT hr = S_OK;
     char *buf;
 
     if (!desc) return E_INVALIDARG;

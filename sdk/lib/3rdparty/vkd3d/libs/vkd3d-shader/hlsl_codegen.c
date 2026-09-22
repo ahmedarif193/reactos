@@ -1851,7 +1851,7 @@ static enum vkd3d_result resource_access_from_deref(struct hlsl_ctx *ctx, struct
 {
     bool tgsm = deref->var->is_tgsm;
     struct hlsl_type **deref_types;
-    unsigned int resource_idx;
+    unsigned int resource_idx = 0;
 
     if (!(deref_types = vkd3d_malloc(sizeof(*deref_types) * (deref->path_len + 1))))
         return VKD3D_ERROR_OUT_OF_MEMORY;
@@ -2721,7 +2721,7 @@ static bool copy_propagation_replace_with_deref(struct hlsl_ctx *ctx,
     int *c = NULL, *d = NULL;
     uint32_t ret_swizzle = 0;
     struct hlsl_block block;
-    unsigned int path_len;
+    unsigned int path_len = 0;
     bool success = false;
     int i, j, k;
 

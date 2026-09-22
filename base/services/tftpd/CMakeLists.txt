@@ -11,6 +11,3 @@ if (MSVC)
     target_compile_options(tftpd PRIVATE /wd4267)
 endif()
 
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(tftpd PRIVATE -Wno-format-overflow)
-endif()

@@ -785,7 +785,7 @@ static int ext4_ext_insert_index(void *icb, handle_t *handle, struct inode *inod
 
 	ix->ei_block = cpu_to_le32(logical);
 	ext4_idx_store_pblock(ix, ptr);
-	le16_add_cpu(&curp->p_hdr->eh_entries, 1);
+	curp->p_hdr->eh_entries = cpu_to_le16(le16_to_cpu(curp->p_hdr->eh_entries) + 1);
 
 	if (unlikely(ix > EXT_LAST_INDEX(curp->p_hdr))) {
 		EXT4_ERROR_INODE(inode, "ix > EXT_LAST_INDEX!");
@@ -926,7 +926,7 @@ static int ext4_ext_split(void *icb, handle_t *handle, struct inode *inode,
 		err = ext4_ext_get_access(icb, handle, inode, path + depth);
 		if (err)
 			goto cleanup;
-		le16_add_cpu(&path[depth].p_hdr->eh_entries, -m);
+		path[depth].p_hdr->eh_entries = cpu_to_le16(le16_to_cpu(path[depth].p_hdr->eh_entries) - m);
 		err = ext4_ext_dirty(icb, handle, inode, path + depth);
 		if (err)
 			goto cleanup;
@@ -1003,7 +1003,7 @@ static int ext4_ext_split(void *icb, handle_t *handle, struct inode *inode,
 			err = ext4_ext_get_access(icb, handle, inode, path + i);
 			if (err)
 				goto cleanup;
-			le16_add_cpu(&path[i].p_hdr->eh_entries, -m);
+			path[i].p_hdr->eh_entries = cpu_to_le16(le16_to_cpu(path[i].p_hdr->eh_entries) - m);
 			err = ext4_ext_dirty(icb, handle, inode, path + i);
 			if (err)
 				goto cleanup;

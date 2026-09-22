@@ -337,7 +337,7 @@ int nfs41_delegation_granted(
 {
     stateid_arg stateid;
     nfs41_client *client = session->client;
-    nfs41_delegation_state *state;
+    nfs41_delegation_state *state = NULL;
     int status = NO_ERROR;
 
     if (delegation->type != OPEN_DELEGATE_READ &&

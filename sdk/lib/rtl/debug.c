@@ -59,7 +59,7 @@ vDbgPrintExWithPrefixInternal(IN PCCH Prefix,
     NTSTATUS Status;
     STRING DebugString;
     CHAR Buffer[512];
-    SIZE_T Length, PrefixLength;
+    SIZE_T Length = 0, PrefixLength = 0;
     EXCEPTION_RECORD ExceptionRecord;
 
     /* Check if we should print it or not */

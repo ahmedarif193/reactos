@@ -635,7 +635,7 @@ UDFDismountDevice(
     PUNICODE_STRING unicodeCdRomDeviceName
     )
 {
-    NTSTATUS RC;
+    NTSTATUS RC = STATUS_UNSUCCESSFUL;
     IO_STATUS_BLOCK IoStatus;
     HANDLE NtFileHandle = (HANDLE)-1;
     OBJECT_ATTRIBUTES ObjectAttributes;

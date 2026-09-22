@@ -1323,7 +1323,7 @@ Return Value:
     // a filter driver, the default value of m_AutoForwardCleanupClose is TRUE.
     //
     if (m_Device->m_AutoForwardCleanupClose) {
-        (void)ForwardCreateRequest(FxIrp, _CreateCompletionRoutine2, pRequest);
+        (void)!ForwardCreateRequest(FxIrp, _CreateCompletionRoutine2, pRequest);
         //
         // _CreateCompletionRoutine2 will complete the WDF request.
         //
@@ -1668,7 +1668,7 @@ Return Value:
         FxPkgIo*   pPkgIo;
 
         pPkgIo = (FxPkgIo*)m_Device->m_PkgIo;
-        pPkgIo->FlushAllQueuesByFileObject(FxIrp->GetFileObject());
+        (VOID)!pPkgIo->FlushAllQueuesByFileObject(FxIrp->GetFileObject());
     }
 
 Passthru:

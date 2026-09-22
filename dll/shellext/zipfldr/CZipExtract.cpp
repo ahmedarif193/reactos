@@ -382,7 +382,7 @@ public:
         int* ErrorCode
     )
     {
-        int err;
+        int err = 0;
         BYTE Buffer[2048];
         DWORD dwFlags = SHPPFW_DIRCREATE | (is_dir ? SHPPFW_NONE : SHPPFW_IGNOREFILENAME);
         HRESULT hr = SHPathPrepareForWriteW(hDlg, NULL, FullPath, dwFlags);

@@ -438,7 +438,7 @@ FlsFree(DWORD dwFlsIndex)
         BaseSetLastNTError(Status);
     return NT_SUCCESS(Status);
 #else
-    BOOL ret;
+    BOOL ret = FALSE;
     PPEB Peb = NtCurrentPeb();
 
     if (dwFlsIndex >= FLS_MAXIMUM_AVAILABLE)

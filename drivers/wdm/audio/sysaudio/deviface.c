@@ -228,7 +228,8 @@ SysAudioRegisterDeviceInterfaces(
     Status = IoRegisterDeviceInterface(DeviceObject, &KSCATEGORY_PREFERRED_MIDIOUT_DEVICE, NULL, &SymbolicLink);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&SymbolicLink, TRUE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &SymbolicLink);
         RtlFreeUnicodeString(&SymbolicLink);
     }
     else
@@ -240,7 +241,8 @@ SysAudioRegisterDeviceInterfaces(
     Status = IoRegisterDeviceInterface(DeviceObject, &KSCATEGORY_PREFERRED_WAVEIN_DEVICE, NULL, &SymbolicLink);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&SymbolicLink, TRUE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &SymbolicLink);
         RtlFreeUnicodeString(&SymbolicLink);
     }
     else
@@ -252,7 +254,8 @@ SysAudioRegisterDeviceInterfaces(
     Status = IoRegisterDeviceInterface(DeviceObject, &KSCATEGORY_PREFERRED_WAVEOUT_DEVICE, NULL, &SymbolicLink);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&SymbolicLink, TRUE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &SymbolicLink);
         RtlFreeUnicodeString(&SymbolicLink);
     }
     else
@@ -263,7 +266,8 @@ SysAudioRegisterDeviceInterfaces(
     Status = IoRegisterDeviceInterface(DeviceObject, &KSCATEGORY_SYSAUDIO, NULL, &SymbolicLink);
     if (NT_SUCCESS(Status))
     {
-        IoSetDeviceInterfaceState(&SymbolicLink, TRUE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&SymbolicLink, TRUE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &SymbolicLink);
         RtlFreeUnicodeString(&SymbolicLink);
     }
     else

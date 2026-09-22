@@ -967,7 +967,7 @@ UINT WINAPI MsiFormatRecordA(MSIHANDLE hinst, MSIHANDLE hrec, char *buf, DWORD *
     MSIRECORD *rec;
     LPWSTR value;
     DWORD len;
-    UINT r;
+    UINT r = 0;
 
     TRACE( "%lu, %lu, %p, %p\n", hinst, hrec, buf, sz );
 

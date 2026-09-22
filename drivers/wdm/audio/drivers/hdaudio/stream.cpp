@@ -83,8 +83,10 @@ CMiniportWaveRTStream::FreeAudioBuffer(
     ULONG BufferSize)
 {
     HANDLE Handles[1] = {m_DmaEngine};
-    m_Interface.SetDmaEngineState(m_Interface.Context, ResetState, 1, Handles);
-    m_Interface.FreeDmaBuffer(m_Interface.Context, m_DmaEngine);
+    if (!NT_SUCCESS(m_Interface.SetDmaEngineState(m_Interface.Context, ResetState, 1, Handles)))
+        DPRINT1("HDAUDIO: SetDmaEngineState(ResetState) failed\n");
+    if (!NT_SUCCESS(m_Interface.FreeDmaBuffer(m_Interface.Context, m_DmaEngine)))
+        DPRINT1("HDAUDIO: FreeDmaBuffer failed\n");
     m_BufferSize = 0;
 }
 
@@ -174,7 +176,8 @@ CMiniportWaveRTStream::AllocateBufferWithNotification(
         return Status;
     if (BufferSize > MAXULONG || BufferOffset > MAXULONG)
     {
-        m_Interface.FreeDmaBufferWithNotification(m_Interface.Context, m_DmaEngine, *AudioBufferMdl, BufferSize);
+        if (!NT_SUCCESS(m_Interface.FreeDmaBufferWithNotification(m_Interface.Context, m_DmaEngine, *AudioBufferMdl, BufferSize)))
+            DPRINT1("HDAUDIO: FreeDmaBufferWithNotification failed\n");
         *AudioBufferMdl = NULL;
         return STATUS_INTEGER_OVERFLOW;
     }
@@ -208,8 +211,10 @@ VOID
 CMiniportWaveRTStream::FreeBufferWithNotification(PMDL AudioBufferMdl, ULONG BufferSize)
 {
     HANDLE Handles[1] = {m_DmaEngine};
-    m_Interface.SetDmaEngineState(m_Interface.Context, ResetState, 1, Handles);
-    m_Interface.FreeDmaBufferWithNotification(m_Interface.Context, m_DmaEngine, AudioBufferMdl, BufferSize);
+    if (!NT_SUCCESS(m_Interface.SetDmaEngineState(m_Interface.Context, ResetState, 1, Handles)))
+        DPRINT1("HDAUDIO: SetDmaEngineState(ResetState) failed\n");
+    if (!NT_SUCCESS(m_Interface.FreeDmaBufferWithNotification(m_Interface.Context, m_DmaEngine, AudioBufferMdl, BufferSize)))
+        DPRINT1("HDAUDIO: FreeDmaBufferWithNotification failed\n");
     m_BufferSize = 0;
 }
 
@@ -478,7 +483,10 @@ HDAUDIO_AllocateStream(
     {
         // out of memory
         if (hDmaEngine)
-            Interface.FreeDmaEngine(Interface.Context, hDmaEngine);
+        {
+            if (!NT_SUCCESS(Interface.FreeDmaEngine(Interface.Context, hDmaEngine)))
+                DPRINT1("HDAUDIO: FreeDmaEngine failed\n");
+        }
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 

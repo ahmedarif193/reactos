@@ -501,7 +501,7 @@ CMP_GetBlockedDriverInfo(
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
     ULONG ulTransferLength;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CMP_GetBlockedDriverInfo(%p %p %lx %p)\n",
           pszNames, pulLength, ulFlags, hMachine);
@@ -549,7 +549,7 @@ CMP_GetServerSideDeviceInstallFlags(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CMP_GetServerSideDeviceInstallFlags(%p %lx %p)\n",
           pulSSDIFlags, ulFlags, hMachine);
@@ -597,7 +597,7 @@ CMP_Init_Detection(
     _In_ ULONG ulMagic)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CMP_Init_Detection(%lu)\n", ulMagic);
 
@@ -1074,7 +1074,7 @@ CM_Add_ID_ExW(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Add_ID_ExW(%p %s %lx %p)\n",
           dnDevInst, debugstr_w(pszID), ulFlags, hMachine);
@@ -1557,7 +1557,7 @@ CM_Delete_Class_Key_Ex(
 {
     WCHAR szGuidString[MAX_GUID_STRING_LEN];
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Delete_Class_Key_Ex(%p %lx %p)\n",
           ClassGuid, ulFlags, hMachine);
@@ -1832,7 +1832,7 @@ CM_Disable_DevNode_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Disable_DevNode_Ex(%p %lx %p)\n",
           dnDevInst, ulFlags, hMachine);
@@ -2018,7 +2018,7 @@ CM_Enable_DevNode_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Enable_DevNode_Ex(%p %lx %p)\n",
           dnDevInst, ulFlags, hMachine);
@@ -2256,7 +2256,7 @@ CM_Enumerate_Enumerators_ExW(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Enumerate_Enumerators_ExW(%lu %p %p %lx %p)\n",
           ulEnumIndex, Buffer, pulLength, ulFlags, hMachine);
@@ -2410,7 +2410,7 @@ CM_Free_Log_Conf_Ex(
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
     PLOG_CONF_INFO pLogConfInfo;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Free_Log_Conf_Ex(%lx %lx %p)\n",
           lcLogConfToBeFreed, ulFlags, hMachine);
@@ -2649,7 +2649,7 @@ CM_Get_Child_Ex(
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
     DWORD dwIndex, dwLength = MAX_DEVICE_ID_LEN;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     TRACE("CM_Get_Child_Ex(%p %lx %lx %p)\n",
           pdnDevInst, dnDevInst, ulFlags, hMachine);
@@ -2937,7 +2937,7 @@ CM_Get_Class_Name_ExW(
 {
     WCHAR szGuidString[MAX_GUID_STRING_LEN];
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Get_Class_Name_ExW(%p %p %p %lx %p\n",
           ClassGuid, Buffer, pulLength, ulFlags, hMachine);
@@ -3080,7 +3080,7 @@ CM_Get_Class_Registry_PropertyW(
     WCHAR szGuidString[PNP_MAX_GUID_STRING_LEN + 1];
     ULONG ulType = 0;
     ULONG ulTransferLength = 0;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     TRACE("CM_Get_Class_Registry_PropertyW(%p %lu %p %p %p %lx %p)\n",
           ClassGuid, ulProperty, pulRegDataType, Buffer, pulLength,
@@ -3172,7 +3172,7 @@ CM_Get_Depth_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Get_Depth_Ex(%p %lx %lx %p)\n",
           pulDepth, dnDevInst, ulFlags, hMachine);
@@ -3692,7 +3692,7 @@ CM_Get_DevNode_Status_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
     ULONG Status, Problem;
 
     TRACE("CM_Get_DevNode_Status_Ex(%p %p %lx %lx %p)\n",
@@ -3993,7 +3993,7 @@ CM_Get_Device_ID_List_ExW(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Get_Device_ID_List_ExW(%p %p %lu %lx %p)\n",
           pszFilter, Buffer, BufferLen, ulFlags, hMachine);
@@ -4123,7 +4123,7 @@ CM_Get_Device_ID_List_Size_ExW(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     FIXME("CM_Get_Device_ID_List_Size_ExW(%p %s %lx %p)\n",
           pulLen, debugstr_w(pszFilter), ulFlags, hMachine);
@@ -4971,7 +4971,7 @@ CM_Get_Global_State_Ex(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Get_Global_State_Ex(%p %lx %p)\n",
           pulState, ulFlags, hMachine);
@@ -5093,7 +5093,7 @@ CM_Get_HW_Prof_Flags_ExW(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     FIXME("CM_Get_HW_Prof_Flags_ExW(%s %lu %p %lx %p)\n",
           debugstr_w(szDevInstName), ulHardwareProfile, pulValue, ulFlags, hMachine);
@@ -5223,7 +5223,7 @@ CM_Get_Hardware_Profile_Info_ExW(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Get_Hardware_Profile_Info_ExW(%lu %p %lx %p)\n",
           ulIndex, pHWProfileInfo, ulFlags, hMachine);
@@ -5293,7 +5293,7 @@ CM_Get_Log_Conf_Priority_Ex(
     HSTRING_TABLE StringTable = NULL;
     PLOG_CONF_INFO pLogConfInfo;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     FIXME("CM_Get_Log_Conf_Priority_Ex(%p %p %lx %p)\n",
           lcLogConf, pPriority, ulFlags, hMachine);
@@ -5381,7 +5381,7 @@ CM_Get_Next_Log_Conf_Ex(
     PLOG_CONF_INFO pNewLogConfInfo;
     ULONG ulNewTag;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     FIXME("CM_Get_Next_Log_Conf_Ex(%p %p %lx %p)\n",
           plcLogConf, lcLogConf, ulFlags, hMachine);
@@ -5492,7 +5492,7 @@ CM_Get_Next_Res_Des_Ex(
     ULONG ulNextResDesType = 0, ulNextResDesTag = 0;
     LPWSTR lpDevInst;
     DEVINST dnDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     FIXME("CM_Get_Next_Res_Des_Ex(%p %p %lu %p %lx %p)\n",
           prdResDes, rdResDes, ForResource, pResourceID, ulFlags, hMachine);
@@ -5624,7 +5624,7 @@ CM_Get_Parent_Ex(
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
     DWORD dwIndex, dwLength = MAX_DEVICE_ID_LEN;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     TRACE("CM_Get_Parent_Ex(%p %lx %lx %p)\n",
           pdnDevInst, dnDevInst, ulFlags, hMachine);
@@ -5856,7 +5856,7 @@ CM_Get_Sibling_Ex(
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
     DWORD dwIndex, dwLength = MAX_DEVICE_ID_LEN;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     TRACE("CM_Get_Sibling_Ex(%p %lx %lx %p)\n",
           pdnDevInst, dnDevInst, ulFlags, hMachine);
@@ -5945,7 +5945,7 @@ CM_Get_Version_Ex(
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
     WORD Version = 0;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     TRACE("CM_Get_Version_Ex(%p)\n", hMachine);
 
@@ -6039,7 +6039,7 @@ CM_Is_Dock_Station_Present_Ex(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Is_Dock_Station_Present_Ex(%p %p)\n",
           pbPresent, hMachine);
@@ -6102,7 +6102,7 @@ CM_Is_Version_Available_Ex(
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
     WORD wServerVersion;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     TRACE("CM_Is_Version_Available_Ex(%hu %p)\n",
           wVersion, hMachine);
@@ -6392,7 +6392,7 @@ CM_Move_DevNode_Ex(
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpFromDevInst;
     LPWSTR lpToDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     FIXME("CM_Move_DevNode_Ex(%lx %lx %lx %p)\n",
           dnFromDevInst, dnToDevInst, ulFlags, hMachine);
@@ -6965,7 +6965,7 @@ CM_Query_And_Remove_SubTree_ExW(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Query_And_Remove_SubTree_ExW(%lx %p %p %lu %lx %p)\n",
           dnAncestor, pVetoType, pszVetoName, ulNameLength,
@@ -7062,7 +7062,7 @@ CM_Query_Arbitrator_Free_Data_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Query_Arbitrator_Free_Data_Ex(%p %lu %lx %lu 0x%08lx %p)\n",
           pData, DataLen, dnDevInst, ResourceID, ulFlags, hMachine);
@@ -7149,7 +7149,7 @@ CM_Query_Arbitrator_Free_Size_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Query_Arbitrator_Free_Size_Ex(%p %lu %lx 0x%08lx %p)\n",
           pulSize, dnDevInst,ResourceID, ulFlags, hMachine);
@@ -7258,7 +7258,7 @@ CM_Query_Resource_Conflict_List(
     PCONFLICT_DATA pConflictData = NULL;
     ULONG ulBufferLength;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     FIXME("CM_Query_Resource_Conflict_List(%p %lx %lu %p %lu %lx %p)\n",
           pclConflictList, dnDevInst, ResourceID, ResourceData,
@@ -7384,7 +7384,7 @@ CM_Reenumerate_DevNode_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     FIXME("CM_Reenumerate_DevNode_Ex(%lx %lx %p)\n",
           dnDevInst, ulFlags, hMachine);
@@ -7462,7 +7462,7 @@ CM_Register_Device_Driver_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Register_Device_Driver_Ex(%lx 0x%08lx %p)\n",
           dnDevInst, ulFlags, hMachine);
@@ -7647,7 +7647,7 @@ CM_Register_Device_Interface_ExW(
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
     ULONG ulTransferLength;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Register_Device_Interface_ExW(%lx %s %s %p %p %lx %p)\n",
           dnDevInst, debugstr_guid(InterfaceClassGuid), debugstr_w(pszReference),
@@ -7850,7 +7850,7 @@ CM_Request_Device_Eject_ExW(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Request_Device_Eject_ExW(%lx %p %p %lu %lx %p)\n",
           dnDevInst, pVetoType, pszVetoName, ulNameLength, ulFlags, hMachine);
@@ -7930,7 +7930,7 @@ CM_Request_Eject_PC_Ex(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Request_Eject_PC_Ex(%p)\n", hMachine);
 
@@ -7984,7 +7984,7 @@ CM_Run_Detection_Ex(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Run_Detection_Ex(%lx %p)\n",
           ulFlags, hMachine);
@@ -8127,7 +8127,7 @@ CM_Set_Class_Registry_PropertyW(
     ULONG ulType = 0;
     PSECURITY_DESCRIPTOR pSecurityDescriptor = NULL;
     ULONG SecurityDescriptorSize = 0;
-    CONFIGRET ret;
+    CONFIGRET ret = 0;
 
     TRACE("CM_Set_Class_Registry_PropertyW(%p %lx %p %lu %lx %p)\n",
           ClassGuid, ulProperty, Buffer, ulLength, ulFlags, hMachine);
@@ -8240,7 +8240,7 @@ CM_Set_DevNode_Problem_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Set_DevNode_Problem_Ex(%lx %lx %lx %p)\n",
           dnDevInst, ulProblem, ulFlags, hMachine);
@@ -8433,7 +8433,7 @@ CM_Set_DevNode_Registry_Property_ExW(
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
     ULONG ulType;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Set_DevNode_Registry_Property_ExW(%lx %lu %p %lx %lx %p)\n",
           dnDevInst, ulProperty, Buffer, ulLength, ulFlags, hMachine);
@@ -8520,7 +8520,7 @@ CM_Set_HW_Prof_Ex(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Set_HW_Prof_Ex(%lu %lx %p)\n",
           ulHardwareProfile, ulFlags, hMachine);
@@ -8642,7 +8642,7 @@ CM_Set_HW_Prof_Flags_ExW(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     FIXME("CM_Set_HW_Prof_Flags_ExW(%s %lu %lu %lx %p)\n",
           debugstr_w(szDevInstName), ulConfig, ulValue, ulFlags, hMachine);
@@ -8711,7 +8711,7 @@ CM_Setup_DevNode_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     FIXME("CM_Setup_DevNode_Ex(%lx %lx %p)\n",
           dnDevInst, ulFlags, hMachine);
@@ -8862,7 +8862,7 @@ CM_Uninstall_DevNode_Ex(
     RPC_BINDING_HANDLE BindingHandle = NULL;
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Uninstall_DevNode_Ex(%lx %lx %p)\n",
           dnPhantom, ulFlags, hMachine);
@@ -8986,7 +8986,7 @@ CM_Unregister_Device_Interface_ExW(
     _In_opt_ HMACHINE hMachine)
 {
     RPC_BINDING_HANDLE BindingHandle = NULL;
-    CONFIGRET ret;
+    CONFIGRET ret = CR_FAILURE;
 
     TRACE("CM_Unregister_Device_Interface_ExW(%s %lx %p)\n",
           debugstr_w(pszDeviceInterface), ulFlags, hMachine);

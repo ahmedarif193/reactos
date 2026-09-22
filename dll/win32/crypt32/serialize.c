@@ -482,7 +482,7 @@ static BOOL CRYPT_ReadContextProp(
 const void *CRYPT_ReadSerializedElement(const BYTE *pbElement, DWORD cbElement,
  DWORD dwContextTypeFlags, DWORD *pdwContentType)
 {
-    const void *context;
+    const void *context = NULL;
 
     TRACE("(%p, %ld, %08lx, %p)\n", pbElement, cbElement, dwContextTypeFlags,
      pdwContentType);

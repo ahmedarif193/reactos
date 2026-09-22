@@ -976,7 +976,7 @@ DxgkpDestroyKmdCpuEvent(
     PDXGKRNL_ADAPTER Adapter;
     PDXGKDDI_DESTROYCPUEVENT Callback;
     HANDLE KmdCpuEvent;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (SyncObj == NULL)
         return STATUS_SUCCESS;
@@ -1029,7 +1029,7 @@ DxgkpCreateKmdCpuEvent(
     PDXGKDDI_DESTROYCPUEVENT DestroyCallback;
     DXGKARG_CREATECPUEVENT Args;
     NTSTATUS CleanupStatus;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (SyncObj == NULL || SyncObj->Device == NULL)
         return STATUS_INVALID_PARAMETER;

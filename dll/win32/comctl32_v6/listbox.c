@@ -875,7 +875,7 @@ static BOOL LISTBOX_SetTabStops( LB_DESCR *descr, INT count, LPINT tabs )
  */
 static LRESULT LISTBOX_GetText( LB_DESCR *descr, INT index, LPWSTR buffer, BOOL unicode )
 {
-    DWORD len;
+    DWORD len = 0;
 
     if ((index < 0) || (index >= descr->nb_items))
     {

@@ -242,7 +242,7 @@ UINT WINAPI MsiDatabaseOpenViewW(MSIHANDLE hdb,
 {
     MSIDATABASE *db;
     MSIQUERY *query = NULL;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE("%s %p\n", debugstr_w(szQuery), phView);
 
@@ -405,7 +405,7 @@ UINT WINAPI MsiViewFetch( MSIHANDLE hView, MSIHANDLE *record )
 {
     MSIQUERY *query;
     MSIRECORD *rec = NULL;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE( "%lu, %p\n", hView, record );
 
@@ -469,7 +469,7 @@ UINT MSI_ViewClose(MSIQUERY *query)
 UINT WINAPI MsiViewClose( MSIHANDLE hView )
 {
     MSIQUERY *query;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE( "%lu\n", hView );
 
@@ -519,7 +519,7 @@ UINT WINAPI MsiViewExecute( MSIHANDLE hView, MSIHANDLE hRec )
 {
     MSIQUERY *query;
     MSIRECORD *rec = NULL;
-    UINT ret;
+    UINT ret = 0;
 
     TRACE( "%lu, %lu\n", hView, hRec );
 
@@ -642,7 +642,7 @@ UINT WINAPI MsiViewGetColumnInfo( MSIHANDLE hView, MSICOLINFO info, MSIHANDLE *h
 {
     MSIQUERY *query = NULL;
     MSIRECORD *rec = NULL;
-    UINT r;
+    UINT r = 0;
 
     TRACE( "%lu, %d, %p\n", hView, info, hRec );
 
@@ -1079,7 +1079,7 @@ UINT WINAPI MsiDatabaseGetPrimaryKeysW( MSIHANDLE hdb, const WCHAR *table, MSIHA
 {
     MSIRECORD *rec = NULL;
     MSIDATABASE *db;
-    UINT r;
+    UINT r = 0;
 
     TRACE( "%lu, %s, %p\n", hdb, debugstr_w(table), phRec );
 
@@ -1165,7 +1165,7 @@ MSICONDITION WINAPI MsiDatabaseIsTablePersistentA( MSIHANDLE hDatabase, const ch
 MSICONDITION WINAPI MsiDatabaseIsTablePersistentW( MSIHANDLE hDatabase, const WCHAR *szTableName )
 {
     MSIDATABASE *db;
-    MSICONDITION r;
+    MSICONDITION r = MSICONDITION_ERROR;
 
     TRACE( "%lu, %s\n", hDatabase, debugstr_w(szTableName) );
 

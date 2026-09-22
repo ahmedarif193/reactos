@@ -199,7 +199,7 @@ static void Proc_1(DHRY_CTX *C, Rec_Pointer Ptr_Val_Par)
 static LONGLONG DhryRun(unsigned long Number_Of_Runs)
 {
     DHRY_CTX C;
-    int Int_1_Loc, Int_2_Loc, Int_3_Loc;
+    int Int_1_Loc = 0, Int_2_Loc = 0, Int_3_Loc;
     char Ch_Index;
     Enumeration Enum_Loc;
     Str_30 Str_1_Loc, Str_2_Loc;

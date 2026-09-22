@@ -1951,7 +1951,7 @@ Return Value:
             WDFREQUEST_FXREQUEST(Request)->SetImpersonationFlags(Options->Flags);
 
             *PGLOBALS_ACTION(&DriverGlobals) = SubmitSyncCallCompletion;
-            (void) WDFIOTARGET_FXIOTARGET(Target)->SubmitSync(
+            (void)!WDFIOTARGET_FXIOTARGET(Target)->SubmitSync(
                 WDFREQUEST_FXREQUEST(Request),
                 Options,
                 PGLOBALS_ACTION(&DriverGlobals)
@@ -2475,7 +2475,7 @@ WDFEXPORT(WdfRequestGetParameters)(
 
 
 
-    (VOID) pRequest->GetParameters(Parameters);
+    (VOID)!pRequest->GetParameters(Parameters);
 
     return;
 }

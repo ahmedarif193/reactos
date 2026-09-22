@@ -150,7 +150,7 @@ NetFileClose(
     _In_ LMSTR servername,
     _In_ DWORD fileid)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetFileClose(%s %lu)\n",
           debugstr_w(servername), fileid);
@@ -186,7 +186,7 @@ NetFileEnum(
     FILE_ENUM_STRUCT EnumStruct;
     FILE_INFO_2_CONTAINER Level2Container = {0, NULL};
     FILE_INFO_3_CONTAINER Level3Container = {0, NULL};
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetFileEnum(%s %s %s %lu %p %lu %p %p %p)\n",
           debugstr_w(servername), debugstr_w(basepath), debugstr_w(username),
@@ -254,7 +254,7 @@ NetFileGetInfo(
     _In_ DWORD level,
     _Out_ LPBYTE *bufptr)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetFileGetInfo(%s %lu %lu %p)\n",
           debugstr_w(servername), fileid, level, bufptr);
@@ -284,7 +284,7 @@ NetRemoteTOD(
     _In_ LPCWSTR UncServerName,
     _Out_ LPBYTE *BufferPtr)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetRemoteTOD(%s %p)\n",
           debugstr_w(UncServerName), BufferPtr);
@@ -318,7 +318,7 @@ NetServerDiskEnum(
     _Inout_ LPDWORD resume_handle)
 {
     DISK_ENUM_CONTAINER EnumContainer;
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetServerDiskEnum(%s %lu %p %lu %p %p %p)\n",
           debugstr_w(servername), level, bufptr, prefmaxlen,
@@ -371,7 +371,7 @@ NetServerGetInfo(
     DWORD level,
     LPBYTE *bufptr)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetServerGetInfo(%s %lu %p)\n",
           debugstr_w(servername), level, bufptr);
@@ -402,7 +402,7 @@ NetServerSetInfo(
     _In_ LPBYTE buf,
     _Out_ LPDWORD parm_err)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetServerSetInfo(%s %lu %p %p)\n",
           debugstr_w(servername), level, buf, parm_err);
@@ -432,7 +432,7 @@ I_NetServerSetServiceBits(
     _In_ DWORD servicebits,
     _In_ DWORD updateimmediately)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_NetServerSetServiceBits(%s %s 0x%lx %lu)\n",
           debugstr_w(servername), debugstr_w(transport), servicebits, updateimmediately);
@@ -461,7 +461,7 @@ NetServerTransportAdd(
     _In_ DWORD level,
     _In_ LPBYTE bufptr)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetServerTransportAdd(%s %lu %p)\n",
           debugstr_w(servername), level, bufptr);
@@ -489,7 +489,7 @@ NetServerTransportAddEx(
     _In_ DWORD level,
     _In_ LPBYTE bufptr)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetServerTransportAddEx(%s %lu %p)\n",
           debugstr_w(servername), level, bufptr);
@@ -517,7 +517,7 @@ NetServerTransportDel(
     _In_ DWORD level,
     _In_ LPBYTE bufptr)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetServerTransportDel(%s %lu %p)\n",
           debugstr_w(servername), level, bufptr);
@@ -552,7 +552,7 @@ NetServerTransportEnum(
     SERVER_XPORT_ENUM_STRUCT EnumStruct;
     SERVER_XPORT_INFO_0_CONTAINER Level0Container = {0, NULL};
     SERVER_XPORT_INFO_1_CONTAINER Level1Container = {0, NULL};
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetServerTransportEnum(%s %lu %p %lu %p %p %p)\n",
           debugstr_w(servername), level, bufptr, prefmaxlen,
@@ -614,7 +614,7 @@ NetSessionDel(
     _In_opt_ LMSTR UncClientName,
     _In_opt_ LMSTR username)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetSessionDel(%s %s %s)\n",
           debugstr_w(servername), debugstr_w(UncClientName), debugstr_w(username));
@@ -654,7 +654,7 @@ NetSessionEnum(
     SESSION_INFO_2_CONTAINER Level2Container = {0, NULL};
     SESSION_INFO_10_CONTAINER Level10Container = {0, NULL};
     SESSION_INFO_502_CONTAINER Level502Container = {0, NULL};
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetSessionEnum(%s %s %s %lu %p %lu %p %p %p)\n",
           debugstr_w(servername), debugstr_w(UncClientName), debugstr_w(username),
@@ -768,7 +768,7 @@ NetSessionGetInfo(
     SESSION_INFO_2_CONTAINER Level2Container = {0, NULL};
     SESSION_INFO_10_CONTAINER Level10Container = {0, NULL};
     DWORD dwTotalEntries;
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetSessionGetInfo(%s %s %s %lu %p)\n",
           debugstr_w(servername), debugstr_w(UncClientName),
@@ -853,7 +853,7 @@ NetShareAdd(
     _In_ LPBYTE buf,
     _Out_ LPDWORD parm_err)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetShareAdd(%s %lu %p %p)\n",
           debugstr_w(servername), level, buf, parm_err);
@@ -885,7 +885,7 @@ NetShareCheck(
     _In_ LMSTR device,
     _Out_ LPDWORD type)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetShareCheck(%s %s %p)\n",
           debugstr_w(servername), debugstr_w(device), type);
@@ -913,7 +913,7 @@ NetShareDel(
     _In_ LMSTR netname,
     _In_ DWORD reserved)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetShareDel(%s %s %lu)\n",
           debugstr_w(servername), debugstr_w(netname), reserved);
@@ -944,7 +944,7 @@ NetShareDelSticky(
     _In_ LMSTR netname,
     _In_ DWORD reserved)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetShareDelSticky(%s %s %lu)\n",
           debugstr_w(servername), debugstr_w(netname), reserved);
@@ -984,7 +984,7 @@ NetShareEnum(
     SHARE_INFO_1_CONTAINER Level1Container = {0, NULL};
     SHARE_INFO_2_CONTAINER Level2Container = {0, NULL};
     SHARE_INFO_502_CONTAINER Level502Container = {0, NULL};
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetShareEnum(%s %lu %p %lu %p %p %p)\n",
           debugstr_w(servername), level, bufptr, prefmaxlen,
@@ -1086,7 +1086,7 @@ NetShareEnumSticky(
     SHARE_INFO_1_CONTAINER Level1Container = {0, NULL};
     SHARE_INFO_2_CONTAINER Level2Container = {0, NULL};
     SHARE_INFO_502_CONTAINER Level502Container = {0, NULL};
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetShareEnumSticky(%s %lu %p %lu %p %p %p)\n",
           debugstr_w(servername), level, bufptr, prefmaxlen,
@@ -1180,7 +1180,7 @@ NetShareGetInfo(
     _In_ DWORD level,
     _Out_ LPBYTE *bufptr)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetShareGetInfo(%s %s %lu %p)\n",
           debugstr_w(servername), debugstr_w(netname), level, bufptr);
@@ -1219,7 +1219,7 @@ NetShareSetInfo(
     _In_  LPBYTE buf,
     _Out_ LPDWORD parm_err)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetShareSetInfo(%s %s %lu %p %p)\n",
           debugstr_w(servername), debugstr_w(netname), level, buf, parm_err);

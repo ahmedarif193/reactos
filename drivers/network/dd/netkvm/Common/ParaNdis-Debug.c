@@ -283,13 +283,13 @@ VOID ParaNdis_PrepareBugCheckData()
     BugCheckData.StaticData.Header.ulMaxContexts = MAX_CONTEXTS;
     BugCheckData.StaticData.Header.SizeOfPointer = sizeof(PVOID);
     BugCheckData.StaticData.Header.PerNicData = (UINT_PTR)(PVOID)BugCheckData.StaticData.PerNicData;
-    BugCheckData.StaticData.Header.DataArea = (UINT64)&BugCheckData.StaticData.Data;
+    BugCheckData.StaticData.Header.DataArea = (UINT64)(UINT_PTR)&BugCheckData.StaticData.Data;
     BugCheckData.StaticData.Header.DataAreaSize = sizeof(BugCheckData.StaticData.Data);
     BugCheckData.StaticData.Data.HistoryDataVersion = PARANDIS_DEBUG_HISTORY_DATA_VERSION;
     BugCheckData.StaticData.Data.SizeOfHistory = MAX_HISTORY;
     BugCheckData.StaticData.Data.SizeOfHistoryEntry = sizeof(tBugCheckHistoryDataEntry);
     BugCheckData.StaticData.Data.HistoryData = (UINT_PTR)(PVOID)BugCheckData.StaticData.History;
-    BugCheckData.Location.Address = (UINT64)&BugCheckData;
+    BugCheckData.Location.Address = (UINT64)(UINT_PTR)&BugCheckData;
     BugCheckData.Location.Size = sizeof(BugCheckData);
 }
 
@@ -315,7 +315,7 @@ static UINT FillDataOnBugCheck()
     for (i = 0; i < MAX_CONTEXTS; ++i)
     {
         tBugCheckPerNicDataContent *pSave = &BugCheckData.StaticData.PerNicData[i];
-        PARANDIS_ADAPTER *p = (PARANDIS_ADAPTER *)pSave->Context;
+        PARANDIS_ADAPTER *p = (PARANDIS_ADAPTER *)(UINT_PTR)pSave->Context;
         if (!p) continue;
         pSave->nofPacketsToComplete = p->NetTxPacketsToReturn;
         pSave->nofReadyTxBuffers = p->nofFreeHardwareBuffers;

@@ -921,7 +921,7 @@ I_ScSetServiceBitsA(SERVICE_STATUS_HANDLE hServiceStatus,
                     BOOL bUpdateImmediately,
                     LPSTR lpString)
 {
-    BOOL bResult;
+    BOOL bResult = FALSE;
 
     TRACE("I_ScSetServiceBitsA(%lu %lx %u %u %s)\n",
           hServiceStatus, dwServiceBits, bSetBitsOn, bUpdateImmediately,
@@ -960,7 +960,7 @@ I_ScSetServiceBitsW(SERVICE_STATUS_HANDLE hServiceStatus,
                     BOOL bUpdateImmediately,
                     LPWSTR lpString)
 {
-    BOOL bResult;
+    BOOL bResult = FALSE;
 
     TRACE("I_ScSetServiceBitsW(%lu %lx %u %u %s)\n",
           hServiceStatus, dwServiceBits, bSetBitsOn, bUpdateImmediately,
@@ -1016,7 +1016,7 @@ BOOL WINAPI
 SetServiceStatus(SERVICE_STATUS_HANDLE hServiceStatus,
                  LPSERVICE_STATUS lpServiceStatus)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("SetServiceStatus(%lu %p)\n",
           hServiceStatus, lpServiceStatus);

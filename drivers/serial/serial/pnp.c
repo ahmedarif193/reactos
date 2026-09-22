@@ -288,7 +288,8 @@ SerialPnpStartDevice(
 	if (!NT_SUCCESS(Status))
 	{
 		WARN_(SERIAL, "IoConnectInterrupt() failed with status 0x%08x\n", Status);
-		IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, FALSE);
+		if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, FALSE)))
+		    WARN_(SERIAL, "IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->SerialInterfaceName);
 		IoDeleteSymbolicLink(&LinkName);
 		return Status;
 	}
@@ -317,7 +318,8 @@ SerialPnpStartDevice(
 	WRITE_PORT_UCHAR(SER_MCR(ComPortBase), DeviceExtension->MCR);
 
 	/* Activate serial interface */
-	IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, TRUE);
+	if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, TRUE)))
+	    WARN_(SERIAL, "IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->SerialInterfaceName);
 	/* We don't really care if the call succeeded or not... */
 
 	return STATUS_SUCCESS;

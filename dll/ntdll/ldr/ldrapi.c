@@ -1046,7 +1046,7 @@ LdrVerifyImageMatchesChecksum(
     HANDLE SectionHandle;
     SIZE_T ViewSize;
     PVOID ViewBase;
-    BOOLEAN Result, NoActualCheck;
+    BOOLEAN Result = FALSE, NoActualCheck;
     NTSTATUS Status;
     PVOID ImportName;
     ULONG Size;

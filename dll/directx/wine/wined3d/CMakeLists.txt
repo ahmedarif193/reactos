@@ -60,6 +60,3 @@ add_pch(d3dwine precomp.h SOURCE)
 add_cd_file(TARGET d3dwine DESTINATION reactos/system32 FOR all)
 set_wine_module_FIXME(d3dwine) # CORE-5743: No ARRAY_SIZE
 
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(d3dwine PRIVATE -Wno-format-overflow)
-endif()

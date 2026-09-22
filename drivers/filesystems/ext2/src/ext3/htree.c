@@ -1852,7 +1852,7 @@ int make_indexed_dir(struct ext2_icb *icb, struct dentry *dentry,
     int		namelen = dentry->d_name.len;
     struct buffer_head *bh2;
     struct dx_root	*root;
-    struct dx_frame	frames[2], *frame;
+    struct dx_frame	frames[2] = {0}, *frame;
     struct dx_entry *entries;
     struct ext3_dir_entry_2	*de, *de2;
     char		*data1, *top;

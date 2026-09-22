@@ -70,9 +70,7 @@ add_dependencies(mesa psdk)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(mesa PRIVATE
-        -Wno-dangling-pointer
         -Wno-array-parameter
-        -Wno-array-compare
     )
 endif()
 

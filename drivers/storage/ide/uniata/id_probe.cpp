@@ -2261,7 +2261,7 @@ AtapiFindIsaController(
     UCHAR                statusByte, statusByte2;
     BOOLEAN              preConfig = FALSE;
     //
-    PIDE_REGISTERS_1 BaseIoAddress1;
+    PIDE_REGISTERS_1 BaseIoAddress1 = NULL;
     PIDE_REGISTERS_2 BaseIoAddress2 = NULL;
 
     // The following table specifies the ports to be checked when searching for

@@ -40,7 +40,7 @@ AddJobA(HANDLE hPrinter, DWORD Level, PBYTE pData, DWORD cbBuf, PDWORD pcbNeeded
 BOOL WINAPI
 AddJobW(HANDLE hPrinter, DWORD Level, PBYTE pData, DWORD cbBuf, PDWORD pcbNeeded)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     FIXME("AddJobW(%p, %lu, %p, %lu, %p)\n", hPrinter, Level, pData, cbBuf, pcbNeeded);
@@ -199,7 +199,7 @@ Cleanup:
 BOOL WINAPI
 EnumJobsW(HANDLE hPrinter, DWORD FirstJob, DWORD NoJobs, DWORD Level, PBYTE pJob, DWORD cbBuf, PDWORD pcbNeeded, PDWORD pcReturned)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     TRACE("EnumJobsW(%p, %lu, %lu, %lu, %p, %lu, %p, %p)\n", hPrinter, FirstJob, NoJobs, Level, pJob, cbBuf, pcbNeeded, pcReturned);
@@ -348,7 +348,7 @@ Cleanup:
 BOOL WINAPI
 GetJobW(HANDLE hPrinter, DWORD JobId, DWORD Level, PBYTE pJob, DWORD cbBuf, PDWORD pcbNeeded)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     FIXME("GetJobW(%p, %lu, %lu, %p, %lu, %p)\n", hPrinter, JobId, Level, pJob, cbBuf, pcbNeeded);
@@ -386,7 +386,7 @@ Cleanup:
 BOOL WINAPI
 ScheduleJob(HANDLE hPrinter, DWORD dwJobID)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
 
     TRACE("ScheduleJob(%p, %lu)\n", hPrinter, dwJobID);
@@ -519,7 +519,7 @@ SetJobA(HANDLE hPrinter, DWORD JobId, DWORD Level, PBYTE pJobInfo, DWORD Command
 BOOL WINAPI
 SetJobW(HANDLE hPrinter, DWORD JobId, DWORD Level, PBYTE pJobInfo, DWORD Command)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     PSPOOLER_HANDLE pHandle = (PSPOOLER_HANDLE)hPrinter;
     WINSPOOL_JOB_CONTAINER JobContainer;
 

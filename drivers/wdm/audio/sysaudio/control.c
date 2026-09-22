@@ -513,7 +513,8 @@ SysAudioHandleProperty(
         }
     }
 
-    RtlStringFromGUID(&Property->Set, &GuidString);
+    if (!NT_SUCCESS(RtlStringFromGUID(&Property->Set, &GuidString)))
+        RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
     DPRINT1("Unhandled property Set |%S| Id %u Flags %x\n", GuidString.Buffer, Property->Id, Property->Flags);
     RtlFreeUnicodeString(&GuidString);
     return SetIrpIoStatus(Irp, STATUS_UNSUCCESSFUL, 0);

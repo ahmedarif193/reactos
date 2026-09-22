@@ -480,7 +480,7 @@ Returns:
     // we allow the driver to have an outstanding purge request while the delete
     // is in progress.
     //
-    (VOID) QueuePurge(TRUE, TRUE, NULL, NULL);
+    (VOID)!QueuePurge(TRUE, TRUE, NULL, NULL);
 
     Lock(&irql);
 
@@ -2319,7 +2319,7 @@ FxIoQueue::QueueRequest(
                         "Queuing WDFREQUEST 0x%p on WDFQUEUE 0x%p",
                         pRequest->GetHandle(),GetObjectHandle());
 
-    (VOID)pRequest->GetIrp(&pIrp);
+    (VOID)!pRequest->GetIrp(&pIrp);
 
     pFxIrp = pRequest->GetFxIrp();
 
@@ -4486,7 +4486,7 @@ FX_VF_METHOD(FxIoQueue, VerifyValidateCompletedRequest)(
 
     Request->Lock(&irql);
 
-    (VOID) Request->VerifyRequestIsDriverOwned(FxDriverGlobals);
+    (VOID)!Request->VerifyRequestIsDriverOwned(FxDriverGlobals);
     Request->ClearVerifierFlagsLocked(FXREQUEST_FLAG_DRIVER_OWNED);
 
     Request->Unlock(irql);
@@ -5905,7 +5905,7 @@ Return Value:
         SetStateForShutdown();
         Unlock(irql);
 
-        QueuePurge(TRUE, TRUE, NULL, NULL);
+        (VOID)!QueuePurge(TRUE, TRUE, NULL, NULL);
 
         Lock(&irql);
         //
@@ -5940,7 +5940,7 @@ Return Value:
         SetStateForShutdown();
         Unlock(irql);
 
-        QueuePurge(TRUE, TRUE, NULL, NULL);
+        (VOID)!QueuePurge(TRUE, TRUE, NULL, NULL);
 
         Lock(&irql);
 

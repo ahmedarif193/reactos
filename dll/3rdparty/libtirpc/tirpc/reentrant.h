@@ -141,7 +141,7 @@
 /* XXX Code will have to be changed to release the right kind!!! XXX */
 #define rwlock_unlock(l)		ReleaseSRWLockExclusive(l)
 
-#define thr_keycreate(k, d)		((*k) = TlsAlloc())
+#define thr_keycreate(k, d)		((void)(d), (*k) = TlsAlloc())
 #define thr_keydelete(k)		TlsFree(k)
 #define thr_setspecific(k, p)	TlsSetValue(k, p)
 #define thr_getspecific(k)		TlsGetValue(k)

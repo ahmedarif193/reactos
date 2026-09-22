@@ -621,20 +621,22 @@ PciAddDevice(IN PDRIVER_OBJECT DriverObject,
                              &PciGlobalLock);
 
         /* Open the device registry key so that we can query the errata flags */
-        IoOpenDeviceRegistryKey(DeviceObject,
-                                PLUGPLAY_REGKEY_DEVICE,
-                                KEY_ALL_ACCESS,
-                                &KeyHandle),
-
-        /* Open the value that contains errata flags for this bus instance */
-        RtlInitUnicodeString(&ValueName, L"HackFlags");
-        Status = ZwQueryValueKey(KeyHandle,
-                                 &ValueName,
-                                 KeyValuePartialInformation,
-                                 ValueInfo,
-                                 sizeof(Buffer),
-                                 &ResultLength);
-        ZwClose(KeyHandle);
+        Status = IoOpenDeviceRegistryKey(DeviceObject,
+                                         PLUGPLAY_REGKEY_DEVICE,
+                                         KEY_ALL_ACCESS,
+                                         &KeyHandle);
+        if (NT_SUCCESS(Status))
+        {
+            /* Open the value that contains errata flags for this bus instance */
+            RtlInitUnicodeString(&ValueName, L"HackFlags");
+            Status = ZwQueryValueKey(KeyHandle,
+                                     &ValueName,
+                                     KeyValuePartialInformation,
+                                     ValueInfo,
+                                     sizeof(Buffer),
+                                     &ResultLength);
+            ZwClose(KeyHandle);
+        }
         if (NT_SUCCESS(Status))
         {
             /* Make sure the data is of expected type and size */

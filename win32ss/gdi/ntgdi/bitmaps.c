@@ -564,7 +564,7 @@ NtGdiGetBitmapBits(
 {
     PSURFACE psurf;
     ULONG cjSize;
-    LONG ret;
+    LONG ret = 0;
 
     /* Check parameters */
     if (pUnsafeBits != NULL && cjBuffer == 0)
@@ -619,7 +619,7 @@ NtGdiSetBitmapBits(
     DWORD Bytes,
     IN PBYTE pUnsafeBits)
 {
-    LONG ret;
+    LONG ret = 0;
     PSURFACE psurf;
 
     if (pUnsafeBits == NULL || Bytes == 0)

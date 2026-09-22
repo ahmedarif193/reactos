@@ -2721,7 +2721,7 @@ ProbeAndCaptureLargeString(
     OUT PLARGE_STRING plstrSafe,
     IN PLARGE_STRING plstrUnsafe)
 {
-    LARGE_STRING lstrTemp;
+    LARGE_STRING lstrTemp = {0};
     PVOID pvBuffer = NULL;
 
     _SEH2_TRY

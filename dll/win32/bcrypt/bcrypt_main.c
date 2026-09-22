@@ -3264,7 +3264,7 @@ static NTSTATUS import_dh_key( enum alg_id alg, const UCHAR *input, ULONG input_
 static NTSTATUS import_key_pair( const struct algorithm *alg, const WCHAR *type, const UCHAR *input, ULONG input_len,
                                  struct key **ret_key )
 {
-    struct key *key;
+    struct key *key = NULL;
     NTSTATUS status;
 
     if (!wcscmp( type, BCRYPT_ECCPUBLIC_BLOB ) || !wcscmp( type, BCRYPT_ECCPRIVATE_BLOB ))

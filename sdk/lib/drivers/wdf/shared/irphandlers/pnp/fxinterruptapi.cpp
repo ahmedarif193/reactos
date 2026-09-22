@@ -897,7 +897,7 @@ Returns:
     //
     // Okay to ignore error status. Called function prints error messages.
     //
-    (VOID) pFxInterrupt->ForceReconnect();
+    (VOID)!pFxInterrupt->ForceReconnect();
 }
 
 __drv_maxIRQL(PASSIVE_LEVEL)
@@ -944,7 +944,7 @@ Returns:
     //
     // Okay to ignore error status. Called function prints error messages.
     //
-    (VOID) pFxInterrupt->ForceDisconnect();
+    (VOID)!pFxInterrupt->ForceDisconnect();
 }
 
 _Must_inspect_result_

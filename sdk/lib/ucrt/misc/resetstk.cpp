@@ -28,7 +28,7 @@
 
 extern "C" int __cdecl _resetstkoflw()
 {
-    LPBYTE pStack, pStackBase, pMaxGuard, pMinGuard;
+    LPBYTE pStack = NULL, pStackBase, pMaxGuard, pMinGuard;
     MEMORY_BASIC_INFORMATION mbi;
     SYSTEM_INFO si;
     DWORD PageSize;
@@ -41,6 +41,7 @@ extern "C" int __cdecl _resetstkoflw()
 #pragma warning(disable:6255)
     // prefast(6255): This alloca is safe and we do not want a __try here
     pStack = (LPBYTE)_alloca(1);
+    *pStack = 0;
 #pragma warning(pop)
 
     // Find the base of the stack.

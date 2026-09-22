@@ -519,7 +519,7 @@ DxgkPagingExecuteBatch(
                 DXGKARG_BUILDPAGINGBUFFER BuildArgs;
                 ULONG PreviousMultipassOffset = MultipassOffset;
                 PUCHAR PreviousCursor = Cursor;
-                NTSTATUS BuildStatus;
+                NTSTATUS BuildStatus = STATUS_UNSUCCESSFUL;
 
                 RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
                 DxgkpPagingPrepareBuildBuffer(Adapter,
@@ -607,7 +607,7 @@ DxgkPagingExecuteBatch(
                 DXGKARG_BUILDPAGINGBUFFER BuildArgs;
                 ULONG PreviousMultipassOffset = MultipassOffset;
                 PUCHAR PreviousCursor = Cursor;
-                NTSTATUS BuildStatus;
+                NTSTATUS BuildStatus = STATUS_UNSUCCESSFUL;
 
                 RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
                 DxgkpPagingPrepareBuildBuffer(Adapter,
@@ -899,7 +899,7 @@ DxgkPagingExecute(
     ULONG LastFenceId = 0;
     ULONG Pass;
     NTSTATUS Status;
-    NTSTATUS BuildStatus;
+    NTSTATUS BuildStatus = STATUS_UNSUCCESSFUL;
     BOOLEAN Complete = FALSE;
 
     PAGED_CODE();

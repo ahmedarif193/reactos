@@ -99,8 +99,7 @@ if(MSVC)
         target_compile_options(libtirpc PRIVATE /wd4101 /wd4133 /wd4473 /wd4477)
     endif()
 else()
-    # FIXME: Tons of warnings.
-    target_compile_options(libtirpc PRIVATE "-w")
+    target_compile_options(libtirpc PRIVATE -Wno-unused-variable -Wno-unused-but-set-variable)
 endif()
 
 set_module_type(libtirpc win32dll)
