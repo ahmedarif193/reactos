@@ -2542,6 +2542,22 @@ NTSTATUS WINAPI wow64_NtUserGetClipCursor( UINT *args )
 
 NTSTATUS WINAPI wow64_NtUserGetClipboardData( UINT *args )
 {
+#ifdef __REACTOS__
+    UINT format = get_ulong( &args );
+    ROS_GETCLIPBDATA32 *gcd32 = get_ptr( &args );
+
+    ROS_GETCLIPBDATA64 gcd = { 0 };
+    HANDLE ret;
+
+    ret = ((ROS_NTUSER_GET_CLIPBOARD_DATA)NtUserGetClipboardData)( format, gcd32 ? &gcd : NULL );
+    if (ret && gcd32)
+    {
+        gcd32->uFmtRet       = gcd.uFmtRet;
+        gcd32->fGlobalHandle = gcd.fGlobalHandle;
+        gcd32->hLocale       = HandleToUlong( gcd.hLocale );
+    }
+    return HandleToUlong( ret );
+#else
     UINT format = get_ulong( &args );
     struct
     {
@@ -2566,6 +2582,7 @@ NTSTATUS WINAPI wow64_NtUserGetClipboardData( UINT *args )
     params32->data_size = params.data_size;
     params32->seqno     = params.seqno;
     return HandleToUlong( ret );
+#endif
 }
 
 NTSTATUS WINAPI wow64_NtUserGetClipboardFormatName( UINT *args )
