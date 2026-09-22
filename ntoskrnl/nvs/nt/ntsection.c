@@ -729,8 +729,11 @@ MmCreateSection(
         if (Size == 0)
             return STATUS_INVALID_PARAMETER_4;
 
-        if (Size > SizeLimit)
+        if (Size > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1)
             return STATUS_SECTION_TOO_BIG;
+
+        if (Size > SizeLimit)
+            return STATUS_INSUFFICIENT_RESOURCES;
 
         Control = MiAllocateControlArea(NULL, FALSE);
         if (Control == NULL)
@@ -738,6 +741,9 @@ MmCreateSection(
 
         Status = (AllocationAttributes & SEC_LARGE_PAGES)
             ? MiSegmentCreateLarge(&MiSystem, Size, Protection, &MiControlAnonymousOps, Control, &Control->Segment)
+            : (AllocationAttributes & SEC_RESERVE)
+            ? MiSegmentCreateReserved(&MiSystem, Size, MI_PROT_EXECUTE_READWRITE, &MiControlAnonymousOps, Control,
+                                      &Control->Segment)
             : MiSegmentCreate(&MiSystem, MiSegmentPageFileBacked, Size, MI_PROT_EXECUTE_READWRITE,
                                &MiControlAnonymousOps, Control, NULL, 0, &Control->Segment);
         if (!NT_SUCCESS(Status))
@@ -1036,13 +1042,21 @@ MmMapViewOfSection(
     KAPC_STATE ApcState;
     NTSTATUS Status;
 
-    UNREFERENCED_PARAMETER(CommitSize);
-
     if (InheritDisposition != ViewShare && InheritDisposition != ViewUnmap)
         return STATUS_INVALID_PARAMETER;
 
     if (MI_PROCESS_OF(Process) == NULL)
         return STATUS_PROCESS_IS_TERMINATING;
+
+    if (CommitSize != 0 && !Section->Control->Image && Section->Control->Segment != NULL &&
+        Section->Control->Segment->Reserved)
+    {
+        Status = MiSegmentCommitPages(Section->Control->Segment,
+                                      (SectionOffset != NULL) ? ((ULONG64)SectionOffset->QuadPart >> PAGE_SHIFT) : 0,
+                                      ((ULONG64)CommitSize + PAGE_SIZE - 1) >> PAGE_SHIFT);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 
     if (Process != PsGetCurrentProcess())
     {

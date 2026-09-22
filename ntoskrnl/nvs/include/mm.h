@@ -308,6 +308,7 @@ NTSTATUS MiMakePageValid(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAd
 VOID MiReleasePageBacking(_Inout_ struct _MI_SYSTEM *System, _In_ ULONG Frame);
 NTSTATUS MiSetPrivatePageProtection(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress,
                                     _In_ ULONG Protection);
+BOOLEAN MiViewPageCommitted(_In_ PMI_VAD Vad, _In_ ULONG64 VirtualAddress);
 ULONG MiViewPageProtection(_In_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, _In_ ULONG64 VirtualAddress,
                            _In_ MI_PTE Pte);
 
@@ -375,6 +376,7 @@ typedef struct _MI_SEGMENT
     volatile LONG WritableUserViews;
     ULONG ActiveWriters;
     UCHAR Kind;
+    BOOLEAN Reserved;
     ULONG Protection;
     volatile LONG64 SizeInBytes;
     volatile LONG64 PageCount;
@@ -400,6 +402,10 @@ NTSTATUS MiSegmentCreate(_Inout_ struct _MI_SYSTEM *System, _In_ UCHAR Kind, _In
                          _In_ ULONG Protection, _In_opt_ PMI_FILE_OPS FileOps, _In_opt_ PVOID FileContext,
                          _In_opt_ PMI_SEGMENT_LAYOUT Layout, _In_ ULONG LayoutCount, _Out_ PMI_SEGMENT *Segment);
 NTSTATUS MiSegmentAdoptFrame(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Page, _In_ ULONG Frame);
+NTSTATUS MiSegmentCreateReserved(_Inout_ struct _MI_SYSTEM *System, _In_ ULONG64 SizeInBytes, _In_ ULONG Protection,
+                                 _In_opt_ PMI_FILE_OPS FileOps, _In_opt_ PVOID FileContext,
+                                 _Out_ PMI_SEGMENT *SegmentOut);
+NTSTATUS MiSegmentCommitPages(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 FirstPage, _In_ ULONG64 PageCount);
 NTSTATUS MiSegmentCreateLarge(_Inout_ PMI_SYSTEM System, _In_ ULONG64 SizeInBytes, _In_ ULONG Protection,
                               _In_opt_ PMI_FILE_OPS FileOps, _In_opt_ PVOID FileContext,
                               _Out_ PMI_SEGMENT *SegmentOut);
@@ -447,6 +453,8 @@ NTSTATUS MiSetRangeModified(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAd
 
 NTSTATUS MiProtectMappedView(_Inout_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, _In_ ULONG64 Start, _In_ ULONG64 End,
                              _In_ ULONG Protection);
+NTSTATUS MiSetMappedViewProtection(_Inout_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, _In_ ULONG64 Start,
+                                   _In_ ULONG64 End, _In_ ULONG Protection);
 VOID MiRemoveMappedView(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_VAD Vad);
 BOOLEAN MiTrimPrototypePage(_Inout_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, _In_ ULONG64 VirtualAddress,
                             _Inout_ PMI_PTE Slot, _In_ ULONG TableFrame);

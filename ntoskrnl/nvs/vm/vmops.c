@@ -80,14 +80,16 @@ MiPageStatusLocked(
 
     if (Pte == 0)
     {
-        *Committed = (BOOLEAN)(!MI_VAD_IS_DIRECT(Vad) && (Vad->Type != MiVadPrivate || Vad->MemCommit));
+        *Committed = (BOOLEAN)(!MI_VAD_IS_DIRECT(Vad) && (Vad->Type != MiVadPrivate || Vad->MemCommit) &&
+                               (Vad->Type == MiVadPrivate || MiViewPageCommitted(Vad, VirtualAddress)));
         *Protection = !*Committed ? 0 : (Vad->Type != MiVadPrivate)
                                             ? MiViewPageProtection(Space, Vad, VirtualAddress, Pte)
                                             : Vad->Protection;
         return;
     }
 
-    if (MiSoftKind(Pte) == MiSoftDecommitted)
+    if (MiSoftKind(Pte) == MiSoftDecommitted ||
+        (Vad->Type != MiVadPrivate && MiSoftKind(Pte) == MiSoftPrototype && !MiViewPageCommitted(Vad, VirtualAddress)))
     {
         *Committed = FALSE;
         *Protection = 0;
@@ -668,10 +670,31 @@ MiAllocateVirtualMemoryBounded(
 
     if (Vad->Type != MiVadPrivate)
     {
+        PMI_SEGMENT Segment = Vad->Segment;
+        ULONG64 FirstPage = Vad->SegmentPageOffset + ((Start - MI_VAD_START(Vad)) >> PAGE_SHIFT);
+
         *BaseAddress = Start;
         *RegionSize = End - Start;
+        if (Segment == NULL || !Segment->Reserved)
+        {
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+            return STATUS_SUCCESS;
+        }
+
+        MiSegmentReference(Segment);
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
-        return STATUS_SUCCESS;
+        Status = MiSegmentCommitPages(Segment, FirstPage, (End - Start) >> PAGE_SHIFT);
+        if (NT_SUCCESS(Status))
+        {
+            MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
+            Vad = MiVadLocate(Space, Start);
+            Status = (Vad != NULL && Vad->Segment == Segment && End <= MI_VAD_END(Vad))
+                         ? MiSetMappedViewProtection(Space, Vad, Start, End, Protection)
+                         : STATUS_CONFLICTING_ADDRESSES;
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        }
+        MiSegmentDereference(Segment);
+        return Status;
     }
 
     Charged = Vad->CommitCharge == 0 ? (LONG64)((End - Start) >> PAGE_SHIFT)
@@ -937,8 +960,13 @@ MiProtectVirtualMemoryEx(
         MiPageStatus(Space, Vad, Va, FALSE, &Committed, &Current);
         if (!Committed)
         {
+            BOOLEAN Reserved = (BOOLEAN)(Vad->Type != MiVadPrivate && !MiViewPageCommitted(Vad, Va));
+
+            if (Reserved && Va == Start)
+                *OldProtection = Vad->Protection;
+
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
-            return STATUS_NOT_COMMITTED;
+            return Reserved ? STATUS_SECTION_PROTECTION : STATUS_NOT_COMMITTED;
         }
 
         if (Va == Start)
@@ -1037,7 +1065,8 @@ MiQueryVirtualMemory(
         if (NextCommitted != Committed || NextProtection != Protection)
             break;
 
-        if (Vad->Type != MiVadImage && MiPtLookup(Space, Va, NULL) == NULL)
+        if (Vad->Type != MiVadImage && (Vad->Segment == NULL || !Vad->Segment->Reserved) &&
+            MiPtLookup(Space, Va, NULL) == NULL)
         {
             ULONG64 Next = MiPtNextTableBoundary(Space, Va);
 
