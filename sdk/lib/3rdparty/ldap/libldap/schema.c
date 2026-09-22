@@ -188,7 +188,7 @@ append_to_safe_string(safe_string * ss, char * s)
 		}
 		ss->val = temp;
 	}
-	strncpy(&ss->val[ss->pos], s, l);
+	memcpy(&ss->val[ss->pos], s, l);
 	ss->pos += l;
 	if ( ss->pos > 0 && LDAP_SPACE(ss->val[ss->pos-1]) )
 		ss->at_whsp = 1;

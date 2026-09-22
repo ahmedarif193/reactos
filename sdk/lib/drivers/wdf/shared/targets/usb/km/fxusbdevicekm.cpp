@@ -378,7 +378,7 @@ FxUsbDevice::GetString(
 {
     PUSB_STRING_DESCRIPTOR pDescriptor;
     PVOID buffer;
-    _URB_CONTROL_DESCRIPTOR_REQUEST urb;
+    URB urb;
     WDF_REQUEST_SEND_OPTIONS options, *pOptions;
     USB_COMMON_DESCRIPTOR common;
     ULONG length;

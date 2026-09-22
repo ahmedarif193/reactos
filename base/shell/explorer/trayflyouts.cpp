@@ -2906,16 +2906,15 @@ public:
             OpenDay();
             return;
         }
+        m_ViewYear = year;
         if (m_Level == 1)
         {
-            m_ViewYear = year;
             m_ViewMonth = month;
             m_Level = 0;
             EnsureCounts();
         }
         else
         {
-            m_ViewYear = year;
             m_Level = 1;
         }
         m_iHotCell = -1;

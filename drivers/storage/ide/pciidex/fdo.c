@@ -434,18 +434,18 @@ AtaCtrlPciCollectInformation(
     _In_ PCM_RESOURCE_LIST ResourcesTranslated)
 {
     PATA_CONTROLLER Controller = &FdoExt->Controller;
-    UCHAR Buffer[RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, u.type0.SubSystemID)];
-    PPCI_COMMON_HEADER PciData = (PPCI_COMMON_HEADER)Buffer; // Partial PCI header
+    PCI_COMMON_HEADER Buffer;
+    PPCI_COMMON_HEADER PciData = &Buffer; // Partial PCI header
     ULONG BytesRead;
 
     PAGED_CODE();
 
     BytesRead = Controller->GetBusData(Controller->BusInterfaceContext,
                                        PCI_WHICHSPACE_CONFIG,
-                                       Buffer,
+                                       &Buffer,
                                        0,
-                                       sizeof(Buffer));
-    if (BytesRead != sizeof(Buffer))
+                                       RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, u.type0.SubSystemID));
+    if (BytesRead != RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, u.type0.SubSystemID))
         return STATUS_IO_DEVICE_ERROR;
 
     AtaCtrlPciSaveData(Controller, PciData);

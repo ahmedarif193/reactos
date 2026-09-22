@@ -493,7 +493,8 @@ BOOL ParseCommandLine( int argc, char* argv[] )
                    DNS server provided was an IP or an FQDN. */
                 if( IsValidIP( Server ) )
                 {
-                    strncpy( State.DefaultServerAddress, Server, 16 );
+                    strncpy( State.DefaultServerAddress, Server, 15 );
+                    State.DefaultServerAddress[15] = '\0';
 
                     PerformInternalLookup( State.DefaultServerAddress,
                                            State.DefaultServer );
@@ -501,6 +502,7 @@ BOOL ParseCommandLine( int argc, char* argv[] )
                 else
                 {
                     strncpy( State.DefaultServer, Server, 255 );
+                    State.DefaultServer[255] = '\0';
 
                     PerformInternalLookup( State.DefaultServer,
                                            State.DefaultServerAddress );
@@ -825,6 +827,7 @@ int main( int argc, char* argv[] )
     strncpy( State.DefaultServerAddress,
              pNetInfo->DnsServerList.IpAddress.String,
              15 );
+    State.DefaultServerAddress[15] = '\0';
 
     HeapFree( ProcessHeap, 0, pNetInfo );
 

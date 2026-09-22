@@ -62,7 +62,7 @@ PITEMID_CHILD ILCreateNetConnectItem(INetConnection * pItem)
     ((PNETCONIDSTRUCT)(pidl->mkid.abID))->Signature = NETCONIDSTRUCT_SIG;
 
     /* Copy the connection properties */
-    pnetid = ILGetConnData(pidl);
+    pnetid = (PNETCONIDSTRUCT)pidl->mkid.abID;
     memset(pnetid->Unknown, 0, sizeof(pnetid->Unknown));
     pnetid->clsidThisObject = pProperties->clsidThisObject;
     pnetid->guidId = pProperties->guidId;

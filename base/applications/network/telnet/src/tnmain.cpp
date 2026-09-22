@@ -117,10 +117,10 @@ struct cmdHistory * cfgets (char *buf, unsigned int length, struct cmdHistory *c
 					// crn@ozemail.com.au
 					if (cmdhist != NULL) {
 						if (!strcmp(buf, ""))
-							strncpy(buf, cmdhist->cmd, 79);
+							lstrcpynA(buf, cmdhist->cmd, 80);
 						else if (cmdhist->prev != NULL) {
 							cmdhist = cmdhist->prev;
-							strncpy(buf, cmdhist->cmd, 79);
+							lstrcpynA(buf, cmdhist->cmd, 80);
 						}
 						current = strlen(buf);
 					}
@@ -132,7 +132,7 @@ struct cmdHistory * cfgets (char *buf, unsigned int length, struct cmdHistory *c
 					if (cmdhist != NULL) {
 						if (cmdhist->next != NULL) {
 							cmdhist = cmdhist->next;
-							strncpy(buf, cmdhist->cmd, 79);
+							lstrcpynA(buf, cmdhist->cmd, 80);
 						} else {
 							strncpy(buf, "", 79);
 						}

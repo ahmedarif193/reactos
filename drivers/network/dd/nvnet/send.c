@@ -401,7 +401,11 @@ NvNetSendPacket(
     _In_ ULONG TotalLength)
 {
     PSCATTER_GATHER_LIST SgList;
-    SCATTER_GATHER_LIST LocalSgList;
+    union
+    {
+        SCATTER_GATHER_LIST List;
+        UCHAR Buffer[FIELD_OFFSET(SCATTER_GATHER_LIST, Elements) + sizeof(SCATTER_GATHER_ELEMENT)];
+    } LocalSgList;
     PNVNET_TCB Tcb;
     ULONG Flags;
 
@@ -448,10 +452,10 @@ NvNetSendPacket(
 
             Flags |= NV_TCB_COALESCE;
 
-            LocalSgList.NumberOfElements = 1;
-            LocalSgList.Elements[0].Address = CoalesceBuffer->PhysicalAddress;
-            LocalSgList.Elements[0].Length = TotalLength;
-            SgList = &LocalSgList;
+            LocalSgList.List.NumberOfElements = 1;
+            LocalSgList.List.Elements[0].Address = CoalesceBuffer->PhysicalAddress;
+            LocalSgList.List.Elements[0].Length = TotalLength;
+            SgList = &LocalSgList.List;
 
             Tcb = Adapter->Send.CurrentTcb;
             Tcb->Buffer = CoalesceBuffer;

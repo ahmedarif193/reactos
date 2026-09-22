@@ -104,7 +104,7 @@ char *hookup(const char *host, int port)
 	hisctladdr.sin_addr.s_addr = inet_addr(host);
 	if (hisctladdr.sin_addr.s_addr != (unsigned long)-1) {
 		hisctladdr.sin_family = AF_INET;
-		(void) strncpy(hostnamebuf, host, sizeof(hostnamebuf));
+		(void) strncpy(hostnamebuf, host, sizeof(hostnamebuf) - 1);
 	} else {
 		hp = gethostbyname(host);
 		if (hp == NULL) {
@@ -116,7 +116,7 @@ char *hookup(const char *host, int port)
 		hisctladdr.sin_family = hp->h_addrtype;
 		bcopy(hp->h_addr_list[0],
 			 (caddr_t)&hisctladdr.sin_addr, hp->h_length);
-		(void) strncpy(hostnamebuf, hp->h_name, sizeof(hostnamebuf));
+		(void) strncpy(hostnamebuf, hp->h_name, sizeof(hostnamebuf) - 1);
 	}
 	hostname = hostnamebuf;
 	s = socket(hisctladdr.sin_family, SOCK_STREAM, 0);
@@ -1379,18 +1379,18 @@ void pswitch(int flag)
 	ip->ntflg = ntflag;
 	ntflag = op->ntflg;
 	(void) strncpy(ip->nti, ntin, 16);
-	(ip->nti)[strlen(ip->nti)] = '\0';
+	(ip->nti)[16] = '\0';
 	(void) strcpy(ntin, op->nti);
 	(void) strncpy(ip->nto, ntout, 16);
-	(ip->nto)[strlen(ip->nto)] = '\0';
+	(ip->nto)[16] = '\0';
 	(void) strcpy(ntout, op->nto);
 	ip->mapflg = mapflag;
 	mapflag = op->mapflg;
 	(void) strncpy(ip->mi, mapin, MAXPATHLEN - 1);
-	(ip->mi)[strlen(ip->mi)] = '\0';
+	(ip->mi)[MAXPATHLEN - 1] = '\0';
 	(void) strcpy(mapin, op->mi);
 	(void) strncpy(ip->mo, mapout, MAXPATHLEN - 1);
-	(ip->mo)[strlen(ip->mo)] = '\0';
+	(ip->mo)[MAXPATHLEN - 1] = '\0';
 	(void) strcpy(mapout, op->mo);
 //	(void) signal(SIGINT, oldintr);
 	if (abrtflag) {

@@ -172,8 +172,8 @@ cmdShare(
         }
     }
 
-    printf("pszShareName: '%S'\n", pszShareName);
-    printf("pszSharePath: '%S'\n", pszSharePath);
+    printf("pszShareName: '%S'\n", pszShareName ? pszShareName : L"(null)");
+    printf("pszSharePath: '%S'\n", pszSharePath ? pszSharePath : L"(null)");
 
     if (pszShareName == NULL && pszSharePath == NULL)
     {

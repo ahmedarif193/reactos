@@ -3604,7 +3604,7 @@ BOOL WINAPI AddConditionalAce(PACL acl, DWORD ace_revision, DWORD ace_flags, UCH
     ace->Mask = access_mask;
     memcpy(&ace->SidStart, sid, sid_length);
     conditional_compile_expression(&expression,
-                                   (PBYTE)&ace->SidStart + sid_length);
+                                   (PBYTE)ace + FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_ACE, SidStart) + sid_length);
 
     status = RtlAddAce(acl, ace_revision, MAXULONG, ace, ace_length);
     HeapFree(GetProcessHeap(), 0, ace);

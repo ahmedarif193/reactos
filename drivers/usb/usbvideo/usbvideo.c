@@ -373,6 +373,7 @@ UsbVideo_SelectStreamingConfiguration(IN PUSBVIDEO_DEVICE_EXTENSION Dx)
     ExFreePool(Urb);
 }
 
+#if DBG
 static
 UCHAR
 UsbVideo_GetPuControlSelector(IN UCHAR PropertyType)
@@ -458,6 +459,7 @@ UsbVideo_VcGetOrSetProperty(IN PUSBVIDEO_DEVICE_EXTENSION Dx,
     ExFreePoolWithTag(Urb, USBVIDEO_TAG);
     return Status;
 }
+#endif
 
 static
 PUSBVIDEO_CONTROL_PROPERTY
