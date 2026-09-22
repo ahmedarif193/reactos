@@ -104,6 +104,7 @@
 #define V3D_L2TCACTL_FLM_CLEAN          (2u << 1)   /* write back dirty lines  */
 #define V3D_CTL_L2TFLSTA                0x0034
 #define V3D_CTL_L2TFLEND                0x0038
+
 #define V3D_CTL_INT_STS                 0x0050
 #define V3D_CTL_INT_SET                 0x0054
 #define V3D_CTL_INT_CLR                 0x0058
