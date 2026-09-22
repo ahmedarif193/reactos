@@ -55,7 +55,7 @@ MiSegmentDefaultProto(
         return MiSoftMake(MiSoftSubsection, Segment->Protection, Page << (PAGE_SHIFT - MI_SECTOR_SHIFT));
 
     if (Segment->Kind == MiSegmentPageFileBacked)
-        return MiSoftMake(MiSoftDemandZero, Segment->Protection, 0);
+        return MiSoftMake(Segment->Reserved ? MiSoftDecommitted : MiSoftDemandZero, Segment->Protection, 0);
 
     return 0;
 }
@@ -284,8 +284,9 @@ MiSegmentDelete(
     MI_FREE(Segment);
 }
 
+static
 NTSTATUS
-MiSegmentCreate(
+MiSegmentCreateEx(
     _Inout_ PMI_SYSTEM System,
     _In_ UCHAR Kind,
     _In_ ULONG64 SizeInBytes,
@@ -294,6 +295,7 @@ MiSegmentCreate(
     _In_opt_ PVOID FileContext,
     _In_opt_ PMI_SEGMENT_LAYOUT Layout,
     _In_ ULONG LayoutCount,
+    _In_ BOOLEAN Reserved,
     _Out_ PMI_SEGMENT *SegmentOut)
 {
     ULONG64 PageCount = MI_PAGE_ALIGN_UP(SizeInBytes) >> PAGE_SHIFT;
@@ -323,6 +325,7 @@ MiSegmentCreate(
     RtlZeroMemory(Segment, sizeof(*Segment));
     Segment->System = System;
     Segment->Kind = Kind;
+    Segment->Reserved = Reserved;
     Segment->Protection = Protection & MI_PROT_ACCESS_MASK;
     MI_ATOMIC_WRITE64(&Segment->SizeInBytes, (LONG64)SizeInBytes);
     Segment->ReferenceCount = 1;
@@ -335,7 +338,7 @@ MiSegmentCreate(
     if (FileOps != NULL)
         Segment->FileOps = *FileOps;
 
-    if (Kind == MiSegmentPageFileBacked && !MiSegmentChargeCommit(Segment, (LONG64)PageCount))
+    if (Kind == MiSegmentPageFileBacked && !Reserved && !MiSegmentChargeCommit(Segment, (LONG64)PageCount))
     {
         MI_FREE(Segment);
         return STATUS_COMMITMENT_LIMIT;
@@ -394,6 +397,81 @@ MiSegmentCreate(
 
     *SegmentOut = Segment;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+MiSegmentCreate(
+    _Inout_ PMI_SYSTEM System,
+    _In_ UCHAR Kind,
+    _In_ ULONG64 SizeInBytes,
+    _In_ ULONG Protection,
+    _In_opt_ PMI_FILE_OPS FileOps,
+    _In_opt_ PVOID FileContext,
+    _In_opt_ PMI_SEGMENT_LAYOUT Layout,
+    _In_ ULONG LayoutCount,
+    _Out_ PMI_SEGMENT *SegmentOut)
+{
+    return MiSegmentCreateEx(System, Kind, SizeInBytes, Protection, FileOps, FileContext, Layout, LayoutCount, FALSE,
+                             SegmentOut);
+}
+
+NTSTATUS
+MiSegmentCreateReserved(
+    _Inout_ PMI_SYSTEM System,
+    _In_ ULONG64 SizeInBytes,
+    _In_ ULONG Protection,
+    _In_opt_ PMI_FILE_OPS FileOps,
+    _In_opt_ PVOID FileContext,
+    _Out_ PMI_SEGMENT *SegmentOut)
+{
+    return MiSegmentCreateEx(System, MiSegmentPageFileBacked, SizeInBytes, Protection, FileOps, FileContext, NULL, 0,
+                             TRUE, SegmentOut);
+}
+
+NTSTATUS
+MiSegmentCommitPages(
+    _Inout_ PMI_SEGMENT Segment,
+    _In_ ULONG64 FirstPage,
+    _In_ ULONG64 PageCount)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    LONG64 Needed = 0;
+    ULONG64 Last;
+    ULONG64 Page;
+
+    if (Segment->Kind != MiSegmentPageFileBacked || !Segment->Reserved)
+        return STATUS_SUCCESS;
+
+    MI_MUTEX_ACQUIRE(&Segment->Lock);
+
+    Last = MiSegmentPages(Segment);
+    if (FirstPage < Last && PageCount < Last - FirstPage)
+        Last = FirstPage + PageCount;
+
+    for (Page = FirstPage; Page < Last; Page++)
+    {
+        if (MiSoftKind(MiArchPteRead(MiSegmentProto(Segment, Page))) == MiSoftDecommitted)
+            Needed++;
+    }
+
+    if (Needed != 0 && !MiSegmentChargeCommit(Segment, Needed))
+    {
+        Status = STATUS_COMMITMENT_LIMIT;
+    }
+    else
+    {
+        for (Page = FirstPage; Page < Last; Page++)
+        {
+            PMI_PTE Proto = MiSegmentProto(Segment, Page);
+            MI_PTE Pte = MiArchPteRead(Proto);
+
+            if (MiSoftKind(Pte) == MiSoftDecommitted)
+                MiArchPteWrite(Proto, MiSoftMake(MiSoftDemandZero, MiSoftProtection(Pte), 0));
+        }
+    }
+
+    MI_MUTEX_RELEASE(&Segment->Lock);
+    return Status;
 }
 
 NTSTATUS
@@ -900,6 +978,22 @@ MiViewDefaultProtection(
     return MiSoftProtection(MiArchPteRead(MiSegmentProto(Segment, Page))) & MI_PROT_ACCESS_MASK;
 }
 
+BOOLEAN
+MiViewPageCommitted(
+    _In_ PMI_VAD Vad,
+    _In_ ULONG64 VirtualAddress)
+{
+    PMI_SEGMENT Segment = Vad->Segment;
+    ULONG64 Page;
+
+    if (Segment == NULL || !Segment->Reserved)
+        return TRUE;
+
+    Page = Vad->SegmentPageOffset + ((VirtualAddress - MI_VAD_START(Vad)) >> PAGE_SHIFT);
+    return (BOOLEAN)(Page < MiSegmentPages(Segment) &&
+                     MiSoftKind(MiArchPteRead(MiSegmentProto(Segment, Page))) != MiSoftDecommitted);
+}
+
 ULONG
 MiViewPageProtection(
     _In_ PMI_ADDRESS_SPACE Space,
@@ -1114,6 +1208,9 @@ MiResolvePrototypeFault(
     ProtoPte = MiArchPteRead(Proto);
     Frame = (ULONG)MiSoftValue(ProtoPte);
 
+    if (MiSoftKind(ProtoPte) == MiSoftDecommitted)
+        return STATUS_ACCESS_VIOLATION;
+
     if (!((MiSoftKind(ProtoPte) == MiSoftResident &&
            MiPfnShareIncrementIfMapped(&Space->System->Pfn, Frame, Proto, ProtoPte)) ||
           (MiSoftKind(ProtoPte) == MiSoftTransition &&
@@ -1236,7 +1333,7 @@ MiViewProtectionAllowed(
 }
 
 NTSTATUS
-MiProtectMappedView(
+MiSetMappedViewProtection(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ PMI_VAD Vad,
     _In_ ULONG64 Start,
@@ -1245,9 +1342,6 @@ MiProtectMappedView(
 {
     PMI_SYSTEM System = Space->System;
     ULONG64 Va;
-
-    if (!MiViewProtectionAllowed(Vad->Segment, Vad->MaximumProtection, Protection))
-        return STATUS_SECTION_PROTECTION;
 
     if (Vad->Type == MiVadImage && MI_PROT_IS_WRITABLE(Protection))
         Protection = (Protection & ~MI_PROT_ACCESS_MASK) |
@@ -1288,6 +1382,20 @@ MiProtectMappedView(
     }
 
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+MiProtectMappedView(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ PMI_VAD Vad,
+    _In_ ULONG64 Start,
+    _In_ ULONG64 End,
+    _In_ ULONG Protection)
+{
+    if (!MiViewProtectionAllowed(Vad->Segment, Vad->MaximumProtection, Protection))
+        return STATUS_SECTION_PROTECTION;
+
+    return MiSetMappedViewProtection(Space, Vad, Start, End, Protection);
 }
 
 static
@@ -1672,7 +1780,8 @@ MiSegmentExtend(
         {
             LONG64 Extra = (LONG64)(NewPages - MiSegmentPages(Segment));
 
-            if (Segment->Kind == MiSegmentPageFileBacked && !MiSegmentChargeCommit(Segment, Extra))
+            if (Segment->Kind == MiSegmentPageFileBacked && !Segment->Reserved &&
+                !MiSegmentChargeCommit(Segment, Extra))
             {
                 Status = STATUS_COMMITMENT_LIMIT;
             }

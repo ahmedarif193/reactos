@@ -613,10 +613,10 @@ MiProtectVirtualMemoryNt(
     {
         *BaseAddress = (PVOID)(ULONG_PTR)Base;
         *NumberOfBytesToProtect = (SIZE_T)Size;
-
-        if (OldAccessProtection != NULL)
-            *OldAccessProtection = MiProtectionToWin32(Old);
     }
+
+    if ((NT_SUCCESS(Status) || Status == STATUS_SECTION_PROTECTION) && OldAccessProtection != NULL)
+        *OldAccessProtection = MiProtectionToWin32(Old);
 
     return Status;
 }
@@ -681,6 +681,18 @@ NtProtectVirtualMemory(
                                       (BOOLEAN)(ExGetPreviousMode() != KernelMode &&
                                                 MiDynamicCodeBlocked(Target.Process)));
     MiReleaseTargetProcess(&Target);
+
+    if (Status == STATUS_SECTION_PROTECTION)
+    {
+        _SEH2_TRY
+        {
+            *UnsafeOldAccessProtection = OldProtection;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        _SEH2_END;
+    }
 
     if (!NT_SUCCESS(Status))
         return Status;
