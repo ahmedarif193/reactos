@@ -497,6 +497,15 @@ MiCreateImageControlArea(
     if (FileSize.QuadPart == 0)
         return STATUS_INVALID_FILE_FOR_SECTION;
 
+    if (Pointers->SharedCacheMap != NULL || Pointers->DataSectionObject != NULL)
+    {
+        IO_STATUS_BLOCK IoStatus;
+
+        CcFlushCache(Pointers, NULL, 0, &IoStatus);
+        if (!NT_SUCCESS(IoStatus.Status))
+            return IoStatus.Status;
+    }
+
     MI_RW_ACQUIRE_EXCLUSIVE(&MiControlLock);
 
     while (!MiLookupControlArea(Pointers, TRUE, &Control))
