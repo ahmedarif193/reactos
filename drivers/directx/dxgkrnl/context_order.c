@@ -17,6 +17,7 @@
 #define DXGK_CONTEXT_ORDER_TYPE_WAIT            2
 #define DXGK_CONTEXT_ORDER_TYPE_SIGNAL          3
 #define DXGK_CONTEXT_ORDER_TYPE_COMPLETION      4
+#define DXGK_CONTEXT_ORDER_MAX_RETIRE_SIGNALS   4
 
 typedef struct _DXGK_CONTEXT_ORDER_OPERATION DXGK_CONTEXT_ORDER_OPERATION, *PDXGK_CONTEXT_ORDER_OPERATION;
 
@@ -44,6 +45,10 @@ struct _DXGK_CONTEXT_ORDER_OPERATION
     PDXGK_CONTEXT_ORDER_COMPLETION_ROUTINE CompletionRoutine;
     PDXGK_CONTEXT_ORDER_COMPLETION_RELEASE_ROUTINE CompletionReleaseRoutine;
     DPT_SCOPE TraceStream;
+    /* Signals that follow this work with nothing between them. They run when
+     * the work retires, so later work need not wait behind a stream entry. */
+    ULONG RetireSignalCount;
+    PDXGKRNL_CONTEXT_SYNC_CAPTURE RetireSignals[DXGK_CONTEXT_ORDER_MAX_RETIRE_SIGNALS];
     DXGK_CONTEXT_ORDER_MARKER Markers[ANYSIZE_ARRAY];
 };
 
@@ -204,6 +209,72 @@ static VOID DxgkpContextOrderReleaseSync(_Inout_ PDXGK_CONTEXT_ORDER_OPERATION O
         KeSetEvent(Capture->EnqueueEvent, IO_NO_INCREMENT, FALSE);
     DxgkContextSyncRelease(Capture);
     ExFreePoolWithTag(Capture, DXGK_CONTEXT_ORDER_OPERATION_TAG);
+}
+
+/* The caller holds the context's admission mutex. The stream lock orders the
+ * attachment against retirement, which unlinks the marker under that lock
+ * before it reads the attachments. */
+static BOOLEAN DxgkpContextOrderAttachRetireSignal(_Inout_ PDXGKRNL_CONTEXT Context, _In_ PDXGKRNL_CONTEXT_SYNC_CAPTURE Capture)
+{
+    PDXGK_CONTEXT_ORDER_OPERATION Operation;
+    PDXGK_CONTEXT_ORDER_MARKER Marker;
+    BOOLEAN Attached = FALSE;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Context->StreamLock, &OldIrql);
+    if (!IsListEmpty(&Context->StreamOperationList))
+    {
+        /* Only the newest entry qualifies: a wait, signal or completion
+         * after the work must keep its place ahead of this signal. */
+        Marker = CONTAINING_RECORD(Context->StreamOperationList.Blink, DXGK_CONTEXT_ORDER_MARKER, ContextEntry);
+        Operation = Marker->Operation;
+        if (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WORK &&
+            Operation->Payload != NULL &&
+            Operation->RetireSignalCount < DXGK_CONTEXT_ORDER_MAX_RETIRE_SIGNALS)
+        {
+            Operation->RetireSignals[Operation->RetireSignalCount++] = Capture;
+            Attached = TRUE;
+        }
+    }
+    KeReleaseSpinLock(&Context->StreamLock, OldIrql);
+    return Attached;
+}
+
+/* Matches a stream signal: it follows completed work whatever that work's
+ * status, while a cancelled or stopping stream only releases a CPU waiter.
+ * Every caller owns the admission mutex and not the device mutex. */
+static VOID DxgkpContextOrderRunRetireSignals(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ PDXGK_CONTEXT_ORDER_OPERATION Operation, _In_ NTSTATUS TerminalStatus)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Operation->RetireSignalCount; ++Index)
+    {
+        PDXGKRNL_CONTEXT_SYNC_CAPTURE Capture = Operation->RetireSignals[Index];
+        PDXGKRNL_DEVICE WakeDevice = Capture->Device;
+
+        Operation->RetireSignals[Index] = NULL;
+        if (TerminalStatus != STATUS_CANCELLED &&
+            TerminalStatus != STATUS_DEVICE_REMOVED &&
+            InterlockedCompareExchange(&Context->StreamStopping, 0, 0) == 0)
+        {
+            if (WakeDevice != NULL && !DxgkReferenceDevice(WakeDevice))
+                WakeDevice = NULL;
+            (VOID)DxgkContextSyncExecute(Capture);
+            if (WakeDevice != NULL)
+            {
+                DxgkContextOrderWakeDevice(WakeDevice);
+                DxgkDereferenceDevice(WakeDevice);
+            }
+        }
+        else if (Capture->EnqueueEvent != NULL &&
+                 InterlockedCompareExchange(&Capture->Executed, 0, 0) == 0)
+        {
+            KeSetEvent(Capture->EnqueueEvent, IO_NO_INCREMENT, FALSE);
+        }
+        DxgkContextSyncRelease(Capture);
+        ExFreePoolWithTag(Capture, DXGK_CONTEXT_ORDER_OPERATION_TAG);
+    }
+    Operation->RetireSignalCount = 0;
 }
 
 static VOID
@@ -844,6 +915,21 @@ NTSTATUS DxgkContextOrderAdmitSignal(_In_reads_(ContextCount) PDXGKRNL_CONTEXT c
         StreamHandles[ContextIndex] = Contexts[ContextIndex]->Mms2ContextStream;
         Sequences[ContextIndex] = 0;
     }
+    /* A signal directly behind unretired work of its only context does not
+     * need a stream entry. Queued there, it would hold every later packet of
+     * the context until that work retired, one GPU job in flight at a time. */
+    if (ContextCount == 1 &&
+        (SignalFlags & DXGK_CONTEXT_SYNC_SIGNAL_AT_SUBMISSION) == 0 &&
+        DxgkpContextOrderAttachRetireSignal(Contexts[0], Capture))
+    {
+        Operation->Payload = NULL;
+        while (LockedCount != 0)
+            KeReleaseMutex(&SortedContexts[--LockedCount]->StreamAdmissionMutex, FALSE);
+        /* The work may already be complete and only awaiting its drain. */
+        DxgkContextOrderScheduleReferenced(Contexts[0]);
+        DxgkpContextOrderFreeUnpublishedOperation(Operation);
+        return STATUS_SUCCESS;
+    }
     Status = DxgkpContextOrderCaptureInterface(Contexts[0], TRUE, &Interface);
     if (!NT_SUCCESS(Status))
         goto Failure;
@@ -1439,6 +1525,8 @@ DxgkContextOrderRetire(
         Operation->TerminalStatus = Retirement->TerminalStatus;
     if (Operation->RetireCallback != NULL)
         Operation->RetireCallback(Operation, Retirement);
+    if (Operation->RetireSignalCount != 0)
+        DxgkpContextOrderRunRetireSignals(Context, Operation, Retirement->TerminalStatus);
     DxgkDereferenceContext(Context);
     if (InterlockedDecrement(&Operation->RemainingRetirements) != 0)
         return;
