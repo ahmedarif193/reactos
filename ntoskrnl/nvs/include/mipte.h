@@ -43,6 +43,8 @@
 #define MI_LEAF_WRITECOMBINE      0x10
 #define MI_LEAF_DEVICE            0x20
 #define MI_LEAF_HARDWARE_DIRTY    0x40
+#define MI_LEAF_PFN_CACHE         0x80 /* Resolve MDL cache attributes per physical page. */
+#define MI_LEAF_CACHE_MASK        (MI_LEAF_NOCACHE | MI_LEAF_WRITECOMBINE | MI_LEAF_DEVICE)
 
 typedef ULONG64 MI_PTE, *PMI_PTE;
 

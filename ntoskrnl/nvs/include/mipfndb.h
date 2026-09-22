@@ -60,7 +60,11 @@ typedef struct _MI_PFN
         struct _MI_ADDRESS_SPACE *PageTableOwner;
     };
     ULONG PteFrame;
-    volatile LONG UsedEntries;
+    union
+    {
+        volatile LONG UsedEntries; /* Page-table PFNs only. */
+        volatile LONG CacheFlags;  /* Data PFNs: MI_LEAF_CACHE_MASK. */
+    };
 } MI_PFN, *PMI_PFN;
 
 C_ASSERT(sizeof(MI_PFN) == 40);
@@ -107,6 +111,21 @@ typedef struct _MI_PFN_DATABASE
     ULONG ContiguousHint;
     volatile LONG64 ZeroedOnDemand;
 } MI_PFN_DATABASE, *PMI_PFN_DATABASE;
+
+/* MDL aliases of managed RAM must retain the allocation's cache attributes.
+ * Device PFNs outside the RAM database still use the caller's cache type. */
+static __inline ULONG
+MiPfnMappingFlags(_In_ PMI_PFN_DATABASE Db, _In_ MI_FRAME_NUMBER Frame, _In_ ULONG Flags)
+{
+    Flags &= ~MI_LEAF_PFN_CACHE;
+    if (Frame < Db->FrameCount && Db->Pfn[Frame].State != MiPageUnusable)
+    {
+        ULONG Cache = (MI_PFN_FLAGS(&Db->Pfn[Frame]) & MI_PFN_FLAG_PAGE_TABLE)
+                          ? 0 : (ULONG)MI_ATOMIC_READ32(&Db->Pfn[Frame].CacheFlags);
+        Flags = (Flags & ~MI_LEAF_CACHE_MASK) | (Cache & MI_LEAF_CACHE_MASK);
+    }
+    return Flags;
+}
 
 VOID MiPfnDbInitialize(_Out_ PMI_PFN_DATABASE Db, _In_ PMI_PFN Array, _In_ ULONG FrameCount, _In_ ULONG CpuCount);
 VOID MiPfnMarkInUse(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG FirstFrame, _In_ ULONG Count);

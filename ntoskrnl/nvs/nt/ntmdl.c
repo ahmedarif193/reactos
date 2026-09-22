@@ -298,15 +298,10 @@ MmMapLockedPagesSpecifyCache(
     PPFN_NUMBER Pages = MmGetMdlPfnArray(Mdl);
     ULONG Count = MiMdlPages(Mdl);
     ULONG Protection = (Priority & MdlMappingNoWrite) ? MI_PROT_READONLY : MI_PROT_READWRITE;
-    BOOLEAN WriteCombinedRam;
     NTSTATUS Status;
     ULONG64 Base;
 
     ASSERT(Mdl->ByteCount != 0);
-
-    WriteCombinedRam = (BOOLEAN)(!(Mdl->MdlFlags & MDL_IO_SPACE) && Pages[0] < MiSystem.Pfn.FrameCount &&
-                                 !(MI_PFN_FLAGS(&MiSystem.Pfn.Pfn[Pages[0]]) & MI_PFN_FLAG_PAGE_TABLE) &&
-                                 MiSystem.Pfn.Pfn[Pages[0]].UsedEntries == MI_NT_PFN_WRITE_COMBINED);
 
     if (AccessMode == KernelMode)
     {
@@ -314,9 +309,7 @@ MmMapLockedPagesSpecifyCache(
         ASSERT(Mdl->MdlFlags & (MDL_PAGES_LOCKED | MDL_PARTIAL | MDL_IO_SPACE | MDL_SOURCE_IS_NONPAGED_POOL));
 
         Status = MiMapFrames(&MiSystem, (const MI_FRAME_NUMBER *)Pages, Count,
-                             (Mdl->MdlFlags & MDL_IO_SPACE) ? MiCacheTypeFromNt(CacheType)
-                             : (WriteCombinedRam ? MiCacheWriteCombined
-                                                 : ((CacheType & 0xFF) == MmNonCached ? MiCacheNone : MiCacheFull)),
+                             MiCacheTypeFromNt(CacheType),
                              Protection, &Base);
         if (!NT_SUCCESS(Status))
         {
@@ -341,10 +334,8 @@ MmMapLockedPagesSpecifyCache(
     Base = (ULONG64)(ULONG_PTR)BaseAddress;
     Status = MiMapFramesUser(MiSpaceOfProcess(PsGetCurrentProcess()), (const MI_FRAME_NUMBER *)Pages, Count,
                              Protection,
-                             (Mdl->MdlFlags & MDL_IO_SPACE)
-                                 ? (((CacheType & 0xFF) == MmNonCached) ? MI_LEAF_NOCACHE
-                                    : (((CacheType & 0xFF) == MmWriteCombined) ? MI_LEAF_WRITECOMBINE : 0))
-                                 : (WriteCombinedRam ? MI_LEAF_WRITECOMBINE : 0),
+                             ((CacheType & 0xFF) == MmNonCached) ? MI_LEAF_NOCACHE
+                                 : (((CacheType & 0xFF) == MmWriteCombined) ? MI_LEAF_WRITECOMBINE : 0),
                              TRUE, &Base);
     if (!NT_SUCCESS(Status))
         ExRaiseStatus(Status);
@@ -486,8 +477,8 @@ MmAllocatePagesForMdlEx(
         if (!(Flags & MM_DONT_ZERO_ALLOCATION))
             RtlZeroMemory(MiArchMapFrame(Frame), PAGE_SIZE);
 
-        if ((CacheType & 0xFF) == MmWriteCombined)
-            MiSystem.Pfn.Pfn[Frame].UsedEntries = MI_NT_PFN_WRITE_COMBINED;
+        MiSystem.Pfn.Pfn[Frame].CacheFlags = ((CacheType & 0xFF) == MmNonCached) ? MI_LEAF_NOCACHE
+            : (((CacheType & 0xFF) == MmWriteCombined) ? MI_LEAF_WRITECOMBINE : 0);
 
         Pages[Got++] = Frame;
     }
@@ -553,7 +544,7 @@ MmFreePagesFromMdl(
 
     for (i = 0; i < Count && Pages[i] != MI_MDL_PFN_END; i++)
     {
-        MiSystem.Pfn.Pfn[Pages[i]].UsedEntries = 0;
+        MiSystem.Pfn.Pfn[Pages[i]].CacheFlags = 0;
         MiPfnShareDecrement(&MiSystem.Pfn, (ULONG)Pages[i], TRUE);
         MiReturnCommit(&MiSystem.SystemSpace, 1);
         Pages[i] = MI_MDL_PFN_END;

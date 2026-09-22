@@ -79,7 +79,9 @@ MmMapLockedPagesWithReservedMapping(
 
     if (!NT_SUCCESS(MiSystemMapFrames(&MiSystem, Base, (const MI_FRAME_NUMBER *)MmGetMdlPfnArray(Mdl), Count,
                                       MI_PROT_READWRITE,
-                                      ((CacheType & 0xFF) == MmNonCached) ? MI_LEAF_NOCACHE : 0, FALSE)))
+                                      MI_LEAF_PFN_CACHE |
+                                      (((CacheType & 0xFF) == MmNonCached) ? MI_LEAF_NOCACHE :
+                                       ((CacheType & 0xFF) == MmWriteCombined) ? MI_LEAF_WRITECOMBINE : 0), FALSE)))
     {
         return NULL;
     }
@@ -104,4 +106,3 @@ MmUnmapReservedMapping(
     Mdl->MdlFlags &= ~(MDL_MAPPED_TO_SYSTEM_VA | MDL_PARTIAL_HAS_BEEN_MAPPED);
     Mdl->MappedSystemVa = NULL;
 }
-

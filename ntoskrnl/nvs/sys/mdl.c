@@ -109,6 +109,9 @@ MiLockPages(
                 {
                     KIRQL OldIrql = MiPfnLock(Db, (ULONG)Frame);
 
+                    if (!(MI_PFN_FLAGS(&Db->Pfn[Frame]) & MI_PFN_FLAG_PAGE_TABLE))
+                        MI_ATOMIC_WRITE32(&Db->Pfn[Frame].CacheFlags,
+                                          MiArchPteLeafFlags(Pte) & MI_LEAF_CACHE_MASK);
                     MiPfnReferenceLocked(Db, (ULONG)Frame);
                     MiPfnUnlock(Db, (ULONG)Frame, OldIrql);
                 }
@@ -188,7 +191,7 @@ MiMapFrames(
     if (*Base == 0)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    Status = MiSystemMapFrames(System, *Base, Frames, PageCount, Protection, Flags, FALSE);
+    Status = MiSystemMapFrames(System, *Base, Frames, PageCount, Protection, Flags | MI_LEAF_PFN_CACHE, FALSE);
     if (!NT_SUCCESS(Status))
     {
         MiReleaseSystemPtes(System, *Base, PageCount);
