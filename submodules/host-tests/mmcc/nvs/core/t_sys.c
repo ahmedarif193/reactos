@@ -1009,6 +1009,26 @@ SysMdlCacheAttributes(void)
         MiUnmapFrames(&World.System, Kernel, 3);
     }
 
+    /* Legacy MDL allocations choose cache attributes on the first mapping;
+     * subsequent kernel/user aliases must preserve that choice. */
+    for (Requested = 0; Requested < RTL_NUMBER_OF(Types); Requested++)
+    {
+        Frames[0] = MiPfnAllocatePage(&World.System.Pfn, 0);
+        CHECK(Frames[0] != MI_FRAME_INVALID);
+        World.PfnArray[Frames[0]].CacheFlags = MI_PFN_CACHE_UNASSIGNED;
+        User = 0;
+        CHECK(NT_SUCCESS(MiMapFramesUser(&Process, Frames, 1, MI_PROT_READWRITE,
+                                         Flags[Requested], TRUE, &User)));
+        CHECK(NT_SUCCESS(MiMapFrames(&World.System, Frames, 1, Types[(Requested + 1) % 3],
+                                     MI_PROT_READWRITE, &Kernel)));
+        CHECK(MiPtTranslate(&World.System.SystemSpace, Kernel, &Physical, &Pte));
+        CHECK(MiArchPteLeafFlags(Pte) == Flags[Requested]);
+        CHECK(World.PfnArray[Frames[0]].CacheFlags == (LONG)Flags[Requested]);
+        CHECK(NT_SUCCESS(MiUnmapFramesUser(&Process, User, TRUE)));
+        MiUnmapFrames(&World.System, Kernel, 1);
+        MiPfnShareDecrement(&World.System.Pfn, (ULONG)Frames[0], TRUE);
+    }
+
     /* Raw I/O PFNs have no established RAM cache attributes. */
     Frames[0] = World.System.Pfn.FrameCount + 1;
     CHECK(NT_SUCCESS(MiMapFrames(&World.System, Frames, 1, MiCacheNone, MI_PROT_READWRITE, &Kernel)));

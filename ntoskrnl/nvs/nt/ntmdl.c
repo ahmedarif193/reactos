@@ -512,7 +512,16 @@ MmAllocatePagesForMdl(
     _In_ PHYSICAL_ADDRESS SkipBytes,
     _In_ SIZE_T TotalBytes)
 {
-    return MmAllocatePagesForMdlEx(LowAddress, HighAddress, SkipBytes, TotalBytes, MmCached, 0);
+    PMDL Mdl = MmAllocatePagesForMdlEx(LowAddress, HighAddress, SkipBytes, TotalBytes, MmCached, 0);
+    ULONG i;
+
+    if (Mdl != NULL)
+    {
+        PPFN_NUMBER Pages = MmGetMdlPfnArray(Mdl);
+        for (i = 0; i < MiMdlPages(Mdl); i++)
+            MiSystem.Pfn.Pfn[Pages[i]].CacheFlags = MI_PFN_CACHE_UNASSIGNED;
+    }
+    return Mdl;
 }
 
 PMDL
