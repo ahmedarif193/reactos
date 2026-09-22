@@ -376,6 +376,28 @@ RtlpFreeDebugInfo(PRTL_CRITICAL_SECTION_DEBUG DebugInfo)
     }
 }
 
+static
+BOOLEAN
+RtlpCriticalSectionOwnsDebugInfo(PRTL_CRITICAL_SECTION CriticalSection)
+{
+    BOOLEAN OwnsDebugInfo = FALSE;
+
+    if (!CRITSECT_HAS_DEBUG_INFO(CriticalSection))
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        OwnsDebugInfo = (CriticalSection->DebugInfo->CriticalSection == CriticalSection);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        OwnsDebugInfo = FALSE;
+    }
+    _SEH2_END;
+
+    return OwnsDebugInfo;
+}
+
 /*++
  * RtlDeleteCriticalSection
  * @implemented NT4
@@ -397,6 +419,7 @@ NTAPI
 RtlDeleteCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
 {
     NTSTATUS Status = STATUS_SUCCESS;
+    BOOLEAN OwnsDebugInfo;
 
     DPRINT("Deleting Critical Section: %p\n", CriticalSection);
 
@@ -410,7 +433,8 @@ RtlDeleteCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
     /* Protect List */
     RtlEnterCriticalSection(&RtlCriticalSectionLock);
 
-    if (CRITSECT_HAS_DEBUG_INFO(CriticalSection))
+    OwnsDebugInfo = RtlpCriticalSectionOwnsDebugInfo(CriticalSection);
+    if (OwnsDebugInfo)
     {
         /* Remove it from the list */
         RemoveEntryList(&CriticalSection->DebugInfo->ProcessLocksList);
@@ -423,7 +447,7 @@ RtlDeleteCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
     /* Unprotect */
     RtlLeaveCriticalSection(&RtlCriticalSectionLock);
 
-    if (CRITSECT_HAS_DEBUG_INFO(CriticalSection))
+    if (OwnsDebugInfo)
     {
         /* Free it */
         RtlpFreeDebugInfo(CriticalSection->DebugInfo);
