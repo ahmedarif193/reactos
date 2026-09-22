@@ -467,6 +467,13 @@ struct _RPI5VC4_DEVICE_EXTENSION
     PHYSICAL_ADDRESS V3dPageTablePhys;
     PHYSICAL_ADDRESS V3dActivePageTablePhys;
     PRPI5VC4_PROCESS V3dActiveProcess;
+    /* Interrupt time of the last address-space switch, which bounds how
+     * long the resident process may keep the MMU while another waits. */
+    ULONGLONG V3dAddressSpaceSwitchTime100ns;
+    /* Diagnostics: address-space switches and passes stalled waiting for
+     * one, since boot. */
+    ULONG V3dAddressSpaceSwitches;
+    ULONG V3dAddressSpaceStalls;
     PVOID V3dScratchPage;
     PHYSICAL_ADDRESS V3dScratchPagePhys;
     PVOID V3dOverflowVa;              /* preallocated binner overflow chunks */

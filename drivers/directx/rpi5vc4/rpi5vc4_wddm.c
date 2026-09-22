@@ -198,6 +198,16 @@ Rpi5Vc4SelectAddressSpaceLocked(
         return FALSE;
     }
     DeviceExtension->V3dActiveProcess = Process;
+    DeviceExtension->V3dAddressSpaceSwitchTime100ns = KeQueryInterruptTime();
+    DeviceExtension->V3dAddressSpaceSwitches++;
+    /* Rare enough to cost nothing, and the rate is the whole point: it is
+     * how often the pipeline had to drain for the MMU. */
+    if ((DeviceExtension->V3dAddressSpaceSwitches & 0x1fff) == 0)
+    {
+        DPRINT1("RPI5VC4: address-space switches=%lu stalls=%lu\n",
+                DeviceExtension->V3dAddressSpaceSwitches,
+                DeviceExtension->V3dAddressSpaceStalls);
+    }
     return TRUE;
 }
 
@@ -226,6 +236,60 @@ Rpi5Vc4OldestQueuedProcessLocked(
             Oldest = Head;
     }
     return Oldest != NULL ? Oldest->Process : NULL;
+}
+
+/*
+ * Every engine shares one MMU, so changing process costs a full pipeline
+ * drain plus an MMU reprogram, and the bin/render overlap cannot span the
+ * boundary. Picking the globally oldest job made two busy processes
+ * alternate once per job and pay that bubble every time. Keep the resident
+ * address space while it still has queued work, and fall back to
+ * oldest-first once the slice expires, so a busy 3D queue still cannot hold
+ * the compositor off for longer than one slice.
+ */
+#define RPI5VC4_ADDRESS_SPACE_SLICE_100NS 20000ULL /* 2 ms */
+
+static BOOLEAN
+Rpi5Vc4ProcessHasQueuedHeadLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ PRPI5VC4_PROCESS Process)
+{
+    ULONG Node;
+
+    for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; ++Node)
+    {
+        PRPI5VC4_PENDING_SUBMIT Head;
+
+        if (DeviceExtension->NodeQueue[Node].Count == 0)
+            continue;
+        Head = DeviceExtension->NodeQueue[Node].Head;
+        if (Head == NULL || Head->Process != Process)
+            continue;
+        if (Head->IsV3dJob || Head->IsTfuJob || Head->IsCsdJob)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static PRPI5VC4_PROCESS
+Rpi5Vc4PreferredProcessLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONGLONG Now,
+    _In_opt_ PRPI5VC4_PENDING_SUBMIT Skip)
+{
+    PRPI5VC4_PROCESS Active = DeviceExtension->V3dActiveProcess;
+    ULONGLONG Switched = DeviceExtension->V3dAddressSpaceSwitchTime100ns;
+
+    /* Now is sampled once at the top of the pass, so a switch made later in
+     * that same pass is stamped after it. Treat that as the slice having
+     * just started rather than letting the subtraction wrap. */
+    if ((Now < Switched ||
+         (Now - Switched) < RPI5VC4_ADDRESS_SPACE_SLICE_100NS) &&
+        Rpi5Vc4ProcessHasQueuedHeadLocked(DeviceExtension, Active))
+    {
+        return Active;
+    }
+    return Rpi5Vc4OldestQueuedProcessLocked(DeviceExtension, Skip);
 }
 
 static BOOLEAN
@@ -435,13 +499,15 @@ Rescan:
 
         if (Head->IsTfuJob || Head->IsCsdJob || Head->IsV3dJob)
         {
-            /* All engines share one page table. Drain the current process
-             * before starting younger work when another process is waiting;
-             * otherwise a busy 3D queue can starve the compositor's TFU. */
+            /* All engines share one page table. Let the resident process
+             * keep it while its work keeps arriving, and hand it over once
+             * the slice expires, so the compositor's TFU waits at most one
+             * slice behind a busy 3D queue instead of a whole batch. */
             if (!Head->BinSubmitted && !Head->RenderSubmitted &&
-                Rpi5Vc4OldestQueuedProcessLocked(DeviceExtension, NULL) != Head->Process)
+                Rpi5Vc4PreferredProcessLocked(DeviceExtension, Now, NULL) != Head->Process)
             {
                 AddressSpaceWaitThisPass = TRUE;
+                DeviceExtension->V3dAddressSpaceStalls++;
                 *NeedPoll = TRUE;
                 goto NextNode;
             }
@@ -449,6 +515,7 @@ Rescan:
                 Rpi5Vc4GpuJobActiveLocked(DeviceExtension))
             {
                 AddressSpaceWaitThisPass = TRUE;
+                DeviceExtension->V3dAddressSpaceStalls++;
                 *NeedPoll = TRUE;
                 goto NextNode;
             }
@@ -586,10 +653,11 @@ Rescan:
                     Rpi5Vc4UpdateBinCompletionLocked(DeviceExtension, Next,
                                                       &BinComplete);
                 }
-                /* Drain binning as well as rendering before handing the
-                 * shared address space to an older job on another node. */
+                /* Overlap the next bin with this render while the resident
+                 * process still holds the address space; once its slice is
+                 * over, drain binning too before handing the MMU over. */
                 if (Next != NULL && !Next->BinSubmitted &&
-                    Rpi5Vc4OldestQueuedProcessLocked(DeviceExtension, Head) == Next->Process)
+                    Rpi5Vc4PreferredProcessLocked(DeviceExtension, Now, Head) == Next->Process)
                 {
                     BinComplete = FALSE;
                     if (!Rpi5Vc4KickBinLocked(DeviceExtension, Next, Now))
