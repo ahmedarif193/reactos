@@ -580,7 +580,7 @@ IntScrollGetScrollBarRect(HWND Wnd, INT Bar, RECT *Rect,
       else *ThumbSize = GetSystemMetrics(SM_CXVSCROLL);
 
       if (((Pixels -= *ThumbSize ) < 0) ||
-          (( pSBInfo->WSBflags & ESB_DISABLE_BOTH) == ESB_DISABLE_BOTH))
+          (SBINFO_GETFLAGS(pSBInfo, Bar) == ESB_DISABLE_BOTH))
       {
           /* Rectangle too small or scrollbar disabled -> no thumb */
           *ThumbPos = *ThumbSize = 0;

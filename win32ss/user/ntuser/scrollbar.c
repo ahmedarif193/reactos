@@ -567,7 +567,7 @@ co_IntSetScrollInfo(PWND Window, INT nBar, LPCSCROLLINFO lpsi, BOOL bRedraw)
    // Check if the scrollbar should be hidden or disabled
    if (lpsi->fMask & (SIF_RANGE | SIF_PAGE | SIF_DISABLENOSCROLL))
    {
-      new_flags = Window->pSBInfo->WSBflags;
+      new_flags = SBINFO_GETFLAGS(Window->pSBInfo, nBar);
       if (Info->nMin + (int)max(Info->nPage, 1) > Info->nMax)
       {
          // Hide or disable scrollbar
@@ -594,9 +594,9 @@ co_IntSetScrollInfo(PWND Window, INT nBar, LPCSCROLLINFO lpsi, BOOL bRedraw)
          }
       }
 
-      if (Window->pSBInfo->WSBflags != new_flags) // Check arrow flags
+      if (SBINFO_GETFLAGS(Window->pSBInfo, nBar) != new_flags) // Check arrow flags
       {
-         Window->pSBInfo->WSBflags = new_flags;
+         SBINFO_SETFLAGS(Window->pSBInfo, nBar, new_flags);
          action |= SA_SSI_REPAINT_ARROWS;
       }
    }
@@ -661,7 +661,7 @@ co_IntSetScrollInfo(PWND Window, INT nBar, LPCSCROLLINFO lpsi, BOOL bRedraw)
    }
 
    if (bChangeParams && (nBar == SB_HORZ || nBar == SB_VERT) && (lpsi->fMask & SIF_DISABLENOSCROLL))
-      IntEnableScrollBar(nBar == SB_HORZ, psbi, Window->pSBInfo->WSBflags);
+      IntEnableScrollBar(nBar == SB_HORZ, psbi, SBINFO_GETFLAGS(Window->pSBInfo, nBar));
 
    // Return current position
    return lpsi->fMask & SIF_PREVIOUSPOS ? OldPos : pSBData->pos;
@@ -1140,7 +1140,7 @@ ScrollBarWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
    {
       case WM_ENABLE:
          if (pWnd->pSBInfo)
-            pWnd->pSBInfo->WSBflags = wParam ? ESB_ENABLE_BOTH : ESB_DISABLE_BOTH;
+            SBINFO_SETFLAGS(pWnd->pSBInfo, SB_CTL, wParam ? ESB_ENABLE_BOTH : ESB_DISABLE_BOTH);
          break;
    }
    return lResult;
@@ -1272,10 +1272,10 @@ NtUserEnableScrollBar(
       goto Cleanup; // Return FALSE
 
    OrigArrows = Window->pSBInfo->WSBflags;
-   Window->pSBInfo->WSBflags = wArrows;
 
    if (wSBflags == SB_CTL)
    {
+      SBINFO_SETFLAGS(Window->pSBInfo, SB_CTL, wArrows);
       if ((wArrows == ESB_DISABLE_BOTH || wArrows == ESB_ENABLE_BOTH))
          IntEnableWindow(hWnd, (wArrows == ESB_ENABLE_BOTH));
 
@@ -1306,10 +1306,16 @@ NtUserEnableScrollBar(
    }
 
    if(InfoV)
+   {
+      SBINFO_SETFLAGS(Window->pSBInfo, SB_VERT, wArrows);
       Chg = IntEnableScrollBar(FALSE, InfoV, wArrows);
+   }
 
    if(InfoH)
+   {
+      SBINFO_SETFLAGS(Window->pSBInfo, SB_HORZ, wArrows);
       Chg = (IntEnableScrollBar(TRUE, InfoH, wArrows) || Chg);
+   }
 
    ERR("FIXME: EnableScrollBar wSBflags %u wArrows %u Chg %d\n", wSBflags, wArrows, Chg);
 // Done in user32:
