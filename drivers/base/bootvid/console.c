@@ -96,9 +96,9 @@ VidSetScrollRegion(
     _In_ ULONG Right,
     _In_ ULONG Bottom)
 {
-    /* Assert alignment */
-    ASSERT((Left % VidpCharacterWidth) == 0);
-    ASSERT((Right % VidpCharacterWidth) == VidpCharacterWidth - 1);
+    ULONG CellLeft, CellRight;
+
+    /* Validate the requested rectangle */
     ASSERT(Left <= Right);
     ASSERT(Top <= Bottom);
     ASSERT(Right < VidpDisplayWidth);
@@ -109,14 +109,31 @@ VidSetScrollRegion(
         return;
     }
 
+    /*
+     * Callers describe the region in pixels, but text can only be placed on
+     * whole character cells, and the cell size is chosen here at run time
+     * from the display mode. The display width itself needs not be a whole
+     * number of cells, so reduce the horizontal bounds to the complete cells
+     * the request contains instead of demanding aligned coordinates.
+     */
+    CellLeft = ((Left + VidpCharacterWidth - 1) / VidpCharacterWidth) * VidpCharacterWidth;
+    CellRight = ((Right + 1) / VidpCharacterWidth) * VidpCharacterWidth;
+
+    /* Refuse a region that cannot hold a single character */
+    ASSERT(CellRight > CellLeft);
+    if (CellRight <= CellLeft)
+        return;
+
+    --CellRight;
+
     /* Set the scroll region */
-    VidpScrollRegion.Left = Left;
+    VidpScrollRegion.Left = CellLeft;
     VidpScrollRegion.Top  = Top;
-    VidpScrollRegion.Right  = Right;
+    VidpScrollRegion.Right  = CellRight;
     VidpScrollRegion.Bottom = Bottom;
 
     /* Set the current X and Y */
-    VidpCurrentX = Left;
+    VidpCurrentX = CellLeft;
     VidpCurrentY = Top;
 }
 
