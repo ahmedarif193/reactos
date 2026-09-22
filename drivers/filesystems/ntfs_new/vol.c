@@ -343,6 +343,7 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     // Initialize Volume Context Block VolCB.
     VolCB = (PVolumeContextBlock)FSDeviceObject->DeviceExtension;
     RtlZeroMemory(VolCB, sizeof(VolumeContextBlock));
+    ExInitializePushLock(&VolCB->MetadataGate);
     Status = ExInitializeResourceLite(&VolCB->MetadataResource);
     if (!NT_SUCCESS(Status))
     {
@@ -359,7 +360,10 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     ExInitializeFastMutex(&VolCB->RecordCacheMutex);
     InitializeListHead(&VolCB->RecordCacheList);
     for (Index = 0; Index < NTFS_RECORD_CACHE_BUCKETS; Index++)
+    {
         InitializeListHead(&VolCB->RecordCacheHash[Index]);
+        InitializeListHead(&VolCB->RecordIdentityHash[Index]);
+    }
     VolCB->RecordCacheCount = 0;
     ExInitializeFastMutex(&VolCB->DirCacheMutex);
     VolCB->CachedDir = NULL;
@@ -672,6 +676,7 @@ NtfsTrimRecordCache(_In_ PVolumeContextBlock VolCB)
         {
             RemoveEntryList(&Candidate->Link);
             RemoveEntryList(&Candidate->HashLink);
+            RemoveEntryList(&Candidate->IdentityLink);
             VolCB->RecordCacheCount--;
             NtfsFileRecordDestroy(Candidate->Record);
             ExFreePoolWithTag(Candidate, TAG_NTFS);
@@ -712,6 +717,11 @@ NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
 {
     ULONG Hash;
     PNtfsCachedRecord New;
+    PNtfsCachedRecord Found;
+    PFileRecordHeader Header;
+    ULONGLONG FileReference;
+    PLIST_ENTRY Bucket;
+    PLIST_ENTRY Entry;
 
     if (!VolCB || !Name || !Length || !Record)
         return NULL;
@@ -725,12 +735,30 @@ NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
     if (NtfsFileRecordGetHeader(Record)->Flags & FR_IS_DIRECTORY)
         return NULL;
 
+    Header = NtfsFileRecordGetHeader(Record);
+    FileReference = ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber;
+    Bucket = &VolCB->RecordIdentityHash[Header->MFTRecordNumber & (NTFS_RECORD_CACHE_BUCKETS - 1)];
+    ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    for (Entry = Bucket->Flink; Entry != Bucket; Entry = Entry->Flink)
+    {
+        Found = CONTAINING_RECORD(Entry, NtfsCachedRecord, IdentityLink);
+        if (Found->FileReference == FileReference)
+        {
+            Found->InUse++;
+            ExReleaseFastMutex(&VolCB->RecordCacheMutex);
+            return Found;
+        }
+    }
+
     New = (PNtfsCachedRecord)ExAllocatePoolUninitialized(
         NonPagedPool,
         FIELD_OFFSET(NtfsCachedRecord, Name) + Length * sizeof(WCHAR),
         TAG_NTFS);
     if (!New)
+    {
+        ExReleaseFastMutex(&VolCB->RecordCacheMutex);
         return NULL;
+    }
 
     Hash = NtfsHashName(Name, Length);
     New->Hash = Hash;
@@ -738,20 +766,10 @@ NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
     New->InUse = 1;
     New->Evicted = FALSE;
     New->Record = Record;
+    New->FileReference = FileReference;
     RtlCopyMemory(New->Name, Name, Length * sizeof(WCHAR));
 
-    ExAcquireFastMutex(&VolCB->RecordCacheMutex);
-    /*
-     * One entry per name. A second entry for a name already cached would
-     * outlive the eviction that a delete or a rename performs on the first,
-     * and would go on serving a name that no longer resolves.
-     */
-    if (NtfsLookupCachedRecordLocked(VolCB, Hash, Name, Length))
-    {
-        ExReleaseFastMutex(&VolCB->RecordCacheMutex);
-        ExFreePoolWithTag(New, TAG_NTFS);
-        return NULL;
-    }
+    InsertHeadList(Bucket, &New->IdentityLink);
     InsertHeadList(&VolCB->RecordCacheList, &New->Link);
     InsertHeadList(
         &VolCB->RecordCacheHash[
@@ -776,7 +794,11 @@ NtfsReleaseCachedRecord(_In_ PVolumeContextBlock VolCB,
     Entry->InUse--;
     /* An evicted entry is off the list already and only waited on its users. */
     if (Entry->Evicted && Entry->InUse == 0)
+    {
+        if (!IsListEmpty(&Entry->IdentityLink))
+            RemoveEntryList(&Entry->IdentityLink);
         Destroy = TRUE;
+    }
     ExReleaseFastMutex(&VolCB->RecordCacheMutex);
 
     if (Destroy)
@@ -825,12 +847,17 @@ NtfsEvictCachedRecord(_In_ PVolumeContextBlock VolCB,
             RemoveEntryList(&Candidate->HashLink);
             VolCB->RecordCacheCount--;
             Candidate->Evicted = TRUE;
-            /* Deleting the file frees the record inside the library, so the
-             * pointer must not be used or destroyed again. */
             if (RecordAlreadyFreed)
-                Candidate->Record = NULL;
+            {
+                RemoveEntryList(&Candidate->IdentityLink);
+                InitializeListHead(&Candidate->IdentityLink);
+            }
             if (Candidate->InUse == 0)
+            {
+                if (!IsListEmpty(&Candidate->IdentityLink))
+                    RemoveEntryList(&Candidate->IdentityLink);
                 InsertTailList(&DoomedList, &Candidate->Link);
+            }
         }
     }
     ExReleaseFastMutex(&VolCB->RecordCacheMutex);

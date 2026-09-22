@@ -69,7 +69,12 @@
          FileCB->RequestedType,
          FileCB->RequestedStream);
 
-     if (DataAttribute)
+     if (DataAttribute && FileCB->StreamCB && FileCB->StreamCB->SizePending)
+     {
+         Buffer->EndOfFile = NtfsGetCommonFcbHeader(FileCB)->FileSize;
+         Buffer->AllocationSize = NtfsGetCommonFcbHeader(FileCB)->AllocationSize;
+     }
+     else if (DataAttribute)
      {
          if (DataAttribute->IsNonResident)
          {
@@ -211,7 +216,12 @@ GetFileNetworkOpenInformation(_In_ PFileContextBlock FileCB,
         FileCB->RequestedType,
         FileCB->RequestedStream);
 
-    if (DataAttribute)
+    if (DataAttribute && FileCB->StreamCB && FileCB->StreamCB->SizePending)
+    {
+        Buffer->EndOfFile = NtfsGetCommonFcbHeader(FileCB)->FileSize;
+        Buffer->AllocationSize = NtfsGetCommonFcbHeader(FileCB)->AllocationSize;
+    }
+    else if (DataAttribute)
     {
         if (DataAttribute->IsNonResident)
         {
@@ -850,10 +860,16 @@ NtfsRefreshFileSizes(_In_ PFileContextBlock FileCB,
 {
     PAttribute DataAttribute;
     PFSRTL_ADVANCED_FCB_HEADER Header;
+    BOOLEAN SizePending;
+    LONGLONG FileSize;
+    LONGLONG ValidDataLength;
 
     if (!FileCB || !FileCB->FileRec)
         return;
     Header = NtfsGetCommonFcbHeader(FileCB);
+    SizePending = FileCB->StreamCB && FileCB->StreamCB->SizePending;
+    FileSize = Header->FileSize.QuadPart;
+    ValidDataLength = Header->ValidDataLength.QuadPart;
 
     DataAttribute = NtfsFileRecordGetAttribute(
         FileCB->FileRec,
@@ -886,6 +902,14 @@ NtfsRefreshFileSizes(_In_ PFileContextBlock FileCB,
         Header->AllocationSize.QuadPart = 0;
         Header->FileSize.QuadPart = 0;
         Header->ValidDataLength.QuadPart = 0;
+    }
+
+    if (SizePending)
+    {
+        if (Header->FileSize.QuadPart < FileSize)
+            Header->FileSize.QuadPart = FileSize;
+        if (Header->ValidDataLength.QuadPart < ValidDataLength)
+            Header->ValidDataLength.QuadPart = ValidDataLength;
     }
 
     if (FileObject && CcIsFileCached(FileObject))
@@ -937,7 +961,6 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     PFileContextBlock TargetFileCB;
     PNtfsFileRecord RefreshedRecord = NULL;
     PNtfsFileRecord ExistingRecord = NULL;
-    PNtfsFileRecord StaleRecord;
     UNICODE_STRING ParentName;
     UNICODE_STRING LeafName;
     UNICODE_STRING NewName;
@@ -1079,23 +1102,13 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     Status = NtfsMasterFileTableGetFileRecordFromQueryEx(NtfsVolumeGetMft(VolCB->DiskVolume), NewName.Buffer, NewName.Length / sizeof(WCHAR), TRUE, &RemainingNameLength, &RefreshedRecord);
     if (NT_SUCCESS(Status) && RemainingNameLength == 0)
     {
-        StaleRecord = FileCB->FileRec;
-        FileCB->FileRec = RefreshedRecord;
-        /*
-         * The old name's cache entry has just been evicted, but other handles
-         * may still hold it, so the record behind it belongs to them until
-         * they let go. This handle keeps the freshly parsed one instead.
-         */
-        if (FileCB->CachedRecord)
+        Status = NtfsFileRecordRefresh(FileCB->FileRec, RefreshedRecord);
+        NtfsFileRecordDestroy(RefreshedRecord);
+        if (!NT_SUCCESS(Status))
         {
-            NtfsReleaseCachedRecord(VolCB, FileCB->CachedRecord);
-            FileCB->CachedRecord = NULL;
+            ExFreePoolWithTag(NameBuffer, TAG_NTFS);
+            return Status;
         }
-        else
-        {
-            NtfsFileRecordDestroy(StaleRecord);
-        }
-        NtfsRefreshFileSizes(FileCB, FileObject);
     }
     else
     {
@@ -1383,6 +1396,7 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     NTSTATUS Status;
     BOOLEAN AllocationRequest = FALSE;
     BOOLEAN ResourceAcquired = FALSE;
+    BOOLEAN PagingResourceAcquired = FALSE;
     BOOLEAN MetadataResourceAcquired = FALSE;
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
@@ -1416,9 +1430,29 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
-    ExAcquireResourceExclusiveLite(
-        &VolCB->MetadataResource,
-        TRUE);
+    if (IrpSp->Parameters.SetFile.FileInformationClass == FileEndOfFileInformation ||
+        IrpSp->Parameters.SetFile.FileInformationClass == FileAllocationInformation ||
+        IrpSp->Parameters.SetFile.FileInformationClass == FileValidDataLengthInformation ||
+        IrpSp->Parameters.SetFile.FileInformationClass == FileRenameInformation)
+    {
+        if (IrpSp->Parameters.SetFile.FileInformationClass != FileRenameInformation &&
+            FileObject->SectionObjectPointer != NULL &&
+            FileObject->SectionObjectPointer->SharedCacheMap != NULL)
+        {
+            IO_STATUS_BLOCK FlushStatus;
+
+            CcFlushCache(FileObject->SectionObjectPointer, NULL, 0, &FlushStatus);
+            Status = FlushStatus.Status;
+            if (!NT_SUCCESS(Status))
+                goto Complete;
+        }
+        Status = NtfsPersistPendingSize(VolCB, FileCB);
+        if (!NT_SUCCESS(Status))
+            goto Complete;
+    }
+    ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+    PagingResourceAcquired = TRUE;
+    NtfsAcquireMetadata(VolCB);
     MetadataResourceAcquired = TRUE;
 
     switch (IrpSp->Parameters.SetFile.
@@ -1694,9 +1728,10 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 Complete:
     if (MetadataResourceAcquired)
     {
-        ExReleaseResourceLite(
-            &VolCB->MetadataResource);
+        NtfsReleaseMetadata(VolCB);
     }
+    if (PagingResourceAcquired)
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
     if (ResourceAcquired)
     {
         ExReleaseResourceLite(NtfsGetMainResource(FileCB));
@@ -1755,7 +1790,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         KeEnterCriticalRegion();
         ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
         /* Enumeration shares the volume index buffer with file lookups. */
-        ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+        NtfsAcquireMetadata(VolCB);
 
         FileInformationRequest = IrpSp->Parameters.QueryDirectory.FileInformationClass;
 
@@ -1789,7 +1824,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 break;
         }
 
-        ExReleaseResourceLite(&VolCB->MetadataResource);
+        NtfsReleaseMetadata(VolCB);
         ExReleaseResourceLite(NtfsGetMainResource(FileCB));
         KeLeaveCriticalRegion();
     }

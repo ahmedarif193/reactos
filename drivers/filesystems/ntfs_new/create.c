@@ -467,6 +467,7 @@ NtfsReferenceStreamContext(
     PLIST_ENTRY Entry;
     ULONGLONG FileReference;
     UNICODE_STRING StreamName;
+    PAttribute DataAttribute;
 
     if (!VolCB || !File)
         return NULL;
@@ -555,6 +556,22 @@ NtfsReferenceStreamContext(
     StreamCB->CommonFCBHeader.PagingIoResource = &StreamCB->PagingIoResource;
     StreamCB->CommonFCBHeader.IsFastIoPossible = FastIoIsPossible;
     FsRtlInitializeFileLock(&StreamCB->FileLock, NULL, NULL);
+    DataAttribute = NtfsFileRecordGetAttribute(File, RequestedType, RequestedStream);
+    if (DataAttribute)
+    {
+        if (DataAttribute->IsNonResident)
+        {
+            StreamCB->CommonFCBHeader.AllocationSize.QuadPart = NtfsAttributeGetPhysicalAllocationSize(DataAttribute);
+            StreamCB->CommonFCBHeader.FileSize.QuadPart = DataAttribute->NonResident.DataSize;
+            StreamCB->CommonFCBHeader.ValidDataLength.QuadPart = DataAttribute->NonResident.InitalizedDataSize;
+        }
+        else
+        {
+            StreamCB->CommonFCBHeader.AllocationSize.QuadPart = DataAttribute->Resident.DataLength;
+            StreamCB->CommonFCBHeader.FileSize.QuadPart = DataAttribute->Resident.DataLength;
+            StreamCB->CommonFCBHeader.ValidDataLength.QuadPart = DataAttribute->Resident.DataLength;
+        }
+    }
     InsertTailList(&VolCB->StreamList, &StreamCB->ListEntry);
     ExReleaseFastMutex(&VolCB->StreamListMutex);
     return StreamCB;
@@ -911,9 +928,9 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                FileObject->FileName.Length / sizeof(WCHAR)))
     {
         KeEnterCriticalRegion();
-        ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+        NtfsAcquireMetadata(VolCB);
         Status = NtfsTranslateNotFoundStatus(Mft, &FileObject->FileName);
-        ExReleaseResourceLite(&VolCB->MetadataResource);
+        NtfsReleaseMetadata(VolCB);
         KeLeaveCriticalRegion();
         Irp->IoStatus.Information = FILE_DOES_NOT_EXIST;
         Irp->IoStatus.Status = Status;
@@ -922,7 +939,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+    NtfsAcquireMetadata(VolCB);
 
     if (OpenTargetDirectory)
     {
@@ -944,7 +961,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             {
                 if (TargetFile)
                     NtfsFileRecordDestroy(TargetFile);
-                ExReleaseResourceLite(&VolCB->MetadataResource);
+                NtfsReleaseMetadata(VolCB);
                 KeLeaveCriticalRegion();
                 return NtfsCompleteCreate(Irp, STATUS_OBJECT_PATH_NOT_FOUND, 0);
             }
@@ -955,7 +972,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         {
             if (TargetFile)
                 NtfsFileRecordDestroy(TargetFile);
-            ExReleaseResourceLite(&VolCB->MetadataResource);
+            NtfsReleaseMetadata(VolCB);
             KeLeaveCriticalRegion();
             return NtfsCompleteCreate(Irp, Status, 0);
         }
@@ -1027,7 +1044,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             Irp,
             CurrentFile,
             RemainingNameLength);
-        ExReleaseResourceLite(&VolCB->MetadataResource);
+        NtfsReleaseMetadata(VolCB);
         KeLeaveCriticalRegion();
         NtfsFileRecordDestroy(CurrentFile);
         Irp->IoStatus.Status = Status;
@@ -1085,21 +1102,21 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             FileObject->FileName.Length != 0 &&
             FileObject->FileName.Buffer[FileObject->FileName.Length / sizeof(WCHAR) - 1] == L'\\')
         {
-            ExReleaseResourceLite(&VolCB->MetadataResource);
+            NtfsReleaseMetadata(VolCB);
             KeLeaveCriticalRegion();
             return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, STATUS_NOT_A_DIRECTORY);
         }
         if ((CreateOptions & FILE_DIRECTORY_FILE) &&
             !IsDirectory)
         {
-            ExReleaseResourceLite(&VolCB->MetadataResource);
+            NtfsReleaseMetadata(VolCB);
             KeLeaveCriticalRegion();
             return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, STATUS_NOT_A_DIRECTORY);
         }
         if ((CreateOptions & FILE_NON_DIRECTORY_FILE) &&
             IsDirectory)
         {
-            ExReleaseResourceLite(&VolCB->MetadataResource);
+            NtfsReleaseMetadata(VolCB);
             KeLeaveCriticalRegion();
             return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, STATUS_FILE_IS_A_DIRECTORY);
         }
@@ -1123,7 +1140,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     break;
                 }
             }
-            ExReleaseResourceLite(&VolCB->MetadataResource);
+            NtfsReleaseMetadata(VolCB);
             KeLeaveCriticalRegion();
             Status = IsDirectory && RootName ? STATUS_ACCESS_DENIED : STATUS_OBJECT_NAME_COLLISION;
             return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, Status);
@@ -1139,7 +1156,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         FileExisted = FALSE;
         if (Status == STATUS_OBJECT_PATH_NOT_FOUND)
         {
-            ExReleaseResourceLite(&VolCB->MetadataResource);
+            NtfsReleaseMetadata(VolCB);
             KeLeaveCriticalRegion();
             return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, Status);
         }
@@ -1233,7 +1250,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 }
                 if (!NT_SUCCESS(Status))
                 {
-                    ExReleaseResourceLite(&VolCB->MetadataResource);
+                    NtfsReleaseMetadata(VolCB);
                     KeLeaveCriticalRegion();
                     Irp->IoStatus.Information = FILE_DOES_NOT_EXIST;
                     Irp->IoStatus.Status = Status;
@@ -1246,7 +1263,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             case FILE_OVERWRITE:
             default:
                 // In these cases, return an error.
-                ExReleaseResourceLite(&VolCB->MetadataResource);
+                NtfsReleaseMetadata(VolCB);
                 KeLeaveCriticalRegion();
                 Irp->IoStatus.Information = FILE_DOES_NOT_EXIST;
                 Irp->IoStatus.Status = Status;
@@ -1257,7 +1274,27 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     }
 
-    ExReleaseResourceLite(&VolCB->MetadataResource);
+    if (!CachedRecord && CurrentFile &&
+        !(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
+    {
+        CachedRecord = NtfsCacheRecord(VolCB,
+                                       FileObject->FileName.Buffer,
+                                       (USHORT)(FileObject->FileName.Length / sizeof(WCHAR)),
+                                       CurrentFile);
+        if (!CachedRecord)
+        {
+            NtfsReleaseMetadata(VolCB);
+            KeLeaveCriticalRegion();
+            return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, NULL,
+                                            STATUS_INSUFFICIENT_RESOURCES);
+        }
+        if (CurrentFile != CachedRecord->Record)
+        {
+            NtfsFileRecordDestroy(CurrentFile);
+            CurrentFile = CachedRecord->Record;
+        }
+    }
+    NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
 
     // Create file context block.
@@ -1355,15 +1392,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                         Status);
     }
 
-    if (!CachedRecord && CurrentFile)
-    {
-        CachedRecord = NtfsCacheRecord(
-            VolCB,
-            FileObject->FileName.Buffer,
-            (USHORT)(FileObject->FileName.Length / sizeof(WCHAR)),
-            CurrentFile);
-    }
-
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
     FileCB->CachedRecord = CachedRecord;
     FileCB->FileRec = CurrentFile;
     FileCB->LastAccessStampPending = NtfsShouldStampLastAccess(FileCB);
@@ -1394,7 +1424,11 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (NT_SUCCESS(Status) && (BasicInformation.FileAttributes & FILE_ATTRIBUTE_READONLY))
             Status = STATUS_ACCESS_DENIED;
         if (!NT_SUCCESS(Status))
+        {
+            NtfsReleaseMetadata(VolCB);
+            KeLeaveCriticalRegion();
             return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, FileCB, CurrentFile, CachedRecord, Status);
+        }
     }
 
     /*
@@ -1424,23 +1458,10 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
         if (!NT_SUCCESS(Status))
         {
-            if (FileCB->RequestedStream)
-                ExFreePool(FileCB->RequestedStream);
-            if (FileCB->FileName.Buffer &&
-                FileCB->FileName.Buffer != FileCB->InlineFileName)
-                ExFreePool(FileCB->FileName.Buffer);
-            NtfsFileRecordDestroy(CurrentFile);
-            ExDeleteResourceLite(
-                &FileCB->MainResource);
-            ExDeleteResourceLite(
-                &FileCB->PagingIoResource);
-            ExFreePool(FileCB);
-            Irp->IoStatus.Information = 0;
-            Irp->IoStatus.Status = Status;
-            IoCompleteRequest(
-                Irp,
-                IO_DISK_INCREMENT);
-            return Status;
+            NtfsReleaseMetadata(VolCB);
+            KeLeaveCriticalRegion();
+            return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, FileCB, CurrentFile,
+                                            CachedRecord, Status);
         }
     }
 
@@ -1452,6 +1473,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                                   CurrentFile,
                                                   FileCB->RequestedType,
                                                   FileCB->RequestedStream);
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
     if (!FileCB->StreamCB)
     {
         return NtfsCompleteFailedCreate(VolumeDeviceObject,
@@ -1553,37 +1576,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     // Initialize file sizes and section state.
     {
-        // Initialize the common header sizes from attributes
-        PAttribute DataAttr = NtfsFileRecordGetAttribute(
-            CurrentFile,
-            FileCB->RequestedType,
-            FileCB->RequestedStream);
-        if (DataAttr)
-        {
-            if (DataAttr->IsNonResident)
-            {
-                NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart =
-                    NtfsAttributeGetPhysicalAllocationSize(
-                        DataAttr);
-                NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart = DataAttr->NonResident.DataSize;
-                NtfsGetCommonFcbHeader(FileCB)->ValidDataLength.QuadPart = DataAttr->NonResident.InitalizedDataSize;
-            }
-            else
-            {
-                /* Cc requires AllocationSize >= FileSize; resident data is
-                 * wholly contained in the record, so they are equal. */
-                NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart = DataAttr->Resident.DataLength;
-                NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart = DataAttr->Resident.DataLength;
-                NtfsGetCommonFcbHeader(FileCB)->ValidDataLength.QuadPart = DataAttr->Resident.DataLength;
-            }
-        }
-        else
-        {
-            NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart = 0;
-            NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart = 0;
-            NtfsGetCommonFcbHeader(FileCB)->ValidDataLength.QuadPart = 0;
-        }
-
         if (FileCB->StreamCB && !(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
         {
             /* Mm requires SectionObjectPointer for image and data sections. */
@@ -1623,13 +1615,15 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
          Disposition == FILE_OVERWRITE_IF))
     {
         KeEnterCriticalRegion();
-        ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+        NtfsAcquireMetadata(VolCB);
         Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream, 0);
-        ExReleaseResourceLite(&VolCB->MetadataResource);
+        NtfsReleaseMetadata(VolCB);
         KeLeaveCriticalRegion();
         if (!NT_SUCCESS(Status))
             return NtfsCompleteCreate(Irp, Status, 0);
 
+        if (FileCB->StreamCB)
+            FileCB->StreamCB->SizePending = FALSE;
         NtfsRefreshFileSizes(FileCB, FileObject);
         NtfsPurgeStreamCache(FileCB, FileObject, NULL, 0);
         FileObject->Flags |= FO_FILE_MODIFIED | FO_FILE_SIZE_CHANGED;
