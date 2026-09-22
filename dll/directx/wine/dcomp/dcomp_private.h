@@ -96,6 +96,23 @@ struct IDCompositionTarget
     const IDCompositionTargetVtbl *lpVtbl;
 };
 
+typedef struct IDCompositionSurfaceVtbl
+{
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(IDCompositionSurface *, REFIID, void **);
+    ULONG (STDMETHODCALLTYPE *AddRef)(IDCompositionSurface *);
+    ULONG (STDMETHODCALLTYPE *Release)(IDCompositionSurface *);
+    HRESULT (STDMETHODCALLTYPE *BeginDraw)(IDCompositionSurface *, const RECT *, REFIID, void **, POINT *);
+    HRESULT (STDMETHODCALLTYPE *EndDraw)(IDCompositionSurface *);
+    HRESULT (STDMETHODCALLTYPE *SuspendDraw)(IDCompositionSurface *);
+    HRESULT (STDMETHODCALLTYPE *ResumeDraw)(IDCompositionSurface *);
+    HRESULT (STDMETHODCALLTYPE *Scroll)(IDCompositionSurface *, const RECT *, const RECT *, int, int);
+} IDCompositionSurfaceVtbl;
+
+struct IDCompositionSurface
+{
+    const IDCompositionSurfaceVtbl *lpVtbl;
+};
+
 typedef struct IDCompositionDeviceVtbl
 {
     HRESULT (STDMETHODCALLTYPE *QueryInterface)(IDCompositionDevice *, REFIID, void **);

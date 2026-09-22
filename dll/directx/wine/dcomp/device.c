@@ -33,6 +33,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
 #include "dcomp_private.h"
 #include "reactos/dxgi_dcomp.h"
 #include "wine/list.h"
+#include "d3d11.h"
+#include "d2d1_1.h"
 
 static const GUID IID_IDCompositionDevice_local =
     {0xc37ea93a, 0xe7aa, 0x450d, {0xb1, 0x6f, 0x97, 0x46, 0xcb, 0x04, 0x07, 0xf3}};
@@ -52,6 +54,8 @@ static const GUID IID_IDCompositionVisualDebug_local =
     {0xfed2b808, 0x5eb4, 0x43a0, {0xae, 0xa3, 0x35, 0xf6, 0x52, 0x80, 0xf9, 0x1b}};
 static const GUID IID_IDCompositionVisual3_local =
     {0x2775f462, 0xb6c1, 0x4015, {0xb0, 0xbe, 0xb3, 0xe7, 0xd6, 0xa4, 0x97, 0x6d}};
+static const GUID IID_IDCompositionSurface_local =
+    {0xbb8a4953, 0x2c99, 0x4f5a, {0x96, 0xf5, 0x48, 0x19, 0x02, 0x7f, 0xa3, 0xac}};
 
 struct dcomp_device
 {
@@ -106,11 +110,31 @@ struct dcomp_target
     BOOL topmost;
 };
 
+struct dcomp_surface
+{
+    IDCompositionSurface IDCompositionSurface_iface;
+    LONG refcount;
+    struct dcomp_device *device;
+    UINT width;
+    UINT height;
+    DXGI_FORMAT format;
+    DXGI_ALPHA_MODE alpha_mode;
+    ID3D11Device *d3d_device;
+    ID3D11DeviceContext *d3d_context;
+    ID3D11Texture2D *texture;
+    IDXGISwapChain1 *swapchain;
+    ID2D1Device *d2d_device;
+    ID2D1DeviceContext *d2d_context;
+    BOOL drawing;
+    BOOL d2d_drawing;
+};
+
 static const IDCompositionDeviceVtbl dcomp_device_vtbl;
 static const IDCompositionDevice3Vtbl dcomp_device3_vtbl;
 static const IDCompositionDesktopDeviceVtbl dcomp_desktop_device_vtbl;
 static const IDCompositionTargetVtbl dcomp_target_vtbl;
 static const IDCompositionVisualVtbl dcomp_visual_vtbl;
+static const IDCompositionSurfaceVtbl dcomp_surface_vtbl;
 
 static ULONG dcomp_device_addref(struct dcomp_device *device);
 static ULONG dcomp_device_release(struct dcomp_device *device);
@@ -650,6 +674,361 @@ static const IDCompositionTargetVtbl dcomp_target_vtbl =
     dcomp_target_SetRoot,
 };
 
+static inline struct dcomp_surface *impl_from_IDCompositionSurface(IDCompositionSurface *iface)
+{
+    return CONTAINING_RECORD(iface, struct dcomp_surface, IDCompositionSurface_iface);
+}
+
+static HRESULT STDMETHODCALLTYPE dcomp_surface_QueryInterface(IDCompositionSurface *iface,
+        REFIID iid, void **out)
+{
+    TRACE("iface %p, iid %s, out %p.\n", iface, debugstr_guid(iid), out);
+
+    if (!out)
+        return E_POINTER;
+    *out = NULL;
+
+    if (IsEqualGUID(iid, &IID_IUnknown) || IsEqualGUID(iid, &IID_IDCompositionSurface_local))
+    {
+        iface->lpVtbl->AddRef(iface);
+        *out = iface;
+        return S_OK;
+    }
+
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE dcomp_surface_AddRef(IDCompositionSurface *iface)
+{
+    struct dcomp_surface *surface = impl_from_IDCompositionSurface(iface);
+    return InterlockedIncrement(&surface->refcount);
+}
+
+static ULONG STDMETHODCALLTYPE dcomp_surface_Release(IDCompositionSurface *iface)
+{
+    struct dcomp_surface *surface = impl_from_IDCompositionSurface(iface);
+    ULONG refcount = InterlockedDecrement(&surface->refcount);
+
+    if (!refcount)
+    {
+        if (surface->d2d_context)
+        {
+            if (surface->d2d_drawing)
+            {
+                ID2D1DeviceContext_PopAxisAlignedClip(surface->d2d_context);
+                ID2D1DeviceContext_EndDraw(surface->d2d_context, NULL, NULL);
+            }
+            ID2D1DeviceContext_SetTarget(surface->d2d_context, NULL);
+            ID2D1DeviceContext_Release(surface->d2d_context);
+        }
+        if (surface->d2d_device)
+            ID2D1Device_Release(surface->d2d_device);
+        if (surface->swapchain)
+            IDXGISwapChain1_Release(surface->swapchain);
+        if (surface->texture)
+            ID3D11Texture2D_Release(surface->texture);
+        if (surface->d3d_context)
+            ID3D11DeviceContext_Release(surface->d3d_context);
+        if (surface->d3d_device)
+            ID3D11Device_Release(surface->d3d_device);
+        dcomp_device_release(surface->device);
+        free(surface);
+    }
+    return refcount;
+}
+
+static HRESULT dcomp_surface_begin_d2d_draw(struct dcomp_surface *surface, const RECT *rect,
+        REFIID iid, void **out)
+{
+    D2D1_MATRIX_3X2_F identity = {{{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f}}};
+    D2D1_BITMAP_PROPERTIES1 bitmap_desc;
+    IDXGISurface *dxgi_surface;
+    ID2D1Bitmap1 *bitmap;
+    D2D1_RECT_F clip;
+    HRESULT hr;
+
+    if (!surface->d2d_context && FAILED(hr = ID2D1Device_CreateDeviceContext(surface->d2d_device,
+            D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &surface->d2d_context)))
+        return hr;
+    if (FAILED(hr = ID2D1DeviceContext_QueryInterface(surface->d2d_context, iid, out)))
+        return hr;
+
+    if (FAILED(hr = ID3D11Texture2D_QueryInterface(surface->texture, &IID_IDXGISurface,
+            (void **)&dxgi_surface)))
+        goto fail;
+    bitmap_desc.pixelFormat.format = surface->format;
+    bitmap_desc.pixelFormat.alphaMode = surface->alpha_mode == DXGI_ALPHA_MODE_IGNORE
+            ? D2D1_ALPHA_MODE_IGNORE : D2D1_ALPHA_MODE_PREMULTIPLIED;
+    bitmap_desc.dpiX = 96.0f;
+    bitmap_desc.dpiY = 96.0f;
+    bitmap_desc.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+    bitmap_desc.colorContext = NULL;
+    hr = ID2D1DeviceContext_CreateBitmapFromDxgiSurface(surface->d2d_context, dxgi_surface,
+            &bitmap_desc, &bitmap);
+    IDXGISurface_Release(dxgi_surface);
+    if (FAILED(hr))
+        goto fail;
+
+    ID2D1DeviceContext_SetTarget(surface->d2d_context, (ID2D1Image *)bitmap);
+    ID2D1Bitmap1_Release(bitmap);
+    ID2D1DeviceContext_SetDpi(surface->d2d_context, 96.0f, 96.0f);
+    ID2D1DeviceContext_SetTransform(surface->d2d_context, &identity);
+    ID2D1DeviceContext_BeginDraw(surface->d2d_context);
+    clip.left = rect->left;
+    clip.top = rect->top;
+    clip.right = rect->right;
+    clip.bottom = rect->bottom;
+    ID2D1DeviceContext_PushAxisAlignedClip(surface->d2d_context, &clip, D2D1_ANTIALIAS_MODE_ALIASED);
+    surface->d2d_drawing = TRUE;
+    return S_OK;
+
+fail:
+    IUnknown_Release((IUnknown *)*out);
+    *out = NULL;
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE dcomp_surface_BeginDraw(IDCompositionSurface *iface,
+        const RECT *update_rect, REFIID iid, void **update_object, POINT *update_offset)
+{
+    struct dcomp_surface *surface = impl_from_IDCompositionSurface(iface);
+    RECT rect;
+    HRESULT hr;
+
+    TRACE("iface %p, update_rect %p, iid %s, update_object %p, update_offset %p.\n",
+            iface, update_rect, debugstr_guid(iid), update_object, update_offset);
+
+    if (!update_object || !update_offset)
+        return E_INVALIDARG;
+    *update_object = NULL;
+    if (surface->drawing)
+        return DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED;
+
+    if (update_rect)
+    {
+        rect = *update_rect;
+        if (rect.left < 0 || rect.top < 0 || rect.left >= rect.right || rect.top >= rect.bottom
+                || rect.right > (LONG)surface->width || rect.bottom > (LONG)surface->height)
+            return E_INVALIDARG;
+    }
+    else
+    {
+        SetRect(&rect, 0, 0, surface->width, surface->height);
+    }
+
+    hr = ID3D11Texture2D_QueryInterface(surface->texture, iid, update_object);
+    if (FAILED(hr) && surface->d2d_device)
+        hr = dcomp_surface_begin_d2d_draw(surface, &rect, iid, update_object);
+    if (FAILED(hr))
+        return hr;
+
+    update_offset->x = rect.left;
+    update_offset->y = rect.top;
+    surface->drawing = TRUE;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE dcomp_surface_EndDraw(IDCompositionSurface *iface)
+{
+    struct dcomp_surface *surface = impl_from_IDCompositionSurface(iface);
+    HRESULT hr = S_OK;
+
+    TRACE("iface %p.\n", iface);
+
+    if (!surface->drawing)
+        return DCOMPOSITION_ERROR_SURFACE_NOT_BEING_RENDERED;
+    if (surface->d2d_drawing)
+    {
+        ID2D1DeviceContext_PopAxisAlignedClip(surface->d2d_context);
+        hr = ID2D1DeviceContext_EndDraw(surface->d2d_context, NULL, NULL);
+        ID2D1DeviceContext_SetTarget(surface->d2d_context, NULL);
+        surface->d2d_drawing = FALSE;
+    }
+    surface->drawing = FALSE;
+    return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE dcomp_surface_SuspendDraw(IDCompositionSurface *iface)
+{
+    struct dcomp_surface *surface = impl_from_IDCompositionSurface(iface);
+
+    TRACE("iface %p.\n", iface);
+
+    return surface->drawing ? S_OK : DCOMPOSITION_ERROR_SURFACE_NOT_BEING_RENDERED;
+}
+
+static HRESULT STDMETHODCALLTYPE dcomp_surface_ResumeDraw(IDCompositionSurface *iface)
+{
+    struct dcomp_surface *surface = impl_from_IDCompositionSurface(iface);
+
+    TRACE("iface %p.\n", iface);
+
+    return surface->drawing ? S_OK : DCOMPOSITION_ERROR_SURFACE_NOT_BEING_RENDERED;
+}
+
+static HRESULT STDMETHODCALLTYPE dcomp_surface_Scroll(IDCompositionSurface *iface,
+        const RECT *scroll_rect, const RECT *clip_rect, int offset_x, int offset_y)
+{
+    FIXME("iface %p, scroll_rect %p, clip_rect %p, offset %d,%d stub!\n",
+            iface, scroll_rect, clip_rect, offset_x, offset_y);
+
+    return E_NOTIMPL;
+}
+
+static const IDCompositionSurfaceVtbl dcomp_surface_vtbl =
+{
+    dcomp_surface_QueryInterface,
+    dcomp_surface_AddRef,
+    dcomp_surface_Release,
+    dcomp_surface_BeginDraw,
+    dcomp_surface_EndDraw,
+    dcomp_surface_SuspendDraw,
+    dcomp_surface_ResumeDraw,
+    dcomp_surface_Scroll,
+};
+
+static HRESULT dcomp_surface_present(struct dcomp_surface *surface,
+        const struct reactos_dxgi_composition_target *target)
+{
+    ID3D11Texture2D *back_buffer;
+    HRESULT hr;
+
+    if (FAILED(hr = IDXGISwapChain1_SetPrivateData(surface->swapchain,
+            &GUID_ReactOSDXGICompositionWindow, sizeof(*target), target)))
+        return hr;
+    if (surface->drawing)
+        return S_OK;
+    if (FAILED(hr = IDXGISwapChain1_GetBuffer(surface->swapchain, 0, &IID_ID3D11Texture2D,
+            (void **)&back_buffer)))
+        return hr;
+    ID3D11DeviceContext_CopyResource(surface->d3d_context, (ID3D11Resource *)back_buffer,
+            (ID3D11Resource *)surface->texture);
+    ID3D11Texture2D_Release(back_buffer);
+    return IDXGISwapChain1_Present(surface->swapchain, 0, 0);
+}
+
+static HRESULT dcomp_surface_get_d3d_device(struct dcomp_surface *surface)
+{
+    IUnknown *rendering_device = surface->device->rendering_device;
+    D2D1_BITMAP_PROPERTIES1 bitmap_desc;
+    ID2D1DeviceContext *context;
+    IDXGISurface *dxgi_surface;
+    ID2D1Bitmap1 *bitmap;
+    D2D1_SIZE_U size;
+    HRESULT hr;
+
+    if (!rendering_device)
+        return E_INVALIDARG;
+    if (SUCCEEDED(IUnknown_QueryInterface(rendering_device, &IID_ID3D11Device,
+            (void **)&surface->d3d_device)))
+        return S_OK;
+    if (FAILED(hr = IUnknown_QueryInterface(rendering_device, &IID_ID2D1Device,
+            (void **)&surface->d2d_device)))
+        return hr;
+
+    if (FAILED(hr = ID2D1Device_CreateDeviceContext(surface->d2d_device,
+            D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &context)))
+        return hr;
+    size.width = 1;
+    size.height = 1;
+    bitmap_desc.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    bitmap_desc.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+    bitmap_desc.dpiX = 96.0f;
+    bitmap_desc.dpiY = 96.0f;
+    bitmap_desc.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+    bitmap_desc.colorContext = NULL;
+    hr = ID2D1DeviceContext_CreateBitmap(context, size, NULL, 0, &bitmap_desc, &bitmap);
+    ID2D1DeviceContext_Release(context);
+    if (FAILED(hr))
+        return hr;
+    hr = ID2D1Bitmap1_GetSurface(bitmap, &dxgi_surface);
+    ID2D1Bitmap1_Release(bitmap);
+    if (FAILED(hr))
+        return hr;
+    hr = IDXGISurface_GetDevice(dxgi_surface, &IID_ID3D11Device, (void **)&surface->d3d_device);
+    IDXGISurface_Release(dxgi_surface);
+    return hr;
+}
+
+static HRESULT dcomp_surface_create(struct dcomp_device *device, UINT width, UINT height,
+        DXGI_FORMAT format, DXGI_ALPHA_MODE alpha_mode, IDCompositionSurface **out)
+{
+    DXGI_SWAP_CHAIN_DESC1 swapchain_desc;
+    D3D11_TEXTURE2D_DESC texture_desc;
+    struct dcomp_surface *surface;
+    IDXGIDevice *dxgi_device;
+    IDXGIFactory2 *factory;
+    IDXGIAdapter *adapter;
+    HRESULT hr;
+
+    if (!(surface = calloc(1, sizeof(*surface))))
+        return E_OUTOFMEMORY;
+    surface->IDCompositionSurface_iface.lpVtbl = &dcomp_surface_vtbl;
+    surface->refcount = 1;
+    surface->device = device;
+    dcomp_device_addref(device);
+    surface->width = width;
+    surface->height = height;
+    surface->format = format;
+    surface->alpha_mode = alpha_mode;
+
+    if (FAILED(hr = dcomp_surface_get_d3d_device(surface)))
+        goto fail;
+    ID3D11Device_GetImmediateContext(surface->d3d_device, &surface->d3d_context);
+
+    texture_desc.Width = width;
+    texture_desc.Height = height;
+    texture_desc.MipLevels = 1;
+    texture_desc.ArraySize = 1;
+    texture_desc.Format = format;
+    texture_desc.SampleDesc.Count = 1;
+    texture_desc.SampleDesc.Quality = 0;
+    texture_desc.Usage = D3D11_USAGE_DEFAULT;
+    texture_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    texture_desc.CPUAccessFlags = 0;
+    texture_desc.MiscFlags = 0;
+    if (FAILED(hr = ID3D11Device_CreateTexture2D(surface->d3d_device, &texture_desc, NULL,
+            &surface->texture)))
+        goto fail;
+
+    if (FAILED(hr = ID3D11Device_QueryInterface(surface->d3d_device, &IID_IDXGIDevice,
+            (void **)&dxgi_device)))
+        goto fail;
+    hr = IDXGIDevice_GetAdapter(dxgi_device, &adapter);
+    IDXGIDevice_Release(dxgi_device);
+    if (FAILED(hr))
+        goto fail;
+    hr = IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory2, (void **)&factory);
+    IDXGIAdapter_Release(adapter);
+    if (FAILED(hr))
+        goto fail;
+
+    memset(&swapchain_desc, 0, sizeof(swapchain_desc));
+    swapchain_desc.Width = width;
+    swapchain_desc.Height = height;
+    swapchain_desc.Format = format;
+    swapchain_desc.SampleDesc.Count = 1;
+    swapchain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    swapchain_desc.BufferCount = 2;
+    swapchain_desc.Scaling = DXGI_SCALING_STRETCH;
+    swapchain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    swapchain_desc.AlphaMode = alpha_mode;
+    hr = IDXGIFactory2_CreateSwapChainForComposition(factory, (IUnknown *)surface->d3d_device,
+            &swapchain_desc, NULL, &surface->swapchain);
+    IDXGIFactory2_Release(factory);
+    if (FAILED(hr))
+        goto fail;
+
+    *out = &surface->IDCompositionSurface_iface;
+    return S_OK;
+
+fail:
+    WARN("Failed to create a %ux%u surface, format %#x, alpha mode %#x, hr %#lx.\n",
+            width, height, format, alpha_mode, hr);
+    dcomp_surface_Release(&surface->IDCompositionSurface_iface);
+    return hr;
+}
+
 static ULONG dcomp_device_addref(struct dcomp_device *device)
 {
     return InterlockedIncrement(&device->refcount);
@@ -757,17 +1136,32 @@ static HRESULT dcomp_commit_visual(struct dcomp_visual *visual, HWND window,
 
     if (visual->content)
     {
-        hr = IUnknown_QueryInterface(visual->content, &IID_IDXGIObject,
-                (void **)&dxgi_object);
-        if (FAILED(hr))
-            return hr;
+        IDCompositionSurface *surface;
 
-        hr = IDXGIObject_SetPrivateData(dxgi_object,
-                &GUID_ReactOSDXGICompositionWindow, sizeof(composition_target),
-                &composition_target);
-        IDXGIObject_Release(dxgi_object);
-        if (FAILED(hr))
-            return hr;
+        if (SUCCEEDED(IUnknown_QueryInterface(visual->content, &IID_IDCompositionSurface_local,
+                (void **)&surface)))
+        {
+            hr = surface->lpVtbl == &dcomp_surface_vtbl
+                    ? dcomp_surface_present(impl_from_IDCompositionSurface(surface), &composition_target)
+                    : E_INVALIDARG;
+            surface->lpVtbl->Release(surface);
+            if (FAILED(hr))
+                return hr;
+        }
+        else
+        {
+            hr = IUnknown_QueryInterface(visual->content, &IID_IDXGIObject,
+                    (void **)&dxgi_object);
+            if (FAILED(hr))
+                return hr;
+
+            hr = IDXGIObject_SetPrivateData(dxgi_object,
+                    &GUID_ReactOSDXGICompositionWindow, sizeof(composition_target),
+                    &composition_target);
+            IDXGIObject_Release(dxgi_object);
+            if (FAILED(hr))
+                return hr;
+        }
     }
 
     LIST_FOR_EACH_ENTRY(child, &visual->children, struct dcomp_visual, entry)
@@ -877,8 +1271,18 @@ static HRESULT STDMETHODCALLTYPE dcomp_device_CreateSurface(IDCompositionDevice 
         UINT width, UINT height, DXGI_FORMAT format, DXGI_ALPHA_MODE alpha_mode,
         IDCompositionSurface **out)
 {
-    if (out) *out = NULL;
-    return E_NOTIMPL;
+    struct dcomp_device *device = impl_from_IDCompositionDevice(iface);
+
+    TRACE("iface %p, width %u, height %u, format %#x, alpha_mode %#x, out %p.\n",
+            iface, width, height, format, alpha_mode, out);
+
+    if (!out)
+        return E_INVALIDARG;
+    *out = NULL;
+    if (!width || !height)
+        return E_INVALIDARG;
+
+    return dcomp_surface_create(device, width, height, format, alpha_mode, out);
 }
 
 static HRESULT STDMETHODCALLTYPE dcomp_device_CreateVirtualSurface(IDCompositionDevice *iface,
