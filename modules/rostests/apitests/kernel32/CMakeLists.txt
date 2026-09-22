@@ -47,6 +47,7 @@ list(APPEND SOURCE
     SystemImageCatalog.c
     SharedMemorySecurity.c
     SharedMemoryTransfer.c
+    StdHandleInheritance.c
     LocaleNameToLCID.c
     lstrcpynW.c
     lstrlen.c
