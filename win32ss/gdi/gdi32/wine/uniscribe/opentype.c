@@ -1262,10 +1262,95 @@ static INT GSUB_apply_ChainContextSubst(const OT_LookupList* lookup, const OT_Lo
         ccsf1 = (const GSUB_ChainContextSubstFormat1*)GSUB_get_subtable(look, j);
         if (GET_BE_WORD(ccsf1->SubstFormat) == 1)
         {
+#ifdef __REACTOS__
+            const GSUB_ChainSubClassSet *crs;
+            int index, i;
+            WORD count;
+
+            TRACE("  subtype 1 (Simple Chaining Context Glyph Substitution)\n");
+
+            offset = GET_BE_WORD(ccsf1->Coverage);
+            index = GSUB_is_glyph_covered((const BYTE*)ccsf1+offset, glyphs[glyph_index]);
+            if (index == -1 || index >= GET_BE_WORD(ccsf1->ChainSubRuleSetCount))
+                continue;
+
+            offset = GET_BE_WORD(ccsf1->ChainSubRuleSet[index]);
+            if (offset == 0)
+                continue;
+
+            crs = (const GSUB_ChainSubClassSet*)((const BYTE*)ccsf1+offset);
+            count = GET_BE_WORD(crs->ChainSubClassRuleCnt);
+
+            for (i = 0; i < count; i++)
+            {
+                WORD backtrack_count, input_count, lookahead_count, substitute_count;
+                int k;
+                const GSUB_ChainSubClassRule_1 *backtrack;
+                const GSUB_ChainSubClassRule_2 *input;
+                const GSUB_ChainSubClassRule_3 *lookahead;
+                const GSUB_ChainSubClassRule_4 *substitute;
+                int new_index = GSUB_E_NOGLYPH;
+
+                offset = GET_BE_WORD(crs->ChainSubClassRule[i]);
+                backtrack = (const GSUB_ChainSubClassRule_1 *)((const BYTE *)crs + offset);
+                backtrack_count = GET_BE_WORD(backtrack->BacktrackGlyphCount);
+                k = glyph_index + dirBacktrack * backtrack_count;
+                if (k < 0 || k >= *glyph_count)
+                    continue;
+
+                input = (const GSUB_ChainSubClassRule_2 *)&backtrack->Backtrack[backtrack_count];
+                input_count = GET_BE_WORD(input->InputGlyphCount) - 1;
+                k = glyph_index + write_dir * input_count;
+                if (k < 0 || k >= *glyph_count)
+                    continue;
+
+                lookahead = (const GSUB_ChainSubClassRule_3 *)&input->Input[input_count];
+                lookahead_count = GET_BE_WORD(lookahead->LookaheadGlyphCount);
+                k = glyph_index + dirLookahead * (input_count + lookahead_count);
+                if (k < 0 || k >= *glyph_count)
+                    continue;
+
+                substitute = (const GSUB_ChainSubClassRule_4 *)&lookahead->LookAhead[lookahead_count];
+
+                for (k = 0; k < backtrack_count; ++k)
+                    if (GET_BE_WORD(backtrack->Backtrack[k]) != glyphs[glyph_index + (dirBacktrack * (k+1))])
+                        break;
+                if (k != backtrack_count)
+                    continue;
+
+                for (k = 0; k < input_count; ++k)
+                    if (GET_BE_WORD(input->Input[k]) != glyphs[glyph_index + (write_dir * (k+1))])
+                        break;
+                if (k != input_count)
+                    continue;
+
+                for (k = 0; k < lookahead_count; ++k)
+                    if (GET_BE_WORD(lookahead->LookAhead[k]) != glyphs[glyph_index + (dirLookahead * (input_count + k + 1))])
+                        break;
+                if (k != lookahead_count)
+                    continue;
+
+                substitute_count = GET_BE_WORD(substitute->SubstCount);
+                for (k = 0; k < substitute_count; ++k)
+                {
+                    unsigned int lookup_index = GET_BE_WORD(substitute->SubstLookupRecord[k].LookupListIndex);
+                    unsigned int sequence_index = GET_BE_WORD(substitute->SubstLookupRecord[k].SequenceIndex);
+                    unsigned int g = glyph_index + write_dir * sequence_index;
+
+                    if (g >= *glyph_count)
+                        continue;
+
+                    new_index = GSUB_apply_lookup(lookup, lookup_index, glyphs, g, write_dir, glyph_count);
+                }
+                return new_index;
+            }
+            continue;
+#else
             static int once;
             if (!once++)
                 FIXME("  TODO: subtype 1 (Simple context glyph substitution)\n");
             continue;
+#endif
         }
         else if (GET_BE_WORD(ccsf1->SubstFormat) == 2)
         {
