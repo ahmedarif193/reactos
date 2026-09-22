@@ -850,7 +850,8 @@ MmCreateSection(
         if (NT_SUCCESS(Status))
             Status = MiCreateImageControlArea(File, &Control);
         if (NT_SUCCESS(Status))
-            Size = Control->ImageSize;
+            Size = (MaximumSize != NULL && MaximumSize->QuadPart != 0) ? (ULONG64)MaximumSize->QuadPart
+                                                                      : Control->ImageSize;
     }
     else
     {
