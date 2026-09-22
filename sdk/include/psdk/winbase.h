@@ -238,6 +238,10 @@ extern "C" {
 #define COPY_FILE_RESTARTABLE                   0x00000002
 #define COPY_FILE_OPEN_SOURCE_FOR_WRITE         0x00000004
 #define COPY_FILE_ALLOW_DECRYPTED_DESTINATION   0x00000008
+#if (_WIN32_WINNT >= 0x0600)
+#define COPY_FILE_COPY_SYMLINK                  0x00000800
+#define COPY_FILE_NO_BUFFERING                  0x00001000
+#endif
 
 #define FILE_FLAG_WRITE_THROUGH                 0x80000000
 #define FILE_FLAG_OVERLAPPED                    0x40000000
