@@ -117,13 +117,8 @@ MiSegmentChargeCommit(
     _Inout_ PMI_SEGMENT Segment,
     _In_ LONG64 Pages)
 {
-    PMI_SYSTEM System = Segment->System;
-
-    if (MI_ATOMIC_ADD64(&System->CommittedPages, Pages) + Pages > System->CommitLimit)
-    {
-        MI_ATOMIC_ADD64(&System->CommittedPages, -Pages);
+    if (!MiChargeSystemCommit(Segment->System, Pages, TRUE))
         return FALSE;
-    }
 
     Segment->CommitCharge += Pages;
     return TRUE;

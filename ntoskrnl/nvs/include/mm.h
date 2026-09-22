@@ -102,6 +102,8 @@ typedef struct _MI_SYSTEM
     PVOID Context;
     BOOLEAN (*ChargeOwnerCommit)(_In_ PVOID Owner, _In_ LONG64 Pages);
     VOID (*ReturnOwnerCommit)(_In_ PVOID Owner, _In_ LONG64 Pages);
+    BOOLEAN (*ExpandCommit)(_Inout_ struct _MI_SYSTEM *System, _In_ LONG64 Pages, _In_ LONG64 Limit,
+                            _In_ BOOLEAN Wait);
 } MI_SYSTEM, *PMI_SYSTEM;
 
 NTSTATUS MiSystemInitialize(_Out_ PMI_SYSTEM System, _In_ PMI_PFN PfnArray, _In_ ULONG FrameCount,
@@ -468,6 +470,8 @@ NTSTATUS MiPageFileInitialize(_Out_ PMI_PAGEFILE PageFile, _In_ PMI_PAGEFILE_OPS
 VOID MiPageFileUninitialize(_Inout_ PMI_PAGEFILE PageFile);
 ULONG64 MiPageFileReserveSlot(_Inout_ PMI_PAGEFILE PageFile);
 VOID MiPageFileReleaseSlot(_Inout_ PMI_PAGEFILE PageFile, _In_ ULONG64 Slot);
+NTSTATUS MiPageFileExtend(_Inout_ PMI_PAGEFILE PageFile, _In_ ULONG64 SlotCount);
 
+BOOLEAN MiChargeSystemCommit(_Inout_ PMI_SYSTEM System, _In_ LONG64 Pages, _In_ BOOLEAN Wait);
 BOOLEAN MiChargeCommit(_Inout_ PMI_ADDRESS_SPACE Space, _In_ LONG64 Pages);
 VOID MiReturnCommit(_Inout_ PMI_ADDRESS_SPACE Space, _In_ LONG64 Pages);
