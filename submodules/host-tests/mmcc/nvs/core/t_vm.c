@@ -390,6 +390,64 @@ VmMemCommitAndLimits(void)
     WorldDestroy(&World);
 }
 
+static
+NTSTATUS
+AllocBounded(PMI_ADDRESS_SPACE Space, ULONG64 *Base, ULONG64 Size, ULONG Type, ULONG64 Lowest, ULONG64 Highest,
+             ULONG64 Alignment)
+{
+    ULONG64 RegionSize = Size;
+
+    return MiAllocateVirtualMemoryBounded(Space, Base, &RegionSize, Type, MI_PROT_READWRITE, Lowest, Highest,
+                                          Alignment);
+}
+
+static
+void
+VmAddressRequirements(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    ULONG64 Base;
+
+    WorldCreate(&World, 256, 1, 5000);
+    ProcessCreate(&World, &Space);
+
+    Base = 0;
+    CHECK(NT_SUCCESS(AllocBounded(&Space, &Base, 0x10000, MI_MEM_RESERVE, 0x40000000ULL, ~0ULL, 0)));
+    CHECK(Base >= 0x40000000ULL && (Base & 0xFFFF) == 0);
+
+    Base = 0;
+    CHECK(NT_SUCCESS(AllocBounded(&Space, &Base, 0x10000, MI_MEM_RESERVE, 0x40010000ULL, 0x7FFFFFFFULL, 0x200000)));
+    CHECK(Base >= 0x40010000ULL && Base + 0x10000 - 1 <= 0x7FFFFFFFULL && (Base & 0x1FFFFF) == 0);
+
+    Base = 0;
+    CHECK(NT_SUCCESS(AllocBounded(&Space, &Base, 0x10000, MI_MEM_RESERVE | MI_MEM_TOP_DOWN, 0x20000000ULL,
+                                  0x3000FFFFULL, 0)));
+    CHECK(Base == 0x30000000ULL);
+
+    Base = 0;
+    CHECK(NT_SUCCESS(AllocBounded(&Space, &Base, 0x10000, MI_MEM_RESERVE | MI_MEM_COMMIT, 0x20000000ULL,
+                                  0x3000FFFFULL, 0)));
+    CHECK(Base >= 0x20000000ULL && Base + 0x10000 - 1 <= 0x3000FFFFULL);
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base, 0x1234)));
+    CHECK(Free(&Space, Base, 0, MI_MEM_RELEASE) == STATUS_SUCCESS);
+
+    Base = 0;
+    CHECK(AllocBounded(&Space, &Base, 0x20000, MI_MEM_RESERVE, 0x50000000ULL, 0x5000FFFFULL, 0) == STATUS_NO_MEMORY);
+
+    Base = USER_BASE;
+    CHECK(AllocBounded(&Space, &Base, 0x10000, MI_MEM_RESERVE, 0x40000000ULL, ~0ULL, 0) ==
+          STATUS_INVALID_PARAMETER);
+
+    Base = 0;
+    CHECK(AllocBounded(&Space, &Base, 0x200000, MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_LARGE_PAGES, 0x40000000ULL,
+                       ~0ULL, 0) == STATUS_NOT_SUPPORTED);
+
+    ProcessDestroy(&World, &Space);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+}
+
 void
 TestVm(void)
 {
@@ -397,6 +455,7 @@ TestVm(void)
     VmCommitDecommitBatch();
     VmReserveCommitMatrix();
     VmMemCommitAndLimits();
+    VmAddressRequirements();
 }
 
 static
