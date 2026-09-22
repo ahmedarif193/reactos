@@ -8,6 +8,7 @@ list(APPEND SOURCE
     CharFuncs.c
     CloseWindow.c
     ClipboardAccess.c
+    ClipboardData.c
     ComboBox.c
     CopyImage.c
     CopyImage_Icon.c
@@ -23,6 +24,7 @@ list(APPEND SOURCE
     DrawText.c
     desktop.c
     EmptyClipboard.c
+    EnableScrollBar.c
     EnumDisplaySettings.c
     GetClassInfo.c
     GetDCEx.c
@@ -45,12 +47,14 @@ list(APPEND SOURCE
     IsTopLevelWindow.c
     IsServerSideWindow.c
     KbdLayout.c
+    LargeMessageBuffers.c
     keybd_event.c
     LoadImage.c
     LoadImageGCC.c
     LookupIconIdFromDirectoryEx.c
     MenuUI.c
     MessageStateAnalyzer.c
+    MinimizedPosition.c
     ModernUser32.c
     NextDlgItem.c
     NonClientPaint.c

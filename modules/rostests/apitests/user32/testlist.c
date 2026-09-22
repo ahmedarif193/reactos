@@ -23,6 +23,8 @@ extern void func_DrawText(void);
 extern void func_desktop(void);
 extern void func_EmptyClipboard(void);
 extern void func_ClipboardAccess(void);
+extern void func_ClipboardData(void);
+extern void func_EnableScrollBar(void);
 extern void func_EnumDisplaySettings(void);
 extern void func_GetClassInfo(void);
 extern void func_GetDCEx(void);
@@ -45,12 +47,14 @@ extern void func_InputMessageSource(void);
 extern void func_IsTopLevelWindow(void);
 extern void func_IsServerSideWindow(void);
 extern void func_KbdLayout(void);
+extern void func_LargeMessageBuffers(void);
 extern void func_keybd_event(void);
 extern void func_LoadImage(void);
 extern void func_LoadImageGCC(void);
 extern void func_LookupIconIdFromDirectoryEx(void);
 extern void func_MenuUI(void);
 extern void func_MessageStateAnalyzer(void);
+extern void func_MinimizedPosition(void);
 extern void func_ModernUser32(void);
 extern void func_NextDlgItem(void);
 extern void func_NonClientPaint(void);
@@ -113,6 +117,8 @@ const struct test winetest_testlist[] =
     { "desktop", func_desktop },
     { "EmptyClipboard", func_EmptyClipboard },
     { "ClipboardAccess", func_ClipboardAccess },
+    { "ClipboardData", func_ClipboardData },
+    { "EnableScrollBar", func_EnableScrollBar },
     { "EnumDisplaySettings", func_EnumDisplaySettings },
     { "GetClassInfo", func_GetClassInfo },
     { "GetDCEx", func_GetDCEx },
@@ -135,12 +141,14 @@ const struct test winetest_testlist[] =
     { "IsTopLevelWindow", func_IsTopLevelWindow },
     { "IsServerSideWindow", func_IsServerSideWindow },
     { "KbdLayout", func_KbdLayout },
+    { "LargeMessageBuffers", func_LargeMessageBuffers },
     { "keybd_event", func_keybd_event },
     { "LoadImage", func_LoadImage },
     { "LoadImageGCC", func_LoadImageGCC },
     { "LookupIconIdFromDirectoryEx", func_LookupIconIdFromDirectoryEx },
     { "MenuUI", func_MenuUI },
     { "MessageStateAnalyzer", func_MessageStateAnalyzer },
+    { "MinimizedPosition", func_MinimizedPosition },
     { "ModernUser32", func_ModernUser32 },
     { "NextDlgItem", func_NextDlgItem },
     { "NonClientPaint", func_NonClientPaint },
