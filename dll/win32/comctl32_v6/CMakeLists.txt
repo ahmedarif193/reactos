@@ -67,7 +67,7 @@ add_library(comctl32_v6 MODULE
 set_target_properties(comctl32_v6 PROPERTIES OUTPUT_NAME comctl32)
 set_module_type(comctl32_v6 win32dll UNICODE)
 target_link_libraries(comctl32_v6 uuid wine ${PSEH_LIB} oldnames)
-add_delay_importlibs(comctl32_v6 oleacc winmm uxtheme)
+add_delay_importlibs(comctl32_v6 oleacc winmm uxtheme ole32)
 add_importlibs(comctl32_v6 user32 gdi32 advapi32 usp10 imm32 kernelbase_ros oleaut32 msvcrt kernel32 ntdll)
 add_pch(comctl32_v6 ${COMCTL32_COMMON_DIR}/precomp.h SOURCE)
 add_dependencies(comctl32_v6 psdk)
