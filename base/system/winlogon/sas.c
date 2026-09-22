@@ -364,7 +364,7 @@ PlayLogonSoundThread(
 
     /* Sound subsystem is running. Play logon sound. */
     TRACE("Playing %s sound\n", SoundData->IsStartup ? "startup" : "logon");
-    if (!ImpersonateLoggedOnUser(SoundData->UserToken))
+    if (SoundData->UserToken && !ImpersonateLoggedOnUser(SoundData->UserToken))
     {
         ERR("ImpersonateLoggedOnUser failed (%x)\n", GetLastError());
     }
@@ -373,7 +373,8 @@ PlayLogonSoundThread(
         PlaySoundRoutine(SoundData->IsStartup ? L"SystemStart" : L"WindowsLogon",
                          TRUE,
                          SND_ALIAS | SND_NODEFAULT);
-        RevertToSelf();
+        if (SoundData->UserToken)
+            RevertToSelf();
     }
 
 Cleanup:
@@ -411,7 +412,7 @@ PlayLogoffShutdownSound(
     _In_ PWLSESSION Session,
     _In_ BOOL bShutdown)
 {
-    if (!ImpersonateLoggedOnUser(Session->UserToken))
+    if (Session->UserToken && !ImpersonateLoggedOnUser(Session->UserToken))
         return;
 
     /* NOTE: Logoff and shutdown sounds play synchronously */
@@ -419,7 +420,8 @@ PlayLogoffShutdownSound(
                      FALSE,
                      SND_ALIAS | SND_NODEFAULT);
 
-    RevertToSelf();
+    if (Session->UserToken)
+        RevertToSelf();
 }
 
 static
@@ -430,12 +432,13 @@ PlayEventSound(
 {
     BOOL bRet;
 
-    if (!ImpersonateLoggedOnUser(Session->UserToken))
+    if (Session->UserToken && !ImpersonateLoggedOnUser(Session->UserToken))
         return FALSE;
 
     bRet = PlaySoundRoutine(EventName, FALSE, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
 
-    RevertToSelf();
+    if (Session->UserToken)
+        RevertToSelf();
 
     return bRet;
 }
