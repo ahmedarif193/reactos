@@ -574,7 +574,7 @@ DisplayBootBitmap(
 {
     PVOID BootCopy = NULL, BootProgress = NULL, BootLogo = NULL, Header = NULL, Footer = NULL;
     VID_DISPLAY_INFO DisplayInfo;
-    ULONG CanvasLeft, CanvasTop, CharacterWidth, ScrollLeft, ScrollRight;
+    ULONG CanvasLeft, CanvasTop;
     UCHAR FooterCenterColor;
 
     if (InbvGopHandleBootBitmap(TextMode))
@@ -660,16 +660,8 @@ DisplayBootBitmap(
             }
         }
 
-        /*
-         * Set the scrolling region on complete character cells. The
-         * framebuffer boot driver can select a wider FreeType cell than the
-         * legacy 8-pixel bitmap font.
-         */
-        CharacterWidth = max(DisplayInfo.CharacterWidth, 1UL);
-        ScrollLeft = ((VID_SCROLL_AREA_LEFT + CharacterWidth - 1) / CharacterWidth) * CharacterWidth;
-        ScrollRight = DisplayInfo.Width - (SCREEN_WIDTH - VID_SCROLL_AREA_RIGHT);
-        ScrollRight = ((ScrollRight + 1) / CharacterWidth) * CharacterWidth - 1;
-        InbvSetScrollRegion(ScrollLeft, VID_SCROLL_AREA_TOP, ScrollRight, DisplayInfo.Height - (SCREEN_HEIGHT - VID_SCROLL_AREA_BOTTOM));
+        /* Set the scrolling region; bootvid reduces it to complete character cells */
+        InbvSetScrollRegion(VID_SCROLL_AREA_LEFT, VID_SCROLL_AREA_TOP, DisplayInfo.Width - (SCREEN_WIDTH - VID_SCROLL_AREA_RIGHT), DisplayInfo.Height - (SCREEN_HEIGHT - VID_SCROLL_AREA_BOTTOM));
 
         /* Make sure we have resources */
         if (Header && Footer)
