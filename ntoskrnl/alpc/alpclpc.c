@@ -984,6 +984,17 @@ AlpcpCheckServerSid(
     return Status;
 }
 
+static
+ULONG_PTR
+LpcpClientViewZeroBits(VOID)
+{
+#ifdef _WIN64
+    if (PsGetCurrentProcessWow64Process() != NULL)
+        return 32;
+#endif
+    return 0;
+}
+
 NTSTATUS
 NTAPI
 NtSecureConnectPort(
@@ -1118,7 +1129,7 @@ NtSecureConnectPort(
         if (!NT_SUCCESS(Status)) goto Failure;
 
         SectionOffset.QuadPart = CapturedClientView.SectionOffset;
-        Status = MmMapViewOfSection(SectionToMap, PsGetCurrentProcess(), &ClientPort->ClientSectionBase, 0, 0, &SectionOffset, &CapturedClientView.ViewSize, ViewUnmap, 0, PAGE_READWRITE);
+        Status = MmMapViewOfSection(SectionToMap, PsGetCurrentProcess(), &ClientPort->ClientSectionBase, LpcpClientViewZeroBits(), 0, &SectionOffset, &CapturedClientView.ViewSize, ViewUnmap, 0, PAGE_READWRITE);
         if (!NT_SUCCESS(Status)) goto Failure;
         CapturedClientView.SectionOffset = SectionOffset.LowPart;
         CapturedClientView.ViewBase = ClientPort->ClientSectionBase;
@@ -1146,6 +1157,7 @@ NtSecureConnectPort(
     Message->Connection.SecurityQos = CapturedQos;
     if (ClientView) Message->Connection.ClientView = CapturedClientView;
     Message->Connection.SectionToMap = SectionToMap;
+    Message->Connection.ClientWow64 = (BOOLEAN)(LpcpClientViewZeroBits() != 0);
     SectionToMap = NULL;
     ObReferenceObject(ClientPort);
     Message->Connection.ClientPort = ClientPort;
@@ -1314,7 +1326,7 @@ AlpcpAcceptLegacyConnection(
     if (Message->Connection.SectionToMap)
     {
         SectionOffset.QuadPart = Message->Connection.ClientView.SectionOffset;
-        Status = MmMapViewOfSection(Message->Connection.SectionToMap, PsGetCurrentProcess(), &ServerPort->ClientSectionBase, 0, 0, &SectionOffset, &Message->Connection.ClientView.ViewSize, ViewUnmap, 0, PAGE_READWRITE);
+        Status = MmMapViewOfSection(Message->Connection.SectionToMap, PsGetCurrentProcess(), &ServerPort->ClientSectionBase, Message->Connection.ClientWow64 ? 32 : 0, 0, &SectionOffset, &Message->Connection.ClientView.ViewSize, ViewUnmap, 0, PAGE_READWRITE);
         if (!NT_SUCCESS(Status))
         {
             ObDereferenceObject(ConnectionPort);
