@@ -353,7 +353,9 @@ DxgkDeviceSetExecutionState(
 {
     if (Device == NULL)
         return;
-    if (ExecutionState != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    if (ExecutionState != D3DKMT_DEVICEEXECUTION_ACTIVE &&
+        !(ExecutionState == D3DKMT_DEVICEEXECUTION_STOPPED &&
+          InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0))
     {
         DPRINT1("DxgkDeviceSetExecutionState: device %p handle 0x%X state %d -> %d (caller %p)\n",
                 Device, Device->Handle,
