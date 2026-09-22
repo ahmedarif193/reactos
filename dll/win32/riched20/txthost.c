@@ -1556,20 +1556,33 @@ LRESULT WINAPI RichEdit10ANSIWndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     return RichEditANSIWndProc( hwnd, msg, wparam, lparam );
 }
 
+#ifdef __REACTOS__
+static WNDPROC re_combobox_proc;
+static WNDPROC re_listbox_proc;
+#endif
+
 static LRESULT WINAPI REComboWndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam )
 {
+#ifdef __REACTOS__
+    return CallWindowProcW( re_combobox_proc, hwnd, msg, wparam, lparam );
+#else
     /* FIXME: Not implemented */
     TRACE( "hwnd %p msg %04x (%s) %08Ix %08Ix\n",
            hwnd, msg, get_msg_name( msg ), wparam, lparam );
     return DefWindowProcW( hwnd, msg, wparam, lparam );
+#endif
 }
 
 static LRESULT WINAPI REListWndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam )
 {
+#ifdef __REACTOS__
+    return CallWindowProcW( re_listbox_proc, hwnd, msg, wparam, lparam );
+#else
     /* FIXME: Not implemented */
     TRACE( "hwnd %p msg %04x (%s) %08Ix %08Ix\n",
            hwnd, msg, get_msg_name( msg ), wparam, lparam );
     return DefWindowProcW( hwnd, msg, wparam, lparam );
+#endif
 }
 
 /******************************************************************
@@ -1582,8 +1595,13 @@ LRESULT WINAPI REExtendedRegisterClass( void )
 {
     WNDCLASSW wc;
     UINT result;
+#ifdef __REACTOS__
+    WNDCLASSW base;
+#endif
 
+#ifndef __REACTOS__
     FIXME( "semi stub\n" );
+#endif
     wc.cbClsExtra = 0;
     wc.cbWndExtra = 4;
     wc.hInstance = NULL;
@@ -1597,7 +1615,16 @@ LRESULT WINAPI REExtendedRegisterClass( void )
         wc.style = CS_PARENTDC | CS_DBLCLKS | CS_GLOBALCLASS;
         wc.lpfnWndProc = REListWndProc;
         wc.lpszClassName = L"REListBox20W";
+#ifdef __REACTOS__
+        if (GetClassInfoW( NULL, L"ListBox", &base ))
+        {
+            re_listbox_proc = base.lpfnWndProc;
+            wc.cbWndExtra = base.cbWndExtra;
+            if (RegisterClassW( &wc )) listbox_registered = TRUE;
+        }
+#else
         if (RegisterClassW( &wc )) listbox_registered = TRUE;
+#endif
     }
 
     if (!combobox_registered)
@@ -1605,7 +1632,16 @@ LRESULT WINAPI REExtendedRegisterClass( void )
         wc.style = CS_PARENTDC | CS_DBLCLKS | CS_GLOBALCLASS | CS_VREDRAW | CS_HREDRAW;
         wc.lpfnWndProc = REComboWndProc;
         wc.lpszClassName = L"REComboBox20W";
+#ifdef __REACTOS__
+        if (GetClassInfoW( NULL, L"ComboBox", &base ))
+        {
+            re_combobox_proc = base.lpfnWndProc;
+            wc.cbWndExtra = base.cbWndExtra;
+            if (RegisterClassW( &wc )) combobox_registered = TRUE;
+        }
+#else
         if (RegisterClassW( &wc )) combobox_registered = TRUE;
+#endif
     }
 
     result = 0;
