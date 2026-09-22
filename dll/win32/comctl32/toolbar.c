@@ -189,6 +189,7 @@ typedef struct
     IDropTarget *pDropTarget;
     INT      nDropItem;
     BOOL     bDropRegistered;
+    INT      iDropDownGap;
 #endif
 } TOOLBAR_INFO, *PTOOLBAR_INFO;
 
@@ -1935,6 +1936,10 @@ TOOLBAR_LayoutToolbar(TOOLBAR_INFO *infoPtr)
                   TOOLBAR_IsValidBitmapIndex(infoPtr, infoPtr->buttons[i].iBitmap),
                   validImageList);
               cx = sizeButton.cx;
+#ifdef __REACTOS__
+              if (sz.cx && button_has_ddarrow(infoPtr, btnPtr))
+                  cx += infoPtr->iDropDownGap;
+#endif
             }
             else
 	      cx = infoPtr->nButtonWidth;
@@ -5684,7 +5689,14 @@ TOOLBAR_GetIdealSize (const TOOLBAR_INFO *infoPtr, WPARAM wParam, LPARAM lParam)
 
 static LRESULT TOOLBAR_Unkwn464(HWND hwnd, WPARAM wParam, LPARAM lParam)
 {
+#ifdef __REACTOS__
+    TOOLBAR_INFO *infoPtr = (TOOLBAR_INFO *)GetWindowLongPtrW(hwnd, 0);
+
+    infoPtr->iDropDownGap = (INT)wParam;
+    TOOLBAR_CalcToolbar(infoPtr);
+#else
     FIXME("hwnd %p, wParam %Ix, lParam %Ix\n", hwnd, wParam, lParam);
+#endif
 
     InvalidateRect(hwnd, NULL, TRUE);
     return 1;
