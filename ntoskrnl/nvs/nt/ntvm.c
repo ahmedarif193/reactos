@@ -313,7 +313,10 @@ MiAllocateVirtualMemoryNt(
     if (RegionSize == 0 || (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - (ULONG_PTR)BaseAddress < RegionSize)
         return STATUS_INVALID_PARAMETER;
 
-    if (BaseAddress != NULL && HighestEndingAddress == 0)
+    if (BaseAddress != NULL && (LowestAddress | HighestEndingAddress | Alignment) != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    if (BaseAddress != NULL)
         Highest = (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
     else if (Highest + 1 < PAGE_SIZE)
         return STATUS_INVALID_PARAMETER;
@@ -460,15 +463,12 @@ MiCaptureAddressRequirements(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (*LowestAddress != 0 &&
-        (*LowestAddress & (((*Alignment != 0) ? *Alignment : MI_ALLOCATION_GRANULARITY) - 1)) != 0)
-    {
+    if ((*LowestAddress & (MI_ALLOCATION_GRANULARITY - 1)) != 0)
         return STATUS_INVALID_PARAMETER;
-    }
 
     if (*HighestEndingAddress != 0)
     {
-        if ((*HighestEndingAddress & (PAGE_SIZE - 1)) != PAGE_SIZE - 1 ||
+        if (((*HighestEndingAddress + 1) & (MI_ALLOCATION_GRANULARITY - 1)) != 0 ||
             *HighestEndingAddress > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS ||
             *HighestEndingAddress < *LowestAddress)
         {
