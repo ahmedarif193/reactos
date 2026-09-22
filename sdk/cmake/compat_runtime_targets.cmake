@@ -62,6 +62,7 @@ set(COMPAT_RUNTIME_MODULES
     gdiplus
     glu32
     hid
+    hlink
     ieframe
     iertutil
     imagehlp
