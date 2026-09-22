@@ -70,7 +70,7 @@ MiControlWriteFrames(
     PMI_CONTROL_AREA Control = Context;
     ULONG Transferred;
 
-    if (PageCount == 0 || PageCount > MI_MAX_FILE_IO_PAGES ||
+    if (PageCount == 0 || PageCount > MI_MAX_FILE_WRITE_PAGES ||
         Length <= (PageCount - 1) * PAGE_SIZE || Length > PageCount * PAGE_SIZE)
         return STATUS_INVALID_PARAMETER;
 
