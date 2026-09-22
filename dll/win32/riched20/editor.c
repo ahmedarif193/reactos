@@ -3009,6 +3009,11 @@ ME_TextEditor *ME_MakeEditor(ITextHost *texthost, BOOL bEmulateVersion10)
     ed->have_texthost2 = FALSE;
   }
 
+#ifdef __REACTOS__
+  ed->hWnd = NULL;
+  if (ed->have_texthost2 && FAILED( ITextHost2_TxGetWindow( ed->texthost, &ed->hWnd ) ))
+    ed->hWnd = NULL;
+#endif
   ed->bEmulateVersion10 = bEmulateVersion10;
   ed->in_place_active = FALSE;
   ed->total_rows = 0;
@@ -3681,8 +3686,11 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
     if (ImmIsIME(GetKeyboardLayout(0)))
     {
       HIMC hIMC = ImmGetContext(editor->hWnd);
-      ImmSetCompositionFontW(hIMC, &lf);
-      ImmReleaseContext(editor->hWnd, hIMC);
+      if (hIMC)
+      {
+        ImmSetCompositionFontW(hIMC, &lf);
+        ImmReleaseContext(editor->hWnd, hIMC);
+      }
     }
 #endif
     return 0;
@@ -4207,15 +4215,18 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
     if (wParam)
     {
       HIMC hIMC = ImmGetContext(editor->hWnd);
-      LPINPUTCONTEXTDX pIC = (LPINPUTCONTEXTDX)ImmLockIMC(hIMC);
-      if (pIC)
+      if (hIMC)
       {
-        pIC->dwUIFlags &= ~0x40000;
-        ImmUnlockIMC(hIMC);
+        LPINPUTCONTEXTDX pIC = (LPINPUTCONTEXTDX)ImmLockIMC(hIMC);
+        if (pIC)
+        {
+          pIC->dwUIFlags &= ~0x40000;
+          ImmUnlockIMC(hIMC);
+        }
+        if (FALSE) /* FIXME: Condition */
+          ImmNotifyIME(hIMC, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+        ImmReleaseContext(editor->hWnd, hIMC);
       }
-      if (FALSE) /* FIXME: Condition */
-        ImmNotifyIME(hIMC, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
-      ImmReleaseContext(editor->hWnd, hIMC);
     }
 
     return DefWindowProcW(editor->hWnd, msg, wParam, lParam);
