@@ -47,6 +47,7 @@ typedef struct _MI_SECTION_OBJECT
     ULONG InitialProtection;
     ULONG Protection;
     ULONG AllocationAttributes;
+    PVOID BasedAddress;
 } MI_SECTION_OBJECT, *PMI_SECTION_OBJECT;
 
 extern SIZE_T MmtotalCommitLimitMaximum;

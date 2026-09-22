@@ -14,6 +14,7 @@
 POBJECT_TYPE MmSectionObjectType;
 
 static MI_RWLOCK MiControlLock;
+static LONG64 MiBasedSectionCursor;
 
 static GENERIC_MAPPING MiSectionMapping =
 {
@@ -603,6 +604,36 @@ MiCreatePhysicalMemorySection(VOID)
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+MiAllocateBasedAddress(
+    _In_ ULONG64 Size,
+    _Out_ PVOID *BasedAddress)
+{
+    ULONG64 Top = (((ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1) / 2) & ~(ULONG64)(MI_ALLOCATION_GRANULARITY - 1);
+    ULONG64 Length;
+
+    if (Size == 0 || Size > Top - MI_ALLOCATION_GRANULARITY)
+        return STATUS_NO_MEMORY;
+
+    Length = (Size + MI_ALLOCATION_GRANULARITY - 1) & ~(ULONG64)(MI_ALLOCATION_GRANULARITY - 1);
+
+    for (;;)
+    {
+        LONG64 Old = InterlockedCompareExchange64(&MiBasedSectionCursor, 0, 0);
+        ULONG64 Current = (Old != 0) ? (ULONG64)Old : Top;
+
+        if (Length > Current - MI_ALLOCATION_GRANULARITY)
+            return STATUS_NO_MEMORY;
+
+        if (InterlockedCompareExchange64(&MiBasedSectionCursor, (LONG64)(Current - Length), Old) == Old)
+        {
+            *BasedAddress = (PVOID)(ULONG_PTR)(Current - Length);
+            return STATUS_SUCCESS;
+        }
+    }
+}
+
 NTSTATUS
 MiSectionInitialize(VOID)
 {
@@ -648,6 +679,7 @@ MmCreateSection(
     PFILE_OBJECT File = FileObject;
     PMI_CONTROL_AREA Control = NULL;
     PMI_SECTION_OBJECT Section;
+    PVOID BasedAddress = NULL;
     BOOLEAN FileReferenced = FALSE;
     ULONG64 Size = 0;
     ULONG Protection;
@@ -797,6 +829,16 @@ MmCreateSection(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    if ((AllocationAttributes & SEC_BASED) && !Control->Image)
+    {
+        Status = MiAllocateBasedAddress(Size, &BasedAddress);
+        if (!NT_SUCCESS(Status))
+        {
+            MiDereferenceControlArea(Control);
+            return Status;
+        }
+    }
+
     Status = ObCreateObject(PreviousMode, MmSectionObjectType, ObjectAttributes, PreviousMode, NULL,
                             sizeof(MI_SECTION_OBJECT), 0, 0, (PVOID *)&Section);
     if (!NT_SUCCESS(Status))
@@ -811,6 +853,7 @@ MmCreateSection(
     Section->InitialProtection = SectionPageProtection;
     Section->Protection = Protection;
     Section->AllocationAttributes = AllocationAttributes;
+    Section->BasedAddress = BasedAddress;
 
     *SectionObject = Section;
     UNREFERENCED_PARAMETER(DesiredAccess);
@@ -967,6 +1010,9 @@ MiMapSectionView(
             return STATUS_INVALID_VIEW_SIZE;
 
         Offset -= Delta;
+
+        if (Base == 0 && !Space->IsSystem && Section->BasedAddress != NULL)
+            Base = (ULONG64)(ULONG_PTR)Section->BasedAddress + Offset;
 
         if (Size == 0)
             Size = SectionSize - Offset;
@@ -1884,7 +1930,7 @@ NtQuerySection(
         {
             PSECTION_BASIC_INFORMATION Basic = SectionInformation;
 
-            Basic->BaseAddress = NULL;
+            Basic->BaseAddress = Section->BasedAddress;
             Basic->Attributes = Section->AllocationAttributes;
             Basic->Size = Section->SizeOfSection;
 
