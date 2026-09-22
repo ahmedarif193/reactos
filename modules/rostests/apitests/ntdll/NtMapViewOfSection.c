@@ -815,6 +815,11 @@ Test_ImageSection(void)
                         &IoStatusBlock,
                         FILE_SHARE_READ,
                         FILE_SYNCHRONOUS_IO_NONALERT);
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND || Status == STATUS_OBJECT_PATH_NOT_FOUND)
+    {
+        skip("File %s is not present\n", wine_dbgstr_wn(FileName.Buffer, FileName.Length / sizeof(WCHAR)));
+        return;
+    }
     ok_ntstatus(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
     {
