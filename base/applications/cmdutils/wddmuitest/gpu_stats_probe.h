@@ -23,7 +23,7 @@ RunGpuStatsProbe(VOID)
     D3DKMT_QUERYADAPTERINFO Information = {0};
     D3DKMT_DRIVERVERSION Version = 0;
     ULONGLONG Previous[32] = {0};
-    LARGE_INTEGER SampleTime[32] = {{0}};
+    LARGE_INTEGER SampleTime[32] = {0};
     ULONG Nodes = 0, Segments = 0, Node, Segment, Sample, Failures = 0;
     LONG Status;
 

@@ -636,8 +636,13 @@ NTAPI
 MmMapMemoryDumpMdl(
     _Inout_ PMDL Mdl)
 {
-    if (!(Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA))
-        (VOID)MmMapLockedPagesSpecifyCache(Mdl, KernelMode, MmCached, NULL, FALSE, HighPagePriority);
+    PVOID BaseVa;
+
+    if (Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA)
+        return;
+
+    BaseVa = MmMapLockedPagesSpecifyCache(Mdl, KernelMode, MmCached, NULL, FALSE, HighPagePriority);
+    DBG_UNREFERENCED_LOCAL_VARIABLE(BaseVa);
 }
 
 typedef struct _MI_SECURE_RANGE

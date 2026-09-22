@@ -194,21 +194,6 @@ static enum_t handle_cb_recall(
     return res->status;
 }
 
-/* OP_CB_NOTIFY_DEVICEID */
-static enum_t handle_cb_notify_deviceid(
-    IN nfs41_rpc_clnt *rpc_clnt,
-    IN struct cb_notify_deviceid_args *args,
-    OUT struct cb_notify_deviceid_res *res)
-{
-    uint32_t i;
-    for (i = 0; i < args->change_count; i++) {
-        pnfs_file_device_notify(rpc_clnt->client->devices,
-            &args->change_list[i]);
-    }
-    res->status = NFS4_OK;
-    return res->status;
-}
-
 static void replay_cache_write(
     IN nfs41_cb_session *session,
     IN OPTIONAL struct cb_compound_args *args,

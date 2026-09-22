@@ -300,7 +300,6 @@ static void open_delegation_return(
     IN bool_t try_recovery)
 {
     stateid_arg stateid;
-    int status;
 
     if (delegation->type == OPEN_DELEGATE_NONE ||
         delegation->type == OPEN_DELEGATE_NONE_EXT)
@@ -312,7 +311,7 @@ static void open_delegation_return(
     stateid.type = STATEID_DELEG_FILE;
     memcpy(&stateid.stateid, &delegation->stateid, sizeof(stateid4));
 
-    status = nfs41_delegreturn(session, file, &stateid, try_recovery);
+    nfs41_delegreturn(session, file, &stateid, try_recovery);
 
     /* clear the delegation type returned by nfs41_open() */
     delegation->type = OPEN_DELEGATE_NONE;

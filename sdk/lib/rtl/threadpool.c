@@ -789,12 +789,18 @@ static void timer_cleanup_callback(struct queue_timer *t)
     RtlLeaveCriticalSection(&q->cs);
 }
 
+#ifdef __REACTOS__
+static VOID NTAPI timer_callback_wrapper(LPVOID p)
+#else
 static DWORD WINAPI timer_callback_wrapper(LPVOID p)
+#endif
 {
     struct queue_timer *t = p;
     t->callback(t->param, TRUE);
     timer_cleanup_callback(t);
+#ifndef __REACTOS__
     return 0;
+#endif
 }
 
 static inline ULONGLONG queue_current_time(void)

@@ -206,7 +206,7 @@ DwmGpuSceneWindowBounds(const DWM_WIN *Window, const DWM_GPU_SCENE_SPACE *Space,
     return DwmGpuDamageBounds(Bounds, Space->Width, Space->Height, Left, Top, Right, Bottom);
 }
 
-static void
+static inline void
 DwmGpuSceneOcclusion(const DWM_WIN *Windows, ULONG Count,
                       const DWM_GPU_SCENE_SPACE *Space, RECT *Occlusion)
 {

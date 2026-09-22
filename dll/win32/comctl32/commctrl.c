@@ -152,11 +152,13 @@ classes[] =
 #endif /* __WINE_COMCTL32_VERSION == 6 */
 };
 
+#if __WINE_COMCTL32_VERSION != 6
 static void register_classes(void)
 {
     for (unsigned int i = 0; i < ARRAY_SIZE(classes); i++)
         classes[i].fn_register();
 }
+#endif
 
 static void unregister_classes(void)
 {

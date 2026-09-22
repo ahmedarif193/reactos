@@ -480,11 +480,11 @@ EXTERN_C HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out
     if (!out) return E_POINTER;
     *out = NULL;
     if (clsid != CLSID_DirectManipulationManager) return CLASS_E_CLASSNOTAVAILABLE;
-    CComObject<CFactory> *factory;
-    HRESULT hr = CComObject<CFactory>::CreateInstance(&factory);
-    if (FAILED(hr)) return hr;
+    CComObjectNoLock<CFactory> *factory = NULL;
+    ATLTRY(factory = new CComObjectNoLock<CFactory>())
+    if (!factory) return E_OUTOFMEMORY;
     factory->AddRef();
-    hr = factory->QueryInterface(iid, out);
+    HRESULT hr = factory->QueryInterface(iid, out);
     factory->Release();
     return hr;
 }

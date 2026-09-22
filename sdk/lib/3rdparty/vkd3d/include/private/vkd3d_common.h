@@ -109,6 +109,8 @@ static inline uint64_t align(uint64_t addr, size_t alignment)
 # define VKD3D_NORETURN __attribute__((noreturn))
 # ifdef __MINGW_PRINTF_FORMAT
 #  define VKD3D_PRINTF_FUNC(fmt, args) __attribute__((format(__MINGW_PRINTF_FORMAT, fmt, args)))
+# elif defined(__REACTOS__) && !defined(__clang__)
+#  define VKD3D_PRINTF_FUNC(fmt, args)
 # else
 #  define VKD3D_PRINTF_FUNC(fmt, args) __attribute__((format(printf, fmt, args)))
 # endif

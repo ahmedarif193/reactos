@@ -228,45 +228,45 @@ void print_share_mode(int level, DWORD mode)
 void print_file_id_both_dir_info(int level, FILE_ID_BOTH_DIR_INFO *pboth_dir_info)
 {
     if (level > g_debug_level) return;
-    fprintf(dlog_file, "FILE_ID_BOTH_DIR_INFO %p %zu\n",
+    fprintf(dlog_file, "FILE_ID_BOTH_DIR_INFO %p %Iu\n",
        pboth_dir_info, sizeof(unsigned char *));
-    fprintf(dlog_file, "\tNextEntryOffset=%lu %zu %zu\n",
+    fprintf(dlog_file, "\tNextEntryOffset=%lu %Iu %Iu\n",
         pboth_dir_info->NextEntryOffset, 
         sizeof(pboth_dir_info->NextEntryOffset), sizeof(DWORD));
-    fprintf(dlog_file, "\tFileIndex=%lu  %zu\n", pboth_dir_info->FileIndex,
+    fprintf(dlog_file, "\tFileIndex=%lu  %Iu\n", pboth_dir_info->FileIndex,
         sizeof(pboth_dir_info->FileIndex));
-    fprintf(dlog_file, "\tCreationTime=0x%llx %zu\n",
+    fprintf(dlog_file, "\tCreationTime=0x%llx %Iu\n",
         pboth_dir_info->CreationTime.QuadPart, 
         sizeof(pboth_dir_info->CreationTime));
-    fprintf(dlog_file, "\tLastAccessTime=0x%llx %zu\n",
+    fprintf(dlog_file, "\tLastAccessTime=0x%llx %Iu\n",
         pboth_dir_info->LastAccessTime.QuadPart, 
         sizeof(pboth_dir_info->LastAccessTime));
-    fprintf(dlog_file, "\tLastWriteTime=0x%llx %zu\n",
+    fprintf(dlog_file, "\tLastWriteTime=0x%llx %Iu\n",
         pboth_dir_info->LastWriteTime.QuadPart, 
         sizeof(pboth_dir_info->LastWriteTime));
-    fprintf(dlog_file, "\tChangeTime=0x%llx %zu\n",
+    fprintf(dlog_file, "\tChangeTime=0x%llx %Iu\n",
         pboth_dir_info->ChangeTime.QuadPart, 
         sizeof(pboth_dir_info->ChangeTime));
-    fprintf(dlog_file, "\tEndOfFile=0x%llx %zu\n",
+    fprintf(dlog_file, "\tEndOfFile=0x%llx %Iu\n",
         pboth_dir_info->EndOfFile.QuadPart, 
         sizeof(pboth_dir_info->EndOfFile));
-    fprintf(dlog_file, "\tAllocationSize=0x%llx %zu\n",
+    fprintf(dlog_file, "\tAllocationSize=0x%llx %Iu\n",
         pboth_dir_info->AllocationSize.QuadPart, 
         sizeof(pboth_dir_info->AllocationSize));
-    fprintf(dlog_file, "\tFileAttributes=%lu %zu\n",
+    fprintf(dlog_file, "\tFileAttributes=%lu %Iu\n",
         pboth_dir_info->FileAttributes, 
         sizeof(pboth_dir_info->FileAttributes));
-    fprintf(dlog_file, "\tFileNameLength=%lu %zu\n",
+    fprintf(dlog_file, "\tFileNameLength=%lu %Iu\n",
         pboth_dir_info->FileNameLength, 
         sizeof(pboth_dir_info->FileNameLength));
-    fprintf(dlog_file, "\tEaSize=%lu %zu\n",
+    fprintf(dlog_file, "\tEaSize=%lu %Iu\n",
         pboth_dir_info->EaSize, sizeof(pboth_dir_info->EaSize));
-    fprintf(dlog_file, "\tShortNameLength=%d %zu\n",
+    fprintf(dlog_file, "\tShortNameLength=%d %Iu\n",
         pboth_dir_info->ShortNameLength, 
         sizeof(pboth_dir_info->ShortNameLength));
-    fprintf(dlog_file, "\tShortName='%S' %zu\n", pboth_dir_info->ShortName,
+    fprintf(dlog_file, "\tShortName='%S' %Iu\n", pboth_dir_info->ShortName,
         sizeof(pboth_dir_info->ShortName));
-    fprintf(dlog_file, "\tFileId=0x%llx %zu\n", pboth_dir_info->FileId.QuadPart,
+    fprintf(dlog_file, "\tFileId=0x%llx %Iu\n", pboth_dir_info->FileId.QuadPart,
         sizeof(pboth_dir_info->FileId));
     fprintf(dlog_file, "\tFileName='%S' %p\n", pboth_dir_info->FileName, 
         pboth_dir_info->FileName);
