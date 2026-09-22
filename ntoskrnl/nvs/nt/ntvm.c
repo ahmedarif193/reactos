@@ -202,10 +202,6 @@ MiHighestAddressFromZeroBits(
 
         Highest = min(Highest, ~0ULL >> (ZeroBits + 32));
     }
-    else if (ZeroBits == 32)
-    {
-        Highest = min(Highest, (ULONG64)MAXULONG);
-    }
     else if (ZeroBits != 0)
     {
         ULONG Shift;

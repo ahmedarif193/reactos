@@ -586,7 +586,7 @@ MmCreatePeb32(
 
     KeAttachProcess(&Process->Pcb);
 
-    Status = MmMapViewOfSection(ExpNlsSectionPointer, Process, &TableBase, 32, 0, &SectionOffset, &ViewSize,
+    Status = MmMapViewOfSection(ExpNlsSectionPointer, Process, &TableBase, MAXULONG, 0, &SectionOffset, &ViewSize,
                                 ViewShare, MEM_TOP_DOWN, PAGE_READONLY);
     if (NT_SUCCESS(Status))
         Status = MiCreatePebOrTeb(Process, PAGE_SIZE, MM_HIGHEST_USER_ADDRESS_WOW64, (PULONG_PTR)&Peb);
