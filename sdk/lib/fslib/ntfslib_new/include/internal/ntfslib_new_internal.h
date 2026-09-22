@@ -717,6 +717,8 @@ public:
     FileRecord(_In_ PVolume DiskVolume);
     ~FileRecord();
 
+    NTSTATUS RefreshFrom(_In_ const FileRecord& Record);
+
     // ./find.cpp
     PAttribute GetAttribute(_In_     AttributeType Type,
                             _In_opt_ PWSTR Name);

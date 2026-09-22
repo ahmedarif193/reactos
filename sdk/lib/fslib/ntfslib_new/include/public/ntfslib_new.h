@@ -335,6 +335,11 @@ void
 NtfsFileRecordDestroy(
     _In_opt_ NtfsFileRecord *FileRecord);
 
+NTSTATUS
+NtfsFileRecordRefresh(
+    _Inout_ NtfsFileRecord *FileRecord,
+    _In_ NtfsFileRecord *RefreshedRecord);
+
 PFileRecordHeader
 NtfsFileRecordGetHeader(
     _In_ NtfsFileRecord *FileRecord);

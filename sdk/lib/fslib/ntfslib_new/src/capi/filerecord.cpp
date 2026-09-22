@@ -44,6 +44,17 @@ NtfsFileRecordGetHeader(
     return reinterpret_cast<PFileRecord>(Fr)->Header;
 }
 
+NTSTATUS
+NtfsFileRecordRefresh(
+    _Inout_ PNtfsFileRecord Fr,
+    _In_ PNtfsFileRecord Refreshed)
+{
+    if (!Fr || !Refreshed)
+        return STATUS_INVALID_PARAMETER;
+    return reinterpret_cast<PFileRecord>(Fr)->RefreshFrom(
+        *reinterpret_cast<PFileRecord>(Refreshed));
+}
+
 PAttribute
 NtfsFileRecordGetAttribute(
     _In_ PNtfsFileRecord Fr,

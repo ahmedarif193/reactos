@@ -114,6 +114,12 @@ if(NTFSLIB_BUILD_FUSE)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(ntfslib_record_refresh_test tests/record_refresh.cpp)
+    target_include_directories(ntfslib_record_refresh_test PRIVATE
+        "${NTFSLIB_ROOT}/include/internal")
+    target_link_libraries(ntfslib_record_refresh_test PRIVATE ntfslib_linux)
+    add_test(NAME ntfslib_linux_record_refresh COMMAND ntfslib_record_refresh_test)
+
     add_executable(ntfslib_pool_new_test tests/pool_new.cpp)
     target_include_directories(ntfslib_pool_new_test PRIVATE
         "${NTFSLIB_ROOT}/include/internal")
