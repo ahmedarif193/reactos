@@ -11870,7 +11870,12 @@ LISTVIEW_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
   /* case LVM_INSERTMARKHITTEST: */
 
+#ifdef __REACTOS__
+  case LVM_ISGROUPVIEWENABLED:
+    return FALSE;
+#else
   /* case LVM_ISGROUPVIEWENABLED: */
+#endif
 
   case LVM_ISITEMVISIBLE:
     return LISTVIEW_IsItemVisible(infoPtr, (INT)wParam);
