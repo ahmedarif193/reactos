@@ -1715,7 +1715,7 @@ NtMapViewOfSection(
     PAGED_CODE();
 
     if (AllocationType & ~(MEM_TOP_DOWN | MEM_LARGE_PAGES | MEM_DOS_LIM | SEC_NO_CHANGE | MEM_RESERVE))
-        return STATUS_INVALID_PARAMETER_9;
+        return STATUS_INVALID_PARAMETER;
 
     if (!MiProtectionFromWin32(Protect, &Protection))
         return STATUS_INVALID_PAGE_PROTECTION;
@@ -1750,10 +1750,17 @@ NtMapViewOfSection(
         return STATUS_INVALID_PARAMETER_3;
 
     if ((ULONG_PTR)MM_HIGHEST_VAD_ADDRESS - (ULONG_PTR)SafeBase < SafeSize)
-        return STATUS_INVALID_PARAMETER_3;
+        return STATUS_INVALID_PARAMETER;
 
     if (ZeroBits > 21 && ZeroBits < 32)
         return STATUS_INVALID_PARAMETER_4;
+
+    if (SafeBase != NULL && ZeroBits != 0 &&
+        ((ZeroBits < 32) ? (((ULONG64)(ULONG_PTR)SafeBase >> (32 - ZeroBits)) != 0)
+                         : (((ULONG_PTR)SafeBase & ~ZeroBits) != 0)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     DesiredAccess = MiSectionAccessForProtection[Protection & MI_PROT_ACCESS_MASK];
 
@@ -1782,7 +1789,7 @@ NtMapViewOfSection(
     }
     else if ((AllocationType & MEM_RESERVE) && Section->Control->FileObject == NULL)
     {
-        Status = STATUS_INVALID_PARAMETER_9;
+        Status = STATUS_INVALID_PARAMETER;
     }
     else if ((AllocationType & MEM_RESERVE) && !MI_PROT_IS_WRITABLE(Section->Protection))
     {
