@@ -45,8 +45,8 @@
 #define __MINGW_LSYMBOL(sym) sym
 #endif
 
-extern char __RUNTIME_PSEUDO_RELOC_LIST__;
-extern char __RUNTIME_PSEUDO_RELOC_LIST_END__;
+extern char __RUNTIME_PSEUDO_RELOC_LIST__[];
+extern char __RUNTIME_PSEUDO_RELOC_LIST_END__[];
 extern char __MINGW_LSYMBOL(_image_base__);
 
 void _pei386_runtime_relocator (void);

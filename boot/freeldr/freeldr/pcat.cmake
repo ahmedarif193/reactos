@@ -172,6 +172,9 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Prevent using SSE (no support in freeldr)
     target_compile_options(freeldr_common PUBLIC -mno-sse)
 endif()
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(freeldr_common PRIVATE --param=min-pagesize=0)
+endif()
 
 set(PCH_SOURCE
     ${PCATLDR_ARC_SOURCE}

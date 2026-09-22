@@ -18,7 +18,7 @@
 #define __ImageBase __MINGW_LSYMBOL(_image_base__)
 #endif
 /* This symbol is defined by the linker.  */
-extern IMAGE_DOS_HEADER __ImageBase;
+extern IMAGE_DOS_HEADER __ImageBase[];
 #endif
 
 WINBOOL _ValidateImageBase (PBYTE);

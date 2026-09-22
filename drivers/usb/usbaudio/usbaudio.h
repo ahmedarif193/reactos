@@ -397,7 +397,7 @@ typedef struct
     UCHAR  bSubframeSize;
     UCHAR  bBitResolution;
     UCHAR  bSamFreqType;
-    UCHAR  tSamFreq[3];
+    UCHAR  tSamFreq[ANYSIZE_ARRAY];
 } USB_AUDIO_STREAMING_FORMAT_TYPE_DESCRIPTOR,
   *PUSB_AUDIO_STREAMING_FORMAT_TYPE_DESCRIPTOR;
 

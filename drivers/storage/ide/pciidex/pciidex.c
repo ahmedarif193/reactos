@@ -22,8 +22,8 @@ PciFindDevice(
         {
             for (FunctionNumber = 0; FunctionNumber < PCI_MAX_FUNCTION; ++FunctionNumber)
             {
-                UCHAR Buffer[RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, RevisionID)];
-                PPCI_COMMON_HEADER PciConfig = (PPCI_COMMON_HEADER)Buffer; // Partial PCI header
+                PCI_COMMON_HEADER Buffer;
+                PPCI_COMMON_HEADER PciConfig = &Buffer; // Partial PCI header
                 PCI_SLOT_NUMBER PciSlot;
                 ULONG BytesRead;
 
@@ -36,8 +36,8 @@ PciFindDevice(
                                                   PciSlot.u.AsULONG,
                                                   &Buffer,
                                                   0,
-                                                  sizeof(Buffer));
-                if (BytesRead != sizeof(Buffer) ||
+                                                  RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, HeaderType));
+                if (BytesRead != RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, HeaderType) ||
                     PciConfig->VendorID == PCI_INVALID_VENDORID ||
                     PciConfig->VendorID == 0)
                 {

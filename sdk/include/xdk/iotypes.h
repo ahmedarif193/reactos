@@ -4299,10 +4299,10 @@ typedef struct _PCI_COMMON_CONFIG {
 #define PCI_CARDBUS_BRIDGE_TYPE           0x02
 
 #define PCI_CONFIGURATION_TYPE(PciData) \
-  (((PPCI_COMMON_CONFIG) (PciData))->HeaderType & ~PCI_MULTIFUNCTION)
+  (((PPCI_COMMON_HEADER) (PciData))->HeaderType & ~PCI_MULTIFUNCTION)
 
 #define PCI_MULTIFUNCTION_DEVICE(PciData) \
-  ((((PPCI_COMMON_CONFIG) (PciData))->HeaderType & PCI_MULTIFUNCTION) != 0)
+  ((((PPCI_COMMON_HEADER) (PciData))->HeaderType & PCI_MULTIFUNCTION) != 0)
 
 /* PCI_COMMON_CONFIG.Command */
 #define PCI_ENABLE_IO_SPACE               0x0001

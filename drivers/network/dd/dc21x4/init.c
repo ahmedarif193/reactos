@@ -825,7 +825,7 @@ CODE_SEG("PAGE")
 ULONG
 DcGetBusModeParameters(
     _In_ PDC21X4_ADAPTER Adapter,
-    _In_ PPCI_COMMON_CONFIG PciData)
+    _In_ PPCI_COMMON_HEADER PciData)
 {
     ULONG DefaultMode, NewMode;
 
@@ -878,8 +878,8 @@ NDIS_STATUS
 DcRecognizeHardware(
     _In_ PDC21X4_ADAPTER Adapter)
 {
-    UCHAR Buffer[RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_CONFIG, CacheLineSize)];
-    PPCI_COMMON_CONFIG PciConfig = (PPCI_COMMON_CONFIG)Buffer; // Partial PCI header
+    PCI_COMMON_HEADER Buffer;
+    PPCI_COMMON_HEADER PciConfig = &Buffer; // Partial PCI header
     PNDIS_TIMER_FUNCTION MediaMonitorRoutine;
     ULONG Bytes;
 
@@ -888,9 +888,9 @@ DcRecognizeHardware(
     Bytes = NdisReadPciSlotInformation(Adapter->AdapterHandle,
                                        0,
                                        FIELD_OFFSET(PCI_COMMON_CONFIG, VendorID),
-                                       Buffer,
-                                       sizeof(Buffer));
-    if (Bytes != sizeof(Buffer))
+                                       &Buffer,
+                                       RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, CacheLineSize));
+    if (Bytes != RTL_SIZEOF_THROUGH_FIELD(PCI_COMMON_HEADER, CacheLineSize))
         return NDIS_STATUS_FAILURE;
 
     Adapter->DeviceId = PciConfig->DeviceID;

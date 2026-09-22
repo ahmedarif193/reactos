@@ -10338,7 +10338,8 @@ uata_ctl_queue:
                     AtaCtl->AdapterInfo.NumberLuns = (UCHAR)deviceExtension->NumberLuns;
                     AtaCtl->AdapterInfo.AdapterInterfaceType = deviceExtension->AdapterInterfaceType;
                     if(deviceExtension->FullDevName) {
-                        strncpy(AtaCtl->AdapterInfo.DeviceName, deviceExtension->FullDevName, 64);
+                        strncpy(AtaCtl->AdapterInfo.DeviceName, deviceExtension->FullDevName, sizeof(AtaCtl->AdapterInfo.DeviceName) - 1);
+                        AtaCtl->AdapterInfo.DeviceName[sizeof(AtaCtl->AdapterInfo.DeviceName) - 1] = '\0';
                     }
                     AtaCtl->AdapterInfo.ChanInfoValid = FALSE;
                     AtaCtl->AdapterInfo.LunInfoValid = FALSE;

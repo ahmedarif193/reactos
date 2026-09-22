@@ -545,7 +545,7 @@ HalpGetPCIData(IN PBUS_HANDLER BusHandler,
 {
     PCI_SLOT_NUMBER Slot;
     UCHAR PciBuffer[PCI_COMMON_HDR_LENGTH];
-    PPCI_COMMON_CONFIG PciConfig = (PPCI_COMMON_CONFIG)PciBuffer;
+    PPCI_COMMON_HEADER PciConfig = (PPCI_COMMON_HEADER)PciBuffer;
     ULONG Len = 0;
 
     Slot.u.AsULONG = SlotNumber;
@@ -635,7 +635,7 @@ HalpSetPCIData(IN PBUS_HANDLER BusHandler,
 {
     PCI_SLOT_NUMBER Slot;
     UCHAR PciBuffer[PCI_COMMON_HDR_LENGTH];
-    PPCI_COMMON_CONFIG PciConfig = (PPCI_COMMON_CONFIG)PciBuffer;
+    PPCI_COMMON_HEADER PciConfig = (PPCI_COMMON_HEADER)PciBuffer;
     ULONG Len = 0;
 
     Slot.u.AsULONG = SlotNumber;

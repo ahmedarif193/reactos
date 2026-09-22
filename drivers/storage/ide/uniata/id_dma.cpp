@@ -1382,7 +1382,7 @@ dma_cs55xx:
                 }
             }
             if(AtaSetTransferMode(deviceExtension, DeviceNumber, lChannel, LunExt, ATA_PIO0 + apiomode)) {
-                timing = (6-apiomode) | (cyr_piotiming_old[i]);
+                timing = (6-apiomode) | (cyr_piotiming_old[apiomode]);
                 /* Channel command timing */
                 SetPciConfig1(0x62+Channel, timing);
                 /* Read command timing */

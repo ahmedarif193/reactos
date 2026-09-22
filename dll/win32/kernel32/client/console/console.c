@@ -3241,7 +3241,10 @@ IntGetConsoleKeyboardLayoutName(OUT PVOID pszLayoutName,
     {
         /* Copy only KL_NAMELENGTH == 9 characters, ANSI or UNICODE */
         if (bAnsi)
-            strncpy(pszLayoutName, (PCHAR)GetKbdLayoutNameRequest->LayoutBuffer, KL_NAMELENGTH);
+        {
+            strncpy(pszLayoutName, (PCHAR)GetKbdLayoutNameRequest->LayoutBuffer, KL_NAMELENGTH - 1);
+            ((PCHAR)pszLayoutName)[KL_NAMELENGTH - 1] = ANSI_NULL;
+        }
         else
             wcsncpy(pszLayoutName, (PWCHAR)GetKbdLayoutNameRequest->LayoutBuffer, KL_NAMELENGTH);
     }

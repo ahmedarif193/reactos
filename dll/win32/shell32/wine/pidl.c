@@ -4384,7 +4384,7 @@ LPITEMIDLIST _ILCreateDesktop(void)
     TRACE("()\n");
     ret = SHAlloc(2);
     if (ret)
-        ret->mkid.cb = 0;
+        ZeroMemory(ret, sizeof(ret->mkid.cb));
     return ret;
 }
 
