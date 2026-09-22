@@ -401,7 +401,7 @@ HRESULT STDMETHODCALLTYPE CShellLink::Save(LPCOLESTR pszFileName, BOOL fRemember
 
 HRESULT STDMETHODCALLTYPE CShellLink::SaveCompleted(LPCOLESTR pszFileName)
 {
-    FIXME("(%p)->(%s)\n", this, debugstr_w(pszFileName));
+    TRACE("(%p)->(%s)\n", this, debugstr_w(pszFileName));
     return S_OK;
 }
 

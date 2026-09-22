@@ -832,7 +832,7 @@ MsqRemoveWindowMessagesFromQueue(PWND Window)
 
       if(SentMessage->Msg.hwnd == UserHMGetHandle(Window))
       {
-         ERR("Remove Window Messages %p From Sent Queue\n",SentMessage);
+         WARN("Remove Window Messages %p From Sent Queue\n",SentMessage);
 #if 0 // Should mark these as invalid and allow the rest clean up, so far no harm by just commenting out. See CORE-9210.
          ClearMsgBitsMask(pti, SentMessage->QS_Flags);
 
@@ -1276,7 +1276,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
          // Receiving thread passed on and left us hanging with issues still pending.
          else if (WaitStatus == STATUS_WAIT_2)
          {
-            ERR("NB Receiving Thread woken up dead!\n");
+            WARN("NB Receiving Thread woken up dead!\n");
             Message->flags |= SMF_RECEIVERDIED;
             break;
          }
@@ -2272,7 +2272,7 @@ MsqCleanupThreadMsgs(PTHREADINFO pti)
       CurrentEntry = pti->SentMessagesListHead.Flink;
       CurrentSentMessage = CONTAINING_RECORD(CurrentEntry, USER_SENT_MESSAGE, ListEntry);
 
-      ERR("Thread Cleanup Sent Messages %p\n",CurrentSentMessage);
+      WARN("Thread Cleanup Sent Messages %p\n",CurrentSentMessage);
 
       /* wake the sender's thread */
       if (CurrentSentMessage->pkCompletionEvent != NULL)
@@ -2360,7 +2360,7 @@ MsqCleanupMessageQueue(PTHREADINFO pti)
       {
          CurrentEntry = MessageQueue->HardwareMessagesListHead.Flink;
          CurrentMessage = CONTAINING_RECORD(CurrentEntry, USER_MESSAGE, ListEntry);
-         ERR("MQ Cleanup Post Messages %p\n",CurrentMessage);
+         WARN("MQ Cleanup Post Messages %p\n",CurrentMessage);
          MsqDestroyMessage(CurrentMessage);
       }
    } ////
