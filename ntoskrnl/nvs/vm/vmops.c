@@ -464,7 +464,7 @@ MiSpaceFindEmptyRange(
     _In_ BOOLEAN TopDown,
     _Out_ PULONG64 StartingVpn)
 {
-    ULONG64 Lowest = max(LowestVpn, Space->LowestVa >> PAGE_SHIFT);
+    ULONG64 Lowest = (LowestVpn > (Space->LowestVa >> PAGE_SHIFT)) ? LowestVpn : (Space->LowestVa >> PAGE_SHIFT);
 
     if (!TopDown && (Space->BottomUpVa >> PAGE_SHIFT) > Lowest &&
         MiVadFindEmptyRangeEx(&Space->VadRoot, PageCount, Alignment, Space->BottomUpVa >> PAGE_SHIFT, HighestVpn,
