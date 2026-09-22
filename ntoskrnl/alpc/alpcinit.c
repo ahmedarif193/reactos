@@ -1071,6 +1071,7 @@ AlpcpClosePort(
     UNREFERENCED_PARAMETER(ProcessHandleCount);
 
     if (SystemHandleCount != 1) return;
+    AlpcpAbandonLegacyConnect(Port);
     AlpcpDisconnectPort(Port, TRUE);
 }
 
@@ -1085,6 +1086,7 @@ AlpcpDeletePort(
     PVOID CallbackObject;
     PEPROCESS OwnerProcess;
 
+    AlpcpAbandonLegacyConnect(Port);
     AlpcpDisconnectPort(Port, TRUE);
 
     AlpcpAcquireLock();

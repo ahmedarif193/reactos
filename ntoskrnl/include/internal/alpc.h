@@ -283,6 +283,8 @@ struct _ALPC_PORT
     ULONG ReferenceCount;
     ULONG ReferenceWaitTarget;
     PKEVENT ReferenceWaiter;
+    PKALPC_MESSAGE ConnectMessage;
+    PETHREAD ConnectThread;
 };
 
 extern POBJECT_TYPE AlpcPortObjectType;
@@ -298,6 +300,17 @@ NTAPI
 AlpcpReleaseLock(VOID);
 
 #define AlpcpPortType(Port)  ((Port)->Flags & ALPC_PORT_TYPE_MASK)
+
+PETHREAD
+NTAPI
+AlpcpCompleteLegacyConnect(
+    _In_ PALPC_PORT Port,
+    _In_ BOOLEAN Accept);
+
+VOID
+NTAPI
+AlpcpAbandonLegacyConnect(
+    _In_ PALPC_PORT Port);
 
 CODE_SEG("INIT")
 BOOLEAN
