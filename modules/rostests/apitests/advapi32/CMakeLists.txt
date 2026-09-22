@@ -20,6 +20,7 @@ list(APPEND SOURCE
     ServiceArgs.c
     ServiceEnv.c
     ServiceNetwork.c
+    TokenBnoIsolation.c
     TraceGuids.c
     svchlp.c)
 
