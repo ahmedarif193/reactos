@@ -1143,8 +1143,8 @@ static void testIcmpSendEcho(void)
         trace ("send addr  : %s\n", ntoa(address));
         trace ("reply addr : %s\n", ntoa(pong->Address));
         trace ("reply size : %lu\n", replysz);
-        trace ("roundtrip  : %lu ms\n", pong->RoundTripTime);
-        trace ("status     : %lu\n", pong->Status);
+        trace ("roundtrip  : %u ms\n", pong->RoundTripTime);
+        trace ("status     : %u\n", pong->Status);
         trace ("recv size  : %u\n", pong->DataSize);
         trace ("ttl        : %u\n", pong->Options.Ttl);
         trace ("flags      : 0x%x\n", pong->Options.Flags);
@@ -1161,7 +1161,7 @@ static void testIcmpSendEcho(void)
     ok(error == NO_ERROR, "Expect last error:0x%08x, got:0x%08lx\n", NO_ERROR, error);
     ok(INADDR_LOOPBACK == ntohl(reply->Address), "Address mismatch, expect:%s, got: %s\n", ntoa(INADDR_LOOPBACK),
        ntoa(reply->Address));
-    ok(reply->Status == IP_SUCCESS, "Expect status:0x%08x, got:0x%08lx\n", IP_SUCCESS, reply->Status);
+    ok(reply->Status == IP_SUCCESS, "Expect status:0x%08x, got:0x%08x\n", IP_SUCCESS, reply->Status);
     ok(reply->DataSize == sizeof(senddata), "Got size:%d\n", reply->DataSize);
     ok(!memcmp(senddata, reply->Data, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
 
@@ -1289,8 +1289,8 @@ static void testIcmpSendEcho(void)
         trace("send addr  : %s\n", ntoa(address));
         trace("reply addr : %s\n", ntoa(reply->Address));
         trace("reply size : %lu\n", replysz);
-        trace("roundtrip  : %lu ms\n", reply->RoundTripTime);
-        trace("status     : %lu\n", reply->Status);
+        trace("roundtrip  : %u ms\n", reply->RoundTripTime);
+        trace("status     : %u\n", reply->Status);
         trace("recv size  : %u\n", reply->DataSize);
         trace("ttl        : %u\n", reply->Options.Ttl);
         trace("flags      : 0x%x\n", reply->Options.Flags);
@@ -1305,7 +1305,7 @@ static void testIcmpSendEcho(void)
     ok(error == NO_ERROR, "Expect last error: 0x%08x, got: 0x%08lx\n", NO_ERROR, error);
     ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
        ntoa(reply->Address));
-    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
+    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08x\n", IP_SUCCESS, reply->Status);
     ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
     ok(!memcmp(senddata, reply->Data, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
 
@@ -1338,7 +1338,7 @@ static void testIcmpSendEcho(void)
     CloseHandle(thread);
     ret = WaitForSingleObject(event, INFINITE);
     ok(ret == WAIT_OBJECT_0, "got %lu.\n", ret);
-    ok(reply->Status == IP_REQ_TIMED_OUT, "Expect status: 0x%08x, got: 0x%08lx\n", IP_REQ_TIMED_OUT, reply->Status);
+    ok(reply->Status == IP_REQ_TIMED_OUT, "Expect status: 0x%08x, got: 0x%08x\n", IP_REQ_TIMED_OUT, reply->Status);
     ok(!reply->DataSize, "got size %d.\n", reply->DataSize);
 
     SetLastError(0xdeadbeef);
@@ -1363,7 +1363,7 @@ static void testIcmpSendEcho(void)
         reply = (ICMP_ECHO_REPLY*)replydata2;
         ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
            ntoa(reply->Address));
-        ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
+        ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08x\n", IP_SUCCESS, reply->Status);
         ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
         if (winetest_debug > 1)
         {
@@ -1371,8 +1371,8 @@ static void testIcmpSendEcho(void)
             trace("send addr  : %s\n", ntoa(address));
             trace("reply addr : %s\n", ntoa(reply->Address));
             trace("reply size : %lu\n", replysz);
-            trace("roundtrip  : %lu ms\n", reply->RoundTripTime);
-            trace("status     : %lu\n", reply->Status);
+            trace("roundtrip  : %u ms\n", reply->RoundTripTime);
+            trace("status     : %u\n", reply->Status);
             trace("recv size  : %u\n", reply->DataSize);
             trace("ttl        : %u\n", reply->Options.Ttl);
             trace("flags      : 0x%x\n", reply->Options.Flags);
@@ -1390,7 +1390,7 @@ static void testIcmpSendEcho(void)
     reply = (ICMP_ECHO_REPLY*)replydata2;
     ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
        ntoa(reply->Address));
-    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
+    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08x\n", IP_SUCCESS, reply->Status);
     ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
     /* pre-Vista, reply->Data is an offset; otherwise it's a pointer, so hardcode the offset */
     ok(!memcmp(senddata, reply + 1, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
@@ -1407,7 +1407,7 @@ static void testIcmpSendEcho(void)
     reply = (ICMP_ECHO_REPLY*)replydata2;
     ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
        ntoa(reply->Address));
-    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
+    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08x\n", IP_SUCCESS, reply->Status);
     ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
     ok(!memcmp(senddata, reply + 1, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
 
@@ -1438,7 +1438,7 @@ static void testIcmpSendEcho(void)
     reply = (ICMP_ECHO_REPLY*)replydata2;
     ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
        ntoa(reply->Address));
-    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
+    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08x\n", IP_SUCCESS, reply->Status);
     ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
     /* pre-Vista, reply->Data is an offset; otherwise it's a pointer, so hardcode the offset */
     ok(!memcmp(senddata, reply + 1, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
@@ -1461,14 +1461,14 @@ static void testIcmpParseReplies( void )
     ret = IcmpParseReplies( &reply, sizeof(reply) );
     ok( ret == 0, "ret %ld\n", ret );
     ok( GetLastError() == 12345, "gle %ld\n", GetLastError() );
-    ok( reply.Status == 12345, "status %ld\n", reply.Status );
+    ok( reply.Status == 12345, "status %u\n", reply.Status );
 
     reply.Reserved = 1;
     SetLastError( 0xdeadbeef );
     ret = IcmpParseReplies( &reply, sizeof(reply) );
     ok( ret == 1, "ret %ld\n", ret );
     ok( GetLastError() == 0xdeadbeef, "gle %ld\n", GetLastError() );
-    ok( reply.Status == 12345, "status %ld\n", reply.Status );
+    ok( reply.Status == 12345, "status %u\n", reply.Status );
     ok( !reply.Reserved, "reserved %d\n", reply.Reserved );
 
     reply.Reserved = 3;
@@ -1476,7 +1476,7 @@ static void testIcmpParseReplies( void )
     ret = IcmpParseReplies( &reply, sizeof(reply) );
     ok( ret == 3, "ret %ld\n", ret );
     ok( GetLastError() == 0xdeadbeef, "gle %ld\n", GetLastError() );
-    ok( reply.Status == 12345, "status %ld\n", reply.Status );
+    ok( reply.Status == 12345, "status %u\n", reply.Status );
     ok( !reply.Reserved, "reserved %d\n", reply.Reserved );
 }
 

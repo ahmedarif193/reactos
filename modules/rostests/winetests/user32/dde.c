@@ -250,7 +250,7 @@ static LRESULT WINAPI dde_server_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPA
     {
         ok(msg_index == 9, "Expected 9, got %d\n", msg_index);
         ok(wparam == (WPARAM)client, "Expected client hwnd, got %08Ix\n", wparam);
-        ok(lparam == 0, "Expected 0, got %08Ix\n", lparam);
+        ok(lparam == 0, "Expected 0, got %08llx\n", (unsigned long long)lparam);
 
         PostMessageA(client, WM_DDE_TERMINATE, (WPARAM)hwnd, 0);
 
@@ -604,8 +604,8 @@ static HDDEDATA CALLBACK server_ddeml_callback(UINT uType, UINT uFmt, HCONV hcon
         ok(uFmt == 0, "Expected 0, got %d\n", uFmt);
         ok(hconv == 0, "Expected 0, got %p\n", hconv);
         ok(hdata == 0, "Expected 0, got %p\n", hdata);
-        ok(dwData1 == 0, "Expected 0, got %08Ix\n", dwData1);
-        ok(dwData2 == 0, "Expected 0, got %08Ix\n", dwData2);
+        ok(dwData1 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData1);
+        ok(dwData2 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData2);
 
         size = DdeQueryStringA(server_pid, hsz1, str, MAX_PATH, CP_WINANSI);
         ok(!lstrcmpA(str, "TestDDEServer"), "Expected TestDDEServer, got %s\n", str);
@@ -625,8 +625,8 @@ static HDDEDATA CALLBACK server_ddeml_callback(UINT uType, UINT uFmt, HCONV hcon
         ok(uFmt == 0, "Expected 0, got %d\n", uFmt);
         ok(hconv == 0, "Expected 0, got %p\n", hconv);
         ok(hdata == 0, "Expected 0, got %p\n", hdata);
-        ok(dwData1 == 0, "Expected 0, got %08Ix\n", dwData1);
-        ok(dwData2 == FALSE, "Expected FALSE, got %08Ix\n", dwData2);
+        ok(dwData1 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData1);
+        ok(dwData2 == FALSE, "Expected FALSE, got %08llx\n", (unsigned long long)dwData2);
 
         size = DdeQueryStringA(server_pid, hsz1, str, MAX_PATH, CP_WINANSI);
         ok(!lstrcmpA(str, "TestDDETopic"), "Expected TestDDETopic, got %s\n", str);
@@ -647,8 +647,8 @@ static HDDEDATA CALLBACK server_ddeml_callback(UINT uType, UINT uFmt, HCONV hcon
         ok(uFmt == 0, "Expected 0, got %d\n", uFmt);
         ok(hconv != NULL, "Expected non-NULL hconv\n");
         ok(hdata == 0, "Expected 0, got %p\n", hdata);
-        ok(dwData1 == 0, "Expected 0, got %08Ix\n", dwData1);
-        ok(dwData2 == FALSE, "Expected FALSE, got %08Ix\n", dwData2);
+        ok(dwData1 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData1);
+        ok(dwData2 == FALSE, "Expected FALSE, got %08llx\n", (unsigned long long)dwData2);
 
         size = DdeQueryStringA(server_pid, hsz1, str, MAX_PATH, CP_WINANSI);
         ok(!lstrcmpA(str, "TestDDETopic"), "Expected TestDDETopic, got %s\n", str);
@@ -667,8 +667,8 @@ static HDDEDATA CALLBACK server_ddeml_callback(UINT uType, UINT uFmt, HCONV hcon
            "Expected 4, 5 or 6, got %d\n", msg_index);
         ok(hconv == conversation, "Expected conversation handle, got %p\n", hconv);
         ok(hdata == 0, "Expected 0, got %p\n", hdata);
-        ok(dwData1 == 0, "Expected 0, got %08Ix\n", dwData1);
-        ok(dwData2 == 0, "Expected 0, got %08Ix\n", dwData2);
+        ok(dwData1 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData1);
+        ok(dwData2 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData2);
 
         if (msg_index == 4)
             ok(uFmt == 0xbeef, "Expected 0xbeef, got %08x\n", uFmt);
@@ -709,8 +709,8 @@ static HDDEDATA CALLBACK server_ddeml_callback(UINT uType, UINT uFmt, HCONV hcon
         ok(msg_index == 7 || msg_index == 8, "Expected 7 or 8, got %d\n", msg_index);
         ok(uFmt == CF_TEXT, "Expected CF_TEXT, got %d\n", uFmt);
         ok(hconv == conversation, "Expected conversation handle, got %p\n", hconv);
-        ok(dwData1 == 0, "Expected 0, got %08Ix\n", dwData1);
-        ok(dwData2 == 0, "Expected 0, got %08Ix\n", dwData2);
+        ok(dwData1 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData1);
+        ok(dwData2 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData2);
 
         size = DdeQueryStringA(server_pid, hsz1, str, MAX_PATH, CP_WINANSI);
         ok(!lstrcmpA(str, "TestDDETopic"), "Expected TestDDETopic, got %s\n", str);
@@ -743,8 +743,8 @@ static HDDEDATA CALLBACK server_ddeml_callback(UINT uType, UINT uFmt, HCONV hcon
         ok(msg_index >= 9 && msg_index <= 11, "Expected 9 or 11, got %d\n", msg_index);
         ok(uFmt == 0, "Expected 0, got %d\n", uFmt);
         ok(hconv == conversation, "Expected conversation handle, got %p\n", hconv);
-        ok(dwData1 == 0, "Expected 0, got %08Ix\n", dwData1);
-        ok(dwData2 == 0, "Expected 0, got %08Ix\n", dwData2);
+        ok(dwData1 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData1);
+        ok(dwData2 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData2);
         ok(hsz2 == 0, "Expected 0, got %p\n", hsz2);
 
         size = DdeQueryStringA(server_pid, hsz1, str, MAX_PATH, CP_WINANSI);
@@ -796,8 +796,8 @@ static HDDEDATA CALLBACK server_ddeml_callback(UINT uType, UINT uFmt, HCONV hcon
         ok(msg_index == 12, "Expected 12, got %d\n", msg_index);
         ok(uFmt == 0, "Expected 0, got %d\n", uFmt);
         ok(hconv == conversation, "Expected conversation handle, got %p\n", hconv);
-        ok(dwData1 == 0, "Expected 0, got %08Ix\n", dwData1);
-        ok(dwData2 == 0, "Expected 0, got %08Ix\n", dwData2);
+        ok(dwData1 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData1);
+        ok(dwData2 == 0, "Expected 0, got %08llx\n", (unsigned long long)dwData2);
         ok(hsz1 == 0, "Expected 0, got %p\n", hsz2);
         ok(hsz2 == 0, "Expected 0, got %p\n", hsz2);
 
@@ -1183,7 +1183,7 @@ static LRESULT WINAPI hook_dde_client_wndprocA(HWND hwnd, UINT msg, WPARAM wpara
 {
     UINT_PTR lo, hi;
 
-    if (winetest_debug > 1) trace("hook_dde_client_wndprocA: %p %04x %08Ix %08Ix\n", hwnd, msg, wparam, lparam);
+    if (winetest_debug > 1) trace("hook_dde_client_wndprocA: %p %04x %08Ix %08llx\n", hwnd, msg, wparam, (unsigned long long)lparam);
 
     switch (msg)
     {
@@ -1202,7 +1202,7 @@ static LRESULT WINAPI hook_dde_client_wndprocW(HWND hwnd, UINT msg, WPARAM wpara
 {
     UINT_PTR lo, hi;
 
-    if (winetest_debug > 1) trace("hook_dde_client_wndprocW: %p %04x %08Ix %08Ix\n", hwnd, msg, wparam, lparam);
+    if (winetest_debug > 1) trace("hook_dde_client_wndprocW: %p %04x %08Ix %08llx\n", hwnd, msg, wparam, (unsigned long long)lparam);
 
     switch (msg)
     {
@@ -1228,8 +1228,8 @@ static LRESULT WINAPI dde_server_wndprocA(HWND hwnd, UINT msg, WPARAM wparam, LP
     {
         ATOM aService = GlobalAddAtomW(TEST_DDE_SERVICE);
 
-        if (winetest_debug > 1) trace("server A: got WM_DDE_INITIATE from %p (%s) with %08Ix\n",
-              (HWND)wparam, client_unicode ? "Unicode" : "ANSI", lparam);
+        if (winetest_debug > 1) trace("server A: got WM_DDE_INITIATE from %p (%s) with %08llx\n",
+              (HWND)wparam, client_unicode ? "Unicode" : "ANSI", (unsigned long long)lparam);
 
         if (LOWORD(lparam) == aService)
         {
@@ -1257,10 +1257,10 @@ static LRESULT WINAPI dde_server_wndprocA(HWND hwnd, UINT msg, WPARAM wparam, LP
         LPCSTR cmd;
         UINT_PTR lo, hi;
 
-        if (winetest_debug > 1) trace("server A: got WM_DDE_EXECUTE from %p with %08Ix\n", (HWND)wparam, lparam);
+        if (winetest_debug > 1) trace("server A: got WM_DDE_EXECUTE from %p with %08llx\n", (HWND)wparam, (unsigned long long)lparam);
 
         UnpackDDElParam(WM_DDE_EXECUTE, lparam, &lo, &hi);
-        if (winetest_debug > 1) trace("%08Ix => lo %04Ix hi %04Ix\n", lparam, lo, hi);
+        if (winetest_debug > 1) trace("%08llx => lo %04Ix hi %04Ix\n", (unsigned long long)lparam, lo, hi);
 
         ack.bAppReturnCode = 0;
         ack.reserved = 0;
@@ -1327,7 +1327,7 @@ static LRESULT WINAPI dde_server_wndprocA(HWND hwnd, UINT msg, WPARAM wparam, LP
         DDEACK ack;
         WORD status;
 
-        if (winetest_debug > 1) trace("server A: got WM_DDE_TERMINATE from %#Ix with %08Ix\n", wparam, lparam);
+        if (winetest_debug > 1) trace("server A: got WM_DDE_TERMINATE from %#Ix with %08llx\n", wparam, (unsigned long long)lparam);
 
         ack.bAppReturnCode = 0;
         ack.reserved = 0;
@@ -1377,8 +1377,8 @@ static LRESULT WINAPI dde_server_wndprocW(HWND hwnd, UINT msg, WPARAM wparam, LP
             GlobalDeleteAtom(aService);
 
         if (winetest_debug > 1)
-            trace("server W: got WM_DDE_INITIATE from %p with %08Ix (client %s conv %s)\n", (HWND)wparam,
-                    lparam, client_unicode ? "Unicode" : "ANSI", conv_unicode ? "Unicode" : "ANSI" );
+            trace("server W: got WM_DDE_INITIATE from %p with %08llx (client %s conv %s)\n", (HWND)wparam,
+                    (unsigned long long)lparam, client_unicode ? "Unicode" : "ANSI", conv_unicode ? "Unicode" : "ANSI" );
 
         return 0;
     }
@@ -1390,10 +1390,10 @@ static LRESULT WINAPI dde_server_wndprocW(HWND hwnd, UINT msg, WPARAM wparam, LP
         LPCSTR cmd;
         UINT_PTR lo, hi;
 
-        if (winetest_debug > 1) trace("server W: got WM_DDE_EXECUTE from %#Ix with %08Ix\n", wparam, lparam);
+        if (winetest_debug > 1) trace("server W: got WM_DDE_EXECUTE from %#Ix with %08llx\n", wparam, (unsigned long long)lparam);
 
         UnpackDDElParam(WM_DDE_EXECUTE, lparam, &lo, &hi);
-        if (winetest_debug > 1) trace("%08Ix => lo %04Ix hi %04Ix\n", lparam, lo, hi);
+        if (winetest_debug > 1) trace("%08llx => lo %04Ix hi %04Ix\n", (unsigned long long)lparam, lo, hi);
 
         ack.bAppReturnCode = 0;
         ack.reserved = 0;
@@ -1468,7 +1468,7 @@ static LRESULT WINAPI dde_server_wndprocW(HWND hwnd, UINT msg, WPARAM wparam, LP
         DDEACK ack;
         WORD status;
 
-        if (winetest_debug > 1) trace("server W: got WM_DDE_TERMINATE from %#Ix with %08Ix\n", wparam, lparam);
+        if (winetest_debug > 1) trace("server W: got WM_DDE_TERMINATE from %#Ix with %08llx\n", wparam, (unsigned long long)lparam);
 
         ack.bAppReturnCode = 0;
         ack.reserved = 0;
@@ -1541,8 +1541,8 @@ static HDDEDATA CALLBACK client_dde_callback(UINT uType, UINT uFmt, HCONV hconv,
     cmd_name = (type <= 14) ? cmd_type[type] : "unknown";
 
     if (winetest_debug > 1)
-        trace("client_dde_callback: %04x (%s) %d %p %p %p %p %08Ix %08Ix\n",
-                uType, cmd_name, uFmt, hconv, hsz1, hsz2, hdata, dwData1, dwData2);
+        trace("client_dde_callback: %04x (%s) %d %p %p %p %p %08llx %08llx\n",
+                uType, cmd_name, uFmt, hconv, hsz1, hsz2, hdata, (unsigned long long)dwData1, (unsigned long long)dwData2);
     return 0;
 }
 
@@ -2134,7 +2134,7 @@ static void test_PackDDElParam(void)
 
     lparam = PackDDElParam(WM_DDE_INITIATE, 0xcafe, 0xbeef);
     /* value gets sign-extended despite being an LPARAM */
-    ok(lparam == (int)0xbeefcafe, "Expected 0xbeefcafe, got %08Ix\n", lparam);
+    ok(lparam == (int)0xbeefcafe, "Expected 0xbeefcafe, got %08llx\n", (unsigned long long)lparam);
 
     lo = hi = 0;
     ret = UnpackDDElParam(WM_DDE_INITIATE, lparam, &lo, &hi);
@@ -2146,7 +2146,7 @@ static void test_PackDDElParam(void)
     ok(ret == TRUE, "Expected TRUE, got %d\n", ret);
 
     lparam = PackDDElParam(WM_DDE_TERMINATE, 0xcafe, 0xbeef);
-    ok(lparam == (int)0xbeefcafe, "Expected 0xbeefcafe, got %08Ix\n", lparam);
+    ok(lparam == (int)0xbeefcafe, "Expected 0xbeefcafe, got %08llx\n", (unsigned long long)lparam);
 
     lo = hi = 0;
     ret = UnpackDDElParam(WM_DDE_TERMINATE, lparam, &lo, &hi);
@@ -2176,7 +2176,7 @@ static void test_PackDDElParam(void)
     ok(ret == TRUE, "Expected TRUE, got %d\n", ret);
 
     lparam = PackDDElParam(WM_DDE_UNADVISE, 0xcafe, 0xbeef);
-    ok(lparam == (int)0xbeefcafe, "Expected 0xbeefcafe, got %08Ix\n", lparam);
+    ok(lparam == (int)0xbeefcafe, "Expected 0xbeefcafe, got %08llx\n", (unsigned long long)lparam);
 
     lo = hi = 0;
     ret = UnpackDDElParam(WM_DDE_UNADVISE, lparam, &lo, &hi);
@@ -2224,7 +2224,7 @@ static void test_PackDDElParam(void)
     ok(ret == TRUE, "Expected TRUE, got %d\n", ret);
 
     lparam = PackDDElParam(WM_DDE_REQUEST, 0xcafe, 0xbeef);
-    ok(lparam == (int)0xbeefcafe, "Expected 0xbeefcafe, got %08Ix\n", lparam);
+    ok(lparam == (int)0xbeefcafe, "Expected 0xbeefcafe, got %08llx\n", (unsigned long long)lparam);
 
     lo = hi = 0;
     ret = UnpackDDElParam(WM_DDE_REQUEST, lparam, &lo, &hi);
@@ -2254,7 +2254,7 @@ static void test_PackDDElParam(void)
     ok(ret == TRUE, "Expected TRUE, got %d\n", ret);
 
     lparam = PackDDElParam(WM_DDE_EXECUTE, 0xcafe, 0xbeef);
-    ok(lparam == 0xbeef, "Expected 0xbeef, got %08Ix\n", lparam);
+    ok(lparam == 0xbeef, "Expected 0xbeef, got %08llx\n", (unsigned long long)lparam);
 
     lo = hi = 0;
     ret = UnpackDDElParam(WM_DDE_EXECUTE, lparam, &lo, &hi);
@@ -2419,8 +2419,8 @@ static HDDEDATA CALLBACK server_end_to_end_callback(UINT uType, UINT uFmt, HCONV
         ok(uFmt == 0, "Expected 0, got %d, msg_index=%d\n", uFmt, msg_index);
         ok(hconv == 0, "Expected 0, got %p, msg_index=%d\n", hconv, msg_index);
         ok(hdata == 0, "Expected 0, got %p, msg_index=%d\n", hdata, msg_index);
-        ok(dwData1 != 0, "Expected not 0, got %08Ix, msg_index=%d\n", dwData1, msg_index);
-        ok(dwData2 == FALSE, "Expected FALSE, got %08Ix, msg_index=%d\n", dwData2, msg_index);
+        ok(dwData1 != 0, "Expected not 0, got %08llx, msg_index=%d\n", (unsigned long long)dwData1, msg_index);
+        ok(dwData2 == FALSE, "Expected FALSE, got %08llx, msg_index=%d\n", (unsigned long long)dwData2, msg_index);
 
         size = DdeQueryStringA(server_pid, hsz1, str, MAX_PATH, CP_WINANSI);
         ok(!lstrcmpA(str, test_topic), "Expected %s, got %s, msg_index=%d\n",
@@ -2452,8 +2452,8 @@ static HDDEDATA CALLBACK server_end_to_end_callback(UINT uType, UINT uFmt, HCONV
         ok(uFmt == 0, "Expected 0, got %d\n", uFmt);
         ok(hconv == conversation, "Expected conversation handle, got %p, msg_index=%d\n",
                              hconv, msg_index);
-        ok(dwData1 == 0, "Expected 0, got %08Ix, msg_index=%d\n", dwData1, msg_index);
-        ok(dwData2 == 0, "Expected 0, got %08Ix, msg_index=%d\n", dwData2, msg_index);
+        ok(dwData1 == 0, "Expected 0, got %08llx, msg_index=%d\n", (unsigned long long)dwData1, msg_index);
+        ok(dwData2 == 0, "Expected 0, got %08llx, msg_index=%d\n", (unsigned long long)dwData2, msg_index);
         ok(hsz2 == 0, "Expected 0, got %p, msg_index=%d\n", hsz2, msg_index);
         size = DdeQueryStringA(server_pid, hsz1, str, MAX_PATH, CP_WINANSI);
         ok(!lstrcmpA(str, test_topic), "Expected %s, got %s, msg_index=%d\n",

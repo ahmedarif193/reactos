@@ -1099,7 +1099,7 @@ static LRESULT WINAPI main_window_procA(HWND hwnd, UINT msg, WPARAM wparam, LPAR
 
             GetClientRect(hwnd, &rc2);
             ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)&rc1);
-            ok(!ret, "got %08Ix\n", ret);
+            ok(!ret, "got %08llx\n", (unsigned long long)ret);
             MapWindowPoints(0, hwnd, (LPPOINT)&rc1, 2);
             ok(EqualRect(&rc1, &rc2), "rects do not match %s / %s\n", wine_dbgstr_rect(&rc1),
                wine_dbgstr_rect(&rc2));
@@ -1156,7 +1156,7 @@ static LRESULT WINAPI main_window_procA(HWND hwnd, UINT msg, WPARAM wparam, LPAR
         case WM_NCCALCSIZE:
         {
             LRESULT ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, wparam, lparam);
-            ok(!ret, "got %08Ix (%08Ix %08Ix)\n", ret, wparam, lparam);
+            ok(!ret, "got %08llx (%08Ix %08llx)\n", (unsigned long long)ret, wparam, (unsigned long long)lparam);
             return ret;
         }
     }
@@ -1193,7 +1193,7 @@ static LRESULT WINAPI main_window_procW(HWND hwnd, UINT msg, WPARAM wparam, LPAR
         case WM_NCCALCSIZE:
         {
             LRESULT ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, wparam, lparam);
-            ok(!ret, "got %08Ix (%08Ix %08Ix)\n", ret, wparam, lparam);
+            ok(!ret, "got %08llx (%08Ix %08llx)\n", (unsigned long long)ret, wparam, (unsigned long long)lparam);
             return ret;
         }
     }
@@ -1225,7 +1225,7 @@ static LRESULT WINAPI tool_window_procA(HWND hwnd, UINT msg, WPARAM wparam, LPAR
         case WM_NCCALCSIZE:
         {
             LRESULT ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, wparam, lparam);
-            ok(!ret, "got %08Ix (%08Ix %08Ix)\n", ret, wparam, lparam);
+            ok(!ret, "got %08llx (%08Ix %08llx)\n", (unsigned long long)ret, wparam, (unsigned long long)lparam);
             return ret;
         }
     }
@@ -1496,7 +1496,7 @@ static LRESULT CALLBACK test_standard_scrollbar_proc(HWND hwnd, UINT msg, WPARAM
     case WM_NCCALCSIZE:
     {
         LRESULT ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, wp, lp);
-        ok(!ret, "got %08Ix (%08Ix %08Ix)\n", ret, wp, lp);
+        ok(!ret, "got %08llx (%08Ix %08llx)\n", (unsigned long long)ret, wp, (unsigned long long)lp);
         return ret;
     }
 
@@ -1549,7 +1549,7 @@ static void test_nonclient_area(HWND hwnd)
 
     rc = rc_window;
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)&rc);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     MapWindowPoints(0, hwnd, (LPPOINT)&rc, 2);
     ok(EqualRect(&rc, &rc_client),
        "client rect does not match: style:exstyle=0x%08lx:0x%08lx, menu=%d client=%s, calc=%s\n",
@@ -1557,7 +1557,7 @@ static void test_nonclient_area(HWND hwnd)
 
     /* NULL rectangle shouldn't crash */
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, 0);
-    ok(ret == 0, "NULL rectangle returned %Id instead of 0\n", ret);
+    ok(ret == 0, "NULL rectangle returned %lld instead of 0\n", (long long)ret);
 
     /* and now test AdjustWindowRectEx and WM_NCCALCSIZE on synthetic data */
     SetRect(&rc_client, 0, 0, 250, 150);
@@ -1567,7 +1567,7 @@ static void test_nonclient_area(HWND hwnd)
 
     rc = rc_window;
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)&rc);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     MapWindowPoints(0, hwnd, (LPPOINT)&rc, 2);
     ok(EqualRect(&rc, &rc_client),
        "synthetic rect does not match: style:exstyle=0x%08lx:0x%08lx, menu=%d, client=%s, calc=%s\n",
@@ -2482,7 +2482,7 @@ static LRESULT WINAPI mdi_child_wnd_proc_2(HWND hwnd, UINT msg, WPARAM wparam, L
             GetWindowRect(hwnd, &rc1);
             GetClientRect(hwnd, &rc2);
             ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)&rc1);
-            ok(!ret, "got %08Ix\n", ret);
+            ok(!ret, "got %08llx\n", (unsigned long long)ret);
             MapWindowPoints(0, hwnd, (LPPOINT)&rc1, 2);
             ok(EqualRect(&rc1, &rc2), "rects do not match, window=%s client=%s\n",
                wine_dbgstr_rect(&rc1), wine_dbgstr_rect(&rc2));
@@ -2512,7 +2512,7 @@ static LRESULT WINAPI mdi_child_wnd_proc_2(HWND hwnd, UINT msg, WPARAM wparam, L
         case WM_NCCALCSIZE:
         {
             LRESULT ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, wparam, lparam);
-            ok(!ret, "got %08Ix (%08Ix %08Ix)\n", ret, wparam, lparam);
+            ok(!ret, "got %08llx (%08Ix %08llx)\n", (unsigned long long)ret, wparam, (unsigned long long)lparam);
             return ret;
         }
     }
@@ -2580,7 +2580,7 @@ static LRESULT WINAPI mdi_main_wnd_procA(HWND hwnd, UINT msg, WPARAM wparam, LPA
         case WM_NCCALCSIZE:
         {
             LRESULT ret = DefFrameProcA(hwnd, mdi_client, WM_NCCALCSIZE, wparam, lparam);
-            ok(!ret, "got %08Ix (%08Ix %08Ix)\n", ret, wparam, lparam);
+            ok(!ret, "got %08llx (%08Ix %08llx)\n", (unsigned long long)ret, wparam, (unsigned long long)lparam);
             return ret;
         }
 
@@ -2937,8 +2937,8 @@ static void check_icon_size_( int line, HICON icon, LONG width, LONG height )
     ok_(__FILE__, line)(ret, "failed to get icon info, error %lu\n", GetLastError());
     ret = GetObjectW(info.hbmColor, sizeof(bitmap), &bitmap);
     ok_(__FILE__, line)(ret, "failed to get bitmap, error %lu\n", GetLastError());
-    ok_(__FILE__, line)(bitmap.bmWidth == width, "expected width %ld, got %d\n", width, bitmap.bmWidth);
-    ok_(__FILE__, line)(bitmap.bmHeight == height, "expected height %ld, got %d\n", height, bitmap.bmHeight);
+    ok_(__FILE__, line)(bitmap.bmWidth == width, "expected width %ld, got %ld\n", width, bitmap.bmWidth);
+    ok_(__FILE__, line)(bitmap.bmHeight == height, "expected height %ld, got %ld\n", height, bitmap.bmHeight);
 }
 
 #define check_internal_icon_size(a, b, c, d) check_internal_icon_size_(__LINE__, a, b, c, d)
@@ -4408,7 +4408,7 @@ static LRESULT CALLBACK test_capture_4_proc(HWND hWnd, UINT msg, WPARAM wParam, 
             }
             cap_wnd = GetCapture();
 
-            ok(cap_wnd == (HWND)lParam, "capture window %p does not match lparam %Ix\n", cap_wnd, lParam);
+            ok(cap_wnd == (HWND)lParam, "capture window %p does not match lparam %llx\n", cap_wnd, (unsigned long long)lParam);
             todo_wine ok(cap_wnd == hWnd, "capture window %p does not match hwnd %p\n", cap_wnd, hWnd);
 
             /* check that re-setting the capture for the menu fails */
@@ -4882,7 +4882,7 @@ static void nccalchelper(HWND hwnd, INT x, INT y, RECT *prc)
     GetWindowRect( hwnd, prc);
     rc = *prc;
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)prc);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     if (winetest_debug > 1)
         trace("window rect is %s, nccalc rect is %s\n", wine_dbgstr_rect(&rc), wine_dbgstr_rect(prc));
 }
@@ -6896,7 +6896,7 @@ static LRESULT CALLBACK winsizes_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
         ok( EqualRect( &rect, r ), "passed rect %s doesn't match window rect %s\n",
             wine_dbgstr_rect( r ), wine_dbgstr_rect( &rect ));
         ret = DefWindowProcA(hwnd, msg, wp, lp);
-        ok(!ret, "got %08Ix\n", ret);
+        ok(!ret, "got %08llx\n", (unsigned long long)ret);
         return ret;
     }
     default:
@@ -7755,7 +7755,7 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcClient), wine_dbgstr_rect(&rc));
 
     ret = ShowWindow(hwnd, SW_SHOW);
-    ok(!ret, "not expected ret: %Iu\n", ret);
+    ok(!ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7769,7 +7769,7 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcClient), wine_dbgstr_rect(&rc));
 
     ret = ShowWindow(hwnd, SW_MINIMIZE);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7786,7 +7786,7 @@ static void test_ShowWindow(void)
                        (rcMinimized.right - rcMinimized.left) * 2,
                        (rcMinimized.bottom - rcMinimized.top) * 2,
                        SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     GetWindowRect(hwnd, &rc);
     ok(EqualRect(&rcMinimized, &rc), "expected %s, got %s\n",
        wine_dbgstr_rect(&rcMinimized), wine_dbgstr_rect(&rc));
@@ -7796,7 +7796,7 @@ static void test_ShowWindow(void)
     /* SetWindowPos shouldn't affect the client rect */
     ret = SetWindowPos(hwnd, 0, 0, 0, 0, 0,
                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     GetWindowRect(hwnd, &rc);
     ok(EqualRect(&rcMinimized, &rc), "expected %s, got %s\n",
        wine_dbgstr_rect(&rcMinimized), wine_dbgstr_rect(&rc));
@@ -7807,12 +7807,12 @@ static void test_ShowWindow(void)
     GetWindowRect(hwnd, &rc);
     SetRect(&rcNonClient, rc.left, rc.top, rc.left, rc.top);
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)&rc);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     ok(EqualRect(&rc, &rcNonClient), "expected %s, got %s\n",
        wine_dbgstr_rect(&rcNonClient), wine_dbgstr_rect(&rc));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7826,7 +7826,7 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcClient), wine_dbgstr_rect(&rc));
 
     ret = ShowWindow(hwnd, SW_MAXIMIZE);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7837,14 +7837,14 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcMaximized), wine_dbgstr_rect(&rc));
     /* maximized windows can be resized */
     ret = SetWindowPos(hwnd, 0, 300, 300, 200, 200, SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     SetRect(&rcResized, 300, 300, 500, 500);
     GetWindowRect(hwnd, &rc);
     ok(EqualRect(&rcResized, &rc), "expected %s, got %s\n",
        wine_dbgstr_rect(&rcResized), wine_dbgstr_rect(&rc));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7855,12 +7855,12 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rc));
 
     ret = EnableWindow(hwnd, FALSE);
-    ok(!ret, "not expected ret: %Iu\n", ret);
+    ok(!ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(style & WS_DISABLED, "window should be disabled\n");
 
     ret = DefWindowProcA(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
-    ok(!ret, "not expected ret: %Iu\n", ret);
+    ok(!ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(style & WS_DISABLED, "window should be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7874,7 +7874,7 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcClient), wine_dbgstr_rect(&rc));
 
     ret = DefWindowProcA(hwnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
-    ok(!ret, "not expected ret: %Iu\n", ret);
+    ok(!ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(style & WS_DISABLED, "window should be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7888,7 +7888,7 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcClient), wine_dbgstr_rect(&rc));
 
     ret = ShowWindow(hwnd, SW_MINIMIZE);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(style & WS_DISABLED, "window should be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7902,7 +7902,7 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcEmpty), wine_dbgstr_rect(&rc));
 
     ret = DefWindowProcA(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);
-    ok(!ret, "not expected ret: %Iu\n", ret);
+    ok(!ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(style & WS_DISABLED, "window should be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7916,7 +7916,7 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcEmpty), wine_dbgstr_rect(&rc));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(style & WS_DISABLED, "window should be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -7930,14 +7930,14 @@ static void test_ShowWindow(void)
        wine_dbgstr_rect(&rcClient), wine_dbgstr_rect(&rc));
 
     ret = DefWindowProcA(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
-    ok(!ret, "not expected ret: %Iu\n", ret);
+    ok(!ret, "not expected ret: %lld\n", (long long)ret);
     ok(IsWindow(hwnd), "window should exist\n");
 
     ret = EnableWindow(hwnd, TRUE);
-    ok(ret, "not expected ret: %Iu\n", ret);
+    ok(ret, "not expected ret: %lld\n", (long long)ret);
 
     ret = DefWindowProcA(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
-    ok(!ret, "not expected ret: %Iu\n", ret);
+    ok(!ret, "not expected ret: %lld\n", (long long)ret);
     ok(!IsWindow(hwnd), "window should not exist\n");
 
     hwnd = CreateWindowExA(0, "MainWindowClass", NULL,
@@ -8007,7 +8007,7 @@ static void test_ShowWindow(void)
                            0, GetWindowLongA(hwnd, GWL_EXSTYLE));
 
         ret = ShowWindow(hwnd, SW_MAXIMIZE);
-        ok(ret, "unexpected ret: %Iu\n", ret);
+        ok(ret, "unexpected ret: %lld\n", (long long)ret);
         style = GetWindowLongA(hwnd, GWL_STYLE);
         ok(style & WS_MAXIMIZE, "Test %u: window should be maximized\n", i);
         GetWindowRect(hwnd, &rc);
@@ -8024,7 +8024,7 @@ static void test_ShowWindow(void)
            wine_dbgstr_rect(&rc));
 
         ret = ShowWindow(hwnd, SW_RESTORE);
-        ok(ret, "unexpected ret: %Iu\n", ret);
+        ok(ret, "unexpected ret: %lld\n", (long long)ret);
         style = GetWindowLongA(hwnd, GWL_STYLE);
         ok(!(style & WS_MAXIMIZE), "Test %u: window should not be maximized\n", i);
         GetWindowRect(hwnd, &rc);
@@ -8119,7 +8119,7 @@ static void test_ShowWindow_owned(HWND hwndMain)
        wine_dbgstr_rect(&orig), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_SHOW);
-    ok(!ret, "wrong ret %Iu\n", ret);
+    ok(!ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8130,7 +8130,7 @@ static void test_ShowWindow_owned(HWND hwndMain)
        wine_dbgstr_rect(&orig), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_MINIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8144,7 +8144,7 @@ static void test_ShowWindow_owned(HWND hwndMain)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
     /* shouldn't be able to resize minimized windows */
     ret = SetWindowPos(hwnd, 0, 0, 0, 200, 200, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     GetWindowRect(hwnd, &rect);
     todo_wine
     ok(EqualRect(&expect, &rect), "expected %s, got %s\n",
@@ -8153,7 +8153,7 @@ static void test_ShowWindow_owned(HWND hwndMain)
     GetWindowRect(hwnd, &rect);
     SetRect(&nc, rect.left, rect.top, rect.left, rect.top);
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)&rect);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     ok(EqualRect(&rect, &nc), "expected %s, got %s\n",
        wine_dbgstr_rect(&nc), wine_dbgstr_rect(&rect));
 
@@ -8161,7 +8161,7 @@ static void test_ShowWindow_owned(HWND hwndMain)
      * on top of each other) */
     OffsetRect(&expect, GetSystemMetrics(SM_CXMINIMIZED), 0);
     ret = ShowWindow(hwnd2, SW_MINIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd2, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8173,7 +8173,7 @@ static void test_ShowWindow_owned(HWND hwndMain)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8184,7 +8184,7 @@ static void test_ShowWindow_owned(HWND hwndMain)
        wine_dbgstr_rect(&orig), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_MAXIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8198,14 +8198,14 @@ static void test_ShowWindow_owned(HWND hwndMain)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
     /* maximized windows can be resized */
     ret = SetWindowPos(hwnd, 0, 300, 300, 200, 200, SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     GetWindowRect(hwnd, &rect);
     SetRect(&expect, 300, 300, 500, 500);
     ok(EqualRect(&expect, &rect), "expected %s, got %s\n",
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8278,7 +8278,7 @@ static void test_ShowWindow_child(HWND hwndMain)
        wine_dbgstr_rect(&orig), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_SHOW);
-    ok(!ret, "wrong ret %Iu\n", ret);
+    ok(!ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8289,7 +8289,7 @@ static void test_ShowWindow_child(HWND hwndMain)
        wine_dbgstr_rect(&orig), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_MINIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8304,7 +8304,7 @@ static void test_ShowWindow_child(HWND hwndMain)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
     /* shouldn't be able to resize minimized windows */
     ret = SetWindowPos(hwnd, 0, 0, 0, 200, 200, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     GetWindowRect(hwnd, &rect);
     ok(EqualRect(&expect, &rect), "expected %s, got %s\n",
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
@@ -8312,7 +8312,7 @@ static void test_ShowWindow_child(HWND hwndMain)
     GetWindowRect(hwnd, &rect);
     SetRect(&nc, rect.left, rect.top, rect.left, rect.top);
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)&rect);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     ok(EqualRect(&rect, &nc), "expected %s, got %s\n",
        wine_dbgstr_rect(&nc), wine_dbgstr_rect(&rect));
 
@@ -8320,7 +8320,7 @@ static void test_ShowWindow_child(HWND hwndMain)
      * fit more than one per row */
     OffsetRect(&expect, 0, -GetSystemMetrics(SM_CYMINIMIZED));
     ret = ShowWindow(hwnd2, SW_MINIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd2, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8331,7 +8331,7 @@ static void test_ShowWindow_child(HWND hwndMain)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8342,7 +8342,7 @@ static void test_ShowWindow_child(HWND hwndMain)
        wine_dbgstr_rect(&orig), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_MAXIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8357,7 +8357,7 @@ static void test_ShowWindow_child(HWND hwndMain)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
     /* maximized windows can be resized */
     ret = SetWindowPos(hwnd, 0, 300, 300, 200, 200, SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     GetWindowRect(hwnd, &rect);
     SetRect(&expect, 300, 300, 500, 500);
     OffsetRect(&expect, pt.x, pt.y);
@@ -8365,7 +8365,7 @@ static void test_ShowWindow_child(HWND hwndMain)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8474,7 +8474,7 @@ static void test_ShowWindow_mdichild(void)
        wine_dbgstr_rect(&orig), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_MINIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8489,7 +8489,7 @@ static void test_ShowWindow_mdichild(void)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
     /* shouldn't be able to resize minimized windows */
     ret = SetWindowPos(hwnd, 0, 0, 0, 200, 200, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     GetWindowRect(hwnd, &rect);
     ok(EqualRect(&expect, &rect), "expected %s, got %s\n",
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
@@ -8497,7 +8497,7 @@ static void test_ShowWindow_mdichild(void)
     GetWindowRect(hwnd, &rect);
     SetRect(&nc, rect.left, rect.top, rect.left, rect.top);
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, 0, (LPARAM)&rect);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     ok(EqualRect(&rect, &nc), "expected %s, got %s\n",
        wine_dbgstr_rect(&nc), wine_dbgstr_rect(&rect));
 
@@ -8505,7 +8505,7 @@ static void test_ShowWindow_mdichild(void)
      * fit more than one per row */
     OffsetRect(&expect, 0, -GetSystemMetrics(SM_CYMINIMIZED));
     ret = ShowWindow(hwnd2, SW_MINIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd2, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8516,7 +8516,7 @@ static void test_ShowWindow_mdichild(void)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8527,7 +8527,7 @@ static void test_ShowWindow_mdichild(void)
        wine_dbgstr_rect(&orig), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_MAXIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8542,7 +8542,7 @@ static void test_ShowWindow_mdichild(void)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
     /* maximized windows can be resized */
     ret = SetWindowPos(hwnd, 0, 300, 300, 200, 200, SWP_NOACTIVATE | SWP_NOZORDER);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     GetWindowRect(hwnd, &rect);
     SetRect(&expect, 300, 300, 500, 500);
     OffsetRect(&expect, pt.x, pt.y);
@@ -8550,7 +8550,7 @@ static void test_ShowWindow_mdichild(void)
        wine_dbgstr_rect(&expect), wine_dbgstr_rect(&rect));
 
     ret = ShowWindow(hwnd, SW_RESTORE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8562,7 +8562,7 @@ static void test_ShowWindow_mdichild(void)
 
     /* test switching from a maximized MDI child to a child without WS_MAXIMIZEBOX */
     ret = ShowWindow(hwnd2, SW_MAXIMIZE);
-    ok(ret, "wrong ret %Iu\n", ret);
+    ok(ret, "wrong ret %lld\n", (long long)ret);
     style = GetWindowLongA(hwnd2, GWL_STYLE);
     ok(!(style & WS_DISABLED), "window should not be disabled\n");
     ok(style & WS_VISIBLE, "window should be visible\n");
@@ -8909,16 +8909,16 @@ static void test_gettext(void)
     if (0)
     {
     r = SendMessageA( hwnd, WM_GETTEXT, 0x10, 0x1000);
-    ok( r == 0, "WM_GETTEXT should return zero (%Id)\n", r );
+    ok( r == 0, "WM_GETTEXT should return zero (%lld)\n", (long long)r );
 
     r = SendMessageA( hwnd, WM_GETTEXT, 0x10000, 0);
-    ok( r == 0, "WM_GETTEXT should return zero (%Id)\n", r );
+    ok( r == 0, "WM_GETTEXT should return zero (%lld)\n", (long long)r );
 
     r = SendMessageA( hwnd, WM_GETTEXT, 0xff000000, 0x1000);
-    ok( r == 0, "WM_GETTEXT should return zero (%Id)\n", r );
+    ok( r == 0, "WM_GETTEXT should return zero (%lld)\n", (long long)r );
 
     r = SendMessageA( hwnd, WM_GETTEXT, 0x1000, 0xff000000);
-    ok( r == 0, "WM_GETTEXT should return zero (%Id)\n", r );
+    ok( r == 0, "WM_GETTEXT should return zero (%lld)\n", (long long)r );
     }
 
     /* GetWindowText doesn't crash */
@@ -8928,22 +8928,22 @@ static void test_gettext(void)
     } else {
 #endif
     r = GetWindowTextA( hwnd, (LPSTR)0x10, 0x1000 );
-    ok( r == 0, "GetWindowText should return zero (%Id)\n", r );
+    ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
     r = GetWindowTextA( hwnd, (LPSTR)0x10000, 0 );
-    ok( r == 0, "GetWindowText should return zero (%Id)\n", r );
+    ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
     r = GetWindowTextA( hwnd, (LPSTR)0xff000000, 0x1000 );
-    ok( r == 0, "GetWindowText should return zero (%Id)\n", r );
+    ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
     r = GetWindowTextA( hwnd, (LPSTR)0x1000, 0xff000000 );
-    ok( r == 0, "GetWindowText should return zero (%Id)\n", r );
+    ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
 
     r = GetWindowTextW( hwnd, (LPWSTR)0x10, 0x1000 );
-    ok( r == 0, "GetWindowText should return zero (%Id)\n", r );
+    ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
     r = GetWindowTextW( hwnd, (LPWSTR)0x10000, 0 );
-    ok( r == 0, "GetWindowText should return zero (%Id)\n", r );
+    ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
     r = GetWindowTextW( hwnd, (LPWSTR)0xff000000, 0x1000 );
-    ok( r == 0, "GetWindowText should return zero (%Id)\n", r );
+    ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
     r = GetWindowTextW( hwnd, (LPWSTR)0x1000, 0xff000000);
-    ok( r == 0, "GetWindowText should return zero (%Id)\n", r );
+    ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
 #ifdef __REACTOS__
     }
 #endif
@@ -9336,8 +9336,8 @@ static void test_hwnd_message(void)
     {
         SetLastError( 0xdeadbeef );
         result = GetWindowLongPtrW( parent, tests[i].offset );
-        ok( result == tests[i].expect, "offset %d, got %08Ix expect %08Ix\n",
-            tests[i].offset, result, tests[i].expect );
+        ok( result == tests[i].expect, "offset %d, got %08llx expect %08Ix\n",
+            tests[i].offset, (unsigned long long)result, tests[i].expect );
         if (tests[i].error)
             ok( GetLastError() == tests[i].error, "offset %d: error %ld expect %ld\n",
                 tests[i].offset, GetLastError(), tests[i].error );
@@ -9716,7 +9716,7 @@ static LRESULT CALLBACK fullscreen_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPAR
         case WM_NCCALCSIZE:
         {
             LRESULT ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, wp, lp);
-            ok(!ret, "got %08Ix (%08Ix %08Ix)\n", ret, wp, lp);
+            ok(!ret, "got %08llx (%08Ix %08llx)\n", (unsigned long long)ret, wp, (unsigned long long)lp);
             return ret;
         }
     }
@@ -9961,7 +9961,7 @@ static LRESULT WINAPI test_thick_child_size_winproc(HWND hwnd, UINT msg, WPARAM 
             minmax = (MINMAXINFO *)lparam;
             if (winetest_debug > 1)
             {
-                trace("hwnd %p, WM_GETMINMAXINFO, %08Ix, %08Ix\n", hwnd, wparam, lparam);
+                trace("hwnd %p, WM_GETMINMAXINFO, %08Ix, %08llx\n", hwnd, wparam, (unsigned long long)lparam);
                 dump_minmax_info( minmax );
             }
             test_thick_child_got_minmax = TRUE;
@@ -10025,7 +10025,7 @@ static LRESULT WINAPI test_thick_child_size_winproc(HWND hwnd, UINT msg, WPARAM 
         case WM_NCCALCSIZE:
         {
             LRESULT ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, wparam, lparam);
-            ok(!ret, "got %08Ix (%08Ix %08Ix)\n", ret, wparam, lparam);
+            ok(!ret, "got %08llx (%08Ix %08llx)\n", (unsigned long long)ret, wparam, (unsigned long long)lparam);
             return ret;
         }
     }
@@ -11325,7 +11325,7 @@ static LRESULT WINAPI smresult_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
 
         /* Send another message while we have a reply queued for the current one. */
         res = SendMessageA(data->thread_hwnd, WM_APP+2, 0, lparam);
-        ok(res == 0x449b0190, "unexpected result %Ix\n", res);
+        ok(res == 0x449b0190, "unexpected result %llx\n", (unsigned long long)res);
 
         return 0;
     }
@@ -11428,7 +11428,7 @@ static void test_smresult(void)
     ok(WaitForSingleObject(data.thread_started, INFINITE) == WAIT_OBJECT_0, "WaitForSingleObject failed\n");
 
     res = SendMessageA(data.thread_hwnd, WM_APP, 0, (LPARAM)&data);
-    ok(res == 0x240408ea, "unexpected result %Ix\n", res);
+    ok(res == 0x240408ea, "unexpected result %llx\n", (unsigned long long)res);
 
     SendMessageA(data.thread_hwnd, WM_CLOSE, 0, 0);
 
@@ -12222,8 +12222,8 @@ static void test_desktop( void )
     {
         SetLastError( 0xdeadbeef );
         result = GetWindowLongPtrW( desktop, tests[i].offset );
-        ok( result == tests[i].expect, "offset %d, got %08Ix expect %08Ix\n",
-            tests[i].offset, result, tests[i].expect );
+        ok( result == tests[i].expect, "offset %d, got %08llx expect %08Ix\n",
+            tests[i].offset, (unsigned long long)result, tests[i].expect );
         if (tests[i].error)
             ok( GetLastError() == tests[i].error, "offset %d: error %ld expect %ld\n",
                 tests[i].offset, GetLastError(), tests[i].error );
@@ -13724,11 +13724,11 @@ static void test_cancel_mode(void)
     ok(GetCapture() == hwnd1, "got capture %p\n", GetCapture());
 
     ret = SendMessageA(hwnd2, WM_CANCELMODE, 0, 0);
-    ok(!ret, "got %Id\n", ret);
+    ok(!ret, "got %lld\n", (long long)ret);
     ok(GetCapture() == hwnd1, "got capture %p\n", GetCapture());
 
     ret = SendMessageA(hwnd1, WM_CANCELMODE, 0, 0);
-    ok(!ret, "got %Id\n", ret);
+    ok(!ret, "got %lld\n", (long long)ret);
     ok(!GetCapture(), "got capture %p\n", GetCapture());
 
     child = CreateWindowA("MainWindowClass", "child", WS_CHILD,
@@ -13738,15 +13738,15 @@ static void test_cancel_mode(void)
     ok(GetCapture() == child, "got capture %p\n", GetCapture());
 
     ret = SendMessageA(hwnd2, WM_CANCELMODE, 0, 0);
-    ok(!ret, "got %Id\n", ret);
+    ok(!ret, "got %lld\n", (long long)ret);
     ok(GetCapture() == child, "got capture %p\n", GetCapture());
 
     ret = SendMessageA(hwnd1, WM_CANCELMODE, 0, 0);
-    ok(!ret, "got %Id\n", ret);
+    ok(!ret, "got %lld\n", (long long)ret);
     ok(GetCapture() == child, "got capture %p\n", GetCapture());
 
     ret = SendMessageA(child, WM_CANCELMODE, 0, 0);
-    ok(!ret, "got %Id\n", ret);
+    ok(!ret, "got %lld\n", (long long)ret);
     ok(!GetCapture(), "got capture %p\n", GetCapture());
 
     DestroyWindow(child);
@@ -13927,22 +13927,22 @@ static void test_WM_NCCALCSIZE(void)
     params.lppos = &winpos;
 
     ret = SendMessageW(hwnd, WM_NCCALCSIZE, TRUE, (LPARAM)&params);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     ok(EqualRect(&params.rgrc[0], &client_rect), "got %s\n", wine_dbgstr_rect(&params.rgrc[0]));
 
     params.rgrc[0] = window_rect;
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, TRUE, (LPARAM)&params);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     ok(EqualRect(&params.rgrc[0], &client_rect), "got %s\n", wine_dbgstr_rect(&params.rgrc[0]));
 
     GetWindowRect(hwnd, &window_rect);
     ret = SendMessageW(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&window_rect);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     ok(EqualRect(&window_rect, &client_rect), "got %s\n", wine_dbgstr_rect(&window_rect));
 
     GetWindowRect(hwnd, &window_rect);
     ret = DefWindowProcA(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&window_rect);
-    ok(!ret, "got %08Ix\n", ret);
+    ok(!ret, "got %08llx\n", (unsigned long long)ret);
     ok(EqualRect(&window_rect, &client_rect), "got %s\n", wine_dbgstr_rect(&window_rect));
 
     DestroyWindow(hwnd);

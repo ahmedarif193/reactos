@@ -1450,7 +1450,7 @@ static void test_IME(void)
     ok(ret, "GetClassInfo failed: %ld\n", GetLastError());
 
     size = VirtualQuery(wnd_class.lpfnWndProc, &mbi, sizeof(mbi));
-    ok(size == sizeof(mbi), "VirtualQuery returned %Id\n", size);
+    ok(size == sizeof(mbi), "VirtualQuery returned %llu\n", (unsigned long long)size);
     if (size == sizeof(mbi)) {
         size = GetModuleFileNameA(mbi.AllocationBase, module_name, sizeof(module_name));
         ok(size, "GetModuleFileName failed\n");
@@ -1464,7 +1464,7 @@ static void test_IME(void)
     ok(ret, "GetClassInfo failed: %ld\n", GetLastError());
 
     size = VirtualQuery(wnd_classw.lpfnWndProc, &mbi, sizeof(mbi));
-    ok(size == sizeof(mbi), "VirtualQuery returned %Id\n", size);
+    ok(size == sizeof(mbi), "VirtualQuery returned %llu\n", (unsigned long long)size);
     size = GetModuleFileNameA(mbi.AllocationBase, module_name, sizeof(module_name));
     ok(size, "GetModuleFileName failed\n");
     for (ptr = module_name+size-1; ptr > module_name; ptr--)

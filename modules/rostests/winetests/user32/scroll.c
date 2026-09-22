@@ -732,11 +732,11 @@ static void test_subclass(void)
     ok(r, "SetScrollRange failed: %lu\n", GetLastError());
 
     res = SetScrollPos(hwnd, SB_CTL, 2, FALSE);
-    ok(!res, "SetScrollPos returned %Iu\n", res);
+    ok(!res, "SetScrollPos returned %lld\n", (long long)res);
 
     memset(&set_scrollinfo, 0xcc, sizeof(set_scrollinfo));
     res = SetScrollPos(hwnd, SB_CTL, 1, FALSE);
-    ok(res == 2, "SetScrollPos returned %Iu\n", res);
+    ok(res == 2, "SetScrollPos returned %lld\n", (long long)res);
     ok(set_scrollinfo.cbSize == sizeof(SCROLLINFO), "cbSize = %u\n", set_scrollinfo.cbSize);
     ok(set_scrollinfo.fMask == (0x1000 | SIF_POS), "fMask = %x\n", set_scrollinfo.fMask);
     ok(set_scrollinfo.nPos == 1, "nPos = %x\n", set_scrollinfo.nPos);
@@ -744,7 +744,7 @@ static void test_subclass(void)
     memset(&scroll_info, 0xcc, sizeof(scroll_info));
     scroll_info.cbSize = sizeof(scroll_info);
     res = SendMessageA(hwnd, SBM_GETSCROLLBARINFO, 0, (LPARAM)&scroll_info);
-    ok(res == 1, "SBM_GETSCROLLBARINFO returned %Iu\n", res);
+    ok(res == 1, "SBM_GETSCROLLBARINFO returned %lld\n", (long long)res);
 
     DestroyWindow(hwnd);
 
@@ -756,7 +756,7 @@ static void test_subclass(void)
     memset(&scroll_info, 0xcc, sizeof(scroll_info));
     scroll_info.cbSize = sizeof(scroll_info);
     res = SendMessageA(hwnd, SBM_GETSCROLLBARINFO, 0, (LPARAM)&scroll_info);
-    ok(!res, "SBM_GETSCROLLBARINFO returned %Iu\n", res);
+    ok(!res, "SBM_GETSCROLLBARINFO returned %lld\n", (long long)res);
 
     DestroyWindow(hwnd);
 
@@ -773,11 +773,11 @@ static void test_subclass(void)
     memset(&scroll_info, 0xcc, sizeof(scroll_info));
     scroll_info.cbSize = sizeof(scroll_info);
     res = SendMessageA(hwnd, SBM_GETSCROLLBARINFO, 0, (LPARAM)&scroll_info);
-    ok(!res, "SBM_GETSCROLLBARINFO returned %Iu\n", res);
+    ok(!res, "SBM_GETSCROLLBARINFO returned %lld\n", (long long)res);
 
     memset(&set_scrollinfo, 0xcc, sizeof(set_scrollinfo));
     res = SetScrollPos(hwnd, SB_CTL, 1, FALSE);
-    ok(res == 0, "SetScrollPos returned %Iu\n", res);
+    ok(res == 0, "SetScrollPos returned %lld\n", (long long)res);
     ok(set_scrollinfo.cbSize == sizeof(SCROLLINFO), "cbSize = %u\n", set_scrollinfo.cbSize);
     ok(set_scrollinfo.fMask == (0x1000 | SIF_POS), "fMask = %x\n", set_scrollinfo.fMask);
     ok(set_scrollinfo.nPos == 1, "nPos = %x\n", set_scrollinfo.nPos);

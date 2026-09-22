@@ -155,8 +155,8 @@ static void test_image(HBITMAP image)
 #endif
 
     GetObjectW(image, sizeof(bm), &bm);
-    ok(bm.bmWidth == 1, "got %d\n", bm.bmWidth);
-    ok(bm.bmHeight == 1, "got %d\n", bm.bmHeight);
+    ok(bm.bmWidth == 1, "got %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == 1, "got %ld\n", bm.bmHeight);
 #ifdef __REACTOS__
     ok(bm.bmBitsPixel == display_bpp, "got %d\n", bm.bmBitsPixel);
 #else

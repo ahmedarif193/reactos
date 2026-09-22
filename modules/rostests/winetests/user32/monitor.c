@@ -2703,15 +2703,15 @@ static void _check_display_dc(INT line, HDC hdc, const DEVMODEA *dm, BOOL allow_
     /* GetObjectA fails on Win7 and older */
     if (ret)
     {
-        ok_(__FILE__, line)(bitmap.bmType == 0, "Expected bmType %d, got %d.\n", 0, bitmap.bmType);
+        ok_(__FILE__, line)(bitmap.bmType == 0, "Expected bmType %d, got %ld.\n", 0, bitmap.bmType);
         ok_(__FILE__, line)(bitmap.bmWidth == GetSystemMetrics(SM_CXVIRTUALSCREEN),
-                "Expected bmWidth %d, got %d.\n", GetSystemMetrics(SM_CXVIRTUALSCREEN), bitmap.bmWidth);
+                "Expected bmWidth %d, got %ld.\n", GetSystemMetrics(SM_CXVIRTUALSCREEN), bitmap.bmWidth);
         ok_(__FILE__, line)(bitmap.bmHeight == GetSystemMetrics(SM_CYVIRTUALSCREEN),
-                "Expected bmHeight %d, got %d.\n", GetSystemMetrics(SM_CYVIRTUALSCREEN), bitmap.bmHeight);
+                "Expected bmHeight %d, got %ld.\n", GetSystemMetrics(SM_CYVIRTUALSCREEN), bitmap.bmHeight);
         ok_(__FILE__, line)(bitmap.bmBitsPixel == 32, "Expected bmBitsPixel %d, got %d.\n", 32,
                 bitmap.bmBitsPixel);
         ok_(__FILE__, line)(bitmap.bmWidthBytes == get_bitmap_stride(bitmap.bmWidth, bitmap.bmBitsPixel),
-                "Expected bmWidthBytes %d, got %d.\n", get_bitmap_stride(bitmap.bmWidth, bitmap.bmBitsPixel),
+                "Expected bmWidthBytes %d, got %ld.\n", get_bitmap_stride(bitmap.bmWidth, bitmap.bmBitsPixel),
                 bitmap.bmWidthBytes);
         ok_(__FILE__, line)(bitmap.bmPlanes == 1, "Expected bmPlanes %d, got %d.\n", 1, bitmap.bmPlanes);
         ok_(__FILE__, line)(bitmap.bmBits == NULL, "Expected bmBits %p, got %p.\n", NULL, bitmap.bmBits);

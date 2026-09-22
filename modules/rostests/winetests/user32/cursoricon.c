@@ -572,9 +572,9 @@ static void check_copy_image(HBITMAP bitmap, UINT type, UINT flags, INT copyWidt
 
         ok(copy_is_dib == dibExpected, "Expected %s, got %s\n",
                 dibExpected ? "DIB" : "DDB", copy_is_dib ? "DIB" : "DDB");
-        ok(copyBitmap.bmWidth == expectedWidth, "Expected width %u, got %u\n",
+        ok(copyBitmap.bmWidth == expectedWidth, "Expected width %u, got %ld\n",
                 expectedWidth, copyBitmap.bmWidth);
-        ok(copyBitmap.bmHeight == expectedHeight, "Expected height %u, got %u\n",
+        ok(copyBitmap.bmHeight == expectedHeight, "Expected height %u, got %ld\n",
                 expectedHeight, copyBitmap.bmHeight);
 #ifdef __REACTOS__
         ok(copyBitmap.bmBitsPixel == expectedDepth || broken(copyBitmap.bmBitsPixel == display_bpp && expectedDepth == 32), "Expected depth %u, got %u\n",
@@ -593,9 +593,9 @@ static void check_copy_image(HBITMAP bitmap, UINT type, UINT flags, INT copyWidt
             GetObjectA(info.hbmMask, sizeof(copyBitmap), &copyBitmap);
 
             ok(!copyBitmap.bmBits, "Expected DDB\n");
-            ok(copyBitmap.bmWidth == expectedWidth, "Expected mask width %u, got %u\n",
+            ok(copyBitmap.bmWidth == expectedWidth, "Expected mask width %u, got %ld\n",
                     expectedWidth, copyBitmap.bmWidth);
-            ok(copyBitmap.bmHeight == expectedHeight, "Expected mask height %u, got %u\n",
+            ok(copyBitmap.bmHeight == expectedHeight, "Expected mask height %u, got %ld\n",
                     expectedHeight, copyBitmap.bmHeight);
             ok(copyBitmap.bmBitsPixel == 1, "Got mask depth %u\n", copyBitmap.bmBitsPixel);
         }
@@ -830,18 +830,18 @@ static void test_icon_info_(HICON hIcon, UINT exp_cx, UINT exp_cy,
         ok_(__FILE__, line)(bmColor.bmBitsPixel == display_bpp,
            "bmColor.bmBitsPixel = %d\n", bmColor.bmBitsPixel);
 #endif
-        ok_(__FILE__, line)(bmColor.bmWidth == exp_cx, "bmColor.bmWidth = %d\n", bmColor.bmWidth);
-        ok_(__FILE__, line)(bmColor.bmHeight == exp_cy, "bmColor.bmHeight = %d\n", bmColor.bmHeight);
+        ok_(__FILE__, line)(bmColor.bmWidth == exp_cx, "bmColor.bmWidth = %ld\n", bmColor.bmWidth);
+        ok_(__FILE__, line)(bmColor.bmHeight == exp_cy, "bmColor.bmHeight = %ld\n", bmColor.bmHeight);
 
         ok_(__FILE__, line)(bmMask.bmBitsPixel == 1, "bmMask.bmBitsPixel = %d\n", bmMask.bmBitsPixel);
-        ok_(__FILE__, line)(bmMask.bmWidth == exp_cx, "bmMask.bmWidth = %d\n", bmMask.bmWidth);
-        ok_(__FILE__, line)(bmMask.bmHeight == exp_mask_cy, "bmMask.bmHeight = %d\n", bmMask.bmHeight);
+        ok_(__FILE__, line)(bmMask.bmWidth == exp_cx, "bmMask.bmWidth = %ld\n", bmMask.bmWidth);
+        ok_(__FILE__, line)(bmMask.bmHeight == exp_mask_cy, "bmMask.bmHeight = %ld\n", bmMask.bmHeight);
     }
     else
     {
         ok_(__FILE__, line)(bmMask.bmBitsPixel == 1, "bmMask.bmBitsPixel = %d\n", bmMask.bmBitsPixel);
-        ok_(__FILE__, line)(bmMask.bmWidth == exp_cx, "bmMask.bmWidth = %d\n", bmMask.bmWidth);
-        ok_(__FILE__, line)(bmMask.bmHeight == exp_mask_cy, "bmMask.bmHeight = %d\n", bmMask.bmHeight);
+        ok_(__FILE__, line)(bmMask.bmWidth == exp_cx, "bmMask.bmWidth = %ld\n", bmMask.bmWidth);
+        ok_(__FILE__, line)(bmMask.bmHeight == exp_mask_cy, "bmMask.bmHeight = %ld\n", bmMask.bmHeight);
     }
     if (pGetIconInfoExA)
     {
@@ -1186,7 +1186,7 @@ static void test_LoadImageBitmap(HBITMAP hbm)
     bmi.bmiHeader.biBitCount= 24;
     bmi.bmiHeader.biCompression= BI_RGB;
     ret = GetDIBits(hdc, hbm, 0, bm.bmHeight, &pixel, &bmi, DIB_RGB_COLORS);
-    ok(ret == bm.bmHeight, "%ld lines were converted, not %d\n", ret, bm.bmHeight);
+    ok(ret == bm.bmHeight, "%ld lines were converted, not %ld\n", ret, bm.bmHeight);
 
     ok(color_match(pixel, 0x00ffffff), "Pixel is 0x%08lx\n", pixel);
 

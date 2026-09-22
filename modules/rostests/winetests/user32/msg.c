@@ -2526,13 +2526,13 @@ static void add_message_(int line, const struct recvd_message *msg)
             };
             const char *code_name = (msg->message <= HCBT_SETFOCUS) ? CBT_code_name[msg->message] : "Unknown";
 
-            sprintf( seq->output, "%s: hook %d (%s) wp %08Ix lp %08Ix",
-                     msg->descr, msg->message, code_name, msg->wParam, msg->lParam );
+            sprintf( seq->output, "%s: hook %d (%s) wp %08Ix lp %08llx",
+                     msg->descr, msg->message, code_name, msg->wParam, (unsigned long long)msg->lParam );
         }
         else if (msg->flags & winevent_hook)
         {
-            sprintf( seq->output, "%s: winevent %p %08x %08Ix %08Ix",
-                     msg->descr, msg->hwnd, msg->message, msg->wParam, msg->lParam );
+            sprintf( seq->output, "%s: winevent %p %08x %08Ix %08llx",
+                     msg->descr, msg->hwnd, msg->message, msg->wParam, (unsigned long long)msg->lParam );
         }
         else
         {
@@ -2543,10 +2543,10 @@ static void add_message_(int line, const struct recvd_message *msg)
             {
                 WINDOWPOS *winpos = (WINDOWPOS *)msg->lParam;
 
-                sprintf( seq->output, "%s: %p WM_WINDOWPOS%s wp %08Ix lp %08Ix after %p x %d y %d cx %d cy %d flags %s",
+                sprintf( seq->output, "%s: %p WM_WINDOWPOS%s wp %08Ix lp %08llx after %p x %d y %d cx %d cy %d flags %s",
                           msg->descr, msg->hwnd,
                           (msg->message == WM_WINDOWPOSCHANGING) ? "CHANGING" : "CHANGED",
-                          msg->wParam, msg->lParam, winpos->hwndInsertAfter,
+                          msg->wParam, (unsigned long long)msg->lParam, winpos->hwndInsertAfter,
                           winpos->x, winpos->y, winpos->cx, winpos->cy,
                           get_winpos_flags(winpos->flags) );
 
@@ -2610,9 +2610,9 @@ static void add_message_(int line, const struct recvd_message *msg)
                 MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)msg->lParam;
                 BOOL is_unicode_data = TRUE;
 
-                sprintf( seq->output, "%s: %p WM_MEASUREITEM: CtlType %#x, CtlID %#x, itemID %#x, itemData %#Ix",
+                sprintf( seq->output, "%s: %p WM_MEASUREITEM: CtlType %#x, CtlID %#x, itemID %#x, itemData %#llx",
                          msg->descr, msg->hwnd, mis->CtlType, mis->CtlID,
-                         mis->itemID, mis->itemData);
+                         mis->itemID, (unsigned long long)mis->itemData);
 
                 if (mis->CtlType == ODT_LISTBOX)
                 {
@@ -2644,9 +2644,9 @@ static void add_message_(int line, const struct recvd_message *msg)
                 ok((int)cis->itemID1 >= 0, "expected >= 0, got %d\n", cis->itemID1);
                 ok((int)cis->itemID2 == -1, "expected -1, got %d\n", cis->itemID2);
 
-                sprintf( seq->output, "%s: %p WM_COMPAREITEM: CtlType %#x, CtlID %#x, itemID1 %#x, itemData1 %#Ix, itemID2 %#x, itemData2 %#Ix",
+                sprintf( seq->output, "%s: %p WM_COMPAREITEM: CtlType %#x, CtlID %#x, itemID1 %#x, itemData1 %#llx, itemID2 %#x, itemData2 %#llx",
                          msg->descr, msg->hwnd, cis->CtlType, cis->CtlID,
-                         cis->itemID1, cis->itemData1, cis->itemID2, cis->itemData2);
+                         cis->itemID1, (unsigned long long)cis->itemData1, cis->itemID2, (unsigned long long)cis->itemData2);
 
                 if (cis->CtlType == ODT_LISTBOX)
                     is_unicode_data = GetWindowLongA(ctrl, GWL_STYLE) & LBS_HASSTRINGS;
@@ -2666,8 +2666,8 @@ static void add_message_(int line, const struct recvd_message *msg)
 
             default:
                 if (msg->message >= 0xc000) return;  /* ignore registered messages */
-                sprintf( seq->output, "%s: %p %04x wp %08Ix lp %08Ix",
-                         msg->descr, msg->hwnd, msg->message, msg->wParam, msg->lParam );
+                sprintf( seq->output, "%s: %p %04x wp %08Ix lp %08llx",
+                         msg->descr, msg->hwnd, msg->message, msg->wParam, (unsigned long long)msg->lParam );
             }
             if (msg->flags & (sent|posted|parent|defwinproc|beginpaint))
                 sprintf( seq->output + strlen(seq->output), " (flags %x)", msg->flags );
@@ -2963,16 +2963,16 @@ static void ok_sequence_(const struct message *expected_list, const char *contex
                         failcount ++;
                         dump++;
                         ok_( file, line) (FALSE,
-			    "in msg 0x%04x expecting lParam 0x%Ix got 0x%Ix\n",
-                            expected->message, expected->lParam, actual->lParam);
+			    "in msg 0x%04x expecting lParam 0x%llx got 0x%llx\n",
+                            expected->message, (unsigned long long)expected->lParam, (unsigned long long)actual->lParam);
 		    }
                     if (is_wine) goto done;
 		}
 		else
                 {
                     ok_( file, line)(((expected->lParam ^ actual->lParam) & ~expected->lp_mask) == 0,
-                                     "in msg 0x%04x expecting lParam 0x%Ix got 0x%Ix\n",
-                                     expected->message, expected->lParam, actual->lParam);
+                                     "in msg 0x%04x expecting lParam 0x%llx got 0x%llx\n",
+                                     expected->message, (unsigned long long)expected->lParam, (unsigned long long)actual->lParam);
                     if ((expected->lParam ^ actual->lParam) & ~expected->lp_mask) dump++;
                 }
             }
@@ -6246,29 +6246,29 @@ static void test_messages(void)
         goto done;
     }
     ok_sequence(WmInitEndSession, "Handling of undocumented 0x3B message by DefWindowProc wparam=0x8000000b", TRUE);
-    ok(res == 1, "SendMessage(hwnd, 0x3B, 0x8000000b, 0) should have returned 1 instead of %Id\n", res);
+    ok(res == 1, "SendMessage(hwnd, 0x3B, 0x8000000b, 0) should have returned 1 instead of %lld\n", (long long)res);
     res = SendMessageA(hwnd, 0x3B, 0x0000000b, 0);
     ok_sequence(WmInitEndSession_2, "Handling of undocumented 0x3B message by DefWindowProc wparam=0x0000000b", TRUE);
-    ok(res == 1, "SendMessage(hwnd, 0x3B, 0x0000000b, 0) should have returned 1 instead of %Id\n", res);
+    ok(res == 1, "SendMessage(hwnd, 0x3B, 0x0000000b, 0) should have returned 1 instead of %lld\n", (long long)res);
     res = SendMessageA(hwnd, 0x3B, 0x0000000f, 0);
     ok_sequence(WmInitEndSession_2, "Handling of undocumented 0x3B message by DefWindowProc wparam=0x0000000f", TRUE);
-    ok(res == 1, "SendMessage(hwnd, 0x3B, 0x0000000f, 0) should have returned 1 instead of %Id\n", res);
+    ok(res == 1, "SendMessage(hwnd, 0x3B, 0x0000000f, 0) should have returned 1 instead of %lld\n", (long long)res);
 
     flush_sequence();
     res = SendMessageA(hwnd, 0x3B, 0x80000008, 0);
     ok_sequence(WmInitEndSession_3, "Handling of undocumented 0x3B message by DefWindowProc wparam=0x80000008", TRUE);
-    ok(res == 2, "SendMessage(hwnd, 0x3B, 0x80000008, 0) should have returned 2 instead of %Id\n", res);
+    ok(res == 2, "SendMessage(hwnd, 0x3B, 0x80000008, 0) should have returned 2 instead of %lld\n", (long long)res);
     res = SendMessageA(hwnd, 0x3B, 0x00000008, 0);
     ok_sequence(WmInitEndSession_4, "Handling of undocumented 0x3B message by DefWindowProc wparam=0x00000008", TRUE);
-    ok(res == 2, "SendMessage(hwnd, 0x3B, 0x00000008, 0) should have returned 2 instead of %Id\n", res);
+    ok(res == 2, "SendMessage(hwnd, 0x3B, 0x00000008, 0) should have returned 2 instead of %lld\n", (long long)res);
 
     res = SendMessageA(hwnd, 0x3B, 0x80000004, 0);
     ok_sequence(WmInitEndSession_3, "Handling of undocumented 0x3B message by DefWindowProc wparam=0x80000004", TRUE);
-    ok(res == 2, "SendMessage(hwnd, 0x3B, 0x80000004, 0) should have returned 2 instead of %Id\n", res);
+    ok(res == 2, "SendMessage(hwnd, 0x3B, 0x80000004, 0) should have returned 2 instead of %lld\n", (long long)res);
 
     res = SendMessageA(hwnd, 0x3B, 0x80000001, 0);
     ok_sequence(WmInitEndSession_5, "Handling of undocumented 0x3B message by DefWindowProc wparam=0x80000001", TRUE);
-    ok(res == 2, "SendMessage(hwnd, 0x3B, 0x80000001, 0) should have returned 2 instead of %Id\n", res);
+    ok(res == 2, "SendMessage(hwnd, 0x3B, 0x80000001, 0) should have returned 2 instead of %lld\n", (long long)res);
 
 done:
     DestroyWindow(hwnd);
@@ -6352,7 +6352,7 @@ static void test_setwindowpos(void)
     flush_sequence();
     res = SetWindowPos(hwnd, HWND_TOPMOST, 50, 50, winX, winY, 0);
     ok_sequence(WmZOrder, "Z-Order", TRUE);
-    ok(res == TRUE, "SetWindowPos expected TRUE, got %Id\n", res);
+    ok(res == TRUE, "SetWindowPos expected TRUE, got %lld\n", (long long)res);
 
     GetWindowRect(hwnd, &rc);
     expect(sysX + X, rc.right);
@@ -6361,7 +6361,7 @@ static void test_setwindowpos(void)
     res = SetWindowPos( hwnd, 0, 0, 0, 0, 0,
             SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     ok_sequence(WmFrameChanged, "FrameChanged", FALSE);
-    ok(res == TRUE, "SetWindowPos expected TRUE, got %Id.\n", res);
+    ok(res == TRUE, "SetWindowPos expected TRUE, got %lld.\n", (long long)res);
 
     GetWindowRect(hwnd, &rc);
     expect(sysX + X, rc.right);
@@ -6371,7 +6371,7 @@ static void test_setwindowpos(void)
     res = SetWindowPos( hwnd, 0, 0, 0, 0, 0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     ok_sequence(WmFrameChanged_move, "FrameChanged", FALSE);
-    ok(res == TRUE, "SetWindowPos expected TRUE, got %Id.\n", res);
+    ok(res == TRUE, "SetWindowPos expected TRUE, got %lld.\n", (long long)res);
 
     GetWindowRect(hwnd, &rc);
     expect(sysX, rc.right);
@@ -6379,7 +6379,7 @@ static void test_setwindowpos(void)
 
     /* get away from possible menu bar to avoid spurious position changed induced by WM. */
     res = SetWindowPos( hwnd, HWND_TOPMOST, 200, 200, 200, 200, SWP_SHOWWINDOW );
-    ok(res == TRUE, "SetWindowPos expected TRUE, got %Id.\n", res);
+    ok(res == TRUE, "SetWindowPos expected TRUE, got %lld.\n", (long long)res);
     SetForegroundWindow( hwnd );
     SetActiveWindow( hwnd );
     flush_events();
@@ -6392,12 +6392,12 @@ static void test_setwindowpos(void)
     flush_sequence();
     ignore_mouse_messages = FALSE;
     res = SetWindowPos( hwnd, 0, 205, 205, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE );
-    ok(res == TRUE, "SetWindowPos expected TRUE, got %Id.\n", res);
+    ok(res == TRUE, "SetWindowPos expected TRUE, got %lld.\n", (long long)res);
     flush_events();
     ok_sequence(WmMove_mouse, "MouseMove", FALSE);
     /* if the window and client rects were not changed WM_MOUSEMOVE is not sent. */
     res = SetWindowPos( hwnd, 0, 205, 205, 200, 200, SWP_NOZORDER | SWP_NOACTIVATE );
-    ok(res == TRUE, "SetWindowPos expected TRUE, got %Id.\n", res);
+    ok(res == TRUE, "SetWindowPos expected TRUE, got %lld.\n", (long long)res);
     flush_events();
     ok_sequence(WmMove_mouse2, "MouseMove2", FALSE);
     ignore_mouse_messages = TRUE;
@@ -7341,11 +7341,11 @@ static void test_button_bm_get_set_image(void)
     hbmp2x2 = CreateCompatibleBitmap(hdc, 2, 2);
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp1x1, sizeof(bm), &bm), "Expect GetObjectW() success\n");
-    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %d,%d\n", 1, 1,
+    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 1, 1,
        bm.bmWidth, bm.bmHeight);
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp2x2, sizeof(bm), &bm), "Expect GetObjectW() success\n");
-    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
 
     hmask2x2 = CreateCompatibleBitmap(hdc, 2, 2);
@@ -7359,7 +7359,7 @@ static void test_button_bm_get_set_image(void)
     ok(GetIconInfo(hicon2x2, &icon_info), "Expect GetIconInfo() success\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(icon_info.hbmColor, sizeof(bm), &bm), "Expect GetObjectW() success\n");
-    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
     DeleteObject(icon_info.hbmColor);
     DeleteObject(icon_info.hbmMask);
@@ -7372,7 +7372,7 @@ static void test_button_bm_get_set_image(void)
     ok(hbmp != 0, "Expect hbmp not 0\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp, sizeof(bm), &bm), "Expect GetObjectW() success\n");
-    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %d,%d\n", 1, 1,
+    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 1, 1,
        bm.bmWidth, bm.bmHeight);
     DestroyWindow(hwnd);
 
@@ -7395,7 +7395,7 @@ static void test_button_bm_get_set_image(void)
     ok(GetIconInfo(hicon, &icon_info), "Expect GetIconInfo() success\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(icon_info.hbmColor, sizeof(bm), &bm), "Expect GetObjectW() success\n");
-    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
     DeleteObject(icon_info.hbmColor);
     DeleteObject(icon_info.hbmMask);
@@ -8218,14 +8218,14 @@ static void test_combobox_messages(void)
     UpdateWindow(combo);
 
     ret = SendMessageA(combo, WM_GETDLGCODE, 0, 0);
-    ok(ret == (DLGC_WANTCHARS | DLGC_WANTARROWS), "wrong dlg_code %08Ix\n", ret);
+    ok(ret == (DLGC_WANTCHARS | DLGC_WANTARROWS), "wrong dlg_code %08llx\n", (unsigned long long)ret);
 
     ret = SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)"item 0");
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
     ret = SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)"item 1");
-    ok(ret == 1, "expected 1, got %Id\n", ret);
+    ok(ret == 1, "expected 1, got %lld\n", (long long)ret);
     ret = SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)"item 2");
-    ok(ret == 2, "expected 2, got %Id\n", ret);
+    ok(ret == 2, "expected 2, got %lld\n", (long long)ret);
 
     SendMessageA(combo, CB_SETCURSEL, 0, 0);
     SetFocus(combo);
@@ -8310,7 +8310,7 @@ static void test_combobox_messages(void)
     ok(combo != 0, "Failed to create combobox window\n");
 
     ret = SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)"item 0");
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
 
     cbInfo.cbSize = sizeof(COMBOBOXINFO);
     SetLastError(0xdeadbeef);
@@ -11254,9 +11254,9 @@ static LRESULT WINAPI TestDlgProcA(HWND hwnd, UINT message, WPARAM wParam, LPARA
         DefDlgProcA(hwnd, DM_SETDEFID, 1, 0);
         ret = DefDlgProcA(hwnd, DM_GETDEFID, 0, 0);
         if (after_end_dialog)
-            ok( ret == 0, "DM_GETDEFID should return 0 after EndDialog, got %Ix\n", ret );
+            ok( ret == 0, "DM_GETDEFID should return 0 after EndDialog, got %llx\n", (unsigned long long)ret );
         else
-            ok(HIWORD(ret) == DC_HASDEFID, "DM_GETDEFID should return DC_HASDEFID, got %Ix\n", ret);
+            ok(HIWORD(ret) == DC_HASDEFID, "DM_GETDEFID should return DC_HASDEFID, got %llx\n", (unsigned long long)ret);
     }
 
     msg.hwnd = hwnd;
@@ -11408,7 +11408,7 @@ static LRESULT WINAPI WmCopyDataProcA(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
             ok(!wm_copydata_done, "Got unexpected wm_copydata_done.\n");
             ok(wp == (WPARAM)GetDesktopWindow(), "Got unexpected wp.\n");
-            ok(cds->dwData == expected_dwdata, "Got unexpected dwData %Id.\n", cds->dwData);
+            ok(cds->dwData == expected_dwdata, "Got unexpected dwData %llu.\n", (unsigned long long)cds->dwData);
             expected_dwdata++;
             ok(cds->cbData == expected_data_sizes[cds->dwData], "Got unexpected cbData %#lx.\n", cds->cbData);
 
@@ -11783,35 +11783,35 @@ static void test_message_conversion(void)
     SetLastError(0);
     lRes = PostMessageA(hwnd, CB_FINDSTRINGEXACT, 0, (LPARAM)wszUnicode);
     ok(lRes == 0 && (GetLastError() == ERROR_MESSAGE_SYNC_ONLY || GetLastError() == ERROR_INVALID_PARAMETER),
-        "PostMessage on sync only message returned %Id, last error %ld\n", lRes, GetLastError());
+        "PostMessage on sync only message returned %lld, last error %ld\n", (long long)lRes, GetLastError());
     SetLastError(0);
     lRes = PostMessageW(hwnd, CB_FINDSTRINGEXACT, 0, (LPARAM)wszUnicode);
     ok(lRes == 0 && (GetLastError() == ERROR_MESSAGE_SYNC_ONLY || GetLastError() == ERROR_INVALID_PARAMETER),
-        "PostMessage on sync only message returned %Id, last error %ld\n", lRes, GetLastError());
+        "PostMessage on sync only message returned %lld, last error %ld\n", (long long)lRes, GetLastError());
     SetLastError(0);
     lRes = PostThreadMessageA(GetCurrentThreadId(), CB_FINDSTRINGEXACT, 0, (LPARAM)wszUnicode);
     ok(lRes == 0 && (GetLastError() == ERROR_MESSAGE_SYNC_ONLY || GetLastError() == ERROR_INVALID_PARAMETER),
-        "PosThreadtMessage on sync only message returned %Id, last error %ld\n", lRes, GetLastError());
+        "PosThreadtMessage on sync only message returned %lld, last error %ld\n", (long long)lRes, GetLastError());
     SetLastError(0);
     lRes = PostThreadMessageW(GetCurrentThreadId(), CB_FINDSTRINGEXACT, 0, (LPARAM)wszUnicode);
     ok(lRes == 0 && (GetLastError() == ERROR_MESSAGE_SYNC_ONLY || GetLastError() == ERROR_INVALID_PARAMETER),
-        "PosThreadtMessage on sync only message returned %Id, last error %ld\n", lRes, GetLastError());
+        "PosThreadtMessage on sync only message returned %lld, last error %ld\n", (long long)lRes, GetLastError());
     SetLastError(0);
     lRes = SendNotifyMessageA(hwnd, CB_FINDSTRINGEXACT, 0, (LPARAM)wszUnicode);
     ok(lRes == 0 && (GetLastError() == ERROR_MESSAGE_SYNC_ONLY || GetLastError() == ERROR_INVALID_PARAMETER),
-        "SendNotifyMessage on sync only message returned %Id, last error %ld\n", lRes, GetLastError());
+        "SendNotifyMessage on sync only message returned %lld, last error %ld\n", (long long)lRes, GetLastError());
     SetLastError(0);
     lRes = SendNotifyMessageW(hwnd, CB_FINDSTRINGEXACT, 0, (LPARAM)wszUnicode);
     ok(lRes == 0 && (GetLastError() == ERROR_MESSAGE_SYNC_ONLY || GetLastError() == ERROR_INVALID_PARAMETER),
-        "SendNotifyMessage on sync only message returned %Id, last error %ld\n", lRes, GetLastError());
+        "SendNotifyMessage on sync only message returned %lld, last error %ld\n", (long long)lRes, GetLastError());
     SetLastError(0);
     lRes = SendMessageCallbackA(hwnd, CB_FINDSTRINGEXACT, 0, (LPARAM)wszUnicode, NULL, 0);
     ok(lRes == 0 && (GetLastError() == ERROR_MESSAGE_SYNC_ONLY || GetLastError() == ERROR_INVALID_PARAMETER),
-        "SendMessageCallback on sync only message returned %Id, last error %ld\n", lRes, GetLastError());
+        "SendMessageCallback on sync only message returned %lld, last error %ld\n", (long long)lRes, GetLastError());
     SetLastError(0);
     lRes = SendMessageCallbackW(hwnd, CB_FINDSTRINGEXACT, 0, (LPARAM)wszUnicode, NULL, 0);
     ok(lRes == 0 && (GetLastError() == ERROR_MESSAGE_SYNC_ONLY || GetLastError() == ERROR_INVALID_PARAMETER),
-        "SendMessageCallback on sync only message returned %Id, last error %ld\n", lRes, GetLastError());
+        "SendMessageCallback on sync only message returned %lld, last error %ld\n", (long long)lRes, GetLastError());
 
     /* Test WM_DEVICECHANGE. */
 
@@ -11822,7 +11822,7 @@ static void test_message_conversion(void)
     dev_interface->dbcc_size = offsetof(DEV_BROADCAST_DEVICEINTERFACE_A,
             dbcc_name[strlen(dev_interface->dbcc_name)]);
     lRes = SendMessageA(hwnd, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, (LPARAM)dev_interface);
-    ok(lRes == 2, "Got %Id, error %lu.\n", lRes, GetLastError());
+    ok(lRes == 2, "Got %lld, error %lu.\n", (long long)lRes, GetLastError());
 
     DestroyWindow(hwnd);
 
@@ -11836,14 +11836,14 @@ static void test_message_conversion(void)
     lRes = SendMessageA (hwnd, WM_GETTEXTLENGTH, 0, 0);
     ok_sequence(WmGetTextLengthAfromW, "ANSI WM_GETTEXTLENGTH to Unicode window", FALSE);
     ok( lRes == WideCharToMultiByte( CP_ACP, 0, wszUnicode, lstrlenW(wszUnicode), NULL, 0, NULL, NULL ),
-        "got bad length %Id\n", lRes );
+        "got bad length %lld\n", (long long)lRes );
 
     flush_sequence();
     lRes = CallWindowProcA( (WNDPROC)GetWindowLongPtrA( hwnd, GWLP_WNDPROC ),
                             hwnd, WM_GETTEXTLENGTH, 0, 0);
     ok_sequence(WmGetTextLengthAfromW, "ANSI WM_GETTEXTLENGTH to Unicode window", FALSE);
     ok( lRes == WideCharToMultiByte( CP_ACP, 0, wszUnicode, lstrlenW(wszUnicode), NULL, 0, NULL, NULL ),
-        "got bad length %Id\n", lRes );
+        "got bad length %lld\n", (long long)lRes );
 
     wndproc = (WNDPROC)SetWindowLongPtrW( hwnd, GWLP_WNDPROC, (LONG_PTR)get_text_len_proc );
     newproc = (WNDPROC)GetWindowLongPtrA( hwnd, GWLP_WNDPROC );
@@ -11851,14 +11851,14 @@ static void test_message_conversion(void)
     ok( lRes == WideCharToMultiByte( CP_ACP, 0, dummy_window_text, lstrlenW(dummy_window_text),
                                      NULL, 0, NULL, NULL ) ||
         broken(lRes == lstrlenW(dummy_window_text) + 37),
-        "got bad length %Id\n", lRes );
+        "got bad length %lld\n", (long long)lRes );
 
     SetWindowLongPtrW( hwnd, GWLP_WNDPROC, (LONG_PTR)wndproc );  /* restore old wnd proc */
     lRes = CallWindowProcA( newproc, hwnd, WM_GETTEXTLENGTH, 0, 0 );
     ok( lRes == WideCharToMultiByte( CP_ACP, 0, dummy_window_text, lstrlenW(dummy_window_text),
                                      NULL, 0, NULL, NULL ) ||
         broken(lRes == lstrlenW(dummy_window_text) + 37),
-        "got bad length %Id\n", lRes );
+        "got bad length %lld\n", (long long)lRes );
 
     ret = DestroyWindow(hwnd);
     ok( ret, "DestroyWindow() error %ld\n", GetLastError());
@@ -13804,63 +13804,63 @@ static DWORD WINAPI test_edit_ime_messages(void *unused_arg)
 
     /* Test EM_{GET|SET}IMESTATUS */
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == 0, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 0, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     /* Note that EM_SETIMESTATUS always return 1, which is contrary to what MSDN says about
      * returning the previous LPARAM value */
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING, EIMES_GETCOMPSTRATONCE);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == EIMES_GETCOMPSTRATONCE, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == EIMES_GETCOMPSTRATONCE, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING, EIMES_CANCELCOMPSTRINFOCUS);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == EIMES_CANCELCOMPSTRINFOCUS, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == EIMES_CANCELCOMPSTRINFOCUS, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING, EIMES_COMPLETECOMPSTRKILLFOCUS);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == EIMES_COMPLETECOMPSTRKILLFOCUS, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == EIMES_COMPLETECOMPSTRKILLFOCUS, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING, EIMES_GETCOMPSTRATONCE
                       | EIMES_CANCELCOMPSTRINFOCUS | EIMES_COMPLETECOMPSTRKILLFOCUS);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
     ok(lr == (EIMES_GETCOMPSTRATONCE | EIMES_CANCELCOMPSTRINFOCUS | EIMES_COMPLETECOMPSTRKILLFOCUS),
-       "Got unexpected lr %#Ix.\n", lr);
+       "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == 0, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 0, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     /* Invalid EM_{GET|SET}IMESTATUS status types and flags */
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, 0, 0);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING + 1, 0);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, 0, EIMES_GETCOMPSTRATONCE);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == 0, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 0, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING + 1, EIMES_GETCOMPSTRATONCE);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == 0, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 0, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0xFFFFFFFF);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == 0xFFFF, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 0xFFFF, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == 0, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 0, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     /* Test IME messages when EIMES_GETCOMPSTRATONCE is not set */
     old_proc = (WNDPROC)SetWindowLongPtrA(hwnd, GWLP_WNDPROC, (LONG_PTR)edit_ime_subclass_proc);
@@ -13900,9 +13900,9 @@ static DWORD WINAPI test_edit_ime_messages(void *unused_arg)
 
     /* Test IME messages when EIMES_GETCOMPSTRATONCE is set */
     lr = SendMessageA(hwnd, EM_SETIMESTATUS, EMSIS_COMPOSITIONSTRING, EIMES_GETCOMPSTRATONCE);
-    ok(lr == 1, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == 1, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
     lr = SendMessageA(hwnd, EM_GETIMESTATUS, EMSIS_COMPOSITIONSTRING, 0);
-    ok(lr == EIMES_GETCOMPSTRATONCE, "Got unexpected lr %#Ix.\n", lr);
+    ok(lr == EIMES_GETCOMPSTRATONCE, "Got unexpected lr %#llx.\n", (unsigned long long)lr);
 
     ret = ImmSetCompositionStringA(himc, SCS_SETSTR, "Wine", 4, NULL, 0);
 #ifdef __REACTOS__
@@ -14482,7 +14482,7 @@ static void test_PeekMessage(void)
     ok(ret && msg.message == WM_QUIT,
        "got %d and %04x instead of TRUE and WM_QUIT\n", ret, msg.message);
     ok(msg.wParam == 0x1234abcd, "got wParam %08Ix instead of 0x1234abcd\n", msg.wParam);
-    ok(msg.lParam == 0, "got lParam %08Ix instead of 0\n", msg.lParam);
+    ok(msg.lParam == 0, "got lParam %08llx instead of 0\n", (unsigned long long)msg.lParam);
     ok_sequence(WmEmptySeq, "WmEmptySeq", FALSE);
 
     qstatus = GetQueueStatus(qs_all_input);
@@ -14991,7 +14991,7 @@ static void test_quit_message(void)
     ok(ret, "PeekMessage failed\n");
     ok(msg.message == WM_QUIT, "Received message 0x%04x instead of WM_QUIT\n", msg.message);
     ok(msg.wParam == 0x1234, "wParam was 0x%Ix instead of 0x1234\n", msg.wParam);
-    ok(msg.lParam == 0, "lParam was 0x%Ix instead of 0\n", msg.lParam);
+    ok(msg.lParam == 0, "lParam was 0x%llx instead of 0\n", (unsigned long long)msg.lParam);
 
     /* Check what happens to a WM_QUIT message posted to a window that gets
      * destroyed.
@@ -16069,7 +16069,7 @@ static void test_ShowWindow(void)
         style = GetWindowLongA(hwnd, GWL_STYLE);
         if (winetest_debug > 1) trace("%d: sending %s, current window style %08lx\n", i+1, sw_cmd_name[idx], style);
         ret = ShowWindow(hwnd, sw[i].cmd);
-        ok(!ret == !sw[i].ret, "%d: cmd %s: expected ret %Iu, got %Iu\n", i+1, sw_cmd_name[idx], sw[i].ret, ret);
+        ok(!ret == !sw[i].ret, "%d: cmd %s: expected ret %lld, got %lld\n", i+1, sw_cmd_name[idx], (long long)sw[i].ret, (long long)ret);
         style = GetWindowLongA(hwnd, GWL_STYLE) & ~WS_BASE;
         ok(style == sw[i].style, "%d: expected style %08lx, got %08lx\n", i+1, sw[i].style, style);
 
@@ -16382,7 +16382,7 @@ static void test_dialog_messages(void)
 
 #define set_selection(hctl, start, end) \
     ret = SendMessageA(hctl, EM_SETSEL, start, end); \
-    ok(ret == 1, "EM_SETSEL returned %Id\n", ret);
+    ok(ret == 1, "EM_SETSEL returned %lld\n", (long long)ret);
 
 #define check_selection(hctl, start, end) \
     ret = SendMessageA(hctl, EM_GETSEL, 0, 0); \
@@ -16426,7 +16426,7 @@ static void test_dialog_messages(void)
 
     flush_sequence();
     ret = DefDlgProcA(hdlg, WM_SETFOCUS, 0, 0);
-    ok(ret == 0, "WM_SETFOCUS returned %Id\n", ret);
+    ok(ret == 0, "WM_SETFOCUS returned %lld\n", (long long)ret);
     ok_sequence(WmDefDlgSetFocus_1, "DefDlgProc(WM_SETFOCUS) 1", FALSE);
 
     hfocus = GetFocus();
@@ -16437,7 +16437,7 @@ static void test_dialog_messages(void)
 
     flush_sequence();
     ret = DefDlgProcA(hdlg, WM_SETFOCUS, 0, 0);
-    ok(ret == 0, "WM_SETFOCUS returned %Id\n", ret);
+    ok(ret == 0, "WM_SETFOCUS returned %lld\n", (long long)ret);
     ok_sequence(WmDefDlgSetFocus_2, "DefDlgProc(WM_SETFOCUS) 2", FALSE);
 
     hfocus = GetFocus();
@@ -17291,7 +17291,7 @@ static void test_dbcs_wm_char(void)
     ok( msg.hwnd == hwnd, "unexpected hwnd %p\n", msg.hwnd );
     ok( msg.message == WM_CHAR, "unexpected message %x\n", msg.message );
     ok( msg.wParam == dbch[0], "bad wparam %Ix/%x\n", msg.wParam, dbch[0] );
-    ok( msg.lParam == 0xbeef, "bad lparam %Ix\n", msg.lParam );
+    ok( msg.lParam == 0xbeef, "bad lparam %llx\n", (unsigned long long)msg.lParam );
     time = msg.time;
     pt = msg.pt;
     ok( time - GetTickCount() <= 100, "bad time %lx\n", msg.time );
@@ -17300,7 +17300,7 @@ static void test_dbcs_wm_char(void)
     ok( msg.hwnd == hwnd, "unexpected hwnd %p\n", msg.hwnd );
     ok( msg.message == WM_CHAR, "unexpected message %x\n", msg.message );
     ok( msg.wParam == dbch[1], "bad wparam %Ix/%x\n", msg.wParam, dbch[0] );
-    ok( msg.lParam == 0xbeef, "bad lparam %Ix\n", msg.lParam );
+    ok( msg.lParam == 0xbeef, "bad lparam %llx\n", (unsigned long long)msg.lParam );
     ok( msg.time == time, "bad time %lx/%lx\n", msg.time, time );
     ok( msg.pt.x == pt.x && msg.pt.y == pt.y, "bad point %lu,%lu/%lu,%lu\n", msg.pt.x, msg.pt.y, pt.x, pt.y );
     ret = PeekMessageA( &msg, hwnd, 0, 0, PM_REMOVE );
@@ -17373,7 +17373,7 @@ static void test_unicode_wm_char(void)
     ok( msg.hwnd == hwnd, "unexpected hwnd %p\n", msg.hwnd );
     ok( msg.message == WM_CHAR, "unexpected message %x\n", msg.message );
     ok( msg.wParam == 0x3b1, "bad wparam %Ix\n", msg.wParam );
-    ok( msg.lParam == 0, "bad lparam %Ix\n", msg.lParam );
+    ok( msg.lParam == 0, "bad lparam %llx\n", (unsigned long long)msg.lParam );
 
     DispatchMessageW( &msg );
 
@@ -17393,7 +17393,7 @@ static void test_unicode_wm_char(void)
     ok( msg.hwnd == hwnd, "unexpected hwnd %p\n", msg.hwnd );
     ok( msg.message == WM_CHAR, "unexpected message %x\n", msg.message );
     ok( msg.wParam == 0x61, "bad wparam %Ix\n", msg.wParam );
-    ok( msg.lParam == 0, "bad lparam %Ix\n", msg.lParam );
+    ok( msg.lParam == 0, "bad lparam %llx\n", (unsigned long long)msg.lParam );
 
     DispatchMessageA( &msg );
 
@@ -17414,7 +17414,7 @@ static void test_unicode_wm_char(void)
     ok( msg.hwnd == hwnd, "unexpected hwnd %p\n", msg.hwnd );
     ok( msg.message == WM_CHAR, "unexpected message %x\n", msg.message );
     ok( msg.wParam == 0xe1, "bad wparam %Ix\n", msg.wParam );
-    ok( msg.lParam == 0, "bad lparam %Ix\n", msg.lParam );
+    ok( msg.lParam == 0, "bad lparam %llx\n", (unsigned long long)msg.lParam );
 
     DispatchMessageA( &msg );
 
@@ -17623,15 +17623,15 @@ static void check_lb_state_dbg(HWND listbox, int count, int cur_sel,
 
     /* calling an orig proc helps to avoid unnecessary message logging */
     ret = CallWindowProcA(listbox_orig_proc, listbox, LB_GETCOUNT, 0, 0);
-    ok_(__FILE__, line)(ret == count, "expected count %d, got %Id\n", count, ret);
+    ok_(__FILE__, line)(ret == count, "expected count %d, got %lld\n", count, (long long)ret);
     ret = CallWindowProcA(listbox_orig_proc, listbox, LB_GETCURSEL, 0, 0);
-    ok_(__FILE__, line)(ret == cur_sel, "expected cur sel %d, got %Id\n", cur_sel, ret);
+    ok_(__FILE__, line)(ret == cur_sel, "expected cur sel %d, got %lld\n", cur_sel, (long long)ret);
     ret = CallWindowProcA(listbox_orig_proc, listbox, LB_GETCARETINDEX, 0, 0);
     ok_(__FILE__, line)(ret == caret_index ||
                         broken(cur_sel == -1 && caret_index == 0 && ret == -1),  /* nt4 */
-                        "expected caret index %d, got %Id\n", caret_index, ret);
+                        "expected caret index %d, got %lld\n", caret_index, (long long)ret);
     ret = CallWindowProcA(listbox_orig_proc, listbox, LB_GETTOPINDEX, 0, 0);
-    ok_(__FILE__, line)(ret == top_index, "expected top index %d, got %Id\n", top_index, ret);
+    ok_(__FILE__, line)(ret == top_index, "expected top index %d, got %lld\n", top_index, (long long)ret);
 }
 
 static void test_listbox_messages(void)
@@ -17663,7 +17663,7 @@ static void test_listbox_messages(void)
     ok((ret & (WS_VSCROLL | WS_HSCROLL)) == 0, "Listbox should not have scroll bars\n");
 
     ret = SendMessageA(listbox, LB_SETCOUNT, 100, 0);
-    ok(ret == 0, "got %Id\n", ret);
+    ok(ret == 0, "got %lld\n", (long long)ret);
     ret = GetWindowLongA(listbox, GWL_STYLE);
     ok((ret & (WS_VSCROLL | WS_HSCROLL)) == WS_VSCROLL, "Listbox should have vertical scroll bar\n");
 
@@ -17700,11 +17700,11 @@ static void test_listbox_messages(void)
     log_all_parent_messages++;
 
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 0");
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 1");
-    ok(ret == 1, "expected 1, got %Id\n", ret);
+    ok(ret == 1, "expected 1, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 2");
-    ok(ret == 2, "expected 2, got %Id\n", ret);
+    ok(ret == 2, "expected 2, got %lld\n", (long long)ret);
 
     ok_sequence(wm_lb_addstring_ownerdraw, "LB_ADDSTRING", FALSE);
     check_lb_state(listbox, 3, LB_ERR, 0, 0);
@@ -17713,74 +17713,74 @@ static void test_listbox_messages(void)
 
     if (winetest_debug > 1) trace("selecting item 0\n");
     ret = SendMessageA(listbox, LB_SETCURSEL, 0, 0);
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_setcursel_0, "LB_SETCURSEL 0", FALSE );
     check_lb_state(listbox, 3, 0, 0, 0);
     flush_sequence();
 
     if (winetest_debug > 1) trace("selecting item 1\n");
     ret = SendMessageA(listbox, LB_SETCURSEL, 1, 0);
-    ok(ret == 1, "expected 1, got %Id\n", ret);
+    ok(ret == 1, "expected 1, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_setcursel_1, "LB_SETCURSEL 1", FALSE );
     check_lb_state(listbox, 3, 1, 1, 0);
 
     if (winetest_debug > 1) trace("selecting item 2\n");
     ret = SendMessageA(listbox, LB_SETCURSEL, 2, 0);
-    ok(ret == 2, "expected 2, got %Id\n", ret);
+    ok(ret == 2, "expected 2, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_setcursel_2, "LB_SETCURSEL 2", FALSE );
     check_lb_state(listbox, 3, 2, 2, 0);
 
     if (winetest_debug > 1) trace("clicking on item 0\n");
     ret = SendMessageA(listbox, WM_LBUTTONDOWN, 0, MAKELPARAM(1, 1));
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, WM_LBUTTONUP, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_click_0, "WM_LBUTTONDOWN 0", FALSE );
     check_lb_state(listbox, 3, 0, 0, 0);
     flush_sequence();
 
     if (winetest_debug > 1) trace("deleting item 0\n");
     ret = SendMessageA(listbox, LB_DELETESTRING, 0, 0);
-    ok(ret == 2, "expected 2, got %Id\n", ret);
+    ok(ret == 2, "expected 2, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_deletestring, "LB_DELETESTRING 0", FALSE );
     check_lb_state(listbox, 2, -1, 0, 0);
     flush_sequence();
 
     if (winetest_debug > 1) trace("deleting item 0\n");
     ret = SendMessageA(listbox, LB_DELETESTRING, 0, 0);
-    ok(ret == 1, "expected 1, got %Id\n", ret);
+    ok(ret == 1, "expected 1, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_deletestring, "LB_DELETESTRING 0", FALSE );
     check_lb_state(listbox, 1, -1, 0, 0);
     flush_sequence();
 
     if (winetest_debug > 1) trace("deleting item 0\n");
     ret = SendMessageA(listbox, LB_DELETESTRING, 0, 0);
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_deletestring_reset, "LB_DELETESTRING 0", FALSE );
     check_lb_state(listbox, 0, -1, 0, 0);
     flush_sequence();
 
     if (winetest_debug > 1) trace("deleting item 0\n");
     ret = SendMessageA(listbox, LB_DELETESTRING, 0, 0);
-    ok(ret == LB_ERR, "expected LB_ERR, got %Id\n", ret);
+    ok(ret == LB_ERR, "expected LB_ERR, got %lld\n", (long long)ret);
     check_lb_state(listbox, 0, -1, 0, 0);
     flush_sequence();
 
     ret = SendMessageA(listbox, LB_DELETESTRING, 0, 0);
-    ok(ret == LB_ERR, "expected LB_ERR, got %Id\n", ret);
+    ok(ret == LB_ERR, "expected LB_ERR, got %lld\n", (long long)ret);
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     flush_sequence();
 
     ret = SendMessageA(listbox, LB_RESETCONTENT, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     flush_sequence();
 
     if (winetest_debug > 1) trace("clicking on item 0\n");
     ret = SendMessageA(listbox, WM_LBUTTONDBLCLK, 0, MAKELPARAM(1, 1));
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, WM_LBUTTONUP, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_dblclick_0, "WM_LBUTTONDBLCLK 0", FALSE );
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     flush_sequence();
@@ -17802,26 +17802,26 @@ static void test_listbox_messages(void)
     log_all_parent_messages++;
 
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 0");
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 1");
-    ok(ret == 1, "expected 1, got %Id\n", ret);
+    ok(ret == 1, "expected 1, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 2");
-    ok(ret == 2, "expected 2, got %Id\n", ret);
+    ok(ret == 2, "expected 2, got %lld\n", (long long)ret);
 
     ok_sequence(wm_lb_addstring_sort_ownerdraw, "LB_ADDSTRING", FALSE);
     check_lb_state(listbox, 3, LB_ERR, 0, 0);
 
     ret = SendMessageA(listbox, LB_RESETCONTENT, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     SetFocus(listbox); /* avoid focus messages */
     flush_sequence();
 
     if (winetest_debug > 1) trace("clicking on item 0\n");
     ret = SendMessageA(listbox, WM_LBUTTONDBLCLK, 0, MAKELPARAM(1, 1));
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, WM_LBUTTONUP, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_dblclick_0, "WM_LBUTTONDBLCLK 0", FALSE );
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     flush_sequence();
@@ -17843,26 +17843,26 @@ static void test_listbox_messages(void)
     log_all_parent_messages++;
 
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 2");
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 0");
-    ok(ret == 1, "expected 1, got %Id\n", ret);
+    ok(ret == 1, "expected 1, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 1");
-    ok(ret == 2, "expected 2, got %Id\n", ret);
+    ok(ret == 2, "expected 2, got %lld\n", (long long)ret);
 
     ok_sequence(wm_lb_addstring, "LB_ADDSTRING", FALSE);
     check_lb_state(listbox, 3, LB_ERR, 0, 0);
 
     ret = SendMessageA(listbox, LB_RESETCONTENT, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     SetFocus(listbox); /* avoid focus messages */
     flush_sequence();
 
     if (winetest_debug > 1) trace("clicking on item 0\n");
     ret = SendMessageA(listbox, WM_LBUTTONDBLCLK, 0, MAKELPARAM(1, 1));
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, WM_LBUTTONUP, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_dblclick_0, "WM_LBUTTONDBLCLK 0", FALSE );
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     flush_sequence();
@@ -17884,26 +17884,26 @@ static void test_listbox_messages(void)
     log_all_parent_messages++;
 
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 2");
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 0");
-    ok(ret == 0, "expected 0, got %Id\n", ret);
+    ok(ret == 0, "expected 0, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, LB_ADDSTRING, 0, (LPARAM)"item 1");
-    ok(ret == 1, "expected 1, got %Id\n", ret);
+    ok(ret == 1, "expected 1, got %lld\n", (long long)ret);
 
     ok_sequence(wm_lb_addstring, "LB_ADDSTRING", FALSE);
     check_lb_state(listbox, 3, LB_ERR, 0, 0);
 
     ret = SendMessageA(listbox, LB_RESETCONTENT, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     SetFocus(listbox); /* avoid focus messages */
     flush_sequence();
 
     if (winetest_debug > 1) trace("clicking on item 0\n");
     ret = SendMessageA(listbox, WM_LBUTTONDBLCLK, 0, MAKELPARAM(1, 1));
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ret = SendMessageA(listbox, WM_LBUTTONUP, 0, 0);
-    ok(ret == LB_OKAY, "expected LB_OKAY, got %Id\n", ret);
+    ok(ret == LB_OKAY, "expected LB_OKAY, got %lld\n", (long long)ret);
     ok_sequence(wm_lb_dblclick_0, "WM_LBUTTONDBLCLK 0", FALSE );
     check_lb_state(listbox, 0, LB_ERR, 0, 0);
     flush_sequence();
@@ -18506,13 +18506,13 @@ static void test_defwinproc(void)
 
     /* Zero high word of the lParam */
     res = DefWindowProcA(hwnd, WM_SETTEXT, 0, 0x1234);
-    ok(res == 0, "WM_SETTEXT was expected to fail, %Id\n", res);
+    ok(res == 0, "WM_SETTEXT was expected to fail, %lld\n", (long long)res);
 
     GetWindowTextA(hwnd, buffA, ARRAY_SIZE(buffA));
     ok(!strcmp(buffA, "test_defwndproc"), "unexpected window text, %s\n", buffA);
 
     res = DefWindowProcW(hwnd, WM_SETTEXT, 0, 0x1234);
-    ok(res == 0, "WM_SETTEXT was expected to fail, %Id\n", res);
+    ok(res == 0, "WM_SETTEXT was expected to fail, %lld\n", (long long)res);
 
     GetWindowTextA(hwnd, buffA, ARRAY_SIZE(buffA));
     ok(!strcmp(buffA, "test_defwndproc"), "unexpected window text, %s\n", buffA);
@@ -18571,7 +18571,7 @@ static void test_defwinproc(void)
     SetCursorPos(x, y);
     flush_events();
     res = DefWindowProcA( hwnd, WM_NCHITTEST, 0, MAKELPARAM(x, y));
-    ok(res == HTCAPTION, "WM_NCHITTEST returned %Id\n", res);
+    ok(res == HTCAPTION, "WM_NCHITTEST returned %lld\n", (long long)res);
 
     mouse_event( MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0 );
     mouse_event( MOUSEEVENTF_LEFTUP, 0, 0, 0, 0 );
@@ -18588,27 +18588,27 @@ static void test_defwinproc(void)
     ok_sequence(NCRBUTTONDOWNSeq, "WM_NCRBUTTONDOWN on caption", FALSE);
 
     res = DefWindowProcA(hwnd, WM_NCXBUTTONUP, 0, MAKELPARAM(x, y));
-    ok(!res, "WM_NCXBUTTONUP returned %Id\n", res);
+    ok(!res, "WM_NCXBUTTONUP returned %lld\n", (long long)res);
     ok_sequence(WmEmptySeq, "WM_NCXBUTTONUP without button", FALSE);
 
     res = DefWindowProcA(hwnd, WM_NCXBUTTONUP, MAKEWPARAM(0, XBUTTON1), MAKELPARAM(x, y));
-    ok(!res, "WM_NCXBUTTONUP returned %Id\n", res);
+    ok(!res, "WM_NCXBUTTONUP returned %lld\n", (long long)res);
     ok_sequence(NCXBUTTONUPSeq1, "WM_NCXBUTTONUP with XBUTTON1", FALSE);
 
     res = DefWindowProcA(hwnd, WM_NCXBUTTONUP, MAKEWPARAM(0, XBUTTON2), MAKELPARAM(x, y));
-    ok(!res, "WM_NCXBUTTONUP returned %Id\n", res);
+    ok(!res, "WM_NCXBUTTONUP returned %lld\n", (long long)res);
     ok_sequence(NCXBUTTONUPSeq2, "WM_NCXBUTTONUP with XBUTTON2", FALSE);
 
     res = DefWindowProcA(hwnd, WM_NCXBUTTONUP, MAKEWPARAM(0, 3), MAKELPARAM(x, y));
-    ok(!res, "WM_NCXBUTTONUP returned %Id\n", res);
+    ok(!res, "WM_NCXBUTTONUP returned %lld\n", (long long)res);
     ok_sequence(WmEmptySeq, "WM_NCXBUTTONUP with invalid button", FALSE);
 
     /* Test WM_MOUSEACTIVATE */
 #define TEST_MOUSEACTIVATE(A,B,C) \
        res = DefWindowProcA(hwnd, WM_MOUSEACTIVATE, (WPARAM)hwnd, (LPARAM)MAKELRESULT(A,0)); \
-       ok(res == B, "WM_MOUSEACTIVATE for %s returned %Id\n", #A, res); \
+       ok(res == B, "WM_MOUSEACTIVATE for %s returned %lld\n", #A, (long long)res); \
        res = DefWindowProcA(hwnd, WM_MOUSEACTIVATE, (WPARAM)hwnd, (LPARAM)MAKELRESULT(A,WM_LBUTTONDOWN)); \
-       ok(res == C, "WM_MOUSEACTIVATE for %s returned %Id\n", #A, res);
+       ok(res == C, "WM_MOUSEACTIVATE for %s returned %lld\n", #A, (long long)res);
 
     TEST_MOUSEACTIVATE(HTERROR,       MA_ACTIVATE, MA_ACTIVATE);
     TEST_MOUSEACTIVATE(HTTRANSPARENT, MA_ACTIVATE, MA_ACTIVATE);
@@ -18691,17 +18691,17 @@ static void test_desktop_winproc(void)
     todo_wine ok(!strcmp(buffer, "test_desktop_wndproc"), "Got unexpected window text: %s.\n", buffer);
 
     res = CallWindowProcA(desktop_proc, hwnd, WM_SETTEXT, 0, (LPARAM)"test");
-    ok(res == TRUE, "Failed to set text, %Id.\n", res);
+    ok(res == TRUE, "Failed to set text, %lld.\n", (long long)res);
     GetWindowTextA(hwnd, buffer, ARRAY_SIZE(buffer));
     ok(!strcmp(buffer, "test"), "Got unexpected window text: %s.\n", buffer);
 
     SetRect(&default_rect, 0, 0, 100, 100);
     res = DefWindowProcW(hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&default_rect);
-    ok(!res, "Got unexpected result %Id.\n", res);
+    ok(!res, "Got unexpected result %lld.\n", (long long)res);
 
     SetRect(&rect, 0, 0, 100, 100);
     res = CallWindowProcA(desktop_proc, hwnd, WM_NCCALCSIZE, FALSE, (LPARAM)&rect);
-    ok(!res, "Got unexpected result %Id.\n", res);
+    ok(!res, "Got unexpected result %lld.\n", (long long)res);
     todo_wine ok(EqualRect(&rect, &default_rect), "rect Got %s, expected %s.\n",
             wine_dbgstr_rect(&rect), wine_dbgstr_rect(&default_rect));
 
@@ -18955,13 +18955,13 @@ static void test_PostMessage(void)
             if (data[i].hwnd)
                 ok(ret && msg.hwnd == 0 && msg.message == WM_USER+2 &&
                    msg.wParam == 0x5678 && msg.lParam == 0x1234,
-                   "%d: got ret %d hwnd %p msg %04x wParam %08Ix lParam %08Ix instead of TRUE/0/WM_USER+2/0x5678/0x1234\n",
-                   i, ret, msg.hwnd, msg.message, msg.wParam, msg.lParam);
+                   "%d: got ret %d hwnd %p msg %04x wParam %08Ix lParam %08llx instead of TRUE/0/WM_USER+2/0x5678/0x1234\n",
+                   i, ret, msg.hwnd, msg.message, msg.wParam, (unsigned long long)msg.lParam);
             else
                 ok(ret && msg.hwnd == hwnd && msg.message == WM_USER+1 &&
                    msg.wParam == 0x1234 && msg.lParam == 0x5678,
-                   "%d: got ret %d hwnd %p msg %04x wParam %08Ix lParam %08Ix instead of TRUE/%p/WM_USER+1/0x1234/0x5678\n",
-                   i, ret, msg.hwnd, msg.message, msg.wParam, msg.lParam, msg.hwnd);
+                   "%d: got ret %d hwnd %p msg %04x wParam %08Ix lParam %08llx instead of TRUE/%p/WM_USER+1/0x1234/0x5678\n",
+                   i, ret, msg.hwnd, msg.message, msg.wParam, (unsigned long long)msg.lParam, msg.hwnd);
         }
     }
 
@@ -19904,7 +19904,7 @@ static void test_hotkey(void)
         if (msg.message == WM_HOTKEY)
         {
             ok(msg.hwnd == test_window, "unexpected hwnd %p\n", msg.hwnd);
-            ok(msg.lParam == MAKELPARAM(MOD_WIN, hotkey_letter), "unexpected WM_HOTKEY lparam %Ix\n", msg.lParam);
+            ok(msg.lParam == MAKELPARAM(MOD_WIN, hotkey_letter), "unexpected WM_HOTKEY lparam %llx\n", (unsigned long long)msg.lParam);
         }
         DispatchMessageA(&msg);
     }
@@ -19948,7 +19948,7 @@ static void test_hotkey(void)
         if (msg.message == WM_HOTKEY)
         {
             ok(msg.hwnd == test_window, "unexpected hwnd %p\n", msg.hwnd);
-            ok(msg.lParam == MAKELPARAM(MOD_WIN, hotkey_letter), "unexpected WM_HOTKEY lparam %Ix\n", msg.lParam);
+            ok(msg.lParam == MAKELPARAM(MOD_WIN, hotkey_letter), "unexpected WM_HOTKEY lparam %llx\n", (unsigned long long)msg.lParam);
         }
         DispatchMessageA(&msg);
     }
@@ -19977,7 +19977,7 @@ static void test_hotkey(void)
         if (msg.message == WM_HOTKEY)
         {
             ok(msg.hwnd == test_window, "unexpected hwnd %p\n", msg.hwnd);
-            ok(msg.lParam == MAKELPARAM(0, hotkey_letter), "unexpected WM_HOTKEY lparam %Ix\n", msg.lParam);
+            ok(msg.lParam == MAKELPARAM(0, hotkey_letter), "unexpected WM_HOTKEY lparam %llx\n", (unsigned long long)msg.lParam);
         }
         DispatchMessageA(&msg);
     }
@@ -20014,7 +20014,7 @@ static void test_hotkey(void)
         {
             struct recvd_message message;
             ok(msg.hwnd == NULL, "unexpected hwnd %p\n", msg.hwnd);
-            ok(msg.lParam == MAKELPARAM(MOD_WIN, hotkey_letter), "unexpected WM_HOTKEY lparam %Ix\n", msg.lParam);
+            ok(msg.lParam == MAKELPARAM(MOD_WIN, hotkey_letter), "unexpected WM_HOTKEY lparam %llx\n", (unsigned long long)msg.lParam);
             message.message = msg.message;
             message.flags = sent|wparam|lparam;
             message.wParam = msg.wParam;
@@ -20078,7 +20078,7 @@ static void test_hotkey(void)
         if (msg.message == WM_HOTKEY)
         {
             ok(msg.hwnd == test_window, "unexpected hwnd %p\n", msg.hwnd);
-            ok(msg.lParam == MAKELPARAM(MOD_ALT, hotkey_letter), "unexpected WM_HOTKEY lparam %Ix\n", msg.lParam);
+            ok(msg.lParam == MAKELPARAM(MOD_ALT, hotkey_letter), "unexpected WM_HOTKEY lparam %llx\n", (unsigned long long)msg.lParam);
         }
         DispatchMessageA(&msg);
     }
@@ -20550,7 +20550,7 @@ static LRESULT WINAPI cancel_popup_proc(HWND hwnd, UINT message, WPARAM wParam, 
         ok((HMENU)wParam == hpopupmenu, "expected %p, got %Ix\n", hpopupmenu, wParam);
         break;
     case WM_CAPTURECHANGED:
-        todo_wine ok(!lParam || (HWND)lParam == hwnd, "lost capture to %Ix\n", lParam);
+        todo_wine ok(!lParam || (HWND)lParam == hwnd, "lost capture to %llx\n", (unsigned long long)lParam);
         break;
     }
 
@@ -20909,7 +20909,7 @@ static LRESULT CALLBACK insendmessage_wnd_proc( HWND hwnd, UINT msg, WPARAM wp, 
 static void CALLBACK msg_callback( HWND hwnd, UINT msg, ULONG_PTR arg, LRESULT result )
 {
     ok( msg == WM_USER + 2, "wrong msg %x\n", msg );
-    ok( result == WM_USER + 2, "wrong result %Ix\n", result );
+    ok( result == WM_USER + 2, "wrong result %llx\n", (unsigned long long)result );
 }
 
 static DWORD WINAPI send_message_thread( void *arg )
@@ -21126,7 +21126,7 @@ static void test_button_style(void)
         for (j = BS_PUSHBUTTON; j <= BS_DEFCOMMANDLINK; ++j)
         {
             ret = SendMessageA(button, BM_SETSTYLE, j, FALSE);
-            ok(ret == 0, "Expected %#x, got %#Ix.\n", 0, ret);
+            ok(ret == 0, "Expected %#x, got %#llx.\n", 0, (unsigned long long)ret);
 
             type = GetWindowLongW(button, GWL_STYLE) & BS_TYPEMASK;
             expected_type = j;
@@ -21210,7 +21210,7 @@ static void test_hook_changing_window_proc(void)
     ok( hook != NULL, "SetWindowsHookExW failed: %lu\n", GetLastError() );
 
     res = SendMessageW( hwnd, WM_USER, 1, 2 );
-    ok( res == 3, "SendMessageW(WM_USER) returned %Iu\n", res );
+    ok( res == 3, "SendMessageW(WM_USER) returned %lld\n", (long long)res );
 
     UnhookWindowsHookEx( hook );
     DestroyWindow( hwnd );
@@ -21501,11 +21501,11 @@ static void test_defwinproc_wm_print(void)
 
     /* Check the return code when no flags are specified */
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, 0);
-    ok(lr == 1, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 1, "Got unexpected lr %lld.\n", (long long)lr);
 
     /* Check the return code when PRF_CHECKVISIBLE is specified and the window is invisible */
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, PRF_CHECKVISIBLE);
-    ok(lr == 0, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 0, "Got unexpected lr %lld.\n", (long long)lr);
 
     ShowWindow(hwnd, SW_SHOWNORMAL);
     flush_events();
@@ -21513,20 +21513,20 @@ static void test_defwinproc_wm_print(void)
 
     /* Check the return code when PRF_CHECKVISIBLE is specified and the window is visible */
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, PRF_CHECKVISIBLE);
-    ok(lr == 1, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 1, "Got unexpected lr %lld.\n", (long long)lr);
 
     /* Check the return code when PRF_ERASEBKGND is specified */
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, PRF_ERASEBKGND);
-    ok(lr == 1, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 1, "Got unexpected lr %lld.\n", (long long)lr);
 
     /* Check the return code when PRF_CLIENT is specified */
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, PRF_CLIENT);
-    ok(lr == 1, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 1, "Got unexpected lr %lld.\n", (long long)lr);
 
     /* PRF_CHILDREN needs to be used with PRF_CLIENT */
     PatBlt(hdc, 0, 0, 100, 100, BLACKNESS);
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, PRF_CHILDREN);
-    ok(lr == 1, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 1, "Got unexpected lr %lld.\n", (long long)lr);
     color = GetPixel(hdc, 50, 50);
     ok(color == RGB(0, 0, 0), "Got unexpected color %#lx.\n", color);
     ok_sequence(WmEmptySeq, "DefWindowProc WM_PRINT PRF_CHILDREN", FALSE);
@@ -21535,7 +21535,7 @@ static void test_defwinproc_wm_print(void)
     /* PRF_CHILDREN | PRF_CLIENT */
     PatBlt(hdc, 0, 0, 100, 100, BLACKNESS);
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, PRF_CHILDREN | PRF_CLIENT);
-    ok(lr == 1, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 1, "Got unexpected lr %lld.\n", (long long)lr);
     color = GetPixel(hdc, 50, 50);
     ok(color == RGB(0xff, 0, 0), "Got unexpected color %#lx.\n", color);
     ok_sequence(wm_print_prf_children, "DefWindowProc WM_PRINT with PRF_CHILDREN | PRF_CLIENT", FALSE);
@@ -21550,7 +21550,7 @@ static void test_defwinproc_wm_print(void)
 
     PatBlt(hdc, 0, 0, 100, 100, BLACKNESS);
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, PRF_CHILDREN | PRF_CLIENT);
-    ok(lr == 1, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 1, "Got unexpected lr %lld.\n", (long long)lr);
     color = GetPixel(hdc, 50, 50);
     ok(color == RGB(0xff, 0, 0), "Got unexpected color %#lx.\n", color);
     ok_sequence(wm_print_prf_children, "DefWindowProc WM_PRINT with PRF_CHILDREN | PRF_CLIENT with an invisible parent", FALSE);
@@ -21566,7 +21566,7 @@ static void test_defwinproc_wm_print(void)
 
     PatBlt(hdc, 0, 0, 100, 100, BLACKNESS);
     lr = DefWindowProcA(hwnd, WM_PRINT, (WPARAM)hdc, PRF_CHILDREN | PRF_CLIENT);
-    ok(lr == 1, "Got unexpected lr %Id.\n", lr);
+    ok(lr == 1, "Got unexpected lr %lld.\n", (long long)lr);
     color = GetPixel(hdc, 50, 50);
     ok(color == RGB(0, 0, 0), "Got unexpected color %#lx.\n", color);
     ok_sequence(WmEmptySeq, "DefWindowProc WM_PRINT with PRF_CHILDREN | PRF_CLIENT with an invisible child", FALSE);
