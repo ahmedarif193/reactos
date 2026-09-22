@@ -227,6 +227,16 @@ GetNativeSystemInfo(IN LPSYSTEM_INFO lpSystemInfo)
                                            0);
     if (!NT_SUCCESS(Status)) return;
 
+#ifdef _M_IX86
+    if (ProcInfo.ProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64)
+    {
+        GetSystemInfo(lpSystemInfo);
+        lpSystemInfo->wProcessorArchitecture = PROCESSOR_ARCHITECTURE_AMD64;
+        lpSystemInfo->dwProcessorType = PROCESSOR_AMD_X8664;
+        return;
+    }
+#endif
+
     GetSystemInfoInternal(&BasicInfo, &ProcInfo, lpSystemInfo);
 }
 
