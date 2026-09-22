@@ -24,7 +24,7 @@ typedef struct _PAGING_FILE
     BOOLEAN Write;
     PMDL PendingMdl;
     PIO_STATUS_BLOCK PendingIosb;
-    PFN_NUMBER Frames[MI_MAX_FILE_IO_PAGES];
+    PFN_NUMBER Frames[MI_MAX_FILE_WRITE_PAGES];
 } PAGING_FILE;
 
 static _Thread_local PAGING_FILE *ActivePaging;
@@ -68,7 +68,8 @@ Submit(PFILE_OBJECT Object, PMDL Mdl, PLARGE_INTEGER Offset, KEVENT *Event, PIO_
     CHECK(Mdl->Next == NULL && Mdl->Process == NULL);
     CHECK(Mdl->StartVa == NULL && Mdl->MappedSystemVa == NULL && Mdl->ByteOffset == 0);
     CHECK(Mdl->MdlFlags == (MDL_PAGES_LOCKED | (Write ? 0 : MDL_IO_PAGE_READ)));
-    CHECK(Mdl->ByteCount > 0 && Mdl->ByteCount <= MI_MAX_FILE_IO_PAGES * PAGE_SIZE);
+    CHECK(Mdl->ByteCount > 0 && Mdl->ByteCount <=
+          (Write ? MI_MAX_FILE_WRITE_PAGES : MI_MAX_FILE_IO_PAGES) * PAGE_SIZE);
     CHECK(Mdl->Size == sizeof(MDL) + sizeof(PFN_NUMBER) * (Mdl->ByteCount / PAGE_SIZE));
     File->Length = Mdl->ByteCount;
     File->Offset = Offset->QuadPart;
@@ -124,7 +125,7 @@ TestNtPaging(void)
     PAGING_FILE File = {0};
     FILE_OBJECT Object = { .FsContext = &File };
     MI_CONTROL_AREA Control = { .FileObject = &Object };
-    ULONG Frames[MI_MAX_FILE_IO_PAGES];
+    ULONG Frames[MI_MAX_FILE_WRITE_PAGES];
     ULONG Transferred;
     ULONG Count, i, Pending, Map, Write;
 
@@ -134,7 +135,7 @@ TestNtPaging(void)
     for (Pending = 0; Pending < 2; Pending++)
     for (Map = 0; Map < 2; Map++)
     for (Write = 0; Write < 2; Write++)
-    for (Count = 1; Count <= MI_MAX_FILE_IO_PAGES; Count++)
+    for (Count = 1; Count <= (Write ? MI_MAX_FILE_WRITE_PAGES : MI_MAX_FILE_IO_PAGES); Count++)
     {
         memset(&File, 0, sizeof(File));
         File.DispatchStatus = Pending ? STATUS_PENDING : STATUS_SUCCESS;
@@ -162,7 +163,8 @@ TestNtPaging(void)
     CHECK(MiControlWriteFrames(&Control, 0, 2 * PAGE_SIZE, Frames, 1) == STATUS_INVALID_PARAMETER);
     CHECK(MiPagingIoFrames(&Object, 1, Frames, 1, TRUE, &Transferred) == STATUS_INVALID_PARAMETER);
     CHECK(MiPagingIoFrames(&Object, 0, Frames, 0, TRUE, &Transferred) == STATUS_INVALID_PARAMETER);
-    CHECK(MiPagingIoFrames(&Object, 0, Frames, MI_MAX_FILE_IO_PAGES + 1, TRUE, &Transferred) == STATUS_INVALID_PARAMETER);
+    CHECK(MiPagingIoFrames(&Object, 0, Frames, MI_MAX_FILE_WRITE_PAGES + 1, TRUE, &Transferred) == STATUS_INVALID_PARAMETER);
+    CHECK(MiPagingIoFrames(&Object, 0, Frames, MI_MAX_FILE_IO_PAGES + 1, FALSE, &Transferred) == STATUS_INVALID_PARAMETER);
     CHECK(MiPagingIoFrames(&Object, 0, NULL, 1, TRUE, &Transferred) == STATUS_INVALID_PARAMETER);
     CHECK(File.Calls == 1 && Transferred == 0);
     ActivePaging = NULL;

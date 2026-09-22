@@ -33,7 +33,7 @@ WriteFrames(PVOID Context, ULONG64 Offset, ULONG Length, const ULONG *Frames, UL
 
     CHECK(MiHostIrql == 0);
     CHECK(Call < RTL_NUMBER_OF(File->Offset));
-    CHECK(PageCount > 0 && PageCount <= MI_MAX_FILE_IO_PAGES);
+    CHECK(PageCount > 0 && PageCount <= MI_MAX_FILE_WRITE_PAGES);
     CHECK(Length > (PageCount - 1) * PAGE_SIZE && Length <= PageCount * PAGE_SIZE);
     CHECK(Offset + Length <= File->File.Size);
     if (File->ExtendOnWrite != 0)
@@ -157,7 +157,7 @@ TestWriteback(void)
     WRITEBACK_FILE File = { .World = &World };
     MI_FILE_OPS Ops = { .Read = TestFileOps.Read, .Write = TestFileOps.Write, .WriteFrames = WriteFrames };
     PMI_SEGMENT Segment;
-    ULONG Pages = MI_MAX_FILE_IO_PAGES + 3;
+    ULONG Pages = MI_MAX_FILE_WRITE_PAGES + 3;
     ULONG64 Size = (Pages - 1) * PAGE_SIZE + 317;
     ULONG64 i;
     ULONG Calls;
@@ -173,9 +173,9 @@ TestWriteback(void)
     memset(File.File.Data, 0xCC, Size);
     CHECK(NT_SUCCESS(MiSegmentFlush(Segment, 0, Size)));
     CHECK(File.Calls == 2);
-    CHECK(File.Offset[0] == 0 && File.Pages[0] == MI_MAX_FILE_IO_PAGES);
-    CHECK(File.Length[0] == MI_MAX_FILE_IO_PAGES * PAGE_SIZE);
-    CHECK(File.Offset[1] == MI_MAX_FILE_IO_PAGES * PAGE_SIZE && File.Pages[1] == 3);
+    CHECK(File.Offset[0] == 0 && File.Pages[0] == MI_MAX_FILE_WRITE_PAGES);
+    CHECK(File.Length[0] == MI_MAX_FILE_WRITE_PAGES * PAGE_SIZE);
+    CHECK(File.Offset[1] == MI_MAX_FILE_WRITE_PAGES * PAGE_SIZE && File.Pages[1] == 3);
     CHECK(File.Length[1] == 2 * PAGE_SIZE + 317);
     CHECK(File.Noncontiguous);
     CHECK(Segment->PagesWritten == Pages);
@@ -188,9 +188,19 @@ TestWriteback(void)
     CHECK(NT_SUCCESS(MiSegmentMarkDirty(Segment, PAGE_SIZE, 1)));
     CHECK(NT_SUCCESS(MiSegmentMarkDirty(Segment, 3 * PAGE_SIZE, 1)));
     CHECK(NT_SUCCESS(MiSegmentFlush(Segment, PAGE_SIZE + 7, 3 * PAGE_SIZE - 14)));
+    CHECK(File.Calls == Calls + 1);
+    CHECK(File.Offset[Calls] == PAGE_SIZE && File.Length[Calls] == 3 * PAGE_SIZE);
+    for (i = PAGE_SIZE; i < 4 * PAGE_SIZE; i++)
+        CHECK(File.File.Data[i] == (UCHAR)((i >> PAGE_SHIFT) * 31 + i));
+
+    Calls = File.Calls;
+    CHECK(MiSegmentPurge(Segment, 2 * PAGE_SIZE, PAGE_SIZE));
+    CHECK(NT_SUCCESS(MiSegmentMarkDirty(Segment, PAGE_SIZE, 1)));
+    CHECK(NT_SUCCESS(MiSegmentMarkDirty(Segment, 3 * PAGE_SIZE, 1)));
+    CHECK(NT_SUCCESS(MiSegmentFlush(Segment, PAGE_SIZE, 3 * PAGE_SIZE)));
     CHECK(File.Calls == Calls + 2);
-    CHECK(File.Offset[Calls] == PAGE_SIZE && File.Length[Calls] == PAGE_SIZE);
-    CHECK(File.Offset[Calls + 1] == 3 * PAGE_SIZE && File.Length[Calls + 1] == PAGE_SIZE);
+    CHECK(File.Length[Calls] == PAGE_SIZE && File.Length[Calls + 1] == PAGE_SIZE);
+    CHECK(!MiSegmentIsResident(Segment, 2 * PAGE_SIZE, PAGE_SIZE));
 
     Calls = File.Calls;
     CHECK(NT_SUCCESS(MiSegmentMarkDirty(Segment, 5 * PAGE_SIZE, 4 * PAGE_SIZE)));

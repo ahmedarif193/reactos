@@ -177,7 +177,7 @@ MiPagingIoFrames(
     struct
     {
         MDL Mdl;
-        PFN_NUMBER Pages[MI_MAX_FILE_IO_PAGES];
+        PFN_NUMBER Pages[MI_MAX_FILE_WRITE_PAGES];
     } Storage = {0};
     PMDL Mdl = &Storage.Mdl;
     PPFN_NUMBER Pages;
@@ -185,7 +185,7 @@ MiPagingIoFrames(
     ULONG i;
 
     *Transferred = 0;
-    if (PageCount == 0 || PageCount > MI_MAX_FILE_IO_PAGES || Frames == NULL ||
+    if (PageCount == 0 || PageCount > (Write ? MI_MAX_FILE_WRITE_PAGES : MI_MAX_FILE_IO_PAGES) || Frames == NULL ||
         (Offset & (PAGE_SIZE - 1)) != 0)
         return STATUS_INVALID_PARAMETER;
 

@@ -1754,7 +1754,7 @@ MiSegmentFlush(
     ULONG64 First = Offset >> PAGE_SHIFT;
     ULONG64 Last;
     ULONG64 Page;
-    ULONG Limit = Segment->FileOps.WriteFrames != NULL ? MI_MAX_FILE_IO_PAGES : 1;
+    ULONG Limit = Segment->FileOps.WriteFrames != NULL ? MI_MAX_FILE_WRITE_PAGES : 1;
 
     if (Segment->Kind != MiSegmentDataFile || Length == 0)
         return STATUS_SUCCESS;
@@ -1771,11 +1771,12 @@ MiSegmentFlush(
 
     for (Page = First; Page < Last;)
     {
-        ULONG Frames[MI_MAX_FILE_IO_PAGES];
+        ULONG Frames[MI_MAX_FILE_WRITE_PAGES];
         ULONG Count = 0;
         ULONG Bytes = 0;
         ULONG64 RunPage = Page;
         ULONG64 RunOffset = 0;
+        ULONG64 BridgeEnd = Page;
         NTSTATUS WriteStatus;
         ULONG i;
 
@@ -1791,8 +1792,30 @@ MiSegmentFlush(
             if (Kind != MiSoftResident && Kind != MiSoftTransition)
                 break;
 
-            if (!(MI_PFN_FLAGS(&System->Pfn.Pfn[MiSoftValue(Pte)]) & MI_PFN_FLAG_MODIFIED))
-                break;
+            if (!(MI_PFN_FLAGS(&System->Pfn.Pfn[MiSoftValue(Pte)]) & MI_PFN_FLAG_MODIFIED) &&
+                Page >= BridgeEnd)
+            {
+                ULONG64 Next;
+                ULONG64 End = (Last < RunPage + Limit) ? Last : RunPage + Limit;
+
+                if (Count == 0)
+                    break;
+                for (Next = Page + 1; Next < End; Next++)
+                {
+                    MI_PTE NextPte = MiArchPteRead(MiSegmentProto(Segment, Next));
+                    MI_SOFT_KIND NextKind = MiSoftKind(NextPte);
+
+                    if (NextKind != MiSoftResident && NextKind != MiSoftTransition)
+                        break;
+                    if (MI_PFN_FLAGS(&System->Pfn.Pfn[MiSoftValue(NextPte)]) & MI_PFN_FLAG_MODIFIED)
+                    {
+                        BridgeEnd = Next;
+                        break;
+                    }
+                }
+                if (Page >= BridgeEnd)
+                    break;
+            }
 
             WriteStatus = MiSegmentAcquirePage(Segment, Proto, TRUE, &Frame);
             if (!NT_SUCCESS(WriteStatus))
@@ -1802,8 +1825,12 @@ MiSegmentFlush(
             }
 
             FileOffset = MiSoftValue(System->Pfn.Pfn[Frame].OriginalPte) << MI_SECTOR_SHIFT;
-            if ((Count != 0 && FileOffset != RunOffset + Count * PAGE_SIZE) ||
-                !MiPfnClearModified(&System->Pfn, Frame))
+            if (Count != 0 && FileOffset != RunOffset + Count * PAGE_SIZE)
+            {
+                MiSegmentReleasePage(Segment, Proto, Frame);
+                break;
+            }
+            if (!MiPfnClearModified(&System->Pfn, Frame) && Count == 0)
             {
                 MiSegmentReleasePage(Segment, Proto, Frame);
                 break;
