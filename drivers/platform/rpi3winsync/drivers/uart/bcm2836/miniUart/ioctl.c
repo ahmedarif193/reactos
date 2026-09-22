@@ -1801,7 +1801,7 @@ SerialEvtIoInternalDeviceControl (
 
         // Override the default settings from allow user control to do not allow.
 
-        wakeSettings.UserControlOfWakeSettings = IdleDoNotAllowUserControl;
+        wakeSettings.UserControlOfWakeSettings = WakeDoNotAllowUserControl;
         status = WdfDeviceAssignSxWakeSettings(pDevExt->WdfDevice, &wakeSettings);
 
         if (!NT_SUCCESS(status)) {
@@ -1823,7 +1823,7 @@ SerialEvtIoInternalDeviceControl (
        // Disable wait-wake
 
        wakeSettings.Enabled = WdfFalse;
-       wakeSettings.UserControlOfWakeSettings = IdleDoNotAllowUserControl;
+       wakeSettings.UserControlOfWakeSettings = WakeDoNotAllowUserControl;
        status = WdfDeviceAssignSxWakeSettings(pDevExt->WdfDevice, &wakeSettings);
 
        if (!NT_SUCCESS(status)) {
@@ -1954,6 +1954,5 @@ SerialEvtIoInternalDeviceControl (
 
     return;
 }
-
 
 

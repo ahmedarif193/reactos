@@ -201,7 +201,7 @@ VOID RpiqMailboxDpc (
 
         RPIQ_REQUEST_CONTEXT* requestContextPtr = 
             RpiqGetRequestContext(nextRequest);
-        MAILBOX_HEADER* outputBufferPtr;
+        PVOID outputBufferPtr;
 
         status = WdfRequestRetrieveOutputBuffer(
             nextRequest,

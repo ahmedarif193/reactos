@@ -51,6 +51,7 @@ NTSTATUS VchiqAllocateFileObjContext (
     )
 {
     ULONG i;
+    PVOID context;
     WDF_OBJECT_ATTRIBUTES wdfObjectAttributes;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(
         &wdfObjectAttributes,
@@ -61,13 +62,15 @@ NTSTATUS VchiqAllocateFileObjContext (
     NTSTATUS status = WdfObjectAllocateContext(
         WdfFileObject,
         &wdfObjectAttributes,
-        VchiqFileContextPPtr);
+        &context);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_ERROR(
             "WdfObjectAllocateContext() failed %!STATUS!)",
             status);
         goto End;
     }
+
+    *VchiqFileContextPPtr = context;
 
     for (i = ARM_PORT_START; i < MAX_ARM_PORTS; i++) {
         if (InterlockedCompareExchangePointer((PVOID*)&DeviceContextPtr->ArmPortHandles[i],

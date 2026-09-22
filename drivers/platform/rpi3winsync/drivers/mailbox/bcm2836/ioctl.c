@@ -78,12 +78,13 @@ VOID RpiqProcessChannel (
     {
     case IOCTL_MAILBOX_VCHIQ:
         {
+            PVOID inputBuffer;
             ULONG* inputBufferPtr;
 
             status = WdfRequestRetrieveInputBuffer(
                 Request,
                 IOCTL_MAILBOX_VCHIQ_INPUT_BUFFER_SIZE,
-                &inputBufferPtr,
+                &inputBuffer,
                 &sizeInput);
             if (!NT_SUCCESS(status)) {
                 RPIQ_LOG_ERROR(
@@ -91,6 +92,8 @@ VOID RpiqProcessChannel (
                     status);
                 goto CompleteRequest;
             }
+
+            inputBufferPtr = inputBuffer;
 
             status = RpiqMailboxWrite(
                 deviceContextPtr,
@@ -111,13 +114,14 @@ VOID RpiqProcessChannel (
         }
     case IOCTL_MAILBOX_PROPERTY:
         {
+            PVOID inputBuffer;
+            PVOID outputBufferPtr;
             MAILBOX_HEADER* inputBufferPtr;
-            MAILBOX_HEADER* outputBufferPtr;
 
             status = WdfRequestRetrieveInputBuffer(
                 Request,
                 sizeof(*inputBufferPtr),
-                &inputBufferPtr,
+                &inputBuffer,
                 &sizeInput);
             if (!NT_SUCCESS(status)) {
                 RPIQ_LOG_ERROR(
@@ -125,6 +129,8 @@ VOID RpiqProcessChannel (
                     status);
                 goto CompleteRequest;
             }
+
+            inputBufferPtr = inputBuffer;
 
             if(inputBufferPtr->TotalBuffer != sizeInput) {
                 RPIQ_LOG_ERROR("Input buffer mismatch \n");

@@ -183,6 +183,7 @@ NTSTATUS RpiqMailboxProperty (
     PHYSICAL_ADDRESS lowAddress = { 0 };
     PHYSICAL_ADDRESS boundaryAddress = { 0 };
     PHYSICAL_ADDRESS addrProperty;
+    PVOID requestContext;
     RPIQ_REQUEST_CONTEXT* requestContextPtr;
 
     PAGED_CODE();
@@ -207,13 +208,15 @@ NTSTATUS RpiqMailboxProperty (
         status = WdfObjectAllocateContext(
             Request,
             &wdfObjectAttributes,
-            &requestContextPtr);
+            &requestContext);
         if (!NT_SUCCESS(status)) {
             RPIQ_LOG_WARNING(
                 "WdfObjectAllocateContext() failed %!STATUS!)",
                 status);
             goto End;
         }
+
+        requestContextPtr = requestContext;
     }
 
     // Firmware expects mailbox request to be in contiguous memory
