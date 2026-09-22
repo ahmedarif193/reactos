@@ -568,6 +568,35 @@ Vc4KmtCreateContext(
     return STATUS_SUCCESS;
 }
 
+static BOOL
+Vc4KmtIsOwnAdapter(
+    _In_ D3DKMT_HANDLE hAdapter)
+{
+    D3DKMT_QUERYADAPTERINFO Query;
+    D3DKMT_UMDFILENAMEINFO UmdName;
+    PCWSTR FileName;
+    PCWSTR Scan;
+
+    RtlZeroMemory(&UmdName, sizeof(UmdName));
+    UmdName.Version = KMTUMDVERSION_DX9;
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.hAdapter = hAdapter;
+    Query.Type = KMTQAITYPE_UMDRIVERNAME;
+    Query.pPrivateDriverData = &UmdName;
+    Query.PrivateDriverDataSize = sizeof(UmdName);
+    if (!NT_SUCCESS(D3DKMTQueryAdapterInfo(&Query)))
+        return FALSE;
+
+    UmdName.UmdFileName[ARRAYSIZE(UmdName.UmdFileName) - 1] = UNICODE_NULL;
+    FileName = UmdName.UmdFileName;
+    for (Scan = UmdName.UmdFileName; *Scan != UNICODE_NULL; Scan++)
+    {
+        if (*Scan == L'\\' || *Scan == L'/')
+            FileName = Scan + 1;
+    }
+    return lstrcmpiW(FileName, L"rpi5vc4um.dll") == 0;
+}
+
 NTSTATUS
 vc4kmt_open(
     _Outptr_ VC4KMT_DEVICE **DeviceOut)
@@ -601,6 +630,12 @@ vc4kmt_open(
         goto fail;
 
     Device->hAdapter = OpenAdapter.hAdapter;
+
+    if (!Vc4KmtIsOwnAdapter(Device->hAdapter))
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto fail;
+    }
 
     Status = Vc4KmtCreateDevice(Device->hAdapter, &Device->hDevice);
     if (!NT_SUCCESS(Status))
