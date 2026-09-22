@@ -578,6 +578,12 @@ typedef struct tagSBINFO
     SBDATA Vert;
 } SBINFO, *PSBINFO;
 
+#define SBINFO_SHIFT(Bar) ((Bar) == SB_VERT ? 2 : 0)
+#define SBINFO_GETFLAGS(psbi, Bar) (((psbi)->WSBflags >> SBINFO_SHIFT(Bar)) & ESB_DISABLE_BOTH)
+#define SBINFO_SETFLAGS(psbi, Bar, Flags) \
+    ((psbi)->WSBflags = ((psbi)->WSBflags & ~(ESB_DISABLE_BOTH << SBINFO_SHIFT(Bar))) | \
+                        (((Flags) & ESB_DISABLE_BOTH) << SBINFO_SHIFT(Bar)))
+
 typedef struct tagSBCALC
 {
     INT posMin;
