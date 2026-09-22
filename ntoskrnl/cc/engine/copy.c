@@ -26,15 +26,28 @@ CcCopyRange(
     {
         ULONG Chunk = (Length > CC_VIEW_SIZE) ? CC_VIEW_SIZE : (ULONG)Length;
         CC_VIEW_RANGE Range;
+        BOOLEAN Extending;
 
         Status = CcViewAcquire(Map, FileOffset, Chunk, &Range);
         if (!NT_SUCCESS(Status))
             break;
 
-        if (Map->Ops.MakeViewResident != NULL)
-            Status = Map->Ops.MakeViewResident(Map->Context, Range.Address, Range.Length);
-        else
-            Status = CcViewMakeResident(Map, &Range, FALSE);
+        Extending = ForWrite && Range.FileOffset + Range.Length > Map->ValidDataLength;
+        if (Extending &&
+            !Map->Ops.IsResident(Map->Context, Range.FileOffset, Range.Length))
+        {
+            Status = Map->Ops.MakeResident(Map->Context, Range.FileOffset, Range.Length, Map->ValidDataLength);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            if (Map->Ops.MakeViewResident != NULL)
+            {
+                if (!Extending)
+                    Status = Map->Ops.MakeViewResident(Map->Context, Range.Address, Range.Length);
+            }
+            else
+                Status = CcViewMakeResident(Map, &Range, FALSE);
+        }
         if (NT_SUCCESS(Status))
         {
             CC_RESOURCE_ACQUIRE_SHARED(&Range.View->IoResource);
@@ -77,7 +90,7 @@ CcPrefetchRange(
 
         if (!Map->Ops.IsResident(Map->Context, FileOffset, Chunk))
         {
-            Status = Map->Ops.MakeResident(Map->Context, FileOffset, Chunk, Map->ValidDataLength);
+            Status = Map->Ops.MakeResident(Map->Context, FileOffset, Chunk, ~0ULL);
             if (!NT_SUCCESS(Status))
                 return Status;
         }
