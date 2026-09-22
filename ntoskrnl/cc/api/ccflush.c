@@ -73,8 +73,6 @@ CcPurgeCacheSection(
     ULONG64 Bytes = (FileOffset != NULL && Length != 0) ? Length : 0;
     BOOLEAN Purged = TRUE;
 
-    UNREFERENCED_PARAMETER(Flags);
-
     if (NtMap != NULL)
     {
         ULONG64 End = (Bytes == 0) ? (ULONG64)-1 : Offset + Bytes;
@@ -88,6 +86,8 @@ CcPurgeCacheSection(
         CcDirtyDiscard(&NtMap->Map, Offset, (Bytes == 0) ? (ULONG64)-1 : Bytes);
         CcMapDetachViews(&NtMap->Map, Offset, (Bytes == 0) ? (ULONG64)-1 : Bytes);
         Purged = MiSegmentPurge(NtMap->Control->Segment, Offset, Bytes);
+        if (Purged && Offset == 0 && Bytes == 0 && (Flags & UNINITIALIZE_CACHE_MAPS))
+            NtMap->PurgeOnClose = TRUE;
         CcNtDereferenceMap(NtMap);
     }
     else

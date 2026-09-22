@@ -80,7 +80,7 @@ static
 NTSTATUS
 CcmmMakeResident(PVOID Context, ULONG64 Offset, ULONG Length, ULONG64 ValidDataLength)
 {
-    return MiSegmentMakeResident(((CCMM_FILE *)Context)->Segment, Offset, Length);
+    return MiSegmentMakeResidentBeyond(((CCMM_FILE *)Context)->Segment, Offset, Length, ValidDataLength);
 }
 
 static
@@ -257,6 +257,46 @@ CcmmRejectMove(PVOID Context, PVOID CacheAddress, ULONG64 FileOffset, ULONG Leng
 
     CHECK(MiSegmentIsResident(File->Segment, FileOffset, Length));
     return STATUS_UNEXPECTED_IO_ERROR;
+}
+
+static
+void
+CcmmExtendingCopy(void)
+{
+    TEST_WORLD World;
+    CCMM_FILE File;
+    CC_CACHE Cache;
+    PUCHAR Data = malloc(PAGE_SIZE);
+    PUCHAR Buffer = malloc(PAGE_SIZE);
+    ULONG i;
+
+    WorldCreate(&World, 256, 1, 100000);
+    WorldAttach(&World, 0, NULL);
+    CHECK(NT_SUCCESS(CcCacheInitialize(&Cache, CC_MIN_VIEWS, 1024)));
+    CcmmFileCreate(&File, &World, &Cache, 4 * PAGE_SIZE);
+    File.Map.ValidDataLength = PAGE_SIZE + 17;
+    memset(Data, 0x5A, PAGE_SIZE);
+    CHECK(NT_SUCCESS(CachedWrite(&File, 0, 2 * PAGE_SIZE + 7, Data, PAGE_SIZE - 14)));
+    CHECK(File.File.Reads == 0);
+    CHECK(NT_SUCCESS(CachedRead(&File, 0, 2 * PAGE_SIZE, Buffer, PAGE_SIZE)));
+    for (i = 0; i < PAGE_SIZE; i++)
+        CHECK(Buffer[i] == (i < 7 || i >= PAGE_SIZE - 7 ? 0 : 0x5A));
+    CHECK(NT_SUCCESS(CachedWrite(&File, 0, PAGE_SIZE + 31, Data, 1)));
+    CHECK(File.File.Reads == 1);
+    CHECK(NT_SUCCESS(CachedRead(&File, 0, PAGE_SIZE, Buffer, PAGE_SIZE)));
+    CHECK(memcmp(Buffer, File.File.Data + PAGE_SIZE, 17) == 0);
+    CHECK(Buffer[31] == 0x5A);
+    CHECK(NT_SUCCESS(CcPrefetchRange(&File.Map, 3 * PAGE_SIZE, PAGE_SIZE)));
+    CHECK(File.File.Reads == 2);
+    CHECK(NT_SUCCESS(CachedRead(&File, 0, 3 * PAGE_SIZE, Buffer, PAGE_SIZE)));
+    CHECK(memcmp(Buffer, File.File.Data + 3 * PAGE_SIZE, PAGE_SIZE) == 0);
+    CHECK(NT_SUCCESS(CcDirtyFlush(&File.Map, 0, 4 * PAGE_SIZE, ~0u, NULL)));
+    CcmmFileDestroy(&File);
+    CcCacheUninitialize(&Cache);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+    free(Buffer);
+    free(Data);
 }
 
 static
@@ -1225,20 +1265,118 @@ MiReferenceDataControlArea(PSECTION_OBJECT_POINTERS Pointers)
     return Control != NULL && MiSegmentTryReference(Control->Segment) ? Control : NULL;
 }
 
-PCC_NT_MAP
-CcNtReferenceMap(PSECTION_OBJECT_POINTERS Pointers)
+static
+void
+CcmmCachedReopen(BOOLEAN Purge)
 {
-    PCC_NT_MAP NtMap = Pointers->SharedCacheMap;
+    TEST_WORLD World;
+    CCMM_FILE File;
+    CC_CACHE Cache;
+    FILE_OBJECT Object = { .References = 1, .FsContext = &File };
+    MI_CONTROL_AREA Control;
+    PCC_NT_MAP NtMap = calloc(1, sizeof(*NtMap));
+    SECTION_OBJECT_POINTERS Pointers = { .DataSectionObject = &Control, .SharedCacheMap = NtMap };
+    UCHAR Data[PAGE_SIZE];
+    CCMM_MOVE Move = { &World, 0, Data, 0, FALSE };
+    ULONG Reads;
 
-    if (NtMap != NULL)
-        MI_ATOMIC_ADD32(&NtMap->ReferenceCount, 1);
-    return NtMap;
+    WorldCreate(&World, 256, 1, 10000);
+    World.System.UnusedSegmentLimit = 4;
+    WorldAttach(&World, 0, NULL);
+    CHECK(NT_SUCCESS(CcCacheInitialize(&Cache, CC_MIN_VIEWS, 1024)));
+    CcmmFileCreate(&File, &World, &Cache, sizeof(Data));
+    CHECK(CcMapUninitialize(&File.Map));
+    Control.Segment = File.Segment;
+    NtMap->Control = &Control;
+    NtMap->Pointers = &Pointers;
+    NtMap->FileObject = &Object;
+    NtMap->ReferenceCount = 1;
+    InsertTailList(&CcNtMapList, &NtMap->Link);
+    CcMapInitialize(&NtMap->Map, &Cache, &CcNtBackingOps, NtMap, sizeof(Data), sizeof(Data), sizeof(Data));
+    NtMap->Map.Ops.MakeViewResident = CcmmNtMakeViewResident;
+    NtMap->Map.OpenCount = 1;
+    CHECK(NT_SUCCESS(CcCopyRange(&NtMap->Map, 0, sizeof(Data), FALSE, CcmmMove, &Move, NULL)));
+    CHECK(memcmp(Data, File.File.Data, sizeof(Data)) == 0);
+    Reads = File.File.Reads;
+    NtMap->Map.OpenCount = 0;
+    CcNtDereferenceMap(NtMap);
+    CHECK(Pointers.SharedCacheMap == NtMap && Object.References == 1 && File.Released == 0);
+    CHECK(File.Segment->MappedViews == 1 && NtMap->ReferenceCount == 0);
+    CHECK(CcNtReferenceMap(&Pointers) == NtMap);
+    NtMap->Map.OpenCount = 1;
+    CcNtDereferenceMap(NtMap);
+    CcNtExpireClosedMaps();
+    CHECK(Pointers.SharedCacheMap == NtMap && File.Segment->MappedViews == 1);
+    CHECK(NT_SUCCESS(CcCopyRange(&NtMap->Map, 0, sizeof(Data), FALSE, CcmmMove, &Move, NULL)));
+    CHECK(memcmp(Data, File.File.Data, sizeof(Data)) == 0 && File.File.Reads == Reads);
+    CHECK(CcNtReferenceMap(&Pointers) == NtMap);
+    NtMap->Map.OpenCount = 0;
+    CcNtDereferenceMap(NtMap);
+    if (Purge)
+        CHECK(CcPurgeCacheSection(&Pointers, NULL, 0, UNINITIALIZE_CACHE_MAPS));
+    else
+        CcNtExpireClosedMaps();
+    CHECK(Pointers.SharedCacheMap == NULL && IsListEmpty(&CcNtMapList));
+    CHECK(Object.References == 0 && File.Released == Purge);
+    MiSegmentPurgeUnused(&World.System, ~0u);
+    CHECK(File.Released == 1);
+    CcCacheUninitialize(&Cache);
+    WorldExpectClean(&World, 256);
+    FileDestroy(&File.File);
+    WorldDestroy(&World);
 }
 
-VOID
-CcNtDereferenceMap(PCC_NT_MAP NtMap)
+static
+void
+CcmmPurgeCached(ULONG Flags, BOOLEAN Partial)
 {
-    CHECK(MI_ATOMIC_ADD32(&NtMap->ReferenceCount, -1) > 1);
+    TEST_WORLD World;
+    CCMM_FILE File;
+    CC_CACHE Cache;
+    FILE_OBJECT Object = { .References = 1, .FsContext = &File };
+    MI_CONTROL_AREA Control;
+    PCC_NT_MAP NtMap = calloc(1, sizeof(*NtMap));
+    SECTION_OBJECT_POINTERS Pointers = { .DataSectionObject = &Control, .SharedCacheMap = NtMap };
+    LARGE_INTEGER Offset = { .QuadPart = PAGE_SIZE };
+    UCHAR Data[2 * PAGE_SIZE];
+    CCMM_MOVE Move = { &World, 0, Data, 0, TRUE };
+    ULONG64 Base = 0, Size = PAGE_SIZE;
+    UCHAR Byte;
+    BOOLEAN Close = (BOOLEAN)(Flags != 0 && !Partial);
+
+    WorldCreate(&World, 256, 1, 10000);
+    World.System.UnusedSegmentLimit = 4;
+    WorldAttach(&World, 0, NULL);
+    CHECK(NT_SUCCESS(CcCacheInitialize(&Cache, CC_MIN_VIEWS, 1024)));
+    CcmmFileCreate(&File, &World, &Cache, sizeof(Data));
+    CHECK(CcMapUninitialize(&File.Map));
+    Control.Segment = File.Segment;
+    NtMap->Control = &Control;
+    NtMap->FileObject = &Object;
+    NtMap->ReferenceCount = 1;
+    CcMapInitialize(&NtMap->Map, &Cache, &CcNtBackingOps, NtMap, sizeof(Data), sizeof(Data), sizeof(Data));
+    NtMap->Map.Ops.MakeViewResident = CcmmNtMakeViewResident;
+    CHECK(NT_SUCCESS(MiMapView(&World.System.SystemSpace, File.Segment, &Base, 0, &Size, MI_PROT_READONLY, 0)));
+    CHECK(NT_SUCCESS(MachineAccessMemory(&World.Machine, 0, Base, &Byte, 1, MachineRead, FALSE)));
+    CHECK(!CcPurgeCacheSection(&Pointers, NULL, 0, UNINITIALIZE_CACHE_MAPS));
+    CHECK(!NtMap->PurgeOnClose);
+    CHECK(NT_SUCCESS(MiUnmapView(&World.System.SystemSpace, Base)));
+    memset(Data, 0xA7, sizeof(Data));
+    CHECK(NT_SUCCESS(CcCopyRange(&NtMap->Map, 0, sizeof(Data), TRUE, CcmmMove, &Move, NULL)));
+    CHECK(CcPurgeCacheSection(&Pointers, Partial ? &Offset : NULL, 0, Flags));
+    CHECK(NtMap->PurgeOnClose == Close);
+    CcNtDestroyMap(NtMap);
+    CHECK(Object.References == 0 && File.Released == Close);
+    CHECK(World.System.UnusedSegmentCount == !Close);
+    CHECK(File.File.Writes == Partial);
+    if (Partial)
+        CHECK(memcmp(File.File.Data, Data, PAGE_SIZE) == 0);
+    MiSegmentPurgeUnused(&World.System, ~0u);
+    CHECK(File.Released == 1);
+    CcCacheUninitialize(&Cache);
+    WorldExpectClean(&World, 256);
+    FileDestroy(&File.File);
+    WorldDestroy(&World);
 }
 
 static
@@ -1297,11 +1435,19 @@ TestCcOnMm(void)
 {
     ULONG i;
 
+    CC_LOCK_INIT(&CcNtMapListLock);
+    InitializeListHead(&CcNtMapList);
     CcmmFaultableCopy();
+    CcmmExtendingCopy();
     CcmmTruncation();
     CcmmNtCloseReclaim(FALSE);
     CcmmNtCloseReclaim(TRUE);
     CcmmPurgeWithoutCache();
+    CcmmPurgeCached(UNINITIALIZE_CACHE_MAPS, FALSE);
+    CcmmPurgeCached(UNINITIALIZE_CACHE_MAPS, TRUE);
+    CcmmPurgeCached(0, FALSE);
+    CcmmCachedReopen(FALSE);
+    CcmmCachedReopen(TRUE);
     CcmmBasic();
     CcmmGrow();
     CcmmNtClose(0, FALSE, FALSE);

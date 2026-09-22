@@ -20,8 +20,6 @@ typedef struct _CC_NT_DEFERRED_WRITE
 } CC_NT_DEFERRED_WRITE, *PCC_NT_DEFERRED_WRITE;
 
 CC_CACHE CcNtCache;
-KSPIN_LOCK CcNtMapListLock;
-LIST_ENTRY CcNtMapList;
 
 ULONG CcLazyWritePages;
 ULONG CcLazyWriteIos;
@@ -44,25 +42,6 @@ static KEVENT CcNtLazyPassEvent;
 static LIST_ENTRY CcNtDeferredWrites;
 static KSPIN_LOCK CcNtDeferredLock;
 static BOOLEAN CcNtReady;
-
-PCC_NT_MAP
-CcNtReferenceMap(
-    _In_ PSECTION_OBJECT_POINTERS Pointers)
-{
-    PCC_NT_MAP NtMap;
-    KIRQL OldIrql;
-
-    if (Pointers == NULL)
-        return NULL;
-
-    KeAcquireSpinLock(&CcNtMapListLock, &OldIrql);
-    NtMap = Pointers->SharedCacheMap;
-    if (NtMap != NULL)
-        InterlockedIncrement(&NtMap->ReferenceCount);
-    KeReleaseSpinLock(&CcNtMapListLock, OldIrql);
-
-    return NtMap;
-}
 
 NTSTATUS
 CcNtFlushMap(
@@ -106,30 +85,6 @@ CcNtFlushMap(
         *PagesFlushed = Flushed;
 
     return Status;
-}
-
-VOID
-CcNtDereferenceMap(
-    _Inout_ PCC_NT_MAP NtMap)
-{
-    BOOLEAN Destroy = FALSE;
-    KIRQL OldIrql;
-
-    KeAcquireSpinLock(&CcNtMapListLock, &OldIrql);
-
-    if (InterlockedDecrement(&NtMap->ReferenceCount) == 0 && NtMap->Map.OpenCount == 0)
-    {
-        if (NtMap->Pointers->SharedCacheMap == NtMap)
-            NtMap->Pointers->SharedCacheMap = NULL;
-
-        RemoveEntryList(&NtMap->Link);
-        Destroy = TRUE;
-    }
-
-    KeReleaseSpinLock(&CcNtMapListLock, OldIrql);
-
-    if (Destroy)
-        CcNtDestroyMap(NtMap);
 }
 
 VOID
@@ -212,14 +167,25 @@ CcNtNextDirtyMap(VOID)
     PCC_NT_MAP Found = NULL;
     PCC_MAP Map;
     KIRQL OldIrql;
+    ULONG Tries;
 
     KeAcquireSpinLock(&CcNtMapListLock, &OldIrql);
 
-    Map = CcDirtyNextMap(&CcNtCache);
-    if (Map != NULL)
+    for (Tries = 0; Tries < 16; Tries++)
     {
-        Found = CONTAINING_RECORD(Map, CC_NT_MAP, Map);
-        InterlockedIncrement(&Found->ReferenceCount);
+        PCC_NT_MAP Candidate;
+
+        Map = CcDirtyNextMap(&CcNtCache);
+        if (Map == NULL)
+            break;
+
+        Candidate = CONTAINING_RECORD(Map, CC_NT_MAP, Map);
+        if (!IsListEmpty(&Candidate->Link))
+        {
+            InterlockedIncrement(&Candidate->ReferenceCount);
+            Found = Candidate;
+            break;
+        }
     }
 
     KeReleaseSpinLock(&CcNtMapListLock, OldIrql);
@@ -292,6 +258,7 @@ CcNtLazyWriter(
         if (Target != 0)
             CcRosFlushDirtyPages(Target, NULL, TRUE, TRUE);
 
+        CcNtExpireClosedMaps();
         CcNtProcessDeferredWrites();
         KePulseEvent(&CcNtLazyPassEvent, IO_NO_INCREMENT, FALSE);
     }
@@ -360,6 +327,7 @@ CcShutdownSystem(VOID)
         if (Flushed == 0)
             break;
     }
+    CcNtExpireClosedMaps();
 }
 
 VOID
