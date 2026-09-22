@@ -428,7 +428,15 @@ BOOL CRegFolder::_IsInNameSpace(_In_ LPCITEMIDLIST pidl)
         return TRUE;
     if (IsEqualGUID(clsid, CLSID_NetworkConnections))
         return TRUE;
-    FIXME("Check registry\n");
+    for (size_t i = 0; i < GetRequiredItemsCount(); ++i)
+    {
+        if (IsEqualGUID(clsid, GetAt(i).clsid))
+            return TRUE;
+    }
+    HKEY hKey;
+    if (!HCR_RegOpenClassIDKey(clsid, &hKey))
+        return FALSE;
+    RegCloseKey(hKey);
     return TRUE;
 }
 
