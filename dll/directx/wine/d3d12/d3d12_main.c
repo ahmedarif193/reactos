@@ -29,3 +29,15 @@ D3D12EnableExperimentalFeatures(UINT FeatureCount, const IID *Iids, void *Config
 
     return E_NOINTERFACE;
 }
+
+HRESULT WINAPI
+D3D12GetInterface(REFCLSID clsid, REFIID iid, void **debug)
+{
+    if (debug)
+        *debug = NULL;
+
+    if (IsEqualGUID(clsid, &CLSID_D3D12Debug))
+        return D3D12GetDebugInterface(iid, debug);
+
+    return E_NOINTERFACE;
+}
