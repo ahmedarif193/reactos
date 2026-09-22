@@ -31,6 +31,7 @@ list(APPEND SOURCE
     PathProcessCommand.cpp
     PathResolve.cpp
     RealShellExecuteEx.cpp
+    RegItemParse.cpp
     SHAppBarMessage.cpp
     SHChangeNotify.cpp
     SHCreateDataObject.cpp
