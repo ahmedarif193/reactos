@@ -83,12 +83,40 @@ static LONG DwmDxPresentFailureLogged;
 
 typedef struct _WGL_ASYNC_PRESENT
 {
+    LIST_ENTRY Entry;
     HWND Window;
     HANDLE CompletionEvent;
     ULONGLONG UpdateId;
     DWORD Flags;
     RECT UpdateRect;
 } WGL_ASYNC_PRESENT, *PWGL_ASYNC_PRESENT;
+
+/*
+ * Publishing a presented frame means waiting for the ICD's completion event
+ * and then handing the surface to the compositor.  A thread-pool item per
+ * frame both cost a kernel event plus a dispatch on every SwapBuffers and
+ * left the publish order to the pool, which may run two frames' callbacks
+ * concurrently and hand the compositor an older update last.  One owning
+ * thread drains a FIFO instead, and its records keep their events, so a
+ * steady stream of frames allocates nothing and publishes strictly in order.
+ */
+#define WGL_PUBLISH_QUEUE_LIMIT 8
+#define WGL_PUBLISH_QUEUE_STALL_MS 5000
+
+typedef struct _WGL_PUBLISH_QUEUE
+{
+    CRITICAL_SECTION Lock;
+    LIST_ENTRY Pending;
+    LIST_ENTRY Spare;
+    HANDLE Wake;
+    HANDLE Slots;
+    HANDLE Thread;
+    HMODULE Module;
+    BOOL Usable;
+} WGL_PUBLISH_QUEUE;
+
+static WGL_PUBLISH_QUEUE DwmDxPublishQueue;
+static INIT_ONCE DwmDxPublishOnce = INIT_ONCE_STATIC_INIT;
 
 static VOID
 IntReportDwmDxPresentFailure(const char *Stage, HRESULT Result)
@@ -100,14 +128,14 @@ IntReportDwmDxPresentFailure(const char *Stage, HRESULT Result)
     }
 }
 
+/* Completes one record and keeps its event for the next frame. */
 static BOOL
-IntPublishDwmDxPresent(PWGL_ASYNC_PRESENT Present)
+IntPublishDwmDxPresentRecycle(PWGL_ASYNC_PRESENT Present)
 {
     HRESULT Result;
-    DWORD WaitResult;
+    BOOL Succeeded;
 
-    WaitResult = WaitForSingleObject(Present->CompletionEvent, INFINITE);
-    if (WaitResult != WAIT_OBJECT_0)
+    if (WaitForSingleObject(Present->CompletionEvent, INFINITE) != WAIT_OBJECT_0)
     {
         IntReportDwmDxPresentFailure("completion_wait",
                                      HRESULT_FROM_WIN32(GetLastError()));
@@ -123,7 +151,6 @@ IntPublishDwmDxPresent(PWGL_ASYNC_PRESENT Present)
         if (FAILED(Result))
             IntReportDwmDxPresentFailure("publish", Result);
     }
-
     if (FAILED(Result))
     {
         (void)DwmDxUpdateWindowSharedSurface(Present->Window,
@@ -132,16 +159,155 @@ IntPublishDwmDxPresent(PWGL_ASYNC_PRESENT Present)
                                              NULL,
                                              NULL);
     }
-    CloseHandle(Present->CompletionEvent);
-    HeapFree(GetProcessHeap(), 0, Present);
-    return SUCCEEDED(Result);
+    Succeeded = SUCCEEDED(Result);
+
+    EnterCriticalSection(&DwmDxPublishQueue.Lock);
+    InsertHeadList(&DwmDxPublishQueue.Spare, &Present->Entry);
+    LeaveCriticalSection(&DwmDxPublishQueue.Lock);
+    ReleaseSemaphore(DwmDxPublishQueue.Slots, 1, NULL);
+    return Succeeded;
 }
 
 static DWORD WINAPI
-IntPublishDwmDxPresentWorker(PVOID Parameter)
+IntPublishDwmDxQueueThread(PVOID Parameter)
 {
-    (void)IntPublishDwmDxPresent((PWGL_ASYNC_PRESENT)Parameter);
-    return 0;
+    (void)Parameter;
+    for (;;)
+    {
+        PWGL_ASYNC_PRESENT Present = NULL;
+        PLIST_ENTRY Entry;
+
+        EnterCriticalSection(&DwmDxPublishQueue.Lock);
+        if (!IsListEmpty(&DwmDxPublishQueue.Pending))
+        {
+            Entry = RemoveHeadList(&DwmDxPublishQueue.Pending);
+            Present = CONTAINING_RECORD(Entry, WGL_ASYNC_PRESENT, Entry);
+        }
+        LeaveCriticalSection(&DwmDxPublishQueue.Lock);
+
+        if (Present == NULL)
+        {
+            (void)WaitForSingleObject(DwmDxPublishQueue.Wake, INFINITE);
+            continue;
+        }
+        (void)IntPublishDwmDxPresentRecycle(Present);
+    }
+}
+
+static BOOL CALLBACK
+IntInitDwmDxPublishQueue(PINIT_ONCE Once, PVOID Parameter, PVOID *Context)
+{
+    DWORD ThreadId;
+
+    (void)Once; (void)Parameter; (void)Context;
+    InitializeListHead(&DwmDxPublishQueue.Pending);
+    InitializeListHead(&DwmDxPublishQueue.Spare);
+    if (!InitializeCriticalSectionAndSpinCount(&DwmDxPublishQueue.Lock, 4000))
+        return TRUE;
+    DwmDxPublishQueue.Wake = CreateEventW(NULL, FALSE, FALSE, NULL);
+    DwmDxPublishQueue.Slots = CreateSemaphoreW(NULL, WGL_PUBLISH_QUEUE_LIMIT,
+                                               WGL_PUBLISH_QUEUE_LIMIT, NULL);
+    if (DwmDxPublishQueue.Wake == NULL || DwmDxPublishQueue.Slots == NULL)
+        goto Failed;
+    /* The process-wide worker can outlive the application's last OpenGL
+     * context and FreeLibrary call. Keep its code and queue storage loaded
+     * for its lifetime, including when it is asleep with no pending frames. */
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                            (LPCWSTR)IntPublishDwmDxQueueThread,
+                            &DwmDxPublishQueue.Module))
+        goto Failed;
+    DwmDxPublishQueue.Thread = CreateThread(NULL, 0, IntPublishDwmDxQueueThread,
+                                            NULL, 0, &ThreadId);
+    if (DwmDxPublishQueue.Thread == NULL)
+        goto Failed;
+    DwmDxPublishQueue.Usable = TRUE;
+    return TRUE;
+
+Failed:
+    if (DwmDxPublishQueue.Module != NULL)
+        FreeLibrary(DwmDxPublishQueue.Module);
+    DwmDxPublishQueue.Module = NULL;
+    if (DwmDxPublishQueue.Wake != NULL)
+        CloseHandle(DwmDxPublishQueue.Wake);
+    if (DwmDxPublishQueue.Slots != NULL)
+        CloseHandle(DwmDxPublishQueue.Slots);
+    DwmDxPublishQueue.Wake = NULL;
+    DwmDxPublishQueue.Slots = NULL;
+    DeleteCriticalSection(&DwmDxPublishQueue.Lock);
+    return TRUE;
+}
+
+/*
+ * Hands back a record whose completion event is already created and reset.
+ * Returns NULL when the queue is unusable or already holds the frames the
+ * compositor has yet to consume, so the caller publishes inline and the
+ * producer feels the backpressure instead of growing this list.
+ */
+static VOID IntReleaseDwmDxPublishRecord(PWGL_ASYNC_PRESENT Present);
+
+static PWGL_ASYNC_PRESENT
+IntAcquireDwmDxPublishRecord(void)
+{
+    PWGL_ASYNC_PRESENT Present = NULL;
+    PLIST_ENTRY Entry;
+
+    (void)InitOnceExecuteOnce(&DwmDxPublishOnce, IntInitDwmDxPublishQueue,
+                              NULL, NULL);
+    if (!DwmDxPublishQueue.Usable)
+        return NULL;
+
+    /* Waiting here throttles the producer to the frames the compositor can
+     * still take. Publishing inline instead would overtake everything this
+     * queue already holds. */
+    if (WaitForSingleObject(DwmDxPublishQueue.Slots,
+                            WGL_PUBLISH_QUEUE_STALL_MS) != WAIT_OBJECT_0)
+        return NULL;
+
+    EnterCriticalSection(&DwmDxPublishQueue.Lock);
+    if (!IsListEmpty(&DwmDxPublishQueue.Spare))
+    {
+        Entry = RemoveHeadList(&DwmDxPublishQueue.Spare);
+        Present = CONTAINING_RECORD(Entry, WGL_ASYNC_PRESENT, Entry);
+    }
+    LeaveCriticalSection(&DwmDxPublishQueue.Lock);
+
+    if (Present != NULL)
+    {
+        if (ResetEvent(Present->CompletionEvent))
+            return Present;
+        IntReleaseDwmDxPublishRecord(Present);
+        return NULL;
+    }
+
+    Present = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Present));
+    if (Present != NULL)
+    {
+        Present->CompletionEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (Present->CompletionEvent != NULL)
+            return Present;
+        HeapFree(GetProcessHeap(), 0, Present);
+    }
+    ReleaseSemaphore(DwmDxPublishQueue.Slots, 1, NULL);
+    return NULL;
+}
+
+static VOID
+IntReleaseDwmDxPublishRecord(PWGL_ASYNC_PRESENT Present)
+{
+    EnterCriticalSection(&DwmDxPublishQueue.Lock);
+    InsertHeadList(&DwmDxPublishQueue.Spare, &Present->Entry);
+    LeaveCriticalSection(&DwmDxPublishQueue.Lock);
+    ReleaseSemaphore(DwmDxPublishQueue.Slots, 1, NULL);
+}
+
+/* Publishes in submission order behind whatever this queue already holds. */
+static VOID
+IntQueueDwmDxPublishRecord(PWGL_ASYNC_PRESENT Present)
+{
+    EnterCriticalSection(&DwmDxPublishQueue.Lock);
+    InsertTailList(&DwmDxPublishQueue.Pending, &Present->Entry);
+    LeaveCriticalSection(&DwmDxPublishQueue.Lock);
+    SetEvent(DwmDxPublishQueue.Wake);
 }
 
 static NTSTATUS
@@ -491,26 +657,23 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     PresentData.PrivateData = CallbackData->PrivateData;
     if (CallbackData->Version >= 3 && IcdData->DrvPresentBuffers2 != NULL)
     {
-        AsyncPresent = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                                 sizeof(*AsyncPresent));
-        if (AsyncPresent == NULL)
+        /* NULL only means this frame publishes inline, which is correct but
+         * slower; it is not a presentation failure. */
+        AsyncPresent = IntAcquireDwmDxPublishRecord();
+        if (AsyncPresent == NULL && DwmDxPublishQueue.Usable)
         {
-            IntReportDwmDxPresentFailure("completion_alloc", E_OUTOFMEMORY);
+            /* The queue is alive but has not drained. Dropping this frame
+             * keeps the published order intact; an inline publish would not. */
+            IntReportDwmDxPresentFailure("publish_congested", E_PENDING);
             goto Cancel;
         }
-        AsyncPresent->CompletionEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
-        if (AsyncPresent->CompletionEvent == NULL)
+        if (AsyncPresent != NULL)
         {
-            IntReportDwmDxPresentFailure("completion_event",
-                                         HRESULT_FROM_WIN32(GetLastError()));
-            HeapFree(GetProcessHeap(), 0, AsyncPresent);
-            AsyncPresent = NULL;
-            goto Cancel;
+            AsyncPresent->Window = Window;
+            AsyncPresent->UpdateId = UpdateId;
+            AsyncPresent->Flags = CallbackData->SyncType;
+            AsyncPresent->UpdateRect = UpdateRect;
         }
-        AsyncPresent->Window = Window;
-        AsyncPresent->UpdateId = UpdateId;
-        AsyncPresent->Flags = CallbackData->SyncType;
-        AsyncPresent->UpdateRect = UpdateRect;
     }
 
     if (AsyncPresent != NULL)
@@ -536,11 +699,7 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     }
     if (AsyncPresent != NULL)
     {
-        if (!QueueUserWorkItem(IntPublishDwmDxPresentWorker, AsyncPresent,
-                               WT_EXECUTELONGFUNCTION))
-        {
-            return IntPublishDwmDxPresent(AsyncPresent);
-        }
+        IntQueueDwmDxPublishRecord(AsyncPresent);
         return TRUE;
     }
 
@@ -555,12 +714,9 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     IntReportDwmDxPresentFailure("publish", Result);
 
 Cancel:
+    /* The record never reached the queue, so its event stays for reuse. */
     if (AsyncPresent != NULL)
-    {
-        if (AsyncPresent->CompletionEvent != NULL)
-            CloseHandle(AsyncPresent->CompletionEvent);
-        HeapFree(GetProcessHeap(), 0, AsyncPresent);
-    }
+        IntReleaseDwmDxPublishRecord(AsyncPresent);
     (void)DwmDxUpdateWindowSharedSurface(Window,
                                          UpdateId,
                                          DWM_DX_UPDATE_CANCEL,
