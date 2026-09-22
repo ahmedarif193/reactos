@@ -253,7 +253,7 @@ CcBcbMakeResident(
 
         if (!Map->Ops.IsResident(Map->Context, Offset, Chunk))
         {
-            Status = Map->Ops.MakeResident(Map->Context, Offset, Chunk, Map->ValidDataLength);
+            Status = Map->Ops.MakeResident(Map->Context, Offset, Chunk, ~0ULL);
             if (!NT_SUCCESS(Status))
                 return Status;
         }

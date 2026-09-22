@@ -743,6 +743,7 @@ NTSTATUS
 MiSegmentMaterialize(
     _Inout_ PMI_SEGMENT Segment,
     _Inout_ PMI_PTE Proto,
+    _In_ ULONG64 ZeroFrom,
     _Out_ PULONG FrameOut)
 {
     PMI_SYSTEM System = Segment->System;
@@ -752,15 +753,18 @@ MiSegmentMaterialize(
     MI_PTE Original = Pte;
     PVOID Mapping;
     ULONG Frame;
+    BOOLEAN Zero;
 
     if (Kind != MiSoftSubsection && Kind != MiSoftDemandZero && Kind != MiSoftPageFile)
         return STATUS_ACCESS_VIOLATION;
 
-    Frame = MiPfnAllocatePage(&System->Pfn, (Kind == MiSoftDemandZero) ? MI_ALLOCATE_ZEROED : 0);
+    Zero = (BOOLEAN)(Kind == MiSoftDemandZero ||
+                     (Kind == MiSoftSubsection && (MiSoftValue(Pte) << MI_SECTOR_SHIFT) >= ZeroFrom));
+    Frame = MiPfnAllocatePage(&System->Pfn, Zero ? MI_ALLOCATE_ZEROED : 0);
     if (Frame == MI_FRAME_INVALID)
         return STATUS_NO_MEMORY;
 
-    if (Kind == MiSoftSubsection)
+    if (Kind == MiSoftSubsection && !Zero)
     {
         ULONG64 Offset = MiSoftValue(Pte) << MI_SECTOR_SHIFT;
         ULONG Bytes = MiSegmentPageBytes(Segment, Offset);
@@ -842,7 +846,7 @@ MiSegmentAcquirePage(
                 if (!AllowIo && (MiSoftKind(Pte) == MiSoftSubsection || MiSoftKind(Pte) == MiSoftPageFile))
                     return STATUS_PENDING_PAGE_IN;
 
-                return MiSegmentMaterialize(Segment, Proto, FrameOut);
+                return MiSegmentMaterialize(Segment, Proto, ~0ULL, FrameOut);
         }
     }
 }
@@ -2095,6 +2099,16 @@ MiSegmentMakeResident(
     _In_ ULONG64 Offset,
     _In_ ULONG64 Length)
 {
+    return MiSegmentMakeResidentBeyond(Segment, Offset, Length, ~0ULL);
+}
+
+NTSTATUS
+MiSegmentMakeResidentBeyond(
+    _Inout_ PMI_SEGMENT Segment,
+    _In_ ULONG64 Offset,
+    _In_ ULONG64 Length,
+    _In_ ULONG64 ValidDataLength)
+{
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG64 Last;
     ULONG64 Page;
@@ -2115,7 +2129,7 @@ MiSegmentMakeResident(
         if (Kind == MiSoftResident || Kind == MiSoftTransition || Pte == 0)
             continue;
 
-        Status = MiSegmentMaterialize(Segment, Proto, &Frame);
+        Status = MiSegmentMaterialize(Segment, Proto, ValidDataLength, &Frame);
         if (NT_SUCCESS(Status))
             MiSegmentReleasePage(Segment, Proto, Frame);
     }

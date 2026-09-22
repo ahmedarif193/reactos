@@ -412,6 +412,8 @@ NTSTATUS MiSegmentFlush(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ U
 BOOLEAN MiSegmentPurge(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
 BOOLEAN MiSegmentIsResident(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
 NTSTATUS MiSegmentMakeResident(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
+NTSTATUS MiSegmentMakeResidentBeyond(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length,
+                                     _In_ ULONG64 ValidDataLength);
 NTSTATUS MiSegmentPrefetch(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
 VOID MiSegmentDrainReads(_Inout_ PMI_SEGMENT Segment, _Inout_ PMI_ASYNC_DRAIN Drain);
 NTSTATUS MiSegmentMarkDirty(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);

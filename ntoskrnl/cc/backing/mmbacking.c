@@ -76,11 +76,9 @@ CcMmMakeResident(
     ULONG Attempts = 0;
     NTSTATUS Status;
 
-    UNREFERENCED_PARAMETER(ValidDataLength);
-
     do
     {
-        Status = MiSegmentMakeResident(NtMap->Control->Segment, Offset, Length);
+        Status = MiSegmentMakeResidentBeyond(NtMap->Control->Segment, Offset, Length, ValidDataLength);
     } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
 
     return Status;

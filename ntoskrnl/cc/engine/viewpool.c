@@ -486,7 +486,7 @@ CcViewMakeResident(
     if (SkipRead || Map->Ops.IsResident(Map->Context, Range->FileOffset, Range->Length))
         return STATUS_SUCCESS;
 
-    return Map->Ops.MakeResident(Map->Context, Range->FileOffset, Range->Length, Map->ValidDataLength);
+    return Map->Ops.MakeResident(Map->Context, Range->FileOffset, Range->Length, ~0ULL);
 }
 
 BOOLEAN
