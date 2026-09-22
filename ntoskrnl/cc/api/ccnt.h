@@ -33,6 +33,7 @@ typedef struct _CC_NT_MAP
     volatile LONG ReferenceCount;
     BOOLEAN PinAccess;
     BOOLEAN Closing;
+    BOOLEAN PurgeOnClose;
     LARGE_INTEGER AllocationSize;
     PVOID LogHandle;
     PFLUSH_TO_LSN FlushToLsn;
@@ -72,6 +73,9 @@ extern CC_CACHE CcNtCache;
 extern CC_BACKING_OPS CcNtBackingOps;
 extern KSPIN_LOCK CcNtMapListLock;
 extern LIST_ENTRY CcNtMapList;
+
+VOID CcNtMapListBarrier(VOID);
+VOID CcNtExpireClosedMaps(VOID);
 
 PCC_NT_MAP CcNtReferenceMap(_In_ PSECTION_OBJECT_POINTERS Pointers);
 VOID CcNtDereferenceMap(_Inout_ PCC_NT_MAP NtMap);

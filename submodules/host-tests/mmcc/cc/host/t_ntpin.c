@@ -81,6 +81,11 @@ KeDelayExecutionThread(ULONG Mode, BOOLEAN Alertable, PLARGE_INTEGER Interval)
     CC_ASSERT(FALSE);
 }
 
+VOID
+CcNtMapListBarrier(VOID)
+{
+}
+
 NTSTATUS
 MiPagingIo(PFILE_OBJECT File, ULONG64 Offset, ULONG Length, PVOID Buffer, BOOLEAN Write, PULONG Transferred)
 {
