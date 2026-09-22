@@ -73,10 +73,6 @@ target_include_directories(vkd3d
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d
         ${CMAKE_CURRENT_BINARY_DIR})
 
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(vkd3d PRIVATE -Wno-format-overflow)
-endif()
-
 add_library(vkd3d_shader INTERFACE)
 target_link_libraries(vkd3d_shader INTERFACE vkd3d)
 

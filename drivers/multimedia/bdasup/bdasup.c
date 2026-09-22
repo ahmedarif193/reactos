@@ -304,7 +304,8 @@ BdaCreateFilterFactoryEx(
         if (FilterDescriptor->AutomationTable != &FilterAutomationTable)
         {
             /* add the item to filter object bag */
-            KsAddItemToObjectBag(FilterFactory->Bag, (PVOID)FilterDescriptor->AutomationTable, FreeFilterInstance);
+            if (!NT_SUCCESS(KsAddItemToObjectBag(FilterFactory->Bag, (PVOID)FilterDescriptor->AutomationTable, FreeFilterInstance)))
+                DPRINT1("KsAddItemToObjectBag failed for automation table %p\n", FilterDescriptor->AutomationTable);
         }
         else
         {
@@ -315,7 +316,8 @@ BdaCreateFilterFactoryEx(
             ASSERT(Status == STATUS_SUCCESS);
 
             /* add to object bag */
-            KsAddItemToObjectBag(FilterFactory->Bag, (PVOID)FilterDescriptor->AutomationTable, FreeFilterInstance);
+            if (!NT_SUCCESS(KsAddItemToObjectBag(FilterFactory->Bag, (PVOID)FilterDescriptor->AutomationTable, FreeFilterInstance)))
+                DPRINT1("KsAddItemToObjectBag failed for automation table %p\n", FilterDescriptor->AutomationTable);
         }
 
         /* initialize filter instance entry */

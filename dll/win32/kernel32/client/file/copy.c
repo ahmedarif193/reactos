@@ -324,7 +324,7 @@ CopyFileExW(IN LPCWSTR lpExistingFileName,
             IN LPBOOL pbCancel OPTIONAL,
             IN DWORD dwCopyFlags)
 {
-    BOOL Ret;
+    BOOL Ret = FALSE;
     HANDLE ExistingHandle, NewHandle;
 
     ExistingHandle = INVALID_HANDLE_VALUE;
@@ -389,7 +389,7 @@ PrivCopyFileExW(IN LPCWSTR lpExistingFileName,
                 IN LPBOOL pbCancel,
                 IN DWORD dwCopyFlags)
 {
-    BOOL Ret;
+    BOOL Ret = FALSE;
     HANDLE ExistingHandle, NewHandle;
 
     ExistingHandle = INVALID_HANDLE_VALUE;

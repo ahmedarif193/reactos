@@ -798,7 +798,7 @@ DxgkpQueryChildConnectionForEnumeration(
 {
     PDXGKDDI_QUERY_CHILD_STATUS QueryChildStatus;
     DXGK_CHILD_STATUS ChildStatus;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     *ConnectionKnown = FALSE;
     *Connected = FALSE;

@@ -257,7 +257,7 @@ static FCRET
 ParseLines(const FILECOMPARE *pFC, HANDLE *phMapping,
            LARGE_INTEGER *pib, const LARGE_INTEGER *pcb, struct list *list)
 {
-    DWORD lineno = 1, ich, cch, ichNext, cbView, cchNode;
+    DWORD lineno = 1, ich, cch, ichNext = 0, cbView, cchNode;
     LPTSTR psz, pszLine;
     BOOL fLast, bCR;
     NODE *node;

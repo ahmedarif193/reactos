@@ -1189,9 +1189,11 @@ Fdo_EnumerateCodec(
     // response to InvalidateDeviceRelations call made as part of adding
     // a new child.
     //
-    WdfChildListAddOrUpdateChildDescriptionAsPresent(
+    if (!NT_SUCCESS(WdfChildListAddOrUpdateChildDescriptionAsPresent(
         WdfFdoGetDefaultChildList(fdoCtx->WdfDevice), &description.Header,
-        NULL); // AddressDescription
+        NULL))) { // AddressDescription
+        SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_PNP, "WdfChildListAddOrUpdateChildDescriptionAsPresent failed\n");
+    }
 }
 
 NTSTATUS
@@ -1221,7 +1223,7 @@ Fdo_EvtDeviceSelfManagedIoInit(
     }
 
     if (fdoCtx->mlcap) {
-        IoRegisterPlugPlayNotification(
+        if (!NT_SUCCESS(IoRegisterPlugPlayNotification(
             EventCategoryDeviceInterfaceChange,
             PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES,
             (PVOID)&GUID_DEVINTERFACE_GRAPHICSPOWER,
@@ -1229,7 +1231,10 @@ Fdo_EvtDeviceSelfManagedIoInit(
             HDAGraphicsPowerInterfaceCallback,
             (PVOID)fdoCtx,
             &fdoCtx->GraphicsNotificationHandle
-        );
+        ))) {
+            fdoCtx->GraphicsNotificationHandle = NULL;
+            SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_PNP, "IoRegisterPlugPlayNotification failed\n");
+        }
 
     }
 #endif

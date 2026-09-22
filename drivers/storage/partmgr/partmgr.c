@@ -1212,7 +1212,8 @@ FdoHandleRemoveDevice(
 
     if (FdoExtension->DiskInterfaceName.Buffer)
     {
-        IoSetDeviceInterfaceState(&FdoExtension->DiskInterfaceName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&FdoExtension->DiskInterfaceName, FALSE)))
+            ERR("IoSetDeviceInterfaceState(%wZ) failed\n", &FdoExtension->DiskInterfaceName);
         RtlFreeUnicodeString(&FdoExtension->DiskInterfaceName);
         RtlInitUnicodeString(&FdoExtension->DiskInterfaceName, NULL);
     }

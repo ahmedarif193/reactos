@@ -61,7 +61,7 @@ Return Value:
 --*/
 
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIRP_CONTEXT IrpContext = NULL;
 
     BOOLEAN TopLevel;

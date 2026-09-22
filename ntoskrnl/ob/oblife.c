@@ -1736,10 +1736,10 @@ NtQueryObject(IN HANDLE ObjectHandle,
     POBJECT_BASIC_INFORMATION BasicInfo;
     ULONG InfoLength = 0;
     PVOID Object = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     POBJECT_HEADER_QUOTA_INFO ObjectQuota;
     SECURITY_INFORMATION SecurityInformation;
-    POBJECT_TYPE ObjectType;
+    POBJECT_TYPE ObjectType = NULL;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PAGED_CODE();
 

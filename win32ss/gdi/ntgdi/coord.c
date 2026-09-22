@@ -263,7 +263,7 @@ NtGdiCombineTransform(
     LPXFORM Unsafexform1,
     LPXFORM Unsafexform2)
 {
-    BOOL Ret;
+    BOOL Ret = FALSE;
 
     _SEH2_TRY
     {

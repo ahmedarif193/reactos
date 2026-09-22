@@ -151,7 +151,7 @@ public:
         VOID
         )
     {
-        (void) ProcessEvent(SelfManagedIoEventFlush);
+        (void)!ProcessEvent(SelfManagedIoEventFlush);
     }
 
     VOID
@@ -159,7 +159,7 @@ public:
         VOID
         )
     {
-        (void) ProcessEvent(SelfManagedIoEventCleanup);
+        (void)!ProcessEvent(SelfManagedIoEventCleanup);
     }
 
 protected:

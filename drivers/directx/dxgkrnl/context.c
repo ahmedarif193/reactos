@@ -2734,7 +2734,7 @@ DxgkCreateCddContext(
 {
     DXGKARG_GETNODEMETADATA Metadata;
     D3DKMT_CREATECONTEXTVIRTUAL VirtualContext;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
     if (Adapter == NULL || CreateContext == NULL || PsGetCurrentProcess() != PsInitialSystemProcess)

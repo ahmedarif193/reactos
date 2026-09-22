@@ -221,7 +221,7 @@ KiSystemCallHandler(
     /* Check for win32k system calls */
     if (TableIndex == WIN32K_SERVICE_INDEX)
     {
-        ULONG GdiBatchCount;
+        ULONG GdiBatchCount = 0;
 
         /* Read the GDI batch count from the TEB */
         _SEH2_TRY

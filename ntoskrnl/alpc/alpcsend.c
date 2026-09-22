@@ -820,7 +820,7 @@ NtAlpcCancelMessage(
     NTSTATUS Status;
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
     PALPC_PORT Port, QueuePort;
-    ALPC_CONTEXT_ATTR Context;
+    ALPC_CONTEXT_ATTR Context = {0};
     ALPC_CONTEXT_ATTR32 Context32;
     PKALPC_MESSAGE Message = NULL;
     PLIST_ENTRY Entry;

@@ -6124,7 +6124,7 @@ __ClassInterpretSenseInfo_ProcessingInvalidSenseBuffer:
                         logErrorInternal = FALSE;
                         logError = FALSE;
                     } else if (cdbOpcode == SCSIOP_MODE_SENSE10) {
-                        USHORT allocationLength;
+                        USHORT allocationLength = 0;
                         REVERSE_BYTES_SHORT(&(cdb->MODE_SENSE10.AllocationLength), &allocationLength);
                         if (SrbGetDataTransferLength(Srb) <= allocationLength) {
                             *Status = STATUS_SUCCESS;
@@ -6132,7 +6132,7 @@ __ClassInterpretSenseInfo_ProcessingInvalidSenseBuffer:
                             logError = FALSE;
                         }
                     } else if (ClasspIsReceiveTokenInformation(cdb)) {
-                        ULONG allocationLength;
+                        ULONG allocationLength = 0;
                         REVERSE_BYTES(&(cdb->RECEIVE_TOKEN_INFORMATION.AllocationLength), &allocationLength);
                         if (SrbGetDataTransferLength(Srb) <= allocationLength) {
                             *Status = STATUS_SUCCESS;
@@ -10374,7 +10374,8 @@ ClassRemoveDevice(
      *  then delete it now.
      */
     if (commonExtension->MountedDeviceInterfaceName.Buffer){
-        (VOID)IoSetDeviceInterfaceState(&commonExtension->MountedDeviceInterfaceName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&commonExtension->MountedDeviceInterfaceName, FALSE)))
+            TracePrint((TRACE_LEVEL_WARNING, TRACE_FLAG_PNP, "IoSetDeviceInterfaceState(%wZ) failed\n", &commonExtension->MountedDeviceInterfaceName));
         RtlFreeUnicodeString(&commonExtension->MountedDeviceInterfaceName);
         RtlInitUnicodeString(&commonExtension->MountedDeviceInterfaceName, NULL);
     }

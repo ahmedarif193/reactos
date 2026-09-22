@@ -1363,7 +1363,7 @@ NtAcceptConnectPort(
     NTSTATUS Status;
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
     PORT_MESSAGE Header;
-    ULONG ConnectionInfoLength;
+    ULONG ConnectionInfoLength = 0;
     PALPC_PORT ConnectionPort, ServerPort = NULL;
     PKALPC_MESSAGE Message;
     PEPROCESS ClientProcess;

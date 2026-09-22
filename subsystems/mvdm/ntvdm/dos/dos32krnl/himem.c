@@ -253,10 +253,10 @@ static UCHAR XmsAlloc(WORD Size, PWORD Handle)
         RunSize = RtlFindNextForwardRunClear(&AllocBitmap, CurrentIndex, &RunStart);
         if (RunSize == 0) break;
 
-        if (RunSize >= HandleEntry->Size)
+        if (RunSize >= Size)
         {
             /* Allocate it here */
-            HandleEntry->Handle = i + 1;
+            HandleEntry->Handle = *Handle;
             HandleEntry->LockCount = 0;
             HandleEntry->Size = Size;
             HandleEntry->Address = XMS_ADDRESS + RunStart * XMS_BLOCK_SIZE;
@@ -560,7 +560,7 @@ static VOID WINAPI XmsBopProcedure(LPWORD Stack)
         /* Allocate Extended Memory Block */
         case 0x09:
         {
-            WORD Handle;
+            WORD Handle = 0;
             UCHAR Result = XmsAlloc(getDX(), &Handle);
 
             if (Result == XMS_STATUS_SUCCESS)

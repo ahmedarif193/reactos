@@ -45,7 +45,6 @@ target_compile_options(e1000e PRIVATE
     -Wno-unused-function
     -Wno-unused-variable
     -Wno-unused-but-set-variable
-    -Wno-address
     -Wno-enum-compare)
 
 target_link_libraries(e1000e wdmguid)

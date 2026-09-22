@@ -409,7 +409,7 @@ UDFCleanUpFcbChain(
     PUDF_FILE_INFO ParentFI;
     UDFNTRequiredFCB* NtReqFcb;
     ULONG CleanCode;
-    LONG RefCount, ComRefCount;
+    LONG RefCount = 0, ComRefCount = 0;
     BOOLEAN Delete = FALSE;
     ULONG          ret_val = 0;
 
@@ -925,7 +925,7 @@ UDFCloseAllXXXDelayedInDir(
     ULONG                   PassedListSize = 0;
     PUDF_FILE_INFO*         FoundList = NULL;
     ULONG                   FoundListSize = 0;
-    NTSTATUS                RC;
+    NTSTATUS                RC = STATUS_UNSUCCESSFUL;
     ULONG                   i;
     _SEH2_VOLATILE BOOLEAN  ResAcq = FALSE;
     _SEH2_VOLATILE BOOLEAN  AcquiredVcb = FALSE;

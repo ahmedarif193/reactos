@@ -88,7 +88,7 @@ AddPrintProvidorA(PSTR pName, DWORD Level, PBYTE pProviderInfo)
 BOOL WINAPI
 AddPrintProvidorW(PWSTR pName, DWORD Level, PBYTE pProviderInfo)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     WINSPOOL_PROVIDOR_CONTAINER ProvidorContainer;
 
     TRACE("AddPrintProvidorW(%S, %lu, %p)\n", pName, Level, pProviderInfo);
@@ -141,7 +141,7 @@ DeletePrintProvidorA(PSTR pName, PSTR pEnvironment, PSTR pPrintProviderName)
 BOOL WINAPI
 DeletePrintProvidorW(PWSTR pName, PWSTR pEnvironment, PWSTR pPrintProviderName)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
 
     TRACE("DeletePrintProvidorW(%S, %S, %S)\n", pName, pEnvironment, pPrintProviderName);
 

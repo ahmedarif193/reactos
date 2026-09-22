@@ -367,6 +367,16 @@ MmProbeAndLockPages(
   _In_ KPROCESSOR_MODE AccessMode,
   _In_ LOCK_OPERATION Operation);
 
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+MmProbeAndLockSelectedPages(
+  _Inout_ PMDL MemoryDescriptorList,
+  _In_ PFILE_SEGMENT_ELEMENT SegmentArray,
+  _In_ KPROCESSOR_MODE AccessMode,
+  _In_ LOCK_OPERATION Operation);
+
 NTKERNELAPI
 MM_SYSTEMSIZE
 NTAPI

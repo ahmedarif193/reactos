@@ -1994,7 +1994,7 @@ NdisMDeregisterAdapterShutdownHandler(
   NDIS_DbgPrint(DEBUG_MINIPORT, ("Called.\n"));
 
   if(Adapter->BugcheckContext->ShutdownHandler) {
-    KeDeregisterBugCheckCallback(Adapter->BugcheckContext->CallbackRecord);
+    NT_VERIFY(KeDeregisterBugCheckCallback(Adapter->BugcheckContext->CallbackRecord));
     IoUnregisterShutdownNotification(Adapter->NdisMiniportBlock.DeviceObject);
   }
 }
@@ -2204,8 +2204,8 @@ NdisMRegisterAdapterShutdownHandler(
 
   KeInitializeCallbackRecord(BugcheckContext->CallbackRecord);
 
-  KeRegisterBugCheckCallback(BugcheckContext->CallbackRecord, NdisIBugcheckCallback,
-      BugcheckContext, sizeof(*BugcheckContext), (PUCHAR)"Ndis Miniport");
+  NT_VERIFY(KeRegisterBugCheckCallback(BugcheckContext->CallbackRecord, NdisIBugcheckCallback,
+      BugcheckContext, sizeof(*BugcheckContext), (PUCHAR)"Ndis Miniport"));
 
   IoRegisterShutdownNotification(Adapter->NdisMiniportBlock.DeviceObject);
 }
@@ -2654,7 +2654,8 @@ NdisIPnPStartDevice(
   Adapter->NdisMiniportBlock.OldPnPDeviceState = Adapter->NdisMiniportBlock.PnPDeviceState;
   Adapter->NdisMiniportBlock.PnPDeviceState = NdisPnPDeviceStarted;
 
-  IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, TRUE);
+  if (!NT_SUCCESS(IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, TRUE)))
+      NDIS_DbgPrint(MIN_TRACE, ("IoSetDeviceInterfaceState(%wZ) failed\n", &Adapter->NdisMiniportBlock.SymbolicLinkName));
 
   MiniStartHangTimer(Adapter);
 
@@ -2709,7 +2710,8 @@ NdisIPnPStopDevice(
 
   (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler)(Adapter);
 
-  IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, FALSE);
+  if (!NT_SUCCESS(IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, FALSE)))
+      NDIS_DbgPrint(MIN_TRACE, ("IoSetDeviceInterfaceState(%wZ) failed\n", &Adapter->NdisMiniportBlock.SymbolicLinkName));
 
   if (Adapter->NdisMiniportBlock.AllocatedResources)
     {
@@ -2824,7 +2826,8 @@ NdisIPnPRemoveDevice(
 
     if (Adapter->NdisMiniportBlock.SymbolicLinkName.Buffer)
     {
-        IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, FALSE)))
+            NDIS_DbgPrint(MIN_TRACE, ("IoSetDeviceInterfaceState(%wZ) failed\n", &Adapter->NdisMiniportBlock.SymbolicLinkName));
         RtlFreeUnicodeString(&Adapter->NdisMiniportBlock.SymbolicLinkName);
     }
 

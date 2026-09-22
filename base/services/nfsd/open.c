@@ -481,7 +481,7 @@ static int handle_open(nfs41_upcall *upcall)
 {
     int status = 0;
     open_upcall_args *args = &upcall->args.open;
-    nfs41_open_state *state;
+    nfs41_open_state *state = NULL;
     nfs41_file_info info = { 0 };
 
     status = create_open_state(args->path, args->open_owner_id, &state);

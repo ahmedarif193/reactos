@@ -2589,13 +2589,13 @@ UDFCreateFile__(
 {
     uint32 l, d;
     uint_di i, j;
-    OSSTATUS status;
+    OSSTATUS status = STATUS_UNSUCCESSFUL;
     LONG_AD FEicb;
     UDF_DIR_SCAN_CONTEXT ScanContext;
     PDIR_INDEX_HDR hDirNdx = DirInfo->Dloc->DirIndex;
     PDIR_INDEX_ITEM DirNdx;
     uint32 LBS = Vcb->LBlockSize;
-    PUDF_FILE_INFO FileInfo;
+    PUDF_FILE_INFO FileInfo = NULL;
     *_FileInfo = NULL;
     BOOLEAN undel = FALSE;
     SIZE_T ReadBytes;
@@ -3868,7 +3868,7 @@ UDFFlushFE(
     )
 {
     int8* NewAllocDescs;
-    OSSTATUS status;
+    OSSTATUS status = STATUS_UNSUCCESSFUL;
     SIZE_T WrittenBytes;
     uint16 AllocMode;
     uint32 lba;
@@ -4591,7 +4591,7 @@ UDFReadTagged(
     uint16 *Ident
     )
 {
-    OSSTATUS RC;
+    OSSTATUS RC = STATUS_UNSUCCESSFUL;
     tag* PTag = (tag*)Buf;
 //    icbtag* Icb = (icbtag*)(Buf+1);
     uint8 checksum;

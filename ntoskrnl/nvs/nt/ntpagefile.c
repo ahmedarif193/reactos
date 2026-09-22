@@ -82,13 +82,13 @@ NtCreatePagingFile(
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     MI_PAGEFILE_OPS Ops = { MiPageFileRead, MiPageFileWrite };
     FILE_END_OF_FILE_INFORMATION EndOfFile;
-    LARGE_INTEGER SafeMinimum, SafeMaximum, AllocationSize;
+    LARGE_INTEGER SafeMinimum = {0}, SafeMaximum = {0}, AllocationSize;
     OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING CapturedName;
     PMI_NT_PAGEFILE PagingFile;
     IO_STATUS_BLOCK IoStatus;
     NTSTATUS Status;
-    PWSTR Buffer;
+    PWSTR Buffer = NULL;
 
     UNREFERENCED_PARAMETER(Reserved);
     PAGED_CODE();

@@ -8181,7 +8181,7 @@ DxgkpCreateAllocationCaptured(
             }
             else if (DxgkAllocInfo.PrivateDriverDataSize >= sizeof(UINT))
             {
-                UINT Size;
+                UINT Size = 0;
 
                 _SEH2_TRY
                 {

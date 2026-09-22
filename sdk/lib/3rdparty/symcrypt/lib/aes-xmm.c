@@ -383,7 +383,7 @@ SymCryptAesEcbEncryptXmm(
     _Out_writes_( cbData )                      PBYTE                       pbDst,
                                                 SIZE_T                      cbData )
 {
-    __m128i c0, c1, c2, c3, c4, c5, c6, c7;
+    __m128i c0, c1 = _mm_setzero_si128(), c2 = _mm_setzero_si128(), c3 = _mm_setzero_si128(), c4 = _mm_setzero_si128(), c5 = _mm_setzero_si128(), c6 = _mm_setzero_si128(), c7 = _mm_setzero_si128();
 
     while( cbData >= 8 * SYMCRYPT_AES_BLOCK_SIZE )
     {
@@ -543,8 +543,8 @@ SymCryptAesCbcDecryptXmm(
                                                 SIZE_T                      cbData )
 {
     __m128i chain;
-    __m128i c0, c1, c2, c3, c4, c5, c6, c7;
-    __m128i d0, d1, d2, d3, d4, d5, d6, d7;
+    __m128i c0, c1 = _mm_setzero_si128(), c2 = _mm_setzero_si128(), c3 = _mm_setzero_si128(), c4 = _mm_setzero_si128(), c5 = _mm_setzero_si128(), c6 = _mm_setzero_si128(), c7 = _mm_setzero_si128();
+    __m128i d0, d1 = _mm_setzero_si128(), d2 = _mm_setzero_si128(), d3 = _mm_setzero_si128(), d4 = _mm_setzero_si128(), d5 = _mm_setzero_si128(), d6 = _mm_setzero_si128(), d7 = _mm_setzero_si128();
 
     if( cbData < SYMCRYPT_AES_BLOCK_SIZE )
     {

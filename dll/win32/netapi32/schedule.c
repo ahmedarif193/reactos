@@ -78,7 +78,7 @@ NetScheduleJobAdd(
     LPBYTE Buffer,
     LPDWORD JobId)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetScheduleJobAdd(%s, %p, %p)\n", debugstr_w(ServerName),
           Buffer, JobId);
@@ -106,7 +106,7 @@ NetScheduleJobDel(
     DWORD MinJobId,
     DWORD MaxJobId)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetScheduleJobDel(%s, %d, %d)\n", debugstr_w(ServerName),
           MinJobId, MaxJobId);
@@ -138,7 +138,7 @@ NetScheduleJobEnum(
     LPDWORD ResumeHandle)
 {
     AT_ENUM_CONTAINER EnumContainer;
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetScheduleJobEnum(%s, %p, %d, %p, %p, %p)\n", debugstr_w(ServerName),
           PointerToBuffer, PreferredMaximumLength, EntriesRead, TotalEntries, ResumeHandle);
@@ -176,7 +176,7 @@ NetScheduleJobGetInfo(
     DWORD JobId,
     LPBYTE *PointerToBuffer)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetScheduleJobGetInfo(%s, %d, %p)\n", debugstr_w(ServerName),
           JobId, PointerToBuffer);

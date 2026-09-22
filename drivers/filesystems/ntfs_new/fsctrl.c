@@ -575,7 +575,7 @@ NtfsGetRetrievalPointers(
     _Inout_ PIRP Irp,
     _In_ PIO_STACK_LOCATION IrpSp)
 {
-    STARTING_VCN_INPUT_BUFFER Input;
+    STARTING_VCN_INPUT_BUFFER Input = {0};
     PRETRIEVAL_POINTERS_BUFFER Output;
     PNtfsRetrievalExtent Extents = NULL;
     PFILE_OBJECT FileObject;
@@ -762,7 +762,7 @@ NtfsGetVolumeBitmap(
     _Inout_ PIRP Irp,
     _In_ PIO_STACK_LOCATION IrpSp)
 {
-    STARTING_LCN_INPUT_BUFFER Input;
+    STARTING_LCN_INPUT_BUFFER Input = {0};
     PVOLUME_BITMAP_BUFFER Output;
     PVolumeContextBlock VolCB;
     PUCHAR Bitmap = NULL;

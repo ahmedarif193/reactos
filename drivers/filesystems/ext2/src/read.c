@@ -862,12 +862,12 @@ Ext2ReadComplete (IN PEXT2_IRP_CONTEXT IrpContext)
 NTSTATUS
 Ext2Read (IN PEXT2_IRP_CONTEXT IrpContext)
 {
-    NTSTATUS            Status;
+    NTSTATUS            Status = STATUS_UNSUCCESSFUL;
     PEXT2_VCB           Vcb;
     PEXT2_FCBVCB        FcbOrVcb;
     PDEVICE_OBJECT      DeviceObject;
     PFILE_OBJECT        FileObject;
-    BOOLEAN             bCompleteRequest;
+    BOOLEAN             bCompleteRequest = FALSE;
 
     ASSERT(IrpContext);
 

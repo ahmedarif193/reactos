@@ -627,7 +627,7 @@ NtUserEnumDisplaySettings(
     UNICODE_STRING ustrDevice;
     WCHAR awcDevice[CCHDEVICENAME];
     NTSTATUS Status;
-    ULONG cbSize, cbExtra;
+    ULONG cbSize = 0, cbExtra = 0;
     DEVMODEW dmReg, *pdm;
 
     TRACE("Enter NtUserEnumDisplaySettings(%wZ, %lu, %p, 0x%lx)\n",

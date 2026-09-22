@@ -260,7 +260,7 @@ Return Value:
     PVOID PreviousTopLevel;
 #endif
 
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
 #if DBG
 

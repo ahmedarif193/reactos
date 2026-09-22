@@ -1970,7 +1970,7 @@ RxCreateSrvOpen(
     IN OUT PFCB Fcb)
 {
     ULONG Flags;
-    PSRV_OPEN SrvOpen;
+    PSRV_OPEN SrvOpen = NULL;
     POOL_TYPE PoolType;
 
     PAGED_CODE();
@@ -3484,7 +3484,7 @@ RxFindOrConstructVirtualNetRoot(
     while (TRUE)
     {
         PNET_ROOT NetRoot;
-        PV_NET_ROOT SavedVNetRoot;
+        PV_NET_ROOT SavedVNetRoot = NULL;
 
         /* Look in prefix table */
         Container = RxPrefixTableLookupName(RxDeviceObject->pRxNetNameTable, CanonicalName, RemainingName, &ConnectionID);
@@ -5251,7 +5251,7 @@ RxLockUserBuffer(
     IN LOCK_OPERATION Operation,
     IN ULONG BufferLength)
 {
-    PIRP Irp;
+    PIRP Irp = NULL;
     PMDL Mdl = NULL;
 
     PAGED_CODE();

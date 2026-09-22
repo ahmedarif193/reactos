@@ -749,7 +749,7 @@ NtUserSetInformationThread(IN HANDLE ThreadHandle,
 
         case UserThreadEndShutdown:
         {
-            NTSTATUS ShutdownStatus;
+            NTSTATUS ShutdownStatus = STATUS_UNSUCCESSFUL;
 
             TRACE("Shutdown ended\n");
 
@@ -779,7 +779,7 @@ NtUserSetInformationThread(IN HANDLE ThreadHandle,
 
         case UserThreadCsrApiPort:
         {
-            HANDLE CsrPortHandle;
+            HANDLE CsrPortHandle = NULL;
 
 
             TRACE("Set CSR API Port for Win32k\n");

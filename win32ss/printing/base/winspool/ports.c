@@ -451,7 +451,7 @@ AddPortA(PSTR pName, HWND hWnd, PSTR pMonitorName)
 BOOL WINAPI
 AddPortExW(PWSTR pName, DWORD Level, PBYTE lpBuffer, PWSTR lpMonitorName)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     WINSPOOL_PORT_CONTAINER PortInfoContainer;
     WINSPOOL_PORT_VAR_CONTAINER PortVarContainer;
     WINSPOOL_PORT_INFO_FF *pPortInfoFF;
@@ -917,7 +917,7 @@ cleanup:
 BOOL WINAPI
 EnumPortsW(PWSTR pName, DWORD Level, PBYTE pPorts, DWORD cbBuf, PDWORD pcbNeeded, PDWORD pcReturned)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
 
     TRACE("EnumPortsW(%S, %lu, %p, %lu, %p, %p)\n", pName, Level, pPorts, cbBuf, pcbNeeded, pcReturned);
 
@@ -1008,7 +1008,7 @@ SetPortA(PSTR pName, PSTR pPortName, DWORD dwLevel, PBYTE pPortInfo)
 BOOL WINAPI
 SetPortW(PWSTR pName, PWSTR pPortName, DWORD dwLevel, PBYTE pPortInfo)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
     WINSPOOL_PORT_CONTAINER PortInfoContainer;
 
     TRACE("SetPortW(%S, %S, %lu, %p)\n", pName, pPortName, dwLevel, pPortInfo);

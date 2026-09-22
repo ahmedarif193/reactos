@@ -172,7 +172,7 @@ private:
         m_CurRefHistory(0),
         m_OwningObject(Owner)
     {
-        RtlZeroMemory(m_TagHistory, sizeof(m_TagHistory));
+        RtlZeroMemory((PVOID)m_TagHistory, sizeof(m_TagHistory));
 
         //
         // We keep handle reference trackers in a list,

@@ -368,9 +368,9 @@ static int get_ea_list(
     OUT PFILE_GET_EA_INFORMATION *ealist_out,
     OUT uint32_t *eaindex_out)
 {
-    unsigned char *entry_list;
+    unsigned char *entry_list = NULL;
     PFILE_GET_EA_INFORMATION ea_list;
-    uint32_t entry_len, ea_size;
+    uint32_t entry_len = 0, ea_size;
     int status = NO_ERROR;
 
     EnterCriticalSection(&state->ea.lock);

@@ -209,7 +209,7 @@ Routine Description:
         // Ignore the return status because QueueRequest will complete the
         // request on it own if it fails to queue request.
         //
-        (VOID) QueueRequest(ReservedRequest);
+        (VOID)!QueueRequest(ReservedRequest);
     }
     else {
         PutBackReservedRequest(ReservedRequest);

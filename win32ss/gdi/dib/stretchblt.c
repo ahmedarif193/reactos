@@ -56,20 +56,20 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
   LONG DstWidth;
   LONG SrcHeight;
   LONG SrcWidth;
-  LONG MaskCy;
-  LONG SourceCy;
+  LONG MaskCy = 0;
+  LONG SourceCy = 0;
 
   ULONG Color;
   ULONG Dest, Source = 0, Pattern = 0;
   ULONG Color00, Color01, Color10, Color11;
-  ULONG FractionX, FractionY;
+  ULONG FractionX, FractionY = 0;
   ULONG xxBPPMask;
   BOOLEAN CanDraw;
   BOOLEAN UseHalftone;
   BOOLEAN UseDirect32Bpp;
   ULONGLONG StepX, StepY;
-  ULONGLONG SourceFixedX, SourceFixedY;
-  LONG sx1, sy1;
+  ULONGLONG SourceFixedX = 0, SourceFixedY;
+  LONG sx1, sy1 = 0;
   PBYTE SourceBits = NULL;
   PBYTE DestBits = NULL;
   LONG SourceDelta = 0;

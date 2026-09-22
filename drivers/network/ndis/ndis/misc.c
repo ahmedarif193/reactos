@@ -226,7 +226,7 @@ NdisOpenFile(
   PNDIS_HANDLE_OBJECT FileHandleObject = NULL;
   IO_STATUS_BLOCK IoStatusBlock;
   FILE_STANDARD_INFORMATION StandardInfo;
-  UINT NtFileLength;
+  UINT NtFileLength = 0;
   NTSTATUS NtStatus;
 
   ASSERT_IRQL(PASSIVE_LEVEL);

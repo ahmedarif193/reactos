@@ -3824,7 +3824,7 @@ static const IImageList2Vtbl ImageListImpl_Vtbl = {
 
 static BOOL is_valid(HIMAGELIST himl)
 {
-    BOOL valid;
+    BOOL valid = FALSE;
     __TRY
     {
         valid = himl && himl->magic == IMAGELIST_MAGIC;

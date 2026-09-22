@@ -74,7 +74,7 @@ AlpcpCaptureAttributes(
     _In_ KPROCESSOR_MODE PreviousMode,
     _Out_ PALPC_MESSAGE_ATTRIBUTES *Captured)
 {
-    ALPC_MESSAGE_ATTRIBUTES Header;
+    ALPC_MESSAGE_ATTRIBUTES Header = {0};
     PALPC_MESSAGE_ATTRIBUTES Buffer;
     ULONG Size;
 
@@ -1197,7 +1197,7 @@ NtAlpcCreateSectionView(
     PALPC_PORT Port;
     PKALPC_SECTION Section;
     PKALPC_VIEW View;
-    ALPC_DATA_VIEW_ATTR Captured;
+    ALPC_DATA_VIEW_ATTR Captured = {0};
     SIZE_T ViewSize;
 
     PAGED_CODE();
@@ -1368,7 +1368,7 @@ NtAlpcCreateSecurityContext(
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
     PALPC_PORT Port;
     PKALPC_SECURITY_DATA Data;
-    ALPC_SECURITY_ATTR Captured;
+    ALPC_SECURITY_ATTR Captured = {0};
     SECURITY_QUALITY_OF_SERVICE Qos;
 
     PAGED_CODE();

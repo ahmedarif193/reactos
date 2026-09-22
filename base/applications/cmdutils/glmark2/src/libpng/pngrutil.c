@@ -272,13 +272,14 @@ png_inflate(png_structp png_ptr, const png_byte *data, png_size_t size,
        */
       {
          PNG_CONST char *msg;
+#if defined(PNG_STDIO_SUPPORTED) && !defined(_WIN32_WCE)
+         char umsg[52];
+#endif
          if (png_ptr->zstream.msg != 0)
             msg = png_ptr->zstream.msg;
          else
          {
 #if defined(PNG_STDIO_SUPPORTED) && !defined(_WIN32_WCE)
-            char umsg[52];
-
             switch (ret)
             {
                case Z_BUF_ERROR:

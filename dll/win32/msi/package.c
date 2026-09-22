@@ -2136,7 +2136,7 @@ UINT msi_set_property( MSIDATABASE *db, const WCHAR *name, const WCHAR *value, i
 UINT WINAPI MsiSetPropertyW( MSIHANDLE hInstall, LPCWSTR szName, LPCWSTR szValue)
 {
     MSIPACKAGE *package;
-    UINT ret;
+    UINT ret = 0;
 
     package = msihandle2msiinfo( hInstall, MSIHANDLETYPE_PACKAGE);
     if( !package )
@@ -2304,7 +2304,7 @@ UINT WINAPI MsiGetPropertyA(MSIHANDLE hinst, const char *name, char *buf, DWORD 
     MSIRECORD *row;
     WCHAR *nameW;
     int len = 0;
-    UINT r;
+    UINT r = 0;
 
     if (!name)
         return ERROR_INVALID_PARAMETER;
@@ -2375,7 +2375,7 @@ UINT WINAPI MsiGetPropertyW(MSIHANDLE hinst, const WCHAR *name, WCHAR *buf, DWOR
     MSIPACKAGE *package;
     MSIRECORD *row;
     int len = 0;
-    UINT r;
+    UINT r = 0;
 
     if (!name)
         return ERROR_INVALID_PARAMETER;

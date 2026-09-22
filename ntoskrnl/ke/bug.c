@@ -857,8 +857,8 @@ KiCaptureBugCheckBackTrace(
     _Out_writes_(MaximumFrames) PULONG_PTR Frames,
     _In_ ULONG MaximumFrames)
 {
-    ULONG_PTR StackLow;
-    ULONG_PTR StackHigh;
+    ULONG_PTR StackLow = 0;
+    ULONG_PTR StackHigh = 0;
     ULONG_PTR Frame;
     ULONG_PTR NextFrame;
     ULONG_PTR ReturnAddress;

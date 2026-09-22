@@ -108,7 +108,7 @@ IntProtectHandle( HANDLE hSpooler, BOOL Close )
 {
     BOOL Bad = TRUE;
     LONG Ret;
-    PSPOOLER_HANDLE pHandle;
+    PSPOOLER_HANDLE pHandle = NULL;
 
     EnterCriticalSection(&rtlCritSec);
 

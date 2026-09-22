@@ -96,7 +96,7 @@ CMainWindow::~CMainWindow()
 VOID
 CMainWindow::InitCategoriesList()
 {
-    HTREEITEM hRootItemAvailable;
+    HTREEITEM hRootItemAvailable = NULL;
 
     hRootItemInstalled = m_TreeView->AddCategory(TVI_ROOT, IDS_INSTALLED, IDI_CATEGORY);
     m_TreeView->AddCategory(hRootItemInstalled, IDS_APPLICATIONS, IDI_APPS);

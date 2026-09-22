@@ -2445,7 +2445,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
                     IN OUT PPS_CREATE_INFO CreateInfo,
                     IN OUT PPS_ATTRIBUTE_LIST AttributeList OPTIONAL)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     HANDLE hProcess = NULL, hThread = NULL;
     HANDLE hSection = NULL, hFile = NULL;
@@ -2465,8 +2465,8 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     PCLIENT_ID ClientIdPtr = NULL;
     PTEB *TebAddressPtr = NULL;
     PSECTION_IMAGE_INFORMATION ImageInfoPtr = NULL;
-    PS_CREATE_INFO CapturedCreateInfo;
-    SIZE_T AttributeCount, i;
+    PS_CREATE_INFO CapturedCreateInfo = {0};
+    SIZE_T AttributeCount = 0, i;
     SECTION_IMAGE_INFORMATION ImageInformation;
     PEPROCESS Process = NULL;
     CLIENT_ID ClientId;

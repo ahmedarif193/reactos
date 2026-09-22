@@ -416,7 +416,7 @@ GetUserPrivileges(
     _Out_ PDWORD AuthFlags)
 {
     PGROUP_MEMBERSHIP GroupMembership = NULL;
-    ULONG GroupCount, SidCount, AliasCount, i;
+    ULONG GroupCount, SidCount = 0, AliasCount, i;
     PSID *SidArray = NULL;
     PULONG AliasArray = NULL;
     BOOL bAdmin = FALSE, bUser = FALSE;

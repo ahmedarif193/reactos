@@ -953,8 +953,8 @@ SoftGpuDpcRoutine(
     ULONGLONG                    ElapsedUs;
     LONG                         TraceSeq;
     SOFTGPU_SUBMIT               Submit;
-    SOFTGPU_SUBMIT               FaultedSubmit;
-    SOFTGPU_EXECUTION_RESULT     FaultResult;
+    SOFTGPU_SUBMIT               FaultedSubmit = {0};
+    SOFTGPU_EXECUTION_RESULT     FaultResult = {0};
     ULONG                        HeadIndex;
     BOOLEAN                      HaveSubmit;
     BOOLEAN                      HaveCompletion = FALSE;

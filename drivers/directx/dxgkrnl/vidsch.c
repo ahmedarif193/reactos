@@ -4317,7 +4317,7 @@ VidSchPreemptEngine(
     DXGKARG_PREEMPTCOMMAND PreemptArgs;
     KIRQL CallIrql;
     KIRQL OldIrql;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;

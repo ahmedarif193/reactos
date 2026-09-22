@@ -357,7 +357,7 @@ SepCaptureAcl(
     _Out_ PACL *CapturedAcl)
 {
     PACL NewAcl;
-    ULONG AclSize;
+    ULONG AclSize = 0;
 
     PAGED_CODE();
 

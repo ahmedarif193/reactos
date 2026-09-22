@@ -2232,7 +2232,7 @@ NdisCloseAdapterEx(
         if (Ext != NULL)
         {
             KIRQL AdapterIrql;
-            KIRQL DriverIrql;
+            KIRQL DriverIrql = PASSIVE_LEVEL;
 
             KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &AdapterIrql);
             if (Block != NULL)

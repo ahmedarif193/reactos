@@ -112,7 +112,7 @@ NtUserConsoleControl(
 
         case ConsoleMakePalettePublic:
         {
-            HPALETTE hPalette;
+            HPALETTE hPalette = NULL;
 
             if (ConsoleCtrlInfoLength != sizeof(hPalette))
             {

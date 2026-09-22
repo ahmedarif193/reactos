@@ -1299,8 +1299,8 @@ SepAccessCheckWorker(
     _Out_ PNTSTATUS AccessStatusList)
 {
     ACCESS_MASK RemainingAccess;
-    ACCESS_MASK WantedRights;
-    ACCESS_MASK MaskDesired;
+    ACCESS_MASK WantedRights = 0;
+    ACCESS_MASK MaskDesired = 0;
     ACCESS_MASK GrantedRights = 0;
     ULONG ResultListIndex;
     ULONG ObjectTypeIndex;
@@ -1991,7 +1991,7 @@ SepAccessCheck(
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     ACCESS_MASK PreviouslyGrantedAccess = 0;
     PPRIVILEGE_SET Privileges = NULL;
-    ULONG CapturedPrivilegeSetLength, RequiredPrivilegeSetLength;
+    ULONG CapturedPrivilegeSetLength = 0, RequiredPrivilegeSetLength;
     ULONG ResultListIndex;
     PTOKEN Token;
     NTSTATUS Status;

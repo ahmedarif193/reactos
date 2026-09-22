@@ -950,22 +950,28 @@ MouHid_StartDevice(
     DeviceExtension->PreparsedData = PreparsedData;
 
     ValueCapsLength = 1;
-    HidP_GetSpecificValueCaps(HidP_Input,
-                              HID_USAGE_PAGE_GENERIC,
-                              HIDP_LINK_COLLECTION_UNSPECIFIED,
-                              HID_USAGE_GENERIC_X,
-                              &DeviceExtension->ValueCapsX,
-                              &ValueCapsLength,
-                              PreparsedData);
+    if (HidP_GetSpecificValueCaps(HidP_Input,
+                                  HID_USAGE_PAGE_GENERIC,
+                                  HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                  HID_USAGE_GENERIC_X,
+                                  &DeviceExtension->ValueCapsX,
+                                  &ValueCapsLength,
+                                  PreparsedData) != HIDP_STATUS_SUCCESS)
+    {
+        RtlZeroMemory(&DeviceExtension->ValueCapsX, sizeof(DeviceExtension->ValueCapsX));
+    }
 
     ValueCapsLength = 1;
-    HidP_GetSpecificValueCaps(HidP_Input,
-                              HID_USAGE_PAGE_GENERIC,
-                              HIDP_LINK_COLLECTION_UNSPECIFIED,
-                              HID_USAGE_GENERIC_Y,
-                              &DeviceExtension->ValueCapsY,
-                              &ValueCapsLength,
-                              PreparsedData);
+    if (HidP_GetSpecificValueCaps(HidP_Input,
+                                  HID_USAGE_PAGE_GENERIC,
+                                  HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                  HID_USAGE_GENERIC_Y,
+                                  &DeviceExtension->ValueCapsY,
+                                  &ValueCapsLength,
+                                  PreparsedData) != HIDP_STATUS_SUCCESS)
+    {
+        RtlZeroMemory(&DeviceExtension->ValueCapsY, sizeof(DeviceExtension->ValueCapsY));
+    }
 
     /* now check for wheel mouse support */
     ValueCapsLength = 1;

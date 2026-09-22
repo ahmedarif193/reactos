@@ -2261,7 +2261,7 @@ IntGdiAddFontResourceEx(
     _In_ DWORD dwFlags)
 {
     PWSTR pchFile = FileName->Buffer;
-    SIZE_T cchFile;
+    SIZE_T cchFile = 0;
     INT ret = 0;
 
     if (cFiles == 2)
@@ -2480,7 +2480,7 @@ IntGdiRemoveFontResource(
     _In_ DWORD dwFlags)
 {
     PWSTR pchFile = FileName->Buffer;
-    SIZE_T cchFile;
+    SIZE_T cchFile = 0;
 
     while (cFiles--)
     {
@@ -2641,9 +2641,11 @@ IntLoadFontsInRegistry(VOID)
 
         if (NT_SUCCESS(Status))
         {
-            RtlCreateUnicodeString(&FileNameW, szPath);
-            nFontCount += IntGdiAddFontResourceEx(&FileNameW, 1, 0, dwFlags);
-            RtlFreeUnicodeString(&FileNameW);
+            if (RtlCreateUnicodeString(&FileNameW, szPath))
+            {
+                nFontCount += IntGdiAddFontResourceEx(&FileNameW, 1, 0, dwFlags);
+                RtlFreeUnicodeString(&FileNameW);
+            }
         }
 
         RtlFreeUnicodeString(&FontTitleW);
@@ -5643,7 +5645,7 @@ ftGdiGetTextCharsetInfo(
     FONTSIGNATURE fs;
     TT_OS2 *pOS2;
     FT_Face Face;
-    CHARSETINFO csi;
+    CHARSETINFO csi = {0};
     DWORD cp, fs0;
     USHORT usACP, usOEM;
 
@@ -6752,7 +6754,7 @@ IntGdiGetFontResourceInfo(
     ULONG Size, i, Count;
     LPBYTE pbBuffer;
     BOOL IsEqual, bFirst;
-    FONTFAMILYINFO *FamInfo;
+    FONTFAMILYINFO *FamInfo = NULL;
     PUNICODE_STRING FullNames = NULL;
     const ULONG MaxFamInfo = 64;
     const ULONG MAX_FAM_INFO_BYTES = sizeof(FONTFAMILYINFO) * MaxFamInfo;
@@ -7458,7 +7460,7 @@ IntExtTextOutW(
     INT glyph_index, i;
     FT_Face face;
     FT_BitmapGlyph realglyph;
-    LONGLONG X64, Y64, RealXStart64, RealYStart64, DeltaX64, DeltaY64;
+    LONGLONG X64, Y64, RealXStart64, RealYStart64, DeltaX64 = 0, DeltaY64 = 0;
     ULONG previous;
     RECTL DestRect, MaskRect;
     HBITMAP hbmGlyph;
@@ -8324,7 +8326,7 @@ GreGetCharWidthW(
     UINT i, glyph_index;
     HFONT hFont = 0;
     LOGFONTW *plf;
-    PINT SafeBuffI;
+    PINT SafeBuffI = NULL;
     PFLOAT SafeBuffF;
 
     dc = DC_LockDc(hDC);

@@ -2693,7 +2693,7 @@ xmlSchemaComplexTypeErr(xmlSchemaAbstractCtxtPtr actxt,
     xmlFree(msg);
 }
 
-static void LIBXML_ATTR_FORMAT(8,0)
+static void
 xmlSchemaFacetErr(xmlSchemaAbstractCtxtPtr actxt,
 		  xmlParserErrors error,
 		  xmlNodePtr node,
@@ -3162,7 +3162,7 @@ xmlSchemaPMutualExclAttrErr(xmlSchemaParserCtxtPtr ctxt,
  * Reports a simple type validation error.
  * TODO: Should this report the value of an element as well?
  */
-static void LIBXML_ATTR_FORMAT(8,0)
+static void
 xmlSchemaPSimpleTypeErr(xmlSchemaParserCtxtPtr ctxt,
 			xmlParserErrors error,
 			xmlSchemaBasicItemPtr ownerItem ATTRIBUTE_UNUSED,

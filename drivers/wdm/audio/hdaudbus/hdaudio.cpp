@@ -119,7 +119,11 @@ HDA_TransferCodecVerbs(
 		);
 		attributes.ParentObject = fdoCtx->WdfDevice;
 
-		WdfWorkItemCreate(&workItemConfig, &attributes, &workItem);
+		status = WdfWorkItemCreate(&workItemConfig, &attributes, &workItem);
+		if (!NT_SUCCESS(status)) {
+			WdfDeviceResumeIdle(fdoCtx->WdfDevice);
+			goto out;
+		}
 
 		PHDA_ASYNC_CONTEXT workItemContext = HDAAsyncWorkItem_GetContext(workItem);
 		workItemContext->devData = devData;

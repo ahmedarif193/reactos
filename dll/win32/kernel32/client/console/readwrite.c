@@ -368,7 +368,7 @@ IntReadConsoleOutput(IN HANDLE hConsoleOutput,
     PCONSOLE_READOUTPUT ReadOutputRequest = &ApiMessage.Data.ReadOutputRequest;
     PCSR_CAPTURE_BUFFER CaptureBuffer = NULL;
 
-    SHORT SizeX, SizeY;
+    SHORT SizeX = 0, SizeY = 0;
     ULONG NumCells;
 
     /* Set up the data to send to the Console Server */
@@ -837,7 +837,7 @@ IntWriteConsoleOutput(IN HANDLE hConsoleOutput,
     PCONSOLE_WRITEOUTPUT WriteOutputRequest = &ApiMessage.Data.WriteOutputRequest;
     PCSR_CAPTURE_BUFFER CaptureBuffer = NULL;
 
-    SHORT SizeX, SizeY;
+    SHORT SizeX = 0, SizeY = 0;
     ULONG NumCells;
 
     /* Set up the data to send to the Console Server */

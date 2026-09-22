@@ -179,7 +179,7 @@ SymCryptIntGenerateRandomPrime(
                                     SIZE_T              cbScratch )
 {
     SYMCRYPT_ERROR  scError = SYMCRYPT_EXTERNAL_FAILURE;
-    PSYMCRYPT_DIVISOR pdPubExp[ SYMCRYPT_RSAKEY_MAX_NUMOF_PUBEXPS ];
+    PSYMCRYPT_DIVISOR pdPubExp[ SYMCRYPT_RSAKEY_MAX_NUMOF_PUBEXPS ] = {0};
     PSYMCRYPT_INT piTmp;
 
     UINT32 cnt = 0;

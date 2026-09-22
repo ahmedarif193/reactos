@@ -148,7 +148,7 @@ Return Value:
 
 {
     PFCB Fcb = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIRP_CONTEXT IrpContext = NULL;
 
     BOOLEAN TopLevel = FALSE;

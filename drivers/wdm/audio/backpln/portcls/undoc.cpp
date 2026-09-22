@@ -890,7 +890,7 @@ PropertyItemDispatch(
     PIO_STACK_LOCATION IoStack;
     ULONG InstanceSize, ValueSize, Index;
     PVOID Instance;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     // allocate a property request
     PropertyRequest = (PPCPROPERTY_REQUEST)AllocateItem(NonPagedPool, sizeof(PCPROPERTY_REQUEST), TAG_PORTCLASS);
@@ -1017,7 +1017,8 @@ PropertyItemDispatch(
     {
         // now call the handler
         UNICODE_STRING GuidBuffer;
-        RtlStringFromGUID(Property->Set, &GuidBuffer);
+        if (!NT_SUCCESS(RtlStringFromGUID(Property->Set, &GuidBuffer)))
+            RtlInitEmptyUnicodeString(&GuidBuffer, NULL, 0);
         DPRINT("Calling Verb %x Node %lu MajorTarget %p MinorTarget %p PropertySet %S PropertyId %lu PropertyFlags %lx InstanceSize %lu ValueSize %lu Handler %p PropertyRequest %p PropertyItemFlags %lx PropertyItemId %lu\n",
                 PropertyRequest->Verb,
                 PropertyRequest->Node, PropertyRequest->MajorTarget, PropertyRequest->MinorTarget, GuidBuffer.Buffer, Property->Id, Property->Flags, PropertyRequest->InstanceSize, PropertyRequest->ValueSize,
@@ -1068,7 +1069,8 @@ PcAddToPropertyTable(
     UNICODE_STRING GuidBuffer;
 
     ASSERT(PropertyItem->Set);
-    RtlStringFromGUID(*PropertyItem->Set, &GuidBuffer);
+    if (!NT_SUCCESS(RtlStringFromGUID(*PropertyItem->Set, &GuidBuffer)))
+        RtlInitEmptyUnicodeString(&GuidBuffer, NULL, 0);
     DPRINT("PcAddToPropertyTable Adding Item Set %S Id %lu Flags %lx\n", GuidBuffer.Buffer, PropertyItem->Id, PropertyItem->Flags);
     RtlFreeUnicodeString(&GuidBuffer);
 
@@ -1284,7 +1286,8 @@ DumpAutomationTable(
             for(Index = 0; Index < AutomationTable->PropertyCount; Index++)
             {
                 // convert to printable string
-                RtlStringFromGUID(*PropertyItem->Set, &GuidString);
+                if (!NT_SUCCESS(RtlStringFromGUID(*PropertyItem->Set, &GuidString)))
+                    RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
                 DPRINT("%SPropertyItemIndex %lu %p GUID %S Id %u Flags %x\n", DebugIndentation, Index, PropertyItem, GuidString.Buffer, PropertyItem->Id, PropertyItem->Flags);
                 RtlFreeUnicodeString(&GuidString);
                 // move to next item
@@ -1312,7 +1315,8 @@ DumpAutomationTable(
             for(Index = 0; Index < AutomationTable->EventCount; Index++)
             {
                 // convert to printable string
-                RtlStringFromGUID(*EventItem->Set, &GuidString);
+                if (!NT_SUCCESS(RtlStringFromGUID(*EventItem->Set, &GuidString)))
+                    RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
                 DPRINT("%SEventItemIndex %lu %p GUID %S Id %u Flags %x\n", DebugIndentation, Index, EventItem, GuidString.Buffer, EventItem->Id, EventItem->Flags);
                 RtlFreeUnicodeString(&GuidString);
 
@@ -1340,7 +1344,8 @@ DumpAutomationTable(
             for(Index = 0; Index < AutomationTable->MethodCount; Index++)
             {
                 // convert to printable string
-                RtlStringFromGUID(*MethodItem->Set, &GuidString);
+                if (!NT_SUCCESS(RtlStringFromGUID(*MethodItem->Set, &GuidString)))
+                    RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
                 DPRINT("%SMethodItemIndex %lu %p GUID %S Id %u Flags %x\n", DebugIndentation, Index, MethodItem, GuidString.Buffer, MethodItem->Id, MethodItem->Flags);
                 RtlFreeUnicodeString(&GuidString);
 

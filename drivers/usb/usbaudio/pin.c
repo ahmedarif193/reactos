@@ -1292,7 +1292,12 @@ InitCapturePin(
         /* no memory */
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    KsAddItemToObjectBag(Pin->Bag, PinContext->Buffer, ExFreePool);
+    if (!NT_SUCCESS(KsAddItemToObjectBag(Pin->Bag, PinContext->Buffer, ExFreePool)))
+    {
+        ExFreePool(PinContext->Buffer);
+        PinContext->Buffer = NULL;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     /* init irps */
     for (Index = 0; Index < CAPTURE_IRP_COUNT; Index++)
@@ -1325,7 +1330,12 @@ InitCapturePin(
         InsertTailList(&PinContext->IrpListHead, &Irp->Tail.Overlay.ListEntry);
 
         /* add to object bag*/
-        KsAddItemToObjectBag(Pin->Bag, Irp, ExFreePool);
+        if (!NT_SUCCESS(KsAddItemToObjectBag(Pin->Bag, Irp, ExFreePool)))
+        {
+            RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+            ExFreePool(Irp);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
 
         /* Select pipe matching the data flow direction */
         {
@@ -1467,7 +1477,12 @@ InitStreamPin(
         InsertTailList(&PinContext->IrpListHead, &Irp->Tail.Overlay.ListEntry);
 
         /* add to object bag*/
-        KsAddItemToObjectBag(Pin->Bag, Irp, ExFreePool);
+        if (!NT_SUCCESS(KsAddItemToObjectBag(Pin->Bag, Irp, ExFreePool)))
+        {
+            RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+            ExFreePool(Irp);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
     }
 
     return STATUS_SUCCESS;

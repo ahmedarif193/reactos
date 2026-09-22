@@ -113,7 +113,7 @@ uint32_t sspi_import_name(sspi_buffer_desc *name_in, sspi_name_t *name_out);
 
 void log_debug(const char *fmt, ...);
 void log_status(char *m, uint32_t major, uint32_t minor);
-void log_hexdump(bool_t on, const u_char *title, const u_char *buf, int len, int offset);
+void log_hexdump(bool_t on, const char *title, const u_char *buf, int len, int offset);
 
 __END_DECLS
 

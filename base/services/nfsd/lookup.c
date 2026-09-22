@@ -479,7 +479,7 @@ int nfs41_lookup(
         &path, path_pos, &referral, parent_out, target_out, info_out);
 
     if (status == ERROR_FILESYSTEM_ABSENT) {
-        nfs41_session *new_session;
+        nfs41_session *new_session = NULL;
 
         /* create a session to the referred server and
          * reformat the path relative to that server's root */

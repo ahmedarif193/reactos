@@ -1070,7 +1070,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
    LARGE_INTEGER Timeout;
    PLIST_ENTRY Entry;
    PWND pWnd;
-   BOOLEAN SwapStateEnabled;
+   BOOLEAN SwapStateEnabled = FALSE;
    LRESULT Result = 0;   //// Result could be trashed. ////
 
    pti = PsGetCurrentThreadWin32Thread();

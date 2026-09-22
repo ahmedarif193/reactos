@@ -662,7 +662,7 @@ Return Value:
 
 {
     BOOLEAN Wait;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PIRP_CONTEXT IrpContext = NULL;
 
     BOOLEAN TopLevel;
@@ -1246,7 +1246,10 @@ Return Value:
             Vcb->VolumeGuidPath.Length = Vcb->VolumeGuidPath.MaximumLength = 0;
         }
 
-        IoVolumeDeviceToGuidPath( Vcb->TargetDeviceObject, &Vcb->VolumeGuidPath );
+        if (!NT_SUCCESS(IoVolumeDeviceToGuidPath( Vcb->TargetDeviceObject, &Vcb->VolumeGuidPath ))) {
+
+            NOTHING;
+        }
 #endif
 
         //
@@ -5040,7 +5043,7 @@ Return Value:
     ULONG EndingCluster;
     ULONG InputBufferLength;
     ULONG OutputBufferLength;
-    LARGE_INTEGER StartingLcn;
+    LARGE_INTEGER StartingLcn = {0};
     PVOLUME_BITMAP_BUFFER OutputBuffer;
 
     PAGED_CODE();
@@ -5297,7 +5300,7 @@ Return Value:
     ULONG Run;
     ULONG RunCount;
     ULONG StartingRun;
-    LARGE_INTEGER StartingVcn;
+    LARGE_INTEGER StartingVcn = {0};
 
     ULONG InputBufferLength;
     ULONG OutputBufferLength;

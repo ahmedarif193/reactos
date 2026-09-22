@@ -1714,8 +1714,16 @@ CreateFontIndirectExA(const ENUMLOGFONTEXDVA *elfexd)
     {
         ENUMLOGFONTEXDVW Logfont;
 
-        EnumLogFontExW2A( (LPENUMLOGFONTEXA) elfexd,
-                          &Logfont.elfEnumLogfontEx );
+        LogFontA2W(&Logfont.elfEnumLogfontEx.elfLogFont, &elfexd->elfEnumLogfontEx.elfLogFont);
+        MultiByteToWideChar(CP_THREAD_ACP, 0, (LPCSTR)elfexd->elfEnumLogfontEx.elfFullName, LF_FULLFACESIZE,
+                            Logfont.elfEnumLogfontEx.elfFullName, LF_FULLFACESIZE);
+        Logfont.elfEnumLogfontEx.elfFullName[LF_FULLFACESIZE - 1] = UNICODE_NULL;
+        MultiByteToWideChar(CP_THREAD_ACP, 0, (LPCSTR)elfexd->elfEnumLogfontEx.elfStyle, LF_FACESIZE,
+                            Logfont.elfEnumLogfontEx.elfStyle, LF_FACESIZE);
+        Logfont.elfEnumLogfontEx.elfStyle[LF_FACESIZE - 1] = UNICODE_NULL;
+        MultiByteToWideChar(CP_THREAD_ACP, 0, (LPCSTR)elfexd->elfEnumLogfontEx.elfScript, LF_FACESIZE,
+                            Logfont.elfEnumLogfontEx.elfScript, LF_FACESIZE);
+        Logfont.elfEnumLogfontEx.elfScript[LF_FACESIZE - 1] = UNICODE_NULL;
 
         RtlCopyMemory( &Logfont.elfDesignVector,
                        &elfexd->elfDesignVector,
@@ -2181,7 +2189,7 @@ AddFontResourceExA(
     if (!lpszFilename)
         return 0;
 
-    PWSTR FilenameW;
+    PWSTR FilenameW = NULL;
     WCHAR szBuff[MAX_PATH];
 
     _SEH2_TRY
@@ -2255,7 +2263,7 @@ RemoveFontResourceExA(
         return FALSE;
 
     WCHAR szBuff[MAX_PATH];
-    PWSTR FilenameW;
+    PWSTR FilenameW = NULL;
 
     _SEH2_TRY
     {

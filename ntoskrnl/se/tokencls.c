@@ -2166,7 +2166,7 @@ NtSetInformationToken(
 
             case TokenSessionReference:
             {
-                ULONG SessionReference;
+                ULONG SessionReference = 0;
 
                 _SEH2_TRY
                 {

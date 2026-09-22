@@ -2348,6 +2348,7 @@ BasepAssignJobListFromAttributes(
 
 #define BASEP_LOWBOX_HANDLE_COUNT 5
 
+#if defined(_WIN64) || defined(WOW64_I386_RUNTIME)
 static
 NTSTATUS
 BasepCreateAppContainerLink(
@@ -2466,6 +2467,7 @@ BasepCreateAppContainerDirectory(
     }
     return Status;
 }
+#endif
 
 typedef struct _BASE_CREATE_EXTENDED_ATTRIBUTES
 {

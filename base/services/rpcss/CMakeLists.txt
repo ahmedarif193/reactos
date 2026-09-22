@@ -18,10 +18,6 @@ list(APPEND SOURCE
 include_directories(${REACTOS_BINARY_DIR}/sdk/include/wine)
 add_executable(rpcss ${SOURCE} rpcss.rc)
 
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(rpcss PRIVATE "-Wno-cast-calling-convention")
-endif()
-
 target_link_libraries(rpcss ${PSEH_LIB} wine)
 set_module_type(rpcss win32cui UNICODE)
 add_importlibs(rpcss advapi32 rpcrt4 msvcrt kernel32 ntdll)

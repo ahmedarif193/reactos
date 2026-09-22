@@ -159,7 +159,7 @@ authsspi_create_default(CLIENT *clnt, char *service, int svc)
         goto out_err;
     sec->svc = svc;
     // Let's acquire creds here for now
-    maj_stat = AcquireCredentialsHandleA(NULL, sec_pkg_name, SECPKG_CRED_BOTH,
+    maj_stat = AcquireCredentialsHandleA(NULL, (LPSTR)sec_pkg_name, SECPKG_CRED_BOTH,
         NULL, NULL, NULL, NULL, &sec->cred, &sec->expiry);
     if (maj_stat != SEC_E_OK) {
         log_debug("authgss_create_default: AcquireCredentialsHandleA failed with %x", maj_stat);
@@ -275,7 +275,7 @@ static bool_t
 authsspi_validate(AUTH *auth, struct opaque_auth *verf, u_int seq)
 {
 	struct rpc_sspi_data *gd;
-	u_int num, qop_state, cur_seq;
+	u_int num, qop_state, cur_seq = 0;
 	sspi_buffer_desc signbuf, checksum;
 	uint32_t maj_stat;
 
@@ -299,8 +299,9 @@ authsspi_validate(AUTH *auth, struct opaque_auth *verf, u_int seq)
 		return (TRUE);
   	}
 
-    if (gd->gc.gc_proc == RPCSEC_SSPI_DESTROY) 
+    if (gd->gc.gc_proc == RPCSEC_SSPI_DESTROY) {
         return TRUE;
+    }
 
 	if (gd->gc.gc_proc == RPCSEC_SSPI_INIT ||
 	        gd->gc.gc_proc == RPCSEC_SSPI_CONTINUE_INIT) {
@@ -739,7 +740,7 @@ uint32_t sspi_import_name(sspi_buffer_desc *name_in, sspi_name_t *name_out)
         return SEC_E_INSUFFICIENT_MEMORY;
 
     strcpy(*name_out, "nfs/");
-    strncat(*name_out, name_in->value, name_in->length);
+    memcpy(*name_out + 4, name_in->value, name_in->length);
 
     log_debug("imported service name is: %s\n", *name_out);
 
@@ -898,7 +899,7 @@ void print_rpc_gss_sec(struct rpc_sspi_sec *ptr)
 	}
 	fprintf(fd_out, "     qop: %d\n", ptr->qop);
 	fprintf(fd_out, "     service: %d\n", ptr->svc);
-	fprintf(fd_out, "     cred: %p\n", ptr->cred);
+	fprintf(fd_out, "     cred: %p:%p\n", (void *)ptr->cred.dwLower, (void *)ptr->cred.dwUpper);
 }
 
 void print_negotiated_attrs(PCtxtHandle ctx)
@@ -939,14 +940,14 @@ void print_negotiated_attrs(PCtxtHandle ctx)
 
 }
 
-void log_hexdump(bool_t on, const u_char *title, const u_char *buf, 
+void log_hexdump(bool_t on, const char *title, const u_char *buf, 
                     int len, int offset)
 {
 	int i, j, jm, c;
 
     if (!on) return;
 
-	fprintf(fd_out, "%04x: %s (len=%d)\n", GetCurrentThreadId(), title, len);
+	fprintf(fd_out, "%04lx: %s (len=%d)\n", GetCurrentThreadId(), title, len);
 	for (i = 0; i < len; i += 0x10) {
 		fprintf(fd_out, "  %04x: ", (u_int)(i + offset));
 		jm = len - i;
@@ -979,7 +980,7 @@ void log_debug(const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	fprintf(fd_out, "%04x: rpcsec_gss: ", GetCurrentThreadId());
+	fprintf(fd_out, "%04lx: rpcsec_gss: ", GetCurrentThreadId());
 	vfprintf(fd_out, fmt, ap);
 	fprintf(fd_out, "\n");
     fflush(fd_out);
@@ -988,7 +989,7 @@ void log_debug(const char *fmt, ...)
 #else
 void print_rpc_gss_sec(struct rpc_sspi_sec *ptr) { return; }
 void print_negotiated_flags(unsigned long  flags) {return; }
-void log_hexdump(bool_t on, const u_char *title, const u_char *buf, 
+void log_hexdump(bool_t on, const char *title, const u_char *buf, 
                     int len, int offset) { return; }
 void log_debug(const char *fmt, ...) { return; }
 #endif

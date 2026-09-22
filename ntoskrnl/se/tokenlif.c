@@ -1751,13 +1751,13 @@ NtCreateToken(
 {
     HANDLE hToken;
     KPROCESSOR_MODE PreviousMode;
-    ULONG PrivilegeCount, GroupCount;
-    PSID OwnerSid, PrimaryGroupSid;
-    PACL DefaultDacl;
+    ULONG PrivilegeCount = 0, GroupCount = 0;
+    PSID OwnerSid = NULL, PrimaryGroupSid = NULL;
+    PACL DefaultDacl = NULL;
     LARGE_INTEGER LocalExpirationTime = {{0, 0}};
     LUID LocalAuthenticationId;
     TOKEN_SOURCE LocalTokenSource;
-    SECURITY_QUALITY_OF_SERVICE LocalSecurityQos;
+    SECURITY_QUALITY_OF_SERVICE LocalSecurityQos = {0};
     PLUID_AND_ATTRIBUTES CapturedPrivileges = NULL;
     PSID_AND_ATTRIBUTES CapturedUser = NULL;
     PSID_AND_ATTRIBUTES CapturedGroups = NULL;

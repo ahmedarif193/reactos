@@ -215,7 +215,7 @@ static HICON SIC_OverlayShortcutImage(HICON SourceIcon, BOOL large)
      */
     if(ShortcutBitmapInfo.bmBitsPixel == 32)
     {
-        BOOL add_alpha;
+        BOOL add_alpha = FALSE;
         BYTE buffer[sizeof(BITMAPINFO) + 256 * sizeof(RGBQUAD)];
         BITMAPINFO* lpbmi = (BITMAPINFO*)buffer;
         PVOID bits;

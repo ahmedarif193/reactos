@@ -524,7 +524,7 @@ IopGetDeviceProperty(PPLUGPLAY_CONTROL_PROPERTY_DATA PropertyData)
     PDEVICE_NODE DeviceNode;
     UNICODE_STRING DeviceInstance;
     ULONG BufferSize;
-    ULONG Property;
+    ULONG Property = 0;
     DEVICE_REGISTRY_PROPERTY DeviceProperty;
     PVOID Buffer;
     NTSTATUS Status;
@@ -1082,10 +1082,10 @@ IopGetDeviceRelations(PPLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA RelationsData)
     PDEVICE_OBJECT ChildDeviceObject;
     PDEVICE_NODE ChildDeviceNode;
     ULONG i;
-    ULONG Relations;
-    ULONG BufferSize, RequiredSize;
+    ULONG Relations = 0;
+    ULONG BufferSize = 0, RequiredSize;
     ULONG BufferLeft;
-    PWCHAR Buffer, Ptr;
+    PWCHAR Buffer = NULL, Ptr;
     NTSTATUS Status = STATUS_SUCCESS;
 
     DPRINT1("IopGetDeviceRelations() called\n");
@@ -1340,8 +1340,8 @@ PiControlQueryRemoveDevice(
     PDEVICE_OBJECT DeviceObject;
     NTSTATUS Status;
     UNICODE_STRING DeviceInstance;
-    PWSTR VetoName;
-    ULONG NameLength, Flags;
+    PWSTR VetoName = NULL;
+    ULONG NameLength = 0, Flags;
     PI_QUERY_REMOVE_DATA RemoveData;
 
     /* Capture and probe all outputs before initiating removal. */

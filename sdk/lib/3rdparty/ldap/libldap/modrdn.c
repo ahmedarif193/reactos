@@ -178,7 +178,7 @@ ldap_rename2(
 	LDAP_CONST char *newSuperior,
 	int deleteoldrdn )
 {
-	int msgid;
+	int msgid = 0;
 	int rc;
 
 	Debug0( LDAP_DEBUG_TRACE, "ldap_rename2\n" );

@@ -4143,7 +4143,7 @@ FxPkgPnp::PnpDeviceUsageNotification(
                         // about yet another failure. So we ignore the return
                         // value.
                         //
-                        (void) SendDeviceUsageNotification(&dependentDevice,
+                        (void)!SendDeviceUsageNotification(&dependentDevice,
                                                            &relatedIrp,
                                                            &workItem,
                                                            Irp,
@@ -4246,7 +4246,7 @@ FxPkgPnp::PnpDeviceUsageNotification(
                     //
                     // Ignore the status because we can't do anything on failure
                     //
-                    (void) SendDeviceUsageNotification(&topOfParentStack,
+                    (void)!SendDeviceUsageNotification(&topOfParentStack,
                                                        &parentIrp,
                                                        &workItem,
                                                        Irp,
@@ -4305,7 +4305,7 @@ FxPkgPnp::PnpDeviceUsageNotification(
                     // We're already in a failure path. We can't do anything
                     // about yet another failure. So we ignore the return value.
                     //
-                    (void) SendDeviceUsageNotification(&dependentDevice,
+                    (void)!SendDeviceUsageNotification(&dependentDevice,
                                                        &relatedIrp,
                                                        &workItem,
                                                        Irp,
@@ -4370,7 +4370,7 @@ FxPkgPnp::PnpDeviceUsageNotification(
                     //
                     // Ignore the status because we can't do anything on failure
                     //
-                    (void) SendDeviceUsageNotification(&topOfParentStack,
+                    (void)!SendDeviceUsageNotification(&topOfParentStack,
                                                        &parentIrp,
                                                        &workItem,
                                                        Irp,
@@ -4422,7 +4422,7 @@ FxPkgPnp::PnpDeviceUsageNotification(
                         // We're already in a failure path. We can't do anything
                         // about yet another failure. So we ignore the return value.
                         //
-                        (void) SendDeviceUsageNotification(&dependentDevice,
+                        (void)!SendDeviceUsageNotification(&dependentDevice,
                                                            &relatedIrp,
                                                            &workItem,
                                                            Irp,

@@ -1615,6 +1615,7 @@
     FT_StreamRec    inc_stream;
     FT_Data         glyph_data;
     FT_Bool         glyph_data_loaded = 0;
+    FT_Stream       saved_stream      = loader->stream;
 #endif
 
 
@@ -1679,7 +1680,14 @@
                             glyph_data.pointer,
                             (FT_ULong)glyph_data.length );
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdangling-pointer"
+#endif
       loader->stream = &inc_stream;
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     }
     else
 
@@ -2211,9 +2219,12 @@
 #ifdef FT_CONFIG_OPTION_INCREMENTAL
 
     if ( glyph_data_loaded )
+    {
+      loader->stream = saved_stream;
       face->root.internal->incremental_interface->funcs->free_glyph_data(
         face->root.internal->incremental_interface->object,
         &glyph_data );
+    }
 
 #endif
 

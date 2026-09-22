@@ -74,7 +74,7 @@ rtime(addrp, timep, timeout)
 	SOCKET s;
 	fd_set readfds;
 	int res;
-	unsigned long thetime;
+	unsigned long thetime = 0;
 	struct sockaddr_in from;
 	int fromlen;
 	int type;

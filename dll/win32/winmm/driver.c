@@ -98,7 +98,7 @@ static	unsigned DRIVER_GetNumberOfModuleRefs(HMODULE hModule, WINE_DRIVER** foun
  */
 LPWINE_DRIVER	DRIVER_FindFromHDrvr(HDRVR hDrvr)
 {
-    LPWINE_DRIVER d;
+    LPWINE_DRIVER d = NULL;
 
     __TRY
     {

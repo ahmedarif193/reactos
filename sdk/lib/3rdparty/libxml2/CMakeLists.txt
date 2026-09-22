@@ -68,8 +68,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
         # '=': conversion from 'size_t' to 'int', possible loss of data
         target_compile_options(libxml2 PRIVATE "/wd4267")
     endif()
-else()
-    target_compile_options(libxml2 PRIVATE "-w")
 endif()
 
 target_include_directories(libxml2

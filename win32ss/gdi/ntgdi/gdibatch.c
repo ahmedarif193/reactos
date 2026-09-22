@@ -366,8 +366,8 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
         PGDIBSPATBLT pgDPB;
         DWORD dwRop, flags;
         HBRUSH hOrgBrush;
-        COLORREF crColor, crBkColor, crBrushClr;
-        ULONG ulForegroundClr, ulBackgroundClr, ulBrushClr;
+        COLORREF crColor, crBkColor = 0, crBrushClr;
+        ULONG ulForegroundClr, ulBackgroundClr = 0, ulBrushClr;
         if (!dc) break;
         pgDPB = (PGDIBSPATBLT) pHdr;
         /* Convert the ROP3 to a ROP4 */
@@ -431,8 +431,8 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
         PPATRECT pRects;
         INT i;
         DWORD dwRop, flags;
-        COLORREF crColor, crBkColor, crBrushClr;
-        ULONG ulForegroundClr, ulBackgroundClr, ulBrushClr;
+        COLORREF crColor, crBkColor = 0, crBrushClr;
+        ULONG ulForegroundClr, ulBackgroundClr = 0, ulBrushClr;
         if (!dc) break;
         pgDPB = (PGDIBSPPATBLT) pHdr;
         /* Convert the ROP3 to a ROP4 */
@@ -514,11 +514,11 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
      case GdiBCTextOut:
      {
         PGDIBSTEXTOUT pgO;
-        COLORREF crColor = -1, crBkColor;
-        ULONG ulForegroundClr, ulBackgroundClr;
+        COLORREF crColor = -1, crBkColor = 0;
+        ULONG ulForegroundClr, ulBackgroundClr = 0;
         DWORD flags = 0, flXform = 0, saveflags, saveflXform = 0;
         FLONG flTextAlign = -1;
-        HANDLE hlfntNew;
+        HANDLE hlfntNew = NULL;
         PRECTL lprc;
         USHORT jBkMode;
         LONG lBkMode;
@@ -627,8 +627,8 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
      case GdiBCExtTextOut:
      {
         PGDIBSEXTTEXTOUT pgO;
-        COLORREF crBkColor;
-        ULONG ulBackgroundClr;
+        COLORREF crBkColor = 0;
+        ULONG ulBackgroundClr = 0;
         POINTL ptlViewportOrg;
         DWORD flags = 0, flXform = 0, saveflags, saveflXform = 0;
         if (!dc) break;

@@ -68,7 +68,7 @@ static bool __scrt_initialize()
 template<typename Tmain>
 static __declspec(noinline) int __cdecl __commonCRTStartup()
 {
-    int exitCode;
+    int exitCode = 0;
 
     if (!__scrt_initialize())
     {

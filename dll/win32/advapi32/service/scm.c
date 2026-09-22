@@ -249,7 +249,7 @@ ChangeServiceConfig2A(SC_HANDLE hService,
                       LPVOID lpInfo)
 {
     SC_RPC_CONFIG_INFOA Info;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("ChangeServiceConfig2A(%p %lu %p)\n",
           hService, dwInfoLevel, lpInfo);
@@ -307,7 +307,7 @@ ChangeServiceConfig2W(SC_HANDLE hService,
                       LPVOID lpInfo)
 {
     SC_RPC_CONFIG_INFOW Info;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("ChangeServiceConfig2W(%p %lu %p)\n",
           hService, dwInfoLevel, lpInfo);
@@ -579,7 +579,7 @@ done:
 BOOL WINAPI
 CloseServiceHandle(SC_HANDLE hSCObject)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("CloseServiceHandle(%p)\n",
           hSCObject);
@@ -623,7 +623,7 @@ ControlService(SC_HANDLE hService,
                DWORD dwControl,
                LPSERVICE_STATUS lpServiceStatus)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("ControlService(%p %lu %p)\n",
           hService, dwControl, lpServiceStatus);
@@ -920,7 +920,7 @@ done:
 BOOL WINAPI
 DeleteService(SC_HANDLE hService)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("DeleteService(%p)\n",
           hService);
@@ -962,7 +962,7 @@ EnumDependentServicesA(SC_HANDLE hService,
     ENUM_SERVICE_STATUSA ServiceStatus;
     LPENUM_SERVICE_STATUSA lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
     DWORD dwCount;
 
     TRACE("EnumDependentServicesA(%p %lu %p %lu %p %p)\n",
@@ -1040,7 +1040,7 @@ EnumDependentServicesW(SC_HANDLE hService,
     ENUM_SERVICE_STATUSW ServiceStatus;
     LPENUM_SERVICE_STATUSW lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
     DWORD dwCount;
 
     TRACE("EnumDependentServicesW(%p %lu %p %lu %p %p)\n",
@@ -1121,7 +1121,7 @@ EnumServiceGroupW(SC_HANDLE hSCManager,
     ENUM_SERVICE_STATUSW ServiceStatus;
     LPENUM_SERVICE_STATUSW lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
     DWORD dwCount;
 
     TRACE("EnumServiceGroupW(%p %lu %lu %p %lu %p %p %p %s)\n",
@@ -1231,7 +1231,7 @@ EnumServicesStatusA(SC_HANDLE hSCManager,
     ENUM_SERVICE_STATUSA ServiceStatus;
     LPENUM_SERVICE_STATUSA lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
     DWORD dwCount;
 
     TRACE("EnumServicesStatusA(%p %lu %lu %p %lu %p %p %p)\n",
@@ -1325,7 +1325,7 @@ EnumServicesStatusW(SC_HANDLE hSCManager,
     ENUM_SERVICE_STATUSW ServiceStatus;
     LPENUM_SERVICE_STATUSW lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
     DWORD dwCount;
 
     TRACE("EnumServicesStatusW(%p %lu %lu %p %lu %p %p %p)\n",
@@ -1421,7 +1421,7 @@ EnumServicesStatusExA(SC_HANDLE hSCManager,
     ENUM_SERVICE_STATUS_PROCESSA ServiceStatus;
     LPENUM_SERVICE_STATUS_PROCESSA lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
     DWORD dwCount;
 
     TRACE("EnumServicesStatusExA(%p %lu %lu %p %lu %p %p %p %s)\n",
@@ -1529,7 +1529,7 @@ EnumServicesStatusExW(SC_HANDLE hSCManager,
     ENUM_SERVICE_STATUS_PROCESSW ServiceStatus;
     LPENUM_SERVICE_STATUS_PROCESSW lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
     DWORD dwCount;
 
     TRACE("EnumServicesStatusExW(%p %lu %lu %p %lu %p %p %p %s)\n",
@@ -1632,7 +1632,7 @@ I_ScSendPnPMessage(
     _In_ DWORD dwEventType,
     _In_ PVOID pEventData)
 {
-    BOOL bResult;
+    BOOL bResult = FALSE;
 
     TRACE("I_ScSendPnPMessage(%p %lu %lu %p)\n",
           hServiceStatus, dwControlCode, dwEventType, pEventData);
@@ -1667,7 +1667,7 @@ GetServiceDisplayNameA(SC_HANDLE hSCManager,
                        LPSTR lpDisplayName,
                        LPDWORD lpcchBuffer)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
     LPSTR lpNameBuffer;
     CHAR szEmptyName[] = "";
 
@@ -1725,7 +1725,7 @@ GetServiceDisplayNameW(SC_HANDLE hSCManager,
                        LPWSTR lpDisplayName,
                        LPDWORD lpcchBuffer)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
     LPWSTR lpNameBuffer;
     WCHAR szEmptyName[] = L"";
 
@@ -1788,7 +1788,7 @@ GetServiceKeyNameA(SC_HANDLE hSCManager,
                    LPSTR lpServiceName,
                    LPDWORD lpcchBuffer)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
     LPSTR lpNameBuffer;
     CHAR szEmptyName[] = "";
 
@@ -1847,7 +1847,7 @@ GetServiceKeyNameW(SC_HANDLE hSCManager,
                    LPWSTR lpServiceName,
                    LPDWORD lpcchBuffer)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
     LPWSTR lpNameBuffer;
     WCHAR szEmptyName[] = L"";
 
@@ -1909,7 +1909,7 @@ I_ScGetCurrentGroupStateW(SC_HANDLE hSCManager,
                           LPWSTR pszGroupName,
                           LPDWORD pdwGroupState)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("I_ScGetCurrentGroupStateW(%p %s %p)\n",
           hSCManager, debugstr_w(pszGroupName), pdwGroupState);
@@ -1952,7 +1952,7 @@ I_ScValidatePnpService(
 {
     SC_RPC_HANDLE hSCManager = NULL;
     SERVICE_STATUS_HANDLE hServiceStatus = NULL;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("I_ScValidatePnpService(%S %S %p)\n",
          pszMachineName, pszServiceName, phServiceStatus);
@@ -1997,7 +1997,7 @@ SC_LOCK WINAPI
 LockServiceDatabase(SC_HANDLE hSCManager)
 {
     SC_LOCK hLock;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("LockServiceDatabase(%p)\n",
           hSCManager);
@@ -2065,7 +2065,7 @@ OpenSCManagerA(LPCSTR lpMachineName,
                DWORD dwDesiredAccess)
 {
     SC_HANDLE hScm = NULL;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("OpenSCManagerA(%s %s %lx)\n",
           debugstr_a(lpMachineName), debugstr_a(lpDatabaseName), dwDesiredAccess);
@@ -2109,7 +2109,7 @@ OpenSCManagerW(LPCWSTR lpMachineName,
                DWORD dwDesiredAccess)
 {
     SC_HANDLE hScm = NULL;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("OpenSCManagerW(%s %s %lx)\n",
           debugstr_w(lpMachineName), debugstr_w(lpDatabaseName), dwDesiredAccess);
@@ -2153,7 +2153,7 @@ OpenServiceA(SC_HANDLE hSCManager,
              DWORD dwDesiredAccess)
 {
     SC_HANDLE hService = NULL;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("OpenServiceA(%p %s %lx)\n",
            hSCManager, debugstr_a(lpServiceName), dwDesiredAccess);
@@ -2201,7 +2201,7 @@ OpenServiceW(SC_HANDLE hSCManager,
              DWORD dwDesiredAccess)
 {
     SC_HANDLE hService = NULL;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("OpenServiceW(%p %s %lx)\n",
            hSCManager, debugstr_w(lpServiceName), dwDesiredAccess);
@@ -2252,7 +2252,7 @@ QueryServiceConfigA(SC_HANDLE hService,
     QUERY_SERVICE_CONFIGA ServiceConfig;
     LPQUERY_SERVICE_CONFIGA lpConfigPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceConfigA(%p %p %lu %p)\n",
            hService, lpServiceConfig, cbBufSize, pcbBytesNeeded);
@@ -2335,7 +2335,7 @@ QueryServiceConfigW(SC_HANDLE hService,
     QUERY_SERVICE_CONFIGW ServiceConfig;
     LPQUERY_SERVICE_CONFIGW lpConfigPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceConfigW(%p %p %lu %p)\n",
            hService, lpServiceConfig, cbBufSize, pcbBytesNeeded);
@@ -2421,7 +2421,7 @@ QueryServiceConfig2A(SC_HANDLE hService,
     LPBYTE lpTempBuffer;
     BOOL bUseTempBuffer = FALSE;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceConfig2A(%p %lu %p %lu %p)\n",
           hService, dwInfoLevel, lpBuffer, cbBufSize, pcbBytesNeeded);
@@ -2538,7 +2538,7 @@ QueryServiceConfig2W(SC_HANDLE hService,
     LPBYTE lpTempBuffer;
     BOOL bUseTempBuffer = FALSE;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceConfig2W(%p %lu %p %lu %p)\n",
           hService, dwInfoLevel, lpBuffer, cbBufSize, pcbBytesNeeded);
@@ -2652,7 +2652,7 @@ QueryServiceLockStatusA(SC_HANDLE hSCManager,
     QUERY_SERVICE_LOCK_STATUSA LockStatus;
     LPQUERY_SERVICE_LOCK_STATUSA lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceLockStatusA(%p %p %lu %p)\n",
           hSCManager, lpLockStatus, cbBufSize, pcbBytesNeeded);
@@ -2714,7 +2714,7 @@ QueryServiceLockStatusW(SC_HANDLE hSCManager,
     QUERY_SERVICE_LOCK_STATUSW LockStatus;
     LPQUERY_SERVICE_LOCK_STATUSW lpStatusPtr;
     DWORD dwBufferSize;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceLockStatusW(%p %p %lu %p)\n",
           hSCManager, lpLockStatus, cbBufSize, pcbBytesNeeded);
@@ -2774,7 +2774,7 @@ QueryServiceObjectSecurity(SC_HANDLE hService,
                            DWORD cbBufSize,
                            LPDWORD pcbBytesNeeded)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceObjectSecurity(%p %lu %p)\n",
            hService, dwSecurityInformation, lpSecurityDescriptor);
@@ -2817,7 +2817,7 @@ SetServiceObjectSecurity(SC_HANDLE hService,
     PSECURITY_DESCRIPTOR SelfRelativeSD = NULL;
     ULONG Length;
     NTSTATUS Status;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("SetServiceObjectSecurity(%p %lu %p)\n",
           hService, dwSecurityInformation, lpSecurityDescriptor);
@@ -2884,7 +2884,7 @@ BOOL WINAPI
 QueryServiceStatus(SC_HANDLE hService,
                    LPSERVICE_STATUS lpServiceStatus)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceStatus(%p %p)\n",
           hService, lpServiceStatus);
@@ -2929,7 +2929,7 @@ QueryServiceStatusEx(SC_HANDLE hService,
                      DWORD cbBufSize,
                      LPDWORD pcbBytesNeeded)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("QueryServiceStatusEx(%p %lu %p %lu %p)\n",
           hService, InfoLevel, lpBuffer, cbBufSize, pcbBytesNeeded);
@@ -2982,7 +2982,7 @@ StartServiceA(SC_HANDLE hService,
               DWORD dwNumServiceArgs,
               LPCSTR *lpServiceArgVectors)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("StartServiceA(%p %lu %p)\n",
           hService, dwNumServiceArgs, lpServiceArgVectors);
@@ -3020,7 +3020,7 @@ StartServiceW(SC_HANDLE hService,
               DWORD dwNumServiceArgs,
               LPCWSTR *lpServiceArgVectors)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("StartServiceW(%p %lu %p)\n",
           hService, dwNumServiceArgs, lpServiceArgVectors);
@@ -3056,7 +3056,7 @@ StartServiceW(SC_HANDLE hService,
 BOOL WINAPI
 UnlockServiceDatabase(SC_LOCK ScLock)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("UnlockServiceDatabase(%x)\n",
           ScLock);
@@ -3093,7 +3093,7 @@ UnlockServiceDatabase(SC_LOCK ScLock)
 BOOL WINAPI
 NotifyBootConfigStatus(BOOL BootAcceptable)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     TRACE("NotifyBootConfigStatus(%u)\n",
           BootAcceptable);
@@ -3125,7 +3125,7 @@ I_ScQueryServiceTagInfo(PVOID Unused,
                         PTAG_INFO_NAME_FROM_TAG InOutParams)
 {
     SC_HANDLE hScm;
-    DWORD dwError;
+    DWORD dwError = 0;
     PTAG_INFO_NAME_FROM_TAG_IN_PARAMS InParams;
     PTAG_INFO_NAME_FROM_TAG_OUT_PARAMS OutParams;
     LPWSTR lpszName;

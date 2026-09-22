@@ -511,7 +511,8 @@ IntelPmcStopHardware(
     _Inout_ PINTELPMC_DEVICE_EXTENSION DeviceExtension)
 {
     DeviceExtension->Started = FALSE;
-    IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+    if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+        DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
     IntelPmcRestoreSleep(DeviceExtension);
     if (DeviceExtension->RegisterBase)
     {
@@ -600,7 +601,8 @@ IntelPmcPnp(
 
         case IRP_MN_SURPRISE_REMOVAL:
             DeviceExtension->Started = FALSE;
-            IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
             IntelPmcRestoreSleep(DeviceExtension);
             break;
 

@@ -173,8 +173,8 @@ static ARC_STATUS IsoLookupFile(PCSTR FileName, ULONG DeviceId, PISO_FILE_INFO I
     PCSTR FullPath = FileName;
     PISO_VOLUME_INFO Volume;
     PCSTR FileNameStr;
-    ULONG i, DirectoryPathLength, DirectorySector, DirectoryLength;
-    PVOID DirectoryBuffer;
+    ULONG i, DirectoryPathLength, DirectorySector = 0, DirectoryLength;
+    PVOID DirectoryBuffer = NULL;
     ULONG NumberOfPathParts;
     CHAR PathBuffer[261];
     CHAR* PathPart;

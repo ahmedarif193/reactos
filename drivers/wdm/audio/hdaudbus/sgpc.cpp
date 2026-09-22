@@ -116,7 +116,9 @@ EjectGraphicsCodec(PFDO_CONTEXT fdoCtx) {
 
     WdfInterruptAcquireLock(fdoCtx->Interrupt);
 
-    WdfChildListUpdateChildDescriptionAsMissing(WdfFdoGetDefaultChildList(fdoCtx->WdfDevice), &description.Header);
+    if (!NT_SUCCESS(WdfChildListUpdateChildDescriptionAsMissing(WdfFdoGetDefaultChildList(fdoCtx->WdfDevice), &description.Header))) {
+        SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_PNP, "WdfChildListUpdateChildDescriptionAsMissing failed\n");
+    }
     //Don't null FdoContext to allow SGPC Audio driver to unregister callbacks / events and cleanup
 
     WdfInterruptReleaseLock(fdoCtx->Interrupt);
@@ -230,8 +232,15 @@ HDAGraphicsPowerInterfaceAdd(WDFWORKITEM WorkItem) {
     }
 
     WdfWaitLockAcquire(fdoCtx->GraphicsDevicesCollectionWaitLock, NULL);
-    WdfCollectionAdd(fdoCtx->GraphicsDevicesCollection, ioTarget);
+    status = WdfCollectionAdd(fdoCtx->GraphicsDevicesCollection, ioTarget);
     WdfWaitLockRelease(fdoCtx->GraphicsDevicesCollectionWaitLock);
+
+    if (!NT_SUCCESS(status)) {
+        SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_INIT,
+            "WdfCollectionAdd failed with status 0x%x\n", status);
+        WdfObjectDelete(ioTarget);
+        goto exit;
+    }
 
     DXGK_GRAPHICSPOWER_REGISTER_INPUT graphicsPowerRegisterInput;
     graphicsPowerRegisterInput = { 0 };
@@ -298,7 +307,10 @@ HDAGraphicsPowerInterfaceCallback(
         );
         attributes.ParentObject = fdoCtx->WdfDevice;
 
-        WdfWorkItemCreate(&workItemConfig, &attributes, &workItem);
+        status = WdfWorkItemCreate(&workItemConfig, &attributes, &workItem);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
 
         PGRAPHICSWORKITEM_CONTEXT workItemContext = GraphicsWorkitem_GetContext(workItem);
         workItemContext->FdoContext = fdoCtx;

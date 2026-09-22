@@ -147,7 +147,7 @@ DeleteMonitorA(PSTR pName, PSTR pEnvironment, PSTR pMonitorName)
 BOOL WINAPI
 DeleteMonitorW(PWSTR pName, PWSTR pEnvironment, PWSTR pMonitorName)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
 
     FIXME("DeleteMonitorW(%S, %S, %S)\n", pName, pEnvironment, pMonitorName);
 
@@ -309,7 +309,7 @@ emA_cleanup:
 BOOL WINAPI
 EnumMonitorsW(PWSTR pName, DWORD Level, PBYTE pMonitors, DWORD cbBuf, PDWORD pcbNeeded, PDWORD pcReturned)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = 0;
 
     FIXME("EnumMonitorsW(%S, %lu, %p, %lu, %p, %p)\n", pName, Level, pMonitors, cbBuf, pcbNeeded, pcReturned);
 

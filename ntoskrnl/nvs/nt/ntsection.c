@@ -1741,7 +1741,7 @@ NtExtendSection(
 {
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PMI_SECTION_OBJECT Section;
-    LARGE_INTEGER SafeSize;
+    LARGE_INTEGER SafeSize = {0};
     NTSTATUS Status;
 
     PAGED_CODE();

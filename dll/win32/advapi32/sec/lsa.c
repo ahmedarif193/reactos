@@ -108,7 +108,7 @@ LsaAddAccountRights(IN LSA_HANDLE PolicyHandle,
                     IN ULONG CountOfRights)
 {
     LSAPR_USER_RIGHT_SET UserRightSet;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaAddAccountRights(%p %p %p 0x%08x)\n",
           PolicyHandle, AccountSid, UserRights, CountOfRights);
@@ -141,7 +141,7 @@ WINAPI
 LsaAddPrivilegesToAccount(IN LSA_HANDLE AccountHandle,
                           IN PPRIVILEGE_SET PrivilegeSet)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaAddPrivilegesToAccount(%p %p)\n",
           AccountHandle, PrivilegeSet);
@@ -168,7 +168,7 @@ NTSTATUS
 WINAPI
 LsaClearAuditLog(IN LSA_HANDLE PolicyHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaClearAuditLog(%p)\n", PolicyHandle);
 
@@ -193,7 +193,7 @@ NTSTATUS
 WINAPI
 LsaClose(IN LSA_HANDLE ObjectHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaClose(%p) called\n", ObjectHandle);
 
@@ -221,7 +221,7 @@ LsaCreateAccount(IN LSA_HANDLE PolicyHandle,
                  IN ACCESS_MASK DesiredAccess,
                  OUT PLSA_HANDLE AccountHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaCreateAccount(%p %p 0x%08lx %p)\n",
           PolicyHandle, AccountSid, DesiredAccess, AccountHandle);
@@ -253,7 +253,7 @@ LsaCreateSecret(IN LSA_HANDLE PolicyHandle,
                 IN ACCESS_MASK DesiredAccess,
                 OUT PLSA_HANDLE SecretHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaCreateSecret(%p %p 0x%08lx %p)\n",
           PolicyHandle, SecretName, DesiredAccess, SecretHandle);
@@ -285,7 +285,7 @@ LsaCreateTrustedDomain(IN LSA_HANDLE PolicyHandle,
                        IN ACCESS_MASK DesiredAccess,
                        OUT PLSA_HANDLE TrustedDomainHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaCreateTrustedDomain(%p %p 0x%08lx %p)\n",
           PolicyHandle, TrustedDomainInformation, DesiredAccess, TrustedDomainHandle);
@@ -319,7 +319,7 @@ LsaCreateTrustedDomainEx(IN LSA_HANDLE PolicyHandle,
                          OUT PLSA_HANDLE TrustedDomainHandle)
 {
     PLSAPR_TRUSTED_DOMAIN_AUTH_INFORMATION_INTERNAL EncryptedAuthInfo = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaCreateTrustedDomainEx(%p %p %p 0x%08lx %p) stub\n",
           PolicyHandle, TrustedDomainInformation, AuthenticationInformation,
@@ -352,7 +352,7 @@ NTSTATUS
 WINAPI
 LsaDelete(IN LSA_HANDLE ObjectHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaDelete(%p)\n", ObjectHandle);
 
@@ -378,7 +378,7 @@ WINAPI
 LsaDeleteTrustedDomain(IN LSA_HANDLE PolicyHandle,
                        IN PSID TrustedDomainSid)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaDeleteTrustedDomain(%p %p)\n",
           PolicyHandle, TrustedDomainSid);
@@ -409,7 +409,7 @@ LsaEnumerateAccountRights(IN LSA_HANDLE PolicyHandle,
                           OUT PULONG CountOfRights)
 {
     LSAPR_USER_RIGHT_SET UserRightsSet;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaEnumerateAccountRights(%p %p %p %p)\n",
           PolicyHandle, AccountSid, UserRights, CountOfRights);
@@ -451,7 +451,7 @@ LsaEnumerateAccounts(IN LSA_HANDLE PolicyHandle,
                      OUT PULONG CountReturned)
 {
     LSAPR_ACCOUNT_ENUM_BUFFER AccountEnumBuffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaEnumerateAccounts(%p %p %p %lu %p)\n",
           PolicyHandle, EnumerationContext, Buffer,
@@ -494,7 +494,7 @@ LsaEnumerateAccountsWithUserRight(IN LSA_HANDLE PolicyHandle,
                                   OUT PULONG CountReturned)
 {
     LSAPR_ACCOUNT_ENUM_BUFFER AccountEnumBuffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaEnumerateAccountsWithUserRight(%p %p %p %p) stub\n",
           PolicyHandle, UserRight, Buffer, CountReturned);
@@ -536,7 +536,7 @@ LsaEnumeratePrivileges(IN LSA_HANDLE PolicyHandle,
                        OUT PULONG CountReturned)
 {
     LSAPR_PRIVILEGE_ENUM_BUFFER PrivilegeEnumBuffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaEnumeratePrivileges(%p %p %p %lu %p)\n",
           PolicyHandle, EnumerationContext, Buffer,
@@ -577,7 +577,7 @@ WINAPI
 LsaEnumeratePrivilegesOfAccount(IN LSA_HANDLE AccountHandle,
                                 OUT PPRIVILEGE_SET *Privileges)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaEnumeratePrivilegesOfAccount(%p %p)\n",
           AccountHandle, Privileges);
@@ -609,7 +609,7 @@ LsaEnumerateTrustedDomains(IN LSA_HANDLE PolicyHandle,
                            OUT PULONG CountReturned)
 {
     LSAPR_TRUSTED_ENUM_BUFFER TrustedEnumBuffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaEnumerateTrustedDomains(%p %p %p %lu %p)\n",
           PolicyHandle, EnumerationContext, Buffer,
@@ -657,7 +657,7 @@ LsaEnumerateTrustedDomainsEx(IN LSA_HANDLE PolicyHandle,
                              OUT PULONG CountReturned)
 {
     LSAPR_TRUSTED_ENUM_BUFFER_EX TrustedEnumBuffer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaEnumerateTrustedDomainsEx(%p %p %p %lu %p)\n",
           PolicyHandle, EnumerationContext, Buffer,
@@ -713,7 +713,7 @@ WINAPI
 LsaGetQuotasForAccount(IN LSA_HANDLE AccountHandle,
                        OUT PQUOTA_LIMITS QuotaLimits)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaGetQuotasForAccount(%p %p)\n",
           AccountHandle, QuotaLimits);
@@ -744,7 +744,7 @@ LsaGetRemoteUserName(IN PLSA_UNICODE_STRING SystemName OPTIONAL,
 {
     PRPC_UNICODE_STRING UserNameString = NULL;
     PRPC_UNICODE_STRING DomainNameString = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaGetRemoteUserName(%s %p %p)\n",
           SystemName ? debugstr_w(SystemName->Buffer) : "(null)",
@@ -785,7 +785,7 @@ WINAPI
 LsaGetSystemAccessAccount(IN LSA_HANDLE AccountHandle,
                           OUT PULONG SystemAccess)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaGetSystemAccessAccount(%p %p)\n",
           AccountHandle, SystemAccess);
@@ -815,7 +815,7 @@ LsaGetUserName(OUT PUNICODE_STRING *UserName,
 {
     PRPC_UNICODE_STRING UserNameString = NULL;
     PRPC_UNICODE_STRING DomainNameString = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaGetUserName(%p %p)\n",
           UserName, DomainName);
@@ -860,7 +860,7 @@ LsaLookupNames(IN LSA_HANDLE PolicyHandle,
 {
     LSAPR_TRANSLATED_SIDS TranslatedSids = {0, NULL};
     ULONG MappedCount = 0;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaLookupNames(%p %lu %p %p %p)\n",
           PolicyHandle, Count, Names, ReferencedDomains, Sids);
@@ -912,7 +912,7 @@ LsaLookupNames2(IN LSA_HANDLE PolicyHandle,
 {
     LSAPR_TRANSLATED_SIDS_EX2 TranslatedSids = {0, NULL};
     ULONG MappedCount = 0;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaLookupNames2(%p 0x%08x %lu %p %p %p)\n",
           PolicyHandle, Flags, Count, Names, ReferencedDomains, Sids);
@@ -963,7 +963,7 @@ LsaLookupPrivilegeDisplayName(IN LSA_HANDLE PolicyHandle,
                               OUT PUSHORT LanguageReturned)
 {
     PRPC_UNICODE_STRING DisplayNameBuffer = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaLookupPrivilegeDisplayName(%p %p %p %p)\n",
           PolicyHandle, Name, DisplayName, LanguageReturned);
@@ -1002,7 +1002,7 @@ LsaLookupPrivilegeName(IN LSA_HANDLE PolicyHandle,
                        OUT PUNICODE_STRING *Name)
 {
     PRPC_UNICODE_STRING NameBuffer = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaLookupPrivilegeName(%p %p %p)\n",
           PolicyHandle, Value, Name);
@@ -1038,7 +1038,7 @@ LsaLookupPrivilegeValue(IN LSA_HANDLE PolicyHandle,
                         OUT PLUID Value)
 {
     LUID Luid;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaLookupPrivilegeValue(%p %p %p)\n",
           PolicyHandle, Name, Value);
@@ -1075,7 +1075,7 @@ LsaLookupSids(IN LSA_HANDLE PolicyHandle,
     LSAPR_SID_ENUM_BUFFER SidEnumBuffer;
     LSAPR_TRANSLATED_NAMES TranslatedNames;
     ULONG MappedCount = 0;
-    NTSTATUS  Status;
+    NTSTATUS  Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaLookupSids(%p %lu %p %p %p)\n",
           PolicyHandle, Count, Sids, ReferencedDomains, Names);
@@ -1145,7 +1145,7 @@ LsaOpenAccount(IN LSA_HANDLE PolicyHandle,
                IN ACCESS_MASK DesiredAccess,
                OUT PLSA_HANDLE AccountHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaOpenAccount(%p %p 0x%08lx %p)\n",
           PolicyHandle, AccountSid, DesiredAccess, AccountHandle);
@@ -1185,7 +1185,7 @@ LsaOpenPolicy(IN PLSA_UNICODE_STRING SystemName OPTIONAL,
               IN ACCESS_MASK DesiredAccess,
               OUT PLSA_HANDLE PolicyHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaOpenPolicy(%s %p 0x%08lx %p)\n",
           SystemName ? debugstr_w(SystemName->Buffer) : "(null)",
@@ -1226,7 +1226,7 @@ LsaOpenPolicySce(IN PLSA_UNICODE_STRING SystemName OPTIONAL,
                  IN ACCESS_MASK DesiredAccess,
                  OUT PLSA_HANDLE PolicyHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaOpenPolicySce(%s %p 0x%08lx %p)\n",
           SystemName ? debugstr_w(SystemName->Buffer) : "(null)",
@@ -1303,7 +1303,7 @@ LsaOpenTrustedDomain(IN LSA_HANDLE PolicyHandle,
                      IN ACCESS_MASK DesiredAccess,
                      OUT PLSA_HANDLE TrustedDomainHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaOpenTrustedDomain(%p %p 0x%08lx %p)\n",
           PolicyHandle, TrustedDomainSid, DesiredAccess, TrustedDomainHandle);
@@ -1335,7 +1335,7 @@ LsaOpenTrustedDomainByName(IN LSA_HANDLE PolicyHandle,
                            IN ACCESS_MASK DesiredAccess,
                            OUT PLSA_HANDLE TrustedDomainHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaOpenTrustedDomainByName(%p %p 0x%08lx %p)\n",
           PolicyHandle, TrustedDomainName, DesiredAccess, TrustedDomainHandle);
@@ -1367,7 +1367,7 @@ LsaQueryDomainInformationPolicy(IN LSA_HANDLE PolicyHandle,
                                 OUT PVOID *Buffer)
 {
     PLSAPR_POLICY_DOMAIN_INFORMATION PolicyInformation = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaQueryDomainInformationPolicy(%p %lu %p)\n",
           PolicyHandle, InformationClass, Buffer);
@@ -1402,7 +1402,7 @@ LsaQueryForestTrustInformation(IN LSA_HANDLE PolicyHandle,
                                IN PLSA_UNICODE_STRING TrustedDomainName,
                                OUT PLSA_FOREST_TRUST_INFORMATION *ForestTrustInfo)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaQueryForestTrustInformation(%p %p %p)\n",
           PolicyHandle, TrustedDomainName, ForestTrustInfo);
@@ -1434,7 +1434,7 @@ LsaQueryInfoTrustedDomain(IN LSA_HANDLE TrustedDomainHandle,
                           OUT PVOID *Buffer)
 {
     PLSAPR_TRUSTED_DOMAIN_INFO TrustedDomainInformation = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaQueryInfoTrustedDomain(%p %d %p) stub\n",
           TrustedDomainHandle, InformationClass, Buffer);
@@ -1518,7 +1518,7 @@ LsaQuerySecret(IN LSA_HANDLE SecretHandle,
     PLSA_UNICODE_STRING DecryptedCurrentValue = NULL;
     PLSA_UNICODE_STRING DecryptedOldValue = NULL;
     SIZE_T BufferSize;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaQuerySecret(%p %p %p %p %p)\n",
           SecretHandle, CurrentValue, CurrentValueSetTime,
@@ -1636,7 +1636,7 @@ LsaQuerySecurityObject(IN LSA_HANDLE ObjectHandle,
 {
     LSAPR_SR_SECURITY_DESCRIPTOR SdBuffer;
     PLSAPR_SR_SECURITY_DESCRIPTOR SdPointer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaQuerySecurityObject(%p %lx %p)\n",
           ObjectHandle, SecurityInformation, SecurityDescriptor);
@@ -1680,7 +1680,7 @@ LsaQueryTrustedDomainInfo(IN LSA_HANDLE PolicyHandle,
                           IN TRUSTED_INFORMATION_CLASS InformationClass,
                           OUT PVOID *Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaQueryTrustedDomainInfo(%p %p %d %p) stub\n",
           PolicyHandle, TrustedDomainSid, InformationClass, Buffer);
@@ -1716,7 +1716,7 @@ LsaQueryTrustedDomainInfoByName(IN LSA_HANDLE PolicyHandle,
                                 IN TRUSTED_INFORMATION_CLASS InformationClass,
                                 OUT PVOID *Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaQueryTrustedDomainInfoByName(%p %p %d %p)\n",
           PolicyHandle, TrustedDomainName, InformationClass, Buffer);
@@ -1753,7 +1753,7 @@ LsaRemoveAccountRights(IN LSA_HANDLE PolicyHandle,
                        IN PLSA_UNICODE_STRING UserRights,
                        IN ULONG CountOfRights)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     LSAPR_USER_RIGHT_SET UserRightSet;
 
     TRACE("LsaRemoveAccountRights(%p %p %d %p %lu)\n",
@@ -1788,7 +1788,7 @@ LsaRemovePrivilegesFromAccount(IN LSA_HANDLE AccountHandle,
                                IN BOOLEAN AllPrivileges,
                                IN PPRIVILEGE_SET Privileges OPTIONAL)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RpcTryExcept
     {
@@ -1818,7 +1818,7 @@ LsaRetrievePrivateData(IN LSA_HANDLE PolicyHandle,
     PLSAPR_CR_CIPHER_VALUE EncryptedData = NULL;
     PLSA_UNICODE_STRING DecryptedData = NULL;
     SIZE_T BufferSize;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaRetrievePrivateData(%p %p %p)\n",
           PolicyHandle, KeyName, PrivateData);
@@ -1884,7 +1884,7 @@ LsaSetDomainInformationPolicy(IN LSA_HANDLE PolicyHandle,
                               IN POLICY_DOMAIN_INFORMATION_CLASS InformationClass,
                               IN PVOID Buffer OPTIONAL)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaSetDomainInformationPolicy(%p %d %p)\n",
           PolicyHandle, InformationClass, Buffer);
@@ -1916,7 +1916,7 @@ LsaSetForestTrustInformation(IN LSA_HANDLE PolicyHandle,
                              IN BOOLEAN CheckOnly,
                              OUT PLSA_FOREST_TRUST_COLLISION_INFORMATION *CollisionInfo)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaSetForestTrustInformation(%p %p %p %d %p)\n",
           PolicyHandle, TrustedDomainName, ForestTrustInfo, CheckOnly, CollisionInfo);
@@ -1949,7 +1949,7 @@ LsaSetInformationPolicy(IN LSA_HANDLE PolicyHandle,
                         IN POLICY_INFORMATION_CLASS InformationClass,
                         IN PVOID Buffer)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaSetInformationPolicy(%p %d %p)\n",
           PolicyHandle, InformationClass, Buffer);
@@ -1993,7 +1993,7 @@ WINAPI
 LsaSetQuotasForAccount(IN LSA_HANDLE AccountHandle,
                        IN PQUOTA_LIMITS QuotaLimits)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaSetQuotasForAccount(%p %p)\n",
           AccountHandle, QuotaLimits);
@@ -2025,7 +2025,7 @@ LsaSetSecret(IN LSA_HANDLE SecretHandle,
     PLSAPR_CR_CIPHER_VALUE EncryptedCurrentValue = NULL;
     PLSAPR_CR_CIPHER_VALUE EncryptedOldValue = NULL;
     SIZE_T BufferSize;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaSetSecret(%p %p %p)\n",
           SecretHandle, EncryptedCurrentValue, EncryptedOldValue);
@@ -2149,7 +2149,7 @@ WINAPI
 LsaSetSystemAccessAccount(IN LSA_HANDLE AccountHandle,
                           IN ULONG SystemAccess)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaSetSystemAccessAccount(%p 0x%lx)\n",
           AccountHandle, SystemAccess);
@@ -2212,7 +2212,7 @@ LsaStorePrivateData(IN LSA_HANDLE PolicyHandle,
 {
     PLSAPR_CR_CIPHER_VALUE EncryptedData = NULL;
     SIZE_T BufferSize;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaStorePrivateData(%p %p %p)\n",
           PolicyHandle, KeyName, PrivateData);

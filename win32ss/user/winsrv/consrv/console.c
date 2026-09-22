@@ -865,6 +865,11 @@ ConSrvInitConsole(OUT PHANDLE NewConsoleHandle,
     }
 #endif
     Status = InsertConsole(&ConsoleHandle, Console);
+    if (!NT_SUCCESS(Status))
+    {
+        ConDrvDeleteConsole((PCONSOLE)Console);
+        return Status;
+    }
 
     // FIXME! We do not support at all asynchronous console creation!
     NtSetEvent(Console->InitEvents[INIT_SUCCESS], NULL);

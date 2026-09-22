@@ -292,7 +292,8 @@ PcRegisterSubdevice(
         if (NT_SUCCESS(Status))
         {
             // activate device interface
-            IoSetDeviceInterfaceState(&SymbolicLinkName, TRUE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&SymbolicLinkName, TRUE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &SymbolicLinkName);
             // allocate symbolic link entry
             SymEntry = (PSYMBOLICLINK_ENTRY)AllocateItem(NonPagedPool, sizeof(SYMBOLICLINK_ENTRY), TAG_PORTCLASS);
             if (SymEntry)

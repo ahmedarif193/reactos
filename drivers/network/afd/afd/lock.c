@@ -99,7 +99,7 @@ AfdCaptureTransferRequest32(ULONG Code, PVOID Destination, const VOID *Source)
     {
         AFD_RECV_INFO_UDP32 Receive;
         AFD_SEND_INFO_UDP32 Send;
-    } Captured;
+    } Captured = {0};
 
     RtlCopyMemory(&Captured, Source, AfdTransferRequestSize(Code, TRUE));
     if (Code == IOCTL_AFD_SEND_DATAGRAM)

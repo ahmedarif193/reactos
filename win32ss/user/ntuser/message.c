@@ -2955,7 +2955,7 @@ static NTSTATUS
 IntCaptureAnsiString(_In_ PCSZ Source, _Out_ PUNICODE_STRING Destination)
 {
     ANSI_STRING AnsiString;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RtlZeroMemory(Destination, sizeof(*Destination));
     _SEH2_TRY

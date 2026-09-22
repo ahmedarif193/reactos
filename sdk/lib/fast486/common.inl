@@ -1220,6 +1220,7 @@ Fast486ParseModRegRm(PFAST486_STATE State,
             }
 
             case 7:
+            default:
             {
                 /* [BX] */
                 ModRegRm->MemoryAddress = State->GeneralRegs[FAST486_REG_EBX].LowWord;

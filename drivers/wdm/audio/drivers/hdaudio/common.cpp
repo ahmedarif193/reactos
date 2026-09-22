@@ -1657,7 +1657,7 @@ CAdapterCommon::BuildInstallFilter(
     IN PULONG AssociatedPins,
     IN UCHAR Digital)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     CFunctionGroupNode *OutNode = (CFunctionGroupNode *)Node;
 
     UCHAR DefaultDevice = 0;

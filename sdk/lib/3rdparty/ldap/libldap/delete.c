@@ -153,7 +153,7 @@ ldap_delete_ext_s(
 int
 ldap_delete( LDAP *ld, LDAP_CONST char *dn )
 {
-	int msgid;
+	int msgid = 0;
 
 	/*
 	 * A delete request looks like this:

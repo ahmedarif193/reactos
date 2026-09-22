@@ -54,7 +54,8 @@ PciQueryInterface(IN PPCI_FDO_EXTENSION DeviceExtension,
     NTSTATUS Status;
     PPCI_INTERFACE *InterfaceList;
     PPCI_INTERFACE PciInterface;
-    RtlStringFromGUID(InterfaceType, &GuidString);
+    if (!NT_SUCCESS(RtlStringFromGUID(InterfaceType, &GuidString)))
+        RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
     DPRINT1("PCI - PciQueryInterface TYPE = %wZ\n", &GuidString);
     RtlFreeUnicodeString(&GuidString);
     DPRINT1("      Size = %u, Version = %u, InterfaceData = %p, LastChance = %s\n",
@@ -72,7 +73,8 @@ PciQueryInterface(IN PPCI_FDO_EXTENSION DeviceExtension,
         PciInterface = *InterfaceList;
 
         /* For debugging, construct the GUID string */
-        RtlStringFromGUID(PciInterface->InterfaceType, &GuidString);
+        if (!NT_SUCCESS(RtlStringFromGUID(PciInterface->InterfaceType, &GuidString)))
+            RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
 
         /* Check if this is an FDO or PDO */
         if (DeviceExtension->ExtensionType == PciFdoExtensionType)

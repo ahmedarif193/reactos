@@ -884,7 +884,7 @@ static BOOL CRYPT_AsnEncodeInteger(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const void *pvStructInfo, BYTE *pbEncoded,
  DWORD *pcbEncoded)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {

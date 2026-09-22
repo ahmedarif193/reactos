@@ -14,7 +14,7 @@ APIENTRY
 NtGdiDdDDICreateDCFromMemory(
     _Inout_ D3DKMT_CREATEDCFROMMEMORY *desc)
 {
-    D3DKMT_CREATEDCFROMMEMORY Captured;
+    D3DKMT_CREATEDCFROMMEMORY Captured = {0};
     PALETTEENTRY PaletteEntries[256];
     ULONG BufferSize, MinimumPitch;
     ULONGLONG RowBits;

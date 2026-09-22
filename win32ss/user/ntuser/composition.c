@@ -1973,7 +1973,7 @@ NTSTATUS
 IntCompositionDwmGetFrame(_In_ PVOID pUser)
 {
     DWM_FRAME_HEADER Frame;
-    DWM_FRAME_HEADER Input;
+    DWM_FRAME_HEADER Input = {0};
     static PWND s_stack[DWM_MAX_WINDOWS];
     PWND pwndDesktop, pwndChild;
     PPDEVOBJ ppdev;
@@ -2611,7 +2611,7 @@ IntCompositionCleanupProcess(_In_ PEPROCESS Process)
 NTSTATUS
 IntCompositionDwmSetGpuOutput(_In_ PVOID pUser)
 {
-    DWM_GPU_OUTPUT Request;
+    DWM_GPU_OUTPUT Request = {0};
     PWND Window;
 
     if (pUser == NULL)
@@ -2664,7 +2664,7 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
     UNREFERENCED_PARAMETER(pUser);
     return STATUS_NOT_SUPPORTED;
 #else
-    DWM_ATTACH req;
+    DWM_ATTACH req = {0};
     HANDLE hWake = NULL;
     PKEVENT WakeEvent = NULL;
     PEPROCESS CurrentProcess = PsGetCurrentProcess();
@@ -2779,7 +2779,7 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
 NTSTATUS
 IntCompositionDwmOpenSurface(_In_ PVOID pUser)
 {
-    DWM_OPEN_SURFACE req;
+    DWM_OPEN_SURFACE req = {0};
     REDIRECT_ENTRY *e;
     HANDLE hSection = NULL;
     NTSTATUS Status;
@@ -3276,7 +3276,7 @@ CopyOutput:
 NTSTATUS
 IntCompositionDwmSetBlur(_In_ PVOID pUser)
 {
-    DWM_BLUR_REQUEST Request;
+    DWM_BLUR_REQUEST Request = {0};
     REDIRECT_ENTRY *Entry;
     PRECTL NewRects = NULL;
     ULONG NewRectCount = 0;

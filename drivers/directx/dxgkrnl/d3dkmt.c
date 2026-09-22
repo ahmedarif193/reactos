@@ -1246,7 +1246,7 @@ DxgkpInvokeQueryInterface(
     _In_ PVOID MiniportDeviceContext,
     _Inout_ PQUERY_INTERFACE QueryInterface)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     _SEH2_TRY
     {
@@ -1267,7 +1267,7 @@ DxgkpInvokeQueryFeatureSupport(
     _In_ PVOID Context,
     INOUT_PDXGKARG_QUERYFEATURESUPPORT QueryFeatureSupport)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     _SEH2_TRY
     {
@@ -3165,7 +3165,7 @@ DxgkpQueryAdapterInfoCaptured(
         case KMTQAITYPE_CURRENTDISPLAYMODE:
         {
             D3DKMT_CURRENTDISPLAYMODE *CurrentMode;
-            NTSTATUS Status;
+            NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
             if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
                 pQueryAdapterInfo->PrivateDriverDataSize < sizeof(*CurrentMode))
@@ -3482,7 +3482,7 @@ DxgkpQueryAdapterInfoCaptured(
         case KMTQAITYPE_GETSEGMENTGROUPSIZE:
         {
             D3DKMT_SEGMENTGROUPSIZEINFO GroupInfo;
-            NTSTATUS Status;
+            NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
             if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
                 pQueryAdapterInfo->PrivateDriverDataSize < sizeof(GroupInfo))
@@ -3518,7 +3518,7 @@ DxgkpQueryAdapterInfoCaptured(
         {
             D3DKMT_NODEMETADATA Metadata;
             PDXGKDDI_GET_NODE_METADATA GetNodeMetadata;
-            NTSTATUS Status;
+            NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
             if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
                 pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Metadata))
@@ -3573,7 +3573,7 @@ DxgkpQueryAdapterInfoCaptured(
 
         case KMTQAITYPE_NODEPERFDATA:
         {
-            D3DKMT_NODE_PERFDATA Request;
+            D3DKMT_NODE_PERFDATA Request = {0};
 
             if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
                 pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Request))
@@ -5721,7 +5721,7 @@ DxgkpQueryMiniportPerfData(
     PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
     DXGKARG_QUERYADAPTERINFO QueryArgs;
     UCHAR Selector[DXGKP_PERFDATA_QUERY_MAX_SIZE];
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
 
@@ -7594,7 +7594,7 @@ DxgkSignalSynchronizationObjectFromGpu2(
     _In_ CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *pData)
 {
     PDXGKRNL_CONTEXT Contexts[D3DDDI_MAX_BROADCAST_CONTEXT];
-    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_ADAPTER Adapter = NULL;
     ULONG ContextCount = 0;
     ULONG SignalFlags = 0;
     ULONG Index;

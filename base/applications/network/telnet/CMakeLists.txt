@@ -32,9 +32,6 @@ endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(telnet PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-narrowing>)
-    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        target_compile_options(telnet PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-restrict>)
-    endif()
 endif()
 
 set_module_type(telnet win32cui)

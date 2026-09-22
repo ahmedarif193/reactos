@@ -9441,7 +9441,7 @@ static enum vkd3d_result sysval_array_normaliser_init(struct vsir_transformation
 {
     unsigned int component_count = 0, next_register_index;
     struct shader_signature *signature;
-    struct signature_element *element;
+    struct signature_element *element = NULL;
     enum vkd3d_result res;
 
     memset(normaliser, 0, sizeof(*normaliser));

@@ -52,7 +52,8 @@ static void wintirpc_debug(char *fmt, ...)
 }
 #else
 #define MSVCRT_CHECK_PMT(x) (x)
-char * CDECL strtok_s(char *str, const char *delim, char **ctx)
+#define strtok_s libtirpc_strtok_s
+static char * CDECL strtok_s(char *str, const char *delim, char **ctx)
 {
     if (!MSVCRT_CHECK_PMT(delim != NULL)) return NULL;
     if (!MSVCRT_CHECK_PMT(ctx != NULL)) return NULL;

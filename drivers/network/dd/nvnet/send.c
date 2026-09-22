@@ -20,7 +20,7 @@ NvNetTransmitPacket32(
     _In_ PNVNET_TCB Tcb,
     _In_ PSCATTER_GATHER_LIST SgList)
 {
-    NVNET_TBD Tbd, LastTbd;
+    NVNET_TBD Tbd, LastTbd = {0};
     ULONG i, Flags;
     ULONG Slots;
 
@@ -106,7 +106,7 @@ NvNetTransmitPacket64(
     _In_ PNVNET_TCB Tcb,
     _In_ PSCATTER_GATHER_LIST SgList)
 {
-    NVNET_TBD Tbd, LastTbd;
+    NVNET_TBD Tbd, LastTbd = {0};
     ULONG i, Flags;
     ULONG Slots;
 

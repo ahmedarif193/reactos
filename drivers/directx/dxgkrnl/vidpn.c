@@ -2130,7 +2130,7 @@ DxgkpRefreshHotPlugEdid(
 {
     PDXGKDDI_QUERY_DEVICE_DESCRIPTOR QueryDeviceDescriptor;
     DXGK_DEVICE_DESCRIPTOR Descriptor;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (!Snapshot->Connected || Snapshot->EdidValid)
         return STATUS_SUCCESS;
@@ -2673,7 +2673,7 @@ DxgkpRecommendTopologyFallback(
     PDXGKDDI_RECOMMEND_VIDPN_TOPOLOGY RecommendTopology =
         DXGK_CB_FULL(Adapter, DxgkDdiRecommendVidPnTopology);
     DXGKARG_RECOMMENDVIDPNTOPOLOGY TopologyArgs;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (RecommendTopology == NULL || !Snapshot->Connected)
         return STATUS_SUCCESS;
@@ -2725,7 +2725,7 @@ DxgkpRecommendHotPlugCandidate(
     PDXGKDDI_RECOMMEND_FUNCTIONAL_VIDPN RecommendFunctionalVidPn = DXGK_CB(Adapter, DxgkDdiRecommendFunctionalVidPn);
     DXGKARG_RECOMMENDFUNCTIONALVIDPN RecommendArgs;
     D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId = Snapshot->TargetId;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     /*
      * Offer the driver its chance to add monitor modes first.  A monitor's mode
@@ -6182,7 +6182,7 @@ DxgkpEnumerateDisplayModeCandidate(
     _In_ BOOLEAN SourcePivot)
 {
     DXGKARG_ENUMVIDPNCOFUNCMODALITY Args;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RtlZeroMemory(&Args, sizeof(Args));
     Args.hConstrainingVidPn = (D3DKMDT_HVIDPN)Candidate;

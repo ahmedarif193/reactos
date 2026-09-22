@@ -7,6 +7,7 @@ include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/winsock)
 
 add_library(ws2_32_inaddr STATIC src/inaddr.c)
+add_dependencies(ws2_32_inaddr psdk)
 
 list(APPEND SOURCE
     src/addrconv.c

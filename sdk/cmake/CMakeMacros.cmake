@@ -730,6 +730,10 @@ function(set_module_type MODULE TYPE)
         target_compile_definitions(${MODULE} PRIVATE UNICODE _UNICODE)
     endif()
 
+    if(TYPE IN_LIST KERNEL_MODULE_TYPES)
+        target_compile_definitions(${MODULE} PRIVATE _GCC_SAL_CHECK_RETURN)
+    endif()
+
     # Set entry point
     if(__module_ENTRYPOINT OR (__module_ENTRYPOINT STREQUAL "0"))
         set_entrypoint(${MODULE} ${__module_ENTRYPOINT})

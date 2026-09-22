@@ -713,7 +713,8 @@ HidClassPDO_PnP(
         {
             /* Disable the device interface */
             if (PDODeviceExtension->DeviceInterface.Length != 0)
-                IoSetDeviceInterfaceState(&PDODeviceExtension->DeviceInterface, FALSE);
+                if (!NT_SUCCESS(IoSetDeviceInterfaceState(&PDODeviceExtension->DeviceInterface, FALSE)))
+                    DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &PDODeviceExtension->DeviceInterface);
 
             //
             // remove us from the fdo's pdo list

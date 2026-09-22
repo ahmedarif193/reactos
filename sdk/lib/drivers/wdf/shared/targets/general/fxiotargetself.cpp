@@ -162,7 +162,7 @@ Implementation Note:
     // possible dispatch the request to the driver.
     // If a failure occurs, DispatchStep2 completes teh Irp
     //
-    (VOID) m_Device->m_PkgIo->DispatchStep2(Irp, ioInCallerCtx, queue);
+    (VOID)!m_Device->m_PkgIo->DispatchStep2(Irp, ioInCallerCtx, queue);
     return;
 
 Fail:

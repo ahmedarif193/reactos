@@ -225,7 +225,7 @@ AlpcpQueryServerInformation(
     _In_ KPROCESSOR_MODE PreviousMode)
 {
     NTSTATUS Status;
-    HANDLE ThreadHandle;
+    HANDLE ThreadHandle = NULL;
     PETHREAD Thread;
     PEPROCESS ThreadProcess, ConnectedProcess = NULL;
     PALPC_COMMUNICATION_INFO CommunicationInfo;
@@ -390,7 +390,7 @@ NtAlpcQueryInformation(
     PSID Sid = NULL;
     PTOKEN Token;
     PTOKEN_USER UserInfo;
-    ULONG ReferenceCount;
+    ULONG ReferenceCount = 0;
 
     PAGED_CODE();
 
@@ -557,11 +557,11 @@ NtAlpcSetInformation(
     NTSTATUS Status;
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
     PALPC_PORT Port;
-    ALPC_PORT_ASSOCIATE_COMPLETION_PORT Associate;
-    ALPC_PORT_ATTRIBUTES Attributes;
+    ALPC_PORT_ASSOCIATE_COMPLETION_PORT Associate = {0};
+    ALPC_PORT_ATTRIBUTES Attributes = {0};
     ALPC_PORT_COMPLETION_LIST_INFORMATION CompletionListInformation;
     ALPC_PORT_MESSAGE_ZONE_INFORMATION MessageZoneInformation;
-    ULONG ConcurrencyCount;
+    ULONG ConcurrencyCount = 0;
     PVOID CallbackObject = NULL, OldCallbackObject;
     PVOID CompletionPort = NULL, OldCompletionPort;
 
@@ -1101,7 +1101,7 @@ AlpcpOpenSender(
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
     PALPC_PORT Port = NULL;
     PORT_MESSAGE Header;
-    OBJECT_ATTRIBUTES CapturedAttributes;
+    OBJECT_ATTRIBUTES CapturedAttributes = {0};
     ALPC_PORT_MESSAGE32 Header32;
     PKALPC_MESSAGE Pending;
     PVOID SenderObject = NULL;

@@ -2205,7 +2205,12 @@ USBAudioFilterCreate(
     Filter->Context = FilterContext;
 
     DPRINT("USBAudioFilterCreate FilterContext %p LowerDevice %p DeviceExtension %p\n", FilterContext, FilterContext->LowerDevice, FilterContext->DeviceExtension);
-    KsAddItemToObjectBag(Filter->Bag, FilterContext, ExFreePool);
+    if (!NT_SUCCESS(KsAddItemToObjectBag(Filter->Bag, FilterContext, ExFreePool)))
+    {
+        Filter->Context = NULL;
+        FreeFunction(FilterContext);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     return STATUS_SUCCESS;
 }
 
@@ -2557,7 +2562,7 @@ UsbAudioGetDataRanges(
                         DataRangeAudio->MinimumSampleFrequency =
                             UsbAudioReadSampleFrequency(&StreamingFormatDescriptor->tSamFreq[0]);
                         DataRangeAudio->MaximumSampleFrequency =
-                            UsbAudioReadSampleFrequency(&StreamingFormatDescriptor->tSamFreq[3]);
+                            UsbAudioReadSampleFrequency(StreamingFormatDescriptor->tSamFreq + 3);
 
                         DataRangeAudioArray[DataRangeIndex] = (PKSDATARANGE)DataRangeAudio;
                         DataRangeIndex++;

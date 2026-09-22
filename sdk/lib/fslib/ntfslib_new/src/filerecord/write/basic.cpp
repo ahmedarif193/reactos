@@ -320,7 +320,7 @@ FileRecord::SetBasicInformation(
     PAttribute Attribute;
     PStandardInformationEx Standard;
     PUCHAR RecordBackup;
-    ULONG RequestedAttributes;
+    ULONG RequestedAttributes = 0;
     ULONG StructuralMask;
     NTSTATUS Status;
 

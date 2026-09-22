@@ -154,7 +154,7 @@ NTAPI
 ElfBackupEventLogFileA(IN HANDLE hEventLog,
                        IN PANSI_STRING BackupFileNameA)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (!BackupFileNameA || (BackupFileNameA->Length == 0))
         return STATUS_INVALID_PARAMETER;
@@ -222,7 +222,7 @@ NTAPI
 ElfBackupEventLogFileW(IN HANDLE hEventLog,
                        IN PUNICODE_STRING BackupFileNameU)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (!BackupFileNameU || (BackupFileNameU->Length == 0))
         return STATUS_INVALID_PARAMETER;
@@ -285,7 +285,7 @@ NTAPI
 ElfClearEventLogFileA(IN HANDLE hEventLog,
                       IN PANSI_STRING BackupFileNameA)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RpcTryExcept
     {
@@ -347,7 +347,7 @@ NTAPI
 ElfClearEventLogFileW(IN HANDLE hEventLog,
                       IN PUNICODE_STRING BackupFileNameU)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RpcTryExcept
     {
@@ -408,7 +408,7 @@ NTSTATUS
 NTAPI
 ElfCloseEventLog(IN HANDLE hEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RpcTryExcept
     {
@@ -454,7 +454,7 @@ NTSTATUS
 NTAPI
 ElfDeregisterEventSource(IN HANDLE hEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RpcTryExcept
     {
@@ -504,7 +504,7 @@ GetEventLogInformation(IN HANDLE hEventLog,
                        IN DWORD cbBufSize,
                        OUT LPDWORD pcbBytesNeeded)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (dwInfoLevel != EVENTLOG_FULL_INFO)
     {
@@ -548,7 +548,7 @@ NTAPI
 ElfNumberOfRecords(IN HANDLE hEventLog,
                    OUT PULONG NumberOfRecords)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (!NumberOfRecords)
         return STATUS_INVALID_PARAMETER;
@@ -597,7 +597,7 @@ NTAPI
 ElfOldestRecord(IN HANDLE hEventLog,
                 OUT PULONG OldestRecordNumber)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (!OldestRecordNumber)
         return STATUS_INVALID_PARAMETER;
@@ -646,7 +646,7 @@ NTAPI
 ElfChangeNotify(IN HANDLE hEventLog,
                 IN HANDLE hEvent)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     CLIENT_ID ClientId = NtCurrentTeb()->ClientId;
     RPC_CLIENT_ID RpcClientId;
 
@@ -694,7 +694,7 @@ ElfOpenBackupEventLogA(IN PANSI_STRING UNCServerNameA,
                        IN PANSI_STRING BackupFileNameA,
                        OUT PHANDLE phEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PSTR pUNCServerName = NULL;
 
     if (!phEventLog || !BackupFileNameA || (BackupFileNameA->Length == 0))
@@ -798,7 +798,7 @@ ElfOpenBackupEventLogW(IN PUNICODE_STRING UNCServerNameU,
                        IN PUNICODE_STRING BackupFileNameU,
                        OUT PHANDLE phEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PWSTR pUNCServerName = NULL;
 
     if (!phEventLog || !BackupFileNameU || (BackupFileNameU->Length == 0))
@@ -886,7 +886,7 @@ ElfOpenEventLogA(IN PANSI_STRING UNCServerNameA,
                  IN PANSI_STRING SourceNameA,
                  OUT PHANDLE phEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PSTR pUNCServerName = NULL;
 
     if (!phEventLog || !SourceNameA || (SourceNameA->Length == 0))
@@ -952,7 +952,7 @@ ElfOpenEventLogW(IN PUNICODE_STRING UNCServerNameU,
                  IN PUNICODE_STRING SourceNameU,
                  OUT PHANDLE phEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PWSTR pUNCServerName = NULL;
 
     if (!phEventLog || !SourceNameU || (SourceNameU->Length == 0))
@@ -1018,7 +1018,7 @@ ElfReadEventLogA(IN HANDLE hEventLog,
                  OUT PULONG NumberOfBytesRead,
                  OUT PULONG MinNumberOfBytesNeeded)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     ULONG Flags;
 
     if (!Buffer || !NumberOfBytesRead || !MinNumberOfBytesNeeded)
@@ -1111,7 +1111,7 @@ ElfReadEventLogW(IN HANDLE hEventLog,
                  OUT PULONG NumberOfBytesRead,
                  OUT PULONG MinNumberOfBytesNeeded)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     ULONG Flags;
 
     if (!Buffer || !NumberOfBytesRead || !MinNumberOfBytesNeeded)
@@ -1191,7 +1191,7 @@ ElfRegisterEventSourceA(IN PANSI_STRING UNCServerNameA,
                         IN PANSI_STRING SourceNameA,
                         OUT PHANDLE phEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PSTR pUNCServerName = NULL;
 
     if (!phEventLog || !SourceNameA || (SourceNameA->Length == 0))
@@ -1262,7 +1262,7 @@ ElfRegisterEventSourceW(IN PUNICODE_STRING UNCServerNameU,
                         IN PUNICODE_STRING SourceNameU,
                         OUT PHANDLE phEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PWSTR pUNCServerName = NULL;
 
     if (!phEventLog || !SourceNameU || (SourceNameU->Length == 0))
@@ -1333,7 +1333,7 @@ ElfReportEventA(IN HANDLE hEventLog,
                 IN OUT PULONG RecordNumber,
                 IN OUT PULONG TimeWritten)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     LARGE_INTEGER SystemTime;
     ULONG Time;
     ULONG dwSize;
@@ -1472,7 +1472,7 @@ ElfReportEventW(IN HANDLE hEventLog,
                 IN OUT PULONG RecordNumber,
                 IN OUT PULONG TimeWritten)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     LARGE_INTEGER SystemTime;
     ULONG Time;
     ULONG dwSize;
@@ -1599,7 +1599,7 @@ ElfReportEventAndSourceW(IN HANDLE hEventLog,
                          IN OUT PULONG RecordNumber,
                          IN OUT PULONG TimeWritten)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RpcTryExcept
     {
@@ -1632,7 +1632,7 @@ NTSTATUS
 NTAPI
 ElfFlushEventLog(IN HANDLE hEventLog)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     RpcTryExcept
     {

@@ -1251,12 +1251,14 @@ Tpm2Pnp(
 
         case IRP_MN_STOP_DEVICE:
         case IRP_MN_SURPRISE_REMOVAL:
-            IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
             Tpm2StopHardware(DeviceExtension);
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+                DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
             DeviceExtension->Started = FALSE;
             Tpm2CancelHardware(DeviceExtension);
             Status = IoAcquireRemoveLock(&DeviceExtension->RemoveLock, Irp);

@@ -479,7 +479,7 @@ SeCaptureSecurityDescriptor(
     _Out_ PSECURITY_DESCRIPTOR *CapturedSecurityDescriptor)
 {
     PISECURITY_DESCRIPTOR OriginalDescriptor = _OriginalSecurityDescriptor;
-    SECURITY_DESCRIPTOR DescriptorCopy;
+    SECURITY_DESCRIPTOR DescriptorCopy = {0};
     PISECURITY_DESCRIPTOR_RELATIVE NewDescriptor;
     ULONG OwnerSAC = 0, GroupSAC = 0;
     ULONG OwnerSize = 0, GroupSize = 0;

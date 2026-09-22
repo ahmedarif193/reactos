@@ -390,7 +390,7 @@ ber_get_stringbvl( BerElement *ber, bgbvr *b )
 		BerVarray ba;			/* BvArray */
 		struct berval **bv;		/* BvVec */
 		char *bo;				/* BvOff */
-	} res;
+	} res = {0};
 
 	tag = ber_skip_tag( ber, &bv.bv_len );
 

@@ -28,7 +28,7 @@ IsGlobalDeviceMap(
     HANDLE DirectoryHandle,
     PBOOLEAN IsGlobal)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     DWORD ReturnLength;
     UNICODE_STRING GlobalString;
     OBJECT_NAME_INFORMATION NameInfo, *PNameInfo;
@@ -555,7 +555,7 @@ QueryDosDeviceW(
     BOOLEAN IsGlobal, GlobalNeeded, Found;
     POBJECT_DIRECTORY_INFORMATION DirInfo;
     OBJECT_DIRECTORY_INFORMATION NullEntry = {{0}};
-    ULONG ReturnLength, NameLength, Length, Context, BufferLength;
+    ULONG ReturnLength, NameLength, Length = 0, Context, BufferLength;
 
     /* Open the '\??' directory */
     RtlInitUnicodeString(&UnicodeString, L"\\??");

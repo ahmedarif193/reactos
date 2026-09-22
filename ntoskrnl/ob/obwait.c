@@ -193,7 +193,7 @@ NtWaitForMultipleObjects(IN ULONG ObjectCount,
     PHANDLE_TABLE HandleTable;
     ACCESS_MASK GrantedAccess;
     PVOID DefaultObject;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PAGED_CODE();
 
     /* Check for valid Object Count */

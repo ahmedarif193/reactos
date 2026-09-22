@@ -72,7 +72,8 @@ PciGetDescriptionMessage(IN ULONG Identifier,
         MessageString.Length -= sizeof(CHAR);
 
         /* Convert it to Unicode */
-        RtlAnsiStringToUnicodeString(&UnicodeString, &MessageString, TRUE);
+        if (!NT_SUCCESS(RtlAnsiStringToUnicodeString(&UnicodeString, &MessageString, TRUE)))
+            return NULL;
         Buffer = UnicodeString.Buffer;
 
         /* Return the length to the caller */

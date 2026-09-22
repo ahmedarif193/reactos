@@ -1016,7 +1016,7 @@ FsRtlNotifyFilterReportChange(IN PNOTIFY_SYNC NotifySync,
     PFILE_NOTIFY_INFORMATION FileNotifyInfo;
     BOOLEAN IsStream, IsParent, PoolQuotaCharged;
     STRING TargetDirectory, TargetName, ParentName, IntNormalizedParentName;
-    ULONG NumberOfBytes, TargetNumberOfParts, FullNumberOfParts, LastPartOffset, ParentNameOffset, ParentNameLength;
+    ULONG NumberOfBytes, TargetNumberOfParts, FullNumberOfParts, LastPartOffset = 0, ParentNameOffset, ParentNameLength;
     ULONG DataLength, AlignedDataLength;
 
     TargetDirectory.Length = 0;

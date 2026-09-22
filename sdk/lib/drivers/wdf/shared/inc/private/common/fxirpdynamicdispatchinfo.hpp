@@ -16,7 +16,7 @@ struct FxIrpDynamicDispatchInfo : public FxStump {
         CxDeviceInfo(NULL)
     {
         InitializeListHead(&ListEntry);
-        RtlZeroMemory(Dispatch, sizeof(Dispatch));
+        RtlZeroMemory((PVOID)Dispatch, sizeof(Dispatch));
     }
 
     ~FxIrpDynamicDispatchInfo()

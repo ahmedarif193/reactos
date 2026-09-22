@@ -47,7 +47,7 @@ AbortSystemShutdownA(LPCSTR lpMachineName)
 BOOL WINAPI
 AbortSystemShutdownW(LPCWSTR lpMachineName)
 {
-    DWORD dwError;
+    DWORD dwError = 0;
 
     RpcTryExcept
     {
@@ -149,7 +149,7 @@ InitiateSystemShutdownW(LPWSTR lpMachineName,
                         BOOL bRebootAfterShutdown)
 {
     UNICODE_STRING Message;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     RtlInitUnicodeString(&Message, lpMessage);
 
@@ -259,7 +259,7 @@ InitiateSystemShutdownExW(LPWSTR lpMachineName,
                           DWORD dwReason)
 {
     UNICODE_STRING Message;
-    DWORD dwError;
+    DWORD dwError = 0;
 
     RtlInitUnicodeString(&Message, lpMessage);
 

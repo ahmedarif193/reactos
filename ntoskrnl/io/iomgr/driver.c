@@ -1265,7 +1265,7 @@ IopInitializeBuiltinDriver(IN PLDR_DATA_TABLE_ENTRY BootLdrEntry)
     PWCHAR Buffer, FileNameWithoutPath;
     PWSTR FileExtension;
     PUNICODE_STRING ModuleName = &BootLdrEntry->BaseDllName;
-    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PLDR_DATA_TABLE_ENTRY LdrEntry = NULL;
     PLIST_ENTRY NextEntry;
     UNICODE_STRING ServiceName;
     BOOLEAN Success;
@@ -1361,7 +1361,12 @@ IopInitializeBuiltinDriver(IN PLDR_DATA_TABLE_ENTRY BootLdrEntry)
             break;
         }
     }
-    ASSERT(NextEntry != &PsLoadedModuleList);
+    if (NextEntry == &PsLoadedModuleList)
+    {
+        DPRINT1("Boot driver '%wZ' not found in PsLoadedModuleList\n", ModuleName);
+        ZwClose(serviceHandle);
+        return FALSE;
+    }
 
     /*
      * Initialize the driver

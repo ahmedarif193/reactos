@@ -28,6 +28,7 @@
 #include <limits.h>
 #include <iphlpapi.h>
 #include <math.h>
+#include <strsafe.h>
 #include "tftpd.h"
 
 //Global Variables
@@ -119,7 +120,7 @@ void WINAPI ServiceMain(DWORD /*argc*/, TCHAR* /*argv*/[])
         {
             if (cfig.logLevel)
             {
-                sprintf(logBuff, "Thread Creation Failed");
+                StringCbPrintfA(logBuff, sizeof(logBuff), "Thread Creation Failed");
                 logMess(logBuff, 1);
             }
             exit(-1);
@@ -187,14 +188,14 @@ void WINAPI ServiceMain(DWORD /*argc*/, TCHAR* /*argv*/[])
         serviceStatus.dwCurrentState = SERVICE_STOP_PENDING;
         SetServiceStatus(serviceStatusHandle, &serviceStatus);
 
-        sprintf(logBuff, "Closing Network Connections...");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "Closing Network Connections...");
         logMess(logBuff, 1);
 
         closeConn();
 
         WSACleanup();
 
-        sprintf(logBuff, "TFTP Server Stopped !\n");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "TFTP Server Stopped !\n");
         logMess(logBuff, 1);
 
         if (cfig.logfile)
@@ -398,7 +399,7 @@ void runProg()
     {
         if (cfig.logLevel)
         {
-            sprintf(logBuff, "Thread Creation Failed");
+            StringCbPrintfA(logBuff, sizeof(logBuff), "Thread Creation Failed");
             logMess(logBuff, 1);
         }
         exit(-1);
@@ -567,7 +568,7 @@ void processRequest(void *lpParam)
 
             if ((htons(req.mesin.opcode) == 5))
             {
-                sprintf(req.serverError.errormessage, "Error Code %i at Client, %s", ntohs(req.clientError.errorcode), req.clientError.errormessage);
+                StringCbPrintfA(req.serverError.errormessage, sizeof(req.serverError.errormessage), "Error Code %i at Client, %s", ntohs(req.clientError.errorcode), req.clientError.errormessage);
                 logMess(&req, 2);
                 req.attempt = UCHAR_MAX;
                 continue;
@@ -1152,7 +1153,7 @@ void processRequest(void *lpParam)
                         }
                         else if (ntohs(req.mesin.opcode) == 5)
                         {
-                            sprintf(req.serverError.errormessage, "Client %s:%u, Error Code %i at Client, %s", inet_ntoa(req.client.sin_addr), ntohs(req.client.sin_port), ntohs(req.clientError.errorcode), req.clientError.errormessage);
+                            StringCbPrintfA(req.serverError.errormessage, sizeof(req.serverError.errormessage), "Client %s:%u, Error Code %i at Client, %s", inet_ntoa(req.client.sin_addr), ntohs(req.client.sin_port), ntohs(req.clientError.errorcode), req.clientError.errormessage);
                             logMess(&req, 1);
                             req.attempt = UCHAR_MAX;
                             break;
@@ -1809,12 +1810,12 @@ void init(void *lpParam)
     GetModuleFileName(NULL, extbuff, _MAX_PATH);
     char *fileExt = strrchr(extbuff, '.');
     *fileExt = 0;
-    sprintf(iniFile, "%s.ini", extbuff);
-    sprintf(lnkFile, "%s.url", extbuff);
+    StringCbPrintfA(iniFile, sizeof(iniFile), "%s.ini", extbuff);
+    StringCbPrintfA(lnkFile, sizeof(lnkFile), "%s.url", extbuff);
     fileExt = strrchr(extbuff, '\\');
     *fileExt = 0;
     fileExt++;
-    sprintf(logFile, "%s\\log\\%s%%Y%%m%%d.log", extbuff, fileExt);
+    StringCbPrintfA(logFile, sizeof(logFile), "%s\\log\\%s%%Y%%m%%d.log", extbuff, fileExt);
 
     FILE *f = NULL;
     char raw[512];
@@ -1840,7 +1841,7 @@ void init(void *lpParam)
             else if (!strcasecmp(raw, "All"))
                 cfig.logLevel = 2;
             else
-                sprintf(tempbuff, "Section [LOGGING], Invalid LogLevel: %s", raw);
+                StringCbPrintfA(tempbuff, sizeof(tempbuff), "Section [LOGGING], Invalid LogLevel: %s", raw);
         }
     }
 
@@ -1858,7 +1859,7 @@ void init(void *lpParam)
             WritePrivateProfileString("InternetShortcut","URL", extbuff, lnkFile);
             WritePrivateProfileString("InternetShortcut","IconIndex", "0", lnkFile);
             WritePrivateProfileString("InternetShortcut","IconFile", extbuff, lnkFile);
-            sprintf(logBuff, "%s Starting..", sVersion);
+            StringCbPrintfA(logBuff, sizeof(logBuff), "%s Starting..", sVersion);
             logMess(logBuff, 1);
 
             if (tempbuff[0])
@@ -1871,7 +1872,7 @@ void init(void *lpParam)
 
     if (cfig.wsaData.wVersion != wVersionRequested)
     {
-        sprintf(logBuff, "WSAStartup Error");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "WSAStartup Error");
         logMess(logBuff, 1);
     }
 
@@ -1885,12 +1886,12 @@ void init(void *lpParam)
             {
                 if (!cfig.homes[0].alias[0] && cfig.homes[0].target[0])
                 {
-                    sprintf(logBuff, "Section [HOME], alias and bare path mixup, entry %s ignored", raw);
+                    StringCbPrintfA(logBuff, sizeof(logBuff), "Section [HOME], alias and bare path mixup, entry %s ignored", raw);
                     logMess(logBuff, 1);
                 }
                 else if (strchr(name, notFileSep) || strchr(name, fileSep) || strchr(name, '>') || strchr(name, '<') || strchr(name, '.'))
                 {
-                    sprintf(logBuff, "Section [HOME], invalid chars in alias %s, entry ignored", name);
+                    StringCbPrintfA(logBuff, sizeof(logBuff), "Section [HOME], invalid chars in alias %s, entry ignored", name);
                     logMess(logBuff, 1);
                 }
                 else if (name[0] && strlen(name) < 64 && value[0])
@@ -1903,7 +1904,7 @@ void init(void *lpParam)
                     {
                         if (cfig.homes[i].alias[0] && !strcasecmp(name, cfig.homes[i].alias))
                         {
-                            sprintf(logBuff, "Section [HOME], Duplicate Entry: %s ignored", raw);
+                            StringCbPrintfA(logBuff, sizeof(logBuff), "Section [HOME], Duplicate Entry: %s ignored", raw);
                             logMess(logBuff, 1);
                             break;
                         }
@@ -1925,7 +1926,7 @@ void init(void *lpParam)
                 }
                 else
                 {
-                    sprintf(logBuff, "Section [HOME], alias %s too large", name);
+                    StringCbPrintfA(logBuff, sizeof(logBuff), "Section [HOME], alias %s too large", name);
                     logMess(logBuff, 1);
                 }
             }
@@ -1942,17 +1943,17 @@ void init(void *lpParam)
             }
             else if (cfig.homes[0].alias[0])
             {
-                sprintf(logBuff, "Section [HOME], alias and bare path mixup, entry %s ignored", raw);
+                StringCbPrintfA(logBuff, sizeof(logBuff), "Section [HOME], alias and bare path mixup, entry %s ignored", raw);
                 logMess(logBuff, 1);
             }
             else if (cfig.homes[0].target[0])
             {
-                sprintf(logBuff, "Section [HOME], Duplicate Path: %s ignored", raw);
+                StringCbPrintfA(logBuff, sizeof(logBuff), "Section [HOME], Duplicate Path: %s ignored", raw);
                 logMess(logBuff, 1);
             }
             else
             {
-                sprintf(logBuff, "Section [HOME], missing = sign, Invalid Entry: %s ignored", raw);
+                StringCbPrintfA(logBuff, sizeof(logBuff), "Section [HOME], missing = sign, Invalid Entry: %s ignored", raw);
                 logMess(logBuff, 1);
             }
         }
@@ -2037,19 +2038,19 @@ void init(void *lpParam)
                             cfig.minport = 0;
                             cfig.maxport = 0;
 
-                            sprintf(logBuff, "Invalid port range %s", value);
+                            StringCbPrintfA(logBuff, sizeof(logBuff), "Invalid port range %s", value);
                             logMess(logBuff, 1);
                         }
                     }
                     else
                     {
-                        sprintf(logBuff, "Invalid port range %s", value);
+                        StringCbPrintfA(logBuff, sizeof(logBuff), "Invalid port range %s", value);
                         logMess(logBuff, 1);
                     }
                 }
                 else
                 {
-                    sprintf(logBuff, "Warning: unknown option %s, ignored", name);
+                    StringCbPrintfA(logBuff, sizeof(logBuff), "Warning: unknown option %s, ignored", name);
                     logMess(logBuff, 1);
                 }
             }
@@ -2090,7 +2091,7 @@ void init(void *lpParam)
                 }
                 else
                 {
-                    sprintf(logBuff, "Section [ALLOWED-CLIENTS] Invalid entry %s in ini file, ignored", raw);
+                    StringCbPrintfA(logBuff, sizeof(logBuff), "Section [ALLOWED-CLIENTS] Invalid entry %s in ini file, ignored", raw);
                     logMess(logBuff, 1);
                 }
             }
@@ -2103,14 +2104,14 @@ void init(void *lpParam)
     }
     else
     {
-        sprintf(logBuff, "starting TFTP service");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "starting TFTP service");
         logMess(logBuff, 1);
     }
 
     for (int i = 0; i < MAX_SERVERS; i++)
         if (cfig.homes[i].target[0])
         {
-            sprintf(logBuff, "alias /%s is mapped to %s", cfig.homes[i].alias, cfig.homes[i].target);
+            StringCbPrintfA(logBuff, sizeof(logBuff), "alias /%s is mapped to %s", cfig.homes[i].alias, cfig.homes[i].target);
             logMess(logBuff, 1);
         }
 
@@ -2124,7 +2125,7 @@ void init(void *lpParam)
         for (MYWORD i = 0; i <= sizeof(cfig.hostRanges) && cfig.hostRanges[i].rangeStart; i++)
 #endif
         {
-            sprintf(logBuff, "%s", "permitted clients: ");
+            StringCbPrintfA(logBuff, sizeof(logBuff), "%s", "permitted clients: ");
             sprintf(temp, "%s-", IP2String(tempbuff, htonl(cfig.hostRanges[i].rangeStart)));
             strcat(logBuff, temp);
             sprintf(temp, "%s", IP2String(tempbuff, htonl(cfig.hostRanges[i].rangeEnd)));
@@ -2134,37 +2135,37 @@ void init(void *lpParam)
     }
     else
     {
-        sprintf(logBuff, "%s", "permitted clients: all");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "%s", "permitted clients: all");
         logMess(logBuff, 1);
     }
 
     if (cfig.minport)
     {
-        sprintf(logBuff, "server port range: %u-%u", cfig.minport, cfig.maxport);
+        StringCbPrintfA(logBuff, sizeof(logBuff), "server port range: %u-%u", cfig.minport, cfig.maxport);
         logMess(logBuff, 1);
     }
     else
     {
-        sprintf(logBuff, "server port range: all");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "server port range: all");
         logMess(logBuff, 1);
     }
 
-    sprintf(logBuff, "max blksize: %u", blksize);
+    StringCbPrintfA(logBuff, sizeof(logBuff), "max blksize: %u", blksize);
     logMess(logBuff, 1);
-    sprintf(logBuff, "default blksize: %u", 512);
+    StringCbPrintfA(logBuff, sizeof(logBuff), "default blksize: %u", 512);
     logMess(logBuff, 1);
-    sprintf(logBuff, "default timeout: %u", timeout);
+    StringCbPrintfA(logBuff, sizeof(logBuff), "default timeout: %u", timeout);
     logMess(logBuff, 1);
-    sprintf(logBuff, "file read allowed: %s", cfig.fileRead ? "Yes" : "No");
+    StringCbPrintfA(logBuff, sizeof(logBuff), "file read allowed: %s", cfig.fileRead ? "Yes" : "No");
     logMess(logBuff, 1);
-    sprintf(logBuff, "file create allowed: %s", cfig.fileWrite ? "Yes" : "No");
+    StringCbPrintfA(logBuff, sizeof(logBuff), "file create allowed: %s", cfig.fileWrite ? "Yes" : "No");
     logMess(logBuff, 1);
-    sprintf(logBuff, "file overwrite allowed: %s", cfig.fileOverwrite ? "Yes" : "No");
+    StringCbPrintfA(logBuff, sizeof(logBuff), "file overwrite allowed: %s", cfig.fileOverwrite ? "Yes" : "No");
     logMess(logBuff, 1);
 
     if (!verbatim)
     {
-        sprintf(logBuff, "logging: %s", cfig.logLevel > 1 ? "all" : "errors");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "logging: %s", cfig.logLevel > 1 ? "all" : "errors");
         logMess(logBuff, 1);
     }
 
@@ -2181,7 +2182,7 @@ void init(void *lpParam)
     }
     else if ( GetLastError() == ERROR_ALREADY_EXISTS )
     {
-        sprintf(logBuff, "CreateEvent opened an existing Event\nServer May already be Running");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "CreateEvent opened an existing Event\nServer May already be Running");
         logMess(logBuff, 0);
         exit(-1);
     }
@@ -2199,7 +2200,7 @@ void init(void *lpParam)
     }
     else if ( GetLastError() == ERROR_ALREADY_EXISTS )
     {
-        sprintf(logBuff, "CreateEvent opened an existing Event\nServer May already be Running");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "CreateEvent opened an existing Event\nServer May already be Running");
         logMess(logBuff, 0);
         exit(-1);
     }
@@ -2217,7 +2218,7 @@ void init(void *lpParam)
     }
     else if ( GetLastError() == ERROR_ALREADY_EXISTS )
     {
-        sprintf(logBuff, "CreateEvent opened an existing Event\nServer May already be Running");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "CreateEvent opened an existing Event\nServer May already be Running");
         logMess(logBuff, 0);
         exit(-1);
     }
@@ -2235,7 +2236,7 @@ void init(void *lpParam)
     }
     else if ( GetLastError() == ERROR_ALREADY_EXISTS )
     {
-        sprintf(logBuff, "CreateEvent opened an existing Event\nServer May already be Running");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "CreateEvent opened an existing Event\nServer May already be Running");
         logMess(logBuff, 0);
         exit(-1);
     }
@@ -2250,13 +2251,13 @@ void init(void *lpParam)
                   NULL);                          // argument to thread function
         }
 
-        sprintf(logBuff, "thread pool size: %u", minThreads);
+        StringCbPrintfA(logBuff, sizeof(logBuff), "thread pool size: %u", minThreads);
         logMess(logBuff, 1);
     }
 
     for (int i = 0; i < MAX_SERVERS && network.tftpConn[i].port; i++)
     {
-        sprintf(logBuff, "listening on: %s:%i", IP2String(tempbuff, network.tftpConn[i].server), network.tftpConn[i].port);
+        StringCbPrintfA(logBuff, sizeof(logBuff), "listening on: %s:%i", IP2String(tempbuff, network.tftpConn[i].server), network.tftpConn[i].port);
         logMess(logBuff, 1);
     }
 
@@ -2302,7 +2303,7 @@ void init(void *lpParam)
                     }
                     else
                     {
-                        sprintf(logBuff, "Warning: Section [LISTEN-ON], Invalid Interface Address %s, ignored", raw);
+                        StringCbPrintfA(logBuff, sizeof(logBuff), "Warning: Section [LISTEN-ON], Invalid Interface Address %s, ignored", raw);
                         logMess(logBuff, 1);
                     }
                 }
@@ -2311,7 +2312,7 @@ void init(void *lpParam)
 
         if (!cfig.ifspecified)
         {
-            sprintf(logBuff, "detecting Interfaces..");
+            StringCbPrintfA(logBuff, sizeof(logBuff), "detecting Interfaces..");
             logMess(logBuff, 1);
             getInterfaces(&newNetwork);
 
@@ -2353,7 +2354,7 @@ void init(void *lpParam)
                 if (newNetwork.tftpConn[i].sock == INVALID_SOCKET)
                 {
                     bindfailed = true;
-                    sprintf(logBuff, "Failed to Create Socket");
+                    StringCbPrintfA(logBuff, sizeof(logBuff), "Failed to Create Socket");
                     logMess(logBuff, 1);
                     continue;
                 }
@@ -2370,7 +2371,7 @@ void init(void *lpParam)
                 {
                     bindfailed = true;
                     closesocket(newNetwork.tftpConn[i].sock);
-                    sprintf(logBuff, "%s Port %i bind failed", IP2String(tempbuff, newNetwork.listenServers[j]), newNetwork.listenPorts[j]);
+                    StringCbPrintfA(logBuff, sizeof(logBuff), "%s Port %i bind failed", IP2String(tempbuff, newNetwork.listenServers[j]), newNetwork.listenPorts[j]);
                     logMess(logBuff, 1);
                     continue;
                 }
@@ -2404,14 +2405,14 @@ void init(void *lpParam)
 
         if (!network.tftpConn[0].ready)
         {
-            sprintf(logBuff, "No Static Interface ready, Waiting...");
+            StringCbPrintfA(logBuff, sizeof(logBuff), "No Static Interface ready, Waiting...");
             logMess(logBuff, 1);
             continue;
         }
 
         for (int i = 0; i < MAX_SERVERS && network.tftpConn[i].loaded; i++)
         {
-            sprintf(logBuff, "Listening On: %s:%d", IP2String(tempbuff, network.tftpConn[i].server), network.tftpConn[i].port);
+            StringCbPrintfA(logBuff, sizeof(logBuff), "Listening On: %s:%d", IP2String(tempbuff, network.tftpConn[i].server), network.tftpConn[i].port);
             logMess(logBuff, 1);
         }
 
@@ -2468,12 +2469,12 @@ bool detectChange()
 
     if (cfig.failureCount)
     {
-        sprintf(logBuff, "Retrying failed Listening Interfaces..");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "Retrying failed Listening Interfaces..");
         logMess(logBuff, 1);
     }
     else
     {
-        sprintf(logBuff, "Network changed, re-detecting Interfaces..");
+        StringCbPrintfA(logBuff, sizeof(logBuff), "Network changed, re-detecting Interfaces..");
         logMess(logBuff, 1);
     }
 

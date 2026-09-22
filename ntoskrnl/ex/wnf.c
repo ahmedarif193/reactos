@@ -59,7 +59,7 @@ ExpWnfCaptureStateName(PCWNF_STATE_NAME StateName,
                        KPROCESSOR_MODE PreviousMode,
                        PWNF_STATE_NAME_INTERNAL InternalName)
 {
-    WNF_STATE_NAME CapturedName;
+    WNF_STATE_NAME CapturedName = {0};
 
     if (!ExpWnfInitialized)
         return STATUS_UNSUCCESSFUL;

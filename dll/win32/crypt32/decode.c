@@ -3136,7 +3136,7 @@ static BOOL WINAPI CRYPT_AsnDecodeAuthorityKeyId(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -3171,7 +3171,7 @@ static BOOL WINAPI CRYPT_AsnDecodeAuthorityKeyId2(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -3227,7 +3227,7 @@ static BOOL WINAPI CRYPT_AsnDecodeAuthorityInfoAccess(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     TRACE("%p, %ld, %08lx, %p, %p, %ld\n", pbEncoded, cbEncoded, dwFlags,
      pDecodePara, pvStructInfo, *pcbStructInfo);
@@ -3517,7 +3517,7 @@ static BOOL WINAPI CRYPT_AsnDecodeBasicConstraints(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -3552,7 +3552,7 @@ static BOOL WINAPI CRYPT_AsnDecodeBasicConstraints2(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -3914,7 +3914,7 @@ static BOOL WINAPI CRYPT_AsnDecodeRsaPubKey_Bcrypt(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -3977,7 +3977,7 @@ static BOOL WINAPI CRYPT_AsnDecodeRsaPubKey(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -4051,7 +4051,7 @@ static BOOL WINAPI CRYPT_AsnDecodeRsaPrivKey(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
     DWORD halflen;
 
     __TRY
@@ -4320,7 +4320,7 @@ static BOOL WINAPI CRYPT_AsnDecodeOctetString(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     TRACE("%p, %ld, %08lx, %p, %p, %ld\n", pbEncoded, cbEncoded, dwFlags,
      pDecodePara, pvStructInfo, *pcbStructInfo);
@@ -4522,7 +4522,7 @@ static BOOL WINAPI CRYPT_AsnDecodeInt(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -4615,7 +4615,7 @@ static BOOL WINAPI CRYPT_AsnDecodeInteger(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -4723,7 +4723,7 @@ static BOOL WINAPI CRYPT_AsnDecodeUnsignedInteger(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -4765,7 +4765,7 @@ static BOOL WINAPI CRYPT_AsnDecodeEnumerated(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     if (!pvStructInfo)
     {
@@ -5110,7 +5110,7 @@ static BOOL WINAPI CRYPT_AsnDecodeChoiceOfTime(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -5347,7 +5347,7 @@ static BOOL WINAPI CRYPT_AsnDecodeCRLDistPoints(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     TRACE("%p, %ld, %08lx, %p, %p, %ld\n", pbEncoded, cbEncoded, dwFlags,
      pDecodePara, pvStructInfo, *pcbStructInfo);
@@ -5380,7 +5380,7 @@ static BOOL WINAPI CRYPT_AsnDecodeEnhancedKeyUsage(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     TRACE("%p, %ld, %08lx, %p, %p, %ld\n", pbEncoded, cbEncoded, dwFlags,
      pDecodePara, pvStructInfo, *pcbStructInfo);
@@ -5412,7 +5412,7 @@ static BOOL WINAPI CRYPT_AsnDecodeIssuingDistPoint(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     TRACE("%p, %ld, %08lx, %p, %p, %ld\n", pbEncoded, cbEncoded, dwFlags,
      pDecodePara, pvStructInfo, *pcbStructInfo);
@@ -6095,7 +6095,7 @@ static BOOL WINAPI CRYPT_AsnDecodeObjectIdentifier(DWORD dwCertEncodingType,
  CRYPT_DECODE_PARA *pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
     DWORD bytesNeeded = 0;
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {
@@ -6134,7 +6134,7 @@ static BOOL WINAPI CRYPT_AsnDecodeEccSignature(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  CRYPT_DECODE_PARA *pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
     struct AsnDecodeSequenceItem items[] = {
      { ASN_INTEGER, offsetof(CERT_ECC_SIGNATURE, r),
        CRYPT_AsnDecodeUnsignedIntegerInternal, sizeof(CRYPT_UINT_BLOB), FALSE,
@@ -6224,7 +6224,7 @@ static BOOL WINAPI CRYPT_AsnDecodeOCSPResponse(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  CRYPT_DECODE_PARA *pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
     struct AsnDecodeSequenceItem items[] = {
      { ASN_ENUMERATED, offsetof(OCSP_RESPONSE_INFO, dwStatus),
        CRYPT_AsnDecodeOCSPResponseStatus, sizeof(DWORD), FALSE, FALSE,
@@ -6281,7 +6281,7 @@ static BOOL WINAPI CRYPT_AsnDecodeOCSPBasicSignedResponse(DWORD dwCertEncodingTy
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  CRYPT_DECODE_PARA *pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
     struct AsnDecodeSequenceItem items[] = {
      { 0, offsetof(OCSP_BASIC_SIGNED_RESPONSE_INFO, ToBeSigned),
        CRYPT_AsnDecodeDerBlob, sizeof(CRYPT_DER_BLOB), FALSE, TRUE,
@@ -6726,7 +6726,7 @@ static BOOL WINAPI CRYPT_AsnDecodeOCSPBasicResponse(DWORD dwCertEncodingType,
        CRYPT_AsnDecodeCertExtensions, FINALMEMBERSIZE(OCSP_BASIC_RESPONSE_INFO, cExtension),
        TRUE, TRUE, offsetof(OCSP_BASIC_RESPONSE_INFO, rgExtension), 0 },
      };
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {

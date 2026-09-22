@@ -358,8 +358,8 @@ EngPlgBlt(
     RECTL MaskRect;
     RECT_ENUM RectEnum;
     LONGLONG Determinant;
-    LONGLONG MaskRight;
-    LONGLONG MaskBottom;
+    LONGLONG MaskRight = 0;
+    LONGLONG MaskBottom = 0;
     LONG SourceWidth;
     LONG SourceHeight;
     BOOL EnumMore;

@@ -218,7 +218,12 @@ PdoHandleQueryDeviceText(
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            RtlAnsiStringToUnicodeString(&DeviceDescription, &AnsiString, FALSE);
+            if (!NT_SUCCESS(RtlAnsiStringToUnicodeString(&DeviceDescription, &AnsiString, FALSE)))
+            {
+                ExFreePoolWithTag(DeviceDescription.Buffer, TAG_SCSIPORT);
+                Irp->IoStatus.Information = 0;
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
 
             Irp->IoStatus.Information = (ULONG_PTR)DeviceDescription.Buffer;
             return STATUS_SUCCESS;
@@ -244,7 +249,12 @@ PdoHandleQueryDeviceText(
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            RtlAnsiStringToUnicodeString(&DeviceDescription, &AnsiString, FALSE);
+            if (!NT_SUCCESS(RtlAnsiStringToUnicodeString(&DeviceDescription, &AnsiString, FALSE)))
+            {
+                ExFreePoolWithTag(DeviceDescription.Buffer, TAG_SCSIPORT);
+                Irp->IoStatus.Information = 0;
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
 
             Irp->IoStatus.Information = (ULONG_PTR)DeviceDescription.Buffer;
             return STATUS_SUCCESS;

@@ -227,5 +227,5 @@ add_importlibs(wdf01000 wdfldr ntoskrnl hal)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(wdf01000
         PRIVATE -Wno-write-strings -Wno-unknown-pragmas -Wno-switch
-        PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-reorder -Wno-invalid-offsetof -Wno-delete-non-virtual-dtor -Wno-class-memaccess>)
+        PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-reorder -Wno-invalid-offsetof>)
 endif()

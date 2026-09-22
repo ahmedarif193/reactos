@@ -1475,7 +1475,7 @@ static NTSTATUS prepare_raid6_write(device_extension* Vcb, chunk* c, uint64_t ad
     uint32_t i;
     bool file_write = Irp && Irp->MdlAddress && (Irp->MdlAddress->ByteOffset == 0);
     PMDL master_mdl;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PFN_NUMBER *pfns, *parity1_pfns, *parity2_pfns;
     log_stripe* log_stripes = NULL;
 
@@ -1908,7 +1908,7 @@ exit:
 __attribute__((nonnull(1,3,5)))
 NTSTATUS write_data(_In_ device_extension* Vcb, _In_ uint64_t address, _In_reads_bytes_(length) void* data, _In_ uint32_t length, _In_ write_data_context* wtc,
                     _In_opt_ PIRP Irp, _In_opt_ chunk* c, _In_ bool file_write, _In_ uint64_t irp_offset, _In_ ULONG priority) {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     uint32_t i;
     CHUNK_ITEM_STRIPE* cis;
     write_stripe* stripes = NULL;
@@ -2195,7 +2195,7 @@ void get_raid56_lock_range(chunk* c, uint64_t address, uint64_t length, uint64_t
 __attribute__((nonnull(1,3)))
 NTSTATUS write_data_complete(device_extension* Vcb, uint64_t address, void* data, uint32_t length, PIRP Irp, chunk* c, bool file_write, uint64_t irp_offset, ULONG priority) {
     write_data_context wtc;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     uint64_t lockaddr, locklen;
 
     KeInitializeEvent(&wtc.Event, NotificationEvent, false);
@@ -3572,7 +3572,7 @@ static NTSTATUS do_write_file_prealloc(fcb* fcb, extent* ext, uint64_t start_dat
                                        PIRP Irp, bool file_write, uint64_t irp_offset, ULONG priority, LIST_ENTRY* rollback) {
     EXTENT_DATA* ed = &ext->extent_data;
     EXTENT_DATA2* ed2 = (EXTENT_DATA2*)ed->data;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     chunk* c = NULL;
 
     if (start_data <= ext->offset && end_data >= ext->offset + ed2->num_bytes) { // replace all
@@ -3929,7 +3929,7 @@ static NTSTATUS do_write_file_prealloc(fcb* fcb, extent* ext, uint64_t start_dat
 
 __attribute__((nonnull(1, 4)))
 NTSTATUS do_write_file(fcb* fcb, uint64_t start, uint64_t end_data, void* data, PIRP Irp, bool file_write, uint32_t irp_offset, LIST_ENTRY* rollback) {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     LIST_ENTRY *le, *le2;
     uint64_t written = 0, length = end_data - start;
     uint64_t last_cow_start;
@@ -4106,7 +4106,7 @@ NTSTATUS write_file2(device_extension* Vcb, PIRP Irp, LARGE_INTEGER offset, void
     bool make_inline;
     INODE_ITEM* origii;
     bool changed_length = false;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     LARGE_INTEGER time;
     BTRFS_TIME now;
     fcb* fcb;
@@ -4591,7 +4591,7 @@ __attribute__((nonnull(1,2)))
 NTSTATUS write_file(device_extension* Vcb, PIRP Irp, bool wait, bool deferred_write) {
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
     void* buf;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     LARGE_INTEGER offset = IrpSp->Parameters.Write.ByteOffset;
     PFILE_OBJECT FileObject = IrpSp->FileObject;
     fcb* fcb = FileObject ? FileObject->FsContext : NULL;
@@ -4664,7 +4664,7 @@ _Dispatch_type_(IRP_MJ_WRITE)
 _Function_class_(DRIVER_DISPATCH)
 __attribute__((nonnull(1,2)))
 NTSTATUS __stdcall drv_write(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp) {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     bool top_level;
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
     device_extension* Vcb = DeviceObject->DeviceExtension;

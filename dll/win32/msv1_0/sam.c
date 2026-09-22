@@ -252,7 +252,7 @@ SamValidateNormalUser(
     NTSTATUS Status;
     SAMPR_HANDLE ServerHandle = NULL;
     SAMPR_HANDLE DomainHandle = NULL;
-    PRPC_SID AccountDomainSid;
+    PRPC_SID AccountDomainSid = NULL;
     RPC_UNICODE_STRING Names[1];
     SAMPR_HANDLE UserHandle = NULL;
     SAMPR_ULONG_ARRAY RelativeIds = {0, NULL};

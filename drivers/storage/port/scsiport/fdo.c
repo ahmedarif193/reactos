@@ -515,7 +515,8 @@ FdoRemoveAdapter(
     // release device interface
     if (DeviceExtension->InterfaceName.Buffer)
     {
-        IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
 
         RtlFreeUnicodeString(&DeviceExtension->InterfaceName);
         RtlInitUnicodeString(&DeviceExtension->InterfaceName, NULL);
@@ -642,7 +643,8 @@ FdoStartAdapter(
 
     if (NT_SUCCESS(status))
     {
-        IoSetDeviceInterfaceState(&PortExtension->InterfaceName, TRUE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&PortExtension->InterfaceName, TRUE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &PortExtension->InterfaceName);
     }
 
     PortExtension->DeviceStarted = TRUE;

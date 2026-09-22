@@ -243,7 +243,7 @@ KeUserModeCallback(
     PUCHAR UserArguments;
     PUCALLOUT_FRAME CalloutFrame;
     PULONG_PTR UserStackPointer;
-    NTSTATUS CallbackStatus;
+    NTSTATUS CallbackStatus = STATUS_UNSUCCESSFUL;
 #ifdef _M_IX86
     PEXCEPTION_REGISTRATION_RECORD ExceptionList;
 #endif // _M_IX86

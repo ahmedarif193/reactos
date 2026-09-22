@@ -1158,7 +1158,8 @@ IKsFilter_DispatchDeviceIoControl(
         }
     }
 
-    RtlStringFromGUID(&Property->Set, &GuidString);
+    if (!NT_SUCCESS(RtlStringFromGUID(&Property->Set, &GuidString)))
+        RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
     DPRINT("IKsFilter_DispatchDeviceIoControl property PinCount %x\n", FilterInstance->Descriptor->PinDescriptorsCount);
     DPRINT("IKsFilter_DispatchDeviceIoControl property Set |%S| Id %u Flags %x Status %lx ResultLength %lu\n", GuidString.Buffer, Property->Id, Property->Flags, Status, Irp->IoStatus.Information);
     RtlFreeUnicodeString(&GuidString);

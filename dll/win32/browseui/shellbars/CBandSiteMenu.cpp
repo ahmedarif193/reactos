@@ -177,7 +177,7 @@ LPITEMIDLIST CBandSiteMenu::_GetQLaunchPidl(BOOL refresh)
 
 HRESULT CBandSiteMenu::_CreateBuiltInISFBand(UINT uID, REFIID riid, void** ppv)
 {
-    LPITEMIDLIST pidl;
+    LPITEMIDLIST pidl = NULL;
     HRESULT hr;
 
     switch (uID)

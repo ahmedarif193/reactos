@@ -2255,7 +2255,7 @@ DxgkpSelectPresentNode(
         for (Node = 0; Node < Adapter->NodeCount; ++Node)
         {
             DXGKARG_GETNODEMETADATA Metadata;
-            NTSTATUS Status;
+            NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
             RtlZeroMemory(&Metadata, sizeof(Metadata));
             _SEH2_TRY

@@ -458,7 +458,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
                   GLubyte bitMask = 128;
                   for (i=0; i<image->Width; i++) {
                   GLint index;
-                  GLubyte red, green, blue, alpha;
+                  GLubyte red, green = 0, blue = 0, alpha = 0;
 
                   /* Fetch image color index */
                   index = (*srcPtr & bitMask) ? 1 : 0;
@@ -523,7 +523,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
 
       case GL_UNSIGNED_BYTE:
          for (pixel=0; pixel<numPixels; pixel++) {
-            GLubyte red, green, blue, alpha;
+            GLubyte red, green = 0, blue = 0, alpha = 0;
             switch (image->Format) {
                case GL_COLOR_INDEX:
                   if (decode_internal_format(internalFormat)==GL_COLOR_INDEX) {
@@ -678,7 +678,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
 
       case GL_FLOAT:
          for (pixel=0; pixel<numPixels; pixel++) {
-            GLfloat red, green, blue, alpha;
+            GLfloat red, green = 0, blue = 0, alpha = 0;
             switch (texImage->Format) {
                case GL_COLOR_INDEX:
                   if (decode_internal_format(internalFormat)==GL_COLOR_INDEX) {
@@ -1878,7 +1878,7 @@ void gl_GetTexImage( GLcontext *ctx, GLenum target, GLint level, GLenum format,
       for (row=0; row<(GLint)image->Height; row++) {
          for (column=0; column<(GLint)image->Width; column++) {
             GLfloat rgba[4];
-            GLfloat output[4];
+            GLfloat output[4] = {0};
             size_t pixel = ((size_t)img * image->Height + row) *
                            image->Width + column;
             GLvoid *destination = gl_pixel_addr_in_image(

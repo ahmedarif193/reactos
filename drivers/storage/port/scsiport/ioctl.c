@@ -72,7 +72,7 @@ static NTSTATUS SpiDumpSubmit(_In_ PSCSIPORT_DUMP_CONTEXT DumpContext, _In_ UCHA
 
     for (Timeout = 0; Timeout < ROS_DUMP_POLL_ITERATIONS; Timeout++)
     {
-        PortExtension->HwInterrupt(&PortExtension->MiniPortDeviceExtension);
+        (VOID)!PortExtension->HwInterrupt(&PortExtension->MiniPortDeviceExtension);
         if (InterlockedCompareExchange(&DumpContext->Completed, 0, 0) != 0)
         {
             return DumpContext->Status;

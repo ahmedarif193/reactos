@@ -512,7 +512,7 @@ BehaviorChecks(HANDLE FileHandleReadOnly, HANDLE FileHandleWriteOnly)
     if (!skip(NT_SUCCESS(Status), "Error mapping view with PAGE_NOACCESS priv. Error = %p\n", Status))
     {
         KmtStartSeh()
-            RtlCompareMemory(BaseAddress, TestString, TestStringSize);
+            (VOID)!RtlCompareMemory(BaseAddress, TestString, TestStringSize);
         KmtEndSeh(STATUS_ACCESS_VIOLATION);
 
         ZwUnmapViewOfSection(NtCurrentProcess(), BaseAddress);
@@ -526,11 +526,11 @@ BehaviorChecks(HANDLE FileHandleReadOnly, HANDLE FileHandleWriteOnly)
     if (ok(NT_SUCCESS(Status), "Error mapping view with PAGE_GUARD priv. Error = %p\n", Status))
     {
         KmtStartSeh()
-            RtlCompareMemory(BaseAddress, TestString, TestStringSize);
+            (VOID)!RtlCompareMemory(BaseAddress, TestString, TestStringSize);
         KmtEndSeh(STATUS_GUARD_PAGE_VIOLATION);
 
         KmtStartSeh()
-            RtlCompareMemory(BaseAddress, TestString, TestStringSize);
+            (VOID)!RtlCompareMemory(BaseAddress, TestString, TestStringSize);
         KmtEndSeh(STATUS_SUCCESS);
 
         ZwUnmapViewOfSection(NtCurrentProcess(), BaseAddress);

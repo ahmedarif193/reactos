@@ -802,7 +802,7 @@ static BOOLEAN NtfsLookupFile(PNTFS_VOLUME_INFO Volume, PCSTR FileName, PNTFS_MF
     ULONG NumberOfPathParts;
     ULONG i;
     ULONGLONG CurrentMFTIndex;
-    ULONG FileAttributes;
+    ULONG FileAttributes = NTFS_FILE_ATTR_DIRECTORY;
     CHAR PathPart[261];
 
     CurrentMFTIndex = NTFS_FILE_ROOT;

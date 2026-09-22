@@ -56,6 +56,7 @@
 
 static int saw_alarm = 0;
 
+#ifndef _WIN32
 static void
 alarm_hndler(s)
 	int	s;
@@ -63,6 +64,7 @@ alarm_hndler(s)
 	saw_alarm = 1;
 	return;
 }
+#endif
 
 /*
  * The internet time server defines the epoch to be Jan 1, 1900
@@ -454,7 +456,7 @@ __rpc_get_time_offset(td, srv, thost, uaddr, netid)
 		save = WSAGetLastError();
 		(void)closesocket(s);
 		errno = save;
-		s = RPC_ANYSOCK;
+		s = (int)RPC_ANYSOCK;
 
 		if (time_valid) {
 			thetime = ntohl(thetime);

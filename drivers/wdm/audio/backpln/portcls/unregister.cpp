@@ -108,7 +108,8 @@ CUnregisterSubdevice::UnregisterSubdevice(
         SymLinkEntry = (PSYMBOLICLINK_ENTRY)CONTAINING_RECORD(Entry, SYMBOLICLINK_ENTRY, Entry);
 
         // unregister device interface
-        IoSetDeviceInterfaceState(&SymLinkEntry->SymbolicLink, FALSE);
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&SymLinkEntry->SymbolicLink, FALSE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &SymLinkEntry->SymbolicLink);
         // free symbolic link
         RtlFreeUnicodeString(&SymLinkEntry->SymbolicLink);
         // free sym entry

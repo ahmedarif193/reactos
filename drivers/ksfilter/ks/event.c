@@ -95,7 +95,7 @@ KspEnableEvent(
     IN  ULONG EventItemSize OPTIONAL)
 {
     PIO_STACK_LOCATION IoStack;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     KSEVENT Event;
     PKSEVENT_ITEM EventItem, FoundEventItem;
     PKSEVENTDATA EventData;
@@ -233,7 +233,8 @@ KspEnableEvent(
     {
         UNICODE_STRING GuidString;
 
-        RtlStringFromGUID(&Event.Set, &GuidString);
+        if (!NT_SUCCESS(RtlStringFromGUID(&Event.Set, &GuidString)))
+            RtlInitEmptyUnicodeString(&GuidString, NULL, 0);
 
         DPRINT("Guid %S Id %u Flags %x not found\n", GuidString.Buffer, Event.Id, Event.Flags);
         RtlFreeUnicodeString(&GuidString);

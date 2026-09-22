@@ -379,10 +379,10 @@ DiskGetBootPath(
     _Out_ PCONFIGURATION_TYPE DeviceType)
 {
     // *DeviceType = DiskGetConfigType(FrldrBootDrive);
+    *DeviceType = 0;
+
     if (*FrLdrBootPath)
         return TRUE;
-
-    *DeviceType = 0;
 
     // FIXME: Do this in some drive recognition procedure!
     if (IsPxe)

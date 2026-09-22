@@ -1679,7 +1679,7 @@ Return Value:
 
   --*/
 {
-    ((FxPkgPdo*) Context)->AskParentToRemoveAndReenumerate();
+    (VOID)!((FxPkgPdo*) Context)->AskParentToRemoveAndReenumerate();
 }
 
 _Must_inspect_result_

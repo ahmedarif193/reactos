@@ -2276,7 +2276,7 @@ Return Value:
 
 
 
-    This->m_Device->m_PkgIo->ResumeProcessingForPower();
+    (VOID)!This->m_Device->m_PkgIo->ResumeProcessingForPower();
 
     if (This->m_SelfManagedIoMachine != NULL) {
         NTSTATUS status;
@@ -2402,7 +2402,7 @@ Return Value:
 
 
     // Top-edge queue hold.
-    This->m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
+    (VOID)!This->m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
 
     status = FxCxInvokeDeviceD0ExitPreHardwareDisabled(
         This->m_Device->GetHandle(),
@@ -2751,7 +2751,7 @@ Return Value:
 
 
     // Top-edge queue hold
-    m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
+    (VOID)!m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
 
     PowerPolicyProcessEvent(PwrPolPowerDownIoStopped);
 }
@@ -3302,7 +3302,7 @@ Return Value:
 
 
     // Top-edge queue release
-    This->m_Device->m_PkgIo->ResumeProcessingForPower();
+    (VOID)!This->m_Device->m_PkgIo->ResumeProcessingForPower();
 
     if (This->m_SelfManagedIoMachine != NULL) {
         NTSTATUS    status;
@@ -3363,7 +3363,7 @@ Return Value:
 
 
     // Top-edge queue release
-    This->m_Device->m_PkgIo->ResumeProcessingForPower();
+    (VOID)!This->m_Device->m_PkgIo->ResumeProcessingForPower();
 
     if (This->m_SelfManagedIoMachine != NULL) {
         NTSTATUS    status;
@@ -3419,7 +3419,7 @@ Return Value:
 
 
 
-    This->m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
+    (VOID)!This->m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
 
     return WdfDevStatePowerWakingDmaEnableFailed;
 }
@@ -3446,7 +3446,7 @@ Return Value:
 
 
 
-    This->m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
+    (VOID)!This->m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
 
     return WdfDevStatePowerWakingDmaEnableFailedNP;
 }
@@ -4177,7 +4177,7 @@ Return Value:
 
 
 
-    This->m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
+    (VOID)!This->m_Device->m_PkgIo->StopProcessingForPower(FxIoStopProcessingForPowerHold);
 
     return WdfDevStatePowerInitialDmaEnableFailed;
 }

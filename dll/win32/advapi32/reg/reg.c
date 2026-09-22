@@ -2428,7 +2428,7 @@ RegEnumKeyExA(
 {
     WCHAR* NameBuffer = NULL;
     WCHAR* ClassBuffer = NULL;
-    DWORD NameLength, ClassLength;
+    DWORD NameLength = 0, ClassLength = 0;
     LONG ErrorCode;
 
     /* Allocate our buffers */
@@ -2479,7 +2479,7 @@ RegEnumKeyExA(
 
     if (lpClass)
     {
-        RtlUnicodeToMultiByteN(lpClass, *lpcbClass, 0, NameBuffer, *lpcbClass * sizeof(WCHAR));
+        RtlUnicodeToMultiByteN(lpClass, *lpcbClass, 0, ClassBuffer, *lpcbClass * sizeof(WCHAR));
         if (ClassLength > *lpcbClass)
             lpClass[*lpcbClass] = '\0';
     }

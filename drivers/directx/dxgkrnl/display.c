@@ -430,7 +430,7 @@ DxgkpAskMiniportIsVidPnSupported(
     _Out_ PBOOLEAN Supported)
 {
     DXGKARG_ISSUPPORTEDVIDPN IsSupportedArgs;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     *Supported = FALSE;
     RtlZeroMemory(&IsSupportedArgs, sizeof(IsSupportedArgs));
@@ -1543,10 +1543,10 @@ DxgkpCallMiniportShadowPresent(
     PRXGKDDI_PRESENT_SHADOW Present = NULL;
     PVOID PresentContext = NULL;
     RXGK_SHADOW_PRESENT_INTERFACE PresentInterface;
-    PDXGKDDI_QUERY_INTERFACE QueryInterfaceCallback;
+    PDXGKDDI_QUERY_INTERFACE QueryInterfaceCallback = NULL;
     QUERY_INTERFACE QueryInterface;
     BOOLEAN InterfaceAcquired = FALSE;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     *Handled = FALSE;
     RtlZeroMemory(&PresentInterface, sizeof(PresentInterface));
@@ -2073,7 +2073,7 @@ DxgkpPointerBridgeSetPosition(
 {
     PDXGKDDI_SET_POINTER_POSITION PfnSetPosition;
     DXGKARG_SETPOINTERPOSITION PositionArgs;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PfnSetPosition = DXGK_CB(Adapter, DxgkDdiSetPointerPosition);
     if (PfnSetPosition == NULL)
@@ -2120,7 +2120,7 @@ DxgkpPointerBridgeSetShape(
     PDXGKDDI_SET_POINTER_SHAPE PfnSetShape;
     DXGKARG_SETPOINTERSHAPE ShapeArgs;
     ULONG RequiredSize;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PfnSetShape = DXGK_CB(Adapter, DxgkDdiSetPointerShape);
     if (PfnSetShape == NULL)

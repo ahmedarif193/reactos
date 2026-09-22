@@ -17,10 +17,6 @@ list(APPEND SOURCE
 
 add_executable(wlansvc ${SOURCE} wlansvc.rc)
 
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(wlansvc PRIVATE "-Wno-cast-calling-convention")
-endif()
-
 if(NOT MSVC)
     target_link_libraries(wlansvc ${PSEH_LIB})
 endif()

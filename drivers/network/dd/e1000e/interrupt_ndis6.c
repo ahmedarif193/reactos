@@ -215,7 +215,6 @@ E1000RegisterInterrupt(
                         DPRINT1("E1000: SUCCESS - Registered single MSI vector (legacy MSI)!\n");
                     }
 
-                    if (IntChars.MessageInfoTable->MessageInfo != NULL)
                     {
                         PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry =
                             &IntChars.MessageInfoTable->MessageInfo[0];

@@ -81,7 +81,7 @@ I_BrowserDebugTrace(
     _In_opt_ LPWSTR ServerName,
     _In_ PCHAR Buffer)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_BrowserDebugTrace(%s %s)\n",
           debugstr_w(ServerName), Buffer);
@@ -109,7 +109,7 @@ I_BrowserQueryEmulatedDomains(
     _Out_ LPDWORD EntriesRead)
 {
     BROWSER_EMULATED_DOMAIN_CONTAINER Container = {0, NULL};
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_BrowserQueryEmulatedDomains(%s %p %p)\n",
           debugstr_w(ServerName), EmulatedDomains, EntriesRead);
@@ -148,7 +148,7 @@ I_BrowserQueryOtherDomains(
 {
     SERVER_INFO_100_CONTAINER Level100Container = {0, NULL};
     SERVER_ENUM_STRUCT EnumStruct;
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_BrowserQueryOtherDomains(%s %p %p %p)\n",
           debugstr_w(ServerName), BufPtr, EntriesRead, TotalEntries);
@@ -195,7 +195,7 @@ I_BrowserServerEnum(
 {
     SERVER_INFO_100_CONTAINER Level100Container = {0, NULL};
     SERVER_ENUM_STRUCT EnumStruct;
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_BrowserServerEnum(%s %s %s %lu %p %lu %p %p %lu %s %p)\n",
           debugstr_w(ServerName), debugstr_w(Transport), debugstr_w(ClientName),
@@ -239,7 +239,7 @@ I_BrowserQueryStatistics(
     _In_opt_ LPCWSTR ServerName,
     _Inout_ LPBROWSER_STATISTICS *Statistics)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_BrowserQueryStatistics(%s %p)\n",
           debugstr_w(ServerName), Statistics);
@@ -264,7 +264,7 @@ WINAPI
 I_BrowserResetStatistics(
     _In_opt_ LPCWSTR ServerName)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_BrowserResetStatistics(%s)\n",
           debugstr_w(ServerName));
@@ -288,7 +288,7 @@ WINAPI
 I_BrowserResetNetlogonState(
     _In_ LPCWSTR ServerName)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_BrowserResetNetlogonState(%s)\n",
           debugstr_w(ServerName));
@@ -315,7 +315,7 @@ I_BrowserSetNetlogonState(
     _In_ LPWSTR EmulatedServerName,
     _In_ DWORD Role)
 {
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("I_BrowserSetNetlogonState(%s %s %s %lu)\n",
           debugstr_w(ServerName), debugstr_w(ServerName),
@@ -348,7 +348,7 @@ NetBrowserStatisticsGet(
     BROWSER_STATISTICS_STRUCT StatisticsStruct;
     BROWSER_STATISTICS_100_CONTAINER Level100Container = {0, NULL};
     BROWSER_STATISTICS_101_CONTAINER Level101Container = {0, NULL};
-    NET_API_STATUS status;
+    NET_API_STATUS status = 0;
 
     TRACE("NetBrowserStatisticsGet(%s %lu %p)\n",
           debugstr_w(ServerName), Level, Buffer);

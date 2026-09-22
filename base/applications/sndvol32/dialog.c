@@ -544,7 +544,7 @@ EnumConnectionsCallback(
                           {
                               /* update dialog control */
                               DWORD volumePosition, volumeStep, maxVolume, i;
-                              DWORD balancePosition, balanceStep;
+                              DWORD balancePosition = 0, balanceStep;
 
                               volumeStep = (Control[Index].Bounds.dwMaximum - Control[Index].Bounds.dwMinimum) / (VOLUME_MAX - VOLUME_MIN);
 

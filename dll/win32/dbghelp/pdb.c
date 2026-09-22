@@ -4384,7 +4384,7 @@ static enum pdb_result pdb_method_get_line_from_inlined_address_internal(struct 
     cv_itemid_t cv_inlinee;
     size_t annotation_offset;
     char *source_file_name;
-    unsigned line_number;
+    unsigned line_number = 0;
     unsigned opcode, arg1, arg2;
     unsigned offset_top_function;
 

@@ -182,7 +182,7 @@ ViaSetTransferMode(
     PCHANNEL_DATA_PATA ChanData = Controller->Channels[Channel];
     ATA_TIMING DeviceTimings[MAX_IDE_DEVICE];
     ULONG i;
-    ULONG DriveTimReg, UdmaTimReg;
+    ULONG DriveTimReg, UdmaTimReg = 0;
     UCHAR PortTimReg;
 
     AtaSelectTimings(DeviceList, DeviceTimings, VIA_PCI_CLOCK, SHARED_CMD_TIMINGS);
@@ -722,7 +722,7 @@ ViaPataGetControllerProperties(
     _Inout_ PATA_CONTROLLER Controller,
     _In_ ULONG HwFlags)
 {
-    ULONG i, UdmaTimReg;
+    ULONG i, UdmaTimReg = 0;
 
     PAGED_CODE();
 

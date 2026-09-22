@@ -552,7 +552,7 @@ Done:
         //
         // We want to propagate the original error code
         //
-        (void) pDevice->DeleteDeviceFromFailedCreate(status, FALSE);
+        (void)!pDevice->DeleteDeviceFromFailedCreate(status, FALSE);
         pDevice = NULL;
     }
 
@@ -1202,7 +1202,7 @@ Return Value:
             //
             // Cleanup the device and then let the super class delete the object.
             //
-            (void) DeleteDeviceFromFailedCreateNoDelete(
+            (void)!DeleteDeviceFromFailedCreateNoDelete(
                 STATUS_UNSUCCESSFUL, TRUE);
         }
     }
@@ -1636,7 +1636,7 @@ FxDevice::InstallPackage(
     //       an existing reference count model.
     //
     Package->AddRef();
-    Package->AssignParentObject(this);
+    (VOID)!Package->AssignParentObject(this);
 }
 
 PVOID

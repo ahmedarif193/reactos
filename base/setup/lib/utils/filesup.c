@@ -465,7 +465,7 @@ SetupMoveFile(
     IN PCWSTR NewFileName,
     IN ULONG Flags)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     IO_STATUS_BLOCK IoStatusBlock;
     OBJECT_ATTRIBUTES ObjectAttributes;
     PFILE_RENAME_INFORMATION RenameInfo;

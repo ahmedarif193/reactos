@@ -259,7 +259,8 @@ SimpleAllocation(VOID)
     //////////////////////////////////////////////////////////////////////////
     RegionSize = DEFAULT_ALLOC_SIZE;
     Base = NULL;
-    ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_NOACCESS);
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_NOACCESS);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 
     KmtStartSeh()
         RtlCopyMemory(Base, TestString, TestStringSize);
@@ -271,7 +272,8 @@ SimpleAllocation(VOID)
     RegionSize = 0;
     ZwFreeVirtualMemory(NtCurrentProcess(), &Base, &RegionSize, MEM_RELEASE);
 
-    ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READONLY);
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READONLY);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     KmtStartSeh()
         RtlCopyMemory(Base, TestString, TestStringSize);
     KmtEndSeh(STATUS_ACCESS_VIOLATION);
@@ -289,7 +291,8 @@ SimpleAllocation(VOID)
 
     RegionSize = 1000;
     Base = NULL;
-    ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &RegionSize, (MEM_COMMIT | MEM_RESERVE), (PAGE_GUARD | PAGE_READWRITE));
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &RegionSize, (MEM_COMMIT | MEM_RESERVE), (PAGE_GUARD | PAGE_READWRITE));
+    ok_eq_hex(Status, STATUS_SUCCESS);
 
     Test_NtQueryVirtualMemory(Base, RegionSize, MEM_COMMIT, (PAGE_GUARD | PAGE_READWRITE));
     KmtStartSeh()

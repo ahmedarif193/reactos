@@ -24,7 +24,7 @@ extern PEXT2_GLOBAL Ext2Global;
 NTSTATUS
 Ext2ShutDown (IN PEXT2_IRP_CONTEXT IrpContext)
 {
-    NTSTATUS                Status;
+    NTSTATUS                Status = STATUS_UNSUCCESSFUL;
 
     PIRP                    Irp;
 

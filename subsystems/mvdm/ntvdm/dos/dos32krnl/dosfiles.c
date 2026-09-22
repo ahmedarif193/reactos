@@ -186,7 +186,7 @@ WORD DosCreateFileEx(LPWORD Handle,
                      WORD Attributes)
 {
     WORD LastError;
-    HANDLE FileHandle;
+    HANDLE FileHandle = NULL;
     PDOS_DEVICE_NODE Node;
     WORD DosHandle;
     ACCESS_MASK AccessMode = 0;
@@ -444,7 +444,7 @@ WORD DosCreateFile(LPWORD Handle,
                    DWORD CreationDisposition,
                    WORD Attributes)
 {
-    HANDLE FileHandle;
+    HANDLE FileHandle = NULL;
     PDOS_DEVICE_NODE Node;
     WORD DosHandle;
     BYTE DescriptorId;
