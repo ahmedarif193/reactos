@@ -115,6 +115,8 @@ Arm64ChpeTestAddressRequirements(VOID)
 #endif
         {0, 0, 0, PAGE_SIZE, STATUS_SUCCESS},
         {0x20000000, 0x3002ffff, 0x200000, PAGE_SIZE, STATUS_SUCCESS},
+        {0x20010000, 0x3002ffff, 0x200000, PAGE_SIZE, STATUS_SUCCESS},
+        {0, 0x3002efff, 0, PAGE_SIZE, STATUS_INVALID_PARAMETER},
         {1, 0, 0, PAGE_SIZE, STATUS_INVALID_PARAMETER},
         {MAXULONG_PTR, 0, 0, PAGE_SIZE, STATUS_INVALID_PARAMETER},
         {0, 0x30020000, 0, PAGE_SIZE, STATUS_INVALID_PARAMETER},
@@ -164,6 +166,26 @@ Arm64ChpeTestAddressRequirements(VOID)
     Status = Allocate(NtCurrentProcess(), &BaseAddress, &RegionSize,
                       MEM_RESERVE, PAGE_READWRITE, &Parameter, 1);
     ok_hex(Status, STATUS_INVALID_PARAMETER);
+    if (NT_SUCCESS(Status))
+    {
+        FreeSize = 0;
+        NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &FreeSize, MEM_RELEASE);
+    }
+
+    BaseAddress = NULL;
+    RegionSize = PAGE_SIZE;
+    Status = NtAllocateVirtualMemory(NtCurrentProcess(), &BaseAddress, 0, &RegionSize, MEM_RESERVE, PAGE_READWRITE);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    FreeSize = 0;
+    Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &FreeSize, MEM_RELEASE);
+    ok_hex(Status, STATUS_SUCCESS);
+    RtlZeroMemory(&Requirements, sizeof(Requirements));
+    RegionSize = PAGE_SIZE;
+    Status = Allocate(NtCurrentProcess(), &BaseAddress, &RegionSize,
+                      MEM_RESERVE, PAGE_READWRITE, &Parameter, 1);
+    ok_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
         FreeSize = 0;
