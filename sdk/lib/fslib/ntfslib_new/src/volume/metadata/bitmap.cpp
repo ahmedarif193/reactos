@@ -12,7 +12,7 @@
 /* Read $Bitmap in fixed-size chunks so we never need one huge allocation
  * for the whole volume bitmap (32MB for a 1TB volume at 4K clusters).
  */
-#define BITMAP_CHUNK_SIZE 0x10000 // 64KB, always a multiple of sizeof(ULONG)
+#define BITMAP_CHUNK_SIZE 0x1000
 
 /* One persistent scratch per volume; see Volume::BitmapWorkBuffer. */
 static
