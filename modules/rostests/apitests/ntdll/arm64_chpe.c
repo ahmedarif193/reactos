@@ -37,7 +37,9 @@ Arm64ChpeTestRequiredImports(VOID)
         "LdrGetDllFullName",
         "NtAllocateVirtualMemoryEx",
         "NtOpenKeyEx",
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
         "RtlIsEcCode",
+#endif
         "RtlLocateExtendedFeature",
         "RtlLocateExtendedFeature2",
         "RtlQueryPerformanceCounter",
