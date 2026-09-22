@@ -2225,6 +2225,9 @@ typedef struct tagME_GlobalDestStruct
 {
   HGLOBAL hData;
   int nLength;
+#ifdef __REACTOS__
+  DWORD edit_style;
+#endif
 } ME_GlobalDestStruct;
 
 static DWORD CALLBACK ME_ReadFromHGLOBALUnicode(DWORD_PTR dwCookie, LPBYTE lpBuff, LONG cb, LONG *pcb)
@@ -2242,6 +2245,12 @@ static DWORD CALLBACK ME_ReadFromHGLOBALUnicode(DWORD_PTR dwCookie, LPBYTE lpBuf
   pData->nLength += i;
   *pcb = 2*i;
   GlobalUnlock(pData->hData);
+#ifdef __REACTOS__
+  if (pData->edit_style & SES_UPPERCASE)
+    CharUpperBuffW((WCHAR *)pDest, i);
+  else if (pData->edit_style & SES_LOWERCASE)
+    CharLowerBuffW((WCHAR *)pDest, i);
+#endif
   return 0;
 }
 
@@ -2285,6 +2294,9 @@ static HRESULT paste_text(ME_TextEditor *editor, FORMATETC *fmt, STGMEDIUM *med)
 
     gds.hData = med->hGlobal;
     gds.nLength = 0;
+#ifdef __REACTOS__
+    gds.edit_style = editor->edit_style;
+#endif
     es.dwCookie = (DWORD_PTR)&gds;
     es.pfnCallback = ME_ReadFromHGLOBALUnicode;
     hr = ME_StreamIn( editor, SF_TEXT | SF_UNICODE | SFF_SELECTION, &es, FALSE ) == 0 ? E_FAIL : S_OK;
@@ -2813,6 +2825,12 @@ static LRESULT handle_wm_char( ME_TextEditor *editor, WCHAR wstr, LPARAM flags )
     if(editor->nTextLimit > ME_GetTextLength(editor) - (to-from))
     {
       ME_Style *style = style_get_insert_style( editor, editor->pCursors );
+#ifdef __REACTOS__
+      if (editor->edit_style & SES_UPPERCASE)
+        wstr = LOWORD(CharUpperW( (WCHAR *)(ULONG_PTR)wstr ));
+      else if (editor->edit_style & SES_LOWERCASE)
+        wstr = LOWORD(CharLowerW( (WCHAR *)(ULONG_PTR)wstr ));
+#endif
       ME_ContinueCoalescingTransaction(editor);
       ME_InsertTextFromCursor(editor, 0, &wstr, 1, style);
       ME_ReleaseStyle(style);
@@ -3021,6 +3039,8 @@ ME_TextEditor *ME_MakeEditor(ITextHost *texthost, BOOL bEmulateVersion10)
   ed->hWnd = NULL;
   if (ed->have_texthost2 && FAILED( ITextHost2_TxGetWindow( ed->texthost, &ed->hWnd ) ))
     ed->hWnd = NULL;
+  ed->edit_style = 0;
+  ed->bidi_effects = 0;
 #endif
   ed->bEmulateVersion10 = bEmulateVersion10;
   ed->in_place_active = FALSE;
@@ -3343,8 +3363,12 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
   UNSUPPORTED_MSG(EM_FINDWORDBREAK)
   UNSUPPORTED_MSG(EM_FMTLINES)
   UNSUPPORTED_MSG(EM_FORMATRANGE)
+#ifndef __REACTOS__
   UNSUPPORTED_MSG(EM_GETBIDIOPTIONS)
+#endif
+#ifndef __REACTOS__
   UNSUPPORTED_MSG(EM_GETEDITSTYLE)
+#endif
   UNSUPPORTED_MSG(EM_GETIMECOMPMODE)
   UNSUPPORTED_MSG(EM_GETIMESTATUS)
   UNSUPPORTED_MSG(EM_SETIMESTATUS)
@@ -3353,8 +3377,12 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
   UNSUPPORTED_MSG(EM_GETTYPOGRAPHYOPTIONS)
   UNSUPPORTED_MSG(EM_GETUNDONAME)
   UNSUPPORTED_MSG(EM_GETWORDBREAKPROCEX)
+#ifndef __REACTOS__
   UNSUPPORTED_MSG(EM_SETBIDIOPTIONS)
+#endif
+#ifndef __REACTOS__
   UNSUPPORTED_MSG(EM_SETEDITSTYLE)
+#endif
   UNSUPPORTED_MSG(EM_SETLANGOPTIONS)
   UNSUPPORTED_MSG(EM_SETMARGINS)
   UNSUPPORTED_MSG(EM_SETPALETTE)
@@ -4336,6 +4364,29 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
     editor->pfnWordBreak = (EDITWORDBREAKPROCW)lParam;
     return (LRESULT)pfnOld;
   }
+#ifdef __REACTOS__
+  case EM_GETEDITSTYLE:
+    return editor->edit_style;
+  case EM_SETEDITSTYLE:
+    editor->edit_style = (editor->edit_style & ~lParam) | (wParam & lParam);
+    return editor->edit_style;
+  case EM_GETBIDIOPTIONS:
+  {
+    BIDIOPTIONS *options = (BIDIOPTIONS *)lParam;
+
+    if (options && options->cbSize == sizeof(*options))
+      options->wEffects = editor->bidi_effects;
+    return 0;
+  }
+  case EM_SETBIDIOPTIONS:
+  {
+    const BIDIOPTIONS *options = (const BIDIOPTIONS *)lParam;
+
+    if (options && options->cbSize == sizeof(*options))
+      editor->bidi_effects = (editor->bidi_effects & ~options->wMask) | (options->wEffects & options->wMask);
+    return 0;
+  }
+#endif
   case EM_GETTEXTMODE:
     return editor->mode;
   case EM_SETTEXTMODE:
