@@ -3567,6 +3567,21 @@ typedef struct _WND2CBOX
   LPHEADCOMBO pCBox;
 } WND2CBOX, *PWND2CBOX;
 
+#ifdef _WIN64
+typedef struct
+{
+   ULONG          self;
+   ULONG          owner;
+   UINT           dwStyle;
+   ULONG          hWndEdit;
+   ULONG          hWndLBox;
+   UINT           wState;
+   ULONG          hFont;
+   RECT           textRect;
+   RECT           buttonRect;
+} HEADCOMBO32;
+#endif
+
 #define CBF_BUTTONDOWN          0x0002
 ////
 ////
@@ -3625,17 +3640,36 @@ NtUserGetComboBoxInfo(
 
    _SEH2_TRY
    {
-      LPHEADCOMBO lphc = ((PWND2CBOX)Wnd)->pCBox;
-      pcbi->rcItem = lphc->textRect;
-      pcbi->rcButton = lphc->buttonRect;
-      pcbi->stateButton = 0;
-      if (lphc->wState & CBF_BUTTONDOWN)
-         pcbi->stateButton |= STATE_SYSTEM_PRESSED;
-      if (RECTL_bIsEmptyRect(&lphc->buttonRect))
-         pcbi->stateButton |= STATE_SYSTEM_INVISIBLE;
-      pcbi->hwndCombo = lphc->self;
-      pcbi->hwndItem = lphc->hWndEdit;
-      pcbi->hwndList = lphc->hWndLBox;
+#ifdef _WIN64
+      if (PsGetProcessWow64Process(Wnd->head.pti->ppi->peProcess))
+      {
+         HEADCOMBO32 *lphc32 = UlongToPtr(*(PULONG)&((PWND2CBOX)Wnd)->pCBox);
+         pcbi->rcItem = lphc32->textRect;
+         pcbi->rcButton = lphc32->buttonRect;
+         pcbi->stateButton = 0;
+         if (lphc32->wState & CBF_BUTTONDOWN)
+            pcbi->stateButton |= STATE_SYSTEM_PRESSED;
+         if (RECTL_bIsEmptyRect(&lphc32->buttonRect))
+            pcbi->stateButton |= STATE_SYSTEM_INVISIBLE;
+         pcbi->hwndCombo = UlongToHandle(lphc32->self);
+         pcbi->hwndItem = UlongToHandle(lphc32->hWndEdit);
+         pcbi->hwndList = UlongToHandle(lphc32->hWndLBox);
+      }
+      else
+#endif
+      {
+         LPHEADCOMBO lphc = ((PWND2CBOX)Wnd)->pCBox;
+         pcbi->rcItem = lphc->textRect;
+         pcbi->rcButton = lphc->buttonRect;
+         pcbi->stateButton = 0;
+         if (lphc->wState & CBF_BUTTONDOWN)
+            pcbi->stateButton |= STATE_SYSTEM_PRESSED;
+         if (RECTL_bIsEmptyRect(&lphc->buttonRect))
+            pcbi->stateButton |= STATE_SYSTEM_INVISIBLE;
+         pcbi->hwndCombo = lphc->self;
+         pcbi->hwndItem = lphc->hWndEdit;
+         pcbi->hwndList = lphc->hWndLBox;
+      }
    }
    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
    {
