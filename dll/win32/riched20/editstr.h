@@ -394,6 +394,10 @@ typedef struct tagME_TextEditor
   unsigned int have_texthost2 : 1;
   ME_TextBuffer *pBuffer;
   ME_Cursor *pCursors;
+#ifdef __REACTOS__
+  DWORD edit_style;
+  WORD bidi_effects;
+#endif
   DWORD props;
   DWORD scrollbars;
   int nCursors;
