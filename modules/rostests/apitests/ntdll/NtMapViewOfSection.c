@@ -1135,7 +1135,6 @@ Test_ImageSection2(void)
 
 }
 
-// doesn't work with WoW64!
 void
 Test_BasedSection(void)
 {
@@ -1144,6 +1143,9 @@ Test_BasedSection(void)
     LARGE_INTEGER MaximumSize, SectionOffset;
     PVOID BaseAddress1, BaseAddress2;
     SIZE_T ViewSize;
+    BOOL IsWow64 = FALSE;
+
+    IsWow64Process(GetCurrentProcess(), &IsWow64);
 
     /* Create a based section with SEC_COMMIT */
     MaximumSize.QuadPart = 0x1000;
@@ -1170,11 +1172,7 @@ Test_BasedSection(void)
                                 ViewShare,
                                 0,
                                 PAGE_READWRITE);
-#if 0 // WOW64?
-    ok_ntstatus(Status, STATUS_CONFLICTING_ADDRESSES);
-#else
-    ok_ntstatus(Status, STATUS_SUCCESS);
-#endif
+    ok_ntstatus(Status, IsWow64 ? STATUS_CONFLICTING_ADDRESSES : STATUS_SUCCESS);
 
     /* Create a 2nd based section with SEC_COMMIT */
     MaximumSize.QuadPart = 0x1000;
@@ -1201,15 +1199,14 @@ Test_BasedSection(void)
                                 ViewShare,
                                 0,
                                 PAGE_READWRITE);
-#if 0 // WOW64?
-    ok_ntstatus(Status, STATUS_CONFLICTING_ADDRESSES);
-#else
-    ok_ntstatus(Status, STATUS_SUCCESS);
-    ok((ULONG_PTR)BaseAddress2 < (ULONG_PTR)BaseAddress1,
-       "Invalid addresses: BaseAddress1=%p, BaseAddress2=%p\n", BaseAddress1, BaseAddress2);
-    ok(((ULONG_PTR)BaseAddress1 - (ULONG_PTR)BaseAddress2) == 0x10000,
-       "Invalid addresses: BaseAddress1=%p, BaseAddress2=%p\n", BaseAddress1, BaseAddress2);
-#endif
+    ok_ntstatus(Status, IsWow64 ? STATUS_CONFLICTING_ADDRESSES : STATUS_SUCCESS);
+    if (!IsWow64)
+    {
+        ok((ULONG_PTR)BaseAddress2 < (ULONG_PTR)BaseAddress1,
+           "Invalid addresses: BaseAddress1=%p, BaseAddress2=%p\n", BaseAddress1, BaseAddress2);
+        ok(((ULONG_PTR)BaseAddress1 - (ULONG_PTR)BaseAddress2) == 0x10000,
+           "Invalid addresses: BaseAddress1=%p, BaseAddress2=%p\n", BaseAddress1, BaseAddress2);
+    }
 }
 
 #define BYTES4(x) x, x, x, x
