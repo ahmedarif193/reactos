@@ -938,12 +938,22 @@ NtfsPurgeStreamCache(_In_ PFileContextBlock FileCB,
                      _In_opt_ PLARGE_INTEGER Offset,
                      _In_ ULONG Length)
 {
+    LARGE_INTEGER PageOffset;
+    ULONG PageLength = 0;
+
     if (!FileObject->SectionObjectPointer)
         return;
 
+    if (Offset)
+    {
+        PageOffset.QuadPart = Offset->QuadPart & ~((LONGLONG)PAGE_SIZE - 1);
+        if (Length != 0)
+            PageLength = (ULONG)ROUND_TO_PAGES(Offset->QuadPart - PageOffset.QuadPart + Length);
+    }
+
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
-    CcPurgeCacheSection(FileObject->SectionObjectPointer, Offset, Length, FALSE);
+    CcPurgeCacheSection(FileObject->SectionObjectPointer, Offset ? &PageOffset : NULL, PageLength, FALSE);
     ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
     KeLeaveCriticalRegion();
 }
