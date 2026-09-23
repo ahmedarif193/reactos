@@ -53,14 +53,6 @@ HalpRiscvInitializeRtc(const VOID *DeviceTree, SIZE_T DeviceTreeSize)
 }
 
 BOOLEAN
-HalpRiscvRtcIsDeviceMemory(PHYSICAL_ADDRESS Address, SIZE_T Length)
-{
-    return HalpRtcAddress.QuadPart && Length && Length <= PAGE_SIZE &&
-           Address.QuadPart >= HalpRtcAddress.QuadPart &&
-           (ULONG64)(Address.QuadPart - HalpRtcAddress.QuadPart) <= PAGE_SIZE - Length;
-}
-
-BOOLEAN
 HalpRiscvMapRtc(VOID)
 {
     if (!HalpRtcAddress.QuadPart) return TRUE;

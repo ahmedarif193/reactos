@@ -161,18 +161,6 @@ HalpRiscvInitializePlic(
 }
 
 BOOLEAN
-NTAPI
-HalpRiscvPlicIsDeviceMemory(
-    _In_ PHYSICAL_ADDRESS Address,
-    _In_ SIZE_T Length)
-{
-    return HalpRiscvPlic.Present && Address.QuadPart >= 0 && Length &&
-           (ULONG64)Address.QuadPart >= HalpRiscvPlic.PhysicalAddress &&
-           Length <= HalpRiscvPlic.Size &&
-           (ULONG64)Address.QuadPart - HalpRiscvPlic.PhysicalAddress <= HalpRiscvPlic.Size - Length;
-}
-
-BOOLEAN
 HalpRiscvMapPlic(VOID)
 {
     PHYSICAL_ADDRESS Address;
