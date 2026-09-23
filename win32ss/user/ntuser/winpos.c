@@ -1444,7 +1444,7 @@ WinPosDoOwnedPopups(PWND Window, HWND hWndInsertAfter)
 
    if (hWndInsertAfter == HWND_BOTTOM)
    {
-      ERR("Window is HWND_BOTTOM hwnd %p\n",hWndInsertAfter);
+      TRACE("Window is HWND_BOTTOM hwnd %p\n",hWndInsertAfter);
       if (List) ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
       goto done;
    }

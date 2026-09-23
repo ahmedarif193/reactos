@@ -1227,7 +1227,12 @@ co_IntSetWndIcons(VOID)
    IntLoadSystenIcons(gpsi->hIconWindows,    OIC_WINLOGO);
    IntLoadSystenIcons(gpsi->hIconSmWindows,  OIC_INTERNAL_WINSMALL);
 
-   ERR("hIconSmWindows %p hIconWindows %p \n",gpsi->hIconSmWindows,gpsi->hIconWindows);
+   if (!gpsi->hIconSmWindows || !gpsi->hIconWindows)
+       ERR("System window icons missing: small %p, large %p\n",
+           gpsi->hIconSmWindows, gpsi->hIconWindows);
+   else
+       TRACE("hIconSmWindows %p hIconWindows %p\n",
+             gpsi->hIconSmWindows, gpsi->hIconWindows);
 
    IntCbFreeMemory(Argument);
 

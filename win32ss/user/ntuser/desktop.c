@@ -3497,7 +3497,7 @@ IntSetThreadDesktop(IN HDESK hDesktop,
     if (!(pti->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD)) &&
         pti->ppi->rpdeskStartup == NULL && hDesktop != NULL)
     {
-        ERR("The process 0x%p '%s' didn't have an assigned startup desktop before, assigning it now!\n",
+        TRACE("Assigning the initial startup desktop to process %p '%s'\n",
             pti->ppi->peProcess, pti->ppi->peProcess->ImageFileName);
 
         pti->ppi->hdeskStartup = hDesktop;
