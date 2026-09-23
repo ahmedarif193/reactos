@@ -220,9 +220,35 @@ GetCurrentConsoleFontEx(IN HANDLE hConsoleOutput,
                         IN BOOL bMaximumWindow,
                         OUT PCONSOLE_FONT_INFOEX lpConsoleCurrentFontEx)
 {
-    DPRINT1("GetCurrentConsoleFontEx(0x%p, 0x%x, 0x%p) UNIMPLEMENTED!\n", hConsoleOutput, bMaximumWindow, lpConsoleCurrentFontEx);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    CONSOLE_API_MESSAGE ApiMessage;
+    PCONSOLE_GETCURRENTFONT GetCurrentFontRequest = &ApiMessage.Data.GetCurrentFontRequest;
+
+    if (lpConsoleCurrentFontEx->cbSize != sizeof(CONSOLE_FONT_INFOEX))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    GetCurrentFontRequest->ConsoleHandle = NtCurrentPeb()->ProcessParameters->ConsoleHandle;
+    GetCurrentFontRequest->OutputHandle  = hConsoleOutput;
+    GetCurrentFontRequest->MaximumWindow = bMaximumWindow;
+
+    CsrClientCallServer((PCSR_API_MESSAGE)&ApiMessage,
+                        NULL,
+                        CSR_CREATE_API_NUMBER(CONSRV_SERVERDLL_INDEX, ConsolepGetCurrentFont),
+                        sizeof(*GetCurrentFontRequest));
+    if (!NT_SUCCESS(ApiMessage.Status))
+    {
+        BaseSetLastNTError(ApiMessage.Status);
+        return FALSE;
+    }
+
+    lpConsoleCurrentFontEx->nFont      = GetCurrentFontRequest->FontIndex;
+    lpConsoleCurrentFontEx->dwFontSize = GetCurrentFontRequest->FontSize;
+    lpConsoleCurrentFontEx->FontFamily = GetCurrentFontRequest->FontFamily;
+    lpConsoleCurrentFontEx->FontWeight = GetCurrentFontRequest->FontWeight;
+    RtlCopyMemory(lpConsoleCurrentFontEx->FaceName, GetCurrentFontRequest->FaceName, sizeof(lpConsoleCurrentFontEx->FaceName));
+    return TRUE;
 }
 
 #endif // (_WIN32_WINNT >= _WIN32_WINNT_VISTA)

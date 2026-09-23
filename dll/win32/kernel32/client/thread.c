@@ -62,7 +62,12 @@ BaseThreadInitThunk(
                            ThreadQuerySetWin32StartAddress,
                            &lpStartAddress,
                            sizeof(lpStartAddress));
-    BaseThreadStartup(lpStartAddress, lpParameter);
+    if ((NtCurrentTeb()->NtTib.Version == (30 << 8)) && !BaseRunningInServerProcess)
+    {
+        CsrNewThread();
+    }
+
+    ExitThread(lpStartAddress(lpParameter));
 }
 
 DECLSPEC_NORETURN

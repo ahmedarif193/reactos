@@ -2167,8 +2167,10 @@ IntGetConsoleTitle(LPVOID lpConsoleTitle, DWORD dwNumChars, BOOLEAN bUnicode)
     CONSOLE_API_MESSAGE ApiMessage;
     PCONSOLE_GETSETCONSOLETITLE TitleRequest = &ApiMessage.Data.TitleRequest;
     PCSR_CAPTURE_BUFFER CaptureBuffer;
+    DWORD RequestedChars;
 
     if (dwNumChars == 0) return 0;
+    RequestedChars = dwNumChars;
 
     TitleRequest->ConsoleHandle = NtCurrentPeb()->ProcessParameters->ConsoleHandle;
     TitleRequest->Length        = dwNumChars * (bUnicode ? sizeof(WCHAR) : sizeof(CHAR));
@@ -2210,6 +2212,18 @@ IntGetConsoleTitle(LPVOID lpConsoleTitle, DWORD dwNumChars, BOOLEAN bUnicode)
     }
 
     CsrFreeCaptureBuffer(CaptureBuffer);
+
+    if (dwNumChars + 1 == RequestedChars)
+    {
+        TitleRequest->Length = 0;
+        TitleRequest->Title  = NULL;
+        CsrClientCallServer((PCSR_API_MESSAGE)&ApiMessage,
+                            NULL,
+                            CSR_CREATE_API_NUMBER(CONSRV_SERVERDLL_INDEX, ConsolepGetTitle),
+                            sizeof(*TitleRequest));
+        if (NT_SUCCESS(ApiMessage.Status))
+            dwNumChars = TitleRequest->Length / (bUnicode ? sizeof(WCHAR) : sizeof(CHAR));
+    }
 
     return dwNumChars;
 }
