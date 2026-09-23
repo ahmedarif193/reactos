@@ -185,8 +185,9 @@ MiPagingIoFrames(
     ULONG i;
 
     *Transferred = 0;
+    /* PE section data can start at a sector-aligned, non-page-aligned offset. */
     if (PageCount == 0 || PageCount > (Write ? MI_MAX_FILE_WRITE_PAGES : MI_MAX_FILE_IO_PAGES) || Frames == NULL ||
-        (Offset & (PAGE_SIZE - 1)) != 0)
+        (Offset & (Write ? PAGE_SIZE - 1 : (1u << MI_SECTOR_SHIFT) - 1)) != 0)
         return STATUS_INVALID_PARAMETER;
 
     MmInitializeMdl(Mdl, NULL, PageCount * PAGE_SIZE);

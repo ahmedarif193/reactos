@@ -43,6 +43,23 @@ MiControlRead(
 }
 
 NTSTATUS
+MiControlReadPages(
+    _In_opt_ PVOID Context,
+    _In_ ULONG64 Offset,
+    _In_ const ULONG *Frames,
+    _In_ ULONG PageCount)
+{
+    PMI_CONTROL_AREA Control = Context;
+    ULONG Transferred;
+    NTSTATUS Status;
+
+    Status = MiPagingIoFrames(Control->FileObject, Offset, Frames, PageCount, FALSE, &Transferred);
+    if (NT_SUCCESS(Status) && Transferred != PageCount * PAGE_SIZE)
+        return STATUS_END_OF_FILE;
+    return Status;
+}
+
+NTSTATUS
 MiControlWrite(
     _In_opt_ PVOID Context,
     _In_ ULONG64 Offset,

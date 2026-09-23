@@ -113,6 +113,8 @@ BOOLEAN MiAllocationProtectionFromWin32(_In_ ULONG Win32Protect, _Out_ PULONG Pr
 ULONG MiProtectionToWin32(_In_ ULONG Protection);
 NTSTATUS MiWaitForMemory(_In_ NTSTATUS Status, _Inout_ PULONG Attempts);
 NTSTATUS MiControlRead(_In_opt_ PVOID Context, _In_ ULONG64 Offset, _In_ ULONG Length, _Out_ PVOID Buffer);
+NTSTATUS MiControlReadPages(_In_opt_ PVOID Context, _In_ ULONG64 Offset,
+                            _In_ const ULONG *Frames, _In_ ULONG PageCount);
 NTSTATUS MiControlReadAsync(_In_opt_ PVOID Context, _In_ ULONG64 Offset, _In_ ULONG Frame,
                             _In_ PVOID Buffer, _In_ MI_READ_COMPLETION Completion,
                             _In_opt_ PVOID CompletionContext);

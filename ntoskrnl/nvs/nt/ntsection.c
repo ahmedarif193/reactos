@@ -165,13 +165,24 @@ MiControlImageRead(
 
 static MI_FILE_OPS MiControlFileOps =
 {
-    MiControlRead, MiControlWrite, MiControlRelease, MiControlWriteFrames, MiControlReadAsync, TRUE
+    .Read = MiControlRead,
+    .Write = MiControlWrite,
+    .Release = MiControlRelease,
+    .WriteFrames = MiControlWriteFrames,
+    .ReadAsync = MiControlReadAsync,
+    .WholePageReads = TRUE,
+    .ReadPages = MiControlReadPages
 };
 static MI_FILE_OPS MiControlImageOps =
 {
-    MiControlImageRead, MiControlWrite, MiControlRelease, MiControlWriteFrames, MiControlReadAsync
+    .Read = MiControlImageRead,
+    .Write = MiControlWrite,
+    .Release = MiControlRelease,
+    .WriteFrames = MiControlWriteFrames,
+    .ReadAsync = MiControlReadAsync,
+    .ReadPages = MiControlReadPages
 };
-static MI_FILE_OPS MiControlAnonymousOps = { NULL, NULL, MiControlRelease, NULL, NULL };
+static MI_FILE_OPS MiControlAnonymousOps = { .Release = MiControlRelease };
 
 VOID
 MiDereferenceControlArea(

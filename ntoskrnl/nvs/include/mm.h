@@ -345,6 +345,9 @@ typedef struct _MI_FILE_OPS
                           _In_ PVOID Buffer, _In_ MI_READ_COMPLETION Completion,
                           _In_opt_ PVOID CompletionContext);
     BOOLEAN WholePageReads;
+    /* Optional synchronous clustered read. Success requires every frame to be filled. */
+    NTSTATUS (*ReadPages)(_In_opt_ PVOID Context, _In_ ULONG64 Offset,
+                          _In_ const ULONG *Frames, _In_ ULONG PageCount);
 } MI_FILE_OPS, *PMI_FILE_OPS;
 
 #define MI_MAX_FILE_IO_PAGES 16
@@ -427,6 +430,7 @@ NTSTATUS MiSegmentFlush(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ U
 BOOLEAN MiSegmentPurge(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
 BOOLEAN MiSegmentIsResident(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
 NTSTATUS MiSegmentMakeResident(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
+NTSTATUS MiSegmentFaultIn(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Page);
 NTSTATUS MiSegmentMakeResidentBeyond(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length,
                                      _In_ ULONG64 ValidDataLength);
 NTSTATUS MiSegmentPrefetch(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
