@@ -655,7 +655,7 @@ DxgkpRemoveMiniportDevice(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_opt_ PVOID MiniportDeviceContext)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (Adapter == NULL || Adapter->MiniportContext == NULL || Adapter->MiniportContext->InitData.s.DxgkDdiRemoveDevice == NULL || MiniportDeviceContext == NULL)
         return STATUS_NOT_SUPPORTED;
@@ -12465,7 +12465,7 @@ DxgkpEnableEngineInterrupt(
     DXGKARG_CONTROLINTERRUPT3 Args3;
     DXGKARG_CONTROLINTERRUPT2 Args2;
     ULONG Version;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
     if (Adapter == NULL || Adapter->MiniportContext == NULL)

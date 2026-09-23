@@ -343,7 +343,7 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     // Initialize Volume Context Block VolCB.
     VolCB = (PVolumeContextBlock)FSDeviceObject->DeviceExtension;
     RtlZeroMemory(VolCB, sizeof(VolumeContextBlock));
-    ExInitializePushLock(&VolCB->MetadataGate);
+    ExInitializePushLock(&VolCB->MetadataGate.Value);
     Status = ExInitializeResourceLite(&VolCB->MetadataResource);
     if (!NT_SUCCESS(Status))
     {

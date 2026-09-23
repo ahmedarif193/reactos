@@ -10,6 +10,7 @@
 #define _NTFSPROCS_
 
 #include <ntifs.h>
+#include <ndk/exfuncs.h>
 #include <ntddscsi.h>
 #include <scsi.h>
 #include <ntddcdrm.h>
