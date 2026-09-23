@@ -497,9 +497,6 @@ RtlVirtualUnwind(
     /* Get a pointer to the unwind info */
     UnwindInfo = RVA(ImageBase, FunctionEntry->UnwindData);
 
-    /* The language specific handler data follows the unwind info */
-    LanguageHandler = ALIGN_UP_POINTER_BY(&UnwindInfo->UnwindCode[UnwindInfo->CountOfCodes], sizeof(ULONG));
-
     /* Calculate relative offset to function start */
     CodeOffset = ControlRva - FunctionEntry->BeginAddress;
 
@@ -651,6 +648,9 @@ Exit:
     /* Check if we have a handler and return it */
     if (UnwindInfo->Flags & (HandlerType & (UNW_FLAG_EHANDLER | UNW_FLAG_UHANDLER)))
     {
+        /* Chained records end in a RUNTIME_FUNCTION, not a handler RVA.
+         * Use the final primary record after following the complete chain. */
+        LanguageHandler = ALIGN_UP_POINTER_BY(&UnwindInfo->UnwindCode[UnwindInfo->CountOfCodes], sizeof(ULONG));
         *HandlerData = (LanguageHandler + 1);
         return RVA(ImageBase, *LanguageHandler);
     }
