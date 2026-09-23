@@ -576,7 +576,8 @@ AlpcpReceiveToUser(
     else
     {
         AlpcpAcquireLock();
-        if ((Message->State & (ALPC_MSG_STATE_CONNECTION | ALPC_MSG_STATE_SYNC)) &&
+        if (!AlpcpReclaimCanceledMessage(Message) &&
+            (Message->State & (ALPC_MSG_STATE_CONNECTION | ALPC_MSG_STATE_SYNC)) &&
             !(Message->State & ALPC_MSG_STATE_REPLIED))
         {
             AlpcpMakePending(ReceivePort, Message);
