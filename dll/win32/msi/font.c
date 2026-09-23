@@ -73,7 +73,7 @@ struct name_record
  * Code based off of code located here
  * http://www.codeproject.com/gdi/fontnamefromfile.asp
  */
-static WCHAR *load_ttf_name_id( MSIPACKAGE *package, const WCHAR *filename, DWORD id )
+static WCHAR *read_ttf_name_id( HANDLE handle, DWORD base, DWORD id )
 {
     struct table_directory tblDir;
     BOOL bFound = FALSE;
@@ -81,20 +81,10 @@ static WCHAR *load_ttf_name_id( MSIPACKAGE *package, const WCHAR *filename, DWOR
     struct name_table_header ttNTHeader;
     struct name_record ttRecord;
     DWORD dwRead;
-    HANDLE handle;
     LPWSTR ret = NULL;
     int i;
 
-    if (package)
-        handle = msi_create_file( package, filename, GENERIC_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL );
-    else
-        handle = CreateFileW( filename, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0 );
-    if (handle == INVALID_HANDLE_VALUE)
-    {
-        ERR("Unable to open font file %s\n", debugstr_w(filename));
-        return NULL;
-    }
-
+    SetFilePointer(handle, base, NULL, FILE_BEGIN);
     if (!ReadFile(handle,&ttOffsetTable, sizeof(struct offset_table),&dwRead,NULL))
         goto end;
 
@@ -159,6 +149,61 @@ static WCHAR *load_ttf_name_id( MSIPACKAGE *package, const WCHAR *filename, DWOR
             free(buf);
             break;
         }
+    }
+
+end:
+    return ret;
+}
+
+static WCHAR *load_ttf_name_id( MSIPACKAGE *package, const WCHAR *filename, DWORD id )
+{
+    ULONG header[3], offset, count, i;
+    WCHAR *ret = NULL, *name, *joined;
+    DWORD dwRead, len;
+    HANDLE handle;
+
+    if (package)
+        handle = msi_create_file( package, filename, GENERIC_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL );
+    else
+        handle = CreateFileW( filename, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0 );
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+        ERR("Unable to open font file %s\n", debugstr_w(filename));
+        return NULL;
+    }
+
+    if (!ReadFile(handle, header, sizeof(header), &dwRead, NULL) || dwRead != sizeof(header))
+        goto end;
+
+    if (memcmp(header, "ttcf", 4))
+    {
+        ret = read_ttf_name_id(handle, 0, id);
+        goto end;
+    }
+
+    count = SWAPLONG(header[2]);
+    for (i = 0; i < count; i++)
+    {
+        SetFilePointer(handle, sizeof(header) + i * sizeof(offset), NULL, FILE_BEGIN);
+        if (!ReadFile(handle, &offset, sizeof(offset), &dwRead, NULL) || dwRead != sizeof(offset))
+            break;
+        if (!(name = read_ttf_name_id(handle, SWAPLONG(offset), id)))
+            continue;
+        if (!ret)
+            ret = name;
+        else
+        {
+            len = lstrlenW(ret) + lstrlenW(name) + 4;
+            if ((joined = malloc(len * sizeof(WCHAR))))
+            {
+                swprintf(joined, len, L"%s & %s", ret, name);
+                free(ret);
+                ret = joined;
+            }
+            free(name);
+        }
+        if (id != NAME_ID_FULL_FONT_NAME)
+            break;
     }
 
 end:
