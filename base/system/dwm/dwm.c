@@ -1280,7 +1280,7 @@ DwmWindowIsHidden(const DWM_WIN *Windows, ULONG Count, ULONG Index,
 static BOOL
 DwmWindowBlursBackdrop(const DWM_WIN *Window)
 {
-    if (Window->AnimFlags != 0)
+    if (Window->AnimFlags != 0 && Window->BackdropType != DWM_BACKDROP_TRANSIENT)
         return FALSE;
     if (Window->BlurFlags & DWM_BLUR_ENABLE)
         return TRUE;
@@ -2752,12 +2752,23 @@ DwmEnsureAnimColumns(LONG Width)
     return TRUE;
 }
 
+static ULONG
+DwmCoverPixel(ULONG Prior, ULONG Pixel, ULONG Cover)
+{
+    ULONG Inverse = 255u - Cover;
+
+    return ((((Pixel >> 16) & 0xFFu) * Cover + ((Prior >> 16) & 0xFFu) * Inverse) / 255u << 16) |
+           ((((Pixel >> 8) & 0xFFu) * Cover + ((Prior >> 8) & 0xFFu) * Inverse) / 255u << 8) |
+           (((Pixel & 0xFFu) * Cover + (Prior & 0xFFu) * Inverse) / 255u);
+}
+
 static void
 DwmBlitScaled(ULONG *comp, LONG scrW,
               LONG clipL, LONG clipT, LONG clipR, LONG clipB,
               const BYTE *pix, LONG srcCx, LONG srcCy, ULONG srcStride,
               LONG dstX, LONG dstY, LONG dstCx, LONG dstCy, ULONG alpha,
-              const DWM_WIN *material)
+              const DWM_WIN *material, const ULONG *backdropBase,
+              ULONG cornerRadius)
 {
     static const ULONG TapRecip[DWM_ANIM_TAPS * DWM_ANIM_TAPS + 1] =
     {
@@ -2843,6 +2854,14 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
             LONG sx0 = sx0Tab[x], sx1 = sx1Tab[x], stepX = stepXTab[x];
             LONG sy, sx;
             ULONG taps = 0, rb = 0, g = 0, sourceAlpha = 0, s, d, inverse, recip;
+            ULONG cover = 255, prior = dstrow[x];
+
+            if (cornerRadius != 0)
+            {
+                cover = DwmCornerAlpha(x - dstX, y - dstY, dstCx, dstCy, cornerRadius);
+                if (cover == 0)
+                    continue;
+            }
 
             for (sy = sy0; sy < sy1; sy += stepY)
             {
@@ -2874,7 +2893,7 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
                     continue;
                 if (pixelAlpha == 255 && alpha == 255)
                 {
-                    dstrow[x] = s;
+                    dstrow[x] = cover < 255 ? DwmCoverPixel(prior, s, cover) : s;
                     continue;
                 }
                 d = dstrow[x];
@@ -2883,6 +2902,8 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
                     ((((s >> 16) & 0xFFu) * alpha + ((d >> 16) & 0xFFu) * inverse) / 255u << 16) |
                     ((((s >> 8) & 0xFFu) * alpha + ((d >> 8) & 0xFFu) * inverse) / 255u << 8) |
                     (((s & 0xFFu) * alpha + (d & 0xFFu) * inverse) / 255u);
+                if (cover < 255)
+                    dstrow[x] = DwmCoverPixel(prior, dstrow[x], cover);
                 continue;
             }
             if (matKey != 0xFFFFFFFFu &&
@@ -2895,18 +2916,20 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
                 ULONG ma = matOpacity * alpha / 255u;
                 ULONG mi = 255u - ma;
 
-                d = dstrow[x];
+                d = backdropBase != NULL ? backdropBase[(SIZE_T)y * scrW + x] : dstrow[x];
                 dstrow[x] =
                     ((((s >> 16) & 0xFFu) * ma +
                       ((d >> 16) & 0xFFu) * mi) / 255u << 16) |
                     ((((s >> 8) & 0xFFu) * ma +
                       ((d >> 8) & 0xFFu) * mi) / 255u << 8) |
                     (((s & 0xFFu) * ma + (d & 0xFFu) * mi) / 255u);
+                if (cover < 255)
+                    dstrow[x] = DwmCoverPixel(prior, dstrow[x], cover);
                 continue;
             }
             if (alpha >= 255)
             {
-                dstrow[x] = s;
+                dstrow[x] = cover < 255 ? DwmCoverPixel(prior, s, cover) : s;
                 continue;
             }
             d = dstrow[x];
@@ -2917,6 +2940,8 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
                 ((((s >> 8) & 0xFFu) * alpha +
                   ((d >> 8) & 0xFFu) * inverse) / 255u << 8) |
                 (((s & 0xFFu) * alpha + (d & 0xFFu) * inverse) / 255u);
+            if (cover < 255)
+                dstrow[x] = DwmCoverPixel(prior, dstrow[x], cover);
         }
     }
 }
@@ -2924,7 +2949,8 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
 static void
 DwmBlitWindowAnimated(ULONG *comp, LONG scrW,
                       LONG clipL, LONG clipT, LONG clipR, LONG clipB,
-                      const BYTE *pix, const BYTE *dxpix, const DWM_WIN *w)
+                      const BYTE *pix, const BYTE *dxpix, const DWM_WIN *w,
+                      const ULONG *backdropBase)
 {
     LONG dstX = w->AnimX - g_originX;
     LONG dstY = w->AnimY - g_originY;
@@ -2937,7 +2963,8 @@ DwmBlitWindowAnimated(ULONG *comp, LONG scrW,
 
     DwmBlitScaled(comp, scrW, clipL, clipT, clipR, clipB,
                   pix, w->cx, w->cy, w->Stride,
-                  dstX, dstY, w->AnimCx, w->AnimCy, alpha, w);
+                  dstX, dstY, w->AnimCx, w->AnimCy, alpha, w,
+                  backdropBase, w->CornerRadius);
 
     if (dxpix != NULL && w->DxWidth != 0 && w->DxHeight != 0)
     {
@@ -2950,7 +2977,7 @@ DwmBlitWindowAnimated(ULONG *comp, LONG scrW,
                       dxpix, (LONG)w->DxWidth, (LONG)w->DxHeight, w->DxPitch,
                       dstX + (LONG)((LONGLONG)w->DxClientX * w->AnimCx / w->cx),
                       dstY + (LONG)((LONGLONG)w->DxClientY * w->AnimCy / w->cy),
-                      cx, cy, alpha, NULL);
+                      cx, cy, alpha, NULL, NULL, 0);
     }
 }
 
@@ -3603,6 +3630,13 @@ DwmComposeLoop(HANDLE hStopEvent)
                 wt = (LONGLONG)wins[i].y - g_originY;
                 wr = wl + wins[i].cx;
                 wb = wt + wins[i].cy;
+                if (wins[i].AnimFlags != 0)
+                {
+                    wl = (LONGLONG)wins[i].AnimX - g_originX;
+                    wt = (LONGLONG)wins[i].AnimY - g_originY;
+                    wr = wl + wins[i].AnimCx;
+                    wb = wt + wins[i].AnimCy;
+                }
                 if (wr <= pl || wl >= pr || wb <= pt || wt >= pb)
                     continue;
                 margin = DwmBlurRadius() * DWM_BLUR_PASSES + 1;
@@ -3850,11 +3884,22 @@ DwmComposeLoop(HANDLE hStopEvent)
                         ++g_statWindows;
                     if (wins[i].AnimFlags != 0)
                     {
+                        DWM_WIN Animated = wins[i];
+                        const ULONG *animatedBackdrop;
+
+                        Animated.x = wins[i].AnimX;
+                        Animated.y = wins[i].AnimY;
+                        Animated.cx = wins[i].AnimCx;
+                        Animated.cy = wins[i].AnimCy;
+                        Animated.AnimFlags = 0;
+                        animatedBackdrop = DwmApplyBackdropBlur(
+                            (ULONG *)g_compBits, g_W, g_H,
+                            pl, pt, pr, pb, &Animated, wins, i);
                         DwmStatCounter(&stgA);
                         DwmBlitWindowAnimated((ULONG *)g_compBits, g_W,
                                               cl, ct, cr, cb, pix,
                                               DwmDxGetSurfaceSnapshot(&wins[i]),
-                                              &wins[i]);
+                                              &wins[i], animatedBackdrop);
                         DwmStatCounter(&stgB);
                         if (g_frameStats)
                             g_statAnimTicks += (ULONGLONG)(stgB.QuadPart - stgA.QuadPart);

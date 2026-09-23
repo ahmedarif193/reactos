@@ -26,7 +26,434 @@ static const WCHAR szTrayNotifyWndClass[] = L"TrayNotifyWnd";
 
 #define TRAY_NOTIFY_WND_SPACING_X   ShellScaleForDpi(1)
 #define TRAY_NOTIFY_WND_SPACING_Y   ShellScaleForDpi(1)
-#define CLOCK_TEXT_HACK             ShellScaleForDpi(4)
+#define TRAY_CHEVRON_WIDTH          ShellScaleForDpi(32)
+#define TRAY_QS_PAD                 ShellScaleForDpi(4)
+#define TRAY_QS_SLOT                ShellScaleForDpi(24)
+
+static const WCHAR szTrayChevronClass[] = L"TrayChevronButton";
+static const WCHAR szTrayQuickSettingsClass[] = L"TrayQuickSettingsButton";
+
+static VOID
+TrayPaintBuffered(HWND hWnd, HDC hdc, VOID (*pfnPaint)(HWND, HDC, const RECT *, PVOID), PVOID pContext)
+{
+    RECT rc;
+    HDC hdcMem;
+    HBITMAP hbm;
+    HGDIOBJ hbmOld;
+
+    ::GetClientRect(hWnd, &rc);
+    hdcMem = CreateCompatibleDC(hdc);
+    hbm = hdcMem ? CreateCompatibleBitmap(hdc, rc.right, rc.bottom) : NULL;
+    if (!hbm)
+    {
+        if (hdcMem)
+            DeleteDC(hdcMem);
+        DrawThemeParentBackground(hWnd, hdc, &rc);
+        pfnPaint(hWnd, hdc, &rc, pContext);
+        return;
+    }
+    hbmOld = SelectObject(hdcMem, hbm);
+    DrawThemeParentBackground(hWnd, hdcMem, &rc);
+    pfnPaint(hWnd, hdcMem, &rc, pContext);
+    BitBlt(hdc, 0, 0, rc.right, rc.bottom, hdcMem, 0, 0, SRCCOPY);
+    SelectObject(hdcMem, hbmOld);
+    DeleteObject(hbm);
+    DeleteDC(hdcMem);
+}
+
+class CTrayChevronButton :
+    public CWindowImpl<CTrayChevronButton, CWindow, CControlWinTraits>
+{
+    HWND m_hwndPager;
+    BOOL m_bHot;
+    BOOL m_bPressed;
+    BOOL m_bTracking;
+    CTooltips m_Tooltip;
+    WCHAR m_szTip[64];
+
+    static VOID Paint(HWND hWnd, HDC hdc, const RECT *prc, PVOID pContext)
+    {
+        CTrayChevronButton *pThis = (CTrayChevronButton *)pContext;
+        BOOL bOpen = TrayOverflow_IsOpen();
+        INT iState = 0;
+        RECT rcPill;
+
+        if (pThis->m_bPressed)
+            iState = TRAY_PILL_PRESSED;
+        else if (bOpen)
+            iState = TRAY_PILL_CHECKED;
+        else if (pThis->m_bHot)
+            iState = TRAY_PILL_HOT;
+        ShellGetTrayPillRect(prc, &rcPill);
+        ShellDrawTrayPill(hdc, &rcPill, iState);
+        ShellDrawTrayGlyph(hdc, &rcPill, bOpen ? IDI_FLU_TRAYCHEVDOWN : IDI_FLU_TRAYCHEVUP);
+    }
+
+public:
+    CTrayChevronButton() : m_hwndPager(NULL), m_bHot(FALSE), m_bPressed(FALSE), m_bTracking(FALSE)
+    {
+        m_szTip[0] = UNICODE_NULL;
+    }
+
+    DECLARE_WND_CLASS_EX(szTrayChevronClass, CS_HREDRAW | CS_VREDRAW, COLOR_3DFACE)
+
+    HWND DoCreate(HWND hwndParent, HWND hwndPager)
+    {
+        m_hwndPager = hwndPager;
+        Create(hwndParent, NULL, NULL, WS_CHILD | WS_CLIPSIBLINGS);
+        if (!m_hWnd)
+            return NULL;
+
+        if (!LoadStringW(hExplorerInstance, IDS_TRAYCHEVRON_TOOLTIP, m_szTip, _countof(m_szTip)))
+            StringCchCopyW(m_szTip, _countof(m_szTip), L"Show hidden icons");
+        m_Tooltip.Create(m_hWnd, WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP);
+        TTTOOLINFOW ti = { 0 };
+        ti.cbSize = TTTOOLINFOW_V1_SIZE;
+        ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+        ti.hwnd = m_hWnd;
+        ti.uId = reinterpret_cast<UINT_PTR>(m_hWnd);
+        ti.lpszText = m_szTip;
+        m_Tooltip.AddTool(&ti);
+        return m_hWnd;
+    }
+
+    LRESULT OnEraseBackground(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        return TRUE;
+    }
+
+    LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = (uMsg == WM_PRINTCLIENT) ? (HDC)wParam : BeginPaint(&ps);
+
+        if (hdc)
+            TrayPaintBuffered(m_hWnd, hdc, Paint, this);
+        if (uMsg != WM_PRINTCLIENT)
+            EndPaint(&ps);
+        return 0;
+    }
+
+    LRESULT OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        if (!m_bTracking)
+        {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, m_hWnd, 0 };
+            TrackMouseEvent(&tme);
+            m_bTracking = TRUE;
+        }
+        if (!m_bHot)
+        {
+            m_bHot = TRUE;
+            Invalidate(FALSE);
+        }
+        return 0;
+    }
+
+    LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        m_bTracking = FALSE;
+        m_bHot = FALSE;
+        Invalidate(FALSE);
+        return 0;
+    }
+
+    LRESULT OnLButtonDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        m_bPressed = TRUE;
+        SetCapture();
+        Invalidate(FALSE);
+        return 0;
+    }
+
+    LRESULT OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        RECT rc;
+
+        if (!m_bPressed)
+            return 0;
+        m_bPressed = FALSE;
+        ReleaseCapture();
+        GetClientRect(&rc);
+        if (PtInRect(&rc, pt))
+        {
+            m_Tooltip.Pop();
+            GetWindowRect(&rc);
+            TrayOverflow_Toggle(m_hWnd, &rc, m_hwndPager);
+        }
+        Invalidate(FALSE);
+        return 0;
+    }
+
+    LRESULT OnCaptureChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        if (m_bPressed && (HWND)lParam != m_hWnd)
+        {
+            m_bPressed = FALSE;
+            Invalidate(FALSE);
+        }
+        return 0;
+    }
+
+    BEGIN_MSG_MAP(CTrayChevronButton)
+        MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBackground)
+        MESSAGE_HANDLER(WM_PAINT, OnPaint)
+        MESSAGE_HANDLER(WM_PRINTCLIENT, OnPaint)
+        MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
+        MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
+        MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
+        MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
+        MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChanged)
+    END_MSG_MAP()
+};
+
+class CTrayQuickSettingsButton :
+    public CWindowImpl<CTrayQuickSettingsButton, CWindow, CControlWinTraits>
+{
+    HWND m_hwndPager;
+    TRAYICONLIST m_List;
+    BOOL m_bHot;
+    BOOL m_bPressed;
+    BOOL m_bTracking;
+    CTooltips m_Tooltip;
+
+    static VOID Paint(HWND hWnd, HDC hdc, const RECT *prc, PVOID pContext)
+    {
+        CTrayQuickSettingsButton *pThis = (CTrayQuickSettingsButton *)pContext;
+        INT iState = 0, cx = 0, cy = 0;
+        RECT rcPill;
+
+        if (pThis->m_bPressed)
+            iState = TRAY_PILL_PRESSED;
+        else if (TrayQuickSettings_IsOpen())
+            iState = TRAY_PILL_CHECKED;
+        else if (pThis->m_bHot)
+            iState = TRAY_PILL_HOT;
+        ShellGetTrayPillRect(prc, &rcPill);
+        ShellDrawTrayPill(hdc, &rcPill, iState);
+
+        if (!pThis->m_List.himl || !ImageList_GetIconSize(pThis->m_List.himl, &cx, &cy))
+            return;
+        for (UINT i = 0; i < pThis->m_List.cItems; i++)
+        {
+            RECT rcSlot = pThis->SlotRect(i, &rcPill);
+            if (pThis->m_List.Items[i].iImage < 0)
+                continue;
+            ImageList_Draw(pThis->m_List.himl, pThis->m_List.Items[i].iImage, hdc,
+                           rcSlot.left + (rcSlot.right - rcSlot.left - cx) / 2,
+                           rcSlot.top + (rcSlot.bottom - rcSlot.top - cy) / 2,
+                           ILD_TRANSPARENT);
+        }
+    }
+
+    RECT SlotRect(UINT i, const RECT *prcPill) const
+    {
+        RECT rc = *prcPill;
+        rc.left = TRAY_QS_PAD + (INT)i * TRAY_QS_SLOT;
+        rc.right = rc.left + TRAY_QS_SLOT;
+        return rc;
+    }
+
+    INT SlotFromPoint(POINT pt) const
+    {
+        INT i = (pt.x - TRAY_QS_PAD) / TRAY_QS_SLOT;
+
+        if (!m_List.cItems)
+            return -1;
+        if (pt.x < TRAY_QS_PAD || i < 0)
+            return 0;
+        return min(i, (INT)m_List.cItems - 1);
+    }
+
+    VOID SendToSlot(INT i, UINT uMsg)
+    {
+        TRAYICONEVENT Event;
+
+        if (i < 0 || i >= (INT)m_List.cItems)
+            return;
+        Event.hWnd = m_List.Items[i].hWnd;
+        Event.uID = m_List.Items[i].uID;
+        Event.uMsg = uMsg;
+        ::SendMessageW(m_hwndPager, TNWM_TRAYICONEVENT, 0, (LPARAM)&Event);
+    }
+
+public:
+    CTrayQuickSettingsButton() : m_hwndPager(NULL), m_bHot(FALSE), m_bPressed(FALSE), m_bTracking(FALSE)
+    {
+        ZeroMemory(&m_List, sizeof(m_List));
+    }
+
+    DECLARE_WND_CLASS_EX(szTrayQuickSettingsClass, CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS, COLOR_3DFACE)
+
+    HWND DoCreate(HWND hwndParent, HWND hwndPager)
+    {
+        m_hwndPager = hwndPager;
+        Create(hwndParent, NULL, NULL, WS_CHILD | WS_CLIPSIBLINGS);
+        if (m_hWnd)
+            m_Tooltip.Create(m_hWnd, WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP);
+        return m_hWnd;
+    }
+
+    UINT GetCount() const
+    {
+        return m_List.cItems;
+    }
+
+    INT GetWidth() const
+    {
+        return m_List.cItems ? 2 * TRAY_QS_PAD + (INT)m_List.cItems * TRAY_QS_SLOT : 0;
+    }
+
+    VOID Refresh()
+    {
+        RECT rcClient, rcPill;
+
+        ZeroMemory(&m_List, sizeof(m_List));
+        if (m_hwndPager)
+            ::SendMessageW(m_hwndPager, TNWM_GETTRAYICONS, TRAYICONS_QUICKSETTINGS, (LPARAM)&m_List);
+        if (!m_hWnd)
+            return;
+
+        while (m_Tooltip.m_hWnd && m_Tooltip.GetToolCount() > 0)
+        {
+            TTTOOLINFOW ti = { TTTOOLINFOW_V1_SIZE };
+            if (!m_Tooltip.EnumTools(&ti))
+                break;
+            m_Tooltip.DelTool(ti.hwnd, (UINT)ti.uId);
+        }
+        GetClientRect(&rcClient);
+        ShellGetTrayPillRect(&rcClient, &rcPill);
+        for (UINT i = 0; m_Tooltip.m_hWnd && i < m_List.cItems; i++)
+        {
+            TTTOOLINFOW ti = { TTTOOLINFOW_V1_SIZE };
+            ti.uFlags = TTF_SUBCLASS;
+            ti.hwnd = m_hWnd;
+            ti.uId = i + 1;
+            ti.rect = SlotRect(i, &rcPill);
+            if (i == 0)
+                ti.rect.left = 0;
+            if (i + 1 == m_List.cItems)
+                ti.rect.right = rcClient.right;
+            ti.lpszText = m_List.Items[i].szTip;
+            m_Tooltip.AddTool(&ti);
+        }
+        Invalidate(FALSE);
+    }
+
+    BOOL GetAnchor(POINT *ppt)
+    {
+        RECT rc;
+
+        if (!m_hWnd || !IsWindowVisible() || !GetWindowRect(&rc))
+            return FALSE;
+        ppt->x = (rc.left + rc.right) / 2;
+        ppt->y = (rc.top + rc.bottom) / 2;
+        return TRUE;
+    }
+
+    LRESULT OnEraseBackground(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        return TRUE;
+    }
+
+    LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = (uMsg == WM_PRINTCLIENT) ? (HDC)wParam : BeginPaint(&ps);
+
+        if (hdc)
+            TrayPaintBuffered(m_hWnd, hdc, Paint, this);
+        if (uMsg != WM_PRINTCLIENT)
+            EndPaint(&ps);
+        return 0;
+    }
+
+    LRESULT OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        if (!m_bTracking)
+        {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, m_hWnd, 0 };
+            TrackMouseEvent(&tme);
+            m_bTracking = TRUE;
+        }
+        if (!m_bHot)
+        {
+            m_bHot = TRUE;
+            Invalidate(FALSE);
+        }
+        return 0;
+    }
+
+    LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        m_bTracking = FALSE;
+        m_bHot = FALSE;
+        Invalidate(FALSE);
+        return 0;
+    }
+
+    LRESULT OnLButtonDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        m_bPressed = TRUE;
+        SetCapture();
+        Invalidate(FALSE);
+        return 0;
+    }
+
+    LRESULT OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        RECT rc;
+
+        if (!m_bPressed)
+            return 0;
+        m_bPressed = FALSE;
+        ReleaseCapture();
+        GetClientRect(&rc);
+        if (PtInRect(&rc, pt))
+        {
+            m_Tooltip.Pop();
+            GetWindowRect(&rc);
+            TrayQuickSettings_Toggle(m_hWnd, &rc);
+        }
+        Invalidate(FALSE);
+        return 0;
+    }
+
+    LRESULT OnRButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        INT i = SlotFromPoint(pt);
+
+        SendToSlot(i, WM_RBUTTONDOWN);
+        SendToSlot(i, WM_RBUTTONUP);
+        SendToSlot(i, WM_CONTEXTMENU);
+        return 0;
+    }
+
+    LRESULT OnCaptureChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        if (m_bPressed && (HWND)lParam != m_hWnd)
+        {
+            m_bPressed = FALSE;
+            Invalidate(FALSE);
+        }
+        return 0;
+    }
+
+    BEGIN_MSG_MAP(CTrayQuickSettingsButton)
+        MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBackground)
+        MESSAGE_HANDLER(WM_PAINT, OnPaint)
+        MESSAGE_HANDLER(WM_PRINTCLIENT, OnPaint)
+        MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
+        MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
+        MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
+        MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
+        MESSAGE_HANDLER(WM_RBUTTONUP, OnRButtonUp)
+        MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChanged)
+    END_MSG_MAP()
+};
 
 /*
  * TrayNotifyWnd
@@ -41,6 +468,8 @@ class CTrayNotifyWnd :
     CComPtr<IUnknown> m_clock;
     CTrayShowDesktopButton m_ShowDesktopButton;
     CComPtr<IUnknown> m_pager;
+    CTrayChevronButton m_Chevron;
+    CTrayQuickSettingsButton m_QuickSettings;
 
     HWND m_hwndClock;
     HWND m_hwndShowDesktop;
@@ -52,13 +481,17 @@ class CTrayNotifyWnd :
     SIZE trayNotifySize;
     MARGINS ContentMargin;
     BOOL IsHorizontal;
+    BOOL m_bModern;
+    BOOL m_bChevron;
 
 public:
     CTrayNotifyWnd() :
         m_hwndClock(NULL),
         m_hwndPager(NULL),
         TrayTheme(NULL),
-        IsHorizontal(FALSE)
+        IsHorizontal(FALSE),
+        m_bModern(FALSE),
+        m_bChevron(FALSE)
     {
         ZeroMemory(&trayClockMinSize, sizeof(trayClockMinSize));
         ZeroMemory(&trayShowDesktopSize, sizeof(trayShowDesktopSize));
@@ -131,7 +564,77 @@ public:
         m_ShowDesktopButton.DoCreate(m_hWnd);
         m_hwndShowDesktop = m_ShowDesktopButton.m_hWnd;
 
+        m_Chevron.DoCreate(m_hWnd, m_hwndPager);
+        m_QuickSettings.DoCreate(m_hWnd, m_hwndPager);
+
         return TRUE;
+    }
+
+    UINT GetOverflowCount()
+    {
+        TRAYICONLIST List;
+
+        ZeroMemory(&List, sizeof(List));
+        ::SendMessage(m_hwndPager, TNWM_GETTRAYICONS, TRAYICONS_OVERFLOW, (LPARAM)&List);
+        return List.cItems;
+    }
+
+    BOOL GetModernMinimumSize(IN OUT PSIZE pSize)
+    {
+        SIZE clockSize = { 0, pSize->cy };
+        SIZE traySize = { 0, pSize->cy };
+
+        ZeroMemory(&trayClockMinSize, sizeof(trayClockMinSize));
+        if (!GetHideClock() && pSize->cy > 0)
+        {
+            ::SendMessage(m_hwndClock, TNWM_GETMINIMUMSIZE, TNWM_MINSIZE_MODERN, (LPARAM)&clockSize);
+            trayClockMinSize = clockSize;
+        }
+
+        ::SendMessage(m_hwndPager, TNWM_GETMINIMUMSIZE, TNWM_MINSIZE_MODERN, (LPARAM)&traySize);
+        trayNotifySize = traySize;
+
+        m_QuickSettings.Refresh();
+        m_bChevron = (GetOverflowCount() != 0);
+
+        m_ShowDesktopButton.m_bModern = TRUE;
+        trayShowDesktopSize.cx = g_TaskbarSettings.bShowDesktopButton ? m_ShowDesktopButton.WidthOrHeight() : 0;
+        trayShowDesktopSize.cy = pSize->cy;
+
+        pSize->cx = (m_bChevron ? TRAY_CHEVRON_WIDTH : 0) + trayNotifySize.cx +
+                    m_QuickSettings.GetWidth() + trayClockMinSize.cx + trayShowDesktopSize.cx;
+        return TRUE;
+    }
+
+    VOID AlignModernControls(IN CONST RECT *prcClient)
+    {
+        CONST UINT swpFlags = SWP_NOCOPYBITS | SWP_NOZORDER | SWP_NOACTIVATE;
+        INT cy = prcClient->bottom - prcClient->top;
+        INT x = prcClient->right;
+        INT cxQuickSettings = m_QuickSettings.GetWidth();
+
+        if (g_TaskbarSettings.bShowDesktopButton)
+        {
+            x -= trayShowDesktopSize.cx;
+            ::SetWindowPos(m_hwndShowDesktop, NULL, x, prcClient->top, trayShowDesktopSize.cx, cy, swpFlags);
+        }
+
+        if (!GetHideClock())
+        {
+            x -= trayClockMinSize.cx;
+            ::SetWindowPos(m_hwndClock, NULL, x, prcClient->top, trayClockMinSize.cx, cy, swpFlags);
+        }
+
+        x -= cxQuickSettings;
+        ::SetWindowPos(m_QuickSettings, NULL, x, prcClient->top, cxQuickSettings, cy,
+                       swpFlags | (cxQuickSettings ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+
+        x -= trayNotifySize.cx;
+        ::SetWindowPos(m_hwndPager, NULL, x, prcClient->top, trayNotifySize.cx, cy, swpFlags);
+
+        x -= TRAY_CHEVRON_WIDTH;
+        ::SetWindowPos(m_Chevron, NULL, x, prcClient->top, TRAY_CHEVRON_WIDTH, cy,
+                       swpFlags | (m_bChevron ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
     }
 
     BOOL GetMinimumSize(IN OUT PSIZE pSize)
@@ -140,6 +643,17 @@ public:
         SIZE traySize = { 0, 0 };
         SIZE showDesktopSize = { 0, 0 };
         BOOL bHideClock = GetHideClock();
+
+        m_bModern = ShellIsModernTray(IsHorizontal);
+        if (m_bModern)
+            return GetModernMinimumSize(pSize);
+
+        m_bChevron = FALSE;
+        m_ShowDesktopButton.m_bModern = FALSE;
+        if (m_Chevron.m_hWnd)
+            m_Chevron.ShowWindow(SW_HIDE);
+        if (m_QuickSettings.m_hWnd)
+            m_QuickSettings.ShowWindow(SW_HIDE);
 
         if (!bHideClock)
         {
@@ -196,29 +710,27 @@ public:
 
         if (IsHorizontal)
         {
-            pSize->cx = 2 * TRAY_NOTIFY_WND_SPACING_X;
+            pSize->cx = ContentMargin.cxLeftWidth + TRAY_NOTIFY_WND_SPACING_X + traySize.cx;
 
             if (!bHideClock)
                 pSize->cx += TRAY_NOTIFY_WND_SPACING_X + trayClockMinSize.cx;
 
             if (g_TaskbarSettings.bShowDesktopButton)
                 pSize->cx += showDesktopButtonExtent;
-
-            pSize->cx += traySize.cx;
-            pSize->cx += ContentMargin.cxLeftWidth + ContentMargin.cxRightWidth;
+            else
+                pSize->cx += ContentMargin.cxRightWidth;
         }
         else
         {
-            pSize->cy = 2 * TRAY_NOTIFY_WND_SPACING_Y;
+            pSize->cy = ContentMargin.cyTopHeight + TRAY_NOTIFY_WND_SPACING_Y + traySize.cy;
 
             if (!bHideClock)
                 pSize->cy += TRAY_NOTIFY_WND_SPACING_Y + trayClockMinSize.cy;
 
             if (g_TaskbarSettings.bShowDesktopButton)
                 pSize->cy += showDesktopButtonExtent;
-
-            pSize->cy += traySize.cy;
-            pSize->cy += ContentMargin.cyTopHeight + ContentMargin.cyBottomHeight;
+            else
+                pSize->cy += ContentMargin.cyBottomHeight;
         }
 
         return TRUE;
@@ -239,6 +751,12 @@ public:
             rcClient = *prcClient;
         else
             GetClientRect(&rcClient);
+
+        if (m_bModern)
+        {
+            AlignModernControls(&rcClient);
+            return;
+        }
 
         rcClient.left += ContentMargin.cxLeftWidth;
         rcClient.top += ContentMargin.cyTopHeight;
@@ -273,9 +791,6 @@ public:
 
                 ptShowDesktop.x = rcClient.right;
                 showDesktopSize.cx = cxyShowDesktop;
-
-                // HACK: Clock has layout problems - remove this once addressed.
-                rcClient.right -= CLOCK_TEXT_HACK;
             }
             else
             {
@@ -289,9 +804,6 @@ public:
 
                 ptShowDesktop.y = rcClient.bottom;
                 showDesktopSize.cy = cxyShowDesktop;
-
-                // HACK: Clock has layout problems - remove this once addressed.
-                rcClient.bottom -= CLOCK_TEXT_HACK;
             }
 
             /* Resize and reposition the button */
@@ -336,7 +848,7 @@ public:
         POINT ptPager;
         if (IsHorizontal)
         {
-            ptPager.x = ContentMargin.cxLeftWidth;
+            ptPager.x = ContentMargin.cxLeftWidth + TRAY_NOTIFY_WND_SPACING_X;
             ptPager.y = ((rcClient.bottom - rcClient.top) - trayNotifySize.cy) / 2;
             if (g_TaskbarSettings.UseCompactTrayIcons())
                 ptPager.y += ContentMargin.cyTopHeight;
@@ -346,7 +858,7 @@ public:
             ptPager.x = ((rcClient.right - rcClient.left) - trayNotifySize.cx) / 2;
             if (g_TaskbarSettings.UseCompactTrayIcons())
                 ptPager.x += ContentMargin.cxLeftWidth;
-            ptPager.y = ContentMargin.cyTopHeight;
+            ptPager.y = ContentMargin.cyTopHeight + TRAY_NOTIFY_WND_SPACING_Y;
         }
 
         ::SetWindowPos(m_hwndPager,
@@ -378,12 +890,49 @@ public:
 
         RECT rect;
         GetClientRect(&rect);
+        if (m_bModern)
+        {
+            DrawThemeParentBackground(m_hWnd, hdc, &rect);
+            return TRUE;
+        }
+
         if (IsThemeBackgroundPartiallyTransparent(TrayTheme, TNP_BACKGROUND, 0))
             DrawThemeParentBackground(m_hWnd, hdc, &rect);
 
         DrawThemeBackground(TrayTheme, hdc, TNP_BACKGROUND, 0, &rect, 0);
 
         return TRUE;
+    }
+
+    LRESULT OnGetIconAnchor(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        POINT *ppt = (POINT *)lParam;
+        RECT rc;
+
+        if (!ppt)
+            return FALSE;
+        if ((INT)wParam != TRAYICON_APP && m_QuickSettings.GetAnchor(ppt))
+            return TRUE;
+        if (m_bChevron && m_Chevron.IsWindowVisible() && m_Chevron.GetWindowRect(&rc))
+        {
+            ppt->x = (rc.left + rc.right) / 2;
+            ppt->y = (rc.top + rc.bottom) / 2;
+            return TRUE;
+        }
+        GetWindowRect(&rc);
+        ppt->x = (rc.left + rc.right) / 2;
+        ppt->y = (rc.top + rc.bottom) / 2;
+        return TRUE;
+    }
+
+    LRESULT OnIconsChanged(INT uCode, LPNMHDR hdr, BOOL& bHandled)
+    {
+        if (!m_bModern)
+            return 0;
+        m_QuickSettings.Refresh();
+        m_Chevron.Invalidate(FALSE);
+        TrayOverflow_Refresh();
+        return 0;
     }
 
     LRESULT OnGetMinimumSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -547,7 +1096,9 @@ public:
         MESSAGE_HANDLER(WM_COPYDATA, OnPagerMessage)
         MESSAGE_HANDLER(TWM_SETTINGSCHANGED, OnTaskbarSettingsChanged)
         NOTIFY_CODE_HANDLER(NTNWM_REALIGN, OnRealign)
+        NOTIFY_CODE_HANDLER(NTNWM_ICONSCHANGED, OnIconsChanged)
         MESSAGE_HANDLER(TNWM_GETMINIMUMSIZE, OnGetMinimumSize)
+        MESSAGE_HANDLER(TNWM_GETICONANCHOR, OnGetIconAnchor)
         MESSAGE_HANDLER(TNWM_GETSHOWDESKTOPBUTTON, OnGetShowDesktopButton)
     END_MSG_MAP()
 };

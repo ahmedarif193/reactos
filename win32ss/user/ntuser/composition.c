@@ -59,6 +59,16 @@ typedef struct _REDIRECT_ENTRY
     RECTL        AnimTarget;
     POINTL       AnimAnchor;
     RECTL        AnimDamage;
+    ULONG        TransSeq;
+    BOOL         TransActive;
+    BOOL         TransHold;
+    LONGLONG     TransStart;
+    LONGLONG     TransDuration;
+    LONG         TransDx;
+    LONG         TransDy;
+    ULONG        TransFromAlpha;
+    ULONG        TransToAlpha;
+    RECTL        TransDamage;
 } REDIRECT_ENTRY;
 
 #define COMPOSITION_ANIM_SCALE          65536
@@ -1354,6 +1364,127 @@ IntCompositionEvaluateAnimation(_Inout_ REDIRECT_ENTRY *Entry,
     return TRUE;
 }
 
+static VOID
+IntCompositionUnpackPoint(_In_ ULONG_PTR Value, _Out_ LONG *px, _Out_ LONG *py)
+{
+    *px = (LONG)(Value & 0xFFFFu) - 0x8000;
+    *py = (LONG)((Value >> 16) & 0xFFFFu) - 0x8000;
+}
+
+static VOID
+IntCompositionStartTransition(_Inout_ REDIRECT_ENTRY *Entry, _In_ PWND Wnd,
+                              _In_ ULONG_PTR Request, _In_ LONGLONG Now)
+{
+    ULONG_PTR FromLT = 0, FromRB = 0;
+    RECTL From = *(PRECTL)&Wnd->rcWindow;
+    ULONG CurrentAlpha = 255;
+    LONG CurrentDx = 0, CurrentDy = 0;
+    BOOL Interrupted = FALSE;
+
+    if (Entry->TransActive && Entry->TransDuration > 0 && Now > Entry->TransStart &&
+        Now - Entry->TransStart < Entry->TransDuration)
+    {
+        ULONG Scale = IntCompositionEase((ULONG)(((Now - Entry->TransStart) * COMPOSITION_ANIM_SCALE) /
+                                                 Entry->TransDuration), FALSE);
+
+        CurrentAlpha = (ULONG)((LONG)Entry->TransFromAlpha +
+                               (LONG)(((LONGLONG)((LONG)Entry->TransToAlpha - (LONG)Entry->TransFromAlpha) *
+                                       Scale) / COMPOSITION_ANIM_SCALE));
+        CurrentDx = (LONG)(((LONGLONG)Entry->TransDx * (COMPOSITION_ANIM_SCALE - Scale)) / COMPOSITION_ANIM_SCALE);
+        CurrentDy = (LONG)(((LONGLONG)Entry->TransDy * (COMPOSITION_ANIM_SCALE - Scale)) / COMPOSITION_ANIM_SCALE);
+        Interrupted = TRUE;
+    }
+
+    Entry->TransSeq = (ULONG)(Request >> 24) & 0xFFu;
+    Entry->TransFromAlpha = (ULONG)Request & 0xFFu;
+    Entry->TransToAlpha = (ULONG)(Request >> 8) & 0xFFu;
+    Entry->TransDuration = (LONGLONG)((Request >> 16) & 0xFFu) *
+                           DWM_TRANSITION_UNIT_MS * 10000LL;
+    Entry->TransStart = Now;
+    Entry->TransHold = FALSE;
+    if (AtomDwmTransitionFromLT != 0 && AtomDwmTransitionFromRB != 0)
+    {
+        FromLT = (ULONG_PTR)UserGetProp(Wnd, AtomDwmTransitionFromLT, FALSE);
+        FromRB = (ULONG_PTR)UserGetProp(Wnd, AtomDwmTransitionFromRB, FALSE);
+    }
+    if (FromLT != 0 && FromRB != 0)
+    {
+        IntCompositionUnpackPoint(FromLT, &From.left, &From.top);
+        IntCompositionUnpackPoint(FromRB, &From.right, &From.bottom);
+    }
+    else if (Interrupted)
+    {
+        Entry->TransFromAlpha = CurrentAlpha;
+        RECTL_vOffsetRect(&From, CurrentDx, CurrentDy);
+    }
+    Entry->TransDx = From.left - Wnd->rcWindow.left;
+    Entry->TransDy = From.top - Wnd->rcWindow.top;
+    Entry->TransActive = gspv.animationinfo.iMinAnimate && Entry->TransDuration > 0 &&
+                         From.right > From.left && From.bottom > From.top;
+    if (!Entry->TransActive)
+    {
+        Entry->TransHold = Entry->TransToAlpha < 255;
+        return;
+    }
+    if (From.right - From.left != Wnd->rcWindow.right - Wnd->rcWindow.left ||
+        From.bottom - From.top != Wnd->rcWindow.bottom - Wnd->rcWindow.top)
+    {
+        Entry->TransDx = 0;
+        Entry->TransDy = 0;
+        IntCompositionStartAnimation(Entry, &From, (PRECTL)&Wnd->rcWindow, DWM_ANIM_MOVE);
+    }
+    Entry->TransDamage = From;
+    RECTL_bUnionRect(&Entry->TransDamage, &Entry->TransDamage, (PRECTL)&Wnd->rcWindow);
+}
+
+static ULONG
+IntCompositionEvaluateTransition(_Inout_ REDIRECT_ENTRY *Entry, _In_ PWND Wnd,
+                                 _In_ LONGLONG Now, _Inout_ PDWM_WIN Frame,
+                                 _Inout_ PRECTL prcDamage)
+{
+    LONGLONG Elapsed;
+    ULONG Scale, Progress;
+    RECTL rcNow;
+    LONG x, y;
+
+    if (!Entry->TransActive)
+        return Entry->TransHold ? Entry->TransToAlpha : 255;
+
+    Elapsed = Now - Entry->TransStart;
+    if (Elapsed < 0)
+        Elapsed = 0;
+    if (Elapsed >= Entry->TransDuration)
+    {
+        Entry->TransActive = FALSE;
+        Entry->TransHold = Entry->TransToAlpha < 255;
+        RECTL_bUnionRect(prcDamage, prcDamage, &Entry->TransDamage);
+        RECTL_bUnionRect(prcDamage, prcDamage, (PRECTL)&Wnd->rcWindow);
+        return Entry->TransToAlpha;
+    }
+
+    Progress = (ULONG)((Elapsed * COMPOSITION_ANIM_SCALE) / Entry->TransDuration);
+    Scale = IntCompositionEase(Progress, FALSE);
+    x = Wnd->rcWindow.left +
+        (LONG)(((LONGLONG)Entry->TransDx * (COMPOSITION_ANIM_SCALE - Scale)) / COMPOSITION_ANIM_SCALE);
+    y = Wnd->rcWindow.top +
+        (LONG)(((LONGLONG)Entry->TransDy * (COMPOSITION_ANIM_SCALE - Scale)) / COMPOSITION_ANIM_SCALE);
+    if (Entry->AnimFlags == 0)
+    {
+        Frame->x = x;
+        Frame->y = y;
+    }
+    rcNow.left = x;
+    rcNow.top = y;
+    rcNow.right = x + (Wnd->rcWindow.right - Wnd->rcWindow.left);
+    rcNow.bottom = y + (Wnd->rcWindow.bottom - Wnd->rcWindow.top);
+    RECTL_bUnionRect(prcDamage, prcDamage, &Entry->TransDamage);
+    RECTL_bUnionRect(prcDamage, prcDamage, &rcNow);
+    Entry->TransDamage = rcNow;
+    return (ULONG)((LONG)Entry->TransFromAlpha +
+                   (LONG)(((LONGLONG)((LONG)Entry->TransToAlpha - (LONG)Entry->TransFromAlpha) *
+                           Scale) / COMPOSITION_ANIM_SCALE));
+}
+
 /*
  * A window's position/size/Z-order changed. Resize the backing when needed
  * (DceResetActiveDCEs then re-redirects any live DCs at the new surface —
@@ -2433,6 +2564,16 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             e->Redirect.rcClient.right - e->Redirect.rcClient.left;
         g_DwmFrameWindows[count].ClientHeight =
             e->Redirect.rcClient.bottom - e->Redirect.rcClient.top;
+        if (AtomDwmTransition != 0)
+        {
+            ULONG_PTR Request = (ULONG_PTR)UserGetProp(w, AtomDwmTransition, FALSE);
+
+            if (((Request >> 24) & 0xFFu) != 0 &&
+                ((Request >> 24) & 0xFFu) != e->TransSeq)
+            {
+                IntCompositionStartTransition(e, w, Request, now);
+            }
+        }
         g_DwmFrameWindows[count].AnimFlags = 0;
         g_DwmFrameWindows[count].AnimX = 0;
         g_DwmFrameWindows[count].AnimY = 0;
@@ -2496,6 +2637,21 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             if (e->Redirect.DxFlags & DWM_DX_PUBLISH_PREMULTIPLIED)
                 lf |= DWM_WINDOW_DX_PREMULTIPLIED_ALPHA;
             g_DwmFrameWindows[count].LayerFlags = lf;
+        }
+        {
+            ULONG TransAlpha;
+
+            if (e->TransActive)
+                AnimRunning = TRUE;
+            TransAlpha = IntCompositionEvaluateTransition(e, w, now,
+                                                          &g_DwmFrameWindows[count],
+                                                          &rcDmg);
+            if (TransAlpha < 255)
+            {
+                g_DwmFrameWindows[count].Alpha =
+                    (g_DwmFrameWindows[count].Alpha * TransAlpha) / 255;
+                g_DwmFrameWindows[count].LayerFlags |= DWM_LWA_ALPHA;
+            }
         }
         if (AtomDwmSystemBackdropType != 0)
         {

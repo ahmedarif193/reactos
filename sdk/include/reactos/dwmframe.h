@@ -229,6 +229,17 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_PROP_BACKDROP_NC_EXTEND_LEFT L"ReactOS.Dwm.BackdropNcExtendLeft"
 #define DWM_PROP_FRAME_EXTEND_TOP     L"ReactOS.Dwm.FrameExtendTop"
 #define DWM_PROP_CORNER_RADIUS        L"ReactOS.Dwm.CornerRadius"
+#define DWM_PROP_TRANSITION           L"ReactOS.Dwm.Transition"
+#define DWM_PROP_TRANSITION_FROM_LT   L"ReactOS.Dwm.TransitionFromLT"
+#define DWM_PROP_TRANSITION_FROM_RB   L"ReactOS.Dwm.TransitionFromRB"
+#define DWM_TRANSITION_UNIT_MS        5u
+#define DWM_TRANSITION_PACK(Seq, FromAlpha, ToAlpha, Ms) \
+    ((((ULONG)(Seq) & 0xFFu) << 24) | \
+     ((((ULONG)(Ms) / DWM_TRANSITION_UNIT_MS) & 0xFFu) << 16) | \
+     (((ULONG)(ToAlpha) & 0xFFu) << 8) | ((ULONG)(FromAlpha) & 0xFFu))
+#define DWM_TRANSITION_POINT(x, y) \
+    ((((ULONG)((LONG)(x) + 0x8000)) & 0xFFFFu) | \
+     ((((ULONG)((LONG)(y) + 0x8000)) & 0xFFFFu) << 16))
 #define DWM_PROP_GPU_OUTPUT           L"ReactOS.Dwm.GpuOutput"
 
 /* Values intentionally match DWM_SYSTEMBACKDROP_TYPE in dwmapi.h. */

@@ -86,6 +86,73 @@ StartTaskManager(
 }
 
 static BOOL
+StartSystemShell(VOID)
+{
+    WCHAR Shell[MAX_PATH] = L"explorer.exe";
+    WCHAR CommandLine[MAX_PATH];
+    DWORD Size = sizeof(Shell) - sizeof(UNICODE_NULL);
+    DWORD Type;
+    HKEY hKey;
+    LPVOID lpEnvironment = NULL;
+    STARTUPINFOW StartupInfo;
+    PROCESS_INFORMATION ProcessInformation;
+    BOOL ret;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                      0,
+                      KEY_QUERY_VALUE,
+                      &hKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hKey, L"Shell", NULL, &Type, (LPBYTE)Shell, &Size) != ERROR_SUCCESS ||
+            (Type != REG_SZ && Type != REG_EXPAND_SZ) || Size < sizeof(WCHAR))
+        {
+            StringCchCopyW(Shell, ARRAYSIZE(Shell), L"explorer.exe");
+        }
+        else
+        {
+            Shell[Size / sizeof(WCHAR)] = UNICODE_NULL;
+        }
+        RegCloseKey(hKey);
+    }
+
+    Size = ExpandEnvironmentStringsW(Shell, CommandLine, ARRAYSIZE(CommandLine));
+    if (!Size || Size > ARRAYSIZE(CommandLine))
+        return FALSE;
+
+    if (!CreateEnvironmentBlock(&lpEnvironment, NULL, TRUE))
+        lpEnvironment = NULL;
+
+    ZeroMemory(&StartupInfo, sizeof(StartupInfo));
+    StartupInfo.cb = sizeof(StartupInfo);
+    StartupInfo.lpDesktop = L"WinSta0\\Default";
+
+    ret = CreateProcessW(NULL,
+                         CommandLine,
+                         NULL,
+                         NULL,
+                         FALSE,
+                         CREATE_UNICODE_ENVIRONMENT,
+                         lpEnvironment,
+                         NULL,
+                         &StartupInfo,
+                         &ProcessInformation);
+    if (ret)
+    {
+        CloseHandle(ProcessInformation.hThread);
+        CloseHandle(ProcessInformation.hProcess);
+    }
+    else
+    {
+        ERR("WL: Failed to restart the shell %s (error %lu)\n", debugstr_w(CommandLine), GetLastError());
+    }
+
+    if (lpEnvironment)
+        DestroyEnvironmentBlock(lpEnvironment);
+    return ret;
+}
+
+static BOOL
 StartUserShell(
     IN OUT PWLSESSION Session)
 {
@@ -95,6 +162,9 @@ StartUserShell(
 #endif
     BOOLEAN Old;
     BOOL ret;
+
+    if (!Session->UserToken)
+        return StartSystemShell();
 
     /* Create environment block for the user */
     if (!CreateEnvironmentBlock(&lpEnvironment, Session->UserToken, TRUE))
@@ -265,15 +335,25 @@ PlaySoundRoutine(
 {
     typedef BOOL (WINAPI *PLAYSOUNDW)(LPCWSTR,HMODULE,DWORD);
     typedef UINT (WINAPI *WAVEOUTGETNUMDEVS)(VOID);
+    static HMODULE hWinmm;
     PLAYSOUNDW Play;
     WAVEOUTGETNUMDEVS waveOutGetNumDevs;
     UINT NumDevs;
     HMODULE hLibrary;
     BOOL Ret = FALSE;
 
-    hLibrary = LoadLibraryW(L"winmm.dll");
+    hLibrary = hWinmm;
     if (!hLibrary)
-        return FALSE;
+    {
+        hLibrary = LoadLibraryW(L"winmm.dll");
+        if (!hLibrary)
+            return FALSE;
+        if (InterlockedCompareExchangePointer((PVOID *)&hWinmm, hLibrary, NULL) != NULL)
+        {
+            FreeLibrary(hLibrary);
+            hLibrary = hWinmm;
+        }
+    }
 
     waveOutGetNumDevs = (WAVEOUTGETNUMDEVS)GetProcAddress(hLibrary, "waveOutGetNumDevs");
     Play = (PLAYSOUNDW)GetProcAddress(hLibrary, "PlaySoundW");
@@ -300,8 +380,6 @@ PlaySoundRoutine(
             FileName ? FileName : L"(n/a)", _SEH2_GetExceptionCode());
     }
     _SEH2_END;
-
-    FreeLibrary(hLibrary);
 
     return Ret;
 }

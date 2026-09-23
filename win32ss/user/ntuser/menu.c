@@ -2340,7 +2340,7 @@ static void FASTCALL MENU_DrawMenuItem(PWND Wnd, PMENU Menu, PWND WndOwner, HDC 
         dis.CtlType   = ODT_MENU;
         dis.CtlID     = 0;
         dis.itemID    = lpitem->wID;
-        dis.itemData  = (DWORD)lpitem->dwItemData;
+        dis.itemData  = lpitem->dwItemData;
         dis.itemState = 0;
         if (lpitem->fState & MF_CHECKED)  dis.itemState |= ODS_CHECKED;
         if (lpitem->fState & MF_DEFAULT)  dis.itemState |= ODS_DEFAULT;

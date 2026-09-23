@@ -57,7 +57,7 @@ BOOL TaskbarSettings::Load()
     bGroupButtons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : FALSE;
 
     dwRet = SHGetValueW(hkExplorer, NULL, L"EnableAutotray", NULL, &dwValue, &cbSize);
-    bHideInactiveIcons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : FALSE;
+    bHideInactiveIcons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : TRUE;
 
     dwRet = SHGetValueW(hkExplorer, L"Advanced", L"TaskbarSmallIcons", NULL, &dwValue, &cbSize);
     bSmallIcons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : TRUE;

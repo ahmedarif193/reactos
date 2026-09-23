@@ -216,4 +216,7 @@ BEGIN
     IDS_TRAYWND_UNDO_CASCADE "&Undo Cascade"
     IDS_TRAYWND_UNDO_TILE "&Undo Tile"
     IDS_TRAYDESKBTN_TOOLTIP "Show Desktop/Windows"
+    IDS_TRAYCHEVRON_TOOLTIP "Show hidden icons"
+    IDS_TRAYCLOCK_NEWNOTIFICATION "%u new notification"
+    IDS_TRAYCLOCK_NEWNOTIFICATIONS "%u new notifications"
 END

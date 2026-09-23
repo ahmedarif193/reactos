@@ -52,6 +52,9 @@ extern ATOM AtomDwmContentBackdrop;
 extern ATOM AtomDwmBackdropNcExtend;
 extern ATOM AtomDwmBackdropNcExtendLeft;
 extern ATOM AtomDwmCornerRadius;
+extern ATOM AtomDwmTransition;
+extern ATOM AtomDwmTransitionFromLT;
+extern ATOM AtomDwmTransitionFromRB;
 typedef struct _USER_CRIT
 {
     EX_PUSH_LOCK Lock;

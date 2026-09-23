@@ -54,6 +54,7 @@ list(APPEND SOURCE
     LoadImageGCC.c
     LookupIconIdFromDirectoryEx.c
     MenuUI.c
+    MenuItemData.c
     MessageStateAnalyzer.c
     MinimizedPosition.c
     ModernUser32.c

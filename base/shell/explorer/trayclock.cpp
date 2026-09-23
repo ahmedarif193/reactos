@@ -70,6 +70,10 @@ class CTrayClockWnd :
     };
     DWORD LineSpacing;
     SIZE CurrentSize;
+    BOOL m_bModern;
+    BOOL m_bHot;
+    BOOL m_bPressed;
+    BOOL m_bTracking;
     WORD VisibleLines;
     SIZE LineSizes[CLOCKWND_FORMAT_COUNT];
     WCHAR szLines[CLOCKWND_FORMAT_COUNT][48];
@@ -105,6 +109,14 @@ private:
     LRESULT OnLButtonDblClick(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     VOID PaintLine(IN HDC hDC, IN OUT RECT *rcClient, IN UINT LineNumber, IN UINT szLinesIndex);
+    VOID PaintModern(IN HDC hDC);
+    VOID UpdateTooltip();
+    DWORD GetLineSpacing() { return m_bModern ? 0 : LineSpacing; }
+    LRESULT OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnLButtonDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnCaptureChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnNotificationsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 
 public:
     // *** IOleWindow methods ***
@@ -147,7 +159,12 @@ public:
         MESSAGE_HANDLER(TNWM_GETMINIMUMSIZE, OnGetMinimumSize)
         MESSAGE_HANDLER(TWM_SETTINGSCHANGED, OnTaskbarSettingsChanged)
         MESSAGE_HANDLER(WM_LBUTTONDBLCLK, OnLButtonDblClick)
+        MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
         MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
+        MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
+        MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
+        MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChanged)
+        MESSAGE_HANDLER(TCWM_NOTIFICATIONSCHANGED, OnNotificationsChanged)
     END_MSG_MAP()
 
     HRESULT Initialize(IN HWND hWndParent);
@@ -158,6 +175,8 @@ public:
 
 #define TRAY_CLOCK_WND_SPACING_X    ShellScaleForDpi(5)
 #define TRAY_CLOCK_WND_SPACING_Y    ShellScaleForDpi(0)
+#define TRAY_CLOCK_MODERN_PAD       ShellScaleForDpi(8)
+#define TRAY_CLOCK_MODERN_BELL      ShellScaleForDpi(16)
 
 CTrayClockWnd::CTrayClockWnd() :
         hFont(NULL),
@@ -165,6 +184,10 @@ CTrayClockWnd::CTrayClockWnd() :
         textColor(0),
         dwFlags(0),
         LineSpacing(0),
+        m_bModern(FALSE),
+        m_bHot(FALSE),
+        m_bPressed(FALSE),
+        m_bTracking(FALSE),
         VisibleLines(0)
 {
     ZeroMemory(&rcText, sizeof(rcText));
@@ -299,7 +322,7 @@ WORD CTrayClockWnd::GetMinimumSize(IN BOOL Horizontal, IN OUT PSIZE pSize)
             {
                 if (Horizontal)
                 {
-                    if (szMax.cy + LineSizes[i].cy + (LONG) LineSpacing >
+                    if (szMax.cy + LineSizes[i].cy + (LONG) GetLineSpacing() >
                         pSize->cy - (2 * TRAY_CLOCK_WND_SPACING_Y))
                     {
                         break;
@@ -312,7 +335,7 @@ WORD CTrayClockWnd::GetMinimumSize(IN BOOL Horizontal, IN OUT PSIZE pSize)
                 }
 
                 /* Add line spacing */
-                szMax.cy += LineSpacing;
+                szMax.cy += GetLineSpacing();
             }
 
             iLinesVisible++;
@@ -324,7 +347,10 @@ WORD CTrayClockWnd::GetMinimumSize(IN BOOL Horizontal, IN OUT PSIZE pSize)
         }
     }
 
-    szMax.cx += 2 * TRAY_CLOCK_WND_SPACING_X;
+    if (m_bModern)
+        szMax.cx += 3 * TRAY_CLOCK_MODERN_PAD + TRAY_CLOCK_MODERN_BELL;
+    else
+        szMax.cx += 2 * TRAY_CLOCK_WND_SPACING_X;
     szMax.cy += 2 * TRAY_CLOCK_WND_SPACING_Y;
 
     *pSize = szMax;
@@ -399,6 +425,28 @@ VOID CTrayClockWnd::UpdateWnd()
             NMHDR nmh = {GetParent(), 0, NTNWM_REALIGN};
             GetParent().SendMessage(WM_NOTIFY, 0, (LPARAM) &nmh);
         }
+    }
+
+    UpdateTooltip();
+}
+
+VOID CTrayClockWnd::UpdateTooltip()
+{
+    UINT cUnread = TrayNotifications_GetUnread();
+
+    if (m_bModern && cUnread)
+    {
+        WCHAR szFormat[64], szTip[80];
+        UINT nId = (cUnread == 1) ? IDS_TRAYCLOCK_NEWNOTIFICATION : IDS_TRAYCLOCK_NEWNOTIFICATIONS;
+
+        if (!LoadStringW(hExplorerInstance, nId, szFormat, _countof(szFormat)))
+        {
+            StringCchCopyW(szFormat, _countof(szFormat),
+                           (cUnread == 1) ? L"%u new notification" : L"%u new notifications");
+        }
+        StringCchPrintfW(szTip, _countof(szTip), szFormat, cUnread);
+        m_tooltip.UpdateTipText(m_hWnd, reinterpret_cast<UINT_PTR>(m_hWnd), szTip);
+        return;
     }
 
     int iDateLength = GetDateFormat(LOCALE_USER_DEFAULT,
@@ -514,6 +562,8 @@ VOID CTrayClockWnd::CalibrateTimer()
 
 LRESULT CTrayClockWnd::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+    TrayNotifications_SetSink(NULL);
+
     /* Disable all timers */
     if (IsTimerEnabled)
     {
@@ -541,6 +591,14 @@ LRESULT CTrayClockWnd::OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
 
     if (hDC == NULL)
         return FALSE;
+
+    if (m_bModern && LinesMeasured)
+    {
+        PaintModern(hDC);
+        if (wParam == 0)
+            EndPaint(&ps);
+        return TRUE;
+    }
 
     if (LinesMeasured &&
         GetClientRect(&rcClient))
@@ -601,7 +659,68 @@ VOID CTrayClockWnd::PaintLine(IN HDC hDC, IN OUT RECT *rcClient, IN UINT LineNum
             szLines[szLinesIndex],
             wcslen(szLines[szLinesIndex]));
 
-    rcClient->top += LineSizes[LineNumber].cy + LineSpacing;
+    rcClient->top += LineSizes[LineNumber].cy + GetLineSpacing();
+}
+
+VOID CTrayClockWnd::PaintModern(IN HDC hDC)
+{
+    RECT rcClient, rcPill, rcBell;
+    HDC hdcMem;
+    HBITMAP hbm;
+    HGDIOBJ hbmOld, hFontOld;
+    INT iState = 0, xRight, y;
+    UINT Lines[2], cLines = 0, i;
+
+    GetClientRect(&rcClient);
+    hdcMem = CreateCompatibleDC(hDC);
+    hbm = hdcMem ? CreateCompatibleBitmap(hDC, rcClient.right, rcClient.bottom) : NULL;
+    if (!hbm)
+    {
+        if (hdcMem)
+            DeleteDC(hdcMem);
+        return;
+    }
+    hbmOld = SelectObject(hdcMem, hbm);
+    DrawThemeParentBackground(m_hWnd, hdcMem, &rcClient);
+
+    if (m_bPressed)
+        iState = TRAY_PILL_PRESSED;
+    else if (TrayCalendar_IsOpen())
+        iState = TRAY_PILL_CHECKED;
+    else if (m_bHot)
+        iState = TRAY_PILL_HOT;
+    ShellGetTrayPillRect(&rcClient, &rcPill);
+    ShellDrawTrayPill(hdcMem, &rcPill, iState);
+
+    rcBell = rcPill;
+    rcBell.right = rcClient.right - TRAY_CLOCK_MODERN_PAD;
+    rcBell.left = rcBell.right - TRAY_CLOCK_MODERN_BELL;
+    ShellDrawTrayGlyph(hdcMem, &rcBell, TrayNotifications_GetUnread() ? IDI_FLU_BELLUNREAD : IDI_FLU_BELL);
+
+    Lines[cLines++] = CLOCKWND_FORMAT_TIME;
+    if (VisibleLines > 1)
+        Lines[cLines++] = CLOCKWND_FORMAT_DATE;
+
+    xRight = rcBell.left - TRAY_CLOCK_MODERN_PAD;
+    y = (rcClient.bottom - CurrentSize.cy) / 2;
+    SetBkMode(hdcMem, TRANSPARENT);
+    ::SetTextColor(hdcMem, textColor);
+    hFontOld = SelectObject(hdcMem, GetClockFont());
+    for (i = 0; i < cLines; i++)
+    {
+        UINT Line = Lines[i];
+
+        if (LineSizes[Line].cx == 0)
+            continue;
+        TextOut(hdcMem, xRight - LineSizes[Line].cx, y, szLines[Line], wcslen(szLines[Line]));
+        y += LineSizes[Line].cy + GetLineSpacing();
+    }
+    SelectObject(hdcMem, hFontOld);
+
+    BitBlt(hDC, 0, 0, rcClient.right, rcClient.bottom, hdcMem, 0, 0, SRCCOPY);
+    SelectObject(hdcMem, hbmOld);
+    DeleteObject(hbm);
+    DeleteDC(hdcMem);
 }
 
 VOID CTrayClockWnd::SetFont(IN HFONT hNewFont, IN BOOL bRedraw)
@@ -645,6 +764,9 @@ LRESULT CTrayClockWnd::OnEraseBackground(UINT uMsg, WPARAM wParam, LPARAM lParam
 {
     HDC hdc = (HDC) wParam;
 
+    if (m_bModern)
+        return TRUE;
+
     if (!IsAppThemed())
     {
         bHandled = FALSE;
@@ -671,9 +793,17 @@ LRESULT CTrayClockWnd::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
 
 LRESULT CTrayClockWnd::OnGetMinimumSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
-    IsHorizontal = (BOOL) wParam;
+    BOOL bModern = ((INT)wParam == TNWM_MINSIZE_MODERN);
 
-    return (LRESULT) GetMinimumSize((BOOL) wParam, (PSIZE) lParam) != 0;
+    IsHorizontal = (wParam != 0);
+    if (bModern != m_bModern)
+    {
+        m_bModern = bModern;
+        UpdateTooltip();
+        InvalidateRect(NULL, TRUE);
+    }
+
+    return (LRESULT) GetMinimumSize(IsHorizontal, (PSIZE) lParam) != 0;
 }
 
 LRESULT CTrayClockWnd::OnContextMenu(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -700,6 +830,7 @@ LRESULT CTrayClockWnd::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& b
     ti.lParam = NULL;
 
     m_tooltip.AddTool(&ti);
+    TrayNotifications_SetSink(m_hWnd);
 
     if (!GetHideClock())
     {
@@ -794,8 +925,76 @@ LRESULT CTrayClockWnd::OnLButtonDblClick(UINT uMsg, WPARAM wParam, LPARAM lParam
     return TRUE;
 }
 
+LRESULT CTrayClockWnd::OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    bHandled = FALSE;
+    if (!m_bModern)
+        return 0;
+    if (!m_bTracking)
+    {
+        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, m_hWnd, 0 };
+        TrackMouseEvent(&tme);
+        m_bTracking = TRUE;
+    }
+    if (!m_bHot)
+    {
+        m_bHot = TRUE;
+        InvalidateRect(NULL, FALSE);
+    }
+    return 0;
+}
+
+LRESULT CTrayClockWnd::OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    m_bTracking = FALSE;
+    if (m_bHot)
+    {
+        m_bHot = FALSE;
+        InvalidateRect(NULL, FALSE);
+    }
+    return 0;
+}
+
+LRESULT CTrayClockWnd::OnLButtonDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    if (!m_bModern)
+    {
+        bHandled = FALSE;
+        return 0;
+    }
+    m_bPressed = TRUE;
+    SetCapture();
+    InvalidateRect(NULL, FALSE);
+    return 0;
+}
+
+LRESULT CTrayClockWnd::OnCaptureChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    if (m_bPressed && (HWND)lParam != m_hWnd)
+    {
+        m_bPressed = FALSE;
+        InvalidateRect(NULL, FALSE);
+    }
+    return 0;
+}
+
+LRESULT CTrayClockWnd::OnNotificationsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    UpdateTooltip();
+    InvalidateRect(NULL, FALSE);
+    return 0;
+}
+
 LRESULT CTrayClockWnd::OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+    if (m_bPressed)
+    {
+        m_bPressed = FALSE;
+        ReleaseCapture();
+        InvalidateRect(NULL, FALSE);
+    }
+
+    m_tooltip.Pop();
     if (IsWindowVisible() && IsThemeActive())
     {
         RECT rc;

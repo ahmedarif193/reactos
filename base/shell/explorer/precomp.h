@@ -80,6 +80,7 @@ ShellScaleForDpi(INT Value)
 
 #define SHELL_TMT_COMPOSITED 2204
 #define SHELL_TMT_FILLCOLOR  3802
+#define SHELL_TMT_OPACITY    2430
 
 static inline BOOL
 ShellGetTaskbarMaterial(COLORREF *pcr, INT *pcyTaskRow = NULL)
@@ -181,6 +182,15 @@ BOOL GetRegValue(IN LPCWSTR pszSubKey, IN LPCWSTR pszValueName, IN BOOL bDefault
 BOOL SetRegDword(IN LPCWSTR pszSubKey, IN LPCWSTR pszValueName, IN DWORD dwValue);
 BOOL GetAdvancedBool(IN LPCWSTR pszValueName, IN BOOL bDefaultValue);
 BOOL SetAdvancedDword(IN LPCWSTR pszValueName, IN DWORD dwValue);
+BOOL GetVersionInfoString(IN LPCWSTR szFileName, IN LPCWSTR szVersionInfo, OUT LPWSTR szBuffer, IN UINT cbBufLen);
+
+#define TRAY_PILL_HOT     1
+#define TRAY_PILL_PRESSED 2
+#define TRAY_PILL_CHECKED 3
+
+VOID ShellDrawTrayPill(IN HDC hdc, IN const RECT *prc, IN INT iState);
+VOID ShellGetTrayPillRect(IN const RECT *prcClient, OUT RECT *prcPill);
+VOID ShellDrawTrayGlyph(IN HDC hdc, IN const RECT *prc, IN UINT nIconId);
 
 /*
  *  rshell.c
@@ -457,8 +467,54 @@ static inline BOOL GetHideClock()
 #define TNWM_GETMINIMUMSIZE (WM_USER + 0x100)
 #define TNWM_CHANGETRAYPOS  (WM_USER + 0x104)
 #define TNWM_GETSHOWDESKTOPBUTTON (WM_USER + 0x7601)
+#define TNWM_GETTRAYICONS   (WM_USER + 0x7602)
+#define TNWM_TRAYICONEVENT  (WM_USER + 0x7603)
+#define TNWM_SETPROMOTED    (WM_USER + 0x7604)
+#define TNWM_GETICONANCHOR  (WM_USER + 0x7605)
+#define TCWM_NOTIFICATIONSCHANGED (WM_USER + 0x7606)
+
+#define TNWM_MINSIZE_MODERN 2
 
 #define NTNWM_REALIGN   (0x1)
+#define NTNWM_ICONSCHANGED (0x2)
+
+#define TRAYICON_APP     0
+#define TRAYICON_NETWORK 1
+#define TRAYICON_VOLUME  2
+#define TRAYICON_POWER   3
+
+#define TRAYICONS_QUICKSETTINGS 0
+#define TRAYICONS_OVERFLOW      1
+
+typedef struct _TRAYICONITEM
+{
+    HWND hWnd;
+    UINT uID;
+    INT Kind;
+    INT iImage;
+    WCHAR szTip[128];
+} TRAYICONITEM, *PTRAYICONITEM;
+
+typedef struct _TRAYICONLIST
+{
+    HIMAGELIST himl;
+    UINT cItems;
+    TRAYICONITEM Items[32];
+} TRAYICONLIST, *PTRAYICONLIST;
+
+typedef struct _TRAYICONEVENT
+{
+    HWND hWnd;
+    UINT uID;
+    UINT uMsg;
+} TRAYICONEVENT, *PTRAYICONEVENT;
+
+static inline BOOL
+ShellIsModernTray(IN BOOL bHorizontal)
+{
+    COLORREF cr;
+    return bHorizontal && ShellGetTaskbarMaterial(&cr);
+}
 
 HRESULT CTrayNotifyWnd_CreateInstance(HWND hwndParent, REFIID riid, void **ppv);
 
