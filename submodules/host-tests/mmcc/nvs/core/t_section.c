@@ -808,7 +808,7 @@ static
 void
 SectionViewOutlivesOwner(void)
 {
-    static MI_FILE_OPS OwnedOps = { OwnedRead, OwnedWrite, OwnedRelease, NULL, NULL };
+    static MI_FILE_OPS OwnedOps = { OwnedRead, OwnedWrite, OwnedRelease, NULL, NULL, NULL };
     TEST_WORLD World;
     MI_ADDRESS_SPACE A;
     OWNED_FILE Owned;
@@ -858,7 +858,7 @@ static
 void
 SectionUnusedCache(void)
 {
-    static MI_FILE_OPS OwnedOps = { OwnedRead, OwnedWrite, OwnedRelease, NULL, NULL };
+    static MI_FILE_OPS OwnedOps = { OwnedRead, OwnedWrite, OwnedRelease, NULL, NULL, NULL };
     TEST_WORLD World;
     MI_ADDRESS_SPACE A;
     OWNED_FILE Owned[3];
@@ -1009,6 +1009,118 @@ SectionViewProtection(void)
     WorldDestroy(&World);
 }
 
+typedef struct _CLUSTER_FILE
+{
+    TEST_FILE File;
+    ULONG Calls, Count;
+    ULONG64 Offset;
+    BOOLEAN Fail;
+} CLUSTER_FILE;
+
+static NTSTATUS
+ClusterRead(PVOID Context, ULONG64 Offset, const ULONG *Frames, ULONG Count)
+{
+    CLUSTER_FILE *File = Context;
+    ULONG i;
+
+    File->Calls++;
+    File->Count = Count;
+    File->Offset = Offset;
+    CHECK(Count > 1 && Count <= MI_MAX_FILE_IO_PAGES);
+    CHECK(Offset + Count * PAGE_SIZE <= File->File.Size);
+    if (File->Fail)
+        return STATUS_UNEXPECTED_IO_ERROR;
+    for (i = 0; i < Count; i++)
+    {
+        PVOID Buffer = MiArchMapFrame(Frames[i]);
+        memcpy(Buffer, File->File.Data + Offset + i * PAGE_SIZE, PAGE_SIZE);
+        MiArchUnmapFrame(Buffer);
+    }
+    return STATUS_SUCCESS;
+}
+
+static void
+SectionClusterRead(void)
+{
+    TEST_WORLD World;
+    CLUSTER_FILE File = {0};
+    MI_FILE_OPS Ops = TestFileOps;
+    MI_ADDRESS_SPACE Space;
+    PMI_SEGMENT Segment;
+    ULONG64 Base = 0;
+    NTSTATUS Status;
+    ULONG i;
+    MI_SEGMENT_LAYOUT Layout[] =
+    {
+        {0, 1, 0, 1024, MI_PROT_READONLY},
+        {1, 4, 1024, 3 * PAGE_SIZE + 37, MI_PROT_READONLY},
+    };
+
+    WorldCreate(&World, 512, 1, 100000);
+    FileCreate(&File.File, 20 * PAGE_SIZE + 37);
+    SpaceCreate(&World, 0, &Space);
+    Ops.ReadPages = ClusterRead;
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, File.File.Size,
+                                     MI_PROT_READONLY, &Ops, &File, NULL, 0, &Segment)));
+    CHECK(NT_SUCCESS(Map(&Space, Segment, &Base, 0, 0, MI_PROT_READONLY)));
+    for (i = 2; i < 20; i++)
+    {
+        CHECK(UserRead64(&World, 0, Base + i * PAGE_SIZE, &Status) ==
+              *(ULONG64 *)(File.File.Data + i * PAGE_SIZE));
+        CHECK(NT_SUCCESS(Status));
+    }
+    CHECK(File.Calls == 2 && File.Count == 2 && File.Offset == 18 * PAGE_SIZE);
+    CHECK(File.File.Reads == 0);
+    CHECK(UserRead64(&World, 0, Base + 20 * PAGE_SIZE, &Status) ==
+          *(ULONG64 *)(File.File.Data + 20 * PAGE_SIZE));
+    CHECK(UserRead64(&World, 0, Base + 20 * PAGE_SIZE + 40, &Status) == 0);
+    CHECK(File.File.Reads == 1 && File.Calls == 2);
+    CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
+    MiSegmentDereference(Segment);
+
+    /* Failed read-ahead must not poison a readable faulting page. */
+    Base = 0; File.Fail = TRUE; File.Calls = 0;
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, File.File.Size,
+                                     MI_PROT_READONLY, &Ops, &File, NULL, 0, &Segment)));
+    CHECK(NT_SUCCESS(Map(&Space, Segment, &Base, 0, 0, MI_PROT_READONLY)));
+    CHECK(UserRead64(&World, 0, Base, &Status) == *(ULONG64 *)File.File.Data);
+    CHECK(NT_SUCCESS(Status) && File.Calls == 1);
+    CHECK(!MiSegmentIsResident(Segment, PAGE_SIZE, PAGE_SIZE));
+    CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
+    MiSegmentDereference(Segment);
+
+    /* Cache reads may not bring backing bytes beyond valid data into memory. */
+    Base = 0; File.Fail = FALSE; File.Calls = 0;
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, File.File.Size,
+                                     MI_PROT_READONLY, &Ops, &File, NULL, 0, &Segment)));
+    CHECK(NT_SUCCESS(Map(&Space, Segment, &Base, 0, 0, MI_PROT_READONLY)));
+    CHECK(NT_SUCCESS(MiSegmentMakeResidentBeyond(Segment, 0, 4 * PAGE_SIZE, 2 * PAGE_SIZE)));
+    CHECK(File.Calls == 1 && File.Count == 2);
+    CHECK(UserRead64(&World, 0, Base + 2 * PAGE_SIZE, &Status) == 0);
+    CHECK(UserRead64(&World, 0, Base + 3 * PAGE_SIZE, &Status) == 0);
+    CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
+    MiSegmentDereference(Segment);
+
+    /* Image raw offsets can be 512-byte aligned; stop before a partial tail. */
+    Base = 0; File.Calls = 0;
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentImage, 5 * PAGE_SIZE,
+                                     MI_PROT_READONLY, &Ops, &File, Layout, 2, &Segment)));
+    CHECK(NT_SUCCESS(Map(&Space, Segment, &Base, 0, 0, MI_PROT_READONLY)));
+    CHECK(UserRead64(&World, 0, Base + PAGE_SIZE, &Status) == *(ULONG64 *)(File.File.Data + 1024));
+    CHECK(NT_SUCCESS(Status) && File.Calls == 1 && File.Count == 3 && File.Offset == 1024);
+    CHECK(UserRead64(&World, 0, Base + 4 * PAGE_SIZE, &Status) ==
+          *(ULONG64 *)(File.File.Data + 1024 + 3 * PAGE_SIZE));
+    CHECK(UserRead64(&World, 0, Base + 4 * PAGE_SIZE + 40, &Status) == 0);
+    CHECK(File.Calls == 1);
+    CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
+    MiSegmentDereference(Segment);
+
+    SpaceDestroy(&World, 0, &Space);
+    WorldExpectClean(&World, 512);
+    FileDestroy(&File.File);
+    WorldDestroy(&World);
+}
+
 void
 TestSection(void)
 {
@@ -1024,6 +1136,7 @@ TestSection(void)
     SectionViewOutlivesOwner();
     SectionUnusedCache();
     SectionViewProtection();
+    SectionClusterRead();
 }
 
 void

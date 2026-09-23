@@ -12,6 +12,7 @@
 #include <mmcc/cc/host/ccntshim.h>
 
 NTSTATUS MiControlRead(PVOID Context, ULONG64 Offset, ULONG Length, PVOID Buffer);
+NTSTATUS MiControlReadPages(PVOID Context, ULONG64 Offset, const ULONG *Frames, ULONG PageCount);
 NTSTATUS MiControlWrite(PVOID Context, ULONG64 Offset, ULONG Length, PVOID Buffer);
 NTSTATUS MiControlWriteFrames(PVOID Context, ULONG64 Offset, ULONG Length, const ULONG *Frames, ULONG PageCount);
 NTSTATUS MiPagingIoFrames(PFILE_OBJECT File, ULONG64 Offset, const ULONG *Frames, ULONG PageCount,
