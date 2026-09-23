@@ -794,7 +794,7 @@ BOOL WINAPI Wow64GetThreadContext( HANDLE handle, WOW64_CONTEXT *context)
 {
 #ifdef __i386__
     return set_ntstatus( NtGetContextThread( handle, (CONTEXT *)context ));
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || (defined(__REACTOS__) && defined(__aarch64__))
     return set_ntstatus( RtlWow64GetThreadContext( handle, context ));
 #else
     return set_ntstatus( STATUS_NOT_IMPLEMENTED );
@@ -809,7 +809,7 @@ BOOL WINAPI Wow64SetThreadContext( HANDLE handle, const WOW64_CONTEXT *context)
 {
 #ifdef __i386__
     return set_ntstatus( NtSetContextThread( handle, (const CONTEXT *)context ));
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || (defined(__REACTOS__) && defined(__aarch64__))
     return set_ntstatus( RtlWow64SetThreadContext( handle, context ));
 #else
     return set_ntstatus( STATUS_NOT_IMPLEMENTED );
