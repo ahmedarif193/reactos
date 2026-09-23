@@ -832,6 +832,38 @@ IopDiscardDriverReinitializations(
     KeReleaseSpinLock(Lock, OldIrql);
 }
 
+static
+BOOLEAN
+IopRetainDriverInitialization(
+    _In_ HANDLE ServiceHandle)
+{
+    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"RetainInitializationCode");
+    union
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Information;
+        UCHAR Buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(ULONG)];
+    } Value;
+    ULONG ResultLength;
+    ULONG Retain;
+    NTSTATUS Status;
+
+    /* Some drivers inspect their INIT section asynchronously after DriverEntry. */
+    Status = ZwQueryValueKey(ServiceHandle,
+                             &ValueName,
+                             KeyValuePartialInformation,
+                             &Value,
+                             sizeof(Value),
+                             &ResultLength);
+    if (!NT_SUCCESS(Status) || Value.Information.Type != REG_DWORD ||
+        Value.Information.DataLength != sizeof(Retain))
+    {
+        return FALSE;
+    }
+
+    RtlCopyMemory(&Retain, Value.Information.Data, sizeof(Retain));
+    return Retain != 0;
+}
+
 /**
  * @brief      Initialize a loaded driver
  *
@@ -1129,7 +1161,8 @@ IopInitializeDriverModuleImpl(
 
     *OutDriverObject = driverObject;
 
-    MmFreeDriverInitialization((PLDR_DATA_TABLE_ENTRY)driverObject->DriverSection);
+    if (!IopRetainDriverInitialization(ServiceHandle))
+        MmFreeDriverInitialization((PLDR_DATA_TABLE_ENTRY)driverObject->DriverSection);
 
     /* Set the driver as initialized */
     IopReadyDeviceObjects(driverObject);
