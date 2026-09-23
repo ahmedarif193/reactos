@@ -5701,16 +5701,9 @@ DxgkQueryAllocationResidency(
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
 
-/*
- * One DxgkDdiQueryAdapterInfo call for the performance-data classes.
- *
- * These classes carry their selector — physical adapter index, node ordinal —
- * inside the very structure the miniport fills in.  A driver written to the
- * input-buffer convention reads that selector from pInputData and one written
- * to the in/out convention reads it from pOutputData, so both are presented,
- * from separate storage: aliasing the two would let a driver that clears its
- * output first destroy the selector it is about to be asked about.
- */
+/* D3DKMT includes the caller's selectors in its public result. The miniport
+ * takes a separate UINT selector and packed DXGK_* output; in particular the
+ * node's MaxTransitionLatency is not naturally aligned in that output. */
 static NTSTATUS
 DxgkpQueryMiniportPerfData(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -5720,33 +5713,86 @@ DxgkpQueryMiniportPerfData(
 {
     PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
     DXGKARG_QUERYADAPTERINFO QueryArgs;
-    UCHAR Selector[DXGKP_PERFDATA_QUERY_MAX_SIZE];
+    union
+    {
+        DXGK_NODE_PERFDATA Node;
+        DXGK_ADAPTER_PERFDATA Adapter;
+        DXGK_ADAPTER_PERFDATACAPS Caps;
+        DXGK_GPUVERSION Version;
+    } Output;
+    UINT Selector;
+    PVOID Result;
+    ULONG OutputSize;
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
 
-    if (Adapter == NULL || Adapter->MiniportContext == NULL ||
-        Data == NULL || DataSize == 0 || DataSize > sizeof(Selector))
-    {
+    if (Adapter == NULL || Adapter->MiniportContext == NULL || Data == NULL)
         return STATUS_INVALID_PARAMETER;
+
+    switch (Type)
+    {
+        case DXGKQAITYPE_NODEPERFDATA:
+        {
+            D3DKMT_NODE_PERFDATA *Node = Data;
+            if (DataSize < sizeof(*Node) || Node->PhysicalAdapterIndex != 0 ||
+                Node->NodeOrdinal >= Adapter->NodeCount || Node->NodeOrdinal > 0xffff)
+                return STATUS_INVALID_PARAMETER;
+            Selector = Node->NodeOrdinal;
+            Result = &Node->Frequency;
+            OutputSize = sizeof(Output.Node);
+            if (DxgkCapsCoreInterfaceVersionToLevel(Adapter->MiniportContext->InitData.s.Version) <
+                DXGK_CAPS_CORE_LEVEL_WDDM_2_5)
+                OutputSize = FIELD_OFFSET(DXGK_NODE_PERFDATA, MaxTransitionLatency);
+            break;
+        }
+        case DXGKQAITYPE_ADAPTERPERFDATA:
+        {
+            D3DKMT_ADAPTER_PERFDATA *Perf = Data;
+            if (DataSize < sizeof(*Perf) || Perf->PhysicalAdapterIndex != 0)
+                return STATUS_INVALID_PARAMETER;
+            Selector = Perf->PhysicalAdapterIndex;
+            Result = &Perf->MemoryFrequency;
+            OutputSize = sizeof(Output.Adapter);
+            break;
+        }
+        case DXGKQAITYPE_ADAPTERPERFDATA_CAPS:
+        {
+            D3DKMT_ADAPTER_PERFDATACAPS *Caps = Data;
+            if (DataSize < sizeof(*Caps) || Caps->PhysicalAdapterIndex != 0)
+                return STATUS_INVALID_PARAMETER;
+            Selector = Caps->PhysicalAdapterIndex;
+            Result = &Caps->MaxMemoryBandwidth;
+            OutputSize = sizeof(Output.Caps);
+            break;
+        }
+        case DXGKQAITYPE_GPUVERSION:
+        {
+            D3DKMT_GPUVERSION *Version = Data;
+            if (DataSize < sizeof(*Version) || Version->PhysicalAdapterIndex != 0)
+                return STATUS_INVALID_PARAMETER;
+            Selector = Version->PhysicalAdapterIndex;
+            Result = Version->BiosVersion;
+            OutputSize = sizeof(Output.Version);
+            break;
+        }
+        default:
+            return STATUS_INVALID_PARAMETER;
     }
 
     PfnQueryAdapterInfo = DXGK_CB(Adapter, DxgkDdiQueryAdapterInfo);
     if (PfnQueryAdapterInfo == NULL)
         return STATUS_NOT_SUPPORTED;
-
-    RtlZeroMemory(Selector, sizeof(Selector));
-    RtlCopyMemory(Selector, Data, DataSize);
-
     if (!DxgkAcquireKmdCall(Adapter))
         return STATUS_DELETE_PENDING;
 
+    RtlZeroMemory(&Output, sizeof(Output));
     RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
     QueryArgs.Type = Type;
-    QueryArgs.pInputData = Selector;
-    QueryArgs.InputDataSize = DataSize;
-    QueryArgs.pOutputData = Data;
-    QueryArgs.OutputDataSize = DataSize;
+    QueryArgs.pInputData = &Selector;
+    QueryArgs.InputDataSize = sizeof(Selector);
+    QueryArgs.pOutputData = &Output;
+    QueryArgs.OutputDataSize = OutputSize;
 
     _SEH2_TRY
     {
@@ -5759,6 +5805,20 @@ DxgkpQueryMiniportPerfData(
     _SEH2_END;
 
     DxgkReleaseKmdCall(Adapter);
+    if (NT_SUCCESS(Status))
+    {
+        if (Type == DXGKQAITYPE_NODEPERFDATA)
+        {
+            D3DKMT_NODE_PERFDATA *Node = Data;
+            RtlCopyMemory(Result, &Output.Node,
+                          FIELD_OFFSET(DXGK_NODE_PERFDATA, MaxTransitionLatency));
+            Node->MaxTransitionLatency = Output.Node.MaxTransitionLatency;
+        }
+        else
+        {
+            RtlCopyMemory(Result, &Output, OutputSize);
+        }
+    }
     return Status;
 }
 
