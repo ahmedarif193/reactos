@@ -991,14 +991,13 @@ DxgkpTdrWorker(
     DXGKRNL_ERR("DxgkpTdrWorker: preemption did not recover — resetting "
                 "adapter %p\n", Adapter);
 
-    /* Attribute the hang before the reset destroys the evidence: the oldest
-     * active packet of each engine with its submit-time batch head, and the
-     * recent GPU VA operations (the fault path prints the same). */
-    VidSchDumpEngineDiagnostics(Adapter);
+    /* Serial output is synchronous and consumes the recovery deadline too.
+     * Print only the engine summary and a bounded recent VA history here.
+     * Full batch, page-table, aperture and context-image dumps can take longer
+     * than TdrDdiDelay before the miniport even gets to reset the GPU. Their
+     * diagnostic records remain available to the debugger. */
+    VidSchDumpEngineDiagnostics(Adapter, FALSE);
     DxgkGpuVaDumpRecentEvents();
-    DxgkVidMmDumpApertureOps();
-    DxgkPagingDumpRecentOps();
-    DxgkVidMmDumpContextImages(NULL, NULL, "tdr");
 
     DxgkPresentBeginReset(Adapter);
     PresentResetStarted = TRUE;

@@ -721,7 +721,7 @@ VidSchGetEngineTdrInfo(
     _In_  ULONG                    EngineOrdinal,
     _Out_ PVOID                    TdrInfo);
 
-VOID VidSchDumpEngineDiagnostics(_In_ struct _DXGKRNL_ADAPTER *Adapter);
+VOID VidSchDumpEngineDiagnostics(_In_ struct _DXGKRNL_ADAPTER *Adapter, _In_ BOOLEAN Detailed);
 BOOLEAN VidSchGetOldestKickedPacket(_In_ struct _DXGKRNL_ADAPTER *Adapter, _Out_ PULONG FenceId, _Out_ PULONG NodeOrdinal, _Out_ PULONG EngineOrdinal);
 
 VOID VidSchReferenceContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet);

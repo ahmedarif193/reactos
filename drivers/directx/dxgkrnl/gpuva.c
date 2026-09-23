@@ -5216,9 +5216,14 @@ DxgkGpuVaDumpRecentEvents(VOID)
 {
     LONG64 Next = DxgkpGpuVaEventNext;
     ULONG Index;
+    const ULONG DumpCount = min(DXGKP_GPUVA_EVENT_RING_SIZE, 32u);
 
-    DXGKRNL_ERR("TDR recent GPU VA operations (oldest first; R=reserve F=free M=map D=destroy W=destroy-wait; #=global seq):\n");
-    for (Index = 0; Index < DXGKP_GPUVA_EVENT_RING_SIZE; Index++)
+    /* Serial debug output is synchronous. Dumping the full ring can consume
+     * the TDR DDI deadline before ResetFromTimeout is even called. Retain the
+     * full ring for the debugger, but print only its most recent entries. */
+    DXGKRNL_ERR("TDR last %lu GPU VA operations (oldest first; R=reserve F=free M=map D=destroy W=destroy-wait; #=global seq):\n", DumpCount);
+    for (Index = DXGKP_GPUVA_EVENT_RING_SIZE - DumpCount;
+         Index < DXGKP_GPUVA_EVENT_RING_SIZE; Index++)
     {
         DXGKP_GPUVA_EVENT Event = DxgkpGpuVaEvents[(ULONG)(Next + Index) % DXGKP_GPUVA_EVENT_RING_SIZE];
 
