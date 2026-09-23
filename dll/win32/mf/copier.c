@@ -134,7 +134,9 @@ static HRESULT WINAPI sample_copier_transform_GetInputStreamInfo(IMFTransform *i
     memset(info, 0, sizeof(*info));
 
     EnterCriticalSection(&transform->cs);
-    info->cbSize = transform->buffer_size;
+    /* An output type alone does not establish input buffer requirements. */
+    if (transform->buffer_type && (transform->flags & SAMPLE_COPIER_INPUT_TYPE_SET))
+        info->cbSize = transform->buffer_size;
     LeaveCriticalSection(&transform->cs);
 
     return S_OK;
