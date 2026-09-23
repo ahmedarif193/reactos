@@ -4960,7 +4960,10 @@ DxgkCbCreateContextAllocation(
     if (NT_SUCCESS(Status) && ContextAllocation->hAllocation != NULL)
     {
         DxgkVidMmTagContextAllocation(ContextAllocation->hAllocation, ContextAllocation->hContext);
+#if DXGKRNL_DEBUG_VERBOSE
+        /* Full context snapshots are expensive; fault paths dump them separately. */
         DxgkVidMmDumpContextImages(NULL, ContextAllocation->hAllocation, "create");
+#endif
     }
     {
         LONG Count = InterlockedIncrement(&Adapter->ContextAllocationCreateCount);
