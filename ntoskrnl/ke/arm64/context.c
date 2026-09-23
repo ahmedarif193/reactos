@@ -91,6 +91,7 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
 
         TrapFrame->PreviousMode = (CHAR)PreviousMode;
         TrapFrame->SavedIrql = PreviousIrql;
+        TrapFrame->ContextFromKFramesUnwound = (ContextFlags & CONTEXT_UNWOUND_TO_CALL) ? TRUE : FALSE;
     }
 
     if (ContextFlags & CONTEXT_DEBUG_REGISTERS)
@@ -117,7 +118,10 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
 
         if (VfpState != NULL)
         {
-            RtlCopyMemory(VfpState->V, Context->V, sizeof(Context->V));
+            if (VfpState->Link != KI_ARM64_SERVICE_VFP_LINK)
+            {
+                RtlCopyMemory(VfpState->V, Context->V, sizeof(Context->V));
+            }
             VfpState->Fpcr = Context->Fpcr;
             VfpState->Fpsr = Context->Fpsr;
 
@@ -218,7 +222,11 @@ KeTrapFrameToContext(_In_ PKTRAP_FRAME TrapFrame,
 
         if (VfpState != NULL)
         {
-            if (VfpState->Link == KI_ARM64_PARTIAL_VFP_LINK)
+            if (VfpState->Link == KI_ARM64_SERVICE_VFP_LINK)
+            {
+                RtlZeroMemory(Context->V, sizeof(Context->V));
+            }
+            else if (VfpState->Link == KI_ARM64_PARTIAL_VFP_LINK)
             {
                 RtlZeroMemory(Context->V, sizeof(Context->V));
                 RtlCopyMemory(&Context->V[8],

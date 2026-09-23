@@ -9,6 +9,10 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+
+#ifndef EXCEPTION_SOFTWARE_ORIGINATE
+#define EXCEPTION_SOFTWARE_ORIGINATE 0x80
+#endif
 #ifdef KDBG
 #include <kdbg/kdb.h>
 #endif
@@ -119,6 +123,7 @@ KiDispatchExceptionToUser(
     EXCEPTION_RECORD LocalExceptRecord;
     ULONG_PTR UserSp;
     PKUSER_EXCEPTION_STACK UserStack;
+    PCONTEXT_EX ContextEx;
 
     ASSERT(TrapFrame != NULL);
     ASSERT(Context != NULL);
@@ -328,6 +333,13 @@ KiDispatchExceptionToUser(
         UserStack->ExceptionRecord = *ExceptionRecord;
         UserStack->MachineFrame.Sp = Context->Sp;
         UserStack->MachineFrame.Pc = Context->Pc;
+        ContextEx = (PCONTEXT_EX)UserStack->ContextEx;
+        ContextEx->Legacy.Offset = -(LONG)sizeof(CONTEXT);
+        ContextEx->Legacy.Length = sizeof(CONTEXT);
+        ContextEx->XState.Offset = (LONG)((ULONG_PTR)(UserStack + 1) - (ULONG_PTR)ContextEx);
+        ContextEx->XState.Length = 0;
+        ContextEx->All.Offset = -(LONG)sizeof(CONTEXT);
+        ContextEx->All.Length = sizeof(CONTEXT) + ContextEx->XState.Offset;
     }
     _SEH2_EXCEPT((LocalExceptRecord = *_SEH2_GetExceptionInformation()->ExceptionRecord),
                  EXCEPTION_EXECUTE_HANDLER)
@@ -434,10 +446,13 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
     KeGetCurrentPrcb()->KeExceptionDispatchCount++;
 
     RtlZeroMemory(&Context, sizeof(Context));
-    Context.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS |
-                           CONTEXT_X18 | CONTEXT_ARM64;
+    Context.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
 
     KeTrapFrameToContext(TrapFrame, ExceptionFrame, &Context);
+    if (TrapFrame->ContextFromKFramesUnwound)
+    {
+        Context.ContextFlags |= CONTEXT_UNWOUND_TO_CALL;
+    }
 
     switch (ExceptionRecord->ExceptionCode)
     {
@@ -545,7 +560,18 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
                 }
             }
 
-            if (DbgkForwardException(ExceptionRecord, TRUE, FALSE))
+            if ((ExceptionRecord->ExceptionCode == STATUS_BREAKPOINT) &&
+                (ExceptionRecord->NumberParameters == 1) &&
+                !(ExceptionRecord->ExceptionFlags & EXCEPTION_SOFTWARE_ORIGINATE) &&
+                ((ULONG_PTR)ExceptionRecord->ExceptionAddress == (ULONG_PTR)TrapFrame->Pc))
+            {
+                TrapFrame->Pc += 4;
+                if (DbgkForwardException(ExceptionRecord, TRUE, FALSE))
+                {
+                    return;
+                }
+            }
+            else if (DbgkForwardException(ExceptionRecord, TRUE, FALSE))
             {
                 return;
             }

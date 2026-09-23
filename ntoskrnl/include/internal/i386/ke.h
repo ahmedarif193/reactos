@@ -121,6 +121,50 @@ KiGetLinkedTrapFrame(PKTRAP_FRAME TrapFrame)
     return (PKTRAP_FRAME)TrapFrame->Edx;
 }
 
+typedef struct _KI_SERVICE_EXCEPTION_STATE
+{
+    UCHAR Reserved;
+} KI_SERVICE_EXCEPTION_STATE, *PKI_SERVICE_EXCEPTION_STATE;
+
+FORCEINLINE
+PKEXCEPTION_FRAME
+KiEnterServiceException(
+    _In_ PKTHREAD Thread,
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _In_opt_ PKEXCEPTION_FRAME ExceptionFrame,
+    _Out_ PKI_SERVICE_EXCEPTION_STATE State)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(PreviousMode);
+    UNREFERENCED_PARAMETER(State);
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    return ExceptionFrame;
+}
+
+FORCEINLINE
+VOID
+KiAbortServiceException(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_opt_ PKEXCEPTION_FRAME ExceptionFrame,
+    _In_ PKI_SERVICE_EXCEPTION_STATE State)
+{
+    UNREFERENCED_PARAMETER(TrapFrame);
+    UNREFERENCED_PARAMETER(ExceptionFrame);
+    UNREFERENCED_PARAMETER(State);
+}
+
+FORCEINLINE
+VOID
+KiLeaveServiceException(
+    _In_ PKTHREAD Thread,
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(TrapFrame);
+}
+
 
 FORCEINLINE
 ULONG_PTR

@@ -1190,9 +1190,6 @@ MmMapViewOfSection(
         Process->VirtualSize += *ViewSize;
         if (Process->VirtualSize > Process->PeakVirtualSize)
             Process->PeakVirtualSize = Process->VirtualSize;
-
-        if (Section->Control->Image)
-            DbgkMapViewOfSection(Section, *BaseAddress, 0, *ViewSize);
     }
 
     if (Attached)
@@ -1219,8 +1216,6 @@ MmUnmapViewOfSection(
         KeStackAttachProcess(&Process->Pcb, &ApcState);
         Attached = TRUE;
     }
-
-    DbgkUnMapViewOfSection(BaseAddress);
 
     Status = MiUnmapView(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)BaseAddress);
     if (Status == STATUS_NOT_MAPPED_VIEW)
@@ -1829,6 +1824,11 @@ NtMapViewOfSection(
         {
             Status = STATUS_IMAGE_MACHINE_TYPE_MISMATCH;
         }
+
+        if (NT_SUCCESS(Status) && Section->Control->Image && (Process == PsGetCurrentProcess()))
+        {
+            DbgkMapViewOfSection(Section, SafeBase, SafeOffset.LowPart, SafeSize);
+        }
     }
 
     ObDereferenceObject(Section);
@@ -1882,6 +1882,11 @@ NtUnmapViewOfSection(
             ObDereferenceObject(Process);
             return STATUS_UNABLE_TO_FREE_VM;
         }
+    }
+
+    if (Process == PsGetCurrentProcess())
+    {
+        DbgkUnMapViewOfSection(BaseAddress);
     }
 
     Status = MmUnmapViewOfSection(Process, BaseAddress);

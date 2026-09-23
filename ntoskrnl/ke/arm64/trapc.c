@@ -805,6 +805,7 @@ KiArm64InitializeTrapFrame(
      */
     CurrentIrql = KeGetCurrentIrql();
 
+    TrapFrame->ExceptionActive = KEXCEPTION_ACTIVE_EXCEPTION_FRAME;
     TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromVector(Context->State.VectorId);
     TrapFrame->SavedIrql = (UCHAR)CurrentIrql;
     Context->VfpState.Link = NULL;
@@ -995,6 +996,485 @@ KiArm64HandleSystemService(
         KiArm64ClearTrapActive();
     }
     return TRUE;
+}
+
+VOID
+KiTrapReturn(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_opt_ PKEXCEPTION_FRAME ExceptionFrame);
+
+VOID
+KiArm64UserServiceEntry(VOID);
+
+VOID
+KiArm64SvcVectorCommon(VOID);
+
+VOID
+KiArm64SyncVectorCommon(VOID);
+
+VOID
+KiArm64CallWithNonvolatileFrame(
+    _In_ VOID (*Routine)(_Inout_ PVOID Parameter),
+    _Inout_ PVOID Parameter);
+
+BOOLEAN
+KiArm64UnwindInterruptFrame(
+    _In_ ULONG64 FunctionStart,
+    _Inout_ PCONTEXT Context,
+    _Inout_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers);
+
+#define KI_ARM64_SERVICE_INTEGER 0x1
+#define KI_ARM64_SERVICE_VECTOR  0x2
+
+typedef struct _KI_ARM64_SERVICE_NONVOLATILES
+{
+    PKTRAP_FRAME TrapFrame;
+    ULONG Flags;
+    BOOLEAN Update;
+    BOOLEAN Found;
+    ULONG64 X[10];
+    ULONG64 D[8];
+} KI_ARM64_SERVICE_NONVOLATILES, *PKI_ARM64_SERVICE_NONVOLATILES;
+
+static
+VOID
+KiArm64UnwindEarlyFrame(
+    _Inout_ PCONTEXT Context,
+    _Inout_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers,
+    _In_ BOOLEAN RestoresVectors)
+{
+    PARM64_EARLY_SYNC_CONTEXT EarlyContext;
+    PULONG64 Registers;
+    ULONG Index;
+
+    EarlyContext = (PARM64_EARLY_SYNC_CONTEXT)(ULONG_PTR)Context->Sp;
+    Registers = &EarlyContext->ExceptionFrame.X19;
+
+    for (Index = 0; Index < 10; Index++)
+    {
+        (&ContextPointers->X19)[Index] = &Registers[Index];
+        Context->X[19 + Index] = Registers[Index];
+    }
+
+    if (RestoresVectors)
+    {
+        for (Index = 0; Index < 8; Index++)
+        {
+            (&ContextPointers->D8)[Index] = &EarlyContext->VfpState.V[8 + Index].Low;
+            Context->V[8 + Index].Low = EarlyContext->VfpState.V[8 + Index].Low;
+        }
+    }
+
+    ContextPointers->Fp = &EarlyContext->ExceptionFrame.Fp;
+    ContextPointers->Lr = &EarlyContext->ExceptionFrame.Lr;
+    Context->Fp = EarlyContext->ExceptionFrame.Fp;
+    Context->Lr = EarlyContext->TrapFrame.Lr;
+    Context->Sp = EarlyContext->TrapFrame.Sp;
+    Context->Pc = EarlyContext->TrapFrame.Pc;
+    Context->ContextFlags &= ~CONTEXT_UNWOUND_TO_CALL;
+}
+
+static
+BOOLEAN
+KiArm64IsStackSlot(
+    _In_opt_ PULONG64 Slot,
+    _In_ ULONG64 StackLow,
+    _In_ ULONG64 StackHigh)
+{
+    return (Slot != NULL) &&
+           ((ULONG64)(ULONG_PTR)Slot >= StackLow) &&
+           ((ULONG64)(ULONG_PTR)(Slot + 1) <= StackHigh);
+}
+
+static
+VOID
+KiArm64ServiceNonvolatilesWorker(
+    _Inout_ PVOID Parameter)
+{
+    PKI_ARM64_SERVICE_NONVOLATILES Request = Parameter;
+    KNONVOLATILE_CONTEXT_POINTERS ContextPointers;
+    CONTEXT Context;
+    PRUNTIME_FUNCTION FunctionEntry;
+    PKTHREAD Thread = KeGetCurrentThread();
+    DWORD64 ImageBase;
+    ULONG64 LookupPc;
+    ULONG64 FunctionStart;
+    ULONG64 PreviousSp;
+    ULONG64 EstablisherFrame;
+    ULONG64 StackLow;
+    ULONG64 StackHigh;
+    PVOID HandlerData;
+    ULONG Frames;
+    ULONG Index;
+
+    RtlZeroMemory(&ContextPointers, sizeof(ContextPointers));
+    RtlCaptureContext(&Context);
+    Context.ContextFlags |= CONTEXT_UNWOUND_TO_CALL;
+    StackLow = (ULONG64)(ULONG_PTR)Thread->StackLimit;
+    StackHigh = (ULONG64)(ULONG_PTR)Thread->StackBase;
+
+    for (Frames = 0; Frames < 128; Frames++)
+    {
+        LookupPc = Context.Pc;
+        if (Context.ContextFlags & CONTEXT_UNWOUND_TO_CALL)
+        {
+            LookupPc -= 4;
+        }
+
+        ImageBase = 0;
+        FunctionEntry = RtlLookupFunctionEntry(LookupPc, &ImageBase, NULL);
+        if (FunctionEntry == NULL)
+        {
+            return;
+        }
+
+        FunctionStart = ImageBase + FunctionEntry->BeginAddress;
+        if (FunctionStart == (ULONG64)(ULONG_PTR)KiArm64UserServiceEntry)
+        {
+            Request->Found = (Context.Sp == (ULONG64)(ULONG_PTR)Request->TrapFrame);
+            break;
+        }
+
+        PreviousSp = Context.Sp;
+        if (FunctionStart == (ULONG64)(ULONG_PTR)KiArm64SyncVectorCommon)
+        {
+            KiArm64UnwindEarlyFrame(&Context, &ContextPointers, TRUE);
+        }
+        else if (FunctionStart == (ULONG64)(ULONG_PTR)KiArm64SvcVectorCommon)
+        {
+            KiArm64UnwindEarlyFrame(&Context, &ContextPointers, FALSE);
+        }
+        else if (!KiArm64UnwindInterruptFrame(FunctionStart, &Context, &ContextPointers))
+        {
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER,
+                             ImageBase,
+                             LookupPc,
+                             FunctionEntry,
+                             &Context,
+                             &HandlerData,
+                             &EstablisherFrame,
+                             &ContextPointers);
+        }
+
+        if ((Context.Sp < PreviousSp) ||
+            (Context.Sp < StackLow) ||
+            (Context.Sp >= StackHigh))
+        {
+            return;
+        }
+    }
+
+    if (!Request->Found)
+    {
+        return;
+    }
+
+    if (!Request->Update)
+    {
+        for (Index = 0; Index < 10; Index++)
+        {
+            Request->X[Index] = Context.X[19 + Index];
+        }
+
+        for (Index = 0; Index < 8; Index++)
+        {
+            Request->D[Index] = Context.V[8 + Index].Low;
+        }
+
+        return;
+    }
+
+    if (Request->Flags & KI_ARM64_SERVICE_INTEGER)
+    {
+        for (Index = 0; Index < 10; Index++)
+        {
+            if (!KiArm64IsStackSlot((&ContextPointers.X19)[Index], StackLow, StackHigh))
+            {
+                Request->Found = FALSE;
+                return;
+            }
+        }
+    }
+
+    if (Request->Flags & KI_ARM64_SERVICE_VECTOR)
+    {
+        for (Index = 0; Index < 8; Index++)
+        {
+            if (!KiArm64IsStackSlot((&ContextPointers.D8)[Index], StackLow, StackHigh))
+            {
+                Request->Found = FALSE;
+                return;
+            }
+        }
+    }
+
+    if (Request->Flags & KI_ARM64_SERVICE_INTEGER)
+    {
+        for (Index = 0; Index < 10; Index++)
+        {
+            *(&ContextPointers.X19)[Index] = Request->X[Index];
+        }
+    }
+
+    if (Request->Flags & KI_ARM64_SERVICE_VECTOR)
+    {
+        for (Index = 0; Index < 8; Index++)
+        {
+            *(&ContextPointers.D8)[Index] = Request->D[Index];
+        }
+    }
+}
+
+BOOLEAN
+KiArm64GetServiceNonvolatiles(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _Inout_ PCONTEXT Context)
+{
+    KI_ARM64_SERVICE_NONVOLATILES Request;
+    ULONG ContextFlags = Context->ContextFlags & ~CONTEXT_ARM64;
+    ULONG Index;
+
+    RtlZeroMemory(&Request, sizeof(Request));
+    Request.TrapFrame = TrapFrame;
+    KiArm64CallWithNonvolatileFrame(KiArm64ServiceNonvolatilesWorker, &Request);
+    if (!Request.Found)
+    {
+        DPRINT1("KiArm64GetServiceNonvolatiles: no service frame for %p\n", TrapFrame);
+    }
+
+    if (ContextFlags & (CONTEXT_INTEGER & ~CONTEXT_ARM64))
+    {
+        for (Index = 0; Index < 10; Index++)
+        {
+            Context->X[19 + Index] = Request.X[Index];
+        }
+    }
+
+    if (ContextFlags & (CONTEXT_FLOATING_POINT & ~CONTEXT_ARM64))
+    {
+        for (Index = 0; Index < 8; Index++)
+        {
+            Context->V[8 + Index].Low = Request.D[Index];
+            Context->V[8 + Index].High = 0;
+        }
+    }
+
+    return Request.Found;
+}
+
+BOOLEAN
+KiArm64SetServiceNonvolatiles(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context)
+{
+    KI_ARM64_SERVICE_NONVOLATILES Request;
+    ULONG ContextFlags = Context->ContextFlags & ~CONTEXT_ARM64;
+    ULONG Index;
+
+    RtlZeroMemory(&Request, sizeof(Request));
+    Request.TrapFrame = TrapFrame;
+    Request.Update = TRUE;
+
+    if (ContextFlags & (CONTEXT_INTEGER & ~CONTEXT_ARM64))
+    {
+        Request.Flags |= KI_ARM64_SERVICE_INTEGER;
+        for (Index = 0; Index < 10; Index++)
+        {
+            Request.X[Index] = Context->X[19 + Index];
+        }
+    }
+
+    if (ContextFlags & (CONTEXT_FLOATING_POINT & ~CONTEXT_ARM64))
+    {
+        Request.Flags |= KI_ARM64_SERVICE_VECTOR;
+        for (Index = 0; Index < 8; Index++)
+        {
+            Request.D[Index] = Context->V[8 + Index].Low;
+        }
+    }
+
+    if (Request.Flags == 0)
+    {
+        return TRUE;
+    }
+
+    KiArm64CallWithNonvolatileFrame(KiArm64ServiceNonvolatilesWorker, &Request);
+    if (!Request.Found)
+    {
+        DPRINT1("KiArm64SetServiceNonvolatiles: no service frame for %p\n", TrapFrame);
+    }
+
+    return Request.Found;
+}
+
+C_ASSERT(sizeof(KI_ARM64_SERVICE_CONTEXT) == 0x2E0);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_SERVICE_CONTEXT, VfpState.V) == 0xE0);
+
+static
+PKEXCEPTION_FRAME
+KiArm64FillServiceContext(
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _Out_ PKI_ARM64_SERVICE_CONTEXT ServiceContext,
+    _In_reads_(10) CONST ULONG64 *Registers,
+    _In_reads_(8) CONST ULONG64 *Vectors)
+{
+    PKARM64_VFP_STATE ServiceVfpState = TrapFrame->VfpState;
+    ULONG Index;
+
+    ASSERT(KiArm64IsServiceHeaderFrame(TrapFrame));
+
+    RtlZeroMemory(ServiceContext, sizeof(*ServiceContext));
+    RtlCopyMemory(&ServiceContext->ExceptionFrame.X19, Registers, 10 * sizeof(ULONG64));
+    ServiceContext->ExceptionFrame.TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
+    ServiceContext->ExceptionFrame.Fp = TrapFrame->Fp;
+    ServiceContext->ExceptionFrame.Lr = TrapFrame->Lr;
+    ServiceContext->ExceptionFrame.Fpcr = ServiceVfpState->Fpcr;
+    ServiceContext->ExceptionFrame.Fpsr = ServiceVfpState->Fpsr;
+    ServiceContext->ServiceVfpState = ServiceVfpState;
+    ServiceContext->VfpState.Link = KI_ARM64_SERVICE_CONTEXT_LINK;
+    ServiceContext->VfpState.Fpcr = ServiceVfpState->Fpcr;
+    ServiceContext->VfpState.Fpsr = ServiceVfpState->Fpsr;
+    for (Index = 0; Index < 8; Index++)
+    {
+        ServiceContext->VfpState.V[8 + Index].Low = Vectors[Index];
+    }
+
+    TrapFrame->VfpState = &ServiceContext->VfpState;
+    return &ServiceContext->ExceptionFrame;
+}
+
+PKEXCEPTION_FRAME
+KiArm64AttachServiceContext(
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _Out_ PKI_ARM64_SERVICE_CONTEXT ServiceContext,
+    _In_ BOOLEAN CaptureNonvolatiles)
+{
+    KI_ARM64_SERVICE_NONVOLATILES Request;
+
+    RtlZeroMemory(&Request, sizeof(Request));
+    if (CaptureNonvolatiles)
+    {
+        Request.TrapFrame = TrapFrame;
+        KiArm64CallWithNonvolatileFrame(KiArm64ServiceNonvolatilesWorker, &Request);
+        if (!Request.Found)
+        {
+            DPRINT1("KiArm64AttachServiceContext: no service frame for %p\n", TrapFrame);
+            ASSERT(Request.Found);
+        }
+    }
+
+    return KiArm64FillServiceContext(TrapFrame, ServiceContext, Request.X, Request.D);
+}
+
+BOOLEAN
+KiArm64ContextNeedsNonvolatiles(
+    _In_ PCONTEXT Context,
+    _In_ KPROCESSOR_MODE PreviousMode)
+{
+    ULONG RequiredFlags = (CONTEXT_INTEGER | CONTEXT_FLOATING_POINT) & ~CONTEXT_ARM64;
+    ULONG ContextFlags = 0;
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForRead(Context, sizeof(CONTEXT), sizeof(ULONG));
+        }
+
+        ContextFlags = *(volatile ULONG *)&Context->ContextFlags;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ContextFlags = 0;
+    }
+    _SEH2_END;
+
+    return (ContextFlags & RequiredFlags) != RequiredFlags;
+}
+
+VOID
+KiArm64DetachServiceContext(
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _In_ PKI_ARM64_SERVICE_CONTEXT ServiceContext)
+{
+    ServiceContext->ServiceVfpState->Fpcr = ServiceContext->VfpState.Fpcr;
+    ServiceContext->ServiceVfpState->Fpsr = ServiceContext->VfpState.Fpsr;
+    TrapFrame->VfpState = ServiceContext->ServiceVfpState;
+}
+
+static
+VOID
+KiArm64RestorePreviousModeForTrap(
+    _Inout_ PKTHREAD Thread,
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    if ((TrapFrame->Reserved & ARM64_PREVIOUS_MODE_MASK) == ARM64_PREVIOUS_MODE_COOKIE)
+    {
+        Thread->PreviousMode = (KPROCESSOR_MODE)((TrapFrame->Reserved & ARM64_PREVIOUS_MODE_VALUE) >>
+                                                 ARM64_PREVIOUS_MODE_SHIFT);
+    }
+}
+
+VOID
+KiArm64DeliverServiceUserApc(
+    _Inout_ PKI_ARM64_SERVICE_CONTEXT ServiceContext,
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+    PKEXCEPTION_FRAME ExceptionFrame;
+    ULONG64 Registers[10];
+    ULONG64 Vectors[8];
+    ULONG Index;
+
+    RtlCopyMemory(Registers, &ServiceContext->ExceptionFrame.X19, sizeof(Registers));
+    for (Index = 0; Index < 8; Index++)
+    {
+        Vectors[Index] = ServiceContext->VfpState.V[8 + Index].Low;
+    }
+
+    ExceptionFrame = KiArm64FillServiceContext(TrapFrame, ServiceContext, Registers, Vectors);
+    KiArm64DeliverPendingUserApc(ExceptionFrame, TrapFrame, TRUE);
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    KiTrapReturn(TrapFrame, ExceptionFrame);
+    UNREACHABLE;
+}
+
+VOID
+KiArm64UserServiceDispatch(
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+    ULONG Instruction;
+
+    TrapFrame->SavedIrql = (UCHAR)KeGetCurrentIrql();
+    KiArm64SavePreviousModeForTrap(Thread, TrapFrame);
+    TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)Thread->TrapFrame;
+    Thread->TrapFrame = TrapFrame;
+
+    Instruction = TrapFrame->Esr & 0xFFFF;
+    if (Instruction == 0xFFFF)
+    {
+        Instruction = (ULONG)(TrapFrame->X[8] & 0x1FFF);
+    }
+
+    KiSystemService(Thread, TrapFrame, Instruction);
+}
+
+BOOLEAN
+KiArm64UserServiceComplete(
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+
+    if (Thread->ApcState.UserApcPending)
+    {
+        return TRUE;
+    }
+
+    _disable();
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    KiArm64RestorePreviousModeForTrap(Thread, TrapFrame);
+    return FALSE;
 }
 
 #define KI_ARM64_ACCESS_READ    0

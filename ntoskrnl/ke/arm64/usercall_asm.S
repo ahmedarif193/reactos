@@ -22,13 +22,14 @@ KiArm64InvokeSystemCall:
     .seh_save_fplr_x 16
     mov     x29, sp
     .seh_set_fp
-    sub     sp, sp, #80
-    .seh_stackalloc 80
     .seh_endprologue
 
     mov     x16, x0
     mov     x17, x1
     cbz     w3, 2f
+    add     w9, w3, #1
+    and     x9, x9, #0x1E
+    sub     sp, sp, x9, lsl #3
     mov     x9, sp
 1:
     ldr     x10, [x2], #8
@@ -42,8 +43,50 @@ KiArm64InvokeSystemCall:
     ldp     x6, x7, [x17, #48]
     blr     x16
 
-    add     sp, sp, #80
+    mov     sp, x29
     ldp     x29, x30, [sp], #16
+    ret
+    .seh_endproc
+
+    .global KiArm64CallWithNonvolatileFrame
+    .seh_proc KiArm64CallWithNonvolatileFrame
+KiArm64CallWithNonvolatileFrame:
+    stp     x19, x20, [sp, #-0xA0]!
+    .seh_save_regp_x x19, 0xA0
+    stp     x21, x22, [sp, #0x10]
+    .seh_save_regp x21, 0x10
+    stp     x23, x24, [sp, #0x20]
+    .seh_save_regp x23, 0x20
+    stp     x25, x26, [sp, #0x30]
+    .seh_save_regp x25, 0x30
+    stp     x27, x28, [sp, #0x40]
+    .seh_save_regp x27, 0x40
+    stp     d8, d9, [sp, #0x50]
+    .seh_save_fregp d8, 0x50
+    stp     d10, d11, [sp, #0x60]
+    .seh_save_fregp d10, 0x60
+    stp     d12, d13, [sp, #0x70]
+    .seh_save_fregp d12, 0x70
+    stp     d14, d15, [sp, #0x80]
+    .seh_save_fregp d14, 0x80
+    stp     x29, x30, [sp, #0x90]
+    .seh_save_fplr 0x90
+    add     x29, sp, #0x90
+    .seh_add_fp 0x90
+    .seh_endprologue
+    mov     x16, x0
+    mov     x0, x1
+    blr     x16
+    ldp     x29, x30, [sp, #0x90]
+    ldp     d14, d15, [sp, #0x80]
+    ldp     d12, d13, [sp, #0x70]
+    ldp     d10, d11, [sp, #0x60]
+    ldp     d8, d9, [sp, #0x50]
+    ldp     x27, x28, [sp, #0x40]
+    ldp     x25, x26, [sp, #0x30]
+    ldp     x23, x24, [sp, #0x20]
+    ldp     x21, x22, [sp, #0x10]
+    ldp     x19, x20, [sp], #0xA0
     ret
     .seh_endproc
 
