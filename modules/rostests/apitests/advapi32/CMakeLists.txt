@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     AddMandatoryAce.c
+    CopySid.c
     CreateService.c
     DuplicateTokenEx.c
     eventlog.c
@@ -8,6 +9,7 @@ list(APPEND SOURCE
     HKEY_CLASSES_ROOT.c
     IsTextUnicode.c
     LockServiceDatabase.c
+    LookupAccountName.c
     QueryServiceConfig2.c
     RegCreateKeyEx.c
     RegEnumKey.c
