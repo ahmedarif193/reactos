@@ -248,7 +248,15 @@ INT cmd_start (LPTSTR Rest)
         else
         {
             TRACE ("[EXEC: %s %s]\n", debugstr_aw(szFullName), debugstr_aw(Rest));
-            _tcscpy(szFullCmdLine, szFullName);
+            if (_tcspbrk(szFullName, _T(" \t")))
+            {
+                _sntprintf(szFullCmdLine, CMDLINE_LENGTH, _T("\"%s\""), szFullName);
+                szFullCmdLine[CMDLINE_LENGTH - 1] = _T('\0');
+            }
+            else
+            {
+                _tcscpy(szFullCmdLine, szFullName);
+            }
         }
 
         /* build command line for CreateProcess() */
