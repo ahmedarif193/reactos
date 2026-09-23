@@ -224,6 +224,7 @@ set(_wow64_default OFF)
 if(ARCH STREQUAL "arm64" AND NOT ARM64EC_RUNTIME)
     set(_wow64_default ON)
 endif()
+# TODO(riscv64): add riscv64 to the ENABLE_WOW64 host list once an x86 CPU backend exists
 cmake_dependent_option(ENABLE_WOW64 "Whether to build the 32-bit WoW64 subsystem." ${_wow64_default}
                        "ARCH STREQUAL amd64 OR ARCH STREQUAL arm64" OFF)
 unset(_wow64_default)
