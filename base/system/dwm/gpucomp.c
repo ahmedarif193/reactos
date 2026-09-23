@@ -2368,7 +2368,7 @@ DwmGpuComposeBlurWindow(const DWM_WIN *Window, const RECTL *Rectangles,
         return Result;
     }
     RECTL Entire = {0, 0, Window->cx, Window->cy};
-    RECT Capture = {0, 0, 0, 0}, Region, Output;
+    RECT Capture = {0, 0, 0, 0}, Region = {0, 0, 0, 0}, Output;
     DWM_GPU_WINDOW_GEOMETRY Geometry;
     ULONG Count = Window->BlurRectCount, Index;
     BOOL HaveRegion = FALSE;
