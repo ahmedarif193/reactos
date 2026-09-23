@@ -93,6 +93,8 @@ typedef struct _FRONTEND_VTBL
                                UINT CmdIdHigh);
     BOOL  (NTAPI *SetMenuClose)(IN OUT PFRONTEND This,
                                 BOOL Enable);
+    BOOL  (NTAPI *GetFont)(IN OUT PFRONTEND This,
+                           OUT PCONSOLE_FONT_INFOEX FontInfo);
 } FRONTEND_VTBL, *PFRONTEND_VTBL;
 
 struct _FRONTEND

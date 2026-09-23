@@ -1190,6 +1190,13 @@ TuiSetMenuClose(IN OUT PFRONTEND This,
     return TRUE;
 }
 
+static BOOL NTAPI
+TuiGetFont(IN OUT PFRONTEND This,
+           OUT PCONSOLE_FONT_INFOEX FontInfo)
+{
+    return FALSE;
+}
+
 static FRONTEND_VTBL TuiVtbl =
 {
     TuiInitFrontEnd,
@@ -1217,6 +1224,7 @@ static FRONTEND_VTBL TuiVtbl =
     TuiSetMouseCursor,
     TuiMenuControl,
     TuiSetMenuClose,
+    TuiGetFont,
 };
 
 static BOOLEAN

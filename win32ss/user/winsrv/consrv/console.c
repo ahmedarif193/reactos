@@ -1518,17 +1518,11 @@ ConSrvGetConsoleProcessList(IN PCONSRV_CONSOLE Console,
 
     *ProcessIdsTotal = 0;
 
-    current_entry = Console->ProcessList.Flink;
-    while (current_entry != &Console->ProcessList)
+    for (current_entry = Console->ProcessList.Flink;
+         current_entry != &Console->ProcessList;
+         current_entry = current_entry->Flink)
     {
         current = CONTAINING_RECORD(current_entry, CONSOLE_PROCESS_DATA, ConsoleLink);
-        current_entry = current_entry->Flink;
-        if (current->Process == NULL)
-        {
-            DPRINT1("Console %p: unlinking process entry %p without a CSR process\n", Console, current);
-            RemoveEntryList(&current->ConsoleLink);
-            continue;
-        }
         if (++(*ProcessIdsTotal) <= MaxIdListItems)
         {
             *ProcessIdsList++ = HandleToUlong(current->Process->ClientId.UniqueProcess);
@@ -1564,13 +1558,6 @@ ConSrvConsoleProcessCtrlEvent(IN PCONSRV_CONSOLE Console,
         current = CONTAINING_RECORD(current_entry, CONSOLE_PROCESS_DATA, ConsoleLink);
         current_entry = current_entry->Flink;
 
-        if (current->Process == NULL)
-        {
-            DPRINT1("Console %p: unlinking process entry %p without a CSR process\n", Console, current);
-            RemoveEntryList(&current->ConsoleLink);
-            continue;
-        }
-
         /*
          * Only processes belonging to the same process group are signaled.
          * If the process group ID is zero, then all the processes are signaled.
@@ -1588,9 +1575,6 @@ VOID
 ConSrvSetProcessFocus(IN PCSR_PROCESS CsrProcess,
                       IN BOOLEAN SetForeground)
 {
-    if (CsrProcess == NULL)
-        return;
-
     // FIXME: Call NtUserSetInformationProcess (currently unimplemented!)
     // for setting Win32 foreground/background flags.
 
@@ -1620,13 +1604,6 @@ ConSrvSetConsoleProcessFocus(IN PCONSRV_CONSOLE Console,
     {
         current = CONTAINING_RECORD(current_entry, CONSOLE_PROCESS_DATA, ConsoleLink);
         current_entry = current_entry->Flink;
-
-        if (current->Process == NULL)
-        {
-            DPRINT1("Console %p: unlinking process entry %p without a CSR process\n", Console, current);
-            RemoveEntryList(&current->ConsoleLink);
-            continue;
-        }
 
         ConSrvSetProcessFocus(current->Process, SetForeground);
     }
@@ -2120,13 +2097,15 @@ CSR_API(SrvSetConsoleKeyShortcuts)
 CON_API(SrvGetConsoleKeyboardLayoutName,
         CONSOLE_GETKBDLAYOUTNAME, GetKbdLayoutNameRequest)
 {
+    BOOL Success;
+
     /* Retrieve the keyboard layout name of the system */
     if (GetKbdLayoutNameRequest->Ansi)
-        GetKeyboardLayoutNameA((PCHAR)GetKbdLayoutNameRequest->LayoutBuffer);
+        Success = GetKeyboardLayoutNameA((PCHAR)GetKbdLayoutNameRequest->LayoutBuffer);
     else
-        GetKeyboardLayoutNameW((PWCHAR)GetKbdLayoutNameRequest->LayoutBuffer);
+        Success = GetKeyboardLayoutNameW((PWCHAR)GetKbdLayoutNameRequest->LayoutBuffer);
 
-    return STATUS_SUCCESS;
+    return Success ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
 
 /* API_NUMBER: ConsolepCharType */

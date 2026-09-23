@@ -72,6 +72,8 @@ BOOLEAN ConDrvIsTerminalAttached(IN struct _CONSOLE* Console);
     (Console)->FrontEndIFace.Vtbl->GetThreadConsoleDesktop(&(Console)->FrontEndIFace)
 #define TermGetConsoleWindowHandle(Console) \
     (Console)->FrontEndIFace.Vtbl->GetConsoleWindowHandle(&(Console)->FrontEndIFace)
+#define TermGetFont(Console, FontInfo) \
+    (Console)->FrontEndIFace.Vtbl->GetFont(&(Console)->FrontEndIFace, (FontInfo))
 #define TermGetSelectionInfo(Console, pSelectionInfo) \
     (Console)->FrontEndIFace.Vtbl->GetSelectionInfo(&(Console)->FrontEndIFace, (pSelectionInfo))
 #define TermGetDisplayMode(Console) \

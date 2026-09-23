@@ -937,7 +937,7 @@ static HWND NTAPI
 GuiGetConsoleWindowHandle(IN OUT PFRONTEND This)
 {
     PGUI_CONSOLE_DATA GuiData = This->Context;
-    return GuiData->hWindow;
+    return GuiData->IsWindowVisible ? GuiData->hWindow : NULL;
 }
 
 static VOID NTAPI
@@ -1187,6 +1187,21 @@ GuiSetMenuClose(IN OUT PFRONTEND This,
     return TRUE;
 }
 
+static BOOL NTAPI
+GuiGetFont(IN OUT PFRONTEND This,
+           OUT PCONSOLE_FONT_INFOEX FontInfo)
+{
+    PGUI_CONSOLE_DATA GuiData = This->Context;
+
+    FontInfo->nFont = 0;
+    FontInfo->dwFontSize.X = (SHORT)GuiData->CharWidth;
+    FontInfo->dwFontSize.Y = (SHORT)GuiData->CharHeight;
+    FontInfo->FontFamily = GuiData->GuiInfo.FontFamily;
+    FontInfo->FontWeight = GuiData->GuiInfo.FontWeight;
+    RtlCopyMemory(FontInfo->FaceName, GuiData->GuiInfo.FaceName, sizeof(FontInfo->FaceName));
+    return TRUE;
+}
+
 static FRONTEND_VTBL GuiVtbl =
 {
     GuiInitFrontEnd,
@@ -1214,6 +1229,7 @@ static FRONTEND_VTBL GuiVtbl =
     GuiSetMouseCursor,
     GuiMenuControl,
     GuiSetMenuClose,
+    GuiGetFont,
 };
 
 
