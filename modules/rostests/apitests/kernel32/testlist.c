@@ -72,6 +72,7 @@ extern void func_ProcessPowerThrottling(void);
 extern void func_TunnelCache(void);
 extern void func_UEFIFirmware(void);
 extern void func_WideCharToMultiByte(void);
+extern void func_WriteFileSeekBack(void);
 
 const struct test winetest_testlist[] =
 {
@@ -145,5 +146,6 @@ const struct test winetest_testlist[] =
     { "TunnelCache",                 func_TunnelCache },
     { "UEFIFirmware",                func_UEFIFirmware },
     { "WideCharToMultiByte",         func_WideCharToMultiByte },
+    { "WriteFileSeekBack",           func_WriteFileSeekBack },
     { 0, 0 }
 };
