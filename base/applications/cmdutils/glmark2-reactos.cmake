@@ -72,7 +72,6 @@ endif()
 target_link_libraries(glmark2-png glmark2-zlib)
 
 set(GLMARK2_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/glmark2-reactos-startup.c
     ${GLMARK2_SOURCE_DIR}/src/benchmark-collection.cpp
     ${GLMARK2_SOURCE_DIR}/src/benchmark.cpp
     ${GLMARK2_SOURCE_DIR}/src/canvas-generic.cpp
@@ -142,6 +141,11 @@ set(GLMARK2_SOURCES
     ${GLMARK2_SOURCE_DIR}/src/glad/src/wgl.c)
 
 add_executable(glmark2 ${GLMARK2_SOURCES})
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    # GCC startup already calls __main to run .ctors. Bridging them again
+    # initializes globals twice and registers duplicate destructors.
+    target_sources(glmark2 PRIVATE glmark2-reactos-startup.c)
+endif()
 set_property(TARGET glmark2 PROPERTY CXX_STANDARD 17)
 set_property(TARGET glmark2 PROPERTY CXX_STANDARD_REQUIRED ON)
 target_include_directories(glmark2 BEFORE PRIVATE
