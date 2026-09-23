@@ -11,7 +11,6 @@
 
 static void Test_Present_NullParam(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTPresent);
 
@@ -75,7 +74,6 @@ static void Test_Present_NoSourceNoColor(void)
 
 static void Test_Render_NullParam(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTRender);
 
@@ -98,7 +96,6 @@ static void Test_Render_InvalidContext(void)
 
 static void Test_GetPresentHistory_NullParam(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTGetPresentHistory);
 

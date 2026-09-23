@@ -156,7 +156,6 @@ static void Test_SetVidPnSourceOwner(void)
 
 static void Test_SetDisplayMode(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTSetDisplayMode);
 
@@ -166,7 +165,6 @@ static void Test_SetDisplayMode(void)
 
 static void Test_WaitForVerticalBlankEvent(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTWaitForVerticalBlankEvent);
 
@@ -253,7 +251,6 @@ static void Test_PollDisplayChildren(void)
 
 static void Test_InvalidateActiveVidPn(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTInvalidateActiveVidPn);
 
@@ -263,7 +260,6 @@ static void Test_InvalidateActiveVidPn(void)
 
 static void Test_SetGammaRamp(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTSetGammaRamp);
 

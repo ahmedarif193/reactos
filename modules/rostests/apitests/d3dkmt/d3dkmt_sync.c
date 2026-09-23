@@ -15,7 +15,6 @@
 
 static void Test_CreateSyncObject_NullParam(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTCreateSynchronizationObject);
 
@@ -24,7 +23,6 @@ static void Test_CreateSyncObject_NullParam(void)
 
 static void Test_DestroySyncObject_NullParam(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTDestroySynchronizationObject);
 
@@ -182,7 +180,6 @@ static void Test_CreateSyncObject_Semaphore(void)
 
 static void Test_WaitForSyncObject_NullParam(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTWaitForSynchronizationObject);
 
@@ -191,7 +188,6 @@ static void Test_WaitForSyncObject_NullParam(void)
 
 static void Test_SignalSyncObject_NullParam(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTSignalSynchronizationObject);
 
@@ -200,7 +196,6 @@ static void Test_SignalSyncObject_NullParam(void)
 
 static void Test_WaitForIdle_NullParam(void)
 {
-    NTSTATUS Status;
 
     LOAD_D3DKMT(D3DKMTWaitForIdle);
 

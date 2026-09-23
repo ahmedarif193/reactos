@@ -1200,7 +1200,7 @@ START_TEST(wddmcaps)
         meta.NodeOrdinalAndAdapterIndex = 0;
         st = QueryAI(pfn, h, KMTQAITYPE_NODEMETADATA, &meta, sizeof(meta));
         if (NT_SUCCESS(st))
-            trace("NODEMETADATA[0]: EngineType=%d name=%.32ws\n",
+            trace("NODEMETADATA[0]: EngineType=%d name=%.32ls\n",
                   (int)meta.NodeData.EngineType, meta.NodeData.FriendlyName);
         else
             trace("NODEMETADATA not available (0x%08lX)\n", (long)st);

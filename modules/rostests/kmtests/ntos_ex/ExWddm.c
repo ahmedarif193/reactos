@@ -1353,9 +1353,9 @@ VOID
 TestModernProcessFaultState(VOID)
 {
     BOOLEAN IsReactOS;
-    UCHAR BeforeCounts;
+    UCHAR BeforeCounts = 0;
     UCHAR ExpectedCounts;
-    ULONG BeforeFlags;
+    ULONG BeforeFlags = 0;
     ULONG FaultInformation;
     ULONG FaultQuery;
     ULONG ReturnLength;
