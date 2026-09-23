@@ -271,12 +271,13 @@ Zw\Name:
 #include <asm/ksriscv64.h>
 
     /*
-     * Kernel-mode Zw* wrappers (ABI-131). There is no RISC-V user syscall
-     * ABI yet, so a Zw* call from kernel code does not trap: it saves the
-     * caller's PreviousMode, forces KernelMode, calls Nt* directly and
-     * restores PreviousMode, exactly like the ARM64 wrapper above. Calls
-     * with more than eight arguments copy the caller's stack arguments below
-     * the wrapper frame so the callee sees them at sp+0.
+     * Kernel-mode Zw* wrappers (ABI-131). Like the ARM64 wrapper above, a
+     * Zw* call from kernel code does not trap: it saves the caller's
+     * PreviousMode, forces KernelMode, calls Nt* directly and restores
+     * PreviousMode. The current thread is read with interrupts masked, so
+     * a migration cannot pair one hart's PCR with another hart's thread.
+     * Calls with more than eight arguments copy the caller's stack arguments
+     * below the wrapper frame so the callee sees them at sp+0.
      */
     .set SyscallId, 0
 
@@ -298,8 +299,11 @@ Zw\Name:
     sd t0, _i * 8(sp)
     .set _i, _i + 1
     .endr
+    csrrci t0, sstatus, 2
     csrr s0, sscratch
     ld s0, PcCurrentThread(s0)
+    andi t0, t0, 2
+    csrs sstatus, t0
     lbu s1, ThPreviousMode(s0)
     sb zero, ThPreviousMode(s0)
     call Nt\Name
@@ -314,8 +318,11 @@ Zw\Name:
     sd ra, 24(sp)
     sd s0, 16(sp)
     sd s1, 8(sp)
+    csrrci t0, sstatus, 2
     csrr s0, sscratch
     ld s0, PcCurrentThread(s0)
+    andi t0, t0, 2
+    csrs sstatus, t0
     lbu s1, ThPreviousMode(s0)
     sb zero, ThPreviousMode(s0)
     call Nt\Name

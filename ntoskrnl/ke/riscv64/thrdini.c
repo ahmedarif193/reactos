@@ -104,6 +104,36 @@ KiInitializeContextThread(
     Thread->TrapFrame = TrapFrame;
 }
 
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+/* Publish the old stack only after this processor has switched away. */
+static
+VOID
+KiRiscvCompleteThreadSwitch(
+    _In_ PKTHREAD OldThread,
+    _In_ PKTHREAD NewThread)
+{
+    BOOLEAN ReadyTransition, ReapThread;
+
+    NewThread->Running = TRUE;
+    KeMemoryBarrier();
+
+    KiAcquireThreadLock(OldThread);
+    OldThread->Running = FALSE;
+    KeMemoryBarrier();
+    ReadyTransition = OldThread->ReadyTransition;
+    OldThread->ReadyTransition = FALSE;
+    ReapThread = (OldThread->State == Terminated);
+    ASSERT(!ReadyTransition || (OldThread->State == DeferredReady));
+    ASSERT(!ReadyTransition || !ReapThread);
+    KiReleaseThreadLock(OldThread);
+
+    if (ReadyTransition)
+        KiDeferredReadyThread(OldThread);
+    else if (ReapThread)
+        KiQueueThreadForReaping(OldThread);
+}
+#endif
+
 /* Runs on the incoming thread's stack with the outgoing frame published. */
 BOOLEAN
 NTAPI
@@ -133,8 +163,7 @@ KiSwapContextResume(
     Prcb->KeContextSwitches++;
     NewThread->ContextSwitches++;
 #if (NTDDI_VERSION >= NTDDI_WIN7)
-    NewThread->Running = TRUE;
-    OldThread->Running = FALSE;
+    KiRiscvCompleteThreadSwitch(OldThread, NewThread);
 #endif
 
     if (NewThread->ApcState.KernelApcPending)
@@ -156,12 +185,14 @@ KiSwapProcess(
 {
     ULONG_PTR Satp;
 
-    UNREFERENCED_PARAMETER(OldProcess);
+    KAFFINITY Member = KeGetCurrentPrcb()->SetMember;
+    InterlockedOr64((PLONG64)&NewProcess->ActiveProcessors, Member);
     ASSERT((NewProcess->DirectoryTableBase & (PAGE_SIZE - 1)) == 0);
     ASSERT(NewProcess->DirectoryTableBase != 0);
 
     Satp = RISCV64_LOADER_SATP_MODE_SV39 | (NewProcess->DirectoryTableBase >> PAGE_SHIFT);
     __asm__ __volatile__("csrw satp, %0\n\tsfence.vma zero, zero" :: "r"(Satp) : "memory");
+    InterlockedAnd64((PLONG64)&OldProcess->ActiveProcessors, ~Member);
 }
 
 /* No per-thread coprocessor ownership or DPC affinity exists yet. */
@@ -186,8 +217,8 @@ KiRiscvIdleWait(_In_ PKPCR Pcr)
         return;
     }
 
-    _enable();
     __asm__ __volatile__("wfi" ::: "memory");
+    _enable();
     _disable();
 }
 
@@ -213,23 +244,42 @@ KiIdleLoop(VOID)
             KiRetireDpcListInDpcStack(Prcb, Prcb->DpcStack);
         }
 
+        if (Pcr->InterruptEnable) _enable();
+        KiAcquirePrcbLock(Prcb);
+        if (!Prcb->NextThread)
+        {
+            NewThread = KiIdleSchedule(Prcb);
+            if (NewThread != Prcb->IdleThread)
+            {
+                NewThread->State = Standby;
+                Prcb->NextThread = NewThread;
+            }
+        }
         NewThread = Prcb->NextThread;
         if (NewThread)
         {
+            InterlockedAnd64((PLONG64)&KiIdleSummary, ~Prcb->SetMember);
             Prcb->NextThread = NULL;
             OldThread = Prcb->CurrentThread;
             Prcb->CurrentThread = NewThread;
             NewThread->State = Running;
-            if (Pcr->InterruptEnable)
-                _enable();
+            KiReleasePrcbLock(Prcb);
             KiSwapContext(APC_LEVEL, OldThread);
-
-            /* The thread that switched back may have been at SYNCH_LEVEL. */
             if (KeGetCurrentIrql() > DISPATCH_LEVEL)
                 KfLowerIrql(DISPATCH_LEVEL);
             continue;
         }
+        InterlockedOr64((PLONG64)&KiIdleSummary, Prcb->SetMember);
+        KiReleasePrcbLock(Prcb);
 
+        /* Check work with SIE clear, then WFI before enabling it. A pending
+         * enabled interrupt wakes WFI even with global SIE clear, closing the
+         * check/interrupt/sleep race without losing a remote reschedule. */
+        _disable();
+        KeMemoryBarrier();
+        if (Prcb->NextThread || Prcb->DpcData[0].DpcQueueDepth ||
+            Prcb->TimerRequest || Prcb->DeferredReadyListHead.Next)
+            continue;
         Prcb->Sleeping = TRUE;
         KiRiscvIdleWait(Pcr);
         Prcb->Sleeping = FALSE;

@@ -13,23 +13,15 @@
 /* Ranges above this size flush the whole translation cache. */
 #define MI_RISCV_TLB_RANGE_LIMIT 64
 
-static
-VOID
-MiRiscvFlushRemote(VOID)
-{
-    /* The boot hart is the only processor; remote shootdown is added with
-     * the secondary harts. */
-    if (KeNumberProcessors > 1)
-        KeFlushEntireTb(TRUE, TRUE);
-}
-
+/* Local fences only order this hart's translations; every other active hart
+ * is fenced through the SBI remote-fence extension. */
 VOID
 MiArchInvalidateTlbAll(MI_TLB_SCOPE Scope)
 {
-    __asm__ __volatile__("sfence.vma zero, zero" ::: "memory");
-
-    if (Scope == MiTlbAllProcessors)
-        MiRiscvFlushRemote();
+    if (Scope == MiTlbAllProcessors && KeNumberProcessors > 1)
+        KiIpiSendTbFlush(KeActiveProcessors, NULL, 0);
+    else
+        __asm__ __volatile__("sfence.vma zero, zero" ::: "memory");
 }
 
 VOID
@@ -49,12 +41,15 @@ MiArchInvalidateTlbRange(PVOID BaseAddress, SIZE_T Size, MI_TLB_SCOPE Scope)
 
     Pages = (Size + ((ULONG_PTR)BaseAddress & (PAGE_SIZE - 1)) + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
+    if (Scope == MiTlbAllProcessors && KeNumberProcessors > 1)
+    {
+        KiIpiSendTbFlush(KeActiveProcessors, (PVOID)Address, (ULONG)Pages);
+        return;
+    }
+
     /* SFENCE.VMA orders this hart's earlier page-table stores itself. */
     for (; Pages != 0; Pages--, Address += PAGE_SIZE)
         __asm__ __volatile__("sfence.vma %0, zero" :: "r"(Address) : "memory");
-
-    if (Scope == MiTlbAllProcessors)
-        MiRiscvFlushRemote();
 }
 
 VOID

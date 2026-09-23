@@ -136,17 +136,13 @@ add_cd_file(TARGET ntoskrnl DESTINATION reactos/system32 NO_CAB FOR all)
 
 add_subdirectory(nvs)
 add_subdirectory(cc)
-if(NOT ARCH STREQUAL "riscv64")
-    add_subdirectory(ntkrnlmp)
-endif()
+add_subdirectory(ntkrnlmp)
 
 add_custom_target(nvs_check_standalone
     COMMAND ${CMAKE_COMMAND} -DNVS_KERNEL_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/nvs/check-standalone.cmake)
 add_dependencies(ntoskrnl nvs_check_standalone)
-if(TARGET ntkrnlmp)
-    add_dependencies(ntkrnlmp nvs_check_standalone)
-endif()
+add_dependencies(ntkrnlmp nvs_check_standalone)
 
 add_asm_files(ntdllsys_asm ntdll.S)
 add_library(ntdllsys ${ntdllsys_asm})

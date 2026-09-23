@@ -23,6 +23,14 @@
 #define IPI_PACKET_READY  6
 #define IPI_SYNCH_REQUEST 16
 
+#define IPI_FROZEN_STATE_RUNNING       0
+#define IPI_FROZEN_STATE_FROZEN        2
+#define IPI_FROZEN_STATE_THAW          3
+#define IPI_FROZEN_STATE_OWNER         4
+#define IPI_FROZEN_STATE_TARGET_FREEZE 5
+#define IPI_FROZEN_STATE_SAVING        6
+#define IPI_FROZEN_FLAG_ACTIVE         0x20
+
 /* No LDTs on RISC-V */
 #define LDT_ENTRY ULONG
 
@@ -222,8 +230,9 @@ struct _KPRCB
     LARGE_INTEGER IoWriteTransferCount;
     LARGE_INTEGER IoOtherTransferCount;
 
-    /* Debugger freeze state (kdbg); no freeze IPI is delivered yet. */
-    ULONG IpiFrozen;
+    /* Cross-processor requests and debugger freeze state. */
+    volatile LONG RequestSummary;
+    volatile ULONG IpiFrozen;
 };
 
 /* Kernel-owned resident storage, addressed by sscratch in supervisor code.

@@ -1,4 +1,4 @@
-add_executable(riscv64_porttest main.c seh.c cxx.cpp)
+add_executable(riscv64_porttest main.c seh.c cxx.cpp smp.c)
 set_target_cpp_properties(riscv64_porttest WITH_EXCEPTIONS WITH_RTTI)
 target_link_libraries(riscv64_porttest cppstl)
 target_include_directories(riscv64_porttest PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/rtl)

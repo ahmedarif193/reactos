@@ -20,8 +20,9 @@ KiRiscvUnimplemented(_In_ const CHAR *Routine)
     if (KiRiscvUnimplementedRoutine == NULL)
     {
         KiRiscvUnimplementedRoutine = Routine;
-        if ((KeNumberProcessors == 1) &&
-            ((ULONG_PTR)KeGetPcr() + FIELD_OFFSET(KPCR, Prcb) == (ULONG_PTR)KiProcessorBlock[0]))
+        if (KeNumberProcessors && KeGetPcr() &&
+            KeGetCurrentPrcb()->Number < (ULONG)(UCHAR)KeNumberProcessors &&
+            KeGetCurrentPrcb() == KiProcessorBlock[KeGetCurrentPrcb()->Number])
         {
             KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED, STATUS_NOT_IMPLEMENTED, (ULONG_PTR)Routine, 0, 0);
         }

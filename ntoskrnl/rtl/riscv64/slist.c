@@ -2,7 +2,7 @@
  * PROJECT:     ReactOS Kernel
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF
- * PURPOSE:     Single-hart kernel sequenced lists for RV64GC
+ * PURPOSE:     SMP kernel sequenced lists for baseline RV64GC
  */
 
 #include <ntoskrnl.h>
@@ -13,27 +13,27 @@ C_ASSERT(FIELD_OFFSET(SLIST_HEADER, Region) == 8);
 
 /* Headers and linked entries must be resident, normally cached kernel RAM.
  * No trap, non-maskable callback or firmware handler may reenter these lists.
- * This is kernel UP serialization, not a general 128-bit atomic primitive. */
+ * The reserved header bit serializes the two 64-bit words without requiring
+ * optional 128-bit atomics. Interrupt masking prevents local reentrancy. */
 static
 BOOLEAN
 RtlpRiscvEnterSList(_In_ const SLIST_HEADER *SListHead)
 {
     BOOLEAN WereEnabled = KeDisableInterrupts();
 
-    if (KeNumberProcessors > 1)
-        KeBugCheckEx(MULTIPROCESSOR_CONFIGURATION_NOT_SUPPORTED, 0x5256534C, KeNumberProcessors, 0, 0);
     if ((SListHead == NULL) || ((ULONG_PTR)SListHead & 15))
         KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED, STATUS_DATATYPE_MISALIGNMENT, (ULONG_PTR)SListHead, 0x5256534C, 0);
 
-    KeMemoryBarrier();
+    while (__atomic_fetch_or((PULONG64)&SListHead->Region, 4, __ATOMIC_ACQUIRE) & 4)
+        YieldProcessor();
     return WereEnabled;
 }
 
 static
 VOID
-RtlpRiscvLeaveSList(_In_ BOOLEAN WereEnabled)
+RtlpRiscvLeaveSList(_In_ const SLIST_HEADER *SListHead, _In_ BOOLEAN WereEnabled)
 {
-    KeMemoryBarrier();
+    __atomic_fetch_and((PULONG64)&SListHead->Region, ~4ULL, __ATOMIC_RELEASE);
     KeRestoreInterrupts(WereEnabled);
 }
 
@@ -41,7 +41,7 @@ static
 PSLIST_ENTRY
 RtlpRiscvFirstSListEntry(_In_ const SLIST_HEADER *SListHead)
 {
-    ULONG64 Region = __atomic_load_n(&SListHead->Region, __ATOMIC_RELAXED);
+    ULONG64 Region = __atomic_load_n(&SListHead->Region, __ATOMIC_RELAXED) & ~4ULL;
 
     /* A zeroed header (the SDK InitializeSListHead form) is an empty list.
      * Otherwise only the full-width Header16 form is supported, never Header8. */
@@ -68,7 +68,7 @@ RtlpRiscvWriteSList(
     NewHeader.Header16.HeaderType = 1;
     NewHeader.Header16.Init = 1;
     NewHeader.Header16.NextEntry = (ULONG_PTR)FirstEntry >> 4;
-    __atomic_store_n(&SListHead->Region, NewHeader.Region, __ATOMIC_RELAXED);
+    __atomic_store_n(&SListHead->Region, NewHeader.Region | 4, __ATOMIC_RELAXED);
     __atomic_store_n(&SListHead->Alignment, NewHeader.Alignment, __ATOMIC_RELAXED);
 }
 
@@ -76,12 +76,10 @@ VOID
 NTAPI
 RtlInitializeSListHead(_Out_ PSLIST_HEADER SListHead)
 {
-    BOOLEAN WereEnabled = RtlpRiscvEnterSList(SListHead);
-
-    /* Initialization requires exclusive ownership before publication. */
+    /* A new header need not contain initialized lock bits. The caller owns it. */
+    ASSERT(SListHead && !((ULONG_PTR)SListHead & 15));
     __atomic_store_n(&SListHead->Alignment, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(&SListHead->Region, 1, __ATOMIC_RELAXED);
-    RtlpRiscvLeaveSList(WereEnabled);
+    __atomic_store_n(&SListHead->Region, 1, __ATOMIC_RELEASE);
 }
 
 PSLIST_ENTRY
@@ -91,7 +89,7 @@ RtlFirstEntrySList(_In_ const SLIST_HEADER *SListHead)
     BOOLEAN WereEnabled = RtlpRiscvEnterSList(SListHead);
     PSLIST_ENTRY Entry = RtlpRiscvFirstSListEntry(SListHead);
 
-    RtlpRiscvLeaveSList(WereEnabled);
+    RtlpRiscvLeaveSList(SListHead, WereEnabled);
     return Entry;
 }
 
@@ -102,7 +100,7 @@ RtlQueryDepthSList(_In_ PSLIST_HEADER SListHead)
     BOOLEAN WereEnabled = RtlpRiscvEnterSList(SListHead);
     USHORT Depth = (USHORT)__atomic_load_n(&SListHead->Alignment, __ATOMIC_RELAXED);
 
-    RtlpRiscvLeaveSList(WereEnabled);
+    RtlpRiscvLeaveSList(SListHead, WereEnabled);
     return Depth;
 }
 
@@ -126,7 +124,7 @@ RtlInterlockedPushListSList(
     Depth = (USHORT)__atomic_load_n(&SListHead->Alignment, __ATOMIC_RELAXED);
     ListEnd->Next = FirstEntry;
     RtlpRiscvWriteSList(SListHead, List, (USHORT)(Depth + Count));
-    RtlpRiscvLeaveSList(WereEnabled);
+    RtlpRiscvLeaveSList(SListHead, WereEnabled);
     return FirstEntry;
 }
 
@@ -156,7 +154,7 @@ RtlInterlockedPopEntrySList(_Inout_ PSLIST_HEADER SListHead)
         RtlpRiscvWriteSList(SListHead, NextEntry, (USHORT)(Depth - 1));
     }
 
-    RtlpRiscvLeaveSList(WereEnabled);
+    RtlpRiscvLeaveSList(SListHead, WereEnabled);
     return FirstEntry;
 }
 
@@ -169,7 +167,7 @@ RtlInterlockedFlushSList(_Inout_ PSLIST_HEADER SListHead)
 
     if (FirstEntry != NULL)
         RtlpRiscvWriteSList(SListHead, NULL, 0);
-    RtlpRiscvLeaveSList(WereEnabled);
+    RtlpRiscvLeaveSList(SListHead, WereEnabled);
     return FirstEntry;
 }
 
