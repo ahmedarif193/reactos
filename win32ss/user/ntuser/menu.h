@@ -108,7 +108,7 @@ typedef struct tagROSMENUITEMINFO
     HMENU hSubMenu;
     HBITMAP hbmpChecked;
     HBITMAP hbmpUnchecked;
-    DWORD dwItemData;
+    ULONG_PTR dwItemData;
     LPWSTR dwTypeData;
     UINT cch;
     HBITMAP hbmpItem;
@@ -118,6 +118,10 @@ typedef struct tagROSMENUITEMINFO
     LPWSTR lpstr; /* Copy of the text pointer in MenuItem->Text */
     SIZE maxBmpSize; /* Maximum size of the bitmap items in MIIM_BITMAP state */
 } ROSMENUITEMINFO, *PROSMENUITEMINFO;
+
+C_ASSERT(FIELD_OFFSET(ROSMENUITEMINFO, dwItemData) == FIELD_OFFSET(MENUITEMINFOW, dwItemData));
+C_ASSERT(RTL_FIELD_SIZE(ROSMENUITEMINFO, dwItemData) == RTL_FIELD_SIZE(MENUITEMINFOW, dwItemData));
+C_ASSERT(FIELD_OFFSET(ROSMENUITEMINFO, hbmpItem) == FIELD_OFFSET(MENUITEMINFOW, hbmpItem));
 //
 //
 //

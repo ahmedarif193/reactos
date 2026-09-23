@@ -27,7 +27,144 @@ struct InternalIconData : NOTIFYICONDATA
 {
     // Must keep a separate copy since the original is unioned with uTimeout.
     UINT uVersionCopy;
+    INT Kind;
+    BOOL bPromoted;
 };
+
+#define TRAY_STOBJECT_CLASS    L"SystemTray_Main"
+#define TRAY_STOBJECT_VOLUME   (WM_APP + 0x4CB)
+#define TRAY_STOBJECT_POWER    (WM_APP + 0x4CD)
+#define TRAY_ICONSETTINGS_KEY  L"Control Panel\\NotifyIconSettings"
+
+static INT
+TrayClassifyIcon(_In_ HWND hWnd, _In_ UINT uID)
+{
+    WCHAR szClass[64];
+    HMODULE hNetShell;
+
+    if (!GetClassNameW(hWnd, szClass, _countof(szClass)))
+        return TRAYICON_APP;
+
+    if (!wcscmp(szClass, TRAY_STOBJECT_CLASS))
+    {
+        if (uID == TRAY_STOBJECT_VOLUME)
+            return TRAYICON_VOLUME;
+        if (uID == TRAY_STOBJECT_POWER)
+            return TRAYICON_POWER;
+        return TRAYICON_APP;
+    }
+
+    hNetShell = GetModuleHandleW(L"netshell.dll");
+    if (hNetShell && (HMODULE)GetWindowLongPtrW(hWnd, GWLP_HINSTANCE) == hNetShell)
+        return TRAYICON_NETWORK;
+
+    return TRAYICON_APP;
+}
+
+static BOOL
+TrayGetIconOwnerPath(_In_ HWND hWnd, _Out_writes_(cchPath) LPWSTR pszPath, _In_ DWORD cchPath)
+{
+    DWORD dwPid = 0;
+    HANDLE hProcess;
+    BOOL bRet = FALSE;
+
+    pszPath[0] = UNICODE_NULL;
+    GetWindowThreadProcessId(hWnd, &dwPid);
+    if (dwPid == GetCurrentProcessId())
+    {
+        HMODULE hModule = (HMODULE)GetWindowLongPtrW(hWnd, GWLP_HINSTANCE);
+        return GetModuleFileNameW(hModule, pszPath, cchPath) != 0;
+    }
+
+    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, dwPid);
+    if (!hProcess)
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwPid);
+    if (hProcess)
+    {
+        bRet = QueryFullProcessImageNameW(hProcess, 0, pszPath, &cchPath);
+        CloseHandle(hProcess);
+    }
+    return bRet;
+}
+
+static BOOL
+TrayGetIconSettingsKey(_In_ const InternalIconData *pItem, _Out_writes_(cchKey) LPWSTR pszKey,
+                       _In_ size_t cchKey, _Out_writes_(cchPath) LPWSTR pszPath, _In_ DWORD cchPath)
+{
+    ULONGLONG Hash = 0xCBF29CE484222325ULL;
+    const BYTE *pb;
+    SIZE_T cb, i;
+    LPWSTR psz;
+
+    if (!TrayGetIconOwnerPath(pItem->hWnd, pszPath, cchPath))
+        return FALSE;
+
+    for (psz = pszPath; *psz; psz++)
+    {
+        Hash ^= (WCHAR)towlower(*psz);
+        Hash *= 0x100000001B3ULL;
+    }
+
+    if (pItem->uFlags & NIF_GUID)
+    {
+        pb = (const BYTE *)&pItem->guidItem;
+        cb = sizeof(pItem->guidItem);
+    }
+    else
+    {
+        pb = (const BYTE *)&pItem->uID;
+        cb = sizeof(pItem->uID);
+    }
+    for (i = 0; i < cb; i++)
+    {
+        Hash ^= pb[i];
+        Hash *= 0x100000001B3ULL;
+    }
+
+    return SUCCEEDED(StringCchPrintfW(pszKey, cchKey, L"%s\\%08lX%08lX", TRAY_ICONSETTINGS_KEY,
+                                      (ULONG)(Hash >> 32), (ULONG)Hash));
+}
+
+static BOOL
+TrayLoadPromoted(_In_ const InternalIconData *pItem)
+{
+    WCHAR szKey[MAX_PATH], szPath[MAX_PATH];
+    DWORD dwValue = 0, cbValue = sizeof(dwValue);
+    HKEY hKey;
+
+    if (!TrayGetIconSettingsKey(pItem, szKey, _countof(szKey), szPath, _countof(szPath)))
+        return FALSE;
+
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, szKey, 0, NULL, 0, KEY_READ | KEY_WRITE,
+                        NULL, &hKey, NULL) != ERROR_SUCCESS)
+    {
+        return FALSE;
+    }
+
+    if (RegQueryValueExW(hKey, L"IsPromoted", NULL, NULL, (LPBYTE)&dwValue, &cbValue) != ERROR_SUCCESS)
+    {
+        DWORD dwUID = pItem->uID;
+        dwValue = 0;
+        RegSetValueExW(hKey, L"ExecutablePath", 0, REG_SZ, (const BYTE *)szPath,
+                       (DWORD)((wcslen(szPath) + 1) * sizeof(WCHAR)));
+        RegSetValueExW(hKey, L"UID", 0, REG_DWORD, (const BYTE *)&dwUID, sizeof(dwUID));
+    }
+    RegCloseKey(hKey);
+    return dwValue != 0;
+}
+
+static VOID
+TraySavePromoted(_In_ const InternalIconData *pItem)
+{
+    WCHAR szKey[MAX_PATH], szPath[MAX_PATH];
+    DWORD dwValue = pItem->bPromoted ? 1 : 0;
+
+    if (TrayGetIconSettingsKey(pItem, szKey, _countof(szKey), szPath, _countof(szPath)))
+    {
+        SHSetValueW(HKEY_CURRENT_USER, szKey, L"IsPromoted", REG_DWORD,
+                    &dwValue, sizeof(dwValue));
+    }
+}
 
 struct IconWatcherData
 {
@@ -149,6 +286,12 @@ class CNotifyToolbar :
 {
     HIMAGELIST m_ImageList;
     int m_VisibleButtonCount;
+    BOOL m_bModern;
+    INT m_cyModern;
+    UINT m_NextCommand;
+    INT m_iPressed;
+    POINT m_ptPressed;
+    BOOL m_bDragging;
 
     CBalloonQueue * m_BalloonQueue;
 
@@ -167,6 +310,20 @@ public:
     VOID ResizeImagelist();
     bool SendNotifyCallback(InternalIconData* notifyItem, UINT uMsg);
     void RefreshToolbarMetrics(BOOL bForceRefresh);
+    BOOL IsModern() { return m_bModern; }
+    VOID SetModern(BOOL bModern, INT cyButton);
+    VOID UpdateVisibility();
+    int IndexFromCommand(int idCommand);
+    VOID GetIcons(INT Filter, PTRAYICONLIST pList);
+    BOOL ForwardIconEvent(CONST TRAYICONEVENT *pEvent);
+    BOOL SetPromoted(HWND hWnd, UINT uID, BOOL bPromoted);
+    LRESULT DrawModernItem(NMCUSTOMDRAW *pcd);
+    UINT GetLayoutSignature();
+
+private:
+    BOOL IsItemVisible(InternalIconData *pItem);
+    VOID ApplyButtonSize();
+    VOID NotifyParentRealign();
 
 private:
     LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -328,6 +485,10 @@ public:
     LRESULT OnCopyData(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnSettingChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnGetMinimumSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnGetTrayIcons(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnTrayIconEvent(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnSetPromoted(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnForwardNotify(INT uCode, LPNMHDR hdr, BOOL& bHandled);
 
 public:
     // *** IOleWindow methods ***
@@ -370,6 +531,11 @@ public:
         MESSAGE_HANDLER(WM_COPYDATA, OnCopyData)
         MESSAGE_HANDLER(WM_SETTINGCHANGE, OnSettingChanged)
         MESSAGE_HANDLER(TNWM_GETMINIMUMSIZE, OnGetMinimumSize)
+        MESSAGE_HANDLER(TNWM_GETTRAYICONS, OnGetTrayIcons)
+        MESSAGE_HANDLER(TNWM_TRAYICONEVENT, OnTrayIconEvent)
+        MESSAGE_HANDLER(TNWM_SETPROMOTED, OnSetPromoted)
+        NOTIFY_CODE_HANDLER(NTNWM_REALIGN, OnForwardNotify)
+        NOTIFY_CODE_HANDLER(NTNWM_ICONSCHANGED, OnForwardNotify)
         NOTIFY_CODE_HANDLER(TTN_POP, OnBalloonPop)
         NOTIFY_CODE_HANDLER(TBN_GETINFOTIPW, OnGetInfoTip)
         NOTIFY_CODE_HANDLER(NM_CUSTOMDRAW, OnCustomDraw)
@@ -738,10 +904,39 @@ void CBalloonQueue::Show(Info& info)
 
     m_current = info.pSource;
     RECT rc;
-    m_toolbar->GetItemRect(IndexOf(m_current), &rc);
-    m_toolbar->ClientToScreen(&rc);
-    const WORD x = (rc.left + rc.right) / 2;
-    const WORD y = (rc.top + rc.bottom) / 2;
+    TBBUTTON btn;
+    POINT pt = { 0, 0 };
+    int index = IndexOf(m_current);
+    if (index >= 0 && m_toolbar->GetButton(index, &btn) &&
+        !(btn.fsState & TBSTATE_HIDDEN) && m_toolbar->GetItemRect(index, &rc))
+    {
+        m_toolbar->ClientToScreen(&rc);
+        pt.x = (rc.left + rc.right) / 2;
+        pt.y = (rc.top + rc.bottom) / 2;
+    }
+    else
+    {
+        ::SendMessageW(::GetParent(m_hwndParent), TNWM_GETICONANCHOR,
+                       (WPARAM)m_current->Kind, (LPARAM)&pt);
+    }
+    const WORD x = (WORD)pt.x;
+    const WORD y = (WORD)pt.y;
+
+    if (m_toolbar->IsModern())
+    {
+        WCHAR szPath[MAX_PATH], szApp[128];
+        HICON hIcon = (info.uIcon > NIIF_ICON_MASK) ? (HICON)info.uIcon : m_current->hIcon;
+
+        szApp[0] = UNICODE_NULL;
+        if (TrayGetIconOwnerPath(m_current->hWnd, szPath, _countof(szPath)) &&
+            (!GetVersionInfoString(szPath, L"FileDescription", szApp, sizeof(szApp)) || !szApp[0]))
+        {
+            StringCchCopyW(szApp, _countof(szApp), PathFindFileNameW(szPath));
+            PathRemoveExtensionW(szApp);
+        }
+        TrayNotifications_Add(m_current->hWnd, m_current->uID, szApp,
+                              info.szInfoTitle, info.szInfo, hIcon);
+    }
 
     m_tooltips->SetTitle(info.szInfoTitle, info.uIcon);
     m_tooltips->TrackPosition(x, y);
@@ -780,8 +975,14 @@ void CBalloonQueue::Close(IN OUT InternalIconData * notifyItem, IN UINT uReason)
 CNotifyToolbar::CNotifyToolbar() :
     m_ImageList(NULL),
     m_VisibleButtonCount(0),
+    m_bModern(FALSE),
+    m_cyModern(0),
+    m_NextCommand(0),
+    m_iPressed(-1),
+    m_bDragging(FALSE),
     m_BalloonQueue(NULL)
 {
+    m_ptPressed.x = m_ptPressed.y = 0;
 }
 
 CNotifyToolbar::~CNotifyToolbar()
@@ -887,11 +1088,15 @@ BOOL CNotifyToolbar::AddButton(_In_ CONST NOTIFYICONDATA *iconData)
     if (iconData->uFlags & NIF_GUID)
         notifyItem->guidItem = iconData->guidItem;
 
+    notifyItem->Kind = TrayClassifyIcon(iconData->hWnd, iconData->uID);
+    if (notifyItem->Kind == TRAYICON_APP)
+        notifyItem->bPromoted = TrayLoadPromoted(notifyItem);
+
     tbBtn.fsState = TBSTATE_ENABLED;
     tbBtn.fsStyle = BTNS_NOPREFIX;
     tbBtn.dwData = (DWORD_PTR)notifyItem;
     tbBtn.iString = (INT_PTR) text;
-    tbBtn.idCommand = GetButtonCount();
+    tbBtn.idCommand = m_NextCommand++;
     tbBtn.iBitmap = -1;
 
     if (iconData->uFlags & NIF_STATE)
@@ -938,19 +1143,16 @@ BOOL CNotifyToolbar::AddButton(_In_ CONST NOTIFYICONDATA *iconData)
         notifyItem->uTimeout = iconData->uTimeout;
     }
 
-    if (notifyItem->dwState & NIS_HIDDEN)
+    if (!IsItemVisible(notifyItem))
     {
         tbBtn.fsState |= TBSTATE_HIDDEN;
-    }
-    else
-    {
-        m_VisibleButtonCount++;
     }
 
     /* TODO: support VERSION_4 (NIF_GUID, NIF_REALTIME, NIF_SHOWTIP) */
 
     CToolbar::AddButton(&tbBtn);
-    SetButtonSize(TrayIconRenderSize(), TrayIconRenderSize());
+    ApplyButtonSize();
+    UpdateVisibility();
 
     if (iconData->uFlags & NIF_INFO)
     {
@@ -1007,27 +1209,10 @@ BOOL CNotifyToolbar::UpdateButton(_In_ CONST NOTIFYICONDATA *iconData)
     int oldIconIndex = btn.iBitmap;
 
     tbbi.cbSize = sizeof(tbbi);
-    tbbi.dwMask = TBIF_BYINDEX | TBIF_COMMAND;
-    tbbi.idCommand = index;
+    tbbi.dwMask = TBIF_BYINDEX;
 
     if (iconData->uFlags & NIF_STATE)
     {
-        if (iconData->dwStateMask & NIS_HIDDEN &&
-            (notifyItem->dwState & NIS_HIDDEN) != (iconData->dwState & NIS_HIDDEN))
-        {
-            tbbi.dwMask |= TBIF_STATE;
-            if (iconData->dwState & NIS_HIDDEN)
-            {
-                tbbi.fsState |= TBSTATE_HIDDEN;
-                m_VisibleButtonCount--;
-            }
-            else
-            {
-                tbbi.fsState &= ~TBSTATE_HIDDEN;
-                m_VisibleButtonCount++;
-            }
-        }
-
         notifyItem->dwState &= ~iconData->dwStateMask;
         notifyItem->dwState |= (iconData->dwState & iconData->dwStateMask);
     }
@@ -1079,6 +1264,7 @@ BOOL CNotifyToolbar::UpdateButton(_In_ CONST NOTIFYICONDATA *iconData)
     /* TODO: support VERSION_4 (NIF_GUID, NIF_REALTIME, NIF_SHOWTIP) */
 
     SetButtonInfo(index, &tbbi);
+    UpdateVisibility();
 
     if (iconData->uFlags & NIF_INFO)
     {
@@ -1100,11 +1286,6 @@ BOOL CNotifyToolbar::RemoveButton(_In_ CONST NOTIFYICONDATA *iconData)
         TRACE("Icon %d from hWnd %08x ALREADY MISSING!\n", iconData->uID, iconData->hWnd);
 
         return FALSE;
-    }
-
-    if (!(notifyItem->dwState & NIS_HIDDEN))
-    {
-        m_VisibleButtonCount--;
     }
 
     if (!(notifyItem->dwState & NIS_SHAREDICON))
@@ -1135,10 +1316,212 @@ BOOL CNotifyToolbar::RemoveButton(_In_ CONST NOTIFYICONDATA *iconData)
     m_BalloonQueue->RemoveInfo(notifyItem);
 
     DeleteButton(index);
+    if (m_iPressed == index)
+    {
+        m_iPressed = -1;
+        m_bDragging = FALSE;
+    }
+    else if (m_iPressed > index)
+    {
+        m_iPressed--;
+    }
 
     delete notifyItem;
 
+    UpdateVisibility();
+
     return TRUE;
+}
+
+BOOL CNotifyToolbar::IsItemVisible(InternalIconData *pItem)
+{
+    if (pItem->dwState & NIS_HIDDEN)
+        return FALSE;
+    if (!m_bModern)
+        return TRUE;
+    if (pItem->Kind != TRAYICON_APP)
+        return FALSE;
+    return pItem->bPromoted || !g_TaskbarSettings.bHideInactiveIcons;
+}
+
+VOID CNotifyToolbar::UpdateVisibility()
+{
+    int count = GetButtonCount();
+
+    m_VisibleButtonCount = 0;
+    for (int i = 0; i < count; i++)
+    {
+        TBBUTTON btn;
+        TBBUTTONINFO tbbi = { sizeof(tbbi) };
+        BOOL bVisible = IsItemVisible(GetItemData(i));
+
+        if (bVisible)
+            m_VisibleButtonCount++;
+
+        GetButton(i, &btn);
+        BOOL bShown = !(btn.fsState & TBSTATE_HIDDEN);
+        if (bShown == bVisible)
+            continue;
+
+        tbbi.dwMask = TBIF_BYINDEX | TBIF_STATE;
+        tbbi.fsState = bVisible ? (btn.fsState & ~TBSTATE_HIDDEN) : (btn.fsState | TBSTATE_HIDDEN);
+        SetButtonInfo(i, &tbbi);
+    }
+}
+
+VOID CNotifyToolbar::ApplyButtonSize()
+{
+    if (m_bModern)
+        SetButtonSize(ShellScaleForDpi(32), m_cyModern);
+    else
+        SetButtonSize(TrayIconRenderSize(), TrayIconRenderSize());
+}
+
+VOID CNotifyToolbar::SetModern(BOOL bModern, INT cyButton)
+{
+    if (bModern == m_bModern && (!bModern || cyButton == m_cyModern))
+        return;
+
+    m_bModern = bModern;
+    m_cyModern = cyButton;
+    RefreshToolbarMetrics(TRUE);
+    ApplyButtonSize();
+    UpdateVisibility();
+}
+
+int CNotifyToolbar::IndexFromCommand(int idCommand)
+{
+    return (int)SendMessageW(TB_COMMANDTOINDEX, idCommand, 0);
+}
+
+VOID CNotifyToolbar::GetIcons(INT Filter, PTRAYICONLIST pList)
+{
+    static const INT QuickSettingsOrder[] = { TRAYICON_NETWORK, TRAYICON_VOLUME, TRAYICON_POWER };
+    int count = GetButtonCount();
+    UINT Pass, PassCount = (Filter == TRAYICONS_QUICKSETTINGS) ? _countof(QuickSettingsOrder) : 1;
+
+    pList->himl = m_ImageList;
+    pList->cItems = 0;
+    if (!m_bModern)
+        return;
+
+    for (Pass = 0; Pass < PassCount; Pass++)
+    {
+        for (int i = 0; i < count && pList->cItems < _countof(pList->Items); i++)
+        {
+            InternalIconData *pItem = GetItemData(i);
+            TBBUTTON btn;
+            PTRAYICONITEM pOut;
+
+            if (pItem->dwState & NIS_HIDDEN)
+                continue;
+            if (Filter == TRAYICONS_QUICKSETTINGS)
+            {
+                if (pItem->Kind != QuickSettingsOrder[Pass])
+                    continue;
+            }
+            else if (pItem->Kind != TRAYICON_APP || IsItemVisible(pItem))
+            {
+                continue;
+            }
+
+            GetButton(i, &btn);
+            pOut = &pList->Items[pList->cItems++];
+            pOut->hWnd = pItem->hWnd;
+            pOut->uID = pItem->uID;
+            pOut->Kind = pItem->Kind;
+            pOut->iImage = btn.iBitmap;
+            StringCchCopyW(pOut->szTip, _countof(pOut->szTip), pItem->szTip);
+        }
+    }
+}
+
+BOOL CNotifyToolbar::ForwardIconEvent(CONST TRAYICONEVENT *pEvent)
+{
+    InternalIconData *pItem;
+
+    if (FindItem(pEvent->hWnd, pEvent->uID, &pItem) < 0)
+        return FALSE;
+
+    if (pEvent->uMsg == WM_CONTEXTMENU || pEvent->uMsg == NIN_SELECT)
+    {
+        if (pItem->uVersionCopy >= NOTIFYICON_VERSION && ::IsWindow(pItem->hWnd))
+        {
+            ::SendNotifyMessage(pItem->hWnd, pItem->uCallbackMessage, pItem->uID, pEvent->uMsg);
+        }
+        return TRUE;
+    }
+
+    SendNotifyCallback(pItem, pEvent->uMsg);
+    return TRUE;
+}
+
+BOOL CNotifyToolbar::SetPromoted(HWND hWnd, UINT uID, BOOL bPromoted)
+{
+    InternalIconData *pItem;
+
+    if (FindItem(hWnd, uID, &pItem) < 0 || pItem->Kind != TRAYICON_APP)
+        return FALSE;
+
+    pItem->bPromoted = bPromoted;
+    TraySavePromoted(pItem);
+    UpdateVisibility();
+    return TRUE;
+}
+
+UINT CNotifyToolbar::GetLayoutSignature()
+{
+    UINT nQuickSettings = 0, nOverflow = 0;
+    int count = GetButtonCount();
+
+    if (!m_bModern)
+        return 0;
+
+    for (int i = 0; i < count; i++)
+    {
+        InternalIconData *pItem = GetItemData(i);
+
+        if (pItem->dwState & NIS_HIDDEN)
+            continue;
+        if (pItem->Kind != TRAYICON_APP)
+            nQuickSettings++;
+        else if (!IsItemVisible(pItem))
+            nOverflow++;
+    }
+    return (nQuickSettings << 1) | (nOverflow ? 1 : 0);
+}
+
+VOID CNotifyToolbar::NotifyParentRealign()
+{
+    NMHDR nmh = {GetParent(), 0, NTNWM_REALIGN};
+    GetParent().SendMessage(WM_NOTIFY, 0, (LPARAM) &nmh);
+}
+
+LRESULT CNotifyToolbar::DrawModernItem(NMCUSTOMDRAW *pcd)
+{
+    INT index = IndexFromCommand((INT)pcd->dwItemSpec);
+    INT cx, cy, iState = 0;
+    TBBUTTON btn;
+    RECT rcPill;
+
+    if (index < 0 || !GetButton(index, &btn))
+        return CDRF_SKIPDEFAULT;
+
+    if (pcd->uItemState & CDIS_SELECTED)
+        iState = TRAY_PILL_PRESSED;
+    else if (pcd->uItemState & CDIS_HOT)
+        iState = TRAY_PILL_HOT;
+    ShellGetTrayPillRect(&pcd->rc, &rcPill);
+    ShellDrawTrayPill(pcd->hdc, &rcPill, iState);
+
+    if (btn.iBitmap >= 0 && ImageList_GetIconSize(m_ImageList, &cx, &cy))
+    {
+        ImageList_Draw(m_ImageList, btn.iBitmap, pcd->hdc,
+                       pcd->rc.left + (pcd->rc.right - pcd->rc.left - cx) / 2,
+                       pcd->rc.top + (pcd->rc.bottom - pcd->rc.top - cy) / 2,
+                       ILD_TRANSPARENT);
+    }
+    return CDRF_SKIPDEFAULT;
 }
 
 VOID CNotifyToolbar::ResizeImagelist()
@@ -1172,7 +1555,7 @@ VOID CNotifyToolbar::ResizeImagelist()
         SetButtonInfo(i, &tbbi);
     }
 
-    SetButtonSize(TrayIconRenderSize(), TrayIconRenderSize());
+    ApplyButtonSize();
 }
 
 LRESULT CNotifyToolbar::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -1308,6 +1691,52 @@ LRESULT CNotifyToolbar::OnMouseEvent(UINT uMsg, WPARAM wParam, LPARAM lParam, BO
     POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
     INT iBtn = HitTest(&pt);
 
+    if (m_bModern)
+    {
+        if (uMsg == WM_LBUTTONDOWN)
+        {
+            m_iPressed = iBtn;
+            m_ptPressed = pt;
+            m_bDragging = FALSE;
+        }
+        else if (uMsg == WM_MOUSEMOVE && (wParam & MK_LBUTTON) && m_iPressed >= 0 && !m_bDragging &&
+                 (abs(pt.x - m_ptPressed.x) > GetSystemMetrics(SM_CXDRAG) ||
+                  abs(pt.y - m_ptPressed.y) > GetSystemMetrics(SM_CYDRAG)))
+        {
+            m_bDragging = TRUE;
+        }
+        else if (uMsg == WM_LBUTTONUP && m_bDragging)
+        {
+            POINT ptScreen = pt;
+            RECT rcTaskbar;
+            InternalIconData *pItem = NULL;
+
+            if (m_iPressed >= 0 && m_iPressed < GetButtonCount())
+                pItem = GetItemData(m_iPressed);
+            m_iPressed = -1;
+            m_bDragging = FALSE;
+
+            ClientToScreen(&ptScreen);
+            ::GetWindowRect(GetAncestor(m_hWnd, GA_ROOT), &rcTaskbar);
+            if (pItem && pItem->Kind == TRAYICON_APP && !PtInRect(&rcTaskbar, ptScreen))
+            {
+                pItem->bPromoted = FALSE;
+                TraySavePromoted(pItem);
+                UpdateVisibility();
+                NotifyParentRealign();
+            }
+            bHandled = FALSE;
+            return FALSE;
+        }
+
+        if (m_bDragging)
+        {
+            SetCursor(LoadCursorW(NULL, IDC_HAND));
+            bHandled = FALSE;
+            return FALSE;
+        }
+    }
+
     if (iBtn >= 0)
     {
         SendMouseEvent(iBtn, uMsg, wParam);
@@ -1411,11 +1840,22 @@ void CNotifyToolbar::Initialize(HWND hWndParent, CBalloonQueue * queue)
 
     RefreshToolbarMetrics(TRUE);
 
-    SetButtonSize(TrayIconRenderSize(), TrayIconRenderSize());
+    ApplyButtonSize();
 }
 
 void CNotifyToolbar::RefreshToolbarMetrics(BOOL bForceRefresh = FALSE)
 {
+    if (m_bModern)
+    {
+        if (bForceRefresh)
+        {
+            TBMETRICS tbm = {sizeof(tbm)};
+            tbm.dwMask = TBMF_BARPAD | TBMF_BUTTONSPACING | TBMF_PAD;
+            SetMetrics(&tbm);
+        }
+        return;
+    }
+
     // Toolbar metrics only needs to be refreshed for the automatic setting and first launch
     if (g_TaskbarSettings.eCompactTrayIcons == TrayIconsMode::TIM_Default ||
         bForceRefresh)
@@ -1507,6 +1947,7 @@ BOOL CSysPagerWnd::NotifyIcon(DWORD dwMessage, _In_ CONST NOTIFYICONDATA *iconDa
     BOOL ret = FALSE;
 
     int VisibleButtonCount = Toolbar.GetVisibleButtonCount();
+    UINT LayoutSignature = Toolbar.GetLayoutSignature();
 
     TRACE("NotifyIcon received. Code=%d\n", dwMessage);
     switch (dwMessage)
@@ -1545,10 +1986,17 @@ BOOL CSysPagerWnd::NotifyIcon(DWORD dwMessage, _In_ CONST NOTIFYICONDATA *iconDa
         return FALSE;
     }
 
-    if (VisibleButtonCount != Toolbar.GetVisibleButtonCount())
+    if (VisibleButtonCount != Toolbar.GetVisibleButtonCount() ||
+        LayoutSignature != Toolbar.GetLayoutSignature())
     {
         /* Ask the parent to resize */
         NMHDR nmh = {GetParent(), 0, NTNWM_REALIGN};
+        GetParent().SendMessage(WM_NOTIFY, 0, (LPARAM) &nmh);
+    }
+
+    if (Toolbar.IsModern())
+    {
+        NMHDR nmh = {m_hWnd, 0, NTNWM_ICONSCHANGED};
         GetParent().SendMessage(WM_NOTIFY, 0, (LPARAM) &nmh);
     }
 
@@ -1569,6 +2017,14 @@ void CSysPagerWnd::GetSize(IN BOOL IsHorizontal, IN PSIZE size)
         size->cx -= size->cx % ShellTrayIconSize();
 
 #else
+    if (IsHorizontal == TNWM_MINSIZE_MODERN)
+    {
+        Toolbar.SetModern(TRUE, size->cy);
+        size->cx = Toolbar.GetVisibleButtonCount() * ShellScaleForDpi(32);
+        return;
+    }
+    Toolbar.SetModern(FALSE, 0);
+
     INT rows = 0;
     INT columns = 0;
     INT cyButton = TrayIconRenderSize() + ShellScaleForDpi(2);
@@ -1616,9 +2072,48 @@ LRESULT CSysPagerWnd::OnCustomDraw(INT uCode, LPNMHDR hdr, BOOL& bHandled)
         return CDRF_NOTIFYITEMDRAW;
 
     case CDDS_ITEMPREPAINT:
+        if (Toolbar.IsModern())
+            return Toolbar.DrawModernItem(cdraw);
         return TBCDRF_NOBACKGROUND | TBCDRF_NOEDGES | TBCDRF_NOOFFSET | TBCDRF_NOMARK | TBCDRF_NOETCHEDEFFECT;
     }
     return TRUE;
+}
+
+LRESULT CSysPagerWnd::OnGetTrayIcons(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    PTRAYICONLIST pList = (PTRAYICONLIST)lParam;
+
+    if (!pList)
+        return FALSE;
+    Toolbar.GetIcons((INT)wParam, pList);
+    return TRUE;
+}
+
+LRESULT CSysPagerWnd::OnTrayIconEvent(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    PTRAYICONEVENT pEvent = (PTRAYICONEVENT)lParam;
+
+    if (!pEvent)
+        return FALSE;
+    return Toolbar.ForwardIconEvent(pEvent);
+}
+
+LRESULT CSysPagerWnd::OnSetPromoted(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    PTRAYICONEVENT pEvent = (PTRAYICONEVENT)lParam;
+
+    if (!pEvent || !Toolbar.SetPromoted(pEvent->hWnd, pEvent->uID, (BOOL)wParam))
+        return FALSE;
+
+    NMHDR nmh = {m_hWnd, 0, NTNWM_REALIGN};
+    GetParent().SendMessage(WM_NOTIFY, 0, (LPARAM)&nmh);
+    return TRUE;
+}
+
+LRESULT CSysPagerWnd::OnForwardNotify(INT uCode, LPNMHDR hdr, BOOL& bHandled)
+{
+    NMHDR nmh = {m_hWnd, 0, (UINT)uCode};
+    return GetParent().SendMessage(WM_NOTIFY, 0, (LPARAM)&nmh);
 }
 
 LRESULT CSysPagerWnd::OnCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -1629,7 +2124,7 @@ LRESULT CSysPagerWnd::OnCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& b
     if (HIWORD(wParam) != BN_CLICKED)
         return 0;
 
-    INT iBtn = LOWORD(wParam);
+    INT iBtn = Toolbar.IndexFromCommand(LOWORD(wParam));
     if (iBtn < 0)
         return 0;
 

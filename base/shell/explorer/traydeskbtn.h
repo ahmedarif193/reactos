@@ -33,6 +33,7 @@ class CTrayShowDesktopButton :
 public:
     BOOL m_bPressed;
     BOOL m_bHorizontal;
+    BOOL m_bModern;
 
     DECLARE_WND_CLASS_EX(szTrayShowDesktopButton, CS_HREDRAW | CS_VREDRAW, COLOR_3DFACE)
 

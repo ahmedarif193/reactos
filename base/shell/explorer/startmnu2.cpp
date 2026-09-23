@@ -137,15 +137,33 @@ static COLORREF SM2Mix(COLORREF a, COLORREF b, int t);
 
 VOID StartMenu2_GetFlyoutPalette(OUT SM2_FLYOUT_PALETTE *pPal)
 {
+    const SM2PALETTE *pBase;
+    COLORREF crTaskbar;
+    BOOL bDark;
+
     SM2SelectPalette();
-    pPal->PanelBg = g_SM2Pal.LeftBg;
-    pPal->PanelText = g_SM2Pal.LeftText;
-    pPal->DimText = SM2Mix(g_SM2Pal.LeftText, g_SM2Pal.LeftBg, 28);
-    pPal->HotFill = g_SM2Pal.HotFill;
-    pPal->HotBorder = g_SM2Pal.HotBorder;
-    pPal->Border = g_SM2Pal.Border;
+    pBase = &g_SM2Pal;
+    bDark = SM2IsDarkTheme();
+    pPal->PanelBg = pBase->LeftBg;
+    if (ShellGetTaskbarMaterial(&crTaskbar))
+    {
+        bDark = (GetRValue(crTaskbar) * 299 + GetGValue(crTaskbar) * 587 +
+                 GetBValue(crTaskbar) * 114) / 1000 < 128;
+        pBase = bDark ? &g_SM2PalDark : &g_SM2PalLight;
+        pPal->PanelBg = crTaskbar;
+    }
+    pPal->PanelText = pBase->LeftText;
+    pPal->DimText = SM2Mix(pBase->LeftText, pPal->PanelBg, 28);
+    pPal->HotFill = pBase->HotFill;
+    pPal->HotBorder = pBase->HotBorder;
+    pPal->Border = pBase->Border;
     pPal->AccentBg = GetSysColor(COLOR_HIGHLIGHT);
     pPal->AccentText = RGB(255, 255, 255);
+    if (bDark)
+    {
+        pPal->AccentBg = SM2Mix(pPal->AccentBg, RGB(255, 255, 255), 110);
+        pPal->AccentText = RGB(0, 0, 0);
+    }
 }
 
 static COLORREF

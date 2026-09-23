@@ -1,5 +1,6 @@
 #include "precomp.h"
 #include <winver.h>
+#include <math.h>
 
 typedef struct _LANGCODEPAGE
 {
@@ -236,4 +237,140 @@ GetVersionInfoString(IN LPCWSTR szFileName,
     }
 
     return bRet;
+}
+
+static INT
+TrayPillCoverage(INT x, INT y, INT cx, INT cy, INT r)
+{
+    FLOAT fx, fy, dx, dy, d;
+
+    if (r <= 0)
+        return 256;
+    fx = x + 0.5f;
+    fy = y + 0.5f;
+    if (fx < r)
+        dx = r - fx;
+    else if (fx > cx - r)
+        dx = fx - (cx - r);
+    else
+        return 256;
+    if (fy < r)
+        dy = r - fy;
+    else if (fy > cy - r)
+        dy = fy - (cy - r);
+    else
+        return 256;
+    d = r + 0.5f - sqrtf(dx * dx + dy * dy);
+    if (d <= 0.0f)
+        return 0;
+    if (d >= 1.0f)
+        return 256;
+    return (INT)(d * 256.0f);
+}
+
+VOID
+ShellDrawTrayPill(IN HDC hdc, IN const RECT *prc, IN INT iState)
+{
+    static const BYTE s_DarkFill[] = { 0, 15, 10, 21 };
+    static const BYTE s_DarkEdge[] = { 0, 26, 20, 32 };
+    static const BYTE s_LightFill[] = { 0, 9, 6, 13 };
+    INT cx = prc->right - prc->left, cy = prc->bottom - prc->top;
+    INT r = ShellScaleForDpi(4);
+    BITMAPINFO bmi;
+    PULONG pBits = NULL;
+    HBITMAP hbm;
+    HDC hdcMem;
+    HGDIOBJ hbmOld;
+    ULONGLONG Sum = 0;
+    BOOL bLight;
+    INT x, y, i;
+
+    if (iState <= 0 || iState >= (INT)_countof(s_DarkFill) || cx <= 0 || cy <= 0)
+        return;
+
+    hdcMem = CreateCompatibleDC(hdc);
+    if (!hdcMem)
+        return;
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = cx;
+    bmi.bmiHeader.biHeight = -cy;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    hbm = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (PVOID *)&pBits, NULL, 0);
+    if (!hbm || !pBits)
+    {
+        if (hbm)
+            DeleteObject(hbm);
+        DeleteDC(hdcMem);
+        return;
+    }
+    hbmOld = SelectObject(hdcMem, hbm);
+    if (BitBlt(hdcMem, 0, 0, cx, cy, hdc, prc->left, prc->top, SRCCOPY))
+    {
+        GdiFlush();
+        for (i = 0; i < cx * cy; i++)
+        {
+            ULONG px = pBits[i];
+            Sum += ((px >> 16) & 0xFF) * 299 + ((px >> 8) & 0xFF) * 587 + (px & 0xFF) * 114;
+        }
+        bLight = (Sum / ((ULONGLONG)cx * cy * 1000)) >= 140;
+
+        for (y = 0; y < cy; y++)
+        {
+            for (x = 0; x < cx; x++)
+            {
+                INT Coverage = TrayPillCoverage(x, y, cx, cy, r);
+                INT Alpha, Target, rr, gg, bb;
+                ULONG px;
+
+                if (!Coverage)
+                    continue;
+                if (bLight)
+                    Alpha = s_LightFill[iState];
+                else
+                    Alpha = (y == 0) ? s_DarkEdge[iState] : s_DarkFill[iState];
+                Alpha = Alpha * Coverage / 256;
+                Target = bLight ? 0 : 255;
+                px = pBits[y * cx + x];
+                rr = (px >> 16) & 0xFF;
+                gg = (px >> 8) & 0xFF;
+                bb = px & 0xFF;
+                rr += (Target - rr) * Alpha / 255;
+                gg += (Target - gg) * Alpha / 255;
+                bb += (Target - bb) * Alpha / 255;
+                pBits[y * cx + x] = ((ULONG)rr << 16) | ((ULONG)gg << 8) | (ULONG)bb;
+            }
+        }
+        BitBlt(hdc, prc->left, prc->top, cx, cy, hdcMem, 0, 0, SRCCOPY);
+    }
+    SelectObject(hdcMem, hbmOld);
+    DeleteObject(hbm);
+    DeleteDC(hdcMem);
+}
+
+VOID
+ShellGetTrayPillRect(IN const RECT *prcClient, OUT RECT *prcPill)
+{
+    INT cyPill = min(ShellScaleForDpi(40), (INT)(prcClient->bottom - prcClient->top));
+
+    *prcPill = *prcClient;
+    prcPill->top += ((prcClient->bottom - prcClient->top) - cyPill) / 2;
+    prcPill->bottom = prcPill->top + cyPill;
+}
+
+VOID
+ShellDrawTrayGlyph(IN HDC hdc, IN const RECT *prc, IN UINT nIconId)
+{
+    INT cx = GetSystemMetrics(SM_CXSMICON), cy = GetSystemMetrics(SM_CYSMICON);
+    HICON hIcon = (HICON)LoadImageW(hExplorerInstance, MAKEINTRESOURCEW(nIconId),
+                                    IMAGE_ICON, cx, cy, LR_SHARED);
+
+    if (hIcon)
+    {
+        DrawIconEx(hdc, prc->left + (prc->right - prc->left - cx) / 2,
+                   prc->top + (prc->bottom - prc->top - cy) / 2,
+                   hIcon, cx, cy, 0, NULL, DI_NORMAL);
+    }
 }

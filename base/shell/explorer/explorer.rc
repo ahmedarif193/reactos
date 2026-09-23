@@ -95,6 +95,13 @@ IDI_FLU_BATTCHG     ICON "res/ico/fluent/battery_charge.ico"
 IDI_FLU_BATTWARN    ICON "res/ico/fluent/battery_warning.ico"
 IDI_FLU_NETADAPTER  ICON "res/ico/fluent/network_wired.ico"
 IDI_FLU_ADD         ICON "res/ico/fluent/add_filled.ico"
+IDI_FLU_TRAYCHEVUP  ICON "res/ico/fluent/tray_chevron_up.ico"
+IDI_FLU_TRAYCHEVDOWN ICON "res/ico/fluent/tray_chevron_down.ico"
+IDI_FLU_BELL        ICON "res/ico/fluent/tray_alert.ico"
+IDI_FLU_BELLUNREAD  ICON "res/ico/fluent/tray_alert_unread.ico"
+IDI_FLU_TRAYACCESS  ICON "res/ico/fluent/tray_accessibility.ico"
+IDI_FLU_TRAYCHEVRIGHT ICON "res/ico/fluent/tray_chevron_right.ico"
+IDI_FLU_TRAYDISMISS ICON "res/ico/fluent/tray_dismiss.ico"
 
 
 /*******************************************************************************\

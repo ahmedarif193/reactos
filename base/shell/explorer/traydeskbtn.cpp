@@ -26,12 +26,16 @@ CTrayShowDesktopButton::CTrayShowDesktopButton() :
     m_bHovering(FALSE),
     m_hWndTaskbar(NULL),
     m_bPressed(FALSE),
-    m_bHorizontal(FALSE)
+    m_bHorizontal(FALSE),
+    m_bModern(FALSE)
 {
 }
 
 INT CTrayShowDesktopButton::WidthOrHeight() const
 {
+    if (m_bModern)
+        return ShellScaleForDpi(12);
+
     if (IsThemeActive() && !m_highContrastMode)
     {
         if (m_drawWithDedicatedBackground)
@@ -317,6 +321,28 @@ VOID CTrayShowDesktopButton::OnDraw(HDC hdc, LPRECT prc)
     RECT rc = { prc->left, prc->top, prc->right, prc->bottom };
     LPRECT lpRc = &rc;
     HBRUSH hbrBackground = NULL;
+
+    if (m_bModern)
+    {
+        ::DrawThemeParentBackground(m_hWnd, hdc, prc);
+        if (m_bHovering || m_bPressed)
+        {
+            INT x = prc->left + ShellScaleForDpi(6);
+            INT cyLine = ShellScaleForDpi(16);
+            INT y = (prc->top + prc->bottom - cyLine) / 2;
+            COLORREF crBack = GetPixel(hdc, x, y);
+            BOOL bLight = (crBack != CLR_INVALID) &&
+                          (GetRValue(crBack) * 299 + GetGValue(crBack) * 587 + GetBValue(crBack) * 114) / 1000 >= 140;
+            RECT rcLine = { x, y, x + ShellScaleForDpi(1), y + cyLine };
+            HBRUSH hbrLine = CreateSolidBrush(bLight ? RGB(118, 118, 118) : RGB(152, 152, 152));
+            if (hbrLine)
+            {
+                FillRect(hdc, &rcLine, hbrLine);
+                DeleteObject(hbrLine);
+            }
+        }
+        return;
+    }
 
     if (m_hTheme)
     {

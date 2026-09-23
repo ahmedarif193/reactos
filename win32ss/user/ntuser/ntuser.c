@@ -37,6 +37,9 @@ ATOM AtomDwmContentBackdrop;
 ATOM AtomDwmBackdropNcExtend;
 ATOM AtomDwmBackdropNcExtendLeft;
 ATOM AtomDwmCornerRadius;
+ATOM AtomDwmTransition;
+ATOM AtomDwmTransitionFromLT;
+ATOM AtomDwmTransitionFromRB;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -162,6 +165,9 @@ InitUserAtoms(VOID)
     AtomDwmBackdropNcExtendLeft = IntAddUserPropertyAtom(
         DWM_PROP_BACKDROP_NC_EXTEND_LEFT);
     AtomDwmCornerRadius = IntAddUserPropertyAtom(DWM_PROP_CORNER_RADIUS);
+    AtomDwmTransition = IntAddUserPropertyAtom(DWM_PROP_TRANSITION);
+    AtomDwmTransitionFromLT = IntAddUserPropertyAtom(DWM_PROP_TRANSITION_FROM_LT);
+    AtomDwmTransitionFromRB = IntAddUserPropertyAtom(DWM_PROP_TRANSITION_FROM_RB);
 
     /*
      * FIXME: AddPropW uses the global kernel atom table, thus leading to conflicts if we use
