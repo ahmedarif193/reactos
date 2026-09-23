@@ -5513,14 +5513,31 @@ NTSTATUS WINAPI wow64_NtUserUnregisterClass( UINT *args )
 {
     UNICODE_STRING32 *name32 = get_ptr( &args );
     HINSTANCE instance = get_ptr( &args );
+#ifdef __REACTOS__
+    ROS_CLSMENUNAME32 *menu_name32 = get_ptr( &args );
+
+    ROS_CLSMENUNAME64 menu_name = { 0 };
+#else
     ULONG *menu_name32 = get_ptr( &args );
 
     struct client_menu_name *menu_name;
+#endif
     UNICODE_STRING name;
     BOOL ret;
 
+#ifdef __REACTOS__
+    ret = NtUserUnregisterClass( unicode_str_32to64( &name, name32 ), instance,
+                                 menu_name32 ? (struct client_menu_name **)&menu_name : NULL );
+    if (ret && menu_name32)
+    {
+        menu_name32->pszClientAnsiMenuName = (ULONG)menu_name.pszClientAnsiMenuName;
+        menu_name32->pwszClientUnicodeMenuName = (ULONG)menu_name.pwszClientUnicodeMenuName;
+        menu_name32->pusMenuName = (ULONG)menu_name.pusMenuName;
+    }
+#else
     ret = NtUserUnregisterClass( unicode_str_32to64( &name, name32 ), instance, &menu_name );
     if (ret) *menu_name32 = PtrToUlong( menu_name );
+#endif
     return ret;
 }
 
