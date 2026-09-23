@@ -146,6 +146,37 @@ KiGetGdiBatchCount(
     return GdiBatchCount;
 }
 
+static
+DECLSPEC_NOINLINE
+NTSTATUS
+KiArm64ConvertServiceThreadToGui(
+    _In_ PKTHREAD Thread)
+{
+    ULONG_PTR RegisterArguments[KI_ARM64_REGISTER_ARGUMENTS];
+    PKTRAP_FRAME TrapFrame = Thread->TrapFrame;
+    NTSTATUS Status;
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
+    {
+        RegisterArguments[Index] = TrapFrame->X[Index];
+    }
+
+    Status = PsConvertToGuiThread();
+
+    TrapFrame = Thread->TrapFrame;
+    if (NT_SUCCESS(Status) ||
+        Status == STATUS_ALREADY_WIN32)
+    {
+        for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
+        {
+            TrapFrame->X[Index] = RegisterArguments[Index];
+        }
+    }
+
+    return Status;
+}
+
 VOID
 KiSystemService(
     _Inout_ PKTHREAD Thread,
@@ -161,7 +192,6 @@ KiSystemService(
     ULONG Index;
     PVOID StackArguments[KI_ARM64_MAX_SYSCALL_ARGUMENTS -
                          KI_ARM64_REGISTER_ARGUMENTS];
-    ULONG_PTR RegisterArguments[8];
     PVOID *UserArguments = NULL;
     PVOID SystemCall;
     KIRQL OldIrql;
@@ -231,33 +261,11 @@ KiSystemService(
             {
                 NTSTATUS ConvertStatus;
 
-                /*
-                 * Snapshot the register arguments: PsConvertToGuiThread switches
-                 * kernel stacks, and the relocated trap frame is re-seeded from
-                 * this copy below. Done here (once per thread) instead of on
-                 * every system call.
-                 */
-                for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
-                {
-                    RegisterArguments[Index] = TrapFrame->X[Index];
-                }
-
-                ConvertStatus = PsConvertToGuiThread();
-
-                /*
-                 * The stack may have moved even when a win32k callout failed.
-                 * Refresh the frame before either dispatch or failure writes;
-                 * PsConvertToGuiThread has already released the old stack.
-                 */
+                ConvertStatus = KiArm64ConvertServiceThreadToGui(Thread);
                 TrapFrame = Thread->TrapFrame;
                 if (NT_SUCCESS(ConvertStatus) ||
                     ConvertStatus == STATUS_ALREADY_WIN32)
                 {
-                    for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
-                    {
-                        TrapFrame->X[Index] = RegisterArguments[Index];
-                    }
-
                     /* Retry with the new service table */
 #if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
                     ServiceTable = (ULONG_PTR)(Thread->GuiThread ?
@@ -489,18 +497,6 @@ KiInitializeUserApc(
         return;
     }
 
-    LocalApcFrame.Context = LocalContext;
-    LocalApcFrame.MachineFrame.Pc = TrapFrame->Pc;
-    LocalApcFrame.MachineFrame.Sp = TrapFrame->Sp;
-    Status = KiArm64CopyToCurrentUserBuffer(ApcFrame,
-                                            &LocalApcFrame,
-                                            sizeof(LocalApcFrame),
-                                            "uapc");
-    if (!NT_SUCCESS(Status))
-    {
-        return;
-    }
-
     /*
      * ARM64 FIX: SystemArgument1 may be PspSystemDllBase (a kernel address
      * pointing into the kernel ntdll mapping). If it is a kernel-range
@@ -517,6 +513,23 @@ KiInitializeUserApc(
         {
             UserSystemArgument1 = Converted;
         }
+    }
+
+    LocalApcFrame.NormalRoutine = UserNormalRoutine;
+    LocalApcFrame.NormalContext = NormalContext;
+    LocalApcFrame.SystemArgument1 = UserSystemArgument1;
+    LocalApcFrame.SystemArgument2 = SystemArgument2;
+    LocalApcFrame.Alertable = TRUE;
+    LocalApcFrame.Context = LocalContext;
+    LocalApcFrame.MachineFrame.Pc = TrapFrame->Pc;
+    LocalApcFrame.MachineFrame.Sp = TrapFrame->Sp;
+    Status = KiArm64CopyToCurrentUserBuffer(ApcFrame,
+                                            &LocalApcFrame,
+                                            sizeof(LocalApcFrame),
+                                            "uapc");
+    if (!NT_SUCCESS(Status))
+    {
+        return;
     }
 
     TrapFrame->X0 = (ULONG_PTR)NormalContext;
@@ -538,6 +551,7 @@ KiUserModeCallout(
     PEPROCESS Process;
     PKTRAP_FRAME TrapFrame;
     KTRAP_FRAME CallbackTrapFrame;
+    KI_ARM64_SERVICE_CONTEXT CalloutContext;
     PKIPCR Pcr;
     PVOID UserCallbackDispatcher;
     ULONG_PTR InitialStack;
@@ -592,9 +606,22 @@ KiUserModeCallout(
     CallbackTrapFrame.Lr = (ULONG_PTR)UserCallbackDispatcher;
     CallbackTrapFrame.X18 = (ULONG_PTR)CurrentThread->Teb;
 
+    RtlZeroMemory(&CalloutContext, sizeof(CalloutContext));
+    CalloutContext.VfpState.Link = KI_ARM64_SERVICE_CONTEXT_LINK;
+    if (TrapFrame->VfpState != NULL)
+    {
+        CalloutContext.VfpState.Fpcr = TrapFrame->VfpState->Fpcr;
+    }
+    CalloutContext.ExceptionFrame.Fpcr = CalloutContext.VfpState.Fpcr;
+    CalloutContext.ExceptionFrame.Fp = CallbackTrapFrame.Fp;
+    CalloutContext.ExceptionFrame.Lr = CallbackTrapFrame.Lr;
+    CalloutContext.ExceptionFrame.TrapFrame = (ULONG64)(ULONG_PTR)&CallbackTrapFrame;
+    CallbackTrapFrame.VfpState = &CalloutContext.VfpState;
+
     _enable();
 
-    KiUserCallbackExit(&CallbackTrapFrame);
+    KiTrapReturn(&CallbackTrapFrame, &CalloutContext.ExceptionFrame);
+    UNREACHABLE;
 }
 
 VOID
@@ -608,6 +635,8 @@ KiSetupUserCalloutFrame(
     UserCalloutFrame->Buffer = Buffer;
     UserCalloutFrame->Length = BufferLength;
     UserCalloutFrame->ApiNumber = ApiNumber;
+    UserCalloutFrame->Reserved = 0;
+    UserCalloutFrame->Lr = TrapFrame->Lr;
     UserCalloutFrame->MachineFrame.Pc = TrapFrame->Pc;
     UserCalloutFrame->MachineFrame.Sp = TrapFrame->Sp;
 }
@@ -638,8 +667,12 @@ KeUserModeCallback(
 
     _SEH2_TRY
     {
-        UserArguments = (PUCHAR)ALIGN_DOWN_POINTER_BY(OldStack - ArgumentLength, 16);
-        CalloutFrame = ((PUCALLOUT_FRAME)UserArguments) - 1;
+        CalloutFrame = (PUCALLOUT_FRAME)ALIGN_DOWN_POINTER_BY(OldStack -
+                                                              sizeof(UCALLOUT_FRAME) -
+                                                              ArgumentLength -
+                                                              16,
+                                                              16);
+        UserArguments = (PUCHAR)(CalloutFrame + 1);
 
         for (Page = PAGE_ROUND_DOWN(OldStack); Page > (ULONG_PTR)CalloutFrame;)
         {
@@ -730,14 +763,18 @@ NtCallbackReturn(
 
     if (CallbackStatus == STATUS_CALLBACK_POP_STACK)
     {
+        ULONG64 TrapFrameLink = TrapFrame->TrapFrame;
+
         TrapVfpState = TrapFrame->VfpState;
         CallbackVfpState = CallbackTrapFrame->VfpState;
         *TrapFrame = *CallbackTrapFrame;
         if ((TrapVfpState != NULL) && (CallbackVfpState != NULL))
         {
-            *TrapVfpState = *CallbackVfpState;
+            TrapVfpState->Fpcr = CallbackVfpState->Fpcr;
+            TrapVfpState->Fpsr = CallbackVfpState->Fpsr;
         }
         TrapFrame->VfpState = TrapVfpState;
+        TrapFrame->TrapFrame = TrapFrameLink;
     }
 
     if (Pcr != NULL)

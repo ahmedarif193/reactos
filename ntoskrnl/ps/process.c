@@ -1861,6 +1861,10 @@ PspCreateWow64ProcessParameters(IN HANDLE ProcessHandle,
     Parameters32->ShowWindowFlags = Captured.ShowWindowFlags;
     Parameters32->EnvironmentSize = (ULONG)EnvironmentSize;
     Parameters32->EnvironmentVersion = (ULONG)Captured.EnvironmentVersion;
+    Parameters32->ProcessGroupId = Captured.ProcessGroupId;
+    Parameters32->LoaderThreads = Captured.LoaderThreads;
+    Parameters32->DefaultThreadpoolThreadMaximum = Captured.DefaultThreadpoolThreadMaximum;
+    Parameters32->HeapMemoryTypeMask = Captured.HeapMemoryTypeMask;
 
     Offset = sizeof(*Parameters32);
     Status = PspAppendWow64String(&Captured.CurrentDirectory.DosPath, &Parameters32->CurrentDirectory.DosPath, (PUCHAR)Parameters32, TotalSize, &Offset);

@@ -280,6 +280,7 @@ PspGetOrSetContextKernelRoutine(
     PKTHREAD Thread;
     PKTRAP_FRAME TrapFrame = NULL;
     PKEXCEPTION_FRAME ExceptionFrame = NULL;
+    ULONG ContextFlags;
 
     PAGED_CODE();
 
@@ -305,16 +306,20 @@ PspGetOrSetContextKernelRoutine(
         (GetSetContext->Mode != KernelMode) &&
         (KiGetPreviousMode(TrapFrame) != UserMode))
     {
-        TrapFrame = NULL;
+        TrapFrame = KiArm64GetUserTrapFrame(Thread);
     }
 
     /* Recover the permanent user frame when no suitable frame is active. */
     if (TrapFrame == NULL)
     {
-        TrapFrame = KeGetTrapFrame(Thread);
+        TrapFrame = KiArm64GetBaseTrapFrame(Thread);
         ExceptionFrame = KeGetExceptionFrame(Thread);
     }
-    else
+    else if (KiArm64IsServiceHeaderFrame(TrapFrame))
+    {
+        ExceptionFrame = NULL;
+    }
+    else if ((ExceptionFrame = KiArm64GetAttachedExceptionFrame(TrapFrame)) == NULL)
     {
         /*
          * If we have a saved TrapFrame, the ExceptionFrame is located
@@ -330,11 +335,35 @@ PspGetOrSetContextKernelRoutine(
         /* Set context: Copy from GetSetContext->Context to trap frame */
         PspSetContext(TrapFrame, ExceptionFrame,
                       &GetSetContext->Context, GetSetContext->Mode);
+        if (ExceptionFrame == NULL)
+        {
+            KiArm64SetServiceNonvolatiles(TrapFrame, &GetSetContext->Context);
+        }
     }
     else
     {
         /* Get context: Copy from trap frame to GetSetContext->Context */
         PspGetContext(TrapFrame, ExceptionFrame, &GetSetContext->Context);
+        if (ExceptionFrame == NULL)
+        {
+            KiArm64GetServiceNonvolatiles(TrapFrame, &GetSetContext->Context);
+        }
+
+        ContextFlags = GetSetContext->Context.ContextFlags &
+                       ~(CONTEXT_EXCEPTION_REPORTING | CONTEXT_SERVICE_ACTIVE | CONTEXT_EXCEPTION_ACTIVE);
+        if (ContextFlags & CONTEXT_EXCEPTION_REQUEST)
+        {
+            ContextFlags |= CONTEXT_EXCEPTION_REPORTING;
+            if (TrapFrame->ExceptionActive == KEXCEPTION_ACTIVE_SERVICE_FRAME)
+            {
+                ContextFlags |= CONTEXT_SERVICE_ACTIVE;
+            }
+            else if (TrapFrame->ExceptionActive == KEXCEPTION_ACTIVE_EXCEPTION_FRAME)
+            {
+                ContextFlags |= CONTEXT_EXCEPTION_ACTIVE;
+            }
+        }
+        GetSetContext->Context.ContextFlags = ContextFlags;
     }
 
     /* Signal the waiting thread that we are done */

@@ -144,6 +144,7 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
                              ContextPointer->ContextFlags | CONTEXT_CONTROL,
                              UserMode);
 
+        TrapFrame->ExceptionActive = KEXCEPTION_ACTIVE_EXCEPTION_FRAME;
         TrapFrame->PreviousMode = UserMode;
         TrapFrame->ContextFromKFramesUnwound = FALSE;
         TrapFrame->DebugRegistersValid = FALSE;

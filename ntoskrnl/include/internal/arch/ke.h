@@ -31,6 +31,8 @@
 #include <internal/amd64/ke.h>
 #elif defined(_M_ARM64) || defined(__aarch64__)
 #include <internal/arm64/ke.h>
+/* TODO(riscv64): add internal/riscv64/ke.h with KI_SERVICE_EXCEPTION_STATE, KiEnterServiceException,
+   KiAbortServiceException, KiLeaveServiceException and a KeGetTrapFrame that returns the live user trap frame */
 #else
 #error "Unknown processor"
 #endif

@@ -576,7 +576,7 @@ KiGetLinkedTrapFrame(
  * kernel mode and Thread->TrapFrame is not active.
  */
 #define KARM64_USER_TRAP_FRAME_OFFSET 0x3E0
-#define KeGetTrapFrame(Thread) \
+#define KiArm64GetBaseTrapFrame(Thread) \
     ((PKTRAP_FRAME)((ULONG_PTR)((Thread)->InitialStack) - \
                      KARM64_USER_TRAP_FRAME_OFFSET))
 
@@ -593,7 +593,7 @@ KiGetLinkedTrapFrame(
  * This matches AMD64 and ARM32 behavior.
  */
 #define KeGetExceptionFrame(Thread) \
-    ((PKEXCEPTION_FRAME)((ULONG_PTR)KeGetTrapFrame(Thread) - sizeof(KEXCEPTION_FRAME)))
+    ((PKEXCEPTION_FRAME)((ULONG_PTR)KiArm64GetBaseTrapFrame(Thread) - sizeof(KEXCEPTION_FRAME)))
 
 #define KiGetPreviousMode(TrapFrame) \
     (((TrapFrame)->Spsr & 0xF) == 0 ? UserMode : KernelMode)
@@ -832,6 +832,144 @@ KiRestoreVfpState(_In_ PKARM64_VFP_STATE State);
  * complete snapshot before requesting a full vector restore.
  */
 #define KI_ARM64_PARTIAL_VFP_LINK ((PKARM64_VFP_STATE)(ULONG_PTR)1)
+#define KI_ARM64_SERVICE_VFP_LINK ((PKARM64_VFP_STATE)(ULONG_PTR)2)
+#define KI_ARM64_SERVICE_CONTEXT_LINK ((PKARM64_VFP_STATE)(ULONG_PTR)3)
+#define KI_ARM64_SERVICE_FRAME_LENGTH 0x160
+
+typedef struct DECLSPEC_ALIGN(16) _KI_ARM64_SERVICE_CONTEXT
+{
+    KEXCEPTION_FRAME ExceptionFrame;
+    PKARM64_VFP_STATE ServiceVfpState;
+    KARM64_VFP_STATE VfpState;
+} KI_ARM64_SERVICE_CONTEXT, *PKI_ARM64_SERVICE_CONTEXT;
+
+C_ASSERT((FIELD_OFFSET(KI_ARM64_SERVICE_CONTEXT, VfpState.V) & 0xF) == 0);
+
+FORCEINLINE
+BOOLEAN
+KiArm64IsServiceHeaderFrame(
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    return (TrapFrame->VfpState != NULL) &&
+           (TrapFrame->VfpState->Link == KI_ARM64_SERVICE_VFP_LINK);
+}
+
+FORCEINLINE
+PKEXCEPTION_FRAME
+KiArm64GetAttachedExceptionFrame(
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    if ((TrapFrame->VfpState == NULL) ||
+        (TrapFrame->VfpState->Link != KI_ARM64_SERVICE_CONTEXT_LINK))
+    {
+        return NULL;
+    }
+
+    return &CONTAINING_RECORD(TrapFrame->VfpState,
+                              KI_ARM64_SERVICE_CONTEXT,
+                              VfpState)->ExceptionFrame;
+}
+
+FORCEINLINE
+PKTRAP_FRAME
+KiArm64GetUserTrapFrame(
+    _In_ PKTHREAD Thread)
+{
+    PKTRAP_FRAME TrapFrame = Thread->TrapFrame;
+    ULONG Depth;
+
+    for (Depth = 0; (TrapFrame != NULL) && (Depth < 64); Depth++)
+    {
+        if (KiGetPreviousMode(TrapFrame) == UserMode)
+        {
+            return TrapFrame;
+        }
+
+        if (TrapFrame->ExceptionActive != KEXCEPTION_ACTIVE_SERVICE_FRAME)
+        {
+            break;
+        }
+
+        TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    }
+
+    return KiArm64GetBaseTrapFrame(Thread);
+}
+
+#define KeGetTrapFrame(Thread) KiArm64GetUserTrapFrame(Thread)
+
+BOOLEAN
+KiArm64GetServiceNonvolatiles(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _Inout_ PCONTEXT Context);
+
+BOOLEAN
+KiArm64SetServiceNonvolatiles(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context);
+
+PKEXCEPTION_FRAME
+KiArm64AttachServiceContext(
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _Out_ PKI_ARM64_SERVICE_CONTEXT ServiceContext,
+    _In_ BOOLEAN CaptureNonvolatiles);
+
+BOOLEAN
+KiArm64ContextNeedsNonvolatiles(
+    _In_ PCONTEXT Context,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+VOID
+KiArm64DetachServiceContext(
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _In_ PKI_ARM64_SERVICE_CONTEXT ServiceContext);
+
+typedef KI_ARM64_SERVICE_CONTEXT KI_SERVICE_EXCEPTION_STATE, *PKI_SERVICE_EXCEPTION_STATE;
+
+FORCEINLINE
+PKEXCEPTION_FRAME
+KiEnterServiceException(
+    _In_ PKTHREAD Thread,
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _In_opt_ PKEXCEPTION_FRAME ExceptionFrame,
+    _Out_ PKI_SERVICE_EXCEPTION_STATE State)
+{
+    UNREFERENCED_PARAMETER(Thread);
+
+    if (KiArm64IsServiceHeaderFrame(TrapFrame))
+    {
+        return KiArm64AttachServiceContext(TrapFrame,
+                                           State,
+                                           KiArm64ContextNeedsNonvolatiles(Context, PreviousMode));
+    }
+
+    *ExceptionFrame = *((PKEXCEPTION_FRAME)TrapFrame - 1);
+    return ExceptionFrame;
+}
+
+FORCEINLINE
+VOID
+KiAbortServiceException(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_opt_ PKEXCEPTION_FRAME ExceptionFrame,
+    _In_ PKI_SERVICE_EXCEPTION_STATE State)
+{
+    if (ExceptionFrame == &State->ExceptionFrame)
+    {
+        KiArm64DetachServiceContext(TrapFrame, State);
+    }
+}
+
+FORCEINLINE
+VOID
+KiLeaveServiceException(
+    _In_ PKTHREAD Thread,
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+}
 
 /* Debug CPU features banner */
 #if DBG

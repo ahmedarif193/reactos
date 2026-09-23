@@ -184,6 +184,8 @@ KiTrapReturn:
     ldr     x17, [x16]
     cmp     x17, #1
     b.eq    .Lrestore_service_vfp
+    cmp     x17, #2
+    b.eq    .Lrestore_service_vfp
     ldr     w17, [x16, #0x0C]
     msr     fpsr, x17
     add     x16, x16, #0x10

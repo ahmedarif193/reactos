@@ -150,12 +150,18 @@ RtlpArm64RestoreRegs(
     _In_ int Reg,
     _In_ int Count,
     _In_ int Pos,
-    _Inout_ PCONTEXT Context)
+    _Inout_ PCONTEXT Context,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     int i, Offset = (Pos > 0) ? Pos : 0;
 
     for (i = 0; i < Count; i++)
-        Context->X[Reg + i] = ((PULONG64)(ULONG_PTR)Context->Sp)[i + Offset];
+    {
+        PULONG64 SavedRegister = &((PULONG64)(ULONG_PTR)Context->Sp)[i + Offset];
+        Context->X[Reg + i] = *SavedRegister;
+        if (ContextPointers && Reg + i >= 19 && Reg + i <= 30)
+            (&ContextPointers->X19)[Reg + i - 19] = SavedRegister;
+    }
 
     if (Pos < 0)
         Context->Sp += -8 * Pos;
@@ -166,12 +172,18 @@ RtlpArm64RestoreFpRegs(
     _In_ int Reg,
     _In_ int Count,
     _In_ int Pos,
-    _Inout_ PCONTEXT Context)
+    _Inout_ PCONTEXT Context,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     int i, Offset = (Pos > 0) ? Pos : 0;
 
     for (i = 0; i < Count; i++)
-        Context->V[Reg + i].Low = ((PULONG64)(ULONG_PTR)Context->Sp)[i + Offset];
+    {
+        PULONG64 SavedRegister = &((PULONG64)(ULONG_PTR)Context->Sp)[i + Offset];
+        Context->V[Reg + i].Low = *SavedRegister;
+        if (ContextPointers && Reg + i >= 8 && Reg + i <= 15)
+            (&ContextPointers->D8)[Reg + i - 8] = SavedRegister;
+    }
 
     if (Pos < 0)
         Context->Sp += -8 * Pos;
@@ -182,7 +194,8 @@ RtlpArm64RestoreQRegs(
     _In_ int Reg,
     _In_ int Count,
     _In_ int Pos,
-    _Inout_ PCONTEXT Context)
+    _Inout_ PCONTEXT Context,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     int i, Offset = (Pos > 0) ? Pos : 0;
 
@@ -190,6 +203,8 @@ RtlpArm64RestoreQRegs(
     {
         Context->V[Reg + i].Low = ((PULONG64)(ULONG_PTR)Context->Sp)[2 * (i + Offset)];
         Context->V[Reg + i].High = ((PULONG64)(ULONG_PTR)Context->Sp)[2 * (i + Offset) + 1];
+        if (ContextPointers && Reg + i >= 8 && Reg + i <= 15)
+            (&ContextPointers->D8)[Reg + i - 8] = &((PULONG64)(ULONG_PTR)Context->Sp)[2 * (i + Offset)];
     }
 
     if (Pos < 0)
@@ -202,7 +217,8 @@ RtlpArm64RestoreAnyReg(
     _In_ int Count,
     _In_ int Type,
     _In_ int Pos,
-    _Inout_ PCONTEXT Context)
+    _Inout_ PCONTEXT Context,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     if (Reg & 0x20)
         Pos = -Pos - 1;
@@ -212,15 +228,15 @@ RtlpArm64RestoreAnyReg(
     case 0:
         if (Count > 1 || Pos < 0)
             Pos *= 2;
-        RtlpArm64RestoreRegs(Reg & 0x1f, Count, Pos, Context);
+        RtlpArm64RestoreRegs(Reg & 0x1f, Count, Pos, Context, ContextPointers);
         break;
     case 1:
         if (Count > 1 || Pos < 0)
             Pos *= 2;
-        RtlpArm64RestoreFpRegs(Reg & 0x1f, Count, Pos, Context);
+        RtlpArm64RestoreFpRegs(Reg & 0x1f, Count, Pos, Context, ContextPointers);
         break;
     case 2:
-        RtlpArm64RestoreQRegs(Reg & 0x1f, Count, Pos, Context);
+        RtlpArm64RestoreQRegs(Reg & 0x1f, Count, Pos, Context, ContextPointers);
         break;
     }
 }
@@ -244,7 +260,8 @@ RtlpArm64ProcessUnwindCodes(
     _Inout_ PCONTEXT Context,
     _In_ int Skip,
     _Inout_ PBOOLEAN FinalPcFromLr,
-    _Inout_ PBOOLEAN UsedFp)
+    _Inout_ PBOOLEAN UsedFp,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     unsigned int val, len, save_next = 2;
 
@@ -270,34 +287,34 @@ RtlpArm64ProcessUnwindCodes(
         if (*Ptr < 0x20)
             Context->Sp += 16 * (val & 0x1f);
         else if (*Ptr < 0x40)
-            RtlpArm64RestoreRegs(19, save_next, -(int)(val & 0x1f), Context);
+            RtlpArm64RestoreRegs(19, save_next, -(int)(val & 0x1f), Context, ContextPointers);
         else if (*Ptr < 0x80)
-            RtlpArm64RestoreRegs(29, 2, val & 0x3f, Context);
+            RtlpArm64RestoreRegs(29, 2, val & 0x3f, Context, ContextPointers);
         else if (*Ptr < 0xc0)
-            RtlpArm64RestoreRegs(29, 2, -(int)(val & 0x3f) - 1, Context);
+            RtlpArm64RestoreRegs(29, 2, -(int)(val & 0x3f) - 1, Context, ContextPointers);
         else if (*Ptr < 0xc8)
             Context->Sp += 16 * (val & 0x7ff);
         else if (*Ptr < 0xcc)
-            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), save_next, val & 0x3f, Context);
+            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), save_next, val & 0x3f, Context, ContextPointers);
         else if (*Ptr < 0xd0)
-            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), save_next, -(int)(val & 0x3f) - 1, Context);
+            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), save_next, -(int)(val & 0x3f) - 1, Context, ContextPointers);
         else if (*Ptr < 0xd4)
-            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), 1, val & 0x3f, Context);
+            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), 1, val & 0x3f, Context, ContextPointers);
         else if (*Ptr < 0xd6)
-            RtlpArm64RestoreRegs(19 + ((val >> 5) & 0xf), 1, -(int)(val & 0x1f) - 1, Context);
+            RtlpArm64RestoreRegs(19 + ((val >> 5) & 0xf), 1, -(int)(val & 0x1f) - 1, Context, ContextPointers);
         else if (*Ptr < 0xd8)
         {
-            RtlpArm64RestoreRegs(19 + 2 * ((val >> 6) & 0x7), 1, val & 0x3f, Context);
-            RtlpArm64RestoreRegs(30, 1, (val & 0x3f) + 1, Context);
+            RtlpArm64RestoreRegs(19 + 2 * ((val >> 6) & 0x7), 1, val & 0x3f, Context, ContextPointers);
+            RtlpArm64RestoreRegs(30, 1, (val & 0x3f) + 1, Context, ContextPointers);
         }
         else if (*Ptr < 0xda)
-            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), save_next, val & 0x3f, Context);
+            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), save_next, val & 0x3f, Context, ContextPointers);
         else if (*Ptr < 0xdc)
-            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), save_next, -(int)(val & 0x3f) - 1, Context);
+            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), save_next, -(int)(val & 0x3f) - 1, Context, ContextPointers);
         else if (*Ptr < 0xde)
-            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), 1, val & 0x3f, Context);
+            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), 1, val & 0x3f, Context, ContextPointers);
         else if (*Ptr == 0xde)
-            RtlpArm64RestoreFpRegs(8 + ((val >> 5) & 0x7), 1, -(int)(val & 0x3f) - 1, Context);
+            RtlpArm64RestoreFpRegs(8 + ((val >> 5) & 0x7), 1, -(int)(val & 0x3f) - 1, Context, ContextPointers);
         else if (*Ptr == 0xe0)
             Context->Sp += 16 * ((Ptr[1] << 16) + (Ptr[2] << 8) + Ptr[3]);
         else if (*Ptr == 0xe1)
@@ -324,7 +341,7 @@ RtlpArm64ProcessUnwindCodes(
         }
         else if (*Ptr == 0xe7)
             RtlpArm64RestoreAnyReg(Ptr[1], (Ptr[1] & 0x40) ? save_next : 1,
-                                   Ptr[2] >> 6, Ptr[2] & 0x3f, Context);
+                                   Ptr[2] >> 6, Ptr[2] & 0x3f, Context, ContextPointers);
         else if (*Ptr == 0xe9)
         {
             Context->Pc = ((PULONG64)(ULONG_PTR)Context->Sp)[1];
@@ -336,7 +353,15 @@ RtlpArm64ProcessUnwindCodes(
         {
             ULONG Flags = Context->ContextFlags & ~CONTEXT_UNWOUND_TO_CALL;
             PCONTEXT SrcContext = (PCONTEXT)(ULONG_PTR)Context->Sp;
+            unsigned int i;
 
+            if (ContextPointers)
+            {
+                for (i = 0; i < 12; i++)
+                    (&ContextPointers->X19)[i] = &SrcContext->X[19 + i];
+                for (i = 0; i < 8; i++)
+                    (&ContextPointers->D8)[i] = &SrcContext->V[8 + i].Low;
+            }
             *Context = *SrcContext;
             Context->ContextFlags = Flags | (SrcContext->ContextFlags & CONTEXT_UNWOUND_TO_CALL);
             *FinalPcFromLr = FALSE;
@@ -362,7 +387,8 @@ RtlpArm64UnwindPacked(
     _In_ ULONG_PTR Base,
     _In_ ULONG_PTR Pc,
     _In_ PARM64_RT_FUNCTION Func,
-    _Inout_ PCONTEXT Context)
+    _Inout_ PCONTEXT Context,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     int i;
     unsigned int len, offset, skip = 0;
@@ -420,14 +446,14 @@ RtlpArm64UnwindPacked(
         if (Func->CR == 3 || Func->CR == 2)
         {
             Context->Sp = Context->Fp;
-            RtlpArm64RestoreRegs(29, 2, 0, Context);
+            RtlpArm64RestoreRegs(29, 2, 0, Context, ContextPointers);
         }
         Context->Sp += local_size;
         if (fp_size)
-            RtlpArm64RestoreFpRegs(8, fp_regs, int_regs, Context);
+            RtlpArm64RestoreFpRegs(8, fp_regs, int_regs, Context, ContextPointers);
         if (Func->CR == 1)
-            RtlpArm64RestoreRegs(30, 1, int_regs - 1, Context);
-        RtlpArm64RestoreRegs(19, Func->RegI, -(int)saved_regs, Context);
+            RtlpArm64RestoreRegs(30, 1, int_regs - 1, Context, ContextPointers);
+        RtlpArm64RestoreRegs(19, Func->RegI, -(int)saved_regs, Context, ContextPointers);
     }
     else
     {
@@ -442,11 +468,11 @@ RtlpArm64UnwindPacked(
             if (local_size <= 512)
             {
                 if (pos++ >= skip)
-                    RtlpArm64RestoreRegs(29, 2, -(int)local_size_regs, Context);
+                    RtlpArm64RestoreRegs(29, 2, -(int)local_size_regs, Context, ContextPointers);
                 break;
             }
             if (pos++ >= skip)
-                RtlpArm64RestoreRegs(29, 2, 0, Context);
+                RtlpArm64RestoreRegs(29, 2, 0, Context, ContextPointers);
         case 0:
         case 1:
             if (!local_size)
@@ -463,15 +489,15 @@ RtlpArm64UnwindPacked(
         if (fp_size)
         {
             if (Func->RegF % 2 == 0 && pos++ >= skip)
-                RtlpArm64RestoreFpRegs(8 + Func->RegF, 1, int_regs + fp_regs - 1, Context);
+                RtlpArm64RestoreFpRegs(8 + Func->RegF, 1, int_regs + fp_regs - 1, Context, ContextPointers);
             for (i = (Func->RegF + 1) / 2 - 1; i >= 0; i--)
             {
                 if (pos++ < skip)
                     continue;
                 if (!i && !int_size)
-                    RtlpArm64RestoreFpRegs(8, 2, -(int)saved_regs, Context);
+                    RtlpArm64RestoreFpRegs(8, 2, -(int)saved_regs, Context, ContextPointers);
                 else
-                    RtlpArm64RestoreFpRegs(8 + 2 * i, 2, int_regs + 2 * i, Context);
+                    RtlpArm64RestoreFpRegs(8 + 2 * i, 2, int_regs + 2 * i, Context, ContextPointers);
             }
         }
 
@@ -480,16 +506,16 @@ RtlpArm64UnwindPacked(
             if (pos++ >= skip)
             {
                 if (Func->CR == 1)
-                    RtlpArm64RestoreRegs(30, 1, int_regs - 1, Context);
+                    RtlpArm64RestoreRegs(30, 1, int_regs - 1, Context, ContextPointers);
                 RtlpArm64RestoreRegs(18 + Func->RegI, 1,
                                      (Func->RegI > 1) ? (int)(Func->RegI - 1) : -(int)saved_regs,
-                                     Context);
+                                     Context, ContextPointers);
             }
         }
         else if (Func->CR == 1)
         {
             if (pos++ >= skip)
-                RtlpArm64RestoreRegs(30, 1, Func->RegI ? (int)(int_regs - 1) : -(int)saved_regs, Context);
+                RtlpArm64RestoreRegs(30, 1, Func->RegI ? (int)(int_regs - 1) : -(int)saved_regs, Context, ContextPointers);
         }
 
         for (i = Func->RegI / 2 - 1; i >= 0; i--)
@@ -497,9 +523,9 @@ RtlpArm64UnwindPacked(
             if (pos++ < skip)
                 continue;
             if (i)
-                RtlpArm64RestoreRegs(19 + 2 * i, 2, 2 * i, Context);
+                RtlpArm64RestoreRegs(19 + 2 * i, 2, 2 * i, Context, ContextPointers);
             else
-                RtlpArm64RestoreRegs(19, 2, -(int)saved_regs, Context);
+                RtlpArm64RestoreRegs(19, 2, -(int)saved_regs, Context, ContextPointers);
         }
     }
 
@@ -516,7 +542,8 @@ RtlpArm64UnwindFull(
     _Inout_ PCONTEXT Context,
     _Out_ PVOID *HandlerData,
     _Inout_ PBOOLEAN FinalPcFromLr,
-    _Inout_ PBOOLEAN UsedFp)
+    _Inout_ PBOOLEAN UsedFp,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     PARM64_XDATA_HEADER info;
     ARM64_XDATA_EPILOG *info_epilog;
@@ -547,7 +574,7 @@ RtlpArm64UnwindFull(
         len = RtlpArm64SequenceLen(data, end);
         if (offset < len)
         {
-            RtlpArm64ProcessUnwindCodes(data, end, Context, len - offset, FinalPcFromLr, UsedFp);
+            RtlpArm64ProcessUnwindCodes(data, end, Context, len - offset, FinalPcFromLr, UsedFp, ContextPointers);
             return NULL;
         }
     }
@@ -564,7 +591,7 @@ RtlpArm64UnwindFull(
                 len = RtlpArm64SequenceLen(ptr, end);
                 if (offset <= info_epilog[i].offset + len)
                 {
-                    RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - info_epilog[i].offset, FinalPcFromLr, UsedFp);
+                    RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - info_epilog[i].offset, FinalPcFromLr, UsedFp, ContextPointers);
                     return NULL;
                 }
             }
@@ -576,12 +603,12 @@ RtlpArm64UnwindFull(
         len = RtlpArm64SequenceLen(ptr, end) + 1;
         if (offset >= info->FunctionLength - len)
         {
-            RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - (info->FunctionLength - len), FinalPcFromLr, UsedFp);
+            RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - (info->FunctionLength - len), FinalPcFromLr, UsedFp, ContextPointers);
             return NULL;
         }
     }
 
-    RtlpArm64ProcessUnwindCodes(data, end, Context, 0, FinalPcFromLr, UsedFp);
+    RtlpArm64ProcessUnwindCodes(data, end, Context, 0, FinalPcFromLr, UsedFp, ContextPointers);
 
     if (info->ExceptionDataPresent)
     {
@@ -611,8 +638,6 @@ RtlVirtualUnwind(
     BOOLEAN UsedFp = FALSE;
     ULONG64 OriginalFp = Context->Fp;
 
-    (VOID)ContextPointers;
-
     if (HandlerData)
         *HandlerData = NULL;
 
@@ -628,9 +653,9 @@ RtlVirtualUnwind(
         }
     }
     else if (Func->Flag)
-        Handler = RtlpArm64UnwindPacked(ImageBase, ControlPc, Func, Context);
+        Handler = RtlpArm64UnwindPacked(ImageBase, ControlPc, Func, Context, ContextPointers);
     else
-        Handler = RtlpArm64UnwindFull(ImageBase, ControlPc, Func, Context, &LocalHandlerData, &FinalPcFromLr, &UsedFp);
+        Handler = RtlpArm64UnwindFull(ImageBase, ControlPc, Func, Context, &LocalHandlerData, &FinalPcFromLr, &UsedFp, ContextPointers);
 
     if (FinalPcFromLr)
         Context->Pc = Context->Lr;
@@ -768,7 +793,7 @@ RtlUnwindEx(
                                             NULL);
 
         if ((EstablisherFrame < StackLow) ||
-            (EstablisherFrame >= StackHigh) ||
+            (EstablisherFrame > StackHigh) ||
             (EstablisherFrame & 0x7))
         {
             ExceptionRecord->ExceptionFlags |= EXCEPTION_STACK_INVALID;

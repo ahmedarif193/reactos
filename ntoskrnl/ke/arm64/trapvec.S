@@ -36,6 +36,11 @@
 .equ ARM64_IRQ_FRAME_SIZE,            0x350
 
 .equ ARM64_PARTIAL_VFP_LINK,          1
+.equ ARM64_SERVICE_VFP_LINK,          2
+.equ ARM64_SERVICE_FRAME_SIZE,        0x160
+.equ ARM64_SERVICE_VFP,               0x150
+.equ ARM64_SERVICE_CONTEXT_SIZE,      0x2E0
+.equ ARM64_SERVICE_CONTEXT_V,         0xE0
 
 /*
  * Dispatch hardware interrupts on the per-processor ISR stack.
@@ -580,6 +585,141 @@ KiArm64SvcVectorCommon:
     ARM64_FINISH_SYNC_ENTRY
     .seh_endproc
 
+    .global KiArm64UserServiceEntry
+    .seh_proc KiArm64UserServiceEntry
+KiArm64UserServiceEntry:
+    sub sp, sp, #ARM64_SERVICE_FRAME_SIZE
+    .seh_stackalloc ARM64_SERVICE_FRAME_SIZE
+    str x30, [sp, #TfLr]
+    .seh_save_reg x30, TfLr
+    str x29, [sp, #TfFp]
+    .seh_save_reg x29, TfFp
+    .seh_endprologue
+    stp x0, x1, [sp, #TfX0]
+    stp x2, x3, [sp, #TfX2]
+    stp x4, x5, [sp, #TfX4]
+    stp x6, x7, [sp, #TfX6]
+    str x8, [sp, #TfX8]
+    str x11, [sp, #TfX11]
+    stp x12, x13, [sp, #TfX12]
+    stp x14, x15, [sp, #TfX14]
+    stp x16, x17, [sp, #TfX16]
+    str x18, [sp, #TfX18]
+    mrs x9, sp_el0
+    mrs x10, elr_el1
+    str x9, [sp, #TfSp]
+    str x10, [sp, #TfPc]
+    mrs x9, spsr_el1
+    mrs x10, esr_el1
+    stp w9, w10, [sp, #TfSpsr]
+    mov x11, #KEXCEPTION_ACTIVE_SERVICE_FRAME
+    orr x11, x11, #0x1000000
+    str x11, [sp, #TfExceptionActive]
+    add x12, sp, #ARM64_SERVICE_VFP
+    str x12, [sp, #TfVfpState]
+    mov x13, #ARM64_SERVICE_VFP_LINK
+    str x13, [x12]
+    mrs x14, fpcr
+    mrs x15, fpsr
+    stp w14, w15, [x12, #8]
+    msr fpcr, xzr
+    mrs x18, tpidr_el1
+    mov x29, xzr
+    tbnz x9, #7, .Luser_service_irq_masked
+    msr daifclr, #0x2
+.Luser_service_irq_masked:
+    mov x0, sp
+    bl KiArm64UserServiceDispatch
+    mov x0, sp
+    bl KiArm64UserServiceComplete
+    cbnz w0, KiArm64UserServiceApcExit
+    msr daifset, #0xF
+    isb
+    ldr x9, [sp, #TfVfpState]
+    ldp w10, w11, [x9, #8]
+    msr fpcr, x10
+    msr fpsr, x11
+    movi v0.16b, #0
+    movi v1.16b, #0
+    movi v2.16b, #0
+    movi v3.16b, #0
+    movi v4.16b, #0
+    movi v5.16b, #0
+    movi v6.16b, #0
+    movi v7.16b, #0
+    movi v16.16b, #0
+    movi v17.16b, #0
+    movi v18.16b, #0
+    movi v19.16b, #0
+    movi v20.16b, #0
+    movi v21.16b, #0
+    movi v22.16b, #0
+    movi v23.16b, #0
+    movi v24.16b, #0
+    movi v25.16b, #0
+    movi v26.16b, #0
+    movi v27.16b, #0
+    movi v28.16b, #0
+    movi v29.16b, #0
+    movi v30.16b, #0
+    movi v31.16b, #0
+    ldr x9, [sp, #TfSp]
+    msr sp_el0, x9
+    ldr x10, [sp, #TfPc]
+    msr elr_el1, x10
+    ldr w11, [sp, #TfSpsr]
+    and w11, w11, #0xFFFFFFE0
+    orr w11, w11, #0x100
+    msr spsr_el1, x11
+    mrs x16, tpidr_el1
+    ldr x16, [x16, #PcCurrentThread]
+    ldr x17, [x16, #ThTeb]
+    msr tpidr_el0, x17
+    ldr x16, [x16, #ThInitialStack]
+    ldp x0, x1, [sp, #TfX0]
+    ldp x2, x3, [sp, #TfX2]
+    ldp x4, x5, [sp, #TfX4]
+    ldp x6, x7, [sp, #TfX6]
+    ldp x8, x9, [sp, #TfX8]
+    ldp x10, x11, [sp, #TfX10]
+    ldp x12, x13, [sp, #TfX12]
+    ldp x14, x15, [sp, #TfX14]
+    ldr x30, [sp, #TfLr]
+    ldr x29, [sp, #TfFp]
+    mov x18, sp
+    mov sp, x16
+    ldp x16, x17, [x18, #TfX16]
+    mrs x18, tpidr_el0
+    eret
+    .seh_endproc
+
+    .global KiArm64UserServiceApcExit
+    .seh_proc KiArm64UserServiceApcExit
+KiArm64UserServiceApcExit:
+    stp x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    sub sp, sp, #ARM64_SERVICE_CONTEXT_SIZE
+    .seh_stackalloc ARM64_SERVICE_CONTEXT_SIZE
+    .seh_endprologue
+    stp x19, x20, [sp, #ExX19]
+    stp x21, x22, [sp, #ExX21]
+    stp x23, x24, [sp, #ExX23]
+    stp x25, x26, [sp, #ExX25]
+    stp x27, x28, [sp, #ExX27]
+    str d8, [sp, #(ARM64_SERVICE_CONTEXT_V + 0x80)]
+    str d9, [sp, #(ARM64_SERVICE_CONTEXT_V + 0x90)]
+    str d10, [sp, #(ARM64_SERVICE_CONTEXT_V + 0xA0)]
+    str d11, [sp, #(ARM64_SERVICE_CONTEXT_V + 0xB0)]
+    str d12, [sp, #(ARM64_SERVICE_CONTEXT_V + 0xC0)]
+    str d13, [sp, #(ARM64_SERVICE_CONTEXT_V + 0xD0)]
+    str d14, [sp, #(ARM64_SERVICE_CONTEXT_V + 0xE0)]
+    str d15, [sp, #(ARM64_SERVICE_CONTEXT_V + 0xF0)]
+    mov x0, sp
+    add x1, sp, #(ARM64_SERVICE_CONTEXT_SIZE + 16)
+    bl KiArm64DeliverServiceUserApc
+    brk #0xf000
+    .seh_endproc
+
 /*
  * Sync handler: SyncSp0 (vector 0)
  *
@@ -698,14 +838,6 @@ KiArm64PermVectorSyncLowerA64_Handler:
     .seh_add_fp 64
     .seh_endprologue
 
-    mrs x9, esr_el1
-    lsr x10, x9, #26
-    cmp x10, #0x15               /* SVC from lower AArch64 EL */
-    b.ne .Lsync_lower_a64_generic
-    mov w1, #8
-    bl KiArm64SvcVectorCommon
-    brk #0xf001
-.Lsync_lower_a64_generic:
     mov w1, #8                    /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
     brk #0xf001
@@ -1465,8 +1597,16 @@ KiArm64VectorTable:
     .space 0x7C
 
 /* Entry 8 - 0x400: Sync, Lower EL A64 */
+    stp x9, x10, [sp, #(TfX9 - ARM64_SERVICE_FRAME_SIZE)]
+    mrs x9, esr_el1
+    lsr x10, x9, #26
+    cmp x10, #0x15
+    b.ne 1f
+    b KiArm64UserServiceEntry
+1:
+    ldp x9, x10, [sp, #(TfX9 - ARM64_SERVICE_FRAME_SIZE)]
     b KiArm64PermVectorSyncLowerA64_Handler
-    .space 0x7C
+    .space 0x60
 
 /* Entry 9 - 0x480: IRQ, Lower EL A64 */
     b KiArm64PermVectorIrqLowerA64_Handler

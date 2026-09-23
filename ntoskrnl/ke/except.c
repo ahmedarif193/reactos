@@ -184,11 +184,12 @@ NtRaiseException(
     KEXCEPTION_FRAME LocalExceptionFrame;
     PKEXCEPTION_FRAME ExceptionFrame = &LocalExceptionFrame;
 #endif
+    KI_SERVICE_EXCEPTION_STATE ServiceState;
 
     /* Get trap frame and link previous one */
     Thread = KeGetCurrentThread();
     TrapFrame = Thread->TrapFrame;
-    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    ExceptionFrame = KiEnterServiceException(Thread, TrapFrame, Context, KeGetPreviousMode(), ExceptionFrame, &ServiceState);
 
     /* Set exception list */
 #ifdef _M_IX86
@@ -204,10 +205,12 @@ NtRaiseException(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("KiRaiseException failed. Status = 0x%lx\n", Status);
+        KiAbortServiceException(TrapFrame, ExceptionFrame, &ServiceState);
         return Status;
     }
 
     /* It was handled, so exit restoring all state */
+    KiLeaveServiceException(Thread, TrapFrame);
     KiExceptionExit(TrapFrame, ExceptionFrame);
 }
 
@@ -262,20 +265,19 @@ NtContinue(
     KEXCEPTION_FRAME LocalExceptionFrame;
     PKEXCEPTION_FRAME ExceptionFrame = &LocalExceptionFrame;
 #endif
+    KI_SERVICE_EXCEPTION_STATE ServiceState;
 
     /* Get trap frame and link previous one*/
     Thread = KeGetCurrentThread();
     TrapFrame = Thread->TrapFrame;
-#ifdef _M_ARM64
-    LocalExceptionFrame = *((PKEXCEPTION_FRAME)TrapFrame - 1);
-#endif
-    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    ExceptionFrame = KiEnterServiceException(Thread, TrapFrame, Context, KeGetPreviousMode(), ExceptionFrame, &ServiceState);
 
     /* Continue from this point on */
     Status = KiContinue(Context, ExceptionFrame, TrapFrame);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("KiContinue failed. Status = 0x%lx\n", Status);
+        KiAbortServiceException(TrapFrame, ExceptionFrame, &ServiceState);
         return Status;
     }
 
@@ -289,6 +291,7 @@ NtContinue(
     KiChpeSuspendCheckpoint(Thread);
     KiChpeContinueToEmulation(TrapFrame, ExceptionFrame);
 #endif
+    KiLeaveServiceException(Thread, TrapFrame);
 
     /* Exit to new context */
     KiExceptionExit(TrapFrame, ExceptionFrame);

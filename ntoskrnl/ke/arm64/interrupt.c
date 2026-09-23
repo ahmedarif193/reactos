@@ -252,6 +252,58 @@ KiArm64RestoreInterruptFrames(_In_ ULONG VectorId, _Inout_ PKI_ARM64_IRQ_FRAME I
     RtlCopyMemory(IrqFrame->V, VfpState->V, sizeof(IrqFrame->V));
 }
 
+VOID
+KiArm64PermVectorIrqSpx_Handler(VOID);
+
+VOID
+KiArm64PermVectorFiqSpx_Handler(VOID);
+
+BOOLEAN
+KiArm64UnwindInterruptFrame(
+    _In_ ULONG64 FunctionStart,
+    _Inout_ PCONTEXT Context,
+    _Inout_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
+{
+    PKI_ARM64_IRQ_FRAME IrqFrame;
+    PULONG64 UpperRegisters;
+    ULONG Index;
+
+    if ((FunctionStart != (ULONG64)(ULONG_PTR)KiArm64PermVectorIrqSpx_Handler) &&
+        (FunctionStart != (ULONG64)(ULONG_PTR)KiArm64PermVectorFiqSpx_Handler))
+    {
+        return FALSE;
+    }
+
+    IrqFrame = (PKI_ARM64_IRQ_FRAME)(ULONG_PTR)Context->Sp;
+    for (Index = 0; Index < 3; Index++)
+    {
+        (&ContextPointers->X19)[Index] = &IrqFrame->X[19 + Index];
+        Context->X[19 + Index] = IrqFrame->X[19 + Index];
+    }
+
+    UpperRegisters = &IrqFrame->X22;
+    for (Index = 0; Index < 7; Index++)
+    {
+        (&ContextPointers->X22)[Index] = &UpperRegisters[Index];
+        Context->X[22 + Index] = UpperRegisters[Index];
+    }
+
+    for (Index = 0; Index < 8; Index++)
+    {
+        (&ContextPointers->D8)[Index] = &IrqFrame->V[8 + Index].Low;
+        Context->V[8 + Index].Low = IrqFrame->V[8 + Index].Low;
+    }
+
+    ContextPointers->Fp = &IrqFrame->Fp;
+    ContextPointers->Lr = &IrqFrame->Lr;
+    Context->Fp = IrqFrame->Fp;
+    Context->Lr = IrqFrame->Lr;
+    Context->Pc = IrqFrame->Elr;
+    Context->Sp = (ULONG64)(ULONG_PTR)(IrqFrame + 1);
+    Context->ContextFlags &= ~CONTEXT_UNWOUND_TO_CALL;
+    return TRUE;
+}
+
 static inline void KiRawDebugPuts(const char *str) {
     UNREFERENCED_PARAMETER(str);
 }
