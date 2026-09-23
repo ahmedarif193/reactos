@@ -29,6 +29,11 @@ endif()
 add_library(wddm_bridge STATIC ${SOURCE})
 add_dependencies(wddm_bridge bugcodes xdk)
 
+# Compile the bridge's capture handlers with the SEH support required by the
+# toolchain. Linking pseh only to win32k does not apply its compiler options to
+# this static library (in particular, the GCC AMD64 SEH plugin).
+target_link_libraries(wddm_bridge PRIVATE pseh)
+
 # The bridge participates in the win32k build environment: it needs the same
 # include paths and definitions as the rest of win32k.
 target_include_directories(wddm_bridge PRIVATE
