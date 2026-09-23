@@ -303,6 +303,7 @@ CsrSbCreateSession(IN PSB_API_MSG ApiMessage)
 
     /* Setup Process Data */
     CsrProcess->ClientId = CreateSession->ProcessInfo.ClientId;
+    CsrProcess->ProcessGroupId = HandleToUlong(CsrProcess->ClientId.UniqueProcess);
     CsrProcess->ProcessHandle = hProcess;
     CsrProcess->NtSession = CsrAllocateNtSession(CreateSession->SessionId);
 
