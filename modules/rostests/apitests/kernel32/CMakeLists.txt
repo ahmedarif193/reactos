@@ -75,6 +75,7 @@ list(APPEND SOURCE
     UEFIFirmware.c
     WideCharToMultiByte.c
     WriteFile.c
+    WriteFileSeekBack.c
 )
 
 list(APPEND PCH_SKIP_SOURCE
