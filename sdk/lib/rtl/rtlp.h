@@ -243,6 +243,13 @@ RtlpUnwindHandler(_In_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID Est
 VOID
 NTAPI
 RtlpArm64RestoreCollidedFrame(_Inout_ PDISPATCHER_CONTEXT DispatcherContext, _Out_ struct _CONTEXT *UnwindContext, _Out_writes_bytes_(NonVolatileRegistersLength) PVOID NonVolatileRegisters, _In_ ULONG NonVolatileRegistersLength, _Out_ PULONG64 EstablisherFrame);
+
+#define RTLP_RAISE_CONTEXT_FLAGS (CONTEXT_FULL | CONTEXT_UNWOUND_TO_CALL)
+#endif
+
+/* TODO(riscv64): define RTLP_RAISE_CONTEXT_FLAGS if the unwinder treats a raise context as unwound to the call */
+#ifndef RTLP_RAISE_CONTEXT_FLAGS
+#define RTLP_RAISE_CONTEXT_FLAGS CONTEXT_FULL
 #endif
 
 VOID

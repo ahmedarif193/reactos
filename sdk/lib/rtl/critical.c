@@ -135,6 +135,9 @@ RtlpWaitForCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
     if (LdrpShutdownInProgress &&
         LdrpShutdownThreadId == NtCurrentTeb()->RealClientId.UniqueThread)
     {
+        if (CriticalSection->OwningThread)
+            NtTerminateProcess(NtCurrentProcess(), STATUS_THREAD_IS_TERMINATING);
+
         DPRINT("Forcing ownership of critical section %p\n", CriticalSection);
         return STATUS_SUCCESS;
     }

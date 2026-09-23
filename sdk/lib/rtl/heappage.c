@@ -1876,7 +1876,7 @@ RtlpPageHeapAllocate(IN PVOID HeapPtr,
     if (DphRoot->HeapFlags & HEAP_NO_ALIGNMENT)
         UserActualSize = Size;
     else
-        UserActualSize = ROUND_UP(Size, 8);
+        UserActualSize = ROUND_UP(Size, MEMORY_ALLOCATION_ALIGNMENT);
 
     /* Set up the block */
     BusyNode->nVirtualAccessSize = AccessSize;

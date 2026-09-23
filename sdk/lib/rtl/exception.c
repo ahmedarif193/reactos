@@ -80,7 +80,7 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
     ExceptionRecord->ExceptionAddress = _ReturnAddress();
 
     /* Write the context flag */
-    Context.ContextFlags = CONTEXT_FULL;
+    Context.ContextFlags = RTLP_RAISE_CONTEXT_FLAGS;
 
     /* Check if user mode debugger is active */
     if (RtlpCheckForActiveDebugger())
@@ -221,7 +221,9 @@ RtlCaptureStackBackTrace(IN ULONG FramesToSkip,
     FramesToSkip++;
 
     /* Don't go past the limit */
-    if ((FramesToCapture + FramesToSkip) >= 128) return 0;
+    if (FramesToSkip >= RTL_NUMBER_OF(Frames)) return 0;
+    if (FramesToCapture > RTL_NUMBER_OF(Frames) - FramesToSkip)
+        FramesToCapture = RTL_NUMBER_OF(Frames) - FramesToSkip;
 
     /* Do the back trace */
     FrameCount = RtlWalkFrameChain(Frames, FramesToCapture + FramesToSkip, 0);
