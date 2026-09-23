@@ -139,6 +139,9 @@ struct user_callback_frame
     ULONG                      *ret_len;
     NTSTATUS                    status;
     jmp_buf                     jmpbuf;
+#ifdef __REACTOS__
+    I386_CONTEXT               *pop_context;
+#endif
 };
 
 /* stack frame for user APCs */
@@ -231,6 +234,9 @@ NTSTATUS (WINAPI *pBTCpuResetToConsistentState)( EXCEPTION_POINTERS * ) = NULL;
 void     (WINAPI *pBTCpuUpdateProcessorInformation)( SYSTEM_CPU_INFORMATION * ) = NULL;
 void     (WINAPI *pBTCpuProcessTerm)( HANDLE, BOOL, NTSTATUS ) = NULL;
 void     (WINAPI *pBTCpuThreadTerm)( HANDLE, LONG ) = NULL;
+#ifdef __REACTOS__
+static NTSTATUS (WINAPI *pBTCpuSuspendLocalThread)( HANDLE, ULONG * );
+#endif
 
 BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
 {
@@ -748,6 +754,20 @@ NTSTATUS WINAPI wow64_NtCallbackReturn( UINT *args )
     *frame->ret_ptr = ret_ptr;
     *frame->ret_len = ret_len;
     frame->status = status;
+#ifdef __REACTOS__
+    if (status == STATUS_CALLBACK_POP_STACK && current_machine == IMAGE_FILE_MACHINE_I386 &&
+        (frame->pop_context = RtlAllocateHeap( GetProcessHeap(), 0, sizeof(*frame->pop_context) )))
+    {
+        frame->pop_context->ContextFlags = CONTEXT_I386_FULL;
+        pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, frame->pop_context );
+        if (frame->pop_context->Eip == PtrToUlong( pBTCpuGetBopCode() ))
+        {
+            frame->pop_context->Eip = *(ULONG *)ULongToPtr( frame->pop_context->Esp );
+            frame->pop_context->Esp += sizeof(ULONG);
+        }
+        frame->pop_context->Eax = STATUS_SUCCESS;
+    }
+#endif
     longjmp( frame->jmpbuf, 1 );
     return STATUS_SUCCESS;
 }
@@ -1033,6 +1053,7 @@ static const WCHAR *get_cpu_dll_name(void)
     {
     case IMAGE_FILE_MACHINE_I386:
         RtlInitUnicodeString( &nameW, L"\\Registry\\Machine\\Software\\Microsoft\\Wow64\\x86" );
+        /* TODO(riscv64): select the riscv64 x86 CPU backend (BTCpu* interface) for a riscv64 native_machine */
         ret = (native_machine == IMAGE_FILE_MACHINE_ARM64 ? L"xtajit.dll" : L"wow64cpu.dll");
         break;
     case IMAGE_FILE_MACHINE_ARMNT:
@@ -1151,6 +1172,9 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
     GET_PTR( BTCpuUpdateProcessorInformation );
     GET_PTR( BTCpuProcessTerm );
     GET_PTR( BTCpuThreadTerm );
+#ifdef __REACTOS__
+    GET_PTR( BTCpuSuspendLocalThread );
+#endif
     GET_PTR( __wine_get_unix_opcode );
 
     module = load_64bit_module( L"wow64win.dll" );
@@ -1259,6 +1283,57 @@ static void thread_init(void)
         NtTerminateProcess( GetCurrentProcess(), STATUS_INVALID_IMAGE_FORMAT );
     }
 }
+
+
+#ifdef __REACTOS__
+static BOOL init_native_thread( CONTEXT *context )
+{
+    TEB32 *teb32 = NtCurrentTeb32();
+    WOW64_CPU_INIT *cpu;
+    XSAVE_FORMAT fxsave;
+    IMAGE_NT_HEADERS *nt;
+    ULONG_PTR pc = host_context_pc( context ), start, arg;
+    SIZE_T size = 0x100000;
+    void *base = NULL;
+
+    if (teb32->Tib.StackBase) return TRUE;
+    start = pc == (ULONG_PTR)RtlUserThreadStart ? host_context_param( context, 0 ) : pc;
+    arg = pc == (ULONG_PTR)RtlUserThreadStart ? host_context_param( context, 1 ) : host_context_param( context, 0 );
+    if (start > 0xffffffff) return FALSE;
+    if (RtlPcToFileHeader( (void *)start, &base ) && (nt = RtlImageNtHeader( base )) &&
+        nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386) return FALSE;
+    base = NULL;
+    if (NtAllocateVirtualMemory( GetCurrentProcess(), &base, get_zero_bits( 0 ), &size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ))
+        NtTerminateThread( GetCurrentThread(), STATUS_NO_MEMORY );
+
+    cpu = (WOW64_CPU_INIT *)(((ULONG_PTR)base + size - sizeof(*cpu)) & ~15);
+    cpu->Cpu.Machine = IMAGE_FILE_MACHINE_I386;
+    cpu->Context.ContextFlags = WOW64_CONTEXT_FULL | WOW64_CONTEXT_FLOATING_POINT | WOW64_CONTEXT_EXTENDED_REGISTERS;
+    cpu->Context.FloatSave.ControlWord = 0x27f;
+    cpu->Context.FloatSave.TagWord = 0xffff;
+    memset( &fxsave, 0, sizeof(fxsave) );
+    fxsave.ControlWord = 0x27f;
+    fxsave.MxCsr = 0x1f80;
+    memcpy( cpu->Context.ExtendedRegisters, &fxsave, sizeof(cpu->Context.ExtendedRegisters) );
+    cpu->Context.Eip = pLdrSystemDllInitBlock->pRtlUserThreadStart;
+    cpu->Context.Eax = start;
+    cpu->Context.Ebx = arg;
+    cpu->Context.Esp = PtrToUlong( cpu ) - 3 * sizeof(ULONG);
+    cpu->Context.EFlags = 0x202;
+    cpu->Context.SegCs = 0x23;
+    cpu->Context.SegDs = 0x2b;
+    cpu->Context.SegEs = 0x2b;
+    cpu->Context.SegFs = 0x53;
+    cpu->Context.SegGs = 0x2b;
+    cpu->Context.SegSs = 0x2b;
+
+    teb32->Tib.StackBase = PtrToUlong( cpu );
+    teb32->Tib.StackLimit = PtrToUlong( base );
+    teb32->DeallocationStack = PtrToUlong( base );
+    NtCurrentTeb()->TlsSlots[WOW64_TLS_CPURESERVED] = cpu;
+    return TRUE;
+}
+#endif
 
 
 /**********************************************************************
@@ -1573,6 +1648,9 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
     frame.temp_list  = NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST];
     frame.ret_ptr    = ret_ptr;
     frame.ret_len    = ret_len;
+#ifdef __REACTOS__
+    frame.pop_context = NULL;
+#endif
 
     NtCurrentTeb()->TlsSlots[WOW64_TLS_USERCALLBACKDATA] = &frame;
     NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST] = NULL;
@@ -1617,6 +1695,10 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
 
             if (!setjmp( frame.jmpbuf ))
                 cpu_simulate();
+#ifdef __REACTOS__
+            else if (frame.pop_context)
+                pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, frame.pop_context );
+#endif
             else
                 pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &orig_ctx );
         }
@@ -1648,12 +1730,41 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
         break;
     }
 
+#ifdef __REACTOS__
+    if (!frame.pop_context) teb32->Tib.ExceptionList = teb_frame;
+#else
     teb32->Tib.ExceptionList = teb_frame;
+#endif
     NtCurrentTeb()->TlsSlots[WOW64_TLS_USERCALLBACKDATA] = frame.prev_frame;
     NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST] = frame.temp_list;
+#ifdef __REACTOS__
+    if (frame.pop_context)
+    {
+        cpu->Flags = flags | WOW64_CPURESERVED_FLAG_RESET_STATE;
+        RtlFreeHeap( GetProcessHeap(), 0, frame.pop_context );
+    }
+    else
+        cpu->Flags = flags;
+    if (frame.status == STATUS_CALLBACK_POP_STACK) return STATUS_UNWIND;
+#else
     cpu->Flags = flags;
+#endif
     return frame.status;
 }
+
+
+#ifdef __REACTOS__
+NTSTATUS WINAPI Wow64SuspendLocalThread( HANDLE thread, ULONG *count )
+{
+    THREAD_BASIC_INFORMATION info;
+
+    if (pBTCpuSuspendLocalThread &&
+        !NtQueryInformationThread( thread, ThreadBasicInformation, &info, sizeof(info), NULL ) &&
+        info.ClientId.UniqueProcess == NtCurrentTeb()->ClientId.UniqueProcess)
+        return pBTCpuSuspendLocalThread( thread, count );
+    return NtSuspendThread( thread, count );
+}
+#endif
 
 
 /**********************************************************************
@@ -1664,6 +1775,9 @@ void WINAPI Wow64LdrpInitialize( CONTEXT *context )
     static RTL_RUN_ONCE init_done;
 
     RtlRunOnceExecuteOnce( &init_done, process_init, NULL, NULL );
+#ifdef __REACTOS__
+    if (!init_native_thread( context )) return;
+#endif
     thread_init();
     cpu_simulate();
 }

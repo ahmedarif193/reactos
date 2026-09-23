@@ -1212,8 +1212,33 @@ NTSTATUS WINAPI wow64_NtSuspendThread( UINT *args )
     HANDLE handle = get_handle( &args );
     ULONG *count = get_ptr( &args );
 
+#ifdef __REACTOS__
+    return Wow64SuspendLocalThread( handle, count );
+#else
     return NtSuspendThread( handle, count );
+#endif
 }
+
+
+#ifdef __REACTOS__
+static void wait_other_threads(void)
+{
+    THREAD_BASIC_INFORMATION info;
+    HANDLE thread = NULL, next;
+    LARGE_INTEGER timeout;
+
+    timeout.QuadPart = -20000000;
+    while (!NtGetNextThread( GetCurrentProcess(), thread, SYNCHRONIZE | THREAD_QUERY_LIMITED_INFORMATION, 0, 0, &next ))
+    {
+        if (thread) NtClose( thread );
+        thread = next;
+        if (NtQueryInformationThread( thread, ThreadBasicInformation, &info, sizeof(info), NULL )) continue;
+        if (info.ClientId.UniqueThread == NtCurrentTeb()->ClientId.UniqueThread) continue;
+        NtWaitForSingleObject( thread, FALSE, &timeout );
+    }
+    if (thread) NtClose( thread );
+}
+#endif
 
 
 /**********************************************************************
@@ -1228,6 +1253,9 @@ NTSTATUS WINAPI wow64_NtTerminateProcess( UINT *args )
 
     if (!handle && pBTCpuProcessTerm) pBTCpuProcessTerm( handle, FALSE, 0 );
     status = NtTerminateProcess( handle, exit_code );
+#ifdef __REACTOS__
+    if (!handle && !status) wait_other_threads();
+#endif
     if (!handle && pBTCpuProcessTerm) pBTCpuProcessTerm( handle, TRUE, status );
     return status;
 }
@@ -1241,7 +1269,11 @@ NTSTATUS WINAPI wow64_NtTerminateThread( UINT *args )
     HANDLE handle = get_handle( &args );
     LONG exit_code = get_ulong( &args );
 
+#ifdef __REACTOS__
+    if (pBTCpuThreadTerm) pBTCpuThreadTerm( handle ? handle : GetCurrentThread(), exit_code );
+#else
     if (pBTCpuThreadTerm) pBTCpuThreadTerm( handle, exit_code );
+#endif
 
     return NtTerminateThread( handle, exit_code );
 }
