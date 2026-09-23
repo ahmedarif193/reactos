@@ -503,7 +503,8 @@ VidSchpAgeUs(
 
 VOID
 VidSchDumpEngineDiagnostics(
-    _In_ PDXGKRNL_ADAPTER Adapter)
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN Detailed)
 {
     PVIDSCH_CONTEXT Ctx;
     ULONGLONG Now = DxgkDiagNow100ns();
@@ -534,7 +535,8 @@ VidSchDumpEngineDiagnostics(
 
         (VOID)VidSchQueryEngineStatus(Adapter, EngineIndex, &State, &Pending, &LastSubmitted, &LastCompleted);
         KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-        RtlCopyMemory(Ring, Engine->DispatchRing, sizeof(Ring));
+        if (Detailed)
+            RtlCopyMemory(Ring, Engine->DispatchRing, sizeof(Ring));
         Next = Engine->DispatchRingNext;
         /* The oldest active packet is the one the engine is stuck on. */
         Oldest = VidSchpFirstActivePacketLocked(Engine);
@@ -556,8 +558,11 @@ VidSchDumpEngineDiagnostics(
         {
             DXGKRNL_ERR("TDR engine %lu oldest active packet: fence=%lu dma va=0x%I64x size=%lu\n",
                         EngineIndex, OldestFence, OldestVa, OldestSize);
-            VidSchpDumpBatchHeadBytes(OldestHead, OldestHeadBytes, OldestSize, "TDR");
+            if (Detailed)
+                VidSchpDumpBatchHeadBytes(OldestHead, OldestHeadBytes, OldestSize, "TDR");
         }
+        if (!Detailed)
+            continue;
         for (Index = 0; Index < VIDSCH_DISPATCH_RING_SIZE; Index++)
         {
             PVIDSCH_DISPATCH_RECORD Record = &Ring[(Next + Index) % VIDSCH_DISPATCH_RING_SIZE];
@@ -577,7 +582,7 @@ VidSchDumpEngineDiagnostics(
                         (LONGLONG)(Record->DispatchTime100ns - Record->AdmitTime100ns) / 10);
         }
     }
-    if (KeGetCurrentIrql() <= APC_LEVEL)
+    if (Detailed && KeGetCurrentIrql() <= APC_LEVEL)
     {
         for (EngineIndex = 0; EngineIndex < Ctx->EngineCount; EngineIndex++)
         {
@@ -2097,7 +2102,7 @@ VidSchpConsumePageFaultInterrupt(
             ExQueueWorkItem(&Engine->FaultDumpWorkItem, DelayedWorkQueue);
         }
     }
-    VidSchDumpEngineDiagnostics(Engine->Adapter);
+    VidSchDumpEngineDiagnostics(Engine->Adapter, TRUE);
     DxgkGpuVaDumpRecentEvents();
     DxgkDumpRecentKmtIoctls();
     DxgkDeviceSetPageFaultState(Device, &PageFaultState);
