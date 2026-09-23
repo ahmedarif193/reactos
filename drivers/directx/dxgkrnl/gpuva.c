@@ -2920,7 +2920,7 @@ DxgkGpuVaDestroyProcess(
             DXGK_CB_FULL(Adapter, DxgkDdiDestroyProcess) != NULL &&
             DxgkAcquireMiniportCallback(Adapter))
         {
-            NTSTATUS Status;
+            NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
             _SEH2_TRY
             {
