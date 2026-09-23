@@ -155,6 +155,52 @@ static VOID TestMapPieces(VOID)
     ok_eq_ulong(Cover, MAXULONG);
 }
 
+static VOID TestAllocationRepeatMapping(VOID)
+{
+    static const struct
+    {
+        ULONGLONG AllocationSize, AllocationOffset, MappingSize, MappingOffset;
+        BOOLEAN Valid;
+        ULONGLONG SourceOffset, ChunkSize;
+    } Cases[] = {
+        /* Intel's internal 4 KiB allocation mapped across two virtual pages. */
+        {0x1000, 0, 0x2000, 0, TRUE, 0, 0x1000},
+        {0x1000, 0, 0x2000, 0x1000, TRUE, 0, 0x1000},
+        /* Repeat pages 1,2 as 1,2,1,2,1. The final repeat is partial. */
+        {0x3000, 0x1000, 0x5000, 0, TRUE, 0x1000, 0x2000},
+        {0x3000, 0x1000, 0x5000, 0x1000, TRUE, 0x2000, 0x1000},
+        {0x3000, 0x1000, 0x5000, 0x2000, TRUE, 0x1000, 0x2000},
+        {0x3000, 0x1000, 0x5000, 0x4000, TRUE, 0x1000, 0x1000},
+        {0x4000, 0x1000, 0x1000, 0, TRUE, 0x1000, 0x1000},
+        {0x1000, 0x1000, 0x2000, 0, FALSE, 0, 0},
+        {0x1000, 0x2000, 0x2000, 0, FALSE, 0, 0},
+        {0, 0, 0x2000, 0, FALSE, 0, 0},
+        {0x1000, 0, 0, 0, FALSE, 0, 0},
+        {0x1000, 0, 0x2000, 0x2000, FALSE, 0, 0},
+        {0x1000, 1, 0x2000, 0, FALSE, 0, 0},
+        {0x1001, 0, 0x2000, 0, FALSE, 0, 0},
+        {0x1000, 0, 0x2001, 0, FALSE, 0, 0},
+        {0x1000, 0, 0x2000, 1, FALSE, 0, 0},
+        /* No addition of the large virtual offset to the physical offset. */
+        {0x3000, 0x2000, MAXULONGLONG - 0xfff, MAXULONGLONG - 0x1fff,
+         TRUE, 0x2000, 0x1000},
+    };
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Cases); ++Index)
+    {
+        ULONGLONG SourceOffset = MAXULONGLONG, ChunkSize = MAXULONGLONG;
+        BOOLEAN Valid = DxgkGpuVaCoreAllocationMapChunk(
+            Cases[Index].AllocationSize, Cases[Index].AllocationOffset,
+            Cases[Index].MappingSize, Cases[Index].MappingOffset,
+            &SourceOffset, &ChunkSize);
+
+        ok(Valid == Cases[Index].Valid, "case %lu: valid %u\n", Index, Valid);
+        ok_eq_ulonglong(SourceOffset, Cases[Index].SourceOffset);
+        ok_eq_ulonglong(ChunkSize, Cases[Index].ChunkSize);
+    }
+}
+
 START_TEST(DxgkGpuVaAddress)
 {
     TestAlignUp();
@@ -162,6 +208,7 @@ START_TEST(DxgkGpuVaAddress)
     TestOverlapAndContainment();
     TestPageMath();
     TestMapPieces();
+    TestAllocationRepeatMapping();
 }
 
 /* EOF */
