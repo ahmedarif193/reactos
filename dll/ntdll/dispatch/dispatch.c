@@ -76,20 +76,22 @@ KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
 /*
  * @implemented
  */
-VOID
+NTSTATUS
 NTAPI
 KiRaiseUserExceptionDispatcher(VOID)
 {
     EXCEPTION_RECORD ExceptionRecord;
+    NTSTATUS ExceptionCode = ((PTEB)NtCurrentTeb())->ExceptionCode;
 
     /* Setup the exception record */
-    ExceptionRecord.ExceptionCode = ((PTEB)NtCurrentTeb())->ExceptionCode;
+    ExceptionRecord.ExceptionCode = ExceptionCode;
     ExceptionRecord.ExceptionFlags = 0;
     ExceptionRecord.ExceptionRecord = NULL;
     ExceptionRecord.NumberParameters = 0;
 
     /* Raise the exception */
     RtlRaiseException(&ExceptionRecord);
+    return ExceptionCode;
 }
 
 /*
