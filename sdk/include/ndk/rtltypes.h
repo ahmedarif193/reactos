@@ -1629,6 +1629,17 @@ typedef struct _RTL_USER_PROCESS_PARAMETERS
 #if (NTDDI_VERSION >= NTDDI_WIN7) || defined(__REACTOS__)
     SIZE_T EnvironmentVersion;
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(__REACTOS__)
+    PVOID PackageDependencyData;
+    ULONG ProcessGroupId;
+    ULONG LoaderThreads;
+    UNICODE_STRING RedirectionDllName;
+    UNICODE_STRING HeapPartitionName;
+    PULONGLONG DefaultThreadpoolCpuSetMasks;
+    ULONG DefaultThreadpoolCpuSetMaskCount;
+    ULONG DefaultThreadpoolThreadMaximum;
+    ULONG HeapMemoryTypeMask;
+#endif
 } RTL_USER_PROCESS_PARAMETERS, *PRTL_USER_PROCESS_PARAMETERS;
 
 typedef struct _RTL_USER_PROCESS_INFORMATION

@@ -84,6 +84,17 @@ extern "C" {
 #define CONTEXT_ARM64_RET_TO_GUEST 0x04000000L
 #endif
 
+#ifndef CONTEXT_EXCEPTION_ACTIVE
+#define CONTEXT_EXCEPTION_ACTIVE    0x08000000L
+#define CONTEXT_SERVICE_ACTIVE      0x10000000L
+#define CONTEXT_EXCEPTION_REQUEST   0x40000000L
+#define CONTEXT_EXCEPTION_REPORTING 0x80000000L
+#endif
+
+#ifndef CONTEXT_UNWOUND_TO_CALL
+#define CONTEXT_UNWOUND_TO_CALL 0x20000000
+#endif
+
 //
 // HAL Variables
 //
@@ -268,9 +279,17 @@ typedef struct _MACHINE_FRAME
 //
 typedef struct _UAPC_FRAME
 {
+    PVOID NormalRoutine;
+    PVOID NormalContext;
+    PVOID SystemArgument1;
+    PVOID SystemArgument2;
+    ULONG64 Alertable;
+    ULONG64 Reserved;
     CONTEXT Context;
     MACHINE_FRAME MachineFrame;
 } UAPC_FRAME, *PUAPC_FRAME;
+
+C_ASSERT(FIELD_OFFSET(UAPC_FRAME, Context) == 0x30);
 
 //
 // Stack frame layout for KiUserExceptionDispatcher
@@ -293,15 +312,15 @@ typedef KEXCEPTION_FRAME KCALLOUT_FRAME, *PKCALLOUT_FRAME;
 //
 typedef struct _UCALLOUT_FRAME
 {
-    ULONG64 P1Home;
-    ULONG64 P2Home;
-    ULONG64 P3Home;
-    ULONG64 P4Home;
     PVOID Buffer;
     ULONG Length;
     ULONG ApiNumber;
+    ULONG64 Reserved;
+    ULONG64 Lr;
     MACHINE_FRAME MachineFrame;
 } UCALLOUT_FRAME, *PUCALLOUT_FRAME;
+
+C_ASSERT(sizeof(UCALLOUT_FRAME) == 0x30);
 
 typedef struct _KSTART_FRAME
 {
