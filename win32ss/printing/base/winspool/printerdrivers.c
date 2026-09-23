@@ -294,6 +294,7 @@ AddPrinterDriverExW(PWSTR pName, DWORD Level, PBYTE pDriverInfo, DWORD dwFileCop
                 pdi->cchCoreDependencies = multi_sz_lenW( pdi8w->pszzCoreDriverDependencies );
             }
 
+            pdi->dwPrinterDriverAttributes   = pdi8w->dwPrinterDriverAttributes;
             pdi->ftMinInboxDriverVerDate     = pdi8w->ftMinInboxDriverVerDate;
             pdi->dwlMinInboxDriverVerVersion = pdi8w->dwlMinInboxDriverVerVersion;
         }
@@ -316,9 +317,9 @@ AddPrinterDriverExW(PWSTR pName, DWORD Level, PBYTE pDriverInfo, DWORD dwFileCop
 
             pdi->pszzPreviousNames = pdi4w->pszzPreviousNames;
             pdi->cchPreviousNames  = 0;
-            if ( pdi4w->pDependentFiles && *pdi4w->pDependentFiles )
+            if ( pdi4w->pszzPreviousNames && *pdi4w->pszzPreviousNames )
             {
-               pdi->cchPreviousNames = multi_sz_lenW( pdi4w->pDependentFiles );
+               pdi->cchPreviousNames = multi_sz_lenW( pdi4w->pszzPreviousNames );
             }
         }
         case 3:
@@ -343,12 +344,13 @@ AddPrinterDriverExW(PWSTR pName, DWORD Level, PBYTE pDriverInfo, DWORD dwFileCop
             PDRIVER_INFO_2W pdi2w = (PDRIVER_INFO_2W)pDriverInfo;
             if ( pdi == NULL ) pdi = HeapAlloc(hProcessHeap, 0, sizeof(WINSPOOL_DRIVER_INFO_2));
 
+            pdi->cVersion = pdi2w->cVersion;
             pdi->pName = pdi2w->pName;
 
             pdi->pEnvironment = pdi2w->pEnvironment;
             if ( !pdi2w->pEnvironment || !*pdi2w->pEnvironment )
             {
-                pdi2w->pEnvironment = (PWSTR)wszCurrentEnvironment;
+                pdi->pEnvironment = (PWSTR)wszCurrentEnvironment;
             }
 
             pdi->pDriverPath = pdi2w->pDriverPath;
