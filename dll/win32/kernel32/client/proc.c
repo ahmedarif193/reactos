@@ -742,6 +742,7 @@ BasePushProcessParameters(IN ULONG ParameterFlags,
     {
         ProcessParameters->ConsoleFlags = 1;
     }
+    ProcessParameters->ProcessGroupId = (CreationFlags & CREATE_NEW_PROCESS_GROUP) ? 0 : Peb->ProcessParameters->ProcessGroupId;
 
     /* Check if there's a .local file present */
     if (ParameterFlags & 1)
@@ -2769,6 +2770,7 @@ BasepCreateUserProcess(IN HANDLE UserToken,
     }
 
     if ((CreationFlags & CREATE_NEW_PROCESS_GROUP) && !(CreationFlags & CREATE_NEW_CONSOLE)) ProcessParameters->ConsoleFlags = 1;
+    ProcessParameters->ProcessGroupId = (CreationFlags & CREATE_NEW_PROCESS_GROUP) ? 0 : NtCurrentPeb()->ProcessParameters->ProcessGroupId;
     if (ParameterFlags & 1) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_LOCAL_DLL_PATH;
     if (ParameterFlags & 2) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_IMAGE_KEY_MISSING;
     if (CreationFlags & PROFILE_USER) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_PROFILE_USER;

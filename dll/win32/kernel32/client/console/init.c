@@ -23,6 +23,7 @@
 
 RTL_CRITICAL_SECTION ConsoleLock;
 BOOLEAN ConsoleInitialized = FALSE;
+static BOOLEAN ConsoleInWow64Process = FALSE;
 extern HANDLE InputWaitHandle;
 static volatile LONG g_bConsoleIMEStartingUp = FALSE; // We use interlock, so LONG
 
@@ -557,7 +558,7 @@ ConDllInitialize(IN ULONG Reason,
 
     if (Reason != DLL_PROCESS_ATTACH)
     {
-        if ((Reason == DLL_THREAD_ATTACH) && IsConsoleApp())
+        if ((Reason == DLL_THREAD_ATTACH) && !ConsoleInWow64Process && IsConsoleApp())
         {
             /* Sync the new thread's LangId with the console's one */
             SetTEBLangID();
@@ -587,6 +588,22 @@ ConDllInitialize(IN ULONG Reason,
     Status = RtlInitializeCriticalSection(&ConsoleLock);
     if (!NT_SUCCESS(Status)) return FALSE;
     ConsoleInitialized = TRUE;
+
+    if (sizeof(PVOID) == sizeof(ULONG64))
+    {
+        ULONG_PTR Wow64Peb = 0;
+
+        Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                           ProcessWow64Information,
+                                           &Wow64Peb,
+                                           sizeof(Wow64Peb),
+                                           NULL);
+        if (NT_SUCCESS(Status) && (Wow64Peb != 0))
+        {
+            ConsoleInWow64Process = TRUE;
+            return TRUE;
+        }
+    }
 
     /* Show by default the console window when applicable */
     ConnectInfo.IsWindowVisible = TRUE;
