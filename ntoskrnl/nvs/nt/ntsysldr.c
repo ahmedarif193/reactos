@@ -1709,6 +1709,7 @@ MiInitializeLoadedModuleList(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ExInitializeResourceLite(&PsLoadedModuleResource);
     KeInitializeSpinLock(&PsLoadedModuleSpinLock);
     InitializeListHead(&PsLoadedModuleList);
+    InitializeListHead(&MmLoadedUserImageList);
 
     ListHead = &LoaderBlock->LoadOrderListHead;
     NextEntry = ListHead->Flink;
