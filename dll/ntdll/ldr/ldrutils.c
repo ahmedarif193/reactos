@@ -1257,8 +1257,9 @@ SkipCheck:
     if (NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
 #endif
     {
-        DPRINT1("LDR: %wZ has machine %04x magic %04x, wrong bitness for this process\n",
-                &BaseDllName, NtHeaders->FileHeader.Machine, NtHeaders->OptionalHeader.Magic);
+        DPRINT1("LDR: %wZ has machine %04x magic %04x, wrong bitness for process %wZ\n",
+                &FullDllName, NtHeaders->FileHeader.Machine, NtHeaders->OptionalHeader.Magic,
+                &NtCurrentPeb()->ProcessParameters->ImagePathName);
         NtUnmapViewOfSection(NtCurrentProcess(), ViewBase);
         NtClose(SectionHandle);
         return STATUS_INVALID_IMAGE_FORMAT;
