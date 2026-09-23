@@ -609,9 +609,16 @@ PopSetSystemPowerStateTraverse(PDEVICE_NODE DeviceNode,
         return STATUS_SUCCESS;
     }
 
+    if (PowerStateContext->SystemPowerState == PowerSystemShutdown)
+        DPRINT1("POWER: action=%u SET_POWER begin %wZ driver=%wZ device=%p\n",
+                PowerStateContext->PowerAction, &DeviceNode->InstancePath,
+                &TopDeviceObject->DriverObject->DriverName, TopDeviceObject);
     Status = PopSendSetSystemPowerState(TopDeviceObject,
                                         PowerStateContext->SystemPowerState,
                                         PowerStateContext->PowerAction);
+    if (PowerStateContext->SystemPowerState == PowerSystemShutdown)
+        DPRINT1("POWER: action=%u SET_POWER end %wZ status=%08lx\n",
+                PowerStateContext->PowerAction, &DeviceNode->InstancePath, Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Device '%wZ' failed IRP_MN_SET_POWER\n", &DeviceNode->InstancePath);
@@ -682,7 +689,12 @@ PopSetSystemPowerState(SYSTEM_POWER_STATE PowerState, POWER_ACTION PowerAction)
     if (Fdo != NULL)
     {
         if (PowerAction != PowerActionShutdownReset)
-            PopSendSetSystemPowerState(Fdo, PowerState, PowerAction);
+        {
+            Status = PopSendSetSystemPowerState(Fdo, PowerState, PowerAction);
+            if (!NT_SUCCESS(Status))
+                DPRINT1("System power transition failed: action=%u status=%08lx\n",
+                        PowerAction, Status);
+        }
 
         ObDereferenceObject(Fdo);
     }

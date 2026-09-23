@@ -28,6 +28,11 @@ HalpReboot(VOID)
     UCHAR Data;
     PVOID ZeroPageMapping;
 
+#ifndef _MINIHAL_
+    /* Modern machines need not have an 8042 keyboard controller. */
+    HalpAcpiReset();
+#endif
+
     /* Map the first physical page */
     PhysicalAddress.QuadPart = 0;
     ZeroPageMapping = HalpMapPhysicalMemory64(PhysicalAddress, 1);
@@ -83,9 +88,13 @@ HalReturnToFirmware(
     /* Check what kind of action this is */
     switch (Action)
     {
-        /* All recognized actions */
+        /* ACPI power-off is performed by the system power driver. If it
+         * returned, halt here; a failed power-off must not become a reboot. */
         case HalHaltRoutine:
         case HalPowerDownRoutine:
+            _disable();
+            for (;;) __halt();
+
         case HalRestartRoutine:
         case HalRebootRoutine:
         {

@@ -826,6 +826,63 @@ HalpGetPmTimer(OUT PULONG Port,
     return TRUE;
 }
 
+VOID
+NTAPI
+HalpAcpiReset(VOID)
+{
+    PFADT Fadt = &HalpFixedAcpiDescTable;
+    PGEN_ADDR Register = &Fadt->reset_reg;
+    PVOID Mapping = NULL;
+    PHARDWARE_PTE PointerPte;
+
+    /* Older FADTs do not contain the optional reset register. Use the cached
+     * table: shutdown cannot allocate pool or acquire the ACPI table mutex. */
+    if (Fadt->Header.Length < RTL_SIZEOF_THROUGH_FIELD(FADT, reset_val) ||
+        !(Fadt->flags & (1UL << 10)) || Register->Address.QuadPart == 0 ||
+        Register->BitOffset != 0)
+    {
+        return;
+    }
+
+    if (Register->AddressSpaceID == 1)
+    {
+        if (Register->Address.QuadPart > MAXUSHORT)
+            return;
+
+        DPRINT1("HAL: ACPI reset port %I64x value %02x\n",
+                Register->Address.QuadPart, Fadt->reset_val);
+        /* ACPI defines this as an 8-bit register. As in ACPICA, ignore an
+         * incorrect firmware width for the system-I/O form. */
+        WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)Register->Address.QuadPart, Fadt->reset_val);
+    }
+    else if (Register->AddressSpaceID == 0 && Register->BitWidth == 8)
+    {
+        Mapping = HalpMapPhysicalMemory64(Register->Address, 1);
+        if (Mapping == NULL)
+            return;
+
+        PointerPte = HalAddressToPte(Mapping);
+        PointerPte->CacheDisable = 1;
+        PointerPte->WriteThrough = 1;
+        HalpFlushTLB();
+
+        DPRINT1("HAL: ACPI reset memory %I64x value %02x\n",
+                Register->Address.QuadPart, Fadt->reset_val);
+        WRITE_REGISTER_UCHAR((PUCHAR)Mapping, Fadt->reset_val);
+        KeFlushWriteBuffer();
+    }
+    else
+    {
+        return;
+    }
+
+    /* Give the platform time to assert reset before trying the legacy path. */
+    KeStallExecutionProcessor(100000);
+    if (Mapping != NULL)
+        HalpUnmapVirtualAddress(Mapping, 1);
+    DPRINT1("HAL: ACPI reset returned; trying keyboard-controller reset\n");
+}
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI

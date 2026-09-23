@@ -9,6 +9,13 @@
 
 #include <hal.h>
 
+VOID
+NTAPI
+HalpAcpiReset(VOID)
+{
+    /* Legacy HALs have no firmware reset register. */
+}
+
 #define NDEBUG
 #include <debug.h>
 

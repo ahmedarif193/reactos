@@ -102,6 +102,12 @@ Bus_FDO_Power (
           AcpiState, AcpiStatus);
         Data->Common.SystemPowerState = oldPowerState;
         status = STATUS_UNSUCCESSFUL;
+        /* A successful lower-driver completion must not hide a failed
+         * platform transition. We still own this IRP at this point. */
+        Irp->IoStatus.Status = status;
+        PoStartNextPowerIrp(Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return status;
       }
   }
     }

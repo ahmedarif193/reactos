@@ -347,7 +347,7 @@ ACPI_STATUS
 acpi_suspend (
 	UINT32			state)
 {
-	ACPI_STATUS status;
+	ACPI_STATUS status, wake_status;
 
 	/* only support S1 and S5 on kernel 2.4 */
 	//if (state != ACPI_STATE_S1 && state != ACPI_STATE_S4
@@ -366,10 +366,10 @@ acpi_suspend (
 	//		/* We don't support S4 under 2.4.  Give up */
 	//		return AE_ERROR;
 	//}
-	AcpiEnterSleepStatePrep(state);
-
-	status = AcpiEnterSleepState(state);
-	if (!ACPI_SUCCESS(status) && state != ACPI_STATE_S5)
+	/* AML preparation may wait and must run with interrupts enabled. Do not
+	 * program the sleep registers if preparation failed. */
+	status = AcpiEnterSleepStatePrep(state);
+	if (ACPI_FAILURE(status))
 		return status;
 
 	/* disable interrupts and flush caches */
@@ -378,16 +378,19 @@ acpi_suspend (
 
 	/* perform OS-specific sleep actions */
 	status = acpi_system_suspend(state);
+	wake_status = AcpiLeaveSleepStatePrep(state);
+	_enable();
 
 	/* Even if we failed to go to sleep, all of the devices are in an suspended
 	 * mode. So, we run these unconditionally to make sure we have a usable system
 	 * no matter what.
 	 */
-	AcpiLeaveSleepState(state);
+	if (ACPI_FAILURE(wake_status) && ACPI_SUCCESS(status))
+		status = wake_status;
+	wake_status = AcpiLeaveSleepState(state);
+	if (ACPI_FAILURE(wake_status) && ACPI_SUCCESS(status))
+		status = wake_status;
 	acpi_system_restore_state(state);
-
-	/* make sure interrupts are enabled */
-	_enable();
 
 	/* reset firmware waking vector */
 	AcpiSetFirmwareWakingVector(0, 0);

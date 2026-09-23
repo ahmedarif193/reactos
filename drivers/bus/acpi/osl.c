@@ -1479,6 +1479,9 @@ AcpiOsEnterSleep(
     UINT32 RegaValue,
     UINT32 RegbValue)
 {
+#if defined(_M_IX86) || defined(_M_AMD64)
+    ASSERT((__readeflags() & 0x200) == 0);
+#endif
     DPRINT1("Entering sleep state S%u.\n", SleepState);
     return AE_OK;
 }
