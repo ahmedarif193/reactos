@@ -195,7 +195,7 @@ Test_SoftGpu2DEndToEnd(void)
     PFND3DKMT_QUERYADAPTERINFO pQueryAdapterInfo;
     PFND3DKMT_WAITFORIDLE pWaitForIdle;
     PFN_D3DUmdRtCreateDeviceCallbacks pCreateCallbacks;
-    PFN_D3DUmdRtDestroyDeviceCallbacks pDestroyCallbacks;
+    PFN_D3DUmdRtDestroyDeviceCallbacks pDestroyCallbacks = NULL;
     PFND3DDDI_OPENADAPTER pOpenAdapter;
     D3DKMT_HANDLE hAdapter = 0;
     D3DKMT_HANDLE hKmtDevice = 0;

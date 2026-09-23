@@ -347,7 +347,6 @@ static void Test_QueryStatistics(void)
      * and basic export availability here.
      */
     PFN_D3DKMTQueryAdapterInfo pfnQueryStats;
-    NTSTATUS Status;
 
     pfnQueryStats = (PFN_D3DKMTQueryAdapterInfo)LoadD3DKMTProc("D3DKMTQueryStatistics");
     if (!pfnQueryStats)
