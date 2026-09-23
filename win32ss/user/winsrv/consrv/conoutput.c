@@ -240,7 +240,7 @@ CON_API(SrvCreateConsoleScreenBuffer,
             PTEXTMODE_SCREEN_BUFFER Buffer = (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer;
 
             TextModeInfo.ScreenAttrib = Buffer->ScreenDefaultAttrib;
-            TextModeInfo.PopupAttrib  = Buffer->PopupDefaultAttrib;
+            TextModeInfo.PopupAttrib  = Buffer->ScreenDefaultAttrib;
 
             TextModeInfo.CursorSize      = Buffer->CursorInfo.dwSize;
             TextModeInfo.IsCursorVisible = Buffer->CursorInfo.bVisible;

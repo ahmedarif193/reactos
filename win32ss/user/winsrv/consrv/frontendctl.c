@@ -319,14 +319,27 @@ CON_API(SrvGetConsoleSelectionInfo,
                 ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL);
 }
 
+static COORD
+ConSrvGetMaximumViewSize(IN PCONSRV_CONSOLE Console,
+                         IN PCONSOLE_SCREEN_BUFFER Buffer)
+{
+    COORD Size;
+
+    TermGetLargestConsoleWindowSize(Console, &Size);
+    Size.X = min(Size.X, Buffer->ScreenBufferSize.X);
+    Size.Y = min(Size.Y, Buffer->ScreenBufferSize.Y);
+    return Size;
+}
+
 /* API_NUMBER: ConsolepGetNumberOfFonts */
 CON_API(SrvGetConsoleNumberOfFonts,
         CONSOLE_GETNUMFONTS, GetNumFontsRequest)
 {
+    CONSOLE_FONT_INFOEX FontInfo;
+
     // FIXME!
     // TermGetNumberOfFonts(Console, ...);
-    DPRINT1("%s not yet implemented\n", __FUNCTION__);
-    GetNumFontsRequest->NumFonts = 0;
+    GetNumFontsRequest->NumFonts = TermGetFont(Console, &FontInfo) ? 1 : 0;
     return STATUS_SUCCESS;
 }
 
@@ -336,6 +349,7 @@ CON_API(SrvGetConsoleFontInfo,
 {
     NTSTATUS Status;
     PCONSOLE_SCREEN_BUFFER Buff;
+    CONSOLE_FONT_INFOEX FontInfo;
 
     Status = ConSrvGetTextModeBuffer(ProcessData,
                                      GetFontInfoRequest->OutputHandle,
@@ -349,11 +363,28 @@ CON_API(SrvGetConsoleFontInfo,
 
     // FIXME!
     // TermGetFontInfo(Console, ...);
-    DPRINT1("%s not yet implemented\n", __FUNCTION__);
-    GetFontInfoRequest->NumFonts = 0;
+    if (GetFontInfoRequest->NumFonts &&
+        !CsrValidateMessageBuffer(ApiMessage,
+                                  (PVOID*)&GetFontInfoRequest->FontInfo,
+                                  GetFontInfoRequest->NumFonts,
+                                  sizeof(CONSOLE_FONT_INFO)))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+    }
+    else if (GetFontInfoRequest->NumFonts && TermGetFont(Console, &FontInfo))
+    {
+        GetFontInfoRequest->FontInfo[0].nFont = 0;
+        GetFontInfoRequest->FontInfo[0].dwFontSize = GetFontInfoRequest->MaximumWindow ?
+            ConSrvGetMaximumViewSize(Console, Buff) : Buff->ViewSize;
+        GetFontInfoRequest->NumFonts = 1;
+    }
+    else
+    {
+        GetFontInfoRequest->NumFonts = 0;
+    }
 
     ConSrvReleaseScreenBuffer(Buff, TRUE);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /* API_NUMBER: ConsolepGetFontSize */
@@ -362,6 +393,7 @@ CON_API(SrvGetConsoleFontSize,
 {
     NTSTATUS Status;
     PCONSOLE_SCREEN_BUFFER Buff;
+    CONSOLE_FONT_INFOEX FontInfo;
 
     Status = ConSrvGetTextModeBuffer(ProcessData,
                                      GetFontSizeRequest->OutputHandle,
@@ -375,10 +407,13 @@ CON_API(SrvGetConsoleFontSize,
 
     // FIXME!
     // TermGetFontSize(Console, ...);
-    DPRINT1("%s not yet implemented\n", __FUNCTION__);
+    if (GetFontSizeRequest->FontIndex != 0 || !TermGetFont(Console, &FontInfo))
+        Status = STATUS_INVALID_PARAMETER;
+    else
+        GetFontSizeRequest->FontSize = FontInfo.dwFontSize;
 
     ConSrvReleaseScreenBuffer(Buff, TRUE);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /* API_NUMBER: ConsolepGetCurrentFont */
@@ -387,6 +422,7 @@ CON_API(SrvGetConsoleCurrentFont,
 {
     NTSTATUS Status;
     PCONSOLE_SCREEN_BUFFER Buff;
+    CONSOLE_FONT_INFOEX FontInfo;
 
     Status = ConSrvGetTextModeBuffer(ProcessData,
                                      GetCurrentFontRequest->OutputHandle,
@@ -400,11 +436,22 @@ CON_API(SrvGetConsoleCurrentFont,
 
     // FIXME!
     // TermGetCurrentFont(Console, ...);
-    DPRINT1("%s not yet implemented\n", __FUNCTION__);
-    GetCurrentFontRequest->FontIndex = 0;
+    if (!TermGetFont(Console, &FontInfo))
+    {
+        Status = STATUS_UNSUCCESSFUL;
+    }
+    else
+    {
+        GetCurrentFontRequest->FontIndex = FontInfo.nFont;
+        GetCurrentFontRequest->FontSize = GetCurrentFontRequest->MaximumWindow ?
+            ConSrvGetMaximumViewSize(Console, Buff) : FontInfo.dwFontSize;
+        GetCurrentFontRequest->FontFamily = FontInfo.FontFamily;
+        GetCurrentFontRequest->FontWeight = FontInfo.FontWeight;
+        RtlCopyMemory(GetCurrentFontRequest->FaceName, FontInfo.FaceName, sizeof(GetCurrentFontRequest->FaceName));
+    }
 
     ConSrvReleaseScreenBuffer(Buff, TRUE);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /* API_NUMBER: ConsolepSetFont */
@@ -413,6 +460,7 @@ CON_API(SrvSetConsoleFont,
 {
     NTSTATUS Status;
     PCONSOLE_SCREEN_BUFFER Buff;
+    CONSOLE_FONT_INFOEX FontInfo;
 
     Status = ConSrvGetTextModeBuffer(ProcessData,
                                      SetFontRequest->OutputHandle,
@@ -426,10 +474,11 @@ CON_API(SrvSetConsoleFont,
 
     // FIXME!
     // TermSetFont(Console, ...);
-    DPRINT1("%s not yet implemented\n", __FUNCTION__);
+    if (SetFontRequest->FontIndex != 0 || !TermGetFont(Console, &FontInfo))
+        Status = STATUS_INVALID_PARAMETER;
 
     ConSrvReleaseScreenBuffer(Buff, TRUE);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /* EOF */
