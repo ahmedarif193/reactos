@@ -54,6 +54,7 @@ list(APPEND SOURCE
     d3dkmt_abifreeze.c
     d3dkmt_procstress.c
     d3dkmt_umdload.c
+    d3dkmt_native11.c
     d3dkmt_umd2d.c
     d3dkmt_pipeline.c
     d3dkmt_capture.c

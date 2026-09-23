@@ -14,6 +14,7 @@
 #include "precomp.h"
 #include <d3dumddi.h>
 #include <d3d10umddi.h>
+#include <drivers/directx/umd_adapter.h>
 
 static PFND3DKMT_QUERYADAPTERINFO pfnQueryAdapterInfo;
 
@@ -63,6 +64,12 @@ UmdLoadQueryAdapterInfo(HANDLE RuntimeAdapter, const D3DDDICB_QUERYADAPTERINFO *
     return NT_SUCCESS(Status) ? S_OK : HRESULT_FROM_NT(Status);
 }
 
+static HRESULT APIENTRY
+UmdLoadQueryAdapterInfo2(HANDLE RuntimeAdapter, const D3DDDICB_QUERYADAPTERINFO2 *Info)
+{
+    return RosUmdQueryAdapterInfo2(RuntimeAdapter, Info, pfnQueryAdapterInfo);
+}
+
 static void Test_LoadUserModeDriver(void)
 {
     D3DKMT_HANDLE hAdapter;
@@ -71,7 +78,7 @@ static void Test_LoadUserModeDriver(void)
     PFND3D10DDI_OPENADAPTER pfnOpenAdapter;
     D3D10DDIARG_OPENADAPTER Open;
     D3D10_2DDI_ADAPTERFUNCS AdapterFuncs;
-    D3DDDI_ADAPTERCALLBACKS AdapterCallbacks;
+    ROS_UMD_ADAPTER_CALLBACKS AdapterCallbacks;
     UINT32 Count, Capacity, Index;
     UINT64 *Versions = NULL;
     HRESULT hr;
@@ -110,9 +117,10 @@ static void Test_LoadUserModeDriver(void)
     memset(&AdapterFuncs, 0, sizeof(AdapterFuncs));
     memset(&AdapterCallbacks, 0, sizeof(AdapterCallbacks));
     AdapterCallbacks.pfnQueryAdapterInfoCb = UmdLoadQueryAdapterInfo;
+    AdapterCallbacks.pfnQueryAdapterInfoCb2 = UmdLoadQueryAdapterInfo2;
     memset(&Open, 0, sizeof(Open));
     Open.hRTAdapter.handle = (HANDLE)(ULONG_PTR)hAdapter;
-    Open.pAdapterCallbacks = &AdapterCallbacks;
+    Open.pAdapterCallbacks = (const D3DDDI_ADAPTERCALLBACKS *)&AdapterCallbacks;
     Open.pAdapterFuncs_2 = &AdapterFuncs;
     /* OpenAdapter10_2 negotiates DDI versions through GetSupportedVersions;
      * no device or device-function table is exchanged by this probe. */
