@@ -79,7 +79,7 @@ ServiceInit(VOID)
     HANDLE hThread;
     NTSTATUS Status;
 
-    ERR("ServiceInit()\n");
+    TRACE("ServiceInit()\n");
 
     /* Get the OS version */
     VersionInfo.dwOSVersionInfoSize = sizeof(VersionInfo);
