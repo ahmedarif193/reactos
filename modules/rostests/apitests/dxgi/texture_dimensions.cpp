@@ -455,6 +455,8 @@ START_TEST(multisample)
         hr = device->CheckFormatSupport(formats[i], &support);
         ok(hr == S_OK && (support & D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET),
                 "Multisample render-target caps %u: %#lx %#x\n", formats[i], hr, support);
+        ok(hr == S_OK && (support & D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD),
+                "Multisample shader-load caps %u: %#lx %#x\n", formats[i], hr, support);
         // Two of four samples receive green; the rest retain transparent black.
         // Readback must contain their average, not a copy of one sample.
         ID3D11Texture2D *texture = NULL;
