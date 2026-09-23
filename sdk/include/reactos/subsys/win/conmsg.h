@@ -511,6 +511,9 @@ typedef struct _CONSOLE_GETCURRENTFONT
     BOOLEAN MaximumWindow;
     ULONG   FontIndex;
     COORD   FontSize;
+    ULONG   FontFamily;
+    ULONG   FontWeight;
+    WCHAR   FaceName[LF_FACESIZE];
 } CONSOLE_GETCURRENTFONT, *PCONSOLE_GETCURRENTFONT;
 
 typedef struct _CONSOLE_SETFONT
