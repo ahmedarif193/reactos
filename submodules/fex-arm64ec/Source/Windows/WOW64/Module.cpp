@@ -52,6 +52,7 @@ $end_info$
 #include <cstdint>
 #include <type_traits>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <unordered_map>
@@ -605,7 +606,28 @@ void BTCpuProcessInit() {
   }
 }
 
-void BTCpuProcessTerm(HANDLE Handle, BOOL After, ULONG Status) {}
+void BTCpuProcessTerm(HANDLE Handle, BOOL After, ULONG Status) {
+#ifdef __REACTOS__
+  if (Handle) {
+    return;
+  }
+
+  if (!After) {
+    ThreadCreationMutex.lock();
+    CTX->GetCodeInvalidationMutex().lock();
+    return;
+  }
+
+  if (static_cast<NTSTATUS>(Status) >= 0) {
+    CTX->GetCodeInvalidationMutex().StealAndDropActiveLocks();
+    std::destroy_at(&ThreadCreationMutex);
+    std::construct_at(&ThreadCreationMutex);
+  } else {
+    CTX->GetCodeInvalidationMutex().unlock();
+    ThreadCreationMutex.unlock();
+  }
+#endif
+}
 
 void BTCpuThreadInit() {
   static constexpr size_t DefaultWow64CS {4};

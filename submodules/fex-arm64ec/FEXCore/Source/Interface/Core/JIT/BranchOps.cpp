@@ -244,6 +244,12 @@ DEF_OP(CondJump) {
 
   auto TrueTargetLabel = JumpTarget(Op->TrueBlock);
 
+#ifdef __REACTOS__
+  if (TrueTargetLabel->Backward.Location) {
+    EmitSuspendInterruptCheck();
+  }
+#endif
+
   if (Op->FromNZCV) {
     b_OrRestart(MapCC(Op->Cond), TrueTargetLabel);
   } else {

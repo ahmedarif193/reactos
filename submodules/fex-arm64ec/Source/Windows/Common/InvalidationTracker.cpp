@@ -114,6 +114,11 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
         NeedsReprotect = HasExec;
 #endif
       }
+#ifdef __REACTOS__
+      else {
+        RWXIntervals.Remove(ProtInterval);
+      }
+#endif
       if (DEPDisabled && !HasExec) {
         DEPPromotedIntervals.Insert(ProtInterval);
       }
