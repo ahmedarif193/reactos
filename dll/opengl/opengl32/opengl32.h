@@ -153,6 +153,8 @@ IntGetCurrentDHGLRC(void)
     return ctx->dhglrc;
 }
 
+BOOL IntIsPixelFormatInitializing(VOID);
+
 /* Software implementation functions */
 INT sw_DescribePixelFormat(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR* descr);
 BOOL sw_SetPixelFormat(HDC hdc, struct wgl_dc_data*, INT format);

@@ -637,6 +637,20 @@ struct dxgi_factory *unsafe_impl_from_IDXGIFactory(IDXGIFactory *iface)
 #ifdef __REACTOS__
 static struct wined3d *dxgi_cached_wined3d;
 static BOOL dxgi_wined3d_initialized;
+/* Protected by the recursive WineD3D mutex. ICD pixel-format initialization
+ * can call CreateDXGIFactory again while the outer factory probes WGL. */
+static DWORD dxgi_wined3d_initializing_thread;
+
+static BOOL dxgi_is_icd_initializing(void)
+{
+    HMODULE module = GetModuleHandleW(L"opengl32.dll");
+    BOOL (WINAPI *is_initializing)(void);
+
+    if (!module)
+        return FALSE;
+    is_initializing = (void *)GetProcAddress(module, "RosOpenGLIsDriverInitializing");
+    return is_initializing && is_initializing();
+}
 #endif
 
 static HRESULT dxgi_factory_init(struct dxgi_factory *factory, BOOL extended)
@@ -647,14 +661,27 @@ static HRESULT dxgi_factory_init(struct dxgi_factory *factory, BOOL extended)
 
     wined3d_mutex_lock();
 #ifdef __REACTOS__
-    if (!dxgi_wined3d_initialized)
+    if (dxgi_is_icd_initializing() ||
+            dxgi_wined3d_initializing_thread == GetCurrentThreadId())
     {
-        dxgi_cached_wined3d = wined3d_create(0);
-        dxgi_wined3d_initialized = TRUE;
+        /* The ICD needs adapter metadata to finish loading. WGL cannot
+         * create a hardware context yet. Build an uncached enumeration
+         * object and let subsequent factories probe the completed ICD. */
+        factory->wined3d = wined3d_create(WINED3D_NO3D);
     }
-    factory->wined3d = dxgi_cached_wined3d;
-    if (factory->wined3d)
-        wined3d_incref(factory->wined3d);
+    else
+    {
+        if (!dxgi_wined3d_initialized)
+        {
+            dxgi_wined3d_initializing_thread = GetCurrentThreadId();
+            dxgi_cached_wined3d = wined3d_create(0);
+            dxgi_wined3d_initializing_thread = 0;
+            dxgi_wined3d_initialized = dxgi_cached_wined3d != NULL;
+        }
+        factory->wined3d = dxgi_cached_wined3d;
+        if (factory->wined3d)
+            wined3d_incref(factory->wined3d);
+    }
 #else
     factory->wined3d = wined3d_create(0);
 #endif
