@@ -71,7 +71,7 @@ struct Surface
 {
     Texture Image;
     ID3D11Texture2D *SharedSource;
-    ULONG SurfaceId, Share, Generation, WindowGeneration, LastFrame;
+    ULONG SurfaceId, Share, Generation, LastFrame;
     ULONGLONG UpdateId;
     BOOL Client;
 
@@ -884,14 +884,14 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
         ClientSource *Source = ImportClientSource(Window);
         if (Source == NULL)
             return NULL;
-        if (Slot->Share != Share || Slot->Generation != Generation ||
-            Slot->WindowGeneration != Window->Generation || Slot->UpdateId != Window->DxUpdateId)
+        if (Slot->Share != Share || Slot->Generation != Generation || Slot->UpdateId != Window->DxUpdateId)
         {
             if (!EnsureTexture(Slot->Image, Width, Height, FALSE, (DXGI_FORMAT)Format))
                 return NULL;
             /* A consumed producer may immediately render into this buffer
              * again. Retain a GPU-owned snapshot so unrelated desktop damage
-             * keeps drawing the last published pixels until its next update. */
+             * keeps drawing the last published pixels until its next update.
+             * GDI front/back generation changes do not publish client pixels. */
             UnbindTextures();
             State.Context->CopyResource(Slot->Image.Resource, Source->Resource);
             State.WorkPending = TRUE;
@@ -899,7 +899,6 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
                 return NULL;
             Slot->Share = Share;
             Slot->Generation = Generation;
-            Slot->WindowGeneration = Window->Generation;
             Slot->SurfaceId = Window->SurfaceId;
             Slot->Client = TRUE;
             Slot->UpdateId = Window->DxUpdateId;
