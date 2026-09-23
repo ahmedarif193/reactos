@@ -2619,7 +2619,7 @@ DxgkpNotifyActivePathChanged(
     PDXGKDDI_UPDATE_ACTIVE_VIDPN_PRESENT_PATH UpdatePath =
         DXGK_CB_FULL(Adapter, DxgkDdiUpdateActiveVidPnPresentPath);
     DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH UpdateArgs;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     if (UpdatePath == NULL)
         return;
