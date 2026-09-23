@@ -58,6 +58,7 @@
 #define DXGK_PRESENT_TRACE_BURST     8
 #define DXGK_PRESENT_TRACE_PERIOD    128
 #define DXGK_MMIO_FLIP_TIMEOUT_100NS  (2000ULL * 10000ULL)
+#define DXGK_VBLANK_WAIT_TIMEOUT_100NS (2000ULL * 10000ULL)
 
 static volatile LONG g_DodPresentTraceCount = 0;
 static volatile LONG g_SharedPrimaryPresentTraceCount = 0;
@@ -467,6 +468,27 @@ DxgkPresentNotifyDeviceRemoved(
     DxgkpReleasePresentQueues(Adapter);
 }
 
+static NTSTATUS
+DxgkpValidateVBlankSource(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
+{
+    D3DKMT_CURRENTDISPLAYMODE CurrentMode;
+
+    /* A present queue also exists for display-only drivers without VSync
+     * support, and for sources without an active scanout path. Neither can
+     * satisfy a wait for a real VBlank. Do not synthesize a successful one. */
+    if (InterlockedCompareExchange(&Adapter->VsyncInterruptEnabled, 0, 0) == 0)
+        return STATUS_NOT_SUPPORTED;
+
+    RtlZeroMemory(&CurrentMode, sizeof(CurrentMode));
+    CurrentMode.VidPnSourceId = VidPnSourceId;
+    if (!NT_SUCCESS(DxgkVidPnQueryCurrentDisplayMode(Adapter, &CurrentMode)))
+        return STATUS_GRAPHICS_PRESENT_OCCLUDED;
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 DxgkpWaitForVerticalBlank(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -481,6 +503,8 @@ DxgkpWaitForVerticalBlank(
     PDXGKRNL_PRESENT_QUEUE Queue;
     DXGKRNL_VBLANK_WAITER Waiter;
     BOOLEAN WaiterLinked = FALSE;
+    ULONGLONG Deadline, Now;
+    LARGE_INTEGER Timeout;
     KIRQL OldIrql;
     ULONG Index;
     NTSTATUS Status;
@@ -507,6 +531,9 @@ DxgkpWaitForVerticalBlank(
         }
         WaitObjects[Index + 1] = ReferencedObjects[Index];
     }
+    Status = DxgkpValidateVBlankSource(Adapter, VidPnSourceId);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
     RtlZeroMemory(&Waiter, sizeof(Waiter));
     KeInitializeEvent(&Waiter.Event, NotificationEvent, FALSE);
     WaitObjects[0] = &Waiter.Event;
@@ -528,9 +555,16 @@ DxgkpWaitForVerticalBlank(
     InsertTailList(&Queue->VBlankWaiterList, &Waiter.Entry);
     WaiterLinked = TRUE;
     KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+    Deadline = KeQueryInterruptTime() + DXGK_VBLANK_WAIT_TIMEOUT_100NS;
     for (;;)
     {
-        Status = KeWaitForMultipleObjects(NumObjects + 1, WaitObjects, WaitAny, UserRequest, KernelMode, FALSE, NULL, WaitBlocks);
+        /* The source can disappear after validation, or its interrupts can
+         * stop without an adapter reset. Bound the wait so it cannot pin a
+         * syscall and its rundown references indefinitely. Spurious wakes
+         * must not extend the deadline. */
+        Now = KeQueryInterruptTime();
+        Timeout.QuadPart = Now < Deadline ? -(LONGLONG)(Deadline - Now) : 0;
+        Status = KeWaitForMultipleObjects(NumObjects + 1, WaitObjects, WaitAny, UserRequest, KernelMode, FALSE, &Timeout, WaitBlocks);
         if (InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) != 0 || InterlockedCompareExchange64(&Adapter->VBlankResetGeneration, 0, 0) != Waiter.ResetGeneration || (Device != NULL && InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE))
         {
             Status = STATUS_DEVICE_REMOVED;
@@ -538,12 +572,21 @@ DxgkpWaitForVerticalBlank(
         }
         if (Status >= STATUS_WAIT_1 && Status <= STATUS_WAIT_0 + NumObjects)
             break;
-        if (Status != STATUS_WAIT_0)
+        if (Status != STATUS_WAIT_0 && Status != STATUS_TIMEOUT)
             break;
         KeAcquireSpinLock(&Queue->VBlankWaitLock, &OldIrql);
         if (InterlockedCompareExchange64(&Queue->VBlankCount, 0, 0) >= Waiter.TargetVBlank)
         {
             KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+        if (Status == STATUS_TIMEOUT)
+        {
+            KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+            Status = DxgkpValidateVBlankSource(Adapter, VidPnSourceId);
+            if (NT_SUCCESS(Status))
+                Status = STATUS_IO_TIMEOUT;
             break;
         }
         KeClearEvent(&Waiter.Event);
