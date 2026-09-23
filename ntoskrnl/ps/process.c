@@ -1923,6 +1923,30 @@ PspCreateWow64ProcessParameters(IN HANDLE ProcessHandle,
  * and returns both handles in a single call.
  */
 #ifdef _WIN64
+#ifndef INITIAL_FPCSR
+#define INITIAL_FPCSR 0x027f
+#endif
+#ifndef INITIAL_MXCSR
+#define INITIAL_MXCSR 0x1f80
+#endif
+
+static
+VOID
+PspInitializeWow64FloatState(
+    _Inout_ PWOW64_CONTEXT Context)
+{
+    XSAVE_FORMAT FxSave;
+
+    RtlZeroMemory(&FxSave, sizeof(FxSave));
+    FxSave.ControlWord = INITIAL_FPCSR;
+    FxSave.MxCsr = INITIAL_MXCSR;
+    RtlCopyMemory(Context->ExtendedRegisters, &FxSave, sizeof(Context->ExtendedRegisters));
+
+    Context->FloatSave.ControlWord = INITIAL_FPCSR;
+    Context->FloatSave.TagWord = 0xFFFF;
+    Context->ContextFlags |= WOW64_CONTEXT_FLOATING_POINT | WOW64_CONTEXT_EXTENDED_REGISTERS;
+}
+
 NTSTATUS
 NTAPI
 PspPrepareWow64Thread(IN HANDLE ProcessHandle,
@@ -1942,6 +1966,7 @@ PspPrepareWow64Thread(IN HANDLE ProcessHandle,
     CpuInit.Cpu.Machine = IMAGE_FILE_MACHINE_I386;
     CpuInit.Context = *Wow64Context;
     CpuInit.Context.ContextFlags = WOW64_CONTEXT_FULL;
+    PspInitializeWow64FloatState(&CpuInit.Context);
     CpuInit.Context.EFlags = (Wow64Context->EFlags & 0x3000) | EFLAGS_INTERRUPT_MASK;
     CpuInit.Context.SegCs = KGDT64_R3_CMCODE | RPL_MASK;
     CpuInit.Context.SegDs = KGDT64_R3_DATA | RPL_MASK;
@@ -3314,6 +3339,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         RtlZeroMemory(&CpuInit, sizeof(CpuInit));
         CpuInit.Cpu.Machine = IMAGE_FILE_MACHINE_I386;
         CpuInit.Context.ContextFlags = WOW64_CONTEXT_FULL;
+        PspInitializeWow64FloatState(&CpuInit.Context);
         CpuInit.Context.Eip = PtrToUlong(ImageInformation.TransferAddress);
         CpuInit.Context.Esp = PtrToUlong(Wow64InitialTeb.StackBase);
         CpuInit.Context.EFlags = EFLAGS_INTERRUPT_MASK;
