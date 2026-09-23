@@ -400,7 +400,7 @@ DxgkpSyncCallDestroyPeriodicNotification(
     _In_ HANDLE NotificationHandle)
 {
     DXGKARG_DESTROYPERIODICFRAMENOTIFICATION DestroyArgs;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     PAGED_CODE();
     if (Adapter == NULL ||

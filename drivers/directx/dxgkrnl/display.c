@@ -471,7 +471,7 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
     _In_opt_ CONST D3DKMDT_VIDEO_SIGNAL_INFO *RequestedTarget,
     _Out_ PDXGKP_DISPLAY_COMMIT_RESULT Result)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PDXGKP_VIDPN VidPn;
     SIZE_T i;
     BOOLEAN ForceDodPresentOnlyPath;
