@@ -261,7 +261,7 @@ public:
     return AtomicFutex.compare_exchange_strong(Expected, Desired, std::memory_order_acq_rel, std::memory_order_acquire);
   }
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) || defined(__REACTOS__)
   // Initialize the internal mutex object to its default initializer state.
   // Should only ever be used in the child process when a Linux fork() has occured.
   void StealAndDropActiveLocks() {
