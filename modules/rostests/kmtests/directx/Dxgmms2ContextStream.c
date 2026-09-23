@@ -126,6 +126,7 @@ static VOID TestOrderedPrefixesWaitsAndSignals(VOID)
     ULONGLONG Sequence2;
     ULONGLONG TransactionId;
     ULONGLONG BeforeAdmitted;
+    ULONG RetiredCount;
     NTSTATUS Status;
 
     Dxgmms2ContextStreamManagerInitialize(&Manager);
@@ -302,7 +303,8 @@ static VOID TestOrderedPrefixesWaitsAndSignals(VOID)
     ok_eq_hex(Status, STATUS_SUCCESS);
     CheckPrefixes(&Manager, ContextA, 10, 10, 10, 0);
     CheckPrefixes(&Manager, ContextB, 1, 1, 1, 0);
-    ok_eq_ulong(DrainRetirements(&Manager, ContextB, NULL), 1);
+    RetiredCount = DrainRetirements(&Manager, ContextB, NULL);
+    ok_eq_ulong(RetiredCount, 1);
 
     Status = QueryContext(&Manager, ContextA, &Snapshot);
     ok_eq_hex(Status, STATUS_SUCCESS);
@@ -359,7 +361,6 @@ static VOID TestOrderedPrefixesWaitsAndSignals(VOID)
 
     {
         DXGMMS2_CONTEXT_RETIREMENT_V1 Retirements[16];
-        ULONG RetiredCount;
 
         RetiredCount = DrainRetirements(&Manager, ContextA, Retirements);
         ok_eq_ulong(RetiredCount, 11);
@@ -369,9 +370,11 @@ static VOID TestOrderedPrefixesWaitsAndSignals(VOID)
             ok_eq_hex(Retirements[10].TerminalStatus, STATUS_CANCELLED);
             ok_eq_ulonglong(Retirements[10].ClientTag, 0x115);
         }
-        ok_eq_ulong(DrainRetirements(&Manager, ContextA, NULL), 0);
+        RetiredCount = DrainRetirements(&Manager, ContextA, NULL);
+        ok_eq_ulong(RetiredCount, 0);
     }
-    ok_eq_ulong(DrainRetirements(&Manager, ContextB, NULL), 2);
+    RetiredCount = DrainRetirements(&Manager, ContextB, NULL);
+    ok_eq_ulong(RetiredCount, 2);
     Status = Dxgmms2ContextStreamDestroy(&Manager, ContextA);
     ok_eq_hex(Status, STATUS_SUCCESS);
     Status = Dxgmms2ContextStreamDestroy(&Manager, ContextB);
@@ -392,6 +395,7 @@ static VOID TestStopClaimDrainAndForcedRetirement(VOID)
     DXGMMS2_CONTEXT_ACTION_V1 Action;
     DXGMMS2_CONTEXT_STREAM_HANDLE Context;
     ULONGLONG Sequence;
+    ULONG RetiredCount;
     NTSTATUS Status;
 
     Dxgmms2ContextStreamManagerInitialize(&Manager);
@@ -417,7 +421,8 @@ static VOID TestStopClaimDrainAndForcedRetirement(VOID)
     Status = Dxgmms2ContextStreamManagerCompleteStop(&Manager, TRUE);
     ok_eq_hex(Status, STATUS_SUCCESS);
     CheckPrefixes(&Manager, Context, 1, 1, 1, 0);
-    ok_eq_ulong(DrainRetirements(&Manager, Context, NULL), 1);
+    RetiredCount = DrainRetirements(&Manager, Context, NULL);
+    ok_eq_ulong(RetiredCount, 1);
     Status = Dxgmms2ContextStreamDestroy(&Manager, Context);
     ok_eq_hex(Status, STATUS_SUCCESS);
     Status = Dxgmms2ContextStreamManagerPrepareDestroy(&Manager);
@@ -444,7 +449,8 @@ static VOID TestStopClaimDrainAndForcedRetirement(VOID)
     CheckPrefixes(&Manager, Context, 1, 1, 1, 0);
     Status = Dxgmms2ContextStreamCompleteWork(&Manager, Context, Sequence, STATUS_SUCCESS);
     ok_eq_hex(Status, STATUS_ALREADY_COMPLETE);
-    ok_eq_ulong(DrainRetirements(&Manager, Context, NULL), 1);
+    RetiredCount = DrainRetirements(&Manager, Context, NULL);
+    ok_eq_ulong(RetiredCount, 1);
     Status = Dxgmms2ContextStreamDestroy(&Manager, Context);
     ok_eq_hex(Status, STATUS_SUCCESS);
     Status = Dxgmms2ContextStreamManagerPrepareDestroy(&Manager);
