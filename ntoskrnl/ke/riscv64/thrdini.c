@@ -160,6 +160,10 @@ KiSwapContextResume(
     if (OldProcess != NewProcess)
         KiSwapProcess(NewProcess, OldProcess);
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* Charge the old thread before another processor can run it. */
+    KiChargeThreadCycleTime(Prcb, OldThread);
+#endif
     Prcb->KeContextSwitches++;
     NewThread->ContextSwitches++;
 #if (NTDDI_VERSION >= NTDDI_WIN7)

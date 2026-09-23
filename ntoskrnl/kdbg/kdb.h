@@ -63,7 +63,7 @@ BOOLEAN
 KdbpProcessorStateIsFrozen(
     _In_ ULONG FrozenState)
 {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     return (FrozenState & ~IPI_FROZEN_FLAG_ACTIVE) == IPI_FROZEN_STATE_FROZEN;
 #else
     UNREFERENCED_PARAMETER(FrozenState);

@@ -1020,7 +1020,7 @@ NtCreateThread(OUT PHANDLE ThreadHandle,
         SafeInitialTeb = *InitialTeb;
     }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     {
         PEPROCESS Process;
         CONTEXT SafeContext;

@@ -348,7 +348,7 @@ PerformTest(
                                 ok(TestContext->Buffer >= (PVOID)0xC1000000 && TestContext->Buffer < (PVOID)0xDBFFFFFF,
                                    "Buffer %p not mapped in system space\n", TestContext->Buffer);
                             }
-#elif defined(_M_AMD64) || defined(_M_ARM64)
+#elif defined(_WIN64)
                             ok((ULONG_PTR)TestContext->Buffer >= (ULONG_PTR)MmSystemRangeStart,
                                "Buffer %p not mapped in system space\n", TestContext->Buffer);
 #else

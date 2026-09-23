@@ -1106,6 +1106,23 @@ KiClearDpcRequestState(
     Prcb->DpcInterruptRequested = FALSE;
 }
 
+#define _KeIsExecutingDpc() (KeGetCurrentPrcb()->DpcRoutineActive)
+
+/* A trap from user mode or from virtual-8086 code. */
+#define KiIsUserModeTrap(TrapFrame) \
+    (KiUserTrap(TrapFrame) || ((TrapFrame)->EFlags & EFLAGS_V86_MASK))
+
+/* The trap frame holds every register: nothing lives in an exception frame. */
+#define KI_NO_EXCEPTION_FRAME
+
+/* Interrupt resources of the APIC HAL: line interrupts stop at the 24 pins of
+ * the first I/O APIC and message vectors start at 0x50. The PIC HAL fits in
+ * the same window. Keep in sync with APIC_MAX_IRQ (hal/halx86/apic/apicp.h)
+ * and MSI_VECTOR_MIN (hal/halx86/apic/msip.h). */
+#define IOP_LINE_INTERRUPT_LIMIT    24
+#define IOP_FIXED_INTERRUPT_LIMIT   24
+#define IOP_MESSAGE_VECTOR_BASE     0x50
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

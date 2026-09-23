@@ -124,10 +124,8 @@ KiScanReadyQueuesOnPrcb(IN PKPRCB Prcb,
     Prcb->QueueIndex = Summary ? Index : READY_SCAN_PRIORITY_MIN;
     KiReleasePrcbLock(Prcb);
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
     if (SmpDbgEnabled && ThreadsBoosted)
         SmpDbgBalanceEvent(Prcb->Number, Prcb->Number, SMPDBG_BALANCE_PERIODIC);
-#endif
 }
 
 VOID

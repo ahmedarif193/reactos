@@ -12,6 +12,13 @@
 #ifndef _REACTOS_WOW64_SHARED_H_
 #define _REACTOS_WOW64_SHARED_H_
 
+/* 64-bit architectures that execute 32-bit x86 code host WoW64 processes.
+ * TODO(riscv64): define it for riscv64 together with ENABLE_WOW64
+ * (sdk/cmake/config.cmake) once an x86 CPU backend exists. */
+#if defined(_M_AMD64) || defined(_M_ARM64)
+#define WOW64_SUPPORTED
+#endif
+
 /* Reserved TEB64 TLS slots used by the WoW64 runtime. */
 #define WOW64_TLS_CPURESERVED      1
 #define WOW64_TLS_TEMPLIST         3

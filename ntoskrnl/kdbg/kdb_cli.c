@@ -245,7 +245,7 @@ KdbpCaptureOutput(IN PCCH String, IN USHORT Length)
 static CONTEXT KdbSavedContextRecord;
 static BOOLEAN KdbContextRecordActive;
 static PKDB_KTRAP_FRAME KdbSavedTrapFrame;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
 static CONTEXT KdbFrameBaseContext;
 #endif
 static BOOLEAN KdbFrameBaseValid;
@@ -3535,7 +3535,48 @@ KdbpContextIsUsable(IN PCONTEXT Context)
     return (KeGetContextPc(Context) != 0 && KeGetContextStackRegister(Context) != 0);
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
+
+#if defined(_M_RISCV64)
+
+/* The checked RISC-V unwinder validates frames against the current thread's
+ * stack, and the debugger walks other threads and interrupt stacks. Follow the
+ * psABI frame records instead: saved s0, then ra, just below the frame pointer. */
+static
+BOOLEAN
+GetNextFrame(
+    _Inout_ PCONTEXT Context,
+    _In_ BOOLEAN FirstFrame)
+{
+    ULONG64 Frame = Context->S0;
+    ULONG64 FrameRecord[2];
+
+    UNREFERENCED_PARAMETER(FirstFrame);
+
+    if ((Frame < sizeof(FrameRecord)) ||
+        !NT_SUCCESS(KdbpSafeReadMemory(FrameRecord, (PVOID)(ULONG_PTR)(Frame - sizeof(FrameRecord)), sizeof(FrameRecord))))
+    {
+        return FALSE;
+    }
+
+    /* Stop at the end of the chain and on frames that do not move up the stack. */
+    if ((FrameRecord[1] == 0) || (Frame <= Context->Sp))
+        return FALSE;
+
+    Context->Sp = Frame;
+    Context->S0 = FrameRecord[0];
+    Context->Ra = Context->Pc = FrameRecord[1];
+    return TRUE;
+}
+
+#else
+
+/* Distance from a return address back into its call instruction. */
+#if defined(_M_AMD64)
+#define KDB_CALL_SITE_BIAS 1
+#elif defined(_M_ARM64)
+#define KDB_CALL_SITE_BIAS 4
+#endif
 
 static
 BOOLEAN
@@ -3560,15 +3601,9 @@ GetNextFrame(
      */
     if (!FirstFrame)
     {
-#ifdef _M_AMD64
-        if (LookupPc == 0)
+        if (LookupPc < KDB_CALL_SITE_BIAS)
             return FALSE;
-        LookupPc--;
-#else
-        if (LookupPc < sizeof(ULONG))
-            return FALSE;
-        LookupPc -= sizeof(ULONG);
-#endif
+        LookupPc -= KDB_CALL_SITE_BIAS;
     }
 
     if (!NT_SUCCESS(KdbpSafeReadMemory(&InstructionByte, (PVOID)(ULONG_PTR)LookupPc, sizeof(InstructionByte))))
@@ -3582,7 +3617,7 @@ GetNextFrame(
         {
             /* No function entry, so this must be a leaf function.
             Note: this can happen after the first frame as the result of an exception */
-#ifdef _M_AMD64
+#if defined(_M_AMD64)
             /* Pop the return address from the stack */
             Context->Rip = *(DWORD64*)Context->Rsp;
             Context->Rsp += sizeof(DWORD64);
@@ -3614,6 +3649,8 @@ GetNextFrame(
 
     return TRUE;
 }
+
+#endif
 
 #define KDB_MAX_BACKTRACE_FRAMES 256
 #define KDB_MAX_BACKTRACE_PROCESSES 4096
@@ -3957,7 +3994,7 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
             Context.Rip = FrameRecord[1];
             Context.Rsp = Value + sizeof(FrameRecord);
         }
-#else
+#elif defined(_M_ARM64)
         {
             ULONG64 FrameRecord[2];
 
@@ -3969,6 +4006,21 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
             Context.Fp = FrameRecord[0];
             Context.Lr = Context.Pc = FrameRecord[1];
             Context.Sp = Value + sizeof(FrameRecord);
+        }
+#elif defined(_M_RISCV64)
+        {
+            /* The psABI frame record lies below the frame pointer: saved s0, then ra. */
+            ULONG64 FrameRecord[2];
+
+            if (Value < sizeof(FrameRecord) ||
+                !NT_SUCCESS(KdbpSafeReadMemory(FrameRecord, (PVOID)(Value - sizeof(FrameRecord)), sizeof(FrameRecord))))
+            {
+                KdbpPrint("Couldn't read the RISC-V frame below %p.\n", (PVOID)Value);
+                return TRUE;
+            }
+            Context.S0 = FrameRecord[0];
+            Context.Ra = Context.Pc = FrameRecord[1];
+            Context.Sp = Value;
         }
 #endif
     }
@@ -4108,20 +4160,6 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
             goto CheckForParentTSS;
 
         Address = 0;
-#if defined(_M_RISCV64)
-        /* psABI frame record: [fp-8] = saved ra, [fp-16] = saved fp. */
-        if (Frame < 2 * sizeof(ULONG_PTR) ||
-            !NT_SUCCESS(KdbpSafeReadMemory(&Address, (PVOID)(Frame - sizeof(ULONG_PTR)), sizeof(ULONG_PTR))))
-        {
-            KdbpPrint("Couldn't access memory at 0x%p!\n", Frame - sizeof(ULONG_PTR));
-            goto CheckForParentTSS;
-        }
-
-        if (Address == 0)
-            goto CheckForParentTSS;
-
-        GotNextFrame = NT_SUCCESS(KdbpSafeReadMemory(&Frame, (PVOID)(Frame - 2 * sizeof(ULONG_PTR)), sizeof(ULONG_PTR)));
-#else
         if (!NT_SUCCESS(KdbpSafeReadMemory(&Address, (PVOID)(Frame + sizeof(ULONG_PTR)), sizeof(ULONG_PTR))))
         {
             KdbpPrint("Couldn't access memory at 0x%p!\n", Frame + sizeof(ULONG_PTR));
@@ -4132,7 +4170,6 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
             goto CheckForParentTSS;
 
         GotNextFrame = NT_SUCCESS(KdbpSafeReadMemory(&Frame, (PVOID)Frame, sizeof(ULONG_PTR)));
-#endif
         if (GotNextFrame)
         {
             KeSetContextFrameRegister(&Context, Frame);
@@ -4140,13 +4177,8 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
         // else
             // Frame = 0;
 
-#if defined(_M_RISCV64)
-        /* Print the call site: the return address minus the shortest call. */
-        if (!KdbSymPrintAddress((PVOID)(Address - 2), &Context))
-#else
         /* Print the location of the call instruction (assumed 5 bytes length) */
         if (!KdbSymPrintAddress((PVOID)(Address - 5), &Context))
-#endif
             KdbpPrint("<%p>\n", (PVOID)Address);
         else
             KdbpPrint("\n");
@@ -4197,7 +4229,7 @@ CheckForParentTSS:
     return TRUE;
 }
 
-#endif // _M_AMD64 || _M_ARM64
+#endif // _WIN64
 
 /*!\brief Continues execution of the system/leaves KDB.
  */
@@ -4433,10 +4465,10 @@ KdbpCmdBreakPoint(ULONG Argc, PCHAR Argv[])
             Size = 4;
         else if (_stricmp(Argv[2], "qword") == 0)
         {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
             Size = 8;
 #else
-            KdbpPrint("bpm: qword watchpoints require AMD64 or ARM64.\n");
+            KdbpPrint("bpm: qword watchpoints require a 64-bit architecture.\n");
             return TRUE;
 #endif
         }
@@ -5727,7 +5759,7 @@ KdbpCmdInterrupt(ULONG Argc, PCHAR Argv[])
     return TRUE;
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
 static VOID KdbpPrintInterruptLine(_In_ PKINTERRUPT Address, _In_ const KINTERRUPT *Interrupt)
 {
     KdbpPrint("  %p vec %03lu cpu %d irql %u/%u %s %s count %lu/%lu ISR ", Address, Interrupt->Vector, Interrupt->Number, Interrupt->Irql, Interrupt->SynchronizeIrql, Interrupt->Mode == LevelSensitive ? "level" : "edge", Interrupt->ShareVector ? "shared" : "exclusive", Interrupt->ServiceCount, Interrupt->DispatchCount);
@@ -5881,6 +5913,17 @@ static BOOLEAN KdbpPrintArm64Interrupt(_In_ ULONG IntId, _In_ BOOLEAN ShowUnused
         return FALSE;
     return TRUE;
 }
+#elif defined(_M_RISCV64)
+static BOOLEAN KdbpPrintRiscvInterrupt(_In_ ULONG Source, _In_ BOOLEAN ShowUnused)
+{
+    PKINTERRUPT Head = KiRiscvQueryInterrupt(Source);
+
+    if (Head != NULL)
+        return KdbpPrintInterruptChain(Source, Head, NULL, TRUE);
+    if (ShowUnused)
+        KdbpPrint("PLIC source %lu: unused\n", Source);
+    return FALSE;
+}
 #endif
 
 static BOOLEAN KdbpCmdInterrupts(ULONG Argc, PCHAR Argv[])
@@ -5942,10 +5985,38 @@ static BOOLEAN KdbpCmdInterrupts(ULONG Argc, PCHAR Argv[])
         if (KdbOutputAborted)
             break;
     }
+#elif defined(_M_RISCV64)
+    ULONG Limit = KiRiscvQueryInterruptLimit();
+    ULONG_PTR Value;
+    ULONG Source;
+
+    if (Argc > 2)
+    {
+        KdbpPrint("Usage: !irqs [source]\n");
+        return TRUE;
+    }
+    if (Argc == 2)
+    {
+        if (!KdbpGetHexNumber(Argv[1], &Value) || Value == 0 || Value >= Limit)
+        {
+            KdbpPrint("!irqs: Invalid PLIC source '%s' (limit 0x%lx).\n", Argv[1], Limit);
+            return TRUE;
+        }
+        (VOID)KdbpPrintRiscvInterrupt((ULONG)Value, TRUE);
+        return TRUE;
+    }
+
+    KdbpPrint("Connected PLIC sources:\n");
+    for (Source = 1; Source < Limit; Source++)
+    {
+        (VOID)KdbpPrintRiscvInterrupt(Source, FALSE);
+        if (KdbOutputAborted)
+            break;
+    }
 #else
     UNREFERENCED_PARAMETER(Argc);
     UNREFERENCED_PARAMETER(Argv);
-    KdbpPrint("!irqs: Vector enumeration is currently available on AMD64 only; use !interrupt address on this architecture.\n");
+    KdbpPrint("!irqs: Vector enumeration is not available on this architecture; use !interrupt address.\n");
 #endif
     return TRUE;
 }
@@ -5991,7 +6062,7 @@ static BOOLEAN KdbpParsePciLocation(_In_ PCHAR Text, _Out_ PULONG Bus, _Out_ PUL
     return TRUE;
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
 static USHORT KdbpReadPciUshort(_In_reads_bytes_(sizeof(PCI_COMMON_CONFIG)) const UCHAR *Config, _In_ ULONG Offset)
 {
     USHORT Value;
@@ -6073,7 +6144,7 @@ static VOID KdbpPrintPciCapabilities(_In_ const PCI_COMMON_CONFIG *Config, _In_ 
 
 static BOOLEAN KdbpCmdPci(ULONG Argc, PCHAR Argv[])
 {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     ULONG NTAPI HalpKdReadPciConfig(ULONG BusNumber, ULONG SlotNumber, PVOID Buffer, ULONG Offset, ULONG Length);
     PCI_COMMON_CONFIG Config;
     PCI_SLOT_NUMBER Slot;
@@ -6081,7 +6152,7 @@ static BOOLEAN KdbpCmdPci(ULONG Argc, PCHAR Argv[])
     ULONG Bus;
     ULONG Device;
     ULONG Function;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     ULONG BytesRead;
     ULONG HeaderType;
     ULONG BarCount;
@@ -6094,7 +6165,7 @@ static BOOLEAN KdbpCmdPci(ULONG Argc, PCHAR Argv[])
         return TRUE;
     }
 
-#if !defined(_M_AMD64) && !defined(_M_ARM64)
+#ifndef _WIN64
     KdbpPrint("!pci: Live PCI configuration reads are unavailable on this architecture; use !devnode for cached PnP resources.\n");
     return TRUE;
 #else

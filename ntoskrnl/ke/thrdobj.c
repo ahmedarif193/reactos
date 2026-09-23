@@ -140,11 +140,7 @@ NTAPI
 KeSetDisableBoostThread(IN OUT PKTHREAD Thread,
                         IN BOOLEAN Disable)
 {
-#if defined(_M_ARM64) || (defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10))
-    const LONG DisableBoostBit = 3;
-#else
-    const LONG DisableBoostBit = 1;
-#endif
+    const LONG DisableBoostBit = KTHREAD_DISABLE_BOOST_BIT;
     ASSERT_THREAD(Thread);
 
     /* Check if we're enabling or disabling */

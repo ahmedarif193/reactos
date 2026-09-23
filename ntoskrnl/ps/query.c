@@ -2729,7 +2729,7 @@ NtSetInformationProcess(
                 Status = STATUS_PROCESS_IS_TERMINATING;
                 break;
             }
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) && (defined(_M_ARM64) || defined(_M_IX86) || defined(_M_AMD64))
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM) /* KeRaiseUserException is a stub on ARM */
             if (Flags)
                 InterlockedOr((PLONG)&HandleTable->Flags, OB_HANDLE_EXCEPTIONS_ENABLED);
             else if (ProcessInformationClass == ProcessMitigationPolicy && HandleTable->EnableHandleExceptions)

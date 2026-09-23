@@ -230,6 +230,10 @@ struct _KPRCB
     LARGE_INTEGER IoWriteTransferCount;
     LARGE_INTEGER IoOtherTransferCount;
 
+    /* Execution-time accounting in ReadTimeStampCounter units. */
+    ULONG64 StartCycles;
+    volatile ULONG64 CycleTime;
+
     /* Cross-processor requests and debugger freeze state. */
     volatile LONG RequestSummary;
     volatile ULONG IpiFrozen;

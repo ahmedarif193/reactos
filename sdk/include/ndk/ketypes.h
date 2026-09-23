@@ -1766,7 +1766,13 @@ C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Previous.InitialStack) == 0x38);
 // Kernel Thread (KTHREAD), Win11 26100 arm64 layout (ntkrnlmp.pdb 10.0.26100.8036)
 // sizeof == 0x4A0; members marked [ReactOS] live in Win11 spare slots
 //
+// Each layout defines the properties the kernel depends on:
+// KTHREAD_DISABLE_BOOST_BIT is the DisableBoost bit of ThreadFlags, and
+// KTHREAD_GROUP_AFFINITY marks Affinity/UserAffinity as GROUP_AFFINITY.
+//
 #if defined(_M_ARM64)
+
+#define KTHREAD_DISABLE_BOOST_BIT 3
 
 typedef struct _KTHREAD
 {
@@ -2116,6 +2122,8 @@ typedef struct _KTHREAD
 // C_ASSERT-locked; ReactOS-internal scheduler/APC fields are tucked into spares.
 //
 #elif defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN11_GE)
+
+#define KTHREAD_DISABLE_BOOST_BIT 3
 
 typedef struct _KTHREAD
 {
@@ -2502,6 +2510,11 @@ typedef struct _KTHREAD
 } KTHREAD;                                               // sizeof 0x4C0
 
 #elif (NTDDI_VERSION < NTDDI_WIN8)
+
+#define KTHREAD_DISABLE_BOOST_BIT 1
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+#define KTHREAD_GROUP_AFFINITY
+#endif
 
 typedef struct _KTHREAD
 {
@@ -2961,6 +2974,9 @@ typedef struct _KTHREAD
 } KTHREAD;
 
 #else // not (NTDDI_VERSION < NTDDI_WIN8)
+
+#define KTHREAD_DISABLE_BOOST_BIT 1
+#define KTHREAD_GROUP_AFFINITY
 
 #if defined(_WIN64) && (NTDDI_VERSION < 0x06032580) // since WIN 8.1 Update1 6.3.9600.16384
 #define NUMBER_OF_LOCK_ENTRIES 5

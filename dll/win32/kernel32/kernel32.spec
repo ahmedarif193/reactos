@@ -96,7 +96,7 @@
 @ stdcall -version=0x600+ CompareStringOrdinal(wstr long wstr long long)
 @ stdcall CompareStringW(long long wstr long wstr long)
 @ stdcall ConnectNamedPipe(long ptr)
-@ stdcall -version=0x502-0x600 -arch=x86_64,arm64 ConsoleIMERoutine(ptr)
+@ stdcall -version=0x502-0x600 -arch=x86_64,arm64,riscv64 ConsoleIMERoutine(ptr)
 @ stdcall ConsoleMenuControl(long long long)
 @ stdcall ContinueDebugEvent(long long long)
 @ stdcall -stub -version=0x600+ ConvertCalDateTimeToSystemTime(ptr ptr)
@@ -979,9 +979,9 @@
 @ stdcall QueryPerformanceFrequency(ptr)
 @ stub -version=0x600+ QueryProcessAffinityUpdateMode
 @ stub -version=0x600+ -arch=i386 QueryProcessCycleTime
-@ stdcall -version=0x600+ -arch=x86_64,arm64 QueryProcessCycleTime(ptr ptr)
+@ stdcall -version=0x600+ -arch=x86_64,arm64,riscv64 QueryProcessCycleTime(ptr ptr)
 @ stub -version=0x600+ -arch=i386 QueryThreadCycleTime
-@ stdcall -version=0x600+ -arch=x86_64,arm64 QueryThreadCycleTime(ptr ptr)
+@ stdcall -version=0x600+ -arch=x86_64,arm64,riscv64 QueryThreadCycleTime(ptr ptr)
 @ stdcall -version=0x600+ QueryThreadpoolStackInformation(ptr ptr) kernelbase.QueryThreadpoolStackInformation
 @ stdcall -version=0x600+ QueryUnbiasedInterruptTime(ptr)
 @ stdcall -version=0x602+ QueryUnbiasedInterruptTimePrecise(ptr)
@@ -1047,21 +1047,21 @@
 @ stdcall -version=0x601+ ResolveLocaleName(wstr ptr long)
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 @ stdcall ResumeThread(long)
-@ stdcall -arch=x86_64,arm64 RtlAddFunctionTable(ptr long long) ntdll.RtlAddFunctionTable
+@ stdcall -arch=x86_64,arm64,riscv64 RtlAddFunctionTable(ptr long long) ntdll.RtlAddFunctionTable
 @ stdcall -register RtlCaptureContext(ptr) ntdll.RtlCaptureContext
 @ stdcall RtlCaptureStackBackTrace(long long ptr ptr) ntdll.RtlCaptureStackBackTrace
-@ stdcall -arch=x86_64,arm64 RtlCompareMemory(ptr ptr ptr) ntdll.RtlCompareMemory
-@ stdcall -arch=x86_64,arm64 RtlCopyMemory(ptr ptr ptr) ntdll.memcpy
-@ stdcall -arch=x86_64,arm64 RtlDeleteFunctionTable(ptr) ntdll.RtlDeleteFunctionTable
+@ stdcall -arch=x86_64,arm64,riscv64 RtlCompareMemory(ptr ptr ptr) ntdll.RtlCompareMemory
+@ stdcall -arch=x86_64,arm64,riscv64 RtlCopyMemory(ptr ptr ptr) ntdll.memcpy
+@ stdcall -arch=x86_64,arm64,riscv64 RtlDeleteFunctionTable(ptr) ntdll.RtlDeleteFunctionTable
 @ stdcall RtlFillMemory(ptr long long) ntdll.RtlFillMemory
-@ stdcall -arch=x86_64,arm64 RtlInstallFunctionTableCallback(double double long ptr ptr ptr) ntdll.RtlInstallFunctionTableCallback
+@ stdcall -arch=x86_64,arm64,riscv64 RtlInstallFunctionTableCallback(double double long ptr ptr ptr) ntdll.RtlInstallFunctionTableCallback
 @ stdcall -arch=x86_64,arm64,riscv64 RtlLookupFunctionEntry(ptr ptr ptr) ntdll.RtlLookupFunctionEntry
 @ stdcall RtlMoveMemory(ptr ptr long) ntdll.RtlMoveMemory
-@ stdcall -arch=x86_64,arm64 RtlPcToFileHeader(ptr ptr) ntdll.RtlPcToFileHeader
-@ stdcall -arch=x86_64,arm64 RtlRaiseException(ptr) ntdll.RtlRaiseException
-@ stdcall -arch=x86_64,arm64 RtlRestoreContext(ptr ptr) ntdll.RtlRestoreContext
+@ stdcall -arch=x86_64,arm64,riscv64 RtlPcToFileHeader(ptr ptr) ntdll.RtlPcToFileHeader
+@ stdcall -arch=x86_64,arm64,riscv64 RtlRaiseException(ptr) ntdll.RtlRaiseException
+@ stdcall -arch=x86_64,arm64,riscv64 RtlRestoreContext(ptr ptr) ntdll.RtlRestoreContext
 @ stdcall RtlUnwind(ptr ptr ptr ptr) ntdll.RtlUnwind
-@ stdcall -arch=x86_64,arm64 RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ntdll.RtlUnwindEx
+@ stdcall -arch=x86_64,arm64,riscv64 RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ntdll.RtlUnwindEx
 @ stdcall -arch=x86_64,arm64,riscv64 RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr) ntdll.RtlVirtualUnwind
 @ stdcall RtlZeroMemory(ptr long) ntdll.RtlZeroMemory
 @ stdcall ScrollConsoleScreenBufferA(long ptr ptr ptr ptr)
@@ -1359,15 +1359,15 @@
 @ stdcall WriteProfileStringW(wstr wstr wstr)
 @ stdcall WriteTapemark(ptr long long long)
 @ stdcall ZombifyActCtx(ptr)
-@ stdcall -arch=x86_64,arm64 __C_specific_handler() ntdll.__C_specific_handler
-@ stdcall -arch=x86_64,arm64 __chkstk() ntdll.__chkstk
+@ stdcall -arch=x86_64,arm64,riscv64 __C_specific_handler() ntdll.__C_specific_handler
+@ stdcall -arch=x86_64,arm64,riscv64 __chkstk() ntdll.__chkstk
 ;@ stdcall -arch=x86_64 __misaligned_access() ntdll.__misaligned_access
 @ stdcall _hread(long ptr long)
 @ stdcall _hwrite(long ptr long)
 @ stdcall _lclose(long)
 @ stdcall _lcreat(str long)
 @ stdcall _llseek(long long long)
-@ stdcall -arch=x86_64,arm64 _local_unwind() ntdll._local_unwind
+@ stdcall -arch=x86_64,arm64,riscv64 _local_unwind() ntdll._local_unwind
 @ stdcall _lopen(str long)
 @ stdcall _lread(long ptr long) _hread
 @ stdcall _lwrite(long ptr long) _hwrite

@@ -82,6 +82,43 @@ KeRaiseIrqlToSynchLevel(VOID)
     return KfRaiseIrql(SYNCH_LEVEL);
 }
 
+/* Internal entry points behind the exported IRQL routines, as on the other
+ * 64-bit architectures. */
+NTKERNELAPI
+VOID
+KxLowerIrql(_In_ KIRQL NewIrql)
+{
+    KfLowerIrql(NewIrql);
+}
+
+NTKERNELAPI
+KIRQL
+KxRaiseIrql(_In_ KIRQL NewIrql)
+{
+    return KfRaiseIrql(NewIrql);
+}
+
+NTKERNELAPI
+KIRQL
+KxRaiseIrqlToDpcLevel(VOID)
+{
+    return KeRaiseIrqlToDpcLevel();
+}
+
+KIRQL
+NTAPI
+KeGetEffectiveIrql(VOID)
+{
+    ULONG_PTR Status;
+
+    /* Nothing can preempt code running with interrupts masked. */
+    __asm__ __volatile__("csrr %0, sstatus" : "=r"(Status));
+    if (!(Status & RISCV_SSTATUS_SIE))
+        return HIGH_LEVEL;
+
+    return KeGetCurrentIrql();
+}
+
 VOID
 NTAPI
 KiRiscvSetInterruptEnabled(_In_ ULONG_PTR Mask, _In_ BOOLEAN Enable)
@@ -130,4 +167,13 @@ KiRiscvClearSoftwareInterrupt(_In_ KIRQL Irql)
     Pcr->SoftwareInterrupts &= ~(1 << Irql);
     KiRiscvUpdateInterruptMask(Pcr);
     KeRestoreInterrupts(Interrupts);
+}
+
+/* The HAL forwards its KeRaiseIrql export here, as on ARM64. */
+#undef KeRaiseIrql
+VOID
+NTAPI
+KeRaiseIrql(_In_ KIRQL NewIrql, _Out_ PKIRQL OldIrql)
+{
+    *OldIrql = KfRaiseIrql(NewIrql);
 }

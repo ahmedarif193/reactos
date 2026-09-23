@@ -911,7 +911,19 @@ KeQueryTotalCycleTimeThread(
     IN OUT PKTHREAD Thread,
     OUT PULONG64 CycleTimeStamp);
 
-#if (defined(_M_AMD64) || defined(_M_ARM64)) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+VOID
+KiDisplayAndLogBugCheckString(
+    _In_z_ PCSTR String);
+
+#ifdef _WIN64
+/* Architecture register dump for the bugcheck screen and log. */
+VOID
+KiDisplayBugCheckRegisterState(
+    _In_opt_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context);
+#endif
+
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
 VOID
 NTAPI
 KiChargeThreadCycleTime(

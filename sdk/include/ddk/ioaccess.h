@@ -45,21 +45,15 @@ extern "C" {
 
 #elif defined(_M_RISCV64)
 
-/* Keep port-space translation and ordered register access behind their native
- * providers. A port number is not implicitly a mapped device address. */
+/* Port-space translation stays behind the HAL: a port number is not
+ * implicitly a mapped device address. Ordered register access is inline in
+ * the WDK headers. */
 UCHAR NTAPI READ_PORT_UCHAR(PUCHAR Port);
 USHORT NTAPI READ_PORT_USHORT(PUSHORT Port);
 ULONG NTAPI READ_PORT_ULONG(PULONG Port);
 VOID NTAPI WRITE_PORT_UCHAR(PUCHAR Port, UCHAR Value);
 VOID NTAPI WRITE_PORT_USHORT(PUSHORT Port, USHORT Value);
 VOID NTAPI WRITE_PORT_ULONG(PULONG Port, ULONG Value);
-
-UCHAR NTAPI READ_REGISTER_UCHAR(volatile UCHAR *Register);
-USHORT NTAPI READ_REGISTER_USHORT(volatile USHORT *Register);
-ULONG NTAPI READ_REGISTER_ULONG(volatile ULONG *Register);
-VOID NTAPI WRITE_REGISTER_UCHAR(volatile UCHAR *Register, UCHAR Value);
-VOID NTAPI WRITE_REGISTER_USHORT(volatile USHORT *Register, USHORT Value);
-VOID NTAPI WRITE_REGISTER_ULONG(volatile ULONG *Register, ULONG Value);
 
 #define MEMORY_BARRIER() __asm__ __volatile__("fence iorw, iorw" ::: "memory")
 

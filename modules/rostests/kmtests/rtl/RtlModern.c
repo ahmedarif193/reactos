@@ -45,7 +45,7 @@ BOOLEAN NTAPI RtlIsZeroMemory(_In_reads_bytes_(Length) PVOID Buffer, _In_ SIZE_T
 VOID NTAPI RtlSetActiveConsoleId(_In_ ULONG ActiveConsoleId);
 VOID NTAPI RtlSetConsoleSessionForegroundProcessId(_In_ ULONGLONG ProcessId);
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
 typedef SIZE_T (*PTEST_STRNLEN)(_In_reads_or_z_(MaximumLength) PCSTR String, _In_ SIZE_T MaximumLength);
 typedef SIZE_T (*PTEST_WCSNLEN)(_In_reads_or_z_(MaximumLength) PCWSTR String, _In_ SIZE_T MaximumLength);
 typedef INT (*PTEST_WCSCAT_S)(_Inout_updates_z_(DestinationCount) PWCHAR Destination, _In_ SIZE_T DestinationCount, _In_z_ PCWSTR Source);
@@ -107,7 +107,7 @@ TestKernelSqrtExport(VOID)
 }
 #endif
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
 static
 PVOID
 TestResolveKernelExport(
@@ -186,14 +186,14 @@ TestModernBitmaps(VOID)
 {
     RTL_BITMAP Destination;
     RTL_BITMAP Source;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     RTL_BITMAP_EX DestinationEx;
     RTL_BITMAP_EX SourceEx;
 #endif
     ULONG DestinationBits;
     ULONG OverlapBits;
     ULONG SourceBits;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     ULONGLONG DestinationBitsEx;
     ULONGLONG SourceBitsEx;
 #endif
@@ -227,7 +227,7 @@ TestModernBitmaps(VOID)
     RtlIntersectBitMaps(&Destination, &Source);
     ok_eq_hex(DestinationBits, 0xF0A0);
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     SourceBitsEx = 0xD;
     RtlInitializeBitMapEx(&SourceEx, &SourceBitsEx, 0x100000001ULL);
     ok_eq_ulonglong(SourceEx.SizeOfBitMap, 0x100000001ULL);
@@ -732,7 +732,7 @@ START_TEST(ExWddmRtl)
     TestIntegerAtoms();
     TestModernRtlState();
     TestModernKernelExports();
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     TestKernelCrtStringExports();
 #endif
 #if defined(_M_AMD64)

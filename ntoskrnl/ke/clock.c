@@ -20,7 +20,7 @@ volatile KSYSTEM_TIME KeTickCount = { 0, 0, 0 };
 ULONG KeMaximumIncrement;
 ULONG KeMinimumIncrement;
 ULONG KeTimeIncrement;
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+#ifdef KI_CYCLE_QUANTUM
 ULONG KiCyclesPerClockQuantum = 1;
 #endif
 
@@ -242,7 +242,7 @@ NTAPI
 KeSetTimeIncrement(IN ULONG MaxIncrement,
                    IN ULONG MinIncrement)
 {
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+#ifdef KI_CYCLE_QUANTUM
     LARGE_INTEGER Frequency;
     ULONGLONG CyclesPerQuantum;
 #endif
@@ -254,8 +254,9 @@ KeSetTimeIncrement(IN ULONG MaxIncrement,
     KeTimeIncrement = MaxIncrement;
     KiTickOffset = MaxIncrement;
 
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
-    /* Convert clock quantum units to TSC cycles. */
+#ifdef KI_CYCLE_QUANTUM
+    /* Convert clock quantum units to counter cycles: the performance counter
+     * runs on the same time base as ReadTimeStampCounter. */
     KeQueryPerformanceCounter(&Frequency);
     CyclesPerQuantum = ((ULONGLONG)Frequency.QuadPart * MaxIncrement) /
                        (10000000ULL * CLOCK_QUANTUM_DECREMENT);
