@@ -730,7 +730,10 @@ User32CallSetWndIconsFromKernel(PVOID Arguments, ULONG ArgumentLength)
       hIconWindows   = Common->hIconWindows;
       hIconSmWindows = Common->hIconSmWindows;
   }
-  ERR("hIconSmWindows %p hIconWindows %p \n",hIconSmWindows,hIconWindows);
+  if (!hIconSmWindows || !hIconWindows)
+      ERR("System window icons missing: small %p, large %p\n", hIconSmWindows, hIconWindows);
+  else
+      TRACE("hIconSmWindows %p hIconWindows %p\n", hIconSmWindows, hIconWindows);
   return ZwCallbackReturn(Arguments, ArgumentLength, STATUS_SUCCESS);
 }
 

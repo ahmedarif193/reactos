@@ -273,7 +273,7 @@ VOID LoadSystemCursors(VOID)
 {
    if (!gpsi->hIconSmWindows)
    {
-       ERR("Loading System Cursors\n");
+       TRACE("Loading System Cursors\n");
        NtUserSetSystemCursor(LoadImageW( 0, IDC_ARROW,       IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE ), OCR_NORMAL);
        NtUserSetSystemCursor(LoadImageW( 0, IDC_IBEAM,       IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE ), OCR_IBEAM);
        NtUserSetSystemCursor(LoadImageW( 0, IDC_WAIT,        IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE ), OCR_WAIT);
