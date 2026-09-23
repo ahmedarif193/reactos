@@ -962,7 +962,7 @@ ThemeDwmHasCaptionButtons(HWND hWnd, const WINDOWINFO *wi)
         return FALSE;
     if ((wi->dwStyle & (WS_CAPTION | WS_SYSMENU)) != (WS_CAPTION | WS_SYSMENU))
         return FALSE;
-    if ((ULONG_PTR)GetPropW(hWnd, DWM_PROP_FRAME_EXTEND_TOP) <= 1)
+    if ((ULONG_PTR)GetPropW(hWnd, DWM_PROP_BACKDROP_NC_EXTEND) <= 1)
         return FALSE;
     pwndData = ThemeGetWndData(hWnd);
     if (!pwndData)
@@ -1008,7 +1008,7 @@ ThemeDwmRepaintCaptionButtons(HWND hWnd)
     RECT rcRoot, rcPainted, rcButtons;
 
     hWndRoot = GetAncestor(hWnd, GA_ROOT);
-    if (!hWndRoot || (ULONG_PTR)GetPropW(hWndRoot, DWM_PROP_FRAME_EXTEND_TOP) <= 1)
+    if (!hWndRoot || (ULONG_PTR)GetPropW(hWndRoot, DWM_PROP_BACKDROP_NC_EXTEND) <= 1)
         return;
     pwndData = ThemeGetWndData(hWndRoot);
     if (!pwndData)
