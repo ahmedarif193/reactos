@@ -654,7 +654,7 @@ WddmBridgeQueryPrimarySource(
     _Out_ LUID *AdapterLuid,
     _Out_ ULONG *VidPnSourceId)
 {
-    D3DKMT_OPENADAPTERFROMHDC OpenAdapter;
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenAdapter;
     D3DKMT_CLOSEADAPTER CloseAdapter;
     ULONG_PTR Information = 0;
     NTSTATUS Status;
@@ -663,11 +663,12 @@ WddmBridgeQueryPrimarySource(
     if (AdapterLuid == NULL || VidPnSourceId == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    /* The internal HDC bridge selects the primary display source. Resolve
-     * its identity once; a later release must not reselect DISPLAY1. */
+    /* Resolve the registered desktop owner, which may differ from the
+     * hardware render adapter selected by the legacy HDC bridge. */
     RtlZeroMemory(&OpenAdapter, sizeof(OpenAdapter));
+    RtlCopyMemory(OpenAdapter.DeviceName, L"\\\\.\\DISPLAY1", sizeof(L"\\\\.\\DISPLAY1"));
     Status = WddmBridgeSendIoctlWithInformation(
-                 IOCTL_D3DKMT_OPENADAPTERFROMHDC,
+                 IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME,
                  &OpenAdapter, sizeof(OpenAdapter),
                  &OpenAdapter, sizeof(OpenAdapter), &Information);
     if (!NT_SUCCESS(Status))
