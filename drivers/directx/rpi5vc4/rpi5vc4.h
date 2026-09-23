@@ -447,6 +447,8 @@ struct _RPI5VC4_DEVICE_EXTENSION
     KTIMER V3dPollTimer;              /* drives V3D job completion polling */
     KDPC V3dPollDpc;
     BOOLEAN StopAccepting;            /* set during StopDevice             */
+    BOOLEAN DmaPipelineFaulted;       /* parked until TDR resets hardware  */
+    ULONG PendingPreemptionFence[RPI5VC4_GPU_NODE_COUNT]; /* guarded by DmaLock */
     BOOLEAN DmaPipelineInitialized;
 
     /* Vsync source: refresh-rate timer polling the PixelValve VFP latch

@@ -76,7 +76,8 @@ Rpi5Vc4ArmV3dPollTimer(
 {
     LARGE_INTEGER Due;
 
-    if (DeviceExtension->StopAccepting || !DeviceExtension->DmaPipelineInitialized)
+    if (DeviceExtension->StopAccepting || DeviceExtension->DmaPipelineFaulted ||
+        !DeviceExtension->DmaPipelineInitialized)
         return;
 
     Due.QuadPart = -10000; /* 1 ms */
@@ -459,6 +460,12 @@ Rpi5Vc4ProcessPendingLocked(
     if (DeviceExtension->StopAccepting)
         return FALSE;
 
+    if (DeviceExtension->DmaPipelineFaulted)
+    {
+        *PipelineAborted = TRUE;
+        return FALSE;
+    }
+
     /* A synchronous exec-engine escape owns the CLE: park the pipeline
      * (jobs stay queued) until the gate is released. */
     if (DeviceExtension->V3dExecGateActive)
@@ -482,8 +489,7 @@ Rescan:
         if (OutOfMemory &&
             !Rpi5Vc4ServiceBinOomLocked(DeviceExtension, Now, NULL))
         {
-            *PipelineAborted = TRUE;
-            return FALSE;
+            goto AbortPipeline;
         }
     }
     for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; Node++)
@@ -831,8 +837,11 @@ CompleteHead:
 AbortPipeline:
         *PipelineAborted = TRUE;
         *NeedPoll = FALSE;
-        DeviceExtension->StopAccepting = TRUE;
-        Rpi5Vc4ClearPendingLocked(DeviceExtension);
+        /* Keep accepted DMA and overflow storage alive until ResetFromTimeout
+         * has stopped the engine. Further valid submissions stay queued for
+         * that reset; returning a SubmitCommand error would bugcheck before
+         * dxgkrnl's watchdog can recover. No failed fence is completed here. */
+        DeviceExtension->DmaPipelineFaulted = TRUE;
         goto Finished;
 
 NextNode:;
@@ -919,6 +928,8 @@ Rpi5Vc4FenceDpcRoutine(
         ULONG Best = RPI5VC4_GPU_NODE_COUNT;
         ULONG Fence = 0;
         ULONG Node;
+        BOOLEAN Preempted = FALSE;
+        ULONG LastCompleted = 0;
 
         KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
         if (DeviceExtension->StopAccepting ||
@@ -949,6 +960,27 @@ Rpi5Vc4FenceDpcRoutine(
 
         if (Best == RPI5VC4_GPU_NODE_COUNT)
         {
+            /* Report completed DMA before acknowledging a preemption. V3D
+             * cannot interrupt a command list, so acknowledge only after all
+             * work already admitted to this node has drained. A hung list
+             * stays pending and the watchdog proceeds to reset. */
+            for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; Node++)
+            {
+                if (DeviceExtension->PendingPreemptionFence[Node] != 0 &&
+                    DeviceExtension->NodeQueue[Node].Count == 0)
+                {
+                    Best = Node;
+                    Fence = DeviceExtension->PendingPreemptionFence[Node];
+                    DeviceExtension->PendingPreemptionFence[Node] = 0;
+                    LastCompleted = DeviceExtension->LastCompletedFencePerNode[Node];
+                    Preempted = TRUE;
+                    break;
+                }
+            }
+        }
+
+        if (Best == RPI5VC4_GPU_NODE_COUNT)
+        {
             if (!NotifyDpc)
             {
                 /* The empty transition and producer admission are serialized
@@ -970,14 +1002,26 @@ Rpi5Vc4FenceDpcRoutine(
 
         /* Claim this watermark while holding DmaLock.  Producers may advance
          * it again while the callback runs; the next drain iteration sees it. */
-        DeviceExtension->LastReportedFencePerNode[Best] = Fence;
+        if (!Preempted)
+            DeviceExtension->LastReportedFencePerNode[Best] = Fence;
         KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
         RtlZeroMemory(&NotifyData, sizeof(NotifyData));
-        NotifyData.InterruptType = DXGK_INTERRUPT_TYPE_DMA_COMPLETED;
-        NotifyData.DmaCompleted.SubmissionFenceId = Fence;
-        NotifyData.DmaCompleted.NodeOrdinal = Best;
-        NotifyData.DmaCompleted.EngineOrdinal = 0;
+        if (Preempted)
+        {
+            NotifyData.InterruptType = DXGK_INTERRUPT_TYPE_DMA_PREEMPTED;
+            NotifyData.DmaPreempted.PreemptionFenceId = Fence;
+            NotifyData.DmaPreempted.LastCompletedFenceId = LastCompleted;
+            NotifyData.DmaPreempted.NodeOrdinal = Best;
+            NotifyData.DmaPreempted.EngineOrdinal = 0;
+        }
+        else
+        {
+            NotifyData.InterruptType = DXGK_INTERRUPT_TYPE_DMA_COMPLETED;
+            NotifyData.DmaCompleted.SubmissionFenceId = Fence;
+            NotifyData.DmaCompleted.NodeOrdinal = Best;
+            NotifyData.DmaCompleted.EngineOrdinal = 0;
+        }
 
         if (DeviceExtension->DxgkInterface.DxgkCbNotifyInterrupt != NULL)
         {
@@ -1038,7 +1082,7 @@ Rpi5Vc4V3dPollDpcRoutine(
         InterlockedExchange(&DeviceExtension->V3dIsrMasked, 0) != 0;
     if (InterruptWasMasked &&
         DeviceExtension->V3dCoreBase != NULL &&
-        !DeviceExtension->StopAccepting)
+        !DeviceExtension->StopAccepting && !DeviceExtension->DmaPipelineFaulted)
     {
         if (DeviceExtension->V3dCoreIrqConnected)
         {
@@ -1329,6 +1373,9 @@ Rpi5Vc4DmaPipelineInit(
                   sizeof(DeviceExtension->LastReportedFencePerNode));
     DeviceExtension->FenceDpcActive = FALSE;
     DeviceExtension->DmaPipelineInitialized = TRUE;
+    DeviceExtension->DmaPipelineFaulted = FALSE;
+    RtlZeroMemory(DeviceExtension->PendingPreemptionFence,
+                  sizeof(DeviceExtension->PendingPreemptionFence));
     DeviceExtension->StopAccepting = FALSE;
 }
 
@@ -3122,9 +3169,7 @@ Rpi5Vc4DdiSubmitCommand(
         Rpi5Vc4QueueFenceDpc(DeviceExtension);
     if (NeedPoll)
         Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
-    if (PipelineAborted)
-        return STATUS_DEVICE_HARDWARE_ERROR;
-
+    /* A hardware fault is recovered asynchronously by the TDR watchdog. */
     return STATUS_SUCCESS;
 }
 
@@ -3320,9 +3365,7 @@ Rpi5Vc4DdiSubmitCommandVirtual(
         Rpi5Vc4QueueFenceDpc(DeviceExtension);
     if (NeedPoll)
         Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
-    if (PipelineAborted)
-        return STATUS_DEVICE_HARDWARE_ERROR;
-
+    /* A hardware fault is recovered asynchronously by the TDR watchdog. */
     return STATUS_SUCCESS;
 }
 
@@ -3333,11 +3376,20 @@ Rpi5Vc4DdiPreemptCommand(
     _In_ CONST DXGKARG_PREEMPTCOMMAND *PreemptCommand)
 {
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
+    KIRQL OldIrql;
 
-    if (DeviceExtension == NULL || PreemptCommand == NULL)
+    if (DeviceExtension == NULL || PreemptCommand == NULL ||
+        PreemptCommand->NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT ||
+        PreemptCommand->EngineOrdinal != 0 ||
+        PreemptCommand->PreemptionFenceId == 0)
         return STATUS_INVALID_PARAMETER;
 
-    return STATUS_NOT_SUPPORTED;
+    KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+    DeviceExtension->PendingPreemptionFence[PreemptCommand->NodeOrdinal] =
+        PreemptCommand->PreemptionFenceId;
+    KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+    Rpi5Vc4QueueFenceDpc(DeviceExtension);
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -3750,6 +3802,8 @@ Rpi5Vc4DdiResetFromTimeout(
 
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
     DeviceExtension->FenceDpcActive = FALSE;
+    RtlZeroMemory(DeviceExtension->PendingPreemptionFence,
+                  sizeof(DeviceExtension->PendingPreemptionFence));
     RtlCopyMemory((PVOID)DeviceExtension->LastReportedFencePerNode,
                   (PVOID)DeviceExtension->LastCompletedFencePerNode,
                   sizeof(DeviceExtension->LastReportedFencePerNode));
@@ -3771,6 +3825,7 @@ Rpi5Vc4DdiRestartFromTimeout(
         return STATUS_DEVICE_NOT_READY;
     if (DeviceExtension->V3dReady)
         Rpi5V3dConnectInterrupt(DeviceExtension);
+    DeviceExtension->DmaPipelineFaulted = FALSE;
     DeviceExtension->StopAccepting = FALSE;
     if (DeviceExtension->Headless && DeviceExtension->HpdWorkItem != NULL)
         Rpi5Vc4ArmHpdTimer(DeviceExtension);
@@ -3902,7 +3957,7 @@ Rpi5Vc4QueueEscapeJob(
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
 
     if (DeviceExtension->NodeQueue[QueueIndex].Count >= RPI5VC4_MAX_PENDING ||
-        DeviceExtension->StopAccepting)
+        DeviceExtension->StopAccepting || DeviceExtension->DmaPipelineFaulted)
     {
         KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
         ExFreePoolWithTag(Entry, RPI5VC4_POOL_TAG);
@@ -4056,7 +4111,7 @@ Rpi5Vc4GpuEscapeGateAcquire(
     for (Tries = 0; Tries < 500; Tries++)
     {
         KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
-        Stopping = DeviceExtension->StopAccepting;
+        Stopping = DeviceExtension->StopAccepting || DeviceExtension->DmaPipelineFaulted;
         /* Exclusive: a concurrent escape already holding the gate must not
          * be released from under its running job by this thread. */
         Taken = !Stopping && !DeviceExtension->V3dExecGateActive && DeviceExtension->NodeQueue[0].Count == 0 && DeviceExtension->NodeQueue[1].Count == 0 && DeviceExtension->NodeQueue[2].Count == 0;
