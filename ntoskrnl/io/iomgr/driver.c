@@ -897,21 +897,23 @@ IopInitializeDriverModuleImpl(
             Status = ZwQueryKey(ServiceHandle, KeyNameInformation, nameInfo, infoLength, &infoLength);
             if (NT_SUCCESS(Status))
             {
-                if (nameInfo->NameLength > UNICODE_STRING_MAX_BYTES || nameInfo->NameLength > MAXULONG - sizeof(*RegistryPath) - PAGE_SIZE + 1)
+                if (nameInfo->NameLength > UNICODE_STRING_MAX_BYTES - sizeof(WCHAR))
                 {
                     Status = STATUS_NAME_TOO_LONG;
                 }
                 else
                 {
-                    ULONG registryPathSize = ROUND_TO_PAGES(sizeof(*RegistryPath) + nameInfo->NameLength);
+                    ULONG registryPathSize = sizeof(*RegistryPath) + nameInfo->NameLength + sizeof(WCHAR);
 
                     RegistryPath = ExAllocatePoolWithTag(NonPagedPool, registryPathSize, TAG_IO);
                     if (RegistryPath)
                     {
                         RegistryPath->Length = (USHORT)nameInfo->NameLength;
-                        RegistryPath->MaximumLength = RegistryPath->Length;
+                        RegistryPath->MaximumLength = RegistryPath->Length + sizeof(WCHAR);
                         RegistryPath->Buffer = (PWCHAR)(RegistryPath + 1);
                         RtlCopyMemory(RegistryPath->Buffer, nameInfo->Name, RegistryPath->Length);
+                        /* Drivers also use Buffer with NUL-terminated string APIs. */
+                        RegistryPath->Buffer[RegistryPath->Length / sizeof(WCHAR)] = UNICODE_NULL;
                         IopNormalizeRegistryPathCase(RegistryPath, &ServiceName);
                     }
                     else
