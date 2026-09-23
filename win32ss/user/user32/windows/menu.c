@@ -866,12 +866,16 @@ EnableMenuItem(HMENU hMenu,
 HMENU WINAPI
 GetMenu(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+       return UlongToHandle((ULONG)GetWindowLongW(hWnd, GWLP_ID));
+#else
        PWND Wnd = ValidateHwnd(hWnd);
 
        if (!Wnd)
                return NULL;
 
        return UlongToHandle(Wnd->IDMenu);
+#endif
 }
 
 /*

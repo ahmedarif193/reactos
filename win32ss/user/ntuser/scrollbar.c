@@ -1223,6 +1223,19 @@ NtUserSBGetParms(
       goto Exit; // Return FALSE
    }
 
+   if (!pSBData)
+   {
+      PSBDATA pKernelSBData = NULL;
+
+      if ((fnBar == SB_HORZ || fnBar == SB_VERT) && Window->pSBInfo)
+         pKernelSBData = IntGetSBData(Window, fnBar);
+
+      if (pKernelSBData)
+         SBDataSafe = *pKernelSBData;
+      else
+         RtlZeroMemory(&SBDataSafe, sizeof(SBDataSafe));
+   }
+
    UserRefObjectCo(Window, &Ref);
    Ret = co_IntGetScrollInfo(Window, fnBar, &SBDataSafe, &psi);
    UserDerefObjectCo(Window);

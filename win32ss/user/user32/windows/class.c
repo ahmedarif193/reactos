@@ -841,6 +841,10 @@ IntGetClassLongW(PWND Wnd, PCLS Class, int nIndex)
 DWORD WINAPI
 GetClassLongA(HWND hWnd, int nIndex)
 {
+#ifdef WOW64_I386_RUNTIME
+    TRACE("%p %d\n", hWnd, nIndex);
+    return (DWORD)NtUserCallHwndParam(hWnd, (DWORD_PTR)nIndex, HWNDPARAM_ROUTINE_ROS_GETCLASSLONGA);
+#else
     PWND Wnd;
     PCLS Class;
     ULONG_PTR Ret = 0;
@@ -889,6 +893,7 @@ GetClassLongA(HWND hWnd, int nIndex)
     _SEH2_END;
 
     return (DWORD)Ret;
+#endif
 }
 
 /*
@@ -897,6 +902,10 @@ GetClassLongA(HWND hWnd, int nIndex)
 DWORD WINAPI
 GetClassLongW(HWND hWnd, int nIndex)
 {
+#ifdef WOW64_I386_RUNTIME
+    TRACE("%p %d\n", hWnd, nIndex);
+    return (DWORD)NtUserCallHwndParam(hWnd, (DWORD_PTR)nIndex, HWNDPARAM_ROUTINE_ROS_GETCLASSLONGW);
+#else
     PWND Wnd;
     PCLS Class;
     ULONG_PTR Ret = 0;
@@ -945,6 +954,7 @@ GetClassLongW(HWND hWnd, int nIndex)
     _SEH2_END;
 
     return (DWORD)Ret;
+#endif
 }
 
 #ifdef _WIN64
@@ -1093,12 +1103,17 @@ GetClassWord(
   HWND hwnd,
   int offset)
 {
+#ifndef WOW64_I386_RUNTIME
     PWND Wnd;
     PCLS class;
     WORD retvalue = 0;
+#endif
 
     if (offset < 0) return GetClassLongA( hwnd, offset );
 
+#ifdef WOW64_I386_RUNTIME
+    return (WORD)NtUserCallHwndParam(hwnd, (DWORD_PTR)offset, HWNDPARAM_ROUTINE_ROS_GETCLASSWORD);
+#else
     Wnd = ValidateHwnd(hwnd);
     if (!Wnd)
         return 0;
@@ -1112,6 +1127,7 @@ GetClassWord(
         SetLastError( ERROR_INVALID_INDEX );
 
     return retvalue;
+#endif
 }
 
 #define PUBLIC_EXSTYLE ( \

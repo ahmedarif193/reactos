@@ -1040,6 +1040,9 @@ GetClientRect(HWND hWnd, LPRECT lpRect)
 HWND WINAPI
 GetLastActivePopup(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    return (HWND)NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_GETLASTACTIVEPOPUP);
+#else
     PWND Wnd;
     HWND Ret = hWnd;
 
@@ -1061,6 +1064,7 @@ GetLastActivePopup(HWND hWnd)
         _SEH2_END;
     }
     return Ret;
+#endif
 }
 
 
@@ -1645,12 +1649,16 @@ IsChild(HWND hWndParent,
 BOOL WINAPI
 IsIconic(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    return (GetWindowLongW(hWnd, GWL_STYLE) & WS_MINIMIZE) != 0;
+#else
     PWND Wnd = ValidateHwnd(hWnd);
 
     if (Wnd != NULL)
         return (Wnd->style & WS_MINIMIZE) != 0;
 
     return FALSE;
+#endif
 }
 
 
@@ -1706,12 +1714,16 @@ IsWindow(HWND hWnd)
 BOOL WINAPI
 IsWindowUnicode(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    return !!NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_ISWINDOWUNICODE);
+#else
     PWND Wnd = ValidateHwnd(hWnd);
 
     if (Wnd != NULL)
         return Wnd->Unicode;
 
     return FALSE;
+#endif
 }
 
 

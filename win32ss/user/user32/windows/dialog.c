@@ -2600,12 +2600,19 @@ IsDialogMessageW(
             if (!(dlgCode & DLGC_WANTTAB))
             {
                 BOOL fIsDialog = TRUE;
+#ifdef WOW64_I386_RUNTIME
+                if (NtUserQueryWindow(hDlg, QUERY_WINDOW_UNIQUE_PROCESS_ID) == HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess))
+                {
+                    fIsDialog = (GETDLGINFO(hDlg) != NULL);
+                }
+#else
                 WND *pWnd = ValidateHwnd(hDlg);
 
                 if (pWnd && TestWindowProcess(pWnd))
                 {
                     fIsDialog = (GETDLGINFO(hDlg) != NULL);
                 }
+#endif
   
                 SendMessageW(hDlg, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
 

@@ -1521,14 +1521,29 @@ EnableScrollBar( HWND hwnd, UINT nBar, UINT flags )
 BOOL WINAPI
 RealGetScrollInfo(HWND Wnd, INT SBType, LPSCROLLINFO Info)
 {
+#ifndef WOW64_I386_RUNTIME
   PWND pWnd;
   PSBDATA pSBData;
+#endif
 
   if (SB_CTL == SBType)
   {
      return SendMessageW(Wnd, SBM_GETSCROLLINFO, 0, (LPARAM) Info);
   }
 
+#ifdef WOW64_I386_RUNTIME
+  if (SBType < SB_HORZ || SBType > SB_VERT)
+  {
+     SetLastError(ERROR_INVALID_PARAMETER);
+     return FALSE;
+  }
+  if (!NtUserSBGetParms(Wnd, SBType, NULL, Info))
+  {
+     if (IsWindow(Wnd)) SetLastError(ERROR_NO_SCROLLBARS);
+     return FALSE;
+  }
+  return TRUE;
+#else
   pWnd = ValidateHwnd(Wnd);
   if (!pWnd) return FALSE;
 
@@ -1544,6 +1559,7 @@ RealGetScrollInfo(HWND Wnd, INT SBType, LPSCROLLINFO Info)
   }
   pSBData = IntGetSBData(pWnd, SBType);
   return NtUserSBGetParms(Wnd, SBType, pSBData, Info);
+#endif
 }
 
 /*
@@ -1552,12 +1568,20 @@ RealGetScrollInfo(HWND Wnd, INT SBType, LPSCROLLINFO Info)
 BOOL WINAPI GetScrollBarInfo( _In_ HWND hwnd, _In_ LONG idObject, _Inout_ LPSCROLLBARINFO info)
 {
     BOOL Ret;
+#ifdef WOW64_I386_RUNTIME
+    RECT rcWindow;
+    TRACE("hwnd=%p idObject=%d info=%p\n", hwnd, idObject, info);
+    if (!GetWindowRect(hwnd, &rcWindow)) return FALSE;
+    Ret = NtUserGetScrollBarInfo(hwnd, idObject, info);
+    OffsetRect( &(info->rcScrollBar), rcWindow.left, rcWindow.top );
+#else
     PWND pWnd = ValidateHwnd(hwnd);
     TRACE("hwnd=%p idObject=%d info=%p\n", hwnd, idObject, info);
     if (!pWnd) return FALSE;
     Ret = NtUserGetScrollBarInfo(hwnd, idObject, info); // This will be fixed once SB is server side.
     /* rcScrollBar needs to be in screen coordinates */
     OffsetRect( &(info->rcScrollBar), pWnd->rcWindow.left, pWnd->rcWindow.top );
+#endif
     return Ret;
 }
 
@@ -1601,8 +1625,10 @@ WINAPI
 DECLSPEC_HOTPATCH
 GetScrollPos(HWND Wnd, INT Bar)
 {
+#ifndef WOW64_I386_RUNTIME
   PWND pwnd;
   PSBDATA pSBData;
+#endif
 
   TRACE("Wnd=%p Bar=%d\n", Wnd, Bar);
 
@@ -1613,6 +1639,13 @@ GetScrollPos(HWND Wnd, INT Bar)
   }
   else if (Bar == SB_HORZ || Bar == SB_VERT )
   {
+#ifdef WOW64_I386_RUNTIME
+     SCROLLINFO ScrollInfo = { sizeof(ScrollInfo), SIF_POS };
+
+     if (RealGetScrollInfo(Wnd, Bar, &ScrollInfo))
+        return ScrollInfo.nPos;
+     return 0;
+#else
      pwnd = ValidateHwnd(Wnd);
      if (!pwnd) return 0;
 
@@ -1625,6 +1658,7 @@ GetScrollPos(HWND Wnd, INT Bar)
      SetLastError(ERROR_NO_SCROLLBARS);
      TRACE("GetScrollPos No Scroll Info\n");
      return 0;
+#endif
   }
   SetLastError(ERROR_INVALID_PARAMETER);
   return 0;
@@ -1638,8 +1672,10 @@ WINAPI
 DECLSPEC_HOTPATCH
 GetScrollRange(HWND Wnd, int Bar, LPINT MinPos, LPINT MaxPos)
 {
+#ifndef WOW64_I386_RUNTIME
   PWND pwnd;
   PSBDATA pSBData;  
+#endif
 
   TRACE("Wnd=%x Bar=%d Min=%p Max=%p\n", Wnd, Bar, MinPos, MaxPos);
 
@@ -1650,6 +1686,24 @@ GetScrollRange(HWND Wnd, int Bar, LPINT MinPos, LPINT MaxPos)
   }
   else if (Bar == SB_HORZ || Bar == SB_VERT )
   {
+#ifdef WOW64_I386_RUNTIME
+      SCROLLINFO ScrollInfo = { sizeof(ScrollInfo), SIF_RANGE };
+
+      if (!IsWindow(Wnd)) return FALSE;
+
+      if (RealGetScrollInfo(Wnd, Bar, &ScrollInfo))
+      {
+         *MinPos = ScrollInfo.nMin;
+         *MaxPos = ScrollInfo.nMax;
+      }
+      else
+      {
+         SetLastError(ERROR_NO_SCROLLBARS);
+         *MinPos = 0;
+         *MaxPos = 0;
+      }
+      return TRUE;
+#else
       pwnd = ValidateHwnd(Wnd);
       if (!pwnd) return FALSE;
 
@@ -1666,6 +1720,7 @@ GetScrollRange(HWND Wnd, int Bar, LPINT MinPos, LPINT MaxPos)
          *MaxPos = 0;
       }
       return TRUE;
+#endif
   }
   SetLastError(ERROR_INVALID_PARAMETER);
   return FALSE;
@@ -1743,11 +1798,13 @@ WINAPI
 DECLSPEC_HOTPATCH
 SetScrollRange(HWND hWnd, INT nBar, INT nMinPos, INT nMaxPos, BOOL bRedraw)
 {
-  PWND pWnd;
   SCROLLINFO ScrollInfo;
 
-  pWnd = ValidateHwnd(hWnd);
-  if ( !pWnd ) return FALSE;
+#ifdef WOW64_I386_RUNTIME
+  if (!IsWindow(hWnd)) return FALSE;
+#else
+  if (!ValidateHwnd(hWnd)) return FALSE;
+#endif
 
   if (((LONGLONG)nMaxPos - nMinPos) > MAXLONG)
   {
