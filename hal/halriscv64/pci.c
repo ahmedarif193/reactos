@@ -214,30 +214,6 @@ HalpRiscvInitializePci(const VOID *DeviceTree, SIZE_T DeviceTreeSize)
 }
 
 BOOLEAN
-NTAPI
-HalpRiscvIsDeviceMemory(PHYSICAL_ADDRESS Address, SIZE_T Length)
-{
-    RISCV_PCI_HOST *Host = &HalpRiscvPciHost;
-    ULONG Index;
-
-    if (HalpRiscvRtcIsDeviceMemory(Address, Length) ||
-        HalpRiscvPlicIsDeviceMemory(Address, Length))
-        return TRUE;
-    if (!HalpRiscvPciHostPresent || Address.QuadPart < 0)
-        return FALSE;
-    if (HalpRiscvRangeContains(Host->ConfigAddress, Host->ConfigSize, Address.QuadPart, Length))
-        return TRUE;
-    for (Index = 0; Index < Host->RangeCount; ++Index)
-    {
-        RISCV_PCI_RANGE *Range = &Host->Ranges[Index];
-
-        if (HalpRiscvRangeContains(Range->PhysicalAddress, Range->Size, Address.QuadPart, Length))
-            return TRUE;
-    }
-    return FALSE;
-}
-
-BOOLEAN
 HalpRiscvMapPciConfig(VOID)
 {
     PHYSICAL_ADDRESS Address;
