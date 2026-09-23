@@ -681,7 +681,9 @@ BCryptOpenAlgorithmProvider(
     Id = KsecAlgorithmIdFromName(AlgorithmId);
     if (Id == KsecAlgInvalid)
         return STATUS_NOT_SUPPORTED;
-    if ((Flags & BCRYPT_ALG_HANDLE_HMAC_FLAG) && KsecSymCryptHash(Id) == NULL)
+    /* AES-CMAC is already keyed; native clients also open it with the MAC flag. */
+    if ((Flags & BCRYPT_ALG_HANDLE_HMAC_FLAG) &&
+        Id != KsecAlgAesCmac && KsecSymCryptHash(Id) == NULL)
         return STATUS_NOT_SUPPORTED;
 
     Algorithm = KsecBcryptAllocate(sizeof(*Algorithm));
@@ -1961,6 +1963,17 @@ KsecInitializeBCrypt(VOID)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    DPRINT1("KSECDD: kernel BCrypt provider initialized; SHA-256, HMAC-SHA-256 and AES-CMAC KATs passed\n");
+    Status = KsecBcryptHashKnownAnswer(KsecAesCmacAlgorithm,
+                                       BCRYPT_ALG_HANDLE_HMAC_FLAG,
+                                       AesCmacKey,
+                                       sizeof(AesCmacKey),
+                                       NULL,
+                                       0,
+                                       AesCmacEmpty,
+                                       sizeof(AesCmacEmpty));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    DPRINT1("KSECDD: kernel BCrypt provider initialized; SHA-256, HMAC-SHA-256 and AES-CMAC (plain/MAC flag) KATs passed\n");
     return STATUS_SUCCESS;
 }
