@@ -182,6 +182,19 @@ endif()
 # Resolve STLport's legacy _vsnprintf from msvcrt before trying ntdll; the
 # ARM64EC ntdll bridge does not export it to AMD64 processes.
 target_link_libraries(glmark2 cppstl cpprt getopt glmark2-png glmark2-zlib)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Resolve the static C++ runtime's CRT references before choosing imports.
+    # Otherwise late winpthread/oldnames objects can bind calloc/_strdup to
+    # MSVCRT while free already comes from UCRT, corrupting the latter's heap.
+    target_link_libraries(glmark2 libwinpthread stdc++compat ucrtoldnames)
+    # libstdc++ filesystem code can request _wfullpath on a later archive pass.
+    # Its returned buffer is freed by UCRT, so bind it to the same allocator.
+    if(ARCH STREQUAL "i386")
+        target_link_options(glmark2 PRIVATE "-Wl,--undefined=__wfullpath")
+    else()
+        target_link_options(glmark2 PRIVATE "-Wl,--undefined=_wfullpath")
+    endif()
+endif()
 set_module_type(glmark2 win32cui)
 add_importlibs(glmark2 libjpeg opengl32 gdi32 user32 ucrtbase kernel32 msvcrt ntdll)
 add_cd_file(TARGET glmark2 DESTINATION reactos/system32 FOR all)
