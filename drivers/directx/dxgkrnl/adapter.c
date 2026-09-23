@@ -1141,20 +1141,24 @@ DxgkpTdrWorker(
     PresentResetStarted = FALSE;
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
-    /* The miniport's allocation state did not survive the reset: every open
-     * of CDD's shared shadow and primary failed afterwards with
-     * STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE and the desktop never
-     * presented again (2026-09-06).  Windows re-commits the VidPN after a
-     * TDR so the display owner recreates its surfaces; do the same, which
-     * recreates the shared surfaces under the shared-surface mutation and
-     * lets the Present bindings rebuild on them. */
+    /* Recommitting the unchanged mode does not recreate allocations.
+     * Replace a lost adapter-owned primary explicitly, preserving CDD's
+     * mapped system-memory shadow. Present bindings follow the resulting
+     * shared-surface generation. */
     {
         NTSTATUS RecommitStatus = DxgkDisplayCommitVidPn(Adapter);
 
+        if (NT_SUCCESS(RecommitStatus) &&
+            Adapter->SharedPrimaryAllocationHandle != NULL)
+        {
+            RecommitStatus = DxgkpEnsureSharedDisplaySurfaces(
+                                 Adapter,
+                                 Adapter->SharedPrimaryVidPnSourceId);
+        }
         if (!NT_SUCCESS(RecommitStatus))
-            DXGKRNL_ERR("DxgkpTdrWorker: VidPN recommit after reset failed 0x%08lX\n", RecommitStatus);
+            DXGKRNL_ERR("DxgkpTdrWorker: display restoration after reset failed 0x%08lX\n", RecommitStatus);
         else
-            DXGKRNL_WARN("DxgkpTdrWorker: VidPN recommitted after reset; shared surfaces recreated\n");
+            DXGKRNL_WARN("DxgkpTdrWorker: VidPN and shared surfaces restored after reset\n");
     }
 
 Exit:

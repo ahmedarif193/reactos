@@ -4502,16 +4502,12 @@ Monitor_ReleaseAdditionalMonitorModeSet(
  * D3DKMT API implementations
  * ====================================================================== */
 
+/* SharedPrimaryMutex and shared-surface rundown are held by the caller. */
 static VOID
-DxgkpDestroySharedPrimaryLocked(
+DxgkpDestroySharedPrimaryAllocationLocked(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     PDXGKVMM_RESOURCE Resource = NULL;
-
-    if (Adapter == NULL)
-        return;
-
-    DxgkpBeginSharedSurfaceMutationLocked(Adapter);
 
     if (Adapter->SharedPrimaryAllocationHandle != NULL)
     {
@@ -4558,6 +4554,20 @@ DxgkpDestroySharedPrimaryLocked(
     Adapter->SharedPrimaryHeight = 0;
     Adapter->SharedPrimaryFormat = 0;
     Adapter->SharedPrimaryIsGopBacked = FALSE;
+}
+
+static VOID
+DxgkpDestroySharedPrimaryLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKVMM_RESOURCE Resource = NULL;
+
+    if (Adapter == NULL)
+        return;
+
+    DxgkpBeginSharedSurfaceMutationLocked(Adapter);
+
+    DxgkpDestroySharedPrimaryAllocationLocked(Adapter);
 
     if (Adapter->SharedShadowAllocationHandle != NULL)
     {
@@ -5137,6 +5147,7 @@ DxgkpEnsureSharedPrimaryLocked(
     UINT ResourcePrivateDataSize = 0;
     PVOID CpuVa = NULL;
     BOOLEAN StartTimer = FALSE;
+    BOOLEAN PreserveShadow = FALSE;
     NTSTATUS Status;
 
     if (Adapter == NULL)
@@ -5183,10 +5194,33 @@ DxgkpEnsureSharedPrimaryLocked(
         Adapter->SharedPrimaryHeight == Adapter->CommittedHeight &&
         Adapter->SharedPrimaryVidPnSourceId == VidPnSourceId)
     {
-        return STATUS_SUCCESS;
+        BOOLEAN ContentLost;
+
+        Status = DxgkVidMmReferenceAllocation(
+                     Adapter->SharedPrimaryAllocationHandle,
+                     Adapter, NULL, &Allocation);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                    Executive, KernelMode, FALSE, NULL);
+        ContentLost = Allocation->ContentLost;
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        DxgkVidMmDereferenceAllocation(Allocation);
+        Allocation = NULL;
+        if (!ContentLost)
+            return STATUS_SUCCESS;
+
+        /* A reset can invalidate a local-memory primary without changing
+         * the mode. Do not publish that lost allocation to new callers.
+         * CDD still maps the system-memory shadow: preserve its backing
+         * while replacing only the primary and its sharing identity. */
+        if (Adapter->MiniportContext->IsDisplayOnlyDriver)
+            return STATUS_GRAPHICS_ALLOCATION_CONTENT_LOST;
+        PreserveShadow = TRUE;
     }
 
-    DxgkpDestroySharedPrimaryLocked(Adapter);
+    if (!PreserveShadow)
+        DxgkpDestroySharedPrimaryLocked(Adapter);
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData) == NULL)
         return STATUS_NOT_SUPPORTED;
@@ -5345,6 +5379,8 @@ DxgkpEnsureSharedPrimaryLocked(
     }
 
     DxgkpBeginSharedSurfaceMutationLocked(Adapter);
+    if (PreserveShadow)
+        DxgkpDestroySharedPrimaryAllocationLocked(Adapter);
     Adapter->SharedPrimaryResourceHandle = Resource->Handle;
     Adapter->SharedPrimaryGlobalShareHandle = Resource->GlobalShareHandle;
     Adapter->SharedPrimaryAllocationHandle = AllocationHandle;
@@ -5390,7 +5426,9 @@ Cleanup:
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpEnsureSharedPrimary: FAILED status=0x%08lX\n", Status);
-        if (Adapter->SharedPrimaryAllocationHandle != NULL || Adapter->SharedPrimaryResourceHandle != 0)
+        if (!PreserveShadow &&
+            (Adapter->SharedPrimaryAllocationHandle != NULL ||
+             Adapter->SharedPrimaryResourceHandle != 0))
         {
             DxgkpDestroySharedPrimaryLocked(Adapter);
         }
