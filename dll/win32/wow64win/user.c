@@ -3676,6 +3676,10 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     switch (msg)
     {
+#ifdef __REACTOS__
+    case WM_NCACTIVATE:
+        return NtUserMessageCall( hwnd, msg, wparam, (LONG)lparam, result_info, type, ansi );
+#endif
     case WM_NCCREATE:
     case WM_CREATE:
         if (lparam)
