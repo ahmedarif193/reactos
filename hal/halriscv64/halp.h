@@ -11,6 +11,9 @@
 
 #define RISCV_SBI_EXTENSION_BASE       0x10UL
 #define RISCV_SBI_EXTENSION_TIME       0x54494D45UL
+#define RISCV_SBI_EXTENSION_HSM        0x48534DUL
+#define RISCV_SBI_EXTENSION_IPI        0x735049UL
+#define RISCV_SBI_EXTENSION_RFENCE     0x52464E43UL
 #define RISCV_SBI_BASE_GET_VERSION     0UL
 #define RISCV_SBI_BASE_GET_IMPL_ID     1UL
 #define RISCV_SBI_BASE_PROBE_EXTENSION 3UL
@@ -27,6 +30,7 @@
 /* Kernel-private bridge values (ntoskrnl internal/riscv64/ke.h): the native
  * image path imports functions only, so the HAL keeps its own copies. */
 #define RISCV_HAL_SIE_STIE             (1UL << 5)   /* RISCV_SIE_STIE */
+#define RISCV_HAL_SIE_SSIE             (1UL << 1)
 #define RISCV_HAL_SIE_SEIE             (1UL << 9)   /* RISCV_SIE_SEIE */
 #define RISCV_HAL_EXTERNAL_IRQL        12
 #define RISCV_HAL_FEATURE_SSTC         0x00000100   /* KI_RISCV_FEATURE_SSTC */
@@ -44,11 +48,15 @@ extern ULONG_PTR HalpRiscvSbiImplementationId;
 extern ULONG64 HalpRiscvTimebaseFrequency;
 extern ULONG64 HalpRiscvBootCounter;
 extern ULONG HalpRiscvCurrentTimeIncrement;
-extern ULONG HalpRiscvFeatureFlags;
-extern BOOLEAN HalpRiscvClockUsesSstc;
-extern ULONG64 HalpRiscvClockDeadline;
-extern ULONG64 HalpRiscvClockPeriod;
-extern ULONG HalpRiscvClockIncrement;
+extern ULONG_PTR HalpRiscvHartIds[MAXIMUM_PROCESSORS];
+extern ULONG HalpRiscvHartCount;
+extern ULONG HalpRiscvStartedProcessors;
+RISCV_SBI_RETURN HalpRiscvSbiCall(ULONG_PTR Extension, ULONG_PTR Function,
+                                ULONG_PTR Arg0, ULONG_PTR Arg1, ULONG_PTR Arg2,
+                                ULONG_PTR Arg3);
+BOOLEAN HalpRiscvDiscoverHarts(struct _LOADER_PARAMETER_BLOCK *LoaderBlock);
+BOOLEAN NTAPI HalpRiscvQueryProcessorHartId(ULONG Number, PULONG_PTR HartId);
+BOOLEAN HalpRiscvSbiExtensionAvailable(ULONG_PTR Extension);
 
 /* Kernel imports (ntoskrnl.exe, listed in CMakeLists.txt IMPORTS). */
 VOID NTAPI KiRiscvSetInterruptEnabled(_In_ ULONG_PTR Mask, _In_ BOOLEAN Enable);

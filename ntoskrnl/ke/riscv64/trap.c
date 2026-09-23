@@ -170,8 +170,8 @@ KiRiscvInitializeTrapVector(VOID)
     ULONG_PTR Status, Vector;
 
     __asm__ __volatile__("csrr %0, sstatus" : "=r"(Status) :: "memory");
-    if ((Status & RISCV_SSTATUS_SIE) || (KeNumberProcessors != 1) ||
-        (KeGetCurrentPrcb() != KiProcessorBlock[0]))
+    if ((Status & RISCV_SSTATUS_SIE) || !KeGetPcr() ||
+        !KeGetCurrentPrcb()->CurrentThread)
     {
         return FALSE;
     }

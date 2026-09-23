@@ -65,15 +65,6 @@ KdpAllowDisable(VOID)
     return STATUS_SUCCESS;
 }
 
-KCONTINUE_STATUS
-NTAPI
-KxSwitchKdProcessor(
-    _In_ ULONG ProcessorIndex)
-{
-    UNREFERENCED_PARAMETER(ProcessorIndex);
-    return ContinueError;
-}
-
 /* Kernel calls already execute in the debugger's address space. User calls
  * enter through the private ECALL service and use the same KD workers. */
 ULONG

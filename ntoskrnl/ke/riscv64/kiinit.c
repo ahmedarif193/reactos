@@ -448,7 +448,7 @@ KiRiscvSystemStartup(
     KeSetPriorityThread(InitialThread, 0);
     KiAcquirePrcbLock(Prcb);
     if (Prcb->NextThread == NULL)
-        KiIdleSummary |= Prcb->SetMember;
+        InterlockedOr64((PLONG64)&KiIdleSummary, Prcb->SetMember);
     KiReleasePrcbLock(Prcb);
 
     KfRaiseIrql(HIGH_LEVEL);
@@ -471,8 +471,8 @@ KiInitMachineDependent(VOID)
 
     __asm__ __volatile__("csrr %0, satp\n\tcsrr %1, stvec"
                          : "=r"(Satp), "=r"(Vector) :: "memory");
-    if ((KeNumberProcessors != 1) ||
-        (KiProcessorBlock[0] != &Pcr->Prcb) ||
+    if ((Pcr->Prcb.Number >= (ULONG)(UCHAR)KeNumberProcessors) ||
+        (KiProcessorBlock[Pcr->Prcb.Number] != &Pcr->Prcb) ||
         ((Satp & RISCV64_LOADER_SATP_MODE_MASK) !=
          RISCV64_LOADER_SATP_MODE_SV39) ||
         (Vector != (ULONG_PTR)KiRiscvTrapEntry))

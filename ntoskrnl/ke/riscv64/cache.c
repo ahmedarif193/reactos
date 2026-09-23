@@ -35,13 +35,13 @@ KeSweepICache(
     UNREFERENCED_PARAMETER(BaseAddress);
     UNREFERENCED_PARAMETER(FlushSize);
 
-    /* The first-entry port admits one kernel hart. Do not silently satisfy
-     * a system-wide request with a local fence after enabling another hart. */
-    if (KeNumberProcessors > 1)
-        KeBugCheckEx(MULTIPROCESSOR_CONFIGURATION_NOT_SUPPORTED, KeNumberProcessors, 0, 0, 0);
-
-    /* The baseline instruction has no range form. */
-    __asm__ __volatile__("fence.i" ::: "memory");
+    KIRQL OldIrql = KeGetCurrentIrql();
+    KAFFINITY Targets;
+    if (OldIrql < SYNCH_LEVEL) KfRaiseIrql(SYNCH_LEVEL);
+    Targets = KeActiveProcessors & ~KeGetCurrentPrcb()->SetMember;
+    __asm__ __volatile__("fence rw, rw\n\tfence.i" ::: "memory");
+    if (Targets) HalpRiscvRemoteFence(Targets, NULL, 0, TRUE);
+    KfLowerIrql(OldIrql);
 }
 
 VOID
@@ -64,8 +64,6 @@ KeFlushIoBuffers(
         __asm__ __volatile__("fence iorw, iorw" ::: "memory");
         return;
     }
-    if (KeNumberProcessors > 1)
-        KeBugCheckEx(MULTIPROCESSOR_CONFIGURATION_NOT_SUPPORTED, KeNumberProcessors, 0, 0, 0);
     if (Mdl->ByteCount == 0)
         return;
 
@@ -76,4 +74,24 @@ KeFlushIoBuffers(
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
     if (ReadOperation)
         KeSweepICache(NULL, 0);
+}
+
+VOID
+FASTCALL
+KeInvalidateRangeAllCaches(
+    _In_ PVOID BaseAddress,
+    _In_ ULONG Length)
+{
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+    if (!Length)
+        return;
+
+    /* The coherent platform does not require data-cache maintenance to make
+     * RAM visible to CPUs or devices. Order those accesses and synchronize
+     * instruction caches on every active hart. A noncoherent platform needs
+     * cache-block operations supplied by its hardware provider. */
+    if (!KiDmaIoCoherency)
+        KiRiscvUnimplemented("KeInvalidateRangeAllCaches/noncoherent-platform");
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+    KeSweepICache(BaseAddress, Length);
 }

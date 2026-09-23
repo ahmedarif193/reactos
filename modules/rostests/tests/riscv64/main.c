@@ -13,6 +13,7 @@
 #include <dbghelp.h>
 
 ULONG RunSehTests(VOID);
+ULONG RunSmpTests(VOID);
 int RunCxxTests(VOID);
 static ULONG Checks, Failures;
 #define CHECK(e) do { ++Checks; if (!(e)) { ++Failures; \
@@ -159,6 +160,7 @@ __declspec(noinline) static VOID DbgHelpTests(VOID)
 
 static VOID ProfileTests(VOID)
 {
+    DWORD_PTR Affinity = SetThreadAffinityMask(GetCurrentThread(), 1);
     HANDLE Profile = NULL;
     ULONG OldInterval, Interval, Size, Buckets, Index, Samples = 0;
     ULONG *Buffer;
@@ -171,7 +173,7 @@ static VOID ProfileTests(VOID)
     Buckets = (Size + 4095) >> 12;
     Buffer = VirtualAlloc(NULL, Buckets * sizeof(ULONG), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     CHECK(Buffer != NULL);
-    if (!Buffer) return;
+    if (!Buffer) { SetThreadAffinityMask(GetCurrentThread(), Affinity); return; }
     NtQueryIntervalProfile(ProfileTime, &OldInterval);
     CHECK(NT_SUCCESS(NtSetIntervalProfile(100000, ProfileTime)));
     CHECK(NT_SUCCESS(NtQueryIntervalProfile(ProfileTime, &Interval)) && Interval >= 100000);
@@ -197,6 +199,7 @@ static VOID ProfileTests(VOID)
     }
     NtSetIntervalProfile(OldInterval, ProfileTime);
     VirtualFree(Buffer, 0, MEM_RELEASE);
+    SetThreadAffinityMask(GetCurrentThread(), Affinity);
 }
 
 int main(int argc, char **argv)
@@ -220,6 +223,7 @@ int main(int argc, char **argv)
     DbgHelpTests();
     ProfileTests();
     KernelTests();
+    Failures += RunSmpTests();
     CheckChild("--fastfail", 0xc0000409);
     CheckChild("--noncontinuable", 0xc0000025);
     DbgPrint("RISCVTEST: END checks=%lu failures=%lu\n", Checks, Failures);

@@ -11,19 +11,19 @@
 ULONG HalpRiscvSbiVersion;
 ULONG_PTR HalpRiscvSbiImplementationId;
 
-static
 RISCV_SBI_RETURN
 HalpRiscvSbiCall(
     _In_ ULONG_PTR Extension,
     _In_ ULONG_PTR Function,
     _In_ ULONG_PTR Argument0,
     _In_ ULONG_PTR Argument1,
-    _In_ ULONG_PTR Argument2)
+    _In_ ULONG_PTR Argument2,
+    _In_ ULONG_PTR Argument3)
 {
     register ULONG_PTR A0 __asm__("a0") = Argument0;
     register ULONG_PTR A1 __asm__("a1") = Argument1;
     register ULONG_PTR A2 __asm__("a2") = Argument2;
-    register ULONG_PTR A3 __asm__("a3") = 0;
+    register ULONG_PTR A3 __asm__("a3") = Argument3;
     register ULONG_PTR A4 __asm__("a4") = 0;
     register ULONG_PTR A5 __asm__("a5") = 0;
     register ULONG_PTR A6 __asm__("a6") = Function;
@@ -50,7 +50,7 @@ HalpRiscvInitializeSbi(VOID)
                               RISCV_SBI_BASE_GET_VERSION,
                               0,
                               0,
-                              0);
+                              0, 0);
     if ((Result.Error != 0) || (Result.Value > MAXULONG))
         return FALSE;
 
@@ -66,7 +66,7 @@ HalpRiscvInitializeSbi(VOID)
                               RISCV_SBI_BASE_PROBE_EXTENSION,
                               RISCV_SBI_EXTENSION_TIME,
                               0,
-                              0);
+                              0, 0);
     if ((Result.Error != 0) || (Result.Value == 0))
         return FALSE;
 
@@ -75,7 +75,7 @@ HalpRiscvInitializeSbi(VOID)
                               RISCV_SBI_BASE_GET_IMPL_ID,
                               0,
                               0,
-                              0);
+                              0, 0);
     if (Result.Error != 0)
         return FALSE;
     HalpRiscvSbiImplementationId = Result.Value;
@@ -90,7 +90,7 @@ HalpRiscvSetTimer(
                             RISCV_SBI_TIME_SET_TIMER,
                             (ULONG_PTR)Deadline,
                             0,
-                            0);
+                            0, 0);
 }
 
 ULONG64
@@ -114,13 +114,21 @@ HalpRiscvSystemReset(
                               RISCV_SBI_BASE_PROBE_EXTENSION,
                               RISCV_SBI_EXTENSION_SRST,
                               0,
-                              0);
+                              0, 0);
     if ((Result.Error != 0) || (Result.Value == 0))
         return FALSE;
     HalpRiscvSbiCall(RISCV_SBI_EXTENSION_SRST,
                      RISCV_SBI_SRST_SYSTEM_RESET,
                      ResetType,
                      RISCV_SBI_SRST_REASON_NONE,
-                     0);
+                     0, 0);
     return FALSE;
+}
+
+BOOLEAN
+HalpRiscvSbiExtensionAvailable(ULONG_PTR Extension)
+{
+    RISCV_SBI_RETURN Result = HalpRiscvSbiCall(RISCV_SBI_EXTENSION_BASE,
+        RISCV_SBI_BASE_PROBE_EXTENSION, Extension, 0, 0, 0);
+    return Result.Error == 0 && Result.Value != 0;
 }

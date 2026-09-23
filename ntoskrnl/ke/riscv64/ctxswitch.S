@@ -60,11 +60,24 @@ KiSwapContext:
     csrrci t0, sstatus, SSTATUS_SIE
     andi t0, t0, SSTATUS_SIE
     csrr t1, sscratch
+    ld a2, PcCurrentThread(t1)
+    /* As on AMD64/ARM64, an incoming stack must be fully detached from its
+     * previous CPU. Remain responsive to IPIs while waiting at dispatcher
+     * priority, then acquire the published KernelStack before loading it. */
+    beq a1, a2, .Lstack_ready
+.Lwait_for_stack:
+    lbu t2, ThRunning(a2)
+    beqz t2, .Lstack_ready
+    csrsi sstatus, SSTATUS_SIE
+    nop
+    j .Lwait_for_stack
+.Lstack_ready:
+    csrci sstatus, SSTATUS_SIE
+    fence r, rw
     /* Zalrsc requires discarding the outgoing context's reservation. Entry
      * has finished, so the PCR's prologue scratch stack slot is disposable. */
     addi t2, t1, PcTrapStack
     sc.d zero, zero, (t2)
-    ld a2, PcCurrentThread(t1)
     sd sp, ThKernelStack(a1)
     ld sp, ThKernelStack(a2)
     /* Kernel callers use NtCurrentTeb(), which reads tp. Carry the incoming

@@ -1802,7 +1802,7 @@ KiWaitForThreadSwapOut(IN PKTHREAD Thread)
     {
         YieldProcessor();
     }
-#elif defined(_M_AMD64)
+#elif defined(_M_AMD64) || defined(_M_RISCV64)
     ASSERT(!Thread->Running);
 #else
     UNREFERENCED_PARAMETER(Thread);
