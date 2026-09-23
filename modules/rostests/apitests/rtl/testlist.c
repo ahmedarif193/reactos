@@ -7,6 +7,7 @@ extern void func_RtlCaptureContext(void);
 extern void func_RtlIntSafe(void);
 extern void func_RtlUnwind(void);
 extern void func_RtlVirtualUnwind(void);
+extern void func_RtlVirtualUnwindChainedHandler(void);
 
 const struct test winetest_testlist[] =
 {
@@ -18,6 +19,7 @@ const struct test winetest_testlist[] =
 #ifdef _M_AMD64
     { "RtlCaptureContext",        func_RtlCaptureContext },
     { "RtlVirtualUnwind",         func_RtlVirtualUnwind },
+    { "RtlVirtualUnwindChainedHandler", func_RtlVirtualUnwindChainedHandler },
 #endif
 
     { 0, 0 }
