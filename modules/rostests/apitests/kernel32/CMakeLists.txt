@@ -76,6 +76,7 @@ list(APPEND SOURCE
     UEFIFirmware.c
     WerRegisterFile.c
     WideCharToMultiByte.c
+    Wow64GetThreadContext.c
     WriteFile.c
     WriteFileSeekBack.c
 )
