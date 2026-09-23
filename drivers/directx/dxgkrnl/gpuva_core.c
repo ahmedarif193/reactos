@@ -103,6 +103,34 @@ DxgkGpuVaCorePageCount(
 }
 
 BOOLEAN
+DxgkGpuVaCoreAllocationMapChunk(
+    _In_ ULONGLONG AllocationSize,
+    _In_ ULONGLONG AllocationOffset,
+    _In_ ULONGLONG MappingSize,
+    _In_ ULONGLONG MappingOffset,
+    _Out_ PULONGLONG SourceOffset,
+    _Out_ PULONGLONG ChunkSize)
+{
+    ULONGLONG RepeatSize;
+    ULONGLONG RepeatOffset;
+
+    *SourceOffset = *ChunkSize = 0;
+    if (AllocationOffset >= AllocationSize || MappingOffset >= MappingSize ||
+        !DxgkGpuVaCoreIsPageAligned(AllocationSize | AllocationOffset |
+                                   MappingSize | MappingOffset))
+        return FALSE;
+
+    /* WDDM 2 permits a virtual mapping larger than the allocation. Repeat
+     * [AllocationOffset, AllocationSize), including a partial final repeat.
+     * This describes aliases of existing backing, never additional pages. */
+    RepeatSize = AllocationSize - AllocationOffset;
+    RepeatOffset = MappingOffset % RepeatSize;
+    *SourceOffset = AllocationOffset + RepeatOffset;
+    *ChunkSize = min(RepeatSize - RepeatOffset, MappingSize - MappingOffset);
+    return TRUE;
+}
+
+BOOLEAN
 DxgkGpuVaCoreNextMapPiece(
     _In_reads_bytes_(SpanCount * SpanStride) const VOID *Spans,
     _In_ ULONG SpanCount,

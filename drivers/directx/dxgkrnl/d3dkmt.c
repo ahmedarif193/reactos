@@ -10745,7 +10745,10 @@ DxgkpDispatchBufferedIoctlWorker(
                     DxgkDereferenceDevice(Device);
                     return STATUS_INVALID_PARAMETER;
                 }
-                if (MapOffset > Allocation->Size || MapSize > Allocation->Size - MapOffset)
+                /* WDDM 2 repeats the remaining allocation pages when the
+                 * virtual range is larger. The starting page must still
+                 * belong to the allocation; gpuva.c builds bounded aliases. */
+                if (MapOffset >= Allocation->Size)
                 {
                     DxgkVidMmDereferenceAllocation(Allocation);
                     DxgkDereferenceDevice(Device);
