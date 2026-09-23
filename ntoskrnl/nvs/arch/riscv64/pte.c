@@ -51,14 +51,11 @@ MiArchPteMakeLeaf(
     if ((Pte & MI_RISCV_PTE_WRITE) && (Flags & MI_LEAF_DIRTY))
         Pte |= MI_RISCV_PTE_DIRTY;
 
-    if (MiRiscvPbmtEnabled)
-    {
-        if (Flags & MI_LEAF_DEVICE)
-            Pte |= MI_RISCV_PTE_PBMT_IO;
-        else if ((Flags & (MI_LEAF_NOCACHE | MI_LEAF_WRITECOMBINE)) || (Protection & MI_PROT_NOCACHE))
-            Pte |= MI_RISCV_PTE_PBMT_NC;
-    }
-
+    /* Caching comes from the platform's physical memory attributes: device
+     * ranges are already I/O and RAM stays cacheable, which the coherent DMA
+     * the HAL requires allows. No Svpbmt type is encoded: a non-cacheable
+     * alias of RAM would need cache-block maintenance against the cacheable
+     * direct map. */
     return Pte;
 }
 
@@ -118,15 +115,9 @@ MiArchPteIsCopyOnWrite(_In_ MI_PTE Pte)
 ULONG
 MiArchPteLeafFlags(_In_ MI_PTE Pte)
 {
-    switch (Pte & MI_RISCV_PTE_PBMT_MASK)
-    {
-        case MI_RISCV_PTE_PBMT_IO:
-            return MI_LEAF_DEVICE;
-        case MI_RISCV_PTE_PBMT_NC:
-            return MI_LEAF_NOCACHE;
-        default:
-            return 0;
-    }
+    /* Leaves carry no cache attribute (see MiArchPteMakeLeaf). */
+    UNREFERENCED_PARAMETER(Pte);
+    return 0;
 }
 
 BOOLEAN

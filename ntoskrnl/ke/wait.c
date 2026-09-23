@@ -900,14 +900,6 @@ KeWaitForSingleObject(IN PVOID Object,
     PLARGE_INTEGER OriginalDueTime = Timeout;
     ULONG Hand = 0;
 
-#if defined(_M_RISCV64)
-    /* IoBuildDeviceIoControlRequest completes through a kernel APC. A thread
-     * can reach this wait with SIE clear; then the pending SSIP cannot run and
-     * the pre-wait APC check loops forever. Normal passive-level waits must
-     * admit interrupts before they acquire the dispatcher lock. */
-    if (!Thread->WaitNext && KeGetCurrentIrql() < DISPATCH_LEVEL)
-        _enable();
-#endif
 
     if (Thread->WaitNext)
         ASSERT(KeGetCurrentIrql() == SYNCH_LEVEL);

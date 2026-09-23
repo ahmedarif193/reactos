@@ -11,10 +11,6 @@
 
 #include "archdef.h"
 
-/* Set once the boot hart reported Svpbmt; firmware enables it with the
- * extension. Without it, physical memory attributes govern caching. */
-extern BOOLEAN MiRiscvPbmtEnabled;
-
 FORCEINLINE
 BOOLEAN
 MiRiscvPteIsTable(_In_ MI_PTE Pte)

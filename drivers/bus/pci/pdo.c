@@ -2810,6 +2810,15 @@ PdoQueryResourceRequirements(
     MsixOption = (HasMsix && AllowMsix);
     MsiOption = (HasMsi && AllowMsi);
     LegacyOption = (InterruptResourcesAllowed && InterruptPin != 0);
+#if defined(_M_RISCV64)
+    /* Without a route in the firmware interrupt map there is no legacy vector. */
+    if (LegacyOption &&
+        (PciPdoRoutedInterruptLine(DeviceExtension, InterruptPin,
+                                   PciConfig.u.type0.InterruptLine) == 0))
+    {
+        LegacyOption = FALSE;
+    }
+#endif
     if (FdoExtension && FdoExtension->OscMasked)
     {
         ULONG Masked = FdoExtension->OscMasked;

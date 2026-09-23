@@ -110,7 +110,7 @@ KiRiscvSystemService(_Inout_ PKTRAP_FRAME Frame)
     {
         Status = PsConvertToGuiThread();
         /* Even a failed callout may have moved and freed the old stack. */
-        Frame = Thread->TrapFrame;
+        Frame = ((PKTRAP_FRAME)Thread->InitialStack) - 1;
         if (!NT_SUCCESS(Status) && (Status != STATUS_ALREADY_WIN32))
         {
             Result = (LONG_PTR)Status;
@@ -133,7 +133,10 @@ KiRiscvSystemService(_Inout_ PKTRAP_FRAME Frame)
     Result = KiRiscvDispatchSystemService(Frame);
 
 Exit:
-    Frame = Thread->TrapFrame;
+    /* The service frame sits right below the initial stack, which a GUI
+     * conversion moves with it. Thread->TrapFrame is not used here: a failed
+     * NtRaiseException or NtContinue returns with it already unlinked. */
+    Frame = ((PKTRAP_FRAME)Thread->InitialStack) - 1;
     Frame->Context.A0 = Result;
 
     if (KeGetCurrentIrql() != PASSIVE_LEVEL)

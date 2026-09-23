@@ -10,8 +10,6 @@
 #include <nvs/nt/mint.h>
 #include "hardware.h"
 
-BOOLEAN MiRiscvPbmtEnabled;
-
 VOID
 NTAPI
 MiInitializeKernelVaLayout(
@@ -31,7 +29,6 @@ MiInitializeKernelVaLayout(
     }
 
     MmSystemRangeStart = (PVOID)(ULONG_PTR)MiArchDescribe()->SystemAddressStart;
-    MiRiscvPbmtEnabled = (KiRiscvQueryFeatureFlags() & KI_RISCV_FEATURE_SVPBMT) != 0;
 }
 
 PVOID
@@ -72,12 +69,33 @@ MiRiscvCheckTableUnlink(_In_ MI_PTE Old, _In_ MI_PTE New)
         MiArchInvalidateTlbAll(MiTlbAllProcessors);
 }
 
+/* Instruction fetch is not coherent with stores. Before a leaf lets any hart
+ * execute contents written since the frame was last executable (paged in,
+ * copied, zeroed or written through a writable mapping), every hart must
+ * discard stale instructions. An unchanged read-only code leaf needs nothing. */
+static
+VOID
+MiRiscvCheckInstructionSync(_In_ MI_PTE Old, _In_ MI_PTE New)
+{
+    if (!MiRiscvPteIsLeaf(New) || !(New & MI_RISCV_PTE_EXECUTE))
+        return;
+
+    if (MiRiscvPteIsLeaf(Old) && (Old & MI_RISCV_PTE_EXECUTE) && !(Old & MI_RISCV_PTE_WRITE) &&
+        ((Old & MI_RISCV_PTE_PFN_MASK) == (New & MI_RISCV_PTE_PFN_MASK)))
+    {
+        return;
+    }
+
+    KeSweepICache(NULL, 0);
+}
+
 VOID
 MiArchPteWrite(_Inout_ PMI_PTE Slot, _In_ MI_PTE Value)
 {
     MI_PTE Old = __atomic_exchange_n(Slot, Value, __ATOMIC_ACQ_REL);
 
     MiRiscvCheckTableUnlink(Old, Value);
+    MiRiscvCheckInstructionSync(Old, Value);
 }
 
 BOOLEAN
@@ -88,7 +106,10 @@ MiArchPteCompareExchange(_Inout_ PMI_PTE Slot, _In_ MI_PTE Expected, _In_ MI_PTE
                                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 
     if (Swapped)
+    {
         MiRiscvCheckTableUnlink(Expected, Value);
+        MiRiscvCheckInstructionSync(Expected, Value);
+    }
 
     return Swapped;
 }

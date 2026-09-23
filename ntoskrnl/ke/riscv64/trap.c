@@ -97,7 +97,6 @@ KiRiscvDescribeAddress(
             return;
         }
     }
-    DbgPrint("address %p is %s page %lx: no loader descriptor\n", Address, Window, Page);
 }
 
 /* Poor man's backtrace: stack words that fall inside a loaded image. */
@@ -205,10 +204,17 @@ KiRiscvTrapStop(_In_ PKTRAP_FRAME TrapFrame)
                  (ULONG_PTR)TrapFrame);
 }
 
-/* Single-hart loop detector for faults on leaves that already permit access. */
-static ULONG64 KiRiscvLastSpuriousPc;
-static ULONG_PTR KiRiscvLastSpuriousAddress;
-static ULONG KiRiscvSpuriousCount;
+/* Detector for a fault that keeps repeating on a leaf which already permits
+ * the access. Each processor tracks its own last such fault; any other page
+ * fault taken by that processor is progress and resets it. */
+typedef struct _KI_RISCV_SPURIOUS_FAULT
+{
+    ULONG64 Pc;
+    ULONG_PTR Address;
+    ULONG Count;
+} KI_RISCV_SPURIOUS_FAULT;
+
+static KI_RISCV_SPURIOUS_FAULT KiRiscvSpuriousFault[MAXIMUM_PROCESSORS];
 
 /* Does a valid leaf grant this access to the trapping mode? Mirrors the
  * privileged-spec permission check (U/SUM/MXR, R/W/X) without A/D. */
@@ -247,6 +253,127 @@ KiRiscvLeafPermitsAccess(
     }
 }
 
+/* The stale-translation paths run on the faulting processor with interrupts
+ * still masked by the trap. MM and exception dispatch may block or run long:
+ * as on AMD64 and ARM64 they run with the interrupt state of the code that
+ * faulted. The caller masks interrupts again before it unlinks the frame. */
+static
+VOID
+KiRiscvPageFault(
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _In_ ULONG64 Code,
+    _In_ KPROCESSOR_MODE Mode)
+{
+    KI_RISCV_SPURIOUS_FAULT *Spurious = &KiRiscvSpuriousFault[KeGetCurrentPrcb()->Number];
+    PVOID Address = (PVOID)(ULONG_PTR)TrapFrame->Stval;
+    KIRQL Irql = KeGetCurrentIrql();
+    MI_RISCV_PAGE_WALK Walk;
+    EXCEPTION_RECORD Record;
+    ULONG FaultCode;
+    NTSTATUS Status;
+
+    /* Present means a valid leaf exists: a protection fault, not demand. */
+    FaultCode = (Code == 15) ? MI_RISCV_FAULT_WRITE : (Code == 12) ? MI_RISCV_FAULT_EXECUTE : 0;
+    if (NT_SUCCESS(MiRiscvWalkCurrentPageTables(Address, &Walk)))
+    {
+        FaultCode |= MI_RISCV_FAULT_PRESENT;
+
+        if (KiRiscvLeafPermitsAccess(Walk.Value.u.Long, Code, Mode, TrapFrame->Sstatus))
+        {
+            ULONG64 Needed = MI_RISCV_PTE_ACCESSED | ((Code == 15) ? MI_RISCV_PTE_DIRTY : 0);
+            ULONG64 Expected = Walk.Value.u.Long;
+
+            if ((Expected & Needed) != Needed)
+            {
+                /* Without Svadu the leaf only lacks A (or D for a store).
+                 * MM records that itself, which it cannot do above
+                 * APC_LEVEL; a page touched there is nonpageable. */
+                if (Irql > APC_LEVEL)
+                {
+                    Spurious->Count = 0;
+                    __atomic_compare_exchange_n(&Walk.Entry->u.Long, &Expected, Expected | Needed, FALSE,
+                                                __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+                    KeInvalidateTlbEntry(Address);
+                    return;
+                }
+            }
+            else
+            {
+                /* The leaf permits the access and A/D are set: this processor
+                 * used a stale translation, or another one made the leaf valid
+                 * after the hardware walk. A stale table entry is only dropped
+                 * by a full fence. Only a kernel access to system space that
+                 * keeps failing this way cannot be explained by a race. */
+                if ((Spurious->Pc != TrapFrame->Context.Pc) ||
+                    (Spurious->Address != (ULONG_PTR)Address))
+                {
+                    Spurious->Pc = TrapFrame->Context.Pc;
+                    Spurious->Address = (ULONG_PTR)Address;
+                    Spurious->Count = 0;
+                }
+                if ((Mode == UserMode) || ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart) ||
+                    (++Spurious->Count < 8))
+                {
+                    KeFlushCurrentTb();
+                    return;
+                }
+                DbgPrint("\n*** Repeated fault on permitted leaf %llx at %p (pc %p)\n",
+                         Walk.Value.u.Long, Address, (PVOID)(ULONG_PTR)TrapFrame->Context.Pc);
+                KeGetCurrentThread()->TrapFrame = TrapFrame->PreviousTrapFrame;
+                KiRiscvTrapStop(TrapFrame);
+            }
+        }
+    }
+    Spurious->Count = 0;
+
+    /* The resident kernel metadata reader never resolves paging faults.
+     * Recover before MM's fatal kernel-address path can recurse into SEH. */
+    if (Mode == KernelMode && (ULONG_PTR)Address >= (ULONG_PTR)MmSystemRangeStart &&
+        KiRiscvFixupUserCopy(TrapFrame, STATUS_ACCESS_VIOLATION))
+    {
+        return;
+    }
+
+    if (KeGetTrapFrameInterruptState(TrapFrame))
+        _enable();
+
+    Status = MmAccessFault(FaultCode, Address, Mode, TrapFrame);
+    if (NT_SUCCESS(Status))
+    {
+        KeInvalidateTlbEntry(Address);
+        return;
+    }
+    if (Irql > APC_LEVEL)
+    {
+        KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL,
+                     (ULONG_PTR)Address,
+                     Irql,
+                     (Code == 15) ? 1 : 0,
+                     TrapFrame->Context.Pc);
+    }
+    if (KiRiscvFixupUserCopy(TrapFrame, Status))
+        return;
+
+    RtlZeroMemory(&Record, sizeof(Record));
+    Record.ExceptionAddress = (PVOID)(ULONG_PTR)TrapFrame->Context.Pc;
+    if ((Status == STATUS_ACCESS_VIOLATION) || (Status == STATUS_GUARD_PAGE_VIOLATION) || (Status == STATUS_STACK_OVERFLOW))
+    {
+        Record.ExceptionCode = Status;
+        Record.NumberParameters = 2;
+        Record.ExceptionInformation[0] = (Code == 15) ? 1 : (Code == 12) ? 8 : 0;
+        Record.ExceptionInformation[1] = (ULONG_PTR)Address;
+    }
+    else
+    {
+        Record.ExceptionCode = STATUS_IN_PAGE_ERROR;
+        Record.NumberParameters = 3;
+        Record.ExceptionInformation[0] = (Code == 15) ? 1 : 0;
+        Record.ExceptionInformation[1] = (ULONG_PTR)Address;
+        Record.ExceptionInformation[2] = Status;
+    }
+    KiDispatchException(&Record, NULL, TrapFrame, Mode, TRUE);
+}
+
 /* Resumable supervisor-trap dispatch. Interrupts (scause bit 63) go to
  * KiRiscvInterruptDispatch at their own IRQL; page faults go to MM; other
  * exceptions are dispatched as NT exceptions. A handled trap returns to the
@@ -260,10 +387,7 @@ KiRiscvTrapHandler(_Inout_ PKTRAP_FRAME TrapFrame)
     ULONG64 Code = Scause & ~(1ULL << 63);
     PVOID Address = (PVOID)(ULONG_PTR)TrapFrame->Stval;
     KPROCESSOR_MODE Mode = KiUserTrap(TrapFrame) ? UserMode : KernelMode;
-    MI_RISCV_PAGE_WALK Walk;
     EXCEPTION_RECORD Record;
-    ULONG FaultCode;
-    NTSTATUS Status;
 
     TrapFrame->PreviousTrapFrame = Thread->TrapFrame;
     Thread->TrapFrame = TrapFrame;
@@ -280,122 +404,10 @@ KiRiscvTrapHandler(_Inout_ PKTRAP_FRAME TrapFrame)
         return;
     }
 
-    if (!(Scause & (1ULL << 63)) && ((Code == 12) || (Code == 13) || (Code == 15)))
+    if ((Code == 12) || (Code == 13) || (Code == 15))
     {
-        KIRQL Irql = KeGetCurrentIrql();
-
-        /* Present means a valid leaf exists: a protection fault, not demand. */
-        FaultCode = (Code == 15) ? MI_RISCV_FAULT_WRITE : (Code == 12) ? MI_RISCV_FAULT_EXECUTE : 0;
-        if (NT_SUCCESS(MiRiscvWalkCurrentPageTables(Address, &Walk)))
-        {
-            FaultCode |= MI_RISCV_FAULT_PRESENT;
-
-            if (KiRiscvLeafPermitsAccess(Walk.Value.u.Long, Code, Mode, TrapFrame->Sstatus))
-            {
-                ULONG64 Needed = MI_RISCV_PTE_ACCESSED | ((Code == 15) ? MI_RISCV_PTE_DIRTY : 0);
-                ULONG64 Expected = Walk.Value.u.Long;
-
-                if ((Expected & Needed) != Needed)
-                {
-                    /* Without Svadu the leaf only lacks A (or D for a store).
-                     * MM records that itself, which it cannot do above
-                     * APC_LEVEL; a page touched there is nonpageable. */
-                    if (Irql > APC_LEVEL)
-                    {
-                        __atomic_compare_exchange_n(&Walk.Entry->u.Long, &Expected, Expected | Needed, FALSE,
-                                                    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-                        KeInvalidateTlbEntry(Address);
-                        Thread->TrapFrame = TrapFrame->PreviousTrapFrame;
-                        return;
-                    }
-                }
-                else
-                {
-                    /* The leaf permits the access and A/D are set: the
-                     * translation was stale. Retry, but never loop on a fault
-                     * this model cannot explain. */
-                    if ((KiRiscvLastSpuriousPc != TrapFrame->Context.Pc) ||
-                        (KiRiscvLastSpuriousAddress != (ULONG_PTR)Address))
-                    {
-                        KiRiscvLastSpuriousPc = TrapFrame->Context.Pc;
-                        KiRiscvLastSpuriousAddress = (ULONG_PTR)Address;
-                        KiRiscvSpuriousCount = 0;
-                    }
-                    if (++KiRiscvSpuriousCount < 8)
-                    {
-                        /* A stale table entry is only dropped by a full fence. */
-                        KeFlushCurrentTb();
-                        Thread->TrapFrame = TrapFrame->PreviousTrapFrame;
-                        return;
-                    }
-                    DbgPrint("\n*** Repeated fault on permitted leaf %llx at %p (pc %p)\n",
-                             Walk.Value.u.Long, Address, (PVOID)(ULONG_PTR)TrapFrame->Context.Pc);
-                    KiRiscvTrapStop(TrapFrame);
-                }
-            }
-        }
-
-        /* A missing loader-window page is a loader or adoption bug, not demand
-         * paging: attribute it before MM raises PAGE_FAULT_IN_NONPAGED_AREA. */
-        if (((ULONG_PTR)Address >= RISCV64_LOADER_KSEG0_BASE) &&
-            ((ULONG_PTR)Address - RISCV64_LOADER_KSEG0_BASE < 2 * RISCV64_LOADER_PHYSICAL_LIMIT))
-        {
-            DbgPrint("\n*** Loader-window fault at %p from %p: cause %lu, code %lx, leaf %llx\n", Address,
-                     (PVOID)(ULONG_PTR)TrapFrame->Context.Pc, (ULONG)Code, FaultCode,
-                     (FaultCode & MI_RISCV_FAULT_PRESENT) ? Walk.Value.u.Long : 0ULL);
-            KiRiscvDescribeAddress(Address);
-            KiRiscvScanStackForCode((PULONG_PTR)(ULONG_PTR)TrapFrame->Context.Sp);
-        }
-
-        /* The resident kernel metadata reader never resolves paging faults.
-         * Recover before MM's fatal kernel-address path can recurse into SEH. */
-        if (Mode == KernelMode && (ULONG_PTR)Address >= (ULONG_PTR)MmSystemRangeStart &&
-            KiRiscvFixupUserCopy(TrapFrame, STATUS_ACCESS_VIOLATION))
-        {
-            Thread->TrapFrame = TrapFrame->PreviousTrapFrame;
-            return;
-        }
-        Status = MmAccessFault(FaultCode, Address, Mode, TrapFrame);
-        if (NT_SUCCESS(Status))
-        {
-            KeInvalidateTlbEntry(Address);
-            Thread->TrapFrame = TrapFrame->PreviousTrapFrame;
-            return;
-        }
-        if (Irql > APC_LEVEL)
-        {
-            KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL,
-                         (ULONG_PTR)Address,
-                         Irql,
-                         (Code == 15) ? 1 : 0,
-                         TrapFrame->Context.Pc);
-        }
-        if (KiRiscvFixupUserCopy(TrapFrame, Status))
-        {
-            Thread->TrapFrame = TrapFrame->PreviousTrapFrame;
-            return;
-        }
-        DbgPrint("\n*** MmAccessFault(%lx, %p) failed: 0x%08lx at %p\n", FaultCode, Address, Status, (PVOID)(ULONG_PTR)TrapFrame->Context.Pc);
-        KiRiscvDescribeAddress(Address);
-
-        RtlZeroMemory(&Record, sizeof(Record));
-        Record.ExceptionAddress = (PVOID)(ULONG_PTR)TrapFrame->Context.Pc;
-        if ((Status == STATUS_ACCESS_VIOLATION) || (Status == STATUS_GUARD_PAGE_VIOLATION) || (Status == STATUS_STACK_OVERFLOW))
-        {
-            Record.ExceptionCode = Status;
-            Record.NumberParameters = 2;
-            Record.ExceptionInformation[0] = (Code == 15) ? 1 : (Code == 12) ? 8 : 0;
-            Record.ExceptionInformation[1] = (ULONG_PTR)Address;
-        }
-        else
-        {
-            Record.ExceptionCode = STATUS_IN_PAGE_ERROR;
-            Record.NumberParameters = 3;
-            Record.ExceptionInformation[0] = (Code == 15) ? 1 : 0;
-            Record.ExceptionInformation[1] = (ULONG_PTR)Address;
-            Record.ExceptionInformation[2] = Status;
-        }
-        KiDispatchException(&Record, NULL, TrapFrame, Mode, TRUE);
+        KiRiscvPageFault(TrapFrame, Code, Mode);
+        _disable();
         Thread->TrapFrame = TrapFrame->PreviousTrapFrame;
         return;
     }
@@ -424,7 +436,10 @@ KiRiscvTrapHandler(_Inout_ PKTRAP_FRAME TrapFrame)
                                      (ULONG_PTR)&Record, 0);
                     /* Fast fail bypasses application SEH and VEH. Only the
                      * second-chance debugger may intervene before exit. */
+                    if (KeGetTrapFrameInterruptState(TrapFrame))
+                        _enable();
                     KiDispatchException(&Record, NULL, TrapFrame, UserMode, FALSE);
+                    _disable();
                     Thread->TrapFrame = TrapFrame->PreviousTrapFrame;
                     return;
                 }
@@ -454,7 +469,11 @@ KiRiscvTrapHandler(_Inout_ PKTRAP_FRAME TrapFrame)
         }
         if (Record.ExceptionCode != 0)
         {
+            /* As for page faults, dispatch with the interrupted state. */
+            if (KeGetTrapFrameInterruptState(TrapFrame))
+                _enable();
             KiDispatchException(&Record, NULL, TrapFrame, Mode, TRUE);
+            _disable();
             Thread->TrapFrame = TrapFrame->PreviousTrapFrame;
             return;
         }
