@@ -1255,14 +1255,9 @@ IntEnableMenuItem(PMENU MenuObject, UINT uIDEnableItem, UINT uEnable)
    /* If the close item in the system menu change update the close button */
    if (res != uEnable)
    {
-      switch (MenuItem->wID) // More than just close.
+      switch (MenuItem->wID)
       {
         case SC_CLOSE:
-        case SC_MAXIMIZE:
-        case SC_MINIMIZE:
-        case SC_MOVE:
-        case SC_RESTORE:
-        case SC_SIZE:
 	if (MenuObject->fFlags & MNF_SYSSUBMENU && MenuObject->spwndNotify != 0)
 	{
             //RECTL rc = MenuObject->spwndNotify->rcWindow;
