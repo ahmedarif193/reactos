@@ -650,7 +650,8 @@ AlpcpLegacyReceive(
     if (Status != STATUS_SUCCESS) return Status;
 
     AlpcpAcquireLock();
-    if (Message->State & (ALPC_MSG_STATE_CONNECTION | ALPC_MSG_STATE_SYNC))
+    if (!AlpcpReclaimCanceledMessage(Message) &&
+        (Message->State & (ALPC_MSG_STATE_CONNECTION | ALPC_MSG_STATE_SYNC)))
     {
         AlpcpMakePending(Port, Message);
         Message->ServerThread = PsGetCurrentThread();

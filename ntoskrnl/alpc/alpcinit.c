@@ -722,6 +722,21 @@ AlpcpRemovePending(
     }
 }
 
+BOOLEAN
+NTAPI
+AlpcpReclaimCanceledMessage(
+    _In_ PKALPC_MESSAGE Message)
+{
+    if (!(Message->State & ALPC_MSG_STATE_IN_CANCELED_QUEUE)) return FALSE;
+
+    RemoveEntryList(&Message->CanceledEntry);
+    InitializeListHead(&Message->CanceledEntry);
+    Message->State &= ~ALPC_MSG_STATE_IN_CANCELED_QUEUE;
+    if (Message->CancelQueuePort) Message->CancelQueuePort->CanceledQueueLength--;
+    Message->CancelQueuePort = NULL;
+    return TRUE;
+}
+
 VOID
 NTAPI
 AlpcpMakePending(

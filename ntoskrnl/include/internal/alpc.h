@@ -530,6 +530,11 @@ NTAPI
 AlpcpRemovePending(
     _In_ PKALPC_MESSAGE Message);
 
+BOOLEAN
+NTAPI
+AlpcpReclaimCanceledMessage(
+    _In_ PKALPC_MESSAGE Message);
+
 VOID
 NTAPI
 AlpcpMakePending(
