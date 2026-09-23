@@ -1510,6 +1510,10 @@ UINT ACTION_CustomAction(MSIPACKAGE *package, const WCHAR *action)
     const WCHAR *source, *target, *ptr, *deferred_data = NULL;
     WCHAR *deformated = NULL;
     int len;
+#ifdef __REACTOS__
+    UINT error_mode = 0;
+    BOOL system_context;
+#endif
 
     /* deferred action: [properties]Action */
     if ((ptr = wcsrchr(action, ']')))
@@ -1571,6 +1575,12 @@ UINT ACTION_CustomAction(MSIPACKAGE *package, const WCHAR *action)
         rc = ERROR_SUCCESS;
         goto end;
     }
+
+#ifdef __REACTOS__
+    system_context = (type & msidbCustomActionTypeInScript) && (type & msidbCustomActionTypeNoImpersonate);
+    if (system_context)
+        error_mode = SetErrorMode( SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX );
+#endif
 
     switch (type & CUSTOM_ACTION_TYPE_MASK)
     {
@@ -1637,6 +1647,11 @@ UINT ACTION_CustomAction(MSIPACKAGE *package, const WCHAR *action)
         FIXME( "unhandled action type %u (%s %s)\n", type & CUSTOM_ACTION_TYPE_MASK, debugstr_w(source),
                debugstr_w(target) );
     }
+
+#ifdef __REACTOS__
+    if (system_context)
+        SetErrorMode( error_mode );
+#endif
 
 end:
     package->scheduled_action_running = FALSE;
