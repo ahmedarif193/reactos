@@ -1191,6 +1191,11 @@ START_TEST(dwmdxntuser)
         return;
     }
 
+    Status = (NTSTATUS)pNtUserCallOneParam(0, DWM_ROUTINE_PRESENTED);
+    ok(Status == STATUS_ACCESS_DENIED,
+       "Only the compositor may complete a flush barrier, got 0x%08lX\n",
+       (unsigned long)Status);
+
     memset(&Luid, 0, sizeof(Luid));
     (void)GetDisplay1Luid(&Luid);
 
