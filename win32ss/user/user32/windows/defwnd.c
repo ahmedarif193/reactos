@@ -1027,6 +1027,9 @@ RealDefWindowProcA(HWND hWnd,
         return Result;
     }
 
+    if (!Wnd && Msg == WM_WINDOWPOSCHANGED)
+        return DefWndHandleWindowPosChanged(hWnd, (const WINDOWPOS *)lParam);
+
     if (!Wnd && Msg != WM_NCCREATE)
     {
         NtUserMessageCall(hWnd, Msg, wParam, lParam, (ULONG_PTR)&Result, FNID_DEFWINDOWPROC, TRUE);
@@ -1263,6 +1266,9 @@ RealDefWindowProcW(HWND hWnd,
         if (Result) RedrawWindow(hWnd, NULL, 0, RDW_INVALIDATE | RDW_FRAME | RDW_ERASE);
         return Result;
     }
+
+    if (!Wnd && Msg == WM_WINDOWPOSCHANGED)
+        return DefWndHandleWindowPosChanged(hWnd, (const WINDOWPOS *)lParam);
 
     if (!Wnd && Msg != WM_NCCREATE)
     {
