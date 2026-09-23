@@ -130,7 +130,14 @@ vDbgPrintExWithPrefixInternal(IN PCCH Prefix,
         ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)DebugString.Buffer;
 
         /* Raise the exception */
-        RtlRaiseException(&ExceptionRecord);
+        _SEH2_TRY
+        {
+            RtlRaiseException(&ExceptionRecord);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        _SEH2_END;
 
         /* In user-mode, clear the InDbgPrint Flag */
         RtlpClearInDbgPrint();

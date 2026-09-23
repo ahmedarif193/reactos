@@ -276,8 +276,12 @@ RtlGetCallersAddress(
     _Out_ PVOID *CallersAddress,
     _Out_ PVOID *CallersCaller)
 {
-    *CallersAddress = _ReturnAddress();
-    *CallersCaller = NULL;
+    PVOID Callers[4];
+    ULONG Number;
+
+    Number = RtlWalkFrameChain(Callers, 4, 0);
+    *CallersAddress = (Number >= 3) ? Callers[2] : NULL;
+    *CallersCaller = (Number == 4) ? Callers[3] : NULL;
 }
 
 BOOLEAN
@@ -347,7 +351,7 @@ RtlDispatchException(
                                             NULL);
 
         if ((EstablisherFrame < StackLow) ||
-            (EstablisherFrame >= StackHigh) ||
+            (EstablisherFrame > StackHigh) ||
             (EstablisherFrame & (sizeof(ULONG64) - 1)))
         {
             ExceptionRecord->ExceptionFlags |= EXCEPTION_STACK_INVALID;
