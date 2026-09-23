@@ -74,6 +74,7 @@ list(APPEND SOURCE
     ProcessPowerThrottling.c
     TunnelCache.c
     UEFIFirmware.c
+    WerRegisterFile.c
     WideCharToMultiByte.c
     WriteFile.c
     WriteFileSeekBack.c
