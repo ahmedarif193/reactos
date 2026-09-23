@@ -1362,6 +1362,7 @@ IntDefWindowProc(
       {
           HDC hDC = UserGetDCEx(Wnd, NULL, DCX_WINDOW|DCX_USESTYLE);
           TRACE("WM_NCUAHDRAWCAPTION: wParam DC_ flags %08x\n",wParam);
+          UserExcludeClientRect(Wnd, hDC);
           UserDrawCaptionBar(Wnd, hDC, wParam | DC_FRAME); // Include DC_FRAME to comp for drawing glitch.
           UserReleaseDC(Wnd, hDC, FALSE);
           return 0;
