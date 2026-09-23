@@ -294,9 +294,45 @@ static void test_modern_queries(void)
     ok(!ret, "NULL cursor-size output accepted\n");
 }
 
+static void Test_NonClientMetricsSize(void)
+{
+    NONCLIENTMETRICSA Full, Legacy;
+    BOOL ret;
+
+    ZeroMemory(&Full, sizeof(Full));
+    Full.cbSize = sizeof(Full);
+    ret = SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, 0, &Full, 0);
+    ok(ret, "SPI_GETNONCLIENTMETRICS (%u) failed, error %lu\n", Full.cbSize, GetLastError());
+
+    FillMemory(&Legacy, sizeof(Legacy), 0xcc);
+    Legacy.cbSize = FIELD_OFFSET(NONCLIENTMETRICSA, iPaddedBorderWidth);
+    ret = SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, 0, &Legacy, 0);
+    ok(ret, "SPI_GETNONCLIENTMETRICS (%u) failed, error %lu\n", Legacy.cbSize, GetLastError());
+    ok(Legacy.cbSize == FIELD_OFFSET(NONCLIENTMETRICSA, iPaddedBorderWidth), "cbSize %u\n", Legacy.cbSize);
+    ok(Legacy.iPaddedBorderWidth == (int)0xcccccccc, "iPaddedBorderWidth written: %d\n", Legacy.iPaddedBorderWidth);
+    ok(Legacy.iBorderWidth == Full.iBorderWidth, "iBorderWidth %d, expected %d\n", Legacy.iBorderWidth, Full.iBorderWidth);
+    ok(Legacy.iCaptionHeight == Full.iCaptionHeight, "iCaptionHeight %d, expected %d\n", Legacy.iCaptionHeight, Full.iCaptionHeight);
+    ok(Legacy.iMenuHeight == Full.iMenuHeight, "iMenuHeight %d, expected %d\n", Legacy.iMenuHeight, Full.iMenuHeight);
+    ok(Legacy.lfMessageFont.lfHeight == Full.lfMessageFont.lfHeight, "lfMessageFont.lfHeight %ld, expected %ld\n",
+       Legacy.lfMessageFont.lfHeight, Full.lfMessageFont.lfHeight);
+    ok(!lstrcmpA(Legacy.lfMessageFont.lfFaceName, Full.lfMessageFont.lfFaceName), "lfMessageFont face '%s', expected '%s'\n",
+       Legacy.lfMessageFont.lfFaceName, Full.lfMessageFont.lfFaceName);
+    ok(!lstrcmpA(Legacy.lfStatusFont.lfFaceName, Full.lfStatusFont.lfFaceName), "lfStatusFont face '%s', expected '%s'\n",
+       Legacy.lfStatusFont.lfFaceName, Full.lfStatusFont.lfFaceName);
+
+    Legacy.cbSize = FIELD_OFFSET(NONCLIENTMETRICSA, iPaddedBorderWidth) - 1;
+    ret = SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, 0, &Legacy, 0);
+    ok(!ret, "SPI_GETNONCLIENTMETRICS (%u) succeeded\n", Legacy.cbSize);
+
+    Legacy.cbSize = FIELD_OFFSET(NONCLIENTMETRICSA, iPaddedBorderWidth) + 1;
+    ret = SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, 0, &Legacy, 0);
+    ok(!ret, "SPI_GETNONCLIENTMETRICS (%u) succeeded\n", Legacy.cbSize);
+}
+
 START_TEST(SystemParametersInfo)
 {
     test_modern_queries();
+    Test_NonClientMetricsSize();
 
     RegisterSimpleClass(SysParamsTestProc, L"sysparamstest");
     hWnd1 = CreateWindowW(L"sysparamstest", L"sysparamstest", WS_OVERLAPPEDWINDOW,
