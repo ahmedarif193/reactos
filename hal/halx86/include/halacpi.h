@@ -51,4 +51,8 @@ HalpAcpiGetCachedTable(
     IN ULONG Signature
 );
 
+VOID
+NTAPI
+HalpAcpiReset(VOID);
+
 /* EOF */

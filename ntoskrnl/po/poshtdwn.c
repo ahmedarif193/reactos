@@ -198,7 +198,9 @@ PopShutdownSystem(IN POWER_ACTION SystemAction)
             /* Try platform driver first, then legacy */
             //PopInvokeSystemStateHandler(PowerStateShutdownReset, NULL);
             PopSetSystemPowerState(PowerSystemShutdown, SystemAction);
+            DPRINT1("REBOOT: device power transition complete\n");
             PopDisplayShutdownScreen();
+            DPRINT1("REBOOT: entering HAL reset\n");
             HalReturnToFirmware(HalRebootRoutine);
 
             /* The firmware refused to restart us */
