@@ -1749,11 +1749,23 @@ DxgkpShadowResetSubmittedFenceIdentities(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     ULONG Slot;
+    KIRQL OldIrql;
 
     if (Adapter == NULL)
         return;
     for (Slot = 0; Slot < DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY; ++Slot)
         InterlockedExchange64(&Adapter->SubmittedFenceIdentities[Slot], 0);
+
+    /* A successful reset aborts the old submissions without completing them.
+     * Publish an empty submission watermark with the new epoch, otherwise a
+     * destroy started after reset waits for an aborted fence forever. Keep
+     * the actual completion watermarks and the fence allocator unchanged. */
+    KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
+    RtlZeroMemory((PVOID)Adapter->NodeLastSubmittedFenceId,
+                  sizeof(Adapter->NodeLastSubmittedFenceId));
+    if (InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch) == 0)
+        InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch);
+    KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
 }
 
 static DECLSPEC_NORETURN VOID DxgkpBugCheckMms2Timeline(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId)
@@ -1976,8 +1988,6 @@ VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter)
     if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
     {
         DxgkpShadowResetSubmittedFenceIdentities(Adapter);
-        if (InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch) == 0)
-            InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch);
         KeMemoryBarrier();
         InterlockedExchange(&Adapter->SubmittedFenceIdentityResetting, 0);
         return;
@@ -1990,8 +2000,6 @@ VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter)
     if (!NT_SUCCESS(Status))
         DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
     DxgkpShadowResetSubmittedFenceIdentities(Adapter);
-    if (InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch) == 0)
-        InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch);
     KeMemoryBarrier();
     InterlockedExchange(&Adapter->SubmittedFenceIdentityResetting, 0);
     DxgkpReopenMms2TimelineCalls(Adapter);
