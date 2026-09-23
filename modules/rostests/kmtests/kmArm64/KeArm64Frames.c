@@ -153,18 +153,13 @@ static VOID Arm64FrameLayout(VOID)
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(MACHINE_FRAME, Pc), 0x8ULL);
     ok_eq_ulonglong((ULONGLONG)sizeof(MACHINE_FRAME), 0x10ULL);
 
-    /*
-     * UCALLOUT_FRAME -- 4 home slots + Buffer + Length + ApiNumber +
-     * MachineFrame.
-     */
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, P1Home), 0x0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, P2Home), 0x8ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, P3Home), 0x10ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, P4Home), 0x18ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, Buffer), 0x20ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, Length), 0x28ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, ApiNumber), 0x2CULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, MachineFrame), 0x30ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, Buffer), 0x0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, Length), 0x8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, ApiNumber), 0xCULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, Reserved), 0x10ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, Lr), 0x18ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(UCALLOUT_FRAME, MachineFrame), 0x20ULL);
+    ok_eq_ulonglong((ULONGLONG)sizeof(UCALLOUT_FRAME), 0x30ULL);
 
     /* Tail dump. */
     dump_trace("[arm64][KeArm64Frames] KTRAP=%Iu KEXC=%Iu KSTART=%Iu KSWITCH=%Iu\n",
