@@ -8,8 +8,10 @@
 static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
         ID3D11ShaderResourceView *view, const char *source, UINT expected,
         UINT samples = 1, UINT sample_mask = ~0u, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM, UINT width = 1, UINT height = 1,
-        DXGI_FORMAT vertex_format = DXGI_FORMAT_UNKNOWN, UINT vertex_mode = 0)
+        DXGI_FORMAT vertex_format = DXGI_FORMAT_UNKNOWN, UINT vertex_mode = 0,
+        ID3D11Texture2D **output = NULL)
 {
+    if (output) *output = NULL;
     HMODULE compiler = LoadLibraryW(L"d3dcompiler_47.dll");
     typedef HRESULT (WINAPI *COMPILE)(const void *, SIZE_T, const char *, const D3D_SHADER_MACRO *,
             ID3DInclude *, const char *, const char *, UINT, UINT, ID3DBlob **, ID3DBlob **);
@@ -56,6 +58,7 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
         desc.SampleDesc.Count = samples;
         desc.Format = format;
         desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        if (output) desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
         hr = device->CreateTexture2D(&desc, NULL, &target);
         ok(hr == S_OK, "Texture sample output: %#lx\n", hr);
         if (target) hr = device->CreateRenderTargetView(target, NULL, &rtv);
@@ -180,6 +183,7 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
     if (layout) layout->Release();
     if (sampler) sampler->Release();
     if (rtv) rtv->Release();
+    if (target && output) { *output = target; target = NULL; }
     if (target) target->Release();
     if (resolved) resolved->Release();
     if (staging) staging->Release();
@@ -453,8 +457,31 @@ START_TEST(multisample)
                 "Multisample render-target caps %u: %#lx %#x\n", formats[i], hr, support);
         // Two of four samples receive green; the rest retain transparent black.
         // Readback must contain their average, not a copy of one sample.
+        ID3D11Texture2D *texture = NULL;
         TestSample(device, context, NULL, "float4 main(float4 p : SV_Position) : SV_Target { return float4(0,1,0,1); }",
-                0x80008000, 4, 0x5, formats[i]);
+                0x80008000, 4, 0x5, formats[i], 1, 1, DXGI_FORMAT_UNKNOWN, 0, &texture);
+        if (texture)
+        {
+            ID3D11ShaderResourceView *view = NULL;
+            hr = device->CreateShaderResourceView(texture, NULL, &view);
+            ok(hr == S_OK && view, "Multisample shader view format %u: %#lx\n", formats[i], hr);
+            if (view)
+            {
+                // Shader model 4.0 requires literal sample indices. Read each
+                // sample to detect translators that silently use sample 0.
+                for (UINT sample = 0; sample < 4; ++sample)
+                {
+                    char source[256];
+                    sprintf(source, "Texture2DMS<float4,4> t : register(t0);"
+                            "float4 main(float4 p : SV_Position) : SV_Target {"
+                            "return t.Load(int2(0,0), %u); }", sample);
+                    trace("Loading sample %u of format %u\n", sample, formats[i]);
+                    TestSample(device, context, view, source, sample & 1 ? 0 : 0xff00ff00);
+                }
+                view->Release();
+            }
+            texture->Release();
+        }
     }
     context->ClearState();
     context->Flush();
