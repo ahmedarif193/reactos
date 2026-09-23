@@ -861,9 +861,11 @@ START_TEST(dwmdxsurface)
        (unsigned long)hr);
     ok(Surface != NULL, "a successful acquisition must return a surface handle\n");
     ok(FirstId != 0, "a successful acquisition must return a non-zero update id\n");
-    ok(Format == DWM_DX_FORMAT_B8G8R8A8_UNORM,
-       "the surface format must be DXGI_FORMAT_B8G8R8A8_UNORM (%u), got %u\n",
-       DWM_DX_FORMAT_B8G8R8A8_UNORM, Format);
+    /* This ordinal returns a D3DDDIFORMAT. The private resource metadata
+     * checked below uses DXGI_FORMAT instead; the two enums differ. */
+    ok(Format == D3DDDIFMT_A8R8G8B8,
+       "the public surface format must be D3DDDIFMT_A8R8G8B8 (%u), got %u\n",
+       D3DDDIFMT_A8R8G8B8, Format);
 
     CheckSharedSurfaceRuntimeData(Surface, Width, Height);
     CheckSharedSurfaceClientOpen(Surface, Width, Height);
@@ -894,18 +896,18 @@ START_TEST(dwmdxsurface)
        SecondId, FirstId);
 
     hr = pDwmpDxUpdateWindowSharedSurface(Window, FirstId, 0, NULL,
-                                          &ClientInWindow);
+                                          &Client);
     ok(FAILED(hr), "publishing a stale update id must fail, got 0x%08lX\n",
        (unsigned long)hr);
 
-    Rect = ClientInWindow;
+    Rect = Client;
     ++Rect.right;
     hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL, &Rect);
     ok(FAILED(hr),
        "an update rect wider than the client bounds must be refused, got 0x%08lX\n",
        (unsigned long)hr);
 
-    Rect = ClientInWindow;
+    Rect = Client;
     --Rect.left;
     hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL, &Rect);
     ok(FAILED(hr),
@@ -918,17 +920,19 @@ START_TEST(dwmdxsurface)
        (unsigned long)hr);
 
     hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 4, NULL,
-                                          &ClientInWindow);
+                                          &Client);
     ok(FAILED(hr), "a reserved update flag bit must be refused, got 0x%08lX\n",
        (unsigned long)hr);
 
-    hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL, &Client);
+    /* The shared allocation is client-sized. Adding the non-client origin
+     * to a full-client update would run beyond its right/bottom edges. */
+    hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL, &ClientInWindow);
     ok(FAILED(hr),
-       "a surface-local rect must not ignore the window's client offset, "
+       "a window-relative rect must not exceed the client-sized allocation, "
        "got 0x%08lX\n", (unsigned long)hr);
 
     hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL,
-                                          &ClientInWindow);
+                                          &Client);
     ok(hr == S_OK, "publishing the issued update must succeed, got 0x%08lX\n",
        (unsigned long)hr);
 
