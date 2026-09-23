@@ -2035,7 +2035,8 @@ DxgkpGpuVaFlushPageTableUpdatesOnce(
             Tables[TableCount].InitialUpdatePending = Table->InitialUpdatePending;
             TableCount++;
         }
-        /* Leaf updates must identify the allocation covering each PTE span. */
+        /* Preserve protection for reservations too: zero PTEs have no backing
+         * allocation, but their UMD-supplied encoding is still significant. */
         SpanCount = 0;
         {
             ULONG MappedCount = 0;
@@ -2044,7 +2045,8 @@ DxgkpGpuVaFlushPageTableUpdatesOnce(
             {
                 PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
 
-                if (Range->State == GpuVaStateMapped && Range->Binding != NULL)
+                if ((Range->State == GpuVaStateMapped && Range->Binding != NULL) ||
+                    Range->State == GpuVaStateReserved)
                     MappedCount++;
             }
             if (MappedCount != 0)
@@ -2065,18 +2067,20 @@ DxgkpGpuVaFlushPageTableUpdatesOnce(
                 for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList && SpanCount < MappedCount; Entry = Entry->Flink)
                 {
                     PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
-                    PDXGKVMM_ALLOCATION MapAllocation;
+                    PDXGKVMM_ALLOCATION MapAllocation = NULL;
 
-                    if (Range->State != GpuVaStateMapped || Range->Binding == NULL)
+                    if (Range->State != GpuVaStateReserved &&
+                        (Range->State != GpuVaStateMapped || Range->Binding == NULL))
                         continue;
-                    if (!GpuVaReferenceBinding(Range->Binding))
+                    if (Range->Binding != NULL && !GpuVaReferenceBinding(Range->Binding))
                     {
                         ExReleaseFastMutex(&Process->GpuVaLock);
                         Status = STATUS_DELETE_PENDING;
                         goto Requeue;
                     }
                     Spans[SpanCount].Binding = Range->Binding;
-                    MapAllocation = Range->Binding->BackingAllocation != NULL ? Range->Binding->BackingAllocation : Range->Binding->LogicalAllocation;
+                    if (Range->Binding != NULL)
+                        MapAllocation = Range->Binding->BackingAllocation != NULL ? Range->Binding->BackingAllocation : Range->Binding->LogicalAllocation;
                     Spans[SpanCount].Start = Range->GpuVirtualAddress;
                     Spans[SpanCount].End = Range->GpuVirtualAddress + Range->SizeInBytes;
                     Spans[SpanCount].MiniportHandle = MapAllocation != NULL ? MapAllocation->MiniportHandle : NULL;
@@ -2184,7 +2188,7 @@ DxgkpGpuVaFlushPageTableUpdatesOnce(
                     Op.NumPageTableEntries = PieceEndIndex - PieceStartIndex;
                     Op.StartVirtualAddress = Cursor;
                     Op.hMiniportAllocation = Span != NULL ? Span->MiniportHandle : NULL;
-                    Op.AllocationOffsetInBytes = Span != NULL ? Span->AllocationOffset + (Cursor - Span->Start) : 0;
+                    Op.AllocationOffsetInBytes = Span != NULL && Span->MiniportHandle != NULL ? Span->AllocationOffset + (Cursor - Span->Start) : 0;
                     Op.DriverProtection = Span != NULL ? Span->DriverProtection : 0;
                     Status = GpuVaAppendPagingOperation(&Operations,
                                                          &OperationCount,
@@ -2290,7 +2294,8 @@ Complete:
     if (Spans != NULL)
     {
         for (ReleaseIndex = 0; ReleaseIndex < SpanCount; ++ReleaseIndex)
-            GpuVaDereferenceBinding(Spans[ReleaseIndex].Binding);
+            if (Spans[ReleaseIndex].Binding != NULL)
+                GpuVaDereferenceBinding(Spans[ReleaseIndex].Binding);
         ExFreePoolWithTag(Spans, TAG_DXGK_GPUVA_PT);
     }
     if (PagingDevice != NULL)
