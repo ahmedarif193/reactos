@@ -358,13 +358,13 @@ SectionSharedDataFile(void)
         ULONG64 CommitSize = 0x2000;
 
         CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &CommitBase, &CommitSize, MI_MEM_COMMIT, MI_PROT_READWRITE)));
-        CHECK(NT_SUCCESS(MiFlushVirtualMemory(&A, &FlushBase, &FlushSize)));
+        CHECK(NT_SUCCESS(MiFlushVirtualMemory(&A, &FlushBase, &FlushSize, TRUE)));
         CHECK(FlushBase == BaseA + 0x3000 && FlushSize == 0x1000);
         CHECK(File.Writes == 1 && *(ULONG64 *)(File.Data + 0x3000) == 0xFEEDFACECAFEBEEFULL);
         CHECK(NT_SUCCESS(UserWrite64(&World, 0, BaseA + 0x3000, 0xFEEDFACECAFEBEEFULL)));
         File.Writes = 0;
         FlushBase = 0x1000;
-        CHECK(MiFlushVirtualMemory(&A, &FlushBase, &FlushSize) == STATUS_NOT_MAPPED_VIEW);
+        CHECK(MiFlushVirtualMemory(&A, &FlushBase, &FlushSize, TRUE) == STATUS_NOT_MAPPED_VIEW);
     }
     CHECK(NT_SUCCESS(MiSegmentFlush(Segment, 0, Size)));
     CHECK(File.Writes == 1);

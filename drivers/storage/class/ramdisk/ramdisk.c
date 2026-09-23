@@ -2294,8 +2294,13 @@ SkipBootSectorProbe:
         RamdiskRestoreDiskState(DriveExtension);
         RamdiskPersistDiskState(DriveExtension);
 
-        /* Clear init flag */
+        /* Clear init flag. A bus relations query only reports initialized
+         * drives; the list lock keeps its count and fill passes consistent. */
+        KeEnterCriticalRegion();
+        ExAcquireFastMutex(&DeviceExtension->DiskListLock);
         DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+        ExReleaseFastMutex(&DeviceExtension->DiskListLock);
+        KeLeaveCriticalRegion();
         DbgPrintEx(DPFLTR_DEFAULT_ID,
                    DPFLTR_TRACE_LEVEL,
                    "RamdiskCreateDiskDevice: GUID %wZ assigned drive %wc\n",
@@ -4708,11 +4713,16 @@ RamdiskQueryDeviceRelations(IN DEVICE_RELATION_TYPE Type,
     NextEntry = ListHead->Flink;
     while (NextEntry != ListHead)
     {
-        /* As long as it wasn't removed, count it in */
+        /* As long as it wasn't removed, count it in. A drive still being
+         * created is reported by the enumeration its creator requests. */
         DriveExtension = CONTAINING_RECORD(NextEntry,
                                            RAMDISK_DRIVE_EXTENSION,
                                            DiskList);
-        if (DriveExtension->State < RamdiskStateBusRemoved) DiskCount++;
+        if ((DriveExtension->State < RamdiskStateBusRemoved) &&
+            !(DriveExtension->PhysicalDeviceObject->Flags & DO_DEVICE_INITIALIZING))
+        {
+            DiskCount++;
+        }
 
         /* Move to the next one */
         NextEntry = NextEntry->Flink;
@@ -4773,6 +4783,10 @@ RamdiskQueryDeviceRelations(IN DEVICE_RELATION_TYPE Type,
                 /* Mark it as enumerated now, but don't actually reference it */
                 DriveExtension->State = RamdiskStateEnumerated;
             }
+        }
+        else if (DriveExtension->PhysicalDeviceObject->Flags & DO_DEVICE_INITIALIZING)
+        {
+            /* Not published yet (see the count pass) */
         }
         else
         {

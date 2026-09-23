@@ -723,16 +723,6 @@ KiReadSystemTime(
 
 #ifndef NTOS_MODE_USER
 
-FORCEINLINE
-VOID
-KiWriteSystemTime(
-    _Out_ volatile KSYSTEM_TIME *SystemTime,
-    _In_ LARGE_INTEGER NewTime)
-{
-    /* Update High2Time first to indicate an update in progress */
-    SystemTime->High2Time = NewTime.HighPart;
-
-#ifdef _WIN64
 #if defined(_M_ARM64)
 NTSYSAPI
 NTSTATUS
@@ -748,18 +738,28 @@ KeDispatchSecondaryInterrupt(
     _In_opt_ PVOID Reserved);
 #endif
 
-#if defined(_M_ARM64)
-    __dmb(_ARM64_BARRIER_ISHST);
-#endif
+FORCEINLINE
+VOID
+KiWriteSystemTime(
+    _Out_ volatile KSYSTEM_TIME *SystemTime,
+    _In_ LARGE_INTEGER NewTime)
+{
+#ifdef _WIN64
+    /* Update High2Time first to indicate an update in progress. Release
+       ordering publishes the previous value before it on weakly ordered
+       processors; x86 stores are already ordered. */
+    WriteRelease(&SystemTime->High2Time, NewTime.HighPart);
+
     /* Do a single 'atomic' write. This isn't actually guaranteed to be atomic,
        if the address isn't 64 bit aligned. But as long as the entire 64 bits
        are within a single cache line, we should be good (on x64 at least,
-       when it comes to ARM64, all bets are off) This is also what Windows does. */
-    *(LONG64*)SystemTime = NewTime.QuadPart;
-#if defined(_M_ARM64)
-    __dmb(_ARM64_BARRIER_ISHST);
-#endif
+       when it comes to ARM64, all bets are off) This is also what Windows does.
+       Release ordering publishes High2Time before the new value. */
+    WriteRelease64((volatile LONG64 *)SystemTime, NewTime.QuadPart);
 #else
+    /* Update High2Time first to indicate an update in progress */
+    SystemTime->High2Time = NewTime.HighPart;
+
     /* Update low part, then high part to allow readers detect partial updates. */
     SystemTime->LowPart = NewTime.LowPart;
     SystemTime->High1Time = NewTime.HighPart;

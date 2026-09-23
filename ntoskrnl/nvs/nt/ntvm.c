@@ -1104,7 +1104,7 @@ MmFlushVirtualMemory(
 {
     ULONG64 Base = (ULONG64)(ULONG_PTR)*BaseAddress;
     ULONG64 Size = *RegionSize;
-    NTSTATUS Status = MiFlushVirtualMemory(MiSpaceOfProcess(Process), &Base, &Size);
+    NTSTATUS Status = MiFlushVirtualMemory(MiSpaceOfProcess(Process), &Base, &Size, TRUE);
 
     if (NT_SUCCESS(Status))
     {
