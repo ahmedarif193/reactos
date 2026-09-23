@@ -41,6 +41,16 @@ static const WCHAR CustomDrivers_Key[] = L"SOFTWARE\\ReactOS\\OpenGL";
 static Drv_Opengl_Info CustomDrvInfo;
 static CUSTOM_DRIVER_STATE CustomDriverState = OGL_CD_NOT_QUERIED;
 
+/* DXGI adapter enumeration can be called by an ICD from DrvValidateVersion.
+ * It must not probe WGL on that thread until the ICD dispatch is published.
+ * This private query deliberately does not acquire the loader lock. */
+BOOL WINAPI
+RosOpenGLIsDriverInitializing(VOID)
+{
+    return IcdLoadingThreadId == GetCurrentThreadId() ||
+           IntIsPixelFormatInitializing();
+}
+
 static BOOL
 IntGetWddmIcdInfo(
     HDC hdc,

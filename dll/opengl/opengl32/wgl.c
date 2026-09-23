@@ -35,6 +35,14 @@ is_process_owned_dc(HDC hdc)
 static CRITICAL_SECTION dc_data_cs = {NULL, -1, 0, 0, 0, 0};
 static struct wgl_dc_data* dc_data_list = NULL;
 
+BOOL
+IntIsPixelFormatInitializing(VOID)
+{
+    /* Initial format enumeration is serialized by dc_data_cs. A vendor may
+     * query DXGI here before this DC has been published in dc_data_list. */
+    return dc_data_cs.OwningThread == NtCurrentTeb()->ClientId.UniqueThread;
+}
+
 LIST_ENTRY ContextListHead;
 
 /* FIXME: suboptimal */
