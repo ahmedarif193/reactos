@@ -57,6 +57,7 @@ list(APPEND SOURCE
     MessageStateAnalyzer.c
     MinimizedPosition.c
     ModernUser32.c
+    NestedWindowPos.c
     NextDlgItem.c
     NonClientPaint.c
     PhysicalPoint.c
