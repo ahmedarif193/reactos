@@ -194,6 +194,10 @@ PUSER_HANDLE_ENTRY
 FASTCALL
 GetUser32Handle(HANDLE handle)
 {
+#ifdef WOW64_I386_RUNTIME
+    UNREFERENCED_PARAMETER(handle);
+    return NULL;
+#else
     INT Index;
     USHORT generation;
 
@@ -213,6 +217,7 @@ GetUser32Handle(HANDLE handle)
         return &gHandleEntries[Index];
 
     return NULL;
+#endif
 }
 
 /*

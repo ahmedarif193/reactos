@@ -997,6 +997,32 @@ NtUserCallHwnd(
             return Visible;
         }
 
+        case HWND_ROUTINE_ROS_GETLASTACTIVEPOPUP:
+        {
+            PWND Window;
+            HWND Ret = hWnd;
+
+            UserEnterShared();
+            Window = UserGetWindowObject(hWnd);
+            if (Window && Window->spwndLastActive)
+                Ret = UserHMGetHandle(Window->spwndLastActive);
+            UserLeave();
+            return (DWORD_PTR)Ret;
+        }
+
+        case HWND_ROUTINE_ROS_ISWINDOWUNICODE:
+        {
+            PWND Window;
+            BOOL Unicode = FALSE;
+
+            UserEnterShared();
+            Window = UserGetWindowObject(hWnd);
+            if (Window)
+                Unicode = Window->Unicode;
+            UserLeave();
+            return Unicode;
+        }
+
         case HWND_ROUTINE_ROS_GETWINDOWSTATE:
         {
             PWND Window;
@@ -1163,6 +1189,26 @@ NtUserCallHwndParam(
                 }
                 _SEH2_END;
             }
+            return Ret;
+        }
+
+        case HWNDPARAM_ROUTINE_ROS_GETCLASSLONGA:
+        case HWNDPARAM_ROUTINE_ROS_GETCLASSLONGW:
+        case HWNDPARAM_ROUTINE_ROS_GETCLASSWORD:
+        {
+            PWND Window;
+            ULONG_PTR Ret = 0;
+
+            UserEnterExclusive();
+            Window = UserGetWindowObject(hWnd);
+            if (Window && Window->pcls)
+            {
+                if (Routine == HWNDPARAM_ROUTINE_ROS_GETCLASSWORD)
+                    Ret = UserGetClassWord(Window, (INT)Param);
+                else
+                    Ret = UserGetClassLongPtr(Window, (INT)Param, Routine == HWNDPARAM_ROUTINE_ROS_GETCLASSLONGA);
+            }
+            UserLeave();
             return Ret;
         }
 

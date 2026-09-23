@@ -563,6 +563,98 @@ IntGetClassWndProc(PCLS Class, BOOL Ansi)
 }
 
 
+ULONG_PTR FASTCALL
+UserGetClassLongPtr(IN PWND Window,
+                    IN INT Index,
+                    IN BOOL Ansi)
+{
+    PCLS Class = Window->pcls;
+    ULONG_PTR Ret = 0;
+
+    if (Index >= 0)
+    {
+        if ((ULONG)Index > Class->cbclsExtra || Class->cbclsExtra - (ULONG)Index < sizeof(ULONG))
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        RtlCopyMemory(&Ret, (PUCHAR)(Class + 1) + Index, sizeof(ULONG));
+        return Ret;
+    }
+
+    switch (Index)
+    {
+        case GCL_CBWNDEXTRA:
+            Ret = (ULONG_PTR)Class->cbwndExtra;
+            break;
+
+        case GCL_CBCLSEXTRA:
+            Ret = (ULONG_PTR)Class->cbclsExtra;
+            break;
+
+        case GCLP_HBRBACKGROUND:
+            Ret = (ULONG_PTR)Class->hbrBackground;
+            if (Ret != 0 && Ret < 0x4000)
+                Ret = (ULONG_PTR)IntGetSysColorBrush((INT)Ret - 1);
+            break;
+
+        case GCLP_HMODULE:
+            Ret = (ULONG_PTR)Class->hModule;
+            break;
+
+        case GCLP_MENUNAME:
+            Ret = Ansi ? (ULONG_PTR)Class->lpszClientAnsiMenuName : (ULONG_PTR)Class->lpszClientUnicodeMenuName;
+            break;
+
+        case GCL_STYLE:
+            Ret = (ULONG_PTR)Class->style;
+            break;
+
+        case GCW_ATOM:
+            Ret = (ULONG_PTR)Class->atomNVClassName;
+            break;
+
+        case GCLP_HCURSOR:
+            Ret = Class->spcur ? (ULONG_PTR)UserHMGetHandle(Class->spcur) : 0;
+            break;
+
+        case GCLP_HICON:
+            Ret = Class->spicn ? (ULONG_PTR)UserHMGetHandle(Class->spicn) : 0;
+            break;
+
+        case GCLP_HICONSM:
+            Ret = Class->spicnSm ? (ULONG_PTR)UserHMGetHandle(Class->spicnSm) : 0;
+            break;
+
+        case GCLP_WNDPROC:
+            Ret = (ULONG_PTR)IntGetClassWndProc(Class, Ansi);
+            break;
+
+        default:
+            EngSetLastError(ERROR_INVALID_INDEX);
+            break;
+    }
+
+    return Ret;
+}
+
+WORD FASTCALL
+UserGetClassWord(IN PWND Window,
+                 IN INT Index)
+{
+    PCLS Class = Window->pcls;
+    WORD Ret = 0;
+
+    if (Index < 0 || (ULONG)Index > Class->cbclsExtra || Class->cbclsExtra - (ULONG)Index < sizeof(WORD))
+    {
+        EngSetLastError(ERROR_INVALID_INDEX);
+        return 0;
+    }
+
+    RtlCopyMemory(&Ret, (PUCHAR)(Class + 1) + Index, sizeof(WORD));
+    return Ret;
+}
+
 static
 WNDPROC FASTCALL
 IntSetClassWndProc(IN OUT PCLS Class,

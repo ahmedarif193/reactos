@@ -58,6 +58,8 @@ IntCheckProcessDesktopClasses(IN PDESKTOP Desktop,
                               IN BOOL FreeOnFailure);
 
 ULONG_PTR FASTCALL UserGetCPD(PVOID,GETCPD,ULONG_PTR);
+ULONG_PTR FASTCALL UserGetClassLongPtr(IN PWND Window, IN INT Index, IN BOOL Ansi);
+WORD FASTCALL UserGetClassWord(IN PWND Window, IN INT Index);
 
 _Must_inspect_result_
 NTSTATUS
