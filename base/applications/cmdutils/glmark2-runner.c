@@ -49,6 +49,11 @@ typedef struct _RUNNER_OUTPUT_SCAN
     BOOL ShadowSeen;
     BOOL ScoreSeen;
     ULONG SeenMask;
+    ULONG ScenesCompleted;
+    ULONG ValidationPassed;
+    ULONG ValidationFailed;
+    ULONG ValidationUnknown;
+    BOOL SetupFailed;
 } RUNNER_OUTPUT_SCAN, *PRUNNER_OUTPUT_SCAN;
 
 static PCSTR
@@ -131,6 +136,16 @@ ScanChildOutputLine(
     if (Scan->LineOverflow)
         return;
     Scan->Line[Scan->LineLength] = '\0';
+    if (strstr(Scan->Line, " FPS: ") != NULL)
+        Scan->ScenesCompleted++;
+    if (strstr(Scan->Line, "Validation: Success") != NULL)
+        Scan->ValidationPassed++;
+    if (strstr(Scan->Line, "Validation: Failure") != NULL)
+        Scan->ValidationFailed++;
+    if (strstr(Scan->Line, "Validation: Unknown") != NULL)
+        Scan->ValidationUnknown++;
+    if (strstr(Scan->Line, "Set up failed") != NULL)
+        Scan->SetupFailed = TRUE;
     ScanSceneFps(Scan, Scan->Line, "[ideas]", "ideas", RunnerSceneIdeas,
                  &Scan->IdeasFps,
                  &Scan->IdeasSeen);
@@ -266,6 +281,9 @@ main(int argc, char **argv)
     HWND Console;
     BOOL RestoreConsole = FALSE;
     BOOL ShowConsole = FALSE;
+    BOOL Offscreen = FALSE;
+    BOOL Validate = FALSE;
+    const char *FrameEnd = "default";
     DWORD ExitCode = ERROR_GEN_FAILURE;
     DWORD StartTick;
     DWORD WaitStatus;
@@ -293,6 +311,21 @@ main(int argc, char **argv)
             continue;
         else if (strcmp(argv[Argument], "--show-console") == 0)
             ShowConsole = TRUE;
+        else if (strcmp(argv[Argument], "--off-screen") == 0)
+            Offscreen = TRUE;
+        else if (strcmp(argv[Argument], "--validate") == 0)
+            Validate = TRUE;
+        else if (strcmp(argv[Argument], "--frame-end") == 0 && Argument + 1 < argc)
+        {
+            FrameEnd = argv[++Argument];
+            if (strcmp(FrameEnd, "default") != 0 &&
+                strcmp(FrameEnd, "finish") != 0 &&
+                strcmp(FrameEnd, "readpixels") != 0)
+            {
+                RunnerPrint("GLMARK2_ERROR invalid_frame_end=%s\n", FrameEnd);
+                return 1;
+            }
+        }
         else if (strcmp(argv[Argument], "--bench") == 0 && Argument + 1 < argc)
         {
             size_t Used = strlen(BenchList);
@@ -308,6 +341,13 @@ main(int argc, char **argv)
                 return 1;
             }
             BenchCount++;
+        }
+        else
+        {
+            RunnerPrint("Usage: glmark2_runner [--full] [--bench SPEC] "
+                        "[--show-console] [--off-screen] [--validate] "
+                        "[--frame-end default|finish|readpixels]\n");
+            return 1;
         }
     }
     FullSuite = (BenchCount == 0);
@@ -338,9 +378,14 @@ main(int argc, char **argv)
         _snprintf(CommandLine,
                   sizeof(CommandLine),
                   "\"%s\" --data-path \"%s\" -s 800x600 "
-                  "--swap-mode immediate%s",
+                  "--swap-mode immediate%s --frame-end %s%s%s",
                   ApplicationPath,
                   DataPath,
+                  /* Validation reads after update advances the FBO ring.
+                   * One buffer keeps that read on the rendered image. */
+                  Offscreen ? (Validate ? " --off-screen=1" : " --off-screen") : "",
+                  FrameEnd,
+                  Validate ? " --validate" : "",
                   BenchList) < 0)
     {
         RunnerPrint("RPI5_GLMARK2_ERROR path_too_long\n");
@@ -382,10 +427,14 @@ main(int argc, char **argv)
     RunnerPrint("RPI5_GLMARK2_BEGIN source=glmark2 "
                 "commit=22c527cb0556f3a1ac4445aaa52cc532760928d5 "
                 "suite=%s bench_count=%u expected_scene_mask=0x%lx "
-                "size=800x600 swap_mode=immediate console_visible=%u\n",
+                "size=800x600 swap_mode=immediate offscreen=%u offscreen_buffers=%u frame_end=%s validate=%u console_visible=%u\n",
                 FullSuite ? "full" : "custom",
                 BenchCount,
                 ExpectedSceneMask,
+                Offscreen,
+                Offscreen ? (Validate ? 1 : 3) : 0,
+                FrameEnd,
+                Validate,
                 Console != NULL && IsWindowVisible(Console));
     if (!CreateProcessA(ApplicationPath,
                         CommandLine,
@@ -434,13 +483,28 @@ main(int argc, char **argv)
         ExitCode = GetLastError();
     if (OutputScan.Unsupported)
         RunnerPrint("RPI5_GLMARK2_UNSUPPORTED detected=1\n");
-    Complete = (OutputScan.SeenMask & ExpectedSceneMask) ==
+    Complete = !OutputScan.SetupFailed &&
+               (OutputScan.SeenMask & ExpectedSceneMask) ==
                    ExpectedSceneMask &&
-               OutputScan.ScoreSeen;
-    RunnerPrint("RPI5_GLMARK2_RESULT size=800x600 suite=%s ideas=%lu jellyfish=%lu "
+               OutputScan.ScoreSeen &&
+               (FullSuite || OutputScan.ScenesCompleted == BenchCount);
+    if (Validate)
+    {
+        Complete = !OutputScan.SetupFailed && OutputScan.ValidationPassed != 0 &&
+                   !OutputScan.ValidationFailed && !OutputScan.ValidationUnknown &&
+                   (FullSuite || OutputScan.ValidationPassed == BenchCount);
+        RunnerPrint("GLMARK2_VALIDATION passed=%lu failed=%lu unknown=%lu expected=%u complete=%u\n",
+                    OutputScan.ValidationPassed, OutputScan.ValidationFailed,
+                    OutputScan.ValidationUnknown, BenchCount, Complete);
+    }
+    else
+    {
+        RunnerPrint("RPI5_GLMARK2_RESULT size=800x600 suite=%s offscreen=%u frame_end=%s ideas=%lu jellyfish=%lu "
                 "terrain=%lu shadow=%lu %s=%lu seen_mask=0x%lx "
                 "expected_mask=0x%lx complete=%lu\n",
                 FullSuite ? "full" : "subset",
+                Offscreen,
+                FrameEnd,
                 OutputScan.IdeasFps,
                 OutputScan.JellyfishFps,
                 OutputScan.TerrainFps,
@@ -450,6 +514,7 @@ main(int argc, char **argv)
                 OutputScan.SeenMask,
                 ExpectedSceneMask,
                 Complete);
+    }
     CloseHandle(ReadPipe);
     CloseHandle(ProcessInformation.hProcess);
     if (RestoreConsole)
