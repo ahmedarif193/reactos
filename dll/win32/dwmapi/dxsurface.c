@@ -13,7 +13,10 @@
 
 #include <ntstatus.h>
 #define WIN32_NO_STATUS
-#ifndef DXGKDDI_INTERFACE_VERSION
+/* This user-mode thunk needs the adapter-LUID API even when the default
+ * driver headers are selected at WDDM 1.1 by the build. */
+#if !defined(DXGKDDI_INTERFACE_VERSION) || DXGKDDI_INTERFACE_VERSION < 0xF003
+#undef DXGKDDI_INTERFACE_VERSION
 #define DXGKDDI_INTERFACE_VERSION 0xF003
 #endif
 
@@ -116,7 +119,7 @@ DwmDxDestroySurface(DWM_DX_SURFACE *Surface)
 static NTSTATUS
 DwmDxGetDevice(const LUID *Luid, ULONG *DeviceIndex)
 {
-    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenAdapter;
+    D3DKMT_OPENADAPTERFROMLUID OpenAdapter;
     D3DKMT_CREATEDEVICE CreateDevice;
     ULONG Index, FreeIndex = DWM_DX_MAX_DEVICES;
     NTSTATUS Status;
@@ -139,26 +142,17 @@ DwmDxGetDevice(const LUID *Luid, ULONG *DeviceIndex)
         return STATUS_INSUFFICIENT_RESOURCES;
 
     RtlZeroMemory(&OpenAdapter, sizeof(OpenAdapter));
-    lstrcpynW(OpenAdapter.DeviceName, L"\\\\.\\DISPLAY1",
-              ARRAYSIZE(OpenAdapter.DeviceName));
-    Status = D3DKMTOpenAdapterFromGdiDisplayName(&OpenAdapter);
+    /* A producer can render on a different adapter from the desktop owner.
+     * Open its requested device directly; DISPLAY1 identifies the scanout,
+     * not necessarily the adapter backing this shared surface. */
+    OpenAdapter.AdapterLuid = *Luid;
+    Status = D3DKMTOpenAdapterFromLuid(&OpenAdapter);
     if (!NT_SUCCESS(Status) || OpenAdapter.hAdapter == 0)
     {
         DwmDxReportFailure("open_adapter",
                            NT_SUCCESS(Status) ? STATUS_NOT_FOUND : Status);
         return NT_SUCCESS(Status) ? STATUS_NOT_FOUND : Status;
     }
-    if (!DwmDxLuidEqual(&OpenAdapter.AdapterLuid, Luid))
-    {
-        D3DKMT_CLOSEADAPTER CloseAdapter;
-
-        RtlZeroMemory(&CloseAdapter, sizeof(CloseAdapter));
-        CloseAdapter.hAdapter = OpenAdapter.hAdapter;
-        (void)D3DKMTCloseAdapter(&CloseAdapter);
-        DwmDxReportFailure("adapter_luid", STATUS_NOT_FOUND);
-        return STATUS_NOT_FOUND;
-    }
-
     RtlZeroMemory(&CreateDevice, sizeof(CreateDevice));
     CreateDevice.hAdapter = OpenAdapter.hAdapter;
     Status = D3DKMTCreateDevice(&CreateDevice);
