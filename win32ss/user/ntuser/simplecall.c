@@ -171,6 +171,46 @@ NtUserCallNoParam(DWORD Routine)
 }
 
 
+static DECLSPEC_NOINLINE BOOL
+IntGetDirectSendProc(HWND hWnd, PROS_DIRECTSENDPROC UserInfo)
+{
+    const ULONG Hooks = HOOKID_TO_FLAG(WH_CALLWNDPROC) | HOOKID_TO_FLAG(WH_CALLWNDPROCRET);
+    ROS_DIRECTSENDPROC Info = { 0 };
+    PTHREADINFO pti;
+    PWND Window;
+    BOOL Ret = FALSE;
+
+    UserEnterShared();
+    pti = PsGetCurrentThreadWin32Thread();
+    Window = UserGetWindowObject(hWnd);
+    if (Window && Window->head.pti == pti &&
+        !(Window->state & WNDS_SERVERSIDEWINDOWPROC) &&
+        !(pti->fsHooks & Hooks) &&
+        !(pti->pDeskInfo && (pti->pDeskInfo->fsHooks & Hooks)))
+    {
+        Info.Proc = (ULONG64)(ULONG_PTR)Window->lpfnWndProc;
+        Info.IsAnsi = !Window->Unicode;
+        Ret = TRUE;
+    }
+    UserLeave();
+
+    if (!Ret)
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(UserInfo, sizeof(*UserInfo), 1);
+        RtlCopyMemory(UserInfo, &Info, sizeof(Info));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Ret = FALSE;
+    }
+    _SEH2_END;
+
+    return Ret;
+}
+
 /*
  * @implemented
  */
@@ -1221,6 +1261,9 @@ NtUserCallHwndParam(
             UserLeave();
             return Ret;
         }
+
+        case HWNDPARAM_ROUTINE_ROS_GETDIRECTSENDPROC:
+            return IntGetDirectSendProc(hWnd, (PROS_DIRECTSENDPROC)Param);
 
         case HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA:
         case HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGW:

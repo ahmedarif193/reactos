@@ -2634,6 +2634,12 @@ SendMessageW(HWND Wnd,
 
   if (Wnd != HWND_TOPMOST && Wnd != HWND_BROADCAST && (Msg < WM_DDE_FIRST || Msg > WM_DDE_LAST))
   {
+#ifdef WOW64_I386_RUNTIME
+      ROS_DIRECTSENDPROC Direct;
+
+      if (NtUserCallHwndParam(Wnd, (DWORD_PTR)&Direct, HWNDPARAM_ROUTINE_ROS_GETDIRECTSENDPROC))
+          return IntCallWindowProcW(Direct.IsAnsi, (WNDPROC)(ULONG_PTR)Direct.Proc, NULL, Wnd, Msg, wParam, lParam);
+#endif
       Window = ValidateHwnd(Wnd);
 
       if ( Window != NULL &&
@@ -2695,6 +2701,12 @@ SendMessageA(HWND Wnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 
   if (Wnd != HWND_TOPMOST && Wnd != HWND_BROADCAST && (Msg < WM_DDE_FIRST || Msg > WM_DDE_LAST))
   {
+#ifdef WOW64_I386_RUNTIME
+      ROS_DIRECTSENDPROC Direct;
+
+      if (NtUserCallHwndParam(Wnd, (DWORD_PTR)&Direct, HWNDPARAM_ROUTINE_ROS_GETDIRECTSENDPROC))
+          return IntCallWindowProcA(Direct.IsAnsi, (WNDPROC)(ULONG_PTR)Direct.Proc, NULL, Wnd, Msg, wParam, lParam);
+#endif
       Window = ValidateHwnd(Wnd);
 
       if ( Window != NULL &&
