@@ -59,6 +59,14 @@ BOOLEAN DxgkGpuVaCoreRangeContains(_In_ ULONGLONG OuterStart, _In_ ULONGLONG Out
 BOOLEAN DxgkGpuVaCoreIsPageAligned(_In_ ULONGLONG Value);
 BOOLEAN DxgkGpuVaCorePageCount(_In_ ULONGLONG Address, _In_ ULONGLONG Size, _Out_ PULONGLONG PageCount);
 
+BOOLEAN DxgkGpuVaCoreAllocationMapChunk(
+    _In_ ULONGLONG AllocationSize,
+    _In_ ULONGLONG AllocationOffset,
+    _In_ ULONGLONG MappingSize,
+    _In_ ULONGLONG MappingOffset,
+    _Out_ PULONGLONG SourceOffset,
+    _Out_ PULONGLONG ChunkSize);
+
 typedef struct _DXGK_GPUVA_CORE_SPAN
 {
     ULONGLONG Start;
