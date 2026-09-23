@@ -21,7 +21,7 @@ BOOLEAN KiTimeAdjustmentEnabled = FALSE;
 
 /* FUNCTIONS ******************************************************************/
 
-#if (defined(_M_AMD64) || defined(_M_ARM64)) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
 VOID
 NTAPI
 KiChargeThreadCycleTime(
@@ -30,21 +30,15 @@ KiChargeThreadCycleTime(
 {
     ULONGLONG CurrentCycles, StartCycles, Delta;
 
-#if defined(_M_ARM64)
-    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(CurrentCycles));
-#else
-    CurrentCycles = __rdtsc();
-#endif
+    CurrentCycles = ReadTimeStampCounter();
     StartCycles = Prcb->StartCycles;
     Prcb->StartCycles = CurrentCycles;
 
     /* Reset the baseline after an uninitialized or backwards sample. */
     if ((StartCycles == 0) || (CurrentCycles < StartCycles))
     {
-#if defined(_M_AMD64)
         if (SmpDbgEnabled)
             SmpDbgCycleCharge(Prcb->Number, 0, TRUE);
-#endif
         return;
     }
 
@@ -53,10 +47,8 @@ KiChargeThreadCycleTime(
     if (Thread->Process != NULL)
         InterlockedExchangeAdd64((PLONG64)&Thread->Process->CycleTime, (LONG64)Delta);
     Prcb->CycleTime += Delta;
-#if defined(_M_AMD64)
     if (SmpDbgEnabled)
         SmpDbgCycleCharge(Prcb->Number, Delta, FALSE);
-#endif
 }
 #endif
 
@@ -196,10 +188,8 @@ KiUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     PKTHREAD Thread = KeGetCurrentThread();
     PKPRCB Prcb = KeGetCurrentPrcb();
 
-#if defined(_M_AMD64)
     if (SmpDbgEnabled)
         SmpDbgRuntimeTick(Prcb->Number);
-#endif
 
     /* Check if this tick is being skipped */
     if (Prcb->SkipTick)
@@ -209,7 +199,7 @@ KiUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
         return;
     }
 
-#if (defined(_M_AMD64) || defined(_M_ARM64)) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
     /* Charge measured execution against the absolute quantum target. */
     KiChargeThreadCycleTime(Prcb, Thread);
 #endif
@@ -218,13 +208,7 @@ KiUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     Prcb->InterruptCount++;
 
     /* Check if we came from user mode */
-#if defined(_M_RISCV64)
-    if (KiUserTrap(TrapFrame))
-#elif !defined(_M_ARM) && !defined(_M_ARM64)
-    if (KiUserTrap(TrapFrame) || (TrapFrame->EFlags & EFLAGS_V86_MASK))
-#else
-    if (TrapFrame->PreviousMode == UserMode)
-#endif
+    if (KiIsUserModeTrap(TrapFrame))
     {
         /* Increase thread user time */
         Prcb->UserTime += Ticks;
@@ -281,7 +265,7 @@ KiUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
         HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
     }
 
-#if !defined(_M_AMD64) || (NTDDI_VERSION < NTDDI_LONGHORN)
+#ifndef KI_CYCLE_QUANTUM
     if (Ticks == 1)
         KiDecrementThreadQuantum(Thread, CLOCK_QUANTUM_DECREMENT);
     else
@@ -291,10 +275,8 @@ KiUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     /* Check if the time expired */
     if (KiIsThreadQuantumExpired(Thread) && (Thread != Prcb->IdleThread))
     {
-#if defined(_M_AMD64)
         if (SmpDbgEnabled)
             SmpDbgQuantumRequest(Prcb->Number);
-#endif
 
         /* Schedule a quantum end */
         Prcb->QuantumEnd = 1;

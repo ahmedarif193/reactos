@@ -10,12 +10,14 @@
 #include <ndk/halfuncs.h>
 #include <ndk/iofuncs.h>
 #include <reactos/hal/acpi_pci.h>
+#include <reactos/hal/msi.h>
 #include "halp.h"
 
 /* Private kernel/HAL imports, not a stable third-party driver interface. */
 DECLSPEC_NORETURN VOID NTAPI KiRiscvUnimplemented(const CHAR *Routine);
 VOID NTAPI KiRiscvRequestSoftwareInterrupt(KIRQL Irql);
 VOID NTAPI KiRiscvClearSoftwareInterrupt(KIRQL Irql);
+VOID NTAPI KiRiscvSendSoftwareInterrupt(KAFFINITY TargetSet, KIRQL Irql);
 BOOLEAN NTAPI InbvDisplayString(PCSTR String);
 
 /* NT layering (ABI-127): boot video owns text output. The debugger transport
@@ -103,6 +105,53 @@ HalGetMessageRoutingInfo(PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
 {
     UNREFERENCED_PARAMETER(RoutingInfo);
     return STATUS_NOT_SUPPORTED;
+}
+
+/* Kernel-private entry points of the same routing services.
+ * TODO: route messages through the AIA IMSIC once the HAL supports it. */
+NTSTATUS
+NTAPI
+HalpGetInterruptTargetInformation(PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation)
+{
+    return HalGetInterruptTargetInformation(TargetInformation);
+}
+
+NTSTATUS
+NTAPI
+HalpGetMessageRoutingInfo(PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
+{
+    return HalGetMessageRoutingInfo(RoutingInfo);
+}
+
+/* The kernel dispatcher claims and completes each PLIC source around its
+ * service routines. These keep only the IRQL part of the HAL contract. */
+BOOLEAN
+NTAPI
+HalBeginSystemInterrupt(KIRQL Irql, ULONG Vector, PKIRQL OldIrql)
+{
+    UNREFERENCED_PARAMETER(Vector);
+
+    /* A source masked at the current level is not taken. */
+    if (Irql <= KeGetCurrentIrql())
+        return FALSE;
+
+    *OldIrql = KfRaiseIrql(Irql);
+    return TRUE;
+}
+
+VOID
+NTAPI
+HalEndSystemInterrupt(KIRQL OldIrql, PKTRAP_FRAME TrapFrame)
+{
+    UNREFERENCED_PARAMETER(TrapFrame);
+    KfLowerIrql(OldIrql);
+}
+
+VOID
+NTAPI
+HalSendSoftwareInterrupt(KAFFINITY TargetSet, KIRQL Irql)
+{
+    KiRiscvSendSoftwareInterrupt(TargetSet, Irql);
 }
 
 ULONG

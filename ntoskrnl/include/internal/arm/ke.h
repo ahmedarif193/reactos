@@ -263,3 +263,5 @@ KiClearDpcRequestState(
 {
     Prcb->DpcInterruptRequested = FALSE;
 }
+
+#define KiIsUserModeTrap(TrapFrame) ((TrapFrame)->PreviousMode == UserMode)

@@ -1,7 +1,11 @@
 /*
  * PROJECT:     ReactOS Kernel
  * LICENSE:     GPL-2.0-or-later
- * PURPOSE:     Gated AMD64 SMP runtime progress diagnostics
+ * PURPOSE:     Gated SMP runtime progress and deadlock diagnostics
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ *
+ * All recording and output is gated at runtime by SmpDbgEnabled, set by the
+ * /SMPDIAG boot option. Architecture recorders live in ke/<arch>/smpdbg.c.
  */
 
 #include <ntoskrnl.h>
@@ -9,6 +13,10 @@
 
 #define NDEBUG
 #include <debug.h>
+
+BOOLEAN SmpDbgEnabled = FALSE;
+
+#ifdef _WIN64
 
 typedef struct DECLSPEC_CACHEALIGN _SMPDBG_CPU
 {
@@ -102,8 +110,6 @@ typedef struct _SMPDBG_DISPATCH_SNAPSHOT
     ULONG DpcRoutineActive;
     ULONG DpcInterruptRequested;
 } SMPDBG_DISPATCH_SNAPSHOT, *PSMPDBG_DISPATCH_SNAPSHOT;
-
-BOOLEAN SmpDbgEnabled = FALSE;
 
 static SMPDBG_CPU SmpDbgCpu[MAXIMUM_PROCESSORS];
 static SMPDBG_SAMPLE SmpDbgPrevious[MAXIMUM_PROCESSORS];
@@ -385,7 +391,7 @@ SmpDbgSnapshotDispatchState(
     Snapshot->QuantumEnd = Prcb->QuantumEnd;
     Snapshot->DpcQueueDepth = Prcb->DpcData[0].DpcQueueDepth;
     Snapshot->DpcRoutineActive = Prcb->DpcRoutineActive;
-    Snapshot->DpcInterruptRequested = Prcb->DpcInterruptRequested;
+    Snapshot->DpcInterruptRequested = KiIsDpcInterruptRequested(Prcb);
 
     if (CurrentThread != NULL)
     {
@@ -465,7 +471,6 @@ SmpDbgReporterThread(
              Cpu++)
         {
             PKPRCB Prcb = KiProcessorBlock[Cpu];
-            PKIPCR Pcr;
             SMPDBG_DISPATCH_SNAPSHOT Dispatch;
             SMPDBG_SAMPLE Current;
             PSMPDBG_SAMPLE Previous;
@@ -479,7 +484,6 @@ SmpDbgReporterThread(
             if (Prcb == NULL)
                 continue;
 
-            Pcr = CONTAINING_RECORD(Prcb, KIPCR, Prcb);
             Current.RuntimeTicks = SmpDbgCpu[Cpu].RuntimeTicks;
             Current.QuantumRequests = SmpDbgCpu[Cpu].QuantumRequests;
             Current.DispatchInterrupts = SmpDbgCpu[Cpu].DispatchInterrupts;
@@ -505,7 +509,7 @@ SmpDbgReporterThread(
                 Current.BalanceSources[Source] =
                     SmpDbgCpu[Cpu].BalanceSources[Source];
             }
-            Current.ContextSwitches = Pcr->ContextSwitches;
+            Current.ContextSwitches = KeGetContextSwitches(Prcb);
             Previous = &SmpDbgPrevious[Cpu];
             LastImage.Parts[0] = SmpDbgCpu[Cpu].LastImage0;
             LastImage.Parts[1] = SmpDbgCpu[Cpu].LastImage1;
@@ -574,7 +578,7 @@ SmpDbgReporterThread(
                      Dispatch.Ready.NextProcessor,
                      Dispatch.QuantumReset,
                      Dispatch.QuantumLeft,
-                     KiCyclesPerClockQuantum,
+                     KiGetQuantumUnitCycles(),
                      Dispatch.CycleTime,
                      Dispatch.QuantumTarget,
                      Dispatch.StartCycles,
@@ -596,6 +600,156 @@ SmpDbgReporterThread(
     }
 }
 
+/*
+ * All-CPU-idle deadlock watchdog.
+ *
+ * When the machine wedges with every CPU idle (timers alive, but no thread
+ * runnable), a progress report only shows "all idle". This system thread
+ * sleeps on a timed delay, which still fires, and watches the machine-wide
+ * context-switch count. When every other CPU stays idle and switches flatline,
+ * it walks every thread and prints its scheduler state, wait reason and
+ * waited-on object, so a circular or lost wait reads straight off the log.
+ */
+
+static volatile LONG SmpDbgWatchdogStarted;
+
+static
+PCSTR
+SmpDbgStateName(
+    _In_ UCHAR State)
+{
+    static const PCSTR Names[] =
+    {
+        "Init", "Ready", "Running", "Standby", "Terminated",
+        "Waiting", "Transition", "DeferredReady", "GateWait"
+    };
+
+    return (State < RTL_NUMBER_OF(Names)) ? Names[State] : "?";
+}
+
+static
+ULONG64
+SmpDbgSumContextSwitches(VOID)
+{
+    ULONG64 Sum = 0;
+    ULONG Cpu;
+
+    for (Cpu = 0; (Cpu < (ULONG)KeNumberProcessors) && (Cpu < MAXIMUM_PROCESSORS); Cpu++)
+    {
+        PKPRCB Prcb = KiProcessorBlock[Cpu];
+
+        if (Prcb != NULL)
+            Sum += KeGetContextSwitches(Prcb);
+    }
+    return Sum;
+}
+
+static
+VOID
+SmpDbgThreadStateDump(VOID)
+{
+    PEPROCESS Process;
+    ULONG ProcessCount = 0;
+
+    DbgPrint("SMPWD ===== all-CPU-idle deadlock: thread state dump =====\n");
+    DbgPrint("SMPWD idle=0x%Ix active=0x%Ix\n",
+             (ULONG_PTR)KiIdleSummary, (ULONG_PTR)KeActiveProcessors);
+
+    Process = PsGetNextProcess(NULL);
+    while ((Process != NULL) && (ProcessCount++ < 128))
+    {
+        PETHREAD Thread;
+        ULONG ThreadCount = 0;
+
+        DbgPrint("SMPWD proc=%p '%s'\n", Process, (PCSTR)PsGetProcessImageFileName(Process));
+
+        Thread = PsGetNextProcessThread(Process, NULL);
+        while ((Thread != NULL) && (ThreadCount++ < 256))
+        {
+            PKTHREAD Tcb = &Thread->Tcb;
+            PVOID Object = NULL;
+            PVOID Owner = NULL;
+
+            if ((Tcb->State == Waiting) && (Tcb->WaitBlockList != NULL))
+            {
+                Object = Tcb->WaitBlockList->Object;
+            }
+            else if (Tcb->State == GateWait)
+            {
+                /* Gates are only waited on by guarded mutexes. */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                Object = Tcb->WaitBlockList;
+#else
+                Object = Tcb->GateObject;
+#endif
+                if (Object != NULL)
+                    Owner = CONTAINING_RECORD(Object, KGUARDED_MUTEX, Gate)->Owner;
+            }
+
+            DbgPrint("SMPWD   thr=%p state=%s reason=%u waitirql=%u prio=%d obj=%p owner=%p start=%p\n",
+                     Thread, SmpDbgStateName(Tcb->State), (ULONG)Tcb->WaitReason,
+                     (ULONG)Tcb->WaitIrql, (int)Tcb->Priority, Object, Owner,
+                     Thread->StartAddress);
+
+            Thread = PsGetNextProcessThread(Process, Thread);
+        }
+
+        Process = PsGetNextProcess(Process);
+    }
+    DbgPrint("SMPWD ===== end thread state dump =====\n");
+}
+
+static
+VOID
+NTAPI
+SmpDbgWatchdogThread(
+    _In_opt_ PVOID Context)
+{
+    LARGE_INTEGER Delay;
+    ULONG64 Previous;
+    LONG Stalled = 0;
+    BOOLEAN Dumped = FALSE;
+
+    UNREFERENCED_PARAMETER(Context);
+
+    Delay.QuadPart = -2LL * 10 * 1000 * 1000;
+    Previous = SmpDbgSumContextSwitches();
+
+    for (;;)
+    {
+        ULONG64 Current;
+        KAFFINITY Active, IdleOrSelf;
+
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        Current = SmpDbgSumContextSwitches();
+
+        /* Every CPU but this one idle, and context switches essentially
+         * flat: user-mode retry storms keep switches moving but still leave
+         * no runnable kernel work when the real wedge hits. */
+        Active = KeActiveProcessors;
+        IdleOrSelf = KiIdleSummary | AFFINITY_MASK(KeGetCurrentProcessorNumber());
+        if ((Active != 0) && ((IdleOrSelf & Active) == Active) && ((Current - Previous) < 256))
+        {
+            Stalled++;
+        }
+        else
+        {
+            Stalled = 0;
+            Dumped = FALSE;
+        }
+        Previous = Current;
+
+        if ((Stalled >= 2) && !Dumped)
+        {
+            Dumped = TRUE;
+            DbgPrint("SMPWD all CPUs idle ~%lds (idle=0x%Ix active=0x%Ix ctxsw=%I64u): dumping thread state\n",
+                     (long)Stalled * 2, (ULONG_PTR)KiIdleSummary,
+                     (ULONG_PTR)KeActiveProcessors, Current);
+            SmpDbgThreadStateDump();
+        }
+    }
+}
+
 VOID
 NTAPI
 SmpDbgStartWatchdog(VOID)
@@ -605,6 +759,17 @@ SmpDbgStartWatchdog(VOID)
 
     if (!SmpDbgEnabled)
         return;
+
+    if (InterlockedExchange(&SmpDbgWatchdogStarted, 1) == 0)
+    {
+        Status = PsCreateSystemThread(&Handle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+                                      SmpDbgWatchdogThread, NULL);
+        if (NT_SUCCESS(Status))
+        {
+            ZwClose(Handle);
+            DbgPrint("SMPWD watchdog thread started\n");
+        }
+    }
 
     if (InterlockedExchange(&SmpDbgReporterStarted, 1) != 0)
         return;
@@ -626,3 +791,5 @@ SmpDbgStartWatchdog(VOID)
         DbgPrint("SMPSTAT reporter start failed status=0x%08lx\n", Status);
     }
 }
+
+#endif /* _WIN64 */

@@ -189,6 +189,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/profobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/queue.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/semphobj.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/smpdbg.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/spinlock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/thrdobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/thrdschd.c
@@ -365,7 +366,6 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/irql.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/kiinit.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/krnlinit.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/smpdbg.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/spinlock.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/thrdini.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/amd64/psctx.c
@@ -453,7 +453,6 @@ elseif(ARCH STREQUAL "riscv64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/riscv64/capture.S)
     list(APPEND SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/config/riscv64/cmhardwr.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/riscv64/ioaccess.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/riscv64/kdsup.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/cache.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/console.c

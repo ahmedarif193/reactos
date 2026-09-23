@@ -51,6 +51,29 @@ KeReleaseSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrql)
     KeLowerIrql(OldIrql);
 }
 
+/* The HAL forwards its legacy spin-lock exports to these, as on ARM64. */
+KIRQL
+FASTCALL
+KfAcquireSpinLock(_Inout_ PKSPIN_LOCK SpinLock)
+{
+    return KeAcquireSpinLockRaiseToDpc(SpinLock);
+}
+
+VOID
+FASTCALL
+KfReleaseSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrql)
+{
+    KeReleaseSpinLock(SpinLock, OldIrql);
+}
+
+#undef KeAcquireSpinLock
+VOID
+NTAPI
+KeAcquireSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _Out_ PKIRQL OldIrql)
+{
+    *OldIrql = KeAcquireSpinLockRaiseToDpc(SpinLock);
+}
+
 KIRQL
 FASTCALL
 KeAcquireQueuedSpinLock(_In_ KSPIN_LOCK_QUEUE_NUMBER Number)
@@ -60,6 +83,43 @@ KeAcquireQueuedSpinLock(_In_ KSPIN_LOCK_QUEUE_NUMBER Number)
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
     KeAcquireQueuedSpinLockAtDpcLevel(KiRiscvGetLockQueue(Number));
     return OldIrql;
+}
+
+KIRQL
+FASTCALL
+KeAcquireQueuedSpinLockRaiseToSynch(_In_ KSPIN_LOCK_QUEUE_NUMBER Number)
+{
+    KIRQL OldIrql;
+    KeRaiseIrql(SYNCH_LEVEL, &OldIrql);
+    KeAcquireQueuedSpinLockAtDpcLevel(KiRiscvGetLockQueue(Number));
+    return OldIrql;
+}
+
+LOGICAL
+FASTCALL
+KeTryToAcquireQueuedSpinLock(_In_ KSPIN_LOCK_QUEUE_NUMBER Number, _Out_ PKIRQL OldIrql)
+{
+    KIRQL PreviousIrql;
+
+    KeRaiseIrql(DISPATCH_LEVEL, &PreviousIrql);
+    if (!KxTryToAcquireQueuedSpinLock(KiRiscvGetLockQueue(Number)))
+    {
+        KeLowerIrql(PreviousIrql);
+        return FALSE;
+    }
+
+    *OldIrql = PreviousIrql;
+    return TRUE;
+}
+
+/* As on the other architectures, IRQL stays at SYNCH_LEVEL when the lock is
+ * not acquired. */
+BOOLEAN
+FASTCALL
+KeTryToAcquireQueuedSpinLockRaiseToSynch(_In_ KSPIN_LOCK_QUEUE_NUMBER Number, _Out_ PKIRQL OldIrql)
+{
+    KeRaiseIrql(SYNCH_LEVEL, OldIrql);
+    return KxTryToAcquireQueuedSpinLock(KiRiscvGetLockQueue(Number));
 }
 
 VOID

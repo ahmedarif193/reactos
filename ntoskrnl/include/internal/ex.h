@@ -1134,12 +1134,10 @@ FORCEINLINE
 VOID
 ExAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
 {
-#if defined(_M_ARM64)
-    if (InterlockedCompareExchangePointer(&PushLock->Ptr,
-                                          (PVOID)EX_PUSH_LOCK_LOCK,
-                                          NULL) != NULL)
-#else
     /* Try acquiring the lock */
+#ifdef _WIN64
+    if (InterlockedBitTestAndSet64((PLONG64)PushLock, EX_PUSH_LOCK_LOCK_V))
+#else
     if (InterlockedBitTestAndSet((PLONG)PushLock, EX_PUSH_LOCK_LOCK_V))
 #endif
     {
@@ -1174,12 +1172,10 @@ FORCEINLINE
 BOOLEAN
 ExTryToAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
 {
-#if defined(_M_ARM64)
-    if (InterlockedCompareExchangePointer(&PushLock->Ptr,
-                                          (PVOID)EX_PUSH_LOCK_LOCK,
-                                          NULL) != NULL)
-#else
     /* Try acquiring the lock */
+#ifdef _WIN64
+    if (InterlockedBitTestAndSet64((PLONG64)PushLock, EX_PUSH_LOCK_LOCK_V))
+#else
     if (InterlockedBitTestAndSet((PLONG)PushLock, EX_PUSH_LOCK_LOCK_V))
 #endif
     {
@@ -1366,16 +1362,6 @@ ExReleasePushLockExclusive(PEX_PUSH_LOCK PushLock)
 
     /* Sanity checks */
     ASSERT(PushLock->Locked);
-
-#if defined(_M_ARM64)
-    OldValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
-                                                     NULL,
-                                                     (PVOID)EX_PUSH_LOCK_LOCK);
-    if (OldValue.Ptr == (PVOID)EX_PUSH_LOCK_LOCK)
-    {
-        return;
-    }
-#endif
 
     /* Unlock the pushlock */
     OldValue.Value = InterlockedExchangeAddSizeT((PSIZE_T)PushLock,

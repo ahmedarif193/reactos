@@ -339,13 +339,14 @@ HalTranslateBusAddress(INTERFACE_TYPE InterfaceType, ULONG BusNumber, PHYSICAL_A
 }
 
 static ULONG
-HalpRiscvAccessPciConfig(BOOLEAN Write, ULONG BusNumber, ULONG SlotNumber, PVOID Buffer, ULONG Offset, ULONG Length)
+HalpRiscvAccessPciConfig(BOOLEAN Write, BOOLEAN Lock, ULONG BusNumber, ULONG SlotNumber, PVOID Buffer, ULONG Offset,
+                         ULONG Length)
 {
     RISCV_PCI_HOST *Host = &HalpRiscvPciHost;
     PCI_SLOT_NUMBER Slot;
     PUCHAR Bytes = Buffer;
     volatile UCHAR *Config;
-    KIRQL OldIrql;
+    KIRQL OldIrql = PASSIVE_LEVEL;
     ULONG Done = 0;
 
     Slot.u.AsULONG = SlotNumber;
@@ -356,14 +357,16 @@ HalpRiscvAccessPciConfig(BOOLEAN Write, ULONG BusNumber, ULONG SlotNumber, PVOID
     Length = min(Length, RISCV_PCI_CONFIG_SIZE - Offset);
     Config = Host->ConfigMapping + ((BusNumber & 255) - Host->FirstBus) * RISCV_PCI_BUS_SIZE +
              (Slot.u.bits.DeviceNumber << 15) + (Slot.u.bits.FunctionNumber << 12);
-    OldIrql = KeAcquireSpinLockRaiseToDpc(&Host->Lock);
+    if (Lock)
+        OldIrql = KeAcquireSpinLockRaiseToDpc(&Host->Lock);
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
 
     /* The legacy HAL API must not reconfigure a PCI bridge's common header.
      * The PCI bus driver's eventual raw configuration interface is separate. */
     if (Write && Offset < 256 && (Config[FIELD_OFFSET(PCI_COMMON_CONFIG, HeaderType)] & 0x7f) == PCI_BRIDGE_TYPE)
     {
-        KeReleaseSpinLock(&Host->Lock, OldIrql);
+        if (Lock)
+            KeReleaseSpinLock(&Host->Lock, OldIrql);
         return 0;
     }
     Config += Offset;
@@ -400,8 +403,20 @@ HalpRiscvAccessPciConfig(BOOLEAN Write, ULONG BusNumber, ULONG SlotNumber, PVOID
         Done += Width;
     }
     __asm__ __volatile__("fence iorw, iorw" ::: "memory");
-    KeReleaseSpinLock(&Host->Lock, OldIrql);
+    if (Lock)
+        KeReleaseSpinLock(&Host->Lock, OldIrql);
     return Done;
+}
+
+/* The debugger reads with the other processors frozen, at an IRQL the lock
+ * cannot be taken from. A frozen processor may own the lock: never wait. */
+ULONG
+NTAPI
+HalpKdReadPciConfig(ULONG BusNumber, ULONG SlotNumber, PVOID Buffer, ULONG Offset, ULONG Length)
+{
+    if (!KeTestSpinLock(&HalpRiscvPciHost.Lock))
+        return MAXULONG;
+    return HalpRiscvAccessPciConfig(FALSE, FALSE, BusNumber, SlotNumber, Buffer, Offset, Length);
 }
 
 ULONG
@@ -410,7 +425,7 @@ HalGetBusDataByOffset(BUS_DATA_TYPE BusDataType, ULONG BusNumber, ULONG SlotNumb
 {
     if (BusDataType != PCIConfiguration)
         return 0;
-    return HalpRiscvAccessPciConfig(FALSE, BusNumber, SlotNumber, Buffer, Offset, Length);
+    return HalpRiscvAccessPciConfig(FALSE, TRUE, BusNumber, SlotNumber, Buffer, Offset, Length);
 }
 
 ULONG
@@ -426,7 +441,7 @@ HalSetBusDataByOffset(BUS_DATA_TYPE BusDataType, ULONG BusNumber, ULONG SlotNumb
 {
     if (BusDataType != PCIConfiguration)
         return 0;
-    return HalpRiscvAccessPciConfig(TRUE, BusNumber, SlotNumber, Buffer, Offset, Length);
+    return HalpRiscvAccessPciConfig(TRUE, TRUE, BusNumber, SlotNumber, Buffer, Offset, Length);
 }
 
 ULONG

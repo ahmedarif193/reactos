@@ -18,17 +18,7 @@ ULONG_PTR
 KxLoadAcquirePointer(
     _In_ PVOID const volatile *Address)
 {
-#ifdef _M_ARM64
-    ULONG_PTR Value;
-
-    __asm__ __volatile__("ldar %0, [%1]"
-                         : "=&r"(Value)
-                         : "r"(Address)
-                         : "memory");
-    return Value;
-#else
     return (ULONG_PTR)ReadPointerAcquire(Address);
-#endif
 }
 
 FORCEINLINE
@@ -37,14 +27,7 @@ KxStoreReleasePointer(
     _Out_ PVOID volatile *Address,
     _In_ PVOID Value)
 {
-#ifdef _M_ARM64
-    __asm__ __volatile__("stlr %1, [%0]"
-                         :
-                         : "r"(Address), "r"(Value)
-                         : "memory");
-#else
     WritePointerRelease(Address, Value);
-#endif
 }
 #endif
 
@@ -128,12 +111,8 @@ KxReleaseSpinLock(
 
 #if defined(CONFIG_SMP) || DBG
     /* Publish the unlocked state with release ordering. */
-#ifdef _M_ARM64
-    __asm__ __volatile__("stlr xzr, [%0]" :: "r"(SpinLock) : "memory");
-#elif defined(_M_AMD64)
+#ifdef _WIN64
     WriteULongPtrRelease((PULONG_PTR)SpinLock, 0);
-#elif defined(_WIN64)
-    InterlockedAnd64((PLONG64)SpinLock, 0);
 #else
     InterlockedAnd((PLONG)SpinLock, 0);
 #endif

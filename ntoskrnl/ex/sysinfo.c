@@ -2781,7 +2781,7 @@ QSI_DEF(SystemEmulationBasicInformation)
     NTSTATUS Status;
 
     Status = QSISystemBasicInformation(Buffer, Size, ReqSize);
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     if (NT_SUCCESS(Status))
     {
         PSYSTEM_BASIC_INFORMATION Sbi = (PSYSTEM_BASIC_INFORMATION)Buffer;
@@ -2800,7 +2800,7 @@ QSI_DEF(SystemEmulationProcessorInformation)
 
     /* Query native information */
     Status = QSISystemProcessorInformation(Buffer, Size, ReqSize);
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     if (NT_SUCCESS(Status))
     {
         PSYSTEM_PROCESSOR_INFORMATION Spi = (PSYSTEM_PROCESSOR_INFORMATION)Buffer;

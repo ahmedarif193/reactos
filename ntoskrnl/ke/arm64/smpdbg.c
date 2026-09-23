@@ -1,7 +1,8 @@
 /*
  * PROJECT:     ReactOS Kernel (ARM64)
- * PURPOSE:     SMP boot diagnostics state. Recorded from ntoskrnl and the HAL,
- *              dumped from one place. Gated at runtime by /SMPDIAG (SmpDbgEnabled).
+ * PURPOSE:     ARM64 generic timer and GIC SMP diagnostics. Recorded from
+ *              ntoskrnl and the HAL; gated at runtime by /SMPDIAG
+ *              (SmpDbgEnabled). The common recorders live in ke/smpdbg.c.
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
@@ -9,10 +10,6 @@
 #include <reactos/smpdbg.h>
 #define NDEBUG
 #include <debug.h>
-
-#if defined(_M_ARM64)
-
-BOOLEAN SmpDbgEnabled = FALSE;
 
 #define SMPDBG_TIMER_PPI(_i) (((_i) == 27) || ((_i) == 30))
 
@@ -22,7 +19,6 @@ typedef struct _SMPDBG_CPU
     volatile ULONG Eoi;     /* HAL EOI'd the timer PPI    */
     volatile ULONG Reject;  /* HAL rejected at high IRQL  */
     volatile ULONG Tick;    /* timer ISR ran              */
-    volatile ULONG Ipi;     /* KiIpiServiceRoutine ran    */
     volatile ULONG Park;    /* idle loop entered WFI      */
     volatile ULONG Wake;    /* idle loop returned from WFI*/
     volatile ULONG Ctl;     /* last timer CTL             */
@@ -32,17 +28,6 @@ typedef struct _SMPDBG_CPU
     volatile ULONG GicEn;   /* timer PPI enabled          */
     volatile ULONG GicPend; /* timer PPI pending          */
     volatile ULONG GicAct;  /* timer PPI active           */
-    volatile ULONG RemoteDpc;
-    volatile ULONG SchedulerIpi;
-    volatile ULONG QueuedDpcIpi;
-    volatile ULONG TbFlushIpi;
-    volatile ULONG GenericCallIpi;
-    volatile ULONG BalanceWake;
-    volatile ULONG BalanceIdle;
-    volatile ULONG BalanceQuantum;
-    volatile ULONG BalancePeriodic;
-    volatile ULONG StandbySteals;
-    volatile ULONG BalanceSources[SMPDBG_MAXCPU];
 } SMPDBG_CPU;
 
 static SMPDBG_CPU SmpDbgCpu[SMPDBG_MAXCPU];
@@ -69,80 +54,6 @@ VOID NTAPI SmpDbgTimerTick(ULONG Cpu)
 {
     if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
         SmpDbgCpu[Cpu].Tick++;
-}
-
-VOID NTAPI SmpDbgIpi(ULONG Cpu)
-{
-    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
-        SmpDbgCpu[Cpu].Ipi++;
-}
-
-VOID NTAPI SmpDbgRemoteDpc(ULONG Cpu, ULONG SourceCpu)
-{
-    UNREFERENCED_PARAMETER(SourceCpu);
-
-    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
-        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].RemoteDpc);
-}
-
-VOID NTAPI SmpDbgSchedulerIpi(ULONG Cpu, PVOID Thread, ULONG Cause)
-{
-    UNREFERENCED_PARAMETER(Thread);
-    UNREFERENCED_PARAMETER(Cause);
-
-    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
-        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].SchedulerIpi);
-}
-
-VOID NTAPI SmpDbgQueuedDpcIpi(ULONG Cpu)
-{
-    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
-        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].QueuedDpcIpi);
-}
-
-VOID NTAPI SmpDbgTbFlushIpi(ULONG Cpu)
-{
-    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
-        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].TbFlushIpi);
-}
-
-VOID NTAPI SmpDbgGenericCallIpi(ULONG Cpu)
-{
-    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
-        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].GenericCallIpi);
-}
-
-VOID NTAPI SmpDbgBalanceEvent(ULONG TargetCpu, ULONG SourceCpu, ULONG Reason)
-{
-    if (!SmpDbgEnabled || (TargetCpu >= SMPDBG_MAXCPU))
-        return;
-
-    switch (Reason)
-    {
-        case SMPDBG_BALANCE_WAKE_PLACEMENT:
-            InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalanceWake);
-            break;
-        case SMPDBG_BALANCE_IDLE:
-            InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalanceIdle);
-            break;
-        case SMPDBG_BALANCE_QUANTUM:
-            InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalanceQuantum);
-            break;
-        case SMPDBG_BALANCE_PERIODIC:
-            InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalancePeriodic);
-            break;
-        default:
-            return;
-    }
-
-    if (SourceCpu < SMPDBG_MAXCPU)
-        InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalanceSources[SourceCpu]);
-}
-
-VOID NTAPI SmpDbgStandbySteal(ULONG TargetCpu)
-{
-    if (SmpDbgEnabled && (TargetCpu < SMPDBG_MAXCPU))
-        InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].StandbySteals);
 }
 
 VOID NTAPI SmpDbgPark(ULONG Cpu)
@@ -211,160 +122,3 @@ VOID NTAPI SmpDbgDumpTimers(ULONG StrandMask)
              SmpDbgCpu[0].GicPend, SmpDbgCpu[1].GicPend, SmpDbgCpu[2].GicPend, SmpDbgCpu[3].GicPend,
              SmpDbgCpu[0].GicAct, SmpDbgCpu[1].GicAct, SmpDbgCpu[2].GicAct, SmpDbgCpu[3].GicAct);
 }
-
-/*
- * ============================================================================
- * All-idle deadlock watchdog
- * ============================================================================
- *
- * When the boot wedges with every CPU idle (timers alive, but no thread
- * runnable), a heartbeat can't help - it only shows "all idle". This watchdog
- * is a system thread that sleeps on a timed delay (which still fires, because
- * the timers are alive) and watches the machine-wide context-switch count.
- * During a real deadlock nothing runs but the idle threads (and this watchdog),
- * so context switches flatline. When that persists, it walks every thread and
- * prints its scheduler state + wait reason + waited-on object, so the circular
- * wait can be read straight off the serial log.
- */
-
-extern PKPRCB KiProcessorBlock[];
-
-static LONG SmpDbgWatchdogStarted = 0;
-
-static const char *SmpDbgStateName(UCHAR State)
-{
-    static const char *Names[] =
-    {
-        "Init", "Ready", "Running", "Standby", "Terminated",
-        "Waiting", "Transition", "DeferredReady", "GateWait"
-    };
-    return (State < (sizeof(Names) / sizeof(Names[0]))) ? Names[State] : "?";
-}
-
-static ULONGLONG SmpDbgSumContextSwitches(VOID)
-{
-    ULONGLONG Sum = 0;
-    ULONG i;
-
-    for (i = 0; i < (ULONG)KeNumberProcessors && i < MAXIMUM_PROCESSORS; i++)
-    {
-        PKPRCB Prcb = KiProcessorBlock[i];
-        if (Prcb != NULL)
-            Sum += Prcb->KeContextSwitches;
-    }
-    return Sum;
-}
-
-static VOID SmpDbgThreadStateDump(VOID)
-{
-    PEPROCESS Process;
-    ULONG ProcCount = 0;
-
-    DbgPrint("SMPWD ===== all-CPU-idle deadlock: thread state dump =====\n");
-    DbgPrint("SMPWD idle=0x%Ix active=0x%Ix\n",
-             (ULONG_PTR)KiIdleSummary, (ULONG_PTR)KeActiveProcessors);
-
-    Process = PsGetNextProcess(NULL);
-    while (Process != NULL && ProcCount++ < 128)
-    {
-        PETHREAD Thread;
-        ULONG ThreadCount = 0;
-
-        DbgPrint("SMPWD proc=%p '%s'\n", Process, (PCSTR)PsGetProcessImageFileName(Process));
-
-        Thread = PsGetNextProcessThread(Process, NULL);
-        while (Thread != NULL && ThreadCount++ < 256)
-        {
-            PKTHREAD Tcb = &Thread->Tcb;
-            PVOID Object = NULL;
-
-            if (Tcb->State == 5 /* Waiting */ && Tcb->WaitBlockList != NULL)
-                Object = Tcb->WaitBlockList->Object;
-
-            DbgPrint("SMPWD   thr=%p state=%s reason=%u waitirql=%u prio=%d obj=%p start=%p\n",
-                     Thread, SmpDbgStateName(Tcb->State), (ULONG)Tcb->WaitReason,
-                     (ULONG)Tcb->WaitIrql, (int)Tcb->Priority, Object, Thread->StartAddress);
-
-            Thread = PsGetNextProcessThread(Process, Thread);
-        }
-
-        Process = PsGetNextProcess(Process);
-    }
-    DbgPrint("SMPWD ===== end thread state dump =====\n");
-}
-
-static VOID NTAPI SmpDbgWatchdogThread(PVOID Context)
-{
-    LARGE_INTEGER Delay;
-    ULONGLONG Prev;
-    LONG Stalled = 0;
-    BOOLEAN Dumped = FALSE;
-
-    UNREFERENCED_PARAMETER(Context);
-
-    Delay.QuadPart = -2LL * 10 * 1000 * 1000; /* 2 seconds, relative */
-    Prev = SmpDbgSumContextSwitches();
-
-    for (;;)
-    {
-        ULONGLONG Cur;
-
-        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-
-        Cur = SmpDbgSumContextSwitches();
-
-        /*
-         * Deadlock signal: every CPU except the one this watchdog woke on is
-         * advertised idle (KiIdleSummary), AND machine-wide context switches are
-         * essentially flat. The all-idle test is robust against user-mode retry
-         * storms (e.g. the EventLog/SCM RegisterEventSource loop), which keep the
-         * context-switch count moving but still leave the kernel scheduler with
-         * no runnable thread when the real wedge hits.
-         */
-        {
-            ULONG MyCpu = KeGetCurrentProcessorNumber();
-            KAFFINITY Active = (KAFFINITY)KeActiveProcessors;
-            KAFFINITY IdleOrMe = (KAFFINITY)KiIdleSummary | ((KAFFINITY)1 << MyCpu);
-            BOOLEAN AllIdle = (Active != 0) && ((IdleOrMe & Active) == Active);
-
-            if (AllIdle && (Cur - Prev < 256))
-            {
-                Stalled++;
-            }
-            else
-            {
-                Stalled = 0;
-                Dumped = FALSE;
-            }
-        }
-        Prev = Cur;
-
-        if (Stalled >= 2 && !Dumped)
-        {
-            Dumped = TRUE;
-            DbgPrint("SMPWD all CPUs idle ~%lds (idle=0x%Ix active=0x%Ix ctxsw=%I64u) - dumping thread state\n",
-                     (long)Stalled * 2, (ULONG_PTR)KiIdleSummary,
-                     (ULONG_PTR)KeActiveProcessors, Cur);
-            SmpDbgThreadStateDump();
-        }
-    }
-}
-
-VOID NTAPI SmpDbgStartWatchdog(VOID)
-{
-    HANDLE Handle;
-
-    if (!SmpDbgEnabled)
-        return;
-    if (InterlockedExchange(&SmpDbgWatchdogStarted, 1) != 0)
-        return;
-
-    if (PsCreateSystemThread(&Handle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
-                             SmpDbgWatchdogThread, NULL) == STATUS_SUCCESS)
-    {
-        ZwClose(Handle);
-        DbgPrint("SMPWD watchdog thread started\n");
-    }
-}
-
-#endif /* _M_ARM64 */

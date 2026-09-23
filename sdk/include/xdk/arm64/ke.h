@@ -58,6 +58,18 @@ YieldProcessor(
 #ifndef MemoryBarrier
 #define MemoryBarrier()                      __asm__ __volatile__("dmb sy" ::: "memory")
 #endif
+
+/* The architected virtual counter, the time base of the kernel's cycle accounting. */
+FORCEINLINE
+ULONG64
+ReadTimeStampCounter(
+    VOID)
+{
+    ULONG64 Value;
+
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(Value) :: "memory");
+    return Value;
+}
 #ifndef PreFetchCacheLine
 #define PreFetchCacheLine(l,a)               __builtin_prefetch((const void *)(a))
 #endif

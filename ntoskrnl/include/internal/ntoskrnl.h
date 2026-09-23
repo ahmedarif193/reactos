@@ -90,11 +90,16 @@
 /* (also defined in lpc.h for LPC subsystem files) */
 
 /* Quantum management changed to QuantumTarget at Vista+; ResourceIndex belongs
- * to ERESOURCE. */
+ * to ERESOURCE. Where the cycle counter feeds KiChargeThreadCycleTime, the
+ * quantum is an execution-time deadline in counter cycles. */
+#if (defined(_M_AMD64) || defined(_M_RISCV64)) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+#define KI_CYCLE_QUANTUM
+#endif
+
 #if defined(_M_ARM64)
 /* arm64 KTHREAD has a real Quantum member (hosted in the Win11 Spare13 slot) */
-#elif defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
-/* amd64 uses the QuantumTarget helpers in internal/ke_x.h */
+#elif defined(KI_CYCLE_QUANTUM)
+/* The cycle model uses the QuantumTarget helpers in internal/ke_x.h */
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
 #define Quantum         ResourceIndex
 #elif (NTDDI_VERSION >= NTDDI_LONGHORN)

@@ -516,10 +516,8 @@ KiQuantumEnd(VOID)
     PKPRCB Prcb = KeGetCurrentPrcb();
     PKTHREAD NextThread, Thread = Prcb->CurrentThread;
 
-#if defined(_M_AMD64)
     if (SmpDbgEnabled)
         SmpDbgQuantumEnd(Prcb->Number);
-#endif
 
     /* Check if a DPC Event was requested to be signaled */
     if (InterlockedExchange(&Prcb->DpcSetEventRequest, 0))
@@ -1026,10 +1024,8 @@ KeInsertQueueDpc(IN PKDPC Dpc,
         if (Prcb != CurrentPrcb)
         {
             /* It was, request and IPI */
-#if defined(_M_AMD64) || defined(_M_ARM64)
             if (SmpDbgEnabled)
                 SmpDbgQueuedDpcIpi(Cpu);
-#endif
             KiIpiSend(AFFINITY_MASK(Cpu), IPI_DPC);
         }
         else
@@ -1225,11 +1221,7 @@ NTAPI
 KeIsExecutingDpc(VOID)
 {
     /* Return if the Dpc Routine is active */
-#if defined(_M_ARM64) || defined(_M_RISCV64)
     return _KeIsExecutingDpc();
-#else
-    return KeGetCurrentPrcb()->DpcRoutineActive;
-#endif
 }
 
 /*

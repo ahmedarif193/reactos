@@ -107,6 +107,10 @@ KiArm64ReadCcsidr(
     (((TrapFrame)->Spsr & ARM64_PSTATE_IRQ_MASK) == 0)
 #define KeGetContextSwitches(Prcb)  ((Prcb)->KeContextSwitches)
 
+/* A freeze request arrives as an IPI, which stays masked while the debugger
+ * port lock is held: no request is deferred to the lock release. */
+FORCEINLINE VOID KiFreezeIfRequested(VOID) {}
+
 // HAL DMA entry points are not declared by MinGW for arm64. Mirror the
 // Windows kernel prototypes so the I/O manager can call into the HAL.
 NTHALAPI
@@ -680,6 +684,7 @@ ULONG
 NTAPI
 KiArm64QueryEffectiveClockMHz(
     _In_ ULONG ProcessorNumber);
+#define KiQueryEffectiveProcessorMhz(Number) KiArm64QueryEffectiveClockMHz(Number)
 
 extern ULONG64 KiArm64IdleCounterTicks[];
 
@@ -1019,3 +1024,5 @@ KiClearDpcRequestState(
 {
     InterlockedAnd(&Prcb->DpcRequestSummary, ~(KI_DPC_NORMAL_PROCESSING_REQUESTED | KI_DPC_NORMAL_DPC_PRESENT));
 }
+
+#define KiIsUserModeTrap(TrapFrame) ((TrapFrame)->PreviousMode == UserMode)
