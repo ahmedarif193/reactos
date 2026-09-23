@@ -710,7 +710,19 @@ static const struct property_desc device_properties[] =
 static LSTATUS query_device_property( HKEY hkey, const struct device *dev, struct property *prop )
 {
     if (!memcmp( &DEVPKEY_Device_InstanceId, &prop->key, sizeof(prop->key) ))
-        return return_property_string( prop, dev->instance );
+    {
+        WCHAR instance_id[3 * MAX_PATH];
+        UINT len;
+
+        /* The property names the complete devnode, not just the last
+         * component of its Enum registry path. */
+        len = swprintf( instance_id, ARRAY_SIZE(instance_id), L"%s", dev->enumerator );
+        if (*dev->device)
+            len += swprintf( instance_id + len, ARRAY_SIZE(instance_id) - len, L"\\%s", dev->device );
+        if (*dev->instance)
+            swprintf( instance_id + len, ARRAY_SIZE(instance_id) - len, L"\\%s", dev->instance );
+        return return_property_string( prop, instance_id );
+    }
 
     for (UINT i = 0; i < ARRAY_SIZE(device_properties); i++)
     {
