@@ -1160,9 +1160,9 @@ DwmD3dInitialize(LONG Width, LONG Height)
         DwmD3dShutdown();
         return FALSE;
     }
-    State.Runtime = LoadLibraryW(L"d3d11.dll");
-    State.Dxgi = LoadLibraryW(L"dxgi.dll");
-    State.Compiler = LoadLibraryW(L"d3dcompiler_47.dll");
+    if (!State.Runtime) State.Runtime = LoadLibraryW(L"d3d11.dll");
+    if (!State.Dxgi) State.Dxgi = LoadLibraryW(L"dxgi.dll");
+    if (!State.Compiler) State.Compiler = LoadLibraryW(L"d3dcompiler_47.dll");
     IDXGIAdapter1 *Adapter = NULL;
     BOOL Success = State.Runtime && State.Dxgi && State.Compiler && CreateDevice(&Adapter) &&
         CreateSwapChain(Adapter) && CreateShaders() && CreateTexture(State.Canvas, Width, Height, TRUE);
@@ -1233,11 +1233,16 @@ DwmD3dShutdown(void)
         RemovePropW(State.Window, DWM_PROP_GPU_OUTPUT);
         DestroyWindow(State.Window);
     }
-    if (State.Compiler) FreeLibrary(State.Compiler);
     if (State.TraceProvider) FreeLibrary(State.TraceProvider);
-    if (State.Dxgi) FreeLibrary(State.Dxgi);
-    if (State.Runtime) FreeLibrary(State.Runtime);
+    /* Runtime modules live for the compositor process, across resizes and
+     * device resets. Releasing every GPU interface above is sufficient for
+     * recovery; unloading DXGI also discards its adapter enumeration cache
+     * and needlessly probes the reset OpenGL ICD again on reinitialization. */
+    HMODULE Runtime = State.Runtime, Dxgi = State.Dxgi, Compiler = State.Compiler;
     ZeroMemory(&State, sizeof(State));
+    State.Runtime = Runtime;
+    State.Dxgi = Dxgi;
+    State.Compiler = Compiler;
 }
 
 void
