@@ -1563,9 +1563,36 @@ Shader_tgsi_translate(const unsigned *code,
          break;
 
       case D3D10_SB_OPCODE_LD_MS:
-         /* XXX: We don't support multi-sampling yet, but we need to parse
-          * this opcode regardless, so we just ignore sample index operand
-          * for now */
+         if (use_legacy_texture_opcodes) {
+            unsigned resource = opcode.src[1].base.index[0].imm;
+            struct ureg_dst coord = ureg_DECL_temporary(ureg);
+            assert(opcode.src[1].base.index_dim == 1);
+            assert(resource < SHADER_MAX_RESOURCES);
+
+            if (ureg_src_is_undef(sx.samplers[resource]))
+               sx.samplers[resource] = ureg_DECL_sampler(ureg, resource);
+
+            ureg_MOV(ureg, coord,
+                     translate_src_operand(&sx, &opcode.src[0], OF_INT));
+            /* TXF uses .w as the sample index for multisample targets. */
+            ureg_MOV(ureg, ureg_writemask(coord, TGSI_WRITEMASK_W),
+                     ureg_scalar(translate_src_operand(&sx, &opcode.src[2], OF_UINT),
+                                 TGSI_SWIZZLE_X));
+            ureg_TXF(ureg,
+                     translate_dst_operand(&sx, &opcode.dst[0], opcode.saturate),
+                     sx.resources[resource].target,
+                     ureg_src(coord), sx.samplers[resource]);
+            ureg_release_temporary(ureg, coord);
+         } else {
+            struct ureg_src srcreg[3];
+            srcreg[0] = translate_src_operand(&sx, &opcode.src[0], OF_INT);
+            srcreg[1] = translate_src_operand(&sx, &opcode.src[1], OF_INT);
+            srcreg[2] = translate_src_operand(&sx, &opcode.src[2], OF_UINT);
+            sample_ureg_emit(ureg, TGSI_OPCODE_SAMPLE_I_MS, 3, &opcode,
+                             translate_dst_operand(&sx, &opcode.dst[0], opcode.saturate),
+                             srcreg);
+         }
+         break;
       case D3D10_SB_OPCODE_LD:
          if (use_legacy_texture_opcodes) {
             unsigned resource = opcode.src[1].base.index[0].imm;
