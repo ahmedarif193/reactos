@@ -35,7 +35,7 @@
 #include "util/u_hash_table.h"
 #include "cso_cache/cso_context.h"
 
-#define SUPPORT_MSAA 0
+#define SUPPORT_MSAA 1
 #define SUPPORT_D3D10_1 0
 #define SUPPORT_D3D11 1
 

@@ -946,7 +946,7 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
 
 #if SUPPORT_MSAA
       if (screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
-                                      PIPE_BIND_RENDER_TARGET)) {
+                                      PIPE_BIND_SAMPLER_VIEW)) {
          *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
       }
 #endif
