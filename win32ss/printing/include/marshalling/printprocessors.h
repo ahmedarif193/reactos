@@ -7,6 +7,7 @@
 
 static const MARSHALLING DatatypesInfo1Marshalling = {
     sizeof(DATATYPES_INFO_1W),
+    "P",
     {
         { FIELD_OFFSET(DATATYPES_INFO_1W, pName), RTL_FIELD_SIZE(DATATYPES_INFO_1W, pName), RTL_FIELD_SIZE(DATATYPES_INFO_1W, pName), TRUE },
         { MAXDWORD, 0, 0, FALSE }
@@ -15,6 +16,7 @@ static const MARSHALLING DatatypesInfo1Marshalling = {
 
 static const MARSHALLING PrintProcessorInfo1Marshalling = {
     sizeof(PRINTPROCESSOR_INFO_1W),
+    "P",
     {
         { FIELD_OFFSET(PRINTPROCESSOR_INFO_1W, pName), RTL_FIELD_SIZE(PRINTPROCESSOR_INFO_1W, pName), RTL_FIELD_SIZE(PRINTPROCESSOR_INFO_1W, pName), TRUE },
         { MAXDWORD, 0, 0, FALSE }

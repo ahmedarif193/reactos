@@ -7,6 +7,7 @@
 
 static const MARSHALLING MonitorInfo1Marshalling = {
     sizeof(MONITOR_INFO_1W),
+    "P",
     {
         { FIELD_OFFSET(MONITOR_INFO_1W, pName), RTL_FIELD_SIZE(MONITOR_INFO_1W, pName), RTL_FIELD_SIZE(MONITOR_INFO_1W, pName), TRUE },
         { MAXDWORD, 0, 0, FALSE }
@@ -15,6 +16,7 @@ static const MARSHALLING MonitorInfo1Marshalling = {
 
 static const MARSHALLING MonitorInfo2Marshalling = {
     sizeof(MONITOR_INFO_2W),
+    "PPP",
     {
         { FIELD_OFFSET(MONITOR_INFO_2W, pName), RTL_FIELD_SIZE(MONITOR_INFO_2W, pName), RTL_FIELD_SIZE(MONITOR_INFO_2W, pName), TRUE },
         { FIELD_OFFSET(MONITOR_INFO_2W, pEnvironment), RTL_FIELD_SIZE(MONITOR_INFO_2W, pEnvironment), RTL_FIELD_SIZE(MONITOR_INFO_2W, pEnvironment), TRUE },

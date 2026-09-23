@@ -23,6 +23,7 @@ MARSHALLING_INFO;
 typedef struct _MARSHALLING
 {
     DWORD cbStructureSize;
+    PCSTR pszWow64Layout;
     MARSHALLING_INFO pInfo[];
 }
 MARSHALLING;
