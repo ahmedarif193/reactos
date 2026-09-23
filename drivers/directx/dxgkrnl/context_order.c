@@ -1174,6 +1174,7 @@ DxgkContextOrderCheckRoom(
 {
     DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Interface;
     DXGMMS2_CONTEXT_STREAM_SNAPSHOT_V1 Snapshot;
+    LARGE_INTEGER NoWait;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -1181,11 +1182,16 @@ DxgkContextOrderCheckRoom(
         return STATUS_INVALID_PARAMETER;
     if (!ExAcquireRundownProtection(&Context->StreamAdmissionRundown))
         return STATUS_DELETE_PENDING;
-    (VOID)KeWaitForSingleObject(&Context->StreamAdmissionMutex,
-                                Executive,
-                                KernelMode,
-                                FALSE,
-                                NULL);
+    /* This capacity hint is also called with the KMD transaction held.
+     * Retirement may need that transaction while holding the stream mutex. */
+    NoWait.QuadPart = 0;
+    Status = KeWaitForSingleObject(&Context->StreamAdmissionMutex,
+                                    Executive, KernelMode, FALSE, &NoWait);
+    if (Status == STATUS_TIMEOUT || !NT_SUCCESS(Status))
+    {
+        ExReleaseRundownProtection(&Context->StreamAdmissionRundown);
+        return Status == STATUS_TIMEOUT ? STATUS_DEVICE_BUSY : Status;
+    }
     if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0)
     {
         Status = STATUS_DELETE_PENDING;
@@ -1241,7 +1247,25 @@ NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ P
     if (Operation == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
     VidSchReferenceContextOrderPacket(Packet);
-    (VOID)KeWaitForSingleObject(&Context->StreamAdmissionMutex, Executive, KernelMode, FALSE, NULL);
+    {
+        LARGE_INTEGER NoWait = {{0}};
+        BOOLEAN TransactionHeld = Context->Device != NULL &&
+            Context->Device->Adapter != NULL &&
+            Context->Device->Adapter->KmdTransactionOwnerThread == PsGetCurrentThread();
+
+        /* Retirement owns this mutex and can release the last monitored
+         * fence reference, which needs a KMD transaction to unmap its GPU
+         * page. Never wait here while owning that transaction: let the
+         * submit caller release it and use its existing bounded retry path. */
+        Status = KeWaitForSingleObject(&Context->StreamAdmissionMutex,
+                                        Executive, KernelMode, FALSE,
+                                        TransactionHeld ? &NoWait : NULL);
+        if (Status == STATUS_TIMEOUT || !NT_SUCCESS(Status))
+        {
+            DxgkpContextOrderFreeUnpublishedOperation(Operation);
+            return Status == STATUS_TIMEOUT ? STATUS_RETRY : Status;
+        }
+    }
     if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0 || !DxgkReferenceContext(Context))
     {
         Status = STATUS_DELETE_PENDING;
