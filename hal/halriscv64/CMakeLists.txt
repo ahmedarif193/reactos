@@ -19,7 +19,7 @@ add_library(hal MODULE
 set_module_type(hal kerneldll ENTRYPOINT 0)
 target_link_libraries(hal libcntpr)
 add_importlibs(hal ntoskrnl)
-target_compile_definitions(hal PRIVATE _NTHAL_ _NTHALDLL_ _NTSYSTEM_)
+target_compile_definitions(hal PRIVATE _NTHAL_ _NTHALDLL_)
 target_include_directories(hal PRIVATE ${REACTOS_SOURCE_DIR}/ntoskrnl/include)
 add_dependencies(hal xdk psdk bugcodes)
 add_cd_file(TARGET hal DESTINATION reactos/system32 NO_CAB FOR all)

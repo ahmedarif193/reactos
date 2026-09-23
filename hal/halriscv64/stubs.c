@@ -9,6 +9,7 @@
 #include <arc/arc.h>
 #include <ndk/halfuncs.h>
 #include <ndk/iofuncs.h>
+#include <reactos/hal/acpi_pci.h>
 #include "halp.h"
 
 /* Private kernel/HAL imports, not a stable third-party driver interface. */
@@ -200,4 +201,273 @@ HalReturnToFirmware(
     _disable();
     for (;;)
         __asm__ __volatile__("wfi");
+}
+
+/* Boot video owns the display; no firmware display state is reset. */
+VOID
+NTAPI
+HalAcquireDisplayOwnership(
+    _In_ PHAL_RESET_DISPLAY_PARAMETERS ResetDisplayParameters)
+{
+    UNREFERENCED_PARAMETER(ResetDisplayParameters);
+}
+
+BOOLEAN
+NTAPI
+HalQueryDisplayParameters(
+    _Out_opt_ PULONG Width,
+    _Out_opt_ PULONG Height,
+    _Out_opt_ PULONG Depth,
+    _Out_opt_ PULONG Frequency)
+{
+    if (Width) *Width = 0;
+    if (Height) *Height = 0;
+    if (Depth) *Depth = 0;
+    if (Frequency) *Frequency = 0;
+    return FALSE;
+}
+
+VOID
+NTAPI
+HalSetDisplayParameters(
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Height);
+}
+
+/* The time CSR is one platform counter, consistent on every hart and not
+ * writable from S-mode: take part in the rendezvous without adjusting it. */
+VOID
+NTAPI
+HalCalibratePerformanceCounter(
+    _In_ volatile PLONG Count,
+    _In_ ULONGLONG NewCount)
+{
+    UNREFERENCED_PARAMETER(NewCount);
+    InterlockedDecrement(Count);
+    while (*Count)
+        YieldProcessor();
+}
+
+/* Interrupts dispatch through the kernel's KINTERRUPT chains. */
+UCHAR
+FASTCALL
+HalSystemVectorDispatchEntry(
+    _In_ ULONG Vector,
+    _Out_ PKINTERRUPT_ROUTINE **FlatDispatch,
+    _Out_ PKINTERRUPT_ROUTINE *NoConnection)
+{
+    UNREFERENCED_PARAMETER(Vector);
+    if (FlatDispatch) *FlatDispatch = NULL;
+    if (NoConnection) *NoConnection = NULL;
+    return 0;
+}
+
+NTSTATUS
+NTAPI
+HalEnableInterrupt(
+    _In_ PINTERRUPT_CONNECTION_DATA ConnectionData)
+{
+    UNREFERENCED_PARAMETER(ConnectionData);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalDisableInterrupt(
+    _In_ PINTERRUPT_CONNECTION_DATA ConnectionData)
+{
+    UNREFERENCED_PARAMETER(ConnectionData);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalGetVectorInput(
+    _In_ ULONG Vector,
+    _In_ PGROUP_AFFINITY Affinity,
+    _Out_ PULONG Input,
+    _Out_ PKINTERRUPT_POLARITY Polarity,
+    _Out_ PINTERRUPT_REMAPPING_INFO IntRemapInfo)
+{
+    UNREFERENCED_PARAMETER(Vector);
+    UNREFERENCED_PARAMETER(Affinity);
+    if (Input) *Input = 0;
+    if (Polarity) *Polarity = InterruptPolarityUnknown;
+    if (IntRemapInfo) RtlZeroMemory(IntRemapInfo, sizeof(*IntRemapInfo));
+    return STATUS_NOT_SUPPORTED;
+}
+
+KIRQL
+NTAPI
+HalConvertDeviceIdtToIrql(
+    _In_ ULONG Vector)
+{
+    UNREFERENCED_PARAMETER(Vector);
+    return 0;
+}
+
+NTSTATUS
+NTAPI
+HalGetMemoryCachingRequirements(
+    _In_ PHYSICAL_ADDRESS BaseAddress,
+    _In_ SIZE_T Length,
+    _Out_ MEMORY_CACHING_TYPE *CacheType)
+{
+    UNREFERENCED_PARAMETER(BaseAddress);
+    UNREFERENCED_PARAMETER(Length);
+    if (!CacheType)
+        return STATUS_INVALID_PARAMETER;
+    *CacheType = MmNonCached;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalGetProcessorIdByNtNumber(
+    _In_ ULONG ProcessorNumber,
+    _Out_ PULONG ProcessorId)
+{
+    ULONG_PTR HartId;
+
+    if (!ProcessorId || !HalpRiscvQueryProcessorHartId(ProcessorNumber, &HartId) ||
+        (HartId > MAXULONG))
+        return STATUS_INVALID_PARAMETER;
+    *ProcessorId = (ULONG)HartId;
+    return STATUS_SUCCESS;
+}
+
+/* No WHEA error source, PMU counter set or UEFI variable service. */
+VOID
+NTAPI
+HalBugCheckSystem(
+    _In_ PWHEA_ERROR_SOURCE_DESCRIPTOR ErrorSource,
+    _In_ PWHEA_ERROR_RECORD ErrorRecord)
+{
+    UNREFERENCED_PARAMETER(ErrorSource);
+    UNREFERENCED_PARAMETER(ErrorRecord);
+}
+
+NTSTATUS
+NTAPI
+HalAllocateHardwareCounters(
+    _In_reads_(GroupCount) PGROUP_AFFINITY GroupAffinity,
+    _In_ ULONG GroupCount,
+    _In_ PPHYSICAL_COUNTER_RESOURCE_LIST ResourceList,
+    _Out_ PHANDLE CounterSetHandle)
+{
+    UNREFERENCED_PARAMETER(GroupAffinity);
+    UNREFERENCED_PARAMETER(GroupCount);
+    UNREFERENCED_PARAMETER(ResourceList);
+    if (CounterSetHandle) *CounterSetHandle = NULL;
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalFreeHardwareCounters(
+    _In_ HANDLE CounterSetHandle)
+{
+    UNREFERENCED_PARAMETER(CounterSetHandle);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalEnumerateEnvironmentVariablesEx(
+    _In_ ULONG InformationClass,
+    _Out_writes_bytes_opt_(*BufferLength) PVOID Buffer,
+    _Inout_opt_ PULONG BufferLength)
+{
+    UNREFERENCED_PARAMETER(InformationClass);
+    UNREFERENCED_PARAMETER(Buffer);
+    if (BufferLength) *BufferLength = 0;
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalGetEnvironmentVariableEx(
+    _In_ PWSTR VariableName,
+    _In_ LPCGUID VendorGuid,
+    _Out_writes_bytes_opt_(*ValueLength) PVOID Value,
+    _Inout_ PULONG ValueLength,
+    _Out_opt_ PULONG Attributes)
+{
+    UNREFERENCED_PARAMETER(VariableName);
+    UNREFERENCED_PARAMETER(VendorGuid);
+    UNREFERENCED_PARAMETER(Value);
+    if (ValueLength) *ValueLength = 0;
+    if (Attributes) *Attributes = 0;
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalSetEnvironmentVariableEx(
+    _In_ PWSTR VariableName,
+    _In_ LPCGUID VendorGuid,
+    _In_reads_bytes_(ValueLength) PVOID Value,
+    _In_ ULONG ValueLength,
+    _In_ ULONG Attributes)
+{
+    UNREFERENCED_PARAMETER(VariableName);
+    UNREFERENCED_PARAMETER(VendorGuid);
+    UNREFERENCED_PARAMETER(Value);
+    UNREFERENCED_PARAMETER(ValueLength);
+    UNREFERENCED_PARAMETER(Attributes);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalQueryEnvironmentVariableInfoEx(
+    _In_ ULONG Attributes,
+    _Out_opt_ PULONGLONG MaximumVariableStorageSize,
+    _Out_opt_ PULONGLONG RemainingVariableStorageSize,
+    _Out_opt_ PULONGLONG MaximumVariableSize)
+{
+    UNREFERENCED_PARAMETER(Attributes);
+    UNREFERENCED_PARAMETER(MaximumVariableStorageSize);
+    UNREFERENCED_PARAMETER(RemainingVariableStorageSize);
+    UNREFERENCED_PARAMETER(MaximumVariableSize);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* ACPI PCI routing hooks: this platform routes PCI INTx through its device
+ * tree, and the ACPI driver is not part of it. */
+VOID
+NTAPI
+HalpConfigurePciRootBridge(
+    _In_ const HAL_ACPI_PCI_ROOT_INFO *Info)
+{
+    UNREFERENCED_PARAMETER(Info);
+}
+
+VOID
+NTAPI
+HalpRegisterPciRouteQuery(
+    _In_opt_ PHAL_ACPI_PCI_ROUTE_QUERY Provider)
+{
+    UNREFERENCED_PARAMETER(Provider);
+}
+
+VOID
+NTAPI
+HalpSetPciRoutingMap(
+    _In_reads_opt_(EntryCount) const HAL_ACPI_PCI_ROUTE_ENTRY *Entries,
+    _In_ ULONG EntryCount)
+{
+    UNREFERENCED_PARAMETER(Entries);
+    UNREFERENCED_PARAMETER(EntryCount);
+}
+
+VOID
+NTAPI
+HalpRecordPciMaxGsi(
+    _In_ const HAL_ACPI_PCI_ROUTE_ENTRY *Entry)
+{
+    UNREFERENCED_PARAMETER(Entry);
 }

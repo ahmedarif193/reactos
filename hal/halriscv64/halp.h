@@ -77,15 +77,12 @@ BOOLEAN HalpRiscvPlicHasSource(_In_ ULONG Phandle, _In_ ULONG Source);
 BOOLEAN HalpRiscvPlicValidSource(_In_ ULONG Source);
 ULONG NTAPI HalpRiscvClaimPlicInterrupt(VOID);
 VOID NTAPI HalpRiscvCompletePlicInterrupt(_In_ ULONG Source);
-BOOLEAN NTAPI HalpRiscvPlicIsDeviceMemory(_In_ PHYSICAL_ADDRESS Address, _In_ SIZE_T Length);
 BOOLEAN HalpRiscvGetPciResource(_Out_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Resource);
 BOOLEAN NTAPI HalpRiscvGetPciBusRange(_Out_ PULONG FirstBus, _Out_ PULONG LastBus);
 BOOLEAN HalpRiscvPciDmaCoherent(VOID);
 NTSTATUS NTAPI HaliInitPnpDriver(VOID);
 BOOLEAN HalpRiscvInitializeRtc(const VOID *DeviceTree, SIZE_T DeviceTreeSize);
 BOOLEAN HalpRiscvMapRtc(VOID);
-BOOLEAN HalpRiscvRtcIsDeviceMemory(PHYSICAL_ADDRESS Address, SIZE_T Length);
-BOOLEAN NTAPI HalpRiscvIsDeviceMemory(_In_ PHYSICAL_ADDRESS Address, _In_ SIZE_T Length);
 ULONG64 HalpRiscvReadTime(VOID);
 BOOLEAN HalpRiscvReadTimebaseFrequency(
     _In_reads_bytes_(DeviceTreeSize) const VOID *DeviceTree,

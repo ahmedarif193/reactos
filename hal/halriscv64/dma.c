@@ -249,3 +249,115 @@ HalGetAdapter(PDEVICE_DESCRIPTION DeviceDescription, PULONG NumberOfMapRegisters
         *NumberOfMapRegisters = 64;
     return (PADAPTER_OBJECT)Adapter;
 }
+
+/* Legacy HAL DMA entry points: the adapter object is the one HalGetAdapter
+ * returned, so they forward to its operations. */
+PVOID
+NTAPI
+HalAllocateCommonBuffer(
+    _In_ PADAPTER_OBJECT AdapterObject,
+    _In_ ULONG Length,
+    _Out_ PPHYSICAL_ADDRESS LogicalAddress,
+    _In_ BOOLEAN CacheEnabled)
+{
+    return HalpRiscvAllocateCommonBuffer((PDMA_ADAPTER)AdapterObject, Length,
+                                         LogicalAddress, CacheEnabled);
+}
+
+VOID
+NTAPI
+HalFreeCommonBuffer(
+    _In_ PADAPTER_OBJECT AdapterObject,
+    _In_ ULONG Length,
+    _In_ PHYSICAL_ADDRESS LogicalAddress,
+    _In_ PVOID VirtualAddress,
+    _In_ BOOLEAN CacheEnabled)
+{
+    HalpRiscvFreeCommonBuffer((PDMA_ADAPTER)AdapterObject, Length, LogicalAddress,
+                              VirtualAddress, CacheEnabled);
+}
+
+/* HalGetAdapter only admits coherent DMA: there is no cache state to flush. */
+VOID
+NTAPI
+HalFlushCommonBuffer(
+    _In_ PADAPTER_OBJECT AdapterObject,
+    _In_ PVOID VirtualAddress,
+    _In_ PHYSICAL_ADDRESS LogicalAddress,
+    _In_ ULONG Length,
+    _In_ BOOLEAN WriteToDevice)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+    UNREFERENCED_PARAMETER(VirtualAddress);
+    UNREFERENCED_PARAMETER(LogicalAddress);
+    UNREFERENCED_PARAMETER(Length);
+    UNREFERENCED_PARAMETER(WriteToDevice);
+}
+
+ULONG
+NTAPI
+HalReadDmaCounter(
+    _In_ PADAPTER_OBJECT AdapterObject)
+{
+    return HalpRiscvReadDmaCounter((PDMA_ADAPTER)AdapterObject);
+}
+
+/* Bus-master PCI DMA has no crash-dump map registers to reserve. */
+PVOID
+NTAPI
+HalAllocateCrashDumpRegisters(
+    _In_ PADAPTER_OBJECT AdapterObject,
+    _Inout_ PULONG NumberOfMapRegisters)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+    if (NumberOfMapRegisters)
+        *NumberOfMapRegisters = 0;
+    return NULL;
+}
+
+BOOLEAN
+NTAPI
+IoFlushAdapterBuffers(
+    _In_ PADAPTER_OBJECT AdapterObject,
+    _In_ PMDL Mdl,
+    _In_ PVOID MapRegisterBase,
+    _In_ PVOID CurrentVa,
+    _In_ ULONG Length,
+    _In_ BOOLEAN WriteToDevice)
+{
+    return HalpRiscvFlushAdapterBuffers((PDMA_ADAPTER)AdapterObject, Mdl, MapRegisterBase,
+                                        CurrentVa, Length, WriteToDevice);
+}
+
+VOID
+NTAPI
+IoFreeAdapterChannel(
+    _In_ PADAPTER_OBJECT AdapterObject)
+{
+    HalpRiscvFreeAdapterChannel((PDMA_ADAPTER)AdapterObject);
+}
+
+VOID
+NTAPI
+IoFreeMapRegisters(
+    _In_ PADAPTER_OBJECT AdapterObject,
+    _In_ PVOID MapRegisterBase,
+    _In_ ULONG NumberOfMapRegisters)
+{
+    HalpRiscvFreeMapRegisters((PDMA_ADAPTER)AdapterObject, MapRegisterBase,
+                              NumberOfMapRegisters);
+}
+
+PHYSICAL_ADDRESS
+NTAPI
+IoMapTransfer(
+    _In_ PADAPTER_OBJECT AdapterObject,
+    _In_ PMDL Mdl,
+    _In_ PVOID MapRegisterBase,
+    _In_ PVOID CurrentVa,
+    _Inout_ PULONG Length,
+    _In_ BOOLEAN WriteToDevice)
+{
+    return HalpRiscvMapTransfer((PDMA_ADAPTER)AdapterObject, Mdl, MapRegisterBase,
+                                CurrentVa, Length, WriteToDevice);
+}
