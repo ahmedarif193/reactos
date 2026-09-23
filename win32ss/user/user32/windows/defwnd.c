@@ -25,6 +25,8 @@ GetSysColor(int nIndex)
 #else
     if (!gpsi)
       return 0;
+    if (gfDefaultSysColors)
+      return (DWORD)NtUserCallOneParam(nIndex, ONEPARAM_ROUTINE_ROS_GETSYSCOLOR);
     return gpsi->argbSystem[nIndex];
 #endif
   }
@@ -48,6 +50,8 @@ GetSysColorBrush(int nIndex)
 #else
     if (!gpsi)
       return NULL;
+    if (gfDefaultSysColors)
+      return (HBRUSH)NtUserCallOneParam(nIndex, ONEPARAM_ROUTINE_ROS_GETSYSCOLORBRUSH);
     return gpsi->ahbrSystem[nIndex];
 #endif
   }

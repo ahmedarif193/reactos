@@ -45,6 +45,7 @@ extern PUSER_HANDLE_TABLE gHandleTable;
 extern PUSER_HANDLE_ENTRY gHandleEntries;
 extern BOOLEAN gfLogonProcess;
 extern BOOLEAN gfServerProcess;
+extern BOOLEAN gfDefaultSysColors;
 extern CRITICAL_SECTION U32AccelCacheLock;
 extern HINSTANCE ghImm32;
 extern RTL_CRITICAL_SECTION gcsUserApiHook;

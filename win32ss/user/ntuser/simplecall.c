@@ -345,6 +345,18 @@ NtUserCallOneParam(
             Result = (DWORD_PTR)gpsi->hbrGray;
             break;
 
+        case ONEPARAM_ROUTINE_ROS_USEDEFAULTSYSCOLORS:
+        {
+            PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
+
+            Result = !!(ppi->W32PF_flags & W32PF_DEFAULTSYSCOLORS);
+            if (Param)
+                ppi->W32PF_flags |= W32PF_DEFAULTSYSCOLORS;
+            else
+                ppi->W32PF_flags &= ~W32PF_DEFAULTSYSCOLORS;
+            break;
+        }
+
         case ONEPARAM_ROUTINE_SWAPMOUSEBUTTON:
         {
             Result = gspv.bMouseBtnSwap;
