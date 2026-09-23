@@ -194,7 +194,8 @@ RealSystemParametersInfoA(UINT uiAction,
         {
            LPNONCLIENTMETRICSA pnclma = (LPNONCLIENTMETRICSA)pvParam;
            NONCLIENTMETRICSW nclmw;
-           if(pnclma->cbSize != sizeof(NONCLIENTMETRICSA))
+           if(pnclma->cbSize != sizeof(NONCLIENTMETRICSA) &&
+              pnclma->cbSize != FIELD_OFFSET(NONCLIENTMETRICSA, iPaddedBorderWidth))
            {
                SetLastError(ERROR_INVALID_PARAMETER);
                return FALSE;
@@ -204,6 +205,9 @@ RealSystemParametersInfoA(UINT uiAction,
            if (!SystemParametersInfoW(uiAction, sizeof(NONCLIENTMETRICSW),
                                       &nclmw, fWinIni))
              return FALSE;
+
+           if (pnclma->cbSize == sizeof(NONCLIENTMETRICSA))
+               pnclma->iPaddedBorderWidth = nclmw.iPaddedBorderWidth;
 
            pnclma->iBorderWidth = nclmw.iBorderWidth;
            pnclma->iScrollWidth = nclmw.iScrollWidth;
@@ -225,12 +229,14 @@ RealSystemParametersInfoA(UINT uiAction,
         {
            LPNONCLIENTMETRICSA pnclma = (LPNONCLIENTMETRICSA)pvParam;
            NONCLIENTMETRICSW nclmw;
-           if(pnclma->cbSize != sizeof(NONCLIENTMETRICSA))
+           if(pnclma->cbSize != sizeof(NONCLIENTMETRICSA) &&
+              pnclma->cbSize != FIELD_OFFSET(NONCLIENTMETRICSA, iPaddedBorderWidth))
            {
                SetLastError(ERROR_INVALID_PARAMETER);
                return FALSE;
            }
            nclmw.cbSize = sizeof(NONCLIENTMETRICSW);
+           nclmw.iPaddedBorderWidth = (pnclma->cbSize == sizeof(NONCLIENTMETRICSA)) ? pnclma->iPaddedBorderWidth : 0;
            nclmw.iBorderWidth = pnclma->iBorderWidth;
            nclmw.iScrollWidth = pnclma->iScrollWidth;
            nclmw.iScrollHeight = pnclma->iScrollHeight;
