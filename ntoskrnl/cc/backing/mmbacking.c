@@ -124,7 +124,7 @@ CcMmFlush(
 
         Address = (ULONG64)(ULONG_PTR)Range.Address;
         Size = Range.Length;
-        Status = MiFlushVirtualMemory(&NtMap->Control->Segment->System->SystemSpace, &Address, &Size);
+        Status = MiFlushVirtualMemory(&NtMap->Control->Segment->System->SystemSpace, &Address, &Size, FALSE);
         Offset += Range.Length;
         Length -= Range.Length;
         CcViewRelease(&Range);

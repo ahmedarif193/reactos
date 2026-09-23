@@ -1148,7 +1148,7 @@
 @ stdcall RtlMakeSelfRelativeSD(ptr ptr ptr)
 @ stdcall RtlMapGenericMask(long ptr)
 @ stdcall RtlMapSecurityErrorToNtStatus(long)
-@ stdcall -arch=i386,x86_64,arm RtlMoveMemory(ptr ptr long)
+@ stdcall -arch=i386,x86_64,arm,riscv64 RtlMoveMemory(ptr ptr long)
 @ stdcall -arch=arm64 RtlMoveMemory(ptr ptr long) RtlpUserMemmove
 @ stdcall RtlMultiAppendUnicodeStringBuffer(ptr long ptr)
 @ stdcall RtlMultiByteToUnicodeN(ptr long ptr ptr long)

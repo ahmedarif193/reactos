@@ -3832,8 +3832,11 @@ KdbpPrintAllThreadBackTraces(IN BOOLEAN Verbose)
     }
 
 Cleanup:
-    if (!KdbpAttachToThread(OriginalThreadId))
+    if (KdbCurrentThread != KdbOriginalThread &&
+        !KdbpAttachToThread(OriginalThreadId))
+    {
         KdbpPrint("bt all: WARNING: Could not restore debugger-entry thread %p.\n", OriginalThreadId);
+    }
 }
 
 static BOOLEAN
