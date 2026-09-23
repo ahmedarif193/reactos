@@ -165,7 +165,7 @@ MiControlImageRead(
 
 static MI_FILE_OPS MiControlFileOps =
 {
-    MiControlRead, MiControlWrite, MiControlRelease, MiControlWriteFrames, MiControlReadAsync
+    MiControlRead, MiControlWrite, MiControlRelease, MiControlWriteFrames, MiControlReadAsync, TRUE
 };
 static MI_FILE_OPS MiControlImageOps =
 {

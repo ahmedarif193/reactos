@@ -344,6 +344,7 @@ typedef struct _MI_FILE_OPS
     NTSTATUS (*ReadAsync)(_In_opt_ PVOID Context, _In_ ULONG64 Offset, _In_ ULONG Frame,
                           _In_ PVOID Buffer, _In_ MI_READ_COMPLETION Completion,
                           _In_opt_ PVOID CompletionContext);
+    BOOLEAN WholePageReads;
 } MI_FILE_OPS, *PMI_FILE_OPS;
 
 #define MI_MAX_FILE_IO_PAGES 16
