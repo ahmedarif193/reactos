@@ -143,6 +143,10 @@ CsrNotifyWaitBlock(IN PCSR_WAIT_BLOCK WaitBlock,
             CsrReleaseCapturedArguments(&WaitBlock->WaitApiMessage);
         }
 
+#ifdef _WIN64
+        if (WaitBlock->WaitThread->Process->Flags & CsrProcessIsWow64) CsrWow64MessageToClient(&WaitBlock->WaitApiMessage);
+#endif
+
         /* Reply to the port */
         NtReplyPort(WaitBlock->WaitThread->Process->ClientPort,
                     &WaitBlock->WaitApiMessage.Header);

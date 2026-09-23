@@ -13,6 +13,10 @@ list(APPEND SOURCE
     wait.c
     srv.h)
 
+if(ARCH MATCHES "64$")
+    list(APPEND SOURCE wow64.c)
+endif()
+
 add_library(csrsrv MODULE
     ${SOURCE}
     csrsrv.rc

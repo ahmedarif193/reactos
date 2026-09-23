@@ -87,6 +87,21 @@ VOID
 NTAPI
 CsrReleaseCapturedArguments(IN PCSR_API_MESSAGE ApiMessage);
 
+#ifdef _WIN64
+VOID
+NTAPI
+CsrWow64MessageToServer(IN OUT PCSR_API_MESSAGE ApiMessage);
+
+VOID
+NTAPI
+CsrWow64MessageToClient(IN OUT PCSR_API_MESSAGE ApiMessage);
+
+ULONG_PTR
+NTAPI
+CsrWow64GetMessagePointerOffset(IN PCSR_API_MESSAGE ApiMessage,
+                                IN ULONG Offset32);
+#endif
+
 NTSTATUS
 NTAPI
 CsrLoadServerDll(IN PCHAR DllString,

@@ -904,12 +904,19 @@ CsrApiRequestThread(IN PVOID Parameter)
         /* Now we reply to a particular client */
         ReplyPort = CsrThread->Process->ClientPort;
 
+#ifdef _WIN64
+        if (CsrThread->Process->Flags & CsrProcessIsWow64) CsrWow64MessageToServer(&ReceiveMsg);
+#endif
+
         /* Check if there's a capture buffer */
         if (ReceiveMsg.CsrCaptureData)
         {
             /* Capture the arguments */
             if (!CsrCaptureArguments(CsrThread, &ReceiveMsg))
             {
+#ifdef _WIN64
+                if (CsrThread->Process->Flags & CsrProcessIsWow64) CsrWow64MessageToClient(&ReceiveMsg);
+#endif
                 /* Ignore this message if we failed to get the arguments */
                 CsrDereferenceThread(CsrThread);
                 continue;
@@ -967,6 +974,9 @@ CsrApiRequestThread(IN PVOID Parameter)
                 {
                     CsrReleaseCapturedArguments(&ReceiveMsg);
                 }
+#ifdef _WIN64
+                if (CsrThread->Process->Flags & CsrProcessIsWow64) CsrWow64MessageToClient(&ReceiveMsg);
+#endif
                 CsrDereferenceThread(CsrThread);
             }
         }
@@ -1313,7 +1323,30 @@ CsrpGetWow64MessagePointerOffset(PCSR_API_MESSAGE ApiMessage, ULONG Offset32)
 {
     if (!Offset32) return 0;
     if (ApiMessage->ApiNumber == 0 && Offset32 == FIELD_OFFSET(CSR_API_MESSAGE32, Data.CsrClientConnect.ConnectionInfo)) return FIELD_OFFSET(CSR_API_MESSAGE, Data.CsrClientConnect.ConnectionInfo);
-    return MAXULONG_PTR;
+    return CsrWow64GetMessagePointerOffset(ApiMessage, Offset32);
+}
+
+static ULONG_PTR
+CsrpGetWow64StartInfoOffset(PCSR_API_MESSAGE ApiMessage)
+{
+    if (ApiMessage->ApiNumber == CSR_CREATE_API_NUMBER(CONSRV_SERVERDLL_INDEX, ConsolepAlloc)) return FIELD_OFFSET(CONSOLE_API_MESSAGE, Data.AllocConsoleRequest.ConsoleStartInfo);
+    if (ApiMessage->ApiNumber == CSR_CREATE_API_NUMBER(CONSRV_SERVERDLL_INDEX, ConsolepAttach)) return FIELD_OFFSET(CONSOLE_API_MESSAGE, Data.AttachConsoleRequest.ConsoleStartInfo);
+    return 0;
+}
+
+static BOOLEAN
+CsrpCaptureStartInfo32(PCSR_API_MESSAGE ApiMessage, PCSR_CAPTURE_BUFFER ServerCaptureBuffer, ULONG_PTR ServerDataAddress, SIZE_T ClientDataLength)
+{
+    ULONG_PTR StartInfoOffset = CsrpGetWow64StartInfoOffset(ApiMessage);
+    PULONG_PTR MessagePointer = (PULONG_PTR)((ULONG_PTR)ApiMessage + StartInfoOffset);
+    PCONSOLE_START_INFO StartInfo = (PCONSOLE_START_INFO)((ULONG_PTR)ServerCaptureBuffer + ServerCaptureBuffer->Size - sizeof(CONSOLE_START_INFO));
+
+    if (!StartInfoOffset || !*MessagePointer) return TRUE;
+    if (ClientDataLength < sizeof(CONSOLE_START_INFO32) || *MessagePointer < ServerDataAddress || *MessagePointer - ServerDataAddress > ClientDataLength - sizeof(CONSOLE_START_INFO32)) return FALSE;
+    CsrpConsoleStartInfo32To64(StartInfo, (PCONSOLE_START_INFO32)*MessagePointer);
+    ServerCaptureBuffer->BufferEnd = (PVOID)*MessagePointer;
+    *MessagePointer = (ULONG_PTR)StartInfo;
+    return TRUE;
 }
 
 static BOOLEAN
@@ -1386,6 +1419,10 @@ CsrpCaptureArguments32(PCSR_THREAD CsrThread, PCSR_API_MESSAGE ApiMessage)
         ServerDataLength += sizeof(CONSRV_API_CONNECTINFO) - sizeof(CONSRV_API_CONNECTINFO32);
         ApiMessage->Data.CsrClientConnect.ConnectionInfoSize = sizeof(CONSRV_API_CONNECTINFO);
     }
+    else if (CsrpGetWow64StartInfoOffset(ApiMessage))
+    {
+        ServerDataLength = ALIGN_UP_BY(ClientDataLength, sizeof(ULONG_PTR)) + sizeof(CONSOLE_START_INFO);
+    }
 
     ServerHeaderSize = FIELD_OFFSET(CSR_CAPTURE_BUFFER, PointerOffsetsArray) + PointerCount * sizeof(ULONG_PTR);
     if (ServerHeaderSize > MAXULONG - ServerDataLength)
@@ -1432,6 +1469,11 @@ CsrpCaptureArguments32(PCSR_THREAD CsrThread, PCSR_API_MESSAGE ApiMessage)
             }
             *MessagePointer += ServerDataAddress - ClientDataAddress;
         }
+        if (!CsrpCaptureStartInfo32(ApiMessage, ServerCaptureBuffer, ServerDataAddress, ClientDataLength))
+        {
+            ApiMessage->Status = STATUS_INVALID_PARAMETER;
+            _SEH2_YIELD(RtlFreeHeap(CsrHeap, 0, ServerCaptureBuffer); return FALSE);
+        }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -1455,9 +1497,18 @@ CsrpReleaseCapturedArguments32(PCSR_API_MESSAGE ApiMessage, PCSR_CAPTURE_BUFFER 
     SIZE_T ServerHeaderSize = FIELD_OFFSET(CSR_CAPTURE_BUFFER, PointerOffsetsArray) + PointerCount * sizeof(ULONG_PTR);
     ULONG_PTR ClientDataAddress = (ULONG_PTR)ClientCaptureBuffer + ClientHeaderSize;
     ULONG_PTR ServerDataAddress = (ULONG_PTR)ServerCaptureBuffer + ServerHeaderSize;
-    ULONG ClientLength = ClientCaptureBuffer->Size;
+    SIZE_T ClientDataLength = ClientCaptureBuffer->Size - ClientHeaderSize;
+    SIZE_T ServerDataLength = ServerCaptureBuffer->Size - ServerHeaderSize;
     BOOLEAN ConsoleConnect = ApiMessage->ApiNumber == 0 && ApiMessage->Data.CsrClientConnect.ServerId == CONSRV_SERVERDLL_INDEX;
     ULONG Index;
+
+    if (ServerCaptureBuffer->BufferEnd)
+    {
+        ServerDataLength -= sizeof(CONSOLE_START_INFO);
+        CsrpConsoleStartInfo64To32((PCONSOLE_START_INFO32)ServerCaptureBuffer->BufferEnd, (PCONSOLE_START_INFO)(ServerDataAddress + ServerDataLength));
+        *(PULONG_PTR)((ULONG_PTR)ApiMessage + CsrpGetWow64StartInfoOffset(ApiMessage)) = (ULONG_PTR)ServerCaptureBuffer->BufferEnd;
+    }
+    if (ClientDataLength > ServerDataLength) ClientDataLength = ServerDataLength;
 
     for (Index = 0; Index < PointerCount; ++Index)
     {
@@ -1474,7 +1525,7 @@ CsrpReleaseCapturedArguments32(PCSR_API_MESSAGE ApiMessage, PCSR_CAPTURE_BUFFER 
             CsrpConsoleConnectInfo64To32((PCONSRV_API_CONNECTINFO32)ClientDataAddress, (PCONSRV_API_CONNECTINFO)ServerDataAddress);
             ApiMessage->Data.CsrClientConnect.ConnectionInfoSize = sizeof(CONSRV_API_CONNECTINFO32);
         }
-        else RtlMoveMemory((PVOID)ClientDataAddress, (PVOID)ServerDataAddress, ClientLength - ClientHeaderSize);
+        else RtlMoveMemory((PVOID)ClientDataAddress, (PVOID)ServerDataAddress, ClientDataLength);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
