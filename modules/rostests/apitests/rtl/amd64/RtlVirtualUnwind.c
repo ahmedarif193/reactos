@@ -445,6 +445,78 @@ static VOID Test_SaveNonvolFar(VOID)
     ok_eq_hex64(Ctx.Rsp, Stack + 8);
 }
 
+START_TEST(RtlVirtualUnwindChainedHandler)
+{
+    TEST_UNWIND_INFO *Primary, *Child, *Outer;
+    PRUNTIME_FUNCTION Link;
+    RUNTIME_FUNCTION Func;
+    CONTEXT Ctx;
+    PEXCEPTION_ROUTINE Handler;
+    PVOID HandlerData;
+    PULONG HandlerWords;
+    ULONG_PTR Frame, Stack = (ULONG_PTR)g_StackBuffer;
+    ULONG Depth, HandlerType;
+
+    RtlpInitialize();
+    for (Depth = 1; Depth <= 2; ++Depth)
+    for (HandlerType = UNW_FLAG_EHANDLER; HandlerType <= UNW_FLAG_UHANDLER; ++HandlerType)
+    {
+        RtlZeroMemory(g_Image.Unwind, sizeof(g_Image.Unwind));
+        RtlZeroMemory(g_StackBuffer, sizeof(g_StackBuffer));
+        g_StackBuffer[4] = 0x1122334455667788ULL; /* saved RBP */
+        g_StackBuffer[5] = 0x8877665544332211ULL; /* return RIP */
+
+        /* The primary record has an odd code count, hence padding before
+         * its handler RVA. Secondary records must inherit this handler and
+         * its data, never interpret the chained function's start as code. */
+        Primary = (TEST_UNWIND_INFO *)(g_Image.Unwind + PARENT_OFFSET);
+        Primary->Version = 1;
+        Primary->Flags = HandlerType;
+        Primary->SizeOfProlog = 1;
+        Primary->CountOfCodes = 1;
+        SetCode(Primary, 0, 1, UWOP_PUSH_NONVOL, REG_RBP);
+        HandlerWords = (PULONG)&Primary->UnwindCode[2];
+        HandlerWords[0] = FIELD_OFFSET(IMAGE_STRUCT, Code) + 0x800;
+        HandlerWords[1] = 0x12345678;
+
+        Child = ResetUnwindInfo(1, 4, 1);
+        Child->Flags = UNW_FLAG_CHAININFO;
+        SetCode(Child, 0, 4, UWOP_ALLOC_SMALL, 3); /* sub rsp, 0x20 */
+        Link = (PRUNTIME_FUNCTION)&Child->UnwindCode[2];
+        Link->BeginAddress = FIELD_OFFSET(IMAGE_STRUCT, Code);
+        Link->EndAddress = Link->BeginAddress + 0x100;
+        Link->UnwindData = FIELD_OFFSET(IMAGE_STRUCT, Unwind) + PARENT_OFFSET;
+
+        Func.BeginAddress = FIELD_OFFSET(IMAGE_STRUCT, Code) + 0x200;
+        Func.EndAddress = Func.BeginAddress + 0x100;
+        Func.UnwindData = FIELD_OFFSET(IMAGE_STRUCT, Unwind);
+        if (Depth == 2)
+        {
+            /* A disjoint cold block can have no codes of its own. */
+            Outer = (TEST_UNWIND_INFO *)(g_Image.Unwind + 2 * PARENT_OFFSET);
+            Outer->Version = 1;
+            Outer->Flags = UNW_FLAG_CHAININFO;
+            *(PRUNTIME_FUNCTION)&Outer->UnwindCode[0] = Func;
+            Func.BeginAddress += 0x200;
+            Func.EndAddress += 0x200;
+            Func.UnwindData += 2 * PARENT_OFFSET;
+        }
+
+        InitContext(&Ctx, Stack);
+        HandlerData = NULL;
+        Frame = 0;
+        Handler = RtlVirtualUnwind(HandlerType, (ULONG_PTR)&g_Image,
+                (ULONG_PTR)&g_Image + Func.BeginAddress + 4, &Func, &Ctx,
+                &HandlerData, &Frame, NULL);
+        ok_eq_pointer(Handler, g_Image.Code + 0x800);
+        ok_eq_pointer(HandlerData, &HandlerWords[1]);
+        ok_eq_hex64(Frame, Stack);
+        ok_eq_hex64(Ctx.Rbp, 0x1122334455667788ULL);
+        ok_eq_hex64(Ctx.Rip, 0x8877665544332211ULL);
+        ok_eq_hex64(Ctx.Rsp, Stack + 0x30);
+    }
+}
+
 static VOID Test_SaveXmm128Far(VOID)
 {
     CONTEXT Ctx;
