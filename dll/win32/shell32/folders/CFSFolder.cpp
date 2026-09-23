@@ -161,8 +161,11 @@ static HRESULT GetCLSIDForFileTypeFromExtension(LPCWSTR pExtension, LPCWSTR KeyN
     }
 
     HRESULT hres = CLSIDFromString (wszCLSIDValue, pclsid);
-    if (FAILED_UNEXPECTEDLY(hres))
-        return hres;
+    if (FAILED(hres))
+    {
+        WARN("Invalid handler CLSID %S for key %S\n", wszCLSIDValue, KeyName);
+        return S_FALSE;
+    }
 
     return S_OK;
 }
