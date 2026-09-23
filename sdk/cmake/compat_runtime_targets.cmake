@@ -8,6 +8,7 @@
 # Each nested build compiles these targets for its own architecture.
 
 set(COMPAT_RUNTIME_MODULES
+    actxprxy
     advapi32
     advapi32_vista
     advpack
@@ -26,6 +27,7 @@ set(COMPAT_RUNTIME_MODULES
     comctl32
     comdlg32
     coml2
+    compstui
     crypt32
     cryptnet
     cryptsp
@@ -64,6 +66,7 @@ set(COMPAT_RUNTIME_MODULES
     hhctrl
     hid
     hlink
+    hnetcfg
     ieframe
     iertutil
     imagehlp
@@ -93,6 +96,7 @@ set(COMPAT_RUNTIME_MODULES
     msvcrt
     mswsock
     msxml3
+    msxml6
     ncrypt
     netapi32
     newdev
@@ -108,6 +112,7 @@ set(COMPAT_RUNTIME_MODULES
     oleaut32
     opengl32
     powrprof
+    printui
     profapi
     propsys
     psapi
