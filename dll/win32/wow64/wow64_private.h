@@ -66,6 +66,9 @@ extern void     (WINAPI *pBTCpuNotifyUnmapViewOfSection)( void *, BOOL, NTSTATUS
 extern void     (WINAPI *pBTCpuUpdateProcessorInformation)( SYSTEM_CPU_INFORMATION * );
 extern void     (WINAPI *pBTCpuProcessTerm)( HANDLE, BOOL, NTSTATUS );
 extern void     (WINAPI *pBTCpuThreadTerm)( HANDLE, LONG );
+#ifdef __REACTOS__
+extern NTSTATUS WINAPI Wow64SuspendLocalThread( HANDLE, ULONG * );
+#endif
 
 struct object_attr64
 {
@@ -575,6 +578,17 @@ static inline void put_iosb( IO_STATUS_BLOCK32 *io32, const IO_STATUS_BLOCK *io 
         io32->Information = io->Information;
     }
 }
+
+#ifdef __REACTOS__
+#ifdef __aarch64__
+static inline ULONG_PTR host_context_pc( const CONTEXT *context ) { return context->Pc; }
+static inline ULONG_PTR host_context_param( const CONTEXT *context, unsigned int index ) { return index ? context->X1 : context->X0; }
+#elif defined(__x86_64__)
+static inline ULONG_PTR host_context_pc( const CONTEXT *context ) { return context->Rip; }
+static inline ULONG_PTR host_context_param( const CONTEXT *context, unsigned int index ) { return index ? context->Rdx : context->Rcx; }
+/* TODO(riscv64): host_context_pc/host_context_param for a riscv64 host (Pc, A0, A1) */
+#endif
+#endif
 
 extern void put_section_image_info( SECTION_IMAGE_INFORMATION32 *info32,
                                     const SECTION_IMAGE_INFORMATION *info );
