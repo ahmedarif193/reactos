@@ -1115,8 +1115,14 @@ GpuVaApplyCopyOperation(
  */
 C_ASSERT(sizeof(DXGK_PTE) == 16);
 
-/* Bounds user-controlled NonPagedPool growth. */
-#define GPUVA_MAX_PROCESS_PAGE_TABLES 1024UL
+/* Bound resident bookkeeping by memory, not by an address-space limit.
+ * 1024 tables cannot describe even one unaligned 2 GiB zero reservation with
+ * 4 KiB pages once its directory tables and other mappings are included.
+ * Each process gets 1/64 of installed RAM, between 16 and 256 MiB, for tables
+ * and their software entries. Paging snapshots require additional transient
+ * memory; allocation failure continues to be propagated to the caller. */
+#define GPUVA_MIN_PAGE_TABLE_BUDGET (16ULL * 1024 * 1024)
+#define GPUVA_MAX_PAGE_TABLE_BUDGET (256ULL * 1024 * 1024)
 #define GPUVA_PAGING_SYNC_TIMEOUT_MS  2000UL
 
 FORCEINLINE
@@ -1201,8 +1207,9 @@ GpuVaAllocPageTable(
     ULONG TableBytes;
     ULONG EntryCount;
     ULONG SegmentId;
+    ULONGLONG Charge;
 
-    if (Process->GpuVaPageTableCount >= GPUVA_MAX_PROCESS_PAGE_TABLES)
+    if (Process->GpuVaPageTableCount == MAXULONG)
         return NULL;
     if (Adapter == NULL || !Adapter->PageTableLevelsValid || Level >= GpuVaLevelCount(Adapter))
         return NULL;
@@ -1228,6 +1235,13 @@ GpuVaAllocPageTable(
     TableBytes = GpuVaTableBytes(Adapter, Level);
     EntryCount = (ULONG)GpuVaEntriesPerTable(Adapter, Level);
     if ((SIZE_T)EntryCount > MAXULONG_PTR / sizeof(*Table->Entries))
+        return NULL;
+    Charge = sizeof(*Table) + (ULONGLONG)TableBytes +
+             (ULONGLONG)EntryCount * sizeof(*Table->Entries);
+    if (Level > 0)
+        Charge += (ULONGLONG)EntryCount * sizeof(*Table->Children);
+    if (Charge > Process->GpuVaPageTableBudget ||
+        Process->GpuVaPageTableBytes > Process->GpuVaPageTableBudget - Charge)
         return NULL;
 
     Table = (PDXGKRNL_GPUVA_PAGE_TABLE)ExAllocatePoolWithTag(
@@ -1306,6 +1320,7 @@ GpuVaAllocPageTable(
 
     InsertTailList(&Process->GpuVaPageTableList, &Table->PageTableListEntry);
     Process->GpuVaPageTableCount++;
+    Process->GpuVaPageTableBytes += Charge;
     return Table;
 }
 
@@ -1399,6 +1414,7 @@ GpuVaFreePageTables(
         ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
     }
     Process->GpuVaPageTableCount = 0;
+    Process->GpuVaPageTableBytes = 0;
     Process->hRootPageTable = NULL;
     Process->RootPageTableEntries = 0;
     Process->RootPageTableProgrammed = FALSE;
@@ -2790,6 +2806,10 @@ DxgkGpuVaCreateProcess(
     Process->RootPageTableProgrammed = FALSE;
     InitializeListHead(&Process->GpuVaPageTableList);
     Process->GpuVaPageTableCount = 0;
+    Process->GpuVaPageTableBytes = 0;
+    Process->GpuVaPageTableBudget = min(GPUVA_MAX_PAGE_TABLE_BUDGET,
+        max(GPUVA_MIN_PAGE_TABLE_BUDGET,
+            ((ULONGLONG)SharedUserData->NumberOfPhysicalPages << PAGE_SHIFT) / 64));
 
     /* Call the miniport's DxgkDdiCreateProcess if this table exposes it. */
     if (DxgkpGpuVaProcessDdiTableAvailable(Adapter) &&

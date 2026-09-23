@@ -1851,6 +1851,8 @@ struct _DXGKRNL_PROCESS
      */
     LIST_ENTRY                  GpuVaPageTableList;
     ULONG                       GpuVaPageTableCount;
+    ULONGLONG                   GpuVaPageTableBytes;
+    ULONGLONG                   GpuVaPageTableBudget;
 
     /*
      * GPU VA range list: sorted doubly-linked list of DXGKRNL_GPUVA_RANGE.
