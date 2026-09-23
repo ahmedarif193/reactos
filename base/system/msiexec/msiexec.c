@@ -435,6 +435,10 @@ static int custom_action_server(const WCHAR *arg)
     /* We need this to unmarshal streams, and some apps expect it to be present. */
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
+#ifdef __REACTOS__
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+#endif
+
     while (ReadFile(pipe, &guid, sizeof(guid), &size, NULL) && size == sizeof(guid))
     {
         if (IsEqualGUID(&guid, &GUID_NULL))
