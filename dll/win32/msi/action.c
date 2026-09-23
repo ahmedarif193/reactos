@@ -5398,12 +5398,41 @@ end:
     return rc;
 }
 
+#ifdef __REACTOS__
+static BOOL is_hidden_property(MSIPACKAGE *package, const WCHAR *name)
+{
+    WCHAR *list, *p, *q;
+    BOOL ret = FALSE;
+    size_t len;
+
+    if (!name || !(list = msi_dup_property(package->db, L"MsiHiddenProperties"))) return FALSE;
+
+    len = wcslen(name);
+    for (p = list; p; p = q ? q + 1 : NULL)
+    {
+        q = wcschr(p, ';');
+        if ((q ? (size_t)(q - p) : wcslen(p)) == len && !wcsncmp(p, name, len))
+        {
+            ret = TRUE;
+            break;
+        }
+    }
+
+    free(list);
+    return ret;
+}
+#endif
+
 static UINT iterate_properties(MSIRECORD *record, void *param)
 {
     MSIRECORD *uirow;
 
     uirow = MSI_CloneRecord(record);
     if (!uirow) return ERROR_OUTOFMEMORY;
+#ifdef __REACTOS__
+    if (is_hidden_property(param, MSI_RecordGetString(record, 1)))
+        MSI_RecordSetStringW(uirow, 2, L"**********");
+#endif
     MSI_RecordSetStringW(uirow, 0, L"Property(S): [1] = [2]");
     MSI_ProcessMessage(param, INSTALLMESSAGE_INFO|MB_ICONHAND, uirow);
     msiobj_release(&uirow->hdr);
