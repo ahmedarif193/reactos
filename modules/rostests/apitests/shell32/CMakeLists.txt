@@ -30,6 +30,7 @@ list(APPEND SOURCE
     PathMakeUniqueName.cpp
     PathProcessCommand.cpp
     PathResolve.cpp
+    ProgramFilesDir.cpp
     RealShellExecuteEx.cpp
     RegItemParse.cpp
     SHAppBarMessage.cpp
