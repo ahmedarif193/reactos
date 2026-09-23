@@ -91,6 +91,7 @@ GetTempFileNameW(IN LPCWSTR lpPathName,
     UINT ID, Num = 0;
     UCHAR IDString[5];
     WCHAR * TempFileName;
+    WCHAR * IDStart;
     BASE_API_MESSAGE ApiMessage;
     PBASE_GET_TEMP_FILE GetTempFile = &ApiMessage.Data.GetTempFileRequest;
     DWORD FileAttributes, LastError;
@@ -151,10 +152,13 @@ GetTempFileNameW(IN LPCWSTR lpPathName,
     TempFileName = lpTempFileName + PathNameString.Length / sizeof(WCHAR);
     memmove(TempFileName, PrefixString.Buffer, PrefixString.Length);
     TempFileName += PrefixString.Length / sizeof(WCHAR);
+    IDStart = TempFileName;
 
     /* Then, generate filename */
     do
     {
+        TempFileName = IDStart;
+
         /* If user didn't gave any ID, ask Csrss to give one */
         if (!uUnique)
         {
