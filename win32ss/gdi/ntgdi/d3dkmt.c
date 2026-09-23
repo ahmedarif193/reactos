@@ -583,7 +583,7 @@ NtGdiDdDDIOpenAdapterFromGdiDisplayName(_Inout_ D3DKMT_OPENADAPTERFROMGDIDISPLAY
         return Status;
     Status = D3dkmtOpenAdapterByCapturedNtDeviceName(
                  NtDeviceName,
-                 TRUE,
+                 FALSE,
                  &Captured.hAdapter,
                  &Captured.AdapterLuid);
     if (!NT_SUCCESS(Status))
