@@ -79,6 +79,7 @@ extern void func_SetWindowExtEx(void);
 extern void func_SetWorldTransform(void);
 extern void func_StretchBlt(void);
 extern void func_TextTransform(void);
+extern void func_TypoMetrics(void);
 
 const struct test winetest_testlist[] =
 {
@@ -159,6 +160,7 @@ const struct test winetest_testlist[] =
     { "SetWorldTransform", func_SetWorldTransform },
     { "StretchBlt", func_StretchBlt },
     { "TextTransform", func_TextTransform },
+    { "TypoMetrics", func_TypoMetrics },
 
     { 0, 0 }
 };
