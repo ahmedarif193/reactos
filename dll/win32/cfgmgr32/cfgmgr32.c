@@ -1748,9 +1748,13 @@ CONFIGRET WINAPI CM_Locate_DevNode_ExW( DEVINST *node, DEVINSTID_W instance_id, 
 
     TRACE( "node %p, instance_id %s, flags %#lx, machine %p\n", node, debugstr_w(instance_id), flags, machine );
     if (machine) FIXME( "machine %p not implemented!\n", machine );
-    if (flags) FIXME( "flags %#lx not implemented!\n", flags );
     if (!node) return CR_INVALID_POINTER;
     *node = 0;
+    if (flags & ~CM_LOCATE_DEVNODE_BITS) return CR_INVALID_FLAG;
+    /* Registry-backed lookup already includes nonpresent (PHANTOM) devices.
+     * Cancelling a pending PnP removal needs a separate server operation. */
+    if (flags & CM_LOCATE_DEVNODE_CANCELREMOVE)
+        FIXME( "cancel removal not implemented!\n" );
 
     if (init_device( &dev, instance )) return CR_INVALID_DEVICE_ID;
 
