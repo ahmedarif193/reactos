@@ -75,6 +75,67 @@ static const WCHAR mica_effect_propW[] = L"ReactOS.Dwm.MicaEffect";
 static BOOL (WINAPI *dwm_theme_defwndproc)(HWND, UINT, WPARAM, LPARAM, LRESULT *);
 static VOID (WINAPI *dwm_theme_frame_changed)(HWND);
 
+static BOOL dwm_layers_disable_dwm(const WCHAR *layers)
+{
+    static const WCHAR name[] = L"DISABLEDWM";
+    SIZE_T length;
+
+    while (*layers)
+    {
+        while (*layers == L' ')
+            layers++;
+        for (length = 0; layers[length] && layers[length] != L' '; length++);
+        if (length == ARRAYSIZE(name) - 1 && !_wcsnicmp(layers, name, length))
+            return TRUE;
+        layers += length;
+    }
+    return FALSE;
+}
+
+static BOOL dwm_composition_disabled_by_layer(void)
+{
+    static const HKEY roots[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+    static LONG state;
+    WCHAR layers[512], path[2][MAX_PATH];
+    DWORD size, type, length, i, j;
+    BOOL disabled = FALSE;
+    HKEY key;
+
+    if (state)
+        return state == 2;
+
+    length = GetEnvironmentVariableW(L"__COMPAT_LAYER", layers, ARRAYSIZE(layers));
+    if (length && length < ARRAYSIZE(layers))
+        disabled = dwm_layers_disable_dwm(layers);
+
+    length = GetModuleFileNameW(NULL, path[0], ARRAYSIZE(path[0]));
+    if (!length || length >= ARRAYSIZE(path[0]))
+        path[0][0] = 0;
+    length = GetLongPathNameW(path[0], path[1], ARRAYSIZE(path[1]));
+    if (!length || length >= ARRAYSIZE(path[1]) || !_wcsicmp(path[0], path[1]))
+        path[1][0] = 0;
+
+    for (i = 0; !disabled && path[0][0] && i < ARRAYSIZE(roots); i++)
+    {
+        if (RegOpenKeyExW(roots[i], L"Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers",
+                          0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key))
+            continue;
+        for (j = 0; !disabled && j < ARRAYSIZE(path) && path[j][0]; j++)
+        {
+            size = sizeof(layers) - sizeof(WCHAR);
+            if (!RegQueryValueExW(key, path[j], NULL, &type, (BYTE *)layers, &size) && type == REG_SZ)
+            {
+                layers[size / sizeof(WCHAR)] = 0;
+                disabled = dwm_layers_disable_dwm(layers);
+            }
+        }
+        RegCloseKey(key);
+    }
+
+    InterlockedExchange(&state, disabled ? 2 : 1);
+    return disabled;
+}
+
 static void dwm_load_theme_hooks(void)
 {
     static LONG loaded;
@@ -230,7 +291,7 @@ HRESULT WINAPI DwmIsCompositionEnabled(BOOL *enabled)
 #endif
     *enabled = FALSE;
 #ifdef __REACTOS__
-    *enabled = NtUserCallOneParam(0, DWM_ROUTINE_ISENABLED) != 0;
+    *enabled = NtUserCallOneParam(0, DWM_ROUTINE_ISENABLED) != 0 && !dwm_composition_disabled_by_layer();
 #else
     version.dwOSVersionInfoSize = sizeof(version);
     if (!RtlGetVersion(&version))
