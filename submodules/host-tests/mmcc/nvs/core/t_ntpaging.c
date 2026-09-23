@@ -167,5 +167,15 @@ TestNtPaging(void)
     CHECK(MiPagingIoFrames(&Object, 0, Frames, MI_MAX_FILE_IO_PAGES + 1, FALSE, &Transferred) == STATUS_INVALID_PARAMETER);
     CHECK(MiPagingIoFrames(&Object, 0, NULL, 1, TRUE, &Transferred) == STATUS_INVALID_PARAMETER);
     CHECK(File.Calls == 1 && Transferred == 0);
+
+    /* PE raw sections are sector aligned, not necessarily page aligned. */
+    memset(&File, 0, sizeof(File));
+    File.Information = 2 * PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiControlReadPages(&Control, 1024, Frames, 2)));
+    CHECK(File.Calls == 1 && File.Offset == 1024 && File.Length == 2 * PAGE_SIZE && !File.Write);
+    File.Information--;
+    CHECK(MiControlReadPages(&Control, 1024, Frames, 2) == STATUS_END_OF_FILE);
+    CHECK(MiPagingIoFrames(&Object, 1024, Frames, 2, TRUE, &Transferred) == STATUS_INVALID_PARAMETER);
+    CHECK(MiPagingIoFrames(&Object, 1025, Frames, 2, FALSE, &Transferred) == STATUS_INVALID_PARAMETER);
     ActivePaging = NULL;
 }
