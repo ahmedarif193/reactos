@@ -56,7 +56,7 @@ RpcThreadRoutine(
     }
 
     Status = RpcServerListen(1, RPC_C_LISTEN_MAX_CALLS_DEFAULT, FALSE);
-    if (Status != RPC_S_OK)
+    if (Status != RPC_S_OK && Status != RPC_S_ALREADY_LISTENING)
     {
         ERR("RpcServerListen() failed (Status %lx)\n", Status);
     }
@@ -1126,7 +1126,7 @@ NetrGetJoinInformation(
     wchar_t **NameBuffer,
     PNETSETUP_JOIN_STATUS BufferType)
 {
-    ERR("NetrGetJoinInformation(%p %p %p)\n",
+    TRACE("NetrGetJoinInformation(%p %p %p)\n",
           ServerName, NameBuffer, BufferType);
 
     if (NameBuffer == NULL)
