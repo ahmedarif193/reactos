@@ -565,6 +565,7 @@
 @ stdcall NtUserSetAppImeLevel(long long)
 @ stdcall NtUserSetCapture(ptr)
 @ stdcall NtUserSetClassLong(ptr long ptr long)
+@ stdcall -arch=x86_64,arm64 NtUserSetClassLongPtr(ptr long ptr long)
 @ stdcall NtUserSetClassWord(ptr long long)
 @ stdcall NtUserSetClipboardData(long ptr ptr)
 @ stdcall NtUserSetClipboardViewer(ptr)
