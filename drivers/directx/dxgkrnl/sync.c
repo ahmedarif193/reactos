@@ -11,6 +11,7 @@
 
 #include "dxgkrnl_private.h"
 #include "presenttrace.h"
+#include "pnp.h"
 #include <ndk/psfuncs.h>
 
 #define DXGK_CPU_SIGNAL_ALLOW_FENCE_REWIND 0x00000004UL
@@ -1598,6 +1599,48 @@ Fail:
 }
 
 static NTSTATUS
+DxgkpSyncValidatePeriodicTarget(
+    _In_ PDXGKRNL_ADAPTER DeviceAdapter,
+    _In_ CONST D3DDDI_SYNCHRONIZATIONOBJECTINFO2 *Info)
+{
+    PDXGKRNL_ADAPTER TargetAdapter;
+    PLIST_ENTRY Entry;
+    KLOCK_QUEUE_HANDLE LockHandle;
+    NTSTATUS Status;
+
+    Status = DxgkReferenceAdapterByHandle(
+        Info->PeriodicMonitoredFence.hAdapter,
+        PsGetCurrentProcess(), &TargetAdapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = STATUS_INVALID_PARAMETER;
+    if (TargetAdapter == DeviceAdapter)
+    {
+        /* Target IDs are miniport child UIDs, not ordinal array indices.
+         * Reject a nonexistent output before allocating a GPU fence or
+         * passing an invalid target to CreatePeriodicFrameNotification. */
+        KeAcquireInStackQueuedSpinLock(&TargetAdapter->ChildListLock, &LockHandle);
+        for (Entry = TargetAdapter->ChildListHead.Flink;
+             Entry != &TargetAdapter->ChildListHead;
+             Entry = Entry->Flink)
+        {
+            PDXGK_CHILD_PDO_EXTENSION Child = CONTAINING_RECORD(
+                Entry, DXGK_CHILD_PDO_EXTENSION, ListEntry);
+            if (Child->Present && Child->Descriptor.ChildDeviceType == TypeVideoOutput &&
+                Child->Descriptor.ChildUid == Info->PeriodicMonitoredFence.VidPnTargetId)
+            {
+                Status = STATUS_SUCCESS;
+                break;
+            }
+        }
+        KeReleaseInStackQueuedSpinLock(&LockHandle);
+    }
+    DxgkDereferenceAdapter(TargetAdapter);
+    return Status;
+}
+
+static NTSTATUS
 DxgkpCreateSynchronizationObjectInternal(
     _In_ D3DKMT_HANDLE hDevice,
     _In_ CONST D3DDDI_SYNCHRONIZATIONOBJECTINFO2 *Info,
@@ -1687,6 +1730,15 @@ DxgkpCreateSynchronizationObjectInternal(
          * drive as a bad parameter rather than an unsupported operation. */
         DxgkDereferenceDevice(Device);
         return STATUS_INVALID_PARAMETER;
+    }
+    if (Info->Type == D3DDDI_PERIODIC_MONITORED_FENCE)
+    {
+        Status = DxgkpSyncValidatePeriodicTarget(Adapter, Info);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkDereferenceDevice(Device);
+            return Status;
+        }
     }
     SyncObj = (PDXGKRNL_SYNC_OBJECT)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGKRNL_SYNC_OBJECT), TAG_DXGK_SYNC);
     if (SyncObj == NULL)
