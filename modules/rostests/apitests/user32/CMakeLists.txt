@@ -44,6 +44,7 @@ list(APPEND SOURCE
     ImeWindow.c
     InitializeLpkHooks.c
     InputMessageSource.c
+    InvalidHandles.c
     IsTopLevelWindow.c
     IsServerSideWindow.c
     KbdLayout.c

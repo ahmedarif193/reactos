@@ -44,6 +44,7 @@ extern void func_GW_ENABLEDPOPUP(void);
 extern void func_ImeWindow(void);
 extern void func_InitializeLpkHooks(void);
 extern void func_InputMessageSource(void);
+extern void func_InvalidHandles(void);
 extern void func_IsTopLevelWindow(void);
 extern void func_IsServerSideWindow(void);
 extern void func_KbdLayout(void);
@@ -138,6 +139,7 @@ const struct test winetest_testlist[] =
     { "ImeWindow", func_ImeWindow },
     { "InitializeLpkHooks", func_InitializeLpkHooks },
     { "InputMessageSource", func_InputMessageSource },
+    { "InvalidHandles", func_InvalidHandles },
     { "IsTopLevelWindow", func_IsTopLevelWindow },
     { "IsServerSideWindow", func_IsServerSideWindow },
     { "KbdLayout", func_KbdLayout },
