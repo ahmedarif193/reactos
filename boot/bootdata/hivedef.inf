@@ -35,9 +35,9 @@ HKCU,"Control Panel\Colors","MenuHilight",2,"0 120 215"
 HKCU,"Control Panel\Colors","MenuText",2,"240 240 240"
 HKCU,"Control Panel\Colors","Scrollbar",2,"43 43 43"
 HKCU,"Control Panel\Colors","TitleText",2,"255 255 255"
-HKCU,"Control Panel\Colors","Window",2,"255 255 255"
+HKCU,"Control Panel\Colors","Window",2,"32 32 32"
 HKCU,"Control Panel\Colors","WindowFrame",2,"64 64 64"
-HKCU,"Control Panel\Colors","WindowText",2,"0 0 0"
+HKCU,"Control Panel\Colors","WindowText",2,"240 240 240"
 
 ; Accessibility
 HKCU,"Control Panel\Accessibility",,0x00000012
