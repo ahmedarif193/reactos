@@ -2246,6 +2246,106 @@ MiSegmentMakeResident(
     return MiSegmentMakeResidentBeyond(Segment, Offset, Length, ~0ULL);
 }
 
+/* Segment->Lock is held. Only complete, contiguous file pages participate.
+ * A failed speculative read must not make the demanded page fail: leave all
+ * prototypes untouched and let the caller retry that page on its own. */
+static
+ULONG
+MiSegmentReadCluster(
+    _Inout_ PMI_SEGMENT Segment,
+    _In_ ULONG64 Page,
+    _In_ ULONG64 Last,
+    _In_ ULONG64 ValidDataLength)
+{
+    ULONG Frames[MI_MAX_FILE_IO_PAGES];
+    MI_PTE Originals[MI_MAX_FILE_IO_PAGES];
+    ULONG Count = 0, i;
+    ULONG64 Offset;
+    NTSTATUS Status;
+
+    if (Segment->FileOps.ReadPages == NULL)
+        return 0;
+    Originals[0] = MiArchPteRead(MiSegmentProto(Segment, Page));
+    if (MiSoftKind(Originals[0]) != MiSoftSubsection)
+        return 0;
+    Offset = MiSoftValue(Originals[0]) << MI_SECTOR_SHIFT;
+    /* The image header uses the single-page normalization callback. */
+    if (Segment->Kind == MiSegmentImage && Offset == 0)
+        return 0;
+
+    while (Count < MI_MAX_FILE_IO_PAGES && Page + Count < Last)
+    {
+        MI_PTE Pte = MiArchPteRead(MiSegmentProto(Segment, Page + Count));
+        ULONG64 FileOffset = Offset + Count * PAGE_SIZE;
+        ULONG Frame;
+
+        if (MiSoftKind(Pte) != MiSoftSubsection ||
+            (MiSoftValue(Pte) << MI_SECTOR_SHIFT) != FileOffset ||
+            MiSegmentPageBytes(Segment, FileOffset) != PAGE_SIZE ||
+            FileOffset >= ValidDataLength || ValidDataLength - FileOffset < PAGE_SIZE)
+            break;
+
+        Frame = MiPfnAllocatePage(&Segment->System->Pfn, 0);
+        if (Frame == MI_FRAME_INVALID)
+            break;
+        Frames[Count] = Frame;
+        Originals[Count++] = Pte;
+    }
+
+    if (Count > 1)
+    {
+        Status = Segment->FileOps.ReadPages(Segment->FileContext, Offset, Frames, Count);
+        if (NT_SUCCESS(Status))
+        {
+            for (i = 0; i < Count; i++)
+            {
+                PMI_PTE Proto = MiSegmentProto(Segment, Page + i);
+
+                MiPfnInitializePage(&Segment->System->Pfn, Frames[i], (ULONG64)(ULONG_PTR)Proto,
+                                    0, Originals[i], MI_PFN_FLAG_PROTOTYPE);
+                MiArchPteWrite(Proto, MiSoftMake(MiSoftResident, MiSoftProtection(Originals[i]), Frames[i]));
+                MiSegmentReleasePage(Segment, Proto, Frames[i]);
+            }
+            MI_ATOMIC_ADD64(&Segment->PagesRead, Count);
+            return Count;
+        }
+    }
+
+    for (i = 0; i < Count; i++)
+        MiPfnShareDecrement(&Segment->System->Pfn, Frames[i], TRUE);
+    return 0;
+}
+
+NTSTATUS
+MiSegmentFaultIn(
+    _Inout_ PMI_SEGMENT Segment,
+    _In_ ULONG64 Page)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Frame;
+
+    MI_MUTEX_ACQUIRE(&Segment->Lock);
+    if (Page >= MiSegmentPages(Segment))
+    {
+        Status = STATUS_ACCESS_VIOLATION;
+    }
+    else
+    {
+        PMI_PTE Proto = MiSegmentProto(Segment, Page);
+        MI_SOFT_KIND Kind = MiSoftKind(MiArchPteRead(Proto));
+
+        if (Kind != MiSoftResident && Kind != MiSoftTransition &&
+            MiSegmentReadCluster(Segment, Page, MiSegmentPages(Segment), ~0ULL) == 0)
+        {
+            Status = MiSegmentMaterialize(Segment, Proto, ~0ULL, &Frame);
+            if (NT_SUCCESS(Status))
+                MiSegmentReleasePage(Segment, Proto, Frame);
+        }
+    }
+    MI_MUTEX_RELEASE(&Segment->Lock);
+    return Status;
+}
+
 NTSTATUS
 MiSegmentMakeResidentBeyond(
     _Inout_ PMI_SEGMENT Segment,
@@ -2269,9 +2369,17 @@ MiSegmentMakeResidentBeyond(
         MI_PTE Pte = MiArchPteRead(Proto);
         MI_SOFT_KIND Kind = MiSoftKind(Pte);
         ULONG Frame;
+        ULONG Cluster;
 
         if (Kind == MiSoftResident || Kind == MiSoftTransition || Pte == 0)
             continue;
+
+        Cluster = MiSegmentReadCluster(Segment, Page, Last, ValidDataLength);
+        if (Cluster != 0)
+        {
+            Page += Cluster - 1;
+            continue;
+        }
 
         Status = MiSegmentMaterialize(Segment, Proto, ValidDataLength, &Frame);
         if (NT_SUCCESS(Status))
