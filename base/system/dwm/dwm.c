@@ -3730,6 +3730,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                     }
                     if (gpuResult == DWM_GPU_COMPLETE)
                     {
+                        NtUserCallOneParam(0, DWM_ROUTINE_PRESENTED);
                         g_lastFrameQpc = (ULONGLONG)statFrameStart.QuadPart;
                         /* On the GPU path these fields mean clear/context,
                          * window draw/upload, and swap/direct-flip.  Keeping
@@ -3965,6 +3966,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                             if (wins[i].DxPitch != 0)
                                 DwmDxAcknowledgeSurface(&wins[i]);
                         }
+                        NtUserCallOneParam(0, DWM_ROUTINE_PRESENTED);
                     }
                 }
             }

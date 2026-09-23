@@ -21,6 +21,8 @@ C_ASSERT(DWM_ROUTINE_OPENSURFACE == ONEPARAM_ROUTINE_DWMOPENSURFACE);
 C_ASSERT(DWM_ROUTINE_DXSURFACE == ONEPARAM_ROUTINE_DWMDXSURFACE);
 C_ASSERT(DWM_ROUTINE_SETBLUR == ONEPARAM_ROUTINE_DWMSETBLUR);
 C_ASSERT(DWM_ROUTINE_SETGPUOUTPUT == ONEPARAM_ROUTINE_DWMSETGPUOUTPUT);
+C_ASSERT(DWM_ROUTINE_FLUSH == ONEPARAM_ROUTINE_DWMFLUSH);
+C_ASSERT(DWM_ROUTINE_PRESENTED == ONEPARAM_ROUTINE_DWMPRESENTED);
 
 /* Registered logon process ID */
 HANDLE gpidLogon = 0;
@@ -404,6 +406,14 @@ NtUserCallOneParam(
             Result = (DWORD_PTR)IntCompositionDwmSetGpuOutput((PVOID)Param);
             break;
         }
+
+        case ONEPARAM_ROUTINE_DWMFLUSH:
+            Result = (DWORD_PTR)IntCompositionDwmFlush();
+            break;
+
+        case ONEPARAM_ROUTINE_DWMPRESENTED:
+            Result = (DWORD_PTR)IntCompositionDwmPresented();
+            break;
 
         case ONEPARAM_ROUTINE_GETINPUTEVENT:
             Result = (DWORD_PTR)IntMsqSetWakeMask(Param);

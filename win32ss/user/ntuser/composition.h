@@ -98,6 +98,8 @@ VOID IntCompositionCleanupProcess(_In_ PEPROCESS Process);
  * dwm-provided buffer with the Z-ordered compositable windows + their backing
  * pixels. See sdk/include/reactos/dwmframe.h for the layout. */
 NTSTATUS IntCompositionDwmGetFrame(_In_ PVOID pUser);
+NTSTATUS IntCompositionDwmFlush(VOID);
+NTSTATUS IntCompositionDwmPresented(VOID);
 
 /* Open a window FRONT section into dwm's process (ONEPARAM_ROUTINE_
  * DWMOPENSURFACE); see DWM_OPEN_SURFACE in dwmframe.h. */
