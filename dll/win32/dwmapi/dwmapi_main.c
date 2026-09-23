@@ -341,15 +341,9 @@ HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
         left = min(margins->cxLeftWidth, (LONG)DWM_MAX_NC_EXTEND);
     }
     if (top > 0)
-    {
-        SetPropW(hwnd, DWM_PROP_FRAME_EXTEND_TOP, (HANDLE)(ULONG_PTR)(top + 1));
         SetPropW(hwnd, DWM_PROP_BACKDROP_NC_EXTEND, (HANDLE)(ULONG_PTR)(top + 1));
-    }
     else
-    {
-        RemovePropW(hwnd, DWM_PROP_FRAME_EXTEND_TOP);
         RemovePropW(hwnd, DWM_PROP_BACKDROP_NC_EXTEND);
-    }
     if (left > 0)
         SetPropW(hwnd, DWM_PROP_BACKDROP_NC_EXTEND_LEFT, (HANDLE)(ULONG_PTR)(left + 1));
     else
