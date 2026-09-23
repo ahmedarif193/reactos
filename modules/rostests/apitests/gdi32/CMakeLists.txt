@@ -79,7 +79,8 @@ list(APPEND SOURCE
     SetWindowExtEx.c
     SetWorldTransform.c
     StretchBlt.c
-    TextTransform.c)
+    TextTransform.c
+    TypoMetrics.c)
 
 list(APPEND PCH_SKIP_SOURCE
     testlist.c)
