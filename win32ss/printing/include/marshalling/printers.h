@@ -7,6 +7,7 @@
 
 static const MARSHALLING PrinterInfoStressMarshalling = {
     sizeof(PRINTER_INFO_STRESS),
+    "PPDDDSDDDDDDDDDDDDDDDDDDWWDDD",
     {
         { FIELD_OFFSET(PRINTER_INFO_STRESS, pPrinterName), RTL_FIELD_SIZE(PRINTER_INFO_STRESS, pPrinterName), RTL_FIELD_SIZE(PRINTER_INFO_STRESS, pPrinterName), TRUE },
         { FIELD_OFFSET(PRINTER_INFO_STRESS, pServerName), RTL_FIELD_SIZE(PRINTER_INFO_STRESS, pServerName), RTL_FIELD_SIZE(PRINTER_INFO_STRESS, pServerName), TRUE },
@@ -43,6 +44,7 @@ static const MARSHALLING PrinterInfoStressMarshalling = {
 
 static const MARSHALLING PrinterInfo1Marshalling = {
     sizeof(PRINTER_INFO_1W),
+    "DPPP",
     {
         { FIELD_OFFSET(PRINTER_INFO_1W, Flags), RTL_FIELD_SIZE(PRINTER_INFO_1W, Flags), RTL_FIELD_SIZE(PRINTER_INFO_1W, Flags), FALSE },
         { FIELD_OFFSET(PRINTER_INFO_1W, pDescription), RTL_FIELD_SIZE(PRINTER_INFO_1W, pDescription), RTL_FIELD_SIZE(PRINTER_INFO_1W, pDescription), TRUE },
@@ -54,6 +56,7 @@ static const MARSHALLING PrinterInfo1Marshalling = {
 
 static const MARSHALLING PrinterInfo2Marshalling = {
     sizeof(PRINTER_INFO_2W),
+    "PPPPPPPPPPPPPDDDDDDDD",
     {
         { FIELD_OFFSET(PRINTER_INFO_2W, pServerName), RTL_FIELD_SIZE(PRINTER_INFO_2W, pServerName), RTL_FIELD_SIZE(PRINTER_INFO_2W, pServerName), TRUE },
         { FIELD_OFFSET(PRINTER_INFO_2W, pPrinterName), RTL_FIELD_SIZE(PRINTER_INFO_2W, pPrinterName), RTL_FIELD_SIZE(PRINTER_INFO_2W, pPrinterName), TRUE },
@@ -82,6 +85,7 @@ static const MARSHALLING PrinterInfo2Marshalling = {
 
 static const MARSHALLING PrinterInfo3Marshalling = {
     sizeof(PRINTER_INFO_3),
+    "P",
     {
         { FIELD_OFFSET(PRINTER_INFO_3, pSecurityDescriptor), RTL_FIELD_SIZE(PRINTER_INFO_3, pSecurityDescriptor), RTL_FIELD_SIZE(PRINTER_INFO_3, pSecurityDescriptor), TRUE },
         { MAXDWORD, 0, 0, FALSE }
@@ -90,6 +94,7 @@ static const MARSHALLING PrinterInfo3Marshalling = {
 
 static const MARSHALLING PrinterInfo4Marshalling = {
     sizeof(PRINTER_INFO_4W),
+    "PPD",
     {
         { FIELD_OFFSET(PRINTER_INFO_4W, pPrinterName), RTL_FIELD_SIZE(PRINTER_INFO_4W, pPrinterName), RTL_FIELD_SIZE(PRINTER_INFO_4W, pPrinterName), TRUE },
         { FIELD_OFFSET(PRINTER_INFO_4W, pServerName), RTL_FIELD_SIZE(PRINTER_INFO_4W, pServerName), RTL_FIELD_SIZE(PRINTER_INFO_4W, pServerName), TRUE },
@@ -100,6 +105,7 @@ static const MARSHALLING PrinterInfo4Marshalling = {
 
 static const MARSHALLING PrinterInfo5Marshalling = {
     sizeof(PRINTER_INFO_5W),
+    "PPDDD",
     {
         { FIELD_OFFSET(PRINTER_INFO_5W, pPrinterName), RTL_FIELD_SIZE(PRINTER_INFO_5W, pPrinterName), RTL_FIELD_SIZE(PRINTER_INFO_5W, pPrinterName), TRUE },
         { FIELD_OFFSET(PRINTER_INFO_5W, pPortName), RTL_FIELD_SIZE(PRINTER_INFO_5W, pPortName), RTL_FIELD_SIZE(PRINTER_INFO_5W, pPortName), TRUE },
@@ -112,6 +118,7 @@ static const MARSHALLING PrinterInfo5Marshalling = {
 
 static const MARSHALLING PrinterInfo6Marshalling = {
     sizeof(PRINTER_INFO_6),
+    "D",
     {
         { FIELD_OFFSET(PRINTER_INFO_6, dwStatus), RTL_FIELD_SIZE(PRINTER_INFO_6, dwStatus), RTL_FIELD_SIZE(PRINTER_INFO_6, dwStatus), FALSE },
         { MAXDWORD, 0, 0, FALSE }
@@ -120,6 +127,7 @@ static const MARSHALLING PrinterInfo6Marshalling = {
 
 static const MARSHALLING PrinterInfo7Marshalling = {
     sizeof(PRINTER_INFO_7W),
+    "PD",
     {
         { FIELD_OFFSET(PRINTER_INFO_7W, pszObjectGUID), RTL_FIELD_SIZE(PRINTER_INFO_7W, pszObjectGUID), RTL_FIELD_SIZE(PRINTER_INFO_7W, pszObjectGUID), TRUE },
         { FIELD_OFFSET(PRINTER_INFO_7W, dwAction), RTL_FIELD_SIZE(PRINTER_INFO_7W, dwAction), RTL_FIELD_SIZE(PRINTER_INFO_7W, dwAction), FALSE },
@@ -129,6 +137,7 @@ static const MARSHALLING PrinterInfo7Marshalling = {
 
 static const MARSHALLING PrinterInfo8Marshalling = {
     sizeof(PRINTER_INFO_8W),
+    "P",
     {
         { FIELD_OFFSET(PRINTER_INFO_8W, pDevMode), RTL_FIELD_SIZE(PRINTER_INFO_8W, pDevMode), RTL_FIELD_SIZE(PRINTER_INFO_8W, pDevMode), TRUE },
         { MAXDWORD, 0, 0, FALSE }
@@ -137,6 +146,7 @@ static const MARSHALLING PrinterInfo8Marshalling = {
 
 static const MARSHALLING PrinterInfo9Marshalling = {
     sizeof(PRINTER_INFO_9W),
+    "P",
     {
         { FIELD_OFFSET(PRINTER_INFO_9W, pDevMode), RTL_FIELD_SIZE(PRINTER_INFO_9W, pDevMode), RTL_FIELD_SIZE(PRINTER_INFO_9W, pDevMode), TRUE },
         { MAXDWORD, 0, 0, FALSE }

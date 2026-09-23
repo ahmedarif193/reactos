@@ -7,6 +7,7 @@
 
 static const MARSHALLING AddJobInfo1Marshalling = {
     sizeof(ADDJOB_INFO_1W),
+    "PD",
     {
         { FIELD_OFFSET(ADDJOB_INFO_1W, Path), RTL_FIELD_SIZE(ADDJOB_INFO_1W, Path), RTL_FIELD_SIZE(ADDJOB_INFO_1W, Path), TRUE },
         { FIELD_OFFSET(ADDJOB_INFO_1W, JobId), RTL_FIELD_SIZE(ADDJOB_INFO_1W, JobId), RTL_FIELD_SIZE(ADDJOB_INFO_1W, JobId), FALSE },
@@ -16,6 +17,7 @@ static const MARSHALLING AddJobInfo1Marshalling = {
 
 static const MARSHALLING JobInfo1Marshalling = {
     sizeof(JOB_INFO_1W),
+    "DPPPPPPDDDDDS",
     {
         { FIELD_OFFSET(JOB_INFO_1W, JobId), RTL_FIELD_SIZE(JOB_INFO_1W, JobId), RTL_FIELD_SIZE(JOB_INFO_1W, JobId), FALSE },
         { FIELD_OFFSET(JOB_INFO_1W, pPrinterName), RTL_FIELD_SIZE(JOB_INFO_1W, pPrinterName), RTL_FIELD_SIZE(JOB_INFO_1W, pPrinterName), TRUE },
@@ -36,6 +38,7 @@ static const MARSHALLING JobInfo1Marshalling = {
 
 static const MARSHALLING JobInfo2Marshalling = {
     sizeof(JOB_INFO_2W),
+    "DPPPPPPPPPPPPDDDDDDDSDD",
     {
         { FIELD_OFFSET(JOB_INFO_2W, JobId), RTL_FIELD_SIZE(JOB_INFO_2W, JobId), RTL_FIELD_SIZE(JOB_INFO_2W, JobId), FALSE },
         { FIELD_OFFSET(JOB_INFO_2W, pPrinterName), RTL_FIELD_SIZE(JOB_INFO_2W, pPrinterName), RTL_FIELD_SIZE(JOB_INFO_2W, pPrinterName), TRUE },

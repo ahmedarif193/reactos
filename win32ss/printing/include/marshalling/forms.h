@@ -7,6 +7,7 @@
 
 static const MARSHALLING FormInfo1Marshalling = {
     sizeof(FORM_INFO_1W),
+    "DPDDDDDD",
     {
         { FIELD_OFFSET(FORM_INFO_1W, Flags), RTL_FIELD_SIZE(FORM_INFO_1W, Flags), RTL_FIELD_SIZE(FORM_INFO_1W, Flags), FALSE },
         { FIELD_OFFSET(FORM_INFO_1W, pName), RTL_FIELD_SIZE(FORM_INFO_1W, pName), RTL_FIELD_SIZE(FORM_INFO_1W, pName), TRUE },
@@ -18,6 +19,7 @@ static const MARSHALLING FormInfo1Marshalling = {
 
 static const MARSHALLING FormInfo2Marshalling = {
     sizeof(FORM_INFO_2W),
+    "DPDDDDDDPDPDPW",
     {
         { FIELD_OFFSET(FORM_INFO_2W, Flags), RTL_FIELD_SIZE(FORM_INFO_2W, Flags), RTL_FIELD_SIZE(FORM_INFO_2W, Flags), FALSE },
         { FIELD_OFFSET(FORM_INFO_2W, pName), RTL_FIELD_SIZE(FORM_INFO_2W, pName), RTL_FIELD_SIZE(FORM_INFO_2W, pName), TRUE },

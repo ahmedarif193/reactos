@@ -7,6 +7,7 @@
 
 static const MARSHALLING PrinterDriver1Marshalling = {
     sizeof(DRIVER_INFO_1W),
+    "P",
     {
         { FIELD_OFFSET(DRIVER_INFO_1W, pName), RTL_FIELD_SIZE(DRIVER_INFO_1W, pName), RTL_FIELD_SIZE(DRIVER_INFO_1W, pName), TRUE },
         { MAXDWORD, 0, 0, FALSE }
@@ -15,6 +16,7 @@ static const MARSHALLING PrinterDriver1Marshalling = {
 
 static const MARSHALLING PrinterDriver2Marshalling = {
     sizeof(DRIVER_INFO_2W),
+    "DPPPPP",
     {
         { FIELD_OFFSET(DRIVER_INFO_2W, pName), RTL_FIELD_SIZE(DRIVER_INFO_2W, pName), RTL_FIELD_SIZE(DRIVER_INFO_2W, pName), TRUE },
         { FIELD_OFFSET(DRIVER_INFO_2W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_2W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_2W, pEnvironment), TRUE },
@@ -27,6 +29,7 @@ static const MARSHALLING PrinterDriver2Marshalling = {
 
 static const MARSHALLING PrinterDriver3Marshalling = {
     sizeof(DRIVER_INFO_3W),
+    "DPPPPPPPPP",
     {
         { FIELD_OFFSET(DRIVER_INFO_3W, pName), RTL_FIELD_SIZE(DRIVER_INFO_3W, pName), RTL_FIELD_SIZE(DRIVER_INFO_3W, pName), TRUE },
         { FIELD_OFFSET(DRIVER_INFO_3W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_3W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_3W, pEnvironment), TRUE },
@@ -43,6 +46,7 @@ static const MARSHALLING PrinterDriver3Marshalling = {
 
 static const MARSHALLING PrinterDriver4Marshalling = {
     sizeof(DRIVER_INFO_4W),
+    "DPPPPPPPPPP",
     {
         { FIELD_OFFSET(DRIVER_INFO_4W, pName), RTL_FIELD_SIZE(DRIVER_INFO_4W, pName), RTL_FIELD_SIZE(DRIVER_INFO_4W, pName), TRUE },
         { FIELD_OFFSET(DRIVER_INFO_4W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_4W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_4W, pEnvironment), TRUE },
@@ -60,6 +64,7 @@ static const MARSHALLING PrinterDriver4Marshalling = {
 
 static const MARSHALLING PrinterDriver5Marshalling = {
     sizeof(DRIVER_INFO_5W),
+    "DPPPPPDDD",
     {
         { FIELD_OFFSET(DRIVER_INFO_5W, pName), RTL_FIELD_SIZE(DRIVER_INFO_5W, pName), RTL_FIELD_SIZE(DRIVER_INFO_5W, pName), TRUE },
         { FIELD_OFFSET(DRIVER_INFO_5W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_5W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_5W, pEnvironment), TRUE },
@@ -72,6 +77,7 @@ static const MARSHALLING PrinterDriver5Marshalling = {
 
 static const MARSHALLING PrinterDriver6Marshalling = {
     sizeof(DRIVER_INFO_6W),
+    "DPPPPPPPPPPFQPPPP",
     {
         { FIELD_OFFSET(DRIVER_INFO_6W, pName), RTL_FIELD_SIZE(DRIVER_INFO_6W, pName), RTL_FIELD_SIZE(DRIVER_INFO_6W, pName), TRUE },
         { FIELD_OFFSET(DRIVER_INFO_6W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_6W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_6W, pEnvironment), TRUE },
@@ -93,6 +99,7 @@ static const MARSHALLING PrinterDriver6Marshalling = {
 
 static const MARSHALLING PrinterDriver8Marshalling = {
     sizeof(DRIVER_INFO_8W),
+    "DPPPPPPPPPPFQPPPPPPPPDPFQ",
     {
         { FIELD_OFFSET(DRIVER_INFO_8W, pName), RTL_FIELD_SIZE(DRIVER_INFO_8W, pName), RTL_FIELD_SIZE(DRIVER_INFO_8W, pName), TRUE },
         { FIELD_OFFSET(DRIVER_INFO_8W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_8W, pEnvironment), RTL_FIELD_SIZE(DRIVER_INFO_8W, pEnvironment), TRUE },

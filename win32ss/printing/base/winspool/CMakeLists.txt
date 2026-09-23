@@ -1,6 +1,7 @@
 
 include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl)
 add_rpc_files(client ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/winspool.idl)
+add_definitions(-D_WINSPOOL_WOW64_MARSHALLING)
 spec2def(winspool.drv winspool.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE

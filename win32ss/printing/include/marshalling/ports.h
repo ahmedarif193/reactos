@@ -7,6 +7,7 @@
 
 static const MARSHALLING PortInfo1Marshalling = {
     sizeof(PORT_INFO_1W),
+    "P",
     {
         { FIELD_OFFSET(PORT_INFO_1W, pName), RTL_FIELD_SIZE(PORT_INFO_1W, pName), RTL_FIELD_SIZE(PORT_INFO_1W, pName), TRUE },
         { MAXDWORD, 0, 0, FALSE }
@@ -15,6 +16,7 @@ static const MARSHALLING PortInfo1Marshalling = {
 
 static const MARSHALLING PortInfo2Marshalling = {
     sizeof(PORT_INFO_2W),
+    "PPPDD",
     {
         { FIELD_OFFSET(PORT_INFO_2W, pPortName), RTL_FIELD_SIZE(PORT_INFO_2W, pPortName), RTL_FIELD_SIZE(PORT_INFO_2W, pPortName), TRUE },
         { FIELD_OFFSET(PORT_INFO_2W, pMonitorName), RTL_FIELD_SIZE(PORT_INFO_2W, pMonitorName), RTL_FIELD_SIZE(PORT_INFO_2W, pMonitorName), TRUE },
