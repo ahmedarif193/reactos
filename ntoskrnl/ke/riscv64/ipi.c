@@ -6,6 +6,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <reactos/smpdbg.h>
 
 static struct
 {
@@ -28,6 +29,38 @@ VOID FASTCALL KiIpiSend(KAFFINITY Targets, ULONG Request)
         Remaining &= ~AFFINITY_MASK(Number);
     }
     if (Targets) HalRequestIpi(Targets);
+}
+
+/* Behind HalSendSoftwareInterrupt: request an APC or DPC interrupt on each
+ * target processor, the current one included. */
+VOID
+NTAPI
+KiRiscvSendSoftwareInterrupt(_In_ KAFFINITY TargetSet, _In_ KIRQL Irql)
+{
+    KIRQL OldIrql = KeGetCurrentIrql();
+    PKPRCB Prcb;
+
+    if ((Irql != APC_LEVEL) && (Irql != DISPATCH_LEVEL))
+        KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL, Irql, OldIrql, 0, 0);
+
+    /* Stay on this processor while it is taken out of the target set. */
+    if (OldIrql < DISPATCH_LEVEL)
+        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+
+    Prcb = KeGetCurrentPrcb();
+    if (TargetSet & Prcb->SetMember)
+    {
+        if (Irql == DISPATCH_LEVEL)
+            Prcb->DpcInterruptRequested = TRUE;
+        KiRiscvRequestSoftwareInterrupt(Irql);
+    }
+
+    TargetSet &= ~Prcb->SetMember;
+    if (TargetSet)
+        KiIpiSend(TargetSet, (Irql == APC_LEVEL) ? IPI_APC : IPI_DPC);
+
+    if (OldIrql < DISPATCH_LEVEL)
+        KeLowerIrql(OldIrql);
 }
 
 /* A target runs the broadcast worker at IPI_LEVEL once every target has
@@ -55,6 +88,8 @@ KiIpiServiceRoutine(PKTRAP_FRAME TrapFrame, PKEXCEPTION_FRAME ExceptionFrame)
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
     ASSERT(KeGetCurrentIrql() == IPI_LEVEL);
+    if (SmpDbgEnabled)
+        SmpDbgIpi(Prcb->Number);
     if (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE)
         KiProcessorFreezeHandler(TrapFrame, ExceptionFrame);
     InterlockedBitTestAndReset(&Prcb->RequestSummary, IPI_FREEZE);
@@ -62,11 +97,17 @@ KiIpiServiceRoutine(PKTRAP_FRAME TrapFrame, PKEXCEPTION_FRAME ExceptionFrame)
         HalRequestSoftwareInterrupt(APC_LEVEL);
     if (InterlockedBitTestAndReset(&Prcb->RequestSummary, IPI_DPC))
     {
+        if (SmpDbgEnabled)
+            SmpDbgRemoteDpc(Prcb->Number, SMPDBG_SOURCE_UNKNOWN);
         Prcb->DpcInterruptRequested = TRUE;
         HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
     }
     if (InterlockedBitTestAndReset(&Prcb->RequestSummary, IPI_SYNCH_REQUEST))
+    {
+        if (SmpDbgEnabled)
+            SmpDbgGenericCallIpi(Prcb->Number);
         KiRiscvExecuteGenericCall();
+    }
     return TRUE;
 }
 

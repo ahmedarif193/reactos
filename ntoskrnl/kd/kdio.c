@@ -673,8 +673,8 @@ KdSendPacket(
                        ExceptionRecord->ExceptionFlags,
                        WaitStateChange->u.Exception.FirstChance ? "FirstChance" : "LastChance",
                        ExceptionRecord->ExceptionInformation[0]);
-#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM) || defined(_M_ARM64)
-extern VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
+            extern VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
+
             if ((ExceptionRecord->ExceptionCode == STATUS_BREAKPOINT) &&
                 ((PVOID)(ULONG_PTR)ExceptionRecord->ExceptionAddress == (PVOID)RtlpBreakWithStatusInstruction))
             {
@@ -686,14 +686,15 @@ extern VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
                     (ULONG)ContextRecord->Rcx;
 #elif defined(_M_ARM)
                     ContextRecord->R0;
-#else // defined(_M_ARM64)
+#elif defined(_M_ARM64)
                     (ULONG)ContextRecord->X0;
+#elif defined(_M_RISCV64)
+                    (ULONG)ContextRecord->A0;
+#else
+#error Unknown architecture
 #endif
                 KdIoPrintf("STATUS_BREAKPOINT Status 0x%08lx\n", Status);
             }
-// #else
-// #error Unknown architecture
-#endif
             return;
         }
 

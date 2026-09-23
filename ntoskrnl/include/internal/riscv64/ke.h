@@ -27,6 +27,9 @@ NTHALAPI ULONG NTAPI HalpRiscvClaimPlicInterrupt(VOID);
 NTHALAPI VOID NTAPI HalpRiscvCompletePlicInterrupt(_In_ ULONG Source);
 
 #define KeGetContextSwitches(Prcb) ((Prcb)->KeContextSwitches)
+/* TODO: measure each hart's cycle counter against the time CSR (Zicntr)
+ * where firmware grants S-mode cycle access; until then report Prcb->MHz. */
+#define KiQueryEffectiveProcessorMhz(Number) (KiProcessorBlock[(Number)]->MHz)
 #define Ki386PerfEnd()
 
 /* A CONTEXT carries no sstatus; kernel code runs in the upper Sv39 half. */
@@ -190,6 +193,7 @@ DECLSPEC_NORETURN VOID NTAPI KiRiscvSystemStartup(_Inout_ PLOADER_PARAMETER_BLOC
 VOID NTAPI KiRiscvSetInterruptEnabled(_In_ ULONG_PTR Mask, _In_ BOOLEAN Enable);
 VOID NTAPI KiRiscvRequestSoftwareInterrupt(_In_ KIRQL Irql);
 VOID NTAPI KiRiscvClearSoftwareInterrupt(_In_ KIRQL Irql);
+VOID NTAPI KiRiscvSendSoftwareInterrupt(_In_ KAFFINITY TargetSet, _In_ KIRQL Irql);
 BOOLEAN NTAPI KiRiscvInitializeTrapVector(VOID);
 KI_RISCV_SBI_RETURN NTAPI KiRiscvSbiCall(_In_ ULONG_PTR Extension, _In_ ULONG_PTR Function, _In_ ULONG_PTR Argument0, _In_ ULONG_PTR Argument1, _In_ ULONG_PTR Argument2);
 VOID NTAPI KiRiscvConsoleInitialize(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
@@ -206,15 +210,26 @@ DECLSPEC_NORETURN VOID NTAPI KiRiscvTrapEntry(VOID);
 DECLSPEC_NORETURN VOID NTAPI KiRiscvTrapStop(_In_ PKTRAP_FRAME TrapFrame);
 VOID NTAPI KiRiscvTrapHandler(_Inout_ PKTRAP_FRAME TrapFrame);
 VOID NTAPI KiRiscvInterruptDispatch(_Inout_ PKTRAP_FRAME TrapFrame);
+PKINTERRUPT NTAPI KiRiscvQueryInterrupt(_In_ ULONG Source);
+ULONG NTAPI KiRiscvQueryInterruptLimit(VOID);
 /* Clock ISR exported by hal.dll (hal.spec, -arch=riscv64): rearms the
  * supervisor timer deadline and calls KeUpdateSystemTime at CLOCK_LEVEL. */
 NTHALAPI VOID NTAPI HalpRiscvClockInterrupt(_In_ PKTRAP_FRAME TrapFrame);
 DECLSPEC_NORETURN VOID NTAPI KiRiscvUnimplemented(_In_ const CHAR *Routine);
+ULONG NTAPI KeGetCurrentProcessorNumber(VOID);
 PKTRAP_FRAME NTAPI KeGetTrapFrame(_In_ PKTHREAD Thread);
 PKEXCEPTION_FRAME NTAPI KeGetExceptionFrame(_In_ PKTHREAD Thread);
 ULONG_PTR NTAPI KeGetTrapFramePc(_In_ PKTRAP_FRAME TrapFrame);
 BOOLEAN NTAPI KeGetTrapFrameInterruptState(_In_ PKTRAP_FRAME TrapFrame);
 BOOLEAN NTAPI KiUserTrap(_In_ PKTRAP_FRAME TrapFrame);
+#define KiIsUserModeTrap(TrapFrame) KiUserTrap(TrapFrame)
+
+/* The trap frame holds every register: nothing lives in an exception frame. */
+#define KI_NO_EXCEPTION_FRAME
+
+/* Without a 128-bit compare-exchange, user-mode SList pops run under a lock:
+ * ntdll has no pop sequence for the fault handler to roll back. */
+#define KI_USER_SLIST_POP_LOCKED
 VOID NTAPI KiRundownThread(_In_ PKTHREAD Thread);
 BOOLEAN NTAPI KiSwapContextResume(_In_ BOOLEAN ApcBypass, _In_ PKTHREAD OldThread, _In_ PKTHREAD NewThread);
 VOID NTAPI KiRetireDpcListInDpcStack(_In_ PKPRCB Prcb, _In_ PVOID DpcStack);

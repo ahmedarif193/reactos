@@ -12,11 +12,11 @@
 #define NDEBUG
 #include <debug.h>
 #include <reactos/drivers/dumpstor.h>
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
 #include <nvs/nt/mmkernel.h>
 #endif
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
 
 #define KDP_LIVE_DUMP_BUGCHECK 0x161
 #define KDP_LIVE_DUMP_WRITE_SIZE (1024 * 1024)

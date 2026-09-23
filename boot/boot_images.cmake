@@ -45,11 +45,7 @@ function(freeldr_ini_add_http_boot SOURCE OUTPUT URL STATIC_IP DEFAULT_OS)
     file(WRITE "${OUTPUT}" "${_contents}")
 endfunction()
 
-if(ARCH STREQUAL "riscv64")
-    set(FREELDR_BOOTCD_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/riscv64/livecd.ini")
-else()
-    set(FREELDR_BOOTCD_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini")
-endif()
+set(FREELDR_BOOTCD_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini")
 set(FREELDR_PREINSTALL_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini")
 if(FREELDR_HTTP_BOOT)
     # The downloaded image is architecture-specific, so each board profile

@@ -695,13 +695,6 @@ KeStartAllProcessors(
     ULONG ProcessorCount;
     ULONG MaximumProcessors;
 
-    {
-        extern BOOLEAN SmpDbgEnabled;
-        if (KeLoaderBlock != NULL && KeLoaderBlock->LoadOptions != NULL &&
-            strstr(KeLoaderBlock->LoadOptions, "SMPDIAG") != NULL)
-            SmpDbgEnabled = TRUE;
-    }
-
     /*
      * ARM64 SMP Boot Implementation
      *

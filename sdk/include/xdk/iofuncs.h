@@ -81,7 +81,7 @@ NTAPI
 READ_PORT_USHORT(
   IN PUSHORT Port);
 
-#if !defined(_M_ARM64) && !defined(_M_ARM64EC)
+#if !defined(_M_ARM64) && !defined(_M_ARM64EC) && !defined(_M_RISCV64)
 NTKERNELAPI
 VOID
 NTAPI
@@ -170,7 +170,7 @@ WRITE_PORT_USHORT(
   IN PUSHORT Port,
   IN USHORT Value);
 
-#if !defined(_M_ARM64) && !defined(_M_ARM64EC)
+#if !defined(_M_ARM64) && !defined(_M_ARM64EC) && !defined(_M_RISCV64)
 NTKERNELAPI
 VOID
 NTAPI
@@ -542,6 +542,161 @@ WRITE_REGISTER_BUFFER_ULONG(
   while (Count--)
     *Dst = *Buffer++;
   __asm__ __volatile__("dsb st" ::: "memory");
+}
+#endif
+
+#if defined(_M_RISCV64) && !defined(NO_PORT_MACROS)
+/* Order each register access against all memory and I/O accesses around it. */
+#define _RISCV64_REGISTER_FENCE() __asm__ __volatile__("fence iorw, iorw" ::: "memory")
+
+FORCEINLINE
+UCHAR
+READ_REGISTER_UCHAR(
+  IN volatile UCHAR *Register)
+{
+  UCHAR Value;
+
+  _RISCV64_REGISTER_FENCE();
+  Value = *Register;
+  _RISCV64_REGISTER_FENCE();
+  return Value;
+}
+
+FORCEINLINE
+USHORT
+READ_REGISTER_USHORT(
+  IN volatile USHORT *Register)
+{
+  USHORT Value;
+
+  _RISCV64_REGISTER_FENCE();
+  Value = *Register;
+  _RISCV64_REGISTER_FENCE();
+  return Value;
+}
+
+FORCEINLINE
+ULONG
+READ_REGISTER_ULONG(
+  IN volatile ULONG *Register)
+{
+  ULONG Value;
+
+  _RISCV64_REGISTER_FENCE();
+  Value = *Register;
+  _RISCV64_REGISTER_FENCE();
+  return Value;
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_BUFFER_UCHAR(
+  IN volatile UCHAR *Register,
+  OUT PUCHAR Buffer,
+  IN ULONG Count)
+{
+  _RISCV64_REGISTER_FENCE();
+  while (Count--)
+    *Buffer++ = *Register;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_BUFFER_USHORT(
+  IN volatile USHORT *Register,
+  OUT PUSHORT Buffer,
+  IN ULONG Count)
+{
+  _RISCV64_REGISTER_FENCE();
+  while (Count--)
+    *Buffer++ = *Register;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_BUFFER_ULONG(
+  IN volatile ULONG *Register,
+  OUT PULONG Buffer,
+  IN ULONG Count)
+{
+  _RISCV64_REGISTER_FENCE();
+  while (Count--)
+    *Buffer++ = *Register;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_UCHAR(
+  IN volatile UCHAR *Register,
+  IN UCHAR Value)
+{
+  _RISCV64_REGISTER_FENCE();
+  *Register = Value;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_USHORT(
+  IN volatile USHORT *Register,
+  IN USHORT Value)
+{
+  _RISCV64_REGISTER_FENCE();
+  *Register = Value;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_ULONG(
+  IN volatile ULONG *Register,
+  IN ULONG Value)
+{
+  _RISCV64_REGISTER_FENCE();
+  *Register = Value;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_BUFFER_UCHAR(
+  IN volatile UCHAR *Register,
+  IN PUCHAR Buffer,
+  IN ULONG Count)
+{
+  _RISCV64_REGISTER_FENCE();
+  while (Count--)
+    *Register = *Buffer++;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_BUFFER_USHORT(
+  IN volatile USHORT *Register,
+  IN PUSHORT Buffer,
+  IN ULONG Count)
+{
+  _RISCV64_REGISTER_FENCE();
+  while (Count--)
+    *Register = *Buffer++;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_BUFFER_ULONG(
+  IN volatile ULONG *Register,
+  IN PULONG Buffer,
+  IN ULONG Count)
+{
+  _RISCV64_REGISTER_FENCE();
+  while (Count--)
+    *Register = *Buffer++;
+  _RISCV64_REGISTER_FENCE();
 }
 #endif
 

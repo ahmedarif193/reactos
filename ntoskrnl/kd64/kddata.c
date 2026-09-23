@@ -17,7 +17,8 @@
 VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 
 //
-// Apply the KIPCR WDK workaround for x86 and AMD64
+// Where the WDK's KPCR is only the public prefix of the kernel's KIPCR,
+// describe the kernel structure. The RISC-V KPCR is the whole structure.
 //
 #if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM64)
 #define KPCR KIPCR

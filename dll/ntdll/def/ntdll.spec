@@ -130,11 +130,11 @@
 @ stdcall -stub -version=0x600+ EtwpNotificationThread() ; doesn't exist in win11
 @ stdcall -stub -version=0x502 EtwpSetHWConfigFunction(ptr long)
 @ stdcall -arch=x86_64,arm64 ExpInterlockedPopEntrySListEnd()
-@ stub -version=0x600+ -arch=x86_64,arm64 ExpInterlockedPopEntrySListEnd8
+@ stub -version=0x600+ -arch=x86_64,arm64,riscv64 ExpInterlockedPopEntrySListEnd8
 @ stdcall -arch=x86_64,arm64 ExpInterlockedPopEntrySListFault()
-@ stub -version=0x600+ -arch=x86_64,arm64 ExpInterlockedPopEntrySListFault8
+@ stub -version=0x600+ -arch=x86_64,arm64,riscv64 ExpInterlockedPopEntrySListFault8
 @ stdcall -arch=x86_64,arm64 ExpInterlockedPopEntrySListResume()
-@ stub -version=0x600+ -arch=x86_64,arm64 ExpInterlockedPopEntrySListResume8
+@ stub -version=0x600+ -arch=x86_64,arm64,riscv64 ExpInterlockedPopEntrySListResume8
 @ stdcall -arch=i386 KiFastSystemCall()
 @ stdcall -arch=i386 KiFastSystemCallRet()
 @ stdcall -arch=i386 KiIntSystemCall()
@@ -164,7 +164,7 @@
 @ stdcall LdrGetDllHandleEx(long wstr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ LdrGetFailureData()
 @ stdcall -stub -version=0x600+ LdrGetFileNameFromLoadAsDataTable(ptr ptr)
-@ stdcall -stub -version=0x600+ -arch=x86_64,arm64 LdrGetKnownDllSectionHandle(wstr long ptr)
+@ stdcall -stub -version=0x600+ -arch=x86_64,arm64,riscv64 LdrGetKnownDllSectionHandle(wstr long ptr)
 @ stdcall LdrGetProcedureAddress(ptr ptr long ptr)
 @ stdcall -version=0x600+ LdrGetProcedureAddressEx(ptr ptr long ptr long)
 @ stdcall -stub LdrHotPatchRoutine(ptr)
@@ -175,7 +175,7 @@
 @ stdcall LdrLoadDll(wstr long ptr ptr)
 @ stdcall LdrLockLoaderLock(long ptr ptr)
 @ stdcall LdrOpenImageFileOptionsKey(ptr long ptr) ; 5.2 SP1 and higher
-@ stdcall -stub -version=0x600+ -arch=x86_64,arm64 LdrProcessInitializationComplete()
+@ stdcall -stub -version=0x600+ -arch=x86_64,arm64,riscv64 LdrProcessInitializationComplete()
 @ stdcall LdrProcessRelocationBlock(ptr long ptr long)
 @ stdcall LdrQueryImageFileExecutionOptions(ptr str long ptr long ptr)
 @ stdcall LdrQueryImageFileExecutionOptionsEx(ptr ptr long ptr long ptr long)
@@ -738,7 +738,7 @@
 @ stdcall RtlCompareString(ptr ptr long)
 @ stdcall RtlCompareUnicodeString (ptr ptr long)
 @ stdcall -version=0x600+ RtlCompareUnicodeStrings(wstr long wstr long long)
-@ stdcall -stub -version=0x600+ -arch=x86_64,arm64 RtlCompleteProcessCloning(long)
+@ stdcall -stub -version=0x600+ -arch=x86_64,arm64,riscv64 RtlCompleteProcessCloning(long)
 @ stdcall RtlCompressBuffer(long ptr long ptr long long ptr ptr)
 @ stdcall RtlComputeCrc32(long ptr long)
 @ stdcall RtlComputeImportTableHash(ptr ptr long)
@@ -757,9 +757,9 @@
 @ stdcall RtlCopyLuidAndAttributesArray(long ptr ptr)
 @ stdcall RtlCopyMappedMemory(ptr ptr long)
 @ stdcall -version=0x600+ -arch=x86_64,arm64 RtlCopyExtendedContext(ptr long ptr)
-@ cdecl -version=0x600+ -arch=x86_64 RtlCopyMemory(ptr ptr long) memmove
+@ cdecl -version=0x600+ -arch=x86_64,riscv64 RtlCopyMemory(ptr ptr long) memmove
 @ cdecl -version=0x600+ -arch=arm64 RtlCopyMemory(ptr ptr long) RtlpUserMemmove
-@ stdcall -stub -version=0x600+ -arch=x86_64,arm64 RtlCopyMemoryNonTemporal(ptr ptr long)
+@ stdcall -stub -version=0x600+ -arch=x86_64,arm64,riscv64 RtlCopyMemoryNonTemporal(ptr ptr long)
 @ stdcall RtlCopyMemoryStreamTo(ptr ptr int64 ptr ptr)
 @ stdcall RtlCopyOutOfProcessMemoryStreamTo(ptr ptr int64 ptr ptr) RtlCopyMemoryStreamTo
 @ stdcall RtlCopySecurityDescriptor(ptr ptr)
@@ -895,8 +895,8 @@
 @ stdcall -arch=arm64 ChpeContinueToGuestEx(ptr long)
 @ stdcall -arch=arm64 ProcessPendingCrossProcessEmulatorWork()
 @ stdcall -arch=arm64,arm64ec ChpeIsProcessorFeaturePresent(long)
-@ stdcall -arch=x86_64,arm64 RtlWow64PopAllCrossProcessWorkFromWorkList(ptr ptr)
-@ stdcall -arch=x86_64,arm64 RtlWow64PushCrossProcessWorkOntoFreeList(ptr ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 RtlWow64PopAllCrossProcessWorkFromWorkList(ptr ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 RtlWow64PushCrossProcessWorkOntoFreeList(ptr ptr)
 @ stdcall RtlLocateExtendedFeature(ptr long ptr)
 @ stdcall RtlLocateExtendedFeature2(ptr long ptr ptr)
 @ stdcall -version=0x600+ -arch=x86_64 RtlLocateLegacyContext(ptr ptr)
@@ -1074,7 +1074,7 @@
 @ stdcall RtlInterlockedFlushSList(ptr)
 @ stdcall RtlInterlockedPopEntrySList(ptr)
 @ stdcall RtlInterlockedPushEntrySList(ptr ptr)
-@ stdcall -arch=x86_64,arm64 RtlInterlockedPushListSList(ptr ptr ptr long)
+@ stdcall -arch=x86_64,arm64,riscv64 RtlInterlockedPushListSList(ptr ptr ptr long)
 @ stdcall -version=0x602+ -arch=i386 RtlInterlockedPushListSListEx(ptr ptr ptr long)
 @ stdcall -version=0x602+ -arch=!i386 RtlInterlockedPushListSListEx(ptr ptr ptr long) RtlInterlockedPushListSList
 @ stdcall -stub -version=0x600+ RtlIoDecodeMemIoResource(ptr ptr ptr ptr)
@@ -1165,7 +1165,7 @@
 @ stdcall RtlNtPathNameToDosPathName(long ptr ptr ptr) ; CHECKME (last arg)
 @ stdcall RtlNtStatusToDosError(long)
 @ stdcall RtlNtStatusToDosErrorNoTeb(long)
-@ stub -version=0x600+ -arch=x86_64,arm64 RtlNtdllName
+@ stub -version=0x600+ -arch=x86_64,arm64,riscv64 RtlNtdllName
 @ stdcall RtlNumberGenericTableElements(ptr)
 @ stdcall RtlNumberGenericTableElementsAvl(ptr)
 @ stdcall RtlNumberOfClearBits(ptr)
@@ -1181,7 +1181,7 @@
 @ stdcall RtlPopFrame(ptr)
 @ stdcall RtlPrefixString(ptr ptr long)
 @ stdcall RtlPrefixUnicodeString(ptr ptr long)
-@ stdcall -stub -version=0x600+ -arch=x86_64,arm64 RtlPrepareForProcessCloning()
+@ stdcall -stub -version=0x600+ -arch=x86_64,arm64,riscv64 RtlPrepareForProcessCloning()
 @ stdcall -stub -version=0x600+ RtlProcessFlsData(long long)
 @ stdcall RtlProtectHeap(ptr long)
 @ stdcall RtlPushFrame(ptr)
@@ -1371,8 +1371,7 @@
 @ stdcall -version=0x502 RtlUsageHeap(ptr long ptr)
 @ stdcall -stub -version=0x600+ -arch=arm RtlUserThreadStart(long long)
 @ stdcall -version=0x600+ -arch=i386,arm64 RtlUserThreadStart(long long)
-# TODO(riscv64): export RtlUserThreadStart as RtlpUserThreadStart (start routine in a0, parameter in a1)
-@ stdcall -version=0x600+ -arch=x86_64 RtlUserThreadStart(ptr ptr) RtlpUserThreadStart
+@ stdcall -version=0x600+ -arch=x86_64,riscv64 RtlUserThreadStart(ptr ptr) RtlpUserThreadStart
 @ stdcall RtlValidAcl(ptr)
 @ stdcall RtlValidRelativeSecurityDescriptor(ptr long long)
 @ stdcall RtlValidSecurityDescriptor(ptr)
@@ -1395,7 +1394,7 @@
 @ stdcall -stub -version=0x600+ RtlWow64CallFunction64()
 @ stdcall RtlWow64EnableFsRedirection(long)
 @ stdcall RtlWow64EnableFsRedirectionEx(long ptr)
-@ stdcall -version=0x600+ -arch=x86_64,arm64 RtlOpenCrossProcessEmulatorWorkConnection(ptr ptr ptr)
+@ stdcall -version=0x600+ -arch=x86_64,arm64,riscv64 RtlOpenCrossProcessEmulatorWorkConnection(ptr ptr ptr)
 @ stdcall -version=0x600+ -arch=x86_64,arm64 RtlWow64GetCpuAreaInfo(ptr long ptr)
 @ stdcall -version=0x600+ RtlWow64GetCurrentMachine()
 @ stdcall -version=0x600+ RtlWow64GetProcessMachines(ptr ptr ptr)
@@ -1403,10 +1402,10 @@
 @ stdcall -version=0x600+ -arch=x86_64,arm64 RtlWow64GetThreadContext(ptr ptr)
 @ stdcall -version=0x600+ -arch=x86_64,arm64 RtlWow64GetThreadSelectorEntry(ptr ptr long ptr)
 @ stdcall -version=0x600+ -arch=x86_64 RtlWow64IsWowGuestMachineSupported(long ptr)
-@ stdcall -stub -version=0x600+ -arch=x86_64,arm64 RtlWow64LogMessageInEventLogger(long long long)
-@ stdcall -version=0x600+ -arch=x86_64,arm64 RtlWow64PopCrossProcessWorkFromFreeList(ptr)
-@ stdcall -version=0x600+ -arch=x86_64,arm64 RtlWow64PushCrossProcessWorkOntoWorkList(ptr ptr ptr)
-@ stdcall -version=0x600+ -arch=x86_64,arm64 RtlWow64RequestCrossProcessHeavyFlush(ptr)
+@ stdcall -stub -version=0x600+ -arch=x86_64,arm64,riscv64 RtlWow64LogMessageInEventLogger(long long long)
+@ stdcall -version=0x600+ -arch=x86_64,arm64,riscv64 RtlWow64PopCrossProcessWorkFromFreeList(ptr)
+@ stdcall -version=0x600+ -arch=x86_64,arm64,riscv64 RtlWow64PushCrossProcessWorkOntoWorkList(ptr ptr ptr)
+@ stdcall -version=0x600+ -arch=x86_64,arm64,riscv64 RtlWow64RequestCrossProcessHeavyFlush(ptr)
 @ stdcall -version=0x600+ -arch=x86_64,arm64 RtlWow64SetThreadContext(ptr ptr)
 @ stdcall -version=0x600+ -arch=x86_64,arm64 RtlWow64SuspendThread(ptr ptr)
 @ stdcall RtlWriteMemoryStream(ptr ptr long ptr)
@@ -1441,7 +1440,7 @@
 @ stdcall RtlpNtQueryValueKey(ptr ptr ptr ptr long)
 @ stdcall RtlpNtSetValueKey(ptr long ptr long)
 @ stdcall -stub -version=0x600+ RtlpQueryDefaultUILanguage(ptr long)
-@ stdcall -stub -version=0x600+ -arch=x86_64,arm64 RtlpQueryProcessDebugInformationFromWow64(long ptr)
+@ stdcall -stub -version=0x600+ -arch=x86_64,arm64,riscv64 RtlpQueryProcessDebugInformationFromWow64(long ptr)
 @ stdcall -stub -version=0x600+ RtlpRefreshCachedUILanguage(wstr long)
 @ stdcall -stub -version=0x600+ RtlpSetInstallLanguage(long ptr)
 @ stdcall -stub -version=0x600+ RtlpSetPreferredUILanguages(long ptr ptr) ; x64 only?
@@ -1946,7 +1945,7 @@
 @ cdecl __iscsym(long)
 @ cdecl __iscsymf(long)
 @ cdecl -arch=arm __jump_unwind()
-@ cdecl -stub -version=0x600+ -arch=x86_64,arm64 __misaligned_access()
+@ cdecl -stub -version=0x600+ -arch=x86_64,arm64,riscv64 __misaligned_access()
 @ cdecl __toascii(long)
 @ cdecl -arch=i386 -ret64 _alldiv(double double)
 @ cdecl -arch=i386 _alldvrm()
@@ -1963,7 +1962,7 @@
 @ cdecl -arch=i386 -ret64 _aullrem(double double)
 @ cdecl -arch=i386 _aullshr()
 @ extern -arch=i386 _chkstk
-@ cdecl -arch=i386,x86_64,arm,arm64 _fltused()
+@ cdecl -arch=i386,x86_64,arm,arm64,riscv64 _fltused()
 @ cdecl -arch=i386 -ret64 _ftol()
 @ cdecl _i64toa(double ptr long)
 @ cdecl _i64tow(double ptr long)
@@ -1975,8 +1974,8 @@
 @ cdecl _ltow(long ptr long)
 @ cdecl _memccpy(ptr ptr long long)
 @ cdecl _memicmp(str str long)
-@ cdecl -arch=x86_64,arm,arm64 _setjmp(ptr ptr)
-@ cdecl -arch=x86_64,arm,arm64 _setjmpex(ptr ptr)
+@ cdecl -arch=x86_64,arm,arm64,riscv64 _setjmp(ptr ptr)
+@ cdecl -arch=x86_64,arm,arm64,riscv64 _setjmpex(ptr ptr)
 @ varargs _snprintf(ptr long str)
 @ varargs _snwprintf(ptr long wstr)
 @ cdecl _splitpath(str ptr ptr ptr ptr)
@@ -2033,7 +2032,7 @@
 @ cdecl isxdigit(long)
 @ cdecl labs(long)
 @ cdecl -arch=i386,x86_64,arm64,riscv64 log(double)
-@ cdecl -arch=x86_64,arm64 longjmp(ptr)
+@ cdecl -arch=x86_64,arm64,riscv64 longjmp(ptr)
 @ cdecl mbstowcs(ptr str long)
 @ cdecl memchr(ptr long long)
 @ cdecl memcmp(ptr ptr long)

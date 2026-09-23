@@ -94,3 +94,54 @@ KiRestoreProcessorControlState(_In_ PKPROCESSOR_STATE ProcessorState)
     __asm__ __volatile__("csrw sie, %0" :: "r"(Registers->Sie) : "memory");
     __asm__ __volatile__("csrw sstatus, %0" :: "r"(Registers->Sstatus) : "memory");
 }
+
+/* Register state for the bugcheck screen and log. */
+VOID
+KiDisplayBugCheckRegisterState(
+    _In_opt_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context)
+{
+    CHAR Line[128];
+
+    static const PCSTR Names[32] =
+    {
+        "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
+        "s0", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
+        "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
+        "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
+    };
+    const CONTEXT *Registers = TrapFrame ? &TrapFrame->Context : Context;
+    ULONG Index;
+
+    if (TrapFrame != NULL)
+    {
+        RtlStringCbPrintfA(Line, sizeof(Line), "pc=%016I64x sstatus=%016I64x\r\n",
+                           Registers->Pc, TrapFrame->Sstatus);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "scause=%016I64x stval=%016I64x\r\n",
+                           TrapFrame->Scause, TrapFrame->Stval);
+    }
+    else
+    {
+        RtlStringCbPrintfA(Line, sizeof(Line), "pc=%016I64x\r\n", Registers->Pc);
+    }
+    KiDisplayAndLogBugCheckString(Line);
+
+    /* x1..x31, three per line */
+    for (Index = 1; Index < RTL_NUMBER_OF(Names); Index += 3)
+    {
+        if (Index + 2 < RTL_NUMBER_OF(Names))
+        {
+            RtlStringCbPrintfA(Line, sizeof(Line), "%-4s=%016I64x %-4s=%016I64x %-4s=%016I64x\r\n",
+                               Names[Index], Registers->X[Index],
+                               Names[Index + 1], Registers->X[Index + 1],
+                               Names[Index + 2], Registers->X[Index + 2]);
+        }
+        else
+        {
+            RtlStringCbPrintfA(Line, sizeof(Line), "%-4s=%016I64x\r\n",
+                               Names[Index], Registers->X[Index]);
+        }
+        KiDisplayAndLogBugCheckString(Line);
+    }
+}

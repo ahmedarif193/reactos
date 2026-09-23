@@ -21,16 +21,16 @@ KeGetPreviousMode(VOID)
 }
 #endif
 
-#if defined(_M_ARM64) || (defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10)) || (NTDDI_VERSION < NTDDI_WIN7)
-#define KiThreadAffinityMask(Thread) ((Thread)->Affinity)
-#define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity)
-#else
+#ifdef KTHREAD_GROUP_AFFINITY
 #define KiThreadAffinityMask(Thread) ((Thread)->Affinity.Mask)
 #define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity.Mask)
+#else
+#define KiThreadAffinityMask(Thread) ((Thread)->Affinity)
+#define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity)
 #endif
 
-/* Convert legacy quantum units to amd64 execution-time deadlines. */
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+/* Convert legacy quantum units to execution-time deadlines. */
+#ifdef KI_CYCLE_QUANTUM
 extern ULONG KiCyclesPerClockQuantum;
 
 FORCEINLINE
@@ -40,6 +40,9 @@ KiQuantumUnitsToCycles(
 {
     return (ULONGLONG)Quantum * KiCyclesPerClockQuantum;
 }
+
+/* Counter cycles per clock quantum unit. */
+#define KiGetQuantumUnitCycles() ((ULONG)KiCyclesPerClockQuantum)
 
 FORCEINLINE
 BOOLEAN
@@ -137,6 +140,9 @@ KiDecrementThreadQuantum(
     Thread->Quantum -= (SCHAR)Decrement;
     return Thread->Quantum <= 0;
 }
+
+/* Quantum is counted in clock units, not counter cycles. */
+#define KiGetQuantumUnitCycles() 0UL
 #endif
 
 //

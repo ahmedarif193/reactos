@@ -10,3 +10,8 @@
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\ReactOS RISC-V64","Directory",,"riscv64"
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\ReactOS RISC-V64\Print Processors",,0x00000010
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\ReactOS RISC-V64\Print Processors\winprint","Driver",,"winprint.dll"
+
+; The HAL enumerates the device-tree platform and implements no ACPI interfaces,
+; so acpi.sys is not built.
+; TODO(riscv64): take the ARM64 ACPI path once the HAL implements it.
+HKLM,"SYSTEM\CurrentControlSet\Services\acpi","Start",0x00010001,0x00000004

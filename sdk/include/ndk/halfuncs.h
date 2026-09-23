@@ -375,6 +375,10 @@ NTAPI
 HalSendNMI(
     _In_ KAFFINITY TargetSet);
 
+#endif // _M_AMD64
+
+#ifdef _WIN64
+
 NTHALAPI
 VOID
 NTAPI
@@ -382,7 +386,7 @@ HalSendSoftwareInterrupt(
     _In_ KAFFINITY TargetSet,
     _In_ KIRQL Irql);
 
-#endif // _M_AMD64
+#endif // _WIN64
 
 #if defined(_M_ARM64) || defined(__aarch64__)
 NTHALAPI

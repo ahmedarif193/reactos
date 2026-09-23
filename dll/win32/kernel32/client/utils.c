@@ -938,7 +938,8 @@ BaseInitializeContext(IN PCONTEXT Context,
 
     if (ContextType == 1)      /* For Threads */
     {
-        Context->Pc = (ULONG_PTR)BaseThreadStartup;
+        Context->Pc = (ULONG_PTR)RtlUserThreadStart;
+        Context->Ra = 0;
     }
     else if (ContextType == 2) /* For Fibers */
     {
@@ -946,7 +947,8 @@ BaseInitializeContext(IN PCONTEXT Context,
     }
     else                       /* For first thread in a Process */
     {
-        Context->Pc = (ULONG_PTR)BaseProcessStartup;
+        Context->Pc = (ULONG_PTR)RtlUserThreadStart;
+        Context->Ra = 0;
     }
 
     Context->ContextFlags = CONTEXT_FULL;
@@ -977,7 +979,6 @@ BaseInitializeContext(IN PCONTEXT Context,
 
     /* Give it some room for the Parameter */
     Context->Sp -= sizeof(PVOID);
-/* TODO(riscv64): start threads and the first thread at RtlUserThreadStart with a0 = start routine, a1 = parameter */
 #else
 #warning Unknown architecture
     UNIMPLEMENTED;

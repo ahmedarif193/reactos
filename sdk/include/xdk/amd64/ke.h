@@ -46,6 +46,7 @@ typedef XSAVE_FORMAT XMM_SAVE_AREA32, *PXMM_SAVE_AREA32;
 #define KeGetDcacheFillSize() 1L
 
 #define YieldProcessor _mm_pause
+#define ReadTimeStampCounter() ((ULONG64)__rdtsc())
 #define MemoryBarrier __faststorefence
 #define FastFence __faststorefence
 #define LoadFence _mm_lfence

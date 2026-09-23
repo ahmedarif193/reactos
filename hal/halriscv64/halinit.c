@@ -134,9 +134,11 @@ HalInitSystem(
     /* Reading time is part of the selected supervisor platform contract. An
      * unavailable CSR traps instead of silently substituting an invented QPC. */
     HalpRiscvBootCounter = HalpRiscvReadTime();
-    KeSetTimeIncrement(RISCV_HAL_MAXIMUM_INCREMENT,
-                       RISCV_HAL_MINIMUM_INCREMENT);
     HalpRiscvInitializationFailure = RiscvHalNoFailure;
     HalpRiscvInitializationPhase = 1;
+
+    /* The kernel sizes its quantum from the performance counter frequency. */
+    KeSetTimeIncrement(RISCV_HAL_MAXIMUM_INCREMENT,
+                       RISCV_HAL_MINIMUM_INCREMENT);
     return TRUE;
 }

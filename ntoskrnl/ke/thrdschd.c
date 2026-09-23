@@ -572,41 +572,30 @@ ThreadFound:
     }
     KiReleasePrcbLock(Target);
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
     if (SmpDbgEnabled)
     {
         SmpDbgBalanceEvent(TargetCpu, SourceCpu, Reason);
         if (StandbySteal)
             SmpDbgStandbySteal(TargetCpu);
     }
-#endif
     KiReleaseThreadLock(Thread);
 
     if (RequestSourceIpi)
     {
-#if defined(_M_AMD64) || defined(_M_ARM64)
         if (SmpDbgEnabled)
             SmpDbgSchedulerIpi(SourceCpu, SourceReplacement, SMPDBG_SCHED_STANDBY_REPAIR);
-#endif
         KiIpiSend(Source->SetMember, IPI_DPC);
     }
 
     if (RequestIpi)
     {
-#if defined(_M_AMD64) || defined(_M_ARM64)
         if (SmpDbgEnabled)
             SmpDbgSchedulerIpi(TargetCpu, Thread, IpiCause);
-#endif
         KiIpiSend(Target->SetMember, IPI_DPC);
     }
 
     if (DisplacedThread != NULL)
         KiDeferredReadyThread(DisplacedThread);
-
-#if !defined(_M_AMD64) && !defined(_M_ARM64)
-    DBG_UNREFERENCED_LOCAL_VARIABLE(IpiCause);
-    DBG_UNREFERENCED_LOCAL_VARIABLE(StandbySteal);
-#endif
 
     return TRUE;
 }
@@ -716,10 +705,8 @@ KiSelectNextProcessor(
     }
 
     ASSERT(BestProcessor < (ULONG)KeNumberProcessors);
-#if defined(_M_AMD64) || defined(_M_ARM64)
     if (SmpDbgEnabled)
         SmpDbgBalanceEvent(BestProcessor, Thread->NextProcessor, KiBalanceWakePlacement);
-#endif
     return BestProcessor;
 }
 #else
@@ -954,10 +941,8 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 #ifdef CONFIG_SMP
             if (Prcb != KeGetCurrentPrcb())
             {
-#if defined(_M_AMD64) || defined(_M_ARM64)
                 if (SmpDbgEnabled)
                     SmpDbgSchedulerIpi(Prcb->Number, Thread, SMPDBG_SCHED_REPLACE_STANDBY);
-#endif
                 KiIpiSend(Prcb->SetMember, IPI_DPC);
             }
 #endif
@@ -988,10 +973,8 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             if (KeGetCurrentProcessorNumber() != Thread->NextProcessor)
             {
                 /* We are, send an IPI */
-#if defined(_M_AMD64) || defined(_M_ARM64)
                 if (SmpDbgEnabled)
                     SmpDbgSchedulerIpi(Thread->NextProcessor, Thread, SMPDBG_SCHED_PREEMPT_CURRENT);
-#endif
                 KiIpiSend(AFFINITY_MASK(Thread->NextProcessor), IPI_DPC);
             }
             return;
@@ -1024,10 +1007,8 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 #ifdef CONFIG_SMP
     if (IdleRequest != 0)
     {
-#if defined(_M_AMD64) || defined(_M_ARM64)
         if (SmpDbgEnabled)
             SmpDbgSchedulerIpi(Processor, Thread, SMPDBG_SCHED_IDLE_REQUEST);
-#endif
         KiIpiSend(IdleRequest, IPI_DPC);
     }
 #endif
@@ -1420,10 +1401,8 @@ KiSetPriorityThread(IN PKTHREAD Thread,
                         if (KeGetCurrentProcessorNumber() != Processor)
                         {
                             /* We are, send an IPI */
-#if defined(_M_AMD64) || defined(_M_ARM64)
                             if (SmpDbgEnabled)
                                 SmpDbgSchedulerIpi(Processor, NewThread, SMPDBG_SCHED_PRIORITY);
-#endif
                             KiIpiSend(AFFINITY_MASK(Processor), IPI_DPC);
                         }
                     }
@@ -1486,10 +1465,8 @@ KiUpdateEffectiveAffinityThread(
             if (Prcb != KeGetCurrentPrcb())
             {
                 /* It is, send an IPI */
-#if defined(_M_AMD64) || defined(_M_ARM64)
                 if (SmpDbgEnabled)
                     SmpDbgSchedulerIpi(Thread->NextProcessor, Prcb->NextThread, SMPDBG_SCHED_AFFINITY);
-#endif
                 KiIpiSend(AFFINITY_MASK(Thread->NextProcessor), IPI_DPC);
             }
         }

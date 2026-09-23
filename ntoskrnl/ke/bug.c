@@ -84,7 +84,6 @@ KiLogBugCheckString(
     KdLogDbgPrint(&LogString);
 }
 
-static
 VOID
 KiDisplayAndLogBugCheckString(
     _In_z_ PCSTR String)
@@ -999,93 +998,18 @@ KiDisplayBugCheckRegisters(
     _In_opt_ PKTRAP_FRAME TrapFrame,
     _In_ PCONTEXT Context)
 {
-    CHAR Line[128];
-
     KiDisplayAndLogBugCheckString("Registers:\r\n");
 
-#if defined(_M_ARM64)
-    {
-        const ULONG64 *Registers;
-        ULONG RegisterCount;
-        ULONG Base;
-        ULONG64 Pc;
-        ULONG64 Lr;
-        ULONG64 Sp;
-        ULONG64 Fp;
-        ULONG Cpsr;
-
-        if (TrapFrame != NULL)
-        {
-            Registers = TrapFrame->X;
-            RegisterCount = RTL_NUMBER_OF(TrapFrame->X);
-            Pc = TrapFrame->Pc;
-            Lr = TrapFrame->Lr;
-            Sp = TrapFrame->Sp;
-            Fp = TrapFrame->Fp;
-            Cpsr = TrapFrame->Spsr;
-        }
-        else
-        {
-            Registers = Context->X;
-            RegisterCount = 29;
-            Pc = Context->Pc;
-            Lr = Context->Lr;
-            Sp = Context->Sp;
-            Fp = Context->Fp;
-            Cpsr = Context->Cpsr;
-        }
-
-        RtlStringCbPrintfA(Line, sizeof(Line), "PC=%016I64x LR=%016I64x SP=%016I64x\r\n", Pc, Lr, Sp);
-        KiDisplayAndLogBugCheckString(Line);
-        if (TrapFrame != NULL)
-            RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx ESR=%08lx\r\n", Fp, Cpsr, TrapFrame->Esr);
-        else
-            RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx\r\n", Fp, Cpsr);
-        KiDisplayAndLogBugCheckString(Line);
-
-        for (Base = 0; Base < RegisterCount; Base += 3)
-        {
-            if ((RegisterCount - Base) >= 3)
-                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1], Base + 2, Registers[Base + 2]);
-            else if ((RegisterCount - Base) == 2)
-                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1]);
-            else
-                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x\r\n", Base, Registers[Base]);
-            KiDisplayAndLogBugCheckString(Line);
-        }
-    }
-#elif defined(_M_AMD64)
-    if (TrapFrame != NULL)
-    {
-        RtlStringCbPrintfA(Line, sizeof(Line), "RIP=%016I64x RSP=%016I64x RBP=%016I64x EFL=%08lx\r\n", TrapFrame->Rip, TrapFrame->Rsp, TrapFrame->Rbp, TrapFrame->EFlags);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "RAX=%016I64x RBX=%016I64x RCX=%016I64x\r\n", TrapFrame->Rax, TrapFrame->Rbx, TrapFrame->Rcx);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "RDX=%016I64x RSI=%016I64x RDI=%016I64x\r\n", TrapFrame->Rdx, TrapFrame->Rsi, TrapFrame->Rdi);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "R8 =%016I64x R9 =%016I64x R10=%016I64x\r\n", TrapFrame->R8, TrapFrame->R9, TrapFrame->R10);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "R11=%016I64x FAR=%016I64x ERR=%016I64x\r\n", TrapFrame->R11, TrapFrame->FaultAddress, TrapFrame->ErrorCode);
-        KiDisplayAndLogBugCheckString(Line);
-    }
-    else
-    {
-        RtlStringCbPrintfA(Line, sizeof(Line), "RIP=%016I64x RSP=%016I64x RBP=%016I64x EFL=%08lx\r\n", Context->Rip, Context->Rsp, Context->Rbp, Context->EFlags);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "RAX=%016I64x RBX=%016I64x RCX=%016I64x\r\n", Context->Rax, Context->Rbx, Context->Rcx);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "RDX=%016I64x RSI=%016I64x RDI=%016I64x\r\n", Context->Rdx, Context->Rsi, Context->Rdi);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "R8 =%016I64x R9 =%016I64x R10=%016I64x\r\n", Context->R8, Context->R9, Context->R10);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "R11=%016I64x R12=%016I64x R13=%016I64x\r\n", Context->R11, Context->R12, Context->R13);
-        KiDisplayAndLogBugCheckString(Line);
-        RtlStringCbPrintfA(Line, sizeof(Line), "R14=%016I64x R15=%016I64x\r\n", Context->R14, Context->R15);
-        KiDisplayAndLogBugCheckString(Line);
-    }
+#ifdef _WIN64
+    KiDisplayBugCheckRegisterState(TrapFrame, Context);
 #else
-    RtlStringCbPrintfA(Line, sizeof(Line), "PC=%p\r\n", (PVOID)KeGetContextPc(Context));
-    KiDisplayAndLogBugCheckString(Line);
+    {
+        CHAR Line[128];
+
+        UNREFERENCED_PARAMETER(TrapFrame);
+        RtlStringCbPrintfA(Line, sizeof(Line), "PC=%p\r\n", (PVOID)KeGetContextPc(Context));
+        KiDisplayAndLogBugCheckString(Line);
+    }
 #endif
 }
 
@@ -1183,7 +1107,7 @@ KiLogProcessorBackTraces(
         RtlStringCbPrintfA(Line, sizeof(Line), "CPU %lu%s:\r\n", Processor, TargetPrcb == CurrentPrcb ? " (bugcheck owner)" : "");
         KiLogBugCheckString(Line);
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
         if ((TargetPrcb != CurrentPrcb) &&
             ((TargetPrcb->IpiFrozen & ~IPI_FROZEN_FLAG_ACTIVE) != IPI_FROZEN_STATE_FROZEN))
 #else

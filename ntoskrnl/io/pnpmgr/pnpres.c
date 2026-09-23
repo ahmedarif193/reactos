@@ -12,44 +12,20 @@
 #define NDEBUG
 #include <debug.h>
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#include <reactos/hal/acpi_pci.h>
+#ifdef _WIN64
 #include <reactos/hal/msi.h>
 #endif
 
-/* Strict MSI/legacy vector-range separation on Intel APIC HAL.
- *
- * Legacy line IRQs map through HalpIrqToVector(irq) = irq +
- * PRIMARY_VECTOR_BASE. The IOAPIC exposes APIC_MAX_IRQ (= 24) GSIs,
- * so the only valid legacy window is [0x30 .. 0x47]. Anything above
- * that overflows into the HAL's MSI pool at 0x50-0xCF and breaks the
- * "MSI and line vectors are disjoint" invariant.
- *
- * To keep the two classes strictly disjoint we mirror the HAL-side
- * constants here and
- *   - clamp the generic arbiter's legacy fallback loop
- *     (IopFindInterruptResource) to bus interrupt levels < 24; and
- *   - strip any line (non-MESSAGE) interrupt descriptor planted by
- *     boot firmware whose vector already lives in the MSI range.
- *
- * These values MUST stay in sync with hal/halx86/apic/apicp.h
- * (APIC_MAX_IRQ) and hal/halx86/apic/msip.h (MSI_VECTOR_MIN).
- *
- * On the i386 PIC HAL the MSI pool does not exist; the clamp below
- * is a harmless superset. ARM64 uses the GIC (SPI/PPI/LPI) with a
- * completely different vector model and must provide its own
- * equivalent constants when MSI support lands there — do NOT reuse
- * these Intel numbers on arm64. */
-#if defined(_M_IX86) || defined(_M_AMD64)
-#define IOP_APIC_MAX_IRQ          24
-#define IOP_APIC_MSI_VECTOR_MIN   0x50
-#endif
-
-/* Fixed GSIs in [IOP_APIC_MAX_IRQ, IOP_APIC_MAX_GSI) pass through to the
- * HAL spillover allocator; flexible ranges stay below IOP_APIC_MAX_IRQ. */
-#if defined(_M_AMD64)
-#include <reactos/hal/acpi_pci.h>
-#define IOP_APIC_MAX_GSI          HAL_ACPI_MAX_GSI_PINS
-#endif
+/* Line and message interrupts must stay in disjoint vector ranges. An
+ * interrupt controller with a fixed line window or a message vector pool
+ * describes it in the architecture header, mirroring its HAL:
+ *   IOP_LINE_INTERRUPT_LIMIT  - flexible line requirements stay below it;
+ *   IOP_FIXED_INTERRUPT_LIMIT - firmware-fixed lines (minimum == maximum)
+ *                               must be below it;
+ *   IOP_MESSAGE_VECTOR_BASE   - a line interrupt whose vector is at or above
+ *                               it was left by firmware inside the message
+ *                               pool and is dropped. */
 
 static
 BOOLEAN
@@ -69,7 +45,6 @@ IopGetNextResourceList(
         &ResourceList->Descriptors[ResourceList->Count]);
 }
 
-#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM64)
 /* Consolidate interrupt descriptors in a device's CM_RESOURCE_LIST
  * so that only the interrupt class the device will actually use
  * survives. This runs after the PnP arbiter has picked an
@@ -77,8 +52,9 @@ IopGetNextResourceList(
  *
  * Two classes of garbage are removed:
  *
- *   1. On x86, ghost line IRQs planted by firmware with a Vector
- *      already inside the MSI pool (Vector >= IOP_APIC_MSI_VECTOR_MIN).
+ *   1. Where the interrupt controller has a message vector pool, ghost
+ *      line IRQs planted by firmware with a Vector already inside it
+ *      (Vector >= IOP_MESSAGE_VECTOR_BASE).
  *      A legal legacy IRQ must never land there; such descriptors
  *      are leftover artifacts from boot routing tables and confuse
  *      drivers that iterate the list.
@@ -135,8 +111,8 @@ IopConsolidateInterruptDescriptors(
             if (Desc->Type == CmResourceTypeInterrupt &&
                 !(Desc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
             {
-#if defined(_M_IX86) || defined(_M_AMD64)
-                if (Desc->u.Interrupt.Vector >= IOP_APIC_MSI_VECTOR_MIN)
+#ifdef IOP_MESSAGE_VECTOR_BASE
+                if (Desc->u.Interrupt.Vector >= IOP_MESSAGE_VECTOR_BASE)
                 {
                     DPRINT1("IopConsolidateInterruptDescriptors: dropping ghost "
                             "legacy interrupt vec=0x%x level=%lu "
@@ -167,7 +143,6 @@ IopConsolidateInterruptDescriptors(
         FullDesc = CmiGetNextResourceDescriptor(FullDesc);
     }
 }
-#endif
 
 static
 BOOLEAN
@@ -533,7 +508,7 @@ IopFindInterruptResource(
            IoDesc->Flags,
            IoDesc->u.Interrupt.MinimumVector, IoDesc->u.Interrupt.MaximumVector);
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     if (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
     {
         HAL_MESSAGE_ROUTING_INFO RoutingInfo;
@@ -564,8 +539,8 @@ IopFindInterruptResource(
         RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
         RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
         RoutingInfo.Flags = HAL_MSI_ROUTING_ALLOCATE_VECTOR;
-#if defined(_M_AMD64)
-        RoutingInfo.DesiredIrql = CLOCK_LEVEL - 1;
+#ifdef IOP_MESSAGE_INTERRUPT_IRQL
+        RoutingInfo.DesiredIrql = IOP_MESSAGE_INTERRUPT_IRQL;
 #endif
         RoutingInfo.MessageCount = MessageCount;
 
@@ -594,37 +569,27 @@ IopFindInterruptResource(
         ULONG LegacyMin = IoDesc->u.Interrupt.MinimumVector;
         ULONG LegacyMax = IoDesc->u.Interrupt.MaximumVector;
 
-#if defined(_M_AMD64)
-        /* Fixed requirements (min == max) are firmware-assigned GSIs: let
-         * them through to the pin bound and let translation decide.
+#ifdef IOP_LINE_INTERRUPT_LIMIT
+        /* Fixed requirements (min == max) are firmware-assigned lines: let
+         * them through to the controller bound and let translation decide.
          * Flexible ranges stay clamped below the fixed line window. */
         if (LegacyMin == LegacyMax)
         {
-            if (LegacyMin >= IOP_APIC_MAX_GSI)
+            if (LegacyMin >= IOP_FIXED_INTERRUPT_LIMIT)
             {
-                DPRINT1("IopFindInterruptResource: fixed GSI %lu past IOAPIC range\n", LegacyMin);
+                DPRINT1("IopFindInterruptResource: fixed line %lu past the controller range\n", LegacyMin);
                 return FALSE;
             }
         }
         else
         {
-            if (LegacyMax >= IOP_APIC_MAX_IRQ)
-                LegacyMax = IOP_APIC_MAX_IRQ - 1;
-            if (LegacyMin >= IOP_APIC_MAX_IRQ)
+            if (LegacyMax >= IOP_LINE_INTERRUPT_LIMIT)
+                LegacyMax = IOP_LINE_INTERRUPT_LIMIT - 1;
+            if (LegacyMin >= IOP_LINE_INTERRUPT_LIMIT)
             {
-                DPRINT1("IopFindInterruptResource: legacy min %lu past IOAPIC range\n", LegacyMin);
+                DPRINT1("IopFindInterruptResource: legacy min %lu past the line window\n", LegacyMin);
                 return FALSE;
             }
-        }
-#elif defined(_M_IX86)
-        /* The i386 APIC HAL keeps the fixed 24-line window */
-        if (LegacyMax >= IOP_APIC_MAX_IRQ)
-            LegacyMax = IOP_APIC_MAX_IRQ - 1;
-        if (LegacyMin >= IOP_APIC_MAX_IRQ)
-        {
-            DPRINT1("IopFindInterruptResource: legacy min %lu past IOAPIC range\n",
-                    LegacyMin);
-            return FALSE;
         }
 #endif
 
@@ -652,7 +617,7 @@ static
 VOID
 IopReleaseMessageVector(ULONG Vector)
 {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
     HAL_MESSAGE_ROUTING_INFO RoutingInfo;
     NTSTATUS Status;
 
@@ -2035,7 +2000,7 @@ IopAssignDeviceResources(
 
        RtlCopyMemory(DeviceNode->ResourceList, DeviceNode->BootResources, ListSize);
 
-#if defined(_M_IX86) || defined(_M_AMD64)
+#ifdef IOP_MESSAGE_VECTOR_BASE
        /* First consolidation pass: drop firmware-planted line
         * interrupts whose vector is inside the MSI pool. This runs
         * before arbitration so the boot resources are clean when the
@@ -2062,7 +2027,6 @@ IopAssignDeviceResources(
    /* Add resource requirements that aren't in the list we already got */
    Status = IopFixupResourceListWithRequirements(DeviceNode->ResourceRequirements, &DeviceNode->ResourceList, DeviceNode);
 
-#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM64)
    /* Second consolidation pass: now that arbitration has finished
     * and the MSI/MSI-X descriptor (if any) has been added, drop the
     * obsolete legacy line descriptor that came from BootResources.
@@ -2071,7 +2035,6 @@ IopAssignDeviceResources(
     * the device will actually use — matching Windows behaviour. */
    if (NT_SUCCESS(Status) && DeviceNode->ResourceList)
        IopConsolidateInterruptDescriptors(DeviceNode->ResourceList);
-#endif
    if (!NT_SUCCESS(Status))
    {
        DPRINT1("Failed to fixup a resource list from supplied resources for %wZ\n", &DeviceNode->InstancePath);

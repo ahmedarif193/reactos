@@ -13,7 +13,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
 NTHALAPI
 NTSTATUS
 NTAPI
@@ -370,7 +370,7 @@ IopConnectInterruptExMessageBased(
         MsgEntry = &Table->MessageInfo[MessageIdx];
         MsgEntry->MessageAddress.QuadPart = 0;
         MsgEntry->MessageData              = (USHORT)MessageIdx;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef _WIN64
         {
             HAL_MESSAGE_ROUTING_INFO RoutingInfo;
             NTSTATUS RoutingStatus;

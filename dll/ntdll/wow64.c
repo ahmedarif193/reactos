@@ -71,7 +71,7 @@ RtlWow64GetCurrentMachine(VOID)
     if (ChpeIsChpeProcess())
         return IMAGE_FILE_MACHINE_AMD64;
 #endif
-#if defined(_WIN64) && !defined(_M_RISCV64)
+#ifdef WOW64_SUPPORTED
     if (NtCurrentTeb()->WowTebOffset)
         RtlWow64GetCurrentCpuArea(&machine, NULL, NULL);
 #endif
@@ -159,7 +159,7 @@ RtlIsCurrentProcess(HANDLE process)
     return RtlpIsCurrentProcess(process);
 }
 
-#if defined(_WIN64) && !defined(_M_RISCV64)
+#ifdef WOW64_SUPPORTED
 
 NTSTATUS
 WINAPI

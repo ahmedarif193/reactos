@@ -19,6 +19,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <reactos/smpdbg.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -159,6 +160,23 @@ KeDisconnectInterrupt(PKINTERRUPT Interrupt)
     return TRUE;
 }
 
+/* The debugger lists connected sources with the other processors frozen. */
+PKINTERRUPT
+NTAPI
+KiRiscvQueryInterrupt(_In_ ULONG Source)
+{
+    if ((Source == 0) || (Source > RISCV_PLIC_MAX_SOURCE))
+        return NULL;
+    return KiRiscvInterruptTable[Source];
+}
+
+ULONG
+NTAPI
+KiRiscvQueryInterruptLimit(VOID)
+{
+    return RISCV_PLIC_MAX_SOURCE + 1;
+}
+
 static
 VOID
 KiRiscvExternalInterrupt(_Inout_ PKTRAP_FRAME TrapFrame)
@@ -222,6 +240,9 @@ KiDispatchInterrupt(VOID)
     PKTHREAD NewThread, OldThread;
 
     ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
+
+    if (SmpDbgEnabled)
+        SmpDbgDispatchInterrupt(Prcb->Number);
 
     /* KiRetireDpcList expects interrupts disabled and re-enables them
      * around each deferred routine. */

@@ -883,3 +883,41 @@ KeFlushIoBuffers(
 
     /* x86-64 DMA is cache coherent. */
 }
+
+/* Register state for the bugcheck screen and log. */
+VOID
+KiDisplayBugCheckRegisterState(
+    _In_opt_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context)
+{
+    CHAR Line[128];
+
+    if (TrapFrame != NULL)
+    {
+        RtlStringCbPrintfA(Line, sizeof(Line), "RIP=%016I64x RSP=%016I64x RBP=%016I64x EFL=%08lx\r\n", TrapFrame->Rip, TrapFrame->Rsp, TrapFrame->Rbp, TrapFrame->EFlags);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "RAX=%016I64x RBX=%016I64x RCX=%016I64x\r\n", TrapFrame->Rax, TrapFrame->Rbx, TrapFrame->Rcx);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "RDX=%016I64x RSI=%016I64x RDI=%016I64x\r\n", TrapFrame->Rdx, TrapFrame->Rsi, TrapFrame->Rdi);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R8 =%016I64x R9 =%016I64x R10=%016I64x\r\n", TrapFrame->R8, TrapFrame->R9, TrapFrame->R10);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R11=%016I64x FAR=%016I64x ERR=%016I64x\r\n", TrapFrame->R11, TrapFrame->FaultAddress, TrapFrame->ErrorCode);
+        KiDisplayAndLogBugCheckString(Line);
+    }
+    else
+    {
+        RtlStringCbPrintfA(Line, sizeof(Line), "RIP=%016I64x RSP=%016I64x RBP=%016I64x EFL=%08lx\r\n", Context->Rip, Context->Rsp, Context->Rbp, Context->EFlags);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "RAX=%016I64x RBX=%016I64x RCX=%016I64x\r\n", Context->Rax, Context->Rbx, Context->Rcx);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "RDX=%016I64x RSI=%016I64x RDI=%016I64x\r\n", Context->Rdx, Context->Rsi, Context->Rdi);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R8 =%016I64x R9 =%016I64x R10=%016I64x\r\n", Context->R8, Context->R9, Context->R10);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R11=%016I64x R12=%016I64x R13=%016I64x\r\n", Context->R11, Context->R12, Context->R13);
+        KiDisplayAndLogBugCheckString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R14=%016I64x R15=%016I64x\r\n", Context->R14, Context->R15);
+        KiDisplayAndLogBugCheckString(Line);
+    }
+}

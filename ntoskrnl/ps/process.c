@@ -1675,7 +1675,7 @@ NtCreateProcess(OUT PHANDLE ProcessHandle,
 }
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
 static NTSTATUS
 PspInitializeWow64Process(IN PEPROCESS Process,
                           IN PSECTION_IMAGE_INFORMATION ImageInformation)
@@ -1766,7 +1766,7 @@ PspAllocateUserStack(IN HANDLE ProcessHandle,
     return STATUS_SUCCESS;
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
 static NTSTATUS
 PspAppendWow64String(IN PUNICODE_STRING Source,
                      OUT PWOW64_UNICODE_STRING Destination,
@@ -1937,7 +1937,7 @@ PspCreateWow64ProcessParameters(IN HANDLE ProcessHandle,
  * on XP/2003. It creates the process, section, PEB, initial thread, TEB,
  * and returns both handles in a single call.
  */
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
 #ifndef INITIAL_FPCSR
 #define INITIAL_FPCSR 0x027f
 #endif
@@ -2266,7 +2266,7 @@ PspApplyCreationMitigations(
         PspStoreMitigationPolicy(Process, PSP_IMAGE_LOAD_POLICY,
                                  PsGetProcessMitigationPolicyFlags(Process, PSP_IMAGE_LOAD_POLICY) | 4);
 
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) && (defined(_M_ARM64) || defined(_M_IX86) || defined(_M_AMD64))
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM) /* KeRaiseUserException is a stub on ARM */
     if (((Options >> 24) & 3) == 1)
     {
         PHANDLE_TABLE HandleTable = ObReferenceProcessHandleTable(Process);
@@ -2494,7 +2494,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     HANDLE ExceptionPort = NULL;
     HANDLE TokenHandle = NULL;
     PVOID NativeProcessParameters = NULL;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     PVOID Wow64ProcessParameters = NULL;
 #endif
     ULONG PspProcessFlags = 0;
@@ -2512,7 +2512,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     CLIENT_ID ClientId;
     INITIAL_TEB InitialTeb;
     PINITIAL_TEB Wow64InitialTebPointer = NULL;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     INITIAL_TEB Wow64InitialTeb;
 #endif
     CONTEXT ThreadContext;
@@ -2534,7 +2534,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     WCHAR BnoPrefixBuffer[256];
     BOOLEAN BnoIsolationPresent = FALSE;
     BOOLEAN AttributeError = FALSE;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     PEB32 *Wow64Peb = NULL;
 #endif
     PAGED_CODE();
@@ -3119,7 +3119,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
             ObFastDereferenceObject(&Process->Token, LowBoxToken);
         }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
         if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
         {
             Status = PspInitializeWow64Process(Process, &ImageInformation);
@@ -3319,7 +3319,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         Status = STATUS_SUCCESS;
     }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     if (Wow64Peb && ProcessParameters)
     {
         Status = PspCreateWow64ProcessParameters(hProcess, ProcessParameters, Wow64Peb, &Wow64ProcessParameters);
@@ -3340,7 +3340,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
      */
 
     /* WoW64 uses a low 32-bit application stack and a separate emulator stack. */
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     if (Wow64Peb)
     {
         WOW64_CPU_INIT CpuInit;
@@ -3443,7 +3443,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
 #endif
 
     /* Create the initial thread via PspCreateThread */
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
     Wow64InitialTebPointer = Wow64Peb ? &Wow64InitialTeb : NULL;
 #endif
     /* The native bootstrap registers do not carry the x86 Win32 entry point. */
@@ -3472,14 +3472,14 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         CreateInfo->SuccessState.FileHandle = hFile;
         CreateInfo->SuccessState.SectionHandle = hSection;
         CreateInfo->SuccessState.UserProcessParametersNative = (ULONGLONG)(ULONG_PTR)NativeProcessParameters;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
         CreateInfo->SuccessState.UserProcessParametersWow64 = PtrToUlong(Wow64ProcessParameters);
 #else
         CreateInfo->SuccessState.UserProcessParametersWow64 = 0;
 #endif
         CreateInfo->SuccessState.CurrentParameterFlags = 0;
         CreateInfo->SuccessState.PebAddressNative = (ULONGLONG)(ULONG_PTR)ProcessBasicInfo.PebBaseAddress;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#ifdef WOW64_SUPPORTED
         CreateInfo->SuccessState.PebAddressWow64 = PtrToUlong(Wow64Peb);
 #else
         CreateInfo->SuccessState.PebAddressWow64 = 0;

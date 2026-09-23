@@ -5,8 +5,8 @@
 
     .text
     .p2align 2
-    .global KeSaveFloatingPointState
-KeSaveFloatingPointState:
+    .global KxSaveFloatingPointState
+KxSaveFloatingPointState:
     csrr t0, sscratch
     lbu t1, PcIrql(t0)
     li t2, DISPATCH_LEVEL
@@ -24,8 +24,8 @@ KeSaveFloatingPointState:
     ret
 
     .p2align 2
-    .global KeRestoreFloatingPointState
-KeRestoreFloatingPointState:
+    .global KxRestoreFloatingPointState
+KxRestoreFloatingPointState:
     csrr t0, sscratch
     ld t1, PcCurrentThread(t0)
     ld t2, FsOwner(a0)

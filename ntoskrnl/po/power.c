@@ -1798,18 +1798,16 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
 
             for (i = 0; i < ProcessorCount; i++)
             {
-#if defined(_M_ARM64)
+#ifdef _WIN64
+                /* The effective clock is sampled on the processor itself. */
                 KeSetSystemAffinityThread(AFFINITY_MASK(i));
-                CurrentSpeed[i] = KiArm64QueryEffectiveClockMHz(i);
-#elif defined(_M_AMD64)
-                KeSetSystemAffinityThread(AFFINITY_MASK(i));
-                CurrentSpeed[i] = KiAmd64QueryEffectiveMHz(i);
+                CurrentSpeed[i] = KiQueryEffectiveProcessorMhz(i);
 #else
                 CurrentSpeed[i] = KiProcessorBlock[i]->MHz;
 #endif
                 MaxSpeed[i] = KiProcessorBlock[i]->MHz;
             }
-#if defined(_M_ARM64) || defined(_M_AMD64)
+#ifdef _WIN64
             if (ProcessorCount != 0)
             {
                 KeRevertToUserAffinityThread();

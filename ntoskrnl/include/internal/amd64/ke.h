@@ -489,6 +489,7 @@ VOID KiSetProcessorType(VOID);
 ULONG64 KiGetFeatureBits(VOID);
 VOID KiInitializeCpuFeatures(VOID);
 ULONG NTAPI KiAmd64QueryEffectiveMHz(_In_ ULONG ProcessorNumber);
+#define KiQueryEffectiveProcessorMhz(Number) KiAmd64QueryEffectiveMHz(Number)
 #if DBG
 VOID KiReportCpuFeatures(IN PKPRCB Prcb);
 #endif
@@ -616,6 +617,22 @@ KiClearDpcRequestState(
 {
     Prcb->DpcInterruptRequested = FALSE;
 }
+
+#define _KeIsExecutingDpc() (KeGetCurrentPrcb()->DpcRoutineActive)
+
+#define KiIsUserModeTrap(TrapFrame) \
+    (KiUserTrap(TrapFrame) || ((TrapFrame)->EFlags & EFLAGS_V86_MASK))
+
+/* Interrupt resources of the APIC HAL: flexible line requirements stay on the
+ * 24 pins of the first I/O APIC, firmware-fixed GSIs may use any I/O APIC pin,
+ * and message vectors start at 0x50, just below CLOCK_LEVEL. Keep in sync
+ * with APIC_MAX_IRQ (hal/halx86/apic/apicp.h) and MSI_VECTOR_MIN
+ * (hal/halx86/apic/msip.h); IOP_FIXED_INTERRUPT_LIMIT needs
+ * <reactos/hal/acpi_pci.h>. */
+#define IOP_LINE_INTERRUPT_LIMIT    24
+#define IOP_FIXED_INTERRUPT_LIMIT   HAL_ACPI_MAX_GSI_PINS
+#define IOP_MESSAGE_VECTOR_BASE     0x50
+#define IOP_MESSAGE_INTERRUPT_IRQL  (CLOCK_LEVEL - 1)
 
 #ifdef __cplusplus
 } // extern "C"

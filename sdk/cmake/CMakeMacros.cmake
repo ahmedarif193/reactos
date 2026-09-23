@@ -1161,12 +1161,6 @@ function(create_registry_hives)
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst.inf)
     endif()
-    if(ARCH STREQUAL "riscv64")
-        # Apply the FDT platform's ACPI and ramdisk policies after the common
-        # LiveCD and per-driver inputs.
-        list(APPEND _livecd_inf_files
-            ${CMAKE_SOURCE_DIR}/boot/bootdata/riscv64/livecd-hive.inf)
-    endif()
     foreach(_livecd_extra_registry_inf IN LISTS LIVECD_EXTRA_REGISTRY_INF)
         if(_livecd_extra_registry_inf STREQUAL "")
             continue()

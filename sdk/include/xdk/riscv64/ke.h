@@ -55,11 +55,33 @@ FORCEINLINE VOID YieldProcessor(VOID)
 }
 #endif
 #define PAUSE_PROCESSOR YieldProcessor()
+
+/* The time CSR is the counter every privilege level can read. */
+FORCEINLINE
+ULONG64
+ReadTimeStampCounter(
+    VOID)
+{
+    ULONG64 Value;
+
+    __asm__ __volatile__("rdtime %0" : "=r"(Value) :: "memory");
+    return Value;
+}
 #define DbgRaiseAssertionFailure() __debugbreak()
 #define KeMemoryBarrier() MemoryBarrier()
 
 NTKERNELAPI PKTHREAD NTAPI KeGetCurrentThread(VOID);
-NTKERNELAPI ULONG NTAPI KeGetCurrentProcessorNumber(VOID);
+
+#if !defined(_NTOSKRNL_) && !defined(_NTSYSTEM_)
+FORCEINLINE
+ULONG
+KeGetCurrentProcessorNumber(VOID)
+{
+    extern NTKERNELAPI ULONG NTAPI KeGetCurrentProcessorNumberEx(
+        _Out_opt_ PPROCESSOR_NUMBER ProcNumber);
+    return KeGetCurrentProcessorNumberEx(NULL);
+}
+#endif
 
 _Must_inspect_result_
 _IRQL_requires_max_(DISPATCH_LEVEL)
