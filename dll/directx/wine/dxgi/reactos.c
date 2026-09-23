@@ -12,6 +12,51 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dxgi);
 
+HRESULT dxgi_get_wddm_output_index(struct wined3d_adapter *adapter, UINT output_idx, UINT *wined3d_output_idx)
+{
+    struct wined3d_adapter_identifier identifier = {0};
+    struct wined3d_output_desc desc;
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME open_adapter;
+    D3DKMT_CLOSEADAPTER close_adapter;
+    UINT i, count;
+    HRESULT hr;
+
+    wined3d_mutex_lock();
+    hr = wined3d_adapter_get_identifier(adapter, 0, &identifier);
+    count = wined3d_adapter_get_output_count(adapter);
+    wined3d_mutex_unlock();
+    if (FAILED(hr))
+        return hr;
+
+    /* WineD3D uses desktop outputs to host its GL contexts, including when
+     * the ICD renders on a different adapter. DXGI must enumerate only the
+     * outputs owned by this adapter, or clients import desktop allocations
+     * into the wrong device. Keep the underlying WineD3D ordinal for creation. */
+    for (i = 0; i < count; ++i)
+    {
+        wined3d_mutex_lock();
+        hr = wined3d_output_get_desc(wined3d_adapter_get_output(adapter, i), &desc);
+        wined3d_mutex_unlock();
+        if (FAILED(hr))
+            continue;
+        memset(&open_adapter, 0, sizeof(open_adapter));
+        lstrcpynW(open_adapter.DeviceName, desc.device_name, ARRAY_SIZE(open_adapter.DeviceName));
+        if (!NT_SUCCESS(D3DKMTOpenAdapterFromGdiDisplayName(&open_adapter)))
+            continue;
+        close_adapter.hAdapter = open_adapter.hAdapter;
+        D3DKMTCloseAdapter(&close_adapter);
+        if (open_adapter.AdapterLuid.LowPart != identifier.adapter_luid.LowPart
+                || open_adapter.AdapterLuid.HighPart != identifier.adapter_luid.HighPart)
+            continue;
+        if (!output_idx--)
+        {
+            *wined3d_output_idx = i;
+            return S_OK;
+        }
+    }
+    return DXGI_ERROR_NOT_FOUND;
+}
+
 HRESULT dxgi_get_wddm_adapter_desc(LUID luid, DXGI_ADAPTER_DESC3 *desc)
 {
     D3DKMT_OPENADAPTERFROMLUID open_adapter = {0};

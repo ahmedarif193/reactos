@@ -206,6 +206,7 @@ HRESULT d3d12_swapchain_create(IWineDXGIFactory *factory, ID3D12CommandQueue *qu
 #if defined(__REACTOS__) && defined(REACTOS_DXGI_D3DKMT_ADAPTER_ORDER)
 HRESULT dxgi_get_wddm_adapter_desc(LUID luid, DXGI_ADAPTER_DESC3 *desc);
 HRESULT dxgi_get_wddm_adapter_index(struct wined3d *wined3d, UINT wddm_adapter_idx, UINT *wined3d_adapter_idx);
+HRESULT dxgi_get_wddm_output_index(struct wined3d_adapter *adapter, UINT output_idx, UINT *wined3d_output_idx);
 #endif
 
 BOOL dxgi_validate_swapchain_desc(const DXGI_SWAP_CHAIN_DESC1 *desc);
