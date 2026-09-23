@@ -528,6 +528,48 @@ BOOL AnyAdapterHasNativeDriver()
     return Found;
 }
 
+BOOL CheckSharedSurfaceSupport()
+{
+    /* An adapter can have a native UMD registered even when D3D11CreateDevice
+     * falls back to a runtime that cannot import window publications. Check
+     * the complete legacy shared-handle path before enabling composition;
+     * otherwise every frame fails and recreates the same unusable device. */
+    D3D11_TEXTURE2D_DESC Desc = {};
+    Desc.Width = Desc.Height = 1;
+    Desc.MipLevels = Desc.ArraySize = Desc.SampleDesc.Count = 1;
+    Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    Desc.Usage = D3D11_USAGE_DEFAULT;
+    Desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    Desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
+    ID3D11Texture2D *Texture = NULL, *Opened = NULL;
+    IDXGIResource *Resource = NULL;
+    HANDLE Share = NULL;
+    HRESULT Status = State.Device->CreateTexture2D(&Desc, NULL, &Texture);
+    if (SUCCEEDED(Status))
+        Status = Texture->QueryInterface(IID_IDXGIResource, (void **)&Resource);
+    if (SUCCEEDED(Status))
+        Status = Resource->GetSharedHandle(&Share);
+    if (SUCCEEDED(Status))
+        Status = Share ? State.Device->OpenSharedResource(Share, IID_ID3D11Texture2D,
+            (void **)&Opened) : E_FAIL;
+    if (SUCCEEDED(Status))
+    {
+        D3D11_TEXTURE2D_DESC Actual = {};
+        Opened->GetDesc(&Actual);
+        if (Actual.Width != Desc.Width || Actual.Height != Desc.Height ||
+            Actual.MipLevels != 1 || Actual.ArraySize != 1 ||
+            Actual.SampleDesc.Count != 1 || Actual.Format != Desc.Format ||
+            !(Actual.BindFlags & D3D11_BIND_SHADER_RESOURCE))
+            Status = DXGI_ERROR_UNSUPPORTED;
+    }
+    /* A legacy DXGI shared handle belongs to the resource, not CloseHandle. */
+    Release(Opened);
+    Release(Resource);
+    Release(Texture);
+    return Result(Status, "shared-surface capability check");
+}
+
 BOOL CreateDevice(IDXGIAdapter1 **Selected)
 {
     typedef HRESULT (WINAPI *CreateFactoryProc)(REFIID, void **);
@@ -589,6 +631,8 @@ BOOL CreateDevice(IDXGIAdapter1 **Selected)
                     Actual.AdapterLuid.LowPart == Desc.AdapterLuid.LowPart;
                 Release(ActualAdapter);
                 Release(DxgiDevice);
+                if (Success)
+                    Success = CheckSharedSurfaceSupport();
                 if (!Success)
                 {
                     Release(State.Context);
