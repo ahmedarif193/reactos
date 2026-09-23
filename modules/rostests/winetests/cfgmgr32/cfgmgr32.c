@@ -3579,7 +3579,10 @@ static void test_CM_Get_DevNode_Property(void)
     ret = CM_Get_DevNode_PropertyW( node, &DEVPKEY_Device_InstanceId, &type, (BYTE *)buffer, &len, 0 );
     ok_x4( ret, ==, CR_SUCCESS );
     ok_u4( type, ==, DEVPROP_TYPE_STRING );
-    ok_u4( len, >, 1 );
+    ok_u4( len, ==, (wcslen(instance_id) + 1) * sizeof(WCHAR) );
+    if (ret == CR_SUCCESS)
+        ok( !wcsicmp(buffer, instance_id), "expected full instance ID %s, got %s\n",
+            debugstr_w(instance_id), debugstr_w(buffer) );
 
     len = sizeof(buffer);
     ret = CM_Get_DevNode_PropertyW( node, &DEVPKEY_Device_EjectionRelations, &type, (BYTE *)buffer, &len, 0 );
