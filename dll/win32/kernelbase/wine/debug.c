@@ -25,6 +25,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "winternl.h"
+#include "werapi.h"
 
 #include "wine/debug.h"
 
@@ -107,6 +108,18 @@ HRESULT WINAPI WerRegisterMemoryBlock(void *block, DWORD size)
 HRESULT WINAPI WerUnregisterMemoryBlock(void *block)
 {
     FIXME("(%p): crash-report memory registration is not implemented\n", block);
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI WerRegisterFile(const WCHAR *file, WER_REGISTER_FILE_TYPE type, DWORD flags)
+{
+    FIXME("(%s, %d, %lu): crash-report file registration is not implemented\n", debugstr_w(file), type, flags);
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI WerUnregisterFile(const WCHAR *file)
+{
+    FIXME("(%s): crash-report file registration is not implemented\n", debugstr_w(file));
     return E_NOTIMPL;
 }
 
