@@ -50,8 +50,9 @@ Rpi5MboxTransact(
         return FALSE;
     }
 
-    /* The firmware takes a 32-bit address; the buffer is allocated <4 GB. */
-    Message = ((ULONG)DeviceExtension->MboxBufferPhys.QuadPart & ~0xFu) |
+    /* The property channel addresses the low 1 GiB through the VideoCore
+     * uncached bus alias, not through the ARM physical address space. */
+    Message = (ULONG)DeviceExtension->MboxBufferPhys.QuadPart | 0xC0000000u |
               RPI5_MBOX_CHANNEL_PROPERTY;
 
 #if defined(_M_ARM64)
@@ -242,9 +243,9 @@ Rpi5MboxInitialize(
     if (DeviceExtension->MboxBase == NULL)
         return FALSE;
 
-    /* Property buffer: 16-byte aligned, below 4 GB for the firmware. */
+    /* The upper two bus-address bits select the VideoCore memory alias. */
     Low.QuadPart = 0;
-    High.QuadPart = 0xFFFFFFFFULL;
+    High.QuadPart = 0x3FFFFFFFULL;
     Boundary.QuadPart = 0;
     DeviceExtension->MboxBufferVa = MmAllocateContiguousMemorySpecifyCache(
         RPI5_MBOX_BUFFER_BYTES, Low, High, Boundary, MmNonCached);
