@@ -72,6 +72,23 @@ static const WCHAR text_color_propW[] = L"ReactOS.Dwm.TextColor";
 static const WCHAR system_backdrop_propW[] = L"ReactOS.Dwm.SystemBackdropType";
 static const WCHAR mica_effect_propW[] = L"ReactOS.Dwm.MicaEffect";
 
+static BOOL (WINAPI *dwm_theme_defwndproc)(HWND, UINT, WPARAM, LPARAM, LRESULT *);
+static VOID (WINAPI *dwm_theme_frame_changed)(HWND);
+
+static void dwm_load_theme_hooks(void)
+{
+    static LONG loaded;
+    HMODULE module;
+
+    if (InterlockedCompareExchange(&loaded, 1, 0))
+        return;
+    module = LoadLibraryW(L"uxtheme.dll");
+    if (!module)
+        return;
+    dwm_theme_frame_changed = (void *)GetProcAddress(module, "ThemeDwmFrameChanged");
+    dwm_theme_defwndproc = (void *)GetProcAddress(module, "ThemeDwmDefWindowProc");
+}
+
 BOOL WINAPI
 DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
@@ -239,6 +256,8 @@ HRESULT WINAPI DwmEnableComposition(UINT uCompositionAction)
 HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
 {
 #ifdef __REACTOS__
+    LONG top;
+
     TRACE("(%p, %p)\n", hwnd, margins);
 
     if (!IsWindow(hwnd))
@@ -249,6 +268,18 @@ HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
     /* The frame margins are compositor metadata. Do not rewrite USER window
      * styles here: doing so changes Chromium's output-device selection before
      * DirectComposition has attached its target. */
+    if (margins->cxLeftWidth < 0 || margins->cxRightWidth < 0 ||
+        margins->cyTopHeight < 0 || margins->cyBottomHeight < 0)
+        top = DWM_MAX_NC_EXTEND;
+    else
+        top = min(margins->cyTopHeight, (LONG)DWM_MAX_NC_EXTEND);
+    if (top > 0)
+        SetPropW(hwnd, DWM_PROP_FRAME_EXTEND_TOP, (HANDLE)(ULONG_PTR)(top + 1));
+    else
+        RemovePropW(hwnd, DWM_PROP_FRAME_EXTEND_TOP);
+    dwm_load_theme_hooks();
+    if (dwm_theme_frame_changed)
+        dwm_theme_frame_changed(hwnd);
     return S_OK;
 #else
     FIXME("(%p, %p) stub\n", hwnd, margins);
@@ -468,11 +499,18 @@ HRESULT WINAPI DwmEnableBlurBehindWindow(HWND hWnd, const DWM_BLURBEHIND *pBlurB
  */
 BOOL WINAPI DwmDefWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, LRESULT *plResult)
 {
+#ifdef __REACTOS__
+    dwm_load_theme_hooks();
+    if (dwm_theme_defwndproc)
+        return dwm_theme_defwndproc(hWnd, Msg, wParam, lParam, plResult);
+    return FALSE;
+#else
     static int i;
 
     if (!i++) FIXME("stub\n");
 
     return FALSE;
+#endif
 }
 
 /**********************************************************************

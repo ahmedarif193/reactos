@@ -163,6 +163,7 @@ typedef enum {
 
 LRESULT CALLBACK ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndProc);
 void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme);
+void ThemeDwmRepaintCaptionButtons(HWND hWnd);
 LONG SCROLL_getObjectId(INT nBar);
 void ThemeDrawScrollBarEx(PDRAW_CONTEXT pcontext, INT nBar, PSCROLLBARINFO psbi, POINT* pt);
 void ThemeDrawScrollBar(PDRAW_CONTEXT pcontext, INT Bar, POINT* pt);

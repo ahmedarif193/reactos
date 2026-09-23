@@ -135,4 +135,6 @@
 @ stdcall ReapplyThemeSysMetrics()
 @ stdcall SetWindowTheme(ptr wstr wstr)
 @ stdcall SetWindowThemeAttribute(ptr long ptr long)
+@ stdcall ThemeDwmDefWindowProc(ptr long ptr ptr ptr)
+@ stdcall ThemeDwmFrameChanged(ptr)
 @ stdcall ThemeInitApiHook(long ptr)

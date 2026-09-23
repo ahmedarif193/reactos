@@ -420,6 +420,11 @@ ThemePostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR
         {
             return OnPostWinPosChanged(hWnd, (WINDOWPOS*)lParam);
         }
+        case WM_PAINT:
+        {
+            ThemeDwmRepaintCaptionButtons(hWnd);
+            return 0;
+        }
         case WM_NCDESTROY:
         {
             UXTHEME_DestroyDialogBrush(hWnd);
@@ -695,6 +700,13 @@ dodefault:
 /**********************************************************************
  *      Exports
  */
+
+VOID WINAPI
+ThemeDwmFrameChanged(HWND hWnd)
+{
+    gabMSGPmessages[WM_PAINT / 8] |= (1 << (WM_PAINT % 8));
+    ThemeDwmRepaintCaptionButtons(hWnd);
+}
 
 BOOL CALLBACK
 ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)

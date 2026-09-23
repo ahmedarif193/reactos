@@ -953,6 +953,134 @@ ThemeGetButtonState(DWORD htCurrect, DWORD htHot, DWORD htDown, BOOL Active)
     return (Active ? BUTTON_NORMAL : BUTTON_INACTIVE);
 }
 
+static BOOL
+ThemeDwmHasCaptionButtons(HWND hWnd, const WINDOWINFO *wi)
+{
+    PWND_DATA pwndData;
+
+    if (!g_bThemeHooksActive)
+        return FALSE;
+    if ((wi->dwStyle & (WS_CAPTION | WS_SYSMENU)) != (WS_CAPTION | WS_SYSMENU))
+        return FALSE;
+    if ((ULONG_PTR)GetPropW(hWnd, DWM_PROP_FRAME_EXTEND_TOP) <= 1)
+        return FALSE;
+    pwndData = ThemeGetWndData(hWnd);
+    if (!pwndData)
+        return FALSE;
+    if (IsRectEmpty(&pwndData->rcCaptionButtons[CLOSEBUTTON]))
+        ThemeCalculateCaptionButtonsPos(hWnd, NULL);
+    return wi->rcClient.top - wi->rcWindow.top < pwndData->rcCaptionButtons[CLOSEBUTTON].bottom;
+}
+
+static void
+ThemeDwmDrawCaptionButtons(PDRAW_CONTEXT pcontext, DWORD htHot, DWORD htDown)
+{
+    static const DWORD HitTest[] = { HTCLOSE, HTMAXBUTTON, HTMINBUTTON };
+    PWND_DATA pwndData = ThemeGetWndData(pcontext->hWnd);
+    HDC hDC = pcontext->hDC;
+    INT i;
+
+    if (!pwndData || !pcontext->theme)
+        return;
+
+    pcontext->hDC = GetDCEx(pcontext->hWnd, NULL, DCX_WINDOW | DCX_CACHE | DCX_CLIPSIBLINGS);
+    if (pcontext->hDC)
+    {
+        for (i = CLOSEBUTTON; i <= MINBUTTON; i++)
+        {
+            if (i != CLOSEBUTTON && !(pcontext->wi.dwStyle & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX)))
+                continue;
+            FillRect(pcontext->hDC, &pwndData->rcCaptionButtons[i], GetStockObject(BLACK_BRUSH));
+            ThemeDrawCaptionButton(pcontext, NULL, (CAPTIONBUTTON)i,
+                                   ThemeGetButtonState(HitTest[i - CLOSEBUTTON], htHot, htDown, pcontext->Active));
+        }
+        ReleaseDC(pcontext->hWnd, pcontext->hDC);
+    }
+    pcontext->hDC = hDC;
+}
+
+void
+ThemeDwmRepaintCaptionButtons(HWND hWnd)
+{
+    DRAW_CONTEXT context;
+    PWND_DATA pwndData;
+    HWND hWndRoot;
+    RECT rcRoot, rcPainted, rcButtons;
+
+    hWndRoot = GetAncestor(hWnd, GA_ROOT);
+    if (!hWndRoot || (ULONG_PTR)GetPropW(hWndRoot, DWM_PROP_FRAME_EXTEND_TOP) <= 1)
+        return;
+    pwndData = ThemeGetWndData(hWndRoot);
+    if (!pwndData)
+        return;
+    if (hWnd != hWndRoot)
+    {
+        GetWindowRect(hWndRoot, &rcRoot);
+        GetWindowRect(hWnd, &rcPainted);
+        UnionRect(&rcButtons, &pwndData->rcCaptionButtons[CLOSEBUTTON], &pwndData->rcCaptionButtons[MINBUTTON]);
+        OffsetRect(&rcButtons, rcRoot.left, rcRoot.top);
+        if (!IntersectRect(&rcButtons, &rcButtons, &rcPainted))
+            return;
+    }
+
+    ThemeInitDrawContext(&context, hWndRoot, 0);
+    if (ThemeDwmHasCaptionButtons(hWndRoot, &context.wi))
+        ThemeDwmDrawCaptionButtons(&context, HT_ISBUTTON(pwndData->lastHitTest) ? pwndData->lastHitTest : 0, 0);
+    ThemeCleanupDrawContext(&context);
+}
+
+BOOL WINAPI
+ThemeDwmDefWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, LRESULT *plResult)
+{
+    DRAW_CONTEXT context;
+    TRACKMOUSEEVENT tme;
+    PWND_DATA pwndData;
+    WINDOWINFO wi;
+    POINT Point;
+    LRESULT Button;
+
+    if (!plResult || (Msg != WM_NCHITTEST && Msg != WM_NCMOUSEMOVE && Msg != WM_NCMOUSELEAVE))
+        return FALSE;
+    wi.cbSize = sizeof(wi);
+    if (!GetWindowInfo(hWnd, &wi) || !ThemeDwmHasCaptionButtons(hWnd, &wi))
+        return FALSE;
+
+    if (Msg == WM_NCHITTEST)
+    {
+        Point.x = GET_X_LPARAM(lParam);
+        Point.y = GET_Y_LPARAM(lParam);
+        Button = ThemeHitTestCaptionButtons(hWnd, &wi, Point);
+        if (Button == HTNOWHERE)
+            return FALSE;
+        *plResult = Button;
+        return TRUE;
+    }
+
+    pwndData = ThemeGetWndData(hWnd);
+    Button = (Msg == WM_NCMOUSEMOVE && HT_ISBUTTON(wParam)) ? (LRESULT)wParam : HTNOWHERE;
+    if (!pwndData || (DWORD)Button == pwndData->lastHitTest)
+        return FALSE;
+
+    if (Button != HTNOWHERE)
+    {
+        tme.cbSize = sizeof(tme);
+        tme.dwFlags = TME_LEAVE | TME_NONCLIENT;
+        tme.hwndTrack = hWnd;
+        tme.dwHoverTime = 0;
+        TrackMouseEvent(&tme);
+    }
+
+    if (HT_ISBUTTON(Button) || HT_ISBUTTON(pwndData->lastHitTest))
+    {
+        pwndData->lastHitTest = (DWORD)Button;
+        ThemeInitDrawContext(&context, hWnd, 0);
+        ThemeDwmDrawCaptionButtons(&context, (DWORD)Button, 0);
+        ThemeCleanupDrawContext(&context);
+    }
+    pwndData->lastHitTest = (DWORD)Button;
+    return FALSE;
+}
+
 static void
 ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent, DWORD htHot, DWORD htDown);
 
@@ -961,6 +1089,12 @@ static void
 ThemeDrawCaptionButtons(PDRAW_CONTEXT pcontext, DWORD htHot, DWORD htDown)
 {
     RECT rcCurrent = pcontext->wi.rcWindow;
+
+    if (ThemeDwmHasCaptionButtons(pcontext->hWnd, &pcontext->wi))
+    {
+        ThemeDwmDrawCaptionButtons(pcontext, htHot, htDown);
+        return;
+    }
 
     OffsetRect(&rcCurrent, -pcontext->wi.rcWindow.left, -pcontext->wi.rcWindow.top);
     ThemeStartBufferedPaint(pcontext, rcCurrent.right, pcontext->CaptionHeight);
@@ -1645,7 +1779,11 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
     switch(Msg)
     {
     case WM_NCPAINT:
-        return ThemeHandleNCPaint(hWnd, (HRGN)wParam);
+    {
+        LRESULT Result = ThemeHandleNCPaint(hWnd, (HRGN)wParam);
+        ThemeDwmRepaintCaptionButtons(hWnd);
+        return Result;
+    }
     //
     // WM_NCUAHDRAWCAPTION : wParam are DC_* flags.
     //
@@ -1660,6 +1798,7 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
             return TRUE;
 
         ThemeHandleNCPaint(hWnd, (HRGN)1);
+        ThemeDwmRepaintCaptionButtons(hWnd);
         return TRUE;
     case WM_NCMOUSEMOVE:
     {

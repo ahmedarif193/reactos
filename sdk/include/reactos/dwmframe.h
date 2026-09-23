@@ -223,6 +223,7 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_PROP_CONTENT_BACKDROP     L"ReactOS.Dwm.ContentBackdrop"
 #define DWM_PROP_BACKDROP_NC_EXTEND   L"ReactOS.Dwm.BackdropNcExtend"
 #define DWM_PROP_BACKDROP_NC_EXTEND_LEFT L"ReactOS.Dwm.BackdropNcExtendLeft"
+#define DWM_PROP_FRAME_EXTEND_TOP     L"ReactOS.Dwm.FrameExtendTop"
 #define DWM_PROP_CORNER_RADIUS        L"ReactOS.Dwm.CornerRadius"
 #define DWM_PROP_GPU_OUTPUT           L"ReactOS.Dwm.GpuOutput"
 
