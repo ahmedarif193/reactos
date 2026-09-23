@@ -192,6 +192,7 @@ IntPublishDwmDxQueueThread(PVOID Parameter)
         }
         (void)IntPublishDwmDxPresentRecycle(Present);
     }
+    return 0;
 }
 
 static BOOL CALLBACK
