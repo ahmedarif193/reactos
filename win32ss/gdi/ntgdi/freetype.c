@@ -4509,7 +4509,6 @@ IntRequestFontSize(PFONTGDI FontGDI, LONG lfWidth, LONG lfHeight)
      * We can read it as "not always". See CORE-14994.
      * See also: https://learn.microsoft.com/en-us/typography/opentype/spec/os2#fsselection
      */
-#define FM_SEL_USE_TYPO_METRICS 0x80
     if (FT_IS_SFNT(face) &&
         (VdmxPpem = IntGdiLoadVDMX(face, lfHeight, &VdmxMax, &VdmxMin)) != 0)
     {
@@ -4522,7 +4521,7 @@ IntRequestFontSize(PFONTGDI FontGDI, LONG lfWidth, LONG lfHeight)
     {
         /* case (A): lfHeight is positive */
         Sum = (FT_Short)pOS2->usWinAscent + (FT_Short)pOS2->usWinDescent;
-        if (Sum == 0 || (pOS2->fsSelection & FM_SEL_USE_TYPO_METRICS))
+        if (Sum == 0)
         {
             Ascent = pHori->Ascender;
             Descent = -pHori->Descender;
@@ -4542,7 +4541,7 @@ IntRequestFontSize(PFONTGDI FontGDI, LONG lfWidth, LONG lfHeight)
     else if (lfHeight < 0)
     {
         /* case (B): lfHeight is negative */
-        if (pOS2->fsSelection & FM_SEL_USE_TYPO_METRICS)
+        if ((FT_Short)pOS2->usWinAscent + (FT_Short)pOS2->usWinDescent == 0)
         {
             FontGDI->tmAscent = FT_MulDiv(-lfHeight, pHori->Ascender, face->units_per_EM);
             FontGDI->tmDescent = FT_MulDiv(-lfHeight, -pHori->Descender, face->units_per_EM);
@@ -4555,7 +4554,6 @@ IntRequestFontSize(PFONTGDI FontGDI, LONG lfWidth, LONG lfHeight)
         FontGDI->tmHeight = FontGDI->tmAscent + FontGDI->tmDescent;
         FontGDI->tmInternalLeading = FontGDI->tmHeight + lfHeight;
     }
-#undef FM_SEL_USE_TYPO_METRICS
 
     FontGDI->Magic = FONTGDI_MAGIC;
     FontGDI->lfHeight = lfHeight;
@@ -4642,12 +4640,11 @@ IntRequestFontSizeEx(FT_Face face, const LOGFONTW *plf)
      * We can read it as "not always". See CORE-14994.
      * See also: https://learn.microsoft.com/en-us/typography/opentype/spec/os2#fsselection
      */
-#define FM_SEL_USE_TYPO_METRICS 0x80
     if (lfHeight > 0)
     {
         /* case (A): lfHeight is positive */
         Sum = (FT_Short)pOS2->usWinAscent + (FT_Short)pOS2->usWinDescent;
-        if (Sum == 0 || (pOS2->fsSelection & FM_SEL_USE_TYPO_METRICS))
+        if (Sum == 0)
         {
             Ascent = pHori->Ascender;
             Descent = -pHori->Descender;
@@ -4667,7 +4664,7 @@ IntRequestFontSizeEx(FT_Face face, const LOGFONTW *plf)
     else if (lfHeight < 0)
     {
         /* case (B): lfHeight is negative */
-        if (pOS2->fsSelection & FM_SEL_USE_TYPO_METRICS)
+        if ((FT_Short)pOS2->usWinAscent + (FT_Short)pOS2->usWinDescent == 0)
         {
             tmAscent = FT_MulDiv(-lfHeight, pHori->Ascender, face->units_per_EM);
             tmDescent = FT_MulDiv(-lfHeight, -pHori->Descender, face->units_per_EM);
@@ -4680,7 +4677,6 @@ IntRequestFontSizeEx(FT_Face face, const LOGFONTW *plf)
         tmHeight = tmAscent + tmDescent;
         tmInternalLeading = tmHeight + lfHeight;
     }
-#undef FM_SEL_USE_TYPO_METRICS
 
     if (FT_IS_SFNT(face))
     {
