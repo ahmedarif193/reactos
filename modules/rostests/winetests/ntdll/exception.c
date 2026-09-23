@@ -7066,6 +7066,7 @@ static void test_thread_context(void)
      };
 
     memcpy( func_ptr, call_func, sizeof(call_func) );
+    FlushInstructionCache( GetCurrentProcess(), func_ptr, sizeof(call_func) );
 
 #define COMPARE(reg) \
     ok( context.reg == expect.reg, "wrong " #reg " %p/%p\n", (void *)(ULONG64)context.reg, (void *)(ULONG64)expect.reg )
@@ -7671,6 +7672,7 @@ static void test_KiUserExceptionDispatcher(void)
     *(void **)&hook_trampoline[4] = hook_KiUserExceptionDispatcher;
     trampoline_ptr = (char *)code_mem + 1024;
     memcpy( trampoline_ptr, hook_trampoline, sizeof(hook_trampoline));
+    FlushInstructionCache( GetCurrentProcess(), trampoline_ptr, sizeof(hook_trampoline) );
 
     ret = VirtualProtect( pKiUserExceptionDispatcher, sizeof(saved_code),
                           PAGE_EXECUTE_READWRITE, &old_protect );
@@ -7754,6 +7756,7 @@ static void test_KiUserApcDispatcher(void)
 
     *(void **)&hook_trampoline[4] = hook_KiUserApcDispatcher;
     memcpy(code_mem, hook_trampoline, sizeof(hook_trampoline));
+    FlushInstructionCache( GetCurrentProcess(), code_mem, sizeof(hook_trampoline) );
 
     ret = VirtualProtect( pKiUserApcDispatcher, sizeof(saved_code),
                           PAGE_EXECUTE_READWRITE, &old_protect );
