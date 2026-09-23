@@ -1321,10 +1321,18 @@ DxgkpDestroyMiniportContext(
 
     if (MiniportContext == NULL || DXGK_CB_FULL(Adapter, DxgkDdiDestroyContext) == NULL || Adapter->MiniportDeviceStopped || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0)
         return STATUS_SUCCESS;
-    if (!DxgkAcquireMiniportCallback(Adapter))
+    /* DestroyContext can call back to free context allocations and flush PTEs.
+     * Follow the same transaction -> miniport order as paging submission. */
+    if (!DxgkBeginKmdTransaction(Adapter))
         return STATUS_DEVICE_NOT_READY;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        DxgkEndKmdTransaction(Adapter);
+        return STATUS_DEVICE_NOT_READY;
+    }
     Status = DXGK_CB_FULL(Adapter, DxgkDdiDestroyContext)(MiniportContext);
     DxgkReleaseMiniportCallback(Adapter);
+    DxgkEndKmdTransaction(Adapter);
     return Status;
 }
 
@@ -1337,10 +1345,16 @@ DxgkpDestroyMiniportDevice(
 
     if (MiniportDevice == NULL || DXGK_CB_FULL(Adapter, DxgkDdiDestroyDevice) == NULL || Adapter->MiniportDeviceStopped || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0)
         return STATUS_SUCCESS;
-    if (!DxgkAcquireMiniportCallback(Adapter))
+    if (!DxgkBeginKmdTransaction(Adapter))
         return STATUS_DEVICE_NOT_READY;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        DxgkEndKmdTransaction(Adapter);
+        return STATUS_DEVICE_NOT_READY;
+    }
     Status = DXGK_CB_FULL(Adapter, DxgkDdiDestroyDevice)(MiniportDevice);
     DxgkReleaseMiniportCallback(Adapter);
+    DxgkEndKmdTransaction(Adapter);
     return Status;
 }
 

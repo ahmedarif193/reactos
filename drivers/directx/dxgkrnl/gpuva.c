@@ -1629,65 +1629,40 @@ GpuVaWaitForKmdResetBoundary(
 }
 
 static NTSTATUS
-GpuVaExecutePagingBatchWithBusyRetry(
+GpuVaExecutePageTableBatch(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_opt_ PDXGKRNL_DEVICE SubmissionDevice,
     _In_reads_(OperationCount) CONST DXGKRNL_PAGING_OP *Operations,
-    _In_ ULONG OperationCount)
+    _In_ ULONG OperationCount,
+    _Inout_ PBOOLEAN TransactionHeld)
 {
-    ULONG BusyRetries;
+    ULONG FenceId = 0;
     NTSTATUS Status;
 
     PAGED_CODE();
+    ASSERT(*TransactionHeld);
+    ASSERT(Adapter->KmdTransactionOwnerThread == PsGetCurrentThread());
 
-    for (BusyRetries = 0;; ++BusyRetries)
-    {
-        LARGE_INTEGER RetryInterval;
-        ULONG FenceId = 0;
+    Status = DxgkPagingExecuteBatch(Adapter,
+                                    SubmissionDevice,
+                                    Operations,
+                                    OperationCount,
+                                    NULL,
+                                    0,
+                                    0,
+                                    0,
+                                    &FenceId,
+                                    NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
-        /* Keep reset from splitting one BuildPagingBuffer batch.  The
-         * transaction ends before the fence wait so TDR can still recover a
-         * paging packet which reaches hardware but does not retire. */
-        if (!DxgkBeginKmdTransaction(Adapter))
-        {
-            Status = STATUS_DELETE_PENDING;
-        }
-        else
-        {
-            Status = DxgkPagingExecuteBatch(Adapter,
-                                            SubmissionDevice,
-                                            Operations,
-                                            OperationCount,
-                                            NULL,
-                                            0,
-                                            0,
-                                            0,
-                                            &FenceId,
-                                            NULL);
-            DxgkEndKmdTransaction(Adapter);
-        }
-        if (Status != STATUS_DEVICE_BUSY)
-        {
-            if (Status == STATUS_DELETE_PENDING &&
-                BusyRetries < 999 &&
-                GpuVaWaitForKmdResetBoundary(Adapter, SubmissionDevice))
-            {
-                continue;
-            }
-            if (!NT_SUCCESS(Status))
-                return Status;
-            Status = DxgkPagingWaitForFence(
-                         Adapter,
-                         FenceId,
-                         GPUVA_PAGING_SYNC_TIMEOUT_MS);
-            return Status;
-        }
-        if (BusyRetries >= 999)
-            return STATUS_DEVICE_BUSY;
-
-        RetryInterval.QuadPart = -10000;
-        KeDelayExecutionThread(KernelMode, FALSE, &RetryInterval);
-    }
+    /* No more miniport calls until PageTableFlushMutex is released. A caller
+     * waiting for this flush may already own the KMD transaction. Drop our
+     * admission reference before the fence wait so reset can recover a stalled
+     * packet when there is no enclosing miniport callback. */
+    DxgkEndKmdTransaction(Adapter);
+    *TransactionHeld = FALSE;
+    return DxgkPagingWaitForFence(Adapter, FenceId, GPUVA_PAGING_SYNC_TIMEOUT_MS);
 }
 
 /*
@@ -1809,7 +1784,7 @@ DxgkGpuVaPlacePendingPageTables(
  * IRQL: PASSIVE_LEVEL, GpuVaLock and PageTableFlushMutex NOT held.
  */
 static NTSTATUS
-DxgkpGpuVaFlushPageTableUpdates(
+DxgkpGpuVaFlushPageTableUpdatesOnce(
     _In_ PDXGKRNL_PROCESS Process,
     _In_opt_ PDXGKRNL_DEVICE OwnedDevice)
 {
@@ -1832,10 +1807,23 @@ DxgkpGpuVaFlushPageTableUpdates(
     ULONG OperationCount = 0;
     ULONG OperationCapacity = 0;
     NTSTATUS Status;
+    BOOLEAN TransactionHeld = FALSE;
 
     PAGED_CODE();
     if (Process == NULL)
         return STATUS_INVALID_PARAMETER;
+
+    Adapter = Process->Adapter;
+    if (Adapter == NULL)
+        return STATUS_DEVICE_NOT_READY;
+
+    /* Miniport reverse callbacks may flush while already owning the adapter
+     * transaction. Taking the process mutex first deadlocks fence cleanup
+     * against context/allocation destruction: each waits for the other's lock.
+     * Always admit the KMD transaction before taking the process flush mutex. */
+    if (!DxgkBeginKmdTransaction(Adapter))
+        return STATUS_DELETE_PENDING;
+    TransactionHeld = TRUE;
 
     Status = KeWaitForSingleObject(&Process->PageTableFlushMutex,
                                    Executive,
@@ -1843,14 +1831,11 @@ DxgkpGpuVaFlushPageTableUpdates(
                                    FALSE,
                                    NULL);
     if (!NT_SUCCESS(Status))
-        return Status;
-
-    Adapter = Process->Adapter;
-    if (Adapter == NULL)
     {
-        Status = STATUS_DEVICE_NOT_READY;
-        goto Complete;
+        DxgkEndKmdTransaction(Adapter);
+        return Status;
     }
+
     if (!DxgkPagingOperationSupported(Adapter,
                                       DxgkPagingOpUpdatePageTable) ||
         !DxgkPagingOperationSupported(Adapter, DxgkPagingOpFlushTlb))
@@ -2244,14 +2229,17 @@ DxgkpGpuVaFlushPageTableUpdates(
     /* Build every operation before admitting the single combined packet. This
      * preserves update order, avoids one DMA allocation and fence wait per PTE
      * span, and ensures a BuildPagingBuffer failure submits none of the batch. */
-    Status = GpuVaExecutePagingBatchWithBusyRetry(Adapter,
-                                                   SubmissionDevice,
-                                                   Operations,
-                                                   OperationCount);
+    Status = GpuVaExecutePageTableBatch(Adapter,
+                                          SubmissionDevice,
+                                          Operations,
+                                          OperationCount,
+                                          &TransactionHeld);
     if (!NT_SUCCESS(Status))
     {
+        /* Busy admission is retried after dropping both locks below. */
+        if (Status == STATUS_DEVICE_BUSY)
+            goto Requeue;
         if (Status == STATUS_DELETE_PENDING ||
-            Status == STATUS_DEVICE_BUSY ||
             Status == STATUS_DEVICE_REMOVED ||
             Status == STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE ||
             Status == STATUS_IO_TIMEOUT)
@@ -2286,6 +2274,11 @@ Requeue:
     GpuVaRequeuePageTableUpdate(Process, Start, End);
 
 Complete:
+    /* Binding/device dereferences can reenter the miniport. Release the flush
+     * mutex first, including after a fence wait that dropped the transaction. */
+    KeReleaseMutex(&Process->PageTableFlushMutex, FALSE);
+    if (TransactionHeld)
+        DxgkEndKmdTransaction(Adapter);
     if (Operations != NULL)
         ExFreePoolWithTag(Operations, TAG_DXGK_GPUVA_PT);
     if (Tables != NULL)
@@ -2302,8 +2295,35 @@ Complete:
     }
     if (PagingDevice != NULL)
         DxgkDereferenceDevice(PagingDevice);
-    KeReleaseMutex(&Process->PageTableFlushMutex, FALSE);
     return Status;
+}
+
+static NTSTATUS
+DxgkpGpuVaFlushPageTableUpdates(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_opt_ PDXGKRNL_DEVICE OwnedDevice)
+{
+    ULONG Retry;
+    NTSTATUS Status;
+
+    for (Retry = 0;; ++Retry)
+    {
+        LARGE_INTEGER Interval;
+
+        Status = DxgkpGpuVaFlushPageTableUpdatesOnce(Process, OwnedDevice);
+        if (Retry >= 999 || Process == NULL || Process->Adapter == NULL)
+            return Status;
+        if (Status == STATUS_DELETE_PENDING &&
+            GpuVaWaitForKmdResetBoundary(Process->Adapter, OwnedDevice))
+            continue;
+        if (Status != STATUS_DEVICE_BUSY)
+            return Status;
+
+        /* Retain dirty PTEs, but never wait for another admission while holding
+         * PageTableFlushMutex. Destruction callbacks need the same mutex. */
+        Interval.QuadPart = -10000;
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    }
 }
 
 NTSTATUS
