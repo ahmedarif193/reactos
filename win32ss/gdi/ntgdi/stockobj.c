@@ -48,6 +48,43 @@ static const COLORREF SysColors[] =
     RGB(236, 233, 216)  /* COLOR_MENUBAR  */
 };
 
+static const COLORREF DefaultSysColors[] =
+{
+    RGB(200, 200, 200),
+    RGB(0, 0, 0),
+    RGB(153, 180, 209),
+    RGB(191, 205, 219),
+    RGB(240, 240, 240),
+    RGB(255, 255, 255),
+    RGB(100, 100, 100),
+    RGB(0, 0, 0),
+    RGB(0, 0, 0),
+    RGB(0, 0, 0),
+    RGB(180, 180, 180),
+    RGB(244, 247, 252),
+    RGB(171, 171, 171),
+    RGB(0, 120, 215),
+    RGB(255, 255, 255),
+    RGB(240, 240, 240),
+    RGB(160, 160, 160),
+    RGB(109, 109, 109),
+    RGB(0, 0, 0),
+    RGB(0, 0, 0),
+    RGB(255, 255, 255),
+    RGB(105, 105, 105),
+    RGB(227, 227, 227),
+    RGB(0, 0, 0),
+    RGB(255, 255, 225),
+    RGB(0, 0, 0),
+    RGB(0, 102, 204),
+    RGB(185, 209, 234),
+    RGB(215, 228, 242),
+    RGB(0, 120, 215),
+    RGB(240, 240, 240)
+};
+
+static HBRUSH DefaultSysColorBrushes[NUM_SYSCOLORS];
+
 // System Bitmap DC
 HDC hSystemBM;
 
@@ -319,16 +356,39 @@ IntSetSysColors(UINT nColors, CONST INT *Elements, CONST COLORREF *Colors)
     }
 }
 
+#define FRAME_SYSCOLORS ((1u << COLOR_BACKGROUND) | (1u << COLOR_ACTIVECAPTION) | \
+                         (1u << COLOR_INACTIVECAPTION) | (1u << COLOR_WINDOWFRAME) | \
+                         (1u << COLOR_CAPTIONTEXT) | (1u << COLOR_ACTIVEBORDER) | \
+                         (1u << COLOR_INACTIVEBORDER) | (1u << COLOR_INACTIVECAPTIONTEXT) | \
+                         (1u << COLOR_GRADIENTACTIVECAPTION) | (1u << COLOR_GRADIENTINACTIVECAPTION))
+
+static BOOL
+IntUsesDefaultSysColor(INT nIndex)
+{
+    PPROCESSINFO ppi;
+
+    if (FRAME_SYSCOLORS & (1u << nIndex))
+        return FALSE;
+    ppi = PsGetCurrentProcessWin32Process();
+    return ppi && (ppi->W32PF_flags & W32PF_DEFAULTSYSCOLORS);
+}
+
 HGDIOBJ FASTCALL
 IntGetSysColorBrush(INT Object)
 {
-    return ((Object < 0) || (NUM_SYSCOLORS <= Object)) ? NULL : gpsi->ahbrSystem[Object];
+    if ((Object < 0) || (NUM_SYSCOLORS <= Object))
+        return NULL;
+    if (IntUsesDefaultSysColor(Object) && DefaultSysColorBrushes[Object])
+        return DefaultSysColorBrushes[Object];
+    return gpsi->ahbrSystem[Object];
 }
 
 DWORD FASTCALL
 IntGetSysColor(INT nIndex)
 {
-    return (NUM_SYSCOLORS <= (UINT)nIndex) ? 0 : gpsi->argbSystem[nIndex];
+    if (NUM_SYSCOLORS <= (UINT)nIndex)
+        return 0;
+    return IntUsesDefaultSysColor(nIndex) ? DefaultSysColors[nIndex] : gpsi->argbSystem[nIndex];
 }
 
 VOID FASTCALL
@@ -350,6 +410,14 @@ CreateSysColorObjects(VOID)
             if (gpsi->ahbrSystem[i] != NULL)
             {
                 GDIOBJ_ConvertToStockObj((HGDIOBJ*)&gpsi->ahbrSystem[i]);
+            }
+        }
+        if (DefaultSysColorBrushes[i] == NULL)
+        {
+            DefaultSysColorBrushes[i] = IntGdiCreateSolidBrush(DefaultSysColors[i]);
+            if (DefaultSysColorBrushes[i] != NULL)
+            {
+                GDIOBJ_ConvertToStockObj((HGDIOBJ*)&DefaultSysColorBrushes[i]);
             }
         }
     }

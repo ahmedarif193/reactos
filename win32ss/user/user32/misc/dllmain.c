@@ -33,6 +33,7 @@ PUSER_HANDLE_TABLE gHandleTable = NULL;
 PUSER_HANDLE_ENTRY gHandleEntries = NULL;
 BOOLEAN gfLogonProcess  = FALSE;
 BOOLEAN gfServerProcess = FALSE;
+BOOLEAN gfDefaultSysColors = FALSE;
 BOOLEAN gfWin32kLockdown = FALSE;
 
 HDC
@@ -270,6 +271,27 @@ VOID
 WINAPI
 GdiProcessSetup(VOID);
 
+static VOID
+InitDefaultSysColors(VOID)
+{
+    WCHAR Root[MAX_PATH + 1], Image[MAX_PATH];
+    UINT Length;
+
+    Length = GetSystemWindowsDirectoryW(Root, MAX_PATH);
+    if (Length == 0 || Length >= MAX_PATH)
+        return;
+    if (Root[Length - 1] != L'\\')
+    {
+        Root[Length++] = L'\\';
+        Root[Length] = UNICODE_NULL;
+    }
+    if (GetModuleFileNameW(NULL, Image, ARRAYSIZE(Image)) == 0 || !_wcsnicmp(Image, Root, Length))
+        return;
+
+    NtUserCallOneParam(TRUE, ONEPARAM_ROUTINE_ROS_USEDEFAULTSYSCOLORS);
+    gfDefaultSysColors = TRUE;
+}
+
 BOOL
 WINAPI
 ClientThreadSetupHelper(BOOL IsCallback)
@@ -381,6 +403,8 @@ ClientThreadSetupHelper(BOOL IsCallback)
             {
                 TRACE("Checkpoint initialization done OK\n");
                 InitializeCriticalSection(&U32AccelCacheLock);
+                if (!gfServerProcess)
+                    InitDefaultSysColors();
                 LoadAppInitDlls();
                 return TRUE;
             }
