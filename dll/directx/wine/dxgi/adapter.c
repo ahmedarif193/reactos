@@ -138,6 +138,15 @@ static HRESULT STDMETHODCALLTYPE dxgi_adapter_EnumOutputs(IWineDXGIAdapter *ifac
     if (!output)
         return E_INVALIDARG;
 
+#if defined(__REACTOS__) && defined(REACTOS_DXGI_D3DKMT_ADAPTER_ORDER)
+    if (!adapter->factory->software && FAILED(hr = dxgi_get_wddm_output_index(
+            adapter->wined3d_adapter, output_idx, &output_idx)))
+    {
+        *output = NULL;
+        return hr;
+    }
+#endif
+
     output_count = wined3d_adapter_get_output_count(adapter->wined3d_adapter);
     if (output_idx >= output_count)
     {
