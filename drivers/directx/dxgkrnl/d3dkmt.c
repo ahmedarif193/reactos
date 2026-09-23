@@ -2143,13 +2143,14 @@ DxgkOpenAdapterFromLuid(
 /*
  * DxgkpOpenAdapterByDisplayOrdinal
  *
- * Exact GDI display selection: \\.\DISPLAYn maps across the video-present
- * sources of the started display-capable adapters.  A full WDDM adapter may
- * expose several sources even when none is attached to the desktop yet.
+ * GDI names describe registered desktop sources, not all sources a renderer
+ * could drive. The legacy HDC bridge also uses this helper for render-adapter
+ * selection until win32k transports a per-DC adapter association.
  */
 static NTSTATUS
 DxgkpOpenAdapterByDisplayOrdinal(
     _In_ ULONG DisplayOrdinal,
+    _In_ BOOLEAN DesktopOnly,
     _Out_ D3DKMT_HANDLE *OutHandle,
     _Out_ LUID *OutLuid,
     _Out_ D3DDDI_VIDEO_PRESENT_SOURCE_ID *OutSourceId)
@@ -2168,23 +2169,9 @@ DxgkpOpenAdapterByDisplayOrdinal(
         return STATUS_INVALID_PARAMETER;
     Count = DxgkpSnapshotAdapters(Snapshot);
 
-    /*
-     * Order the walk so hardware adapters come before the basic-display
-     * fallback, rather than taking DxgkAdapterGlobalListHead order.
-     *
-     * That list is in AddDevice order, so which adapter answers DISPLAY1 was
-     * decided by a load race between BasicDisplay.sys and the PCI miniports.
-     * When the fallback won, D3DKMTOpenAdapterFromHdc resolved a window's DC
-     * to the basic-display adapter, and a hardware ICD asked to describe
-     * pixel formats for a DC on an adapter that is not its own answers with
-     * none -- so OpenGL silently fell back to the software rasteriser.
-     * Preferring hardware here makes DISPLAY1 deterministic and agrees with
-     * the way opengl32 picks the first render adapter's ICD.
-     *
-     * This does not make the lookup honour the HDC it was given; that is a
-     * separate gap (the caller ignores the DC and asks for ordinal 1).  It
-     * only stops the answer depending on driver load order.
-     */
+    /* Preserve deterministic hardware-first selection for legacy render
+     * callers. Desktop lookups below accept only the registered bridge owner;
+     * render capability alone never assigns a GDI display name. */
     for (Pass = 0; Pass < 2 && !NT_SUCCESS(Status); ++Pass)
     {
         for (i = 0; i < Count; ++i)
@@ -2194,6 +2181,15 @@ DxgkpOpenAdapterByDisplayOrdinal(
                                  Adapter->MiniportContext->IsBasicDisplayFallback;
             ULONG SourceCount = Adapter->NumberOfVideoPresentSources;
 
+            if (DesktopOnly)
+            {
+                /* ReactOS currently registers one GDI bridge/source. A
+                 * headless hardware adapter must not steal DISPLAY1 from
+                 * the registered owner merely because it supports VidPNs. */
+                if (Adapter->DisplayDeviceName[0] == L'\0')
+                    continue;
+                SourceCount = 1;
+            }
             if (SourceCount == 0)
                 continue;
             if ((Pass == 0) == IsFallback)
@@ -9851,6 +9847,7 @@ DxgkpDispatchBufferedIoctlWorker(
             pData = (D3DKMT_OPENADAPTERFROMHDC *)SystemBuffer;
             Status = DxgkpOpenAdapterByDisplayOrdinal(
                          1,
+                         FALSE,
                          &pData->hAdapter,
                          &pData->AdapterLuid,
                          &pData->VidPnSourceId);
@@ -9878,6 +9875,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpOpenAdapterByDisplayOrdinal(
                          DisplayOrdinal,
+                         TRUE,
                          &pData->hAdapter,
                          &pData->AdapterLuid,
                          &pData->VidPnSourceId);
