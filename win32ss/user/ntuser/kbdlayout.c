@@ -1102,6 +1102,8 @@ NtUserGetKeyboardLayoutName(
 
     pti = PsGetCurrentThreadWin32Thread();
     pKl = pti->KeyboardLayout;
+    if (!pKl)
+        pKl = W32kGetDefaultKeyLayout();
 
     if (!pKl)
         goto cleanup;
