@@ -701,8 +701,9 @@ v3d_resource_modifier(struct v3d_resource *rsc)
                 /* A shared tiled buffer should always be allocated as UIF,
                  * not UBLINEAR or LT.
                  */
-                assert(rsc->slices[0].tiling == V3D_TILING_UIF_XOR ||
-                       rsc->slices[0].tiling == V3D_TILING_UIF_NO_XOR);
+                if (rsc->slices[0].tiling != V3D_TILING_UIF_XOR &&
+                    rsc->slices[0].tiling != V3D_TILING_UIF_NO_XOR)
+                        return DRM_FORMAT_MOD_INVALID;
                 return DRM_FORMAT_MOD_BROADCOM_UIF;
         } else {
                 return DRM_FORMAT_MOD_LINEAR;
@@ -722,6 +723,8 @@ v3d_resource_get_handle(struct pipe_screen *pscreen,
         whandle->stride = rsc->slices[0].stride;
         whandle->offset = 0;
         whandle->modifier = v3d_resource_modifier(rsc);
+        if (whandle->modifier == DRM_FORMAT_MOD_INVALID)
+                return false;
 
         /* If we're passing some reference to our BO out to some other part of
          * the system, then we can't do any optimizations about only us being
@@ -779,7 +782,7 @@ v3d_resource_get_param(struct pipe_screen *pscreen,
                 return true;
         case PIPE_RESOURCE_PARAM_MODIFIER:
                 *value = v3d_resource_modifier(rsc);
-                return true;
+                return *value != DRM_FORMAT_MOD_INVALID;
         case PIPE_RESOURCE_PARAM_NPLANES:
                 *value = util_resource_num(prsc);
                 return true;
@@ -1426,7 +1429,15 @@ v3d_flush_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
                 ptmpl.bind |= PIPE_BIND_SHARED;
                 struct v3d_resource *new_rsc =
                         v3d_resource(pctx->screen->resource_create(pctx->screen, &ptmpl));
-                assert(new_rsc);
+                if (!new_rsc) {
+                        /* Allocation can fail after a device reset as well as
+                         * under memory pressure. Leave the original intact;
+                         * get_handle rejects its unexportable tiling until a
+                         * later conversion succeeds. */
+                        util_debug_message(&pctx->debug, OUT_OF_MEMORY,
+                                           "Unable to allocate shared V3D resource");
+                        return;
+                }
 
                 struct pipe_blit_info blit = { 0 };
                 u_box_3d(0, 0, 0,
