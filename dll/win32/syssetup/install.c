@@ -34,6 +34,9 @@
 DWORD WINAPI
 SetupStartService(LPCWSTR lpServiceName, BOOL bWait);
 
+static BOOL
+InitializeProgramFilesDir(VOID);
+
 /* GLOBALS ******************************************************************/
 
 HINF hSysSetupInf = INVALID_HANDLE_VALUE;
@@ -1141,6 +1144,7 @@ InstallLiveCD(VOID)
     BOOL bRes;
 
     PreprocessUnattend(FALSE);
+    InitializeProgramFilesDir();
     if (!CommonInstall())
         goto error;
 
@@ -1398,6 +1402,71 @@ InitializeProgramFilesDir(VOID)
             // return FALSE;
         }
     }
+
+#ifdef _WIN64
+    if (!LoadStringW(hDllInstance,
+                     IDS_COMMONFILES,
+                     szBuffer,
+                     ARRAYSIZE(szBuffer)))
+    {
+        DPRINT1("Warning: %lu\n", GetLastError());
+        return TRUE;
+    }
+
+    wcscat(szProgramFilesDirPath, L" (x86)");
+    wcscpy(szCommonFilesDirPath, szProgramFilesDirPath);
+    wcscat(szCommonFilesDirPath, L"\\");
+    wcscat(szCommonFilesDirPath, szBuffer);
+
+    Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion",
+                          0,
+                          KEY_SET_VALUE,
+                          &hKey);
+    if (Error != ERROR_SUCCESS)
+    {
+        DPRINT1("Warning: %lu\n", Error);
+        return TRUE;
+    }
+
+    dwLength = (wcslen(szProgramFilesDirPath) + 1) * sizeof(WCHAR);
+    Error = RegSetValueExW(hKey,
+                           L"ProgramFilesDir (x86)",
+                           0,
+                           REG_SZ,
+                           (LPBYTE)szProgramFilesDirPath,
+                           dwLength);
+    if (Error != ERROR_SUCCESS)
+    {
+        DPRINT1("Warning: %lu\n", Error);
+    }
+
+    dwLength = (wcslen(szCommonFilesDirPath) + 1) * sizeof(WCHAR);
+    Error = RegSetValueExW(hKey,
+                           L"CommonFilesDir (x86)",
+                           0,
+                           REG_SZ,
+                           (LPBYTE)szCommonFilesDirPath,
+                           dwLength);
+    if (Error != ERROR_SUCCESS)
+    {
+        DPRINT1("Warning: %lu\n", Error);
+    }
+
+    RegCloseKey(hKey);
+
+    if (!CreateDirectoryW(szProgramFilesDirPath, NULL) &&
+        GetLastError() != ERROR_ALREADY_EXISTS)
+    {
+        DPRINT1("Warning: %lu\n", GetLastError());
+    }
+
+    if (!CreateDirectoryW(szCommonFilesDirPath, NULL) &&
+        GetLastError() != ERROR_ALREADY_EXISTS)
+    {
+        DPRINT1("Warning: %lu\n", GetLastError());
+    }
+#endif
 
     return TRUE;
 }
