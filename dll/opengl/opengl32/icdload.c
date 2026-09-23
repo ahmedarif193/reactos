@@ -51,6 +51,23 @@ RosOpenGLIsDriverInitializing(VOID)
            IntIsPixelFormatInitializing();
 }
 
+/* WineD3D must identify the ICD bound to its probe DC, which can differ from
+ * the adapter owning the monitor. Query only captured state; probing here
+ * would recurse into ICD initialization. */
+BOOL WINAPI
+RosOpenGLGetAdapterLuid(HDC hdc, LUID *luid)
+{
+    struct wgl_dc_data *data;
+
+    if (hdc == NULL || luid == NULL)
+        return FALSE;
+    data = IntGetDcData(hdc);
+    if (data == NULL || data->icd_data == NULL || !data->AdapterLuidValid)
+        return FALSE;
+    *luid = data->AdapterLuid;
+    return TRUE;
+}
+
 static BOOL
 IntGetWddmIcdInfo(
     HDC hdc,

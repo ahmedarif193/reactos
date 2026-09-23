@@ -5090,9 +5090,6 @@ static BOOL wined3d_adapter_gl_init(struct wined3d_adapter_gl *adapter_gl,
     if (ordinal == 0 && wined3d_get_primary_adapter_luid(&primary_luid))
         luid = &primary_luid;
 
-    if (!wined3d_adapter_init(&adapter_gl->a, ordinal, luid, &wined3d_adapter_gl_ops))
-        return FALSE;
-
     /* Dynamically load all GL core functions */
     {
         HMODULE mod_gl = GetModuleHandleA("opengl32.dll");
@@ -5109,6 +5106,21 @@ static BOOL wined3d_adapter_gl_init(struct wined3d_adapter_gl *adapter_gl,
     if (!wined3d_caps_gl_ctx_create(adapter_gl, &caps_gl_ctx))
     {
         ERR("Failed to get a GL context for adapter %p.\n", adapter_gl);
+        return FALSE;
+    }
+
+#ifdef __REACTOS__
+    {
+        BOOL (WINAPI *get_adapter_luid)(HDC, LUID *);
+
+        get_adapter_luid = (void *)GetProcAddress(GetModuleHandleA("opengl32.dll"), "RosOpenGLGetAdapterLuid");
+        if (get_adapter_luid && get_adapter_luid(caps_gl_ctx.dc, &primary_luid))
+            luid = &primary_luid;
+    }
+#endif
+    if (!wined3d_adapter_init(&adapter_gl->a, ordinal, luid, &wined3d_adapter_gl_ops))
+    {
+        wined3d_caps_gl_ctx_destroy(&caps_gl_ctx);
         return FALSE;
     }
 

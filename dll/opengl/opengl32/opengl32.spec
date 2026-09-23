@@ -369,3 +369,4 @@
 @ stdcall wglUseFontOutlinesW(long long long long long long long ptr)
 
 @ stdcall -private RosOpenGLIsDriverInitializing()
+@ stdcall -private RosOpenGLGetAdapterLuid(ptr ptr)
