@@ -317,7 +317,7 @@ HRESULT WINAPI DwmEnableComposition(UINT uCompositionAction)
 HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
 {
 #ifdef __REACTOS__
-    LONG top;
+    LONG top, left;
 
     TRACE("(%p, %p)\n", hwnd, margins);
 
@@ -331,13 +331,29 @@ HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
      * DirectComposition has attached its target. */
     if (margins->cxLeftWidth < 0 || margins->cxRightWidth < 0 ||
         margins->cyTopHeight < 0 || margins->cyBottomHeight < 0)
+    {
         top = DWM_MAX_NC_EXTEND;
+        left = 0;
+    }
     else
+    {
         top = min(margins->cyTopHeight, (LONG)DWM_MAX_NC_EXTEND);
+        left = min(margins->cxLeftWidth, (LONG)DWM_MAX_NC_EXTEND);
+    }
     if (top > 0)
+    {
         SetPropW(hwnd, DWM_PROP_FRAME_EXTEND_TOP, (HANDLE)(ULONG_PTR)(top + 1));
+        SetPropW(hwnd, DWM_PROP_BACKDROP_NC_EXTEND, (HANDLE)(ULONG_PTR)(top + 1));
+    }
     else
+    {
         RemovePropW(hwnd, DWM_PROP_FRAME_EXTEND_TOP);
+        RemovePropW(hwnd, DWM_PROP_BACKDROP_NC_EXTEND);
+    }
+    if (left > 0)
+        SetPropW(hwnd, DWM_PROP_BACKDROP_NC_EXTEND_LEFT, (HANDLE)(ULONG_PTR)(left + 1));
+    else
+        RemovePropW(hwnd, DWM_PROP_BACKDROP_NC_EXTEND_LEFT);
     dwm_load_theme_hooks();
     if (dwm_theme_frame_changed)
         dwm_theme_frame_changed(hwnd);
