@@ -394,6 +394,24 @@ CWineTest::RunTest(CTestInfo* TestInfo)
                 TESTEXCEPTION("CPipe::Read failed for the test run\n");
             }
         }
+
+        /* A broken output pipe is also produced by a crash. Preserve the
+         * exit status instead of reporting only that the test completed. */
+        if (WaitForSingleObject(Process.GetProcessHandle(), ProcessActivityTimeout) != WAIT_OBJECT_0)
+            TESTEXCEPTION("Timeout waiting for test process termination\n");
+        DWORD ExitCode;
+        if (!GetExitCodeProcess(Process.GetProcessHandle(), &ExitCode))
+            TESTEXCEPTION("GetExitCodeProcess failed for the test run\n");
+        if (ExitCode != 0)
+        {
+            char ExitMessage[96];
+            if (!tailString.empty())
+                StringOut(tailString);
+            tailString.clear();
+            snprintf(ExitMessage, sizeof(ExitMessage), "Test process exited with code 0x%08lx\n", ExitCode);
+            StringOut(ExitMessage);
+            TestInfo->Log += ExitMessage;
+        }
     }
     catch(CTestException& e)
     {
