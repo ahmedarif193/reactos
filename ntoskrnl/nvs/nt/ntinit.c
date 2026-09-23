@@ -327,6 +327,11 @@ MiInitializePhase0(
         (MmProductType == (((ULONG)L'a' << 16) | L'L')) ? NtProductLanManNt :
         (MmProductType == (((ULONG)L'e' << 16) | L'S')) ? NtProductServer : NtProductWinNt;
     MmWriteableSharedUserData->ProductTypeIsValid = TRUE;
+    /* Publish the installed-page count as well as the system-information
+     * query. Graphics memory budgets and user drivers read this shared field;
+     * leaving it zero makes them select minimum-memory limits. */
+    MmWriteableSharedUserData->NumberOfPhysicalPages =
+        (ULONG)min((ULONGLONG)MmNumberOfPhysicalPages, (ULONGLONG)MAXULONG);
 
     MmWriteableSharedUserData->LargePageMinimum = MiSystem.Arch->SupportsLargePages
         ? (ULONG)MiSystem.Arch->LargePageSize : 0;
