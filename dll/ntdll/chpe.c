@@ -2227,27 +2227,65 @@ ChpeCallX64DllMain(PVOID EntryPoint,
     return (BOOLEAN)Result;
 }
 
+extern PRTLP_UNHANDLED_EXCEPTION_FILTER RtlpUnhandledExceptionFilter;
+extern PVOID Kernel32ThreadInitThunkFunction;
+extern BOOLEAN InsideCsrProcess;
+
+static
+LONG
+ChpepUserThreadFilter(
+    _In_ PEXCEPTION_POINTERS ExceptionInfo)
+{
+    PRTLP_UNHANDLED_EXCEPTION_FILTER Filter = RtlDecodePointer(RtlpUnhandledExceptionFilter);
+
+    if (Filter == NULL)
+    {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    return Filter(ExceptionInfo);
+}
+
 VOID
 NTAPI
 ChpeRtlUserThreadStart(PVOID StartAddress, PVOID Parameter)
 {
     NTSTATUS InitStatus;
-    ULONG_PTR Status;
+    ULONG_PTR Status = 0;
 
-    if (ChpeIsChpeProcess() && ChpeIsEmulatorReady())
+    _SEH2_TRY
     {
-        InitStatus = ChpeInitializeThread();
-        if (!NT_SUCCESS(InitStatus))
+        if (ChpeIsChpeProcess() && ChpeIsEmulatorReady())
         {
-            RtlExitUserThread(InitStatus);
+            InitStatus = ChpeInitializeThread();
+            if (!NT_SUCCESS(InitStatus))
+            {
+                RtlExitUserThread(InitStatus);
+            }
+
+            Status = ChpepCallX64Routine(StartAddress, (ULONG_PTR)Parameter, 0, 0, 0);
+        }
+        else if (!ChpeIsChpeProcess() && (Kernel32ThreadInitThunkFunction != NULL))
+        {
+            ((VOID (NTAPI *)(ULONG, PVOID, PVOID))Kernel32ThreadInitThunkFunction)(0,
+                                                                                StartAddress,
+                                                                                Parameter);
+        }
+        else
+        {
+            Status = ((ULONG_PTR (NTAPI *)(PVOID))StartAddress)(Parameter);
+        }
+    }
+    _SEH2_EXCEPT(ChpepUserThreadFilter(_SEH2_GetExceptionInformation()))
+    {
+        if (InsideCsrProcess)
+        {
+            RtlExitUserThread(_SEH2_GetExceptionCode());
         }
 
-        Status = ChpepCallX64Routine(StartAddress, (ULONG_PTR)Parameter, 0, 0, 0);
+        NtTerminateProcess(NtCurrentProcess(), _SEH2_GetExceptionCode());
     }
-    else
-    {
-        Status = ((ULONG_PTR (NTAPI *)(PVOID))StartAddress)(Parameter);
-    }
+    _SEH2_END;
 
     RtlExitUserThread((NTSTATUS)Status);
 }

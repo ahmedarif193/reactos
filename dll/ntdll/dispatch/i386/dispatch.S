@@ -12,6 +12,7 @@
 #include <ks386.inc>
 
 EXTERN _LdrpInit@12:PROC
+EXTERN _RtlpUserThreadStart@8:PROC
 EXTERN _NtTestAlert@0:PROC
 EXTERN _RtlDispatchException@8:PROC
 EXTERN _RtlRaiseException@4:PROC
@@ -274,5 +275,11 @@ PUBLIC _KiFastSystemCallRet@0
     ret
 
 .ENDP
+
+PUBLIC _RtlUserThreadStart@8
+_RtlUserThreadStart@8:
+    mov [esp + 8], ebx
+    mov [esp + 4], eax
+    jmp _RtlpUserThreadStart@8
 
 END

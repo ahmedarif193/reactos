@@ -45,7 +45,7 @@ PLDR_DATA_TABLE_ENTRY LdrpCurrentDllInitializer;
 PLDR_DATA_TABLE_ENTRY LdrpNtDllDataTableEntry;
 
 static NTSTATUS (WINAPI *Kernel32ProcessInitPostImportFunction)(VOID);
-static PVOID Kernel32ThreadInitThunkFunction;
+PVOID Kernel32ThreadInitThunkFunction;
 static BOOL (WINAPI *Kernel32BaseQueryModuleData)(IN LPSTR ModuleName, IN LPSTR Unk1, IN PVOID Unk2, IN PVOID Unk3, IN PVOID Unk4);
 
 RTL_BITMAP TlsBitMap;
@@ -2479,6 +2479,9 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     ProcessParameters = RtlNormalizeProcessParams(Peb->ProcessParameters);
     if (ProcessParameters)
     {
+        if (!ProcessParameters->ProcessGroupId)
+            ProcessParameters->ProcessGroupId = HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess);
+
         /* Save the Image and Command Line Names */
         ImageFileName = ProcessParameters->ImagePathName;
         CommandLine = ProcessParameters->CommandLine;
@@ -3392,10 +3395,9 @@ LdrpInit(PCONTEXT Context,
             if (Kernel32ThreadInitThunkFunction &&
                 Context->Rip == (ULONG64)(ULONG_PTR)LdrpImageEntry->EntryPoint)
             {
-                Context->Rcx = 0;
-                Context->Rdx = (ULONG64)(ULONG_PTR)LdrpImageEntry->EntryPoint;
-                Context->R8 = (ULONG64)(ULONG_PTR)Peb;
-                Context->Rip = (ULONG64)(ULONG_PTR)Kernel32ThreadInitThunkFunction;
+                Context->Rcx = (ULONG64)(ULONG_PTR)LdrpImageEntry->EntryPoint;
+                Context->Rdx = (ULONG64)(ULONG_PTR)Peb;
+                Context->Rip = (ULONG64)(ULONG_PTR)RtlpUserThreadStart;
             }
 #endif
         }
@@ -3430,6 +3432,42 @@ LdrpInit(PCONTEXT Context,
         LdrpInitFailure(LoaderStatus);
         RtlRaiseStatus(LoaderStatus);
     }
+}
+
+extern PRTLP_UNHANDLED_EXCEPTION_FILTER RtlpUnhandledExceptionFilter;
+
+static
+LONG
+RtlpUserThreadFilter(
+    _In_ PEXCEPTION_POINTERS ExceptionInfo)
+{
+    PRTLP_UNHANDLED_EXCEPTION_FILTER Filter = RtlDecodePointer(RtlpUnhandledExceptionFilter);
+
+    return Filter ? Filter(ExceptionInfo) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+VOID
+NTAPI
+RtlpUserThreadStart(
+    _In_ PVOID StartAddress,
+    _In_ PVOID Parameter)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    _SEH2_TRY
+    {
+        if (Kernel32ThreadInitThunkFunction)
+            ((VOID (NTAPI *)(ULONG, PVOID, PVOID))Kernel32ThreadInitThunkFunction)(0, StartAddress, Parameter);
+        else
+            Status = ((NTSTATUS (NTAPI *)(PVOID))StartAddress)(Parameter);
+    }
+    _SEH2_EXCEPT(RtlpUserThreadFilter(_SEH2_GetExceptionInformation()))
+    {
+        NtTerminateProcess(NtCurrentProcess(), _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    RtlExitUserThread(Status);
 }
 
 /* EOF */

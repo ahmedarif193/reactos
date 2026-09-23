@@ -63,18 +63,17 @@ LdrInitializeThunk:
     .global KiUserApcDispatcher
     .seh_proc KiUserApcDispatcher
 KiUserApcDispatcher:
+    .seh_context
+    nop
+    .seh_stackalloc 0x30
     .seh_endprologue
-    /*
-     * The kernel returns here with sp pointing at a UAPC_FRAME. The CONTEXT is
-     * the first field, so the incoming sp is also the NtContinue context.
-     */
-    mov     x19, sp
-    mov     x4, x3
-    mov     x3, x19
+    ldp     x4, x0, [sp]
+    ldp     x1, x2, [sp, #0x10]
+    add     x3, sp, #0x30
     bl      ChpeInvokeUserApcRoutine
 
-    mov     x0, x19
-    mov     w1, #1
+    add     x0, sp, #0x30
+    ldr     w1, [sp, #0x20]
     bl      NtContinue
 
     mov     w19, w0

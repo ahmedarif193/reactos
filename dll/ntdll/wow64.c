@@ -245,6 +245,21 @@ RtlWow64SetThreadContext(HANDLE handle, WOW64_CONTEXT *context)
 
 NTSTATUS
 WINAPI
+RtlWow64SuspendThread(HANDLE handle, ULONG *count)
+{
+    static NTSTATUS (WINAPI *suspend_local)(HANDLE, ULONG *);
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"wow64.dll");
+    PVOID module;
+
+    if (!suspend_local && NT_SUCCESS(LdrGetDllHandle(NULL, NULL, &name, &module)))
+        suspend_local = RtlFindExportedRoutineByName(module, "Wow64SuspendLocalThread");
+    if (suspend_local)
+        return suspend_local(handle, count);
+    return NtSuspendThread(handle, count);
+}
+
+NTSTATUS
+WINAPI
 RtlWow64GetThreadSelectorEntry(HANDLE handle,
                                RTL_THREAD_DESCRIPTOR_INFORMATION *info,
                                ULONG size,
