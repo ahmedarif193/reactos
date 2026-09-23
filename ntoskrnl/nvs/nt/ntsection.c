@@ -163,6 +163,64 @@ MiControlImageRead(
     return Status;
 }
 
+/* Called only by the modified page writer threads, which run with no top-level
+ * IRP of their own. */
+static
+NTSTATUS
+MiControlAcquireForModWrite(
+    _In_opt_ PVOID Context,
+    _In_ ULONG64 EndingOffset,
+    _Out_ PVOID *Token)
+{
+    PMI_CONTROL_AREA Control = Context;
+    LARGE_INTEGER End;
+    NTSTATUS Status;
+
+    *Token = NULL;
+    End.QuadPart = (LONGLONG)EndingOffset;
+    Status = FsRtlAcquireFileForModWriteEx(Control->FileObject, &End, (PERESOURCE *)Token);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* The file system then knows the write comes from the modified writer. */
+    ASSERT(IoGetTopLevelIrp() == NULL);
+    IoSetTopLevelIrp((PIRP)FSRTL_MOD_WRITE_TOP_LEVEL_IRP);
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+MiControlReleaseForModWrite(
+    _In_opt_ PVOID Context,
+    _In_opt_ PVOID Token)
+{
+    PMI_CONTROL_AREA Control = Context;
+
+    IoSetTopLevelIrp(NULL);
+    if (Token != NULL)
+        FsRtlReleaseFileForModWrite(Control->FileObject, (PERESOURCE)Token);
+}
+
+static
+NTSTATUS
+MiControlAcquireForFlush(
+    _In_opt_ PVOID Context)
+{
+    PMI_CONTROL_AREA Control = Context;
+
+    return FsRtlAcquireFileForCcFlushEx(Control->FileObject);
+}
+
+static
+VOID
+MiControlReleaseForFlush(
+    _In_opt_ PVOID Context)
+{
+    PMI_CONTROL_AREA Control = Context;
+
+    FsRtlReleaseFileForCcFlush(Control->FileObject);
+}
+
 static MI_FILE_OPS MiControlFileOps =
 {
     .Read = MiControlRead,
@@ -171,7 +229,11 @@ static MI_FILE_OPS MiControlFileOps =
     .WriteFrames = MiControlWriteFrames,
     .ReadAsync = MiControlReadAsync,
     .WholePageReads = TRUE,
-    .ReadPages = MiControlReadPages
+    .ReadPages = MiControlReadPages,
+    .AcquireForModWrite = MiControlAcquireForModWrite,
+    .ReleaseForModWrite = MiControlReleaseForModWrite,
+    .AcquireForFlush = MiControlAcquireForFlush,
+    .ReleaseForFlush = MiControlReleaseForFlush
 };
 static MI_FILE_OPS MiControlImageOps =
 {
@@ -180,7 +242,11 @@ static MI_FILE_OPS MiControlImageOps =
     .Release = MiControlRelease,
     .WriteFrames = MiControlWriteFrames,
     .ReadAsync = MiControlReadAsync,
-    .ReadPages = MiControlReadPages
+    .ReadPages = MiControlReadPages,
+    .AcquireForModWrite = MiControlAcquireForModWrite,
+    .ReleaseForModWrite = MiControlReleaseForModWrite,
+    .AcquireForFlush = MiControlAcquireForFlush,
+    .ReleaseForFlush = MiControlReleaseForFlush
 };
 static MI_FILE_OPS MiControlAnonymousOps = { .Release = MiControlRelease };
 

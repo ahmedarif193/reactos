@@ -300,6 +300,7 @@ KiFindBestStandbySource(
         Thread = Source->NextThread;
         if ((CurrentThread != NULL) &&
             (CurrentThread != Source->IdleThread) &&
+            (KiThreadAffinityMask(CurrentThread) & Source->SetMember) &&
             (Thread != NULL) &&
             (Thread != Source->IdleThread) &&
             (Thread->State == Standby) &&
@@ -332,8 +333,13 @@ KiTryStealStandbyThreadLocked(
     *ReplacementThread = NULL;
     CurrentThread = Source->CurrentThread;
     Thread = Source->NextThread;
+
+    /* The standby thread may be what moves the current thread off the source
+     * processor after an affinity change that excludes it. Stealing it would
+     * leave that thread running where its affinity no longer allows. */
     if ((CurrentThread == NULL) ||
         (CurrentThread == Source->IdleThread) ||
+        !(KiThreadAffinityMask(CurrentThread) & Source->SetMember) ||
         (Thread == NULL) ||
         (Thread == Source->IdleThread) ||
         (Thread->State != Standby) ||

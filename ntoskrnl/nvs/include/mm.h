@@ -362,6 +362,15 @@ typedef struct _MI_FILE_OPS
     /* Optional synchronous clustered read. Success requires every frame to be filled. */
     NTSTATUS (*ReadPages)(_In_opt_ PVOID Context, _In_ ULONG64 Offset,
                           _In_ const ULONG *Frames, _In_ ULONG PageCount);
+    /* Optional. Writers that do not come from the file system claim the file
+     * before taking segment locks: file system locks order before them, and a
+     * truncating writer can hold those while it waits on a segment. The
+     * modified page writer does not wait for the file. */
+    NTSTATUS (*AcquireForModWrite)(_In_opt_ PVOID Context, _In_ ULONG64 EndingOffset,
+                                   _Out_ PVOID *Token);
+    VOID (*ReleaseForModWrite)(_In_opt_ PVOID Context, _In_opt_ PVOID Token);
+    NTSTATUS (*AcquireForFlush)(_In_opt_ PVOID Context);
+    VOID (*ReleaseForFlush)(_In_opt_ PVOID Context);
 } MI_FILE_OPS, *PMI_FILE_OPS;
 
 #define MI_MAX_FILE_IO_PAGES 16
@@ -469,7 +478,7 @@ NTSTATUS MiCloneLargeViewLocked(_Inout_ PMI_ADDRESS_SPACE Source, _Inout_ PMI_AD
                                 _Inout_ PMI_VAD Vad);
 BOOLEAN MiViewProtectionAllowed(_In_ PMI_SEGMENT Segment, _In_ ULONG Maximum, _In_ ULONG Protection);
 NTSTATUS MiFlushVirtualMemory(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PULONG64 BaseAddress,
-                              _Inout_ PULONG64 RegionSize);
+                              _Inout_ PULONG64 RegionSize, _In_ BOOLEAN AcquireFile);
 NTSTATUS MiSetRangeModified(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress, _In_ ULONG64 Length);
 
 NTSTATUS MiProtectMappedView(_Inout_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, _In_ ULONG64 Start, _In_ ULONG64 End,

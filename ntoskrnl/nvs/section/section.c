@@ -1723,7 +1723,8 @@ NTSTATUS
 MiFlushVirtualMemory(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _Inout_ PULONG64 BaseAddress,
-    _Inout_ PULONG64 RegionSize)
+    _Inout_ PULONG64 RegionSize,
+    _In_ BOOLEAN AcquireFile)
 {
     ULONG64 Start = MI_PAGE_ALIGN_DOWN(*BaseAddress);
     NTSTATUS Status = STATUS_SUCCESS;
@@ -1759,7 +1760,19 @@ MiFlushVirtualMemory(
     if (Writable)
     {
         MiSetRangeModified(Space, Start, End - Start);
-        Status = MiSegmentFlush(Segment, Offset, End - Start);
+
+        /* The cache manager flushes its views with the file already held. */
+        AcquireFile = (BOOLEAN)(AcquireFile && Segment->FileOps.AcquireForFlush != NULL);
+        if (AcquireFile)
+            Status = Segment->FileOps.AcquireForFlush(Segment->FileContext);
+
+        if (NT_SUCCESS(Status))
+        {
+            Status = MiSegmentFlush(Segment, Offset, End - Start);
+
+            if (AcquireFile)
+                Segment->FileOps.ReleaseForFlush(Segment->FileContext);
+        }
     }
 
     MiSegmentDereference(Segment);
@@ -2449,12 +2462,35 @@ MiWritePrototypePage(
     Segment = MiSegmentFromPrototype(System, Entry->PteAddress, &Page);
     if (Segment != NULL)
     {
+        PVOID ModWriteToken = NULL;
         KIRQL OldIrql;
 
-        MI_MUTEX_ACQUIRE(&Segment->FlushLock);
-        Status = MiSegmentWritePage(Segment, Frame, Entry->OriginalPte);
-        MiPfnWriteComplete(&System->Pfn, Frame, Entry->OriginalPte, (BOOLEAN)NT_SUCCESS(Status));
-        MI_MUTEX_RELEASE(&Segment->FlushLock);
+        /* A busy file keeps the page modified for a later pass. */
+        if (Segment->FileOps.AcquireForModWrite != NULL)
+        {
+            ULONG64 EndingOffset = (MiSoftValue(Entry->OriginalPte) << MI_SECTOR_SHIFT) + PAGE_SIZE;
+
+            Status = Segment->FileOps.AcquireForModWrite(Segment->FileContext, EndingOffset, &ModWriteToken);
+        }
+        else
+        {
+            Status = STATUS_SUCCESS;
+        }
+
+        if (NT_SUCCESS(Status))
+        {
+            MI_MUTEX_ACQUIRE(&Segment->FlushLock);
+            Status = MiSegmentWritePage(Segment, Frame, Entry->OriginalPte);
+            MiPfnWriteComplete(&System->Pfn, Frame, Entry->OriginalPte, (BOOLEAN)NT_SUCCESS(Status));
+            MI_MUTEX_RELEASE(&Segment->FlushLock);
+
+            if (Segment->FileOps.ReleaseForModWrite != NULL)
+                Segment->FileOps.ReleaseForModWrite(Segment->FileContext, ModWriteToken);
+        }
+        else
+        {
+            MiPfnWriteComplete(&System->Pfn, Frame, Entry->OriginalPte, FALSE);
+        }
 
         MI_SPIN_ACQUIRE(&System->SegmentListLock, &OldIrql);
         Segment->ActiveWriters--;
