@@ -1067,6 +1067,12 @@ VidSchpScanStateBaseAddress(
     LONG64 Submission;
 
     Submission = InterlockedIncrement64(&Context->SubmissionCount);
+    /* Historical command decoding is diagnostic-only. Reading WC command
+     * memory and allocating a page on every submission penalizes all clients.
+     * The bounded batch head and fault-time dumps remain available normally. */
+    if (!DXGKRNL_DEBUG_VERBOSE)
+        return;
+
     Limit = Submission <= VIDSCH_BASE_SCAN_FIRST ? VIDSCH_BASE_SCAN_FIRST_LIMIT : VIDSCH_BASE_SCAN_CHUNK;
     Limit = min(Limit, DmaBufferSize);
     Chunk = ExAllocatePoolWithTag(PagedPool, VIDSCH_BASE_SCAN_CHUNK, 'sbSV');
