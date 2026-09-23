@@ -1042,12 +1042,7 @@ AlpcpDisconnectPort(
             break;
     }
 
-    if (AlpcpPortType(Port) == ALPC_PORT_TYPE_CLIENT)
-    {
-        AlpcpReleaseLock();
-        AlpcpSendPortClosed(Port);
-        AlpcpAcquireLock();
-    }
+    if (AlpcpPortType(Port) == ALPC_PORT_TYPE_CLIENT) AlpcpSendPortClosed(Port);
 
     if (AlpcpPortType(Port) == ALPC_PORT_TYPE_SERVER) AlpcpRundownPendingReplies(Port);
 
