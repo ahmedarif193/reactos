@@ -812,6 +812,19 @@ MiSegmentPageBytes(
 }
 
 static
+ULONG
+MiSegmentReadBytes(
+    _In_ PMI_SEGMENT Segment,
+    _In_ ULONG64 FileOffset)
+{
+    ULONG Bytes = MiSegmentPageBytes(Segment, FileOffset);
+
+    if (Bytes != 0 && Segment->Kind != MiSegmentImage && Segment->FileOps.WholePageReads)
+        return PAGE_SIZE;
+    return Bytes;
+}
+
+static
 NTSTATUS
 MiSegmentMaterialize(
     _Inout_ PMI_SEGMENT Segment,
@@ -840,7 +853,7 @@ MiSegmentMaterialize(
     if (Kind == MiSoftSubsection && !Zero)
     {
         ULONG64 Offset = MiSoftValue(Pte) << MI_SECTOR_SHIFT;
-        ULONG Bytes = MiSegmentPageBytes(Segment, Offset);
+        ULONG Bytes = MiSegmentReadBytes(Segment, Offset);
 
         Mapping = MiArchMapFrame(Frame);
         if (Bytes != 0)
@@ -2207,7 +2220,7 @@ MiSegmentPrefetch(
         Read->Original = Original;
         Read->Generation = Segment->ReadGeneration;
         Read->Mapping = MiArchMapFrame(Read->Frame);
-        Read->Bytes = MiSegmentPageBytes(Segment, FileOffset);
+        Read->Bytes = MiSegmentReadBytes(Segment, FileOffset);
         MiSegmentReference(Segment);
         InsertTailList(&Segment->PendingReads, &Read->Link);
         Segment->PendingReadCount++;
