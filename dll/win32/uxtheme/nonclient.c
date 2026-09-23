@@ -1792,7 +1792,6 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
     // WM_NCUAHDRAWFRAME : wParam is HDC, lParam are DC_ACTIVE and or DC_REDRAWHUNGWND.
     //
     case WM_NCUAHDRAWFRAME:
-    case WM_NCACTIVATE:
 
         if ((GetWindowLongW(hWnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION)
             return TRUE;
@@ -1800,6 +1799,18 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
         ThemeHandleNCPaint(hWnd, (HRGN)1);
         ThemeDwmRepaintCaptionButtons(hWnd);
         return TRUE;
+    case WM_NCACTIVATE:
+    {
+        HDC hDC;
+
+        if ((GetWindowLongW(hWnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION)
+            return TRUE;
+
+        hDC = GetWindowDC(hWnd);
+        SendMessageW(hWnd, WM_NCUAHDRAWFRAME, (WPARAM)hDC, wParam ? DC_ACTIVE : 0);
+        ReleaseDC(hWnd, hDC);
+        return TRUE;
+    }
     case WM_NCMOUSEMOVE:
     {
         POINT Point;
