@@ -9445,7 +9445,8 @@ static NTSTATUS
 DxgkpVidMmBeginResidencyTransactionInternal(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ PVOID Owner,
-    _In_ BOOLEAN AllowDestroying)
+    _In_ BOOLEAN AllowDestroying,
+    _In_ BOOLEAN ReferencedBacking)
 {
     PDXGKRNL_ADAPTER Adapter;
     NTSTATUS Status;
@@ -9477,7 +9478,9 @@ DxgkpVidMmBeginResidencyTransactionInternal(
             BOOLEAN Acquired;
 
             if (!AllowDestroying &&
-                InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
+                InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0 &&
+                !(ReferencedBacking && Allocation->BackingAllocation == NULL &&
+                  InterlockedCompareExchange(&Allocation->ReferenceCount, 0, 0) > 0))
             {
                 KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
                 return STATUS_DELETE_PENDING;
@@ -9519,7 +9522,25 @@ DxgkpVidMmBeginResidencyTransaction(
 {
     return DxgkpVidMmBeginResidencyTransactionInternal(Allocation,
                                                        Owner,
+                                                       FALSE,
                                                        FALSE);
+}
+
+static NTSTATUS
+DxgkpVidMmBeginReferencedResidencyTransaction(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PVOID Owner)
+{
+    /* Public batches capture physical references through live, owned handles
+     * before admission. Closing the creator marks its logical allocation as
+     * Destroying, but opened aliases still own the same physical backing.
+     * The captured reference prevents the destroy worker/finalizer (which
+     * require ReferenceCount == 0) from freeing it during this transaction.
+     * Victim selection and recovery retain their separate admission rules. */
+    return DxgkpVidMmBeginResidencyTransactionInternal(Allocation,
+                                                       Owner,
+                                                       FALSE,
+                                                       TRUE);
 }
 
 /*
@@ -11732,8 +11753,8 @@ DxgkVidMmMakeResidentBatch(
             Status = STATUS_INVALID_PARAMETER;
             goto Rollback;
         }
-        Status = DxgkpVidMmBeginResidencyTransaction(Allocation,
-                                                    &OwnerToken);
+        Status = DxgkpVidMmBeginReferencedResidencyTransaction(Allocation,
+                                                              &OwnerToken);
         if (!NT_SUCCESS(Status))
             goto Rollback;
         Entries[EntryIndex].TransactionOwned = TRUE;
@@ -12017,8 +12038,8 @@ DxgkVidMmEvictBatch(
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
-        Status = DxgkpVidMmBeginResidencyTransaction(Allocation,
-                                                    &OwnerToken);
+        Status = DxgkpVidMmBeginReferencedResidencyTransaction(Allocation,
+                                                              &OwnerToken);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
         Entries[EntryIndex].TransactionOwned = TRUE;
@@ -13121,7 +13142,8 @@ DxgkVidMmRecoverFromTimeout(
          */
         Status = DxgkpVidMmBeginResidencyTransactionInternal(Allocation,
                                                              &OwnerToken,
-                                                             TRUE);
+                                                             TRUE,
+                                                             FALSE);
         if (NT_SUCCESS(Status))
         {
             Status = DxgkpVidMmRecoverAllocationOwned(Allocation);
