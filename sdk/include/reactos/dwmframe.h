@@ -11,7 +11,9 @@
  * generation change (resize/recreate) tells it to remap. The kernel never
  * copies pixels into the pull buffer and never composites once attached.
  *
- * Every entry is rejected for processes other than the attached compositor.
+ * Frame pulling, surface opening and presentation acknowledgement are limited
+ * to the attached compositor. Producer surface calls validate window ownership;
+ * FLUSH waits only for the calling process's published updates.
  * Win10 equivalents of this contract (ours ride NtUserCallOneParam until the
  * D3DKMT flip-model path replaces them):
  *   DWMATTACH       ~ NtUserDwmStartRedirection(TRUE/FALSE)
@@ -32,6 +34,8 @@
 #define DWM_ROUTINE_DXSURFACE    0xfffe0017
 #define DWM_ROUTINE_SETBLUR      0xfffe0018
 #define DWM_ROUTINE_SETGPUOUTPUT 0xfffe0019
+#define DWM_ROUTINE_FLUSH        0xfffe001b
+#define DWM_ROUTINE_PRESENTED    0xfffe001c
 
 /*
  * Internal win32k control channel to the canonical display driver (DrvEscape).

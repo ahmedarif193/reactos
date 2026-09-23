@@ -289,6 +289,151 @@ IntCompositionMarkDamage(_In_ BOOL bFull)
     IntCompositionDwmWake();
 }
 
+/* Flush waiters capture only their process's outstanding publications. The
+ * USER lock protects this list and the generation/update tuples; it is never
+ * held while a caller waits for dwm.exe to finish presenting. */
+typedef struct _DWM_FLUSH_WAITER
+{
+    LIST_ENTRY Entry;
+    KEVENT Event;
+} DWM_FLUSH_WAITER;
+
+typedef struct _DWM_FLUSH_TARGET
+{
+    ULONG SurfaceId;
+    ULONG DxGeneration;
+    ULONG BackGeneration;
+    ULONGLONG DxUpdateId;
+    ULONGLONG GdiUpdateId;
+} DWM_FLUSH_TARGET;
+
+static LIST_ENTRY g_DwmFlushWaiters = { &g_DwmFlushWaiters, &g_DwmFlushWaiters };
+static ULONGLONG g_DwmFrameIssued;
+static ULONGLONG g_DwmFramePresented;
+
+static VOID
+IntCompositionWakeFlushWaiters(VOID)
+{
+    PLIST_ENTRY Entry;
+    for (Entry = g_DwmFlushWaiters.Flink;
+         Entry != &g_DwmFlushWaiters; Entry = Entry->Flink)
+    {
+        DWM_FLUSH_WAITER *Waiter = CONTAINING_RECORD(Entry, DWM_FLUSH_WAITER, Entry);
+        KeSetEvent(&Waiter->Event, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+NTSTATUS
+IntCompositionDwmPresented(VOID)
+{
+    if (!g_DwmAttached || PsGetCurrentProcess() != g_DwmProcess)
+        return STATUS_ACCESS_DENIED;
+    g_DwmFramePresented = g_DwmFrameIssued;
+    IntCompositionWakeFlushWaiters();
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+IntCompositionDwmFlush(VOID)
+{
+    DWM_FLUSH_TARGET *Targets;
+    DWM_FLUSH_WAITER Waiter;
+    ULONG Index, Count = 0;
+    ULONGLONG Frame, Deadline;
+    PEPROCESS Compositor;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!gbCompositionEnabled || !g_DwmAttached)
+        return STATUS_DEVICE_NOT_READY;
+    if (PsGetCurrentProcess() == g_DwmProcess)
+        return STATUS_SUCCESS;
+
+    Targets = ExAllocatePoolWithTag(PagedPool,
+                  sizeof(*Targets) * COMPOSITION_MAX_WINDOWS, 'fwDC');
+    if (Targets == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    for (Index = 0; Index < g_RedirectHighWater; ++Index)
+    {
+        REDIRECT_ENTRY *Entry = &g_Redirects[Index];
+        PWND_REDIRECT Redirect = &Entry->Redirect;
+        PWND SourceWnd = Redirect->DxWindow ?
+            UserGetWindowObject((HWND)(ULONG_PTR)Redirect->DxWindow) : Entry->Wnd;
+        DWM_FLUSH_TARGET *Target = &Targets[Count];
+
+        if (SourceWnd == NULL || SourceWnd->head.pti == NULL ||
+            SourceWnd->head.pti->ppi->peProcess != PsGetCurrentProcess())
+            continue;
+        if (Redirect->DxPublishedUpdateId <= Redirect->DxConsumedUpdateId &&
+            Redirect->GdiAdmittedUpdateId <= Redirect->GdiConsumedUpdateId)
+            continue;
+        Target->SurfaceId = Index;
+        Target->DxGeneration = Redirect->DxGeneration;
+        Target->BackGeneration = Redirect->BackGeneration;
+        /* ISSUE reserves a producer slot; only UPDATE/PUBLISH queues it for
+         * composition. Waiting for an issued but unpublished slot would block
+         * the very thread which must publish it after DwmFlush returns. */
+        Target->DxUpdateId = Redirect->DxPublishedUpdateId;
+        Target->GdiUpdateId = Redirect->GdiAdmittedUpdateId;
+        ++Count;
+    }
+    if (Count == 0)
+    {
+        /* An idle caller still needs refresh pacing, but must not make DWM
+         * redraw an unchanged desktop. dwmapi handles this result without
+         * inventing a new compositor publication. */
+        ExFreePoolWithTag(Targets, 'fwDC');
+        return STATUS_NOT_FOUND;
+    }
+    Compositor = g_DwmProcess;
+    ObReferenceObject(Compositor);
+    Frame = g_DwmFrameIssued + 1;
+    Deadline = KeQueryInterruptTime() + 5 * 10000000ULL;
+    KeInitializeEvent(&Waiter.Event, NotificationEvent, FALSE);
+    InsertTailList(&g_DwmFlushWaiters, &Waiter.Entry);
+    IntCompositionMarkDamage(TRUE);
+    for (;;)
+    {
+        BOOLEAN Complete = g_DwmFramePresented >= Frame;
+        LARGE_INTEGER Timeout;
+        ULONGLONG Now;
+
+        if (!g_DwmAttached || g_DwmProcess != Compositor)
+        {
+            Status = STATUS_DEVICE_NOT_READY;
+            break;
+        }
+        for (Index = 0; Complete && Index < Count; ++Index)
+        {
+            DWM_FLUSH_TARGET *Target = &Targets[Index];
+            PWND_REDIRECT Redirect = &g_Redirects[Target->SurfaceId].Redirect;
+            if ((Redirect->DxGeneration == Target->DxGeneration &&
+                 Redirect->DxConsumedUpdateId < Target->DxUpdateId) ||
+                (Redirect->BackGeneration == Target->BackGeneration &&
+                 Redirect->GdiConsumedUpdateId < Target->GdiUpdateId))
+                Complete = FALSE;
+        }
+        if (Complete)
+            break;
+        Now = KeQueryInterruptTime();
+        if (Now >= Deadline)
+        {
+            Status = STATUS_TIMEOUT;
+            break;
+        }
+        Timeout.QuadPart = -(LONGLONG)(Deadline - Now);
+        KeClearEvent(&Waiter.Event);
+        UserLeave();
+        Status = KeWaitForSingleObject(&Waiter.Event, Executive, KernelMode, FALSE, &Timeout);
+        UserEnterExclusive();
+        if (Status == STATUS_TIMEOUT || !NT_SUCCESS(Status))
+            break;
+    }
+    RemoveEntryList(&Waiter.Entry);
+    ObDereferenceObject(Compositor);
+    ExFreePoolWithTag(Targets, 'fwDC');
+    return Status;
+}
+
 static BOOL
 IntCompositionAccumulatePositionDamage(_In_ const RECTL *Rect)
 {
@@ -2484,7 +2629,10 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     if (!NT_SUCCESS(Status))
         IntCompositionMarkDamage(TRUE);
     else
+    {
+        ++g_DwmFrameIssued;
         g_DwmLastFrameTime = (LONGLONG)KeQueryInterruptTime();
+    }
     return Status;
 }
 
@@ -2571,6 +2719,7 @@ IntCompositionDwmTeardown(VOID)
     PKEVENT WakeEvent;
 
     g_DwmAttached = FALSE;
+    IntCompositionWakeFlushWaiters();
     IntCompositionReleaseFrameSurfaces();
     (VOID)IntCompositionReleaseGpuOutput(TRUE);
     /* Damage raised from the GDI finish path holds this same PDEV lock while

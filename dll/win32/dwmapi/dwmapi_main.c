@@ -802,12 +802,28 @@ HRESULT WINAPI DwmFlush(void)
     LARGE_INTEGER qpf, qpc, delay;
     LONG64 qpc_refresh_period;
     int display_frequency;
+#ifdef __REACTOS__
+    NTSTATUS status;
+
+    if (!GdiFlush())
+        return E_FAIL;
+    status = (NTSTATUS)NtUserCallOneParam(0, DWM_ROUTINE_FLUSH);
+    if (status == STATUS_DEVICE_NOT_READY)
+        return DWM_E_COMPOSITIONDISABLED;
+    if (status == STATUS_TIMEOUT)
+        return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+    if (status != STATUS_NOT_FOUND)
+        return NT_SUCCESS(status) ? S_OK : HRESULT_FROM_WIN32(RtlNtStatusToDosError(status));
+    /* There were no outstanding DirectX publications from this process.
+     * Pace the idle call without forcing the compositor to redraw. */
+#else
     static BOOL once;
 
     if (!once++)
         FIXME("stub.\n");
     else
         TRACE("stub.\n");
+#endif
 
     display_frequency = get_display_frequency();
     NtQueryPerformanceCounter(&qpc, &qpf);
