@@ -213,6 +213,15 @@ typedef struct _WOW64_USER_PROCESS_PARAMETERS
     WOW64_DRIVE_LETTER_CURDIR CurrentDirectories[WOW64_MAX_DRIVE_LETTERS];
     ULONG EnvironmentSize;
     ULONG EnvironmentVersion;
+    ULONG PackageDependencyData;
+    ULONG ProcessGroupId;
+    ULONG LoaderThreads;
+    WOW64_UNICODE_STRING RedirectionDllName;
+    WOW64_UNICODE_STRING HeapPartitionName;
+    ULONG DefaultThreadpoolCpuSetMasks;
+    ULONG DefaultThreadpoolCpuSetMaskCount;
+    ULONG DefaultThreadpoolThreadMaximum;
+    ULONG HeapMemoryTypeMask;
 } WOW64_USER_PROCESS_PARAMETERS, *PWOW64_USER_PROCESS_PARAMETERS;
 
 typedef struct _WOW64_CPU_AREA_INFO
