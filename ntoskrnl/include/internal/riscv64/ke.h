@@ -239,7 +239,13 @@ FORCEINLINE
 PKTHREAD
 _KeGetCurrentThread(VOID)
 {
-    return KeGetCurrentPrcb()->CurrentThread;
+    BOOLEAN Enabled = KeDisableInterrupts();
+    PKTHREAD Thread = KeGetCurrentPrcb()->CurrentThread;
+
+    /* Reading sscratch and dereferencing the PCR are separate instructions.
+     * Keep a reschedule from migrating us between those two operations. */
+    KeRestoreInterrupts(Enabled);
+    return Thread;
 }
 
 FORCEINLINE
@@ -352,8 +358,16 @@ KiClearDpcRequestState(
 #ifdef __cplusplus
 extern "C" {
 #endif
+VOID NTAPI KiRiscvInitializePcr(PKPCR Pcr, PKTHREAD Thread, ULONG_PTR HartId,
+                              ULONG Number, PVOID DpcStack, PVOID PanicStack);
+NTHALAPI BOOLEAN NTAPI HalpRiscvQueryProcessorHartId(ULONG Number, PULONG_PTR HartId);
+NTHALAPI VOID NTAPI HalpRiscvRemoteFence(KAFFINITY Targets, PVOID Address, SIZE_T Size, BOOLEAN Instruction);
+VOID NTAPI KiIpiSendTbFlush(KAFFINITY Targets, PVOID Address, ULONG Pages);
+VOID NTAPI KiIpiProcessRequests(VOID);
 NTHALAPI NTSTATUS NTAPI HalAllocateAdapterChannel(PADAPTER_OBJECT AdapterObject, PWAIT_CONTEXT_BLOCK Wcb,
                                                   ULONG NumberOfMapRegisters, PDRIVER_CONTROL ExecutionRoutine);
+BOOLEAN KiProcessorFreezeHandler(PKTRAP_FRAME TrapFrame, PKEXCEPTION_FRAME ExceptionFrame);
+VOID NTAPI KiFreezeIfRequested(VOID);
 #ifdef __cplusplus
 }
 #endif

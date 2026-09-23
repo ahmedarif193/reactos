@@ -39,6 +39,8 @@ HalInitSystem(
 
     if (BootPhase == 1)
     {
+        if (KeGetCurrentProcessorNumber() != 0)
+            return HalpRiscvInitializationPhase == 2;
         if (HalpRiscvInitializationPhase != 1)
         {
             HalpRiscvInitializationFailure = RiscvHalInvalidBootPhase;
@@ -67,9 +69,8 @@ HalInitSystem(
          * loop, which unmasks around wfi only once a source is enabled.
          * Requests already recorded in Pcr->SoftwareInterrupts (DPCs
          * queued during phase 0/1) are taken as soon as SIE is set. */
-        HalpRiscvFeatureFlags = KiRiscvQueryFeatureFlags();
         HalpRiscvStartClock();
-        KiRiscvSetInterruptEnabled(RISCV_HAL_SIE_STIE, TRUE);
+        KiRiscvSetInterruptEnabled(RISCV_HAL_SIE_STIE | RISCV_HAL_SIE_SSIE, TRUE);
         HalpRiscvInitializationPhase = 2;
         __asm__ __volatile__("csrsi sstatus, 2" ::: "memory");
         return TRUE;
@@ -123,8 +124,8 @@ HalInitSystem(
     }
     if (HalpRiscvPciDmaCoherent())
         KeSetDmaIoCoherency(1);
-    if (!HalpRiscvInitializeSbi())
     HalInitPnpDriver = HaliInitPnpDriver;
+    if (!HalpRiscvInitializeSbi() || !HalpRiscvDiscoverHarts(LoaderBlock))
     {
         HalpRiscvInitializationFailure = RiscvHalSbiUnavailable;
         return FALSE;

@@ -7,6 +7,24 @@
 
 #include <ntoskrnl.h>
 
+VOID NTAPI
+KiSaveProcessorState(PKTRAP_FRAME TrapFrame, PKEXCEPTION_FRAME ExceptionFrame)
+{
+    PKPROCESSOR_STATE State = &KeGetCurrentPrcb()->ProcessorState;
+    UNREFERENCED_PARAMETER(ExceptionFrame);
+    State->ContextFrame = TrapFrame->Context;
+    KiSaveProcessorControlState(State);
+}
+
+VOID NTAPI
+KiRestoreProcessorState(PKTRAP_FRAME TrapFrame, PKEXCEPTION_FRAME ExceptionFrame)
+{
+    PKPROCESSOR_STATE State = &KeGetCurrentPrcb()->ProcessorState;
+    UNREFERENCED_PARAMETER(ExceptionFrame);
+    TrapFrame->Context = State->ContextFrame;
+    KiRestoreProcessorControlState(State);
+}
+
 ULONG
 NTAPI
 KeGetRecommendedSharedDataAlignment(VOID)

@@ -19,19 +19,20 @@ KiRiscvUpdateInterruptMask(_In_ PKPCR Pcr)
     if (Irql >= SYNCH_LEVEL) Mask &= ~RISCV_SIE_SEIE;
     if (Irql >= CLOCK_LEVEL) Mask &= ~RISCV_SIE_STIE;
 
-    /* APC and DPC share SSIP. Enable it only for an eligible request, or a
-     * masked APC alone would continually retrap while running at APC_LEVEL. */
+    if (Irql >= IPI_LEVEL) Mask &= ~RISCV_SIE_SSIE;
+
+    /* APC, DPC and remote IPIs share SSIP. Keep the remote doorbell enabled
+     * below IPI_LEVEL, but only raise it locally for an eligible APC/DPC. */
     if (((Irql < DISPATCH_LEVEL) && (Pcr->SoftwareInterrupts & (1 << DISPATCH_LEVEL))) ||
         ((Irql < APC_LEVEL) && (Pcr->SoftwareInterrupts & (1 << APC_LEVEL))))
     {
         Mask |= RISCV_SIE_SSIE;
+        __asm__ __volatile__("csrsi sip, 2" ::: "memory");
     }
 
     __asm__ __volatile__("csrw sie, %0" :: "r"(Mask) : "memory");
-    if (Pcr->SoftwareInterrupts)
-        __asm__ __volatile__("csrsi sip, 2" ::: "memory");
-    else
-        __asm__ __volatile__("csrci sip, 2" ::: "memory");
+    /* Only the interrupt handler acknowledges SSIP. Clearing it here could
+     * lose a remote hart's doorbell racing with a local IRQL change. */
 }
 
 KIRQL
@@ -88,8 +89,8 @@ KiRiscvSetInterruptEnabled(_In_ ULONG_PTR Mask, _In_ BOOLEAN Enable)
     BOOLEAN Interrupts = KeDisableInterrupts();
     PKPCR Pcr = KeGetPcr();
 
-    /* Software requests are kernel-owned; there is no SMP/IPI provider yet. */
-    if (Mask & ~(RISCV_SIE_STIE | RISCV_SIE_SEIE))
+    /* SSIE is also the SBI interprocessor doorbell. */
+    if (Mask & ~(RISCV_SIE_STIE | RISCV_SIE_SEIE | RISCV_SIE_SSIE))
         KeBugCheckEx(HAL_INITIALIZATION_FAILED, Mask, Enable, 0, 0);
 
     if (Enable)

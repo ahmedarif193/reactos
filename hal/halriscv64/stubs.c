@@ -54,8 +54,6 @@ RISCV_HAL_REQUIRED(VOID, WRITE_PORT_BUFFER_UCHAR, (PUCHAR Port, PUCHAR Buffer, U
 RISCV_HAL_REQUIRED(VOID, WRITE_PORT_BUFFER_USHORT, (PUSHORT Port, PUSHORT Buffer, ULONG Count))
 RISCV_HAL_REQUIRED(VOID, WRITE_PORT_BUFFER_ULONG, (PULONG Port, PULONG Buffer, ULONG Count))
 
-/* Single-hart bring-up: the boot hart is the only processor (SMP is stubbed). */
-BOOLEAN NTAPI HalAllProcessorsStarted(VOID) { return TRUE; }
 /* QEMU virt exposes no PC speaker. Let beep.sys load and report unsupported
  * tone generation through the normal HAL failure result. */
 BOOLEAN NTAPI HalMakeBeep(ULONG Frequency) { UNREFERENCED_PARAMETER(Frequency); return FALSE; }
@@ -126,7 +124,7 @@ HalGetInterruptVector(INTERFACE_TYPE InterfaceType, ULONG BusNumber, ULONG BusIn
         return 0;
     }
     *Irql = RISCV_HAL_EXTERNAL_IRQL;
-    *Affinity = 1; /* This HAL currently owns only the boot hart. */
+    *Affinity = 1; /* Route PLIC device interrupts to logical CPU 0. */
     return BusInterruptLevel;
 }
 
@@ -159,7 +157,7 @@ VOID
 NTAPI
 HalReportResourceUsage(VOID)
 {
-    static WCHAR Name[] = L"RISC-V SBI Uniprocessor HAL";
+    static WCHAR Name[] = L"RISC-V SBI HAL";
     UNICODE_STRING HalName;
     CM_RESOURCE_LIST List = {0};
     ULONG ListSize = FIELD_OFFSET(CM_RESOURCE_LIST, List);

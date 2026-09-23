@@ -662,8 +662,8 @@ KdpPrint(
     KdpReleaseLock(&KdpDebuggerLock, PrintIrql);
     KdpPortOwnerPrcb = NULL;
     KeMemoryBarrier();
-#if defined(_M_AMD64)
-    /* A freeze NMI that arrived while we held the port lock was deferred. */
+#if defined(_M_AMD64) || defined(_M_RISCV64)
+    /* A freeze request that arrived while we held the port lock was deferred. */
     KiFreezeIfRequested();
 #endif
 

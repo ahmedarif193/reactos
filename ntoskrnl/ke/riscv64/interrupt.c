@@ -28,8 +28,8 @@
 #define RISCV_INTERRUPT_EXTERNAL 9
 #define RISCV_PLIC_MAX_SOURCE    1023
 
-/* This port owns a single hart. Raising to SYNCH_LEVEL masks SEIP while a
- * chain is changed, and the dispatch path never takes this table lock. */
+/* PLIC sources are routed to CPU 0. Connect/disconnect run on that CPU at
+ * SYNCH_LEVEL, excluding dispatch while changing the interrupt chain. */
 static KSPIN_LOCK KiRiscvInterruptTableLock;
 static PKINTERRUPT KiRiscvInterruptTable[RISCV_PLIC_MAX_SOURCE + 1];
 
@@ -87,6 +87,7 @@ KeConnectInterrupt(PKINTERRUPT Interrupt)
     if (Interrupt->Connected)
         return TRUE;
 
+    KeSetSystemAffinityThread(1);
     OldIrql = KeAcquireSpinLockRaiseToSynch(&KiRiscvInterruptTableLock);
     Head = KiRiscvInterruptTable[Interrupt->Vector];
     if (!Head)
@@ -109,6 +110,7 @@ KeConnectInterrupt(PKINTERRUPT Interrupt)
     }
     Interrupt->Connected = Connected;
     KeReleaseSpinLock(&KiRiscvInterruptTableLock, OldIrql);
+    KeRevertToUserAffinityThread();
     return Connected;
 }
 
@@ -123,11 +125,13 @@ KeDisconnectInterrupt(PKINTERRUPT Interrupt)
     if (!Interrupt || Interrupt->Vector == 0 ||
         Interrupt->Vector > RISCV_PLIC_MAX_SOURCE)
         return FALSE;
+    KeSetSystemAffinityThread(1);
     OldIrql = KeAcquireSpinLockRaiseToSynch(&KiRiscvInterruptTableLock);
     Head = KiRiscvInterruptTable[Interrupt->Vector];
     if (!Head || !Interrupt->Connected)
     {
         KeReleaseSpinLock(&KiRiscvInterruptTableLock, OldIrql);
+        KeRevertToUserAffinityThread();
         return FALSE;
     }
 
@@ -151,6 +155,7 @@ KeDisconnectInterrupt(PKINTERRUPT Interrupt)
     InitializeListHead(&Interrupt->InterruptListEntry);
     KeMemoryBarrier();
     KeReleaseSpinLock(&KiRiscvInterruptTableLock, OldIrql);
+    KeRevertToUserAffinityThread();
     return TRUE;
 }
 
@@ -262,13 +267,9 @@ KiDispatchInterrupt(VOID)
     KiSwapContext(APC_LEVEL, OldThread);
 }
 
-/* SSIP is the shared request line for APC_LEVEL and DISPATCH_LEVEL work.
- * KiRiscvUpdateInterruptMask raises SSIP whenever a request bit is set and
- * unmasks SSIE only while an eligible request exists, so this runs only
- * when there is work below the interrupted IRQL. Requests made while
- * dispatching (a DPC that readies a thread, a switched-in thread with a
- * pending kernel APC) are picked up by re-evaluating the request word
- * after each lower, before sret. */
+/* SSIP carries remote IPIs and local APC/DPC requests. Service the IPI first,
+ * then re-evaluate local work after each dispatch or APC delivery, since a
+ * context switch may resume this trap on another processor. */
 static
 VOID
 KiRiscvDeliverSoftwareInterrupts(
@@ -277,11 +278,17 @@ KiRiscvDeliverSoftwareInterrupts(
     PKPCR Pcr = KeGetPcr();
     KIRQL Irql;
 
-    /* Acknowledge first: the mask update below re-raises SSIP for any
-     * request that stays ineligible at the interrupted IRQL. */
+    /* Acknowledge first: mask updates re-raise SSIP when a deferred local
+     * APC/DPC becomes eligible. Remote requests remain in RequestSummary. */
     __asm__ __volatile__("csrci sip, 2" ::: "memory");
+    KeMemoryBarrier();
+    Irql = KfRaiseIrql(IPI_LEVEL);
+    KiIpiServiceRoutine(TrapFrame, NULL);
+    KfLowerIrql(Irql);
     for (;;)
     {
+        /* Dispatch/APC delivery may resume this thread on another CPU. */
+        Pcr = KeGetPcr();
         Irql = Pcr->CurrentIrql;
         if ((Irql < DISPATCH_LEVEL) &&
             (Pcr->SoftwareInterrupts & (1 << DISPATCH_LEVEL)))

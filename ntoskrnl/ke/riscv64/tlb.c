@@ -18,28 +18,41 @@ KeFlushCurrentTb(VOID)
 
 VOID
 NTAPI
-KeFlushProcessTb(VOID)
+KiIpiSendTbFlush(KAFFINITY Targets, PVOID Address, ULONG Pages)
 {
-    /* The current process can run elsewhere once SMP is implemented. */
-    if (KeNumberProcessors > 1)
-        KeBugCheckEx(MULTIPROCESSOR_CONFIGURATION_NOT_SUPPORTED, KeNumberProcessors, 0, 0, 0);
-
-    /* Flush more than the current ASID; no ASID allocation policy is implied. */
-    KeFlushCurrentTb();
+    KIRQL OldIrql = KeGetCurrentIrql();
+    KAFFINITY Self;
+    ULONG Index;
+    if (OldIrql < SYNCH_LEVEL) KfRaiseIrql(SYNCH_LEVEL);
+    Self = KeGetCurrentPrcb()->SetMember;
+    Targets &= KeActiveProcessors;
+    if (Targets & Self)
+    {
+        if (!Pages || Pages > FLUSH_MULTIPLE_MAXIMUM)
+            KeFlushCurrentTb();
+        else
+            for (Index = 0; Index < Pages; ++Index)
+                KeInvalidateTlbEntry((PUCHAR)Address + (SIZE_T)Index * PAGE_SIZE);
+    }
+    Targets &= ~Self;
+    if (Targets)
+        HalpRiscvRemoteFence(Targets, Pages ? Address : NULL,
+                            Pages ? (SIZE_T)Pages * PAGE_SIZE : 0, FALSE);
+    KfLowerIrql(OldIrql);
 }
 
-VOID
-NTAPI
-KeFlushEntireTb(_In_ BOOLEAN Invalid, _In_ BOOLEAN AllProcessors)
+VOID NTAPI KeFlushProcessTb(VOID)
 {
-    KIRQL OldIrql;
+    /* ASID zero: every context switch flushes before entering another root.
+     * Broadcasting also covers a hart switching into this process now. */
+    KiIpiSendTbFlush(KeActiveProcessors, NULL, 0);
+}
 
+VOID NTAPI KeFlushEntireTb(BOOLEAN Invalid, BOOLEAN AllProcessors)
+{
     UNREFERENCED_PARAMETER(Invalid);
-
-    if (AllProcessors && (KeNumberProcessors > 1))
-        KeBugCheckEx(MULTIPROCESSOR_CONFIGURATION_NOT_SUPPORTED, KeNumberProcessors, 0, 0, 0);
-
-    OldIrql = KeRaiseIrqlToSynchLevel();
-    KeFlushCurrentTb();
-    KeLowerIrql(OldIrql);
+    if (AllProcessors)
+        KiIpiSendTbFlush(KeActiveProcessors, NULL, 0);
+    else
+        KeFlushCurrentTb();
 }

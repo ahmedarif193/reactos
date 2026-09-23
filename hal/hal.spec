@@ -223,3 +223,5 @@
 
 @ stdcall -arch=arm64 VideoPortQuerySystemTime(ptr)
 @ extern -arch=riscv64 -constant KdHvComPortInUse ntoskrnl.KdHvComPortInUse
+@ stdcall -arch=riscv64 HalpRiscvQueryProcessorHartId(long ptr)
+@ stdcall -arch=riscv64 HalpRiscvRemoteFence(long ptr long long)

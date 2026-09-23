@@ -37,7 +37,11 @@ KIRQL
 NTAPI
 KeGetCurrentIrql(VOID)
 {
-    return KeGetPcr()->CurrentIrql;
+    BOOLEAN Enabled = KeDisableInterrupts();
+    KIRQL Irql = KeGetPcr()->CurrentIrql;
+
+    KeRestoreInterrupts(Enabled);
+    return Irql;
 }
 
 BOOLEAN
@@ -61,22 +65,9 @@ KiRiscvInitializeBootPcr(
         return FALSE;
     }
 
-    /* The caller owns resident PCR and bootstrap-thread storage. This does
-     * not replace KeInitializeThread or initialize the idle process. */
-    RtlZeroMemory(Pcr, sizeof(*Pcr));
-    Pcr->HartId = HartId;
-    Pcr->CurrentIrql = HIGH_LEVEL;
-    Pcr->PanicStack = KiRiscvPanicStack + sizeof(KiRiscvPanicStack);
+    KiRiscvInitializePcr(Pcr, Thread, HartId, 0, DpcStack,
+                         KiRiscvPanicStack + sizeof(KiRiscvPanicStack));
     Prcb = &Pcr->Prcb;
-    Prcb->CurrentThread = Thread;
-    Prcb->IdleThread = Thread;
-    Prcb->DpcStack = DpcStack;
-    Prcb->Number = 0;
-    Prcb->SetMember = 1;
-    Prcb->ParentNode = &KiNode0;
-    Prcb->MultiThreadProcessorSet = 1;
-    Prcb->MultiThreadSetMaster = Prcb;
-    KiInitSpinLocks(Prcb, 0);
 
     /* Publish only initialized queues and processor identity. sscratch is
      * reserved from here onward; trap entry must restore it before C code. */
@@ -86,4 +77,29 @@ KiRiscvInitializeBootPcr(
     KeMemoryBarrier();
     KeNumberProcessors = 1;
     return TRUE;
+}
+
+VOID NTAPI
+KiRiscvInitializePcr(PKPCR Pcr, PKTHREAD Thread, ULONG_PTR HartId,
+                     ULONG Number, PVOID DpcStack, PVOID PanicStack)
+{
+    PKPRCB Prcb;
+    /* The caller owns resident PCR and bootstrap-thread storage. This does
+     * not replace KeInitializeThread or initialize the idle process. */
+    RtlZeroMemory(Pcr, sizeof(*Pcr));
+    Pcr->HartId = HartId;
+    Pcr->CurrentIrql = HIGH_LEVEL;
+    Pcr->PanicStack = PanicStack;
+    Prcb = &Pcr->Prcb;
+    Prcb->CurrentThread = Thread;
+    Prcb->IdleThread = Thread;
+    Prcb->DpcStack = DpcStack;
+    Prcb->Number = Number;
+    Prcb->SetMember = AFFINITY_MASK(Number);
+    Prcb->ParentNode = &KiNode0;
+    Prcb->MultiThreadProcessorSet = Prcb->SetMember;
+    Prcb->MultiThreadSetMaster = Prcb;
+    KiInitSpinLocks(Prcb, Number);
+
+    Pcr->KdVersionBlock = Number ? KeGetPcr()->KdVersionBlock : NULL;
 }

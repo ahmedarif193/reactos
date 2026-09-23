@@ -11,6 +11,8 @@ add_library(hal MODULE
     platform.c
     rtc.c
     sbi.c
+    smp.c
+    smp_trampoline.S
     stubs.c
     timer.c
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)

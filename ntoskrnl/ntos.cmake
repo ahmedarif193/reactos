@@ -440,6 +440,7 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm64/rtlexcpt.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm64/rtlstubs.c)
 elseif(ARCH STREQUAL "riscv64")
+    list(REMOVE_ITEM SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ipi.c)
     list(APPEND ASM_SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/ctxswitch.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/entry.S
@@ -459,7 +460,9 @@ elseif(ARCH STREQUAL "riscv64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/context.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/cpu.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/features.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/freeze.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/interrupt.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/ipi.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/irql.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/kiinit.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/pcr.c

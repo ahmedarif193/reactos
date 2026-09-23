@@ -985,7 +985,7 @@ KeInitThread(IN OUT PKTHREAD Thread,
 #endif
     Thread->KernelStackResident = TRUE;
     Thread->AdjustReason = AdjustNone;
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN7)
+#if (defined(_M_AMD64) || defined(_M_RISCV64)) && (NTDDI_VERSION >= NTDDI_WIN7)
     Thread->Running = FALSE;
     Thread->ReadyTransition = FALSE;
 #endif
@@ -1754,7 +1754,7 @@ KeTerminateThread(IN KPRIORITY Increment)
     Process->KernelTime += Thread->KernelTime;
     Process->UserTime += Thread->UserTime;
 
-#if !defined(_M_AMD64) || (NTDDI_VERSION < NTDDI_WIN7)
+#if (!defined(_M_AMD64) && !defined(_M_RISCV64)) || (NTDDI_VERSION < NTDDI_WIN7)
     KiQueueThreadForReaping(Thread);
 #endif
 
