@@ -154,8 +154,11 @@ main (int argc, char **argv)
   int literal_search=0;
 
   FILE *pfile;				/* file pointer */
-  int hfind;				/* search handle */
+  intptr_t hfind;			/* search handle */
   struct _finddata_t finddata;		/* _findfirst, filenext block */
+  char filepath[MAX_PATH];
+  const char *sep;
+  size_t dirlen;
 
   /* Scan the command line */
   while ((--argc) && (needle == NULL))
@@ -256,6 +259,10 @@ main (int argc, char **argv)
   while (--argc >= 0)
     {
       hfind = _findfirst (*++argv, &finddata);
+      dirlen = 0;
+      for (sep = *argv; *sep; sep++)
+        if (*sep == '\\' || *sep == '/' || *sep == ':')
+          dirlen = sep - *argv + 1;
       if (hfind < 0)
 	{
 	  /* We were not able to find a file. Display a message and
@@ -270,7 +277,9 @@ main (int argc, char **argv)
 	  do
             {
               /* We have found a file, so try to open it */
-	      if ((pfile = fopen (finddata.name, "r")) != NULL)
+	      _snprintf (filepath, sizeof(filepath), "%.*s%s", (int)dirlen, *argv, finddata.name);
+	      filepath[sizeof(filepath) - 1] = '\0';
+	      if ((pfile = fopen (filepath, "r")) != NULL)
 	        {
 	          printf ("---------------- %s\n", finddata.name);
 	          ret = find_str (needle, pfile, invert_search, count_lines,
@@ -286,7 +295,7 @@ main (int argc, char **argv)
 		           finddata.name);
                 }
 	    }
-          while (_findnext(hfind, &finddata) > 0);
+          while (_findnext(hfind, &finddata) == 0);
         }
       _findclose(hfind);
     } /* for each argv */
