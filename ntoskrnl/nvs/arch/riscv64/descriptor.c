@@ -12,7 +12,10 @@
 #include <nvs/include/miarchcheck.h>
 
 /* Accessed and dirty bits may be updated by hardware (Svadu) or raise a
- * page fault (Svade); the backend supports both, so neither is assumed. */
+ * page fault (Svade); the backend supports both, so neither is assumed.
+ * The low quarter of the system half holds the loader's KSEG0 and direct-map
+ * windows (see RISCV64_LOADER_BLOCK): only their populated slots are adopted,
+ * and the memory manager allocates above them. */
 static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
 {
     MI_ARCH_ID_VALUE,
@@ -48,7 +51,7 @@ static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
     TRUE,
     NULL,
     0,
-    0,
+    0xFFFFFFE000000000ULL,
     TRUE
 };
 

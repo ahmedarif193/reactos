@@ -176,7 +176,6 @@ Retry:
     Frame->Sstatus = RISCV_USER_SSTATUS;
     Thread->PreviousMode = UserMode;
     Thread->TrapFrame = Frame->PreviousTrapFrame;
-    KeSweepICache(NULL, 0);
     KiRiscvRestoreTrapFrame(Frame);
 }
 

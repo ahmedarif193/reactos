@@ -239,8 +239,12 @@ KsecReadMachineSpecificCounters(
         *MachineSpecificCounters = (ULONG)cntvct;
     }
 #elif defined(_M_RISCV64)
-    /* No mandatory, privilege-safe RISC-V counter is available here. */
-    *MachineSpecificCounters = 0;
+    {
+        ULONG64 Time;
+
+        __asm__ volatile("rdtime %0" : "=r"(Time));
+        *MachineSpecificCounters = (ULONG)Time;
+    }
 #else
     #error Implement me!
 #endif
