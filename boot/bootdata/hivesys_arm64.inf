@@ -8,6 +8,8 @@
 
 HKLM,"SOFTWARE\Microsoft\Wow64\x86",,0x00000000,"wow64fex.dll"
 
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management","LargeStackSize",0x00010001,0x00028000
+
 ; Native print environment. Keep this synchronized with winprint packaging.
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64","Directory",,"ARM64"
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors",,0x00000010
