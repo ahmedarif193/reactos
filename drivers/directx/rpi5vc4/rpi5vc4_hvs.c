@@ -383,11 +383,16 @@ Rpi5HvsSelectHead(
 }
 
 static BOOLEAN
-Rpi5HvsFrameReached(
-    _In_ UCHAR Target,
+Rpi5HvsFrameAdvanced(
+    _In_ UCHAR Retired,
     _In_ UCHAR Current)
 {
-    return (CHAR)((Target << 2) - (Current << 2)) <= 0;
+    /* A list needs one frame boundary after retirement, not an ordering of
+     * arbitrary 6-bit timestamps. Signed modular ordering becomes ambiguous
+     * after 32 frames of inactivity and makes old slots look busy again.
+     * Equality after a complete wrap is conservative: wait one more frame.
+     * The caller still excludes the active and requested hardware lists. */
+    return Current != Retired;
 }
 
 static BOOLEAN
@@ -434,15 +439,16 @@ Rpi5HvsChoosePrivateSlot(
         ULONG Index = (Start + Offset) % RPI5VC4_HVS_PRIVATE_SLOT_COUNT;
         ULONG Slot = RPI5_HVS_PRIVATE_SLOT(Index);
 
-        if (Slot == ActiveHead || Slot == PendingHead ||
-            Slot + RequiredDwords > DlistDwords)
+        if (DeviceExtension->HvsPrivateSlotRetireValid[Index] &&
+            Rpi5HvsFrameAdvanced(
+                DeviceExtension->HvsPrivateSlotRetireFrame[Index], Frame))
         {
-            continue;
+            DeviceExtension->HvsPrivateSlotRetireValid[Index] = FALSE;
         }
 
-        if (DeviceExtension->HvsPrivateSlotRetireValid[Index] &&
-            !Rpi5HvsFrameReached(
-                DeviceExtension->HvsPrivateSlotRetireFrame[Index], Frame))
+        if (Slot == ActiveHead || Slot == PendingHead ||
+            Slot + RequiredDwords > DlistDwords ||
+            DeviceExtension->HvsPrivateSlotRetireValid[Index])
         {
             continue;
         }
@@ -487,7 +493,7 @@ Rpi5HvsRetirePrivateSlot(
         (PULONG)((PUCHAR)HvsBase + StatusReg)) >>
         RPI5_HVS_STATUS_FRAME_SHIFT) & RPI5_HVS_STATUS_FRAME_MASK);
     DeviceExtension->HvsPrivateSlotRetireFrame[Index] =
-        (UCHAR)((Frame + 1) & 0x3f);
+        Frame;
     DeviceExtension->HvsPrivateSlotRetireValid[Index] = TRUE;
 }
 
