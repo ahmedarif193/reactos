@@ -1376,10 +1376,43 @@ static UINT load_all_folders( MSIPACKAGE *package )
     return r;
 }
 
+#ifdef __REACTOS__
+static void set_root_drive( MSIPACKAGE *package )
+{
+    WCHAR drives[128], best[4] = L"C:\\", *drive, *value;
+    ULARGE_INTEGER avail, best_avail;
+
+    if ((value = msi_dup_property( package->db, L"ROOTDRIVE" )))
+    {
+        free( value );
+        return;
+    }
+
+    best_avail.QuadPart = 0;
+    if (GetLogicalDriveStringsW( ARRAY_SIZE(drives), drives ))
+    {
+        for (drive = drives; *drive; drive += wcslen( drive ) + 1)
+        {
+            if (GetDriveTypeW( drive ) != DRIVE_FIXED) continue;
+            if (!GetDiskFreeSpaceExW( drive, &avail, NULL, NULL )) continue;
+            if (avail.QuadPart <= best_avail.QuadPart) continue;
+            best_avail = avail;
+            lstrcpynW( best, drive, ARRAY_SIZE(best) );
+        }
+    }
+
+    msi_set_property( package->db, L"ROOTDRIVE", best, -1 );
+}
+#endif
+
 static UINT ACTION_CostInitialize(MSIPACKAGE *package)
 {
     msi_set_property( package->db, L"CostingComplete", L"0", -1 );
+#ifdef __REACTOS__
+    set_root_drive( package );
+#else
     msi_set_property( package->db, L"ROOTDRIVE", L"C:\\", -1 );
+#endif
 
     load_all_folders( package );
     msi_load_all_components( package );
