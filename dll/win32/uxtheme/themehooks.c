@@ -629,8 +629,10 @@ int WINAPI ThemeSetWindowRgn(HWND hWnd, HRGN hRgn, BOOL bRedraw)
     PWND_DATA pwndData = ThemeGetWndData(hWnd);
     if(pwndData)
     {
-        pwndData->HasAppDefinedRgn = TRUE;
+        pwndData->HasAppDefinedRgn = (hRgn != NULL);
         pwndData->HasThemeRgn = FALSE;
+        if (hRgn == NULL)
+            pwndData->DirtyThemeRegion = TRUE;
     }
 
     return g_user32ApiHook.SetWindowRgn(hWnd, hRgn, bRedraw);
