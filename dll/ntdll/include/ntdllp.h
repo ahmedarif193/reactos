@@ -305,6 +305,13 @@ LdrpSendDllNotifications(
     _In_ PLDR_DATA_TABLE_ENTRY DllEntry,
     _In_ ULONG NotificationReason);
 
+typedef VOID (NTAPI *PLDRP_DLL_NOTIFICATION_DISPATCHER)(PLDR_DLL_NOTIFICATION_FUNCTION Callback, ULONG NotificationReason, PCLDR_DLL_NOTIFICATION_DATA NotificationData, PVOID Context);
+
+VOID
+NTAPI
+LdrpSetDllNotificationDispatcher(
+    _In_opt_ PLDRP_DLL_NOTIFICATION_DISPATCHER Dispatcher);
+
 #endif /* (_WIN32_WINNT >= _WIN32_WINNT_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA) */
 
 /* path.c */
