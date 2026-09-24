@@ -45,6 +45,7 @@ typedef struct _MACHINE_CPU
 typedef struct _MACHINE
 {
     PUCHAR Ram;
+    int *FrameBusy;
     ULONG64 FrameCount;
     ULONG64 SystemRoot;
     ULONG CpuCount;
@@ -70,6 +71,8 @@ extern _Thread_local ULONG MachineCpu;
 void MachineCreate(PMACHINE Machine, ULONG64 FrameCount, ULONG CpuCount);
 void MachineDestroy(PMACHINE Machine);
 PUCHAR MachineFrame(PMACHINE Machine, ULONG64 Frame);
+void MachineCopyFromRam(PMACHINE Machine, PVOID Buffer, const void *Mapping, SIZE_T Length);
+void MachineCopyToRam(PMACHINE Machine, PVOID Mapping, const void *Buffer, SIZE_T Length);
 void MachineSetUserRoot(PMACHINE Machine, ULONG Cpu, ULONG64 RootFrame);
 NTSTATUS MachineAccessMemory(PMACHINE Machine, ULONG Cpu, ULONG64 VirtualAddress, PVOID Buffer, SIZE_T Length,
                              MACHINE_ACCESS Access, BOOLEAN UserMode);

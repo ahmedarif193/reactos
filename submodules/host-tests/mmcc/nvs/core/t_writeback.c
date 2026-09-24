@@ -67,7 +67,7 @@ WriteFrames(PVOID Context, ULONG64 Offset, ULONG Length, const ULONG *Frames, UL
         if (!File->File.FailWrites)
         {
             Mapping = MiArchMapFrame(Frames[i]);
-            memcpy(File->File.Data + Offset + i * PAGE_SIZE, Mapping, Bytes);
+            MachineCopyFromRam(&File->World->Machine, File->File.Data + Offset + i * PAGE_SIZE, Mapping, Bytes);
             MiArchUnmapFrame(Mapping);
         }
     }
@@ -150,6 +150,96 @@ WritebackFailureProgress(void)
     WorldDestroy(&World);
 }
 
+typedef struct _WRITEBACK_REDIRTY
+{
+    TEST_FILE File;
+    TEST_WORLD *World;
+    PMI_ADDRESS_SPACE Space;
+    ULONG64 Base;
+    ULONG64 Value;
+    volatile LONG Copied;
+    volatile LONG Written;
+} WRITEBACK_REDIRTY;
+
+static NTSTATUS
+WritebackWhileMapped(PVOID Context, ULONG64 Offset, ULONG Length, PVOID Buffer)
+{
+    WRITEBACK_REDIRTY *State = Context;
+    NTSTATUS Status = TestFileOps.Write(&State->File, Offset, Length, Buffer);
+
+    /* Keep the first I/O outstanding after its data has reached the file.
+     * A real emulated CPU must be able to fault, write and trim this page. */
+    if (MI_ATOMIC_READ32(&State->Copied) == 0)
+    {
+        MI_ATOMIC_ADD32(&State->Copied, 1);
+        while (MI_ATOMIC_READ32(&State->Written) == 0)
+            sched_yield();
+    }
+    return Status;
+}
+
+static void *
+WritebackRedirtyWorker(PVOID Context)
+{
+    WRITEBACK_REDIRTY *State = Context;
+
+    MiHostCpu = MachineCpu = 1;
+    while (MI_ATOMIC_READ32(&State->Copied) == 0)
+        sched_yield();
+    CHECK(NT_SUCCESS(UserWrite64(State->World, 1, State->Base, State->Value)));
+    CHECK(MiTrimAddressSpace(State->Space, 1, TRUE) == 1);
+    MI_ATOMIC_ADD32(&State->Written, 1);
+    return NULL;
+}
+
+static void
+WritebackConcurrentRedirty(BOOLEAN ModifiedWriter)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    WRITEBACK_REDIRTY State = { .World = &World, .Space = &Space, .Value = 0xAABBCCDDEEFF0011ULL };
+    MI_FILE_OPS Ops = { .Read = TestFileOps.Read, .Write = WritebackWhileMapped };
+    PMI_SEGMENT Segment;
+    ULONG64 Size = PAGE_SIZE;
+    ULONG64 Initial = 0x1122334455667788ULL, Stored;
+    NTSTATUS Status;
+    pthread_t Worker;
+
+    WorldCreate(&World, 256, 2, 10000);
+    FileCreate(&State.File, PAGE_SIZE);
+    CHECK(NT_SUCCESS(MiAddressSpaceCreate(&World.System, &Space)));
+    WorldAttach(&World, 0, &Space);
+    WorldAttach(&World, 1, &Space);
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, PAGE_SIZE, MI_PROT_READWRITE,
+                                     &Ops, &State, NULL, 0, &Segment)));
+    CHECK(NT_SUCCESS(MiMapView(&Space, Segment, &State.Base, 0, &Size, MI_PROT_READWRITE, 0)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, State.Base, Initial)));
+    CHECK(MiTrimAddressSpace(&Space, 1, TRUE) == 1);
+    MI_ASSERT(pthread_create(&Worker, NULL, WritebackRedirtyWorker, &State) == 0);
+    if (ModifiedWriter)
+        CHECK(MiWriteModifiedPages(&World.System, 1) == 1);
+    else
+        CHECK(NT_SUCCESS(MiSegmentFlush(Segment, 0, PAGE_SIZE)));
+    MI_ASSERT(pthread_join(Worker, NULL) == 0);
+    memcpy(&Stored, State.File.Data, sizeof(Stored));
+    CHECK(Stored == Initial);
+    CHECK(MiPfnListCount(&World.System.Pfn, MiPageModified) == 1);
+    CHECK(MiWriteModifiedPages(&World.System, 1) == 1);
+    CHECK(State.File.Writes == 2);
+    memcpy(&Stored, State.File.Data, sizeof(Stored));
+    CHECK(Stored == State.Value);
+    CHECK(UserRead64(&World, 0, State.Base, &Status) == State.Value);
+    CHECK(NT_SUCCESS(Status));
+    CHECK(NT_SUCCESS(MiUnmapView(&Space, State.Base)));
+    WorldAttach(&World, 0, NULL);
+    WorldAttach(&World, 1, NULL);
+    MiAddressSpaceDestroy(&Space);
+    CHECK(MiSegmentDereferenceAndClose(Segment));
+    WorldExpectClean(&World, 256);
+    FileDestroy(&State.File);
+    WorldDestroy(&World);
+}
+
 void
 TestWriteback(void)
 {
@@ -164,6 +254,8 @@ TestWriteback(void)
 
     WritebackSizeReentry();
     WritebackFailureProgress();
+    WritebackConcurrentRedirty(FALSE);
+    WritebackConcurrentRedirty(TRUE);
     WorldCreate(&World, 512, 1, 100000);
     FileCreate(&File.File, Size);
     CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, Size, MI_PROT_READWRITE,

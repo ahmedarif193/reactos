@@ -56,6 +56,9 @@ MachineCreate(PMACHINE Machine, ULONG64 FrameCount, ULONG CpuCount)
     if (posix_memalign((void **)&Machine->Ram, PAGE_SIZE, (size_t)FrameCount * PAGE_SIZE) != 0)
         abort();
     memset(Machine->Ram, 0, (size_t)FrameCount * PAGE_SIZE);
+    Machine->FrameBusy = calloc(FrameCount, sizeof(*Machine->FrameBusy));
+    if (Machine->FrameBusy == NULL)
+        abort();
     Machine->FrameCount = FrameCount;
     Machine->CpuCount = CpuCount;
     Machine->StrictTlb = TRUE;
@@ -66,6 +69,7 @@ void
 MachineDestroy(PMACHINE Machine)
 {
     free(Machine->Ram);
+    free(Machine->FrameBusy);
     if (MachineCurrent == Machine)
         MachineCurrent = NULL;
 }
@@ -80,13 +84,6 @@ MachineFrame(PMACHINE Machine, ULONG64 Frame)
     }
 
     return Machine->Ram + Frame * PAGE_SIZE;
-}
-
-void
-MachineSetUserRoot(PMACHINE Machine, ULONG Cpu, ULONG64 RootFrame)
-{
-    Machine->Cpu[Cpu].UserRoot = RootFrame;
-    memset(Machine->Cpu[Cpu].Tlb, 0, sizeof(Machine->Cpu[Cpu].Tlb));
 }
 
 PVOID
@@ -115,11 +112,11 @@ MiArchPteCompareExchange(_Inout_ PMI_PTE Slot, _In_ MI_PTE Expected, _In_ MI_PTE
 
 static
 void
-MachineCpuAcquire(PMACHINE Machine, ULONG Cpu)
+MachineAcquire(volatile int *Busy)
 {
     unsigned Spins = 0;
 
-    while (__sync_lock_test_and_set(&Machine->Cpu[Cpu].Busy, 1))
+    while (__sync_lock_test_and_set(Busy, 1))
     {
         if (++Spins > 64)
         {
@@ -131,9 +128,73 @@ MachineCpuAcquire(PMACHINE Machine, ULONG Cpu)
 
 static
 void
+MachineCpuAcquire(PMACHINE Machine, ULONG Cpu)
+{
+    MachineAcquire(&Machine->Cpu[Cpu].Busy);
+}
+
+static
+void
 MachineCpuRelease(PMACHINE Machine, ULONG Cpu)
 {
     __sync_lock_release(&Machine->Cpu[Cpu].Busy);
+}
+
+static
+void
+MachineCopyRam(PMACHINE Machine, PVOID Buffer, PUCHAR Mapping, SIZE_T Length, BOOLEAN Write)
+{
+    PUCHAR Cursor = Buffer;
+    ULONG_PTR Offset = (ULONG_PTR)Mapping - (ULONG_PTR)Machine->Ram;
+    ULONG64 RamSize = Machine->FrameCount * PAGE_SIZE;
+
+    MI_ASSERT(Offset <= RamSize && Length <= RamSize - Offset);
+
+    /* CPU accesses and emulated I/O may overlap during page writeback. Give
+     * aligned 64-bit transfers defined host-C behavior, but release the frame
+     * lock between words so that a page copy is not an atomic snapshot. These
+     * locks never cover faults or I/O completion. Direct MM mappings (including
+     * page tables and page initialization) still require the core's own locks. */
+    while (Length != 0)
+    {
+        SIZE_T Chunk = sizeof(ULONG64) - (Offset & (sizeof(ULONG64) - 1));
+        int *Busy = &Machine->FrameBusy[Offset >> PAGE_SHIFT];
+
+        if (Chunk > Length)
+            Chunk = Length;
+        MachineAcquire(Busy);
+        if (Write)
+            memcpy(Mapping, Cursor, Chunk);
+        else
+            memcpy(Cursor, Mapping, Chunk);
+        __sync_lock_release(Busy);
+        Cursor += Chunk;
+        Mapping += Chunk;
+        Offset += Chunk;
+        Length -= Chunk;
+    }
+}
+
+void
+MachineCopyFromRam(PMACHINE Machine, PVOID Buffer, const void *Mapping, SIZE_T Length)
+{
+    MachineCopyRam(Machine, Buffer, (PUCHAR)Mapping, Length, FALSE);
+}
+
+void
+MachineCopyToRam(PMACHINE Machine, PVOID Mapping, const void *Buffer, SIZE_T Length)
+{
+    MachineCopyRam(Machine, (PVOID)Buffer, Mapping, Length, TRUE);
+}
+
+void
+MachineSetUserRoot(PMACHINE Machine, ULONG Cpu, ULONG64 RootFrame)
+{
+    /* Root switches and remote invalidations share the emulated CPU's TLB. */
+    MachineCpuAcquire(Machine, Cpu);
+    Machine->Cpu[Cpu].UserRoot = RootFrame;
+    memset(Machine->Cpu[Cpu].Tlb, 0, sizeof(Machine->Cpu[Cpu].Tlb));
+    MachineCpuRelease(Machine, Cpu);
 }
 
 VOID
@@ -430,9 +491,9 @@ MachineAccessMemory(PMACHINE Machine, ULONG Cpu, ULONG64 VirtualAddress, PVOID B
             PUCHAR Physical = MachineFrame(Machine, Frame) + (VirtualAddress & (PAGE_SIZE - 1));
 
             if (Access == MachineWrite)
-                memcpy(Physical, Cursor, Chunk);
+                MachineCopyToRam(Machine, Physical, Cursor, Chunk);
             else
-                memcpy(Cursor, Physical, Chunk);
+                MachineCopyFromRam(Machine, Cursor, Physical, Chunk);
 
             Cursor += Chunk;
         }
