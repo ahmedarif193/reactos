@@ -3270,6 +3270,40 @@ LdrpInitFailure(NTSTATUS Status)
     }
 }
 
+static
+LONG
+LdrpInitExceptionFilter(
+    _In_ PEXCEPTION_POINTERS ExceptionInfo)
+{
+    PEXCEPTION_RECORD ExceptionRecord = ExceptionInfo->ExceptionRecord;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PVOID ImageBase = NULL;
+
+    if (RtlPcToFileHeader(ExceptionRecord->ExceptionAddress, &ImageBase) &&
+        LdrpCheckForLoadedDllHandle(ImageBase, &LdrEntry))
+    {
+        DPRINT1("LDR: Exception %08lx at %p (%wZ+0x%Ix) during process initialization, parameters %lu: %p %p\n",
+                ExceptionRecord->ExceptionCode,
+                ExceptionRecord->ExceptionAddress,
+                &LdrEntry->BaseDllName,
+                (ULONG_PTR)ExceptionRecord->ExceptionAddress - (ULONG_PTR)ImageBase,
+                ExceptionRecord->NumberParameters,
+                (PVOID)ExceptionRecord->ExceptionInformation[0],
+                (PVOID)ExceptionRecord->ExceptionInformation[1]);
+    }
+    else
+    {
+        DPRINT1("LDR: Exception %08lx at %p during process initialization, parameters %lu: %p %p\n",
+                ExceptionRecord->ExceptionCode,
+                ExceptionRecord->ExceptionAddress,
+                ExceptionRecord->NumberParameters,
+                (PVOID)ExceptionRecord->ExceptionInformation[0],
+                (PVOID)ExceptionRecord->ExceptionInformation[1]);
+    }
+
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 VOID
 NTAPI
 LdrpInit(PCONTEXT Context,
@@ -3356,7 +3390,7 @@ LdrpInit(PCONTEXT Context,
                 UNIMPLEMENTED;
             }
         }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        _SEH2_EXCEPT(LdrpInitExceptionFilter(_SEH2_GetExceptionInformation()))
         {
             /* Fail with the SEH error */
             LoaderStatus = _SEH2_GetExceptionCode();
