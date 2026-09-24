@@ -1230,6 +1230,10 @@ public:
         _In_ ULONGLONG FileReference,
         _In_ PUNICODE_STRING Name);
 
+    NTSTATUS
+    PushDownResidentRoot(
+        _In_ PFileRecord DirectoryFile);
+
 private:
     struct DirectEnumerationFrame
     {

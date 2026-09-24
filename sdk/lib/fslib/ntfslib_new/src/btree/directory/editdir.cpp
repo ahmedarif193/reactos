@@ -1755,6 +1755,130 @@ SpliceEntryIntoHeader(
 }
 
 NTSTATUS
+Directory::PushDownResidentRoot(
+    _In_ PFileRecord DirectoryFile)
+{
+    PAttribute IndexRootAttribute;
+    PIndexRootEx IndexRoot;
+    PUCHAR List;
+    ULONG ListBytes;
+    ULONG MinimumListBytes;
+    ULONG IndexRecordSize;
+    ULONGLONG AllocationUnit;
+    BOOLEAN Large;
+    NTSTATUS Status;
+
+    if (!DiskVolume || !DirectoryFile ||
+        !DirectoryFile->Header ||
+        !DirectoryFile->Data ||
+        !(DirectoryFile->Header->Flags &
+          FR_IS_DIRECTORY) ||
+        DiskVolume->IsReadOnly)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    DiskVolume->IndexWorkBufferValid = FALSE;
+
+    IndexRootAttribute =
+        DirectoryFile->GetAttribute(
+            TypeIndexRoot,
+            const_cast<PWSTR>(NtfsI30Name));
+    if (!IndexRootAttribute ||
+        IndexRootAttribute->IsNonResident ||
+        IndexRootAttribute->
+            Resident.DataOffset < 0x18 ||
+        IndexRootAttribute->
+            Resident.DataLength <
+                FIELD_OFFSET(IndexRootEx,
+                             Header) +
+                sizeof(IndexNodeHeader) ||
+        IndexRootAttribute->
+            Resident.DataOffset >
+                IndexRootAttribute->Length ||
+        IndexRootAttribute->
+            Resident.DataLength >
+                IndexRootAttribute->Length -
+                IndexRootAttribute->
+                    Resident.DataOffset)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+    IndexRoot =
+        reinterpret_cast<PIndexRootEx>(
+            GetResidentDataPointer(
+                IndexRootAttribute));
+    IndexRecordSize =
+        BytesPerIndexRecord(DiskVolume);
+    if (IndexRecordSize == 0 ||
+        IndexRoot->AttributeType !=
+            TypeFileName ||
+        IndexRoot->CollationRule !=
+            ATTRDEF_COLLATION_FILENAME ||
+        IndexRoot->BytesPerIndexRec !=
+            IndexRecordSize ||
+        IndexRoot->ClusPerIndexRec !=
+            (UCHAR)
+                DiskVolume->
+                    ClustersPerIndexRecord)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+    AllocationUnit =
+        IndexRecordSize <
+            BytesPerCluster(DiskVolume)
+            ? DiskVolume->BytesPerSector
+            : BytesPerCluster(DiskVolume);
+    if (AllocationUnit == 0 ||
+        IndexRecordSize % AllocationUnit != 0 ||
+        IndexRoot->Header.IndexOffset <
+            sizeof(IndexNodeHeader) ||
+        IndexRoot->Header.TotalIndexSize <=
+            IndexRoot->Header.IndexOffset ||
+        IndexRoot->Header.TotalIndexSize >
+            IndexRootAttribute->
+                Resident.DataLength -
+                FIELD_OFFSET(IndexRootEx,
+                             Header))
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    Large = !!(IndexRoot->Header.Flags &
+               NTFS_INDEX_HEADER_LARGE);
+    ListBytes =
+        IndexRoot->Header.TotalIndexSize -
+        IndexRoot->Header.IndexOffset;
+    MinimumListBytes =
+        FIELD_OFFSET(IndexEntry, IndexStream) +
+        (Large ? sizeof(ULONGLONG) : 0);
+    if (ListBytes <= MinimumListBytes)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    List =
+        new(PagedPool, TAG_BTREE)
+            UCHAR[ListBytes];
+    if (!List)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(List,
+                  reinterpret_cast<PUCHAR>(
+                      &IndexRoot->Header) +
+                      IndexRoot->Header.IndexOffset,
+                  ListBytes);
+
+    Status = PushDownRoot(
+        DiskVolume,
+        DirectoryFile,
+        IndexRoot,
+        List,
+        ListBytes,
+        Large,
+        IndexRecordSize,
+        AllocationUnit);
+    delete[] List;
+    return Status;
+}
+
+NTSTATUS
 Directory::AddFileToDirectory(
     _In_ PFileRecord DirectoryFile,
     _In_ ULONGLONG FileReference,
