@@ -479,6 +479,9 @@ WsNqLookupServiceBegin(IN PNSQUERY NsQuery,
         }
     }
 
+    if (!IsListEmpty(&NsQuery->ProviderList))
+        ErrorCode = ERROR_SUCCESS;
+
 Exit:
     /* Check if we had an error somewhere */
     if (ErrorCode == SOCKET_ERROR)
