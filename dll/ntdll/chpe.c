@@ -1377,6 +1377,21 @@ ChpepCallThreadpoolCallback(PVOID Callback,
     ChpepCallX64Routine(Callback, Argument0, Argument1, Argument2, Argument3);
 }
 
+static
+VOID
+NTAPI
+ChpepCallDllNotification(PLDR_DLL_NOTIFICATION_FUNCTION Callback,
+                         ULONG NotificationReason,
+                         PCLDR_DLL_NOTIFICATION_DATA NotificationData,
+                         PVOID Context)
+{
+    ChpepCallThreadpoolCallback((PVOID)Callback,
+                                NotificationReason,
+                                (ULONG_PTR)NotificationData,
+                                (ULONG_PTR)Context,
+                                0);
+}
+
 VOID
 NTAPI
 ChpeInvokeUserApcRoutine(PVOID NormalContext, PVOID SystemArgument1,
@@ -1449,6 +1464,7 @@ ChpepResetEmulatorState(BOOLEAN UnloadModule)
 
     RtlpSetFlsCallbackDispatcher(NULL);
     RtlpSetThreadpoolCallbackDispatcher(NULL);
+    LdrpSetDllNotificationDispatcher(NULL);
     ChpeProcessInitialized = FALSE;
     ChpeEmulatorLoaded = FALSE;
     RtlZeroMemory(&ChpeDispatchTable, sizeof(ChpeDispatchTable));
@@ -1629,6 +1645,7 @@ ChpeInitializeProcess(VOID)
     ChpeProcessInitialized = TRUE;
     RtlpSetFlsCallbackDispatcher(ChpepCallFlsCallback);
     RtlpSetThreadpoolCallbackDispatcher(ChpepCallThreadpoolCallback);
+    LdrpSetDllNotificationDispatcher(ChpepCallDllNotification);
     RtlpSetRunOnceCallbackDispatcher(ChpepCallRunOnceCallback);
 
     Status = ChpepCreateCrossProcessWorkList();

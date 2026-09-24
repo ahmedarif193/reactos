@@ -18,6 +18,8 @@ typedef struct _LDR_DLL_NOTIFICATION_ENTRY
 
 static RTL_STATIC_LIST_HEAD(LdrpDllNotificationList);
 
+static PLDRP_DLL_NOTIFICATION_DISPATCHER volatile LdrpDllNotificationDispatcher;
+
 /* Initialize critical section statically */
 static RTL_CRITICAL_SECTION LdrpDllNotificationLock;
 static RTL_CRITICAL_SECTION_DEBUG LdrpDllNotificationLockDebug = {
@@ -33,6 +35,14 @@ static RTL_CRITICAL_SECTION LdrpDllNotificationLock = {
 };
 
 /* FUNCTIONS *****************************************************************/
+
+VOID
+NTAPI
+LdrpSetDllNotificationDispatcher(
+    _In_opt_ PLDRP_DLL_NOTIFICATION_DISPATCHER Dispatcher)
+{
+    InterlockedExchangePointer((PVOID volatile *)&LdrpDllNotificationDispatcher, (PVOID)Dispatcher);
+}
 
 NTSTATUS
 NTAPI
@@ -108,6 +118,7 @@ LdrpSendDllNotifications(
     PLIST_ENTRY Entry;
     PLDR_DLL_NOTIFICATION_ENTRY NotificationEntry;
     LDR_DLL_NOTIFICATION_DATA NotificationData;
+    PLDRP_DLL_NOTIFICATION_DISPATCHER Dispatcher;
 
     /*
      * LDR_DLL_LOADED_NOTIFICATION_DATA and LDR_DLL_UNLOADED_NOTIFICATION_DATA
@@ -132,6 +143,9 @@ LdrpSendDllNotifications(
     NotificationData.Loaded.DllBase = DllEntry->DllBase;
     NotificationData.Loaded.SizeOfImage = DllEntry->SizeOfImage;
 
+    Dispatcher = (PLDRP_DLL_NOTIFICATION_DISPATCHER)InterlockedCompareExchangePointer(
+        (PVOID volatile *)&LdrpDllNotificationDispatcher, NULL, NULL);
+
     /* Send notification to all registered callbacks */
     RtlEnterCriticalSection(&LdrpDllNotificationLock);
     _SEH2_TRY
@@ -141,9 +155,19 @@ LdrpSendDllNotifications(
              Entry = Entry->Flink)
         {
             NotificationEntry = CONTAINING_RECORD(Entry, LDR_DLL_NOTIFICATION_ENTRY, List);
-            NotificationEntry->Callback(NotificationReason,
-                                        &NotificationData,
-                                        NotificationEntry->Context);
+            if (Dispatcher)
+            {
+                Dispatcher(NotificationEntry->Callback,
+                           NotificationReason,
+                           &NotificationData,
+                           NotificationEntry->Context);
+            }
+            else
+            {
+                NotificationEntry->Callback(NotificationReason,
+                                            &NotificationData,
+                                            NotificationEntry->Context);
+            }
         }
     }
     _SEH2_FINALLY
