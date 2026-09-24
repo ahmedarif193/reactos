@@ -399,6 +399,9 @@ UnhandledExceptionFilter(IN PEXCEPTION_POINTERS ExceptionInfo)
 
     /* No debugger present, let's continue... */
 
+    /* ReactOS-specific: DPRINT a stack trace */
+    PrintStackTrace(ExceptionInfo);
+
     RealFilter = RtlDecodePointer(GlobalTopLevelExceptionFilter);
     if (RealFilter)
     {
@@ -406,9 +409,6 @@ UnhandledExceptionFilter(IN PEXCEPTION_POINTERS ExceptionInfo)
         if (RetValue != EXCEPTION_CONTINUE_SEARCH)
             return RetValue;
     }
-
-    /* ReactOS-specific: DPRINT a stack trace */
-    PrintStackTrace(ExceptionInfo);
 
     /*
      * Now pop up an error if needed. Check both the process-wide (Win32)
