@@ -10,6 +10,7 @@
 #include <iptypes.h>
 #include <strsafe.h>
 #include <winreg.h>
+#include <iphlpapi.h>
 
 #include "mswhelper.h"
 
@@ -20,6 +21,7 @@
 #define NSP_CALLID_HOSTNAME 0x0002
 #define NSP_CALLID_HOSTBYNAME 0x0003
 #define NSP_CALLID_SERVICEBYNAME 0x0004
+#define NSP_CALLID_NLA 0x0005
 
 #ifndef BUFSIZ
 #define BUFSIZ 1024
@@ -72,6 +74,8 @@ static const GUID guid_mswsock_NLA = {/*Data1:*/ 0x6642243A,
                                       /*Data2:*/ 0x3BA8,
                                       /*Data3:*/ 0x4AA6,
                                       /*Data4:*/ {0xBA, 0xA5, 0x2E, 0x0B, 0xD7, 0x1F, 0xDD, 0x83}};
+
+static const GUID guid_NLA_SERVICE_CLASS = {0x0037E515, 0xB5C9, 0x4A43, {0xBA, 0xDA, 0x8B, 0x48, 0xA8, 0x7A, 0xD2, 0x39}};
 
 #ifdef NSP_REDIRECT
 
@@ -153,16 +157,8 @@ mwsNSPLookupServiceBegin(_In_ LPGUID lpProviderId,
     PWSHANDLEINTERN pLook;
     int wsaErr;
 
-    if (IsEqualGUID(lpProviderId, &guid_mswsock_TcpIp))
-    {
-        //OK
-    }
-    else if (IsEqualGUID(lpProviderId, &guid_mswsock_NLA))
-    {
-        WSASetLastError(WSASERVICE_NOT_FOUND);
-        return SOCKET_ERROR;
-    }
-    else
+    if (!IsEqualGUID(lpProviderId, &guid_mswsock_TcpIp) &&
+        !IsEqualGUID(lpProviderId, &guid_mswsock_NLA))
     {
         return ERROR_CALL_NOT_IMPLEMENTED;
     }
@@ -221,7 +217,21 @@ mwsNSPLookupServiceBegin(_In_ LPGUID lpProviderId,
 #else /* NSP_REDIRECT */
 
     wsaErr = ERROR_CALL_NOT_IMPLEMENTED;
-    if (lpqsRestrictions->lpServiceClassId == NULL)
+    if (IsEqualGUID(lpProviderId, &guid_mswsock_NLA))
+    {
+        if (lpqsRestrictions->dwNameSpace != NS_NLA ||
+            (lpqsRestrictions->lpServiceClassId &&
+             !IsEqualGUID(lpqsRestrictions->lpServiceClassId, &guid_NLA_SERVICE_CLASS)))
+        {
+            wsaErr = WSASERVICE_NOT_FOUND;
+        }
+        else
+        {
+            pLook->CallID = NSP_CALLID_NLA;
+            wsaErr = NO_ERROR;
+        }
+    }
+    else if (lpqsRestrictions->lpServiceClassId == NULL)
     {
         wsaErr = ERROR_CALL_NOT_IMPLEMENTED;
     }
@@ -262,10 +272,84 @@ mwsNSPLookupServiceBegin(_In_ LPGUID lpProviderId,
 
     if (wsaErr != NO_ERROR)
     {
+        HeapFree(GetProcessHeap(), 0, pLook);
+        *lphLookup = NULL;
         WSASetLastError(wsaErr);
         return SOCKET_ERROR;
     }
     return NO_ERROR;
+}
+
+static
+INT
+NSP_LookupServiceNextNla(_In_ PWSHANDLEINTERN data,
+                         _In_ DWORD dwControlFlags,
+                         _Inout_ LPWSAQUERYSETW lpRes,
+                         _Inout_ LPDWORD lpResLen)
+{
+    PIP_ADAPTER_ADDRESSES Adapters = NULL, Adapter;
+    ULONG AdaptersLength = 0x4000;
+    ULONG Result;
+    DWORD Index = 0;
+    DWORD NameBytes = 0;
+    DWORD Required;
+    INT wsaErr = WSA_E_NO_MORE;
+
+    for (;;)
+    {
+        Adapters = HeapAlloc(GetProcessHeap(), 0, AdaptersLength);
+        if (!Adapters)
+            return WSA_NOT_ENOUGH_MEMORY;
+        Result = GetAdaptersAddresses(AF_UNSPEC,
+                                      GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                      NULL,
+                                      Adapters,
+                                      &AdaptersLength);
+        if (Result != ERROR_BUFFER_OVERFLOW)
+            break;
+        HeapFree(GetProcessHeap(), 0, Adapters);
+    }
+    if (Result != ERROR_SUCCESS)
+    {
+        HeapFree(GetProcessHeap(), 0, Adapters);
+        return (Result == ERROR_NO_DATA) ? WSA_E_NO_MORE : WSASYSCALLFAILURE;
+    }
+
+    for (Adapter = Adapters; Adapter; Adapter = Adapter->Next)
+    {
+        if (Adapter->OperStatus != IfOperStatusUp ||
+            Adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
+            Adapter->FirstUnicastAddress == NULL)
+        {
+            continue;
+        }
+        if (Index++ != data->CallIDCounter)
+            continue;
+
+        if ((dwControlFlags & LUP_RETURN_NAME) && Adapter->FriendlyName)
+            NameBytes = (DWORD)(wcslen(Adapter->FriendlyName) + 1) * sizeof(WCHAR);
+        Required = sizeof(WSAQUERYSETW) + NameBytes;
+        if (*lpResLen < Required)
+        {
+            *lpResLen = Required;
+            wsaErr = WSAEFAULT;
+            break;
+        }
+
+        lpRes->dwSize = sizeof(WSAQUERYSETW);
+        lpRes->dwNameSpace = NS_NLA;
+        if (NameBytes)
+        {
+            lpRes->lpszServiceInstanceName = (LPWSTR)(lpRes + 1);
+            RtlCopyMemory(lpRes->lpszServiceInstanceName, Adapter->FriendlyName, NameBytes);
+        }
+        data->CallIDCounter++;
+        wsaErr = NO_ERROR;
+        break;
+    }
+
+    HeapFree(GetProcessHeap(), 0, Adapters);
+    return wsaErr;
 }
 
 INT
@@ -304,6 +388,15 @@ mwsNSPLookupServiceNext(_In_ HANDLE hLookup,
 
     RtlZeroMemory(lpqsResults, *lpdwBufferLength);
     lpqsResults->dwSize = sizeof(*lpqsResults);
+
+    if (pLook->CallID == NSP_CALLID_NLA)
+    {
+        wsaErr = NSP_LookupServiceNextNla(pLook,
+                                          dwControlFlags,
+                                          lpqsResults,
+                                          lpdwBufferLength);
+        goto End;
+    }
 
     wsaErr = NSP_LookupServiceNextW(pLook,
                                     dwControlFlags,
