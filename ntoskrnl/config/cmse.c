@@ -344,6 +344,13 @@ CmpSecurityMethod(IN PVOID ObjectBody,
                                               SecurityDescriptor,
                                               PoolType,
                                               GenericMapping);
+            if (NT_SUCCESS(Status))
+            {
+                CmpReportNotify(Kcb,
+                                Kcb->KeyHive,
+                                Kcb->KeyCell,
+                                REG_NOTIFY_CHANGE_ATTRIBUTES | REG_NOTIFY_CHANGE_SECURITY);
+            }
             break;
 
         case QuerySecurityDescriptor:

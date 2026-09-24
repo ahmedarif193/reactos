@@ -1492,8 +1492,7 @@ NtNotifyChangeMultipleKeys(IN HANDLE MasterKeyHandle,
         (CompletionFilter & ~(REG_LEGAL_CHANGE_FILTER | REG_NOTIFY_THREAD_AGNOSTIC)))
         return STATUS_INVALID_PARAMETER;
 
-    /* Name/value notifications are wired to the mutation paths below. */
-    if (Count || ApcRoutine || (CompletionFilter & ~(REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC)))
+    if (Count || ApcRoutine)
         return STATUS_NOT_IMPLEMENTED;
     if (Asynchronous && !Event) return STATUS_INVALID_PARAMETER;
 
