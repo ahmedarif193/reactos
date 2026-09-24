@@ -425,7 +425,7 @@ KiRiscvSystemStartup(
     InitialThread->Running = TRUE;
 #endif
     RtlZeroMemory(&InitialThread->Affinity, sizeof(InitialThread->Affinity));
-    InitialThread->Affinity.Mask = 1;
+    KiThreadAffinityMask(InitialThread) = 1;
     InitialThread->WaitIrql = DISPATCH_LEVEL;
     InitialProcess->ActiveProcessors = 1;
     Prcb->CurrentThread = InitialThread;

@@ -53,7 +53,7 @@ KiWaitTest(IN PVOID ObjectPointer,
         KiAcquireThreadLock(WaitThread);
 
         if ((WaitThread->State == Waiting) &&
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
             (WaitBlock->BlockState == WaitBlockActive)
 #else
             TRUE
@@ -89,7 +89,7 @@ KiUnlinkThread(IN PKTHREAD Thread,
     /* Update wait status */
     Thread->WaitStatus |= WaitStatus;
 
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
     {
         if (Thread->TimerActive)
         {
@@ -150,7 +150,7 @@ VOID
 FASTCALL
 KiUnlinkWaitBlocks(IN PKTHREAD Thread)
 {
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
     PKWAIT_BLOCK WaitBlockArray = Thread->WaitBlockList;
     ULONG Count = Thread->WaitBlockCount;
     ULONG Index;
@@ -1267,7 +1267,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 if (Index == Count)
                 {
                     /* Loop wait blocks */
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
                     for (Index = 0; Index < Count; Index++)
                     {
                         CurrentObject = (PKMUTANT)WaitBlockArray[Index].Object;
@@ -1314,7 +1314,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 Timer->TimerListEntry.Blink = NULL;
 
                 /* Link the wait blocks */
-#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))
+#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64))
                 WaitBlock->NextWaitBlock = TimerBlock;
 #endif
             }
@@ -1364,7 +1364,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
             if (Timeout) Timer->Header.Inserted = TRUE;
 
             /* Insert into Object's Wait List*/
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
             for (Index = 0; Index < Count; Index++)
             {
                 CurrentObject = WaitBlockArray[Index].Object;

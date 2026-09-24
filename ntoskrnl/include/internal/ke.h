@@ -4,6 +4,10 @@
 
 #include "arch/ke.h"
 
+#ifndef KI_USER_MODE_CALLBACK_ENTRY
+#define KI_USER_MODE_CALLBACK_ENTRY KiCallUserMode
+#endif
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -112,15 +116,11 @@ extern ULONG64 KeFeatureBits;
 extern KAFFINITY KeActiveProcessors;
 extern ULONG KeBugCheckActive;
 extern PKPRCB KiProcessorBlock[];
-#ifdef _M_ARM64
+#ifdef KI_CORE_PARKING
 extern KSCHEDULER_SUBNODE KiNode0SubNode;
 #endif
 #ifndef KI_MAX_NUMA_NODES
-#ifdef _M_ARM64
-#define KI_MAX_NUMA_NODES MAXIMUM_PROCESSORS
-#else
 #define KI_MAX_NUMA_NODES 1
-#endif
 #endif
 #ifdef CONFIG_SMP
 extern ULONG KeMaximumProcessors;

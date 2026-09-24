@@ -8,7 +8,6 @@
 #define NDEBUG
 #include <debug.h>
 
-NTSTATUS NTAPI KiRiscvCallUserMode(PKTRAP_FRAME Frame, PVOID *OutputBuffer, PULONG OutputLength);
 DECLSPEC_NORETURN VOID NTAPI KiRiscvCallbackReturn(PKCALLOUT_FRAME CalloutFrame, NTSTATUS Status);
 
 NTSTATUS

@@ -6,6 +6,19 @@
 /* ReactOS RV64 kernel-private interfaces. */
 #pragma once
 
+/* Native assembly entry used by KD to recognize user callback transitions. */
+#define KI_USER_MODE_CALLBACK_ENTRY KiRiscvCallUserMode
+
+NTSTATUS
+NTAPI
+KiRiscvCallUserMode(
+    _In_ PKTRAP_FRAME Frame,
+    _Out_ PVOID *OutputBuffer,
+    _Out_ PULONG OutputLength);
+
+/* TODO(riscv64): initialize scheduler sub-nodes and maintain their idle sets
+ * before enabling KI_CORE_PARKING. */
+
 /* Software synchronization priority, below the clock and IPI levels. */
 #define SYNCH_LEVEL 12
 
