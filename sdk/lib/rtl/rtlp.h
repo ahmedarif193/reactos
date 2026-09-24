@@ -8,6 +8,21 @@
 
 /* INCLUDES ******************************************************************/
 
+#if defined(_M_AMD64)
+#include "amd64/raise.h"
+#elif defined(_M_ARM64)
+#include "arm64/raise.h"
+#elif defined(_M_RISCV64)
+#include "riscv64/raise.h"
+#endif
+
+#if defined(RTLP_RAISE_EXCEPTION_NEEDS_CALLER_CONTEXT) || defined(RTLP_RAISE_STATUS_NEEDS_CALLER_CONTEXT)
+/* Advance a captured context to the caller of the routine that captured it. */
+VOID
+NTAPI
+RtlpStepContextToCaller(_Inout_ PCONTEXT Context);
+#endif
+
 /* PAGED_CODE equivalent for user-mode RTL */
 #if DBG
 extern VOID FASTCALL CHECK_PAGED_CODE_RTL(char *file, int line);
@@ -258,13 +273,6 @@ VOID
 NTAPI
 RtlpArm64RestoreCollidedFrame(_Inout_ PDISPATCHER_CONTEXT DispatcherContext, _Out_ struct _CONTEXT *UnwindContext, _Out_writes_bytes_(NonVolatileRegistersLength) PVOID NonVolatileRegisters, _In_ ULONG NonVolatileRegistersLength, _Out_ PULONG64 EstablisherFrame);
 
-#define RTLP_RAISE_CONTEXT_FLAGS (CONTEXT_FULL | CONTEXT_UNWOUND_TO_CALL)
-#endif
-
-#if defined(_M_RISCV64)
-/* The raise helpers step the captured context to the caller, so the dispatcher
-   treats it as unwound to the call site. */
-#define RTLP_RAISE_CONTEXT_FLAGS (CONTEXT_FULL | CONTEXT_UNWOUND_TO_CALL)
 #endif
 
 #ifndef RTLP_RAISE_CONTEXT_FLAGS

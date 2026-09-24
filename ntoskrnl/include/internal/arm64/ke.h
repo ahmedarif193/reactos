@@ -5,6 +5,12 @@
 
 #pragma once
 
+/* This port initializes scheduler sub-nodes and their non-parked CPU sets. */
+#define KI_CORE_PARKING
+
+/* Executive bring-up completes native interrupt setup after each HAL phase. */
+#define EX_ARCH_HAS_POST_HAL_INIT
+
 #ifndef IMAGE_FILE_MACHINE_ARM64
 #define IMAGE_FILE_MACHINE_ARM64 0xAA64
 #endif

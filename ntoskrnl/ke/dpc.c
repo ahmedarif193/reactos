@@ -26,7 +26,7 @@
 
 #define KI_MAXIMUM_DPCS_PER_BATCH 32
 
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
 #define KI_DPC_TARGET_PROCESSOR_OFFSET 0x800
 #else
 #define KI_DPC_TARGET_PROCESSOR_OFFSET MAXIMUM_PROCESSORS
@@ -44,7 +44,7 @@ ULONG KiDPCTimeout = 110;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
 
 static PVOID volatile KiActiveDpc[MAXIMUM_PROCESSORS];
 
@@ -277,11 +277,11 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
                         /* Call the DPC */
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
                         KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
 #endif
                         DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
                         KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
 #endif
                     }
@@ -328,11 +328,11 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
                         /* Call the DPC */
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
                         KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
 #endif
                         DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
                         KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
 #endif
                     }
@@ -369,11 +369,11 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
             /* Call the DPC */
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
             KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
 #endif
             DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
             KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
 #endif
         }
@@ -489,11 +489,11 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
 #endif
 
             /* Call the DPC */
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
             KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
 #endif
             DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
             KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
 #endif
         }
@@ -722,7 +722,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
 #endif
 
                 /* Clear its DPC data and save its parameters */
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
                 KiBeginDpcExecution(Prcb, Dpc);
 #endif
                 Dpc->DpcData = NULL;
@@ -747,7 +747,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
                 /* Call the DPC */
                 DeferredRoutine(Dpc, DeferredContext, SystemArgument1, SystemArgument2);
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
                 KiEndDpcExecution(Prcb, Dpc);
 #endif
                 ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
@@ -829,7 +829,7 @@ KiInitializeDpc(IN PKDPC Dpc,
     Dpc->DeferredRoutine = DeferredRoutine;
     Dpc->DeferredContext = DeferredContext;
     Dpc->DpcData = NULL;
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
     Dpc->ProcessorHistory = 0;
 #endif
 }
@@ -915,7 +915,7 @@ KeInsertQueueDpc(IN PKDPC Dpc,
     if (!InterlockedCompareExchangePointer(&Dpc->DpcData, DpcData, NULL))
     {
         /* Now we can play with the DPC safely */
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
         InterlockedOr64((volatile LONG64 *)&Dpc->ProcessorHistory, (LONG64)AFFINITY_MASK(Cpu));
 #endif
         Dpc->SystemArgument1 = SystemArgument1;
@@ -1104,14 +1104,14 @@ BOOLEAN
 NTAPI
 KeRemoveQueueDpc(IN PKDPC Dpc)
 {
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
     return KeRemoveQueueDpcEx(Dpc, FALSE);
 #else
     return KiRemoveQueueDpc(Dpc);
 #endif
 }
 
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
 
 /*
  * @implemented
@@ -1247,7 +1247,7 @@ KeSetTargetProcessorDpc(IN PKDPC Dpc,
 {
     /* Set a target CPU */
     ASSERT_DPC(Dpc);
-#if defined(_M_ARM64)
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
     if ((Number < 0) || ((UCHAR)Number >= (UCHAR)KeNumberProcessors) || (Dpc->DpcData != NULL))
         return;
 #endif

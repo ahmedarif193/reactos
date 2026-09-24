@@ -569,11 +569,7 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     FIELD_OFFSET(KCALLOUT_FRAME, CBSTACK_FRAME_POINTER),
 #endif
     FALSE,
-#if defined(_M_RISCV64)
-    0, // RISC-V user callbacks do not enter through KiCallUserMode
-#else
-    PtrToUL64(KiCallUserMode),
-#endif
+    PtrToUL64(KI_USER_MODE_CALLBACK_ENTRY),
     0,
     PtrToUL64(&PsLoadedModuleList),
     PtrToUL64(&PsActiveProcessHead),

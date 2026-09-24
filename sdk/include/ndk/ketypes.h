@@ -1336,7 +1336,7 @@ typedef struct _KEXECUTE_OPTIONS
     UCHAR Spare:2;
 } KEXECUTE_OPTIONS, *PKEXECUTE_OPTIONS;
 
-#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(KERNEL_LAYOUT_WIN11_ARM64)
 typedef union _KWAIT_STATUS_REGISTER
 {
     UCHAR Flags;
@@ -1765,12 +1765,14 @@ C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Previous.InitialStack) == 0x38);
 //
 // Kernel Thread (KTHREAD), Win11 26100 arm64 layout (ntkrnlmp.pdb 10.0.26100.8036)
 // sizeof == 0x4A0; members marked [ReactOS] live in Win11 spare slots
+// RISC-V shares these objects; register frames and per-CPU state remain native.
+// VfpState and ARM64 emulation/vector metadata are reserved on RISC-V.
 //
 // Each layout defines the properties the kernel depends on:
 // KTHREAD_DISABLE_BOOST_BIT is the DisableBoost bit of ThreadFlags, and
 // KTHREAD_GROUP_AFFINITY marks Affinity/UserAffinity as GROUP_AFFINITY.
 //
-#if defined(_M_ARM64)
+#ifdef KERNEL_LAYOUT_WIN11_ARM64
 
 #define KTHREAD_DISABLE_BOOST_BIT 3
 
@@ -3341,7 +3343,7 @@ typedef struct _KTHREAD
     union
     {
         KEVENT SuspendEvent;
-#if defined(__REACTOS__) && (defined(_M_IX86) || defined(_M_RISCV64))
+#if defined(__REACTOS__) && defined(_M_IX86)
         KEVENT SuspendSemaphore;
 #endif
     };
@@ -3415,23 +3417,21 @@ typedef struct _KTHREAD
     PVOID CallbackStack;
     UCHAR LargeStack;
     UCHAR Iopl;
-#elif defined(__REACTOS__) && defined(_M_RISCV64)
-    /* ReactOS-private thread state; no Windows RV64 layout is claimed. */
-    KSPIN_LOCK ApcQueueLock;
-#if (NTDDI_VERSION >= NTDDI_WIN10)
-    PKAPC_STATE ApcStatePointer[2];
-    CHAR DecayBoost;
-    LONG RealtimePriorityFloor;
-#endif
-    KAPC SuspendApc;
-    UCHAR LargeStack;
-    PVOID CallbackStack;
 #endif
 } KTHREAD;
 
 #endif
 
-#if defined(_M_ARM64) && !defined(__ASSEMBLER__)
+#if defined(KDPC_HAS_PROCESSOR_HISTORY) && !defined(__ASSEMBLER__)
+/* Both Win11 26100 AMD64 and ARM64 PDBs give this KDPC shape. */
+C_ASSERT(sizeof(KDPC) == 0x40);
+C_ASSERT(FIELD_OFFSET(KDPC, DpcListEntry) == 0x08);
+C_ASSERT(FIELD_OFFSET(KDPC, ProcessorHistory) == 0x10);
+C_ASSERT(FIELD_OFFSET(KDPC, DeferredRoutine) == 0x18);
+C_ASSERT(FIELD_OFFSET(KDPC, DpcData) == 0x38);
+#endif
+
+#if defined(KERNEL_LAYOUT_WIN11_ARM64) && !defined(__ASSEMBLER__)
 C_ASSERT(sizeof(KTHREAD) == 0x4A0);
 C_ASSERT(sizeof(KWAIT_BLOCK) == 0x30);
 C_ASSERT(sizeof(KAPC) == 0x58);
@@ -3600,10 +3600,10 @@ C_ASSERT(FIELD_OFFSET(KTHREAD, CallbackStack) == 0x4B0);
     ASSERT((((object)->Header.Type & KOBJECT_TYPE_MASK) == ThreadObject))
 
 //
-// Kernel Process (KPROCESS), Win11 26100 arm64 layout for ARM64
+// Kernel Process (KPROCESS), shared Win11 26100 arm64 layout
 // sizeof == 0x1B8; members marked [ReactOS] live in Win11 spare slots
 //
-#if defined(_M_ARM64)
+#ifdef KERNEL_LAYOUT_WIN11_ARM64
 
 typedef struct _KPROCESS
 {
@@ -3760,7 +3760,7 @@ typedef struct _KPROCESS
 
 #endif
 
-#if defined(_M_ARM64) && !defined(__ASSEMBLER__)
+#if defined(KERNEL_LAYOUT_WIN11_ARM64) && !defined(__ASSEMBLER__)
 C_ASSERT(sizeof(KPROCESS) == 0x1B8);
 C_ASSERT(FIELD_OFFSET(KPROCESS, DirectoryTableBase) == 0x028);
 C_ASSERT(FIELD_OFFSET(KPROCESS, Asid) == 0x030);
