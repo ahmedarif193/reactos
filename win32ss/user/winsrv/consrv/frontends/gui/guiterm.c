@@ -174,7 +174,7 @@ GuiConsoleInputThread(PVOID Param)
 
                 DPRINT("PM_CREATE_CONSOLE -- creating window\n");
 
-                NewWindow = CreateWindowExW(WS_EX_CLIENTEDGE,
+                NewWindow = CreateWindowExW(WS_EX_WINDOWEDGE,
                                             GUI_CONWND_CLASS,
                                             Console->Title.Buffer,
                                             WS_OVERLAPPEDWINDOW,
@@ -992,8 +992,8 @@ GuiGetLargestConsoleWindowSize(IN OUT PFRONTEND This,
         WidthUnit = HeightUnit = 1;
 #endif
 
-    Width  -= (2 * (GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXEDGE)));
-    Height -= (2 * (GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CYEDGE)) + GetSystemMetrics(SM_CYCAPTION));
+    Width  -= (2 * GetSystemMetrics(SM_CXFRAME));
+    Height -= (2 * GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CYCAPTION));
 
     if (Width  < 0) Width  = 0;
     if (Height < 0) Height = 0;
