@@ -294,6 +294,9 @@ list(APPEND SOURCE
     wsdxml.idl
     wtypes.idl
     wuapi.idl
+    xapo.idl
+    xaudio2.idl
+    xaudio2fx.idl
     xmldom.idl
     xmldso.idl
     ctfutb.idl
