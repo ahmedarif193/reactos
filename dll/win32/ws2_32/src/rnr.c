@@ -565,7 +565,7 @@ WSALookupServiceNextA(IN HANDLE hLookup,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 INT
 WSPAPI
@@ -578,8 +578,53 @@ WSANSPIoctl(HANDLE hLookup,
             LPDWORD lpcbBytesReturned,
             LPWSACOMPLETION lpCompletion)
 {
+    PWSPROCESS Process;
+    PWSTHREAD Thread;
+    PNSQUERY Query = hLookup;
+    PNSQUERY_PROVIDER QueryProvider;
+    INT ErrorCode;
+
     DPRINT("WSANSPIoctl: %lx\n", hLookup);
-    return 0;
+
+    if ((ErrorCode = WsApiProlog(&Process, &Thread)) != ERROR_SUCCESS)
+    {
+        SetLastError(ErrorCode);
+        return SOCKET_ERROR;
+    }
+
+    if (IsBadWritePtr(lpcbBytesReturned, sizeof(*lpcbBytesReturned)))
+    {
+        SetLastError(WSAEFAULT);
+        return SOCKET_ERROR;
+    }
+
+    if (IsBadReadPtr(Query, sizeof(*Query)) || !WsNqValidateAndReference(Query))
+    {
+        SetLastError(WSA_INVALID_HANDLE);
+        return SOCKET_ERROR;
+    }
+
+    QueryProvider = Query->ActiveProvider ? Query->ActiveProvider : Query->CurrentProvider;
+    if (QueryProvider && QueryProvider->Provider->Service.NSPIoctl)
+    {
+        ErrorCode = QueryProvider->Provider->Service.NSPIoctl(QueryProvider->LookupHandle,
+                                                              dwControlCode,
+                                                              lpvInBuffer,
+                                                              cbInBuffer,
+                                                              lpvOutBuffer,
+                                                              cbOutBuffer,
+                                                              lpcbBytesReturned,
+                                                              lpCompletion,
+                                                              &Thread->WahThreadId);
+    }
+    else
+    {
+        SetLastError(WSAEOPNOTSUPP);
+        ErrorCode = SOCKET_ERROR;
+    }
+
+    WsNqDereference(Query);
+    return ErrorCode;
 }
 
 /*
