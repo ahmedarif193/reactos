@@ -373,6 +373,8 @@ MasterFileTable::InsertFileNameLink(
             Inserted,
             NewData,
             NewDataLength);
+        if (!NT_SUCCESS(Status))
+            (void)File->RemoveAttributeRecord(Inserted);
     }
     delete[] NewData;
     if (!NT_SUCCESS(Status))
@@ -1316,6 +1318,35 @@ MasterFileTable::RenameFile(
         NewNameLength,
         &NewAttribute,
         &NewValue);
+    if (Status == STATUS_BUFFER_TOO_SMALL &&
+        (Child->Header->Flags & FR_IS_DIRECTORY))
+    {
+        Directory ChildIndex(DiskVolume);
+
+        Status = ChildIndex.PushDownResidentRoot(Child);
+        if (NT_SUCCESS(Status))
+        {
+            Status = FindFileNamePair(
+                Child,
+                OldParentReference,
+                &OldNameString,
+                &NameAttribute,
+                &NameValue,
+                &AliasAttribute,
+                &AliasValue);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            Status = InsertFileNameLink(
+                Child,
+                NameValue,
+                NewParentReference,
+                NewName,
+                NewNameLength,
+                &NewAttribute,
+                &NewValue);
+        }
+    }
     if (!NT_SUCCESS(Status))
         goto Done;
     Status = WriteFileRecordToMFT(Child);
