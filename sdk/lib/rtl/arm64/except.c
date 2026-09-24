@@ -226,7 +226,7 @@ RtlpUnwindHandler(_In_ PEXCEPTION_RECORD ExceptionRecord, _In_ PVOID Establisher
  */
 VOID
 NTAPI
-RtlpArm64StepContextToCaller(_Inout_ PCONTEXT Context)
+RtlpStepContextToCaller(_Inout_ PCONTEXT Context)
 {
     PRUNTIME_FUNCTION FunctionEntry;
     ULONG_PTR ImageBase;

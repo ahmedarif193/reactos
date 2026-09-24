@@ -19,7 +19,7 @@ KAFFINITY
 FASTCALL
 KiGetNonParkedProcessorSet(VOID)
 {
-#ifdef _M_ARM64
+#ifdef KI_CORE_PARKING
     KAFFINITY NonParkedSet = *(volatile KAFFINITY *)&KiNode0SubNode.NonParkedSet;
 
     return NonParkedSet ? (NonParkedSet & KeActiveProcessors) : KeActiveProcessors;
@@ -36,7 +36,7 @@ KiIsProcessorParked(
     return (KiGetNonParkedProcessorSet() & Prcb->SetMember) == 0;
 }
 
-#ifdef _M_ARM64
+#ifdef KI_CORE_PARKING
 static
 ULONG
 KiCountProcessorSet(
@@ -181,7 +181,7 @@ PoSetProcessorAggregatorParking(
     _In_ ULONG RequestedParkedProcessors,
     _Out_ PULONG ParkedProcessors)
 {
-#ifdef _M_ARM64
+#ifdef KI_CORE_PARKING
     KAFFINITY ActiveSet;
     KAFFINITY NonParkedSet;
     KAFFINITY OldNonParkedSet;

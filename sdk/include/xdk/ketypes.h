@@ -3,6 +3,12 @@
  ******************************************************************************/
 $if (_WDMDDK_)
 
+#if defined(_M_ARM64)
+$include(arm64/kelayout.h)
+#elif defined(_M_RISCV64)
+$include(riscv64/kelayout.h)
+#endif
+
 typedef UCHAR KIRQL, *PKIRQL;
 typedef CCHAR KPROCESSOR_MODE;
 typedef LONG KPRIORITY;
@@ -548,7 +554,7 @@ typedef enum _KWAIT_REASON {
 
 typedef struct _KWAIT_BLOCK {
   LIST_ENTRY WaitListEntry;
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
   UCHAR WaitType;
   volatile UCHAR BlockState;
   USHORT WaitKey;
@@ -818,8 +824,8 @@ typedef enum _KDPC_IMPORTANCE {
 } KDPC_IMPORTANCE;
 
 typedef struct _KDPC {
-#if defined(_M_ARM64)
-  /* Win11 26100 arm64 layout (sizeof 0x40) */
+#ifdef KDPC_HAS_PROCESSOR_HISTORY
+  /* Shared Win11 26100 layout (sizeof 0x40). */
   _ANONYMOUS_UNION union {
     ULONG TargetInfoAsUlong;
     _ANONYMOUS_STRUCT struct {
@@ -880,7 +886,7 @@ typedef struct _DISPATCHER_HEADER {
         _ANONYMOUS_UNION union {
           UCHAR TimerControlFlags;
           _ANONYMOUS_STRUCT struct {
-#if defined(_M_ARM64)
+#ifdef KERNEL_LAYOUT_WIN11_ARM64
             /* Win11 layout */
             UCHAR Absolute:1;
             UCHAR Wake:1;
@@ -913,7 +919,7 @@ typedef struct _DISPATCHER_HEADER {
         UCHAR Hand;
       } DUMMYUNIONNAME2;
       _ANONYMOUS_UNION union {
-#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(KERNEL_LAYOUT_WIN11_ARM64)
         _ANONYMOUS_UNION union {
           UCHAR TimerMiscFlags;
           _ANONYMOUS_STRUCT struct {
@@ -995,8 +1001,8 @@ typedef struct _KTIMER {
   ULARGE_INTEGER DueTime;
   LIST_ENTRY TimerListEntry;
   struct _KDPC *Dpc;
-#if defined(_M_ARM64)
-  /* Win11 26100 arm64 layout */
+#ifdef KERNEL_LAYOUT_WIN11_ARM64
+  /* Shared Win11 26100 layout. */
   USHORT Processor;
   USHORT TimerType;
 #elif (NTDDI_VERSION >= NTDDI_WIN7) && !defined(_X86_)

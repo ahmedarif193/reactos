@@ -1452,7 +1452,7 @@ KxCommitThreadWait(IN PKTHREAD Thread,
 // TimerActive thread flag (timer block joins in addition to the array).
 // Condition mirrors KWAIT_BLOCK in xdk/ketypes.h.
 //
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
 #define KxChainTimerOnly()                                                  \
     Thread->WaitBlockCount = 1;                                             \
     Thread->TimerActive = FALSE
@@ -1485,7 +1485,7 @@ KxCommitThreadWait(IN PKTHREAD Thread,
     WaitBlock->NextWaitBlock = WaitBlock
 #endif
 
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
 #define KxPrepareTimerWaitBlock()                                           \
     NOTHING
 #define KxInitializeTimerWaitList()                                         \

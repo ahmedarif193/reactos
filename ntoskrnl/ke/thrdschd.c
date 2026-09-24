@@ -627,7 +627,7 @@ KiSelectNextProcessor(
         if (IdleSet == 0)
             break;
 
-#ifdef _M_ARM64
+#ifdef KI_CORE_PARKING
         if (Thread->IdealProcessor < (ULONG)KeNumberProcessors &&
             KiProcessorBlock[Thread->IdealProcessor] != NULL)
         {

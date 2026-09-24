@@ -183,13 +183,13 @@ KeInitializeProcess(IN OUT PKPROCESS Process,
     Process->Affinity = Affinity;
     Process->BasePriority = (CHAR)Priority;
     Process->QuantumReset = 6;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) || defined(KERNEL_LAYOUT_WIN11_ARM64)
     Process->DirectoryTableBase = DirectoryTableBase[0];
     Process->Unused0 = DirectoryTableBase[1];
-#if defined(_M_ARM64)
+#ifdef KERNEL_LAYOUT_WIN11_ARM64
     /* Win11 ARM64 KPROCESS: 0x028 = translation root, 0x030 = ASID. Keep the
      * hyperspace root in the ReactOS-private Unused0 slot (exactly as amd64
-     * does), so 0x030 remains the native field used by the ASID allocator. */
+     * does), so 0x030 remains reserved for architecture ASID allocation. */
     Process->Asid = 0;
     Process->Spare0b = 0;
 #endif

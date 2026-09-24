@@ -1022,7 +1022,7 @@ KeInitThread(IN OUT PKTHREAD Thread,
                     NULL);
 
     /* Initialize the Suspend Semaphore */
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64)
     KeInitializeEvent(&Thread->SuspendEvent, SynchronizationEvent, FALSE);
 #else
     KeInitializeSemaphore(&Thread->SuspendSemaphore, 0, 2);
@@ -1032,12 +1032,12 @@ KeInitThread(IN OUT PKTHREAD Thread,
     Timer = &Thread->Timer;
     KeInitializeTimer(Timer);
     TimerWaitBlock = &Thread->WaitBlock[TIMER_WAIT_BLOCK];
-#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))
+#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64))
     TimerWaitBlock->Object = Timer;
 #endif
     TimerWaitBlock->WaitKey = STATUS_TIMEOUT;
     TimerWaitBlock->WaitType = WaitAny;
-#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))
+#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(KERNEL_LAYOUT_WIN11_ARM64))
     TimerWaitBlock->NextWaitBlock = NULL;
 #endif
 

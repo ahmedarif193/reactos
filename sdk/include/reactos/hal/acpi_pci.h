@@ -13,6 +13,12 @@
 
 #include <ntdef.h>
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+#include "x86/pcipolicy.h"
+#elif defined(_M_RISCV64)
+#include "riscv64/pcipolicy.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -183,7 +189,7 @@ HalQueryPciMsiSupport(
     _Out_opt_ PULONG OscMaskedControls
     );
 
-#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_RISCV64)
+#ifdef HAL_PCI_HAS_ROUTED_INTERRUPT_QUERY
 NTHALAPI
 BOOLEAN
 NTAPI

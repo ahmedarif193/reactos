@@ -326,7 +326,7 @@ VOID NTAPI RtlGetCallersAddress(PVOID *Caller, PVOID *CallersCaller)
         *CallersCaller = (PVOID)Next.Pc;
 }
 
-VOID NTAPI RtlpRiscv64StepContextToCaller(PCONTEXT Context)
+VOID NTAPI RtlpStepContextToCaller(PCONTEXT Context)
 {
     CONTEXT Next;
     DISPATCHER_CONTEXT Dc = {0};

@@ -30,7 +30,7 @@ MmArmInitSystem(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock
 );
 
-#if defined(_M_ARM64)
+#ifdef EX_ARCH_HAS_POST_HAL_INIT
 VOID
 NTAPI
 ExArchPostHalInitSystemPhase0(VOID);
@@ -39,9 +39,9 @@ VOID
 NTAPI
 ExArchPostHalInitSystemPhase1(VOID);
 
-VOID
-NTAPI
-KeReenableTimerInterrupt(VOID);
+#else
+#define ExArchPostHalInitSystemPhase0() ((void)0)
+#define ExArchPostHalInitSystemPhase1() ((void)0)
 #endif
 
 typedef struct _INIT_BUFFER
@@ -1167,9 +1167,7 @@ ExpInitializeExecutive(IN ULONG Cpu,
         KeBugCheck(HAL_INITIALIZATION_FAILED);
     }
 
-#if defined(_M_ARM64)
     ExArchPostHalInitSystemPhase0();
-#endif
 
     /* Make sure interrupts are active now */
     _enable();
@@ -1525,10 +1523,7 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Do Phase 1 HAL Initialization */
     if (!HalInitSystem(1, LoaderBlock)) KeBugCheck(HAL1_INITIALIZATION_FAILED);
 
-#if defined(_M_ARM64)
-    KeReenableTimerInterrupt();
     ExArchPostHalInitSystemPhase1();
-#endif
 
     CommandLine = (LoaderBlock->LoadOptions ? _strupr(LoaderBlock->LoadOptions) : NULL);
 
@@ -1570,19 +1565,6 @@ Phase1InitializationDiscard(IN PVOID Context)
     NtosEntry = CONTAINING_RECORD(LoaderBlock->LoadOrderListHead.Flink,
                                   LDR_DATA_TABLE_ENTRY,
                                   InLoadOrderLinks);
-#if defined(_M_ARM64)
-    /* ARM64: FreeLDR may store list links as raw physical offsets that get
-     * sign-extended to 64-bit.  Mask to 48-bit PA and convert to KSEG0 VA. */
-    {
-        ULONG_PTR Raw = (ULONG_PTR)LoaderBlock->LoadOrderListHead.Flink;
-        ULONG_PTR Kva = KSEG0_BASE | (Raw & 0x0000FFFFFFFFFFFFULL);
-        LoaderBlock->LoadOrderListHead.Flink = (PLIST_ENTRY)Kva;
-        NtosEntry = CONTAINING_RECORD(LoaderBlock->LoadOrderListHead.Flink,
-                                      LDR_DATA_TABLE_ENTRY,
-                                      InLoadOrderLinks);
-    }
-#endif
-
     /* Find the banner message */
     MsgStatus = RtlFindMessage(NtosEntry->DllBase,
                                RT_MESSAGETABLE,

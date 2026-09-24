@@ -2187,7 +2187,7 @@ PciPdoRoutedInterruptLine(
     _In_ UCHAR InterruptPin,
     _In_ UCHAR InterruptLine)
 {
-#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_RISCV64)
+#ifdef HAL_PCI_HAS_ROUTED_INTERRUPT_QUERY
     PPDO_DEVICE_EXTENSION CurrentExtension = DeviceExtension;
     PFDO_DEVICE_EXTENSION CurrentFdoExtension;
     UCHAR CurrentPin = InterruptPin;
@@ -2239,8 +2239,8 @@ PciPdoRoutedInterruptLine(
     }
 #endif
 
-#if defined(_M_RISCV64)
-    /* On the FDT PCI host, the firmware map is authoritative. A config-space
+#ifdef HAL_PCI_FIRMWARE_ROUTING_AUTHORITATIVE
+    /* The platform firmware map is authoritative. A config-space
      * InterruptLine value is only a placeholder until that map is applied. */
     return 0;
 #endif
@@ -2810,7 +2810,7 @@ PdoQueryResourceRequirements(
     MsixOption = (HasMsix && AllowMsix);
     MsiOption = (HasMsi && AllowMsi);
     LegacyOption = (InterruptResourcesAllowed && InterruptPin != 0);
-#if defined(_M_RISCV64)
+#ifdef HAL_PCI_FIRMWARE_ROUTING_AUTHORITATIVE
     /* Without a route in the firmware interrupt map there is no legacy vector. */
     if (LegacyOption &&
         (PciPdoRoutedInterruptLine(DeviceExtension, InterruptPin,
@@ -2916,7 +2916,7 @@ PdoQueryResourceRequirements(
             {
                 Dest->ShareDisposition = CmResourceShareShared;
                 Dest->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-#if defined(_M_RISCV64)
+#ifdef HAL_PCI_FIRMWARE_ROUTING_AUTHORITATIVE
                 Dest->u.Interrupt.MinimumVector =
                     PciPdoRoutedInterruptLine(DeviceExtension, InterruptPin,
                                               PciConfig.u.type0.InterruptLine);

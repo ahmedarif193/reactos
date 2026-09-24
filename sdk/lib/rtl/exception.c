@@ -22,32 +22,7 @@ PRTLP_UNHANDLED_EXCEPTION_FILTER RtlpUnhandledExceptionFilter;
 
 /* FUNCTIONS ***************************************************************/
 
-#if defined(_M_AMD64)
-/* Defined in rtl/amd64/except.c - advances a captured CONTEXT one frame up so
- * it describes the caller of the routine that captured it. */
-VOID
-NTAPI
-RtlpAmd64StepContextToCaller(
-    _Inout_ PCONTEXT Context);
-#endif
-
-#if defined(_M_ARM64)
-/* Defined in rtl/arm64/except.c - advances a captured CONTEXT one frame up so
- * it describes the caller of the routine that captured it. */
-VOID
-NTAPI
-RtlpArm64StepContextToCaller(_Inout_ PCONTEXT Context);
-#endif
-
-#if defined(_M_RISCV64)
-/* Defined in rtl/riscv64/dispatch.c - the same step for RISC-V. It marks the
- * context as unwound to a call, so it runs after the context flags are set. */
-VOID
-NTAPI
-RtlpRiscv64StepContextToCaller(_Inout_ PCONTEXT Context);
-#endif
-
-#if defined(_M_ARM64) || defined(_M_RISCV64)
+#ifdef RTLP_RAISE_USES_RESTORE_CONTEXT
 /* Defined in rtl/<arch>/context_asm.S - loads the register file from Context and
  * branches to Context->Pc (does not return). Used to resume at a handler-patched
  * context; ZwContinue cannot resume a kernel-mode context from a non-trap call
@@ -77,15 +52,9 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
     /* Capture the context */
     RtlCaptureContext(&Context);
 
-#if defined(_M_ARM64)
-    /*
-     * RtlCaptureContext records this helper's own frame. Step the context up
-     * one frame so dispatch starts in the caller's SEH scope and a handler that
-     * continues execution resumes after the raise instead of re-entering here.
-     */
-    RtlpArm64StepContextToCaller(&Context);
-#elif defined(_M_RISCV64)
-    RtlpRiscv64StepContextToCaller(&Context);
+#ifdef RTLP_RAISE_EXCEPTION_NEEDS_CALLER_CONTEXT
+    /* Dispatch in the caller's SEH scope and resume after the raise. */
+    RtlpStepContextToCaller(&Context);
 #endif
 
     /* Save the exception address */
@@ -110,7 +79,7 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
         }
         else
         {
-#if defined(_M_ARM64) || defined(_M_RISCV64)
+#ifdef RTLP_RAISE_USES_RESTORE_CONTEXT
             /* See RtlRaiseStatus: resume the handler-patched context directly;
              * ZwContinue cannot resume a kernel-mode context here. */
             RtlRestoreContext(&Context, ExceptionRecord);
@@ -159,15 +128,9 @@ RtlRaiseStatus(IN NTSTATUS Status)
     /* Write the context flag */
     Context.ContextFlags = CONTEXT_FULL;
 
-#if defined(_M_AMD64)
-    /*
-     * RtlCaptureContext records this helper's own frame. Step the context up
-     * one frame so exception dispatch starts in the caller's SEH scope with
-     * all nonvolatile registers restored.
-     */
-    RtlpAmd64StepContextToCaller(&Context);
-#elif defined(_M_RISCV64)
-    RtlpRiscv64StepContextToCaller(&Context);
+#ifdef RTLP_RAISE_STATUS_NEEDS_CALLER_CONTEXT
+    /* Dispatch in the caller's SEH scope with nonvolatile registers restored. */
+    RtlpStepContextToCaller(&Context);
 #endif
 
     /* Check if user mode debugger is active */
@@ -185,9 +148,9 @@ RtlRaiseStatus(IN NTSTATUS Status)
          */
         if (RtlDispatchException(&ExceptionRecord, &Context))
         {
-#if defined(_M_ARM64) || defined(_M_RISCV64)
+#ifdef RTLP_RAISE_USES_RESTORE_CONTEXT
             /*
-             * The ARM64 language handler resolves an __except by patching the
+             * The language handler resolves an __except by patching the
              * context to the handler block and returning continue-execution.
              * Restore the register file directly to reach it - ZwContinue cannot
              * resume a kernel-mode context from this non-trap site.

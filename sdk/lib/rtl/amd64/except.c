@@ -19,7 +19,7 @@
  */
 VOID
 NTAPI
-RtlpAmd64StepContextToCaller(
+RtlpStepContextToCaller(
     _Inout_ PCONTEXT Context)
 {
     PRUNTIME_FUNCTION FunctionEntry;
