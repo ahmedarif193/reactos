@@ -57,6 +57,8 @@ set(COMPAT_RUNTIME_MODULES
     dwmapi
     dwrite
     dxgi
+    dxva2
+    evr
     fmifs
     fontsub
     gdi32
@@ -83,6 +85,9 @@ set(COMPAT_RUNTIME_MODULES
     libxslt
     lpk
     mbedtls
+    mf
+    mfplat
+    mfreadwrite
     mlang
     mmdevapi
     mpr
@@ -120,6 +125,7 @@ set(COMPAT_RUNTIME_MODULES
     riched20
     rpcrt4
     rsaenh
+    rtworkq
     samlib
     schannel
     sechost
@@ -146,10 +152,12 @@ set(COMPAT_RUNTIME_MODULES
     usp10
     uxtheme
     version
+    vulkan-1
     wbemdisp
     wbemprox
     win32u
     winusb
+    windows_ui
     windowscodecs
     winhttp
     wininet
@@ -172,6 +180,7 @@ set(COMPAT_RUNTIME_MODULES
     xinput1_3
     xinput1_4
     xinput9_1_0
+    xaudio2_9
     xmllite)
 
 # These targets share an output basename with a regular module. Package them
