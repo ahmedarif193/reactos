@@ -50,10 +50,16 @@ CmpInitNotify(VOID)
 static VOID
 CmpCompleteNotify(PCMP_NOTIFY_POST Post, NTSTATUS Status)
 {
-    RemoveEntryList(&Post->KeyList);
-    InitializeListHead(&Post->KeyList);
-    RemoveEntryList(&Post->ThreadList);
-    InitializeListHead(&Post->ThreadList);
+    if (!IsListEmpty(&Post->KeyList))
+    {
+        RemoveEntryList(&Post->KeyList);
+        InitializeListHead(&Post->KeyList);
+    }
+    if (!IsListEmpty(&Post->ThreadList))
+    {
+        RemoveEntryList(&Post->ThreadList);
+        InitializeListHead(&Post->ThreadList);
+    }
     Post->Status = Status;
     if (Post->Asynchronous)
     {
