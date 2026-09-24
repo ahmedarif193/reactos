@@ -2440,6 +2440,20 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
     if (NewSize == OldDataLength)
         return STATUS_SUCCESS;
 
+    SparseFile = FALSE;
+    if (AttrType == TypeData &&
+        NewSize > OldDataLength)
+    {
+        Status = GetStandardInformationForUpdate(
+            &StandardAttribute,
+            &Standard);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        SparseFile =
+            !!(Standard->FilePermissions &
+               FILE_PERM_SPARSE);
+    }
+
     RecordBackup =
         NtfsAcquireRecordScratch(DiskVolume, AttributeOwner->RecordBufferSize);
     if (!RecordBackup)
@@ -2464,6 +2478,25 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
                 AttributeOwner->Data);
         AttributeOwner->ClearDataRunCache();
         NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
+        if (SparseFile)
+        {
+            Status = AttributeOwner->PromoteResidentData(
+                TargetAttribute,
+                NULL,
+                0,
+                0,
+                OldDataLength,
+                BytesPerCluster(DiskVolume));
+            if (NT_SUCCESS(Status))
+            {
+                TargetAttribute = GetAttribute(AttrType, StreamName);
+                Status = TargetAttribute
+                    ? ResizeSparseData(TargetAttribute,
+                                       NewSize)
+                    : STATUS_FILE_CORRUPT_ERROR;
+            }
+            return Status;
+        }
         Status = AttributeOwner->PromoteResidentData(
             TargetAttribute,
             NULL,
