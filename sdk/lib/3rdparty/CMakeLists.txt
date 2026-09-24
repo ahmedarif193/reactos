@@ -2,6 +2,7 @@
 add_subdirectory(adns)
 add_subdirectory(cardlib)
 add_subdirectory(fatfs)
+add_subdirectory(faudio)
 add_subdirectory(freetype)
 add_subdirectory(libgsm)
 add_subdirectory(lcms2)
