@@ -1910,14 +1910,14 @@ KdpTimeSlipDpcRoutine(IN PKDPC Dpc,
                       IN PVOID SystemArgument1,
                       IN PVOID SystemArgument2)
 {
-    LONG OldSlip, NewSlip, PendingSlip;
+    LONG OldSlip, NewSlip;
 
-    /* Get the current pending slip */
-    PendingSlip = KdpTimeSlipPending;
     do
     {
-        /* Save the old value and either disable or enable it now. */
-        OldSlip = PendingSlip;
+        /* A concurrent debugger exit can change the count after a failed CAS. */
+        OldSlip = KdpTimeSlipPending;
+
+        /* Either disable slipping or leave one update pending. */
         NewSlip = OldSlip > 1 ? 1 : 0;
 
         /* Try to change the value */

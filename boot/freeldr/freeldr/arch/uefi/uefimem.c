@@ -51,6 +51,7 @@ AddMemoryDescriptor(
 
 extern EFI_SYSTEM_TABLE* GlobalSystemTable;
 extern EFI_HANDLE GlobalImageHandle;
+extern PVOID UefiFirmwareStackFrame;
 
 extern ULONG_PTR VramAddress;
 extern ULONG VramSize;
@@ -429,6 +430,27 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
                       LoaderFirmwareTemporary);
     }
 #endif
+
+    /*
+     * The entry frame remains live until we switch to BasicStack, and firmware
+     * calls later reuse that stack. Some firmware maps incorrectly expose its
+     * final, partially occupied page as conventional memory. Never hand that
+     * page to the loader allocator: creating a heap there overwrites our stack
+     * and subsequent calls overwrite the heap. Preserve the original type
+     * when firmware already reserved the page.
+     */
+    for (Index = 0; Index < FreeldrDescCount; ++Index)
+    {
+        PFN_NUMBER StackPage = (ULONG_PTR)UefiFirmwareStackFrame / EFI_PAGE_SIZE;
+
+        if (FreeldrMem[Index].MemoryType == LoaderFree &&
+            StackPage >= FreeldrMem[Index].BasePage &&
+            StackPage - FreeldrMem[Index].BasePage < FreeldrMem[Index].PageCount)
+        {
+            UefiSetMemory(FreeldrMem, StackPage * EFI_PAGE_SIZE, 1, LoaderFirmwareTemporary);
+            break;
+        }
+    }
 
     /* Windows expects the first page to be reserved, otherwise it asserts.
      * However it can be just a free page on some UEFI systems. */
