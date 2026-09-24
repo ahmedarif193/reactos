@@ -150,6 +150,8 @@ MmSetProcessExecutableWriteTracking(
     return MiSetExecutableWriteTracking(MiSpaceOfProcess(Process), Enable);
 }
 
+/* EcCodeBitMap is present only in the native 64-bit PEB. */
+#ifdef _WIN64
 #define MI_EC_CODE_BITMAP_SIZE (1ULL << 32)
 
 BOOLEAN
@@ -206,3 +208,4 @@ MiIsEcCodeAddress(
     return FALSE;
 #endif
 }
+#endif

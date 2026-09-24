@@ -16,6 +16,7 @@ EFI_HANDLE GlobalImageHandle;
 EFI_SYSTEM_TABLE *GlobalSystemTable;
 PVOID UefiServiceStack;
 PVOID BasicStack;
+PVOID UefiFirmwareStackFrame;
 
 void _changestack(VOID);
 
@@ -30,6 +31,7 @@ EfiEntry(
 
     GlobalImageHandle = ImageHandle;
     GlobalSystemTable = SystemTable;
+    UefiFirmwareStackFrame = &CmdLine;
 
     /* Load the default settings from the command-line */
     LoadSettings(CmdLine);

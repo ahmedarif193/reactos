@@ -97,7 +97,14 @@ MiWorkerThreadsInitialize(VOID)
         return Status;
 
     ZwClose(Handle);
-    return STATUS_SUCCESS;
+
+    /* NVS's memory balancer does not scan scheduler ready queues. Start
+     * the shared scheduler balance-set manager too, so threads readied at
+     * their base priority cannot starve behind continuously boosted peers. */
+    Status = PsCreateSystemThread(&Handle, THREAD_ALL_ACCESS, &ObjectAttributes, NULL, NULL,
+                                  KeBalanceSetManager, NULL);
+    if (NT_SUCCESS(Status)) ZwClose(Handle);
+    return Status;
 }
 
 VOID
