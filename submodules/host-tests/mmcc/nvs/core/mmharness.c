@@ -107,7 +107,7 @@ PagingRead(PVOID Context, ULONG64 Slot, PVOID PageBuffer)
     if (Paging->FailReads || Slot == 0 || Slot >= Paging->Slots)
         return STATUS_UNEXPECTED_IO_ERROR;
 
-    memcpy(PageBuffer, Paging->Store + Slot * PAGE_SIZE, PAGE_SIZE);
+    MachineCopyToRam(MachineCurrent, PageBuffer, Paging->Store + Slot * PAGE_SIZE, PAGE_SIZE);
     return STATUS_SUCCESS;
 }
 
@@ -121,7 +121,7 @@ PagingWrite(PVOID Context, ULONG64 Slot, PVOID PageBuffer)
     if (Paging->FailWrites || Slot == 0 || Slot >= Paging->Slots)
         return STATUS_UNEXPECTED_IO_ERROR;
 
-    memcpy(Paging->Store + Slot * PAGE_SIZE, PageBuffer, PAGE_SIZE);
+    MachineCopyFromRam(MachineCurrent, Paging->Store + Slot * PAGE_SIZE, PageBuffer, PAGE_SIZE);
     return STATUS_SUCCESS;
 }
 
@@ -194,7 +194,7 @@ FileRead(PVOID Context, ULONG64 Offset, ULONG Length, PVOID Buffer)
     if (File->FailReads || Offset + Length > File->Size)
         return STATUS_UNEXPECTED_IO_ERROR;
 
-    memcpy(Buffer, File->Data + Offset, Length);
+    MachineCopyToRam(MachineCurrent, Buffer, File->Data + Offset, Length);
     __sync_fetch_and_add(&File->Reads, 1);
     return STATUS_SUCCESS;
 }
@@ -209,7 +209,7 @@ FileWrite(PVOID Context, ULONG64 Offset, ULONG Length, PVOID Buffer)
     if (File->FailWrites || Offset + Length > File->Size)
         return STATUS_UNEXPECTED_IO_ERROR;
 
-    memcpy(File->Data + Offset, Buffer, Length);
+    MachineCopyFromRam(MachineCurrent, File->Data + Offset, Buffer, Length);
     __sync_fetch_and_add(&File->Writes, 1);
     return STATUS_SUCCESS;
 }
