@@ -428,6 +428,13 @@ MiCaptureAddressRequirements(
             if (Parameter.Type == MemExtendedParameterNumaNode)
                 continue;
 
+            if (Parameter.Type == MemExtendedParameterAttributeFlags)
+            {
+                if ((Parameter.ULong64 & ~(ULONG64)MEM_EXTENDED_PARAMETER_EC_CODE) != 0)
+                    _SEH2_YIELD(return STATUS_NOT_SUPPORTED);
+                continue;
+            }
+
             if (Parameter.Type != MemExtendedParameterAddressRequirements)
                 _SEH2_YIELD(return STATUS_NOT_SUPPORTED);
 
