@@ -37,8 +37,10 @@
 
 .equ ARM64_PARTIAL_VFP_LINK,          1
 .equ ARM64_SERVICE_VFP_LINK,          2
-.equ ARM64_SERVICE_FRAME_SIZE,        0x160
+.equ ARM64_SERVICE_FRAME_SIZE,        0x1F0
 .equ ARM64_SERVICE_VFP,               0x150
+.equ ARM64_SERVICE_NONVOLATILE_X,     0x160
+.equ ARM64_SERVICE_NONVOLATILE_D,     0x1B0
 .equ ARM64_SERVICE_CONTEXT_SIZE,      0x2E0
 .equ ARM64_SERVICE_CONTEXT_V,         0xE0
 
@@ -590,6 +592,24 @@ KiArm64SvcVectorCommon:
 KiArm64UserServiceEntry:
     sub sp, sp, #ARM64_SERVICE_FRAME_SIZE
     .seh_stackalloc ARM64_SERVICE_FRAME_SIZE
+    stp x19, x20, [sp, #ARM64_SERVICE_NONVOLATILE_X]
+    .seh_save_regp x19, ARM64_SERVICE_NONVOLATILE_X
+    stp x21, x22, [sp, #(ARM64_SERVICE_NONVOLATILE_X + 0x10)]
+    .seh_save_regp x21, (ARM64_SERVICE_NONVOLATILE_X + 0x10)
+    stp x23, x24, [sp, #(ARM64_SERVICE_NONVOLATILE_X + 0x20)]
+    .seh_save_regp x23, (ARM64_SERVICE_NONVOLATILE_X + 0x20)
+    stp x25, x26, [sp, #(ARM64_SERVICE_NONVOLATILE_X + 0x30)]
+    .seh_save_regp x25, (ARM64_SERVICE_NONVOLATILE_X + 0x30)
+    stp x27, x28, [sp, #(ARM64_SERVICE_NONVOLATILE_X + 0x40)]
+    .seh_save_regp x27, (ARM64_SERVICE_NONVOLATILE_X + 0x40)
+    stp d8, d9, [sp, #ARM64_SERVICE_NONVOLATILE_D]
+    .seh_save_fregp d8, ARM64_SERVICE_NONVOLATILE_D
+    stp d10, d11, [sp, #(ARM64_SERVICE_NONVOLATILE_D + 0x10)]
+    .seh_save_fregp d10, (ARM64_SERVICE_NONVOLATILE_D + 0x10)
+    stp d12, d13, [sp, #(ARM64_SERVICE_NONVOLATILE_D + 0x20)]
+    .seh_save_fregp d12, (ARM64_SERVICE_NONVOLATILE_D + 0x20)
+    stp d14, d15, [sp, #(ARM64_SERVICE_NONVOLATILE_D + 0x30)]
+    .seh_save_fregp d14, (ARM64_SERVICE_NONVOLATILE_D + 0x30)
     str x30, [sp, #TfLr]
     .seh_save_reg x30, TfLr
     str x29, [sp, #TfFp]
@@ -632,7 +652,17 @@ KiArm64UserServiceEntry:
     bl KiArm64UserServiceDispatch
     mov x0, sp
     bl KiArm64UserServiceComplete
-    cbnz w0, KiArm64UserServiceApcExit
+    cmp w0, #0
+    ldp x19, x20, [sp, #ARM64_SERVICE_NONVOLATILE_X]
+    ldp x21, x22, [sp, #(ARM64_SERVICE_NONVOLATILE_X + 0x10)]
+    ldp x23, x24, [sp, #(ARM64_SERVICE_NONVOLATILE_X + 0x20)]
+    ldp x25, x26, [sp, #(ARM64_SERVICE_NONVOLATILE_X + 0x30)]
+    ldp x27, x28, [sp, #(ARM64_SERVICE_NONVOLATILE_X + 0x40)]
+    ldp d8, d9, [sp, #ARM64_SERVICE_NONVOLATILE_D]
+    ldp d10, d11, [sp, #(ARM64_SERVICE_NONVOLATILE_D + 0x10)]
+    ldp d12, d13, [sp, #(ARM64_SERVICE_NONVOLATILE_D + 0x20)]
+    ldp d14, d15, [sp, #(ARM64_SERVICE_NONVOLATILE_D + 0x30)]
+    b.ne KiArm64UserServiceApcExit
     msr daifset, #0xF
     isb
     ldr x9, [sp, #TfVfpState]

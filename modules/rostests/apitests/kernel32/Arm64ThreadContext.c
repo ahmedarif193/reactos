@@ -40,7 +40,7 @@ CaptureContext(
     _Out_ PCONTEXT Context)
 {
     RtlZeroMemory(Context, sizeof(*Context));
-    Context->ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+    Context->ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT;
     return GetThreadContext(Thread, Context);
 }
 
@@ -72,7 +72,7 @@ CheckUserContext(
 
 START_TEST(Arm64ThreadContext)
 {
-    CONTEXT Before, After;
+    CONTEXT Before, After, Modified;
     HANDLE Thread;
     DWORD ThreadId;
     DWORD Result;
@@ -174,6 +174,47 @@ START_TEST(Arm64ThreadContext)
             if (Success)
             {
                 CheckUserContext(&Before, "running", Round);
+                Modified = Before;
+                Modified.X[19] = 0x123456789ABCDEF0ULL ^ Round;
+                Modified.X[20] = 0x0FEDCBA987654321ULL ^ Round;
+                Modified.V[8].Low = 0x1122334455667788ULL ^ Round;
+                Modified.V[9].Low = 0x8877665544332211ULL ^ Round;
+                Success = SetThreadContext(Thread, &Modified);
+                ok(Success,
+                   "SetThreadContext modified round %lu failed: %lu\n",
+                   Round,
+                   GetLastError());
+                if (Success)
+                {
+                    Success = CaptureContext(Thread, &After);
+                    ok(Success,
+                       "GetThreadContext modified round %lu failed: %lu\n",
+                       Round,
+                       GetLastError());
+                    if (Success)
+                    {
+                        ok(After.X[19] == Modified.X[19],
+                           "round %lu X19 changed from %I64x to %I64x\n",
+                           Round,
+                           Modified.X[19],
+                           After.X[19]);
+                        ok(After.X[20] == Modified.X[20],
+                           "round %lu X20 changed from %I64x to %I64x\n",
+                           Round,
+                           Modified.X[20],
+                           After.X[20]);
+                        ok(After.V[8].Low == Modified.V[8].Low,
+                           "round %lu D8 changed from %I64x to %I64x\n",
+                           Round,
+                           Modified.V[8].Low,
+                           After.V[8].Low);
+                        ok(After.V[9].Low == Modified.V[9].Low,
+                           "round %lu D9 changed from %I64x to %I64x\n",
+                           Round,
+                           Modified.V[9].Low,
+                           After.V[9].Low);
+                    }
+                }
                 Success = SetThreadContext(Thread, &Before);
                 ok(Success,
                    "SetThreadContext round %lu failed: %lu\n",
@@ -198,6 +239,26 @@ START_TEST(Arm64ThreadContext)
                        Round,
                        Before.Sp,
                        After.Sp);
+                    ok(After.X[19] == Before.X[19],
+                       "round %lu X19 restore changed from %I64x to %I64x\n",
+                       Round,
+                       Before.X[19],
+                       After.X[19]);
+                    ok(After.X[20] == Before.X[20],
+                       "round %lu X20 restore changed from %I64x to %I64x\n",
+                       Round,
+                       Before.X[20],
+                       After.X[20]);
+                    ok(After.V[8].Low == Before.V[8].Low,
+                       "round %lu D8 restore changed from %I64x to %I64x\n",
+                       Round,
+                       Before.V[8].Low,
+                       After.V[8].Low);
+                    ok(After.V[9].Low == Before.V[9].Low,
+                       "round %lu D9 restore changed from %I64x to %I64x\n",
+                       Round,
+                       Before.V[9].Low,
+                       After.V[9].Low);
                 }
             }
 

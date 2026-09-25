@@ -1036,6 +1036,27 @@ typedef struct _KI_ARM64_SERVICE_NONVOLATILES
     ULONG64 D[8];
 } KI_ARM64_SERVICE_NONVOLATILES, *PKI_ARM64_SERVICE_NONVOLATILES;
 
+typedef struct _KI_ARM64_SERVICE_REGISTER_BANK
+{
+    ULONG64 X[10];
+    ULONG64 D[8];
+} KI_ARM64_SERVICE_REGISTER_BANK, *PKI_ARM64_SERVICE_REGISTER_BANK;
+
+C_ASSERT(sizeof(KI_ARM64_SERVICE_REGISTER_BANK) +
+         KI_ARM64_SERVICE_NONVOLATILE_OFFSET == KI_ARM64_SERVICE_FRAME_LENGTH);
+
+static
+PKI_ARM64_SERVICE_REGISTER_BANK
+KiArm64GetServiceRegisterBank(
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    if (!KiArm64IsServiceHeaderFrame(TrapFrame))
+        return NULL;
+
+    return (PKI_ARM64_SERVICE_REGISTER_BANK)((PUCHAR)TrapFrame +
+                                             KI_ARM64_SERVICE_NONVOLATILE_OFFSET);
+}
+
 static
 VOID
 KiArm64UnwindEarlyFrame(
@@ -1231,8 +1252,30 @@ KiArm64GetServiceNonvolatiles(
     _Inout_ PCONTEXT Context)
 {
     KI_ARM64_SERVICE_NONVOLATILES Request;
+    PKI_ARM64_SERVICE_REGISTER_BANK RegisterBank;
     ULONG ContextFlags = Context->ContextFlags & ~CONTEXT_ARM64;
     ULONG Index;
+
+    RegisterBank = KiArm64GetServiceRegisterBank(TrapFrame);
+    if (RegisterBank != NULL)
+    {
+        if (ContextFlags & (CONTEXT_INTEGER & ~CONTEXT_ARM64))
+        {
+            for (Index = 0; Index < 10; Index++)
+                Context->X[19 + Index] = RegisterBank->X[Index];
+        }
+
+        if (ContextFlags & (CONTEXT_FLOATING_POINT & ~CONTEXT_ARM64))
+        {
+            for (Index = 0; Index < 8; Index++)
+            {
+                Context->V[8 + Index].Low = RegisterBank->D[Index];
+                Context->V[8 + Index].High = 0;
+            }
+        }
+
+        return TRUE;
+    }
 
     RtlZeroMemory(&Request, sizeof(Request));
     Request.TrapFrame = TrapFrame;
@@ -1240,6 +1283,7 @@ KiArm64GetServiceNonvolatiles(
     if (!Request.Found)
     {
         DPRINT1("KiArm64GetServiceNonvolatiles: no service frame for %p\n", TrapFrame);
+        return FALSE;
     }
 
     if (ContextFlags & (CONTEXT_INTEGER & ~CONTEXT_ARM64))
@@ -1268,6 +1312,7 @@ KiArm64SetServiceNonvolatiles(
     _In_ PCONTEXT Context)
 {
     KI_ARM64_SERVICE_NONVOLATILES Request;
+    PKI_ARM64_SERVICE_REGISTER_BANK RegisterBank;
     ULONG ContextFlags = Context->ContextFlags & ~CONTEXT_ARM64;
     ULONG Index;
 
@@ -1295,6 +1340,16 @@ KiArm64SetServiceNonvolatiles(
 
     if (Request.Flags == 0)
     {
+        return TRUE;
+    }
+
+    RegisterBank = KiArm64GetServiceRegisterBank(TrapFrame);
+    if (RegisterBank != NULL)
+    {
+        if (Request.Flags & KI_ARM64_SERVICE_INTEGER)
+            RtlCopyMemory(RegisterBank->X, Request.X, sizeof(RegisterBank->X));
+        if (Request.Flags & KI_ARM64_SERVICE_VECTOR)
+            RtlCopyMemory(RegisterBank->D, Request.D, sizeof(RegisterBank->D));
         return TRUE;
     }
 
@@ -1350,12 +1405,23 @@ KiArm64AttachServiceContext(
     _In_ BOOLEAN CaptureNonvolatiles)
 {
     KI_ARM64_SERVICE_NONVOLATILES Request;
+    PKI_ARM64_SERVICE_REGISTER_BANK RegisterBank;
 
     RtlZeroMemory(&Request, sizeof(Request));
     if (CaptureNonvolatiles)
     {
         Request.TrapFrame = TrapFrame;
-        KiArm64CallWithNonvolatileFrame(KiArm64ServiceNonvolatilesWorker, &Request);
+        RegisterBank = KiArm64GetServiceRegisterBank(TrapFrame);
+        if (RegisterBank != NULL)
+        {
+            RtlCopyMemory(Request.X, RegisterBank->X, sizeof(Request.X));
+            RtlCopyMemory(Request.D, RegisterBank->D, sizeof(Request.D));
+            Request.Found = TRUE;
+        }
+        else
+        {
+            KiArm64CallWithNonvolatileFrame(KiArm64ServiceNonvolatilesWorker, &Request);
+        }
         if (!Request.Found)
         {
             DPRINT1("KiArm64AttachServiceContext: no service frame for %p\n", TrapFrame);
