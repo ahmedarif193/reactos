@@ -38,6 +38,14 @@ MiArchUnmapFrame(
     UNREFERENCED_PARAMETER(Mapping);
 }
 
+PVOID
+MiArchDebugMapFrame(_In_ ULONG64 Frame)
+{
+    if (Frame > ((~MI_ARM64_PHYS_MAP_BASE & MI_ARM64_PHYS_ADDR_MASK) >> PAGE_SHIFT))
+        return NULL;
+    return MiArchMapFrame(Frame);
+}
+
 MI_PTE
 MiArchPteRead(
     _In_ PMI_PTE Slot)
@@ -99,6 +107,19 @@ MiArchBootRootFrame(VOID)
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
     return (Ttbr1 & 0x0000FFFFFFFFF000ULL) >> PAGE_SHIFT;
+}
+
+ULONG64
+MiArchDebugRootFrame(_In_ ULONG64 VirtualAddress)
+{
+    ULONG64 Ttbr;
+
+    if (VirtualAddress & (1ULL << 63))
+        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr));
+    else
+        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr));
+
+    return (Ttbr & 0x0000FFFFFFFFF000ULL) >> PAGE_SHIFT;
 }
 
 VOID

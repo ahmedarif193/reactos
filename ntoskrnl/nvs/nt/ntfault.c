@@ -261,28 +261,115 @@ MmDbgCopyMemory(
     _In_ ULONG Size,
     _In_ ULONG Flags)
 {
-    PVOID Source;
-    ULONG64 Physical;
+    const MI_ARCH_DESCRIPTOR *Arch = MiArchDescribe();
+    PVOID Source = NULL;
+    ULONG64 Physical, AliasPhysical, AliasAddress;
+    MI_PTE Leaf;
+    ULONG CacheFlags = 0;
+    ULONG RequestedCache = Flags & (MMDBG_COPY_CACHED | MMDBG_COPY_UNCACHED |
+                                     MMDBG_COPY_WRITE_COMBINED);
 
     if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
         return STATUS_INVALID_PARAMETER_3;
+
+    if ((Address & (PAGE_SIZE - 1)) + Size > PAGE_SIZE)
+        return STATUS_INVALID_PARAMETER_3;
+
+    if (RequestedCache && (RequestedCache & (RequestedCache - 1)))
+        return STATUS_INVALID_PARAMETER_4;
 
     if (Flags & MMDBG_COPY_PHYSICAL)
     {
         Physical = Address;
     }
-    else if (!MiTranslateCurrentAddress(Address, &Physical, NULL))
+    else
     {
-        return STATUS_UNSUCCESSFUL;
+        if (Arch->VirtualAddressBits < sizeof(ULONG_PTR) * 8 &&
+            ((Address + (1ULL << (Arch->VirtualAddressBits - 1))) >> Arch->VirtualAddressBits))
+            return STATUS_UNSUCCESSFUL;
+
+        if (!MiPtTranslateRoot(Arch, MiArchDebugRootFrame(Address),
+                               Address, &Physical, &Leaf))
+            return STATUS_UNSUCCESSFUL;
+
+        CacheFlags = MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK;
+        if (CacheFlags != 0)
+        {
+            Source = (PVOID)(ULONG_PTR)Address;
+        }
     }
 
-    if ((Physical & (PAGE_SIZE - 1)) + Size > PAGE_SIZE)
-        return STATUS_INVALID_PARAMETER_3;
-
-    Source = MiArchMapFrame(Physical >> PAGE_SHIFT);
     if (Source == NULL)
+    {
+        Source = MiArchDebugMapFrame(Physical >> PAGE_SHIFT);
+        if (Source == NULL)
+            return STATUS_UNSUCCESSFUL;
+
+        Source = (PUCHAR)Source + (Physical & (PAGE_SIZE - 1));
+        AliasAddress = (ULONG64)(ULONG_PTR)Source;
+        if (!MiPtTranslateRoot(Arch, MiArchDebugRootFrame(AliasAddress),
+                               AliasAddress, &AliasPhysical, &Leaf) ||
+            AliasPhysical != Physical)
+            return STATUS_UNSUCCESSFUL;
+
+        if (!(Flags & MMDBG_COPY_PHYSICAL) &&
+            (MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) != CacheFlags)
+            return STATUS_UNSUCCESSFUL;
+        CacheFlags = MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK;
+    }
+
+    if ((Flags & MMDBG_COPY_WRITE) && !MiArchPteIsHardwareWritable(Leaf))
         return STATUS_UNSUCCESSFUL;
-    Source = (PUCHAR)Source + (Physical & (PAGE_SIZE - 1));
+
+    if ((RequestedCache == MMDBG_COPY_CACHED && CacheFlags != 0) ||
+        (RequestedCache == MMDBG_COPY_UNCACHED &&
+         !(CacheFlags & (MI_LEAF_NOCACHE | MI_LEAF_DEVICE))) ||
+        (RequestedCache == MMDBG_COPY_WRITE_COMBINED && CacheFlags != MI_LEAF_WRITECOMBINE))
+        return STATUS_UNSUCCESSFUL;
+
+    if (CacheFlags != 0)
+    {
+        union
+        {
+            UCHAR Byte;
+            USHORT Word;
+            ULONG Long;
+            ULONG64 Quad;
+        } Value;
+
+        if (Address & (Size - 1))
+            return STATUS_INVALID_PARAMETER_3;
+
+        if (Flags & MMDBG_COPY_WRITE)
+            RtlCopyMemory(&Value, Buffer, Size);
+
+        KeMemoryBarrier();
+        if (Flags & MMDBG_COPY_WRITE)
+        {
+            switch (Size)
+            {
+                case 1: *(volatile UCHAR *)Source = Value.Byte; break;
+                case 2: *(volatile USHORT *)Source = Value.Word; break;
+                case 4: *(volatile ULONG *)Source = Value.Long; break;
+                case 8: *(volatile ULONG64 *)Source = Value.Quad; break;
+            }
+        }
+        else
+        {
+            switch (Size)
+            {
+                case 1: Value.Byte = *(volatile UCHAR *)Source; break;
+                case 2: Value.Word = *(volatile USHORT *)Source; break;
+                case 4: Value.Long = *(volatile ULONG *)Source; break;
+                case 8: Value.Quad = *(volatile ULONG64 *)Source; break;
+            }
+        }
+        KeMemoryBarrier();
+
+        if (!(Flags & MMDBG_COPY_WRITE))
+            RtlCopyMemory(Buffer, &Value, Size);
+        return STATUS_SUCCESS;
+    }
 
     if (Flags & MMDBG_COPY_WRITE)
         RtlCopyMemory(Source, Buffer, Size);

@@ -134,6 +134,7 @@ BOOLEAN MiArchPteIsBlock(_In_ MI_PTE Pte, _In_ ULONG Level);
 MI_PTE MiArchPteMakeBlock(_In_ ULONG64 Frame, _In_ ULONG Protection, _In_ ULONG Flags);
 ULONG64 MiArchPteFrame(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsWritable(_In_ MI_PTE Pte);
+BOOLEAN MiArchPteIsHardwareWritable(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsCopyOnWrite(_In_ MI_PTE Pte);
 ULONG MiArchPteLeafFlags(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsDirty(_In_ MI_PTE Pte);
@@ -148,8 +149,10 @@ BOOLEAN MiArchPteNeedsBreak(_In_ MI_PTE Old, _In_ MI_PTE New);
 VOID MiArchInitializeProcessRoot(_In_ ULONG64 SystemRootFrame, _In_ ULONG64 ProcessRootFrame);
 
 ULONG64 MiArchBootRootFrame(VOID);
+ULONG64 MiArchDebugRootFrame(_In_ ULONG64 VirtualAddress);
 VOID MiArchBootClearUserHalf(_In_ ULONG64 RootFrame);
 PVOID MiArchMapFrame(_In_ ULONG64 Frame);
+PVOID MiArchDebugMapFrame(_In_ ULONG64 Frame);
 VOID MiArchUnmapFrame(_In_ PVOID Mapping);
 MI_PTE MiArchPteRead(_In_ PMI_PTE Slot);
 VOID MiArchPteWrite(_Inout_ PMI_PTE Slot, _In_ MI_PTE Value);
