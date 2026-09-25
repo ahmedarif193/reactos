@@ -38,6 +38,15 @@ gdb_receive_packet(_Inout_ PKD_CONTEXT KdContext)
     BOOLEAN PacketTooLarge;
     char HighNibble, LowNibble;
 
+    /* The first command of a live attach was already read by the break-in poll. */
+    if (gdb_polled_packet_pending)
+    {
+        gdb_input_length = gdb_polled_packet_length;
+        RtlCopyMemory(gdb_input, gdb_polled_packet, gdb_input_length + 1);
+        gdb_polled_packet_pending = FALSE;
+        return KdPacketReceived;
+    }
+
 wait_for_packet:
     if (gdb_packet_start_pending)
     {
