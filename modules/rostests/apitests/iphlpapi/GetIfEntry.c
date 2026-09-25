@@ -64,6 +64,22 @@ START_TEST(GetIfEntry)
     if (Error != NO_ERROR || !Context->Table->dwNumEntries)
         goto Cleanup;
 
+    /* An Ethernet interface has an MTU even before its first link-up. */
+    for (Index = 0; Index < Context->Table->dwNumEntries; ++Index)
+    {
+        MIB_IFROW Row = Context->Table->table[Index];
+
+        if (Row.dwType != MIB_IF_TYPE_ETHERNET)
+            continue;
+        trace("Ethernet interface %lu: MTU %lu, operational state %lu\n",
+              Row.dwIndex, Row.dwMtu, (ULONG)Row.dwOperStatus);
+        ok(Row.dwMtu != 0, "GetIfTable returned MTU zero for interface %lu\n", Row.dwIndex);
+        Error = GetIfEntry(&Row);
+        ok(Error == NO_ERROR, "GetIfEntry(%lu) returned %lu\n", Row.dwIndex, Error);
+        if (Error == NO_ERROR)
+            ok(Row.dwMtu != 0, "GetIfEntry returned MTU zero for interface %lu\n", Row.dwIndex);
+    }
+
     /* Force queued legacy OIDs as well as synchronous requests. Every caller
      * needs its own completion, even when several query the same adapter. */
     for (Count = 0; Count < QUERY_THREADS; ++Count)
