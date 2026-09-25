@@ -111,6 +111,7 @@ BOOLEAN NTAPI ChpeCanContinueToGuest(VOID);
 DECLSPEC_NORETURN VOID NTAPI ChpeContinueToGuest(PVOID Amd64Context);
 DECLSPEC_NORETURN VOID NTAPI ChpeContinueToGuestEx(PVOID Amd64Context, BOOLEAN FullContext);
 BOOLEAN NTAPI RtlIsEcCode(ULONG_PTR Address);
+BOOLEAN NTAPI ChpeMarkEcCodeRange(PVOID Address, SIZE_T Length);
 
 typedef struct _CHPE_AMD64_SCOPE_TABLE
 {
@@ -2017,7 +2018,31 @@ ChpeNtAllocateVirtualMemory(HANDLE ProcessHandle, PVOID *BaseAddress, ULONG_PTR 
 NTSTATUS NTAPI
 ChpeNtAllocateVirtualMemoryEx(HANDLE ProcessHandle, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect, PMEM_EXTENDED_PARAMETER ExtendedParameters, ULONG ExtendedParameterCount)
 {
-    return NtAllocateVirtualMemoryEx(ProcessHandle, BaseAddress, RegionSize, AllocationType, Protect, ExtendedParameters, ExtendedParameterCount);
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = NtAllocateVirtualMemoryEx(ProcessHandle, BaseAddress, RegionSize, AllocationType, Protect, ExtendedParameters, ExtendedParameterCount);
+    if (!NT_SUCCESS(Status) || !RtlIsCurrentProcess(ProcessHandle))
+        return Status;
+
+    _SEH2_TRY
+    {
+        for (Index = 0; Index < ExtendedParameterCount; ++Index)
+        {
+            if (ExtendedParameters[Index].Type == MemExtendedParameterAttributeFlags &&
+                (ExtendedParameters[Index].ULong64 & MEM_EXTENDED_PARAMETER_EC_CODE))
+            {
+                ChpeMarkEcCodeRange(*BaseAddress, *RegionSize);
+                break;
+            }
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    _SEH2_END;
+
+    return Status;
 }
 
 NTSTATUS NTAPI
