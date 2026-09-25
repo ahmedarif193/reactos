@@ -449,3 +449,6 @@
  @ stdcall NdisAcquireRWLockWrite(ptr ptr long)
  @ stdcall NdisReleaseRWLock(ptr ptr)
  @ stdcall NdisAllocateNetBufferMdlAndData(ptr)
+; NDIS 6.20 processor topology (implemented in 60processor.c)
+ @ stdcall NdisCurrentProcessorIndex()
+ @ stdcall NdisGetProcessorInformationEx(ptr ptr ptr)
