@@ -299,6 +299,8 @@ FsRtlCopyWrite(IN PFILE_OBJECT FileObject,
     NewSize.QuadPart = 0;
     Offset.QuadPart = FileOffset->QuadPart + Length;
     FcbHeader = (PFSRTL_COMMON_FCB_HEADER)FileObject->FsContext;
+    OldFileSize = FcbHeader->FileSize;
+    OldValidDataLength = FcbHeader->ValidDataLength;
 
     /* Nagar p.544.
      * Check with Cc if we can write and check if the IO > 64kB (WDK macro).
@@ -542,7 +544,7 @@ FsRtlCopyWrite(IN PFILE_OBJECT FileObject,
     }
     else
     {
-        LARGE_INTEGER OldFileSize;
+        LARGE_INTEGER OldFileSize = FcbHeader->FileSize;
 
         /* Sanity check */
         ASSERT(!KeIsExecutingDpc());

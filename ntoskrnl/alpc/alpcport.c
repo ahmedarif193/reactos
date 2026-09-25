@@ -380,7 +380,7 @@ NtAlpcQueryInformation(
     _In_ ULONG Length,
     _Out_opt_ PULONG ReturnLength)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
     PALPC_PORT Port;
     ALPC_BASIC_INFORMATION Basic;
