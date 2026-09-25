@@ -1647,7 +1647,6 @@ GpuVaWaitForKmdResetBoundary(
 static NTSTATUS
 GpuVaExecutePageTableBatch(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_opt_ PDXGKRNL_DEVICE SubmissionDevice,
     _In_reads_(OperationCount) CONST DXGKRNL_PAGING_OP *Operations,
     _In_ ULONG OperationCount,
     _Inout_ PBOOLEAN TransactionHeld)
@@ -1659,8 +1658,13 @@ GpuVaExecutePageTableBatch(
     ASSERT(*TransactionHeld);
     ASSERT(Adapter->KmdTransactionOwnerThread == PsGetCurrentThread());
 
+    /* Page-table maintenance belongs to VidMm, not the client work ledger.
+     * A client fault must reject its rendering while still allowing the OS
+     * to invalidate its mappings before releasing their backing pages. The
+     * caller retains the process, tables and bindings until the paging fence
+     * retires; the packet uses the adapter's paging system context. */
     Status = DxgkPagingExecuteBatch(Adapter,
-                                    SubmissionDevice,
+                                    NULL,
                                     Operations,
                                     OperationCount,
                                     NULL,
@@ -1806,7 +1810,6 @@ DxgkpGpuVaFlushPageTableUpdatesOnce(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE PagingDevice = NULL;
-    PDXGKRNL_DEVICE SubmissionDevice = NULL;
     PDXGKP_GPUVA_TABLE_SNAPSHOT Tables = NULL;
     PDXGKP_GPUVA_MAP_SPAN Spans = NULL;
     PDXGKRNL_PAGING_OP Operations = NULL;
@@ -1903,11 +1906,6 @@ DxgkpGpuVaFlushPageTableUpdatesOnce(
         }
         if (!NT_SUCCESS(Status))
             goto Complete;
-        /* A client device submits through itself; the paging system device
-         * submits through the paging system context (SubmissionDevice NULL),
-         * exactly as the owned-device teardown path does. */
-        SubmissionDevice = PagingDevice != Adapter->PagingSystemDevice ?
-                           PagingDevice : NULL;
     }
 
     /* Anything allocated since the last flush is still unreachable by the GPU
@@ -2250,7 +2248,6 @@ DxgkpGpuVaFlushPageTableUpdatesOnce(
      * preserves update order, avoids one DMA allocation and fence wait per PTE
      * span, and ensures a BuildPagingBuffer failure submits none of the batch. */
     Status = GpuVaExecutePageTableBatch(Adapter,
-                                          SubmissionDevice,
                                           Operations,
                                           OperationCount,
                                           &TransactionHeld);
