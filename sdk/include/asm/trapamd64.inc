@@ -95,6 +95,114 @@ ENDM
 
 #endif /* _USE_ML */
 
+/* Debug registers belong to the interrupted user thread, not to whichever
+ * thread next runs on this processor. Switch to the processor's kernel debug
+ * state before interrupts can schedule another thread. The normal (no user
+ * debug context) path does not access the hardware debug registers. */
+MACRO(SAVE_DEBUG_REGISTERS, Frame, Scratch)
+    mov Scratch, dr0
+    mov [Frame + KTRAP_FRAME_Dr0], Scratch
+    mov Scratch, dr1
+    mov [Frame + KTRAP_FRAME_Dr1], Scratch
+    mov Scratch, dr2
+    mov [Frame + KTRAP_FRAME_Dr2], Scratch
+    mov Scratch, dr3
+    mov [Frame + KTRAP_FRAME_Dr3], Scratch
+    mov Scratch, dr6
+    mov [Frame + KTRAP_FRAME_Dr6], Scratch
+    mov Scratch, dr7
+    mov [Frame + KTRAP_FRAME_Dr7], Scratch
+ENDM
+
+MACRO(RESTORE_DEBUG_REGISTERS, Frame, Scratch)
+    xor Scratch, Scratch
+    mov dr7, Scratch
+    mov Scratch, [Frame + KTRAP_FRAME_Dr0]
+    mov dr0, Scratch
+    mov Scratch, [Frame + KTRAP_FRAME_Dr1]
+    mov dr1, Scratch
+    mov Scratch, [Frame + KTRAP_FRAME_Dr2]
+    mov dr2, Scratch
+    mov Scratch, [Frame + KTRAP_FRAME_Dr3]
+    mov dr3, Scratch
+    mov Scratch, [Frame + KTRAP_FRAME_Dr6]
+    mov dr6, Scratch
+    mov Scratch, [Frame + KTRAP_FRAME_Dr7]
+    mov dr7, Scratch
+ENDM
+
+/* Clobbers rax and rcx. Must run with kernel GS and interrupts disabled. */
+MACRO(SAVE_USER_DEBUG_REGISTERS, Frame)
+#ifdef _USE_ML
+    LOCAL SaveUserDebugRegisters, UserDebugRegistersSaved
+#endif
+    mov rcx, gs:[PcCurrentThread]
+    test byte ptr [rcx + ThDebugActive], DEBUG_ACTIVE_DR7
+#ifdef _USE_ML
+    jnz SaveUserDebugRegisters
+#else
+    jnz 8f
+#endif
+    xor eax, eax
+    mov [Frame + KTRAP_FRAME_Dr0], rax
+    mov [Frame + KTRAP_FRAME_Dr1], rax
+    mov [Frame + KTRAP_FRAME_Dr2], rax
+    mov [Frame + KTRAP_FRAME_Dr3], rax
+    mov [Frame + KTRAP_FRAME_Dr6], rax
+    mov [Frame + KTRAP_FRAME_Dr7], rax
+#ifdef _USE_ML
+    jmp UserDebugRegistersSaved
+SaveUserDebugRegisters:
+#else
+    jmp 9f
+8:
+#endif
+    SAVE_DEBUG_REGISTERS Frame, rax
+    and qword ptr [Frame + KTRAP_FRAME_Dr6], HEX(0E00F)
+    /* DR7's reserved bit 10 reads as one. Do not expose it in CONTEXT. */
+    and dword ptr [Frame + KTRAP_FRAME_Dr7], DR7_LEGAL
+    xor eax, eax
+    mov dr7, rax
+    mov rcx, gs:[PcCurrentPrcb]
+    mov rax, [rcx + PbProcessorState + PsKernelDr0]
+    mov dr0, rax
+    mov rax, [rcx + PbProcessorState + PsKernelDr1]
+    mov dr1, rax
+    mov rax, [rcx + PbProcessorState + PsKernelDr2]
+    mov dr2, rax
+    mov rax, [rcx + PbProcessorState + PsKernelDr3]
+    mov dr3, rax
+    mov rax, [rcx + PbProcessorState + PsKernelDr6]
+    mov dr6, rax
+    mov rax, [rcx + PbProcessorState + PsKernelDr7]
+    mov dr7, rax
+#ifdef _USE_ML
+UserDebugRegistersSaved:
+#else
+9:
+#endif
+ENDM
+
+/* Preserve rax (the system call result); clobber rcx and rdx only. */
+MACRO(RESTORE_USER_DEBUG_REGISTERS, Frame)
+#ifdef _USE_ML
+    LOCAL UserDebugRegistersRestored
+#endif
+    mov rcx, gs:[PcCurrentThread]
+    test byte ptr [rcx + ThDebugActive], DEBUG_ACTIVE_DR7
+#ifdef _USE_ML
+    jz UserDebugRegistersRestored
+#else
+    jz 9f
+#endif
+    RESTORE_DEBUG_REGISTERS Frame, rdx
+#ifdef _USE_ML
+UserDebugRegistersRestored:
+#else
+9:
+#endif
+ENDM
+
 APIC_EOI = HEX(0FFFFFFFFFFFE00B0)
 
 TF_SEGMENTS             = HEX(08)
@@ -200,10 +308,17 @@ MACRO(EnterTrap, Flags)
     mov es, ax
     swapgs
 
+    SAVE_USER_DEBUG_REGISTERS rbp
+
     /* Load kernel MXCSR */
     ldmxcsr gs:[PcMxCsr]
 
     ASSERT_IRQL_PASSIVE
+#ifdef _USE_ML
+    jmp debug_registers_saved
+#else
+    jmp 3f
+#endif
 
 #ifdef _USE_ML
 kernel_mode_entry:
@@ -211,27 +326,20 @@ kernel_mode_entry:
 2:
 #endif
 
+    if ((Flags) AND TF_DEBUG)
+        SAVE_DEBUG_REGISTERS rbp, rax
+    endif
+#ifdef _USE_ML
+debug_registers_saved:
+#else
+3:
+#endif
+
 //    if (Flags AND TF_IRQL)
         /* Save previous irql */
         mov rax, cr8
         mov [rbp + KTRAP_FRAME_PreviousIrql], al
 //    endif
-
-    if ((Flags) AND TF_DEBUG)
-        /* Save debug registers */
-        mov rax, dr0
-        mov [rbp + KTRAP_FRAME_Dr0], rax
-        mov rax, dr1
-        mov [rbp + KTRAP_FRAME_Dr1], rax
-        mov rax, dr2
-        mov [rbp + KTRAP_FRAME_Dr2], rax
-        mov rax, dr3
-        mov [rbp + KTRAP_FRAME_Dr3], rax
-        mov rax, dr6
-        mov [rbp + KTRAP_FRAME_Dr6], rax
-        mov rax, dr7
-        mov [rbp + KTRAP_FRAME_Dr7], rax
-    endif
 
     /* Make sure the direction flag is cleared */
     cld
@@ -274,14 +382,29 @@ MACRO(ExitTrap, Flags)
     ASSERT_IRQL_PASSIVE
 
     cli
+    RESTORE_USER_DEBUG_REGISTERS rbp
 
     /* Swap gs to user mode */
     swapgs
+#ifdef _USE_ML
+    jmp debug_registers_restored
+#else
+    jmp 3f
+#endif
 
 #ifdef _USE_ML
 kernel_mode_return:
 #else
 2:
+#endif
+
+    if ((Flags) AND TF_DEBUG)
+        RESTORE_DEBUG_REGISTERS rbp, rdx
+    endif
+#ifdef _USE_ML
+debug_registers_restored:
+#else
+3:
 #endif
 
     /* Restore volatile registers */

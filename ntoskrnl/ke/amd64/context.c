@@ -147,8 +147,11 @@ KeContextToTrapFrame(IN PCONTEXT Context,
         TrapFrame->Dr6 = Context->Dr6;
         TrapFrame->Dr7 = Context->Dr7;
 
-        if ((Context->SegCs & MODE_MASK) != KernelMode)
+        /* SegCs need not be present in a debug-register-only context. */
+        if (PreviousMode != KernelMode)
         {
+            TrapFrame->Dr6 &= 0xE00F;
+            TrapFrame->Dr7 &= DR7_LEGAL;
             if (TrapFrame->Dr0 > (ULONG64)MmHighestUserAddress)
                 TrapFrame->Dr0 = 0;
             if (TrapFrame->Dr1 > (ULONG64)MmHighestUserAddress)
@@ -157,6 +160,22 @@ KeContextToTrapFrame(IN PCONTEXT Context,
                 TrapFrame->Dr2 = 0;
             if (TrapFrame->Dr3 > (ULONG64)MmHighestUserAddress)
                 TrapFrame->Dr3 = 0;
+        }
+
+        /* Thread creation fills the new thread's frame from the creator. */
+        if ((PreviousMode != KernelMode ||
+             (TrapFrame->SegCs & MODE_MASK) != KernelMode) &&
+            (ULONG_PTR)TrapFrame >= (ULONG_PTR)KeGetCurrentThread()->StackLimit &&
+            (ULONG_PTR)TrapFrame < (ULONG_PTR)KeGetCurrentThread()->InitialStack)
+        {
+            /* Preserve disabled slots too: GetThreadContext must still see
+             * their addresses on the next system call. */
+            PKTHREAD Thread = KeGetCurrentThread();
+            if (TrapFrame->Dr0 | TrapFrame->Dr1 | TrapFrame->Dr2 |
+                TrapFrame->Dr3 | TrapFrame->Dr6 | TrapFrame->Dr7)
+                Thread->Header.DebugActive |= DEBUG_ACTIVE_DR7;
+            else
+                Thread->Header.DebugActive &= ~DEBUG_ACTIVE_DR7;
         }
     }
 

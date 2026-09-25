@@ -2051,19 +2051,20 @@ EnterKdbg:;
 
 #if defined(_M_AMD64)
     /*
-     * Most amd64 trap entries do not populate the debug-register slots in
-     * KTRAP_FRAME. CONTEXT_ALL nevertheless asks KeTrapFrameToContext to
-     * copy them, which exposes unrelated stack contents as DR0-DR7. KDB is
-     * executing on the interrupted processor here, so capture the canonical
-     * hardware state before any command reads or edits it.
+     * Kernel traps other than #DB need not populate the debug-register
+     * slots, so capture the live kernel state. User traps already carry the
+     * thread's own registers, while the hardware holds the kernel state.
      */
-    KdbTrapFrame.Dr0 = __readdr(0);
-    KdbTrapFrame.Dr1 = __readdr(1);
-    KdbTrapFrame.Dr2 = __readdr(2);
-    KdbTrapFrame.Dr3 = __readdr(3);
-    KdbTrapFrame.Dr6 = __readdr(6);
-    KdbTrapFrame.Dr7 = __readdr(7);
-    KdbTrapFrame.ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+    if (PreviousMode == KernelMode)
+    {
+        KdbTrapFrame.Dr0 = __readdr(0);
+        KdbTrapFrame.Dr1 = __readdr(1);
+        KdbTrapFrame.Dr2 = __readdr(2);
+        KdbTrapFrame.Dr3 = __readdr(3);
+        KdbTrapFrame.Dr6 = __readdr(6);
+        KdbTrapFrame.Dr7 = __readdr(7);
+        KdbTrapFrame.ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+    }
 #endif
 
 #if defined(_M_ARM64)
