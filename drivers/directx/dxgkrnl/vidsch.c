@@ -2130,6 +2130,20 @@ VidSchpConsumePageFaultInterrupt(
             1);
     }
 
+    /* With no reset requirement the fault notification itself ends hardware
+     * access to this oldest packet. Otherwise the successful reset, not this
+     * notification or software retirement, must release its memory references. */
+    if ((NotifyData.DmaPageFaulted.PageFaultFlags &
+         (DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED |
+          DXGK_PAGE_FAULT_ADAPTER_RESET_REQUIRED |
+          DXGK_PAGE_FAULT_FATAL_HARDWARE_ERROR)) == 0)
+    {
+        DxgkNotifySubmissionFenceTermination(
+            Engine->Adapter,
+            Engine->SchedulerOrdinal,
+            NotifyData.DmaPageFaulted.FaultedFenceId);
+    }
+
     /*
      * This advances only dxgmms2's private queue watermark so it can emit one
      * retirement record. The monitored/submission timeline is deliberately
@@ -4859,6 +4873,11 @@ VidSchResetEngine(
          * that boundary first, then clear the dispatched mark only on the
          * surviving suffix.  The next claim carries the resubmission flag.
          */
+        /* The KMD has emptied the hardware queue. Only the aborted prefix
+         * stops holding memory references; the surviving suffix will run
+         * again. Keep successful completion and monitored fences unchanged. */
+        DxgkNotifySubmissionFenceTermination(
+            Adapter, EngineOrdinal, ResetArgs.LastAbortedFenceId);
         Status = Sched->NotifyCompletion(
                             Sched->SchedulerHandle,
                             EngineOrdinal,

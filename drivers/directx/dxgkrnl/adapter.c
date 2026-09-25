@@ -1767,6 +1767,8 @@ DxgkpShadowResetSubmittedFenceIdentities(
     KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
     RtlZeroMemory((PVOID)Adapter->NodeLastSubmittedFenceId,
                   sizeof(Adapter->NodeLastSubmittedFenceId));
+    RtlZeroMemory((PVOID)Adapter->NodeLastTerminalFenceId,
+                  sizeof(Adapter->NodeLastTerminalFenceId));
     if (InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch) == 0)
         InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch);
     KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
@@ -2009,6 +2011,33 @@ VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter)
     DxgkpReopenMms2TimelineCalls(Adapter);
 }
 
+/* The caller has established that hardware can no longer access commands
+ * through FenceId: a completion interrupt, a terminal page fault that needs
+ * no reset, or a successful reset's validated LastAbortedFenceId. Preemption,
+ * software cancellation and elapsed time are not such boundaries. */
+VOID
+NTAPI
+DxgkNotifySubmissionFenceTermination(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG FenceId)
+{
+    volatile LONG *Watermark;
+    LONG Previous;
+
+    ASSERT(Adapter != NULL);
+    if (FenceId == 0 || NodeOrdinal >= DXGK_MAX_TRACKED_NODES)
+        return;
+
+    Watermark = (volatile LONG *)&Adapter->NodeLastTerminalFenceId[NodeOrdinal];
+    do
+    {
+        Previous = InterlockedCompareExchange(Watermark, 0, 0);
+        if (Previous != 0 && DxgkpFenceIdReached((ULONG)Previous, FenceId))
+            return;
+    } while (InterlockedCompareExchange(Watermark, (LONG)FenceId, Previous) != Previous);
+}
+
 NTSTATUS NTAPI DxgkNotifySubmissionFenceCompletion(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId, _In_ BOOLEAN Preempted, _Out_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot)
 {
     DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
@@ -2032,6 +2061,9 @@ NTSTATUS NTAPI DxgkNotifySubmissionFenceCompletion(_In_ PDXGKRNL_ADAPTER Adapter
     }
     DxgkpUpdateCompletedFence(&Adapter->NodeLastSubmittedFenceId[NodeOrdinal], Snapshot->LastSubmittedFence);
     DxgkpUpdateCompletedFence(&Adapter->NodeLastCompletedFenceId[NodeOrdinal], Snapshot->LastCompletedFence);
+    /* For preemption, use only the last genuinely completed fence returned
+     * by the timeline, never the preemption fence itself. */
+    DxgkNotifySubmissionFenceTermination(Adapter, NodeOrdinal, Snapshot->LastCompletedFence);
     DxgkpUpdateCompletedFence(&Adapter->LastCompletedSubmissionFenceId, Snapshot->GlobalLastCompletedFence);
     DxgkpReleaseMms2TimelineCall(Adapter);
     return STATUS_SUCCESS;

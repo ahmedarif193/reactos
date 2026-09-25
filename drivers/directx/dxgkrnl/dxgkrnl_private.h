@@ -1192,6 +1192,9 @@ struct _DXGKRNL_ADAPTER
     volatile ULONG              LastCompletedSubmissionFenceId;
     volatile ULONG              NodeLastSubmittedFenceId[DXGK_MAX_TRACKED_NODES];
     volatile ULONG              NodeLastCompletedFenceId[DXGK_MAX_TRACKED_NODES];
+    /* Memory-lifetime boundary: successful completion or confirmed abort.
+     * Never use this to signal a client fence or report successful execution. */
+    volatile ULONG              NodeLastTerminalFenceId[DXGK_MAX_TRACKED_NODES];
     volatile LONG64             NextRedirectionFenceId;
     volatile LONG64             SubmittedFenceIdentities[DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY];
 
@@ -3580,6 +3583,7 @@ BOOLEAN NTAPI DxgkIsSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ U
 VOID NTAPI DxgkReleaseSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId, _In_ ULONG FenceIdentityEpoch);
 VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter);
 NTSTATUS NTAPI DxgkNotifySubmissionFenceCompletion(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId, _In_ BOOLEAN Preempted, _Out_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot);
+VOID NTAPI DxgkNotifySubmissionFenceTermination(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId);
 VOID NTAPI DxgkDrainVidSchCallbacks(_In_ PDXGKRNL_ADAPTER Adapter);
 
 /* Teardown-path wait: sleep (1 ms) until a worker-busy flag clears.
