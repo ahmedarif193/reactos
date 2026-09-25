@@ -2012,6 +2012,9 @@ Ndis6FilterTerminalOidRequest(
         return NDIS_STATUS_NOT_SUPPORTED;
     }
 
+    if (!Ext->Initialized || Ext->MiniportAdapterContext == NULL)
+        return NDIS_STATUS_ADAPTER_NOT_READY;
+
     return Ext->DriverBlock->Characteristics.OidRequestHandler(Ext->MiniportAdapterContext, OidRequest);
 }
 
@@ -2061,6 +2064,9 @@ Ndis6FilterTerminalDirectOidRequest(
     {
         return NDIS_STATUS_NOT_SUPPORTED;
     }
+
+    if (!Ext->Initialized || Ext->MiniportAdapterContext == NULL)
+        return NDIS_STATUS_ADAPTER_NOT_READY;
 
     return Ext->DriverBlock->Characteristics.DirectOidRequestHandler(Ext->MiniportAdapterContext, OidRequest);
 }
