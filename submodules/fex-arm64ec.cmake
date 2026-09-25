@@ -43,10 +43,15 @@ if(NOT FEX_ARM64EC_UNAVAILABLE_REASON)
     endif()
 endif()
 
+if(NOT EXISTS "${FEX_SOURCE_DIR}/CMakeLists.txt")
+    message(STATUS "FEX ARM64EC: the fex-arm64ec feed is not checked out; skipping it. "
+        "Run scripts/feeds update fex-arm64ec to build it.")
+    return()
+endif()
+
 if(FEX_ARM64EC_UNAVAILABLE_REASON)
     message(FATAL_ERROR "FEX ARM64EC is enabled but unavailable: ${FEX_ARM64EC_UNAVAILABLE_REASON}. "
-        "Restore the source snapshot recorded in submodules/fex-arm64ec/REACTOS_IMPORT.md, "
-        "or use -DENABLE_FEX_ARM64EC=OFF to disable it explicitly.")
+        "Use -DENABLE_FEX_ARM64EC=OFF to disable it explicitly.")
 endif()
 
 set(FEX_ARM64EC_AVAILABLE ON)
@@ -109,6 +114,7 @@ fex_discard_stale_build(fex-wow64-build "${FEX_WOW64_BINARY_DIR}")
 file(REMOVE_RECURSE "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-src")
 
 ExternalProject_Add(fex-arm64ec-build
+    EXCLUDE_FROM_ALL TRUE
     SOURCE_DIR "${FEX_SOURCE_DIR}"
     BINARY_DIR "${FEX_BINARY_DIR}"
     DOWNLOAD_COMMAND ""
@@ -186,6 +192,7 @@ ExternalProject_Add(fex-arm64ec-build
 # The i386 emulator uses a separate build directory and output from ARM64EC,
 # so the two nested builds can run concurrently.
 ExternalProject_Add(fex-wow64-build
+    EXCLUDE_FROM_ALL TRUE
     SOURCE_DIR "${FEX_SOURCE_DIR}"
     BINARY_DIR "${FEX_WOW64_BINARY_DIR}"
     DOWNLOAD_COMMAND ""
@@ -246,6 +253,7 @@ add_cd_file(
     DESTINATION reactos/system32
     NAME_ON_CD arm64ecfex.dll
     NO_CAB
+    OPTIONAL
     FOR all)
 
 add_cd_file(
@@ -254,7 +262,9 @@ add_cd_file(
     DESTINATION reactos/system32
     NAME_ON_CD wow64fex.dll
     NO_CAB
+    OPTIONAL
     FOR all)
+add_dependencies(submodules fex-arm64ec-build fex-wow64-build)
 
 if(ENABLE_FEX_ARM64EC_TEST_PAYLOADS)
     set(FEX_ARM64EC_AMD64_TEST_BINARY

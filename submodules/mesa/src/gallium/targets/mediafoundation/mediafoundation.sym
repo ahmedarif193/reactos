@@ -1,7 +1,0 @@
-{
-	global:
-		MFInit_*_*;
-		MFDestroy_*_*;
-	local:
-		*;
-};

@@ -14,3 +14,8 @@ modules/[Aa][Hh][Kk]_[Tt]ests
 .settings
 .vscode
 sdk/tools/winesync/winesync.cfg
+
+# Local feed configuration and the source feeds checked out by scripts/feeds
+feeds.conf
+/submodules/fex-arm64ec/
+/submodules/mesa/

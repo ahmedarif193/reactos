@@ -1,4 +1,0 @@
-# Initialization leaks, causing the ASan of this job to mark everything failed.
-# Needs to get fixed.
-dEQP-VK.wsi.*
-dEQP-VK.image.swapchain_mutable.*

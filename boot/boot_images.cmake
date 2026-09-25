@@ -281,14 +281,24 @@ function(add_user_profile_dirs _image_filelist _rootdir _username)
 endfunction()
 
 
+function(image_list_command _image _var)
+    set(${_var} ${CMAKE_COMMAND} -DMODE=list
+        -DBASE=${CMAKE_CURRENT_BINARY_DIR}/${_image}.$<CONFIG>.lst
+        -DOPTIONAL=${CMAKE_CURRENT_BINARY_DIR}/${_image}.optional.$<CONFIG>.lst
+        -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/${_image}.effective.lst
+        -P ${REACTOS_SOURCE_DIR}/sdk/cmake/optional_files.cmake PARENT_SCOPE)
+endfunction()
+
 ## BootCD
 # Create the file list
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootcd.cmake.lst "${CMAKE_CURRENT_BINARY_DIR}/empty\n")
 
+image_list_command(bootcd _bootcd_list_command)
 add_custom_target(bootcd
+    COMMAND ${_bootcd_list_command}
     COMMAND native-mkisofs -quiet -o ${REACTOS_BINARY_DIR}/bootcd.iso
         ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
-        -path-list ${CMAKE_CURRENT_BINARY_DIR}/bootcd.$<CONFIG>.lst
+        -path-list ${CMAKE_CURRENT_BINARY_DIR}/bootcd.effective.lst
     ${ISOHYBRID_BOOTCD_COMMAND}
     DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs livecd
     VERBATIM)
@@ -297,10 +307,12 @@ add_custom_target(bootcd
 # Create the file list
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootcdregtest.cmake.lst "${CMAKE_CURRENT_BINARY_DIR}/empty\n")
 
+image_list_command(bootcdregtest _bootcdregtest_list_command)
 add_custom_target(bootcdregtest
+    COMMAND ${_bootcdregtest_list_command}
     COMMAND native-mkisofs -quiet -o ${REACTOS_BINARY_DIR}/bootcdregtest.iso
         ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS_REGTEST} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
-        -path-list ${CMAKE_CURRENT_BINARY_DIR}/bootcdregtest.$<CONFIG>.lst
+        -path-list ${CMAKE_CURRENT_BINARY_DIR}/bootcdregtest.effective.lst
     ${ISOHYBRID_BOOTCDREGTEST_COMMAND}
     DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs
     VERBATIM)
@@ -371,6 +383,7 @@ foreach(_livecd_extra_registry_inf IN LISTS LIVECD_EXTRA_REGISTRY_INF)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_livecd_extra_registry_inf}")
 endforeach()
 
+image_list_command(livecd _livecd_list_command)
 if(FREELDR_WIM_RAMDISK)
     set(_livecd_stage_dir  ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim_stage)
     set(_livecd_boot_wim   ${CMAKE_CURRENT_BINARY_DIR}/boot.wim)
@@ -380,8 +393,9 @@ if(FREELDR_WIM_RAMDISK)
     set(_livecd_wim_script ${REACTOS_SOURCE_DIR}/boot/bootdata/wim/make_livecd_wim.cmake)
 
     add_custom_target(livecd
+        COMMAND ${_livecd_list_command}
         COMMAND ${CMAKE_COMMAND}
-            -DINPUT_LIST=${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
+            -DINPUT_LIST=${CMAKE_CURRENT_BINARY_DIR}/livecd.effective.lst
             -DSTAGE_DIR=${_livecd_stage_dir}
             -DOUTPUT_WIM=${_livecd_boot_wim}
             -DOUTPUT_LIST=${_livecd_wim_lst}
@@ -397,9 +411,10 @@ if(FREELDR_WIM_RAMDISK)
         VERBATIM)
 else()
     add_custom_target(livecd
+        COMMAND ${_livecd_list_command}
         COMMAND native-mkisofs -quiet -o ${REACTOS_BINARY_DIR}/livecd.iso
             ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
-            -path-list ${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
+            -path-list ${CMAKE_CURRENT_BINARY_DIR}/livecd.effective.lst
         ${ISOHYBRID_LIVECD_COMMAND}
         DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs ${_livecd_overlay_deps}
         VERBATIM)
@@ -586,13 +601,15 @@ if(DEFINED EFI_PLATFORM_ID)
     endif()
 endif()
 
+image_list_command(preinstall _preinstall_list_command)
 add_custom_target(preinstall_partition
+    COMMAND ${_preinstall_list_command}
     COMMAND ${CMAKE_COMMAND} -E rm -f
         ${_preinstall_boot_partition_file}
         ${_preinstall_system_partition_file}
     COMMAND ${CMAKE_COMMAND}
         -DOUTPUT_DIR=${_rosprofiler_image_symbol_dir}
-        -DPREINSTALL_LIST=${CMAKE_CURRENT_BINARY_DIR}/preinstall.$<CONFIG>.lst
+        -DPREINSTALL_LIST=${CMAKE_CURRENT_BINARY_DIR}/preinstall.effective.lst
         -DIMAGE_SIZE_MB=${_preinstall_system_partition_size_mb}
         -DRESERVE_MB=${ROSPROFILER_IMAGE_FREE_RESERVE_MB}
         -DFS_OVERHEAD_MB=${ROSPROFILER_IMAGE_FS_OVERHEAD_MB}
@@ -615,7 +632,7 @@ add_custom_target(preinstall_partition
     COMMAND native-ntfsimg
         --addfiles
         ${_preinstall_system_partition_file}
-        ${CMAKE_CURRENT_BINARY_DIR}/preinstall.$<CONFIG>.lst
+        ${CMAKE_CURRENT_BINARY_DIR}/preinstall.effective.lst
     DEPENDS ${_preinstall_partition_deps}
     VERBATIM)
 

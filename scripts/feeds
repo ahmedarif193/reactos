@@ -1,0 +1,205 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif.ing@outlook.com>
+#
+# Check out the external source feeds declared in feeds.conf into submodules/.
+# Each feed tracks its branch head, so an update fast-forwards the working copy
+# to the current tip of the configured branch.
+
+set -u
+
+REACTOS_SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+FEEDS_DIR="$REACTOS_SOURCE_DIR/submodules"
+
+if [ -f "$REACTOS_SOURCE_DIR/feeds.conf" ]; then
+	FEEDS_CONF="$REACTOS_SOURCE_DIR/feeds.conf"
+else
+	FEEDS_CONF="$REACTOS_SOURCE_DIR/feeds.conf.default"
+fi
+
+fail() {
+	echo "feeds: $*" >&2
+	exit 1
+}
+
+usage() {
+	cat >&2 <<'USAGE'
+Usage: scripts/feeds <command> [feed ...]
+
+Commands:
+  update [feed ...]   Clone missing feeds and fast-forward them to their branch
+                      head. Without arguments every feed in feeds.conf is used.
+  status [feed ...]   Report each feed's checked-out revision without network
+                      access.
+  list                Print the configured feeds.
+USAGE
+	exit 2
+}
+
+command -v git >/dev/null 2>&1 || fail "git is required"
+[ -f "$FEEDS_CONF" ] || fail "no feeds configuration at $FEEDS_CONF"
+
+# Emit "name url branch submodules" for the requested feeds, or for all of them.
+feed_lines() {
+	awk -v selection="$*" '
+		BEGIN { count = split(selection, want, " ") }
+		/^[ \t]*(#|$)/ { next }
+		$1 != "src-git" { printf "feeds: %s:%d: unknown directive %s\n", FILENAME, FNR, $1 > "/dev/stderr"; bad = 1; next }
+		{
+			name = $2
+			location = $3
+			nested = (NF >= 4) ? $4 : ""
+			separator = index(location, ";")
+			if (separator == 0) {
+				printf "feeds: %s:%d: %s has no ;branch\n", FILENAME, FNR, name > "/dev/stderr"
+				bad = 1
+				next
+			}
+			url = substr(location, 1, separator - 1)
+			branch = substr(location, separator + 1)
+			if (count > 0) {
+				keep = 0
+				for (i = 1; i <= count; i++)
+					if (want[i] == name)
+						keep = 1
+				if (!keep)
+					next
+			}
+			seen[name] = 1
+			print name, url, branch, nested
+		}
+		END {
+			for (i = 1; i <= count; i++)
+				if (!(want[i] in seen)) {
+					printf "feeds: no such feed: %s\n", want[i] > "/dev/stderr"
+					bad = 1
+				}
+			if (bad)
+				exit 1
+		}
+	' "$FEEDS_CONF"
+}
+
+# Initialize one nested submodule path, shallowly, from its parent repository.
+feed_nested_update() {
+	_root=$1
+	_path=$2
+	_parent=$_root
+	_relative=$_path
+	_prefix=""
+
+	# Walk the path components and move the parent down to the longest prefix
+	# that is itself a checked-out repository, so the remainder stays relative
+	# to the repository that declares it. Plain directories in between, such as
+	# the "dependencies" level of Zydis, are skipped.
+	while :; do
+		case "$_relative" in
+			*/*)
+				_head=${_relative%%/*}
+				_tail=${_relative#*/}
+				;;
+			*)
+				break
+				;;
+		esac
+		if [ -n "$_prefix" ]; then
+			_candidate="$_prefix/$_head"
+		else
+			_candidate="$_head"
+		fi
+		if [ -e "$_parent/$_candidate/.git" ]; then
+			_parent="$_parent/$_candidate"
+			_prefix=""
+		else
+			_prefix="$_candidate"
+		fi
+		_relative=$_tail
+	done
+	[ -z "$_prefix" ] || _relative="$_prefix/$_relative"
+
+	git -C "$_parent" submodule update --init --depth 1 -- "$_relative" ||
+		fail "could not initialize $_path in $_root"
+}
+
+feed_update() {
+	_name=$1
+	_url=$2
+	_branch=$3
+	_nested=$4
+	_dir="$FEEDS_DIR/$_name"
+
+	if [ ! -e "$_dir/.git" ]; then
+		if [ -e "$_dir" ] && [ -n "$(ls -A "$_dir" 2>/dev/null)" ]; then
+			fail "$_dir exists but is not a Git checkout; move it aside"
+		fi
+		echo "feeds: cloning $_name from $_url ($_branch)"
+		mkdir -p "$FEEDS_DIR" || fail "could not create $FEEDS_DIR"
+		git clone --depth 1 --single-branch --branch "$_branch" "$_url" "$_dir" ||
+			fail "could not clone $_name"
+	else
+		# Never discard local work: a dirty or diverged feed is left as it is.
+		if [ -n "$(git -C "$_dir" status --porcelain 2>/dev/null)" ]; then
+			echo "feeds: $_name has local modifications; leaving it untouched" >&2
+			return 0
+		fi
+		echo "feeds: updating $_name to $_branch"
+		git -C "$_dir" fetch --depth 1 "$_url" "$_branch" ||
+			fail "could not fetch $_branch for $_name"
+		_head=$(git -C "$_dir" rev-parse HEAD)
+		_target=$(git -C "$_dir" rev-parse FETCH_HEAD)
+		if [ "$_head" != "$_target" ]; then
+			git -C "$_dir" checkout --quiet --detach FETCH_HEAD ||
+				fail "could not check out $_branch for $_name"
+		fi
+	fi
+
+	if [ -n "$_nested" ]; then
+		# Shortest paths first so a parent is checked out before its children.
+		for _path in $(printf '%s\n' "$_nested" | tr ',' '\n' | awk 'NF { print gsub("/", "/"), $0 }' | sort -n -k1,1 | cut -d' ' -f2-); do
+			feed_nested_update "$_dir" "$_path"
+		done
+	fi
+}
+
+feed_status() {
+	_name=$1
+	_branch=$3
+	_dir="$FEEDS_DIR/$_name"
+
+	if [ ! -e "$_dir/.git" ]; then
+		printf '%-14s %s\n' "$_name" "not checked out"
+		return 0
+	fi
+	_revision=$(git -C "$_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)
+	_dirty=""
+	[ -n "$(git -C "$_dir" status --porcelain 2>/dev/null)" ] && _dirty=" (modified)"
+	printf '%-14s %s %s%s\n' "$_name" "$_revision" "$_branch" "$_dirty"
+}
+
+[ $# -ge 1 ] || usage
+_command=$1
+shift
+
+_lines=$(feed_lines "$@") || exit 1
+[ -n "$_lines" ] || fail "no feeds configured in $FEEDS_CONF"
+
+case "$_command" in
+	update)
+		printf '%s\n' "$_lines" | while read -r name url branch nested; do
+			feed_update "$name" "$url" "$branch" "${nested:-}" || exit 1
+		done
+		;;
+	status)
+		printf '%s\n' "$_lines" | while read -r name url branch nested; do
+			feed_status "$name" "$url" "$branch"
+		done
+		;;
+	list)
+		printf '%s\n' "$_lines" | while read -r name url branch nested; do
+			printf '%-14s %s;%s\n' "$name" "$url" "$branch"
+		done
+		;;
+	*)
+		usage
+		;;
+esac

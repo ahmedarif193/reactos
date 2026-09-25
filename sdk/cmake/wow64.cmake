@@ -125,12 +125,13 @@ foreach(_target IN LISTS WOW64_I386_MODULES WOW64_I386_EXECUTABLES)
     _wow64_get_target_file("${_target}" _file)
     list(APPEND WOW64_I386_FILES "${_file}")
 endforeach()
+set(WOW64_I386_OPTIONAL_FILES)
 if(WOW64_I386_MESA_FILE)
-    list(APPEND WOW64_I386_FILES "${WOW64_I386_MESA_FILE}")
-    list(APPEND WOW64_I386_FILES "${WOW64_I386_MESA_D3D_FILE}")
+    list(APPEND WOW64_I386_OPTIONAL_FILES "${WOW64_I386_MESA_FILE}")
+    list(APPEND WOW64_I386_OPTIONAL_FILES "${WOW64_I386_MESA_D3D_FILE}")
 endif()
 
-set(WOW64_I386_VALIDATION_FILES ${WOW64_I386_FILES})
+set(WOW64_I386_VALIDATION_FILES ${WOW64_I386_FILES} ${WOW64_I386_OPTIONAL_FILES})
 foreach(_target IN LISTS WOW64_I386_AUXILIARY_MODULES)
     _wow64_get_target_file("${_target}" _file)
     list(APPEND WOW64_I386_VALIDATION_FILES "${_file}")
@@ -239,6 +240,11 @@ add_custom_target(wow64_i386 ALL
 add_dependencies(wow64_i386 wow64_i386_configure)
 
 add_cd_file(TARGET wow64_i386 FILE ${WOW64_I386_FILES} DESTINATION reactos/SysWOW64 FOR all)
+
+if(WOW64_I386_OPTIONAL_FILES)
+    add_cd_file(TARGET wow64_i386 FILE ${WOW64_I386_OPTIONAL_FILES}
+        DESTINATION reactos/SysWOW64 OPTIONAL FOR all)
+endif()
 
 _wow64_get_target_file(comctl32 _wow64_comctl32_file)
 _wow64_get_target_file(comctl32_v6 _wow64_comctl32_v6_file)

@@ -63,6 +63,7 @@ USER_ARCH=0
 USER_TOOLCHAIN=0
 USER_BUILD_TYPE_FLAG=0
 RUN_MENUCONFIG=0
+SKIP_FEEDS_UPDATE=0
 
 usage() {
 	echo "Usage: configure.sh [options]"
@@ -73,6 +74,7 @@ usage() {
 	echo "  makefiles            Use Unix Makefiles generator (default: Ninja)"
 	echo "  menuconfig           Open the interactive configuration UI first;"
 	echo "                       selections persist in the output tree"
+	echo "  --no-feeds-update    Do not fetch the source feeds declared in feeds.conf"
 	echo "  -D<var>=<val>        Pass option to CMake"
 	exit 1
 }
@@ -163,6 +165,26 @@ sync_glmark2_submodule() {
 	[ -f "$GLMARK2_DIR/src/zlib/adler32.c" ] || fail "glmark2 submodule is incomplete after synchronization"
 }
 
+# External sources live in their own repositories, declared in feeds.conf.
+# They are checked out under submodules/ and track their configured branch.
+sync_feeds() {
+	[ "$SKIP_FEEDS_UPDATE" = "0" ] || return 0
+	[ -x "$REACTOS_SOURCE_DIR/scripts/feeds" ] || fail "missing $REACTOS_SOURCE_DIR/scripts/feeds"
+
+	FEEDS_WANTED=mesa
+	if [ "$ARCH" = "arm64" ] && fex_arm64ec_enabled; then
+		FEEDS_WANTED="$FEEDS_WANTED fex-arm64ec"
+	elif kdb_zydis_enabled; then
+		# KDBG takes its disassembler from the FEX feed even without ARM64EC.
+		FEEDS_WANTED="$FEEDS_WANTED fex-arm64ec"
+	fi
+
+	echo "Updating source feeds:$FEEDS_WANTED"
+	# shellcheck disable=SC2086
+	"$REACTOS_SOURCE_DIR/scripts/feeds" update $FEEDS_WANTED ||
+		fail "could not update the source feeds; pass --no-feeds-update to skip"
+}
+
 # KDBG on x86 uses the Zydis and Zycore revisions vendored with FEX. Verify
 # those sources before CMake consumes them.
 kdb_zydis_enabled() {
@@ -203,14 +225,14 @@ verify_kdb_sources() {
 	KDB_ZYDIS_DIR="$KDB_FEX_DIR/External/zydis"
 	KDB_ZYCORE_DIR="$KDB_ZYDIS_DIR/dependencies/zycore"
 	[ -f "$KDB_ZYDIS_DIR/src/MetaInfo.c" ] && [ -f "$KDB_ZYCORE_DIR/src/API/Memory.c" ] ||
-		fail "KDBG requires the vendored Zydis and Zycore sources in submodules/fex-arm64ec"
+		fail "KDBG requires the Zydis and Zycore sources from the fex-arm64ec feed; run scripts/feeds update fex-arm64ec"
 }
 
 verify_arm64_sources() {
 	[ "$ARCH" = "arm64" ] || return 0
 
 	if ! fex_arm64ec_enabled; then
-		echo "FEX ARM64EC disabled by configuration; skipping vendored source check."
+		echo "FEX ARM64EC disabled by configuration; skipping its source check."
 		return 0
 	fi
 
@@ -221,7 +243,7 @@ verify_arm64_sources() {
 		[ -f "$FEX_CHECKOUT_DIR/External/rpmalloc/CMakeLists.txt" ] &&
 		[ -f "$FEX_CHECKOUT_DIR/External/unordered_dense/CMakeLists.txt" ] &&
 		[ -f "$FEX_CHECKOUT_DIR/External/xxhash/cmake_unofficial/CMakeLists.txt" ] ||
-		optional_fex_warning "vendored FEX source dependencies are incomplete"
+		optional_fex_warning "the fex-arm64ec feed is incomplete; run scripts/feeds update fex-arm64ec"
 }
 
 lower_build_type() {
@@ -311,6 +333,11 @@ while [ $# -gt 0 ]; do
 		--arch=*)
 			ARCH=$(normalize_arch "${1#--arch=}")
 			USER_ARCH=1
+			;;
+		--no-feeds-update)
+			SKIP_FEEDS_UPDATE=1
+			shift
+			continue
 			;;
 		-r|--release)
 			BUILD_TYPE=Release
@@ -566,6 +593,7 @@ fi
 echo
 
 sync_glmark2_submodule
+sync_feeds
 verify_kdb_sources
 verify_arm64_sources
 

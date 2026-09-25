@@ -105,6 +105,7 @@ if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "i386")
     # in an isolated Release configuration even
     # when the destination OS is Debug. No other OS binaries are built here.
     ExternalProject_Add(mesa_gallium_support
+        EXCLUDE_FROM_ALL TRUE
         PREFIX "${MESA_WORK_DIR}/support-prefix"
         SOURCE_DIR "${REACTOS_SOURCE_DIR}"
         BINARY_DIR "${MESA_SUPPORT_DIR}"
@@ -172,6 +173,7 @@ if(_mesa_lavapipe_enabled)
     list(APPEND _mesa_build_byproducts "${MESA_LAVAPIPE_DLL}" "${MESA_LAVAPIPE_MANIFEST}")
 endif()
 ExternalProject_Add(mesa_gallium_build
+    EXCLUDE_FROM_ALL TRUE
     PREFIX "${MESA_WORK_DIR}/cmake-prefix"
     SOURCE_DIR "${MESA_SOURCE_DIR}"
     BINARY_DIR "${MESA_BINARY_DIR}"
@@ -227,10 +229,12 @@ add_custom_command(
     DEPENDS mesa_gallium_build "${MESA_DLL}"
     VERBATIM)
 add_custom_target(mesa_gallium DEPENDS "${MESA_GALLIUM_ICD_STAGE}")
-add_cd_file(FILE "${MESA_GALLIUM_ICD_STAGE}" TARGET mesa_gallium DESTINATION reactos/system32 FOR all)
+add_cd_file(FILE "${MESA_GALLIUM_ICD_STAGE}" TARGET mesa_gallium DESTINATION reactos/system32 OPTIONAL FOR all)
+add_optional_registry_inf(INF mesa-gallium.inf REQUIRES "${MESA_GALLIUM_ICD_STAGE}")
+add_dependencies(submodules mesa_gallium)
 # ExternalProject DLLs are staged files rather than CMake module targets.
 # Catalog the exact stripped images shipped to the guest.
-set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_FILES "${MESA_GALLIUM_ICD_STAGE}")
+set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_OPTIONAL_FILES "${MESA_GALLIUM_ICD_STAGE}")
 if(_mesa_d3d_umd_enabled)
     add_custom_command(
         OUTPUT "${MESA_D3D_UMD_STAGE}"
@@ -241,7 +245,7 @@ if(_mesa_d3d_umd_enabled)
         VERBATIM)
     add_custom_target(mesa_d3d_umd DEPENDS "${MESA_D3D_UMD_STAGE}")
     add_dependencies(mesa_gallium mesa_d3d_umd)
-    add_cd_file(FILE "${MESA_D3D_UMD_STAGE}" TARGET mesa_d3d_umd DESTINATION reactos/system32 FOR all)
-    set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_FILES "${MESA_D3D_UMD_STAGE}")
+    add_cd_file(FILE "${MESA_D3D_UMD_STAGE}" TARGET mesa_d3d_umd DESTINATION reactos/system32 OPTIONAL FOR all)
+    set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_OPTIONAL_FILES "${MESA_D3D_UMD_STAGE}")
 endif()
 message(STATUS "Mesa Gallium OpenGL ICD (${ARCH}: ${MESA_GALLIUM_DRIVERS}): Release build from ${MESA_SOURCE_DIR}")

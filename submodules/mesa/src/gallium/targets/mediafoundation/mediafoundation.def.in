@@ -1,5 +1,0 @@
-@MFInit@
-@MFDestroy@
-@DllGetActivationFactory@
-@DllGetClassObject@
-@DllCanUnloadNow@
