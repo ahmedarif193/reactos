@@ -13,6 +13,9 @@ DllMain(HINSTANCE hInstance, DWORD Reason, LPVOID Reserved)
     switch ( Reason )
     {
         case DLL_PROCESS_ATTACH:
+            PixelFormatInitTlsIndex = TlsAlloc();
+            if (PixelFormatInitTlsIndex == TLS_OUT_OF_INDEXES)
+                return FALSE;
             /* Initialize Context list */
             InitializeListHead(&ContextListHead);
             /* no break */
@@ -32,6 +35,11 @@ DllMain(HINSTANCE hInstance, DWORD Reason, LPVOID Reserved)
                 wglMakeCurrent(NULL, NULL);
                 IntDeleteAllContexts();
                 IntDeleteAllICDs();
+            }
+            if (PixelFormatInitTlsIndex != TLS_OUT_OF_INDEXES)
+            {
+                TlsFree(PixelFormatInitTlsIndex);
+                PixelFormatInitTlsIndex = TLS_OUT_OF_INDEXES;
             }
             break;
     }
