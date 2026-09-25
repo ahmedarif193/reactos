@@ -316,6 +316,58 @@ MasterFileTable::RemoveFileNameFromRecord(
     return File->RemoveAttributeRecord(NameAttribute);
 }
 
+/* Rename temporarily keeps both names. A resident data stream can fill the
+ * record even when the final name is shorter. Move its data out of the record
+ * before changing the namespace, preserving its length and contents. */
+NTSTATUS
+MasterFileTable::EnsureFileNameSpace(
+    _In_ PFileRecord File,
+    _In_ ULONG NameLength,
+    _In_ PFileRecord OldParent,
+    _In_ PFileRecord NewParent)
+{
+    ULONG Required = ALIGN_UP_BY(0x18 + FIELD_OFFSET(FileNameEx, Name) +
+                                NameLength * sizeof(WCHAR), sizeof(ULONGLONG));
+    PAttribute DataAttribute;
+    PFileRecord Parents[] = {OldParent, NewParent};
+    NTSTATUS Status;
+
+    /* A directory makes room by pushing its index root down on insert. */
+    if (File->Header->Flags & FR_IS_DIRECTORY)
+        return STATUS_SUCCESS;
+    if (File->Header->ActualSize > File->Header->AllocatedSize)
+        return STATUS_FILE_CORRUPT_ERROR;
+    if (Required <= File->Header->AllocatedSize - File->Header->ActualSize)
+        return STATUS_SUCCESS;
+    DataAttribute = File->FindAttributeInRecord(TypeData, NULL, NULL);
+    if (!DataAttribute || DataAttribute->IsNonResident ||
+        !DataAttribute->Resident.DataLength)
+        return STATUS_BUFFER_TOO_SMALL;
+    Status = File->PromoteResidentData(DataAttribute, NULL, 0, 0,
+                                     DataAttribute->Resident.DataLength,
+                                     DataAttribute->Resident.DataLength);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* Promotion updates duplicated allocation sizes in parent indexes.
+     * Refresh the caller's copies before it modifies those indexes. */
+    for (ULONG Index = 0; Index < RTL_NUMBER_OF(Parents); ++Index)
+    {
+        PFileRecord Refreshed = NULL;
+        if (Index && NewParent == OldParent)
+            continue;
+        Status = GetFileRecord(Parents[Index]->Header->MFTRecordNumber, &Refreshed);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Status = Parents[Index]->RefreshFrom(*Refreshed);
+        delete Refreshed;
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    return Required <= File->Header->AllocatedSize - File->Header->ActualSize
+        ? STATUS_SUCCESS : STATUS_BUFFER_TOO_SMALL;
+}
+
 /*
  * Publishes an additional $FILE_NAME on a record: a new POSIX name copying
  * the duplicated header fields (timestamps, sizes, flags) from an existing
@@ -991,6 +1043,10 @@ MasterFileTable::CreateHardLink(
     if (Status != STATUS_NOT_FOUND)
         goto Done;
 
+    Status = EnsureFileNameSpace(Child, NewNameLength, OldParent, NewParent);
+    if (!NT_SUCCESS(Status))
+        goto Done;
+
     /* Copy the duplicated information from any existing name. */
     Status = EnumerateFileNames(
         Child,
@@ -1276,6 +1332,10 @@ MasterFileTable::RenameFile(
     {
         goto Done;
     }
+
+    Status = EnsureFileNameSpace(Child, NewNameLength, OldParent, NewParent);
+    if (!NT_SUCCESS(Status))
+        goto Done;
 
     Status = FindFileNamePair(
         Child,
