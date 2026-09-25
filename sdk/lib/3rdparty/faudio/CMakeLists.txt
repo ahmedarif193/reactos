@@ -2,7 +2,6 @@
 add_definitions(
     -DFAUDIO_WIN32_PLATFORM
     -DHAVE_WMADEC
-    -DNDEBUG
     -Dalloca=_alloca)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -27,6 +26,7 @@ list(APPEND SOURCE
     src/FAudio_platform_win32.c)
 
 add_library(faudio ${SOURCE})
+target_compile_definitions(faudio PRIVATE $<$<CONFIG:Debug>:NDEBUG>)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(faudio PRIVATE -Wno-unused-variable -Wno-unused-but-set-variable)
