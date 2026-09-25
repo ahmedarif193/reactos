@@ -329,6 +329,7 @@ void wined3d_gl_limits_get_uniform_block_range(const struct wined3d_gl_limits *g
 #define WINED3D_QUIRK_LIMITED_TEX_FILTERING     0x00000100
 #define WINED3D_QUIRK_BROKEN_ARB_FOG            0x00000200
 #define WINED3D_QUIRK_NO_INDEPENDENT_BIT_DEPTHS 0x00000400
+#define WINED3D_QUIRK_FLOAT_COPY_CONVERSION     0x00000800
 
 typedef void (WINE_GLAPI *wined3d_generic_attrib_func)(GLuint idx, const void *data);
 
@@ -945,6 +946,7 @@ struct gl_texture
 {
     struct wined3d_sampler_desc sampler_desc;
     GLuint name;
+    GLuint raw_view;
 };
 
 struct wined3d_renderbuffer_entry

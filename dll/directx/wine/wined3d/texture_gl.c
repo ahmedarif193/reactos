@@ -35,6 +35,15 @@
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
 WINE_DECLARE_DEBUG_CHANNEL(d3d_perf);
 
+static bool wined3d_texture_use_immutable_storage(const struct wined3d_texture *texture,
+        const struct wined3d_gl_info *gl_info)
+{
+    /* We don't expect to create texture views for textures with height-scaled formats.
+     * Besides, ARB_texture_storage doesn't allow specifying exact sizes for all levels. */
+    return gl_info->supported[ARB_TEXTURE_STORAGE]
+            && !(texture->resource.format_attrs & WINED3D_FORMAT_ATTR_HEIGHT_SCALE);
+}
+
 GLenum wined3d_texture_get_gl_buffer(const struct wined3d_texture *texture)
 {
     const struct wined3d_swapchain *swapchain = texture->swapchain;
@@ -523,6 +532,45 @@ static bool raw_blitter_supported(enum wined3d_blit_op op, struct wined3d_textur
     return true;
 }
 
+static GLuint raw_blitter_get_texture_name(struct wined3d_texture_gl *texture_gl,
+        struct wined3d_context_gl *context_gl, bool srgb)
+{
+    const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+    struct gl_texture *texture;
+    GLenum internal;
+
+    if (!(gl_info->quirks & WINED3D_QUIRK_FLOAT_COPY_CONVERSION)
+            || !wined3d_texture_use_immutable_storage(&texture_gl->t, gl_info))
+        return wined3d_texture_gl_get_texture_name(texture_gl, &context_gl->c, srgb);
+
+    srgb = srgb && needs_separate_srgb_gl_texture(&context_gl->c, &texture_gl->t);
+    texture = wined3d_texture_gl_get_gl_texture(texture_gl, srgb);
+    internal = wined3d_gl_get_internal_format(&texture_gl->t.resource,
+            wined3d_format_gl(texture_gl->t.resource.format), srgb);
+    switch (internal)
+    {
+        case GL_R16F: internal = GL_R16UI; break;
+        case GL_RG16F: internal = GL_RG16UI; break;
+        case GL_RGBA16F: internal = GL_RGBA16UI; break;
+        case GL_R32F: internal = GL_R32UI; break;
+        case GL_RG32F: internal = GL_RG32UI; break;
+        case GL_RGB32F: internal = GL_RGB32UI; break;
+        case GL_RGBA32F: internal = GL_RGBA32UI; break;
+        default: return texture->name;
+    }
+
+    /* Copy through an integer view of the same storage, so the driver cannot
+     * canonicalise floating-point values. The view is cached with the texture. */
+    if (!texture->raw_view)
+    {
+        gl_info->gl_ops.gl.p_glGenTextures(1, &texture->raw_view);
+        GL_EXTCALL(glTextureView(texture->raw_view, texture_gl->target, texture->name, internal,
+                0, texture_gl->t.level_count, 0, texture_gl->t.layer_count));
+        checkGLcall("create raw image copy view");
+    }
+    return texture->raw_view;
+}
+
 static DWORD raw_blitter_blit(struct wined3d_blitter *blitter, enum wined3d_blit_op op,
         struct wined3d_context *context, struct wined3d_texture *src_texture, unsigned int src_sub_resource_idx,
         DWORD src_location, const RECT *src_rect, struct wined3d_texture *dst_texture,
@@ -567,8 +615,8 @@ static DWORD raw_blitter_blit(struct wined3d_blitter *blitter, enum wined3d_blit
                 ? WINED3D_LOCATION_TEXTURE_SRGB : WINED3D_LOCATION_TEXTURE_RGB;
     if (!wined3d_texture_load_location(src_texture, src_sub_resource_idx, context, location))
         ERR("Failed to load the source sub-resource into %s.\n", wined3d_debug_location(location));
-    src_name = wined3d_texture_gl_get_texture_name(src_texture_gl,
-            context, location == WINED3D_LOCATION_TEXTURE_SRGB);
+    src_name = raw_blitter_get_texture_name(src_texture_gl,
+            context_gl, location == WINED3D_LOCATION_TEXTURE_SRGB);
 
     location = dst_location & (WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB);
     if (!location)
@@ -584,8 +632,8 @@ static DWORD raw_blitter_blit(struct wined3d_blitter *blitter, enum wined3d_blit
         if (!wined3d_texture_load_location(dst_texture, dst_sub_resource_idx, context, location))
             ERR("Failed to load the destination sub-resource into %s.\n", wined3d_debug_location(location));
     }
-    dst_name = wined3d_texture_gl_get_texture_name(dst_texture_gl,
-            context, location == WINED3D_LOCATION_TEXTURE_SRGB);
+    dst_name = raw_blitter_get_texture_name(dst_texture_gl,
+            context_gl, location == WINED3D_LOCATION_TEXTURE_SRGB);
 
     GL_EXTCALL(glCopyImageSubData(src_name, src_texture_gl->target, src_level,
             src_rect->left, src_rect->top, src_layer, dst_name, dst_texture_gl->target, dst_level,
@@ -1249,6 +1297,11 @@ void texture2d_get_blt_info(const struct wined3d_texture_gl *texture_gl,
 static void gltexture_delete(struct wined3d_device *device, const struct wined3d_gl_info *gl_info,
         struct gl_texture *tex)
 {
+    if (tex->raw_view)
+    {
+        gl_info->gl_ops.gl.p_glDeleteTextures(1, &tex->raw_view);
+        tex->raw_view = 0;
+    }
     context_gl_resource_released(device, tex->name, FALSE);
     gl_info->gl_ops.gl.p_glDeleteTextures(1, &tex->name);
     tex->name = 0;
@@ -2289,15 +2342,6 @@ static void wined3d_texture_gl_prepare_buffer_object(struct wined3d_texture_gl *
 
     TRACE("Created buffer object %u for texture %p, sub-resource %u.\n", bo->id, texture_gl, sub_resource_idx);
     sub_resource->bo = &bo->b;
-}
-
-static bool wined3d_texture_use_immutable_storage(const struct wined3d_texture *texture,
-        const struct wined3d_gl_info *gl_info)
-{
-    /* We don't expect to create texture views for textures with height-scaled formats.
-     * Besides, ARB_texture_storage doesn't allow specifying exact sizes for all levels. */
-    return gl_info->supported[ARB_TEXTURE_STORAGE]
-            && !(texture->resource.format_attrs & WINED3D_FORMAT_ATTR_HEIGHT_SCALE);
 }
 
 void wined3d_texture_gl_prepare_texture(struct wined3d_texture_gl *texture_gl,

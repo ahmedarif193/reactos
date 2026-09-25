@@ -721,6 +721,40 @@ static BOOL match_broken_rgba16(const struct wined3d_gl_info *gl_info, struct wi
     return size < 16;
 }
 
+static BOOL match_float_copy_conversion(const struct wined3d_gl_info *gl_info, struct wined3d_caps_gl_ctx *ctx,
+        const char *gl_renderer, enum wined3d_gl_vendor gl_vendor,
+        enum wined3d_pci_vendor card_vendor, enum wined3d_pci_device device)
+{
+    static const DWORD data[] = {0xff0000ff, 0x7c013c00, 0x80000001, 0xffffffff};
+    DWORD source[ARRAY_SIZE(data)], copied[ARRAY_SIZE(data)];
+    GLuint textures[2];
+    GLenum error;
+
+    if (!gl_info->supported[ARB_COPY_IMAGE] || !gl_info->supported[ARB_TEXTURE_VIEW]
+            || !gl_info->supported[ARB_TEXTURE_STORAGE])
+        return FALSE;
+
+    /* Some drivers convert float texels during CopyImageSubData, losing NaN
+     * payload bits. Compare the actual stored source, isolating the copy from
+     * any conversions during upload or readback. */
+    gl_info->gl_ops.gl.p_glGenTextures(2, textures);
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, textures[0]);
+    GL_EXTCALL(glTexStorage2D(GL_TEXTURE_2D, 1, GL_RG16F, 2, 2));
+    gl_info->gl_ops.gl.p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RG, GL_HALF_FLOAT, data);
+    gl_info->gl_ops.gl.p_glGetTexImage(GL_TEXTURE_2D, 0, GL_RG, GL_HALF_FLOAT, source);
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, textures[1]);
+    GL_EXTCALL(glTexStorage2D(GL_TEXTURE_2D, 1, GL_RG16F, 2, 2));
+    GL_EXTCALL(glCopyImageSubData(textures[0], GL_TEXTURE_2D, 0, 0, 0, 0,
+            textures[1], GL_TEXTURE_2D, 0, 0, 0, 0, 2, 2, 1));
+    gl_info->gl_ops.gl.p_glGetTexImage(GL_TEXTURE_2D, 0, GL_RG, GL_HALF_FLOAT, copied);
+    error = gl_info->gl_ops.gl.p_glGetError();
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, 0);
+    gl_info->gl_ops.gl.p_glDeleteTextures(2, textures);
+    checkGLcall("test float copy conversion");
+
+    return error == GL_NO_ERROR && memcmp(source, copied, sizeof(source));
+}
+
 static BOOL match_fglrx(const struct wined3d_gl_info *gl_info, struct wined3d_caps_gl_ctx *ctx,
         const char *gl_renderer, enum wined3d_gl_vendor gl_vendor,
         enum wined3d_pci_vendor card_vendor, enum wined3d_pci_device device)
@@ -962,6 +996,11 @@ static void quirk_broken_rgba16(struct wined3d_gl_info *gl_info)
     gl_info->quirks |= WINED3D_QUIRK_BROKEN_RGBA16;
 }
 
+static void quirk_float_copy_conversion(struct wined3d_gl_info *gl_info)
+{
+    gl_info->quirks |= WINED3D_QUIRK_FLOAT_COPY_CONVERSION;
+}
+
 static void quirk_infolog_spam(struct wined3d_gl_info *gl_info)
 {
     gl_info->quirks |= WINED3D_QUIRK_INFO_LOG_SPAM;
@@ -1111,6 +1150,11 @@ static void fixup_extensions(struct wined3d_gl_info *gl_info, struct wined3d_cap
             match_fglrx,
             quirk_infolog_spam,
             "Not printing GLSL infolog"
+        },
+        {
+            match_float_copy_conversion,
+            quirk_float_copy_conversion,
+            "Preserve float bits during raw image copies"
         },
         {
             match_not_dx10_capable,
