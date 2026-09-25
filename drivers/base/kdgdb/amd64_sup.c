@@ -193,74 +193,59 @@ gdb_thread_to_reg(
     _In_ ULONG Register)
 {
     enum reg_name reg_name = (enum reg_name)Register;
-    static const void* NullValue = NULL;
+    PKSWITCH_FRAME Frame;
+    PKEXCEPTION_FRAME ExceptionFrame;
+    ULONG_PTR Stack, Limit, Top;
+    static ULONG_PTR SavedRsp;
 
-#if 0
-    if (Thread->Tcb.TrapFrame)
-    {
-        PKTRAP_FRAME TrapFrame = Thread->Tcb.TrapFrame;
+    /* A running thread on another processor has no saved switch frame. */
+    if (Thread->Tcb.State == Running ||
+        !Thread->Tcb.InitialStack || !Thread->Tcb.KernelStack)
+        return NULL;
 
-        switch (reg_name)
-        {
-            case RAX: return &TrapFrame->Rax;
-            case RBX: return &TrapFrame->Rbx;
-            case RCX: return &TrapFrame->Rcx;
-            case RDX: return &TrapFrame->Rdx;
-            case RSP: return &TrapFrame->Rsp;
-            case RBP: return &TrapFrame->Rbp;
-            case RSI: return &TrapFrame->Rsi;
-            case RDI: return &TrapFrame->Rdi;
-            case RIP: return &TrapFrame->Rip;
-            case R8: return &TrapFrame->R8;
-            case R9: return &TrapFrame->R9;
-            case R10: return &TrapFrame->R10;
-            case R11: return &TrapFrame->R11;
-            case EFLAGS: return &TrapFrame->EFlags;
-            case CS: return &TrapFrame->SegCs;
-            case DS: return &TrapFrame->SegSs;
-            case ES: return &TrapFrame->SegEs;
-            case FS: return &TrapFrame->SegFs;
-            case GS: return &TrapFrame->SegGs;
-            case SS: return &TrapFrame->SegSs;
-            default:
-                KDDBGPRINT("Unhandled regname: %d.\n", reg_name);
-        }
-    }
-    else
-#endif
-    if (!Thread->Tcb.InitialStack)
+    Stack = (ULONG_PTR)Thread->Tcb.KernelStack;
+    Limit = Thread->Tcb.StackLimit;
+    Top = (ULONG_PTR)Thread->Tcb.InitialStack;
+    if (Stack < Limit || Stack > Top || Top - Stack < sizeof(KSWITCH_FRAME))
+        return NULL;
+
+    /* KiSwapContextInternal saves KSWITCH_FRAME at KTHREAD.KernelStack. */
+    Frame = (PKSWITCH_FRAME)Stack;
+    SavedRsp = Stack + sizeof(*Frame);
+    ExceptionFrame = (PKEXCEPTION_FRAME)SavedRsp;
+
+    switch (reg_name)
     {
-        /* Terminated thread? */
-        switch (reg_name)
-        {
-            case RSP:
-            case RBP:
-            case RIP:
-                KDDBGPRINT("Returning NULL for register %d.\n", reg_name);
-                return &NullValue;
-            default:
-                return NULL;
-        }
-    }
-    else
-    {
-        switch (reg_name)
-        {
-            case RSP: return &Thread->Tcb.KernelStack;
-            case RIP:
-            {
-                PULONG_PTR Rsp = Thread->Tcb.KernelStack;
-                return &Rsp[3];
-            }
-            case RBP:
-            {
-                PULONG_PTR Rsp = Thread->Tcb.KernelStack;
-                return &Rsp[4];
-            }
-            default:
-                return NULL;
-        }
+        case RSP: return &SavedRsp;
+        case RIP: return &Frame->Return;
+        case RBP: return &Frame->Rbp;
+        default: break;
     }
 
-    return NULL;
+    /* KiSwapContext saves nonvolatile registers immediately above that frame. */
+    if (Top - SavedRsp < sizeof(*ExceptionFrame))
+        return NULL;
+
+    switch (reg_name)
+    {
+        case RBX: return &ExceptionFrame->Rbx;
+        case RSI: return &ExceptionFrame->Rsi;
+        case RDI: return &ExceptionFrame->Rdi;
+        case R12: return &ExceptionFrame->R12;
+        case R13: return &ExceptionFrame->R13;
+        case R14: return &ExceptionFrame->R14;
+        case R15: return &ExceptionFrame->R15;
+        case XMM6: return &ExceptionFrame->Xmm6;
+        case XMM7: return &ExceptionFrame->Xmm7;
+        case XMM8: return &ExceptionFrame->Xmm8;
+        case XMM9: return &ExceptionFrame->Xmm9;
+        case XMM10: return &ExceptionFrame->Xmm10;
+        case XMM11: return &ExceptionFrame->Xmm11;
+        case XMM12: return &ExceptionFrame->Xmm12;
+        case XMM13: return &ExceptionFrame->Xmm13;
+        case XMM14: return &ExceptionFrame->Xmm14;
+        case XMM15: return &ExceptionFrame->Xmm15;
+        case MXCSR: return &ExceptionFrame->MxCsr;
+        default: return NULL;
+    }
 }

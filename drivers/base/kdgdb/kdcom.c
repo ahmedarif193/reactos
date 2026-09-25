@@ -23,6 +23,9 @@ CPPORT KdComPort;
 BOOLEAN gdb_breakin_pending;
 BOOLEAN gdb_packet_start_pending;
 BOOLEAN gdb_vctrlc_pending;
+BOOLEAN gdb_polled_packet_pending;
+CHAR gdb_polled_packet[GDB_PACKET_MAX_SIZE + 1];
+ULONG gdb_polled_packet_length;
 #ifdef KDDEBUG
 CPPORT KdDebugComPort;
 #endif
@@ -61,6 +64,7 @@ static GDB_POLL_STATE GdbPollState;
 static ULONG GdbPollPayloadIndex;
 static UCHAR GdbPollChecksum;
 static UCHAR GdbPollReceivedChecksum;
+static BOOLEAN GdbPollEscaped;
 
 #define GDB_POLL_PACKET_TIMEOUT_US 2000
 
@@ -495,6 +499,7 @@ KdpPollBreakIn(VOID)
         GdbPollState = GdbPollPayload;
         GdbPollPayloadIndex = 0;
         GdbPollChecksum = 0;
+        GdbPollEscaped = FALSE;
     }
 
     while (TRUE)
@@ -521,6 +526,7 @@ KdpPollBreakIn(VOID)
             GdbPollState = GdbPollPayload;
             GdbPollPayloadIndex = 0;
             GdbPollChecksum = 0;
+            GdbPollEscaped = FALSE;
             continue;
         }
 
@@ -530,17 +536,28 @@ KdpPollBreakIn(VOID)
                 break;
 
             case GdbPollPayload:
-                if (Byte == '#')
+                if (Byte == '#' && !GdbPollEscaped)
                 {
-                    if (GdbPollPayloadIndex != sizeof(VCtrlCPayload) - 1)
-                        goto RejectPacket;
                     GdbPollState = GdbPollChecksumHigh;
                     break;
                 }
 
                 GdbPollChecksum += Byte;
-                if (GdbPollPayloadIndex >= sizeof(VCtrlCPayload) - 1 || Byte != VCtrlCPayload[GdbPollPayloadIndex++])
+                if (GdbPollEscaped)
+                {
+                    Byte ^= 0x20;
+                    GdbPollEscaped = FALSE;
+                }
+                else if (Byte == 0x7d)
+                {
+                    GdbPollEscaped = TRUE;
+                    break;
+                }
+
+                if (GdbPollPayloadIndex == GDB_PACKET_MAX_SIZE)
                     GdbPollState = GdbPollDiscard;
+                else
+                    gdb_polled_packet[GdbPollPayloadIndex++] = (CHAR)Byte;
                 break;
 
             case GdbPollChecksumHigh:
@@ -564,9 +581,22 @@ KdpPollBreakIn(VOID)
                 GdbPollState = GdbPollIdle;
                 if (!gdb_no_ack_mode)
                     KdpSendByte('+');
-                gdb_vctrlc_pending = TRUE;
                 KD_DEBUGGER_NOT_PRESENT = FALSE;
-                KDDBGPRINT("vCtrlC BreakIn Polled.\n");
+                gdb_polled_packet[GdbPollPayloadIndex] = '\0';
+                if (GdbPollPayloadIndex == sizeof(VCtrlCPayload) - 1 &&
+                    RtlCompareMemory(gdb_polled_packet, VCtrlCPayload,
+                                     sizeof(VCtrlCPayload) - 1) == sizeof(VCtrlCPayload) - 1)
+                {
+                    gdb_vctrlc_pending = TRUE;
+                    KDDBGPRINT("vCtrlC BreakIn Polled.\n");
+                }
+                else
+                {
+                    /* Preserve the first command of a live GDB attach. */
+                    gdb_polled_packet_length = GdbPollPayloadIndex;
+                    gdb_polled_packet_pending = TRUE;
+                    KDDBGPRINT("GDB packet initiated break-in.\n");
+                }
                 return KdPacketReceived;
             }
 

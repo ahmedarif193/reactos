@@ -699,46 +699,40 @@ get_kdlog_snapshot(
 
 static
 KDSTATUS
-send_kdlog(VOID)
+send_kdlog(_In_ BOOLEAN Full)
 {
     GDB_KDLOG_SNAPSHOT Snapshot;
     KDSTATUS Status;
+    ULONG Length, Offset, FirstLength;
 
     if (!get_kdlog_snapshot(&Snapshot))
         return send_monitor_output("KDGDB KD log is unavailable.\n");
 
+    Length = Full ? Snapshot.Length : min(Snapshot.Length, 8192);
     Status = send_monitor_output(
-        "KDGDB KD log: bytes=%lu buffer=%lu rollovers=%lu wrapped=%s\n",
+        "KDGDB KD log: bytes=%lu shown=%lu buffer=%lu rollovers=%lu wrapped=%s\n",
         Snapshot.Length,
+        Length,
         Snapshot.BufferSize,
         Snapshot.RolloverCount,
         Snapshot.RolloverCount ? "yes" : "no");
     if (Status != KdPacketReceived)
         return Status;
 
-    if (Snapshot.Length != 0)
+    if (Length != 0)
     {
-        if (Snapshot.RolloverCount)
-        {
-            Status = send_monitor_data(
-                Snapshot.Buffer + Snapshot.WriteOffset,
-                Snapshot.BufferSize - Snapshot.WriteOffset);
-            if (Status != KdPacketReceived)
-                return Status;
-
-            Status = send_monitor_data(
-                Snapshot.Buffer,
-                Snapshot.WriteOffset);
-        }
-        else
-        {
-            Status = send_monitor_data(
-                Snapshot.Buffer,
-                Snapshot.WriteOffset);
-        }
-
+        Offset = Snapshot.RolloverCount ? Snapshot.WriteOffset : 0;
+        Offset = (Offset + Snapshot.Length - Length) % Snapshot.BufferSize;
+        FirstLength = min(Length, Snapshot.BufferSize - Offset);
+        Status = send_monitor_data(Snapshot.Buffer + Offset, FirstLength);
         if (Status != KdPacketReceived)
             return Status;
+        if (Length > FirstLength)
+        {
+            Status = send_monitor_data(Snapshot.Buffer, Length - FirstLength);
+            if (Status != KdPacketReceived)
+                return Status;
+        }
     }
 
     return send_monitor_output("\nKDGDB KD log: end\n");
@@ -819,7 +813,8 @@ handle_gdb_monitor_command(VOID)
         MONITOR_PRINT("  processes  active process list\n");
         MONITOR_PRINT("  threads    active thread list\n");
         MONITOR_PRINT("  modules    loaded kernel module list\n");
-        MONITOR_PRINT("  kdlog      buffered kernel debug log\n");
+        MONITOR_PRINT("  kdlog      latest 8192 bytes of kernel debug log\n");
+        MONITOR_PRINT("  kdlog all  complete buffered kernel debug log\n");
     }
     else if (strcmp(Command, "version") == 0)
     {
@@ -920,7 +915,11 @@ handle_gdb_monitor_command(VOID)
     }
     else if (strcmp(Command, "kdlog") == 0)
     {
-        Status = send_kdlog();
+        Status = send_kdlog(FALSE);
+    }
+    else if (strcmp(Command, "kdlog all") == 0)
+    {
+        Status = send_kdlog(TRUE);
     }
     else
     {
@@ -1923,6 +1922,14 @@ handle_gdb_remove_breakpoint(
     return KdPacketReceived;
 }
 
+static KDSTATUS resume_debuggee(
+    _Out_ DBGKD_MANIPULATE_STATE64* State,
+    _Out_ PSTRING MessageData,
+    _Out_ PULONG MessageLength,
+    _Inout_ PKD_CONTEXT KdContext,
+    _In_ BOOLEAN HasAddress,
+    _In_ ULONG64 Address);
+
 static
 KDSTATUS
 handle_gdb_detach(
@@ -1938,7 +1945,10 @@ handle_gdb_detach(
 
     /* A later debugger connection starts in acknowledgement mode again. */
     gdb_no_ack_mode = FALSE;
-    return ContinueManipulateStateHandler(State, MessageData, MessageLength, KdContext);
+    KD_DEBUGGER_NOT_PRESENT = TRUE;
+
+    /* Resume exactly as 'c' does, including stepping over our own INT3. */
+    return resume_debuggee(State, MessageData, MessageLength, KdContext, FALSE, 0);
 }
 
 static
@@ -2040,19 +2050,16 @@ step_over_breakpoint(VOID)
 
 static
 KDSTATUS
-handle_gdb_c(
+resume_debuggee(
     _Out_ DBGKD_MANIPULATE_STATE64* State,
     _Out_ PSTRING MessageData,
     _Out_ PULONG MessageLength,
-    _Inout_ PKD_CONTEXT KdContext)
+    _Inout_ PKD_CONTEXT KdContext,
+    _In_ BOOLEAN HasAddress,
+    _In_ ULONG64 Address)
 {
-    BOOLEAN HasAddress;
     BOOLEAN ContextChanged;
     BOOLEAN WasSingleStepping;
-    ULONG64 Address;
-
-    if (!parse_resume_address(&HasAddress, &Address))
-        return LOOP_IF_SUCCESS(send_gdb_packet("E01"));
 
     WasSingleStepping = KdpIsSingleStep(&CurrentContext);
     KdpClearSingleStep(&CurrentContext);
@@ -2091,6 +2098,24 @@ handle_gdb_c(
         return set_context_then_continue(State, MessageData, MessageLength, KdContext);
 
     return ContinueManipulateStateHandler(State, MessageData, MessageLength, KdContext);
+}
+
+static
+KDSTATUS
+handle_gdb_c(
+    _Out_ DBGKD_MANIPULATE_STATE64* State,
+    _Out_ PSTRING MessageData,
+    _Out_ PULONG MessageLength,
+    _Inout_ PKD_CONTEXT KdContext)
+{
+    BOOLEAN HasAddress;
+    ULONG64 Address;
+
+    if (!parse_resume_address(&HasAddress, &Address))
+        return LOOP_IF_SUCCESS(send_gdb_packet("E01"));
+
+    return resume_debuggee(State, MessageData, MessageLength,
+                           KdContext, HasAddress, Address);
 }
 
 static

@@ -66,9 +66,12 @@ GetContextSendHandler(
     if (ReportInitialState)
     {
         ReportInitialState = FALSE;
-        Status = gdb_send_exception();
-        if (Status != KdPacketReceived)
-            KdpManipulateStateHandler = ContinueManipulateStateHandler;
+        if (!gdb_polled_packet_pending)
+        {
+            Status = gdb_send_exception();
+            if (Status != KdPacketReceived)
+                KdpManipulateStateHandler = ContinueManipulateStateHandler;
+        }
     }
 
     return TRUE;
@@ -227,7 +230,8 @@ send_kd_state_change(DBGKD_ANY_WAIT_STATE_CHANGE* StateChange)
             gdb_vctrlc_pending = FALSE;
             send_gdb_packet("OK");
         }
-        Status = gdb_send_exception();
+        /* A live attach first expects the reply to its queued command. */
+        Status = gdb_polled_packet_pending ? KdPacketReceived : gdb_send_exception();
         if (Status == KdPacketTimedOut)
         {
             KdpSendPacketHandler = NULL;
