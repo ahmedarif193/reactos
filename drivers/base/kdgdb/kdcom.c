@@ -474,6 +474,7 @@ KdpPollBreakIn(VOID)
 {
     static const CHAR VCtrlCPayload[] = "vCtrlC";
     ULONG EmptyPolls = 0;
+    BOOLEAN ReceivedByte = FALSE;
     UCHAR Byte;
 
     /*
@@ -506,11 +507,15 @@ KdpPollBreakIn(VOID)
     {
         if (KdpPollByte(&Byte) != KdPacketReceived)
         {
-            if (GdbPollState == GdbPollIdle || EmptyPolls++ >= GDB_POLL_PACKET_TIMEOUT_US)
+            /* Wait for the rest of a packet only if this poll received
+             * part of it; a silent line must not stall every clock tick. */
+            if (!ReceivedByte || GdbPollState == GdbPollIdle ||
+                EmptyPolls++ >= GDB_POLL_PACKET_TIMEOUT_US)
                 break;
             KeStallExecutionProcessor(1);
             continue;
         }
+        ReceivedByte = TRUE;
         EmptyPolls = 0;
 
         if (Byte == 0x03)
