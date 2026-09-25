@@ -157,13 +157,17 @@ else()
 endif()
 set(_mesa_build_targets mesa_gallium)
 set(_mesa_build_byproducts "${MESA_DLL}")
+set(_mesa_lavapipe_enabled OFF)
+if(ENABLE_MESA_LLVMPIPE AND NOT ARM64EC_RUNTIME)
+    set(_mesa_lavapipe_enabled ON)
+endif()
 set(_mesa_d3d_umd_enabled OFF)
 if((ARCH STREQUAL "arm64" OR ARCH STREQUAL "i386") AND NOT ARM64EC_RUNTIME)
     set(_mesa_d3d_umd_enabled ON)
     list(APPEND _mesa_build_targets mesa_d3d)
     list(APPEND _mesa_build_byproducts "${MESA_D3D_DLL}")
 endif()
-if(ENABLE_MESA_LLVMPIPE)
+if(_mesa_lavapipe_enabled)
     list(APPEND _mesa_build_targets vulkan_lvp lvp_icd)
     list(APPEND _mesa_build_byproducts "${MESA_LAVAPIPE_DLL}" "${MESA_LAVAPIPE_MANIFEST}")
 endif()
@@ -180,7 +184,7 @@ ExternalProject_Add(mesa_gallium_build
         -DMESA_ARCH:STRING=${_mesa_arch}
         -DMESA_WGL_DLL_NAME:STRING=mesa_gallium
         -DMESA_LLVMPIPE:BOOL=${ENABLE_MESA_LLVMPIPE}
-        -DMESA_LAVAPIPE:BOOL=${ENABLE_MESA_LLVMPIPE}
+        -DMESA_LAVAPIPE:BOOL=${_mesa_lavapipe_enabled}
         -DMESA_ASSERTIONS:BOOL=${_mesa_assertions}
         -DMESA_LLVM_ROOT:PATH=${MESA_LLVM_PREFIX}
         -DMESA_DIRECTX_HEADERS_ROOT:PATH=${MESA_DIRECTX_HEADERS_PREFIX}
@@ -195,12 +199,17 @@ ExternalProject_Add(mesa_gallium_build
 if(ENABLE_MESA_LLVMPIPE)
     # These producers are declared later under submodules/. Attach them here,
     # where ExternalProject's configure-step custom command is scoped.
-    set(_mesa_configure_dependencies directx-headers-build)
+    set(_mesa_configure_dependencies)
+    if(_mesa_lavapipe_enabled)
+        list(APPEND _mesa_configure_dependencies directx-headers-build)
+    endif()
     if(NOT MESA_LLVM_ROOT)
         list(APPEND _mesa_configure_dependencies mesa-llvm)
     endif()
-    ExternalProject_Add_StepDependencies(mesa_gallium_build configure
-        ${_mesa_configure_dependencies})
+    if(_mesa_configure_dependencies)
+        ExternalProject_Add_StepDependencies(mesa_gallium_build configure
+            ${_mesa_configure_dependencies})
+    endif()
 endif()
 
 if(_mesa_support_dependency)

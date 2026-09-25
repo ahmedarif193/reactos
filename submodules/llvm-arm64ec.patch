@@ -1,0 +1,83 @@
+--- a/llvm/lib/TargetParser/Host.cpp
++++ b/llvm/lib/TargetParser/Host.cpp
+@@ -55,7 +55,7 @@
+ #include <kstat.h>
+ #endif
+ #if defined(__GNUC__) || defined(__clang__)
+-#if (defined(__i386__) || defined(__x86_64__)) && !defined(_MSC_VER)
++#if (defined(__i386__) || defined(__x86_64__)) && !defined(_MSC_VER) && !defined(__arm64ec__)
+ #include <cpuid.h>
+ #endif
+ #endif
+@@ -637,7 +637,7 @@
+ 
+ #if (defined(__i386__) || defined(_M_IX86) || defined(__x86_64__) ||           \
+      defined(_M_X64)) &&                                                       \
+-    !defined(_M_ARM64EC)
++    !defined(_M_ARM64EC) && !defined(__arm64ec__)
+ 
+ /// getX86CpuIDAndInfo - Execute the specified cpuid and return the 4 values in
+ /// the specified arguments.  If we can't run cpuid on the host, return true.
+@@ -1994,7 +1994,7 @@
+ 
+ #if (defined(__i386__) || defined(_M_IX86) || defined(__x86_64__) ||           \
+      defined(_M_X64)) &&                                                       \
+-    !defined(_M_ARM64EC)
++    !defined(_M_ARM64EC) && !defined(__arm64ec__)
+ StringMap<bool> sys::getHostCPUFeatures() {
+   unsigned EAX = 0, EBX = 0, ECX = 0, EDX = 0;
+   unsigned MaxLevel;
+@@ -2544,7 +2544,7 @@
+ #elif defined(__arm64e__)
+   T.setArch(Triple::aarch64, Triple::AArch64SubArch_arm64e);
+   T.setArchName("arm64e");
+-#elif defined(__aarch64__)
++#elif defined(__aarch64__) || defined(__arm64ec__)
+   T.setArch(Triple::aarch64);
+   T.setArchName("arm64");
+ #elif defined(__x86_64h__)
+--- a/llvm/lib/Support/Windows/explicit_symbols.inc
++++ b/llvm/lib/Support/Windows/explicit_symbols.inc
+@@ -23,6 +23,7 @@
+ EXPLICIT_SYMBOL(__main) // FIXME: Don't call it.
+ #endif
+ 
++#if !defined(__arm64ec__)
+ #ifdef HAVE___ASHLDI3
+ EXPLICIT_SYMBOL(__ashldi3)
+ #endif
+@@ -65,6 +66,7 @@
+ #ifdef HAVE___UMODDI3
+ EXPLICIT_SYMBOL(__umoddi3)
+ #endif
++#endif
+ 
+ /* msvcrt */
+ #if defined(_MSC_VER)
+--- a/llvm/lib/Support/Windows/Memory.inc
++++ b/llvm/lib/Support/Windows/Memory.inc
+@@ -130,8 +130,24 @@
+   DWORD Protect = getWindowsProtectionFlags(Flags);
+ 
+   size_t AllocSize = NumBlocks * Granularity;
++#if defined(__arm64ec__)
++  using VirtualAlloc2Fn = void *(WINAPI *)(HANDLE, void *, size_t, ULONG,
++                                           ULONG, MEM_EXTENDED_PARAMETER *, ULONG);
++  static const auto AllocEc = reinterpret_cast<VirtualAlloc2Fn>(
++      ::GetProcAddress(::GetModuleHandleW(L"kernelbase.dll"), "VirtualAlloc2"));
++  if (!AllocEc) {
++    EC = std::make_error_code(std::errc::function_not_supported);
++    return MemoryBlock();
++  }
++  MEM_EXTENDED_PARAMETER ECParameter{};
++  ECParameter.Type = MemExtendedParameterAttributeFlags;
++  ECParameter.ULong64 = MEM_EXTENDED_PARAMETER_EC_CODE;
++  void *PA = AllocEc(::GetCurrentProcess(), reinterpret_cast<void *>(Start),
++                     AllocSize, AllocType, Protect, &ECParameter, 1);
++#else
+   void *PA = ::VirtualAlloc(reinterpret_cast<void *>(Start), AllocSize,
+                             AllocType, Protect);
++#endif
+   if (PA == NULL) {
+     if (NearBlock || HugePages) {
+       // Try again without the NearBlock hint and without large memory pages
