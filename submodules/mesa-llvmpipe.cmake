@@ -8,8 +8,8 @@ endif()
 if(CMAKE_VERSION VERSION_LESS 3.24)
     message(FATAL_ERROR "The optional Mesa LLVMpipe build requires CMake 3.24 or newer.")
 endif()
-if(NOT ARCH MATCHES "^(amd64|arm64)$" OR ARM64EC_RUNTIME)
-    message(FATAL_ERROR "Mesa LLVMpipe requires a native amd64 or arm64 ReactOS target.")
+if(NOT ARCH MATCHES "^(amd64|arm64)$")
+    message(FATAL_ERROR "Mesa LLVMpipe requires an amd64 or arm64 ReactOS target.")
 endif()
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" OR MSVC)
     message(FATAL_ERROR "Mesa LLVMpipe currently requires the llvm-mingw Clang toolchain.")
@@ -35,7 +35,11 @@ else()
     set(MESA_CPU aarch64)
     set(MESA_LLVM_TARGET AArch64)
 endif()
-set(MESA_TRIPLE "${MESA_CPU}-w64-mingw32")
+if(ARM64EC_RUNTIME)
+    set(MESA_TRIPLE arm64ec-w64-mingw32)
+else()
+    set(MESA_TRIPLE "${MESA_CPU}-w64-mingw32")
+endif()
 # Do not cache architecture-specific tool selections across reconfiguration.
 find_program(MESA_CC NAMES ${MESA_TRIPLE}-clang HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_CXX NAMES ${MESA_TRIPLE}-clang++ HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
@@ -83,6 +87,12 @@ if(MESA_LLVM_ROOT)
     endif()
 else()
     set(MESA_LLVM_PREFIX "${MESA_WORK_DIR}/llvm-install")
+    set(_mesa_llvm_patch_args)
+    set(_mesa_llvm_abi_args)
+    if(ARM64EC_RUNTIME)
+        set(_mesa_llvm_patch_args PATCH_COMMAND ${MESA_PATCH} -p1 -i "${REACTOS_SOURCE_DIR}/submodules/llvm-arm64ec.patch")
+        set(_mesa_llvm_abi_args -DLLVM_DISABLE_ASSEMBLY_FILES=ON)
+    endif()
     set(MESA_LLVM_SOURCE_ROOT "" CACHE PATH "Optional existing LLVM 22.1.8 source tree to reuse across architectures")
     if(MESA_LLVM_SOURCE_ROOT)
         get_filename_component(_mesa_llvm_source "${MESA_LLVM_SOURCE_ROOT}" ABSOLUTE)
@@ -112,6 +122,7 @@ else()
         SOURCE_DIR "${_mesa_llvm_source}"
         SOURCE_SUBDIR llvm
         BINARY_DIR "${MESA_WORK_DIR}/llvm-build"
+        ${_mesa_llvm_patch_args}
         CMAKE_GENERATOR Ninja
         CMAKE_ARGS
             -DCMAKE_MAKE_PROGRAM=${MESA_NINJA}
@@ -130,6 +141,7 @@ else()
             -DLLVM_DEFAULT_TARGET_TRIPLE=${MESA_TRIPLE}
             -DLLVM_TARGETS_TO_BUILD=${MESA_LLVM_TARGET}
             -DLLVM_TARGET_ARCH=${MESA_LLVM_TARGET}
+            ${_mesa_llvm_abi_args}
             -DLLVM_ENABLE_PROJECTS=
             -DLLVM_ENABLE_RUNTIMES=
             -DLLVM_ENABLE_RTTI=ON
