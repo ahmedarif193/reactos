@@ -10,6 +10,9 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntdll.h>
+#if defined(_M_ARM64)
+#include <reactos/chpe.h>
+#endif
 
 #define NDEBUG
 #include <debug.h>
@@ -19,6 +22,9 @@
 PLDR_DATA_TABLE_ENTRY LdrpLoadedDllHandleCache, LdrpGetModuleHandleCache;
 
 BOOLEAN g_ShimsEnabled;
+#if defined(_M_ARM64)
+static const UNICODE_STRING LdrpChpeBridgeName = RTL_CONSTANT_STRING(L"ntdll_chpe.dll");
+#endif
 PVOID g_pShimEngineModule;
 PVOID g_pfnSE_DllLoaded;
 PVOID g_pfnSE_DllUnloaded;
@@ -1046,6 +1052,52 @@ LdrpSetProtection(PVOID ViewBase,
     return STATUS_SUCCESS;
 }
 
+#if defined(_M_ARM64)
+static
+BOOLEAN
+LdrpFindPreMappedChpeBridge(PVOID *BaseAddress, SIZE_T *ImageSize)
+{
+    const UNICODE_STRING Suffix = RTL_CONSTANT_STRING(L"\\System32\\arm64ec\\ntdll_chpe.dll");
+    struct
+    {
+        MEMORY_SECTION_NAME Name;
+        WCHAR Path[512];
+    } SectionName;
+    MEMORY_BASIC_INFORMATION Basic = {0};
+    PIMAGE_NT_HEADERS Headers;
+    PVOID Base = (PVOID)(ULONG_PTR)CHPE_BRIDGE_BASE;
+    NTSTATUS Status;
+
+    Status = NtQueryVirtualMemory(NtCurrentProcess(), Base, MemoryBasicInformation,
+                                  &Basic, sizeof(Basic), NULL);
+    if (!NT_SUCCESS(Status) || Basic.AllocationBase != Base || Basic.Type != MEM_IMAGE)
+        return FALSE;
+
+    Status = NtQueryVirtualMemory(NtCurrentProcess(), Base, MemorySectionName,
+                                  &SectionName, sizeof(SectionName), NULL);
+    if (!NT_SUCCESS(Status) || SectionName.Name.SectionFileName.Length < Suffix.Length ||
+        RtlCompareUnicodeStrings(
+            SectionName.Name.SectionFileName.Buffer +
+                (SectionName.Name.SectionFileName.Length - Suffix.Length) / sizeof(WCHAR),
+            Suffix.Length / sizeof(WCHAR), Suffix.Buffer, Suffix.Length / sizeof(WCHAR), TRUE) != 0)
+    {
+        return FALSE;
+    }
+
+    Headers = RtlImageNtHeader(Base);
+    if (Headers == NULL || (Headers->FileHeader.Machine != IMAGE_FILE_MACHINE_ARM64EC &&
+                            Headers->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) ||
+        Headers->OptionalHeader.ImageBase != CHPE_BRIDGE_BASE)
+    {
+        return FALSE;
+    }
+
+    *BaseAddress = Base;
+    *ImageSize = Headers->OptionalHeader.SizeOfImage;
+    return TRUE;
+}
+#endif
+
 /* NOTE: Not yet reviewed */
 NTSTATUS
 NTAPI
@@ -1220,6 +1272,14 @@ SkipCheck:
     /* Map the DLL */
     ViewBase = NULL;
     ViewSize = 0;
+#if defined(_M_ARM64)
+    if (RtlEqualUnicodeString(&BaseDllName, &LdrpChpeBridgeName, TRUE) &&
+        LdrpFindPreMappedChpeBridge(&ViewBase, &ViewSize))
+    {
+        Status = STATUS_SUCCESS;
+    }
+    else
+#endif
     Status = NtMapViewOfSection(SectionHandle,
                                 NtCurrentProcess(),
                                 &ViewBase,
