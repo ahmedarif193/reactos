@@ -161,6 +161,7 @@ Dxgmms2SchedCoreAdmit(
     Packet->SubmissionFenceId = FenceId;
     Packet->Flags = Info->Flags;
     Packet->Priority = Info->Priority;
+    Packet->DeferredStatus = STATUS_SUCCESS;
     Packet->DispatchSequence = 0;
     Packet->Dispatched = FALSE;
     Packet->Claimed = FALSE;
@@ -196,6 +197,10 @@ Dxgmms2SchedCoreNextReady(
 
         if (Packet->Dispatched)
         {
+            /* Preemption can leave a rejected submission behind work that
+             * must be resubmitted. Its published fence remains a barrier. */
+            if (*First != NULL && !NT_SUCCESS(Packet->DeferredStatus))
+                return Best;
             if (++Dispatched >= DXGMMS2_SCHED_MAX_DISPATCHED)
                 return NULL;
             continue;
@@ -370,8 +375,9 @@ Dxgmms2SchedCorePublishDispatch(
  * Dxgmms2SchedCoreCompleteDispatch
  *
  * Commits the outcome of the miniport submit exactly once.  A failed dispatch
- * removes the packet immediately and hands it back for terminalization; a
- * successful one leaves it queued until its fence retires.
+ * removes the packet immediately and hands it back for terminalization.
+ * A malformed virtual submission is an ordered no-op: the miniport has
+ * rejected its contents, but its fence cannot retire ahead of earlier work.
  */
 NTSTATUS
 Dxgmms2SchedCoreCompleteDispatch(
@@ -393,6 +399,14 @@ Dxgmms2SchedCoreCompleteDispatch(
 
     Packet->Claimed = FALSE;
     Packet->ClaimToken = 0;
+    if (DispatchStatus == STATUS_INVALID_PARAMETER && Packet->Dispatched &&
+        (Packet->Flags & DXGMMS2_SCHEDULER_ADMIT_VIRTUAL) != 0)
+    {
+        Packet->DeferredStatus = DispatchStatus;
+        if (Engine->State == Dxgmms2EngineSubmitting)
+            Engine->State = Dxgmms2EngineRunning;
+        return STATUS_SUCCESS;
+    }
     if (!NT_SUCCESS(DispatchStatus))
     {
         RemoveEntryList(&Packet->Entry);
@@ -444,16 +458,19 @@ Dxgmms2SchedCoreNotifyCompletion(
         CompletedFenceId = Engine->LastCompletedFenceId;
     else if ((LONG)(CompletedFenceId - Engine->LastCompletedFenceId) > 0)
         Engine->LastCompletedFenceId = CompletedFenceId;
-    if (CompletedFenceId == 0)
-        return 0;
-
     while (Count < Capacity && !IsListEmpty(&Engine->RunQueue))
     {
         PDXGMMS2_SCHED_PACKET Packet = CONTAINING_RECORD(Engine->RunQueue.Flink, DXGMMS2_SCHED_PACKET, Entry);
 
         if (!Packet->Dispatched || Packet->Claimed)
             break;
-        if ((LONG)(CompletedFenceId - Packet->SubmissionFenceId) < 0)
+        /* A rejected packet contains no GPU work. Reaching the queue head
+         * proves all its predecessors have retired, even if no interrupt
+         * carries the rejected fence itself. Never advance the hardware
+         * watermark here: a later valid submission still needs completion. */
+        if (NT_SUCCESS(Packet->DeferredStatus) &&
+            (CompletedFenceId == 0 ||
+             (LONG)(CompletedFenceId - Packet->SubmissionFenceId) < 0))
             break;
         RemoveEntryList(&Packet->Entry);
         InitializeListHead(&Packet->Entry);
@@ -629,7 +646,8 @@ Dxgmms2SchedCoreResetDispatched(
     {
         PDXGMMS2_SCHED_PACKET Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
 
-        if (!Packet->Dispatched || Packet->Claimed)
+        if (!Packet->Dispatched || Packet->Claimed ||
+            !NT_SUCCESS(Packet->DeferredStatus))
             continue;
         Packet->Dispatched = FALSE;
         Packet->DispatchSequence = 0;

@@ -1330,6 +1330,135 @@ TestDispatchWindow(PDXGMMS2_SCHED_TEST_STATE State)
     ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
+static VOID
+TestRejectedVirtualSubmission(PDXGMMS2_SCHED_TEST_STATE State)
+{
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
+    PDXGMMS2_SCHED_PACKET First, Rejected, Later, Failed, Retired[3];
+    ULONG Mode, FirstFence, RejectedFence, LaterFence, Count;
+    NTSTATUS Status;
+
+    for (Mode = 0; Mode < 5; ++Mode)
+    {
+        RtlZeroMemory(State, sizeof(*State));
+        Dxgmms2SchedCoreInitialize(&State->Core);
+        Status = Dxgmms2SchedCoreStart(&State->Core, 2);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (Mode == 3)
+        {
+            State->Core.Engines[0].NextFenceId = (LONG)0xfffffffe;
+            State->Core.Engines[0].LastCompletedFenceId = 0xfffffffe;
+        }
+        FirstFence = AdmitOne(State, 0, 1, &First);
+        RejectedFence = AdmitOne(State, 0, 2, &Rejected);
+        LaterFence = AdmitOne(State, 0, 3, &Later);
+        Rejected->Flags |= DXGMMS2_SCHEDULER_ADMIT_VIRTUAL;
+        InitClaim(&Claim);
+        ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "first claim");
+        ok_eq_ulong(Claim.SubmissionFenceId, FirstFence);
+        Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken,
+                                                 STATUS_SUCCESS, &Failed);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        InitClaim(&Claim);
+        ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "rejected claim");
+        ok_eq_ulong(Claim.SubmissionFenceId, RejectedFence);
+        Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (Mode == 1)
+        {
+            /* Completion can arrive inside the callback. The live claim
+             * prevents even a completed rejection from retiring yet. */
+            Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0,
+                                                     RejectedFence, Retired, 3);
+            ok_eq_ulong(Count, 1);
+            ok_eq_pointer(Retired[0], First);
+        }
+        Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken,
+                                                 STATUS_INVALID_PARAMETER, &Failed);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_pointer(Failed, NULL);
+        ok_bool_true(Rejected->Dispatched, "rejection retains its ordered fence");
+        if (Failed != NULL)
+            continue; /* Keep the negative control safe on the old core. */
+        ok_eq_hex(Rejected->DeferredStatus, STATUS_INVALID_PARAMETER);
+        Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken,
+                                                 STATUS_INVALID_PARAMETER, &Failed);
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+        Count = Dxgmms2SchedCoreCancelOwner(&State->Core, 2, Retired, 3);
+        ok_eq_ulong(Count, 0);
+        if (Mode == 2 || Mode == 4)
+        {
+            Count = Dxgmms2SchedCoreResetDispatched(&State->Core, 0, Retired, 3);
+            ok_eq_ulong(Count, 1);
+            ok_eq_pointer(Retired[0], First);
+            Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 0, Retired, 3);
+            ok_eq_ulong(Count, 0);
+            if (Mode == 4)
+            {
+                Count = Dxgmms2SchedCoreCancelOwner(&State->Core, 1, Retired, 3);
+                ok_eq_ulong(Count, 1);
+                ok_eq_pointer(Retired[0], First);
+            }
+            else
+            {
+                InitClaim(&Claim);
+                ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "resubmit predecessor only");
+                ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, First);
+                Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+                ok_eq_hex(Status, STATUS_SUCCESS);
+                Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken,
+                                                         STATUS_SUCCESS, &Failed);
+                ok_eq_hex(Status, STATUS_SUCCESS);
+            }
+        }
+        InitClaim(&Claim);
+        ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "healthy owner can submit");
+        ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, Later);
+        Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken,
+                                                 STATUS_SUCCESS, &Failed);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (Mode != 1 && Mode != 4)
+        {
+            Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 0, Retired, 3);
+            ok_eq_ulong(Count, 0);
+            /* A bounded drain may stop exactly before the rejected packet. */
+            Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, FirstFence, Retired, 1);
+            ok_eq_ulong(Count, 1);
+            ok_eq_pointer(Retired[0], First);
+        }
+        Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 0, Retired, 3);
+        ok_eq_ulong(Count, 1);
+        ok_eq_pointer(Retired[0], Rejected);
+        ok_eq_ulong(State->Core.TotalPackets, 1);
+        ok_eq_ulong(State->Core.Engines[0].LastCompletedFenceId,
+                    Mode == 4 ? 0 : (Mode == 1 ? RejectedFence : FirstFence));
+        Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, LaterFence, Retired, 3);
+        ok_eq_ulong(Count, 1);
+        ok_eq_pointer(Retired[0], Later);
+
+        /* A lone rejected command needs no hardware interrupt to drain. */
+        RejectedFence = AdmitOne(State, 1, 2, &Rejected);
+        Rejected->Flags |= DXGMMS2_SCHEDULER_ADMIT_VIRTUAL;
+        InitClaim(&Claim);
+        ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 1, &Claim), "lone rejection");
+        Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 1, Claim.ClaimToken);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 1, Claim.ClaimToken,
+                                                 STATUS_INVALID_PARAMETER, &Failed);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_pointer(Failed, NULL);
+        Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 1, 0, Retired, 3);
+        ok_eq_ulong(Count, 1);
+        ok_eq_pointer(Retired[0], Rejected);
+        ok_eq_ulong(State->Core.Engines[1].LastCompletedFenceId, 0);
+        ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core), "all owners drained");
+    }
+}
+
 START_TEST(Dxgmms2Scheduler)
 {
     PDXGMMS2_SCHED_TEST_STATE State;
@@ -1359,6 +1488,7 @@ START_TEST(Dxgmms2Scheduler)
     TestReadyContextScheduling(State);
     TestReadyContextFairness(State);
     TestDispatchWindow(State);
+    TestRejectedVirtualSubmission(State);
 
     ExFreePoolWithTag(State, TAG_DXGMMS2_SCHED_TEST);
 }

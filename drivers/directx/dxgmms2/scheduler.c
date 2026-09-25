@@ -190,7 +190,9 @@ Dxgmms2SchedulerCompleteDispatch(
         KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
         Count = Dxgmms2SchedCoreNotifyCompletion(&Context->SchedulerCore, EngineOrdinal, 0, Retired, RTL_NUMBER_OF(Retired));
         for (Index = 0; Index < Count; ++Index)
-            Dxgmms2SchedulerQueueRetirementLocked(Context, Retired[Index], Dxgmms2RetireCompleted, STATUS_SUCCESS);
+            Dxgmms2SchedulerQueueRetirementLocked(Context, Retired[Index],
+                NT_SUCCESS(Retired[Index]->DeferredStatus) ? Dxgmms2RetireCompleted : Dxgmms2RetireAborted,
+                Retired[Index]->DeferredStatus);
         KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
     } while (Count == RTL_NUMBER_OF(Retired));
     return Status;
@@ -218,7 +220,9 @@ Dxgmms2SchedulerNotifyCompletion(
         KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
         Count = Dxgmms2SchedCoreNotifyCompletion(&Context->SchedulerCore, EngineOrdinal, CompletedFenceId, Retired, RTL_NUMBER_OF(Retired));
         for (Index = 0; Index < Count; ++Index)
-            Dxgmms2SchedulerQueueRetirementLocked(Context, Retired[Index], Dxgmms2RetireCompleted, STATUS_SUCCESS);
+            Dxgmms2SchedulerQueueRetirementLocked(Context, Retired[Index],
+                NT_SUCCESS(Retired[Index]->DeferredStatus) ? Dxgmms2RetireCompleted : Dxgmms2RetireAborted,
+                Retired[Index]->DeferredStatus);
         KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
     } while (Count == RTL_NUMBER_OF(Retired));
     return STATUS_SUCCESS;
@@ -279,6 +283,10 @@ Dxgmms2SchedulerCancelOwnerPackets(
             Dxgmms2SchedulerQueueRetirementLocked(Context, Cancelled[Index], Dxgmms2RetireCancelled, CancelStatus);
         KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
     } while (Count == RTL_NUMBER_OF(Cancelled));
+    /* Preempted predecessors can be cancelled without another interrupt.
+     * Re-evaluate any ordered rejection they left at an engine's head. */
+    for (Index = 0; Index < Context->SchedulerCore.EngineCount; ++Index)
+        (VOID)Dxgmms2SchedulerNotifyCompletion(Scheduler, Index, 0);
     return STATUS_SUCCESS;
 }
 
@@ -305,6 +313,8 @@ Dxgmms2SchedulerAbortAllPackets(
             Dxgmms2SchedulerQueueRetirementLocked(Context, Aborted[Index], Dxgmms2RetireAborted, AbortStatus);
         KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
     } while (Count == RTL_NUMBER_OF(Aborted));
+    for (Index = 0; Index < Context->SchedulerCore.EngineCount; ++Index)
+        (VOID)Dxgmms2SchedulerNotifyCompletion(Scheduler, Index, 0);
     return STATUS_SUCCESS;
 }
 
