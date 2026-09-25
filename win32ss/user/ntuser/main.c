@@ -133,6 +133,9 @@ UserDeleteW32Process(
     }
 #endif
 
+    if (ppiCurrent->ClientProcs)
+        ExFreePoolWithTag(ppiCurrent->ClientProcs, USERTAG_PROCESSINFO);
+
     /* Free the PROCESSINFO */
     ExFreePoolWithTag(ppiCurrent, USERTAG_PROCESSINFO);
 }

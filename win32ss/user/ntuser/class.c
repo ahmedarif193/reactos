@@ -528,9 +528,9 @@ IntGetClassWndProc(PCLS Class, BOOL Ansi)
          if (GETPFNSERVER(i) == Class->lpfnWndProc)
          {
             if (Ansi)
-               Ret = GETPFNCLIENTA(i);
+               Ret = IntGetClientProc(i, TRUE);
             else
-               Ret = GETPFNCLIENTW(i);
+               Ret = IntGetClientProc(i, FALSE);
          }
      }
      return Ret;
@@ -541,13 +541,13 @@ IntGetClassWndProc(PCLS Class, BOOL Ansi)
   {
      if (Ansi)
      {
-        if (GETPFNCLIENTW(Class->fnid) == Class->lpfnWndProc)
-           Ret = GETPFNCLIENTA(Class->fnid);
+        if (IntGetClientProc(Class->fnid, FALSE) == Class->lpfnWndProc)
+           Ret = IntGetClientProc(Class->fnid, TRUE);
      }
      else
      {
-        if (GETPFNCLIENTA(Class->fnid) == Class->lpfnWndProc)
-           Ret = GETPFNCLIENTW(Class->fnid);
+        if (IntGetClientProc(Class->fnid, TRUE) == Class->lpfnWndProc)
+           Ret = IntGetClientProc(Class->fnid, FALSE);
      }
   }
 
@@ -694,12 +694,12 @@ IntSetClassWndProc(IN OUT PCLS Class,
    // Switch from Client Side call to Server Side call if match. Ref: "deftest".
    for ( i = FNID_FIRST; i <= FNID_SWITCH; i++)
    {
-       if (GETPFNCLIENTW(i) == Class->lpfnWndProc)
+       if (IntGetClientProc(i, FALSE) == Class->lpfnWndProc)
        {
           chWndProc = GETPFNSERVER(i);
           break;
        }
-       if (GETPFNCLIENTA(i) == Class->lpfnWndProc)
+       if (IntGetClientProc(i, TRUE) == Class->lpfnWndProc)
        {
           chWndProc = GETPFNSERVER(i);
           break;
@@ -1305,12 +1305,12 @@ IntCreateClass(IN CONST WNDCLASSEXW* lpwcx,
            */
                for ( i = FNID_FIRST; i <= FNID_SWITCH; i++)
                { // Open ANSI or Unicode, just match, set and break.
-                   if (GETPFNCLIENTW(i) == Class->lpfnWndProc)
+                   if (IntGetClientProc(i, FALSE) == Class->lpfnWndProc)
                    {
                       WndProc = GETPFNSERVER(i);
                       break;
                    }
-                   if (GETPFNCLIENTA(i) == Class->lpfnWndProc)
+                   if (IntGetClientProc(i, TRUE) == Class->lpfnWndProc)
                    {
                       WndProc = GETPFNSERVER(i);
                       break;

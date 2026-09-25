@@ -32,6 +32,7 @@ typedef struct _TL
 } TL, *PTL;
 
 extern PSERVERINFO gpsi;
+WNDPROC FASTCALL IntGetClientProc(USHORT FnId, BOOL Ansi);
 #define gptiCurrent ((PTHREADINFO)PsGetCurrentThreadWin32Thread())
 extern PPROCESSINFO gppiList;
 extern PPROCESSINFO ppiScrnSaver;

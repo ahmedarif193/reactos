@@ -3532,12 +3532,32 @@ NTSTATUS WINAPI wow64_NtUserInitializeClientPfnArrays( UINT *args )
     const ROS_PFNCLIENT32 *procsA32 = get_ptr( &args );
     const ROS_PFNCLIENT32 *procsW32 = get_ptr( &args );
     const ROS_PFNCLIENTWORKER32 *workers32 = get_ptr( &args );
-    get_ptr( &args );
+    HINSTANCE user_module = get_ptr( &args );
+    ntuser_client_func_ptr procsA[ROS_PFNCLIENT_COUNT] = {0}, procsW[ROS_PFNCLIENT_COUNT] = {0};
+    ntuser_client_func_ptr workers[ROS_PFNCLIENTWORKER_COUNT] = {0};
+    NTSTATUS status;
+    UINT i;
 
+    if (ros_client_procs_initialized) return STATUS_SUCCESS;
     if (!procsA32 || !procsW32 || !workers32) return STATUS_INVALID_PARAMETER;
-    memcpy(&ros_client_procs_a, procsA32, sizeof(ros_client_procs_a));
-    memcpy(&ros_client_procs_w, procsW32, sizeof(ros_client_procs_w));
-    memcpy(&ros_client_workers, workers32, sizeof(ros_client_workers));
+    for (i = 0; i < ROS_PFNCLIENT_COUNT; ++i)
+    {
+        procsA[i][0] = (WNDPROC)(ULONG_PTR)procsA32->Functions[i];
+        procsW[i][0] = (WNDPROC)(ULONG_PTR)procsW32->Functions[i];
+    }
+    for (i = 0; i < ROS_PFNCLIENTWORKER_COUNT; ++i)
+        workers[i][0] = (WNDPROC)(ULONG_PTR)workers32->Functions[i];
+
+    status = NtUserInitializeClientPfnArrays(procsA, procsW, workers, user_module);
+    if (status) return status;
+
+    for (i = 0; i < ROS_PFNCLIENT_COUNT; ++i)
+    {
+        ros_client_procs_a.Functions[i] = PtrToUlong(procsA[i][0]);
+        ros_client_procs_w.Functions[i] = PtrToUlong(procsW[i][0]);
+    }
+    for (i = 0; i < ROS_PFNCLIENTWORKER_COUNT; ++i)
+        ros_client_workers.Functions[i] = PtrToUlong(workers[i][0]);
     ros_client_procs_initialized = TRUE;
     return STATUS_SUCCESS;
 #else
