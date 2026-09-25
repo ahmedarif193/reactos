@@ -883,6 +883,12 @@ NdisMGetDmaAlignment(
   PLOGICAL_ADAPTER Adapter = MiniportAdapterHandle;
   PDMA_ADAPTER AdapterObject = (PDMA_ADAPTER)Adapter->NdisMiniportBlock.SystemAdapterObject;
 
+  if (Adapter->IsNdis6)
+  {
+      extern ULONG NTAPI Ndis6MGetDmaAlignment(NDIS_HANDLE);
+      return Ndis6MGetDmaAlignment(MiniportAdapterHandle);
+  }
+
   NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
   return AdapterObject->DmaOperations->GetDmaAlignment(AdapterObject);

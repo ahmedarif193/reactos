@@ -200,6 +200,24 @@ Ndis6IoInitDmaAdapter(
     return NDIS_STATUS_SUCCESS;
 }
 
+ULONG
+NTAPI
+Ndis6MGetDmaAlignment(
+    _In_ NDIS_HANDLE MiniportAdapterHandle)
+{
+    PNDIS6_ADAPTER_EXT Ext = Ndis6IoExtFromHandle(MiniportAdapterHandle);
+
+    /* Miniports may ask this during InitializeEx, before registering SG DMA.
+     * NDIS 6 keeps its DMA adapter in Ext, not the legacy miniport block. */
+    if (Ext == NULL ||
+        Ndis6IoInitDmaAdapter(Ext, Ext->PhysicalDeviceObject) != NDIS_STATUS_SUCCESS)
+    {
+        return KeGetRecommendedSharedDataAlignment();
+    }
+
+    return Ext->DmaAdapter->DmaOperations->GetDmaAlignment(Ext->DmaAdapter);
+}
+
 VOID
 Ndis6IoFreeDmaAdapter(
     _In_ PNDIS6_ADAPTER_EXT Ext)
