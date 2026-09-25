@@ -40,6 +40,8 @@
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x172, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_QUERYADAPTERINFO \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x104, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_PRESENT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x141, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x182, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
@@ -85,6 +87,10 @@ DxgkEngAddRedirBitmapD3DDirtyRgn(
     _In_ UINT DirtyRectCount,
     _In_reads_(ContextCount) const HANDLE *Contexts,
     _In_ UINT ContextCount);
+
+NTSTATUS
+NTAPI
+DxgkEngQueryWindowPresentState(_In_ ULONG_PTR WindowHandle);
 
 NTSTATUS
 NTAPI
@@ -527,6 +533,7 @@ WddmBridgeInit(VOID)
         CddInterface.CancelRedirectedBltPresent =
             DxgkEngCancelRedirectedBltPresent;
         CddInterface.DispatchNtGdi = DxgkEngDispatchNtGdiDdDDI;
+        CddInterface.QueryWindowPresentState = DxgkEngQueryWindowPresentState;
         Status = WddmBridgeSendIoctlToDevice(
                      DeviceObject,
                      IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE,
@@ -720,6 +727,9 @@ WddmBridgeIsExpectedControlStatus(
     _In_ NTSTATUS Status)
 {
     if (Status == STATUS_DEVICE_BUSY || Status == STATUS_NOT_SUPPORTED)
+        return TRUE;
+    if (IoControlCode == IOCTL_D3DKMT_PRESENT &&
+        Status == STATUS_GRAPHICS_PRESENT_OCCLUDED)
         return TRUE;
     if (IoControlCode == IOCTL_D3DKMT_QUERYSTATISTICS &&
         Status == STATUS_INVALID_PARAMETER)

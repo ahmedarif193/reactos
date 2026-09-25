@@ -33,6 +33,7 @@ list(APPEND SOURCE
     d3dkmt_residency.c
     d3dkmt_gpuva.c
     d3dkmt_softgpu_lifetime.c
+    d3dkmt_softgpu_occlusion.c
     d3dkmt_hwqueue.c
     d3dkmt_sync2.c
     d3dkmt_videomem.c
