@@ -800,7 +800,7 @@
 #@ stdcall GetWriteWatch(long ptr long ptr ptr ptr)
 #@ stdcall GetWsChanges(long ptr long)
 #@ stdcall GetWsChangesEx(long ptr ptr)
-#@ stdcall -arch=i386,x86_64 GetXStateFeaturesMask(ptr ptr)
+@ stdcall -arch=x86_64 GetXStateFeaturesMask(ptr ptr)
 #@ stdcall GlobalAlloc(long long)
 #@ stdcall GlobalFree(long)
 #@ stdcall GlobalMemoryStatusEx(ptr)
@@ -835,8 +835,8 @@
 #@ stdcall InitOnceInitialize(ptr) ntdll.RtlRunOnceInitialize
 @ stdcall InitializeAcl(ptr long long)
 @ stdcall InitializeConditionVariable(ptr) ntdll.RtlInitializeConditionVariable
-#@ stdcall InitializeContext(ptr long ptr ptr)
-#@ stdcall InitializeContext2(ptr long ptr ptr int64)
+@ stdcall -arch=x86_64 InitializeContext(ptr long ptr ptr)
+@ stdcall -arch=x86_64 InitializeContext2(ptr long ptr ptr int64)
 #@ stdcall InitializeCriticalSection(ptr) ntdll.RtlInitializeCriticalSection
 #@ stdcall InitializeCriticalSectionAndSpinCount(ptr long)
 #@ stdcall InitializeCriticalSectionEx(ptr long long)
@@ -977,7 +977,7 @@
 #@ stdcall LocalReAlloc(long long long)
 #@ stdcall LocalUnlock(long)
 #@ stdcall LocaleNameToLCID(wstr long)
-#@ stdcall -arch=i386,x86_64 LocateXStateFeature(ptr long ptr)
+@ stdcall -arch=x86_64 LocateXStateFeature(ptr long ptr)
 #@ stdcall LockFile(long long long long long)
 #@ stdcall LockFileEx(long long long long long ptr)
 #@ stdcall LockResource(long)
@@ -1551,7 +1551,7 @@
 @ stdcall SetUserGeoName(wstr)
 #@ stdcall SetWaitableTimer(long ptr long ptr ptr long)
 @ stdcall SetWaitableTimerEx(long ptr long ptr ptr ptr long) kernel32.SetWaitableTimerEx
-#@ stdcall -arch=i386,x86_64 SetXStateFeaturesMask(ptr int64)
+@ stdcall -arch=x86_64 SetXStateFeaturesMask(ptr int64)
 #@ stdcall SetupComm(long long long)
 # #@ stub SharedLocalIsEnabled
 #@ stdcall SignalObjectAndWait(long long long long)
