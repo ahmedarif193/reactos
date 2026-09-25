@@ -2430,6 +2430,7 @@ DxgkCleanupAdapterDevices(
     Adapter->CddShadowBindingHandle = 0;
     Adapter->CddPrimaryBindingHandle = 0;
     Adapter->CddBindingGeneration = 0;
+    DxgkpForgetCddCapture(Adapter);
     (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
     while (!IsListEmpty(&Adapter->DeviceListHead))
     {

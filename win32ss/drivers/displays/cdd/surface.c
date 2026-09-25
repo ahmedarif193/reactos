@@ -208,6 +208,19 @@ RcddDisableSurface(
    VIDEO_MEMORY VideoMemory;
    PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
 
+   KeWaitForSingleObject(&ppdev->CaptureMutex, Executive, KernelMode, FALSE, NULL);
+   if (ppdev->CaptureSurface != NULL)
+   {
+      EngUnlockSurface(ppdev->CaptureSurface);
+      ppdev->CaptureSurface = NULL;
+   }
+   if (ppdev->CaptureBitmap != NULL)
+   {
+      EngDeleteSurface(ppdev->CaptureBitmap);
+      ppdev->CaptureBitmap = NULL;
+   }
+   KeReleaseMutex(&ppdev->CaptureMutex, FALSE);
+
    if (ppdev->hSurfEng != NULL)
    {
       EngDeleteSurface(ppdev->hSurfEng);

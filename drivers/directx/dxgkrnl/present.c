@@ -52,6 +52,7 @@
 #include "vidsch.h"
 #include "present.h"
 #include "present_queue_core.h"
+#include <reactos/dwmframe.h>
 
 #define DXGK_PRESENT_EXEC_LOG_LIMIT  32
 #define DXGK_PRESENT_EXEC_SLOW_US    5000ULL
@@ -86,6 +87,22 @@ static NTSTATUS DxgkpSelectCddPresentEngine(_In_ PDXGKRNL_ADAPTER Adapter, _Out_
 static NTSTATUS NTAPI DxgkpExecuteOrderedMmioFlip(_Inout_ PVOID CallbackContext);
 static VOID NTAPI DxgkpReleaseOrderedMmioFlip(_Inout_ PVOID CallbackContext, _In_ NTSTATUS CompletionStatus);
 
+typedef struct _DXGKRNL_CDD_CAPTURE
+{
+    DXGK_REDIRECTION_SURFACE_CREATE Surface;
+    D3DKMT_HANDLE BindingHandle;
+} DXGKRNL_CDD_CAPTURE, *PDXGKRNL_CDD_CAPTURE;
+
+VOID
+DxgkpForgetCddCapture(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter->CddCapture != NULL)
+    {
+        ExFreePoolWithTag(Adapter->CddCapture, TAG_DXGK_PRESENT);
+        Adapter->CddCapture = NULL;
+    }
+}
+
 static NTSTATUS
 DxgkpDestroyCddPresentBinding(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -114,13 +131,38 @@ DxgkpDestroyCddPresentBinding(
 }
 
 static NTSTATUS
+DxgkpDestroyCddCapture(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKRNL_CDD_CAPTURE Capture = Adapter->CddCapture;
+    DXGK_REDIRECTION_SURFACE_DESTROY Destroy;
+    NTSTATUS BindingStatus, Status;
+
+    if (Capture == NULL)
+        return STATUS_SUCCESS;
+    BindingStatus = DxgkpDestroyCddPresentBinding(Adapter, Device,
+                                               &Capture->BindingHandle);
+    RtlZeroMemory(&Destroy, sizeof(Destroy));
+    Destroy.StructSize = sizeof(Destroy);
+    Destroy.AllocationHandle = Capture->Surface.AllocationHandle;
+    Destroy.ResourceHandle = Capture->Surface.ResourceHandle;
+    Destroy.GlobalShare = Capture->Surface.GlobalShare;
+    Status = DxgkDestroyRedirectionSurface(Adapter, &Destroy);
+    DxgkpForgetCddCapture(Adapter);
+    return !NT_SUCCESS(BindingStatus) ? BindingStatus : Status;
+}
+
+static NTSTATUS
 DxgkpDestroyCddPresentBindings(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE Device)
 {
     NTSTATUS PrimaryStatus;
     NTSTATUS ShadowStatus;
+    NTSTATUS CaptureStatus;
 
+    CaptureStatus = DxgkpDestroyCddCapture(Adapter, Device);
     PrimaryStatus = DxgkpDestroyCddPresentBinding(
                         Adapter,
                         Device,
@@ -130,6 +172,8 @@ DxgkpDestroyCddPresentBindings(
                        Device,
                        &Adapter->CddShadowBindingHandle);
     Adapter->CddBindingGeneration = 0;
+    if (!NT_SUCCESS(CaptureStatus))
+        return CaptureStatus;
     return !NT_SUCCESS(PrimaryStatus) ? PrimaryStatus : ShadowStatus;
 }
 
@@ -157,6 +201,53 @@ DxgkpCreateCddPresentBinding(
     *BindingHandle = BindingReference->Handle;
     DxgkVidMmDereferenceLogicalAllocation(BindingReference);
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpReferenceCddContext(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry)
+{
+    D3DKMT_CREATEDEVICE CreateDevice;
+    D3DKMT_CREATECONTEXT CreateContext;
+    D3DKMT_DESTROYDEVICE DestroyDevice;
+    PDXGKRNL_ADAPTER ContextAdapter;
+    ULONG Node;
+    NTSTATUS Status;
+
+    /* Caller holds CddPresentMutex in the system process. */
+    if (Adapter->CddContextHandle == 0)
+    {
+        RtlZeroMemory(&CreateDevice, sizeof(CreateDevice));
+        CreateDevice.pAdapter = Adapter;
+        Status = DxgkCreateCddDevice(&CreateDevice);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Adapter->CddDeviceHandle = CreateDevice.hDevice;
+
+        RtlZeroMemory(&CreateContext, sizeof(CreateContext));
+        CreateContext.hDevice = CreateDevice.hDevice;
+        Status = DxgkpSelectCddPresentEngine(Adapter, &Node,
+                                           &CreateContext.EngineAffinity);
+        if (NT_SUCCESS(Status))
+        {
+            CreateContext.NodeOrdinal = Node;
+            Status = DxgkCreateCddContext(Adapter, &CreateContext);
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            DestroyDevice.hDevice = Adapter->CddDeviceHandle;
+            DxgkDestroyDevice(&DestroyDevice);
+            Adapter->CddDeviceHandle = 0;
+            return Status;
+        }
+        Adapter->CddContextHandle = CreateContext.hContext;
+    }
+    Status = DxgkReferenceContextByHandle(Adapter->CddContextHandle,
+                                         PsInitialSystemProcess, &ContextAdapter,
+                                         &Entry->Device, &Entry->Context);
+    ASSERT(!NT_SUCCESS(Status) || ContextAdapter == Adapter);
+    return Status;
 }
 
 static NTSTATUS
@@ -1419,14 +1510,10 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
     PDXGKVMM_ALLOCATION Allocation;
     DXGKRNL_PRESENT_ENTRY Entry;
     PDXGKRNL_DEVICE_WORK PresentWork = NULL;
-    D3DKMT_CREATEDEVICE CreateDevice;
-    D3DKMT_CREATECONTEXT CreateContext;
     D3DKMT_DESTROYDEVICE DestroyDevice;
     KAPC_STATE ApcState;
     BOOLEAN Attached;
     BOOLEAN DestroyCdd;
-    PDXGKRNL_ADAPTER ContextAdapter;
-    ULONG Node;
     PBYTE DestinationVa;
     PBYTE SourceVa;
     ULONG Width;
@@ -1465,6 +1552,12 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
         return STATUS_NOT_SUPPORTED;
     }
 
+    /* GPU composition owns publication of the desktop. GDI has already
+     * updated its CPU drawing surface; presenting that background over the
+     * compositor's output would erase the composed windows. */
+    if (DxgkVidPnGetCompositorGeneration(Adapter, SharedSurface->VidPnSourceId) != 0)
+        return STATUS_SUCCESS;
+
     Width = SharedSurface->CommittedWidth;
     Height = SharedSurface->CommittedHeight;
     Allocation = SharedSurface->ShadowAllocation;
@@ -1492,35 +1585,17 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
     RtlZeroMemory(&Entry, sizeof(Entry));
     DestroyCdd = FALSE;
 
-    if (Adapter->CddContextHandle == 0)
+    /* A compositor claim takes CddPresentMutex too, draining the previous
+     * background copy before it gains desktop publication ownership. */
+    if (DxgkVidPnGetCompositorGeneration(Adapter, SharedSurface->VidPnSourceId) != 0)
     {
-        RtlZeroMemory(&CreateDevice, sizeof(CreateDevice));
-        CreateDevice.pAdapter = Adapter;
-        Status = DxgkCreateCddDevice(&CreateDevice);
-        if (!NT_SUCCESS(Status))
-            goto CleanupCdd;
-        Adapter->CddDeviceHandle = CreateDevice.hDevice;
-
-        RtlZeroMemory(&CreateContext, sizeof(CreateContext));
-        CreateContext.hDevice = CreateDevice.hDevice;
-        Status = DxgkpSelectCddPresentEngine(Adapter, &Node, &CreateContext.EngineAffinity);
-        CreateContext.NodeOrdinal = Node;
-        if (NT_SUCCESS(Status))
-            Status = DxgkCreateCddContext(Adapter, &CreateContext);
-        if (!NT_SUCCESS(Status))
-        {
-            DestroyDevice.hDevice = Adapter->CddDeviceHandle;
-            DxgkDestroyDevice(&DestroyDevice);
-            Adapter->CddDeviceHandle = 0;
-            goto CleanupCdd;
-        }
-        Adapter->CddContextHandle = CreateContext.hContext;
+        Status = STATUS_SUCCESS;
+        goto CleanupCdd;
     }
 
-    Status = DxgkReferenceContextByHandle(Adapter->CddContextHandle, PsInitialSystemProcess, &ContextAdapter, &Entry.Device, &Entry.Context);
+    Status = DxgkpReferenceCddContext(Adapter, &Entry);
     if (!NT_SUCCESS(Status))
         goto CleanupCdd;
-    ASSERT(ContextAdapter == Adapter);
     Status = DxgkDeviceWaitForIdle(Entry.Device);
     if (!NT_SUCCESS(Status))
         goto CleanupCdd;
@@ -1676,6 +1751,264 @@ CleanupCdd:
     if (Attached)
         KeUnstackDetachProcess(&ApcState);
     KeReleaseMutex(&Adapter->CddPresentMutex, FALSE);
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpWaitForCddCaptureIdle(_In_ PDXGKRNL_DEVICE Device)
+{
+    DXGK_DEVICE_WORK_SNAPSHOT Snapshot;
+    LARGE_INTEGER Deadline;
+    NTSTATUS Status;
+
+    Status = DxgkDeviceWorkCoreCaptureSnapshot(&Device->WorkLedger, &Snapshot);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    KeQuerySystemTime(&Deadline);
+    Deadline.QuadPart += 2000LL * 10000;
+    Status = DxgkDeviceWorkCoreWaitForSnapshotUntil(&Device->WorkLedger,
+                                                 &Snapshot, &Deadline);
+    return Status == STATUS_TIMEOUT ? STATUS_IO_TIMEOUT : Status;
+}
+
+NTSTATUS
+DxgkpCaptureDesktop(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGK_DESKTOP_CAPTURE Capture)
+{
+    DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
+    DXGKRNL_PRESENT_ENTRY Entry;
+    PDXGKRNL_CDD_CAPTURE Cached;
+    PDXGKRNL_PRESENT_QUEUE Queue = NULL;
+    PDXGKVMM_ALLOCATION Staging = NULL;
+    PDXGKRNL_DEVICE_WORK PresentWork = NULL;
+    D3DKMT_DESTROYDEVICE DestroyDevice;
+    KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE, CddLocked = FALSE;
+    BOOLEAN Pinned = FALSE, DestroyCdd = FALSE;
+    PVOID CpuAddress;
+    ULONG Row;
+    ULONGLONG RequiredBytes, Generation;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    C_ASSERT(sizeof(DXGK_DESKTOP_CAPTURE) == 32);
+    if (Adapter == NULL || Capture == NULL ||
+        Capture->StructSize != sizeof(*Capture) || Capture->Flags != 0 ||
+        Capture->Width == 0 || Capture->Height == 0 ||
+        Capture->Width > MAXLONG / sizeof(ULONG) || Capture->Height > MAXLONG ||
+        Capture->Pitch < Capture->Width * sizeof(ULONG) ||
+        Capture->Destination < (ULONG_PTR)MmSystemRangeStart ||
+        Capture->Destination > MAXULONG_PTR)
+        return STATUS_INVALID_PARAMETER;
+    RequiredBytes = (ULONGLONG)(Capture->Height - 1) * Capture->Pitch +
+                    (ULONGLONG)Capture->Width * sizeof(ULONG);
+    if (RequiredBytes > Capture->BufferSize ||
+        Capture->Destination > MAXULONG_PTR - (RequiredBytes - 1))
+        return STATUS_INVALID_BUFFER_SIZE;
+
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DELETE_PENDING;
+    RtlZeroMemory(&Entry, sizeof(Entry));
+    RtlZeroMemory(&SharedSurface, sizeof(SharedSurface));
+    Status = STATUS_SUCCESS;
+    if (Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->IsDisplayOnlyDriver)
+        goto Cleanup;
+    Status = DxgkpAcquireSharedSurfaceSnapshot(Adapter, &SharedSurface);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Generation = DxgkVidPnGetCompositorGeneration(Adapter, SharedSurface.VidPnSourceId);
+    if (Generation == 0)
+        goto Cleanup;
+    if (SharedSurface.PrimaryAllocation == NULL ||
+        SharedSurface.PrimaryWidth < Capture->Width ||
+        SharedSurface.PrimaryHeight < Capture->Height ||
+        SharedSurface.CommittedWidth != Capture->Width ||
+        SharedSurface.CommittedHeight != Capture->Height ||
+        Adapter->PresentQueues == NULL ||
+        SharedSurface.VidPnSourceId >= Adapter->PresentQueueCount)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Cleanup;
+    }
+
+    KeWaitForSingleObject(&Adapter->CddPresentMutex, Executive, KernelMode, FALSE, NULL);
+    CddLocked = TRUE;
+    Attached = PsGetCurrentProcess() != PsInitialSystemProcess;
+    if (Attached)
+        KeStackAttachProcess((PKPROCESS)PsInitialSystemProcess, &ApcState);
+    Status = DxgkpReferenceCddContext(Adapter, &Entry);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkpWaitForCddCaptureIdle(Entry.Device);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkpEnsureCddPresentBindings(Adapter, Entry.Device, &SharedSurface);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    /* The GPU primary may be tiled and non-CPU-visible. Ask the KMD for a
+     * linear staging allocation and reuse it for this mode generation. The
+     * GDI drawing shadow is never overwritten by composed screen reads. */
+    Cached = Adapter->CddCapture;
+    if (Cached == NULL)
+    {
+        Cached = ExAllocatePoolWithTag(PagedPool, sizeof(*Cached), TAG_DXGK_PRESENT);
+        if (Cached == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        RtlZeroMemory(Cached, sizeof(*Cached));
+        Cached->Surface.StructSize = sizeof(Cached->Surface);
+        Cached->Surface.Width = Capture->Width;
+        Cached->Surface.Height = Capture->Height;
+        Cached->Surface.Format = DWM_DX_FORMAT_B8G8R8A8_UNORM;
+        Status = DxgkCreateCaptureSurface(Adapter, Entry.Device, &Cached->Surface);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(Cached, TAG_DXGK_PRESENT);
+            goto Cleanup;
+        }
+        Adapter->CddCapture = Cached;
+    }
+    Status = DxgkVidMmReferenceAllocation(
+                 (HANDLE)(ULONG_PTR)Cached->Surface.AllocationHandle,
+                 Adapter, Entry.Device, &Staging);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    if (Cached->BindingHandle == 0)
+    {
+        Status = DxgkpCreateCddPresentBinding(Entry.Device, Staging, FALSE,
+                                            &Cached->BindingHandle);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+    Status = DxgkVidMmReferenceOpenBinding(
+                 (HANDLE)(ULONG_PTR)Adapter->CddPrimaryBindingHandle,
+                 Adapter, Entry.Device, &Entry.SourceOpenBindingHandle,
+                 &Entry.SourceOpenBindingReference);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkVidMmReferenceOpenBinding(
+                 (HANDLE)(ULONG_PTR)Cached->BindingHandle,
+                 Adapter, Entry.Device, &Entry.DestinationOpenBindingHandle,
+                 &Entry.DestinationOpenBindingReference);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    if (!Staging->Resident)
+    {
+        Status = DxgkVidMmMakeResident(Staging, Adapter);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+    Status = DxgkVidMmAcquireSubmissionResidencyPinEx(Staging, Adapter, NULL, FALSE);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Pinned = TRUE;
+
+    /* Serialize against admission of another desktop blit until this copy
+     * retires. Retirement itself never takes ExecutionMutex. CddPresentMutex
+     * also excludes CPU/GDI presents on the same persistent device. */
+    Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[SharedSurface.VidPnSourceId];
+    KeWaitForSingleObject(&Queue->ExecutionMutex, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkVidMmWaitForTrackedSubmissions(SharedSurface.PrimaryAllocation, FALSE);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Entry.Type = DxgkPresentTypeBlt;
+    Entry.hSource = (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface.PrimaryHandle;
+    Entry.hDestination = (D3DKMT_HANDLE)Cached->Surface.AllocationHandle;
+    Entry.SourceAllocation = SharedSurface.PrimaryAllocation;
+    Entry.DestinationAllocation = Staging;
+    Entry.SourceIsSharedPrimary = TRUE;
+    Entry.CddPresent = TRUE;
+    Entry.SourceGpuOnly = TRUE;
+    Entry.SharedSurface = SharedSurface;
+    Entry.VidPnSourceId = SharedSurface.VidPnSourceId;
+    Entry.SrcRect.right = Capture->Width;
+    Entry.SrcRect.bottom = Capture->Height;
+    Entry.DstRect = Entry.SrcRect;
+    Status = DxgkDeviceWorkCreate(Entry.Device, &Entry.DeviceWork);
+    if (NT_SUCCESS(Status))
+        Status = DxgkDeviceWorkActivate(Entry.DeviceWork);
+    if (NT_SUCCESS(Status))
+    {
+        PresentWork = Entry.DeviceWork;
+        DxgkDeviceWorkReference(PresentWork);
+        Status = DxgkpExecuteFullPresent(Adapter, &Entry);
+        DxgkDeviceCompletePresent(Entry.Device, Entry.DeviceWork, Status);
+    }
+    if (NT_SUCCESS(Status))
+        Status = DxgkpWaitForCddCaptureIdle(Entry.Device);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DxgkDeviceWorkGetStatus(PresentWork);
+        if (Status == STATUS_PENDING)
+            Status = STATUS_DEVICE_NOT_READY;
+    }
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    RequiredBytes = (ULONGLONG)(Capture->Height - 1) * Cached->Surface.Pitch +
+                    (ULONGLONG)Capture->Width * sizeof(ULONG);
+    if (Cached->Surface.Pitch < Capture->Width * sizeof(ULONG) ||
+        RequiredBytes > Staging->Size)
+    {
+        Status = STATUS_INVALID_BUFFER_SIZE;
+        goto Cleanup;
+    }
+    Status = DxgkVidMmInvalidateReferencedAllocationCache(Staging, 0, RequiredBytes);
+    if (NT_SUCCESS(Status))
+        Status = DxgkVidMmMapAllocationCpu(Staging, &CpuAddress);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    if (Generation != DxgkVidPnGetCompositorGeneration(Adapter, SharedSurface.VidPnSourceId))
+    {
+        Status = STATUS_RETRY;
+        goto Cleanup;
+    }
+    for (Row = 0; Row < Capture->Height; ++Row)
+    {
+        RtlCopyMemory((PUCHAR)(ULONG_PTR)Capture->Destination + (SIZE_T)Row * Capture->Pitch,
+                      (PUCHAR)CpuAddress + (SIZE_T)Row * Cached->Surface.Pitch,
+                      Capture->Width * sizeof(ULONG));
+    }
+    Capture->Flags = DXGK_DESKTOP_CAPTURE_HAS_IMAGE;
+
+Cleanup:
+    if (Queue != NULL)
+        KeReleaseMutex(&Queue->ExecutionMutex, FALSE);
+    DxgkDeviceWorkDestroy(Entry.DeviceWork);
+    DxgkDeviceWorkDereference(PresentWork);
+    if (Entry.DestinationOpenBindingReference != NULL)
+        DxgkVidMmDereferenceLogicalAllocation(Entry.DestinationOpenBindingReference);
+    if (Entry.SourceOpenBindingReference != NULL)
+        DxgkVidMmDereferenceLogicalAllocation(Entry.SourceOpenBindingReference);
+    if (Pinned)
+        DxgkVidMmReleaseSubmissionResidencyPin(Staging);
+    if (Staging != NULL)
+        DxgkVidMmDereferenceAllocation(Staging);
+    if (Status == STATUS_DEVICE_REMOVED && Entry.Device != NULL &&
+        InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) == 0)
+    {
+        (VOID)DxgkpDestroyCddPresentBindings(Adapter, Entry.Device);
+        DestroyCdd = TRUE;
+    }
+    if (Entry.Context != NULL)
+        DxgkDereferenceContext(Entry.Context);
+    if (DestroyCdd)
+    {
+        DestroyDevice.hDevice = Adapter->CddDeviceHandle;
+        Adapter->CddContextHandle = 0;
+        Adapter->CddDeviceHandle = 0;
+        DxgkDestroyDevice(&DestroyDevice);
+    }
+    if (Attached)
+        KeUnstackDetachProcess(&ApcState);
+    if (CddLocked)
+        KeReleaseMutex(&Adapter->CddPresentMutex, FALSE);
+    DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
     DxgkpReleasePresentQueues(Adapter);
     return Status;
 }
@@ -2557,6 +2890,15 @@ DxgkpExecuteFullPresentMeasured(
     Status = DxgkpWaitForPresentWrites(Entry, FALSE);
     if (!NT_SUCCESS(Status))
         goto PresentCleanup;
+    if (Entry->SharedSurface.HeadlessDesktop &&
+        Entry->CompositorGeneration != 0 && Entry->DestinationIsSharedPrimary)
+    {
+        /* The detached desktop is also read by CDD's capture context. Drain
+         * the previous copy/read before this context overwrites that primary. */
+        Status = DxgkVidMmWaitForTrackedSubmissions(Entry->DestinationAllocation, FALSE);
+        if (!NT_SUCCESS(Status))
+            goto PresentCleanup;
+    }
     /*
      * A miniport that implements DxgkDdiPresent copies on the GPU; only a
      * display-only miniport, which has no present DDI at all, needs the port

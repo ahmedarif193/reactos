@@ -152,6 +152,11 @@ DxgkpSetCompositorSourceOwner(
     _In_ CONST struct _RXGK_SETCOMPOSITORSOURCEOWNER_PACKET *Packet);
 
 ULONG64
+DxgkVidPnGetCompositorGeneration(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId);
+
+ULONG64
 DxgkVidPnCaptureCompositorGeneration(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE Device,

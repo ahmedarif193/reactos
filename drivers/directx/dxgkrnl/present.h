@@ -433,6 +433,12 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
     _In_ const DXGKRNL_SHARED_SURFACE_SNAPSHOT *SharedSurface,
     _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly);
 
+struct _DXGK_DESKTOP_CAPTURE;
+NTSTATUS
+DxgkpCaptureDesktop(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _Inout_ struct _DXGK_DESKTOP_CAPTURE *Capture);
+
 VOID
 DxgkpBeginSharedSurfaceMutationLocked(
     _In_ struct _DXGKRNL_ADAPTER *Adapter);

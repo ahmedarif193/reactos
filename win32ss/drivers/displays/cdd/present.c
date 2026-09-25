@@ -426,6 +426,81 @@ RcddPresentTarget(
    RcddPresent(ppdev, &rcl);
 }
 
+/* A screen read under GPU composition must sample the composed primary,
+ * not ScreenPtr (the independent GDI drawing buffer). Keep a real engine
+ * bitmap so Eng* can safely recover its private SURFACE, and keep its lock
+ * until the caller has consumed the captured pixels. Ordinary screen writes
+ * and offscreen-to-offscreen blits do not perform any readback. */
+static BOOL
+RcddAcquireScreenRead(
+   SURFOBJ *Destination,
+   SURFOBJ **Source,
+   PRCDD_PDEV *LockedPdev)
+{
+   PRCDD_PDEV ppdev;
+   DXGK_DESKTOP_CAPTURE Capture;
+   SIZEL Size;
+   ULONG Returned, Error;
+
+   *LockedPdev = NULL;
+   if (*Source == NULL || (*Source)->dhpdev == NULL)
+      return TRUE;
+   ppdev = (PRCDD_PDEV)(*Source)->dhpdev;
+   if ((*Source)->pvScan0 != ppdev->ScreenPtr ||
+       (Destination != NULL && Destination->pvScan0 == ppdev->ScreenPtr) ||
+       ppdev->BitsPerPixel != 32)
+      return TRUE;
+
+   KeWaitForSingleObject(&ppdev->CaptureMutex, Executive, KernelMode, FALSE, NULL);
+   if (ppdev->CaptureSurface == NULL)
+   {
+      Size.cx = ppdev->ScreenWidth;
+      Size.cy = ppdev->ScreenHeight;
+      ppdev->CaptureBitmap = (HSURF)EngCreateBitmap(Size, 0, BMF_32BPP,
+                                                   BMF_TOPDOWN, NULL);
+      if (ppdev->CaptureBitmap == NULL)
+         goto Failure;
+      ppdev->CaptureSurface = EngLockSurface(ppdev->CaptureBitmap);
+      if (ppdev->CaptureSurface == NULL)
+      {
+         EngDeleteSurface(ppdev->CaptureBitmap);
+         ppdev->CaptureBitmap = NULL;
+         goto Failure;
+      }
+   }
+   RtlZeroMemory(&Capture, sizeof(Capture));
+   Capture.StructSize = sizeof(Capture);
+   Capture.Width = ppdev->ScreenWidth;
+   Capture.Height = ppdev->ScreenHeight;
+   Capture.Pitch = ppdev->CaptureSurface->lDelta;
+   Capture.BufferSize = ppdev->CaptureSurface->cjBits;
+   Capture.Destination = (ULONGLONG)(ULONG_PTR)ppdev->CaptureSurface->pvScan0;
+   Error = EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DXGK_CAPTURE_DESKTOP,
+                              &Capture, sizeof(Capture), &Capture,
+                              sizeof(Capture), &Returned);
+   if (Error != 0 || Returned != sizeof(Capture))
+      goto Failure;
+   if (!(Capture.Flags & DXGK_DESKTOP_CAPTURE_HAS_IMAGE))
+   {
+      KeReleaseMutex(&ppdev->CaptureMutex, FALSE);
+      return TRUE;
+   }
+   *Source = ppdev->CaptureSurface;
+   *LockedPdev = ppdev;
+   return TRUE;
+
+Failure:
+   KeReleaseMutex(&ppdev->CaptureMutex, FALSE);
+   return FALSE;
+}
+
+static VOID
+RcddReleaseScreenRead(PRCDD_PDEV LockedPdev)
+{
+   if (LockedPdev != NULL)
+      KeReleaseMutex(&LockedPdev->CaptureMutex, FALSE);
+}
+
 /*
  * RcddBitBlt
  *
@@ -446,10 +521,13 @@ RcddBitBlt(
    IN ROP4 rop4)
 {
    BOOL Result;
-
+   PRCDD_PDEV CapturePdev;
    ULONG seq = RcddBeginDraw(psoTrg);
 
+   if (!RcddAcquireScreenRead(psoTrg, &psoSrc, &CapturePdev))
+      return FALSE;
    Result = EngBitBlt(psoTrg, psoSrc, psoMask, pco, pxlo, prclTrg, pptlSrc, pptlMask, pbo, pptlBrush, rop4);
+   RcddReleaseScreenRead(CapturePdev);
    if (Result)
       RcddPresentTarget(psoTrg, seq, prclTrg, pco);
 
@@ -471,10 +549,13 @@ RcddCopyBits(
    IN POINTL *pptlSrc)
 {
    BOOL Result;
-
+   PRCDD_PDEV CapturePdev;
    ULONG seq = RcddBeginDraw(psoDest);
 
+   if (!RcddAcquireScreenRead(psoDest, &psoSrc, &CapturePdev))
+      return FALSE;
    Result = EngCopyBits(psoDest, psoSrc, pco, pxlo, prclDest, pptlSrc);
+   RcddReleaseScreenRead(CapturePdev);
    if (Result)
       RcddPresentTarget(psoDest, seq, prclDest, pco);
 

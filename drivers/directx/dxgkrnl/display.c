@@ -2828,6 +2828,27 @@ DxgkpDisplayDispatch(
             break;
         }
 
+        case IOCTL_VIDEO_DXGK_CAPTURE_DESKTOP:
+        {
+            PDXGK_DESKTOP_CAPTURE Capture = Irp->AssociatedIrp.SystemBuffer;
+
+            if (Irp->RequestorMode != KernelMode)
+                Status = STATUS_ACCESS_DENIED;
+            else if (Capture == NULL ||
+                     Stack->Parameters.DeviceIoControl.InputBufferLength != sizeof(*Capture) ||
+                     Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Capture))
+                Status = STATUS_BUFFER_TOO_SMALL;
+            else if (g_DisplayAdapter == NULL)
+                Status = STATUS_DEVICE_NOT_READY;
+            else
+            {
+                Status = DxgkpCaptureDesktop(g_DisplayAdapter, Capture);
+                if (NT_SUCCESS(Status))
+                    BytesReturned = sizeof(*Capture);
+            }
+            break;
+        }
+
         case IOCTL_VIDEO_DXGK_CREATE_REDIRECTION_SURFACE:
         {
             PDXGK_REDIRECTION_SURFACE_CREATE Create =

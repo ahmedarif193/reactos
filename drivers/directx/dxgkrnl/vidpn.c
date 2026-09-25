@@ -374,6 +374,7 @@ DxgkpSetCompositorSourceOwner(
     PEPROCESS Process = PsGetCurrentProcess();
     LUID AdapterLuid;
     ULONG Count = 0, Index;
+    BOOLEAN CddLocked = FALSE;
     NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
@@ -425,6 +426,13 @@ DxgkpSetCompositorSourceOwner(
     else if (Packet->Width != 0 || Packet->Height != 0)
         return STATUS_INVALID_PARAMETER;
 
+    /* Finish the old GDI desktop copy before the compositor can publish its
+     * first frame. CDD checks ownership under this same mutex. */
+    if (Packet->Action == RXGK_COMPOSITOR_SOURCE_CLAIM)
+    {
+        KeWaitForSingleObject(&Adapter->CddPresentMutex, Executive, KernelMode, FALSE, NULL);
+        CddLocked = TRUE;
+    }
     DxgkpEnsureSourceOwnerMutex();
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&g_SourceProgrammingResource, TRUE);
@@ -472,6 +480,8 @@ DxgkpSetCompositorSourceOwner(
     KeLeaveCriticalRegion();
 
 Cleanup:
+    if (CddLocked)
+        KeReleaseMutex(&Adapter->CddPresentMutex, FALSE);
     if (NewOwner != NULL)
     {
         ObDereferenceObject(NewOwner->Process);
@@ -485,6 +495,23 @@ Cleanup:
     for (Index = 0; Index < Count; ++Index)
         DxgkDereferenceAdapter(Adapters[Index]);
     return Status;
+}
+
+ULONG64
+DxgkVidPnGetCompositorGeneration(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId)
+{
+    PDXGKP_COMPOSITOR_SOURCE_OWNER Owner;
+    ULONG64 Generation = 0;
+
+    DxgkpEnsureSourceOwnerMutex();
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    Owner = DxgkpFindCompositorSourceOwnerLocked(&Adapter->AdapterLuid, SourceId);
+    if (Owner != NULL)
+        Generation = Owner->Generation;
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+    return Generation;
 }
 
 ULONG64
@@ -4870,6 +4897,16 @@ DxgkCreateRedirectionSurface(
                                 Device == NULL ?
                                     D3DKMDT_GDISURFACE_TEXTURE_CPUVISIBLE :
                                     D3DKMDT_GDISURFACE_TEXTURE);
+}
+
+NTSTATUS
+DxgkCreateCaptureSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Inout_ PDXGK_REDIRECTION_SURFACE_CREATE Create)
+{
+    return DxgkpCreateGdiSurface(Adapter, Device, Create,
+                                D3DKMDT_GDISURFACE_STAGING_CPUVISIBLE);
 }
 
 NTSTATUS
