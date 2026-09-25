@@ -16,7 +16,8 @@
 
 /* DEFINES *******************************************************************/
 
-#define KDB_STACK_SIZE                   (4096*3)
+/* Backtraces hold architecture contexts and symbol lookups on this stack. */
+#define KDB_STACK_SIZE                   KERNEL_LARGE_STACK_SIZE
 #if defined(_M_AMD64) || defined(_M_ARM64)
 #define KDB_STACK_ALIGN                 16
 #ifdef _M_AMD64
@@ -1615,7 +1616,7 @@ KdbpInternalEnter(
 {
     PETHREAD Thread;
     PVOID SavedInitialStack, SavedStackBase, SavedKernelStack;
-    ULONG SavedStackLimit;
+    ULONG_PTR SavedStackLimit;
     BOOLEAN DisplayAcquired = FALSE;
 
     KbdDisableMouse();
