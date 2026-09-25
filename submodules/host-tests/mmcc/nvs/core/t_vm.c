@@ -149,6 +149,59 @@ VmExecutableWriteTracking(void)
     WorldDestroy(&World);
 }
 
+static void
+VmDynamicCodeEcExemption(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    ULONG64 Plain = 0;
+    ULONG64 EcCode = 0;
+    ULONG64 Blocked = 0;
+    ULONG64 Base;
+    ULONG64 Size;
+    ULONG Old;
+
+    WorldCreate(&World, 256, 1, 100000);
+    ProcessCreate(&World, &Space);
+    WorldAttach(&World, 0, &Space);
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Plain, KB64, MI_MEM_RESERVE, MI_PROT_EXECUTE_READWRITE)));
+    CHECK(NT_SUCCESS(Alloc(&Space, &EcCode, KB64, MI_MEM_RESERVE, MI_PROT_EXECUTE_READWRITE)));
+    MiVadLocate(&Space, EcCode)->EcCode = TRUE;
+
+    Size = KB64;
+    CHECK(MiAllocateVirtualMemoryBounded(&Space, &Blocked, &Size, MI_MEM_RESERVE, MI_PROT_EXECUTE_READWRITE, 0,
+                                         0, 0, TRUE) == STATUS_DYNAMIC_CODE_BLOCKED);
+
+    Base = Plain;
+    Size = PAGE_SIZE;
+    CHECK(MiAllocateVirtualMemoryBounded(&Space, &Base, &Size, MI_MEM_COMMIT, MI_PROT_EXECUTE_READWRITE, 0, 0, 0,
+                                         TRUE) == STATUS_DYNAMIC_CODE_BLOCKED);
+    Base = Plain;
+    Size = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemoryBounded(&Space, &Base, &Size, MI_MEM_COMMIT, MI_PROT_READWRITE, 0, 0, 0,
+                                                    TRUE)));
+    Base = EcCode;
+    Size = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemoryBounded(&Space, &Base, &Size, MI_MEM_COMMIT, MI_PROT_EXECUTE_READWRITE,
+                                                    0, 0, 0, TRUE)));
+
+    Base = Plain;
+    Size = PAGE_SIZE;
+    CHECK(MiProtectVirtualMemoryEx(&Space, &Base, &Size, MI_PROT_EXECUTE_READWRITE, &Old, TRUE) ==
+          STATUS_DYNAMIC_CODE_BLOCKED);
+    Base = EcCode;
+    Size = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiProtectVirtualMemoryEx(&Space, &Base, &Size, MI_PROT_EXECUTE_READ, &Old, TRUE)));
+
+    CHECK(NT_SUCCESS(Free(&Space, Plain, 0, MI_MEM_RELEASE)));
+    CHECK(NT_SUCCESS(Free(&Space, EcCode, 0, MI_MEM_RELEASE)));
+    WorldAttach(&World, 0, NULL);
+    ProcessDestroy(&World, &Space);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+}
+
 static
 void
 VmCommitDecommitBatch(void)
@@ -457,7 +510,7 @@ AllocBounded(PMI_ADDRESS_SPACE Space, ULONG64 *Base, ULONG64 Size, ULONG Type, U
     ULONG64 RegionSize = Size;
 
     return MiAllocateVirtualMemoryBounded(Space, Base, &RegionSize, Type, MI_PROT_READWRITE, Lowest, Highest,
-                                          Alignment);
+                                          Alignment, FALSE);
 }
 
 static
@@ -512,6 +565,7 @@ TestVm(void)
 {
     VmWindowsProtection();
     VmExecutableWriteTracking();
+    VmDynamicCodeEcExemption();
     VmCommitDecommitBatch();
     VmReserveCommitMatrix();
     VmMemCommitAndLimits();

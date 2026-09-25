@@ -233,6 +233,7 @@ MiAllocateVirtualMemoryNt(
     ULONG Attempts = 0;
     PVOID BaseAddress;
     SIZE_T RegionSize;
+    BOOLEAN DenyDynamicCode;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -315,12 +316,7 @@ MiAllocateVirtualMemoryNt(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if (ExGetPreviousMode() != KernelMode && (Protect & PAGE_IS_EXECUTABLE) &&
-        MiDynamicCodeBlocked(Target.Process))
-    {
-        MiReleaseTargetProcess(&Target);
-        return STATUS_DYNAMIC_CODE_BLOCKED;
-    }
+    DenyDynamicCode = (BOOLEAN)(ExGetPreviousMode() != KernelMode && MiDynamicCodeBlocked(Target.Process));
 
     if (AllocationType & MEM_COMMIT)
         Type |= MI_MEM_COMMIT;
@@ -344,7 +340,7 @@ MiAllocateVirtualMemoryNt(
             Type |= MI_MEM_RESERVE;
 
         Status = MiAllocateVirtualMemoryBounded(MiSpaceOfProcess(Target.Process), &Base, &Size, Type, Protection,
-                                                LowestAddress, Highest, Alignment);
+                                                LowestAddress, Highest, Alignment, DenyDynamicCode);
     } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
 
     if (NT_SUCCESS(Status))
