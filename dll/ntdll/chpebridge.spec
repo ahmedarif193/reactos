@@ -28,66 +28,66 @@
 142 stdcall -version=0x602+ LdrResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) ChpeLdrResolveDelayLoadedAPI
 143 stdcall -version=0x602+ LdrResolveDelayLoadsFromDll(ptr str long) ChpeLdrResolveDelayLoadsFromDll
 156 stdcall LdrUnloadDll(ptr) ChpeLdrUnloadDll
-186 stdcall NtAdjustPrivilegesToken(long long ptr long ptr ptr) ChpeNtAdjustPrivilegesToken
-195 stdcall NtAllocateVirtualMemory(long ptr ptr ptr long long) ChpeNtAllocateVirtualMemory
-196 stdcall NtAllocateVirtualMemoryEx(long ptr ptr long long ptr long) ChpeNtAllocateVirtualMemoryEx
-190 stdcall NtAlertThreadByThreadId(long) ChpeNtAlertThreadByThreadId
-230 stdcall NtClose(long) ChpeNtClose
+186 stdcall NtAdjustPrivilegesToken(long long ptr long ptr ptr) ChpeAutoNtAdjustPrivilegesToken
+195 stdcall NtAllocateVirtualMemory(long ptr ptr ptr long long) ChpeAutoNtAllocateVirtualMemory
+196 stdcall NtAllocateVirtualMemoryEx(long ptr ptr long long ptr long) ChpeAutoNtAllocateVirtualMemoryEx
+190 stdcall NtAlertThreadByThreadId(long) ChpeAutoNtAlertThreadByThreadId
+230 stdcall NtClose(long) ChpeAutoNtClose
 241 stdcall NtContinue(ptr long) ChpeNtContinue
 242 stdcall -version=0xA00+ NtContinueEx(ptr ptr) ChpeNtContinueEx
-249 stdcall NtCreateFile(ptr long ptr ptr ptr long long long long ptr long) ChpeNtCreateFile
-261 stdcall NtCreateNamedPipeFile(ptr long ptr ptr long long long long long long long long long ptr) ChpeNtCreateNamedPipeFile
-296 stdcall NtDeviceIoControlFile(long long ptr ptr ptr long ptr long ptr long) ChpeNtDeviceIoControlFile
-314 stdcall -version=0x600+ NtFlushProcessWriteBuffers() ChpeNtFlushProcessWriteBuffers
-312 stdcall NtFlushInstructionCache(long ptr long) ChpeNtFlushInstructionCache
-318 stdcall NtFreeVirtualMemory(long ptr ptr long) ChpeNtFreeVirtualMemory
+249 stdcall NtCreateFile(ptr long ptr ptr ptr long long long long ptr long) ChpeAutoNtCreateFile
+261 stdcall NtCreateNamedPipeFile(ptr long ptr ptr long long long long long long long long long ptr) ChpeAutoNtCreateNamedPipeFile
+296 stdcall NtDeviceIoControlFile(long long ptr ptr ptr long ptr long ptr long) ChpeAutoNtDeviceIoControlFile
+314 stdcall -version=0x600+ NtFlushProcessWriteBuffers() ChpeAutoNtFlushProcessWriteBuffers
+312 stdcall NtFlushInstructionCache(long ptr long) ChpeAutoNtFlushInstructionCache
+318 stdcall NtFreeVirtualMemory(long ptr ptr long) ChpeAutoNtFreeVirtualMemory
 322 stdcall NtGetContextThread(long ptr) ChpeNtGetContextThread
-328 stdcall -version=0x600+ NtGetNextThread(ptr ptr long long long ptr) ChpeNtGetNextThread
-357 stdcall NtMapViewOfSection(long long ptr long ptr ptr ptr long long long) ChpeNtMapViewOfSection
+328 stdcall -version=0x600+ NtGetNextThread(ptr ptr long long long ptr) ChpeAutoNtGetNextThread
+357 stdcall NtMapViewOfSection(long long ptr long ptr ptr ptr long long long) ChpeAutoNtMapViewOfSection
 358 stdcall NtMapViewOfSectionEx(long long ptr ptr ptr long long ptr long) ChpeNtMapViewOfSectionEx
-363 stdcall NtNotifyChangeKey(ptr ptr ptr ptr ptr long long ptr long long) ChpeNtNotifyChangeKey
-364 stdcall NtNotifyChangeMultipleKeys(ptr long ptr ptr ptr ptr ptr long long ptr long long) ChpeNtNotifyChangeMultipleKeys
-369 stdcall NtOpenFile(ptr long ptr ptr long long) ChpeNtOpenFile
-404 stdcall NtProtectVirtualMemory(long ptr ptr long ptr) ChpeNtProtectVirtualMemory
-412 stdcall NtQueryDirectoryFile(long long ptr ptr ptr ptr long long long ptr long) ChpeNtQueryDirectoryFile
-422 stdcall NtQueryInformationFile(long ptr ptr long long) ChpeNtQueryInformationFile
-435 stdcall NtQueryKey(long long ptr long ptr) ChpeNtQueryKey
-256 stdcall NtCreateKey(ptr long ptr long ptr long ptr) ChpeNtCreateKey
-427 stdcall NtQueryInformationThread(long long ptr long ptr) ChpeNtQueryInformationThread
-425 stdcall NtQueryInformationProcess(ptr long ptr long ptr) ChpeNtQueryInformationProcess
+363 stdcall NtNotifyChangeKey(ptr ptr ptr ptr ptr long long ptr long long) ChpeAutoNtNotifyChangeKey
+364 stdcall NtNotifyChangeMultipleKeys(ptr long ptr ptr ptr ptr ptr long long ptr long long) ChpeAutoNtNotifyChangeMultipleKeys
+369 stdcall NtOpenFile(ptr long ptr ptr long long) ChpeAutoNtOpenFile
+404 stdcall NtProtectVirtualMemory(long ptr ptr long ptr) ChpeAutoNtProtectVirtualMemory
+412 stdcall NtQueryDirectoryFile(long long ptr ptr ptr ptr long long long ptr long) ChpeAutoNtQueryDirectoryFile
+422 stdcall NtQueryInformationFile(long ptr ptr long long) ChpeAutoNtQueryInformationFile
+435 stdcall NtQueryKey(long long ptr long ptr) ChpeAutoNtQueryKey
+256 stdcall NtCreateKey(ptr long ptr long ptr long ptr) ChpeAutoNtCreateKey
+427 stdcall NtQueryInformationThread(long long ptr long ptr) ChpeAutoNtQueryInformationThread
+425 stdcall NtQueryInformationProcess(ptr long ptr long ptr) ChpeAutoNtQueryInformationProcess
 876 stdcall RtlFormatCurrentUserKeyPath(ptr) ChpeRtlFormatCurrentUserKeyPath
 887 stdcall RtlFreeUnicodeString(ptr) ChpeRtlFreeUnicodeString
-372 stdcall NtOpenKey(ptr long ptr) ChpeNtOpenKey
-826 stdcall NtOpenKeyEx(ptr long ptr long) ChpeNtOpenKeyEx
-456 stdcall NtQueryValueKey(long ptr long ptr long ptr) ChpeNtQueryValueKey
-553 stdcall NtSetValueKey(long ptr long long ptr long) ChpeNtSetValueKey
-290 stdcall NtDeleteKey(long) ChpeNtDeleteKey
-293 stdcall NtDeleteValueKey(long ptr) ChpeNtDeleteValueKey
-302 stdcall NtEnumerateKey(long long long ptr long ptr) ChpeNtEnumerateKey
-305 stdcall NtEnumerateValueKey(long long long ptr long ptr) ChpeNtEnumerateValueKey
-313 stdcall NtFlushKey(long) ChpeNtFlushKey
-251 stdcall NtCreateWaitCompletionPacket(ptr long ptr) ChpeNtCreateWaitCompletionPacket
-252 stdcall NtAssociateWaitCompletionPacket(long long long ptr ptr long long ptr) ChpeNtAssociateWaitCompletionPacket
-253 stdcall NtCancelWaitCompletionPacket(long long) ChpeNtCancelWaitCompletionPacket
-458 stdcall NtQueryVolumeInformationFile(long ptr ptr long long) ChpeNtQueryVolumeInformationFile
-439 stdcall NtQueryObject(long long long long long) ChpeNtQueryObject
-451 stdcall NtQuerySystemInformation(long ptr long ptr) ChpeNtQuerySystemInformation
+372 stdcall NtOpenKey(ptr long ptr) ChpeAutoNtOpenKey
+826 stdcall NtOpenKeyEx(ptr long ptr long) ChpeAutoNtOpenKeyEx
+456 stdcall NtQueryValueKey(long ptr long ptr long ptr) ChpeAutoNtQueryValueKey
+553 stdcall NtSetValueKey(long ptr long long ptr long) ChpeAutoNtSetValueKey
+290 stdcall NtDeleteKey(long) ChpeAutoNtDeleteKey
+293 stdcall NtDeleteValueKey(long ptr) ChpeAutoNtDeleteValueKey
+302 stdcall NtEnumerateKey(long long long ptr long ptr) ChpeAutoNtEnumerateKey
+305 stdcall NtEnumerateValueKey(long long long ptr long ptr) ChpeAutoNtEnumerateValueKey
+313 stdcall NtFlushKey(long) ChpeAutoNtFlushKey
+251 stdcall NtCreateWaitCompletionPacket(ptr long ptr) ChpeAutoNtCreateWaitCompletionPacket
+252 stdcall NtAssociateWaitCompletionPacket(long long long ptr ptr long long ptr) ChpeAutoNtAssociateWaitCompletionPacket
+253 stdcall NtCancelWaitCompletionPacket(long long) ChpeAutoNtCancelWaitCompletionPacket
+458 stdcall NtQueryVolumeInformationFile(long ptr ptr long long) ChpeAutoNtQueryVolumeInformationFile
+439 stdcall NtQueryObject(long long long long long) ChpeAutoNtQueryObject
+451 stdcall NtQuerySystemInformation(long ptr long ptr) ChpeAutoNtQuerySystemInformation
 921 stdcall RtlGetNativeSystemInformation(long ptr long ptr) ChpeRtlGetNativeSystemInformation
-457 stdcall NtQueryVirtualMemory(long ptr long ptr long ptr) ChpeNtQueryVirtualMemory
+457 stdcall NtQueryVirtualMemory(long ptr long ptr long ptr) ChpeAutoNtQueryVirtualMemory
 464 stdcall NtRaiseException(ptr ptr long) ChpeNtRaiseException
-466 stdcall NtReadFile(long long ptr ptr ptr ptr long ptr ptr) ChpeNtReadFile
-470 stdcall NtReadVirtualMemory(long ptr ptr long ptr) ChpeNtReadVirtualMemory
+466 stdcall NtReadFile(long long ptr ptr ptr ptr long ptr ptr) ChpeAutoNtReadFile
+470 stdcall NtReadVirtualMemory(long ptr ptr long ptr) ChpeAutoNtReadVirtualMemory
 511 stdcall NtSetContextThread(long ptr) ChpeNtSetContextThread
-562 stdcall NtSuspendProcess(ptr) ChpeNtSuspendProcess
-563 stdcall NtSuspendThread(ptr ptr) ChpeNtSuspendThread
-500 stdcall NtResumeThread(ptr ptr) ChpeNtResumeThread
-566 stdcall NtTerminateProcess(long long) ChpeNtTerminateProcess
-567 stdcall NtTerminateThread(long long) ChpeNtTerminateThread
-580 stdcall NtUnmapViewOfSection(long ptr) ChpeNtUnmapViewOfSection
+562 stdcall NtSuspendProcess(ptr) ChpeAutoNtSuspendProcess
+563 stdcall NtSuspendThread(ptr ptr) ChpeAutoNtSuspendThread
+500 stdcall NtResumeThread(ptr ptr) ChpeAutoNtResumeThread
+566 stdcall NtTerminateProcess(long long) ChpeAutoNtTerminateProcess
+567 stdcall NtTerminateThread(long long) ChpeAutoNtTerminateThread
+580 stdcall NtUnmapViewOfSection(long ptr) ChpeAutoNtUnmapViewOfSection
 581 stdcall NtUnmapViewOfSectionEx(long ptr long) ChpeNtUnmapViewOfSectionEx
-587 stdcall NtWaitForAlertByThreadId(ptr ptr) ChpeNtWaitForAlertByThreadId
-595 stdcall NtWriteFile(long long ptr ptr ptr ptr long ptr ptr) ChpeNtWriteFile
-598 stdcall NtWriteVirtualMemory(long ptr ptr long ptr) ChpeNtWriteVirtualMemory
+587 stdcall NtWaitForAlertByThreadId(ptr ptr) ChpeAutoNtWaitForAlertByThreadId
+595 stdcall NtWriteFile(long long ptr ptr ptr ptr long ptr ptr) ChpeAutoNtWriteFile
+598 stdcall NtWriteVirtualMemory(long ptr ptr long ptr) ChpeAutoNtWriteVirtualMemory
 633 stdcall RtlAddFunctionTable(ptr long long) ChpeRtlAddFunctionTable
 634 stdcall RtlAddGrowableFunctionTable(ptr ptr long long long long) ChpeRtlAddGrowableFunctionTable
 639 stdcall RtlAddVectoredContinueHandler(long ptr) ChpeRtlAddVectoredContinueHandler
@@ -216,8 +216,8 @@
 1309 stdcall RtlWow64GetThreadSelectorEntry(ptr ptr long ptr) ChpeRtlWow64GetThreadSelectorEntry
 
 273 stdcall NtCreateThread(ptr long ptr long ptr ptr ptr long) ChpeNtCreateThread
-321 stdcall NtFsControlFile(long long ptr ptr ptr long ptr long ptr long) ChpeNtFsControlFile
-550 stdcall NtSetTimer(long ptr ptr ptr long long ptr) ChpeNtSetTimer
+321 stdcall NtFsControlFile(long long ptr ptr ptr long ptr long ptr long) ChpeAutoNtFsControlFile
+550 stdcall NtSetTimer(long ptr ptr ptr long long ptr) ChpeAutoNtSetTimer
 744 stdcall RtlCreateUserThread(long ptr long long ptr ptr ptr ptr ptr) ChpeRtlCreateUserThread
 756 stdcall RtlDecompressFragment(long ptr long ptr long long ptr ptr) ChpeRtlDecompressFragment
 890 stdcall RtlGenerate8dot3Name(ptr ptr long ptr) ChpeRtlGenerate8dot3Name

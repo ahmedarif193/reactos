@@ -112,6 +112,7 @@ DECLSPEC_NORETURN VOID NTAPI ChpeContinueToGuest(PVOID Amd64Context);
 DECLSPEC_NORETURN VOID NTAPI ChpeContinueToGuestEx(PVOID Amd64Context, BOOLEAN FullContext);
 BOOLEAN NTAPI RtlIsEcCode(ULONG_PTR Address);
 BOOLEAN NTAPI ChpeMarkEcCodeRange(PVOID Address, SIZE_T Length);
+static VOID ChpepDispatchEmulatedSyscall(PCONTEXT Context);
 
 typedef struct _CHPE_AMD64_SCOPE_TABLE
 {
@@ -682,6 +683,11 @@ ChpeDispatchExceptionNative(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT
         return STATUS_INVALID_PARAMETER;
 
     ChpepContextArm64ToX64(&EcContext, NativeContext);
+    if (ExceptionRecord->ExceptionCode == STATUS_EMULATION_SYSCALL)
+    {
+        ChpepDispatchEmulatedSyscall(&EcContext.AMD64_Context);
+        ChpeContinueToGuestEx(&EcContext.AMD64_Context, FALSE);
+    }
     Status = ChpepCallExceptionHandlers(ExceptionRecord, &EcContext.AMD64_Context);
     if (Status != STATUS_SUCCESS)
     {
@@ -3304,4 +3310,134 @@ ChpeUnsupportedEmulationEntry(PVOID Context)
     RtlRaiseStatus(STATUS_NOT_SUPPORTED);
 }
 
+#define CHPE_AUTO_NATIVE_ALIAS(name) \
+    __asm__(".globl \"#ChpeAutoNt" #name "\"\n" \
+            ".set \"#ChpeAutoNt" #name "\",\"#ChpeNt" #name "\"\n");
+CHPE_AUTO_NATIVE_ALIAS(AdjustPrivilegesToken)
+CHPE_AUTO_NATIVE_ALIAS(AllocateVirtualMemory)
+CHPE_AUTO_NATIVE_ALIAS(AllocateVirtualMemoryEx)
+CHPE_AUTO_NATIVE_ALIAS(AlertThreadByThreadId)
+CHPE_AUTO_NATIVE_ALIAS(Close)
+CHPE_AUTO_NATIVE_ALIAS(CreateFile)
+CHPE_AUTO_NATIVE_ALIAS(CreateNamedPipeFile)
+CHPE_AUTO_NATIVE_ALIAS(DeviceIoControlFile)
+CHPE_AUTO_NATIVE_ALIAS(FlushProcessWriteBuffers)
+CHPE_AUTO_NATIVE_ALIAS(FlushInstructionCache)
+CHPE_AUTO_NATIVE_ALIAS(FreeVirtualMemory)
+CHPE_AUTO_NATIVE_ALIAS(GetNextThread)
+CHPE_AUTO_NATIVE_ALIAS(MapViewOfSection)
+CHPE_AUTO_NATIVE_ALIAS(NotifyChangeKey)
+CHPE_AUTO_NATIVE_ALIAS(NotifyChangeMultipleKeys)
+CHPE_AUTO_NATIVE_ALIAS(OpenFile)
+CHPE_AUTO_NATIVE_ALIAS(ProtectVirtualMemory)
+CHPE_AUTO_NATIVE_ALIAS(QueryDirectoryFile)
+CHPE_AUTO_NATIVE_ALIAS(QueryInformationFile)
+CHPE_AUTO_NATIVE_ALIAS(QueryKey)
+CHPE_AUTO_NATIVE_ALIAS(CreateKey)
+CHPE_AUTO_NATIVE_ALIAS(QueryInformationThread)
+CHPE_AUTO_NATIVE_ALIAS(QueryInformationProcess)
+CHPE_AUTO_NATIVE_ALIAS(OpenKey)
+CHPE_AUTO_NATIVE_ALIAS(OpenKeyEx)
+CHPE_AUTO_NATIVE_ALIAS(QueryValueKey)
+CHPE_AUTO_NATIVE_ALIAS(SetValueKey)
+CHPE_AUTO_NATIVE_ALIAS(DeleteKey)
+CHPE_AUTO_NATIVE_ALIAS(DeleteValueKey)
+CHPE_AUTO_NATIVE_ALIAS(EnumerateKey)
+CHPE_AUTO_NATIVE_ALIAS(EnumerateValueKey)
+CHPE_AUTO_NATIVE_ALIAS(FlushKey)
+CHPE_AUTO_NATIVE_ALIAS(CreateWaitCompletionPacket)
+CHPE_AUTO_NATIVE_ALIAS(AssociateWaitCompletionPacket)
+CHPE_AUTO_NATIVE_ALIAS(CancelWaitCompletionPacket)
+CHPE_AUTO_NATIVE_ALIAS(QueryVolumeInformationFile)
+CHPE_AUTO_NATIVE_ALIAS(QueryObject)
+CHPE_AUTO_NATIVE_ALIAS(QuerySystemInformation)
+CHPE_AUTO_NATIVE_ALIAS(QueryVirtualMemory)
+CHPE_AUTO_NATIVE_ALIAS(ReadFile)
+CHPE_AUTO_NATIVE_ALIAS(ReadVirtualMemory)
+CHPE_AUTO_NATIVE_ALIAS(SuspendProcess)
+CHPE_AUTO_NATIVE_ALIAS(SuspendThread)
+CHPE_AUTO_NATIVE_ALIAS(ResumeThread)
+CHPE_AUTO_NATIVE_ALIAS(TerminateProcess)
+CHPE_AUTO_NATIVE_ALIAS(TerminateThread)
+CHPE_AUTO_NATIVE_ALIAS(UnmapViewOfSection)
+CHPE_AUTO_NATIVE_ALIAS(WaitForAlertByThreadId)
+CHPE_AUTO_NATIVE_ALIAS(WriteFile)
+CHPE_AUTO_NATIVE_ALIAS(WriteVirtualMemory)
+CHPE_AUTO_NATIVE_ALIAS(FsControlFile)
+CHPE_AUTO_NATIVE_ALIAS(SetTimer)
+#undef CHPE_AUTO_NATIVE_ALIAS
+
 #include "chpebridge_generated.inc"
+
+NTSTATUS NTAPI NtCreateTransactionManager(PHANDLE TmHandle, ACCESS_MASK DesiredAccess,
+                                          POBJECT_ATTRIBUTES ObjectAttributes,
+                                          PUNICODE_STRING LogFileName, ULONG CreateOptions,
+                                          ULONG CommitStrength);
+
+#define CHPE_PARAMS_0 VOID
+#define CHPE_PARAMS_1 ULONG_PTR a0
+#define CHPE_PARAMS_2 CHPE_PARAMS_1, ULONG_PTR a1
+#define CHPE_PARAMS_3 CHPE_PARAMS_2, ULONG_PTR a2
+#define CHPE_PARAMS_4 CHPE_PARAMS_3, ULONG_PTR a3
+#define CHPE_PARAMS_5 CHPE_PARAMS_4, ULONG_PTR a4
+#define CHPE_PARAMS_6 CHPE_PARAMS_5, ULONG_PTR a5
+#define CHPE_PARAMS_7 CHPE_PARAMS_6, ULONG_PTR a6
+#define CHPE_PARAMS_8 CHPE_PARAMS_7, ULONG_PTR a7
+#define CHPE_PARAMS_9 CHPE_PARAMS_8, ULONG_PTR a8
+#define CHPE_PARAMS_10 CHPE_PARAMS_9, ULONG_PTR a9
+#define CHPE_PARAMS_11 CHPE_PARAMS_10, ULONG_PTR a10
+#define CHPE_PARAMS_12 CHPE_PARAMS_11, ULONG_PTR a11
+#define CHPE_PARAMS_13 CHPE_PARAMS_12, ULONG_PTR a12
+#define CHPE_PARAMS_14 CHPE_PARAMS_13, ULONG_PTR a13
+#define CHPE_PARAMS_15 CHPE_PARAMS_14, ULONG_PTR a14
+#define CHPE_PARAMS_16 CHPE_PARAMS_15, ULONG_PTR a15
+#define CHPE_PARAMS_17 CHPE_PARAMS_16, ULONG_PTR a16
+#define CHPE_PARAMS(Count) CHPE_PARAMS_##Count
+
+#define SYSFUNCS_TARGET_ARM64 1
+#define SVC_(name, argcount) \
+    __attribute__((naked)) NTSTATUS NTAPI ChpeSyscall##name(CHPE_PARAMS(argcount)) \
+    { \
+        __asm__("b \"#Nt" #name "\""); \
+    }
+#define SVC_WRAP_(name, argcount) SVC_(name, argcount)
+#include <sysfuncs.h>
+#undef SVC_WRAP_
+#undef SVC_
+
+enum
+{
+    ChpeSyscallCount = 0
+#define SVC_(name, argcount) + 1
+#define SVC_WRAP_(name, argcount) + 1
+#include <sysfuncs.h>
+#undef SVC_WRAP_
+#undef SVC_
+};
+
+extern const PVOID ChpeSyscallServices[ChpeSyscallCount];
+__asm__(".section .rdata,\"dr\"\n.balign 8\n.globl ChpeSyscallServices\nChpeSyscallServices:\n"
+#define SVC_(name, argcount) ".quad \"#ChpeSyscall" #name "\"\n"
+#define SVC_WRAP_(name, argcount) SVC_(name, argcount)
+#include <sysfuncs.h>
+#undef SVC_WRAP_
+#undef SVC_
+        ".text\n");
+
+#undef SYSFUNCS_TARGET_ARM64
+
+VOID NTAPI ChpeInvokeSyscall(VOID);
+
+static VOID
+ChpepDispatchEmulatedSyscall(PCONTEXT Context)
+{
+    if (Context->Rax < ChpeSyscallCount)
+    {
+        Context->Rcx = Context->R10;
+        Context->R10 = Context->Rip;
+        Context->Rip = (ULONG64)(ULONG_PTR)ChpeInvokeSyscall;
+        return;
+    }
+
+    Context->Rax = (ULONG)STATUS_INVALID_SYSTEM_SERVICE;
+}
