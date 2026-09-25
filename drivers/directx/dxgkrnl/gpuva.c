@@ -3527,6 +3527,7 @@ DxgkGpuVaMap(
     _In_ ULONGLONG              SizeInBytes,
     _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection,
     _In_ UINT64                 DriverProtection,
+    _In_ D3DGPU_VIRTUAL_ADDRESS PlannedAddress,
     _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress)
 {
     D3DGPU_VIRTUAL_ADDRESS ActualAddress;
@@ -3565,6 +3566,11 @@ DxgkGpuVaMap(
         return STATUS_QUOTA_EXCEEDED;
 
     *OutAddress = 0;
+    /* A bridge-selected automatic address is provisional until this lock is
+     * acquired. Preserve that distinction from an explicit caller remap. */
+    if (PlannedAddress != 0 &&
+        (BaseAddress != 0 || (PlannedAddress & GPUVA_RESERVATION_MASK) != 0))
+        return STATUS_INVALID_PARAMETER;
     if (BaseAddress != 0)
     {
         if (BaseAddress < GPUVA_START_ADDRESS ||
@@ -3643,7 +3649,26 @@ DxgkGpuVaMap(
         return Status;
     }
 
-    if (BaseAddress != 0)
+    if (PlannedAddress != 0)
+    {
+        ActualAddress = PlannedAddress;
+        if (ActualAddress < MinAddress || ActualAddress >= MaxAddress ||
+            SizeInBytes > MaxAddress - ActualAddress)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (GpuVaFindOverlapping(Process, ActualAddress, SizeInBytes) != NULL)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
+    }
+    else if (BaseAddress != 0)
     {
         PDXGKRNL_GPUVA_RANGE Existing;
 

@@ -2585,6 +2585,7 @@ DxgkGpuVaMap(
     _In_ ULONGLONG              SizeInBytes,
     _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection,
     _In_ UINT64                 DriverProtection,
+    _In_ D3DGPU_VIRTUAL_ADDRESS PlannedAddress,
     _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
 
 BOOLEAN

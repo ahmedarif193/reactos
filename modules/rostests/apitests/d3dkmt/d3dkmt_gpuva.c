@@ -201,3 +201,139 @@ START_TEST(gpuva)
     Test_ReserveGpuVa_BadHandle();
     Test_GpuVa_MapCycle();
 }
+
+/* Automatic placement must never alias another live automatic mapping, even
+ * when different threads concurrently publish their chosen addresses. NoAccess
+ * mappings exercise allocation of VA ranges without vendor-private allocations. */
+#define GPUVA_MAP_THREADS 8
+#define GPUVA_MAP_ITERATIONS 64
+
+typedef struct _GPUVA_MAP_THREAD
+{
+    PFND3DKMT_MAPGPUVIRTUALADDRESS Map;
+    D3DKMT_HANDLE Queue;
+    HANDLE Start;
+    NTSTATUS Status[GPUVA_MAP_ITERATIONS];
+    D3DGPU_VIRTUAL_ADDRESS Address[GPUVA_MAP_ITERATIONS];
+} GPUVA_MAP_THREAD;
+
+static DWORD WINAPI
+MapGpuVaThread(void *Parameter)
+{
+    GPUVA_MAP_THREAD *Thread = Parameter;
+    D3DDDI_MAPGPUVIRTUALADDRESS Map;
+    UINT Index;
+
+    WaitForSingleObject(Thread->Start, INFINITE);
+    for (Index = 0; Index < GPUVA_MAP_ITERATIONS; ++Index)
+    {
+        memset(&Map, 0, sizeof(Map));
+        Map.hPagingQueue = Thread->Queue;
+        Map.SizeInPages = 1;
+        Map.Protection.NoAccess = 1;
+        Thread->Status[Index] = Thread->Map(&Map);
+        Thread->Address[Index] = NT_SUCCESS(Thread->Status[Index]) ? Map.VirtualAddress : 0;
+    }
+    return 0;
+}
+
+START_TEST(gpuva_parallel)
+{
+    GPUVA_MAP_THREAD Data[GPUVA_MAP_THREADS] = {{0}};
+    HANDLE Threads[GPUVA_MAP_THREADS], Start;
+    D3DGPU_VIRTUAL_ADDRESS Addresses[GPUVA_MAP_THREADS * GPUVA_MAP_ITERATIONS];
+    D3DKMT_HANDLE Adapter, Device;
+    D3DKMT_CREATEPAGINGQUEUE Queue = {0};
+    D3DDDI_DESTROYPAGINGQUEUE DestroyQueue;
+    D3DDDI_MAPGPUVIRTUALADDRESS Probe = {0};
+    D3DKMT_FREEGPUVIRTUALADDRESS Free = {0};
+    UINT Created = 0, Count = 0, Thread, Index, Previous;
+    BOOL Duplicate;
+    NTSTATUS Status;
+
+    LOADFN(PFND3DKMT_CREATEPAGINGQUEUE, CreateQueue, "D3DKMTCreatePagingQueue");
+    LOADFN(PFND3DKMT_DESTROYPAGINGQUEUE, DeleteQueue, "D3DKMTDestroyPagingQueue");
+    LOADFN(PFND3DKMT_MAPGPUVIRTUALADDRESS, Map, "D3DKMTMapGpuVirtualAddress");
+    LOADFN(PFND3DKMT_FREEGPUVIRTUALADDRESS, FreeMap, "D3DKMTFreeGpuVirtualAddress");
+
+    Adapter = OpenRenderAdapter();
+    if (!Adapter) { skip("No render-capable adapter\n"); return; }
+    Device = CreateTestDevice(Adapter);
+    if (!Device) { skip("No test device\n"); CloseAdapter(Adapter); return; }
+    Queue.hDevice = Device;
+    Queue.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+    Status = CreateQueue(&Queue);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("Paging queue unavailable: %#lx\n", Status);
+        goto CleanupDevice;
+    }
+
+    Probe.hPagingQueue = Queue.hPagingQueue;
+    Probe.SizeInPages = 1;
+    Probe.Protection.NoAccess = 1;
+    Status = Map(&Probe);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("NoAccess automatic mappings unavailable: %#lx\n", Status);
+        goto CleanupQueue;
+    }
+    Free.hAdapter = Adapter;
+    Free.BaseAddress = Probe.VirtualAddress;
+    Free.Size = 0x1000;
+    Status = FreeMap(&Free);
+    ok_succeeded(Status, "Free probe mapping failed: %#lx\n", Status);
+
+    Start = CreateEventW(NULL, TRUE, FALSE, NULL);
+    ok(Start != NULL, "CreateEvent failed: %lu\n", GetLastError());
+    if (!Start) goto CleanupQueue;
+    for (Thread = 0; Thread < GPUVA_MAP_THREADS; ++Thread)
+    {
+        Data[Thread].Map = Map;
+        Data[Thread].Queue = Queue.hPagingQueue;
+        Data[Thread].Start = Start;
+        Threads[Thread] = CreateThread(NULL, 0, MapGpuVaThread, &Data[Thread], 0, NULL);
+        ok(Threads[Thread] != NULL, "CreateThread %u failed: %lu\n", Thread, GetLastError());
+        if (!Threads[Thread]) break;
+        ++Created;
+    }
+    SetEvent(Start);
+    for (Thread = 0; Thread < Created; ++Thread)
+    {
+        WaitForSingleObject(Threads[Thread], INFINITE);
+        CloseHandle(Threads[Thread]);
+    }
+    CloseHandle(Start);
+
+    for (Thread = 0; Thread < Created; ++Thread)
+    {
+        for (Index = 0; Index < GPUVA_MAP_ITERATIONS; ++Index)
+        {
+            Status = Data[Thread].Status[Index];
+            ok_succeeded(Status, "Thread %u map %u failed: %#lx\n", Thread, Index, Status);
+            if (!NT_SUCCESS(Status)) continue;
+            ok(Data[Thread].Address[Index] != 0, "Thread %u map %u returned zero\n", Thread, Index);
+            if (!Data[Thread].Address[Index]) continue;
+            Duplicate = FALSE;
+            for (Previous = 0; Previous < Count; ++Previous)
+                if (Addresses[Previous] == Data[Thread].Address[Index]) Duplicate = TRUE;
+            ok(!Duplicate, "Thread %u map %u aliases live automatic mapping %#I64x\n",
+               Thread, Index, Data[Thread].Address[Index]);
+            if (!Duplicate) Addresses[Count++] = Data[Thread].Address[Index];
+        }
+    }
+    trace("%u successful unique mappings from %u concurrent threads\n", Count, Created);
+    for (Index = 0; Index < Count; ++Index)
+    {
+        Free.BaseAddress = Addresses[Index];
+        Status = FreeMap(&Free);
+        ok_succeeded(Status, "Free mapping %u failed: %#lx\n", Index, Status);
+    }
+CleanupQueue:
+    DestroyQueue.hPagingQueue = Queue.hPagingQueue;
+    Status = DeleteQueue(&DestroyQueue);
+    ok_succeeded(Status, "DestroyPagingQueue failed: %#lx\n", Status);
+CleanupDevice:
+    DestroyTestDevice(Device);
+    CloseAdapter(Adapter);
+}

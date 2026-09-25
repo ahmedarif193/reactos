@@ -10,6 +10,7 @@ extern void func_D3dkmtPresent(void);
 extern void func_pagingqueue(void);
 extern void func_residency(void);
 extern void func_gpuva(void);
+extern void func_gpuva_parallel(void);
 extern void func_softgpu_lifetime(void);
 extern void func_hwqueue(void);
 extern void func_sync2(void);
@@ -92,6 +93,7 @@ const struct test winetest_testlist[] =
     { "pagingqueue",   func_pagingqueue },
     { "residency",     func_residency },
     { "gpuva",         func_gpuva },
+    { "gpuva_parallel", func_gpuva_parallel },
     { "softgpu_lifetime", func_softgpu_lifetime },
     { "hwqueue",       func_hwqueue },
     { "sync2",         func_sync2 },
