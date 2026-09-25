@@ -71,7 +71,7 @@ NtSetInformationVirtualMemory(
 {
     MI_PROCESS_REFERENCE Target;
     PMEMORY_RANGE_ENTRY Ranges;
-    ULONG Flag;
+    ULONG Flag = 0;
     SIZE_T Bytes;
     ULONG_PTR Index;
     NTSTATUS Status;
@@ -157,6 +157,7 @@ MiIsEcCodeAddress(
     _In_ PEPROCESS Process,
     _In_ PVOID Address)
 {
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN10)
     volatile ULONGLONG *BitmapWord;
     ULONG_PTR AddressValue = (ULONG_PTR)Address;
     ULONG_PTR BitmapAddress;
@@ -199,4 +200,9 @@ MiIsEcCodeAddress(
     _SEH2_END;
 
     return IsEcCode;
+#else
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(Address);
+    return FALSE;
+#endif
 }
