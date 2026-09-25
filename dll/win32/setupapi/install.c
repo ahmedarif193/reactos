@@ -1711,6 +1711,39 @@ static BOOL GetLineText( HINF hinf, PCWSTR section_name, PCWSTR key_name, PWSTR 
 }
 
 
+/* Read every field of a line as a double-NUL terminated multi-string */
+static BOOL GetMultiSzLine( HINF hinf, PCWSTR section_name, PCWSTR key_name, PWSTR *value)
+{
+    INFCONTEXT context;
+    DWORD required;
+    PWSTR buf = NULL;
+
+    *value = NULL;
+
+    if (! SetupFindFirstLineW( hinf, section_name, key_name, &context ) )
+        return FALSE;
+
+    if (! SetupGetMultiSzFieldW( &context, 1, NULL, 0, &required ) )
+        return FALSE;
+
+    buf = HeapAlloc( GetProcessHeap(), 0, required * sizeof(WCHAR) );
+    if ( ! buf )
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    if (! SetupGetMultiSzFieldW( &context, 1, buf, required, NULL ) )
+    {
+        HeapFree( GetProcessHeap(), 0, buf );
+        return FALSE;
+    }
+
+    *value = buf;
+    return TRUE;
+}
+
+
 static BOOL GetIntField( HINF hinf, PCWSTR section_name, PCWSTR key_name, INT *value)
 {
     LPWSTR buffer, end;
@@ -1869,7 +1902,8 @@ static BOOL InstallOneService(
     GetLineText(hInf, ServiceSection, LoadOrderGroupKey, &LoadOrderGroup);
     GetLineText(hInf, ServiceSection, DisplayNameKey, &DisplayName);
     GetLineText(hInf, ServiceSection, DescriptionKey, &Description);
-    GetLineText(hInf, ServiceSection, DependenciesKey, &Dependencies);
+    /* CreateServiceW and ChangeServiceConfigW take a multi-string, one entry per field */
+    GetMultiSzLine(hInf, ServiceSection, DependenciesKey, &Dependencies);
     GetLineText(hInf, ServiceSection, StartNameKey, &StartName);
 
     /* If there is no group, we must not request a tag */
