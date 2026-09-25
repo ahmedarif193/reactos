@@ -1506,6 +1506,13 @@ private:
         _In_ PUNICODE_STRING Name);
 
     NTSTATUS
+    EnsureFileNameSpace(
+        _In_ PFileRecord File,
+        _In_ ULONG NameLength,
+        _In_ PFileRecord OldParent,
+        _In_ PFileRecord NewParent);
+
+    NTSTATUS
     InsertFileNameLink(
         _In_ PFileRecord File,
         _In_ const FileNameEx* Source,

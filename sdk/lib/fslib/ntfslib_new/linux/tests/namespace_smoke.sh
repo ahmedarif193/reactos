@@ -114,6 +114,38 @@ test "$(link_count /moved-src/alias.bin)" = 1
 "$driver" --remove-dir "$image" /dst
 "$ntfsfix" -n "$image" >/dev/null
 
+# Near-full resident records need room for the temporary second $FILE_NAME.
+dd if=/dev/zero bs=590 count=1 status=none |
+    tr '\000' R >"$workdir/resident.bin"
+"$driver" --create-dir "$image" /dense >/dev/null
+"$driver" --create-dir "$image" /target >/dev/null
+for operation in same cross case link; do
+    source=/dense/verify-persistence.cmd.partial
+    "$driver" --create-file "$image" "$source" >/dev/null
+    "$driver" --write "$image" "$source" 0 "$workdir/resident.bin"
+    case "$operation" in
+        same) target=/dense/verify-persistence.cmd ;;
+        cross) target=/target/verify-persistence.cmd ;;
+        case) target=/dense/VERIFY-PERSISTENCE.CMD.PARTIAL ;;
+        link) target=/target/verify-persistence.cmd ;;
+    esac
+    if [ "$operation" = link ]; then
+        "$driver" --link "$image" "$source" "$target"
+        test "$(link_count "$target")" = 2
+        "$ntfscat" "$image" "$source" | cmp - "$workdir/resident.bin"
+        # Promotion must update the original name's duplicated sizes too.
+        test "$("$driver" --list-info "$image" /dense |
+            awk '$4 == "verify-persistence.cmd.partial" { print $2 " " $3 }')" = "590 $cluster_size"
+        "$driver" --remove "$image" "$source"
+    else
+        "$driver" --rename "$image" "$source" "$target"
+    fi
+    "$ntfscat" "$image" "$target" | cmp - "$workdir/resident.bin"
+    "$driver" --remove "$image" "$target"
+done
+"$driver" --remove-dir "$image" /dense
+"$driver" --remove-dir "$image" /target
+
 # Push one directory through root promotion, node splits, and the
 # initial $ATTRIBUTE_LIST transition, then drain it back through every
 # removal shape and reclaim the allocation.
