@@ -1641,7 +1641,11 @@ HRESULT NativeDevice::Initialize(IDXGIAdapter *selected_adapter, UINT creation_f
     create_args.DXGIBaseDDI.pDXGIBaseCallbacks = &dxgi_callbacks;
     create_args.DXGIBaseDDI.pDXGIDDIBaseFunctions2 = wddm20 ? reinterpret_cast<DXGI1_1_DDI_BASE_FUNCTIONS *>(&wddm20_dxgi) : &dxgi_functions;
     if (wddm20) create_args.ppfnRetrieveSubObject = &retrieve_subobject;
-    if (FAILED(hr = adapter_functions.pfnCreateDevice(driver_adapter, &create_args))) return hr;
+    if (FAILED(hr = adapter_functions.pfnCreateDevice(driver_adapter, &create_args)))
+    {
+        WARN("Native UMD failed to create a DDI %#x device, hr %#lx.\n", size_args.Interface, hr);
+        return hr;
+    }
     driver_created = true;
     if (wddm20) NativeWddm20InstallFunctions(this);
     if (!functions.pfnDestroyDevice || !functions.pfnCalcPrivateResourceSize
@@ -2397,7 +2401,12 @@ HRESULT NativeDevice::CreateTexture(const D3D11_TEXTURE2D_DESC *input,
         shared_data.desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED;
     if (present && !primary) shared_data.desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
     HRESULT hr = register_resource(runtime_device, texture->runtime_handle.handle, allocation_flags, &shared_data, sizeof(shared_data));
-    if (FAILED(hr)) { texture->Release(); return hr; }
+    if (FAILED(hr))
+    {
+        WARN("Failed to register native texture, hr %#lx.\n", hr);
+        texture->Release();
+        return hr;
+    }
     texture->registered = true;
     BeginCall();
     functions.pfnCreateResource(driver_device, &args, texture->handle, texture->runtime_handle);
