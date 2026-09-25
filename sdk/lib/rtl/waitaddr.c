@@ -26,7 +26,7 @@ typedef struct _RTL_WAIT_ON_ADDRESS_ENTRY
 typedef struct _RTL_WAIT_ON_ADDRESS_BUCKET
 {
     LIST_ENTRY ListHead;
-    volatile LONG Lock;
+    RTL_SRWLOCK Lock;
 } RTL_WAIT_ON_ADDRESS_BUCKET, *PRTL_WAIT_ON_ADDRESS_BUCKET;
 
 static RTL_WAIT_ON_ADDRESS_BUCKET RtlpWaitOnAddressBuckets[RTL_WAIT_BUCKET_COUNT];
@@ -46,8 +46,8 @@ VOID
 RtlpAcquireWaitOnAddressBucket(
     _Inout_ PRTL_WAIT_ON_ADDRESS_BUCKET Bucket)
 {
-    while (InterlockedCompareExchange(&Bucket->Lock, 1, 0) != 0)
-        YieldProcessor();
+    /* Waiters must block: spinning can starve a lower-priority owner. */
+    RtlAcquireSRWLockExclusive(&Bucket->Lock);
 
     if (Bucket->ListHead.Flink == NULL)
         InitializeListHead(&Bucket->ListHead);
@@ -58,7 +58,7 @@ VOID
 RtlpReleaseWaitOnAddressBucket(
     _Inout_ PRTL_WAIT_ON_ADDRESS_BUCKET Bucket)
 {
-    InterlockedExchange(&Bucket->Lock, 0);
+    RtlReleaseSRWLockExclusive(&Bucket->Lock);
 }
 
 static
@@ -163,7 +163,7 @@ RtlpWakeAddress(
             Entry->Address = NULL;
             RemoveEntryList(&Entry->ListEntry);
 
-            /* Keep system calls out of the spin lock for the common case. */
+            /* Keep system calls out of the bucket lock for the common case. */
             if (ThreadCount < RTL_WAKE_BATCH_SIZE)
                 ThreadIds[ThreadCount++] = Entry->ThreadId;
             else
