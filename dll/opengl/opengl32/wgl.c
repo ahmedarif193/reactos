@@ -1226,8 +1226,10 @@ IntDeleteAllContexts(void)
 
     while (Entry != &ContextListHead)
     {
+        LIST_ENTRY* Next = Entry->Flink;
+
         context = CONTAINING_RECORD(Entry, struct wgl_context, ListEntry);
         wglDeleteContext((HGLRC)context);
-        Entry = Entry->Flink;
+        Entry = Next;
     }
 }
