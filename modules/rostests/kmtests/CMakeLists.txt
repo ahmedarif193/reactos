@@ -109,6 +109,7 @@ list(APPEND KMTEST_DRV_SOURCE
     example/Example.c
     example/KernelType.c
     hal/HalSystemInfo.c
+    ndis/NdisRwLock.c
     npfs/NpfsConnect.c
     npfs/NpfsCreate.c
     npfs/NpfsFileInfo.c
@@ -398,7 +399,7 @@ else()
     target_link_options(kmtest_drv PRIVATE -Wl,--forceinteg)
 endif()
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp poguid wdmguid ${PSEH_LIB})
-add_importlibs(kmtest_drv ksecdd ntoskrnl hal)
+add_importlibs(kmtest_drv ksecdd ndis ntoskrnl hal)
 if(REACTOS_USE_WDDM)
     add_importlibs(kmtest_drv dxgkrnl dxgmms2)
 endif()

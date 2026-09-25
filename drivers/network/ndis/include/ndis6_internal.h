@@ -966,14 +966,17 @@ Ndis6FilterTerminalDirectOidRequest(
  *  third-party NDIS 6 driver expects from ndis.sys.
  * ============================================================================ */
 
-/* NDIS 6 RW lock — wraps an EX_PUSH_LOCK or simple shared/exclusive
- * primitive. Drivers use NdisAllocateRWLock + NdisAcquire/Release/Free. */
+/* NDIS 6 spin-based RW lock; LOCK_STATE_EX is a three-byte public ABI. */
 typedef struct _NDIS_RW_LOCK_EX NDIS_RW_LOCK_EX, *PNDIS_RW_LOCK_EX;
 
 typedef struct _LOCK_STATE_EX
 {
-    PVOID  Reserved[2];
+    KIRQL OldIrql;
+    UCHAR LockState;
+    UCHAR Flags;
 } LOCK_STATE_EX, *PLOCK_STATE_EX;
+
+#define NDIS_RWL_AT_DISPATCH_LEVEL 1
 
 PNDIS_RW_LOCK_EX NTAPI
 NdisAllocateRWLock(
