@@ -1074,12 +1074,13 @@ struct _DXGKRNL_ADAPTER
     PVOID                       RetiredShadowFb;
 
     /*
-     * Display mode committed through CommitVidPn.  Set when the mode is
-     * successfully committed to the miniport.
+     * Desktop geometry. VidPnCommitted denotes a hardware topology;
+     * HeadlessDesktop denotes a detached source with no scanout target.
      */
     ULONG                       CommittedWidth;
     ULONG                       CommittedHeight;
     BOOLEAN                     VidPnCommitted;
+    BOOLEAN                     HeadlessDesktop;
     struct _DXGKP_DISPLAY_MODE_CACHE *DisplayModeCache;
     ULONG                       DisplayModeGeneration;
     DECLSPEC_ALIGN(8) volatile LONG64 HotPlugGeneration;
@@ -3391,6 +3392,7 @@ typedef struct _DXGKP_DISPLAY_COMMIT_RESULT
     ULONG CommittedWidth;
     ULONG CommittedHeight;
     BOOLEAN VidPnCommitted;
+    BOOLEAN HeadlessDesktop;
 } DXGKP_DISPLAY_COMMIT_RESULT, *PDXGKP_DISPLAY_COMMIT_RESULT;
 
 NTSTATUS

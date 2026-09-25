@@ -939,6 +939,7 @@ DxgkpAcquireSharedSurfaceSnapshot(
     Snapshot->PostDisplayPitch = Adapter->PostDisplayPitch;
     Snapshot->PostDisplayHeight = Adapter->PostDisplayHeight;
     Snapshot->VidPnCommitted = Adapter->VidPnCommitted;
+    Snapshot->HeadlessDesktop = Adapter->HeadlessDesktop;
 
     if (Snapshot->PrimaryHandle != NULL)
     {
@@ -2739,13 +2740,13 @@ DxgkpExecuteFullPresentMeasured(
                      Entry->SourceAllocation,
                      Adapter,
                      &PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX],
-                     TRUE);
+                     !Entry->SourceGpuOnly);
         if (!NT_SUCCESS(Status))
             goto PresentCleanup;
         PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = SourceDeviceSpecificHandle;
         SubmissionAllocations[SubmissionAllocationCount] =
             Entry->SourceAllocation;
-        SubmissionAllocationCpuDirty[SubmissionAllocationCount] = TRUE;
+        SubmissionAllocationCpuDirty[SubmissionAllocationCount] = !Entry->SourceGpuOnly;
         SubmissionAllocationCount++;
     }
 
@@ -3767,6 +3768,50 @@ DxgkpReleaseOrderedMmioFlip(
 }
 
 static NTSTATUS
+DxgkpPrepareDetachedDesktopPresent(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry)
+{
+    NTSTATUS Status;
+    BOOLEAN Program;
+
+    if (Entry->Type != DxgkPresentTypeFlip ||
+        !Entry->SharedSurface.HeadlessDesktop)
+        return STATUS_SUCCESS;
+
+    /* There is no CRTC/vblank on a detached desktop. A registered compositor
+     * still publishes real pixels for screen reads: copy its finished buffer
+     * into the desktop primary using normal GPU DMA instead of admitting an
+     * MMIO flip which can never scan out. Keep this conversion at admission,
+     * before later commands can enter the submitting context's stream. */
+    if (Entry->CompositorGeneration == 0)
+        return STATUS_GRAPHICS_PRESENT_OCCLUDED;
+    if (!Entry->SharedSurface.RundownHeld ||
+        Entry->SharedSurface.PrimaryHandle == NULL ||
+        Entry->hDestination != 0 || Entry->DestinationAllocation != NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkVidPnAcquireScanoutLease(Adapter, Entry->Device,
+                 Entry->VidPnSourceId, Entry->Window,
+                 Entry->CompositorGeneration, &Program);
+    if (Program)
+        DxgkVidPnReleaseScanoutLease();
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Program)
+        return STATUS_INVALID_DEVICE_STATE;
+    Status = DxgkVidMmReferenceAllocation(Entry->SharedSurface.PrimaryHandle,
+                 Adapter, NULL, &Entry->DestinationAllocation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Entry->hDestination = (D3DKMT_HANDLE)(ULONG_PTR)Entry->SharedSurface.PrimaryHandle;
+    Entry->DestinationIsSharedPrimary = TRUE;
+    Entry->Type = DxgkPresentTypeBlt;
+    Entry->FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
+    Entry->SourceGpuOnly = TRUE;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
 DxgkpCheckPresentAdmission(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_PRESENT_ENTRY Entry)
@@ -3831,6 +3876,13 @@ DxgkpQueuePresent(
     {
         DxgkpReleasePresentEntry(Entry);
         return STATUS_DEVICE_REMOVED;
+    }
+
+    Status = DxgkpPrepareDetachedDesktopPresent(Adapter, Entry);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkpReleasePresentEntry(Entry);
+        return Status;
     }
 
     if (!DxgkpAcquirePresentQueues(Adapter))

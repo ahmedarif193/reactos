@@ -101,6 +101,7 @@ typedef struct _DXGKRNL_SHARED_SURFACE_SNAPSHOT
     ULONG                           PostDisplayPitch;
     ULONG                           PostDisplayHeight;
     BOOLEAN                         VidPnCommitted;
+    BOOLEAN                         HeadlessDesktop;
     BOOLEAN                         RundownHeld;
 } DXGKRNL_SHARED_SURFACE_SNAPSHOT, *PDXGKRNL_SHARED_SURFACE_SNAPSHOT;
 
@@ -157,6 +158,8 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
     BOOLEAN                         SourceIsSharedShadow;
     BOOLEAN                         DestinationIsSharedPrimary;
     BOOLEAN                         DestinationIsSharedShadow;
+    /* A completed GPU producer has no CPU writes to clean on its source. */
+    BOOLEAN                         SourceGpuOnly;
 
     /* Source and destination rectangles. */
     RECT                            SrcRect;
