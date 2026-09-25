@@ -598,7 +598,7 @@ MiAllocateVirtualMemoryEx(
     _In_ ULONG64 HighestAddress)
 {
     return MiAllocateVirtualMemoryBounded(Space, BaseAddress, RegionSize, AllocationType, Protection, 0,
-                                          HighestAddress, 0);
+                                          HighestAddress, 0, FALSE);
 }
 
 NTSTATUS
@@ -610,7 +610,8 @@ MiAllocateVirtualMemoryBounded(
     _In_ ULONG Protection,
     _In_ ULONG64 LowestAddress,
     _In_ ULONG64 HighestAddress,
-    _In_ ULONG64 Alignment)
+    _In_ ULONG64 Alignment,
+    _In_ BOOLEAN DenyDynamicCode)
 {
     ULONG64 Start;
     ULONG64 End;
@@ -620,6 +621,9 @@ MiAllocateVirtualMemoryBounded(
 
     if (!MiProtectionIsValid(Protection) || MI_PROT_IS_COPY(Protection))
         return STATUS_INVALID_PAGE_PROTECTION;
+
+    if (DenyDynamicCode && MI_PROT_IS_EXECUTE(Protection) && (AllocationType & MI_MEM_RESERVE))
+        return STATUS_DYNAMIC_CODE_BLOCKED;
 
     if (AllocationType & MI_MEM_LARGE_PAGES)
     {
@@ -666,6 +670,12 @@ MiAllocateVirtualMemoryBounded(
     {
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
         return STATUS_CONFLICTING_ADDRESSES;
+    }
+
+    if (DenyDynamicCode && MI_PROT_IS_EXECUTE(Protection) && Vad->Type != MiVadImage && !Vad->EcCode)
+    {
+        MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        return STATUS_DYNAMIC_CODE_BLOCKED;
     }
 
     if (Vad->Type != MiVadPrivate)
@@ -928,7 +938,7 @@ MiProtectVirtualMemoryEx(
         return STATUS_CONFLICTING_ADDRESSES;
     }
 
-    if (DenyDynamicCode && MI_PROT_IS_EXECUTE(NewProtection) && Vad->Type != MiVadImage)
+    if (DenyDynamicCode && MI_PROT_IS_EXECUTE(NewProtection) && Vad->Type != MiVadImage && !Vad->EcCode)
     {
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
         return STATUS_DYNAMIC_CODE_BLOCKED;
