@@ -55,6 +55,7 @@ list(APPEND SOURCE
     d3dkmt_procstress.c
     d3dkmt_umdload.c
     d3dkmt_native11.c
+    d3d11_resource_min_lod.c
     d3dkmt_umd2d.c
     d3dkmt_pipeline.c
     d3dkmt_capture.c

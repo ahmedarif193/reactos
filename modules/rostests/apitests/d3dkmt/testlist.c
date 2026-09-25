@@ -43,6 +43,7 @@ extern void func_gpusync(void);
 extern void func_eventcancel(void);
 extern void func_scheduling(void);
 extern void func_native11(void);
+extern void func_resource_min_lod(void);
 extern void func_umdcallbacks(void);
 extern void func_abifreeze(void);
 extern void func_procstress(void);
@@ -123,6 +124,7 @@ const struct test winetest_testlist[] =
     { "eventcancel",   func_eventcancel },
     { "scheduling",    func_scheduling },
     { "native11",      func_native11 },
+    { "resource_min_lod", func_resource_min_lod },
     { "umdcallbacks",  func_umdcallbacks },
     { "abifreeze",     func_abifreeze },
     { "procstress",    func_procstress },
