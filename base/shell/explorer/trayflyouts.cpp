@@ -32,16 +32,6 @@ enum
     TFY_FLYOUT_RADIUS = 8
 };
 
-static double
-TfyEase(double t)
-{
-    double u;
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-    u = 1.0 - t;
-    return 1.0 - u * u * u;
-}
-
 static RECT g_rcTfyMorphFrom;
 static ULONGLONG g_TfyMorphTick;
 static ULONG g_TfyTransitionSeq;
@@ -4045,7 +4035,6 @@ public:
 
     VOID Toggle(HWND hwndOwner, const RECT *prcAnchor)
     {
-        MONITORINFO mi;
         POINT ptRef;
         int xPos, yPos;
 
@@ -5466,7 +5455,6 @@ public:
 
     VOID Open(const RECT *prcAnchor)
     {
-        MONITORINFO mi;
         POINT ptRef;
         int xPos, yPos;
 
@@ -7628,7 +7616,6 @@ public:
 
     VOID Toggle(HWND hwndOwner, const RECT *prcAnchor)
     {
-        MONITORINFO mi;
         POINT ptRef;
         int xPos, yPos;
 
@@ -8144,8 +8131,8 @@ public:
             m_bTracking = TRUE;
         }
         if ((wParam & MK_LBUTTON) && m_iPressed >= 0 && !m_bDragging &&
-            (abs(pt.x - m_ptDown.x) > GetSystemMetrics(SM_CXDRAG) ||
-             abs(pt.y - m_ptDown.y) > GetSystemMetrics(SM_CYDRAG)))
+            (abs(static_cast<int>(pt.x - m_ptDown.x)) > GetSystemMetrics(SM_CXDRAG) ||
+             abs(static_cast<int>(pt.y - m_ptDown.y)) > GetSystemMetrics(SM_CYDRAG)))
         {
             m_bDragging = TRUE;
         }
