@@ -34,13 +34,17 @@ is_process_owned_dc(HDC hdc)
 
 static CRITICAL_SECTION dc_data_cs = {NULL, -1, 0, 0, 0, 0};
 static struct wgl_dc_data* dc_data_list = NULL;
+DWORD PixelFormatInitTlsIndex = TLS_OUT_OF_INDEXES;
 
 BOOL
 IntIsPixelFormatInitializing(VOID)
 {
-    /* Initial format enumeration is serialized by dc_data_cs. A vendor may
-     * query DXGI here before this DC has been published in dc_data_list. */
-    return dc_data_cs.OwningThread == NtCurrentTeb()->ClientId.UniqueThread;
+    DWORD error = GetLastError();
+    BOOL initializing = TlsGetValue(PixelFormatInitTlsIndex) != NULL;
+
+    /* A vendor may query DXGI before this DC's format data is published. */
+    SetLastError(error);
+    return initializing;
 }
 
 LIST_ENTRY ContextListHead;
@@ -52,6 +56,9 @@ get_dc_data_ex(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR *descr)
 {
     HWND hwnd = NULL;
     struct wgl_dc_data* data;
+    struct wgl_dc_data* existing;
+    PVOID previous_initializing;
+    BOOL initialized = FALSE;
     DWORD objType = GetObjectType(hdc);
     ULONG flags = 0;
     union
@@ -99,55 +106,86 @@ get_dc_data_ex(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR *descr)
         }
         data = data->next;
     }
+    LeaveCriticalSection(&dc_data_cs);
+
+    /* The ICD may call back into us from another thread while holding its
+     * own locks, so never call it with dc_data_cs held. */
     data= HeapAlloc(GetProcessHeap(), 0, sizeof(*data));
     if(!data)
+        return NULL;
+
+    previous_initializing = TlsGetValue(PixelFormatInitTlsIndex);
+    if (!TlsSetValue(PixelFormatInitTlsIndex, (PVOID)1))
     {
-        LeaveCriticalSection(&dc_data_cs);
+        HeapFree(GetProcessHeap(), 0, data);
         return NULL;
     }
-    /* initialize the structure */
-    data->owner.u = id.u;
-    data->flags = flags;
-    data->pixelformat = 0;
-    data->sw_data = NULL;
-    data->AdapterLuidValid = FALSE;
-    /* Load the driver */
-    data->icd_data = IntGetIcdData(hdc, &data->AdapterLuid,
-                                   &data->AdapterLuidValid);
-    /* Get the number of available formats for this DC once and for all */
-    if(data->icd_data)
-        data->nb_icd_formats = data->icd_data->DrvDescribePixelFormat(hdc, format, size, descr);
-    else
-        data->nb_icd_formats = 0;
-    TRACE("ICD %S has %u formats for HDC %x.\n", data->icd_data ? data->icd_data->DriverName : NULL, data->nb_icd_formats, hdc);
-    data->nb_sw_formats = sw_DescribePixelFormat(hdc, 0, 0, NULL);
-    /* The ICD/software split is decided here once per DC; a loaded ICD
-     * that offers no format is a hardware path silently lost. */
-    if (data->icd_data == NULL || data->nb_icd_formats == 0)
+    _SEH2_TRY
     {
-        D3DKMT_OPENADAPTERFROMHDC DcAdapter;
-        LUID DcLuid = {0, 0};
-
-        RtlZeroMemory(&DcAdapter, sizeof(DcAdapter));
-        DcAdapter.hDc = hdc;
-        if (NT_SUCCESS(D3DKMTOpenAdapterFromHdc(&DcAdapter)) && DcAdapter.hAdapter != 0)
+        /* initialize the structure */
+        data->owner.u = id.u;
+        data->flags = flags;
+        data->pixelformat = 0;
+        data->sw_data = NULL;
+        data->AdapterLuidValid = FALSE;
+        /* Load the driver */
+        data->icd_data = IntGetIcdData(hdc, &data->AdapterLuid,
+                                       &data->AdapterLuidValid);
+        /* Get the number of available formats for this DC once and for all */
+        if(data->icd_data)
+            data->nb_icd_formats = data->icd_data->DrvDescribePixelFormat(hdc, format, size, descr);
+        else
+            data->nb_icd_formats = 0;
+        TRACE("ICD %S has %u formats for HDC %x.\n", data->icd_data ? data->icd_data->DriverName : NULL, data->nb_icd_formats, hdc);
+        data->nb_sw_formats = sw_DescribePixelFormat(hdc, 0, 0, NULL);
+        /* The ICD/software split is decided here once per DC; a loaded ICD
+         * that offers no format is a hardware path silently lost. */
+        if (data->icd_data == NULL || data->nb_icd_formats == 0)
         {
-            D3DKMT_CLOSEADAPTER Close = { DcAdapter.hAdapter };
+            D3DKMT_OPENADAPTERFROMHDC DcAdapter;
+            LUID DcLuid = {0, 0};
 
-            DcLuid = DcAdapter.AdapterLuid;
-            D3DKMTCloseAdapter(&Close);
+            RtlZeroMemory(&DcAdapter, sizeof(DcAdapter));
+            DcAdapter.hDc = hdc;
+            if (NT_SUCCESS(D3DKMTOpenAdapterFromHdc(&DcAdapter)) && DcAdapter.hAdapter != 0)
+            {
+                D3DKMT_CLOSEADAPTER Close = { DcAdapter.hAdapter };
+
+                DcLuid = DcAdapter.AdapterLuid;
+                D3DKMTCloseAdapter(&Close);
+            }
+            ERR("HDC %p: ICD %S offers %u format(s), software offers %u; ICD adapter LUID %08lx-%08lx (%s), DC adapter LUID %08lx-%08lx source %u\n",
+                hdc,
+                data->icd_data ? data->icd_data->DriverName : L"(none)",
+                data->nb_icd_formats,
+                data->nb_sw_formats,
+                data->AdapterLuid.HighPart,
+                data->AdapterLuid.LowPart,
+                data->AdapterLuidValid ? "valid" : "unknown",
+                DcLuid.HighPart,
+                DcLuid.LowPart,
+                DcAdapter.VidPnSourceId);
         }
-        ERR("HDC %p: ICD %S offers %u format(s), software offers %u; ICD adapter LUID %08lx-%08lx (%s), DC adapter LUID %08lx-%08lx source %u\n",
-            hdc,
-            data->icd_data ? data->icd_data->DriverName : L"(none)",
-            data->nb_icd_formats,
-            data->nb_sw_formats,
-            data->AdapterLuid.HighPart,
-            data->AdapterLuid.LowPart,
-            data->AdapterLuidValid ? "valid" : "unknown",
-            DcLuid.HighPart,
-            DcLuid.LowPart,
-            DcAdapter.VidPnSourceId);
+        initialized = TRUE;
+    }
+    _SEH2_FINALLY
+    {
+        TlsSetValue(PixelFormatInitTlsIndex, previous_initializing);
+        if (!initialized)
+            HeapFree(GetProcessHeap(), 0, data);
+    }
+    _SEH2_END;
+
+    EnterCriticalSection(&dc_data_cs);
+    for (existing = dc_data_list; existing != NULL; existing = existing->next)
+    {
+        if (existing->owner.u == id.u && existing->flags == flags)
+        {
+            /* Another thread completed the same DC while we queried it. */
+            LeaveCriticalSection(&dc_data_cs);
+            HeapFree(GetProcessHeap(), 0, data);
+            return existing;
+        }
     }
     data->next = dc_data_list;
     dc_data_list = data;

@@ -154,6 +154,7 @@ IntGetCurrentDHGLRC(void)
 }
 
 BOOL IntIsPixelFormatInitializing(VOID);
+extern DWORD PixelFormatInitTlsIndex;
 
 /* Software implementation functions */
 INT sw_DescribePixelFormat(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR* descr);
