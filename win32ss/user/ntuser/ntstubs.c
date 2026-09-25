@@ -153,7 +153,11 @@ NtUserInitializeClientPfnArrays(
       RtlCopyMemory(&ClientProcs[1], pfnClientW, sizeof(ClientProcs[1]));
       RtlCopyMemory(&Workers, pfnClientWorker, sizeof(Workers));
 
+#ifdef _M_IX86
+      if (!ClientPfnInit)
+#else
       if (!ClientPfnInit && !PsGetProcessWow64Process(ppi->peProcess))
+#endif
       {
          gpsi->apfnClientA = ClientProcs[0];
          gpsi->apfnClientW = ClientProcs[1];
