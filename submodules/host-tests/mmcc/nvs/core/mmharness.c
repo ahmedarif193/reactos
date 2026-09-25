@@ -214,7 +214,7 @@ FileWrite(PVOID Context, ULONG64 Offset, ULONG Length, PVOID Buffer)
     return STATUS_SUCCESS;
 }
 
-MI_FILE_OPS TestFileOps = { FileRead, FileWrite, NULL, NULL, NULL, NULL };
+MI_FILE_OPS TestFileOps = { .Read = FileRead, .Write = FileWrite };
 
 void
 FileCreate(TEST_FILE *File, ULONG64 Size)

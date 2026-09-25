@@ -808,7 +808,7 @@ static
 void
 SectionViewOutlivesOwner(void)
 {
-    static MI_FILE_OPS OwnedOps = { OwnedRead, OwnedWrite, OwnedRelease, NULL, NULL, NULL };
+    static MI_FILE_OPS OwnedOps = { .Read = OwnedRead, .Write = OwnedWrite, .Release = OwnedRelease };
     TEST_WORLD World;
     MI_ADDRESS_SPACE A;
     OWNED_FILE Owned;
@@ -858,7 +858,7 @@ static
 void
 SectionUnusedCache(void)
 {
-    static MI_FILE_OPS OwnedOps = { OwnedRead, OwnedWrite, OwnedRelease, NULL, NULL, NULL };
+    static MI_FILE_OPS OwnedOps = { .Read = OwnedRead, .Write = OwnedWrite, .Release = OwnedRelease };
     TEST_WORLD World;
     MI_ADDRESS_SPACE A;
     OWNED_FILE Owned[3];
