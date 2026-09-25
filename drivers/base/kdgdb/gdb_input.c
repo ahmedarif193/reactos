@@ -1001,6 +1001,16 @@ handle_gdb_set_thread(void)
         break;
     case 'g':
         KDDBGPRINT("Setting debug thread: %s.\n", gdb_input);
+#if MONOPROCESS
+        /* GDB selects Hg0 (any thread) before reading memory. Keep a valid
+         * explicit selection: it also selects the NT process address space. */
+        if (Tid == 0 && gdb_dbg_tid != 0 && gdb_dbg_tid != (UINT_PTR)-1 &&
+            find_thread(gdb_dbg_pid, gdb_dbg_tid) != NULL)
+        {
+            Status = send_gdb_packet("OK");
+            break;
+        }
+#endif
         gdb_dbg_pid = Pid;
         gdb_dbg_tid = Tid;
         Status = send_gdb_packet("OK");

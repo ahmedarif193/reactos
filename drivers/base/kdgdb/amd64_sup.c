@@ -187,6 +187,50 @@ gdb_set_ctx_reg(
     }
 }
 
+static
+PCONTEXT
+gdb_frozen_thread_context(
+    _In_ PETHREAD Thread)
+{
+    PKPRCB* ProcessorBlock;
+    ULONG Processor;
+
+    if (KdDebuggerDataBlock == NULL ||
+        KdDebuggerDataBlock->KiProcessorBlock == 0)
+    {
+        return NULL;
+    }
+
+    ProcessorBlock = (PKPRCB*)(ULONG_PTR)KdDebuggerDataBlock->KiProcessorBlock;
+    for (Processor = 0; Processor < CurrentStateChange.NumberProcessors; ++Processor)
+    {
+        PKPRCB Prcb = ProcessorBlock[Processor];
+        PCONTEXT Context;
+        ULONG FrozenState;
+
+        if (Prcb == NULL || Prcb->CurrentThread != &Thread->Tcb)
+            continue;
+
+        /* FROZEN and OWNER are published only after the context is saved. */
+        FrozenState = Prcb->IpiFrozen & ~IPI_FROZEN_FLAG_ACTIVE;
+        if (FrozenState != IPI_FROZEN_STATE_FROZEN &&
+            FrozenState != IPI_FROZEN_STATE_OWNER)
+        {
+            return NULL;
+        }
+        KeMemoryBarrier();
+        Context = &Prcb->ProcessorState.ContextFrame;
+        if ((Context->ContextFlags & (CONTEXT_FULL | CONTEXT_SEGMENTS)) !=
+            (CONTEXT_FULL | CONTEXT_SEGMENTS))
+        {
+            return NULL;
+        }
+        return Context;
+    }
+
+    return NULL;
+}
+
 const void*
 gdb_thread_to_reg(
     _In_ PETHREAD Thread,
@@ -197,10 +241,17 @@ gdb_thread_to_reg(
     PKEXCEPTION_FRAME ExceptionFrame;
     ULONG_PTR Stack, Limit, Top;
     static ULONG_PTR SavedRsp;
+    static ULONG ScalarValue;
 
-    /* A running thread on another processor has no saved switch frame. */
-    if (Thread->Tcb.State == Running ||
-        !Thread->Tcb.InitialStack || !Thread->Tcb.KernelStack)
+    /* A running thread has no switch frame; its frozen CPU holds its state. */
+    if (Thread->Tcb.State == Running)
+    {
+        PCONTEXT Context = gdb_frozen_thread_context(Thread);
+
+        return Context ? gdb_ctx_to_reg(Context, Register, &ScalarValue) : NULL;
+    }
+
+    if (!Thread->Tcb.InitialStack || !Thread->Tcb.KernelStack)
         return NULL;
 
     Stack = (ULONG_PTR)Thread->Tcb.KernelStack;
