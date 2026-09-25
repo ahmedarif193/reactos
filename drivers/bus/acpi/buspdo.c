@@ -1290,7 +1290,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Type = CmResourceTypePort;
                     RequirementDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    RequirementDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                    RequirementDescriptor->Flags = IsPciRoot ?
+                        (CM_RESOURCE_PORT_POSITIVE_DECODE | CM_RESOURCE_PORT_WINDOW_DECODE) :
                         (CM_RESOURCE_PORT_IO |
                          (addr16->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     RequirementDescriptor->u.Port.Alignment = Alignment;
@@ -1363,7 +1364,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Type = CmResourceTypePort;
                     RequirementDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    RequirementDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                    RequirementDescriptor->Flags = IsPciRoot ?
+                        (CM_RESOURCE_PORT_POSITIVE_DECODE | CM_RESOURCE_PORT_WINDOW_DECODE) :
                         (CM_RESOURCE_PORT_IO |
                          (addr32->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     RequirementDescriptor->u.Port.Alignment = Alignment;
@@ -1440,7 +1442,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Type = CmResourceTypePort;
                     RequirementDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    RequirementDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                    RequirementDescriptor->Flags = IsPciRoot ?
+                        (CM_RESOURCE_PORT_POSITIVE_DECODE | CM_RESOURCE_PORT_WINDOW_DECODE) :
                         (CM_RESOURCE_PORT_IO |
                          (addr64->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     RequirementDescriptor->u.Port.Alignment = Alignment;
@@ -1516,7 +1519,8 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Type = CmResourceTypePort;
                     RequirementDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    RequirementDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                    RequirementDescriptor->Flags = IsPciRoot ?
+                        (CM_RESOURCE_PORT_POSITIVE_DECODE | CM_RESOURCE_PORT_WINDOW_DECODE) :
                         (CM_RESOURCE_PORT_IO |
                          (addrx->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     RequirementDescriptor->u.Port.Alignment = Alignment;
@@ -1979,7 +1983,8 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->Type = CmResourceTypePort;
                     ResourceDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    ResourceDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                    ResourceDescriptor->Flags = IsPciRoot ?
+                        (CM_RESOURCE_PORT_POSITIVE_DECODE | CM_RESOURCE_PORT_WINDOW_DECODE) :
                         (CM_RESOURCE_PORT_IO |
                          (addr16->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     ResourceDescriptor->u.Port.Start.QuadPart =
@@ -2050,7 +2055,8 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->Type = CmResourceTypePort;
                     ResourceDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    ResourceDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                    ResourceDescriptor->Flags = IsPciRoot ?
+                        (CM_RESOURCE_PORT_POSITIVE_DECODE | CM_RESOURCE_PORT_WINDOW_DECODE) :
                         (CM_RESOURCE_PORT_IO |
                          (addr32->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     ResourceDescriptor->u.Port.Start.QuadPart =
@@ -2115,7 +2121,8 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->Type = CmResourceTypePort;
                     ResourceDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    ResourceDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                    ResourceDescriptor->Flags = IsPciRoot ?
+                        (CM_RESOURCE_PORT_POSITIVE_DECODE | CM_RESOURCE_PORT_WINDOW_DECODE) :
                         (CM_RESOURCE_PORT_IO |
                          (addr64->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     ResourceDescriptor->u.Port.Start.QuadPart =
@@ -2180,7 +2187,8 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->Type = CmResourceTypePort;
                     ResourceDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    ResourceDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                    ResourceDescriptor->Flags = IsPciRoot ?
+                        (CM_RESOURCE_PORT_POSITIVE_DECODE | CM_RESOURCE_PORT_WINDOW_DECODE) :
                         (CM_RESOURCE_PORT_IO |
                          (addrx->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     ResourceDescriptor->u.Port.Start.QuadPart =
