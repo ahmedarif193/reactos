@@ -3902,6 +3902,10 @@ DxgkDeviceSetExecutionState(
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 BOOLEAN
+DxgkDeviceSetDmaFaultExecutionState(
+    _In_ PDXGKRNL_DEVICE Device);
+
+BOOLEAN
 DxgkDeviceSetPageFaultExecutionState(
     _In_ PDXGKRNL_DEVICE Device);
 

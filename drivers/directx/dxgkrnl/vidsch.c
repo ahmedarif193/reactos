@@ -54,6 +54,20 @@
  * Internal helpers
  * ====================================================================== */
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+/* A GPU page fault and a rejected virtual submission are both terminal for
+ * the device: none of its later packets may run or complete successfully. */
+static BOOLEAN
+VidSchpDeviceDmaFaulted(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    LONG State = InterlockedCompareExchange(&Device->ExecutionState, 0, 0);
+
+    return VidSchPolicyCompletionMustFail(State, D3DKMT_DEVICEEXECUTION_ERROR_DMAPAGEFAULT) ||
+           VidSchPolicyCompletionMustFail(State, D3DKMT_DEVICEEXECUTION_ERROR_DMAFAULT);
+}
+#endif
+
 /*
  * VidSchpFenceReached — signed fence comparison for wrap-around safety.
  *
@@ -677,10 +691,7 @@ VidSchpDrainRetirements(_In_ PDXGKRNL_ADAPTER Adapter)
             if (!Faulted &&
                 Records[Index].Reason == Dxgmms2RetireCompleted &&
                 Packet->Device != NULL &&
-                VidSchPolicyCompletionMustFail(
-                    InterlockedCompareExchange(
-                        &Packet->Device->ExecutionState, 0, 0),
-                    D3DKMT_DEVICEEXECUTION_ERROR_DMAPAGEFAULT))
+                VidSchpDeviceDmaFaulted(Packet->Device))
             {
                 Faulted = TRUE;
                 FaultStatus =
@@ -1496,7 +1507,7 @@ static VOID VidSchpFinalizeDequeuedPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In
 {
     VidSchAccountNodeRetire(Packet);
     Packet->SchedulerCookie = 0;
-    DxgkDeviceWorkComplete(Packet->DeviceWork);
+    DxgkDeviceWorkCompleteWithStatus(Packet->DeviceWork, CompletionStatus);
     if (Packet->ContextOrderOperation != NULL)
         DxgkContextOrderAbortPacket(Packet, CompletionStatus);
     VidSchpDereferencePacket(Packet);
@@ -2323,6 +2334,7 @@ VidSchpSubmitVirtualPacket(
     BOOLEAN KmdCallAcquired = FALSE;
     BOOLEAN Removed = FALSE;
     BOOLEAN SubmissionOwned = FALSE;
+    BOOLEAN Rejected = FALSE;
     PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
 
     /* The kick already claimed this packet from dxgmms2; the claim token is
@@ -2332,9 +2344,7 @@ VidSchpSubmitVirtualPacket(
     {
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         if (Packet->Device != NULL &&
-            InterlockedCompareExchange(
-                &Packet->Device->ExecutionState, 0, 0) ==
-                D3DKMT_DEVICEEXECUTION_ERROR_DMAPAGEFAULT)
+            VidSchpDeviceDmaFaulted(Packet->Device))
         {
             Status =
                 STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE;
@@ -2418,7 +2428,33 @@ VidSchpSubmitVirtualPacket(
             DptEnd(&g_DxgPresentTrace, DdiTrace, NT_SUCCESS(Status), 0);
         }
         if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("VidSch: virtual submission rejected 0x%08lX context=%p va=0x%I64x bytes=%u fence=%u\n",
+                        Status, SubmitArgs.hContext, SubmitArgs.DmaBufferVirtualAddress,
+                        SubmitArgs.DmaBufferSize, SubmitArgs.SubmissionFenceId);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+            if (Status != STATUS_INVALID_PARAMETER)
+                KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&SubmitArgs, (ULONG_PTR)Engine);
+
+            /* SubmitCommandVirtual may reject malformed UMD data. Fault only
+             * its device, and keep this packet ordered behind earlier GPU
+             * work. dxgmms2 retires the rejected no-op at the queue head;
+             * treating it as an immediate dispatch abort would release its
+             * context/tracker state before those predecessors finish. */
+            Rejected = TRUE;
+            KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+            if (Packet->Faulted == 0)
+            {
+                Packet->FaultStatus = STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE;
+                InterlockedExchange(&Packet->Faulted, 1);
+            }
+            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+            if (DxgkDeviceSetDmaFaultExecutionState(Packet->Device))
+                InterlockedExchange(&Packet->CancelFaultedDevicePackets, 1);
+#else
             KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&SubmitArgs, (ULONG_PTR)Engine);
+#endif
+        }
     }
 
     if (KmdCallAcquired)
@@ -2439,7 +2475,7 @@ VidSchpSubmitVirtualPacket(
             DxgkCommitTrackedDmaBuffer(Adapter, Reservation);
     }
     if (Packet != NULL && Packet->ContextOrderOperation != NULL)
-        DxgkContextOrderCommitPacket(Packet, Status);
+        DxgkContextOrderCommitPacket(Packet, Rejected ? STATUS_SUCCESS : Status);
     if (KmdCallAcquired)
     {
         InterlockedExchange(&Packet->ContextOrderResubmissionPending, 0);
@@ -2457,7 +2493,7 @@ VidSchpSubmitVirtualPacket(
         PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched = VidSchpScheduler(Adapter);
         NTSTATUS CommitStatus = Status;
 
-        if (!NT_SUCCESS(Status))
+        if (!NT_SUCCESS(Status) && !Rejected)
         {
             DXGKRNL_ERR("VidSch: DxgkDdiSubmitCommandVirtual failed 0x%08lX engine=%lu fence=%lu\n", Status, Packet->EngineOrdinal, Packet->SubmissionFenceId);
             AbortStatus = (NTSTATUS)InterlockedCompareExchange((volatile LONG *)&Packet->ContextOrderAbortStatus, 0, 0);
@@ -2581,11 +2617,7 @@ VidSchpKickEngine(
         }
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         if (Packet->Device != NULL &&
-            InterlockedCompareExchange(
-                &Packet->Device->ExecutionState,
-                0,
-                0) ==
-                D3DKMT_DEVICEEXECUTION_ERROR_DMAPAGEFAULT)
+            VidSchpDeviceDmaFaulted(Packet->Device))
         {
             NTSTATUS FaultStatus =
                 STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE;

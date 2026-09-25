@@ -368,9 +368,10 @@ DxgkDeviceSetExecutionState(
 }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
-BOOLEAN
-DxgkDeviceSetPageFaultExecutionState(
-    _In_ PDXGKRNL_DEVICE Device)
+static BOOLEAN
+DxgkpDeviceSetFaultExecutionState(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DKMT_DEVICEEXECUTION_STATE ExecutionState)
 {
     BOOLEAN Transitioned;
 
@@ -380,17 +381,33 @@ DxgkDeviceSetPageFaultExecutionState(
                        &Device->WorkLedger,
                        &Device->ExecutionState,
                        D3DKMT_DEVICEEXECUTION_ACTIVE,
-                       D3DKMT_DEVICEEXECUTION_ERROR_DMAPAGEFAULT);
+                       ExecutionState);
     if (Transitioned)
     {
-        DPRINT1("DxgkDeviceSetPageFaultExecutionState: device %p handle 0x%X -> ERROR_DMAPAGEFAULT (caller %p)\n",
-                Device, Device->Handle, _ReturnAddress());
+        DXGKRNL_ERR("device %p handle 0x%X entered DMA error state %u\n",
+                    Device, Device->Handle, ExecutionState);
         DxgkSyncObjectCancelDeviceWaits(
             Device,
             STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE,
             TRUE);
     }
     return Transitioned;
+}
+
+BOOLEAN
+DxgkDeviceSetPageFaultExecutionState(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    return DxgkpDeviceSetFaultExecutionState(
+        Device, D3DKMT_DEVICEEXECUTION_ERROR_DMAPAGEFAULT);
+}
+
+BOOLEAN
+DxgkDeviceSetDmaFaultExecutionState(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    return DxgkpDeviceSetFaultExecutionState(
+        Device, D3DKMT_DEVICEEXECUTION_ERROR_DMAFAULT);
 }
 
 VOID
