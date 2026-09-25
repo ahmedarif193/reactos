@@ -363,6 +363,31 @@ static DWORD WINAPI Arm64ChpeThreadExit(PVOID Parameter)
     return (ULONG_PTR)Parameter;
 }
 
+static VOID Arm64ChpeTestNativeModuleLookupAfterFls(VOID)
+{
+#if defined(_M_ARM64)
+    PIMAGE_NT_HEADERS Headers = RtlImageNtHeader(GetModuleHandleW(NULL));
+    DWORD Index;
+    HMODULE Module;
+
+    if (!Headers || Headers->FileHeader.Machine != IMAGE_FILE_MACHINE_ARM64)
+        return;
+
+    Index = FlsAlloc(NULL);
+    ok(Index != FLS_OUT_OF_INDEXES, "FlsAlloc failed: %lu\n", GetLastError());
+    if (Index == FLS_OUT_OF_INDEXES)
+        return;
+
+    Module = GetModuleHandleW(L"ntdll.dll");
+    ok(Module != NULL, "native ntdll lookup failed after FLS allocation: %lu\n", GetLastError());
+    if (Module)
+        ok(GetProcAddress(Module, "RtlGetDeviceFamilyInfoEnum") != NULL,
+           "RtlGetDeviceFamilyInfoEnum lookup failed: %lu\n", GetLastError());
+
+    FlsFree(Index);
+#endif
+}
+
 static VOID Arm64ChpeTestThreadSuspendResume(VOID)
 {
     PFN_ThreadSuspendCount Suspend = LookupProc("NtSuspendThread");
@@ -402,6 +427,7 @@ static VOID Arm64ChpeTestThreadSuspendResume(VOID)
 
 START_TEST(arm64_chpe)
 {
+    Arm64ChpeTestNativeModuleLookupAfterFls();
     Ntdll = GetModuleHandleW(L"ntdll.dll");
     ok(Ntdll != NULL, "GetModuleHandleW(ntdll.dll) failed: %lu\n", GetLastError());
     if (!Ntdll)

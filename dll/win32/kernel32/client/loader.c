@@ -11,6 +11,40 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_ARM64)
+NTSYSAPI BOOLEAN NTAPI RtlIsEcCode(ULONG_PTR CodeAddress);
+
+static LPCWSTR BasepChpeModuleName(LPCWSTR ModuleName, PVOID CallerAddress)
+{
+    static const UNICODE_STRING NtdllName = RTL_CONSTANT_STRING(L"ntdll.dll");
+    static const UNICODE_STRING NtdllBaseName = RTL_CONSTANT_STRING(L"ntdll");
+    PIMAGE_NT_HEADERS NtHeaders;
+    UNICODE_STRING RequestedName;
+
+    if (!ModuleName)
+        return ModuleName;
+
+    RtlInitUnicodeString(&RequestedName, ModuleName);
+    if (!RtlEqualUnicodeString(&RequestedName, &NtdllName, TRUE) &&
+        !RtlEqualUnicodeString(&RequestedName, &NtdllBaseName, TRUE))
+        return ModuleName;
+
+    NtHeaders = RtlImageNtHeader(NtCurrentPeb()->ImageBaseAddress);
+    if (!NtHeaders ||
+        (NtHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 &&
+         NtHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_ARM64EC))
+    {
+        return ModuleName;
+    }
+
+    if (!NtCurrentPeb()->ChpeV2ProcessInfo ||
+        RtlIsEcCode((ULONG_PTR)CallerAddress))
+        return ModuleName;
+
+    return L"ntdll_chpe.dll";
+}
+#endif
+
 /* FUNCTIONS ****************************************************************/
 
 NTSTATUS
@@ -880,6 +914,9 @@ GetModuleHandleA(LPCSTR lpModuleName)
 {
     PUNICODE_STRING ModuleNameW;
     PTEB pTeb = NtCurrentTeb();
+#if defined(_M_ARM64)
+    PVOID CallerAddress = _ReturnAddress();
+#endif
 
     /* Check if we have no name to convert */
     if (!lpModuleName)
@@ -890,7 +927,11 @@ GetModuleHandleA(LPCSTR lpModuleName)
 
     /* Call W version if conversion was successful */
     if (ModuleNameW)
+#if defined(_M_ARM64)
+        return GetModuleHandleW(BasepChpeModuleName(ModuleNameW->Buffer, CallerAddress));
+#else
         return GetModuleHandleW(ModuleNameW->Buffer);
+#endif
 
     /* Return failure */
     return 0;
@@ -910,6 +951,10 @@ GetModuleHandleW(LPCWSTR lpModuleName)
     /* If current module is requested - return it right away */
     if (!lpModuleName)
         return ((HMODULE)NtCurrentPeb()->ImageBaseAddress);
+
+#if defined(_M_ARM64)
+    lpModuleName = BasepChpeModuleName(lpModuleName, _ReturnAddress());
+#endif
 
     /* Use common helper routine */
     Success = BasepGetModuleHandleExW(TRUE,
@@ -946,6 +991,11 @@ GetModuleHandleExW(IN DWORD dwFlags,
     /* If result is 2, there is no need to do anything - return success. */
     if (dwValid == BASEP_GET_MODULE_HANDLE_EX_PARAMETER_VALIDATION_SUCCESS) return TRUE;
 
+#if defined(_M_ARM64)
+    if (!(dwFlags & GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS))
+        lpwModuleName = BasepChpeModuleName(lpwModuleName, _ReturnAddress());
+#endif
+
     /* Use common helper routine */
     Ret = BasepGetModuleHandleExW(FALSE,
                                   dwFlags,
@@ -967,6 +1017,9 @@ GetModuleHandleExA(IN DWORD dwFlags,
     PUNICODE_STRING lpModuleNameW;
     DWORD dwValid;
     BOOL Ret;
+#if defined(_M_ARM64)
+    PVOID CallerAddress = _ReturnAddress();
+#endif
 
     /* Validate parameters */
     dwValid = BasepGetModuleHandleExParameterValidation(dwFlags, (LPCWSTR)lpModuleName, phModule);
@@ -997,7 +1050,11 @@ GetModuleHandleExA(IN DWORD dwFlags,
         /* Call the extended version of the API */
         Ret = BasepGetModuleHandleExW(FALSE,
                                       dwFlags,
+#if defined(_M_ARM64)
+                                      BasepChpeModuleName(lpModuleNameW->Buffer, CallerAddress),
+#else
                                       lpModuleNameW->Buffer,
+#endif
                                       phModule);
     }
 
