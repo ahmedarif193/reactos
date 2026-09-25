@@ -23,6 +23,7 @@ add_library(kernelbase_ros MODULE
     PssSnapshot.c
     Security.c
     SyncObjects.c
+    VirtualAlloc2.c
     VolumeInformation.c
     WerRuntime.c
     ${CMAKE_CURRENT_BINARY_DIR}/kernelbase_ros_stubs.c
