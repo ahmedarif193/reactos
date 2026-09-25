@@ -373,6 +373,7 @@ DriverEntry(_In_ PVOID DriverObject, _In_ PVOID RegistryPath)
     InitData.TaggedQueuing = TRUE;
     InitData.AutoRequestSense = TRUE;
     InitData.MultipleRequestPerLu = TRUE;
+    InitData.FeatureSupport = STOR_FEATURE_SUPPORTS_NVME_ADAPTER;
 
     return StorPortInitialize(DriverObject, RegistryPath, &InitData, NULL);
 }

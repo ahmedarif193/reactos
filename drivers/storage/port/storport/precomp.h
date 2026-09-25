@@ -197,6 +197,7 @@ typedef struct _PDO_DEVICE_EXTENSION
     ULONG QueueDepth;
     BOOLEAN DeviceClaimed;
     PINQUIRYDATA InquiryBuffer;
+    CHAR SerialNumber[252]; /* Cached SCSI VPD page 0x80, NUL terminated. */
     struct _PORT_DUMP_CONTEXT *DumpContext;
 
 } PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
