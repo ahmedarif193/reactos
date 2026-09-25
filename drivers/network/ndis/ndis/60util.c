@@ -11,8 +11,8 @@
  *
  *                - Timer object API (NdisAllocateTimerObject etc.) —
  *                  KTIMER + KDPC wrapper used for periodic work
- *                - RW lock API (NdisAllocateRWLock etc.) — shared/exclusive
- *                  synchronization primitive on top of EX_PUSH_LOCK
+ *                - RW lock API (NdisAllocateRWLock etc.) — spin-based
+ *                  shared/exclusive lock usable at DISPATCH_LEVEL
  *              The legacy DDK header doesn't carry these declarations
  *              (NDIS_TIMER_CHARACTERISTICS, NDIS_RW_LOCK_EX, etc.), so
  *              ndis6_internal.h declares the prototypes locally and the
@@ -850,19 +850,31 @@ NdisIfGetInterfaceIndexFromNetLuid(
 /* ============================================================================
  *  NDIS 6 RW lock
  *
- *  Wraps ERESOURCE which gives us shared/exclusive semantics. The
- *  driver-visible PNDIS_RW_LOCK_EX is the bridge's wrapper; LOCK_STATE_EX
- *  is used to remember whether the caller acquired shared or exclusive
- *  so the matching Release path runs.
+ *  NDIS RW locks are nonpaged spin-based locks: callers may acquire them
+ *  from a DPC, and ownership is held at DISPATCH_LEVEL. A short gate lock
+ *  protects admission; per-CPU read depth lets a processor re-acquire for
+ *  read while a writer is waiting. LOCK_STATE_EX records the previous IRQL
+ *  and whether the caller holds the lock shared or exclusive.
  * ============================================================================ */
 
 struct _NDIS_RW_LOCK_EX
 {
     ULONG       Magic;
-    ERESOURCE   Resource;
+    ULONG       CpuCount;
+    KSPIN_LOCK  Gate;
+    ULONG       Writer;             /* Owning processor index + 1, or 0 */
+    ULONG       WriterDepth;
+    ULONG       WaitingWriters;
+    ULONG       Readers;
+    ULONG       ReadDepth[ANYSIZE_ARRAY];
 };
 
 #define NDIS6_RWLOCK_MAGIC  0xB16CB16E
+
+#define NDIS6_RWLOCK_STATE_READ   1
+#define NDIS6_RWLOCK_STATE_WRITE  2
+
+C_ASSERT(sizeof(LOCK_STATE_EX) == 3);
 
 PNDIS_RW_LOCK_EX
 NTAPI
@@ -870,16 +882,24 @@ NdisAllocateRWLock(
     _In_opt_ NDIS_HANDLE NdisHandle)
 {
     PNDIS_RW_LOCK_EX Lock;
+    ULONG CpuCount;
+    SIZE_T Size;
 
     UNREFERENCED_PARAMETER(NdisHandle);
 
-    Lock = (PNDIS_RW_LOCK_EX)ExAllocatePoolWithTag(
-        NonPagedPool, sizeof(*Lock), NDIS6_RWLOCK_TAG);
+    CpuCount = KeQueryMaximumProcessorCountEx(ALL_PROCESSOR_GROUPS);
+    if (CpuCount == 0)
+        return NULL;
+
+    Size = FIELD_OFFSET(NDIS_RW_LOCK_EX, ReadDepth) + (SIZE_T)CpuCount * sizeof(ULONG);
+    Lock = (PNDIS_RW_LOCK_EX)ExAllocatePoolWithTag(NonPagedPool, Size, NDIS6_RWLOCK_TAG);
     if (Lock == NULL)
         return NULL;
 
+    RtlZeroMemory(Lock, Size);
     Lock->Magic = NDIS6_RWLOCK_MAGIC;
-    ExInitializeResourceLite(&Lock->Resource);
+    Lock->CpuCount = CpuCount;
+    KeInitializeSpinLock(&Lock->Gate);
     return Lock;
 }
 
@@ -890,9 +910,39 @@ NdisFreeRWLock(
 {
     if (Lock == NULL || Lock->Magic != NDIS6_RWLOCK_MAGIC)
         return;
-    ExDeleteResourceLite(&Lock->Resource);
+    ASSERT(Lock->Writer == 0 && Lock->Readers == 0 && Lock->WaitingWriters == 0);
     Lock->Magic = 0;
     ExFreePoolWithTag(Lock, NDIS6_RWLOCK_TAG);
+}
+
+/* Raises to DISPATCH_LEVEL unless the caller is already there, and returns
+ * the current processor index, which stays fixed until release. */
+static
+ULONG
+Ndis6RwLockEnter(
+    _In_  PNDIS_RW_LOCK_EX Lock,
+    _Out_ PLOCK_STATE_EX   LockState,
+    _In_  UCHAR            Flags)
+{
+    ULONG Cpu;
+
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+
+    LockState->Flags = Flags;
+    LockState->LockState = 0;
+    if (Flags & NDIS_RWL_AT_DISPATCH_LEVEL)
+    {
+        ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
+        LockState->OldIrql = DISPATCH_LEVEL;
+    }
+    else
+    {
+        KeRaiseIrql(DISPATCH_LEVEL, &LockState->OldIrql);
+    }
+
+    Cpu = KeGetCurrentProcessorNumberEx(NULL);
+    ASSERT(Cpu < Lock->CpuCount);
+    return Cpu;
 }
 
 VOID
@@ -902,17 +952,34 @@ NdisAcquireRWLockRead(
     _Out_ PLOCK_STATE_EX   LockState,
     _In_  UCHAR            Flags)
 {
-    UNREFERENCED_PARAMETER(Flags);
+    ULONG Cpu;
 
     if (Lock == NULL || Lock->Magic != NDIS6_RWLOCK_MAGIC || LockState == NULL)
         return;
 
-    /* ERESOURCE requires APC disabled before acquire. */
-    KeEnterCriticalRegion();
-    ExAcquireResourceSharedLite(&Lock->Resource, TRUE);
+    Cpu = Ndis6RwLockEnter(Lock, LockState, Flags);
+    for (;;)
+    {
+        KeAcquireSpinLockAtDpcLevel(&Lock->Gate);
+        if (Lock->Writer == Cpu + 1)
+        {
+            /* A read inside this processor's own write nests in the write. */
+            Lock->WriterDepth++;
+            LockState->LockState = NDIS6_RWLOCK_STATE_WRITE;
+        }
+        else if (Lock->Writer == 0 &&
+                 (Lock->WaitingWriters == 0 || Lock->ReadDepth[Cpu] != 0))
+        {
+            Lock->ReadDepth[Cpu]++;
+            Lock->Readers++;
+            LockState->LockState = NDIS6_RWLOCK_STATE_READ;
+        }
+        KeReleaseSpinLockFromDpcLevel(&Lock->Gate);
 
-    LockState->Reserved[0] = (PVOID)(ULONG_PTR)1;  /* "shared" */
-    LockState->Reserved[1] = NULL;
+        if (LockState->LockState != 0)
+            return;
+        YieldProcessor();
+    }
 }
 
 VOID
@@ -922,16 +989,37 @@ NdisAcquireRWLockWrite(
     _Out_ PLOCK_STATE_EX   LockState,
     _In_  UCHAR            Flags)
 {
-    UNREFERENCED_PARAMETER(Flags);
+    ULONG Cpu;
 
     if (Lock == NULL || Lock->Magic != NDIS6_RWLOCK_MAGIC || LockState == NULL)
         return;
 
-    KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&Lock->Resource, TRUE);
+    Cpu = Ndis6RwLockEnter(Lock, LockState, Flags);
+    KeAcquireSpinLockAtDpcLevel(&Lock->Gate);
 
-    LockState->Reserved[0] = (PVOID)(ULONG_PTR)2;  /* "exclusive" */
-    LockState->Reserved[1] = NULL;
+    /* Read-to-write promotion is not supported. */
+    ASSERT(Lock->ReadDepth[Cpu] == 0);
+
+    if (Lock->Writer == Cpu + 1)
+    {
+        Lock->WriterDepth++;
+        LockState->LockState = NDIS6_RWLOCK_STATE_WRITE;
+        KeReleaseSpinLockFromDpcLevel(&Lock->Gate);
+        return;
+    }
+
+    Lock->WaitingWriters++;
+    while (Lock->Writer != 0 || Lock->Readers != 0)
+    {
+        KeReleaseSpinLockFromDpcLevel(&Lock->Gate);
+        YieldProcessor();
+        KeAcquireSpinLockAtDpcLevel(&Lock->Gate);
+    }
+    Lock->WaitingWriters--;
+    Lock->Writer = Cpu + 1;
+    Lock->WriterDepth = 1;
+    LockState->LockState = NDIS6_RWLOCK_STATE_WRITE;
+    KeReleaseSpinLockFromDpcLevel(&Lock->Gate);
 }
 
 VOID
@@ -940,13 +1028,35 @@ NdisReleaseRWLock(
     _In_ PNDIS_RW_LOCK_EX Lock,
     _In_ PLOCK_STATE_EX   LockState)
 {
+    ULONG Cpu;
+    KIRQL OldIrql;
+
     if (Lock == NULL || Lock->Magic != NDIS6_RWLOCK_MAGIC || LockState == NULL)
         return;
 
-    ExReleaseResourceLite(&Lock->Resource);
-    KeLeaveCriticalRegion();
+    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
+    Cpu = KeGetCurrentProcessorNumberEx(NULL);
+    OldIrql = LockState->OldIrql;
 
-    LockState->Reserved[0] = NULL;
+    KeAcquireSpinLockAtDpcLevel(&Lock->Gate);
+    if (LockState->LockState == NDIS6_RWLOCK_STATE_READ)
+    {
+        ASSERT(Lock->ReadDepth[Cpu] != 0 && Lock->Readers != 0);
+        Lock->ReadDepth[Cpu]--;
+        Lock->Readers--;
+    }
+    else
+    {
+        ASSERT(LockState->LockState == NDIS6_RWLOCK_STATE_WRITE);
+        ASSERT(Lock->Writer == Cpu + 1 && Lock->WriterDepth != 0);
+        if (--Lock->WriterDepth == 0)
+            Lock->Writer = 0;
+    }
+    LockState->LockState = 0;
+    KeReleaseSpinLockFromDpcLevel(&Lock->Gate);
+
+    if (OldIrql < DISPATCH_LEVEL)
+        KeLowerIrql(OldIrql);
 }
 
 /* ============================================================================
