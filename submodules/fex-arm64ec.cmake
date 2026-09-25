@@ -56,6 +56,7 @@ endif()
 
 set(FEX_ARM64EC_AVAILABLE ON)
 include(ExternalProject)
+include("${REACTOS_SOURCE_DIR}/sdk/cmake/nested-build.cmake")
 
 # FEX is a compiler, and its own optimisation level multiplies into every block
 # it translates.  Forwarding a Debug CMAKE_BUILD_TYPE builds the JIT -O0 and
@@ -181,7 +182,7 @@ ExternalProject_Add(fex-arm64ec-build
         -DOVERRIDE_HASH=0000000000000000000000000000000000000000
         # Python for code generation.
         -DPython_EXECUTABLE=${FEX_PYTHON_EXECUTABLE}
-    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target arm64ecfex
+    BUILD_COMMAND ${REACTOS_NESTED_BUILD} <BINARY_DIR> --target arm64ecfex
     INSTALL_COMMAND ${CMAKE_COMMAND} -E make_directory "${REACTOS_BINARY_DIR}/symbols"
     COMMAND ${FEX_LLVM_STRIP} --only-keep-debug "${FEX_DLL_SOURCE}" -o "${FEX_DLL_SYMBOLS}"
     COMMAND ${FEX_LLVM_STRIP} --strip-debug "${FEX_DLL_SOURCE}" -o "${FEX_DLL_DEST}"
@@ -239,7 +240,7 @@ ExternalProject_Add(fex-wow64-build
         -DOVERRIDE_VERSION=ReactOS
         -DOVERRIDE_HASH=0000000000000000000000000000000000000000
         -DPython_EXECUTABLE=${FEX_PYTHON_EXECUTABLE}
-    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target ${FEX_WOW64_BUILD_TARGETS}
+    BUILD_COMMAND ${REACTOS_NESTED_BUILD} <BINARY_DIR> --target ${FEX_WOW64_BUILD_TARGETS}
     INSTALL_COMMAND ${CMAKE_COMMAND} -E make_directory "${REACTOS_BINARY_DIR}/symbols"
     COMMAND ${FEX_LLVM_STRIP} --only-keep-debug "${FEX_WOW64_DLL_SOURCE}" -o "${FEX_WOW64_DLL_SYMBOLS}"
     COMMAND ${FEX_LLVM_STRIP} --strip-debug "${FEX_WOW64_DLL_SOURCE}" -o "${FEX_WOW64_DLL_DEST}"
