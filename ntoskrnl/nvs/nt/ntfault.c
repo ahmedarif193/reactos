@@ -23,6 +23,7 @@ MiCheckForUserStackOverflow(
     PTEB Teb = Thread->Tcb.Teb;
     ULONG64 StackBase, StackLimit, DeallocationStack, Guaranteed, Page, Next, Size;
     ULONG64 GuardSize = MM_USER_STACK_GUARD_PAGES * PAGE_SIZE;
+    ULONG64 OverflowReserve;
     NTSTATUS Status = STATUS_GUARD_PAGE_VIOLATION;
 #ifdef _WIN64
     PTEB32 Wow64Teb = NULL;
@@ -59,16 +60,24 @@ MiCheckForUserStackOverflow(
         }
 #endif
 
-        Guaranteed = ROUND_TO_PAGES(Guaranteed);
-        if (Guaranteed == 0 || Guaranteed >= StackBase - DeallocationStack)
-            Guaranteed = PAGE_SIZE;
-
         Page = (ULONG64)(ULONG_PTR)PAGE_ALIGN(Address);
 
         if ((ULONG64)(ULONG_PTR)Address >= StackBase || (ULONG64)(ULONG_PTR)Address < DeallocationStack)
             _SEH2_YIELD(return STATUS_GUARD_PAGE_VIOLATION);
 
-        if (Page - DeallocationStack <= GuardSize + Guaranteed)
+        Guaranteed = ROUND_TO_PAGES(Guaranteed);
+        OverflowReserve = GuardSize + PAGE_SIZE;
+        if (Guaranteed != 0 && Guaranteed < StackBase - DeallocationStack)
+        {
+            GuardSize = max(GuardSize, Guaranteed + PAGE_SIZE);
+            OverflowReserve = GuardSize;
+        }
+        else
+        {
+            Guaranteed = PAGE_SIZE;
+        }
+
+        if (Page - DeallocationStack <= OverflowReserve)
         {
             Next = (DeallocationStack & ~((ULONG64)PAGE_SIZE - 1)) + PAGE_SIZE;
             Size = Guaranteed;

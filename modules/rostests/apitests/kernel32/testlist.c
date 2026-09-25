@@ -64,6 +64,7 @@ extern void func_SetComputerNameExW(void);
 extern void func_SetConsoleWindowInfo(void);
 extern void func_SetCurrentDirectory(void);
 extern void func_SetFileAllocationInfo(void);
+extern void func_SetThreadStackGuarantee(void);
 extern void func_SetUnhandledExceptionFilter(void);
 extern void func_SetWaitableTimerEx(void);
 extern void func_SuspendThread(void);
@@ -142,6 +143,7 @@ const struct test winetest_testlist[] =
     { "SetComputerNameExW",          func_SetComputerNameExW },
     { "SetConsoleWindowInfo",        func_SetConsoleWindowInfo },
     { "SetCurrentDirectory",         func_SetCurrentDirectory },
+    { "SetThreadStackGuarantee",     func_SetThreadStackGuarantee },
     { "SetUnhandledExceptionFilter", func_SetUnhandledExceptionFilter },
     { "SetWaitableTimerEx",          func_SetWaitableTimerEx },
     { "SuspendThread",               func_SuspendThread },
