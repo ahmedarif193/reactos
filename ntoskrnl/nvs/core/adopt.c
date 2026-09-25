@@ -150,27 +150,49 @@ MiSystemReserveTopLevelHole(
 {
     PMI_ADDRESS_SPACE Space = &System->SystemSpace;
     const MI_ARCH_DESCRIPTOR *Arch = System->Arch;
-    PMI_VAD Vad;
+    PMI_VAD_NODE Node;
+    ULONG64 Cursor, End;
 
     if (Arch->SystemReservedEnd <= Arch->SystemAddressStart)
         return STATUS_SUCCESS;
 
-    Vad = MI_ALLOCATE(sizeof(*Vad));
-    if (Vad == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    RtlZeroMemory(Vad, sizeof(*Vad));
-    Vad->Type = MiVadSystem;
-    Vad->Protection = MI_PROT_NOACCESS;
-    Vad->Node.StartingVpn = Arch->SystemAddressStart >> PAGE_SHIFT;
-    Vad->Node.EndingVpn = (Arch->SystemReservedEnd >> PAGE_SHIFT) - 1;
-
-    if (!MiVadInsert(&Space->VadRoot, &Vad->Node))
+    Cursor = Arch->SystemAddressStart >> PAGE_SHIFT;
+    End = (Arch->SystemReservedEnd >> PAGE_SHIFT) - 1;
+    Node = MiVadFirst(&Space->VadRoot);
+    while (Cursor <= End)
     {
-        MI_FREE(Vad);
-        return STATUS_CONFLICTING_ADDRESSES;
-    }
+        PMI_VAD Vad;
+        ULONG64 GapEnd;
 
+        while (Node != NULL && Node->EndingVpn < Cursor)
+            Node = MiVadNext(Node);
+        if (Node != NULL && Node->StartingVpn <= Cursor)
+        {
+            if (Node->EndingVpn >= End)
+                break;
+            Cursor = Node->EndingVpn + 1;
+            Node = MiVadNext(Node);
+            continue;
+        }
+
+        GapEnd = (Node != NULL && Node->StartingVpn <= End) ? Node->StartingVpn - 1 : End;
+        Vad = MI_ALLOCATE(sizeof(*Vad));
+        if (Vad == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(Vad, sizeof(*Vad));
+        Vad->Type = MiVadSystem;
+        Vad->Protection = MI_PROT_NOACCESS;
+        Vad->Node.StartingVpn = Cursor;
+        Vad->Node.EndingVpn = GapEnd;
+        if (!MiVadInsert(&Space->VadRoot, &Vad->Node))
+        {
+            MI_FREE(Vad);
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
+        if (GapEnd == End)
+            break;
+        Cursor = GapEnd + 1;
+    }
     return STATUS_SUCCESS;
 }
 
