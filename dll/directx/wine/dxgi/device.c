@@ -431,6 +431,25 @@ static ULONG STDMETHODCALLTYPE dxgi_swapchain_factory_Release(IWineDXGISwapChain
     return dxgi_device_Release(&device->IWineDXGIDevice_iface);
 }
 
+#ifdef __REACTOS__
+/* Windowed rendering does not need the adapter to drive an enumerated
+ * output. Fall back to its first output, which is not enumerated. */
+static HRESULT dxgi_get_rendering_output(struct dxgi_factory *factory, struct dxgi_adapter *adapter,
+        HWND window, IDXGIOutput **output)
+{
+    struct dxgi_output *rendering_output;
+    HRESULT hr;
+
+    if ((hr = dxgi_get_output_from_window(&factory->IWineDXGIFactory_iface, window, output)) != DXGI_ERROR_NOT_FOUND
+            || !wined3d_adapter_get_output(adapter->wined3d_adapter, 0))
+        return hr;
+    if (FAILED(hr = dxgi_output_create(adapter, 0, &rendering_output)))
+        return hr;
+    *output = (IDXGIOutput *)&rendering_output->IDXGIOutput6_iface;
+    return S_OK;
+}
+#endif
+
 static HRESULT STDMETHODCALLTYPE dxgi_swapchain_factory_create_swapchain(IWineDXGISwapChainFactory *iface,
         IDXGIFactory *factory, HWND window, const DXGI_SWAP_CHAIN_DESC1 *desc,
         const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen_desc, IDXGIOutput *output, IDXGISwapChain1 **swapchain)
@@ -454,8 +473,16 @@ static HRESULT STDMETHODCALLTYPE dxgi_swapchain_factory_create_swapchain(IWineDX
 #ifdef __REACTOS__
     if (!window && !(window = dxgi_factory_get_device_window(dxgi_factory)))
         return E_FAIL;
-#endif
+    /* Fullscreen and output-restricted swapchains need an enumerated output. */
+    if (!output && (!fullscreen_desc || fullscreen_desc->Windowed))
+        hr = dxgi_get_rendering_output(dxgi_factory, unsafe_impl_from_IDXGIAdapter((IDXGIAdapter *)device->adapter),
+                window, &containing_output);
+    else
+        hr = dxgi_get_output_from_window(&dxgi_factory->IWineDXGIFactory_iface, window, &containing_output);
+    if (FAILED(hr))
+#else
     if (FAILED(hr = dxgi_get_output_from_window(&dxgi_factory->IWineDXGIFactory_iface, window, &containing_output)))
+#endif
     {
         WARN("Failed to get output from window %p, hr %#lx.\n", window, hr);
         return hr;
@@ -567,7 +594,12 @@ HRESULT dxgi_device_init(struct dxgi_device *device, struct dxgi_device_layer *l
     }
 
     window = dxgi_factory_get_device_window(dxgi_factory);
+#ifdef __REACTOS__
+    /* The implicit swapchain only supplies the rendering context. */
+    if (FAILED(hr = dxgi_get_rendering_output(dxgi_factory, dxgi_adapter, window, &output)))
+#else
     if (FAILED(hr = dxgi_get_output_from_window(&dxgi_factory->IWineDXGIFactory_iface, window, &output)))
+#endif
     {
         ERR("Failed to get output from window %p.\n", window);
         wined3d_device_decref(device->wined3d_device);
