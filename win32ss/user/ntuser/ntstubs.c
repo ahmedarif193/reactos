@@ -96,6 +96,24 @@ NtUserGetAltTabInfo(
    return 0;
 }
 
+WNDPROC
+FASTCALL
+IntGetClientProc(USHORT FnId, BOOL Ansi)
+{
+   PPROCESSINFO ppi = GetW32ProcessInfo();
+   const PFNCLIENT *Procs;
+
+   ASSERT(FnId >= FNID_FIRST);
+   ASSERT(FnId - FNID_FIRST < sizeof(PFNCLIENT) / sizeof(WNDPROC));
+
+   if (ppi && ppi->ClientProcs)
+      Procs = &ppi->ClientProcs[Ansi ? 0 : 1];
+   else
+      Procs = Ansi ? &gpsi->apfnClientA : &gpsi->apfnClientW;
+
+   return ((const WNDPROC *)Procs)[FnId - FNID_FIRST];
+}
+
 NTSTATUS
 APIENTRY
 NtUserInitializeClientPfnArrays(
@@ -105,27 +123,46 @@ NtUserInitializeClientPfnArrays(
   HINSTANCE hmodUser)
 {
    NTSTATUS Status = STATUS_SUCCESS;
+   PPROCESSINFO ppi;
+   PPFNCLIENT ClientProcs;
+   PFNCLIENTWORKER Workers;
+
    TRACE("Enter NtUserInitializeClientPfnArrays User32 0x%p\n", hmodUser);
 
-   if (ClientPfnInit) return Status;
-
    UserEnterExclusive();
+   ppi = GetW32ProcessInfo();
+   if (ppi->ClientProcs)
+   {
+      UserLeave();
+      return Status;
+   }
+
+   ClientProcs = ExAllocatePoolWithTag(PagedPool, 2 * sizeof(*ClientProcs), USERTAG_PROCESSINFO);
+   if (!ClientProcs)
+   {
+      UserLeave();
+      return STATUS_NO_MEMORY;
+   }
 
    _SEH2_TRY
    {
       ProbeForRead( pfnClientA, sizeof(PFNCLIENT), 1);
       ProbeForRead( pfnClientW, sizeof(PFNCLIENT), 1);
       ProbeForRead( pfnClientWorker, sizeof(PFNCLIENTWORKER), 1);
-      RtlCopyMemory(&gpsi->apfnClientA, pfnClientA, sizeof(PFNCLIENT));
-      RtlCopyMemory(&gpsi->apfnClientW, pfnClientW, sizeof(PFNCLIENT));
-      RtlCopyMemory(&gpsi->apfnClientWorker, pfnClientWorker, sizeof(PFNCLIENTWORKER));
+      RtlCopyMemory(&ClientProcs[0], pfnClientA, sizeof(ClientProcs[0]));
+      RtlCopyMemory(&ClientProcs[1], pfnClientW, sizeof(ClientProcs[1]));
+      RtlCopyMemory(&Workers, pfnClientWorker, sizeof(Workers));
 
-      //// FIXME: HAX! Temporary until server side is finished.
-      //// Copy the client side procs for now.
-      RtlCopyMemory(&gpsi->aStoCidPfn, pfnClientW, sizeof(gpsi->aStoCidPfn));
-
-      hModClient = hmodUser;
-      ClientPfnInit = TRUE;
+      if (!ClientPfnInit && !PsGetProcessWow64Process(ppi->peProcess))
+      {
+         gpsi->apfnClientA = ClientProcs[0];
+         gpsi->apfnClientW = ClientProcs[1];
+         gpsi->apfnClientWorker = Workers;
+         RtlCopyMemory(&gpsi->aStoCidPfn, &ClientProcs[1], sizeof(gpsi->aStoCidPfn));
+         hModClient = hmodUser;
+         ClientPfnInit = TRUE;
+      }
+      ppi->ClientProcs = ClientProcs;
    }
    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
    {
@@ -135,6 +172,7 @@ NtUserInitializeClientPfnArrays(
 
    if (!NT_SUCCESS(Status))
    {
+      ExFreePoolWithTag(ClientProcs, USERTAG_PROCESSINFO);
       ERR("Failed reading Client Pfns from user space.\n");
       SetLastNtError(Status);
    }

@@ -338,6 +338,8 @@ typedef struct _PROCESSINFO
     struct _GDI_POOL* pPoolBrushAttr;
     struct _GDI_POOL* pPoolRgnAttr;
 
+    struct _PFNCLIENT *ClientProcs;
+
 #if DBG
     BYTE DbgChannelLevel[DbgChCount];
 #ifndef __cplusplus
