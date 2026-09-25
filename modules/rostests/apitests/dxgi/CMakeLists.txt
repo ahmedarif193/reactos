@@ -5,6 +5,7 @@ add_executable(dxgi_apitest
     composition.cpp
     completion_event.cpp
     buffer_copy.cpp
+    copy_depth_stencil.cpp
     dwm_render.cpp
     testlist.c)
 

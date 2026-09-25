@@ -3042,8 +3042,12 @@ void STDMETHODCALLTYPE NativeContext::CopyResource(ID3D11Resource *dst, ID3D11Re
             || (d->dimension == D3D10DDIRESOURCE_TEXTURE3D) != (s->dimension == D3D10DDIRESOURCE_TEXTURE3D)
             || d->desc.Width != s->desc.Width || d->desc.Height != s->desc.Height
             || d->desc.ArraySize != s->desc.ArraySize || d->desc.MipLevels != s->desc.MipLevels
-            || d->desc.Format != s->desc.Format || d->desc.SampleDesc.Count != s->desc.SampleDesc.Count
+            || (d->desc.Format != s->desc.Format
+                && (NativeFormatFamily(d->desc.Format) == DXGI_FORMAT_UNKNOWN
+                    || NativeFormatFamily(d->desc.Format) != NativeFormatFamily(s->desc.Format)))
+            || d->desc.SampleDesc.Count != s->desc.SampleDesc.Count
             || d->desc.SampleDesc.Quality != s->desc.SampleDesc.Quality || d->desc.Usage == D3D11_USAGE_IMMUTABLE) return;
+    if ((d->desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) && device->feature_level < D3D_FEATURE_LEVEL_10_1) return;
     NativeLock guard(device);
     device->functions.pfnResourceCopy(device->driver_device, d->handle, s->handle);
 }
@@ -3085,6 +3089,7 @@ void STDMETHODCALLTYPE NativeContext::CopySubresourceRegion(ID3D11Resource *dst,
     NativeTextureInfo *d = GetNativeTexture(dst, device, &dst_info), *s = GetNativeTexture(src, device, &src_info);
     if (!d || !s || dst_subresource >= d->desc.MipLevels * d->desc.ArraySize
             || src_subresource >= s->desc.MipLevels * s->desc.ArraySize || !device->functions.pfnResourceCopyRegion) return;
+    if ((d->desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) && device->feature_level < D3D_FEATURE_LEVEL_10_1) return;
     NativeLock guard(device);
     device->functions.pfnResourceCopyRegion(device->driver_device, d->handle, dst_subresource,
             x, y, z, s->handle, src_subresource, reinterpret_cast<const D3D10_DDI_BOX *>(box));
