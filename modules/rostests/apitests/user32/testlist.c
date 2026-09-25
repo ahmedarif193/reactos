@@ -16,6 +16,7 @@ extern void func_CreateIconFromResourceEx(void);
 extern void func_CreateWindowEx(void);
 extern void func_DeferWindowPos(void);
 extern void func_DestroyCursorIcon(void);
+extern void func_DestroyWindow(void);
 extern void func_DM_REPOSITION(void);
 extern void func_Dpi(void);
 extern void func_DrawIconEx(void);
@@ -113,6 +114,7 @@ const struct test winetest_testlist[] =
     { "CreateWindowEx", func_CreateWindowEx },
     { "DeferWindowPos", func_DeferWindowPos },
     { "DestroyCursorIcon", func_DestroyCursorIcon },
+    { "DestroyWindow", func_DestroyWindow },
     { "DM_REPOSITION", func_DM_REPOSITION },
     { "Dpi", func_Dpi },
     { "DrawIconEx", func_DrawIconEx },

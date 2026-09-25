@@ -588,23 +588,38 @@ LRESULT co_UserFreeWindow(PWND Window,
 
    if(Window->state2 & WNDS2_INDESTROY)
    {
-      TRACE("Tried to call co_UserFreeWindow() twice\n");
-      return 0;
+      /* A terminating thread can abandon this function in a user callback,
+       * including WM_NCDESTROY. Its owner sweep must finish the kernel cleanup
+       * before process classes are freed. Ordinary reentrant destruction must
+       * still leave the original invocation in charge. */
+      if (Window->head.pti != ThreadData ||
+          !(ThreadData->TIF_flags & TIF_INCLEANUP) || Window->pcls == NULL)
+      {
+         TRACE("Tried to call co_UserFreeWindow() twice\n");
+         return 0;
+      }
+      SendMessages = FALSE;
    }
-   Window->state2 |= WNDS2_INDESTROY;
-   Window->style &= ~WS_VISIBLE;
-   IntUipiFreeWindowFilters(Window);
-   Window->head.pti->cVisWindows--;
+   else
+   {
+      Window->state2 |= WNDS2_INDESTROY;
+      Window->style &= ~WS_VISIBLE;
+      IntUipiFreeWindowFilters(Window);
+      Window->head.pti->cVisWindows--;
 
-   /* Release the compositor's backing surface for this window (no-op when
-    * composition is off / the window was never redirected). */
-   IntCompositionOnWindowDestroy(Window);
+      /* Release the compositor's backing surface for this window (no-op when
+       * composition is off / the window was never redirected). */
+      IntCompositionOnWindowDestroy(Window);
 
-   /* remove the window already at this point from the thread window list so we
-      don't get into trouble when destroying the thread windows while we're still
-      in co_UserFreeWindow() */
-   if (!IsListEmpty(&Window->ThreadListEntry))
-       RemoveEntryList(&Window->ThreadListEntry);
+      /* remove the window already at this point from the thread window list so we
+         don't get into trouble when destroying the thread windows while we're still
+         in co_UserFreeWindow() */
+      if (!IsListEmpty(&Window->ThreadListEntry))
+      {
+         RemoveEntryList(&Window->ThreadListEntry);
+         InitializeListHead(&Window->ThreadListEntry);
+      }
+   }
 
    BelongsToThreadData = IntWndBelongsToThread(Window, ThreadData);
 
@@ -2969,6 +2984,16 @@ BOOLEAN co_UserDestroyWindow(PVOID Object)
 
    ASSERT_REFS_CO(Window); // FIXME: Temp HACK?
 
+   ti = PsGetCurrentThreadWin32Thread();
+   if (Window->head.pti == ti && (ti->TIF_flags & TIF_INCLEANUP) &&
+       (Window->state2 & WNDS2_INDESTROY) && Window->pcls != NULL)
+   {
+      /* The window may already reject handle lookups, but an interrupted
+       * destructor still owns its class and other kernel resources. */
+      co_UserFreeWindow(Window, ti->ppi, ti, FALSE);
+      return TRUE;
+   }
+
    /* NtUserDestroyWindow does check if the window has already been destroyed
       but co_UserDestroyWindow can be called from more paths which means
       that it can also be called for a window that has already been destroyed. */
@@ -2979,8 +3004,6 @@ BOOLEAN co_UserDestroyWindow(PVOID Object)
    }
 
    hWnd = UserHMGetHandle(Window);
-   ti = PsGetCurrentThreadWin32Thread();
-
    TRACE("co_UserDestroyWindow(Window = 0x%p, hWnd = 0x%p)\n", Window, hWnd);
 
    /* Check for owner thread */
