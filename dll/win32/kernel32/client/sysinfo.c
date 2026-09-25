@@ -213,6 +213,10 @@ GetNativeSystemInfo(IN LPSYSTEM_INFO lpSystemInfo)
 {
     SYSTEM_BASIC_INFORMATION BasicInfo;
     SYSTEM_PROCESSOR_INFORMATION ProcInfo;
+    SYSTEM_INFO ProcessInfo;
+    SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION Machines[8];
+    HANDLE Process = NULL;
+    ULONG Index;
     NTSTATUS Status;
 
     Status = RtlGetNativeSystemInformation(SystemBasicInformation,
@@ -227,17 +231,44 @@ GetNativeSystemInfo(IN LPSYSTEM_INFO lpSystemInfo)
                                            0);
     if (!NT_SUCCESS(Status)) return;
 
-#ifdef _M_IX86
-    if (ProcInfo.ProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64)
+    GetSystemInfoInternal(&BasicInfo, &ProcInfo, lpSystemInfo);
+
+    if (ProcInfo.ProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL ||
+        ProcInfo.ProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ||
+        ProcInfo.ProcessorArchitecture == PROCESSOR_ARCHITECTURE_IA64)
     {
-        GetSystemInfo(lpSystemInfo);
-        lpSystemInfo->wProcessorArchitecture = PROCESSOR_ARCHITECTURE_AMD64;
-        lpSystemInfo->dwProcessorType = PROCESSOR_AMD_X8664;
         return;
     }
-#endif
 
-    GetSystemInfoInternal(&BasicInfo, &ProcInfo, lpSystemInfo);
+    RtlZeroMemory(&ProcessInfo, sizeof(ProcessInfo));
+    ProcessInfo.wProcessorArchitecture = PROCESSOR_ARCHITECTURE_UNKNOWN;
+    GetSystemInfo(&ProcessInfo);
+    if (ProcessInfo.wProcessorArchitecture != PROCESSOR_ARCHITECTURE_INTEL &&
+        ProcessInfo.wProcessorArchitecture != PROCESSOR_ARCHITECTURE_AMD64)
+    {
+        return;
+    }
+
+    *lpSystemInfo = ProcessInfo;
+    if (ProcessInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64)
+        return;
+
+    RtlZeroMemory(Machines, sizeof(Machines));
+    Status = NtQuerySystemInformationEx(SystemSupportedProcessorArchitectures2,
+                                        &Process, sizeof(Process),
+                                        Machines, sizeof(Machines), NULL);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Machines) && Machines[Index].Machine; ++Index)
+    {
+        if (Machines[Index].Machine == IMAGE_FILE_MACHINE_AMD64 && Machines[Index].UserMode)
+        {
+            lpSystemInfo->wProcessorArchitecture = PROCESSOR_ARCHITECTURE_AMD64;
+            lpSystemInfo->dwProcessorType = PROCESSOR_AMD_X8664;
+            break;
+        }
+    }
 }
 
 /*
