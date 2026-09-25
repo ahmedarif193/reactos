@@ -155,9 +155,6 @@ static void test_get_blob_part(void)
     ok(blob2 == blob, "D3DGetBlobPart failed got %p, expected %p\n", blob, blob2);
 
     hr = D3DGetBlobPart(test_blob_part, 8 * sizeof(DWORD), D3D_BLOB_INPUT_SIGNATURE_BLOB, 0, &blob);
-#if D3D_COMPILER_VERSION >= 46
-    todo_wine
-#endif
     ok(hr == expected, "Got unexpected hr %#lx.\n", hr);
     ok(blob2 == blob, "D3DGetBlobPart failed got %p, expected %p\n", blob, blob2);
 
@@ -300,9 +297,6 @@ static void test_get_blob_part(void)
     {
         /* There isn't a full DXBC blob returned for D3D_BLOB_LEGACY_SHADER */
         hr = D3DGetBlobPart(dword, size, parts[i], 0, &blob2);
-#if D3D_COMPILER_VERSION >= 46
-        todo_wine
-#endif
         ok(hr == expected, "Got unexpected hr %#lx, expected %#lx.\n", hr, expected);
     }
 
@@ -323,9 +317,6 @@ static void test_get_blob_part(void)
     {
         /* There isn't a full DXBC blob returned for D3D_BLOB_XNA_PREPASS_SHADER */
         hr = D3DGetBlobPart(dword, size, parts[i], 0, &blob2);
-#if D3D_COMPILER_VERSION >= 46
-        todo_wine
-#endif
         ok(hr == expected, "Got unexpected hr %#lx, expected %#lx.\n", hr, expected);
     }
 
@@ -346,9 +337,6 @@ static void test_get_blob_part(void)
     {
         /* There isn't a full DXBC blob returned for D3D_BLOB_XNA_SHADER */
         hr = D3DGetBlobPart(dword, size, parts[i], 0, &blob2);
-#if D3D_COMPILER_VERSION >= 46
-        todo_wine
-#endif
         ok(hr == expected, "Got unexpected hr %#lx, expected %#lx.\n", hr, expected);
     }
 
@@ -375,9 +363,6 @@ static void test_get_blob_part(void)
     ok(hr == D3DERR_INVALIDCALL, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DStripShader(test_blob_part, 8 * sizeof(DWORD), 0, &blob);
-#if D3D_COMPILER_VERSION >= 46
-    todo_wine
-#endif
     ok(hr == expected, "Got unexpected hr %#lx.\n", hr);
 
     hr = D3DStripShader(test_blob_part, test_blob_part[6], 0, NULL);
@@ -716,9 +701,6 @@ static void test_get_blob_part2(void)
     {
         /* There isn't a full DXBC blob returned for D3D_BLOB_DEBUG_INFO */
         hr = D3DGetBlobPart(dword, size, parts[i], 0, &blob2);
-#if D3D_COMPILER_VERSION >= 46
-        todo_wine
-#endif
         ok(hr == expected, "Got unexpected hr %#lx, expected %#lx.\n", hr, expected);
     }
 

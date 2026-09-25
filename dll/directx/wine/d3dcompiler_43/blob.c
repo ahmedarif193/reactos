@@ -214,6 +214,19 @@ static BOOL check_blob_part(DWORD tag, D3D_BLOB_PART part)
     return add;
 }
 
+static HRESULT d3dcompiler_dxbc_error(int result)
+{
+    if (result == VKD3D_ERROR_OUT_OF_MEMORY)
+        return E_OUTOFMEMORY;
+#if D3D_COMPILER_VERSION >= 46
+    /* Newer compiler versions distinguish malformed DXBC from a valid
+     * container that simply does not contain the requested blob part. */
+    if (result == VKD3D_ERROR_INVALID_ARGUMENT)
+        return D3DERR_INVALIDCALL;
+#endif
+    return E_FAIL;
+}
+
 static HRESULT d3dcompiler_get_blob_part(const void *data, SIZE_T data_size, UINT part, UINT flags, ID3DBlob **blob)
 {
     const struct vkd3d_shader_code src_dxbc = {.code = data, .size = data_size};
@@ -240,7 +253,7 @@ static HRESULT d3dcompiler_get_blob_part(const void *data, SIZE_T data_size, UIN
     if ((ret = vkd3d_shader_parse_dxbc(&src_dxbc, 0, &src_dxbc_desc, NULL)) < 0)
     {
         WARN("Failed to parse source data, ret %d.\n", ret);
-        return E_FAIL;
+        return d3dcompiler_dxbc_error(ret);
     }
 
     if (!(sections = calloc(src_dxbc_desc.section_count, sizeof(*sections))))
@@ -371,7 +384,7 @@ static HRESULT d3dcompiler_strip_shader(const void *data, SIZE_T data_size, UINT
     if ((ret = vkd3d_shader_parse_dxbc(&src_dxbc, 0, &src_dxbc_desc, NULL)) < 0)
     {
         WARN("Failed to parse source data, ret %d.\n", ret);
-        return E_FAIL;
+        return d3dcompiler_dxbc_error(ret);
     }
 
     /* src_dxbc.count >= dst_dxbc.count */
