@@ -37,6 +37,9 @@ IntDereferenceClass(IN OUT PCLS Class,
                     IN PDESKTOPINFO Desktop,
                     IN PPROCESSINFO pi);
 
+VOID IntFreeClassMenuName(IN OUT PCLS Class);
+BOOL IntSetClassMenuName(IN PCLS Class, IN PUNICODE_STRING MenuName);
+
 PCLS
 IntGetAndReferenceClass(PUNICODE_STRING ClassName, HINSTANCE hInstance, BOOL bDesktopThread);
 
