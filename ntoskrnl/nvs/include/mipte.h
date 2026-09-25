@@ -46,7 +46,11 @@
 #define MI_LEAF_PFN_CACHE         0x80 /* Resolve MDL cache attributes per physical page. */
 #define MI_LEAF_CACHE_MASK        (MI_LEAF_NOCACHE | MI_LEAF_WRITECOMBINE | MI_LEAF_DEVICE)
 
-typedef ULONG64 MI_PTE, *PMI_PTE;
+#if defined(MI_ARCH_PTE_BYTES) && MI_ARCH_PTE_BYTES == 4
+typedef ULONG MI_PTE, *PMI_PTE;
+#else
+typedef ULONG_PTR MI_PTE, *PMI_PTE;
+#endif
 
 #define MI_SOFT_KIND_SHIFT        1
 #define MI_SOFT_KIND_MASK         0x7ULL

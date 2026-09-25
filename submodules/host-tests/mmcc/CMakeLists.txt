@@ -11,6 +11,7 @@ include_directories(${MMCC_KERNEL_ROOT} ${CMAKE_CURRENT_SOURCE_DIR}/..)
 add_subdirectory(nvs/core)
 add_subdirectory(nvs/amd64)
 add_subdirectory(nvs/arm64)
+add_subdirectory(nvs/i386)
 add_subdirectory(pool)
 add_subdirectory(cc)
 

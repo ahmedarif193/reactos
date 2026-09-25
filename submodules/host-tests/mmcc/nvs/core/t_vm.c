@@ -801,7 +801,7 @@ RangeCheck(TEST_WORLD *World, PMI_ADDRESS_SPACE Space, ULONG64 Base, ULONG Pages
                 if (getenv("MM_DEBUG"))
                     fprintf(stderr, "page %u transition frame %llu state %u pteaddr %llx slot %llx orig %llx\n", i,
                             MiSoftValue(Pte), Entry->State, Entry->PteAddress,
-                            MiPtSlotAddress(Slot, TableFrame, Va), Entry->OriginalPte);
+                            MiPtSlotAddress(Slot, TableFrame, Va), (ULONG64)Entry->OriginalPte);
                 Errors++;
             }
         }

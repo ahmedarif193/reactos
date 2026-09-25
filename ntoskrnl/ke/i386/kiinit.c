@@ -540,6 +540,7 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
         KeInitializeSpinLock(&Ki486CompatibilityLock);
 
         /* Initialize portable parts of the OS */
+        MiInitializeKernelVaLayout(LoaderBlock);
         KiInitSystem();
 
         /* Initialize the Idle Process and the Process Listhead */
