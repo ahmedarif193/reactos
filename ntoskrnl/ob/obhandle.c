@@ -223,7 +223,7 @@ ObpReferenceProcessObjectByHandle(IN HANDLE Handle,
             /* Return handle info */
             HandleInformation->HandleAttributes = 0;
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-            HandleInformation->GrantedAccess = Process->ImagePathHash;
+            HandleInformation->GrantedAccess = PROCESS_ALL_ACCESS;
 #else
             HandleInformation->GrantedAccess = Process->GrantedAccess;
 #endif
@@ -247,7 +247,7 @@ ObpReferenceProcessObjectByHandle(IN HANDLE Handle,
             /* Return handle information */
             HandleInformation->HandleAttributes = 0;
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-            HandleInformation->GrantedAccess = Thread->SpareUlong0;
+            HandleInformation->GrantedAccess = THREAD_ALL_ACCESS;
 #else
             HandleInformation->GrantedAccess = Thread->GrantedAccess;
 #endif
