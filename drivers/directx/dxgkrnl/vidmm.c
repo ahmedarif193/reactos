@@ -1856,7 +1856,7 @@ DxgkVidMmDumpContextImages(
             }
         }
         Words = (const ULONG *)Allocation->CpuAddress;
-        for (Word = 0; Word + 48 < Limit / sizeof(ULONG); Word++)
+        for (Word = 0; Word + 64 <= Limit / sizeof(ULONG); Word++)
         {
             if ((Words[Word] & 0xFFF70000UL) != 0x11000000UL)
                 continue;

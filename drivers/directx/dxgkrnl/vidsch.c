@@ -433,6 +433,8 @@ VidSchpAdmitPacket(
         NTSTATUS Status;
         DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_QUEUE);
         Packet->PresentationQueueTrace = Trace;
+        Packet->AdmitTime100ns = DxgkDiagNow100ns();
+        Packet->AdmitSequence = DxgkDiagSequence();
         Status = Sched->AdmitPacket(Sched->SchedulerHandle, &Info, OutFenceId);
         /* After successful publication, Packet may already have retired. */
         if (!NT_SUCCESS(Status))
@@ -522,7 +524,7 @@ VidSchpAgeUs(
     _In_ ULONGLONG Now100ns,
     _In_ ULONGLONG Then100ns)
 {
-    if (Then100ns == 0)
+    if (Then100ns == 0 || Now100ns < Then100ns)
         return -1;
     return (LONGLONG)(Now100ns - Then100ns) / 10;
 }
@@ -605,7 +607,7 @@ VidSchDumpEngineDiagnostics(
                         VidSchpAgeUs(Now, Record->DispatchTime100ns),
                         Record->CompleteTime100ns != 0 ? "-" : "never ",
                         Record->CompleteTime100ns != 0 ? VidSchpAgeUs(Now, Record->CompleteTime100ns) : 0,
-                        (LONGLONG)(Record->DispatchTime100ns - Record->AdmitTime100ns) / 10);
+                        VidSchpAgeUs(Record->DispatchTime100ns, Record->AdmitTime100ns));
         }
     }
     if (Detailed && KeGetCurrentIrql() <= APC_LEVEL)
