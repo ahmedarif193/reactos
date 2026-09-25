@@ -1768,7 +1768,7 @@ DxgkpVidMmTrackContextAllocation(
         }
     }
     KeReleaseSpinLock(&DxgkpContextAllocationRangeLock, OldIrql);
-    DXGKRNL_INFO("context allocation %s seq=#%I64d: alloc=%p kmd=%p segment=%lu offset=0x%I64x size=0x%I64x\n",
+    DXGKRNL_VERBOSE("context allocation %s seq=#%I64d: alloc=%p kmd=%p segment=%lu offset=0x%I64x size=0x%I64x\n",
                  Live ? "live" : "gone", DxgkDiagSequence(), Allocation, Allocation->MiniportHandle,
                  Allocation->SegmentId, (ULONGLONG)Allocation->SegmentOffset, (ULONGLONG)Allocation->Size);
 }
@@ -2167,7 +2167,7 @@ DxgkVidMmCreateContextAllocation(
             }
             InitOp.DestinationGpuVirtualAddress = ContextHandle->GpuVirtualAddress;
             DxgkpVidMmTrackContextAllocation(Allocation, TRUE);
-            DPRINT1("context allocation init seq=#%I64d: alloc=%p segment=%lu offset=0x%I64x cpuva=%p (cpuvisible=%u protected=%u aperture=%d cpuaddr=%p sysmem=%p) gpuva=0x%I64x\n",
+            DXGKRNL_VERBOSE("context allocation init seq=#%I64d: alloc=%p segment=%lu offset=0x%I64x cpuva=%p (cpuvisible=%u protected=%u aperture=%d cpuaddr=%p sysmem=%p) gpuva=0x%I64x\n",
                     DxgkDiagSequence(), Allocation, Allocation->SegmentId, (ULONGLONG)Allocation->PhysicalAddress.QuadPart, InitOp.DestinationVirtualAddress,
                     Flags.CpuVisible, Flags.Protected, (int)VidMmSegmentIsAperture(Segment), Allocation->CpuAddress, Allocation->SystemMemory,
                     InitOp.DestinationGpuVirtualAddress);
@@ -4771,7 +4771,7 @@ DxgkVidMmInitializeAdapter(
                                          ? PagingBufferSize
                                          : VIDMM_PAGING_BUFFER_SIZE_DEFAULT;
             Seg->PagingBufferPrivateDataSize = PagingBufferPrivateDataSize;
-            DPRINT1("VidMm: paging buffer segment=%lu size=0x%lx private-data=%lu bytes\n",
+            DXGKRNL_TRACE("VidMm: paging buffer segment=%lu size=0x%lx private-data=%lu bytes\n",
                     PagingBufferSegmentId, Seg->PagingBufferSize, PagingBufferPrivateDataSize);
         }
 
@@ -7302,7 +7302,7 @@ DxgkVidMmDumpSegments(
     {
         PDXGKRNL_SEGMENT Segment = &ADAPTER_SEGMENTS(Adapter)[i];
 
-        DPRINT1("VidMm segment %lu: size=0x%I64x commit=0x%I64x base=0x%I64x cpu=0x%I64x flags=0x%08x (aperture=%u cpuvisible=%u cachecoherent=%u usebanking=%u agp=%u)\n",
+        DXGKRNL_TRACE("VidMm segment %lu: size=0x%I64x commit=0x%I64x base=0x%I64x cpu=0x%I64x flags=0x%08x (aperture=%u cpuvisible=%u cachecoherent=%u usebanking=%u agp=%u)\n",
                 Segment->SegmentId, Segment->Size, Segment->CommitLimit,
                 (ULONGLONG)Segment->BaseAddress.QuadPart, (ULONGLONG)Segment->CpuTranslatedAddress.QuadPart,
                 Segment->Flags.Value, Segment->Flags.Aperture, Segment->Flags.CpuVisible,
@@ -9170,7 +9170,6 @@ DxgkpVidMmNotifyResidency(
 {
     DXGKRNL_PAGING_OP Op;
     NTSTATUS Status;
-    static LONG NotifyCount = 0;
 
     if (Allocation == NULL || !Allocation->ExplicitResidencyNotification ||
         Allocation->Adapter == NULL || Allocation->MiniportHandle == NULL ||
@@ -9190,12 +9189,12 @@ DxgkpVidMmNotifyResidency(
     }
     Op.NotifyResident = Resident;
     Status = DxgkPagingExecuteSynchronous(Allocation->Adapter, Allocation->Device, &Op);
-    if (InterlockedIncrement(&NotifyCount) <= 12 || !NT_SUCCESS(Status))
-    {
-        DPRINT1("NotifyResidency #%ld: alloc=%p hAlloc=%p resident=%d segment=%lu offset=0x%I64x -> 0x%08lx\n",
-                NotifyCount, Allocation, Allocation->MiniportHandle, (int)Resident,
-                Op.NotifyPhysicalAddress.SegmentId, (ULONGLONG)Op.NotifyPhysicalAddress.SegmentOffset, Status);
-    }
+    if (!NT_SUCCESS(Status))
+        DXGKRNL_WARN("NotifyResidency: alloc=%p hAlloc=%p resident=%d failed 0x%08lx\n",
+                     Allocation, Allocation->MiniportHandle, (int)Resident, Status);
+    DXGKRNL_VERBOSE("NotifyResidency: alloc=%p hAlloc=%p resident=%d segment=%lu offset=0x%I64x -> 0x%08lx\n",
+                    Allocation, Allocation->MiniportHandle, (int)Resident,
+                    Op.NotifyPhysicalAddress.SegmentId, (ULONGLONG)Op.NotifyPhysicalAddress.SegmentOffset, Status);
 }
 
 static VOID
@@ -9282,7 +9281,7 @@ DxgkpVidMmPrepareEvictionOwned(
 
     if (!Allocation->Resident)
     {
-        DPRINT1("DxgkVidMmEvict: allocation %p is not resident\n", Allocation);
+        DXGKRNL_WARN("DxgkVidMmEvict: allocation %p is not resident\n", Allocation);
         return STATUS_INVALID_PARAMETER;
     }
     if (DxgkSubmissionResidencyPinIsHeld(&Allocation->SubmissionResidencyPinCount))
@@ -11125,7 +11124,7 @@ DxgkpVidMmMakeResidentOwned(
     DPRINT("DxgkVidMmMakeResident: Alloc=%p size=%Iu\n", Allocation, Allocation->Size);
     if (Allocation->Resident)
     {
-        DPRINT1("DxgkVidMmMakeResident: alloc %p is already resident\n", Allocation);
+        DXGKRNL_WARN("DxgkVidMmMakeResident: alloc %p is already resident\n", Allocation);
         Status = STATUS_INVALID_PARAMETER;
         goto Cleanup;
     }
@@ -11229,7 +11228,7 @@ DxgkpVidMmMakeResidentOwned(
             DxgkVidMmDereferenceAllocation(Victim);
             continue;
         }
-        DPRINT1("DxgkVidMmMakeResident: evicting victim %p (priority %lu) from seg %lu to make room for %p\n", Victim, VictimPriority, Seg->SegmentId, Allocation);
+        DXGKRNL_VERBOSE("DxgkVidMmMakeResident: evicting victim %p (priority %lu) from seg %lu to make room for %p\n", Victim, VictimPriority, Seg->SegmentId, Allocation);
         Status = DxgkpVidMmTryBeginResidencyTransaction(
                      Victim,
                      &VictimOwnerToken);

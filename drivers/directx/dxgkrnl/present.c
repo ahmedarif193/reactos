@@ -3336,6 +3336,11 @@ DxgkpExecuteFullPresentMeasured(
         (PresentArgs.pDmaBufferPrivateData != DmaBufferPrivateData ||
          PresentArgs.DmaBufferPrivateDataSize != DmaBufferPrivateDataSize))
     {
+        DXGKRNL_WARN("DxgkpExecuteFullPresent: private data changed "
+                     "%p/%lu -> %p/%u\n",
+                     DmaBufferPrivateData, DmaBufferPrivateDataSize,
+                     PresentArgs.pDmaBufferPrivateData,
+                     PresentArgs.DmaBufferPrivateDataSize);
         Status = STATUS_INVALID_PARAMETER;
     }
     if (NT_SUCCESS(Status))
@@ -3428,6 +3433,10 @@ DxgkpExecuteFullPresentMeasured(
                 (AllocationIndex == DXGK_PRESENT_DESTINATION_INDEX &&
                  DestinationDeviceSpecificHandle == NULL))
             {
+                DXGKRNL_WARN("DxgkpExecuteFullPresent: patch %u allocation %u "
+                             "source=%p destination=%p\n",
+                             PatchIndex, AllocationIndex,
+                             SourceDeviceSpecificHandle, DestinationDeviceSpecificHandle);
                 Status = STATUS_INVALID_PARAMETER;
                 goto PresentSubmissionDone;
             }

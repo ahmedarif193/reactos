@@ -830,7 +830,7 @@ DxgkpQueryChildConnectionForEnumeration(
     }
     _SEH2_END;
     DxgkReleaseKmdCall(Adapter);
-    DXGKRNL_INFO("CHILD_CONNECTION: adapter=%p uid=%lu hpd=%u nondestructive=%u "
+    DXGKRNL_TRACE("CHILD_CONNECTION: adapter=%p uid=%lu hpd=%u nondestructive=%u "
                  "status=0x%08lX connected=%u\n",
                  Adapter, Descriptor->ChildUid,
                  (UINT)Descriptor->ChildCapabilities.HpdAwareness,

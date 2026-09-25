@@ -4992,7 +4992,7 @@ DxgkCbCreateContextAllocation(
         LONG Count = InterlockedIncrement(&Adapter->ContextAllocationCreateCount);
 
         {
-            DXGKRNL_INFO("DxgkCbCreateContextAllocation #%ld seq=#%I64d: size=%Iu flags=0x%x (shared=%u mapva=%u) allocflags=0x%08x (cpuvisible=%u protected=%u cached=%u) segset=0x%x evict=0x%x pref=0x%x align=%u ctx=%p dev=%p -> status=0x%08lx handle=%p va=0x%I64x\n",
+            DXGKRNL_VERBOSE("DxgkCbCreateContextAllocation #%ld seq=#%I64d: size=%Iu flags=0x%x (shared=%u mapva=%u) allocflags=0x%08x (cpuvisible=%u protected=%u cached=%u) segset=0x%x evict=0x%x pref=0x%x align=%u ctx=%p dev=%p -> status=0x%08lx handle=%p va=0x%I64x\n",
                         Count, DxgkDiagSequence(), ContextAllocation->Size, ContextAllocation->ContextAllocationFlags.Value,
                         ContextAllocation->ContextAllocationFlags.SharedAcrossContexts,
                         ContextAllocation->ContextAllocationFlags.MapGpuVirtualAddress,
@@ -5924,8 +5924,11 @@ DxgkCbMapContextAllocation(
                                            Args->DriverProtection,
                                            &Address);
     Count = InterlockedIncrement(&Adapter->ContextAllocationMapCount);
+    if (!NT_SUCCESS(Status))
+        DXGKRNL_WARN("DxgkCbMapContextAllocation: allocation=%p pages=%I64u failed 0x%08lx\n",
+                     Args->hAllocation, (ULONGLONG)Args->SizeInPages, Status);
     {
-        DXGKRNL_INFO("DxgkCbMapContextAllocation #%ld seq=#%I64d: alloc=%p base=0x%I64x min=0x%I64x max=0x%I64x offset=%I64u pages=%I64u prot=0x%I64x -> status=0x%08lx va=0x%I64x\n",
+        DXGKRNL_VERBOSE("DxgkCbMapContextAllocation #%ld seq=#%I64d: alloc=%p base=0x%I64x min=0x%I64x max=0x%I64x offset=%I64u pages=%I64u prot=0x%I64x -> status=0x%08lx va=0x%I64x\n",
                     Count, DxgkDiagSequence(), Args->hAllocation, Args->BaseAddress, Args->MinimumAddress, Args->MaximumAddress,
                     (ULONGLONG)Args->OffsetInPages, (ULONGLONG)Args->SizeInPages, Args->Protection.Value, Status, Address);
     }
@@ -5958,7 +5961,10 @@ DxgkCbUpdateContextAllocation(
         return STATUS_INVALID_HANDLE;
     Status = DxgkVidMmUpdateContextAllocation(Adapter, Args->hAllocation, Args->pPrivateDriverData, Args->PrivateDriverDataSize);
     Count = InterlockedIncrement(&Adapter->ContextAllocationUpdateCount);
-    DXGKRNL_INFO("DxgkCbUpdateContextAllocation #%ld seq=#%I64d: alloc=%p private=%u bytes -> 0x%08lx\n", Count, DxgkDiagSequence(), Args->hAllocation, Args->PrivateDriverDataSize, Status);
+    if (!NT_SUCCESS(Status))
+        DXGKRNL_WARN("DxgkCbUpdateContextAllocation: allocation=%p failed 0x%08lx\n",
+                     Args->hAllocation, Status);
+    DXGKRNL_VERBOSE("DxgkCbUpdateContextAllocation #%ld seq=#%I64d: alloc=%p private=%u bytes -> 0x%08lx\n", Count, DxgkDiagSequence(), Args->hAllocation, Args->PrivateDriverDataSize, Status);
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return Status;
 }
@@ -6529,8 +6535,8 @@ DxgkpReportAcpiEval(
     ULONG OutputLength = 0;
     LONG Count;
 
-    /* A miniport that rejects start rarely says which firmware answer it
-     * disliked, so the first evaluations of every adapter stay visible. */
+    /* Retain failed firmware answers; normal size probes and successful
+     * evaluations are visible only with init tracing enabled. */
     Count = InterlockedIncrement(&Adapter->AcpiEvalCount);
     if (Count > 32 && NT_SUCCESS(Status))
         return;
@@ -6550,7 +6556,12 @@ DxgkpReportAcpiEval(
         OutputLength = OutputBuffer->Length;
     }
 
-    DXGKRNL_INFO("DxgkCbEvalAcpiMethod #%ld: adapter=%p uid=0x%lx sig=%.4s "
+    if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_TOO_SMALL &&
+        Status != STATUS_BUFFER_OVERFLOW)
+        DXGKRNL_WARN("DxgkCbEvalAcpiMethod: adapter=%p uid=0x%lx method=%s failed 0x%08lx\n",
+                     Adapter, DeviceUid, MethodName, Status);
+
+    DXGKRNL_TRACE("DxgkCbEvalAcpiMethod #%ld: adapter=%p uid=0x%lx sig=%.4s "
                 "method=%s args=%lu in=%lu out=%lu -> status=0x%08lx "
                 "info=%Iu count=%lu length=%lu\n",
                 Count, Adapter, DeviceUid, (PCSTR)&Signature, MethodName,
@@ -6919,7 +6930,7 @@ DxgkpFillInterface(
         &Interface->Version);
     Interface->DeviceHandle = (HANDLE)Adapter;
 
-    DXGKRNL_INFO("DxgkpFillInterface: DeviceHandle=%p Size=%u "
+    DXGKRNL_TRACE("DxgkpFillInterface: DeviceHandle=%p Size=%u "
                 "RequestedVersion=0x%lX AdvertisedVersion=0x%lX\n",
                   Interface->DeviceHandle,
                   Interface->Size,
@@ -7532,7 +7543,7 @@ DxgkCbGetDeviceInformation(
                         else if (Desc->Flags & CM_RESOURCE_MEMORY_LARGE_64)
                             Decoded = (ULONGLONG)Desc->u.Memory64.Length64 << 32;
                     }
-                    DXGKRNL_INFO("adapter %p resource[%lu.%lu] type=%u flags=0x%04x "
+                    DXGKRNL_TRACE("adapter %p resource[%lu.%lu] type=%u flags=0x%04x "
                                 "start=0x%I64x rawlen=0x%08lx len=0x%I64x\n",
                                 Adapter, ListIndex, Index, Desc->Type, Desc->Flags,
                                 Desc->u.Memory.Start.QuadPart,
@@ -9798,7 +9809,7 @@ DxgkCbMapMemory(
 
         if (MapCount <= 8)
         {
-            DXGKRNL_INFO("DxgkCbMapMemory #%ld: adapter %p PA=0x%I64X len=0x%lX "
+            DXGKRNL_VERBOSE("DxgkCbMapMemory #%ld: adapter %p PA=0x%I64X len=0x%lX "
                         "io=%d user=%d cache=%d -> %p (%s)\n",
                         MapCount, Adapter, TranslatedAddress.QuadPart, Length,
                         InIoSpace, MapToUserMode, CacheType, Va, MapMethod);
@@ -10154,11 +10165,13 @@ DxgkCbIndicateChildStatus(
                  ChildStatus->ChildUid,
                  ChildStatus->HotPlug.Connected,
                  &Changed);
-    DXGKRNL_INFO("CHILD_INDICATION: adapter=%p uid=%lu connected=%u "
-                 "state=%u changed=%u status=0x%08lX\n",
-                 Adapter, ChildStatus->ChildUid,
-                 (UINT)ChildStatus->HotPlug.Connected,
-                 (UINT)Adapter->State, (UINT)Changed, Status);
+    if (!NT_SUCCESS(Status))
+        DXGKRNL_WARN("CHILD_INDICATION: adapter=%p uid=%lu failed 0x%08lX\n",
+                     Adapter, ChildStatus->ChildUid, Status);
+    else if (Changed)
+        DXGKRNL_INFO("CHILD_INDICATION: adapter=%p uid=%lu connected=%u state=%u\n",
+                     Adapter, ChildStatus->ChildUid,
+                     (UINT)ChildStatus->HotPlug.Connected, (UINT)Adapter->State);
     if (NT_SUCCESS(Status) && Changed)
     {
         Status = DxgkVidPnQueueHotPlugRebuild(Adapter);
@@ -10420,7 +10433,11 @@ DxgkpFirmwareTableReadTable(
                                          BufferSize,
                                          &Information);
 
-    DXGKRNL_INFO("firmware table '%.4s' provider '%.4s' -> 0x%08lx, %lu byte(s)\n",
+    if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_TOO_SMALL)
+        DXGKRNL_WARN("firmware table '%.4s' provider '%.4s' failed 0x%08lx\n",
+                     (PCHAR)&TableId, (PCHAR)&ProviderSignature, Status);
+
+    DXGKRNL_TRACE("firmware table '%.4s' provider '%.4s' -> 0x%08lx, %lu byte(s)\n",
                 (PCHAR)&TableId, (PCHAR)&ProviderSignature,
                 Status, (ULONG)Information);
 
@@ -10909,12 +10926,13 @@ DxgkCbQueryServices(
 #endif
 
 Done:
-    /* Every service a miniport asks for during start is worth knowing about
-     * when the start fails without explaining itself. */
+    if (!NT_SUCCESS(Status))
+        DXGKRNL_WARN("DxgkCbQueryServices: adapter=%p type=%lu version=%u failed 0x%08lx\n",
+                     Adapter, (ULONG)ServicesType, Interface->Version, Status);
     Count = InterlockedIncrement(&Adapter->QueryServicesCount);
     if (Count <= 16 || !NT_SUCCESS(Status))
     {
-        DXGKRNL_INFO("DxgkCbQueryServices #%ld: adapter=%p type=%lu size=%u "
+        DXGKRNL_TRACE("DxgkCbQueryServices #%ld: adapter=%p type=%lu size=%u "
                     "version=%u -> status=0x%08lx\n",
                     Count, Adapter, (ULONG)ServicesType,
                     Interface->Size, Interface->Version, Status);
@@ -11744,7 +11762,7 @@ DxgkpCacheGpuMmuGeometry(
          * has to describe its child.  Report the geometry the miniport asked
          * for so the two cannot be guessed at separately.
          */
-        DXGKRNL_INFO("DxgkAdapterStart: page-table level %lu: %I64u entries x %u bytes "
+        DXGKRNL_TRACE("DxgkAdapterStart: page-table level %lu: %I64u entries x %u bytes "
                      "(index-bits=%u align=%u) segment=%u paging-process-segment=%u\n",
                      Level,
                      Entries,
@@ -12997,7 +13015,7 @@ DxgkAdapterStart(
                     /* The topology count is defined only for multi-engine miniports. */
                     Adapter->NodeCount = Caps->SchedulingCaps.MultiEngineAware ? Caps->GpuEngineTopology.NbAsymetricProcessingNodes : 1;
                     Adapter->HighestAcceptableAddress = Caps->HighestAcceptableAddress;
-                    DXGKRNL_INFO("DxgkAdapterStart: driver caps: HighestAcceptableAddress=0x%I64x nodes=%lu scheduling=0x%08x\n",
+                    DXGKRNL_TRACE("DxgkAdapterStart: driver caps: HighestAcceptableAddress=0x%I64x nodes=%lu scheduling=0x%08x\n",
                                 (ULONGLONG)Caps->HighestAcceptableAddress.QuadPart, Adapter->NodeCount, Caps->SchedulingCaps.Value);
                     Adapter->SchedulingCaps.Value = Caps->SchedulingCaps.Value;
                     Adapter->FlipCaps.Value = Caps->FlipCaps.Value;
@@ -13107,7 +13125,7 @@ DxgkAdapterStart(
     if (Adapter->PageTableLevelsValid)
     {
         Adapter->GpuMmuCapsValid = TRUE;
-        DXGKRNL_INFO("DxgkAdapterStart: GpuMmu caps: va-bits=%u levels=%u update-mode=%u flags=0x%08x "
+        DXGKRNL_TRACE("DxgkAdapterStart: GpuMmu caps: va-bits=%u levels=%u update-mode=%u flags=0x%08x "
                     "(ReadOnly=%u NoExecute=%u ZeroInPte=%u ExplicitPTInvalidation=%u CacheCoherent=%u "
                     "RequireAddressSpaceIdle=%u LargePage=%u DualPte=%u InvalidTlbNotCached=%u CachedPageTables=%u) "
                     "MultiEngineAware=%u nodes=%lu\n",
@@ -13162,12 +13180,14 @@ DxgkAdapterStart(
         _SEH2_END;
         DxgkReleaseKmdCall(Adapter);
         Adapter->PhysicalAdapterCapsValid = NT_SUCCESS(CapsStatus);
-        DXGKRNL_INFO("DxgkAdapterStart: physical adapter caps status=0x%08lx nodes=%u paging-node=%u handle=%p flags=0x%08x\n",
+        if (!NT_SUCCESS(CapsStatus) && !Adapter->MiniportContext->IsBasicDisplayFallback)
+            DXGKRNL_WARN("DxgkAdapterStart: physical adapter caps failed 0x%08lx\n", CapsStatus);
+        DXGKRNL_TRACE("DxgkAdapterStart: physical adapter caps status=0x%08lx nodes=%u paging-node=%u handle=%p flags=0x%08x\n",
                     CapsStatus, Adapter->PhysicalAdapterCaps.NumExecutionNodes, Adapter->PhysicalAdapterCaps.PagingNodeIndex,
                     Adapter->PhysicalAdapterCaps.DxgkPhysicalAdapterHandle, Adapter->PhysicalAdapterCaps.Flags.Value);
     }
-    /* Name every node's engine once: which node is the copy engine decides
-     * where paging belongs when the physical adapter caps are refused. */
+    /* This extra enumeration exists only for the verbose boot dump. */
+#if DXGKRNL_DEBUG_TRACE
     if (DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata) != NULL && DxgkAcquireKmdCall(Adapter))
     {
         ULONG NodeOrdinal;
@@ -13179,12 +13199,13 @@ DxgkAdapterStart(
 
             RtlZeroMemory(&Metadata, sizeof(Metadata));
             MetaStatus = DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata)(Adapter->MiniportDeviceContext, NodeOrdinal, &Metadata);
-            DXGKRNL_INFO("DxgkAdapterStart: node %lu metadata status=0x%08lx engine-type=%u gpummu=%u iommu=%u\n",
+            DXGKRNL_TRACE("DxgkAdapterStart: node %lu metadata status=0x%08lx engine-type=%u gpummu=%u iommu=%u\n",
                          NodeOrdinal, MetaStatus, (UINT)Metadata.EngineType, (UINT)Metadata.GpuMmuSupported, (UINT)Metadata.IoMmuSupported);
         }
         DxgkReleaseKmdCall(Adapter);
     }
     DxgkVidMmDumpSegments(Adapter);
+#endif
     {
         BOOLEAN ProviderStarted;
 

@@ -1656,7 +1656,7 @@ DxgkCreatePagingSystemContext(
     CreateContextArg.Flags.SystemContext = 1;
     if (ContextSchedulingSupported)
         CreateContextArg.Flags.HwQueueSupported = 1;
-    DXGKRNL_INFO("DxgkCreatePagingSystemContext: creating paging context "
+    DXGKRNL_TRACE("DxgkCreatePagingSystemContext: creating paging context "
                  "node=%lu context-scheduling=%u runtime=%p flags=0x%08x\n",
                  PagingNode,
                  ContextSchedulingSupported,
@@ -1692,7 +1692,7 @@ DxgkCreatePagingSystemContext(
     Context->ContextInfo = CreateContextArg.ContextInfo;
     DxgkEndKmdTransaction(Adapter);
 
-    DXGKRNL_INFO("DxgkCreatePagingSystemContext: device=%p context=%p node=%lu engine=0x%x dma-size=0x%x segment-set=0x%x private=%u\n",
+    DXGKRNL_TRACE("DxgkCreatePagingSystemContext: device=%p context=%p node=%lu engine=0x%x dma-size=0x%x segment-set=0x%x private=%u\n",
                  Device->hMiniportDevice,
                  Context->hMiniportContext,
                  PagingNode,

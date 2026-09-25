@@ -2634,7 +2634,7 @@ VidSchpKickEngine(
         {
             Packet->Kicked = FALSE;
             InterlockedExchange(&Packet->ContextOrderResubmissionPending, 1);
-            DXGKRNL_INFO("VidSch: packet %p fence=%lu ctx=%p marked for resubmission seq=#%I64d\n",
+            DXGKRNL_VERBOSE("VidSch: packet %p fence=%lu ctx=%p marked for resubmission seq=#%I64d\n",
                          Packet, Packet->SubmissionFenceId, Packet->Context, DxgkDiagSequence());
             if (DxgkCapsCoreInterfaceVersionAtLeast(
                     Adapter->MiniportContext->InitData.s.Version,
@@ -4537,7 +4537,7 @@ VidSchPreemptEngine(
     }
     _SEH2_END;
     KeLowerIrql(CallIrql);
-    DXGKRNL_INFO("VidSch: DxgkDdiPreemptCommand node=%lu engine=%lu -> 0x%08lX seq=#%I64d\n",
+    DXGKRNL_VERBOSE("VidSch: DxgkDdiPreemptCommand node=%lu engine=%lu -> 0x%08lX seq=#%I64d\n",
                  NodeOrdinal, EngineOrdinal, Status, DxgkDiagSequence());
     if (NT_SUCCESS(Status))
     {
