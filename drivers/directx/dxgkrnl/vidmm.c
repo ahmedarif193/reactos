@@ -6488,10 +6488,10 @@ DxgkpVidMmWaitForAllocationReferences(
             for (Node = 0; Node < DXGK_MAX_TRACKED_NODES; ++Node)
             {
                 ULONG Submitted = SubmittedAtDestroy[Node];
-                ULONG Completed = Adapter->NodeLastCompletedFenceId[Node];
+                ULONG Terminal = Adapter->NodeLastTerminalFenceId[Node];
 
                 if (Submitted != 0 &&
-                    (Completed == 0 || (LONG)(Completed - Submitted) < 0))
+                    (Terminal == 0 || (LONG)(Terminal - Submitted) < 0))
                 {
                     Outstanding = TRUE;
                     break;
@@ -6505,10 +6505,10 @@ DxgkpVidMmWaitForAllocationReferences(
             for (Node = 0; Node < DXGK_MAX_TRACKED_NODES; ++Node)
             {
                 ULONG Reference = Allocation->LastRefFenceId[Node];
-                ULONG Completed = Adapter->NodeLastCompletedFenceId[Node];
+                ULONG Terminal = Adapter->NodeLastTerminalFenceId[Node];
 
                 if (Reference != 0 &&
-                    (Completed == 0 || (LONG)(Completed - Reference) < 0))
+                    (Terminal == 0 || (LONG)(Terminal - Reference) < 0))
                 {
                     Outstanding = TRUE;
                     break;
