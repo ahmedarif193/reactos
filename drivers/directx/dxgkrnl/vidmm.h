@@ -414,6 +414,9 @@ typedef struct _DXGKVMM_ALLOCATION
     LIST_ENTRY          UserModeMappingList;
     volatile LONG       UserModeMappingCount;
     KMUTEX              UserModeLock;
+    /* Remains discoverable after handle retirement, until mappings are gone. */
+    LIST_ENTRY          UserModeMappingGlobalEntry;
+    volatile LONG       UserModeMappingRegistered;
 
     /* Miniport-side allocation handle (from DxgkDdiCreateAllocation). */
     HANDLE              MiniportHandle;
