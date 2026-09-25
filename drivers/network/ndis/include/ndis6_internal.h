@@ -253,6 +253,11 @@ typedef struct _NDIS6_ADAPTER_EXT
      * this rundown before invoking callbacks or freeing either object. */
     EX_RUNDOWN_REF                  LifecycleRundown;
 
+    /* Legacy requests are synchronous, including pending OID completion.
+     * Drain them before HaltEx invalidates the context and cached attributes. */
+    EX_RUNDOWN_REF                  LegacyRequestRundown;
+    BOOLEAN                         LegacyRequestsClosed;
+
     /* The driver block that registered this miniport. */
     PNDIS6_DRIVER_BLOCK             DriverBlock;
 

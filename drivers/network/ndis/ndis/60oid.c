@@ -389,8 +389,8 @@ NdisMOidRequestComplete(
  *  Returns an NDIS_STATUS just like MiniDoRequest would.
  * ============================================================================ */
 
-NDIS_STATUS
-Ndis6LegacyDoRequest(
+static NDIS_STATUS
+Ndis6LegacyDoRequestWorker(
     _In_ PLOGICAL_ADAPTER Adapter,
     _In_ PNDIS_REQUEST    Request)
 {
@@ -645,6 +645,29 @@ Ndis6LegacyDoRequest(
     default:
         return NDIS_STATUS_NOT_SUPPORTED;
     }
+}
+
+NDIS_STATUS
+Ndis6LegacyDoRequest(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ PNDIS_REQUEST Request)
+{
+    PNDIS6_ADAPTER_EXT Ext;
+    NDIS_STATUS Status;
+
+    if (Adapter == NULL || Request == NULL || (Ext = NDIS6_EXT(Adapter)) == NULL)
+        return NDIS_STATUS_INVALID_DATA;
+    if (!ExAcquireRundownProtection(&Ext->LegacyRequestRundown))
+        return NDIS_STATUS_ADAPTER_NOT_READY;
+
+    if (!Ext->Initialized || Ext->ProtocolBindingsClosing ||
+        Ext->MiniportAdapterContext == NULL)
+        Status = NDIS_STATUS_ADAPTER_NOT_READY;
+    else
+        Status = Ndis6LegacyDoRequestWorker(Adapter, Request);
+
+    ExReleaseRundownProtection(&Ext->LegacyRequestRundown);
+    return Status;
 }
 
 /* ============================================================================

@@ -391,6 +391,7 @@ Ndis6InitializeLogicalAdapter(
     Ext->Adapter                = Adapter;
     Ndis6AllocateInterfaceIdentity(Pdo, Ext);
     ExInitializeRundownProtection(&Ext->LifecycleRundown);
+    ExInitializeRundownProtection(&Ext->LegacyRequestRundown);
     Ext->DriverBlock            = DriverBlock;
     Ext->IsWdfManaged           = IsWdfManaged;
     Ext->PhysicalDeviceObject   = Pdo;
@@ -757,6 +758,13 @@ Ndis6CallMiniportInitializeEx(
     if (Ext->DriverBlock->Characteristics.InitializeHandlerEx == NULL)
         return NDIS_STATUS_BAD_CHARACTERISTICS;
 
+    /* STOP/START reuses the extension after the preceding halt drained it. */
+    if (Ext->LegacyRequestsClosed)
+    {
+        ExReInitializeRundownProtection(&Ext->LegacyRequestRundown);
+        Ext->LegacyRequestsClosed = FALSE;
+    }
+
     RtlZeroMemory(&Params, sizeof(Params));
     Params.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
     Params.Header.Revision = NDIS_MINIPORT_INIT_PARAMETERS_REVISION_1;
@@ -906,6 +914,9 @@ Ndis6CallMiniportHaltEx(
      * their per-adapter state while OID/close entry points are still valid. */
     Ndis6UnbindAllProtocolsFromAdapter(Adapter);
     Ndis6DetachFiltersFromAdapter(Adapter);
+
+    ExWaitForRundownProtectionRelease(&Ext->LegacyRequestRundown);
+    Ext->LegacyRequestsClosed = TRUE;
 
     if (Ext->DriverBlock->Characteristics.HaltHandlerEx != NULL &&
         Ext->MiniportAdapterContext != NULL)
@@ -1462,6 +1473,7 @@ Ndis6CreateImInstance(
     Ext->Adapter                = Adapter;
     Ndis6AllocateInterfaceIdentity(Fdo, Ext);
     ExInitializeRundownProtection(&Ext->LifecycleRundown);
+    ExInitializeRundownProtection(&Ext->LegacyRequestRundown);
     Ext->DriverBlock            = DriverBlock;
     Ext->PhysicalDeviceObject   = Fdo;   /* self-PDO: no bus underneath */
     Ext->FunctionalDeviceObject = Fdo;
