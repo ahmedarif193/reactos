@@ -38,6 +38,7 @@
  */
 
 #include "dxgkrnl_private.h"
+#include "vidmm.h"
 #include "presenttrace.h"
 #include "vidsch.h"
 
@@ -67,6 +68,17 @@ VidSchpDeviceDmaFaulted(
            VidSchPolicyCompletionMustFail(State, D3DKMT_DEVICEEXECUTION_ERROR_DMAFAULT);
 }
 #endif
+
+static VOID
+VidSchpCompleteWrittenPrimaries(
+    _Inout_ PVIDSCH_DMA_PACKET Packet,
+    _In_ NTSTATUS Status)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Packet->WrittenPrimaryCount; ++Index)
+        DxgkVidMmCompleteTrackedSubmission(&Packet->WrittenPrimaries[Index], Status);
+}
 
 /*
  * VidSchpFenceReached — signed fence comparison for wrap-around safety.
@@ -707,6 +719,9 @@ VidSchpDrainRetirements(_In_ PDXGKRNL_ADAPTER Adapter)
             if (Records[Index].Reason == Dxgmms2RetireCompleted)
             {
                 VidSchpRecordCompletion(Packet);
+                /* Release write dependencies before context completion can
+                 * execute an ordered MMIO flip of this same allocation. */
+                VidSchpCompleteWrittenPrimaries(Packet, STATUS_SUCCESS);
                 DxgkDeviceWorkComplete(Packet->DeviceWork);
                 DxgkContextOrderCompletePacket(Packet, STATUS_SUCCESS);
                 VidSchpDereferencePacket(Packet);
@@ -1146,6 +1161,8 @@ static VOID
 VidSchpDestroyPacket(
     _In_ PVIDSCH_DMA_PACKET Packet)
 {
+    ULONG Index;
+
     ASSERT(Packet != NULL);
     ASSERT(InterlockedCompareExchange(&Packet->ReferenceCount, 0, 0) == 0);
     ASSERT(!VidSchPolicyPacketCleanupMustDefer(KeGetCurrentIrql()));
@@ -1168,6 +1185,15 @@ VidSchpDestroyPacket(
     }
     if (Packet->OwnedDriverPrivateData != NULL)
         ExFreePoolWithTag(Packet->OwnedDriverPrivateData, TAG_VIDSCH);
+    for (Index = 0; Index < Packet->WrittenPrimaryCount; ++Index)
+    {
+        PDXGKVMM_TRACKED_SUBMISSION Write = &Packet->WrittenPrimaries[Index];
+
+        DxgkVidMmReleaseTrackedSubmissionResidencyPin(Write);
+        DxgkVidMmDereferenceAllocation(Write->Allocation);
+    }
+    if (Packet->WrittenPrimaries != NULL)
+        ExFreePoolWithTag(Packet->WrittenPrimaries, TAG_VIDSCH);
     DxgkDeviceWorkDestroy(Packet->DeviceWork);
     Packet->DeviceWork = NULL;
     if (Packet->HoldsContextReference)
@@ -1507,6 +1533,7 @@ static VOID VidSchpFinalizeDequeuedPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In
 {
     VidSchAccountNodeRetire(Packet);
     Packet->SchedulerCookie = 0;
+    VidSchpCompleteWrittenPrimaries(Packet, CompletionStatus);
     DxgkDeviceWorkCompleteWithStatus(Packet->DeviceWork, CompletionStatus);
     if (Packet->ContextOrderOperation != NULL)
         DxgkContextOrderAbortPacket(Packet, CompletionStatus);
@@ -3254,7 +3281,9 @@ VidSchSubmitCommandVirtual(
     _In_ ULONG DmaBufferSize,
     _In_reads_bytes_opt_(DriverPrivateDataSize) PVOID DriverPrivateData,
     _In_ ULONG DriverPrivateDataSize,
-    _In_ BOOLEAN NullRendering)
+    _In_ BOOLEAN NullRendering,
+    _In_ ULONG NumPrimaries,
+    _In_reads_(NumPrimaries) CONST D3DKMT_HANDLE *WrittenPrimaries)
 {
     PVIDSCH_CONTEXT Ctx;
     PVIDSCH_ENGINE Engine;
@@ -3263,12 +3292,16 @@ VidSchSubmitCommandVirtual(
     ULONG EngineOrdinal;
     ULONG AdmittedFenceId;
     ULONG KmdPrivateDataSize;
+    ULONG Index;
     PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
     NTSTATUS Status;
 
     PAGED_CODE();
 
     if (Adapter == NULL || Context == NULL || DmaBufferGpuVa == 0 || DmaBufferSize == 0 || (DriverPrivateDataSize != 0 && DriverPrivateData == NULL))
+        return STATUS_INVALID_PARAMETER;
+    if (NumPrimaries > D3DDDI_MAX_WRITTEN_PRIMARIES ||
+        (NumPrimaries != 0 && WrittenPrimaries == NULL))
         return STATUS_INVALID_PARAMETER;
     KmdPrivateDataSize = Context->ContextInfo.DmaBufferPrivateDataSize;
     if (DriverPrivateDataSize > KmdPrivateDataSize)
@@ -3301,6 +3334,44 @@ VidSchSubmitCommandVirtual(
         return STATUS_DELETE_PENDING;
     }
     Packet->Device = Context->Device;
+
+    if (NumPrimaries != 0)
+    {
+        Packet->WrittenPrimaries = ExAllocatePoolWithTag(
+            NonPagedPool, NumPrimaries * sizeof(*Packet->WrittenPrimaries), TAG_VIDSCH);
+        if (Packet->WrittenPrimaries == NULL)
+        {
+            VidSchpDereferencePacket(Packet);
+            VidSchpReleaseCall(Adapter);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        for (Index = 0; Index < NumPrimaries; ++Index)
+        {
+            PDXGKVMM_ALLOCATION Allocation;
+
+            /* Lookup checks adapter/device ownership and resolves shared
+             * aliases to the backing used by present and CPU access. */
+            Status = DxgkVidMmReferenceAllocation(
+                         (HANDLE)(ULONG_PTR)WrittenPrimaries[Index],
+                         Adapter, Context->Device, &Allocation);
+            if (NT_SUCCESS(Status))
+            {
+                Status = DxgkVidMmAcquireTrackedSubmissionResidencyPin(
+                             Allocation, Adapter, FALSE,
+                             &Packet->WrittenPrimaries[Packet->WrittenPrimaryCount]);
+                if (NT_SUCCESS(Status))
+                    ++Packet->WrittenPrimaryCount;
+                else
+                    DxgkVidMmDereferenceAllocation(Allocation);
+            }
+            if (!NT_SUCCESS(Status))
+            {
+                VidSchpDereferencePacket(Packet);
+                VidSchpReleaseCall(Adapter);
+                return Status;
+            }
+        }
+    }
 
     if (KmdPrivateDataSize != 0)
     {

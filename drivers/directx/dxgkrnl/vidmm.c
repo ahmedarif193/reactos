@@ -921,6 +921,12 @@ DxgkpVidMmInitializeAllocationLifetime(
     InitializeListHead(&Allocation->ResidencyBudgetChargeList);
 #endif
     Allocation->SubmissionResidencyPinCount = 0;
+    KeInitializeSpinLock(&Allocation->TrackedSubmissionLock);
+    InitializeListHead(&Allocation->TrackedSubmissions);
+    Allocation->TrackedSubmissionSequence = 0;
+    Allocation->TrackedSubmissionFailureSequence = 0;
+    Allocation->TrackedSubmissionFailure = STATUS_SUCCESS;
+    KeInitializeEvent(&Allocation->TrackedSubmissionsChangedEvent, NotificationEvent, FALSE);
     Allocation->ResidencyTransactionOwner = NULL;
     KeInitializeEvent(&Allocation->ReferencesDrainedEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Allocation->LogicalReferencesDrainedEvent, NotificationEvent, FALSE);
@@ -4062,6 +4068,7 @@ DxgkpVidMmFinalizeAllocation(
     ASSERT(InterlockedCompareExchange(&Allocation->ReferenceCount, 0, 0) == 0);
     ASSERT(InterlockedCompareExchange(&Allocation->LogicalReferenceCount, 0, 0) == 0);
     ASSERT(!DxgkSubmissionResidencyPinIsHeld(&Allocation->SubmissionResidencyPinCount));
+    ASSERT(IsListEmpty(&Allocation->TrackedSubmissions));
     ASSERT(InterlockedCompareExchangePointer(
                &Allocation->ResidencyTransactionOwner,
                NULL,
@@ -10079,6 +10086,72 @@ DxgkVidMmEvict(
  * a lost engine is reported to the caller instead of wedging its thread. */
 #define DXGKP_VIDMM_LOCK_REFERENCE_TIMEOUT_MS 1000
 
+ULONGLONG
+DxgkVidMmSnapshotTrackedSubmissions(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    ULONGLONG Sequence;
+    KIRQL OldIrql;
+
+    if (Allocation->BackingAllocation != NULL)
+        Allocation = Allocation->BackingAllocation;
+    KeAcquireSpinLock(&Allocation->TrackedSubmissionLock, &OldIrql);
+    Sequence = Allocation->TrackedSubmissionSequence;
+    KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
+    return Sequence;
+}
+
+NTSTATUS
+DxgkVidMmWaitForSubmissionSequence(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ ULONGLONG Sequence,
+    _In_ BOOLEAN DoNotWait)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    ULONGLONG StartTime;
+    LARGE_INTEGER Interval;
+
+    PAGED_CODE();
+    if (Allocation->BackingAllocation != NULL)
+        Allocation = Allocation->BackingAllocation;
+    Adapter = Allocation->Adapter;
+    StartTime = KeQueryInterruptTime();
+    Interval.QuadPart = -10 * 10000LL;
+    for (;;)
+    {
+        KIRQL OldIrql;
+        BOOLEAN Outstanding = FALSE;
+        NTSTATUS Status = STATUS_SUCCESS;
+
+        KeAcquireSpinLock(&Allocation->TrackedSubmissionLock, &OldIrql);
+        if (Allocation->TrackedSubmissionFailureSequence != 0 &&
+            Allocation->TrackedSubmissionFailureSequence <= Sequence)
+            Status = Allocation->TrackedSubmissionFailure;
+        if (!IsListEmpty(&Allocation->TrackedSubmissions))
+        {
+            PDXGKVMM_TRACKED_SUBMISSION First = CONTAINING_RECORD(
+                Allocation->TrackedSubmissions.Flink, DXGKVMM_TRACKED_SUBMISSION, Entry);
+
+            Outstanding = First->Sequence <= Sequence;
+        }
+        KeClearEvent(&Allocation->TrackedSubmissionsChangedEvent);
+        KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
+        if (!NT_SUCCESS(Status) || !Outstanding)
+            return Status;
+        if (DoNotWait)
+            return STATUS_GRAPHICS_ALLOCATION_BUSY;
+        if (Adapter->MiniportDeviceStopped ||
+            InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
+            return STATUS_DEVICE_REMOVED;
+        if (KeQueryInterruptTime() - StartTime >=
+            (ULONGLONG)DXGKP_VIDMM_LOCK_REFERENCE_TIMEOUT_MS * 10000ULL)
+            return STATUS_GRAPHICS_ALLOCATION_BUSY;
+        DxgkRetireCompletedDmaBuffers(Adapter);
+        KeWaitForSingleObject(&Allocation->TrackedSubmissionsChangedEvent,
+                             Executive, KernelMode, FALSE, &Interval);
+    }
+}
+
 NTSTATUS
 DxgkVidMmWaitForTrackedSubmissions(
     _In_ PDXGKVMM_ALLOCATION Allocation,
@@ -10087,6 +10160,7 @@ DxgkVidMmWaitForTrackedSubmissions(
     PDXGKRNL_ADAPTER Adapter;
     LARGE_INTEGER Interval;
     ULONGLONG StartTime;
+    NTSTATUS Status;
 
     PAGED_CODE();
     if (Allocation == NULL)
@@ -10097,6 +10171,11 @@ DxgkVidMmWaitForTrackedSubmissions(
     Adapter = Allocation->Adapter;
     if (Adapter == NULL)
         return STATUS_INVALID_DEVICE_STATE;
+
+    Status = DxgkVidMmWaitForSubmissionSequence(
+                 Allocation, DxgkVidMmSnapshotTrackedSubmissions(Allocation), DoNotWait);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     StartTime = KeQueryInterruptTime();
     Interval.QuadPart = -10000LL;
@@ -13401,6 +13480,70 @@ DxgkVidMmReleaseSubmissionResidencyPin(
     ASSERT(Allocation != NULL);
     Released = DxgkSubmissionResidencyPinRelease(&Allocation->SubmissionResidencyPinCount);
     ASSERT(Released);
+}
+
+NTSTATUS
+DxgkVidMmAcquireTrackedSubmissionResidencyPin(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_ BOOLEAN CpuDirty,
+    _Out_ PDXGKVMM_TRACKED_SUBMISSION Submission)
+{
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    ASSERT(Allocation->BackingAllocation == NULL);
+    Status = DxgkVidMmAcquireSubmissionResidencyPinEx(Allocation, ExpectedAdapter, NULL, CpuDirty);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    KeAcquireSpinLock(&Allocation->TrackedSubmissionLock, &OldIrql);
+    if (Allocation->TrackedSubmissionSequence == MAXULONGLONG)
+    {
+        KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
+        DxgkVidMmReleaseSubmissionResidencyPin(Allocation);
+        return STATUS_INTEGER_OVERFLOW;
+    }
+    Submission->Allocation = Allocation;
+    Submission->Sequence = ++Allocation->TrackedSubmissionSequence;
+    Submission->Pending = TRUE;
+    InsertTailList(&Allocation->TrackedSubmissions, &Submission->Entry);
+    KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
+    return STATUS_SUCCESS;
+}
+
+VOID
+DxgkVidMmCompleteTrackedSubmission(
+    _Inout_ PDXGKVMM_TRACKED_SUBMISSION Submission,
+    _In_ NTSTATUS Status)
+{
+    PDXGKVMM_ALLOCATION Allocation = Submission->Allocation;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Allocation->TrackedSubmissionLock, &OldIrql);
+    if (Submission->Pending)
+    {
+        RemoveEntryList(&Submission->Entry);
+        Submission->Pending = FALSE;
+        if (!NT_SUCCESS(Status) &&
+            (Allocation->TrackedSubmissionFailureSequence == 0 ||
+             Submission->Sequence < Allocation->TrackedSubmissionFailureSequence))
+        {
+            Allocation->TrackedSubmissionFailureSequence = Submission->Sequence;
+            Allocation->TrackedSubmissionFailure = Status;
+        }
+        KeSetEvent(&Allocation->TrackedSubmissionsChangedEvent, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
+}
+
+VOID
+DxgkVidMmReleaseTrackedSubmissionResidencyPin(
+    _Inout_ PDXGKVMM_TRACKED_SUBMISSION Submission)
+{
+    /* Unpublished submissions never wrote anything. A published packet has
+     * already recorded its real completion/cancellation status at retirement. */
+    DxgkVidMmCompleteTrackedSubmission(Submission, STATUS_SUCCESS);
+    DxgkVidMmReleaseSubmissionResidencyPin(Submission->Allocation);
 }
 
 static NTSTATUS

@@ -137,6 +137,12 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
     PDXGKVMM_ALLOCATION             SourceAllocation;
     PDXGKVMM_ALLOCATION             DestinationAllocation;
 
+    /* Snapshot at admission: later writes may be queued behind this flip
+     * on its context, and must never become dependencies of that flip. */
+    ULONGLONG                       SourceWriteSequence;
+    ULONGLONG                       DestinationWriteSequence;
+    BOOLEAN                         WriteDependenciesCaptured;
+
     /* An OpenResource alias owns a persistent per-device miniport binding.
      * Keep the logical alias referenced separately from its physical backing. */
     HANDLE                          SourceOpenBindingHandle;

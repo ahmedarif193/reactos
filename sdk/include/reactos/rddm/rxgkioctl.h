@@ -85,6 +85,9 @@
 #define RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA      (1024U * 1024U)
 #define RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE 44U
 #define RXGK_SUBMITCOMMAND_PACKET_V1_SIZE       48U
+#define RXGK_SUBMITCOMMAND_PACKET_VERSION_2     2U
+#define RXGK_SUBMITCOMMAND_MAX_PRIMARIES         16U
+#define RXGK_SUBMITCOMMAND_PACKET_V2_SIZE       120U
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 #define RXGK_ISFEATUREENABLED_PACKET_SIZE       12U
 #endif
@@ -206,9 +209,8 @@ typedef struct _RXGK_CREATECONTEXTVIRTUAL_PACKET
 } RXGK_CREATECONTEXTVIRTUAL_PACKET, *PRXGK_CREATECONTEXTVIRTUAL_PACKET;
 
 /*
- * The v1 submit packet represents exactly one broadcast context.  Written
- * primaries, history buffers, and redirected presents are rejected before
- * marshalling and therefore cannot introduce nested pointers here.
+ * The v1 submit packet represents exactly one broadcast context without
+ * written primaries. History buffers and redirected presents are unsupported.
  *
  * PrivateDriverDataOffset follows the same canonical rule as above.  The v1
  * wire size is 48 bytes on x86, amd64, and ARM64.
@@ -226,6 +228,16 @@ typedef struct _RXGK_SUBMITCOMMAND_PACKET
     ULONG       PrivateDriverDataOffset;
     ULONG       Reserved;
 } RXGK_SUBMITCOMMAND_PACKET, *PRXGK_SUBMITCOMMAND_PACKET;
+
+/* V2 extends the fixed-width V1 header with the captured write dependencies.
+ * Private bytes follow this complete header, never a caller-owned pointer. */
+typedef struct _RXGK_SUBMITCOMMAND_PACKET_V2
+{
+    RXGK_SUBMITCOMMAND_PACKET Header;
+    ULONG NumPrimaries;
+    ULONG WrittenPrimaries[RXGK_SUBMITCOMMAND_MAX_PRIMARIES];
+    ULONG Reserved;
+} RXGK_SUBMITCOMMAND_PACKET_V2, *PRXGK_SUBMITCOMMAND_PACKET_V2;
 
 /*
  * Pointer-free WDDM 2.0 resource-present private-data query.

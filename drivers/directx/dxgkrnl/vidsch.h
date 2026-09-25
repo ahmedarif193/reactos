@@ -173,6 +173,9 @@ typedef struct _VIDSCH_DMA_PACKET
     BOOLEAN                     VirtualAddressing;
     BOOLEAN                     HoldsContextReference;
     PVOID                       OwnedDriverPrivateData;
+    /* WrittenPrimaries references/pins survive until terminal packet cleanup. */
+    struct _DXGKVMM_TRACKED_SUBMISSION *WrittenPrimaries;
+    ULONG                       WrittenPrimaryCount;
     struct _VIDSCH_ENGINE      *OwnerEngine;
     LIST_ENTRY                  ActiveEngineEntry;
     volatile LONG               ReferenceCount;
@@ -499,7 +502,9 @@ VidSchSubmitCommandVirtual(
     _In_ ULONG DmaBufferSize,
     _In_reads_bytes_opt_(DriverPrivateDataSize) PVOID DriverPrivateData,
     _In_ ULONG DriverPrivateDataSize,
-    _In_ BOOLEAN NullRendering);
+    _In_ BOOLEAN NullRendering,
+    _In_ ULONG NumPrimaries,
+    _In_reads_(NumPrimaries) CONST D3DKMT_HANDLE *WrittenPrimaries);
 
 /*
  * VidSchSubmitCommandTracked
