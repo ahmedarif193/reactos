@@ -233,10 +233,12 @@ static FAST_MUTEX DxgkVidMmResourceListLock;
 static FAST_MUTEX DxgkVidMmDestroyBatchListLock;
 static FAST_MUTEX DxgkVidMmPolicyLock;
 static FAST_MUTEX DxgkVidMmHandleDataReferenceListLock;
+static FAST_MUTEX DxgkVidMmUserMappingListLock;
 static LIST_ENTRY DxgkVidMmAllocationListHead;
 static LIST_ENTRY DxgkVidMmResourceListHead;
 static LIST_ENTRY DxgkVidMmDestroyBatchListHead;
 static LIST_ENTRY DxgkVidMmHandleDataReferenceListHead;
+static LIST_ENTRY DxgkVidMmUserMappingListHead;
 static ULONG      DxgkVidMmAllocationHandleCookie = 0x4D4D414C; /* "LAMM" */
 static ULONG      DxgkVidMmResourceHandleCookie   = 0x4D4D4552; /* "REMM" */
 static ULONG      DxgkVidMmGlobalShareHandleCookie = 0x4D4D4753; /* "SGMM" */
@@ -704,6 +706,7 @@ DxgkpVidMmEnsureGlobalsInitialized(VOID)
         ExInitializeFastMutex(&DxgkVidMmDestroyBatchListLock);
         ExInitializeFastMutex(&DxgkVidMmPolicyLock);
         ExInitializeFastMutex(&DxgkVidMmHandleDataReferenceListLock);
+        ExInitializeFastMutex(&DxgkVidMmUserMappingListLock);
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         ExInitializeFastMutex(&DxgkVidMmProcessBudgetLock);
 #endif
@@ -711,6 +714,7 @@ DxgkpVidMmEnsureGlobalsInitialized(VOID)
         InitializeListHead(&DxgkVidMmResourceListHead);
         InitializeListHead(&DxgkVidMmDestroyBatchListHead);
         InitializeListHead(&DxgkVidMmHandleDataReferenceListHead);
+        InitializeListHead(&DxgkVidMmUserMappingListHead);
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         InitializeListHead(&DxgkVidMmProcessBudgetListHead);
         InitializeListHead(&DxgkVidMmProcessBudgetGateListHead);
@@ -910,6 +914,8 @@ DxgkpVidMmInitializeAllocationLifetime(
     Allocation->ImplicitResidencyReference = TRUE;
     InitializeListHead(&Allocation->ResidencyReferenceList);
     InitializeListHead(&Allocation->UserModeMappingList);
+    InitializeListHead(&Allocation->UserModeMappingGlobalEntry);
+    Allocation->UserModeMappingRegistered = 0;
     KeInitializeMutex(&Allocation->UserModeLock, 0);
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     InitializeListHead(&Allocation->ResidencyBudgetChargeList);
@@ -4059,6 +4065,21 @@ DxgkpVidMmFinalizeAllocation(
                &Allocation->ResidencyTransactionOwner,
                NULL,
                NULL) == NULL);
+
+    /* Handle retirement may precede this worker by an arbitrary interval.
+     * Keep CPU mappings discoverable to process cleanup throughout that
+     * interval. Hold the registry lock until unmapping completes: an exiting
+     * process must not miss mappings being retired by this worker. Lock order
+     * is registry -> UserModeLock; mapping calls register before taking the
+     * per-allocation mutex and hold an ordinary allocation reference. */
+    if (Allocation->UserModeMappingRegistered)
+    {
+        ExAcquireFastMutex(&DxgkVidMmUserMappingListLock);
+        (VOID)DxgkpVidMmUnmapUserMappings(Allocation, TRUE);
+        RemoveEntryList(&Allocation->UserModeMappingGlobalEntry);
+        InitializeListHead(&Allocation->UserModeMappingGlobalEntry);
+        ExReleaseFastMutex(&DxgkVidMmUserMappingListLock);
+    }
 
     /*
      * Destroy is legal even if user mode did not balance every MakeResident
@@ -13585,6 +13606,18 @@ DxgkVidMmMapAllocationUser(
     *OutVa = NULL;
     Process = PsGetCurrentProcess();
 
+    if (!InterlockedCompareExchange(&Allocation->UserModeMappingRegistered, 0, 0))
+    {
+        ExAcquireFastMutex(&DxgkVidMmUserMappingListLock);
+        if (!Allocation->UserModeMappingRegistered)
+        {
+            InsertTailList(&DxgkVidMmUserMappingListHead,
+                           &Allocation->UserModeMappingGlobalEntry);
+            InterlockedExchange(&Allocation->UserModeMappingRegistered, 1);
+        }
+        ExReleaseFastMutex(&DxgkVidMmUserMappingListLock);
+    }
+
     (VOID)KeWaitForSingleObject(&Allocation->UserModeLock, Executive, KernelMode, FALSE, NULL);
 
     Mapping = DxgkpVidMmFindUserMappingLocked(Allocation, Process);
@@ -13959,15 +13992,19 @@ DxgkpVidMmUnmapAllocationUserProcess(
             return STATUS_NOT_FOUND;
         }
 
-        if (Mapping->LockCount > 1)
+        Mapping->LockCount--;
+        if (Mapping->LockCount == 0)
         {
-            Mapping->LockCount--;
-            KeReleaseMutex(&Allocation->UserModeLock, FALSE);
-            return STATUS_SUCCESS;
+            MappingCount = InterlockedDecrement(
+                               &Allocation->UserModeMappingCount);
+            ASSERT(MappingCount >= 0);
         }
-
-        /* The final unlock must retire the user VAD. Allocation destruction
-         * can be deferred after its handle leaves the process-cleanup list. */
+        /* Unlock releases the residency pin, not the cached CPU address.
+         * Persistent ICD mappings rely on that address while the backing is
+         * unchanged. Placement changes, process exit and physical allocation
+         * destruction invalidate the cache explicitly. */
+        KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+        return STATUS_SUCCESS;
     }
     if (Force && !IncludeActive && Mapping->LockCount != 0)
     {
@@ -13980,8 +14017,6 @@ DxgkpVidMmUnmapAllocationUserProcess(
     UserMapBase = Mapping->MapBase;
     UserVa = Mapping->Address;
     Mdl = Mapping->Mdl;
-
-    KeReleaseMutex(&Allocation->UserModeLock, FALSE);
 
     if (Process != PsGetCurrentProcess())
     {
@@ -14016,6 +14051,8 @@ DxgkpVidMmUnmapAllocationUserProcess(
     IoFreeMdl(Mdl);
     ObDereferenceObject(Process);
     ExFreePoolWithTag(Mapping, TAG_VIDMM_ALLOC);
+    /* Process cleanup must also wait for an unmap already in progress. */
+    KeReleaseMutex(&Allocation->UserModeLock, FALSE);
     return STATUS_SUCCESS;
 }
 
@@ -14034,80 +14071,32 @@ VOID
 DxgkVidMmProcessCleanup(
     _In_ PEPROCESS Process)
 {
-    PDXGKVMM_ALLOCATION *Allocations = NULL;
     PLIST_ENTRY Entry;
-    ULONG Count = 0;
-    ULONG Index = 0;
 
     PAGED_CODE();
     ASSERT(Process != NULL);
 
     DxgkpVidMmEnsureGlobalsInitialized();
 
-    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-    for (Entry = DxgkVidMmAllocationListHead.Flink;
-         Entry != &DxgkVidMmAllocationListHead;
+    /* This registry includes unpublished allocations awaiting GPU retirement.
+     * Its lock excludes physical finalization, so cleanup needs neither a
+     * fallible snapshot allocation nor references that would obstruct the
+     * GPU reference drain. Each unmap takes UserModeLock below this lock. */
+    ExAcquireFastMutex(&DxgkVidMmUserMappingListLock);
+    for (Entry = DxgkVidMmUserMappingListHead.Flink;
+         Entry != &DxgkVidMmUserMappingListHead;
          Entry = Entry->Flink)
     {
-        PDXGKVMM_ALLOCATION Alloc;
-        BOOLEAN Mapped;
+        PDXGKVMM_ALLOCATION Allocation;
 
-        Alloc = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
-        (VOID)KeWaitForSingleObject(&Alloc->UserModeLock, Executive, KernelMode, FALSE, NULL);
-        Mapped = DxgkpVidMmFindUserMappingLocked(Alloc, Process) != NULL;
-        KeReleaseMutex(&Alloc->UserModeLock, FALSE);
-        if (Mapped)
-            Count++;
+        Allocation = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION,
+                                       UserModeMappingGlobalEntry);
+        (VOID)DxgkpVidMmUnmapAllocationUserProcess(Allocation,
+                                                 Process,
+                                                 TRUE,
+                                                 TRUE);
     }
-    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-
-    if (Count == 0)
-        return;
-
-    Allocations = ExAllocatePoolWithTag(NonPagedPool,
-                                        Count * sizeof(*Allocations),
-                                        TAG_VIDMM_ALLOC);
-    if (Allocations == NULL)
-    {
-        DPRINT1("DxgkVidMmProcessCleanup: unable to allocate handle array for %lu user mappings\n",
-                Count);
-        return;
-    }
-
-    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-    for (Entry = DxgkVidMmAllocationListHead.Flink;
-         Entry != &DxgkVidMmAllocationListHead && Index < Count;
-         Entry = Entry->Flink)
-    {
-        PDXGKVMM_ALLOCATION Alloc;
-        BOOLEAN Mapped;
-
-        Alloc = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
-        (VOID)KeWaitForSingleObject(&Alloc->UserModeLock, Executive, KernelMode, FALSE, NULL);
-        Mapped = DxgkpVidMmFindUserMappingLocked(Alloc, Process) != NULL;
-        KeReleaseMutex(&Alloc->UserModeLock, FALSE);
-        if (Mapped &&
-            InterlockedCompareExchange(&Alloc->Destroying, 0, 0) == 0 &&
-            InterlockedCompareExchange(&Alloc->ReferenceCount, 0, 0) > 0)
-        {
-            InterlockedIncrement(&Alloc->ReferenceCount);
-            Allocations[Index++] = Alloc;
-        }
-    }
-    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-
-    while (Index != 0)
-    {
-        PDXGKVMM_ALLOCATION Alloc = Allocations[--Index];
-
-        (VOID)DxgkpVidMmUnmapAllocationUserProcess(Alloc,
-                                                    Process,
-                                                    TRUE,
-                                                    TRUE);
-        DxgkVidMmDereferenceAllocation(Alloc);
-    }
-
-    ExFreePoolWithTag(Allocations, TAG_VIDMM_ALLOC);
+    ExReleaseFastMutex(&DxgkVidMmUserMappingListLock);
 }
 
 static VOID
