@@ -17,6 +17,7 @@
 #ifndef WM_APP
     #define WM_APP 0x8000
 #endif
+#define PM_DESTROY_CONSOLE      (WM_APP + 2)
 #define PM_RESIZE_TERMINAL      (WM_APP + 3)
 #define PM_CONSOLE_BEEP         (WM_APP + 4)
 #define PM_CONSOLE_SET_TITLE    (WM_APP + 5)

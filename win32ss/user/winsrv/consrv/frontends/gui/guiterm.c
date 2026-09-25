@@ -25,7 +25,6 @@
 #define CONGUI_UPDATE_TIMER   1
 
 #define PM_CREATE_CONSOLE     (WM_APP + 1)
-#define PM_DESTROY_CONSOLE    (WM_APP + 2)
 
 
 /* GLOBALS ********************************************************************/
@@ -129,7 +128,6 @@ GuiConsoleInputThread(PVOID Param)
     ULONG_PTR InputThreadId = HandleToUlong(NtCurrentTeb()->ClientId.UniqueThread);
     HANDLE hThread = NULL;
 
-    LONG WindowCount = 0;
     MSG msg;
 
     /*
@@ -163,8 +161,10 @@ GuiConsoleInputThread(PVOID Param)
 
     while (GetMessageW(&msg, NULL, 0, 0))
     {
-        switch (msg.message)
+        if (msg.hwnd == NULL)
         {
+            switch (msg.message)
+            {
             case PM_CREATE_CONSOLE:
             {
                 PGUI_CONSOLE_DATA GuiData = (PGUI_CONSOLE_DATA)msg.lParam;
@@ -193,8 +193,6 @@ GuiConsoleInputThread(PVOID Param)
                 }
 
                 ASSERT(NewWindow == GuiData->hWindow);
-
-                _InterlockedIncrement(&WindowCount);
 
                 //
                 // FIXME: TODO: Move everything there into conwnd.c!OnNcCreate()
@@ -246,16 +244,12 @@ GuiConsoleInputThread(PVOID Param)
                  * DispatchMessage cannot dispatch our private thread messages;
                  * draining them here loses other consoles' create/destroy events. */
 
-                if (GuiData->hWindow == NULL) continue;
-
-                DestroyWindow(GuiData->hWindow);
+                if (GuiData->hWindow != NULL)
+                    DestroyWindow(GuiData->hWindow);
 
                 NtSetEvent(GuiData->hGuiTermEvent, NULL);
-
-                /* Keep this per-desktop dispatcher available to concurrent console creators. */
-                _InterlockedDecrement(&WindowCount);
-
                 continue;
+            }
             }
         }
 
@@ -604,8 +598,20 @@ GuiDeinitFrontEnd(IN OUT PFRONTEND This)
 {
     PGUI_CONSOLE_DATA GuiData = This->Context;
 
-    DPRINT("Send PM_DESTROY_CONSOLE message and wait on hGuiTermEvent...\n");
-    PostThreadMessageW(GuiData->InputThreadId, PM_DESTROY_CONSOLE, 0, (LPARAM)GuiData);
+    /* Thread-only messages can be discarded by nested modal loops. Target
+     * the console window so its window procedure performs destruction. Keep
+     * the thread-message route for a failed/absent window during init. */
+    DPRINT("Post PM_DESTROY_CONSOLE and wait on hGuiTermEvent...\n");
+    if (GuiData->hWindow == NULL ||
+        !PostMessageW(GuiData->hWindow, PM_DESTROY_CONSOLE, 0, 0))
+    {
+        if (!PostThreadMessageW(GuiData->InputThreadId, PM_DESTROY_CONSOLE,
+                                0, (LPARAM)GuiData))
+        {
+            DPRINT1("Unable to post console destruction to thread %p (error %lu)\n",
+                    (PVOID)GuiData->InputThreadId, GetLastError());
+        }
+    }
     NtWaitForSingleObject(GuiData->hGuiTermEvent, FALSE, NULL);
     DPRINT("hGuiTermEvent set\n");
     NtClose(GuiData->hGuiTermEvent);

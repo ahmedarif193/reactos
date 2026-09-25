@@ -28,9 +28,6 @@
 
 /* GLOBALS ********************************************************************/
 
-// #define PM_CREATE_CONSOLE       (WM_APP + 1)
-// #define PM_DESTROY_CONSOLE      (WM_APP + 2)
-
 // See guiterm.c
 #define CONGUI_MIN_WIDTH      10
 #define CONGUI_MIN_HEIGHT     10
@@ -2390,6 +2387,15 @@ ConWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
      */
     GuiData = GuiGetGuiData(hWnd);
     if (GuiData == NULL) return DefWindowProcW(hWnd, msg, wParam, lParam);
+
+    /* Teardown is a window message so modal message loops dispatch it too.
+     * Signal only after DestroyWindow returns: the waiting thread frees GuiData. */
+    if (msg == PM_DESTROY_CONSOLE)
+    {
+        DestroyWindow(hWnd);
+        NtSetEvent(GuiData->hGuiTermEvent, NULL);
+        return 0;
+    }
 
     // TEMPORARY HACK until all of the functions can deal with a NULL GuiData->ActiveBuffer ...
     if (GuiData->ActiveBuffer == NULL) return DefWindowProcW(hWnd, msg, wParam, lParam);
