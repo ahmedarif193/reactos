@@ -155,6 +155,7 @@ set(COMPAT_RUNTIME_MODULES
     vulkan-1
     wbemdisp
     wbemprox
+    wevtapi
     win32u
     winusb
     windows_ui
