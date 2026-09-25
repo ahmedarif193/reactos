@@ -54,6 +54,7 @@ extern void func_SyscallStub(void);
 extern void func_NtCreateFile(void);
 extern void func_NtCreateKey(void);
 extern void func_NtCreateProfile(void);
+extern void func_NtCreateSection(void);
 extern void func_NtCreateThread(void);
 extern void func_NtCreateThreadWin32(void);
 extern void func_NtDeleteKey(void);
@@ -216,6 +217,7 @@ const struct test winetest_testlist[] =
     { "NtCreateFile",                   func_NtCreateFile },
     { "NtCreateKey",                    func_NtCreateKey },
     { "NtCreateProfile",                func_NtCreateProfile },
+    { "NtCreateSection",                func_NtCreateSection },
     { "NtCreateThread",                 func_NtCreateThread },
     { "NtCreateThreadWin32",            func_NtCreateThreadWin32 },
     { "NtDeleteKey",                    func_NtDeleteKey },
