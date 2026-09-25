@@ -29,6 +29,7 @@ typedef struct _DXGMMS2_SCHED_PACKET
     ULONGLONG  DispatchSequence;
     ULONG      Flags;
     LONG       Priority;
+    NTSTATUS   DeferredStatus;  /* miniport rejection, retired after predecessors */
     BOOLEAN    Dispatched;      /* handed to the miniport at least once */
     BOOLEAN    Claimed;         /* a dispatch claim is outstanding */
     BOOLEAN    Ready;
