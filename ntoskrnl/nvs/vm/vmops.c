@@ -987,6 +987,12 @@ MiProtectVirtualMemoryEx(
         Status = MiSetPrivateRangeProtection(Space, Start, End, NewProtection);
     }
 
+    if (NT_SUCCESS(Status) && Space->TrackExecutableWrites &&
+        MI_PROT_IS_EXECUTE(NewProtection) && MI_PROT_IS_WRITABLE(NewProtection))
+    {
+        MiArmExecutableWriteRangeLocked(Space, Start, End);
+    }
+
     *BaseAddress = Start;
     *RegionSize = End - Start;
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);

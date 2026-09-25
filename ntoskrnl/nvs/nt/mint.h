@@ -55,6 +55,18 @@ extern SIZE_T MmtotalCommitLimitMaximum;
 extern MI_SYSTEM MiSystem;
 extern MI_PROCESS_MANAGER MiProcessManager;
 
+typedef struct _MI_PROCESS_REFERENCE
+{
+    PEPROCESS Process;
+    KAPC_STATE ApcState;
+    BOOLEAN Referenced;
+    BOOLEAN Attached;
+} MI_PROCESS_REFERENCE, *PMI_PROCESS_REFERENCE;
+
+NTSTATUS MiReferenceTargetProcess(_In_ HANDLE ProcessHandle, _In_ ACCESS_MASK Access,
+                                  _Out_ PMI_PROCESS_REFERENCE Reference);
+VOID MiReleaseTargetProcess(_Inout_ PMI_PROCESS_REFERENCE Reference);
+
 #define MI_PROCESS_OF(Process)  ((PMI_PROCESS)(Process)->Vm.Instance.VmWorkingSetList)
 #define MI_IS_SYSTEM_VA(Va)     ((ULONG_PTR)(Va) >= (ULONG_PTR)MmSystemRangeStart)
 

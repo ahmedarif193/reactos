@@ -186,7 +186,9 @@ MiResolveValidFault(
     _Inout_ PMI_PTE Slot,
     _In_ MI_PTE Pte,
     _In_ MI_FAULT_ACCESS Access,
-    _In_ BOOLEAN UserMode)
+    _In_ BOOLEAN UserMode,
+    _In_ BOOLEAN ManagedWrite,
+    _In_ BOOLEAN AllowExecutableWrite)
 {
     ULONG Frame = (ULONG)MiArchPteFrame(Pte);
     MI_PTE Updated = Pte;
@@ -204,6 +206,12 @@ MiResolveValidFault(
 
         if (!MiArchPteIsWritable(Pte))
             return STATUS_ACCESS_VIOLATION;
+
+        if (ManagedWrite && !AllowExecutableWrite &&
+            !MiArchPteIsDirty(Pte) && MiArchPteIsExecutable(Pte, TRUE))
+        {
+            return STATUS_EXECUTABLE_MEMORY_WRITE;
+        }
 
         if (!MiArchPteIsDirty(Pte))
         {
@@ -250,11 +258,12 @@ MiMakePageValid(
 #define MI_FAULT_PAGE_IN_ATTEMPTS 64
 
 NTSTATUS
-MiFault(
+MiFaultWithWriteAllowance(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 VirtualAddress,
     _In_ MI_FAULT_ACCESS Access,
-    _In_ BOOLEAN UserMode)
+    _In_ BOOLEAN UserMode,
+    _In_ BOOLEAN AllowExecutableWrite)
 {
     PMI_SYSTEM System = Space->System;
     ULONG64 PageVa = VirtualAddress & ~((ULONG64)PAGE_SIZE - 1);
@@ -270,6 +279,8 @@ MiFault(
     ULONG Attempts = 0;
     ULONG PageIns = 0;
     KIRQL OldIrql;
+    BOOLEAN ManagedWrite;
+    BOOLEAN WasValid = FALSE;
 
     if (VirtualAddress < Space->LowestVa || VirtualAddress > Space->HighestVa ||
         MiArchIsSelfMapAddress(VirtualAddress))
@@ -287,6 +298,9 @@ RetryAddress:
         MI_RW_RELEASE_SHARED(&Space->Lock);
         return STATUS_ACCESS_VIOLATION;
     }
+
+    ManagedWrite = (BOOLEAN)(Access == MiFaultWrite && UserMode &&
+                             Space->TrackExecutableWrites && !Vad->EcCode);
 
     if (!MI_ATOMIC_READ32(&Vad->PteTouched))
         MI_ATOMIC_CAS32(&Vad->PteTouched, TRUE, FALSE);
@@ -336,6 +350,7 @@ RetryPage:
 
     if (MiArchPteIsValid(Pte))
     {
+        WasValid = TRUE;
         if (!MiArchPteIsLeafDescriptor(Pte) &&
             !(Vad->Type == MiVadLarge && MiArchPteIsBlock(Pte, System->Arch->LargePageLevel)))
         {
@@ -343,9 +358,13 @@ RetryPage:
             goto Complete;
         }
 
-        Status = MiResolveValidFault(Space, PageVa, Slot, Pte, Access, UserMode);
+        Status = MiResolveValidFault(Space, PageVa, Slot, Pte, Access, UserMode,
+                                     ManagedWrite, AllowExecutableWrite);
         if (Status == STATUS_PENDING_COPY)
+        {
+            WasValid = FALSE;
             Status = MiCopyOnWrite(Space, Vad, PageVa, Slot, TableFrame, Pte);
+        }
         goto Complete;
     }
 
@@ -550,9 +569,24 @@ RetryPage:
     }
 
 Complete:
+    if (NT_SUCCESS(Status) && ManagedWrite && !AllowExecutableWrite && !WasValid)
+    {
+        Pte = MiArchPteRead(Slot);
+        if (MiArchPteIsLeafDescriptor(Pte) && MiArchPteIsWritable(Pte) &&
+            MiArchPteIsExecutable(Pte, TRUE))
+        {
+            if (MiArchPteIsDirty(Pte))
+            {
+                MiArchPteWrite(Slot, MiArchPteSetDirty(Pte, FALSE));
+                MiArchTlbInvalidate(PageVa, 1, TRUE);
+            }
+            Status = STATUS_EXECUTABLE_MEMORY_WRITE;
+        }
+    }
     MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
     MI_RW_RELEASE_SHARED(&Space->Lock);
-    if (NT_SUCCESS(Status) || Status == STATUS_GUARD_PAGE_VIOLATION)
+    if (NT_SUCCESS(Status) || Status == STATUS_GUARD_PAGE_VIOLATION ||
+        Status == STATUS_EXECUTABLE_MEMORY_WRITE)
         return Status;
 
 Failed:
@@ -560,4 +594,14 @@ Failed:
     MiPtPruneEmpty(Space, PageVa);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
     return Status;
+}
+
+NTSTATUS
+MiFault(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 VirtualAddress,
+    _In_ MI_FAULT_ACCESS Access,
+    _In_ BOOLEAN UserMode)
+{
+    return MiFaultWithWriteAllowance(Space, VirtualAddress, Access, UserMode, FALSE);
 }

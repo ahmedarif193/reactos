@@ -90,6 +90,65 @@ Protect(PMI_ADDRESS_SPACE Space, ULONG64 Base, ULONG64 Size, ULONG Protection, U
     return MiProtectVirtualMemory(Space, &Base, &Size, Protection, Old);
 }
 
+static void
+VmExecutableWriteTracking(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    ULONG64 Code = 0;
+    ULONG64 EcCode = 0;
+    ULONG64 Sparse = 0x100000000ULL;
+    ULONG64 Adjacent = Sparse + 0x40000000ULL;
+    ULONG Old;
+
+    WorldCreate(&World, 256, 2, 100000);
+    World.Machine.StrictTlb = TRUE;
+    ProcessCreate(&World, &Space);
+    WorldAttach(&World, 1, &Space);
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Code, PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT,
+                           MI_PROT_EXECUTE_READWRITE)));
+    CHECK(NT_SUCCESS(Alloc(&Space, &EcCode, PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT,
+                           MI_PROT_EXECUTE_READWRITE)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Code, 1)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, EcCode, 1)));
+    MiVadLocate(&Space, EcCode)->EcCode = TRUE;
+
+    CHECK(NT_SUCCESS(MiSetExecutableWriteTracking(&Space, TRUE)));
+    CHECK(UserWrite64(&World, 0, Code, 2) == STATUS_EXECUTABLE_MEMORY_WRITE);
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, EcCode, 2)));
+    CHECK(NT_SUCCESS(MiFaultWithWriteAllowance(&Space, Code, MiFaultWrite, TRUE, TRUE)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Code, 2)));
+    CHECK(NT_SUCCESS(MiResetExecutableWriteTracking(&Space, Code, 1)));
+    CHECK(UserWrite64(&World, 1, Code, 3) == STATUS_EXECUTABLE_MEMORY_WRITE);
+
+    CHECK(NT_SUCCESS(Protect(&Space, Code, PAGE_SIZE, MI_PROT_READWRITE, &Old)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Code, 4)));
+    CHECK(NT_SUCCESS(Protect(&Space, Code, PAGE_SIZE, MI_PROT_EXECUTE_READWRITE, &Old)));
+    CHECK(UserWrite64(&World, 0, Code, 5) == STATUS_EXECUTABLE_MEMORY_WRITE);
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Sparse, 0x40000000ULL, MI_MEM_RESERVE,
+                           MI_PROT_EXECUTE_READWRITE)));
+    CHECK(NT_SUCCESS(Alloc(&Space, &Adjacent, KB64, MI_MEM_RESERVE,
+                           MI_PROT_EXECUTE_READWRITE)));
+    CHECK(NT_SUCCESS(MiResetExecutableWriteTracking(&Space, Sparse, 0x40000000ULL + KB64)));
+    CHECK(MiResetExecutableWriteTracking(&Space, Adjacent, KB64 + PAGE_SIZE) ==
+          STATUS_MEMORY_NOT_ALLOCATED);
+
+    CHECK(NT_SUCCESS(MiSetExecutableWriteTracking(&Space, FALSE)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Code, 6)));
+    CHECK(MiResetExecutableWriteTracking(&Space, Code, 1) == STATUS_NOT_SUPPORTED);
+
+    CHECK(NT_SUCCESS(Free(&Space, Code, 0, MI_MEM_RELEASE)));
+    CHECK(NT_SUCCESS(Free(&Space, EcCode, 0, MI_MEM_RELEASE)));
+    CHECK(NT_SUCCESS(Free(&Space, Sparse, 0, MI_MEM_RELEASE)));
+    CHECK(NT_SUCCESS(Free(&Space, Adjacent, 0, MI_MEM_RELEASE)));
+    WorldAttach(&World, 1, NULL);
+    ProcessDestroy(&World, &Space);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+}
+
 static
 void
 VmCommitDecommitBatch(void)
@@ -452,6 +511,7 @@ void
 TestVm(void)
 {
     VmWindowsProtection();
+    VmExecutableWriteTracking();
     VmCommitDecommitBatch();
     VmReserveCommitMatrix();
     VmMemCommitAndLimits();

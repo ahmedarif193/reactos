@@ -1276,6 +1276,11 @@ MiIsEcCodeAddress(
     _In_ PVOID Address);
 #endif
 
+NTSTATUS
+MmSetProcessExecutableWriteTracking(
+    _In_ PEPROCESS Process,
+    _In_ BOOLEAN Enable);
+
 #ifdef _M_ARM64
 VOID
 NTAPI

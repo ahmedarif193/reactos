@@ -69,13 +69,85 @@ NtSetInformationVirtualMemory(
     _In_ PVOID VmInformation,
     _In_ ULONG VmInformationLength)
 {
-    UNREFERENCED_PARAMETER(ProcessHandle);
-    UNREFERENCED_PARAMETER(VmInformationClass);
-    UNREFERENCED_PARAMETER(NumberOfEntries);
-    UNREFERENCED_PARAMETER(VirtualAddresses);
-    UNREFERENCED_PARAMETER(VmInformation);
-    UNREFERENCED_PARAMETER(VmInformationLength);
-    return STATUS_SUCCESS;
+    MI_PROCESS_REFERENCE Target;
+    PMEMORY_RANGE_ENTRY Ranges;
+    ULONG Flag;
+    SIZE_T Bytes;
+    ULONG_PTR Index;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (VmInformationClass != VmPageDirtyStateInformation)
+        return STATUS_SUCCESS;
+    if (NumberOfEntries == 0 || NumberOfEntries > MAXULONG / sizeof(MEMORY_RANGE_ENTRY))
+        return STATUS_INVALID_PARAMETER_3;
+    if (VmInformation == NULL)
+        return STATUS_INVALID_PARAMETER_5;
+    if (VmInformationLength != sizeof(Flag))
+        return STATUS_INVALID_PARAMETER_6;
+    if (VirtualAddresses == NULL)
+        return STATUS_ACCESS_VIOLATION;
+
+    Bytes = NumberOfEntries * sizeof(MEMORY_RANGE_ENTRY);
+    Ranges = ExAllocatePoolWithTag(PagedPool, Bytes, 'rMvN');
+    if (Ranges == NULL)
+        return STATUS_NO_MEMORY;
+
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+        {
+            ProbeForRead(VmInformation, sizeof(Flag), sizeof(Flag));
+            ProbeForRead(VirtualAddresses, Bytes, sizeof(PVOID));
+        }
+        Flag = *(PULONG)VmInformation;
+        RtlCopyMemory(Ranges, VirtualAddresses, Bytes);
+        Status = STATUS_SUCCESS;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    if (Flag != 0)
+    {
+        Status = STATUS_INVALID_PARAMETER_5;
+        goto Cleanup;
+    }
+
+    Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    for (Index = 0; Index < NumberOfEntries; Index++)
+    {
+        Status = MiResetExecutableWriteTracking(MiSpaceOfProcess(Target.Process),
+                                               (ULONG64)(ULONG_PTR)Ranges[Index].VirtualAddress,
+                                               (ULONG64)Ranges[Index].NumberOfBytes);
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+
+    MiReleaseTargetProcess(&Target);
+
+Cleanup:
+    ExFreePoolWithTag(Ranges, 'rMvN');
+    return Status;
+}
+
+NTSTATUS
+MmSetProcessExecutableWriteTracking(
+    _In_ PEPROCESS Process,
+    _In_ BOOLEAN Enable)
+{
+    if (MI_PROCESS_OF(Process) == NULL)
+        return STATUS_PROCESS_IS_TERMINATING;
+
+    return MiSetExecutableWriteTracking(MiSpaceOfProcess(Process), Enable);
 }
 
 #define MI_EC_CODE_BITMAP_SIZE (1ULL << 32)

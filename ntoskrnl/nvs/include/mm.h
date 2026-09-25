@@ -318,6 +318,9 @@ ULONG MiViewPageProtection(_In_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, _In_ 
 
 NTSTATUS MiFault(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ MI_FAULT_ACCESS Access,
                  _In_ BOOLEAN UserMode);
+NTSTATUS MiFaultWithWriteAllowance(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress,
+                                   _In_ MI_FAULT_ACCESS Access, _In_ BOOLEAN UserMode,
+                                   _In_ BOOLEAN AllowExecutableWrite);
 NTSTATUS MiSetExecutableWriteTracking(_Inout_ PMI_ADDRESS_SPACE Space, _In_ BOOLEAN Enable);
 NTSTATUS MiResetExecutableWriteTracking(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Base,
                                         _In_ ULONG64 Size);

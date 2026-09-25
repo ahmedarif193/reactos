@@ -124,7 +124,8 @@ MiLockPages(
 
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
 
-            Status = MiFault(Space, Va, WriteAccess ? MiFaultWrite : MiFaultRead, UserMode);
+            Status = MiFaultWithWriteAllowance(Space, Va, WriteAccess ? MiFaultWrite : MiFaultRead,
+                                               UserMode, TRUE);
             if (!NT_SUCCESS(Status))
                 break;
 
