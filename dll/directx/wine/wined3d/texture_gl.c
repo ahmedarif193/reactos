@@ -2077,6 +2077,20 @@ static void wined3d_texture_gl_download_data(struct wined3d_context *context,
         GL_EXTCALL(glGetCompressedTexImage(target, src_level, offset));
         checkGLcall("glGetCompressedTexImage");
     }
+    else if (dst_bo && target == GL_TEXTURE_3D && src_depth > 1
+            && (gl_info->quirks & WINED3D_QUIRK_BROKEN_VOLUME_PACK))
+    {
+        GLuint name = wined3d_texture_gl_get_texture_name(src_texture_gl, context, srgb);
+        unsigned int slice;
+
+        /* Pack one slice at a time; the driver misaddresses multi-slice
+         * pixel-pack transfers. */
+        for (slice = 0; slice < src_depth; ++slice)
+            GL_EXTCALL(glGetTextureSubImage(name, src_level, 0, 0, slice,
+                    src_width, src_height, 1, format_gl->format, format_gl->type,
+                    src_slice_pitch, offset + (size_t)slice * src_slice_pitch));
+        checkGLcall("glGetTextureSubImage volume slices");
+    }
     else
     {
         TRACE("Downloading texture %p, %u, level %u, format %#x, type %#x, data %p.\n",
