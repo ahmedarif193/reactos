@@ -26,7 +26,7 @@ MiKdbParseAddress(
     _In_ PCHAR Argv[],
     _Out_ PULONG64 Value)
 {
-    ULONGLONG Parsed = 0;
+    ULONG_PTR Parsed = 0;
 
     if (Argc < 2 || !KdbpGetHexNumber(Argv[1], &Parsed))
         return FALSE;
