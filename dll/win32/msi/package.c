@@ -24,13 +24,15 @@
 #if defined(__REACTOS__) && (DLL_EXPORT_VERSION < 0x0a00)
 #define WIN32_NO_STATUS
 #endif
+#ifdef __REACTOS__
+/* NDK loads the Win32 types before its NTSTATUS definitions. */
+#include <ndk/rtlfuncs.h>
+#endif
 #include "windef.h"
 #include "winbase.h"
 #include "winreg.h"
 #include "winnls.h"
-#ifdef __REACTOS__
-#include <ndk/rtlfuncs.h>
-#else
+#ifndef __REACTOS__
 #include "winternl.h"
 #endif
 #include "shlwapi.h"
