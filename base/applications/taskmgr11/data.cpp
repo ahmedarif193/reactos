@@ -3545,13 +3545,7 @@ void Tick(void)
                                p->pid == 0 ? L"System Idle Process" : L"System");
             }
 
-            /* Private working set is ideal. ReactOS currently leaves it zero,
-               but does provide the process commit charge in PrivatePageCount. */
             p->memBytes = (ULONGLONG)spi->WorkingSetPrivateSize.QuadPart;
-            if (!p->memBytes)
-                p->memBytes = (ULONGLONG)spi->PrivatePageCount;
-            if (!p->memBytes)
-                p->memBytes = (ULONGLONG)spi->PagefileUsage;
 
             /* deltas */
             const PrevProc* pv = FindPrev(p->pid, p->createTime);
