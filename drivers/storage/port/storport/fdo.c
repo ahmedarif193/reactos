@@ -323,6 +323,108 @@ PortFdoStartDevice(
 
 
 static
+VOID
+PortReadSerialNumber(
+    _In_ PPDO_DEVICE_EXTENSION PdoExtension)
+{
+    IO_STATUS_BLOCK IoStatusBlock;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+    SCSI_REQUEST_BLOCK Srb;
+    PCDB Cdb;
+    PUCHAR Buffer;
+    UCHAR SrbStatus;
+    ULONG Length;
+
+    /* The unit serial number VPD page is optional, so any failure leaves the serial empty */
+    PdoExtension->SerialNumber[0] = ANSI_NULL;
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, MAXUCHAR + SENSE_BUFFER_SIZE, TAG_INQUIRY_DATA);
+    if (Buffer == NULL)
+        return;
+
+    RtlZeroMemory(Buffer, MAXUCHAR + SENSE_BUFFER_SIZE);
+
+    KeInitializeEvent(&Event,
+                      NotificationEvent,
+                      FALSE);
+
+    Irp = IoBuildDeviceIoControlRequest(IOCTL_SCSI_EXECUTE_IN,
+                                        PdoExtension->Device,
+                                        NULL,
+                                        0,
+                                        Buffer,
+                                        MAXUCHAR,
+                                        TRUE,
+                                        &Event,
+                                        &IoStatusBlock);
+    if (Irp == NULL)
+        goto Done;
+
+    RtlZeroMemory(&Srb, sizeof(SCSI_REQUEST_BLOCK));
+
+    Srb.Length = sizeof(SCSI_REQUEST_BLOCK);
+    Srb.OriginalRequest = Irp;
+    Srb.PathId = PdoExtension->Bus;
+    Srb.TargetId = PdoExtension->Target;
+    Srb.Lun = PdoExtension->Lun;
+    Srb.Function = SRB_FUNCTION_EXECUTE_SCSI;
+    Srb.SrbFlags = SRB_FLAGS_DATA_IN | SRB_FLAGS_DISABLE_SYNCH_TRANSFER | SRB_FLAGS_NO_QUEUE_FREEZE;
+    Srb.TimeOutValue = 4;
+    Srb.CdbLength = 6;
+
+    Srb.SenseInfoBuffer = Buffer + MAXUCHAR;
+    Srb.SenseInfoBufferLength = SENSE_BUFFER_SIZE;
+
+    Srb.DataBuffer = Buffer;
+    Srb.DataTransferLength = MAXUCHAR;
+
+    IoGetNextIrpStackLocation(Irp)->Parameters.Scsi.Srb = &Srb;
+
+    Cdb = (PCDB)Srb.Cdb;
+    Cdb->CDB6INQUIRY3.OperationCode = SCSIOP_INQUIRY;
+    Cdb->CDB6INQUIRY3.EnableVitalProductData = 1;
+    Cdb->CDB6INQUIRY3.PageCode = VPD_SERIAL_NUMBER;
+    Cdb->CDB6INQUIRY3.AllocationLength = MAXUCHAR;
+
+    Status = IoCallDriver(PdoExtension->Device, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+    }
+
+    /* A short page completes with SRB_STATUS_DATA_OVERRUN (underrun) */
+    SrbStatus = SRB_STATUS(Srb.SrbStatus);
+    if ((SrbStatus != SRB_STATUS_SUCCESS && SrbStatus != SRB_STATUS_DATA_OVERRUN) ||
+        Srb.DataTransferLength < 4 ||
+        Buffer[1] != VPD_SERIAL_NUMBER)
+    {
+        goto Done;
+    }
+
+    /* Page header: bytes 2-3 hold the big-endian serial number length */
+    Length = ((ULONG)Buffer[2] << 8) | Buffer[3];
+    Length = min(Length, Srb.DataTransferLength - 4);
+    Length = min(Length, sizeof(PdoExtension->SerialNumber) - 1);
+
+    /* Drop the trailing padding */
+    while (Length > 0 && (Buffer[3 + Length] == ' ' || Buffer[3 + Length] == ANSI_NULL))
+        Length--;
+
+    RtlCopyMemory(PdoExtension->SerialNumber, Buffer + 4, Length);
+    PdoExtension->SerialNumber[Length] = ANSI_NULL;
+
+Done:
+    ExFreePoolWithTag(Buffer, TAG_INQUIRY_DATA);
+}
+
+
+static
 NTSTATUS
 PortSendInquiry(
     _In_ PPDO_DEVICE_EXTENSION PdoExtension)
@@ -568,6 +670,7 @@ PortFdoScanBus(
                 }
                 else
                 {
+                    PortReadSerialNumber(PdoExtension);
                     DPRINT("VendorId: %.8s\n", PdoExtension->InquiryBuffer->VendorId);
                     DPRINT("ProductId: %.16s\n", PdoExtension->InquiryBuffer->ProductId);
                     DPRINT("ProductRevisionLevel: %.4s\n", PdoExtension->InquiryBuffer->ProductRevisionLevel);

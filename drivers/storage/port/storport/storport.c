@@ -582,6 +582,24 @@ PortDispatchClose(
 
 
 static
+STORAGE_BUS_TYPE
+PortStorageBusType(
+    _In_ PFDO_DEVICE_EXTENSION FdoExtension)
+{
+    PHW_INITIALIZATION_DATA InitData = FdoExtension->Miniport.InitData;
+
+    /* The init data copy is zero-filled past the size the miniport passed */
+    if (InitData != NULL &&
+        (InitData->FeatureSupport & STOR_FEATURE_SUPPORTS_NVME_ADAPTER))
+    {
+        return BusTypeNvme;
+    }
+
+    return BusTypeSata;
+}
+
+
+static
 NTSTATUS
 PortQueryDeviceProperty(
     _In_ PPDO_DEVICE_EXTENSION PdoExtension,
@@ -613,6 +631,8 @@ PortQueryDeviceProperty(
 
     DescriptorLength = FIELD_OFFSET(STORAGE_DEVICE_DESCRIPTOR, RawDeviceProperties) +
                        8 + 1 + 16 + 1 + 4 + 1;
+    if (PdoExtension->SerialNumber[0])
+        DescriptorLength += strlen(PdoExtension->SerialNumber) + 1;
 
     if (OutputLength < sizeof(STORAGE_DESCRIPTOR_HEADER))
     {
@@ -639,7 +659,7 @@ PortQueryDeviceProperty(
     Descriptor->DeviceTypeModifier = InquiryData->DeviceTypeModifier;
     Descriptor->RemovableMedia = InquiryData->RemovableMedia;
     Descriptor->CommandQueueing = InquiryData->CommandQueue;
-    Descriptor->BusType = BusTypeSata;
+    Descriptor->BusType = PortStorageBusType(PdoExtension->FdoExtension);
 
     Buffer = Descriptor->RawDeviceProperties;
     Descriptor->VendorIdOffset = (ULONG)(Buffer - (PUCHAR)Descriptor);
@@ -652,7 +672,12 @@ PortQueryDeviceProperty(
 
     Descriptor->ProductRevisionOffset = (ULONG)(Buffer - (PUCHAR)Descriptor);
     RtlCopyMemory(Buffer, InquiryData->ProductRevisionLevel, 4);
-    Descriptor->SerialNumberOffset = 0;
+    Buffer += 4 + 1;
+    if (PdoExtension->SerialNumber[0])
+    {
+        Descriptor->SerialNumberOffset = (ULONG)(Buffer - (PUCHAR)Descriptor);
+        RtlCopyMemory(Buffer, PdoExtension->SerialNumber, strlen(PdoExtension->SerialNumber) + 1);
+    }
     Descriptor->RawPropertiesLength = DescriptorLength -
                                       FIELD_OFFSET(STORAGE_DEVICE_DESCRIPTOR, RawDeviceProperties);
 
@@ -713,7 +738,7 @@ PortQueryAdapterProperty(
     Descriptor->AdapterScansDown = FALSE;
     Descriptor->CommandQueueing = FdoExtension->Miniport.PortConfig.TaggedQueuing;
     Descriptor->AcceleratedTransfer = TRUE;
-    Descriptor->BusType = BusTypeSata;
+    Descriptor->BusType = PortStorageBusType(FdoExtension);
     Descriptor->BusMajorVersion = 1;
     Descriptor->BusMinorVersion = 0;
 
