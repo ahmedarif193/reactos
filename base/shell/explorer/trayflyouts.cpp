@@ -9071,7 +9071,14 @@ public:
         }
         else if (iHit == TFY_QSHIT_SETTINGS)
         {
-            ShellExecuteW(NULL, L"open", L"control.exe", NULL, NULL, SW_SHOWNORMAL);
+            SHELLEXECUTEINFOW sei = { sizeof(sei), SEE_MASK_IDLIST };
+            sei.nShow = SW_SHOWNORMAL;
+            sei.lpIDList = SHCloneSpecialIDList(NULL, CSIDL_CONTROLS, FALSE);
+            if (sei.lpIDList)
+            {
+                ShellExecuteExW(&sei);
+                ILFree((LPITEMIDLIST)sei.lpIDList);
+            }
             FadeOut();
         }
         return 0;
