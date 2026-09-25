@@ -696,7 +696,11 @@ MmCreateTeb(
     _SEH2_TRY
     {
         RtlZeroMemory(Teb, TebSize);
+#ifdef _M_IX86
+        Teb->NtTib.ExceptionList = EXCEPTION_CHAIN_END;
+#else
         Teb->NtTib.ExceptionList = NULL;
+#endif
         Teb->NtTib.Self = (PNT_TIB)Teb;
         Teb->NtTib.Version = 30 << 8;
         Teb->ClientId = *ClientId;
