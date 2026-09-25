@@ -68,6 +68,7 @@ list(APPEND SOURCE
     SetFileAllocationInfo.c
     SetUnhandledExceptionFilter.c
     SetWaitableTimerEx.c
+    SuspendThread.c
     SystemFirmware.c
     TerminateProcess.c
     ThreadPowerThrottling.c

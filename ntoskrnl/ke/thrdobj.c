@@ -24,6 +24,53 @@ NTKERNELAPI KPRIORITY NTAPI KeSetActualBasePriorityThread(_Inout_ PKTHREAD Threa
 
 /* FUNCTIONS *****************************************************************/
 
+/* The APC lock serializes these signals with changes to the suspend counts. */
+static
+VOID
+KiSignalThreadResume(IN PKTHREAD Thread)
+{
+    KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+    Thread->SuspendEvent.Header.SignalState = 1;
+#else
+    Thread->SuspendSemaphore.Header.SignalState++;
+#endif
+    KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+    KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+}
+
+static
+VOID
+KiWaitForThreadResume(IN PKTHREAD Thread)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+    KLOCK_QUEUE_HANDLE ApcLock;
+    BOOLEAN IsSuspended;
+
+    for (;;)
+    {
+        KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
+        IsSuspended = Thread->SuspendCount != 0 || Thread->FreezeCount != 0;
+        if (IsSuspended)
+        {
+            /* A binary event cannot retain resume credits for multiple APCs.
+             * The counts are authoritative. Clear the event while holding the
+             * same lock as resume, so a later resume cannot be lost before wait. */
+            KiAcquireDispatcherObject(&Thread->SuspendEvent.Header);
+            Thread->SuspendEvent.Header.SignalState = 0;
+            KiReleaseDispatcherObject(&Thread->SuspendEvent.Header);
+        }
+        KiReleaseApcLockFromSynchLevel(&ApcLock);
+        KiExitDispatcher(ApcLock.OldIrql);
+        if (!IsSuspended) return;
+
+        KeWaitForSingleObject(&Thread->SuspendEvent, Suspended, KernelMode, FALSE, NULL);
+    }
+#else
+    KeWaitForSingleObject(&Thread->SuspendSemaphore, Suspended, KernelMode, FALSE, NULL);
+#endif
+}
+
 UCHAR
 NTAPI
 KeFindNextRightSetAffinity(IN UCHAR Number,
@@ -175,11 +222,7 @@ KeAlertResumeThread(IN PKTHREAD Thread)
         {
             if (KiChpeClearDeferredSuspend(Thread))
             {
-                /* Signal and satisfy */
-                KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
-                Thread->SuspendSemaphore.Header.SignalState++;
-                KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
-                KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+                KiSignalThreadResume(Thread);
             }
         }
     }
@@ -368,15 +411,7 @@ KeForceResumeThread(IN PKTHREAD Thread)
 
         if (KiChpeClearDeferredSuspend(Thread))
         {
-            /* Lock the suspend semaphore */
-            KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
-
-            /* Signal and satisfy */
-            Thread->SuspendSemaphore.Header.SignalState++;
-            KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
-
-            /* Release the suspend semaphore */
-            KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+            KiSignalThreadResume(Thread);
         }
     }
 
@@ -426,7 +461,7 @@ KeFreezeAllThreads(VOID)
         if ((Current != CurrentThread) && (Current->ApcQueueable))
         {
             /* Sanity check */
-            OldCount = Current->SuspendCount;
+            OldCount = Current->FreezeCount;
             ASSERT(OldCount != MAXIMUM_SUSPEND_COUNT);
 
             /* Increase the freeze count */
@@ -442,6 +477,7 @@ KeFreezeAllThreads(VOID)
                     Current->SuspendApc.Inserted = TRUE;
                     KiInsertQueueApc(&Current->SuspendApc, IO_NO_INCREMENT);
                 }
+#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))
                 else
                 {
                     /* Lock the suspend semaphore */
@@ -453,6 +489,7 @@ KeFreezeAllThreads(VOID)
                     /* Release the suspend semaphore */
                     KiReleaseDispatcherObject(&Current->SuspendSemaphore.Header);
                 }
+#endif
             }
         }
 
@@ -494,15 +531,7 @@ KeResumeThread(IN PKTHREAD Thread)
         {
             if (KiChpeClearDeferredSuspend(Thread))
             {
-                /* Acquire the suspend semaphore lock */
-                KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
-
-                /* Signal the Suspend Semaphore */
-                Thread->SuspendSemaphore.Header.SignalState++;
-                KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
-
-                /* Release the suspend semaphore lock */
-                KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+                KiSignalThreadResume(Thread);
             }
         }
     }
@@ -728,11 +757,7 @@ KiChpeSuspendCheckpoint(IN PKTHREAD Thread)
 
     if (Wait)
     {
-        KeWaitForSingleObject(&Thread->SuspendSemaphore,
-                              Suspended,
-                              KernelMode,
-                              FALSE,
-                              NULL);
+        KiWaitForThreadResume(Thread);
     }
 }
 #endif
@@ -762,11 +787,7 @@ KiSuspendThread(IN PVOID NormalContext,
 #endif
 
     /* Non-alertable kernel-mode suspended wait */
-    KeWaitForSingleObject(&Thread->SuspendSemaphore,
-                          Suspended,
-                          KernelMode,
-                          FALSE,
-                          NULL);
+    KiWaitForThreadResume(Thread);
 }
 
 ULONG
@@ -808,6 +829,7 @@ KeSuspendThread(PKTHREAD Thread)
                 Thread->SuspendApc.Inserted = TRUE;
                 KiInsertQueueApc(&Thread->SuspendApc, IO_NO_INCREMENT);
             }
+#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))
             else
             {
                 /* Lock the suspend semaphore */
@@ -819,6 +841,7 @@ KeSuspendThread(PKTHREAD Thread)
                 /* Release the suspend semaphore */
                 KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
             }
+#endif
         }
     }
 
@@ -863,15 +886,7 @@ KeThawAllThreads(VOID)
             /* Check if both counts are zero now */
             if (!(Current->SuspendCount) && (!Current->FreezeCount))
             {
-                /* Lock the suspend semaphore */
-                KiAcquireDispatcherObject(&Current->SuspendSemaphore.Header);
-
-                /* Signal the suspend semaphore and wake it */
-                Current->SuspendSemaphore.Header.SignalState++;
-                KiWaitTest(&Current->SuspendSemaphore, 0);
-
-                /* Unlock the suspend semaphore */
-                KiReleaseDispatcherObject(&Current->SuspendSemaphore.Header);
+                KiSignalThreadResume(Current);
             }
         }
 
