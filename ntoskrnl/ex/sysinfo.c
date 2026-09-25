@@ -1298,8 +1298,10 @@ ExpQuerySystemProcessInformation(
                 SpiCurrent->PeakVirtualSize = Process->PeakVirtualSize;
                 SpiCurrent->VirtualSize = Process->VirtualSize;
                 SpiCurrent->PageFaultCount = Process->Vm.Instance.PageFaultCount;
-                SpiCurrent->PeakWorkingSetSize = Process->Vm.Instance.PeakWorkingSetSize;
-                SpiCurrent->WorkingSetSize = Process->Vm.Instance.WorkingSetSize;
+                SpiCurrent->PeakWorkingSetSize = Process->Vm.Instance.PeakWorkingSetSize << PAGE_SHIFT;
+                SpiCurrent->WorkingSetSize = Process->Vm.Instance.WorkingSetSize << PAGE_SHIFT;
+                SpiCurrent->WorkingSetPrivateSize.QuadPart =
+                    (LONGLONG)(min(Process->NumberOfPrivatePages, Process->Vm.Instance.WorkingSetSize) << PAGE_SHIFT);
                 SpiCurrent->QuotaPeakPagedPoolUsage = Process->ProcessQuotaPeak[PsPagedPool];
                 SpiCurrent->QuotaPagedPoolUsage = Process->ProcessQuotaUsage[PsPagedPool];
                 SpiCurrent->QuotaPeakNonPagedPoolUsage = Process->ProcessQuotaPeak[PsNonPagedPool];
