@@ -246,6 +246,8 @@ IopResDbCheckDescriptor(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Candidate, _In_opt_
     for (le = IopResBuckets[cls].List.Flink; le != &IopResBuckets[cls].List; le = le->Flink)
     {
         PPI_RES_ENTRY entry = CONTAINING_RECORD(le, PI_RES_ENTRY, ListEntry);
+        if (CandidateOwner != NULL && entry->Owner == CandidateOwner)
+            continue;
         if (IopResDbConflict(Candidate, CandidateOwner, &entry->Desc, entry->Owner))
         {
             if (Conflicting)
