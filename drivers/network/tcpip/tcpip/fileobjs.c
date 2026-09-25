@@ -482,6 +482,7 @@ NTSTATUS FileOpenAddress(
   }
 
   RtlZeroMemory(AddrFile, sizeof(ADDRESS_FILE));
+  ExInitializeRundownProtection(&AddrFile->ReceiveDatagramRundown);
 
   AddrFile->RefCount = 1;
   AddrFile->Free = AddrFileFree;

@@ -155,7 +155,8 @@ DGDeliverData(
 
         UnlockObject(AddrFile);
     }
-    else if (AddrFile->RegisteredReceiveDatagramHandler)
+    else if (AddrFile->RegisteredReceiveDatagramHandler &&
+             ExAcquireRundownProtection(&AddrFile->ReceiveDatagramRundown))
     {
         PTDI_IND_RECEIVE_DATAGRAM ReceiveHandler = AddrFile->ReceiveDatagramHandler;
         PVOID HandlerContext = AddrFile->ReceiveDatagramHandlerContext;
@@ -200,6 +201,7 @@ DGDeliverData(
         if (STATUS_SUCCESS != Status)
             TI_DbgPrint(MAX_TRACE, ("receive handler signaled failure with Status 0x%x\n", Status));
 
+        ExReleaseRundownProtection(&AddrFile->ReceiveDatagramRundown);
         DereferenceObject(AddrFile);
     }
     else

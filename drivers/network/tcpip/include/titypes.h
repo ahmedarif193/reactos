@@ -167,6 +167,7 @@ typedef struct _ADDRESS_FILE {
     PTDI_IND_RECEIVE_DATAGRAM ReceiveDatagramHandler;
     PVOID ReceiveDatagramHandlerContext;
     BOOLEAN RegisteredReceiveDatagramHandler;
+    EX_RUNDOWN_REF ReceiveDatagramRundown;
     /* Expedited receive indication handler */
     PTDI_IND_RECEIVE_EXPEDITED ExpeditedReceiveHandler;
     PVOID ExpeditedReceiveHandlerContext;
