@@ -3,6 +3,7 @@ add_executable(dxgi_apitest
     dxgi.c
     texture_dimensions.cpp
     composition.cpp
+    composition_lifetime.cpp
     completion_event.cpp
     buffer_copy.cpp
     copy_depth_stencil.cpp
