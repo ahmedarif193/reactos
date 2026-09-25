@@ -1825,6 +1825,9 @@ ChpeDispatchException(PEXCEPTION_RECORD ExceptionRecord,
 
     pChpeResetToConsistentState(ExceptionRecord, CpuArea->ContextAmd64, Context);
 
+    if (ExceptionRecord->ExceptionCode == STATUS_EMULATION_SYSCALL)
+        return pChpeDispatchExceptionNative(ExceptionRecord, (PARM64_NT_CONTEXT)Context) == STATUS_SUCCESS;
+
     if (RtlCallVectoredExceptionHandlers(ExceptionRecord, Context))
     {
         RtlCallVectoredContinueHandlers(ExceptionRecord, Context);

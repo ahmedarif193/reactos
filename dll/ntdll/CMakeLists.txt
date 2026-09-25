@@ -126,6 +126,7 @@ add_dependencies(ntdll ntstatus asm)
 add_cd_file(TARGET ntdll DESTINATION reactos/system32 NO_CAB FOR all)
 
 if(ARM64EC_RUNTIME)
+    include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/include)
     add_arm64ec_x64_source(NTDLL_CHPE_X64_SOURCE chpebridge_x64.c)
 endif()
 

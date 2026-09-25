@@ -5,7 +5,42 @@
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
+#include <sdkddkver.h>
 #include <wine/asm.h>
+
+#define CHPE_X64_SYSCALL(Name, Id) \
+    __ASM_DEFINE_FUNC("\"EXP+#" #Name "\"", \
+                     __ASM_SEH(".seh_endprologue\n\t") \
+                     ".byte 0x4c,0x8b,0xd1,0xb8\n\t" \
+                     ".long " #Id "\n\t" \
+                     "syscall\n\tret\n\t.fill 21,1,0x90\n\t") \
+    __asm__(".globl " #Name "\n.set " #Name ",\"EXP+#" #Name "\"\n");
+
+__asm__(".set ChpeServiceId, 0\n");
+
+#define SYSFUNCS_TARGET_ARM64 1
+#define SVC_(name, argcount) \
+    __asm__(".set ChpeServiceId_" #name ", ChpeServiceId\n" \
+            ".set ChpeServiceId, ChpeServiceId + 1\n"); \
+    CHPE_X64_SYSCALL(ChpeAutoNt##name, ChpeServiceId_##name) \
+    CHPE_X64_SYSCALL(ChpeAutoZw##name, ChpeServiceId_##name)
+#define SVC_WRAP_(name, argcount) SVC_(name, argcount)
+#include <sysfuncs.h>
+#undef SVC_WRAP_
+#undef SVC_
+#undef SYSFUNCS_TARGET_ARM64
+#undef CHPE_X64_SYSCALL
+
+__ASM_GLOBAL_FUNC(ChpeInvokeSyscall,
+                  "movq %r10,8(%rsp)\n\t"
+                  "popq %r10\n\t"
+                  "movq %r10,8(%rsp)\n\t"
+                  "leaq ChpeSyscallServices(%rip),%r10\n\t"
+                  "callq *(%r10,%rax,8)\n\t"
+                  "movq (%rsp),%r10\n\t"
+                  "pushq 8(%rsp)\n\t"
+                  "pushq %r10\n\t"
+                  "ret")
 
 /*
  * The x64 export has the same split shape as the Windows ARM64X ntdll: keep

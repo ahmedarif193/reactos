@@ -1,3 +1,11 @@
+#ifndef SYSFUNCS_TARGET_ARM64
+#if defined(_M_ARM64)
+#define SYSFUNCS_TARGET_ARM64 1
+#else
+#define SYSFUNCS_TARGET_ARM64 0
+#endif
+#endif
+
 #ifndef SYSFUNCS_NT6_ONLY
     SVC_(AcceptConnectPort, 6)
     SVC_(AccessCheck, 8)
@@ -18,7 +26,7 @@
     SVC_(AllocateUserPhysicalPages, 3)
     SVC_(AllocateUuids, 4)
     SVC_WRAP_(AllocateVirtualMemory, 6)
-#if defined(_M_ARM64)
+#if SYSFUNCS_TARGET_ARM64
     SVC_WRAP_(AllocateVirtualMemoryEx, 7)
 #else
     SVC_(AllocateVirtualMemoryEx, 7)
@@ -246,7 +254,7 @@
     SVC_(SetInformationProcess, 4)
     SVC_(SetInformationThread, 4)
     SVC_(SetInformationToken, 4)
-#if defined(_M_ARM64) && !defined(SYSFUNCS_WOW64)
+#if SYSFUNCS_TARGET_ARM64 && !defined(SYSFUNCS_WOW64)
     SVC_WRAP_(SetInformationVirtualMemory, 6)
 #endif
     SVC_(SetIntervalProfile, 2)
