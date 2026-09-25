@@ -567,7 +567,7 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
                 /* Get the current process and granted access */
                 CurrentProcess = PsGetCurrentProcess();
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-                GrantedAccess = CurrentProcess->ImagePathHash;
+                GrantedAccess = PROCESS_ALL_ACCESS;
 #else
                 GrantedAccess = CurrentProcess->GrantedAccess;
 #endif
@@ -619,7 +619,7 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
                 /* Get the current process and granted access */
                 CurrentThread = PsGetCurrentThread();
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-                GrantedAccess = CurrentThread->SpareUlong0;
+                GrantedAccess = THREAD_ALL_ACCESS;
 #else
                 GrantedAccess = CurrentThread->GrantedAccess;
 #endif
