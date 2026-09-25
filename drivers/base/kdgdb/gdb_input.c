@@ -813,6 +813,7 @@ handle_gdb_monitor_command(VOID)
         MONITOR_PRINT("  processes  active process list\n");
         MONITOR_PRINT("  threads    active thread list\n");
         MONITOR_PRINT("  modules    loaded kernel module list\n");
+        MONITOR_PRINT("  exception  current NT exception record and fault details\n");
         MONITOR_PRINT("  kdlog      latest 8192 bytes of kernel debug log\n");
         MONITOR_PRINT("  kdlog all  complete buffered kernel debug log\n");
     }
@@ -910,6 +911,45 @@ handle_gdb_monitor_command(VOID)
                               Module->DllBase,
                               Module->SizeOfImage,
                               Name);
+            }
+        }
+    }
+    else if (strcmp(Command, "exception") == 0)
+    {
+        if (CurrentStateChange.NewState != DbgKdExceptionStateChange)
+        {
+            MONITOR_PRINT("Current stop is not an exception.\n");
+        }
+        else
+        {
+            const DBGKM_EXCEPTION64* Exception = &CurrentStateChange.u.Exception;
+            const EXCEPTION_RECORD64* Record = &Exception->ExceptionRecord;
+            ULONG Count = min(Record->NumberParameters,
+                              RTL_NUMBER_OF(Record->ExceptionInformation));
+            ULONG Index;
+
+            MONITOR_PRINT("exception code=%08lx flags=%08lx address=%016" PRIx64
+                          " first_chance=%lu parameters=%lu\n",
+                          (ULONG)Record->ExceptionCode, Record->ExceptionFlags,
+                          Record->ExceptionAddress, Exception->FirstChance,
+                          Record->NumberParameters);
+            for (Index = 0; Index < Count && Status == KdPacketReceived; ++Index)
+                MONITOR_PRINT("  parameter[%lu]=%016" PRIx64 "\n",
+                              Index, Record->ExceptionInformation[Index]);
+
+            if (Record->ExceptionCode == STATUS_ACCESS_VIOLATION && Count >= 2)
+            {
+                const CHAR* Access;
+
+                switch (Record->ExceptionInformation[0])
+                {
+                    case 0: Access = "read"; break;
+                    case 1: Access = "write"; break;
+                    case 8: Access = "execute"; break;
+                    default: Access = "unknown"; break;
+                }
+                MONITOR_PRINT("  access=%s fault_address=%016" PRIx64 "\n",
+                              Access, Record->ExceptionInformation[1]);
             }
         }
     }
