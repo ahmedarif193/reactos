@@ -197,6 +197,10 @@ KiSystemCallHandler(
     /* Set previous mode */
     Thread->PreviousMode = TrapFrame->PreviousMode = UserMode;
 
+    /* NtContinue and NtRaiseException leave through KiExceptionExit,
+     * which checks this field instead of taking the SYSRET path. */
+    TrapFrame->PreviousIrql = PASSIVE_LEVEL;
+
     /* We don't have an exception frame yet */
     TrapFrame->ExceptionFrame = 0;
 
