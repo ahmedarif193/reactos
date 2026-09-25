@@ -98,6 +98,15 @@ typedef struct _DC_STATISTICS
     ULONG64 ReceiveAlignmentErrors;
 } DC_STATISTICS, *PDC_STATISTICS;
 
+typedef struct _DC_LOCAL_SG_LIST
+{
+    ULONG NumberOfElements;
+    ULONG_PTR Reserved;
+    SCATTER_GATHER_ELEMENT Elements[1];
+} DC_LOCAL_SG_LIST;
+
+C_ASSERT(FIELD_OFFSET(DC_LOCAL_SG_LIST, Elements) == FIELD_OFFSET(SCATTER_GATHER_LIST, Elements));
+
 typedef struct _DC21X4_ADAPTER
 {
     PUCHAR IoBase;
@@ -140,7 +149,7 @@ typedef struct _DC21X4_ADAPTER
     ULONG LastTcbCompleted;
     PDC_TCB HeadTcb;
     SINGLE_LIST_ENTRY SendBufferList;
-    SCATTER_GATHER_LIST LocalSgList;
+    DC_LOCAL_SG_LIST LocalSgList;
 
     DECLSPEC_CACHEALIGN NDIS_SPIN_LOCK ReceiveLock;
     PDC_RCB* RcbArray;

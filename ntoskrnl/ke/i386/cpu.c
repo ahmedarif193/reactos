@@ -17,10 +17,10 @@
 /* GLOBALS *******************************************************************/
 
 /* The TSS to use for Double Fault Traps (INT 0x9) */
-UCHAR KiDoubleFaultTSS[KTSS_IO_MAPS];
+KTSS KiDoubleFaultTSS;
 
 /* The TSS to use for NMI Fault Traps (INT 0x2) */
-UCHAR KiNMITSS[KTSS_IO_MAPS];
+KTSS KiNMITSS;
 
 /* CPU Features and Flags */
 ULONG KeI386CpuType;
@@ -849,7 +849,7 @@ Ki386InitializeTss(IN PKTSS Tss,
     ((PKIDTENTRY)TaskGateEntry)->Selector = KGDT_DF_TSS;
 
     /* Initialize the TSS used for handling double faults. */
-    Tss = (PKTSS)KiDoubleFaultTSS;
+    Tss = &KiDoubleFaultTSS;
     KiInitializeTSS(Tss);
     Tss->CR3 = __readcr3();
     Tss->Esp0 = KiDoubleFaultStack;
@@ -879,7 +879,7 @@ Ki386InitializeTss(IN PKTSS Tss,
     ((PKIDTENTRY)TaskGateEntry)->Selector = KGDT_NMI_TSS;
 
     /* Initialize the actual TSS */
-    Tss = (PKTSS)KiNMITSS;
+    Tss = &KiNMITSS;
     KiInitializeTSS(Tss);
     Tss->CR3 = __readcr3();
     Tss->Esp0 = KiDoubleFaultStack;

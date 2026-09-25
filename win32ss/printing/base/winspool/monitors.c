@@ -76,7 +76,7 @@ AddMonitorA(PSTR pName, DWORD Level, PBYTE pMonitors)
 BOOL WINAPI
 AddMonitorW(PWSTR pName, DWORD Level, PBYTE pMonitors)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_GEN_FAILURE;
     WINSPOOL_MONITOR_CONTAINER MonitorInfoContainer;
 
     FIXME("AddMonitorW(%S, %lu, %p)\n", pName, Level, pMonitors);

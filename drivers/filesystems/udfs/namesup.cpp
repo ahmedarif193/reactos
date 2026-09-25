@@ -97,7 +97,7 @@ UDFIsNameValid(
     LONG   Index, l;
     BOOLEAN _StreamOpen = FALSE;
     PWCHAR Buffer;
-    WCHAR c, c0;
+    WCHAR c, c0 = 0;
 
     if(StreamOpen) (*StreamOpen) = FALSE;
     // We can't create nameless file or too long path

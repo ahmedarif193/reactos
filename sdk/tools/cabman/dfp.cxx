@@ -260,7 +260,7 @@ ULONG CDFParser::Parse()
                 switch (CurrentToken)
                 {
                     case TokenInteger:
-                        sprintf(CurrentString, "%u", (UINT)CurrentInteger);
+                        snprintf(CurrentString, sizeof(CurrentString), "%u", (UINT)CurrentInteger);
                     case TokenIdentifier:
                     case TokenString:
                         if (Command)
@@ -389,7 +389,7 @@ bool CDFParser::OnDiskLabel(ULONG Number, char* Label)
             ch = DiskLabelTemplate[i];
             if (ch == '*')
             {
-                sprintf(Buffer, "%u", (UINT)Number);
+                snprintf(Buffer, sizeof(Buffer), "%u", (UINT)Number);
                 strcat(Label, Buffer);
                 j += (LONG)strlen(Buffer);
             }
@@ -445,7 +445,7 @@ bool CDFParser::OnCabinetName(ULONG Number, char* Name)
             ch = CabinetNameTemplate[i];
             if (ch == '*')
             {
-                sprintf(Buffer, "%u", (UINT)Number);
+                snprintf(Buffer, sizeof(Buffer), "%u", (UINT)Number);
                 strcat(Name, Buffer);
                 j += (LONG)strlen(Buffer);
             }

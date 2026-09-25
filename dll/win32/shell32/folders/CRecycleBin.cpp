@@ -804,6 +804,8 @@ HRESULT WINAPI CRecycleBin::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, 
             _ILGetFileDateTime(pidl2, &ft2);
             result = CompareFileTime(&ft1, &ft2);
             break;
+        default:
+            return E_INVALIDARG;
     }
     return MAKE_COMPARE_HRESULT(result);
 }

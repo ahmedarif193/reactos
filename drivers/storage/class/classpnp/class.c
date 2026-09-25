@@ -10770,7 +10770,7 @@ ClassUpdateInformationInRegistry(
     _In_ ULONG            InquiryDataLength
     )
 {
-    NTSTATUS          status;
+    NTSTATUS          status = STATUS_UNSUCCESSFUL;
     SCSI_ADDRESS      scsiAddress = {0};
     OBJECT_ATTRIBUTES objectAttributes = {0};
     STRING            string;

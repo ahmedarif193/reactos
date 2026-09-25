@@ -116,7 +116,7 @@ GetRegString(CRegKey &Key, LPCWSTR Name, CStringW &Value);
 bool
 ExpandEnvStrings(CStringW &Str);
 
-template <class T> static CStringW
+template <class T> CStringW
 BuildPath(const T &Base, LPCWSTR Append)
 {
     CStringW path = Base;

@@ -803,14 +803,6 @@ DoLAYOUT(IN PLAYOUT LayoutData,
                     exit(1);
                 }
 
-                /* Check if there is a valid virtual key */
-                if (ScVk[i].VirtualKey == 0xFFFF)
-                {
-                    /* Fail */
-                    printf("The Scancode you tried to use (%X) is reserved.\n", ScanCode);
-                    exit(1);
-                }
-
                 /* Fill out the entry */
                 Entry->OriginalVirtualKey = ScVk[i].VirtualKey;
                 Entry->Name = ScVk[i].Name;

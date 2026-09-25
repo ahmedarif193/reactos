@@ -297,7 +297,7 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PFILE_OBJECT FileObject;
     PVolumeContextBlock VolCB;
     PNtfsVolume DiskVolume;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     NTSTATUS TimestampStatus;
     PUCHAR Buffer;
     LARGE_INTEGER ReadOffset;

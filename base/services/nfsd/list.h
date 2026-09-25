@@ -48,20 +48,20 @@ struct list_entry {
         entry = tmp, tmp = entry->next)
 
 
-static void list_init(
+static inline void list_init(
     struct list_entry *head)
 {
     head->prev = head;
     head->next = head;
 }
 
-static int list_empty(
+static inline int list_empty(
     struct list_entry *head)
 {
     return head->next == head;
 }
 
-static void list_add(
+static inline void list_add(
     struct list_entry *entry,
     struct list_entry *prev,
     struct list_entry *next)
@@ -73,21 +73,21 @@ static void list_add(
     next->prev = entry;
 }
 
-static void list_add_head(
+static inline void list_add_head(
     struct list_entry *head,
     struct list_entry *entry)
 {
     list_add(entry, head, head->next);
 }
 
-static void list_add_tail(
+static inline void list_add_tail(
     struct list_entry *head,
     struct list_entry *entry)
 {
     list_add(entry, head->prev, head);
 }
 
-static void list_remove(
+static inline void list_remove(
     struct list_entry *entry)
 {
     if (!list_empty(entry)) {
@@ -99,7 +99,7 @@ static void list_remove(
 
 typedef int (*list_compare_fn)(const struct list_entry*, const void*);
 
-static struct list_entry* list_search(
+static inline struct list_entry* list_search(
     const struct list_entry *head,
     const void *value,
     list_compare_fn compare)

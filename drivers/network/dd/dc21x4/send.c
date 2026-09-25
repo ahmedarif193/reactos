@@ -158,7 +158,7 @@ DcSendPacket(
             return NDIS_STATUS_RESOURCES;
         }
 
-        SgList = &Adapter->LocalSgList;
+        SgList = (PSCATTER_GATHER_LIST)&Adapter->LocalSgList;
         SgList->Elements[0].Address.LowPart = CoalesceBuffer->PhysicalAddress;
         SgList->Elements[0].Length = PacketLength;
         SgList->NumberOfElements = 1;

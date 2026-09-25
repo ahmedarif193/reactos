@@ -56,7 +56,7 @@ struct SearchStart
 };
 
 template<class T, class F, class R>
-static INT_PTR FindItemInComboEx(HWND hCombo, T &FindItem, F CompareFunc, R RetMatch)
+INT_PTR FindItemInComboEx(HWND hCombo, T &FindItem, F CompareFunc, R RetMatch)
 {
     COMBOBOXEXITEMW item;
     item.mask = CBEIF_LPARAM;

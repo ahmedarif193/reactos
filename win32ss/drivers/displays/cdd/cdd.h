@@ -26,7 +26,6 @@
 #include <windef.h>
 #include <wingdi.h>
 #include <winddi.h>
-#include <winioctl.h>
 #include <ntddvdeo.h>
 
 /* DWM composition contract (CDD_ESCAPE_*, IOCTL_VIDEO_DXGK_*): shared with

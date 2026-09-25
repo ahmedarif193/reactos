@@ -12,6 +12,22 @@
 #define NDEBUG
 #include <debug.h>
 
+typedef struct _KI_FXSAVE_HEADER
+{
+    USHORT ControlWord;
+    USHORT StatusWord;
+    USHORT TagWord;
+    USHORT ErrorOpcode;
+    ULONG ErrorOffset;
+    ULONG ErrorSelector;
+    ULONG DataOffset;
+    ULONG DataSelector;
+    ULONG MXCsr;
+    ULONG MXCsrMask;
+} KI_FXSAVE_HEADER, *PKI_FXSAVE_HEADER;
+
+C_ASSERT(sizeof(KI_FXSAVE_HEADER) == FIELD_OFFSET(FXSAVE_FORMAT, RegisterArea));
+
 typedef struct _KSWITCHFRAME
 {
     PVOID ExceptionList;
@@ -96,7 +112,7 @@ KiInitializeContextThread(IN PKTHREAD Thread,
                           IN PCONTEXT ContextPointer)
 {
     PFX_SAVE_AREA FxSaveArea;
-    PFXSAVE_FORMAT FxSaveFormat;
+    PKI_FXSAVE_HEADER FxSaveFormat;
     PKSTART_FRAME StartFrame;
     PKSWITCHFRAME CtxSwitchFrame;
     PKTRAP_FRAME TrapFrame;
@@ -128,7 +144,7 @@ KiInitializeContextThread(IN PKTHREAD Thread,
         if (KeI386FxsrPresent)
         {
             /* Get the FX Save Format Area */
-            FxSaveFormat = (PFXSAVE_FORMAT)Context->ExtendedRegisters;
+            FxSaveFormat = (PKI_FXSAVE_HEADER)Context->ExtendedRegisters;
 
             /* Set an initial state */
             FxSaveFormat->ControlWord = 0x27F;
