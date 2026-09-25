@@ -39,6 +39,8 @@ typedef struct ETH_HEADER {
 typedef struct LAN_ADAPTER {
     LIST_ENTRY ListEntry;                   /* Entry on list */
     KSPIN_LOCK Lock;                        /* Lock for this structure */
+    LIST_ENTRY ReconfigureQueue;            /* Status indications in arrival order */
+    BOOLEAN ReconfigureActive;              /* One worker drains this adapter's queue */
     EX_RUNDOWN_REF WorkRundown;             /* Protects queued adapter work */
     volatile LONG Closing;                  /* New callbacks must not queue work */
     BOOLEAN Listed;                         /* Adapter is on the global list */

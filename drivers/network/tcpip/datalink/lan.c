@@ -32,6 +32,7 @@ typedef struct _LAN_WQ_ITEM {
 NPAGED_LOOKASIDE_LIST LanWqLookaside;
 
 typedef struct _RECONFIGURE_CONTEXT {
+    LIST_ENTRY ListEntry;
     ULONG State;
     PLAN_ADAPTER Adapter;
     PIP_INTERFACE Interface;
@@ -849,16 +850,38 @@ BOOLEAN ReconfigureAdapter(PRECONFIGURE_CONTEXT Context)
 
 VOID ReconfigureAdapterWorker(PVOID Context)
 {
-    PRECONFIGURE_CONTEXT ReconfigureContext = Context;
+    PLAN_ADAPTER Adapter = Context;
+    PRECONFIGURE_CONTEXT ReconfigureContext;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    BOOLEAN Done;
 
-    /* Complete the reconfiguration asynchronously */
-    if (!ReconfigureContext->Adapter->Closing)
-        ReconfigureAdapter(ReconfigureContext);
+    for (;;)
+    {
+        KeAcquireSpinLock(&Adapter->Lock, &OldIrql);
+        Entry = RemoveHeadList(&Adapter->ReconfigureQueue);
+        KeReleaseSpinLock(&Adapter->Lock, OldIrql);
+        ReconfigureContext = CONTAINING_RECORD(Entry, RECONFIGURE_CONTEXT, ListEntry);
 
-    /* Free the context */
-    IPDereferenceInterface(ReconfigureContext->Interface);
-    ExReleaseRundownProtection(&ReconfigureContext->Adapter->WorkRundown);
-    ExFreePoolWithTag(ReconfigureContext, CONTEXT_TAG);
+        /* Apply queued indications in arrival order. */
+        if (!Adapter->Closing)
+            ReconfigureAdapter(ReconfigureContext);
+
+        KeAcquireSpinLock(&Adapter->Lock, &OldIrql);
+        Done = IsListEmpty(&Adapter->ReconfigureQueue);
+        if (Done)
+            Adapter->ReconfigureActive = FALSE;
+        KeReleaseSpinLock(&Adapter->Lock, OldIrql);
+
+        IPDereferenceInterface(ReconfigureContext->Interface);
+        ExFreePoolWithTag(ReconfigureContext, CONTEXT_TAG);
+        ExReleaseRundownProtection(&Adapter->WorkRundown);
+
+        /* Releasing the last work reference may let the adapter be torn down;
+         * only a still-queued context keeps it alive. */
+        if (Done)
+            return;
+    }
 }
 
 VOID NTAPI ProtocolStatus(
@@ -878,6 +901,7 @@ VOID NTAPI ProtocolStatus(
     PLAN_ADAPTER Adapter = BindingContext;
     PRECONFIGURE_CONTEXT Context;
     PIP_INTERFACE Interface;
+    KIRQL OldIrql;
 
     TI_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
 
@@ -893,17 +917,11 @@ VOID NTAPI ProtocolStatus(
         case NDIS_STATUS_MEDIA_CONNECT:
             TI_DbgPrint(MIN_TRACE, ("NDIS_STATUS_MEDIA_CONNECT\n"));
 
-            if (Adapter->State == LAN_STATE_STARTED)
-                goto Failure;
-
             GeneralStatus = LAN_STATE_STARTED;
             break;
 
         case NDIS_STATUS_MEDIA_DISCONNECT:
             TI_DbgPrint(MIN_TRACE, ("NDIS_STATUS_MEDIA_DISCONNECT\n"));
-
-            if (Adapter->State == LAN_STATE_STOPPED)
-                goto Failure;
 
             GeneralStatus = LAN_STATE_STOPPED;
             break;
@@ -939,13 +957,25 @@ VOID NTAPI ProtocolStatus(
     Context->Interface = Interface;
     Context->State = GeneralStatus;
 
-    /* Queue the work item */
-    if (!ChewCreate(ReconfigureAdapterWorker, Context))
+    /* Adapter->State may lag behind indications still queued, so do not
+     * deduplicate against it. One worker at a time drains the queue so that
+     * parallel executive workers cannot reorder an adapter's changes. */
+    KeAcquireSpinLock(&Adapter->Lock, &OldIrql);
+    InsertTailList(&Adapter->ReconfigureQueue, &Context->ListEntry);
+    if (!Adapter->ReconfigureActive)
     {
-        ExFreePoolWithTag(Context, CONTEXT_TAG);
-        IPDereferenceInterface(Interface);
-        goto Failure;
+        Adapter->ReconfigureActive = TRUE;
+        if (!ChewCreate(ReconfigureAdapterWorker, Adapter))
+        {
+            Adapter->ReconfigureActive = FALSE;
+            RemoveEntryList(&Context->ListEntry);
+            KeReleaseSpinLock(&Adapter->Lock, OldIrql);
+            ExFreePoolWithTag(Context, CONTEXT_TAG);
+            IPDereferenceInterface(Interface);
+            goto Failure;
+        }
     }
+    KeReleaseSpinLock(&Adapter->Lock, OldIrql);
 
     return;
 
@@ -1552,6 +1582,7 @@ NDIS_STATUS LANRegisterAdapter(
 
     /* Initialize protecting spin lock */
     KeInitializeSpinLock(&IF->Lock);
+    InitializeListHead(&IF->ReconfigureQueue);
 
     KeInitializeEvent(&IF->Event, SynchronizationEvent, FALSE);
 
