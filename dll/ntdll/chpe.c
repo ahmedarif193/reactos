@@ -1816,17 +1816,20 @@ ChpeDispatchException(PEXCEPTION_RECORD ExceptionRecord,
     PCHPE_V2_CPU_AREA_INFO CpuArea;
     NTSTATUS Status;
 
-    if (!ChpeProcessInitialized || !pChpeResetToConsistentState || !pChpeDispatchExceptionNative)
+    if (!pChpeResetToConsistentState || !pChpeDispatchExceptionNative)
         return FALSE;
 
     CpuArea = ChpepGetCurrentCpuArea();
-    if (!CpuArea || !CpuArea->EmulatorData[1] || !CpuArea->ContextAmd64)
+    if (!CpuArea)
         return FALSE;
-
-    pChpeResetToConsistentState(ExceptionRecord, CpuArea->ContextAmd64, Context);
 
     if (ExceptionRecord->ExceptionCode == STATUS_EMULATION_SYSCALL)
         return pChpeDispatchExceptionNative(ExceptionRecord, (PARM64_NT_CONTEXT)Context) == STATUS_SUCCESS;
+
+    pChpeResetToConsistentState(ExceptionRecord, CpuArea->ContextAmd64, Context);
+
+    if (!ChpeProcessInitialized || !CpuArea->EmulatorData[1] || !CpuArea->ContextAmd64)
+        return FALSE;
 
     if (RtlCallVectoredExceptionHandlers(ExceptionRecord, Context))
     {
