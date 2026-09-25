@@ -40,6 +40,8 @@
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x172, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_QUERYADAPTERINFO \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x104, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x182, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 C_ASSERT(DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE == (2 * sizeof(ULONG)));
 C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel) ==
@@ -728,6 +730,11 @@ WddmBridgeIsExpectedControlStatus(
     if (IoControlCode == IOCTL_D3DKMT_QUERYADAPTERINFO &&
         (Status == STATUS_INVALID_PARAMETER ||
          Status == STATUS_OBJECT_NAME_NOT_FOUND))
+        return TRUE;
+    /* MapGpuVirtualAddress retries a provisional address after a competing
+     * reservation.  The caller reports a conflict only if retries fail. */
+    if (IoControlCode == IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS &&
+        Status == STATUS_CONFLICTING_ADDRESSES)
         return TRUE;
     if (IoControlCode == IOCTL_D3DKMT_PUBLIC_OPERATION && (Status == STATUS_INVALID_HANDLE || Status == STATUS_INVALID_PARAMETER || Status == STATUS_GRAPHICS_VAIL_STATE_CHANGED))
         return TRUE;

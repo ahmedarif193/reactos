@@ -4460,6 +4460,7 @@ D3DKMTMapGpuVirtualAddress(
     D3DDDI_MAPGPUVIRTUALADDRESS Commit;
     ULONG_PTR Information = 0;
     NTSTATUS Status;
+    ULONG Attempts = 0;
 
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -4473,6 +4474,8 @@ D3DKMTMapGpuVirtualAddress(
     if (!NT_SUCCESS(Status))
         return Status;
 
+Retry:
+    Information = 0;
     Status = WddmBridgeSendIoctlWithInformation(IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -4485,9 +4488,13 @@ D3DKMTMapGpuVirtualAddress(
         return Status;
 
     Commit = Captured;
-    Commit.BaseAddress = Captured.VirtualAddress;
+    /* Preserve BaseAddress == 0. VirtualAddress is the provisional choice;
+     * dxgkrnl must reject a competing reservation instead of treating it as
+     * an explicit remap of another thread's allocation. */
     Information = 0;
     Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS, &Commit, sizeof(Commit), &Commit, sizeof(Commit), &Information);
+    if (Status == STATUS_CONFLICTING_ADDRESSES && Captured.BaseAddress == 0 && ++Attempts < 64)
+        goto Retry;
     if (NT_SUCCESS(Status) && (Information != sizeof(Commit) || Commit.VirtualAddress != Captured.VirtualAddress))
         Status = STATUS_INVALID_DEVICE_STATE;
     return Status;

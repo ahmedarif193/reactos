@@ -10765,7 +10765,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 else
                     Status = STATUS_SUCCESS;
                 if (NT_SUCCESS(Status))
-                    Status = PrepareOnly ? DxgkGpuVaPlanMap(Adapter, Device->ProcessRecord, Allocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, &pMap->VirtualAddress) : DxgkGpuVaMap(Adapter, Device->ProcessRecord, Allocation, pMap->hAllocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, pMap->DriverProtection, &pMap->VirtualAddress);
+                    Status = PrepareOnly ? DxgkGpuVaPlanMap(Adapter, Device->ProcessRecord, Allocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, &pMap->VirtualAddress) : DxgkGpuVaMap(Adapter, Device->ProcessRecord, Allocation, pMap->hAllocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, pMap->DriverProtection, pMap->BaseAddress == 0 ? pMap->VirtualAddress : 0, &pMap->VirtualAddress);
                 if (!PrepareOnly)
                 {
                     FlushStatus = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
@@ -12641,39 +12641,24 @@ static NTSTATUS
 DxgkpDirectMapGpuVirtualAddress(
     _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *Data)
 {
-    D3DDDI_MAPGPUVIRTUALADDRESS Commit;
     ULONG_PTR Information = 0;
     NTSTATUS Status;
 
     if (Data == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    /* This packet is kernel-resident: choose and commit the address under one
+     * GPUVA lock acquisition. No provisional user output needs publishing. */
+    Data->VirtualAddress = 0;
     Status = DxgkpInvokeDirectBufferedThunk(
-                 IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS,
+                 IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS,
                  Data,
                  sizeof(*Data),
                  sizeof(*Data),
                  &Information);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    if (Information != sizeof(*Data) || Data->VirtualAddress == 0)
-        return STATUS_INVALID_DEVICE_STATE;
-
-    Commit = *Data;
-    Commit.BaseAddress = Data->VirtualAddress;
-    Information = 0;
-    Status = DxgkpInvokeDirectBufferedThunk(
-                 IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS,
-                 &Commit,
-                 sizeof(Commit),
-                 sizeof(Commit),
-                 &Information);
     if (NT_SUCCESS(Status) &&
-        (Information != sizeof(Commit) ||
-         Commit.VirtualAddress != Data->VirtualAddress))
-    {
+        (Information != sizeof(*Data) || Data->VirtualAddress == 0))
         return STATUS_INVALID_DEVICE_STATE;
-    }
     return Status;
 }
 

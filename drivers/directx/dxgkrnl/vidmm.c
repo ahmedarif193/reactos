@@ -1568,7 +1568,7 @@ DxgkVidMmMapVirtualPresentAllocation(
 
     Protection.Value = 0;
     Protection.Write = Write;
-    Status = DxgkGpuVaMap(Device->Adapter, Device->ProcessRecord, Allocation, Binding->Handle, 0, 0, 0, 0, Allocation->Size, Protection, 0, OutAddress);
+    Status = DxgkGpuVaMap(Device->Adapter, Device->ProcessRecord, Allocation, Binding->Handle, 0, 0, 0, 0, Allocation->Size, Protection, 0, 0, OutAddress);
     if (!NT_SUCCESS(Status))
         return Status;
     /* Own the reservation as soon as Map succeeds, including when flushing
@@ -1662,7 +1662,7 @@ DxgkVidMmCreateVirtualDmaBufferBacking(
         Protection.Value = 0;
         Protection.Write = 1;
         Protection.Execute = 1;
-        Status = DxgkGpuVaMap(Adapter, Device->ProcessRecord, Backing->Allocation, Backing->Allocation->Handle, 0, 0, 0, 0, Backing->Allocation->Size, Protection, 0, &Backing->Address);
+        Status = DxgkGpuVaMap(Adapter, Device->ProcessRecord, Backing->Allocation, Backing->Allocation->Handle, 0, 0, 0, 0, Backing->Allocation->Size, Protection, 0, 0, &Backing->Address);
     }
     if (NT_SUCCESS(Status))
         Status = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
@@ -2138,6 +2138,7 @@ DxgkVidMmCreateContextAllocation(
                                          0,
                                          ((ULONGLONG)Size + PAGE_SIZE - 1) & ~(ULONGLONG)(PAGE_SIZE - 1),
                                          Protection,
+                                         0,
                                          0,
                                          &GpuVa);
                 if (NT_SUCCESS(MapStatus))
@@ -7128,6 +7129,7 @@ DxgkVidMmMapContextAllocation(
                           SizeInPages * PAGE_SIZE,
                           Protection,
                           DriverProtection,
+                          0,
                           OutAddress);
     if (NT_SUCCESS(Status))
     {
@@ -8409,6 +8411,7 @@ DxgkpCreateAllocationCaptured(
                                       0,
                                       Allocation->Size,
                                       Protection,
+                                      0,
                                       0,
                                       &GpuVirtualAddress);
             }
