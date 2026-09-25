@@ -8832,7 +8832,6 @@ KdbpPagerInternal(
     _In_ ULONG BufLength,
     _In_ BOOLEAN DoPage)
 {
-    static BOOLEAN TerminalInitialized = FALSE;
     CHAR c;
     ULONG ScanCode;
     PCHAR p;
@@ -8847,11 +8846,7 @@ KdbpPagerInternal(
         return;
 
     /* Initialize the terminal */
-    if (!TerminalInitialized)
-    {
-        TerminalInitialized = TRUE;
-        KdpInitTerminal();
-    }
+    KdpInitTerminal();
 
     /* Refresh terminal size each time when number of printed rows is 0 */
     if (KdbNumberOfRowsPrinted == 0)
