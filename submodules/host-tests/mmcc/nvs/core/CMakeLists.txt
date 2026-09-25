@@ -20,6 +20,7 @@ set(MM_CORE
     ${NVS_ROOT}/pagefile/pagefile.c
     ${NVS_ROOT}/fault/fault.c
     ${NVS_ROOT}/vm/vmops.c
+    ${NVS_ROOT}/vm/execwrite.c
     ${NVS_ROOT}/vm/large.c
     ${NVS_ROOT}/vm/awe.c
     ${NVS_ROOT}/vm/rotate.c

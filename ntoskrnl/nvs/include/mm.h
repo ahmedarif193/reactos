@@ -60,6 +60,7 @@ typedef struct _MI_ADDRESS_SPACE
     ULONG64 BottomUpVa;
     ULONG64 TopDownVa;
     PVOID CommitOwner;
+    BOOLEAN TrackExecutableWrites;
 
     volatile LONG64 CommittedPages;
     volatile LONG64 ResidentPages;
@@ -179,6 +180,7 @@ typedef struct _MI_VAD
     BOOLEAN CacheView;
     BOOLEAN WritableUser;
     BOOLEAN LockedPages;
+    BOOLEAN EcCode;
     volatile LONG PteTouched;
     struct _MI_SEGMENT *Segment;
     ULONG64 SegmentPageOffset;
@@ -316,6 +318,11 @@ ULONG MiViewPageProtection(_In_ PMI_ADDRESS_SPACE Space, _In_ PMI_VAD Vad, _In_ 
 
 NTSTATUS MiFault(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ MI_FAULT_ACCESS Access,
                  _In_ BOOLEAN UserMode);
+NTSTATUS MiSetExecutableWriteTracking(_Inout_ PMI_ADDRESS_SPACE Space, _In_ BOOLEAN Enable);
+NTSTATUS MiResetExecutableWriteTracking(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Base,
+                                        _In_ ULONG64 Size);
+VOID MiArmExecutableWriteRangeLocked(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Start,
+                                     _In_ ULONG64 End);
 VOID MiRepurposeStandbyPage(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);
 VOID MiDeletePte(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _Inout_ PMI_PTE Slot,
                  _In_ ULONG TableFrame, _In_ MI_PTE NewValue);
