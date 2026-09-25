@@ -8893,17 +8893,21 @@ DxgkpVidMmWaitForQueuedWorkBeforeDestroy(
 
     PAGED_CODE();
     DxgkGpuVaRecordEvent('W', (ULONGLONG)(ULONG_PTR)Device, 0, 0);
-    Status = DxgkDeviceWorkWaitForQueued(Device, DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS);
+    Status = Device->ProcessRecord != NULL
+                 ? DxgkProcessWaitForQueuedWork(Device->ProcessRecord,
+                                               DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS)
+                 : DxgkDeviceWorkWaitForQueued(Device,
+                                              DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS);
     DxgkGpuVaRecordEvent('w', (ULONGLONG)(ULONG_PTR)Device, (ULONGLONG)(ULONG)Status, 0);
     if (Status == STATUS_TIMEOUT)
     {
-        DPRINT1("%s: queued work on device %p did not finish within %u ms\n",
+        DPRINT1("%s: queued work sharing device %p's GPU address space did not finish within %u ms\n",
                 Operation, Device, DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS);
         Status = STATUS_IO_TIMEOUT;
     }
     else if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_REMOVED)
     {
-        DPRINT1("%s: queued-work wait on device %p failed 0x%08lx\n",
+        DPRINT1("%s: queued-work wait for device %p's GPU address space failed 0x%08lx\n",
                 Operation, Device, Status);
     }
     return Status;
@@ -8961,10 +8965,13 @@ DxgkDestroyAllocation(
      * D3DDDICB_DESTROYALLOCATION2FLAGS contract: the video memory manager
      * must assume that commands queued before this request may still access
      * the allocations and defer the destruction until that work finishes.
-     * The GPU page-table entries and the backing are released synchronously
-     * below, so the deferral is a wait here.  Only work already accepted on
-     * the owning device counts; a device whose work never completes is torn
-     * down by TDR, which terminates its ledger and ends the wait.
+     * The GPU page-table entries and the backing are released after this
+     * wait.  All devices of the process share its GPU address space: a
+     * command queued on another device may reference this allocation
+     * without an allocation list or a submitted fence yet.  Snapshot every
+     * device's accepted work and drain it; later work does not extend the
+     * wait, and a device whose work never completes is torn down by TDR,
+     * which terminates its ledger and ends the wait.
      */
     Status = DxgkpVidMmWaitForQueuedWorkBeforeDestroy(Device, "DxgkDestroyAllocation");
     if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_REMOVED)
@@ -9333,11 +9340,11 @@ DxgkpVidMmEvictOwned(
     /*
      * Eviction releases the allocation's placement (and its aperture mapping)
      * while the GPU virtual address stays mapped from the client's point of
-     * view.  Commands queued on the owning device before the eviction was
+     * view. Commands queued in the owning process before the eviction was
      * requested may still touch the allocation: D3DKMTEvict only forbids new
      * accesses, and a make-room victim was never told at all.  Same rule as
      * destruction (AssumeNotInUse == FALSE): let the work already accepted
-     * on the owner finish first.
+     * in that GPU address space finish first.
     */
     if (Allocation->Device != NULL)
     {

@@ -259,8 +259,8 @@ DxgkDeviceWorkWaitForQueued(
 /*
  * Wait for the DMA work already queued on every device of a process.
  *
- * Used before a process-wide mapping is torn down (D3DKMTFreeGpuVirtualAddress
- * clears page-table entries with the CPU).  The video memory manager's
+ * Used before allocation destruction invalidates process-wide GPU mappings
+ * or eviction releases their placement. The video memory manager's
  * destruction rule (D3DDDICB_DESTROYALLOCATION2FLAGS.AssumeNotInUse == FALSE)
  * assumes that commands queued before the request may still access what is
  * being taken away; the same holds for a GPU virtual address range, and on
@@ -277,12 +277,17 @@ DxgkProcessWaitForQueuedWork(
     _In_ PDXGKRNL_PROCESS ProcessRecord,
     _In_ ULONG TimeoutMs)
 {
-    PDXGKRNL_DEVICE StackDevices[DXGK_PROCESS_WAIT_STACK_DEVICES];
-    PDXGKRNL_DEVICE *Devices = StackDevices;
+    struct DXGK_PROCESS_WORK_SNAPSHOT
+    {
+        PDXGKRNL_DEVICE Device;
+        DXGK_DEVICE_WORK_SNAPSHOT Work;
+        NTSTATUS Status;
+    } StackDevices[DXGK_PROCESS_WAIT_STACK_DEVICES], *Devices = StackDevices;
     ULONG Capacity = DXGK_PROCESS_WAIT_STACK_DEVICES;
     ULONG Count = 0;
     ULONG Index;
     PLIST_ENTRY Entry;
+    LARGE_INTEGER Deadline;
     NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
@@ -319,17 +324,34 @@ DxgkProcessWaitForQueuedWork(
          * is terminal and nothing queued on it can still run. */
         if (Device == NULL || !DxgkReferenceDevice(Device))
             continue;
-        Devices[Count++] = Device;
+        Devices[Count].Device = Device;
+        Devices[Count].Status = DxgkDeviceWorkCoreCaptureSnapshot(
+            &Device->WorkLedger, &Devices[Count].Work);
+        Count++;
     }
     ExReleaseFastMutex(&ProcessRecord->ProcessMutex);
 
+    /* Snapshot every ledger before waiting. Capturing a later device only
+     * after an earlier one drains would include work submitted after this
+     * request, possibly waiting on the caller itself. Share one deadline
+     * across the process rather than multiplying it by the device count. */
+    KeQuerySystemTime(&Deadline);
+    Deadline.QuadPart += (LONGLONG)TimeoutMs * 10000LL;
     for (Index = 0; Index < Count; Index++)
     {
-        NTSTATUS WaitStatus = DxgkDeviceWorkWaitForQueued(Devices[Index], TimeoutMs);
+        NTSTATUS WaitStatus = Devices[Index].Status;
 
-        if (WaitStatus == STATUS_TIMEOUT || (!NT_SUCCESS(WaitStatus) && NT_SUCCESS(Status)))
+        if (NT_SUCCESS(WaitStatus))
+            WaitStatus = DxgkDeviceWorkCoreWaitForSnapshotUntil(
+                &Devices[Index].Device->WorkLedger, &Devices[Index].Work, &Deadline);
+
+        /* STATUS_TIMEOUT has success severity. A later terminal device
+         * must not overwrite it and authorize teardown of a live mapping. */
+        if (WaitStatus == STATUS_TIMEOUT ||
+            (Status != STATUS_TIMEOUT && !NT_SUCCESS(WaitStatus) &&
+             (NT_SUCCESS(Status) || Status == STATUS_DEVICE_REMOVED)))
             Status = WaitStatus;
-        DxgkDereferenceDevice(Devices[Index]);
+        DxgkDereferenceDevice(Devices[Index].Device);
     }
     if (Devices != StackDevices)
         ExFreePoolWithTag(Devices, TAG_DXGK_DEVICE);
