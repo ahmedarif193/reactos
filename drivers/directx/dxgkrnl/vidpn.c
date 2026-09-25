@@ -4624,11 +4624,12 @@ DxgkpDestroySharedPrimaryLocked(
     DxgkpEndSharedSurfaceMutationLocked(Adapter);
 }
 
-NTSTATUS
-DxgkCreateRedirectionSurface(
+static NTSTATUS
+DxgkpCreateGdiSurface(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_opt_ PDXGKRNL_DEVICE Device,
-    _Inout_ PDXGK_REDIRECTION_SURFACE_CREATE Create)
+    _Inout_ PDXGK_REDIRECTION_SURFACE_CREATE Create,
+    _In_ D3DKMDT_GDISURFACETYPE SurfaceType)
 {
     DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA QueryArgs;
     D3DKMDT_GDISURFACEDATA SurfaceData;
@@ -4679,7 +4680,7 @@ DxgkCreateRedirectionSurface(
     SurfaceData.Width = Create->Width;
     SurfaceData.Height = Create->Height;
     SurfaceData.Format = D3DDDIFMT_X8R8G8B8;
-    SurfaceData.Type = D3DKMDT_GDISURFACE_TEXTURE;
+    SurfaceData.Type = SurfaceType;
     SurfaceData.Pitch = Create->Width * sizeof(ULONG);
 
     RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
@@ -4812,7 +4813,8 @@ DxgkCreateRedirectionSurface(
     /* CDD paints its kernel-owned redirection bitmap through CpuAddress.  A
      * user DWM/ICD resource is instead a GPU texture opened by global share;
      * production KMDs legitimately describe that texture as non-CPU-visible. */
-    if (Device == NULL)
+    if (SurfaceType == D3DKMDT_GDISURFACE_TEXTURE_CPUVISIBLE ||
+        SurfaceType == D3DKMDT_GDISURFACE_STAGING_CPUVISIBLE)
     {
         Status = DxgkVidMmMapAllocationCpu(Allocation, &CpuAddress);
         if (!NT_SUCCESS(Status) || CpuAddress == NULL)
@@ -4852,6 +4854,22 @@ Cleanup:
     if (ResourcePrivateData != NULL)
         ExFreePoolWithTag(ResourcePrivateData, TAG_DXGK_DISPLAY);
     return Status;
+}
+
+NTSTATUS
+DxgkCreateRedirectionSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _Inout_ PDXGK_REDIRECTION_SURFACE_CREATE Create)
+{
+    /* CDD paints directly into its shared bitmap for the bitmap's lifetime.
+     * Ask the miniport for the OS CPU-visible texture contract; TEXTURE is
+     * explicitly GPU-only and cannot supply that permanent CPU mapping.
+     * User-owned redirection textures are rendered through the UMD. */
+    return DxgkpCreateGdiSurface(Adapter, Device, Create,
+                                Device == NULL ?
+                                    D3DKMDT_GDISURFACE_TEXTURE_CPUVISIBLE :
+                                    D3DKMDT_GDISURFACE_TEXTURE);
 }
 
 NTSTATUS
