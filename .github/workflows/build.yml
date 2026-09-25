@@ -9,35 +9,27 @@ jobs:
           - compiler: gcc
             arch: i386
             config: Debug
-            ntver: '0x600'
+            ntver: '0xA00'
           - compiler: gcc
             arch: i386
             config: Release
-            ntver: '0x600'
+            ntver: '0xA00'
           - compiler: gcc
             arch: amd64
             config: Debug
-            ntver: '0x600'
+            ntver: '0xA00'
           - compiler: gcc
             arch: amd64
             config: Release
-            ntver: '0x600'
-          - compiler: gcc
-            arch: amd64
-            config: Debug
-            ntver: '0x601'
-          - compiler: gcc
-            arch: amd64
-            config: Release
-            ntver: '0x601'
+            ntver: '0xA00'
           - compiler: clang
             arch: amd64
             config: Debug
-            ntver: '0x601'
+            ntver: '0xA00'
           - compiler: clang
             arch: amd64
             config: Release
-            ntver: '0x601'
+            ntver: '0xA00'
           - compiler: clang
             arch: arm64
             config: Debug
