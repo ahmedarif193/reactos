@@ -100,9 +100,8 @@ DxgkpQueryBusRelations(
     _Out_ PDEVICE_RELATIONS *Relations);
 
 NTSTATUS
-DxgkPnpQueryInitialDisplayConnection(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _Out_ PBOOLEAN Connected);
+DxgkPnpCacheInitialChildRelations(
+    _In_ PDXGKRNL_ADAPTER Adapter);
 
 /*
  * DxgkpPollDisplayChildrenRequest

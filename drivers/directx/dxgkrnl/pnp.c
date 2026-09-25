@@ -846,52 +846,48 @@ DxgkpQueryChildConnectionForEnumeration(
     return STATUS_SUCCESS;
 }
 
-/* Check the initial connector state before the automatic BasicDisplay
- * handoff. This does not publish PDOs or a new enumeration epoch: normal
- * BusRelations still owns those, after adapter start has completed. */
+/* Query the fixed connector descriptors inside StartDevice's Level Three
+ * boundary, before VidMm/paging/desktop allocations exist. BusRelations
+ * publishes the PDOs later. Repeating this query after the desktop has been
+ * created would require evicting its live primary and shadow allocations. */
 NTSTATUS
-DxgkPnpQueryInitialDisplayConnection(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _Out_ PBOOLEAN Connected)
+DxgkPnpCacheInitialChildRelations(
+    _In_ PDXGKRNL_ADAPTER Adapter)
 {
     PDXGK_CHILD_DESCRIPTOR Children;
     ULONG ChildrenSize;
-    ULONG Index;
+    KIRQL OldIrql;
     NTSTATUS Status;
 
     PAGED_CODE();
-    *Connected = FALSE;
+    ASSERT(Adapter->State == DxgkAdapterStateStarting);
+    ASSERT(Adapter->KmdExclusiveOwnerThread == PsGetCurrentThread());
+    ASSERT(Adapter->InterruptCallbacksBlocked != 0);
     if (Adapter->NumberOfChildren == 0)
         return STATUS_SUCCESS;
+    if (DXGK_CB(Adapter, DxgkDdiQueryChildRelations) == NULL)
+        return STATUS_NOT_SUPPORTED;
     if (Adapter->NumberOfChildren >= MAXULONG / sizeof(*Children))
         return STATUS_INTEGER_OVERFLOW;
 
     ChildrenSize = (Adapter->NumberOfChildren + 1) * sizeof(*Children);
-    Children = ExAllocatePoolWithTag(PagedPool, ChildrenSize, TAG_DXGK_RESOURCES);
+    Children = ExAllocatePoolWithTag(NonPagedPool, ChildrenSize, TAG_DXGK_RESOURCES);
     if (Children == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
     RtlZeroMemory(Children, ChildrenSize);
-    Status = DxgkpCallQueryChildRelationsLevel3(Adapter, Children,
-                                               ChildrenSize, TRUE);
+    Status = DXGK_CB(Adapter, DxgkDdiQueryChildRelations)(
+                 Adapter->MiniportDeviceContext, Children, ChildrenSize);
     if (NT_SUCCESS(Status))
     {
-        for (Index = 0; Index < Adapter->NumberOfChildren; Index++)
-        {
-            BOOLEAN Known;
-            BOOLEAN ChildConnected;
-
-            Status = DxgkpQueryChildConnectionForEnumeration(Adapter,
-                         &Children[Index], &Known, &ChildConnected);
-            if (!NT_SUCCESS(Status))
-                break;
-            if (Known && ChildConnected)
-            {
-                *Connected = TRUE;
-                break;
-            }
-        }
+        KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+        ASSERT(Adapter->ChildEnumerationEpoch != 0);
+        ASSERT(Adapter->ChildDescriptors == NULL);
+        Adapter->ChildDescriptors = Children;
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        Children = NULL;
     }
-    ExFreePoolWithTag(Children, TAG_DXGK_RESOURCES);
+    if (Children != NULL)
+        ExFreePoolWithTag(Children, TAG_DXGK_RESOURCES);
     return Status;
 }
 
@@ -1017,7 +1013,7 @@ DxgkpQueryBusRelations(
      * ChildListLock also protects their lifetime and publication below. */
     KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
     if (Adapter->ChildEnumerationEpoch == ExpectedEpoch &&
-        Adapter->ChildRelationsEnumerated && Adapter->ChildDescriptors != NULL)
+        Adapter->ChildDescriptors != NULL)
     {
         RtlCopyMemory(ChildRelations, Adapter->ChildDescriptors, ChildRelationsSize);
         HaveDescriptors = TRUE;

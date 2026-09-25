@@ -509,28 +509,17 @@ DxgkpShouldRegisterDisplayBridge(
     if (TakeOverFromFallback)
     {
         DXGK_DISPLAY_INFORMATION DisplayInformation;
-        BOOLEAN Connected;
         NTSTATUS OwnershipStatus;
 
-        /* A successful StartDevice can describe a GPU with no display
-         * attached. Keep the working fallback until the claimant has an
-         * output to drive; stopping it here otherwise leaves win32k with
-         * only a zero-path VidPN and causes VIDEO_DRIVER_INIT_FAILURE. */
-        OwnershipStatus = DxgkPnpQueryInitialDisplayConnection(Claimant,
-                                                               &Connected);
-        if (!NT_SUCCESS(OwnershipStatus) || !Connected)
-        {
-            DXGKRNL_INFO("DISPLAY_BRIDGE: adapter %p has no confirmed output "
-                         "(query=0x%08lX); BasicDisplay retains the desktop\n",
-                         Claimant, OwnershipStatus);
-            return FALSE;
-        }
-
+        /* Display ownership follows the working adapter, not HDMI presence.
+         * The bridge establishes a detached desktop when no target is lit.
+         * Keep the fallback transaction armed until its mode and surfaces
+         * have been validated by DxgkDisplayRegister. */
         RtlZeroMemory(&DisplayInformation, sizeof(DisplayInformation));
         OwnershipStatus = DxgkpAcquirePostDisplayOwnership((HANDLE)Claimant,
                                                            &DisplayInformation,
                                                            NULL);
-        DXGKRNL_ERR("DISPLAY_BRIDGE: adapter %p claiming POST ownership from the "
+        DXGKRNL_INFO("DISPLAY_BRIDGE: adapter %p claiming POST ownership from the "
                     "basic-display fallback -> 0x%08lX (%ux%u)\n",
                     Claimant,
                     OwnershipStatus,
@@ -642,6 +631,8 @@ DxgkpCompletePostDisplayHandoff(
 
     if (FallbackAdapter != NULL)
         DxgkpSetBasicDisplayUiSuppressed(FallbackAdapter, SuppressFallbackUi);
+    if (NT_SUCCESS(StartStatus) && SuppressFallbackUi)
+        DXGKRNL_INFO("DISPLAY_BRIDGE: BasicDisplay retired; adapter %p owns the desktop\n", Claimant);
 
     KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
     if (FallbackRemoveRundownHeld && FallbackAdapter != NULL)
@@ -12068,6 +12059,8 @@ DxgkpBeginAdapterStart(
         *Generation = NextGeneration;
     }
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    if (NT_SUCCESS(Status))
+        DxgkPnpBeginChildEnumerationEpoch(Adapter);
     return Status;
 }
 
@@ -12089,9 +12082,6 @@ DxgkpCompleteAdapterStart(
      */
     if (!NT_SUCCESS(Status) && Restartable)
         DxgkpClearPostDisplayOwner(Adapter);
-    if (NT_SUCCESS(Status))
-        DxgkPnpBeginChildEnumerationEpoch(Adapter);
-
     (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
     ASSERT(Adapter->AdapterStartGeneration == Generation);
     ASSERT(Adapter->State == DxgkAdapterStateStarting);
@@ -12135,6 +12125,10 @@ DxgkpDestroyAdapterVidPn(
     (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
     VidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
     Adapter->VidPn = NULL;
+    Adapter->VidPnCommitted = FALSE;
+    Adapter->HeadlessDesktop = FALSE;
+    Adapter->CommittedWidth = 0;
+    Adapter->CommittedHeight = 0;
     KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
     if (VidPn != NULL)
         DxgkVidPnDestroy(VidPn);
@@ -12923,10 +12917,20 @@ DxgkAdapterStart(
 
     Progress.MiniportStarted = TRUE;
 
+    /* QueryChildRelations requires Level Three, including an empty video
+     * memory working set. Capture the potential connectors now, before the
+     * paging context and desktop allocate persistent GPU resources. */
+    DxgkBlockInterruptCallbacks(Adapter);
+    Status = DxgkPnpCacheInitialChildRelations(Adapter);
     DxgkpEnablePeriodicInterruptHandoff(Adapter);
     DxgkEndKmdExclusive(Adapter, TRUE);
     DxgkUnblockInterruptCallbacks(Adapter);
     DxgkReleaseLevel3Transition(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkAdapterStart: initial child enumeration failed 0x%08lX\n", Status);
+        goto StartRollback;
+    }
 
     DXGKRNL_TRACE("DxgkAdapterStart: started — Sources=%lu Children=%lu\n",
                   Adapter->NumberOfVideoPresentSources,

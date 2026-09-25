@@ -186,7 +186,8 @@ DxgkpDisplayPublishInitialMode(
                       L"DefaultSettings.VRefresh"};
     ULONG Values[RTL_NUMBER_OF(Names)];
 
-    if (g_DisplayAdapter != Adapter || !g_DisplayInitialModePending || !Adapter->VidPnCommitted)
+    if (g_DisplayAdapter != Adapter || !g_DisplayInitialModePending ||
+        (!Adapter->VidPnCommitted && !Adapter->HeadlessDesktop))
         return;
     RtlZeroMemory(&Current, sizeof(Current));
     (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
@@ -463,6 +464,51 @@ DxgkpAskMiniportIsVidPnSupported(
     return STATUS_SUCCESS;
 }
 
+/* A disconnected full adapter still owns the desktop source used by GDI,
+ * windowed rendering and remote desktop. This mode has no target timings and
+ * must never be submitted as a fabricated connected path to the miniport. */
+static NTSTATUS
+DxgkpPrepareHeadlessDesktop(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGKP_VIDPN VidPn,
+    _Out_ PDXGKP_DISPLAY_COMMIT_RESULT Result)
+{
+    PDXGKP_VIDPN_SOURCE_MODESET Sources;
+    ULONG Width, Height;
+    SIZE_T Index;
+
+    Width = Adapter->CommittedWidth ? Adapter->CommittedWidth : Adapter->PostDisplayWidth;
+    Height = Adapter->CommittedHeight ? Adapter->CommittedHeight : Adapter->PostDisplayHeight;
+    if (!Width || !Height)
+    {
+        Width = 1024;
+        Height = 768;
+    }
+    if (!DxgkVidPnEnsurePinnedSourceMode(VidPn, 0, Width, Height))
+        return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+    Sources = VidPn->SourceModeSets[0];
+    for (Index = 0; Index < Sources->NumModes; ++Index)
+    {
+        const D3DKMDT_VIDPN_SOURCE_MODE *Mode = &Sources->Modes[Index];
+
+        if (Mode->Id != Sources->PinnedModeId)
+            continue;
+        Width = Mode->Format.Graphics.PrimSurfSize.cx;
+        Height = Mode->Format.Graphics.PrimSurfSize.cy;
+        if (Mode->Type != D3DKMDT_RMT_GRAPHICS || !Width || !Height ||
+            Width > MAXLONG / sizeof(ULONG) || Height > MAXULONG / (Width * sizeof(ULONG)))
+        {
+            return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+        }
+        Result->CommittedWidth = Width;
+        Result->CommittedHeight = Height;
+        Result->VidPnCommitted = FALSE;
+        Result->HeadlessDesktop = TRUE;
+        return STATUS_SUCCESS;
+    }
+    return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+}
+
 
 NTSTATUS
 DxgkpDisplayCommitVidPnCandidateWithTarget(
@@ -561,6 +607,8 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
      */
     if (TopologyEmpty && !Adapter->VidPnCommitted && !ForceDodPresentOnlyPath)
     {
+        if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+            return DxgkpPrepareHeadlessDesktop(Adapter, VidPn, Result);
         DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: empty topology, nothing committed yet\n");
         Result->VidPnCommitted = FALSE;
         return STATUS_SUCCESS;
@@ -1354,6 +1402,12 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
     Result->CommittedHeight = NewCommittedHeight;
     Result->VidPnCommitted = TRUE;
 
+    if (TopologyEmpty && !Adapter->MiniportContext->IsDisplayOnlyDriver)
+    {
+        Status = DxgkpPrepareHeadlessDesktop(Adapter, VidPn, Result);
+        goto Cleanup;
+    }
+
     DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: mode-set complete (%ux%u)\n", Result->CommittedWidth, Result->CommittedHeight);
     Status = STATUS_SUCCESS;
 
@@ -1404,6 +1458,7 @@ DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(
             Adapter->CommittedWidth = Result.CommittedWidth;
             Adapter->CommittedHeight = Result.CommittedHeight;
             Adapter->VidPnCommitted = Result.VidPnCommitted;
+            Adapter->HeadlessDesktop = Result.HeadlessDesktop;
         }
         else
             Status = STATUS_RETRY;
@@ -1691,7 +1746,8 @@ DxgkpPresentSourceRects(
         SharedSurface.ShadowFbSize = SourceSize > ~(ULONG)0 ?
                                      ~(ULONG)0 : (ULONG)SourceSize;
     }
-    if (SharedSurface.ShadowFb == NULL || !SharedSurface.VidPnCommitted)
+    if (SharedSurface.ShadowFb == NULL ||
+        (!SharedSurface.VidPnCommitted && !SharedSurface.HeadlessDesktop))
     {
         Status = STATUS_UNSUCCESSFUL;
         goto Cleanup;
@@ -3552,8 +3608,24 @@ DxgkDisplayRegister(
                 goto Cleanup;
             }
         }
+
+        /* Do not retire BasicDisplay and discover the missing primary only
+         * when win32k enables its first PDEV. A failure here still takes the
+         * adapter-start rollback path and restores the retained fallback. */
+        if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+        {
+            Status = DxgkpEnsureSharedDisplaySurfaces(Adapter, 0);
+            if (!NT_SUCCESS(Status))
+            {
+                DXGKRNL_ERR("DxgkDisplayRegister: desktop surfaces failed 0x%08lX\n", Status);
+                goto Cleanup;
+            }
+        }
     }
 
+    DXGKRNL_INFO("DISPLAY_BRIDGE: adapter %p desktop ready %lux%lu (%s)\n",
+                 Adapter, Adapter->CommittedWidth, Adapter->CommittedHeight,
+                 Adapter->HeadlessDesktop ? "detached" : "scanout");
     Status = STATUS_SUCCESS;
 
 Cleanup:

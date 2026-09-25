@@ -570,6 +570,15 @@ DxgkVidPnAcquireScanoutLease(
     else
         Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
     ExReleaseFastMutex(&g_SourceOwnerMutex);
+    if (*Program)
+    {
+        /* Rendering/copies still retire normally for a detached desktop;
+         * there is no target on which to program a primary address. */
+        (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+        if (Adapter->HeadlessDesktop)
+            *Program = FALSE;
+        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    }
     if (!*Program)
     {
         ExReleaseResourceLite(&g_SourceProgrammingResource);
@@ -2948,6 +2957,7 @@ DxgkpVidPnRebuildForHotPlugGeneration(
     Adapter->CommittedWidth = CommitResult.CommittedWidth;
     Adapter->CommittedHeight = CommitResult.CommittedHeight;
     Adapter->VidPnCommitted = CommitResult.VidPnCommitted;
+    Adapter->HeadlessDesktop = CommitResult.HeadlessDesktop;
     if (Snapshot.Connected && Snapshot.EdidValid && MatchingChild != NULL)
     {
         RtlCopyMemory(MatchingChild->Edid, Snapshot.Edid, sizeof(MatchingChild->Edid));
@@ -2958,7 +2968,8 @@ DxgkpVidPnRebuildForHotPlugGeneration(
     KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
     DxgkpDisplayPublishInitialMode(Adapter);
     DxgkVidPnDestroyDisplayModeCache(Adapter);
-    if (CommitResult.CommittedWidth != OldCommittedWidth || CommitResult.CommittedHeight != OldCommittedHeight || !Snapshot.Connected)
+    if (CommitResult.CommittedWidth != OldCommittedWidth || CommitResult.CommittedHeight != OldCommittedHeight ||
+        (!Snapshot.Connected && !CommitResult.HeadlessDesktop))
         DxgkpDestroySharedPrimaryLocked(Adapter);
     /* After the new VidPn is published and the VidPn mutex is dropped, but
      * while the KMD transaction still holds the miniport. */
@@ -5996,7 +6007,7 @@ DxgkVidPnQueryCurrentDisplayMode(
                                 FALSE,
                                 NULL);
     VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
-    if (!Adapter->VidPnCommitted ||
+    if ((!Adapter->VidPnCommitted && !Adapter->HeadlessDesktop) ||
         Adapter->CommittedWidth == 0 ||
         Adapter->CommittedHeight == 0 ||
         VidPn == NULL ||
@@ -6014,7 +6025,7 @@ DxgkVidPnQueryCurrentDisplayMode(
             break;
         }
     }
-    if (Path == NULL)
+    if (Path == NULL && !(Adapter->HeadlessDesktop && VidPn->NumPaths == 0 && SourceId == 0))
         goto Cleanup;
 
     SourceSet = VidPn->SourceModeSets[SourceId];
@@ -6042,7 +6053,7 @@ DxgkVidPnQueryCurrentDisplayMode(
     if (SourceMode->Format.Graphics.PixelFormat != D3DDDIFMT_UNKNOWN)
         Mode.Format = SourceMode->Format.Graphics.PixelFormat;
 
-    if (DxgkVidPnTargetIndexFromId(VidPn, Path->VidPnTargetId) != MAXULONG)
+    if (Path != NULL && DxgkVidPnTargetIndexFromId(VidPn, Path->VidPnTargetId) != MAXULONG)
         TargetSet = (DxgkVidPnTargetIndexFromId(VidPn, Path->VidPnTargetId) != MAXULONG)
                         ? VidPn->TargetModeSets[DxgkVidPnTargetIndexFromId(VidPn, Path->VidPnTargetId)] : NULL;
     if (TargetSet != NULL && TargetSet->PinnedModeId != (UINT)-1)
@@ -6067,7 +6078,7 @@ DxgkVidPnQueryCurrentDisplayMode(
         Mode.ScanLineOrdering = TargetMode->VideoSignalInfo.ScanLineOrdering;
     }
 
-    switch (Path->ContentTransformation.Rotation)
+    switch (Path != NULL ? Path->ContentTransformation.Rotation : D3DKMDT_VPPR_IDENTITY)
     {
         case D3DKMDT_VPPR_ROTATE90:
             Mode.DisplayOrientation = D3DDDI_ROTATION_90;
@@ -6272,6 +6283,38 @@ DxgkpEnsureDisplayModeCacheLocked(
     if (!DxgkVidPnReference((D3DKMDT_HVIDPN)Current))
         Current = NULL;
     KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    if (Current != NULL && Current->NumPaths == 0 && Adapter->HeadlessDesktop)
+    {
+        D3DKMDT_VIDEO_SIGNAL_INFO Timing;
+
+        Sources = Current->SourceModeSets[0];
+        if (Sources != NULL)
+        {
+            for (SourceIndex = 0; SourceIndex < Sources->NumModes; ++SourceIndex)
+                if (Sources->Modes[SourceIndex].Id == Sources->PinnedModeId)
+                    PinnedSource = &Sources->Modes[SourceIndex];
+        }
+        if (PinnedSource == NULL)
+        {
+            Status = STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+            goto Cleanup;
+        }
+        Cache = ExAllocatePoolZero(PagedPool, sizeof(*Cache), TAG_DXGK_MODESET);
+        if (Cache == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        Cache->HotPlugGeneration = Generation;
+        Cache->SourceId = 0;
+        Cache->TargetId = D3DDDI_ID_UNINITIALIZED;
+        RtlZeroMemory(&Timing, sizeof(Timing));
+        Timing.ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
+        Status = DxgkpAppendDisplayMode(Cache, PinnedSource, &Timing);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        goto PublishCache;
+    }
     if (Current == NULL || Current->NumPaths == 0)
     {
         Status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
@@ -6368,6 +6411,7 @@ DxgkpEnsureDisplayModeCacheLocked(
             }
         }
     }
+PublishCache:
     if (Cache->Count == 0)
     {
         Status = STATUS_GRAPHICS_NO_AVAILABLE_VIDPN_TARGET;
@@ -6605,7 +6649,8 @@ DxgkVidPnSetVideoMode(
     (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
     if (ModeIndex == 0)
     {
-        Status = Adapter->VidPnCommitted ? STATUS_SUCCESS : DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(Adapter);
+        Status = (Adapter->VidPnCommitted || Adapter->HeadlessDesktop) ?
+                     STATUS_SUCCESS : DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(Adapter);
         goto Cleanup;
     }
     Status = DxgkpEnsureDisplayModeCacheLocked(Adapter);
@@ -6701,6 +6746,7 @@ DxgkVidPnSetVideoMode(
             Adapter->CommittedWidth = Result.CommittedWidth;
             Adapter->CommittedHeight = Result.CommittedHeight;
             Adapter->VidPnCommitted = TRUE;
+            Adapter->HeadlessDesktop = FALSE;
             Candidate = NULL;
         }
         else
