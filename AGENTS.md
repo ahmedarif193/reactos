@@ -9,3 +9,8 @@
 - Keep common code architecture neutral and suitable for existing ports and the upcoming RISC-V64 port.
 - Do not use common code for experiments or application-specific workarounds. Add special cases only when their necessity is demonstrated, and put architecture-specific behavior in the architecture layer where possible.
 - Prefer fixes to the underlying behavior. Keep doubtful or incomplete changes unstaged, and remove temporary diagnostics before committing.
+
+# Commit messages
+
+- Use a `[COMPONENT]` subject and a body with `Problem:`, `Why:`, and `How:` paragraphs separated by blank lines.
+- Include related AGENTS.md updates in a relevant change commit; do not create a separate commit just for those instructions.
