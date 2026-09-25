@@ -392,7 +392,7 @@ static ULONGLONG GenAllocFillFree(WORKER *Worker, ULONG Iterations)
 
 static ULONGLONG GenFileSeqWrite(WORKER *Worker, ULONG Iterations)
 {
-    char Path[MAX_PATH];
+    char Path[MAX_PATH + 32];
     ULONGLONG Done = 0;
     ULONG i;
 
@@ -550,7 +550,7 @@ static ULONGLONG GenMapRandomWrite(WORKER *Worker, ULONG Iterations)
 
 static ULONGLONG GenSmallFiles(WORKER *Worker, ULONG Iterations)
 {
-    char Path[MAX_PATH];
+    char Path[MAX_PATH + 32];
     ULONGLONG Files = 0;
     ULONG i, j;
 
@@ -593,7 +593,7 @@ static ULONGLONG GenSmallFiles(WORKER *Worker, ULONG Iterations)
 
 static ULONGLONG GenFileCopy(WORKER *Worker, ULONG Iterations)
 {
-    char Path[MAX_PATH];
+    char Path[MAX_PATH + 32];
     ULONGLONG Done = 0;
     ULONG i;
 
@@ -898,7 +898,7 @@ static BOOL GeneralOpen(WORKER *Worker, const char *TempPath)
 
 static void GeneralClose(WORKER *Worker)
 {
-    char Path[MAX_PATH];
+    char Path[MAX_PATH + 32];
     ULONG j;
 
     if (Worker->BigFile != NULL)
@@ -995,8 +995,8 @@ static BOOL GenCheckFile(WORKER *Worker, const char *Path, ULONG Blocks, BOOL Di
 
 static BOOL GenVerifyRename(WORKER *Worker)
 {
-    char OldPath[MAX_PATH];
-    char NewPath[MAX_PATH];
+    char OldPath[MAX_PATH + 32];
+    char NewPath[MAX_PATH + 32];
     HANDLE First = INVALID_HANDLE_VALUE;
     HANDLE Second = INVALID_HANDLE_VALUE;
     HANDLE Renamed = INVALID_HANDLE_VALUE;
@@ -1071,7 +1071,7 @@ Done:
 
 static BOOL GeneralVerify(WORKER *Worker)
 {
-    char Path[MAX_PATH];
+    char Path[MAX_PATH + 32];
     ULONG Blocks = 256;
     ULONG b;
     HANDLE File;
