@@ -2453,6 +2453,35 @@ DxgkpExecuteCpuPresent(
     return STATUS_SUCCESS;
 }
 
+static VOID
+DxgkpCapturePresentWrites(_Inout_ PDXGKRNL_PRESENT_ENTRY Entry)
+{
+    if (Entry->WriteDependenciesCaptured)
+        return;
+    if (Entry->SourceAllocation != NULL)
+        Entry->SourceWriteSequence = DxgkVidMmSnapshotTrackedSubmissions(Entry->SourceAllocation);
+    if (Entry->DestinationAllocation != NULL)
+        Entry->DestinationWriteSequence = DxgkVidMmSnapshotTrackedSubmissions(Entry->DestinationAllocation);
+    Entry->WriteDependenciesCaptured = TRUE;
+}
+
+static NTSTATUS
+DxgkpWaitForPresentWrites(
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry,
+    _In_ BOOLEAN DoNotWait)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    DxgkpCapturePresentWrites(Entry);
+    if (Entry->SourceAllocation != NULL)
+        Status = DxgkVidMmWaitForSubmissionSequence(Entry->SourceAllocation,
+                     Entry->SourceWriteSequence, DoNotWait);
+    if (NT_SUCCESS(Status) && Entry->DestinationAllocation != NULL)
+        Status = DxgkVidMmWaitForSubmissionSequence(Entry->DestinationAllocation,
+                     Entry->DestinationWriteSequence, DoNotWait);
+    return Status;
+}
+
 /* ========================================================================
  * DxgkpExecuteFullPresent  (private)
  *
@@ -2524,6 +2553,9 @@ DxgkpExecuteFullPresentMeasured(
         Status = STATUS_DEVICE_REMOVED;
         goto PresentCleanup;
     }
+    Status = DxgkpWaitForPresentWrites(Entry, FALSE);
+    if (!NT_SUCCESS(Status))
+        goto PresentCleanup;
     /*
      * A miniport that implements DxgkDdiPresent copies on the GPU; only a
      * display-only miniport, which has no present DDI at all, needs the port
@@ -3516,6 +3548,10 @@ DxgkpExecuteMmioFlip(
     if (PresentContext == NULL || (Entry->Context == NULL && Adapter->SchedulingCaps.MultiEngineAware))
         return STATUS_INVALID_HANDLE;
 
+    Status = DxgkpWaitForPresentWrites(Entry, FALSE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     KeWaitForSingleObject(&Queue->MmioPresentMutex, Executive, KernelMode, FALSE, NULL);
     Status = Queue->MmioFailureStatus;
     if (!NT_SUCCESS(Status))
@@ -3822,6 +3858,17 @@ DxgkpQueuePresent(
     }
 
     Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[Entry->VidPnSourceId];
+    DxgkpCapturePresentWrites(Entry);
+    if (Entry->DoNotWait)
+    {
+        Status = DxgkpWaitForPresentWrites(Entry, TRUE);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkpReleasePresentQueues(Adapter);
+            DxgkpReleasePresentEntry(Entry);
+            return Status == STATUS_GRAPHICS_ALLOCATION_BUSY ? STATUS_DEVICE_BUSY : Status;
+        }
+    }
     Status = DxgkDeviceWorkCreate(Entry->Device, &DeviceWork);
     if (!NT_SUCCESS(Status))
     {

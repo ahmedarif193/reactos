@@ -51,6 +51,8 @@ C_ASSERT(FIELD_OFFSET(RXGK_CREATECONTEXTVIRTUAL_PACKET, PrivateDriverDataOffset)
 C_ASSERT(FIELD_OFFSET(RXGK_CREATECONTEXTVIRTUAL_PACKET, ContextHandle) == 36);
 C_ASSERT(FIELD_OFFSET(RXGK_CREATECONTEXTVIRTUAL_PACKET, Reserved) == 40);
 C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET) == RXGK_SUBMITCOMMAND_PACKET_V1_SIZE);
+C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET_V2) == RXGK_SUBMITCOMMAND_PACKET_V2_SIZE);
+C_ASSERT(RXGK_SUBMITCOMMAND_MAX_PRIMARIES == D3DDDI_MAX_WRITTEN_PRIMARIES);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Size) == 0);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Version) == 4);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Commands) == 8);
@@ -4898,6 +4900,7 @@ D3DKMTSubmitCommand(
     D3DKMT_SUBMITCOMMAND Captured;
     PRXGK_SUBMITCOMMAND_PACKET Packet;
     ULONG FlagsValue;
+    ULONG HeaderSize;
     SIZE_T PacketSize;
     NTSTATUS Status;
 
@@ -4921,13 +4924,12 @@ D3DKMTSubmitCommand(
 
     /*
      * As with CreateContextVirtual, NullRendering is not required here.  The
-     * bridge polices what it can see -- one context, no primaries, no present
+     * bridge polices what it can see -- one context, captured primaries, no present
      * history, a known flag set -- and leaves "may this context actually
      * execute?" to dxgkrnl, which answers it from the context's own creation
      * flags and the process's page tables.
      */
     if (Captured.BroadcastContextCount != 1 ||
-        Captured.NumPrimaries != 0 ||
         Captured.NumHistoryBuffers != 0 ||
         Captured.PresentHistoryToken != 0 ||
         (FlagsValue & ~RXGK_SUBMITCOMMAND_SUPPORTED_FLAGS) != 0)
@@ -4946,7 +4948,9 @@ D3DKMTSubmitCommand(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = WddmBridgeSizeAdd(sizeof(*Packet), Captured.PrivateDriverDataSize, &PacketSize);
+    HeaderSize = Captured.NumPrimaries != 0
+                     ? sizeof(RXGK_SUBMITCOMMAND_PACKET_V2) : sizeof(*Packet);
+    Status = WddmBridgeSizeAdd(HeaderSize, Captured.PrivateDriverDataSize, &PacketSize);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -4963,9 +4967,18 @@ D3DKMTSubmitCommand(
     Packet->PresentHistoryToken = Captured.PresentHistoryToken;
     Packet->ContextHandle = Captured.BroadcastContext[0];
     Packet->PrivateDriverDataSize = Captured.PrivateDriverDataSize;
+    if (Captured.NumPrimaries != 0)
+    {
+        PRXGK_SUBMITCOMMAND_PACKET_V2 PacketV2 = (PVOID)Packet;
+
+        Packet->Version = RXGK_SUBMITCOMMAND_PACKET_VERSION_2;
+        PacketV2->NumPrimaries = Captured.NumPrimaries;
+        RtlCopyMemory(PacketV2->WrittenPrimaries, Captured.WrittenPrimaries,
+                      Captured.NumPrimaries * sizeof(Captured.WrittenPrimaries[0]));
+    }
     if (Captured.PrivateDriverDataSize != 0)
     {
-        Packet->PrivateDriverDataOffset = sizeof(*Packet);
+        Packet->PrivateDriverDataOffset = HeaderSize;
         Status = WddmBridgeSafeCopyFrom((PUCHAR)Packet + Packet->PrivateDriverDataOffset, Captured.pPrivateDriverData, Captured.PrivateDriverDataSize);
         if (!NT_SUCCESS(Status))
             goto Cleanup;

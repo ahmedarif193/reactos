@@ -39,6 +39,8 @@
 
 C_ASSERT(sizeof(RXGK_CREATECONTEXTVIRTUAL_PACKET) == RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET) == RXGK_SUBMITCOMMAND_PACKET_V1_SIZE);
+C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET_V2) == RXGK_SUBMITCOMMAND_PACKET_V2_SIZE);
+C_ASSERT(RXGK_SUBMITCOMMAND_MAX_PRIMARIES == D3DDDI_MAX_WRITTEN_PRIMARIES);
 C_ASSERT(sizeof(RXGK_PUBLIC_OPERATION_PACKET) == RXGK_PUBLIC_OPERATION_PACKET_V1_SIZE);
 C_ASSERT(FIELD_OFFSET(RXGK_PUBLIC_OPERATION_PACKET, Pointer0) == 32);
 C_ASSERT(FIELD_OFFSET(RXGK_PUBLIC_OPERATION_PACKET, Value0) == 40);
@@ -9130,7 +9132,10 @@ DxgkSubmitCommand(
                     SubmitCommand->pPrivateDriverData);
         return STATUS_INVALID_PARAMETER;
     }
-    if (SubmitCommand->NumPrimaries != 0 || SubmitCommand->NumHistoryBuffers != 0 || SubmitCommand->PresentHistoryToken != 0 || (FlagsValue & ~RXGK_SUBMITCOMMAND_SUPPORTED_FLAGS) != 0)
+    if (SubmitCommand->NumPrimaries > D3DDDI_MAX_WRITTEN_PRIMARIES ||
+        SubmitCommand->Commands > MAXULONGLONG - SubmitCommand->CommandLength)
+        return STATUS_INVALID_PARAMETER;
+    if (SubmitCommand->NumHistoryBuffers != 0 || SubmitCommand->PresentHistoryToken != 0 || (FlagsValue & ~RXGK_SUBMITCOMMAND_SUPPORTED_FLAGS) != 0)
         return STATUS_NOT_SUPPORTED;
 
     Status = DxgkReferenceVirtualContextByHandle(SubmitCommand->BroadcastContext[0], PsGetCurrentProcess(), &Adapter, &Device, &Context);
@@ -9200,7 +9205,7 @@ DxgkSubmitCommand(
 
         for (;;)
         {
-            Status = VidSchSubmitCommandVirtual(Adapter, Context, SubmitCommand->Commands, SubmitCommand->CommandLength, SubmitCommand->pPrivateDriverData, SubmitCommand->PrivateDriverDataSize, SubmitCommand->Flags.NullRendering != 0);
+            Status = VidSchSubmitCommandVirtual(Adapter, Context, SubmitCommand->Commands, SubmitCommand->CommandLength, SubmitCommand->pPrivateDriverData, SubmitCommand->PrivateDriverDataSize, SubmitCommand->Flags.NullRendering != 0, SubmitCommand->NumPrimaries, SubmitCommand->WrittenPrimaries);
             if (Status == STATUS_RETRY)
             {
                 Status = DxgkYieldKmdTransactionForContextRoom(
@@ -9244,17 +9249,13 @@ DxgkSubmitCommand(
 }
 
 static NTSTATUS
-DxgkpValidateWddmPrivatePacket(
+DxgkpValidateWddmPrivatePayload(
     _In_ ULONG InputLength,
     _In_ ULONG PacketSize,
-    _In_ ULONG PacketVersion,
     _In_ ULONG HeaderSize,
     _In_ ULONG PrivateDataSize,
     _In_ ULONG PrivateDataOffset)
 {
-    if (PacketVersion != RXGK_WDDM_PACKET_VERSION_1)
-        return STATUS_NOT_SUPPORTED;
-
     if (PacketSize < HeaderSize || PacketSize != InputLength ||
         PrivateDataSize > RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA)
     {
@@ -9277,6 +9278,21 @@ DxgkpValidateWddmPrivatePacket(
     }
 
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpValidateWddmPrivatePacket(
+    _In_ ULONG InputLength,
+    _In_ ULONG PacketSize,
+    _In_ ULONG PacketVersion,
+    _In_ ULONG HeaderSize,
+    _In_ ULONG PrivateDataSize,
+    _In_ ULONG PrivateDataOffset)
+{
+    if (PacketVersion != RXGK_WDDM_PACKET_VERSION_1)
+        return STATUS_NOT_SUPPORTED;
+    return DxgkpValidateWddmPrivatePayload(InputLength, PacketSize, HeaderSize,
+                                         PrivateDataSize, PrivateDataOffset);
 }
 
 static volatile LONG DxgkpHwProtectionTeardownRecovered;
@@ -10500,7 +10516,9 @@ DxgkpDispatchBufferedIoctlWorker(
         case IOCTL_D3DKMT_SUBMITCOMMAND:
         {
             PRXGK_SUBMITCOMMAND_PACKET Packet;
+            PRXGK_SUBMITCOMMAND_PACKET_V2 PacketV2 = NULL;
             D3DKMT_SUBMITCOMMAND Request;
+            ULONG HeaderSize;
 
             if (SystemBuffer == NULL || InputLength < sizeof(RXGK_SUBMITCOMMAND_PACKET))
             {
@@ -10508,7 +10526,22 @@ DxgkpDispatchBufferedIoctlWorker(
             }
 
             Packet = (PRXGK_SUBMITCOMMAND_PACKET)SystemBuffer;
-            Status = DxgkpValidateWddmPrivatePacket(InputLength, Packet->Size, Packet->Version, sizeof(*Packet), Packet->PrivateDriverDataSize, Packet->PrivateDriverDataOffset);
+            HeaderSize = sizeof(*Packet);
+            if (Packet->Version == RXGK_SUBMITCOMMAND_PACKET_VERSION_2)
+            {
+                HeaderSize = sizeof(*PacketV2);
+                if (InputLength < HeaderSize)
+                    return STATUS_BUFFER_TOO_SMALL;
+                PacketV2 = (PVOID)Packet;
+                if (PacketV2->NumPrimaries > D3DDDI_MAX_WRITTEN_PRIMARIES ||
+                    PacketV2->Reserved != 0)
+                    return STATUS_INVALID_PARAMETER;
+            }
+            else if (Packet->Version != RXGK_WDDM_PACKET_VERSION_1)
+            {
+                return STATUS_NOT_SUPPORTED;
+            }
+            Status = DxgkpValidateWddmPrivatePayload(InputLength, Packet->Size, HeaderSize, Packet->PrivateDriverDataSize, Packet->PrivateDriverDataOffset);
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_ERR("D3DKMTSubmitCommand: packet validation failed 0x%08lX input=%lu size=%lu version=%lu private=%lu offset=%lu\n",
@@ -10537,6 +10570,12 @@ DxgkpDispatchBufferedIoctlWorker(
             Request.Flags.NullRendering = ((Packet->Flags & RXGK_SUBMITCOMMAND_FLAG_NULL_RENDERING) != 0);
             Request.BroadcastContextCount = 1;
             Request.BroadcastContext[0] = Packet->ContextHandle;
+            if (PacketV2 != NULL)
+            {
+                Request.NumPrimaries = PacketV2->NumPrimaries;
+                RtlCopyMemory(Request.WrittenPrimaries, PacketV2->WrittenPrimaries,
+                              Request.NumPrimaries * sizeof(Request.WrittenPrimaries[0]));
+            }
             Request.PrivateDriverDataSize = Packet->PrivateDriverDataSize;
             if (Packet->PrivateDriverDataSize != 0)
             {

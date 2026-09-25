@@ -40,6 +40,17 @@
 /* Opaque AcquireHandleData references returned to a display miniport. */
 #define TAG_VIDMM_HANDLE_REF 'HVxD'
 
+/* A GPUVA write dependency has a stable identity even when VidSch rebinds
+ * its hardware fence at dispatch. The packet owns this record and a backing
+ * allocation reference until terminal cleanup. */
+typedef struct _DXGKVMM_TRACKED_SUBMISSION
+{
+    LIST_ENTRY Entry;
+    PDXGKVMM_ALLOCATION Allocation;
+    ULONGLONG Sequence;
+    BOOLEAN Pending;
+} DXGKVMM_TRACKED_SUBMISSION, *PDXGKVMM_TRACKED_SUBMISSION;
+
 /* =========================================================================
  * DXGKRNL_SEGMENT
  *
@@ -357,8 +368,11 @@ typedef struct _DXGKVMM_ALLOCATION
      * long-lived overlay placement pin. */
     KSPIN_LOCK          TrackedSubmissionLock;
     volatile LONG       SubmissionResidencyPinCount;
-    volatile LONG       TrackedSubmissionPinCount;
-    KEVENT              TrackedSubmissionsDrainedEvent;
+    LIST_ENTRY          TrackedSubmissions;
+    ULONGLONG           TrackedSubmissionSequence;
+    ULONGLONG           TrackedSubmissionFailureSequence;
+    NTSTATUS            TrackedSubmissionFailure;
+    KEVENT              TrackedSubmissionsChangedEvent;
 
     /*
      * Physical base address of the allocation.
@@ -883,7 +897,8 @@ NTSTATUS
 DxgkVidMmAcquireTrackedSubmissionResidencyPin(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
-    _In_ BOOLEAN CpuDirty);
+    _In_ BOOLEAN CpuDirty,
+    _Out_ PDXGKVMM_TRACKED_SUBMISSION Submission);
 
 VOID
 DxgkVidMmReleaseSubmissionResidencyPin(
@@ -891,7 +906,22 @@ DxgkVidMmReleaseSubmissionResidencyPin(
 
 VOID
 DxgkVidMmReleaseTrackedSubmissionResidencyPin(
+    _Inout_ PDXGKVMM_TRACKED_SUBMISSION Submission);
+
+VOID
+DxgkVidMmCompleteTrackedSubmission(
+    _Inout_ PDXGKVMM_TRACKED_SUBMISSION Submission,
+    _In_ NTSTATUS Status);
+
+ULONGLONG
+DxgkVidMmSnapshotTrackedSubmissions(
     _In_ PDXGKVMM_ALLOCATION Allocation);
+
+NTSTATUS
+DxgkVidMmWaitForSubmissionSequence(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ ULONGLONG Sequence,
+    _In_ BOOLEAN DoNotWait);
 
 NTSTATUS
 DxgkVidMmWaitForTrackedSubmissions(
