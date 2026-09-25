@@ -896,10 +896,6 @@ DxgkPresent(
      * User-mode present callers may omit hDestination to mean "present to the
      * current primary". Route those blits to the shared-primary allocation
      * when dxgkrnl already exposed one.
-     *
-     * Phase-1 callers like dwm.exe can also still issue placeholder presents
-     * before they have a real source allocation. Treat those as no-ops rather
-     * than faulting the miniport with null allocation handles.
      */
     if (Entry.Type == DxgkPresentTypeBlt)
     {
@@ -925,12 +921,8 @@ DxgkPresent(
         {
             /*
              * Only the VidPn source owner may present straight to the primary.
-             * A present with no destination from a non-owner is a windowed
-             * present: it must succeed but must NOT scan its surface out to the
-             * primary (which would paint over the live desktop).  Leaving
-             * hDestination == 0 makes the present a no-op-to-screen below.
-             * This mirrors the Windows model where DWM owns the primary and
-             * composites app presents into their window.
+             * Non-owners need window clipping or a redirection destination;
+             * they cannot overwrite the desktop primary.
              */
             Entry.hDestination = (D3DKMT_HANDLE)(ULONG_PTR)Entry.SharedSurface.PrimaryHandle;
             DestinationIsInternal = TRUE;
@@ -976,6 +968,34 @@ DxgkPresent(
                 DxgkpReleasePresentEntry(&Entry);
                 return Status;
             }
+        }
+    }
+
+    /* A hidden, minimized, or empty window has no destination pixels. Query
+     * USER only after validating the device/context and allocation handles.
+     * Do not send a BLT with a NULL destination to the miniport: NULL is valid
+     * for a flip, not a copy. Occlusion rejects only this display operation;
+     * it neither completes preceding GPU work nor faults the device. */
+    if (Entry.Type == DxgkPresentTypeBlt &&
+        Entry.hDestination == 0 && Entry.Window != 0)
+    {
+        /* Occlusion returns before queue admission. Preserve the terminal
+         * device/context failure that DxgkpQueuePresent would report, so a
+         * hidden window cannot turn a lost device into a retryable present. */
+        if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 ||
+            InterlockedCompareExchange(&Device->ExecutionState, 0, 0) !=
+                D3DKMT_DEVICEEXECUTION_ACTIVE ||
+            (Context != NULL &&
+             InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0))
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return STATUS_DEVICE_REMOVED;
+        }
+        Status = DxgkQueryWindowPresentState(Entry.Window);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return Status;
         }
     }
 

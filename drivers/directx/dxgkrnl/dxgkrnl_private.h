@@ -3271,6 +3271,9 @@ DxgkPublishRedirectionPresent(
     _In_ ULONG SubmissionFenceId);
 
 NTSTATUS
+DxgkQueryWindowPresentState(_In_ ULONG_PTR WindowHandle);
+
+NTSTATUS
 DxgkAdmitRedirectedBltPresent(
     _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
 

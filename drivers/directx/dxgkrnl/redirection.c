@@ -79,6 +79,12 @@ DxgkRegisterWin32kCddInterface(
     else if (Interface->Version ==
              DXGKRNL_WIN32K_CDD_INTERFACE_VERSION_4)
     {
+        RequiredSize = FIELD_OFFSET(DXGKRNL_WIN32K_CDD_INTERFACE,
+                                    QueryWindowPresentState);
+    }
+    else if (Interface->Version ==
+             DXGKRNL_WIN32K_CDD_INTERFACE_VERSION_5)
+    {
         RequiredSize = sizeof(*Interface);
     }
     else
@@ -206,6 +212,20 @@ DxgkPublishRedirectionPresent(
         Allocation->RedirectionSubmittedFenceId[NodeOrdinal] =
             SubmissionFenceId;
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+}
+
+NTSTATUS
+DxgkQueryWindowPresentState(_In_ ULONG_PTR WindowHandle)
+{
+    PDXGKENG_QUERY_WINDOW_PRESENT_STATE Callback;
+
+    KeEnterCriticalRegion();
+    ExfAcquirePushLockShared(&DxgkpWin32kCddInterfaceLock);
+    Callback = DxgkpWin32kCddInterface.QueryWindowPresentState;
+    ExfReleasePushLockShared(&DxgkpWin32kCddInterfaceLock);
+    KeLeaveCriticalRegion();
+
+    return Callback != NULL ? Callback(WindowHandle) : STATUS_NOT_SUPPORTED;
 }
 
 NTSTATUS

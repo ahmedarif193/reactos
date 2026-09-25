@@ -267,6 +267,34 @@ DxgkEngAddRedirBitmapD3DDirtyRgn(
 
 NTSTATUS
 NTAPI
+DxgkEngQueryWindowPresentState(_In_ ULONG_PTR WindowHandle)
+{
+    PWND Window;
+    BOOL Entered;
+    NTSTATUS Status;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Entered = UserIsEntered();
+    if (!Entered)
+        UserEnterShared();
+    Window = ValidateHwndNoErr((HWND)WindowHandle);
+    if (Window == NULL)
+        Status = STATUS_INVALID_HANDLE;
+    else if (!IntIsWindowVisible(Window) ||
+             (Window->style & WS_MINIMIZE) ||
+             RECTL_bIsEmptyRect(&Window->rcClient))
+        Status = STATUS_GRAPHICS_PRESENT_OCCLUDED;
+    else
+        Status = STATUS_SUCCESS;
+    if (!Entered)
+        UserLeave();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
 DxgkEngAdmitRedirectedBltPresent(
     _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present)
 {
