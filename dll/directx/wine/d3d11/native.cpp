@@ -518,8 +518,8 @@ public:
     void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(ID3D11UnorderedAccessView *pUnorderedAccessView, const FLOAT Values[4]) override;
     void STDMETHODCALLTYPE ClearDepthStencilView(ID3D11DepthStencilView *pDepthStencilView, UINT ClearFlags, FLOAT Depth, UINT8 Stencil) override;
     void STDMETHODCALLTYPE GenerateMips(ID3D11ShaderResourceView *pShaderResourceView) override;
-    void STDMETHODCALLTYPE SetResourceMinLOD(ID3D11Resource *pResource, FLOAT MinLOD) override { Unimplemented("SetResourceMinLOD"); }
-    FLOAT STDMETHODCALLTYPE GetResourceMinLOD(ID3D11Resource *pResource) override { Unimplemented("GetResourceMinLOD"); return 0; }
+    void STDMETHODCALLTYPE SetResourceMinLOD(ID3D11Resource *pResource, FLOAT MinLOD) override;
+    FLOAT STDMETHODCALLTYPE GetResourceMinLOD(ID3D11Resource *pResource) override;
     void STDMETHODCALLTYPE ResolveSubresource(ID3D11Resource *, UINT, ID3D11Resource *, UINT, DXGI_FORMAT) override;
     void STDMETHODCALLTYPE ExecuteCommandList(ID3D11CommandList *pCommandList, BOOL RestoreContextState) override;
     void STDMETHODCALLTYPE HSSetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView *const *ppShaderResourceViews) override;
@@ -709,6 +709,7 @@ class NativeTexture1D final : public NativeChild<ID3D11Texture1D, &IID_ID3D11Tex
 {
 public:
     D3D11_TEXTURE1D_DESC desc = {};
+    FLOAT min_lod = 0;
     D3D10DDI_HRESOURCE handle = {};
     D3D10DDI_HRTRESOURCE runtime_handle;
     UINT priority = 0;
@@ -753,6 +754,7 @@ class NativeTexture2D : public NativeChild<ID3D11Texture2D, &IID_ID3D11Texture2D
 {
 public:
     D3D11_TEXTURE2D_DESC desc = {};
+    FLOAT min_lod = 0;
     D3D10DDI_HRESOURCE handle = {};
     D3D10DDI_HRTRESOURCE runtime_handle;
     UINT priority = 0;
@@ -834,6 +836,7 @@ class NativeTexture3D : public NativeChild<ID3D11Texture3D, &IID_ID3D11Texture3D
 {
 public:
     D3D11_TEXTURE3D_DESC desc = {};
+    FLOAT min_lod = 0;
     D3D10DDI_HRESOURCE handle = {};
     D3D10DDI_HRTRESOURCE runtime_handle;
     UINT priority = 0;
@@ -869,6 +872,7 @@ struct NativeTextureInfo
     ID3D11Resource *resource;
     D3D11_TEXTURE2D_DESC desc;
     D3D10DDI_HRESOURCE handle;
+    FLOAT *min_lod;
     BYTE *mapped;
     UINT depth;
     D3D10DDIRESOURCE_TYPE dimension;
@@ -887,6 +891,7 @@ static NativeTextureInfo *GetNativeTexture(ID3D11Resource *resource, NativeDevic
     if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE1D)
     {
         NativeTexture1D *texture = static_cast<NativeTexture1D *>(static_cast<ID3D11Texture1D *>(resource));
+        info->min_lod = &texture->min_lod;
         info->desc = {};
         info->desc.Width = texture->desc.Width;
         info->desc.Height = info->desc.SampleDesc.Count = 1;
@@ -905,6 +910,7 @@ static NativeTextureInfo *GetNativeTexture(ID3D11Resource *resource, NativeDevic
     else if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
     {
         NativeTexture2D *texture = static_cast<NativeTexture2D *>(static_cast<ID3D11Texture2D *>(resource));
+        info->min_lod = &texture->min_lod;
         info->desc = texture->desc;
         info->handle = texture->handle;
         info->mapped = texture->mapped;
@@ -915,6 +921,7 @@ static NativeTextureInfo *GetNativeTexture(ID3D11Resource *resource, NativeDevic
     else if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D)
     {
         NativeTexture3D *texture = static_cast<NativeTexture3D *>(static_cast<ID3D11Texture3D *>(resource));
+        info->min_lod = &texture->min_lod;
         info->desc = {};
         info->desc.Width = texture->desc.Width;
         info->desc.Height = texture->desc.Height;
@@ -3016,6 +3023,30 @@ void STDMETHODCALLTYPE NativeContext::GenerateMips(ID3D11ShaderResourceView *res
     NativeLock guard(device);
     device->BeginCall();
     device->functions.pfnGenMips(device->driver_device, view->handle);
+}
+
+void STDMETHODCALLTYPE NativeContext::SetResourceMinLOD(ID3D11Resource *resource, FLOAT min_lod)
+{
+    /* This DDI is excluded from deferred-context function tables. Ignore the
+     * invalid call without marking the rest of the command list unsupported. */
+    if (deferred) return;
+    NativeTextureInfo info;
+    NativeLock guard(device);
+    if (!GetNativeTexture(resource, device, &info)
+            || !(info.desc.MiscFlags & D3D11_RESOURCE_MISC_RESOURCE_CLAMP)) return;
+    if (!device->functions.pfnSetResourceMinLOD) { Unimplemented("SetResourceMinLOD DDI"); return; }
+    device->BeginCall();
+    device->functions.pfnSetResourceMinLOD(device->driver_device, info.handle, min_lod);
+    if (SUCCEEDED(device->operation_error)) *info.min_lod = min_lod;
+}
+
+FLOAT STDMETHODCALLTYPE NativeContext::GetResourceMinLOD(ID3D11Resource *resource)
+{
+    if (deferred) return 0;
+    NativeTextureInfo info;
+    NativeLock guard(device);
+    if (!GetNativeTexture(resource, device, &info)) return 0;
+    return *info.min_lod;
 }
 
 void STDMETHODCALLTYPE NativeContext::CopyResource(ID3D11Resource *dst, ID3D11Resource *src)
