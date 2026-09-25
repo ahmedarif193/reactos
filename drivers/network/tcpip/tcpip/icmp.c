@@ -13,7 +13,11 @@ typedef struct _ICMP_PACKET_CONTEXT
     TDI_REQUEST TdiRequest;
     KDPC TimeoutDpc;
     KEVENT InitializationFinishedEvent;
-    KEVENT DatagramProcessedEvent;
+    BOOLEAN SendFailed;
+    KSPIN_LOCK ReplyLock;
+    IPAddr DestinationAddress;
+    USHORT Identifier;
+    USHORT Sequence;
     LARGE_INTEGER TimerResolution;
     INT64 StartTicks;
     PIRP Irp;
@@ -90,9 +94,11 @@ EndRequestHandler(
     UINT32 nReplies;
     KIRQL OldIrql;
 
+    /* A zero timeout can queue this worker before the sending thread exits. */
+    KeWaitForSingleObject(&Context->InitializationFinishedEvent, Executive, KernelMode, FALSE, NULL);
     ClearReceiveHandler((PADDRESS_FILE)Context->TdiRequest.Handle.AddressHandle);
-
-    KeWaitForSingleObject(&Context->DatagramProcessedEvent, Executive, KernelMode, FALSE, NULL);
+    ExWaitForRundownProtectionRelease(
+        &((PADDRESS_FILE)Context->TdiRequest.Handle.AddressHandle)->ReceiveDatagramRundown);
 
     TI_DbgPrint(DEBUG_ICMP, ("Finishing request Context: %p\n", Context));
 
@@ -135,6 +141,67 @@ EndRequestHandler(
     TI_DbgPrint(DEBUG_ICMP, ("Leaving, nReplies: %u\n", nReplies));
 }
 
+/* Raw ICMP is delivered to every open ICMP address file. Only this echo's
+ * reply, or an error quoting this echo, belongs in its result buffer. */
+static BOOLEAN
+IcmpMatchesRequest(
+    _In_ const ICMP_PACKET_CONTEXT *Context,
+    _In_reads_bytes_(Bytes) const UCHAR *Packet,
+    _In_ ULONG Bytes,
+    _In_ ULONG HeaderSize)
+{
+    const ICMP_HEADER *Header;
+    const UCHAR *Original;
+    ULONG OriginalSize, OriginalHeaderSize;
+    IPAddr Destination;
+
+    if (HeaderSize < sizeof(IPv4_HEADER) || HeaderSize > Bytes ||
+        Bytes - HeaderSize < sizeof(ICMP_HEADER))
+    {
+        return FALSE;
+    }
+
+    Header = (const ICMP_HEADER *)(Packet + HeaderSize);
+    if (Header->Type == ICMP_TYPE_ECHO_REPLY)
+    {
+        return Header->Code == 0 &&
+               Header->Identifier == Context->Identifier &&
+               Header->Seq == Context->Sequence;
+    }
+
+    if (Header->Type != ICMP_TYPE_DEST_UNREACH &&
+        Header->Type != ICMP_TYPE_SOURCE_QUENCH &&
+        Header->Type != ICMP_TYPE_TIME_EXCEEDED &&
+        Header->Type != ICMP_TYPE_PARAMETER)
+    {
+        return FALSE;
+    }
+
+    /* Error messages quote the original IPv4 header and ICMP header. */
+    Original = Packet + HeaderSize + sizeof(ICMP_HEADER);
+    OriginalSize = Bytes - HeaderSize - sizeof(ICMP_HEADER);
+    if (OriginalSize < sizeof(IPv4_HEADER) || (Original[0] >> 4) != 4 ||
+        Original[9] != IPPROTO_ICMP)
+    {
+        return FALSE;
+    }
+
+    OriginalHeaderSize = (Original[0] & 15) * 4;
+    if (OriginalHeaderSize < sizeof(IPv4_HEADER) || OriginalHeaderSize > OriginalSize ||
+        OriginalSize - OriginalHeaderSize < sizeof(ICMP_HEADER))
+    {
+        return FALSE;
+    }
+
+    RtlCopyMemory(&Destination, Original + 16, sizeof(Destination));
+    Header = (const ICMP_HEADER *)(Original + OriginalHeaderSize);
+    return Destination == Context->DestinationAddress &&
+           Header->Type == ICMP_TYPE_ECHO_REQUEST &&
+           Header->Code == 0 &&
+           Header->Identifier == Context->Identifier &&
+           Header->Seq == Context->Sequence;
+}
+
 NTSTATUS
 NTAPI
 ReceiveDatagram(
@@ -152,34 +219,53 @@ ReceiveDatagram(
 {
     PICMP_PACKET_CONTEXT Context = TdiEventContext;
     PIPv4_HEADER IpHeader = Tsdu;
-    UINT16 IpHeaderSize = sizeof(IPv4_HEADER) + OptionsLength;
-    PICMP_HEADER IcmpHeader = (PICMP_HEADER)((PUCHAR)Tsdu + IpHeaderSize);
-
-    PVOID DataBuffer = (PUCHAR)Tsdu + IpHeaderSize + sizeof(ICMP_HEADER);
-    INT32 DataSize = min(BytesAvailable, UINT16_MAX) - IpHeaderSize - sizeof(ICMP_HEADER);
+    ULONG IpHeaderSize;
+    ULONG PacketBytes;
+    PICMP_HEADER IcmpHeader;
+    PVOID DataBuffer;
+    ULONG DataSize;
 
     INT64 CurrentTime;
     UINT32 RoundTripTime;
     PICMP_ECHO_REPLY CurrentReply;
     PUCHAR CurrentUserBuffer;
+    KIRQL OldIrql;
+    BOOLEAN Finish = FALSE;
 
-    // do not handle echo requests
-    if (DataSize >= 0 && IcmpHeader->Type == ICMP_TYPE_ECHO_REQUEST)
+    *OutBytesTaken = BytesAvailable;
+    if (OptionsLength < 0 || OptionsLength > MAX_OPT_SIZE ||
+        (OptionsLength && Options == NULL) || SourceAddressLength != sizeof(IPAddr) ||
+        SourceAddress == NULL || Tsdu == NULL)
     {
         return STATUS_SUCCESS;
     }
 
-    KeWaitForSingleObject(&Context->InitializationFinishedEvent, Executive, KernelMode, FALSE, NULL);
-    KeClearEvent(&Context->DatagramProcessedEvent);
+    IpHeaderSize = sizeof(IPv4_HEADER) + OptionsLength;
+    PacketBytes = min(BytesIndicated, min(BytesAvailable, UINT16_MAX));
+    if (!IcmpMatchesRequest(Context, Tsdu, PacketBytes, IpHeaderSize))
+        return STATUS_SUCCESS;
 
-    ASSERT(SourceAddressLength == sizeof(IPAddr));
+    IcmpHeader = (PICMP_HEADER)((PUCHAR)Tsdu + IpHeaderSize);
+    DataBuffer = (PUCHAR)IcmpHeader + sizeof(ICMP_HEADER);
+    DataSize = PacketBytes - IpHeaderSize - sizeof(ICMP_HEADER);
+
+    KeWaitForSingleObject(&Context->InitializationFinishedEvent, Executive, KernelMode, FALSE, NULL);
+    if (Context->SendFailed)
+        return STATUS_SUCCESS;
+
     TI_DbgPrint(DEBUG_ICMP, ("Received datagram Context: 0x%p\n", TdiEventContext));
 
     CurrentTime = KeQueryPerformanceCounter(NULL).QuadPart;
     RoundTripTime = (CurrentTime - Context->StartTicks) * 1000 / Context->TimerResolution.QuadPart;
+    KeAcquireSpinLock(&Context->ReplyLock, &OldIrql);
+    if (Context->RemainingSize < sizeof(ICMP_ECHO_REPLY))
+    {
+        KeReleaseSpinLock(&Context->ReplyLock, OldIrql);
+        return STATUS_SUCCESS;
+    }
     CurrentReply = (PICMP_ECHO_REPLY)Context->CurrentReply;
 
-    if (Context->RemainingSize >= sizeof(ICMP_ECHO_REPLY) && DataSize >= 0)
+    if (Context->RemainingSize >= sizeof(ICMP_ECHO_REPLY))
     {
         TI_DbgPrint(DEBUG_ICMP, ("RemainingSize: %u, RoundTripTime: %u\n", Context->RemainingSize, RoundTripTime));
 
@@ -221,8 +307,8 @@ ReceiveDatagram(
     {
         UINT32 _OptSize = min(Context->RemainingSize, OptionsLength);
 
-        memcpy(Context->CurrentReply + Context->RemainingSize + _OptSize, Options, _OptSize);
-        CurrentReply->Options.OptionsData = CurrentUserBuffer + Context->RemainingSize + _OptSize;
+        memcpy(Context->CurrentReply + Context->RemainingSize - _OptSize, Options, _OptSize);
+        CurrentReply->Options.OptionsData = CurrentUserBuffer + Context->RemainingSize - _OptSize;
         CurrentReply->Options.OptionsSize = _OptSize;
 
         Context->RemainingSize -= _OptSize;
@@ -242,14 +328,13 @@ ReceiveDatagram(
         // if the timer was inserted, that means DPC has not been queued yet
         if (KeCancelTimer(&Context->TimeoutTimer))
         {
-            PADDRESS_FILE AddrFile = (PADDRESS_FILE)Context->TdiRequest.Handle.AddressHandle;
-            ClearReceiveHandler(AddrFile);
-
-            IoQueueWorkItem(Context->FinishWorker, &EndRequestHandler, DelayedWorkQueue, Context);
+            Finish = TRUE;
         }
     }
+    KeReleaseSpinLock(&Context->ReplyLock, OldIrql);
+    if (Finish)
+        IoQueueWorkItem(Context->FinishWorker, &EndRequestHandler, DelayedWorkQueue, Context);
 
-    KeSetEvent(&Context->DatagramProcessedEvent, IO_NO_INCREMENT, FALSE);
     return STATUS_SUCCESS;
 }
 
@@ -347,9 +432,18 @@ DispEchoRequest(
     SendContext->CurrentReply = Irp->AssociatedIrp.SystemBuffer;
     SendContext->RemainingSize = OutputBufferLength;
     SendContext->nReplies = 0;
+    SendContext->SendFailed = FALSE;
+    KeInitializeSpinLock(&SendContext->ReplyLock);
+    SendContext->DestinationAddress = Request->Address;
     SendContext->FinishWorker = IoAllocateWorkItem(DeviceObject);
     KeInitializeEvent(&SendContext->InitializationFinishedEvent, NotificationEvent, FALSE);
-    KeInitializeEvent(&SendContext->DatagramProcessedEvent, NotificationEvent, TRUE);
+
+    if (!SendContext->FinishWorker)
+    {
+        FileCloseAddress(&SendContext->TdiRequest);
+        ExFreePoolWithTag(SendContext, OUT_DATA_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     KeInitializeDpc(&SendContext->TimeoutDpc, &TimeoutHandler, SendContext);
     KeInitializeTimerEx(&SendContext->TimeoutTimer, SynchronizationTimer);
@@ -366,6 +460,8 @@ DispEchoRequest(
 
     if (!Buffer)
     {
+        FileCloseAddress(&SendContext->TdiRequest);
+        IoFreeWorkItem(SendContext->FinishWorker);
         ExFreePoolWithTag(SendContext, OUT_DATA_TAG);
 
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -376,9 +472,11 @@ DispEchoRequest(
     ((PICMP_HEADER)Buffer)->Checksum = 0;
     ((PICMP_HEADER)Buffer)->Identifier = (UINT_PTR)PsGetCurrentProcessId() & UINT16_MAX;
     ((PICMP_HEADER)Buffer)->Seq = InterlockedIncrement16(&IcmpSequence);
+    SendContext->Identifier = ((PICMP_HEADER)Buffer)->Identifier;
+    SendContext->Sequence = ((PICMP_HEADER)Buffer)->Seq;
     memcpy(Buffer + sizeof(ICMP_HEADER), (PUCHAR)Request + Request->DataOffset, Request->DataSize);
     ((PICMP_HEADER)Buffer)->Checksum = IPv4Checksum(Buffer, RequestSize, 0);
-    SavedTtl = Request->Ttl;
+    SavedTtl = Request->HasOptions ? Request->Ttl : AddrFile->TTL;
 
     RtlZeroMemory(Irp->AssociatedIrp.SystemBuffer, OutputBufferLength);
 
@@ -404,7 +502,13 @@ DispEchoRequest(
     {
         NTSTATUS _Status;
 
+        /* DGDeliverData may already have copied the handler and context.
+         * Wake those callbacks before waiting for them, and keep both the
+         * context and IRP alive until they have returned. */
+        SendContext->SendFailed = TRUE;
+        KeSetEvent(&SendContext->InitializationFinishedEvent, IO_NO_INCREMENT, FALSE);
         ClearReceiveHandler(AddrFile);
+        ExWaitForRundownProtectionRelease(&AddrFile->ReceiveDatagramRundown);
         _Status = FileCloseAddress(&SendContext->TdiRequest);
         ASSERT(NT_SUCCESS(_Status));
 
