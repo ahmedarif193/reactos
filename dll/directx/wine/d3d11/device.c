@@ -61,6 +61,24 @@ static inline BOOL d3d_device_is_d3d10_active(struct d3d_device *device)
                 || IsEqualGUID(&device->state->emulated_interface, &IID_ID3D10Device1);
 }
 
+static bool d3d_device_validate_copy_destination(struct d3d_device *device,
+        struct wined3d_resource *resource)
+{
+    struct wined3d_resource_desc desc;
+
+    if (device->state->feature_level >= D3D_FEATURE_LEVEL_10_1)
+        return true;
+
+    wined3d_resource_get_desc(resource, &desc);
+    if (desc.bind_flags & WINED3D_BIND_DEPTH_STENCIL)
+    {
+        WARN("Depth/stencil copy destinations require feature level 10_1.\n");
+        return false;
+    }
+
+    return true;
+}
+
 static D3D_FEATURE_LEVEL d3d_feature_level_from_wined3d(enum wined3d_feature_level level)
 {
     return (D3D_FEATURE_LEVEL)level;
@@ -1356,6 +1374,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_CopySubresourceRegion(ID3D11D
 
     wined3d_dst_resource = wined3d_resource_from_d3d11_resource(dst_resource);
     wined3d_src_resource = wined3d_resource_from_d3d11_resource(src_resource);
+    if (!d3d_device_validate_copy_destination(context->device, wined3d_dst_resource))
+        return;
+
     wined3d_device_context_copy_sub_resource_region(context->wined3d_context, wined3d_dst_resource, dst_subresource_idx,
             dst_x, dst_y, dst_z, wined3d_src_resource, src_subresource_idx, src_box ? &wined3d_src_box : NULL, 0);
 }
@@ -1370,6 +1391,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_CopyResource(ID3D11DeviceCont
 
     wined3d_dst_resource = wined3d_resource_from_d3d11_resource(dst_resource);
     wined3d_src_resource = wined3d_resource_from_d3d11_resource(src_resource);
+    if (!d3d_device_validate_copy_destination(context->device, wined3d_dst_resource))
+        return;
+
     wined3d_device_context_copy_resource(context->wined3d_context, wined3d_dst_resource, wined3d_src_resource);
 }
 
@@ -2755,6 +2779,9 @@ static void STDMETHODCALLTYPE d3d11_device_context_CopySubresourceRegion1(ID3D11
 
     wined3d_dst_resource = wined3d_resource_from_d3d11_resource(dst_resource);
     wined3d_src_resource = wined3d_resource_from_d3d11_resource(src_resource);
+    if (!d3d_device_validate_copy_destination(context->device, wined3d_dst_resource))
+        return;
+
     wined3d_device_context_copy_sub_resource_region(context->wined3d_context, wined3d_dst_resource, dst_subresource_idx,
             dst_x, dst_y, dst_z, wined3d_src_resource, src_subresource_idx, src_box ? &wined3d_src_box : NULL, flags);
 }
@@ -6129,6 +6156,9 @@ static void STDMETHODCALLTYPE d3d10_device_CopySubresourceRegion(ID3D10Device1 *
 
     wined3d_dst_resource = wined3d_resource_from_d3d10_resource(dst_resource);
     wined3d_src_resource = wined3d_resource_from_d3d10_resource(src_resource);
+    if (!d3d_device_validate_copy_destination(device, wined3d_dst_resource))
+        return;
+
     wined3d_device_context_copy_sub_resource_region(device->immediate_context.wined3d_context,
             wined3d_dst_resource, dst_subresource_idx, dst_x, dst_y, dst_z,
             wined3d_src_resource, src_subresource_idx, src_box ? &wined3d_src_box : NULL, 0);
@@ -6144,6 +6174,9 @@ static void STDMETHODCALLTYPE d3d10_device_CopyResource(ID3D10Device1 *iface,
 
     wined3d_dst_resource = wined3d_resource_from_d3d10_resource(dst_resource);
     wined3d_src_resource = wined3d_resource_from_d3d10_resource(src_resource);
+    if (!d3d_device_validate_copy_destination(device, wined3d_dst_resource))
+        return;
+
     wined3d_device_context_copy_resource(device->immediate_context.wined3d_context,
             wined3d_dst_resource, wined3d_src_resource);
 }
