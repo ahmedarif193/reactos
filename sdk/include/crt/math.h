@@ -12,8 +12,16 @@
 extern "C" {
 #endif
 
+#if defined(__FLT_EVAL_METHOD__) && (__FLT_EVAL_METHOD__ == 2)
+typedef long double float_t;
+typedef long double double_t;
+#elif defined(__FLT_EVAL_METHOD__) && (__FLT_EVAL_METHOD__ == 1)
+typedef double float_t;
+typedef double double_t;
+#else
 typedef float float_t;
 typedef double double_t;
+#endif
 
 #ifndef _EXCEPTION_DEFINED
 #define _EXCEPTION_DEFINED
