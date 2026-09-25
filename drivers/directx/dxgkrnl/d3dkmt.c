@@ -11036,7 +11036,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 static LONG NormalizedPrinted = 0;
 
                 if (InterlockedCompareExchange(&NormalizedPrinted, 1, 0) == 0)
-                    DPRINT1("D3DKMTMakeResident: normalizing MustSucceed-only request for %u allocation(s)\n", pMakeResident->NumAllocations);
+                    DXGKRNL_TRACE("D3DKMTMakeResident: normalizing MustSucceed-only request for %u allocation(s)\n", pMakeResident->NumAllocations);
                 pMakeResident->Flags.CantTrimFurther = 1;
             }
             pMakeResident->NumBytesToTrim = 0;

@@ -68,10 +68,9 @@
 /*
  * DXGKRNL_INFO(fmt, ...)
  *
- * Always-on report of a normal event worth keeping in a boot log: the
- * resources, capabilities, mappings and firmware answers an adapter start
- * is built from.  Printed at the same level as an error so a failed start
- * still says what preceded it, but not labelled as one.
+ * Always-on, concise adapter/display/power state reports. Routine successful
+ * calls, resource dumps and allocation/mapping lifecycle details belong in
+ * TRACE or VERBOSE; failures belong in WARN/ERR.
  */
 #define DXGKRNL_INFO(fmt, ...) \
     DPRINT1("DXGKRNL: " fmt, ##__VA_ARGS__)
