@@ -85,6 +85,51 @@ MmBuildMdlForNonPagedPool(
         Mdl->MdlFlags |= MDL_IO_SPACE;
 }
 
+static
+NTSTATUS
+MiProbeAndLockNonpageablePages(
+    _In_ PMDL Mdl,
+    _In_ ULONG Count,
+    _In_ BOOLEAN WriteAccess)
+{
+    PMI_ADDRESS_SPACE Space = &MiSystem.SystemSpace;
+    PMI_PFN_DATABASE Db = &MiSystem.Pfn;
+    PPFN_NUMBER Pages = MmGetMdlPfnArray(Mdl);
+    ULONG64 Start = (ULONG64)(ULONG_PTR)Mdl->StartVa;
+    ULONG i;
+
+    if (Count == 0 || Start < Space->LowestVa || Start > Space->HighestVa ||
+        ((ULONG64)Count << PAGE_SHIFT) - 1 > Space->HighestVa - Start)
+        return STATUS_ACCESS_VIOLATION;
+
+    for (i = 0; i < Count; i++)
+    {
+        ULONG64 Physical, Frame;
+        MI_PTE Pte;
+
+        if (!MiPtTranslate(Space, Start + (ULONG64)i * PAGE_SIZE, &Physical, &Pte) ||
+            (WriteAccess && !MiArchPteIsWritable(Pte)))
+        {
+            MiUnlockFrames(&MiSystem, (const MI_FRAME_NUMBER *)Pages, i, WriteAccess);
+            return STATUS_ACCESS_VIOLATION;
+        }
+
+        Frame = Physical >> PAGE_SHIFT;
+        if (Frame < Db->FrameCount)
+        {
+            KIRQL OldIrql = MiPfnLock(Db, (ULONG)Frame);
+
+            if (!(MI_PFN_FLAGS(&Db->Pfn[Frame]) & MI_PFN_FLAG_PAGE_TABLE))
+                MI_ATOMIC_WRITE32(&Db->Pfn[Frame].CacheFlags,
+                                  MiArchPteLeafFlags(Pte) & MI_LEAF_CACHE_MASK);
+            MiPfnReferenceLocked(Db, (ULONG)Frame);
+            MiPfnUnlock(Db, (ULONG)Frame, OldIrql);
+        }
+        Pages[i] = (PFN_NUMBER)Frame;
+    }
+    return STATUS_SUCCESS;
+}
+
 VOID
 NTAPI
 MmProbeAndLockPages(
@@ -124,12 +169,21 @@ MmProbeAndLockPages(
         Mdl->Process = PsGetCurrentProcess();
     }
 
-    do
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+    if (KeGetCurrentIrql() > APC_LEVEL && Space == &MiSystem.SystemSpace)
     {
-        Status = MiLockPages(Space, (ULONG64)(ULONG_PTR)Mdl->StartVa, Count,
-                             (BOOLEAN)(AccessMode != KernelMode && Space != &MiSystem.SystemSpace),
-                             (BOOLEAN)(Operation != IoReadAccess), (PMI_FRAME_NUMBER)Pages);
-    } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
+        Status = MiProbeAndLockNonpageablePages(Mdl, Count, Operation != IoReadAccess);
+    }
+    else
+    {
+        ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+        do
+        {
+            Status = MiLockPages(Space, (ULONG64)(ULONG_PTR)Mdl->StartVa, Count,
+                                 (BOOLEAN)(AccessMode != KernelMode && Space != &MiSystem.SystemSpace),
+                                 (BOOLEAN)(Operation != IoReadAccess), (PMI_FRAME_NUMBER)Pages);
+        } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
+    }
 
     if (!NT_SUCCESS(Status))
     {
