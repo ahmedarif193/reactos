@@ -755,6 +755,62 @@ static BOOL match_float_copy_conversion(const struct wined3d_gl_info *gl_info, s
     return error == GL_NO_ERROR && memcmp(source, copied, sizeof(source));
 }
 
+static BOOL match_broken_view_mipmaps(const struct wined3d_gl_info *gl_info, struct wined3d_caps_gl_ctx *ctx,
+        const char *gl_renderer, enum wined3d_gl_vendor gl_vendor,
+        enum wined3d_pci_vendor card_vendor, enum wined3d_pci_device device)
+{
+    static const DWORD zero[64];
+    DWORD source[16], result[16] = {0};
+    GLuint texture, view;
+    unsigned int i;
+    GLenum error;
+    BOOL broken;
+
+    if (!gl_info->supported[ARB_TEXTURE_VIEW] || !gl_info->supported[ARB_TEXTURE_STORAGE]
+            || !gl_info->fbo_ops.glGenerateMipmap)
+        return FALSE;
+
+    /* A view's mip levels are relative to its base. Some implementations
+     * generate into the wrong levels, even overwriting the source image. */
+    for (i = 0; i < ARRAY_SIZE(source); ++i)
+        source[i] = 0xff113377;
+    gl_info->gl_ops.gl.p_glGenTextures(1, &texture);
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, texture);
+    GL_EXTCALL(glTexStorage2D(GL_TEXTURE_2D, 4, GL_RGBA8, 8, 8));
+    gl_info->gl_ops.gl.p_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, zero);
+    gl_info->gl_ops.gl.p_glTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, source);
+    gl_info->gl_ops.gl.p_glTexSubImage2D(GL_TEXTURE_2D, 2, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, zero);
+    gl_info->gl_ops.gl.p_glTexSubImage2D(GL_TEXTURE_2D, 3, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, zero);
+    gl_info->gl_ops.gl.p_glGenTextures(1, &view);
+    GL_EXTCALL(glTextureView(view, GL_TEXTURE_2D, texture, GL_RGBA8, 1, 3, 0, 1));
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, view);
+    gl_info->fbo_ops.glGenerateMipmap(GL_TEXTURE_2D);
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, texture);
+    gl_info->gl_ops.gl.p_glGetTexImage(GL_TEXTURE_2D, 1, GL_RGBA, GL_UNSIGNED_BYTE, result);
+    broken = memcmp(source, result, sizeof(source)) != 0;
+    gl_info->gl_ops.gl.p_glGetTexImage(GL_TEXTURE_2D, 2, GL_RGBA, GL_UNSIGNED_BYTE, result);
+    broken |= memcmp(source, result, 4 * sizeof(*source)) != 0;
+    error = gl_info->gl_ops.gl.p_glGetError();
+    if (error == GL_NO_ERROR && broken)
+    {
+        /* Only select the workaround if the original texture generates the
+         * expected mipmap from the same source. */
+        gl_info->gl_ops.gl.p_glTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, source);
+        gl_info->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+        gl_info->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 2);
+        gl_info->fbo_ops.glGenerateMipmap(GL_TEXTURE_2D);
+        gl_info->gl_ops.gl.p_glGetTexImage(GL_TEXTURE_2D, 2, GL_RGBA, GL_UNSIGNED_BYTE, result);
+        broken = !memcmp(source, result, 4 * sizeof(*source));
+        error = gl_info->gl_ops.gl.p_glGetError();
+    }
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, 0);
+    gl_info->gl_ops.gl.p_glDeleteTextures(1, &view);
+    gl_info->gl_ops.gl.p_glDeleteTextures(1, &texture);
+    checkGLcall("test mipmap generation through a texture view");
+
+    return error == GL_NO_ERROR && broken;
+}
+
 static BOOL match_fglrx(const struct wined3d_gl_info *gl_info, struct wined3d_caps_gl_ctx *ctx,
         const char *gl_renderer, enum wined3d_gl_vendor gl_vendor,
         enum wined3d_pci_vendor card_vendor, enum wined3d_pci_device device)
@@ -1001,6 +1057,11 @@ static void quirk_float_copy_conversion(struct wined3d_gl_info *gl_info)
     gl_info->quirks |= WINED3D_QUIRK_FLOAT_COPY_CONVERSION;
 }
 
+static void quirk_broken_view_mipmaps(struct wined3d_gl_info *gl_info)
+{
+    gl_info->quirks |= WINED3D_QUIRK_BROKEN_VIEW_MIPMAPS;
+}
+
 static void quirk_infolog_spam(struct wined3d_gl_info *gl_info)
 {
     gl_info->quirks |= WINED3D_QUIRK_INFO_LOG_SPAM;
@@ -1155,6 +1216,11 @@ static void fixup_extensions(struct wined3d_gl_info *gl_info, struct wined3d_cap
             match_float_copy_conversion,
             quirk_float_copy_conversion,
             "Preserve float bits during raw image copies"
+        },
+        {
+            match_broken_view_mipmaps,
+            quirk_broken_view_mipmaps,
+            "Generate mipmaps through the original texture when the view is equivalent"
         },
         {
             match_not_dx10_capable,

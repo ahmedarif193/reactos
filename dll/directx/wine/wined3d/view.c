@@ -1359,7 +1359,7 @@ void wined3d_shader_resource_view_gl_generate_mipmap(struct wined3d_shader_resou
     struct wined3d_texture_gl *texture_gl;
     struct gl_texture *gl_tex;
     DWORD location;
-    BOOL srgb;
+    BOOL srgb, use_view;
 
     TRACE("view_gl %p.\n", view_gl);
 
@@ -1370,6 +1370,16 @@ void wined3d_shader_resource_view_gl_generate_mipmap(struct wined3d_shader_resou
 
     texture_gl = wined3d_texture_gl(texture_from_resource(view_gl->v.resource));
     srgb = !!(texture_gl->t.flags & WINED3D_TEXTURE_IS_SRGB);
+    use_view = !!view_gl->gl_view.name;
+    /* Restrict generation on the original texture to views with the same
+     * format and all layers. Otherwise it would modify layers outside the
+     * view or use the wrong interpretation (notably for sRGB). */
+    if (use_view && (gl_info->quirks & WINED3D_QUIRK_BROKEN_VIEW_MIPMAPS)
+            && !base_layer && layer_count == texture_gl->t.layer_count
+            && wined3d_format_gl(view_gl->v.format)->internal
+            == wined3d_gl_get_internal_format(&texture_gl->t.resource,
+                    wined3d_format_gl(texture_gl->t.resource.format), srgb))
+        use_view = FALSE;
     location = srgb ? WINED3D_LOCATION_TEXTURE_SRGB : WINED3D_LOCATION_TEXTURE_RGB;
     for (i = 0; i < layer_count; ++i)
     {
@@ -1378,7 +1388,7 @@ void wined3d_shader_resource_view_gl_generate_mipmap(struct wined3d_shader_resou
             ERR("Failed to load source layer %u.\n", base_layer + i);
     }
 
-    if (view_gl->gl_view.name)
+    if (use_view)
     {
         shader_resource_view_gl_bind_and_dirtify(view_gl, context_gl);
     }
@@ -1413,7 +1423,7 @@ void wined3d_shader_resource_view_gl_generate_mipmap(struct wined3d_shader_resou
         }
     }
 
-    if (!view_gl->gl_view.name)
+    if (!use_view)
     {
         gl_tex->sampler_desc.mip_base_level = base_level;
         gl_info->gl_ops.gl.p_glTexParameteri(texture_gl->target,
