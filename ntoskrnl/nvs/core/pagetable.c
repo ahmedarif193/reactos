@@ -95,23 +95,29 @@ MiPtWalk(
 }
 
 BOOLEAN
-MiPtTranslate(
-    _In_ PMI_ADDRESS_SPACE Space,
+MiPtTranslateRoot(
+    _In_ const MI_ARCH_DESCRIPTOR *Arch,
+    _In_ ULONG64 RootFrame,
     _In_ ULONG64 VirtualAddress,
     _Out_ PULONG64 PhysicalAddress,
     _Out_opt_ PMI_PTE LeafPte)
 {
-    const MI_ARCH_DESCRIPTOR *Arch = Space->System->Arch;
-    ULONG64 Frame = Space->RootFrame;
+    ULONG64 Frame = RootFrame;
     LONG Level;
 
     *PhysicalAddress = 0;
 
     for (Level = Arch->PagingLevels - 1; Level >= 0; Level--)
     {
-        PMI_PTE Slot = (PMI_PTE)MiArchMapFrame(Frame) + MiPtIndex(Arch, VirtualAddress, Level);
-        MI_PTE Entry = MiArchPteRead(Slot);
+        PMI_PTE Table = MiArchMapFrame(Frame);
+        PMI_PTE Slot;
+        MI_PTE Entry;
         ULONG64 Span;
+
+        if (Table == NULL)
+            return FALSE;
+        Slot = Table + MiPtIndex(Arch, VirtualAddress, Level);
+        Entry = MiArchPteRead(Slot);
 
         if (!MiArchPteIsValid(Entry) || (Level == 0 && !MiArchPteIsLeafDescriptor(Entry)))
             return FALSE;
@@ -132,6 +138,17 @@ MiPtTranslate(
     }
 
     return FALSE;
+}
+
+BOOLEAN
+MiPtTranslate(
+    _In_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 VirtualAddress,
+    _Out_ PULONG64 PhysicalAddress,
+    _Out_opt_ PMI_PTE LeafPte)
+{
+    return MiPtTranslateRoot(Space->System->Arch, Space->RootFrame,
+                             VirtualAddress, PhysicalAddress, LeafPte);
 }
 
 PMI_PTE

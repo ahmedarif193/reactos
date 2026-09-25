@@ -105,6 +105,21 @@ MiSpaceForAddress(
 }
 
 FORCEINLINE
+BOOLEAN
+MiTranslateCurrentAddress(
+    _In_ ULONG64 Address,
+    _Out_ PULONG64 Physical,
+    _Out_opt_ PMI_PTE LeafPte)
+{
+    if (MiSystem.SystemSpace.System == NULL)
+        return MiPtTranslateRoot(MiArchDescribe(), MiArchBootRootFrame(),
+                                 Address, Physical, LeafPte);
+
+    return MiPtTranslate(MiSpaceForAddress((PVOID)(ULONG_PTR)Address),
+                         Address, Physical, LeafPte);
+}
+
+FORCEINLINE
 MI_CACHE_TYPE
 MiCacheTypeFromNt(
     _In_ MEMORY_CACHING_TYPE CacheType)
