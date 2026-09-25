@@ -3754,7 +3754,14 @@ DxgkpReleaseOrderedMmioFlip(
         return;
     if (CompletionStatus == STATUS_PENDING)
         CompletionStatus = STATUS_CANCELLED;
-    DxgkDeviceWorkCompleteWithStatus(Entry->DeviceWork, CompletionStatus);
+    DxgkDeviceCompletePresent(Entry->Device, Entry->DeviceWork, CompletionStatus);
+    if (!NT_SUCCESS(CompletionStatus) &&
+        CompletionStatus != STATUS_GRAPHICS_PRESENT_OCCLUDED &&
+        CompletionStatus != STATUS_CANCELLED)
+    {
+        DXGKRNL_WARN("DxgkpReleaseOrderedMmioFlip: present %llu failed 0x%08lX\n",
+                     Entry->PresentId, CompletionStatus);
+    }
     DxgkpReleasePresentEntry(Entry);
     ExFreePoolWithTag(Entry, TAG_DXGK_PRESENT);
 }
@@ -3983,7 +3990,7 @@ DxgkpQueuePresent(
                 Entry->DeviceWork = DeviceWork;
                 DeviceWork = NULL;
                 Status = DxgkpExecuteMmioFlip(Adapter, Queue, Entry);
-                DxgkDeviceWorkCompleteWithStatus(Entry->DeviceWork, Status);
+                DxgkDeviceCompletePresent(Entry->Device, Entry->DeviceWork, Status);
             }
         }
         if (DeviceWork != NULL && !NT_SUCCESS(Status))
