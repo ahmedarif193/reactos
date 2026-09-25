@@ -1014,6 +1014,135 @@ done:
     if (code) ID3D10Blob_Release(code);
 }
 
+static void TestIndirectDraw(ID3D11Device *device, ID3D11DeviceContext *context,
+        pD3DCompile compile, ID3D11PixelShader *ps, ID3D11RasterizerState *rasterizer,
+        ID3D11Texture2D *texture, ID3D11RenderTargetView *target, ID3D11Texture2D *staging)
+{
+    const UINT indices[] = {1, 2, 3};
+    const FLOAT vertices[][2] = {{-1, 1}, {3, 1}, {-1, -3}};
+    const char source[] = "float4 main(float2 p : POSITION) : SV_Position { return float4(p, 0, 1); }";
+    const D3D11_INPUT_ELEMENT_DESC element = {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,
+            0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
+    const UINT stride = sizeof(vertices[0]), vertex_offset = 0;
+    const FLOAT clear[4] = {0, 0, 0, 0};
+    D3D11_BUFFER_DESC desc = {sizeof(indices), D3D11_USAGE_IMMUTABLE, D3D11_BIND_INDEX_BUFFER, 0, 0, 0};
+    D3D11_SUBRESOURCE_DATA data = {indices, 0, 0};
+    D3D11_VIEWPORT viewport = {0, 0, 16, 16, 0, 1};
+    ID3D11Buffer *index = NULL, *arguments = NULL;
+    ID3D11Buffer *vertex = NULL;
+    ID3D11VertexShader *vs = NULL;
+    ID3D11InputLayout *layout = NULL;
+    ID3DBlob *code = NULL;
+    ID3D11DeviceContext *deferred = NULL, *draw_context;
+    ID3D11CommandList *commands = NULL;
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    UINT phase, x, y, bad, values[6];
+    HRESULT hr;
+
+    hr = ID3D11Device_CreateBuffer(device, &desc, &data, &index);
+    ok(hr == S_OK, "Indirect index buffer creation returned %#lx\n", hr);
+    if (FAILED(hr)) goto done;
+    desc.ByteWidth = sizeof(vertices);
+    desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    data.pSysMem = vertices;
+    hr = ID3D11Device_CreateBuffer(device, &desc, &data, &vertex);
+    ok(hr == S_OK, "Indirect vertex buffer creation returned %#lx\n", hr);
+    if (FAILED(hr)) goto done;
+    hr = compile(source, sizeof(source) - 1, "indirect", NULL, NULL, "main", "vs_4_0", 0, 0, &code, NULL);
+    ok(hr == S_OK, "Indirect vertex shader compilation returned %#lx\n", hr);
+    if (FAILED(hr)) goto done;
+    hr = ID3D11Device_CreateVertexShader(device, ID3D10Blob_GetBufferPointer(code),
+            ID3D10Blob_GetBufferSize(code), NULL, &vs);
+    ok(hr == S_OK, "Indirect vertex shader creation returned %#lx\n", hr);
+    if (FAILED(hr)) goto done;
+    hr = ID3D11Device_CreateInputLayout(device, &element, 1, ID3D10Blob_GetBufferPointer(code),
+            ID3D10Blob_GetBufferSize(code), &layout);
+    ok(hr == S_OK, "Indirect input layout creation returned %#lx\n", hr);
+    if (FAILED(hr)) goto done;
+    hr = ID3D11Device_CreateDeferredContext(device, 0, &deferred);
+    ok(hr == S_OK, "Indirect deferred context creation returned %#lx\n", hr);
+    if (FAILED(hr)) goto done;
+    for (phase = 0; phase < 4; ++phase)
+    {
+        BOOL indexed = phase & 1;
+        memset(values, 0, sizeof(values));
+        memset(&desc, 0, sizeof(desc));
+        desc.ByteWidth = sizeof(values);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+        data.pSysMem = values;
+        hr = ID3D11Device_CreateBuffer(device, &desc, &data, &arguments);
+        ok(hr == S_OK, "Indirect argument buffer phase %u returned %#lx\n", phase, hr);
+        if (FAILED(hr)) goto done;
+        draw_context = phase < 2 ? context : deferred;
+        ID3D11DeviceContext_ClearState(draw_context);
+        ID3D11DeviceContext_ClearRenderTargetView(draw_context, target, clear);
+        ID3D11DeviceContext_OMSetRenderTargets(draw_context, 1, &target, NULL);
+        ID3D11DeviceContext_RSSetState(draw_context, rasterizer);
+        ID3D11DeviceContext_RSSetViewports(draw_context, 1, &viewport);
+        ID3D11DeviceContext_IASetPrimitiveTopology(draw_context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ID3D11DeviceContext_IASetIndexBuffer(draw_context, index, DXGI_FORMAT_R32_UINT, 0);
+        ID3D11DeviceContext_IASetInputLayout(draw_context, layout);
+        ID3D11DeviceContext_IASetVertexBuffers(draw_context, 0, 1, &vertex, &stride, &vertex_offset);
+        ID3D11DeviceContext_VSSetShader(draw_context, vs, NULL, 0);
+        ID3D11DeviceContext_PSSetShader(draw_context, ps, NULL, 0);
+
+        /* Use a nonzero byte offset and a signed base vertex. For a deferred
+         * draw, upload the arguments after recording: playback must read the
+         * resource, not a CPU snapshot taken while building the command list. */
+        values[0] = 0xdeadbeef;
+        values[1] = 3;
+        values[2] = 1;
+        values[4] = indexed ? ~0u : 0;
+        if (phase < 2)
+            ID3D11DeviceContext_UpdateSubresource(context, (ID3D11Resource *)arguments, 0, NULL, values, 0, 0);
+        if (indexed)
+            ID3D11DeviceContext_DrawIndexedInstancedIndirect(draw_context, arguments, sizeof(UINT));
+        else
+            ID3D11DeviceContext_DrawInstancedIndirect(draw_context, arguments, sizeof(UINT));
+        if (phase >= 2)
+        {
+            hr = ID3D11DeviceContext_FinishCommandList(deferred, FALSE, &commands);
+            ok(hr == S_OK, "Indirect command list phase %u returned %#lx\n", phase, hr);
+            if (FAILED(hr)) goto done;
+            ID3D11DeviceContext_UpdateSubresource(context, (ID3D11Resource *)arguments, 0, NULL, values, 0, 0);
+            ID3D11Buffer_Release(arguments);
+            arguments = NULL;
+            ID3D11DeviceContext_ExecuteCommandList(context, commands, FALSE);
+            ID3D11CommandList_Release(commands);
+            commands = NULL;
+        }
+        ID3D11DeviceContext_OMSetRenderTargets(context, 0, NULL, NULL);
+        ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)staging, (ID3D11Resource *)texture);
+        hr = ID3D11DeviceContext_Map(context, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &mapped);
+        ok(hr == S_OK, "Indirect draw readback phase %u returned %#lx\n", phase, hr);
+        if (SUCCEEDED(hr))
+        {
+            bad = 0;
+            for (y = 0; y < 16; ++y)
+                for (x = 0; x < 16; ++x)
+                {
+                    const BYTE *pixel = (const BYTE *)mapped.pData + y * mapped.RowPitch + x * 4;
+                    if (abs(pixel[0] - 191) > 1 || abs(pixel[1] - 128) > 1
+                            || abs(pixel[2] - 64) > 1 || pixel[3] != 255) ++bad;
+                }
+            ok(!bad, "Indirect draw phase %u: %u pixels did not contain shader output\n", phase, bad);
+            ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)staging, 0);
+        }
+        if (arguments) { ID3D11Buffer_Release(arguments); arguments = NULL; }
+    }
+done:
+    ID3D11DeviceContext_ClearState(context);
+    if (commands) ID3D11CommandList_Release(commands);
+    if (arguments) ID3D11Buffer_Release(arguments);
+    if (index) ID3D11Buffer_Release(index);
+    if (vertex) ID3D11Buffer_Release(vertex);
+    if (layout) ID3D11InputLayout_Release(layout);
+    if (vs) ID3D11VertexShader_Release(vs);
+    if (code) ID3D10Blob_Release(code);
+    if (deferred) ID3D11DeviceContext_Release(deferred);
+}
+
 static void TestShaderDraw(ID3D11Device *device, ID3D11DeviceContext *context,
         ID3D11Texture2D *texture, ID3D11RenderTargetView *target, ID3D11Texture2D *staging)
 {
@@ -1168,6 +1297,7 @@ static void TestShaderDraw(ID3D11Device *device, ID3D11DeviceContext *context,
     TestPredication(device, context, vs, ps, rasterizer, texture, target, staging);
     TestBufferViews(device, context, vs, rasterizer, texture, target, staging, compile);
     TestComputeDispatch(device, context, compile);
+    TestIndirectDraw(device, context, compile, ps, rasterizer, texture, target, staging);
 done:
     ID3D11DeviceContext_ClearState(context);
     if (query) ID3D11Query_Release(query);
