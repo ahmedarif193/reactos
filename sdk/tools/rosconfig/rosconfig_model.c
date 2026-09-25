@@ -460,6 +460,8 @@ void cache_load(const char *path)
     char *buf = read_file(path);
     char **lines;
     int nlines, i;
+    char *legacy_sarch = NULL;
+    Option *profile_i386 = find_opt("PROFILE_I386");
 
     if (!buf)
         return;                 /* no cache yet: defaults stay active */
@@ -479,6 +481,12 @@ void cache_load(const char *path)
         *eq = '\0';
         rtrim(line);
         o = find_opt(line);
+        if (!o && profile_i386 && strcmp(line, "SARCH") == 0) {
+            free(legacy_sarch);
+            legacy_sarch = xstrdup(eq + 1);
+            rtrim(legacy_sarch);
+            continue;
+        }
         if (!o) {
             *eq = '=';
             *GROW(g_extras, g_nextras, g_cextras) = xstrdup(line);
@@ -498,6 +506,13 @@ void cache_load(const char *path)
                 free(val);
             }
         }
+    }
+
+    if (legacy_sarch) {
+        if (strcmp(profile_i386->value, profile_i386->def) == 0 &&
+            choice_index(profile_i386, legacy_sarch) >= 0)
+            set_value(profile_i386, legacy_sarch);
+        free(legacy_sarch);
     }
 
     free(lines);
