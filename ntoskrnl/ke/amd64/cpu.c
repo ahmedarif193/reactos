@@ -731,14 +731,18 @@ KiSaveProcessorState(
     /* Save control registers */
     KiSaveProcessorControlState(&Prcb->ProcessorState);
 
-    /* KTRAP_FRAME debug slots are valid only for selected trap vectors. The
-     * control-state snapshot is authoritative for a frozen processor. */
-    Prcb->ProcessorState.ContextFrame.Dr0 = Prcb->ProcessorState.SpecialRegisters.KernelDr0;
-    Prcb->ProcessorState.ContextFrame.Dr1 = Prcb->ProcessorState.SpecialRegisters.KernelDr1;
-    Prcb->ProcessorState.ContextFrame.Dr2 = Prcb->ProcessorState.SpecialRegisters.KernelDr2;
-    Prcb->ProcessorState.ContextFrame.Dr3 = Prcb->ProcessorState.SpecialRegisters.KernelDr3;
-    Prcb->ProcessorState.ContextFrame.Dr6 = Prcb->ProcessorState.SpecialRegisters.KernelDr6;
-    Prcb->ProcessorState.ContextFrame.Dr7 = Prcb->ProcessorState.SpecialRegisters.KernelDr7;
+    /* Kernel trap frames hold valid debug slots only for selected vectors, so
+     * the control-state snapshot is authoritative for them. User frames carry
+     * the interrupted thread's own debug registers. */
+    if (TrapFrame->PreviousMode == KernelMode)
+    {
+        Prcb->ProcessorState.ContextFrame.Dr0 = Prcb->ProcessorState.SpecialRegisters.KernelDr0;
+        Prcb->ProcessorState.ContextFrame.Dr1 = Prcb->ProcessorState.SpecialRegisters.KernelDr1;
+        Prcb->ProcessorState.ContextFrame.Dr2 = Prcb->ProcessorState.SpecialRegisters.KernelDr2;
+        Prcb->ProcessorState.ContextFrame.Dr3 = Prcb->ProcessorState.SpecialRegisters.KernelDr3;
+        Prcb->ProcessorState.ContextFrame.Dr6 = Prcb->ProcessorState.SpecialRegisters.KernelDr6;
+        Prcb->ProcessorState.ContextFrame.Dr7 = Prcb->ProcessorState.SpecialRegisters.KernelDr7;
+    }
 }
 
 VOID
@@ -757,12 +761,15 @@ KiRestoreProcessorState(
                          TrapFrame->PreviousMode);
 
     /* Preserve debugger edits made to a frozen processor context. */
-    Prcb->ProcessorState.SpecialRegisters.KernelDr0 = Prcb->ProcessorState.ContextFrame.Dr0;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr1 = Prcb->ProcessorState.ContextFrame.Dr1;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr2 = Prcb->ProcessorState.ContextFrame.Dr2;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr3 = Prcb->ProcessorState.ContextFrame.Dr3;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr6 = Prcb->ProcessorState.ContextFrame.Dr6;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr7 = Prcb->ProcessorState.ContextFrame.Dr7;
+    if (TrapFrame->PreviousMode == KernelMode)
+    {
+        Prcb->ProcessorState.SpecialRegisters.KernelDr0 = Prcb->ProcessorState.ContextFrame.Dr0;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr1 = Prcb->ProcessorState.ContextFrame.Dr1;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr2 = Prcb->ProcessorState.ContextFrame.Dr2;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr3 = Prcb->ProcessorState.ContextFrame.Dr3;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr6 = Prcb->ProcessorState.ContextFrame.Dr6;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr7 = Prcb->ProcessorState.ContextFrame.Dr7;
+    }
 
     /* Restore control registers */
     KiRestoreProcessorControlState(&Prcb->ProcessorState);

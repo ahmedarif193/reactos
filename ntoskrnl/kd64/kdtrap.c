@@ -53,6 +53,16 @@
 #error Unsupported Architecture
 #endif
 
+//
+// AMD64 user traps carry the thread's own debug registers. The live hardware
+// and SpecialRegisters hold the separate kernel debugger state.
+//
+#if defined(_M_AMD64)
+#define KdpUsesKernelDebugRegisters(Mode)  ((Mode) == KernelMode)
+#elif defined(_M_IX86)
+#define KdpUsesKernelDebugRegisters(Mode)  TRUE
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 BOOLEAN
@@ -122,12 +132,15 @@ KdpReport(IN PKTRAP_FRAME TrapFrame,
 
 #if defined(_M_IX86) || defined(_M_AMD64)
     /* The generic trap context does not always contain valid debug slots. */
-    Prcb->ProcessorState.ContextFrame.Dr0 = Prcb->ProcessorState.SpecialRegisters.KernelDr0;
-    Prcb->ProcessorState.ContextFrame.Dr1 = Prcb->ProcessorState.SpecialRegisters.KernelDr1;
-    Prcb->ProcessorState.ContextFrame.Dr2 = Prcb->ProcessorState.SpecialRegisters.KernelDr2;
-    Prcb->ProcessorState.ContextFrame.Dr3 = Prcb->ProcessorState.SpecialRegisters.KernelDr3;
-    Prcb->ProcessorState.ContextFrame.Dr6 = Prcb->ProcessorState.SpecialRegisters.KernelDr6;
-    Prcb->ProcessorState.ContextFrame.Dr7 = Prcb->ProcessorState.SpecialRegisters.KernelDr7;
+    if (KdpUsesKernelDebugRegisters(PreviousMode))
+    {
+        Prcb->ProcessorState.ContextFrame.Dr0 = Prcb->ProcessorState.SpecialRegisters.KernelDr0;
+        Prcb->ProcessorState.ContextFrame.Dr1 = Prcb->ProcessorState.SpecialRegisters.KernelDr1;
+        Prcb->ProcessorState.ContextFrame.Dr2 = Prcb->ProcessorState.SpecialRegisters.KernelDr2;
+        Prcb->ProcessorState.ContextFrame.Dr3 = Prcb->ProcessorState.SpecialRegisters.KernelDr3;
+        Prcb->ProcessorState.ContextFrame.Dr6 = Prcb->ProcessorState.SpecialRegisters.KernelDr6;
+        Prcb->ProcessorState.ContextFrame.Dr7 = Prcb->ProcessorState.SpecialRegisters.KernelDr7;
+    }
 #endif
 
     /* Report the new state */
@@ -148,12 +161,15 @@ KdpReport(IN PKTRAP_FRAME TrapFrame,
      * made through the reported CONTEXT; otherwise BPM commands only update
      * the software copy and are discarded as the debugger exits.
      */
-    Prcb->ProcessorState.SpecialRegisters.KernelDr0 = ContextRecord->Dr0;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr1 = ContextRecord->Dr1;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr2 = ContextRecord->Dr2;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr3 = ContextRecord->Dr3;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr6 = ContextRecord->Dr6;
-    Prcb->ProcessorState.SpecialRegisters.KernelDr7 = ContextRecord->Dr7;
+    if (KdpUsesKernelDebugRegisters(PreviousMode))
+    {
+        Prcb->ProcessorState.SpecialRegisters.KernelDr0 = ContextRecord->Dr0;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr1 = ContextRecord->Dr1;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr2 = ContextRecord->Dr2;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr3 = ContextRecord->Dr3;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr6 = ContextRecord->Dr6;
+        Prcb->ProcessorState.SpecialRegisters.KernelDr7 = ContextRecord->Dr7;
+    }
 #endif
 
     KiRestoreProcessorControlState(&Prcb->ProcessorState);
