@@ -90,6 +90,7 @@ static const struct wined3d_extension_map gl_extension_map[] =
     {"GL_ARB_framebuffer_object",           ARB_FRAMEBUFFER_OBJECT        },
     {"GL_ARB_framebuffer_sRGB",             ARB_FRAMEBUFFER_SRGB          },
     {"GL_ARB_geometry_shader4",             ARB_GEOMETRY_SHADER4          },
+    {"GL_ARB_get_texture_sub_image",        ARB_GET_TEXTURE_SUB_IMAGE     },
     {"GL_ARB_gpu_shader5",                  ARB_GPU_SHADER5               },
     {"GL_ARB_half_float_pixel",             ARB_HALF_FLOAT_PIXEL          },
     {"GL_ARB_half_float_vertex",            ARB_HALF_FLOAT_VERTEX         },
@@ -811,6 +812,54 @@ static BOOL match_broken_view_mipmaps(const struct wined3d_gl_info *gl_info, str
     return error == GL_NO_ERROR && broken;
 }
 
+static BOOL match_broken_volume_pack(const struct wined3d_gl_info *gl_info, struct wined3d_caps_gl_ctx *ctx,
+        const char *gl_renderer, enum wined3d_gl_vendor gl_vendor,
+        enum wined3d_pci_vendor card_vendor, enum wined3d_pci_device device)
+{
+    DWORD source[16], result[16], zero[16] = {0};
+    GLuint texture, buffer;
+    unsigned int i;
+    GLenum error;
+    BOOL broken = FALSE;
+
+    if (!gl_info->supported[ARB_GET_TEXTURE_SUB_IMAGE] || !gl_info->supported[ARB_TEXTURE_STORAGE]
+            || !gl_info->supported[ARB_PIXEL_BUFFER_OBJECT]
+            || !gl_info->gl_ops.ext.p_glGetTextureSubImage)
+        return FALSE;
+
+    /* A multi-slice PBO transfer can overwrite its first slice repeatedly.
+     * Use distinct slice contents and verify the per-slice alternative before
+     * selecting it. This readback is confined to adapter initialization. */
+    for (i = 0; i < ARRAY_SIZE(source); ++i)
+        source[i] = 0xff001000 + i;
+    gl_info->gl_ops.gl.p_glGenTextures(1, &texture);
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_3D, texture);
+    GL_EXTCALL(glTexStorage3D(GL_TEXTURE_3D, 1, GL_RGBA8, 2, 2, 4));
+    GL_EXTCALL(glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, 2, 2, 4, GL_RGBA, GL_UNSIGNED_BYTE, source));
+    GL_EXTCALL(glGenBuffers(1, &buffer));
+    GL_EXTCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer));
+    GL_EXTCALL(glBufferData(GL_PIXEL_PACK_BUFFER, sizeof(source), zero, GL_STREAM_READ));
+    gl_info->gl_ops.gl.p_glGetTexImage(GL_TEXTURE_3D, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    GL_EXTCALL(glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, sizeof(result), result));
+    error = gl_info->gl_ops.gl.p_glGetError();
+    if (error == GL_NO_ERROR && memcmp(source, result, sizeof(source)))
+    {
+        GL_EXTCALL(glBufferData(GL_PIXEL_PACK_BUFFER, sizeof(source), zero, GL_STREAM_READ));
+        for (i = 0; i < 4; ++i)
+            GL_EXTCALL(glGetTextureSubImage(texture, 0, 0, 0, i, 2, 2, 1,
+                    GL_RGBA, GL_UNSIGNED_BYTE, 4 * sizeof(DWORD), (void *)(uintptr_t)(i * 4 * sizeof(DWORD))));
+        GL_EXTCALL(glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, sizeof(result), result));
+        error = gl_info->gl_ops.gl.p_glGetError();
+        broken = error == GL_NO_ERROR && !memcmp(source, result, sizeof(source));
+    }
+    GL_EXTCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, 0));
+    GL_EXTCALL(glDeleteBuffers(1, &buffer));
+    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_3D, 0);
+    gl_info->gl_ops.gl.p_glDeleteTextures(1, &texture);
+    checkGLcall("test volume pixel-pack slice addressing");
+    return broken;
+}
+
 static BOOL match_fglrx(const struct wined3d_gl_info *gl_info, struct wined3d_caps_gl_ctx *ctx,
         const char *gl_renderer, enum wined3d_gl_vendor gl_vendor,
         enum wined3d_pci_vendor card_vendor, enum wined3d_pci_device device)
@@ -1062,6 +1111,11 @@ static void quirk_broken_view_mipmaps(struct wined3d_gl_info *gl_info)
     gl_info->quirks |= WINED3D_QUIRK_BROKEN_VIEW_MIPMAPS;
 }
 
+static void quirk_broken_volume_pack(struct wined3d_gl_info *gl_info)
+{
+    gl_info->quirks |= WINED3D_QUIRK_BROKEN_VOLUME_PACK;
+}
+
 static void quirk_infolog_spam(struct wined3d_gl_info *gl_info)
 {
     gl_info->quirks |= WINED3D_QUIRK_INFO_LOG_SPAM;
@@ -1221,6 +1275,11 @@ static void fixup_extensions(struct wined3d_gl_info *gl_info, struct wined3d_cap
             match_broken_view_mipmaps,
             quirk_broken_view_mipmaps,
             "Generate mipmaps through the original texture when the view is equivalent"
+        },
+        {
+            match_broken_volume_pack,
+            quirk_broken_volume_pack,
+            "Transfer volume pixel-pack buffers one slice at a time"
         },
         {
             match_not_dx10_capable,
@@ -2240,6 +2299,8 @@ static void load_gl_funcs(struct wined3d_gl_info *gl_info)
     USE_GL_FUNC(glCopyBufferSubData)
     /* GL_ARB_copy_image */
     USE_GL_FUNC(glCopyImageSubData)
+    /* GL_ARB_get_texture_sub_image */
+    USE_GL_FUNC(glGetTextureSubImage)
     /* GL_ARB_debug_output */
     USE_GL_FUNC(glDebugMessageCallbackARB)
     USE_GL_FUNC(glDebugMessageControlARB)
@@ -3502,6 +3563,7 @@ static BOOL wined3d_adapter_init_gl_caps(struct wined3d_adapter_gl *adapter_gl,
         {ARB_CLIP_CONTROL,                 MAKEDWORD_VERSION(4, 5)},
         {ARB_CULL_DISTANCE,                MAKEDWORD_VERSION(4, 5)},
         {ARB_DERIVATIVE_CONTROL,           MAKEDWORD_VERSION(4, 5)},
+        {ARB_GET_TEXTURE_SUB_IMAGE,        MAKEDWORD_VERSION(4, 5)},
         {ARB_SHADER_TEXTURE_IMAGE_SAMPLES, MAKEDWORD_VERSION(4, 5)},
         {ARB_TEXTURE_BARRIER,              MAKEDWORD_VERSION(4, 5)},
         {EXT_SHADER_INTEGER_MIX,           MAKEDWORD_VERSION(4, 5)},

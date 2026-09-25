@@ -12,6 +12,7 @@ extern void func_raster_coverage(void);
 extern void func_null_texture(void);
 extern void func_buffer_copy(void);
 extern void func_copy_depth_stencil(void);
+extern void func_volume_readback(void);
 
 const struct test winetest_testlist[] =
 {
@@ -26,5 +27,6 @@ const struct test winetest_testlist[] =
     { "null_texture", func_null_texture },
     { "buffer_copy", func_buffer_copy },
     { "copy_depth_stencil", func_copy_depth_stencil },
+    { "volume_readback", func_volume_readback },
     { 0, 0 }
 };
