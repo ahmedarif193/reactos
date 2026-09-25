@@ -242,12 +242,18 @@ MiInitializePhase0(
 
     PhysicalBytes = (ULONG64)MmNumberOfPhysicalPages << PAGE_SHIFT;
     if (MiSystem.Arch->VirtualAddressBits > 32)
+    {
         SystemPteBytes = MI_SYSPTE_64BIT_PAGES << PAGE_SHIFT;
+        NonPagedBytes = MiClampBytes(PhysicalBytes / 2, 64 * _1MB, 4ULL * _1GB);
+        PagedBytes = MiClampBytes(PhysicalBytes, 128 * _1MB, 4ULL * _1GB);
+    }
     else
-        SystemPteBytes = MiClampBytes(PhysicalBytes / 2, 128 * _1MB, 2 * _1GB);
-    NonPagedBytes = MiClampBytes(PhysicalBytes / 2, 64 * _1MB, 4ULL * _1GB);
+    {
+        SystemPteBytes = MiClampBytes(PhysicalBytes / 8, 64 * _1MB, 128 * _1MB);
+        NonPagedBytes = MiClampBytes(PhysicalBytes / 8, 64 * _1MB, 128 * _1MB);
+        PagedBytes = MiClampBytes(PhysicalBytes / 4, 128 * _1MB, 256 * _1MB);
+    }
     ExecutableBytes = NonPagedBytes / 2;
-    PagedBytes = MiClampBytes(PhysicalBytes, 128 * _1MB, 4ULL * _1GB);
 
     Status = MiSystemPtesInitialize(&MiSystem, SystemPteBytes >> PAGE_SHIFT, MI_SYSPTE_CPU_CACHES);
     if (!NT_SUCCESS(Status))
