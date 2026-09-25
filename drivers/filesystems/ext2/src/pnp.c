@@ -311,7 +311,7 @@ Ext2PnpSurpriseRemove (
     PEXT2_IRP_CONTEXT IrpContext,
     PEXT2_VCB         Vcb      )
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     KEVENT   Event;
     BOOLEAN  bDeleted;
 

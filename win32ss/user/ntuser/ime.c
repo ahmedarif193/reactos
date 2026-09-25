@@ -56,7 +56,7 @@ IntGetImeHotKeyLanguageScore(
     _In_ HKL hKL,
     _In_ LANGID HotKeyLangId)
 {
-    LCID lcid;
+    LCID lcid = MAKELCID(LANGID_NEUTRAL, SORT_DEFAULT);
 
     if (HotKeyLangId == LANGID_NEUTRAL || HotKeyLangId == LOWORD(hKL))
         return 3;

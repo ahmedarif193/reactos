@@ -465,7 +465,7 @@ bool CCABManager::DisplayCabinet()
                     printf("%s ", Date2Str(Str, Search.File->FileDate));
                     printf("%s ", Time2Str(Str, Search.File->FileTime));
                     printf("%s ", Attr2Str(Str, Search.File->Attributes));
-                    sprintf(Str, "%u", (UINT)Search.File->FileSize);
+                    snprintf(Str, sizeof(Str), "%u", (UINT)Search.File->FileSize);
                     printf("%s ", Pad(Str, ' ', 13));
                     printf("%s\n", Search.FileName.c_str());
 
@@ -482,7 +482,7 @@ bool CCABManager::DisplayCabinet()
                 printf("                 1 file    ");
             else
             {
-                sprintf(Str, "%u", (UINT)FileCount);
+                snprintf(Str, sizeof(Str), "%u", (UINT)FileCount);
                 printf("      %s files   ", Pad(Str, ' ', 12));
             }
 
@@ -490,7 +490,7 @@ bool CCABManager::DisplayCabinet()
                 printf("           1 byte\n");
             else
             {
-                sprintf(Str, "%u", (UINT)ByteCount);
+                snprintf(Str, sizeof(Str), "%u", (UINT)ByteCount);
                 printf("%s bytes\n", Pad(Str, ' ', 12));
             }
         }

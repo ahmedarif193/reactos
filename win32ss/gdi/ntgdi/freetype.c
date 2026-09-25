@@ -8254,10 +8254,8 @@ GreGetCharABCWidthsW(
     IntRequestFontSize(FontGDI, plf->lfWidth, plf->lfHeight);
     FT_Set_Transform(face, NULL, NULL);
 
-    if (!fl)
-        SafeBuffF = SafeBuffer;
-    else
-        SafeBuffI = SafeBuffer;
+    SafeBuffF = SafeBuffer;
+    SafeBuffI = SafeBuffer;
 
     for (i = FirstChar; i < FirstChar+Count; i++)
     {

@@ -5505,7 +5505,7 @@ RxDriverEntry(
     IN PDRIVER_OBJECT DriverObject,
     IN PUNICODE_STRING RegistryPath)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     USHORT i, State = 0;
 
     DPRINT("RxDriverEntry(%p, %p)\n", DriverObject, RegistryPath);
@@ -5589,7 +5589,7 @@ RxDriverEntry(
     UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
 #else
-    return STATUS_SUCCESS;
+    return Status;
 #endif
 }
 

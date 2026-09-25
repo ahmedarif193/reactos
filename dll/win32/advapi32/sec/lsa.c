@@ -1267,7 +1267,7 @@ LsaOpenSecret(IN LSA_HANDLE PolicyHandle,
               IN ACCESS_MASK DesiredAccess,
               OUT PLSA_HANDLE SecretHandle)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaOpenSecret(%p %p 0x%08lx %p)\n",
           PolicyHandle, SecretName, DesiredAccess, SecretHandle);
@@ -1475,7 +1475,7 @@ LsaQueryInformationPolicy(IN LSA_HANDLE PolicyHandle,
                           OUT PVOID *Buffer)
 {
     PLSAPR_POLICY_INFORMATION PolicyInformation = NULL;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
     TRACE("LsaQueryInformationPolicy(%p %d %p)\n",
           PolicyHandle, InformationClass, Buffer);

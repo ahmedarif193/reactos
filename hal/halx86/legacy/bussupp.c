@@ -368,8 +368,8 @@ NTAPI
 HalpIsValidPCIDevice(IN PBUS_HANDLER BusHandler,
                      IN PCI_SLOT_NUMBER Slot)
 {
-    UCHAR DataBuffer[PCI_COMMON_HDR_LENGTH];
-    PPCI_COMMON_CONFIG PciHeader = (PVOID)DataBuffer;
+    PCI_COMMON_CONFIG DataBuffer;
+    PPCI_COMMON_CONFIG PciHeader = &DataBuffer;
     ULONG i;
     ULONG_PTR Address;
 
@@ -644,8 +644,8 @@ HalpGetPciBridgeConfig(IN ULONG PciType,
 {
     PCI_SLOT_NUMBER PciSlot;
     ULONG i, j, k;
-    UCHAR DataBuffer[PCI_COMMON_HDR_LENGTH];
-    PPCI_COMMON_CONFIG PciData = (PPCI_COMMON_CONFIG)DataBuffer;
+    PCI_COMMON_CONFIG DataBuffer;
+    PPCI_COMMON_CONFIG PciData = &DataBuffer;
     PBUS_HANDLER BusHandler;
 
     /* Loop PCI buses */
@@ -1027,8 +1027,8 @@ HalpInitializePciBus(VOID)
     UCHAR PciType;
     PCI_SLOT_NUMBER PciSlot;
     ULONG i, j, k;
-    UCHAR DataBuffer[PCI_COMMON_HDR_LENGTH];
-    PPCI_COMMON_CONFIG PciData = (PPCI_COMMON_CONFIG)DataBuffer;
+    PCI_COMMON_CONFIG DataBuffer;
+    PPCI_COMMON_CONFIG PciData = &DataBuffer;
     PBUS_HANDLER BusHandler;
     ULONG HackFlags;
     BOOLEAN ExtendedAddressDecoding = FALSE;

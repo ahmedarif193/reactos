@@ -12,6 +12,7 @@
 #define modfl _dummy_modfl
 #include <precomp.h>
 #undef modfl
+#include <float.h>
 
 //static const double one = 1.0;
 
@@ -19,6 +20,12 @@
 
 long double modfl(long double __x, long double *__i)
 {
+#if LDBL_MANT_DIG == DBL_MANT_DIG && LDBL_MAX_EXP == DBL_MAX_EXP
+	double integral;
+	double fraction = modf((double)__x, &integral);
+	*__i = (long double)integral;
+	return (long double)fraction;
+#else
 	union
 	{
 		long double*   __x;
@@ -84,4 +91,5 @@ long double modfl(long double __x, long double *__i)
 
 		return __x - *__i;
 	}
+#endif
 }

@@ -3217,7 +3217,7 @@ BOOL WINAPI CRYPT_AsnEncodeOctets(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const void *pvStructInfo, DWORD dwFlags,
  PCRYPT_ENCODE_PARA pEncodePara, BYTE *pbEncoded, DWORD *pcbEncoded)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     __TRY
     {

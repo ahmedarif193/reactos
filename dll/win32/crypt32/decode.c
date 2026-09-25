@@ -4425,7 +4425,7 @@ static BOOL WINAPI CRYPT_AsnDecodeBits(DWORD dwCertEncodingType,
  LPCSTR lpszStructType, const BYTE *pbEncoded, DWORD cbEncoded, DWORD dwFlags,
  PCRYPT_DECODE_PARA pDecodePara, void *pvStructInfo, DWORD *pcbStructInfo)
 {
-    BOOL ret;
+    BOOL ret = FALSE;
 
     TRACE("(%p, %ld, 0x%08lx, %p, %p, %p)\n", pbEncoded, cbEncoded, dwFlags,
      pDecodePara, pvStructInfo, pcbStructInfo);

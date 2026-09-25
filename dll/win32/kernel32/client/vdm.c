@@ -544,7 +544,7 @@ BaseUpdateVDMEntry(IN ULONG UpdateIndex,
                    IN ULONG IndexInfo,
                    IN ULONG BinaryType)
 {
-    BASE_API_MESSAGE ApiMessage;
+    BASE_API_MESSAGE ApiMessage = {0};
     PBASE_UPDATE_VDM_ENTRY UpdateVdmEntry = &ApiMessage.Data.UpdateVDMEntryRequest;
 
     /* Check what update is being sent */
@@ -567,6 +567,16 @@ BaseUpdateVDMEntry(IN ULONG UpdateIndex,
             UpdateVdmEntry->iTask = IndexInfo;
             break;
         }
+
+        case VdmEntryUpdateControlCHandler:
+        {
+            UpdateVdmEntry->iTask = IndexInfo;
+            break;
+        }
+
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
     }
 
     /* Also check what kind of binary this is for the console handle */

@@ -153,7 +153,7 @@ AddPropSheetPage(HPROPSHEETPAGE hPage, LPFNSVADDPROPSHEETPAGE pfnAddPage, LPARAM
     return E_FAIL;
 }
 
-template<class T> static UINT CALLBACK
+template<class T> UINT CALLBACK
 PropSheetPageLifetimeCallback(HWND hWnd, UINT uMsg, PROPSHEETPAGEW *pPSP)
 {
     if (uMsg == PSPCB_RELEASE)

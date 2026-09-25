@@ -23,6 +23,7 @@
 #define __NFS41_DAEMON_NAME_CACHE_H__
 
 #include "nfs41.h"
+#include "nfs41_ops.h"
 
 
 static __inline struct nfs41_name_cache* client_name_cache(

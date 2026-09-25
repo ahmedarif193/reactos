@@ -194,8 +194,8 @@ UDFUpdateXSpaceBitmaps(
     int8* bad_bm;
     int8* old_bm;
     int8* new_bm;
-    int8* fpart_bm;
-    int8* upart_bm;
+    int8* fpart_bm = NULL;
+    int8* upart_bm = NULL;
     OSSTATUS status, status2;
     int8* USBM=NULL;
     int8* FSBM=NULL;
