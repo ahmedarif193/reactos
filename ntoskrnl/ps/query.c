@@ -1020,8 +1020,8 @@ NtQueryInformationProcess(
                 VmCounters->PeakVirtualSize = Process->PeakVirtualSize;
                 VmCounters->VirtualSize = Process->VirtualSize;
                 VmCounters->PageFaultCount = Process->Vm.Instance.PageFaultCount;
-                VmCounters->PeakWorkingSetSize = Process->Vm.Instance.PeakWorkingSetSize;
-                VmCounters->WorkingSetSize = Process->Vm.Instance.WorkingSetSize;
+                VmCounters->PeakWorkingSetSize = Process->Vm.Instance.PeakWorkingSetSize << PAGE_SHIFT;
+                VmCounters->WorkingSetSize = Process->Vm.Instance.WorkingSetSize << PAGE_SHIFT;
                 VmCounters->QuotaPeakPagedPoolUsage = Process->ProcessQuotaPeak[PsPagedPool];
                 VmCounters->QuotaPagedPoolUsage = Process->ProcessQuotaUsage[PsPagedPool];
                 VmCounters->QuotaPeakNonPagedPoolUsage = Process->ProcessQuotaPeak[PsNonPagedPool];
