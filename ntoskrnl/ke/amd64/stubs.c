@@ -182,6 +182,16 @@ KiIdleLoop(VOID)
         }
 #endif
 
+        /* An affinity change can leave our own idle thread as the next
+         * thread. We already run on its stack, so retry the selection. */
+        if (NewThread == Prcb->IdleThread)
+        {
+            ASSERT(Prcb->CurrentThread == NewThread);
+            NewThread->State = Running;
+            KiReleasePrcbLock(Prcb);
+            continue;
+        }
+
         if (NewThread)
         {
             OldThread = Prcb->CurrentThread;
