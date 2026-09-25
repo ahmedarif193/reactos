@@ -2668,6 +2668,58 @@ HRESULT CDECL wined3d_shader_set_local_constants_float(struct wined3d_shader *sh
     return WINED3D_OK;
 }
 
+/* Registers carried in generic varyings to the pixel shader: its inputs other
+ * than system values with GLSL built-ins, plus captured stream-output registers.
+ * Declaring every register can exceed the total output component limits. */
+static uint32_t shader_get_rasterizer_input_mask(const struct wined3d_state *state)
+{
+    const struct wined3d_shader *ps = state->shader[WINED3D_SHADER_TYPE_PIXEL];
+    const struct wined3d_shader *gs = state->shader[WINED3D_SHADER_TYPE_GEOMETRY];
+    unsigned int i, register_idx, component_idx;
+    uint32_t mask = 0;
+
+    if (ps && ps->reg_maps.shader_version.major >= 4)
+    {
+        for (i = 0; i < ps->input_signature.element_count; ++i)
+        {
+            const struct wined3d_shader_signature_element *e = &ps->input_signature.elements[i];
+
+            if (!(ps->reg_maps.input_registers & (1u << e->register_idx)))
+                continue;
+            if (e->sysval_semantic == WINED3D_SV_IS_FRONT_FACE
+                    || e->sysval_semantic == WINED3D_SV_SAMPLE_INDEX)
+                continue;
+            if (!e->semantic_idx && (e->sysval_semantic == WINED3D_SV_POSITION
+                    || e->sysval_semantic == WINED3D_SV_RENDER_TARGET_ARRAY_INDEX
+                    || e->sysval_semantic == WINED3D_SV_VIEWPORT_ARRAY_INDEX))
+                continue;
+            mask |= 1u << e->register_idx;
+        }
+    }
+    else if (ps)
+    {
+        mask = wined3d_mask_from_size(ps->limits->packed_input);
+    }
+
+    /* Rasterization and stream output may run together. Preserve captured
+     * registers even when the pixel shader does not read them. */
+    if (gs && gs->u.gs.so_desc)
+    {
+        const struct wined3d_stream_output_desc *so_desc = gs->u.gs.so_desc;
+
+        for (i = 0; i < so_desc->element_count; ++i)
+        {
+            const struct wined3d_stream_output_element *e = &so_desc->elements[i];
+
+            if (!e->semantic_name || e->stream_idx)
+                continue;
+            if (shader_get_stream_output_register_info(gs, e, &register_idx, &component_idx))
+                mask |= 1u << register_idx;
+        }
+    }
+    return mask;
+}
+
 static void init_interpolation_compile_args(uint32_t *interpolation_args,
         const struct wined3d_shader *pixel_shader, const struct wined3d_d3d_info *d3d_info)
 {
@@ -2725,6 +2777,8 @@ void find_vs_compile_args(const struct wined3d_state *state, const struct wined3
     args->point_size = state->primitive_type == WINED3D_PT_POINTLIST;
     args->next_shader_type = hull_shader ? WINED3D_SHADER_TYPE_HULL
             : geometry_shader ? WINED3D_SHADER_TYPE_GEOMETRY : WINED3D_SHADER_TYPE_PIXEL;
+    args->rasterizer_input_mask = args->next_shader_type == WINED3D_SHADER_TYPE_PIXEL
+            ? shader_get_rasterizer_input_mask(state) : 0;
     if (shader->reg_maps.shader_version.major >= 4)
         args->next_shader_input_count = hull_shader ? hull_shader->limits->packed_input
                 : geometry_shader ? geometry_shader->limits->packed_input
@@ -2840,6 +2894,8 @@ void find_ds_compile_args(const struct wined3d_state *state, const struct wined3
     args->output_count = geometry_shader ? geometry_shader->limits->packed_input
             : pixel_shader ? pixel_shader->limits->packed_input : shader->limits->packed_output;
     args->next_shader_type = geometry_shader ? WINED3D_SHADER_TYPE_GEOMETRY : WINED3D_SHADER_TYPE_PIXEL;
+    args->rasterizer_input_mask = args->next_shader_type == WINED3D_SHADER_TYPE_PIXEL
+            ? shader_get_rasterizer_input_mask(state) : 0;
 
     init_interpolation_compile_args(args->interpolation_mode,
             args->next_shader_type == WINED3D_SHADER_TYPE_PIXEL ? pixel_shader : NULL, context->d3d_info);
@@ -2853,6 +2909,7 @@ void find_gs_compile_args(const struct wined3d_state *state, const struct wined3
     const struct wined3d_shader *pixel_shader = state->shader[WINED3D_SHADER_TYPE_PIXEL];
 
     args->output_count = pixel_shader ? pixel_shader->limits->packed_input : shader->limits->packed_output;
+    args->rasterizer_input_mask = shader_get_rasterizer_input_mask(state);
 
     if (!(args->primitive_type = shader->u.gs.input_type))
         args->primitive_type = state->primitive_type;
@@ -2869,6 +2926,7 @@ void find_ps_compile_args(const struct wined3d_state *state, const struct wined3
     unsigned int i;
 
     memset(args, 0, sizeof(*args)); /* FIXME: Make sure all bits are set. */
+    args->rasterizer_input_mask = shader_get_rasterizer_input_mask(state);
     if (!d3d_info->srgb_write_control && needs_srgb_write(d3d_info, state, &state->fb))
     {
         static unsigned int warned = 0;

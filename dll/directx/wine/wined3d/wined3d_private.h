@@ -1468,6 +1468,7 @@ enum wined3d_shader_tex_types
 struct ps_compile_args
 {
     struct color_fixup_desc     color_fixup[WINED3D_MAX_FRAGMENT_SAMPLERS];
+    uint32_t rasterizer_input_mask;
     enum wined3d_vertex_processing_mode vp_mode;
     enum wined3d_ffp_ps_fog_mode fog;
     DWORD                       tex_types; /* ps 1 - 3, 16 textures */
@@ -1494,6 +1495,7 @@ struct vs_compile_args
 {
     DWORD swizzle_map;   /* MAX_ATTRIBS, 32 */
     unsigned int next_shader_input_count;
+    uint32_t rasterizer_input_mask;
     uint32_t interpolation_mode[WINED3D_PACKED_INTERPOLATION_SIZE];
     BYTE fog_src;
     BYTE clip_enabled : 1;
@@ -1510,12 +1512,14 @@ struct ds_compile_args
     unsigned int output_count : 16;
     unsigned int next_shader_type : 3;
     unsigned int padding : 13;
+    uint32_t rasterizer_input_mask;
     uint32_t interpolation_mode[WINED3D_PACKED_INTERPOLATION_SIZE];
 };
 
 struct gs_compile_args
 {
     unsigned int output_count;
+    uint32_t rasterizer_input_mask;
     enum wined3d_primitive_type primitive_type;
     uint32_t interpolation_mode[WINED3D_PACKED_INTERPOLATION_SIZE];
 };
