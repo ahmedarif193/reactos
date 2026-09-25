@@ -154,6 +154,14 @@ NTSTATUS SendFragments(
     TI_DbgPrint(MAX_TRACE, ("Called. IPPacket (0x%X)  NCE (0x%X)  PathMTU (%d).\n",
         IPPacket, NCE, PathMTU));
 
+    /* Every non-final fragment must carry at least one 8-byte block. A smaller
+     * MTU would allocate an empty buffer or underflow the fragment length. */
+    if (PathMTU <= IPPacket->HeaderSize || PathMTU - IPPacket->HeaderSize < 8)
+    {
+        IPPacket->Free(IPPacket);
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+
     /* Make a smaller buffer if we will only send one fragment */
     GetDataPtr( IPPacket->NdisPacket, IPPacket->Position, &InData, &InSize );
     if( InSize < BufferSize ) BufferSize = InSize;

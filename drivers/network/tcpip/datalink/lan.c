@@ -1405,10 +1405,24 @@ BOOLEAN BindAdapter(
         return FALSE;
     }
 
+    /* Addresses can be assigned and packets sent before the first media
+     * connect indication, so the interface needs its MTU from the start. */
+    NdisStatus = NDISCall(Adapter,
+                          NdisRequestQueryInformation,
+                          OID_GEN_MAXIMUM_FRAME_SIZE,
+                          &Adapter->MTU,
+                          sizeof(Adapter->MTU));
+    if (NdisStatus != NDIS_STATUS_SUCCESS || Adapter->MTU == 0) {
+        TI_DbgPrint(MIN_TRACE, ("Could not obtain a valid MTU (0x%X, %u).\n",
+                               NdisStatus, Adapter->MTU));
+        return FALSE;
+    }
+
     /* Bind the adapter to IP layer */
     BindInfo.Context       = Adapter;
     BindInfo.HeaderSize    = Adapter->HeaderSize;
     BindInfo.MinFrameSize  = Adapter->MinFrameSize;
+    BindInfo.MTU           = Adapter->MTU;
     BindInfo.Address       = (PUCHAR)&Adapter->HWAddress;
     BindInfo.AddressLength = Adapter->HWAddressLength;
     BindInfo.Transmit      = LANTransmit;

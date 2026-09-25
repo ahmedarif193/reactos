@@ -113,14 +113,13 @@ NDIS_STATUS LoopRegisterAdapter(
   BindInfo.Context = NULL;
   BindInfo.HeaderSize = 0;
   BindInfo.MinFrameSize = 0;
+  BindInfo.MTU = 16384;
   BindInfo.Address = NULL;
   BindInfo.AddressLength = 0;
   BindInfo.Transmit = LoopTransmit;
 
   Loopback = IPCreateInterface(&BindInfo);
   if (!Loopback) return NDIS_STATUS_RESOURCES;
-
-  Loopback->MTU = 16384;
 
   Loopback->Name.Buffer = L"Loopback";
   Loopback->Name.MaximumLength = Loopback->Name.Length =
