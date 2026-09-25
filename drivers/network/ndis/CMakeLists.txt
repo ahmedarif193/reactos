@@ -57,6 +57,7 @@ set(NDIS6_SOURCE
     ndis/60thunk_rx.c
     ndis/60filter.c
     ndis/60util.c
+    ndis/60processor.c
     include/ndis6_internal.h)
 set_source_files_properties(${NDIS6_SOURCE} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
