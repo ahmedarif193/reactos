@@ -548,16 +548,28 @@ IntCompositionIsEnabled(VOID)
     return gbCompositionEnabled;
 }
 
+/* co_UserFreeWindow retires redirection before its WM_NCDESTROY callback, so
+ * a window in destruction must never be registered again. */
+static BOOL
+IntCompositionIsDying(_In_ PWND Wnd)
+{
+    return (Wnd->state & WNDS_DESTROYED) || (Wnd->state2 & WNDS2_INDESTROY);
+}
+
 static PWND
 IntCompositionTopLevel(_In_ PWND Wnd)
 {
     PWND ancestor = Wnd, desktop = UserGetDesktopWindow();
 
-    if (Wnd == NULL || desktop == NULL)
+    if (Wnd == NULL || desktop == NULL || IntCompositionIsDying(Wnd))
         return NULL;
 
     while (ancestor->spwndParent != NULL && ancestor->spwndParent != desktop)
+    {
         ancestor = ancestor->spwndParent;
+        if (IntCompositionIsDying(ancestor))
+            return NULL;
+    }
     return ancestor;
 }
 
@@ -579,6 +591,11 @@ static REDIRECT_ENTRY *
 IntCompositionAlloc(_In_ PWND Wnd)
 {
     ULONG i;
+
+    /* No later destroy hook would remove a dying window's entry */
+    if (Wnd == NULL || Wnd->head.pti == NULL || IntCompositionIsDying(Wnd))
+        return NULL;
+
     for (i = 0; i < COMPOSITION_MAX_WINDOWS; i++)
     {
         if (g_Redirects[i].Wnd == NULL)
@@ -607,7 +624,7 @@ IntCompositionFreeBlur(_Inout_ REDIRECT_ENTRY *Entry)
 static BOOL
 IntCompositionIsCompositable(_In_ PWND Wnd)
 {
-    if (Wnd == NULL || Wnd->head.pti == NULL)
+    if (Wnd == NULL || Wnd->head.pti == NULL || IntCompositionIsDying(Wnd))
         return FALSE;
     /* The registered fullscreen OpenGL window is DWM's final GPU scanout
      * carrier.  Redirecting or returning it in GETFRAME would make DWM
