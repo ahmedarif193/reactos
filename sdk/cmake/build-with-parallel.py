@@ -5,6 +5,10 @@
 Ninja does not export its -j setting. Read only the ancestor process chain at
 build time so changing -j requires neither a cache option nor reconfiguration.
 No external Python modules are required.
+
+Ninja withholds a command's output until the command exits, so a nested build
+is invisible while it runs. Mirror its progress to the controlling terminal as
+it happens and keep the captured log free of the duplicated progress lines.
 """
 import ctypes
 import json
@@ -13,6 +17,15 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
+
+
+NESTED_BUILD_MIRROR = 'REACTOS_NESTED_BUILD_MIRROR'
+PROGRESS_LINE = re.compile(rb'^\[[0-9]+/[0-9]+\]')
+CONSOLE_ERASE = b'\r\x1b[K'
+if os.name == 'nt' or os.environ.get('TERM', 'dumb') == 'dumb':
+    CONSOLE_ERASE = b'\r'
+MIRROR_INTERVAL = 0.5
 
 
 def job_count(argv):
@@ -146,6 +159,69 @@ def build_command(command, jobs, environment):
     return command, environment
 
 
+def open_console():
+    """Return the controlling terminal when Ninja is capturing our output."""
+    if os.environ.get(NESTED_BUILD_MIRROR):
+        return None
+    try:
+        if sys.stdout.isatty():
+            return None
+    except (AttributeError, ValueError):
+        return None
+    try:
+        return open('CONOUT$' if os.name == 'nt' else '/dev/tty', 'wb', buffering=0)
+    except OSError:
+        return None
+
+
+def show(console, prefix, line):
+    """Write one tagged line over whatever status line Ninja last drew."""
+    try:
+        console.write(CONSOLE_ERASE + prefix + line + b'\n')
+    except OSError:
+        pass
+
+
+def mirror_build(command, environment, console):
+    """Run the nested build, streaming its progress to the terminal."""
+    environment = dict(environment)
+    environment[NESTED_BUILD_MIRROR] = '1'
+    name = Path(command[command.index('--build') + 1]).resolve().name.lstrip('_')
+    prefix = b'[' + (name or 'nested').encode() + b'] '
+    process = subprocess.Popen(command, env=environment,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    captured = []
+    pending = None
+    shown = 0.0
+    for line in iter(process.stdout.readline, b''):
+        captured.append(line)
+        line = line.rstrip()
+        if PROGRESS_LINE.match(line):
+            pending = line
+            if time.monotonic() - shown < MIRROR_INTERVAL:
+                continue
+            show(console, prefix, pending)
+            pending = None
+            shown = time.monotonic()
+            continue
+        if not line:
+            continue
+        if pending is not None:
+            show(console, prefix, pending)
+            pending = None
+        show(console, prefix, line)
+        shown = time.monotonic()
+    if pending is not None:
+        show(console, prefix, pending)
+    process.stdout.close()
+    status = process.wait()
+    if not status:
+        captured = [line for line in captured if not PROGRESS_LINE.match(line)]
+    sys.stdout.buffer.writelines(captured)
+    sys.stdout.buffer.flush()
+    return status
+
+
 def main():
     if len(sys.argv) < 4 or sys.argv[2] != '--build':
         raise SystemExit('Usage: build-with-parallel.py <cmake> --build <directory> [build options]')
@@ -155,8 +231,12 @@ def main():
         jobs = next((count for argv in ancestors()
                      if (count := job_count(argv)) is not None), None)
     command, environment = build_command(command, jobs, os.environ)
+    console = open_console()
     try:
-        return subprocess.call(command, env=environment)
+        if console is None:
+            return subprocess.call(command, env=environment)
+        with console:
+            return mirror_build(command, environment, console)
     except KeyboardInterrupt:
         return 130
 
