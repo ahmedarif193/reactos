@@ -4180,7 +4180,9 @@ DxgkpProcessPresentQueueLocked(_In_ PVOID Context)
          * miniport has no DxgkDdiPresent), fall back to the DOD path
          * if a shadow framebuffer is available.
          */
-        if (Status == STATUS_NOT_SUPPORTED && Entry.SharedSurface.RundownHeld && Entry.SharedSurface.ShadowFb != NULL)
+        if (Status == STATUS_NOT_SUPPORTED &&
+            DXGK_CB_FULL(Adapter, DxgkDdiPresent) == NULL &&
+            Entry.SharedSurface.RundownHeld && Entry.SharedSurface.ShadowFb != NULL)
         {
             Status = DxgkpExecuteDodPresent(Adapter, &Entry);
         }
