@@ -917,7 +917,6 @@ static void test_reflection_desc_ps(void)
         expected = pdesc->SystemValueType;
 #else
         expected = D3D_NAME_UNDEFINED;
-        todo_wine
 #endif
         ok(desc.SystemValueType == expected, "(%u): got unexpected SystemValueType %#x, expected %#x.\n",
                 i, desc.SystemValueType, expected);
@@ -1086,7 +1085,7 @@ static void test_reflection_desc_ps_output(void)
         hr = call_reflect(tests[i].blob, tests[i].blob[6], &IID_ID3D11ShaderReflection, (void **)&ref11);
         if (D3D_COMPILER_VERSION < 43)
         {
-            todo_wine ok(hr == E_INVALIDARG, "%u: Got unexpected hr %#lx.\n", i, hr);
+            ok(hr == E_INVALIDARG, "%u: Got unexpected hr %#lx.\n", i, hr);
             if (SUCCEEDED(hr))
                 ref11->lpVtbl->Release(ref11);
             continue;
@@ -1108,7 +1107,6 @@ static void test_reflection_desc_ps_output(void)
         expected = pdesc->SystemValueType;
 #else
         expected = D3D_NAME_UNDEFINED;
-        todo_wine
 #endif
         ok(desc.SystemValueType == expected, "(%u): Got unexpected SystemValueType %#x, expected %x.\n",
                 i, desc.SystemValueType, expected);
@@ -1366,7 +1364,6 @@ static void test_reflection_bound_resources(const DWORD *blob, const D3D12_SHADE
         expected = pdesc->uFlags;
 #else
         expected = 0;
-        todo_wine_if(pdesc->uFlags)
 #endif
         ok(desc11.uFlags == expected, "Got unexpected uFlags %#x, i %u.\n", desc11.uFlags, i);
         ok(desc11.ReturnType == pdesc->ReturnType, "Got unexpected ReturnType %#x, i %u.\n", desc11.ReturnType, i);

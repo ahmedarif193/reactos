@@ -463,6 +463,10 @@ static HRESULT STDMETHODCALLTYPE d3dcompiler_shader_reflection_GetResourceBindin
     memcpy(desc, &reflection->bound_resources[index],
             reflection->interface_version == D3DCOMPILER_REFLECTION_VERSION_D3D12
             ? sizeof(D3D12_SHADER_INPUT_BIND_DESC) : sizeof(D3D11_SHADER_INPUT_BIND_DESC));
+#if !D3D_COMPILER_VERSION
+    /* D3D10 reflection does not expose the compiler's input-binding flags. */
+    desc->uFlags = 0;
+#endif
 
     return S_OK;
 }
@@ -483,6 +487,11 @@ static HRESULT get_signature_parameter(const struct vkd3d_shader_signature *sign
     desc->SemanticIndex = e->semantic_index;
     desc->Register = e->register_index;
     desc->SystemValueType = (D3D_NAME)e->sysval_semantic;
+#if !D3D_COMPILER_VERSION
+    /* The legacy API leaves pixel-output system values undefined. */
+    if (output && desc->SystemValueType >= D3D_NAME_TARGET)
+        desc->SystemValueType = D3D_NAME_UNDEFINED;
+#endif
     desc->ComponentType = (D3D_REGISTER_COMPONENT_TYPE)e->component_type;
     desc->Mask = e->mask;
     desc->ReadWriteMask = output ? (0xf ^ e->used_mask) : e->used_mask;
@@ -1572,7 +1581,7 @@ static HRESULT d3dcompiler_shader_reflection_init(struct d3dcompiler_shader_refl
 {
     struct vkd3d_shader_compile_info compile_info = {.type = VKD3D_SHADER_STRUCTURE_TYPE_COMPILE_INFO};
     struct vkd3d_shader_dxbc_desc src_dxbc_desc;
-    bool found_stat = false;
+    bool found_stat = false, found_rdef = false;
     HRESULT hr = S_OK;
     unsigned int i;
     int ret;
@@ -1608,6 +1617,7 @@ static HRESULT d3dcompiler_shader_reflection_init(struct d3dcompiler_shader_refl
 
         if (section->tag == TAG_RDEF)
         {
+            found_rdef = true;
             if (FAILED(hr = d3dcompiler_parse_rdef(reflection, section->data.code, section->data.size)))
             {
                 WARN("Failed to parse RDEF section.\n");
@@ -1636,6 +1646,13 @@ static HRESULT d3dcompiler_shader_reflection_init(struct d3dcompiler_shader_refl
             }
             found_stat = true;
         }
+    }
+
+    /* D3D10ReflectShader requires reflection data; later versions do not. */
+    if (!D3D_COMPILER_VERSION && !found_rdef)
+    {
+        hr = E_INVALIDARG;
+        goto err_out;
     }
 
     reflection->desc.InputParameters = reflection->signature_info.input.element_count;
