@@ -262,7 +262,7 @@ MmDbgCopyMemory(
     {
         Physical = Address;
     }
-    else if (!MiPtTranslate(MiSpaceForAddress((PVOID)(ULONG_PTR)Address), Address, &Physical, NULL))
+    else if (!MiTranslateCurrentAddress(Address, &Physical, NULL))
     {
         return STATUS_UNSUCCESSFUL;
     }
@@ -270,7 +270,10 @@ MmDbgCopyMemory(
     if ((Physical & (PAGE_SIZE - 1)) + Size > PAGE_SIZE)
         return STATUS_INVALID_PARAMETER_3;
 
-    Source = (PUCHAR)MiArchMapFrame(Physical >> PAGE_SHIFT) + (Physical & (PAGE_SIZE - 1));
+    Source = MiArchMapFrame(Physical >> PAGE_SHIFT);
+    if (Source == NULL)
+        return STATUS_UNSUCCESSFUL;
+    Source = (PUCHAR)Source + (Physical & (PAGE_SIZE - 1));
 
     if (Flags & MMDBG_COPY_WRITE)
         RtlCopyMemory(Source, Buffer, Size);
@@ -300,13 +303,14 @@ MmCopyMemory(
     {
         ULONG64 Physical;
         SIZE_T Chunk;
+        PVOID Mapping;
 
         if (Flags & MM_COPY_MEMORY_PHYSICAL)
         {
             Physical = (ULONG64)SourceAddress.PhysicalAddress.QuadPart + Done;
         }
-        else if (!MiPtTranslate(MiSpaceForAddress(SourceAddress.VirtualAddress),
-                                (ULONG64)(ULONG_PTR)SourceAddress.VirtualAddress + Done, &Physical, NULL))
+        else if (!MiTranslateCurrentAddress((ULONG64)(ULONG_PTR)SourceAddress.VirtualAddress + Done,
+                                            &Physical, NULL))
         {
             break;
         }
@@ -315,8 +319,11 @@ MmCopyMemory(
         if (Chunk > NumberOfBytes - Done)
             Chunk = NumberOfBytes - Done;
 
+        Mapping = MiArchMapFrame(Physical >> PAGE_SHIFT);
+        if (Mapping == NULL)
+            break;
         RtlCopyMemory((PUCHAR)TargetAddress + Done,
-                      (PUCHAR)MiArchMapFrame(Physical >> PAGE_SHIFT) + (Physical & (PAGE_SIZE - 1)), Chunk);
+                      (PUCHAR)Mapping + (Physical & (PAGE_SIZE - 1)), Chunk);
         Done += Chunk;
     }
 

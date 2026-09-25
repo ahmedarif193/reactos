@@ -204,9 +204,10 @@ MmGetPhysicalAddress(
     _In_ PVOID BaseAddress)
 {
     PHYSICAL_ADDRESS Physical;
+    ULONG64 Address = (ULONG64)(ULONG_PTR)BaseAddress;
+    ULONG64 Mapped;
 
-    Physical.QuadPart = (LONGLONG)MiGetPhysicalAddress(MiSpaceForAddress(BaseAddress),
-                                                       (ULONG64)(ULONG_PTR)BaseAddress);
+    Physical.QuadPart = MiTranslateCurrentAddress(Address, &Mapped, NULL) ? (LONGLONG)Mapped : 0;
     return Physical;
 }
 
@@ -243,11 +244,15 @@ MmIsAddressValid(
     _In_ PVOID VirtualAddress)
 {
     ULONG64 Physical;
+    ULONG64 Address = (ULONG64)(ULONG_PTR)VirtualAddress;
+
+    if (MiSystem.SystemSpace.System == NULL)
+        return MiTranslateCurrentAddress(Address, &Physical, NULL);
 
     if (!MI_IS_SYSTEM_VA(VirtualAddress) && PsGetCurrentProcess()->Vm.Instance.VmWorkingSetList == NULL)
         return FALSE;
 
-    return MiPtTranslate(MiSpaceForAddress(VirtualAddress), (ULONG64)(ULONG_PTR)VirtualAddress, &Physical, NULL);
+    return MiTranslateCurrentAddress(Address, &Physical, NULL);
 }
 
 BOOLEAN
