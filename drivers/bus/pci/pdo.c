@@ -2475,7 +2475,8 @@ PdoQueryResourceRequirements(
     BOOLEAN MsiOption;
     BOOLEAN LegacyOption;
     BOOLEAN InterruptResourcesAllowed;
-    ULONG OptionCount;
+    ULONG OptionCount, ListCount;
+    BOOLEAN SingleInterruptList;
     SIZE_T AllocationSize;
     PUCHAR ListPtr;
     ULONG OptionIndex;
@@ -2828,10 +2829,17 @@ PdoQueryResourceRequirements(
     if (OptionCount == 0)
         Options[OptionCount++] = PciRequirementNone;
 
+    /* When each interrupt choice needs one descriptor, report the BARs once
+     * and encode the choices as IO_RESOURCE_ALTERNATIVEs of the preferred one.
+     * Multiple MSI-X messages still need separate whole-list alternatives. */
+    SingleInterruptList = !MsixOption || MsixMessageCount == 1;
+    ListCount = SingleInterruptList ? 1 : OptionCount;
     AllocationSize = FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List[0]);
-    for (OptionIndex = 0; OptionIndex < OptionCount; OptionIndex++)
+    for (OptionIndex = 0; OptionIndex < ListCount; OptionIndex++)
     {
-        InterruptCount = (Options[OptionIndex] == PciRequirementMsix) ? MsixMessageCount :
+        InterruptCount = SingleInterruptList ?
+                         ((Options[0] == PciRequirementNone) ? 0 : OptionCount) :
+                         (Options[OptionIndex] == PciRequirementMsix) ? MsixMessageCount :
                          (Options[OptionIndex] == PciRequirementNone) ? 0 : 1;
         CurrentCount = BaseDescriptorCount + InterruptCount;
         AllocationSize += FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) +
@@ -2857,15 +2865,17 @@ PdoQueryResourceRequirements(
     ResourceList->InterfaceType = PCIBus;
     ResourceList->BusNumber = RequirementsBusNumber;
     ResourceList->SlotNumber = DeviceExtension->PciDevice->SlotNumber.u.AsULONG;
-    ResourceList->AlternativeLists = OptionCount;
+    ResourceList->AlternativeLists = ListCount;
     ListPtr = (PUCHAR)&ResourceList->List[0];
 
-    for (OptionIndex = 0; OptionIndex < OptionCount; OptionIndex++)
+    for (OptionIndex = 0; OptionIndex < ListCount; OptionIndex++)
     {
         PIO_RESOURCE_LIST IoList = (PIO_RESOURCE_LIST)ListPtr;
         PIO_RESOURCE_DESCRIPTOR Dest;
 
-        InterruptCount = (Options[OptionIndex] == PciRequirementMsix) ? MsixMessageCount :
+        InterruptCount = SingleInterruptList ?
+                         ((Options[0] == PciRequirementNone) ? 0 : OptionCount) :
+                         (Options[OptionIndex] == PciRequirementMsix) ? MsixMessageCount :
                          (Options[OptionIndex] == PciRequirementNone) ? 0 : 1;
         CurrentCount = BaseDescriptorCount + InterruptCount;
         IoList->Version = 1;
@@ -2883,10 +2893,11 @@ PdoQueryResourceRequirements(
 
         for (MessageIndex = 0; MessageIndex < InterruptCount; MessageIndex++, Dest++)
         {
-            Dest->Option = 0;
+            ULONG InterruptOption = Options[SingleInterruptList ? MessageIndex : OptionIndex];
+            Dest->Option = (SingleInterruptList && MessageIndex) ? IO_RESOURCE_ALTERNATIVE : 0;
             Dest->Type = CmResourceTypeInterrupt;
 
-            if (Options[OptionIndex] == PciRequirementLegacy)
+            if (InterruptOption == PciRequirementLegacy)
             {
                 Dest->ShareDisposition = CmResourceShareShared;
                 Dest->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
@@ -2895,7 +2906,7 @@ PdoQueryResourceRequirements(
             }
             else
             {
-                ULONG MsgCount = (Options[OptionIndex] == PciRequirementMsix) ? 1 : MsiMessageCount;
+                ULONG MsgCount = (InterruptOption == PciRequirementMsix) ? 1 : MsiMessageCount;
                 Dest->ShareDisposition = CmResourceShareDeviceExclusive;
                 Dest->Flags = CM_RESOURCE_INTERRUPT_LATCHED |
                               CM_RESOURCE_INTERRUPT_MESSAGE |
