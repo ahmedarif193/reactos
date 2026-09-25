@@ -81,6 +81,7 @@ list(APPEND SOURCE
     Wow64GetThreadContext.c
     WriteFile.c
     WriteFileSeekBack.c
+    XState.c
 )
 
 list(APPEND PCH_SKIP_SOURCE

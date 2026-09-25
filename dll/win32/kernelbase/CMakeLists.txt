@@ -26,6 +26,7 @@ add_library(kernelbase_ros MODULE
     VirtualAlloc2.c
     VolumeInformation.c
     WerRuntime.c
+    XState.c
     ${CMAKE_CURRENT_BINARY_DIR}/kernelbase_ros_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/kernelbase_ros.def)
 
