@@ -1125,6 +1125,9 @@ SetThreadStackGuarantee(IN OUT PULONG StackSizeInBytes)
     ULONG AllocationSize;
     ULONG RoundedSize;
     SIZE_T StackReserve;
+    SIZE_T GuardSize;
+    PVOID GuardBase;
+    NTSTATUS Status;
 
     if (!StackSizeInBytes)
     {
@@ -1163,7 +1166,32 @@ SetThreadStackGuarantee(IN OUT PULONG StackSizeInBytes)
     }
 
     if (RoundedSize > GuaranteedStackBytes)
+    {
+        /* Commit the guarantee as guard pages now, so that a large frame
+         * cannot skip over it before the overflow is detected. */
+        GuardSize = (SIZE_T)RoundedSize + PAGE_SIZE;
+        if (GuardSize >= (ULONG_PTR)Teb->NtTib.StackLimit -
+                         (ULONG_PTR)Teb->DeallocationStack)
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+
+        GuardBase = (PBYTE)Teb->NtTib.StackLimit - GuardSize;
+        Status = NtAllocateVirtualMemory(NtCurrentProcess(),
+                                         &GuardBase,
+                                         0,
+                                         &GuardSize,
+                                         MEM_COMMIT,
+                                         PAGE_READWRITE | PAGE_GUARD);
+        if (!NT_SUCCESS(Status))
+        {
+            BaseSetLastNTError(Status);
+            return FALSE;
+        }
+
         Teb->GuaranteedStackBytes = RoundedSize;
+    }
 
     return TRUE;
 }
