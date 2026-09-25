@@ -103,7 +103,25 @@ typedef struct _CDD_PRESENT_SOURCE
     CTL_CODE(FILE_DEVICE_VIDEO, 0x928, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_VIDEO_DXGK_SYNCHRONIZE_REDIRECTION_SURFACES \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x929, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_CAPTURE_DESKTOP \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x92b, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #include <pshpack4.h>
+
+/* Kernel-only CDD readback. Destination is a caller-owned kernel bitmap,
+ * valid for the synchronous request. Flags is zero on input; HAS_IMAGE on
+ * output means the composed GPU desktop was copied. Without a compositor,
+ * CDD continues reading its ordinary GDI drawing surface. */
+#define DXGK_DESKTOP_CAPTURE_HAS_IMAGE 0x00000001u
+typedef struct _DXGK_DESKTOP_CAPTURE
+{
+    ULONG StructSize;
+    ULONG Flags;
+    ULONG Width;
+    ULONG Height;
+    ULONG Pitch;
+    ULONG BufferSize;
+    ULONGLONG Destination;
+} DXGK_DESKTOP_CAPTURE, *PDXGK_DESKTOP_CAPTURE;
 
 typedef struct _DXGK_PRESENT_DIRTY_RECTS_INPUT
 {

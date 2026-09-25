@@ -125,6 +125,7 @@ struct _VIDEO_MODE_INFORMATION;
 struct _DXGK_REDIRECTION_SURFACE_DESTROY;
 struct _DXGK_REDIRECTION_SURFACE_ASSOCIATE;
 struct _DXGK_REDIRECTION_SURFACES_SYNC;
+struct _DXGKRNL_CDD_CAPTURE;
 
 /* MmSystemRangeStart is a kernel global (user/kernel VA split boundary). It is
  * declared in the XDK arch mm.h, which the WDM include subset used here does not
@@ -1216,6 +1217,7 @@ struct _DXGKRNL_ADAPTER
     D3DKMT_HANDLE               CddShadowBindingHandle;
     D3DKMT_HANDLE               CddPrimaryBindingHandle;
     ULONG64                     CddBindingGeneration;
+    struct _DXGKRNL_CDD_CAPTURE *CddCapture;
     /* Set by an adapter reset and by a miniport Present that rejects the
      * persistent CDD bindings: the KMD's device-specific opens are gone and
      * the next Present must recreate them. */
@@ -3231,6 +3233,15 @@ DxgkCreateRedirectionSurface(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_opt_ PDXGKRNL_DEVICE Device,
     _Inout_ struct _DXGK_REDIRECTION_SURFACE_CREATE *Create);
+
+NTSTATUS
+DxgkCreateCaptureSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Inout_ struct _DXGK_REDIRECTION_SURFACE_CREATE *Create);
+
+/* Adapter device cleanup owns the resources; discard only the cache record. */
+VOID DxgkpForgetCddCapture(_In_ PDXGKRNL_ADAPTER Adapter);
 
 NTSTATUS
 DxgkDestroyRedirectionSurface(

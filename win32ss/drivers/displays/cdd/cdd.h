@@ -51,6 +51,9 @@ typedef struct _RCDD_PDEV
    ULONG BlueMask;
    BYTE PaletteShift;
    PVOID ScreenPtr;            /* Mapped WDDM scan-out (dxgkrnl shadow FB)    */
+   KMUTEX CaptureMutex;       /* Protects the reusable composed-screen DIB. */
+   HSURF CaptureBitmap;
+   SURFOBJ *CaptureSurface;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
 
