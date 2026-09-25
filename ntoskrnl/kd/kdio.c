@@ -813,6 +813,9 @@ KdReceivePacket(
     ResponseString.MaximumLength = min(ResponseString.MaximumLength,
                                        DebugIo->u.GetString.LengthOfStringRead);
 
+    /* An assertion may prompt before KDBG has initialized its pager. */
+    KdpInitTerminal();
+
     /* The prompt string has been printed by KdSendPacket; go to
      * new line and print the kdb prompt -- for SYSREG2 support. */
     KdIoPrintString("\n", 1);

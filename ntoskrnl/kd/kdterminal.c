@@ -50,6 +50,13 @@ static CHAR KdTermNextKey = ANSI_NULL; /* 1-character input queue buffer */
 BOOLEAN
 KdpInitTerminal(VOID)
 {
+    static BOOLEAN Initialized = FALSE;
+
+    /* DbgPrompt can be the first terminal user, before the KDBG pager. */
+    if (Initialized)
+        return KdTermConnected;
+    Initialized = TRUE;
+
     /* Determine whether the controlling terminal is a serial terminal:
      * serial output is enabled *and* KDSERIAL is set (i.e. user input
      * through serial). */
