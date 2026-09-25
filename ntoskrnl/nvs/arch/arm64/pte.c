@@ -124,6 +124,12 @@ MiArchPteIsCopyOnWrite(_In_ MI_PTE Pte)
     return (Pte & A64_SW_COPY) != 0;
 }
 
+BOOLEAN
+MiArchPteIsHardwareWritable(_In_ MI_PTE Pte)
+{
+    return (Pte & (A64_VALID | A64_AP_READONLY)) == A64_VALID;
+}
+
 ULONG
 MiArchPteLeafFlags(_In_ MI_PTE Pte)
 {

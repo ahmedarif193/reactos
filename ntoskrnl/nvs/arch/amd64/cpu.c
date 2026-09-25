@@ -24,6 +24,14 @@ MiArchUnmapFrame(_In_ PVOID Mapping)
     UNREFERENCED_PARAMETER(Mapping);
 }
 
+PVOID
+MiArchDebugMapFrame(_In_ ULONG64 Frame)
+{
+    if (Frame >= (MI_AMD64_DIRECT_BYTES >> PAGE_SHIFT))
+        return NULL;
+    return MiArchMapFrame(Frame);
+}
+
 MI_PTE
 MiArchPteRead(_In_ PMI_PTE Slot)
 {
@@ -47,6 +55,13 @@ ULONG64
 MiArchBootRootFrame(VOID)
 {
     return (__readcr3() & MI_AMD64_PTE_FRAME) >> MI_ARCH_PAGE_SHIFT;
+}
+
+ULONG64
+MiArchDebugRootFrame(_In_ ULONG64 VirtualAddress)
+{
+    UNREFERENCED_PARAMETER(VirtualAddress);
+    return MiArchBootRootFrame();
 }
 
 VOID

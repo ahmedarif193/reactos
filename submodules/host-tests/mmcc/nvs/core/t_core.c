@@ -222,10 +222,28 @@ TestPageTable(void)
         CHECK(MachineAccessMemory(&World.Machine, 0, Addresses[i] + 5, &Read, 1, MachineRead, TRUE) == STATUS_SUCCESS);
         CHECK(Read == Value && MachineFrame(&World.Machine, Frames[i])[5] == Value);
         CHECK(MachineTouch(&World.Machine, 0, Addresses[i], MachineExecute, TRUE) == STATUS_ACCESS_VIOLATION);
+
+        /* Debugger reads during bootstrap have only the architecture and the
+         * loader's root frame, before an MI_ADDRESS_SPACE has been adopted. */
+        {
+            ULONG64 Physical;
+            MI_PTE Leaf;
+
+            CHECK(MiPtTranslateRoot(MiArchDescribe(), Space.RootFrame, Addresses[i] + 5, &Physical, &Leaf));
+            CHECK(Physical == ((ULONG64)Frames[i] << PAGE_SHIFT) + 5);
+            CHECK(MiArchPteFrame(Leaf) == Frames[i]);
+        }
     }
 
     CHECK(MiPtCheck(&Space) == 0);
     CHECK(Space.PageTablePages >= 3);
+
+    {
+        ULONG64 Physical = ~0ULL;
+
+        CHECK(!MiPtTranslateRoot(MiArchDescribe(), Space.RootFrame, 0, &Physical, NULL));
+        CHECK(Physical == 0);
+    }
 
     {
         ULONG TableFrame;

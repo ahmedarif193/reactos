@@ -102,6 +102,12 @@ MiArchPteIsCopyOnWrite(_In_ MI_PTE Pte)
     return MiAmd64PteHas(Pte, MI_AMD64_PTE_COPY);
 }
 
+BOOLEAN
+MiArchPteIsHardwareWritable(_In_ MI_PTE Pte)
+{
+    return MiAmd64PteHas(Pte, MI_AMD64_PTE_WRITE);
+}
+
 ULONG
 MiArchPteLeafFlags(_In_ MI_PTE Pte)
 {
