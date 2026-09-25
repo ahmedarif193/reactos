@@ -1650,7 +1650,7 @@ NtCreateSection(
     }
     _SEH2_END;
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 NTSTATUS
