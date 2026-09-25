@@ -785,17 +785,18 @@ INT WINAPI wglGetPixelFormat(HDC hdc)
     return ret;
 }
 
-/* Release a context current to this thread through the implementation that
- * bound it, and give up this thread's ownership of it. */
+/* Release the drawable binding through the implementation that established it.
+ * A same-context rebind must keep thread ownership throughout the transition. */
 static
 VOID
-IntReleaseContext(struct wgl_context* ctx)
+IntReleaseContext(struct wgl_context* ctx, BOOL keep_ownership)
 {
     if(ctx->icd_data)
         ctx->icd_data->DrvReleaseContext(ctx->dhglrc);
     else
         sw_ReleaseContext(ctx->dhglrc);
-    InterlockedExchange(&ctx->thread_id, 0);
+    if(!keep_ownership)
+        InterlockedExchange(&ctx->thread_id, 0);
 }
 
 static
@@ -835,7 +836,7 @@ IntMakeContextCurrentARB(HDC hDrawDC, HDC hReadDC, HGLRC hglrc)
     {
         if(old_ctx)
         {
-            IntReleaseContext(old_ctx);
+            IntReleaseContext(old_ctx, FALSE);
             IntMakeCurrent(NULL, NULL, NULL);
             IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());
         }
@@ -894,8 +895,8 @@ IntMakeContextCurrentARB(HDC hDrawDC, HDC hReadDC, HGLRC hglrc)
         return FALSE;
     }
 
-    if(old_ctx && old_ctx != ctx)
-        IntReleaseContext(old_ctx);
+    if(old_ctx)
+        IntReleaseContext(old_ctx, old_ctx == ctx);
 
     if(!make_current(hDrawDC, hReadDC, hglrc))
     {
@@ -973,11 +974,10 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
             return FALSE;
         }
 
-        /* Keep ownership while rebinding the same context. Another thread
-         * must not acquire it between releasing the old DC and binding the
-         * new one. DrvSetContext / sw_SetContext updates the drawable. */
-        if(old_ctx && old_ctx != ctx)
-            IntReleaseContext(old_ctx);
+        /* The ICD must drop the previous drawable before DrvSetContext even for
+         * the same context, which keeps its thread ownership meanwhile. */
+        if(old_ctx)
+            IntReleaseContext(old_ctx, old_ctx == ctx);
 
         /* Call the ICD or SW implementation */
         if(ctx->icd_data)
@@ -988,6 +988,7 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
                 ERR("DrvSetContext failed!\n");
                 /* revert */
                 InterlockedExchange(&ctx->thread_id, 0);
+                IntMakeCurrent(NULL, NULL, NULL);
                 IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());
                 SetLastError(ERROR_INVALID_PARAMETER);
                 return FALSE;
@@ -1015,7 +1016,7 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
     }
     else if(old_ctx)
     {
-        IntReleaseContext(old_ctx);
+        IntReleaseContext(old_ctx, FALSE);
         /* Unset it */
         IntMakeCurrent(NULL, NULL, NULL);
         IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());
