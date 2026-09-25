@@ -461,23 +461,30 @@ static void draw_line(SB *sb, int row, int cols, const char *attr,
     sb_str(sb, "\x1b[0m\x1b[K");
 }
 
+static const char *choice_value_text(const ChoiceValue *cv)
+{
+    return cv->label ? cv->label : cv->value;
+}
+
 static void item_text(const Item *it, char *buf, size_t bufsz)
 {
     if (it->type == ENTRY_MENU) {
-        snprintf(buf, bufsz, "      %s  --->", g_menus[it->index].title);
+        snprintf(buf, bufsz, "    %s  --->", g_menus[it->index].title);
     } else {
         const Option *o = &g_opts[it->index];
         if (o->type == OPT_BOOL) {
-            const char *ind = "[ ]";
+            char mark = ' ';
             if (strcmp(o->value, "y") == 0)
-                ind = "[*]";
+                mark = '*';
             else if (strcmp(o->value, "auto") == 0)
-                ind = "[A]";
-            snprintf(buf, bufsz, "  %s %s", ind, o->prompt);
+                mark = 'A';
+            snprintf(buf, bufsz, "[%c] %s", mark, o->prompt);
         } else if (o->type == OPT_CHOICE) {
-            snprintf(buf, bufsz, "  (%s) %s  --->", o->value, o->prompt);
+            int index = choice_index(o, o->value);
+            snprintf(buf, bufsz, "    %s  ---> [%s]", o->prompt,
+                     index >= 0 ? choice_value_text(&o->values[index]) : o->value);
         } else {
-            snprintf(buf, bufsz, "  (%s) %s", o->value, o->prompt);
+            snprintf(buf, bufsz, "    %s  ---> [%s]", o->prompt, o->value);
         }
     }
     if (!item_available(it)) {
@@ -651,8 +658,7 @@ static void popup_choice(Option *o)
         w = (int)strlen(o->prompt) + 8;
         for (i = 0; i < o->nvalues; i++) {
             const ChoiceValue *cv = &o->values[i];
-            int l = (int)strlen(cv->value) + 10 +
-                    (cv->label ? (int)strlen(cv->label) + 2 : 0);
+            int l = (int)strlen(choice_value_text(cv)) + 8;
             if (l > w)
                 w = l;
         }
@@ -699,7 +705,7 @@ static void popup_choice(Option *o)
             const ChoiceValue *cv = &o->values[index];
             char row[512];
             int l;
-            snprintf(row, sizeof(row), " (%c) %-10s %s", (choice_index(o, o->value) == index) ? '*' : ' ', cv->value, cv->label ? cv->label : "");
+            snprintf(row, sizeof(row), " (%c) %s", (choice_index(o, o->value) == index) ? 'X' : ' ', choice_value_text(cv));
             rtrim(row);
             l = (int)strlen(row);
             if (l > w - 2) {
@@ -1021,7 +1027,7 @@ static void show_global_help(void)
         "Question mark shows detailed help for the selected option or submenu. Slash searches symbols and prompts, including hidden options. V toggles hidden entries. F1 opens this key reference. S saves, L reloads the saved configuration, and R resets all options. Unsaved changes are confirmed before normal quitting. Configure-integrated runs also ask whether CMake should start when the menu is clean; Ctrl+C cancels immediately.\n\n"
         "Indicators\n"
         "----------\n"
-        "[*] enabled, [ ] disabled, [A] automatic default, (--->) editable choice or submenu, [hidden] unavailable until its dependencies are met.";
+        "[*] enabled, [ ] disabled, [A] automatic default, ---> submenu, ---> [value] choice or text value and its current setting, (X) selected choice, [hidden] unavailable until its dependencies are met.";
     show_help_page(" rosconfig navigation help", text);
 }
 

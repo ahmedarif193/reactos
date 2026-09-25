@@ -97,7 +97,7 @@ source root. Persistent selections live below the output tree they configure:
   choose another standalone target tree.
 - Bool options can hold the value `auto`, which means "do not emit to
   CMake" — the conditional defaults in `sdk/cmake/config.cmake` (e.g.
-  `WITH_DEBUG_SYMBOLS`) stay in charge.
+  `ENABLE_WOW64`) stay in charge.
 - From the source directory, the no-argument wrappers prepare their platform's
   default output tree. From another output directory they use that tree; an
   explicit `--build-dir <output-directory>` selects any conventionally named
@@ -105,27 +105,41 @@ source root. Persistent selections live below the output tree they configure:
 - Changed selections take effect the next time that tree is configured
   (`configure.sh` always starts from a fresh CMake cache).
 
-## Target profiles and image contents
+## Main menu layout
 
-The main menu is intentionally limited to four stable areas:
+The main menu starts with the target identity, then the settings that only
+affect how the tree is built, then the operating system itself, and ends with
+debugging and testing. A submenu is hidden while none of its options apply to
+the selected target.
 
-| Main area | Contents |
+| Entry | Contents |
 | --- | --- |
-| Platform, image, and boot | Target identity and profile, boot behavior, optional image contents, and boot-test payloads. |
-| Compiler and code generation | CPU instruction selection, release optimization, toolchain support, and ccache. |
-| Debugging and analysis | Debug information, kernel-debugger policy and watchdog, runtime checks, and MSVC analysis. |
-| System components and compatibility | ALPC, graphics model, target NT level, ISA PnP, FEX, and WoW64. |
+| Target architecture | `ARCH`: x86-64, x86 or AArch64. |
+| Target profile | The machine or board to build for; the list depends on the architecture. |
+| Compiler toolchain | Clang, GCC or MSVC. |
+| Build type | Debug or Release. |
+| Code generation | CPU instruction set, tuning, LTO and stack protector (GCC and Clang only). |
+| Build options | ccache, separate debug symbol files, `.rossym` compression and MSVC analysis. |
+| Boot options | UEFI HTTP boot for the boards that support it. |
+| System | Target NT version, ALPC, ISA Plug and Play and the ROSV hypervisor. |
+| Graphics | Display driver model, Mesa Gallium and LLVMpipe/Lavapipe. |
+| Compatibility layers | WoW64, FEX ARM64EC and validation of their build outputs. |
+| Desktop and applications | Early Winlogon background, wallpapers and rosapps. |
+| Kernel debugging | Kernel debugger and KD transport. |
+| Testing | Test suite and boot-time test automation (Debug builds only). |
 
-The `Platform, image, and boot -> Target platform` submenu shows the profile
-selector for the selected architecture. Profile definitions and their CMake
-manifests are kept below `sdk/cmake/rosconfig/profiles/`:
+## Target profiles
+
+A profile selects the machine to build for. Only the selector of the chosen
+architecture is shown. Profile definitions and their CMake manifests are kept
+below `sdk/cmake/rosconfig/profiles/`:
 
 ```
 profiles/
   profiles.def
   apply.cmake
   amd64/{profiles.def,generic.cmake,lattepandamu.cmake}
-  i386/{profiles.def,generic.cmake}
+  i386/{profiles.def,generic.cmake,pc98.cmake,xbox.cmake}
   arm64/{profiles.def,generic.cmake,profile_raspberry.cmake}
 ```
 
@@ -136,7 +150,12 @@ normal ReactOS subdirectories have been configured, so an incomplete or
 incompatible profile fails during configuration instead of producing a
 partially populated image.
 
-Every supported architecture has a `generic` default profile. ARM64 provides
+Every supported architecture has a `generic` default profile. i386 also
+provides `pc98` (NEC PC-9800 series) and `xbox` (Original Xbox), which set the
+`SARCH` sub-architecture and with it the HAL, boot loader and display drivers.
+The generic i386 profile leaves `SARCH` alone, so an explicit `-DSARCH=` still
+works; saved caches that contain a `SARCH` selection migrate to the matching
+profile. ARM64 provides
 `profile_raspberry`, displayed as **Raspberry Pi 3/5**, which enables both
 boards' driver sets in one image: SD/SDIO, DWC2, SMSC95xx and RP1 Ethernet,
 CYW43xx Wi-Fi, display, OpenGL and audio, plus the pinned `rpi3winsync`
@@ -155,10 +174,10 @@ profile. Explicit `-D` precedence remains unchanged for ordinary menu and
 image-content options. If `ROSCONFIG_PROFILE` is not provided, CMake uses the
 architecture's `generic` profile.
 
-Optional image contents are independent switches, not profiles. The
-`Platform, image, and boot -> Image contents and tests` submenu exposes
-RosApps, RosTests, diagnostic payloads, boot-test automation, and wallpapers.
-Enabling `ENABLE_ROSTESTS` builds and packages the test suite and
+Optional image contents are independent switches, not profiles: rosapps and
+wallpapers live in `Desktop and applications`, FEX diagnostic payloads in
+`Compatibility layers`, and the test suite with its boot-time automation in
+`Testing`. Enabling `ENABLE_ROSTESTS` builds and packages the test suite and
 `rosautotest` runner, and can be combined with any target profile.
 
 ## Option definitions
@@ -194,8 +213,11 @@ endmenu
 their first child. `source "relative/file.def"` includes another definition
 relative to the file containing the directive. Supported config directives are
 `prompt`, `type bool|choice|string`,
-`value <v> "<label>"`, `default`, `depends KEY=VAL` / `KEY!=VAL` (ANDed),
-`meta`, `var <CMakeName>`, `cmaketype BOOL|STRING`, `help`.
+`value <v> "<label>"`, `default`, `depends KEY=VAL` / `KEY!=VAL`,
+`meta`, `var <CMakeName>`, `cmaketype BOOL|STRING`, `help`. Separate `depends`
+lines are ANDed and terms joined by `||` on one line are alternatives. There
+is no `&&`: a term such as `A=x && B=y` compares `A` with the literal text
+`x && B=y`, so write one `depends` line per condition instead.
 
 Kernel debugger implementations are mutually exclusive. External KD transport
 DLLs are not independent enable switches: rosconfig selects which transport is
@@ -206,29 +228,30 @@ Visibility follows the build path that actually consumes each setting:
 
 | Setting group | Visible when |
 | --- | --- |
-| Target CPU generation | GCC or Clang; MSVC does not consume `OARCH`/`TUNE`. |
-| Release optimizations | Release with GCC or Clang; currently exposes LTCG. |
-| Dummy PSEH | GCC or Clang; MSVC always uses native SEH. |
+| Code generation menu | GCC or Clang; MSVC does not consume `OARCH`/`TUNE`. |
+| Link-time optimization | Release with GCC or Clang. |
 | Debug-symbol controls | GCC or Clang; the MSVC path manages PDB output itself. |
 | Stack protector | GCC only, matching `config.cmake`. |
 | Runtime checks and static analysis | MSVC only; runtime checks are additionally limited to Debug. |
-| ReactOS test suite | Debug builds only. |
+| UEFI HTTP boot | LattePanda Mu and Raspberry Pi profiles. |
+| ISA Plug and Play | i386, except the Xbox profile. |
+| ROSV hypervisor | AMD64 builds only. |
+| LLVMpipe and Lavapipe | Clang AMD64 or ARM64 builds with the Mesa Gallium driver enabled. |
 | FEX ARM64EC runtime | ARM64 builds only. |
-| WoW64 subsystem | AMD64 builds only. |
-| WDDM compatibility level | WDDM display-model builds only. |
+| WoW64 subsystem | AMD64 and ARM64 builds. |
+| Testing menu | Debug builds only. |
 
 ## Graphics driver model
 
-The `System components and compatibility -> Graphics stack` menu selects
-either the legacy XPDM/VideoPort path or the experimental WDDM/dxgkrnl path.
+The `Graphics` menu selects either the legacy XPDM/VideoPort path or the
+experimental WDDM/dxgkrnl path.
 XPDM restores the UEFI framebuffer registration and, for the Raspberry Pi 5
 profile, builds the preserved VC4 XPDM miniport. WDDM builds the DirectX
 graphics kernel stack and selects the WDDM VC4 miniport instead.
 
-The WDDM level is a compatibility ceiling, not a capability assertion.
-WDDM targets compile against the highest audited shared header layout, while
-runtime reporting is capped by the selected level and by the subsystems that
-are actually implemented end to end.
+WDDM builds target the Windows 11 24H2 (WDDM 3.2) contract; `config.cmake`
+fixes `REACTOS_WDDM_LEVEL` to 3.2, so there is no selectable level. Individual
+features still report only what is implemented end to end.
 
 ## Tool CLI (used by the scripts)
 

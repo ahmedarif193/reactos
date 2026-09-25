@@ -246,6 +246,8 @@ int rosconfig_self_test(void)
         "    type choice\n"
         "    var ROSCONFIG_PROFILE\n"
         "    value generic \"Generic i386\"\n"
+        "    value pc98 \"NEC PC-9800 series\"\n"
+        "    value xbox \"Original Xbox\"\n"
         "    default generic\n"
         "    depends ARCH=i386\n"
         "config PROFILE_ARM64\n"
@@ -261,6 +263,8 @@ int rosconfig_self_test(void)
         "LEVEL=expert\n"
         "LABEL=from cache\n"
         "PROFILE_ARM64=rpi5\n"
+        "SARCH=xbox\n"
+        "PROFILE_I386=generic\n"
         "UNKNOWN_KEEP=y\n"
         "legacy line\n";
     char definition_path[FILENAME_MAX];
@@ -419,6 +423,7 @@ int rosconfig_self_test(void)
     expect_string(&test, label->value, "from cache", "cache loads a string containing spaces");
     expect_string(&test, profile_arm64->value, "profile_raspberry", "cache migrates the old Raspberry Pi 5 selection");
     expect(&test, profile_arm64->nvalues == 2, "ARM64 exposes generic and one combined Raspberry Pi profile");
+    expect_string(&test, profile_i386->value, "xbox", "cache migrates the legacy i386 SARCH selection to its profile");
     set_config_value("PROFILE_ARM64=rpi3");
     expect_string(&test, profile_arm64->value, "profile_raspberry", "command-line settings migrate the old Raspberry Pi 3 selection");
     set_config_value("ARCH=arm64");
@@ -427,6 +432,7 @@ int rosconfig_self_test(void)
     expect(&test, cache_save(saved_cache_path) == 0, "cache saves successfully");
     expect(&test, file_contains(saved_cache_path, "# --- Build / Advanced"), "saved cache records the nested menu path");
     expect(&test, file_contains(saved_cache_path, "UNKNOWN_KEEP=y") && file_contains(saved_cache_path, "legacy line"), "unknown cache entries are preserved");
+    expect(&test, !file_contains(saved_cache_path, "SARCH="), "the migrated SARCH entry is not preserved");
     set_value(enable, "n");
     cache_reload(input_cache_path);
     expect_string(&test, enable->value, "y", "cache reload discards an unsaved value");

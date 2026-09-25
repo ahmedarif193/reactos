@@ -9,6 +9,5 @@ config PROFILE_AMD64
     help
       Generic builds the architecture-independent AMD64 target.
 
-      LattePanda Mu exposes the board-specific FreeLdr HTTP boot option and
-      external UEFI network stack. Optional image contents are selected
-      independently in the Image contents and tests submenu.
+      LattePanda Mu adds the board-specific UEFI HTTP boot option in the
+      Boot options menu and its external UEFI network stack.

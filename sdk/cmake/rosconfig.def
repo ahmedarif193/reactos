@@ -23,17 +23,13 @@
 #
 # Bool options defaulting to "auto" are tri-state: "auto" means "do not
 # emit to CMake", which keeps the conditional default logic from
-# sdk/cmake/config.cmake (e.g. WITH_DEBUG_SYMBOLS following its conditional
+# sdk/cmake/config.cmake (e.g. ENABLE_WOW64 following its conditional
 # default) intact.
-
-menu "Platform, image, and boot"
-
-menu "Target platform"
 
 config ARCH
     prompt "Target architecture"
     type choice
-    value amd64 "x86-64 (default)"
+    value amd64 "x86-64"
     value i386  "IA-32 / x86"
     value arm64 "AArch64"
     default amd64
@@ -45,17 +41,7 @@ config ARCH
       -a/--arch (or /arch=) argument overrides this selection for
       that configure run.
 
-config SARCH
-    prompt "Platform variant"
-    type choice
-    value pc   "Standard PC (BIOS)"
-    value pc98 "NEC PC-9800 series"
-    value xbox "Original Xbox"
-    default pc
-    depends ARCH=i386
-    help
-      Sub-architecture (platform) to build the i386 port for.
-      Non-PC variants change HAL, bootloader and drivers.
+source "rosconfig/profiles/profiles.def"
 
 config TOOLCHAIN
     prompt "Compiler toolchain"
@@ -76,7 +62,7 @@ config TOOLCHAIN
 config BUILD_TYPE
     prompt "Build type"
     type choice
-    value Debug   "Debug (default)"
+    value Debug   "Debug"
     value Release "Release"
     default Debug
     meta
@@ -86,160 +72,41 @@ config BUILD_TYPE
       A -r/--release (or /r) argument or an explicit
       -DCMAKE_BUILD_TYPE overrides this selection for that run.
 
-source "rosconfig/profiles/profiles.def"
-
-endmenu
-
-menu "Boot options"
-
-config FREELDR_HTTP_BOOT
-    prompt "Enable HTTP boot"
-    type bool
-    default n
-    depends PROFILE_AMD64=lattepandamu || PROFILE_ARM64=profile_raspberry
-    help
-      Build the FreeLdr UEFI HTTP boot path: FreeLdr downloads the
-      live image over HTTP and boots it as a ramdisk. Packages the
-      board's UEFI network drivers onto the boot media.
-
-config ENABLE_EXPERIMENTAL_EARLY_SPLASH
-    prompt "Early Winlogon PNG background"
-    type bool
-    default y
-    help
-      Display the shipped BlueHorizon PNG as soon as Winlogon creates the
-      interactive desktop. Keep it stretched across the full virtual screen
-      until Userinit has prepared the normal user background and launched the
-      shell. Disable this option to retain the classic solid-color startup
-      background and omit the PNG decoder path from Winlogon.
-
-endmenu
-
-menu "Image contents and tests"
-
-config ENABLE_ROSAPPS
-    prompt "ReactOS extra applications"
-    type bool
-    default n
-    help
-      Build the optional applications from modules/rosapps.
-
-config ENABLE_ROSTESTS
-    prompt "ReactOS test suite and RosAutoTest"
-    type bool
-    default n
-    depends BUILD_TYPE=Debug
-    help
-      Build and package the ReactOS test suite, including the
-      rosautotest runner. Tests are available only in Debug builds.
-
-config ENABLE_FEX_ARM64EC_TEST_PAYLOADS
-    prompt "Include local AMD64 FEX diagnostic payloads"
-    type bool
-    default n
-    depends ARCH=arm64
-    depends ENABLE_FEX_ARM64EC=y
-    help
-      Whether to import optional AMD64 diagnostic executables from a
-      neighboring AMD64 build into ReactOS images. Keep this disabled for
-      deterministic release and normal development images.
-
-menu "Boot test automation"
-    depends BUILD_TYPE=Debug
-
-config ENABLE_ROSAUTOTEST_BOOT_RUN
-    prompt "Run the full RosAutoTest suite at boot"
-    type bool
-    default n
-    help
-      Build and package the complete ReactOS test suite, then run it through
-      RosAutoTest after desktop startup. The standard RosAutoTest run includes
-      public KMTests.
-
-config ENABLE_CPUBENCH_BOOT_RUN
-    prompt "Run CPUbench at boot"
-    type bool
-    default n
-    help
-      Run the architecture-neutral CPU benchmark after desktop startup.
-
-config ENABLE_RP1GEM_BENCHMARK
-    prompt "Run RP1 GEM single-stream benchmark at boot"
-    type bool
-    default n
-    depends PROFILE_ARM64=profile_raspberry && FREELDR_HTTP_BOOT
-    help
-      Run one 30-second TCP stream in each direction against the HTTP-boot
-      host before reporting boot-test completion.
-
-config ENABLE_KMTEST_BOOT_RUN
-    prompt "Run all unattended KMTests at boot"
-    type bool
-    default n
-    help
-      Build the kernel-mode test harness when the complete test suite is
-      disabled, then enumerate and run its public and hidden unattended tests
-      after desktop startup. Interactive, negative self-test, and ExPools
-      cases remain manual-only.
-
-config ENABLE_RPI5_WIFI_BOOT_RUN
-    prompt "Run RPi5 Wi-Fi diagnostics at boot"
-    type bool
-    default n
-    depends PROFILE_ARM64=profile_raspberry
-    help
-      Scan through the native WLAN stack. An optional boot_test_network.cfg can
-      name a WIFI_SSID and WIFI_KEY_FILE for connection and throughput testing
-      without storing a passphrase in the source tree.
-
-endmenu
-
-config ENABLE_WALLPAPERS
-    prompt "ReactOS wallpapers"
-    type bool
-    default n
-    help
-      Integrate the optional wallpapers module into built images.
-
-endmenu
-
-endmenu
-
-menu "Compiler and code generation"
-
-menu "Target CPU code generation"
+menu "Code generation"
 
     depends TOOLCHAIN!=msvc
 
 config OARCH_AMD64
-    prompt "CPU instruction family"
+    prompt "CPU instruction set"
     type choice
     var OARCH
     value k8        "AMD K8"
     value opteron   "AMD Opteron"
-    value athlon64  "AMD Athlon 64 (default)"
+    value athlon64  "AMD Athlon 64"
     value athlon-fx "AMD Athlon FX"
     default athlon64
     depends ARCH=amd64
     help
-      Generate instructions for this CPU type (the OARCH variable).
+      Oldest CPU the generated code must run on (the OARCH variable,
+      passed as -march).
 
 config OARCH_I386
-    prompt "CPU instruction family"
+    prompt "CPU instruction set"
     type choice
     var OARCH
-    value pentium    "Pentium (default)"
+    value pentium    "Pentium"
     value pentiumpro "Pentium Pro"
     default pentium
     depends ARCH=i386
     help
-      Generate instructions for this CPU type (the OARCH variable).
+      Oldest CPU the generated code must run on (the OARCH variable,
+      passed as -march).
 
 config OARCH_ARM64
-    prompt "CPU instruction family"
+    prompt "CPU instruction set"
     type choice
     var OARCH
-    value armv8-a   "ARMv8.0-A (default)"
+    value armv8-a   "ARMv8.0-A"
     value armv8.1-a "ARMv8.1-A"
     value armv8.2-a "ARMv8.2-A"
     value armv8.3-a "ARMv8.3-A"
@@ -249,60 +116,38 @@ config OARCH_ARM64
     default armv8-a
     depends ARCH=arm64
     help
-      Generate instructions for this CPU type (the OARCH variable).
-      Do not bump this unless really needed: as of 2021 there are
-      still new designs using original A53 cores with ARMv8.0.
+      Oldest architecture revision the generated code must run on (the
+      OARCH variable, passed as -march). Do not raise this unless really
+      needed: new designs still ship ARMv8.0 Cortex-A53 cores.
 
 config TUNE
-    prompt "Optimize for CPU"
+    prompt "Tune for CPU"
     type string
     default generic
     help
-      Which CPU ReactOS should be tuned for (the TUNE variable,
-      passed as -mtune / equivalent). "generic" fits all supported
-      architectures.
-
-endmenu
-
-menu "Release optimizations"
-
-    depends BUILD_TYPE=Release
-    depends TOOLCHAIN!=msvc
+      CPU the generated code is scheduled for (the TUNE variable, passed
+      as -mtune). This does not change the required instruction set.
+      "generic" fits all supported architectures.
 
 config LTCG
-    prompt "Link-time code generation (LTO)"
+    prompt "Link-time optimization (LTO)"
     type bool
     default n
+    depends BUILD_TYPE=Release
     help
-      Whether to build GCC or Clang Release images with link-time code
-      generation. ReactOS does not enable global LTCG through this option
-      for MSVC builds.
-
-endmenu
-
-menu "Toolchain support"
-
-    depends TOOLCHAIN!=msvc
+      Build GCC or Clang Release images with link-time code generation.
 
 config STACK_PROTECTOR
-    prompt "GCC stack protector"
+    prompt "Stack protector"
     type bool
     default n
     depends TOOLCHAIN=gcc
     help
-      Whether to enable the GCC stack checker while compiling.
-      Only meaningful for GCC builds.
-
-config USE_DUMMY_PSEH
-    prompt "Use the dummy PSEH implementation"
-    type bool
-    default n
-    help
-      Controls the PSEH implementation and exception-handling definitions
-      used by GCC and Clang. MSVC uses compiler-native SEH and ignores this
-      setting, so the entire submenu is hidden for the MSVC toolchain.
+      Compile with the GCC stack checker (-fstack-protector-strong).
 
 endmenu
+
+menu "Build options"
 
 config ENABLE_CCACHE
     prompt "Use ccache"
@@ -310,23 +155,7 @@ config ENABLE_CCACHE
     default n
     depends TOOLCHAIN!=msvc
     help
-      Whether to wrap the compiler with ccache. Requires ccache to
-      be installed on the host.
-
-endmenu
-
-menu "Debugging and analysis"
-
-menu "Debug information"
-
-config WITH_DEBUG_SYMBOLS
-    prompt "Compile debug information"
-    type bool
-    default auto
-    depends TOOLCHAIN!=msvc
-    help
-      Whether to compile debug information. "auto" enables it for
-      Debug/RelWithDebInfo builds or when SEPARATE_DBG is on.
+      Wrap the compiler with ccache. Requires ccache on the host.
 
 config SEPARATE_DBG
     prompt "Separate debug symbol files"
@@ -334,77 +163,20 @@ config SEPARATE_DBG
     default y
     depends TOOLCHAIN!=msvc
     help
-      Whether to generate separate debug symbol files (instead of
-      keeping symbols inside the binaries).
+      Write debug symbols to separate files instead of keeping them inside
+      the binaries.
 
 config ROSSYM_COMPRESSION
-    prompt "Compress the embedded .rossym symbol section"
+    prompt "Compress the embedded .rossym section"
     type bool
     default n
-    depends TOOLCHAIN!=msvc && NO_ROSSYM=n
+    depends TOOLCHAIN!=msvc
     help
       Store the embedded symbol section compressed with LZNT1 and expand it
-      when a module is loaded. The section is roughly a third of its former
-      size, which is worth about 59 MB across a full image, at the cost of
-      one decompression per module at load time. Symbol lookup itself is
-      unaffected because the expanded copy is what gets searched.
-
-endmenu
-
-menu "Kernel debugger"
-
-config KD_DEBUGGER
-    prompt "Kernel debugger mode"
-    type choice
-    value AUTO     "Automatic (toolchain and build-type default)"
-    value NONE     "No interactive kernel debugger"
-    value KDBG     "Integrated ReactOS debugger (KDBG)"
-    value EXTERNAL "External KD protocol"
-    default AUTO
-    help
-      Select the mutually exclusive kernel debugger implementation.
-      "Automatic" preserves the defaults from sdk/cmake/config.cmake:
-      KDBG for GCC/Clang debug builds, external KD for MSVC debug
-      builds, and neither for non-debug builds.
-
-config KD_DEFAULT_TRANSPORT
-    prompt "Default external KD transport"
-    type choice
-    value KDCOM "Serial KD (KDCOM / WinDbg)"
-    value KDGDB "GDB remote protocol (KDGDB)"
-    default KDCOM
-    depends KD_DEBUGGER=EXTERNAL
-    help
-      Select which external transport is installed as the default
-      KDCOM.DLL. This does not disable the other compatible transport
-      modules; they remain available for selection through the boot
-      DEBUGPORT option.
-
-config ENABLE_KD_WATCHDOG
-    prompt "Enable KD log-stall watchdog"
-    type bool
-    default n
-    depends BUILD_TYPE=Debug
-    help
-      Enable the internal-debugger log-stall watchdog by default. It remains
-      disabled unless selected here or enabled for an individual boot with
-      /KDWATCHDOG=<seconds>. Only /DEBUG boots can arm it.
-
-config KD_WATCHDOG_TIMEOUT
-    prompt "Default KD watchdog timeout (seconds)"
-    type string
-    default 6
-    depends BUILD_TYPE=Debug
-    depends ENABLE_KD_WATCHDOG=y
-    help
-      Default timeout for the internal-debugger log-stall watchdog when
-      the boot options do not contain /KDWATCHDOG. A boot entry can still
-      override it with /KDWATCHDOG=<seconds>; zero disables it. Valid values
-      for the enabled default range from 5 to 3600 seconds.
-
-endmenu
-
-menu "Compiler diagnostics"
+      when a module is loaded. The section shrinks to roughly a third of its
+      size, about 59 MB across a full image, at the cost of one decompression
+      per module at load time. Symbol lookup is unaffected because the
+      expanded copy is what gets searched.
 
 config RUNTIME_CHECKS
     prompt "MSVC runtime checks"
@@ -413,70 +185,88 @@ config RUNTIME_CHECKS
     depends TOOLCHAIN=msvc
     depends BUILD_TYPE=Debug
     help
-      Whether to enable runtime checks (/RTC) on MSVC. "auto"
-      enables them for Debug builds; they are incompatible with
-      compiler optimizations.
+      Enable MSVC runtime checks (/RTC). "auto" enables them for Debug
+      builds; they are incompatible with compiler optimizations.
 
 config _PREFAST_
-    prompt "PREFAST analysis"
+    prompt "MSVC PREfast analysis"
     type bool
     default n
     depends TOOLCHAIN=msvc
     help
-      Whether to enable PREFAST while compiling (MSVC only).
+      Run every C compilation through PREfast.
 
 config _VS_ANALYZE_
-    prompt "Visual Studio static analysis"
+    prompt "MSVC static analysis (/analyze)"
     type bool
     default n
     depends TOOLCHAIN=msvc
     help
-      Whether to enable static analysis while compiling (MSVC only).
+      Compile with /analyze. Takes precedence over PREfast when both are
+      enabled.
 
 endmenu
 
-endmenu
+menu "Boot options"
 
-menu "System components and compatibility"
-
-config ENABLE_ALPC
-    prompt "Advanced Local Procedure Call (ALPC)"
-    type bool
-    default y
-    help
-      Whether to build the experimental ALPC port implementation in place of
-      the classic LPC implementation. Disable this option to retain the
-      established LPC kernel path while ALPC is under development.
-
-menu "Graphics stack"
-
-config ENABLE_MESA_LLVMPIPE
-    prompt "Modern Mesa LLVMpipe OpenGL and Lavapipe Vulkan"
+config FREELDR_HTTP_BOOT
+    prompt "UEFI HTTP boot"
     type bool
     default n
-    depends TOOLCHAIN=clang
-    depends ARCH=amd64 || ARCH=arm64
+    depends PROFILE_AMD64=lattepandamu || PROFILE_ARM64=profile_raspberry
     help
-      Add LLVMpipe to the shared mesa_gallium.dll OpenGL ICD and package the
-      Lavapipe Vulkan ICD with the Khronos Vulkan loader. On ARM64 the shared
-      OpenGL ICD retains the V3D and VC4 Raspberry Pi hardware drivers and uses
-      LLVMpipe as its CPU fallback. LLVM's Windows static libraries and native
-      code-generation tools are built automatically when needed. The first
-      enabled build downloads pinned sources and needs several GB of free
-      space. This does not replace opengl32.dll. Runtime validation is separate.
+      Build the FreeLdr UEFI HTTP boot path: FreeLdr downloads the live
+      image over HTTP and boots it as a ramdisk. It becomes the zero-timeout
+      default boot entry, and the board's UEFI network drivers are packaged
+      onto the boot media.
 
-config MESA_GALLIUM_FROM_SOURCE
-    prompt "Mesa Gallium OpenGL driver"
+endmenu
+
+menu "System"
+
+config REACTOS_TARGET_NT
+    prompt "Target NT version"
+    type choice
+    value 0x502 "NT 5.2 (Windows Server 2003)"
+    value 0x600 "NT 6.0 (Windows Vista)"
+    value 0x601 "NT 6.1 (Windows 7)"
+    value 0x602 "NT 6.2 (Windows 8)"
+    value 0x603 "NT 6.3 (Windows 8.1)"
+    value 0xA00 "NT 10.0 (Windows 10)"
+    default 0xA00
+    help
+      The NT version ReactOS reports and targets (REACTOS_TARGET_NT).
+      User-mode DLL exports follow this version through
+      DLL_EXPORT_VERSION.
+
+config ENABLE_ALPC
+    prompt "ALPC (Advanced Local Procedure Call)"
     type bool
     default y
-    depends TOOLCHAIN=clang
-    depends ARCH=i386 || ARCH=amd64 || ARCH=arm64
     help
-      Build and package mesa_gallium.dll by default with llvm-mingw Clang.
-      AMD64 and i386 use softpipe for CPU rendering. Native ARM64 includes
-      V3D and VC4 for Raspberry Pi hardware in the same DLL, followed by
-      softpipe. No LLVM runtime dependency is required unless the optional
-      LLVMpipe/Lavapipe configuration is enabled.
+      Build the ALPC port implementation in place of the classic LPC one.
+      Disable to keep the established LPC kernel path.
+
+config ISAPNP_ENABLE
+    prompt "ISA Plug and Play support"
+    type bool
+    default auto
+    depends ARCH=i386
+    depends PROFILE_I386!=xbox
+    help
+      Build ISA Plug and Play support. "auto" enables it on i386 PCs.
+
+config ENABLE_ROSV
+    prompt "ROSV hypervisor (VMX)"
+    type bool
+    default n
+    depends ARCH=amd64
+    help
+      Build the ROSV VMX hypervisor driver and its user-mode tools.
+
+endmenu
+
+menu "Graphics"
 
 config REACTOS_GRAPHICS_DRIVER_MODEL
     prompt "Display driver model"
@@ -492,99 +282,196 @@ config REACTOS_GRAPHICS_DRIVER_MODEL
       Raspberry Pi 5 VC4 XPDM miniport.
 
       WDDM builds dxgkrnl, its memory managers, WDDM miniports and their
-      user-mode halves. Legacy VGA binaries remain available as recovery
-      components, but WDDM owns normal display enumeration.
+      user-mode halves against the Windows 11 24H2 (WDDM 3.2) contract.
+      Legacy VGA binaries remain available as recovery components, but WDDM
+      owns normal display enumeration.
 
-config REACTOS_WDDM_LEVEL
-    prompt "WDDM compatibility ceiling"
-    type choice
-    value 1.0 "WDDM 1.0 (Vista)"
-    value 1.1 "WDDM 1.1 (Windows 7)"
-    value 1.2 "WDDM 1.2 (Windows 8)"
-    value 1.3 "WDDM 1.3 (Windows 8.1)"
-    value 2.0 "WDDM 2.0 (Windows 10 1507)"
-    value 2.1 "WDDM 2.1"
-    value 2.2 "WDDM 2.2"
-    value 2.3 "WDDM 2.3"
-    value 2.4 "WDDM 2.4"
-    value 2.5 "WDDM 2.5"
-    value 2.6 "WDDM 2.6"
-    value 2.7 "WDDM 2.7"
-    value 2.8 "WDDM 2.8"
-    value 2.9 "WDDM 2.9"
-    value 3.0 "WDDM 3.0"
-    value 3.1 "WDDM 3.1"
-    value 3.2 "WDDM 3.2 (header/test ceiling)"
-    default 2.0
-    depends REACTOS_GRAPHICS_DRIVER_MODEL=WDDM
+config MESA_GALLIUM_FROM_SOURCE
+    prompt "Mesa Gallium OpenGL driver"
+    type bool
+    default y
+    depends TOOLCHAIN=clang
+    depends ARCH=i386 || ARCH=amd64 || ARCH=arm64
     help
-      Set the maximum WDDM level this build may expose. This is a compatibility
-      ceiling, not an automatic capability promotion: dxgkrnl still reports
-      the minimum of this selection, the miniport declaration, the memory
-      manager provider and the OS features implemented end to end.
+      Build and package mesa_gallium.dll with llvm-mingw Clang. AMD64 and
+      i386 use softpipe for CPU rendering. ARM64 includes the V3D and VC4
+      Raspberry Pi hardware drivers in the same DLL, followed by softpipe.
+      No LLVM runtime is needed unless LLVMpipe is enabled below.
 
-      WDDM components continue to compile against the highest audited header
-      layout so changing this setting cannot silently alter shared structure
-      sizes between dxgkrnl and a miniport.
+config ENABLE_MESA_LLVMPIPE
+    prompt "LLVMpipe OpenGL and Lavapipe Vulkan"
+    type bool
+    default n
+    depends MESA_GALLIUM_FROM_SOURCE=y
+    depends TOOLCHAIN=clang
+    depends ARCH=amd64 || ARCH=arm64
+    help
+      Replace softpipe with LLVMpipe in mesa_gallium.dll and package the
+      Lavapipe Vulkan ICD with the Khronos Vulkan loader. On ARM64 the V3D
+      and VC4 hardware drivers are kept and LLVMpipe becomes their CPU
+      fallback. LLVM's Windows static libraries and native code-generation
+      tools are built automatically; the first enabled build downloads pinned
+      sources and needs several GB of free space. opengl32.dll is not
+      replaced.
 
 endmenu
 
-config REACTOS_TARGET_NT
-    prompt "Target NT version"
-    type choice
-    value 0x502 "NT 5.2 (Windows Server 2003)"
-    value 0x600 "NT 6.0 (Windows Vista)"
-    value 0x601 "NT 6.1 (Windows 7)"
-    value 0x602 "NT 6.2 (Windows 8)"
-    value 0x603 "NT 6.3 (Windows 8.1)"
-    value 0xA00 "NT 10.0 (Windows 10)"
-    default 0xA00
-    help
-      The NT version ReactOS reports and targets
-      (REACTOS_TARGET_NT). User-mode DLL exports follow this
-      version through DLL_EXPORT_VERSION.
-
-config ISAPNP_ENABLE
-    prompt "ISA Plug-and-Play support"
-    type bool
-    default auto
-    depends ARCH=i386
-    depends SARCH!=xbox
-    help
-      Whether to enable ISA PnP support. "auto" enables it on i386
-      except for the Xbox platform variant, like
-      sdk/cmake/config.cmake.
-
-config ENABLE_FEX_ARM64EC
-    prompt "FEX ARM64EC emulator (run AMD64 binaries)"
-    type bool
-    default y
-    depends ARCH=arm64
-    help
-      Whether to build the optional FEX ARM64EC emulator for
-      running AMD64 binaries on ARM64. This is enabled by default;
-      its pinned source and build dependencies are included in the checkout.
-      Missing FEX prerequisites stop configuration while it is enabled.
+menu "Compatibility layers"
 
 config ENABLE_WOW64
-    prompt "WoW64 subsystem (run IA-32 binaries)"
+    prompt "WoW64 (run 32-bit x86 applications)"
     type bool
     default auto
     depends ARCH=amd64 || ARCH=arm64
     help
-      Whether to build the native WoW64 support DLLs and the supporting
-      ntdll and kernel paths needed to run 32-bit applications on amd64
-      or ARM64. "auto" enables it by default on ARM64.
+      Build the WoW64 subsystem: the support DLLs plus the ntdll and kernel
+      paths that run 32-bit x86 applications. "auto" enables it on ARM64.
+
+config ENABLE_FEX_ARM64EC
+    prompt "FEX ARM64EC emulator (run x86-64 applications)"
+    type bool
+    default y
+    depends ARCH=arm64
+    help
+      Build the FEX ARM64EC emulator that runs AMD64 applications on ARM64.
+      Its pinned source and build dependencies are part of the checkout;
+      missing prerequisites stop configuration while it is enabled.
+
+config ENABLE_FEX_ARM64EC_TEST_PAYLOADS
+    prompt "Include local AMD64 FEX diagnostic payloads"
+    type bool
+    default n
+    depends ARCH=arm64
+    depends ENABLE_FEX_ARM64EC=y
+    help
+      Import optional AMD64 diagnostic executables from a neighboring AMD64
+      build into the image. Keep this disabled for deterministic release
+      and normal development images.
 
 config VALIDATE_COMPAT_BINARIES
-    prompt "Validate ARM64EC and WoW64 build outputs"
+    prompt "Validate WoW64 and ARM64EC build outputs"
     type bool
     default auto
     depends ENABLE_FEX_ARM64EC=y || ENABLE_WOW64=y
     help
       Check PE architecture, ARM64EC metadata and ABI-sensitive imports
-      after the nested compatibility builds. Disable to skip these checks;
-      the compatibility DLLs are still built and packaged. "auto" enables
-      validation for Release builds and disables it for Debug builds.
+      after the nested compatibility builds. The compatibility DLLs are
+      built and packaged either way. "auto" validates Release builds only.
+
+endmenu
+
+menu "Desktop and applications"
+
+config ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    prompt "Early Winlogon background image"
+    type bool
+    default y
+    help
+      Show the BlueHorizon PNG as soon as Winlogon creates the interactive
+      desktop, stretched across the virtual screen until Userinit has
+      prepared the user background and started the shell. Disable to keep
+      the classic solid-color startup background and omit the PNG decoder
+      path from Winlogon.
+
+config ENABLE_WALLPAPERS
+    prompt "Extra wallpapers"
+    type bool
+    default n
+    help
+      Add the optional wallpapers module to built images.
+
+config ENABLE_ROSAPPS
+    prompt "Extra applications (rosapps)"
+    type bool
+    default n
+    help
+      Build the optional applications from modules/rosapps.
+
+endmenu
+
+menu "Kernel debugging"
+
+config KD_DEBUGGER
+    prompt "Kernel debugger"
+    type choice
+    value AUTO     "Automatic (toolchain and build-type default)"
+    value NONE     "No interactive kernel debugger"
+    value KDBG     "Integrated ReactOS debugger (KDBG)"
+    value EXTERNAL "External KD protocol"
+    default AUTO
+    help
+      Select the kernel debugger implementation. "Automatic" uses KDBG for
+      GCC/Clang Debug builds, external KD for MSVC Debug builds, and no
+      debugger for Release builds.
+
+config KD_DEFAULT_TRANSPORT
+    prompt "Default KD transport"
+    type choice
+    value KDCOM "Serial KD (KDCOM / WinDbg)"
+    value KDGDB "GDB remote protocol (KDGDB)"
+    default KDCOM
+    depends KD_DEBUGGER=EXTERNAL
+    help
+      Transport installed as the default KDCOM.DLL. The other compatible
+      transport remains available through the boot DEBUGPORT option.
+
+endmenu
+
+menu "Testing"
+
+    depends BUILD_TYPE=Debug
+
+config ENABLE_ROSTESTS
+    prompt "Test suite and RosAutoTest"
+    type bool
+    default n
+    help
+      Build and package the ReactOS test suite, including the RosAutoTest
+      runner. Available in Debug builds only.
+
+config ENABLE_ROSAUTOTEST_BOOT_RUN
+    prompt "Run the full RosAutoTest suite at boot"
+    type bool
+    default n
+    help
+      Build and package the complete test suite, then run it through
+      RosAutoTest after desktop startup. The run includes public KMTests.
+
+config ENABLE_KMTEST_BOOT_RUN
+    prompt "Run all unattended KMTests at boot"
+    type bool
+    default n
+    help
+      Build the kernel-mode test harness even when the test suite is
+      disabled, then run its public and hidden unattended tests after
+      desktop startup. Interactive, negative self-test and ExPools cases
+      remain manual-only.
+
+config ENABLE_CPUBENCH_BOOT_RUN
+    prompt "Run CPUbench at boot"
+    type bool
+    default n
+    help
+      Run the architecture-neutral CPU benchmark after desktop startup.
+
+config ENABLE_RP1GEM_BENCHMARK
+    prompt "Run the RP1 GEM network benchmark at boot"
+    type bool
+    default n
+    depends PROFILE_ARM64=profile_raspberry
+    depends FREELDR_HTTP_BOOT=y
+    help
+      Run one 30-second TCP stream in each direction against the HTTP boot
+      host before reporting boot-test completion.
+
+config ENABLE_RPI5_WIFI_BOOT_RUN
+    prompt "Run Raspberry Pi 5 Wi-Fi diagnostics at boot"
+    type bool
+    default n
+    depends PROFILE_ARM64=profile_raspberry
+    help
+      Scan through the native WLAN stack. An optional boot_test_network.cfg
+      can name a WIFI_SSID and WIFI_KEY_FILE for connection and throughput
+      testing without storing a passphrase in the source tree.
 
 endmenu

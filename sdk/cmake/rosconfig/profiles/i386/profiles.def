@@ -3,8 +3,12 @@ config PROFILE_I386
     type choice
     var ROSCONFIG_PROFILE
     value generic "Generic i386"
+    value pc98    "NEC PC-9800 series"
+    value xbox    "Original Xbox"
     default generic
     depends ARCH=i386
     help
-      Select the generic i386 target profile. Optional image contents are
-      selected independently in the Image contents and tests submenu.
+      Generic builds the standard PC target.
+
+      NEC PC-9800 series and Original Xbox select their own HAL, boot loader
+      and display drivers (the SARCH sub-architecture).

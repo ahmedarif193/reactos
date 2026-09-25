@@ -13,5 +13,4 @@ config PROFILE_ARM64
       boards: SD/SDIO, DWC2, SMSC95xx and RP1 Ethernet, CYW43xx Wi-Fi,
       display, OpenGL and audio. Hardware IDs select the matching driver.
       The pinned Windows 10 BSP source snapshot is included for parity work.
-      Optional image contents are selected independently in the Image contents
-      and tests submenu.
+      It also adds the UEFI HTTP boot option in the Boot options menu.
