@@ -9,6 +9,9 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#if defined(_M_ARM64)
+#include <reactos/chpe.h>
+#endif
 #define NDEBUG
 #include <debug.h>
 
@@ -252,6 +255,52 @@ PspMapSystemDll(IN PEPROCESS Process,
     if (DllBase) *DllBase = ImageBase;
     return Status;
 }
+
+#if defined(_M_ARM64)
+NTSTATUS
+NTAPI
+PspMapChpeBridge(IN PEPROCESS Process)
+{
+    const UNICODE_STRING Path = RTL_CONSTANT_STRING(L"\\SystemRoot\\System32\\arm64ec\\ntdll_chpe.dll");
+    OBJECT_ATTRIBUTES Attributes;
+    IO_STATUS_BLOCK IoStatus;
+    HANDLE FileHandle;
+    HANDLE SectionHandle;
+    PSECTION Section;
+    PVOID Base = (PVOID)(ULONG_PTR)CHPE_BRIDGE_BASE;
+    SIZE_T ViewSize = 0;
+    NTSTATUS Status;
+
+    InitializeObjectAttributes(&Attributes, (PUNICODE_STRING)&Path,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenFile(&FileHandle, FILE_READ_ACCESS, &Attributes, &IoStatus,
+                        FILE_SHARE_READ, 0);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ZwCreateSection(&SectionHandle, SECTION_MAP_EXECUTE | SECTION_MAP_READ,
+                             NULL, NULL, PAGE_EXECUTE, SEC_IMAGE, FileHandle);
+    ZwClose(FileHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ObReferenceObjectByHandle(SectionHandle, SECTION_MAP_EXECUTE,
+                                       MmSectionObjectType, KernelMode, (PVOID *)&Section, NULL);
+    ZwClose(SectionHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = MmMapViewOfSection(Section, Process, &Base, 0, 0, NULL, &ViewSize,
+                                ViewShare, 0, PAGE_EXECUTE_WRITECOPY);
+    ObDereferenceObject(Section);
+    if (Status == STATUS_IMAGE_NOT_AT_BASE)
+    {
+        MmUnmapViewOfSection(Process, Base);
+        return STATUS_CONFLICTING_ADDRESSES;
+    }
+    return Status;
+}
+#endif
 
 CODE_SEG("INIT")
 NTSTATUS

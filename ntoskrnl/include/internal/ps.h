@@ -218,6 +218,12 @@ PspMapSystemDll(
     IN BOOLEAN UseLargePages
 );
 
+#if defined(_M_ARM64)
+NTSTATUS
+NTAPI
+PspMapChpeBridge(IN PEPROCESS Process);
+#endif
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI
