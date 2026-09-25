@@ -7,6 +7,10 @@
 # architecture-specific loader and guest executables remain separate.
 include("${CMAKE_CURRENT_LIST_DIR}/compat_runtime_targets.cmake")
 
-set(ARM64EC_RUNTIME_MODULES ${COMPAT_RUNTIME_MODULES} ntdll_chpe)
+set(ARM64EC_RUNTIME_MODULES ${COMPAT_RUNTIME_MODULES}
+    directmanipulation
+    ntdll_chpe
+    windows_media
+    windows_networking_connectivity)
 set(ARM64EC_RUNTIME_AUXILIARY_MODULES ${COMPAT_RUNTIME_AUXILIARY_MODULES})
 set(ARM64EC_RUNTIME_ALIASES ${COMPAT_RUNTIME_ALIASES})
