@@ -185,8 +185,6 @@ SoftGpuWalkGpuVaPage(
     ULONGLONG TablePhysical = RootPhysical;
     LONG Level;
 
-    UNREFERENCED_PARAMETER(Device);
-
     if (FaultLevel != NULL)
         *FaultLevel = SOFTGPU_GPUVA_LEVELS - 1;
     if (PhysicalAddress == NULL ||
@@ -276,9 +274,22 @@ SoftGpuWalkGpuVaPage(
         {
             return FALSE;
         }
-        *PhysicalAddress =
-            (Entry.PageAddress << PAGE_SHIFT) +
-            (Va & (PAGE_SIZE - 1));
+        *PhysicalAddress = Entry.PageAddress << PAGE_SHIFT;
+        if (Entry.Segment != 0)
+        {
+            /* VidMm leaf addresses in our local segment are offsets into
+             * the framebuffer slab, not system physical addresses. */
+            if (Device == NULL || Entry.Segment != SOFTGPU_SEGMENT_ID ||
+                Device->FrameBufferSize < PAGE_SIZE ||
+                *PhysicalAddress > Device->FrameBufferSize - PAGE_SIZE ||
+                (ULONGLONG)Device->FrameBufferPhys.QuadPart >
+                    MAXULONGLONG - *PhysicalAddress - (PAGE_SIZE - 1))
+            {
+                return FALSE;
+            }
+            *PhysicalAddress += (ULONGLONG)Device->FrameBufferPhys.QuadPart;
+        }
+        *PhysicalAddress += Va & (PAGE_SIZE - 1);
         return TRUE;
     }
 
@@ -2109,13 +2120,12 @@ SoftGpuDdiBuildPagingBuffer(
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         case DXGK_OPERATION_UPDATE_PAGE_TABLE:
         {
-            /*
-             * CPU_VIRTUAL mode: dxgkrnl already wrote the generic DXGK_PTE
-             * descriptors into the table this device handed it, and this
-             * device's translation reads exactly that format, so the update
-             * needs validation rather than a format conversion.
-             */
+            /* VidMm supplies a separate descriptor snapshot. The miniport
+             * must copy it into the actual CPU-visible page table, even
+             * though this software device uses the same descriptor format. */
             CONST DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Update = &BuildPagingBuffer->UpdatePageTable;
+            volatile DXGK_PTE *Entries;
+            ULONG Index;
 
             if (Update->UpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
                 return STATUS_NOT_SUPPORTED;
@@ -2128,10 +2138,28 @@ SoftGpuDdiBuildPagingBuffer(
                 return STATUS_INVALID_PARAMETER;
             if (Update->PageTableAddress.CpuVirtual == NULL)
                 return STATUS_INVALID_PARAMETER;
-            Cmd = SoftGpuBeginPagingCommand(BuildPagingBuffer);
-            if (Cmd == NULL)
-                return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
-            SoftGpuEndPagingCommand(BuildPagingBuffer);
+            /* Initial paging-process tables may have no DMA buffer. In
+             * that case the CPU update itself completes this operation. */
+            if (BuildPagingBuffer->pDmaBuffer != NULL)
+            {
+                Cmd = SoftGpuBeginPagingCommand(BuildPagingBuffer);
+                if (Cmd == NULL)
+                    return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+            }
+            Entries = (volatile DXGK_PTE *)Update->PageTableAddress.CpuVirtual;
+            for (Index = 0; Index < Update->NumPageTableEntries; ++Index)
+            {
+                DXGK_PTE Entry = Update->pPageTableEntries[Update->Flags.Repeat ? 0 : Index];
+                volatile DXGK_PTE *Target = &Entries[Update->StartIndex + Index];
+
+                /* Publish the address before its valid/protection bits.
+                 * Interlocked operations also order CPU table walkers. */
+                InterlockedExchange64((volatile LONG64 *)&Target->Flags, 0);
+                InterlockedExchange64((volatile LONG64 *)&Target->PageAddress, Entry.PageAddress);
+                InterlockedExchange64((volatile LONG64 *)&Target->Flags, Entry.Flags);
+            }
+            if (BuildPagingBuffer->pDmaBuffer != NULL)
+                SoftGpuEndPagingCommand(BuildPagingBuffer);
             return STATUS_SUCCESS;
         }
 
