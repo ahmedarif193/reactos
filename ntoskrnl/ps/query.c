@@ -3235,11 +3235,15 @@ NtSetInformationProcess(
                 break;
             }
 
-            if (ManageWrites.ProcessEnableWriteExceptions)
-                PspSetProcessFlag(Process, PSF_MANAGE_EXECUTABLE_MEMORY_WRITES_BIT);
-            else
-                PspClearProcessFlag(Process, PSF_MANAGE_EXECUTABLE_MEMORY_WRITES_BIT);
-            Status = STATUS_SUCCESS;
+            Status = MmSetProcessExecutableWriteTracking(Process,
+                                                         ManageWrites.ProcessEnableWriteExceptions != 0);
+            if (NT_SUCCESS(Status))
+            {
+                if (ManageWrites.ProcessEnableWriteExceptions)
+                    PspSetProcessFlag(Process, PSF_MANAGE_EXECUTABLE_MEMORY_WRITES_BIT);
+                else
+                    PspClearProcessFlag(Process, PSF_MANAGE_EXECUTABLE_MEMORY_WRITES_BIT);
+            }
 #else
             Status = STATUS_NOT_SUPPORTED;
 #endif

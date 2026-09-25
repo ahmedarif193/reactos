@@ -145,6 +145,7 @@ MmAccessFaultEx(
     ULONG Attempts = 0;
     PEPROCESS Process;
     NTSTATUS Status;
+    BOOLEAN AllowExecutableWrite = (PsGetCurrentThread()->ExecutableWriteAllowed != 0);
 
     UNREFERENCED_PARAMETER(TrapInformation);
     UNREFERENCED_PARAMETER(AddressSpaceLocked);
@@ -187,7 +188,9 @@ MmAccessFaultEx(
 
     do
     {
-        Status = MiFault(Space, (ULONG64)(ULONG_PTR)Address, Access, (BOOLEAN)(Mode != KernelMode));
+        Status = MiFaultWithWriteAllowance(Space, (ULONG64)(ULONG_PTR)Address, Access,
+                                           (BOOLEAN)(Mode != KernelMode),
+                                           AllowExecutableWrite);
     } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
 
     if (Process != NULL)

@@ -22,15 +22,6 @@ SIZE_T MmTotalCommittedPages;
 SIZE_T MmSharedCommit;
 SIZE_T MmPeakCommitment;
 
-typedef struct _MI_PROCESS_REFERENCE
-{
-    PEPROCESS Process;
-    KAPC_STATE ApcState;
-    BOOLEAN Referenced;
-    BOOLEAN Attached;
-} MI_PROCESS_REFERENCE, *PMI_PROCESS_REFERENCE;
-
-static
 NTSTATUS
 MiReferenceTargetProcess(
     _In_ HANDLE ProcessHandle,
@@ -69,7 +60,6 @@ MiReferenceTargetProcess(
     return STATUS_SUCCESS;
 }
 
-static
 VOID
 MiReleaseTargetProcess(
     _Inout_ PMI_PROCESS_REFERENCE Reference)
@@ -233,7 +223,8 @@ MiAllocateVirtualMemoryNt(
     _In_ ULONG Protect,
     _In_ ULONG64 LowestAddress,
     _In_ ULONG64 HighestEndingAddress,
-    _In_ ULONG64 Alignment)
+    _In_ ULONG64 Alignment,
+    _In_ BOOLEAN EcCode)
 {
     MI_PROCESS_REFERENCE Target;
     ULONG64 Base, Size, Highest;
@@ -358,6 +349,18 @@ MiAllocateVirtualMemoryNt(
 
     if (NT_SUCCESS(Status))
     {
+        if (EcCode && (Type & MI_MEM_RESERVE))
+        {
+            PMI_ADDRESS_SPACE Space = MiSpaceOfProcess(Target.Process);
+            PMI_VAD Vad;
+
+            MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
+            Vad = MiVadLocate(Space, Base);
+            if (Vad != NULL && Vad->Node.StartingVpn == (Base >> PAGE_SHIFT))
+                Vad->EcCode = TRUE;
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        }
+
         if (Type & MI_MEM_RESERVE)
         {
             Target.Process->VirtualSize += (SIZE_T)Size;
@@ -387,7 +390,7 @@ NtAllocateVirtualMemory(
     _In_ ULONG Protect)
 {
     return MiAllocateVirtualMemoryNt(ProcessHandle, UBaseAddress, ZeroBits, URegionSize, AllocationType, Protect,
-                                     0, 0, 0);
+                                     0, 0, 0, FALSE);
 }
 
 static
@@ -397,7 +400,8 @@ MiCaptureAddressRequirements(
     _In_ ULONG Count,
     _Out_ PULONG64 LowestAddress,
     _Out_ PULONG64 HighestEndingAddress,
-    _Out_ PULONG64 Alignment)
+    _Out_ PULONG64 Alignment,
+    _Out_ PBOOLEAN EcCode)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG Present = 0;
@@ -406,6 +410,7 @@ MiCaptureAddressRequirements(
     *LowestAddress = 0;
     *HighestEndingAddress = 0;
     *Alignment = 0;
+    *EcCode = FALSE;
 
     _SEH2_TRY
     {
@@ -432,6 +437,7 @@ MiCaptureAddressRequirements(
             {
                 if ((Parameter.ULong64 & ~(ULONG64)MEM_EXTENDED_PARAMETER_EC_CODE) != 0)
                     _SEH2_YIELD(return STATUS_NOT_SUPPORTED);
+                *EcCode = (BOOLEAN)((Parameter.ULong64 & MEM_EXTENDED_PARAMETER_EC_CODE) != 0);
                 continue;
             }
 
@@ -499,6 +505,7 @@ NtAllocateVirtualMemoryEx(
     ULONG64 LowestAddress = 0;
     ULONG64 HighestEndingAddress = 0;
     ULONG64 Alignment = 0;
+    BOOLEAN EcCode = FALSE;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -509,7 +516,7 @@ NtAllocateVirtualMemoryEx(
             return STATUS_INVALID_PARAMETER;
 
         Status = MiCaptureAddressRequirements(ExtendedParameters, ExtendedParameterCount, &LowestAddress,
-                                              &HighestEndingAddress, &Alignment);
+                                              &HighestEndingAddress, &Alignment, &EcCode);
         if (!NT_SUCCESS(Status))
             return Status;
     }
@@ -519,7 +526,7 @@ NtAllocateVirtualMemoryEx(
     }
 
     return MiAllocateVirtualMemoryNt(ProcessHandle, BaseAddress, 0, RegionSize, AllocationType, PageProtection,
-                                     LowestAddress, HighestEndingAddress, Alignment);
+                                     LowestAddress, HighestEndingAddress, Alignment, EcCode);
 }
 
 NTSTATUS

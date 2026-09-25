@@ -1752,9 +1752,7 @@ typedef struct _ETHREAD
     ULONG PowerThrottlingControlMask;
     ULONG PowerThrottlingStateMask;
 #endif
-#if defined(_M_ARM64)
     volatile LONG ExecutableWriteAllowed;
-#endif
 #if defined(__REACTOS__)
     CHAR Win32kPriorityFloor;
     volatile LONG DynamicCodeOptOut;
