@@ -738,6 +738,13 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     {
         Status = PspMapSystemDll(Process, NULL, FALSE);
         if (!NT_SUCCESS(Status)) goto CleanupWithRef;
+#if defined(_M_ARM64)
+        if (Process->Machine == IMAGE_FILE_MACHINE_AMD64)
+        {
+            Status = PspMapChpeBridge(Process);
+            if (!NT_SUCCESS(Status)) goto CleanupWithRef;
+        }
+#endif
     }
 
     /* Create a handle for the Process */
