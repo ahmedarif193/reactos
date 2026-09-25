@@ -447,22 +447,29 @@ void STDMETHODCALLTYPE NativeContext::Dispatch(UINT x, UINT y, UINT z)
     device->functions.pfnDispatch(device->driver_device, x, y, z);
 }
 
-void STDMETHODCALLTYPE NativeContext::DispatchIndirect(ID3D11Buffer *buffer, UINT offset)
-{
-    auto *args = GetNativeBuffer(buffer, device);
-    if (!args || !(args->desc.MiscFlags & D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS) || (offset & 3)
-            || offset > args->desc.ByteWidth || args->desc.ByteWidth - offset < 3 * sizeof(UINT)
-            || !device->functions.pfnDispatchIndirect) return;
-    NativeLock guard(device);
-    if (deferred)
-    {
-        if (recording_disabled) return;
-        NativeCommandRef<ID3D11Buffer> retained(buffer);
-        Record([=](NativeContext *context) { context->DispatchIndirect(retained.Get(), offset); });
-        return;
-    }
-    device->functions.pfnDispatchIndirect(device->driver_device, args->handle, offset);
+/* Arguments stay in GPU memory; deferred commands retain the buffer, not its
+ * current contents, until playback. */
+#define NATIVE_INDIRECT(Method, ArgumentCount) \
+void STDMETHODCALLTYPE NativeContext::Method(ID3D11Buffer *buffer, UINT offset) \
+{ \
+    auto *args = GetNativeBuffer(buffer, device); \
+    if (!args || !(args->desc.MiscFlags & D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS) || (offset & 3) \
+            || offset > args->desc.ByteWidth || args->desc.ByteWidth - offset < ArgumentCount * sizeof(UINT) \
+            || !device->functions.pfn##Method) return; \
+    NativeLock guard(device); \
+    if (deferred) \
+    { \
+        if (recording_disabled) return; \
+        NativeCommandRef<ID3D11Buffer> retained(buffer); \
+        Record([=](NativeContext *context) { context->Method(retained.Get(), offset); }); \
+        return; \
+    } \
+    device->functions.pfn##Method(device->driver_device, args->handle, offset); \
 }
+NATIVE_INDIRECT(DispatchIndirect, 3)
+NATIVE_INDIRECT(DrawInstancedIndirect, 4)
+NATIVE_INDIRECT(DrawIndexedInstancedIndirect, 5)
+#undef NATIVE_INDIRECT
 
 void STDMETHODCALLTYPE NativeContext::CopyStructureCount(ID3D11Buffer *buffer, UINT offset, ID3D11UnorderedAccessView *object)
 {
