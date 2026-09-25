@@ -245,6 +245,7 @@ KMT_TESTFUNC Test_KeWaitMultiple;
 KMT_TESTFUNC Test_KernelType;
 KMT_TESTFUNC Test_MmAllocateContiguousNode;
 KMT_TESTFUNC Test_MmMdl;
+KMT_TESTFUNC Test_MmMdlDispatch;
 KMT_TESTFUNC Test_MmLargePages;
 KMT_TESTFUNC Test_MmSection;
 KMT_TESTFUNC Test_MmWddmRanges;
@@ -530,6 +531,7 @@ const KMT_TEST TestList[] =
     { "KernelType",                         Test_KernelType },
     { "MmAllocateContiguousNode",           Test_MmAllocateContiguousNode },
     { "MmMdl",                              Test_MmMdl },
+    { "MmMdlDispatch",                      Test_MmMdlDispatch },
     { "MmLargePages",                       Test_MmLargePages },
     { "MmSecureKM",                         Test_MmSecureKM },
     { "MmSection",                          Test_MmSection },
