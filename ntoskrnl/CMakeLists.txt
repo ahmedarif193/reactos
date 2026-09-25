@@ -10,7 +10,8 @@ if(KDBG AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64") AND NOT TARGET kdb_z
     set(KDB_ZYCORE_ROOT ${KDB_ZYDIS_ROOT}/dependencies/zycore)
 
     if(NOT EXISTS ${KDB_ZYDIS_ROOT}/src/MetaInfo.c OR NOT EXISTS ${KDB_ZYCORE_ROOT}/src/API/Memory.c)
-        message(FATAL_ERROR "KDBG requires the vendored Zydis and Zycore sources under submodules/fex-arm64ec.")
+        message(FATAL_ERROR "KDBG requires Zydis and Zycore from the fex-arm64ec feed. "
+            "Run scripts/feeds update fex-arm64ec, or configure with -DKD_DEBUGGER=NONE.")
     endif()
 
     add_library(kdb_zycore STATIC ${KDB_ZYCORE_ROOT}/src/API/Memory.c ${KDB_ZYCORE_ROOT}/src/API/Process.c ${KDB_ZYCORE_ROOT}/src/API/Synchronization.c ${KDB_ZYCORE_ROOT}/src/API/Terminal.c ${KDB_ZYCORE_ROOT}/src/API/Thread.c ${KDB_ZYCORE_ROOT}/src/Allocator.c ${KDB_ZYCORE_ROOT}/src/ArgParse.c ${KDB_ZYCORE_ROOT}/src/Bitset.c ${KDB_ZYCORE_ROOT}/src/Format.c ${KDB_ZYCORE_ROOT}/src/List.c ${KDB_ZYCORE_ROOT}/src/String.c ${KDB_ZYCORE_ROOT}/src/Vector.c ${KDB_ZYCORE_ROOT}/src/Zycore.c)

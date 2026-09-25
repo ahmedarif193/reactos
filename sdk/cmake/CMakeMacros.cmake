@@ -294,7 +294,7 @@ macro(dir_to_num dir var)
 endmacro()
 
 function(add_cd_file)
-    cmake_parse_arguments(_CD "NO_CAB" "DESTINATION;NAME_ON_CD;TARGET" "FILE;FOR" ${ARGN})
+    cmake_parse_arguments(_CD "NO_CAB;OPTIONAL" "DESTINATION;NAME_ON_CD;TARGET" "FILE;FOR" ${ARGN})
     if(NOT (_CD_TARGET OR _CD_FILE))
         message(FATAL_ERROR "You must provide a target or a file to install!")
     endif()
@@ -311,13 +311,19 @@ function(add_cd_file)
 
     # Trust exact OS build artifacts, independently of their runtime path.
     # The kernel embeds these hashes for code-integrity image policy checks.
-    if(_CD_TARGET AND _CD_DESTINATION MATCHES "^reactos/(system32|winsxs)(/|$)")
+    if(_CD_TARGET AND NOT _CD_OPTIONAL AND _CD_DESTINATION MATCHES "^reactos/(system32|winsxs)(/|$)")
         if(TARGET ${_CD_TARGET})
             get_target_property(_ci_module_type ${_CD_TARGET} REACTOS_MODULE_TYPE)
             if(_ci_module_type MATCHES "^(nativedll|win32dll|win32ocx|cpl|module)$")
                 set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_TARGETS ${_CD_TARGET})
             endif()
         endif()
+    endif()
+
+    if(_CD_OPTIONAL)
+        set(_cd_list OPTIONAL_FILE_LIST)
+    else()
+        set(_cd_list FILE_LIST)
     endif()
 
     # get file if we need to
@@ -350,25 +356,31 @@ function(add_cd_file)
                 else()
                     get_filename_component(__file ${item} NAME)
                 endif()
-                set_property(GLOBAL APPEND PROPERTY BOOTCD_FILE_LIST "${_CD_ARCH_DESTINATION}/${__file}=${item}")
+                set_property(GLOBAL APPEND PROPERTY BOOTCD_${_cd_list} "${_CD_ARCH_DESTINATION}/${__file}=${item}")
             endforeach()
             # manage dependency
-            if(_CD_TARGET)
+            if(_CD_TARGET AND NOT _CD_OPTIONAL)
                 add_dependencies(bootcd ${_CD_TARGET} registry_inf)
             endif()
         else()
             dir_to_num(${_CD_DESTINATION} _num)
-            foreach(item ${_CD_FILE})
-                # add it in reactos.cab
-                file(APPEND ${REACTOS_BINARY_DIR}/boot/bootdata/packages/reactos.dff.cmake "\"${item}\" ${_num}\n")
+            if(_CD_OPTIONAL)
+                foreach(item ${_CD_FILE})
+                    file(APPEND ${REACTOS_BINARY_DIR}/boot/bootdata/packages/reactos.dff.optional.cmake "\"${item}\" ${_num}\n")
+                endforeach()
+            else()
+                foreach(item ${_CD_FILE})
+                    # add it in reactos.cab
+                    file(APPEND ${REACTOS_BINARY_DIR}/boot/bootdata/packages/reactos.dff.cmake "\"${item}\" ${_num}\n")
 
-                # manage dependency - file level
-                set_property(GLOBAL APPEND PROPERTY REACTOS_CAB_DEPENDS ${item})
-            endforeach()
+                    # manage dependency - file level
+                    set_property(GLOBAL APPEND PROPERTY REACTOS_CAB_DEPENDS ${item})
+                endforeach()
 
-            # manage dependency - target level
-            if(_CD_TARGET)
-                add_dependencies(reactos_cab_inf ${_CD_TARGET})
+                # manage dependency - target level
+                if(_CD_TARGET)
+                    add_dependencies(reactos_cab_inf ${_CD_TARGET})
+                endif()
             endif()
         endif()
     endif() #end bootcd
@@ -377,7 +389,7 @@ function(add_cd_file)
     list(FIND _CD_FOR livecd __cd)
     if(NOT __cd EQUAL -1)
         # manage dependency
-        if(_CD_TARGET)
+        if(_CD_TARGET AND NOT _CD_OPTIONAL)
             add_dependencies(livecd ${_CD_TARGET} registry_inf)
         endif()
         foreach(item ${_CD_FILE})
@@ -387,7 +399,7 @@ function(add_cd_file)
             else()
                 get_filename_component(__file ${item} NAME)
             endif()
-            set_property(GLOBAL APPEND PROPERTY LIVECD_FILE_LIST "${_CD_DESTINATION}/${__file}=${item}")
+            set_property(GLOBAL APPEND PROPERTY LIVECD_${_cd_list} "${_CD_DESTINATION}/${__file}=${item}")
         endforeach()
     endif() #end livecd
 
@@ -406,10 +418,10 @@ function(add_cd_file)
                 else()
                     get_filename_component(__file ${item} NAME)
                 endif()
-                set_property(GLOBAL APPEND PROPERTY BOOTCDREGTEST_FILE_LIST "${_CD_ARCH_DESTINATION}/${__file}=${item}")
+                set_property(GLOBAL APPEND PROPERTY BOOTCDREGTEST_${_cd_list} "${_CD_ARCH_DESTINATION}/${__file}=${item}")
             endforeach()
             # manage dependency
-            if(_CD_TARGET)
+            if(_CD_TARGET AND NOT _CD_OPTIONAL)
                 add_dependencies(bootcdregtest ${_CD_TARGET} registry_inf)
             endif()
         else()
@@ -427,7 +439,7 @@ function(add_cd_file)
     list(FIND _CD_FOR preinstall __cd)
     if(NOT __cd EQUAL -1)
         # manage dependency
-        if(_CD_TARGET)
+        if(_CD_TARGET AND NOT _CD_OPTIONAL)
             add_dependencies(preinstall_partition ${_CD_TARGET} registry_inf)
         endif()
         foreach(item ${_CD_FILE})
@@ -437,7 +449,7 @@ function(add_cd_file)
             else()
                 get_filename_component(__file ${item} NAME)
             endif()
-            set_property(GLOBAL APPEND PROPERTY PREINSTALL_FILE_LIST "${_CD_DESTINATION}/${__file}=${item}")
+            set_property(GLOBAL APPEND PROPERTY PREINSTALL_${_cd_list} "${_CD_DESTINATION}/${__file}=${item}")
         endforeach()
     endif() #end preinstall
 endfunction()
@@ -540,6 +552,20 @@ endif()
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/preinstall.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/preinstall.cmake.lst)
+
+    foreach(_image livecd bootcd bootcdregtest preinstall)
+        string(TOUPPER "${_image}" _property)
+        get_property(_filelist GLOBAL PROPERTY ${_property}_OPTIONAL_FILE_LIST)
+        if(_image STREQUAL "bootcd")
+            get_property(_livecd_filelist GLOBAL PROPERTY LIVECD_OPTIONAL_FILE_LIST)
+            list(APPEND _filelist ${_livecd_filelist})
+        endif()
+        string(REPLACE ";" "\n" _filelist "${_filelist}")
+        file(WRITE ${REACTOS_BINARY_DIR}/boot/${_image}.optional.cmake.lst "${_filelist}\n")
+        file(GENERATE
+             OUTPUT ${REACTOS_BINARY_DIR}/boot/${_image}.optional.$<CONFIG>.lst
+             INPUT ${REACTOS_BINARY_DIR}/boot/${_image}.optional.cmake.lst)
+    endforeach()
 endfunction()
 
 # Create module_clean targets
@@ -1012,6 +1038,19 @@ function(add_registry_inf)
     endforeach()
 endfunction()
 
+function(add_optional_registry_inf)
+    cmake_parse_arguments(_REG "" "INF;REQUIRES" "" ${ARGN})
+    if(NOT _REG_INF OR NOT _REG_REQUIRES)
+        message(FATAL_ERROR "add_optional_registry_inf requires INF and REQUIRES")
+    endif()
+    if(IS_ABSOLUTE "${_REG_INF}")
+        set(_source_file "${_REG_INF}")
+    else()
+        set(_source_file "${CMAKE_CURRENT_SOURCE_DIR}/${_REG_INF}")
+    endif()
+    set_property(GLOBAL APPEND PROPERTY REGISTRY_OPTIONAL_INF_LIST "${_REG_REQUIRES}|${_source_file}")
+endfunction()
+
 function(create_registry_hives)
 
     # Register the launcher only when the source script has been populated.
@@ -1038,7 +1077,37 @@ function(create_registry_hives)
     endforeach()
 
     # Concatenate all registry files to registry.inf
-    concatenate_files(${_registry_inf} ${_converted_files})
+    set(_registry_base_inf "${CMAKE_BINARY_DIR}/boot/bootdata/registry_base.inf")
+    concatenate_files(${_registry_base_inf} ${_converted_files})
+
+    get_property(_optional_infs GLOBAL PROPERTY REGISTRY_OPTIONAL_INF_LIST)
+    set(_optional_inf_list "")
+    set(_converted_optional_files "")
+    foreach(_entry ${_optional_infs})
+        string(FIND "${_entry}" "|" _separator)
+        string(SUBSTRING "${_entry}" 0 ${_separator} _required)
+        math(EXPR _start "${_separator} + 1")
+        string(SUBSTRING "${_entry}" ${_start} -1 _file)
+        get_filename_component(_file_name ${_file} NAME_WE)
+        file(RELATIVE_PATH _subdir ${CMAKE_SOURCE_DIR} ${_file})
+        get_filename_component(_subdir ${_subdir} DIRECTORY)
+        set(_converted_file ${CMAKE_BINARY_DIR}/${_subdir}/${_file_name}_utf16.inf)
+        utf16le_convert(${_file} ${_converted_file})
+        list(APPEND _converted_optional_files ${_converted_file})
+        string(APPEND _optional_inf_list "${_required}|${_converted_file}\n")
+    endforeach()
+    file(WRITE ${CMAKE_BINARY_DIR}/boot/bootdata/registry_optional.txt "${_optional_inf_list}")
+
+    add_custom_command(
+        OUTPUT ${_registry_inf} ${_registry_inf}.always
+        COMMAND ${CMAKE_COMMAND} -DMODE=binary
+            -DBASE=${_registry_base_inf}
+            -DOPTIONAL=${CMAKE_BINARY_DIR}/boot/bootdata/registry_optional.txt
+            -DOUTPUT=${_registry_inf}
+            -P ${CMAKE_SOURCE_DIR}/sdk/cmake/optional_files.cmake
+        DEPENDS ${_registry_base_inf} ${_converted_optional_files}
+        VERBATIM)
+    set_source_files_properties(${_registry_inf}.always PROPERTIES SYMBOLIC TRUE)
 
     # Add registry.inf to bootcd
     add_custom_target(registry_inf DEPENDS ${_registry_inf})

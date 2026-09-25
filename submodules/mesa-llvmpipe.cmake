@@ -117,6 +117,7 @@ else()
     # LLVM bootstraps its host TableGen executables when cross-compiling; do
     # not run target Windows llvm-config/TableGen on the build host.
     ExternalProject_Add(mesa-llvm
+        EXCLUDE_FROM_ALL TRUE
         PREFIX "${MESA_WORK_DIR}/llvm-prefix"
         ${_mesa_llvm_download}
         SOURCE_DIR "${_mesa_llvm_source}"
@@ -169,6 +170,7 @@ endif()
 
 # Keep the loader and headers on the same release as Mesa's Vulkan API files.
 ExternalProject_Add(vulkan-headers-build
+    EXCLUDE_FROM_ALL TRUE
     PREFIX "${MESA_WORK_DIR}/vulkan-headers-prefix"
     URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.354.tar.gz
     URL_HASH SHA256=4ca3606e57728febf8aef097c9d7ba6c52385955bb4a6dc06fcf9fc3d76541de
@@ -186,6 +188,7 @@ ExternalProject_Add(vulkan-headers-build
     BUILD_BYPRODUCTS "${VULKAN_HEADERS_PREFIX}/include/vulkan/vulkan.h")
 
 ExternalProject_Add(directx-headers-build
+    EXCLUDE_FROM_ALL TRUE
     PREFIX "${MESA_WORK_DIR}/directx-headers-prefix"
     URL https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.619.1.tar.gz
     URL_HASH SHA256=6193774904c940eebb9b0c51b816b93dd776cfeb25a951f0f4a58f22387e5008
@@ -212,6 +215,7 @@ ExternalProject_Add(directx-headers-build
         "${DIRECTX_HEADERS_PREFIX}/include/dxguids/dxguids.h")
 
 ExternalProject_Add(vulkan-loader-build
+    EXCLUDE_FROM_ALL TRUE
     DEPENDS vulkan-headers-build
     PREFIX "${MESA_WORK_DIR}/vulkan-loader-prefix"
     URL https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/v1.4.354.tar.gz
@@ -272,10 +276,12 @@ add_custom_command(
 
 add_custom_target(mesa-llvmpipe DEPENDS "${MESA_LAVAPIPE_DLL}" "${MESA_LAVAPIPE_MANIFEST}" "${VULKAN_LOADER_DLL}" "${MESA_LICENSES}")
 add_dependencies(mesa-llvmpipe mesa_gallium)
-add_cd_file(FILE "${MESA_LAVAPIPE_DLL}" TARGET mesa-llvmpipe DESTINATION reactos/system32 FOR all)
-add_cd_file(FILE "${MESA_LAVAPIPE_MANIFEST}" TARGET mesa-llvmpipe DESTINATION reactos/system32 FOR all)
-add_cd_file(FILE "${VULKAN_LOADER_DLL}" TARGET mesa-llvmpipe DESTINATION reactos/system32 FOR all)
-add_cd_file(FILE "${MESA_LICENSES}" TARGET mesa-llvmpipe DESTINATION reactos/3rdParty FOR all)
+add_cd_file(FILE "${MESA_LAVAPIPE_DLL}" TARGET mesa-llvmpipe DESTINATION reactos/system32 OPTIONAL FOR all)
+add_cd_file(FILE "${MESA_LAVAPIPE_MANIFEST}" TARGET mesa-llvmpipe DESTINATION reactos/system32 OPTIONAL FOR all)
+add_cd_file(FILE "${VULKAN_LOADER_DLL}" TARGET mesa-llvmpipe DESTINATION reactos/system32 OPTIONAL FOR all)
+add_cd_file(FILE "${MESA_LICENSES}" TARGET mesa-llvmpipe DESTINATION reactos/3rdParty OPTIONAL FOR all)
+add_optional_registry_inf(INF "${REACTOS_SOURCE_DIR}/submodules/mesa-llvmpipe.inf" REQUIRES "${MESA_LAVAPIPE_MANIFEST}")
+add_dependencies(submodules mesa-llvmpipe)
 if(ARCH STREQUAL "arm64")
     set(_mesa_wgl_profile "VC4/V3D/LLVMpipe WGL")
 else()

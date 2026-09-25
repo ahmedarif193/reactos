@@ -1,3 +1,0 @@
-x86_64 CtsGraphicsTestCases
-x86_64 CtsNativeHardwareTestCases
-x86_64 CtsSkQPTestCases

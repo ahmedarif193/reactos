@@ -9,9 +9,13 @@ import sys
 
 
 def main():
-    manifest, output = map(pathlib.Path, sys.argv[1:])
+    manifest, output = map(pathlib.Path, sys.argv[1:3])
+    names = manifest.read_text().splitlines()
+    if len(sys.argv) > 3:
+        names += [name for name in pathlib.Path(sys.argv[3]).read_text().splitlines()
+                  if name and pathlib.Path(name).exists()]
     entries = set()
-    for name in manifest.read_text().splitlines():
+    for name in names:
         path = pathlib.Path(name)
         data = path.read_bytes()
         if data[:2] != b"MZ":

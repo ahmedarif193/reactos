@@ -68,10 +68,11 @@ endforeach()
 
 # The source-built ICD is an external-project output, not a MODULE target.
 # Package its EC counterpart with the EC OpenGL loader, never the native ICD.
+set(ARM64EC_RUNTIME_OPTIONAL_FILES)
 if(TARGET mesa_gallium)
     set(_arm64ec_mesa_file "${ARM64EC_BINARY_DIR}/dll/opengl/mesa_gallium/mesa-icd/mesa_gallium.dll")
     list(APPEND ARM64EC_RUNTIME_BUILD_MODULES mesa_gallium)
-    list(APPEND ARM64EC_RUNTIME_FILES "${_arm64ec_mesa_file}")
+    list(APPEND ARM64EC_RUNTIME_OPTIONAL_FILES "${_arm64ec_mesa_file}")
     list(APPEND ARM64EC_RUNTIME_VALIDATION_FILES "${_arm64ec_mesa_file}")
 endif()
 
@@ -195,6 +196,11 @@ add_dependencies(fex_arm64ec_runtime fex_arm64ec_configure)
 
 add_cd_file(TARGET fex_arm64ec_runtime FILE ${ARM64EC_RUNTIME_FILES}
     DESTINATION reactos/system32/arm64ec FOR all)
+
+if(ARM64EC_RUNTIME_OPTIONAL_FILES)
+    add_cd_file(TARGET fex_arm64ec_runtime FILE ${ARM64EC_RUNTIME_OPTIONAL_FILES}
+        DESTINATION reactos/system32/arm64ec OPTIONAL FOR all)
+endif()
 
 if(ARM64EC_ALIAS_FILES)
     list(LENGTH ARM64EC_ALIAS_FILES _arm64ec_alias_count)

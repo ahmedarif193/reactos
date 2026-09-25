@@ -1,1 +1,0 @@
-/* lima specific driconf options */

@@ -78,10 +78,24 @@ configure_file(
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/concat.cmake "
     file(READ \${SRC1} S1)
     file(READ \${SRC2} S2)
-    file(WRITE \${DST} \"\${S1}\${S2}\")
+    file(READ \${SRC3} S3)
+    file(WRITE \${DST} \"\${S1}\${S2}\${S3}\")
 ")
 
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.cmake "")
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional.cmake "")
+file(GENERATE
+     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional.$<CONFIG>.in
+     INPUT ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional.cmake)
+
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional.always
+    COMMAND ${CMAKE_COMMAND} -DMODE=dff
+        -DOPTIONAL=${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional.$<CONFIG>.in
+        -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional
+        -P ${REACTOS_SOURCE_DIR}/sdk/cmake/optional_files.cmake
+    VERBATIM)
+set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional.always PROPERTIES SYMBOLIC TRUE)
 
 # This generates reactos.dff.dyn by processing the generator expressions
 file(GENERATE
@@ -95,13 +109,15 @@ add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff
     COMMAND ${CMAKE_COMMAND} -D SRC1=${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.base
                              -D SRC2=${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.$<CONFIG>.dyn
+                             -D SRC3=${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional
                              -D DST=${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.maydiff
                              -P ${CMAKE_CURRENT_BINARY_DIR}/concat.cmake
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                              ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.maydiff
                              ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.base
-    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.$<CONFIG>.dyn)
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.$<CONFIG>.dyn
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff.optional)
 
 add_custom_command(
     COMMAND native-cabman -C ${CMAKE_CURRENT_BINARY_DIR}/reactos.dff -L ${CMAKE_CURRENT_BINARY_DIR} -I -P ${REACTOS_SOURCE_DIR}

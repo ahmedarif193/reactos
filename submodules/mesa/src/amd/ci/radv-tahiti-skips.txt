@@ -1,3 +1,0 @@
-# Most of it fails, some of it slightly flaky.  Needs to be debugged.
-dEQP-VK.image.swapchain_mutable.direct.*
-dEQP-VK.wsi.direct.*
