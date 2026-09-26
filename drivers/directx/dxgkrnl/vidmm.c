@@ -13479,6 +13479,22 @@ DxgkpVidMmCleanAllocationForSubmissionLocked(
 }
 #endif
 
+static BOOLEAN
+DxgkpVidMmTryAddHeldSubmissionPin(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation)
+{
+    LONG Count;
+
+    for (;;)
+    {
+        Count = InterlockedCompareExchange(&Allocation->SubmissionResidencyPinCount, 0, 0);
+        if (Count <= 0 || Count == MAXLONG)
+            return FALSE;
+        if (InterlockedCompareExchange(&Allocation->SubmissionResidencyPinCount, Count + 1, Count) == Count)
+            return TRUE;
+    }
+}
+
 static NTSTATUS
 DxgkVidMmAcquireSubmissionResidencyPinExImpl(
     _In_ PDXGKVMM_ALLOCATION Allocation,
@@ -13490,6 +13506,20 @@ DxgkVidMmAcquireSubmissionResidencyPinExImpl(
 
     if (Allocation == NULL || ExpectedAdapter == NULL || Allocation->Adapter != ExpectedAdapter)
         return STATUS_INVALID_PARAMETER;
+    /* Eviction, relocation and idle preparation all refuse a pinned
+     * allocation, so while another pin is held the placement it validated
+     * stays valid and one more pin needs only the count. */
+    if (!CpuDirty && !Allocation->PendingPlacement &&
+        DxgkpVidMmTryAddHeldSubmissionPin(Allocation))
+    {
+        if (ListEntry != NULL)
+        {
+            ListEntry->Value = 0;
+            ListEntry->SegmentId = Allocation->SegmentId;
+            ListEntry->PhysicalAddress = Allocation->PhysicalAddress;
+        }
+        return STATUS_SUCCESS;
+    }
     /* Scheduler admission depends on the paging fence: an allocation whose
      * paging packet has not retired does not yet have the placement this
      * submission would patch into its DMA buffer. */
