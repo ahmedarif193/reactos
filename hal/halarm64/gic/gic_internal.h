@@ -480,43 +480,6 @@ typedef struct _HALP_GIC_VPE
 
 /*
  * ============================================================================
- * Virtual Machine Structure for GICv4
- * ============================================================================
- *
- * Tracks per-VM state for GICv4 virtual interrupt injection.
- */
-typedef struct _HALP_GIC_VM
-{
-    /* VM identification */
-    ULONG VmId;                     /* Unique VM identifier */
-
-    /* Virtual property table (shared by all vPEs in VM) */
-    PVOID VpropBase;                /* Virtual LPI property table virtual address */
-    PHYSICAL_ADDRESS VpropPa;       /* Virtual LPI property table physical address */
-    SIZE_T VpropSize;               /* Property table size in bytes */
-    PVOID VpropRaw;                 /* Raw allocation for freeing */
-
-    /* vPE management */
-    PHALP_GIC_VPE VpeList;          /* List of vPEs in this VM */
-    ULONG VpeCount;                 /* Number of vPEs */
-    KSPIN_LOCK VpeLock;             /* Lock protecting vPE list */
-
-    /* VLPI allocation */
-    RTL_BITMAP VlpiBitmap;          /* Bitmap for VLPI allocation */
-    PULONG VlpiBitmapBuffer;        /* Bitmap storage */
-    ULONG VlpiCount;                /* Total VLPIs available */
-    ULONG VlpiAllocated;            /* VLPIs currently allocated */
-
-    /* Linked list for global VM list */
-    struct _HALP_GIC_VM *Next;
-    struct _HALP_GIC_VM *Prev;
-
-    /* Initialization state */
-    volatile LONG InitState;        /* 0=pending, 1=initializing, 2=done, -1=failed */
-} HALP_GIC_VM, *PHALP_GIC_VM;
-
-/*
- * ============================================================================
  * VLPI (Virtual LPI) Mapping Entry
  * ============================================================================
  *
@@ -755,12 +718,6 @@ extern ULONG HalpGicRedistRegionCount;
 extern ULONG HalpGicRedistStride;
 
 /*
- * VLPI and DirectLPI capability flags (discovered during redistributor scan)
- */
-extern BOOLEAN HalpGicRedistHasVlpis;
-extern BOOLEAN HalpGicRedistHasDirectLpi;
-
-/*
  * ============================================================================
  * Global State Variables (exported from gic_common.c / gic_init.c)
  * ============================================================================
@@ -816,22 +773,6 @@ extern BOOLEAN HalpGicHasVlpis;             /* System supports VLPIs */
 extern BOOLEAN HalpGicHasDirectLpi;         /* System supports direct LPI injection */
 extern BOOLEAN HalpGicIsGicv4_1;            /* System is GICv4.1 capable */
 
-/* vPE ID allocator */
-extern RTL_BITMAP HalpGicVpeidBitmap;
-extern PULONG HalpGicVpeidBitmapBuffer;
-extern ULONG HalpGicVpeidCount;
-extern ULONG HalpGicVpeidAllocated;
-extern KSPIN_LOCK HalpGicVpeidLock;
-
-/* VM tracking */
-extern PHALP_GIC_VM HalpGicVmList;
-extern ULONG HalpGicVmCount;
-extern KSPIN_LOCK HalpGicVmLock;
-
-/* vPE tracking (indexed by vPE ID) */
-extern PHALP_GIC_VPE *HalpGicVpeTable;
-extern ULONG HalpGicVpeTableSize;
-
 /* LPI state */
 extern ULONG HalpGicLpiCount;
 extern UCHAR *HalpGicLpiConfig;
@@ -844,15 +785,7 @@ extern PHYSICAL_ADDRESS HalpGicLpiPendingPa[MAXIMUM_PROCESSORS];
 extern BOOLEAN HalpGicItsInitialized;
 extern BOOLEAN HalpGicItsInitFailed;
 extern volatile LONG HalpGicItsInitState;
-extern ULONG HalpGicItsDeviceIdBits;
-extern ULONG HalpGicItsEventIdBits;
-extern ULONG HalpGicItsEventIdLimit;
 extern ULONG HalpGicItsLpiIdBits;
-extern ULONG HalpGicItsIttEntrySize;
-extern ULONG HalpGicItsDeviceTableEntries;
-extern ULONG HalpGicItsCollectionEntries;
-extern PHALP_ARM64_ITS_DEVICE *HalpGicItsDeviceBuckets;
-extern ULONG HalpGicItsDeviceBucketCount;
 extern BOOLEAN HalpGicItsCollectionMapped[MAXIMUM_PROCESSORS];
 
 /* Active interrupt tracking */
@@ -874,12 +807,6 @@ extern BOOLEAN HalpGicv2GroupModeLocked;
  * IRQ Affinity Tracking State (GICv3 Dynamic Affinity Routing)
  * ============================================================================
  */
-
-/* Maximum number of SPIs we track (INTIDs 32-1019 = 988 SPIs) */
-#define HALP_GIC_MAX_SPI_COUNT 988
-
-/* Array tracking target CPU for each SPI (indexed by INTID - 32) */
-extern ULONG HalpGicSpiAffinityTarget[HALP_GIC_MAX_SPI_COUNT];
 
 /* Array storing MPIDR values for each CPU (indexed by CPU number) */
 extern ULONGLONG HalpGicCpuMpidr[MAXIMUM_PROCESSORS];
@@ -1241,67 +1168,6 @@ HalpGicv3RegisterCpu(
     _In_ ULONGLONG Mpidr);
 
 /*
- * HalpArm64SetGicAffinity - Set affinity for a GIC interrupt
- *
- * Routes an SPI to the specified target CPU by programming GICD_IROUTER.
- * This is the main function for dynamic IRQ affinity routing.
- *
- * Parameters:
- *   InterruptId - GIC interrupt ID (must be SPI: 32-1019)
- *   TargetCpu   - Target CPU index
- *
- * Returns:
- *   STATUS_SUCCESS on success
- *   STATUS_INVALID_PARAMETER if InterruptId is not an SPI
- *   STATUS_INVALID_PARAMETER if TargetCpu is out of range or not online
- */
-NTSTATUS
-HalpArm64SetGicAffinity(
-    _In_ ULONG InterruptId,
-    _In_ ULONG TargetCpu);
-
-/*
- * HalpArm64GetGicAffinity - Get current affinity for a GIC interrupt
- *
- * Returns the target CPU for an SPI.
- *
- * Parameters:
- *   InterruptId - GIC interrupt ID (must be SPI: 32-1019)
- *
- * Returns:
- *   Target CPU index, or (ULONG)-1 if invalid interrupt ID
- */
-ULONG
-HalpArm64GetGicAffinity(
-    _In_ ULONG InterruptId);
-
-/*
- * HalpGicv3MigrateCpuIrqs - Migrate IRQs away from a CPU
- *
- * Called when a CPU goes offline. Migrates all SPIs currently
- * routed to the specified CPU to CPU 0.
- *
- * Parameters:
- *   CpuIndex - CPU that is going offline
- */
-VOID
-HalpGicv3MigrateCpuIrqs(
-    _In_ ULONG CpuIndex);
-
-/*
- * HalpGicv3SetSpiAffinityRoundRobin - Distribute SPIs across CPUs
- *
- * Distributes all SPIs across available CPUs using round-robin
- * for load balancing.
- *
- * Parameters:
- *   Lines - Total number of interrupt lines in the GIC
- */
-VOID
-HalpGicv3SetSpiAffinityRoundRobin(
-    _In_ ULONG Lines);
-
-/*
  * ============================================================================
  * Redistributor Functions (defined in gic_redist.c)
  * ============================================================================
@@ -1398,12 +1264,6 @@ HalpInitGicRedistributor(
     _In_ ULONG Cpu);
 
 /*
- * HalpArm64EnableCpuInterface - Enable the CPU interface for the current CPU
- */
-VOID
-HalpArm64EnableCpuInterface(VOID);
-
-/*
  * ============================================================================
  * ITS Functions (defined in gic_its.c)
  * ============================================================================
@@ -1460,27 +1320,11 @@ HalpGicItsEnsureCollectionOnNode(
     _Inout_ PHALP_GIC_ITS_NODE ItsNode,
     _In_ ULONG Cpu);
 
-/*
- * Device management
- */
-PHALP_ARM64_ITS_DEVICE
-HalpGicItsGetDevice(
-    _In_ USHORT RequesterId);
-
-PHALP_ARM64_ITS_DEVICE
-HalpGicItsGetDeviceOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ USHORT RequesterId);
-
 PHALP_ARM64_ITS_DEVICE
 HalpGicItsCreateDevice(
     _Inout_ PHALP_GIC_ITS_NODE ItsNode,
     _In_ ULONG DeviceId,
     _In_ ULONG NrEvents);
-
-VOID
-HalpGicItsFreeDevice(
-    _Inout_ PHALP_ARM64_ITS_DEVICE Device);
 
 /*
  * LPI configuration
@@ -1497,28 +1341,6 @@ VOID
 HalpGicItsSetLpiPriority(
     _In_ ULONG Lpi,
     _In_ UCHAR Priority);
-
-/*
- * ITS command functions - Single ITS (legacy)
- */
-BOOLEAN
-HalpGicItsSendMapd(
-    _In_ ULONG DeviceId,
-    _In_ ULONG IttEntries,
-    _In_ ULONGLONG IttPa);
-
-BOOLEAN
-HalpGicItsSendMapc(
-    _In_ ULONG CollectionId,
-    _In_ ULONGLONG TargetAddress);
-
-BOOLEAN
-HalpGicItsSendMapti(
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _In_ ULONG PhysId,
-    _In_ ULONG CollectionId,
-    _In_ ULONGLONG TargetAddress);
 
 /*
  * ITS command functions - Multi-ITS (new)
@@ -1545,18 +1367,6 @@ HalpGicItsSendMaptiOnNode(
     _In_ ULONG EventId,
     _In_ ULONG PhysId,
     _In_ ULONG CollectionId);
-
-BOOLEAN
-HalpGicItsSendInvOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId);
-
-BOOLEAN
-HalpGicItsSendDiscardOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId);
 
 BOOLEAN
 HalpGicItsSendIntOnNode(
@@ -1587,25 +1397,6 @@ HalpGicItsAllocateMsi(
     _Out_ PPHYSICAL_ADDRESS MsiAddress,
     _Out_ PULONG MsiData);
 
-NTSTATUS
-HalpGicItsFreeMsi(
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId);
-
-NTSTATUS
-HalpGicItsGetMsiInfo(
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _Out_ PHALP_MSI_INFO MsiInfo);
-
-/*
- * MSI affinity management
- */
-NTSTATUS
-HalpGicItsSetMsiAffinity(
-    _In_ ULONG Lpi,
-    _In_ ULONG TargetCpu);
-
 /*
  * ============================================================================
  * GIC Version Detection Functions (defined in gic_init.c)
@@ -1634,99 +1425,10 @@ BOOLEAN
 HalpGicHasVlpiSupport(VOID);
 
 /*
- * HalpGicHasExtendedSpi - Check if extended SPI range is available
- *
- * Returns TRUE if GICv3.1+ extended SPI range (up to 1020 SPIs) is supported.
- */
-BOOLEAN
-HalpGicHasExtendedSpi(VOID);
-
-/*
  * ============================================================================
  * GICv4 vPE Management Functions (defined in gic_its.c)
  * ============================================================================
  */
-
-/*
- * HalpGicItsInitVpeSupport - Initialize GICv4 vPE support
- *
- * Allocates vPE ID bitmap and initializes vPE tracking structures.
- * Must be called after ITS initialization if GICv4 is supported.
- *
- * Returns TRUE on success, FALSE if vPE support is not available.
- */
-BOOLEAN
-HalpGicItsInitVpeSupport(VOID);
-
-/*
- * HalpGicItsAllocateVpe - Allocate a vPE for a virtual processor
- *
- * Allocates a vPE ID, creates the Virtual Pending Table, and
- * maps the vPE on all ITS nodes via VMAPP commands.
- *
- * Parameters:
- *   VmId     - Virtual Machine ID
- *   VpIndex  - Virtual Processor index within VM
- *   VpeOut   - Receives pointer to allocated vPE structure
- *
- * Returns:
- *   STATUS_SUCCESS on success
- *   STATUS_INSUFFICIENT_RESOURCES if out of vPE IDs or memory
- *   STATUS_NOT_SUPPORTED if GICv4 is not available
- */
-NTSTATUS
-HalpGicItsAllocateVpe(
-    _In_ ULONG VmId,
-    _In_ ULONG VpIndex,
-    _Out_ PHALP_GIC_VPE *VpeOut);
-
-/*
- * HalpGicItsFreeVpe - Free a vPE
- *
- * Unmaps the vPE from all ITS nodes and frees resources.
- *
- * Parameters:
- *   Vpe - Pointer to vPE to free
- */
-VOID
-HalpGicItsFreeVpe(
-    _In_ PHALP_GIC_VPE Vpe);
-
-/*
- * HalpGicItsScheduleVpe - Schedule a vPE on a CPU
- *
- * Makes a vPE resident on the specified CPU by programming
- * GICR_VPENDBASER. VLPIs for this vPE will be delivered
- * to the CPU after this call.
- *
- * Parameters:
- *   Vpe      - Pointer to vPE to schedule
- *   TargetCpu - CPU to schedule the vPE on
- *
- * Returns:
- *   STATUS_SUCCESS on success
- *   STATUS_INVALID_PARAMETER if parameters are invalid
- */
-NTSTATUS
-HalpGicItsScheduleVpe(
-    _In_ PHALP_GIC_VPE Vpe,
-    _In_ ULONG TargetCpu);
-
-/*
- * HalpGicItsDescheduleVpe - Deschedule a vPE from its current CPU
- *
- * Makes a vPE non-resident. A doorbell interrupt will be
- * generated if there are pending VLPIs for this vPE.
- *
- * Parameters:
- *   Vpe - Pointer to vPE to deschedule
- *
- * Returns:
- *   STATUS_SUCCESS on success
- */
-NTSTATUS
-HalpGicItsDescheduleVpe(
-    _In_ PHALP_GIC_VPE Vpe);
 
 /*
  * ============================================================================
@@ -1735,143 +1437,10 @@ HalpGicItsDescheduleVpe(
  */
 
 /*
- * HalpGicItsMapVlpi - Map a virtual interrupt to an LPI
- *
- * Creates a VLPI mapping using the VMAPTI command. The virtual
- * interrupt will be delivered to the vPE when the device triggers
- * the corresponding event.
- *
- * Parameters:
- *   Vpe       - Target vPE
- *   DeviceId  - Device ID
- *   EventId   - Event ID within device
- *   VirtIntId - Virtual interrupt ID within VM
- *   Enabled   - TRUE to enable the VLPI immediately
- *
- * Returns:
- *   STATUS_SUCCESS on success
- */
-NTSTATUS
-HalpGicItsMapVlpi(
-    _In_ PHALP_GIC_VPE Vpe,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _In_ ULONG VirtIntId,
-    _In_ BOOLEAN Enabled);
-
-/*
- * HalpGicItsUnmapVlpi - Unmap a virtual interrupt
- *
- * Removes a VLPI mapping and frees associated resources.
- *
- * Parameters:
- *   Vpe      - Target vPE
- *   DeviceId - Device ID
- *   EventId  - Event ID within device
- *
- * Returns:
- *   STATUS_SUCCESS on success
- */
-NTSTATUS
-HalpGicItsUnmapVlpi(
-    _In_ PHALP_GIC_VPE Vpe,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId);
-
-/*
- * HalpGicItsMoveVlpi - Move a VLPI to a different vPE
- *
- * Uses VMOVI command to move a virtual interrupt to a different vPE.
- *
- * Parameters:
- *   DeviceId  - Device ID
- *   EventId   - Event ID within device
- *   TargetVpe - New target vPE
- *
- * Returns:
- *   STATUS_SUCCESS on success
- */
-NTSTATUS
-HalpGicItsMoveVlpi(
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _In_ PHALP_GIC_VPE TargetVpe);
-
-/*
- * HalpGicItsGetVpeId - Get the vPE ID from a vPE pointer
- *
- * Returns the vPE ID for use by callers that don't have access to the
- * full HALP_GIC_VPE structure definition.
- */
-ULONG
-HalpGicItsGetVpeId(
-    _In_ PHALP_GIC_VPE Vpe);
-
-/*
  * ============================================================================
  * GICv4 ITS Command Functions (defined in gic_its.c)
  * ============================================================================
  */
-
-/*
- * HalpGicItsSendVmappOnNode - Send VMAPP command to map vPE
- */
-BOOLEAN
-HalpGicItsSendVmappOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ PHALP_GIC_VPE Vpe,
-    _In_ ULONG CollectionId,
-    _In_ BOOLEAN Valid);
-
-/*
- * HalpGicItsSendVmaptiOnNode - Send VMAPTI command to map virtual interrupt
- */
-BOOLEAN
-HalpGicItsSendVmaptiOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _In_ PHALP_GIC_VPE Vpe,
-    _In_ ULONG VirtIntId,
-    _In_ BOOLEAN DoorbellEnabled);
-
-/*
- * HalpGicItsSendVmoviOnNode - Send VMOVI command to move virtual interrupt
- */
-BOOLEAN
-HalpGicItsSendVmoviOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _In_ PHALP_GIC_VPE Vpe,
-    _In_ BOOLEAN DoorbellEnabled);
-
-/*
- * HalpGicItsSendVmovpOnNode - Send VMOVP command to move vPE
- */
-BOOLEAN
-HalpGicItsSendVmovpOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ PHALP_GIC_VPE Vpe,
-    _In_ ULONG CollectionId,
-    _In_ USHORT SeqNum,
-    _In_ USHORT ItsList);
-
-/*
- * HalpGicItsSendVinvallOnNode - Send VINVALL command
- */
-BOOLEAN
-HalpGicItsSendVinvallOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ PHALP_GIC_VPE Vpe);
-
-/*
- * HalpGicItsSendVsyncOnNode - Send VSYNC command
- */
-BOOLEAN
-HalpGicItsSendVsyncOnNode(
-    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ PHALP_GIC_VPE Vpe);
 
 /*
  * ============================================================================

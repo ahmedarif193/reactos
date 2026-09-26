@@ -329,7 +329,6 @@ static ULONG HalpArm64PciRootBridgeCount = 0;
 
 /* Tags for memory allocation */
 #define TAG_DMA_MAP  'PMAD'
-#define TAG_DMA_BUF  'BMAD'
 #define TAG_DMA_CMN  'CMAD'
 #define TAG_DMA_SGL  'GSAD'
 #define TAG_DMA_ADAPTER 'AMAD'
@@ -937,8 +936,7 @@ HalpPciLogEcamCoverage(VOID)
         return;
     }
 
-    if ((Flags & HALP_ACPI_ECAM_COVERAGE_USED) &&
-        !(Flags & (HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL | HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY)))
+    if (Flags & HALP_ACPI_ECAM_COVERAGE_USED)
     {
         DbgPrint("HAL: ARM64 PCI Express MMCONFIG (ECAM) active for configuration space.\n");
     }
@@ -972,26 +970,6 @@ HalpPciLogEcamCoverage(VOID)
         DbgPrint("HAL:   ECAM failure: access spanned multiple 4KB windows.\n");
     }
 
-    if (Flags & HALP_ACPI_ECAM_COVERAGE_MAP_FAILURE)
-    {
-        DbgPrint("HAL:   ECAM failure: failed to map ECAM page.\n");
-    }
-
-    if (Flags & HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES)
-    {
-        DbgPrint("HAL:   ECAM failure: configuration space read returned 0xFFFF.\n");
-    }
-
-    if (Flags & HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL)
-    {
-        DbgPrint("HAL:   ECAM note: access path disabled globally after firmware failure.\n");
-    }
-
-    if (Flags & HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY)
-    {
-        DbgPrint("HAL:   ECAM note: firmware quirk forced ECAM disable (no legacy on ARM64!).\n");
-    }
-
     if (Flags & HALP_ACPI_ECAM_COVERAGE_ZERO_LENGTH)
     {
         DbgPrint("HAL:   ECAM note: zero-length configuration request observed.\n");
@@ -1017,20 +995,6 @@ HalpPciLogEcamCoverage(VOID)
                      HalpAcpiMcfgAllocations[Index].BaseAddress);
         }
     }
-}
-
-BOOLEAN
-NTAPI
-HalpIsApicInterruptController(VOID)
-{
-    return FALSE;
-}
-
-BOOLEAN
-NTAPI
-HalIsIoApicPresent(VOID)
-{
-    return FALSE;
 }
 
 /*
@@ -1194,13 +1158,6 @@ HalQueryPciBusRange(
     return TRUE;
 }
 
-ULONG
-NTAPI
-HalGetAcpiSciVector(VOID)
-{
-    return 0;
-}
-
 ULONG HalpBusType = 0xFFFFFFFF;
 
 /*
@@ -1314,190 +1271,6 @@ HalpInitDma(VOID)
     }
 
     HalpArm64DmaInitialized = TRUE;
-}
-
-/*
- * HalpArm64SmmuInitialize - Initialize SMMUv2/v3 for DMA address translation
- *
- * This function programs the System Memory Management Unit (SMMU) to provide
- * IOVA (I/O Virtual Address) translation for DMA operations. The SMMU allows:
- * - DMA isolation between devices
- * - Address translation for devices with limited addressing capabilities
- * - Protection from rogue DMA accesses
- *
- * SMMUv3 Architecture (simplified):
- * 1. Stream Table: Maps StreamID (device identifier) to translation context
- * 2. Command Queue: Commands for cache invalidation, configuration changes
- * 3. Event Queue: Records translation faults and errors
- * 4. Page Tables: Multi-level page tables similar to CPU MMU
- *
- * Current Implementation Status:
- * - SMMU detection and bypass mode: ✓ Implemented
- * - Full translation mode: ✗ Not implemented (requires extensive page table management)
- * - Stream table programming: ✗ Stub
- * - Command/event queue setup: ✗ Stub
- *
- * For production use, full SMMU programming requires:
- * 1. Allocate and initialize stream table based on max StreamID
- * 2. Create command and event queues
- * 3. Program SMMU_CR0 to enable translation
- * 4. Set up page tables for each device's IOVA space
- * 5. Handle translation faults via event queue
- *
- * References:
- * - ARM IHI 0070 (SMMUv3 Architecture Specification)
- * - ARM IHI 0062 (IORT Specification for ACPI)
- */
-BOOLEAN
-HalpArm64SmmuInitialize(VOID)
-{
-    /*
-     * This function is a framework for full SMMU initialization.
-     * Currently, the HAL relies on firmware configuring SMMU in bypass mode
-     * (identity mapping), which works for systems with coherent DMA where
-     * all devices can access the full physical address space.
-     *
-     * Full SMMU translation mode implementation would include:
-     */
-
-    if (!HalpArm64SmmuState.Present)
-    {
-        DPRINT("[arm64][SMMU] No SMMU detected, skipping initialization\n");
-        return FALSE;
-    }
-
-    if (HalpArm64SmmuState.Initialized)
-    {
-        DPRINT("[arm64][SMMU] Already initialized\n");
-        return TRUE;
-    }
-
-    DPRINT1("[arm64][SMMU] SMMU detected at PA 0x%llx (Model %lu), size 0x%llx\n",
-            HalpArm64SmmuState.BaseAddress,
-            HalpArm64SmmuState.Model,
-            HalpArm64SmmuState.Span);
-
-    /*
-     * Step 1: Map SMMU register space
-     * Map the SMMU MMIO registers into kernel virtual address space.
-     * Required for accessing SMMU_CR0, stream table registers, etc.
-     */
-    if (!HalpArm64SmmuState.MappedBase)
-    {
-        PHYSICAL_ADDRESS SmmuPhys;
-        SmmuPhys.QuadPart = HalpArm64SmmuState.BaseAddress;
-        UNREFERENCED_PARAMETER(SmmuPhys);
-
-        /* TODO: Use MmMapIoSpace to map SMMU registers */
-        /* HalpArm64SmmuState.MappedBase = MmMapIoSpace(SmmuPhys, HalpArm64SmmuState.Span, MmNonCached); */
-
-        if (!HalpArm64SmmuState.MappedBase)
-        {
-            DPRINT1("[arm64][SMMU] Failed to map SMMU register space\n");
-            return FALSE;
-        }
-
-        DPRINT("[arm64][SMMU] Mapped SMMU registers to VA %p\n",
-               HalpArm64SmmuState.MappedBase);
-    }
-
-    /*
-     * Step 2: Allocate Stream Table
-     * The stream table maps StreamID (from PCIe Requester ID, etc.) to
-     * translation context. Size depends on max StreamID from IORT.
-     *
-     * For SMMUv3, each entry is 64 bytes (linear table) or a 2-level structure.
-     */
-    if (HalpArm64SmmuState.Model == 3 && !HalpArm64SmmuState.StreamTableBase)
-    {
-        /* TODO: Allocate physically contiguous stream table */
-        /*
-         * SIZE_T StreamTableSize = HalpArm64SmmuState.StreamTableEntries * 64;
-         * PHYSICAL_ADDRESS Low = {0}, High = {0xFFFFFFFFFFFFFFFFULL}, Boundary = {0};
-         *
-         * HalpArm64SmmuState.StreamTableBase = MmAllocateContiguousMemorySpecifyCache(
-         *     StreamTableSize, Low, High, Boundary, MmCached);
-         *
-         * if (!HalpArm64SmmuState.StreamTableBase)
-         *     return FALSE;
-         *
-         * RtlZeroMemory(HalpArm64SmmuState.StreamTableBase, StreamTableSize);
-         * HalpArm64SmmuState.StreamTablePhysical = MmGetPhysicalAddress(HalpArm64SmmuState.StreamTableBase);
-         */
-
-        DPRINT("[arm64][SMMU] Stream table allocation: %lu entries (not implemented)\n",
-               HalpArm64SmmuState.StreamTableEntries);
-    }
-
-    /*
-     * Step 3: Configure SMMU for bypass mode
-     * Set SMMU_CR0.SMMUEN=0 to disable translation (bypass mode).
-     * This allows DMA to proceed with identity mapping while we defer
-     * full IOMMU programming.
-     */
-    if (HalpArm64SmmuState.MappedBase)
-    {
-        /* TODO: Write SMMU_CR0 to configure bypass */
-        /*
-         * volatile ULONG *SmmuCr0 = (ULONG*)((ULONG_PTR)HalpArm64SmmuState.MappedBase + 0x20);
-         * ULONG Cr0 = *SmmuCr0;
-         * Cr0 &= ~(1 << 0);  // Clear SMMUEN bit (disable translation)
-         * *SmmuCr0 = Cr0;
-         * __asm__ __volatile__("dsb sy" ::: "memory");
-         */
-
-        DPRINT1("[arm64][SMMU] SMMU configured for bypass mode (translation disabled)\n");
-        HalpArm64SmmuState.BypassMode = TRUE;
-    }
-
-    /*
-     * Step 4: Set up Command Queue (SMMUv3)
-     * The command queue is used to send commands to the SMMU:
-     * - CFGI: Invalidate configuration cache
-     * - TLBI: Invalidate TLB entries
-     * - SYNC: Synchronization barrier
-     */
-    if (HalpArm64SmmuState.Model == 3 && !HalpArm64SmmuState.CmdQueue)
-    {
-        /* TODO: Allocate and configure command queue */
-        /*
-         * SIZE_T QueueSize = 4096;  // Typical size
-         * HalpArm64SmmuState.CmdQueue = MmAllocateContiguousMemorySpecifyCache(...);
-         * Program SMMU_CMDQ_BASE, SMMU_CMDQ_PROD, SMMU_CMDQ_CONS registers
-         */
-
-        DPRINT("[arm64][SMMU] Command queue setup (not implemented)\n");
-    }
-
-    /*
-     * Step 5: Set up Event Queue (SMMUv3)
-     * The event queue receives translation fault events and other errors.
-     * The HAL should process these asynchronously via DPC/interrupt.
-     */
-    if (HalpArm64SmmuState.Model == 3 && !HalpArm64SmmuState.EventQueue)
-    {
-        /* TODO: Allocate and configure event queue */
-        /*
-         * Program SMMU_EVENTQ_BASE, SMMU_EVENTQ_PROD, SMMU_EVENTQ_CONS registers
-         * Set up interrupt for event queue (SMMU_IRQ_CTRL)
-         */
-
-        DPRINT("[arm64][SMMU] Event queue setup (not implemented)\n");
-    }
-
-    /*
-     * Step 6: Initialize per-device translation contexts
-     * For each device that requires IOMMU protection:
-     * 1. Allocate page tables for the device's IOVA space
-     * 2. Program stream table entry with page table base
-     * 3. Set configuration flags (enable, fault handling, etc.)
-     */
-    /* TODO: Implement device-specific IOMMU context setup */
-
-    HalpArm64SmmuState.Initialized = TRUE;
-    DPRINT1("[arm64][SMMU] SMMU initialization complete (bypass mode)\n");
-
-    return TRUE;
 }
 
 VOID
@@ -1758,50 +1531,6 @@ HalpSetPciRoutingMap(
     }
 }
 
-BOOLEAN
-NTAPI
-HalQueryArm64TimerConfig(
-    _Out_ PHAL_ARM64_TIMER_CONFIG Config)
-{
-    ULONG Flags = 0;
-
-    if (!Config)
-        return FALSE;
-
-    /* Defaults: virtual timer PPI 27, level-sensitive */
-    Config->Vector = 27;
-    Config->UseVirtual = TRUE;
-    Config->Mode = LevelSensitive;
-
-    if (HalpArm64GtdtInfo.Present)
-    {
-        if (HalpArm64GtdtInfo.NonSecureEl1Interrupt)
-        {
-            Config->Vector = HalpArm64GtdtInfo.NonSecureEl1Interrupt;
-            Flags = HalpArm64GtdtInfo.NonSecureEl1Flags;
-            Config->UseVirtual = FALSE;
-        }
-        else if (HalpArm64GtdtInfo.VirtualTimerInterrupt)
-        {
-            Config->Vector = HalpArm64GtdtInfo.VirtualTimerInterrupt;
-            Flags = HalpArm64GtdtInfo.VirtualTimerFlags;
-            Config->UseVirtual = TRUE;
-        }
-        else if (HalpArm64GtdtInfo.SecureEl1Interrupt)
-        {
-            Config->Vector = HalpArm64GtdtInfo.SecureEl1Interrupt;
-            Flags = HalpArm64GtdtInfo.SecureEl1Flags;
-            Config->UseVirtual = FALSE;
-        }
-
-        /* GTDT flags: bit1 indicates trigger (0=edge, 1=level) */
-        if ((Flags & 0x2) == 0)
-            Config->Mode = Latched;
-    }
-
-    return TRUE;
-}
-
 #define HAL_ARM64_SYSTEM_RANGE_BASE 0xFFFF800000000000ULL
 #define HAL_ARM64_PHYS_MAP_BASE 0xFFFFFC0000000000ULL
 #define HAL_ARM64_PHYS_ADDR_MASK 0x0000FFFFFFFFFFFFULL
@@ -1833,10 +1562,6 @@ HalQueryArm64TimerConfig(
  */
 extern ULONG HalpStartedProcessorCount;
 
-/* Legacy variables kept for compatibility */
-static PHYSICAL_ADDRESS HalpApEntryPointPhys;
-static PKPROCESSOR_STATE HalpApProcessorState;
-
 /*
  * External SMP infrastructure functions from smp.c
  */
@@ -1852,7 +1577,6 @@ extern VOID HalpArm64DiscoverParkedCpus(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderB
 extern BOOLEAN HalpArm64WakeParkedCpu(_In_ ULONG ProcessorNumber,
                                       _In_ UINT64 EntryPoint,
                                       _In_ UINT64 ContextId);
-extern VOID HalpArm64EnableCpuInterface(VOID);
 
 static BOOLEAN
 HalpArm64FlushMdlDcacheRange(_In_ PMDL Mdl,
@@ -1940,13 +1664,6 @@ HalpArm64FlushMdlDcacheRange(_In_ PMDL Mdl,
 }
 
 
-BOOLEAN
-NTAPI
-HalIsPciMsiSupported(VOID)
-{
-    return ((HalpGicItsPresent && !HalpGicItsInitFailed) || HalpGicMsiPresent);
-}
-
 #define HALP_ARM64_MSI_ROUTE_CACHE_SIZE 64
 
 static struct
@@ -2014,45 +1731,6 @@ HalpArm64QueryMsiRoute(
     }
 
     return STATUS_NOT_FOUND;
-}
-
-BOOLEAN
-NTAPI
-HalGetMsiMessageAddress(
-    _In_ ULONGLONG Vector,
-    _In_ ULONGLONG Affinity,
-    _Out_ PULONG AddressLow,
-    _Out_opt_ PULONG AddressHigh,
-    _Out_ PUSHORT Data)
-{
-    ULONGLONG Address;
-    ULONG Limit;
-    ULONG Vector32;
-
-    UNREFERENCED_PARAMETER(Affinity);
-
-    if (!HalpGicMsiPresent || !AddressLow || !Data)
-        return FALSE;
-
-    if (HalpGicMsiSpiCount == 0)
-        return FALSE;
-
-    if (Vector > MAXULONG)
-        return FALSE;
-
-    Vector32 = (ULONG)Vector;
-    Limit = (ULONG)HalpGicMsiSpiBase + (ULONG)HalpGicMsiSpiCount;
-    if (Vector32 < HalpGicMsiSpiBase || Vector32 >= Limit)
-        return FALSE;
-
-    Address = HalpGicMsiFrameBase + HAL_ARM64_GICV2M_SETSPI;
-    *AddressLow = (ULONG)(Address & 0xFFFFFFFFu);
-    if (AddressHigh) *AddressHigh = (ULONG)(Address >> 32);
-    *Data = (USHORT)Vector32;
-
-    HalpArm64RecordMsiRoute(Vector32, Address, Vector32);
-
-    return TRUE;
 }
 
 BOOLEAN
@@ -2751,152 +2429,10 @@ BOOLEAN HalpGicv2GroupModeLocked = FALSE; /* Explicit boot option override */
  * The underlying implementation uses GICD_IROUTER for GICv3 SPIs.
  */
 
-/* Forward declarations for GICv3 affinity functions from gicv3.c */
-NTSTATUS
-HalpArm64SetGicAffinity(
-    _In_ ULONG InterruptId,
-    _In_ ULONG TargetCpu);
-
-ULONG
-HalpArm64GetGicAffinity(
-    _In_ ULONG InterruptId);
-
-VOID
-HalpGicv3MigrateCpuIrqs(
-    _In_ ULONG CpuIndex);
-
-VOID
-HalpGicv3SetSpiAffinityRoundRobin(
-    _In_ ULONG Lines);
-
 VOID
 HalpGicv3SendSgi(
     _In_ KAFFINITY TargetSet,
     _In_ ULONG SgiId);
-
-/*
- * HalpSetInterruptAffinity - Set IRQ affinity (HAL API wrapper)
- *
- * This is the HAL API for setting interrupt affinity, callable from
- * kernel mode via HalSetSystemInformation with HalIrqAffinity class.
- *
- * Parameters:
- *   InterruptVector - The interrupt vector (GSI/INTID)
- *   TargetCpu       - Target CPU processor number
- *
- * Returns:
- *   STATUS_SUCCESS on success
- *   STATUS_INVALID_PARAMETER for invalid parameters
- *   STATUS_NOT_SUPPORTED if GICv3 is not in use
- */
-NTSTATUS
-NTAPI
-HalpSetInterruptAffinity(
-    _In_ ULONG InterruptVector,
-    _In_ ULONG TargetCpu)
-{
-    /* Only supported on GICv3 with system registers */
-    if (!HalpGicUseSysRegs)
-    {
-        /*
-         * GICv2 uses GICD_ITARGETSR which has an 8-CPU bitmap limit.
-         * Dynamic affinity routing per-IRQ is not well supported.
-         */
-        DPRINT1("[arm64][HAL] SetInterruptAffinity: GICv2 does not support dynamic affinity\n");
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    /*
-     * Validate interrupt vector is an SPI (32-1019).
-     * SGIs (0-15) and PPIs (16-31) are per-CPU and cannot be rerouted.
-     */
-    if (InterruptVector < 32 || InterruptVector >= 1020)
-    {
-        DPRINT1("[arm64][HAL] SetInterruptAffinity: vector %lu is not an SPI\n",
-                InterruptVector);
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    /* Call the GICv3 implementation */
-    return HalpArm64SetGicAffinity(InterruptVector, TargetCpu);
-}
-
-/*
- * HalpGetInterruptAffinity - Get IRQ affinity (HAL API wrapper)
- *
- * Returns the current target CPU for an interrupt.
- *
- * Parameters:
- *   InterruptVector - The interrupt vector (GSI/INTID)
- *
- * Returns:
- *   Target CPU number, or (ULONG)-1 on error
- */
-ULONG
-NTAPI
-HalpGetInterruptAffinity(
-    _In_ ULONG InterruptVector)
-{
-    /* Only supported on GICv3 with system registers */
-    if (!HalpGicUseSysRegs)
-    {
-        return (ULONG)-1;
-    }
-
-    /* Call the GICv3 implementation */
-    return HalpArm64GetGicAffinity(InterruptVector);
-}
-
-/*
- * HalpMigrateInterruptsFromCpu - Migrate all interrupts away from a CPU
- *
- * Called when a CPU goes offline. All SPIs routed to the specified
- * CPU are migrated to CPU 0.
- *
- * Parameters:
- *   CpuIndex - The CPU that is going offline
- */
-VOID
-NTAPI
-HalpMigrateInterruptsFromCpu(
-    _In_ ULONG CpuIndex)
-{
-    if (!HalpGicUseSysRegs)
-    {
-        /* GICv2 does not track per-CPU affinity */
-        return;
-    }
-
-    HalpGicv3MigrateCpuIrqs(CpuIndex);
-}
-
-/*
- * HalpDistributeInterruptsRoundRobin - Distribute SPIs across all CPUs
- *
- * Distributes all SPIs across available CPUs using round-robin
- * for load balancing. Should be called after all CPUs are online.
- */
-VOID
-NTAPI
-HalpDistributeInterruptsRoundRobin(VOID)
-{
-    ULONG Typer;
-    ULONG Lines;
-
-    if (!HalpGicUseSysRegs)
-    {
-        /* GICv2 uses simple CPU targeting */
-        return;
-    }
-
-    /* Get number of interrupt lines from GICD_TYPER */
-    Typer = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_TYPER);
-    Lines = 32 * ((Typer & 0x1F) + 1);
-    if (Lines > 1020)
-        Lines = 1020;
-
-    HalpGicv3SetSpiAffinityRoundRobin(Lines);
-}
 
 /*
  * PSCI call helper functions.
@@ -6731,7 +6267,6 @@ HalStartNextProcessor(
         (UINT64)LoaderBlock
     );
 
-    HalpApProcessorState = ProcessorState;
     __asm__ __volatile__("dsb sy; isb" ::: "memory");
 
     /* Check if PSCI is available */
@@ -7575,203 +7110,9 @@ HalpGicItsAllocateMsi(
     _Out_ PPHYSICAL_ADDRESS MsiAddress,
     _Out_ PULONG MsiData);
 
-NTSTATUS
-HalpGicItsFreeMsi(
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId);
-
-NTSTATUS
-HalpGicItsSetMsiAffinity(
-    _In_ ULONG Lpi,
-    _In_ ULONG TargetCpu);
-
 VOID
 HalpGicItsDisableLpi(
     _In_ ULONG Lpi);
-
-/*
- * HalpAllocateMsiInterrupt - Allocate MSI for a PCI device
- *
- * This is the main HAL API for PCI drivers to allocate MSI/MSI-X interrupts.
- * It uses the ITS to:
- * 1. Create/lookup the device in the ITS device table
- * 2. Allocate LPIs from the global pool
- * 3. Map the event to the LPI via MAPTI command
- * 4. Return the MSI address (GITS_TRANSLATER) and data (EventID)
- *
- * Parameters:
- *   BusNumber   - PCI bus number
- *   SlotNumber  - PCI slot/device number
- *   EventId     - MSI/MSI-X vector index (0 for MSI, 0-N for MSI-X)
- *   TargetCpu   - CPU to route the interrupt to
- *   MsiAddress  - Receives the address to program in PCI MSI capability
- *   MsiData     - Receives the data to program in PCI MSI capability
- *   Vector      - Receives the allocated system vector (LPI INTID)
- *
- * Returns:
- *   STATUS_SUCCESS on success, error code on failure.
- */
-NTSTATUS
-NTAPI
-HalpAllocateMsiInterrupt(
-    _In_ ULONG BusNumber,
-    _In_ ULONG SlotNumber,
-    _In_ ULONG EventId,
-    _In_ ULONG TargetCpu,
-    _Out_ PPHYSICAL_ADDRESS MsiAddress,
-    _Out_ PULONG MsiData,
-    _Out_ PULONG Vector)
-{
-    PCI_SLOT_NUMBER PciSlot;
-    ULONG DeviceId;
-    ULONG Lpi;
-    NTSTATUS Status;
-
-    if (!MsiAddress || !MsiData || !Vector)
-        return STATUS_INVALID_PARAMETER;
-
-    /* Check if ITS is available */
-    if (!HalpGicItsPresent || HalpGicItsNodeCount == 0)
-    {
-        /* Fall back to GICv2m MSI frame if available */
-        if (HalpGicMsiPresent)
-        {
-            /* Use SPI-based MSI via GICv2m frame */
-            MsiAddress->QuadPart = HalpGicMsiFrameBase + HAL_ARM64_GICV2M_SETSPI;
-            *MsiData = HalpGicMsiSpiBase + (EventId % HalpGicMsiSpiCount);
-            *Vector = *MsiData;
-            return STATUS_SUCCESS;
-        }
-        return STATUS_DEVICE_NOT_READY;
-    }
-
-    /* Calculate DeviceID from BDF (Bus:Device:Function) */
-    PciSlot.u.AsULONG = SlotNumber;
-    DeviceId = ((BusNumber & 0xFF) << 8) |
-               ((PciSlot.u.bits.DeviceNumber & 0x1F) << 3) |
-               (PciSlot.u.bits.FunctionNumber & 0x07);
-
-    /* Allocate MSI via ITS */
-    Status = HalpGicItsAllocateMsi(DeviceId, EventId, TargetCpu, 0,
-                                    &Lpi, MsiAddress, MsiData);
-    if (NT_SUCCESS(Status))
-    {
-        *Vector = Lpi;
-        DPRINT("[arm64][MSI] Allocated MSI: Bus=%lu Dev=%u Func=%u Event=%lu -> LPI=%lu\n",
-               BusNumber, PciSlot.u.bits.DeviceNumber, PciSlot.u.bits.FunctionNumber,
-               EventId, Lpi);
-    }
-    else
-    {
-        DPRINT1("[arm64][MSI] Failed to allocate MSI: Bus=%lu Dev=%u Func=%u Event=%lu Status=0x%lx\n",
-                BusNumber, PciSlot.u.bits.DeviceNumber, PciSlot.u.bits.FunctionNumber,
-                EventId, Status);
-    }
-
-    return Status;
-}
-
-/*
- * HalpFreeMsiInterrupt - Free a previously allocated MSI
- *
- * Frees an MSI that was allocated by HalpAllocateMsiInterrupt.
- *
- * Parameters:
- *   BusNumber  - PCI bus number
- *   SlotNumber - PCI slot/device number
- *   EventId    - MSI/MSI-X vector index that was allocated
- *
- * Returns:
- *   STATUS_SUCCESS on success, error code on failure.
- */
-NTSTATUS
-NTAPI
-HalpFreeMsiInterrupt(
-    _In_ ULONG BusNumber,
-    _In_ ULONG SlotNumber,
-    _In_ ULONG EventId)
-{
-    PCI_SLOT_NUMBER PciSlot;
-    ULONG DeviceId;
-
-    if (!HalpGicItsPresent || HalpGicItsNodeCount == 0)
-        return STATUS_DEVICE_NOT_READY;
-
-    /* Calculate DeviceID from BDF */
-    PciSlot.u.AsULONG = SlotNumber;
-    DeviceId = ((BusNumber & 0xFF) << 8) |
-               ((PciSlot.u.bits.DeviceNumber & 0x1F) << 3) |
-               (PciSlot.u.bits.FunctionNumber & 0x07);
-
-    return HalpGicItsFreeMsi(DeviceId, EventId);
-}
-
-/*
- * HalpSetMsiInterruptAffinity - Change MSI interrupt affinity
- *
- * Changes the target CPU for an MSI interrupt. This requires sending
- * ITS commands to update the collection mapping.
- *
- * Parameters:
- *   Vector    - System vector (LPI INTID) from HalpAllocateMsiInterrupt
- *   TargetCpu - New target CPU for the interrupt
- *
- * Returns:
- *   STATUS_SUCCESS on success, error code on failure.
- */
-NTSTATUS
-NTAPI
-HalpSetMsiInterruptAffinity(
-    _In_ ULONG Vector,
-    _In_ ULONG TargetCpu)
-{
-    if (!HalpGicItsPresent || HalpGicItsNodeCount == 0)
-        return STATUS_DEVICE_NOT_READY;
-
-    /* Validate vector is in LPI range */
-    if (Vector < HAL_ARM64_LPI_BASE)
-        return STATUS_INVALID_PARAMETER;
-
-    return HalpGicItsSetMsiAffinity(Vector, TargetCpu);
-}
-
-/*
- * HalpEnableMsiInterrupt - Enable an MSI interrupt
- *
- * Enables an LPI in the PROPBASE table, making it deliverable.
- *
- * Parameters:
- *   Vector - System vector (LPI INTID)
- */
-VOID
-NTAPI
-HalpEnableMsiInterrupt(
-    _In_ ULONG Vector)
-{
-    if (Vector >= HAL_ARM64_LPI_BASE)
-    {
-        HalpGicItsEnableLpi(Vector);
-    }
-}
-
-/*
- * HalpDisableMsiInterrupt - Disable an MSI interrupt
- *
- * Disables an LPI in the PROPBASE table, preventing delivery.
- *
- * Parameters:
- *   Vector - System vector (LPI INTID)
- */
-VOID
-NTAPI
-HalpDisableMsiInterrupt(
-    _In_ ULONG Vector)
-{
-    if (Vector >= HAL_ARM64_LPI_BASE)
-    {
-        HalpGicItsDisableLpi(Vector);
-    }
-}
 
 /*
  * ============================================================================
@@ -7789,96 +7130,6 @@ HalpDisableMsiInterrupt(
  * These APIs are designed to integrate with Windows 11 ARM64's hypervisor
  * and virtual machine monitor subsystems.
  */
-
-/*
- * HalpRegisterVirtualProcessor - Register a vPE for a virtual processor
- *
- * Allocates and initializes a GICv4 virtual Processing Element (vPE)
- * for use by a virtual machine. Each vPE can receive VLPIs directly
- * without hypervisor intervention when scheduled on a CPU.
- *
- * Parameters:
- *   VmId     - Virtual Machine identifier
- *   VpIndex  - Virtual Processor index within the VM (0-based)
- *   VpeId    - Receives the allocated vPE ID
- *
- * Returns:
- *   STATUS_SUCCESS - vPE allocated successfully
- *   STATUS_NOT_SUPPORTED - GICv4 VLPIs not supported on this hardware
- *   STATUS_INSUFFICIENT_RESOURCES - No vPE IDs or memory available
- */
-NTSTATUS
-NTAPI
-HalpRegisterVirtualProcessor(
-    _In_ ULONG VmId,
-    _In_ ULONG VpIndex,
-    _Out_ PULONG VpeId)
-{
-    PHALP_GIC_VPE Vpe = NULL;
-    NTSTATUS Status;
-
-    if (!VpeId)
-        return STATUS_INVALID_PARAMETER;
-
-    *VpeId = 0;
-
-    /* Check if GICv4 VLPI support is available */
-    if (!HalpGicHasVlpiSupport())
-    {
-        DPRINT("[arm64][HAL] GICv4 VLPI support not available\n");
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    /* Allocate a vPE for this virtual processor */
-    Status = HalpGicItsAllocateVpe(VmId, VpIndex, &Vpe);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("[arm64][HAL] Failed to allocate vPE for VM %lu VP %lu: 0x%lx\n",
-                VmId, VpIndex, Status);
-        return Status;
-    }
-
-    *VpeId = HalpGicItsGetVpeId(Vpe);
-
-    DPRINT("[arm64][HAL] Registered vPE %lu for VM %lu VP %lu\n",
-           *VpeId, VmId, VpIndex);
-
-    return STATUS_SUCCESS;
-}
-
-/*
- * HalpUnregisterVirtualProcessor - Unregister a vPE
- *
- * Frees a previously registered vPE and all associated resources.
- * The vPE must not be currently scheduled on any CPU.
- *
- * Parameters:
- *   VpeId - vPE ID returned from HalpRegisterVirtualProcessor
- *
- * Returns:
- *   STATUS_SUCCESS - vPE freed successfully
- *   STATUS_INVALID_PARAMETER - Invalid vPE ID
- */
-NTSTATUS
-NTAPI
-HalpUnregisterVirtualProcessor(
-    _In_ ULONG VpeId)
-{
-    PHALP_GIC_VPE Vpe;
-
-    if (VpeId >= HalpGicVpeTableSize)
-        return STATUS_INVALID_PARAMETER;
-
-    Vpe = HalpGicVpeTable[VpeId];
-    if (!Vpe)
-        return STATUS_INVALID_PARAMETER;
-
-    DPRINT("[arm64][HAL] Unregistering vPE %lu\n", VpeId);
-
-    HalpGicItsFreeVpe(Vpe);
-
-    return STATUS_SUCCESS;
-}
 
 /*
  * HalpInjectVirtualInterrupt - Inject a virtual interrupt to a vPE
@@ -7923,200 +7174,6 @@ HalpInjectVirtualInterrupt(
 
     DPRINT("[arm64][HAL] HalpInjectVirtualInterrupt: vPE=%lu VLPI=%lu (stub)\n",
            VpeId, VirtualLpi);
-
-    return STATUS_SUCCESS;
-}
-
-/*
- * HalpScheduleVirtualProcessor - Schedule a vPE on a physical CPU
- *
- * Makes a vPE resident on the specified CPU by programming GICR_VPENDBASER.
- * Once scheduled, VLPIs for this vPE will be delivered directly to the CPU.
- *
- * Parameters:
- *   VpeId     - vPE ID to schedule
- *   TargetCpu - Physical CPU to schedule the vPE on
- *
- * Returns:
- *   STATUS_SUCCESS - vPE scheduled successfully
- *   STATUS_INVALID_PARAMETER - Invalid vPE ID or CPU
- *   STATUS_NOT_SUPPORTED - GICv4 not supported
- */
-NTSTATUS
-NTAPI
-HalpScheduleVirtualProcessor(
-    _In_ ULONG VpeId,
-    _In_ ULONG TargetCpu)
-{
-    PHALP_GIC_VPE Vpe;
-
-    if (!HalpGicHasVlpiSupport())
-        return STATUS_NOT_SUPPORTED;
-
-    if (VpeId >= HalpGicVpeTableSize)
-        return STATUS_INVALID_PARAMETER;
-
-    Vpe = HalpGicVpeTable[VpeId];
-    if (!Vpe)
-        return STATUS_INVALID_PARAMETER;
-
-    return HalpGicItsScheduleVpe(Vpe, TargetCpu);
-}
-
-/*
- * HalpDescheduleVirtualProcessor - Deschedule a vPE from its current CPU
- *
- * Makes a vPE non-resident. A doorbell interrupt will be generated
- * if there are pending VLPIs for the vPE.
- *
- * Parameters:
- *   VpeId - vPE ID to deschedule
- *
- * Returns:
- *   STATUS_SUCCESS - vPE descheduled successfully
- *   STATUS_INVALID_PARAMETER - Invalid vPE ID
- */
-NTSTATUS
-NTAPI
-HalpDescheduleVirtualProcessor(
-    _In_ ULONG VpeId)
-{
-    PHALP_GIC_VPE Vpe;
-
-    if (!HalpGicHasVlpiSupport())
-        return STATUS_NOT_SUPPORTED;
-
-    if (VpeId >= HalpGicVpeTableSize)
-        return STATUS_INVALID_PARAMETER;
-
-    Vpe = HalpGicVpeTable[VpeId];
-    if (!Vpe)
-        return STATUS_INVALID_PARAMETER;
-
-    return HalpGicItsDescheduleVpe(Vpe);
-}
-
-/*
- * HalpMapVirtualDeviceInterrupt - Map a device interrupt to a vPE
- *
- * Creates a VMAPTI mapping that routes a device's MSI to a vPE.
- * When the device triggers the interrupt, it will be delivered
- * directly to the vPE without hypervisor intervention.
- *
- * Parameters:
- *   VpeId       - Target vPE ID
- *   DeviceId    - PCI device ID (requester ID)
- *   EventId     - Event ID within the device (MSI index)
- *   VirtualIntId - Virtual interrupt ID within the VM
- *
- * Returns:
- *   STATUS_SUCCESS - Mapping created successfully
- *   STATUS_NOT_SUPPORTED - GICv4 VLPIs not supported
- *   STATUS_INSUFFICIENT_RESOURCES - No resources available
- */
-NTSTATUS
-NTAPI
-HalpMapVirtualDeviceInterrupt(
-    _In_ ULONG VpeId,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _In_ ULONG VirtualIntId)
-{
-    PHALP_GIC_VPE Vpe;
-
-    if (!HalpGicHasVlpiSupport())
-        return STATUS_NOT_SUPPORTED;
-
-    if (VpeId >= HalpGicVpeTableSize)
-        return STATUS_INVALID_PARAMETER;
-
-    Vpe = HalpGicVpeTable[VpeId];
-    if (!Vpe)
-        return STATUS_INVALID_PARAMETER;
-
-    return HalpGicItsMapVlpi(Vpe, DeviceId, EventId, VirtualIntId, TRUE);
-}
-
-/*
- * HalpUnmapVirtualDeviceInterrupt - Unmap a device interrupt from a vPE
- *
- * Removes a VMAPTI mapping, stopping device interrupts from being
- * delivered to the vPE.
- *
- * Parameters:
- *   VpeId    - Target vPE ID
- *   DeviceId - PCI device ID (requester ID)
- *   EventId  - Event ID within the device (MSI index)
- *
- * Returns:
- *   STATUS_SUCCESS - Mapping removed successfully
- *   STATUS_NOT_SUPPORTED - GICv4 VLPIs not supported
- */
-NTSTATUS
-NTAPI
-HalpUnmapVirtualDeviceInterrupt(
-    _In_ ULONG VpeId,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId)
-{
-    PHALP_GIC_VPE Vpe;
-
-    if (!HalpGicHasVlpiSupport())
-        return STATUS_NOT_SUPPORTED;
-
-    if (VpeId >= HalpGicVpeTableSize)
-        return STATUS_INVALID_PARAMETER;
-
-    Vpe = HalpGicVpeTable[VpeId];
-    if (!Vpe)
-        return STATUS_INVALID_PARAMETER;
-
-    return HalpGicItsUnmapVlpi(Vpe, DeviceId, EventId);
-}
-
-/*
- * HalpQueryGicCapabilities - Query GIC version and capabilities
- *
- * Returns information about the GIC hardware version and supported
- * features, including GICv3.1/v4 capabilities.
- *
- * Parameters:
- *   Architecture     - Receives GIC architecture version (3 or 4)
- *   HasVlpis         - Receives TRUE if VLPIs are supported
- *   HasDirectLpi     - Receives TRUE if direct LPI injection is supported
- *   HasExtendedSpi   - Receives TRUE if extended SPI range is supported
- *   MaxVpeid         - Receives maximum vPE ID (0 if VLPIs not supported)
- *
- * Returns:
- *   STATUS_SUCCESS
- */
-NTSTATUS
-NTAPI
-HalpQueryGicCapabilities(
-    _Out_opt_ PULONG Architecture,
-    _Out_opt_ PBOOLEAN HasVlpis,
-    _Out_opt_ PBOOLEAN HasDirectLpi,
-    _Out_opt_ PBOOLEAN HasExtendedSpi,
-    _Out_opt_ PULONG MaxVpeid)
-{
-    /* Ensure version detection has been performed */
-    if (!HalpGicVersionInfo.Initialized)
-        HalpGicDetectVersion();
-
-    if (Architecture)
-        *Architecture = HalpGicVersionInfo.Architecture;
-
-    if (HasVlpis)
-        *HasVlpis = HalpGicHasVlpis;
-
-    if (HasDirectLpi)
-        *HasDirectLpi = HalpGicHasDirectLpi;
-
-    if (HasExtendedSpi)
-        *HasExtendedSpi = HalpGicVersionInfo.HasExtendedSpiRange;
-
-    if (MaxVpeid)
-        *MaxVpeid = HalpGicVersionInfo.MaxVpeid;
 
     return STATUS_SUCCESS;
 }

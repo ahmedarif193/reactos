@@ -424,35 +424,4 @@ HalSetIommuPolicy(
     return STATUS_NOT_SUPPORTED;
 }
 
-NTSTATUS
-NTAPI
-HalpRequestInterrupt(
-    _In_ ULONG Irql,
-    _In_ PVOID InterruptObject,
-    _In_ ULONG Vector,
-    _In_ ULONG MessageNumber,
-    _In_ ULONG ProcessorNumber)
-{
-    DPRINT1("HalRequestInterrupt: STUB (Win10+ API)\n");
-    UNREFERENCED_PARAMETER(Irql);
-    UNREFERENCED_PARAMETER(InterruptObject);
-    UNREFERENCED_PARAMETER(Vector);
-    UNREFERENCED_PARAMETER(MessageNumber);
-    UNREFERENCED_PARAMETER(ProcessorNumber);
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalpEnumerateUnmaskedInterrupts(
-    _Out_ PVOID InterruptInformation,
-    _Inout_ PULONG InterruptInformationLength)
-{
-    DPRINT1("HalEnumerateUnmaskedInterrupts: STUB (Win10+ API)\n");
-    UNREFERENCED_PARAMETER(InterruptInformation);
-    if (InterruptInformationLength)
-        *InterruptInformationLength = 0;
-    return STATUS_NOT_SUPPORTED;
-}
-
 /* EOF */

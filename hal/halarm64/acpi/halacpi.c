@@ -9,9 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
-#if defined(_M_ARM64) || defined(__aarch64__)
 #include <halacpi_arm64.h>
-#endif
 #include <halpcie.h>
 #include <ntifs.h>
 #include <ndk/extypes.h>
@@ -19,60 +17,24 @@
 #include <reactos/hal/acpi_cstate.h>
 #include <stdarg.h>
 #include <ntstrsafe.h>
-/* NDEBUG temporarily disabled for ARM64 ACPI debugging */
-//#define NDEBUG
+#define NDEBUG
 #include <debug.h>
-/* Legacy PCI config uses the global lock from the legacy PCI bus support */
-extern KSPIN_LOCK HalpPCIConfigLock;
 
 extern VOID HalpPciLogEcamCoverage(VOID);
-extern BOOLEAN NTAPI HalpIsApicInterruptController(VOID);
 
 NTSYSAPI NTSTATUS NTAPI NtShutdownSystem(_In_ SHUTDOWN_ACTION Action);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-#define HALP_ARM64 1
 #define HALP_ARM64_KSEG0_BASE 0xFFFF800000000000ULL
 #define HALP_ARM64_PHYS_MAP_BASE 0xFFFFFC0000000000ULL
 #define HALP_ARM64_PHYS_ADDR_MASK 0x0000FFFFFFFFFFFFULL
-#endif
-
-int __cdecl _vsnprintf(char *Buffer, size_t Count, const char *Format, va_list Args);
-int __cdecl _snprintf(char *Buffer, size_t Count, const char *Format, ...);
-
-#ifndef ACPI_PM1_STATUS_BUS_MASTER
-#define ACPI_PM1_STATUS_BUS_MASTER     0x0010
-#endif
-#ifndef ACPI_FADT_WBINVD
-#define ACPI_FADT_WBINVD               0x00000001
-#endif
-#ifndef ACPI_FADT_WBINVD_FLUSH
-#define ACPI_FADT_WBINVD_FLUSH         0x00000002
-#endif
 
 /* GLOBALS ********************************************************************/
 
-PHALP_ACPI_MCFG HalpAcpiMcfgTable;
 PHALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocations;
 ULONG HalpAcpiMcfgAllocationCount;
 #define HALP_ACPI_MAX_MCFG_ALLOCATIONS 32
 static HALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocationStorage[HALP_ACPI_MAX_MCFG_ALLOCATIONS];
-PUCHAR HalpAcpiMcfgSegDisabled;
-ULONG HalpAcpiMcfgSegDisabledCount;
 volatile LONG HalpAcpiEcamCoverageFlags;
-/* ECAM is enabled by default; may be disabled via registry (DisableEcam) */
-BOOLEAN HalpAcpiEcamDisabled = FALSE;
-/* Per-segment legacy override when firmware ECAM decode is broken */
-USHORT HalpAcpiEcamForceLegacySegment = 0xFFFF;
-BOOLEAN HalpAcpiEcamForceLegacyLogged = FALSE;
-
-static PVOID *HalpAcpiMcfgEcamMappings;
-static ULONG HalpAcpiMcfgEcamMappingCount;
-
-static PVOID
-HalpAcpiEnsureEcamMapping(
-    _In_ ULONG AllocationIndex,
-    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation);
 
 static
 LONG
@@ -118,51 +80,6 @@ HalpPciVendorIdLooksSane(
     return TRUE;
 }
 
-#define HALP_ACPI_ECAM_STATE_UNKNOWN   0
-#define HALP_ACPI_ECAM_STATE_WORKING   1
-#define HALP_ACPI_ECAM_STATE_DISABLED  2
-
-static __inline ULONG
-HalpPciReadConfigDwordLegacy(
-    _In_ UCHAR BusNumber,
-    _In_ UCHAR DeviceNumber,
-    _In_ UCHAR FunctionNumber,
-    _In_ UCHAR RegisterOffset)
-{
-#if defined(HALP_ARM64)
-    UNREFERENCED_PARAMETER(BusNumber);
-    UNREFERENCED_PARAMETER(DeviceNumber);
-    UNREFERENCED_PARAMETER(FunctionNumber);
-    UNREFERENCED_PARAMETER(RegisterOffset);
-    return 0xFFFFFFFF;
-#else
-    ULONG Address;
-    ULONG Value;
-    UCHAR ConfigControl;
-    KIRQL OldIrql;
-
-    KeAcquireSpinLock(&HalpPCIConfigLock, &OldIrql);
-    ConfigControl = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB);
-    if (!(ConfigControl & 0x01))
-    {
-        WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, ConfigControl | 0x01);
-    }
-
-    Address = 0x80000000;
-    Address |= ((ULONG)BusNumber << 16);
-    Address |= ((ULONG)DeviceNumber << 11);
-    Address |= ((ULONG)FunctionNumber << 8);
-    Address |= (RegisterOffset & 0xFC);
-
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
-    Value = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, 0);
-
-    KeReleaseSpinLock(&HalpPCIConfigLock, OldIrql);
-    return Value;
-#endif
-}
-
 static __inline ULONGLONG
 HalpAcpiEcamOffsetInAllocation(
     _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation,
@@ -181,62 +98,9 @@ HalpAcpiEcamOffsetInAllocation(
     return Offset;
 }
 
-static ULONG
-HalpAcpiReadEcamUlong(
-    _In_ ULONG AllocationIndex,
-    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation,
-    _In_ UCHAR BusNumber,
-    _In_ UCHAR DeviceNumber,
-    _In_ UCHAR FunctionNumber,
-    _In_ ULONG RegisterOffset)
-{
-    ULONGLONG Offset;
-    PVOID MappingBase;
-    PHYSICAL_ADDRESS Physical;
-    PHYSICAL_ADDRESS PageBase;
-    ULONG PageOffset;
-    PVOID Mapping;
-    ULONG Value;
-
-    Offset = HalpAcpiEcamOffsetInAllocation(Allocation,
-                                           BusNumber,
-                                           DeviceNumber,
-                                           FunctionNumber,
-                                           RegisterOffset);
-
-    MappingBase = NULL;
-    if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
-    {
-        MappingBase = HalpAcpiMcfgEcamMappings[AllocationIndex];
-        if (!MappingBase)
-            MappingBase = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
-    }
-
-    if (MappingBase)
-    {
-        return READ_REGISTER_ULONG((PULONG)((PUCHAR)MappingBase + Offset));
-    }
-
-    Physical.QuadPart = Allocation->BaseAddress + Offset;
-    PageBase.QuadPart = Physical.QuadPart & ~((ULONGLONG)PAGE_SIZE - 1);
-    PageOffset = (ULONG)(Physical.QuadPart - PageBase.QuadPart);
-
-    Mapping = MmMapIoSpace(PageBase, PAGE_SIZE, MmNonCached);
-    if (!Mapping)
-    {
-        return 0xFFFFFFFF;
-    }
-
-    Value = READ_REGISTER_ULONG((PULONG)((PUCHAR)Mapping + PageOffset));
-    MmUnmapIoSpace(Mapping, PAGE_SIZE);
-
-    return Value;
-}
-
 static
 VOID
 HalpAcpiReadEcamBytes(
-    _In_ ULONG AllocationIndex,
     _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation,
     _In_ ULONG BusNumber,
     _In_ PCI_SLOT_NUMBER Slot,
@@ -244,24 +108,14 @@ HalpAcpiReadEcamBytes(
     _Out_writes_bytes_(Length) PVOID Buffer,
     _In_ ULONG Length)
 {
-    PVOID allocationMapping;
     PVOID tempMapping;
     PUCHAR deviceBase;
     ULONGLONG deviceOffset;
+    ULONGLONG physAddr;
     PHYSICAL_ADDRESS phys;
     ULONG currentOffset;
     ULONG remaining;
     PUCHAR out;
-
-    allocationMapping = NULL;
-    tempMapping = NULL;
-
-    if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
-    {
-        allocationMapping = HalpAcpiMcfgEcamMappings[AllocationIndex];
-        if (!allocationMapping)
-            allocationMapping = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
-    }
 
     deviceOffset = HalpAcpiEcamOffsetInAllocation(Allocation,
                                                   (UCHAR)BusNumber,
@@ -269,26 +123,17 @@ HalpAcpiReadEcamBytes(
                                                   Slot.u.bits.FunctionNumber,
                                                   0);
 
-    if (allocationMapping)
+    physAddr = Allocation->BaseAddress + deviceOffset;
+    phys.QuadPart = physAddr & ~((ULONGLONG)PAGE_SIZE - 1);
+
+    tempMapping = MmMapIoSpace(phys, PAGE_SIZE, MmNonCached);
+    if (!tempMapping)
     {
-        deviceBase = (PUCHAR)allocationMapping + deviceOffset;
+        RtlFillMemory(Buffer, Length, 0xFF);
+        return;
     }
-    else
-    {
-        ULONGLONG physAddr;
 
-        physAddr = Allocation->BaseAddress + deviceOffset;
-        phys.QuadPart = physAddr & ~((ULONGLONG)PAGE_SIZE - 1);
-
-        tempMapping = MmMapIoSpace(phys, PAGE_SIZE, MmNonCached);
-        if (!tempMapping)
-        {
-            RtlFillMemory(Buffer, Length, 0xFF);
-            return;
-        }
-
-        deviceBase = (PUCHAR)tempMapping + (ULONG)(physAddr - phys.QuadPart);
-    }
+    deviceBase = (PUCHAR)tempMapping + (ULONG)(physAddr - phys.QuadPart);
 
     currentOffset = Offset;
     remaining = Length;
@@ -320,16 +165,12 @@ HalpAcpiReadEcamBytes(
         remaining -= toCopy;
     }
 
-    if (tempMapping)
-    {
-        MmUnmapIoSpace(tempMapping, PAGE_SIZE);
-    }
+    MmUnmapIoSpace(tempMapping, PAGE_SIZE);
 }
 
 static
 VOID
 HalpAcpiWriteEcamBytes(
-    _In_ ULONG AllocationIndex,
     _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation,
     _In_ ULONG BusNumber,
     _In_ PCI_SLOT_NUMBER Slot,
@@ -337,24 +178,14 @@ HalpAcpiWriteEcamBytes(
     _In_ ULONG Offset,
     _In_ ULONG Length)
 {
-    PVOID allocationMapping;
     PVOID tempMapping;
     PUCHAR deviceBase;
     ULONGLONG deviceOffset;
+    ULONGLONG physAddr;
     PHYSICAL_ADDRESS phys;
     ULONG currentOffset;
     ULONG remaining;
     PUCHAR in;
-
-    allocationMapping = NULL;
-    tempMapping = NULL;
-
-    if (HalpAcpiMcfgEcamMappings && AllocationIndex < HalpAcpiMcfgEcamMappingCount)
-    {
-        allocationMapping = HalpAcpiMcfgEcamMappings[AllocationIndex];
-        if (!allocationMapping)
-            allocationMapping = HalpAcpiEnsureEcamMapping(AllocationIndex, Allocation);
-    }
 
     deviceOffset = HalpAcpiEcamOffsetInAllocation(Allocation,
                                                   (UCHAR)BusNumber,
@@ -362,25 +193,16 @@ HalpAcpiWriteEcamBytes(
                                                   Slot.u.bits.FunctionNumber,
                                                   0);
 
-    if (allocationMapping)
+    physAddr = Allocation->BaseAddress + deviceOffset;
+    phys.QuadPart = physAddr & ~((ULONGLONG)PAGE_SIZE - 1);
+
+    tempMapping = MmMapIoSpace(phys, PAGE_SIZE, MmNonCached);
+    if (!tempMapping)
     {
-        deviceBase = (PUCHAR)allocationMapping + deviceOffset;
+        return;
     }
-    else
-    {
-        ULONGLONG physAddr;
 
-        physAddr = Allocation->BaseAddress + deviceOffset;
-        phys.QuadPart = physAddr & ~((ULONGLONG)PAGE_SIZE - 1);
-
-        tempMapping = MmMapIoSpace(phys, PAGE_SIZE, MmNonCached);
-        if (!tempMapping)
-        {
-            return;
-        }
-
-        deviceBase = (PUCHAR)tempMapping + (ULONG)(physAddr - phys.QuadPart);
-    }
+    deviceBase = (PUCHAR)tempMapping + (ULONG)(physAddr - phys.QuadPart);
 
     currentOffset = Offset;
     remaining = Length;
@@ -421,398 +243,8 @@ HalpAcpiWriteEcamBytes(
         remaining -= toWrite;
     }
 
-    if (tempMapping)
-    {
-        MmUnmapIoSpace(tempMapping, PAGE_SIZE);
-    }
+    MmUnmapIoSpace(tempMapping, PAGE_SIZE);
 }
-
-static PVOID
-HalpAcpiEnsureEcamMapping(
-    _In_ ULONG AllocationIndex,
-    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation)
-{
-    PVOID Existing;
-    PVOID NewMapping;
-    PHYSICAL_ADDRESS Base;
-    ULONGLONG BusCount;
-    ULONGLONG WindowLength;
-    SIZE_T Length;
-
-    if (!HalpAcpiMcfgEcamMappings || AllocationIndex >= HalpAcpiMcfgEcamMappingCount)
-    {
-        return NULL;
-    }
-
-    Existing = HalpAcpiMcfgEcamMappings[AllocationIndex];
-    if (Existing)
-    {
-        return Existing;
-    }
-
-    BusCount = (ULONGLONG)(Allocation->EndBusNumber - Allocation->StartBusNumber + 1);
-    WindowLength = BusCount << 20;
-    if (!BusCount || !WindowLength)
-    {
-        return NULL;
-    }
-
-    if (WindowLength > (ULONGLONG)(SIZE_T)-1)
-    {
-        return NULL;
-    }
-
-    Length = (SIZE_T)WindowLength;
-    if ((sizeof(PVOID) == sizeof(ULONG)) && (Length > 0x4000000))
-    {
-        DPRINT1("HAL: ECAM window %#llx too large (%zu bytes) on 32-bit; falling back to legacy\n",
-                Allocation->BaseAddress,
-                Length);
-        return NULL;
-    }
-
-    Base.QuadPart = Allocation->BaseAddress;
-
-    NewMapping = MmMapIoSpace(Base, Length, MmNonCached);
-    if (!NewMapping)
-    {
-        return NULL;
-    }
-
-    if (InterlockedCompareExchangePointer((PVOID *)&HalpAcpiMcfgEcamMappings[AllocationIndex],
-                                          NewMapping,
-                                          NULL) != NULL)
-    {
-        MmUnmapIoSpace(NewMapping, Length);
-        return HalpAcpiMcfgEcamMappings[AllocationIndex];
-    }
-
-    return NewMapping;
-}
-
-static BOOLEAN
-HalpAcpiValidateEcamAllocation(
-    _In_ ULONG AllocationIndex,
-    _In_ const HALP_ACPI_MCFG_ALLOCATION *Allocation)
-{
-    UCHAR BusNumber = Allocation->StartBusNumber;
-    BOOLEAN FoundLegacy;
-    ULONG LegacyId;
-    ULONG EcamId;
-    UCHAR Dev;
-    ULONG Matches = 0;
-    ULONG Mismatches = 0;
-    const UCHAR MaxProbeBuses = 4;
-    const UCHAR MaxProbeDevices = 4;
-
-    if (Allocation->PciSegment != 0)
-    {
-        for (Dev = 0; Dev < PCI_MAX_DEVICES; Dev++)
-        {
-            EcamId = HalpAcpiReadEcamUlong(AllocationIndex, Allocation, BusNumber, Dev, 0, 0);
-            if (EcamId == 0xFFFFFFFF)
-            {
-                continue;
-            }
-
-            if (HalpPciVendorIdLooksSane(EcamId, 0))
-            {
-                return TRUE;
-            }
-
-            return FALSE;
-        }
-
-        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
-                                "HAL: ECAM segment had only 0xFFFFFFFF; disabling ECAM for segment");
-        return FALSE;
-    }
-
-    FoundLegacy = FALSE;
-
-    for (BusNumber = Allocation->StartBusNumber;
-         BusNumber <= Allocation->EndBusNumber && (BusNumber - Allocation->StartBusNumber) < MaxProbeBuses;
-         ++BusNumber)
-    {
-        for (Dev = 0; Dev < PCI_MAX_DEVICES && Dev < MaxProbeDevices; Dev++)
-        {
-            LegacyId = HalpPciReadConfigDwordLegacy(BusNumber, Dev, 0, 0);
-            if (!HalpPciVendorIdLooksSane(LegacyId, 0))
-            {
-                continue;
-            }
-
-            FoundLegacy = TRUE;
-            EcamId = HalpAcpiReadEcamUlong(AllocationIndex, Allocation, BusNumber, Dev, 0, 0);
-            if (EcamId == LegacyId)
-            {
-                ++Matches;
-                continue;
-            }
-
-            if (EcamId != 0xFFFFFFFF)
-            {
-                ++Mismatches;
-                if (Mismatches >= 2)
-                {
-                    DPRINT1("HAL: ECAM disable seg %u bus %u dev %u legacy %08lx ecam %08lx\n",
-                            Allocation->PciSegment,
-                            BusNumber,
-                            Dev,
-                            LegacyId,
-                            EcamId);
-                    return FALSE;
-                }
-            }
-        }
-    }
-
-    if (Matches)
-        return TRUE;
-
-    if (FoundLegacy && Mismatches)
-        return FALSE;
-
-    if (!FoundLegacy)
-    {
-        for (Dev = 0; Dev < PCI_MAX_DEVICES; Dev++)
-        {
-            EcamId = HalpAcpiReadEcamUlong(AllocationIndex, Allocation,
-                                           Allocation->StartBusNumber, Dev, 0, 0);
-            if (EcamId == 0xFFFFFFFF)
-                continue;
-
-            return HalpPciVendorIdLooksSane(EcamId, 0);
-        }
-
-        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
-                                "HAL: ECAM segment had only 0xFFFFFFFF; disabling ECAM for segment");
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-static const CHAR HalpAcpiVBoxOemId[6] = {'V','B','O','X',' ',' '};
-static const CHAR HalpAcpiVBoxMcfgId[8] = {'V','B','O','X','M','C','F','G'};
-
-static __attribute__((unused))
-BOOLEAN
-HalpAcpiIsVirtualBoxMcfg(
-    _In_ PHALP_ACPI_MCFG Mcfg,
-    _In_ ULONG EntryCount)
-{
-    const HALP_ACPI_MCFG_ALLOCATION *Allocation;
-
-    if (!Mcfg)
-    {
-        return FALSE;
-    }
-
-    if (RtlCompareMemory(Mcfg->Header.OEMID,
-                         HalpAcpiVBoxOemId,
-                         sizeof(HalpAcpiVBoxOemId)) != sizeof(HalpAcpiVBoxOemId))
-    {
-        return FALSE;
-    }
-
-    if (RtlCompareMemory(Mcfg->Header.OEMTableID,
-                         HalpAcpiVBoxMcfgId,
-                         sizeof(HalpAcpiVBoxMcfgId)) != sizeof(HalpAcpiVBoxMcfgId))
-    {
-        return FALSE;
-    }
-
-    if (EntryCount == 0)
-    {
-        return TRUE;
-    }
-
-    Allocation = (const HALP_ACPI_MCFG_ALLOCATION *)((const PUCHAR)Mcfg + sizeof(*Mcfg));
-
-    if ((Allocation->BaseAddress == 0x00000000DC000000ULL) &&
-        (Allocation->StartBusNumber == 0x00) &&
-        (Allocation->EndBusNumber == 0x3F))
-    {
-        return TRUE;
-    }
-
-    return FALSE;
-}
-
-CODE_SEG("INIT")
-static __attribute__((unused))
-BOOLEAN
-HalpAcpiForceVirtualBoxPciExpress(
-    _In_ ULONGLONG BaseAddress,
-    _In_ ULONGLONG Length,
-    _Out_opt_ PULONG LegacyVendorValue,
-    _Out_opt_ PULONG MmconfigVendorValue)
-{
-#if defined(HALP_ARM64)
-    UNREFERENCED_PARAMETER(BaseAddress);
-    UNREFERENCED_PARAMETER(Length);
-    if (LegacyVendorValue)
-        *LegacyVendorValue = 0xFFFFFFFF;
-    if (MmconfigVendorValue)
-        *MmconfigVendorValue = 0xFFFFFFFF;
-    return FALSE;
-#else
-    ULONGLONG LengthBits;
-    ULONGLONG Value;
-    ULONG Address;
-    ULONG LowValue;
-    ULONG HighValue;
-    ULONG OldLowValue;
-    ULONG NewLowValue;
-    ULONG OldHighValue;
-    ULONG NewHighValue;
-    ULONG AddressRegisterAfterLow;
-    ULONG AddressRegisterAfterHigh;
-    USHORT OldCommand;
-    USHORT Command;
-    USHORT NewCommand;
-    BOOLEAN Success;
-
-    if (Length >= (256ULL << 20))
-    {
-        LengthBits = 0ULL << 1; /* 256 MB window */
-        Length = 256ULL << 20;
-    }
-    else if (Length >= (128ULL << 20))
-    {
-        LengthBits = 0x1ULL << 1; /* 128 MB window */
-        Length = 128ULL << 20;
-    }
-    else
-    {
-        LengthBits = 0x2ULL << 1; /* 64 MB window */
-        Length = 64ULL << 20;
-    }
-
-    BaseAddress &= ~(Length - 1);
-
-    Value = BaseAddress | LengthBits | 0x1ULL;
-    LowValue = (ULONG)Value;
-    HighValue = (ULONG)(Value >> 32);
-
-    Address = 0x80000000;
-    Address |= (0 << 16); /* Bus 0 */
-    Address |= (0 << 11); /* Device 0 */
-    Address |= (0 << 8);  /* Function 0 */
-    Address |= 0x60;      /* PCIEXBAR low dword */
-
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
-    OldLowValue = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
-    if (OldLowValue != LowValue)
-    {
-        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
-        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC, LowValue);
-    }
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
-    NewLowValue = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
-    AddressRegisterAfterLow = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8);
-
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address + 4);
-    OldHighValue = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
-    if (OldHighValue != HighValue)
-    {
-        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address + 4);
-        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC, HighValue);
-    }
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address + 4);
-    NewHighValue = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
-    AddressRegisterAfterHigh = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8);
-
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, 0);
-
-    Success = (NewLowValue != 0xFFFFFFFF) && (NewHighValue != 0xFFFFFFFF);
-
-    {
-        ULONG LegacyVendor;
-        ULONG LegacyAddress;
-        volatile ULONG *EcamPtr;
-        ULONG MmconfigVendor;
-        PHYSICAL_ADDRESS MmconfigAddress;
-
-        LegacyAddress = 0x80000000;
-        LegacyAddress |= (0 << 16); /* Bus 0 */
-        LegacyAddress |= (0 << 11); /* Device 0 */
-        LegacyAddress |= (0 << 8);  /* Function 0 */
-        LegacyAddress |= 0;         /* Vendor/Device */
-
-        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, LegacyAddress);
-        LegacyVendor = READ_PORT_ULONG((PULONG)(ULONG_PTR)0xCFC);
-        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, 0);
-
-        MmconfigVendor = 0xFFFFFFFF;
-        MmconfigAddress.QuadPart = BaseAddress;
-        EcamPtr = (volatile ULONG *)HalpMapPhysicalMemory64(MmconfigAddress, 1);
-        if (EcamPtr)
-        {
-            MmconfigVendor = READ_REGISTER_ULONG((PULONG)(ULONG_PTR)EcamPtr);
-            HalpUnmapVirtualAddress((PVOID)EcamPtr, 1);
-        }
-
-        if (LegacyVendorValue)
-        {
-            *LegacyVendorValue = LegacyVendor;
-        }
-
-        if (MmconfigVendorValue)
-        {
-            *MmconfigVendorValue = MmconfigVendor;
-        }
-    }
-
-    Address = 0x80000000;
-    Address |= (0 << 16);
-    Address |= (0 << 11);
-    Address |= (0 << 8);
-    Address |= FIELD_OFFSET(PCI_COMMON_HEADER, Command);
-
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
-    OldCommand = READ_PORT_USHORT((PUSHORT)(ULONG_PTR)0xCFC);
-    Command = OldCommand | PCI_ENABLE_IO_SPACE | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER;
-    if (Command != OldCommand)
-    {
-        WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
-        WRITE_PORT_USHORT((PUSHORT)(ULONG_PTR)0xCFC, Command);
-    }
-
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, Address);
-    NewCommand = READ_PORT_USHORT((PUSHORT)(ULONG_PTR)0xCFC);
-
-    WRITE_PORT_ULONG((PULONG)(ULONG_PTR)0xCF8, 0);
-
-    DPRINT1("HAL: Forced VirtualBox PCIEXBAR to base %I64x length %I64x (low 0x%08lx->0x%08lx, high 0x%08lx->0x%08lx, cmd 0x%04x->0x%04x->0x%04x, addr=0x%08lx/0x%08lx)\n",
-            BaseAddress,
-            Length,
-            OldLowValue,
-            NewLowValue,
-            OldHighValue,
-            NewHighValue,
-            OldCommand,
-            Command,
-            NewCommand,
-            AddressRegisterAfterLow,
-            AddressRegisterAfterHigh);
-
-    return Success;
-#endif
-}
-
-#define ACPI_PM1_STATUS_BUS_MASTER     0x0010
-#define ACPI_PM1_STATUS_POWER_BUTTON   0x0100
-#ifndef ACPI_FADT_POWER_BUTTON
-#define ACPI_FADT_POWER_BUTTON         (1 << 4)
-#endif
-#ifndef ACPI_FADT_WBINVD
-#define ACPI_FADT_WBINVD               (1 << 0)
-#endif
-#ifndef ACPI_FADT_WBINVD_FLUSH
-#define ACPI_FADT_WBINVD_FLUSH         (1 << 1)
-#endif
 
 PHYSICAL_ADDRESS HalpFacsPhysicalAddress;
 GEN_ADDR HalpPmTimerBlock;
@@ -825,7 +257,6 @@ PFN_COUNT HalpPmTimerMappingPages;
 ULONG HalpPmTimerPort;
 ULONG HalpPmTimerMask;
 ULONG HalpPmTimerBitShift;
-ULONG HalpAcpiPmTimerFrequency = 3579545UL;
 GEN_ADDR HalpPm1EventBlocks[2];
 GEN_ADDR HalpPm1ControlBlocks[2];
 GEN_ADDR HalpPm2ControlBlock;
@@ -877,13 +308,6 @@ BOOLEAN
 HalpAcpiWriteRegister(
     _In_ const GEN_ADDR *Gas,
     _In_ ULONG Value);
-
-static
-BOOLEAN
-HalpBuildLegacyCStateRegister(
-    _In_ const GEN_ADDR *ControlBlock,
-    _In_ UCHAR ByteOffset,
-    _Out_ PHAL_ACPI_C_STATE_REGISTER Target);
 
 static
 ULONG
@@ -1171,57 +595,6 @@ HalpAcpiReadRegister(
 }
 
 BOOLEAN
-NTAPI
-HalpAcpiQueryPowerButton(VOID)
-{
-    ULONG Index;
-    ULONG Value;
-    BOOLEAN Pressed = FALSE;
-
-    /* If ACPI handles power button via a control method device, nothing to do */
-    if (HalpFixedAcpiDescTable.flags & ACPI_FADT_POWER_BUTTON)
-    {
-        return FALSE;
-    }
-
-    for (Index = 0; Index < RTL_NUMBER_OF(HalpPm1EventBlocks); Index++)
-    {
-        if (!HalpPm1EventBlockValid[Index])
-        {
-            continue;
-        }
-
-        if (!HalpAcpiReadRegister(&HalpPm1EventBlocks[Index], &Value))
-        {
-            continue;
-        }
-
-        if (Value & ACPI_PM1_STATUS_POWER_BUTTON)
-        {
-            HalpAcpiWriteRegister(&HalpPm1EventBlocks[Index], ACPI_PM1_STATUS_POWER_BUTTON);
-            Pressed = TRUE;
-        }
-    }
-
-    if (Pressed && !HalpPowerButtonShutdownInitiated)
-    {
-        NTSTATUS Status;
-
-        HalpPowerButtonShutdownInitiated = TRUE;
-        DPRINT1("HAL: Initiating shutdown sequence after power button press.\n");
-
-        Status = NtShutdownSystem(ShutdownPowerOff);
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("HAL: NtShutdownSystem failed with status 0x%08lx\n", Status);
-            HalpPowerButtonShutdownInitiated = FALSE;
-        }
-    }
-
-    return Pressed;
-}
-
-BOOLEAN
 HalpAcpiWriteRegister(
     _In_ const GEN_ADDR *Gas,
     _In_ ULONG Value)
@@ -1303,109 +676,6 @@ HalpAcpiWriteRegister(
         default:
             return FALSE;
     }
-}
-
-static
-BOOLEAN
-HalpBuildLegacyCStateRegister(
-    _In_ const GEN_ADDR *ControlBlock,
-    _In_ UCHAR ByteOffset,
-    _Out_ PHAL_ACPI_C_STATE_REGISTER Target)
-{
-    if (!ControlBlock || !Target)
-        return FALSE;
-
-    if (!HalpAcpiGasValid(ControlBlock))
-        return FALSE;
-
-    Target->AddressSpaceId = ControlBlock->AddressSpaceID;
-    Target->BitWidth = 8;
-    Target->BitOffset = 0;
-    Target->AccessSize = 1;
-    Target->Address = ControlBlock->Address.QuadPart + ByteOffset;
-    return TRUE;
-}
-
-NTSTATUS
-NTAPI
-HalGetAcpiCStateInformation(
-    _Out_ PHAL_ACPI_C_STATE_INFO Info)
-{
-    const GEN_ADDR *ControlBlock;
-    ULONG Count = 0;
-    BOOLEAN RequireFlush;
-
-    if (!Info)
-        return STATUS_INVALID_PARAMETER;
-
-    RtlZeroMemory(Info, sizeof(*Info));
-
-    ControlBlock = NULL;
-    if (HalpPm1ControlBlockValid[0])
-    {
-        ControlBlock = &HalpPm1ControlBlocks[0];
-    }
-    else if (HalpPm1ControlBlockValid[1])
-    {
-        ControlBlock = &HalpPm1ControlBlocks[1];
-    }
-
-    if (!ControlBlock)
-        return STATUS_NOT_SUPPORTED;
-
-    /* ACPI spec: lack of WBINVD or presence of WBINVD_FLUSH means C3 requires cache flush */
-    RequireFlush = ((HalpFixedAcpiDescTable.flags & ACPI_FADT_WBINVD) == 0) ||
-                   ((HalpFixedAcpiDescTable.flags & ACPI_FADT_WBINVD_FLUSH) != 0);
-
-    if (HalpFixedAcpiDescTable.lvl2_latency &&
-        HalpFixedAcpiDescTable.lvl2_latency != 0xFFFF)
-    {
-        if (Count < HAL_ACPI_MAX_C_STATES &&
-            HalpBuildLegacyCStateRegister(ControlBlock, 4, &Info->States[Count].Register))
-        {
-            Info->States[Count].Type = 2;
-            Info->States[Count].Latency = HalpFixedAcpiDescTable.lvl2_latency;
-            Info->States[Count].RequiresCacheFlush = FALSE;
-            ++Count;
-        }
-    }
-
-    if (HalpFixedAcpiDescTable.lvl3_latency &&
-        HalpFixedAcpiDescTable.lvl3_latency != 0xFFFF)
-    {
-        if (Count < HAL_ACPI_MAX_C_STATES &&
-            HalpBuildLegacyCStateRegister(ControlBlock, 5, &Info->States[Count].Register))
-        {
-            Info->States[Count].Type = 3;
-            Info->States[Count].Latency = HalpFixedAcpiDescTable.lvl3_latency;
-            Info->States[Count].RequiresCacheFlush = RequireFlush;
-            ++Count;
-        }
-    }
-
-    Info->Count = Count;
-    return (Count != 0) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
-}
-
-BOOLEAN
-NTAPI
-HalIsAcpiBusMasterActive(VOID)
-{
-    ULONG Value;
-
-    for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpPm1EventBlocks); ++Index)
-    {
-        if (!HalpPm1EventBlockValid[Index])
-            continue;
-
-        if (!HalpAcpiReadRegister(&HalpPm1EventBlocks[Index], &Value))
-            continue;
-
-        if (Value & ACPI_PM1_STATUS_BUS_MASTER)
-            return TRUE;
-    }
-
-    return FALSE;
 }
 
 VOID
@@ -1535,34 +805,6 @@ HaliAcpiTimerInit(IN ULONG TimerPort,
     HalpPmTimerInitialized = TRUE;
 }
 
-ULONG
-NTAPI
-HalpAcpiTimerRead(VOID)
-{
-    ULONG Value;
-
-    if (!HalpPmTimerInitialized)
-    {
-        return 0;
-    }
-
-    if (HalpPmTimerMemoryMapped && HalpPmTimerRegister)
-    {
-    Value = READ_REGISTER_ULONG((PULONG)HalpPmTimerRegister);
-    }
-    else
-    {
-        Value = READ_PORT_ULONG((PULONG)(ULONG_PTR)HalpPmTimerPort);
-    }
-
-    if (HalpPmTimerBitShift)
-    {
-        Value >>= HalpPmTimerBitShift;
-    }
-
-    return Value & HalpPmTimerMask;
-}
-
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI
@@ -1607,15 +849,10 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Get the debug table for KD */
     HalpDebugPortTable = HalAcpiGetTable(LoaderBlock, DBGP_SIGNATURE);
 
-    /* Discover additional ACPI tables of interest early */
-    HalpAcpiDiscoverHpetTable(LoaderBlock);
-    HalpAcpiDiscoverWaetTable(LoaderBlock);
-
     /* Cache the PCI Express MMCONFIG information if present */
     {
         PHALP_ACPI_MCFG Mcfg;
 
-        HalpAcpiMcfgTable = NULL;
         HalpAcpiMcfgAllocations = NULL;
         HalpAcpiMcfgAllocationCount = 0;
 
@@ -1643,107 +880,6 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                             Remainder);
                 }
 
-#if !defined(HALP_ARM64)
-                if (HalpAcpiIsVirtualBoxMcfg(Mcfg, EntryCount))
-                {
-                    const HALP_ACPI_MCFG_ALLOCATION *FirstAllocation;
-                    ULONGLONG BusCount;
-                    ULONGLONG WindowLength;
-                    ULONG VendorEcam = 0xFFFFFFFF;
-                    BOOLEAN Programmed;
-                    BOOLEAN MmconfigValid;
-
-                    HalpAcpiRecordEcamEvent(
-                        HALP_ACPI_ECAM_COVERAGE_USED,
-                        "HAL: VirtualBox firmware advertises PCI Express MMCONFIG; attempting to keep ECAM online.");
-
-                    /* Leave legacy configuration mechanism 1 enabled */
-                    {
-                        UCHAR LegacyEnable;
-
-                        LegacyEnable = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB);
-                        LegacyEnable |= 0x01;
-                        WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, LegacyEnable);
-                        LegacyEnable = READ_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB);
-                        DPRINT1("HAL: Legacy PCI enable port now 0x%02x\n", LegacyEnable);
-                    }
-
-                    FirstAllocation = (const HALP_ACPI_MCFG_ALLOCATION *)((const PUCHAR)Mcfg + sizeof(*Mcfg));
-                    BusCount = (ULONGLONG)(FirstAllocation->EndBusNumber - FirstAllocation->StartBusNumber + 1);
-                    WindowLength = BusCount << 20;
-
-                    Programmed = HalpAcpiForceVirtualBoxPciExpress(FirstAllocation->BaseAddress,
-                                                                   WindowLength,
-                                                                   NULL,
-                                                                   &VendorEcam);
-                    MmconfigValid = HalpPciVendorIdLooksSane(VendorEcam, (USHORT)(VendorEcam & 0xFFFF));
-
-                    if (Programmed && !MmconfigValid)
-                    {
-                        PHYSICAL_ADDRESS TestAddress;
-                        PVOID Mapping;
-
-                        TestAddress.QuadPart = FirstAllocation->BaseAddress;
-                        Mapping = HalpMapPhysicalMemory64(TestAddress, 1);
-                        if (Mapping)
-                        {
-                            VendorEcam = READ_REGISTER_ULONG((PULONG)(ULONG_PTR)Mapping);
-                            HalpUnmapVirtualAddress(Mapping, 1);
-                            MmconfigValid = HalpPciVendorIdLooksSane(VendorEcam, (USHORT)(VendorEcam & 0xFFFF));
-                        }
-                    }
-
-                    if (Programmed && !MmconfigValid)
-                    {
-                        ULONGLONG AltBase = 0x00000000E0000000ULL; /* Common Q35 default */
-                        ULONG AltVendor = 0xFFFFFFFF;
-
-                        DPRINT1("HAL: VBox MMCONFIG vendor at %I64x read 0x%08lx; trying alt base %I64x\n",
-                                FirstAllocation->BaseAddress,
-                                VendorEcam,
-                                AltBase);
-
-                        Programmed = HalpAcpiForceVirtualBoxPciExpress(AltBase,
-                                                                       WindowLength,
-                                                                       NULL,
-                                                                       &AltVendor);
-
-                        if (Programmed &&
-                            HalpPciVendorIdLooksSane(AltVendor, (USHORT)(AltVendor & 0xFFFF)))
-                        {
-                            DPRINT1("HAL: VBox MMCONFIG works at alt base %I64x (vendor 0x%08lx); overriding MCFG base.\n",
-                                    AltBase,
-                                    AltVendor);
-                            ((PHALP_ACPI_MCFG_ALLOCATION)FirstAllocation)->BaseAddress = AltBase;
-                            VendorEcam = AltVendor;
-                            MmconfigValid = TRUE;
-                        }
-                        else
-                        {
-                            DPRINT1("HAL: VBox alt base %I64x still invalid (vendor 0x%08lx).\n",
-                                    AltBase,
-                                    AltVendor);
-                            MmconfigValid = FALSE;
-                        }
-                    }
-
-                    if (!Programmed || !MmconfigValid)
-                    {
-                        /*
-                         * VirtualBox ICH9/Q35 firmware advertises an MCFG
-                         * window that does not actually decode PCI Express
-                         * MMCONFIG cycles. Instead of disabling ECAM
-                         * globally, mark this segment as legacy-only and let
-                         * other segments continue using ECAM if available.
-                         */
-                        HalpAcpiEcamForceLegacySegment = FirstAllocation->PciSegment;
-                        HalpAcpiRecordEcamEvent(
-                            HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY,
-                            "HAL: VirtualBox firmware does not decode PCI Express MMCONFIG; forcing legacy configuration space access for this segment.");
-                    }
-                }
-#endif
-
                 if (EntryCount != 0)
                 {
                     ULONG Index;
@@ -1759,7 +895,6 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                   SourceAllocations,
                                   CopyCount * sizeof(HALP_ACPI_MCFG_ALLOCATION));
 
-                    HalpAcpiMcfgTable = Mcfg;
                     HalpAcpiMcfgAllocations = HalpAcpiMcfgAllocationStorage;
                     HalpAcpiMcfgAllocationCount = CopyCount;
 
@@ -1769,10 +904,6 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                 EntryCount,
                                 CopyCount);
                     }
-
-                    /* Defer per-allocation disable-map allocation to Phase 1 (pool ready) */
-                    HalpAcpiMcfgSegDisabled = NULL;
-                    HalpAcpiMcfgSegDisabledCount = 0;
 
                     for (Index = 0; Index < EntryCount; ++Index)
                     {
@@ -1831,19 +962,8 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
      * Identify the ACPI HAL flavor more accurately based on architecture.
      * This is user-visible via HalReportResourceUsage().
      */
-#if defined(_M_ARM64) || defined(__aarch64__)
     /* ARM64 always uses GIC (Generic Interrupt Controller) */
     HalName = L"ACPI ARM64-based PC";
-#else
-    if (HalpIsApicInterruptController())
-    {
-#ifdef _M_AMD64
-        HalName = L"ACPI x64-based PC";
-#else
-        HalName = L"ACPI x86-based PC";
-#endif
-    }
-#endif
     /* Return success */
     return STATUS_SUCCESS;
 }
@@ -1878,7 +998,7 @@ HalpAppendFormatA(
 
 /* Helper function to show PCI BAR size */
 CODE_SEG("INIT")
-static __attribute__((unused)) VOID
+static VOID
 ShowSize(ULONGLONG Size, PCHAR Buffer, SIZE_T BufferSize)
 {
     if (!Size) return;
@@ -1921,19 +1041,9 @@ HalpAcpiAccessConfigEcam(
     _In_ ULONG Length)
 {
     PHALP_ACPI_MCFG_ALLOCATION Allocation;
-    ULONG AllocationIndex;
-    UCHAR State;
     ULONGLONG BusCount;
     ULONGLONG WindowLength;
     ULONGLONG AccessOffset;
-
-    if (HalpAcpiEcamDisabled)
-    {
-        HalpAcpiRecordEcamEvent(
-            HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
-            "HAL: PCI Express MMCONFIG access requested after ECAM was globally disabled; using legacy configuration space.");
-        return FALSE;
-    }
 
     if (!HalpAcpiMcfgAllocations || !HalpAcpiMcfgAllocationCount)
     {
@@ -1978,60 +1088,13 @@ HalpAcpiAccessConfigEcam(
         HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_SEGMENT_ANY, NULL);
     }
 
-    //
-    // First allocation for this (segment, bus) that validates; Find skips
-    // disabled windows so a dead window can't shadow a working one.
-    //
-    for (;;)
+    Allocation = HalpAcpiFindMcfgAllocation(Segment, (UCHAR)BusNumber);
+    if (!Allocation)
     {
-        Allocation = HalpAcpiFindMcfgAllocation(Segment, (UCHAR)BusNumber);
-        if (!Allocation)
-        {
-            HalpAcpiRecordEcamEvent(
-                HALP_ACPI_ECAM_COVERAGE_NO_ALLOCATION,
-                "HAL: PCI Express MMCONFIG has no allocation that covers the requested bus; using legacy configuration space.");
-            return FALSE;
-        }
-
-        if (HalpAcpiEcamForceLegacySegment != 0xFFFF &&
-            Allocation->PciSegment == HalpAcpiEcamForceLegacySegment)
-        {
-            if (!HalpAcpiEcamForceLegacyLogged)
-            {
-                CHAR msg[128];
-                RtlStringCbPrintfA(msg,
-                                   sizeof(msg),
-                                   "HAL: ECAM disabled for segment %u due to firmware decode failure; using legacy configuration space.",
-                                   Allocation->PciSegment);
-                HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
-                HalpAcpiEcamForceLegacyLogged = TRUE;
-            }
-            return FALSE;
-        }
-
-        AllocationIndex = (ULONG)(Allocation - HalpAcpiMcfgAllocations);
-        if (!HalpAcpiMcfgSegDisabled || AllocationIndex >= HalpAcpiMcfgSegDisabledCount)
-        {
-            break;
-        }
-
-        State = HalpAcpiMcfgSegDisabled[AllocationIndex];
-        if (State == HALP_ACPI_ECAM_STATE_WORKING)
-        {
-            break;
-        }
-
-        /* UNKNOWN (Find already skips DISABLED): validate this window once. */
-        if (HalpAcpiValidateEcamAllocation(AllocationIndex, Allocation))
-        {
-            HalpAcpiMcfgSegDisabled[AllocationIndex] = HALP_ACPI_ECAM_STATE_WORKING;
-            break;
-        }
-
-        HalpAcpiMcfgSegDisabled[AllocationIndex] = HALP_ACPI_ECAM_STATE_DISABLED;
-        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
-                                "HAL: PCI Express MMCONFIG decode mismatch; using legacy configuration space.");
-        /* Loop: Find now skips this disabled window and returns the next. */
+        HalpAcpiRecordEcamEvent(
+            HALP_ACPI_ECAM_COVERAGE_NO_ALLOCATION,
+            "HAL: PCI Express MMCONFIG has no allocation that covers the requested bus; using legacy configuration space.");
+        return FALSE;
     }
 
     //
@@ -2072,8 +1135,7 @@ HalpAcpiAccessConfigEcam(
 
     if (Write)
     {
-        HalpAcpiWriteEcamBytes(AllocationIndex,
-                               Allocation,
+        HalpAcpiWriteEcamBytes(Allocation,
                                BusNumber,
                                Slot,
                                Buffer,
@@ -2083,8 +1145,7 @@ HalpAcpiAccessConfigEcam(
         return TRUE;
     }
 
-    HalpAcpiReadEcamBytes(AllocationIndex,
-                          Allocation,
+    HalpAcpiReadEcamBytes(Allocation,
                           BusNumber,
                           Slot,
                           Offset,
@@ -2140,30 +1201,22 @@ HalpAcpiFindMcfgAllocation(
             continue;
         }
 
-        if (HalpAcpiMcfgSegDisabled && Index < HalpAcpiMcfgSegDisabledCount &&
-            HalpAcpiMcfgSegDisabled[Index] == HALP_ACPI_ECAM_STATE_DISABLED)
-        {
-            continue;
-        }
-
         return Allocation;
     }
 
     return NULL;
 }
 
-ULONG NTAPI HalpKdReadPciConfig(_In_ ULONG BusNumber, _In_ ULONG SlotNumber, _Out_writes_bytes_(Length) PVOID Buffer, _In_ ULONG Offset, _In_ ULONG Length)
+ULONG
+NTAPI
+HalpKdReadPciConfig(
+    _In_ ULONG BusNumber,
+    _In_ ULONG SlotNumber,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
 {
-    PHALP_ACPI_MCFG_ALLOCATION Allocation;
     PCI_SLOT_NUMBER Slot;
-    ULONG AllocationIndex;
-    PVOID Mapping;
-    ULONGLONG BusCount;
-    ULONGLONG WindowLength;
-    ULONGLONG DeviceOffset;
-    ULONG CurrentOffset;
-    ULONG Remaining;
-    PUCHAR Output;
 
     if (Buffer == NULL || Length == 0 || BusNumber > 0xFF || Offset >= 0x1000 || (ULONGLONG)Offset + Length > 0x1000)
         return 0;
@@ -2172,123 +1225,8 @@ ULONG NTAPI HalpKdReadPciConfig(_In_ ULONG BusNumber, _In_ ULONG SlotNumber, _Ou
     if (Slot.u.bits.DeviceNumber >= PCI_MAX_DEVICES || Slot.u.bits.FunctionNumber >= PCI_MAX_FUNCTION)
         return 0;
 
-    if (HalpAcpiEcamDisabled)
-        return MAXULONG;
-    Allocation = HalpAcpiFindMcfgAllocation(HALP_ACPI_SEGMENT_ANY, (UCHAR)BusNumber);
-    if (Allocation == NULL || (HalpAcpiEcamForceLegacySegment != 0xFFFF && Allocation->PciSegment == HalpAcpiEcamForceLegacySegment))
-        return MAXULONG;
-
-    AllocationIndex = (ULONG)(Allocation - HalpAcpiMcfgAllocations);
-    if (HalpAcpiMcfgEcamMappings == NULL || AllocationIndex >= HalpAcpiMcfgEcamMappingCount)
-        return MAXULONG;
-    Mapping = HalpAcpiMcfgEcamMappings[AllocationIndex];
-    if (Mapping == NULL)
-        return MAXULONG;
-
-    if (Allocation->StartBusNumber == Allocation->EndBusNumber && (Slot.u.bits.DeviceNumber != 0 || Slot.u.bits.FunctionNumber != 0))
-    {
-        RtlFillMemory(Buffer, Length, 0xFF);
-        return Length;
-    }
-
-    BusCount = (ULONGLONG)(Allocation->EndBusNumber - Allocation->StartBusNumber + 1);
-    WindowLength = BusCount << 20;
-    DeviceOffset = HalpAcpiEcamOffsetInAllocation(Allocation, (UCHAR)BusNumber, Slot.u.bits.DeviceNumber, Slot.u.bits.FunctionNumber, 0);
-    if (BusCount == 0 || WindowLength == 0 || DeviceOffset > WindowLength || (ULONGLONG)Offset + Length > WindowLength - DeviceOffset)
-        return MAXULONG;
-
-    CurrentOffset = Offset;
-    Remaining = Length;
-    Output = Buffer;
-    while (Remaining != 0)
-    {
-        ULONG AlignedOffset;
-        ULONG ByteInDword;
-        ULONG TransferLength;
-        ULONG Dword;
-
-        AlignedOffset = CurrentOffset & ~3u;
-        ByteInDword = CurrentOffset & 3u;
-        TransferLength = min(4 - ByteInDword, Remaining);
-        Dword = READ_REGISTER_ULONG((PULONG)((PUCHAR)Mapping + DeviceOffset + AlignedOffset));
-        RtlCopyMemory(Output, ((PUCHAR)&Dword) + ByteInDword, TransferLength);
-        CurrentOffset += TransferLength;
-        Output += TransferLength;
-        Remaining -= TransferLength;
-    }
-    return Length;
-}
-
-PHALP_ACPI_MCFG_ALLOCATION
-NTAPI
-HalpAcpiGetMcfgAllocation(
-    _In_ USHORT Segment,
-    _In_ UCHAR BusNumber)
-{
-    PHALP_ACPI_MCFG_ALLOCATION Allocation;
-    ULONG AllocationIndex;
-
-    Allocation = HalpAcpiFindMcfgAllocation(Segment, BusNumber);
-    if (!Allocation)
-    {
-        return NULL;
-    }
-
-    AllocationIndex = (ULONG)(Allocation - HalpAcpiMcfgAllocations);
-    if (HalpAcpiMcfgSegDisabled && AllocationIndex < HalpAcpiMcfgSegDisabledCount &&
-        HalpAcpiMcfgSegDisabled[AllocationIndex] == HALP_ACPI_ECAM_STATE_DISABLED)
-    {
-        return NULL;
-    }
-
-    if (HalpAcpiEcamForceLegacySegment != 0xFFFF &&
-        Allocation->PciSegment == HalpAcpiEcamForceLegacySegment)
-    {
-        return NULL;
-    }
-
-    return Allocation;
-}
-
-BOOLEAN
-NTAPI
-HalpAcpiGetEcamAddress(
-    _In_ USHORT Segment,
-    _In_ UCHAR BusNumber,
-    _In_ UCHAR DeviceNumber,
-    _In_ UCHAR FunctionNumber,
-    _In_ ULONG RegisterOffset,
-    _Out_ PPHYSICAL_ADDRESS Address)
-{
-    PHALP_ACPI_MCFG_ALLOCATION Allocation;
-    ULONGLONG Base;
-
-    if (!Address)
-    {
-        return FALSE;
-    }
-
-    Allocation = HalpAcpiGetMcfgAllocation(Segment, BusNumber);
-    if (!Allocation)
-    {
-        return FALSE;
-    }
-
-    if (DeviceNumber >= PCI_MAX_DEVICES ||
-        FunctionNumber >= PCI_MAX_FUNCTION ||
-        RegisterOffset >= 0x1000)
-    {
-        return FALSE;
-    }
-
-    Base = Allocation->BaseAddress;
-    Base += ((ULONGLONG)(BusNumber - Allocation->StartBusNumber) << 20);
-    Base += ((ULONGLONG)DeviceNumber << 15);
-    Base += ((ULONGLONG)FunctionNumber << 12);
-    Base += RegisterOffset;
-
-    Address->QuadPart = Base;
-    return TRUE;
+    /* FIXME: No ECAM window is mapped for use from the debugger */
+    return MAXULONG;
 }
 
 /*
@@ -2296,7 +1234,6 @@ HalpAcpiGetEcamAddress(
  * ARM64 uses only ECAM (PCIe memory-mapped configuration) - there is no
  * legacy I/O port-based PCI configuration mechanism on ARM64.
  */
-#if defined(HALP_ARM64)
 
 /* ARM64 stub for PCI stubs initialization - no legacy PCI on ARM64 */
 CODE_SEG("INIT")
@@ -2428,8 +1365,6 @@ HalpPciDescribeGsi(
 #define HalpGetNMICrashFlag() HalpGetNMICrashFlagArm64()
 #define HalpPhase0GetPciDataByOffset HalpPhase0GetPciDataByOffsetArm64
 #define HalpPhase0SetPciDataByOffset HalpPhase0SetPciDataByOffsetArm64
-
-#endif /* HALP_ARM64 */
 
 /* These includes provide the PCI device/vendor lookup tables */
 #define NEWLINE "\n"
@@ -3155,28 +2090,19 @@ CODE_SEG("INIT")
 static
 VOID
 HalpAcpiEnumeratePciBusDebug(VOID)
-	{
-	    PCI_COMMON_CONFIG PciConfig;
-	    PCI_SLOT_NUMBER PciSlot;
-	    ULONG BusNumber, DeviceNumber, FunctionNumber;
-	    ULONG VendorId;
-	    USHORT VendorWord;
-	    LONG EcamFlags;
-	    BOOLEAN ForcedLegacy;
+{
+    PCI_COMMON_CONFIG PciConfig;
+    PCI_SLOT_NUMBER PciSlot;
+    ULONG BusNumber, DeviceNumber, FunctionNumber;
+    ULONG VendorId;
+    USHORT VendorWord;
 
-    /* Make sure legacy handlers exist if ECAM access is disabled */
     /* Setup the PCI stub support */
     HalpInitializePciStubs();
-
-#if !defined(HALP_ARM64)
-    /* Force legacy PCI configuration mechanism 1 to be enabled (x86/amd64 only) */
-    WRITE_PORT_UCHAR((PUCHAR)(ULONG_PTR)0xCFB, 0x01);
-#endif
 
     /* Set the NMI crash flag */
     HalpGetNMICrashFlag();
 
-#if defined(HALP_ARM64)
     /*
      * Several ARM64 platforms describe overlapping bus-number ranges in
      * separate MCFG segments. This early diagnostic pass runs before the
@@ -3194,32 +2120,24 @@ HalpAcpiEnumeratePciBusDebug(VOID)
         DbgPrint("HAL: Early PCI hardware dump deferred to ACPI/PnP discovery.\n");
         return;
     }
-#endif
 
     /* Print PCI bus enumeration header */
     DbgPrint("\n====== PCI BUS HARDWARE DETECTION (ACPI HAL) =======\n\n");
 
-    EcamFlags = HalpAcpiEcamCoverageFlags;
-    ForcedLegacy = (EcamFlags & HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY) != 0;
-
-#if defined(HALP_ARM64)
     if (!HalpArm64HasPciConfigSpaceBackend())
     {
         HalpPciLogEcamCoverage();
         DbgPrint("\n====== END PCI BUS DETECTION =======\n\n");
         return;
     }
-#endif
 
     /* Enumerate all PCI buses */
     for (BusNumber = 0; BusNumber < 256; BusNumber++)
     {
         BOOLEAN BusHadAnyDevice = FALSE;
 
-#if defined(HALP_ARM64)
         if (BusNumber > HalpAcpiMcfgAllocations[0].EndBusNumber)
             break;
-#endif
 
         /* Try to read from bus - if it fails, still try all slots for bus 0 */
         PciSlot.u.AsULONG = 0;
@@ -3247,19 +2165,10 @@ HalpAcpiEnumeratePciBusDebug(VOID)
 
         if (!HalpPciVendorIdLooksSane(VendorId, (USHORT)VendorId))
         {
-            if ((BusNumber == 0) && ForcedLegacy)
-            {
-                DPRINT("HAL: Bus 0 vendor probe returned 0x%08lx/0x%04x after firmware-forced legacy mode; continuing scan.\n",
-                       VendorId,
-                       VendorWord);
-            }
-            else
-            {
-                DPRINT("HAL: No PCI device responding on bus %u (vendor=0x%08lx/0x%04x); stopping scan\n",
-                       BusNumber,
-                       VendorId,
-                       VendorWord);
-            }
+            DPRINT("HAL: No PCI device responding on bus %u (vendor=0x%08lx/0x%04x); stopping scan\n",
+                   BusNumber,
+                   VendorId,
+                   VendorWord);
             /* If not bus 0, assume no more buses and stop */
             if (BusNumber != 0)
             {
@@ -3411,86 +2320,4 @@ HalpQueryAcpiRootPointer(
     }
 
     return (HalpAcpiRsdpAddress.QuadPart != 0);
-}
-
-/* Phase 1 init: allocate per-segment ECAM disable map and read registry gate */
-CODE_SEG("INIT")
-VOID
-HalpAcpiPhase1Init(VOID)
-{
-    /* Initialize HPET if available - provides high-resolution timing */
-    HalpHpetInitialize();
-
-    /* Allocate per-allocation disable flags if MCFG present and not yet allocated */
-    if (HalpAcpiMcfgAllocations && HalpAcpiMcfgAllocationCount && !HalpAcpiMcfgSegDisabled)
-    {
-        HalpAcpiMcfgSegDisabled = ExAllocatePoolWithTag(NonPagedPool,
-                                                         HalpAcpiMcfgAllocationCount * sizeof(UCHAR),
-                                                         'gaCE');
-        if (HalpAcpiMcfgSegDisabled)
-        {
-            RtlZeroMemory(HalpAcpiMcfgSegDisabled, HalpAcpiMcfgAllocationCount * sizeof(UCHAR));
-            HalpAcpiMcfgSegDisabledCount = HalpAcpiMcfgAllocationCount;
-        }
-    }
-
-    if (HalpAcpiMcfgAllocations && HalpAcpiMcfgAllocationCount && !HalpAcpiMcfgEcamMappings)
-    {
-        HalpAcpiMcfgEcamMappings = ExAllocatePoolWithTag(NonPagedPool,
-                                                         HalpAcpiMcfgAllocationCount * sizeof(PVOID),
-                                                         'maCE');
-        if (HalpAcpiMcfgEcamMappings)
-        {
-            RtlZeroMemory(HalpAcpiMcfgEcamMappings, HalpAcpiMcfgAllocationCount * sizeof(PVOID));
-            HalpAcpiMcfgEcamMappingCount = HalpAcpiMcfgAllocationCount;
-        }
-    }
-
-    /* Optional registry gate to disable ECAM globally: HKLM\System\CCS\Services\pci\Parameters\DisableEcam */
-    {
-        UNICODE_STRING KeyName;
-        HANDLE Root = NULL, Key = NULL;
-        NTSTATUS Sts;
-        ULONG Disable = 0;
-        PKEY_VALUE_PARTIAL_INFORMATION Kvpi = NULL;
-        ULONG Req = 0;
-
-        RtlInitUnicodeString(&KeyName, L"\\REGISTRY\\MACHINE\\SYSTEM\\CURRENTCONTROLSET");
-        Sts = HalpOpenRegistryKey(&Root, NULL, &KeyName, KEY_READ, FALSE);
-        if (NT_SUCCESS(Sts))
-        {
-            RtlInitUnicodeString(&KeyName, L"Services\\pci\\Parameters");
-            Sts = HalpOpenRegistryKey(&Key, Root, &KeyName, KEY_READ, FALSE);
-            ZwClose(Root);
-            if (NT_SUCCESS(Sts))
-            {
-                RtlInitUnicodeString(&KeyName, L"DisableEcam");
-                Sts = ZwQueryValueKey(Key, &KeyName, KeyValuePartialInformation, NULL, 0, &Req);
-                if ((Sts == STATUS_BUFFER_OVERFLOW || Sts == STATUS_BUFFER_TOO_SMALL) && Req)
-                {
-                    Kvpi = ExAllocatePoolWithTag(PagedPool, Req, TAG_HAL);
-                    if (Kvpi)
-                    {
-                        Sts = ZwQueryValueKey(Key, &KeyName, KeyValuePartialInformation, Kvpi, Req, &Req);
-                        if (NT_SUCCESS(Sts) && Kvpi->Type == REG_DWORD && Kvpi->DataLength >= sizeof(ULONG))
-                        {
-                            Disable = *(PULONG)Kvpi->Data;
-                        }
-                        ExFreePoolWithTag(Kvpi, TAG_HAL);
-                    }
-                }
-                ZwClose(Key);
-            }
-        }
-
-        if (Disable)
-        {
-            if (!HalpAcpiEcamDisabled)
-            {
-                HalpAcpiEcamDisabled = TRUE;
-                HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_DISABLED_GLOBAL,
-                                        "HAL: Registry forced DisableEcam=1; using legacy PCI configuration.");
-            }
-        }
-    }
 }
