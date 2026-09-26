@@ -109,9 +109,18 @@ NTKERNELAPI KIRQL FASTCALL KfRaiseIrql(KIRQL NewIrql);
 NTKERNELAPI VOID FASTCALL KfLowerIrql(KIRQL NewIrql);
 #define KeRaiseIrql(NewIrql, OldIrql) (*(OldIrql) = KfRaiseIrql(NewIrql))
 #define KeLowerIrql(NewIrql) KfLowerIrql(NewIrql)
+#if defined(_NTOSKRNL_) || defined(_NTHAL_) || defined(_NTSYSTEM_)
 NTKERNELAPI KIRQL NTAPI KeRaiseIrqlToDpcLevel(VOID);
 NTKERNELAPI KIRQL NTAPI KeRaiseIrqlToSynchLevel(VOID);
+#else
+/* Drivers raise inline, as on the other 64-bit architectures. */
+FORCEINLINE KIRQL KeRaiseIrqlToDpcLevel(VOID) { return KfRaiseIrql(DISPATCH_LEVEL); }
+FORCEINLINE KIRQL KeRaiseIrqlToSynchLevel(VOID) { return KfRaiseIrql(12); }
+#endif
 
+/* KUSER_SHARED_DATA.SystemTime is only 4-byte aligned and RV64 does not
+ * guarantee atomic misaligned loads, so drivers call the kernel for the
+ * clock values instead of reading the shared page as AMD64 and ARM64 do. */
 extern NTKERNELAPI volatile KSYSTEM_TIME KeTickCount;
 NTKERNELAPI VOID NTAPI KeQueryTickCount(PLARGE_INTEGER CurrentCount);
 NTKERNELAPI VOID NTAPI KeFlushIoBuffers(PMDL Mdl, BOOLEAN ReadOperation, BOOLEAN DmaOperation);

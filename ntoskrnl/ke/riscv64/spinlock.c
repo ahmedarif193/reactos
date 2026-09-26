@@ -51,29 +51,6 @@ KeReleaseSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrql)
     KeLowerIrql(OldIrql);
 }
 
-/* The HAL forwards its legacy spin-lock exports to these, as on ARM64. */
-KIRQL
-FASTCALL
-KfAcquireSpinLock(_Inout_ PKSPIN_LOCK SpinLock)
-{
-    return KeAcquireSpinLockRaiseToDpc(SpinLock);
-}
-
-VOID
-FASTCALL
-KfReleaseSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrql)
-{
-    KeReleaseSpinLock(SpinLock, OldIrql);
-}
-
-#undef KeAcquireSpinLock
-VOID
-NTAPI
-KeAcquireSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _Out_ PKIRQL OldIrql)
-{
-    *OldIrql = KeAcquireSpinLockRaiseToDpc(SpinLock);
-}
-
 KIRQL
 FASTCALL
 KeAcquireQueuedSpinLock(_In_ KSPIN_LOCK_QUEUE_NUMBER Number)

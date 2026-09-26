@@ -4674,7 +4674,7 @@ RtlEnlargedUnsignedMultiply(
     return Product;
 }
 
-#if defined(_AMD64_) || defined(_IA64_)
+#if defined(_WIN64)
 static __inline
 LARGE_INTEGER
 NTAPI_INLINE
@@ -4700,7 +4700,7 @@ RtlExtendedLargeIntegerDivide(
     _Out_opt_ PULONG Remainder
 );
 
-#endif /* defined(_AMD64_) || defined(_IA64_) */
+#endif /* _WIN64 */
 
 #endif
 

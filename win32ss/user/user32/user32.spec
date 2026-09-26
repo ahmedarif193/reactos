@@ -265,8 +265,8 @@
 @ stdcall GetClassInfoExW(long wstr ptr)
 @ stdcall GetClassInfoW(long wstr ptr)
 @ stdcall GetClassLongA(long long)
-@ stdcall -arch=x86_64,arm64,riscv64 GetClassLongPtrA(ptr long)
-@ stdcall -arch=x86_64,arm64,riscv64 GetClassLongPtrW(ptr long)
+@ stdcall -arch=win64 GetClassLongPtrA(ptr long)
+@ stdcall -arch=win64 GetClassLongPtrW(ptr long)
 @ stdcall GetClassLongW(long long)
 @ stdcall GetClassNameA(long ptr long)
 @ stdcall GetClassNameW(long ptr long)
@@ -419,8 +419,8 @@
 @ stdcall -version=0x601+ GetWindowDisplayAffinity(long ptr)
 @ stdcall GetWindowInfo(long ptr)
 @ stdcall GetWindowLongA(long long)
-@ stdcall -arch=x86_64,arm64,riscv64 GetWindowLongPtrA(ptr long)
-@ stdcall -arch=x86_64,arm64,riscv64 GetWindowLongPtrW(ptr long)
+@ stdcall -arch=win64 GetWindowLongPtrA(ptr long)
+@ stdcall -arch=win64 GetWindowLongPtrW(ptr long)
 @ stdcall GetWindowLongW(long long)
 @ stdcall GetWindowModuleFileName(long ptr long) GetWindowModuleFileNameA
 @ stdcall GetWindowModuleFileNameA(long ptr long)
@@ -661,8 +661,8 @@
 @ stdcall SetCaretBlinkTime(long)
 @ stdcall SetCaretPos(long long)
 @ stdcall SetClassLongA(long long long)
-@ stdcall -arch=x86_64,arm64,riscv64 SetClassLongPtrA(ptr long ptr)
-@ stdcall -arch=x86_64,arm64,riscv64 SetClassLongPtrW(ptr long ptr)
+@ stdcall -arch=win64 SetClassLongPtrA(ptr long ptr)
+@ stdcall -arch=win64 SetClassLongPtrW(ptr long ptr)
 @ stdcall SetClassLongW(long long long)
 @ stdcall SetClassWord(long long long) ; Direct call NtUserSetClassWord
 @ stdcall SetClipboardData(long long)
@@ -732,8 +732,8 @@
 @ stdcall SetWindowContextHelpId(long long)
 @ stdcall -version=0x601+ SetWindowDisplayAffinity(long long)
 @ stdcall SetWindowLongA(long long long)
-@ stdcall -arch=x86_64,arm64,riscv64 SetWindowLongPtrA(ptr long ptr)
-@ stdcall -arch=x86_64,arm64,riscv64 SetWindowLongPtrW(ptr long ptr)
+@ stdcall -arch=win64 SetWindowLongPtrA(ptr long ptr)
+@ stdcall -arch=win64 SetWindowLongPtrW(ptr long ptr)
 @ stdcall SetWindowLongW(long long long)
 @ stdcall SetWindowPlacement(long ptr) NtUserSetWindowPlacement
 @ stdcall SetWindowPos(long long long long long long long) NtUserSetWindowPos

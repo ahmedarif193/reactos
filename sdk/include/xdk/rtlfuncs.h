@@ -567,7 +567,7 @@ RtlEqualUnicodeString(
   _In_ CONST UNICODE_STRING *String2,
   _In_ BOOLEAN CaseInSensitive);
 
-#if !defined(_AMD64_) && !defined(_IA64_)
+#if !defined(_WIN64)
 NTSYSAPI
 LARGE_INTEGER
 NTAPI
@@ -3082,7 +3082,7 @@ RtlInitEmptyUnicodeString(
 }
 $endif (_WDMDDK_)
 
-#if defined(_AMD64_) || defined(_IA64_)
+#if defined(_WIN64)
 
 $if (_WDMDDK_)
 
@@ -3147,7 +3147,7 @@ RtlLargeIntegerDivide(
 
 $endif (_NTDDK_)
 
-#endif /* defined(_AMD64_) || defined(_IA64_) */
+#endif /* _WIN64 */
 
 $if (_WDMDDK_)
 

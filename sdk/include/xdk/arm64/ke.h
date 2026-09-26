@@ -176,6 +176,8 @@ KeGetCurrentProcessorNumber(VOID)
 }
 #endif
 
+/* Kernel-private, as on Windows ARM64: drivers use KeAcquireSpinLock. */
+#if defined(_NTOSKRNL_) || defined(_NTSYSTEM_)
 _Requires_lock_not_held_(*SpinLock)
 _Acquires_lock_(*SpinLock)
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -196,6 +198,7 @@ FASTCALL
 KfReleaseSpinLock(
   _Inout_ PKSPIN_LOCK SpinLock,
   _In_ _IRQL_restores_ KIRQL NewIrql);
+#endif
 
 _Requires_lock_not_held_(*SpinLock)
 _Acquires_lock_(*SpinLock)

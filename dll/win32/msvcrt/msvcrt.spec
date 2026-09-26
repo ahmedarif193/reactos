@@ -1,6 +1,6 @@
 # msvcrt.dll - MS VC++ Run Time Library
 
-@ cdecl -version=0x502 -arch=x86_64,arm64 -norelay $I10_OUTPUT(double long long ptr) I10_OUTPUT
+@ cdecl -version=0x502 -arch=win64 -norelay $I10_OUTPUT(double long long ptr) I10_OUTPUT
 @ cdecl -arch=arm ??0__non_rtti_object@@QAA@ABV0@@Z(ptr ptr) __non_rtti_object_copy_ctor
 @ thiscall -arch=i386 ??0__non_rtti_object@@QAE@ABV0@@Z(ptr ptr) __non_rtti_object_copy_ctor
 @ cdecl -arch=win64 ??0__non_rtti_object@@QEAA@AEBV0@@Z(ptr ptr) __non_rtti_object_copy_ctor
@@ -185,7 +185,7 @@
 @ cdecl -arch=i386 __CxxExceptionFilter(ptr ptr long ptr)
 @ cdecl -norelay __CxxFrameHandler(ptr ptr ptr ptr)
 @ cdecl -arch=i386 -norelay __CxxFrameHandler2(ptr ptr ptr ptr) __CxxFrameHandler
-@ cdecl -version=0x600+ -arch=x86_64,arm64 -norelay __CxxFrameHandler2(ptr ptr ptr ptr) __CxxFrameHandler
+@ cdecl -version=0x600+ -arch=win64 -norelay __CxxFrameHandler2(ptr ptr ptr ptr) __CxxFrameHandler
 @ cdecl -arch=arm -norelay __CxxFrameHandler3(ptr ptr ptr ptr)
 @ cdecl -version=0x600+ -norelay __CxxFrameHandler3(ptr ptr ptr ptr) __CxxFrameHandler
 @ stdcall -arch=i386 __CxxLongjmpUnwind(ptr)
@@ -201,8 +201,8 @@
 @ cdecl ___lc_collate_cp_func()
 @ cdecl ___lc_handle_func()
 @ cdecl ___mb_cur_max_func()
-@ cdecl -arch=i386,x86_64,arm64 ___setlc_active_func()
-@ cdecl -arch=i386,x86_64,arm64 ___unguarded_readlc_active_add_func()
+@ cdecl -arch=i386,win64 ___setlc_active_func()
+@ cdecl -arch=i386,win64 ___unguarded_readlc_active_add_func()
 @ extern __argc MSVCRT___argc
 @ extern __argv MSVCRT___argv
 @ extern __badioinfo MSVCRT___badioinfo
@@ -218,14 +218,14 @@
 @ cdecl -version=0x600+ __dstbias() __p__dstbias
 @ cdecl __fpecode()
 @ cdecl __getmainargs(ptr ptr ptr long ptr)
-@ extern -arch=i386,x86_64,arm64,riscv64 __initenv MSVCRT___initenv
+@ extern -arch=i386,win64 __initenv MSVCRT___initenv
 @ cdecl __iob_func()
 @ cdecl __isascii(long)
 @ cdecl __iscsym(long)
 @ cdecl __iscsymf(long)
 @ stdcall -arch=arm __jump_unwind(ptr ptr) ntdll.__jump_unwind
-@ extern -arch=i386,x86_64,arm64 __lc_codepage MSVCRT___lc_codepage
-@ extern -arch=i386,x86_64,arm64 __lc_collate_cp MSVCRT___lc_collate_cp
+@ extern -arch=i386,win64 __lc_codepage MSVCRT___lc_codepage
+@ extern -arch=i386,win64 __lc_collate_cp MSVCRT___lc_collate_cp
 @ extern __lc_handle MSVCRT___lc_handle
 @ cdecl __lconv_init()
 @ cdecl -version=0x600+ -arch=i386 -norelay __libm_sse2_acos()
@@ -440,7 +440,7 @@
 @ cdecl _fgetchar()
 @ cdecl _fgetwchar()
 @ cdecl _filbuf(ptr)
-@ extern -arch=i386,x86_64,arm64 _fileinfo
+@ extern -arch=i386,win64 _fileinfo
 @ cdecl _filelength(long)
 @ cdecl -ret64 _filelengthi64(long)
 @ cdecl _fileno(ptr)
@@ -635,7 +635,7 @@
 @ cdecl _ismbstrail(ptr ptr)
 @ cdecl -version=0x600+ _ismbstrail_l(ptr ptr ptr)
 @ cdecl _isnan(double)
-@ cdecl -arch=x86_64,arm64 _isnanf(float)
+@ cdecl -arch=win64 _isnanf(float)
 @ cdecl -version=0x600+ _isprint_l(long ptr)
 @ cdecl -version=0x600+ _isspace_l(long ptr)
 @ cdecl -version=0x600+ _isupper_l(long ptr)
@@ -844,7 +844,7 @@
 # stub -version=0x600+ -arch=win32 _msize_debug(ptr long)
 # stub -version=0x600+ -arch=win64 _msize_dbg(ptr long)
 @ cdecl _nextafter(double double) nextafter
-@ cdecl -arch=x86_64,arm64 _nextafterf(float float) nextafterf
+@ cdecl -arch=win64 _nextafterf(float float) nextafterf
 @ extern _onexit # Declaring it as extern let us use the symbol from msvcrtex while having the __imp_ symbol defined in the import lib
 @ varargs _open(str long)
 @ cdecl _open_osfhandle(long long)
@@ -884,7 +884,7 @@
 @ cdecl -arch=i386 _safe_fprem()
 @ cdecl -arch=i386 _safe_fprem1()
 @ cdecl _scalb(double long)
-@ cdecl -arch=x86_64,arm64 _scalbf(float long)
+@ cdecl -arch=win64 _scalbf(float long)
 @ varargs -version=0x600+ _scanf_l(str ptr)
 @ varargs -version=0x600+ _scanf_s_l(str ptr)
 @ varargs _scprintf(str)
@@ -1416,7 +1416,7 @@
 @ varargs scanf(str)
 @ varargs -version=0x600+ scanf_s(str)
 @ cdecl setbuf(ptr ptr)
-@ cdecl -arch=arm,x86_64,arm64 -norelay setjmp(ptr ptr) _setjmp # FIXME: should be private, but is imported by ARM builds somehow
+@ cdecl -arch=arm,win64 -norelay setjmp(ptr ptr) _setjmp # FIXME: should be private, but is imported by ARM builds somehow
 @ cdecl setlocale(long str)
 @ cdecl setvbuf(ptr str long long)
 @ cdecl signal(long long)
