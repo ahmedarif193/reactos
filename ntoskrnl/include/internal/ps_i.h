@@ -368,7 +368,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     IQS_SAME
     (
         UNICODE_STRING,
-        ULONG_PTR,
+        ULONG,
         ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE
     ),
 

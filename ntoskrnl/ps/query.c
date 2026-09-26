@@ -18,6 +18,112 @@
 #define NDEBUG
 #include <debug.h>
 
+static const UCHAR PspThreadSetUnprobedClasses[] =
+{
+    ThreadEnableAlignmentFaultFixup,
+    ThreadCounterProfiling,
+};
+
+static const UCHAR PspThreadQueryPointerAlignedClasses[] =
+{
+    ThreadNameInformation,
+};
+
+static const UCHAR PspThreadSetPointerAlignedClasses[] =
+{
+    ThreadAffinityMask,
+    ThreadGroupInformation,
+    ThreadCpuAccountingInformation,
+    ThreadNameInformation,
+    ThreadManageWritesToExecutableMemory,
+};
+
+static const UCHAR PspProcessQueryUnprobedClasses[] =
+{
+    ProcessPriorityClass,
+    ProcessGroupInformation,
+    ProcessProtectionInformation,
+    ProcessInPrivate,
+    ProcessHighGraphicsPriorityInformation,
+};
+
+static const UCHAR PspProcessQueryPointerAlignedClasses[] =
+{
+    ProcessCommitReleaseInformation,
+};
+
+static const UCHAR PspProcessSetUnprobedClasses[] =
+{
+    ProcessEnableAlignmentFaultFixup,
+    ProcessPriorityClass,
+    ProcessForegroundInformation,
+    ProcessInPrivate,
+    ProcessHighGraphicsPriorityInformation,
+};
+
+static const UCHAR PspProcessSetPointerAlignedClasses[] =
+{
+    ProcessExceptionPort,
+    ProcessAffinityMask,
+    ProcessTlsInformation,
+    ProcessInstrumentationCallback,
+    ProcessThreadStackAllocation,
+    ProcessConsoleHostProcess,
+    ProcessDynamicFunctionTableInformation,
+    ProcessRevokeFileHandles,
+    ProcessMemoryExhaustion,
+    ProcessCommitReleaseInformation,
+    ProcessManageWritesToExecutableMemory,
+};
+
+static
+BOOLEAN
+PspIsInfoClassListed(
+    _In_ ULONG InformationClass,
+    _In_reads_(Count) const UCHAR *Classes,
+    _In_ ULONG Count)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (Classes[Index] == InformationClass)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+NTSTATUS
+PspCheckInfoBufferAlignment(
+    _In_ ULONG InformationClass,
+    _In_opt_ PVOID Buffer,
+    _In_ ULONG BufferLength,
+    _In_reads_(UnprobedCount) const UCHAR *UnprobedClasses,
+    _In_ ULONG UnprobedCount,
+    _In_reads_(PointerAlignedCount) const UCHAR *PointerAlignedClasses,
+    _In_ ULONG PointerAlignedCount,
+    _In_ ULONG MinimumProbeLength,
+    _In_ KPROCESSOR_MODE PreviousMode)
+{
+    ULONG Alignment = sizeof(ULONG);
+
+    if (PreviousMode == KernelMode || BufferLength == 0 || BufferLength < MinimumProbeLength)
+        return STATUS_SUCCESS;
+
+    if (PspIsInfoClassListed(InformationClass, UnprobedClasses, UnprobedCount))
+        return STATUS_SUCCESS;
+
+    if (PspIsInfoClassListed(InformationClass, PointerAlignedClasses, PointerAlignedCount))
+        Alignment = sizeof(ULONG_PTR);
+
+    if (((ULONG_PTR)Buffer & (Alignment - 1)) != 0)
+        return STATUS_DATATYPE_MISALIGNMENT;
+
+    return STATUS_SUCCESS;
+}
+
 #ifdef _WIN64
 static NTSTATUS
 PspCopyThreadWow64Context(IN PETHREAD Thread,
@@ -581,6 +687,18 @@ NtQueryInformationProcess(
     /* This variable-size class still requires room for one handle value. */
     if (ProcessInformationClass == ProcessHandleTable && ProcessInformationLength < sizeof(ULONG))
         return STATUS_INFO_LENGTH_MISMATCH;
+
+    Status = PspCheckInfoBufferAlignment(ProcessInformationClass,
+                                         ProcessInformation,
+                                         ProcessInformationLength,
+                                         PspProcessQueryUnprobedClasses,
+                                         RTL_NUMBER_OF(PspProcessQueryUnprobedClasses),
+                                         PspProcessQueryPointerAlignedClasses,
+                                         RTL_NUMBER_OF(PspProcessQueryPointerAlignedClasses),
+                                         sizeof(ULONG),
+                                         PreviousMode);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     /* Validate the information class */
     Status = DefaultQueryInfoBufferCheck(ProcessInformationClass,
@@ -2118,6 +2236,18 @@ NtSetInformationProcess(
 #endif
     PAGED_CODE();
 
+    Status = PspCheckInfoBufferAlignment(ProcessInformationClass,
+                                         ProcessInformation,
+                                         ProcessInformationLength,
+                                         PspProcessSetUnprobedClasses,
+                                         RTL_NUMBER_OF(PspProcessSetUnprobedClasses),
+                                         PspProcessSetPointerAlignedClasses,
+                                         RTL_NUMBER_OF(PspProcessSetPointerAlignedClasses),
+                                         1,
+                                         PreviousMode);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     /* Validate the information class */
     Status = DefaultSetInfoBufferCheck(ProcessInformationClass,
                                        PsProcessInfoClass,
@@ -3286,6 +3416,18 @@ NtSetInformationThread(
 
     PAGED_CODE();
 
+    Status = PspCheckInfoBufferAlignment(ThreadInformationClass,
+                                         ThreadInformation,
+                                         ThreadInformationLength,
+                                         PspThreadSetUnprobedClasses,
+                                         RTL_NUMBER_OF(PspThreadSetUnprobedClasses),
+                                         PspThreadSetPointerAlignedClasses,
+                                         RTL_NUMBER_OF(PspThreadSetPointerAlignedClasses),
+                                         1,
+                                         PreviousMode);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     /* Validate the information class */
     Status = DefaultSetInfoBufferCheck(ThreadInformationClass,
                                        PsThreadInfoClass,
@@ -4387,6 +4529,18 @@ NtQueryInformationThread(
     ULONG Length = 0;
 
     PAGED_CODE();
+
+    Status = PspCheckInfoBufferAlignment(ThreadInformationClass,
+                                         ThreadInformation,
+                                         ThreadInformationLength,
+                                         NULL,
+                                         0,
+                                         PspThreadQueryPointerAlignedClasses,
+                                         RTL_NUMBER_OF(PspThreadQueryPointerAlignedClasses),
+                                         sizeof(ULONG),
+                                         PreviousMode);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     /* Validate the information class */
     Status = DefaultQueryInfoBufferCheck(ThreadInformationClass,
