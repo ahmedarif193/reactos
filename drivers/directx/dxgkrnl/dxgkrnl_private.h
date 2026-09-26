@@ -2178,6 +2178,13 @@ DxgkCbSynchronizeExecution(
     _In_  ULONG                   MessageNumber,
     _Out_ PBOOLEAN                ReturnValue);
 
+NTSTATUS
+DxgkSynchronizeScanoutExecution(
+    _In_  PDXGKRNL_ADAPTER        Adapter,
+    _In_  PKSYNCHRONIZE_ROUTINE   SynchronizeRoutine,
+    _In_  PVOID                   Context,
+    _Out_ PBOOLEAN                ReturnValue);
+
 /* WDDM 1.0 memory-mapping callback (individual parameters, not struct). */
 NTSTATUS
 APIENTRY
