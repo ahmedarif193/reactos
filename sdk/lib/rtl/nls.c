@@ -864,6 +864,11 @@ RtlUpcaseUnicodeToOemN(OUT PCHAR OemString,
         {
             UpcaseChar = RtlpUpcaseUnicodeChar(*UnicodeString);
             *OemString = NlsUnicodeToOemTable[UpcaseChar];
+            if (NlsOemToUnicodeTable[(UCHAR)*OemString] != UpcaseChar)
+            {
+                UpcaseChar = RtlpUpcaseUnicodeChar(NlsOemToUnicodeTable[(UCHAR)*OemString]);
+                *OemString = NlsUnicodeToOemTable[UpcaseChar];
+            }
             OemString++;
             UnicodeString++;
         }
