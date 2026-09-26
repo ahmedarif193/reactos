@@ -58,7 +58,7 @@ get_dc_data_ex(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR *descr)
     struct wgl_dc_data* data;
     struct wgl_dc_data* existing;
     PVOID previous_initializing;
-    BOOL initialized = FALSE;
+    volatile BOOL initialized = FALSE;
     DWORD objType = GetObjectType(hdc);
     ULONG flags = 0;
     union
