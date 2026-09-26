@@ -180,9 +180,9 @@ ProbeAndCaptureUnicodeString(OUT PUNICODE_STRING Dest,
                     ProbeForRead(Dest->Buffer, Dest->Length, sizeof(WCHAR));
 
                     /* Allocate space for the buffer */
-                    Buffer = (PWCHAR)ExAllocatePoolWithTag(PagedPool,
-                                                   Dest->Length + sizeof(WCHAR),
-                                                   'RTSU');
+                    Buffer = (PWCHAR)ExAllocatePoolZero(PagedPool,
+                                                        ALIGN_UP_BY(Dest->Length, sizeof(WCHAR)) + sizeof(WCHAR),
+                                                        'RTSU');
                     if (Buffer == NULL)
                     {
                         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -191,14 +191,9 @@ ProbeAndCaptureUnicodeString(OUT PUNICODE_STRING Dest,
 
                     /* Copy it */
                     RtlCopyMemory(Buffer, Dest->Buffer, Dest->Length);
-                    Buffer[Dest->Length / sizeof(WCHAR)] = UNICODE_NULL;
 
                     /* Set it as the buffer */
                     Dest->Buffer = Buffer;
-                    if (Dest->Length % sizeof(WCHAR))
-                    {
-                        Dest->Length--;
-                    }
                     if (Dest->Length >= UNICODE_STRING_MAX_BYTES)
                     {
                         Dest->MaximumLength = Dest->Length;
