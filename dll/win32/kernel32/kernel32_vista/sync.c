@@ -140,12 +140,11 @@ BOOL WINAPI InitializeCriticalSectionEx(OUT LPCRITICAL_SECTION lpCriticalSection
 {
     NTSTATUS Status;
 
-    /* FIXME: Flags ignored */
-
     /* Initialize the critical section */
-    Status = RtlInitializeCriticalSectionAndSpinCount(
+    Status = RtlInitializeCriticalSectionEx(
         (PRTL_CRITICAL_SECTION)lpCriticalSection,
-        dwSpinCount);
+        dwSpinCount,
+        flags);
     if (!NT_SUCCESS(Status))
     {
         /* Set failure code */
