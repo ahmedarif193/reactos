@@ -1040,7 +1040,7 @@ LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL)
             _SEH2_TRY
             {
                 /* Check if it has TLS */
-                if (LdrEntry->TlsIndex && Context)
+                if (LdrEntry->TlsIndex)
                 {
                     /* Call TLS */
                     LdrpCallTlsInitializers(LdrEntry, DLL_PROCESS_ATTACH);
