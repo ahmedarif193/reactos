@@ -1,8 +1,8 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            hal/arch/common/include/halirq.h
- * PURPOSE:         IRQ/Vector translation stubs for non-x86 architectures
+ * FILE:            hal/halarm64/include/halirq.h
+ * PURPOSE:         IRQ/Vector translation stubs for the GIC
  *
  * On ARM64, interrupt translation is handled differently than on x86.
  * The GIC (Generic Interrupt Controller) uses INTIDs directly as vectors,

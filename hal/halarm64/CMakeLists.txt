@@ -24,6 +24,7 @@ add_definitions(
     -D_NTHAL_)
 
 include_directories(
+    ${HAL_ARM64_SOURCE_DIR}/include
     ${HAL_COMMON_DIR}/include
     ${REACTOS_SOURCE_DIR}/ntoskrnl/include
     ${REACTOS_SOURCE_DIR}/ntoskrnl/include/internal
@@ -44,9 +45,10 @@ list(APPEND GIC_SOURCES
 #####################################
 
 list(APPEND SOURCES
+    ${HAL_COMMON_DIR}/acpi/halacpi.c
+    ${HAL_COMMON_DIR}/acpi/tables.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/halpnpdd.c
-    ${HAL_ARM64_SOURCE_DIR}/acpi/rsdt.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/hpet.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/waet.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/arm64.c
