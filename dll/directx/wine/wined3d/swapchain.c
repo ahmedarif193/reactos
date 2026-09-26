@@ -560,6 +560,8 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
     {
         BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
 
+        PatBlt(swapchain->dc, draw_rect.left, draw_rect.top,
+                draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top, BLACKNESS);
         if (!GdiAlphaBlend(swapchain->dc, draw_rect.left, draw_rect.top,
                 draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top,
                 src_dc, source_rect.left, source_rect.top,
@@ -1465,6 +1467,8 @@ static void swapchain_gdi_frontbuffer_updated(struct wined3d_swapchain *swapchai
             BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
             BOOL ret;
 
+            PatBlt(swapchain->dc, draw_rect.left, draw_rect.top,
+                    draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top, BLACKNESS);
             ret = GdiAlphaBlend(swapchain->dc, draw_rect.left, draw_rect.top,
                     draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top,
                     src_dc, source_rect.left, source_rect.top,
