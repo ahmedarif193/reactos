@@ -36,10 +36,7 @@ MiBalanceSetManager(
         }
 
         MmAvailablePages = (PFN_COUNT)MiPfnAvailablePages(&MiSystem.Pfn);
-        MmTotalCommittedPages = (SIZE_T)MI_ATOMIC_READ64(&MiSystem.CommittedPages);
-
-        if (MmTotalCommittedPages > MmPeakCommitment)
-            MmPeakCommitment = MmTotalCommittedPages;
+        MmQuerySystemCommitCharge(NULL);
     }
 }
 

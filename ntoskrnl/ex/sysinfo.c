@@ -913,6 +913,7 @@ QSI_DEF(SystemPerformanceInformation)
     PEPROCESS TheIdleProcess;
 #endif
     PKPRCB Prcb;
+    SIZE_T PeakCommitment;
     PSYSTEM_PERFORMANCE_INFORMATION Spi
         = (PSYSTEM_PERFORMANCE_INFORMATION) Buffer;
 
@@ -969,7 +970,7 @@ QSI_DEF(SystemPerformanceInformation)
 
     Spi->AvailablePages = (ULONG)MmAvailablePages;
 
-    Spi->CommittedPages = MmTotalCommittedPages;
+    Spi->CommittedPages = MmQuerySystemCommitCharge(&PeakCommitment);
     /*
      *  Add up the full system total + pagefile.
      *  All this make Taskmgr happy but not sure it is the right numbers.
@@ -977,7 +978,7 @@ QSI_DEF(SystemPerformanceInformation)
      */
     Spi->CommitLimit = MmNumberOfPhysicalPages + MiFreeSwapPages + MiUsedSwapPages;
 
-    Spi->PeakCommitment = MmPeakCommitment;
+    Spi->PeakCommitment = PeakCommitment;
     Spi->PageFaultCount = 0; /* FIXME */
     Spi->CopyOnWriteCount = 0; /* FIXME */
     Spi->TransitionCount = 0; /* FIXME */

@@ -1902,6 +1902,11 @@ NTAPI
 MmQueryProcessCommitCharge(
     _In_ PEPROCESS Process);
 
+SIZE_T
+NTAPI
+MmQuerySystemCommitCharge(
+    _Out_opt_ PSIZE_T PeakCommitment);
+
 
 /* session.c *****************************************************************/
 

@@ -22,6 +22,34 @@ SIZE_T MmTotalCommittedPages;
 SIZE_T MmSharedCommit;
 SIZE_T MmPeakCommitment;
 
+SIZE_T
+NTAPI
+MmQuerySystemCommitCharge(
+    _Out_opt_ PSIZE_T PeakCommitment)
+{
+    SIZE_T Committed;
+    SIZE_T Peak;
+
+    Committed = (SIZE_T)MI_ATOMIC_READ64(&MiSystem.CommittedPages);
+    MmTotalCommittedPages = Committed;
+
+    Peak = MmPeakCommitment;
+    while (Committed > Peak)
+    {
+        if (InterlockedCompareExchangeSizeT(&MmPeakCommitment, Committed, Peak) == Peak)
+        {
+            Peak = Committed;
+            break;
+        }
+        Peak = MmPeakCommitment;
+    }
+
+    if (PeakCommitment != NULL)
+        *PeakCommitment = Peak;
+
+    return Committed;
+}
+
 NTSTATUS
 MiReferenceTargetProcess(
     _In_ HANDLE ProcessHandle,
