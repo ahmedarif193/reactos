@@ -2015,7 +2015,7 @@ SSI_DEF(SystemTimeAdjustmentInformation)
     else
     {
         /* Check if a valid time adjustment value is given */
-        if (TimeInfo->TimeAdjustment == 0) return STATUS_INVALID_PARAMETER_2;
+        if (TimeInfo->TimeAdjustment == 0) return STATUS_INTEGER_DIVIDE_BY_ZERO;
 
         /* Enable time adjustment and set the adjustment value */
         KiTimeAdjustmentEnabled = TRUE;
