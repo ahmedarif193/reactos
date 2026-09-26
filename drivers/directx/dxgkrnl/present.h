@@ -111,6 +111,15 @@ typedef struct _DXGKRNL_SHARED_SURFACE_SNAPSHOT
  * One instance per queued present.  Stored in the circular FIFO inside
  * DXGKRNL_PRESENT_QUEUE.  Lifetime: enqueue → dequeue+execute.
  * ====================================================================== */
+/* One overlay plane of a queued compositor flip. */
+typedef struct _DXGKRNL_PRESENT_OVERLAY
+{
+    PDXGKVMM_ALLOCATION             Allocation;
+    UINT                            LayerIndex;
+    RECT                            SrcRect;
+    RECT                            DstRect;
+} DXGKRNL_PRESENT_OVERLAY;
+
 typedef struct _DXGKRNL_PRESENT_ENTRY
 {
     /* Monotonically increasing present identifier (per VidPn source). */
@@ -206,6 +215,10 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
     LIST_ENTRY                      MmioFlipEntry;
     volatile LONG                   MmioFlipReferences;
 
+    /* Overlay planes a compositor flip shows above its primary. */
+    UINT                            OverlayCount;
+    DXGKRNL_PRESENT_OVERLAY         Overlays[RXGK_PRESENT_MAX_OVERLAYS];
+
 } DXGKRNL_PRESENT_ENTRY, *PDXGKRNL_PRESENT_ENTRY;
 
 NTSTATUS DxgkPresentSetQueuedLimit(_In_ struct _DXGKRNL_DEVICE *Device, _In_ ULONG RequestedLimit);
@@ -271,6 +284,9 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
     KEVENT                          MmioVSyncEvent;
     PDXGKVMM_ALLOCATION             MmioCurrentAllocation;
     PDXGKVMM_ALLOCATION             MmioPendingAllocation;
+    /* Pinned overlay allocations of the scanned and the armed flip. */
+    PDXGKVMM_ALLOCATION             MmioCurrentOverlays[RXGK_PRESENT_MAX_OVERLAYS];
+    PDXGKVMM_ALLOCATION             MmioPendingOverlays[RXGK_PRESENT_MAX_OVERLAYS];
     NTSTATUS                        MmioFailureStatus;
     LONG64                          MmioLastFlipSequence;
     /* Ordered MMIO flips wait for scanout on this drainer, never on the

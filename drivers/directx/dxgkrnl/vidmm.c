@@ -12598,9 +12598,10 @@ DxgkpVidMmFillAperturePagingOperation(
     return STATUS_SUCCESS;
 }
 
-NTSTATUS
-DxgkVidMmEnsureAllocationApertureMapped(
-    _In_ PDXGKVMM_ALLOCATION Allocation)
+static NTSTATUS
+DxgkpVidMmEnsureAllocationApertureMapped(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN ReferencedBacking)
 {
     ULONG OwnerToken;
     DXGKRNL_PAGING_OP Op;
@@ -12608,7 +12609,9 @@ DxgkVidMmEnsureAllocationApertureMapped(
 
     if (Allocation == NULL)
         return STATUS_INVALID_PARAMETER;
-    Status = DxgkpVidMmBeginResidencyTransaction(Allocation, &OwnerToken);
+    Status = ReferencedBacking ?
+        DxgkpVidMmBeginReferencedResidencyTransaction(Allocation, &OwnerToken) :
+        DxgkpVidMmBeginResidencyTransaction(Allocation, &OwnerToken);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -12628,6 +12631,22 @@ DxgkVidMmEnsureAllocationApertureMapped(
     }
     DxgkpVidMmEndResidencyTransaction(Allocation, &OwnerToken);
     return Status;
+}
+
+NTSTATUS
+DxgkVidMmEnsureAllocationApertureMapped(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    return DxgkpVidMmEnsureAllocationApertureMapped(Allocation, FALSE);
+}
+
+/* The caller holds a reference to this physical backing, so its creator
+ * closing it does not end the caller's use: an opened alias still owns it. */
+NTSTATUS
+DxgkVidMmEnsureReferencedAllocationApertureMapped(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    return DxgkpVidMmEnsureAllocationApertureMapped(Allocation, TRUE);
 }
 
 /*

@@ -1057,6 +1057,10 @@ DxgkVidMmEnsureAllocationApertureMapped(
     _In_ PDXGKVMM_ALLOCATION Allocation);
 
 NTSTATUS
+DxgkVidMmEnsureReferencedAllocationApertureMapped(
+    _In_ PDXGKVMM_ALLOCATION Allocation);
+
+NTSTATUS
 DxgkVidMmCreateVirtualDmaBufferBacking(
     _In_ PDXGKRNL_DEVICE Device,
     _In_ ULONG Size,

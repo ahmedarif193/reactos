@@ -2938,6 +2938,12 @@ DxgkPresent(
     _In_ ULONG InputLength);
 
 NTSTATUS
+NTAPI
+DxgkPresentWithOverlays(
+    _Inout_ RXGK_PRESENT_OVERLAYS *Request,
+    _In_ ULONG InputLength);
+
+NTSTATUS
 __cdecl
 DxgkPresentCallback(
     _Inout_ D3DKMT_PRESENT *pPresent);

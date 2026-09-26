@@ -47,6 +47,30 @@
 #endif
 
 C_ASSERT(RXGK_D3DKMT_PRESENT_WIRE_SIZE <= sizeof(D3DKMT_PRESENT));
+
+/*
+ * A compositor flip with overlay planes above its primary. The flip's
+ * D3DKMT_PRESENT, RXGK_D3DKMT_PRESENT_WIRE_SIZE bytes, follows this header.
+ * Each overlay is a linear surface the miniport scans out unscaled.
+ */
+#define RXGK_PRESENT_MAX_OVERLAYS 2
+
+typedef struct _RXGK_PRESENT_OVERLAY
+{
+    D3DKMT_HANDLE hAllocation;
+    UINT LayerIndex;            /* 1 is directly above the primary */
+    RECT SrcRect;
+    RECT DstRect;
+} RXGK_PRESENT_OVERLAY;
+
+typedef struct _RXGK_PRESENT_OVERLAYS
+{
+    UINT OverlayCount;
+    UINT Reserved;
+    RXGK_PRESENT_OVERLAY Overlays[RXGK_PRESENT_MAX_OVERLAYS];
+} RXGK_PRESENT_OVERLAYS;
+
+C_ASSERT(sizeof(RXGK_PRESENT_OVERLAYS) % 8 == 0);
 #if defined(_WIN64)
 C_ASSERT(FIELD_OFFSET(D3DKMT_PRESENT, PresentHistoryToken) == 360);
 #else
