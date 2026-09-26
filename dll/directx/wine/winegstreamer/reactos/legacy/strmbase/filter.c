@@ -197,7 +197,7 @@ HRESULT WINAPI BaseFilter_Init(BaseFilter * This, const IBaseFilterVtbl *Vtbl, c
 {
     This->IBaseFilter_iface.lpVtbl = Vtbl;
     This->refCount = 1;
-    InitializeCriticalSection(&This->csFilter);
+    InitializeCriticalSectionEx(&This->csFilter, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
     This->state = State_Stopped;
     This->rtStreamStart = 0;
     This->pClock = NULL;

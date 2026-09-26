@@ -2143,7 +2143,7 @@ static NTSTATUS tp_threadpool_alloc( struct threadpool **out )
     pool->shutdown              = FALSE;
 
 #ifdef __REACTOS__
-    RtlInitializeCriticalSection( &pool->cs );
+    RtlInitializeCriticalSectionEx( &pool->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
 #else
     RtlInitializeCriticalSectionEx( &pool->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
 
@@ -2314,7 +2314,7 @@ static NTSTATUS tp_group_alloc( struct threadpool_group **out )
     group->shutdown     = FALSE;
 
 #ifdef __REACTOS__
-    RtlInitializeCriticalSection( &group->cs );
+    RtlInitializeCriticalSectionEx( &group->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
 #else
     RtlInitializeCriticalSectionEx( &group->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
 

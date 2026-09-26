@@ -212,7 +212,7 @@ static HRESULT PullPin_Init(const IPinVtbl *PullPin_Vtbl, const PIN_INFO * pPinI
     pPinImpl->fnCustomRequest = pCustomRequest;
     pPinImpl->stop_playback = TRUE;
 
-    InitializeCriticalSection(&pPinImpl->thread_lock);
+    InitializeCriticalSectionEx(&pPinImpl->thread_lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
     pPinImpl->thread_lock.DebugInfo->Spare[0] = (DWORD_PTR)( __FILE__ ": PullPin.thread_lock");
 
     return S_OK;
