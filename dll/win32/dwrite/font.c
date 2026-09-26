@@ -168,11 +168,13 @@ void dwrite_fontface_get_glyph_bbox(IDWriteFontFace *iface, struct dwrite_glyphb
     params.glyph = bitmap->glyph;
     params.gridfit = bitmap->gridfit;
     params.emsize = bitmap->emsize;
+    params.offset_x = bitmap->offset_x;
+    params.offset_y = bitmap->offset_y;
     matrix_2x2_from_dwrite_matrix(&params.m, bitmap->m ? bitmap->m : &identity);
 
     EnterCriticalSection(&fontface->cs);
     /* For now bypass cache for transformed cases. */
-    if (bitmap->m && memcmp(&params.m, &identity_2x2, sizeof(params.m)))
+    if ((bitmap->m && memcmp(&params.m, &identity_2x2, sizeof(params.m))) || bitmap->offset_x || bitmap->offset_y)
     {
         params.bbox = &bitmap->bbox;
         UNIX_CALL(get_glyph_bbox, &params);
@@ -215,6 +217,8 @@ static HRESULT dwrite_fontface_get_glyph_bitmap(struct dwrite_fontface *fontface
     params.mode = rendering_mode;
     params.gridfit = bitmap->gridfit;
     params.emsize = bitmap->emsize;
+    params.offset_x = bitmap->offset_x;
+    params.offset_y = bitmap->offset_y;
     params.bbox = bitmap->bbox;
     params.pitch = bitmap->pitch;
     params.bitmap = bitmap->buf;
@@ -223,7 +227,7 @@ static HRESULT dwrite_fontface_get_glyph_bitmap(struct dwrite_fontface *fontface
 
     EnterCriticalSection(&fontface->cs);
     /* For now bypass cache for transformed cases. */
-    if (bitmap->m && memcmp(&params.m, &identity_2x2, sizeof(params.m)))
+    if ((bitmap->m && memcmp(&params.m, &identity_2x2, sizeof(params.m))) || bitmap->offset_x || bitmap->offset_y)
     {
         UNIX_CALL(get_glyph_bitmap, &params);
     }
@@ -5874,6 +5878,20 @@ static ULONG WINAPI glyphrunanalysis_Release(IDWriteGlyphRunAnalysis *iface)
     return refcount;
 }
 
+static void glyphrunanalysis_get_glyph_origin(const struct dwrite_glyphrunanalysis *analysis, UINT32 i,
+        struct dwrite_glyphbitmap *bitmap, POINT *origin)
+{
+    float x = analysis->origins[i].x, y = analysis->origins[i].y;
+    BOOL snap_x = analysis->rendering_mode == DWRITE_RENDERING_MODE1_ALIASED ||
+            analysis->rendering_mode == DWRITE_RENDERING_MODE1_GDI_CLASSIC ||
+            analysis->rendering_mode == DWRITE_RENDERING_MODE1_GDI_NATURAL;
+
+    origin->x = (LONG)floorf(snap_x ? x + 0.5f : x);
+    origin->y = (LONG)floorf(analysis->gridfit ? y + 0.5f : y);
+    bitmap->offset_x = snap_x ? 0.0f : x - origin->x;
+    bitmap->offset_y = analysis->gridfit ? 0.0f : y - origin->y;
+}
+
 static void glyphrunanalysis_get_texturebounds(struct dwrite_glyphrunanalysis *analysis, RECT *bounds)
 {
     struct dwrite_glyphbitmap glyph_bitmap;
@@ -5897,8 +5915,10 @@ static void glyphrunanalysis_get_texturebounds(struct dwrite_glyphrunanalysis *a
     for (i = 0; i < analysis->run.glyphCount; i++) {
         RECT *bbox = &glyph_bitmap.bbox;
         UINT32 bitmap_size;
+        POINT origin;
 
         glyph_bitmap.glyph = analysis->run.glyphIndices[i];
+        glyphrunanalysis_get_glyph_origin(analysis, i, &glyph_bitmap, &origin);
         dwrite_fontface_get_glyph_bbox(analysis->run.fontFace, &glyph_bitmap);
 
         bitmap_size = get_glyph_bitmap_pitch(analysis->rendering_mode, bbox->right - bbox->left) *
@@ -5906,7 +5926,7 @@ static void glyphrunanalysis_get_texturebounds(struct dwrite_glyphrunanalysis *a
         if (bitmap_size > analysis->max_glyph_bitmap_size)
             analysis->max_glyph_bitmap_size = bitmap_size;
 
-        OffsetRect(bbox, analysis->origins[i].x, analysis->origins[i].y);
+        OffsetRect(bbox, origin.x, origin.y);
         UnionRect(&analysis->bounds, &analysis->bounds, bbox);
     }
 
@@ -5983,8 +6003,10 @@ static HRESULT glyphrunanalysis_render(struct dwrite_glyphrunanalysis *analysis)
         BYTE *src = glyph_bitmap.buf, *dst;
         int x, y, width, height;
         unsigned int is_1bpp;
+        POINT origin;
 
         glyph_bitmap.glyph = analysis->run.glyphIndices[i];
+        glyphrunanalysis_get_glyph_origin(analysis, i, &glyph_bitmap, &origin);
         dwrite_fontface_get_glyph_bbox(analysis->run.fontFace, &glyph_bitmap);
 
         if (IsRectEmpty(bbox))
@@ -6002,7 +6024,7 @@ static HRESULT glyphrunanalysis_render(struct dwrite_glyphrunanalysis *analysis)
             continue;
         }
 
-        OffsetRect(bbox, analysis->origins[i].x, analysis->origins[i].y);
+        OffsetRect(bbox, origin.x, origin.y);
 
         /* blit to analysis bitmap */
         dst = get_pixel_ptr(analysis->bitmap, analysis->texture_type, bbox, &analysis->bounds);

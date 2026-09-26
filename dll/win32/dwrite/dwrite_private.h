@@ -586,6 +586,8 @@ struct dwrite_glyphbitmap
     float emsize;
     UINT16 glyph;
     unsigned int gridfit;
+    float offset_x;
+    float offset_y;
     INT pitch;
     RECT bbox;
     BYTE *buf;
