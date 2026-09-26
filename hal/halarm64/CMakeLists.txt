@@ -6,7 +6,7 @@ spec2def(hal.dll ../hal.spec ADD_IMPORTLIB)
 
 function(reactos_hal_setup TARGET ENTRYPOINT)
     set_module_type(${TARGET} kerneldll ENTRYPOINT ${ENTRYPOINT})
-    target_link_libraries(${TARGET} libcntpr)
+    target_link_libraries(${TARGET} halcommon libcntpr)
     add_importlibs(${TARGET} ntoskrnl)
     add_dependencies(${TARGET} psdk asm)
     add_cd_file(TARGET ${TARGET} DESTINATION reactos/system32 NO_CAB FOR all)
@@ -32,22 +32,6 @@ include_directories(
     ${CMAKE_CURRENT_BINARY_DIR})
 
 #####################################
-# Generate the pcidata source files for ARM64
-#
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.h
-    COMMAND native-bin2c ${HAL_COMMON_DIR}/legacy/bus/pci_classes.ids ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.h BINSTR ClassTable "DATA_SEG\(\"INITDATA\"\)" ${HAL_COMMON_DIR}/include/hal.h
-    DEPENDS native-bin2c ${HAL_COMMON_DIR}/legacy/bus/pci_classes.ids
-    VERBATIM)
-
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.h
-    COMMAND native-bin2c ${HAL_COMMON_DIR}/legacy/bus/pci_vendors.ids ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.h BINSTR VendorTable "DATA_SEG\(\"INITDATA\"\)" ${HAL_COMMON_DIR}/include/hal.h
-    DEPENDS native-bin2c ${HAL_COMMON_DIR}/legacy/bus/pci_vendors.ids
-    VERBATIM)
-#####################################
-
-#####################################
 # GIC (Generic Interrupt Controller) source files
 #
 list(APPEND GIC_SOURCES
@@ -66,20 +50,18 @@ list(APPEND SOURCES
     ${HAL_ARM64_SOURCE_DIR}/acpi/hpet.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/waet.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/arm64.c
-    ${HAL_COMMON_DIR}/generic/sysinfo_stubs.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64.c
     ${HAL_ARM64_SOURCE_DIR}/secondary.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64_acpi_int.c
     ${HAL_ARM64_SOURCE_DIR}/halext.c
+    ${HAL_ARM64_SOURCE_DIR}/sysinfo.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2711_pci.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2711_vc.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2837_intc.c
     ${HAL_ARM64_SOURCE_DIR}/smp.c
     ${HAL_ARM64_SOURCE_DIR}/smp_trampoline.S
     ${HAL_ARM64_SOURCE_DIR}/kernstubs.c
-    ${GIC_SOURCES}
-    ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
-    ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c)
+    ${GIC_SOURCES})
 
 add_library(hal MODULE
     ${SOURCES}
@@ -98,8 +80,8 @@ add_library(halmacpi MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 reactos_hal_setup(halmacpi 0)
 
-# Ensure the PCI data headers are generated before compiling halacpi.c
+# halacpi.c names PCI devices from the shared tables
 set_source_files_properties(${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c PROPERTIES
-    OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/pci_classes.h;${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.h")
+    OBJECT_DEPENDS "${REACTOS_BINARY_DIR}/hal/arch/common/pci_classes.h;${REACTOS_BINARY_DIR}/hal/arch/common/pci_vendors.h")
 
 # DWARF sections are preserved directly in the binary for rossym_new to parse

@@ -1,0 +1,458 @@
+/*
+ * PROJECT:         ReactOS HAL
+ * LICENSE:         GPL - See COPYING in the top level directory
+ * FILE:            hal/halarm64/sysinfo.c
+ * PURPOSE:         ARM64 HAL services introduced after Windows 7: MSI
+ *                  routing, interrupt targeting and ARM64-only stubs
+ * PROGRAMMERS:     ReactOS Portable Systems Group
+ */
+
+/* INCLUDES *******************************************************************/
+
+#include <hal.h>
+#include <reactos/hal/msi.h>
+#include <reactos/hal/acpi_pci.h>
+#define NDEBUG
+#include <debug.h>
+
+#define HALP_ARM64_MSI_DEFAULT_IRQL 4
+
+NTSTATUS
+NTAPI
+HalpArm64QueryMsiRoute(
+    _In_ ULONG Vector,
+    _Out_ PULONGLONG Address,
+    _Out_ PULONG Data);
+
+static KSPIN_LOCK HalpArm64MsiRoutingLock;
+static volatile LONG HalpArm64MsiRoutingLockState;
+static RTL_BITMAP HalpArm64MsiRoutingBitmap;
+static PULONG HalpArm64MsiRoutingBuffer;
+static ULONG HalpArm64MsiRoutingBase;
+static ULONG HalpArm64MsiRoutingCount;
+
+static
+VOID
+HalpArm64EnsureMsiRoutingLock(VOID)
+{
+    LONG State;
+
+    State = HalpArm64MsiRoutingLockState;
+    if (State == 2)
+        return;
+
+    State = InterlockedCompareExchange(&HalpArm64MsiRoutingLockState, 1, 0);
+    if (State == 0)
+    {
+        KeInitializeSpinLock(&HalpArm64MsiRoutingLock);
+        InterlockedExchange(&HalpArm64MsiRoutingLockState, 2);
+        return;
+    }
+
+    while (HalpArm64MsiRoutingLockState != 2)
+        KeStallExecutionProcessor(1);
+}
+
+static
+NTSTATUS
+HalpArm64EnsureMsiRoutingAllocator(VOID)
+{
+    ULONG BaseVector;
+    ULONG VectorCount;
+    ULONG BitmapBytes;
+    PULONG NewBuffer;
+    PULONG OldBuffer = NULL;
+    KIRQL OldIrql;
+
+    if (!HalGetMsiVectorRange(&BaseVector, &VectorCount) ||
+        VectorCount == 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    HalpArm64EnsureMsiRoutingLock();
+
+    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
+    if (HalpArm64MsiRoutingBuffer != NULL &&
+        HalpArm64MsiRoutingBase == BaseVector &&
+        HalpArm64MsiRoutingCount == VectorCount)
+    {
+        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+        return STATUS_SUCCESS;
+    }
+    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+
+    BitmapBytes = ((VectorCount + 31) / 32) * sizeof(ULONG);
+    NewBuffer = ExAllocatePoolWithTag(NonPagedPool, BitmapBytes, TAG_HAL);
+    if (NewBuffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(NewBuffer, BitmapBytes);
+
+    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
+    if (HalpArm64MsiRoutingBuffer == NULL ||
+        HalpArm64MsiRoutingBase != BaseVector ||
+        HalpArm64MsiRoutingCount != VectorCount)
+    {
+        OldBuffer = HalpArm64MsiRoutingBuffer;
+        HalpArm64MsiRoutingBuffer = NewBuffer;
+        HalpArm64MsiRoutingBase = BaseVector;
+        HalpArm64MsiRoutingCount = VectorCount;
+        RtlInitializeBitMap(&HalpArm64MsiRoutingBitmap,
+                            HalpArm64MsiRoutingBuffer,
+                            HalpArm64MsiRoutingCount);
+        RtlClearAllBits(&HalpArm64MsiRoutingBitmap);
+        NewBuffer = NULL;
+    }
+    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+
+    if (OldBuffer != NULL)
+        ExFreePoolWithTag(OldBuffer, TAG_HAL);
+    if (NewBuffer != NULL)
+        ExFreePoolWithTag(NewBuffer, TAG_HAL);
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+HalpArm64AllocateMsiRoutingVector(
+    _In_ ULONG MessageCount,
+    _Out_ PULONG Vector)
+{
+    ULONG Offset;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    /*
+     * Keep the native ARM64 rule exact: Windows 11 ARM64 HalpAllocateMsiLines
+     * rejects Count == 0 and every non-power-of-two count before scanning its
+     * bitmap. PCI MSI multiple-message fields encode powers of two; MSI-X
+     * entries are allocated as individual messages.
+     */
+    if (Vector == NULL || MessageCount == 0 ||
+        (MessageCount & (MessageCount - 1)) != 0)
+    {
+        DPRINT1("HalpArm64AllocateMsiRoutingVector: native MSI line count must be a power of two, got %lu\n",
+                MessageCount);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = HalpArm64EnsureMsiRoutingAllocator();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
+    if (MessageCount > HalpArm64MsiRoutingCount)
+    {
+        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    for (Offset = 0;
+         Offset + MessageCount <= HalpArm64MsiRoutingCount;
+         Offset += MessageCount)
+    {
+        if (RtlAreBitsClear(&HalpArm64MsiRoutingBitmap, Offset, MessageCount))
+        {
+            RtlSetBits(&HalpArm64MsiRoutingBitmap, Offset, MessageCount);
+            *Vector = HalpArm64MsiRoutingBase + Offset;
+            KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+            return STATUS_SUCCESS;
+        }
+    }
+
+    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+    return STATUS_INSUFFICIENT_RESOURCES;
+}
+
+/* FUNCTIONS ******************************************************************/
+
+/*
+ * Base HAL Functions (Windows 2000+)
+ * These are deprecated legacy functions - drivers should use DMA_OPERATIONS instead.
+ */
+VOID
+FASTCALL
+HalExamineMBR(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONG SectorSize,
+    _In_ ULONG MBRTypeIdentifier,
+    _Out_ PVOID *Buffer)
+{
+    DPRINT1("HalExamineMBR: STUB (deprecated API - use disk class driver)\n");
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(SectorSize);
+    UNREFERENCED_PARAMETER(MBRTypeIdentifier);
+    if (Buffer)
+        *Buffer = NULL;
+}
+
+ULONG
+NTAPI
+HalGetDmaAlignment(
+    _In_ PVOID DmaAdapter)
+{
+    DPRINT1("HalGetDmaAlignment: STUB (deprecated API - use DMA_OPERATIONS)\n");
+    UNREFERENCED_PARAMETER(DmaAdapter);
+    /* Return default alignment (no alignment restriction) */
+    return 0;
+}
+
+KIRQL
+NTAPI
+HalConvertDeviceIdtToIrql(
+    _In_ ULONG Vector)
+{
+    UNREFERENCED_PARAMETER(Vector);
+    return 0;
+}
+
+NTSTATUS
+NTAPI
+HalGetInterruptTargetInformation(
+    _Inout_ PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation)
+{
+    KAFFINITY Mask;
+    ULONG ProcessorNumber;
+
+    if (TargetInformation == NULL ||
+        TargetInformation->Version != HAL_INTERRUPT_TARGET_INFORMATION_VERSION)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Mask = TargetInformation->TargetProcessors;
+    if (Mask == 0)
+        Mask = KeQueryActiveProcessors();
+
+    ProcessorNumber = 0;
+    while ((Mask & 1) == 0)
+    {
+        Mask >>= 1;
+        ProcessorNumber++;
+    }
+
+    TargetInformation->ProcessorNumber = ProcessorNumber;
+    TargetInformation->TargetProcessors = ((KAFFINITY)1 << ProcessorNumber);
+    TargetInformation->DestinationId = ProcessorNumber;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalGetMessageRoutingInfo(
+    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
+{
+    HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
+    NTSTATUS Status;
+
+    if (RoutingInfo == NULL ||
+        RoutingInfo->Version != HAL_MESSAGE_ROUTING_INFO_VERSION)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (RoutingInfo->Flags & HAL_MSI_ROUTING_RELEASE_VECTOR)
+    {
+        KIRQL OldIrql;
+        ULONG Offset;
+
+        if (RoutingInfo->Flags != HAL_MSI_ROUTING_RELEASE_VECTOR || RoutingInfo->MessageCount != 1)
+            return STATUS_INVALID_PARAMETER;
+
+        HalpArm64EnsureMsiRoutingLock();
+        KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
+        Offset = RoutingInfo->Vector - HalpArm64MsiRoutingBase;
+        if (HalpArm64MsiRoutingBuffer == NULL || Offset >= HalpArm64MsiRoutingCount ||
+            !RtlAreBitsSet(&HalpArm64MsiRoutingBitmap, Offset, 1))
+        {
+            KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+            return STATUS_INVALID_PARAMETER;
+        }
+        RtlClearBits(&HalpArm64MsiRoutingBitmap, Offset, 1);
+        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+        return STATUS_SUCCESS;
+    }
+
+    if (RoutingInfo->Flags & HAL_MSI_ROUTING_ALLOCATE_VECTOR)
+    {
+        Status = HalpArm64AllocateMsiRoutingVector(RoutingInfo->MessageCount,
+                                                   &RoutingInfo->Vector);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        RoutingInfo->Irql = RoutingInfo->DesiredIrql ?
+                            RoutingInfo->DesiredIrql :
+                            HALP_ARM64_MSI_DEFAULT_IRQL;
+        if (RoutingInfo->TargetProcessors == 0)
+            RoutingInfo->TargetProcessors = KeQueryActiveProcessors();
+    }
+    else
+    {
+        if (RoutingInfo->Vector == 0)
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    if (RoutingInfo->Vector == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+    TargetInfo.TargetProcessors = RoutingInfo->TargetProcessors;
+    TargetInfo.ProcessorNumber = 0;
+    TargetInfo.DestinationId = 0;
+    Status = HalGetInterruptTargetInformation(&TargetInfo);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RoutingInfo->TargetProcessors = TargetInfo.TargetProcessors;
+    RoutingInfo->DestinationId = TargetInfo.DestinationId;
+    if (RoutingInfo->Irql == 0)
+        RoutingInfo->Irql = HalConvertDeviceIdtToIrql(RoutingInfo->Vector);
+    {
+        ULONGLONG MsiAddress;
+        ULONG MsiData;
+
+        if (NT_SUCCESS(HalpArm64QueryMsiRoute(RoutingInfo->Vector, &MsiAddress, &MsiData)))
+        {
+            RoutingInfo->MessageAddress.QuadPart = (LONGLONG)MsiAddress;
+            RoutingInfo->MessageData = (USHORT)MsiData;
+        }
+        else
+        {
+            RoutingInfo->MessageAddress.QuadPart = 0;
+            RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector - HalpArm64MsiRoutingBase);
+        }
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalGetProcessorIdByNtNumber(
+    _In_ ULONG ProcessorNumber,
+    _Out_ PULONG ProcessorId)
+{
+    if (ProcessorId == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (ProcessorNumber >= MAXIMUM_PROCESSORS)
+        return STATUS_INVALID_PARAMETER;
+
+    *ProcessorId = ProcessorNumber;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Windows 8+ DMA Crash Dump Register APIs (NT 6.2+)
+ * Extended crash dump register allocation with support for multiple register sets.
+ */
+NTSTATUS
+NTAPI
+HalDmaAllocateCrashDumpRegistersEx(
+    _In_ PVOID Adapter,
+    _In_ ULONG NumberOfMapRegisters,
+    _In_ ULONG Type,
+    _Out_ PVOID *MapRegisterBase,
+    _Out_ PULONG MapRegistersAvailable)
+{
+    DPRINT1("HalDmaAllocateCrashDumpRegistersEx: STUB (Win8+ API)\n");
+    UNREFERENCED_PARAMETER(Adapter);
+    UNREFERENCED_PARAMETER(NumberOfMapRegisters);
+    UNREFERENCED_PARAMETER(Type);
+    if (MapRegisterBase)
+        *MapRegisterBase = NULL;
+    if (MapRegistersAvailable)
+        *MapRegistersAvailable = 0;
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalDmaFreeCrashDumpRegistersEx(
+    _In_ PVOID Adapter,
+    _In_ ULONG Type)
+{
+    DPRINT1("HalDmaFreeCrashDumpRegistersEx: STUB (Win8+ API)\n");
+    UNREFERENCED_PARAMETER(Adapter);
+    UNREFERENCED_PARAMETER(Type);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Windows 8.1+ APIs (NT 6.3+)
+ * Interrupt controller and IRQ management extensions.
+ */
+NTSTATUS
+NTAPI
+HalConvertDeviceIdtVectorToIrql(
+    _In_ ULONG Vector,
+    _In_ ULONG Reserved,
+    _Out_ PULONG Irql)
+{
+    DPRINT1("HalConvertDeviceIdtVectorToIrql: STUB (Win8.1+ API)\n");
+    UNREFERENCED_PARAMETER(Vector);
+    UNREFERENCED_PARAMETER(Reserved);
+    if (Irql)
+        *Irql = 0;
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalAllocateGsivForSecondaryIc(
+    _In_ PVOID ParentHandle,
+    _In_ ULONG GsivCount)
+{
+    DPRINT1("HalAllocateGsivForSecondaryIc: STUB (Win8.1+ API)\n");
+    UNREFERENCED_PARAMETER(ParentHandle);
+    UNREFERENCED_PARAMETER(GsivCount);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * Windows 10+ APIs (NT 10.0+)
+ * Modern interrupt handling and IOMMU policy management.
+ */
+NTSTATUS
+NTAPI
+HalSetIommuPolicy(
+    _In_ PVOID Policy)
+{
+    DPRINT1("HalSetIommuPolicy: STUB (Win10+ API)\n");
+    UNREFERENCED_PARAMETER(Policy);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalpRequestInterrupt(
+    _In_ ULONG Irql,
+    _In_ PVOID InterruptObject,
+    _In_ ULONG Vector,
+    _In_ ULONG MessageNumber,
+    _In_ ULONG ProcessorNumber)
+{
+    DPRINT1("HalRequestInterrupt: STUB (Win10+ API)\n");
+    UNREFERENCED_PARAMETER(Irql);
+    UNREFERENCED_PARAMETER(InterruptObject);
+    UNREFERENCED_PARAMETER(Vector);
+    UNREFERENCED_PARAMETER(MessageNumber);
+    UNREFERENCED_PARAMETER(ProcessorNumber);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalpEnumerateUnmaskedInterrupts(
+    _Out_ PVOID InterruptInformation,
+    _Inout_ PULONG InterruptInformationLength)
+{
+    DPRINT1("HalEnumerateUnmaskedInterrupts: STUB (Win10+ API)\n");
+    UNREFERENCED_PARAMETER(InterruptInformation);
+    if (InterruptInformationLength)
+        *InterruptInformationLength = 0;
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* EOF */
