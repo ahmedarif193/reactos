@@ -201,6 +201,7 @@ BOOL IntCompositionIsGpuOutputPresent(_In_opt_ HWND Window,
 
 /* BeginPaint/EndPaint bracket for redirected composition. */
 VOID IntCompositionPaintBegin(_In_ PWND Wnd);
+VOID IntCompositionEndThreadPaints(_In_ PTHREADINFO pti);
 VOID IntCompositionPaintEnd(_In_ PWND Wnd);
 
 /* Cache-DC hold bracket for redirected windows. Classic common DCs are not

@@ -1456,6 +1456,7 @@ co_IntGetPeekMessage( PMSG pMsg,
 
     pti = PsGetCurrentThreadWin32Thread();
     pti->pClientInfo->cSpins++; // Bump up the spin count.
+    IntCompositionEndThreadPaints(pti);
 
     do
     {
