@@ -3184,8 +3184,7 @@
 @ stdcall RtlUnregisterFeatureUsageProvider(ptr)
 @ stub -arch=arm64 RtlUnsignedMultiplyHigh
 @ stub -arch=arm64 RtlValidateCorrelationVector
-@ stub -arch=arm64 RtlVirtualUnwind2
-@ stdcall -arch=riscv64 RtlVirtualUnwind2(long int64 int64 ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
+@ stdcall -arch=win64 RtlVirtualUnwind2(long int64 int64 ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
 @ stub -arch=arm64 RtlWriteNonVolatileMemory
 @ stub -arch=arm64 SeAccessCheckEx
 @ stub -arch=arm64 SeAccessCheckFromState

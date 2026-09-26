@@ -11,6 +11,15 @@
 #include <debug.h>
 #include "unwind_private.h"
 
+/* Function tables registered with RtlAddFunctionTable and
+ * RtlInstallFunctionTableCallback (dynfntbl.c). */
+PRUNTIME_FUNCTION
+NTAPI
+RtlpLookupDynamicFunctionEntry(
+    _In_ DWORD64 ControlPc,
+    _Out_ PDWORD64 ImageBase,
+    _In_ PUNWIND_HISTORY_TABLE HistoryTable);
+
 static NTSTATUS
 NTAPI
 RtlpRiscv64ReadLocalMemory(
@@ -109,16 +118,21 @@ RtlpRiscv64ReadScope(PDISPATCHER_CONTEXT Dispatcher, ULONG Index,
     ULONG Size;
     NTSTATUS Status;
 
+    /* Dispatch reaches here only for an image entry or a registered dynamic
+     * one. Dynamic code has no sections: its records are checked by shape and
+     * read through the checked reader only. */
     Nt = RtlImageNtHeader((PVOID)Dispatcher->ImageBase);
+#define SCOPE_RANGE_VALID(Rva, Size, Required, Forbidden) \
+    (!Nt || RtlpRiscv64ValidateImageRange(Nt, (Rva), (Size), (Required), (Forbidden)))
     Rva = (ULONG64)Dispatcher->HandlerData - Dispatcher->ImageBase;
-    if (!Nt || Rva > MAXULONG || (Rva & 3) ||
-        !RtlpRiscv64ValidateImageRange(Nt, (ULONG)Rva, sizeof(ULONG),
+    if (Rva > MAXULONG || (Rva & 3) ||
+        !SCOPE_RANGE_VALID((ULONG)Rva, sizeof(ULONG),
             IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE))
         return STATUS_BAD_FUNCTION_TABLE;
     Status = RtlpRiscv64ReadMemory(Count, Dispatcher->HandlerData, sizeof(*Count));
     if (!NT_SUCCESS(Status) || *Count > 256) return STATUS_BAD_FUNCTION_TABLE;
     Size = sizeof(ULONG) + *Count * sizeof(*Scope);
-    if (!RtlpRiscv64ValidateImageRange(Nt, (ULONG)Rva, Size,
+    if (!SCOPE_RANGE_VALID((ULONG)Rva, Size,
             IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE))
         return STATUS_BAD_FUNCTION_TABLE;
     if (!Scope) return STATUS_SUCCESS;
@@ -128,18 +142,19 @@ RtlpRiscv64ReadScope(PDISPATCHER_CONTEXT Dispatcher, ULONG Index,
         sizeof(*Scope));
     if (!NT_SUCCESS(Status) || Scope->BeginAddress >= Scope->EndAddress ||
         ((Scope->BeginAddress | Scope->EndAddress | Scope->JumpTarget) & 1) ||
-        !RtlpRiscv64ValidateImageRange(Nt, Scope->BeginAddress,
+        !SCOPE_RANGE_VALID(Scope->BeginAddress,
             Scope->EndAddress - Scope->BeginAddress,
             IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE) ||
         (Scope->HandlerAddress != 1 &&
          ((Scope->HandlerAddress & 1) || !Scope->HandlerAddress ||
-          !RtlpRiscv64ValidateImageRange(Nt, Scope->HandlerAddress, 2,
+          !SCOPE_RANGE_VALID(Scope->HandlerAddress, 2,
             IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE))) ||
         (!Scope->JumpTarget && Scope->HandlerAddress == 1) ||
-        (Scope->JumpTarget && !RtlpRiscv64ValidateImageRange(Nt,
+        (Scope->JumpTarget && !SCOPE_RANGE_VALID(
             Scope->JumpTarget, 2, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE,
             IMAGE_SCN_MEM_WRITE)))
         return STATUS_BAD_FUNCTION_TABLE;
+#undef SCOPE_RANGE_VALID
     return STATUS_SUCCESS;
 }
 
@@ -404,6 +419,13 @@ RtlpRiscv64LookupFunctionEntry(
                                                 &FunctionTable,
                                                 &EntryCount,
                                                 &NtHeaders);
+    if ((Status == STATUS_NOT_FOUND) && (*ImageBase == 0))
+    {
+        /* Code outside every loaded image, such as JIT output, is described
+         * by the dynamic function tables. */
+        *FunctionEntry = RtlpLookupDynamicFunctionEntry(ControlPc, ImageBase, NULL);
+        return *FunctionEntry ? STATUS_SUCCESS : STATUS_NOT_FOUND;
+    }
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -471,6 +493,25 @@ RtlLookupFunctionEntry(
     return Entry;
 }
 
+/* A function entry outside every image must be the one a dynamic function
+ * table registers for ControlPc, relative to the same base. */
+static
+BOOLEAN
+RtlpRiscv64IsDynamicFunctionEntry(
+    _In_ ULONG_PTR ImageBase,
+    _In_ ULONG_PTR ControlPc,
+    _In_ PRUNTIME_FUNCTION FunctionEntry)
+{
+    PRUNTIME_FUNCTION Registered;
+    DWORD64 RegisteredBase = 0;
+
+    Registered = RtlpLookupDynamicFunctionEntry(ControlPc, &RegisteredBase, NULL);
+    return (Registered != NULL) && (RegisteredBase == ImageBase) &&
+           (Registered->BeginAddress == FunctionEntry->BeginAddress) &&
+           (Registered->EndAddress == FunctionEntry->EndAddress) &&
+           (Registered->UnwindData == FunctionEntry->UnwindData);
+}
+
 NTSTATUS
 NTAPI
 RtlVirtualUnwind2(
@@ -529,19 +570,29 @@ RtlVirtualUnwind2(
             return STATUS_BAD_FUNCTION_TABLE;
 
         NtHeaders = RtlImageNtHeader((PVOID)ImageBase);
-        if (NtHeaders == NULL)
-            return STATUS_INVALID_IMAGE_FORMAT;
-        View.ImageSize = NtHeaders->OptionalHeader.SizeOfImage;
+        if (NtHeaders != NULL)
+        {
+            View.ImageSize = NtHeaders->OptionalHeader.SizeOfImage;
 
-        RtlZeroMemory(SeenEntries, sizeof(SeenEntries));
-        Status = RtlpRiscv64ValidateRecordImageRanges(
-            &View,
-            NtHeaders,
-            &LocalFunctionEntry,
-            SeenEntries,
-            0);
-        if (!NT_SUCCESS(Status))
-            return Status;
+            RtlZeroMemory(SeenEntries, sizeof(SeenEntries));
+            Status = RtlpRiscv64ValidateRecordImageRanges(
+                &View,
+                NtHeaders,
+                &LocalFunctionEntry,
+                SeenEntries,
+                0);
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+        else
+        {
+            /* Dynamic code has no sections to check its records against.
+             * Its RVAs span the 32-bit range from the registered base and
+             * every read still goes through the checked reader. */
+            if (!RtlpRiscv64IsDynamicFunctionEntry(ImageBase, ControlPc, &LocalFunctionEntry))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            View.ImageSize = MAXULONG;
+        }
 
         DecodedFunctionEntry = &LocalFunctionEntry;
     }

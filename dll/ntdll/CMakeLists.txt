@@ -58,7 +58,7 @@ list(APPEND SOURCE
 set_source_files_properties(rtl/capability.c PROPERTIES
     COMPILE_DEFINITIONS "__WINE_PE_BUILD;SYMCRYPT_PLATFORM_WINE=1")
 
-if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64")
     list(APPEND SOURCE rtl/xstate_wow64.c)
 endif()
 
