@@ -92,7 +92,7 @@ RunBlurCacheProbe(const RECT *WorkArea)
         for (Index = 0; Index < ARRAYSIZE(Offsets); ++Index)
         {
             POINT Point = {Left + 256 + Offsets[Index], Top + 128};
-            COLORREF Color = ReadSharedPrimaryPixel(Screen, Point);
+            COLORREF Color = GetPixel(Screen, Point.x, Point.y);
             Value[Index] = GetRValue(Color);
             if (Color == CLR_INVALID ||
                 abs((int)GetRValue(Color) - (int)GetGValue(Color)) > 4 ||
