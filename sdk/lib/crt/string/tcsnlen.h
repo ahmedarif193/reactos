@@ -8,7 +8,7 @@ size_t __cdecl _tcsnlen(const _TCHAR * str, size_t count)
 
  if(str == 0) return 0;
 
- for(s = str; *s && count; ++ s, -- count);
+ for(s = str; count && *s; ++ s, -- count);
 
  return s - str;
 }
