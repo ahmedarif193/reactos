@@ -9656,10 +9656,22 @@ DxgkDumpRecentKmtIoctls(VOID)
  *
  * Returns the NTSTATUS that should be placed in IoStatus.
  * ====================================================================== */
+/* The parts of a METHOD_BUFFERED request the handlers use; an IRP and the
+ * direct win32k entry both reduce to this. */
+typedef struct _DXGKP_KMT_REQUEST
+{
+    PVOID SystemBuffer;
+    ULONG InputLength;
+    ULONG OutputLength;
+    ULONG IoControlCode;
+    BOOLEAN Internal;
+    KPROCESSOR_MODE RequestorMode;
+    ULONG_PTR Information;
+} DXGKP_KMT_REQUEST, *PDXGKP_KMT_REQUEST;
+
 static NTSTATUS
 DxgkpDispatchBufferedIoctlWorker(
-    _In_ PIRP              Irp,
-    _In_ PIO_STACK_LOCATION Stack);
+    _Inout_ PDXGKP_KMT_REQUEST Request);
 
 /* In-flight KMT requests, for the silent stall: a GL process that stops
  * without a fault, a TDR or a logged CPU wait (2026-09-06 runs 4 and 7) is
@@ -9727,12 +9739,11 @@ DxgkKmtReportStuckIoctls(
     }
 }
 
-NTSTATUS
-DxgkpDispatchBufferedIoctl(
-    _In_ PIRP              Irp,
-    _In_ PIO_STACK_LOCATION Stack)
+static NTSTATUS
+DxgkpDispatchKmtRequest(
+    _Inout_ PDXGKP_KMT_REQUEST Request)
 {
-    ULONG IoControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
+    ULONG IoControlCode = Request->IoControlCode;
     ULONG Operation = 0;
     DXGKP_KMT_INFLIGHT *InFlight;
     NTSTATUS Status;
@@ -9741,13 +9752,13 @@ DxgkpDispatchBufferedIoctl(
 #endif
 
     if (IoControlCode == IOCTL_D3DKMT_PUBLIC_OPERATION &&
-        Stack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(RXGK_PUBLIC_OPERATION_PACKET) &&
-        Irp->AssociatedIrp.SystemBuffer != NULL)
+        Request->InputLength >= sizeof(RXGK_PUBLIC_OPERATION_PACKET) &&
+        Request->SystemBuffer != NULL)
     {
-        Operation = ((PRXGK_PUBLIC_OPERATION_PACKET)Irp->AssociatedIrp.SystemBuffer)->Operation;
+        Operation = ((PRXGK_PUBLIC_OPERATION_PACKET)Request->SystemBuffer)->Operation;
     }
     InFlight = DxgkpKmtEnterInFlight(IoControlCode, Operation);
-    Status = DxgkpDispatchBufferedIoctlWorker(Irp, Stack);
+    Status = DxgkpDispatchBufferedIoctlWorker(Request);
     if (InFlight != NULL)
     {
         InFlight->Enter100ns = 0;
@@ -9761,17 +9772,36 @@ DxgkpDispatchBufferedIoctl(
     return Status;
 }
 
-static NTSTATUS
-DxgkpDispatchBufferedIoctlWorker(
+NTSTATUS
+DxgkpDispatchBufferedIoctl(
     _In_ PIRP              Irp,
     _In_ PIO_STACK_LOCATION Stack)
 {
-    PVOID   SystemBuffer  = Irp->AssociatedIrp.SystemBuffer;
-    ULONG   InputLength   = Stack->Parameters.DeviceIoControl.InputBufferLength;
-    ULONG   OutputLength  = Stack->Parameters.DeviceIoControl.OutputBufferLength;
-    ULONG   IoControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
+    DXGKP_KMT_REQUEST Request;
+    NTSTATUS Status;
+
+    Request.SystemBuffer = Irp->AssociatedIrp.SystemBuffer;
+    Request.InputLength = Stack->Parameters.DeviceIoControl.InputBufferLength;
+    Request.OutputLength = Stack->Parameters.DeviceIoControl.OutputBufferLength;
+    Request.IoControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
+    Request.Internal = Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    Request.RequestorMode = Irp->RequestorMode;
+    Request.Information = Irp->IoStatus.Information;
+    Status = DxgkpDispatchKmtRequest(&Request);
+    Irp->IoStatus.Information = Request.Information;
+    return Status;
+}
+
+static NTSTATUS
+DxgkpDispatchBufferedIoctlWorker(
+    _Inout_ PDXGKP_KMT_REQUEST KmtRequest)
+{
+    PVOID   SystemBuffer  = KmtRequest->SystemBuffer;
+    ULONG   InputLength   = KmtRequest->InputLength;
+    ULONG   OutputLength  = KmtRequest->OutputLength;
+    ULONG   IoControlCode = KmtRequest->IoControlCode;
     ULONG   MinimumLevel;
-    KPROCESSOR_MODE EmbeddedBufferMode = Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? KernelMode : Irp->RequestorMode;
+    KPROCESSOR_MODE EmbeddedBufferMode = KmtRequest->Internal ? KernelMode : KmtRequest->RequestorMode;
     NTSTATUS Status;
 
     MinimumLevel = DxgkpKmtIoctlMinimumConfiguredLevel(IoControlCode);
@@ -9787,7 +9817,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkEnumAdapters((D3DKMT_ENUMADAPTERS *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_ENUMADAPTERS);
+                KmtRequest->Information = sizeof(D3DKMT_ENUMADAPTERS);
             return Status;
         }
 
@@ -9806,7 +9836,7 @@ DxgkpDispatchBufferedIoctlWorker(
              * never learns the adapter count.
              */
             if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_TOO_SMALL)
-                Irp->IoStatus.Information = sizeof(D3DKMT_ENUMADAPTERS2);
+                KmtRequest->Information = sizeof(D3DKMT_ENUMADAPTERS2);
             return Status == STATUS_BUFFER_TOO_SMALL ? STATUS_BUFFER_OVERFLOW : Status;
         }
 
@@ -9817,7 +9847,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkOpenAdapterFromLuid((D3DKMT_OPENADAPTERFROMLUID *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_OPENADAPTERFROMLUID);
+                KmtRequest->Information = sizeof(D3DKMT_OPENADAPTERFROMLUID);
             return Status;
         }
 
@@ -9837,7 +9867,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpQueryAdapterInfoWithAccessMode((CONST D3DKMT_QUERYADAPTERINFO *)SystemBuffer, EmbeddedBufferMode);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_QUERYADAPTERINFO);
+                KmtRequest->Information = sizeof(D3DKMT_QUERYADAPTERINFO);
             return Status;
         }
 
@@ -9855,7 +9885,7 @@ DxgkpDispatchBufferedIoctlWorker(
                          (PRXGK_ISFEATUREENABLED_PACKET)SystemBuffer);
             if (NT_SUCCESS(Status))
             {
-                Irp->IoStatus.Information =
+                KmtRequest->Information =
                     sizeof(RXGK_ISFEATUREENABLED_PACKET);
             }
             return Status;
@@ -9866,7 +9896,7 @@ DxgkpDispatchBufferedIoctlWorker(
         case IOCTL_D3DKMT_SETFSEBLOCK:
         case IOCTL_D3DKMT_QUERYFSEBLOCK:
         {
-            return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
+            return KmtRequest->Internal ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
         }
 #endif
 
@@ -9874,26 +9904,26 @@ DxgkpDispatchBufferedIoctlWorker(
         case IOCTL_D3DKMT_CREATEHWCONTEXT:
         case IOCTL_D3DKMT_DESTROYHWCONTEXT:
         {
-            return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_IMPLEMENTED : STATUS_ACCESS_DENIED;
+            return KmtRequest->Internal ? STATUS_NOT_IMPLEMENTED : STATUS_ACCESS_DENIED;
         }
 #endif
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2300)
         case IOCTL_D3DKMT_SETMONITORCOLORSPACETRANSFORM:
         {
-            return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
+            return KmtRequest->Internal ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
         }
 #endif
 
         case IOCTL_D3DKMT_PUBLIC_OPERATION:
         {
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+            if (!KmtRequest->Internal)
                 return STATUS_ACCESS_DENIED;
             if (InputLength < sizeof(RXGK_PUBLIC_OPERATION_PACKET) || OutputLength < sizeof(RXGK_PUBLIC_OPERATION_PACKET) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkpDispatchPublicOperation((PRXGK_PUBLIC_OPERATION_PACKET)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(RXGK_PUBLIC_OPERATION_PACKET);
+                KmtRequest->Information = sizeof(RXGK_PUBLIC_OPERATION_PACKET);
             return Status;
         }
 
@@ -9904,7 +9934,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkGetDisplayModeList((D3DKMT_GETDISPLAYMODELIST *)SystemBuffer);
             if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_TOO_SMALL)
-                Irp->IoStatus.Information = sizeof(D3DKMT_GETDISPLAYMODELIST);
+                KmtRequest->Information = sizeof(D3DKMT_GETDISPLAYMODELIST);
             return Status == STATUS_BUFFER_TOO_SMALL ? STATUS_BUFFER_OVERFLOW : Status;
         }
 
@@ -9923,7 +9953,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             if (InputLength < sizeof(D3DKMT_OPENADAPTERFROMHDC) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+            if (!KmtRequest->Internal)
                 return STATUS_ACCESS_DENIED;
 
             /* win32k owns HDCs and forwards only desktop DCs through this
@@ -9936,7 +9966,7 @@ DxgkpDispatchBufferedIoctlWorker(
                          &pData->AdapterLuid,
                          &pData->VidPnSourceId);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(*pData);
+                KmtRequest->Information = sizeof(*pData);
             return Status;
         }
 
@@ -9947,7 +9977,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             if (InputLength < sizeof(D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+            if (!KmtRequest->Internal)
                 return STATUS_ACCESS_DENIED;
 
             pData = (D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *)SystemBuffer;
@@ -9964,7 +9994,7 @@ DxgkpDispatchBufferedIoctlWorker(
                          &pData->AdapterLuid,
                          &pData->VidPnSourceId);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(*pData);
+                KmtRequest->Information = sizeof(*pData);
             return Status;
         }
 
@@ -9976,7 +10006,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             if (InputLength < sizeof(D3DKMT_OPENADAPTERFROMDEVICENAME) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+            if (!KmtRequest->Internal)
                 return STATUS_ACCESS_DENIED;
 
             pData = (D3DKMT_OPENADAPTERFROMDEVICENAME *)SystemBuffer;
@@ -9991,7 +10021,7 @@ DxgkpDispatchBufferedIoctlWorker(
                          &pData->AdapterLuid);
             if (!NT_SUCCESS(Status))
                 return Status;
-            Irp->IoStatus.Information = sizeof(D3DKMT_OPENADAPTERFROMDEVICENAME);
+            KmtRequest->Information = sizeof(D3DKMT_OPENADAPTERFROMDEVICENAME);
             return STATUS_SUCCESS;
         }
 
@@ -10029,7 +10059,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 pData->AllocationListSize = CreateDeviceCopy.AllocationListSize;
                 pData->pPatchLocationList = CreateDeviceCopy.pPatchLocationList;
                 pData->PatchLocationListSize = CreateDeviceCopy.PatchLocationListSize;
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEDEVICE);
+                KmtRequest->Information = sizeof(D3DKMT_CREATEDEVICE);
             }
             return Status;
         }
@@ -10053,7 +10083,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpCreateAllocationWithAccessMode((D3DKMT_CREATEALLOCATION *)SystemBuffer, EmbeddedBufferMode);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEALLOCATION);
+                KmtRequest->Information = sizeof(D3DKMT_CREATEALLOCATION);
             return Status;
         }
 
@@ -10064,7 +10094,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpCreateAllocation2WithAccessMode((D3DKMT_CREATEALLOCATION *)SystemBuffer, EmbeddedBufferMode);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEALLOCATION);
+                KmtRequest->Information = sizeof(D3DKMT_CREATEALLOCATION);
             return Status;
         }
 
@@ -10120,7 +10150,7 @@ DxgkpDispatchBufferedIoctlWorker(
              * The bridge and direct user callers need a user VA. CDD runs in
              * kernel and needs a system VA for the shadow surface.
              */
-            UserMappingCaller = (Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) || (Irp->RequestorMode == UserMode);
+            UserMappingCaller = KmtRequest->Internal || (KmtRequest->RequestorMode == UserMode);
             Status = DxgkpBeginSynchronizedLock(LockAdapter,
                                                 LockDevice,
                                                 LockAlloc,
@@ -10153,7 +10183,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 ASSERT((ULONG_PTR)LockVa < (ULONG_PTR)MmSystemRangeStart);
             DXGKRNL_VERBOSE("D3DKMTLock: alloc=0x%X -> VA=%p\n",
                             pLock->hAllocation, LockVa);
-            Irp->IoStatus.Information = sizeof(D3DKMT_LOCK);
+            KmtRequest->Information = sizeof(D3DKMT_LOCK);
             return STATUS_SUCCESS;
         }
 
@@ -10176,7 +10206,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_INVALID_PARAMETER;
             }
 
-            UserMappingCaller = (Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) || (Irp->RequestorMode == UserMode);
+            UserMappingCaller = KmtRequest->Internal || (KmtRequest->RequestorMode == UserMode);
             Status = DxgkReferenceOwnedDeviceByHandle(pUnlock->hDevice, PsGetCurrentProcess(), &UnlockAdapter, &UnlockDevice);
             if (!NT_SUCCESS(Status))
                 return STATUS_INVALID_PARAMETER;
@@ -10245,7 +10275,7 @@ DxgkpDispatchBufferedIoctlWorker(
                           Status, pGSPH->hSharedPrimary);
 
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_GETSHAREDPRIMARYHANDLE);
+                KmtRequest->Information = sizeof(D3DKMT_GETSHAREDPRIMARYHANDLE);
             return Status;
         }
 
@@ -10259,7 +10289,7 @@ DxgkpDispatchBufferedIoctlWorker(
             pData = (DXGKMT_GETSHADOWSURFACE *)SystemBuffer;
             Status = DxgkGetShadowSurface(pData);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(DXGKMT_GETSHADOWSURFACE);
+                KmtRequest->Information = sizeof(DXGKMT_GETSHADOWSURFACE);
             return Status;
         }
 
@@ -10271,7 +10301,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkQueryResourceInfo(
                          (D3DKMT_QUERYRESOURCEINFO *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_QUERYRESOURCEINFO);
+                KmtRequest->Information = sizeof(D3DKMT_QUERYRESOURCEINFO);
             return Status;
         }
 
@@ -10282,7 +10312,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkOpenResource((D3DKMT_OPENRESOURCE *)SystemBuffer);
             if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_TOO_SMALL)
-                Irp->IoStatus.Information = sizeof(D3DKMT_OPENRESOURCE);
+                KmtRequest->Information = sizeof(D3DKMT_OPENRESOURCE);
             return Status == STATUS_BUFFER_TOO_SMALL ? STATUS_BUFFER_OVERFLOW : Status;
         }
 
@@ -10341,7 +10371,7 @@ DxgkpDispatchBufferedIoctlWorker(
                          &RequiredSize);
             Packet->PrivateDriverDataSize = RequiredSize;
             if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_TOO_SMALL)
-                Irp->IoStatus.Information = Packet->Size;
+                KmtRequest->Information = Packet->Size;
             return Status == STATUS_BUFFER_TOO_SMALL
                        ? STATUS_BUFFER_OVERFLOW
                        : Status;
@@ -10452,7 +10482,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpReclaimAllocations2Packet(Packet);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = Packet->Size;
+                KmtRequest->Information = Packet->Size;
             return Status;
         }
 
@@ -10481,7 +10511,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpUpdateAllocationPropertyPacket(Packet);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(*Packet);
+                KmtRequest->Information = sizeof(*Packet);
             return Status;
         }
 
@@ -10529,7 +10559,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpReclaimAllocations3Packet(Packet);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = Packet->Size;
+                KmtRequest->Information = Packet->Size;
             return Status;
         }
 #endif
@@ -10576,7 +10606,7 @@ DxgkpDispatchBufferedIoctlWorker(
             if (NT_SUCCESS(Status))
             {
                 Packet->ContextHandle = Request.hContext;
-                Irp->IoStatus.Information = sizeof(*Packet);
+                KmtRequest->Information = sizeof(*Packet);
             }
             return Status;
         }
@@ -10660,7 +10690,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkRender((D3DKMT_RENDER *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_RENDER);
+                KmtRequest->Information = sizeof(D3DKMT_RENDER);
             return Status;
         }
 
@@ -10691,7 +10721,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkPresent((D3DKMT_PRESENT *)SystemBuffer,
                                  InputLength);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = min(InputLength, OutputLength);
+                KmtRequest->Information = min(InputLength, OutputLength);
             return Status;
         }
 
@@ -10702,7 +10732,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkPresentWithOverlays((RXGK_PRESENT_OVERLAYS *)SystemBuffer,
                                              InputLength);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = min(InputLength, OutputLength);
+                KmtRequest->Information = min(InputLength, OutputLength);
             return Status;
         }
 
@@ -10742,7 +10772,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpCreateContextWithAccessMode((D3DKMT_CREATECONTEXT *)SystemBuffer, EmbeddedBufferMode);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATECONTEXT);
+                KmtRequest->Information = sizeof(D3DKMT_CREATECONTEXT);
             return Status;
         }
 
@@ -10763,7 +10793,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkCreateSynchronizationObject(
                          (D3DKMT_CREATESYNCHRONIZATIONOBJECT *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATESYNCHRONIZATIONOBJECT);
+                KmtRequest->Information = sizeof(D3DKMT_CREATESYNCHRONIZATIONOBJECT);
             return Status;
         }
 
@@ -10804,7 +10834,7 @@ DxgkpDispatchBufferedIoctlWorker(
             pDevState = (D3DKMT_GETDEVICESTATE *)SystemBuffer;
             Status = DxgkGetDeviceState(pDevState);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_GETDEVICESTATE);
+                KmtRequest->Information = sizeof(D3DKMT_GETDEVICESTATE);
             return Status;
         }
 
@@ -10822,7 +10852,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             if (InputLength < sizeof(D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL) || OutputLength < sizeof(D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+            if (!KmtRequest->Internal)
                 return STATUS_ACCESS_DENIED;
 
             pMap = (D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL *)SystemBuffer;
@@ -10897,7 +10927,7 @@ DxgkpDispatchBufferedIoctlWorker(
             if (NT_SUCCESS(Status))
             {
                 pMap->PagingFenceValue = 0;
-                Irp->IoStatus.Information = sizeof(D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL);
+                KmtRequest->Information = sizeof(D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL);
             }
             return Status;
         }
@@ -10915,7 +10945,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             if (InputLength < sizeof(D3DDDI_RESERVEGPUVIRTUALADDRESS_LOCAL) || OutputLength < sizeof(D3DDDI_RESERVEGPUVIRTUALADDRESS_LOCAL) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+            if (!KmtRequest->Internal)
                 return STATUS_ACCESS_DENIED;
 
             pReserve = (D3DDDI_RESERVEGPUVIRTUALADDRESS_LOCAL *)SystemBuffer;
@@ -10972,7 +11002,7 @@ DxgkpDispatchBufferedIoctlWorker(
             if (NT_SUCCESS(Status))
             {
                 pReserve->PagingFenceValue = 0;
-                Irp->IoStatus.Information = sizeof(D3DDDI_RESERVEGPUVIRTUALADDRESS_LOCAL);
+                KmtRequest->Information = sizeof(D3DDDI_RESERVEGPUVIRTUALADDRESS_LOCAL);
             }
             return Status;
         }
@@ -11234,7 +11264,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY ||
                 Status == STATUS_NO_MEMORY)
             {
-                Irp->IoStatus.Information = sizeof(D3DDDI_MAKERESIDENT_LOCAL);
+                KmtRequest->Information = sizeof(D3DDDI_MAKERESIDENT_LOCAL);
             }
             return Status;
         }
@@ -11267,7 +11297,7 @@ DxgkpDispatchBufferedIoctlWorker(
             if (pEvict->NumAllocations == 0)
             {
                 DxgkDereferenceDevice(Device);
-                Irp->IoStatus.Information = sizeof(D3DKMT_EVICT_LOCAL);
+                KmtRequest->Information = sizeof(D3DKMT_EVICT_LOCAL);
                 return STATUS_SUCCESS;
             }
 
@@ -11305,7 +11335,7 @@ DxgkpDispatchBufferedIoctlWorker(
             ExFreePoolWithTag(AllocationList, TAG_DXGK_GPUVA);
             DxgkDereferenceDevice(Device);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_EVICT_LOCAL);
+                KmtRequest->Information = sizeof(D3DKMT_EVICT_LOCAL);
             return Status;
         }
 
@@ -11411,7 +11441,7 @@ DxgkpDispatchBufferedIoctlWorker(
             pScanLine = (D3DKMT_GETSCANLINE *)SystemBuffer;
             Status = DxgkGetScanLine(pScanLine);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_GETSCANLINE);
+                KmtRequest->Information = sizeof(D3DKMT_GETSCANLINE);
             return Status;
         }
 
@@ -11476,7 +11506,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 pPriority = (D3DKMT_GETCONTEXTSCHEDULINGPRIORITY *)SystemBuffer;
                 Status = DxgkGetContextSchedulingPriority(pPriority);
                 if (NT_SUCCESS(Status))
-                    Irp->IoStatus.Information = sizeof(D3DKMT_GETCONTEXTSCHEDULINGPRIORITY);
+                    KmtRequest->Information = sizeof(D3DKMT_GETCONTEXTSCHEDULINGPRIORITY);
                 return Status;
             }
         }
@@ -11486,8 +11516,8 @@ DxgkpDispatchBufferedIoctlWorker(
         {
             PRXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET Packet;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -11515,7 +11545,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkpGetSharedResourceAdapterLuid(Packet);
             if (NT_SUCCESS(Status))
             {
-                Irp->IoStatus.Information =
+                KmtRequest->Information =
                     RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE;
             }
             return Status;
@@ -11526,8 +11556,8 @@ DxgkpDispatchBufferedIoctlWorker(
         {
             PRXGK_SHAREOBJECTS_PACKET Packet;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -11541,7 +11571,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Packet = (PRXGK_SHAREOBJECTS_PACKET)SystemBuffer;
             Status = DxgkpShareObjects(Packet);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = RXGK_SHAREOBJECTS_PACKET_V1_SIZE;
+                KmtRequest->Information = RXGK_SHAREOBJECTS_PACKET_V1_SIZE;
             return Status;
         }
 
@@ -11549,8 +11579,8 @@ DxgkpDispatchBufferedIoctlWorker(
         {
             PRXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET Packet;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -11565,7 +11595,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkpResolveSharedResourceNtHandle(Packet);
             if (NT_SUCCESS(Status))
             {
-                Irp->IoStatus.Information =
+                KmtRequest->Information =
                     RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE;
             }
             return Status;
@@ -11576,8 +11606,8 @@ DxgkpDispatchBufferedIoctlWorker(
             PRXGK_VALIDATESHAREDRESOURCEOWNER_PACKET Packet;
             LUID AdapterLuid;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
                 return STATUS_ACCESS_DENIED;
             if (InputLength != sizeof(*Packet) || OutputLength != 0 || SystemBuffer == NULL)
                 return STATUS_INFO_LENGTH_MISMATCH;
@@ -11596,8 +11626,8 @@ DxgkpDispatchBufferedIoctlWorker(
         {
             const RXGK_SETCOMPOSITORSOURCEOWNER_PACKET *Packet;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -11640,8 +11670,8 @@ DxgkpDispatchBufferedIoctlWorker(
         {
             PRXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET Packet;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -11675,7 +11705,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkpQueryVidPnExclusiveOwnershipPacket(Packet);
             if (NT_SUCCESS(Status))
             {
-                Irp->IoStatus.Information =
+                KmtRequest->Information =
                     RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE;
             }
             return Status;
@@ -11688,8 +11718,8 @@ DxgkpDispatchBufferedIoctlWorker(
         {
             PRXGK_CONTEXTINPROCESSPRIORITY_PACKET Packet;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -11730,7 +11760,7 @@ DxgkpDispatchBufferedIoctlWorker(
                          &Packet->Priority);
             if (NT_SUCCESS(Status))
             {
-                Irp->IoStatus.Information =
+                KmtRequest->Information =
                     RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE;
             }
             return Status;
@@ -11749,7 +11779,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return DxgkSetProcessSchedulingPriorityClass(pRequest->hProcess, pRequest->Class);
             Status = DxgkGetProcessSchedulingPriorityClass(pRequest->hProcess, &pRequest->Class);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(DXGKP_PROCESS_PRIORITY_REQUEST);
+                KmtRequest->Information = sizeof(DXGKP_PROCESS_PRIORITY_REQUEST);
             return Status;
         }
 
@@ -11773,7 +11803,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkSetQueuedLimit(pQueuedLimit);
             /* D3DKMT_GET_QUEUEDLIMIT_* answers in the same buffer. */
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_SETQUEUEDLIMIT);
+                KmtRequest->Information = sizeof(D3DKMT_SETQUEUEDLIMIT);
             return Status;
         }
 
@@ -11809,7 +11839,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return Status;
 
             pMethods->MethodCount = 0;
-            Irp->IoStatus.Information = sizeof(D3DKMT_GETMULTISAMPLEMETHODLIST);
+            KmtRequest->Information = sizeof(D3DKMT_GETMULTISAMPLEMETHODLIST);
             return STATUS_NOT_SUPPORTED;
         }
 
@@ -11844,7 +11874,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkQueryStatistics((CONST D3DKMT_QUERYSTATISTICS *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_QUERYSTATISTICS);
+                KmtRequest->Information = sizeof(D3DKMT_QUERYSTATISTICS);
             return Status;
         }
 
@@ -11917,7 +11947,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkQueryClockCalibration((D3DKMT_QUERYCLOCKCALIBRATION *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_QUERYCLOCKCALIBRATION);
+                KmtRequest->Information = sizeof(D3DKMT_QUERYCLOCKCALIBRATION);
             return Status;
         }
 
@@ -11934,7 +11964,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkCreateHwQueue((D3DKMT_CREATEHWQUEUE *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEHWQUEUE);
+                KmtRequest->Information = sizeof(D3DKMT_CREATEHWQUEUE);
             return Status;
         }
 
@@ -11986,7 +12016,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkRegisterTrimNotification((D3DKMT_REGISTERTRIMNOTIFICATION *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_REGISTERTRIMNOTIFICATION);
+                KmtRequest->Information = sizeof(D3DKMT_REGISTERTRIMNOTIFICATION);
             return Status;
         }
 
@@ -12003,7 +12033,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkCreateKeyedMutex((D3DKMT_CREATEKEYEDMUTEX *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEKEYEDMUTEX);
+                KmtRequest->Information = sizeof(D3DKMT_CREATEKEYEDMUTEX);
             return Status;
         }
 
@@ -12013,7 +12043,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkCreateKeyedMutex2((D3DKMT_CREATEKEYEDMUTEX2 *)SystemBuffer, EmbeddedBufferMode);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEKEYEDMUTEX2);
+                KmtRequest->Information = sizeof(D3DKMT_CREATEKEYEDMUTEX2);
             return Status;
         }
 
@@ -12023,7 +12053,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkOpenKeyedMutex((D3DKMT_OPENKEYEDMUTEX *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_OPENKEYEDMUTEX);
+                KmtRequest->Information = sizeof(D3DKMT_OPENKEYEDMUTEX);
             return Status;
         }
 
@@ -12033,7 +12063,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkOpenKeyedMutex2((D3DKMT_OPENKEYEDMUTEX2 *)SystemBuffer, EmbeddedBufferMode);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_OPENKEYEDMUTEX2);
+                KmtRequest->Information = sizeof(D3DKMT_OPENKEYEDMUTEX2);
             return Status;
         }
 
@@ -12050,7 +12080,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkAcquireKeyedMutex((D3DKMT_ACQUIREKEYEDMUTEX *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_ACQUIREKEYEDMUTEX);
+                KmtRequest->Information = sizeof(D3DKMT_ACQUIREKEYEDMUTEX);
             return Status;
         }
 
@@ -12060,7 +12090,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
             Status = DxgkAcquireKeyedMutex2((D3DKMT_ACQUIREKEYEDMUTEX2 *)SystemBuffer, EmbeddedBufferMode);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_ACQUIREKEYEDMUTEX2);
+                KmtRequest->Information = sizeof(D3DKMT_ACQUIREKEYEDMUTEX2);
             return Status;
         }
 
@@ -12086,7 +12116,7 @@ DxgkpDispatchBufferedIoctlWorker(
                          (D3DKMT_CREATEOVERLAY *)SystemBuffer,
                          EmbeddedBufferMode);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEOVERLAY);
+                KmtRequest->Information = sizeof(D3DKMT_CREATEOVERLAY);
             return Status;
         }
 
@@ -12183,8 +12213,8 @@ DxgkpDispatchBufferedIoctlWorker(
             PRXGK_GETDWMVERTICALBLANKEVENT_PACKET Packet;
             HANDLE EventHandle;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -12216,7 +12246,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return Status;
 
             Packet->EventHandle = (ULONGLONG)(ULONG_PTR)EventHandle;
-            Irp->IoStatus.Information =
+            KmtRequest->Information =
                 RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE;
             return STATUS_SUCCESS;
         }
@@ -12225,8 +12255,8 @@ DxgkpDispatchBufferedIoctlWorker(
         {
             PRXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET Packet;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -12289,7 +12319,7 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkCreateSynchronizationObject2(
                          (D3DKMT_CREATESYNCHRONIZATIONOBJECT2 *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATESYNCHRONIZATIONOBJECT2);
+                KmtRequest->Information = sizeof(D3DKMT_CREATESYNCHRONIZATIONOBJECT2);
             return Status;
         }
 
@@ -12300,7 +12330,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkOpenSynchronizationObject((D3DKMT_OPENSYNCHRONIZATIONOBJECT *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_OPENSYNCHRONIZATIONOBJECT);
+                KmtRequest->Information = sizeof(D3DKMT_OPENSYNCHRONIZATIONOBJECT);
             return Status;
         }
 
@@ -12329,7 +12359,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkCreatePagingQueue((D3DKMT_CREATEPAGINGQUEUE *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEPAGINGQUEUE);
+                KmtRequest->Information = sizeof(D3DKMT_CREATEPAGINGQUEUE);
             return Status;
         }
 
@@ -12348,7 +12378,7 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkQueryVideoMemoryInfo((D3DKMT_QUERYVIDEOMEMORYINFO *)SystemBuffer);
             if (NT_SUCCESS(Status))
-                Irp->IoStatus.Information = sizeof(D3DKMT_QUERYVIDEOMEMORYINFO);
+                KmtRequest->Information = sizeof(D3DKMT_QUERYVIDEOMEMORYINFO);
             return Status;
         }
 
@@ -12396,8 +12426,8 @@ DxgkpDispatchBufferedIoctlWorker(
         {
             PDXGKRNL_WIN32K_CDD_INTERFACE Interface;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
-                Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal ||
+                KmtRequest->RequestorMode != KernelMode)
             {
                 return STATUS_ACCESS_DENIED;
             }
@@ -12438,7 +12468,7 @@ DxgkpDispatchBufferedIoctlWorker(
             ULONG Version;
             ULONG InterfaceSize;
 
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL || Irp->RequestorMode != KernelMode)
+            if (!KmtRequest->Internal || KmtRequest->RequestorMode != KernelMode)
                 return STATUS_ACCESS_DENIED;
             if (InputLength < DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE ||
                 SystemBuffer == NULL)
@@ -12473,6 +12503,8 @@ DxgkpDispatchBufferedIoctlWorker(
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_6_SIZE;
             else if (Version == DXGKRNL_INTERFACE_VERSION_7)
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_7_SIZE;
+            else if (Version == DXGKRNL_INTERFACE_VERSION_8)
+                InterfaceSize = DXGKRNL_INTERFACE_VERSION_8_SIZE;
             else
             {
                 DXGKRNL_WARN("IOCTL_DXGKRNL_EXCHANGE_INTERFACE: "
@@ -12617,7 +12649,10 @@ DxgkpDispatchBufferedIoctlWorker(
             }
 #endif
 
-            Irp->IoStatus.Information = InterfaceSize;
+            if (Version >= DXGKRNL_INTERFACE_VERSION_8)
+                pInterface->RxgkIntPfnDispatchKmtIoctl = DxgkDispatchKmtIoctlDirect;
+
+            KmtRequest->Information = InterfaceSize;
 
             DXGKRNL_TRACE("IOCTL_DXGKRNL_EXCHANGE_INTERFACE: exchange successful (v%lu), %lu bytes populated\n", Version, InterfaceSize);
             return STATUS_SUCCESS;
@@ -12849,98 +12884,14 @@ DxgkpDirectSignalSynchronizationObjectFromCpu(
 }
 #endif
 
-/* ========================================================================
- * DxgkDispatchDeviceControl
- *
- * IRP_MJ_DEVICE_CONTROL handler.  Dispatches D3DKMT IOCTLs to the
- * appropriate handler function.
- *
- * IRQL: PASSIVE_LEVEL
- * ====================================================================== */
-NTSTATUS
-NTAPI
-DxgkDispatchDeviceControl(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PIRP           Irp)
+/* METHOD_BUFFERED D3DKMT requests that complete synchronously through
+ * DxgkpDispatchBufferedIoctl. */
+static BOOLEAN
+DxgkpIsBufferedKmtIoctl(
+    _In_ ULONG IoControlCode)
 {
-    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
-    NTSTATUS           Status;
-
-    /*
-     * Route \Device\Video0 IOCTLs (IOCTL_VIDEO_*) to the display handler.
-     * The display handler completes the IRP and returns TRUE.
-     */
-    if (DxgkDisplayDispatchIoctl(DeviceObject, Irp))
-        return STATUS_SUCCESS;
-
-    DXGKRNL_VERBOSE("DxgkDispatchDeviceControl: IoControlCode=0x%lX\n",
-                    Stack->Parameters.DeviceIoControl.IoControlCode);
-
-    switch (Stack->Parameters.DeviceIoControl.IoControlCode)
+    switch (IoControlCode)
     {
-        case IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY:
-        case IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY:
-        case IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY:
-        case IOCTL_DXGKRNL_GET_UNINIT_ENTRY:
-        {
-            PVOID *OutputPtr = (PVOID *)Irp->UserBuffer;
-            PVOID EntryPoint;
-            ULONG MinimumLevel;
-
-            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL || Irp->RequestorMode != KernelMode)
-            {
-                Status = STATUS_ACCESS_DENIED;
-                Irp->IoStatus.Information = 0;
-                Irp->IoStatus.Status = Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
-                return Status;
-            }
-            MinimumLevel = DxgkpKmtIoctlMinimumConfiguredLevel(
-                Stack->Parameters.DeviceIoControl.IoControlCode);
-            if (MinimumLevel == 0 ||
-                REACTOS_WDDM_TARGET_LEVEL < MinimumLevel)
-            {
-                Status = STATUS_NOT_SUPPORTED;
-                Irp->IoStatus.Information = 0;
-                Irp->IoStatus.Status = Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
-                return Status;
-            }
-            if (Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY)
-                EntryPoint = (PVOID)DxgkInitializeDisplayOnlyDriver;
-            else if (Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY || Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY)
-                EntryPoint = (PVOID)DxgkInitialize;
-            else
-                EntryPoint = (PVOID)DxgkUnInitialize;
-            if (Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(PVOID) || OutputPtr == NULL)
-            {
-                Status = STATUS_BUFFER_TOO_SMALL;
-                Irp->IoStatus.Information = 0;
-                Irp->IoStatus.Status = Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
-                return Status;
-            }
-            _SEH2_TRY
-            {
-                *OutputPtr = EntryPoint;
-            }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-                Status = _SEH2_GetExceptionCode();
-                Irp->IoStatus.Information = 0;
-                Irp->IoStatus.Status = Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
-                return Status;
-            }
-            _SEH2_END;
-            DXGKRNL_TRACE("DxgkDispatchDeviceControl: resolved private entry 0x%lX to %p\n", Stack->Parameters.DeviceIoControl.IoControlCode, EntryPoint);
-            Status = STATUS_SUCCESS;
-            Irp->IoStatus.Information = sizeof(PVOID);
-            Irp->IoStatus.Status = Status;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            return Status;
-        }
-
         /* D3DKMT buffered IOCTLs */
         case IOCTL_D3DKMT_ENUMADAPTERS:
         case IOCTL_D3DKMT_ENUMADAPTERS2:
@@ -13099,19 +13050,190 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2:
         case IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE:
         case IOCTL_DXGKRNL_EXCHANGE_INTERFACE:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+/*
+ * Runs a buffered D3DKMT request for win32k without building an IRP. The
+ * caller's buffers get the METHOD_BUFFERED treatment an internal IOCTL would:
+ * one system buffer holds the input and receives the output, which is copied
+ * back unless the request failed. Returns FALSE for a request that must still
+ * travel as an IRP.
+ */
+BOOLEAN
+NTAPI
+DxgkDispatchKmtIoctlDirect(
+    _In_ ULONG IoControlCode,
+    _In_reads_bytes_opt_(InputSize) PVOID InputBuffer,
+    _In_ ULONG InputSize,
+    _Out_writes_bytes_opt_(OutputSize) PVOID OutputBuffer,
+    _In_ ULONG OutputSize,
+    _Out_ NTSTATUS *OutStatus,
+    _Out_ PULONG_PTR OutInformation)
+{
+    UCHAR StackBuffer[512];
+    DXGKP_KMT_REQUEST Request;
+    ULONG BufferSize = max(InputSize, OutputSize);
+    PVOID SystemBuffer = NULL;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (OutStatus == NULL || OutInformation == NULL || !DxgkpIsBufferedKmtIoctl(IoControlCode))
+        return FALSE;
+    *OutInformation = 0;
+    if ((InputBuffer == NULL && InputSize != 0) || (OutputBuffer == NULL && OutputSize != 0))
+    {
+        *OutStatus = STATUS_INVALID_PARAMETER;
+        return TRUE;
+    }
+    if (BufferSize > sizeof(StackBuffer))
+    {
+        SystemBuffer = ExAllocatePoolWithTag(NonPagedPool, BufferSize, TAG_DXGK_CAPTURE);
+        if (SystemBuffer == NULL)
         {
-            if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL && Irp->RequestorMode == UserMode)
+            *OutStatus = STATUS_INSUFFICIENT_RESOURCES;
+            return TRUE;
+        }
+    }
+    else if (BufferSize != 0)
+    {
+        SystemBuffer = StackBuffer;
+    }
+    if (InputSize != 0)
+        RtlCopyMemory(SystemBuffer, InputBuffer, InputSize);
+    if (BufferSize > InputSize)
+        RtlZeroMemory((PUCHAR)SystemBuffer + InputSize, BufferSize - InputSize);
+
+    Request.SystemBuffer = SystemBuffer;
+    Request.InputLength = InputSize;
+    Request.OutputLength = OutputSize;
+    Request.IoControlCode = IoControlCode;
+    Request.Internal = TRUE;
+    Request.RequestorMode = KernelMode;
+    Request.Information = 0;
+    Status = DxgkpDispatchKmtRequest(&Request);
+
+    if (Request.Information > OutputSize)
+        Request.Information = OutputSize;
+    if (!NT_ERROR(Status) && Request.Information != 0)
+        RtlCopyMemory(OutputBuffer, SystemBuffer, Request.Information);
+    if (SystemBuffer != NULL && SystemBuffer != StackBuffer)
+        ExFreePoolWithTag(SystemBuffer, TAG_DXGK_CAPTURE);
+    *OutStatus = Status;
+    *OutInformation = Request.Information;
+    return TRUE;
+}
+
+/* ========================================================================
+ * DxgkDispatchDeviceControl
+ *
+ * IRP_MJ_DEVICE_CONTROL handler.  Dispatches D3DKMT IOCTLs to the
+ * appropriate handler function.
+ *
+ * IRQL: PASSIVE_LEVEL
+ * ====================================================================== */
+NTSTATUS
+NTAPI
+DxgkDispatchDeviceControl(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP           Irp)
+{
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+    NTSTATUS           Status;
+
+    /*
+     * Route \Device\Video0 IOCTLs (IOCTL_VIDEO_*) to the display handler.
+     * The display handler completes the IRP and returns TRUE.
+     */
+    if (DxgkDisplayDispatchIoctl(DeviceObject, Irp))
+        return STATUS_SUCCESS;
+
+    DXGKRNL_VERBOSE("DxgkDispatchDeviceControl: IoControlCode=0x%lX\n",
+                    Stack->Parameters.DeviceIoControl.IoControlCode);
+
+    if (DxgkpIsBufferedKmtIoctl(Stack->Parameters.DeviceIoControl.IoControlCode))
+    {
+        if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL && Irp->RequestorMode == UserMode)
+        {
+            Irp->IoStatus.Status = STATUS_ACCESS_DENIED;
+            Irp->IoStatus.Information = 0;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_ACCESS_DENIED;
+        }
+        Status = DxgkpDispatchBufferedIoctl(Irp, Stack);
+        Irp->IoStatus.Status = Status;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
+
+    switch (Stack->Parameters.DeviceIoControl.IoControlCode)
+    {
+        case IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY:
+        case IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY:
+        case IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY:
+        case IOCTL_DXGKRNL_GET_UNINIT_ENTRY:
+        {
+            PVOID *OutputPtr = (PVOID *)Irp->UserBuffer;
+            PVOID EntryPoint;
+            ULONG MinimumLevel;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL || Irp->RequestorMode != KernelMode)
             {
-                Irp->IoStatus.Status = STATUS_ACCESS_DENIED;
+                Status = STATUS_ACCESS_DENIED;
                 Irp->IoStatus.Information = 0;
+                Irp->IoStatus.Status = Status;
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
-                return STATUS_ACCESS_DENIED;
+                return Status;
             }
-            Status = DxgkpDispatchBufferedIoctl(Irp, Stack);
+            MinimumLevel = DxgkpKmtIoctlMinimumConfiguredLevel(
+                Stack->Parameters.DeviceIoControl.IoControlCode);
+            if (MinimumLevel == 0 ||
+                REACTOS_WDDM_TARGET_LEVEL < MinimumLevel)
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                Irp->IoStatus.Information = 0;
+                Irp->IoStatus.Status = Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+            }
+            if (Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY)
+                EntryPoint = (PVOID)DxgkInitializeDisplayOnlyDriver;
+            else if (Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY || Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY)
+                EntryPoint = (PVOID)DxgkInitialize;
+            else
+                EntryPoint = (PVOID)DxgkUnInitialize;
+            if (Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(PVOID) || OutputPtr == NULL)
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                Irp->IoStatus.Information = 0;
+                Irp->IoStatus.Status = Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+            }
+            _SEH2_TRY
+            {
+                *OutputPtr = EntryPoint;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                Irp->IoStatus.Information = 0;
+                Irp->IoStatus.Status = Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+            }
+            _SEH2_END;
+            DXGKRNL_TRACE("DxgkDispatchDeviceControl: resolved private entry 0x%lX to %p\n", Stack->Parameters.DeviceIoControl.IoControlCode, EntryPoint);
+            Status = STATUS_SUCCESS;
+            Irp->IoStatus.Information = sizeof(PVOID);
             Irp->IoStatus.Status = Status;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;
         }
+
 
         default:
             DXGKRNL_WARN("DxgkDispatchDeviceControl: unknown IOCTL 0x%lX\n",

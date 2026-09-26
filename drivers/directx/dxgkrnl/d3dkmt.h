@@ -578,4 +578,15 @@ DxgkpDispatchBufferedIoctl(
     _In_ PIRP              Irp,
     _In_ PIO_STACK_LOCATION Stack);
 
+BOOLEAN
+NTAPI
+DxgkDispatchKmtIoctlDirect(
+    _In_ ULONG IoControlCode,
+    _In_reads_bytes_opt_(InputSize) PVOID InputBuffer,
+    _In_ ULONG InputSize,
+    _Out_writes_bytes_opt_(OutputSize) PVOID OutputBuffer,
+    _In_ ULONG OutputSize,
+    _Out_ NTSTATUS *OutStatus,
+    _Out_ PULONG_PTR OutInformation);
+
 VOID DxgkProcessPriorityCleanup(_In_ PEPROCESS Process);

@@ -121,6 +121,11 @@ typedef struct _WDDM_BRIDGE_COMPLETION_CONTEXT
 
 /* The mutex serializes state publication; rundown protects concurrent IOCTLs. */
 
+static BOOLEAN
+WddmBridgeIsExpectedControlStatus(
+    _In_ ULONG IoControlCode,
+    _In_ NTSTATUS Status);
+
 static NTSTATUS
 WddmBridgeSendIoctlToDevice(
     _In_ PDEVICE_OBJECT DeviceObject,
@@ -361,6 +366,16 @@ WddmBridgeInit(VOID)
     ExchangeIn.ConfiguredWddmLevel = REACTOS_WDDM_TARGET_LEVEL;
     RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
     Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
+
+    /* An older dxgkrnl rejects version 8.  Retry the append-only v7 prefix. */
+    if (Status == STATUS_NOT_SUPPORTED)
+    {
+        ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_7;
+        ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_7_SIZE;
+        RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
+        Information = 0;
+        Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
+    }
 
     /* An older dxgkrnl rejects version 7.  Retry the append-only v6 prefix. */
     if (Status == STATUS_NOT_SUPPORTED)
@@ -665,6 +680,7 @@ WddmBridgeSendIoctlWithInformation(
 {
     PDEVICE_OBJECT DeviceObject;
     BOOLEAN RundownAcquired = FALSE;
+    ULONG_PTR DirectInformation;
     NTSTATUS Status;
 
     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
@@ -715,7 +731,24 @@ WddmBridgeSendIoctlWithInformation(
         return Status;
     }
 
-    Status = WddmBridgeSendIoctlToDevice(DeviceObject, IoControlCode, InputBuffer, InputSize, OutputBuffer, OutputSize, Information);
+    /* dxgkrnl completes these requests synchronously, so calling its
+     * dispatcher directly skips only the IRP and its completion APC. */
+    if (g_DxgkrnlInterfaceVersion < DXGKRNL_INTERFACE_VERSION_8 ||
+        g_DxgkrnlInterface.RxgkIntPfnDispatchKmtIoctl == NULL ||
+        !g_DxgkrnlInterface.RxgkIntPfnDispatchKmtIoctl(IoControlCode, InputBuffer, InputSize, OutputBuffer, OutputSize, &Status, &DirectInformation))
+    {
+        Status = WddmBridgeSendIoctlToDevice(DeviceObject, IoControlCode, InputBuffer, InputSize, OutputBuffer, OutputSize, Information);
+    }
+    else
+    {
+        if (Information != NULL)
+            *Information = DirectInformation;
+        if (!NT_SUCCESS(Status) && !WddmBridgeIsExpectedControlStatus(IoControlCode, Status))
+        {
+            DPRINT1("WddmBridgeSendIoctl: IOCTL 0x%08lX failed with 0x%08lX\n",
+                    IoControlCode, Status);
+        }
+    }
     if (RundownAcquired)
         ExReleaseRundownProtection(&g_WddmBridgeRundown);
     return Status;

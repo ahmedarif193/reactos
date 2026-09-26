@@ -182,7 +182,8 @@ typedef struct _DXGKRNL_WIN32K_CDD_INTERFACE
 #define DXGKRNL_INTERFACE_VERSION_5        5
 #define DXGKRNL_INTERFACE_VERSION_6        6
 #define DXGKRNL_INTERFACE_VERSION_7        7
-#define DXGKRNL_INTERFACE_VERSION_CURRENT  DXGKRNL_INTERFACE_VERSION_7
+#define DXGKRNL_INTERFACE_VERSION_8        8
+#define DXGKRNL_INTERFACE_VERSION_CURRENT  DXGKRNL_INTERFACE_VERSION_8
 
 typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
 {
@@ -195,6 +196,22 @@ typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
     FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel)
 
 /* REACTOS_WIN32K_DXGKRNL_INTERFACE function Pointers: */
+
+/* Runs a METHOD_BUFFERED internal D3DKMT IOCTL without an IRP. Returns FALSE
+ * when the request must be sent as an IRP instead. */
+typedef
+BOOLEAN
+NTAPI
+DXGADAPTER_DISPATCHKMTIOCTL(
+    _In_ ULONG IoControlCode,
+    _In_reads_bytes_opt_(InputSize) PVOID InputBuffer,
+    _In_ ULONG InputSize,
+    _Out_writes_bytes_opt_(OutputSize) PVOID OutputBuffer,
+    _In_ ULONG OutputSize,
+    _Out_ NTSTATUS *Status,
+    _Out_ PULONG_PTR Information);
+
+typedef DXGADAPTER_DISPATCHKMTIOCTL *PDXGADAPTER_DISPATCHKMTIOCTL;
 
 typedef
 NTSTATUS
@@ -1198,6 +1215,9 @@ typedef struct _REACTOS_WIN32K_DXGKRNL_INTERFACE
     /* Version 7 additions; WDDM 1.2 implementation slots. */
     PDXGADAPTER_GETDWMVERTICALBLANKEVENT RxgkIntPfnGetDwmVerticalBlankEvent;
     PDXGADAPTER_SETSYNCREFRESHCOUNTWAITTARGET RxgkIntPfnSetSyncRefreshCountWaitTarget;
+
+    /* Version 8 additions; IRP-free transport for the bridge's IOCTLs. */
+    PDXGADAPTER_DISPATCHKMTIOCTL RxgkIntPfnDispatchKmtIoctl;
 } REACTOS_WIN32K_DXGKRNL_INTERFACE, *PREACTOS_WIN32K_DXGKRNL_INTERFACE;
 
 /* Sizes used to negotiate the append-only callback table. */
@@ -1214,6 +1234,8 @@ typedef struct _REACTOS_WIN32K_DXGKRNL_INTERFACE
 #define DXGKRNL_INTERFACE_VERSION_6_SIZE \
     FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnGetDwmVerticalBlankEvent)
 #define DXGKRNL_INTERFACE_VERSION_7_SIZE \
+    FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnDispatchKmtIoctl)
+#define DXGKRNL_INTERFACE_VERSION_8_SIZE \
     sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE)
 
 /*
@@ -1223,4 +1245,4 @@ typedef struct _REACTOS_WIN32K_DXGKRNL_INTERFACE
  * then fails to attach at all -- there is no adapter after that.  Keeping the
  * pair in one place is what stops the two from drifting apart again.
  */
-#define DXGKRNL_INTERFACE_VERSION_CURRENT_SIZE  DXGKRNL_INTERFACE_VERSION_7_SIZE
+#define DXGKRNL_INTERFACE_VERSION_CURRENT_SIZE  DXGKRNL_INTERFACE_VERSION_8_SIZE
