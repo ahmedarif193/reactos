@@ -797,6 +797,16 @@ Rpi5Vc4DdiStartDevice(
     if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
         Rpi5HvsInstallScanout(DeviceExtension);
 
+    /* The HVS switches display lists at frame start, so a primary flip is
+     * an MMIO operation and never queues behind rendering work. */
+    if (!DeviceExtension->Headless &&
+        !Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        DeviceExtension->FlipWorkItem =
+            IoAllocateWorkItem(DeviceExtension->PhysicalDeviceObject);
+        DeviceExtension->MmioFlips = DeviceExtension->FlipWorkItem != NULL;
+    }
+
     DeviceExtension->SourceVisible = TRUE;
     DeviceExtension->Started = TRUE;
     InterlockedExchange(&DeviceExtension->ShadowPresentInterfaceQueriesOpen, 1);
@@ -893,6 +903,13 @@ Rpi5Vc4DdiStopDevice(
     {
         IoFreeWorkItem(DeviceExtension->HpdWorkItem);
         DeviceExtension->HpdWorkItem = NULL;
+    }
+
+    DeviceExtension->MmioFlips = FALSE;
+    if (DeviceExtension->FlipWorkItem != NULL)
+    {
+        IoFreeWorkItem(DeviceExtension->FlipWorkItem);
+        DeviceExtension->FlipWorkItem = NULL;
     }
 
     if (DeviceExtension->HvsBase != NULL)

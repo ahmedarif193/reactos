@@ -188,6 +188,13 @@ Rpi5HvsFlipScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ PHYSICAL_ADDRESS FrameBufferPhysical);
 
+/* Read the base-plane address of the list the HVS is scanning. Callable at
+ * DISPATCH_LEVEL; fails until the register block has been mapped. */
+BOOLEAN
+Rpi5HvsQueryScanoutAddress(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _Out_ PPHYSICAL_ADDRESS Address);
+
 /* One plane of a multi-plane (MPO) composition, bottom-up layer order. */
 typedef struct _RPI5VC4_HVS_PLANE
 {

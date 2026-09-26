@@ -415,6 +415,138 @@ Rpi5Vc4DdiEnumVidPnCofuncModality(
     return STATUS_SUCCESS;
 }
 
+/*
+ * The HVS scans physical memory directly; only surfaces in the VRAM slab or
+ * the firmware framebuffer are reachable scanout targets. The whole visible
+ * raster must fit below the target's end. Callable at DISPATCH_LEVEL.
+ */
+static NTSTATUS
+Rpi5Vc4ValidateHvsTarget(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PHYSICAL_ADDRESS Target)
+{
+    ULONGLONG SlabBase;
+    ULONGLONG SlabEnd;
+    ULONGLONG RasterBytes;
+
+    if (DeviceExtension->VramPhysical.QuadPart < 0 ||
+        DeviceExtension->VramSize == 0)
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+
+    SlabBase = (ULONGLONG)DeviceExtension->VramPhysical.QuadPart;
+    if (SlabBase > MAXULONGLONG - DeviceExtension->VramSize)
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    SlabEnd = SlabBase + DeviceExtension->VramSize;
+
+    if (Target.QuadPart == DeviceExtension->FirmwareFrameBufferPhysical.QuadPart)
+        return STATUS_SUCCESS;
+
+    RasterBytes = (ULONGLONG)DeviceExtension->BytesPerScanLine *
+                  DeviceExtension->ScreenHeight;
+    if (DeviceExtension->VramVa == NULL ||
+        (ULONGLONG)Target.QuadPart < SlabBase ||
+        (ULONGLONG)Target.QuadPart >= SlabEnd ||
+        RasterBytes > SlabEnd - (ULONGLONG)Target.QuadPart)
+    {
+        DPRINT1("RPI5VC4: SetVidPnSourceAddress: 0x%I64x outside the "
+                "VRAM slab\n", Target.QuadPart);
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+Rpi5Vc4FlipHvsScanout(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PHYSICAL_ADDRESS Target)
+{
+    if (!Rpi5HvsFlipScanout(DeviceExtension, Target))
+    {
+        /* Latched-off flip path: fail fast, no reinstall churn. */
+        if (DeviceExtension->HvsFlipBroken)
+            return STATUS_UNSUCCESSFUL;
+
+        /*
+         * The live display list no longer matches (e.g. the firmware plane
+         * was rebuilt); reinstall our list at the current address, then
+         * retry the flip once.
+         */
+        Rpi5HvsInstallScanout(DeviceExtension);
+        if (!Rpi5HvsFlipScanout(DeviceExtension, Target))
+        {
+            DPRINT1("RPI5VC4: HVS flip to 0x%I64x failed\n", Target.QuadPart);
+            return STATUS_UNSUCCESSFUL;
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/* Publish the latest armed MMIO flip. Only the newest address matters: a
+ * superseded flip was never observed by dxgkrnl as scanned. */
+static VOID
+NTAPI
+Rpi5Vc4FlipWorker(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID Context)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = Context;
+    PHYSICAL_ADDRESS Target;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (DeviceExtension == NULL)
+        return;
+
+    for (;;)
+    {
+        Target.QuadPart = InterlockedExchange64(
+                              &DeviceExtension->FlipPendingAddress, 0);
+        if (Target.QuadPart != 0 && !DeviceExtension->StopAccepting)
+            (VOID)Rpi5Vc4FlipHvsScanout(DeviceExtension, Target);
+
+        /* A flip armed after the exchange saw the worker still claimed. */
+        InterlockedExchange(&DeviceExtension->FlipWorkQueued, 0);
+        if (InterlockedCompareExchange64(&DeviceExtension->FlipPendingAddress,
+                                         0, 0) == 0 ||
+            DeviceExtension->StopAccepting ||
+            InterlockedCompareExchange(&DeviceExtension->FlipWorkQueued,
+                                       1, 0) != 0)
+        {
+            break;
+        }
+    }
+}
+
+VOID
+NTAPI
+Rpi5Vc4FlipDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (DeviceExtension == NULL || DeviceExtension->StopAccepting ||
+        DeviceExtension->FlipWorkItem == NULL)
+    {
+        return;
+    }
+
+    if (InterlockedCompareExchange(&DeviceExtension->FlipWorkQueued, 1, 0) == 0)
+    {
+        IoQueueWorkItem(DeviceExtension->FlipWorkItem, Rpi5Vc4FlipWorker,
+                        CriticalWorkQueue, DeviceExtension);
+    }
+}
+
 NTSTATUS
 APIENTRY
 Rpi5Vc4DdiSetVidPnSourceAddress(
@@ -427,6 +559,7 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
     ULONGLONG SlabBase;
     ULONGLONG SlabEnd;
     ULONGLONG Offset;
+    NTSTATUS Status;
 
     if (DeviceExtension == NULL || SetVidPnSourceAddress == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -438,6 +571,24 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
         return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
 
     Target = SetVidPnSourceAddress->PrimaryAddress;
+
+    /* An MMIO flip arrives under the synchronization lock. Arm it for the
+     * passive worker; the HVS switches lists at the next frame start and the
+     * vsync source reports the switch once the HVS scans the new list. */
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+    {
+        if (!DeviceExtension->MmioFlips)
+            return STATUS_NOT_SUPPORTED;
+        if (Target.QuadPart == 0)
+            Target = DeviceExtension->FirmwareFrameBufferPhysical;
+        Status = Rpi5Vc4ValidateHvsTarget(DeviceExtension, Target);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        InterlockedExchange64(&DeviceExtension->FlipPendingAddress,
+                              Target.QuadPart);
+        KeInsertQueueDpc(&DeviceExtension->FlipDpc, NULL, NULL);
+        return STATUS_SUCCESS;
+    }
 
     /* RP1 DSI consumes a fixed portrait firmware framebuffer rather than a
      * page-flippable HVS plane.  A full-WDDM flip reaches this DDI only after
@@ -508,58 +659,10 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
     if (Target.QuadPart == 0)
         Target = DeviceExtension->FirmwareFrameBufferPhysical;
 
-    /*
-     * The HVS scans physical memory directly; only surfaces in the VRAM
-     * slab or the firmware framebuffer are reachable scanout targets.
-     * The whole visible raster must fit below the target's end.
-     */
-    if (DeviceExtension->VramPhysical.QuadPart < 0 ||
-        DeviceExtension->VramSize == 0)
-    {
-        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
-    }
-
-    SlabBase = (ULONGLONG)DeviceExtension->VramPhysical.QuadPart;
-    if (SlabBase > MAXULONGLONG - DeviceExtension->VramSize)
-        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
-    SlabEnd = SlabBase + DeviceExtension->VramSize;
-
-    if (Target.QuadPart != DeviceExtension->FirmwareFrameBufferPhysical.QuadPart)
-    {
-        ULONGLONG RasterBytes = (ULONGLONG)DeviceExtension->BytesPerScanLine *
-                                DeviceExtension->ScreenHeight;
-
-        if (DeviceExtension->VramVa == NULL ||
-            (ULONGLONG)Target.QuadPart < SlabBase ||
-            (ULONGLONG)Target.QuadPart >= SlabEnd ||
-            RasterBytes > SlabEnd - (ULONGLONG)Target.QuadPart)
-        {
-            DPRINT1("RPI5VC4: SetVidPnSourceAddress: 0x%I64x outside the "
-                    "VRAM slab\n", Target.QuadPart);
-            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
-        }
-    }
-
-    if (!Rpi5HvsFlipScanout(DeviceExtension, Target))
-    {
-        /* Latched-off flip path: fail fast, no reinstall churn. */
-        if (DeviceExtension->HvsFlipBroken)
-            return STATUS_UNSUCCESSFUL;
-
-        /*
-         * The live display list no longer matches (e.g. the firmware plane
-         * was rebuilt); reinstall our list at the current address, then
-         * retry the flip once.
-         */
-        Rpi5HvsInstallScanout(DeviceExtension);
-        if (!Rpi5HvsFlipScanout(DeviceExtension, Target))
-        {
-            DPRINT1("RPI5VC4: HVS flip to 0x%I64x failed\n", Target.QuadPart);
-            return STATUS_UNSUCCESSFUL;
-        }
-    }
-
-    return STATUS_SUCCESS;
+    Status = Rpi5Vc4ValidateHvsTarget(DeviceExtension, Target);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return Rpi5Vc4FlipHvsScanout(DeviceExtension, Target);
 }
 
 NTSTATUS
