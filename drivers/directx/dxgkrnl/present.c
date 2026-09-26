@@ -2145,6 +2145,9 @@ DxgkPresentInit(
         KeInitializeSpinLock(&Queues[i].VBlankWaitLock);
         KeInitializeMutex(&Queues[i].MmioPresentMutex, 0);
         KeInitializeEvent(&Queues[i].MmioVSyncEvent, SynchronizationEvent, FALSE);
+        KeInitializeSpinLock(&Queues[i].MmioFlipLock);
+        InitializeListHead(&Queues[i].MmioFlipList);
+        Queues[i].MmioFlipWorkQueued = 0;
         InitializeListHead(&Queues[i].VBlankWaiterList);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
         Status = DxgkpCreateDwmVBlankEvent(&Queues[i].DwmVBlankEvent);
@@ -4066,6 +4069,64 @@ Cleanup:
     return Status;
 }
 
+static VOID
+DxgkpDereferenceOrderedMmioFlip(
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry)
+{
+    if (InterlockedDecrement(&Entry->MmioFlipReferences) != 0)
+        return;
+    DxgkpReleasePresentEntry(Entry);
+    ExFreePoolWithTag(Entry, TAG_DXGK_PRESENT);
+}
+
+/* Arms and confirms ordered flips in admission order. Each entry carries
+ * the present-queue reference taken when its context work retired; release
+ * it only after this drainer's last access to the queue. */
+static VOID
+NTAPI
+DxgkpMmioFlipWorker(
+    _In_ PVOID Parameter)
+{
+    PDXGKRNL_PRESENT_QUEUE Queue = Parameter;
+    PDXGKRNL_ADAPTER Adapter = Queue->Adapter;
+    PDXGKRNL_PRESENT_ENTRY Entry;
+    BOOLEAN QueuesHeld = FALSE;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&Queue->MmioFlipLock, &OldIrql);
+        Entry = NULL;
+        if (!IsListEmpty(&Queue->MmioFlipList))
+        {
+            Entry = CONTAINING_RECORD(RemoveHeadList(&Queue->MmioFlipList),
+                                      DXGKRNL_PRESENT_ENTRY, MmioFlipEntry);
+        }
+        else
+        {
+            InterlockedExchange(&Queue->MmioFlipWorkQueued, 0);
+        }
+        KeReleaseSpinLock(&Queue->MmioFlipLock, OldIrql);
+        if (QueuesHeld)
+            DxgkpReleasePresentQueues(Adapter);
+        if (Entry == NULL)
+            return;
+        QueuesHeld = TRUE;
+
+        Status = DxgkpExecuteMmioFlip(Adapter, Queue, Entry);
+        DxgkDeviceCompletePresent(Entry->Device, Entry->DeviceWork, Status);
+        if (!NT_SUCCESS(Status) &&
+            Status != STATUS_GRAPHICS_PRESENT_OCCLUDED &&
+            Status != STATUS_CANCELLED)
+        {
+            DXGKRNL_WARN("DxgkpMmioFlipWorker: present %llu failed 0x%08lX\n",
+                         Entry->PresentId, Status);
+        }
+        DxgkpDereferenceOrderedMmioFlip(Entry);
+    }
+}
+
 static NTSTATUS NTAPI
 DxgkpExecuteOrderedMmioFlip(
     _Inout_ PVOID CallbackContext)
@@ -4073,7 +4134,7 @@ DxgkpExecuteOrderedMmioFlip(
     PDXGKRNL_PRESENT_ENTRY Entry = CallbackContext;
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_PRESENT_QUEUE Queue;
-    NTSTATUS Status;
+    KIRQL OldIrql;
 
     if (Entry == NULL || Entry->Device == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -4083,16 +4144,27 @@ DxgkpExecuteOrderedMmioFlip(
     if (Adapter->PresentQueues == NULL ||
         Entry->VidPnSourceId >= Adapter->PresentQueueCount)
     {
-        Status = STATUS_DEVICE_REMOVED;
+        DxgkpReleasePresentQueues(Adapter);
+        return STATUS_DEVICE_REMOVED;
     }
-    else
+
+    /* The context's earlier work has retired. Waiting here for the flip to
+     * reach scanout would stall the shared context-order worker for up to
+     * a refresh period, starving every other context of dispatch and
+     * retirement. Hand the flip, its present-queue reference and its
+     * present completion to the queue's drainer instead. */
+    Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)
+                [Entry->VidPnSourceId];
+    InterlockedExchange(&Entry->MmioFlipReferences, 2);
+    KeAcquireSpinLock(&Queue->MmioFlipLock, &OldIrql);
+    InsertTailList(&Queue->MmioFlipList, &Entry->MmioFlipEntry);
+    KeReleaseSpinLock(&Queue->MmioFlipLock, OldIrql);
+    if (InterlockedCompareExchange(&Queue->MmioFlipWorkQueued, 1, 0) == 0)
     {
-        Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)
-                    [Entry->VidPnSourceId];
-        Status = DxgkpExecuteMmioFlip(Adapter, Queue, Entry);
+        ExInitializeWorkItem(&Queue->MmioFlipWorkItem, DxgkpMmioFlipWorker, Queue);
+        ExQueueWorkItem(&Queue->MmioFlipWorkItem, CriticalWorkQueue);
     }
-    DxgkpReleasePresentQueues(Adapter);
-    return Status;
+    return STATUS_SUCCESS;
 }
 
 static VOID NTAPI
@@ -4104,6 +4176,12 @@ DxgkpReleaseOrderedMmioFlip(
 
     if (Entry == NULL)
         return;
+    /* A handed-off flip completes its present after scanout. */
+    if (InterlockedCompareExchange(&Entry->MmioFlipReferences, 0, 0) != 0)
+    {
+        DxgkpDereferenceOrderedMmioFlip(Entry);
+        return;
+    }
     if (CompletionStatus == STATUS_PENDING)
         CompletionStatus = STATUS_CANCELLED;
     DxgkDeviceCompletePresent(Entry->Device, Entry->DeviceWork, CompletionStatus);
@@ -4371,6 +4449,7 @@ DxgkpQueuePresent(
                 {
                     *OrderedEntry = *Entry;
                     OrderedEntry->DeviceWork = DeviceWork;
+                    OrderedEntry->MmioFlipReferences = 0;
                     Status = DxgkContextOrderAdmitCompletion(
                                  Entry->Context,
                                  OrderedEntry,
