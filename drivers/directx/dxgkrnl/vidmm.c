@@ -7889,14 +7889,17 @@ DxgkpCreateDwmRedirectionAllocation(
         return FALSE;
     }
 
+    /* Only the linear OS surface is created here. A producer's GPU buffer
+     * carries the same descriptor without a pitch; its layout is the
+     * miniport's, so it is an ordinary driver resource. */
     RuntimeInfo = CreateAllocation->pPrivateRuntimeData;
-    if (RuntimeInfo->Magic != DWM_DX_SURFACE_INFO_MAGIC)
+    if (RuntimeInfo->Magic != DWM_DX_SURFACE_INFO_MAGIC ||
+        RuntimeInfo->Version != DWM_DX_SURFACE_INFO_VERSION)
         return FALSE;
 
     RtlCopyMemory(&RawFlags, &CreateAllocation->Flags, sizeof(RawFlags));
     AllocationInfo = CreateAllocation->pAllocationInfo;
-    if (RuntimeInfo->Version != DWM_DX_SURFACE_INFO_VERSION ||
-        RuntimeInfo->Width == 0 || RuntimeInfo->Height == 0 ||
+    if (RuntimeInfo->Width == 0 || RuntimeInfo->Height == 0 ||
         RuntimeInfo->Format != DWM_DX_FORMAT_B8G8R8A8_UNORM ||
         RuntimeInfo->Width > MAXULONG / sizeof(ULONG) ||
         RuntimeInfo->Pitch != RuntimeInfo->Width * sizeof(ULONG) ||
