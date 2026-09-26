@@ -15,6 +15,7 @@
 #include <drivers/directx/umd_adapter.h>
 #include <wine/winedxgi.h>
 #include <dwmframe.h>
+#include <dwmoverlay.h>
 #include <dxgi_dcomp.h>
 #include <vkd3d_shader.h>
 #include <wine/debug.h>
@@ -4593,7 +4594,7 @@ struct NativePublishRecord
     bool busy;
 };
 
-class NativeSwapChain final : public IDXGISwapChain3, public NativeAllocation
+class NativeSwapChain final : public IDXGISwapChain3, public IDwmOverlaySwapChain, public NativeAllocation
 {
 public:
     LONG references = 1;
@@ -4613,6 +4614,9 @@ public:
     NativeTexture2D *transport = NULL; /* the latest frame, one of transports */
     RECT frame_damage[8] = {};
     DWM_DX_SURFACE_EXCHANGE publication = {};
+    /* The overlay planes of the compositor output's present in progress. */
+    UINT overlay_count = 0;
+    D3DKMT_MULTIPLANE_OVERLAY overlays[DWM_MAX_OVERLAY_PLANES] = {};
     /* Client publications are retained: DWM samples each frame in place and
      * sets that buffer's release event once it no longer reads it. */
     D3DKMT_HANDLE release_shares[16] = {};
@@ -4674,6 +4678,12 @@ public:
     {
         if (!out) return E_INVALIDARG;
         *out = NULL;
+        if (IsEqualGUID(iid, IID_IDwmOverlaySwapChain) && primary)
+        {
+            *out = static_cast<IDwmOverlaySwapChain *>(this);
+            AddRef();
+            return S_OK;
+        }
         if (!IsEqualGUID(iid, IID_IUnknown) && !IsEqualGUID(iid, IID_IDXGIObject)
                 && !IsEqualGUID(iid, IID_IDXGIDeviceSubObject) && !IsEqualGUID(iid, IID_IDXGISwapChain)
                 && !IsEqualGUID(iid, IID_IDXGISwapChain1) && !IsEqualGUID(iid, IID_IDXGISwapChain2)
@@ -4682,6 +4692,8 @@ public:
         AddRef();
         return S_OK;
     }
+    HRESULT STDMETHODCALLTYPE PresentWithOverlays(UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS *parameters,
+            UINT count, const DWM_OVERLAY_PLANE *planes) override;
     ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&references); }
     ULONG STDMETHODCALLTYPE Release() override
     {
@@ -5162,6 +5174,41 @@ HRESULT NativeSwapChain::Publish(NativeTexture2D *texture)
     return hr;
 }
 
+HRESULT STDMETHODCALLTYPE NativeSwapChain::PresentWithOverlays(UINT interval, UINT flags,
+        const DXGI_PRESENT_PARAMETERS *parameters, UINT count, const DWM_OVERLAY_PLANE *planes)
+{
+    if (!primary || !count || count > DWM_MAX_OVERLAY_PLANES || !planes
+            || (flags & (DXGI_PRESENT_TEST | DXGI_PRESENT_DO_NOT_SEQUENCE)))
+        return DXGI_ERROR_INVALID_CALL;
+    NativeLock guard(device);
+    if (!device->get_single_allocation) return DXGI_ERROR_UNSUPPORTED;
+    for (UINT i = 0; i < count; ++i)
+    {
+        const DWM_OVERLAY_PLANE &plane = planes[i];
+        NativeTexture2D *texture = static_cast<NativeTexture2D *>(plane.Texture);
+        D3DKMT_HANDLE allocation = 0;
+        if (!texture || texture->device != device
+                || plane.Source.right - plane.Source.left != plane.Destination.right - plane.Destination.left
+                || plane.Source.bottom - plane.Source.top != plane.Destination.bottom - plane.Destination.top
+                || FAILED(device->get_single_allocation(device->runtime_device,
+                        texture->runtime_handle.handle, &allocation)) || !allocation)
+            return DXGI_ERROR_INVALID_CALL;
+        D3DKMT_MULTIPLANE_OVERLAY &overlay = overlays[i];
+        ZeroMemory(&overlay, sizeof(overlay));
+        overlay.LayerIndex = i + 1;
+        overlay.Enabled = TRUE;
+        overlay.hAllocation = allocation;
+        overlay.PlaneAttributes.SrcRect = plane.Source;
+        overlay.PlaneAttributes.DstRect = plane.Destination;
+        overlay.PlaneAttributes.ClipRect = plane.Destination;
+        overlay.PlaneAttributes.Rotation = D3DDDI_ROTATION_IDENTITY;
+    }
+    overlay_count = count;
+    HRESULT hr = Present1(interval, flags, parameters);
+    overlay_count = 0;
+    return hr;
+}
+
 struct NativePresentContext
 {
     NativeSwapChain *swapchain;
@@ -5240,7 +5287,36 @@ static HRESULT APIENTRY NativePresent(HANDLE runtime_device, DXGIDDICB_PRESENT *
         context->result = StatusToHresult(status);
         return context->result;
     }
-    status = D3DKMTPresent(&present);
+    if (swapchain->overlay_count)
+    {
+        /* The same flip with the overlay planes above the output. */
+        D3DKMT_MULTIPLANE_OVERLAY planes[1 + DWM_MAX_OVERLAY_PLANES] = {};
+        D3DKMT_PRESENT_MULTIPLANE_OVERLAY overlay = {};
+        planes[0].LayerIndex = 0;
+        planes[0].Enabled = TRUE;
+        planes[0].hAllocation = present.hSource;
+        planes[0].PlaneAttributes.SrcRect = present.SrcRect;
+        planes[0].PlaneAttributes.DstRect = present.DstRect;
+        planes[0].PlaneAttributes.ClipRect = present.DstRect;
+        planes[0].PlaneAttributes.Rotation = D3DDDI_ROTATION_IDENTITY;
+        for (UINT i = 0; i < swapchain->overlay_count; ++i)
+            planes[i + 1] = swapchain->overlays[i];
+        overlay.hContext = present.hContext;
+        overlay.BroadcastContextCount = present.BroadcastContextCount;
+        for (UINT i = 0; i < present.BroadcastContextCount; ++i)
+            overlay.BroadcastContext[i] = present.BroadcastContext[i];
+        overlay.VidPnSourceId = 0;
+        overlay.PresentCount = present.PresentCount;
+        overlay.FlipInterval = present.FlipInterval;
+        overlay.Flags.PresentCountValid = 1;
+        overlay.Flags.FlipDoNotWait = present.Flags.FlipDoNotWait;
+        overlay.Flags.FlipRestart = present.Flags.FlipRestart;
+        overlay.PresentPlaneCount = swapchain->overlay_count + 1;
+        overlay.pPresentPlanes = planes;
+        status = D3DKMTPresentMultiPlaneOverlay(&overlay);
+    }
+    else
+        status = D3DKMTPresent(&present);
     context->submitted = status == STATUS_SUCCESS;
     if (context->submitted)
     {
