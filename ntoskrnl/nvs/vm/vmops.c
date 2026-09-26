@@ -817,7 +817,7 @@ MiFreeVirtualMemory(
         if (End > MI_VAD_END(Vad) || End <= Start)
         {
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
-            return (FreeType == MI_MEM_RELEASE) ? STATUS_UNABLE_TO_FREE_VM : STATUS_UNABLE_TO_DECOMMIT_VM;
+            return STATUS_UNABLE_TO_FREE_VM;
         }
     }
 

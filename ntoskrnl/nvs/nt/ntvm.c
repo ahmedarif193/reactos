@@ -304,6 +304,9 @@ MiAllocateVirtualMemoryNt(
     if (BaseAddress != NULL && (LowestAddress | HighestEndingAddress | Alignment) != 0)
         return STATUS_INVALID_PARAMETER;
 
+    if (BaseAddress != NULL && (ULONG_PTR)BaseAddress < (ULONG_PTR)MM_LOWEST_USER_ADDRESS)
+        return STATUS_CONFLICTING_ADDRESSES;
+
     if (BaseAddress != NULL)
         Highest = (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
     else if (Highest + 1 < PAGE_SIZE)
@@ -553,6 +556,9 @@ NtFreeVirtualMemory(
 
     if ((ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - (ULONG_PTR)BaseAddress < RegionSize)
         return STATUS_INVALID_PARAMETER;
+
+    if ((ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress) == MI_SHARED_USER_DATA_VA)
+        return STATUS_INVALID_PAGE_PROTECTION;
 
     Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
     if (!NT_SUCCESS(Status))
