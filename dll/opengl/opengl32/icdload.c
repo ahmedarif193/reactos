@@ -102,10 +102,13 @@ typedef HRESULT (WINAPI *PFN_DWM_DX_GET_WINDOW_SHARED_SURFACE)(
     HWND, LUID, HMONITOR, DWORD, UINT *, HANDLE *, ULONGLONG *);
 typedef HRESULT (WINAPI *PFN_DWM_DX_UPDATE_WINDOW_SHARED_SURFACE)(
     HWND, ULONGLONG, DWORD, HMONITOR, const RECT *);
+typedef HRESULT (WINAPI *PFN_DWM_DX_PUBLISH_WINDOW_SURFACE)(
+    HWND, LUID, HANDLE, UINT, UINT, HANDLE);
 
 static INIT_ONCE DwmDxInitOnce = INIT_ONCE_STATIC_INIT;
 static PFN_DWM_DX_GET_WINDOW_SHARED_SURFACE DwmDxGetWindowSharedSurface;
 static PFN_DWM_DX_UPDATE_WINDOW_SHARED_SURFACE DwmDxUpdateWindowSharedSurface;
+static PFN_DWM_DX_PUBLISH_WINDOW_SURFACE DwmDxPublishWindowSurface;
 static LONG DwmDxPresentFailureLogged;
 
 typedef struct _WGL_ASYNC_PRESENT
@@ -116,6 +119,9 @@ typedef struct _WGL_ASYNC_PRESENT
     ULONGLONG UpdateId;
     DWORD Flags;
     RECT UpdateRect;
+    /* A retained present publishes the ICD's own buffer instead. */
+    PWGL_PRESENTBUFFERS_CB_RETAINED Retained;
+    WGL_PRESENTBUFFERS_CB_RETAINED RetainedData;
 } WGL_ASYNC_PRESENT, *PWGL_ASYNC_PRESENT;
 
 /*
@@ -162,6 +168,26 @@ IntPublishDwmDxPresentRecycle(PWGL_ASYNC_PRESENT Present)
     HRESULT Result;
     BOOL Succeeded;
 
+    if (Present->Retained != NULL)
+    {
+        const WGL_PRESENTBUFFERS_CB_RETAINED *Retained = Present->Retained;
+
+        Result = E_FAIL;
+        if (WaitForSingleObject(Retained->CompletionEvent, INFINITE) == WAIT_OBJECT_0)
+        {
+            Result = DwmDxPublishWindowSurface(Present->Window,
+                                               Retained->Base.AdapterLuid,
+                                               Retained->SharedSurface,
+                                               Retained->Width,
+                                               Retained->Height,
+                                               Retained->ReleaseEvent);
+        }
+        /* A buffer DWM never received is the ICD's again. */
+        if (FAILED(Result))
+            SetEvent(Retained->ReleaseEvent);
+        goto Recycle;
+    }
+
     if (WaitForSingleObject(Present->CompletionEvent, INFINITE) != WAIT_OBJECT_0)
     {
         IntReportDwmDxPresentFailure("completion_wait",
@@ -186,7 +212,9 @@ IntPublishDwmDxPresentRecycle(PWGL_ASYNC_PRESENT Present)
                                              NULL,
                                              NULL);
     }
+Recycle:
     Succeeded = SUCCEEDED(Result);
+    Present->Retained = NULL;
 
     EnterCriticalSection(&DwmDxPublishQueue.Lock);
     InsertHeadList(&DwmDxPublishQueue.Spare, &Present->Entry);
@@ -401,6 +429,9 @@ IntLoadDwmDxCallbacks(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *Context)
     DwmDxUpdateWindowSharedSurface =
         (PFN_DWM_DX_UPDATE_WINDOW_SHARED_SURFACE)
             GetProcAddress(Module, (LPCSTR)(ULONG_PTR)101);
+    DwmDxPublishWindowSurface =
+        (PFN_DWM_DX_PUBLISH_WINDOW_SURFACE)
+            GetProcAddress(Module, "DwmpDxPublishWindowSurface");
     return TRUE;
 }
 
@@ -581,9 +612,103 @@ wglPresentBuffersDirect(HDC hdc,
     return IcdData->DrvPresentBuffers(hdc, &PresentData);
 }
 
+/* A retained buffer that is presented directly is the ICD's again. */
+static BOOL
+IntPresentRetainedDirect(HDC hdc,
+                         struct ICD_Data *IcdData,
+                         const WGL_PRESENTBUFFERS_CB_RETAINED *Retained)
+{
+    BOOL Result = wglPresentBuffersDirect(hdc, IcdData, &Retained->Base);
+
+    SetEvent(Retained->ReleaseEvent);
+    return Result;
+}
+
+/* The ICD rotates its own buffers, so each frame is published as it is,
+ * in order, once its rendering is complete. */
+static BOOL
+IntPresentRetained(HDC hdc,
+                   HWND Window,
+                   struct ICD_Data *IcdData,
+                   const WGL_PRESENTBUFFERS_CB_RETAINED *Retained)
+{
+    PWGL_ASYNC_PRESENT AsyncPresent;
+    HRESULT Result;
+
+    if (DwmDxPublishWindowSurface == NULL || Retained->SharedSurface == NULL)
+        return IntPresentRetainedDirect(hdc, IcdData, Retained);
+
+    AsyncPresent = IntAcquireDwmDxPublishRecord();
+    if (AsyncPresent != NULL)
+    {
+        AsyncPresent->Window = Window;
+        AsyncPresent->RetainedData = *Retained;
+        AsyncPresent->Retained = &AsyncPresent->RetainedData;
+        IntQueueDwmDxPublishRecord(AsyncPresent);
+        return TRUE;
+    }
+    if (DwmDxPublishQueue.Usable)
+    {
+        /* The queue has not drained; publishing here would overtake it. */
+        IntReportDwmDxPresentFailure("publish_congested", E_PENDING);
+        SetEvent(Retained->ReleaseEvent);
+        return FALSE;
+    }
+
+    Result = E_FAIL;
+    if (WaitForSingleObject(Retained->CompletionEvent, INFINITE) == WAIT_OBJECT_0)
+    {
+        Result = DwmDxPublishWindowSurface(Window,
+                                           Retained->Base.AdapterLuid,
+                                           Retained->SharedSurface,
+                                           Retained->Width,
+                                           Retained->Height,
+                                           Retained->ReleaseEvent);
+    }
+    if (FAILED(Result))
+    {
+        IntReportDwmDxPresentFailure("publish_retained", Result);
+        SetEvent(Retained->ReleaseEvent);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL
+IntPresentRetainedBuffers(HDC hdc, const WGL_PRESENTBUFFERS_CB_RETAINED *Retained)
+{
+    struct wgl_dc_data *DcData;
+    struct ICD_Data *IcdData;
+    RECT ClientRect;
+    HWND Window;
+
+    Window = WindowFromDC(hdc);
+    DcData = IntGetDcData(hdc);
+    IcdData = (DcData != NULL && DcData->icd_data != NULL) ?
+        DcData->icd_data : IntGetIcdData(hdc, NULL, NULL);
+    if (Window == NULL || IcdData == NULL || IcdData->DrvPresentBuffers == NULL ||
+        !GetClientRect(Window, &ClientRect))
+    {
+        SetEvent(Retained->ReleaseEvent);
+        return FALSE;
+    }
+
+    /* Invisible windows and DWM's own output are not composed. */
+    if (IsIconic(Window) || IsRectEmpty(&ClientRect) || !IsWindowVisible(Window) ||
+        GetPropW(Window, DWM_PROP_GPU_OUTPUT) != NULL)
+    {
+        return IntPresentRetainedDirect(hdc, IcdData, Retained);
+    }
+
+    (void)InitOnceExecuteOnce(&DwmDxInitOnce, IntLoadDwmDxCallbacks,
+                              NULL, NULL);
+    return IntPresentRetained(hdc, Window, IcdData, Retained);
+}
+
 static BOOL APIENTRY
 wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
 {
+    const WGL_PRESENTBUFFERS_CB_RETAINED *Retained;
     struct ICD_Data *IcdData;
     PWGL_ASYNC_PRESENT AsyncPresent = NULL;
     WGL_PRESENTBUFFERS PresentData;
@@ -599,11 +724,16 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     HRESULT Result;
 
     if (hdc == NULL || CallbackData == NULL ||
-        (CallbackData->Version != 2 && CallbackData->Version != 3) ||
+        (CallbackData->Version != 2 && CallbackData->Version != 3 &&
+         CallbackData->Version != WGL_PRESENTBUFFERS_CB_RETAINED_VERSION) ||
         CallbackData->SyncType > 1)
     {
         return FALSE;
     }
+    Retained = CallbackData->Version == WGL_PRESENTBUFFERS_CB_RETAINED_VERSION ?
+        CONTAINING_RECORD(CallbackData, WGL_PRESENTBUFFERS_CB_RETAINED, Base) : NULL;
+    if (Retained != NULL)
+        return IntPresentRetainedBuffers(hdc, Retained);
 
     Window = WindowFromDC(hdc);
     if (Window == NULL)

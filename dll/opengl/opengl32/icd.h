@@ -371,6 +371,23 @@ typedef struct _WGL_PRESENTBUFFERS_CB
     RECT UpdateRect;
 } WGL_PRESENTBUFFERS_CB, *PWGL_PRESENTBUFFERS_CB;
 
+/* Version 4 of the present callback hands the compositor the ICD's own
+ * buffer. The ICD resets ReleaseEvent before the call; it is set again once
+ * no compositor frame reads the buffer, including when it is not published.
+ * CompletionEvent is set when the buffer's GPU writes are complete, and
+ * PrivateData still describes the buffer for a direct present. */
+#define WGL_PRESENTBUFFERS_CB_RETAINED_VERSION 4
+
+typedef struct _WGL_PRESENTBUFFERS_CB_RETAINED
+{
+    WGL_PRESENTBUFFERS_CB Base;
+    HANDLE SharedSurface;       /* D3DKMT global share, B8G8R8A8 */
+    UINT Width;
+    UINT Height;
+    HANDLE ReleaseEvent;
+    HANDLE CompletionEvent;
+} WGL_PRESENTBUFFERS_CB_RETAINED, *PWGL_PRESENTBUFFERS_CB_RETAINED;
+
 typedef struct _WGL_PRESENTBUFFERS
 {
     HANDLE hSurface;

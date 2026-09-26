@@ -239,6 +239,7 @@ static const DWM_NAMED_EXPORT DwmApiNamedExports[] =
     {205, "DwmTransitionOwnedWindow"},
     {206, "DwmUnregisterThumbnail"},
     {207, "DwmUpdateThumbnailProperties"},
+    {208, "DwmpDxPublishWindowSurface"},
 };
 
 static const char * const DwmApiOrdinalNames[] =
@@ -351,9 +352,12 @@ static const char * const DwmApiOrdinalNames[] =
     "DwmTransitionOwnedWindow",
     "DwmUnregisterThumbnail",
     "DwmUpdateThumbnailProperties",
+    "DwmpDxPublishWindowSurface",
 };
 
-C_ASSERT(sizeof(DwmApiOrdinalNames) / sizeof(DwmApiOrdinalNames[0]) == 108);
+/* Windows' ordinals 100-207, then the ReactOS DwmpDxPublishWindowSurface
+ * extension at 208. */
+C_ASSERT(sizeof(DwmApiOrdinalNames) / sizeof(DwmApiOrdinalNames[0]) == 109);
 
 static const WORD DwmApiFormerStubOrdinals[] =
 {
