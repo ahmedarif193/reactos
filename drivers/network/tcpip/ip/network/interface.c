@@ -270,7 +270,9 @@ PIP_INTERFACE FindOnLinkInterface(PIP_ADDRESS Address)
         if (HasLoopbackPrefix(Address, &CurrentIF->Unicast) ||
             HasPrefix(Address, &CurrentIF->Unicast, AddrCountPrefixBits(&CurrentIF->Netmask)))
         {
-            if (!IPReferenceInterface(CurrentIF))
+            /* A disconnected interface keeps its address, but its subnet is
+             * not reachable until the media connects again. */
+            if (!IsInterfaceOperational(CurrentIF) || !IPReferenceInterface(CurrentIF))
                 continue;
             TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
             return CurrentIF;
@@ -293,4 +295,12 @@ VOID GetInterfaceConnectionStatus(PIP_INTERFACE Interface, PULONG Result)
     else {
         *Result = MIB_IF_OPER_STATUS_DISCONNECTED;
     }
+}
+
+BOOLEAN IsInterfaceOperational(PIP_INTERFACE Interface)
+{
+    ULONG OperStatus;
+
+    GetInterfaceConnectionStatus(Interface, &OperStatus);
+    return OperStatus == MIB_IF_OPER_STATUS_OPERATIONAL;
 }

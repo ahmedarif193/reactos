@@ -322,8 +322,11 @@ PNEIGHBOR_CACHE_ENTRY RouterGetRoute(PIP_ADDRESS Destination)
 	TI_DbgPrint(DEBUG_ROUTER,("This-Route: %s (Sharing %d bits)\n",
 				  A2S(&NCE->Address), Length));
 
+	/* Routes through a disconnected interface stay configured, but are
+	 * inactive until its media connects again. */
 	if(Length >= MaskLength && (Length > BestLength || !BestNCE) &&
-           ((!(State & NUD_STALE) && !(State & NUD_INCOMPLETE)) || !BestNCE)) {
+           ((!(State & NUD_STALE) && !(State & NUD_INCOMPLETE)) || !BestNCE) &&
+           IsInterfaceOperational(NCE->Interface)) {
 	    /* This seems to be a better router */
 	    BestNCE    = NCE;
 	    BestLength = Length;
