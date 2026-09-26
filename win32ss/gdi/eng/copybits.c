@@ -234,7 +234,21 @@ IntEngCopyBits(
     RECTL *prclDest,
     POINTL *ptlSource)
 {
-    return EngCopyBits(psoDest, psoSource, pco, pxlo, prclDest, ptlSource);
+    SURFACE *psurfDest = CONTAINING_RECORD(psoDest, SURFACE, SurfObj);
+    SURFACE *psurfSource = CONTAINING_RECORD(psoSource, SURFACE, SurfObj);
+    PFN_DrvCopyBits pfnCopyBits;
+
+    /* A driver that hooked CopyBits on an engine-managed surface sees every
+     * copy involving it, reads included: the bitmap need not hold the image
+     * that is displayed. EngCopyBits must not call back into the driver. */
+    if (psurfDest->flags & HOOK_COPYBITS)
+        pfnCopyBits = GDIDEVFUNCS(psoDest).CopyBits;
+    else if (psurfSource->flags & HOOK_COPYBITS)
+        pfnCopyBits = GDIDEVFUNCS(psoSource).CopyBits;
+    else
+        pfnCopyBits = EngCopyBits;
+
+    return pfnCopyBits(psoDest, psoSource, pco, pxlo, prclDest, ptlSource);
 }
 
 
