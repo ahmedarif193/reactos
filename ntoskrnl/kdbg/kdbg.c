@@ -88,7 +88,10 @@ KdbgProcessDeferredSymbolRequest(
 {
     PLDR_DATA_TABLE_ENTRY LdrEntry;
 
-    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+    /* Loads reported during phase 0 arrive at HIGH_LEVEL, before symbol
+     * loading is enabled; KdbSymInit loads those modules in phase 1. */
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+        return;
 
     if (KdbpSymFindModule(Base, -1, &LdrEntry))
         KdbSymProcessSymbols(LdrEntry, Load);
