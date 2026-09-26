@@ -359,6 +359,9 @@ typedef struct _DWM_FRAME_HEADER
     LONG  DmgR, DmgB;    /*       (present only this; empty if R<=L) */
     ULONG BlurRectArrayBase; /* out: byte offset of RECTL[0]          */
     ULONG BlurRectCount;     /* out: total blur rectangles in frame  */
+    LONG  ContentL, ContentT; /* out: union of changed published     */
+    LONG  ContentR, ContentB; /*      client pixels; no frame, shadow */
+                              /*      or placement changed with them */
 } DWM_FRAME_HEADER, *PDWM_FRAME_HEADER;
 
 /* DwmEnableBlurBehindWindow exchange. The HRGN is consumed synchronously in

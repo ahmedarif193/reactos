@@ -676,6 +676,7 @@ IntCompositionFreeDxSurface(_Inout_ PWND_REDIRECT r)
     r->DxFlags = 0;
     r->DxClientX = 0;
     r->DxClientY = 0;
+    r->DxFrameGeneration = 0;
     r->DxIssuedUpdateId = 0;
     r->DxPublishedUpdateId = 0;
     r->DxConsumedUpdateId = 0;
@@ -2281,6 +2282,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     BOOL PositionDamageValid;
     RECTL PositionDamage;
     RECTL rcDmg = {0, 0, 0, 0};
+    RECTL rcContent = {0, 0, 0, 0};
     NTSTATUS Status = STATUS_SUCCESS;
 
     if (!gbCompositionEnabled)
@@ -2389,6 +2391,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         BOOL PaintDeferred = FALSE;
         BOOL DxPublished;
         BOOL DxPending;
+        BOOL EntryDamaged;
 
         if (e == NULL || e->Redirect.cx <= 0 || e->Redirect.cy <= 0)
             continue;
@@ -2509,15 +2512,15 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         }
 
         if (BackingDeferred || PaintDeferred)
-            wasDamaged = FALSE;
+            EntryDamaged = FALSE;
         else if (dirty || fullDamage)
-            wasDamaged = InterlockedExchange((volatile LONG *)&e->Damaged, FALSE) != FALSE;
+            EntryDamaged = InterlockedExchange((volatile LONG *)&e->Damaged, FALSE) != FALSE;
         else
-            wasDamaged = FALSE;
+            EntryDamaged = FALSE;
         /* A GDI write can arrive after this entry's dirty hint was read on
          * the previous pull. Its pending bounds survive independently of the
          * metadata damage flag; publishing them must always wake a redraw. */
-        wasDamaged |= BackingChanged || DxPending;
+        wasDamaged = EntryDamaged || BackingChanged || DxPending;
         if (wasDamaged)
             ReadyDamage = TRUE;
         if (PaintDeferred)
@@ -2742,7 +2745,23 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         }
         count++;
 
-        if (wasDamaged)
+        /* A publication alone replaces only the client layer; the frame,
+         * shadow and placement it is composed with are unchanged. A new
+         * registration or a moved client layer also uncovers base pixels. */
+        if (wasDamaged && DxPending && !EntryDamaged && !BackingChanged &&
+            e->Redirect.DxFrameGeneration == e->Redirect.DxGeneration &&
+            e->Redirect.DxFrameClientX == e->Redirect.DxClientX &&
+            e->Redirect.DxFrameClientY == e->Redirect.DxClientY)
+        {
+            RECTL Bounds;
+
+            Bounds.left = w->rcWindow.left + e->Redirect.DxClientX;
+            Bounds.top = w->rcWindow.top + e->Redirect.DxClientY;
+            Bounds.right = Bounds.left + (LONG)e->Redirect.DxInfo.Width;
+            Bounds.bottom = Bounds.top + (LONG)e->Redirect.DxInfo.Height;
+            RECTL_bUnionRect(&rcContent, &rcContent, &Bounds);
+        }
+        else if (wasDamaged)
         {
             RECTL Bounds = w->rcWindow;
 
@@ -2756,6 +2775,12 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                 RECTL_vOffsetRect(&Bounds, w->rcWindow.left, w->rcWindow.top);
             }
             RECTL_bUnionRect(&rcDmg, &rcDmg, &Bounds);
+        }
+        if (wasDamaged)
+        {
+            e->Redirect.DxFrameGeneration = e->Redirect.DxGeneration;
+            e->Redirect.DxFrameClientX = e->Redirect.DxClientX;
+            e->Redirect.DxFrameClientY = e->Redirect.DxClientY;
         }
     }
 
@@ -2778,6 +2803,10 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     Frame.DmgT = rcDmg.top;
     Frame.DmgR = rcDmg.right;
     Frame.DmgB = rcDmg.bottom;
+    Frame.ContentL = rcContent.left;
+    Frame.ContentT = rcContent.top;
+    Frame.ContentR = rcContent.right;
+    Frame.ContentB = rcContent.bottom;
     Frame.BlurRectCount = blurRectCount;
     OutputBytes = DWM_BLURRECTARRAY_BASE +
                   blurRectCount * sizeof(RECTL);
@@ -3575,7 +3604,10 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             }
 
             Entry->Redirect.DxPublishedUpdateId = Request.UpdateId;
-            IntCompositionDamageDxPublication(Entry, TopWnd);
+            /* The next frame damages the pending client layer itself. */
+            if (!Entry->Redirect.FrontValid)
+                Entry->Damaged = TRUE;
+            IntCompositionMarkDamage(FALSE);
             break;
 
         default:
