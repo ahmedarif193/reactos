@@ -1568,7 +1568,6 @@ RunTaskmgrTimerComparison(VOID)
     return Failures ? 1 : 0;
 }
 
-#include "primary_probe.h"
 #include "blur_probe.h"
 #include "blur_cache_probe.h"
 #include "damage_probe.h"
@@ -1660,7 +1659,6 @@ RunDesktopPerf(HWND Owner, ULONG SampleCount)
                 COLORREF Actual;
                 ClientToScreen(Owner, &Point);
                 Actual = GetPixel(Screen, Point.x, Point.y);
-                (void)ReadSharedPrimaryPixel(Screen, Point);
                 TestPrint("DWM_SHARED_PIXEL x=%ld y=%ld expected=%08lx actual=%08lx\n",
                           Point.x, Point.y, Expected, Actual);
                 if (Expected != CLR_INVALID && Actual == Expected)

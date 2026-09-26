@@ -43,8 +43,7 @@ DamageProbeWindowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 static BOOL
 DamageProbePixel(HDC Screen, LONG X, LONG Y, COLORREF Expected, ULONG Phase)
 {
-    POINT Point = {X, Y};
-    COLORREF Actual = ReadSharedPrimaryPixel(Screen, Point);
+    COLORREF Actual = GetPixel(Screen, X, Y);
     BOOL Match = Actual != CLR_INVALID && Actual == Expected;
     TestPrint("DWM_GPU_DAMAGE_PIXEL phase=%lu x=%ld y=%ld expected=%08lx actual=%08lx pass=%u\n",
               Phase, X, Y, Expected, Actual, Match);
@@ -258,7 +257,7 @@ RunGlPrimaryProbe(const RECT *WorkArea, BOOL MixedGdi)
         BlurProbeSettle();
 #define GL_PRIMARY_CHECK(Px, Py, Expected) do { \
     COLORREF Actual; POINT Position = {(Px), (Py)}; BOOL Match; \
-    Actual = ReadSharedPrimaryPixel(Screen, Position); \
+    Actual = GetPixel(Screen, Position.x, Position.y); \
     Match = Actual != CLR_INVALID && Actual == (Expected); \
     ++Checks; if (!Match) ++Failures; \
     TestPrint("DWM_GL_PRIMARY_PIXEL phase=%lu x=%ld y=%ld expected=%08lx actual=%08lx pass=%u mixed=%u\n", \

@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
  */
 
-/* Verify rendered glass from the GPU primary, without GDI shadow readback. */
+/* Verify rendered glass through GDI screen reads of the composed desktop. */
 static BOOL BlurProbeInverted;
 
 static LRESULT CALLBACK
@@ -135,7 +135,7 @@ RunBlurProbe(const RECT *WorkArea)
         {
             POINT Point = {Left + 256 + Offsets[Index],
                            Top + (Phase == 7 ? 176 : 128)};
-            COLORREF Color = ReadSharedPrimaryPixel(Screen, Point);
+            COLORREF Color = GetPixel(Screen, Point.x, Point.y);
             Value[Index] = GetRValue(Color);
             if (Color == CLR_INVALID ||
                 abs((int)GetRValue(Color) - (int)GetGValue(Color)) > 4 ||
