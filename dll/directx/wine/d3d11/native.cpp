@@ -194,7 +194,7 @@ public:
     HRESULT (WINAPI *register_resource)(HANDLE, HANDLE, D3DKMT_CREATEALLOCATIONFLAGS, const void *, UINT) = NULL;
     HRESULT (WINAPI *get_resource_handles)(HANDLE, HANDLE, D3DKMT_HANDLE *, D3DKMT_HANDLE *) = NULL;
     HRESULT (WINAPI *get_single_allocation)(HANDLE, HANDLE, D3DKMT_HANDLE *) = NULL;
-    HRESULT (WINAPI *adopt_resource)(HANDLE, HANDLE, D3DKMT_HANDLE, D3DKMT_HANDLE) = NULL;
+    HRESULT (WINAPI *adopt_resource)(HANDLE, HANDLE, D3DKMT_HANDLE, D3DKMT_HANDLE, D3DKMT_HANDLE) = NULL;
     HRESULT (WINAPI *release_resource)(HANDLE, HANDLE) = NULL;
     HRESULT (WINAPI *rotate_resources)(HANDLE, const HANDLE *, UINT) = NULL;
     HRESULT (WINAPI *enqueue_event)(HANDLE, HANDLE) = NULL;
@@ -2504,7 +2504,8 @@ HRESULT STDMETHODCALLTYPE NativeDevice::OpenSharedResource(HANDLE shared, REFIID
             texture->mapped = static_cast<BYTE *>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 1));
             if (!texture->handle.pDrvPrivate || !texture->mapped)
                 hr = E_OUTOFMEMORY;
-            else if (SUCCEEDED(hr = adopt_resource(runtime_device, texture->runtime_handle.handle, open.hResource, open.hGlobalShare)))
+            else if (SUCCEEDED(hr = adopt_resource(runtime_device, texture->runtime_handle.handle, open.hResource, open.hGlobalShare,
+                    open.NumAllocations == 1 ? open.pOpenAllocationInfo[0].hAllocation : 0)))
             {
                 open.hResource = 0;
                 texture->registered = true;

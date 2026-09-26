@@ -72,10 +72,12 @@ D3DUmdRtGetSingleResourceAllocation(HANDLE hRuntimeDevice, HANDLE hRuntimeResour
                                    D3DKMT_HANDLE *Allocation);
 
 /* Transfers an opened kernel resource to this runtime only on success. The
- * runtime handle must not already be registered. */
+ * runtime handle must not already be registered. SingleAllocation is the
+ * resource's only allocation, or 0 if it has several. */
 HRESULT WINAPI
 D3DUmdRtAdoptResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
-                     D3DKMT_HANDLE KernelResource, D3DKMT_HANDLE GlobalShare);
+                     D3DKMT_HANDLE KernelResource, D3DKMT_HANDLE GlobalShare,
+                     D3DKMT_HANDLE SingleAllocation);
 
 /* Call after UMD destruction or failed creation. This closes any remaining
  * kernel resource and releases registration, including copied metadata. */

@@ -627,7 +627,8 @@ D3DUmdRtGetSingleResourceAllocation(HANDLE hRuntimeDevice, HANDLE hRuntimeResour
 
 HRESULT WINAPI
 D3DUmdRtAdoptResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
-                     D3DKMT_HANDLE KernelResource, D3DKMT_HANDLE GlobalShare)
+                     D3DKMT_HANDLE KernelResource, D3DKMT_HANDLE GlobalShare,
+                     D3DKMT_HANDLE SingleAllocation)
 {
     PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hRuntimeDevice);
     PD3DUMDRT_RESOURCE Resource;
@@ -640,6 +641,7 @@ D3DUmdRtAdoptResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
     Resource->hRuntimeResource = hRuntimeResource;
     Resource->hKMResource = KernelResource;
     Resource->hGlobalShare = GlobalShare;
+    Resource->hSingleAllocation = SingleAllocation;
     Resource->Registered = TRUE;
     EnterCriticalSection(&D3DUmdRtDeviceLock);
     if (D3DUmdRtResourceLocked(Device, hRuntimeResource) != NULL)
