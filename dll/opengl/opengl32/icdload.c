@@ -213,6 +213,31 @@ IntReleaseDwmDxPublishSlot(void)
         SetEvent(DwmDxPublishQueue.SlotFreed);
 }
 
+/* The queue is FIFO, so any retained record still pending for the window
+ * is newer than the one being completed. */
+static BOOL
+IntDwmDxNewerRetainedQueued(HWND Window)
+{
+    PLIST_ENTRY Entry;
+    BOOL Found = FALSE;
+
+    EnterCriticalSection(&DwmDxPublishQueue.Lock);
+    for (Entry = DwmDxPublishQueue.Pending.Flink;
+         Entry != &DwmDxPublishQueue.Pending;
+         Entry = Entry->Flink)
+    {
+        PWGL_ASYNC_PRESENT Next = CONTAINING_RECORD(Entry, WGL_ASYNC_PRESENT, Entry);
+
+        if (Next->Retained != NULL && Next->Window == Window)
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+    LeaveCriticalSection(&DwmDxPublishQueue.Lock);
+    return Found;
+}
+
 /* Completes one record and keeps its event for the next frame. */
 static BOOL
 IntPublishDwmDxPresentRecycle(PWGL_ASYNC_PRESENT Present)
@@ -225,7 +250,17 @@ IntPublishDwmDxPresentRecycle(PWGL_ASYNC_PRESENT Present)
         const WGL_PRESENTBUFFERS_CB_RETAINED *Retained = Present->Retained;
 
         Result = E_FAIL;
-        if (WaitForSingleObject(Retained->CompletionEvent, INFINITE) == WAIT_OBJECT_0)
+        if (WaitForSingleObject(Retained->CompletionEvent, INFINITE) != WAIT_OBJECT_0)
+        {
+            Result = E_FAIL;
+        }
+        else if (IntDwmDxNewerRetainedQueued(Present->Window))
+        {
+            /* A newer frame would supersede this one before the compositor
+             * takes it; the buffer goes straight back to the ICD below. */
+            Result = S_FALSE;
+        }
+        else
         {
             Result = DwmDxPublishWindowSurface(Present->Window,
                                                Retained->Base.AdapterLuid,
@@ -237,7 +272,7 @@ IntPublishDwmDxPresentRecycle(PWGL_ASYNC_PRESENT Present)
                                                    DWM_DX_PUBLISH_SCANOUT : 0);
         }
         /* A buffer DWM never received is the ICD's again. */
-        if (FAILED(Result))
+        if (FAILED(Result) || Result == S_FALSE)
             SetEvent(Retained->ReleaseEvent);
         goto Recycle;
     }
