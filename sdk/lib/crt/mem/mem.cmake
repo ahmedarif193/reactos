@@ -24,11 +24,11 @@ elseif(ARCH STREQUAL "amd64")
         mem/amd64/memset_asm.s
     )
 elseif(ARCH STREQUAL "arm64")
-    list(APPEND LIBCNTPR_MEM_SOURCE
-        mem/memchr.c
-    )
+    list(REMOVE_ITEM LIBCNTPR_MEM_SOURCE mem/memcmp.c)
     list(APPEND LIBCNTPR_MEM_ASM_SOURCE
         mem/arm64/mem_asm.s
+        string/arm64/memchr.S
+        string/arm64/memcmp.S
     )
 else()
     list(APPEND LIBCNTPR_MEM_SOURCE
