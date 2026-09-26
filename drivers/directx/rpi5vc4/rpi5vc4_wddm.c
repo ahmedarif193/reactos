@@ -1884,6 +1884,9 @@ Rpi5Vc4DdiGetStandardAllocationDriverData(
     PrivateData.Version = RPI5VC4_STANDARD_ALLOCATION_VERSION;
     PrivateData.Type =
         GetStandardAllocationDriverData->StandardAllocationType;
+    if (PrivateData.Type == DXGK_STDALLOCATION_GDISURFACE)
+        PrivateData.GdiSurfaceType =
+            GetStandardAllocationDriverData->pCreateGdiSurfaceData->Type;
 
     RtlZeroMemory(&ResourceData, sizeof(ResourceData));
     ResourceData.Magic = RPI5VC4_RESOURCE_DATA_MAGIC;
@@ -2436,9 +2439,15 @@ Rpi5Vc4DdiCreateAllocation(
         {
             Size = AllocationData->Size;
         }
+        /* Kernel present copies reach only the slab, so a CPU-visible GDI
+         * staging surface, which a present copy fills for the CPU, lives
+         * there as well. */
         LocalAllocation =
             (StandardAllocation &&
-             PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE) ||
+             (PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE ||
+              (PrivateData->Type == DXGK_STDALLOCATION_GDISURFACE &&
+               PrivateData->GdiSurfaceType ==
+                   D3DKMDT_GDISURFACE_STAGING_CPUVISIBLE))) ||
             PrimaryResource || ScanoutResource;
         SegmentId = LocalAllocation ? RPI5VC4_LOCAL_SEGMENT_ID :
                                       RPI5VC4_APERTURE_SEGMENT_ID;
@@ -2477,6 +2486,13 @@ Rpi5Vc4DdiCreateAllocation(
                 }
                 return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
             }
+        }
+        else if (ResourceDataValid &&
+                 ResourceData->Layout == RPI5VC4_RESOURCE_LAYOUT_LINEAR &&
+                 ResourceData->Stride != 0 &&
+                 (ULONGLONG)ResourceData->Stride * ResourceData->Height <= Size)
+        {
+            ResourcePitch = ResourceData->Stride;
         }
 
         if ((LocalAllocation && Size > DeviceExtension->VramSize) ||
@@ -2586,10 +2602,14 @@ Rpi5Vc4DdiOpenAllocation(
     _In_ PVOID MiniportDeviceContext,
     _In_ CONST DXGKARG_OPENALLOCATION *OpenAllocation)
 {
+    PRPI5VC4_WDDM_DEVICE Device = MiniportDeviceContext;
     ULONG i;
 
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
-
+    if (Device == NULL || Device->Magic != RPI5VC4_DEVICE_MAGIC ||
+        Device->Adapter == NULL)
+    {
+        return STATUS_INVALID_HANDLE;
+    }
     if (OpenAllocation == NULL ||
         (OpenAllocation->NumAllocations != 0 &&
          OpenAllocation->pOpenAllocation == NULL))
@@ -2600,6 +2620,8 @@ Rpi5Vc4DdiOpenAllocation(
     for (i = 0; i < OpenAllocation->NumAllocations; i++)
     {
         DXGK_OPENALLOCATIONINFO *Info = &OpenAllocation->pOpenAllocation[i];
+        DXGKARGCB_GETHANDLEDATA HandleData;
+        PRPI5VC4_ALLOCATION Allocation;
         PRPI5VC4_OPENALLOCATION Open;
 
         Open = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Open),
@@ -2617,9 +2639,16 @@ Rpi5Vc4DdiOpenAllocation(
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
+        RtlZeroMemory(&HandleData, sizeof(HandleData));
+        HandleData.hObject = Info->hAllocation;
+        HandleData.Type = DXGK_HANDLE_ALLOCATION;
+        Allocation = Device->Adapter->DxgkInterface.DxgkCbGetHandleData(&HandleData);
+
         RtlZeroMemory(Open, sizeof(*Open));
         Open->Magic = RPI5VC4_OPENALLOC_MAGIC;
         Open->hVidMmAllocation = Info->hAllocation;
+        if (Allocation != NULL && Allocation->Magic == RPI5VC4_ALLOCATION_MAGIC)
+            Open->Allocation = Allocation;
 
         Info->hDeviceSpecificAllocation = (HANDLE)Open;
     }
@@ -2780,6 +2809,34 @@ Rpi5Vc4DdiRender(
     return STATUS_SUCCESS;
 }
 
+/* A linear allocation the present copy can address, with the rectangle
+ * inside it; NULL for anything the TFU raster copy cannot describe. */
+static CONST RPI5VC4_ALLOCATION *
+Rpi5Vc4PresentCopyAllocation(
+    _In_ CONST DXGK_ALLOCATIONLIST *Entry,
+    _In_ CONST RECT *Rect)
+{
+    CONST RPI5VC4_OPENALLOCATION *Open = Entry->hDeviceSpecificAllocation;
+    CONST RPI5VC4_ALLOCATION *Allocation;
+
+    if (Entry->SegmentId != RPI5VC4_LOCAL_SEGMENT_ID || Open == NULL ||
+        Open->Magic != RPI5VC4_OPENALLOC_MAGIC || Open->Allocation == NULL)
+    {
+        return NULL;
+    }
+    Allocation = Open->Allocation;
+    if (Allocation->ResourceLayout != RPI5VC4_RESOURCE_LAYOUT_LINEAR ||
+        Allocation->Pitch < Allocation->Width * sizeof(ULONG) ||
+        (Allocation->Pitch % sizeof(ULONG)) != 0 ||
+        Rect->left < 0 || Rect->top < 0 ||
+        (ULONG)Rect->right > Allocation->Width ||
+        (ULONG)Rect->bottom > Allocation->Height)
+    {
+        return NULL;
+    }
+    return Allocation;
+}
+
 NTSTATUS
 APIENTRY
 Rpi5Vc4DdiPresent(
@@ -2789,6 +2846,8 @@ Rpi5Vc4DdiPresent(
     PRPI5VC4_WDDM_DEVICE Device;
     PRPI5VC4_CONTEXT Context;
     PRPI5VC4_DMA_PACKET Packet;
+    CONST RPI5VC4_ALLOCATION *CopySource = NULL;
+    CONST RPI5VC4_ALLOCATION *CopyDestination = NULL;
 
     if (MiniportDeviceContext == NULL || Present == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -2833,25 +2892,28 @@ Rpi5Vc4DdiPresent(
 
     Present->pDmaBuffer = (PUCHAR)Present->pDmaBuffer + sizeof(*Packet);
 
+    if (Present->Flags.Blt && Present->pAllocationList != NULL)
+    {
+        CopySource = Rpi5Vc4PresentCopyAllocation(
+            &Present->pAllocationList[DXGK_PRESENT_SOURCE_INDEX],
+            &Present->SrcRect);
+        CopyDestination = Rpi5Vc4PresentCopyAllocation(
+            &Present->pAllocationList[DXGK_PRESENT_DESTINATION_INDEX],
+            &Present->DstRect);
+    }
+
     /*
-     * UMD-track Stage 2 (A/B bring-up form): for plain equal-size 32bpp
-     * blits, additionally emit a TFU raster-copy job over the same
-     * pixels — allocation-relative, so DxgkDdiPatch resolves real GPU
-     * VAs.  The CPU present path still moves the pixels (correctness is
-     * never at risk); on V3D silicon the TFU runs the same copy under a
-     * real workload, validating the engine via fence completion.  The
-     * executor skips the job if patching didn't produce slab GPU VAs.
+     * An unscaled 32bpp blit between linear slab allocations is a TFU
+     * raster copy, allocation-relative so DxgkDdiPatch resolves the GPU
+     * VAs. Each side uses its own row pitch: the source may be a client
+     * scanout buffer and the destination a CPU-visible staging surface.
      */
     if (Device->Adapter != NULL &&
         Device->Adapter->V3dReady &&
         Device->Adapter->BitsPerPixel == 32 &&
-        Present->Flags.Blt &&
+        CopySource != NULL &&
+        CopyDestination != NULL &&
         Present->pPatchLocationListOut != NULL &&
-        Present->pAllocationList != NULL &&
-        Present->pAllocationList[DXGK_PRESENT_SOURCE_INDEX].SegmentId ==
-            RPI5VC4_LOCAL_SEGMENT_ID &&
-        Present->pAllocationList[DXGK_PRESENT_DESTINATION_INDEX].SegmentId ==
-            RPI5VC4_LOCAL_SEGMENT_ID &&
         Present->PatchLocationListOutSize >= 2 &&
         Present->DmaSize >= 2 * sizeof(RPI5VC4_DMA_PACKET) &&
         (Present->SrcRect.right - Present->SrcRect.left) ==
@@ -2861,9 +2923,9 @@ Rpi5Vc4DdiPresent(
         Present->DstRect.right > Present->DstRect.left &&
         Present->DstRect.bottom > Present->DstRect.top)
     {
-        PRPI5VC4_DEVICE_EXTENSION Adapter = Device->Adapter;
         PRPI5VC4_DMA_PACKET Tfu = (PRPI5VC4_DMA_PACKET)Present->pDmaBuffer;
-        ULONG Pitch = Adapter->BytesPerScanLine;
+        ULONG SourcePitch = CopySource->Pitch;
+        ULONG DestinationPitch = CopyDestination->Pitch;
         ULONG Width = Present->DstRect.right - Present->DstRect.left;
         ULONG Height = Present->DstRect.bottom - Present->DstRect.top;
         D3DDDI_PATCHLOCATIONLIST *Loc = Present->pPatchLocationListOut;
@@ -2874,7 +2936,7 @@ Rpi5Vc4DdiPresent(
         Tfu->Magic = RPI5VC4_DMA_PACKET_MAGIC;
         Tfu->Op = RPI5VC4_DMA_OP_TFU_JOB;
         Tfu->Length = sizeof(*Tfu);
-        Vc4CleTfuRasterCopyV71(Tfu->TfuJob.Regs, 0, Pitch, 0, Pitch, Width, Height, V3D71_TEXFMT_RGBA8, 4);
+        Vc4CleTfuRasterCopyV71(Tfu->TfuJob.Regs, 0, SourcePitch, 0, DestinationPitch, Width, Height, V3D71_TEXFMT_RGBA8, 4);
 
         /* IIA = source allocation + source-rect byte offset. */
         RtlZeroMemory(Loc, sizeof(*Loc));
@@ -2882,7 +2944,7 @@ Rpi5Vc4DdiPresent(
         Loc->PatchOffset = TfuPacketOffset +
                            (ULONG)FIELD_OFFSET(RPI5VC4_DMA_PACKET,
                                                TfuJob.Regs[1]);
-        Loc->AllocationOffset = Present->SrcRect.top * Pitch +
+        Loc->AllocationOffset = Present->SrcRect.top * SourcePitch +
                                 Present->SrcRect.left * 4;
         Loc++;
 
@@ -2892,7 +2954,7 @@ Rpi5Vc4DdiPresent(
         Loc->PatchOffset = TfuPacketOffset +
                            (ULONG)FIELD_OFFSET(RPI5VC4_DMA_PACKET,
                                                TfuJob.Regs[6]);
-        Loc->AllocationOffset = Present->DstRect.top * Pitch +
+        Loc->AllocationOffset = Present->DstRect.top * DestinationPitch +
                                 Present->DstRect.left * 4;
         Loc++;
 
