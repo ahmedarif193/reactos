@@ -12,8 +12,7 @@ memmove:
     mov     x15, x0
     cbz     x2, .Lcpy_ret
     cmp     x0, x1
-    b.eq    .Lcpy_ret
-    b.lo    .Lcpy_fwd
+    b.ls    .Lcpy_fwd
     add     x3, x1, x2
     cmp     x0, x3
     b.lo    .Lcpy_bwd                // dst inside [src, src+n): copy backward
