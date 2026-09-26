@@ -31,6 +31,8 @@
 
 #pragma once
 
+#include <halpnp.h>
+
 /* ------------------------------------------------------------------ */
 /*  Generic MMIO accessor (defined in halarm64.c): identity-mapping   */
 /*  aware during Phase 0, physical-alias/kernel-VA aware afterwards.  */
@@ -106,25 +108,10 @@ extern const HAL_ARM64_PCI_CONFIG_BACKEND *HalpArm64PciConfigBackend;
 /* ------------------------------------------------------------------ */
 /*  Platform device contract (fixed SoC devices absent from ACPI)     */
 /* ------------------------------------------------------------------ */
-#define HAL_ARM64_PLATFORM_DEVICE_MAX_MEMORY    4
 #define HAL_ARM64_MAX_PLATFORM_DEVICES          8
 
-typedef struct _HAL_ARM64_PLATFORM_DEVICE
-{
-    PCSTR Name;                 /* Diagnostics only                       */
-    PCWSTR DeviceId;            /* PnP device/hardware ID                 */
-    PCWSTR CompatibleId;        /* Optional second hardware ID, or NULL   */
-
-    ULONG MemoryCount;
-    struct
-    {
-        ULONGLONG Base;
-        ULONG Length;
-    } Memory[HAL_ARM64_PLATFORM_DEVICE_MAX_MEMORY];
-
-    ULONG Gsi;                  /* 0 = no interrupt resource              */
-    BOOLEAN EdgeTriggered;      /* FALSE = level-sensitive                */
-} HAL_ARM64_PLATFORM_DEVICE, *PHAL_ARM64_PLATFORM_DEVICE;
+/* The shared ACPI HAL bus driver reports these as child PDOs */
+typedef HAL_PLATFORM_DEVICE HAL_ARM64_PLATFORM_DEVICE, *PHAL_ARM64_PLATFORM_DEVICE;
 
 /* ------------------------------------------------------------------ */
 /*  Registration (called from platform probes)                        */
