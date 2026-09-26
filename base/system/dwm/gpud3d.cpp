@@ -98,16 +98,16 @@ struct ClientSource
 
 struct BlurTarget
 {
-    Texture Capture, Horizontal, Result;
+    Texture Horizontal, Result;
     DWM_WIN Owner;
     RECT Bounds;
+    LONG Width, Height; /* filtered texels in Result */
     ULONG Radius, Call, Frame;
     ULONGLONG LastUse;
     BOOL Valid, Pinned;
 
     void Reset()
     {
-        Capture.Reset();
         Horizontal.Reset();
         Result.Reset();
         Valid = FALSE;
@@ -118,6 +118,7 @@ struct Constants
 {
     FLOAT Rectangle[4], TargetSize[4], SourceSize[4], ClientRect[4], CaptureRect[4];
     FLOAT Brush[4], Colorization[4], ColorKey[4], Flags[4], Extra[4], Shadow[4], Filter[4];
+    FLOAT SampleExtent[4], SampleOrigin[4];
     FLOAT Taps[33][4];
 };
 
@@ -127,7 +128,7 @@ struct ConstantBuffer
     ConstantBuffer *Next;
 };
 
-enum Shader { Solid, Copy, Window, Filter, Shadow, ShaderCount };
+enum Shader { Solid, Copy, Window, Filter, Shadow, BlurCopy, ShaderCount };
 
 /* Disjoint rectangles repaired separately, so distant damage does not
  * redraw everything between it. */
@@ -237,6 +238,38 @@ BOOL EnsureTexture(Texture &Image, LONG Width, LONG Height, BOOL RenderTarget,
     BOOL Created = CreateTexture(Image, Width, Height, RenderTarget, NULL, 0, Format);
     DptEnd(&g_DwmPresentTrace, Trace, Created, Created ? (ULONGLONG)Width * Height * 4 : 0);
     return Created;
+}
+
+/* Blur scratch textures grow in 64-pixel steps and are reused while large
+ * enough, so a capture whose size changes as a window moves or is clipped
+ * by the screen edge does not allocate each frame. */
+BOOL EnsureScratch(Texture &Image, LONG Width, LONG Height, BOOL RenderTarget)
+{
+    LONG AlignedWidth = (Width + 63) & ~63, AlignedHeight = (Height + 63) & ~63;
+    if (Image.Resource != NULL && Image.Width >= Width && Image.Height >= Height &&
+        (ULONGLONG)Image.Width * Image.Height <= 2ull * AlignedWidth * AlignedHeight)
+        return TRUE;
+    return EnsureTexture(Image, AlignedWidth, AlignedHeight, RenderTarget);
+}
+
+/* Maps the quad to Region of Image and samples no texel outside it. */
+void SetSampleRegion(Constants &Data, const Texture &Image, const RECT &Region)
+{
+    Data.SampleOrigin[0] = (FLOAT)Region.left / Image.Width;
+    Data.SampleOrigin[1] = (FLOAT)Region.top / Image.Height;
+    Data.SampleOrigin[2] = (Region.left + 0.5f) / Image.Width;
+    Data.SampleOrigin[3] = (Region.top + 0.5f) / Image.Height;
+    Data.SampleExtent[0] = (FLOAT)(Region.right - Region.left) / Image.Width;
+    Data.SampleExtent[1] = (FLOAT)(Region.bottom - Region.top) / Image.Height;
+    Data.SampleExtent[2] = (Region.right - 0.5f) / Image.Width;
+    Data.SampleExtent[3] = (Region.bottom - 0.5f) / Image.Height;
+}
+
+/* Samples only the Width x Height texels at the origin of Image. */
+void SetSampleExtent(Constants &Data, const Texture &Image, LONG Width, LONG Height)
+{
+    RECT Region = {0, 0, Width, Height};
+    SetSampleRegion(Data, Image, Region);
 }
 
 /* Returns the parts of Clip outside the active occluder, at most four. */
@@ -543,7 +576,7 @@ BOOL CreateShaders()
     CompileProc Compile = (CompileProc)GetProcAddress(State.Compiler, "D3DCompile");
     if (Compile == NULL)
         return FALSE;
-    const char *Entries[] = {"QuadVS", "SolidPS", "CopyPS", "WindowPS", "FilterPS", "ShadowPS"};
+    const char *Entries[] = {"QuadVS", "SolidPS", "CopyPS", "WindowPS", "FilterPS", "ShadowPS", "BlurCopyPS"};
     for (ULONG Index = 0; Index < ARRAYSIZE(Entries); ++Index)
     {
         ID3DBlob *Bytecode = NULL, *Errors = NULL;
@@ -1189,26 +1222,26 @@ BlurTarget *FilterCaptureImpl(const RECT &Bounds, ULONG Radius)
     LONG Width = Bounds.right - Bounds.left, Height = Bounds.bottom - Bounds.top;
     ULONG Scale = Radius >= 12 ? 2 : 1;
     LONG FilterWidth = (Width + Scale - 1) / Scale, FilterHeight = (Height + Scale - 1) / Scale;
-    if (!EnsureTexture(Target->Capture, Width, Height, FALSE) ||
-        !EnsureTexture(Target->Horizontal, FilterWidth, FilterHeight, TRUE) ||
-        !EnsureTexture(Target->Result, FilterWidth, FilterHeight, TRUE))
+    if (!EnsureScratch(Target->Horizontal, FilterWidth, FilterHeight, TRUE) ||
+        !EnsureScratch(Target->Result, FilterWidth, FilterHeight, TRUE))
         return NULL;
-    UnbindTextures();
-    D3D11_BOX Box = {(UINT)Bounds.left, (UINT)Bounds.top, 0, (UINT)Bounds.right, (UINT)Bounds.bottom, 1};
-    DPT_SCOPE CaptureTrace = DptBegin(&g_DwmPresentTrace, DPT_BLIT);
-    State.Context->CopySubresourceRegion(Target->Capture.Resource, 0, 0, 0, 0, State.Canvas.Resource, 0, &Box);
-    DptEnd(&g_DwmPresentTrace, CaptureTrace, TRUE, 0);
+    /* The first pass reads the composed lower scene straight from the
+     * canvas; nothing draws over it before this capture is filtered. */
     Constants Data = {};
     SetRectangle(Data, 0, 0, FilterWidth, FilterHeight);
     RECT Clip = {0, 0, FilterWidth, FilterHeight};
     BuildWeights((Radius + Scale - 1) / Scale, Data);
-    Data.Filter[0] = 1.0f / FilterWidth;
-    if (!Draw(Target->Horizontal, Filter, Clip, Data, Target->Capture.View))
+    SetSampleRegion(Data, State.Canvas, Bounds);
+    Data.Filter[0] = Data.SampleExtent[0] / FilterWidth;
+    if (!Draw(Target->Horizontal, Filter, Clip, Data, State.Canvas.View))
         return NULL;
+    SetSampleExtent(Data, Target->Horizontal, FilterWidth, FilterHeight);
     Data.Filter[0] = 0;
-    Data.Filter[1] = 1.0f / FilterHeight;
+    Data.Filter[1] = Data.SampleExtent[1] / FilterHeight;
     if (!Draw(Target->Result, Filter, Clip, Data, Target->Horizontal.View))
         return NULL;
+    Target->Width = FilterWidth;
+    Target->Height = FilterHeight;
     Target->Bounds = Bounds;
     Target->Radius = Radius;
     Target->Call = Call;
@@ -1282,6 +1315,8 @@ BOOL DrawLayer(const DWM_WIN *Window, const BYTE *Pixels, BOOL Client, LONG Orig
     Data.CaptureRect[1] = (FLOAT)Capture.top;
     Data.CaptureRect[2] = (FLOAT)(Capture.right - Capture.left);
     Data.CaptureRect[3] = (FLOAT)(Capture.bottom - Capture.top);
+    if (Blur != NULL)
+        SetSampleExtent(Data, Blur->Result, Blur->Width, Blur->Height);
     SetColor(Data.Brush, Window->BackdropColor);
     SetColor(Data.Colorization, Window->BackdropColorization);
     SetColor(Data.ColorKey, Window->ColorKey);
@@ -1740,7 +1775,8 @@ DwmD3dBlurRect(const RECT *Rect, ULONG Radius)
     Constants Data = {};
     SetRectangle(Data, Capture.left, Capture.top, Capture.right, Capture.bottom);
     Data.SourceSize[2] = 1;
-    return Draw(State.Canvas, Copy, ClipDraw(Capture), Data, Blur->Result.View);
+    SetSampleExtent(Data, Blur->Result, Blur->Width, Blur->Height);
+    return Draw(State.Canvas, BlurCopy, ClipDraw(Capture), Data, Blur->Result.View);
 }
 
 static BOOL
@@ -1790,11 +1826,12 @@ DwmD3dBlurWindow(const DWM_WIN *Window, const RECTL *Rectangles, LONG OriginX, L
     Constants Data = {};
     SetRectangle(Data, Capture.left, Capture.top, Capture.right, Capture.bottom);
     Data.SourceSize[2] = Alpha;
+    SetSampleExtent(Data, Blur->Result, Blur->Width, Blur->Height);
     for (ULONG Index = 0; Index < Count; ++Index)
     {
         RECT Part;
         if (WindowBlurRect(Window, &Rectangles[Index], OriginX, OriginY, Part) &&
-            !Draw(State.Canvas, Copy, ClipDraw(Part), Data, Blur->Result.View, NULL, Alpha < 1))
+            !Draw(State.Canvas, BlurCopy, ClipDraw(Part), Data, Blur->Result.View, NULL, Alpha < 1))
             return FALSE;
     }
     return TRUE;
