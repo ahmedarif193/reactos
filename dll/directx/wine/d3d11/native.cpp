@@ -2455,14 +2455,18 @@ HRESULT STDMETHODCALLTYPE NativeDevice::OpenSharedResource(HANDLE shared, REFIID
         hr = StatusToHresult(D3DKMTOpenResource(&open));
     if (SUCCEEDED(hr))
     {
+        /* A CPU-visible OS surface has a linear pitch; a producer's GPU
+         * buffer has none, its layout being the driver's. */
         if (query.PrivateRuntimeDataSize == sizeof(composition_data)
                 && composition_data.Magic == DWM_DX_SURFACE_INFO_MAGIC
-                && composition_data.Version == DWM_DX_SURFACE_INFO_VERSION
                 && composition_data.Format == DWM_DX_FORMAT_B8G8R8A8_UNORM
                 && composition_data.Width <= D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION
-                && composition_data.Pitch >= composition_data.Width * 4)
+                && ((composition_data.Version == DWM_DX_SURFACE_INFO_VERSION
+                     && composition_data.Pitch >= composition_data.Width * 4)
+                    || (composition_data.Version == DWM_DX_SURFACE_INFO_VERSION_GPU
+                        && composition_data.Pitch == 0)))
         {
-            /* This describes the OS-owned surface. The miniport's private
+            /* This describes the shared surface. The miniport's private
              * allocation payload is still passed unchanged to OpenResource. */
             data.signature = native_shared_texture_signature;
             data.version = 1;
