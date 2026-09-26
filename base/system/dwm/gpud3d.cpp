@@ -31,7 +31,9 @@
 
 extern "C" {
 #include "presenttrace.h"
+#include "dxsurface.h"
 }
+#include <dwmoverlay.h>
 
 extern "C" DWORD_PTR NTAPI NtUserCallOneParam(DWORD_PTR Param, DWORD Routine);
 
@@ -148,6 +150,21 @@ struct Compositor
     ID3D11Device *Device;
     ID3D11DeviceContext *Context;
     IDXGISwapChain1 *SwapChain;
+    /* Opaque, unobstructed clients the display scans out above the output
+     * instead of DWM drawing them. */
+    IDwmOverlaySwapChain *OverlayChain;
+    struct OverlayPlane
+    {
+        const DWM_WIN *Window;
+        ULONG SurfaceId;
+        RECT Client;
+        ID3D11Texture2D *Resource;
+        Texture *Image;
+    } Overlays[DWM_MAX_OVERLAY_PLANES];
+    ULONG OverlayCount;
+    RECT PreviousOverlays[DWM_MAX_OVERLAY_PLANES];
+    ULONG PreviousOverlayCount;
+    ULONG OverlayFailures;
     ID3D11VertexShader *VertexShader;
     ID3D11PixelShader *PixelShaders[ShaderCount];
     ConstantBuffer *ConstantsHead, *ConstantsTail, *NextConstants;
@@ -1391,7 +1408,12 @@ DwmD3dInitialize(LONG Width, LONG Height)
     BOOL Success = State.Runtime && State.Dxgi && State.Compiler && CreateDevice(&Adapter) &&
         CreateSwapChain(Adapter) && CreateShaders() && BindOutput();
     if (Success)
+    {
         SetNativeTraceProvider(Adapter);
+        /* Without the interface every client is composed. */
+        if (FAILED(State.SwapChain->QueryInterface(IID_IDwmOverlaySwapChain, (void **)&State.OverlayChain)))
+            State.OverlayChain = NULL;
+    }
     Release(Adapter);
     if (!Success)
     {
@@ -1451,6 +1473,7 @@ DwmD3dShutdown(void)
     for (ULONG Index = 0; Index < ARRAYSIZE(State.PixelShaders); ++Index)
         Release(State.PixelShaders[Index]);
     Release(State.VertexShader);
+    Release(State.OverlayChain);
     Release(State.SwapChain);
     Release(State.Context);
     Release(State.Device);
@@ -1549,6 +1572,82 @@ OpaqueClientRect(const DWM_WIN *Window, RECT *Rect)
     }
     return DwmGpuDamageBounds(Rect, State.Width, State.Height, Client.Left, Client.Top,
                               Client.Left + Client.Width, Client.Top + Client.Height);
+}
+
+/* A client the display can show as an overlay plane: an opaque retained
+ * frame in scanout memory, unscaled, wholly on screen, and not covered by
+ * any window, shadow or material above it. */
+static BOOL
+OverlayClient(ULONG Index, RECT *Rect)
+{
+    const DWM_WIN *Window = &State.Scene.Windows[Index];
+    DWM_GPU_WINDOW_GEOMETRY Owner, Client;
+
+    if ((Window->LayerFlags & (DWM_WINDOW_DX_RETAINED | DWM_WINDOW_DX_SCANOUT)) !=
+            (DWM_WINDOW_DX_RETAINED | DWM_WINDOW_DX_SCANOUT) ||
+        !OpaqueClientRect(Window, Rect) ||
+        !DwmGpuWindowGeometry(Window, State.Scene.Space.OriginX, State.Scene.Space.OriginY, &Owner) ||
+        !DwmGpuClientGeometry(Window, &Owner, &Client) ||
+        Client.Width != (LONG)Window->DxWidth || Client.Height != (LONG)Window->DxHeight ||
+        Rect->left != Client.Left || Rect->top != Client.Top ||
+        Rect->right != Client.Left + Client.Width || Rect->bottom != Client.Top + Client.Height)
+    {
+        return FALSE;
+    }
+    for (ULONG Above = Index + 1; Above < State.Scene.Count; ++Above)
+    {
+        RECT Bounds;
+        if (DwmGpuSceneWindowBounds(&State.Scene.Windows[Above], &State.Scene.Space, FALSE, &Bounds) &&
+            DwmGpuDamageIntersects(&Bounds, Rect))
+            return FALSE;
+        if (DwmGpuSceneWindowBounds(&State.Scene.Windows[Above], &State.Scene.Space, TRUE, &Bounds) &&
+            DwmGpuDamageIntersects(&Bounds, Rect))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+/* Chooses this frame's overlay planes, largest first. */
+static void
+SelectOverlays(void)
+{
+    State.OverlayCount = 0;
+    if (State.OverlayChain == NULL || !State.SceneCurrent || State.OverlayFailures >= 3)
+        return;
+    for (ULONG Index = 0; Index < State.Scene.Count; ++Index)
+    {
+        const DWM_WIN *Window = &State.Scene.Windows[Index];
+        RECT Rect;
+        if (!OverlayClient(Index, &Rect))
+            continue;
+        ClientSource *Source = ImportClientSource(Window);
+        Texture *Image = Import(Window, TRUE);
+        if (Source == NULL || Image == NULL)
+            continue;
+        ULONG Slot = State.OverlayCount;
+        LONGLONG Area = (LONGLONG)(Rect.right - Rect.left) * (Rect.bottom - Rect.top);
+        if (Slot == ARRAYSIZE(State.Overlays))
+        {
+            /* Replace the smallest if this one is larger. */
+            Slot = 0;
+            for (ULONG Other = 1; Other < ARRAYSIZE(State.Overlays); ++Other)
+            {
+                const RECT &A = State.Overlays[Other].Client, &B = State.Overlays[Slot].Client;
+                if ((LONGLONG)(A.right - A.left) * (A.bottom - A.top) < (LONGLONG)(B.right - B.left) * (B.bottom - B.top))
+                    Slot = Other;
+            }
+            const RECT &Smallest = State.Overlays[Slot].Client;
+            if ((LONGLONG)(Smallest.right - Smallest.left) * (Smallest.bottom - Smallest.top) >= Area)
+                continue;
+        }
+        else
+            ++State.OverlayCount;
+        State.Overlays[Slot].Window = Window;
+        State.Overlays[Slot].SurfaceId = Window->SurfaceId;
+        State.Overlays[Slot].Client = Rect;
+        State.Overlays[Slot].Resource = Source->Resource;
+        State.Overlays[Slot].Image = Image;
+    }
 }
 
 /* A material window whose lower scene is unchanged redraws from last frame's
@@ -1684,20 +1783,44 @@ DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdro
         State.Context->Flush();
         State.ClientCopiesFenced = TRUE;
     }
+    SelectOverlays();
     RECT Full = {0, 0, State.Width, State.Height}, Part;
+    BOOL Incremental = State.FrameValid && !RefreshBackdrop && Damage != NULL;
     State.Repair.Count = 0;
-    if (State.FrameValid && !RefreshBackdrop && Damage != NULL)
+    if (Incremental)
     {
         for (ULONG Index = 0; Index < DamageCount; ++Index)
-            if (DwmGpuDamageBounds(&Part, State.Width, State.Height, Damage[Index].left, Damage[Index].top,
-                                   Damage[Index].right, Damage[Index].bottom))
+        {
+            if (!DwmGpuDamageBounds(&Part, State.Width, State.Height, Damage[Index].left, Damage[Index].top,
+                                    Damage[Index].right, Damage[Index].bottom))
+                continue;
+            /* The display shows an overlay client over whatever lies below. */
+            BOOL Covered = FALSE;
+            for (ULONG Overlay = 0; !Covered && Overlay < State.OverlayCount; ++Overlay)
+            {
+                RECT Union;
+                UnionRect(&Union, &Part, &State.Overlays[Overlay].Client);
+                Covered = EqualRect(&Union, &State.Overlays[Overlay].Client);
+            }
+            if (!Covered)
                 AddRepair(State.Repair, Part);
+        }
         if (DwmGpuDamageBounds(&Part, State.Width, State.Height, State.Scene.AnimationDamage.left,
                                State.Scene.AnimationDamage.top, State.Scene.AnimationDamage.right,
                                State.Scene.AnimationDamage.bottom))
             AddRepair(State.Repair, Part);
+        /* A client that stops being an overlay was never drawn below it. */
+        for (ULONG Previous = 0; Previous < State.PreviousOverlayCount; ++Previous)
+        {
+            BOOL Still = FALSE;
+            for (ULONG Overlay = 0; !Still && Overlay < State.OverlayCount; ++Overlay)
+                Still = EqualRect(&State.PreviousOverlays[Previous], &State.Overlays[Overlay].Client);
+            if (!Still)
+                AddRepair(State.Repair, State.PreviousOverlays[Previous]);
+        }
     }
-    if (State.Repair.Count == 0)
+    /* Only overlay content changed: the frame flips with nothing to draw. */
+    if (State.Repair.Count == 0 && !(Incremental && State.OverlayCount != 0))
         AddRepair(State.Repair, Full);
     PinCachedCaptures();
     ExpandRepair(State.Repair);
@@ -1757,6 +1880,9 @@ DwmD3dWindow(const DWM_WIN *Window, const BYTE *Pixels, LONG OriginX, LONG Origi
     /* The occluding client itself, and everything above it, draws whole. */
     if (State.WindowIndex >= State.OccluderIndex)
         State.OccluderActive = FALSE;
+    for (ULONG Index = 0; Client != NULL && Index < State.OverlayCount; ++Index)
+        if (State.Overlays[Index].SurfaceId == Window->SurfaceId)
+            return TRUE;
     return Client == NULL || DrawLayer(Window, NULL, TRUE, OriginX, OriginY, Client);
 }
 
@@ -1944,8 +2070,67 @@ DwmD3dEnd(void)
     Present.DirtyRectsCount = State.Repair.Count;
     Present.pDirtyRects = State.Repair.Parts;
     DPT_SCOPE PresentTrace = DptBegin(&g_DwmPresentTrace, DPT_KMT_PRESENT);
-    HRESULT Status = State.SwapChain->Present1(1, 0, &Present);
+    HRESULT Status = E_FAIL;
+    ULONG Scanout[DWM_MAX_OVERLAY_PLANES], ScanoutCount = 0;
+    if (State.OverlayCount != 0)
+    {
+        DWM_OVERLAY_PLANE Planes[DWM_MAX_OVERLAY_PLANES];
+        for (ULONG Index = 0; Index < State.OverlayCount; ++Index)
+        {
+            const RECT &Client = State.Overlays[Index].Client;
+            Planes[Index].Texture = State.Overlays[Index].Resource;
+            SetRect(&Planes[Index].Source, 0, 0, Client.right - Client.left, Client.bottom - Client.top);
+            Planes[Index].Destination = Client;
+            Scanout[Index] = State.Overlays[Index].SurfaceId;
+        }
+        Status = State.OverlayChain->PresentWithOverlays(1, 0, &Present, State.OverlayCount, Planes);
+        if (SUCCEEDED(Status))
+            ScanoutCount = State.OverlayCount;
+        else if (Status != DXGI_ERROR_DEVICE_REMOVED && Status != DXGI_ERROR_DEVICE_RESET)
+        {
+            /* The display refused this configuration and showed nothing:
+             * draw the clients after all and present the frame normally. */
+            ++State.OverlayFailures;
+            RepairSet Clip = State.Clip;
+            RECT Draw = State.Draw;
+            for (ULONG Index = 0; Index < State.OverlayCount; ++Index)
+            {
+                const RECT &Client = State.Overlays[Index].Client;
+                State.Clip.Count = 0;
+                AddRepair(State.Clip, Client);
+                State.Draw = Client;
+                State.OccluderActive = FALSE;
+                DrawLayer(State.Overlays[Index].Window, NULL, TRUE, State.Scene.Space.OriginX,
+                          State.Scene.Space.OriginY, State.Overlays[Index].Image);
+                AddRepair(State.Repair, Client);
+                RECT Part;
+                SetRect(&Part, Client.left & ~63, Client.top & ~63,
+                        min((Client.right + 63) & ~63, State.Width), min((Client.bottom + 63) & ~63, State.Height));
+                D3D11_BOX Box = {(UINT)Part.left, (UINT)Part.top, 0, (UINT)Part.right, (UINT)Part.bottom, 1};
+                UnbindTextures();
+                State.Context->CopySubresourceRegion(State.BackBuffer, 0, Part.left, Part.top, 0,
+                                                     State.Canvas.Resource, 0, &Box);
+            }
+            State.Clip = Clip;
+            State.Draw = Draw;
+            State.OverlayCount = 0;
+            Present.DirtyRectsCount = State.Repair.Count;
+            Present.pDirtyRects = State.Repair.Parts;
+            Status = State.SwapChain->Present1(1, 0, &Present);
+        }
+    }
+    else
+        Status = State.SwapChain->Present1(1, 0, &Present);
     DptEnd(&g_DwmPresentTrace, PresentTrace, SUCCEEDED(Status), 0);
+    if (Status == S_OK)
+    {
+        /* Frames on overlay planes stay in use until the next flip. */
+        DwmDxReleaseRetiredFrames();
+        DwmDxSetScanoutSurfaces(Scanout, ScanoutCount);
+        State.PreviousOverlayCount = State.OverlayCount;
+        for (ULONG Index = 0; Index < State.OverlayCount; ++Index)
+            State.PreviousOverlays[Index] = State.Overlays[Index].Client;
+    }
     BOOL Finished = FinishGpuReads();
     if (!Finished || !Result(Status, "Present1"))
         return DWM_GPU_FAILED;
