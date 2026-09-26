@@ -1206,22 +1206,34 @@ void BuildWeights(ULONG Radius, Constants &Data)
     Data.Filter[2] = (FLOAT)Count;
 }
 
-BlurTarget *FilterCaptureImpl(const RECT &Bounds, ULONG Radius)
+/* The previous frame's result of this capture, while nothing below its
+ * owner has changed. */
+BlurTarget *CachedBlur(const RECT &Bounds, ULONG Radius, ULONG Call)
 {
-    ULONG Call = State.BlurCall++;
-    BlurTarget *Oldest = NULL, *Reusable = NULL;
+    if (!State.BlurOwnerValid || !State.BlurLowerUnchanged)
+        return NULL;
     for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
     {
         BlurTarget *Target = &State.Blurs[Index];
-        if (State.BlurOwnerValid && State.BlurLowerUnchanged && Target->Valid &&
-            Target->Frame + 1 == State.Frame && Target->Call == Call && Target->Radius == Radius &&
-            EqualRect(&Target->Bounds, &Bounds) && memcmp(&Target->Owner, &State.BlurOwner, sizeof(Target->Owner)) == 0)
+        if (Target->Valid && Target->Frame + 1 == State.Frame && Target->Call == Call &&
+            Target->Radius == Radius && EqualRect(&Target->Bounds, &Bounds) &&
+            memcmp(&Target->Owner, &State.BlurOwner, sizeof(Target->Owner)) == 0)
         {
             Target->Frame = State.Frame;
             Target->LastUse = ++State.BlurUse;
             ++State.Reused;
             return Target;
         }
+    }
+    return NULL;
+}
+
+BlurTarget *FilterCaptureImpl(const RECT &Bounds, ULONG Radius, ULONG Call)
+{
+    BlurTarget *Oldest = NULL, *Reusable = NULL;
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
+    {
+        BlurTarget *Target = &State.Blurs[Index];
         /* A pinned result is still owed to a window that skipped its capture. */
         if (Target->Pinned)
             continue;
@@ -1271,8 +1283,16 @@ BlurTarget *FilterCaptureImpl(const RECT &Bounds, ULONG Radius)
 
 BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
 {
+    ULONG Call = State.BlurCall++;
+    BlurTarget *Target = CachedBlur(Bounds, Radius, Call);
+    if (Target != NULL)
+    {
+        DptCount(&g_DwmPresentTrace, DPT_BLUR_HIT,
+                 (ULONGLONG)(Bounds.right - Bounds.left) * (Bounds.bottom - Bounds.top) * 4);
+        return Target;
+    }
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BLUR_FILTER);
-    BlurTarget *Target = FilterCaptureImpl(Bounds, Radius);
+    Target = FilterCaptureImpl(Bounds, Radius, Call);
     DptEnd(&g_DwmPresentTrace, Trace, Target != NULL, 0);
     return Target;
 }
