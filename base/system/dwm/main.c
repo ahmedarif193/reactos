@@ -6,8 +6,11 @@
  */
 
 #define COBJMACROS
+#include <ntstatus.h>
+#define WIN32_NO_STATUS
 #include <windows.h>
 #include <objbase.h>
+#include <d3dkmthk.h>
 #include <reactos/dwmcore.h>
 
 typedef struct _DWM_APP_HOST
@@ -366,6 +369,9 @@ wWinMain(HINSTANCE Instance, HINSTANCE PreviousInstance,
     UNREFERENCED_PARAMETER(ShowCommand);
 
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    /* Composition must not wait behind applications' queued GPU work. */
+    (void)D3DKMTSetProcessSchedulingPriorityClass(
+        GetCurrentProcess(), D3DKMT_SCHEDULINGPRIORITYCLASS_REALTIME);
 
     ZeroMemory(&Host, sizeof(Host));
     Host.IUnknown_iface.lpVtbl = (IUnknownVtbl *)&g_DwmAppHostVtbl;
