@@ -125,6 +125,13 @@ static PCHPE_UPDATE_PROCESSOR_INFO     pChpeUpdateProcessorInfo;
 typedef NTSTATUS (NTAPI *PCHPE_DISPATCH_EXCEPTION_NATIVE)(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT NativeContext);
 typedef DECLSPEC_NORETURN VOID (NTAPI *PCHPE_EMULATION_DISPATCH)(PCONTEXT);
 static PCHPE_DISPATCH_EXCEPTION_NATIVE pChpeDispatchExceptionNative;
+
+static
+BOOLEAN
+NTAPI
+ChpepDispatchMixedException(PEXCEPTION_RECORD ExceptionRecord,
+                            PCONTEXT Context,
+                            PBOOLEAN Handled);
 static PCHPE_EMULATION_DISPATCH pChpeEmulationDispatch;
 static CHPE_DISPATCH_TABLE             ChpeDispatchTable;
 
@@ -1485,6 +1492,7 @@ ChpepResetEmulatorState(BOOLEAN UnloadModule)
     pChpeNotifyReadFile = NULL;
     pChpeIsProcessorFeaturePresent = NULL;
     pChpeUpdateProcessorInfo = NULL;
+    RtlpDispatchExceptionHook = NULL;
     pChpeDispatchExceptionNative = NULL;
     pChpeEmulationDispatch = NULL;
     RtlZeroMemory(ChpeProcessorFeatures, sizeof(ChpeProcessorFeatures));
@@ -1591,6 +1599,7 @@ ChpepLoadEmulator(VOID)
 
 #undef CHPE_GET_PROC
 
+    RtlpDispatchExceptionHook = ChpepDispatchMixedException;
     ChpeEmulatorLoaded = TRUE;
     return STATUS_SUCCESS;
 
@@ -1814,7 +1823,6 @@ ChpeDispatchException(PEXCEPTION_RECORD ExceptionRecord,
                       PCONTEXT Context)
 {
     PCHPE_V2_CPU_AREA_INFO CpuArea;
-    NTSTATUS Status;
 
     if (!pChpeResetToConsistentState || !pChpeDispatchExceptionNative)
         return FALSE;
@@ -1827,10 +1835,27 @@ ChpeDispatchException(PEXCEPTION_RECORD ExceptionRecord,
         return pChpeDispatchExceptionNative(ExceptionRecord, (PARM64_NT_CONTEXT)Context) == STATUS_SUCCESS;
 
     pChpeResetToConsistentState(ExceptionRecord, CpuArea->ContextAmd64, Context);
+    return FALSE;
+}
 
-    if (!ChpeProcessInitialized || !CpuArea->EmulatorData[1] || !CpuArea->ContextAmd64)
+static
+BOOLEAN
+NTAPI
+ChpepDispatchMixedException(PEXCEPTION_RECORD ExceptionRecord,
+                            PCONTEXT Context,
+                            PBOOLEAN Handled)
+{
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+    NTSTATUS Status;
+
+    if (!ChpeProcessInitialized || !pChpeDispatchExceptionNative)
         return FALSE;
 
+    CpuArea = ChpepGetCurrentCpuArea();
+    if (!CpuArea || !CpuArea->EmulatorData[1] || !CpuArea->ContextAmd64)
+        return FALSE;
+
+    *Handled = TRUE;
     if (RtlCallVectoredExceptionHandlers(ExceptionRecord, Context))
     {
         RtlCallVectoredContinueHandlers(ExceptionRecord, Context);
@@ -1838,14 +1863,17 @@ ChpeDispatchException(PEXCEPTION_RECORD ExceptionRecord,
     }
 
     Status = pChpeDispatchExceptionNative(ExceptionRecord, (PARM64_NT_CONTEXT)Context);
-    RtlCallVectoredContinueHandlers(ExceptionRecord, Context);
     if (Status == STATUS_SUCCESS)
+    {
+        RtlCallVectoredContinueHandlers(ExceptionRecord, Context);
         return TRUE;
+    }
 
     if (Status != STATUS_UNHANDLED_EXCEPTION)
         RtlRaiseStatus(Status);
 
-    return FALSE;
+    *Handled = FALSE;
+    return TRUE;
 }
 
 BOOLEAN

@@ -188,6 +188,12 @@ BOOLEAN
 NTAPI
 RtlpCheckForActiveDebugger(VOID);
 
+typedef BOOLEAN (NTAPI *PRTLP_DISPATCH_EXCEPTION_HOOK)(PEXCEPTION_RECORD ExceptionRecord,
+                                                        PCONTEXT ContextRecord,
+                                                        PBOOLEAN Handled);
+
+extern PRTLP_DISPATCH_EXCEPTION_HOOK RtlpDispatchExceptionHook;
+
 BOOLEAN
 NTAPI
 RtlpHandleDpcStackException(IN PEXCEPTION_REGISTRATION_RECORD RegistrationFrame,

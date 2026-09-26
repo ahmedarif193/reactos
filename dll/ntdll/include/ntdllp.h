@@ -395,6 +395,11 @@ ChpeDispatchException(
     PEXCEPTION_RECORD ExceptionRecord,
     PCONTEXT Context);
 
+extern BOOLEAN (NTAPI *RtlpDispatchExceptionHook)(
+    PEXCEPTION_RECORD ExceptionRecord,
+    PCONTEXT ContextRecord,
+    PBOOLEAN Handled);
+
 VOID
 NTAPI
 ChpeNotifyMemoryAlloc(

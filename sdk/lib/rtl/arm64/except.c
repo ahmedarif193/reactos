@@ -28,6 +28,8 @@
 
 /* RtlLookupFunctionEntry/RtlVirtualUnwind prototypes come from the NDK */
 
+PRTLP_DISPATCH_EXCEPTION_HOOK RtlpDispatchExceptionHook;
+
 static VOID RtlpArm64CaptureNonVolatileRegisters(_Out_ DISPATCHER_CONTEXT_NONVOLREG_ARM64 *NonVolatileRegisters, _In_ PCONTEXT Context)
 {
     ULONG Index;
@@ -306,6 +308,13 @@ RtlDispatchException(
     ULONG_PTR LookupPc;
     ULONG64 ControlPc;
     BOOLEAN ControlPcIsUnwound;
+    BOOLEAN Handled;
+
+    if (RtlpDispatchExceptionHook != NULL &&
+        RtlpDispatchExceptionHook(ExceptionRecord, ContextRecord, &Handled))
+    {
+        return Handled;
+    }
 
     if (RtlCallVectoredExceptionHandlers(ExceptionRecord, ContextRecord))
     {
