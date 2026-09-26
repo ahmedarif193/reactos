@@ -250,6 +250,9 @@
 1857 cdecl _setjmp(ptr ptr) ChpeSetJmpX64
 1858 cdecl _setjmpex(ptr ptr) ChpeSetJmpX64
 1912 cdecl longjmp(ptr long) ChpeLongJmp
+960 stdcall RtlInitMemoryStream(ptr) ChpeRtlInitMemoryStream
+962 stdcall RtlInitOutOfProcessMemoryStream(ptr) ChpeRtlInitOutOfProcessMemoryStream
+1141 stdcall RtlReleaseMemoryStream(ptr) ChpeRtlReleaseMemoryStream
 95 stdcall ExpInterlockedPopEntrySListEnd() ChpeUnsupportedKernelEntry
 97 stdcall ExpInterlockedPopEntrySListFault() ChpeUnsupportedKernelEntry
 99 stdcall ExpInterlockedPopEntrySListResume() ChpeUnsupportedKernelEntry
@@ -1071,9 +1074,7 @@
 957 stdcall RtlInitAnsiStringEx(ptr str) ChpeAutoRtlInitAnsiStringEx
 958 stdcall -version=0x600+ RtlInitBarrier(long long) ChpeStubRtlInitBarrier
 959 stdcall RtlInitCodePageTable(ptr ptr) ChpeAutoRtlInitCodePageTable
-960 stdcall RtlInitMemoryStream(ptr) ChpeAutoRtlInitMemoryStream
 961 stdcall RtlInitNlsTables(ptr ptr ptr ptr) ChpeAutoRtlInitNlsTables
-962 stdcall RtlInitOutOfProcessMemoryStream(ptr) ChpeAutoRtlInitOutOfProcessMemoryStream
 963 stdcall RtlInitString(ptr str) ChpeAutoRtlInitString
 964 stdcall RtlGetNextEntryHashTable(ptr ptr) ChpeAutoRtlGetNextEntryHashTable
 965 stdcall RtlInitEnumerationHashTable(ptr ptr) ChpeAutoRtlInitEnumerationHashTable
@@ -1224,7 +1225,6 @@
 1137 stdcall RtlRegisterCfgTargetRange(ptr long) ChpeAutoRtlRegisterCfgTargetRange
 1138 stdcall -version=0x600+ RtlRegisterThreadWithCsrss() ChpeStubRtlRegisterThreadWithCsrss
 1140 stdcall RtlReleaseActivationContext(ptr) ChpeAutoRtlReleaseActivationContext
-1141 stdcall RtlReleaseMemoryStream(ptr) ChpeAutoRtlReleaseMemoryStream
 1142 stdcall RtlReleasePebLock() ChpeAutoRtlReleasePebLock
 1144 stdcall RtlReleaseRelativeName(ptr) ChpeAutoRtlReleaseRelativeName
 1145 stdcall RtlReleaseResource(ptr) ChpeAutoRtlReleaseResource
