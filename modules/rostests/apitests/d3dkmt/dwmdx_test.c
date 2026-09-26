@@ -1128,6 +1128,10 @@ TestNativePublicationArguments(PFN_NTUSERCALLONEPARAM pNtUserCallOneParam,
     Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
     ok(Status == STATUS_INVALID_PARAMETER,
        "unknown native publication flags must be rejected: 0x%08lX\n", (unsigned long)Status);
+    Exchange.Flags = DWM_DX_PUBLISH_SCANOUT;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "a scanout publication must be retained: 0x%08lX\n", (unsigned long)Status);
     Exchange.Flags = 0;
 
     Exchange.Info.Pitch = Client.right * sizeof(ULONG);

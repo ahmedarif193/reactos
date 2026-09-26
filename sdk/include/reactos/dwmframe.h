@@ -231,6 +231,7 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_LWA_ALPHA    0x00000002u
 
 /* Compositor-owned attributes carried in the unused high LayerFlags bits. */
+#define DWM_WINDOW_DX_SCANOUT  0x02000000u /* see DWM_DX_PUBLISH_SCANOUT */
 #define DWM_WINDOW_DX_RETAINED 0x04000000u /* see DWM_DX_PUBLISH_RETAINED */
 #define DWM_WINDOW_DX_PREMULTIPLIED_ALPHA 0x08000000u
 #define DWM_WINDOW_PREMULTIPLIED_ALPHA 0x10000000u
@@ -443,6 +444,8 @@ typedef struct _DWM_DX_SHARED_SURFACE_INFO
 
 #define DWM_DX_PUBLISH_PREMULTIPLIED 0x00000001u
 #define DWM_DX_PUBLISH_RETAINED      0x00000002u
+/* The retained buffer can also be scanned out as an overlay plane. */
+#define DWM_DX_PUBLISH_SCANOUT       0x00000004u
 
 #define DWM_DX_UPDATE_CANCEL     0x80000000u
 

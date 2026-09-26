@@ -70,3 +70,10 @@ WddmBridgeSetCompositorSourceOwner(
 /* Cached device object pointer (set by WddmBridgeInit) */
 extern PFILE_OBJECT   g_DxgkrnlFileObject;
 extern PDEVICE_OBJECT g_DxgkrnlDeviceObject;
+
+/* A compositor flip with overlay planes; both arguments are kernel copies. */
+NTSTATUS
+APIENTRY
+D3DKMTPresentWithOverlays(
+    _In_ const RXGK_PRESENT_OVERLAYS *Overlays,
+    _In_ const D3DKMT_PRESENT *Present);

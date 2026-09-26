@@ -198,6 +198,7 @@ IntCompositionCompleteRedirectedBltPresent(
 VOID IntCompositionDamageFromGdi(VOID);
 BOOL IntCompositionIsAttachedProcess(VOID);
 BOOL IntCompositionIsGpuOutputWindow(_In_opt_ PWND Window);
+HWND IntCompositionGetGpuOutputWindow(VOID);
 BOOL IntCompositionIsGpuOutputPresent(_In_opt_ HWND Window,
                                       _In_ const RECT *SourceRect,
                                       _In_ const RECT *DestinationRect);

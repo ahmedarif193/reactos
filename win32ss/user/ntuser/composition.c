@@ -2066,6 +2066,17 @@ IntCompositionIsGpuOutputWindow(_In_opt_ PWND Window)
            Registered == (ULONG_PTR)UserHMGetHandle(Window);
 }
 
+/* The attached compositor's registered output window, for that compositor
+ * only. */
+HWND
+IntCompositionGetGpuOutputWindow(VOID)
+{
+    if (!g_DwmAttached || PsGetCurrentProcess() != g_DwmProcess)
+        return NULL;
+    return (HWND)InterlockedCompareExchangePointer(
+        (PVOID volatile *)&g_DwmGpuOutputWindow, NULL, NULL);
+}
+
 BOOL
 IntCompositionIsGpuOutputPresent(_In_opt_ HWND Window,
                                  _In_ const RECT *SourceRect,
@@ -2769,6 +2780,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                 lf |= DWM_WINDOW_DX_PREMULTIPLIED_ALPHA;
             if (e->Redirect.DxFlags & DWM_DX_PUBLISH_RETAINED)
                 lf |= DWM_WINDOW_DX_RETAINED;
+            if (e->Redirect.DxFlags & DWM_DX_PUBLISH_SCANOUT)
+                lf |= DWM_WINDOW_DX_SCANOUT;
             g_DwmFrameWindows[count].LayerFlags = lf;
         }
         {
@@ -3457,7 +3470,10 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             {
                 if (Request.Info.Version != DWM_DX_SURFACE_INFO_VERSION_GPU ||
                     Request.Info.Pitch != 0 ||
-                    (Request.Flags & ~(DWM_DX_PUBLISH_PREMULTIPLIED | DWM_DX_PUBLISH_RETAINED)) != 0 ||
+                    (Request.Flags & ~(DWM_DX_PUBLISH_PREMULTIPLIED | DWM_DX_PUBLISH_RETAINED |
+                                       DWM_DX_PUBLISH_SCANOUT)) != 0 ||
+                    ((Request.Flags & DWM_DX_PUBLISH_SCANOUT) &&
+                     !(Request.Flags & DWM_DX_PUBLISH_RETAINED)) ||
                     (Request.Info.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM &&
                      Request.Info.Format != DWM_DX_FORMAT_R8G8B8A8_UNORM) ||
                     Request.UpdateRect.left != 0 || Request.UpdateRect.top != 0 ||

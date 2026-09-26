@@ -309,6 +309,8 @@ typedef struct _DXGKP_PROCESS_PRIORITY_REQUEST
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x140, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_PRESENT \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x141, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_PRESENTOVERLAYS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x144, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x150, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECT \
@@ -2001,6 +2003,38 @@ Cleanup:
     if (CapturedSubRects != NULL)
         ExFreePoolWithTag(CapturedSubRects, TAG_WDDM_BRIDGE);
     return WddmBridgeRejectBadBuffer(Status);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTPresentWithOverlays(
+    _In_ const RXGK_PRESENT_OVERLAYS *Overlays,
+    _In_ const D3DKMT_PRESENT *Present)
+{
+    struct
+    {
+        RXGK_PRESENT_OVERLAYS Header;
+        UCHAR Present[RXGK_D3DKMT_PRESENT_WIRE_SIZE];
+    } *Request;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (Overlays == NULL || Present == NULL || Present->SubRectCnt != 0 ||
+        Present->pSrcSubRects != NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Request = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Request), TAG_WDDM_BRIDGE);
+    if (Request == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(&Request->Header, Overlays, sizeof(Request->Header));
+    RtlCopyMemory(Request->Present, Present, sizeof(Request->Present));
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_PRESENTOVERLAYS,
+                                                Request, sizeof(*Request),
+                                                Request, sizeof(*Request),
+                                                &Information);
+    ExFreePoolWithTag(Request, TAG_WDDM_BRIDGE);
+    return Status;
 }
 
 /* ---- Memory locking ------------------------------------------------------ */
