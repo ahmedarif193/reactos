@@ -554,6 +554,17 @@ HalpQueryAcpiResourceRequirements(
     OUT PIO_RESOURCE_REQUIREMENTS_LIST *Requirements
 );
 
+BOOLEAN
+NTAPI
+HalpGetPmTimer(
+    OUT PULONG Port,
+    OUT PULONG Mask
+);
+
+VOID
+NTAPI
+HalpAcpiReset(VOID);
+
 VOID
 FASTCALL
 KeUpdateSystemTime(

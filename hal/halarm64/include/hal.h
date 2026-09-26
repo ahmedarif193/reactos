@@ -1,8 +1,8 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            hal/arch/common/include/hal.h
- * PURPOSE:         Minimal HAL header for common ACPI helpers on non-x86
+ * FILE:            hal/halarm64/include/hal.h
+ * PURPOSE:         ARM64 HAL private header
  */
 
 #pragma once
@@ -12,11 +12,12 @@
 #include <ioaccess.h>
 #include <halfuncs.h>
 #include <ndk/iofuncs.h>
+#include <ndk/kefuncs.h>
 #include <reactos/hal/acpi_pci.h>
 #include <reactos/hal/acpi_cstate.h>
 #include <reactos/drivers/acpi/acpi.h>
 #include <bugcodes.h>
-#include <halacpi.h>
+#include <halacpip.h>
 #include <halirq.h>
 
 #ifndef TAG_HAL

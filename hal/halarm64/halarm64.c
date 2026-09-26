@@ -15,7 +15,7 @@
 #include <reactos/hal/acpi_pci.h>
 #include <reactos/hal/acpi_cstate.h>
 #include <reactos/drivers/acpi/acpi.h>
-#include <halacpi.h>
+#include <halacpip.h>
 #include <halacpi_arm64.h>
 #include <bugcodes.h>
 #include "halext.h"
