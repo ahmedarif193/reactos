@@ -1,5 +1,10 @@
 # RISC-V NT uses the Windows C data model and PE/COFF modules.
 # Keep the firmware's UEFI compilation options separate from the NT ABI.
+#
+# TODO(riscv64): temporary. AMD64 and ARM64 build with Clang through the
+# shared compiler layer (gcc.cmake/clang.cmake). Fold the RISC-V specifics
+# below into that layer, and toolchain-riscv64.cmake into
+# toolchain-clang.cmake, then delete this file.
 set(CMAKE_MC_COMPILER native-windmc)
 set(NO_ROSSYM TRUE)
 set(PSEH_LIB pseh)

@@ -341,7 +341,7 @@ KiRiscvSystemStartup(
         KiRiscvStartupStop(Failure);
 
     /* Bring up the firmware-described console first so every later failure
-     * can print. A missing console is not fatal (ABI-126). */
+     * can print. A missing console is not fatal. */
     RiscvBlock = &LoaderBlock->u.Riscv64;
     KiRiscvConsoleInitialize(LoaderBlock);
     KiRiscvIdentifyProcessor(LoaderBlock);
@@ -366,7 +366,7 @@ KiRiscvSystemStartup(
         KiRiscvStartupStop(KiRiscvStartupTrapVectorFailure);
     KiRiscvStartupPhase = KiRiscvStartupTrapVectorInstalled;
 
-    /* ABI-132: NT kernel code reads and writes user buffers directly (under
+    /* NT kernel code reads and writes user buffers directly (under
      * probing and SEH), so supervisor access to U pages is permitted for the
      * lifetime of the system. MXR stays clear: execute-only is not readable. */
     __asm__ __volatile__("li t0, 0x40000\n\tcsrs sstatus, t0\n\tli t0, 0x80000\n\tcsrc sstatus, t0" ::: "t0", "memory");

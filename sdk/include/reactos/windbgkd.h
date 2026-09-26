@@ -273,7 +273,7 @@ typedef struct _ARM64_DBGKD_CONTROL_SET
     ULONG CurrentSymbolEnd;
 } ARM64_DBGKD_CONTROL_SET, *PARM64_DBGKD_CONTROL_SET;
 
-/* ReactOS-private RISC-V layout (ABI-127); no Microsoft KD wire format exists. */
+/* ReactOS-private RISC-V layout; no Microsoft KD wire format exists. */
 typedef struct _RISCV64_DBGKD_CONTROL_SET
 {
     ULONG Continue;
@@ -382,7 +382,7 @@ typedef struct _ARM64_DBGKD_CONTROL_REPORT
     UCHAR InstructionStream[DBGKD_MAXSTREAM];
 } ARM64_DBGKD_CONTROL_REPORT, *PARM64_DBGKD_CONTROL_REPORT;
 
-/* ReactOS-private RISC-V layout (ABI-127): Pc/Sp/Ra plus an instruction window. */
+/* ReactOS-private RISC-V layout: Pc/Sp/Ra plus an instruction window. */
 typedef struct _RISCV64_DBGKD_CONTROL_REPORT
 {
     ULONG64 Pc;

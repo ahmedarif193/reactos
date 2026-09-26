@@ -5,7 +5,7 @@
  * PURPOSE:     Machine-dependent registry configuration for RISC-V64
  *
  * Publishes HARDWARE\DESCRIPTION\System\CentralProcessor\<n> from the
- * device-tree/SBI processor record (ABI-128). RISC-V has no CPUID/MIDR:
+ * device-tree/SBI processor record. RISC-V has no CPUID/MIDR:
  * identity comes from firmware, so the values below are firmware strings.
  */
 

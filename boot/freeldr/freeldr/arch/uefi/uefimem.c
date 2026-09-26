@@ -432,12 +432,14 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
 #endif
 
     /*
-     * The entry frame remains live until we switch to BasicStack, and firmware
-     * calls later reuse that stack. Some firmware maps incorrectly expose its
-     * final, partially occupied page as conventional memory. Never hand that
-     * page to the loader allocator: creating a heap there overwrites our stack
-     * and subsequent calls overwrite the heap. Preserve the original type
-     * when firmware already reserved the page.
+     * FreeLoader builds its memory map and heap while still running on the
+     * firmware's entry stack, and ExitBootServices later runs on that stack
+     * again. The UEFI memory map must describe it as allocated, but some
+     * firmware reports the stack's top page as EfiConventionalMemory: QEMU's
+     * RISC-V virt EDK2 starts a conventional region at the page holding the
+     * entry frame, so the pinning above hands it to the loader allocator and
+     * the heap overwrites the live stack. Keep that page out of the free pool;
+     * a page firmware already reserved keeps its type.
      */
     for (Index = 0; Index < FreeldrDescCount; ++Index)
     {

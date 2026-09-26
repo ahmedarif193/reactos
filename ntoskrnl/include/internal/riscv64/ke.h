@@ -162,8 +162,8 @@ KeGetTrapFrameFrameRegister(_In_ PKTRAP_FRAME TrapFrame)
     return TrapFrame->Context.S0;
 }
 
-/* Boot-hart processor identification (ABI-128), filled from the device tree
- * and the SBI base extension. KeFeatureBits stays zero (ABI-123). */
+/* Boot-hart processor identification, filled from the device tree
+ * and the SBI base extension. KeFeatureBits stays zero. */
 #define KI_RISCV_FEATURE_ZICBOM      0x00000001
 #define KI_RISCV_FEATURE_ZICBOZ      0x00000002
 #define KI_RISCV_FEATURE_ZICBOP      0x00000004

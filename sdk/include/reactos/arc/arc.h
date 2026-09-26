@@ -864,7 +864,7 @@ typedef struct _ARM64_LOADER_BLOCK
 #define RISCV64_LOADER_PHYSICAL_LIMIT                 0x0000001000000000ULL
 #define RISCV64_LOADER_BOOT_PROTOCOL_MINIMUM_REVISION 0x00010000ULL
 
-/* Early console register interfaces (ABI-126). Values are wire constants. */
+/* Early console register interfaces. Values are wire constants. */
 #define RISCV64_EARLY_CONSOLE_NONE                    0
 #define RISCV64_EARLY_CONSOLE_NS16550                 1 /* 8250/16550 register file, reg-shift/reg-io-width applied */
 #define RISCV64_EARLY_CONSOLE_SBI_DEBUG               2 /* SBI DBCN extension, no MMIO */

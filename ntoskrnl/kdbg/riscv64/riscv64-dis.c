@@ -4,7 +4,7 @@
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF
  * PURPOSE:     KDBG RISC-V instruction words, lengths and branch targets
  *
- * No RISC-V disassembler is provided yet (ABI-127): instructions are printed
+ * No RISC-V disassembler is provided yet: instructions are printed
  * as words with their opcode class, compressed ones marked. Control-flow
  * decoding is exact for the base ISA and the C extension so single-step can
  * place a temporary breakpoint at the next instruction.

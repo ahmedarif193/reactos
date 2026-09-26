@@ -607,7 +607,7 @@ RiscvAddEarlyDeviceRange(
 }
 
 /*
- * ABI-126: resolve /chosen/stdout-path from the retained device tree and
+ * Resolve /chosen/stdout-path from the retained device tree and
  * describe the console register file for the kernel. The UART is never
  * touched here; firmware owns its configuration. Absence of a usable
  * console is not an error: the kernel falls back to the SBI debug console.
