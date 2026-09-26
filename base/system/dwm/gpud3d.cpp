@@ -1175,8 +1175,10 @@ BOOL DrawLayer(const DWM_WIN *Window, const BYTE *Pixels, BOOL Client, LONG Orig
     Data.Extra[2] = DWM_MATERIAL_REFLECT_STRENGTH / 255.0f;
     Data.Extra[3] = (FLOAT)Premultiplied;
     BOOL Blend = Alpha < 1.0f || Data.SourceSize[3] != 0 || Data.Flags[2] != 0 || Premultiplied;
+    /* An opaque layer without glass or colour key is its source unchanged. */
+    Shader Program = !Blend && !Glass && Data.Flags[3] == 0 ? Copy : Shader::Window;
     return Draw(State.Canvas,
-                Shader::Window,
+                Program,
                 ClipDraw(Bounds),
                 Data,
                 Image->View,
