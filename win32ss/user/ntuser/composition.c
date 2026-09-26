@@ -3613,7 +3613,10 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 Publication->Retained = (Request.Flags & DWM_DX_PUBLISH_RETAINED) != 0;
                 Publication->Delivered = FALSE;
                 Entry->Redirect.DxPublication = (ULONG)(Publication - g_DxPublications) + 1;
-                IntCompositionDamageDxPublication(Entry, TopWnd);
+                /* The next frame damages the pending client layer itself. */
+                if (!Entry->Redirect.FrontValid)
+                    Entry->Damaged = TRUE;
+                IntCompositionMarkDamage(FALSE);
                 return STATUS_SUCCESS;
             }
             else
