@@ -105,6 +105,8 @@ struct BlurTarget
     RECT Bounds;
     LONG Width, Height; /* filtered texels in Result */
     ULONG Radius, Call, Frame;
+    ULONG ValidFrame; /* last frame whose lower scene the result matches */
+    ULONGLONG OwnerBase, OwnerClient; /* owner publications a later capture saw */
     ULONGLONG LastUse;
     BOOL Valid, Pinned;
 
@@ -185,7 +187,8 @@ struct Compositor
     /* The window redraws its material from last frame's filtered capture. */
     BOOL CachedCapture[DWM_MAX_WINDOWS];
     DWM_WIN BlurOwner;
-    BOOL BlurOwnerValid, BlurLowerUnchanged;
+    ULONGLONG BlurOwnerBase, BlurOwnerClient;
+    BOOL BlurOwnerValid;
     ULONG BlurCall, Frame, PresentedBuffers;
     /* Clip is the canvas region this frame draws, its Repair grown over the
      * captures it touches; Draw bounds it. The back buffer also lacks the
@@ -1206,18 +1209,21 @@ void BuildWeights(ULONG Radius, Constants &Data)
     Data.Filter[2] = (FLOAT)Count;
 }
 
-/* The previous frame's result of this capture, while nothing below its
- * owner has changed. */
+/* An earlier result of this capture that still matches this frame's lower
+ * scene. */
 BlurTarget *CachedBlur(const RECT &Bounds, ULONG Radius, ULONG Call)
 {
-    if (!State.BlurOwnerValid || !State.BlurLowerUnchanged)
+    if (!State.BlurOwnerValid)
         return NULL;
     for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
     {
         BlurTarget *Target = &State.Blurs[Index];
-        if (Target->Valid && Target->Frame + 1 == State.Frame && Target->Call == Call &&
+        /* A later capture also samples the layers its owner drew first. */
+        if (Target->Valid && Target->ValidFrame == State.Frame && Target->Call == Call &&
             Target->Radius == Radius && EqualRect(&Target->Bounds, &Bounds) &&
-            memcmp(&Target->Owner, &State.BlurOwner, sizeof(Target->Owner)) == 0)
+            memcmp(&Target->Owner, &State.BlurOwner, sizeof(Target->Owner)) == 0 &&
+            (Call == 0 || (Target->OwnerBase == State.BlurOwnerBase &&
+                           Target->OwnerClient == State.BlurOwnerClient)))
         {
             Target->Frame = State.Frame;
             Target->LastUse = ++State.BlurUse;
@@ -1275,6 +1281,9 @@ BlurTarget *FilterCaptureImpl(const RECT &Bounds, ULONG Radius, ULONG Call)
     Target->Radius = Radius;
     Target->Call = Call;
     Target->Frame = State.Frame;
+    Target->ValidFrame = State.Frame;
+    Target->OwnerBase = State.BlurOwnerBase;
+    Target->OwnerClient = State.BlurOwnerClient;
     Target->LastUse = ++State.BlurUse;
     Target->Valid = State.BlurOwnerValid;
     ++State.Filtered;
@@ -1542,11 +1551,26 @@ DwmD3dScene(const DWM_WIN *Windows, ULONG Count, const RECTL *BlurRects,
     for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
     {
         BlurTarget *Target = &State.Blurs[Index];
+        BOOL Current = FALSE;
         if (!DwmGpuSceneHasSurface(Windows, Count, Target->Owner.SurfaceId, FALSE))
         {
             Target->Reset();
             ZeroMemory(Target, sizeof(*Target));
+            continue;
         }
+        /* A result stays exact while nothing below its owner changes, also
+         * across frames that do not draw the owner. Begin numbers this
+         * frame next. */
+        for (ULONG Owner = 0; Target->Valid && Target->ValidFrame == State.Frame && Owner < Count; ++Owner)
+        {
+            if (Windows[Owner].SurfaceId == Target->Owner.SurfaceId &&
+                Windows[Owner].Generation == Target->Owner.Generation)
+            {
+                Current = State.LowerUnchanged[Owner] && Windows[Owner].AnimFlags == 0;
+                break;
+            }
+        }
+        Target->ValidFrame = Current ? State.Frame + 1 : 0;
     }
 }
 
@@ -1557,8 +1581,9 @@ DwmD3dPrepareWindow(const DWM_WIN *Window, ULONG Index)
     if (Index > State.OccluderIndex)
         State.OccluderActive = FALSE;
     State.BlurOwner = DwmGpuCacheBlurOwner(Window);
+    State.BlurOwnerBase = Window->BaseUpdateId;
+    State.BlurOwnerClient = Window->DxUpdateId;
     State.BlurOwnerValid = Window->AnimFlags == 0;
-    State.BlurLowerUnchanged = Index < DWM_MAX_WINDOWS && State.LowerUnchanged[Index];
     State.BlurCall = 0;
 }
 
@@ -1707,7 +1732,7 @@ PinCachedCaptures(void)
         for (ULONG Slot = 0; Slot < ARRAYSIZE(State.Blurs); ++Slot)
         {
             BlurTarget *Target = &State.Blurs[Slot];
-            if (!Target->Pinned && Target->Valid && Target->Frame + 1 == State.Frame &&
+            if (!Target->Pinned && Target->Valid && Target->ValidFrame == State.Frame &&
                 Target->Call == 0 && Target->Radius == Radius && EqualRect(&Target->Bounds, &Bounds) &&
                 memcmp(&Target->Owner, &Owner, sizeof(Owner)) == 0)
             {
