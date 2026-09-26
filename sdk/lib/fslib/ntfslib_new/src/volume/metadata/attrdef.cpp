@@ -210,6 +210,8 @@ Volume::GetADSPreference(_In_  PUNICODE_STRING FileName,
     if (SecondColon == MAXULONG)
     {
         StreamLength = CharacterCount - FirstColon - 1;
+        if (StreamLength == 0)
+            return STATUS_OBJECT_NAME_INVALID;
     }
     else
     {
