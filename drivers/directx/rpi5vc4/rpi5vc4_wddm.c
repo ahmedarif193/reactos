@@ -12,6 +12,7 @@
 #include "rpi5vc4.h"
 #include "rpi5vc4_v3d.h"
 #include "rpi5vc4_crtc.h"
+#include "rpi5vc4_hvs.h"
 #include "rpi5vc4_mbox.h"
 #include <reactos/vc4cle.h>
 
@@ -1305,7 +1306,14 @@ Rpi5Vc4VsyncDpcRoutine(
         RtlZeroMemory(&NotifyData, sizeof(NotifyData));
         NotifyData.InterruptType = DXGK_INTERRUPT_TYPE_CRTC_VSYNC;
         NotifyData.CrtcVsync.VidPnTargetId = 0;
-        NotifyData.CrtcVsync.PhysicalAddress = DeviceExtension->FrameBufferPhysical;
+        /* Report the list the HVS scans, not the last one armed: dxgkrnl
+         * releases the previous primary once this address matches a flip. */
+        if (!Rpi5HvsQueryScanoutAddress(DeviceExtension,
+                                        &NotifyData.CrtcVsync.PhysicalAddress))
+        {
+            NotifyData.CrtcVsync.PhysicalAddress =
+                DeviceExtension->FrameBufferPhysical;
+        }
         NotifyData.CrtcVsync.PhysicalAdapterMask = 1;
         NotifyData.Flags.ValidPhysicalAdapterMask = 1;
 
@@ -1379,6 +1387,10 @@ Rpi5Vc4DmaPipelineInit(
                     Rpi5Vc4VsyncDpcRoutine, DeviceExtension);
     KeInitializeTimer(&DeviceExtension->VsyncTimer);
     DeviceExtension->VsyncEnabled = FALSE;
+    KeInitializeDpc(&DeviceExtension->FlipDpc,
+                    Rpi5Vc4FlipDpcRoutine, DeviceExtension);
+    DeviceExtension->FlipWorkQueued = 0;
+    DeviceExtension->FlipPendingAddress = 0;
     KeInitializeDpc(&DeviceExtension->HpdDpc,
                     Rpi5Vc4HpdDpcRoutine, DeviceExtension);
     KeInitializeTimer(&DeviceExtension->HpdTimer);
@@ -1422,6 +1434,7 @@ Rpi5Vc4DmaPipelineDrain(
     KeRemoveQueueDpc(&DeviceExtension->VsyncDpc);
     KeRemoveQueueDpc(&DeviceExtension->HpdDpc);
     KeRemoveQueueDpc(&DeviceExtension->FenceDpc);
+    KeRemoveQueueDpc(&DeviceExtension->FlipDpc);
     KeFlushQueuedDpcs();
     KeCancelTimer(&DeviceExtension->HpdTimer);
     KeRemoveQueueDpc(&DeviceExtension->HpdDpc);
@@ -1433,6 +1446,16 @@ Rpi5Vc4DmaPipelineDrain(
         HpdWait.QuadPart = -100000; /* 10 ms */
         KeDelayExecutionThread(KernelMode, FALSE, &HpdWait);
     }
+    /* The flip worker holds the HVS mutexes; let it finish before the
+     * caller unmaps the HVS and frees its work item. */
+    while (InterlockedCompareExchange(&DeviceExtension->FlipWorkQueued, 0, 0) != 0)
+    {
+        LARGE_INTEGER FlipWait;
+
+        FlipWait.QuadPart = -10000; /* 1 ms */
+        KeDelayExecutionThread(KernelMode, FALSE, &FlipWait);
+    }
+    InterlockedExchange64(&DeviceExtension->FlipPendingAddress, 0);
 
     /* Stop/remove aborts queued work; only observed hardware completion may
      * advance a fence or emit DMA_COMPLETED. */
@@ -1621,6 +1644,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Caps->SchedulingCaps.MultiEngineAware = TRUE;
             Caps->GpuEngineTopology.NbAsymetricProcessingNodes =
                 RPI5VC4_GPU_NODE_COUNT;
+            Caps->FlipCaps.FlipOnVSyncMmIo = DeviceExtension->MmioFlips;
             Caps->WDDMVersion = DXGKDDI_WDDMv2_ENUM;
             Caps->SupportNonVGA = TRUE;
             return STATUS_SUCCESS;
@@ -2760,6 +2784,14 @@ Rpi5Vc4DdiPresent(
         return STATUS_INVALID_HANDLE;
     if (Device == NULL || Device->Magic != RPI5VC4_DEVICE_MAGIC || Device->Adapter == NULL)
         return STATUS_INVALID_HANDLE;
+
+    /* FlipOnVSyncMmIo: dxgkrnl arms the flip through SetVidPnSourceAddress
+     * and passes no DMA buffer, as the flip describes no GPU work. */
+    if (Present->Flags.Flip && Present->pDmaBuffer == NULL)
+    {
+        return Device->Adapter->MmioFlips ?
+                   STATUS_SUCCESS : STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    }
 
     if (Present->pDmaBuffer == NULL ||
         Present->DmaSize < sizeof(RPI5VC4_DMA_PACKET))

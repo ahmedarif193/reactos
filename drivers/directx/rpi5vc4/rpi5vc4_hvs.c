@@ -1007,6 +1007,48 @@ FlipFailed:
     return FALSE;
 }
 
+BOOLEAN
+Rpi5HvsQueryScanoutAddress(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _Out_ PPHYSICAL_ADDRESS Address)
+{
+    PVOID Base = DeviceExtension->HvsBase;
+    volatile ULONG *Dlist;
+    ULONG ActiveReg, Head, Ptr0, Ptr1, Words;
+
+    Address->QuadPart = 0;
+    if (Base == NULL || DeviceExtension->Headless ||
+        Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) ||
+        DeviceExtension->HvsLptrsReg == 0)
+    {
+        return FALSE;
+    }
+
+    Dlist = (volatile ULONG *)((PUCHAR)Base + RPI5_HVS_DLIST_OFFSET);
+    Words = Rpi5HvsGetDlistDwords(Base);
+    ActiveReg = DeviceExtension->HvsLptrsReg == RPI5_HVS_LPTRS_D ?
+                    RPI5_HVS_ACTIVE_DL_D : RPI5_HVS_ACTIVE_DL_C;
+    Head = READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + ActiveReg)) &
+               RPI5_HVS_LPTRS_HEAD_MASK;
+    if (Words <= 6 || Head >= Words - 6 ||
+        !(READ_REGISTER_ULONG((PULONG)&Dlist[Head]) & RPI5_HVS_CTL0_VALID))
+    {
+        return FALSE;
+    }
+
+    Ptr0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 5]);
+    Ptr1 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 6]);
+    /* A list switch between the reads would pair two lists' words. */
+    if (Head != (READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + ActiveReg)) &
+                     RPI5_HVS_LPTRS_HEAD_MASK))
+    {
+        return FALSE;
+    }
+
+    Address->QuadPart = (LONGLONG)(((ULONGLONG)(Ptr0 & 0xffu) << 32) | Ptr1);
+    return TRUE;
+}
+
 /* LPTRS is the requested list; LACT identifies the list actually scanned.
  * A programmed flip does not release the previous surface until LACT changes.
  * Match the primary address as a cursor update may replace the list meanwhile. */

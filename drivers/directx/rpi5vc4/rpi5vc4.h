@@ -457,6 +457,15 @@ struct _RPI5VC4_DEVICE_EXTENSION
     KDPC VsyncDpc;
     BOOLEAN VsyncEnabled;
 
+    /* MMIO flips reach SetVidPnSourceAddress at the synchronization level.
+     * A passive worker publishes the latest armed address to the HVS; the
+     * vsync source reports the list the HVS actually scans. */
+    BOOLEAN MmioFlips;
+    KDPC FlipDpc;
+    PIO_WORKITEM FlipWorkItem;
+    volatile LONG FlipWorkQueued;
+    volatile LONG64 FlipPendingAddress;
+
     /* ---- V3D 7.1 (3D engine) state -------------------------------------- */
     BOOLEAN V3dReady;
     ULONG V3dVersion;
@@ -761,6 +770,9 @@ VOID Rpi5Vc4DmaPipelineDrain(
 NTSTATUS APIENTRY Rpi5Vc4DdiSetVidPnSourceAddress(
     _In_ PVOID MiniportDeviceContext,
     _In_ CONST DXGKARG_SETVIDPNSOURCEADDRESS *SetVidPnSourceAddress);
+
+/* Queues the passive worker that publishes an armed MMIO flip. */
+KDEFERRED_ROUTINE Rpi5Vc4FlipDpcRoutine;
 
 
 NTSTATUS APIENTRY Rpi5Vc4DdiIsSupportedVidPn(
