@@ -680,7 +680,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     IQS_NONE,
 
     /* ThreadIoPriority */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_QUERY
+    ),
 
     /* ThreadCycleTime */
     IQS_SAME
@@ -699,7 +704,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     ),
 
     /* ThreadActualBasePriority */
-    IQS_NONE,
+    IQS_SAME
+    (
+        LONG,
+        ULONG,
+        ICIF_QUERY
+    ),
 
     /* ThreadTebInformation */
     IQS_NONE,
@@ -727,7 +737,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadUmsInformation */
     IQS_NONE,
     /* ThreadCounterProfiling */
-    IQS_NONE,
+    IQS_SAME
+    (
+        BOOLEAN,
+        BOOLEAN,
+        ICIF_QUERY
+    ),
     /* ThreadIdealProcessorEx */
     IQS_SAME
     (
@@ -738,7 +753,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
 
     // Windows 8
     /* ThreadCpuAccountingInformation */
-    IQS_NONE,
+    IQS_SAME
+    (
+        BOOLEAN,
+        BOOLEAN,
+        ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE
+    ),
 
     // Windows 8.1
     /* ThreadSuspendCount */
@@ -753,7 +773,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadHeterogeneousCpuPolicy */
     IQS_NONE,
     /* ThreadContainerId */
-    IQS_NONE,
+    IQS_SAME
+    (
+        GUID,
+        ULONG,
+        ICIF_QUERY
+    ),
 
     /* ThreadNameInformation */
     IQS_SAME(UNICODE_STRING, ULONG, ICIF_QUERY | ICIF_SET | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET_SIZE_VARIABLE),
@@ -770,13 +795,23 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     ),
 
     /* ThreadDynamicCodePolicyInfo */
-    IQS_SAME(ULONG, ULONG, ICIF_SET),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_SET),
     /* ThreadExplicitCaseSensitivity */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_QUERY
+    ),
     /* ThreadWorkOnBehalfTicket */
     IQS_NONE,
     /* ThreadSubsystemInformation */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_QUERY
+    ),
     /* ThreadDbgkWerReportActive */
     IQS_NONE,
     /* ThreadAttachContainer */
@@ -804,7 +839,17 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadStrongerBadHandleChecks */
     IQS_NONE,
     /* ThreadEffectiveIoPriority */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_QUERY
+    ),
     /* ThreadEffectivePagePriority */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_QUERY
+    ),
 };

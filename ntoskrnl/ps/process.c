@@ -457,6 +457,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     Process->DefaultPagePriority = Parent ? Parent->DefaultPagePriority : PSP_PAGE_PRIORITY_NORMAL;
+    Process->DefaultIoPriority = Parent ? Parent->DefaultIoPriority : IoPriorityNormal;
 #endif
 
     /* Initialize pushlock and rundown protection */

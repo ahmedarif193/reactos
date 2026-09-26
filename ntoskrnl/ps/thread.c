@@ -276,6 +276,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     /* At Vista+, ThreadsProcess -> Tcb.Process (KPROCESS*) */
     Thread->Tcb.Process = &Process->Pcb;
     Thread->ThreadPagePriority = Process->DefaultPagePriority;
+    Thread->ThreadIoPriority = Process->DefaultIoPriority;
 #else
     Thread->ThreadsProcess = Process;
 #endif

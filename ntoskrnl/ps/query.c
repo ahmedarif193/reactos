@@ -5352,6 +5352,136 @@ NtQueryInformationThread(
             break;
         }
 
+        case ThreadIoPriority:
+        case ThreadActualBasePriority:
+        case ThreadDynamicCodePolicyInfo:
+        case ThreadExplicitCaseSensitivity:
+        case ThreadSubsystemInformation:
+        case ThreadEffectiveIoPriority:
+        case ThreadEffectivePagePriority:
+        {
+            ULONG Value = 0;
+
+            Length = sizeof(ULONG);
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            switch (ThreadInformationClass)
+            {
+                case ThreadIoPriority:
+                case ThreadEffectiveIoPriority:
+                    Value = Thread->ThreadIoPriority;
+                    break;
+
+                case ThreadActualBasePriority:
+                    Value = (ULONG)(LONG)Thread->Tcb.BasePriority;
+                    break;
+
+                case ThreadDynamicCodePolicyInfo:
+                    Value = (ULONG)Thread->DynamicCodeOptOut;
+                    break;
+
+                case ThreadEffectivePagePriority:
+                    Value = Thread->ThreadPagePriority;
+                    break;
+
+                default:
+                    break;
+            }
+
+            ObDereferenceObject(Thread);
+
+            _SEH2_TRY
+            {
+                *(PULONG)ThreadInformation = Value;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case ThreadCounterProfiling:
+        case ThreadCpuAccountingInformation:
+        {
+            Length = sizeof(BOOLEAN);
+            if ((ThreadInformationLength < Length) ||
+                ((ThreadInformationClass == ThreadCounterProfiling) &&
+                 (ThreadInformationLength != Length)))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            ObDereferenceObject(Thread);
+
+            _SEH2_TRY
+            {
+                *(PBOOLEAN)ThreadInformation = FALSE;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case ThreadContainerId:
+        {
+            Length = sizeof(GUID);
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            ObDereferenceObject(Thread);
+
+            _SEH2_TRY
+            {
+                RtlZeroMemory(ThreadInformation, sizeof(GUID));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
         /* Anything else */
         default:
             /* Not yet implemented */
