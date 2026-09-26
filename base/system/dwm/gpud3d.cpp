@@ -156,6 +156,7 @@ struct Compositor
      * A copy made after that fence cannot be released early. */
     BOOL CopyingClients, ClientCopiesFenced, ClientCopiesUnfenced;
     Texture Canvas, Backdrop;
+    ID3D11Texture2D *BackBuffer;
     Surface Surfaces[DWM_MAX_WINDOWS * 2];
     ClientSource ClientSources[DWM_MAX_WINDOWS * 2];
     BlurTarget Blurs[4];
@@ -166,8 +167,9 @@ struct Compositor
     DWM_WIN BlurOwner;
     BOOL BlurOwnerValid, BlurLowerUnchanged;
     ULONG BlurCall, Frame, PresentedBuffers;
-    /* Clip is this frame's drawn region: its own Repair plus the previous
-     * frame's, which the back buffer has not received yet. Draw bounds it. */
+    /* Clip is the canvas region this frame draws, its Repair grown over the
+     * captures it touches; Draw bounds it. The back buffer also lacks the
+     * previous frame's repair. */
     RECT Draw;
     RepairSet Clip, Repair, PreviousRepair;
     ULONGLONG BlurUse, Filtered, Reused;
@@ -809,23 +811,15 @@ BOOL CreateDevice(IDXGIAdapter1 **Selected)
     return Success;
 }
 
-/* Frames compose straight into the swapchain's back buffer. Presenting
- * rotates the buffer identities under this one resource, so its view stays
- * valid; the buffer then holds the frame presented two frames earlier. */
+/* Frames compose into a canvas that always holds the complete frame, and
+ * the repaired parts are copied into the swapchain's back buffer. Presenting
+ * rotates the buffer identities under back buffer 0, which then holds the
+ * frame presented two frames earlier. */
 BOOL BindOutput()
 {
-    State.Canvas.Reset();
-    if (!Result(State.SwapChain->GetBuffer(0, IID_ID3D11Texture2D, (void **)&State.Canvas.Resource), "GetBuffer") ||
-        !Result(State.Device->CreateRenderTargetView(State.Canvas.Resource, NULL, &State.Canvas.Target),
-                "CreateRenderTargetView output"))
-    {
-        State.Canvas.Reset();
-        return FALSE;
-    }
-    State.Canvas.Width = State.Width;
-    State.Canvas.Height = State.Height;
-    State.Canvas.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    return TRUE;
+    Release(State.BackBuffer);
+    return Result(State.SwapChain->GetBuffer(0, IID_ID3D11Texture2D, (void **)&State.BackBuffer), "GetBuffer") &&
+           CreateTexture(State.Canvas, State.Width, State.Height, TRUE);
 }
 
 BOOL CreateSwapChain(IDXGIAdapter1 *Adapter)
@@ -1385,6 +1379,7 @@ DwmD3dShutdown(void)
         State.Blurs[Index].Reset();
     State.Backdrop.Reset();
     State.Canvas.Reset();
+    Release(State.BackBuffer);
     Release(State.ClientCopies);
     Release(State.Completion);
     Release(State.Rasterizer);
@@ -1651,20 +1646,7 @@ DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdro
         AddRepair(State.Repair, Full);
     PinCachedCaptures();
     ExpandRepair(State.Repair);
-    /* The back buffer was presented two frames ago and lacks the previous
-     * frame's repair. Draw each buffer of the two-buffer chain whole once. */
     State.Clip = State.Repair;
-    if (State.PresentedBuffers < 2)
-    {
-        State.Clip.Count = 0;
-        AddRepair(State.Clip, Full);
-    }
-    else
-    {
-        for (ULONG Index = 0; Index < State.PreviousRepair.Count; ++Index)
-            AddRepair(State.Clip, State.PreviousRepair.Parts[Index]);
-        ExpandRepair(State.Clip);
-    }
     SetRectEmpty(&State.Draw);
     for (ULONG Index = 0; Index < State.Clip.Count; ++Index)
         DwmGpuDamageUnion(&State.Draw, &State.Clip.Parts[Index]);
@@ -1875,6 +1857,32 @@ DwmD3dEnd(void)
 {
     if (!State.Active)
         return DWM_GPU_FAILED;
+    /* The back buffer was presented two frames ago: it needs this frame's
+     * and the previous frame's repair, and each buffer of the two-buffer
+     * chain is filled whole once. The canvas holds the complete frame, so
+     * copying whole 64-pixel blocks is exact and lets tiled GPUs store
+     * whole tiles without shading or loading the destination. */
+    RECT Full = {0, 0, State.Width, State.Height};
+    RepairSet Copy = {};
+    if (State.PresentedBuffers < 2)
+        AddRepair(Copy, Full);
+    for (ULONG Index = 0; Index < State.Repair.Count + State.PreviousRepair.Count; ++Index)
+    {
+        RECT Part = Index < State.Repair.Count ? State.Repair.Parts[Index] :
+                                                 State.PreviousRepair.Parts[Index - State.Repair.Count];
+        SetRect(&Part, Part.left & ~63, Part.top & ~63,
+                min((Part.right + 63) & ~63, State.Width), min((Part.bottom + 63) & ~63, State.Height));
+        AddRepair(Copy, Part);
+    }
+    UnbindTextures();
+    for (ULONG Index = 0; Index < Copy.Count; ++Index)
+    {
+        const RECT &Part = Copy.Parts[Index];
+        D3D11_BOX Box = {(UINT)Part.left, (UINT)Part.top, 0, (UINT)Part.right, (UINT)Part.bottom, 1};
+        State.Context->CopySubresourceRegion(State.BackBuffer, 0, Part.left, Part.top, 0,
+                                             State.Canvas.Resource, 0, &Box);
+    }
+    State.WorkPending = TRUE;
     DXGI_PRESENT_PARAMETERS Present = {};
     Present.DirtyRectsCount = State.Repair.Count;
     Present.pDirtyRects = State.Repair.Parts;
