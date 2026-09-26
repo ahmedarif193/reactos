@@ -82,6 +82,8 @@ typedef struct _REDIRECT_ENTRY
 
 static REDIRECT_ENTRY  g_Redirects[COMPOSITION_MAX_WINDOWS];
 static ULONG           g_RedirectHighWater = 0;
+/* g_Redirects[i].Wnd, packed so a lookup does not touch every large entry. */
+static PWND            g_RedirectWnds[COMPOSITION_MAX_WINDOWS];
 static volatile LONG   g_CompositionDamaged = FALSE;
 static volatile LONG   g_CompositionFullDamage = FALSE;
 /* Position changes run under the exclusive USER lock, as does GETFRAME.
@@ -609,7 +611,7 @@ IntCompositionFind(_In_ PWND Wnd)
         return NULL;
     for (i = 0; i < g_RedirectHighWater; i++)
     {
-        if (g_Redirects[i].Wnd == Wnd)
+        if (g_RedirectWnds[i] == Wnd)
             return &g_Redirects[i];
     }
     return NULL;
@@ -630,6 +632,7 @@ IntCompositionAlloc(_In_ PWND Wnd)
         {
             RtlZeroMemory(&g_Redirects[i], sizeof(REDIRECT_ENTRY));
             g_Redirects[i].Wnd = Wnd;
+            g_RedirectWnds[i] = Wnd;
             if (i >= g_RedirectHighWater)
                 g_RedirectHighWater = i + 1;
             return &g_Redirects[i];
@@ -1199,6 +1202,7 @@ IntCompositionOnWindowDestroy(_In_ PWND Wnd)
     IntCompositionFreeSurface(&e->Redirect, FALSE);
     IntCompositionFreeBlur(e);
     e->Wnd = NULL;
+    g_RedirectWnds[e - g_Redirects] = NULL;
     e->WindowRectValid = FALSE;
 }
 
@@ -4338,6 +4342,7 @@ IntCompositionSetEnabled(_In_ BOOL bEnable)
                 IntCompositionFreeSurface(&g_Redirects[i].Redirect, FALSE);
                 IntCompositionFreeBlur(&g_Redirects[i]);
                 g_Redirects[i].Wnd = NULL;
+                g_RedirectWnds[i] = NULL;
             }
         }
         for (i = 0; i < COMPOSITION_MAX_GL; i++)
