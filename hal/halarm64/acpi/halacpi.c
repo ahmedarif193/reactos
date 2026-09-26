@@ -905,7 +905,7 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                 CopyCount);
                     }
 
-                    for (Index = 0; Index < EntryCount; ++Index)
+                    for (Index = 0; Index < CopyCount; ++Index)
                     {
                         const HALP_ACPI_MCFG_ALLOCATION *Allocation =
                             &HalpAcpiMcfgAllocations[Index];
