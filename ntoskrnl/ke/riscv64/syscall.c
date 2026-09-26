@@ -46,6 +46,73 @@ KiRiscvUserDebugService(_Inout_ PKTRAP_FRAME Frame)
     }
 }
 
+/* A win32k service from a thread that is not a GUI thread yet. */
+static
+BOOLEAN
+KiRiscvNeedsGuiConversion(
+    _In_ PKTHREAD Thread,
+    _In_ PKTRAP_FRAME Frame)
+{
+    return ((Frame->Context.T0 >> TABLE_OFFSET_BITS) == WIN32K_SERVICE_INDEX) &&
+           !Thread->GuiThread && KeServiceDescriptorTableShadow[WIN32K_SERVICE_INDEX].Base &&
+           PspW32ProcessCallout && PspW32ThreadCallout;
+}
+
+/*
+ * GUI conversion needs a large kernel stack. The trap entry moves the thread
+ * to it before calling KiRiscvTrapHandler, so no C frame lives on the old
+ * stack during the switch (see KiConvertToGuiThread on AMD64):
+ *   KiRiscvCreateGuiStack    allocates the stack, or returns NULL;
+ *   KeSwitchKernelStack      moves the thread and the trap frame to it;
+ *   KiRiscvDeleteKernelStack frees the old stack.
+ * PsConvertToGuiThread then finds the large stack in place. Allocation and
+ * release may block, so they run with interrupts enabled, inside a guarded
+ * region and with the service frame linked, as the service itself will.
+ */
+PVOID
+NTAPI
+KiRiscvCreateGuiStack(
+    _Inout_ PKTRAP_FRAME Frame)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+    PVOID Stack;
+
+    ASSERT(KiUserTrap(Frame) && (Frame->Scause == 8));
+    if (Thread->LargeStack || !KiRiscvNeedsGuiConversion(Thread, Frame))
+        return NULL;
+
+    Frame->PreviousTrapFrame = Thread->TrapFrame;
+    Thread->TrapFrame = Frame;
+    _enable();
+    KeEnterGuardedRegion();
+    Stack = MmCreateKernelStack(TRUE, 0);
+    if (!Stack)
+    {
+        /* PsConvertToGuiThread reports the failure to the caller. */
+        KeLeaveGuardedRegion();
+        _disable();
+        Thread->TrapFrame = Frame->PreviousTrapFrame;
+        Frame->PreviousTrapFrame = NULL;
+    }
+    return Stack;
+}
+
+VOID
+NTAPI
+KiRiscvDeleteKernelStack(
+    _In_ PVOID OldStack,
+    _Inout_ PKTRAP_FRAME Frame)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+
+    ASSERT(Thread->LargeStack && (Thread->TrapFrame == Frame));
+    KeLeaveGuardedRegion();
+    MmDeleteKernelStack(OldStack, FALSE);
+    _disable();
+    Thread->TrapFrame = Frame->PreviousTrapFrame;
+    Frame->PreviousTrapFrame = NULL;
+}
+
 static
 DECLSPEC_NOINLINE
 ULONG_PTR
@@ -104,13 +171,10 @@ KiRiscvSystemService(_Inout_ PKTRAP_FRAME Frame)
     /* ECALL is always four bytes, unlike a compressed breakpoint. */
     Frame->Context.Pc += 4;
     _enable();
-    if (((Frame->Context.T0 >> TABLE_OFFSET_BITS) == WIN32K_SERVICE_INDEX) &&
-        !Thread->GuiThread && KeServiceDescriptorTableShadow[WIN32K_SERVICE_INDEX].Base &&
-        PspW32ProcessCallout && PspW32ThreadCallout)
+    if (KiRiscvNeedsGuiConversion(Thread, Frame))
     {
+        /* The trap entry already moved the thread to a large stack. */
         Status = PsConvertToGuiThread();
-        /* Even a failed callout may have moved and freed the old stack. */
-        Frame = ((PKTRAP_FRAME)Thread->InitialStack) - 1;
         if (!NT_SUCCESS(Status) && (Status != STATUS_ALREADY_WIN32))
         {
             Result = (LONG_PTR)Status;
@@ -133,9 +197,9 @@ KiRiscvSystemService(_Inout_ PKTRAP_FRAME Frame)
     Result = KiRiscvDispatchSystemService(Frame);
 
 Exit:
-    /* The service frame sits right below the initial stack, which a GUI
-     * conversion moves with it. Thread->TrapFrame is not used here: a failed
-     * NtRaiseException or NtContinue returns with it already unlinked. */
+    /* The service frame sits right below the initial stack. Thread->TrapFrame
+     * is not used here: a failed NtRaiseException or NtContinue returns with
+     * it already unlinked. */
     Frame = ((PKTRAP_FRAME)Thread->InitialStack) - 1;
     Frame->Context.A0 = Result;
 
