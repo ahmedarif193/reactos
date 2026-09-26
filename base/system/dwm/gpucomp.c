@@ -1142,17 +1142,24 @@ DwmGpuComposeBeginMeasured(const BYTE *BackdropPixels,
 
 BOOL
 DwmGpuComposeBegin(ULONG BackdropColor, const BYTE *BackdropPixels,
-                    BOOL RefreshBackdrop, const RECT *Damage)
+                    BOOL RefreshBackdrop, const RECT *Damage, ULONG DamageCount)
 {
+    RECT Bounds = {0, 0, 0, 0};
+    ULONG Index;
+
     if (DwmD3dIsActive())
     {
         DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BEGIN);
-        BOOL Result = DwmD3dBegin(BackdropColor, BackdropPixels, RefreshBackdrop, Damage);
+        BOOL Result = DwmD3dBegin(BackdropColor, BackdropPixels, RefreshBackdrop, Damage, DamageCount);
         DptEnd(&g_DwmPresentTrace, Trace, Result, 0);
         return Result;
     }
+    /* This path repairs one rectangle. */
+    for (Index = 0; Damage != NULL && Index < DamageCount; ++Index)
+        DwmGpuDamageUnion(&Bounds, &Damage[Index]);
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BEGIN);
-    BOOL Result = DwmGpuComposeBeginMeasured(BackdropPixels, RefreshBackdrop, Damage);
+    BOOL Result = DwmGpuComposeBeginMeasured(BackdropPixels, RefreshBackdrop,
+                                             Damage != NULL && DamageCount != 0 ? &Bounds : NULL);
     ULONGLONG Bytes = Result ?
         (ULONGLONG)(g_composeDamage.Draw.right - g_composeDamage.Draw.left) *
         (g_composeDamage.Draw.bottom - g_composeDamage.Draw.top) * sizeof(ULONG) : 0;

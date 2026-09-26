@@ -127,6 +127,14 @@ struct ConstantBuffer
 
 enum Shader { Solid, Copy, Window, Filter, Shadow, ShaderCount };
 
+/* Disjoint rectangles repaired separately, so distant damage does not
+ * redraw everything between it. */
+struct RepairSet
+{
+    RECT Parts[4];
+    ULONG Count;
+};
+
 struct Compositor
 {
     HMODULE Runtime, Dxgi, Compiler, TraceProvider;
@@ -158,9 +166,10 @@ struct Compositor
     DWM_WIN BlurOwner;
     BOOL BlurOwnerValid, BlurLowerUnchanged;
     ULONG BlurCall, Frame, PresentedBuffers;
-    /* Draw is this frame's drawn region: its own Repair plus the previous
-     * frame's, which the back buffer has not received yet. */
-    RECT Draw, Repair, PreviousRepair;
+    /* Clip is this frame's drawn region: its own Repair plus the previous
+     * frame's, which the back buffer has not received yet. Draw bounds it. */
+    RECT Draw;
+    RepairSet Clip, Repair, PreviousRepair;
     ULONGLONG BlurUse, Filtered, Reused;
     /* An opaque client layer hides everything the frame draws beneath it.
      * Until that layer is drawn, canvas draws skip its rectangle. */
@@ -260,9 +269,17 @@ BOOL Draw(Texture &Target,
 {
     if (Clip.left >= Clip.right || Clip.top >= Clip.bottom)
         return TRUE;
-    RECT Parts[4];
-    ULONG PartCount = SplitAroundOccluder(Target, Clip, Parts);
-    if (PartCount == 0)
+    RECT Parts[4], Scissors[4 * ARRAYSIZE(State.Clip.Parts)];
+    ULONG PartCount = SplitAroundOccluder(Target, Clip, Parts), ScissorCount = 0;
+    for (ULONG Index = 0; Index < PartCount; ++Index)
+    {
+        if (&Target != &State.Canvas)
+            Scissors[ScissorCount++] = Parts[Index];
+        else
+            for (ULONG Part = 0; Part < State.Clip.Count; ++Part)
+                ScissorCount += IntersectRect(&Scissors[ScissorCount], &Parts[Index], &State.Clip.Parts[Part]) != FALSE;
+    }
+    if (ScissorCount == 0)
         return TRUE;
     Data.TargetSize[0] = (FLOAT)Target.Width;
     Data.TargetSize[1] = (FLOAT)Target.Height;
@@ -312,9 +329,9 @@ BOOL Draw(Texture &Target,
     State.Context->PSSetSamplers(0, 1, &State.Sampler);
     ID3D11ShaderResourceView *Views[2] = {Source, Backdrop};
     State.Context->PSSetShaderResources(0, ARRAYSIZE(Views), Views);
-    for (ULONG Index = 0; Index < PartCount; ++Index)
+    for (ULONG Index = 0; Index < ScissorCount; ++Index)
     {
-        State.Context->RSSetScissorRects(1, &Parts[Index]);
+        State.Context->RSSetScissorRects(1, &Scissors[Index]);
         State.Context->Draw(4, 0);
     }
     State.WorkPending = TRUE;
@@ -423,6 +440,96 @@ RECT ClipDraw(const RECT &Bounds)
     RECT Clip = {max(Bounds.left, State.Draw.left), max(Bounds.top, State.Draw.top),
                  min(Bounds.right, State.Draw.right), min(Bounds.bottom, State.Draw.bottom)};
     return Clip;
+}
+
+BOOL DrawIntersects(const RECT &Bounds)
+{
+    for (ULONG Index = 0; Index < State.Clip.Count; ++Index)
+        if (DwmGpuDamageIntersects(&Bounds, &State.Clip.Parts[Index]))
+            return TRUE;
+    return FALSE;
+}
+
+LONGLONG RectArea(const RECT &Rect)
+{
+    return (LONGLONG)(Rect.right - Rect.left) * (Rect.bottom - Rect.top);
+}
+
+/* Adds a rectangle to a repair set, merging it with every part it touches.
+ * A full set absorbs it into the part whose union grows least. */
+void AddRepair(RepairSet &Set, RECT Rect)
+{
+    if (Rect.left >= Rect.right || Rect.top >= Rect.bottom)
+        return;
+    for (ULONG Index = 0; Index < Set.Count;)
+    {
+        const RECT &Part = Set.Parts[Index];
+        if (Part.left <= Rect.right && Rect.left <= Part.right &&
+            Part.top <= Rect.bottom && Rect.top <= Part.bottom)
+        {
+            DwmGpuDamageUnion(&Rect, &Part);
+            Set.Parts[Index] = Set.Parts[--Set.Count];
+            Index = 0;
+        }
+        else
+        {
+            ++Index;
+        }
+    }
+    if (Set.Count < ARRAYSIZE(Set.Parts))
+    {
+        Set.Parts[Set.Count++] = Rect;
+        return;
+    }
+    ULONG Best = 0;
+    LONGLONG BestGrowth = 0;
+    for (ULONG Index = 0; Index < Set.Count; ++Index)
+    {
+        RECT Union = Set.Parts[Index];
+        DwmGpuDamageUnion(&Union, &Rect);
+        LONGLONG Growth = RectArea(Union) - RectArea(Set.Parts[Index]) - RectArea(Rect);
+        if (Index == 0 || Growth < BestGrowth)
+        {
+            Best = Index;
+            BestGrowth = Growth;
+        }
+    }
+    DwmGpuDamageUnion(&Rect, &Set.Parts[Best]);
+    Set.Parts[Best] = Set.Parts[--Set.Count];
+    AddRepair(Set, Rect);
+}
+
+/* Grows each part over the captures it touches, so no capture reads pixels
+ * this frame does not redraw, and merges the parts that then meet. */
+void ExpandRepair(RepairSet &Set)
+{
+    for (ULONG Round = 0; Round < 16; ++Round)
+    {
+        BOOL Changed = FALSE;
+        for (ULONG Index = 0; !Changed && Index < Set.Count; ++Index)
+        {
+            RECT Part = Set.Parts[Index];
+            DwmGpuDamageExpandBlur(&Part, State.Width, State.Height, State.Scene.Windows, State.Scene.Count,
+                State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius,
+                State.CachedCapture);
+            if (!EqualRect(&Part, &Set.Parts[Index]))
+            {
+                Set.Parts[Index] = Set.Parts[--Set.Count];
+                AddRepair(Set, Part);
+                Changed = TRUE;
+            }
+        }
+        if (!Changed)
+            return;
+    }
+    RECT Bounds = {};
+    for (ULONG Index = 0; Index < Set.Count; ++Index)
+        DwmGpuDamageUnion(&Bounds, &Set.Parts[Index]);
+    DwmGpuDamageExpandBlur(&Bounds, State.Width, State.Height, State.Scene.Windows, State.Scene.Count,
+        State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius,
+        State.CachedCapture);
+    Set.Parts[0] = Bounds;
+    Set.Count = 1;
 }
 
 BOOL CreateShaders()
@@ -1121,7 +1228,7 @@ BOOL DrawLayer(const DWM_WIN *Window, const BYTE *Pixels, BOOL Client, LONG Orig
     RECT Bounds;
     if (!DwmGpuDamageBounds(&Bounds, State.Width, State.Height, Geometry.Left, Geometry.Top,
         Geometry.Left + Geometry.Width, Geometry.Top + Geometry.Height) ||
-        !DwmGpuDamageIntersects(&Bounds, &State.Draw))
+        !DrawIntersects(Bounds))
         return TRUE;
     FLOAT Alpha = (Window->LayerFlags & DWM_LWA_ALPHA) ? min(Window->Alpha, 255u) / 255.0f : 1.0f;
     if (Alpha == 0)
@@ -1495,7 +1602,8 @@ SelectOccluder(void)
 }
 
 BOOL
-DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdrop, const RECT *Damage)
+DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdrop,
+            const RECT *Damage, ULONG DamageCount)
 {
     if (!State.Active || !FinishGpuReads())
         return FALSE;
@@ -1526,25 +1634,40 @@ DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdro
         State.Context->Flush();
         State.ClientCopiesFenced = TRUE;
     }
-    RECT Full = {0, 0, State.Width, State.Height};
-    State.Draw = State.FrameValid && !RefreshBackdrop && Damage ? *Damage : Full;
-    DwmGpuDamageUnion(&State.Draw, &State.Scene.AnimationDamage);
-    if (!DwmGpuDamageBounds(&State.Draw, State.Width, State.Height, State.Draw.left, State.Draw.top, State.Draw.right, State.Draw.bottom))
-        State.Draw = Full;
+    RECT Full = {0, 0, State.Width, State.Height}, Part;
+    State.Repair.Count = 0;
+    if (State.FrameValid && !RefreshBackdrop && Damage != NULL)
+    {
+        for (ULONG Index = 0; Index < DamageCount; ++Index)
+            if (DwmGpuDamageBounds(&Part, State.Width, State.Height, Damage[Index].left, Damage[Index].top,
+                                   Damage[Index].right, Damage[Index].bottom))
+                AddRepair(State.Repair, Part);
+        if (DwmGpuDamageBounds(&Part, State.Width, State.Height, State.Scene.AnimationDamage.left,
+                               State.Scene.AnimationDamage.top, State.Scene.AnimationDamage.right,
+                               State.Scene.AnimationDamage.bottom))
+            AddRepair(State.Repair, Part);
+    }
+    if (State.Repair.Count == 0)
+        AddRepair(State.Repair, Full);
     PinCachedCaptures();
-    DwmGpuDamageExpandBlur(&State.Draw, State.Width, State.Height, State.Scene.Windows, State.Scene.Count,
-        State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius, State.CachedCapture);
+    ExpandRepair(State.Repair);
     /* The back buffer was presented two frames ago and lacks the previous
      * frame's repair. Draw each buffer of the two-buffer chain whole once. */
-    State.Repair = State.Draw;
+    State.Clip = State.Repair;
     if (State.PresentedBuffers < 2)
-        State.Draw = Full;
-    else if (!EqualRect(&State.Draw, &State.PreviousRepair))
     {
-        DwmGpuDamageUnion(&State.Draw, &State.PreviousRepair);
-        DwmGpuDamageExpandBlur(&State.Draw, State.Width, State.Height, State.Scene.Windows, State.Scene.Count,
-            State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius, State.CachedCapture);
+        State.Clip.Count = 0;
+        AddRepair(State.Clip, Full);
     }
+    else
+    {
+        for (ULONG Index = 0; Index < State.PreviousRepair.Count; ++Index)
+            AddRepair(State.Clip, State.PreviousRepair.Parts[Index]);
+        ExpandRepair(State.Clip);
+    }
+    SetRectEmpty(&State.Draw);
+    for (ULONG Index = 0; Index < State.Clip.Count; ++Index)
+        DwmGpuDamageUnion(&State.Draw, &State.Clip.Parts[Index]);
     SelectOccluder();
     Constants Data = {};
     SetRectangle(Data, 0, 0, State.Width, State.Height);
@@ -1607,7 +1730,7 @@ DwmD3dBlurRect(const RECT *Rect, ULONG Radius)
         return FALSE;
     RECT Capture;
     if (!DwmGpuDamageBounds(&Capture, State.Width, State.Height, Rect->left, Rect->top, Rect->right, Rect->bottom) ||
-        !DwmGpuDamageIntersects(&Capture, &State.Draw))
+        !DrawIntersects(Capture))
         return TRUE;
     BlurTarget *Blur = FilterCapture(Capture, Radius);
     if (Blur == NULL)
@@ -1657,7 +1780,7 @@ DwmD3dBlurWindow(const DWM_WIN *Window, const RECTL *Rectangles, LONG OriginX, L
     }
     if (!DwmGpuDamageBounds(&Capture, State.Width, State.Height, (LONGLONG)Capture.left - Radius,
         (LONGLONG)Capture.top - Radius, (LONGLONG)Capture.right + Radius, (LONGLONG)Capture.bottom + Radius) ||
-        !DwmGpuDamageIntersects(&Capture, &State.Draw) || Count == 0)
+        !DrawIntersects(Capture) || Count == 0)
         return TRUE;
     BlurTarget *Blur = FilterCapture(Capture, Radius);
     if (Blur == NULL)
@@ -1682,7 +1805,7 @@ DwmD3dShadow(const RECT *Bounds, LONGLONG X, LONGLONG Y, LONG Width, LONG Height
 {
     if (!State.Active || Bounds == NULL || Width <= 0 || Height <= 0 || WideExtent <= 0)
         return FALSE;
-    if (WindowAlpha == 0 || !DwmGpuDamageIntersects(Bounds, &State.Draw))
+    if (WindowAlpha == 0 || !DrawIntersects(*Bounds))
         return TRUE;
     Constants Data = {};
     SetRectangle(Data, Bounds->left, Bounds->top, Bounds->right, Bounds->bottom);
@@ -1753,8 +1876,8 @@ DwmD3dEnd(void)
     if (!State.Active)
         return DWM_GPU_FAILED;
     DXGI_PRESENT_PARAMETERS Present = {};
-    Present.DirtyRectsCount = 1;
-    Present.pDirtyRects = &State.Repair;
+    Present.DirtyRectsCount = State.Repair.Count;
+    Present.pDirtyRects = State.Repair.Parts;
     DPT_SCOPE PresentTrace = DptBegin(&g_DwmPresentTrace, DPT_KMT_PRESENT);
     HRESULT Status = State.SwapChain->Present1(1, 0, &Present);
     DptEnd(&g_DwmPresentTrace, PresentTrace, SUCCEEDED(Status), 0);

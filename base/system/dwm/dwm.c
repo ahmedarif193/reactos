@@ -756,9 +756,11 @@ DwmMaterialBlurRadius(void)
     return DwmScaledBlurRadius(DWM_MATERIAL_BLUR_RADIUS_96);
 }
 
-/* Adds a buffer-relative rectangle, clipped to the buffer, to the damage. */
+/* Adds a buffer-relative rectangle, clipped to the buffer, to the damage
+ * bounds and to the list of separately repaired parts. */
 static void
 DwmUnionDamage(LONG *Left, LONG *Top, LONG *Right, LONG *Bottom,
+               RECT *Parts, ULONG *PartCount,
                LONGLONG L, LONGLONG T, LONGLONG R, LONGLONG B)
 {
     L = max(L, 0); T = max(T, 0);
@@ -769,6 +771,7 @@ DwmUnionDamage(LONG *Left, LONG *Top, LONG *Right, LONG *Bottom,
     *Top = min(*Top, (LONG)T);
     *Right = max(*Right, (LONG)R);
     *Bottom = max(*Bottom, (LONG)B);
+    SetRect(&Parts[(*PartCount)++], (LONG)L, (LONG)T, (LONG)R, (LONG)B);
 }
 
 static BOOL
@@ -3607,6 +3610,8 @@ DwmComposeLoop(HANDLE hStopEvent)
             BOOL refreshBackdrop = forceFull || hdr->FullDamage;
             BOOL windowDamage = hdr->DmgR > hdr->DmgL && hdr->DmgB > hdr->DmgT;
             BOOL contentDamage = hdr->ContentR > hdr->ContentL && hdr->ContentB > hdr->ContentT;
+            RECT damageParts[2];
+            ULONG damagePartCount = 0;
 
             if (forceFull || hdr->FullDamage || (!windowDamage && !contentDamage))
             {
@@ -3618,7 +3623,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                 if (windowDamage)
                 {
                     /* Window damage can move or reveal a shadow. */
-                    DwmUnionDamage(&pl, &pt, &pr, &pb,
+                    DwmUnionDamage(&pl, &pt, &pr, &pb, damageParts, &damagePartCount,
                                    (LONGLONG)hdr->DmgL - g_originX - g_shadowMarginLeft,
                                    (LONGLONG)hdr->DmgT - g_originY - g_shadowMarginTop,
                                    (LONGLONG)hdr->DmgR - g_originX + g_shadowMarginRight,
@@ -3626,7 +3631,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                 }
                 if (contentDamage)
                 {
-                    DwmUnionDamage(&pl, &pt, &pr, &pb,
+                    DwmUnionDamage(&pl, &pt, &pr, &pb, damageParts, &damagePartCount,
                                    (LONGLONG)hdr->ContentL - g_originX,
                                    (LONGLONG)hdr->ContentT - g_originY,
                                    (LONGLONG)hdr->ContentR - g_originX,
@@ -3720,20 +3725,28 @@ DwmComposeLoop(HANDLE hStopEvent)
                     ULONGLONG TraceDrawStart = 0, TraceDrawEnd = 0, TracePresentEnd = 0;
                     BOOL gpuFrame;
                     DWM_GPU_RESULT gpuResult;
-                    RECT gpuDamage = {pl, pt, pr, pb};
+                    RECT gpuDamage[2] = {{pl, pt, pr, pb}};
+                    ULONG gpuDamageCount = 1;
                     RECT gpuShadowMargins = {g_shadowMarginLeft, g_shadowMarginTop,
                                               g_shadowMarginRight, g_shadowMarginBottom};
                     /* A dirty frame includes metadata/preparation before Begin.
                      * The fetch counter also exposes an unfinished metadata call. */
                     if (FrameTrace.Epoch && FrameTrace.Epoch == FetchTrace.Epoch)
                         FrameTrace.Start = FetchTrace.Start;
+                    /* Repair window and content damage apart: one bounding
+                     * box of both can span most of the screen. */
+                    if ((pl != 0 || pt != 0 || pr != g_W || pb != g_H) && damagePartCount != 0)
+                    {
+                        memcpy(gpuDamage, damageParts, damagePartCount * sizeof(damageParts[0]));
+                        gpuDamageCount = damagePartCount;
+                    }
                     DwmGpuComposeScene(wins, hdr->Count,
                                         (const RECTL *)(g_buf + hdr->BlurRectArrayBase),
                                         hdr->BlurRectCount, g_originX, g_originY,
                                         refreshBackdrop, DwmBlurRadius(), &gpuShadowMargins);
                     gpuFrame = DwmGpuComposeBegin(GetSysColor(COLOR_DESKTOP),
                                                        g_backdropBits, refreshBackdrop,
-                                                       &gpuDamage);
+                                                       gpuDamage, gpuDamageCount);
 
                     DwmStatCounter(&statBackdropEnd);
                     if (FrameTrace.Epoch) TraceDrawStart = DptNow();
