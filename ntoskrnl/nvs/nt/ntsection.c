@@ -904,6 +904,8 @@ MmCreateSection(
         if (Size > SizeLimit)
             return STATUS_INSUFFICIENT_RESOURCES;
 
+        Size = ROUND_TO_PAGES(Size);
+
         Control = MiAllocateControlArea(NULL, FALSE);
         if (Control == NULL)
             return STATUS_INSUFFICIENT_RESOURCES;
