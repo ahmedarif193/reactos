@@ -4575,6 +4575,19 @@ static int NativeTraceCompare(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
+/* A retained frame is handed to DWM once the kernel reports that its GPU
+ * work retired, so Present returns without waiting for the GPU. One thread
+ * publishes the frames of every chain strictly in presentation order. */
+struct NativePublishRecord
+{
+    NativePublishRecord *next;
+    NativeSwapChain *swapchain;
+    DWM_DX_SURFACE_EXCHANGE exchange;
+    HANDLE completion; /* set by the kernel when the frame's GPU work retires */
+    HANDLE release;    /* the chain's release event of the published buffer */
+    bool busy;
+};
+
 class NativeSwapChain final : public IDXGISwapChain3, public NativeAllocation
 {
 public:
@@ -4587,11 +4600,23 @@ public:
     DXGI_RGBA background = {};
     NativePrivateData private_data;
     NativeTexture2D *buffers[16] = {};
-    NativeTexture2D *transport = NULL;
-    ID3D11Query *completion = NULL;
-    HANDLE consumed_event = NULL;
+    /* A chain whose buffers cannot be handed to DWM copies each frame into
+     * the free member of this ring. One frame is on screen and one may be
+     * waiting to be picked up, so a third keeps Present from blocking. */
+    NativeTexture2D *transports[3] = {};
+    UINT transport_frame[3] = {}, transport_fills = 0;
+    NativeTexture2D *transport = NULL; /* the latest frame, one of transports */
+    RECT frame_damage[8] = {};
     DWM_DX_SURFACE_EXCHANGE publication = {};
-    bool pending_publication = false;
+    /* Client publications are retained: DWM samples each frame in place and
+     * sets that buffer's release event once it no longer reads it. */
+    D3DKMT_HANDLE release_shares[16] = {};
+    HANDLE release_events[16] = {};
+    /* Each queued frame holds a distinct buffer, so a chain has at most 16. */
+    NativePublishRecord publish_records[16] = {};
+    CRITICAL_SECTION publish_lock;
+    HANDLE publishes_drained = NULL;
+    UINT queued_publishes = 0;
     HMODULE retirement_module = NULL;
     UINT present_count = 0;
     struct { ULONGLONG interval, present, consumed, producer, driver, submit, poll, sleeps; } trace_frames[4096] = {};
@@ -4599,7 +4624,6 @@ public:
     ULONGLONG trace_previous = 0, trace_consumed = 0, trace_producer = 0, trace_driver = 0;
     ULONGLONG trace_submit = 0, trace_poll = 0, trace_sleeps = 0;
     HRESULT PresentMeasured(UINT, UINT, const DXGI_PRESENT_PARAMETERS *);
-    HRESULT WaitForPublicationMeasured(bool);
     void DumpTrace();
     bool primary = false;
     bool composition = false;
@@ -4607,30 +4631,40 @@ public:
 
     NativeSwapChain(NativeDevice *d, IDXGIFactory *f, HWND w) : device(d), factory(f), window(w)
     {
+        InitializeCriticalSection(&publish_lock);
         device->AddRef();
         factory->AddRef();
     }
     ~NativeSwapChain()
     {
+        DrainPublishes();
         DumpTrace();
-        while (pending_publication)
-        {
-            HRESULT hr = WaitForPublication(true);
-            if (FAILED(hr) && hr != DXGI_ERROR_WAS_STILL_DRAWING) Sleep(50);
-        }
         RetirePublication();
-        if (consumed_event) CloseHandle(consumed_event);
-        if (completion) completion->Release();
-        if (transport) transport->Release();
+        CloseReleaseEvents();
+        /* The publishing thread signals the drain while it holds the lock. */
+        EnterCriticalSection(&publish_lock);
+        LeaveCriticalSection(&publish_lock);
+        DeleteCriticalSection(&publish_lock);
+        for (UINT i = 0; i < 16; ++i) if (publish_records[i].completion) CloseHandle(publish_records[i].completion);
+        if (publishes_drained) CloseHandle(publishes_drained);
+        for (UINT i = 0; i < 3; ++i) if (transports[i]) transports[i]->Release();
         for (UINT i = 0; i < 16; ++i) if (buffers[i]) buffers[i]->Release();
         factory->Release();
         device->Release();
     }
     HRESULT AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested);
     static DWORD WINAPI DestroyPending(void *);
-    HRESULT WaitForPublication(bool wait);
     HRESULT RetirePublication();
-    HRESULT Publish(NativeTexture2D *, UINT, const DXGI_PRESENT_PARAMETERS *);
+    HANDLE ReleaseEvent(NativeTexture2D *texture, D3DKMT_HANDLE *share);
+    bool Released(NativeTexture2D *texture);
+    HRESULT WaitForRelease(NativeTexture2D *texture);
+    bool AllReleased(DWORD timeout);
+    void CloseReleaseEvents();
+    HRESULT Publish(NativeTexture2D *);
+    HRESULT FillTransport(UINT, const DXGI_PRESENT_PARAMETERS *);
+    HRESULT QueuePublish(const DWM_DX_SURFACE_EXCHANGE &, HANDLE release);
+    void CompletePublish(NativePublishRecord *);
+    void DrainPublishes();
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
     {
         if (!out) return E_INVALIDARG;
@@ -4648,7 +4682,7 @@ public:
     {
         ULONG count = InterlockedDecrement(&references);
         if (count) return count;
-        if (pending_publication && WaitForSingleObject(consumed_event, 0) == WAIT_TIMEOUT
+        if (!primary && (queued_publishes || !AllReleased(0))
                 && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                 reinterpret_cast<LPCWSTR>(DestroyPending), &retirement_module))
         {
@@ -4821,8 +4855,9 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::SetPrivateData(REFGUID guid, UINT siz
         if (FAILED(hr)) return hr;
         window = target.window;
     }
+    DrainPublishes();
     if (transport_valid && !publication.GlobalShare)
-        return Publish(transport, 0, NULL);
+        return Publish(transport);
     return S_OK;
 }
 
@@ -4837,119 +4872,289 @@ DWORD WINAPI NativeSwapChain::DestroyPending(void *argument)
     return 0;
 }
 
-HRESULT NativeSwapChain::WaitForPublication(bool wait)
+static struct
 {
-    ULONGLONG start = NativeTraceNow();
-    HRESULT hr = WaitForPublicationMeasured(wait);
-    trace_consumed += NativeTraceNow() - start;
-    return hr;
+    CRITICAL_SECTION lock;
+    NativePublishRecord *head, *tail;
+    HANDLE wake;
+    bool usable;
+} native_publish_queue;
+static INIT_ONCE native_publish_once = INIT_ONCE_STATIC_INIT;
+
+static DWORD WINAPI NativePublishThread(void *)
+{
+    for (;;)
+    {
+        EnterCriticalSection(&native_publish_queue.lock);
+        NativePublishRecord *record = native_publish_queue.head;
+        if (record)
+        {
+            native_publish_queue.head = record->next;
+            if (!native_publish_queue.head) native_publish_queue.tail = NULL;
+        }
+        LeaveCriticalSection(&native_publish_queue.lock);
+        if (record) record->swapchain->CompletePublish(record);
+        else WaitForSingleObject(native_publish_queue.wake, INFINITE);
+    }
 }
 
-HRESULT NativeSwapChain::WaitForPublicationMeasured(bool wait)
+static BOOL CALLBACK NativeInitPublishQueue(PINIT_ONCE, void *, void **)
 {
-    if (!pending_publication) return S_OK;
-    DWORD started = GetTickCount();
-    do
+    HMODULE module = NULL;
+    InitializeCriticalSection(&native_publish_queue.lock);
+    native_publish_queue.wake = CreateEventW(NULL, FALSE, FALSE, NULL);
+    /* The thread can outlive the last chain and the application's last
+     * reference to this module, so it keeps the module loaded. */
+    if (!native_publish_queue.wake || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            reinterpret_cast<LPCWSTR>(NativePublishThread), &module))
+        return TRUE;
+    HANDLE thread = CreateThread(NULL, 0, NativePublishThread, NULL, 0, NULL);
+    if (!thread)
     {
-        DWORD result = WaitForSingleObject(consumed_event, wait ? 50 : 0);
-        if (result == WAIT_OBJECT_0)
-        {
-            pending_publication = false;
-            return S_OK;
-        }
-        if (result != WAIT_TIMEOUT) return HRESULT_FROM_WIN32(GetLastError());
-    } while (wait && GetTickCount() - started < 5000);
-    return DXGI_ERROR_WAS_STILL_DRAWING;
+        FreeLibrary(module);
+        return TRUE;
+    }
+    CloseHandle(thread);
+    native_publish_queue.usable = true;
+    return TRUE;
+}
+
+/* Queue a retained frame whose GPU work was just flushed. The caller has
+ * reset release, which marks the buffer busy until DWM lets it go. */
+HRESULT NativeSwapChain::QueuePublish(const DWM_DX_SURFACE_EXCHANGE &exchange, HANDLE release)
+{
+    InitOnceExecuteOnce(&native_publish_once, NativeInitPublishQueue, NULL, NULL);
+    if (!native_publish_queue.usable) return E_OUTOFMEMORY;
+    NativePublishRecord *record = NULL;
+    EnterCriticalSection(&publish_lock);
+    for (UINT i = 0; i < 16 && !record; ++i) if (!publish_records[i].busy) record = &publish_records[i];
+    LeaveCriticalSection(&publish_lock);
+    if (!record) return E_OUTOFMEMORY;
+    if (!record->completion) record->completion = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (!publishes_drained) publishes_drained = CreateEventW(NULL, TRUE, TRUE, NULL);
+    if (!record->completion || !publishes_drained) return HRESULT_FROM_WIN32(GetLastError());
+    HRESULT hr = device->EnqueueSetEvent(record->completion);
+    if (FAILED(hr)) return hr;
+    record->next = NULL;
+    record->swapchain = this;
+    record->exchange = exchange;
+    record->release = release;
+    EnterCriticalSection(&publish_lock);
+    record->busy = true;
+    if (queued_publishes++ == 0) ResetEvent(publishes_drained);
+    LeaveCriticalSection(&publish_lock);
+    EnterCriticalSection(&native_publish_queue.lock);
+    if (native_publish_queue.tail) native_publish_queue.tail->next = record;
+    else native_publish_queue.head = record;
+    native_publish_queue.tail = record;
+    LeaveCriticalSection(&native_publish_queue.lock);
+    SetEvent(native_publish_queue.wake);
+    return S_OK;
+}
+
+/* Runs on the publishing thread, which never takes the device lock. */
+void NativeSwapChain::CompletePublish(NativePublishRecord *record)
+{
+    /* Device removal also sets the completion event. A frame whose GPU work
+     * never retires is dropped rather than shown incomplete. */
+    NTSTATUS status = STATUS_TIMEOUT;
+    if (WaitForSingleObject(record->completion, 5000) == WAIT_OBJECT_0)
+        status = static_cast<NTSTATUS>(NtUserCallOneParam(
+                reinterpret_cast<DWORD_PTR>(&record->exchange), DWM_ROUTINE_DXSURFACE));
+    EnterCriticalSection(&publish_lock);
+    if (status >= 0) publication = record->exchange;
+    else SetEvent(record->release);
+    record->busy = false;
+    if (--queued_publishes == 0) SetEvent(publishes_drained);
+    LeaveCriticalSection(&publish_lock);
+}
+
+/* Every reader of publication first lets the queued frames of this chain
+ * reach DWM, so the publishing thread is its only concurrent writer. */
+void NativeSwapChain::DrainPublishes()
+{
+    if (publishes_drained) WaitForSingleObject(publishes_drained, INFINITE);
+}
+
+/* The release event of the buffer allocation currently behind texture. */
+HANDLE NativeSwapChain::ReleaseEvent(NativeTexture2D *texture, D3DKMT_HANDLE *share)
+{
+    D3DKMT_HANDLE shared = 0;
+    if (FAILED(device->get_resource_handles(device->runtime_device, texture->runtime_handle.handle,
+            NULL, &shared)) || !shared)
+        return NULL;
+    if (share) *share = shared;
+    UINT free_slot = 16;
+    for (UINT i = 0; i < 16; ++i)
+    {
+        if (release_events[i] && release_shares[i] == shared) return release_events[i];
+        if (!release_events[i] && free_slot == 16) free_slot = i;
+    }
+    if (free_slot == 16) return NULL;
+    release_events[free_slot] = CreateEventW(NULL, TRUE, TRUE, NULL);
+    if (!release_events[free_slot]) return NULL;
+    release_shares[free_slot] = shared;
+    return release_events[free_slot];
+}
+
+bool NativeSwapChain::Released(NativeTexture2D *texture)
+{
+    HANDLE event = ReleaseEvent(texture, NULL);
+    return !event || WaitForSingleObject(event, 0) == WAIT_OBJECT_0;
+}
+
+HRESULT NativeSwapChain::WaitForRelease(NativeTexture2D *texture)
+{
+    HANDLE event = ReleaseEvent(texture, NULL);
+    if (!event) return S_OK;
+    ULONGLONG start = NativeTraceNow();
+    DWORD result = WaitForSingleObject(event, 5000);
+    trace_consumed += NativeTraceNow() - start;
+    if (result == WAIT_OBJECT_0) return S_OK;
+    return result == WAIT_TIMEOUT ? DXGI_ERROR_WAS_STILL_DRAWING : HRESULT_FROM_WIN32(GetLastError());
+}
+
+bool NativeSwapChain::AllReleased(DWORD timeout)
+{
+    DWORD started = GetTickCount();
+    for (UINT i = 0; i < 16; ++i)
+    {
+        if (!release_events[i]) continue;
+        DWORD elapsed = GetTickCount() - started;
+        if (WaitForSingleObject(release_events[i], elapsed < timeout ? timeout - elapsed : 0) != WAIT_OBJECT_0)
+            return false;
+    }
+    return true;
+}
+
+void NativeSwapChain::CloseReleaseEvents()
+{
+    for (UINT i = 0; i < 16; ++i)
+    {
+        if (release_events[i]) CloseHandle(release_events[i]);
+        release_events[i] = NULL;
+        release_shares[i] = 0;
+    }
 }
 
 HRESULT NativeSwapChain::RetirePublication()
 {
+    DrainPublishes();
     if (!publication.GlobalShare) return S_OK;
-    HRESULT hr = WaitForPublication(true);
-    if (FAILED(hr)) return hr;
     DWM_DX_SURFACE_EXCHANGE exchange = publication;
     exchange.Action = DWM_DX_SURFACE_UNREGISTER;
     NTSTATUS status = static_cast<NTSTATUS>(NtUserCallOneParam(
             reinterpret_cast<DWORD_PTR>(&exchange), DWM_ROUTINE_DXSURFACE));
     /* A consumed tuple can already have been retired by window destruction
      * or resize. Never unregister a newer publication on that window. */
-    hr = status == STATUS_NOT_FOUND ? S_OK : StatusToHresult(status);
+    HRESULT hr = status == STATUS_NOT_FOUND ? S_OK : StatusToHresult(status);
     if (SUCCEEDED(hr)) ZeroMemory(&publication, sizeof(publication));
+    /* DWM releases the retained frames it still holds on its next frame. */
+    if (SUCCEEDED(hr) && !AllReleased(5000)) hr = DXGI_ERROR_WAS_STILL_DRAWING;
     return hr;
 }
 
-HRESULT NativeSwapChain::Publish(NativeTexture2D *texture, UINT flags,
-        const DXGI_PRESENT_PARAMETERS *parameters)
+/* Copy the back buffer into a transport DWM has released. That transport
+ * holds an older frame, so the damage of every present since is copied. */
+HRESULT NativeSwapChain::FillTransport(UINT flags, const DXGI_PRESENT_PARAMETERS *parameters)
+{
+    UINT frame = transport_fills + 1, index = 3;
+    for (UINT i = 0; i < 3; ++i)
+    {
+        if (transports[i] == transport || !Released(transports[i])) continue;
+        if (index == 3 || transport_frame[i] > transport_frame[index]) index = i;
+    }
+    if (index == 3)
+    {
+        if (flags & DXGI_PRESENT_DO_NOT_WAIT) return DXGI_ERROR_WAS_STILL_DRAWING;
+        HANDLE events[3];
+        UINT candidates[3], count = 0;
+        for (UINT i = 0; i < 3; ++i)
+        {
+            if (transports[i] == transport) continue;
+            events[count] = ReleaseEvent(transports[i], NULL);
+            if (!events[count]) return E_OUTOFMEMORY;
+            candidates[count++] = i;
+        }
+        ULONGLONG start = NativeTraceNow();
+        DWORD result = WaitForMultipleObjects(count, events, FALSE, 5000);
+        trace_consumed += NativeTraceNow() - start;
+        if (result >= WAIT_OBJECT_0 + count)
+            return result == WAIT_TIMEOUT ? DXGI_ERROR_WAS_STILL_DRAWING : HRESULT_FROM_WIN32(GetLastError());
+        index = candidates[result - WAIT_OBJECT_0];
+    }
+    RECT full = {0, 0, static_cast<LONG>(desc.Width), static_cast<LONG>(desc.Height)};
+    RECT &damage = frame_damage[frame % ARRAYSIZE(frame_damage)];
+    damage = full;
+    if (parameters && parameters->DirtyRectsCount)
+    {
+        SetRectEmpty(&damage);
+        for (UINT i = 0; i < parameters->DirtyRectsCount; ++i)
+            UnionRect(&damage, &damage, &parameters->pDirtyRects[i]);
+    }
+    UINT held = transport_frame[index];
+    RECT older = {};
+    if (!held || frame - held > ARRAYSIZE(frame_damage)) older = full;
+    for (UINT past = held + 1; past < frame && !EqualRect(&older, &full); ++past)
+        UnionRect(&older, &older, &frame_damage[past % ARRAYSIZE(frame_damage)]);
+    NativeTexture2D *target = transports[index];
+    device->BeginCall();
+    if (EqualRect(&older, &full) || EqualRect(&damage, &full))
+        device->context->CopyResource(target, buffers[0]);
+    else
+    {
+        const RECT *rects = parameters->pDirtyRects;
+        for (UINT i = 0; i <= parameters->DirtyRectsCount; ++i)
+        {
+            const RECT &r = i < parameters->DirtyRectsCount ? rects[i] : older;
+            if (IsRectEmpty(&r)) continue;
+            D3D11_BOX box = {static_cast<UINT>(r.left), static_cast<UINT>(r.top), 0,
+                            static_cast<UINT>(r.right), static_cast<UINT>(r.bottom), 1};
+            device->context->CopySubresourceRegion(target, 0, r.left, r.top, 0, buffers[0], 0, &box);
+        }
+    }
+    if (FAILED(device->operation_error)) return device->operation_error;
+    transport_fills = frame;
+    transport_frame[index] = frame;
+    transport = target;
+    return S_OK;
+}
+
+HRESULT NativeSwapChain::Publish(NativeTexture2D *texture)
 {
     if (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM)
         return DXGI_ERROR_UNSUPPORTED;
-    HRESULT hr;
-    if (!completion)
-    {
-        D3D11_QUERY_DESC query_desc = {D3D11_QUERY_EVENT, 0};
-        hr = device->CreateQuery(&query_desc, &completion);
-        if (FAILED(hr)) return hr;
-    }
-    if (!consumed_event)
-    {
-        consumed_event = CreateEventW(NULL, TRUE, TRUE, NULL);
-        if (!consumed_event) return HRESULT_FROM_WIN32(GetLastError());
-    }
-
-    /* A successful driver Present need not mean that its GPU writes have
-     * finished. The compositor opens this resource on another device. */
-    ULONGLONG trace_start = NativeTraceNow();
-    device->context->End(completion);
-    device->context->Flush();
-    trace_submit += NativeTraceNow() - trace_start;
-    DWORD started = GetTickCount();
-    BOOL done = FALSE;
-    do
-    {
-        ULONGLONG poll_start = NativeTraceNow();
-        hr = device->context->GetData(completion, &done, sizeof(done), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-        trace_poll += NativeTraceNow() - poll_start;
-        if (FAILED(hr)) return hr;
-        if (hr == S_OK && done) break;
-        if ((flags & DXGI_PRESENT_DO_NOT_WAIT) || GetTickCount() - started >= 5000)
-            return DXGI_ERROR_WAS_STILL_DRAWING;
-        ULONGLONG sleep_start = NativeTraceNow();
-        Sleep(1);
-        trace_sleeps += NativeTraceNow() - sleep_start;
-    } while (true);
-
-    trace_producer += NativeTraceNow() - trace_start;
     DWM_DX_SURFACE_EXCHANGE exchange = {};
     exchange.StructSize = sizeof(exchange);
     exchange.Action = DWM_DX_SURFACE_PUBLISH;
     exchange.Window = reinterpret_cast<ULONG_PTR>(window);
     DXGI_ADAPTER_DESC adapter_desc;
-    hr = device->adapter->GetDesc(&adapter_desc);
+    HRESULT hr = device->adapter->GetDesc(&adapter_desc);
     if (FAILED(hr)) return hr;
     exchange.AdapterLuid = adapter_desc.AdapterLuid;
     D3DKMT_HANDLE shared = 0;
-    hr = device->get_resource_handles(device->runtime_device, texture->runtime_handle.handle, NULL, &shared);
-    if (FAILED(hr)) return hr;
+    HANDLE release = ReleaseEvent(texture, &shared);
+    if (!release) return E_OUTOFMEMORY;
     exchange.GlobalShare = shared;
-    if (!exchange.GlobalShare) return DXGI_ERROR_INVALID_CALL;
     exchange.Info.Magic = DWM_DX_SURFACE_INFO_MAGIC;
     exchange.Info.Version = DWM_DX_SURFACE_INFO_VERSION_GPU;
     exchange.Info.Width = desc.Width;
     exchange.Info.Height = desc.Height;
     exchange.Info.Format = desc.Format;
+    exchange.Flags = DWM_DX_PUBLISH_RETAINED;
     if (desc.AlphaMode == DXGI_ALPHA_MODE_PREMULTIPLIED)
         exchange.Flags |= DWM_DX_PUBLISH_PREMULTIPLIED;
-    exchange.ReadyEvent = reinterpret_cast<ULONG_PTR>(consumed_event);
+    exchange.ReadyEvent = reinterpret_cast<ULONG_PTR>(release);
+    /* A transport retains undamaged pixels across Present1 calls, and a flip
+     * buffer holds a complete frame, so the whole image is published. */
     exchange.UpdateRect.right = desc.Width;
     exchange.UpdateRect.bottom = desc.Height;
-    /* transport retains undamaged pixels across Present1 calls. Publish its
-     * complete image, including when the application supplied partial damage. */
-    hr = StatusToHresult(static_cast<NTSTATUS>(NtUserCallOneParam(
-            reinterpret_cast<DWORD_PTR>(&exchange), DWM_ROUTINE_DXSURFACE)));
-    if (FAILED(hr)) return hr;
-    publication = exchange;
-    pending_publication = true;
-    return S_OK;
+    ResetEvent(release);
+    ULONGLONG trace_start = NativeTraceNow();
+    hr = QueuePublish(exchange, release);
+    trace_submit += NativeTraceNow() - trace_start;
+    if (FAILED(hr)) SetEvent(release);
+    return hr;
 }
 
 struct NativePresentContext
@@ -5079,7 +5284,7 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
     primary_desc.ModeDesc.ScanlineOrdering = DXGI_DDI_MODE_SCANLINE_ORDER_PROGRESSIVE;
     primary_desc.ModeDesc.Rotation = DXGI_DDI_MODE_ROTATION_IDENTITY;
     NativeTexture2D *new_buffers[16] = {};
-    NativeTexture2D *new_transport = NULL;
+    NativeTexture2D *new_transports[3] = {};
     HRESULT hr = S_OK;
     for (UINT i = 0; i < requested.BufferCount; ++i)
     {
@@ -5088,13 +5293,13 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
         if (FAILED(hr)) break;
         new_buffers[i] = static_cast<NativeTexture2D *>(texture);
     }
-    if (SUCCEEDED(hr) && !primary && (requested.BufferCount == 1 || composition))
+    /* Single buffering needs an immutable publication; composition also
+     * needs retained history for damage across rotating back buffers. */
+    for (UINT i = 0; SUCCEEDED(hr) && !primary && (requested.BufferCount == 1 || composition) && i < 3; ++i)
     {
-        /* Single buffering needs an immutable publication; composition also
-         * needs retained history for damage across rotating back buffers. */
         ID3D11Texture2D *texture = NULL;
         hr = device->CreateTexture(&texture_desc, NULL, &texture, true);
-        new_transport = static_cast<NativeTexture2D *>(texture);
+        if (SUCCEEDED(hr)) new_transports[i] = static_cast<NativeTexture2D *>(texture);
     }
     if (SUCCEEDED(hr)) hr = RetirePublication();
     if (SUCCEEDED(hr))
@@ -5105,13 +5310,20 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
             buffers[i] = new_buffers[i];
             new_buffers[i] = NULL;
         }
-        if (transport) transport->Release();
-        transport = new_transport;
+        for (UINT i = 0; i < 3; ++i)
+        {
+            if (transports[i]) transports[i]->Release();
+            transports[i] = new_transports[i];
+            new_transports[i] = NULL;
+            transport_frame[i] = 0;
+        }
+        transport_fills = 0;
+        transport = NULL;
         transport_valid = false;
-        new_transport = NULL;
         desc = requested;
+        CloseReleaseEvents();
     }
-    if (new_transport) new_transport->Release();
+    for (UINT i = 0; i < 3; ++i) if (new_transports[i]) new_transports[i]->Release();
     for (UINT i = 0; i < 16; ++i) if (new_buffers[i]) new_buffers[i]->Release();
     return hr;
 }
@@ -5254,7 +5466,7 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
                     || static_cast<UINT>(rect.right) > desc.Width || static_cast<UINT>(rect.bottom) > desc.Height)
                 return DXGI_ERROR_INVALID_CALL;
         }
-        if (!primary && !transport && parameters->DirtyRectsCount)
+        if (!primary && !transports[0] && parameters->DirtyRectsCount)
         {
             const RECT &rect = parameters->pDirtyRects[0];
             /* The current compositor publication carries one complete client
@@ -5268,24 +5480,15 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
     if (!sequence && !present_count) return S_OK;
     if (!primary && sequence)
     {
-        HRESULT hr = WaitForPublication(!(flags & DXGI_PRESENT_DO_NOT_WAIT));
+        HRESULT hr = S_OK;
+        if (transports[0])
+            hr = FillTransport(flags, parameters);
+        /* The next buffer becomes the back buffer. With three or more, DWM
+         * frees it without this present, so a caller that may not block is
+         * refused until it has. A two-buffer chain frees it by presenting. */
+        else if ((flags & DXGI_PRESENT_DO_NOT_WAIT) && desc.BufferCount > 2 && !Released(buffers[1]))
+            hr = DXGI_ERROR_WAS_STILL_DRAWING;
         if (FAILED(hr)) return hr;
-        if (transport)
-        {
-            device->BeginCall();
-            if (parameters && parameters->DirtyRectsCount)
-            {
-                for (UINT i = 0; i < parameters->DirtyRectsCount; ++i)
-                {
-                    const RECT &r = parameters->pDirtyRects[i];
-                    D3D11_BOX box = {static_cast<UINT>(r.left), static_cast<UINT>(r.top), 0,
-                                    static_cast<UINT>(r.right), static_cast<UINT>(r.bottom), 1};
-                    device->context->CopySubresourceRegion(transport, 0, r.left, r.top, 0, buffers[0], 0, &box);
-                }
-            }
-            else device->context->CopyResource(transport, buffers[0]);
-            if (FAILED(device->operation_error)) return device->operation_error;
-        }
     }
     NativeTexture2D *source = transport ? transport : buffers[sequence ? 0 : desc.BufferCount - 1];
     D3DKMT_HANDLE source_allocation = 0;
@@ -5321,7 +5524,7 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
          * publishes it when a visual first acquires a target window. */
         if (window)
         {
-            hr = Publish(source, flags, parameters);
+            hr = Publish(source);
             if (FAILED(hr)) return hr;
         }
     }
@@ -5339,6 +5542,13 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
         hr = device->dxgi_functions.pfnRotateResourceIdentities(&rotate);
         if (SUCCEEDED(hr)) hr = device->rotate_resources(device->runtime_device, runtime_resources, desc.BufferCount);
         if (FAILED(hr)) { device->removed_reason = DXGI_ERROR_DRIVER_INTERNAL_ERROR; return hr; }
+        /* The application renders into the new back buffer once Present
+         * returns, so DWM must have released that frame first. */
+        if (window && !transports[0])
+        {
+            hr = WaitForRelease(buffers[0]);
+            if (FAILED(hr)) return hr;
+        }
     }
     if (sequence && (desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD))
     {
