@@ -323,23 +323,6 @@ HalGetMessageRoutingInfo(
 
 NTSTATUS
 NTAPI
-HalGetMemoryCachingRequirements(
-    _In_ PHYSICAL_ADDRESS BaseAddress,
-    _In_ SIZE_T Length,
-    _Out_ MEMORY_CACHING_TYPE *CacheType)
-{
-    UNREFERENCED_PARAMETER(BaseAddress);
-    UNREFERENCED_PARAMETER(Length);
-
-    if (CacheType == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    *CacheType = MmNonCached;
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
 HalGetProcessorIdByNtNumber(
     _In_ ULONG ProcessorNumber,
     _Out_ PULONG ProcessorId)

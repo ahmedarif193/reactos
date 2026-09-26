@@ -24,9 +24,9 @@ function(add_hal _halname)
         ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 
     if(${_halname} STREQUAL "hal")
-        target_link_libraries(${_halname} libcntpr setjmp arbiter fast486 ${PSEH_LIB})
+        target_link_libraries(${_halname} halcommon libcntpr setjmp arbiter fast486 ${PSEH_LIB})
     else()
-        target_link_libraries(${_halname} libcntpr setjmp fast486 ${PSEH_LIB})
+        target_link_libraries(${_halname} halcommon libcntpr setjmp fast486 ${PSEH_LIB})
     endif()
 
     add_importlibs(${_halname} ntoskrnl)
@@ -47,7 +47,6 @@ include(up.cmake)
 include(smp.cmake)
 
 if(ARCH STREQUAL "i386")
-    include(pcidata.cmake)
     include(legacy.cmake)
     include(pic.cmake)
     include(xbox.cmake)
@@ -70,8 +69,6 @@ if(ARCH STREQUAL "i386")
     #add_hal(halmp SOURCES mp/halmp.rc COMPONENTS generic legacy smp apic)
 
 elseif(ARCH STREQUAL "amd64")
-    include(pcidata.cmake)
-
     # The amd64 hal.dll is already an SMP APIC HAL, so there is no separate
     # halmp.dll -- it was a byte-for-byte duplicate of this target.
     add_hal(hal SOURCES ${HAL_SOURCE} COMPONENTS generic acpi smp apic)
