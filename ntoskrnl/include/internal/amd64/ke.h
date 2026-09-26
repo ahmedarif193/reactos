@@ -490,6 +490,8 @@ ULONG64 KiGetFeatureBits(VOID);
 VOID KiInitializeCpuFeatures(VOID);
 ULONG NTAPI KiAmd64QueryEffectiveMHz(_In_ ULONG ProcessorNumber);
 #define KiQueryEffectiveProcessorMhz(Number) KiAmd64QueryEffectiveMHz(Number)
+/* Current page table root, as recorded in a crash dump header. */
+#define KiReadDirectoryTableBase() ((ULONG64)__readcr3())
 #if DBG
 VOID KiReportCpuFeatures(IN PKPRCB Prcb);
 #endif
@@ -619,6 +621,9 @@ KiClearDpcRequestState(
 }
 
 #define _KeIsExecutingDpc() (KeGetCurrentPrcb()->DpcRoutineActive)
+
+/* The RPL of the saved code selector is the previous mode. */
+#define KiGetContextPreviousMode(Context) ((KPROCESSOR_MODE)((Context)->SegCs & 1))
 
 #define KiIsUserModeTrap(TrapFrame) \
     (KiUserTrap(TrapFrame) || ((TrapFrame)->EFlags & EFLAGS_V86_MASK))

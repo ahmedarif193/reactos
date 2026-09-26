@@ -871,55 +871,52 @@ KiDisplayBugCheckRegisterState(
     _In_ PCONTEXT Context)
 {
     CHAR Line[128];
+    const ULONG64 *Registers;
+    ULONG RegisterCount;
+    ULONG Base;
+    ULONG64 Pc;
+    ULONG64 Lr;
+    ULONG64 Sp;
+    ULONG64 Fp;
+    ULONG Cpsr;
 
+    if (TrapFrame != NULL)
     {
-        const ULONG64 *Registers;
-        ULONG RegisterCount;
-        ULONG Base;
-        ULONG64 Pc;
-        ULONG64 Lr;
-        ULONG64 Sp;
-        ULONG64 Fp;
-        ULONG Cpsr;
+        Registers = TrapFrame->X;
+        RegisterCount = RTL_NUMBER_OF(TrapFrame->X);
+        Pc = TrapFrame->Pc;
+        Lr = TrapFrame->Lr;
+        Sp = TrapFrame->Sp;
+        Fp = TrapFrame->Fp;
+        Cpsr = TrapFrame->Spsr;
+    }
+    else
+    {
+        Registers = Context->X;
+        RegisterCount = 29;
+        Pc = Context->Pc;
+        Lr = Context->Lr;
+        Sp = Context->Sp;
+        Fp = Context->Fp;
+        Cpsr = Context->Cpsr;
+    }
 
-        if (TrapFrame != NULL)
-        {
-            Registers = TrapFrame->X;
-            RegisterCount = RTL_NUMBER_OF(TrapFrame->X);
-            Pc = TrapFrame->Pc;
-            Lr = TrapFrame->Lr;
-            Sp = TrapFrame->Sp;
-            Fp = TrapFrame->Fp;
-            Cpsr = TrapFrame->Spsr;
-        }
+    RtlStringCbPrintfA(Line, sizeof(Line), "PC=%016I64x LR=%016I64x SP=%016I64x\r\n", Pc, Lr, Sp);
+    KiDisplayAndLogBugCheckString(Line);
+    if (TrapFrame != NULL)
+        RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx ESR=%08lx\r\n", Fp, Cpsr, TrapFrame->Esr);
+    else
+        RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx\r\n", Fp, Cpsr);
+    KiDisplayAndLogBugCheckString(Line);
+
+    for (Base = 0; Base < RegisterCount; Base += 3)
+    {
+        if ((RegisterCount - Base) >= 3)
+            RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1], Base + 2, Registers[Base + 2]);
+        else if ((RegisterCount - Base) == 2)
+            RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1]);
         else
-        {
-            Registers = Context->X;
-            RegisterCount = 29;
-            Pc = Context->Pc;
-            Lr = Context->Lr;
-            Sp = Context->Sp;
-            Fp = Context->Fp;
-            Cpsr = Context->Cpsr;
-        }
-
-        RtlStringCbPrintfA(Line, sizeof(Line), "PC=%016I64x LR=%016I64x SP=%016I64x\r\n", Pc, Lr, Sp);
+            RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x\r\n", Base, Registers[Base]);
         KiDisplayAndLogBugCheckString(Line);
-        if (TrapFrame != NULL)
-            RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx ESR=%08lx\r\n", Fp, Cpsr, TrapFrame->Esr);
-        else
-            RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx\r\n", Fp, Cpsr);
-        KiDisplayAndLogBugCheckString(Line);
-
-        for (Base = 0; Base < RegisterCount; Base += 3)
-        {
-            if ((RegisterCount - Base) >= 3)
-                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1], Base + 2, Registers[Base + 2]);
-            else if ((RegisterCount - Base) == 2)
-                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1]);
-            else
-                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x\r\n", Base, Registers[Base]);
-            KiDisplayAndLogBugCheckString(Line);
-        }
     }
 }

@@ -1911,24 +1911,10 @@ KeInitializeCrashDumpHeader(IN ULONG Type, IN ULONG Flags, OUT PVOID Buffer, IN 
     {
         Header->DirectoryTableBase = KPROCESS_DTB0(&PsInitialSystemProcess->Pcb);
     }
-#if defined(_M_ARM64)
     else
     {
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Header->DirectoryTableBase));
+        Header->DirectoryTableBase = KiReadDirectoryTableBase();
     }
-#elif defined(_M_RISCV64)
-    else
-    {
-        ULONG64 Satp;
-        __asm__ __volatile__("csrr %0, satp" : "=r"(Satp));
-        Header->DirectoryTableBase = (Satp & RISCV64_LOADER_SATP_PPN_MASK) << PAGE_SHIFT;
-    }
-#else
-    else
-    {
-        Header->DirectoryTableBase = __readcr3();
-    }
-#endif
     Header->PfnDataBase = (ULONG64)(ULONG_PTR)MmPfnDatabase;
     Header->PsLoadedModuleList = (ULONG64)(ULONG_PTR)&PsLoadedModuleList;
     Header->PsActiveProcessHead = (ULONG64)(ULONG_PTR)&PsActiveProcessHead;
