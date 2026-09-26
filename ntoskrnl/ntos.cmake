@@ -477,13 +477,6 @@ elseif(ARCH STREQUAL "riscv64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/riscv64/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/riscv64/rtlexcpt.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/riscv64/slist.c)
-    # KeSwitchKernelStack relocates the live conversion chain's frame records.
-    # These callers also reload explicit pointers into the moved stack.
-    set_property(SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/win32.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/syscall.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/trap.c
-        APPEND PROPERTY COMPILE_OPTIONS -fno-omit-frame-pointer)
 endif()
 
 if(NOT _WINKD_)

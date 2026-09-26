@@ -130,9 +130,25 @@ KiRiscvTrapEntry:
     mv sp, t0
     /* End this trap's C frame chain; interrupted s0 is in the context. */
     mv s0, zero
-    mv a0, sp
     .global KiRiscvTrapHandlerCall
 KiRiscvTrapHandlerCall:
+    /* A win32k service from a thread on a small stack moves to a large
+     * stack before any C frame exists, as KiConvertToGuiThread does on
+     * AMD64: only this trap frame points into the old stack, and
+     * KeSwitchKernelStack relocates it with sp. */
+    ld t1, TfScause(sp)
+    li t2, 8
+    bne t1, t2, .Lcall_handler
+    mv a0, sp
+    call KiRiscvCreateGuiStack
+    beqz a0, .Lcall_handler
+    li a1, KERNEL_STACK_SIZE
+    sub a1, a0, a1
+    call KeSwitchKernelStack
+    mv a1, sp
+    call KiRiscvDeleteKernelStack
+.Lcall_handler:
+    mv a0, sp
     call KiRiscvTrapHandler
     .global KiRiscvTrapHandlerReturn
 KiRiscvTrapHandlerReturn:
