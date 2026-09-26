@@ -44,9 +44,10 @@ START_TEST(scene_cache)
     Current.DxUpdateId += 5;
     ok(SAME(&ShadowCapture, &ShadowCapture), "Skipped client publications are safe outside the entire client\n");
     Current.DxGlobalShare = 2;
-    ok(!SAME(&ShadowCapture, &ShadowCapture), "Resource replacement must invalidate\n");
+    ok(SAME(&ShadowCapture, &ShadowCapture), "A retained frame in another buffer changed the shadow\n");
+    ok(!SAME(&ClientCapture, &ShadowCapture), "A retained frame in another buffer kept stale client pixels\n");
     Current = Old; ++Current.DxUpdateId; ++Current.DxGeneration;
-    ok(!SAME(&ShadowCapture, &ShadowCapture), "Generation change must invalidate\n");
+    ok(SAME(&ShadowCapture, &ShadowCapture), "A new buffer generation changed the shadow\n");
     Current = Old; ++Current.DxUpdateId; ++Current.x;
     ok(!SAME(&ShadowCapture, &ShadowCapture), "Moving the shadow must invalidate\n");
     Current = Old; ++Current.DxUpdateId; Current.Alpha = 128;

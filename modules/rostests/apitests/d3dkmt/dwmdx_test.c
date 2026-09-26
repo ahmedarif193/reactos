@@ -1124,7 +1124,7 @@ TestNativePublicationArguments(PFN_NTUSERCALLONEPARAM pNtUserCallOneParam,
     Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
     ok(Status == STATUS_INVALID_HANDLE,
        "premultiplied publication must validate resource ownership: 0x%08lX\n", (unsigned long)Status);
-    Exchange.Flags = 2;
+    Exchange.Flags = 0x80000000u;
     Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
     ok(Status == STATUS_INVALID_PARAMETER,
        "unknown native publication flags must be rejected: 0x%08lX\n", (unsigned long)Status);
