@@ -2759,6 +2759,12 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             COLORREF key = 0;
             DWORD lf = 0;
             IntCompositionGetLayered(w, &alpha, &key, &lf);
+            if (AtomDwmSheetOfGlass != 0 &&
+                UserGetProp(w, AtomDwmSheetOfGlass, FALSE) != NULL &&
+                RtlEqualMemory(&w->rcClient, &w->rcWindow, sizeof(RECT)))
+            {
+                lf |= DWM_WINDOW_PREMULTIPLIED_ALPHA;
+            }
             if (!(w->style & (WS_MINIMIZE | WS_MAXIMIZE)) &&
                 UserHasWindowEdge(w->style, w->ExStyle))
             {

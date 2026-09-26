@@ -36,6 +36,7 @@ ATOM AtomDwmBackdropRegion;
 ATOM AtomDwmContentBackdrop;
 ATOM AtomDwmBackdropNcExtend;
 ATOM AtomDwmBackdropNcExtendLeft;
+ATOM AtomDwmSheetOfGlass;
 ATOM AtomDwmCornerRadius;
 ATOM AtomDwmTransition;
 ATOM AtomDwmTransitionFromLT;
@@ -164,6 +165,7 @@ InitUserAtoms(VOID)
         DWM_PROP_BACKDROP_NC_EXTEND);
     AtomDwmBackdropNcExtendLeft = IntAddUserPropertyAtom(
         DWM_PROP_BACKDROP_NC_EXTEND_LEFT);
+    AtomDwmSheetOfGlass = IntAddUserPropertyAtom(DWM_PROP_SHEET_OF_GLASS);
     AtomDwmCornerRadius = IntAddUserPropertyAtom(DWM_PROP_CORNER_RADIUS);
     AtomDwmTransition = IntAddUserPropertyAtom(DWM_PROP_TRANSITION);
     AtomDwmTransitionFromLT = IntAddUserPropertyAtom(DWM_PROP_TRANSITION_FROM_LT);
