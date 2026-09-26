@@ -631,6 +631,17 @@ static BOOL get_glyph_transform(unsigned int simulations, const MATRIX_2X2 *m, F
     return TRUE;
 }
 
+static FT_Int32 get_glyph_load_flags(unsigned int gridfit, BOOL needs_transform)
+{
+    FT_Int32 flags = FT_LOAD_NO_AUTOHINT;
+
+    if (!gridfit)
+        flags |= FT_LOAD_NO_HINTING;
+    if (needs_transform)
+        flags |= FT_LOAD_NO_BITMAP;
+    return flags;
+}
+
 static NTSTATUS get_glyph_bbox(void *args)
 {
     struct get_glyph_bbox_params *params = args;
@@ -648,7 +659,7 @@ static NTSTATUS get_glyph_bbox(void *args)
 
     needs_transform = FT_IS_SCALABLE(face) && get_glyph_transform(params->simulations, &params->m, &m);
 
-    if (pFT_Load_Glyph(face, params->glyph, needs_transform ? FT_LOAD_NO_BITMAP : 0))
+    if (pFT_Load_Glyph(face, params->glyph, get_glyph_load_flags(params->gridfit, needs_transform)))
     {
         WARN("Failed to load glyph %u.\n", params->glyph);
         pFT_Done_Size(size);
@@ -789,7 +800,7 @@ static NTSTATUS get_glyph_bitmap(void *args)
 
     needs_transform = FT_IS_SCALABLE(face) && get_glyph_transform(params->simulations, &params->m, &m);
 
-    if (!pFT_Load_Glyph(face, params->glyph, needs_transform ? FT_LOAD_NO_BITMAP : 0))
+    if (!pFT_Load_Glyph(face, params->glyph, get_glyph_load_flags(params->gridfit, needs_transform)))
     {
         pFT_Get_Glyph(face->glyph, &glyph);
 
@@ -827,7 +838,7 @@ static NTSTATUS get_glyph_advance(void *args)
     if (!(size = freetype_set_face_size(face, params->emsize)))
         return STATUS_UNSUCCESSFUL;
 
-    if (!pFT_Load_Glyph(face, params->glyph, params->mode == DWRITE_MEASURING_MODE_NATURAL ? FT_LOAD_NO_HINTING : 0))
+    if (!pFT_Load_Glyph(face, params->glyph, params->mode == DWRITE_MEASURING_MODE_NATURAL ? FT_LOAD_NO_HINTING : FT_LOAD_NO_AUTOHINT))
     {
         *params->advance = face->glyph->advance.x >> 6;
         *params->has_contours = freetype_glyph_has_contours(face);
@@ -1076,6 +1087,7 @@ static NTSTATUS wow64_get_glyph_bbox(void *args)
         UINT64 object;
         ULONG simulations;
         ULONG glyph;
+        ULONG gridfit;
         float emsize;
         MATRIX_2X2 m;
         PTR32 bbox;
@@ -1085,6 +1097,7 @@ static NTSTATUS wow64_get_glyph_bbox(void *args)
         params32->object,
         params32->simulations,
         params32->glyph,
+        params32->gridfit,
         params32->emsize,
         params32->m,
         ULongToPtr(params32->bbox),
@@ -1101,6 +1114,7 @@ static NTSTATUS wow64_get_glyph_bitmap(void *args)
         ULONG simulations;
         ULONG glyph;
         ULONG mode;
+        ULONG gridfit;
         float emsize;
         MATRIX_2X2 m;
         RECT bbox;
@@ -1114,6 +1128,7 @@ static NTSTATUS wow64_get_glyph_bitmap(void *args)
         params32->simulations,
         params32->glyph,
         params32->mode,
+        params32->gridfit,
         params32->emsize,
         params32->m,
         params32->bbox,

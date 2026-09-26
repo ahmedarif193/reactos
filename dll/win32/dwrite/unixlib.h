@@ -68,6 +68,7 @@ struct get_glyph_bbox_params
     UINT64 object;
     unsigned int simulations;
     unsigned int glyph;
+    unsigned int gridfit;
     float emsize;
     MATRIX_2X2 m;
     RECT *bbox;
@@ -79,6 +80,7 @@ struct get_glyph_bitmap_params
     unsigned int simulations;
     unsigned int glyph;
     unsigned int mode;
+    unsigned int gridfit;
     float emsize;
     MATRIX_2X2 m;
     RECT bbox;
