@@ -2379,6 +2379,7 @@ RtlGetFullPathName_UstrEx(IN PUNICODE_STRING FileName,
     ULONG Length;
     USHORT StaticLength;
     UNICODE_STRING TempDynamicString;
+    RTL_PATH_TYPE LocalPathType;
 
     /* Initialize all our locals */
     ShortName = NULL;
@@ -2389,6 +2390,7 @@ RtlGetFullPathName_UstrEx(IN PUNICODE_STRING FileName,
     if (StringUsed) *StringUsed = NULL;
     if (LengthNeeded) *LengthNeeded = 0;
     if (FilePartSize) *FilePartSize = 0;
+    LocalPathType = *PathType;
 
     /* Check for invalid parameters */
     if ((DynamicString) && !(StringUsed) && (StaticString))
@@ -2417,7 +2419,7 @@ RtlGetFullPathName_UstrEx(IN PUNICODE_STRING FileName,
                                      StaticBuffer,
                                      &ShortName,
                                      NameInvalid,
-                                     PathType);
+                                     &LocalPathType);
     DPRINT("Length: %u StaticBuffer: %S\n", Length, StaticBuffer);
     if (!Length)
     {
@@ -2487,7 +2489,7 @@ RtlGetFullPathName_UstrEx(IN PUNICODE_STRING FileName,
                                      StaticBuffer,
                                      &ShortName,
                                      NameInvalid,
-                                     PathType);
+                                     &LocalPathType);
     if (!Length)
     {
         /* It failed */
@@ -2539,7 +2541,7 @@ RtlGetFullPathName_UstrEx(IN PUNICODE_STRING FileName,
                                      TempDynamicString.Buffer,
                                      &ShortName,
                                      NameInvalid,
-                                     PathType);
+                                     &LocalPathType);
     if (!Length)
     {
         /* Some path error, so fail out */
@@ -2579,9 +2581,11 @@ Release:
     RtlReleasePebLock();
 
 Quickie:
+    *PathType = LocalPathType;
+
     /* Free any buffers we should be freeing */
     DPRINT("Status: %lx %S %S\n", Status, StaticBuffer, TempDynamicString.Buffer);
-    if ((StaticString) && (StaticBuffer) && (StaticBuffer != StaticString->Buffer))
+    if ((StaticBuffer) && (!(StaticString) || (StaticBuffer != StaticString->Buffer)))
     {
         RtlpFreeStringMemory(StaticBuffer, TAG_USTR);
     }
