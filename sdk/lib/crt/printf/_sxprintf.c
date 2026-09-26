@@ -68,6 +68,9 @@ _sxprintf(
     /* Limit output to count + 1 characters */
     if (count != -1)
         sizeOfBuffer = min(sizeOfBuffer, count + 1);
+#elif defined(_LIBCNT_)
+    if ((format == NULL) || ((buffer == NULL) && (count != 0)))
+        return -1;
 #endif
 
     /* Setup the FILE structure */
