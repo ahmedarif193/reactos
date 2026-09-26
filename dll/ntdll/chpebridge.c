@@ -2994,16 +2994,26 @@ ChpeNtCreateThread(PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTR
                    PINITIAL_TEB UserStack, BOOLEAN CreateSuspended)
 {
     ARM64_NT_CONTEXT ArmContext;
+    PCONTEXT NativeContext = ThreadContext;
 
     /* ARM64EC kernel32 builds a native ARM64 context for CreateThread,
      * while an emulated x64 caller supplies the hybrid AMD64 layout. */
-    if (ThreadContext != NULL &&
-        !((((PARM64_NT_CONTEXT)ThreadContext)->ContextFlags & CONTEXT_ARM64) == CONTEXT_ARM64 &&
-          (((PARM64EC_NT_CONTEXT)ThreadContext)->ContextFlags & CONTEXT_AMD64) != CONTEXT_AMD64))
+    _SEH2_TRY
     {
-        ChpepContextX64ToArm64(&ArmContext, (PARM64EC_NT_CONTEXT)ThreadContext);
-        ThreadContext = (PCONTEXT)&ArmContext;
+        if (ThreadContext != NULL &&
+            !((((PARM64_NT_CONTEXT)ThreadContext)->ContextFlags & CONTEXT_ARM64) == CONTEXT_ARM64 &&
+              (((PARM64EC_NT_CONTEXT)ThreadContext)->ContextFlags & CONTEXT_AMD64) != CONTEXT_AMD64))
+        {
+            ChpepContextX64ToArm64(&ArmContext, (PARM64EC_NT_CONTEXT)ThreadContext);
+            NativeContext = (PCONTEXT)&ArmContext;
+        }
     }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        NativeContext = ThreadContext;
+    }
+    _SEH2_END;
+    ThreadContext = NativeContext;
 
     return NtCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle,
                           ClientId, ThreadContext, UserStack, CreateSuspended);
