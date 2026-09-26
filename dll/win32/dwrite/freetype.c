@@ -642,6 +642,15 @@ static FT_Int32 get_glyph_load_flags(unsigned int gridfit, BOOL needs_transform)
     return flags;
 }
 
+static void translate_glyph(FT_Glyph glyph, float offset_x, float offset_y)
+{
+    if (glyph->format != FT_GLYPH_FORMAT_OUTLINE || (!offset_x && !offset_y))
+        return;
+
+    pFT_Outline_Translate(&((FT_OutlineGlyph)glyph)->outline,
+            (FT_Pos)(offset_x * 64.0f + 0.5f), -(FT_Pos)(offset_y * 64.0f + 0.5f));
+}
+
 static NTSTATUS get_glyph_bbox(void *args)
 {
     struct get_glyph_bbox_params *params = args;
@@ -676,6 +685,7 @@ static NTSTATUS get_glyph_bbox(void *args)
         pFT_Glyph_Transform(glyph, &m, NULL);
     }
 
+    translate_glyph(glyph, params->offset_x, params->offset_y);
     pFT_Glyph_Get_CBox(glyph, FT_GLYPH_BBOX_PIXELS, &bbox);
     pFT_Done_Glyph(glyph);
     pFT_Done_Size(size);
@@ -812,6 +822,8 @@ static NTSTATUS get_glyph_bitmap(void *args)
             /* Includes oblique and user transform. */
             pFT_Glyph_Transform(glyph, &m, NULL);
         }
+
+        translate_glyph(glyph, params->offset_x, params->offset_y);
 
         if (params->mode == DWRITE_RENDERING_MODE1_ALIASED)
             ret = freetype_get_aliased_glyph_bitmap(params, glyph);
@@ -1089,6 +1101,8 @@ static NTSTATUS wow64_get_glyph_bbox(void *args)
         ULONG glyph;
         ULONG gridfit;
         float emsize;
+        float offset_x;
+        float offset_y;
         MATRIX_2X2 m;
         PTR32 bbox;
     } const *params32 = args;
@@ -1099,6 +1113,8 @@ static NTSTATUS wow64_get_glyph_bbox(void *args)
         params32->glyph,
         params32->gridfit,
         params32->emsize,
+        params32->offset_x,
+        params32->offset_y,
         params32->m,
         ULongToPtr(params32->bbox),
     };
@@ -1116,6 +1132,8 @@ static NTSTATUS wow64_get_glyph_bitmap(void *args)
         ULONG mode;
         ULONG gridfit;
         float emsize;
+        float offset_x;
+        float offset_y;
         MATRIX_2X2 m;
         RECT bbox;
         int pitch;
@@ -1130,6 +1148,8 @@ static NTSTATUS wow64_get_glyph_bitmap(void *args)
         params32->mode,
         params32->gridfit,
         params32->emsize,
+        params32->offset_x,
+        params32->offset_y,
         params32->m,
         params32->bbox,
         params32->pitch,

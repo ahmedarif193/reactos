@@ -70,6 +70,8 @@ struct get_glyph_bbox_params
     unsigned int glyph;
     unsigned int gridfit;
     float emsize;
+    float offset_x;
+    float offset_y;
     MATRIX_2X2 m;
     RECT *bbox;
 };
@@ -82,6 +84,8 @@ struct get_glyph_bitmap_params
     unsigned int mode;
     unsigned int gridfit;
     float emsize;
+    float offset_x;
+    float offset_y;
     MATRIX_2X2 m;
     RECT bbox;
     int pitch;
