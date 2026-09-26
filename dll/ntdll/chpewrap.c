@@ -90,6 +90,29 @@ ChpepSendCrossProcessNotification(PCHPE_CROSS_PROCESS_CONNECTION Connection,
     return TRUE;
 }
 
+static
+BOOLEAN
+ChpepCaptureRange(PVOID *BaseAddress,
+                  PSIZE_T RegionSize,
+                  PVOID *Base,
+                  PSIZE_T Size)
+{
+    BOOLEAN Captured = TRUE;
+
+    _SEH2_TRY
+    {
+        *Base = *BaseAddress;
+        *Size = *RegionSize;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Captured = FALSE;
+    }
+    _SEH2_END;
+
+    return Captured;
+}
+
 /*
  * @implemented
  */
@@ -107,29 +130,38 @@ ChpepNtAllocateVirtualMemory(HANDLE ProcessHandle,
     PVOID CallbackToken;
     NTSTATUS Status;
     BOOLEAN IsCurrent;
+    PVOID Base;
+    SIZE_T Size;
 
     CallbackToken = ChpeEnterEmulatorCallback();
     if (!CallbackToken)
         return ZwAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
 
-    if (!*BaseAddress && (AllocationType & MEM_COMMIT))
+    if (!ChpepCaptureRange(BaseAddress, RegionSize, &Base, &Size))
+    {
+        ChpeLeaveEmulatorCallback(CallbackToken);
+        return ZwAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
+    }
+
+    if (!Base && (AllocationType & MEM_COMMIT))
         AllocationType |= MEM_RESERVE;
 
     IsCurrent = ChpeIsCurrentProcessHandle(ProcessHandle);
     if (IsCurrent)
-        ChpeNotifyMemoryAlloc(*BaseAddress, *RegionSize, AllocationType, Protect, FALSE, 0);
+        ChpeNotifyMemoryAlloc(Base, Size, AllocationType, Protect, FALSE, 0);
     else
     {
         ChpepOpenCrossProcessConnection(ProcessHandle, &Connection);
-        ChpepSendCrossProcessNotification(&Connection, CrossProcessPreVirtualAlloc, *BaseAddress, *RegionSize, 3, AllocationType, Protect, 0);
+        ChpepSendCrossProcessNotification(&Connection, CrossProcessPreVirtualAlloc, Base, Size, 3, AllocationType, Protect, 0);
     }
 
     Status = ZwAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
+    ChpepCaptureRange(BaseAddress, RegionSize, &Base, &Size);
 
     if (IsCurrent)
-        ChpeNotifyMemoryAlloc(*BaseAddress, *RegionSize, AllocationType, Protect, TRUE, Status);
+        ChpeNotifyMemoryAlloc(Base, Size, AllocationType, Protect, TRUE, Status);
     else
-        ChpepSendCrossProcessNotification(&Connection, CrossProcessPostVirtualAlloc, *BaseAddress, *RegionSize, 3, AllocationType, Protect, Status);
+        ChpepSendCrossProcessNotification(&Connection, CrossProcessPostVirtualAlloc, Base, Size, 3, AllocationType, Protect, Status);
 
     ChpepCloseCrossProcessConnection(&Connection);
     ChpeLeaveEmulatorCallback(CallbackToken);
@@ -154,6 +186,8 @@ ChpepNtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
     PVOID CallbackToken;
     NTSTATUS Status;
     BOOLEAN IsCurrent;
+    PVOID Base;
+    SIZE_T Size;
     BOOLEAN EcCode;
 
     Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, NULL, &EcCode, NULL);
@@ -170,25 +204,32 @@ ChpepNtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
         return Status;
     }
 
-    if (!*BaseAddress && (AllocationType & MEM_COMMIT))
+    if (!ChpepCaptureRange(BaseAddress, RegionSize, &Base, &Size))
+    {
+        ChpeLeaveEmulatorCallback(CallbackToken);
+        return ZwAllocateVirtualMemoryEx(ProcessHandle, BaseAddress, RegionSize, AllocationType, Protect, ExtendedParameters, ExtendedParameterCount);
+    }
+
+    if (!Base && (AllocationType & MEM_COMMIT))
         AllocationType |= MEM_RESERVE;
 
     if (IsCurrent)
-        ChpeNotifyMemoryAlloc(*BaseAddress, *RegionSize, AllocationType, Protect, FALSE, 0);
+        ChpeNotifyMemoryAlloc(Base, Size, AllocationType, Protect, FALSE, 0);
     else
     {
         ChpepOpenCrossProcessConnection(ProcessHandle, &Connection);
-        ChpepSendCrossProcessNotification(&Connection, CrossProcessPreVirtualAlloc, *BaseAddress, *RegionSize, 3, AllocationType, Protect, 0);
+        ChpepSendCrossProcessNotification(&Connection, CrossProcessPreVirtualAlloc, Base, Size, 3, AllocationType, Protect, 0);
     }
 
     Status = ZwAllocateVirtualMemoryEx(ProcessHandle, BaseAddress, RegionSize, AllocationType, Protect, ExtendedParameters, ExtendedParameterCount);
+    ChpepCaptureRange(BaseAddress, RegionSize, &Base, &Size);
     if (NT_SUCCESS(Status) && IsCurrent && EcCode)
-        ChpeMarkEcCodeRange(*BaseAddress, *RegionSize);
+        ChpeMarkEcCodeRange(Base, Size);
 
     if (IsCurrent)
-        ChpeNotifyMemoryAlloc(*BaseAddress, *RegionSize, AllocationType, Protect, TRUE, Status);
+        ChpeNotifyMemoryAlloc(Base, Size, AllocationType, Protect, TRUE, Status);
     else
-        ChpepSendCrossProcessNotification(&Connection, CrossProcessPostVirtualAlloc, *BaseAddress, *RegionSize, 3, AllocationType, Protect, Status);
+        ChpepSendCrossProcessNotification(&Connection, CrossProcessPostVirtualAlloc, Base, Size, 3, AllocationType, Protect, Status);
 
     ChpepCloseCrossProcessConnection(&Connection);
     ChpeLeaveEmulatorCallback(CallbackToken);
@@ -210,26 +251,35 @@ ChpepNtFreeVirtualMemory(HANDLE ProcessHandle,
     PVOID CallbackToken;
     NTSTATUS Status;
     BOOLEAN IsCurrent;
+    PVOID Base;
+    SIZE_T Size;
 
     CallbackToken = ChpeEnterEmulatorCallback();
     if (!CallbackToken)
         return ZwFreeVirtualMemory(ProcessHandle, BaseAddress, RegionSize, FreeType);
 
+    if (!ChpepCaptureRange(BaseAddress, RegionSize, &Base, &Size))
+    {
+        ChpeLeaveEmulatorCallback(CallbackToken);
+        return ZwFreeVirtualMemory(ProcessHandle, BaseAddress, RegionSize, FreeType);
+    }
+
     IsCurrent = ChpeIsCurrentProcessHandle(ProcessHandle);
     if (IsCurrent)
-        ChpeNotifyMemoryFree(*BaseAddress, *RegionSize, FreeType, FALSE, 0);
+        ChpeNotifyMemoryFree(Base, Size, FreeType, FALSE, 0);
     else
     {
         ChpepOpenCrossProcessConnection(ProcessHandle, &Connection);
-        ChpepSendCrossProcessNotification(&Connection, CrossProcessPreVirtualFree, *BaseAddress, *RegionSize, 2, FreeType, 0, 0);
+        ChpepSendCrossProcessNotification(&Connection, CrossProcessPreVirtualFree, Base, Size, 2, FreeType, 0, 0);
     }
 
     Status = ZwFreeVirtualMemory(ProcessHandle, BaseAddress, RegionSize, FreeType);
+    ChpepCaptureRange(BaseAddress, RegionSize, &Base, &Size);
 
     if (IsCurrent)
-        ChpeNotifyMemoryFree(*BaseAddress, *RegionSize, FreeType, TRUE, Status);
+        ChpeNotifyMemoryFree(Base, Size, FreeType, TRUE, Status);
     else
-        ChpepSendCrossProcessNotification(&Connection, CrossProcessPostVirtualFree, *BaseAddress, *RegionSize, 2, FreeType, Status, 0);
+        ChpepSendCrossProcessNotification(&Connection, CrossProcessPostVirtualFree, Base, Size, 2, FreeType, Status, 0);
 
     ChpepCloseCrossProcessConnection(&Connection);
     ChpeLeaveEmulatorCallback(CallbackToken);
@@ -252,26 +302,35 @@ ChpepNtProtectVirtualMemory(HANDLE ProcessHandle,
     PVOID CallbackToken;
     NTSTATUS Status;
     BOOLEAN IsCurrent;
+    PVOID Base;
+    SIZE_T Size;
 
     CallbackToken = ChpeEnterEmulatorCallback();
     if (!CallbackToken)
         return ZwProtectVirtualMemory(ProcessHandle, BaseAddress, RegionSize, NewProtect, OldProtect);
 
+    if (!ChpepCaptureRange(BaseAddress, RegionSize, &Base, &Size))
+    {
+        ChpeLeaveEmulatorCallback(CallbackToken);
+        return ZwProtectVirtualMemory(ProcessHandle, BaseAddress, RegionSize, NewProtect, OldProtect);
+    }
+
     IsCurrent = ChpeIsCurrentProcessHandle(ProcessHandle);
     if (IsCurrent)
-        ChpeNotifyMemoryProtect(*BaseAddress, *RegionSize, NewProtect, FALSE, 0);
+        ChpeNotifyMemoryProtect(Base, Size, NewProtect, FALSE, 0);
     else
     {
         ChpepOpenCrossProcessConnection(ProcessHandle, &Connection);
-        ChpepSendCrossProcessNotification(&Connection, CrossProcessPreVirtualProtect, *BaseAddress, *RegionSize, 2, NewProtect, 0, 0);
+        ChpepSendCrossProcessNotification(&Connection, CrossProcessPreVirtualProtect, Base, Size, 2, NewProtect, 0, 0);
     }
 
     Status = ZwProtectVirtualMemory(ProcessHandle, BaseAddress, RegionSize, NewProtect, OldProtect);
+    ChpepCaptureRange(BaseAddress, RegionSize, &Base, &Size);
 
     if (IsCurrent)
-        ChpeNotifyMemoryProtect(*BaseAddress, *RegionSize, NewProtect, TRUE, Status);
+        ChpeNotifyMemoryProtect(Base, Size, NewProtect, TRUE, Status);
     else
-        ChpepSendCrossProcessNotification(&Connection, CrossProcessPostVirtualProtect, *BaseAddress, *RegionSize, 2, NewProtect, Status, 0);
+        ChpepSendCrossProcessNotification(&Connection, CrossProcessPostVirtualProtect, Base, Size, 2, NewProtect, Status, 0);
 
     ChpepCloseCrossProcessConnection(&Connection);
     ChpeLeaveEmulatorCallback(CallbackToken);
