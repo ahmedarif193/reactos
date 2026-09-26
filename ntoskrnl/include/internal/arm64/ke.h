@@ -692,6 +692,17 @@ KiArm64QueryEffectiveClockMHz(
     _In_ ULONG ProcessorNumber);
 #define KiQueryEffectiveProcessorMhz(Number) KiArm64QueryEffectiveClockMHz(Number)
 
+/* Current page table root, as recorded in a crash dump header. */
+FORCEINLINE
+ULONG64
+KiReadDirectoryTableBase(VOID)
+{
+    ULONG64 Ttbr0;
+
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    return Ttbr0;
+}
+
 extern ULONG64 KiArm64IdleCounterTicks[];
 
 ULONG

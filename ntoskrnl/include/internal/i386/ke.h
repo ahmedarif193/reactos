@@ -1108,6 +1108,9 @@ KiClearDpcRequestState(
 
 #define _KeIsExecutingDpc() (KeGetCurrentPrcb()->DpcRoutineActive)
 
+/* The RPL of the saved code selector is the previous mode. */
+#define KiGetContextPreviousMode(Context) ((KPROCESSOR_MODE)((Context)->SegCs & 1))
+
 /* A trap from user mode or from virtual-8086 code. */
 #define KiIsUserModeTrap(TrapFrame) \
     (KiUserTrap(TrapFrame) || ((TrapFrame)->EFlags & EFLAGS_V86_MASK))
