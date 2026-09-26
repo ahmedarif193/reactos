@@ -157,6 +157,19 @@ vc4kmt_bo_create_resource_private_ex(
     _Out_ VC4KMT_BO *Bo);
 
 NTSTATUS
+vc4kmt_bo_create_shared(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
+    _In_reads_bytes_(ResourcePrivateDataSize) const VOID *ResourcePrivateData,
+    _In_ UINT ResourcePrivateDataSize,
+    _In_reads_bytes_(RuntimePrivateDataSize) const VOID *RuntimePrivateData,
+    _In_ UINT RuntimePrivateDataSize,
+    _Out_ VC4KMT_BO *Bo,
+    _Out_ D3DKMT_HANDLE *hResource,
+    _Out_ D3DKMT_HANDLE *hGlobalShare);
+
+NTSTATUS
 vc4kmt_bo_adopt_resource(
     _In_ VC4KMT_DEVICE *Device,
     _In_ D3DKMT_HANDLE hAllocation,
