@@ -2030,6 +2030,23 @@ VOID CAutoComplete::AutoCompThreadProc()
 
 VOID CAutoComplete::DoThreadWork(PAC_THREAD pThread)
 {
+    // The enumerator is only used on this thread; never reset or expand it
+    // from the UI thread while a Next call may be running here.
+    if (pThread->m_bReset && m_pEnum)
+    {
+        HRESULT hr = m_pEnum->Reset(); // IEnumString::Reset
+        TRACE("m_pEnum->Reset(%p): 0x%08lx\n",
+              static_cast<IUnknown *>(m_pEnum), hr);
+    }
+
+    if (pThread->m_bExpand && m_pACList)
+    {
+        HRESULT hr = m_pACList->Expand(pThread->m_strStemText); // IACList::Expand
+        TRACE("m_pACList->Expand(%p, %S): 0x%08lx\n",
+              static_cast<IUnknown *>(m_pACList),
+              static_cast<LPCWSTR>(pThread->m_strStemText), hr);
+    }
+
     if (pThread->m_bExpand || m_innerList.GetSize() == 0)
     {
         ReLoadInnerList(pThread);
@@ -2092,27 +2109,20 @@ LRESULT CAutoComplete::OnAutoCompStart(UINT uMsg, WPARAM wParam, LPARAM lParam, 
         pThread->m_bExpand = !strStemText.IsEmpty();
         m_strStemText = strStemText;
     }
+    pThread->m_strStemText = strStemText;
 
-    // reset if necessary
-    if (pThread->m_bReset && m_pEnum)
-    {
-        HRESULT hr = m_pEnum->Reset(); // IEnumString::Reset
-        TRACE("m_pEnum->Reset(%p): 0x%08lx\n",
-              static_cast<IUnknown *>(m_pEnum), hr);
-    }
-
-    // update ac list if necessary
-    if (pThread->m_bExpand && m_pACList)
-    {
-        HRESULT hr = m_pACList->Expand(strStemText); // IACList::Expand
-        TRACE("m_pACList->Expand(%p, %S): 0x%08lx\n",
-              static_cast<IUnknown *>(m_pACList),
-              static_cast<LPCWSTR>(strStemText), hr);
-    }
-
-    PAC_THREAD pOld = InterlockedExchangeThreadData(&m_pThread, pThread);
+    // Reclaim a request the worker has not taken yet, so its reset and
+    // expansion are not lost, then publish the new one.
+    PAC_THREAD pOld = InterlockedExchangeThreadData(&m_pThread, NULL);
     if (pOld)
+    {
+        pThread->m_bReset |= pOld->m_bReset;
+        if (!strStemText.IsEmpty())
+            pThread->m_bExpand |= pOld->m_bExpand;
         delete pOld;
+    }
+    pOld = InterlockedExchangeThreadData(&m_pThread, pThread);
+    ATLASSERT(pOld == NULL);
 
     BOOL bDoStart = FALSE;
     if (m_hThread)

@@ -128,6 +128,7 @@ typedef struct AC_THREAD
     CSimpleArray<CStringW> m_outerList; // outer list
     BOOL m_bReset;
     BOOL m_bExpand;
+    CStringW m_strStemText;
 
     VOID ReLoadInnerList(const CStringW& strText);
 } AC_THREAD, *PAC_THREAD;
