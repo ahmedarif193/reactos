@@ -39,6 +39,32 @@ typedef struct _ARM64_DISPATCHER_CONTEXT
 
 /* RtlUnwindEx is declared by the SDK headers */
 
+LONG
+RtlpArm64ExecuteHandler(
+    _In_ PVOID Argument,
+    _In_ PVOID EstablisherFrame,
+    _In_ PVOID Handler,
+    _In_ PUCHAR NonVolatileRegisters);
+
+static
+LONG
+RtlpArm64CallScopeHandler(
+    _In_ PARM64_DISPATCHER_CONTEXT DispatcherContext,
+    _In_ PVOID Argument,
+    _In_ PVOID EstablisherFrame,
+    _In_ PVOID Handler)
+{
+    if (DispatcherContext->NonVolatileRegisters != NULL)
+    {
+        return RtlpArm64ExecuteHandler(Argument,
+                                       EstablisherFrame,
+                                       Handler,
+                                       DispatcherContext->NonVolatileRegisters);
+    }
+
+    return ((PEXCEPTION_FILTER)Handler)((PEXCEPTION_POINTERS)Argument, (DWORD64)EstablisherFrame);
+}
+
 EXCEPTION_DISPOSITION
 __cdecl
 __C_specific_handler(
@@ -111,7 +137,10 @@ __C_specific_handler(
             {
                 HandlerAddress = ScopeTable->ScopeRecord[Index].HandlerAddress;
                 TerminationHandler = (PTERMINATION_HANDLER)(ImageBase + HandlerAddress);
-                TerminationHandler(TRUE, (DWORD64)EstablisherFrame);
+                RtlpArm64CallScopeHandler(Arm64DispatcherContext,
+                                          ULongToPtr(TRUE),
+                                          EstablisherFrame,
+                                          (PVOID)TerminationHandler);
             }
             else if (ScopeTable->ScopeRecord[Index].JumpTarget == TargetIpOffset)
             {
@@ -133,7 +162,10 @@ __C_specific_handler(
             else
             {
                 ExceptionFilter = (PEXCEPTION_FILTER)(ImageBase + HandlerAddress);
-                FilterResult = ExceptionFilter(&ExceptionPointers, (DWORD64)EstablisherFrame);
+                FilterResult = RtlpArm64CallScopeHandler(Arm64DispatcherContext,
+                                                         &ExceptionPointers,
+                                                         EstablisherFrame,
+                                                         (PVOID)ExceptionFilter);
             }
 
             if (FilterResult < 0)
