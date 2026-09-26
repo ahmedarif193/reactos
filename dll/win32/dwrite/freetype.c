@@ -117,6 +117,7 @@ typedef struct
 #define pFT_Outline_New FT_Outline_New
 #define pFT_Outline_Transform FT_Outline_Transform
 #define pFT_Outline_Translate FT_Outline_Translate
+#define pFT_Set_Char_Size FT_Set_Char_Size
 #define pFT_Set_Pixel_Sizes FT_Set_Pixel_Sizes
 #else
 static void *ft_handle = NULL;
@@ -148,21 +149,27 @@ MAKE_FUNCPTR(FT_Outline_Get_Bitmap);
 MAKE_FUNCPTR(FT_Outline_New);
 MAKE_FUNCPTR(FT_Outline_Transform);
 MAKE_FUNCPTR(FT_Outline_Translate);
+MAKE_FUNCPTR(FT_Set_Char_Size);
 MAKE_FUNCPTR(FT_Set_Pixel_Sizes);
 #undef MAKE_FUNCPTR
 #endif
 
 #define FaceFromObject(o) ((FT_Face)(ULONG_PTR)(o))
 
-static FT_Size freetype_set_face_size(FT_Face face, FT_UInt emsize)
+static FT_Size freetype_set_face_size(FT_Face face, float emsize)
 {
     FT_Size size;
+    FT_Error error;
 
     if (pFT_New_Size(face, &size)) return NULL;
 
     pFT_Activate_Size(size);
 
-    if (pFT_Set_Pixel_Sizes(face, emsize, emsize))
+    if (FT_IS_SCALABLE(face))
+        error = pFT_Set_Char_Size(face, 0, (FT_F26Dot6)(emsize * 64.0f + 0.5f), 0, 0);
+    else
+        error = pFT_Set_Pixel_Sizes(face, emsize, emsize);
+    if (error)
     {
         pFT_Done_Size(size);
         return NULL;
@@ -219,6 +226,7 @@ static NTSTATUS process_attach(void *args)
     LOAD_FUNCPTR(FT_Outline_New)
     LOAD_FUNCPTR(FT_Outline_Transform)
     LOAD_FUNCPTR(FT_Outline_Translate)
+    LOAD_FUNCPTR(FT_Set_Char_Size)
     LOAD_FUNCPTR(FT_Set_Pixel_Sizes)
 #undef LOAD_FUNCPTR
 #endif
