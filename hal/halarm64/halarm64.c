@@ -5335,8 +5335,7 @@ HalGetEnvironmentVariable(
     UNREFERENCED_PARAMETER(Variable);
     UNREFERENCED_PARAMETER(ValueLength);
     UNREFERENCED_PARAMETER(Value);
-    UNIMPLEMENTED_STUB();
-    return ESUCCESS;
+    return ENOENT;
 }
 
 /*
@@ -6082,8 +6081,7 @@ HalSetEnvironmentVariable(
 {
     UNREFERENCED_PARAMETER(Variable);
     UNREFERENCED_PARAMETER(Value);
-    UNIMPLEMENTED_STUB();
-    return ESUCCESS;
+    return EACCES;
 }
 
 /*
