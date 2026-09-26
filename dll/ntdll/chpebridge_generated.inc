@@ -5088,15 +5088,11 @@ NTSTATUS NTAPI ChpeAutoRtlInitializeCriticalSectionAndSpinCount(PRTL_CRITICAL_SE
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlInitializeCriticalSectionAndSpinCount), __typeof__(&RtlInitializeCriticalSectionAndSpinCount)), "RtlInitializeCriticalSectionAndSpinCount bridge signature mismatch");
 
-/* Native definition: sdk/lib/rtl/critical.c */
-#ifdef RtlInitializeCriticalSectionEx
-#undef RtlInitializeCriticalSectionEx
-#endif
-NTSTATUS NTAPI RtlInitializeCriticalSectionEx(PVOID a0, ULONG a1, ULONG a2);
-NTSTATUS NTAPI ChpeAutoRtlInitializeCriticalSectionEx(PVOID a0, ULONG a1, ULONG a2)
+NTSTATUS NTAPI ChpeAutoRtlInitializeCriticalSectionEx(PRTL_CRITICAL_SECTION a0, ULONG a1, ULONG a2)
 {
     return RtlInitializeCriticalSectionEx(a0, a1, a2);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlInitializeCriticalSectionEx), __typeof__(&RtlInitializeCriticalSectionEx)), "RtlInitializeCriticalSectionEx bridge signature mismatch");
 
 /* Native definition: dll/ntdll/rtl/xstate_wow64.c */
 #ifdef RtlInitializeExtendedContext
