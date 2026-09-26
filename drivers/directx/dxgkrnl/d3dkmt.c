@@ -8695,6 +8695,9 @@ typedef struct _DXGKRNL_PROCESS_PRIORITY
 static LIST_ENTRY DxgkProcessPriorityList = { &DxgkProcessPriorityList, &DxgkProcessPriorityList };
 static FAST_MUTEX DxgkProcessPriorityLock;
 static volatile LONG DxgkProcessPriorityLockReady;
+/* Bumped on every class change so devices refresh the class they cache for
+ * packet admission. */
+static volatile LONG DxgkProcessPriorityGeneration;
 
 static VOID
 DxgkpEnsureProcessPriorityLock(VOID)
@@ -8798,6 +8801,7 @@ DxgkSetProcessSchedulingPriorityClass(
         InsertTailList(&DxgkProcessPriorityList, &Record->Link);
     }
     Record->Class = Class;
+    InterlockedIncrement(&DxgkProcessPriorityGeneration);
     ExReleaseFastMutex(&DxgkProcessPriorityLock);
 
     if (Referenced)
@@ -8844,6 +8848,69 @@ DxgkGetProcessSchedulingPriorityClass(
     if (Referenced)
         ObDereferenceObject(Process);
     return STATUS_SUCCESS;
+}
+
+static D3DKMT_SCHEDULINGPRIORITYCLASS
+DxgkpLookupProcessPriorityClass(
+    _In_opt_ PEPROCESS Process)
+{
+    D3DKMT_SCHEDULINGPRIORITYCLASS Class = D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL;
+    PLIST_ENTRY Entry;
+
+    if (Process == NULL)
+        return Class;
+    DxgkpEnsureProcessPriorityLock();
+    ExAcquireFastMutex(&DxgkProcessPriorityLock);
+    for (Entry = DxgkProcessPriorityList.Flink; Entry != &DxgkProcessPriorityList; Entry = Entry->Flink)
+    {
+        PDXGKRNL_PROCESS_PRIORITY Record = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS_PRIORITY, Link);
+
+        if (Record->Process == Process)
+        {
+            Class = Record->Class;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&DxgkProcessPriorityLock);
+    return Class;
+}
+
+/*
+ * Each process class gets its own band of admission priorities, wide enough
+ * for the -7..7 relative priority D3DKMTSetContextSchedulingPriority sets, so
+ * a higher class always goes first and NORMAL with no adjustment stays at 0.
+ */
+#define DXGKP_PRIORITY_CLASS_BAND 16
+
+LONG
+DxgkContextSchedulingPriority(
+    _In_ PDXGKRNL_CONTEXT Context)
+{
+    PDXGKRNL_DEVICE Device = Context->Device;
+    LONG Class = D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL;
+    LONG Relative = InterlockedCompareExchange(&Context->SchedulingPriority, 0, 0);
+
+    if (Device != NULL)
+    {
+        LONG Generation = InterlockedCompareExchange(&DxgkProcessPriorityGeneration, 0, 0);
+
+        /* The class registry is guarded by a fast mutex. Above APC_LEVEL
+         * keep the cached class; a later admission refreshes it. */
+        if (InterlockedCompareExchange(&Device->PriorityClassGeneration, 0, 0) != Generation &&
+            KeGetCurrentIrql() <= APC_LEVEL)
+        {
+            InterlockedExchange(&Device->PriorityClass,
+                                DxgkpLookupProcessPriorityClass(Device->OwnerProcess));
+            InterlockedExchange(&Device->PriorityClassGeneration, Generation);
+        }
+        Class = InterlockedCompareExchange(&Device->PriorityClass, 0, 0);
+    }
+
+    if (Relative < -7)
+        Relative = -7;
+    else if (Relative > 7)
+        Relative = 7;
+    return (Class - D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL) * DXGKP_PRIORITY_CLASS_BAND + Relative;
 }
 
 VOID

@@ -1516,6 +1516,8 @@ DxgkCreatePagingSystemContext(
     RtlZeroMemory(Device, sizeof(*Device));
     Device->Adapter = Adapter;
     Device->OwnerProcess = PsInitialSystemProcess;
+    Device->PriorityClass = D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL;
+    Device->PriorityClassGeneration = -1;
     Device->ProcessRecord = ProcessRecord;
     Device->ReferenceCount = 1;
     Device->ExecutionState = D3DKMT_DEVICEEXECUTION_ACTIVE;
@@ -2060,6 +2062,8 @@ DxgkpCreateDevice(
 
     Device->Adapter = Adapter;
     Device->OwnerProcess = PsGetCurrentProcess();
+    Device->PriorityClass = D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL;
+    Device->PriorityClassGeneration = -1;
     Device->Flags   = pCreateDevice->Flags;
     Device->GdiDevice = GdiDevice;
     Device->ReferenceCount = 1;
