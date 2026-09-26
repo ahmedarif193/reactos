@@ -446,12 +446,6 @@ NtSetDefaultLocale(IN BOOLEAN UserProfile,
     PKEY_VALUE_PARTIAL_INFORMATION KeyValueInformation;
     PAGED_CODE();
 
-    /* Check that the passed locale ID is not bogus */
-    if (DefaultLocaleId & BOGUS_LOCALE_ID)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
     /* Check if we have a profile */
     if (UserProfile)
     {
@@ -527,41 +521,36 @@ NtSetDefaultLocale(IN BOOLEAN UserProfile,
     }
     else
     {
-        /* We have a locale, validate it */
-        Status = ExpValidateNlsLocaleId(DefaultLocaleId);
+        /* Open the key now */
+        Status = ZwOpenKey(&KeyHandle, KEY_SET_VALUE, &ObjectAttributes);
         if (NT_SUCCESS(Status))
         {
-            /* Open the key now */
-            Status = ZwOpenKey(&KeyHandle, KEY_SET_VALUE, &ObjectAttributes);
-            if (NT_SUCCESS(Status))
+            /* Check if we had a profile */
+            if (UserProfile)
             {
-                /* Check if we had a profile */
-                if (UserProfile)
-                {
-                    /* Fill in the buffer */
-                    ValueLength = _swprintf(ValueBuffer,
-                                            L"%08lx",
-                                            (ULONG)DefaultLocaleId);
-                }
-                else
-                {
-                    /* Fill in the buffer */
-                    ValueLength = _swprintf(ValueBuffer,
-                                            L"%04lx",
-                                            (ULONG)DefaultLocaleId & 0xFFFF);
-                }
-
-                /* Set the length for the registry call */
-                ValueLength = (ValueLength + 1) * sizeof(WCHAR);
-
-                /* Now write the actual value */
-                Status = ZwSetValueKey(KeyHandle,
-                                       &ValueName,
-                                       0,
-                                       REG_SZ,
-                                       ValueBuffer,
-                                       ValueLength);
+                /* Fill in the buffer */
+                ValueLength = _swprintf(ValueBuffer,
+                                        L"%08lX",
+                                        (ULONG)DefaultLocaleId);
             }
+            else
+            {
+                /* Fill in the buffer */
+                ValueLength = _swprintf(ValueBuffer,
+                                        L"%04lX",
+                                        (ULONG)DefaultLocaleId & 0xFFFF);
+            }
+
+            /* Set the length for the registry call */
+            ValueLength = (ValueLength + 1) * sizeof(WCHAR);
+
+            /* Now write the actual value */
+            Status = ZwSetValueKey(KeyHandle,
+                                   &ValueName,
+                                   0,
+                                   REG_SZ,
+                                   ValueBuffer,
+                                   ValueLength);
         }
     }
 
