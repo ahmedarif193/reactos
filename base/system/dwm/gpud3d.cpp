@@ -85,10 +85,12 @@ struct Surface
 struct ClientSource
 {
     ID3D11Texture2D *Resource;
+    Texture Sampled; /* views Resource for a retained frame; owns no resource */
     ULONG SurfaceId, Share, LastFrame;
 
     void Reset()
     {
+        Release(Sampled.View);
         Release(Resource);
         ZeroMemory(this, sizeof(*this));
     }
@@ -1026,6 +1028,22 @@ void PruneClientSources(const DWM_WIN *Windows, ULONG Count)
     }
 }
 
+/* A retained publication is sampled where its producer left it, with no
+ * copy. DWM holds it until a later frame reports a newer one. */
+Texture *ImportRetained(const DWM_WIN *Window)
+{
+    if (Window->DxUpdateId == 0)
+        return NULL;
+    ClientSource *Source = ImportClientSource(Window);
+    if (Source == NULL)
+        return NULL;
+    if (Source->Sampled.View == NULL &&
+        !Result(State.Device->CreateShaderResourceView(Source->Resource, NULL, &Source->Sampled.View),
+                "CreateShaderResourceView client"))
+        return NULL;
+    return &Source->Sampled;
+}
+
 Texture *Import(const DWM_WIN *Window, BOOL Client)
 {
     ULONG Share = Client ? Window->DxGlobalShare : Window->BaseGlobalShare;
@@ -1039,6 +1057,8 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
         return NULL;
     if (!Client && (Width != (ULONG)Window->cx || Height != (ULONG)Window->cy))
         return NULL;
+    if (Client && (Window->LayerFlags & DWM_WINDOW_DX_RETAINED))
+        return ImportRetained(Window);
     Surface *Slot = FindSurface(Window, Client);
     if (Client)
     {
