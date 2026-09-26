@@ -1986,12 +1986,12 @@ NtGdiGetPixel(
                               CLR_INVALID);
 
         /* Call the copy bits function */
-        EngCopyBits(&psurfDest->SurfObj,
-                    &psurfSrc->SurfObj,
-                    NULL,
-                    &exlo.xlo,
-                    &rclDest,
-                    &ptlSrc);
+        IntEngCopyBits(&psurfDest->SurfObj,
+                       &psurfSrc->SurfObj,
+                       NULL,
+                       &exlo.xlo,
+                       &rclDest,
+                       &ptlSrc);
 
         /* Cleanup the XLATEOBJ */
         EXLATEOBJ_vCleanup(&exlo);
