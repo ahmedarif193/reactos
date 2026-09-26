@@ -34,6 +34,7 @@ BOOL DwmD3dShadow(const RECT *Bounds, LONGLONG X, LONGLONG Y, LONG Width,
                   LONG Height, LONG Offset, LONG WideExtent, BOOL Active,
                   ULONG WideOpacity, ULONG TightOpacity, ULONG WindowAlpha);
 void DwmD3dBlurStats(ULONGLONG *Filtered, ULONGLONG *Reused);
+BOOL DwmD3dClientCopiesRetired(void);
 DWM_GPU_RESULT DwmD3dEnd(void);
 DWM_GPU_RESULT DwmD3dCheckOutput(void);
 

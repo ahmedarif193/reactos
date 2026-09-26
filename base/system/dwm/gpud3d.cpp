@@ -143,7 +143,10 @@ struct Compositor
     ID3D11SamplerState *Sampler;
     ID3D11BlendState *Blend, *PremultipliedBlend;
     ID3D11RasterizerState *Rasterizer;
-    ID3D11Query *Completion;
+    ID3D11Query *Completion, *ClientCopies;
+    /* ClientCopies fences the copies Begin makes of new client publications.
+     * A copy made after that fence cannot be released early. */
+    BOOL CopyingClients, ClientCopiesFenced, ClientCopiesUnfenced;
     Texture Canvas, Backdrop;
     Surface Surfaces[DWM_MAX_WINDOWS * 2];
     ClientSource ClientSources[DWM_MAX_WINDOWS * 2];
@@ -475,7 +478,8 @@ BOOL CreateShaders()
     if (!Result(State.Device->CreateRasterizerState(&Rasterizer, &State.Rasterizer), "CreateRasterizerState"))
         return FALSE;
     D3D11_QUERY_DESC Query = {D3D11_QUERY_EVENT, 0};
-    return Result(State.Device->CreateQuery(&Query, &State.Completion), "CreateQuery");
+    return Result(State.Device->CreateQuery(&Query, &State.Completion), "CreateQuery") &&
+           Result(State.Device->CreateQuery(&Query, &State.ClientCopies), "CreateQuery client copies");
 }
 
 BOOL HasNativeDriver(const LUID &Luid)
@@ -930,6 +934,7 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
             UnbindTextures();
             State.Context->CopyResource(Slot->Image.Resource, Source->Resource);
             State.WorkPending = TRUE;
+            State.ClientCopiesUnfenced |= !State.CopyingClients;
             if (!Result(State.Device->GetDeviceRemovedReason(), "Client texture snapshot"))
                 return NULL;
             Slot->Share = Share;
@@ -1245,6 +1250,7 @@ DwmD3dShutdown(void)
         State.Blurs[Index].Reset();
     State.Backdrop.Reset();
     State.Canvas.Reset();
+    Release(State.ClientCopies);
     Release(State.Completion);
     Release(State.Rasterizer);
     Release(State.PremultipliedBlend);
@@ -1416,6 +1422,29 @@ DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdro
     State.NextConstants = State.ConstantsHead;
     ++State.Frame;
     State.BlurOwnerValid = FALSE;
+    /* Copy new client publications before the canvas has pending draws, so
+     * the fence ending here flushes only these copies. Their producers can
+     * then reuse the shared buffers while the frame renders and waits for
+     * scanout. A failed copy is retried, unfenced, when its window draws. */
+    State.ClientCopiesFenced = State.ClientCopiesUnfenced = FALSE;
+    State.CopyingClients = TRUE;
+    for (ULONG Index = 0; State.SceneCurrent && Index < State.Scene.Count; ++Index)
+    {
+        const DWM_WIN *Window = &State.Scene.Windows[Index];
+        if (Window->DxGlobalShare != 0 && Window->DxUpdateId != 0)
+        {
+            DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_TEXTURE);
+            Texture *Client = Import(Window, TRUE);
+            DptEnd(&g_DwmPresentTrace, Trace, Client != NULL, 0);
+        }
+    }
+    State.CopyingClients = FALSE;
+    if (State.WorkPending)
+    {
+        State.Context->End(State.ClientCopies);
+        State.Context->Flush();
+        State.ClientCopiesFenced = TRUE;
+    }
     RECT Full = {0, 0, State.Width, State.Height};
     State.Draw = State.FrameValid && !RefreshBackdrop && Damage ? *Damage : Full;
     DwmGpuDamageUnion(&State.Draw, &State.Scene.AnimationDamage);
@@ -1592,6 +1621,37 @@ DwmD3dBlurStats(ULONGLONG *Filtered, ULONGLONG *Reused)
     *Filtered = State.Filtered;
     *Reused = State.Reused;
     State.Filtered = State.Reused = 0;
+}
+
+BOOL
+DwmD3dClientCopiesRetired(void)
+{
+    if (!State.Active || State.ClientCopiesUnfenced)
+        return FALSE;
+    if (!State.ClientCopiesFenced)
+        return TRUE;
+    /* The copies were submitted at Begin and are usually done by now. Do not
+     * delay the present for a slow one; it is acknowledged after the present. */
+    LARGE_INTEGER Frequency, Start, Now;
+    QueryPerformanceFrequency(&Frequency);
+    QueryPerformanceCounter(&Start);
+    for (;;)
+    {
+        BOOL Complete = FALSE;
+        HRESULT Status = State.Context->GetData(State.ClientCopies, &Complete, sizeof(Complete),
+                                                D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (FAILED(Status))
+            return FALSE;
+        if (Status == S_OK && Complete)
+        {
+            State.ClientCopiesFenced = FALSE;
+            return TRUE;
+        }
+        QueryPerformanceCounter(&Now);
+        if ((Now.QuadPart - Start.QuadPart) * 250 >= Frequency.QuadPart)
+            return FALSE;
+        SwitchToThread();
+    }
 }
 
 DWM_GPU_RESULT
