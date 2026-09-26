@@ -209,7 +209,6 @@
 @ stdcall -arch=arm64 KxSaveFloatingPointState(ptr) ntoskrnl.KxSaveFloatingPointState
 @ stdcall -arch=arm64 KxRestoreFloatingPointState(ptr) ntoskrnl.KxRestoreFloatingPointState
 
-@ stdcall -arch=arm64 VideoPortQuerySystemTime(ptr)
 
 ; ReactOS-private kernel/HAL bridge on RISC-V.
 @ stdcall -arch=riscv64 HalpRiscvClockInterrupt(ptr)
