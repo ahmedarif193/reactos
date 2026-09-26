@@ -128,7 +128,8 @@ elseif(ARCH STREQUAL "amd64")
         amd64/except.c
         amd64/unwind.c
         amd64/stubs.c
-        mem.c)
+        mem.c
+        unwind2.c)
 
     # RtlWalkFrameChain protects arbitrary stack reads with native SEH. Clang
     # must model asynchronous faults so those loads remain inside the scope.
@@ -154,7 +155,8 @@ elseif(ARCH STREQUAL "arm64")
         arm64/unwind.c
         byteswap.c
         dynfntbl.c
-        mem.c)
+        mem.c
+        unwind2.c)
 elseif(ARCH STREQUAL "riscv64")
     list(REMOVE_ITEM SOURCE slist.c)
     list(APPEND ASM_SOURCE
@@ -164,6 +166,7 @@ elseif(ARCH STREQUAL "riscv64")
     list(APPEND SOURCE
         bitmap64.c
         byteswap.c
+        dynfntbl.c
         mem.c
         riscv64/except.c
         riscv64/context.c

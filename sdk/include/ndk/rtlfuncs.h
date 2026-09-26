@@ -876,7 +876,6 @@ RtlVirtualUnwind(
     _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers
 );
 
-#if defined(_M_RISCV64)
 NTSYSAPI
 NTSTATUS
 NTAPI
@@ -895,7 +894,6 @@ RtlVirtualUnwind2(
     _Out_opt_ PEXCEPTION_ROUTINE* HandlerRoutine,
     _In_ ULONG UnwindFlags
 );
-#endif
 
 #endif // _WIN64
 
