@@ -155,6 +155,11 @@ struct Compositor
     ULONG BlurCall, Frame, PresentedBuffers;
     RECT Draw, PreviousCopy;
     ULONGLONG BlurUse, Filtered, Reused;
+    /* An opaque client layer hides everything the frame draws beneath it.
+     * Until that layer is drawn, canvas draws skip its rectangle. */
+    RECT Occluder;
+    ULONG OccluderIndex, WindowIndex;
+    BOOL OccluderActive, SceneCurrent;
 };
 
 Compositor State;
@@ -214,6 +219,29 @@ BOOL EnsureTexture(Texture &Image, LONG Width, LONG Height, BOOL RenderTarget,
     return Created;
 }
 
+/* Returns the parts of Clip outside the active occluder, at most four. */
+ULONG SplitAroundOccluder(const Texture &Target, const RECT &Clip, RECT Parts[4])
+{
+    RECT Hidden;
+    ULONG Count = 0;
+
+    if (!State.OccluderActive || &Target != &State.Canvas ||
+        !IntersectRect(&Hidden, &Clip, &State.Occluder))
+    {
+        Parts[0] = Clip;
+        return 1;
+    }
+    if (Hidden.top > Clip.top)
+        SetRect(&Parts[Count++], Clip.left, Clip.top, Clip.right, Hidden.top);
+    if (Hidden.bottom < Clip.bottom)
+        SetRect(&Parts[Count++], Clip.left, Hidden.bottom, Clip.right, Clip.bottom);
+    if (Hidden.left > Clip.left)
+        SetRect(&Parts[Count++], Clip.left, Hidden.top, Hidden.left, Hidden.bottom);
+    if (Hidden.right < Clip.right)
+        SetRect(&Parts[Count++], Hidden.right, Hidden.top, Clip.right, Hidden.bottom);
+    return Count;
+}
+
 BOOL Draw(Texture &Target,
           Shader Program,
           const RECT &Clip,
@@ -224,6 +252,10 @@ BOOL Draw(Texture &Target,
           BOOL Premultiplied = FALSE)
 {
     if (Clip.left >= Clip.right || Clip.top >= Clip.bottom)
+        return TRUE;
+    RECT Parts[4];
+    ULONG PartCount = SplitAroundOccluder(Target, Clip, Parts);
+    if (PartCount == 0)
         return TRUE;
     Data.TargetSize[0] = (FLOAT)Target.Width;
     Data.TargetSize[1] = (FLOAT)Target.Height;
@@ -261,7 +293,6 @@ BOOL Draw(Texture &Target,
     DPT_SCOPE DrawTrace = DptBegin(&g_DwmPresentTrace, DPT_SHARED_COMPOSE);
     D3D11_VIEWPORT Viewport = {0, 0, (FLOAT)Target.Width, (FLOAT)Target.Height, 0, 1};
     State.Context->RSSetViewports(1, &Viewport);
-    State.Context->RSSetScissorRects(1, &Clip);
     State.Context->RSSetState(State.Rasterizer);
     State.Context->OMSetRenderTargets(1, &Target.Target, NULL);
     State.Context->OMSetBlendState(Premultiplied ? State.PremultipliedBlend : Blend ? State.Blend : NULL, NULL, ~0u);
@@ -274,7 +305,11 @@ BOOL Draw(Texture &Target,
     State.Context->PSSetSamplers(0, 1, &State.Sampler);
     ID3D11ShaderResourceView *Views[2] = {Source, Backdrop};
     State.Context->PSSetShaderResources(0, ARRAYSIZE(Views), Views);
-    State.Context->Draw(4, 0);
+    for (ULONG Index = 0; Index < PartCount; ++Index)
+    {
+        State.Context->RSSetScissorRects(1, &Parts[Index]);
+        State.Context->Draw(4, 0);
+    }
     State.WorkPending = TRUE;
     UnbindTextures();
     DptEnd(&g_DwmPresentTrace, DrawTrace, TRUE, 0);
@@ -1250,6 +1285,7 @@ DwmD3dScene(const DWM_WIN *Windows, ULONG Count, const RECTL *BlurRects,
              ULONG BlurRectCount, LONG OriginX, LONG OriginY,
              BOOL RefreshBackdrop, ULONG BlurRadius, const RECT *ShadowMargins)
 {
+    State.SceneCurrent = FALSE;
     if (Count > DWM_MAX_WINDOWS || BlurRectCount > DWM_MAX_BLUR_RECTS)
     {
         State.Scene.Valid = FALSE;
@@ -1257,6 +1293,7 @@ DwmD3dScene(const DWM_WIN *Windows, ULONG Count, const RECTL *BlurRects,
     }
     DWM_GPU_SCENE_SPACE Space = {OriginX, OriginY, State.Width, State.Height, BlurRadius, *ShadowMargins};
     DwmGpuCacheScene(&State.Scene, Windows, Count, BlurRects, BlurRectCount, &Space, RefreshBackdrop, State.LowerUnchanged);
+    State.SceneCurrent = TRUE;
     PruneClientSources(Windows, Count);
     for (ULONG Index = 0; Index < ARRAYSIZE(State.Surfaces); ++Index)
     {
@@ -1282,6 +1319,9 @@ DwmD3dScene(const DWM_WIN *Windows, ULONG Count, const RECTL *BlurRects,
 void
 DwmD3dPrepareWindow(const DWM_WIN *Window, ULONG Index)
 {
+    State.WindowIndex = Index;
+    if (Index > State.OccluderIndex)
+        State.OccluderActive = FALSE;
     State.BlurOwner = DwmGpuCacheBlurOwner(Window);
     State.BlurOwnerValid = Window->AnimFlags == 0;
     State.BlurLowerUnchanged = Index < DWM_MAX_WINDOWS && State.LowerUnchanged[Index];
@@ -1295,6 +1335,76 @@ DwmD3dNeedsSurfacePixels(const DWM_WIN *Window)
         return FALSE;
     Surface *Slot = FindSurface(Window, FALSE);
     return !SurfaceCurrent(Slot, Window) || Slot->UpdateId != Window->BaseUpdateId;
+}
+
+/* A published client drawn without blending, glass, colour key or animation
+ * overwrites its whole client rectangle. */
+static BOOL
+OpaqueClientRect(const DWM_WIN *Window, RECT *Rect)
+{
+    DWM_GPU_WINDOW_GEOMETRY Owner, Client;
+
+    if (Window->DxGlobalShare == 0 || Window->DxUpdateId == 0 || Window->AnimFlags != 0 ||
+        ((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha < 255) ||
+        (Window->LayerFlags & (DWM_LWA_COLORKEY | DWM_WINDOW_PREMULTIPLIED_ALPHA |
+                               DWM_WINDOW_DX_PREMULTIPLIED_ALPHA)) ||
+        (Window->BlurFlags & DWM_BLUR_ENABLE) ||
+        (Window->BackdropType == DWM_BACKDROP_TRANSIENT && Window->BackdropOpacity < 255 &&
+         Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW) ||
+        !DwmGpuWindowGeometry(Window, State.Scene.Space.OriginX, State.Scene.Space.OriginY, &Owner) ||
+        !DwmGpuClientGeometry(Window, &Owner, &Client))
+    {
+        return FALSE;
+    }
+    return DwmGpuDamageBounds(Rect, State.Width, State.Height, Client.Left, Client.Top,
+                              Client.Left + Client.Width, Client.Top + Client.Height);
+}
+
+/* Pick the largest opaque client inside this frame's damage. Layers drawn
+ * beneath it within its rectangle would be overwritten, so they are skipped.
+ * Those pixels stay stale on the canvas, so no capture drawn before the
+ * client may read them: a lower window's capture must miss the rectangle,
+ * and the window's own material blur stays outside it by its radius. */
+static void
+SelectOccluder(void)
+{
+    LONGLONG Best = 0;
+
+    State.OccluderActive = FALSE;
+    State.OccluderIndex = ~0ul;
+    if (!State.SceneCurrent)
+        return;
+    for (ULONG Index = 0; Index < State.Scene.Count; ++Index)
+    {
+        const DWM_WIN *Window = &State.Scene.Windows[Index];
+        RECT Rect, Visible, Capture;
+        BOOL Clear = TRUE;
+
+        if (!OpaqueClientRect(Window, &Rect))
+            continue;
+        if (DwmGpuSceneWindowBounds(Window, &State.Scene.Space, TRUE, &Capture))
+        {
+            LONG Radius = (LONG)DwmGpuMaterialBlurRadius(Window) + 2;
+
+            InflateRect(&Rect, -Radius, -Radius);
+        }
+        if (!IntersectRect(&Visible, &Rect, &State.Draw))
+            continue;
+        for (ULONG Lower = 0; Clear && Lower < Index; ++Lower)
+        {
+            if (DwmGpuSceneWindowBounds(&State.Scene.Windows[Lower], &State.Scene.Space, TRUE, &Capture) &&
+                DwmGpuDamageIntersects(&Capture, &Visible))
+                Clear = FALSE;
+        }
+        LONGLONG Area = (LONGLONG)(Visible.right - Visible.left) * (Visible.bottom - Visible.top);
+        if (Clear && Area > Best)
+        {
+            Best = Area;
+            State.Occluder = Visible;
+            State.OccluderIndex = Index;
+        }
+    }
+    State.OccluderActive = Best != 0;
 }
 
 BOOL
@@ -1313,6 +1423,7 @@ DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdro
         State.Draw = Full;
     DwmGpuDamageExpandBlur(&State.Draw, State.Width, State.Height, State.Scene.Windows, State.Scene.Count,
         State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius, NULL);
+    SelectOccluder();
     Constants Data = {};
     SetRectangle(Data, 0, 0, State.Width, State.Height);
     SetColor(Data.Brush, BackdropColor);
@@ -1361,6 +1472,9 @@ DwmD3dWindow(const DWM_WIN *Window, const BYTE *Pixels, LONG OriginX, LONG Origi
         return FALSE;
     /* A client capture also sees its owner's newly drawn base pixels. */
     State.BlurOwnerValid = FALSE;
+    /* The occluding client itself, and everything above it, draws whole. */
+    if (State.WindowIndex >= State.OccluderIndex)
+        State.OccluderActive = FALSE;
     return Client == NULL || DrawLayer(Window, NULL, TRUE, OriginX, OriginY, Client);
 }
 
