@@ -101,6 +101,20 @@
  */
 #define RPI5_HVS_CURSOR_UPM_BASE        64u
 #define RPI5_HVS_CURSOR_UPM_HANDLE      1u
+#define RPI5_HVS_PTR0_UPM(Base, Handle) \
+    (((Base) << RPI5_HVS_PTR0_UPM_BASE_SHIFT) | ((Handle) << RPI5_HVS_PTR0_UPM_HANDLE_SHIFT))
+#define RPI5_HVS_PRIMARY_UPM            RPI5_HVS_PTR0_UPM(0u, 0u)
+#define RPI5_HVS_CURSOR_UPM \
+    RPI5_HVS_PTR0_UPM(RPI5_HVS_CURSOR_UPM_BASE, RPI5_HVS_CURSOR_UPM_HANDLE)
+/* Overlays follow the cursor, each with its own slot. Bases and sizes are in
+ * 256-byte UBM words; a slot holds the plane's two fetched lines. */
+#define RPI5_HVS_OVERLAY_UPM_WORDS      64u
+#define RPI5_HVS_OVERLAY_UPM(Index) \
+    RPI5_HVS_PTR0_UPM(128u + (Index) * RPI5_HVS_OVERLAY_UPM_WORDS, 2u + (Index))
+/* An overlay line pair, each line padded to 32 bytes plus one 32-byte word
+ * for an unaligned start, must fit in its slot. */
+#define RPI5_HVS_OVERLAY_PITCH_FITS(PitchBytes) \
+    (2u * ((((PitchBytes) + 31u) & ~31u) + 32u) <= RPI5_HVS_OVERLAY_UPM_WORDS * 256u)
 
 /* HVS pixel formats (CTL0 bits 4:0) and channel orders (CTL0 bits 14:13). */
 #define RPI5_HVS_PIXEL_FORMAT_RGBA8888  7
@@ -143,13 +157,15 @@
 /*
  * Emit one unscaled plane element into Dl. An opaque plane forces a fixed
  * opaque alpha (source alpha ignored); a non-opaque plane blends with the
- * per-pixel source alpha. Returns the dword count written (always
+ * per-pixel source alpha. Upm selects the plane's fetch buffer, one of the
+ * RPI5_HVS_*_UPM values. Returns the dword count written (always
  * RPI5_HVS_PLANE_DWORDS).
  */
 ULONG
 Rpi5HvsBuildPlane(
     _Out_writes_(RPI5_HVS_PLANE_DWORDS) PULONG Dl,
     _In_ BOOLEAN Opaque,
+    _In_ ULONG Upm,
     _In_ ULONGLONG PhysAddr,
     _In_ ULONG X,
     _In_ ULONG Y,
@@ -194,18 +210,6 @@ BOOLEAN
 Rpi5HvsQueryScanoutAddress(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _Out_ PPHYSICAL_ADDRESS Address);
-
-/* One plane of a multi-plane (MPO) composition, bottom-up layer order. */
-typedef struct _RPI5VC4_HVS_PLANE
-{
-    ULONGLONG Phys;
-    ULONG X;
-    ULONG Y;
-    ULONG Width;
-    ULONG Height;
-    ULONG PitchBytes;
-    BOOLEAN Opaque;                   /* FALSE = per-pixel premult alpha  */
-} RPI5VC4_HVS_PLANE, *PRPI5VC4_HVS_PLANE;
 
 /*
  * Compose Count planes (plus the hardware cursor on top) through a

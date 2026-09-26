@@ -122,6 +122,7 @@ ULONG
 Rpi5HvsBuildPlane(
     _Out_writes_(RPI5_HVS_PLANE_DWORDS) PULONG Dl,
     _In_ BOOLEAN Opaque,
+    _In_ ULONG Upm,
     _In_ ULONGLONG PhysAddr,
     _In_ ULONG X,
     _In_ ULONG Y,
@@ -169,12 +170,7 @@ Rpi5HvsBuildPlane(
     Dl[4] = RPI5_HVS_CONTEXT_INIT;
 
     /* Word 5 - PTR0: upper 8 bits of the 40-bit DMA address plus UPM slot. */
-    Dl[5] = (ULONG)((PhysAddr >> 32) & 0xff);
-    if (!Opaque)
-    {
-        Dl[5] |= (RPI5_HVS_CURSOR_UPM_BASE << RPI5_HVS_PTR0_UPM_BASE_SHIFT) |
-                 (RPI5_HVS_CURSOR_UPM_HANDLE << RPI5_HVS_PTR0_UPM_HANDLE_SHIFT);
-    }
+    Dl[5] = (ULONG)((PhysAddr >> 32) & 0xff) | Upm;
 
     /* Word 6 - PTR1: lower 32 bits of the address. */
     Dl[6] = (ULONG)(PhysAddr & 0xffffffff);
@@ -235,6 +231,7 @@ Rpi5HvsColdStartChannel(
 
     Count = Rpi5HvsBuildPlane(Plane,
                               TRUE,
+                              RPI5_HVS_PRIMARY_UPM,
                               Phys,
                               0,
                               0,
@@ -565,7 +562,7 @@ Rpi5HvsInstallScanoutLocked(
         }
     }
 
-    Count += Rpi5HvsBuildPlane(&Plane[Count], TRUE, Phys, 0, 0, Width, Height, Pitch,
+    Count += Rpi5HvsBuildPlane(&Plane[Count], TRUE, RPI5_HVS_PRIMARY_UPM, Phys, 0, 0, Width, Height, Pitch,
                                RPI5_HVS_PIXEL_FORMAT_RGBA8888, RPI5_HVS_PIXEL_ORDER_BGRA);
 
     if (DeviceExtension->CursorVisible)
@@ -585,6 +582,7 @@ Rpi5HvsInstallScanoutLocked(
         {
             CursorAt = Count;
             Count += Rpi5HvsBuildPlane(&Plane[Count], FALSE,
+                                       RPI5_HVS_CURSOR_UPM,
                                        CursorPhys,
                                        CursorX, CursorY,
                                        CursorWidth,
@@ -709,9 +707,7 @@ Rpi5HvsMoveCursorLocked(
            (CursorX & 0x1fff);
     Pos2 = (((Height - 1) & 0x1fff) << RPI5_HVS_POS2_LINES_SHIFT) |
            ((Width - 1) & 0x1fff);
-    Ptr0 = (RPI5_HVS_CURSOR_UPM_BASE << RPI5_HVS_PTR0_UPM_BASE_SHIFT) |
-           (RPI5_HVS_CURSOR_UPM_HANDLE << RPI5_HVS_PTR0_UPM_HANDLE_SHIFT) |
-           (ULONG)((CursorPhys >> 32) & 0xff);
+    Ptr0 = RPI5_HVS_CURSOR_UPM | (ULONG)((CursorPhys >> 32) & 0xff);
 
     WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 1], Pos0);
     WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 3], Pos2);
@@ -817,6 +813,7 @@ Rpi5HvsInstallPlaneListUnlocked(
 
         Used += Rpi5HvsBuildPlane(&List[Used],
                                   Planes[i].Opaque,
+                                  i == 0 ? RPI5_HVS_PRIMARY_UPM : RPI5_HVS_OVERLAY_UPM(i - 1),
                                   Planes[i].Phys,
                                   Planes[i].X, Planes[i].Y,
                                   Planes[i].Width, Planes[i].Height,
@@ -836,6 +833,7 @@ Rpi5HvsInstallPlaneListUnlocked(
         {
             CursorAt = Used;
             Used += Rpi5HvsBuildPlane(&List[Used], FALSE,
+                                      RPI5_HVS_CURSOR_UPM,
                                       CursorPhys,
                                       CursorX, CursorY,
                                       CursorWidth, CursorHeight,
@@ -930,7 +928,8 @@ Rpi5HvsFlipScanoutUnlocked(
     if (DeviceExtension->HvsFlipBroken)
         return FALSE;
 
-    if (Phys == CurrentPhys)
+    /* Leaving overlays reinstalls the primary alone, even at its address. */
+    if (Phys == CurrentPhys && !DeviceExtension->HvsOverlayActive)
         return TRUE;
 
     HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
@@ -986,6 +985,7 @@ Rpi5HvsFlipScanoutUnlocked(
     }
 
     DeviceExtension->FrameBufferPhysical = FrameBufferPhysical;
+    DeviceExtension->HvsOverlayActive = FALSE;
 
     if (DeviceExtension->HvsFlipFailCount != 0)
         DeviceExtension->HvsFlipFailCount = 0;

@@ -484,6 +484,21 @@ Rpi5Vc4FlipHvsScanout(
     return STATUS_SUCCESS;
 }
 
+/* Install a list of overlays on top of the base plane. Passive only. */
+static BOOLEAN
+Rpi5Vc4InstallOverlayPlanes(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_reads_(Count) CONST RPI5VC4_HVS_PLANE *Planes,
+    _In_ ULONG Count)
+{
+    if (!Rpi5HvsInstallPlaneList(DeviceExtension, Planes, Count))
+        return FALSE;
+    /* Presents and flips track the base layer from here. */
+    DeviceExtension->FrameBufferPhysical.QuadPart = (LONGLONG)Planes[0].Phys;
+    DeviceExtension->HvsOverlayActive = TRUE;
+    return TRUE;
+}
+
 /* Publish the latest armed MMIO flip. Only the newest address matters: a
  * superseded flip was never observed by dxgkrnl as scanned. */
 static VOID
@@ -502,10 +517,20 @@ Rpi5Vc4FlipWorker(
 
     for (;;)
     {
+        LONG PlaneCount;
+
         Target.QuadPart = InterlockedExchange64(
                               &DeviceExtension->FlipPendingAddress, 0);
+        PlaneCount = InterlockedExchange(&DeviceExtension->FlipPendingPlaneCount, 0);
         if (Target.QuadPart != 0 && !DeviceExtension->StopAccepting)
-            (VOID)Rpi5Vc4FlipHvsScanout(DeviceExtension, Target);
+        {
+            if (PlaneCount > 1)
+                (VOID)Rpi5Vc4InstallOverlayPlanes(DeviceExtension,
+                                                  DeviceExtension->FlipPendingPlanes,
+                                                  (ULONG)PlaneCount);
+            else
+                (VOID)Rpi5Vc4FlipHvsScanout(DeviceExtension, Target);
+        }
 
         /* A flip armed after the exchange saw the worker still claimed. */
         InterlockedExchange(&DeviceExtension->FlipWorkQueued, 0);
@@ -584,6 +609,7 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
         Status = Rpi5Vc4ValidateHvsTarget(DeviceExtension, Target);
         if (!NT_SUCCESS(Status))
             return Status;
+        InterlockedExchange(&DeviceExtension->FlipPendingPlaneCount, 0);
         InterlockedExchange64(&DeviceExtension->FlipPendingAddress,
                               Target.QuadPart);
         KeInsertQueueDpc(&DeviceExtension->FlipDpc, NULL, NULL);
@@ -816,6 +842,7 @@ Rpi5Vc4DdiCommitVidPn(
  * ====================================================================== */
 
 #define RPI5VC4_MPO_MAX_PLANES RPI5_HVS_MPO_MAX_PLANES
+C_ASSERT(RPI5VC4_MPO_MAX_PLANES == RPI5VC4_MMIO_FLIP_PLANES);
 
 static BOOLEAN
 Rpi5Vc4MpoPlaneSupported(
@@ -854,6 +881,35 @@ Rpi5Vc4MpoPlaneSupported(
     return TRUE;
 }
 
+/* A plane's allocation is the primary or a linear scanout surface, and its
+ * source rectangle lies inside it. A scanout surface is shown as an overlay,
+ * so its lines must also fit an overlay fetch slot. Returns the row size. */
+static BOOLEAN
+Rpi5Vc4MpoPlaneAllocation(
+    _In_opt_ HANDLE hAllocation,
+    _In_ CONST DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES *Attributes,
+    _Out_ PULONG Pitch)
+{
+    CONST RPI5VC4_ALLOCATION *Allocation = (CONST RPI5VC4_ALLOCATION *)hAllocation;
+
+    *Pitch = 0;
+    if (Allocation == NULL || Allocation->Magic != RPI5VC4_ALLOCATION_MAGIC ||
+        (!Allocation->Primary && !Allocation->Scanout) ||
+        Allocation->ResourceLayout != RPI5VC4_RESOURCE_LAYOUT_LINEAR ||
+        Allocation->Pitch == 0 ||
+        (!Allocation->Primary && !RPI5_HVS_OVERLAY_PITCH_FITS(Allocation->Pitch)) ||
+        Attributes->SrcRect.left < 0 || Attributes->SrcRect.top < 0 ||
+        Attributes->SrcRect.right <= Attributes->SrcRect.left ||
+        Attributes->SrcRect.bottom <= Attributes->SrcRect.top ||
+        (ULONG)Attributes->SrcRect.right > Allocation->Width ||
+        (ULONG)Attributes->SrcRect.bottom > Allocation->Height)
+    {
+        return FALSE;
+    }
+    *Pitch = Allocation->Pitch;
+    return TRUE;
+}
+
 NTSTATUS
 APIENTRY
 Rpi5Vc4DdiCheckMultiPlaneOverlaySupport(
@@ -881,7 +937,12 @@ Rpi5Vc4DdiCheckMultiPlaneOverlaySupport(
 
     for (i = 0; i < CheckMultiPlaneOverlaySupport->PlaneCount; i++)
     {
-        if (CheckMultiPlaneOverlaySupport->pPlanes[i].VidPnSourceId != 0 || !Rpi5Vc4MpoPlaneSupported(DeviceExtension, &CheckMultiPlaneOverlaySupport->pPlanes[i].PlaneAttributes))
+        ULONG Pitch;
+
+        if (CheckMultiPlaneOverlaySupport->pPlanes[i].VidPnSourceId != 0 ||
+            !Rpi5Vc4MpoPlaneSupported(DeviceExtension, &CheckMultiPlaneOverlaySupport->pPlanes[i].PlaneAttributes) ||
+            !Rpi5Vc4MpoPlaneAllocation(CheckMultiPlaneOverlaySupport->pPlanes[i].hAllocation,
+                                       &CheckMultiPlaneOverlaySupport->pPlanes[i].PlaneAttributes, &Pitch))
         {
             CheckMultiPlaneOverlaySupport->Supported = FALSE;
             CheckMultiPlaneOverlaySupport->ReturnInfo.FailingPlane = i;
@@ -936,6 +997,7 @@ Rpi5Vc4DdiSetVidPnSourceAddressWithMultiPlaneOverlay(
                 ULONGLONG SlabBase =
                     (ULONGLONG)DeviceExtension->VramPhysical.QuadPart;
                 ULONGLONG Phys;
+                ULONG Pitch = 0;
 
                 if (!Plane->Enabled || Plane->LayerIndex != Layer)
                     continue;
@@ -957,6 +1019,16 @@ Rpi5Vc4DdiSetVidPnSourceAddressWithMultiPlaneOverlay(
                 {
                     return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
                 }
+                /* An overlay scans out its source rectangle of a linear
+                 * surface; the base plane is the whole primary. */
+                if (Layer != 0)
+                {
+                    if (!Rpi5Vc4MpoPlaneAllocation(Plane->hAllocation,
+                                                   &Plane->PlaneAttributes, &Pitch))
+                        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+                    Phys += (ULONGLONG)Plane->PlaneAttributes.SrcRect.top * Pitch +
+                            (ULONGLONG)Plane->PlaneAttributes.SrcRect.left * sizeof(ULONG);
+                }
 
                 HvsPlanes[EnabledCount].Phys = Phys;
                 HvsPlanes[EnabledCount].X = Plane->PlaneAttributes.DstRect.left;
@@ -968,7 +1040,7 @@ Rpi5Vc4DdiSetVidPnSourceAddressWithMultiPlaneOverlay(
                     Plane->PlaneAttributes.DstRect.bottom -
                     Plane->PlaneAttributes.DstRect.top;
                 HvsPlanes[EnabledCount].PitchBytes =
-                    HvsPlanes[EnabledCount].Width * 4;
+                    Layer != 0 ? Pitch : HvsPlanes[EnabledCount].Width * 4;
                 /* Layer 0 is the opaque base; overlays alpha-blend. */
                 HvsPlanes[EnabledCount].Opaque =
                     (Layer == 0) ||
@@ -978,6 +1050,28 @@ Rpi5Vc4DdiSetVidPnSourceAddressWithMultiPlaneOverlay(
                 if (Layer == 0)
                     Base = Plane;
             }
+        }
+
+        /* An MMIO flip arrives under the synchronization lock. As for a
+         * single plane, arm it for the passive worker: the HVS switches lists
+         * at the next frame start, and the vsync source reports the base. */
+        if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+        {
+            NTSTATUS Status;
+
+            if (!DeviceExtension->MmioFlips || Base == NULL || EnabledCount == 0)
+                return STATUS_NOT_SUPPORTED;
+            Status = Rpi5Vc4ValidateHvsTarget(DeviceExtension, Base->AllocationAddress);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            HvsPlanes[0].PitchBytes = DeviceExtension->BytesPerScanLine;
+            RtlCopyMemory(DeviceExtension->FlipPendingPlanes, HvsPlanes,
+                          EnabledCount * sizeof(HvsPlanes[0]));
+            InterlockedExchange(&DeviceExtension->FlipPendingPlaneCount, (LONG)EnabledCount);
+            InterlockedExchange64(&DeviceExtension->FlipPendingAddress,
+                                  Base->AllocationAddress.QuadPart);
+            KeInsertQueueDpc(&DeviceExtension->FlipDpc, NULL, NULL);
+            return STATUS_SUCCESS;
         }
 
         if (EnabledCount == 0)
@@ -1006,12 +1100,11 @@ Rpi5Vc4DdiSetVidPnSourceAddressWithMultiPlaneOverlay(
             return STATUS_SUCCESS;
         }
 
-        if (!Rpi5HvsInstallPlaneList(DeviceExtension, HvsPlanes, EnabledCount))
+        if (Base == NULL)
+            return STATUS_NOT_SUPPORTED;
+        HvsPlanes[0].PitchBytes = DeviceExtension->BytesPerScanLine;
+        if (!Rpi5Vc4InstallOverlayPlanes(DeviceExtension, HvsPlanes, EnabledCount))
             return STATUS_UNSUCCESSFUL;
-
-        /* Presents and flips track the base layer from here. */
-        if (Base != NULL)
-            DeviceExtension->FrameBufferPhysical = Base->AllocationAddress;
     }
 
     return STATUS_SUCCESS;

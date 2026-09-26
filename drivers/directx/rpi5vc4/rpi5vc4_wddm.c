@@ -2313,6 +2313,7 @@ Rpi5Vc4DdiCreateAllocation(
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
     CONST RPI5VC4_RESOURCE_DATA *ResourceData;
     BOOLEAN PrimaryResource = FALSE;
+    BOOLEAN ScanoutResource = FALSE;
     BOOLEAN ResourceDataValid = FALSE;
     ULONG i;
 
@@ -2343,6 +2344,22 @@ Rpi5Vc4DdiCreateAllocation(
         ResourceDataValid = TRUE;
         PrimaryResource =
             (ResourceData->Flags & RPI5VC4_RESOURCE_FLAG_PRIMARY) != 0;
+        ScanoutResource =
+            (ResourceData->Flags & RPI5VC4_RESOURCE_FLAG_SCANOUT) != 0;
+        if (ScanoutResource &&
+            (PrimaryResource ||
+             ResourceData->Dimension != RPI5VC4_RESOURCE_DIMENSION_TEXTURE2D ||
+             ResourceData->Format != RPI5VC4_RESOURCE_DXGI_FORMAT_B8G8R8A8_UNORM ||
+             ResourceData->Layout != RPI5VC4_RESOURCE_LAYOUT_LINEAR ||
+             ResourceData->Width == 0 || ResourceData->Height == 0 ||
+             ResourceData->Depth != 1 || ResourceData->ArraySize != 1 ||
+             ResourceData->MipLevels != 1 || ResourceData->SampleCount != 1 ||
+             ResourceData->Width > MAXULONG / sizeof(ULONG) ||
+             ResourceData->Stride < ResourceData->Width * sizeof(ULONG) ||
+             (ResourceData->Stride & 63) != 0))
+        {
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
         if (PrimaryResource &&
             (ResourceData->PrimaryVidPnSourceId != 0 ||
              ResourceData->Dimension !=
@@ -2422,7 +2439,7 @@ Rpi5Vc4DdiCreateAllocation(
         LocalAllocation =
             (StandardAllocation &&
              PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE) ||
-            PrimaryResource;
+            PrimaryResource || ScanoutResource;
         SegmentId = LocalAllocation ? RPI5VC4_LOCAL_SEGMENT_ID :
                                       RPI5VC4_APERTURE_SEGMENT_ID;
 
@@ -2440,7 +2457,7 @@ Rpi5Vc4DdiCreateAllocation(
 
         ResourcePitch = 0;
         RequiredBytes = 0;
-        if (PrimaryResource)
+        if (PrimaryResource || ScanoutResource)
         {
             ResourcePitch = ResourceData->Stride != 0 ?
                                 ResourceData->Stride :
@@ -2503,6 +2520,7 @@ Rpi5Vc4DdiCreateAllocation(
             Allocation->Height = ResourceData->Height;
             Allocation->Pitch = ResourcePitch;
             Allocation->Primary = PrimaryResource;
+            Allocation->Scanout = ScanoutResource;
         }
 
         Info->Size = Size;
