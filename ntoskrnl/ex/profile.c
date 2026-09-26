@@ -104,14 +104,14 @@ NtCreateProfile(OUT PHANDLE ProfileHandle,
     NTSTATUS Status;
     ULONG Log2 = 0;
     ULONG_PTR Segment = 0;
-    ULONG BucketsRequired;
+    SIZE_T BucketsRequired;
     PAGED_CODE();
 
     /* Easy way out */
     if(!BufferSize) return STATUS_INVALID_PARAMETER_7;
 
     /* Check if this is a low-memory profile */
-    if ((!BucketSize) && (RangeBase < (PVOID)(0x10000)))
+    if ((sizeof(PVOID) == sizeof(ULONG)) && (!BucketSize) && (RangeBase < (PVOID)(0x10000)))
     {
         /* Validate size */
         if (BufferSize < sizeof(ULONG)) return STATUS_INVALID_PARAMETER_7;
@@ -138,7 +138,7 @@ NtCreateProfile(OUT PHANDLE ProfileHandle,
 
     /* Make sure that the buckets can map the range */
     BucketsRequired = RangeSize >> BucketSize;
-    if (RangeSize & ((1 << BucketSize) - 1))
+    if (RangeSize & (((SIZE_T)1 << BucketSize) - 1))
     {
         BucketsRequired++;
     }
