@@ -69,6 +69,9 @@ DxgkBeginKmdTransaction(
         WaitStatus = KeWaitForSingleObject(&Adapter->KmdTransactionMutex, Executive, KernelMode, FALSE, NULL);
         DptEnd(&g_DxgPresentTrace, Trace, TRUE, 0);
     }
+    /* A wait broken by process termination returns without the mutex. */
+    if (WaitStatus != STATUS_SUCCESS && WaitStatus != STATUS_ABANDONED)
+        return FALSE;
     if (!DxgkAcquireKmdCall(Adapter))
     {
         KeReleaseMutex(&Adapter->KmdTransactionMutex, FALSE);
