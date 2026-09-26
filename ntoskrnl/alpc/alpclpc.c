@@ -110,6 +110,7 @@ AlpcpBuildLegacyMessage(
     Message->State = State;
     AlpcpSetMessageSenderPort(Message, Port);
     if (Header->u2.s2.DataInfoOffset) Message->State |= ALPC_MSG_STATE_DATA_INFO;
+    else Message->PortMessage.u1.s1.TotalLength = (CSHORT)(sizeof(PORT_MESSAGE) + (USHORT)Header->u1.s1.DataLength);
 
     CopyLength = AlpcpLegacyCopyLength(Header);
     if (CopyLength)
