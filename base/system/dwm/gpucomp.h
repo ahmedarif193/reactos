@@ -97,6 +97,10 @@ BOOL DwmGpuComposeShadow(const RECT *Bounds, LONGLONG X, LONGLONG Y,
                           BOOL Active, ULONG WideOpacity, ULONG TightOpacity,
                           ULONG WindowAlpha);
 
+/* TRUE when the frame's copies of new client publications have completed on
+ * the GPU, so they may be acknowledged before the frame is presented. */
+BOOL DwmGpuComposeClientCopiesRetired(void);
+
 /* COMPLETE means presentation was accepted. DEFERRED means the output is
  * temporarily unavailable and GPU reads have completed, so client copies
  * may be acknowledged without counting the frame as presented. */

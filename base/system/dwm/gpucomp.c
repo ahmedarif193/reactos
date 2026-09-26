@@ -1513,6 +1513,12 @@ DwmGpuComposeEndMeasured(void)
     return Result;
 }
 
+BOOL
+DwmGpuComposeClientCopiesRetired(void)
+{
+    return DwmD3dIsActive() && DwmD3dClientCopiesRetired();
+}
+
 DWM_GPU_RESULT
 DwmGpuComposeEnd(void)
 {

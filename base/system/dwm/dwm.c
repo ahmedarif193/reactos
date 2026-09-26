@@ -3748,6 +3748,16 @@ DwmComposeLoop(HANDLE hStopEvent)
                     DwmStatCounter(&statComposeEnd);
                     if (FrameTrace.Epoch) TraceDrawEnd = DptNow();
 
+                    /* Presenting waits for scanout. Return the producers'
+                     * shared buffers once DWM's copies of them are done. */
+                    if (gpuFrame && DwmGpuComposeClientCopiesRetired())
+                    {
+                        AckTrace = DptBegin(&g_DwmPresentTrace, DPT_ACK);
+                        for (i = 0; i < hdr->Count; ++i)
+                            DwmDxAcknowledgeSurface(&wins[i]);
+                        DptEnd(&g_DwmPresentTrace, AckTrace, TRUE, 0);
+                    }
+
                     gpuResult = gpuFrame ? DwmGpuComposeEnd() : DwmGpuComposeAbort();
                     if (FrameTrace.Epoch) TracePresentEnd = DptNow();
                     if (gpuResult == DWM_GPU_COMPLETE ||
