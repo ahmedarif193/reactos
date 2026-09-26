@@ -643,9 +643,9 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
 #else
         0,
 #endif
-        sizeof(ULONG), // UCHAR
+        sizeof(UCHAR),
         0, /* No size for Set */
-        sizeof(ULONG),
+        sizeof(UCHAR),
 #if (NTDDI_VERSION >= NTDDI_VISTA)
         ICIF_QUERY |
 #endif
