@@ -45,6 +45,17 @@ NTHALAPI VOID NTAPI HalpRiscvCompletePlicInterrupt(_In_ ULONG Source);
 #define KiQueryEffectiveProcessorMhz(Number) (KiProcessorBlock[(Number)]->MHz)
 #define Ki386PerfEnd()
 
+/* Current page table root, as recorded in a crash dump header. */
+FORCEINLINE
+ULONG64
+KiReadDirectoryTableBase(VOID)
+{
+    ULONG64 Satp;
+
+    __asm__ __volatile__("csrr %0, satp" : "=r"(Satp));
+    return (Satp & RISCV64_LOADER_SATP_PPN_MASK) << PAGE_SHIFT;
+}
+
 /* A CONTEXT carries no sstatus; kernel code runs in the upper Sv39 half. */
 #define KiGetContextPreviousMode(Context) \
     (((LONG64)(Context)->Pc < 0) ? KernelMode : UserMode)

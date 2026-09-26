@@ -467,7 +467,7 @@ FdoStartDevice(
     PCM_PARTIAL_RESOURCE_DESCRIPTOR ResourceDescriptor;
     ULONG FoundBusNumber = FALSE;
     ULONG i;
-#if defined(_M_ARM64) || defined(_M_RISCV64)
+#ifdef HAL_PCI_HAS_MSI_SUPPORT_QUERY
     BOOLEAN HalMsiSupported;
     USHORT EffectiveSegment;
 #endif
@@ -586,11 +586,11 @@ FdoStartDevice(
     }
 
     /*
-     * On x86 ACPI platforms, pci.sys owns the MSI policy decision. On
-     * ARM64 and RISC-V, message interrupts additionally depend on platform
-     * interrupt controller routing, so ask HAL before exposing MSI/MSI-X resources.
+     * On x86 ACPI platforms, pci.sys owns the MSI policy decision. Where
+     * message interrupts additionally depend on platform interrupt
+     * controller routing, ask HAL before exposing MSI/MSI-X resources.
      */
-#if defined(_M_ARM64) || defined(_M_RISCV64)
+#ifdef HAL_PCI_HAS_MSI_SUPPORT_QUERY
     EffectiveSegment = DeviceExtension->BusSegment;
     HalMsiSupported = HalQueryPciMsiSupport(DeviceExtension->BusSegment,
                                             (UCHAR)DeviceExtension->BusNumber,

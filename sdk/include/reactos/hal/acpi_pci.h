@@ -15,6 +15,8 @@
 
 #if defined(_M_IX86) || defined(_M_AMD64)
 #include "x86/pcipolicy.h"
+#elif defined(_M_ARM64)
+#include "arm64/pcipolicy.h"
 #elif defined(_M_RISCV64)
 #include "riscv64/pcipolicy.h"
 #endif
@@ -176,6 +178,7 @@ HalIsPciMsiSupported(
     VOID
     );
 
+#ifdef HAL_PCI_HAS_MSI_SUPPORT_QUERY
 NTHALAPI
 BOOLEAN
 NTAPI
@@ -188,6 +191,7 @@ HalQueryPciMsiSupport(
     _Out_opt_ PUSHORT EffectiveSegment,
     _Out_opt_ PULONG OscMaskedControls
     );
+#endif
 
 #ifdef HAL_PCI_HAS_ROUTED_INTERRUPT_QUERY
 NTHALAPI

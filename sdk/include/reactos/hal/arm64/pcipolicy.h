@@ -5,7 +5,5 @@
 /* PCI routing policy supplied by this platform HAL. */
 #pragma once
 
-#define HAL_PCI_HAS_ROUTED_INTERRUPT_QUERY
 /* Message interrupts depend on the interrupt controller: pci.sys asks the HAL. */
 #define HAL_PCI_HAS_MSI_SUPPORT_QUERY
-#define HAL_PCI_FIRMWARE_ROUTING_AUTHORITATIVE

@@ -347,7 +347,7 @@ done:
     return STATUS_SUCCESS;
 }
 
-#endif /* _WIN64 && !_M_RISCV64 */
+#endif /* WOW64_SUPPORTED */
 
 #if defined(_WIN64)
 
