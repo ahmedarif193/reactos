@@ -336,12 +336,9 @@ static
 VOID
 SpiUpdatePerUserSystemParameters(VOID)
 {
-    static LOGFONTW lf1 = {-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE,
-                           FALSE, ANSI_CHARSET, 0, 0, DEFAULT_QUALITY,
-                           VARIABLE_PITCH | FF_SWISS, L"MS Sans Serif"};
-    static LOGFONTW lf2 = {-11, 0, 0, 0, FW_BOLD, FALSE, FALSE,
-                           FALSE, ANSI_CHARSET, 0, 0, DEFAULT_QUALITY,
-                           VARIABLE_PITCH | FF_SWISS, L"MS Sans Serif"};
+    static LOGFONTW lf1 = {-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+                           FALSE, DEFAULT_CHARSET, 0, 0, DEFAULT_QUALITY,
+                           0, L"Segoe UI"};
 #ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
     HBITMAP EarlyWallpaper = NULL;
     LONG EarlyWallpaperWidth = 0;
@@ -426,7 +423,7 @@ SpiUpdatePerUserSystemParameters(VOID)
 #if (WINVER >= 0x0600)
     gspv.ncm.iPaddedBorderWidth = SpiLoadMetric(L"PaddedBorderWidth", 0);
 #endif
-    SpiLoadFont(&gspv.ncm.lfCaptionFont, L"CaptionFont", &lf2);
+    SpiLoadFont(&gspv.ncm.lfCaptionFont, L"CaptionFont", &lf1);
     SpiLoadFont(&gspv.ncm.lfSmCaptionFont, L"SmCaptionFont", &lf1);
     SpiLoadFont(&gspv.ncm.lfMenuFont, L"MenuFont", &lf1);
     SpiLoadFont(&gspv.ncm.lfStatusFont, L"StatusFont", &lf1);
