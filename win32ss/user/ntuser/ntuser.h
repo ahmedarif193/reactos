@@ -52,6 +52,7 @@ extern ATOM AtomDwmBackdropRegion;
 extern ATOM AtomDwmContentBackdrop;
 extern ATOM AtomDwmBackdropNcExtend;
 extern ATOM AtomDwmBackdropNcExtendLeft;
+extern ATOM AtomDwmSheetOfGlass;
 extern ATOM AtomDwmCornerRadius;
 extern ATOM AtomDwmTransition;
 extern ATOM AtomDwmTransitionFromLT;

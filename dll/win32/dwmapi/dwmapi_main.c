@@ -334,11 +334,13 @@ HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
     {
         top = DWM_MAX_NC_EXTEND;
         left = 0;
+        SetPropW(hwnd, DWM_PROP_SHEET_OF_GLASS, (HANDLE)1);
     }
     else
     {
         top = min(margins->cyTopHeight, (LONG)DWM_MAX_NC_EXTEND);
         left = min(margins->cxLeftWidth, (LONG)DWM_MAX_NC_EXTEND);
+        RemovePropW(hwnd, DWM_PROP_SHEET_OF_GLASS);
     }
     if (top > 0)
         SetPropW(hwnd, DWM_PROP_BACKDROP_NC_EXTEND, (HANDLE)(ULONG_PTR)(top + 1));
