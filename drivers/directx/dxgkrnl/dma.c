@@ -718,6 +718,7 @@ DxgkpAdmitPresentOverlays(
         if (!NT_SUCCESS(Status))
             return Status;
         Entry->OverlayCount = Index + 1;
+        Entry->Overlays[Index].hAllocation = Overlay->hAllocation;
         Entry->Overlays[Index].LayerIndex = Overlay->LayerIndex;
         Entry->Overlays[Index].SrcRect = Overlay->SrcRect;
         Entry->Overlays[Index].DstRect = Overlay->DstRect;

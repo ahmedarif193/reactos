@@ -115,6 +115,7 @@ typedef struct _DXGKRNL_SHARED_SURFACE_SNAPSHOT
 typedef struct _DXGKRNL_PRESENT_OVERLAY
 {
     PDXGKVMM_ALLOCATION             Allocation;
+    D3DKMT_HANDLE                   hAllocation;    /* as the compositor named it */
     UINT                            LayerIndex;
     RECT                            SrcRect;
     RECT                            DstRect;
@@ -284,9 +285,11 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
     KEVENT                          MmioVSyncEvent;
     PDXGKVMM_ALLOCATION             MmioCurrentAllocation;
     PDXGKVMM_ALLOCATION             MmioPendingAllocation;
-    /* Pinned overlay allocations of the scanned and the armed flip. */
-    PDXGKVMM_ALLOCATION             MmioCurrentOverlays[RXGK_PRESENT_MAX_OVERLAYS];
-    PDXGKVMM_ALLOCATION             MmioPendingOverlays[RXGK_PRESENT_MAX_OVERLAYS];
+    D3DKMT_HANDLE                   MmioCurrentHandle;
+    D3DKMT_HANDLE                   MmioPendingHandle;
+    /* Pinned overlay planes of the scanned and the armed flip. */
+    DXGKRNL_PRESENT_OVERLAY         MmioCurrentOverlays[RXGK_PRESENT_MAX_OVERLAYS];
+    DXGKRNL_PRESENT_OVERLAY         MmioPendingOverlays[RXGK_PRESENT_MAX_OVERLAYS];
     NTSTATUS                        MmioFailureStatus;
     LONG64                          MmioLastFlipSequence;
     /* Ordered MMIO flips wait for scanout on this drainer, never on the

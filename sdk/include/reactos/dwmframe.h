@@ -110,8 +110,10 @@ typedef struct _CDD_PRESENT_SOURCE
 
 /* Kernel-only CDD readback. Destination is a caller-owned kernel bitmap,
  * valid for the synchronous request. Flags is zero on input; HAS_IMAGE on
- * output means the composed GPU desktop was copied. Without a compositor,
- * CDD continues reading its ordinary GDI drawing surface. */
+ * output means the composed GPU desktop was copied into Region, the part
+ * of the desktop the caller reads; the rest of Destination is untouched.
+ * Without a compositor, CDD continues reading its ordinary GDI drawing
+ * surface. */
 #define DXGK_DESKTOP_CAPTURE_HAS_IMAGE 0x00000001u
 typedef struct _DXGK_DESKTOP_CAPTURE
 {
@@ -122,6 +124,7 @@ typedef struct _DXGK_DESKTOP_CAPTURE
     ULONG Pitch;
     ULONG BufferSize;
     ULONGLONG Destination;
+    RECTL Region;
 } DXGK_DESKTOP_CAPTURE, *PDXGK_DESKTOP_CAPTURE;
 
 typedef struct _DXGK_PRESENT_DIRTY_RECTS_INPUT

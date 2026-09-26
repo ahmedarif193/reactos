@@ -1779,6 +1779,42 @@ DxgkpWaitForCddCaptureIdle(_In_ PDXGKRNL_DEVICE Device)
     return Status == STATUS_TIMEOUT ? STATUS_IO_TIMEOUT : Status;
 }
 
+/* Copies Entry's source into the capture staging allocation on the CDD
+ * device and waits until the copy has retired. */
+static NTSTATUS
+DxgkpCaptureBlit(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry)
+{
+    PDXGKRNL_DEVICE_WORK PresentWork = NULL;
+    NTSTATUS Status;
+
+    Status = DxgkVidMmWaitForTrackedSubmissions(Entry->SourceAllocation, FALSE);
+    if (NT_SUCCESS(Status))
+        Status = DxgkDeviceWorkCreate(Entry->Device, &Entry->DeviceWork);
+    if (NT_SUCCESS(Status))
+        Status = DxgkDeviceWorkActivate(Entry->DeviceWork);
+    if (NT_SUCCESS(Status))
+    {
+        PresentWork = Entry->DeviceWork;
+        DxgkDeviceWorkReference(PresentWork);
+        Status = DxgkpExecuteFullPresent(Adapter, Entry);
+        DxgkDeviceCompletePresent(Entry->Device, Entry->DeviceWork, Status);
+    }
+    if (NT_SUCCESS(Status))
+        Status = DxgkpWaitForCddCaptureIdle(Entry->Device);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DxgkDeviceWorkGetStatus(PresentWork);
+        if (Status == STATUS_PENDING)
+            Status = STATUS_DEVICE_NOT_READY;
+    }
+    DxgkDeviceWorkDestroy(Entry->DeviceWork);
+    Entry->DeviceWork = NULL;
+    DxgkDeviceWorkDereference(PresentWork);
+    return Status;
+}
+
 NTSTATUS
 DxgkpCaptureDesktop(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -1789,25 +1825,29 @@ DxgkpCaptureDesktop(
     PDXGKRNL_CDD_CAPTURE Cached;
     PDXGKRNL_PRESENT_QUEUE Queue = NULL;
     PDXGKVMM_ALLOCATION Staging = NULL;
-    PDXGKRNL_DEVICE_WORK PresentWork = NULL;
     D3DKMT_DESTROYDEVICE DestroyDevice;
     KAPC_STATE ApcState;
-    BOOLEAN Attached = FALSE, CddLocked = FALSE;
+    BOOLEAN Attached = FALSE, CddLocked = FALSE, MmioLocked = FALSE;
     BOOLEAN Pinned = FALSE, DestroyCdd = FALSE;
     PVOID CpuAddress;
     ULONG Row;
-    ULONGLONG RequiredBytes, Generation;
+    ULONGLONG RequiredBytes, RegionOffset, RegionBytes, Generation;
     NTSTATUS Status;
 
     PAGED_CODE();
-    C_ASSERT(sizeof(DXGK_DESKTOP_CAPTURE) == 32);
+    C_ASSERT(sizeof(DXGK_DESKTOP_CAPTURE) == 48);
     if (Adapter == NULL || Capture == NULL ||
         Capture->StructSize != sizeof(*Capture) || Capture->Flags != 0 ||
         Capture->Width == 0 || Capture->Height == 0 ||
         Capture->Width > MAXLONG / sizeof(ULONG) || Capture->Height > MAXLONG ||
         Capture->Pitch < Capture->Width * sizeof(ULONG) ||
         Capture->Destination < (ULONG_PTR)MmSystemRangeStart ||
-        Capture->Destination > MAXULONG_PTR)
+        Capture->Destination > MAXULONG_PTR ||
+        Capture->Region.left < 0 || Capture->Region.top < 0 ||
+        Capture->Region.left >= Capture->Region.right ||
+        Capture->Region.top >= Capture->Region.bottom ||
+        (ULONG)Capture->Region.right > Capture->Width ||
+        (ULONG)Capture->Region.bottom > Capture->Height)
         return STATUS_INVALID_PARAMETER;
     RequiredBytes = (ULONGLONG)(Capture->Height - 1) * Capture->Pitch +
                     (ULONGLONG)Capture->Width * sizeof(ULONG);
@@ -1918,42 +1958,76 @@ DxgkpCaptureDesktop(
 
     /* Serialize against admission of another desktop blit until this copy
      * retires. Retirement itself never takes ExecutionMutex. CddPresentMutex
-     * also excludes CPU/GDI presents on the same persistent device. */
+     * also excludes CPU/GDI presents on the same persistent device. Holding
+     * MmioPresentMutex keeps the scanned planes from changing mid-copy. */
     Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[SharedSurface.VidPnSourceId];
     KeWaitForSingleObject(&Queue->ExecutionMutex, Executive, KernelMode, FALSE, NULL);
-    Status = DxgkVidMmWaitForTrackedSubmissions(SharedSurface.PrimaryAllocation, FALSE);
-    if (!NT_SUCCESS(Status))
-        goto Cleanup;
+    KeWaitForSingleObject(&Queue->MmioPresentMutex, Executive, KernelMode, FALSE, NULL);
+    MmioLocked = TRUE;
     Entry.Type = DxgkPresentTypeBlt;
-    Entry.hSource = (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface.PrimaryHandle;
     Entry.hDestination = (D3DKMT_HANDLE)Cached->Surface.AllocationHandle;
-    Entry.SourceAllocation = SharedSurface.PrimaryAllocation;
     Entry.DestinationAllocation = Staging;
-    Entry.SourceIsSharedPrimary = TRUE;
     Entry.CddPresent = TRUE;
     Entry.SourceGpuOnly = TRUE;
     Entry.SharedSurface = SharedSurface;
     Entry.VidPnSourceId = SharedSurface.VidPnSourceId;
-    Entry.SrcRect.right = Capture->Width;
-    Entry.SrcRect.bottom = Capture->Height;
+    Entry.SrcRect.left = Capture->Region.left;
+    Entry.SrcRect.top = Capture->Region.top;
+    Entry.SrcRect.right = Capture->Region.right;
+    Entry.SrcRect.bottom = Capture->Region.bottom;
     Entry.DstRect = Entry.SrcRect;
-    Status = DxgkDeviceWorkCreate(Entry.Device, &Entry.DeviceWork);
-    if (NT_SUCCESS(Status))
-        Status = DxgkDeviceWorkActivate(Entry.DeviceWork);
-    if (NT_SUCCESS(Status))
+    if (Queue->MmioCurrentAllocation != NULL && Queue->MmioCurrentHandle != 0)
     {
-        PresentWork = Entry.DeviceWork;
-        DxgkDeviceWorkReference(PresentWork);
-        Status = DxgkpExecuteFullPresent(Adapter, &Entry);
-        DxgkDeviceCompletePresent(Entry.Device, Entry.DeviceWork, Status);
+        /* A flip-model compositor scans out its own buffer with overlay
+         * planes above it; the shared primary is not what is displayed. */
+        PDXGKVMM_ALLOCATION PrimaryBinding = Entry.SourceOpenBindingReference;
+        HANDLE PrimaryBindingHandle = Entry.SourceOpenBindingHandle;
+        ULONG Overlay;
+
+        Entry.SourceOpenBindingReference = NULL;
+        Entry.SourceOpenBindingHandle = NULL;
+        Entry.hSource = Queue->MmioCurrentHandle;
+        Entry.SourceAllocation = Queue->MmioCurrentAllocation;
+        Status = DxgkpCaptureBlit(Adapter, &Entry);
+        for (Overlay = 0; NT_SUCCESS(Status) && Overlay < RXGK_PRESENT_MAX_OVERLAYS; ++Overlay)
+        {
+            const DXGKRNL_PRESENT_OVERLAY *Plane = &Queue->MmioCurrentOverlays[Overlay];
+            RECT Visible;
+
+            if (Plane->Allocation == NULL)
+                continue;
+            Visible.left = max(Plane->DstRect.left, Capture->Region.left);
+            Visible.top = max(Plane->DstRect.top, Capture->Region.top);
+            Visible.right = min(Plane->DstRect.right, Capture->Region.right);
+            Visible.bottom = min(Plane->DstRect.bottom, Capture->Region.bottom);
+            if (Visible.left >= Visible.right || Visible.top >= Visible.bottom)
+                continue;
+            Entry.hSource = Plane->hAllocation;
+            Entry.SourceAllocation = Plane->Allocation;
+            Entry.SrcRect = Plane->SrcRect;
+            Entry.DstRect = Plane->DstRect;
+            if (Plane->SrcRect.right - Plane->SrcRect.left == Plane->DstRect.right - Plane->DstRect.left &&
+                Plane->SrcRect.bottom - Plane->SrcRect.top == Plane->DstRect.bottom - Plane->DstRect.top)
+            {
+                /* An unscaled plane copies only the part that is read. */
+                Entry.SrcRect.left += Visible.left - Plane->DstRect.left;
+                Entry.SrcRect.top += Visible.top - Plane->DstRect.top;
+                Entry.SrcRect.right -= Plane->DstRect.right - Visible.right;
+                Entry.SrcRect.bottom -= Plane->DstRect.bottom - Visible.bottom;
+                Entry.DstRect = Visible;
+            }
+            Status = DxgkpCaptureBlit(Adapter, &Entry);
+        }
+        Entry.SourceAllocation = NULL;
+        Entry.SourceOpenBindingReference = PrimaryBinding;
+        Entry.SourceOpenBindingHandle = PrimaryBindingHandle;
     }
-    if (NT_SUCCESS(Status))
-        Status = DxgkpWaitForCddCaptureIdle(Entry.Device);
-    if (NT_SUCCESS(Status))
+    else
     {
-        Status = DxgkDeviceWorkGetStatus(PresentWork);
-        if (Status == STATUS_PENDING)
-            Status = STATUS_DEVICE_NOT_READY;
+        Entry.hSource = (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface.PrimaryHandle;
+        Entry.SourceAllocation = SharedSurface.PrimaryAllocation;
+        Entry.SourceIsSharedPrimary = TRUE;
+        Status = DxgkpCaptureBlit(Adapter, &Entry);
     }
     if (!NT_SUCCESS(Status))
         goto Cleanup;
@@ -1965,7 +2039,12 @@ DxgkpCaptureDesktop(
         Status = STATUS_INVALID_BUFFER_SIZE;
         goto Cleanup;
     }
-    Status = DxgkVidMmInvalidateReferencedAllocationCache(Staging, 0, RequiredBytes);
+    RegionOffset = (ULONGLONG)Capture->Region.top * Cached->Surface.Pitch +
+                   (ULONGLONG)Capture->Region.left * sizeof(ULONG);
+    RegionBytes = (ULONGLONG)(Capture->Region.bottom - Capture->Region.top - 1) *
+                      Cached->Surface.Pitch +
+                  (ULONGLONG)(Capture->Region.right - Capture->Region.left) * sizeof(ULONG);
+    Status = DxgkVidMmInvalidateReferencedAllocationCache(Staging, RegionOffset, RegionBytes);
     if (NT_SUCCESS(Status))
         Status = DxgkVidMmMapAllocationCpu(Staging, &CpuAddress);
     if (!NT_SUCCESS(Status))
@@ -1975,19 +2054,21 @@ DxgkpCaptureDesktop(
         Status = STATUS_RETRY;
         goto Cleanup;
     }
-    for (Row = 0; Row < Capture->Height; ++Row)
+    for (Row = (ULONG)Capture->Region.top; Row < (ULONG)Capture->Region.bottom; ++Row)
     {
-        RtlCopyMemory((PUCHAR)(ULONG_PTR)Capture->Destination + (SIZE_T)Row * Capture->Pitch,
-                      (PUCHAR)CpuAddress + (SIZE_T)Row * Cached->Surface.Pitch,
-                      Capture->Width * sizeof(ULONG));
+        SIZE_T Column = (SIZE_T)Capture->Region.left * sizeof(ULONG);
+
+        RtlCopyMemory((PUCHAR)(ULONG_PTR)Capture->Destination + (SIZE_T)Row * Capture->Pitch + Column,
+                      (PUCHAR)CpuAddress + (SIZE_T)Row * Cached->Surface.Pitch + Column,
+                      (SIZE_T)(Capture->Region.right - Capture->Region.left) * sizeof(ULONG));
     }
     Capture->Flags = DXGK_DESKTOP_CAPTURE_HAS_IMAGE;
 
 Cleanup:
+    if (MmioLocked)
+        KeReleaseMutex(&Queue->MmioPresentMutex, FALSE);
     if (Queue != NULL)
         KeReleaseMutex(&Queue->ExecutionMutex, FALSE);
-    DxgkDeviceWorkDestroy(Entry.DeviceWork);
-    DxgkDeviceWorkDereference(PresentWork);
     if (Entry.DestinationOpenBindingReference != NULL)
         DxgkVidMmDereferenceLogicalAllocation(Entry.DestinationOpenBindingReference);
     if (Entry.SourceOpenBindingReference != NULL)
@@ -2257,8 +2338,8 @@ DxgkPresentRetireScanout(
     {
         PDXGKVMM_ALLOCATION Current;
         PDXGKVMM_ALLOCATION Pending;
-        PDXGKVMM_ALLOCATION CurrentOverlays[RXGK_PRESENT_MAX_OVERLAYS];
-        PDXGKVMM_ALLOCATION PendingOverlays[RXGK_PRESENT_MAX_OVERLAYS];
+        DXGKRNL_PRESENT_OVERLAY CurrentOverlays[RXGK_PRESENT_MAX_OVERLAYS];
+        DXGKRNL_PRESENT_OVERLAY PendingOverlays[RXGK_PRESENT_MAX_OVERLAYS];
         ULONG Overlay;
 
         KeWaitForSingleObject(&Queues[Index].MmioPresentMutex, Executive, KernelMode, FALSE, NULL);
@@ -2268,6 +2349,8 @@ DxgkPresentRetireScanout(
         RtlCopyMemory(PendingOverlays, Queues[Index].MmioPendingOverlays, sizeof(PendingOverlays));
         Queues[Index].MmioCurrentAllocation = NULL;
         Queues[Index].MmioPendingAllocation = NULL;
+        Queues[Index].MmioCurrentHandle = 0;
+        Queues[Index].MmioPendingHandle = 0;
         RtlZeroMemory(Queues[Index].MmioCurrentOverlays, sizeof(Queues[Index].MmioCurrentOverlays));
         RtlZeroMemory(Queues[Index].MmioPendingOverlays, sizeof(Queues[Index].MmioPendingOverlays));
         Queues[Index].MmioFailureStatus = STATUS_SUCCESS;
@@ -2277,8 +2360,8 @@ DxgkPresentRetireScanout(
         DxgkpReleaseScanoutAllocation(Current);
         for (Overlay = 0; Overlay < RXGK_PRESENT_MAX_OVERLAYS; ++Overlay)
         {
-            DxgkpReleaseScanoutAllocation(PendingOverlays[Overlay]);
-            DxgkpReleaseScanoutAllocation(CurrentOverlays[Overlay]);
+            DxgkpReleaseScanoutAllocation(PendingOverlays[Overlay].Allocation);
+            DxgkpReleaseScanoutAllocation(CurrentOverlays[Overlay].Allocation);
         }
     }
 }
@@ -4066,11 +4149,12 @@ DxgkpExecuteMmioFlip(
     /* Keep the producer thread across Present and SetSourceAddress. Drivers
      * can associate a preceding UMD escape/render dependency with this call. */
     Queue->MmioPendingAllocation = Allocation;
+    Queue->MmioPendingHandle = Entry->hSource;
     Entry->SourceAllocation = NULL;
     PinOwned = FALSE;
     for (OverlayIndex = 0; OverlayIndex < Entry->OverlayCount; ++OverlayIndex)
     {
-        Queue->MmioPendingOverlays[OverlayIndex] = Entry->Overlays[OverlayIndex].Allocation;
+        Queue->MmioPendingOverlays[OverlayIndex] = Entry->Overlays[OverlayIndex];
         Entry->Overlays[OverlayIndex].Allocation = NULL;
         OverlayPinned[OverlayIndex] = FALSE;
     }
@@ -4112,7 +4196,7 @@ DxgkpExecuteMmioFlip(
         OverlayCall.Planes[0].PlaneAttributes.Rotation = D3DDDI_ROTATION_IDENTITY;
         for (OverlayIndex = 0; OverlayIndex < Entry->OverlayCount; ++OverlayIndex)
         {
-            PDXGKVMM_ALLOCATION Overlay = Queue->MmioPendingOverlays[OverlayIndex];
+            PDXGKVMM_ALLOCATION Overlay = Queue->MmioPendingOverlays[OverlayIndex].Allocation;
             DXGK_MULTIPLANE_OVERLAY_PLANE *Plane = &OverlayCall.Planes[OverlayIndex + 1];
 
             Plane->LayerIndex = Entry->Overlays[OverlayIndex].LayerIndex;
@@ -4144,18 +4228,20 @@ DxgkpExecuteMmioFlip(
     if (NT_SUCCESS(Status))
     {
         PDXGKVMM_ALLOCATION Displaced = Queue->MmioCurrentAllocation;
-        PDXGKVMM_ALLOCATION DisplacedOverlays[RXGK_PRESENT_MAX_OVERLAYS];
+        DXGKRNL_PRESENT_OVERLAY DisplacedOverlays[RXGK_PRESENT_MAX_OVERLAYS];
 
         /* The latched list shows exactly this flip's planes. */
         RtlCopyMemory(DisplacedOverlays, Queue->MmioCurrentOverlays, sizeof(DisplacedOverlays));
         RtlCopyMemory(Queue->MmioCurrentOverlays, Queue->MmioPendingOverlays, sizeof(DisplacedOverlays));
         RtlZeroMemory(Queue->MmioPendingOverlays, sizeof(Queue->MmioPendingOverlays));
         Queue->MmioCurrentAllocation = Queue->MmioPendingAllocation;
+        Queue->MmioCurrentHandle = Queue->MmioPendingHandle;
         Queue->MmioPendingAllocation = NULL;
+        Queue->MmioPendingHandle = 0;
         Queue->MmioLastFlipSequence = ObservedSequence;
         DxgkpReleaseScanoutAllocation(Displaced);
         for (OverlayIndex = 0; OverlayIndex < RXGK_PRESENT_MAX_OVERLAYS; ++OverlayIndex)
-            DxgkpReleaseScanoutAllocation(DisplacedOverlays[OverlayIndex]);
+            DxgkpReleaseScanoutAllocation(DisplacedOverlays[OverlayIndex].Allocation);
         InterlockedIncrement(&Queue->PresentedFrameCount);
     }
 
