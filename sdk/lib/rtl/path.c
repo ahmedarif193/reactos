@@ -2676,7 +2676,7 @@ RtlDosSearchPath_Ustr(IN ULONG Flags,
     if (PathType == RtlPathTypeRelative)
     {
         /* Does the caller want SxS? */
-        if (Flags & 1)
+        if ((Flags & 1) && (FileNameString->Length))
         {
             /* Apply the SxS magic */
             FullIsolatedPath = NULL;
