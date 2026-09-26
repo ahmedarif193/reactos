@@ -137,6 +137,8 @@ HKLM,"SOFTWARE\Clients\StartMenuInternet","",0x00000000,"IEXPLORE.EXE"
 HKLM,"SOFTWARE\Clients\StartMenuInternet\IEXPLORE.EXE","",0x00000000,"Internet Explorer"
 HKLM,"SOFTWARE\Clients\StartMenuInternet\IEXPLORE.EXE\DefaultIcon","",0x00020000,"%programfiles%\Internet Explorer\iexplore.exe,-7"
 HKLM,"SOFTWARE\Clients\StartMenuInternet\IEXPLORE.EXE\shell\open\command","",0x00020000,"%programfiles%\Internet Explorer\iexplore.exe"
+HKLM,"SOFTWARE\Policies",,0x00000012
+HKLM,"SOFTWARE\RegisteredApplications",,0x00000012
 
 ; CTF
 HKLM,"SOFTWARE\Microsoft\CTF\SystemShared",,0x00000012
