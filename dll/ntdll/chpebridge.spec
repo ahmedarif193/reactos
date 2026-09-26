@@ -249,6 +249,7 @@
 1920 cdecl qsort(ptr long long ptr) ChpeQsort
 1857 cdecl _setjmp(ptr ptr) ChpeSetJmpX64
 1858 cdecl _setjmpex(ptr ptr) ChpeSetJmpX64
+1912 cdecl longjmp(ptr long) ChpeLongJmp
 95 stdcall ExpInterlockedPopEntrySListEnd() ChpeUnsupportedKernelEntry
 97 stdcall ExpInterlockedPopEntrySListFault() ChpeUnsupportedKernelEntry
 99 stdcall ExpInterlockedPopEntrySListResume() ChpeUnsupportedKernelEntry
@@ -1928,7 +1929,6 @@
 1909 cdecl isxdigit(long) ChpeAutoisxdigit
 1910 cdecl labs(long) ChpeAutolabs
 1911 cdecl log(double) ChpeAutolog
-1912 cdecl longjmp(ptr) ChpeAutolongjmp
 1913 cdecl mbstowcs(ptr str long) ChpeAutombstowcs
 1914 cdecl memchr(ptr long long) ChpeAutomemchr
 1915 cdecl memcmp(ptr ptr long) ChpeAutomemcmp

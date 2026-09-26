@@ -2880,6 +2880,36 @@ ChpeRtlUnwind(PVOID TargetFrame, PVOID TargetIp, PEXCEPTION_RECORD ExceptionReco
     ChpeRtlUnwindEx(TargetFrame, TargetIp, ExceptionRecord, ReturnValue, &ContextRecord, NULL);
 }
 
+DECLSPEC_NORETURN
+VOID CDECL
+ChpeLongJmp(_JUMP_BUFFER *JumpBuffer, int Value)
+{
+    CONTEXT ContextRecord;
+    EXCEPTION_RECORD ExceptionRecord;
+
+    if (Value == 0)
+        Value = 1;
+
+    RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+    ExceptionRecord.ExceptionCode = STATUS_LONGJUMP;
+    ExceptionRecord.NumberParameters = 1;
+    ExceptionRecord.ExceptionInformation[0] = (ULONG_PTR)JumpBuffer;
+
+    if (JumpBuffer->Frame != 0)
+        ChpeRtlUnwind((PVOID)JumpBuffer->Frame, (PVOID)JumpBuffer->Rip, &ExceptionRecord, (PVOID)(LONG_PTR)Value);
+
+    RtlZeroMemory(&ContextRecord, sizeof(ContextRecord));
+    ContextRecord.ContextFlags = CONTEXT_FULL;
+    ContextRecord.Rip = JumpBuffer->Rip;
+    ContextRecord.Rsp = JumpBuffer->Rsp;
+    if (RtlIsEcCode(JumpBuffer->Rip))
+        ContextRecord.Rcx = (ULONG64)(LONG_PTR)Value;
+    else
+        ContextRecord.Rax = (ULONG64)(LONG_PTR)Value;
+    ChpeRtlRestoreContext(&ContextRecord, &ExceptionRecord);
+    RtlRaiseStatus(STATUS_UNSUCCESSFUL);
+}
+
 ULONG WINAPI
 ChpeEtwEventRegister(LPCGUID ProviderId, PENABLECALLBACK EnableCallback, PVOID CallbackContext, PREGHANDLE RegHandle)
 {

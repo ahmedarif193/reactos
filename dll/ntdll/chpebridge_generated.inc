@@ -10272,12 +10272,6 @@ double NTAPI ChpeAutolog(double a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutolog), __typeof__(&log)), "log bridge signature mismatch");
 
-void NTAPI ChpeAutolongjmp(_JBTYPE * a0, int a1)
-{
-    longjmp(a0, a1);
-}
-_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutolongjmp), __typeof__(&longjmp)), "longjmp bridge signature mismatch");
-
 size_t NTAPI ChpeAutombstowcs(wchar_t * a0, const char * a1, size_t a2)
 {
     return mbstowcs(a0, a1, a2);
