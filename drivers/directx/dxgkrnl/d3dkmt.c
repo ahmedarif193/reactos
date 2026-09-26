@@ -4286,56 +4286,6 @@ DxgkpIsVirtGpuCommandEscape(
 }
 
 static NTSTATUS
-DxgkpReferenceRenderAllocation(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_DEVICE Device,
-    _In_ D3DKMT_HANDLE AllocationHandle,
-    _Out_ PDXGKVMM_ALLOCATION *AllocationReference,
-    _Out_ PDXGKVMM_ALLOCATION *OpenBindingReference,
-    _Out_ PDXGK_ALLOCATIONLIST AllocationListEntry)
-{
-    NTSTATUS Status;
-
-    if (Adapter == NULL || Device == NULL || AllocationHandle == 0 || AllocationReference == NULL || OpenBindingReference == NULL || AllocationListEntry == NULL)
-        return STATUS_INVALID_PARAMETER;
-    *AllocationReference = NULL;
-    *OpenBindingReference = NULL;
-    RtlZeroMemory(AllocationListEntry, sizeof(*AllocationListEntry));
-    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationHandle, Adapter, Device, AllocationReference);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    /* This private physical-submit transport has an allocation list rather
-     * than a user-managed GPUVA residency set. Imported textures may have
-     * pageable backing; admit them through VidMm paging before resolving
-     * their physical addresses and taking the submission pin. */
-    if (!(*AllocationReference)->Resident)
-    {
-        Status = DxgkVidMmMakeResident(*AllocationReference, Adapter);
-        if (!NT_SUCCESS(Status))
-            goto Cleanup;
-    }
-    Status = DxgkVidMmAcquireSubmissionResidencyPinEx(*AllocationReference,
-                                                       Adapter,
-                                                       AllocationListEntry,
-                                                       FALSE);
-    if (!NT_SUCCESS(Status))
-        goto Cleanup;
-    Status = DxgkVidMmReferenceOpenBinding((HANDLE)(ULONG_PTR)AllocationHandle, Adapter, Device, &AllocationListEntry->hDeviceSpecificAllocation, OpenBindingReference);
-    if (!NT_SUCCESS(Status))
-    {
-        DxgkVidMmReleaseSubmissionResidencyPin(*AllocationReference);
-        goto Cleanup;
-    }
-    return STATUS_SUCCESS;
-
-Cleanup:
-    DxgkVidMmDereferenceAllocation(*AllocationReference);
-    *AllocationReference = NULL;
-    RtlZeroMemory(AllocationListEntry, sizeof(*AllocationListEntry));
-    return Status;
-}
-
-static NTSTATUS
 DxgkpSubmitVirtGpuCommandEscapeMeasured(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE Device,
@@ -4354,6 +4304,8 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
     PDXGKVMM_ALLOCATION InlineOpenBindingReferenceList[VIDSCH_INLINE_ALLOCATIONS];
     PDXGKVMM_ALLOCATION InlineAllocationReferenceList[VIDSCH_INLINE_ALLOCATIONS];
     BOOLEAN InlineAllocationCpuDirtyList[VIDSCH_INLINE_ALLOCATIONS];
+    D3DKMT_HANDLE InlineAllocationHandleList[VIDSCH_INLINE_ALLOCATIONS];
+    D3DKMT_HANDLE *AllocationHandleList = NULL;
     DXGK_ALLOCATIONLIST *AllocationList = NULL;
     PDXGKVMM_ALLOCATION *OpenBindingReferenceList = NULL;
     PDXGKVMM_ALLOCATION *AllocationReferenceList = NULL;
@@ -4369,6 +4321,7 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
     UINT EscapePatchCount = 0;
     UINT OpenBindingReferenceCount = 0;
     UINT AllocationReferenceCount = 0;
+    UINT AllocationPinCount = 0;
     ULONGLONG BackpressureDeadline = 0;
     ULONG NodeOrdinal;
     UINT i;
@@ -4461,6 +4414,7 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
             OpenBindingReferenceList = InlineOpenBindingReferenceList;
             AllocationReferenceList = InlineAllocationReferenceList;
             AllocationCpuDirtyList = InlineAllocationCpuDirtyList;
+            AllocationHandleList = InlineAllocationHandleList;
         }
         else
         {
@@ -4468,11 +4422,13 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
             OpenBindingReferenceList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*OpenBindingReferenceList), TAG_DXGK_SUBMITDMA);
             AllocationReferenceList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationReferenceList), TAG_DXGK_SUBMITDMA);
             AllocationCpuDirtyList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationCpuDirtyList), TAG_DXGK_SUBMITDMA);
+            AllocationHandleList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationHandleList), TAG_DXGK_SUBMITDMA);
         }
         if (AllocationList == NULL ||
             OpenBindingReferenceList == NULL ||
             AllocationReferenceList == NULL ||
-            AllocationCpuDirtyList == NULL)
+            AllocationCpuDirtyList == NULL ||
+            AllocationHandleList == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Cleanup;
@@ -4509,19 +4465,43 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
                 ResourceFlags = DXGK_VIRTGPU_RESOURCE_CPU_DIRTY;
             }
 
-            Status = DxgkpReferenceRenderAllocation(
-                         Adapter,
-                         Device,
-                         AllocationHandle,
-                         &AllocationReferenceList[i],
-                         &OpenBindingReferenceList[i],
-                         &AllocationList[i]);
-            if (!NT_SUCCESS(Status))
-                goto Cleanup;
+            AllocationHandleList[i] = AllocationHandle;
             AllocationCpuDirtyList[i] =
                 (ResourceFlags & DXGK_VIRTGPU_RESOURCE_CPU_DIRTY) != 0;
-            AllocationReferenceCount++;
-            OpenBindingReferenceCount++;
+        }
+
+        /* One lookup pass under the allocation list lock, then residency and
+         * the submission pin for each entry outside it. */
+        Status = DxgkVidMmReferenceSubmissionAllocations(Adapter,
+                                                         Device,
+                                                         AllocationHandleList,
+                                                         ResourceHandleCount,
+                                                         AllocationReferenceList,
+                                                         OpenBindingReferenceList,
+                                                         AllocationList);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        AllocationReferenceCount = ResourceHandleCount;
+        OpenBindingReferenceCount = ResourceHandleCount;
+        for (i = 0; i < ResourceHandleCount; ++i)
+        {
+            /* This private physical-submit transport has an allocation list
+             * rather than a user-managed GPUVA residency set. Imported
+             * textures may have pageable backing; admit them through VidMm
+             * paging before resolving their physical addresses. */
+            if (!AllocationReferenceList[i]->Resident)
+            {
+                Status = DxgkVidMmMakeResident(AllocationReferenceList[i], Adapter);
+                if (!NT_SUCCESS(Status))
+                    goto Cleanup;
+            }
+            Status = DxgkVidMmAcquireSubmissionResidencyPinEx(AllocationReferenceList[i],
+                                                               Adapter,
+                                                               &AllocationList[i],
+                                                               FALSE);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+            AllocationPinCount++;
         }
     }
 
@@ -4635,12 +4615,15 @@ Cleanup:
     {
         for (i = 0; i < AllocationReferenceCount; ++i)
         {
-            DxgkVidMmReleaseSubmissionResidencyPin(AllocationReferenceList[i]);
+            if (i < AllocationPinCount)
+                DxgkVidMmReleaseSubmissionResidencyPin(AllocationReferenceList[i]);
             DxgkVidMmDereferenceAllocation(AllocationReferenceList[i]);
         }
         if (AllocationReferenceList != InlineAllocationReferenceList)
             ExFreePoolWithTag(AllocationReferenceList, TAG_DXGK_SUBMITDMA);
     }
+    if (AllocationHandleList != NULL && AllocationHandleList != InlineAllocationHandleList)
+        ExFreePoolWithTag(AllocationHandleList, TAG_DXGK_SUBMITDMA);
     if (AllocationCpuDirtyList != NULL &&
         AllocationCpuDirtyList != InlineAllocationCpuDirtyList)
         ExFreePoolWithTag(AllocationCpuDirtyList, TAG_DXGK_SUBMITDMA);

@@ -819,6 +819,16 @@ DxgkVidMmAcquireGpuVaBindingReferences(
     _Out_ PDXGKVMM_ALLOCATION *OutBackingAllocation);
 
 NTSTATUS
+DxgkVidMmReferenceSubmissionAllocations(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_reads_(Count) CONST D3DKMT_HANDLE *Handles,
+    _In_ UINT Count,
+    _Out_writes_(Count) PDXGKVMM_ALLOCATION *Allocations,
+    _Out_writes_(Count) PDXGKVMM_ALLOCATION *OpenBindings,
+    _Out_writes_(Count) DXGK_ALLOCATIONLIST *ListEntries);
+
+NTSTATUS
 DxgkVidMmReferenceOpenBinding(
     _In_ HANDLE Handle,
     _In_ PDXGKRNL_ADAPTER ExpectedAdapter,

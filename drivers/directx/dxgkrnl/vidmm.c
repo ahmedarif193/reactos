@@ -2515,6 +2515,82 @@ DxgkVidMmReferenceOpenBinding(
     return Status;
 }
 
+/*
+ * References every allocation of one submission and its open binding under a
+ * single hold of the allocation list lock. Each entry gets exactly the checks
+ * of DxgkVidMmReferenceAllocation and DxgkVidMmReferenceOpenBinding; on
+ * failure nothing stays referenced.
+ */
+NTSTATUS
+DxgkVidMmReferenceSubmissionAllocations(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_reads_(Count) CONST D3DKMT_HANDLE *Handles,
+    _In_ UINT Count,
+    _Out_writes_(Count) PDXGKVMM_ALLOCATION *Allocations,
+    _Out_writes_(Count) PDXGKVMM_ALLOCATION *OpenBindings,
+    _Out_writes_(Count) DXGK_ALLOCATIONLIST *ListEntries)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    UINT Index;
+    UINT Referenced = 0;
+
+    if (Adapter == NULL || Device == NULL || Device->Adapter != Adapter ||
+        (Count != 0 && (Handles == NULL || Allocations == NULL ||
+                        OpenBindings == NULL || ListEntries == NULL)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    for (Index = 0; Index < Count; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Allocation;
+        PDXGKVMM_ALLOCATION Backing;
+
+        Allocations[Index] = NULL;
+        OpenBindings[Index] = NULL;
+        RtlZeroMemory(&ListEntries[Index], sizeof(ListEntries[Index]));
+        Allocation = Handles[Index] != 0 ? DxgkpVidMmLookupAllocationLocked(Handles[Index]) : NULL;
+        Backing = Allocation != NULL && Allocation->BackingAllocation != NULL ?
+            Allocation->BackingAllocation : Allocation;
+        if (Allocation == NULL || Backing == NULL || Allocation->Initializing ||
+            InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0 ||
+            InterlockedCompareExchange(&Backing->ReferenceCount, 0, 0) <= 0 ||
+            Allocation->Adapter != Adapter || Allocation->Device != Device)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (Allocation->OpenBindingHandle == NULL)
+        {
+            Status = STATUS_NOT_FOUND;
+            break;
+        }
+        InterlockedIncrement(&Backing->ReferenceCount);
+        InterlockedIncrement(&Allocation->LogicalReferenceCount);
+        Allocations[Index] = Backing;
+        OpenBindings[Index] = Allocation;
+        ListEntries[Index].hDeviceSpecificAllocation = Allocation->OpenBindingHandle;
+        Referenced++;
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+
+    if (!NT_SUCCESS(Status))
+    {
+        for (Index = 0; Index < Referenced; ++Index)
+        {
+            DxgkVidMmDereferenceLogicalAllocation(OpenBindings[Index]);
+            DxgkVidMmDereferenceAllocation(Allocations[Index]);
+            Allocations[Index] = NULL;
+            OpenBindings[Index] = NULL;
+            RtlZeroMemory(&ListEntries[Index], sizeof(ListEntries[Index]));
+        }
+    }
+    return Status;
+}
+
 NTSTATUS DxgkVidMmCreatePresentBinding(_In_ PDXGKRNL_DEVICE Device, _In_ PDXGKVMM_ALLOCATION BackingAllocation, _In_ BOOLEAN ReadOnly, _Out_ PHANDLE OutOpenBindingHandle, _Out_ PDXGKVMM_ALLOCATION *OutBindingReference)
 {
     PDXGKRNL_ADAPTER Adapter;
