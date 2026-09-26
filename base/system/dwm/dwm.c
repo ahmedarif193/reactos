@@ -756,6 +756,21 @@ DwmMaterialBlurRadius(void)
     return DwmScaledBlurRadius(DWM_MATERIAL_BLUR_RADIUS_96);
 }
 
+/* Adds a buffer-relative rectangle, clipped to the buffer, to the damage. */
+static void
+DwmUnionDamage(LONG *Left, LONG *Top, LONG *Right, LONG *Bottom,
+               LONGLONG L, LONGLONG T, LONGLONG R, LONGLONG B)
+{
+    L = max(L, 0); T = max(T, 0);
+    R = min(R, (LONGLONG)g_W); B = min(B, (LONGLONG)g_H);
+    if (R <= L || B <= T)
+        return;
+    *Left = min(*Left, (LONG)L);
+    *Top = min(*Top, (LONG)T);
+    *Right = max(*Right, (LONG)R);
+    *Bottom = max(*Bottom, (LONG)B);
+}
+
 static BOOL
 DwmClipBlurRect(const RECTL *Rectangle, LONG WindowX, LONG WindowY,
                 const DWM_WIN *Window,
@@ -3590,31 +3605,43 @@ DwmComposeLoop(HANDLE hStopEvent)
             LONG cl, ct, cr, cb;
             BOOL completeFrame = TRUE;
             BOOL refreshBackdrop = forceFull || hdr->FullDamage;
+            BOOL windowDamage = hdr->DmgR > hdr->DmgL && hdr->DmgB > hdr->DmgT;
+            BOOL contentDamage = hdr->ContentR > hdr->ContentL && hdr->ContentB > hdr->ContentT;
 
-            if (forceFull || hdr->FullDamage ||
-                hdr->DmgR <= hdr->DmgL || hdr->DmgB <= hdr->DmgT)
+            if (forceFull || hdr->FullDamage || (!windowDamage && !contentDamage))
             {
                 pl = 0; pt = 0; pr = g_W; pb = g_H;
             }
             else
             {
-                LONGLONG l = (LONGLONG)hdr->DmgL - g_originX;
-                LONGLONG t = (LONGLONG)hdr->DmgT - g_originY;
-                LONGLONG r = (LONGLONG)hdr->DmgR - g_originX;
-                LONGLONG b = (LONGLONG)hdr->DmgB - g_originY;
-                pl = (l < 0) ? 0 : (l > g_W ? g_W : (LONG)l);
-                pt = (t < 0) ? 0 : (t > g_H ? g_H : (LONG)t);
-                pr = (r < 0) ? 0 : (r > g_W ? g_W : (LONG)r);
-                pb = (b < 0) ? 0 : (b > g_H ? g_H : (LONG)b);
+                pl = g_W; pt = g_H; pr = 0; pb = 0;
+                if (windowDamage)
+                {
+                    /* Window damage can move or reveal a shadow. */
+                    DwmUnionDamage(&pl, &pt, &pr, &pb,
+                                   (LONGLONG)hdr->DmgL - g_originX - g_shadowMarginLeft,
+                                   (LONGLONG)hdr->DmgT - g_originY - g_shadowMarginTop,
+                                   (LONGLONG)hdr->DmgR - g_originX + g_shadowMarginRight,
+                                   (LONGLONG)hdr->DmgB - g_originY + g_shadowMarginBottom);
+                }
+                if (contentDamage)
+                {
+                    DwmUnionDamage(&pl, &pt, &pr, &pb,
+                                   (LONGLONG)hdr->ContentL - g_originX,
+                                   (LONGLONG)hdr->ContentT - g_originY,
+                                   (LONGLONG)hdr->ContentR - g_originX,
+                                   (LONGLONG)hdr->ContentB - g_originY);
+                }
+                if (pr <= pl || pb <= pt)
+                {
+                    /* Offscreen damage still needs a frame that consumes
+                     * its publications. */
+                    pl = min(pl, g_W - 1);
+                    pt = min(pt, g_H - 1);
+                    pr = pl + 1;
+                    pb = pt + 1;
+                }
             }
-            pl -= g_shadowMarginLeft;
-            pt -= g_shadowMarginTop;
-            pr += g_shadowMarginRight;
-            pb += g_shadowMarginBottom;
-            if (pl < 0) pl = 0;
-            if (pt < 0) pt = 0;
-            if (pr > g_W) pr = g_W;
-            if (pb > g_H) pb = g_H;
             for (i = 0; i < hdr->Count; ++i)
                 DwmSettingsApplyWindow(&Settings, &wins[i]);
 
