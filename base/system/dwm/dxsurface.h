@@ -14,5 +14,7 @@ const BYTE *DwmDxGetSurfaceSnapshot(const DWM_WIN *Window);
 const BYTE *DwmDxGetRedirectionSnapshot(const DWM_WIN *Window);
 void DwmDxAcknowledgeSurface(const DWM_WIN *Window);
 void DwmDxHoldFrames(const DWM_WIN *Windows, ULONG Count);
+void DwmDxReleaseRetiredFrames(void);
+void DwmDxSetScanoutSurfaces(const ULONG *SurfaceIds, ULONG Count);
 void DwmDxSweepSurfaces(const DWM_WIN *Windows, ULONG Count);
 void DwmDxCleanupSurfaces(void);

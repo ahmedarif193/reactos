@@ -553,12 +553,16 @@ typedef struct _DWM_DX_HELD_FRAME
     ULONG SurfaceId;
     ULONG Generation;
     ULONGLONG UpdateId;
+    BOOL Scanout; /* shown on an overlay plane by the last present */
 } DWM_DX_HELD_FRAME;
 
 /* Indexed by SurfaceId. A slot left by a torn-down window keeps a tuple that
  * win32k already released; releasing it again when the slot is reused is a
  * harmless STATUS_NOT_FOUND, since update IDs are never reused. */
 static DWM_DX_HELD_FRAME g_HeldFrames[DWM_MAX_SURFACES];
+/* Frames replaced while the display still scanned them out: released once
+ * the present that replaced them has latched. */
+static DWM_DX_HELD_FRAME g_RetiringFrames[DWM_MAX_SURFACES];
 
 static void
 DwmDxReleaseFrame(const DWM_DX_HELD_FRAME *Held)
@@ -584,6 +588,42 @@ DwmDxReleaseFrame(const DWM_DX_HELD_FRAME *Held)
  * keeps its frame: it can reappear without a new present, and window
  * teardown releases it in win32k.
  */
+/* A replaced frame is released now, or after the next present latches if
+ * the display still shows it as an overlay plane. */
+static void
+DwmDxRetireFrame(DWM_DX_HELD_FRAME *Held)
+{
+    if (Held->UpdateId == 0)
+        return;
+    if (Held->Scanout)
+    {
+        DWM_DX_HELD_FRAME *Retiring = &g_RetiringFrames[Held->SurfaceId];
+
+        if (Retiring->UpdateId != 0)
+            DwmDxReleaseFrame(Retiring);
+        *Retiring = *Held;
+    }
+    else
+    {
+        DwmDxReleaseFrame(Held);
+    }
+}
+
+/* A present returns once its flip has latched, so the frames it replaced on
+ * overlay planes are no longer scanned out. */
+void
+DwmDxReleaseRetiredFrames(void)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < ARRAYSIZE(g_RetiringFrames); ++Index)
+    {
+        if (g_RetiringFrames[Index].UpdateId != 0)
+            DwmDxReleaseFrame(&g_RetiringFrames[Index]);
+        RtlZeroMemory(&g_RetiringFrames[Index], sizeof(g_RetiringFrames[Index]));
+    }
+}
+
 void
 DwmDxHoldFrames(const DWM_WIN *Windows, ULONG Count)
 {
@@ -591,6 +631,9 @@ DwmDxHoldFrames(const DWM_WIN *Windows, ULONG Count)
 
     if ((Count != 0 && Windows == NULL) || Count > DWM_MAX_WINDOWS)
         return;
+
+    /* Left by a frame that did not present: its output was occluded or lost. */
+    DwmDxReleaseRetiredFrames();
 
     for (Index = 0; Index < Count; ++Index)
     {
@@ -603,18 +646,32 @@ DwmDxHoldFrames(const DWM_WIN *Windows, ULONG Count)
         if (!(Window->LayerFlags & DWM_WINDOW_DX_RETAINED) || Window->DxUpdateId == 0)
         {
             /* The window no longer shows a retained frame. */
-            if (Held->UpdateId != 0)
-                DwmDxReleaseFrame(Held);
+            DwmDxRetireFrame(Held);
             RtlZeroMemory(Held, sizeof(*Held));
             continue;
         }
         if (Held->Generation == Window->DxGeneration && Held->UpdateId == Window->DxUpdateId)
             continue;
-        if (Held->UpdateId != 0)
-            DwmDxReleaseFrame(Held);
+        DwmDxRetireFrame(Held);
         Held->SurfaceId = Window->SurfaceId;
         Held->Generation = Window->DxGeneration;
         Held->UpdateId = Window->DxUpdateId;
+        Held->Scanout = FALSE;
+    }
+}
+
+/* The surfaces the last present scanned out as overlay planes. */
+void
+DwmDxSetScanoutSurfaces(const ULONG *SurfaceIds, ULONG Count)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < ARRAYSIZE(g_HeldFrames); ++Index)
+        g_HeldFrames[Index].Scanout = FALSE;
+    for (Index = 0; Index < Count; ++Index)
+    {
+        if (SurfaceIds[Index] < ARRAYSIZE(g_HeldFrames))
+            g_HeldFrames[SurfaceIds[Index]].Scanout = TRUE;
     }
 }
 
@@ -677,8 +734,11 @@ DwmDxCleanupSurfaces(void)
     {
         if (g_HeldFrames[Index].UpdateId != 0)
             DwmDxReleaseFrame(&g_HeldFrames[Index]);
+        if (g_RetiringFrames[Index].UpdateId != 0)
+            DwmDxReleaseFrame(&g_RetiringFrames[Index]);
     }
     RtlZeroMemory(g_HeldFrames, sizeof(g_HeldFrames));
+    RtlZeroMemory(g_RetiringFrames, sizeof(g_RetiringFrames));
 
     for (Index = 0; Index < DWM_DX_MAX_DEVICES; ++Index)
     {
