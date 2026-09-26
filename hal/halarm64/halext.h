@@ -18,10 +18,6 @@
  *                  accessor for SoCs whose root complexes are not ECAM/MCFG
  *                  reachable.
  *
- *                - HAL_ARM64_PLATFORM_DEVICE: fixed SoC devices missing from
- *                  the firmware ACPI namespace, reported by the HAL bus
- *                  driver as child PDOs from a resource descriptor.
- *
  *              Adding a platform (RPi4, QCOM, ...) means: one new platform
  *              file implementing a probe that registers its services, plus
  *              one line in the platform table in halext.c.
@@ -30,8 +26,6 @@
  */
 
 #pragma once
-
-#include <halpnp.h>
 
 /* ------------------------------------------------------------------ */
 /*  Generic MMIO accessor (defined in halarm64.c): identity-mapping   */
@@ -106,14 +100,6 @@ typedef struct _HAL_ARM64_PCI_CONFIG_BACKEND
 extern const HAL_ARM64_PCI_CONFIG_BACKEND *HalpArm64PciConfigBackend;
 
 /* ------------------------------------------------------------------ */
-/*  Platform device contract (fixed SoC devices absent from ACPI)     */
-/* ------------------------------------------------------------------ */
-#define HAL_ARM64_MAX_PLATFORM_DEVICES          8
-
-/* The shared ACPI HAL bus driver reports these as child PDOs */
-typedef HAL_PLATFORM_DEVICE HAL_ARM64_PLATFORM_DEVICE, *PHAL_ARM64_PLATFORM_DEVICE;
-
-/* ------------------------------------------------------------------ */
 /*  Registration (called from platform probes)                        */
 /* ------------------------------------------------------------------ */
 
@@ -124,10 +110,6 @@ HalpArm64RegisterInterruptController(
 NTSTATUS
 HalpArm64RegisterPciConfigBackend(
     _In_ const HAL_ARM64_PCI_CONFIG_BACKEND *Backend);
-
-NTSTATUS
-HalpArm64RegisterPlatformDevice(
-    _In_ const HAL_ARM64_PLATFORM_DEVICE *Device);
 
 /* ------------------------------------------------------------------ */
 /*  Generic HAL consumption                                           */
@@ -145,10 +127,3 @@ HalpArm64ProbePlatforms(
 
 VOID
 HalpArm64Phase1PlatformInit(VOID);
-
-ULONG
-HalpArm64GetPlatformDeviceCount(VOID);
-
-const HAL_ARM64_PLATFORM_DEVICE *
-HalpArm64GetPlatformDevice(
-    _In_ ULONG Index);

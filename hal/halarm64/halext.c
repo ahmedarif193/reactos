@@ -51,9 +51,6 @@ static BOOLEAN HalpArm64PlatformMatched = FALSE;
 const HAL_ARM64_INTERRUPT_CONTROLLER *HalpArm64InterruptController = NULL;
 const HAL_ARM64_PCI_CONFIG_BACKEND *HalpArm64PciConfigBackend = NULL;
 
-static const HAL_ARM64_PLATFORM_DEVICE *HalpArm64PlatformDevices[HAL_ARM64_MAX_PLATFORM_DEVICES];
-static ULONG HalpArm64PlatformDeviceCount = 0;
-
 /* ================================================================== */
 /*  Registration                                                      */
 /* ================================================================== */
@@ -97,24 +94,6 @@ HalpArm64RegisterPciConfigBackend(
     return STATUS_SUCCESS;
 }
 
-NTSTATUS
-HalpArm64RegisterPlatformDevice(
-    _In_ const HAL_ARM64_PLATFORM_DEVICE *Device)
-{
-    if (!Device || !Device->DeviceId)
-        return STATUS_INVALID_PARAMETER;
-
-    if (HalpArm64PlatformDeviceCount >= HAL_ARM64_MAX_PLATFORM_DEVICES)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    HalpArm64PlatformDevices[HalpArm64PlatformDeviceCount++] = Device;
-
-    DPRINT1("[arm64][HALEXT] Platform device: %s (%S)\n",
-            Device->Name ? Device->Name : "?",
-            Device->DeviceId);
-    return STATUS_SUCCESS;
-}
-
 /* ================================================================== */
 /*  Generic HAL consumption                                           */
 /* ================================================================== */
@@ -144,20 +123,4 @@ VOID
 HalpArm64Phase1PlatformInit(VOID)
 {
     HalpBcm2711VcInit();
-}
-
-ULONG
-HalpArm64GetPlatformDeviceCount(VOID)
-{
-    return HalpArm64PlatformDeviceCount;
-}
-
-const HAL_ARM64_PLATFORM_DEVICE *
-HalpArm64GetPlatformDevice(
-    _In_ ULONG Index)
-{
-    if (Index >= HalpArm64PlatformDeviceCount)
-        return NULL;
-
-    return HalpArm64PlatformDevices[Index];
 }

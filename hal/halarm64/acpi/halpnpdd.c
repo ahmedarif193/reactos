@@ -414,13 +414,4 @@ HalpQueryReservedResources(
     return HALP_RESERVED_VECTOR_COUNT;
 }
 
-const HAL_PLATFORM_DEVICE *
-NTAPI
-HalpGetPlatformDevice(
-    _In_ ULONG Index)
-{
-    /* Devices registered through the platform extension contract */
-    return HalpArm64GetPlatformDevice(Index);
-}
-
 /* EOF */
