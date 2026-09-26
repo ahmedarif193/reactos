@@ -529,6 +529,7 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_OPENRESOURCE:
         case IOCTL_D3DKMT_RENDER:
         case IOCTL_D3DKMT_PRESENT:
+        case IOCTL_D3DKMT_PRESENTOVERLAYS:
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT:
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECT:
         case IOCTL_D3DKMT_SETDISPLAYMODE:
@@ -10694,6 +10695,17 @@ DxgkpDispatchBufferedIoctlWorker(
             return Status;
         }
 
+        case IOCTL_D3DKMT_PRESENTOVERLAYS:
+        {
+            if (SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkPresentWithOverlays((RXGK_PRESENT_OVERLAYS *)SystemBuffer,
+                                             InputLength);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = min(InputLength, OutputLength);
+            return Status;
+        }
+
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT:
         {
             if (InputLength < sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECT) || SystemBuffer == NULL)
@@ -12952,6 +12964,7 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_UNLOCK:
         case IOCTL_D3DKMT_RENDER:
         case IOCTL_D3DKMT_PRESENT:
+        case IOCTL_D3DKMT_PRESENTOVERLAYS:
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT:
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECT:
         case IOCTL_D3DKMT_SETDISPLAYMODE:

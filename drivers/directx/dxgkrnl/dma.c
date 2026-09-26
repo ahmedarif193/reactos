@@ -663,11 +663,99 @@ DxgkpCaptureRedirectedBltPresent(
     return DxgkAdmitRedirectedBltPresent(RedirectedPresent);
 }
 
-NTSTATUS
-NTAPI
-DxgkPresent(
+/*
+ * Overlay planes ride a compositor flip: each is referenced for the queued
+ * entry, and the miniport must accept the whole configuration now, so that
+ * an unsupported overlay fails this present instead of the armed flip.
+ */
+static NTSTATUS
+DxgkpAdmitPresentOverlays(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry,
+    _In_reads_(OverlayCount) const RXGK_PRESENT_OVERLAY *Overlays,
+    _In_ UINT OverlayCount)
+{
+    DXGK_CHECK_MULTIPLANE_OVERLAY_SUPPORT_PLANE Planes[1 + RXGK_PRESENT_MAX_OVERLAYS];
+    DXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT Check;
+    NTSTATUS Status;
+    UINT Index, Other;
+
+    /* Only an MMIO flip can arm every plane at once. */
+    if (Entry->Type != DxgkPresentTypeFlip || Entry->SourceAllocation == NULL ||
+        OverlayCount > RXGK_PRESENT_MAX_OVERLAYS || Entry->SharedSurface.HeadlessDesktop ||
+        Adapter->MiniportContext->IsDisplayOnlyDriver ||
+        !(Entry->FlipInterval == D3DDDI_FLIPINTERVAL_IMMEDIATE ?
+              Adapter->FlipCaps.FlipImmediateMmIo : Adapter->FlipCaps.FlipOnVSyncMmIo) ||
+        DXGK_CB_FULL(Adapter, DxgkDdiCheckMultiPlaneOverlaySupport) == NULL ||
+        DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay) == NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    RtlZeroMemory(Planes, sizeof(Planes));
+    Planes[0].hAllocation = Entry->SourceAllocation->MiniportHandle;
+    Planes[0].VidPnSourceId = Entry->VidPnSourceId;
+    Planes[0].PlaneAttributes.SrcRect = Entry->SrcRect;
+    Planes[0].PlaneAttributes.DstRect = Entry->DstRect;
+    Planes[0].PlaneAttributes.ClipRect = Entry->DstRect;
+    Planes[0].PlaneAttributes.Rotation = D3DDDI_ROTATION_IDENTITY;
+    for (Index = 0; Index < OverlayCount; ++Index)
+    {
+        const RXGK_PRESENT_OVERLAY *Overlay = &Overlays[Index];
+        DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES *Attributes = &Planes[Index + 1].PlaneAttributes;
+
+        if (Overlay->hAllocation == 0 || Overlay->LayerIndex == 0 ||
+            Overlay->LayerIndex > RXGK_PRESENT_MAX_OVERLAYS)
+            return STATUS_INVALID_PARAMETER;
+        for (Other = 0; Other < Index; ++Other)
+        {
+            if (Overlays[Other].LayerIndex == Overlay->LayerIndex)
+                return STATUS_INVALID_PARAMETER;
+        }
+        Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Overlay->hAllocation,
+                                              Adapter, Device, &Entry->Overlays[Index].Allocation);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Entry->OverlayCount = Index + 1;
+        Entry->Overlays[Index].LayerIndex = Overlay->LayerIndex;
+        Entry->Overlays[Index].SrcRect = Overlay->SrcRect;
+        Entry->Overlays[Index].DstRect = Overlay->DstRect;
+        Planes[Index + 1].hAllocation = Entry->Overlays[Index].Allocation->MiniportHandle;
+        Planes[Index + 1].VidPnSourceId = Entry->VidPnSourceId;
+        Attributes->SrcRect = Overlay->SrcRect;
+        Attributes->DstRect = Overlay->DstRect;
+        Attributes->ClipRect = Overlay->DstRect;
+        Attributes->Rotation = D3DDDI_ROTATION_IDENTITY;
+    }
+
+    RtlZeroMemory(&Check, sizeof(Check));
+    Check.PlaneCount = OverlayCount + 1;
+    Check.pPlanes = Planes;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiCheckMultiPlaneOverlaySupport)(
+                     Adapter->MiniportDeviceContext, &Check);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    if (NT_SUCCESS(Status) && !Check.Supported)
+        Status = STATUS_NOT_SUPPORTED;
+    return Status;
+}
+
+static NTSTATUS
+DxgkpPresent(
     _Inout_ D3DKMT_PRESENT *pPresent,
-    _In_ ULONG InputLength)
+    _In_ ULONG InputLength,
+    _In_reads_opt_(OverlayCount) const RXGK_PRESENT_OVERLAY *Overlays,
+    _In_ UINT OverlayCount)
 {
     PDXGKRNL_ADAPTER         Adapter = NULL;
     PDXGKRNL_DEVICE          Device = NULL;
@@ -1051,6 +1139,16 @@ DxgkPresent(
         DxgkpReleaseSharedSurfaceSnapshot(&Entry.SharedSurface);
     }
 
+    if (OverlayCount != 0)
+    {
+        Status = DxgkpAdmitPresentOverlays(Adapter, Device, &Entry, Overlays, OverlayCount);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return Status;
+        }
+    }
+
     /* --- Submit to the present queue ----------------------------------- */
 
     Status = DxgkpQueuePresent(Adapter, &Entry, &PresentId);
@@ -1062,6 +1160,35 @@ DxgkPresent(
     }
 
     return Status;
+}
+
+NTSTATUS
+NTAPI
+DxgkPresent(
+    _Inout_ D3DKMT_PRESENT *pPresent,
+    _In_ ULONG InputLength)
+{
+    return DxgkpPresent(pPresent, InputLength, NULL, 0);
+}
+
+/* A compositor flip carrying overlay planes; see RXGK_PRESENT_OVERLAYS. */
+NTSTATUS
+NTAPI
+DxgkPresentWithOverlays(
+    _Inout_ RXGK_PRESENT_OVERLAYS *Request,
+    _In_ ULONG InputLength)
+{
+    D3DKMT_PRESENT *Present;
+
+    if (Request == NULL ||
+        InputLength < sizeof(*Request) + RTL_SIZEOF_THROUGH_FIELD(D3DKMT_PRESENT, Flags) ||
+        Request->OverlayCount == 0 || Request->OverlayCount > RXGK_PRESENT_MAX_OVERLAYS)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Present = (D3DKMT_PRESENT *)(Request + 1);
+    return DxgkpPresent(Present, InputLength - sizeof(*Request),
+                        Request->Overlays, Request->OverlayCount);
 }
 
 NTSTATUS

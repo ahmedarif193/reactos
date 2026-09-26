@@ -845,6 +845,13 @@ DxgkpReleasePresentEntry(
         DxgkVidMmDereferenceAllocation(Entry->DestinationAllocation);
     if (Entry->SourceAllocation != NULL)
         DxgkVidMmDereferenceAllocation(Entry->SourceAllocation);
+    while (Entry->OverlayCount != 0)
+    {
+        PDXGKVMM_ALLOCATION Overlay = Entry->Overlays[--Entry->OverlayCount].Allocation;
+
+        if (Overlay != NULL)
+            DxgkVidMmDereferenceAllocation(Overlay);
+    }
     if (Entry->Context != NULL)
         DxgkDereferenceContext(Entry->Context);
     DxgkDeviceWorkDestroy(Entry->DeviceWork);
@@ -2250,17 +2257,29 @@ DxgkPresentRetireScanout(
     {
         PDXGKVMM_ALLOCATION Current;
         PDXGKVMM_ALLOCATION Pending;
+        PDXGKVMM_ALLOCATION CurrentOverlays[RXGK_PRESENT_MAX_OVERLAYS];
+        PDXGKVMM_ALLOCATION PendingOverlays[RXGK_PRESENT_MAX_OVERLAYS];
+        ULONG Overlay;
 
         KeWaitForSingleObject(&Queues[Index].MmioPresentMutex, Executive, KernelMode, FALSE, NULL);
         Current = Queues[Index].MmioCurrentAllocation;
         Pending = Queues[Index].MmioPendingAllocation;
+        RtlCopyMemory(CurrentOverlays, Queues[Index].MmioCurrentOverlays, sizeof(CurrentOverlays));
+        RtlCopyMemory(PendingOverlays, Queues[Index].MmioPendingOverlays, sizeof(PendingOverlays));
         Queues[Index].MmioCurrentAllocation = NULL;
         Queues[Index].MmioPendingAllocation = NULL;
+        RtlZeroMemory(Queues[Index].MmioCurrentOverlays, sizeof(Queues[Index].MmioCurrentOverlays));
+        RtlZeroMemory(Queues[Index].MmioPendingOverlays, sizeof(Queues[Index].MmioPendingOverlays));
         Queues[Index].MmioFailureStatus = STATUS_SUCCESS;
         Queues[Index].MmioLastFlipSequence = 0;
         KeReleaseMutex(&Queues[Index].MmioPresentMutex, FALSE);
         DxgkpReleaseScanoutAllocation(Pending);
         DxgkpReleaseScanoutAllocation(Current);
+        for (Overlay = 0; Overlay < RXGK_PRESENT_MAX_OVERLAYS; ++Overlay)
+        {
+            DxgkpReleaseScanoutAllocation(PendingOverlays[Overlay]);
+            DxgkpReleaseScanoutAllocation(CurrentOverlays[Overlay]);
+        }
     }
 }
 
@@ -3864,6 +3883,29 @@ DxgkpSetMmioSourceAddress(
     return NT_SUCCESS(Call->Status);
 }
 
+typedef struct _DXGKP_MMIO_OVERLAY_CALL
+{
+    PDXGKRNL_ADAPTER Adapter;
+    DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY Args;
+    DXGK_MULTIPLANE_OVERLAY_PLANE Planes[1 + RXGK_PRESENT_MAX_OVERLAYS];
+    LONG64 ArmSequence;
+    NTSTATUS Status;
+} DXGKP_MMIO_OVERLAY_CALL;
+
+/* A flip with overlays arms every plane of the source in one call. */
+static BOOLEAN NTAPI
+DxgkpSetMmioOverlays(
+    _In_ PVOID Context)
+{
+    DXGKP_MMIO_OVERLAY_CALL *Call = Context;
+
+    Call->ArmSequence = InterlockedCompareExchange64(
+                            &Call->Adapter->VsyncScanoutSequence[Call->Args.VidPnSourceId], 0, 0);
+    Call->Status = DXGK_CB_FULL(Call->Adapter, DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay)(
+                       Call->Adapter->MiniportDeviceContext, &Call->Args);
+    return NT_SUCCESS(Call->Status);
+}
+
 static NTSTATUS
 DxgkpExecuteMmioFlip(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -3874,6 +3916,10 @@ DxgkpExecuteMmioFlip(
     DXGK_ALLOCATIONLIST AllocationList[DXGK_PRESENT_MAX_INDEX + 1];
     DXGK_PRESENTALLOCATIONINFO AllocationInfo[DXGK_PRESENT_MAX_INDEX + 1];
     DXGKP_MMIO_FLIP_CALL FlipCall;
+    DXGKP_MMIO_OVERLAY_CALL OverlayCall;
+    BOOLEAN OverlayPinned[RXGK_PRESENT_MAX_OVERLAYS] = {0};
+    PHYSICAL_ADDRESS OverlayAddress[RXGK_PRESENT_MAX_OVERLAYS];
+    ULONG OverlayIndex;
     PDXGKVMM_ALLOCATION Allocation = Entry->SourceAllocation;
     PDXGKVMM_ALLOCATION Binding = NULL;
     HANDLE OpenHandle = Entry->SourceOpenBindingHandle;
@@ -3949,6 +3995,25 @@ DxgkpExecuteMmioFlip(
     Address = DxgkVidMmGetAllocationPrimaryAddress(Allocation);
     AllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = OpenHandle;
 
+    /* Overlays stay resident while they are armed or scanned out. */
+    for (OverlayIndex = 0; OverlayIndex < Entry->OverlayCount; ++OverlayIndex)
+    {
+        PDXGKVMM_ALLOCATION Overlay = Entry->Overlays[OverlayIndex].Allocation;
+        DXGK_ALLOCATIONLIST OverlayPin;
+
+        /* The present references the backing, which a closing client
+         * leaves to its opened alias rather than destroying at once. */
+        Status = DxgkVidMmEnsureReferencedAllocationApertureMapped(Overlay);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        RtlZeroMemory(&OverlayPin, sizeof(OverlayPin));
+        Status = DxgkVidMmAcquireSubmissionResidencyPinEx(Overlay, Adapter, &OverlayPin, TRUE);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        OverlayPinned[OverlayIndex] = TRUE;
+        OverlayAddress[OverlayIndex] = DxgkVidMmGetAllocationPrimaryAddress(Overlay);
+    }
+
     /* FlipOnVSyncMmIo explicitly requests Present(NULL DMA). A GPUVA
      * context still uses PRESENTALLOCATIONINFO, but a flip needs the resident
      * segment/address, not an invented command-buffer GPU mapping. */
@@ -4003,6 +4068,12 @@ DxgkpExecuteMmioFlip(
     Queue->MmioPendingAllocation = Allocation;
     Entry->SourceAllocation = NULL;
     PinOwned = FALSE;
+    for (OverlayIndex = 0; OverlayIndex < Entry->OverlayCount; ++OverlayIndex)
+    {
+        Queue->MmioPendingOverlays[OverlayIndex] = Entry->Overlays[OverlayIndex].Allocation;
+        Entry->Overlays[OverlayIndex].Allocation = NULL;
+        OverlayPinned[OverlayIndex] = FALSE;
+    }
     DriverCalled = TRUE;
     _SEH2_TRY
     {
@@ -4020,9 +4091,50 @@ DxgkpExecuteMmioFlip(
         Status = STATUS_INVALID_DEVICE_STATE;
         goto Cleanup;
     }
-    Status = DxgkSynchronizeScanoutExecution(Adapter, DxgkpSetMmioSourceAddress, &FlipCall, &Synchronized);
-    if (NT_SUCCESS(Status))
-        Status = FlipCall.Status;
+    if (Entry->OverlayCount == 0)
+    {
+        Status = DxgkSynchronizeScanoutExecution(Adapter, DxgkpSetMmioSourceAddress, &FlipCall, &Synchronized);
+        if (NT_SUCCESS(Status))
+            Status = FlipCall.Status;
+    }
+    else
+    {
+        RtlZeroMemory(&OverlayCall, sizeof(OverlayCall));
+        OverlayCall.Adapter = Adapter;
+        OverlayCall.Planes[0].LayerIndex = 0;
+        OverlayCall.Planes[0].Enabled = TRUE;
+        OverlayCall.Planes[0].AllocationSegment = Allocation->SegmentId;
+        OverlayCall.Planes[0].AllocationAddress = Address;
+        OverlayCall.Planes[0].hAllocation = Allocation->MiniportHandle;
+        OverlayCall.Planes[0].PlaneAttributes.SrcRect = Entry->SrcRect;
+        OverlayCall.Planes[0].PlaneAttributes.DstRect = Entry->DstRect;
+        OverlayCall.Planes[0].PlaneAttributes.ClipRect = Entry->DstRect;
+        OverlayCall.Planes[0].PlaneAttributes.Rotation = D3DDDI_ROTATION_IDENTITY;
+        for (OverlayIndex = 0; OverlayIndex < Entry->OverlayCount; ++OverlayIndex)
+        {
+            PDXGKVMM_ALLOCATION Overlay = Queue->MmioPendingOverlays[OverlayIndex];
+            DXGK_MULTIPLANE_OVERLAY_PLANE *Plane = &OverlayCall.Planes[OverlayIndex + 1];
+
+            Plane->LayerIndex = Entry->Overlays[OverlayIndex].LayerIndex;
+            Plane->Enabled = TRUE;
+            Plane->AllocationSegment = Overlay->SegmentId;
+            Plane->AllocationAddress = OverlayAddress[OverlayIndex];
+            Plane->hAllocation = Overlay->MiniportHandle;
+            Plane->PlaneAttributes.SrcRect = Entry->Overlays[OverlayIndex].SrcRect;
+            Plane->PlaneAttributes.DstRect = Entry->Overlays[OverlayIndex].DstRect;
+            Plane->PlaneAttributes.ClipRect = Entry->Overlays[OverlayIndex].DstRect;
+            Plane->PlaneAttributes.Rotation = D3DDDI_ROTATION_IDENTITY;
+        }
+        OverlayCall.Args.VidPnSourceId = Entry->VidPnSourceId;
+        OverlayCall.Args.PlaneCount = Entry->OverlayCount + 1;
+        OverlayCall.Args.pPlanes = OverlayCall.Planes;
+        OverlayCall.Args.Flags.FlipImmediate = FlipCall.Args.Flags.FlipImmediate;
+        OverlayCall.Args.Flags.FlipOnNextVSync = FlipCall.Args.Flags.FlipOnNextVSync;
+        Status = DxgkSynchronizeScanoutExecution(Adapter, DxgkpSetMmioOverlays, &OverlayCall, &Synchronized);
+        FlipCall.ArmSequence = OverlayCall.ArmSequence;
+        if (NT_SUCCESS(Status))
+            Status = OverlayCall.Status;
+    }
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     DxgkEndKmdTransaction(Adapter);
@@ -4032,11 +4144,18 @@ DxgkpExecuteMmioFlip(
     if (NT_SUCCESS(Status))
     {
         PDXGKVMM_ALLOCATION Displaced = Queue->MmioCurrentAllocation;
+        PDXGKVMM_ALLOCATION DisplacedOverlays[RXGK_PRESENT_MAX_OVERLAYS];
 
+        /* The latched list shows exactly this flip's planes. */
+        RtlCopyMemory(DisplacedOverlays, Queue->MmioCurrentOverlays, sizeof(DisplacedOverlays));
+        RtlCopyMemory(Queue->MmioCurrentOverlays, Queue->MmioPendingOverlays, sizeof(DisplacedOverlays));
+        RtlZeroMemory(Queue->MmioPendingOverlays, sizeof(Queue->MmioPendingOverlays));
         Queue->MmioCurrentAllocation = Queue->MmioPendingAllocation;
         Queue->MmioPendingAllocation = NULL;
         Queue->MmioLastFlipSequence = ObservedSequence;
         DxgkpReleaseScanoutAllocation(Displaced);
+        for (OverlayIndex = 0; OverlayIndex < RXGK_PRESENT_MAX_OVERLAYS; ++OverlayIndex)
+            DxgkpReleaseScanoutAllocation(DisplacedOverlays[OverlayIndex]);
         InterlockedIncrement(&Queue->PresentedFrameCount);
     }
 
@@ -4063,6 +4182,11 @@ Cleanup:
     }
     if (PinOwned)
         DxgkVidMmReleaseSubmissionResidencyPin(Allocation);
+    for (OverlayIndex = 0; OverlayIndex < RXGK_PRESENT_MAX_OVERLAYS; ++OverlayIndex)
+    {
+        if (OverlayPinned[OverlayIndex])
+            DxgkVidMmReleaseSubmissionResidencyPin(Entry->Overlays[OverlayIndex].Allocation);
+    }
     if (ScanoutLease)
         DxgkVidPnReleaseScanoutLease();
     KeReleaseMutex(&Queue->MmioPresentMutex, FALSE);
