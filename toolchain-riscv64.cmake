@@ -1,3 +1,5 @@
+# TODO(riscv64): temporary. Merge into toolchain-clang.cmake together with
+# sdk/cmake/riscv64.cmake, then delete this file.
 # ReactOS, UEFI and assembly-offset generator modules are native PE/COFF targets.
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR riscv64)

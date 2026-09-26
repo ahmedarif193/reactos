@@ -147,7 +147,7 @@ KiRiscvConsoleInitializeNs16550(
     if ((Address == 0) || (Address & (Width - 1)))
         return FALSE;
 
-    /* The loader mapped this window into the direct map (ABI-126). */
+    /* The loader mapped this window into the direct map. */
     Window = (ULONGLONG)KI_UART_REGISTER_COUNT << Shift;
     if ((Length < Window) ||
         (Address >= RiscvBlock->PhysicalLimit) ||

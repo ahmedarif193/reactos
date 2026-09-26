@@ -2,7 +2,7 @@
  * PROJECT:     ReactOS Kernel
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF
- * PURPOSE:     KD serial provider over the RISC-V early console (ABI-127)
+ * PURPOSE:     KD serial provider over the RISC-V early console
  */
 
 #include <ntoskrnl.h>

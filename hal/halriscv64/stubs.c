@@ -20,7 +20,7 @@ VOID NTAPI KiRiscvClearSoftwareInterrupt(KIRQL Irql);
 VOID NTAPI KiRiscvSendSoftwareInterrupt(KAFFINITY TargetSet, KIRQL Irql);
 BOOLEAN NTAPI InbvDisplayString(PCSTR String);
 
-/* NT layering (ABI-127): boot video owns text output. The debugger transport
+/* NT layering: boot video owns text output. The debugger transport
  * remains independent when firmware supplies no usable framebuffer. */
 VOID
 NTAPI

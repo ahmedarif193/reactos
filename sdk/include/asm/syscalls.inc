@@ -271,7 +271,7 @@ Zw\Name:
 #include <asm/ksriscv64.h>
 
     /*
-     * Kernel-mode Zw* wrappers (ABI-131). Like the ARM64 wrapper above, a
+     * Kernel-mode Zw* wrappers. Like the ARM64 wrapper above, a
      * Zw* call from kernel code does not trap: it saves the caller's
      * PreviousMode, forces KernelMode, calls Nt* directly and restores
      * PreviousMode. The current thread is read with interrupts masked, so
