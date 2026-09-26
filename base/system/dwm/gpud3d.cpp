@@ -101,7 +101,7 @@ struct BlurTarget
     RECT Bounds;
     ULONG Radius, Call, Frame;
     ULONGLONG LastUse;
-    BOOL Valid;
+    BOOL Valid, Pinned;
 
     void Reset()
     {
@@ -153,6 +153,8 @@ struct Compositor
     BlurTarget Blurs[4];
     DWM_GPU_SCENE_CACHE Scene;
     BOOL LowerUnchanged[DWM_MAX_WINDOWS];
+    /* The window redraws its material from last frame's filtered capture. */
+    BOOL CachedCapture[DWM_MAX_WINDOWS];
     DWM_WIN BlurOwner;
     BOOL BlurOwnerValid, BlurLowerUnchanged;
     ULONG BlurCall, Frame, PresentedBuffers;
@@ -1015,7 +1017,7 @@ void BuildWeights(ULONG Radius, Constants &Data)
 BlurTarget *FilterCaptureImpl(const RECT &Bounds, ULONG Radius)
 {
     ULONG Call = State.BlurCall++;
-    BlurTarget *Oldest = &State.Blurs[0], *Reusable = NULL;
+    BlurTarget *Oldest = NULL, *Reusable = NULL;
     for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
     {
         BlurTarget *Target = &State.Blurs[Index];
@@ -1028,11 +1030,14 @@ BlurTarget *FilterCaptureImpl(const RECT &Bounds, ULONG Radius)
             ++State.Reused;
             return Target;
         }
+        /* A pinned result is still owed to a window that skipped its capture. */
+        if (Target->Pinned)
+            continue;
         if (Target->Frame != State.Frame && Target->Call == Call &&
             Target->Owner.SurfaceId == State.BlurOwner.SurfaceId &&
             (Reusable == NULL || Target->LastUse > Reusable->LastUse))
             Reusable = Target;
-        if (Target->LastUse < Oldest->LastUse)
+        if (Oldest == NULL || Target->LastUse < Oldest->LastUse)
             Oldest = Target;
     }
     /* Invalid pixels can still use the owner's previous texture storage. */
@@ -1366,6 +1371,56 @@ OpaqueClientRect(const DWM_WIN *Window, RECT *Rect)
                               Client.Left + Client.Width, Client.Top + Client.Height);
 }
 
+/* A material window whose lower scene is unchanged redraws from last frame's
+ * filtered capture. That capture adds no damage and reads no canvas pixels,
+ * so pin it where this frame's other captures cannot evict it. Keep one
+ * target free for captures that are taken. */
+static void
+PinCachedCaptures(void)
+{
+    ULONG Pinned = 0;
+
+    ZeroMemory(State.CachedCapture, sizeof(State.CachedCapture));
+    for (ULONG Slot = 0; Slot < ARRAYSIZE(State.Blurs); ++Slot)
+        State.Blurs[Slot].Pinned = FALSE;
+    for (ULONG Index = 0; State.SceneCurrent && Index < State.Scene.Count &&
+         Pinned + 1 < ARRAYSIZE(State.Blurs); ++Index)
+    {
+        const DWM_WIN *Window = &State.Scene.Windows[Index];
+        DWM_GPU_WINDOW_GEOMETRY Geometry;
+        RECT Bounds;
+
+        /* Only a window's first capture can be served whole: explicit blur
+         * and a glass client capture again after its base draws. */
+        if (Window->BackdropType != DWM_BACKDROP_TRANSIENT || Window->BackdropRegion == 0 ||
+            Window->BackdropOpacity >= 255 || (Window->BlurFlags & DWM_BLUR_ENABLE) ||
+            (Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW &&
+             Window->DxGlobalShare != 0 && Window->DxUpdateId != 0) ||
+            !State.LowerUnchanged[Index] || Window->AnimFlags != 0 ||
+            ((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha == 0) ||
+            !DwmGpuWindowGeometry(Window, State.Scene.Space.OriginX, State.Scene.Space.OriginY, &Geometry))
+            continue;
+        ULONG Radius = DwmGpuMaterialBlurRadius(Window);
+        if (!DwmGpuDamageBounds(&Bounds, State.Width, State.Height, Geometry.Left - Radius, Geometry.Top - Radius,
+                                Geometry.Left + Geometry.Width + Radius, Geometry.Top + Geometry.Height + Radius))
+            continue;
+        DWM_WIN Owner = DwmGpuCacheBlurOwner(Window);
+        for (ULONG Slot = 0; Slot < ARRAYSIZE(State.Blurs); ++Slot)
+        {
+            BlurTarget *Target = &State.Blurs[Slot];
+            if (!Target->Pinned && Target->Valid && Target->Frame + 1 == State.Frame &&
+                Target->Call == 0 && Target->Radius == Radius && EqualRect(&Target->Bounds, &Bounds) &&
+                memcmp(&Target->Owner, &Owner, sizeof(Owner)) == 0)
+            {
+                Target->Pinned = TRUE;
+                State.CachedCapture[Index] = TRUE;
+                ++Pinned;
+                break;
+            }
+        }
+    }
+}
+
 /* Pick the largest opaque client inside this frame's damage. Layers drawn
  * beneath it within its rectangle would be overwritten, so they are skipped.
  * Those pixels stay stale on the canvas, so no capture drawn before the
@@ -1388,7 +1443,9 @@ SelectOccluder(void)
 
         if (!OpaqueClientRect(Window, &Rect))
             continue;
-        if (DwmGpuSceneWindowBounds(Window, &State.Scene.Space, TRUE, &Capture))
+        /* A capture served from cache reads no canvas pixels. */
+        if (!State.CachedCapture[Index] &&
+            DwmGpuSceneWindowBounds(Window, &State.Scene.Space, TRUE, &Capture))
         {
             LONG Radius = (LONG)DwmGpuMaterialBlurRadius(Window) + 2;
 
@@ -1398,7 +1455,8 @@ SelectOccluder(void)
             continue;
         for (ULONG Lower = 0; Clear && Lower < Index; ++Lower)
         {
-            if (DwmGpuSceneWindowBounds(&State.Scene.Windows[Lower], &State.Scene.Space, TRUE, &Capture) &&
+            if (!State.CachedCapture[Lower] &&
+                DwmGpuSceneWindowBounds(&State.Scene.Windows[Lower], &State.Scene.Space, TRUE, &Capture) &&
                 DwmGpuDamageIntersects(&Capture, &Visible))
                 Clear = FALSE;
         }
@@ -1450,8 +1508,9 @@ DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdro
     DwmGpuDamageUnion(&State.Draw, &State.Scene.AnimationDamage);
     if (!DwmGpuDamageBounds(&State.Draw, State.Width, State.Height, State.Draw.left, State.Draw.top, State.Draw.right, State.Draw.bottom))
         State.Draw = Full;
+    PinCachedCaptures();
     DwmGpuDamageExpandBlur(&State.Draw, State.Width, State.Height, State.Scene.Windows, State.Scene.Count,
-        State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius, NULL);
+        State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius, State.CachedCapture);
     SelectOccluder();
     Constants Data = {};
     SetRectangle(Data, 0, 0, State.Width, State.Height);
