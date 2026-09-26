@@ -5017,23 +5017,11 @@ void NTAPI ChpeAutoRtlInitCodePageTable(PUSHORT a0, PCPTABLEINFO a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlInitCodePageTable), __typeof__(&RtlInitCodePageTable)), "RtlInitCodePageTable bridge signature mismatch");
 
-void NTAPI ChpeAutoRtlInitMemoryStream(PRTL_MEMORY_STREAM a0)
-{
-    RtlInitMemoryStream(a0);
-}
-_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlInitMemoryStream), __typeof__(&RtlInitMemoryStream)), "RtlInitMemoryStream bridge signature mismatch");
-
 void NTAPI ChpeAutoRtlInitNlsTables(PUSHORT a0, PUSHORT a1, PUSHORT a2, PNLSTABLEINFO a3)
 {
     RtlInitNlsTables(a0, a1, a2, a3);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlInitNlsTables), __typeof__(&RtlInitNlsTables)), "RtlInitNlsTables bridge signature mismatch");
-
-void NTAPI ChpeAutoRtlInitOutOfProcessMemoryStream(PRTL_MEMORY_STREAM a0)
-{
-    RtlInitOutOfProcessMemoryStream(a0);
-}
-_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlInitOutOfProcessMemoryStream), __typeof__(&RtlInitOutOfProcessMemoryStream)), "RtlInitOutOfProcessMemoryStream bridge signature mismatch");
 
 void NTAPI ChpeAutoRtlInitString(PSTRING a0, PCSTR a1)
 {
@@ -6002,12 +5990,6 @@ void NTAPI ChpeAutoRtlReleaseActivationContext(HANDLE a0)
     RtlReleaseActivationContext(a0);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlReleaseActivationContext), __typeof__(&RtlReleaseActivationContext)), "RtlReleaseActivationContext bridge signature mismatch");
-
-ULONG NTAPI ChpeAutoRtlReleaseMemoryStream(struct IStream * a0)
-{
-    return RtlReleaseMemoryStream(a0);
-}
-_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlReleaseMemoryStream), __typeof__(&RtlReleaseMemoryStream)), "RtlReleaseMemoryStream bridge signature mismatch");
 
 void NTAPI ChpeAutoRtlReleasePebLock(VOID)
 {

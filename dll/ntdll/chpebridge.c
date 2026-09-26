@@ -22,6 +22,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <setjmp.h>
+#include <objidl.h>
 #include <md4.h>
 #include <md5.h>
 #include <sha1.h>
@@ -3408,6 +3409,86 @@ CHPE_AUTO_NATIVE_ALIAS(SetTimer)
 #undef CHPE_AUTO_NATIVE_ALIAS
 
 #include "chpebridge_generated.inc"
+
+ULONG NTAPI ChpeRtlReleaseMemoryStream(struct IStream *This);
+
+static struct IStreamVtbl ChpeRtlMemoryStreamVtbl =
+{
+    ChpeAutoRtlQueryInterfaceMemoryStream,
+    ChpeAutoRtlAddRefMemoryStream,
+    ChpeRtlReleaseMemoryStream,
+    ChpeAutoRtlReadMemoryStream,
+    ChpeAutoRtlWriteMemoryStream,
+    ChpeAutoRtlSeekMemoryStream,
+    ChpeAutoRtlSetMemoryStreamSize,
+    ChpeAutoRtlCopyMemoryStreamTo,
+    ChpeAutoRtlCommitMemoryStream,
+    ChpeAutoRtlRevertMemoryStream,
+    ChpeAutoRtlLockMemoryStreamRegion,
+    ChpeAutoRtlUnlockMemoryStreamRegion,
+    ChpeAutoRtlStatMemoryStream,
+    ChpeAutoRtlCloneMemoryStream,
+};
+
+static struct IStreamVtbl ChpeRtlOutOfProcessMemoryStreamVtbl =
+{
+    ChpeAutoRtlQueryInterfaceMemoryStream,
+    ChpeAutoRtlAddRefMemoryStream,
+    ChpeRtlReleaseMemoryStream,
+    ChpeAutoRtlReadOutOfProcessMemoryStream,
+    ChpeAutoRtlWriteMemoryStream,
+    ChpeAutoRtlSeekMemoryStream,
+    ChpeAutoRtlSetMemoryStreamSize,
+    ChpeAutoRtlCopyMemoryStreamTo,
+    ChpeAutoRtlCommitMemoryStream,
+    ChpeAutoRtlRevertMemoryStream,
+    ChpeAutoRtlLockMemoryStreamRegion,
+    ChpeAutoRtlUnlockMemoryStreamRegion,
+    ChpeAutoRtlStatMemoryStream,
+    ChpeAutoRtlCloneMemoryStream,
+};
+
+VOID NTAPI
+ChpeRtlInitMemoryStream(PRTL_MEMORY_STREAM Stream)
+{
+    RtlInitMemoryStream(Stream);
+    Stream->Vtbl = &ChpeRtlMemoryStreamVtbl;
+}
+
+VOID NTAPI
+ChpeRtlInitOutOfProcessMemoryStream(PRTL_MEMORY_STREAM Stream)
+{
+    static PVOID FinalRelease;
+    ANSI_STRING Name = RTL_CONSTANT_STRING("RtlFinalReleaseOutOfProcessMemoryStream");
+    PVOID BridgeBase = NULL;
+    PVOID Export = NULL;
+
+    RtlInitOutOfProcessMemoryStream(Stream);
+    Stream->Vtbl = &ChpeRtlOutOfProcessMemoryStreamVtbl;
+
+    if (FinalRelease == NULL &&
+        NT_SUCCESS(LdrGetDllHandle(NULL, NULL, (PUNICODE_STRING)&ChpeBridgeNtdllName, &BridgeBase)) &&
+        NT_SUCCESS(LdrGetProcedureAddress(BridgeBase, &Name, 0, &Export)))
+    {
+        FinalRelease = Export;
+    }
+
+    Stream->FinalRelease = FinalRelease ? (PRTL_MEMORY_STREAM_FINAL_RELEASE_ROUTINE)FinalRelease :
+                                          ChpeAutoRtlFinalReleaseOutOfProcessMemoryStream;
+}
+
+ULONG NTAPI
+ChpeRtlReleaseMemoryStream(struct IStream *This)
+{
+    PRTL_MEMORY_STREAM Stream = CONTAINING_RECORD(This, RTL_MEMORY_STREAM, Vtbl);
+    LONG Result;
+
+    Result = InterlockedDecrement(&Stream->RefCount);
+    if (Result == 0 && Stream->FinalRelease)
+        Stream->FinalRelease(Stream);
+
+    return Result;
+}
 
 NTSTATUS NTAPI NtCreateTransactionManager(PHANDLE TmHandle, ACCESS_MASK DesiredAccess,
                                           POBJECT_ATTRIBUTES ObjectAttributes,
