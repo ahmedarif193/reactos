@@ -5,7 +5,7 @@ $if (_NTDDK_)
  */
 
 
-/* Public kernel MM boundaries for the provisional Sv39 layout (ABI-052). */
+/* Public kernel MM boundaries for the provisional Sv39 layout. */
 extern NTKERNELAPI PVOID MmHighestUserAddress;
 extern NTKERNELAPI PVOID MmSystemRangeStart;
 extern NTKERNELAPI ULONG_PTR MmUserProbeAddress;

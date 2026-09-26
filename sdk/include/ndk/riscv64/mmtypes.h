@@ -15,7 +15,7 @@
 /* Width of a pointer-sized virtual page number, not the hardware PPN. */
 #define MM_PAGE_FRAME_NUMBER_SIZE       (64 - PAGE_SHIFT)
 
-/* Sv39 low-half user limit selected by ABI-052. Keep this compile-time value
+/* Sv39 low-half user limit. Keep this compile-time value
  * identical to the kernel's initial MmHighestUserAddress value. */
 #define MI_HIGHEST_USER_ADDRESS         ((PVOID)0x0000003FFFFEFFFFULL)
 

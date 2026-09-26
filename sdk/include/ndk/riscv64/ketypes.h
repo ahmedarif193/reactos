@@ -8,7 +8,7 @@
 #ifndef _RISCV64_KETYPES_H
 #define _RISCV64_KETYPES_H
 
-/* Software synchronization priority selected by ABI-064. */
+/* Software synchronization priority, below the clock and IPI levels. */
 #define SYNCH_LEVEL 12
 
 /* ReactOS-private U-mode ECALL selector, outside the NT service-table space. */
