@@ -718,7 +718,7 @@ NpWaitForNamedPipe(IN PDEVICE_OBJECT DeviceObject,
     Fcb = (PNP_FCB)((ULONG_PTR)Fcb & ~1);
 
     NodeTypeCode = Fcb ? Fcb->NodeType : 0;
-    if (NodeTypeCode != NPFS_NTC_FCB)
+    if (NodeTypeCode != NPFS_NTC_FCB || !Fcb->ServerOpenCount)
     {
         Status = STATUS_OBJECT_NAME_NOT_FOUND;
         goto Quickie;
