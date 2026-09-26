@@ -11026,6 +11026,41 @@ DxgkCbSynchronizeExecution(
     return STATUS_SUCCESS;
 }
 
+/*
+ * DxgkSynchronizeScanoutExecution
+ *
+ * Synchronizes an MMIO source-address update with the adapter interrupt.
+ * A miniport without a connected interrupt reports vsync from its own DPC,
+ * so there is no ISR to exclude: run the routine at DISPATCH_LEVEL under
+ * the adapter interrupt lock instead of failing every MMIO flip.
+ *
+ * IRQL: <= DISPATCH_LEVEL
+ */
+NTSTATUS
+DxgkSynchronizeScanoutExecution(
+    _In_  PDXGKRNL_ADAPTER        Adapter,
+    _In_  PKSYNCHRONIZE_ROUTINE   SynchronizeRoutine,
+    _In_  PVOID                   Context,
+    _Out_ PBOOLEAN                ReturnValue)
+{
+    KIRQL OldIrql;
+
+    if (Adapter->InterruptObject != NULL ||
+        Adapter->InterruptMessageTable != NULL)
+    {
+        return DxgkCbSynchronizeExecution((HANDLE)Adapter,
+                                          SynchronizeRoutine,
+                                          Context,
+                                          0,
+                                          ReturnValue);
+    }
+
+    OldIrql = DxgkpAcquireAdapterInterruptLock(Adapter);
+    *ReturnValue = SynchronizeRoutine(Context);
+    DxgkpReleaseAdapterInterruptLock(Adapter, OldIrql);
+    return STATUS_SUCCESS;
+}
+
 static BOOLEAN
 DxgkpValidatePostDisplayInformation(
     _In_ const DXGK_DISPLAY_INFORMATION *DisplayInformation)

@@ -4020,7 +4020,7 @@ DxgkpExecuteMmioFlip(
         Status = STATUS_INVALID_DEVICE_STATE;
         goto Cleanup;
     }
-    Status = DxgkCbSynchronizeExecution(Adapter, DxgkpSetMmioSourceAddress, &FlipCall, 0, &Synchronized);
+    Status = DxgkSynchronizeScanoutExecution(Adapter, DxgkpSetMmioSourceAddress, &FlipCall, &Synchronized);
     if (NT_SUCCESS(Status))
         Status = FlipCall.Status;
     if (!NT_SUCCESS(Status))
