@@ -21,6 +21,9 @@ foreach(_table classes vendors)
 endforeach()
 
 list(APPEND SOURCE
+    generic/display.c
+    generic/memory.c
+    generic/misc.c
     generic/sysinfo_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
     ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c)

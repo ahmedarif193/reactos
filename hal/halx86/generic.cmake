@@ -2,7 +2,6 @@
 list(APPEND HAL_GENERIC_SOURCE
     generic/beep.c
     generic/cmos.c
-    generic/display.c
     generic/dma.c
     generic/drive.c
     generic/gsihints.c

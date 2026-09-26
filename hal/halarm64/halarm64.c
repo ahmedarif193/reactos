@@ -1558,43 +1558,6 @@ HalpRegisterPciDebuggingDeviceInfo(VOID)
 {
 }
 
-NTSTATUS
-NTAPI
-HalpOpenRegistryKey(
-    _Out_ PHANDLE KeyHandle,
-    _In_opt_ HANDLE RootKey,
-    _In_ PUNICODE_STRING KeyName,
-    _In_ ACCESS_MASK DesiredAccess,
-    _In_ BOOLEAN Create)
-{
-    NTSTATUS Status;
-    ULONG Disposition;
-    OBJECT_ATTRIBUTES ObjectAttributes;
-
-    InitializeObjectAttributes(&ObjectAttributes,
-                               KeyName,
-                               OBJ_CASE_INSENSITIVE,
-                               RootKey,
-                               NULL);
-
-    if (Create)
-    {
-        Status = ZwCreateKey(KeyHandle,
-                             DesiredAccess,
-                             &ObjectAttributes,
-                             0,
-                             NULL,
-                             REG_OPTION_VOLATILE,
-                             &Disposition);
-    }
-    else
-    {
-        Status = ZwOpenKey(KeyHandle, DesiredAccess, &ObjectAttributes);
-    }
-
-    return Status;
-}
-
 /*
  * ARM64 PCI-related HAL stub functions.
  *
@@ -1846,9 +1809,6 @@ HalQueryArm64TimerConfig(
 #define HAL_ARM64_GICD_MAP_LENGTH 0x10000ULL
 #define HAL_ARM64_GICR_FRAME_LENGTH 0x20000ULL
 #define HAL_ARM64_ITS_MAP_LENGTH 0x20000ULL
-
-static ULONG HalpUsedAllocDescriptors;
-static MEMORY_ALLOCATION_DESCRIPTOR HalpAllocationDescriptorArray[64];
 
 /*
  * PSCI (Power State Coordination Interface) definitions for ARM64.
@@ -2310,129 +2270,6 @@ static __inline PVOID HalpPhysToKseg0(ULONGLONG Physical)
 
     return (PVOID)(ULONG_PTR)(HAL_ARM64_PHYS_MAP_BASE |
                               (Physical & HAL_ARM64_PHYS_ADDR_MASK));
-}
-
-ULONG64
-NTAPI
-HalpAllocPhysicalMemory(
-    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
-    _In_ ULONG64 MaxAddress,
-    _In_ PFN_NUMBER PageCount,
-    _In_ BOOLEAN Aligned)
-{
-    ULONG UsedDescriptors;
-    ULONG64 PhysicalAddress;
-    PFN_NUMBER MaxPage, BasePage, Alignment;
-    PLIST_ENTRY NextEntry;
-    PMEMORY_ALLOCATION_DESCRIPTOR MdBlock, NewBlock, FreeBlock;
-    BOOLEAN IgnoreMaxAddress;
-
-    MaxPage = MaxAddress >> PAGE_SHIFT;
-
-    if ((HalpUsedAllocDescriptors + 2) > RTL_NUMBER_OF(HalpAllocationDescriptorArray))
-    {
-        DPRINT1("HAL: HalpAllocPhysicalMemory - descriptor array full\n");
-        return 0;
-    }
-
-    UsedDescriptors = HalpUsedAllocDescriptors;
-
-    /*
-     * ARM64-specific: On ARM64 systems, physical memory typically starts at
-     * addresses well above 16MB (e.g., 0x40000000 or 0x80000000). The MaxAddress
-     * constraint (usually 0x1000000 for 16MB) is an x86 legacy for ISA DMA
-     * compatibility, which does not apply to ARM64.
-     *
-     * We perform two passes:
-     * 1. First pass: Try to find memory below MaxAddress (for compatibility)
-     * 2. Second pass: If no memory found below MaxAddress, allocate from any
-     *    available free memory (ARM64 fallback)
-     */
-    for (IgnoreMaxAddress = FALSE; ; IgnoreMaxAddress = TRUE)
-    {
-        NextEntry = LoaderBlock->MemoryDescriptorListHead.Flink;
-
-        while (NextEntry != &LoaderBlock->MemoryDescriptorListHead)
-        {
-            MdBlock = CONTAINING_RECORD(NextEntry,
-                                        MEMORY_ALLOCATION_DESCRIPTOR,
-                                        ListEntry);
-
-            Alignment = 0;
-            if (Aligned)
-                Alignment = ((MdBlock->BasePage + 0x0F) & ~0x0F) - MdBlock->BasePage;
-
-            if ((MdBlock->MemoryType == LoaderFree) ||
-                (MdBlock->MemoryType == LoaderFirmwareTemporary))
-            {
-                BasePage = MdBlock->BasePage;
-                /*
-                 * Check if this block is suitable:
-                 * - BasePage must be non-zero
-                 * - Block must have enough pages (including alignment)
-                 * - If not ignoring MaxAddress, the allocation must fit below MaxPage
-                 */
-                if ((BasePage) &&
-                    (MdBlock->PageCount >= PageCount + Alignment) &&
-                    (IgnoreMaxAddress || (BasePage + PageCount + Alignment < MaxPage)))
-                {
-                    PhysicalAddress = ((ULONG64)BasePage + Alignment) << PAGE_SHIFT;
-                    goto FoundBlock;
-                }
-            }
-
-            NextEntry = NextEntry->Flink;
-        }
-
-        /* If we already tried ignoring MaxAddress and still failed, give up */
-        if (IgnoreMaxAddress)
-        {
-            DPRINT1("HAL: HalpAllocPhysicalMemory - no suitable memory found\n");
-            return 0;
-        }
-
-        /* First pass failed, try second pass ignoring MaxAddress (ARM64 fallback) */
-    }
-
-FoundBlock:
-
-    NewBlock = &HalpAllocationDescriptorArray[HalpUsedAllocDescriptors];
-    NewBlock->PageCount = (ULONG)PageCount;
-    NewBlock->BasePage = MdBlock->BasePage + Alignment;
-    NewBlock->MemoryType = LoaderHALCachedMemory;
-
-    UsedDescriptors++;
-    HalpUsedAllocDescriptors = UsedDescriptors;
-
-    if (Alignment)
-    {
-        if (MdBlock->PageCount > (PageCount + Alignment))
-        {
-            FreeBlock = &HalpAllocationDescriptorArray[UsedDescriptors];
-            FreeBlock->PageCount = MdBlock->PageCount - Alignment - (ULONG)PageCount;
-            FreeBlock->BasePage = MdBlock->BasePage + Alignment + (ULONG)PageCount;
-            FreeBlock->MemoryType = MdBlock->MemoryType;
-
-            HalpUsedAllocDescriptors++;
-
-            InsertHeadList(&MdBlock->ListEntry, &FreeBlock->ListEntry);
-        }
-
-        MdBlock->PageCount = Alignment;
-        InsertHeadList(&MdBlock->ListEntry, &NewBlock->ListEntry);
-    }
-    else
-    {
-        MdBlock->BasePage += (ULONG)PageCount;
-        MdBlock->PageCount -= (ULONG)PageCount;
-
-        InsertTailList(&MdBlock->ListEntry, &NewBlock->ListEntry);
-
-        if (MdBlock->PageCount == 0)
-            RemoveEntryList(&MdBlock->ListEntry);
-    }
-
-    return PhysicalAddress;
 }
 
 PVOID
@@ -3511,15 +3348,6 @@ HalRequestSoftwareInterrupt(
     HalpArm64SendSgiSelf(SgiId);
 }
 
-VOID
-NTAPI
-HalAcquireDisplayOwnership(
-    _In_ PHAL_RESET_DISPLAY_PARAMETERS ResetDisplayParameters)
-{
-    UNREFERENCED_PARAMETER(ResetDisplayParameters);
-    UNIMPLEMENTED_STUB();
-}
-
 NTSTATUS
 NTAPI
 HalAdjustResourceList(
@@ -4193,15 +4021,6 @@ HalDisableSystemInterrupt(
     }
 
     HalpArm64DisableInterrupt(Vector);
-}
-
-VOID
-NTAPI
-HalDisplayString(
-    _In_ PCSTR String)
-{
-    /* Call the Inbv driver */
-    InbvDisplayString(String);
 }
 
 /*
@@ -6576,22 +6395,6 @@ HalProcessorIdle(VOID)
     __asm__ __volatile__("dsb sy; isb; wfi" ::: "memory");
 }
 
-BOOLEAN
-NTAPI
-HalQueryDisplayParameters(
-    _Out_opt_ PULONG Width,
-    _Out_opt_ PULONG Height,
-    _Out_opt_ PULONG Depth,
-    _Out_opt_ PULONG Frequency)
-{
-    if (Width) *Width = 0;
-    if (Height) *Height = 0;
-    if (Depth) *Depth = 0;
-    if (Frequency) *Frequency = 0;
-    UNIMPLEMENTED_STUB();
-    return FALSE;
-}
-
 #define HAL_ARM64_RTC_EARLIEST_SECONDS 1767225600UL
 #define HAL_ARM64_PL031_PHYSICAL_ADDRESS 0x09010000ULL
 
@@ -7007,46 +6810,6 @@ FASTCALL
 HalSweepIcache(VOID)
 {
     __asm__ __volatile__("ic iallu\n\tdsb sy\n\tisb" ::: "memory");
-}
-
-/*
- * HalSystemVectorDispatchEntry - Get dispatch entry for a system vector.
- *
- * On x86/x64, this is used for APIC vector→IDT dispatch table lookup.
- * On ARM64, interrupt dispatch is handled differently:
- *
- * 1. GIC delivers INTID via ICC_IAR1_EL1 (system register) or GICC_IAR (MMIO)
- * 2. HalGetInterruptSource() reads the active INTID
- * 3. KiArm64InterruptDispatchEntry() uses KiArm64IntTable[] for dispatch
- * 4. KeConnectInterrupt() populates KiArm64IntTable[] directly
- *
- * Since ARM64 doesn't use the x86-style vector→dispatch table mechanism,
- * this function returns 0 (no special dispatch type) like the x86 HAL.
- *
- * Return values:
- *   0 = Normal dispatch (use kernel's KINTERRUPT chain)
- *   1 = Flat dispatch (direct routine call)
- *   2 = No connection handler
- */
-UCHAR
-FASTCALL
-HalSystemVectorDispatchEntry(
-    _In_ ULONG Vector,
-    _Out_ PKINTERRUPT_ROUTINE **FlatDispatch,
-    _Out_ PKINTERRUPT_ROUTINE *NoConnection)
-{
-    UNREFERENCED_PARAMETER(Vector);
-
-    /*
-     * Return 0 to indicate normal KINTERRUPT chain dispatch.
-     * The kernel will use its own dispatch table (KiArm64IntTable on ARM64).
-     */
-    if (FlatDispatch)
-        *FlatDispatch = NULL;
-    if (NoConnection)
-        *NoConnection = NULL;
-
-    return 0;
 }
 
 BOOLEAN
@@ -7597,17 +7360,6 @@ HalReturnToFirmware(
     {
         __asm__ __volatile__("wfi");
     }
-}
-
-VOID
-NTAPI
-HalSetDisplayParameters(
-    _In_ ULONG Width,
-    _In_ ULONG Height)
-{
-    UNREFERENCED_PARAMETER(Width);
-    UNREFERENCED_PARAMETER(Height);
-    UNIMPLEMENTED_STUB();
 }
 
 /*

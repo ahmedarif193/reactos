@@ -8,7 +8,6 @@ list(APPEND HAL_XBOX_ASM_SOURCE
 list(APPEND HAL_XBOX_SOURCE
     generic/beep.c
     generic/cmos.c
-    generic/display.c
     generic/dma.c
     generic/drive.c
     generic/halinit.c

@@ -99,46 +99,6 @@ HalpMarkAcpiHal(VOID)
     return Status;
 }
 
-NTSTATUS
-NTAPI
-HalpOpenRegistryKey(IN PHANDLE KeyHandle,
-                    IN HANDLE RootKey,
-                    IN PUNICODE_STRING KeyName,
-                    IN ACCESS_MASK DesiredAccess,
-                    IN BOOLEAN Create)
-{
-    NTSTATUS Status;
-    ULONG Disposition;
-    OBJECT_ATTRIBUTES ObjectAttributes;
-
-    /* Setup the attributes we received */
-    InitializeObjectAttributes(&ObjectAttributes,
-                               KeyName,
-                               OBJ_CASE_INSENSITIVE,
-                               RootKey,
-                               NULL);
-
-    /* What to do? */
-    if ( Create )
-    {
-        /* Create the key */
-        Status = ZwCreateKey(KeyHandle,
-                             DesiredAccess,
-                             &ObjectAttributes,
-                             0,
-                             NULL,
-                             REG_OPTION_VOLATILE,
-                             &Disposition);
-    }
-    else
-    {
-        /* Open the key */
-        Status = ZwOpenKey(KeyHandle, DesiredAccess, &ObjectAttributes);
-    }
-
-    /* We're done */
-    return Status;
-}
 #endif /* !_MINIHAL_ */
 
 VOID
@@ -217,18 +177,6 @@ HalpFlushTLB(VOID)
 /*
  * @implemented
  */
-UCHAR
-FASTCALL
-HalSystemVectorDispatchEntry(IN ULONG Vector,
-                             OUT PKINTERRUPT_ROUTINE **FlatDispatch,
-                             OUT PKINTERRUPT_ROUTINE *NoConnection)
-{
-    //
-    // Not implemented on x86
-    //
-    return 0;
-}
-
 /*
  * @implemented
  */
