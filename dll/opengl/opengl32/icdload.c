@@ -103,7 +103,7 @@ typedef HRESULT (WINAPI *PFN_DWM_DX_GET_WINDOW_SHARED_SURFACE)(
 typedef HRESULT (WINAPI *PFN_DWM_DX_UPDATE_WINDOW_SHARED_SURFACE)(
     HWND, ULONGLONG, DWORD, HMONITOR, const RECT *);
 typedef HRESULT (WINAPI *PFN_DWM_DX_PUBLISH_WINDOW_SURFACE)(
-    HWND, LUID, HANDLE, UINT, UINT, HANDLE);
+    HWND, LUID, HANDLE, UINT, UINT, HANDLE, DWORD);
 
 static INIT_ONCE DwmDxInitOnce = INIT_ONCE_STATIC_INIT;
 static PFN_DWM_DX_GET_WINDOW_SHARED_SURFACE DwmDxGetWindowSharedSurface;
@@ -180,7 +180,9 @@ IntPublishDwmDxPresentRecycle(PWGL_ASYNC_PRESENT Present)
                                                Retained->SharedSurface,
                                                Retained->Width,
                                                Retained->Height,
-                                               Retained->ReleaseEvent);
+                                               Retained->ReleaseEvent,
+                                               (Retained->Flags & WGL_PRESENTBUFFERS_SCANOUT) ?
+                                                   DWM_DX_PUBLISH_SCANOUT : 0);
         }
         /* A buffer DWM never received is the ICD's again. */
         if (FAILED(Result))
@@ -663,7 +665,9 @@ IntPresentRetained(HDC hdc,
                                            Retained->SharedSurface,
                                            Retained->Width,
                                            Retained->Height,
-                                           Retained->ReleaseEvent);
+                                           Retained->ReleaseEvent,
+                                           (Retained->Flags & WGL_PRESENTBUFFERS_SCANOUT) ?
+                                               DWM_DX_PUBLISH_SCANOUT : 0);
     }
     if (FAILED(Result))
     {

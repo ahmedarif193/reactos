@@ -106,4 +106,4 @@
 205 stdcall DwmTransitionOwnedWindow(long long)
 206 stdcall DwmUnregisterThumbnail(long)
 207 stdcall DwmUpdateThumbnailProperties(ptr ptr)
-@ stdcall DwmpDxPublishWindowSurface(ptr int64 ptr long long ptr)
+@ stdcall DwmpDxPublishWindowSurface(ptr int64 ptr long long ptr long)
