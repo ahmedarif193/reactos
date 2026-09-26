@@ -7,26 +7,6 @@
 
 #pragma once
 
-#define HAL_PLATFORM_DEVICE_MAX_MEMORY 4
-
-/* A fixed device the firmware tables do not describe, reported as a bus child */
-typedef struct _HAL_PLATFORM_DEVICE
-{
-    PCSTR Name;                 /* Diagnostics only                       */
-    PCWSTR DeviceId;            /* PnP device/hardware ID                 */
-    PCWSTR CompatibleId;        /* Optional second hardware ID, or NULL   */
-
-    ULONG MemoryCount;
-    struct
-    {
-        ULONGLONG Base;
-        ULONG Length;
-    } Memory[HAL_PLATFORM_DEVICE_MAX_MEMORY];
-
-    ULONG Gsi;                  /* 0 = no interrupt resource              */
-    BOOLEAN EdgeTriggered;      /* FALSE = level-sensitive                */
-} HAL_PLATFORM_DEVICE, *PHAL_PLATFORM_DEVICE;
-
 /* acpi/halpnpdd.c: reference counting for the interfaces the bus exports */
 VOID
 NTAPI
@@ -41,12 +21,6 @@ HalpPnpInterfaceDereference(
 /*
  * Architecture hooks
  */
-
-/* Platform devices to report, by index; NULL ends the list */
-const HAL_PLATFORM_DEVICE *
-NTAPI
-HalpGetPlatformDevice(
-    _In_ ULONG Index);
 
 /* Fill an interface the bus exports; STATUS_NOT_SUPPORTED if unknown */
 NTSTATUS

@@ -28,8 +28,7 @@ typedef enum _EXTENSION_TYPE
 typedef enum _PDO_TYPE
 {
     AcpiPdo = 0x80,
-    WdPdo,
-    PlatformPdo
+    WdPdo
 } PDO_TYPE;
 
 typedef enum _HALP_PNP_STATE
@@ -61,7 +60,6 @@ typedef struct _PDO_EXTENSION
     PFDO_EXTENSION ParentFdoExtension;
     PDEVICE_OBJECT ParentFdoDeviceObject;
     PDO_TYPE PdoType;
-    const HAL_PLATFORM_DEVICE *PlatformDevice;
     FAST_MUTEX PnpStateLock;
     HALP_PNP_STATE PnpState;
     HALP_PNP_STATE PreviousPnpState;
@@ -122,8 +120,7 @@ NTSTATUS
 HalpCreatePdo(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PFDO_EXTENSION FdoExtension,
-    _In_ PDO_TYPE PdoType,
-    _In_opt_ const HAL_PLATFORM_DEVICE *PlatformDevice)
+    _In_ PDO_TYPE PdoType)
 {
     NTSTATUS Status;
     PDEVICE_OBJECT PdoDeviceObject;
@@ -147,7 +144,6 @@ HalpCreatePdo(
     PdoExtension->ParentFdoDeviceObject = FdoExtension->FunctionalDeviceObject;
     ObReferenceObject(PdoExtension->ParentFdoDeviceObject);
     PdoExtension->PdoType = PdoType;
-    PdoExtension->PlatformDevice = PlatformDevice;
     ExInitializeFastMutex(&PdoExtension->PnpStateLock);
     PdoExtension->PnpState = HalpPnpStateNotStarted;
     PdoExtension->PreviousPnpState = HalpPnpStateNotStarted;
@@ -186,8 +182,6 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
     PFDO_EXTENSION FdoExtension;
     PDEVICE_OBJECT DeviceObject, AttachedDevice;
     PDESCRIPTION_HEADER Wdrt;
-    const HAL_PLATFORM_DEVICE *PlatformDevice;
-    ULONG Index;
 
     DPRINT("HAL: PnP Driver ADD!\n");
 
@@ -227,7 +221,7 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
     FdoExtension->AttachedDeviceObject = AttachedDevice;
 
     /* Create the ACPI PDO */
-    Status = HalpCreatePdo(DriverObject, FdoExtension, AcpiPdo, NULL);
+    Status = HalpCreatePdo(DriverObject, FdoExtension, AcpiPdo);
     if (!NT_SUCCESS(Status))
     {
         /* Fail */
@@ -235,16 +229,6 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
         IoDetachDevice(AttachedDevice);
         IoDeleteDevice(DeviceObject);
         return Status;
-    }
-
-    /* Report the devices the firmware tables do not describe */
-    for (Index = 0; (PlatformDevice = HalpGetPlatformDevice(Index)) != NULL; Index++)
-    {
-        /* A missing platform device must not fail the HAL bus */
-        if (!NT_SUCCESS(HalpCreatePdo(DriverObject, FdoExtension, PlatformPdo, PlatformDevice)))
-        {
-            DPRINT1("HAL: Could not create platform PDO for %S\n", PlatformDevice->DeviceId);
-        }
     }
 
     /* Find the ACPI watchdog table */
@@ -483,127 +467,6 @@ HalpQueryCapabilities(IN PDEVICE_OBJECT DeviceObject,
     return Status;
 }
 
-/*
- * Report a platform device's fixed memory windows and interrupt. The raw GSI
- * goes in u.Interrupt.Level; the PnP manager translates it through the HAL.
- */
-static
-NTSTATUS
-HalpBuildPlatformDeviceResources(
-    _In_ const HAL_PLATFORM_DEVICE *Device,
-    _Out_ PCM_RESOURCE_LIST *Resources)
-{
-    PCM_RESOURCE_LIST List;
-    PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
-    ULONG Count;
-    ULONG Index;
-    ULONG Size;
-
-    Count = Device->MemoryCount + (Device->Gsi != 0 ? 1 : 0);
-    if (Count == 0)
-        return STATUS_NOT_SUPPORTED;
-
-    /* CM_RESOURCE_LIST already covers one partial descriptor */
-    Size = sizeof(CM_RESOURCE_LIST) +
-           (Count - 1) * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
-    List = ExAllocatePoolZero(PagedPool, Size, TAG_HAL);
-    if (!List)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    List->Count = 1;
-    List->List[0].InterfaceType = PNPBus;
-    List->List[0].BusNumber = 0;
-    List->List[0].PartialResourceList.Version = 1;
-    List->List[0].PartialResourceList.Revision = 1;
-    List->List[0].PartialResourceList.Count = Count;
-
-    Desc = List->List[0].PartialResourceList.PartialDescriptors;
-
-    for (Index = 0; Index < Device->MemoryCount; Index++, Desc++)
-    {
-        Desc->Type = CmResourceTypeMemory;
-        Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-        Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-        Desc->u.Memory.Start.QuadPart = Device->Memory[Index].Base;
-        Desc->u.Memory.Length = Device->Memory[Index].Length;
-    }
-
-    if (Device->Gsi != 0)
-    {
-        Desc->Type = CmResourceTypeInterrupt;
-        Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-        Desc->Flags = Device->EdgeTriggered ? CM_RESOURCE_INTERRUPT_LATCHED
-                                            : CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-        Desc->u.Interrupt.Level = Device->Gsi;
-        Desc->u.Interrupt.Vector = Device->Gsi;
-        Desc->u.Interrupt.Affinity = (KAFFINITY)-1;
-    }
-
-    *Resources = List;
-    return STATUS_SUCCESS;
-}
-
-/* The matching requirements: fixed addresses and a fixed GSI */
-static
-NTSTATUS
-HalpBuildPlatformDeviceRequirements(
-    _In_ const HAL_PLATFORM_DEVICE *Device,
-    _Out_ PIO_RESOURCE_REQUIREMENTS_LIST *Requirements)
-{
-    PIO_RESOURCE_REQUIREMENTS_LIST List;
-    PIO_RESOURCE_DESCRIPTOR Desc;
-    ULONG Count;
-    ULONG Index;
-    ULONG Size;
-
-    Count = Device->MemoryCount + (Device->Gsi != 0 ? 1 : 0);
-    if (Count == 0)
-        return STATUS_NOT_SUPPORTED;
-
-    /* One alternative list; the structure already covers one descriptor */
-    Size = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) +
-           (Count - 1) * sizeof(IO_RESOURCE_DESCRIPTOR);
-    List = ExAllocatePoolZero(PagedPool, Size, TAG_HAL);
-    if (!List)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    List->ListSize = Size;
-    List->InterfaceType = PNPBus;
-    List->BusNumber = 0;
-    List->SlotNumber = 0;
-    List->AlternativeLists = 1;
-    List->List[0].Version = 1;
-    List->List[0].Revision = 1;
-    List->List[0].Count = Count;
-
-    Desc = List->List[0].Descriptors;
-
-    for (Index = 0; Index < Device->MemoryCount; Index++, Desc++)
-    {
-        Desc->Type = CmResourceTypeMemory;
-        Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-        Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-        Desc->u.Memory.Length = Device->Memory[Index].Length;
-        Desc->u.Memory.Alignment = 1;
-        Desc->u.Memory.MinimumAddress.QuadPart = Device->Memory[Index].Base;
-        Desc->u.Memory.MaximumAddress.QuadPart =
-            Device->Memory[Index].Base + Device->Memory[Index].Length - 1;
-    }
-
-    if (Device->Gsi != 0)
-    {
-        Desc->Type = CmResourceTypeInterrupt;
-        Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-        Desc->Flags = Device->EdgeTriggered ? CM_RESOURCE_INTERRUPT_LATCHED
-                                            : CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-        Desc->u.Interrupt.MinimumVector = Device->Gsi;
-        Desc->u.Interrupt.MaximumVector = Device->Gsi;
-    }
-
-    *Requirements = List;
-    return STATUS_SUCCESS;
-}
-
 NTSTATUS
 NTAPI
 HalpQueryResources(IN PDEVICE_OBJECT DeviceObject,
@@ -692,11 +555,6 @@ HalpQueryResources(IN PDEVICE_OBJECT DeviceObject,
 
         return STATUS_SUCCESS;
     }
-    else if (DeviceExtension->PdoType == PlatformPdo)
-    {
-        return HalpBuildPlatformDeviceResources(DeviceExtension->PlatformDevice,
-                                                Resources);
-    }
     else if (DeviceExtension->PdoType == WdPdo)
     {
         /* Watchdog doesn't */
@@ -722,11 +580,6 @@ HalpQueryResourceRequirements(IN PDEVICE_OBJECT DeviceObject,
     {
         /* Query ACPI requirements */
         return HalpQueryAcpiResourceRequirements(Requirements);
-    }
-    else if (DeviceExtension->PdoType == PlatformPdo)
-    {
-        return HalpBuildPlatformDeviceRequirements(DeviceExtension->PlatformDevice,
-                                                   Requirements);
     }
     else if (DeviceExtension->PdoType == WdPdo)
     {
@@ -768,12 +621,6 @@ HalpQueryIdPdo(IN PDEVICE_OBJECT DeviceObject,
             CompatibleId = L"*PNP0C18";
             break;
 
-        case PlatformPdo:
-            /* A compatible ID (such as a PCI class) can select the driver */
-            DeviceId = PdoExtension->PlatformDevice->DeviceId;
-            CompatibleId = PdoExtension->PlatformDevice->CompatibleId;
-            break;
-
         default:
             return STATUS_NOT_SUPPORTED;
     }
@@ -794,7 +641,7 @@ HalpQueryIdPdo(IN PDEVICE_OBJECT DeviceObject,
 
             /* Hardware IDs are a multi-string */
             MultiSz = TRUE;
-            IdCount = CompatibleId ? 2 : 1;
+            IdCount = 2;
             Ids[0] = DeviceId;
             Ids[1] = CompatibleId;
             break;

@@ -13,15 +13,6 @@
 
 /* FUNCTIONS ******************************************************************/
 
-const HAL_PLATFORM_DEVICE *
-NTAPI
-HalpGetPlatformDevice(IN ULONG Index)
-{
-    /* The firmware tables describe every device */
-    UNREFERENCED_PARAMETER(Index);
-    return NULL;
-}
-
 NTSTATUS
 NTAPI
 HalpQueryBusInterface(IN PDEVICE_OBJECT DeviceObject,
