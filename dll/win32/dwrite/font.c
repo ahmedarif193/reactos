@@ -157,7 +157,8 @@ static int fontface_get_glyph_advance(struct dwrite_fontface *fontface, float fo
 
 void dwrite_fontface_get_glyph_bbox(IDWriteFontFace *iface, struct dwrite_glyphbitmap *bitmap)
 {
-    struct cache_key key = { .size = bitmap->emsize, .glyph = bitmap->glyph, .mode = DWRITE_MEASURING_MODE_NATURAL };
+    struct cache_key key = { .size = bitmap->emsize, .glyph = bitmap->glyph,
+            .mode = bitmap->gridfit ? DWRITE_MEASURING_MODE_GDI_CLASSIC : DWRITE_MEASURING_MODE_NATURAL };
     struct dwrite_fontface *fontface = unsafe_impl_from_IDWriteFontFace(iface);
     struct get_glyph_bbox_params params;
     struct cache_entry *entry;
@@ -165,6 +166,7 @@ void dwrite_fontface_get_glyph_bbox(IDWriteFontFace *iface, struct dwrite_glyphb
     params.object = fontface->get_font_object(fontface);
     params.simulations = bitmap->simulations;
     params.glyph = bitmap->glyph;
+    params.gridfit = bitmap->gridfit;
     params.emsize = bitmap->emsize;
     matrix_2x2_from_dwrite_matrix(&params.m, bitmap->m ? bitmap->m : &identity);
 
@@ -196,7 +198,8 @@ static unsigned int get_glyph_bitmap_pitch(DWRITE_RENDERING_MODE1 rendering_mode
 static HRESULT dwrite_fontface_get_glyph_bitmap(struct dwrite_fontface *fontface, DWRITE_RENDERING_MODE1 rendering_mode,
         unsigned int *is_1bpp, struct dwrite_glyphbitmap *bitmap)
 {
-    struct cache_key key = { .size = bitmap->emsize, .glyph = bitmap->glyph, .mode = DWRITE_MEASURING_MODE_NATURAL };
+    struct cache_key key = { .size = bitmap->emsize, .glyph = bitmap->glyph,
+            .mode = bitmap->gridfit ? DWRITE_MEASURING_MODE_GDI_CLASSIC : DWRITE_MEASURING_MODE_NATURAL };
     struct get_glyph_bitmap_params params;
     const RECT *bbox = &bitmap->bbox;
     unsigned int bitmap_size, _1bpp;
@@ -210,6 +213,7 @@ static HRESULT dwrite_fontface_get_glyph_bitmap(struct dwrite_fontface *fontface
     params.simulations = fontface->simulations;
     params.glyph = bitmap->glyph;
     params.mode = rendering_mode;
+    params.gridfit = bitmap->gridfit;
     params.emsize = bitmap->emsize;
     params.bbox = bitmap->bbox;
     params.pitch = bitmap->pitch;
@@ -396,6 +400,7 @@ struct dwrite_glyphrunanalysis
     LONG refcount;
 
     DWRITE_RENDERING_MODE1 rendering_mode;
+    unsigned int gridfit;
     DWRITE_TEXTURE_TYPE texture_type; /* derived from rendering mode specified on creation */
     DWRITE_GLYPH_RUN run; /* glyphAdvances and glyphOffsets are not used */
     DWRITE_MATRIX m;
@@ -5885,6 +5890,7 @@ static void glyphrunanalysis_get_texturebounds(struct dwrite_glyphrunanalysis *a
     memset(&glyph_bitmap, 0, sizeof(glyph_bitmap));
     glyph_bitmap.simulations = IDWriteFontFace_GetSimulations(analysis->run.fontFace);
     glyph_bitmap.emsize = analysis->run.fontEmSize;
+    glyph_bitmap.gridfit = analysis->gridfit;
     if (analysis->flags & RUNANALYSIS_USE_TRANSFORM)
         glyph_bitmap.m = &analysis->m;
 
@@ -5964,6 +5970,7 @@ static HRESULT glyphrunanalysis_render(struct dwrite_glyphrunanalysis *analysis)
     memset(&glyph_bitmap, 0, sizeof(glyph_bitmap));
     glyph_bitmap.simulations = fontface->simulations;
     glyph_bitmap.emsize = analysis->run.fontEmSize;
+    glyph_bitmap.gridfit = analysis->gridfit;
     if (analysis->flags & RUNANALYSIS_USE_TRANSFORM)
         glyph_bitmap.m = &analysis->m;
     if (!(glyph_bitmap.buf = malloc(analysis->max_glyph_bitmap_size)))
@@ -6224,6 +6231,18 @@ HRESULT create_glyphrunanalysis(const struct glyphrunanalysis_desc *desc, IDWrit
     analysis->IDWriteGlyphRunAnalysis_iface.lpVtbl = &glyphrunanalysisvtbl;
     analysis->refcount = 1;
     analysis->rendering_mode = desc->rendering_mode;
+    if (desc->gridfit_mode == DWRITE_GRID_FIT_MODE_DEFAULT)
+    {
+        const struct dwrite_fonttable *gasp = get_fontface_gasp(unsafe_impl_from_IDWriteFontFace(desc->run->fontFace));
+
+        analysis->gridfit = desc->rendering_mode == DWRITE_RENDERING_MODE1_ALIASED ||
+                desc->rendering_mode == DWRITE_RENDERING_MODE1_GDI_CLASSIC ||
+                desc->rendering_mode == DWRITE_RENDERING_MODE1_GDI_NATURAL ||
+                desc->measuring_mode != DWRITE_MEASURING_MODE_NATURAL || !gasp->exists ||
+                (opentype_get_gasp_flags(gasp, desc->run->fontEmSize) & (GASP_GRIDFIT | GASP_SYMMETRIC_GRIDFIT));
+    }
+    else
+        analysis->gridfit = desc->gridfit_mode == DWRITE_GRID_FIT_MODE_ENABLED;
 
     if (desc->rendering_mode == DWRITE_RENDERING_MODE1_ALIASED
             || desc->aa_mode == DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE)
