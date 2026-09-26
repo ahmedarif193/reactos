@@ -253,6 +253,20 @@ typedef struct _RPI5VC4_CONTEXT
     PRPI5VC4_WDDM_DEVICE Device;
 } RPI5VC4_CONTEXT, *PRPI5VC4_CONTEXT;
 
+/* One plane of a multi-plane (MPO) composition, bottom-up layer order. */
+typedef struct _RPI5VC4_HVS_PLANE
+{
+    ULONGLONG Phys;
+    ULONG X;
+    ULONG Y;
+    ULONG Width;
+    ULONG Height;
+    ULONG PitchBytes;
+    BOOLEAN Opaque;                   /* FALSE = per-pixel premult alpha  */
+} RPI5VC4_HVS_PLANE, *PRPI5VC4_HVS_PLANE;
+
+#define RPI5VC4_MMIO_FLIP_PLANES 3
+
 typedef struct _RPI5VC4_ALLOCATION
 {
     ULONG Magic;
@@ -263,6 +277,7 @@ typedef struct _RPI5VC4_ALLOCATION
     ULONG Height;
     ULONG Pitch;
     BOOLEAN Primary;
+    BOOLEAN Scanout; /* an overlay plane candidate; Pitch is its row size */
 } RPI5VC4_ALLOCATION, *PRPI5VC4_ALLOCATION;
 
 typedef struct _RPI5VC4_STANDARD_ALLOCATION_DATA
@@ -465,6 +480,11 @@ struct _RPI5VC4_DEVICE_EXTENSION
     PIO_WORKITEM FlipWorkItem;
     volatile LONG FlipWorkQueued;
     volatile LONG64 FlipPendingAddress;
+    /* An armed MMIO flip with overlays: its planes, base first. dxgkrnl
+     * arms the next flip only after this one is scanned out. */
+    RPI5VC4_HVS_PLANE FlipPendingPlanes[RPI5VC4_MMIO_FLIP_PLANES];
+    volatile LONG FlipPendingPlaneCount;
+    BOOLEAN HvsOverlayActive; /* the scanned list has more than the primary */
 
     /* ---- V3D 7.1 (3D engine) state -------------------------------------- */
     BOOLEAN V3dReady;

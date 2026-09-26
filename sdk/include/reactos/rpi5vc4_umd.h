@@ -85,7 +85,11 @@
 #define RPI5VC4_RESOURCE_LAYOUT_V3D_UIF      2u
 
 #define RPI5VC4_RESOURCE_FLAG_PRIMARY         (1u << 0)
-#define RPI5VC4_RESOURCE_VALID_FLAGS           RPI5VC4_RESOURCE_FLAG_PRIMARY
+/* A linear B8G8R8A8 surface, with Stride set, that the display controller
+ * can scan out as an overlay plane. It lives in contiguous local memory. */
+#define RPI5VC4_RESOURCE_FLAG_SCANOUT         (1u << 1)
+#define RPI5VC4_RESOURCE_VALID_FLAGS           (RPI5VC4_RESOURCE_FLAG_PRIMARY | \
+                                                RPI5VC4_RESOURCE_FLAG_SCANOUT)
 #define RPI5VC4_RESOURCE_INVALID_VIDPN_SOURCE  0xffffffffu
 
 typedef struct _RPI5VC4_RESOURCE_DATA
