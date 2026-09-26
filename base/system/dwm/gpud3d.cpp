@@ -158,7 +158,9 @@ struct Compositor
     DWM_WIN BlurOwner;
     BOOL BlurOwnerValid, BlurLowerUnchanged;
     ULONG BlurCall, Frame, PresentedBuffers;
-    RECT Draw, PreviousCopy;
+    /* Draw is this frame's drawn region: its own Repair plus the previous
+     * frame's, which the back buffer has not received yet. */
+    RECT Draw, Repair, PreviousRepair;
     ULONGLONG BlurUse, Filtered, Reused;
     /* An opaque client layer hides everything the frame draws beneath it.
      * Until that layer is drawn, canvas draws skip its rectangle. */
@@ -700,6 +702,25 @@ BOOL CreateDevice(IDXGIAdapter1 **Selected)
     return Success;
 }
 
+/* Frames compose straight into the swapchain's back buffer. Presenting
+ * rotates the buffer identities under this one resource, so its view stays
+ * valid; the buffer then holds the frame presented two frames earlier. */
+BOOL BindOutput()
+{
+    State.Canvas.Reset();
+    if (!Result(State.SwapChain->GetBuffer(0, IID_ID3D11Texture2D, (void **)&State.Canvas.Resource), "GetBuffer") ||
+        !Result(State.Device->CreateRenderTargetView(State.Canvas.Resource, NULL, &State.Canvas.Target),
+                "CreateRenderTargetView output"))
+    {
+        State.Canvas.Reset();
+        return FALSE;
+    }
+    State.Canvas.Width = State.Width;
+    State.Canvas.Height = State.Height;
+    State.Canvas.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    return TRUE;
+}
+
 BOOL CreateSwapChain(IDXGIAdapter1 *Adapter)
 {
     IDXGIFactory2 *Factory = NULL;
@@ -1210,7 +1231,7 @@ DwmD3dInitialize(LONG Width, LONG Height)
     if (!State.Compiler) State.Compiler = LoadLibraryW(L"d3dcompiler_47.dll");
     IDXGIAdapter1 *Adapter = NULL;
     BOOL Success = State.Runtime && State.Dxgi && State.Compiler && CreateDevice(&Adapter) &&
-        CreateSwapChain(Adapter) && CreateShaders() && CreateTexture(State.Canvas, Width, Height, TRUE);
+        CreateSwapChain(Adapter) && CreateShaders() && BindOutput();
     if (Success)
         SetNativeTraceProvider(Adapter);
     Release(Adapter);
@@ -1511,6 +1532,17 @@ DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdro
     PinCachedCaptures();
     DwmGpuDamageExpandBlur(&State.Draw, State.Width, State.Height, State.Scene.Windows, State.Scene.Count,
         State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius, State.CachedCapture);
+    /* The back buffer was presented two frames ago and lacks the previous
+     * frame's repair. Draw each buffer of the two-buffer chain whole once. */
+    State.Repair = State.Draw;
+    if (State.PresentedBuffers < 2)
+        State.Draw = Full;
+    else if (!EqualRect(&State.Draw, &State.PreviousRepair))
+    {
+        DwmGpuDamageUnion(&State.Draw, &State.PreviousRepair);
+        DwmGpuDamageExpandBlur(&State.Draw, State.Width, State.Height, State.Scene.Windows, State.Scene.Count,
+            State.Scene.Space.OriginX, State.Scene.Space.OriginY, State.Scene.Space.BlurRadius, State.CachedCapture);
+    }
     SelectOccluder();
     Constants Data = {};
     SetRectangle(Data, 0, 0, State.Width, State.Height);
@@ -1718,27 +1750,9 @@ DwmD3dEnd(void)
 {
     if (!State.Active)
         return DWM_GPU_FAILED;
-    ID3D11Texture2D *BackBuffer = NULL;
-    if (!Result(State.SwapChain->GetBuffer(0, IID_ID3D11Texture2D, (void **)&BackBuffer), "GetBuffer"))
-        return DWM_GPU_FAILED;
-    /* The canvas always contains the last completed composition. A two-buffer
-     * flip chain needs both this frame's repair and the previous frame's repair
-     * before the current back buffer is complete. Initialize each buffer once. */
-    RECT Copy = State.Draw;
-    if (State.PresentedBuffers < 2)
-        SetRect(&Copy, 0, 0, State.Width, State.Height);
-    else
-        DwmGpuDamageUnion(&Copy, &State.PreviousCopy);
-    D3D11_BOX Box = {(UINT)Copy.left, (UINT)Copy.top, 0, (UINT)Copy.right, (UINT)Copy.bottom, 1};
-    UnbindTextures();
-    DPT_SCOPE CopyTrace = DptBegin(&g_DwmPresentTrace, DPT_FLUSH);
-    State.Context->CopySubresourceRegion(BackBuffer, 0, Copy.left, Copy.top, 0, State.Canvas.Resource, 0, &Box);
-    DptEnd(&g_DwmPresentTrace, CopyTrace, TRUE, 0);
-    State.WorkPending = TRUE;
-    Release(BackBuffer);
     DXGI_PRESENT_PARAMETERS Present = {};
     Present.DirtyRectsCount = 1;
-    Present.pDirtyRects = &Copy;
+    Present.pDirtyRects = &State.Repair;
     DPT_SCOPE PresentTrace = DptBegin(&g_DwmPresentTrace, DPT_KMT_PRESENT);
     HRESULT Status = State.SwapChain->Present1(1, 0, &Present);
     DptEnd(&g_DwmPresentTrace, PresentTrace, SUCCEEDED(Status), 0);
@@ -1755,7 +1769,7 @@ DwmD3dEnd(void)
         State.PresentedBuffers = 0;
         return DWM_GPU_DEFERRED;
     }
-    State.PreviousCopy = State.Draw;
+    State.PreviousRepair = State.Repair;
     State.PresentedBuffers = min(State.PresentedBuffers + 1, 2u);
     State.FrameValid = TRUE;
     State.Scene.Valid = TRUE;
