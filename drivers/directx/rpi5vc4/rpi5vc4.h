@@ -190,7 +190,7 @@ typedef struct _RPI5VC4_DMA_PACKET
 #define RPI5VC4_OPENALLOC_MAGIC     0x52564433u
 #define RPI5VC4_PROCESS_MAGIC       0x52564434u
 #define RPI5VC4_STANDARD_ALLOCATION_MAGIC   0x52565341u
-#define RPI5VC4_STANDARD_ALLOCATION_VERSION 1u
+#define RPI5VC4_STANDARD_ALLOCATION_VERSION 2u
 
 typedef struct _RPI5VC4_DEVICE_EXTENSION RPI5VC4_DEVICE_EXTENSION,
     *PRPI5VC4_DEVICE_EXTENSION;
@@ -275,9 +275,9 @@ typedef struct _RPI5VC4_ALLOCATION
     ULONG ResourceFormat;
     ULONG Width;
     ULONG Height;
-    ULONG Pitch;
+    ULONG Pitch; /* row size of a linear resource; 0 when unknown */
     BOOLEAN Primary;
-    BOOLEAN Scanout; /* an overlay plane candidate; Pitch is its row size */
+    BOOLEAN Scanout; /* an overlay plane candidate */
 } RPI5VC4_ALLOCATION, *PRPI5VC4_ALLOCATION;
 
 typedef struct _RPI5VC4_STANDARD_ALLOCATION_DATA
@@ -285,6 +285,7 @@ typedef struct _RPI5VC4_STANDARD_ALLOCATION_DATA
     ULONG Magic;
     ULONG Version;
     ULONG Type;
+    ULONG GdiSurfaceType; /* D3DKMDT_GDISURFACETYPE for a GDI surface */
 } RPI5VC4_STANDARD_ALLOCATION_DATA,
  *PRPI5VC4_STANDARD_ALLOCATION_DATA;
 
@@ -292,6 +293,7 @@ typedef struct _RPI5VC4_OPENALLOCATION
 {
     ULONG Magic;
     D3DKMT_HANDLE hVidMmAllocation;
+    PRPI5VC4_ALLOCATION Allocation;
 } RPI5VC4_OPENALLOCATION, *PRPI5VC4_OPENALLOCATION;
 
 typedef struct _RPI5VC4_DMA_PRIVATE_DATA
