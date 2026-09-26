@@ -27,15 +27,6 @@
 
 /*
  * ============================================================================
- * Local State
- * ============================================================================
- */
-
-/* One-time logging flag */
-static BOOLEAN HalpLoggedGicOnce = FALSE;
-
-/*
- * ============================================================================
  * Global GIC Version Information
  * ============================================================================
  */
@@ -47,22 +38,6 @@ HALP_GIC_VERSION_INFO HalpGicVersionInfo = {0};
 BOOLEAN HalpGicHasVlpis = FALSE;
 BOOLEAN HalpGicHasDirectLpi = FALSE;
 BOOLEAN HalpGicIsGicv4_1 = FALSE;
-
-/* vPE ID allocator state */
-RTL_BITMAP HalpGicVpeidBitmap;
-PULONG HalpGicVpeidBitmapBuffer = NULL;
-ULONG HalpGicVpeidCount = 0;
-ULONG HalpGicVpeidAllocated = 0;
-KSPIN_LOCK HalpGicVpeidLock;
-
-/* VM tracking */
-PHALP_GIC_VM HalpGicVmList = NULL;
-ULONG HalpGicVmCount = 0;
-KSPIN_LOCK HalpGicVmLock;
-
-/* vPE table (indexed by vPE ID) */
-PHALP_GIC_VPE *HalpGicVpeTable = NULL;
-ULONG HalpGicVpeTableSize = 0;
 
 /*
  * ============================================================================
@@ -865,18 +840,6 @@ HalpGicHasVlpiSupport(VOID)
 }
 
 /*
- * HalpGicHasExtendedSpi - Check if extended SPI range is available
- */
-BOOLEAN
-HalpGicHasExtendedSpi(VOID)
-{
-    if (!HalpGicVersionInfo.Initialized)
-        HalpGicDetectVersion();
-
-    return HalpGicVersionInfo.HasExtendedSpiRange;
-}
-
-/*
  * ============================================================================
  * HAL GIC Initialization Entry Point
  * ============================================================================
@@ -947,41 +910,5 @@ HalpInitGic(
      */
     HalpGicDetectVersion();
 
-    /*
-     * Initialize vPE/VLPI tracking locks for GICv4.
-     * These are needed even if GICv4 is not present to avoid
-     * uninitialized spinlock issues.
-     */
-    KeInitializeSpinLock(&HalpGicVpeidLock);
-    KeInitializeSpinLock(&HalpGicVmLock);
-
     return TRUE;
-}
-
-/*
- * HalpGicLogStatus - Log GIC status (called after KD is initialized)
- *
- * Called from HalInitSystem() phase 1 to log GIC configuration
- * after the debugger is available.
- */
-VOID
-HalpGicLogStatus(VOID)
-{
-    if (HalpLoggedGicOnce)
-        return;
-
-    HalpLoggedGicOnce = TRUE;
-
-    DPRINT1("[arm64][GIC] GIC probe: ARCHREV=%lu\n", HalpGicArchRev);
-    DPRINT1("[arm64][GIC] Using %s CPU interface\n",
-            HalpGicUseSysRegs ? "GICv3 system-register" : "GICv2 legacy (GICC)");
-
-    if (HalpGicItsPresent)
-    {
-        DPRINT1("[arm64][GIC] ITS present at 0x%llx\n", HalpGicItsBase);
-    }
-    if (HalpGicMsiPresent)
-    {
-        DPRINT1("[arm64][GIC] GICv2m MSI frame at 0x%llx\n", HalpGicMsiFrameBase);
-    }
 }

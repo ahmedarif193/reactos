@@ -52,8 +52,6 @@ ULONG_PTR HalpGicrCpuBase[MAXIMUM_PROCESSORS] = {0};
 HALP_GIC_REDIST_REGION HalpGicRedistRegions[HALP_GIC_MAX_REDIST_REGIONS];
 ULONG HalpGicRedistRegionCount = 0;
 ULONG HalpGicRedistStride = 0;  /* 0 = auto-detect from GICR_TYPER.VLPIS */
-BOOLEAN HalpGicRedistHasVlpis = FALSE;
-BOOLEAN HalpGicRedistHasDirectLpi = FALSE;
 
 /* GIC ITS state */
 ULONGLONG HalpGicItsBase = 0;
@@ -96,29 +94,12 @@ static ULONG HalpGicCacheLineSize = 0;
 
 /*
  * ============================================================================
- * IRQ Affinity Tracking State (GICv3 Dynamic Affinity Routing)
+ * IRQ Affinity Tracking State (GICv3 Affinity Routing)
  * ============================================================================
  *
- * Windows 11 ARM64 GIC compatibility requires dynamic IRQ affinity routing.
- * This allows SPIs to be dynamically routed to any CPU, supporting:
- * - SMP load balancing
- * - CPU hotplug scenarios
- * - Per-IRQ affinity control via Windows HAL APIs
- *
- * Each SPI (interrupt IDs 32-1019) can be individually routed to a specific
- * CPU by programming the corresponding GICD_IROUTER register.
- *
- * The tracking structure stores:
- * - Target CPU index for each SPI
- * - MPIDR value for each online CPU (for IROUTER programming)
- * - Spinlock for thread-safe affinity updates
+ * An SPI (interrupt IDs 32-1019) is routed to a CPU by programming its
+ * GICD_IROUTER register with that CPU's MPIDR, recorded here per CPU.
  */
-
-/* Maximum number of SPIs we track (INTIDs 32-1019 = 988 SPIs) */
-#define HALP_GIC_MAX_SPI_COUNT 988
-
-/* Array tracking target CPU for each SPI (indexed by INTID - 32) */
-ULONG HalpGicSpiAffinityTarget[HALP_GIC_MAX_SPI_COUNT] = {0};
 
 /* Array storing MPIDR values for each CPU (indexed by CPU number) */
 ULONGLONG HalpGicCpuMpidr[MAXIMUM_PROCESSORS] = {0};

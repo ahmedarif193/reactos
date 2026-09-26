@@ -614,20 +614,8 @@ HalpInitGicRedistributor(
 
     DPRINT("[arm64][GICR] Initializing redistributor for CPU %lu at 0x%p\n", Cpu, (PVOID)Base);
 
-    /*
-     * Read GICR_TYPER to discover capabilities and update global flags.
-     * These flags affect how LPIs and VLPIs are handled.
-     */
+    /* Log the capabilities GICR_TYPER reports */
     Typer = HalpMmioRead64(Base, GICR_TYPER);
-
-    if (Typer & HALP_GICR_TYPER_VLPIS)
-    {
-        HalpGicRedistHasVlpis = TRUE;
-    }
-    if (Typer & HALP_GICR_TYPER_DIRECTLPI)
-    {
-        HalpGicRedistHasDirectLpi = TRUE;
-    }
 
     DPRINT("[arm64][GICR] CPU %lu TYPER: 0x%llx (VLPIS=%u DirectLPI=%u Last=%u)\n",
            Cpu, Typer,
@@ -746,169 +734,10 @@ HalpInitGicRedistributor(
 }
 
 /*
- * HalpArm64EnableCpuInterface - Enable the CPU interface for the current CPU
- *
- * This is a unified function that initializes the appropriate interface
- * based on the GIC version:
- * - GICv3: Initializes Redistributor + ICC_* system registers
- * - GICv2: Initializes GICC MMIO registers
- *
- * This function is typically called during secondary processor startup.
- *
- * Note: Implementation still in smp.c for now. This can be enabled once
- * the migration is complete.
- */
-#if 0 /* Disabled - implementation still in smp.c */
-VOID
-HalpArm64EnableCpuInterface(VOID)
-{
-    ULONG Cpu = KeGetCurrentProcessorNumber();
-    ULONGLONG Mpidr;
-
-    DPRINT1("[arm64][GIC] Enabling CPU interface for CPU %lu\n", Cpu);
-
-    if (HalpGicUseSysRegs)
-    {
-        /*
-         * GICv3: Need to discover and cache the Redistributor base
-         * for this CPU if not already known.
-         */
-        if (Cpu < MAXIMUM_PROCESSORS && HalpGicrCpuBase[Cpu] == 0)
-        {
-            Mpidr = HalpReadMpidr();
-            HalpGicrCpuBase[Cpu] = HalpArm64FindGicrForMpidr(Mpidr);
-
-            if (HalpGicrCpuBase[Cpu] == 0)
-            {
-                DPRINT1("[arm64][GIC] Warning: Could not find GICR for CPU %lu\n", Cpu);
-            }
-        }
-
-        /* Initialize Redistributor */
-        HalpInitGicRedistributor(Cpu);
-
-        /* Initialize CPU interface via system registers */
-        HalpInitGicv3CpuInterface();
-    }
-    else
-    {
-        /* GICv2: Configure SGI/PPI bank and CPU interface */
-        HalpInitGicv2SgiPpi();
-        HalpInitGicv2CpuInterface();
-    }
-}
-#endif /* Disabled - implementation still in smp.c */
-
-/*
  * ============================================================================
  * Redistributor SGI/PPI Management
  * ============================================================================
  */
-
-/*
- * HalpGicrEnableSgiPpi - Enable an SGI or PPI on the current CPU
- *
- * Enables a specific SGI (0-15) or PPI (16-31) by writing to
- * GICR_ISENABLER0.
- *
- * Parameters:
- *   IntId - Interrupt ID (0-31)
- */
-VOID
-HalpGicrEnableSgiPpi(
-    _In_ ULONG IntId)
-{
-    ULONG Cpu;
-    ULONG_PTR SgiBase;
-
-    if (IntId >= 32)
-    {
-        DPRINT1("[arm64][GICR] IntId %lu is not an SGI/PPI\n", IntId);
-        return;
-    }
-
-    Cpu = KeGetCurrentProcessorNumber();
-    SgiBase = HalpGicrSgiBase(Cpu);
-
-    if (SgiBase == 0)
-    {
-        DPRINT1("[arm64][GICR] Cannot enable INTID %lu: SGI base unavailable\n", IntId);
-        return;
-    }
-
-    *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << IntId);
-    __asm__ __volatile__("dsb sy" ::: "memory");
-}
-
-/*
- * HalpGicrDisableSgiPpi - Disable an SGI or PPI on the current CPU
- *
- * Disables a specific SGI (0-15) or PPI (16-31) by writing to
- * GICR_ICENABLER0.
- *
- * Parameters:
- *   IntId - Interrupt ID (0-31)
- */
-VOID
-HalpGicrDisableSgiPpi(
-    _In_ ULONG IntId)
-{
-    ULONG Cpu;
-    ULONG_PTR SgiBase;
-
-    if (IntId >= 32)
-    {
-        DPRINT1("[arm64][GICR] IntId %lu is not an SGI/PPI\n", IntId);
-        return;
-    }
-
-    Cpu = KeGetCurrentProcessorNumber();
-    SgiBase = HalpGicrSgiBase(Cpu);
-
-    if (SgiBase == 0)
-    {
-        DPRINT1("[arm64][GICR] Cannot disable INTID %lu: SGI base unavailable\n", IntId);
-        return;
-    }
-
-    *HalpMmio(SgiBase, GICR_ICENABLER0) = (1u << IntId);
-    __asm__ __volatile__("dsb sy" ::: "memory");
-}
-
-/*
- * HalpGicrClearPending - Clear pending state for an SGI or PPI
- *
- * Clears the pending state for a specific SGI or PPI by writing to
- * GICR_ICPENDR0.
- *
- * Parameters:
- *   IntId - Interrupt ID (0-31)
- */
-VOID
-HalpGicrClearPending(
-    _In_ ULONG IntId)
-{
-    ULONG Cpu;
-    ULONG_PTR SgiBase;
-
-    if (IntId >= 32)
-    {
-        DPRINT1("[arm64][GICR] IntId %lu is not an SGI/PPI\n", IntId);
-        return;
-    }
-
-    Cpu = KeGetCurrentProcessorNumber();
-    SgiBase = HalpGicrSgiBase(Cpu);
-
-    if (SgiBase == 0)
-    {
-        DPRINT1("[arm64][GICR] Cannot clear pending INTID %lu: SGI base unavailable\n", IntId);
-        return;
-    }
-
-    *HalpMmio(SgiBase, GICR_ICPENDR0) = (1u << IntId);
-    __asm__ __volatile__("dsb sy" ::: "memory");
-}
 
 /*
  * ============================================================================

@@ -50,8 +50,6 @@ list(APPEND SOURCES
     ${HAL_COMMON_DIR}/acpi/tables.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/halpnpdd.c
-    ${HAL_ARM64_SOURCE_DIR}/acpi/hpet.c
-    ${HAL_ARM64_SOURCE_DIR}/acpi/waet.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/arm64.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64.c
     ${HAL_ARM64_SOURCE_DIR}/secondary.c

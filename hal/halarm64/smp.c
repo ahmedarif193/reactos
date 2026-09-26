@@ -102,7 +102,6 @@ FORCEINLINE VOID HalpWriteIccIgrpen1(unsigned int v)
 /*
  * Private physical alias used by the ARM64 kernel/HAL direct map.
  */
-#define HAL_ARM64_KSEG0_BASE 0xFFFF800000000000ULL
 #define HAL_ARM64_PHYS_MAP_BASE 0xFFFFFC0000000000ULL
 
 /*
@@ -196,14 +195,6 @@ HalpArm64ReadTcrEl1(VOID)
 {
     UINT64 Value;
     __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(Value));
-    return Value;
-}
-
-FORCEINLINE UINT64
-HalpArm64ReadTtbr0El1(VOID)
-{
-    UINT64 Value;
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Value));
     return Value;
 }
 
@@ -635,25 +626,4 @@ HalpArm64WakeParkedCpu(
 
     DPRINT1("[arm64][HAL] Sent parking wake to CPU %lu\n", ProcessorNumber);
     return TRUE;
-}
-
-/*
- * HalpArm64EnableCpuInterface - Enable GICv3 CPU interface
- */
-VOID
-HalpArm64EnableCpuInterface(VOID)
-{
-    HalpWriteIccSre(7);
-    /*
-     * Program the priority mask wide open (0xFF = allow every priority). This
-     * routine's job is to *enable* the CPU interface; the kernel IRQL layer
-     * (HalpArm64SetPmrExact) then tightens PMR to the current IRQL on the first
-     * KfRaiseIrql/KfLowerIrql. The previous 0x00 masked every interrupt, which
-     * contradicted the routine's purpose and would have silenced a core that
-     * ever relied on it for interrupt delivery.
-     */
-    HalpWriteIccPmr(0xFF);
-    HalpWriteIccBpr1(0);
-    HalpWriteIccIgrpen1(1);
-    __asm__ __volatile__("isb" ::: "memory");
 }
