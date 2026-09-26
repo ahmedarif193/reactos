@@ -17,7 +17,7 @@
 #define DXGMMS2_SCHED_MAX_PACKETS   512
 /* Keep scheduling decisions in the kernel instead of filling a miniport
  * FIFO with an entire producer backlog. Admission capacity is unchanged. */
-#define DXGMMS2_SCHED_MAX_DISPATCHED 8
+#define DXGMMS2_SCHED_MAX_DISPATCHED 2
 
 typedef struct _DXGMMS2_SCHED_PACKET
 {
