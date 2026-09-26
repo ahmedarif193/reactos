@@ -2069,12 +2069,104 @@ NtGdiDdDDIOutputDuplReleaseFrame(_In_ const struct _D3DKMT_OUTPUTDUPL_RELEASE_FR
     return STATUS_NOT_IMPLEMENTED;
 }
 
+/*
+ * The attached compositor presents its complete output with overlay planes
+ * above it. The layer 0 plane is that output, flipped exactly like the
+ * promoted Blt in NtGdiDdDDIPresent; the others are scanned out unscaled.
+ */
 NTSTATUS
 APIENTRY
 NtGdiDdDDIPresentMultiPlaneOverlay(_In_ const struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY* unnamedParam1)
 {
+    D3DKMT_PRESENT_MULTIPLANE_OVERLAY Captured;
+    D3DKMT_MULTIPLANE_OVERLAY Planes[1 + RXGK_PRESENT_MAX_OVERLAYS];
+    const D3DKMT_MULTIPLANE_OVERLAY *Base = NULL;
+    RXGK_PRESENT_OVERLAYS Overlays;
+    D3DKMT_PRESENT Present;
+    HWND Window;
+    NTSTATUS Status = STATUS_SUCCESS;
+    UINT Index;
+
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForRead((PVOID)unnamedParam1, sizeof(Captured), sizeof(ULONG));
+        /* The syscall table names this structure by another tag. */
+        Captured = *(const D3DKMT_PRESENT_MULTIPLANE_OVERLAY *)unnamedParam1;
+        if (Captured.PresentPlaneCount < 2 || Captured.PresentPlaneCount > ARRAYSIZE(Planes) ||
+            Captured.pPresentPlanes == NULL)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+        }
+        else
+        {
+            if (ExGetPreviousMode() != KernelMode)
+                ProbeForRead(Captured.pPresentPlanes,
+                             Captured.PresentPlaneCount * sizeof(Planes[0]), sizeof(ULONG));
+            RtlCopyMemory(Planes, Captured.pPresentPlanes,
+                          Captured.PresentPlaneCount * sizeof(Planes[0]));
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Overlays, sizeof(Overlays));
+    for (Index = 0; Index < Captured.PresentPlaneCount; ++Index)
+    {
+        const D3DKMT_MULTIPLANE_OVERLAY *Plane = &Planes[Index];
+
+        if (!Plane->Enabled)
+            continue;
+        if (Plane->LayerIndex == 0)
+        {
+            if (Base != NULL)
+                return STATUS_INVALID_PARAMETER;
+            Base = Plane;
+            continue;
+        }
+        if (Overlays.OverlayCount == RXGK_PRESENT_MAX_OVERLAYS)
+            return STATUS_INVALID_PARAMETER;
+        Overlays.Overlays[Overlays.OverlayCount].hAllocation = Plane->hAllocation;
+        Overlays.Overlays[Overlays.OverlayCount].LayerIndex = Plane->LayerIndex;
+        Overlays.Overlays[Overlays.OverlayCount].SrcRect = Plane->PlaneAttributes.SrcRect;
+        Overlays.Overlays[Overlays.OverlayCount].DstRect = Plane->PlaneAttributes.DstRect;
+        Overlays.OverlayCount++;
+    }
+    Window = IntCompositionGetGpuOutputWindow();
+    if (Base == NULL || Overlays.OverlayCount == 0 || Window == NULL ||
+        Captured.VidPnSourceId != 0 || Captured.BroadcastContextCount > D3DDDI_MAX_BROADCAST_CONTEXT ||
+        !IntCompositionIsGpuOutputPresent(Window, &Base->PlaneAttributes.SrcRect,
+                                          &Base->PlaneAttributes.DstRect))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&Present, sizeof(Present));
+    Present.hContext = Captured.hContext;
+    Present.BroadcastContextCount = Captured.BroadcastContextCount;
+    RtlCopyMemory(Present.BroadcastContext, Captured.BroadcastContext,
+                  Captured.BroadcastContextCount * sizeof(Present.BroadcastContext[0]));
+    Present.hWindow = Window;
+    Present.hSource = Base->hAllocation;
+    Present.SrcRect = Base->PlaneAttributes.SrcRect;
+    Present.DstRect = Base->PlaneAttributes.DstRect;
+    Present.FlipInterval = Captured.FlipInterval;
+    Present.PresentCount = Captured.PresentCount;
+    Present.Flags.Flip = 1;
+    Present.Flags.RestrictVidPnSource = 1;
+    Present.Flags.SrcRectValid = 1;
+    Present.Flags.DstRectValid = 1;
+    Present.Flags.PresentCountValid = Captured.Flags.PresentCountValid;
+    Present.Flags.FlipDoNotWait = Captured.Flags.FlipDoNotWait;
+    Present.Flags.FlipRestart = Captured.Flags.FlipRestart;
+    Present.VidPnSourceId = 0;
+    return D3DKMTPresentWithOverlays(&Overlays, &Present);
 }
 
 NTSTATUS
