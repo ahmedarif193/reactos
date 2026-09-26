@@ -200,6 +200,12 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
     struct _DXGKRNL_DEVICE_WORK    *DeviceWork;
     BOOLEAN                         PresentLimitReservationOwned;
 
+    /* An ordered MMIO flip is armed and confirmed by its queue's flip
+     * drainer. That drainer and the context-order release each own one
+     * reference; the last one releases the entry. */
+    LIST_ENTRY                      MmioFlipEntry;
+    volatile LONG                   MmioFlipReferences;
+
 } DXGKRNL_PRESENT_ENTRY, *PDXGKRNL_PRESENT_ENTRY;
 
 NTSTATUS DxgkPresentSetQueuedLimit(_In_ struct _DXGKRNL_DEVICE *Device, _In_ ULONG RequestedLimit);
@@ -267,6 +273,12 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
     PDXGKVMM_ALLOCATION             MmioPendingAllocation;
     NTSTATUS                        MmioFailureStatus;
     LONG64                          MmioLastFlipSequence;
+    /* Ordered MMIO flips wait for scanout on this drainer, never on the
+     * single worker that dispatches and retires every context's work. */
+    KSPIN_LOCK                      MmioFlipLock;
+    LIST_ENTRY                      MmioFlipList;
+    volatile LONG                   MmioFlipWorkQueued;
+    WORK_QUEUE_ITEM                 MmioFlipWorkItem;
     KSPIN_LOCK                      VBlankWaitLock;
     LIST_ENTRY                      VBlankWaiterList;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
