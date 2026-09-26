@@ -386,7 +386,11 @@ typedef struct _WGL_PRESENTBUFFERS_CB_RETAINED
     UINT Height;
     HANDLE ReleaseEvent;
     HANDLE CompletionEvent;
+    UINT Flags;                 /* WGL_PRESENTBUFFERS_SCANOUT */
 } WGL_PRESENTBUFFERS_CB_RETAINED, *PWGL_PRESENTBUFFERS_CB_RETAINED;
+
+/* The buffer is linear in memory the display can scan out as a plane. */
+#define WGL_PRESENTBUFFERS_SCANOUT 0x00000001u
 
 typedef struct _WGL_PRESENTBUFFERS
 {

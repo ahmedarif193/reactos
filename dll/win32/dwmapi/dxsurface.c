@@ -595,7 +595,8 @@ DwmpDxUpdateWindowSharedSurface(HWND Window,
 /*
  * ReactOS extension: publishes a producer-owned client buffer, retained.
  * DWM samples it in place and sets ReleaseEvent once no frame reads it.
- * The buffer's GPU writes must be complete.
+ * The buffer's GPU writes must be complete. Flags may add
+ * DWM_DX_PUBLISH_SCANOUT for a buffer the display can scan out.
  */
 HRESULT WINAPI
 DwmpDxPublishWindowSurface(HWND Window,
@@ -603,14 +604,15 @@ DwmpDxPublishWindowSurface(HWND Window,
                            HANDLE SharedSurface,
                            UINT Width,
                            UINT Height,
-                           HANDLE ReleaseEvent)
+                           HANDLE ReleaseEvent,
+                           DWORD Flags)
 {
     DWM_DX_SURFACE_EXCHANGE Exchange;
     NTSTATUS Status;
 
     if (!IsWindow(Window) || SharedSurface == NULL ||
         (ULONG_PTR)SharedSurface > MAXULONG || ReleaseEvent == NULL ||
-        Width == 0 || Height == 0)
+        Width == 0 || Height == 0 || (Flags & ~DWM_DX_PUBLISH_SCANOUT) != 0)
     {
         return E_INVALIDARG;
     }
@@ -626,7 +628,7 @@ DwmpDxPublishWindowSurface(HWND Window,
     Exchange.Info.Width = Width;
     Exchange.Info.Height = Height;
     Exchange.Info.Format = DWM_DX_FORMAT_B8G8R8A8_UNORM;
-    Exchange.Flags = DWM_DX_PUBLISH_RETAINED;
+    Exchange.Flags = DWM_DX_PUBLISH_RETAINED | Flags;
     Exchange.ReadyEvent = (ULONGLONG)(ULONG_PTR)ReleaseEvent;
     Exchange.UpdateRect.right = (LONG)Width;
     Exchange.UpdateRect.bottom = (LONG)Height;
