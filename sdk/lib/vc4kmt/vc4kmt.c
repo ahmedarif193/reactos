@@ -1011,8 +1011,10 @@ vc4kmt_bo_create_resource_ex(
         Device, Size, Flags, RuntimeResource, NULL, 0, Bo);
 }
 
-NTSTATUS
-vc4kmt_bo_create_resource_private_ex(
+/* SharedRuntimeData makes the D3DKMT allocation a shared resource of its
+ * own; hResource then owns it and hGlobalShare names it to other processes. */
+static NTSTATUS
+Vc4KmtBoCreate(
     _In_ VC4KMT_DEVICE *Device,
     _In_ UINT Size,
     _In_ ULONG Flags,
@@ -1020,7 +1022,12 @@ vc4kmt_bo_create_resource_private_ex(
     _In_reads_bytes_opt_(ResourcePrivateDataSize)
         const VOID *ResourcePrivateData,
     _In_ UINT ResourcePrivateDataSize,
-    _Out_ VC4KMT_BO *Bo)
+    _In_reads_bytes_opt_(SharedRuntimeDataSize)
+        const VOID *SharedRuntimeData,
+    _In_ UINT SharedRuntimeDataSize,
+    _Out_ VC4KMT_BO *Bo,
+    _Out_opt_ D3DKMT_HANDLE *hResource,
+    _Out_opt_ D3DKMT_HANDLE *hGlobalShare)
 {
     D3DKMT_CREATEALLOCATION CreateData;
     D3DDDI_ALLOCATIONINFO AllocationInfo;
@@ -1038,7 +1045,12 @@ vc4kmt_bo_create_resource_private_ex(
 
     if (Device == NULL || Bo == NULL || Size == 0 ||
         (ResourcePrivateDataSize != 0 && ResourcePrivateData == NULL) ||
-        (ResourcePrivateDataSize != 0 && RuntimeResource == NULL) ||
+        (ResourcePrivateDataSize != 0 && RuntimeResource == NULL &&
+         SharedRuntimeData == NULL) ||
+        (SharedRuntimeData != NULL &&
+         (SharedRuntimeDataSize == 0 || RuntimeResource != NULL ||
+          Device->RuntimeCallbacks || Device->Fake ||
+          hResource == NULL || hGlobalShare == NULL)) ||
         (Flags & ~VC4KMT_BO_CREATE_CPU_CACHED) != 0)
         return STATUS_INVALID_PARAMETER;
 
@@ -1115,13 +1127,39 @@ vc4kmt_bo_create_resource_private_ex(
         CreateData.PrivateDriverDataSize = ResourcePrivateDataSize;
         CreateData.NumAllocations = 1;
         CreateData.pAllocationInfo = &AllocationInfo;
+        if (SharedRuntimeData != NULL)
+        {
+            CreateData.Flags.CreateResource = 1;
+            CreateData.Flags.CreateShared = 1;
+            CreateData.pPrivateRuntimeData = SharedRuntimeData;
+            CreateData.PrivateRuntimeDataSize = SharedRuntimeDataSize;
+        }
         Status = D3DKMTCreateAllocation(&CreateData);
         Bo->hAllocation = AllocationInfo.hAllocation;
+        if (NT_SUCCESS(Status) && SharedRuntimeData != NULL)
+        {
+            *hResource = CreateData.hResource;
+            *hGlobalShare = CreateData.hGlobalShare;
+            if (CreateData.hResource == 0 || CreateData.hGlobalShare == 0)
+                Status = STATUS_INVALID_DEVICE_STATE;
+        }
     }
-    if (!NT_SUCCESS(Status))
-        return Status;
-    if (Bo->hAllocation == 0)
-        return STATUS_INVALID_DEVICE_STATE;
+    if (!NT_SUCCESS(Status) || Bo->hAllocation == 0)
+    {
+        if (SharedRuntimeData != NULL && *hResource != 0)
+        {
+            D3DKMT_DESTROYALLOCATION Destroy;
+
+            RtlZeroMemory(&Destroy, sizeof(Destroy));
+            Destroy.hDevice = Device->hDevice;
+            Destroy.hResource = *hResource;
+            (void)D3DKMTDestroyAllocation(&Destroy);
+            *hResource = 0;
+            *hGlobalShare = 0;
+        }
+        RtlZeroMemory(Bo, sizeof(*Bo));
+        return NT_SUCCESS(Status) ? STATUS_INVALID_DEVICE_STATE : Status;
+    }
 
     Bo->Size = Size;
     Status = Vc4KmtTrackBo(Device, Bo->hAllocation, RuntimeResource, Size,
@@ -1162,8 +1200,60 @@ vc4kmt_bo_create_resource_private_ex(
     return STATUS_SUCCESS;
 
 fail:
-    (void)vc4kmt_bo_destroy(Device, Bo);
+    if (SharedRuntimeData != NULL)
+    {
+        (void)vc4kmt_bo_close_shared(Device, Bo, *hResource);
+        *hResource = 0;
+        *hGlobalShare = 0;
+    }
+    else
+    {
+        (void)vc4kmt_bo_destroy(Device, Bo);
+    }
     return Status;
+}
+
+NTSTATUS
+vc4kmt_bo_create_resource_private_ex(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
+    _In_opt_ HANDLE RuntimeResource,
+    _In_reads_bytes_opt_(ResourcePrivateDataSize)
+        const VOID *ResourcePrivateData,
+    _In_ UINT ResourcePrivateDataSize,
+    _Out_ VC4KMT_BO *Bo)
+{
+    return Vc4KmtBoCreate(Device, Size, Flags, RuntimeResource,
+                          ResourcePrivateData, ResourcePrivateDataSize,
+                          NULL, 0, Bo, NULL, NULL);
+}
+
+/* Creates an allocation another process can open by hGlobalShare. It is
+ * released with vc4kmt_bo_close_shared(Device, Bo, *hResource). */
+NTSTATUS
+vc4kmt_bo_create_shared(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
+    _In_reads_bytes_(ResourcePrivateDataSize) const VOID *ResourcePrivateData,
+    _In_ UINT ResourcePrivateDataSize,
+    _In_reads_bytes_(RuntimePrivateDataSize) const VOID *RuntimePrivateData,
+    _In_ UINT RuntimePrivateDataSize,
+    _Out_ VC4KMT_BO *Bo,
+    _Out_ D3DKMT_HANDLE *hResource,
+    _Out_ D3DKMT_HANDLE *hGlobalShare)
+{
+    if (hResource != NULL)
+        *hResource = 0;
+    if (hGlobalShare != NULL)
+        *hGlobalShare = 0;
+    if (RuntimePrivateData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    return Vc4KmtBoCreate(Device, Size, Flags, NULL,
+                          ResourcePrivateData, ResourcePrivateDataSize,
+                          RuntimePrivateData, RuntimePrivateDataSize,
+                          Bo, hResource, hGlobalShare);
 }
 
 NTSTATUS
