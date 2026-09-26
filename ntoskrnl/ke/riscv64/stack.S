@@ -3,7 +3,9 @@
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF
  */
 
-/* Native kernel-stack migration. SP changes only after the C helper returns. */
+/* Native kernel-stack migration. SP changes only after the C helper returns.
+ * Callers keep no pointer into the old stack except sp and the frame-pointer
+ * chain: the trap entry calls this with only its trap frame live. */
 #include <asm/ksriscv64.h>
 
     .section .text$KeSwitchKernelStack, "xr"
