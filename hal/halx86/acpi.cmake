@@ -2,6 +2,8 @@
 include_directories(include ${REACTOS_SOURCE_DIR}/drivers/bus/acpi/acpica/include)
 
 list(APPEND HAL_ACPI_SOURCE
+    ${REACTOS_SOURCE_DIR}/hal/arch/common/acpi/halacpi.c
+    ${REACTOS_SOURCE_DIR}/hal/arch/common/acpi/tables.c
     acpi/halacpi.c
     acpi/halpnpdd.c
     acpi/busemul.c

@@ -7,7 +7,6 @@
  */
 
 #include <hal.h>
-#include <halacpi.h>
 #include <ntifs.h>
 #include <reactos/drivers/acpi/acpi.h>
 #define NDEBUG

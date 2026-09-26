@@ -21,7 +21,6 @@ NTSTATUS NTAPI HalpGetMessageRoutingInfo(PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
 {
     return HalGetMessageRoutingInfo(RoutingInfo);
 }
-NTSTATUS NTAPI IopReserveIrqVectors(ULONG c, ULONG a, PKINTERRUPT *i) { (VOID)c;(VOID)a;(VOID)i; return 0; }
 
 VOID NTAPI ScsiPortWritePortUchar(PUCHAR p, UCHAR v) { WRITE_PORT_UCHAR(p,v); }
 UCHAR NTAPI ScsiPortReadPortUchar(PUCHAR p) { return READ_PORT_UCHAR(p); }

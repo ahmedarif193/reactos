@@ -208,7 +208,6 @@
 ; Internal kernel entry points needed by early ARM64 HAL code.
 @ stdcall -arch=arm64 KxSaveFloatingPointState(ptr) ntoskrnl.KxSaveFloatingPointState
 @ stdcall -arch=arm64 KxRestoreFloatingPointState(ptr) ntoskrnl.KxRestoreFloatingPointState
-@ stdcall -arch=arm64 IopReserveIrqVectors(long long ptr)
 
 @ stdcall -arch=arm64 VideoPortQuerySystemTime(ptr)
 
