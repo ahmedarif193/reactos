@@ -46,11 +46,15 @@ DwmGpuCacheBlurOwner(const DWM_WIN *Window)
     DWM_WIN Key = *Window;
 
     /* Own pixels and a packed region-array offset do not change the lower
-     * scene. The filter key separately checks the actual capture rectangle. */
+     * scene. The filter key separately checks the actual capture rectangle.
+     * A retained client publishes each frame in another buffer, so only
+     * whether it has a client layer is kept of that buffer's identity. */
     Key.Damaged = 0;
     Key.BaseUpdateId = 0;
     Key.BasePreviousUpdateId = 0;
     memset(&Key.BaseDirtyRect, 0, sizeof(Key.BaseDirtyRect));
+    Key.DxGlobalShare = Key.DxGlobalShare != 0;
+    Key.DxGeneration = 0;
     Key.DxUpdateId = 0;
     Key.BlurRectBase = 0;
     return Key;
@@ -126,6 +130,9 @@ DwmGpuSceneWindowSameForCapture(const DWM_WIN *Current, const DWM_WIN *Old,
              DwmGpuDamageIntersects(&Changed, OldInterest)))
             return FALSE;
 
+        /* A retained client presents each frame from another buffer. */
+        CurrentKey.DxGlobalShare = OldKey.DxGlobalShare;
+        CurrentKey.DxGeneration = OldKey.DxGeneration;
         CurrentKey.DxUpdateId = OldKey.DxUpdateId;
         if (DwmGpuSceneWindowSame(&CurrentKey, &OldKey, CurrentRects, CurrentRectCount,
                                   OldRects, OldRectCount))

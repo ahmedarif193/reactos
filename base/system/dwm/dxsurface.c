@@ -548,6 +548,68 @@ DwmDxAcknowledgeSurface(const DWM_WIN *Window)
     }
 }
 
+typedef struct _DWM_DX_HELD_FRAME
+{
+    ULONG SurfaceId;
+    ULONG Generation;
+    ULONGLONG UpdateId;
+} DWM_DX_HELD_FRAME;
+
+/* Indexed by SurfaceId. A slot left by a torn-down window keeps a tuple that
+ * win32k already released; releasing it again when the slot is reused is a
+ * harmless STATUS_NOT_FOUND, since update IDs are never reused. */
+static DWM_DX_HELD_FRAME g_HeldFrames[DWM_MAX_SURFACES];
+
+static void
+DwmDxReleaseFrame(const DWM_DX_HELD_FRAME *Held)
+{
+    DWM_DX_SURFACE_EXCHANGE Exchange;
+
+    RtlZeroMemory(&Exchange, sizeof(Exchange));
+    Exchange.StructSize = sizeof(Exchange);
+    Exchange.Action = DWM_DX_SURFACE_RELEASE;
+    Exchange.SurfaceId = Held->SurfaceId;
+    Exchange.Generation = Held->Generation;
+    Exchange.UpdateId = Held->UpdateId;
+    /* Window teardown may already have released it. */
+    (void)NtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+}
+
+/*
+ * DWM owns a retained client frame from the GETFRAME that reports it until
+ * a later GETFRAME reports a newer frame of that surface. DWM fetches a frame
+ * only after the GPU finished reading the previous one, so the older frame
+ * is released here, whether or not any compositor path sampled it. A window
+ * that is merely absent from this frame keeps its frame: it can reappear
+ * without a new present, and window teardown releases it in win32k.
+ */
+void
+DwmDxHoldFrames(const DWM_WIN *Windows, ULONG Count)
+{
+    ULONG Index;
+
+    if ((Count != 0 && Windows == NULL) || Count > DWM_MAX_WINDOWS)
+        return;
+
+    for (Index = 0; Index < Count; ++Index)
+    {
+        const DWM_WIN *Window = &Windows[Index];
+        DWM_DX_HELD_FRAME *Held;
+
+        if (!(Window->LayerFlags & DWM_WINDOW_DX_RETAINED) || Window->DxUpdateId == 0 ||
+            Window->SurfaceId >= ARRAYSIZE(g_HeldFrames))
+            continue;
+        Held = &g_HeldFrames[Window->SurfaceId];
+        if (Held->Generation == Window->DxGeneration && Held->UpdateId == Window->DxUpdateId)
+            continue;
+        if (Held->UpdateId != 0)
+            DwmDxReleaseFrame(Held);
+        Held->SurfaceId = Window->SurfaceId;
+        Held->Generation = Window->DxGeneration;
+        Held->UpdateId = Window->DxUpdateId;
+    }
+}
+
 void
 DwmDxSweepSurfaces(const DWM_WIN *Windows, ULONG Count)
 {
@@ -601,6 +663,14 @@ DwmDxCleanupSurfaces(void)
     /* Release locked mappings before destroying their owning devices. */
     for (Index = 0; Index < DWM_DX_MAX_VIEWS; ++Index)
         DwmDxDropView(&g_Views[Index]);
+
+    /* Composition has stopped, so no retained frame is read any more. */
+    for (Index = 0; Index < ARRAYSIZE(g_HeldFrames); ++Index)
+    {
+        if (g_HeldFrames[Index].UpdateId != 0)
+            DwmDxReleaseFrame(&g_HeldFrames[Index]);
+    }
+    RtlZeroMemory(g_HeldFrames, sizeof(g_HeldFrames));
 
     for (Index = 0; Index < DWM_DX_MAX_DEVICES; ++Index)
     {

@@ -71,9 +71,12 @@ typedef struct _WND_REDIRECT
     ULONGLONG DxWindow;      /* HWND whose client owns the shared allocation */
     LONG      DxClientX;     /* source client origin in top-level backing    */
     LONG      DxClientY;
-    ULONG     DxFrameGeneration; /* registration and client origin the last */
-    LONG      DxFrameClientX;    /* frame reported to the compositor        */
+    ULONG     DxFrameWidth;      /* client layer size and origin the last   */
+    ULONG     DxFrameHeight;     /* frame reported to the compositor        */
+    LONG      DxFrameClientX;
     LONG      DxFrameClientY;
+    ULONG     DxPublication;     /* 1 + g_DxPublications slot of the current
+                                  * publication, or 0                      */
     ULONGLONG DxIssuedUpdateId;
     ULONGLONG DxPublishedUpdateId;
     ULONGLONG DxConsumedUpdateId;

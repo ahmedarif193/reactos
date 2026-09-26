@@ -28,7 +28,7 @@ BOOL gbCompositionEnabled = FALSE;
  * (shared with user mode) untouched. Sized for a comfortable desktop; windows
  * beyond the cap simply stay on the direct path.
  */
-#define COMPOSITION_MAX_WINDOWS 512
+#define COMPOSITION_MAX_WINDOWS DWM_MAX_SURFACES
 #define COMPOSITION_COMPOSE_MAX COMPOSITION_MAX_WINDOWS
 /* A cache DC has no defined end: an application may hold one and draw
  * through it for as long as it likes. Publish a backing whose DC bracket is
@@ -244,6 +244,8 @@ typedef struct _DWM_DX_PUBLICATION
     ULONG Generation;
     ULONGLONG UpdateId;
     BOOL Retired;
+    BOOL Retained;  /* DWM_DX_PUBLISH_RETAINED: released only by RELEASE */
+    BOOL Delivered; /* reported to the compositor by GETFRAME */
 } DWM_DX_PUBLICATION;
 
 static DWM_DX_PUBLICATION g_DxPublications[COMPOSITION_MAX_WINDOWS];
@@ -283,6 +285,28 @@ IntCompositionDrainDxPublications(_In_ PEPROCESS Compositor, _In_ BOOL RetiredOn
             IntCompositionCompleteDxPublication(Publication);
         }
     }
+}
+
+/* The publication a window's DX fields currently describe, if still pending. */
+static DWM_DX_PUBLICATION *
+IntCompositionCurrentDxPublication(_In_ REDIRECT_ENTRY *Entry)
+{
+    DWM_DX_PUBLICATION *Publication;
+
+    if (Entry->Redirect.DxPublication == 0 ||
+        Entry->Redirect.DxPublication > ARRAYSIZE(g_DxPublications))
+    {
+        return NULL;
+    }
+    Publication = &g_DxPublications[Entry->Redirect.DxPublication - 1];
+    if (Publication->ReadyEvent == NULL ||
+        Publication->SurfaceId != (ULONG)(Entry - g_Redirects) ||
+        Publication->Generation != Entry->Redirect.DxGeneration ||
+        Publication->UpdateId != Entry->Redirect.DxPublishedUpdateId)
+    {
+        return NULL;
+    }
+    return Publication;
 }
 
 /* Wake dwm after marking damage (no-op when no dwm is attached). */
@@ -650,7 +674,30 @@ IntCompositionIsCompositable(_In_ PWND Wnd)
 static VOID
 IntCompositionFreeDxSurface(_Inout_ PWND_REDIRECT r)
 {
-    if (r->DxReadyEvent != NULL)
+    if (r->DxReadyEvent != NULL && (r->DxFlags & DWM_DX_PUBLISH_RETAINED))
+    {
+        REDIRECT_ENTRY *Entry = CONTAINING_RECORD(r, REDIRECT_ENTRY, Redirect);
+        ULONG SurfaceId = (ULONG)(Entry - g_Redirects);
+        ULONG Index;
+
+        /* The compositor may still hold retained frames of this surface.
+         * GETFRAME releases them once its earlier reads are complete. */
+        for (Index = 0; Index < ARRAYSIZE(g_DxPublications); ++Index)
+        {
+            DWM_DX_PUBLICATION *Publication = &g_DxPublications[Index];
+            if (Publication->ReadyEvent != NULL && Publication->Retained &&
+                Publication->SurfaceId == SurfaceId)
+            {
+                if (Publication->Delivered)
+                    Publication->Retired = TRUE;
+                else
+                    IntCompositionCompleteDxPublication(Publication);
+            }
+        }
+        ObDereferenceObject(r->DxReadyEvent);
+        r->DxReadyEvent = NULL;
+    }
+    else if (r->DxReadyEvent != NULL)
     {
         if (r->DxInfo.Version == DWM_DX_SURFACE_INFO_VERSION_GPU &&
             r->DxPublishedUpdateId > r->DxConsumedUpdateId)
@@ -680,7 +727,9 @@ IntCompositionFreeDxSurface(_Inout_ PWND_REDIRECT r)
     r->DxFlags = 0;
     r->DxClientX = 0;
     r->DxClientY = 0;
-    r->DxFrameGeneration = 0;
+    r->DxFrameWidth = 0;
+    r->DxFrameHeight = 0;
+    r->DxPublication = 0;
     r->DxIssuedUpdateId = 0;
     r->DxPublishedUpdateId = 0;
     r->DxConsumedUpdateId = 0;
@@ -2593,6 +2642,13 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         g_DwmFrameWindows[count].DxGeneration = e->Redirect.DxGeneration;
         g_DwmFrameWindows[count].DxAdapterLuid = e->Redirect.DxAdapterLuid;
         g_DwmFrameWindows[count].DxUpdateId = e->Redirect.DxPublishedUpdateId;
+        {
+            /* The compositor may read this frame from now on, so only it
+             * may release a retained publication. */
+            DWM_DX_PUBLICATION *Publication = IntCompositionCurrentDxPublication(e);
+            if (Publication != NULL)
+                Publication->Delivered = TRUE;
+        }
         g_DwmFrameWindows[count].DxClientX = e->Redirect.DxClientX;
         g_DwmFrameWindows[count].DxClientY = e->Redirect.DxClientY;
         g_DwmFrameWindows[count].DxWidth = e->Redirect.DxInfo.Width;
@@ -2711,6 +2767,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             g_DwmFrameWindows[count].ColorKey = (ULONG)key;
             if (e->Redirect.DxFlags & DWM_DX_PUBLISH_PREMULTIPLIED)
                 lf |= DWM_WINDOW_DX_PREMULTIPLIED_ALPHA;
+            if (e->Redirect.DxFlags & DWM_DX_PUBLISH_RETAINED)
+                lf |= DWM_WINDOW_DX_RETAINED;
             g_DwmFrameWindows[count].LayerFlags = lf;
         }
         {
@@ -2801,10 +2859,11 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         count++;
 
         /* A publication alone replaces only the client layer; the frame,
-         * shadow and placement it is composed with are unchanged. A new
-         * registration or a moved client layer also uncovers base pixels. */
+         * shadow and placement it is composed with are unchanged. A resized
+         * or moved client layer also uncovers base pixels. */
         if (wasDamaged && DxPending && !EntryDamaged && !BackingChanged &&
-            e->Redirect.DxFrameGeneration == e->Redirect.DxGeneration &&
+            e->Redirect.DxFrameWidth == e->Redirect.DxInfo.Width &&
+            e->Redirect.DxFrameHeight == e->Redirect.DxInfo.Height &&
             e->Redirect.DxFrameClientX == e->Redirect.DxClientX &&
             e->Redirect.DxFrameClientY == e->Redirect.DxClientY)
         {
@@ -2833,7 +2892,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         }
         if (wasDamaged)
         {
-            e->Redirect.DxFrameGeneration = e->Redirect.DxGeneration;
+            e->Redirect.DxFrameWidth = e->Redirect.DxInfo.Width;
+            e->Redirect.DxFrameHeight = e->Redirect.DxInfo.Height;
             e->Redirect.DxFrameClientX = e->Redirect.DxClientX;
             e->Redirect.DxFrameClientY = e->Redirect.DxClientY;
         }
@@ -3283,7 +3343,8 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
     if (Request.StructSize != sizeof(Request))
         return STATUS_INFO_LENGTH_MISMATCH;
 
-    if (Request.Action == DWM_DX_SURFACE_CONSUMED)
+    if (Request.Action == DWM_DX_SURFACE_CONSUMED ||
+        Request.Action == DWM_DX_SURFACE_RELEASE)
     {
         ULONG Index;
         for (Index = 0; Index < ARRAYSIZE(g_DxPublications); ++Index)
@@ -3295,10 +3356,27 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 Publication->Generation == Request.Generation &&
                 Publication->UpdateId == Request.UpdateId)
             {
-                IntCompositionCompleteDxPublication(Publication);
+                if (Request.Action == DWM_DX_SURFACE_RELEASE || !Publication->Retained)
+                {
+                    IntCompositionCompleteDxPublication(Publication);
+                }
+                else if (Publication->SurfaceId < g_RedirectHighWater)
+                {
+                    /* The compositor keeps sampling a retained frame; this
+                     * only acknowledges it, ending its pending damage. */
+                    PWND_REDIRECT Redirect = &g_Redirects[Publication->SurfaceId].Redirect;
+                    if (Redirect->DxGeneration == Publication->Generation &&
+                        Redirect->DxPublishedUpdateId == Publication->UpdateId)
+                    {
+                        Redirect->DxConsumedUpdateId = Publication->UpdateId;
+                    }
+                }
                 goto CopyOutput;
             }
         }
+        /* A retained frame can already have been retired by teardown. */
+        if (Request.Action == DWM_DX_SURFACE_RELEASE)
+            return STATUS_NOT_FOUND;
         if (PsGetCurrentProcess() != g_DwmProcess)
             return STATUS_ACCESS_DENIED;
         if (Request.SurfaceId >= g_RedirectHighWater)
@@ -3360,6 +3438,7 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             ULONG ClientWidth = SourceWnd->rcClient.right - SourceWnd->rcClient.left;
             ULONG ClientHeight = SourceWnd->rcClient.bottom - SourceWnd->rcClient.top;
             BOOL Publish = Request.Action == DWM_DX_SURFACE_PUBLISH;
+            BOOL Supersede;
             BOOL SameResource;
             PKEVENT ReadyEvent;
             DWM_DX_PUBLICATION *Publication = NULL;
@@ -3377,7 +3456,8 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             if (Publish)
             {
                 if (Request.Info.Version != DWM_DX_SURFACE_INFO_VERSION_GPU ||
-                    Request.Info.Pitch != 0 || (Request.Flags & ~DWM_DX_PUBLISH_PREMULTIPLIED) != 0 ||
+                    Request.Info.Pitch != 0 ||
+                    (Request.Flags & ~(DWM_DX_PUBLISH_PREMULTIPLIED | DWM_DX_PUBLISH_RETAINED)) != 0 ||
                     (Request.Info.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM &&
                      Request.Info.Format != DWM_DX_FORMAT_R8G8B8A8_UNORM) ||
                     Request.UpdateRect.left != 0 || Request.UpdateRect.top != 0 ||
@@ -3396,9 +3476,16 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 return STATUS_INVALID_PARAMETER;
             }
             /* Replacing a registration must not release a buffer which the
-             * compositor has already received and may still be reading. */
-            if (Entry->Redirect.DxIssuedUpdateId > Entry->Redirect.DxConsumedUpdateId)
+             * compositor has already received and may still be reading. A
+             * retained frame is released separately, so a newer retained
+             * frame can replace it at any time. */
+            Supersede = Publish && (Request.Flags & DWM_DX_PUBLISH_RETAINED) &&
+                        (Entry->Redirect.DxFlags & DWM_DX_PUBLISH_RETAINED);
+            if (!Supersede &&
+                Entry->Redirect.DxIssuedUpdateId > Entry->Redirect.DxConsumedUpdateId)
+            {
                 return STATUS_DEVICE_BUSY;
+            }
             if (Publish)
             {
                 ULONG Index;
@@ -3474,11 +3561,22 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 }
             }
 
+            if (Supersede)
+            {
+                /* A frame the compositor never received is released now;
+                 * one it received is released by the compositor. */
+                DWM_DX_PUBLICATION *Previous = IntCompositionCurrentDxPublication(Entry);
+                if (Previous != NULL && !Previous->Delivered)
+                    IntCompositionCompleteDxPublication(Previous);
+            }
             if (Entry->Redirect.DxReadyEvent != NULL)
             {
-                KeSetEvent(Entry->Redirect.DxReadyEvent,
-                           IO_NO_INCREMENT,
-                           FALSE);
+                if (!Supersede)
+                {
+                    KeSetEvent(Entry->Redirect.DxReadyEvent,
+                               IO_NO_INCREMENT,
+                               FALSE);
+                }
                 ObDereferenceObject(Entry->Redirect.DxReadyEvent);
             }
 
@@ -3512,11 +3610,15 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 Publication->SurfaceId = (ULONG)(Entry - g_Redirects);
                 Publication->Generation = Entry->Redirect.DxGeneration;
                 Publication->UpdateId = Request.UpdateId;
+                Publication->Retained = (Request.Flags & DWM_DX_PUBLISH_RETAINED) != 0;
+                Publication->Delivered = FALSE;
+                Entry->Redirect.DxPublication = (ULONG)(Publication - g_DxPublications) + 1;
                 IntCompositionDamageDxPublication(Entry, TopWnd);
                 return STATUS_SUCCESS;
             }
             else
             {
+                Entry->Redirect.DxPublication = 0;
                 Entry->Redirect.DxIssuedUpdateId = 0;
                 Entry->Redirect.DxPublishedUpdateId = 0;
                 Entry->Redirect.DxConsumedUpdateId = 0;
@@ -3538,8 +3640,12 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                  * a new owner's publication when an old swapchain releases. */
                 return STATUS_NOT_FOUND;
             }
-            if (Entry->Redirect.DxIssuedUpdateId > Entry->Redirect.DxConsumedUpdateId)
+            /* Retained frames stay valid until the compositor lets them go. */
+            if (!(Entry->Redirect.DxFlags & DWM_DX_PUBLISH_RETAINED) &&
+                Entry->Redirect.DxIssuedUpdateId > Entry->Redirect.DxConsumedUpdateId)
+            {
                 return STATUS_DEVICE_BUSY;
+            }
             IntCompositionFreeDxSurface(&Entry->Redirect);
             IntCompositionDamageDxPublication(Entry, TopWnd);
             break;

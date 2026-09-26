@@ -3563,6 +3563,7 @@ DwmComposeLoop(HANDLE hStopEvent)
         }
 
         wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
+        DwmDxHoldFrames(wins, hdr->Count);
         DwmDxSweepSurfaces(wins, hdr->Count);
 
         if ((LONG)hdr->ScreenW != primW || (LONG)hdr->ScreenH != primH)

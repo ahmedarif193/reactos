@@ -24,6 +24,7 @@
 
 #define DWM_FRAME_MAGIC   0x354d5744u   /* 'DWM5' (versioned FRONT dirty bounds) */
 #define DWM_MAX_WINDOWS    256
+#define DWM_MAX_SURFACES   512          /* every DWM_WIN SurfaceId is below */
 
 /* NtUserCallOneParam routine numbers of the DWM entry points (must match
  * win32ss/include/ntuser.h, which owns the routine numbering). */
@@ -230,6 +231,7 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_LWA_ALPHA    0x00000002u
 
 /* Compositor-owned attributes carried in the unused high LayerFlags bits. */
+#define DWM_WINDOW_DX_RETAINED 0x04000000u /* see DWM_DX_PUBLISH_RETAINED */
 #define DWM_WINDOW_DX_PREMULTIPLIED_ALPHA 0x08000000u
 #define DWM_WINDOW_PREMULTIPLIED_ALPHA 0x10000000u
 #define DWM_WINDOW_DARK      0x20000000u
@@ -435,10 +437,12 @@ typedef struct _DWM_DX_SHARED_SURFACE_INFO
 #define DWM_DX_SURFACE_CANCEL_GDI 6u
 #define DWM_DX_SURFACE_PUBLISH    7u
 #define DWM_DX_SURFACE_UNREGISTER 8u
+#define DWM_DX_SURFACE_RELEASE    9u
 
 #define DWM_DX_REDIRECTION_GDI_SURFACE 0x00000010u
 
 #define DWM_DX_PUBLISH_PREMULTIPLIED 0x00000001u
+#define DWM_DX_PUBLISH_RETAINED      0x00000002u
 
 #define DWM_DX_UPDATE_CANCEL     0x80000000u
 
@@ -452,7 +456,16 @@ typedef struct _DWM_DX_SHARED_SURFACE_INFO
  * The producer must finish GPU writes before PUBLISH and keep its resource
  * alive and unchanged until consumption. PUBLISH currently requires the
  * complete client rectangle; partial client publications need a damage
- * history contract that this frame format does not carry. */
+ * history contract that this frame format does not carry.
+ *
+ * A RETAINED publication comes from a producer that owns other buffers. The
+ * compositor samples it directly and owns it from the GETFRAME that reports
+ * it; CONSUMED then only acknowledges the frame. The compositor RELEASEs it
+ * after a later GETFRAME reports a newer frame of that surface, and calls
+ * GETFRAME only once its GPU reads of earlier frames are complete. Window
+ * teardown releases it too. RELEASE sets the ReadyEvent. A newer retained
+ * publication supersedes one no GETFRAME reported yet, releasing it at once,
+ * so a producer never waits for more than the frame on screen. */
 typedef struct _DWM_DX_SURFACE_EXCHANGE
 {
     ULONG StructSize;
