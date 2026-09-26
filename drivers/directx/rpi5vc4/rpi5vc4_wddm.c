@@ -1332,10 +1332,29 @@ Rpi5Vc4VsyncControl(
     if (Enable && !DeviceExtension->VsyncEnabled)
     {
         LARGE_INTEGER Due;
+        LONG Period;
 
         DeviceExtension->VsyncEnabled = TRUE;
-        Due.QuadPart = -166667; /* ~16.7 ms, 60 Hz */
-        KeSetTimerEx(&DeviceExtension->VsyncTimer, Due, 16,
+        if (DeviceExtension->PixelValveBase != NULL &&
+            !DeviceExtension->PvVBlankBroken)
+        {
+            /*
+             * The VFP latch holds one bit, so a poll interval that spans two
+             * vblanks reports only one, and a slow poll reports a vblank up
+             * to a whole interval late. Either delays a vsync-paced flip by a
+             * frame, and a refresh-rate timer drifting against the display
+             * does it periodically. Poll every tick instead.
+             */
+            Period = RPI5_PV_VSYNC_POLL_MS;
+            Due.QuadPart = -10000LL * RPI5_PV_VSYNC_POLL_MS;
+        }
+        else
+        {
+            /* Without a live latch the timer itself paces the reports. */
+            Period = 16;
+            Due.QuadPart = -166667; /* ~16.7 ms, 60 Hz */
+        }
+        KeSetTimerEx(&DeviceExtension->VsyncTimer, Due, Period,
                      &DeviceExtension->VsyncDpc);
     }
     else if (!Enable && DeviceExtension->VsyncEnabled)

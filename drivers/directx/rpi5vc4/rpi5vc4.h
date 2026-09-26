@@ -451,7 +451,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
     ULONG PendingPreemptionFence[RPI5VC4_GPU_NODE_COUNT]; /* guarded by DmaLock */
     BOOLEAN DmaPipelineInitialized;
 
-    /* Vsync source: refresh-rate timer polling the PixelValve VFP latch
+    /* Vsync source: a timer polling the PixelValve VFP latch every tick
      * (the root-enumerated devnode has no interrupt resource). */
     KTIMER VsyncTimer;
     KDPC VsyncDpc;

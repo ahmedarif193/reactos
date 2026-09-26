@@ -69,6 +69,7 @@
 
 #define RPI5_PV_VBLANK_POLL_US          50
 #define RPI5_PV_VBLANK_TIMEOUT_US       50000
+#define RPI5_PV_VSYNC_POLL_MS           1       /* vsync DPC latch poll period */
 
 /* Extract the 16-bit low/high halves shared by the HORZ/VERT timing words. */
 #define RPI5_PV_LO16(v)                 ((v) & 0xffff)
