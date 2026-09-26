@@ -591,3 +591,46 @@ DwmpDxUpdateWindowSharedSurface(HWND Window,
         DwmDxReportFailure("update", Status);
     return DwmDxStatusToHresult(Status);
 }
+
+/*
+ * ReactOS extension: publishes a producer-owned client buffer, retained.
+ * DWM samples it in place and sets ReleaseEvent once no frame reads it.
+ * The buffer's GPU writes must be complete.
+ */
+HRESULT WINAPI
+DwmpDxPublishWindowSurface(HWND Window,
+                           LUID AdapterLuid,
+                           HANDLE SharedSurface,
+                           UINT Width,
+                           UINT Height,
+                           HANDLE ReleaseEvent)
+{
+    DWM_DX_SURFACE_EXCHANGE Exchange;
+    NTSTATUS Status;
+
+    if (!IsWindow(Window) || SharedSurface == NULL ||
+        (ULONG_PTR)SharedSurface > MAXULONG || ReleaseEvent == NULL ||
+        Width == 0 || Height == 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    RtlZeroMemory(&Exchange, sizeof(Exchange));
+    Exchange.StructSize = sizeof(Exchange);
+    Exchange.Action = DWM_DX_SURFACE_PUBLISH;
+    Exchange.Window = (ULONGLONG)(ULONG_PTR)Window;
+    Exchange.AdapterLuid = AdapterLuid;
+    Exchange.GlobalShare = (ULONG)(ULONG_PTR)SharedSurface;
+    Exchange.Info.Magic = DWM_DX_SURFACE_INFO_MAGIC;
+    Exchange.Info.Version = DWM_DX_SURFACE_INFO_VERSION_GPU;
+    Exchange.Info.Width = Width;
+    Exchange.Info.Height = Height;
+    Exchange.Info.Format = DWM_DX_FORMAT_B8G8R8A8_UNORM;
+    Exchange.Flags = DWM_DX_PUBLISH_RETAINED;
+    Exchange.ReadyEvent = (ULONGLONG)(ULONG_PTR)ReleaseEvent;
+    Exchange.UpdateRect.right = (LONG)Width;
+    Exchange.UpdateRect.bottom = (LONG)Height;
+    Status = (NTSTATUS)NtUserCallOneParam((DWORD_PTR)&Exchange,
+                                          DWM_ROUTINE_DXSURFACE);
+    return DwmDxStatusToHresult(Status);
+}
