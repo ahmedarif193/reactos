@@ -13,10 +13,12 @@
 #define DXGKP_HANDLE_TYPE_MASK 0xF0000000UL
 #define DXGKP_HANDLE_GENERATION_MASK 0x0FFFFFFFUL
 #define DXGKP_HANDLE_COOKIE 0x19B753A1UL
+#define DXGKP_HANDLE_HASH_BUCKETS 256
 
 typedef struct _DXGKRNL_HANDLE_ENTRY
 {
     LIST_ENTRY ListEntry;
+    LIST_ENTRY HashEntry;
     D3DKMT_HANDLE Handle;
     DXGKRNL_HANDLE_TYPE Type;
     PVOID Object;
@@ -30,6 +32,9 @@ typedef struct _DXGKRNL_HANDLE_ENTRY
 
 static FAST_MUTEX DxgkHandleTableLock;
 static LIST_ENTRY DxgkHandleTableHead;
+/* Lookup index for DxgkHandleTableHead; generations are sequential, so the
+ * low handle bits spread evenly across buckets. */
+static LIST_ENTRY DxgkHandleHashHeads[DXGKP_HANDLE_HASH_BUCKETS];
 static volatile LONG DxgkNextHandleGeneration;
 static BOOLEAN DxgkHandleTableInitialized;
 
@@ -47,21 +52,39 @@ DxgkpHandleType(
     return (DXGKRNL_HANDLE_TYPE)(((ULONG)Handle & DXGKP_HANDLE_TYPE_MASK) >> DXGKP_HANDLE_TYPE_SHIFT);
 }
 
-static BOOLEAN
-DxgkpHandleExistsLocked(
+static PLIST_ENTRY
+DxgkpHandleHashHead(
     _In_ D3DKMT_HANDLE Handle)
 {
+    return &DxgkHandleHashHeads[(ULONG)Handle & (DXGKP_HANDLE_HASH_BUCKETS - 1)];
+}
+
+static PDXGKRNL_HANDLE_ENTRY
+DxgkpFindHandleLocked(
+    _In_ D3DKMT_HANDLE Handle)
+{
+    PLIST_ENTRY Head = DxgkpHandleHashHead(Handle);
     PLIST_ENTRY Entry;
 
-    for (Entry = DxgkHandleTableHead.Flink; Entry != &DxgkHandleTableHead; Entry = Entry->Flink)
+    for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
     {
-        PDXGKRNL_HANDLE_ENTRY HandleEntry = CONTAINING_RECORD(Entry, DXGKRNL_HANDLE_ENTRY, ListEntry);
+        PDXGKRNL_HANDLE_ENTRY HandleEntry = CONTAINING_RECORD(Entry, DXGKRNL_HANDLE_ENTRY, HashEntry);
 
         if (HandleEntry->Handle == Handle)
-            return TRUE;
+            return HandleEntry;
     }
 
-    return FALSE;
+    return NULL;
+}
+
+static VOID
+DxgkpUnlinkHandleLocked(
+    _Inout_ PDXGKRNL_HANDLE_ENTRY Entry)
+{
+    RemoveEntryList(&Entry->ListEntry);
+    InitializeListHead(&Entry->ListEntry);
+    RemoveEntryList(&Entry->HashEntry);
+    InitializeListHead(&Entry->HashEntry);
 }
 
 static D3DKMT_HANDLE
@@ -77,7 +100,7 @@ DxgkpAllocateHandleLocked(
         if (Generation == 0)
             continue;
         Handle = (D3DKMT_HANDLE)(DxgkpHandleTypeBits(Type) | ((Generation ^ DXGKP_HANDLE_COOKIE) & DXGKP_HANDLE_GENERATION_MASK));
-    } while (Handle == 0 || DxgkpHandleExistsLocked(Handle));
+    } while (Handle == 0 || DxgkpFindHandleLocked(Handle) != NULL);
 
     return Handle;
 }
@@ -115,6 +138,7 @@ DxgkpCreateHandle(
     Entry->TeardownClaimed = TeardownClaimed;
     Entry->OwnsAdapterReference = OwnsAdapterReference;
     InitializeListHead(&Entry->ListEntry);
+    InitializeListHead(&Entry->HashEntry);
     ObReferenceObject(OwnerProcess);
 
     ExAcquireFastMutex(&DxgkHandleTableLock);
@@ -139,6 +163,7 @@ DxgkpCreateHandle(
     }
     Entry->Handle = DxgkpAllocateHandleLocked(Type);
     InsertTailList(&DxgkHandleTableHead, &Entry->ListEntry);
+    InsertTailList(DxgkpHandleHashHead(Entry->Handle), &Entry->HashEntry);
     ExReleaseFastMutex(&DxgkHandleTableLock);
 
     *OutHandle = Entry->Handle;
@@ -153,23 +178,6 @@ DxgkTryClaimTeardown(
      * This independent claim transfers the object's one final-release right. */
     ASSERT(TeardownClaimed != NULL);
     return (TeardownClaimed != NULL && InterlockedCompareExchange(TeardownClaimed, 1, 0) == 0);
-}
-
-static PDXGKRNL_HANDLE_ENTRY
-DxgkpFindHandleLocked(
-    _In_ D3DKMT_HANDLE Handle)
-{
-    PLIST_ENTRY Entry;
-
-    for (Entry = DxgkHandleTableHead.Flink; Entry != &DxgkHandleTableHead; Entry = Entry->Flink)
-    {
-        PDXGKRNL_HANDLE_ENTRY HandleEntry = CONTAINING_RECORD(Entry, DXGKRNL_HANDLE_ENTRY, ListEntry);
-
-        if (HandleEntry->Handle == Handle)
-            return HandleEntry;
-    }
-
-    return NULL;
 }
 
 static NTSTATUS
@@ -217,12 +225,16 @@ DxgkpFreeHandleEntry(
 NTSTATUS
 DxgkHandleManagerInitialize(VOID)
 {
+    ULONG Index;
+
     PAGED_CODE();
 
     if (DxgkHandleTableInitialized)
         return STATUS_ALREADY_INITIALIZED;
     ExInitializeFastMutex(&DxgkHandleTableLock);
     InitializeListHead(&DxgkHandleTableHead);
+    for (Index = 0; Index < DXGKP_HANDLE_HASH_BUCKETS; ++Index)
+        InitializeListHead(&DxgkHandleHashHeads[Index]);
     DxgkNextHandleGeneration = 0;
     DxgkHandleTableInitialized = TRUE;
     return STATUS_SUCCESS;
@@ -241,9 +253,10 @@ DxgkHandleManagerUninitialize(VOID)
     ExAcquireFastMutex(&DxgkHandleTableLock);
     while (!IsListEmpty(&DxgkHandleTableHead))
     {
-        PLIST_ENTRY Entry = RemoveHeadList(&DxgkHandleTableHead);
+        PDXGKRNL_HANDLE_ENTRY Entry = CONTAINING_RECORD(DxgkHandleTableHead.Flink, DXGKRNL_HANDLE_ENTRY, ListEntry);
 
-        InsertTailList(&Retired, Entry);
+        DxgkpUnlinkHandleLocked(Entry);
+        InsertTailList(&Retired, &Entry->ListEntry);
     }
     DxgkHandleTableInitialized = FALSE;
     ExReleaseFastMutex(&DxgkHandleTableLock);
@@ -449,8 +462,7 @@ DxgkCloseAdapterHandle(
     Status = DxgkpValidateHandleEntry(Entry, Handle, DxgkHandleTypeAdapter, OwnerProcess);
     if (NT_SUCCESS(Status))
     {
-        RemoveEntryList(&Entry->ListEntry);
-        InitializeListHead(&Entry->ListEntry);
+        DxgkpUnlinkHandleLocked(Entry);
         Entry->OwnsAdapterReference = FALSE;
         *OutAdapter = (PDXGKRNL_ADAPTER)Entry->Object;
     }
@@ -526,8 +538,7 @@ DxgkDetachDeviceHandle(
     if (NT_SUCCESS(Status))
     {
         DxgkDeviceBeginDestroy((PDXGKRNL_DEVICE)Entry->Object);
-        RemoveEntryList(&Entry->ListEntry);
-        InitializeListHead(&Entry->ListEntry);
+        DxgkpUnlinkHandleLocked(Entry);
         *OutDevice = (PDXGKRNL_DEVICE)Entry->Object;
     }
     ExReleaseFastMutex(&DxgkHandleTableLock);
@@ -597,8 +608,7 @@ DxgkpRemoveObjectHandle(
 
         if (HandleEntry->Type != Type || HandleEntry->Object != Object)
             continue;
-        RemoveEntryList(&HandleEntry->ListEntry);
-        InitializeListHead(&HandleEntry->ListEntry);
+        DxgkpUnlinkHandleLocked(HandleEntry);
         Found = HandleEntry;
         break;
     }
@@ -678,8 +688,7 @@ DxgkDetachOwnedHandle(
     {
         if (Entry->Destroying != NULL)
             InterlockedExchange(Entry->Destroying, 1);
-        RemoveEntryList(&Entry->ListEntry);
-        InitializeListHead(&Entry->ListEntry);
+        DxgkpUnlinkHandleLocked(Entry);
         *OutObject = Entry->Object;
     }
     ExReleaseFastMutex(&DxgkHandleTableLock);
@@ -730,8 +739,7 @@ DxgkDetachContextHandle(
     if (NT_SUCCESS(Status))
     {
         InterlockedExchange(&((PDXGKRNL_CONTEXT)Entry->Object)->Destroying, 1);
-        RemoveEntryList(&Entry->ListEntry);
-        InitializeListHead(&Entry->ListEntry);
+        DxgkpUnlinkHandleLocked(Entry);
         *OutContext = (PDXGKRNL_CONTEXT)Entry->Object;
     }
     ExReleaseFastMutex(&DxgkHandleTableLock);
@@ -762,7 +770,7 @@ DxgkpPurgeHandles(
                 DxgkDeviceBeginDestroy((PDXGKRNL_DEVICE)HandleEntry->Object);
             else if (HandleEntry->Type == DxgkHandleTypeContext)
                 InterlockedExchange(&((PDXGKRNL_CONTEXT)HandleEntry->Object)->Destroying, 1);
-            RemoveEntryList(&HandleEntry->ListEntry);
+            DxgkpUnlinkHandleLocked(HandleEntry);
             InsertTailList(&Retired, &HandleEntry->ListEntry);
         }
         Entry = Next;
@@ -810,7 +818,7 @@ DxgkpPurgeAdapterOpenHandles(
 
         if (HandleEntry->Adapter == Adapter && HandleEntry->Type == DxgkHandleTypeAdapter)
         {
-            RemoveEntryList(&HandleEntry->ListEntry);
+            DxgkpUnlinkHandleLocked(HandleEntry);
             InsertTailList(&Retired, &HandleEntry->ListEntry);
         }
         Entry = Next;
