@@ -773,15 +773,15 @@ BOOLEAN ReconfigureAdapter(PRECONFIGURE_CONTEXT Context)
     PLAN_ADAPTER Adapter = Context->Adapter;
     PIP_INTERFACE Interface = Context->Interface;
     NDIS_STATUS NdisStatus;
-    IP_ADDRESS DefaultMask;
 
-    /* Initialize the default unspecified address (0.0.0.0) */
-    AddrInitIPv4(&DefaultMask, 0);
     if (Context->State == LAN_STATE_STARTED &&
         !Context->Adapter->CompletingReset)
     {
-        /* Read the IP configuration */
-        ReadIpConfiguration(Interface);
+        /* A media transition keeps the interface addresses, and AddIPAddress
+         * aliases have no registry counterpart: only load the configuration
+         * while no address is assigned. */
+        if (AddrIsUnspecified(&Interface->Unicast))
+            ReadIpConfiguration(Interface);
 
         /* Compute the broadcast address */
         Interface->Broadcast.Type = IP_ADDRESS_V4;
@@ -790,16 +790,10 @@ BOOLEAN ReconfigureAdapter(PRECONFIGURE_CONTEXT Context)
     }
     else if (!Context->Adapter->CompletingReset)
     {
-        /* Clear IP configuration */
-        Interface->Unicast = DefaultMask;
-        Interface->Netmask = DefaultMask;
-        Interface->Broadcast = DefaultMask;
-
-        /* Remove all interface routes */
-        RouterRemoveRoutesForInterface(Interface);
-
-        /* Destroy all cached neighbors */
-        NBDestroyNeighborsForInterface(Interface);
+        /* Keep the addresses and routes across a disconnect; route selection
+         * skips this interface until it connects again. Invalidate rather
+         * than destroy neighbors, because the routes still reference them. */
+        NBInvalidateNeighborsForInterface(Interface);
     }
 
     Context->Adapter->CompletingReset = FALSE;

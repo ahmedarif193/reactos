@@ -48,7 +48,11 @@ VOID NBSendPackets( PNEIGHBOR_CACHE_ENTRY NCE ) {
     PLIST_ENTRY PacketEntry;
     PNEIGHBOR_PACKET Packet;
     UINT HashValue;
-    ASSERT(!(NCE->State & NUD_INCOMPLETE));
+
+    /* A media disconnect can invalidate the entry after the caller checked
+     * it. Keep the packets queued until the address resolves again. */
+    if (NCE->State & NUD_INCOMPLETE)
+        return;
 
     HashValue  = *(PULONG)(&NCE->Address.Address);
     HashValue ^= HashValue >> 16;
@@ -250,6 +254,35 @@ VOID NBSendSolicit(PNEIGHBOR_CACHE_ENTRY NCE)
     ARPTransmit(&NCE->Address,
                 (NCE->State & NUD_INCOMPLETE) ? NULL : NCE->LinkAddress,
                 NCE->Interface);
+}
+
+VOID NBInvalidateNeighborsForInterface(PIP_INTERFACE Interface)
+{
+    KIRQL OldIrql;
+    PNEIGHBOR_CACHE_ENTRY NCE;
+    ULONG i;
+
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    for (i = 0; i <= NB_HASHMASK; ++i)
+    {
+        TcpipAcquireSpinLockAtDpcLevel(&NeighborCache[i].Lock);
+        for (NCE = NeighborCache[i].Cache; NCE; NCE = NCE->Next)
+        {
+            if (NCE->Interface != Interface)
+                continue;
+
+            NBFlushPacketQueue(NCE, NDIS_STATUS_REQUEST_ABORTED);
+            if (!(NCE->State & NUD_PERMANENT))
+            {
+                NCE->State = NUD_INCOMPLETE;
+                NCE->EventCount = 0;
+                if (NCE->EventTimer)
+                    NCE->EventTimer = ARP_INCOMPLETE_TIMEOUT;
+            }
+        }
+        TcpipReleaseSpinLockFromDpcLevel(&NeighborCache[i].Lock);
+    }
+    KeLowerIrql(OldIrql);
 }
 
 VOID NBDestroyNeighborsForInterface(PIP_INTERFACE Interface)

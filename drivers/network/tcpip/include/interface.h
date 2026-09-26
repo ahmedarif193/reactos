@@ -11,6 +11,7 @@ NTSTATUS GetInterfaceSpeed( PIP_INTERFACE Interface, PUINT Speed );
 NTSTATUS GetInterfaceName( PIP_INTERFACE Interface, PCHAR NameBuffer,
 			   UINT NameMaxLen );
 VOID GetInterfaceConnectionStatus( PIP_INTERFACE Interface, PULONG OperStatus );
+BOOLEAN IsInterfaceOperational(PIP_INTERFACE Interface);
 PIP_INTERFACE FindOnLinkInterface(PIP_ADDRESS Address);
 PIP_INTERFACE GetDefaultInterface(VOID);
 PIP_INTERFACE GetMulticastInterface(ULONG Selector);

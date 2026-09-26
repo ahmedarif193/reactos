@@ -117,4 +117,6 @@ VOID NBResetNeighborTimeout(
 
 VOID NBDestroyNeighborsForInterface(PIP_INTERFACE Interface);
 
+VOID NBInvalidateNeighborsForInterface(PIP_INTERFACE Interface);
+
 /* EOF */
