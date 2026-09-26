@@ -174,7 +174,7 @@ HalpAcpiCopyBiosTable(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         /* Phase 0: Convert to pages and use the HAL heap */
         PageCount = BYTES_TO_PAGES(Size);
         PhysAddress.QuadPart = HalpAllocPhysicalMemory(LoaderBlock,
-                                                       0x1000000,
+                                                       HALP_ACPI_MAX_PHYSICAL_ADDRESS,
                                                        PageCount,
                                                        FALSE);
         if (PhysAddress.QuadPart)
@@ -542,7 +542,7 @@ HalpAcpiFindRsdtPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
 
     /* Allocate the memory */
     PhysicalAddress.QuadPart = HalpAllocPhysicalMemory(LoaderBlock,
-                                                       0x1000000,
+                                                       HALP_ACPI_MAX_PHYSICAL_ADDRESS,
                                                        PageCount,
                                                        FALSE);
     if (PhysicalAddress.QuadPart)

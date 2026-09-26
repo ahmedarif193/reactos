@@ -9,7 +9,6 @@ list(APPEND HAL_PC98_SOURCE
     pc98/profil.c
     pc98/reboot.c
     generic/bios.c
-    generic/display.c
     generic/dma.c
     generic/drive.c
     generic/halinit.c

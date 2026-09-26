@@ -67,6 +67,9 @@ VOID
 #define HALP_LOW_STUB_SIZE_IN_PAGES 3
 #endif
 
+/* Phase 0 copies of ACPI data stay below 16 MB, as they always have on x86 */
+#define HALP_ACPI_MAX_PHYSICAL_ADDRESS 0x1000000
+
 FORCEINLINE
 UCHAR
 BCD_INT(

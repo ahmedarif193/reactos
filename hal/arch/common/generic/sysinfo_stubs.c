@@ -198,4 +198,19 @@ HalGetMemoryCachingRequirements(
     return STATUS_SUCCESS;
 }
 
+UCHAR
+FASTCALL
+HalSystemVectorDispatchEntry(
+    _In_ ULONG Vector,
+    _Out_ PKINTERRUPT_ROUTINE **FlatDispatch,
+    _Out_ PKINTERRUPT_ROUTINE *NoConnection)
+{
+    UNREFERENCED_PARAMETER(Vector);
+
+    /* No vector has a flat dispatch: the kernel's KINTERRUPT chains run */
+    if (FlatDispatch) *FlatDispatch = NULL;
+    if (NoConnection) *NoConnection = NULL;
+    return 0;
+}
+
 /* EOF */

@@ -18,17 +18,6 @@ DECLSPEC_NORETURN VOID NTAPI KiRiscvUnimplemented(const CHAR *Routine);
 VOID NTAPI KiRiscvRequestSoftwareInterrupt(KIRQL Irql);
 VOID NTAPI KiRiscvClearSoftwareInterrupt(KIRQL Irql);
 VOID NTAPI KiRiscvSendSoftwareInterrupt(KAFFINITY TargetSet, KIRQL Irql);
-BOOLEAN NTAPI InbvDisplayString(PCSTR String);
-
-/* NT layering: boot video owns text output. The debugger transport
- * remains independent when firmware supplies no usable framebuffer. */
-VOID
-NTAPI
-HalDisplayString(
-    _In_ PCSTR String)
-{
-    InbvDisplayString(String);
-}
 
 /* Never infer an MMIO pointer from a port number or invent a counter rate. */
 #define RISCV_HAL_REQUIRED(ReturnType, Name, Parameters) \
@@ -252,40 +241,6 @@ HalReturnToFirmware(
         __asm__ __volatile__("wfi");
 }
 
-/* Boot video owns the display; no firmware display state is reset. */
-VOID
-NTAPI
-HalAcquireDisplayOwnership(
-    _In_ PHAL_RESET_DISPLAY_PARAMETERS ResetDisplayParameters)
-{
-    UNREFERENCED_PARAMETER(ResetDisplayParameters);
-}
-
-BOOLEAN
-NTAPI
-HalQueryDisplayParameters(
-    _Out_opt_ PULONG Width,
-    _Out_opt_ PULONG Height,
-    _Out_opt_ PULONG Depth,
-    _Out_opt_ PULONG Frequency)
-{
-    if (Width) *Width = 0;
-    if (Height) *Height = 0;
-    if (Depth) *Depth = 0;
-    if (Frequency) *Frequency = 0;
-    return FALSE;
-}
-
-VOID
-NTAPI
-HalSetDisplayParameters(
-    _In_ ULONG Width,
-    _In_ ULONG Height)
-{
-    UNREFERENCED_PARAMETER(Width);
-    UNREFERENCED_PARAMETER(Height);
-}
-
 /* The time CSR is one platform counter, consistent on every hart and not
  * writable from S-mode: take part in the rendezvous without adjusting it. */
 VOID
@@ -298,20 +253,6 @@ HalCalibratePerformanceCounter(
     InterlockedDecrement(Count);
     while (*Count)
         YieldProcessor();
-}
-
-/* Interrupts dispatch through the kernel's KINTERRUPT chains. */
-UCHAR
-FASTCALL
-HalSystemVectorDispatchEntry(
-    _In_ ULONG Vector,
-    _Out_ PKINTERRUPT_ROUTINE **FlatDispatch,
-    _Out_ PKINTERRUPT_ROUTINE *NoConnection)
-{
-    UNREFERENCED_PARAMETER(Vector);
-    if (FlatDispatch) *FlatDispatch = NULL;
-    if (NoConnection) *NoConnection = NULL;
-    return 0;
 }
 
 KIRQL

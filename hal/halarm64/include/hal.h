@@ -24,6 +24,9 @@
 #define TAG_HAL    ' laH'
 #endif
 
+/* RAM starts far above 16 MB: phase 0 ACPI copies may use any page */
+#define HALP_ACPI_MAX_PHYSICAL_ADDRESS MAXULONGLONG
+
 #ifndef MACHINE_TYPE_ISA
 #define MACHINE_TYPE_ISA        0x0000
 #define MACHINE_TYPE_EISA       0x0001
