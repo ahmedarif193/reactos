@@ -17,25 +17,31 @@ NtfsGetVolumeInformation(PDEVICE_OBJECT DeviceObject,
                          PFILE_FS_VOLUME_INFORMATION Buffer,
                          PULONG Length)
 {
-    size_t VolumeInfoSize = sizeof(FILE_FS_VOLUME_INFORMATION);
+    ULONG LabelOffset = FIELD_OFFSET(FILE_FS_VOLUME_INFORMATION, VolumeLabel);
+    ULONG BytesToCopy;
+    NTSTATUS Status = STATUS_SUCCESS;
 
-    if (*Length < VolumeInfoSize + DeviceObject->Vpb->VolumeLabelLength)
-        return STATUS_BUFFER_TOO_SMALL;
+    if (*Length < LabelOffset)
+        return STATUS_INFO_LENGTH_MISMATCH;
 
     Buffer->VolumeSerialNumber = DeviceObject->Vpb->SerialNumber;
     Buffer->VolumeLabelLength = DeviceObject->Vpb->VolumeLabelLength;
-    RtlCopyMemory(Buffer->VolumeLabel,
-                  DeviceObject->Vpb->VolumeLabel,
-                  DeviceObject->Vpb->VolumeLabelLength);
 
     // TODO: Fix this
     Buffer->VolumeCreationTime.QuadPart = 0;
     Buffer->SupportsObjects = FALSE;
 
-    // TODO: Investigate. Should we be returning the bytes written instead?
-    *Length -= VolumeInfoSize + DeviceObject->Vpb->VolumeLabelLength;
+    BytesToCopy = min(*Length - LabelOffset, (ULONG)DeviceObject->Vpb->VolumeLabelLength);
+    if (BytesToCopy < DeviceObject->Vpb->VolumeLabelLength)
+        Status = STATUS_BUFFER_OVERFLOW;
 
-    return STATUS_SUCCESS;
+    RtlCopyMemory(Buffer->VolumeLabel,
+                  DeviceObject->Vpb->VolumeLabel,
+                  BytesToCopy);
+
+    *Length -= LabelOffset + BytesToCopy;
+
+    return Status;
 }
 
 static
@@ -70,44 +76,32 @@ NtfsGetAttributeInfo(PNtfsVolume DiskVolume,
                      PFILE_FS_ATTRIBUTE_INFORMATION Buffer,
                      PULONG Length)
 {
-    NTSTATUS Status;
-    size_t BytesToWrite;
-    LPCWSTR NTFSVerFormat;
-    UNICODE_STRING NTFSVer;
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG NameOffset = FIELD_OFFSET(FILE_FS_ATTRIBUTE_INFORMATION, FileSystemName);
+    ULONG BytesToCopy;
+    WCHAR NameBuffer[40];
+    UNICODE_STRING Name;
     PNtfsLogFileService LFS;
 
+    if (*Length < NameOffset)
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    RtlInitEmptyUnicodeString(&Name, NameBuffer, sizeof(NameBuffer));
     if (gShowVersionInfo)
     {
         // Report "NTFS x.x, Client x.x"
-        BytesToWrite = sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + 38;
-        if (*Length < BytesToWrite)
-            goto fallback;
         LFS = NtfsVolumeGetLFS(DiskVolume);
-        Buffer->FileSystemNameLength = 40;
-        NTFSVerFormat = L"NTFS %1ld.%1ld, Client %1ld.%1ld";
-        RtlInitEmptyUnicodeString(&NTFSVer,
-                                  Buffer->FileSystemName,
-                                  40);
-        Status = RtlUnicodeStringPrintf(&NTFSVer,
-                                        NTFSVerFormat,
+        Status = RtlUnicodeStringPrintf(&Name,
+                                        L"NTFS %1ld.%1ld, Client %1ld.%1ld",
                                         NtfsVolumeGetMajorVersion(DiskVolume),
                                         NtfsVolumeGetMinorVersion(DiskVolume),
                                         NtfsLogFileServiceGetClientMajorVersion(LFS),
                                         NtfsLogFileServiceGetClientMinorVersion(LFS));
-        if (!NT_SUCCESS(Status))
-            goto fallback;
     }
-
-    else
+    if (!gShowVersionInfo || !NT_SUCCESS(Status))
     {
-fallback:
         // Report "NTFS"
-        BytesToWrite = sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + 6;
-        if (*Length < BytesToWrite)
-            return STATUS_BUFFER_TOO_SMALL;
-        Buffer->FileSystemNameLength = 8;
-        RtlCopyMemory(Buffer->FileSystemName, L"NTFS", 8);
-        *Length -= BytesToWrite;
+        RtlInitUnicodeString(&Name, L"NTFS");
     }
 
     /* For more information on FileSystemAttributes:
@@ -125,8 +119,16 @@ fallback:
         Buffer->FileSystemAttributes |= FILE_READ_ONLY_VOLUME;
 
     Buffer->MaximumComponentNameLength = 255;
-    *Length -= BytesToWrite;
-    return STATUS_SUCCESS;
+
+    Status = STATUS_SUCCESS;
+    BytesToCopy = min(*Length - NameOffset, (ULONG)Name.Length);
+    if (BytesToCopy < Name.Length)
+        Status = STATUS_BUFFER_OVERFLOW;
+
+    Buffer->FileSystemNameLength = BytesToCopy;
+    RtlCopyMemory(Buffer->FileSystemName, Name.Buffer, BytesToCopy);
+    *Length -= NameOffset + BytesToCopy;
+    return Status;
 }
 
 static
@@ -223,12 +225,14 @@ NtfsFsdQueryVolumeInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             break;
     }
 
-    if (NT_SUCCESS(Status))
+    if (!NT_ERROR(Status))
         Irp->IoStatus.Information =
             IoStack->Parameters.QueryFile.Length - BufferLength;
     else
         Irp->IoStatus.Information = 0;
 
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_DISK_INCREMENT);
     return Status;
 }
 
@@ -277,6 +281,8 @@ NtfsFsdSetVolumeInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     else
         Irp->IoStatus.Information = 0;
 
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_DISK_INCREMENT);
     return Status;
 }
 
