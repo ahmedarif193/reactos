@@ -177,6 +177,9 @@ typedef struct _DXGKVMM_RESOURCE
 
     /* Linkage in the VidMm global resource list. */
     LIST_ENTRY         GlobalResourceEntry;
+    /* Handle and global-share lookup links; published with GlobalResourceEntry. */
+    LIST_ENTRY         HandleHashEntry;
+    LIST_ENTRY         ShareHashEntry;
 } DXGKVMM_RESOURCE, *PDXGKVMM_RESOURCE;
 
 /* =========================================================================
@@ -484,6 +487,9 @@ typedef struct _DXGKVMM_ALLOCATION
      * Linkage in the VidMm global allocation list.
      */
     LIST_ENTRY          GlobalAllocationEntry;
+
+    /* Linkage in the VidMm handle hash; published with GlobalAllocationEntry. */
+    LIST_ENTRY          HandleHashEntry;
 
     /* Ordered membership in DXGKVMM_RESOURCE.AllocationList. */
     LIST_ENTRY          ResourceEntry;

@@ -235,6 +235,14 @@ static FAST_MUTEX DxgkVidMmPolicyLock;
 static FAST_MUTEX DxgkVidMmHandleDataReferenceListLock;
 static FAST_MUTEX DxgkVidMmUserMappingListLock;
 static LIST_ENTRY DxgkVidMmAllocationListHead;
+/* Handle lookup index for DxgkVidMmAllocationListHead, protected by
+ * DxgkVidMmAllocationListLock. Handles are sequential, so the low bits
+ * spread evenly across buckets. */
+#define DXGKVMM_ALLOCATION_HASH_BUCKETS 256
+static LIST_ENTRY DxgkVidMmAllocationHashHeads[DXGKVMM_ALLOCATION_HASH_BUCKETS];
+/* Same indexes for DxgkVidMmResourceListHead, under DxgkVidMmResourceListLock. */
+static LIST_ENTRY DxgkVidMmResourceHashHeads[DXGKVMM_ALLOCATION_HASH_BUCKETS];
+static LIST_ENTRY DxgkVidMmShareHashHeads[DXGKVMM_ALLOCATION_HASH_BUCKETS];
 static LIST_ENTRY DxgkVidMmResourceListHead;
 static LIST_ENTRY DxgkVidMmDestroyBatchListHead;
 static LIST_ENTRY DxgkVidMmHandleDataReferenceListHead;
@@ -693,10 +701,66 @@ DxgkpVidMmPrimarySegmentsCpuVisible(
     return TRUE;
 }
 
+static PLIST_ENTRY
+DxgkpVidMmAllocationHashHead(
+    _In_ D3DKMT_HANDLE Handle)
+{
+    return &DxgkVidMmAllocationHashHeads[(ULONG)Handle & (DXGKVMM_ALLOCATION_HASH_BUCKETS - 1)];
+}
+
+static VOID
+DxgkpVidMmPublishAllocationLocked(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation)
+{
+    InsertTailList(&DxgkVidMmAllocationListHead, &Allocation->GlobalAllocationEntry);
+    InsertTailList(DxgkpVidMmAllocationHashHead(Allocation->Handle), &Allocation->HandleHashEntry);
+}
+
+static VOID
+DxgkpVidMmUnpublishAllocationLocked(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation)
+{
+    RemoveEntryList(&Allocation->GlobalAllocationEntry);
+    InitializeListHead(&Allocation->GlobalAllocationEntry);
+    RemoveEntryList(&Allocation->HandleHashEntry);
+    InitializeListHead(&Allocation->HandleHashEntry);
+}
+
+static VOID
+DxgkpVidMmPublishResourceLocked(
+    _Inout_ PDXGKVMM_RESOURCE Resource)
+{
+    InsertTailList(&DxgkVidMmResourceListHead, &Resource->GlobalResourceEntry);
+    InsertTailList(&DxgkVidMmResourceHashHeads[(ULONG)Resource->Handle & (DXGKVMM_ALLOCATION_HASH_BUCKETS - 1)],
+                   &Resource->HandleHashEntry);
+    if (Resource->Shareable)
+    {
+        InsertTailList(&DxgkVidMmShareHashHeads[(ULONG)Resource->GlobalShareHandle & (DXGKVMM_ALLOCATION_HASH_BUCKETS - 1)],
+                       &Resource->ShareHashEntry);
+    }
+}
+
+static VOID
+DxgkpVidMmUnpublishResourceLocked(
+    _Inout_ PDXGKVMM_RESOURCE Resource)
+{
+    RemoveEntryList(&Resource->GlobalResourceEntry);
+    InitializeListHead(&Resource->GlobalResourceEntry);
+    RemoveEntryList(&Resource->HandleHashEntry);
+    InitializeListHead(&Resource->HandleHashEntry);
+    /* Only a shareable resource is linked into a share bucket. */
+    if (!IsListEmpty(&Resource->ShareHashEntry))
+    {
+        RemoveEntryList(&Resource->ShareHashEntry);
+        InitializeListHead(&Resource->ShareHashEntry);
+    }
+}
+
 static VOID
 DxgkpVidMmEnsureGlobalsInitialized(VOID)
 {
     LONG State;
+    ULONG Index;
 
     State = InterlockedCompareExchange(&DxgkVidMmGlobalsState, 1, 0);
     if (State == 0)
@@ -711,6 +775,12 @@ DxgkpVidMmEnsureGlobalsInitialized(VOID)
         ExInitializeFastMutex(&DxgkVidMmProcessBudgetLock);
 #endif
         InitializeListHead(&DxgkVidMmAllocationListHead);
+        for (Index = 0; Index < DXGKVMM_ALLOCATION_HASH_BUCKETS; ++Index)
+        {
+            InitializeListHead(&DxgkVidMmAllocationHashHeads[Index]);
+            InitializeListHead(&DxgkVidMmResourceHashHeads[Index]);
+            InitializeListHead(&DxgkVidMmShareHashHeads[Index]);
+        }
         InitializeListHead(&DxgkVidMmResourceListHead);
         InitializeListHead(&DxgkVidMmDestroyBatchListHead);
         InitializeListHead(&DxgkVidMmHandleDataReferenceListHead);
@@ -1309,11 +1379,12 @@ DxgkpVidMmCreateSystemAllocation(
     InitializeListHead(&Alloc->SegmentEntry);
     InitializeListHead(&Alloc->DeviceEntry);
     InitializeListHead(&Alloc->GlobalAllocationEntry);
+    InitializeListHead(&Alloc->HandleHashEntry);
     InitializeListHead(&Alloc->ResourceEntry);
 
     DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-    InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
+    DxgkpVidMmPublishAllocationLocked(Alloc);
     InterlockedIncrement(&Alloc->ReferenceCount);
     *OutAllocation = Alloc;
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -2291,15 +2362,14 @@ static PDXGKVMM_ALLOCATION
 DxgkpVidMmLookupAllocationLocked(
     _In_ D3DKMT_HANDLE Handle)
 {
+    PLIST_ENTRY Head = DxgkpVidMmAllocationHashHead(Handle);
     PLIST_ENTRY Entry;
 
-    for (Entry = DxgkVidMmAllocationListHead.Flink;
-         Entry != &DxgkVidMmAllocationListHead;
-         Entry = Entry->Flink)
+    for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
     {
         PDXGKVMM_ALLOCATION Alloc;
 
-        Alloc = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+        Alloc = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, HandleHashEntry);
         if (Alloc->Handle == Handle && Alloc->Magic == DXGKVMM_ALLOCATION_MAGIC)
             return Alloc;
     }
@@ -2311,15 +2381,14 @@ static PDXGKVMM_RESOURCE
 DxgkpVidMmLookupResourceLocked(
     _In_ D3DKMT_HANDLE Handle)
 {
+    PLIST_ENTRY Head = &DxgkVidMmResourceHashHeads[(ULONG)Handle & (DXGKVMM_ALLOCATION_HASH_BUCKETS - 1)];
     PLIST_ENTRY Entry;
 
-    for (Entry = DxgkVidMmResourceListHead.Flink;
-         Entry != &DxgkVidMmResourceListHead;
-         Entry = Entry->Flink)
+    for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
     {
         PDXGKVMM_RESOURCE Resource;
 
-        Resource = CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, GlobalResourceEntry);
+        Resource = CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, HandleHashEntry);
         if (Resource->Handle == Handle)
             return Resource;
     }
@@ -2331,15 +2400,14 @@ static PDXGKVMM_RESOURCE
 DxgkpVidMmLookupGlobalShareLocked(
     _In_ D3DKMT_HANDLE Handle)
 {
+    PLIST_ENTRY Head = &DxgkVidMmShareHashHeads[(ULONG)Handle & (DXGKVMM_ALLOCATION_HASH_BUCKETS - 1)];
     PLIST_ENTRY Entry;
 
-    for (Entry = DxgkVidMmResourceListHead.Flink;
-         Entry != &DxgkVidMmResourceListHead;
-         Entry = Entry->Flink)
+    for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
     {
         PDXGKVMM_RESOURCE Resource;
 
-        Resource = CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, GlobalResourceEntry);
+        Resource = CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, ShareHashEntry);
         if (Resource->Shareable && Resource->GlobalShareHandle == Handle)
             return Resource;
     }
@@ -2491,6 +2559,7 @@ NTSTATUS DxgkVidMmCreatePresentBinding(_In_ PDXGKRNL_DEVICE Device, _In_ PDXGKVM
     InitializeListHead(&Binding->SegmentEntry);
     InitializeListHead(&Binding->DeviceEntry);
     InitializeListHead(&Binding->GlobalAllocationEntry);
+    InitializeListHead(&Binding->HandleHashEntry);
     InitializeListHead(&Binding->ResourceEntry);
     Binding->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextAllocationHandle, DxgkVidMmAllocationHandleCookie);
     Binding->Magic = DXGKVMM_ALLOCATION_MAGIC;
@@ -2560,7 +2629,7 @@ NTSTATUS DxgkVidMmCreatePresentBinding(_In_ PDXGKRNL_DEVICE Device, _In_ PDXGKVM
     }
 
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-    InsertTailList(&DxgkVidMmAllocationListHead, &Binding->GlobalAllocationEntry);
+    DxgkpVidMmPublishAllocationLocked(Binding);
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
     Published = TRUE;
 
@@ -2657,8 +2726,7 @@ Cleanup:
             ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
             if (!IsListEmpty(&Binding->GlobalAllocationEntry))
             {
-                RemoveEntryList(&Binding->GlobalAllocationEntry);
-                InitializeListHead(&Binding->GlobalAllocationEntry);
+                DxgkpVidMmUnpublishAllocationLocked(Binding);
             }
             ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
         }
@@ -3283,6 +3351,8 @@ DxgkVidMmCreateOpenResource(
     RtlZeroMemory(Resource->OpenBindingScratch, (SIZE_T)AllocationCount * sizeof(*Resource->OpenBindingScratch));
     InitializeListHead(&Resource->AllocationList);
     InitializeListHead(&Resource->GlobalResourceEntry);
+    InitializeListHead(&Resource->HandleHashEntry);
+    InitializeListHead(&Resource->ShareHashEntry);
     InterlockedIncrement(&BackingResource->ReferenceCount);
 
     for (Index = 0; Index < AllocationCount; ++Index)
@@ -3316,6 +3386,7 @@ DxgkVidMmCreateOpenResource(
         InitializeListHead(&Allocation->SegmentEntry);
         InitializeListHead(&Allocation->DeviceEntry);
         InitializeListHead(&Allocation->GlobalAllocationEntry);
+        InitializeListHead(&Allocation->HandleHashEntry);
         InitializeListHead(&Allocation->ResourceEntry);
         InterlockedIncrement(&BackingAllocation->ReferenceCount);
         InterlockedIncrement(&Resource->ReferenceCount);
@@ -3341,7 +3412,7 @@ DxgkVidMmCreateOpenResource(
 
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     for (Index = 0; Index < AllocationCount; ++Index)
-        InsertTailList(&DxgkVidMmAllocationListHead, &Resource->OpenAllocations[Index]->GlobalAllocationEntry);
+        DxgkpVidMmPublishAllocationLocked(Resource->OpenAllocations[Index]);
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
     AllocationsPublished = TRUE;
 
@@ -3391,7 +3462,7 @@ DxgkVidMmCreateOpenResource(
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     for (Index = 0; Index < AllocationCount; ++Index)
         Resource->OpenAllocations[Index]->Initializing = FALSE;
-    InsertTailList(&DxgkVidMmResourceListHead, &Resource->GlobalResourceEntry);
+    DxgkpVidMmPublishResourceLocked(Resource);
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
     ExReleaseFastMutex(&DxgkVidMmResourceListLock);
     for (Index = 0; Index < AllocationCount; ++Index)
@@ -3460,8 +3531,7 @@ Cleanup:
             {
                 InterlockedExchange(&Allocation->Destroying, 1);
                 InterlockedExchange(&Allocation->FinalizeQueued, 2);
-                RemoveEntryList(&Allocation->GlobalAllocationEntry);
-                InitializeListHead(&Allocation->GlobalAllocationEntry);
+                DxgkpVidMmUnpublishAllocationLocked(Allocation);
             }
         }
         ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -3897,10 +3967,12 @@ DxgkVidMmCreateResourceWrapper(
     }
     InitializeListHead(&Resource->AllocationList);
     InitializeListHead(&Resource->GlobalResourceEntry);
+    InitializeListHead(&Resource->HandleHashEntry);
+    InitializeListHead(&Resource->ShareHashEntry);
 
     DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmResourceListLock);
-    InsertTailList(&DxgkVidMmResourceListHead, &Resource->GlobalResourceEntry);
+    DxgkpVidMmPublishResourceLocked(Resource);
     ExReleaseFastMutex(&DxgkVidMmResourceListLock);
 
     return Resource;
@@ -4368,8 +4440,7 @@ DxgkpVidMmDestroyResourceWrapper(
         ASSERT(InterlockedCompareExchange(&Resource->CloseUncertain, 0, 0) == 0);
         InterlockedExchange(&Resource->DestroyFailureUncertain, 0);
         InterlockedExchange(&Resource->Destroying, 1);
-        RemoveEntryList(&Resource->GlobalResourceEntry);
-        InitializeListHead(&Resource->GlobalResourceEntry);
+        DxgkpVidMmUnpublishResourceLocked(Resource);
         Status = STATUS_SUCCESS;
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -4951,8 +5022,7 @@ DxgkpVidMmForceLocalUnbatchedAllocations(
                 Allocation->MiniportResourceHandle = NULL;
                 Allocation->DestroyMiniportResource = FALSE;
             }
-            RemoveEntryList(&Allocation->GlobalAllocationEntry);
-            InitializeListHead(&Allocation->GlobalAllocationEntry);
+            DxgkpVidMmUnpublishAllocationLocked(Allocation);
             if (Resource != NULL && !IsListEmpty(&Allocation->ResourceEntry))
             {
                 ASSERT(Resource->AllocationCount != 0);
@@ -5020,8 +5090,7 @@ DxgkpVidMmForceLocalResources(
             InterlockedExchange(&Resource->DestroyFailureUncertain, 0);
             Resource->Device = NULL;
             Resource->MiniportHandle = NULL;
-            RemoveEntryList(&Resource->GlobalResourceEntry);
-            InitializeListHead(&Resource->GlobalResourceEntry);
+            DxgkpVidMmUnpublishResourceLocked(Resource);
             break;
         }
         ExReleaseFastMutex(&DxgkVidMmResourceListLock);
@@ -5285,6 +5354,7 @@ DxgkpVidMmCreateAllocationTracked(
     InitializeListHead(&Alloc->SegmentEntry);
     InitializeListHead(&Alloc->DeviceEntry);
     InitializeListHead(&Alloc->GlobalAllocationEntry);
+    InitializeListHead(&Alloc->HandleHashEntry);
     InitializeListHead(&Alloc->ResourceEntry);
 
     /* -----------------------------------------------------------------------
@@ -5641,7 +5711,7 @@ DxgkpVidMmCreateAllocationTracked(
 
     DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-    InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
+    DxgkpVidMmPublishAllocationLocked(Alloc);
     if (OutAllocation != NULL)
     {
         InterlockedIncrement(&Alloc->ReferenceCount);
@@ -5806,11 +5876,12 @@ DxgkVidMmCreatePreMappedAllocation(
     InitializeListHead(&Alloc->SegmentEntry);
     InitializeListHead(&Alloc->DeviceEntry);
     InitializeListHead(&Alloc->GlobalAllocationEntry);
+    InitializeListHead(&Alloc->HandleHashEntry);
     InitializeListHead(&Alloc->ResourceEntry);
 
     DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-    InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
+    DxgkpVidMmPublishAllocationLocked(Alloc);
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
 
     *OutHandle = (HANDLE)(ULONG_PTR)Alloc->Handle;
@@ -6050,8 +6121,7 @@ DxgkpVidMmTryCommitDestroyBatch(
 
             if (!IsListEmpty(&Allocation->GlobalAllocationEntry))
             {
-                RemoveEntryList(&Allocation->GlobalAllocationEntry);
-                InitializeListHead(&Allocation->GlobalAllocationEntry);
+                DxgkpVidMmUnpublishAllocationLocked(Allocation);
             }
             if (Resource != NULL && !IsListEmpty(&Allocation->ResourceEntry))
             {
@@ -6090,8 +6160,7 @@ DxgkpVidMmTryCommitDestroyBatch(
             InterlockedExchange(&Resource->Destroying, 1);
             if (!IsListEmpty(&Resource->GlobalResourceEntry))
             {
-                RemoveEntryList(&Resource->GlobalResourceEntry);
-                InitializeListHead(&Resource->GlobalResourceEntry);
+                DxgkpVidMmUnpublishResourceLocked(Resource);
             }
         }
     }
@@ -6709,8 +6778,7 @@ DxgkpVidMmDestroyAllocationList(
              * in TryCommitDestroyBatch is already idempotent. */
             if (!IsListEmpty(&Allocation->GlobalAllocationEntry))
             {
-                RemoveEntryList(&Allocation->GlobalAllocationEntry);
-                InitializeListHead(&Allocation->GlobalAllocationEntry);
+                DxgkpVidMmUnpublishAllocationLocked(Allocation);
             }
             if (Resource != NULL && !IsListEmpty(&Allocation->ResourceEntry))
             {
@@ -6733,8 +6801,7 @@ DxgkpVidMmDestroyAllocationList(
             ASSERT(IsListEmpty(&Resource->AllocationList));
             ASSERT(Batch->ResourceHandleReferenceOwned != 0);
             InterlockedExchange(&Resource->Destroying, 1);
-            RemoveEntryList(&Resource->GlobalResourceEntry);
-            InitializeListHead(&Resource->GlobalResourceEntry);
+            DxgkpVidMmUnpublishResourceLocked(Resource);
         }
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
