@@ -577,11 +577,12 @@ DwmDxReleaseFrame(const DWM_DX_HELD_FRAME *Held)
 
 /*
  * DWM owns a retained client frame from the GETFRAME that reports it until
- * a later GETFRAME reports a newer frame of that surface. DWM fetches a frame
- * only after the GPU finished reading the previous one, so the older frame
- * is released here, whether or not any compositor path sampled it. A window
- * that is merely absent from this frame keeps its frame: it can reappear
- * without a new present, and window teardown releases it in win32k.
+ * a later GETFRAME reports a newer frame of that surface, or the window
+ * without one. DWM fetches a frame only after the GPU finished reading the
+ * previous one, so the older frame is released here, whether or not any
+ * compositor path sampled it. A window that is merely absent from this frame
+ * keeps its frame: it can reappear without a new present, and window
+ * teardown releases it in win32k.
  */
 void
 DwmDxHoldFrames(const DWM_WIN *Windows, ULONG Count)
@@ -596,10 +597,17 @@ DwmDxHoldFrames(const DWM_WIN *Windows, ULONG Count)
         const DWM_WIN *Window = &Windows[Index];
         DWM_DX_HELD_FRAME *Held;
 
-        if (!(Window->LayerFlags & DWM_WINDOW_DX_RETAINED) || Window->DxUpdateId == 0 ||
-            Window->SurfaceId >= ARRAYSIZE(g_HeldFrames))
+        if (Window->SurfaceId >= ARRAYSIZE(g_HeldFrames))
             continue;
         Held = &g_HeldFrames[Window->SurfaceId];
+        if (!(Window->LayerFlags & DWM_WINDOW_DX_RETAINED) || Window->DxUpdateId == 0)
+        {
+            /* The window no longer shows a retained frame. */
+            if (Held->UpdateId != 0)
+                DwmDxReleaseFrame(Held);
+            RtlZeroMemory(Held, sizeof(*Held));
+            continue;
+        }
         if (Held->Generation == Window->DxGeneration && Held->UpdateId == Window->DxUpdateId)
             continue;
         if (Held->UpdateId != 0)
