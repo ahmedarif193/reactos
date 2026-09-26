@@ -64,6 +64,7 @@ set(COMPAT_RUNTIME_MODULES
     gdi32
     gdi32_vista
     gdiplus
+    getuname
     glu32
     hhctrl
     hid
