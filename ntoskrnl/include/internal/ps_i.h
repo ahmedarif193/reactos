@@ -117,7 +117,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     (
         PROCESS_LDT_INFORMATION,
         ULONG,
-        ICIF_QUERY | ICIF_SET
+        ICIF_QUERY | ICIF_SET | ICIF_SIZE_VARIABLE
     ),
 
     /* ProcessLdtSize */
@@ -125,7 +125,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     (
         PROCESS_LDT_SIZE,
         ULONG,
-        ICIF_SET
+        ICIF_SET | ICIF_SET_SIZE_VARIABLE
     ),
 
     /* ProcessDefaultHardErrorMode */
@@ -141,7 +141,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     (
         UCHAR,
         ULONG,
-        ICIF_SET
+        ICIF_SET | ICIF_SET_SIZE_VARIABLE
     ),
 
     /* ProcessPooledUsageAndLimits */
@@ -157,7 +157,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     (
         PROCESS_WS_WATCH_INFORMATION,
         ULONG,
-        ICIF_QUERY | ICIF_SET | ICIF_SET_SIZE_VARIABLE
+        ICIF_QUERY | ICIF_SET | ICIF_SIZE_VARIABLE
     ),
 
     /* ProcessUserModeIOPL is only implemented in x86 */
@@ -230,7 +230,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
         ULONG,
         RTL_FIELD_TYPE(PROCESS_DEVICEMAP_INFORMATION, Set),
         ULONG,
-        ICIF_QUERY | ICIF_SET
+        ICIF_QUERY | ICIF_SET | ICIF_QUERY_SIZE_VARIABLE
     ),
 
     /* ProcessSessionInformation */
@@ -306,7 +306,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
         ULONG,
         ULONG,
         ULONG,
-        ICIF_QUERY | ICIF_SET
+        ICIF_QUERY | ICIF_SET | ICIF_SIZE_VARIABLE
     ),
 
     /* ProcessIoPriority */
@@ -554,7 +554,7 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
         ICIF_QUERY
     ),
 #else
-    IQS_NONE,
+    IQS_NO_TYPE_LENGTH(ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
 #endif
 
     /* ThreadEnableAlignmentFaultFixup */
@@ -665,7 +665,7 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     (
         ULONG,
         ULONG,
-        ICIF_SET
+        ICIF_SET | ICIF_SET_SIZE_VARIABLE
     ),
 
     /* ThreadIsTerminated */
@@ -725,7 +725,7 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     (
         WOW64_CONTEXT,
         ULONG,
-        ICIF_QUERY | ICIF_SET
+        ICIF_QUERY | ICIF_SET | ICIF_SIZE_VARIABLE
     ),
     /* ThreadGroupInformation */
     IQS_SAME

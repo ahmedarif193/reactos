@@ -125,6 +125,14 @@ PspCheckInfoBufferAlignment(
 }
 
 #ifdef _WIN64
+static BOOLEAN
+PspIsX86Wow64Process(IN PEPROCESS Process)
+{
+    return Process->WoW64Process &&
+           (Process->WoW64Process->NtdllType == PsWowX86SystemDll ||
+            Process->WoW64Process->NtdllType == PsWowChpeX86SystemDll);
+}
+
 static NTSTATUS
 PspCopyThreadWow64Context(IN PETHREAD Thread,
                           IN OUT PWOW64_CONTEXT Context,
@@ -139,9 +147,7 @@ PspCopyThreadWow64Context(IN PETHREAD Thread,
     BOOLEAN Attached = Process != PsGetCurrentProcess();
     NTSTATUS Status = STATUS_SUCCESS;
 
-    if (!Process->WoW64Process ||
-        (Process->WoW64Process->NtdllType != PsWowX86SystemDll &&
-         Process->WoW64Process->NtdllType != PsWowChpeX86SystemDll)) return STATUS_INVALID_PARAMETER;
+    if (!PspIsX86Wow64Process(Process)) return STATUS_INVALID_PARAMETER;
     if (!ExAcquireRundownProtection(&Thread->RundownProtect)) return STATUS_THREAD_IS_TERMINATING;
     if (Attached) KeStackAttachProcess(&Process->Pcb, &ApcState);
 
@@ -896,12 +902,9 @@ NtQueryInformationProcess(
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
-                /* Ignore exception */
+                Status = _SEH2_GetExceptionCode();
             }
             _SEH2_END;
-
-            /* Set status to success in any case */
-            Status = STATUS_SUCCESS;
 
             /* Dereference the process */
             ObDereferenceObject(Process);
@@ -1266,7 +1269,7 @@ NtQueryInformationProcess(
 
                 /* Only one flag is supported and it needs LUID mappings */
                 if ((Flags & ~PROCESS_LUID_DOSDEVICES_ONLY) != 0 ||
-                    !ObIsLUIDDeviceMapsEnabled())
+                    ((Flags & PROCESS_LUID_DOSDEVICES_ONLY) && !ObIsLUIDDeviceMapsEnabled()))
                 {
                     Status = STATUS_INVALID_PARAMETER;
                     break;
@@ -1656,10 +1659,10 @@ NtQueryInformationProcess(
                                                     NewCookie,
                                                     Cookie);
                 if (!Cookie) Cookie = NewCookie;
-
-                /* Set the return length */
-                Length = sizeof(ULONG);
             }
+
+            /* Set the return length */
+            Length = sizeof(ULONG);
 
             /* Indicate success */
             Status = STATUS_SUCCESS;
@@ -1891,8 +1894,23 @@ NtQueryInformationProcess(
         }
 
         case ProcessHandleTracing:
-            DPRINT1("Handle tracing not implemented: %lu\n", ProcessInformationClass);
-            Status = STATUS_NOT_IMPLEMENTED;
+            if (ProcessInformationLength < FIELD_OFFSET(PROCESS_HANDLE_TRACING_QUERY, HandleTrace))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ProcessHandle,
+                                               PROCESS_QUERY_INFORMATION,
+                                               PsProcessType,
+                                               PreviousMode,
+                                               (PVOID*)&Process,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            ObDereferenceObject(Process);
+            Status = STATUS_INVALID_PARAMETER;
             break;
 
         case ProcessLUIDDeviceMapsEnabled:
@@ -2113,12 +2131,10 @@ NtQueryInformationProcess(
 
         case ProcessEnergyValues:
         {
+            ULONG CopyLength;
+
             Length = sizeof(PROCESS_ENERGY_VALUES);
-            if (ProcessInformationLength < Length)
-            {
-                Status = STATUS_INFO_LENGTH_MISMATCH;
-                break;
-            }
+            CopyLength = min(ProcessInformationLength, Length);
 
             Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
             if (!NT_SUCCESS(Status)) break;
@@ -2128,9 +2144,9 @@ NtQueryInformationProcess(
                 PPO_PROCESS_ENERGY_CONTEXT EnergyContext = ReadPointerAcquire((volatile PVOID *)&Process->EnergyContext);
 
                 if (EnergyContext != NULL)
-                    RtlCopyMemory(ProcessInformation, &EnergyContext->Values, Length);
+                    RtlCopyMemory(ProcessInformation, &EnergyContext->Values, CopyLength);
                 else
-                    RtlZeroMemory(ProcessInformation, Length);
+                    RtlZeroMemory(ProcessInformation, CopyLength);
                 Status = STATUS_SUCCESS;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -2160,8 +2176,7 @@ NtQueryInformationProcess(
             break;
 
         case ProcessWorkingSetWatch:
-            DPRINT1("WS Watch not implemented: %lu\n", ProcessInformationClass);
-            Status = STATUS_NOT_IMPLEMENTED;
+            Status = STATUS_UNSUCCESSFUL;
             break;
 
         case ProcessPooledUsageAndLimits:
@@ -3330,7 +3345,30 @@ NtSetInformationProcess(
             break;
 
         case ProcessHandleTracing:
-            DPRINT1("Handle tracing not implemented\n");
+            if (ProcessInformationLength == 0)
+            {
+                Status = STATUS_SUCCESS;
+                break;
+            }
+
+            if (ProcessInformationLength != sizeof(PROCESS_HANDLE_TRACING_ENABLE) &&
+                ProcessInformationLength != sizeof(PROCESS_HANDLE_TRACING_ENABLE_EX))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                (VOID)((volatile PROCESS_HANDLE_TRACING_ENABLE *)ProcessInformation)->Flags;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
             Status = STATUS_NOT_IMPLEMENTED;
             break;
 
@@ -4476,20 +4514,29 @@ NtSetInformationThread(
 #ifdef _WIN64
             WOW64_CONTEXT Wow64Context;
 
-            _SEH2_TRY
-            {
-                Wow64Context = *(PWOW64_CONTEXT)ThreadInformation;
-            }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-                Status = _SEH2_GetExceptionCode();
-                _SEH2_YIELD(break);
-            }
-            _SEH2_END;
-
             Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_SET_CONTEXT, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
             if (!NT_SUCCESS(Status)) break;
-            Status = PspCopyThreadWow64Context(Thread, &Wow64Context, TRUE);
+
+            if (!PspIsX86Wow64Process(THREAD_TO_PROCESS(Thread)))
+                Status = STATUS_INVALID_PARAMETER;
+            else if (ThreadInformationLength != sizeof(Wow64Context))
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+
+            if (NT_SUCCESS(Status))
+            {
+                _SEH2_TRY
+                {
+                    Wow64Context = *(PWOW64_CONTEXT)ThreadInformation;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+            }
+
+            if (NT_SUCCESS(Status))
+                Status = PspCopyThreadWow64Context(Thread, &Wow64Context, TRUE);
             ObDereferenceObject(Thread);
 #else
             Status = STATUS_NOT_SUPPORTED;
@@ -5319,7 +5366,24 @@ NtQueryInformationThread(
 #ifdef _WIN64
             WOW64_CONTEXT Wow64Context;
 
+            Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_GET_CONTEXT, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
+            if (!NT_SUCCESS(Status)) break;
+
+            if (!PspIsX86Wow64Process(THREAD_TO_PROCESS(Thread)))
+            {
+                ObDereferenceObject(Thread);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
             Length = sizeof(Wow64Context);
+            if (ThreadInformationLength != Length)
+            {
+                ObDereferenceObject(Thread);
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
             _SEH2_TRY
             {
                 Wow64Context.ContextFlags = ((PWOW64_CONTEXT)ThreadInformation)->ContextFlags;
@@ -5327,13 +5391,11 @@ NtQueryInformationThread(
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
                 Status = _SEH2_GetExceptionCode();
-                _SEH2_YIELD(break);
             }
             _SEH2_END;
 
-            Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_GET_CONTEXT, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
-            if (!NT_SUCCESS(Status)) break;
-            Status = PspCopyThreadWow64Context(Thread, &Wow64Context, FALSE);
+            if (NT_SUCCESS(Status))
+                Status = PspCopyThreadWow64Context(Thread, &Wow64Context, FALSE);
             ObDereferenceObject(Thread);
             if (!NT_SUCCESS(Status)) break;
 
