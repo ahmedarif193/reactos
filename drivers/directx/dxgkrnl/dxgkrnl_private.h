@@ -1308,6 +1308,11 @@ struct _DXGKRNL_DEVICE
      * aggregation across this process's devices). */
     PEPROCESS                   OwnerProcess;
 
+    /* OwnerProcess's GPU scheduling priority class, cached for packet
+     * admission and refreshed when any process changes its class. */
+    volatile LONG               PriorityClass;
+    volatile LONG               PriorityClassGeneration;
+
     /* Shared per-process/per-adapter WDDM 2.0 GPU state. */
     PDXGKRNL_PROCESS            ProcessRecord;
 
@@ -2862,6 +2867,10 @@ DxgkDereferenceContext(
 
 BOOLEAN
 DxgkReferenceContext(
+    _In_ PDXGKRNL_CONTEXT Context);
+
+LONG
+DxgkContextSchedulingPriority(
     _In_ PDXGKRNL_CONTEXT Context);
 
 BOOLEAN
