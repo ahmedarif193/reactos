@@ -18,7 +18,6 @@ list(APPEND HAL_PC98_SOURCE
     generic/misc.c
     generic/nmi.c
     generic/portio.c
-    generic/sysinfo_stubs.c
     generic/sysinfo.c
     generic/usage.c
     generic/x86bios.c)
@@ -45,8 +44,6 @@ list(APPEND HAL_PC98_SOURCE
     legacy/bus/cmosbus.c
     legacy/bus/isabus.c
     legacy/bus/pcibus.c
-    ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
-    ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c
     legacy/bus/sysbus.c
     legacy/bussupp.c
     legacy/halpnpdd.c
@@ -55,6 +52,9 @@ list(APPEND HAL_PC98_SOURCE
 add_asm_files(lib_hal_pc98_asm ${HAL_PC98_ASM_SOURCE})
 add_library(lib_hal_pc98 OBJECT ${HAL_PC98_SOURCE} ${lib_hal_pc98_asm})
 add_dependencies(lib_hal_pc98 bugcodes xdk asm)
+# bussupp.c names devices from the shared PCI tables
+target_include_directories(lib_hal_pc98 PRIVATE $<TARGET_PROPERTY:halcommon,INTERFACE_INCLUDE_DIRECTORIES>)
+add_dependencies(lib_hal_pc98 halcommon)
 #add_pch(lib_hal_pc98 pc98/halpc98.h)
 
 target_compile_definitions(lib_hal_pc98 PRIVATE SARCH_PC98)

@@ -17,7 +17,7 @@ add_library(hal MODULE
     timer.c
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 set_module_type(hal kerneldll ENTRYPOINT 0)
-target_link_libraries(hal libcntpr)
+target_link_libraries(hal halcommon libcntpr)
 add_importlibs(hal ntoskrnl)
 target_compile_definitions(hal PRIVATE _NTHAL_ _NTHALDLL_)
 target_include_directories(hal PRIVATE ${REACTOS_SOURCE_DIR}/ntoskrnl/include)

@@ -2,210 +2,123 @@
  * PROJECT:         ReactOS HAL
  * LICENSE:         GPL - See COPYING in the top level directory
  * FILE:            hal/arch/common/generic/sysinfo_stubs.c
- * PURPOSE:         HAL System Information Stubs for Windows 8/8.1/10+ APIs
- * PROGRAMMERS:     ReactOS Portable Systems Group
- *
- * NOTES:
- *   This file contains architecture-independent stub implementations for
- *   HAL exports introduced in Windows 8, 8.1, and Windows 10.
- *   These stubs allow ReactOS to report as Windows 10-compatible while
- *   providing proper STATUS_NOT_SUPPORTED responses for unimplemented features.
+ * PURPOSE:         Stubs every HAL shares for services no platform
+ *                  implements yet
  */
 
 /* INCLUDES *******************************************************************/
 
-#include <hal.h>
-#include <reactos/hal/msi.h>
-#if defined(_M_ARM64)
-#include <reactos/hal/acpi_pci.h>
-#endif
+#include <ntifs.h>
+#include <ndk/halfuncs.h>
+
 #define NDEBUG
 #include <debug.h>
 
-#if defined(_M_ARM64)
-#define HALP_ARM64_MSI_DEFAULT_IRQL 4
+/* FUNCTIONS ******************************************************************/
+
+VOID
+NTAPI
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+HalBugCheckSystem(
+    _In_ PWHEA_ERROR_SOURCE_DESCRIPTOR ErrorSource,
+    _In_ PWHEA_ERROR_RECORD ErrorRecord)
+{
+    UNREFERENCED_PARAMETER(ErrorSource);
+    UNREFERENCED_PARAMETER(ErrorRecord);
+#else
+HalBugCheckSystem(
+    _In_ PWHEA_ERROR_RECORD ErrorRecord)
+{
+    UNREFERENCED_PARAMETER(ErrorRecord);
+#endif
+    DPRINT1("HalBugCheckSystem: STUB\n");
+}
 
 NTSTATUS
 NTAPI
-HalpArm64QueryMsiRoute(
-    _In_ ULONG Vector,
-    _Out_ PULONGLONG Address,
-    _Out_ PULONG Data);
-
-static KSPIN_LOCK HalpArm64MsiRoutingLock;
-static volatile LONG HalpArm64MsiRoutingLockState;
-static RTL_BITMAP HalpArm64MsiRoutingBitmap;
-static PULONG HalpArm64MsiRoutingBuffer;
-static ULONG HalpArm64MsiRoutingBase;
-static ULONG HalpArm64MsiRoutingCount;
-
-static
-VOID
-HalpArm64EnsureMsiRoutingLock(VOID)
+HalAllocateHardwareCounters(
+    _In_reads_(GroupCount) PGROUP_AFFINITY GroupAffinity,
+    _In_ ULONG GroupCount,
+    _In_ PPHYSICAL_COUNTER_RESOURCE_LIST ResourceList,
+    _Out_opt_ PHANDLE CounterSetHandle)
 {
-    LONG State;
+    UNREFERENCED_PARAMETER(GroupAffinity);
+    UNREFERENCED_PARAMETER(GroupCount);
+    UNREFERENCED_PARAMETER(ResourceList);
 
-    State = HalpArm64MsiRoutingLockState;
-    if (State == 2)
-        return;
+    if (CounterSetHandle)
+        *CounterSetHandle = NULL;
 
-    State = InterlockedCompareExchange(&HalpArm64MsiRoutingLockState, 1, 0);
-    if (State == 0)
-    {
-        KeInitializeSpinLock(&HalpArm64MsiRoutingLock);
-        InterlockedExchange(&HalpArm64MsiRoutingLockState, 2);
-        return;
-    }
-
-    while (HalpArm64MsiRoutingLockState != 2)
-        KeStallExecutionProcessor(1);
+    DPRINT1("HalAllocateHardwareCounters: STUB\n");
+    return STATUS_NOT_SUPPORTED;
 }
 
-static
 NTSTATUS
-HalpArm64EnsureMsiRoutingAllocator(VOID)
+NTAPI
+HalFreeHardwareCounters(
+    _In_opt_ HANDLE CounterSetHandle)
 {
-    ULONG BaseVector;
-    ULONG VectorCount;
-    ULONG BitmapBytes;
-    PULONG NewBuffer;
-    PULONG OldBuffer = NULL;
-    KIRQL OldIrql;
-
-    if (!HalGetMsiVectorRange(&BaseVector, &VectorCount) ||
-        VectorCount == 0)
-    {
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    HalpArm64EnsureMsiRoutingLock();
-
-    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
-    if (HalpArm64MsiRoutingBuffer != NULL &&
-        HalpArm64MsiRoutingBase == BaseVector &&
-        HalpArm64MsiRoutingCount == VectorCount)
-    {
-        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
-        return STATUS_SUCCESS;
-    }
-    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
-
-    BitmapBytes = ((VectorCount + 31) / 32) * sizeof(ULONG);
-    NewBuffer = ExAllocatePoolWithTag(NonPagedPool, BitmapBytes, TAG_HAL);
-    if (NewBuffer == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    RtlZeroMemory(NewBuffer, BitmapBytes);
-
-    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
-    if (HalpArm64MsiRoutingBuffer == NULL ||
-        HalpArm64MsiRoutingBase != BaseVector ||
-        HalpArm64MsiRoutingCount != VectorCount)
-    {
-        OldBuffer = HalpArm64MsiRoutingBuffer;
-        HalpArm64MsiRoutingBuffer = NewBuffer;
-        HalpArm64MsiRoutingBase = BaseVector;
-        HalpArm64MsiRoutingCount = VectorCount;
-        RtlInitializeBitMap(&HalpArm64MsiRoutingBitmap,
-                            HalpArm64MsiRoutingBuffer,
-                            HalpArm64MsiRoutingCount);
-        RtlClearAllBits(&HalpArm64MsiRoutingBitmap);
-        NewBuffer = NULL;
-    }
-    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
-
-    if (OldBuffer != NULL)
-        ExFreePoolWithTag(OldBuffer, TAG_HAL);
-    if (NewBuffer != NULL)
-        ExFreePoolWithTag(NewBuffer, TAG_HAL);
-
+    UNREFERENCED_PARAMETER(CounterSetHandle);
+    DPRINT1("HalFreeHardwareCounters: STUB\n");
     return STATUS_SUCCESS;
 }
 
-static
 NTSTATUS
-HalpArm64AllocateMsiRoutingVector(
-    _In_ ULONG MessageCount,
-    _Out_ PULONG Vector)
-{
-    ULONG Offset;
-    KIRQL OldIrql;
-    NTSTATUS Status;
-
-    /*
-     * Keep the native ARM64 rule exact: Windows 11 ARM64 HalpAllocateMsiLines
-     * rejects Count == 0 and every non-power-of-two count before scanning its
-     * bitmap. PCI MSI multiple-message fields encode powers of two; MSI-X
-     * entries are allocated as individual messages.
-     */
-    if (Vector == NULL || MessageCount == 0 ||
-        (MessageCount & (MessageCount - 1)) != 0)
-    {
-        DPRINT1("HalpArm64AllocateMsiRoutingVector: native MSI line count must be a power of two, got %lu\n",
-                MessageCount);
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    Status = HalpArm64EnsureMsiRoutingAllocator();
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
-    if (MessageCount > HalpArm64MsiRoutingCount)
-    {
-        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    for (Offset = 0;
-         Offset + MessageCount <= HalpArm64MsiRoutingCount;
-         Offset += MessageCount)
-    {
-        if (RtlAreBitsClear(&HalpArm64MsiRoutingBitmap, Offset, MessageCount))
-        {
-            RtlSetBits(&HalpArm64MsiRoutingBitmap, Offset, MessageCount);
-            *Vector = HalpArm64MsiRoutingBase + Offset;
-            KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
-            return STATUS_SUCCESS;
-        }
-    }
-
-    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
-    return STATUS_INSUFFICIENT_RESOURCES;
-}
-#endif
-
-/* FUNCTIONS ******************************************************************/
-
-/*
- * Base HAL Functions (Windows 2000+)
- * These are deprecated legacy functions - drivers should use DMA_OPERATIONS instead.
- */
-VOID
-FASTCALL
-HalExamineMBR(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ ULONG SectorSize,
-    _In_ ULONG MBRTypeIdentifier,
-    _Out_ PVOID *Buffer)
-{
-    DPRINT1("HalExamineMBR: STUB (deprecated API - use disk class driver)\n");
-    UNREFERENCED_PARAMETER(DeviceObject);
-    UNREFERENCED_PARAMETER(SectorSize);
-    UNREFERENCED_PARAMETER(MBRTypeIdentifier);
-    if (Buffer)
-        *Buffer = NULL;
-}
-
-ULONG
 NTAPI
-HalGetDmaAlignment(
-    _In_ PVOID DmaAdapter)
+HalEnumerateEnvironmentVariablesEx(
+    _In_ ULONG InformationClass,
+    _Out_writes_bytes_opt_(*BufferLength) PVOID Buffer,
+    _Inout_opt_ PULONG BufferLength)
 {
-    DPRINT1("HalGetDmaAlignment: STUB (deprecated API - use DMA_OPERATIONS)\n");
-    UNREFERENCED_PARAMETER(DmaAdapter);
-    /* Return default alignment (no alignment restriction) */
-    return 0;
+    UNREFERENCED_PARAMETER(InformationClass);
+    UNREFERENCED_PARAMETER(Buffer);
+
+    if (BufferLength)
+        *BufferLength = 0;
+
+    DPRINT1("HalEnumerateEnvironmentVariablesEx: STUB\n");
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalGetEnvironmentVariableEx(
+    _In_ PWSTR VariableName,
+    _In_ LPCGUID VendorGuid,
+    _Out_writes_bytes_opt_(*ValueLength) PVOID Value,
+    _Inout_ PULONG ValueLength,
+    _Out_opt_ PULONG Attributes)
+{
+    UNREFERENCED_PARAMETER(VariableName);
+    UNREFERENCED_PARAMETER(VendorGuid);
+    UNREFERENCED_PARAMETER(Value);
+
+    if (ValueLength)
+        *ValueLength = 0;
+    if (Attributes)
+        *Attributes = 0;
+
+    DPRINT1("HalGetEnvironmentVariableEx: STUB\n");
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalSetEnvironmentVariableEx(
+    _In_ PWSTR VariableName,
+    _In_ LPCGUID VendorGuid,
+    _In_reads_bytes_(ValueLength) PVOID Value,
+    _In_ ULONG ValueLength,
+    _In_ ULONG Attributes)
+{
+    UNREFERENCED_PARAMETER(VariableName);
+    UNREFERENCED_PARAMETER(VendorGuid);
+    UNREFERENCED_PARAMETER(Value);
+    UNREFERENCED_PARAMETER(ValueLength);
+    UNREFERENCED_PARAMETER(Attributes);
+
+    DPRINT1("HalSetEnvironmentVariableEx: STUB\n");
+    return STATUS_NOT_SUPPORTED;
 }
 
 NTSTATUS
@@ -213,8 +126,8 @@ NTAPI
 HalEnableInterrupt(
     _In_ PINTERRUPT_CONNECTION_DATA ConnectionData)
 {
-    DPRINT1("HalEnableInterrupt: STUB (Win7+ API)\n");
     UNREFERENCED_PARAMETER(ConnectionData);
+    DPRINT1("HalEnableInterrupt: STUB\n");
     return STATUS_NOT_SUPPORTED;
 }
 
@@ -223,8 +136,8 @@ NTAPI
 HalDisableInterrupt(
     _In_ PINTERRUPT_CONNECTION_DATA ConnectionData)
 {
-    DPRINT1("HalDisableInterrupt: STUB (Win7+ API)\n");
     UNREFERENCED_PARAMETER(ConnectionData);
+    DPRINT1("HalDisableInterrupt: STUB\n");
     return STATUS_NOT_SUPPORTED;
 }
 
@@ -237,7 +150,6 @@ HalGetVectorInput(
     _Out_ PKINTERRUPT_POLARITY Polarity,
     _Out_ PINTERRUPT_REMAPPING_INFO IntRemapInfo)
 {
-    DPRINT1("HalGetVectorInput: STUB (Win7+ API)\n");
     UNREFERENCED_PARAMETER(Vector);
     UNREFERENCED_PARAMETER(Affinity);
 
@@ -248,149 +160,25 @@ HalGetVectorInput(
     if (IntRemapInfo)
         RtlZeroMemory(IntRemapInfo, sizeof(*IntRemapInfo));
 
+    DPRINT1("HalGetVectorInput: STUB\n");
     return STATUS_NOT_SUPPORTED;
 }
 
-KIRQL
-NTAPI
-HalConvertDeviceIdtToIrql(
-    _In_ ULONG Vector)
-{
-    UNREFERENCED_PARAMETER(Vector);
-    return 0;
-}
-
 NTSTATUS
 NTAPI
-HalGetInterruptTargetInformation(
-    _Inout_ PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation)
+HalQueryEnvironmentVariableInfoEx(
+    _In_ ULONG Attributes,
+    _Out_opt_ PULONGLONG MaximumVariableStorageSize,
+    _Out_opt_ PULONGLONG RemainingVariableStorageSize,
+    _Out_opt_ PULONGLONG MaximumVariableSize)
 {
-    KAFFINITY Mask;
-    ULONG ProcessorNumber;
+    UNREFERENCED_PARAMETER(Attributes);
+    UNREFERENCED_PARAMETER(MaximumVariableStorageSize);
+    UNREFERENCED_PARAMETER(RemainingVariableStorageSize);
+    UNREFERENCED_PARAMETER(MaximumVariableSize);
 
-    if (TargetInformation == NULL ||
-        TargetInformation->Version != HAL_INTERRUPT_TARGET_INFORMATION_VERSION)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    Mask = TargetInformation->TargetProcessors;
-    if (Mask == 0)
-        Mask = KeQueryActiveProcessors();
-
-    ProcessorNumber = 0;
-    while ((Mask & 1) == 0)
-    {
-        Mask >>= 1;
-        ProcessorNumber++;
-    }
-
-    TargetInformation->ProcessorNumber = ProcessorNumber;
-    TargetInformation->TargetProcessors = ((KAFFINITY)1 << ProcessorNumber);
-    TargetInformation->DestinationId = ProcessorNumber;
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
-HalGetMessageRoutingInfo(
-    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
-{
-    HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
-    NTSTATUS Status;
-
-    if (RoutingInfo == NULL ||
-        RoutingInfo->Version != HAL_MESSAGE_ROUTING_INFO_VERSION)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (RoutingInfo->Flags & HAL_MSI_ROUTING_RELEASE_VECTOR)
-    {
-#if defined(_M_ARM64)
-        KIRQL OldIrql;
-        ULONG Offset;
-
-        if (RoutingInfo->Flags != HAL_MSI_ROUTING_RELEASE_VECTOR || RoutingInfo->MessageCount != 1)
-            return STATUS_INVALID_PARAMETER;
-
-        HalpArm64EnsureMsiRoutingLock();
-        KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
-        Offset = RoutingInfo->Vector - HalpArm64MsiRoutingBase;
-        if (HalpArm64MsiRoutingBuffer == NULL || Offset >= HalpArm64MsiRoutingCount ||
-            !RtlAreBitsSet(&HalpArm64MsiRoutingBitmap, Offset, 1))
-        {
-            KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
-            return STATUS_INVALID_PARAMETER;
-        }
-        RtlClearBits(&HalpArm64MsiRoutingBitmap, Offset, 1);
-        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
-        return STATUS_SUCCESS;
-#else
-        return STATUS_NOT_SUPPORTED;
-#endif
-    }
-
-    if (RoutingInfo->Flags & HAL_MSI_ROUTING_ALLOCATE_VECTOR)
-    {
-#if defined(_M_ARM64)
-        Status = HalpArm64AllocateMsiRoutingVector(RoutingInfo->MessageCount,
-                                                   &RoutingInfo->Vector);
-        if (!NT_SUCCESS(Status))
-            return Status;
-
-        RoutingInfo->Irql = RoutingInfo->DesiredIrql ?
-                            RoutingInfo->DesiredIrql :
-                            HALP_ARM64_MSI_DEFAULT_IRQL;
-        if (RoutingInfo->TargetProcessors == 0)
-            RoutingInfo->TargetProcessors = KeQueryActiveProcessors();
-#else
-        return STATUS_NOT_SUPPORTED;
-#endif
-    }
-    else
-    {
-        if (RoutingInfo->Vector == 0)
-            return STATUS_INVALID_PARAMETER;
-    }
-
-    if (RoutingInfo->Vector == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
-    TargetInfo.TargetProcessors = RoutingInfo->TargetProcessors;
-    TargetInfo.ProcessorNumber = 0;
-    TargetInfo.DestinationId = 0;
-    Status = HalGetInterruptTargetInformation(&TargetInfo);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    RoutingInfo->TargetProcessors = TargetInfo.TargetProcessors;
-    RoutingInfo->DestinationId = TargetInfo.DestinationId;
-    if (RoutingInfo->Irql == 0)
-        RoutingInfo->Irql = HalConvertDeviceIdtToIrql(RoutingInfo->Vector);
-#if defined(_M_ARM64)
-    {
-        ULONGLONG MsiAddress;
-        ULONG MsiData;
-
-        if (NT_SUCCESS(HalpArm64QueryMsiRoute(RoutingInfo->Vector, &MsiAddress, &MsiData)))
-        {
-            RoutingInfo->MessageAddress.QuadPart = (LONGLONG)MsiAddress;
-            RoutingInfo->MessageData = (USHORT)MsiData;
-        }
-        else
-        {
-            RoutingInfo->MessageAddress.QuadPart = 0;
-            RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector - HalpArm64MsiRoutingBase);
-        }
-    }
-#else
-    RoutingInfo->MessageAddress.QuadPart = 0xFEE00000ULL |
-                                           ((ULONGLONG)TargetInfo.DestinationId << 12);
-    RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector & 0xFF);
-#endif
-    return STATUS_SUCCESS;
+    DPRINT1("HalQueryEnvironmentVariableInfoEx: STUB\n");
+    return STATUS_NOT_SUPPORTED;
 }
 
 NTSTATUS
@@ -408,262 +196,6 @@ HalGetMemoryCachingRequirements(
 
     *CacheType = MmNonCached;
     return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
-HalGetProcessorIdByNtNumber(
-    _In_ ULONG ProcessorNumber,
-    _Out_ PULONG ProcessorId)
-{
-    if (ProcessorId == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    if (ProcessorNumber >= MAXIMUM_PROCESSORS)
-        return STATUS_INVALID_PARAMETER;
-
-    *ProcessorId = ProcessorNumber;
-    return STATUS_SUCCESS;
-}
-
-/* NOTE: HalGetScatterGatherList, HalPutDmaAdapter, HalPutScatterGatherList
- * are already implemented in hal/arch/common/generic/dma.c */
-
-/*
- * Windows 7+ WHEA (Windows Hardware Error Architecture) APIs (NT 6.1+)
- */
-VOID
-NTAPI
-HalBugCheckSystem(
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-    _In_ PWHEA_ERROR_SOURCE_DESCRIPTOR ErrorSource,
-    _In_ PWHEA_ERROR_RECORD ErrorRecord)
-#else
-    _In_ PWHEA_ERROR_RECORD ErrorRecord)
-#endif
-{
-    DPRINT1("HalBugCheckSystem: STUB (Win7+ WHEA API)\n");
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-    UNREFERENCED_PARAMETER(ErrorSource);
-#endif
-    UNREFERENCED_PARAMETER(ErrorRecord);
-    /* This function is called during bugcheck - just trace and return */
-}
-
-/*
- * Windows 8+ Hardware Counter APIs (NT 6.2+)
- * These are stubs for compatibility - hardware performance counters
- * require CPU-specific PMU (Performance Monitoring Unit) support.
- */
-NTSTATUS
-NTAPI
-HalAllocateHardwareCounters(
-    _In_reads_(GroupCount) PGROUP_AFFINITY GroupAffinity,
-    _In_ ULONG GroupCount,
-    _In_ PPHYSICAL_COUNTER_RESOURCE_LIST ResourceList,
-    _Out_ PHANDLE CounterSetHandle)
-{
-    DPRINT1("HalAllocateHardwareCounters: STUB (Win8+ API)\n");
-    UNREFERENCED_PARAMETER(GroupAffinity);
-    UNREFERENCED_PARAMETER(GroupCount);
-    UNREFERENCED_PARAMETER(ResourceList);
-    if (CounterSetHandle)
-        *CounterSetHandle = NULL;
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalFreeHardwareCounters(
-    _In_ HANDLE CounterSetHandle)
-{
-    DPRINT1("HalFreeHardwareCounters: STUB (Win8+ API)\n");
-    UNREFERENCED_PARAMETER(CounterSetHandle);
-    return STATUS_SUCCESS;
-}
-
-/*
- * Windows 8+ DMA Crash Dump Register APIs (NT 6.2+)
- * Extended crash dump register allocation with support for multiple register sets.
- */
-NTSTATUS
-NTAPI
-HalDmaAllocateCrashDumpRegistersEx(
-    _In_ PVOID Adapter,
-    _In_ ULONG NumberOfMapRegisters,
-    _In_ ULONG Type,
-    _Out_ PVOID *MapRegisterBase,
-    _Out_ PULONG MapRegistersAvailable)
-{
-    DPRINT1("HalDmaAllocateCrashDumpRegistersEx: STUB (Win8+ API)\n");
-    UNREFERENCED_PARAMETER(Adapter);
-    UNREFERENCED_PARAMETER(NumberOfMapRegisters);
-    UNREFERENCED_PARAMETER(Type);
-    if (MapRegisterBase)
-        *MapRegisterBase = NULL;
-    if (MapRegistersAvailable)
-        *MapRegistersAvailable = 0;
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalDmaFreeCrashDumpRegistersEx(
-    _In_ PVOID Adapter,
-    _In_ ULONG Type)
-{
-    DPRINT1("HalDmaFreeCrashDumpRegistersEx: STUB (Win8+ API)\n");
-    UNREFERENCED_PARAMETER(Adapter);
-    UNREFERENCED_PARAMETER(Type);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
-HalEnumerateEnvironmentVariablesEx(
-    _In_ ULONG InformationClass,
-    _Out_writes_bytes_opt_(*BufferLength) PVOID Buffer,
-    _Inout_opt_ PULONG BufferLength)
-{
-    DPRINT1("HalEnumerateEnvironmentVariablesEx: STUB (Win7+ API)\n");
-    UNREFERENCED_PARAMETER(InformationClass);
-    UNREFERENCED_PARAMETER(Buffer);
-
-    if (BufferLength)
-        *BufferLength = 0;
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalGetEnvironmentVariableEx(
-    _In_ PWSTR VariableName,
-    _In_ LPCGUID VendorGuid,
-    _Out_writes_bytes_opt_(*ValueLength) PVOID Value,
-    _Inout_ PULONG ValueLength,
-    _Out_opt_ PULONG Attributes)
-{
-    DPRINT1("HalGetEnvironmentVariableEx: STUB (Win7+ API)\n");
-    UNREFERENCED_PARAMETER(VariableName);
-    UNREFERENCED_PARAMETER(VendorGuid);
-    UNREFERENCED_PARAMETER(Value);
-
-    if (ValueLength)
-        *ValueLength = 0;
-    if (Attributes)
-        *Attributes = 0;
-
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalSetEnvironmentVariableEx(
-    _In_ PWSTR VariableName,
-    _In_ LPCGUID VendorGuid,
-    _In_reads_bytes_(ValueLength) PVOID Value,
-    _In_ ULONG ValueLength,
-    _In_ ULONG Attributes)
-{
-    DPRINT1("HalSetEnvironmentVariableEx: STUB (Win7+ API)\n");
-    UNREFERENCED_PARAMETER(VariableName);
-    UNREFERENCED_PARAMETER(VendorGuid);
-    UNREFERENCED_PARAMETER(Value);
-    UNREFERENCED_PARAMETER(ValueLength);
-    UNREFERENCED_PARAMETER(Attributes);
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalQueryEnvironmentVariableInfoEx(
-    _In_ ULONG Attributes,
-    _Out_opt_ PULONGLONG MaximumVariableStorageSize,
-    _Out_opt_ PULONGLONG RemainingVariableStorageSize,
-    _Out_opt_ PULONGLONG MaximumVariableSize)
-{
-    DPRINT1("HalQueryEnvironmentVariableInfoEx: STUB (Win7+ API)\n");
-    UNREFERENCED_PARAMETER(Attributes);
-    UNREFERENCED_PARAMETER(MaximumVariableStorageSize);
-    UNREFERENCED_PARAMETER(RemainingVariableStorageSize);
-    UNREFERENCED_PARAMETER(MaximumVariableSize);
-    return STATUS_NOT_SUPPORTED;
-}
-
-/*
- * Windows 8.1+ APIs (NT 6.3+)
- * Interrupt controller and IRQ management extensions.
- */
-NTSTATUS
-NTAPI
-HalConvertDeviceIdtVectorToIrql(
-    _In_ ULONG Vector,
-    _In_ ULONG Reserved,
-    _Out_ PULONG Irql)
-{
-    DPRINT1("HalConvertDeviceIdtVectorToIrql: STUB (Win8.1+ API)\n");
-    UNREFERENCED_PARAMETER(Vector);
-    UNREFERENCED_PARAMETER(Reserved);
-    if (Irql)
-        *Irql = 0;
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalAllocateGsivForSecondaryIc(
-    _In_ PVOID ParentHandle,
-    _In_ ULONG GsivCount)
-{
-    DPRINT1("HalAllocateGsivForSecondaryIc: STUB (Win8.1+ API)\n");
-    UNREFERENCED_PARAMETER(ParentHandle);
-    UNREFERENCED_PARAMETER(GsivCount);
-    return STATUS_NOT_SUPPORTED;
-}
-
-/*
- * Windows 10+ APIs (NT 10.0+)
- * Modern interrupt handling and IOMMU policy management.
- */
-NTSTATUS
-NTAPI
-HalSetIommuPolicy(
-    _In_ PVOID Policy)
-{
-    DPRINT1("HalSetIommuPolicy: STUB (Win10+ API)\n");
-    UNREFERENCED_PARAMETER(Policy);
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalpRequestInterrupt(
-    _In_ ULONG Irql,
-    _In_ PVOID InterruptObject,
-    _In_ ULONG Vector,
-    _In_ ULONG MessageNumber,
-    _In_ ULONG ProcessorNumber)
-{
-    DPRINT1("HalRequestInterrupt: STUB (Win10+ API)\n");
-    UNREFERENCED_PARAMETER(Irql);
-    UNREFERENCED_PARAMETER(InterruptObject);
-    UNREFERENCED_PARAMETER(Vector);
-    UNREFERENCED_PARAMETER(MessageNumber);
-    UNREFERENCED_PARAMETER(ProcessorNumber);
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-NTAPI
-HalpEnumerateUnmaskedInterrupts(
-    _Out_ PVOID InterruptInformation,
-    _Inout_ PULONG InterruptInformationLength)
-{
-    DPRINT1("HalEnumerateUnmaskedInterrupts: STUB (Win10+ API)\n");
-    UNREFERENCED_PARAMETER(InterruptInformation);
-    if (InterruptInformationLength)
-        *InterruptInformationLength = 0;
-    return STATUS_NOT_SUPPORTED;
 }
 
 /* EOF */
