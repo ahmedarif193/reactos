@@ -30,9 +30,10 @@ BOOL gbCompositionEnabled = FALSE;
  */
 #define COMPOSITION_MAX_WINDOWS 512
 #define COMPOSITION_COMPOSE_MAX COMPOSITION_MAX_WINDOWS
-/* A paint bracket older than this composes anyway
- * (a hung painter must not freeze its window forever). */
-#define COMPOSITION_PAINT_STALE_100NS (100LL * 10000LL) /* 100 ms */
+/* A cache DC has no defined end: an application may hold one and draw
+ * through it for as long as it likes. Publish a backing whose DC bracket is
+ * older than this; a BeginPaint bracket is never published open. */
+#define COMPOSITION_DC_HOLD_100NS (100LL * 10000LL) /* 100 ms */
 
 typedef struct _REDIRECT_ENTRY
 {
@@ -41,7 +42,10 @@ typedef struct _REDIRECT_ENTRY
     RECTL        WindowRect;   /* last position submitted to the compositor    */
     BOOL         WindowRectValid;
     LONG         PaintCount;   /* BeginPaint..EndPaint depth on this tree      */
-    LONGLONG     PaintStart;   /* when the outer paint bracket opened          */
+    PTHREADINFO  PaintOwner;   /* thread that opened the outer paint bracket   */
+    LONG         DcCount;      /* GetDC..ReleaseDC depth on this tree          */
+    PTHREADINFO  DcOwner;      /* thread that opened the outer DC bracket      */
+    LONGLONG     DcStart;      /* when the outer DC bracket opened             */
     BOOL         Damaged;      /* this window's backing changed since compose  */
     volatile LONG BackingDrawn;/* at least one GDI operation reached backing   */
     volatile LONG BackComplete;/* a complete GL client frame reached BACK      */
@@ -1056,11 +1060,12 @@ IntCompositionMarkOpenGL(_In_ PWND Wnd)
 
     /* GL windows hold their cache DC for the window's lifetime, so the DC-hold
      * bracket does not apply to them — release any bracket the pre-mark
-     * GetDC opened, or the window would only compose on the stale-guard. */
+     * GetDC opened, or the window would not compose until its thread next
+     * asks for a message. */
     {
         REDIRECT_ENTRY *e = IntCompositionFind(ancestor);
         if (e != NULL)
-            e->PaintCount = 0;
+            e->DcCount = 0;
     }
 }
 
@@ -1755,8 +1760,8 @@ IntCompositionDamageBacking(_In_opt_ PSURFACE psurf,
                  * compositor for every primitive inside that bracket only
                  * makes it repeatedly present the previous FRONT while BACK
                  * is incomplete. */
-                if (InterlockedCompareExchange(&g_Redirects[i].PaintCount,
-                                               0, 0) == 0)
+                if (InterlockedCompareExchange(&g_Redirects[i].PaintCount, 0, 0) == 0 &&
+                    InterlockedCompareExchange(&g_Redirects[i].DcCount, 0, 0) == 0)
                 {
                     IntCompositionMarkDamage(FALSE);
                 }
@@ -2070,7 +2075,45 @@ IntCompositionPaintBegin(_In_ PWND Wnd)
         return;
 
     if (InterlockedIncrement(&e->PaintCount) == 1)
-        e->PaintStart = (LONGLONG)KeQueryInterruptTime();
+        e->PaintOwner = PsGetCurrentThreadWin32Thread();
+}
+
+/* A thread that asks for its next message, or exits, has finished the paints
+ * it began. Close any bracket it still holds, such as a cache DC it never
+ * released, so its completed backing is published; an open bracket otherwise
+ * hides every later draw. Brackets opened by other threads are left to them. */
+VOID
+IntCompositionEndThreadPaints(_In_ PTHREADINFO pti)
+{
+    BOOL Ended = FALSE;
+    ULONG i;
+
+    if (!gbCompositionEnabled)
+        return;
+
+    for (i = 0; i < g_RedirectHighWater; ++i)
+    {
+        REDIRECT_ENTRY *e = &g_Redirects[i];
+
+        if (e->Wnd == NULL)
+            continue;
+        if (e->PaintOwner == pti &&
+            InterlockedCompareExchange(&e->PaintCount, 0, 0) != 0)
+        {
+            InterlockedExchange(&e->PaintCount, 0);
+            e->Damaged = TRUE;
+            Ended = TRUE;
+        }
+        if (e->DcOwner == pti &&
+            InterlockedCompareExchange(&e->DcCount, 0, 0) != 0)
+        {
+            InterlockedExchange(&e->DcCount, 0);
+            e->Damaged = TRUE;
+            Ended = TRUE;
+        }
+    }
+    if (Ended)
+        IntCompositionMarkDamage(FALSE);
 }
 
 VOID
@@ -2106,13 +2149,22 @@ IntCompositionPaintEnd(_In_ PWND Wnd)
 UCHAR
 IntCompositionDcAcquire(_In_opt_ PWND Wnd)
 {
+    REDIRECT_ENTRY *e;
+
     if (Wnd == NULL || IntCompositionIsGLWindow(Wnd))
         return COMPOSITION_DC_NONE;
 
     if (!gbCompositionEnabled)
         return COMPOSITION_DC_NONE;
 
-    IntCompositionPaintBegin(Wnd);
+    e = IntCompositionFind(IntCompositionTopLevel(Wnd));
+    if (e == NULL)
+        return COMPOSITION_DC_NONE;
+    if (InterlockedIncrement(&e->DcCount) == 1)
+    {
+        e->DcOwner = PsGetCurrentThreadWin32Thread();
+        e->DcStart = (LONGLONG)KeQueryInterruptTime();
+    }
     return COMPOSITION_DC_REDIRECTED;
 }
 
@@ -2120,7 +2172,7 @@ VOID
 IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State)
 {
     REDIRECT_ENTRY *e;
-    LONG PaintCount;
+    LONG DcCount;
 
     if (State == COMPOSITION_DC_NONE)
         return;
@@ -2132,14 +2184,15 @@ IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State)
     if (e == NULL)
         return;
 
-    PaintCount = e->PaintCount;
-    if (PaintCount > 0)
-        PaintCount = InterlockedDecrement(&e->PaintCount);
+    DcCount = e->DcCount;
+    if (DcCount > 0)
+        DcCount = InterlockedDecrement(&e->DcCount);
 
     /* If the session drew, flag damage; the compose runs on the batch-done
      * commit, the throttled tick, or the pre-idle flush (not per release, so
      * a burst of small draws doesn't serialize behind a compose each). */
-    if (e->Damaged && PaintCount == 0 &&
+    if (e->Damaged && DcCount == 0 &&
+        InterlockedCompareExchange(&e->PaintCount, 0, 0) == 0 &&
         !IntCompositionTreeHasPendingPaint(e->Wnd))
         IntCompositionMarkDamage(FALSE);
 }
@@ -2405,10 +2458,12 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
          * the remainder of the snapshot, serializing it against redirected
          * GDI drawing. */
         {
-            LONG PaintCount = e->PaintCount;
-            LONGLONG PaintAge = now - e->PaintStart;
-            BOOL bBusy = (PaintCount > 0) &&
-                         PaintAge < COMPOSITION_PAINT_STALE_100NS;
+            /* Never publish a BACK whose paint is still open, however long
+             * it takes. A painter closes its brackets when it next asks for
+             * a message; only a long-held cache DC is published open. */
+            BOOL bBusy = InterlockedCompareExchange(&e->PaintCount, 0, 0) > 0 ||
+                         (InterlockedCompareExchange(&e->DcCount, 0, 0) > 0 &&
+                          now - e->DcStart < COMPOSITION_DC_HOLD_100NS);
             BOOL bBackingDrawn =
                 InterlockedCompareExchange(&e->BackingDrawn, FALSE, FALSE) != FALSE;
             BOOL bBackingDirty =
