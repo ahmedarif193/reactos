@@ -52,15 +52,76 @@ typedef struct { ULONG Count; KERNEL_MODULE Modules[]; } KERNEL_MODULES;
 typedef LONG (NTAPI *CREATE_PROFILE)(PHANDLE, HANDLE, PVOID, SIZE_T, ULONG, PVOID, ULONG, ULONG, ULONG_PTR);
 typedef LONG (NTAPI *PROFILE_OPERATION)(HANDLE);
 typedef LONG (NTAPI *ADJUST_PRIVILEGE)(ULONG, BOOLEAN, BOOLEAN, PBOOLEAN);
+typedef LONG (NTAPI *SET_INTERVAL_PROFILE)(ULONG, ULONG);
+typedef LONG (NTAPI *SET_TIMER_RESOLUTION)(ULONG, BOOLEAN, PULONG);
 typedef struct
 {
     HANDLE Handle;
     ULONG *Buckets, Count;
     KERNEL_MODULE Module;
 } SAMPLE_PROFILE;
-static SAMPLE_PROFILE Profiles[128];
+static SAMPLE_PROFILE Profiles[256];
 static ULONG ProfileCount;
 static PROFILE_OPERATION StopProfile;
+static QUERY_SYSTEM SampleQuery;
+static const WCHAR *SampleTarget;
+static DWORD SampleDelay;
+static BOOL ResolutionHeld;
+static HANDLE SampleTargetHandle;
+static ULONGLONG SampleTargetCpu0, SampleTargetStart;
+
+static void AddSampleProfile(CREATE_PROFILE CreateProfile, PROFILE_OPERATION StartProfile,
+                             HANDLE Target, const KERNEL_MODULE *Module)
+{
+    SAMPLE_PROFILE *Profile = &Profiles[ProfileCount];
+    LONG Status;
+    if (ProfileCount >= ARRAYSIZE(Profiles)) return;
+    Profile->Module = *Module;
+    if (!Profile->Module.ImageSize || Profile->Module.ImageSize > 64 * 1024 * 1024) return;
+    Profile->Count = (Profile->Module.ImageSize + 63) / 64;
+    Profile->Buckets = calloc(Profile->Count, sizeof(ULONG));
+    if (!Profile->Buckets) return;
+    Status = CreateProfile(&Profile->Handle, Target, Profile->Module.ImageBase,
+                           Profile->Module.ImageSize, 6, Profile->Buckets,
+                           Profile->Count * sizeof(ULONG), 0, 0xF);
+    if (Status >= 0) Status = StartProfile(Profile->Handle);
+    if (Status < 0)
+    {
+        printf("SAMPLE_ERROR module=%s status=0x%08lx\n",
+               Profile->Module.FullPathName + Profile->Module.OffsetToFileName, Status);
+        if (Profile->Handle) CloseHandle(Profile->Handle);
+        free(Profile->Buckets);
+        memset(Profile, 0, sizeof(*Profile));
+        return;
+    }
+    ++ProfileCount;
+}
+
+static void AddUserModules(CREATE_PROFILE CreateProfile, PROFILE_OPERATION StartProfile,
+                           HANDLE Target, DWORD Pid)
+{
+    HMODULE Handles[256];
+    DWORD Needed = 0;
+    HANDLE Reader = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, Pid);
+    if (!Reader || !EnumProcessModules(Reader, Handles, sizeof(Handles), &Needed))
+    {
+        printf("SAMPLE_ERROR user_modules=%lu\n", GetLastError());
+        if (Reader) CloseHandle(Reader);
+        return;
+    }
+    for (DWORD i = 0; i < Needed / sizeof(HMODULE) && i < ARRAYSIZE(Handles); ++i)
+    {
+        MODULEINFO Info;
+        KERNEL_MODULE Module = {0};
+        if (!GetModuleInformation(Reader, Handles[i], &Info, sizeof(Info)) ||
+            !GetModuleBaseNameA(Reader, Handles[i], Module.FullPathName, sizeof(Module.FullPathName)))
+            continue;
+        Module.ImageBase = Info.lpBaseOfDll;
+        Module.ImageSize = Info.SizeOfImage;
+        AddSampleProfile(CreateProfile, StartProfile, Target, &Module);
+    }
+    CloseHandle(Reader);
+}
 
 static void StartSampling(QUERY_SYSTEM Query, const WCHAR *TargetName)
 {
@@ -73,13 +134,20 @@ static void StartSampling(QUERY_SYSTEM Query, const WCHAR *TargetName)
     BOOLEAN WasEnabled = FALSE, PrivilegeAdjusted = FALSE;
     LONG Status;
     HANDLE Target = NULL;
+    DWORD Pid = 0;
+    SET_INTERVAL_PROFILE SetInterval = (SET_INTERVAL_PROFILE)GetProcAddress(Ntdll, "NtSetIntervalProfile");
+    SET_TIMER_RESOLUTION SetResolution = (SET_TIMER_RESOLUTION)GetProcAddress(Ntdll, "NtSetTimerResolution");
+    ULONG Resolution = 0;
     StopProfile = (PROFILE_OPERATION)GetProcAddress(Ntdll, "NtStopProfile");
     if (!CreateProfile || !StartProfile || !StopProfile || !Adjust) return;
+    /* Samples come from the clock tick, so ask for a 1 ms tick as well. */
+    if (SetResolution && SetResolution(10000, TRUE, &Resolution) >= 0) ResolutionHeld = TRUE;
+    if (SetInterval) SetInterval(10000, 0);
+    printf("SAMPLE_INTERVAL tick_100ns=%lu\n", Resolution);
     if (TargetName)
     {
         PROCESSENTRY32W Entry = { .dwSize = sizeof(Entry) };
         HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        DWORD Pid = 0;
         if (Snapshot != INVALID_HANDLE_VALUE && Process32FirstW(Snapshot, &Entry))
             do
             {
@@ -123,42 +191,64 @@ static void StartSampling(QUERY_SYSTEM Query, const WCHAR *TargetName)
         free(Modules);
         goto Cleanup;
     }
-    for (ULONG i = 0; i < Modules->Count && ProfileCount < 128; ++i)
-    {
-        SAMPLE_PROFILE *Profile = &Profiles[ProfileCount];
-        Profile->Module = Modules->Modules[i];
-        if (!Profile->Module.ImageSize || Profile->Module.ImageSize > 16 * 1024 * 1024) continue;
-        Profile->Count = (Profile->Module.ImageSize + 63) / 64;
-        Profile->Buckets = calloc(Profile->Count, sizeof(ULONG));
-        if (!Profile->Buckets) continue;
-        Status = CreateProfile(&Profile->Handle, Target, Profile->Module.ImageBase,
-                               Profile->Module.ImageSize, 6, Profile->Buckets,
-                               Profile->Count * sizeof(ULONG), 0, 0xF);
-        if (Status >= 0) Status = StartProfile(Profile->Handle);
-        if (Status < 0)
-        {
-            printf("SAMPLE_ERROR module=%s status=0x%08lx\n",
-                   Profile->Module.FullPathName + Profile->Module.OffsetToFileName, Status);
-            if (Profile->Handle) CloseHandle(Profile->Handle);
-            free(Profile->Buckets);
-            memset(Profile, 0, sizeof(*Profile));
-            continue;
-        }
-        ++ProfileCount;
-    }
+    for (ULONG i = 0; i < Modules->Count; ++i)
+        AddSampleProfile(CreateProfile, StartProfile, Target, &Modules->Modules[i]);
     free(Modules);
+    if (Pid) AddUserModules(CreateProfile, StartProfile, Target, Pid);
+    if (Pid && DuplicateHandle(GetCurrentProcess(), Target, GetCurrentProcess(),
+                               &SampleTargetHandle, 0, FALSE, DUPLICATE_SAME_ACCESS))
+    {
+        FILETIME Creation, Exit, Kernel, User, Now;
+        GetSystemTimeAsFileTime(&Now);
+        SampleTargetStart = ((ULONGLONG)Now.dwHighDateTime << 32) | Now.dwLowDateTime;
+        if (GetProcessTimes(SampleTargetHandle, &Creation, &Exit, &Kernel, &User))
+            SampleTargetCpu0 = (((ULONGLONG)Kernel.dwHighDateTime << 32) | Kernel.dwLowDateTime) +
+                               (((ULONGLONG)User.dwHighDateTime << 32) | User.dwLowDateTime);
+    }
 Cleanup:
     if (Target) CloseHandle(Target);
     if (PrivilegeAdjusted) Adjust(11, WasEnabled, FALSE, &WasEnabled);
 }
 
+static DWORD WINAPI DelayedSampling(void *Parameter)
+{
+    UNREFERENCED_PARAMETER(Parameter);
+    Sleep(SampleDelay);
+    StartSampling(SampleQuery, SampleTarget);
+    return 0;
+}
+
 static void StopSampling(void)
 {
+    SET_TIMER_RESOLUTION SetResolution =
+        (SET_TIMER_RESOLUTION)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetTimerResolution");
+    ULONG Resolution;
     for (ULONG i = 0; i < ProfileCount; ++i) StopProfile(Profiles[i].Handle);
+    if (ResolutionHeld && SetResolution) SetResolution(10000, FALSE, &Resolution);
 }
 
 static void ReportSamples(void)
 {
+    if (SampleTargetHandle)
+    {
+        FILETIME Creation, Exit, Kernel, User, Now;
+        ULONGLONG KernelTime, UserTime, End;
+        GetSystemTimeAsFileTime(&Now);
+        if (GetProcessTimes(SampleTargetHandle, &Creation, &Exit, &Kernel, &User))
+        {
+            KernelTime = ((ULONGLONG)Kernel.dwHighDateTime << 32) | Kernel.dwLowDateTime;
+            UserTime = ((ULONGLONG)User.dwHighDateTime << 32) | User.dwLowDateTime;
+            End = ((ULONGLONG)Exit.dwHighDateTime << 32) | Exit.dwLowDateTime;
+            if (WaitForSingleObject(SampleTargetHandle, 0) != WAIT_OBJECT_0 || End < SampleTargetStart)
+                End = ((ULONGLONG)Now.dwHighDateTime << 32) | Now.dwLowDateTime;
+            if (End > SampleTargetStart)
+                printf("SAMPLE_TARGET_CPU user_s=%.3f kernel_s=%.3f wall_s=%.3f busy_pct=%.1f\n",
+                       UserTime / 1e7, KernelTime / 1e7, (End - SampleTargetStart) / 1e7,
+                       (KernelTime + UserTime - SampleTargetCpu0) * 100.0 / (End - SampleTargetStart));
+        }
+        CloseHandle(SampleTargetHandle);
+        SampleTargetHandle = NULL;
+    }
     for (ULONG i = 0; i < ProfileCount; ++i)
     {
         SAMPLE_PROFILE *Profile = &Profiles[i];
@@ -167,7 +257,7 @@ static void ReportSamples(void)
         for (ULONG j = 0; j < Profile->Count; ++j) Total += Profile->Buckets[j];
         if (Total) printf("SAMPLE_MODULE module=%s base=%p total=%llu bucket_bytes=64\n",
                           Name, Profile->Module.ImageBase, Total);
-        for (unsigned rank = 0; rank < 20; ++rank)
+        for (unsigned rank = 0; rank < 400; ++rank)
         {
             ULONG Best = 0;
             for (ULONG j = 1; j < Profile->Count; ++j)
@@ -397,7 +487,7 @@ static void ReportThermals(const char *Phase)
         }
         if (i == 0)
         {
-            const char *Commands[] = { "get_throttled", "measure_clock arm", "measure_temp", "pmic_read_adc" };
+            const char *Commands[] = { "get_throttled", "measure_clock arm", "measure_clock v3d", "measure_clock core", "measure_temp", "pmic_read_adc" };
             for (unsigned j = 0; j < sizeof(Commands) / sizeof(Commands[0]); ++j)
             {
                 BYTE InputBytes[512] = {0}, OutputBytes[4096] = {0};
@@ -655,7 +745,7 @@ int wmain(int argc, WCHAR **argv)
     PROCESS_INFORMATION Child = {0};
     PROCESS_MEMORY_COUNTERS Memory = { .cb = sizeof(Memory) };
     LARGE_INTEGER Frequency, Start, End;
-    HANDLE Snapshot;
+    HANDLE Snapshot, Sampler = NULL;
     QUERY_SYSTEM Query = (QUERY_SYSTEM)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation");
     DWORD_PTR Affinity = 0;
     BOOL Sampling = FALSE, Telemetry = FALSE, LiveTelemetry = FALSE;
@@ -686,6 +776,7 @@ int wmain(int argc, WCHAR **argv)
             Sampling = TRUE;
             SampleName = argv[i] + 14;
         }
+        else if (!wcsncmp(argv[i], L"--sample-delay=", 15)) SampleDelay = wcstoul(argv[i] + 15, NULL, 10);
         else return 2;
     }
     if (!Command && !Idle) return 2;
@@ -706,7 +797,7 @@ int wmain(int argc, WCHAR **argv)
             return 2;
         }
     }
-    if (Sampling) StartSampling(Query, SampleName);
+    if (Sampling && !SampleDelay) StartSampling(Query, SampleName);
     Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (Snapshot != INVALID_HANDLE_VALUE && Process32FirstW(Snapshot, &Entry))
     {
@@ -752,6 +843,12 @@ int wmain(int argc, WCHAR **argv)
         if ((AuditPath || LiveTelemetry) && !StartFirmwareWorker()) AuditErrors |= 0x02000000;
         if (ClockProbePath && !StartClockProbe()) AuditErrors |= 0x04000000;
         ResumeThread(Child.hThread);
+        if (Sampling && SampleDelay)
+        {
+            SampleQuery = Query;
+            SampleTarget = SampleName;
+            Sampler = CreateThread(NULL, 0, DelayedSampling, NULL, 0, NULL);
+        }
         if (StopFile)
         {
             DWORD WaitStarted = GetTickCount();
@@ -802,6 +899,11 @@ int wmain(int argc, WCHAR **argv)
     if (ProbeStop) SetEvent(ProbeStop);
     QueryPerformanceCounter(&End);
     TickAfter = GetTickCount();
+    if (Sampler)
+    {
+        WaitForSingleObject(Sampler, INFINITE);
+        CloseHandle(Sampler);
+    }
     if (Sampling) StopSampling();
     Query(8, After, sizeof(After), NULL);
     Query(23, IrqAfter, sizeof(IrqAfter), NULL);
