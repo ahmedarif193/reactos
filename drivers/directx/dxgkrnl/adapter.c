@@ -5266,12 +5266,6 @@ DxgkpPowerFStateWorker(
     {
         (VOID)DxgkpDrainPowerComponentFStates(Adapter);
 
-        /*
-         * Signal before releasing the queue slot.  A request that arrives
-         * after the release resets this event itself, so a drain waiter never
-         * observes a stale signalled state.
-         */
-        KeSetEvent(&Adapter->PowerFStateDrainedEvent, IO_NO_INCREMENT, FALSE);
         InterlockedExchange(&Adapter->PowerFStateWorkQueued, 0);
         KeMemoryBarrier();
 
@@ -5279,11 +5273,12 @@ DxgkpPowerFStateWorker(
          * release above is still recorded; take it over rather than leaving
          * the component stranded in its old F-state. */
         if (!DxgkpPowerComponentFStatePending(Adapter))
-            return;
+            break;
         if (InterlockedCompareExchange(&Adapter->PowerFStateWorkQueued, 1, 0) != 0)
-            return;
-        KeClearEvent(&Adapter->PowerFStateDrainedEvent);
+            break;
     }
+
+    ExReleaseRundownProtection(&Adapter->PowerFStateRundownRef);
 }
 
 static VOID
@@ -5298,12 +5293,14 @@ DxgkpRequestPowerComponentFState(
         return;
     }
 
+    if (!ExAcquireRundownProtection(&Adapter->PowerFStateRundownRef))
+        return;
     InterlockedExchange(&Adapter->PowerComponents[Component].RequestedFState, (LONG)FState);
+    /* A queued worker owns the reference until its last table access. */
     if (InterlockedCompareExchange(&Adapter->PowerFStateWorkQueued, 1, 0) == 0)
-    {
-        KeClearEvent(&Adapter->PowerFStateDrainedEvent);
         ExQueueWorkItem(&Adapter->PowerFStateWorkItem, DelayedWorkQueue);
-    }
+    else
+        ExReleaseRundownProtection(&Adapter->PowerFStateRundownRef);
 }
 
 /* --- Power Framework callbacks ---------------------------------------- */
@@ -5696,10 +5693,9 @@ DxgkpStopRuntimePowerManagement(
     KeMemoryBarrier();
     PoFxUnregisterDevice(Handle);
 
-    /* No new deferred transition can be requested now, so waiting once is
-     * enough to know the worker is finished with the component table. */
-    KeWaitForSingleObject(&Adapter->PowerFStateDrainedEvent,
-                          Executive, KernelMode, FALSE, NULL);
+    /* No new deferred transition can be requested now. The rundown also
+     * covers a worker's pending-request check after it released its slot. */
+    ExWaitForRundownProtectionRelease(&Adapter->PowerFStateRundownRef);
 
     if (Adapter->PowerComponents != NULL)
     {
@@ -5707,6 +5703,7 @@ DxgkpStopRuntimePowerManagement(
         Adapter->PowerComponents = NULL;
     }
     Adapter->PowerComponentCount = 0;
+    ExReInitializeRundownProtection(&Adapter->PowerFStateRundownRef);
 }
 
 /*
@@ -15444,7 +15441,7 @@ DxgkpAddDeviceRegistered(
     Adapter->SubmitDmaRetireActiveWorkers = 0;
     ExInitializeWorkItem(&Adapter->SubmitDmaRetireWorkItem, DxgkpRetireSubmittedDmaBuffersWorker, Adapter);
     ExInitializeWorkItem(&Adapter->PowerFStateWorkItem, DxgkpPowerFStateWorker, Adapter);
-    KeInitializeEvent(&Adapter->PowerFStateDrainedEvent, NotificationEvent, TRUE);
+    ExInitializeRundownProtection(&Adapter->PowerFStateRundownRef);
     Adapter->SubmitDmaStopping = 1;
     Adapter->DmaBufferCacheStopping = 0;
     Adapter->DmaBufferCacheCount = 0;

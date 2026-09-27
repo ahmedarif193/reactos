@@ -626,9 +626,9 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               PowerManagementStarted;
     WORK_QUEUE_ITEM             PowerFStateWorkItem;
     volatile LONG               PowerFStateWorkQueued;
-    /* Signalled while no deferred F-state transition is queued or running,
-     * so teardown can free the component table without racing the worker. */
-    KEVENT                      PowerFStateDrainedEvent;
+    /* Held by a queued F-state worker until its final component-table access,
+     * which follows the release of the queue slot. */
+    EX_RUNDOWN_REF              PowerFStateRundownRef;
 
     /*
      * Full registry path of the display adapter's PnP software key
