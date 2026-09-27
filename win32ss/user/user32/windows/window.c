@@ -192,6 +192,8 @@ User32CreateWindowEx(DWORD dwExStyle,
     DbgPrint("[window] User32CreateWindowEx style %d, exstyle %d, parent %d\n", dwStyle, dwExStyle, hWndParent);
 #endif
 
+    LoadUserApiHook();
+
     dwFlagsVer = RtlGetExpWinVer( hInstance ? hInstance : GetModuleHandleW(NULL) );
     TRACE("Module Version %x\n",dwFlagsVer);
 

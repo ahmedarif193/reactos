@@ -151,8 +151,6 @@ GetSystemMetrics(int nIndex)
       return RealGetSystemMetrics(nIndex);
    }
 
-   LoadUserApiHook();
-
    Hook = BeginIfHookedUserApiHook();
 
    /* Bypass SEH and go direct. */
@@ -380,8 +378,6 @@ SystemParametersInfoA(UINT uiAction,
 {
    BOOL Hook, Ret = FALSE;
 
-   LoadUserApiHook();
-
    Hook = BeginIfHookedUserApiHook();
 
    /* Bypass SEH and go direct. */
@@ -412,8 +408,6 @@ SystemParametersInfoW(UINT uiAction,
 		      UINT fWinIni)
 {
    BOOL Hook, Ret = FALSE;
-
-   LoadUserApiHook();
 
    Hook = BeginIfHookedUserApiHook();
 
