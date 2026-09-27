@@ -122,7 +122,7 @@ list(APPEND GEN_NLS
     c_950)
 
 set(NLS_DESTINATIONS reactos/system32)
-if(ARCH STREQUAL "amd64" AND ENABLE_WOW64)
+if(ENABLE_WOW64)
     list(APPEND NLS_DESTINATIONS reactos/SysWOW64)
 endif()
 
