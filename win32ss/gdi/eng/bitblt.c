@@ -231,7 +231,8 @@ CallDibBitBlt(SURFOBJ* OutputObj,
     SURFOBJ *psoTemp = NULL;
 
     if ((InputObj == OutputObj) &&
-        ((OutputObj->iBitmapFormat == BMF_1BPP) || (OutputObj->iBitmapFormat == BMF_4BPP)))
+        ((OutputObj->iBitmapFormat == BMF_1BPP) || (OutputObj->iBitmapFormat == BMF_4BPP) ||
+         (OutputObj->iBitmapFormat == BMF_24BPP)))
     {
         RECTL rclDst = *OutputRect, rclSrc, rclOverlap;
 

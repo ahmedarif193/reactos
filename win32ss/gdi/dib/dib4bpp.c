@@ -19,7 +19,7 @@ VOID
 DIB_4BPP_PutPixel(SURFOBJ *SurfObj, LONG x, LONG y, ULONG c)
 {
    PBYTE addr = (PBYTE)SurfObj->pvScan0 + (x>>1) + y * SurfObj->lDelta;
-   *addr = (*addr & notmask[x&1]) | (BYTE)(c << ((1-(x&1))<<2));
+   *addr = (*addr & notmask[x&1]) | (BYTE)((c & 0x0f) << ((1-(x&1))<<2));
 }
 
 ULONG
@@ -374,7 +374,6 @@ DIB_4BPP_BitBlt(PBLTINFO BltInfo)
   BOOLEAN UsesSource;
   BOOLEAN UsesPattern;
   PULONG DestBits;
-  LONG RoundedRight;
   static const ULONG ExpandSolidColor[16] =
   {
     0x00000000 /* 0 */,
@@ -399,8 +398,6 @@ DIB_4BPP_BitBlt(PBLTINFO BltInfo)
   UsesPattern = ROP4_USES_PATTERN(BltInfo->Rop4);
 
   SourceY = BltInfo->SourcePoint.y;
-  RoundedRight = BltInfo->DestRect.right -
-    ((BltInfo->DestRect.right - BltInfo->DestRect.left) & 0x7);
 
   if (UsesPattern)
   {
@@ -446,7 +443,7 @@ DIB_4BPP_BitBlt(PBLTINFO BltInfo)
       DestBits = (PULONG)((ULONG_PTR)DestBits + 1);
     }
 
-    for (; DestX < RoundedRight; DestX += 8, SourceX += 8, DestBits++)
+    for (; DestX + 8 <= BltInfo->DestRect.right; DestX += 8, SourceX += 8, DestBits++)
     {
       Dest = *DestBits;
       if (UsesSource)
@@ -463,14 +460,14 @@ DIB_4BPP_BitBlt(PBLTINFO BltInfo)
       }
       if (BltInfo->PatternSurface)
       {
-        Pattern = DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX + BltInfo->BrushOrigin.x + 1) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY);
-        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX + BltInfo->BrushOrigin.x + 0) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY) << 4;
-        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX + BltInfo->BrushOrigin.x + 3) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY) << 8;
-        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX + BltInfo->BrushOrigin.x + 2) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY) << 12;
-        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX + BltInfo->BrushOrigin.x + 5) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY) << 16;
-        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX + BltInfo->BrushOrigin.x + 4) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY) << 20;
-        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX + BltInfo->BrushOrigin.x + 7) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY) << 24;
-        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX + BltInfo->BrushOrigin.x + 6) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY) << 28;
+        Pattern = DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX + 1 - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY);
+        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX + 0 - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY) << 4;
+        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX + 3 - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY) << 8;
+        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX + 2 - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY) << 12;
+        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX + 5 - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY) << 16;
+        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX + 4 - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY) << 20;
+        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX + 7 - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY) << 24;
+        Pattern |= DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX + 6 - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY) << 28;
       }
       *DestBits = DIB_DoRop(BltInfo->Rop4, Dest, Source, Pattern);
     }
