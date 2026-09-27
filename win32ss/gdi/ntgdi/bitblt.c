@@ -1259,6 +1259,19 @@ IntPatBlt(
 
     IntLPtoDP(pdc, (LPPOINT)&DestRect, 2);
 
+    if (DestRect.left > DestRect.right)
+    {
+        LONG lTmp = DestRect.left;
+        DestRect.left = DestRect.right + 1;
+        DestRect.right = lTmp + 1;
+    }
+    if (DestRect.top > DestRect.bottom)
+    {
+        LONG lTmp = DestRect.top;
+        DestRect.top = DestRect.bottom + 1;
+        DestRect.bottom = lTmp + 1;
+    }
+
     DestRect.left   += pdc->ptlDCOrig.x;
     DestRect.top    += pdc->ptlDCOrig.y;
     DestRect.right  += pdc->ptlDCOrig.x;

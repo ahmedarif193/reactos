@@ -736,6 +736,7 @@ NtGdiOffsetWindowOrgEx(
 
     pdcattr->ptlWindowOrg.x += XOffset;
     pdcattr->ptlWindowOrg.y += YOffset;
+    pdcattr->lWindowOrgx += XOffset;
     pdcattr->flXform |= PAGE_XLATE_CHANGED | WORLD_XFORM_CHANGED | DEVICE_TO_WORLD_INVALID;
 
     DC_UnlockDc(dc);
@@ -983,10 +984,20 @@ IntGdiSetMapMode(
     iPrevMapMode = pdcattr->iMapMode;
     pdcattr->iMapMode = MapMode;
 
+    if (pdcattr->dwLayout & LAYOUT_RTL)
+    {
+        if (MapMode != MM_ANISOTROPIC)
+            pdcattr->szlWindowExt.cx = -pdcattr->szlWindowExt.cx;
+        pdcattr->iMapMode = MM_ANISOTROPIC;
+    }
+
     /* Update xform flags */
     pdcattr->flXform = flXform | (PAGE_XLATE_CHANGED | PAGE_EXTENTS_CHANGED |
                                   INVALIDATE_ATTRIBUTES | DEVICE_TO_PAGE_INVALID |
                                   WORLD_XFORM_CHANGED | DEVICE_TO_WORLD_INVALID);
+
+    if (pdcattr->dwLayout & LAYOUT_RTL)
+        IntMirrorWindowOrg(dc);
 
     return iPrevMapMode;
 }
@@ -1121,6 +1132,7 @@ NtGdiSetWindowOrgEx(
 
     pdcattr->ptlWindowOrg.x = X;
     pdcattr->ptlWindowOrg.y = Y;
+    pdcattr->lWindowOrgx = X;
     pdcattr->flXform |= PAGE_XLATE_CHANGED | WORLD_XFORM_CHANGED | DEVICE_TO_WORLD_INVALID;
 
     DC_UnlockDc(dc);
@@ -1261,7 +1273,10 @@ NtGdiGetDeviceWidth(
         EngSetLastError(ERROR_INVALID_HANDLE);
         return 0;
     }
-    Ret = dc->erclWindow.right - dc->erclWindow.left;
+    if (dc->dclevel.pSurface)
+        Ret = dc->dclevel.pSurface->SurfObj.sizlBitmap.cx;
+    else
+        Ret = dc->erclWindow.right - dc->erclWindow.left;
     DC_UnlockDc(dc);
     return Ret;
 }

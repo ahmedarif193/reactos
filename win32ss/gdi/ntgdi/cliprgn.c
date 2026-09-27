@@ -394,6 +394,13 @@ GdiGetClipBox(
         iComplexity = REGION_GetRgnBox(pdc->prgnVis, prc);
     }
 
+    if (pdc->pdcattr->dwLayout & LAYOUT_RTL)
+    {
+        LONG lTemp = prc->left;
+        prc->left = prc->right - 1;
+        prc->right = lTemp - 1;
+    }
+
     /* Unlock the DC */
     DC_UnlockDc(pdc);
 
@@ -464,6 +471,12 @@ NtGdiExcludeClipRect(
     rect.bottom = yBottom;
     RECTL_vMakeWellOrdered(&rect);
     IntLPtoDP(pdc, (LPPOINT)&rect, 2);
+    if (pdc->pdcattr->dwLayout & LAYOUT_RTL)
+    {
+        LONG lTemp = rect.left;
+        rect.left = rect.right + 1;
+        rect.right = lTemp + 1;
+    }
 
     prgn = IntSysCreateRectpRgnIndirect(&rect);
     if ( prgn )
@@ -515,6 +528,12 @@ NtGdiIntersectClipRect(
     rect.bottom = yBottom;
     RECTL_vMakeWellOrdered(&rect);
     IntLPtoDP(pdc, (LPPOINT)&rect, 2);
+    if (pdc->pdcattr->dwLayout & LAYOUT_RTL)
+    {
+        LONG lTemp = rect.left;
+        rect.left = rect.right + 1;
+        rect.right = lTemp + 1;
+    }
 
     prgn = IntSysCreateRectpRgnIndirect(&rect);
     if ( prgn )

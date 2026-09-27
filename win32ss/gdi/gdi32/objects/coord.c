@@ -467,7 +467,7 @@ GetWindowOrgEx(
     }
 
     /* Get the current window origin */
-    lpPoint->x = pdcattr->ptlWindowOrg.x;
+    lpPoint->x = pdcattr->lWindowOrgx;
     lpPoint->y = pdcattr->ptlWindowOrg.y;
 
     return TRUE;
@@ -565,11 +565,11 @@ SetWindowOrgEx(
 
     if (lpPoint)
     {
-        lpPoint->x = pdcattr->ptlWindowOrg.x;
+        lpPoint->x = pdcattr->lWindowOrgx;
         lpPoint->y = pdcattr->ptlWindowOrg.y;
     }
 
-    if ((pdcattr->ptlWindowOrg.x == X) && (pdcattr->ptlWindowOrg.y == Y))
+    if ((pdcattr->lWindowOrgx == X) && (pdcattr->ptlWindowOrg.y == Y))
         return TRUE;
 
     if (NtCurrentTeb()->GdiTebBatch.HDC == hdc)
@@ -946,7 +946,7 @@ OffsetWindowOrgEx(
     if ( lpPoint )
     {
         *lpPoint   = pdcattr->ptlWindowOrg;
-        //lpPoint->x = pdcattr->lWindowOrgx;
+        lpPoint->x = pdcattr->lWindowOrgx;
     }
 
     if ( nXOffset || nYOffset != nXOffset )

@@ -772,10 +772,9 @@ GetClipRgn(
 
     Ret = NtGdiGetRandomRgn(hdc, hrgn, CLIPRGN);
 
-//  if (Ret)
-//  {
-//     if(GetLayout(hdc) & LAYOUT_RTL) MirrorRgnDC(hdc,(HRGN)Ret, NULL);
-//  }
+    if ((Ret > 0) && (GetLayout(hdc) & LAYOUT_RTL))
+        MirrorRgnDC(hdc, hrgn, NULL);
+
     return Ret;
 }
 

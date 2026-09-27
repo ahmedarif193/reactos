@@ -668,7 +668,17 @@ IntRectangle(PDC dc,
     DestRect.top    = min(TopRect,  BottomRect);
     DestRect.bottom = max(TopRect,  BottomRect);
 
+    if (pdcattr->dwLayout & LAYOUT_RTL)
+    {
+        DestRect.left--;
+        DestRect.right--;
+    }
+
     IntLPtoDP(dc, (LPPOINT)&DestRect, 2);
+    RECTL_vMakeWellOrdered(&DestRect);
+
+    if (DestRect.left == DestRect.right || DestRect.top == DestRect.bottom)
+        return TRUE;
 
     DestRect.left   += dc->ptlDCOrig.x;
     DestRect.right  += dc->ptlDCOrig.x;
