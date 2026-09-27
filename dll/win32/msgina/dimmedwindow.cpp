@@ -256,9 +256,13 @@ HRESULT WINAPI
 ShellDimScreen(void** pUnknown, HWND* hWindow)
 {
     CComObject<CDimmedWindow> *pWindow;
-    HRESULT hr = CComObject<CDimmedWindow>::CreateInstance(&pWindow);
+    HRESULT hr;
     ULONG refcount;
 
+    if (!pUnknown || !hWindow)
+        return E_INVALIDARG;
+
+    hr = CComObject<CDimmedWindow>::CreateInstance(&pWindow);
     pWindow->WaitForInit();
 
     if (!IsWindow(pWindow->Wnd()))
