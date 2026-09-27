@@ -1897,6 +1897,14 @@ CreateRedirectedFile(PIRP Irp,
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
+    if (FileObject->FileName.Length == sizeof(WCHAR) && FileObject->FileName.Buffer[0] == L'\\')
+    {
+        Irp->IoStatus.Status = STATUS_OBJECT_NAME_INVALID;
+        IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+
     DPRINT("Request for opening: %wZ\n", &FileObject->FileName);
 
     Referenced = FALSE;
@@ -2535,6 +2543,11 @@ DriverEntry(PDRIVER_OBJECT DriverObject,
     /* And finish init */
     mupDeviceObject = DeviceObject;
     MupInitializeVcb(DeviceObject->DeviceExtension);
+
+    {
+        UNICODE_STRING UncLink = RTL_CONSTANT_STRING(L"\\DosDevices\\UNC");
+        IoCreateSymbolicLink(&UncLink, &MupString);
+    }
 
     return STATUS_SUCCESS;
 }
