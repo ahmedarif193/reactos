@@ -236,14 +236,20 @@ RcddDisablePDEV(
    }
 
    RcddDisableHardwarePointer(ppdev);
-   ASSERT(IsListEmpty(&ppdev->RedirectionBitmapList));
-   ASSERT(ppdev->RedirectionBitmapCount == 0);
+   RcddDeleteDisplayLocks(ppdev);
    if (ppdev->RedirectionLock != NULL)
    {
+      EngAcquireSemaphore(ppdev->RedirectionLock);
+      if (ppdev->RedirectionBitmapCount != 0)
+      {
+         ppdev->RedirectionPdevRetired = TRUE;
+         EngReleaseSemaphore(ppdev->RedirectionLock);
+         return;
+      }
+      EngReleaseSemaphore(ppdev->RedirectionLock);
       EngDeleteSemaphore(ppdev->RedirectionLock);
       ppdev->RedirectionLock = NULL;
    }
-   RcddDeleteDisplayLocks(ppdev);
 
    EngFreeMem(dhpdev);
 }

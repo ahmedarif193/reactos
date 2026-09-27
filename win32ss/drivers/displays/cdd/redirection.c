@@ -153,30 +153,43 @@ RcddDeleteDeviceBitmapEx(
 {
    PRCDD_BITMAP Bitmap = (PRCDD_BITMAP)dhsurf;
    DXGK_REDIRECTION_SURFACE_DESTROY Destroy;
+   PRCDD_PDEV Pdev;
+   BOOL FreePdev = FALSE;
    ULONG BytesReturned;
 
    if (Bitmap == NULL)
       return;
 
-   EngAcquireSemaphore(Bitmap->Pdev->RedirectionLock);
+   Pdev = Bitmap->Pdev;
+   EngAcquireSemaphore(Pdev->RedirectionLock);
    if (!IsListEmpty(&Bitmap->ListEntry))
    {
       RemoveEntryList(&Bitmap->ListEntry);
       InitializeListHead(&Bitmap->ListEntry);
-      ASSERT(Bitmap->Pdev->RedirectionBitmapCount != 0);
-      if (Bitmap->Pdev->RedirectionBitmapCount != 0)
-         Bitmap->Pdev->RedirectionBitmapCount--;
+      ASSERT(Pdev->RedirectionBitmapCount != 0);
+      if (Pdev->RedirectionBitmapCount != 0)
+      {
+         Pdev->RedirectionBitmapCount--;
+         FreePdev = Pdev->RedirectionPdevRetired &&
+                    Pdev->RedirectionBitmapCount == 0;
+      }
    }
-   EngReleaseSemaphore(Bitmap->Pdev->RedirectionLock);
+   EngReleaseSemaphore(Pdev->RedirectionLock);
 
    RtlZeroMemory(&Destroy, sizeof(Destroy));
    Destroy.StructSize = sizeof(Destroy);
    Destroy.AllocationHandle = Bitmap->AllocationHandle;
    Destroy.ResourceHandle = Bitmap->ResourceHandle;
    Destroy.GlobalShare = Bitmap->GlobalShare;
-   (VOID)EngDeviceIoControl(Bitmap->Pdev->hDriver,
+   (VOID)EngDeviceIoControl(Pdev->hDriver,
                             IOCTL_VIDEO_DXGK_DESTROY_REDIRECTION_SURFACE,
                             &Destroy, sizeof(Destroy),
                             NULL, 0, &BytesReturned);
    EngFreeMem(Bitmap);
+
+   if (FreePdev)
+   {
+      EngDeleteSemaphore(Pdev->RedirectionLock);
+      EngFreeMem(Pdev);
+   }
 }

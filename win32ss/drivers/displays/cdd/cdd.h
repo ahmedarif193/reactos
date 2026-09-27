@@ -85,6 +85,7 @@ typedef struct _RCDD_PDEV
    HSEMAPHORE RedirectionLock;
    LIST_ENTRY RedirectionBitmapList;
    ULONG RedirectionBitmapCount;
+   BOOL RedirectionPdevRetired;
 
    /* DWM cursor state (driven by DrvEscape, see escape.c) */
    BOOL CursorSuppressed;      /* Compositor owns the cursor                  */
