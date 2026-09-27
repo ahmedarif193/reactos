@@ -283,6 +283,11 @@ KiSystemService(
                         goto ServiceDispatch;
                     }
                 }
+                else
+                {
+                    TrapFrame->X0 = ConvertStatus;
+                    return;
+                }
             }
         }
 
