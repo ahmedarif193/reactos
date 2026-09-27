@@ -29,6 +29,7 @@
   @ cdecl FT_Get_Char_Index ()
   @ cdecl FT_Get_Charmap_Index ()
   @ cdecl FT_Get_First_Char ()
+  @ cdecl FT_Get_Gasp ()
   @ cdecl FT_Get_Glyph ()
   @ cdecl FT_Get_Glyph_Name ()
   @ cdecl FT_Get_Kerning ()

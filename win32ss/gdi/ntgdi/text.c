@@ -354,6 +354,11 @@ NtGdiGetTextExtentExW(
         Size.cx = 0;
         Size.cy = 0;
         Status = MmCopyToCaller(UnsafeSize, &Size, sizeof(SIZE));
+        if (NT_SUCCESS(Status) && UnsafeFit)
+        {
+            Fit = 0;
+            Status = MmCopyToCaller(UnsafeFit, &Fit, sizeof(INT));
+        }
         if (! NT_SUCCESS(Status))
         {
             SetLastNtError(Status);

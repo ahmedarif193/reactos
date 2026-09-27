@@ -994,7 +994,7 @@ NtGdiGetGlyphOutline(
      ExFreePoolWithTag(pvBuf, GDITAG_TEXT);
   }
 
-  if (pgm)
+  if (pgm && (Ret != GDI_ERROR))
   {
      _SEH2_TRY
      {
@@ -1110,6 +1110,8 @@ NtGdiGetOutlineTextMetricsInternalW(
   ULONG Size;
   OUTLINETEXTMETRICW *potm;
   NTSTATUS Status = STATUS_SUCCESS;
+  FONT_DC_SCALE Scale;
+  LONG lfWidth, lfHeight;
 
   dc = DC_LockDc(hDC);
   if (!dc)
@@ -1120,6 +1122,7 @@ NtGdiGetOutlineTextMetricsInternalW(
   pdcattr = dc->pdcattr;
   hFont = pdcattr->hlfntNew;
   TextObj = RealizeFontInit(hFont);
+  IntFontInitDcScale(dc, &Scale);
   DC_UnlockDc(dc);
   if (!TextObj)
   {
@@ -1132,6 +1135,8 @@ NtGdiGetOutlineTextMetricsInternalW(
      TEXTOBJ_UnlockText(TextObj);
      return 0;
   }
+  lfWidth = TextObj->logfont.elfEnumLogfontEx.elfLogFont.lfWidth;
+  lfHeight = TextObj->logfont.elfEnumLogfontEx.elfLogFont.lfHeight;
   TextIntUpdateSize(TextObj, FontGDI, TRUE);
   TEXTOBJ_UnlockText(TextObj);
   Size = IntGetOutlineTextMetrics(FontGDI, 0, NULL, FALSE);
@@ -1148,7 +1153,7 @@ NtGdiGetOutlineTextMetricsInternalW(
       return 0;
   }
   RtlZeroMemory(potm, Size);
-  IntGetOutlineTextMetrics(FontGDI, Size, potm, FALSE);
+  IntGetOutlineTextMetricsScaled(FontGDI, &Scale, lfWidth, lfHeight, Size, potm);
 
   _SEH2_TRY
   {
