@@ -160,16 +160,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
         ICIF_QUERY | ICIF_SET | ICIF_SIZE_VARIABLE
     ),
 
-    /* ProcessUserModeIOPL is only implemented in x86 */
-#if defined (_X86_)
+    /* ProcessUserModeIOPL */
     IQS_NO_TYPE_LENGTH
     (
         ULONG,
-        ICIF_SET
+        ICIF_SET | ICIF_SET_SIZE_VARIABLE
     ),
-#else
-    IQS_NONE,
-#endif
 
     /* ProcessEnableAlignmentFaultFixup */
     IQS
