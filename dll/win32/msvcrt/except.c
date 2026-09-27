@@ -1157,6 +1157,16 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
 
                 handler = (void *)(base + table->ScopeRecord[i].HandlerAddress);
                 TRACE_(unwind)( "scope %u calling filter %p ptrs %p frame %p\n", i, handler, &ptrs, frame );
+#ifdef __REACTOS__
+                {
+                    LONG filter_result = __C_ExecuteExceptionFilter( &ptrs, frame, handler, dispatch->NonVolatileRegisters );
+
+                    if (filter_result < 0)
+                        return ExceptionContinueExecution;
+                    if (!filter_result)
+                        continue;
+                }
+#else
                 switch (__C_ExecuteExceptionFilter( &ptrs, frame, handler, dispatch->NonVolatileRegisters ))
                 {
                 case EXCEPTION_EXECUTE_HANDLER:
@@ -1166,6 +1176,7 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
                 case EXCEPTION_CONTINUE_EXECUTION:
                     return ExceptionContinueExecution;
                 }
+#endif
             }
             /* Call the destructor if we're handling a C++ exception. */
             if (is_cxx_exception(rec)) __DestructExceptionObject( rec );
@@ -1235,6 +1246,16 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
 
                 handler = (void *)(base + table->ScopeRecord[i].HandlerAddress);
                 TRACE_(unwind)( "scope %u calling filter %p ptrs %p frame %p\n", i, handler, &ptrs, frame );
+#ifdef __REACTOS__
+                {
+                    LONG filter_result = __C_ExecuteExceptionFilter( &ptrs, frame, handler, dispatch->NonVolatileRegisters );
+
+                    if (filter_result < 0)
+                        return ExceptionContinueExecution;
+                    if (!filter_result)
+                        continue;
+                }
+#else
                 switch (__C_ExecuteExceptionFilter( &ptrs, frame, handler, dispatch->NonVolatileRegisters ))
                 {
                 case EXCEPTION_EXECUTE_HANDLER:
@@ -1244,6 +1265,7 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
                 case EXCEPTION_CONTINUE_EXECUTION:
                     return ExceptionContinueExecution;
                 }
+#endif
             }
             /* Call the destructor if we're handling a C++ exception. */
             if (is_cxx_exception( rec )) __DestructExceptionObject( rec );
@@ -1315,6 +1337,16 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
                 PEXCEPTION_FILTER filter = (void *)(base + table->ScopeRecord[i].HandlerAddress);
 
                 TRACE_(unwind)( "scope %u calling filter %p ptrs %p frame %p\n", i, filter, &ptrs, frame );
+#ifdef __REACTOS__
+                {
+                    LONG filter_result = filter( &ptrs, frame );
+
+                    if (filter_result < 0)
+                        return ExceptionContinueExecution;
+                    if (!filter_result)
+                        continue;
+                }
+#else
                 switch (filter( &ptrs, frame ))
                 {
                 case EXCEPTION_EXECUTE_HANDLER:
@@ -1324,6 +1356,7 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
                 case EXCEPTION_CONTINUE_EXECUTION:
                     return ExceptionContinueExecution;
                 }
+#endif
             }
             /* Call the destructor if we're handling a C++ exception. */
             if (is_cxx_exception( rec )) __DestructExceptionObject( rec );
