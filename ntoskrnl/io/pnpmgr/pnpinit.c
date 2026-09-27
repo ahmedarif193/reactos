@@ -223,6 +223,11 @@ PipGetDriverTagPriority(IN HANDLE ServiceHandle)
         Group.MaximumLength = (USHORT)KeyValueInformation->DataLength;
         Group.Buffer = Buffer;
     }
+    else
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Quickie;
+    }
 
     /* Now read the tag */
     Status = IopGetRegistryValue(ServiceHandle, L"Tag", &KeyValueInformationTag);

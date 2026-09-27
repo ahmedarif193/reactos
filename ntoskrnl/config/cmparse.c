@@ -1713,6 +1713,8 @@ CmpBuildHashStackAndLookupCache(
     ULONG SubkeysInTotal, RemainingSubkeysInTotal, MatchRemainingSubkeys;
     CM_HASH_CACHE_STACK HashCacheStack[CMP_SUBKEY_LEVELS_DEPTH_LIMIT];
 
+    *LockedKcbs = NULL;
+
     /* Make sure it's not a dead KCB */
     ASSERT((*Kcb)->RefCount > 0);
 

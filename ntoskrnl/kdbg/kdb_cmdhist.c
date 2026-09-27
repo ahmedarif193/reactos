@@ -118,7 +118,7 @@ KdbpGetPrevHistoryEntry(
     {
         LONG i = *NextIndex - 1;
         if (i < 0)
-            *NextIndex = RTL_NUMBER_OF(KdbCommandHistory) - 1;
+            i = RTL_NUMBER_OF(KdbCommandHistory) - 1;
 
         if (KdbCommandHistory[i] && i != KdbCommandHistoryIndex)
             *NextIndex = i;
