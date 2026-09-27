@@ -68,7 +68,7 @@ RtlFlsAlloc(
     RtlAcquirePebLock();
     FlsData = NtCurrentTeb()->FlsData;
 
-    if (!Peb->FlsCallback && !(Peb->FlsCallback = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, RTL_FLS_MAXIMUM_AVAILABLE * sizeof(PVOID))))
+    if (!Peb->FlsCallback && !(Peb->FlsCallback = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, RTL_FLS_MAXIMUM_AVAILABLE * 2 * sizeof(PVOID))))
     {
         Status = STATUS_NO_MEMORY;
     }
@@ -93,7 +93,7 @@ RtlFlsAlloc(
             }
 
             FlsData->Data[FlsIndex] = NULL;
-            Peb->FlsCallback[FlsIndex] = Callback;
+            Peb->FlsCallback[2 * FlsIndex] = Callback;
             if (FlsIndex > Peb->FlsHighIndex)
                 Peb->FlsHighIndex = FlsIndex;
             *Index = FlsIndex;
@@ -121,7 +121,7 @@ RtlFlsFree(
     {
         if (RtlAreBitsSet(RtlpGetFlsBitmap(Peb), Index, 1))
         {
-            PFLS_CALLBACK_FUNCTION Callback = Peb->FlsCallback[Index];
+            PFLS_CALLBACK_FUNCTION Callback = Peb->FlsCallback[2 * Index];
             PLIST_ENTRY Entry;
 
             for (Entry = Peb->FlsListHead.Flink; Entry != &Peb->FlsListHead; Entry = Entry->Flink)
@@ -135,7 +135,7 @@ RtlFlsFree(
                     FlsData->Data[Index] = NULL;
                 }
             }
-            Peb->FlsCallback[Index] = NULL;
+            Peb->FlsCallback[2 * Index] = NULL;
             RtlClearBits(RtlpGetFlsBitmap(Peb), Index, 1);
         }
         else

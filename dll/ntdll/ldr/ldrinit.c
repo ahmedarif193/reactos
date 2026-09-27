@@ -1340,7 +1340,7 @@ LdrShutdownThread(VOID)
 
         for (n = 1; n <= FlsHighIndex; ++n)
         {
-            lpCallback = NtCurrentPeb()->FlsCallback[n];
+            lpCallback = NtCurrentPeb()->FlsCallback[2 * n];
             if (lpCallback && pFlsData->Data[n])
             {
                 RtlpCallFlsCallback(lpCallback, pFlsData->Data[n]);
