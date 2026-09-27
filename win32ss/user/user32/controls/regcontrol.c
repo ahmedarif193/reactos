@@ -269,6 +269,18 @@ BOOL WINAPI RegisterClientPFN(VOID)
   pfnClientWorker.pfnGhostWndProc     = GhostWndProc_common;
   pfnClientWorker.pfnCtfHookProc      = User32DefWindowProc;
 
+  {
+      PFNCLIENT PublishedA = pfnClientA, PublishedW = pfnClientW;
+
+      PublishedA.pfnTitleWndProc = pfnClientA.pfnMessageWindowProc;
+      PublishedA.pfnMessageWindowProc = pfnClientA.pfnTitleWndProc;
+      PublishedW.pfnTitleWndProc = pfnClientW.pfnMessageWindowProc;
+      PublishedW.pfnMessageWindowProc = pfnClientW.pfnTitleWndProc;
+      RtlInitializeNtUserPfn(&PublishedA, sizeof(PublishedA),
+                             &PublishedW, sizeof(PublishedW),
+                             &pfnClientWorker, sizeof(pfnClientWorker));
+  }
+
   Status = NtUserInitializeClientPfnArrays( &pfnClientA,
                                             &pfnClientW,
                                             &pfnClientWorker,
