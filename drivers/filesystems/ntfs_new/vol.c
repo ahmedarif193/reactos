@@ -448,6 +448,18 @@ NtfsMissingNameMatches(_In_ PNtfsMissingName Entry,
     return TRUE;
 }
 
+/* Directory opens may keep one trailing separator; both spellings name the
+ * same file, so they must share one cache entry. */
+static
+USHORT
+NtfsMissingNameLength(_In_reads_(Length) PCWSTR Name,
+                      _In_ USHORT Length)
+{
+    if (Length > 1 && Name[Length - 1] == L'\\')
+        return Length - 1;
+    return Length;
+}
+
 /*
  * Repeated lookups of a name that is not there would otherwise walk the
  * directory index every time, so remember the misses.
@@ -464,6 +476,7 @@ NtfsIsNameKnownMissing(_In_ PVolumeContextBlock VolCB,
     if (!VolCB || !Name || !Length)
         return FALSE;
 
+    Length = NtfsMissingNameLength(Name, Length);
     Hash = NtfsHashName(Name, Length);
     ExAcquireFastMutex(&VolCB->MissingNameMutex);
     for (Entry = VolCB->MissingNameHash[
@@ -500,6 +513,7 @@ NtfsRecordNameMissing(_In_ PVolumeContextBlock VolCB,
     if (!VolCB || !Name || !Length)
         return;
 
+    Length = NtfsMissingNameLength(Name, Length);
     Missing = (PNtfsMissingName)ExAllocatePoolUninitialized(
         NonPagedPool,
         FIELD_OFFSET(NtfsMissingName, Name) + Length * sizeof(WCHAR),
@@ -559,6 +573,7 @@ NtfsForgetMissingName(_In_ PVolumeContextBlock VolCB,
     if (!VolCB || !Name || !Length)
         return;
 
+    Length = NtfsMissingNameLength(Name, Length);
     Hash = NtfsHashName(Name, Length);
     ExAcquireFastMutex(&VolCB->MissingNameMutex);
     for (Entry = VolCB->MissingNameHash[
