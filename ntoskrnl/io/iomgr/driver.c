@@ -935,13 +935,13 @@ IopInitializeDriverModuleImpl(
                 }
                 else
                 {
-                    ULONG registryPathSize = sizeof(*RegistryPath) + nameInfo->NameLength + sizeof(WCHAR);
+                    ULONG registryPathSize = ROUND_TO_PAGES(sizeof(*RegistryPath) + nameInfo->NameLength + sizeof(WCHAR));
 
                     RegistryPath = ExAllocatePoolWithTag(NonPagedPool, registryPathSize, TAG_IO);
                     if (RegistryPath)
                     {
                         RegistryPath->Length = (USHORT)nameInfo->NameLength;
-                        RegistryPath->MaximumLength = RegistryPath->Length + sizeof(WCHAR);
+                        RegistryPath->MaximumLength = RegistryPath->Length;
                         RegistryPath->Buffer = (PWCHAR)(RegistryPath + 1);
                         RtlCopyMemory(RegistryPath->Buffer, nameInfo->Name, RegistryPath->Length);
                         /* Drivers also use Buffer with NUL-terminated string APIs. */
