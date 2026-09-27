@@ -226,6 +226,62 @@ NTSTATUS WINAPI wow64_NtLoadDriver( UINT *args )
 }
 
 
+#ifdef __REACTOS__
+typedef struct
+{
+    ULONG Version;
+    ULONG Flags;
+    union
+    {
+        struct
+        {
+            UNICODE_STRING ResourceFileName;
+            USHORT ResourceReasonId;
+            ULONG StringCount;
+            UNICODE_STRING *ReasonStrings;
+        } Detailed;
+        UNICODE_STRING SimpleString;
+    };
+} POWER_REQUEST_CONTEXT64;
+
+typedef struct
+{
+    ULONG Version;
+    ULONG Flags;
+    union
+    {
+        struct
+        {
+            UNICODE_STRING32 ResourceFileName;
+            USHORT ResourceReasonId;
+            ULONG StringCount;
+            ULONG ReasonStrings;
+        } Detailed;
+        UNICODE_STRING32 SimpleString;
+    };
+} POWER_REQUEST_CONTEXT32;
+
+typedef struct
+{
+    HANDLE PowerRequestHandle;
+    ULONG RequestType;
+    ULONG SetAction;
+    void *Reserved;
+} POWER_REQUEST_ACTION64;
+
+typedef struct
+{
+    ULONG PowerRequestHandle;
+    ULONG RequestType;
+    ULONG SetAction;
+    ULONG Reserved;
+} POWER_REQUEST_ACTION32;
+
+C_ASSERT( sizeof(POWER_REQUEST_CONTEXT32) == 28 );
+C_ASSERT( sizeof(POWER_REQUEST_CONTEXT64) == 40 );
+C_ASSERT( sizeof(POWER_REQUEST_ACTION64) == 24 );
+#endif
+
 /**********************************************************************
  *           wow64_NtPowerInformation
  */
@@ -244,6 +300,57 @@ NTSTATUS WINAPI wow64_NtPowerInformation( UINT *args )
     case SystemExecutionState:   /* ULONG */
     case ProcessorInformation:   /* PROCESSOR_POWER_INFORMATION */
         return NtPowerInformation( level, in_buf, in_len, out_buf, out_len );
+
+#ifdef __REACTOS__
+    case PowerRequestCreate:  /* COUNTED_REASON_CONTEXT in, HANDLE out */
+    {
+        const POWER_REQUEST_CONTEXT32 *ctx32 = in_buf;
+        POWER_REQUEST_CONTEXT64 ctx;
+        HANDLE handle = 0;
+        NTSTATUS status;
+        ULONG i;
+
+        if (!in_buf || in_len != sizeof(*ctx32) || !out_buf || out_len != sizeof(ULONG)) return STATUS_INVALID_PARAMETER;
+        memset( &ctx, 0, sizeof(ctx) );
+        ctx.Version = ctx32->Version;
+        ctx.Flags = ctx32->Flags;
+        if (ctx32->Flags == POWER_REQUEST_CONTEXT_DETAILED_STRING)
+        {
+            const UNICODE_STRING32 *strings32 = ULongToPtr( ctx32->Detailed.ReasonStrings );
+
+            unicode_str_32to64( &ctx.Detailed.ResourceFileName, &ctx32->Detailed.ResourceFileName );
+            ctx.Detailed.ResourceReasonId = ctx32->Detailed.ResourceReasonId;
+            ctx.Detailed.StringCount = ctx32->Detailed.StringCount;
+            if (ctx.Detailed.StringCount && strings32)
+            {
+                if (ctx.Detailed.StringCount > ~0u / sizeof(UNICODE_STRING)) return STATUS_INVALID_PARAMETER;
+                ctx.Detailed.ReasonStrings = Wow64AllocateTemp( ctx.Detailed.StringCount * sizeof(UNICODE_STRING) );
+                if (!ctx.Detailed.ReasonStrings) return STATUS_NO_MEMORY;
+                for (i = 0; i < ctx.Detailed.StringCount; i++)
+                    unicode_str_32to64( &ctx.Detailed.ReasonStrings[i], &strings32[i] );
+            }
+        }
+        else if (ctx32->Flags == POWER_REQUEST_CONTEXT_SIMPLE_STRING)
+            unicode_str_32to64( &ctx.SimpleString, &ctx32->SimpleString );
+
+        status = NtPowerInformation( level, &ctx, sizeof(ctx), &handle, sizeof(handle) );
+        if (NT_SUCCESS(status)) put_handle( out_buf, handle );
+        return status;
+    }
+
+    case PowerRequestAction:  /* POWER_REQUEST_ACTION */
+    {
+        const POWER_REQUEST_ACTION32 *action32 = in_buf;
+        POWER_REQUEST_ACTION64 action;
+
+        if (!in_buf || in_len != sizeof(*action32) || out_buf || out_len) return STATUS_INVALID_PARAMETER;
+        action.PowerRequestHandle = LongToHandle( action32->PowerRequestHandle );
+        action.RequestType = action32->RequestType;
+        action.SetAction = action32->SetAction;
+        action.Reserved = ULongToPtr( action32->Reserved );
+        return NtPowerInformation( level, &action, sizeof(action), NULL, 0 );
+    }
+#endif
 
     default:
         FIXME( "unsupported level %u\n", level );
@@ -334,6 +441,12 @@ NTSTATUS WINAPI wow64_NtQuerySystemInformation( UINT *args )
     case SystemProcessorBrandString:  /* char[] */
     case SystemProcessorFeaturesInformation:  /* SYSTEM_PROCESSOR_FEATURES_INFORMATION */
     case SystemWineVersionInformation:  /* char[] */
+#ifdef __REACTOS__
+    case SystemFlagsInformation:  /* SYSTEM_FLAGS_INFORMATION */
+    case SystemNumaProcessorMap:  /* SYSTEM_NUMA_INFORMATION */
+    case SystemNumaAvailableMemory:  /* SYSTEM_NUMA_INFORMATION */
+    case SystemBootEnvironmentInformation:  /* SYSTEM_BOOT_ENVIRONMENT_INFORMATION */
+#endif
         return NtQuerySystemInformation( class, ptr, len, retlen );
 
 #ifdef __REACTOS__
