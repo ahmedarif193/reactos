@@ -106,8 +106,16 @@ static MSG_ENTRY CaptionHeight_chain[]={
 static void Test_NonClientMetrics()
 {
     NONCLIENTMETRICS NonClientMetrics;
+    HRESULT (WINAPI *pDwmIsCompositionEnabled)(BOOL *);
+    BOOL Composition = FALSE;
 
     /* WARNING: this test requires themes and dwm to be disabled */
+    pDwmIsCompositionEnabled = (void *)GetProcAddress(LoadLibraryW(L"dwmapi.dll"), "DwmIsCompositionEnabled");
+    if (pDwmIsCompositionEnabled && SUCCEEDED(pDwmIsCompositionEnabled(&Composition)) && Composition)
+    {
+        skip("Non-client metrics message chains require DWM composition to be disabled\n");
+        return;
+    }
 
     SetCursorPos(0,0);
 

@@ -7,12 +7,6 @@
 
 #include "precomp.h"
 
-static USHORT GetWinVersion(VOID)
-{
-    return ((GetVersion() & 0xFF) << 8) |
-        ((GetVersion() >> 8) & 0xFF);
-}
-
 VOID Test_Desktop(VOID)
 {
     WNDCLASSEXW wcex;
@@ -27,14 +21,11 @@ VOID Test_Desktop(VOID)
     ok_hex(wcex.style, 0x8);
     ok(wcex.lpfnWndProc != NULL, "lpfnWndProc shound't be NULL\n");
     ok_int(wcex.cbClsExtra, 0);
-    ok_int(wcex.cbWndExtra, GetWinVersion() <= 0x502 ? 8 : 0);
+    ok_int(wcex.cbWndExtra, 0);
     ok_ptr(wcex.hInstance, GetModuleHandle(NULL));
     ok_ptr(wcex.hIcon, NULL);
     ok(wcex.hCursor != NULL, "hCursor shound't be NULL\n");
-    if (GetWinVersion() > 0x502)
-        ok_ptr(wcex.hbrBackground, (HBRUSH)(ULONG_PTR)2);
-    else
-        ok(wcex.hbrBackground != NULL, "hbrBackground shound't be NULL\n");
+    ok_ptr(wcex.hbrBackground, (HBRUSH)(ULONG_PTR)2);
     ok_ptr(wcex.lpszMenuName, NULL);
     ok_ptr(wcex.lpszClassName, (LPCWSTR)WC_DESKTOP);
     ok_ptr(wcex.hIconSm, NULL);
@@ -103,7 +94,7 @@ VOID Test_SwitchWnd(VOID)
     ok_hex(wcex.style, 0x803);
     ok_ptr(wcex.lpfnWndProc, NULL);
     ok_int(wcex.cbClsExtra, 0);
-    ok_int(wcex.cbWndExtra, GetWinVersion() <= 0x502 ? sizeof(ULONG_PTR) : 16);
+    ok_int(wcex.cbWndExtra, 16);
     ok_ptr(wcex.hInstance, GetModuleHandle(NULL));
     ok_ptr(wcex.hIcon, NULL);
     ok(wcex.hCursor != NULL, "hCursor shound't be NULL\n");

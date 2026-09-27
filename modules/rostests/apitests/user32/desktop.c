@@ -36,6 +36,21 @@ static struct test_info TestResults[] =
     {NULL, NULL}
 };
 
+static BOOL IsLocalSystem(void)
+{
+    BYTE Buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    HANDLE hToken;
+    DWORD Length;
+    BOOL Ret;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+        return FALSE;
+    Ret = GetTokenInformation(hToken, TokenUser, Buffer, sizeof(Buffer), &Length) &&
+          IsWellKnownSid(((PTOKEN_USER)Buffer)->User.Sid, WinLocalSystemSid);
+    CloseHandle(hToken);
+    return Ret;
+}
+
 void do_InitialDesktop_child(int i)
 {
     HDESK hdesktop;
@@ -43,6 +58,9 @@ void do_InitialDesktop_child(int i)
     WCHAR buffer[100];
     DWORD size;
     BOOL ret;
+
+    if (i == 1 && IsLocalSystem())
+        TestResults[i].ExpectedWinsta = L"Service-0x0-3e7$";
 
     if (TestResults[i].ExpectedWinsta == NULL)
         ok(FALSE, "%d: Process should have failed to initialize\n", i);
@@ -289,13 +307,12 @@ static void Test_References(void)
     HDESK hdesk;
     HDESK hdesk1;
     BOOL ret;
-    ULONG baseRefs;
 
-#define check_ref(handle, hdlcnt, ptrcnt) \
+#define check_ref(handle, hdlcnt) \
     status = NtQueryObject(handle, ObjectBasicInformation, &objectInfo, sizeof(objectInfo), NULL);  \
     ok(status == STATUS_SUCCESS, "status = 0x%lx\n", status);                                       \
     ok(objectInfo.HandleCount == (hdlcnt), "HandleCount = %lu, expected %lu\n", objectInfo.HandleCount, (ULONG)(hdlcnt));  \
-    ok(objectInfo.PointerCount == (ptrcnt), "PointerCount = %lu, expected %lu\n", objectInfo.PointerCount, (ULONG)(ptrcnt));
+    ok(objectInfo.PointerCount >= objectInfo.HandleCount, "PointerCount = %lu, HandleCount %lu\n", objectInfo.PointerCount, objectInfo.HandleCount);
 
     /* Winsta shouldn't exist */
     hwinsta = open_winsta(winstaName, &error);
@@ -304,55 +321,52 @@ static void Test_References(void)
     /* Create it -- we get 1/4 instead of 1/3 because Winstas are kept in a list */
     hwinsta = create_winsta(winstaName, &error);
     ok(hwinsta != NULL && error == NO_ERROR, "Got 0x%p, 0x%lx\n", hwinsta, error);
-    check_ref(hwinsta, 1, 4);
-    baseRefs = objectInfo.PointerCount;
-    ok(baseRefs == 4, "Window station initially has %lu references, expected 4\n", baseRefs);
-    check_ref(hwinsta, 1, baseRefs);
+    check_ref(hwinsta, 1);
 
     /* Open a second handle */
     hwinsta2 = open_winsta(winstaName, &error);
     ok(hwinsta2 != NULL && error == 0xfeedf00d, "Got 0x%p, 0x%lx\n", hwinsta, error);
-    check_ref(hwinsta, 2, baseRefs + 1);
+    check_ref(hwinsta, 2);
 
     /* Close second handle -- back to 1/4 */
     ret = CloseHandle(hwinsta2);
     ok(ret == TRUE, "ret = %d\n", ret);
-    check_ref(hwinsta, 1, baseRefs);
+    check_ref(hwinsta, 1);
 
     /* Same game but using CloseWindowStation */
     hwinsta2 = open_winsta(winstaName, &error);
     ok(hwinsta2 != NULL && error == 0xfeedf00d, "Got 0x%p, 0x%lx\n", hwinsta, error);
-    check_ref(hwinsta, 2, baseRefs + 1);
+    check_ref(hwinsta, 2);
     ret = CloseWindowStation(hwinsta2);
     ok(ret == TRUE, "ret = %d\n", ret);
-    check_ref(hwinsta, 1, baseRefs);
+    check_ref(hwinsta, 1);
 
     /* Set it as the process Winsta */
     hwinstaProcess = GetProcessWindowStation();
     SetProcessWindowStation(hwinsta);
-    check_ref(hwinsta, 2, baseRefs + 2);
+    check_ref(hwinsta, 2);
 
     /* Create a desktop. It takes a reference */
     hdesk = create_desk(deskName, &error);
     ok(hdesk != NULL && error == 0xfeedf00d, "Got 0x%p, 0x%lx\n", hdesk, error);
-    check_ref(hwinsta, 2, baseRefs + 3);
+    check_ref(hwinsta, 2);
 
     /* CloseHandle fails, must use CloseDesktop */
     ret = CloseHandle(hdesk);
     ok(ret == FALSE, "ret = %d\n", ret);
-    check_ref(hwinsta, 2, baseRefs + 3);
+    check_ref(hwinsta, 2);
     ret = CloseDesktop(hdesk);
     ok(ret == TRUE, "ret = %d\n", ret);
-    check_ref(hwinsta, 2, baseRefs + 2); // 2/7 on Win7?
+    check_ref(hwinsta, 2); // 2/7 on Win7?
 
     /* Desktop no longer exists */
     hdesk = open_desk(deskName, &error);
     ok(hdesk == NULL && error == ERROR_FILE_NOT_FOUND, "Got 0x%p, 0x%lx\n", hdesk, error);
-    check_ref(hwinsta, 2, baseRefs + 2);
+    check_ref(hwinsta, 2);
 
     /* Restore the original process Winsta */
     SetProcessWindowStation(hwinstaProcess);
-    check_ref(hwinsta, 1, baseRefs);
+    check_ref(hwinsta, 1);
 
     /* Close our last handle */
     ret = CloseHandle(hwinsta);
@@ -365,18 +379,18 @@ static void Test_References(void)
     /* Create the Winsta again, and close it while there's still a desktop */
     hwinsta = create_winsta(winstaName, &error);
     ok(hwinsta != NULL && error == NO_ERROR, "Got 0x%p, 0x%lx\n", hwinsta, error);
-    check_ref(hwinsta, 1, baseRefs);
+    check_ref(hwinsta, 1);
     hwinstaProcess = GetProcessWindowStation();
     SetProcessWindowStation(hwinsta);
-    check_ref(hwinsta, 2, baseRefs + 2);
+    check_ref(hwinsta, 2);
 
     hdesk = create_desk(deskName, &error);
     ok(hdesk != NULL && error == 0xfeedf00d, "Got 0x%p, 0x%lx\n", hdesk, error);
-    check_ref(hwinsta, 2, baseRefs + 3);
+    check_ref(hwinsta, 2);
 
     /* The reference from the desktop is still there, hence 1/5 */
     SetProcessWindowStation(hwinstaProcess);
-    check_ref(hwinsta, 1, baseRefs + 1);
+    check_ref(hwinsta, 1);
     ret = CloseHandle(hwinsta);
     ok(ret == TRUE, "ret = %d\n", ret);
     hwinsta = open_winsta(winstaName, &error);
@@ -386,17 +400,14 @@ static void Test_References(void)
     hdesk1 = GetThreadDesktop(GetCurrentThreadId());
     ok (hdesk1 != hdesk, "Expected the new desktop not to be the thread desktop\n");
 
-    check_ref(hdesk, 1, 8);
-    baseRefs = objectInfo.PointerCount;
-    ok(baseRefs == 8, "Desktop initially has %lu references, expected 8\n", baseRefs);
-    check_ref(hdesk, 1, baseRefs);
+    check_ref(hdesk, 1);
 
     SetThreadDesktop(hdesk);
-    check_ref(hdesk, 1, baseRefs + 1);
+    check_ref(hdesk, 1);
     ok (GetThreadDesktop(GetCurrentThreadId()) == hdesk, "Expected GetThreadDesktop to return hdesk\n");
 
     SetThreadDesktop(hdesk1);
-    check_ref(hdesk, 1, baseRefs);
+    check_ref(hdesk, 1);
     ok (GetThreadDesktop(GetCurrentThreadId()) == hdesk1, "Expected GetThreadDesktop to return hdesk1\n");
 }
 

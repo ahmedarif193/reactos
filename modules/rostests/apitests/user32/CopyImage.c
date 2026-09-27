@@ -7,7 +7,6 @@
  */
 
 #include "precomp.h"
-#include <versionhelpers.h>
 
 #define COPYIMAGE_VALID_FLAGS ( \
     LR_SHARED | LR_COPYFROMRESOURCE | LR_CREATEDIBSECTION | LR_LOADMAP3DCOLORS | 0x800 | \
@@ -42,11 +41,8 @@ static HANDLE CreateTestImage(UINT uType)
 static VOID
 Test_CopyImage_Flags(UINT uType)
 {
-    UINT iBit, uBit, uValidFlags = COPYIMAGE_VALID_FLAGS;
+    UINT iBit, uBit, uValidFlags = COPYIMAGE_VALID_FLAGS | LR_UNKNOWN_0x10000;
     HANDLE hImage, hCopiedImage;
-
-    if (IsWindowsVistaOrGreater())
-        uValidFlags |= LR_UNKNOWN_0x10000;
 
     hImage = CreateTestImage(uType);
     for (iBit = 0; iBit < sizeof(UINT) * CHAR_BIT; ++iBit)
