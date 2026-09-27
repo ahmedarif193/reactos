@@ -2969,6 +2969,30 @@ RtlInitializeContext(
     _In_ PINITIAL_TEB InitialTeb
 );
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlInitializeNtUserPfn(
+    _In_reads_bytes_(ClientASize) const VOID *ClientA,
+    _In_ ULONG ClientASize,
+    _In_reads_bytes_(ClientWSize) const VOID *ClientW,
+    _In_ ULONG ClientWSize,
+    _In_reads_bytes_(ClientWorkerSize) const VOID *ClientWorker,
+    _In_ ULONG ClientWorkerSize);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlRetrieveNtUserPfn(
+    _Out_ const VOID **ClientA,
+    _Out_ const VOID **ClientW,
+    _Out_ const VOID **ClientWorker);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlResetNtUserPfn(VOID);
+
 #ifdef _M_AMD64
 typedef struct _WOW64_CONTEXT *PWOW64_CONTEXT;
 
