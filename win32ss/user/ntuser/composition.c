@@ -1814,7 +1814,9 @@ IntCompositionDamageBacking(_In_opt_ PSURFACE psurf,
                  * makes it repeatedly present the previous FRONT while BACK
                  * is incomplete. */
                 if (InterlockedCompareExchange(&g_Redirects[i].PaintCount, 0, 0) == 0 &&
-                    InterlockedCompareExchange(&g_Redirects[i].DcCount, 0, 0) == 0)
+                    (InterlockedCompareExchange(&g_Redirects[i].DcCount, 0, 0) == 0 ||
+                     (LONGLONG)KeQueryInterruptTime() - g_Redirects[i].DcStart >=
+                         COMPOSITION_DC_HOLD_100NS))
                 {
                     IntCompositionMarkDamage(FALSE);
                 }
