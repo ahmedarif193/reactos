@@ -722,6 +722,23 @@ again:
  *    SHELL_ExecuteW [Internal]
  *
  */
+/* An elevated caller already has what "runas" asks for, so it gets no prompt. */
+static BOOL SHELL_IsTokenElevated(void)
+{
+    TOKEN_ELEVATION Elevation;
+    HANDLE hToken;
+    DWORD cbSize;
+    BOOL bElevated = FALSE;
+
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        if (GetTokenInformation(hToken, TokenElevation, &Elevation, sizeof(Elevation), &cbSize))
+            bElevated = (Elevation.TokenIsElevated != 0);
+        CloseHandle(hToken);
+    }
+    return bElevated;
+}
+
 static UINT_PTR SHELL_ExecuteW(const WCHAR *lpCmd, WCHAR *env, BOOL shWait,
                                const SHELLEXECUTEINFOW *psei, LPSHELLEXECUTEINFOW psei_out)
 {
@@ -786,7 +803,7 @@ static UINT_PTR SHELL_ExecuteW(const WCHAR *lpCmd, WCHAR *env, BOOL shWait,
     }
 
     BOOL createdProcess;
-    if (psei->lpVerb && !StrCmpIW(L"runas", psei->lpVerb))
+    if (psei->lpVerb && !StrCmpIW(L"runas", psei->lpVerb) && !SHELL_IsTokenElevated())
     {
         HRESULT hr = PromptAndRunProcessAs(psei->hwnd, (LPWSTR)lpCmd, dwCreationFlags,
                                                  env, lpDirectory, &startup, &info);
