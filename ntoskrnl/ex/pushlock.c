@@ -494,6 +494,8 @@ ExBlockPushLock(PEX_PUSH_LOCK PushLock,
         /* Try again with the new value */
         OldValue = NewValue;
     }
+
+    KeMemoryBarrier();
 }
 
 NTSTATUS
