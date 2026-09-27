@@ -117,7 +117,6 @@ extern void UXTHEME_UninitSystem(void);
 
 #ifdef __REACTOS__
 extern HINSTANCE hDllInst;
-extern ATOM atWndContext;
 extern DWORD gdwErrorInfoTlsIndex;
 extern BOOL g_bThemeHooksActive;
 BOOL CALLBACK UXTHEME_broadcast_theme_changed(HWND hwnd, LPARAM enable);

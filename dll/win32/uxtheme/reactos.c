@@ -5,7 +5,6 @@
 #include <uxundoc.h>
 
 HINSTANCE hDllInst;
-ATOM atWndContext;
 DWORD gdwErrorInfoTlsIndex = TLS_OUT_OF_INDEXES;
 
 static BOOL CALLBACK send_theme_changed(HWND hwnd, LPARAM enable)

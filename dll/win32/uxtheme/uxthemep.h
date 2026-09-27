@@ -85,6 +85,7 @@ typedef struct _WND_DATA
     INT  SCROLL_TrackingBar;
     INT  SCROLL_TrackingPos;
     INT  SCROLL_TrackingVal;
+    BOOL ScrollBarPainted[2];
 } WND_DATA, *PWND_DATA;
 
 /* The draw context stores data that are needed by the drawing operations in the non client area of the window */
@@ -140,6 +141,7 @@ typedef enum {
 
 #define HAS_MENU(hwnd,style)  ((((style) & (WS_CHILD | WS_POPUP)) != WS_CHILD) && GetMenu(hwnd))
 
+#define SWP_UXTHEME_REFRAME 0x01000000
 #define BUTTON_GAP_SIZE 2
 
 #define MENU_BAR_ITEMS_SPACE (12)
@@ -178,10 +180,10 @@ HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style);
 HTHEME GetNCScrollbarTheme(HWND hWnd, DWORD style);
 
 extern HINSTANCE hDllInst;
-extern ATOM atWndContext;
 extern BOOL g_bThemeHooksActive;
 
 void UXTHEME_InitSystem(HINSTANCE hInst);
+BOOL UXTHEME_IsAppThemed(void);
 void UXTHEME_ReloadTheme(BOOL load);
 BOOL CALLBACK UXTHEME_broadcast_theme_changed (HWND hWnd, LPARAM enable);
 

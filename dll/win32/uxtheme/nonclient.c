@@ -1287,6 +1287,28 @@ static void ThemeDrawMenuBar(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
                                     pcontext->Active);
 }
 
+static void ThemeRecordScrollBarPainted(PDRAW_CONTEXT pcontext, INT nBar, LONG idObject, DWORD dwStyle)
+{
+    PWND_DATA pwndData = ThemeGetWndData(pcontext->hWnd);
+    SCROLLBARINFO sbi;
+    RECT rc;
+
+    if (!pwndData)
+        return;
+
+    pwndData->ScrollBarPainted[nBar] = FALSE;
+    if (!(pcontext->wi.dwStyle & dwStyle))
+        return;
+
+    sbi.cbSize = sizeof(sbi);
+    if (!GetScrollBarInfo(pcontext->hWnd, idObject, &sbi))
+        return;
+
+    rc = sbi.rcScrollBar;
+    OffsetRect(&rc, -pcontext->wi.rcWindow.left, -pcontext->wi.rcWindow.top);
+    pwndData->ScrollBarPainted[nBar] = RectVisible(pcontext->hDC, &rc);
+}
+
 static void ThemeDrawScrollBarsGrip(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
 {
     RECT rcPart;
@@ -1348,6 +1370,9 @@ ThemePaintWindow(PDRAW_CONTEXT pcontext, RECT* prcCurrent, BOOL bDoDoubleBufferi
 
     if (pcontext->wi.dwExStyle & WS_EX_CLIENTEDGE)
         DrawEdge(pcontext->hDC, prcCurrent, EDGE_SUNKEN, BF_RECT | BF_ADJUST);
+
+    ThemeRecordScrollBarPainted(pcontext, SB_HORZ, OBJID_HSCROLL, WS_HSCROLL);
+    ThemeRecordScrollBarPainted(pcontext, SB_VERT, OBJID_VSCROLL, WS_VSCROLL);
 
     if ((pcontext->wi.dwStyle & WS_HSCROLL) && IsScrollBarVisible(pcontext->hWnd, OBJID_HSCROLL))
         ThemeDrawScrollBar(pcontext, SB_HORZ , NULL);
@@ -1424,13 +1449,13 @@ ThemeHandleNcMouseMove(HWND hWnd, DWORD ht, POINT* pt)
             ThemeDrawCaptionButtons(&context, ht, 0);
     }
 
-   if (context.wi.dwStyle & WS_HSCROLL)
+   if ((context.wi.dwStyle & WS_HSCROLL) && pwndData->ScrollBarPainted[SB_HORZ])
    {
        if (ht == HTHSCROLL || pwndData->lastHitTest == HTHSCROLL)
            ThemeDrawScrollBar(&context, SB_HORZ , ht == HTHSCROLL ? pt : NULL);
    }
 
-    if (context.wi.dwStyle & WS_VSCROLL)
+    if ((context.wi.dwStyle & WS_VSCROLL) && pwndData->ScrollBarPainted[SB_VERT])
     {
         if (ht == HTVSCROLL || pwndData->lastHitTest == HTVSCROLL)
             ThemeDrawScrollBar(&context, SB_VERT, ht == HTVSCROLL ? pt : NULL);
@@ -1463,10 +1488,10 @@ ThemeHandleNcMouseLeave(HWND hWnd)
     if (context.wi.dwStyle & WS_SYSMENU && HT_ISBUTTON(pwndData->lastHitTest))
         ThemeDrawCaptionButtons(&context, 0, 0);
 
-   if (context.wi.dwStyle & WS_HSCROLL && pwndData->lastHitTest == HTHSCROLL)
+   if (context.wi.dwStyle & WS_HSCROLL && pwndData->lastHitTest == HTHSCROLL && pwndData->ScrollBarPainted[SB_HORZ])
         ThemeDrawScrollBar(&context, SB_HORZ,  NULL);
 
-    if (context.wi.dwStyle & WS_VSCROLL && pwndData->lastHitTest == HTVSCROLL)
+    if (context.wi.dwStyle & WS_VSCROLL && pwndData->lastHitTest == HTVSCROLL && pwndData->ScrollBarPainted[SB_VERT])
         ThemeDrawScrollBar(&context, SB_VERT, NULL);
 
     ThemeCleanupDrawContext(&context);
@@ -1780,8 +1805,10 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
     {
     case WM_NCPAINT:
     {
+        DWORD dwLastError = GetLastError();
         LRESULT Result = ThemeHandleNCPaint(hWnd, (HRGN)wParam);
         ThemeDwmRepaintCaptionButtons(hWnd);
+        SetLastError(dwLastError);
         return Result;
     }
     //
@@ -1792,23 +1819,16 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
     // WM_NCUAHDRAWFRAME : wParam is HDC, lParam are DC_ACTIVE and or DC_REDRAWHUNGWND.
     //
     case WM_NCUAHDRAWFRAME:
+    case WM_NCACTIVATE:
 
         if ((GetWindowLongW(hWnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION)
             return TRUE;
 
+    {
+        DWORD dwLastError = GetLastError();
         ThemeHandleNCPaint(hWnd, (HRGN)1);
         ThemeDwmRepaintCaptionButtons(hWnd);
-        return TRUE;
-    case WM_NCACTIVATE:
-    {
-        HDC hDC;
-
-        if ((GetWindowLongW(hWnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION)
-            return TRUE;
-
-        hDC = GetWindowDC(hWnd);
-        SendMessageW(hWnd, WM_NCUAHDRAWFRAME, (WPARAM)hDC, wParam ? DC_ACTIVE : 0);
-        ReleaseDC(hWnd, hDC);
+        SetLastError(dwLastError);
         return TRUE;
     }
     case WM_NCMOUSEMOVE:

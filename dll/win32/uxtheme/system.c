@@ -33,6 +33,7 @@
 #include "winnls.h"
 #include "resource.h"
 #include <reactos/dwmframe.h>
+#include <dwmapi.h>
 #endif
 
 #include "uxthemedll.h"
@@ -527,7 +528,6 @@ void UXTHEME_InitSystem(HINSTANCE hInst)
 {
 #ifdef __REACTOS__
     hDllInst = hInst;
-    atWndContext = GlobalAddAtomW(L"ux_WndContext");
     gdwErrorInfoTlsIndex = TlsAlloc();
 #endif
     atWindowTheme        = GlobalAddAtomW(L"ux_theme");
@@ -553,7 +553,6 @@ void UXTHEME_UninitSystem(void)
     GlobalDeleteAtom(atSubIdList);
     GlobalDeleteAtom(atDialogThemeEnabled);
 #ifdef __REACTOS__
-    GlobalDeleteAtom(atWndContext);
     UXTHEME_DeleteParseErrorInfo();
     TlsFree(gdwErrorInfoTlsIndex);
     gdwErrorInfoTlsIndex = TLS_OUT_OF_INDEXES;
@@ -573,12 +572,17 @@ void UXTHEME_ReloadTheme(BOOL load)
 /***********************************************************************
  *      IsAppThemed                                         (UXTHEME.@)
  */
+BOOL UXTHEME_IsAppThemed(void)
+{
+    return bThemeActive && g_bThemeHooksActive;
+}
+
 BOOL WINAPI IsAppThemed(void)
 {
 #ifdef __REACTOS__
     TRACE("\n");
     SetLastError(ERROR_SUCCESS);
-    return bThemeActive && g_bThemeHooksActive;
+    return UXTHEME_IsAppThemed();
 #else
     return IsThemeActive();
 #endif
@@ -599,11 +603,12 @@ BOOL WINAPI IsThemeActive(void)
 */
 BOOL WINAPI IsCompositionActive(void)
 {
-    FIXME(": stub\n");
+    BOOL Enabled = FALSE;
 
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    if (FAILED(DwmIsCompositionEnabled(&Enabled)))
+        return FALSE;
 
-    return FALSE;
+    return Enabled;
 }
 
 /***********************************************************************

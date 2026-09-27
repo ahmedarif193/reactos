@@ -14,29 +14,88 @@ BYTE gabMSGPmessages[UAHOWP_MAX_SIZE];
 BYTE gabDLGPmessages[UAHOWP_MAX_SIZE];
 BOOL g_bThemeHooksActive = FALSE;
 
+#define WND_DATA_BUCKETS 64
+
+typedef struct _WND_DATA_ENTRY
+{
+    struct _WND_DATA_ENTRY *Next;
+    HWND hWnd;
+    PWND_DATA Data;
+} WND_DATA_ENTRY, *PWND_DATA_ENTRY;
+
+static PWND_DATA_ENTRY g_WndDataBuckets[WND_DATA_BUCKETS];
+static SRWLOCK g_WndDataLock = SRWLOCK_INIT;
+
+static PWND_DATA_ENTRY *
+ThemeWndDataBucket(HWND hWnd)
+{
+    return &g_WndDataBuckets[((ULONG_PTR)hWnd >> 1) % WND_DATA_BUCKETS];
+}
+
+static PWND_DATA
+ThemeFindWndData(HWND hWnd)
+{
+    PWND_DATA_ENTRY Entry;
+    PWND_DATA pwndData = NULL;
+
+    AcquireSRWLockShared(&g_WndDataLock);
+    for (Entry = *ThemeWndDataBucket(hWnd); Entry; Entry = Entry->Next)
+    {
+        if (Entry->hWnd == hWnd)
+        {
+            pwndData = Entry->Data;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_WndDataLock);
+
+    return pwndData;
+}
+
 PWND_DATA ThemeGetWndData(HWND hWnd)
 {
+    PWND_DATA_ENTRY Entry, *Bucket;
     PWND_DATA pwndData;
 
-    pwndData = (PWND_DATA)GetPropW(hWnd, (LPCWSTR)MAKEINTATOM(atWndContext));
-    if(pwndData == NULL)
-    {
-        pwndData = HeapAlloc(GetProcessHeap(),
-                            HEAP_ZERO_MEMORY,
-                            sizeof(WND_DATA));
-        if(pwndData == NULL)
-        {
-            return NULL;
-        }
+    pwndData = ThemeFindWndData(hWnd);
+    if (pwndData != NULL)
+        return pwndData;
 
-        SetPropW( hWnd, (LPCWSTR)MAKEINTATOM(atWndContext), pwndData);
+    Entry = HeapAlloc(GetProcessHeap(), 0, sizeof(*Entry));
+    pwndData = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(WND_DATA));
+    if (Entry == NULL || pwndData == NULL)
+    {
+        HeapFree(GetProcessHeap(), 0, Entry);
+        HeapFree(GetProcessHeap(), 0, pwndData);
+        return NULL;
     }
+
+    AcquireSRWLockExclusive(&g_WndDataLock);
+    Bucket = ThemeWndDataBucket(hWnd);
+    for (Entry->Next = *Bucket; Entry->Next; Entry->Next = Entry->Next->Next)
+    {
+        if (Entry->Next->hWnd == hWnd)
+        {
+            PWND_DATA pExisting = Entry->Next->Data;
+
+            ReleaseSRWLockExclusive(&g_WndDataLock);
+            HeapFree(GetProcessHeap(), 0, Entry);
+            HeapFree(GetProcessHeap(), 0, pwndData);
+            return pExisting;
+        }
+    }
+    Entry->hWnd = hWnd;
+    Entry->Data = pwndData;
+    Entry->Next = *Bucket;
+    *Bucket = Entry;
+    ReleaseSRWLockExclusive(&g_WndDataLock);
 
     return pwndData;
 }
 
 void ThemeDestroyWndData(HWND hWnd)
 {
+    PWND_DATA_ENTRY Entry = NULL, *Link;
     PWND_DATA pwndData;
     DWORD ProcessId;
 
@@ -47,11 +106,25 @@ void ThemeDestroyWndData(HWND hWnd)
         return;
     }
 
-    pwndData = (PWND_DATA)GetPropW(hWnd, (LPCWSTR)MAKEINTATOM(atWndContext));
-    if(pwndData == NULL)
+    AcquireSRWLockExclusive(&g_WndDataLock);
+    for (Link = ThemeWndDataBucket(hWnd); *Link; Link = &(*Link)->Next)
+    {
+        if ((*Link)->hWnd == hWnd)
+        {
+            Entry = *Link;
+            *Link = Entry->Next;
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_WndDataLock);
+
+    if (Entry == NULL)
     {
         return;
     }
+
+    pwndData = Entry->Data;
+    HeapFree(GetProcessHeap(), 0, Entry);
 
     if(pwndData->HasThemeRgn)
     {
@@ -84,8 +157,6 @@ void ThemeDestroyWndData(HWND hWnd)
     }
 
     HeapFree(GetProcessHeap(), 0, pwndData);
-
-    SetPropW( hWnd, (LPCWSTR)MAKEINTATOM(atWndContext), NULL);
 }
 
 HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style)
@@ -225,6 +296,13 @@ int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
 
     style = GetWindowLongW(hWnd, GWL_STYLE);
 
+    if ((pWinPos->flags & (SWP_STATECHANGED | SWP_UXTHEME_REFRAME)) == SWP_STATECHANGED &&
+        (GetWindowLongW(hWnd, GWL_EXSTYLE) & WS_EX_MDICHILD) && (style & WS_MAXIMIZE))
+    {
+        SetWindowPos(hWnd, NULL, 0, 0, 0, 0,
+                     SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_UXTHEME_REFRAME);
+    }
+
     /* Get theme data for this window */
     pwndData = ThemeGetWndData(hWnd);
     if (pwndData == NULL)
@@ -240,7 +318,8 @@ int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
 
     /* A former caption must not keep clipping a borderless window to the
      * old themed frame, even when the style change did not resize it. */
-    if ((style & WS_CAPTION) != WS_CAPTION || !IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
+    if ((style & WS_CAPTION) != WS_CAPTION || !UXTHEME_IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT) ||
+        IsCompositionActive())
     {
         if(pwndData->HasThemeRgn)
         {
@@ -288,9 +367,9 @@ ThemeDefWindowProcW(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
     PWND_DATA pwndData;
 
     ThemeMarkPrintClient(hWnd, Msg);
-    pwndData = (PWND_DATA)GetPropW(hWnd, (LPCWSTR)MAKEINTATOM(atWndContext));
+    pwndData = ThemeFindWndData(hWnd);
 
-    if(!IsAppThemed() ||
+    if(!UXTHEME_IsAppThemed() ||
        !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT) ||
        (pwndData && pwndData->HasAppDefinedRgn))
     {
@@ -313,9 +392,9 @@ ThemeDefWindowProcA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
     PWND_DATA pwndData;
 
     ThemeMarkPrintClient(hWnd, Msg);
-    pwndData = (PWND_DATA)GetPropW(hWnd, (LPCWSTR)MAKEINTATOM(atWndContext));
+    pwndData = ThemeFindWndData(hWnd);
 
-    if(!IsAppThemed() ||
+    if(!UXTHEME_IsAppThemed() ||
        !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT) ||
        (pwndData && pwndData->HasAppDefinedRgn))
     {
@@ -335,6 +414,12 @@ ThemeDefWindowProcA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 static LRESULT CALLBACK
 ThemePreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR ret,PDWORD unknown)
 {
+    if ((Msg == WM_WINDOWPOSCHANGING || Msg == WM_WINDOWPOSCHANGED) &&
+        (((WINDOWPOS *)lParam)->flags & SWP_UXTHEME_REFRAME))
+    {
+        return TRUE;
+    }
+
     switch(Msg)
     {
         case WM_CREATE:
@@ -342,7 +427,7 @@ ThemePreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR 
         case WM_SIZE:
         case WM_WINDOWPOSCHANGED:
         {
-            if(IsAppThemed() && (GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
+            if(UXTHEME_IsAppThemed() && (GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
                 ThemeCalculateCaptionButtonsPos(hWnd, NULL);
             break;
         }
@@ -380,7 +465,7 @@ ThemePreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR 
                 pwndData->hthemeScrollbar = NULL;
             }
 
-            if(IsAppThemed() && (GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
+            if(UXTHEME_IsAppThemed() && (GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
                 ThemeCalculateCaptionButtonsPos(hWnd, NULL);
 
             pwndData->DirtyThemeRegion = TRUE;
@@ -645,7 +730,7 @@ BOOL WINAPI ThemeGetScrollInfo(HWND hwnd, int fnBar, LPSCROLLINFO lpsi)
     BOOL ret;
 
     /* Avoid creating a window context if it is not needed */
-    if(!IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
+    if(!UXTHEME_IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
         goto dodefault;
 
     style = GetWindowLongW(hwnd, GWL_STYLE);
