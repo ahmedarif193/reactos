@@ -3387,6 +3387,24 @@ QSI_DEF(SystemProcessorBrandString)
     return STATUS_SUCCESS;
 }
 
+/* Class 90 - Boot Environment Information */
+QSI_DEF(SystemBootEnvironmentInformation)
+{
+    SYSTEM_BOOT_ENVIRONMENT_INFORMATION Info;
+
+    if (Size < sizeof(SYSTEM_BOOT_ENVIRONMENT_V1))
+    {
+        *ReqSize = sizeof(Info);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.FirmwareType = ExpFirmwareType;
+    *ReqSize = min(Size, sizeof(Info));
+    RtlCopyMemory(Buffer, &Info, *ReqSize);
+    return STATUS_SUCCESS;
+}
+
 /* Class 184 - Physical Memory Information */
 QSI_DEF(SystemPhysicalMemoryInformation)
 {
@@ -3510,6 +3528,7 @@ CallQS[] =
 
     // Vista and later
     SI_QX(SystemModuleInformationEx),
+    SI_QX(SystemBootEnvironmentInformation),
     SI_QX(SystemProcessorBrandString),
 
     // Win10 RS4 and later (gaps in between stay NULL and fail
