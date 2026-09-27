@@ -591,10 +591,8 @@ GetDeviceCaps(
         if ( pdcattr == NULL )
         {
             if (!GdiValidateHandle(hdc))
-            {
                 SetLastError(ERROR_INVALID_PARAMETER);
-                return 0;
-            }
+            return 0;
         }
         else if (!(pdcattr->ulDirty_ & DC_PRIMARY_DISPLAY))
             return NtGdiGetDeviceCaps(hdc, nIndex);

@@ -85,7 +85,7 @@ FASTCALL DIB_BitmapInfoSize(
     }
     else /* assume BITMAPINFOHEADER */
     {
-        colors = max ? (1 << info->bmiHeader.biBitCount) : info->bmiHeader.biClrUsed;
+        colors = max ? ((info->bmiHeader.biBitCount <= 8) ? (1 << info->bmiHeader.biBitCount) : 0) : info->bmiHeader.biClrUsed;
         if (colors > 256)
             colors = 256;
         if (!colors && (info->bmiHeader.biBitCount <= 8))
@@ -609,6 +609,8 @@ CreateDIBitmap(
 // GdiGetHandleUserData(hdc, GDI_OBJECT_TYPE_DC, (PVOID)&pDc_Attr))
 
     cjBmpScanSize = GdiGetBitmapBitsSize(pbmiConverted);
+    if ((cjBmpScanSize == 0) && ((Compression == BI_RLE8) || (Compression == BI_RLE4)))
+        Init &= ~CBM_INIT;
 
     DPRINT("pBMI %p, Size bpp %u, dibsize %d, Conv %u, BSS %u\n",
            Data, BitsPerPixel, DibSize, cjInfoSize, cjBmpScanSize);
@@ -783,7 +785,6 @@ SetDIBitsToDevice(
     UINT bmiHeight;
     ULONG iFormat, cBitsPixel, cjBits, cjWidth;
 
-    #define MaxScanLines 1000
     #define IS_ALIGNED(Pointer, Alignment) \
         (((ULONG_PTR)(void *)(Pointer)) % (Alignment) == 0)
 
@@ -816,12 +817,6 @@ SetDIBitsToDevice(
     pConvertedInfo = ConvertBitmapInfo(lpbmi, ColorUse, &ConvertedInfoSize, FALSE);
     if (!pConvertedInfo)
         return 0;
-
-    if (ScanLines > MaxScanLines)
-    {
-        LinesCopied = 0;
-        goto Exit;
-    }
 
     bmiHeight = abs(pConvertedInfo->bmiHeader.biHeight);
     if ((StartScan > bmiHeight) && (ScanLines > bmiHeight))
@@ -927,7 +922,7 @@ SetDIBitsToDevice(
         DPRINT("SetDIBitsToDevice Allocate Bits %u!!!\n", cjBmpScanSize);
     }
 
-    if (!GdiGetHandleUserData(hdc, GDI_OBJECT_TYPE_DC, (PVOID) & pDc_Attr))
+    if (!(pDc_Attr = GdiGetDcAttr(hdc)))
     {
         DPRINT1("SetDIBitsToDevice called on invalid DC %p (not owned?)\n", hdc);
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -1083,7 +1078,7 @@ StretchDIBits(
         }
     }
 
-    if (!GdiGetHandleUserData(hdc, GDI_OBJECT_TYPE_DC, (PVOID) & pDc_Attr))
+    if (!(pDc_Attr = GdiGetDcAttr(hdc)))
     {
         DPRINT1("StretchDIBits called on invalid DC %p (not owned?)\n", hdc);
         SetLastError(ERROR_INVALID_PARAMETER);
