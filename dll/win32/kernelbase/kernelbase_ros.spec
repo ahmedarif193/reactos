@@ -1808,12 +1808,12 @@
 # #@ stub exit
 # #@ stub hgets
 # #@ stub hwprintf
-#@ stdcall lstrcmp(str str) lstrcmpA
-#@ stdcall lstrcmpA(str str)
-#@ stdcall lstrcmpW(wstr wstr)
-#@ stdcall lstrcmpi(str str) lstrcmpiA
-#@ stdcall lstrcmpiA(str str)
-#@ stdcall lstrcmpiW(wstr wstr)
+@ stdcall lstrcmp(str str) lstrcmpA
+@ stdcall lstrcmpA(str str)
+@ stdcall lstrcmpW(wstr wstr)
+@ stdcall lstrcmpi(str str) lstrcmpiA
+@ stdcall lstrcmpiA(str str)
+@ stdcall lstrcmpiW(wstr wstr)
 #@ stdcall lstrcpyn(ptr str long) KERNELBASE_lstrcpynA
 #@ stdcall lstrcpynA(ptr str long) KERNELBASE_lstrcpynA
 #@ stdcall lstrcpynW(ptr wstr long) KERNELBASE_lstrcpynW

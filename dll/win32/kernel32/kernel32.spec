@@ -91,10 +91,10 @@
 @ stdcall -stub -version=0x600+ CompareCalendarDates(ptr ptr ptr)
 @ stdcall CompareFileTime(ptr ptr)
 @ stdcall -version=0xA00+ CompareObjectHandles(ptr ptr)
-@ stdcall CompareStringA(long long str long str long)
-@ stdcall -version=0x600+ CompareStringEx(wstr long wstr long wstr long ptr ptr ptr)
+@ stdcall CompareStringA(long long str long str long) kernelbase.CompareStringA
+@ stdcall -version=0x600+ CompareStringEx(wstr long wstr long wstr long ptr ptr ptr) kernelbase.CompareStringEx
 @ stdcall -version=0x600+ CompareStringOrdinal(wstr long wstr long long)
-@ stdcall CompareStringW(long long wstr long wstr long)
+@ stdcall CompareStringW(long long wstr long wstr long) kernelbase.CompareStringW
 @ stdcall ConnectNamedPipe(long ptr)
 @ stdcall -version=0x502-0x600 -arch=win64 ConsoleIMERoutine(ptr)
 @ stdcall ConsoleMenuControl(long long long)
@@ -1372,12 +1372,12 @@
 @ stdcall lstrcat(str str) lstrcatA
 @ stdcall lstrcatA(str str)
 @ stdcall lstrcatW(wstr wstr)
-@ stdcall lstrcmp(str str) lstrcmpA
-@ stdcall lstrcmpA(str str)
-@ stdcall lstrcmpW(wstr wstr)
-@ stdcall lstrcmpi(str str) lstrcmpiA
-@ stdcall lstrcmpiA(str str)
-@ stdcall lstrcmpiW(wstr wstr)
+@ stdcall lstrcmp(str str) kernelbase.lstrcmpA
+@ stdcall lstrcmpA(str str) kernelbase.lstrcmpA
+@ stdcall lstrcmpW(wstr wstr) kernelbase.lstrcmpW
+@ stdcall lstrcmpi(str str) kernelbase.lstrcmpiA
+@ stdcall lstrcmpiA(str str) kernelbase.lstrcmpiA
+@ stdcall lstrcmpiW(wstr wstr) kernelbase.lstrcmpiW
 @ stdcall lstrcpy(ptr str) lstrcpyA
 @ stdcall lstrcpyA(ptr str)
 @ stdcall lstrcpyW(ptr wstr)
