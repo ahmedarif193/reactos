@@ -2454,15 +2454,36 @@ static void EDIT_AdjustFormatRect(EDITSTATE *es)
  *		it is also used to set the rect of a single line control
  *
  */
+static int EDIT_is_valid_format_rect(const EDITSTATE *es, const RECT *rc)
+{
+    if (IsRectEmpty(rc))
+        return 0;
+    if (es->text_width > (rc->right - rc->left) || (es->line_height * es->line_count) > (rc->bottom - rc->top))
+        return 0;
+    return 1;
+}
+
 static void EDIT_SetRectNP(EDITSTATE *es, const RECT *rc)
 {
 	LONG_PTR ExStyle;
 	INT bw, bh;
+	BOOL too_large = FALSE;
+	RECT edit_rect;
+
 	ExStyle = GetWindowLongPtrW(es->hwndSelf, GWL_EXSTYLE);
-	
-	CopyRect(&es->format_rect, rc);
-	
-	if (ExStyle & WS_EX_CLIENTEDGE) {
+
+	if (EDIT_is_valid_format_rect(es, rc))
+	{
+		CopyRect(&es->format_rect, rc);
+		GetClientRect(es->hwndSelf, &edit_rect);
+		too_large = (rc->bottom - rc->top) > (edit_rect.bottom - edit_rect.top);
+	}
+	else
+	{
+		GetClientRect(es->hwndSelf, &es->format_rect);
+	}
+
+	if (ExStyle & WS_EX_CLIENTEDGE && !too_large) {
 		es->format_rect.left++;
 		es->format_rect.right--;
 		
@@ -2993,6 +3014,22 @@ static BOOL is_cjk(UINT charset)
     return FALSE;
 }
 
+static int get_cjk_fontinfo_margin(int width, int side_bearing)
+{
+    int margin;
+    if (side_bearing < 0)
+        margin = min(-side_bearing, width/2);
+    else
+        margin = 0;
+    return margin;
+}
+
+struct char_width_info {
+    INT min_lsb, min_rsb, unknown;
+};
+
+BOOL WINAPI GetCharWidthInfo(HDC, struct char_width_info *);
+
 static void EDIT_EM_SetMargins(EDITSTATE *es, INT action,
 			       WORD left, WORD right, BOOL repaint)
 {
@@ -3020,9 +3057,23 @@ static void EDIT_EM_SetMargins(EDITSTATE *es, INT action,
                         default_right_margin = es->right_margin;
                     }
                 } else {
-                    /* FIXME: figure out the CJK values. They are not affected by the client rect. */
-                    default_left_margin = width / 2;
-                    default_right_margin = width / 2;
+                    struct char_width_info width_info;
+                    LONG rc_width;
+
+                    if (GetCharWidthInfo(dc, &width_info)) {
+                        default_left_margin = get_cjk_fontinfo_margin(width, width_info.min_lsb);
+                        default_right_margin = get_cjk_fontinfo_margin(width, width_info.min_rsb);
+                    } else {
+                        default_left_margin = width / 2;
+                        default_right_margin = width / 2;
+                    }
+
+                    GetClientRect(es->hwndSelf, &rc);
+                    rc_width = !IsRectEmpty(&rc) ? rc.right - rc.left : 80;
+                    if (rc_width < default_left_margin + default_right_margin + width * 2) {
+                        default_left_margin = es->left_margin;
+                        default_right_margin = es->right_margin;
+                    }
                 }
             }
             SelectObject(dc, old_font);
@@ -3199,7 +3250,8 @@ static inline BOOL EDIT_IsInsideDialog(EDITSTATE *es)
 static void EDIT_WM_Paste(EDITSTATE *es)
 {
 	HGLOBAL hsrc;
-	LPWSTR src;
+	LPWSTR src, ptr, line;
+	SIZE_T len;
 
 	/* Protect read-only edit control from modification */
 	if(es->style & ES_READONLY)
@@ -3208,7 +3260,21 @@ static void EDIT_WM_Paste(EDITSTATE *es)
 	OpenClipboard(es->hwndSelf);
 	if ((hsrc = GetClipboardData(CF_UNICODETEXT))) {
 		src = GlobalLock(hsrc);
-		EDIT_EM_ReplaceSel(es, TRUE, src, TRUE, TRUE);
+		if (src && !(es->style & ES_MULTILINE) && ((ptr = wcschr(src, '\n')))) {
+			len = ptr - src;
+			if (len && src[len - 1] == '\r')
+				--len;
+			line = HeapAlloc(GetProcessHeap(), 0, (len + 1) * sizeof(WCHAR));
+			if (line) {
+				memcpy(line, src, len * sizeof(WCHAR));
+				line[len] = 0;
+				EDIT_EM_ReplaceSel(es, TRUE, line, TRUE, TRUE);
+				HeapFree(GetProcessHeap(), 0, line);
+			}
+		}
+		else if (src) {
+			EDIT_EM_ReplaceSel(es, TRUE, src, TRUE, TRUE);
+		}
 		GlobalUnlock(hsrc);
 	}
         else if (es->style & ES_PASSWORD) {
@@ -4863,7 +4929,8 @@ LRESULT WINAPI EditWndProc_common( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     {
         if (!pWnd->fnid)
         {
-            NtUserSetWindowFNID(hwnd, FNID_EDIT);
+            if (msg == WM_NCCREATE)
+                NtUserSetWindowFNID(hwnd, FNID_EDIT);
         }
         else
         {
@@ -5066,6 +5133,7 @@ LRESULT WINAPI EditWndProc_common( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
 	case EM_SETWORDBREAKPROC:
 		EDIT_EM_SetWordBreakProc(es, (void *)lParam);
+		result = 1;
 		break;
 
 	case EM_GETWORDBREAKPROC:
@@ -5328,6 +5396,7 @@ LRESULT WINAPI EditWndProc_common( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
 	case WM_SIZE:
 		EDIT_WM_Size(es, (UINT)wParam);
+		result = 1;
 		break;
 
         case WM_STYLECHANGED:

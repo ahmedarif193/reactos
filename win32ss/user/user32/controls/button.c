@@ -261,7 +261,8 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
     {
        if (!pWnd->fnid)
        {
-          NtUserSetWindowFNID(hWnd, FNID_BUTTON);
+          if (uMsg == WM_NCCREATE)
+             NtUserSetWindowFNID(hWnd, FNID_BUTTON);
        }
        else
        {

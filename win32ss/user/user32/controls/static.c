@@ -403,10 +403,12 @@ LRESULT WINAPI StaticWndProc_common( HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
             RECT rect;
             HDC hdc = wParam ? (HDC)wParam : BeginPaint(hwnd, &ps);
             GetClientRect( hwnd, &rect );
-            if (staticPaintFunc[style])
             {
                 HRGN hrgn = set_control_clipping( hdc, &rect );
-                (staticPaintFunc[style])( hwnd, hdc, full_style );
+                if (staticPaintFunc[style])
+                    (staticPaintFunc[style])( hwnd, hdc, full_style );
+                else
+                    STATIC_SendWmCtlColorStatic(hwnd, hdc);
                 SelectClipRgn( hdc, hrgn );
                 if (hrgn) DeleteObject( hrgn );
             }
@@ -437,29 +439,68 @@ LRESULT WINAPI StaticWndProc_common( HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
         {
             CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
 
-            if (full_style & SS_SUNKEN)
+            if (full_style & SS_SUNKEN || style == SS_ETCHEDHORZ || style == SS_ETCHEDVERT)
                 SetWindowLongW( hwnd, GWL_EXSTYLE,
                                 GetWindowLongW( hwnd, GWL_EXSTYLE ) | WS_EX_STATICEDGE );
+
+            if (style == SS_ETCHEDHORZ || style == SS_ETCHEDVERT)
+            {
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                if (style == SS_ETCHEDHORZ)
+                    rc.bottom = rc.top;
+                else
+                    rc.right = rc.left;
+                AdjustWindowRectEx(&rc, full_style, FALSE, GetWindowLongW(hwnd, GWL_EXSTYLE));
+                SetWindowPos( hwnd, NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
+                              SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER );
+            }
 
             switch (style) {
             case SS_ICON:
                 {
+                    const WCHAR *name = cs->lpszName;
                     HICON hIcon;
-                    if (unicode || IS_INTRESOURCE(cs->lpszName))
-                       hIcon = STATIC_LoadIconW(cs->hInstance, cs->lpszName, full_style);
+
+                    if (!unicode)
+                    {
+                        const char *nameA = (const char *)name;
+                        if (nameA && nameA[0] == '\xff')
+                            name = MAKEINTRESOURCEW(MAKEWORD(nameA[1], nameA[2]));
+                    }
+                    else if (name && name[0] == 0xffff)
+                    {
+                        name = MAKEINTRESOURCEW(name[1]);
+                    }
+
+                    if (unicode || IS_INTRESOURCE(name))
+                       hIcon = STATIC_LoadIconW(cs->hInstance, name, full_style);
                     else
-                       hIcon = STATIC_LoadIconA(cs->hInstance, (LPCSTR)cs->lpszName, full_style);
+                       hIcon = STATIC_LoadIconA(cs->hInstance, (LPCSTR)name, full_style);
                     STATIC_SetIcon(hwnd, hIcon, full_style);
                 }
                 break;
             case SS_BITMAP:
                 if ((ULONG_PTR)cs->hInstance >> 16)
                 {
+                    const WCHAR *name = cs->lpszName;
                     HBITMAP hBitmap;
-                    if (unicode || IS_INTRESOURCE(cs->lpszName))
-                        hBitmap = LoadBitmapW(cs->hInstance, cs->lpszName);
+
+                    if (!unicode)
+                    {
+                        const char *nameA = (const char *)name;
+                        if (nameA && nameA[0] == '\xff')
+                            name = MAKEINTRESOURCEW(MAKEWORD(nameA[1], nameA[2]));
+                    }
+                    else if (name && name[0] == 0xffff)
+                    {
+                        name = MAKEINTRESOURCEW(name[1]);
+                    }
+
+                    if (unicode || IS_INTRESOURCE(name))
+                        hBitmap = LoadBitmapW(cs->hInstance, name);
                     else
-                        hBitmap = LoadBitmapA(cs->hInstance, (LPCSTR)cs->lpszName);
+                        hBitmap = LoadBitmapA(cs->hInstance, (LPCSTR)name);
                     STATIC_SetBitmap(hwnd, hBitmap, full_style);
                 }
                 break;
@@ -545,6 +586,7 @@ LRESULT WINAPI StaticWndProc_common( HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM
 	break;
 
     case STM_SETICON:
+        if (style != SS_ICON) return 0;
         lResult = (LRESULT)STATIC_SetIcon( hwnd, (HICON)wParam, full_style );
         STATIC_TryPaintFcn( hwnd, full_style );
         break;
@@ -871,7 +913,7 @@ static void STATIC_PaintEtchedfn( HWND hwnd, HDC hdc, DWORD style )
 {
     RECT rc;
 
-    /* FIXME: sometimes (not always) sends WM_CTLCOLORSTATIC */
+    STATIC_SendWmCtlColorStatic(hwnd, hdc);
     GetClientRect( hwnd, &rc );
     switch (style & SS_TYPEMASK)
     {
