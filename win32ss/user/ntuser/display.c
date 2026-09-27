@@ -331,7 +331,7 @@ UserEnumDisplayDevices(
     pdispdev->DeviceID[0] = UNICODE_NULL;
 
     /* Fill in DeviceID */
-    if (pdo != NULL)
+    if (pdo != NULL && (pustrDevice || !(dwFlags & EDD_GET_DEVICE_INTERFACE_NAME)))
     {
         Status = IoGetDeviceProperty(pdo,
                                      DevicePropertyHardwareID,
@@ -488,9 +488,11 @@ NTSTATUS
 NTAPI
 UserEnumCurrentDisplaySettings(
     PUNICODE_STRING pustrDevice,
-    PDEVMODEW *ppdm)
+    PDEVMODEW *ppdm,
+    PPOINTL pptlPosition)
 {
     PPDEVOBJ ppdev;
+    PMONITOR pMonitor;
 
     /* Get the PDEV for the device */
     ppdev = EngpGetPDEV(pustrDevice);
@@ -502,6 +504,13 @@ UserEnumCurrentDisplaySettings(
     }
 
     *ppdm = ppdev->pdmwDev;
+    pptlPosition->x = pptlPosition->y = 0;
+    pMonitor = UserGetMonitorFromHDev((HDEV)ppdev);
+    if (pMonitor)
+    {
+        pptlPosition->x = pMonitor->rcMonitor.left;
+        pptlPosition->y = pMonitor->rcMonitor.top;
+    }
     PDEVOBJ_vRelease(ppdev);
 
     return STATUS_SUCCESS;
@@ -574,22 +583,45 @@ UserOpenDisplaySettingsKey(
     IN PUNICODE_STRING pustrDevice,
     IN BOOL bGlobal)
 {
-    HKEY hkey;
-    DISPLAY_DEVICEW dispdev;
+    HKEY hkey, hkeyMap;
+    PGRAPHICS_DEVICE pGraphicsDevice;
+    WCHAR szDeviceKey[128];
+    ULONG cbSize;
+    UNICODE_STRING ustrKeyName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
     NTSTATUS Status;
 
-    /* Get device info */
-    Status = UserEnumDisplayDevices(pustrDevice, 0, &dispdev, 0);
-    if (!NT_SUCCESS(Status))
-        return Status;
+    if (!pustrDevice)
+        EngpUpdateGraphicsDeviceList();
+
+    pGraphicsDevice = EngpFindGraphicsDevice(pustrDevice, 0);
+    if (!pGraphicsDevice)
+        return STATUS_UNSUCCESSFUL;
 
     if (bGlobal)
     {
         // FIXME: Need to fix the registry key somehow
     }
 
+    Status = RegOpenKey(KEY_VIDEO, &hkeyMap);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(szDeviceKey, sizeof(szDeviceKey));
+    cbSize = sizeof(szDeviceKey) - sizeof(WCHAR);
+    Status = RegQueryValue(hkeyMap, pGraphicsDevice->szNtDeviceName, REG_SZ, szDeviceKey, &cbSize);
+    ZwClose(hkeyMap);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     /* Open the registry key */
-    Status = RegOpenKey(dispdev.DeviceKey, &hkey);
+    RtlInitUnicodeString(&ustrKeyName, szDeviceKey);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &ustrKeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwOpenKey((PHANDLE)&hkey, KEY_READ | KEY_SET_VALUE, &ObjectAttributes);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -629,6 +661,8 @@ NtUserEnumDisplaySettings(
     NTSTATUS Status;
     ULONG cbSize = 0, cbExtra = 0;
     DEVMODEW dmReg, *pdm;
+    POINTL ptlPosition;
+    BOOL bCurrent = FALSE;
 
     TRACE("Enter NtUserEnumDisplaySettings(%wZ, %lu, %p, 0x%lx)\n",
           pustrDevice, iModeNum, lpDevMode, dwFlags);
@@ -682,9 +716,6 @@ NtUserEnumDisplaySettings(
         pustrDevice = &ustrDevice;
     }
 
-    if (iModeNum == (DWORD)-3)
-        return STATUS_INVALID_PARAMETER_3;
-
     /* Acquire global USER lock */
     UserEnterShared();
 
@@ -695,10 +726,11 @@ NtUserEnumDisplaySettings(
         pdm = &dmReg;
         pdm->dmSize = sizeof(DEVMODEW);
     }
-    else if (iModeNum == ENUM_CURRENT_SETTINGS)
+    else if (iModeNum == ENUM_CURRENT_SETTINGS || iModeNum == (DWORD)-3)
     {
         /* Get the current settings */
-        Status = UserEnumCurrentDisplaySettings(pustrDevice, &pdm);
+        Status = UserEnumCurrentDisplaySettings(pustrDevice, &pdm, &ptlPosition);
+        bCurrent = TRUE;
     }
     else
     {
@@ -717,6 +749,17 @@ NtUserEnumDisplaySettings(
         {
             /* Output what we got */
             RtlCopyMemory(lpDevMode, pdm, min(cbSize, pdm->dmSize));
+
+            if (bCurrent)
+            {
+                lpDevMode->dmFields |= DM_POSITION | DM_DISPLAYORIENTATION;
+                lpDevMode->dmPosition = ptlPosition;
+                lpDevMode->dmDisplayOrientation = DMDO_DEFAULT;
+            }
+            else
+            {
+                lpDevMode->dmFields |= DM_DISPLAYORIENTATION;
+            }
 
             /* Output private/extra driver data */
             if (cbExtra > 0 && pdm->dmDriverExtra > 0)
@@ -774,9 +817,9 @@ UserChangeDisplaySettings(
             return DISP_CHANGE_BADPARAM;
         }
     }
-    else if (pdm->dmSize < FIELD_OFFSET(DEVMODEW, dmFields))
+    else if (pdm->dmSize < FIELD_OFFSET(DEVMODEW, dmICMMethod))
     {
-        return DISP_CHANGE_BADMODE; /* This is what WinXP SP3 returns */
+        return DISP_CHANGE_BADMODE;
     }
     else
     {

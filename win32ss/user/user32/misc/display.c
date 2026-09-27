@@ -173,15 +173,22 @@ EnumDisplaySettingsExA(
     {
         /* Store old structure size */
         WORD OldSize = lpDevMode->dmSize;
+        DEVMODEA dmTruncated;
+        LPDEVMODEA pdmOut = lpDevMode;
 
-        if (OldSize < FIELD_OFFSET(DEVMODEA, dmICMMethod) || OldSize > sizeof(DEVMODEA))
+        if (OldSize > sizeof(DEVMODEA))
         {
             OldSize = sizeof(DEVMODEA);
             lpDevMode->dmDriverExtra = 0;
         }
+        else if (OldSize < FIELD_OFFSET(DEVMODEA, dmICMMethod))
+        {
+            RtlZeroMemory(&dmTruncated, sizeof(dmTruncated));
+            pdmOut = &dmTruncated;
+        }
 
-#define COPYS(f,len) WideCharToMultiByte(CP_THREAD_ACP, 0, lpExtendedDevMode->f, len, (LPSTR)lpDevMode->f, len, NULL, NULL)
-#define COPYN(f) lpDevMode->f = lpExtendedDevMode->f
+#define COPYS(f,len) WideCharToMultiByte(CP_THREAD_ACP, 0, lpExtendedDevMode->f, len, (LPSTR)pdmOut->f, len, NULL, NULL)
+#define COPYN(f) pdmOut->f = lpExtendedDevMode->f
 
         COPYS(dmDeviceName, CCHDEVICENAME);
         COPYN(dmSpecVersion);
@@ -222,6 +229,15 @@ EnumDisplaySettingsExA(
                 COPYN(dmPanningWidth);
                 COPYN(dmPanningHeight);
             }
+        }
+
+        if (pdmOut == &dmTruncated)
+        {
+            dmTruncated.dmSize = OldSize;
+            dmTruncated.dmDriverExtra = lpDevMode->dmDriverExtra;
+            RtlCopyMemory(lpDevMode, &dmTruncated, OldSize);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, lpExtendedDevMode);
+            return TRUE;
         }
 
         /* Restore old size */
@@ -316,18 +332,23 @@ EnumDisplaySettingsExW(
         WORD OldSize = lpDevMode->dmSize;
         WORD OldDriverExtra = lpDevMode->dmDriverExtra;
 
-        if (OldSize < FIELD_OFFSET(DEVMODEW, dmICMMethod) || OldSize > sizeof(DEVMODEW))
+        if (OldSize > sizeof(DEVMODEW))
         {
             OldSize = sizeof(DEVMODEW);
             OldDriverExtra = 0;
         }
 
+        lpExtendedDevMode->dmSize = OldSize;
+        lpExtendedDevMode->dmDriverExtra = OldDriverExtra;
+
         /* Copy general data */
         RtlCopyMemory(lpDevMode, lpExtendedDevMode, OldSize);
 
-        /* Restore old sizes */
-        lpDevMode->dmSize = OldSize;
-        lpDevMode->dmDriverExtra = OldDriverExtra;
+        if (OldSize < FIELD_OFFSET(DEVMODEW, dmICMMethod))
+        {
+            RtlFreeHeap(RtlGetProcessHeap(), 0, lpExtendedDevMode);
+            return TRUE;
+        }
 
         /* Extra data presented? */
         if (lpDevMode->dmDriverExtra && lpExtendedDevMode->dmDriverExtra)
