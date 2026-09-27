@@ -1200,6 +1200,9 @@ NTSTATUS WINAPI wow64_NtQueryInformationJobObject( UINT *args )
         }
         else return STATUS_INFO_LENGTH_MISMATCH;
 
+    case JobObjectBasicUIRestrictions:   /* JOBOBJECT_BASIC_UI_RESTRICTIONS */
+        return NtQueryInformationJobObject( handle, class, ptr, len, retlen );
+
     case JobObjectBasicProcessIdList:   /* JOBOBJECT_BASIC_PROCESS_ID_LIST */
         if (len >= sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST32))
         {
@@ -1845,9 +1848,8 @@ NTSTATUS WINAPI wow64_NtSetInformationJobObject( UINT *args )
         }
         else return STATUS_INVALID_PARAMETER;
 
-    case JobObjectBasicUIRestrictions:
-        FIXME( "unsupported class JobObjectBasicUIRestrictions\n" );
-        return STATUS_SUCCESS;
+    case JobObjectBasicUIRestrictions:   /* JOBOBJECT_BASIC_UI_RESTRICTIONS */
+        return NtSetInformationJobObject( handle, class, ptr, len );
 
     case JobObjectAssociateCompletionPortInformation:   /* JOBOBJECT_ASSOCIATE_COMPLETION_PORT */
         if (len == sizeof(JOBOBJECT_ASSOCIATE_COMPLETION_PORT32))
