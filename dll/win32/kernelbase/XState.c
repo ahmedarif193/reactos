@@ -12,8 +12,7 @@
 #include "winternl.h"
 #include "wine/kernelbase.h"
 
-/* The corresponding native RTL context helpers are available on AMD64. */
-#ifdef __x86_64__
+#ifdef _WIN64
 
 BOOL WINAPI InitializeContext2(void *buffer, DWORD flags, CONTEXT **context,
                               DWORD *length, ULONG64 compaction_mask)
@@ -45,6 +44,10 @@ BOOL WINAPI InitializeContext(void *buffer, DWORD flags, CONTEXT **context, DWOR
 {
     return InitializeContext2(buffer, flags, context, length, ~(ULONG64)0);
 }
+
+#endif
+
+#ifdef __x86_64__
 
 BOOL WINAPI GetXStateFeaturesMask(CONTEXT *context, DWORD64 *mask)
 {
