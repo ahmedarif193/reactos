@@ -2106,6 +2106,28 @@ CreateScalableFontResourceA(
     LPCSTR		lpszCurrentPath
 )
 {
+    PWSTR ResW = NULL, FileW = NULL, PathW = NULL;
+    BOOL Ret;
+
+    if (lpszFontRes && !(ResW = HEAP_strdupA2W_buf(lpszFontRes, NULL, 0)))
+        goto NoMemory;
+    if (lpszFontFile && !(FileW = HEAP_strdupA2W_buf(lpszFontFile, NULL, 0)))
+        goto NoMemory;
+    if (lpszCurrentPath && !(PathW = HEAP_strdupA2W_buf(lpszCurrentPath, NULL, 0)))
+        goto NoMemory;
+
+    Ret = CreateScalableFontResourceW(fdwHidden, ResW, FileW, PathW);
+
+    HEAP_strdupA2W_buf_free(ResW, NULL);
+    HEAP_strdupA2W_buf_free(FileW, NULL);
+    HEAP_strdupA2W_buf_free(PathW, NULL);
+    return Ret;
+
+NoMemory:
+    HEAP_strdupA2W_buf_free(ResW, NULL);
+    HEAP_strdupA2W_buf_free(FileW, NULL);
+    HEAP_strdupA2W_buf_free(PathW, NULL);
+    SetLastError(ERROR_OUTOFMEMORY);
     return FALSE;
 }
 
@@ -2240,6 +2262,188 @@ RemoveFontResourceExA(
     return result;
 }
 
+#define FOT_NE_FFLAGS_LIBMODULE 0x8000
+#define FOT_NE_OSFLAGS_WINDOWS 0x02
+
+static const char FotDosString[0x40] = "This is a TrueType resource file";
+static const char FotFontRes[] = {'F','O','N','T','R','E','S',':'};
+
+#include <pshpack1.h>
+typedef struct _FOT_FONTDIR
+{
+    WORD num_of_resources;
+    WORD res_id;
+    WORD dfVersion;
+    DWORD dfSize;
+    CHAR dfCopyright[60];
+    WORD dfType;
+    WORD dfPoints;
+    WORD dfVertRes;
+    WORD dfHorizRes;
+    WORD dfAscent;
+    WORD dfInternalLeading;
+    WORD dfExternalLeading;
+    BYTE dfItalic;
+    BYTE dfUnderline;
+    BYTE dfStrikeOut;
+    WORD dfWeight;
+    BYTE dfCharSet;
+    WORD dfPixWidth;
+    WORD dfPixHeight;
+    BYTE dfPitchAndFamily;
+    WORD dfAvgWidth;
+    WORD dfMaxWidth;
+    BYTE dfFirstChar;
+    BYTE dfLastChar;
+    BYTE dfDefaultChar;
+    BYTE dfBreakChar;
+    WORD dfWidthBytes;
+    DWORD dfDevice;
+    DWORD dfFace;
+    DWORD dfReserved;
+    CHAR szFaceName[LF_FACESIZE];
+} FOT_FONTDIR;
+#include <poppack.h>
+
+#include <pshpack2.h>
+typedef struct _FOT_NE_TYPEINFO
+{
+    WORD type_id;
+    WORD count;
+    DWORD res;
+} FOT_NE_TYPEINFO;
+
+typedef struct _FOT_NE_NAMEINFO
+{
+    WORD off;
+    WORD len;
+    WORD flags;
+    WORD id;
+    DWORD res;
+} FOT_NE_NAMEINFO;
+
+typedef struct _FOT_RSRC_TAB
+{
+    WORD align;
+    FOT_NE_TYPEINFO fontdir_type;
+    FOT_NE_NAMEINFO fontdir_name;
+    FOT_NE_TYPEINFO scalable_type;
+    FOT_NE_NAMEINFO scalable_name;
+    WORD end_of_rsrc;
+    BYTE fontdir_res_name[8];
+} FOT_RSRC_TAB;
+#include <poppack.h>
+
+static PVOID
+IntMapFontResourceFile(
+    _In_ LPCWSTR FileName,
+    _Out_ PLARGE_INTEGER Size)
+{
+    HANDLE File, Mapping;
+    PVOID Ptr;
+
+    File = CreateFileW(FileName, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (File == INVALID_HANDLE_VALUE)
+        return NULL;
+
+    if (!GetFileSizeEx(File, Size) || Size->HighPart)
+    {
+        CloseHandle(File);
+        return NULL;
+    }
+
+    Mapping = CreateFileMappingW(File, NULL, PAGE_READONLY, 0, 0, NULL);
+    CloseHandle(File);
+    if (!Mapping)
+        return NULL;
+
+    Ptr = MapViewOfFile(Mapping, FILE_MAP_READ, 0, 0, 0);
+    CloseHandle(Mapping);
+    return Ptr;
+}
+
+static PVOID
+IntFindNeResource(
+    _In_ PBYTE Ptr,
+    _In_ WORD Type,
+    _In_ DWORD ResourceOffset,
+    _In_ DWORD Size,
+    _Out_ PDWORD Length)
+{
+    WORD Align, TypeId, Count;
+    DWORD DataOffset;
+
+    if (Size < ResourceOffset + 10)
+        return NULL;
+    Align = *(WORD *)(Ptr + ResourceOffset);
+    ResourceOffset += 2;
+    TypeId = *(WORD *)(Ptr + ResourceOffset);
+    while (TypeId && TypeId != Type)
+    {
+        Count = *(WORD *)(Ptr + ResourceOffset + 2);
+        ResourceOffset += 8 + Count * 12;
+        if (Size < ResourceOffset + 8)
+            return NULL;
+        TypeId = *(WORD *)(Ptr + ResourceOffset);
+    }
+    if (!TypeId)
+        return NULL;
+    Count = *(WORD *)(Ptr + ResourceOffset + 2);
+    if (Size < ResourceOffset + 8 + Count * 12)
+        return NULL;
+    DataOffset = *(WORD *)(Ptr + ResourceOffset + 8) << Align;
+    *Length = *(WORD *)(Ptr + ResourceOffset + 10) << Align;
+    if (Size < DataOffset + *Length)
+        return NULL;
+    return Ptr + DataOffset;
+}
+
+static PWSTR
+IntGetScalableFontFileName(
+    _In_ LPCWSTR ResourceFile,
+    _Out_ PBOOL Hidden)
+{
+    LARGE_INTEGER Size;
+    PBYTE Ptr;
+    const IMAGE_DOS_HEADER *Dos;
+    const IMAGE_OS2_HEADER *Ne;
+    PWORD FontDir;
+    PCHAR Data;
+    PWSTR Name = NULL;
+    DWORD Length;
+
+    Ptr = IntMapFontResourceFile(ResourceFile, &Size);
+    if (!Ptr)
+        return NULL;
+
+    if (Size.LowPart < sizeof(*Dos))
+        goto Exit;
+    Dos = (const IMAGE_DOS_HEADER *)Ptr;
+    if (Dos->e_magic != IMAGE_DOS_SIGNATURE)
+        goto Exit;
+    if (Size.LowPart < Dos->e_lfanew + sizeof(*Ne))
+        goto Exit;
+    Ne = (const IMAGE_OS2_HEADER *)(Ptr + Dos->e_lfanew);
+
+    FontDir = IntFindNeResource(Ptr, 0x8007, Dos->e_lfanew + Ne->ne_rsrctab, Size.LowPart, &Length);
+    if (!FontDir)
+        goto Exit;
+    *Hidden = (FontDir[35] & 0x80) != 0;
+
+    Data = IntFindNeResource(Ptr, 0x80cc, Dos->e_lfanew + Ne->ne_rsrctab, Size.LowPart, &Length);
+    if (!Data || !memchr(Data, 0, Length))
+        goto Exit;
+
+    Length = MultiByteToWideChar(CP_ACP, 0, Data, -1, NULL, 0);
+    Name = HeapAlloc(GetProcessHeap(), 0, Length * sizeof(WCHAR));
+    if (Name)
+        MultiByteToWideChar(CP_ACP, 0, Data, -1, Name, Length);
+
+Exit:
+    UnmapViewOfFile(Ptr);
+    return Name;
+}
+
 /* @implemented */
 BOOL
 WINAPI
@@ -2260,12 +2464,27 @@ RemoveFontResourceExW(
         return FALSE;
 
     ULONG cFiles, cwc;
+    DWORD flOriginal = fl;
+    BOOL ret = FALSE;
     PWSTR pszConverted = IntConvertFontPaths(lpFileName, &cFiles, &cwc, &fl, TRUE);
-    if (!pszConverted)
-        return FALSE;
+    if (pszConverted)
+    {
+        ret = NtGdiRemoveFontResourceW(pszConverted, cwc, cFiles, fl, 0, NULL);
+        HEAP_free(pszConverted);
+    }
 
-    BOOL ret = NtGdiRemoveFontResourceW(pszConverted, cwc, cFiles, fl, 0, NULL);
-    HEAP_free(pszConverted);
+    if (!ret)
+    {
+        BOOL bHidden = FALSE;
+        PWSTR pszScalable = IntGetScalableFontFileName(lpFileName, &bHidden);
+        if (pszScalable)
+        {
+            if (bHidden)
+                flOriginal |= FR_PRIVATE | FR_NOT_ENUM;
+            ret = RemoveFontResourceExW(pszScalable, flOriginal, pdv);
+            HeapFree(GetProcessHeap(), 0, pszScalable);
+        }
+    }
     return ret;
 }
 
@@ -2567,23 +2786,41 @@ GdiAddFontResourceW(
     DESIGNVECTOR *pdv)
 {
     ULONG cFiles, cwc;
+    FLONG flOriginal = fl;
+    BOOL bConverted;
+    INT ret = 0;
     PWSTR pszConverted = IntConvertFontPaths(lpszFilename, &cFiles, &cwc, &fl, FALSE);
-    if (!pszConverted)
-        return 0;
-
-    INT ret = NtGdiAddFontResourceW(pszConverted, cwc, cFiles, fl, 0, pdv);
-    HEAP_free(pszConverted);
-    if (ret)
-        return ret;
-
-    pszConverted = IntConvertFontPaths(lpszFilename, &cFiles, &cwc, &fl, TRUE);
     if (!pszConverted)
         return 0;
 
     ret = NtGdiAddFontResourceW(pszConverted, cwc, cFiles, fl, 0, pdv);
     HEAP_free(pszConverted);
+    if (ret)
+        return ret;
+
+    pszConverted = IntConvertFontPaths(lpszFilename, &cFiles, &cwc, &fl, TRUE);
+    bConverted = (pszConverted != NULL);
+    if (bConverted)
+    {
+        ret = NtGdiAddFontResourceW(pszConverted, cwc, cFiles, fl, 0, pdv);
+        HEAP_free(pszConverted);
+    }
+
     if (!ret)
-        SetLastError(ERROR_INVALID_PARAMETER);
+    {
+        BOOL bHidden = FALSE;
+        PWSTR pszScalable = IntGetScalableFontFileName(lpszFilename, &bHidden);
+        if (pszScalable)
+        {
+            if (bHidden)
+                flOriginal |= FR_PRIVATE | FR_NOT_ENUM;
+            ret = GdiAddFontResourceW(pszScalable, flOriginal, pdv);
+            HeapFree(GetProcessHeap(), 0, pszScalable);
+            return ret;
+        }
+        if (bConverted)
+            SetLastError(ERROR_INVALID_PARAMETER);
+    }
     return ret;
 }
 
@@ -2650,6 +2887,177 @@ RemoveFontResourceTracking(LPCSTR lpString,int unknown)
     return 0;
 }
 
+static BOOL
+IntCreateFotFile(
+    _In_ LPCWSTR Resource,
+    _In_ LPCWSTR FontFile,
+    _In_ const FOT_FONTDIR *FontDir)
+{
+    BOOL Ret = FALSE;
+    HANDLE File;
+    DWORD Size, Written;
+    PBYTE Ptr, Start;
+    BYTE ImportNameLen, ResNameLen, NonResNameLen, FontFileLen;
+    PCHAR FontFileA, LastPart, Ext;
+    IMAGE_DOS_HEADER Dos;
+    IMAGE_OS2_HEADER Ne =
+    {
+        IMAGE_OS2_SIGNATURE, 5, 1, 0, 0, 0, FOT_NE_FFLAGS_LIBMODULE, 0,
+        0, 0, 0, 0, 0, 0,
+        0, sizeof(Ne), sizeof(Ne), 0, 0, 0, 0,
+        0, 4, 2, FOT_NE_OSFLAGS_WINDOWS, 0, 0, 0, 0, 0x300
+    };
+    FOT_RSRC_TAB RsrcTab =
+    {
+        4,
+        { 0x8007, 1, 0 },
+        { 0, 0, 0x0c50, 0x2c, 0 },
+        { 0x80cc, 1, 0 },
+        { 0, 0, 0x0c50, 0x8001, 0 },
+        0,
+        { 7, 'F', 'O', 'N', 'T', 'D', 'I', 'R' }
+    };
+
+    RtlZeroMemory(&Dos, sizeof(Dos));
+    Dos.e_magic = IMAGE_DOS_SIGNATURE;
+    Dos.e_lfanew = sizeof(Dos) + sizeof(FotDosString);
+
+    FontFileLen = WideCharToMultiByte(CP_ACP, 0, FontFile, -1, NULL, 0, NULL, NULL);
+    FontFileA = HeapAlloc(GetProcessHeap(), 0, FontFileLen);
+    if (!FontFileA)
+        return FALSE;
+    WideCharToMultiByte(CP_ACP, 0, FontFile, -1, FontFileA, FontFileLen, NULL, NULL);
+
+    LastPart = strrchr(FontFileA, '\\');
+    if (LastPart)
+        LastPart++;
+    else
+        LastPart = FontFileA;
+    ImportNameLen = strlen(LastPart) + 1;
+
+    Ext = strchr(LastPart, '.');
+    if (Ext)
+        ResNameLen = Ext - LastPart;
+    else
+        ResNameLen = ImportNameLen - 1;
+
+    NonResNameLen = sizeof(FotFontRes) + strlen(FontDir->szFaceName);
+
+    Ne.ne_cbnrestab = 1 + NonResNameLen + 2 + 1;
+    Ne.ne_restab = Ne.ne_rsrctab + sizeof(RsrcTab);
+    Ne.ne_modtab = Ne.ne_imptab = Ne.ne_restab + 1 + ResNameLen + 2 + 3;
+    Ne.ne_enttab = Ne.ne_imptab + 1 + ImportNameLen;
+    Ne.ne_cbenttab = 2;
+    Ne.ne_nrestab = Ne.ne_enttab + Ne.ne_cbenttab + 2 + Dos.e_lfanew;
+
+    RsrcTab.scalable_name.off = (Ne.ne_nrestab + Ne.ne_cbnrestab + 0xf) >> 4;
+    RsrcTab.scalable_name.len = (FontFileLen + 0xf) >> 4;
+    RsrcTab.fontdir_name.off = RsrcTab.scalable_name.off + RsrcTab.scalable_name.len;
+    RsrcTab.fontdir_name.len = (FontDir->dfSize + 0xf) >> 4;
+
+    Size = (RsrcTab.fontdir_name.off + RsrcTab.fontdir_name.len) << 4;
+    Start = Ptr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size);
+    if (!Ptr)
+    {
+        HeapFree(GetProcessHeap(), 0, FontFileA);
+        return FALSE;
+    }
+
+    RtlCopyMemory(Ptr, &Dos, sizeof(Dos));
+    RtlCopyMemory(Ptr + sizeof(Dos), FotDosString, sizeof(FotDosString));
+    RtlCopyMemory(Ptr + Dos.e_lfanew, &Ne, sizeof(Ne));
+
+    Ptr = Start + Dos.e_lfanew + Ne.ne_rsrctab;
+    RtlCopyMemory(Ptr, &RsrcTab, sizeof(RsrcTab));
+
+    Ptr = Start + Dos.e_lfanew + Ne.ne_restab;
+    *Ptr++ = ResNameLen;
+    RtlCopyMemory(Ptr, LastPart, ResNameLen);
+
+    Ptr = Start + Dos.e_lfanew + Ne.ne_imptab;
+    *Ptr++ = ImportNameLen;
+    RtlCopyMemory(Ptr, LastPart, ImportNameLen);
+
+    Ptr = Start + Ne.ne_nrestab;
+    *Ptr++ = NonResNameLen;
+    RtlCopyMemory(Ptr, FotFontRes, sizeof(FotFontRes));
+    RtlCopyMemory(Ptr + sizeof(FotFontRes), FontDir->szFaceName, strlen(FontDir->szFaceName));
+
+    Ptr = Start + (RsrcTab.scalable_name.off << 4);
+    RtlCopyMemory(Ptr, FontFileA, FontFileLen);
+
+    Ptr = Start + (RsrcTab.fontdir_name.off << 4);
+    RtlCopyMemory(Ptr, FontDir, FontDir->dfSize);
+
+    File = CreateFileW(Resource, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (File != INVALID_HANDLE_VALUE)
+    {
+        if (WriteFile(File, Start, Size, &Written, NULL) && Written == Size)
+            Ret = TRUE;
+        CloseHandle(File);
+    }
+
+    HeapFree(GetProcessHeap(), 0, Start);
+    HeapFree(GetProcessHeap(), 0, FontFileA);
+    return Ret;
+}
+
+static BOOL
+IntGetFontFileOutlineMetrics(
+    _In_ LPCWSTR Path,
+    _Out_ TEXTMETRICW *Tm,
+    _Out_ PUINT EmSquare,
+    _Out_writes_(LF_FACESIZE) PWSTR FaceName)
+{
+    LOGFONTW Logfonts[16];
+    DWORD Size = sizeof(Logfonts);
+    OUTLINETEXTMETRICW *Otm = NULL;
+    HFONT hFont, hOldFont;
+    UINT cbOtm;
+    HDC hdc;
+    BOOL Ret = FALSE;
+
+    if (GetFileAttributesW(Path) == INVALID_FILE_ATTRIBUTES)
+        return FALSE;
+
+    if (!GdiAddFontResourceW(Path, 0, NULL))
+        return FALSE;
+
+    if (GetFontResourceInfoW(Path, &Size, Logfonts, 2) && Size >= sizeof(LOGFONTW))
+    {
+        hdc = CreateCompatibleDC(NULL);
+        if (hdc)
+        {
+            Logfonts[0].lfHeight = 100;
+            Logfonts[0].lfWidth = 0;
+            hFont = CreateFontIndirectW(&Logfonts[0]);
+            if (hFont)
+            {
+                hOldFont = SelectObject(hdc, hFont);
+                cbOtm = GetOutlineTextMetricsW(hdc, 0, NULL);
+                if (cbOtm)
+                    Otm = HeapAlloc(GetProcessHeap(), 0, cbOtm);
+                if (Otm && GetOutlineTextMetricsW(hdc, cbOtm, Otm))
+                {
+                    *Tm = Otm->otmTextMetrics;
+                    *EmSquare = Otm->otmEMSquare;
+                    StringCchCopyW(FaceName, LF_FACESIZE,
+                                   (PCWSTR)((PBYTE)Otm + (ULONG_PTR)Otm->otmpFamilyName));
+                    Ret = TRUE;
+                }
+                if (Otm)
+                    HeapFree(GetProcessHeap(), 0, Otm);
+                SelectObject(hdc, hOldFont);
+                DeleteObject(hFont);
+            }
+            DeleteDC(hdc);
+        }
+    }
+
+    RemoveFontResourceExW(Path, 0, NULL);
+    return Ret;
+}
+
 BOOL
 WINAPI
 CreateScalableFontResourceW(
@@ -2659,23 +3067,74 @@ CreateScalableFontResourceW(
     LPCWSTR lpszCurrentPath
 )
 {
-    HANDLE f;
+    WCHAR Path[MAX_PATH], FaceName[LF_FACESIZE];
+    FOT_FONTDIR FontDir;
+    TEXTMETRICW Tm;
+    UINT EmSquare;
+    LPCWSTR MetricsPath;
 
-    UNIMPLEMENTED;
+    if (!lpszFontFile)
+        goto Fail;
 
-    /* fHidden=1 - only visible for the calling app, read-only, not
-     * enumerated with EnumFonts/EnumFontFamilies
-     * lpszCurrentPath can be NULL
-     */
-
-    /* If the output file already exists, return the ERROR_FILE_EXISTS error as specified in MSDN */
-    if ((f = CreateFileW(lpszFontRes, 0, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0)) != INVALID_HANDLE_VALUE)
+    if (lpszCurrentPath && lpszCurrentPath[0])
     {
-        CloseHandle(f);
-        SetLastError(ERROR_FILE_EXISTS);
-        return FALSE;
+        if (lstrlenW(lpszCurrentPath) + lstrlenW(lpszFontFile) + 2 > MAX_PATH)
+            goto Fail;
+        StringCchCopyW(Path, MAX_PATH, lpszCurrentPath);
+        StringCchCatW(Path, MAX_PATH, L"\\");
+        StringCchCatW(Path, MAX_PATH, lpszFontFile);
+        MetricsPath = Path;
     }
-    return FALSE; /* create failed */
+    else
+    {
+        MetricsPath = lpszFontFile;
+    }
+
+    if (!IntGetFontFileOutlineMetrics(MetricsPath, &Tm, &EmSquare, FaceName))
+        goto Fail;
+    if (!(Tm.tmPitchAndFamily & TMPF_TRUETYPE))
+        goto Fail;
+
+    RtlZeroMemory(&FontDir, sizeof(FontDir));
+    FontDir.num_of_resources = 1;
+    FontDir.res_id = 0;
+    FontDir.dfVersion = 0x200;
+    FontDir.dfSize = sizeof(FontDir);
+    strcpy(FontDir.dfCopyright, "ReactOS fontdir");
+    FontDir.dfType = 0x4003;
+    FontDir.dfPoints = EmSquare;
+    FontDir.dfVertRes = 72;
+    FontDir.dfHorizRes = 72;
+    FontDir.dfAscent = Tm.tmAscent;
+    FontDir.dfInternalLeading = Tm.tmInternalLeading;
+    FontDir.dfExternalLeading = Tm.tmExternalLeading;
+    FontDir.dfItalic = Tm.tmItalic;
+    FontDir.dfUnderline = Tm.tmUnderlined;
+    FontDir.dfStrikeOut = Tm.tmStruckOut;
+    FontDir.dfWeight = Tm.tmWeight;
+    FontDir.dfCharSet = Tm.tmCharSet;
+    FontDir.dfPixWidth = 0;
+    FontDir.dfPixHeight = Tm.tmHeight;
+    FontDir.dfPitchAndFamily = Tm.tmPitchAndFamily;
+    FontDir.dfAvgWidth = Tm.tmAveCharWidth;
+    FontDir.dfMaxWidth = Tm.tmMaxCharWidth;
+    FontDir.dfFirstChar = Tm.tmFirstChar;
+    FontDir.dfLastChar = Tm.tmLastChar;
+    FontDir.dfDefaultChar = Tm.tmDefaultChar;
+    FontDir.dfBreakChar = Tm.tmBreakChar;
+    FontDir.dfWidthBytes = 0;
+    FontDir.dfDevice = 0;
+    FontDir.dfFace = FIELD_OFFSET(FOT_FONTDIR, szFaceName);
+    FontDir.dfReserved = 0;
+    WideCharToMultiByte(CP_ACP, 0, FaceName, -1, FontDir.szFaceName, LF_FACESIZE, NULL, NULL);
+
+    if (fdwHidden)
+        FontDir.dfType |= 0x80;
+    return IntCreateFotFile(lpszFontRes, lpszFontFile, &FontDir);
+
+Fail:
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
 }
 
 /*
