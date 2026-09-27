@@ -546,8 +546,8 @@ QueryDosDeviceW(
     )
 {
     PWSTR Ptr;
-    PVOID Buffer;
-    NTSTATUS Status;
+    PVOID _SEH2_VOLATILE Buffer;
+    NTSTATUS _SEH2_VOLATILE Status;
     USHORT i, TotalEntries;
     UNICODE_STRING UnicodeString;
     OBJECT_ATTRIBUTES ObjectAttributes;
@@ -555,7 +555,8 @@ QueryDosDeviceW(
     BOOLEAN IsGlobal, GlobalNeeded, Found;
     POBJECT_DIRECTORY_INFORMATION DirInfo;
     OBJECT_DIRECTORY_INFORMATION NullEntry = {{0}};
-    ULONG ReturnLength, NameLength, Length = 0, Context, BufferLength;
+    ULONG ReturnLength, NameLength, Context, BufferLength;
+    ULONG _SEH2_VOLATILE Length = 0;
 
     /* Open the '\??' directory */
     RtlInitUnicodeString(&UnicodeString, L"\\??");
