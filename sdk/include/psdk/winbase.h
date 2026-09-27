@@ -2633,6 +2633,8 @@ BOOL WINAPI IsWow64Process(HANDLE,PBOOL);
 #endif
 #if (_WIN32_WINNT >= 0x0A00)
 BOOL WINAPI IsWow64Process2(HANDLE,PUSHORT,PUSHORT);
+HRESULT WINAPI IsWow64GuestMachineSupported(USHORT,PBOOL);
+HRESULT WINAPI GetMachineTypeAttributes(USHORT,MACHINE_ATTRIBUTES*);
 #endif
 void WINAPI LeaveCriticalSection(LPCRITICAL_SECTION);
 #define LimitEmsPages(n)

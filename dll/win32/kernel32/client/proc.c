@@ -1886,6 +1886,86 @@ IsWow64Process2(IN HANDLE hProcess,
     return TRUE;
 }
 
+static
+NTSTATUS
+BasepQuerySupportedMachines(OUT SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION *Machines,
+                            IN ULONG Count)
+{
+    HANDLE Process = NULL;
+
+    RtlZeroMemory(Machines, Count * sizeof(*Machines));
+    return NtQuerySystemInformationEx(SystemSupportedProcessorArchitectures2,
+                                      &Process,
+                                      sizeof(Process),
+                                      Machines,
+                                      (Count - 1) * sizeof(*Machines),
+                                      NULL);
+}
+
+/*
+ * @implemented
+ */
+HRESULT
+WINAPI
+GetMachineTypeAttributes(IN USHORT Machine,
+                         OUT MACHINE_ATTRIBUTES *MachineTypeAttributes)
+{
+    SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION Machines[8];
+    ULONG Attributes = 0;
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = BasepQuerySupportedMachines(Machines, RTL_NUMBER_OF(Machines));
+    if (!NT_SUCCESS(Status))
+        return HRESULT_FROM_NT(Status);
+
+    for (Index = 0; Machines[Index].Machine; Index++)
+    {
+        if (Machines[Index].Machine != Machine)
+            continue;
+
+        if (Machines[Index].UserMode)
+            Attributes |= UserEnabled;
+        if (Machines[Index].KernelMode)
+            Attributes |= KernelEnabled;
+        if (Machines[Index].WoW64Container)
+            Attributes |= Wow64Container;
+        break;
+    }
+
+    *MachineTypeAttributes = (MACHINE_ATTRIBUTES)Attributes;
+    return S_OK;
+}
+
+/*
+ * @implemented
+ */
+HRESULT
+WINAPI
+IsWow64GuestMachineSupported(IN USHORT WowGuestMachine,
+                             OUT PBOOL MachineIsSupported)
+{
+    SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION Machines[8];
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = BasepQuerySupportedMachines(Machines, RTL_NUMBER_OF(Machines));
+    if (!NT_SUCCESS(Status))
+        return HRESULT_FROM_NT(Status);
+
+    *MachineIsSupported = FALSE;
+    for (Index = 0; Machines[Index].Machine; Index++)
+    {
+        if (Machines[Index].Machine == WowGuestMachine && Machines[Index].WoW64Container)
+        {
+            *MachineIsSupported = TRUE;
+            break;
+        }
+    }
+
+    return S_OK;
+}
+
 /*
  * @implemented
  */
