@@ -66,7 +66,7 @@ MiCheckForUserStackOverflow(
             _SEH2_YIELD(return STATUS_GUARD_PAGE_VIOLATION);
 
         Guaranteed = ROUND_TO_PAGES(Guaranteed);
-        OverflowReserve = GuardSize + PAGE_SIZE;
+        OverflowReserve = max(GuardSize, 2 * PAGE_SIZE);
         if (Guaranteed != 0 && Guaranteed < StackBase - DeallocationStack)
         {
             GuardSize = max(GuardSize, Guaranteed + PAGE_SIZE);
