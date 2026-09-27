@@ -686,6 +686,20 @@ LRESULT co_UserFreeWindow(PWND Window,
          ThreadData->rpdesk->rpwinstaParent->ShellListView = NULL;
    }
 
+   if (Window->head.rpdesk && Window->head.rpdesk->pDeskInfo)
+   {
+      PDESKTOPINFO pDeskInfo = Window->head.rpdesk->pDeskInfo;
+
+      if (pDeskInfo->spwndShell == Window)
+      {
+         pDeskInfo->spwndShell = NULL;
+         pDeskInfo->hShellWindow = NULL;
+         pDeskInfo->ppiShellProcess = NULL;
+      }
+      if (pDeskInfo->spwndBkGnd == Window)
+         pDeskInfo->spwndBkGnd = NULL;
+   }
+
    if (ThreadData->spwndDefaultIme &&
        ThreadData->spwndDefaultIme->spwndOwner == Window)
    {
@@ -3847,6 +3861,10 @@ HWND FASTCALL UserGetShellWindow(VOID)
 {
    PWINSTATION_OBJECT WinStaObject;
    HWND Ret;
+   PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+
+   if (pti && pti->pDeskInfo && pti->pDeskInfo->hShellWindow)
+      return pti->pDeskInfo->hShellWindow;
 
    NTSTATUS Status = IntValidateWindowStationHandle(PsGetCurrentProcess()->Win32WindowStation,
                      UserMode,
@@ -3910,10 +3928,12 @@ NtUserSetShellWindowEx(HWND hwndShell, HWND hwndListView)
       goto Exit; // Return FALSE
    }
 
+   ti = GetW32ThreadInfo();
+
    /*
     * Test if we are permitted to change the shell window.
     */
-   if (WinStaObject->ShellWindow)
+   if (!ti->pDeskInfo || ti->pDeskInfo->spwndShell)
    {
       ObDereferenceObject(WinStaObject);
       goto Exit; // Return FALSE
@@ -3949,17 +3969,16 @@ NtUserSetShellWindowEx(HWND hwndShell, HWND hwndListView)
    WndShell->state2 |= WNDS2_BOTTOMMOST;
    co_WinPosSetWindowPos(WndShell, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 
-   WinStaObject->ShellWindow = hwndShell;
-   WinStaObject->ShellListView = hwndListView;
-
-   ti = GetW32ThreadInfo();
-   if (ti->pDeskInfo)
+   if (!WinStaObject->ShellWindow)
    {
-       ti->pDeskInfo->hShellWindow = hwndShell;
-       ti->pDeskInfo->spwndShell = WndShell;
-       ti->pDeskInfo->spwndBkGnd = WndListView;
-       ti->pDeskInfo->ppiShellProcess = ti->ppi;
+      WinStaObject->ShellWindow = hwndShell;
+      WinStaObject->ShellListView = hwndListView;
    }
+
+   ti->pDeskInfo->hShellWindow = hwndShell;
+   ti->pDeskInfo->spwndShell = WndShell;
+   ti->pDeskInfo->spwndBkGnd = WndListView;
+   ti->pDeskInfo->ppiShellProcess = ti->ppi;
 
    UserRegisterHotKey(WndShell, SC_TASKLIST, MOD_CONTROL, VK_ESCAPE);
 
@@ -4064,6 +4083,12 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
             {
                if (hWnd == WindowStation->ShellWindow || hWnd == WindowStation->ShellListView)
                   Style.styleNew &= ~WS_EX_TOPMOST;
+            }
+            if (Window->head.rpdesk && Window->head.rpdesk->pDeskInfo &&
+                (Window->head.rpdesk->pDeskInfo->spwndShell == Window ||
+                 Window->head.rpdesk->pDeskInfo->spwndBkGnd == Window))
+            {
+               Style.styleNew &= ~WS_EX_TOPMOST;
             }
             /* WS_EX_WINDOWEDGE depends on some other styles */
             if (IntCheckFrameEdge(Window->style, NewValue))
