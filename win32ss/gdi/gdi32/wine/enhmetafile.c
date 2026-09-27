@@ -308,6 +308,7 @@ static BOOL EMF_Delete_HENHMETAFILE( HENHMETAFILE hmf )
         HeapFree( GetProcessHeap(), 0, metaObj );
         Ret = TRUE;
     }
+    else SetLastError( ERROR_INVALID_HANDLE );
     LeaveCriticalSection( &enhmetafile_cs );
     return Ret;
 }
@@ -330,6 +331,7 @@ static ENHMETAHEADER *EMF_GetEnhMetaHeader( HENHMETAFILE hmf )
         ret = metaObj->emh;
         GDI_ReleaseObj( hmf );
     }
+    else SetLastError( ERROR_INVALID_HANDLE );
     LeaveCriticalSection( &enhmetafile_cs );
     return ret;
 }
@@ -1819,11 +1821,7 @@ BOOL WINAPI PlayEnhMetaFileRecord(
     case EMR_CREATEDIBPATTERNBRUSHPT:
       {
         const EMRCREATEDIBPATTERNBRUSHPT *lpCreate = (const EMRCREATEDIBPATTERNBRUSHPT *)mr;
-        LPVOID lpPackedStruct;
 
-        /* Check that offsets and data are contained within the record
-         * (including checking for wrap-arounds).
-         */
         if (    lpCreate->offBmi  + lpCreate->cbBmi  > mr->nSize
              || lpCreate->offBits + lpCreate->cbBits > mr->nSize
              || lpCreate->offBmi  + lpCreate->cbBmi  < lpCreate->offBmi
@@ -1833,28 +1831,15 @@ BOOL WINAPI PlayEnhMetaFileRecord(
             break;
         }
 
-        /* This is a BITMAPINFO struct followed directly by bitmap bits */
-        lpPackedStruct = HeapAlloc( GetProcessHeap(), 0,
-                                    lpCreate->cbBmi + lpCreate->cbBits );
-        if(!lpPackedStruct)
+        if (lpCreate->offBmi + lpCreate->cbBmi != lpCreate->offBits)
         {
-            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            ERR("Invalid data in EMR_CREATEDIBPATTERNBRUSHPT record\n");
             break;
         }
 
-        /* Now pack this structure */
-        memcpy( lpPackedStruct,
-                ((const BYTE *)lpCreate) + lpCreate->offBmi,
-                lpCreate->cbBmi );
-        memcpy( ((BYTE*)lpPackedStruct) + lpCreate->cbBmi,
-                ((const BYTE *)lpCreate) + lpCreate->offBits,
-                lpCreate->cbBits );
-
         (handletable->objectHandle)[lpCreate->ihBrush] =
-           CreateDIBPatternBrushPt( lpPackedStruct,
+           CreateDIBPatternBrushPt( (const BYTE *)lpCreate + lpCreate->offBmi,
                                     (UINT)lpCreate->iUsage );
-
-        HeapFree(GetProcessHeap(), 0, lpPackedStruct);
         break;
       }
 

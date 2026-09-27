@@ -139,7 +139,11 @@ static POINT *convert_points( UINT count, const POINTS *pts )
 BOOL WINAPI DeleteMetaFile( HMETAFILE hmf )
 {
     METAHEADER *mh = free_gdi_handle( hmf );
-    if (!mh) return FALSE;
+    if (!mh)
+    {
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
+    }
     return HeapFree( GetProcessHeap(), 0, mh );
 }
 
@@ -290,7 +294,11 @@ static METAHEADER *get_metafile_bits( HMETAFILE hmf )
 {
     METAHEADER *ret, *mh = GDI_GetObjPtr( hmf, OBJ_METAFILE );
 
-    if (!mh) return NULL;
+    if (!mh)
+    {
+        SetLastError( ERROR_INVALID_HANDLE );
+        return NULL;
+    }
 
     if (mh->mtType != METAFILE_DISK)
     {
@@ -379,28 +387,31 @@ HMETAFILE WINAPI CopyMetaFileA( HMETAFILE hSrcMetaFile, LPCSTR lpFilename )
  */
 BOOL WINAPI PlayMetaFile( HDC hdc, HMETAFILE hmf )
 {
+    BOOL metadc = GetObjectType(hdc) == OBJ_METADC;
     METAHEADER *mh = get_metafile_bits( hmf );
     METARECORD *mr;
     HANDLETABLE *ht;
     unsigned int offset = 0;
     WORD i;
-    HPEN hPen;
-    HBRUSH hBrush;
-    HPALETTE hPal;
-    HRGN hRgn;
+    HPEN hPen = NULL;
+    HBRUSH hBrush = NULL;
+    HPALETTE hPal = NULL;
+    HRGN hRgn = NULL;
 
     if (!mh) return FALSE;
 
-    /* save DC */
-    hPen = GetCurrentObject(hdc, OBJ_PEN);
-    hBrush = GetCurrentObject(hdc, OBJ_BRUSH);
-    hPal = GetCurrentObject(hdc, OBJ_PAL);
-
-    hRgn = CreateRectRgn(0, 0, 0, 0);
-    if (!GetClipRgn(hdc, hRgn))
+    if (!metadc)
     {
-        DeleteObject(hRgn);
-        hRgn = 0;
+        hPen = GetCurrentObject(hdc, OBJ_PEN);
+        hBrush = GetCurrentObject(hdc, OBJ_BRUSH);
+        hPal = GetCurrentObject(hdc, OBJ_PAL);
+
+        hRgn = CreateRectRgn(0, 0, 0, 0);
+        if (!GetClipRgn(hdc, hRgn))
+        {
+            DeleteObject(hRgn);
+            hRgn = 0;
+        }
     }
 
     /* create the handle table */
@@ -433,12 +444,14 @@ BOOL WINAPI PlayMetaFile( HDC hdc, HMETAFILE hmf )
 	PlayMetaFileRecord( hdc, ht, mr, mh->mtNoObjects );
     }
 
-    /* restore DC */
-    SelectObject(hdc, hPen);
-    SelectObject(hdc, hBrush);
-    SelectPalette(hdc, hPal, FALSE);
-    ExtSelectClipRgn(hdc, hRgn, RGN_COPY);
-    DeleteObject(hRgn);
+    if (!metadc)
+    {
+        SelectObject(hdc, hPen);
+        SelectObject(hdc, hBrush);
+        SelectPalette(hdc, hPal, FALSE);
+        ExtSelectClipRgn(hdc, hRgn, RGN_COPY);
+        DeleteObject(hRgn);
+    }
 
     /* free objects in handle table */
     for(i = 0; i < mh->mtNoObjects; i++)
@@ -1095,7 +1108,11 @@ UINT WINAPI GetMetaFileBitsEx( HMETAFILE hmf, UINT nSize, LPVOID buf )
     BOOL mf_copy = FALSE;
 
     TRACE("(%p,%d,%p)\n", hmf, nSize, buf);
-    if (!mh) return 0;  /* FIXME: error code */
+    if (!mh)
+    {
+        SetLastError( ERROR_INVALID_HANDLE );
+        return 0;
+    }
     if(mh->mtType == METAFILE_DISK)
     {
         mh = MF_LoadDiskBasedMetaFile( mh );

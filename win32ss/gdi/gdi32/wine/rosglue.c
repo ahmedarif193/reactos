@@ -223,12 +223,14 @@ get_brush_bitmap_info(
     PVOID pvBits,
     PUINT puUsage)
 {
+    BYTE ajInfo[FIELD_OFFSET(BITMAPINFO, bmiColors) + 256 * sizeof(RGBQUAD)];
+    PBITMAPINFO pbmiLocal = (PBITMAPINFO)ajInfo;
     HBITMAP hbmp;
     HDC hdc;
-    PVOID Bits;
+    UINT uUsage;
+    BOOL bResult = FALSE;
 
-    /* Call win32k to get the bitmap handle and color usage */
-    hbmp = NtGdiGetObjectBitmapHandle(hbr, puUsage);
+    hbmp = NtGdiGetObjectBitmapHandle(hbr, &uUsage);
     if (hbmp == NULL)
         return FALSE;
 
@@ -236,38 +238,30 @@ get_brush_bitmap_info(
     if (hdc == NULL)
         return FALSE;
 
-    /* Initialize the BITMAPINFO */
-    ZeroMemory(pbmi, sizeof(*pbmi));
-    pbmi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    ZeroMemory(pbmiLocal, sizeof(ajInfo));
+    pbmiLocal->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 
-    /* Retrieve information about the bitmap */
-    if (!GetDIBits(hdc, hbmp, 0, 0, NULL, pbmi, *puUsage))
-        return FALSE;
+    if (!GetDIBits(hdc, hbmp, 0, 0, NULL, pbmiLocal, uUsage))
+        goto Exit;
 
-    if (pvBits)
+    if (!GetDIBits(hdc, hbmp, 0, abs(pbmiLocal->bmiHeader.biHeight), pvBits, pbmiLocal, uUsage))
+        goto Exit;
+
+    pbmiLocal->bmiHeader.biClrImportant = 0;
+    if (pbmiLocal->bmiHeader.biBitCount <= 8)
     {
-        /* Now allocate a buffer for the bits */
-        Bits = HeapAlloc(GetProcessHeap(), 0, pbmi->bmiHeader.biSizeImage);
-        if (Bits == NULL)
-            return FALSE;
-
-        /* Retrieve the bitmap bits */
-        if (!GetDIBits(hdc, hbmp, 0, pbmi->bmiHeader.biHeight, Bits, pbmi, *puUsage))
-        {
-            HeapFree(GetProcessHeap(), 0, Bits);
-            return FALSE;
-        }
-
-        CopyMemory( pvBits, Bits, pbmi->bmiHeader.biSizeImage );
-
+        pbmiLocal->bmiHeader.biClrUsed = 1 << pbmiLocal->bmiHeader.biBitCount;
     }
 
-    /* GetDIBits doesn't set biClrUsed, but wine code needs it, so we set it */
-    if (pbmi->bmiHeader.biBitCount <= 8)
-    {
-        pbmi->bmiHeader.biClrUsed =  1 << pbmi->bmiHeader.biBitCount;
-    }
-    return TRUE;
+    if (pbmi)
+        CopyMemory(pbmi, pbmiLocal, get_dib_info_size(pbmiLocal, uUsage));
+    if (puUsage)
+        *puUsage = uUsage;
+    bResult = TRUE;
+
+Exit:
+    ReleaseDC(NULL, hdc);
+    return bResult;
 }
 
 BOOL

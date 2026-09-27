@@ -520,7 +520,7 @@ PatBlt(
 {
     PDC_ATTR pdcattr;
 
-    HANDLE_EMETAFDC(BOOL, PatBlt, FALSE, hdc, nXLeft, nYLeft, nWidth, nHeight, dwRop);
+    HANDLE_METADC(BOOL, PatBlt, FALSE, hdc, nXLeft, nYLeft, nWidth, nHeight, dwRop);
 
     if ( GdiConvertAndCheckDC(hdc) == NULL ) return FALSE;
 
