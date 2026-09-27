@@ -173,8 +173,60 @@ TestApcRundown(VOID)
     ObDereferenceObject(ThreadObject);
 }
 
+static
+VOID
+NTAPI
+SelfSpecialApcRoutine(
+    _In_ PKAPC Apc,
+    _Inout_ PKNORMAL_ROUTINE *NormalRoutine,
+    _Inout_ PVOID *NormalContext,
+    _Inout_ PVOID *SystemArgument1,
+    _Inout_ PVOID *SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(Apc);
+    UNREFERENCED_PARAMETER(NormalRoutine);
+    UNREFERENCED_PARAMETER(NormalContext);
+    *(volatile LONG *)*SystemArgument1 = 1;
+    KeSetEvent((PKEVENT)*SystemArgument2, IO_NO_INCREMENT, FALSE);
+}
+
+static
+VOID
+TestSelfSpecialApc(VOID)
+{
+    KAPC Apc;
+    KEVENT Done;
+    volatile LONG Delivered;
+    ULONG Mode, Index, Late, Rejected;
+
+    for (Mode = 0; Mode < 2; Mode++)
+    {
+        Late = Rejected = 0;
+        if (Mode) KeEnterCriticalRegion();
+        for (Index = 0; Index < 16384; Index++)
+        {
+            Delivered = 0;
+            KeInitializeEvent(&Done, NotificationEvent, FALSE);
+            KeInitializeApc(&Apc, KeGetCurrentThread(), CurrentApcEnvironment,
+                            SelfSpecialApcRoutine, NULL, NULL, KernelMode, NULL);
+            if (!KeInsertQueueApc(&Apc, (PVOID)&Delivered, &Done, IO_NO_INCREMENT))
+            {
+                Rejected++;
+                break;
+            }
+            if (!Delivered) Late++;
+            /* Keep both stack objects alive even on the broken return path. */
+            KeWaitForSingleObject(&Done, Executive, KernelMode, FALSE, NULL);
+        }
+        if (Mode) KeLeaveCriticalRegion();
+        ok_eq_ulong(Rejected, 0);
+        ok_eq_ulong(Late, 0);
+    }
+}
+
 START_TEST(KeApcInject)
 {
+    TestSelfSpecialApc();
     TestNormalApcInjection();
     TestApcRundown();
 }

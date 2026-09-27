@@ -7,14 +7,58 @@
 /* Based on code Copyright 2008 Etersoft (Alexander Morozov) */
 
 #include <kmt_test.h>
+#include <kmt_public.h>
 
 #define NDEBUG
 #include <debug.h>
+
+static
+VOID
+TestSynchronousCompletion(VOID)
+{
+    KEVENT Event;
+    IO_STATUS_BLOCK IoStatus;
+    UCHAR Output[128];
+    PIRP Irp;
+    NTSTATUS Status;
+    ULONG Index, Late = 0, BadStatus = 0, BadOutput = 0;
+
+    /* Match a file system's synchronous buffered IOCTL, including its normal
+     * APC exclusion. Special completion APCs must still finish before a
+     * non-pending dispatch returns and its stack event goes out of scope. */
+    KeEnterCriticalRegion();
+    for (Index = 0; Index < 4096; Index++)
+    {
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+        IoStatus.Status = STATUS_PENDING;
+        IoStatus.Information = 0;
+        Output[0] = 0;
+        Irp = IoBuildDeviceIoControlRequest(IOCTL_KMTEST_GET_TESTS,
+                                           KmtDriverObject->DeviceObject,
+                                           NULL, 0, Output, sizeof(Output),
+                                           FALSE, &Event, &IoStatus);
+        if (!Irp) break;
+        Status = IoCallDriver(KmtDriverObject->DeviceObject, Irp);
+        if (Status != STATUS_PENDING && !KeReadStateEvent(&Event)) Late++;
+        /* Drain completion before reusing the event, IOSB and output buffer
+         * so the regression reports a failure without corrupting the stack. */
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        if (Status != STATUS_SUCCESS || IoStatus.Status != STATUS_SUCCESS) BadStatus++;
+        if (!IoStatus.Information || !Output[0]) BadOutput++;
+    }
+    KeLeaveCriticalRegion();
+    ok_eq_ulong(Index, 4096);
+    ok_eq_ulong(Late, 0);
+    ok_eq_ulong(BadStatus, 0);
+    ok_eq_ulong(BadOutput, 0);
+}
 
 START_TEST(IoIrp)
 {
     USHORT size;
     IRP *iorp;
+
+    TestSynchronousCompletion();
 
     // 1st test
     size = sizeof(IRP) + 5 * sizeof(IO_STACK_LOCATION);
