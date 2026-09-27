@@ -1480,10 +1480,52 @@ NtUserSetObjectInformation(
     PVOID pvInformation,
     DWORD nLength)
 {
-    /* FIXME: ZwQueryObject */
-    /* FIXME: ZwSetInformationObject */
-    SetLastNtError(STATUS_UNSUCCESSFUL);
-    return FALSE;
+    NTSTATUS Status;
+    PVOID Object;
+    USEROBJECTFLAGS ObjectFlags;
+    OBJECT_HANDLE_ATTRIBUTE_INFORMATION HandleFlags;
+
+    if (nIndex != UOI_FLAGS || !pvInformation || nLength < sizeof(ObjectFlags))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForRead(pvInformation, sizeof(ObjectFlags), 1);
+        ObjectFlags = *(PUSEROBJECTFLAGS)pvInformation;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        SetLastNtError(_SEH2_GetExceptionCode());
+        _SEH2_YIELD(return FALSE);
+    }
+    _SEH2_END;
+
+    Status = ObReferenceObjectByHandle(hObject, 0, ExWindowStationObjectType, UserMode, &Object, NULL);
+    if (Status == STATUS_OBJECT_TYPE_MISMATCH)
+        Status = ObReferenceObjectByHandle(hObject, 0, ExDesktopObjectType, UserMode, &Object, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastNtError(Status);
+        return FALSE;
+    }
+    ObDereferenceObject(Object);
+
+    Status = ZwQueryObject(hObject, ObjectHandleFlagInformation, &HandleFlags, sizeof(HandleFlags), NULL);
+    if (NT_SUCCESS(Status))
+    {
+        HandleFlags.Inherit = !!ObjectFlags.fInherit;
+        Status = ZwSetInformationObject(hObject, ObjectHandleFlagInformation, &HandleFlags, sizeof(HandleFlags));
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastNtError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 

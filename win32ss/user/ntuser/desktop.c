@@ -581,6 +581,7 @@ IntResolveDesktop(
     PUNICODE_STRING ObjectName;
     UNICODE_STRING WinStaName, DesktopName;
     const UNICODE_STRING WinSta0Name = RTL_CONSTANT_STRING(L"WinSta0");
+    const UNICODE_STRING DefaultDesktopName = RTL_CONSTANT_STRING(L"Default");
     PWINSTATION_OBJECT WinStaObject;
     HWINSTA hTempWinSta = NULL;
     BOOLEAN bUseDefaultWinSta = FALSE;
@@ -747,7 +748,8 @@ IntResolveDesktop(
         // RtlInitUnicodeString(&WinStaName, L"WinSta0");
         WinStaName = WinSta0Name;
 
-        if (ObFindHandleForObject(Process,
+        if (DesktopName.Buffer == NULL &&
+            ObFindHandleForObject(Process,
                                   NULL,
                                   ExWindowStationObjectType,
                                   NULL,
@@ -1074,16 +1076,10 @@ IntResolveDesktop(
                 goto Quit;
             }
 
-            //
-            // FIXME: We might not need to always create or open the "Default"
-            // desktop on the Service-0xXXXX-YYYY$ window station; we may need
-            // to use another one....
-            //
-
-            /* Create or open the Default desktop on the window station */
-            Status = RtlStringCbCopyW(ObjectName->Buffer,
-                                      ObjectName->MaximumLength,
-                                      L"Default");
+            Status = RtlStringCbCopyNW(ObjectName->Buffer,
+                                       ObjectName->MaximumLength,
+                                       DesktopName.Buffer,
+                                       DesktopName.Length);
             if (!NT_SUCCESS(Status))
             {
                 ERR("Impossible to build a valid desktop name, Status 0x%08lx\n", Status);
@@ -1102,13 +1098,27 @@ IntResolveDesktop(
                                        hWinSta,
                                        NULL);
 
-            Status = IntCreateDesktop(&hDesktop,
-                                      ObjectAttributes,
-                                      UserMode,
-                                      NULL,
-                                      NULL,
-                                      0,
-                                      MAXIMUM_ALLOWED);
+            if (RtlEqualUnicodeString(&DesktopName, &DefaultDesktopName, TRUE))
+            {
+                Status = IntCreateDesktop(&hDesktop,
+                                          ObjectAttributes,
+                                          UserMode,
+                                          NULL,
+                                          NULL,
+                                          0,
+                                          MAXIMUM_ALLOWED);
+            }
+            else
+            {
+                ObjectAttributes->Attributes &= ~OBJ_OPENIF;
+                Status = ObOpenObjectByName(ObjectAttributes,
+                                            ExDesktopObjectType,
+                                            UserMode,
+                                            NULL,
+                                            MAXIMUM_ALLOWED,
+                                            NULL,
+                                            (PHANDLE)&hDesktop);
+            }
             if (!NT_SUCCESS(Status))
             {
                 ASSERT(hDesktop == NULL);
@@ -2556,7 +2566,7 @@ IntCreateDesktop(
     Cs.y = UserGetSystemMetrics(SM_YVIRTUALSCREEN),
     Cs.cx = UserGetSystemMetrics(SM_CXVIRTUALSCREEN),
     Cs.cy = UserGetSystemMetrics(SM_CYVIRTUALSCREEN),
-    Cs.style = WS_POPUP|WS_CLIPCHILDREN;
+    Cs.style = WS_POPUP|WS_CLIPSIBLINGS|WS_CLIPCHILDREN;
     Cs.hInstance = hModClient; // hModuleWin; // Server side winproc!
     Cs.lpszName = (LPCWSTR) &WindowName;
     Cs.lpszClass = (LPCWSTR) &ClassName;
@@ -2588,7 +2598,7 @@ IntCreateDesktop(
     RtlZeroMemory(&WindowName, sizeof(WindowName));
     RtlZeroMemory(&Cs, sizeof(Cs));
     Cs.cx = Cs.cy = 100;
-    Cs.style = WS_POPUP|WS_CLIPCHILDREN;
+    Cs.style = WS_POPUP|WS_CLIPSIBLINGS|WS_CLIPCHILDREN;
     Cs.hInstance = hModClient; // hModuleWin; // Server side winproc!
     Cs.lpszName = (LPCWSTR)&WindowName;
     Cs.lpszClass = (LPCWSTR)&ClassName;
@@ -2600,6 +2610,8 @@ IntCreateDesktop(
         goto Quit;
     }
     pWnd->fnid = FNID_MESSAGEWND;
+    RECTL_vSetRect(&pWnd->rcWindow, 0, 0, Cs.cx, Cs.cy);
+    pWnd->rcClient = pWnd->rcWindow;
 
     /* Assign the message window to the desktop */
     pdesk->spwndMessage = pWnd;
@@ -2639,6 +2651,24 @@ Quit:
     return Status;
 }
 
+static VOID
+IntSetDesktopHandleProtection(
+    _In_ HDESK hDesktop,
+    _In_ BOOLEAN ProtectFromClose)
+{
+    OBJECT_HANDLE_INFORMATION HandleInfo;
+    OBJECT_HANDLE_ATTRIBUTE_INFORMATION HandleFlags;
+    PVOID Object;
+
+    if (!NT_SUCCESS(ObReferenceObjectByHandle(hDesktop, 0, ExDesktopObjectType, UserMode, &Object, &HandleInfo)))
+        return;
+    ObDereferenceObject(Object);
+
+    HandleFlags.Inherit = (HandleInfo.HandleAttributes & OBJ_INHERIT) != 0;
+    HandleFlags.ProtectFromClose = ProtectFromClose;
+    ObSetHandleAttributes(hDesktop, &HandleFlags, KernelMode);
+}
+
 HDESK APIENTRY
 NtUserCreateDesktop(
     POBJECT_ATTRIBUTES ObjectAttributes,
@@ -2675,6 +2705,7 @@ NtUserCreateDesktop(
         goto Exit; // Return NULL
     }
 
+    IntSetDesktopHandleProtection(hDesk, TRUE);
     Ret = hDesk;
 
 Exit:
@@ -2736,6 +2767,7 @@ NtUserOpenDesktop(
 
     TRACE("Opened desktop %S with handle 0x%p\n", ObjectAttributes->ObjectName->Buffer, Desktop);
 
+    IntSetDesktopHandleProtection(Desktop, TRUE);
     return Desktop;
 }
 
@@ -2815,6 +2847,8 @@ NtUserOpenInputDesktop(
     TRACE("Enter NtUserOpenInputDesktop gpdeskInputDesktop 0x%p\n", gpdeskInputDesktop);
 
     hdesk = UserOpenInputDesktop(dwFlags, fInherit, dwDesiredAccess);
+    if (hdesk)
+        IntSetDesktopHandleProtection(hdesk, TRUE);
 
     TRACE("NtUserOpenInputDesktop returning 0x%p\n", hdesk);
     UserLeave();
@@ -2869,6 +2903,7 @@ NtUserCloseDesktop(HDESK hDesktop)
 
     ObDereferenceObject(pdesk);
 
+    IntSetDesktopHandleProtection(hDesktop, FALSE);
     Status = ObCloseHandle(hDesktop, UserMode);
     if (!NT_SUCCESS(Status))
     {
@@ -3139,6 +3174,7 @@ NtUserSwitchDesktop(HDESK hdesk)
 
     /* Set the global state. */
     gpdeskInputDesktop = pdesk;
+    IntGetSysCursorInfo()->bClipped = FALSE;
 
     /* Show the new desktop window */
     co_IntShowDesktop(pdesk, UserGetSystemMetrics(SM_CXSCREEN), UserGetSystemMetrics(SM_CYSCREEN), bRedrawDesktop);
@@ -3418,7 +3454,7 @@ IntSetThreadDesktop(IN HDESK hDesktop,
 
         if (pti->rpdesk == pdesk)
         {
-            /* Nothing to do */
+            pti->hdesk = hDesktop;
             ObDereferenceObject(pdesk);
             return TRUE;
         }
