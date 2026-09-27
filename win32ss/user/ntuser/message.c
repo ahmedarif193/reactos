@@ -2425,6 +2425,9 @@ NtUserDragDetect(
     TRACE("Enter NtUserDragDetect(%p)\n", hWnd);
     UserEnterExclusive();
 
+    if (!(UserGetKeyState(VK_LBUTTON) & 0x8000))
+        goto Exit;
+
     wDragWidth = UserGetSystemMetrics(SM_CXDRAG);
     wDragHeight= UserGetSystemMetrics(SM_CYDRAG);
 

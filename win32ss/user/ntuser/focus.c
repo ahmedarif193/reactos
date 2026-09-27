@@ -1563,13 +1563,16 @@ co_UserSetCapture(HWND hWnd)
       MsqSetStateWindow(pti, MSQ_STATE_MOVESIZE, NULL);
    ///
       /* Somebody may have missed some mouse movements */
-      mi.dx = 0;
-      mi.dy = 0;
-      mi.mouseData = 0;
-      mi.dwFlags = MOUSEEVENTF_MOVE;
-      mi.time = 0;
-      mi.dwExtraInfo = 0;
-      UserSendMouseInput(&mi, FALSE);
+      if (hWndPrev)
+      {
+         mi.dx = 0;
+         mi.dy = 0;
+         mi.mouseData = 0;
+         mi.dwFlags = MOUSEEVENTF_MOVE;
+         mi.time = 0;
+         mi.dwExtraInfo = 0;
+         UserSendMouseInput(&mi, FALSE);
+      }
    }
    return hWndPrev;
 }
