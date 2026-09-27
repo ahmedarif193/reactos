@@ -594,7 +594,6 @@ RepeatChainedInfo:
                 break;
 
             case UWOP_SPARE_CODE:
-                ASSERT(FALSE);
                 i += 3;
                 break;
 
