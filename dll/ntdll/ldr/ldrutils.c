@@ -1006,10 +1006,11 @@ LdrpSetProtection(PVOID ViewBase,
             /* Check if we are setting or restoring protection */
             if (Restore)
             {
-                /* Set it to either EXECUTE or READONLY */
+                /* Return to the protection the section was mapped with */
                 if (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
                 {
-                    NewProtection = PAGE_EXECUTE;
+                    NewProtection = (Section->Characteristics & IMAGE_SCN_MEM_READ) ?
+                                    PAGE_EXECUTE_READ : PAGE_EXECUTE;
                 }
                 else
                 {
