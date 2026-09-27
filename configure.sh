@@ -39,7 +39,7 @@ configure.sh: no RosBE installation found.
 Install one of:
 
   - Local RosBE (compiles run on the host):
-      curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-linux-bootstrap.sh | sh
+      curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-unix-bootstrap.sh | sh
 
   - Docker RosBE (compiles run in a rootless container):
       curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-linux-docker-bootstrap.sh | sh
