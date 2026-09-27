@@ -23,6 +23,38 @@ static const ULONG gaulHatchBrushes[HS_DDI_MAX][8] =
 
 HSURF gahsurfHatch[HS_DDI_MAX];
 
+static const BYTE gajBayer8x8[8][8] =
+{
+    {  0, 32,  8, 40,  2, 34, 10, 42 },
+    { 48, 16, 56, 24, 50, 18, 58, 26 },
+    { 12, 44,  4, 36, 14, 46,  6, 38 },
+    { 60, 28, 52, 20, 62, 30, 54, 22 },
+    {  3, 35, 11, 43,  1, 33,  9, 41 },
+    { 51, 19, 59, 27, 49, 17, 57, 25 },
+    { 15, 47,  7, 39, 13, 45,  5, 37 },
+    { 63, 31, 55, 23, 61, 29, 53, 21 }
+};
+
+static const BYTE gajBayer16x16[16][16] =
+{
+    {   0, 128,  32, 160,   8, 136,  40, 168,   2, 130,  34, 162,  10, 138,  42, 170 },
+    { 192,  64, 224,  96, 200,  72, 232, 104, 194,  66, 226,  98, 202,  74, 234, 106 },
+    {  48, 176,  16, 144,  56, 184,  24, 152,  50, 178,  18, 146,  58, 186,  26, 154 },
+    { 240, 112, 208,  80, 248, 120, 216,  88, 242, 114, 210,  82, 250, 122, 218,  90 },
+    {  12, 140,  44, 172,   4, 132,  36, 164,  14, 142,  46, 174,   6, 134,  38, 166 },
+    { 204,  76, 236, 108, 196,  68, 228, 100, 206,  78, 238, 110, 198,  70, 230, 102 },
+    {  60, 188,  28, 156,  52, 180,  20, 148,  62, 190,  30, 158,  54, 182,  22, 150 },
+    { 252, 124, 220,  92, 244, 116, 212,  84, 254, 126, 222,  94, 246, 118, 214,  86 },
+    {   3, 131,  35, 163,  11, 139,  43, 171,   1, 129,  33, 161,   9, 137,  41, 169 },
+    { 195,  67, 227,  99, 203,  75, 235, 107, 193,  65, 225,  97, 201,  73, 233, 105 },
+    {  51, 179,  19, 147,  59, 187,  27, 155,  49, 177,  17, 145,  57, 185,  25, 153 },
+    { 243, 115, 211,  83, 251, 123, 219,  91, 241, 113, 209,  81, 249, 121, 217,  89 },
+    {  15, 143,  47, 175,   7, 135,  39, 167,  13, 141,  45, 173,   5, 133,  37, 165 },
+    { 207,  79, 239, 111, 199,  71, 231, 103, 205,  77, 237, 109, 197,  69, 229, 101 },
+    {  63, 191,  31, 159,  55, 183,  23, 151,  61, 189,  29, 157,  53, 181,  21, 149 },
+    { 255, 127, 223,  95, 247, 119, 215,  87, 253, 125, 221,  93, 245, 117, 213,  85 }
+};
+
 /** Internal functions ********************************************************/
 
 CODE_SEG("INIT")
@@ -65,6 +97,9 @@ EBRUSHOBJ_vInit(EBRUSHOBJ *pebo,
     pebo->pengbrush = NULL;
     pebo->flattrs = pbrush->flAttrs;
     pebo->psoMask = NULL;
+
+    if (!(pbrush->flAttrs & (BR_IS_PEN | BR_IS_OLDSTYLEPEN)))
+        pebo->flattrs |= BR_DITHER_OK;
 
     /* Initialize 1 bpp fore and back colors */
     pebo->crCurrentBack = crBackgroundClr;
@@ -127,9 +162,16 @@ EBRUSHOBJ_vSetSolidRGBColor(EBRUSHOBJ *pebo, COLORREF crColor)
 {
     ULONG iSolidColor;
     EXLATEOBJ exlo;
+    COLORREF crOriginal = crColor;
 
     /* Never use with non-solid brushes */
     ASSERT(pebo->flattrs & BR_IS_SOLID);
+
+    if (pebo->pengbrush)
+    {
+        SURFACE_ShareUnlockSurface(pebo->pengbrush);
+        pebo->pengbrush = NULL;
+    }
 
     if (crColor & 0x01000000)
     {
@@ -167,6 +209,15 @@ EBRUSHOBJ_vSetSolidRGBColor(EBRUSHOBJ *pebo, COLORREF crColor)
     /* Special handling for mono-surfaces */
     if (pebo->ppalSurf->flFlags & PAL_MONOCHROME)
     {
+        if ((pebo->flattrs & BR_DITHER_OK) &&
+            !(pebo->ppalSurf->flFlags & PAL_DIBSECTION) &&
+            (crColor != RGB(0, 0, 0)) &&
+            (crColor != RGB(0xFF, 0xFF, 0xFF)))
+        {
+            pebo->BrushObject.iSolidColor = 0xFFFFFFFF;
+            return;
+        }
+
         /* Determine the indices for back and fore color */
         ULONG iBackIndex =
             PALETTE_ulGetNearestPaletteIndex(pebo->ppalSurf, pebo->crCurrentBack);
@@ -176,7 +227,7 @@ EBRUSHOBJ_vSetSolidRGBColor(EBRUSHOBJ *pebo, COLORREF crColor)
         ULONG rgbBack = PALETTE_ulGetRGBColorFromIndex(pebo->ppalSurf, iBackIndex);
 
         /* Match the pen color against RGB and translated background color */
-        if ((crColor == rgbBack) || (crColor == pebo->crCurrentBack))
+        if ((crColor == rgbBack) || (crOriginal == pebo->crCurrentBack))
                 pebo->BrushObject.iSolidColor = iBackIndex;
         else
             pebo->BrushObject.iSolidColor = iForeIndex;
@@ -358,6 +409,108 @@ FixupDIBBrushPalette(
     return ppalNew;
 }
 
+static
+BOOL
+EBRUSHOBJ_bRealizeDitheredBrush(
+    _In_ EBRUSHOBJ *pebo,
+    _In_ PFN_DrvRealizeBrush pfnRealizeBrush,
+    _In_opt_ SURFOBJ *psoMask,
+    _In_opt_ PSURFACE psurfPattern,
+    _In_opt_ PPALETTE ppalPattern,
+    _In_opt_ PSURFACE psurfHatch)
+{
+    SIZEL sizl = {8, 8};
+    HBITMAP hbmDither;
+    PSURFACE psurfDither;
+    EXLATEOBJ exloRGB, exlo;
+    PFN_DIB_GetPixel pfnGetPixel = NULL;
+    ULONG iWhite, iBlack, iFore = 0, iBack = 0, ulColor, ulGrey, iPixel;
+    LONG x, y;
+    BOOL bWhite, bResult;
+
+    if (psurfPattern)
+        sizl = psurfPattern->SurfObj.sizlBitmap;
+
+    if (psurfHatch)
+    {
+        iBack = PALETTE_ulGetNearestPaletteIndex(pebo->ppalSurf, pebo->crCurrentBack);
+        if (pebo->crCurrentText == PALETTE_ulGetRGBColorFromIndex(pebo->ppalSurf, 0))
+            iFore = 0;
+        else if (pebo->crCurrentText == PALETTE_ulGetRGBColorFromIndex(pebo->ppalSurf, 1))
+            iFore = 1;
+        else
+            iFore = (pebo->crCurrentText == pebo->crCurrentBack) ? iBack : !iBack;
+        iBack = (pebo->crCurrentText != pebo->crCurrentBack) ? !iFore : iFore;
+        pfnGetPixel = DibFunctionsForBitmapFormat[BMF_1BPP].DIB_GetPixel;
+    }
+
+    hbmDither = EngCreateBitmap(sizl, 0, BMF_1BPP, BMF_TOPDOWN, NULL);
+    if (!hbmDither)
+        return FALSE;
+
+    psurfDither = SURFACE_ShareLockSurface(hbmDither);
+    if (!psurfDither)
+    {
+        EngDeleteSurface((HSURF)hbmDither);
+        return FALSE;
+    }
+
+    iWhite = PALETTE_ulGetNearestPaletteIndex(pebo->ppalSurf, RGB(0xFF, 0xFF, 0xFF));
+    iBlack = PALETTE_ulGetNearestPaletteIndex(pebo->ppalSurf, RGB(0, 0, 0));
+
+    if (psurfPattern)
+    {
+        EXLATEOBJ_vInitialize(&exloRGB, ppalPattern, &gpalRGB, 0, CLR_INVALID, 0);
+        pfnGetPixel = DibFunctionsForBitmapFormat[psurfPattern->SurfObj.iBitmapFormat].DIB_GetPixel;
+    }
+
+    for (y = 0; y < sizl.cy; y++)
+    {
+        for (x = 0; x < sizl.cx; x++)
+        {
+            if (psurfHatch)
+            {
+                iPixel = pfnGetPixel(&psurfHatch->SurfObj, x, y) ? iBack : iFore;
+                DibFunctionsForBitmapFormat[BMF_1BPP].DIB_PutPixel(&psurfDither->SurfObj, x, y, iPixel);
+                continue;
+            }
+            else if (psurfPattern)
+            {
+                ulColor = XLATEOBJ_iXlate(&exloRGB.xlo, pfnGetPixel(&psurfPattern->SurfObj, x, y));
+                ulGrey = 77 * GetRValue(ulColor) + 151 * GetGValue(ulColor) + 28 * GetBValue(ulColor);
+                bWhite = (ulGrey + 255 * gajBayer16x16[y % 16][x % 16]) > 255 * 255;
+            }
+            else
+            {
+                ulGrey = (77 * GetRValue(pebo->crRealize) + 151 * GetGValue(pebo->crRealize) +
+                          28 * GetBValue(pebo->crRealize)) >> 8;
+                bWhite = (((ulGrey + 1) >> 2) + gajBayer8x8[7 - y][x]) > 63;
+            }
+
+            DibFunctionsForBitmapFormat[BMF_1BPP].DIB_PutPixel(&psurfDither->SurfObj, x, y, bWhite ? iWhite : iBlack);
+        }
+    }
+
+    if (psurfPattern)
+        EXLATEOBJ_vCleanup(&exloRGB);
+
+    EXLATEOBJ_vInitialize(&exlo, pebo->ppalSurf, pebo->ppalSurf, 0, 0, 0);
+
+    bResult = pfnRealizeBrush(&pebo->BrushObject,
+                              &pebo->psurfTrg->SurfObj,
+                              &psurfDither->SurfObj,
+                              psoMask,
+                              &exlo.xlo,
+                              -1);
+
+    EXLATEOBJ_vCleanup(&exlo);
+
+    SURFACE_ShareUnlockSurface(psurfDither);
+    EngDeleteSurface((HSURF)hbmDither);
+
+    return bResult;
+}
+
 BOOL
 NTAPI
 EBRUSHOBJ_bRealizeBrush(EBRUSHOBJ *pebo, BOOL bCallDriver)
@@ -402,6 +555,11 @@ EBRUSHOBJ_bRealizeBrush(EBRUSHOBJ *pebo, BOOL bCallDriver)
         psoMask = NULL;
     }
 
+    if ((pbr->flAttrs & BR_IS_SOLID) && (pebo->BrushObject.iSolidColor == 0xFFFFFFFF))
+    {
+        return EBRUSHOBJ_bRealizeDitheredBrush(pebo, pfnRealizeBrush, psoMask, NULL, NULL, NULL);
+    }
+
     /* Check if this is a hatch brush */
     if (pbr->flAttrs & BR_IS_HATCH)
     {
@@ -437,6 +595,27 @@ EBRUSHOBJ_bRealizeBrush(EBRUSHOBJ *pebo, BOOL bCallDriver)
     {
         /* The palette is already as it should be */
         ppalPattern = psurfPattern->ppal;
+    }
+
+    if ((pbr->flAttrs & BR_IS_HATCH) &&
+        (pebo->ppalSurf->flFlags & PAL_MONOCHROME))
+    {
+        bResult = EBRUSHOBJ_bRealizeDitheredBrush(pebo, pfnRealizeBrush, psoMask, NULL, NULL, psurfPattern);
+        SURFACE_ShareUnlockSurface(psurfPattern);
+        return bResult;
+    }
+
+    if ((pebo->psurfTrg->SurfObj.iBitmapFormat == BMF_1BPP) &&
+        (pbr->flAttrs & (BR_IS_BITMAP | BR_IS_DIB)) &&
+        (psurfPattern->SurfObj.iBitmapFormat >= BMF_1BPP) &&
+        (psurfPattern->SurfObj.iBitmapFormat <= BMF_32BPP) &&
+        !((pbr->flAttrs & BR_IS_BITMAP) &&
+          (psurfPattern->SurfObj.iBitmapFormat == BMF_1BPP) &&
+          !(psurfPattern->ppal->flFlags & PAL_DIBSECTION)))
+    {
+        bResult = EBRUSHOBJ_bRealizeDitheredBrush(pebo, pfnRealizeBrush, psoMask, psurfPattern, ppalPattern, NULL);
+        SURFACE_ShareUnlockSurface(psurfPattern);
+        return bResult;
     }
 
     /* Initialize XLATEOBJ for the brush */

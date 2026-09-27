@@ -115,6 +115,7 @@ DC_vUpdateTextBrush(PDC pdc)
         EBRUSHOBJ_vUpdateFromDC(&pdc->eboText, pbrDefaultBrush, pdc);
 
     /* Update the eboText's solid color */
+    pdc->eboText.flattrs &= ~BR_DITHER_OK;
     EBRUSHOBJ_vSetSolidRGBColor(&pdc->eboText, pdcattr->crForegroundClr);
 
     /* Clear flag */
@@ -131,6 +132,7 @@ DC_vUpdateBackgroundBrush(PDC pdc)
         EBRUSHOBJ_vUpdateFromDC(&pdc->eboBackground, pbrDefaultBrush, pdc);
 
     /* Update the eboBackground's solid color */
+    pdc->eboBackground.flattrs &= ~BR_DITHER_OK;
     EBRUSHOBJ_vSetSolidRGBColor(&pdc->eboBackground, pdcattr->crBackgroundClr);
 
     /* Clear flag */
