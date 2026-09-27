@@ -4211,8 +4211,8 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
             break;
 
          case GWLP_ID: // LONG
-            OldValue = (LONG) Window->IDMenu;
-            Window->IDMenu = (UINT) NewValue;
+            OldValue = (LONG_PTR)Window->IDMenu;
+            Window->IDMenu = (UINT_PTR)NewValue;
             break;
 
          case GWLP_USERDATA: // LONG or LONG_PTR
@@ -4362,20 +4362,17 @@ NtUserSetWindowWord(HWND hWnd, INT Index, WORD NewValue)
       goto Exit; // Return 0
    }
 
-   switch (Index)
+   if (Index == GWLP_USERDATA)
    {
-      case GWL_ID:
-      case GWL_HINSTANCE:
-      case GWL_HWNDPARENT:
-         Ret = (WORD)co_UserSetWindowLong(UserHMGetHandle(Window), Index, (UINT)NewValue, TRUE);
-         goto Exit;
+      Ret = LOWORD(Window->dwUserData);
+      Window->dwUserData = MAKELONG(NewValue, HIWORD(Window->dwUserData));
+      goto Exit;
+   }
 
-      default:
-         if (Index < 0)
-         {
-            EngSetLastError(ERROR_INVALID_INDEX);
-            goto Exit; // Return 0
-         }
+   if (Index < 0)
+   {
+      EngSetLastError(ERROR_INVALID_INDEX);
+      goto Exit; // Return 0
    }
 
    if ((ULONG)Index > (Window->cbwndExtra - sizeof(WORD)))

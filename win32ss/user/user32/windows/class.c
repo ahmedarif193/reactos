@@ -1278,20 +1278,11 @@ WORD
 WINAPI
 GetWindowWord(HWND hWnd, int nIndex)
 {
-    switch(nIndex)
+    if (nIndex < 0 && nIndex != GWLP_USERDATA)
     {
-    case GWLP_ID:
-    case GWLP_HINSTANCE:
-    case GWLP_HWNDPARENT:
-        break;
-    default:
-        if (nIndex < 0)
-        {
-            WARN("Invalid offset %d\n", nIndex );
-            SetLastError( ERROR_INVALID_INDEX );
-            return 0;
-        }
-        break;
+        WARN("Invalid offset %d\n", nIndex );
+        SetLastError( ERROR_INVALID_INDEX );
+        return 0;
     }
     return IntGetWindowLong( hWnd, nIndex, sizeof(WORD), FALSE );
 }
@@ -1742,20 +1733,11 @@ WORD
 WINAPI
 SetWindowWord ( HWND hWnd,int nIndex,WORD wNewWord )
 {
-    switch(nIndex)
+    if (nIndex < 0 && nIndex != GWLP_USERDATA)
     {
-    case GWLP_ID:
-    case GWLP_HINSTANCE:
-    case GWLP_HWNDPARENT:
-        break;
-    default:
-        if (nIndex < 0)
-        {
-            WARN("Invalid offset %d\n", nIndex );
-            SetLastError( ERROR_INVALID_INDEX );
-            return 0;
-        }
-        break;
+        WARN("Invalid offset %d\n", nIndex );
+        SetLastError( ERROR_INVALID_INDEX );
+        return 0;
     }
     /* DO NOT USE NtUserSetWindowLong(Ptr)! */
     return NtUserSetWindowWord(hWnd, nIndex, wNewWord);
