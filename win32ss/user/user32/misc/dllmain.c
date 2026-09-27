@@ -742,7 +742,7 @@ User32CallSetWndIconsFromKernel(PVOID Arguments, ULONG ArgumentLength)
 {
   PSETWNDICONS_CALLBACK_ARGUMENTS Common = Arguments;
 
-  if (!gpsi->hIconSmWindows)
+  if (!UserGetServerInfo(hIconSmWindows, ROS_SERVERINFO_HICONSMWINDOWS))
   {
       Common->hIconSample    = LoadImageW(0, IDI_APPLICATION, IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
       Common->hIconHand      = LoadImageW(0, IDI_HAND,        IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);

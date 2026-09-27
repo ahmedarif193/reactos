@@ -2743,14 +2743,14 @@ IsDialogMessageW(
      case WM_SYSKEYDOWN:
          /* If the ALT key is being pressed display the keyboard cues */
          if ( HIWORD(lpMsg->lParam) & KF_ALTDOWN &&
-             !(gpsi->dwSRVIFlags & SRVINFO_KBDPREF) && !(gpsi->PUSIFlags & PUSIF_KEYBOARDCUES) )
+             !(gpsi->dwSRVIFlags & SRVINFO_KBDPREF) && !(UserGetServerInfo(PUSIFlags, ROS_SERVERINFO_PUSIFLAGS) & PUSIF_KEYBOARDCUES) )
              SendMessageW(hDlg, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
          break;
 
      case WM_SYSCOMMAND:
          /* If the ALT key is being pressed display the keyboard cues */
          if ( lpMsg->wParam == SC_KEYMENU &&
-             !(gpsi->dwSRVIFlags & SRVINFO_KBDPREF) && !(gpsi->PUSIFlags & PUSIF_KEYBOARDCUES) )
+             !(gpsi->dwSRVIFlags & SRVINFO_KBDPREF) && !(UserGetServerInfo(PUSIFlags, ROS_SERVERINFO_PUSIFLAGS) & PUSIF_KEYBOARDCUES) )
          {
             SendMessageW(hDlg, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEACCEL | UISF_HIDEFOCUS), 0);
          }

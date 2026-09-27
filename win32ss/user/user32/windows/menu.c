@@ -164,6 +164,139 @@ IntGetMenuDefaultItem(PMENU Menu, BOOL fByPos, UINT gmdiFlags, DWORD *gismc)
    return ( fByPos ) ? i : Item->wID;
 }
 
+#ifdef WOW64_I386_RUNTIME
+static BOOL GetMenuItemInfo_common ( HMENU hmenu,
+                                     UINT item,
+                                     BOOL bypos,
+                                     LPMENUITEMINFOW lpmii,
+                                     BOOL unicode)
+{
+    MENUITEMINFOW mii;
+    WCHAR *text = NULL;
+    int len;
+
+    if ((lpmii->fMask & MIIM_TYPE) && (lpmii->fMask & (MIIM_STRING | MIIM_FTYPE | MIIM_BITMAP)))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    ZeroMemory(&mii, sizeof(mii));
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_FTYPE | MIIM_BITMAP | MIIM_CHECKMARKS | MIIM_DATA | MIIM_ID | MIIM_STATE | MIIM_SUBMENU | MIIM_STRING;
+    if (!NtUserThunkedMenuItemInfo(hmenu, item, bypos, THUNKED_MENUITEMINFO_ROS_GETW, &mii, NULL))
+    {
+        SetLastError(ERROR_MENU_ITEM_NOT_FOUND);
+        return FALSE;
+    }
+
+    if ((lpmii->fMask & (MIIM_TYPE | MIIM_STRING)) && mii.cch)
+    {
+        MENUITEMINFOW str;
+
+        text = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, (mii.cch + 1) * sizeof(WCHAR));
+        if (!text)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+        ZeroMemory(&str, sizeof(str));
+        str.cbSize = sizeof(str);
+        str.fMask = MIIM_STRING;
+        str.dwTypeData = text;
+        str.cch = mii.cch;
+        NtUserThunkedMenuItemInfo(hmenu, item, bypos, THUNKED_MENUITEMINFO_ROS_GETW, &str, NULL);
+    }
+
+    if (lpmii->fMask & MIIM_TYPE)
+    {
+        lpmii->fType = mii.fType & MENUITEMINFO_TYPE_MASK;
+        if (mii.hbmpItem && !IS_MAGIC_BITMAP(mii.hbmpItem))
+            lpmii->fType |= MFT_BITMAP;
+        lpmii->hbmpItem = mii.hbmpItem;
+        if (lpmii->fType & MFT_BITMAP)
+        {
+            lpmii->dwTypeData = (LPWSTR)mii.hbmpItem;
+            lpmii->cch = 0;
+        }
+        else if (lpmii->fType & (MFT_OWNERDRAW | MFT_SEPARATOR))
+        {
+            lpmii->dwTypeData = 0;
+            lpmii->cch = 0;
+        }
+    }
+
+    if (lpmii->fMask & (MIIM_TYPE | MIIM_STRING))
+    {
+        if (!text)
+        {
+            if (lpmii->dwTypeData && lpmii->cch && !(GdiValidateHandle((HGDIOBJ)lpmii->dwTypeData)))
+            {
+                if (unicode)
+                    *((WCHAR *)lpmii->dwTypeData) = 0;
+                else
+                    *((CHAR *)lpmii->dwTypeData) = 0;
+            }
+            lpmii->cch = 0;
+        }
+        else
+        {
+            if (unicode)
+            {
+                len = strlenW(text);
+                if (lpmii->dwTypeData && lpmii->cch)
+                    lstrcpynW(lpmii->dwTypeData, text, lpmii->cch);
+            }
+            else
+            {
+                len = WideCharToMultiByte(CP_ACP, 0, text, -1, NULL, 0, NULL, NULL) - 1;
+                if (lpmii->dwTypeData && lpmii->cch)
+                    if (!WideCharToMultiByte(CP_ACP, 0, text, -1, (LPSTR)lpmii->dwTypeData, lpmii->cch, NULL, NULL))
+                        ((LPSTR)lpmii->dwTypeData)[lpmii->cch - 1] = 0;
+            }
+            if (lpmii->dwTypeData && lpmii->cch)
+            {
+                if (lpmii->cch <= len + 1)
+                    lpmii->cch--;
+                else
+                    lpmii->cch = len;
+            }
+            else
+            {
+                lpmii->cch = len;
+            }
+        }
+    }
+
+    if (text)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, text);
+
+    if (lpmii->fMask & MIIM_FTYPE)
+        lpmii->fType = mii.fType & MENUITEMINFO_TYPE_MASK;
+
+    if (lpmii->fMask & MIIM_BITMAP)
+        lpmii->hbmpItem = mii.hbmpItem;
+
+    if (lpmii->fMask & MIIM_STATE)
+        lpmii->fState = mii.fState & MENUITEMINFO_STATE_MASK;
+
+    if (lpmii->fMask & MIIM_ID)
+        lpmii->wID = mii.wID;
+
+    lpmii->hSubMenu = (lpmii->fMask & MIIM_SUBMENU) ? mii.hSubMenu : 0;
+
+    if (lpmii->fMask & MIIM_CHECKMARKS)
+    {
+        lpmii->hbmpChecked = mii.hbmpChecked;
+        lpmii->hbmpUnchecked = mii.hbmpUnchecked;
+    }
+
+    if (lpmii->fMask & MIIM_DATA)
+        lpmii->dwItemData = mii.dwItemData;
+
+    return TRUE;
+}
+#else
 static BOOL GetMenuItemInfo_common ( HMENU hmenu,
                                      UINT item,
                                      BOOL bypos,
@@ -288,6 +421,7 @@ static BOOL GetMenuItemInfo_common ( HMENU hmenu,
 
   return TRUE;
 }
+#endif
 
 
 //

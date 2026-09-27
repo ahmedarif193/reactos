@@ -6675,7 +6675,11 @@ NtUserThunkedMenuItemInfo(
       }
    }
 
-   if (bInsert)
+   if (bInsert == THUNKED_MENUITEMINFO_ROS_GETW)
+   {
+      Ret = UserMenuItemInfo(Menu, uItem, fByPosition, (PROSMENUITEMINFO)lpmii, FALSE, NULL);
+   }
+   else if (bInsert)
    {
       Ret = UserInsertMenuItem(Menu, uItem, fByPosition, lpmii, &lstrCaption);
    }

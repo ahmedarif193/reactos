@@ -271,7 +271,7 @@ CURSORICON_ConvertPngToBmpIcon(
 
 VOID LoadSystemCursors(VOID)
 {
-   if (!gpsi->hIconSmWindows)
+   if (!UserGetServerInfo(hIconSmWindows, ROS_SERVERINFO_HICONSMWINDOWS))
    {
        TRACE("Loading System Cursors\n");
        NtUserSetSystemCursor(LoadImageW( 0, IDC_ARROW,       IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE ), OCR_NORMAL);
@@ -2875,7 +2875,7 @@ int WINAPI LookupIconIdFromDirectoryEx(
     if(Flags & LR_MONOCHROME)
         bppDesired = 1;
     else
-        bppDesired = gpsi->BitCount;
+        bppDesired = (USHORT)UserGetServerInfo(BitCount, ROS_SERVERINFO_BITCOUNT);
 
     if(!cxDesired)
         cxDesired = Flags & LR_DEFAULTSIZE ? GetSystemMetrics(fIcon ? SM_CXICON : SM_CXCURSOR) : 256;

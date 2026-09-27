@@ -56,8 +56,10 @@ extern Imm32ApiTable gImmApiEntries;
 
 #ifdef WOW64_I386_RUNTIME
 #define UserGetGrayBrush() ((HBRUSH)NtUserCallOneParam(0, ONEPARAM_ROUTINE_ROS_GETGRAYBRUSH))
+#define UserGetServerInfo(Field, Selector) (NtUserCallOneParam((Selector), ONEPARAM_ROUTINE_ROS_GETSERVERINFO))
 #else
 #define UserGetGrayBrush() (gpsi->hbrGray)
+#define UserGetServerInfo(Field, Selector) ((DWORD_PTR)gpsi->Field)
 #endif
 
 #define IMM_FN(name) gImmApiEntries.p##name

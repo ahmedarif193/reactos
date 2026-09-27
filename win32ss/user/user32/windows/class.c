@@ -1141,7 +1141,16 @@ GetClassWord(
 
 LONG_PTR IntGetWindowLong( HWND hwnd, INT offset, UINT size, BOOL unicode )
 {
+    if (size < sizeof(LONG_PTR) &&
+        (offset == GWLP_WNDPROC || offset == GWLP_HINSTANCE || offset == GWLP_HWNDPARENT))
+    {
+        SetLastError( ERROR_INVALID_INDEX );
+        return 0;
+    }
+
 #ifdef WOW64_I386_RUNTIME
+    if (size == sizeof(WORD))
+        return (LONG_PTR)NtUserCallHwndParam(hwnd, (DWORD_PTR)offset, HWNDPARAM_ROUTINE_ROS_GETWINDOWWORD);
     return (LONG_PTR)NtUserCallHwndParam(hwnd, (DWORD_PTR)offset, unicode ? HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGW : HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA);
 #else
     LONG_PTR retvalue = 0;

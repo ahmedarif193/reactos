@@ -232,6 +232,9 @@ NtUserCallOneParam(
         case ONEPARAM_ROUTINE_ROS_GETSYSCOLOR:
         case ONEPARAM_ROUTINE_ROS_GETSYSCOLORBRUSH:
         case ONEPARAM_ROUTINE_ROS_GETSYSTEMMETRICS:
+        case ONEPARAM_ROUTINE_ROS_GETDESKTOPWINDOW:
+        case ONEPARAM_ROUTINE_ROS_GETSHELLWINDOW:
+        case ONEPARAM_ROUTINE_ROS_GETSERVERINFO:
         case ONEPARAM_ROUTINE_WINDOWFROMDC:
         case ONEPARAM_ROUTINE_GETKEYBOARDTYPE:
         case ONEPARAM_ROUTINE_GETKEYBOARDLAYOUT:
@@ -344,6 +347,54 @@ NtUserCallOneParam(
         case ONEPARAM_ROUTINE_ROS_GETGRAYBRUSH:
             Result = (DWORD_PTR)gpsi->hbrGray;
             break;
+
+        case ONEPARAM_ROUTINE_ROS_GETSERVERINFO:
+            switch (Param)
+            {
+                case ROS_SERVERINFO_INSTALLEDEVENTHOOKS:
+                    Result = gpsi->dwInstalledEventHooks;
+                    break;
+                case ROS_SERVERINFO_LASTRITEVENTTICKCOUNT:
+                    Result = gpsi->dwLastRITEventTickCount;
+                    break;
+                case ROS_SERVERINFO_PUSIFLAGS:
+                    Result = gpsi->PUSIFlags;
+                    break;
+                case ROS_SERVERINFO_BITCOUNT:
+                    Result = gpsi->BitCount;
+                    break;
+                case ROS_SERVERINFO_HICONSMWINDOWS:
+                    Result = (DWORD_PTR)gpsi->hIconSmWindows;
+                    break;
+                case ROS_SERVERINFO_HICONWINDOWS:
+                    Result = (DWORD_PTR)gpsi->hIconWindows;
+                    break;
+                case ROS_SERVERINFO_ATOMICONPROP:
+                    Result = gpsi->atomIconProp;
+                    break;
+                case ROS_SERVERINFO_ATOMICONSMPROP:
+                    Result = gpsi->atomIconSmProp;
+                    break;
+                default:
+                    EngSetLastError(ERROR_INVALID_PARAMETER);
+                    Result = 0;
+                    break;
+            }
+            break;
+
+        case ONEPARAM_ROUTINE_ROS_GETDESKTOPWINDOW:
+        {
+            PWND pwndDesktop = UserGetDesktopWindow();
+            Result = (DWORD_PTR)(pwndDesktop ? UserHMGetHandle(pwndDesktop) : NULL);
+            break;
+        }
+
+        case ONEPARAM_ROUTINE_ROS_GETSHELLWINDOW:
+        {
+            PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+            Result = (DWORD_PTR)((pti && pti->pDeskInfo) ? pti->pDeskInfo->hShellWindow : NULL);
+            break;
+        }
 
         case ONEPARAM_ROUTINE_ROS_USEDEFAULTSYSCOLORS:
         {
@@ -1279,12 +1330,14 @@ NtUserCallHwndParam(
 
         case HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA:
         case HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGW:
+        case HWNDPARAM_ROUTINE_ROS_GETWINDOWWORD:
         {
             PWND Window;
             PWND RelatedWindow;
             LONG_PTR Ret = 0;
             INT Index = (INT)Param;
             BOOL Ansi = Routine == HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA;
+            ULONG Size = (Routine == HWNDPARAM_ROUTINE_ROS_GETWINDOWWORD) ? sizeof(WORD) : sizeof(ULONG);
 
             UserEnterExclusive();
             Window = UserGetWindowObject(hWnd);
@@ -1292,12 +1345,12 @@ NtUserCallHwndParam(
 
             if (Index >= 0)
             {
-                if ((ULONG)Index > Window->cbwndExtra || Window->cbwndExtra - (ULONG)Index < sizeof(ULONG))
+                if ((ULONG)Index > Window->cbwndExtra || Window->cbwndExtra - (ULONG)Index < Size)
                 {
                     EngSetLastError(ERROR_INVALID_INDEX);
                     goto GetWindowLongExit;
                 }
-                RtlCopyMemory(&Ret, (PUCHAR)(Window + 1) + Index, sizeof(ULONG));
+                RtlCopyMemory(&Ret, (PUCHAR)(Window + 1) + Index, Size);
                 goto GetWindowLongExit;
             }
 

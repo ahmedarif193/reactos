@@ -378,11 +378,11 @@ DefWndGetIcon(PWND pWnd, WPARAM wParam, LPARAM lParam)
     switch(wParam)
     {
         case ICON_BIG:
-            hIconRet = UserGetProp(UserHMGetHandle(pWnd), gpsi->atomIconProp, TRUE);
+            hIconRet = UserGetProp(UserHMGetHandle(pWnd), (ATOM)UserGetServerInfo(atomIconProp, ROS_SERVERINFO_ATOMICONPROP), TRUE);
             break;
         case ICON_SMALL:
         case ICON_SMALL2:
-            hIconRet = UserGetProp(UserHMGetHandle(pWnd), gpsi->atomIconSmProp, TRUE);
+            hIconRet = UserGetProp(UserHMGetHandle(pWnd), (ATOM)UserGetServerInfo(atomIconSmProp, ROS_SERVERINFO_ATOMICONSMPROP), TRUE);
             break;
         default:
             break;
@@ -402,7 +402,11 @@ User32DefWindowProc(HWND hWnd,
     if (hWnd)
     {
        pWnd = ValidateHwnd(hWnd);
+#ifdef WOW64_I386_RUNTIME
+       if (!pWnd && Msg != WM_GETTITLEBARINFOEX) return 0;
+#else
        if (!pWnd) return 0;
+#endif
     }
 
     switch (Msg)
@@ -1012,6 +1016,30 @@ GoSS:
 }
 
 
+#ifdef WOW64_I386_RUNTIME
+static BOOL
+IntIsClientDefWndMessage(UINT Msg)
+{
+    switch (Msg)
+    {
+        case WM_IME_CHAR:
+        case WM_IME_KEYDOWN:
+        case WM_IME_KEYUP:
+        case WM_IME_COMPOSITION:
+        case WM_IME_STARTCOMPOSITION:
+        case WM_IME_ENDCOMPOSITION:
+        case WM_IME_SELECT:
+        case WM_IME_NOTIFY:
+        case WM_IME_CONTROL:
+        case WM_IME_SETCONTEXT:
+        case WM_IME_SYSTEM:
+        case WM_GETTITLEBARINFOEX:
+            return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 LRESULT WINAPI
 RealDefWindowProcA(HWND hWnd,
                    UINT Msg,
@@ -1034,7 +1062,7 @@ RealDefWindowProcA(HWND hWnd,
     if (!Wnd && Msg == WM_WINDOWPOSCHANGED)
         return DefWndHandleWindowPosChanged(hWnd, (const WINDOWPOS *)lParam);
 
-    if (!Wnd && Msg != WM_NCCREATE)
+    if (!Wnd && Msg != WM_NCCREATE && !IntIsClientDefWndMessage(Msg))
     {
         NtUserMessageCall(hWnd, Msg, wParam, lParam, (ULONG_PTR)&Result, FNID_DEFWINDOWPROC, TRUE);
         return Result;
@@ -1274,7 +1302,7 @@ RealDefWindowProcW(HWND hWnd,
     if (!Wnd && Msg == WM_WINDOWPOSCHANGED)
         return DefWndHandleWindowPosChanged(hWnd, (const WINDOWPOS *)lParam);
 
-    if (!Wnd && Msg != WM_NCCREATE)
+    if (!Wnd && Msg != WM_NCCREATE && !IntIsClientDefWndMessage(Msg))
     {
         NtUserMessageCall(hWnd, Msg, wParam, lParam, (ULONG_PTR)&Result, FNID_DEFWINDOWPROC, FALSE);
         return Result;

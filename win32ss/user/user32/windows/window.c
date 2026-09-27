@@ -15,6 +15,7 @@
 WINE_DEFAULT_DEBUG_CHANNEL(user32);
 
 void MDI_CalcDefaultChildPos( HWND hwndClient, INT total, LPPOINT lpPos, INT delta, UINT *id );
+void MDI_UpdateMaximizedChildFrame( HWND client, HWND child );
 extern LPCWSTR FASTCALL ClassNameToVersion(const void *lpszClass, LPCWSTR lpszMenuName, LPCWSTR *plpLibFileName, HANDLE *pContext, BOOL bAnsi);
 
 #ifdef WOW64_I386_RUNTIME
@@ -371,6 +372,16 @@ cleanup:
 }
 
 
+#ifdef WOW64_I386_RUNTIME
+static BOOL
+IntIsMdiClientWindow(HWND hWnd)
+{
+    WCHAR szClass[16];
+
+    return GetClassNameW(hWnd, szClass, ARRAYSIZE(szClass)) && !_wcsicmp(szClass, L"MDIClient");
+}
+#endif
+
 /*
  * @implemented
  */
@@ -404,6 +415,18 @@ CreateWindowExA(DWORD dwExStyle,
         POINT mPos[2];
         UINT id = 0;
         HWND top_child;
+        DWORD dwParentStyle;
+#ifdef WOW64_I386_RUNTIME
+        if (!IsWindow(hWndParent)) return NULL;
+
+        if (!IntIsMdiClientWindow(hWndParent))
+        {
+           WARN("WS_EX_MDICHILD, but parent %p is not MDIClient\n", hWndParent);
+           return NULL;
+        }
+
+        dwParentStyle = GetWindowLongW(hWndParent, GWL_STYLE);
+#else
         PWND pWndParent;
 
         pWndParent = ValidateHwnd(hWndParent);
@@ -413,8 +436,11 @@ CreateWindowExA(DWORD dwExStyle,
         if (pWndParent->fnid != FNID_MDICLIENT) // wine uses WIN_ISMDICLIENT
         {
            WARN("WS_EX_MDICHILD, but parent %p is not MDIClient\n", hWndParent);
-           goto skip_mdi;
+           return NULL;
         }
+
+        dwParentStyle = pWndParent->style;
+#endif
 
         /* lpParams of WM_[NC]CREATE is different for MDI children.
         * MDICREATESTRUCT members have the originally passed values.
@@ -431,7 +457,7 @@ CreateWindowExA(DWORD dwExStyle,
 
         lpParam = (LPVOID)&mdi;
 
-        if (pWndParent->style & MDIS_ALLCHILDSTYLES)
+        if (dwParentStyle & MDIS_ALLCHILDSTYLES)
         {
             if (dwStyle & WS_POPUP)
             {
@@ -479,7 +505,6 @@ CreateWindowExA(DWORD dwExStyle,
         }
     }
 
-skip_mdi:
     hwnd = User32CreateWindowEx(dwExStyle,
                                 lpClassName,
                                 lpWindowName,
@@ -493,6 +518,8 @@ skip_mdi:
                                 hInstance,
                                 lpParam,
                                 NUCWE_ANSI);
+    if (hwnd && lpParam == (LPVOID)&mdi)
+        MDI_UpdateMaximizedChildFrame(hWndParent, hwnd);
     return hwnd;
 }
 
@@ -530,6 +557,18 @@ CreateWindowExW(DWORD dwExStyle,
         POINT mPos[2];
         UINT id = 0;
         HWND top_child;
+        DWORD dwParentStyle;
+#ifdef WOW64_I386_RUNTIME
+        if (!IsWindow(hWndParent)) return NULL;
+
+        if (!IntIsMdiClientWindow(hWndParent))
+        {
+           WARN("WS_EX_MDICHILD, but parent %p is not MDIClient\n", hWndParent);
+           return NULL;
+        }
+
+        dwParentStyle = GetWindowLongW(hWndParent, GWL_STYLE);
+#else
         PWND pWndParent;
 
         pWndParent = ValidateHwnd(hWndParent);
@@ -539,8 +578,11 @@ CreateWindowExW(DWORD dwExStyle,
         if (pWndParent->fnid != FNID_MDICLIENT)
         {
            WARN("WS_EX_MDICHILD, but parent %p is not MDIClient\n", hWndParent);
-           goto skip_mdi;
+           return NULL;
         }
+
+        dwParentStyle = pWndParent->style;
+#endif
 
         /* lpParams of WM_[NC]CREATE is different for MDI children.
         * MDICREATESTRUCT members have the originally passed values.
@@ -557,7 +599,7 @@ CreateWindowExW(DWORD dwExStyle,
 
         lpParam = (LPVOID)&mdi;
 
-        if (pWndParent->style & MDIS_ALLCHILDSTYLES)
+        if (dwParentStyle & MDIS_ALLCHILDSTYLES)
         {
             if (dwStyle & WS_POPUP)
             {
@@ -605,7 +647,6 @@ CreateWindowExW(DWORD dwExStyle,
         }
     }
 
-skip_mdi:
     hwnd = User32CreateWindowEx(dwExStyle,
                                 (LPCSTR)lpClassName,
                                 (LPCSTR)lpWindowName,
@@ -619,6 +660,8 @@ skip_mdi:
                                 hInstance,
                                 lpParam,
                                 0);
+    if (hwnd && lpParam == (LPVOID)&mdi)
+        MDI_UpdateMaximizedChildFrame(hWndParent, hwnd);
     return hwnd;
 }
 
@@ -655,6 +698,9 @@ EndDeferWindowPos(HDWP hWinPosInfo)
 HWND WINAPI
 GetDesktopWindow(VOID)
 {
+#ifdef WOW64_I386_RUNTIME
+    return (HWND)NtUserCallOneParam(0, ONEPARAM_ROUTINE_ROS_GETDESKTOPWINDOW);
+#else
     PWND Wnd;
     HWND Ret = NULL;
 
@@ -671,6 +717,7 @@ GetDesktopWindow(VOID)
     _SEH2_END;
 
     return Ret;
+#endif
 }
 
 
@@ -1681,8 +1728,12 @@ WINAPI
 IsServerSideWindow(
     _In_ HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    return !!(NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_GETWINDOWSTATE) & WNDS_SERVERSIDEWINDOWPROC);
+#else
     PWND Wnd = ValidateHwnd(hWnd);
     return Wnd && (Wnd->state & WNDS_SERVERSIDEWINDOWPROC);
+#endif
 }
 
 
@@ -2022,6 +2073,60 @@ DWORD WINAPI
 GetWindowContextHelpId(HWND hwnd)
 {
     return NtUserxGetWindowContextHelpId(hwnd);
+}
+
+HICON WINAPI
+InternalGetWindowIcon(HWND hWnd, UINT iconType)
+{
+    PWND pWnd;
+    HICON hIcon;
+    ATOM atomIcon, atomIconSm;
+    BOOL bSmallCopy = FALSE;
+
+    pWnd = ValidateHwnd(hWnd);
+    if (!pWnd)
+        return NULL;
+
+    if (!TestWindowProcess(pWnd))
+        return NULL;
+
+    atomIcon = (ATOM)UserGetServerInfo(atomIconProp, ROS_SERVERINFO_ATOMICONPROP);
+    atomIconSm = (ATOM)UserGetServerInfo(atomIconSmProp, ROS_SERVERINFO_ATOMICONSMPROP);
+
+    switch (iconType)
+    {
+        case ICON_BIG:
+            hIcon = UserGetProp(hWnd, atomIcon, TRUE);
+            if (!hIcon)
+                hIcon = (HICON)GetClassLongPtrW(hWnd, GCLP_HICON);
+            break;
+
+        case ICON_SMALL:
+        case ICON_SMALL2:
+            hIcon = UserGetProp(hWnd, atomIconSm, TRUE);
+            if (!hIcon && (hIcon = UserGetProp(hWnd, atomIcon, TRUE)))
+                bSmallCopy = TRUE;
+            if (!hIcon)
+                hIcon = (HICON)GetClassLongPtrW(hWnd, GCLP_HICONSM);
+            if (!hIcon && (hIcon = (HICON)GetClassLongPtrW(hWnd, GCLP_HICON)))
+                bSmallCopy = TRUE;
+            break;
+
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return NULL;
+    }
+
+    if (!hIcon)
+    {
+        hIcon = LoadImageW(NULL, (LPCWSTR)IDI_APPLICATION, IMAGE_ICON, 0, 0,
+                           LR_SHARED | LR_DEFAULTSIZE);
+    }
+
+    return CopyImage(hIcon, IMAGE_ICON,
+                     bSmallCopy ? GetSystemMetrics(SM_CXSMICON) : 0,
+                     bSmallCopy ? GetSystemMetrics(SM_CYSMICON) : 0,
+                     0);
 }
 
 /*

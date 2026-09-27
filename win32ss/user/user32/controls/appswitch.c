@@ -212,7 +212,7 @@ BOOL CALLBACK EnumerateCallback(HWND window, LPARAM lParam)
             if (!hIcon)
             {
                 // using windows logo icon as default
-                hIcon = gpsi->hIconWindows;
+                hIcon = (HICON)UserGetServerInfo(hIconWindows, ROS_SERVERINFO_HICONWINDOWS);
                 if (!hIcon)
                 {
                     //if all attempts to get icon fails go to the next window

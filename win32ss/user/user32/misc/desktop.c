@@ -674,10 +674,14 @@ SetShellWindow(HWND hwndShell)
 HWND WINAPI
 GetShellWindow(VOID)
 {
+#ifdef WOW64_I386_RUNTIME
+   return (HWND)NtUserCallOneParam(0, ONEPARAM_ROUTINE_ROS_GETSHELLWINDOW);
+#else
    PDESKTOPINFO pdi;
    pdi = GetThreadDesktopInfo();
    if (pdi) return pdi->hShellWindow;
    return NULL;
+#endif
 }
 
 

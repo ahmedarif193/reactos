@@ -256,6 +256,11 @@ PVOID
 FASTCALL
 ValidateHandle(HANDLE handle, UINT uType)
 {
+#ifdef WOW64_I386_RUNTIME
+  UNREFERENCED_PARAMETER(handle);
+  UNREFERENCED_PARAMETER(uType);
+  return NULL;
+#else
   PVOID ret;
   PUSER_HANDLE_ENTRY pEntry;
 
@@ -305,6 +310,7 @@ ValidateHandle(HANDLE handle, UINT uType)
     ret = DesktopPtrToUser(pEntry->ptr);
 
   return ret;
+#endif
 }
 
 //
