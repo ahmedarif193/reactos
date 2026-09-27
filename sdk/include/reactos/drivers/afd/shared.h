@@ -25,6 +25,16 @@ typedef struct _AFD_CREATE_PACKET {
     WCHAR				TransportName[1];
 } AFD_CREATE_PACKET, *PAFD_CREATE_PACKET;
 
+typedef struct _AFD_CREATE_PACKET_NT6 {
+    DWORD				EndpointFlags;
+    DWORD				GroupID;
+    DWORD				AddressFamily;
+    DWORD				SocketType;
+    DWORD				Protocol;
+    DWORD				SizeOfTransportName;
+    WCHAR				TransportName[1];
+} AFD_CREATE_PACKET_NT6, *PAFD_CREATE_PACKET_NT6;
+
 typedef struct _AFD_INFO {
     ULONG			        InformationClass;
     union {

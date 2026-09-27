@@ -371,7 +371,19 @@ AfdCreateSocket(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     AFD_DbgPrint(MID_TRACE,("%p: Checking command channel\n", FCB));
 
     if( ConnectInfo ) {
-        FCB->TdiDeviceName.Length = ConnectInfo->SizeOfTransportName;
+        PAFD_CREATE_PACKET_NT6 ConnectInfoNt6 = (PAFD_CREATE_PACKET_NT6)ConnectInfo;
+        PWCHAR TransportName = ConnectInfo->TransportName;
+        ULONG SizeOfTransportName = ConnectInfo->SizeOfTransportName;
+
+        if (EaInfo->EaValueLength >= FIELD_OFFSET(AFD_CREATE_PACKET_NT6, TransportName) + sizeof(WCHAR) &&
+            ConnectInfoNt6->SizeOfTransportName ==
+            EaInfo->EaValueLength - FIELD_OFFSET(AFD_CREATE_PACKET_NT6, TransportName) - sizeof(WCHAR))
+        {
+            TransportName = ConnectInfoNt6->TransportName;
+            SizeOfTransportName = ConnectInfoNt6->SizeOfTransportName;
+        }
+
+        FCB->TdiDeviceName.Length = SizeOfTransportName;
         FCB->TdiDeviceName.MaximumLength = FCB->TdiDeviceName.Length;
         FCB->TdiDeviceName.Buffer = ExAllocatePoolWithTag(NonPagedPool,
                                                           FCB->TdiDeviceName.Length,
@@ -386,7 +398,7 @@ AfdCreateSocket(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         }
 
         RtlCopyMemory( FCB->TdiDeviceName.Buffer,
-                       ConnectInfo->TransportName,
+                       TransportName,
                        FCB->TdiDeviceName.Length );
 
         AFD_DbgPrint(MID_TRACE,("Success: %s %wZ\n",
