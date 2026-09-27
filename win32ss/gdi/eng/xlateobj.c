@@ -571,6 +571,29 @@ XlateNeedsFieldExpansion(PPALETTE ppalSrc, PPALETTE ppalDst)
 
 /** Private Functions *********************************************************/
 
+static ULONG
+EXLATEOBJ_iDstColorIndex(
+    _In_ PPALETTE ppalDst,
+    _In_ COLORREF crColor)
+{
+    if (((crColor & 0xFFFF0000) == 0x10FF0000) && (ppalDst->flFlags & PAL_INDEXED))
+        return ((crColor & 0xFF) < ppalDst->NumColors) ? (crColor & 0xFF) : 0;
+
+    return PALETTE_ulGetNearestIndex(ppalDst, crColor);
+}
+
+static COLORREF
+EXLATEOBJ_crResolveDstColor(
+    _In_ PPALETTE ppalDC,
+    _In_ PPALETTE ppalDst,
+    _In_ COLORREF crColor)
+{
+    if (((crColor & 0xFFFF0000) == 0x10FF0000) && (ppalDst->flFlags & PAL_INDEXED))
+        return crColor;
+
+    return PALETTE_crResolveColor(ppalDC, ppalDst, crColor);
+}
+
 VOID
 NTAPI
 EXLATEOBJ_vInitialize(
@@ -641,8 +664,8 @@ EXLATEOBJ_vInitialize(
                 /* DDB -> DIB: Use the dest DC's back and fore color (black -> fore, white -> back) */
                 ULONG iBlack = PALETTE_ulGetNearestPaletteIndex(ppalSrc, 0x000000);
                 ULONG iWhite = iBlack ^ 1;
-                iColors[iBlack] = PALETTE_ulGetNearestPaletteIndex(ppalDst, crDstForeColor);
-                iColors[iWhite] = PALETTE_ulGetNearestPaletteIndex(ppalDst, crDstBackColor);
+                iColors[iBlack] = EXLATEOBJ_iDstColorIndex(ppalDst, crDstForeColor);
+                iColors[iWhite] = EXLATEOBJ_iDstColorIndex(ppalDst, crDstBackColor);
             }
             else
             {
@@ -697,12 +720,12 @@ EXLATEOBJ_vInitialize(
                 /* Use the dest DCs back and fore color */
                 ULONG iBlack = PALETTE_ulGetNearestPaletteIndex(ppalSrc, 0x000000);
                 ULONG iWhite = iBlack ^ 1;
-                pexlo->xlo.pulXlate[iBlack] = PALETTE_ulGetNearestIndex(ppalDst, crDstForeColor);
-                pexlo->xlo.pulXlate[iWhite] = PALETTE_ulGetNearestIndex(ppalDst, crDstBackColor);
+                pexlo->xlo.pulXlate[iBlack] = EXLATEOBJ_iDstColorIndex(ppalDst, crDstForeColor);
+                pexlo->xlo.pulXlate[iWhite] = EXLATEOBJ_iDstColorIndex(ppalDst, crDstBackColor);
             }
         }
     }
-    else if (ppalDst->flFlags & PAL_MONOCHROME)
+    else if ((ppalDst->flFlags & PAL_MONOCHROME) && !(ppalDst->flFlags & PAL_DIBSECTION))
     {
         pexlo->pfnXlate = EXLATEOBJ_iXlateToMono;
         pexlo->xlo.flXlate |= XO_TO_MONO;
@@ -748,7 +771,7 @@ EXLATEOBJ_vInitialize(
             pexlo->ulGreenShift = CalculateShift(RGB(0,0xFF,0), pexlo->ulGreenMask);
             pexlo->ulBlueShift = CalculateShift(RGB(0,0,0xFF), pexlo->ulBlueMask);
 
-            pexlo->aulXlate[0] = EXLATEOBJ_iXlateShiftAndMask(pexlo, crSrcBackColor);
+            pexlo->aulXlate[0] = PALETTE_ulGetNearestBitFieldsIndex(ppalSrc, crSrcBackColor);
         }
     }
     else if (ppalSrc->flFlags & PAL_INDEXED)
@@ -837,7 +860,7 @@ EXLATEOBJ_vInitialize(
         if (ppalDst->flFlags & PAL_INDEXED)
             pexlo->pfnXlate = EXLATEOBJ_iXlateBitfieldsToPal;
 
-        else if (ppalDst->flFlags & PAL_RGB)
+        else if ((ppalDst->flFlags & PAL_RGB) && !(ppalDst->flFlags & PAL_BITFIELDS))
             /* The inverse function works the same */
             pexlo->pfnXlate = EXLATEOBJ_iXlateRGBtoBGR;
 
@@ -936,10 +959,10 @@ EXLATEOBJ_vInitXlateFromDCs(
                           ppalDst,
                           PALETTE_crResolveColor(pdcSrc->dclevel.ppal, ppalSrc,
                                                  pdcSrc->pdcattr->crBackgroundClr),
-                          PALETTE_crResolveColor(pdcDst->dclevel.ppal, ppalDst,
-                                                 pdcDst->pdcattr->crBackgroundClr),
-                          PALETTE_crResolveColor(pdcDst->dclevel.ppal, ppalDst,
-                                                 pdcDst->pdcattr->crForegroundClr));
+                          EXLATEOBJ_crResolveDstColor(pdcDst->dclevel.ppal, ppalDst,
+                                                      pdcDst->pdcattr->crBackgroundClr),
+                          EXLATEOBJ_crResolveDstColor(pdcDst->dclevel.ppal, ppalDst,
+                                                      pdcDst->pdcattr->crForegroundClr));
 
     pexlo->ppalDstDc = pdcDst->dclevel.ppal;
 }
@@ -970,10 +993,10 @@ EXLATEOBJ_vInitXlateFromDCsEx(
                           ppalSrc,
                           ppalDst,
                           PALETTE_crResolveColor(pdcSrc->dclevel.ppal, ppalSrc, crBackColor),
-                          PALETTE_crResolveColor(pdcDst->dclevel.ppal, ppalDst,
-                                                 pdcDst->pdcattr->crBackgroundClr),
-                          PALETTE_crResolveColor(pdcDst->dclevel.ppal, ppalDst,
-                                                 pdcDst->pdcattr->crForegroundClr));
+                          EXLATEOBJ_crResolveDstColor(pdcDst->dclevel.ppal, ppalDst,
+                                                      pdcDst->pdcattr->crBackgroundClr),
+                          EXLATEOBJ_crResolveDstColor(pdcDst->dclevel.ppal, ppalDst,
+                                                      pdcDst->pdcattr->crForegroundClr));
 
     pexlo->ppalDstDc = pdcDst->dclevel.ppal;
 }

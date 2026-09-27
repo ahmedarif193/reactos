@@ -298,9 +298,9 @@ PALETTE_ulGetNearestBitFieldsIndex(PALETTE* ppal, ULONG ulColor)
     ppal->ulGreenShift = CalculateShift(RGB(0,0xff,0), ppal->GreenMask);
     ppal->ulBlueShift = CalculateShift(RGB(0,0,0xff), ppal->BlueMask);
 
-    ulNewColor = _rotl(ulColor, ppal->ulRedShift) & ppal->RedMask;
-    ulNewColor |= _rotl(ulColor, ppal->ulGreenShift) & ppal->GreenMask;
-    ulNewColor |= _rotl(ulColor, ppal->ulBlueShift) & ppal->BlueMask;
+    ulNewColor = _rotl(ulColor & 0x0000FF, ppal->ulRedShift) & ppal->RedMask;
+    ulNewColor |= _rotl(ulColor & 0x00FF00, ppal->ulGreenShift) & ppal->GreenMask;
+    ulNewColor |= _rotl(ulColor & 0xFF0000, ppal->ulBlueShift) & ppal->BlueMask;
 
    return ulNewColor;
 }
@@ -365,11 +365,13 @@ PALETTE_crResolveColor(PPALETTE ppalDC, PPALETTE ppalSurf, COLORREF crColor)
 
     if ((crColor & 0xFFFF0000) == 0x10FF0000)
     {
-        if (!ppalSurf || !(ppalSurf->flFlags & PAL_INDEXED) ||
-            iIndex >= ppalSurf->NumColors)
+        if (!ppalSurf || !(ppalSurf->flFlags & PAL_INDEXED))
         {
             return 0;
         }
+        iIndex = crColor & 0xFF;
+        if (iIndex >= ppalSurf->NumColors)
+            iIndex = 0;
         return PALETTE_ulGetRGBColorFromIndex(ppalSurf, iIndex);
     }
 

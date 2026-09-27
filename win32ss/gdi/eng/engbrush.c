@@ -141,7 +141,7 @@ EBRUSHOBJ_vSetSolidRGBColor(EBRUSHOBJ *pebo, COLORREF crColor)
     }
     else if ((crColor & 0xFFFF0000) == 0x10FF0000)
     {
-        ULONG iIndex = crColor & 0xFFFF;
+        ULONG iIndex = crColor & 0xFF;
 
         if (!(pebo->ppalSurf->flFlags & PAL_INDEXED) ||
             iIndex >= pebo->ppalSurf->NumColors)

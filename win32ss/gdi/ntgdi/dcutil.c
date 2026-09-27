@@ -910,7 +910,7 @@ TranslateCOLORREF(PDC pdc, COLORREF crColor)
     }
     else if ((crColor & 0xFFFF0000) == 0x10FF0000)
     {
-        index = crColor & 0xFFFF;
+        index = crColor & 0xFF;
         if (!(psurfDC->ppal->flFlags & PAL_INDEXED) || index >= psurfDC->ppal->NumColors)
             return 0;
         return index;
