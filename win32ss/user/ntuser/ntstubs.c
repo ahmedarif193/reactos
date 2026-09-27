@@ -232,9 +232,15 @@ NtUserModifyUserStartupInfoFlags(
    DWORD Unknown0,
    DWORD Unknown1)
 {
-   STUB
+   PPROCESSINFO ppi;
 
-   return 0;
+   UserEnterExclusive();
+   ppi = PsGetCurrentProcessWin32Process();
+   if (ppi)
+      ppi->usi.dwFlags = (ppi->usi.dwFlags & ~Unknown0) | (Unknown1 & Unknown0);
+   UserLeave();
+
+   return TRUE;
 }
 
 DWORD
@@ -341,7 +347,7 @@ NtUserSetSysColors(
    /* We need this check to prevent overflow later */
    if ((ULONG)cElements >= 0x40000000)
    {
-      EngSetLastError(ERROR_NOACCESS);
+      EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
       return FALSE;
    }
 
@@ -475,7 +481,9 @@ NtUserProcessConnect(
     /* Get Win32 process information */
     W32Process = PsGetProcessWin32Process(Process);
     if (!W32Process ||
-        (W32Process->pClientBase && Process != PsGetCurrentProcess()))
+        (W32Process->pClientBase && Process != PsGetCurrentProcess()) ||
+        (PsGetCurrentProcess() != gpepCSRSS &&
+         (Process != PsGetCurrentProcess() || W32Process->pClientBase)))
     {
         Status = STATUS_UNSUCCESSFUL;
         goto Cleanup;
