@@ -209,11 +209,13 @@ NtGdiBitBlt(
 
     /* An RTL destination needs the mirroring-capable stretch path */
     pdcPeek = DC_LockDc(hDCDest);
-    if (pdcPeek)
+    if (!pdcPeek)
     {
-        bRtlDest = (pdcPeek->pdcattr->dwLayout & LAYOUT_RTL) != 0;
-        DC_UnlockDc(pdcPeek);
+        EngSetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
     }
+    bRtlDest = (pdcPeek->pdcattr->dwLayout & LAYOUT_RTL) != 0;
+    DC_UnlockDc(pdcPeek);
 
     if ((dwRop & CAPTUREBLT) || bRtlDest)
     {

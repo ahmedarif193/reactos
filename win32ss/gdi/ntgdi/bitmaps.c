@@ -211,7 +211,7 @@ NtGdiCreateBitmap(
 
     /* Check parameters (possible overflow of cjSize!) */
     if ((iFormat == 0) || (nWidth <= 0) || (nWidth >= 0x8000000) || (nHeight <= 0) ||
-        (cBitsPixel > 32) || (cPlanes > 32) || (cjSize >= 0x100000000ULL))
+        (cBitsPixel > 32) || (cPlanes > 32))
     {
         DPRINT1("Invalid bitmap format! Width=%d, Height=%d, Bpp=%u, Planes=%u\n",
                 nWidth, nHeight, cBitsPixel, cPlanes);
@@ -221,6 +221,9 @@ NtGdiCreateBitmap(
             EngSetLastError(ERROR_INVALID_PARAMETER);
         return NULL;
     }
+
+    if ((ULONGLONG)WIDTH_BYTES_ALIGN32(nWidth, cRealBpp) * nHeight > MAXLONG - sizeof(SURFACE))
+        return NULL;
 
     /* Allocate the surface (but don't set the bits) */
     psurf = SURFACE_AllocSurface(STYPE_BITMAP,
@@ -251,15 +254,8 @@ NtGdiCreateBitmap(
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            GDIOBJ_vDeleteObject(&psurf->BaseObject);
-            _SEH2_YIELD(return NULL;)
         }
         _SEH2_END
-    }
-    else
-    {
-        /* Zero the bits */
-        RtlZeroMemory(psurf->SurfObj.pvBits, psurf->SurfObj.cjBits);
     }
 
     /* Get the handle for the bitmap */
@@ -650,15 +646,18 @@ NtGdiSetBitmapBits(
         return 0;
     }
 
+    Bytes = min(Bytes, WIDTH_BYTES_ALIGN16(psurf->SurfObj.sizlBitmap.cx,
+                                           BitsPerFormat(psurf->SurfObj.iBitmapFormat)) *
+                       (ULONG)psurf->SurfObj.sizlBitmap.cy);
+    ret = Bytes;
+
     _SEH2_TRY
     {
-        /* NOTE: Win2k3 doesn't check WORD alignment here. */
-        ProbeForWrite(pUnsafeBits, Bytes, 1);
-        ret = UnsafeSetBitmapBits(psurf, Bytes, pUnsafeBits);
+        ProbeForRead(pUnsafeBits, Bytes, 1);
+        UnsafeSetBitmapBits(psurf, Bytes, pUnsafeBits);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        ret = 0;
     }
     _SEH2_END
 

@@ -318,15 +318,16 @@ NtGdiExtSelectClipRgn(
     DC *dc;
     PREGION prgn;
 
-    if ( fnMode < RGN_AND || fnMode > RGN_COPY )
-    {
-        EngSetLastError(ERROR_INVALID_PARAMETER);
-        return ERROR;
-    }
-
     if (!(dc = DC_LockDc(hDC)))
     {
         EngSetLastError(ERROR_INVALID_HANDLE);
+        return ERROR;
+    }
+
+    if ( fnMode < RGN_AND || fnMode > RGN_COPY )
+    {
+        DC_UnlockDc(dc);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         return ERROR;
     }
 

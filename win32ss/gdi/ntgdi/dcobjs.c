@@ -760,11 +760,19 @@ NtGdiGetRandomRgn(
     INT ret = 0;
     PDC pdc;
     PREGION prgnSrc = NULL;
+    PREGION prgnDest;
 
     pdc = DC_LockDc(hdc);
     if (!pdc)
     {
         EngSetLastError(ERROR_INVALID_HANDLE);
+        return -1;
+    }
+
+    prgnDest = REGION_LockRgn(hrgnDest);
+    if (!prgnDest)
+    {
+        DC_UnlockDc(pdc);
         return -1;
     }
 
@@ -805,24 +813,18 @@ NtGdiGetRandomRgn(
 
     if (prgnSrc)
     {
-        PREGION prgnDest = REGION_LockRgn(hrgnDest);
-        if (prgnDest)
+        ret = IntGdiCombineRgn(prgnDest, prgnSrc, 0, RGN_COPY) == ERROR ? -1 : 1;
+        if ((ret == 1) && (iCode == SYSRGN))
         {
-            ret = IntGdiCombineRgn(prgnDest, prgnSrc, 0, RGN_COPY) == ERROR ? -1 : 1;
-            if ((ret == 1) && (iCode == SYSRGN))
-            {
-                /// \todo FIXME This is not really correct, since we already modified the region
-                if (pdc->fs & DC_REDIRECTION)
-                    ret = REGION_bOffsetRgn(prgnDest, pdc->erclWindow.left, pdc->erclWindow.top);
-                else
-                    ret = REGION_bOffsetRgn(prgnDest, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
-            }
-            REGION_UnlockRgn(prgnDest);
+            /// \todo FIXME This is not really correct, since we already modified the region
+            if (pdc->fs & DC_REDIRECTION)
+                ret = REGION_bOffsetRgn(prgnDest, pdc->erclWindow.left, pdc->erclWindow.top);
+            else
+                ret = REGION_bOffsetRgn(prgnDest, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
         }
-        else
-            ret = -1;
     }
 
+    REGION_UnlockRgn(prgnDest);
     DC_UnlockDc(pdc);
 
     return ret;

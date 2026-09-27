@@ -1064,6 +1064,10 @@ NtGdiDoPalette(
 	LPVOID pEntries = NULL;
 	SIZE_T cjSize;
 
+	bInbound = (iFunc == GdiPalAnimate ||
+	            iFunc == GdiPalSetEntries ||
+	            iFunc == GdiPalSetColorTable);
+
 	if (pUnsafeEntries)
 	{
 		if (cEntries == 0)
@@ -1105,17 +1109,11 @@ NtGdiDoPalette(
 
 		case GdiPalSetEntries:
 			if (pEntries)
-			{
-				if (bInbound)
-					ret = IntSetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (CONST LPPALETTEENTRY)pEntries);
-				else
-					ret = IntGetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (LPPALETTEENTRY)pEntries);
-			}
+				ret = IntSetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (CONST LPPALETTEENTRY)pEntries);
 			break;
 
 		case GdiPalGetEntries:
-			if (!bInbound)
-				ret = IntGetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (LPPALETTEENTRY)pEntries);
+			ret = IntGetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (LPPALETTEENTRY)pEntries);
 			break;
 
 		case GdiPalGetSystemEntries:
