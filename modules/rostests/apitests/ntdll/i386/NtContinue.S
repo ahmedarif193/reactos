@@ -10,10 +10,12 @@ EXTERN _check:PROC
 
 PUBLIC _continuePoint
 _continuePoint:
- push ss
+ push 0
+ mov word ptr [esp], ss
  push 0
  pushfd
- push cs
+ push 0
+ mov word ptr [esp], cs
  PUSH_OFFSET _continuePoint
  push ebp
 
@@ -24,10 +26,14 @@ _continuePoint:
  push esi
  push edi
 
- push ds
- push es
- push fs
- push gs
+ push 0
+ mov word ptr [esp], ds
+ push 0
+ mov word ptr [esp], es
+ push 0
+ mov word ptr [esp], fs
+ push 0
+ mov word ptr [esp], gs
 
  // TODO: floating point state
  sub esp, 112
