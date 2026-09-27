@@ -1154,12 +1154,18 @@ Finish:
 
 LRESULT WINAPI ImeWndProcA( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
 {
-    return ImeWndProc_common(hwnd, msg, wParam, lParam, FALSE);
+    DWORD dwLastError = GetLastError();
+    LRESULT lResult = ImeWndProc_common(hwnd, msg, wParam, lParam, FALSE);
+    SetLastError(dwLastError);
+    return lResult;
 }
 
 LRESULT WINAPI ImeWndProcW( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
 {
-    return ImeWndProc_common(hwnd, msg, wParam, lParam, TRUE);
+    DWORD dwLastError = GetLastError();
+    LRESULT lResult = ImeWndProc_common(hwnd, msg, wParam, lParam, TRUE);
+    SetLastError(dwLastError);
+    return lResult;
 }
 
 BOOL WINAPI UpdatePerUserImmEnabling(VOID)
