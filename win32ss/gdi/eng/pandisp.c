@@ -162,6 +162,20 @@ PanDisablePDEV(
     EngFreeMem(pandev);
 }
 
+BOOL
+APIENTRY
+PanAssertMode(
+    _In_ DHPDEV dhpdev,
+    _In_ BOOL bEnable)
+{
+    PPANDEV pandev = (PPANDEV)dhpdev;
+
+    if (!GETPFN(AssertMode))
+        return TRUE;
+
+    return GETPFN(AssertMode)(pandev->dhpdevScreen, bEnable);
+}
+
 VOID
 APIENTRY
 PanDisableSurface(
@@ -482,6 +496,7 @@ DRVFN gPanDispDrvFn[] =
     { INDEX_DrvDisablePDEV,    (PFN) PanDisablePDEV    },
     { INDEX_DrvEnableSurface,  (PFN) PanEnableSurface  },
     { INDEX_DrvDisableSurface, (PFN) PanDisableSurface },
+    { INDEX_DrvAssertMode,     (PFN) PanAssertMode     },
 
     /* required for device-managed surfaces */
     { INDEX_DrvCopyBits,       (PFN) PanCopyBits       },
