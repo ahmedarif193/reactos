@@ -1080,7 +1080,7 @@ NSP_LookupServiceNextW(_In_ PWSHANDLEINTERN data,
             if (!mswBufferAppendBlob_Servent(&buf,
                                              lpRes,
                                              ServiceInstanceNameA,/* ServiceName */
-                                             (LUP_RETURN_ALIASES & data->dwControlFlags) != 0 ? hostinfo.servaliasesA : NULL,
+                                             hostinfo.servaliasesA,
                                              ServiceProtocolNameA,
                                              hostinfo.servport))
             {
