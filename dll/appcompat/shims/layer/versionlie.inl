@@ -39,11 +39,11 @@ BOOL WINAPI SHIM_OBJ_NAME(APIHook_GetVersionExW)(LPOSVERSIONINFOEXA lpOsVersionI
 /* We do not care about the actual type, FakeVersion will correctly handle it either way */
 DWORD WINAPI SHIM_OBJ_NAME(APIHook_RtlGetVersion)(LPOSVERSIONINFOEXA lpOsVersionInfo)
 {
-    if (CALL_SHIM(3, GETVERSIONEXAPROC)(lpOsVersionInfo) == STATUS_SUCCESS)
-    {
-        return FakeVersion(lpOsVersionInfo, &VERSION_INFO) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
-    }
-    return STATUS_INVALID_PARAMETER;
+    LONG Status = CALL_SHIM(3, GETVERSIONEXAPROC)(lpOsVersionInfo);
+
+    if (Status >= 0 && !FakeVersion(lpOsVersionInfo, &VERSION_INFO))
+        return STATUS_INVALID_PARAMETER;
+    return Status;
 }
 
 BOOL WINAPI SHIM_OBJ_NAME(Notify)(DWORD fdwReason, PVOID ptr)

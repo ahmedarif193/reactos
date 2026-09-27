@@ -72,7 +72,7 @@ BOOL FakeVersion(LPOSVERSIONINFOEXA pResult, VersionLieInfo* pFake)
         {
             if (FAILED(StringCbCopyA(pResult->szCSDVersion, sizeof(pResult->szCSDVersion), pFake->szCSDVersionA)))
                 return FALSE;
-            if (pResult->dwOSVersionInfoSize == sizeof(OSVERSIONINFOEXA) && pFake->dwPlatformId != VER_PLATFORM_WIN32_WINDOWS)
+            if (pResult->dwOSVersionInfoSize == sizeof(OSVERSIONINFOEXA) && pFake->dwMajorVersion >= 5)
             {
                 pResult->wServicePackMajor = pFake->wServicePackMajor;
                 pResult->wServicePackMinor = pFake->wServicePackMinor;
@@ -83,7 +83,7 @@ BOOL FakeVersion(LPOSVERSIONINFOEXA pResult, VersionLieInfo* pFake)
             LPOSVERSIONINFOEXW pResultW = (LPOSVERSIONINFOEXW)pResult;
             if (FAILED(StringCbCopyW(pResultW->szCSDVersion, sizeof(pResultW->szCSDVersion), pFake->szCSDVersionW)))
                 return FALSE;
-            if (pResultW->dwOSVersionInfoSize == sizeof(OSVERSIONINFOEXW) && pFake->dwPlatformId != VER_PLATFORM_WIN32_WINDOWS)
+            if (pResultW->dwOSVersionInfoSize == sizeof(OSVERSIONINFOEXW) && pFake->dwMajorVersion >= 5)
             {
                 pResultW->wServicePackMajor = pFake->wServicePackMajor;
                 pResultW->wServicePackMinor = pFake->wServicePackMinor;
