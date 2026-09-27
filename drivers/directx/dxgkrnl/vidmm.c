@@ -137,8 +137,9 @@ static VOID NTAPI DxgkpVidMmDestroyBatchWorker(_In_ PVOID Context);
 static ULONG DxgkpVidMmForceQuarantinedDestroyBatches(_In_ PDXGKRNL_ADAPTER Adapter);
 static ULONG DxgkpVidMmForceLocalAdapterBackings(_In_ PDXGKRNL_ADAPTER Adapter);
 static NTSTATUS DxgkpVidMmDestroyAllocation(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ PDXGKRNL_DEVICE ExpectedDevice, _In_opt_ PDXGKVMM_RESOURCE ExpectedResource, _In_ HANDLE AllocationHandle);
-static NTSTATUS DxgkpVidMmDestroyAllocationList(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ PDXGKRNL_DEVICE Device, _In_reads_(AllocationCount) CONST D3DKMT_HANDLE *AllocationHandles, _In_ UINT AllocationCount, _In_ BOOLEAN ResourceOperationLockHeld, _Inout_opt_ PBOOLEAN KmdTransactionHeld, _Inout_opt_ PBOOLEAN CallerResourceLockHeld);
+static NTSTATUS DxgkpVidMmDestroyAllocationList(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ PDXGKRNL_DEVICE Device, _In_reads_(AllocationCount) CONST D3DKMT_HANDLE *AllocationHandles, _In_ UINT AllocationCount, _In_ BOOLEAN ResourceOperationLockHeld, _Inout_opt_ PBOOLEAN KmdTransactionHeld, _Inout_opt_ PBOOLEAN CallerResourceLockHeld, _In_opt_ struct _DXGKVMM_DESTROY_BATCH *ResourceDestroyBatch);
 static struct _DXGKVMM_DESTROY_BATCH *DxgkpVidMmAllocateDestroyBatch(_In_ PDXGKRNL_ADAPTER Adapter, _In_ UINT AllocationCount);
+static VOID DxgkpVidMmDelegateResourceDestroy(_In_ PDXGKVMM_RESOURCE Resource, _In_ struct _DXGKVMM_DESTROY_BATCH *Batch);
 static NTSTATUS DxgkpVidMmActivateUnpublishedDestroyBatch(_In_ struct _DXGKVMM_DESTROY_BATCH *Batch, _In_reads_(Batch->AllocationCount) PDXGKVMM_ALLOCATION *Allocations, _In_opt_ PDXGKVMM_RESOURCE Resource, _In_reads_opt_(Batch->AllocationCount) PHANDLE OpenHandles, _In_opt_ struct _DXGKVMM_OPEN_BINDING_GROUP *OpenBindingGroup, _In_ NTSTATUS FailureStatus, _In_ BOOLEAN TrackUnpublishedObjects, _In_ BOOLEAN AwaitingStopBoundary);
 static VOID DxgkpVidMmFreeDestroyBatch(_In_ struct _DXGKVMM_DESTROY_BATCH *Batch);
 static VOID DxgkpVidMmQuarantineDestroyBatch(_In_ struct _DXGKVMM_DESTROY_BATCH *Batch);
@@ -247,6 +248,13 @@ static LIST_ENTRY DxgkVidMmResourceListHead;
 static LIST_ENTRY DxgkVidMmDestroyBatchListHead;
 static LIST_ENTRY DxgkVidMmHandleDataReferenceListHead;
 static LIST_ENTRY DxgkVidMmUserMappingListHead;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+/* GPU retirement of destroyed allocations waits on a dedicated thread, never
+ * on a system worker. DxgkVidMmDestroyBatchListLock protects the queue. */
+static LIST_ENTRY DxgkVidMmRetirementQueue;
+static KEVENT     DxgkVidMmRetirementEvent;
+static volatile LONG DxgkVidMmRetirementThreadState;
+#endif
 static ULONG      DxgkVidMmAllocationHandleCookie = 0x4D4D414C; /* "LAMM" */
 static ULONG      DxgkVidMmResourceHandleCookie   = 0x4D4D4552; /* "REMM" */
 static ULONG      DxgkVidMmGlobalShareHandleCookie = 0x4D4D4753; /* "SGMM" */
@@ -285,11 +293,19 @@ typedef struct _DXGKVMM_OPEN_BINDING_GROUP
     UINT DestroyBatchCount;
 } DXGKVMM_OPEN_BINDING_GROUP, *PDXGKVMM_OPEN_BINDING_GROUP;
 
+typedef struct _DXGKVMM_RETIRE_SNAPSHOT
+{
+    ULONG SubmittedFenceId[DXGK_MAX_TRACKED_NODES];
+    LONG SubmittedEpoch;
+} DXGKVMM_RETIRE_SNAPSHOT, *PDXGKVMM_RETIRE_SNAPSHOT;
+
 typedef struct _DXGKVMM_DESTROY_BATCH
 {
     WORK_QUEUE_ITEM WorkItem;
+    LIST_ENTRY RetirementEntry;
     KEVENT WorkerIdleEvent;
     KEVENT WorkerCompletionEvent;
+    KEVENT RetirementCompletionEvent;
     KEVENT CompletionEvent;
     LIST_ENTRY QuarantineEntry;
     PDXGKRNL_ADAPTER Adapter;
@@ -303,6 +319,8 @@ typedef struct _DXGKVMM_DESTROY_BATCH
     volatile LONG PendingAllocationCount;
     volatile LONG WorkQueued;
     volatile LONG WorkerCounted;
+    volatile LONG RetirementCounted;
+    DXGKVMM_RETIRE_SNAPSHOT RetirementSnapshot;
     volatile LONG Listed;
     volatile LONG LifetimeReferenceCount;
     volatile LONG ActiveReferenceHeld;
@@ -788,6 +806,8 @@ DxgkpVidMmEnsureGlobalsInitialized(VOID)
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         InitializeListHead(&DxgkVidMmProcessBudgetListHead);
         InitializeListHead(&DxgkVidMmProcessBudgetGateListHead);
+        InitializeListHead(&DxgkVidMmRetirementQueue);
+        KeInitializeEvent(&DxgkVidMmRetirementEvent, SynchronizationEvent, FALSE);
 #endif
         InterlockedExchange(&DxgkVidMmGlobalsState, 2);
         return;
@@ -1010,6 +1030,7 @@ DxgkpVidMmInitializeResourceLifetime(
     Resource->ReferenceCount = 1;
     Resource->Destroying = 0;
     Resource->FinalizeQueued = 0;
+    Resource->DestroyBatch = NULL;
     KeInitializeEvent(&Resource->ReferencesDrainedEvent, NotificationEvent, FALSE);
 }
 
@@ -3073,6 +3094,16 @@ DxgkVidMmDereferenceResource(
     ASSERT(Resource != NULL);
     References = InterlockedDecrement(&Resource->ReferenceCount);
     ASSERT(References >= 0);
+    if (References == 2 && InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
+    {
+        PDXGKVMM_DESTROY_BATCH Batch =
+            InterlockedExchangePointer((PVOID volatile *)&Resource->DestroyBatch, NULL);
+
+        /* Only the delegated handle and batch references remain. No allocation
+         * or open resource can still use the parent miniport handle. */
+        if (Batch != NULL)
+            DxgkpVidMmNotifyDestroyBatchAllocationDrained(Batch);
+    }
     if (References == 0)
     {
         KeSetEvent(&Resource->ReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
@@ -4349,7 +4380,7 @@ DxgkpVidMmDestroyResourceWrapper(
     _In_ PDXGKVMM_RESOURCE Resource)
 {
     PLIST_ENTRY Entry;
-    DXGKARG_DESTROYALLOCATION DestroyArgs;
+    PDXGKVMM_DESTROY_BATCH ResourceDestroyBatch = NULL;
     BOOLEAN ResourcePinned = FALSE;
     BOOLEAN ResourceOperationLockHeld = FALSE;
     BOOLEAN ResourceHandleDelegated = FALSE;
@@ -4394,6 +4425,13 @@ DxgkpVidMmDestroyResourceWrapper(
     if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Resource->CloseUncertain, 0, 0) != 0 || (InterlockedCompareExchange(&Resource->DestroyFailureUncertain, 0, 0) != 0 && InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked, 0, 0) == 0))
     {
         Status = STATUS_DEVICE_BUSY;
+        goto Cleanup;
+    }
+
+    ResourceDestroyBatch = DxgkpVidMmAllocateDestroyBatch(Adapter, 0);
+    if (ResourceDestroyBatch == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
     }
 
@@ -4466,7 +4504,8 @@ DxgkpVidMmDestroyResourceWrapper(
             goto Cleanup;
         }
         Status = DxgkpVidMmDestroyAllocationList(Adapter, NULL, AllocationHandles, CapturedCount, TRUE,
-                                                &KmdTransactionStarted, &ResourceOperationLockHeld);
+                                                &KmdTransactionStarted, &ResourceOperationLockHeld,
+                                                ResourceDestroyBatch);
         ExFreePoolWithTag(AllocationHandles, TAG_VIDMM_RESOURCE);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
@@ -4477,36 +4516,6 @@ DxgkpVidMmDestroyResourceWrapper(
         }
     }
 
-    (VOID)KeWaitForSingleObject(&Resource->MiniportResourceLock, Executive, KernelMode, FALSE, NULL);
-    if (Resource->BackingResource == NULL && Resource->MiniportHandle != NULL)
-    {
-        if (InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked, 0, 0) != 0)
-        {
-            if (Adapter->MiniportDeviceStopped || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0)
-                Status = STATUS_SUCCESS;
-            else
-                Status = STATUS_DEVICE_NOT_READY;
-        }
-        else if (DXGK_CB_FULL(Adapter, DxgkDdiDestroyAllocation) == NULL)
-            Status = STATUS_NOT_SUPPORTED;
-        else if (!DxgkAcquireMiniportCallback(Adapter))
-            Status = STATUS_DEVICE_NOT_READY;
-        else
-        {
-            RtlZeroMemory(&DestroyArgs, sizeof(DestroyArgs));
-            DestroyArgs.hResource = Resource->MiniportHandle;
-            DestroyArgs.Flags.DestroyResource = 1;
-            Status = DXGK_CB_FULL(Adapter, DxgkDdiDestroyAllocation)(Adapter->MiniportDeviceContext, &DestroyArgs);
-            DxgkReleaseMiniportCallback(Adapter);
-        }
-        if (!NT_SUCCESS(Status))
-        {
-            InterlockedExchange(&Resource->DestroyFailureUncertain, 1);
-            KeReleaseMutex(&Resource->MiniportResourceLock, FALSE);
-            goto Cleanup;
-        }
-        Resource->MiniportHandle = NULL;
-    }
     ExAcquireFastMutex(&DxgkVidMmResourceListLock);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0 || Resource->AllocationCount != 0 || !IsListEmpty(&Resource->AllocationList) || IsListEmpty(&Resource->GlobalResourceEntry))
@@ -4515,13 +4524,12 @@ DxgkpVidMmDestroyResourceWrapper(
     {
         ASSERT(InterlockedCompareExchange(&Resource->CloseUncertain, 0, 0) == 0);
         InterlockedExchange(&Resource->DestroyFailureUncertain, 0);
-        InterlockedExchange(&Resource->Destroying, 1);
-        DxgkpVidMmUnpublishResourceLocked(Resource);
+        DxgkpVidMmDelegateResourceDestroy(Resource, ResourceDestroyBatch);
+        ResourceHandleDelegated = TRUE;
         Status = STATUS_SUCCESS;
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
     ExReleaseFastMutex(&DxgkVidMmResourceListLock);
-    KeReleaseMutex(&Resource->MiniportResourceLock, FALSE);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -4535,6 +4543,7 @@ ResourceTombstoned:
     ResourcePinned = FALSE;
     if (!ResourceHandleDelegated)
         DxgkVidMmDereferenceResource(Resource);
+    DxgkpVidMmFreeDestroyBatch(ResourceDestroyBatch);
     return STATUS_SUCCESS;
 
 Cleanup:
@@ -4544,6 +4553,8 @@ Cleanup:
         DxgkEndKmdTransaction(Adapter);
     if (ResourcePinned)
         DxgkVidMmDereferenceResource(Resource);
+    if (ResourceDestroyBatch != NULL)
+        DxgkpVidMmFreeDestroyBatch(ResourceDestroyBatch);
     return Status;
 }
 
@@ -5997,7 +6008,7 @@ DxgkpVidMmDestroyAllocation(
     else
         Allocation = NULL;
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-    Status = Allocation != NULL ? DxgkpVidMmDestroyAllocationList(Adapter, Device, &Handle, 1, FALSE, NULL, NULL) : STATUS_INVALID_PARAMETER;
+    Status = Allocation != NULL ? DxgkpVidMmDestroyAllocationList(Adapter, Device, &Handle, 1, FALSE, NULL, NULL, NULL) : STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(Status))
         DPRINT1("DxgkVidMmDestroyAllocation: invalid handle %p\n", AllocationHandle);
     return Status;
@@ -6030,7 +6041,7 @@ DxgkpVidMmAllocateDestroyBatch(
 {
     PDXGKVMM_DESTROY_BATCH Batch;
 
-    if (Adapter == NULL || AllocationCount == 0 || AllocationCount > MAXLONG)
+    if (Adapter == NULL || AllocationCount > MAXLONG)
         return NULL;
     if ((SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*Batch->Allocations) || (SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*Batch->OpenBindingHandles) || (SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*Batch->MiniportHandles))
         return NULL;
@@ -6039,25 +6050,30 @@ DxgkpVidMmAllocateDestroyBatch(
         return NULL;
     RtlZeroMemory(Batch, sizeof(*Batch));
     Batch->LifetimeReferenceCount = 1;
-    Batch->Allocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Batch->Allocations), TAG_VIDMM_ALLOC);
-    Batch->OpenBindingHandles = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Batch->OpenBindingHandles), TAG_VIDMM_ALLOC);
-    Batch->MiniportHandles = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Batch->MiniportHandles), TAG_VIDMM_ALLOC);
-    if (Batch->Allocations == NULL || Batch->OpenBindingHandles == NULL || Batch->MiniportHandles == NULL)
+    if (AllocationCount != 0)
     {
-        DxgkpVidMmFreeDestroyBatch(Batch);
-        return NULL;
+        Batch->Allocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Batch->Allocations), TAG_VIDMM_ALLOC);
+        Batch->OpenBindingHandles = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Batch->OpenBindingHandles), TAG_VIDMM_ALLOC);
+        Batch->MiniportHandles = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Batch->MiniportHandles), TAG_VIDMM_ALLOC);
+        if (Batch->Allocations == NULL || Batch->OpenBindingHandles == NULL || Batch->MiniportHandles == NULL)
+        {
+            DxgkpVidMmFreeDestroyBatch(Batch);
+            return NULL;
+        }
+        RtlZeroMemory(Batch->Allocations, (SIZE_T)AllocationCount * sizeof(*Batch->Allocations));
+        RtlZeroMemory(Batch->OpenBindingHandles, (SIZE_T)AllocationCount * sizeof(*Batch->OpenBindingHandles));
+        RtlZeroMemory(Batch->MiniportHandles, (SIZE_T)AllocationCount * sizeof(*Batch->MiniportHandles));
     }
-    RtlZeroMemory(Batch->Allocations, (SIZE_T)AllocationCount * sizeof(*Batch->Allocations));
-    RtlZeroMemory(Batch->OpenBindingHandles, (SIZE_T)AllocationCount * sizeof(*Batch->OpenBindingHandles));
-    RtlZeroMemory(Batch->MiniportHandles, (SIZE_T)AllocationCount * sizeof(*Batch->MiniportHandles));
     Batch->Adapter = Adapter;
     Batch->AllocationCount = AllocationCount;
     Batch->PendingAllocationCount = (LONG)AllocationCount;
     Batch->CompletionStatus = STATUS_PENDING;
     KeInitializeEvent(&Batch->WorkerIdleEvent, NotificationEvent, TRUE);
     KeInitializeEvent(&Batch->WorkerCompletionEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&Batch->RetirementCompletionEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Batch->CompletionEvent, NotificationEvent, FALSE);
     InitializeListHead(&Batch->QuarantineEntry);
+    InitializeListHead(&Batch->RetirementEntry);
     ExInitializeWorkItem(&Batch->WorkItem, DxgkpVidMmDestroyBatchWorker, Batch);
     return Batch;
 }
@@ -6095,6 +6111,30 @@ DxgkpVidMmRegisterDestroyBatch(
         InsertTailList(&DxgkVidMmDestroyBatchListHead, &Batch->QuarantineEntry);
     }
     ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
+}
+
+static VOID
+DxgkpVidMmDelegateResourceDestroy(
+    _In_ PDXGKVMM_RESOURCE Resource,
+    _In_ PDXGKVMM_DESTROY_BATCH Batch)
+{
+    /* ResourceOperationLock and the publication locks exclude new opens.
+     * The caller still pins Resource until after these fields are published. */
+    ASSERT(Batch->AllocationCount == 0);
+    ASSERT(Resource->AllocationCount == 0 && IsListEmpty(&Resource->AllocationList));
+    ASSERT(Resource->DestroyBatch == NULL);
+    Batch->Resource = Resource;
+    Batch->MiniportDeviceHandle = Resource->Device != NULL ?
+        Resource->Device->hMiniportDevice : NULL;
+    Batch->DestroyResource = Resource->BackingResource == NULL;
+    Batch->ResourceHandleReferenceOwned = 1;
+    Batch->DestroyCommitted = 1;
+    Batch->PendingAllocationCount = 1; /* remaining allocation/open references */
+    InterlockedIncrement(&Resource->ReferenceCount);
+    DxgkpVidMmRegisterDestroyBatch(Batch);
+    Resource->DestroyBatch = Batch;
+    InterlockedExchange(&Resource->Destroying, 1);
+    DxgkpVidMmUnpublishResourceLocked(Resource);
 }
 
 static VOID
@@ -6290,8 +6330,16 @@ DxgkpVidMmCloseReadyBindingGroup(
         KeReleaseMutex(&Group->OperationLock, FALSE);
         return Status;
     }
+    /* A member still retiring must not block this one; the last ready
+     * member closes and commits the whole group. */
     for (Index = 0; Index < Group->AllocationCount; ++Index)
-        KeWaitForSingleObject(&Group->Allocations[Index]->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+    {
+        if (KeReadStateEvent(&Group->Allocations[Index]->LogicalReferencesDrainedEvent) == 0)
+        {
+            KeReleaseMutex(&Group->OperationLock, FALSE);
+            return STATUS_PENDING;
+        }
+    }
     if (InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked, 0, 0) != 0)
         Status = STATUS_DEVICE_NOT_READY;
     else if (DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation) == NULL)
@@ -6351,6 +6399,62 @@ DxgkpVidMmCloseReadyBindingGroup(
     }
     return Status;
 }
+
+static NTSTATUS
+DxgkpVidMmCompleteRetiredBatch(
+    _In_ PDXGKVMM_DESTROY_BATCH Batch)
+{
+    UINT Index;
+    UINT OtherIndex;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    /* Closing a group can commit another member's batch; the batch reference
+     * alone does not keep these allocation wrappers alive. */
+    for (Index = 0; Index < Batch->AllocationCount; ++Index)
+    {
+        LONG References = InterlockedIncrement(&Batch->Allocations[Index]->ReferenceCount);
+        ASSERT(References > 1);
+    }
+    for (Index = 0; Index < Batch->AllocationCount; ++Index)
+        DxgkpVidMmDropLogicalHandleReference(Batch->Allocations[Index]);
+    for (Index = 0; Index < Batch->AllocationCount; ++Index)
+        KeWaitForSingleObject(&Batch->Allocations[Index]->LogicalReferencesDrainedEvent,
+                              Executive, KernelMode, FALSE, NULL);
+    for (Index = 0; Index < Batch->AllocationCount; ++Index)
+    {
+        PDXGKVMM_OPEN_BINDING_GROUP Group = Batch->Allocations[Index]->OpenBindingGroup;
+
+        if (Group == NULL)
+            continue;
+        for (OtherIndex = 0; OtherIndex < Index; ++OtherIndex)
+            if (Batch->Allocations[OtherIndex]->OpenBindingGroup == Group)
+                break;
+        if (OtherIndex != Index)
+            continue;
+        Status = DxgkpVidMmCloseReadyBindingGroup(Batch->Adapter, Group);
+        if (Status == STATUS_PENDING)
+            Status = STATUS_SUCCESS;
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        /* An incomplete group remains published only to its retained batches.
+         * Its last retiring member performs the deferred commit. */
+        DxgkpVidMmTryCommitDestroyBatch(Batch);
+    }
+    else
+    {
+        Batch->CompletionStatus = Status;
+        Batch->AwaitingStopBoundary = TRUE;
+        DxgkpVidMmPoisonDestroyBatchResource(Batch);
+        DxgkpVidMmQuarantineDestroyBatch(Batch);
+    }
+    for (Index = 0; Index < Batch->AllocationCount; ++Index)
+        DxgkVidMmDereferenceAllocation(Batch->Allocations[Index]);
+    return Status;
+}
+
 static VOID
 NTAPI
 DxgkpVidMmDestroyBatchWorker(
@@ -6492,7 +6596,7 @@ DxgkpVidMmForceQuarantinedDestroyBatches(
         PDXGKVMM_DESTROY_BATCH Batch = CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, QuarantineEntry);
 
         Entry = Entry->Flink;
-        if (Batch->Adapter == Adapter && InterlockedCompareExchange(&Batch->CompletionWaiter, 0, 0) == 0 && InterlockedCompareExchange(&Batch->WorkerCounted, 0, 0) == 0 && InterlockedCompareExchange(&Batch->WorkQueued, 0, 0) == 0)
+        if (Batch->Adapter == Adapter && InterlockedCompareExchange(&Batch->CompletionWaiter, 0, 0) == 0 && InterlockedCompareExchange(&Batch->WorkerCounted, 0, 0) == 0 && InterlockedCompareExchange(&Batch->RetirementCounted, 0, 0) == 0 && InterlockedCompareExchange(&Batch->WorkQueued, 0, 0) == 0)
         {
             RemoveEntryList(&Batch->QuarantineEntry);
             InsertTailList(&ForcedBatches, &Batch->QuarantineEntry);
@@ -6616,7 +6720,8 @@ static NTSTATUS
 DxgkpVidMmWaitForAllocationReferences(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ ULONG TimeoutMs)
+    _In_ ULONG TimeoutMs,
+    _In_opt_ CONST DXGKVMM_RETIRE_SNAPSHOT *Snapshot)
 {
     LARGE_INTEGER Interval;
     ULONGLONG StartTime;
@@ -6630,7 +6735,15 @@ DxgkpVidMmWaitForAllocationReferences(
     if (Allocation->BackingAllocation != NULL)
         Allocation = Allocation->BackingAllocation;
 
-    TimeoutMs = min(TimeoutMs, DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS);
+    if (Snapshot != NULL)
+    {
+        RtlCopyMemory(SubmittedAtDestroy, Snapshot->SubmittedFenceId,
+                      sizeof(SubmittedAtDestroy));
+        SubmittedEpoch = Snapshot->SubmittedEpoch;
+        SubmittedSnapshotTaken = TRUE;
+    }
+    else
+        TimeoutMs = min(TimeoutMs, DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS);
     StartTime = KeQueryInterruptTime();
     Interval.QuadPart = -10000LL; /* 1 ms; the clock, not sleep count, sets the deadline. */
     for (;;)
@@ -6706,6 +6819,191 @@ DxgkpVidMmWaitForAllocationReferences(
     return STATUS_IO_TIMEOUT;
 }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static VOID
+DxgkpVidMmRetireBatch(
+    _In_ PDXGKVMM_DESTROY_BATCH Batch)
+{
+    PDXGKRNL_ADAPTER Adapter = Batch->Adapter;
+    NTSTATUS Status = STATUS_SUCCESS;
+    UINT Index;
+    UINT OtherIndex;
+
+    PAGED_CODE();
+    ASSERT(Batch->AllocationCount != 0);
+
+    /* Cross any enclosing reverse callback before touching page tables, then
+     * leave the transaction available to the GPU completion/paging paths. */
+    if (!DxgkBeginKmdTransaction(Adapter))
+        Status = STATUS_DEVICE_NOT_READY;
+    else
+    {
+        DxgkEndKmdTransaction(Adapter);
+        for (Index = 0; Index < Batch->AllocationCount; ++Index)
+        {
+            Status = DxgkpVidMmWaitForAllocationReferences(
+                         Adapter, Batch->Allocations[Index],
+                         DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS,
+                         &Batch->RetirementSnapshot);
+            if (!NT_SUCCESS(Status))
+                break;
+        }
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        for (Index = 0; Index < Batch->AllocationCount; ++Index)
+        {
+            PDXGKVMM_ALLOCATION Allocation = Batch->Allocations[Index];
+            PDXGKRNL_DEVICE Device = Allocation->Device;
+
+            if (Device != NULL && Device->ProcessRecord != NULL)
+                DxgkGpuVaInvalidateAllocation(Adapter, Device->ProcessRecord, Allocation);
+        }
+        for (Index = 0; Index < Batch->AllocationCount; ++Index)
+        {
+            PDXGKRNL_DEVICE Device = Batch->Allocations[Index]->Device;
+
+            if (Device == NULL || Device->ProcessRecord == NULL)
+                continue;
+            for (OtherIndex = 0; OtherIndex < Index; ++OtherIndex)
+                if (Batch->Allocations[OtherIndex]->Device == Device)
+                    break;
+            if (OtherIndex != Index)
+                continue;
+            /* Device cleanup waits for this counted worker before releasing
+             * the device/process, including an already unlinked device. */
+            Status = DxgkGpuVaFlushPageTableUpdatesForDevice(Device->ProcessRecord, Device);
+            if (!NT_SUCCESS(Status))
+                break;
+        }
+    }
+    if (NT_SUCCESS(Status))
+        Status = DxgkpVidMmCompleteRetiredBatch(Batch);
+    /* Completion can release allocations and their device/resource. Only the
+     * worker's independent batch reference may be used from this point. */
+    if (!NT_SUCCESS(Status))
+    {
+        Batch->CompletionStatus = Status;
+        Batch->AwaitingStopBoundary = TRUE;
+        DxgkpVidMmPoisonDestroyBatchResource(Batch);
+        DxgkpVidMmQuarantineDestroyBatch(Batch);
+        DXGKRNL_WARN("Allocation retirement failed with 0x%08lx; "
+                     "retaining batch %p until adapter stop\n", Status, Batch);
+    }
+
+    ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
+    InterlockedExchange(&Batch->RetirementCounted, 0);
+    KeSetEvent(&Batch->RetirementCompletionEvent, IO_NO_INCREMENT, FALSE);
+    ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
+    DxgkpVidMmFreeDestroyBatch(Batch);
+    DxgkpVidMmRetireDestroyWorkerCount(Adapter);
+    DxgkDereferenceAdapter(Adapter);
+}
+
+static VOID
+NTAPI
+DxgkpVidMmRetirementThread(
+    _In_ PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+
+    for (;;)
+    {
+        PDXGKVMM_DESTROY_BATCH Batch = NULL;
+
+        ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
+        if (!IsListEmpty(&DxgkVidMmRetirementQueue))
+        {
+            PLIST_ENTRY Entry = RemoveHeadList(&DxgkVidMmRetirementQueue);
+
+            InitializeListHead(Entry);
+            Batch = CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, RetirementEntry);
+        }
+        ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
+
+        if (Batch != NULL)
+            DxgkpVidMmRetireBatch(Batch);
+        else
+            (VOID)KeWaitForSingleObject(&DxgkVidMmRetirementEvent,
+                                        Executive, KernelMode, FALSE, NULL);
+    }
+}
+
+static BOOLEAN
+DxgkpVidMmStartRetirementThread(VOID)
+{
+    OBJECT_ATTRIBUTES Attributes;
+    HANDLE ThreadHandle;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (InterlockedCompareExchange(&DxgkVidMmRetirementThreadState, 0, 0) == 2)
+        return TRUE;
+    /* While another caller starts the thread, retire this batch inline. */
+    if (InterlockedCompareExchange(&DxgkVidMmRetirementThreadState, 1, 0) != 0)
+        return FALSE;
+    InitializeObjectAttributes(&Attributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, &Attributes,
+                                  NULL, NULL, DxgkpVidMmRetirementThread, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        InterlockedExchange(&DxgkVidMmRetirementThreadState, 0);
+        return FALSE;
+    }
+    ZwClose(ThreadHandle);
+    InterlockedExchange(&DxgkVidMmRetirementThreadState, 2);
+    return TRUE;
+}
+
+static BOOLEAN
+DxgkpVidMmQueueRetirement(
+    _In_ PDXGKVMM_DESTROY_BATCH Batch)
+{
+    PDXGKRNL_ADAPTER Adapter = Batch->Adapter;
+    BOOLEAN ResetDrainedEvent = FALSE;
+    BOOLEAN Admitted;
+    KIRQL OldIrql;
+    ULONG Node;
+
+    if (!DxgkpVidMmStartRetirementThread() || !DxgkReferenceAdapter(Adapter))
+        return FALSE;
+
+    /* Capture at logical destruction, not when a worker eventually runs:
+     * later unrelated submissions must not move this retirement boundary. */
+    KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
+    for (Node = 0; Node < DXGK_MAX_TRACKED_NODES; ++Node)
+        Batch->RetirementSnapshot.SubmittedFenceId[Node] =
+            Adapter->NodeLastSubmittedFenceId[Node];
+    Batch->RetirementSnapshot.SubmittedEpoch =
+        InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0);
+    KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
+
+    ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
+    Admitted = DxgkVidMmWorkerDrainCoreTryAdmitLocked(
+                   &Adapter->VidMmDestroyWorkerCount,
+                   InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked,
+                                               0, 0) != 0,
+                   &ResetDrainedEvent);
+    if (Admitted)
+    {
+        InterlockedIncrement(&Batch->LifetimeReferenceCount);
+        InterlockedExchange(&Batch->RetirementCounted, 1);
+        InsertTailList(&DxgkVidMmRetirementQueue, &Batch->RetirementEntry);
+        if (ResetDrainedEvent)
+            KeResetEvent(&Adapter->VidMmDestroyWorkersDrainedEvent);
+    }
+    ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
+    if (!Admitted)
+    {
+        DxgkDereferenceAdapter(Adapter);
+        return FALSE;
+    }
+    KeSetEvent(&DxgkVidMmRetirementEvent, IO_NO_INCREMENT, FALSE);
+    return TRUE;
+}
+#endif
+
 static NTSTATUS
 DxgkpVidMmDestroyAllocationList(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -6714,7 +7012,8 @@ DxgkpVidMmDestroyAllocationList(
     _In_ UINT AllocationCount,
     _In_ BOOLEAN ResourceOperationLockHeld,
     _Inout_opt_ PBOOLEAN KmdTransactionHeld,
-    _Inout_opt_ PBOOLEAN CallerResourceLockHeld)
+    _Inout_opt_ PBOOLEAN CallerResourceLockHeld,
+    _In_opt_ PDXGKVMM_DESTROY_BATCH ResourceDestroyBatch)
 {
     PDXGKVMM_DESTROY_BATCH Batch = NULL;
     PDXGKVMM_RESOURCE Resource = NULL;
@@ -6793,9 +7092,8 @@ DxgkpVidMmDestroyAllocationList(
         Batch->Resource = Resource;
         if (ResourceOperationLockHeld)
         {
+            ASSERT(ResourceDestroyBatch != NULL);
             Batch->DestroyResourceWrapper = TRUE;
-            Batch->DestroyResource = Resource->BackingResource == NULL;
-            InterlockedExchange(&Batch->ResourceHandleReferenceOwned, 1);
         }
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -6866,18 +7164,12 @@ DxgkpVidMmDestroyAllocationList(
         }
         if (Batch->DestroyResourceWrapper)
         {
-            /* The batch owns the resource handle reference from this point,
-             * including when the GPU drain below times out. Unpublish the
-             * parent with its allocations so the wrapper cannot interpret
-             * accepted, deferred destruction as permission to free it now.
-             * Miniport destruction and reference release remain with the
-             * batch, after retirement or the adapter-stop boundary. */
+            /* The parent's own batch destroys it after every allocation, open
+             * alias and earlier partial-destroy batch has released it. */
             ASSERT(Resource != NULL);
             ASSERT(Resource->AllocationCount == 0);
             ASSERT(IsListEmpty(&Resource->AllocationList));
-            ASSERT(Batch->ResourceHandleReferenceOwned != 0);
-            InterlockedExchange(&Resource->Destroying, 1);
-            DxgkpVidMmUnpublishResourceLocked(Resource);
+            DxgkpVidMmDelegateResourceDestroy(Resource, ResourceDestroyBatch);
         }
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -6910,6 +7202,16 @@ DxgkpVidMmDestroyAllocationList(
     }
 
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /* Unpublish synchronously, but wait for GPU retirement outside the
+     * caller's miniport and GDI locks. */
+    if (DxgkpVidMmQueueRetirement(Batch))
+    {
+        if (ResourceOperationLockAcquired)
+            KeReleaseMutex(&Resource->ResourceOperationLock, FALSE);
+        DxgkpVidMmFreeDestroyBatch(Batch);
+        return STATUS_SUCCESS;
+    }
+
     /*
      * Clear every GPUVA binding before dropping the logical handle references.
      * GpuVaInvalidateAllocation batches page-table notifications while it owns
@@ -6926,7 +7228,7 @@ DxgkpVidMmDestroyAllocationList(
     {
         Status = DxgkpVidMmWaitForAllocationReferences(
                      Adapter, Batch->Allocations[Index],
-                     DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS);
+                     DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS, NULL);
         if (!NT_SUCCESS(Status))
             break;
     }
@@ -6993,64 +7295,11 @@ QuarantineGpuVaBatch:
         return Status;
     }
 #endif
-    for (Index = 0; Index < AllocationCount; ++Index)
-        DxgkpVidMmDropLogicalHandleReference(Batch->Allocations[Index]);
-    for (Index = 0; Index < AllocationCount; ++Index)
-    {
-        KeWaitForSingleObject(&Batch->Allocations[Index]->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
-    }
-    for (Index = 0; Index < AllocationCount; ++Index)
-    {
-        PDXGKVMM_OPEN_BINDING_GROUP Group = Batch->Allocations[Index]->OpenBindingGroup;
-
-        if (Group == NULL)
-            continue;
-        for (OtherIndex = 0; OtherIndex < Index && Batch->Allocations[OtherIndex]->OpenBindingGroup != Group; ++OtherIndex)
-            NOTHING;
-        if (OtherIndex != Index)
-            continue;
-        Status = DxgkpVidMmCloseReadyBindingGroup(Adapter, Group);
-        if (Status == STATUS_PENDING)
-        {
-            Status = STATUS_SUCCESS;
-            continue;
-        }
-        if (!NT_SUCCESS(Status))
-            break;
-    }
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("DxgkDestroyAllocation: group CloseAllocation failed with 0x%08lx; quarantining uncertain bindings\n", Status);
-        DxgkpVidMmPoisonDestroyBatchResource(Batch);
-        InterlockedExchange(&Batch->CompletionWaiter, 0);
-        DxgkpVidMmQuarantineDestroyBatch(Batch);
-        if (ResourceOperationLockAcquired)
-            KeReleaseMutex(&Resource->ResourceOperationLock, FALSE);
-        DxgkpVidMmFreeDestroyBatch(Batch);
-        return Status;
-    }
-
-    DxgkpVidMmTryCommitDestroyBatch(Batch);
+    Status = DxgkpVidMmCompleteRetiredBatch(Batch);
     if (ResourceOperationLockAcquired)
-    {
         KeReleaseMutex(&Resource->ResourceOperationLock, FALSE);
-        ResourceOperationLockAcquired = FALSE;
-    }
-    if (InterlockedCompareExchange(&Batch->DestroyCommitted, 0, 0) == 0)
-    {
-        if (ResourceOperationLockHeld)
-            DxgkpVidMmPoisonDestroyBatchResource(Batch);
-        InterlockedExchange(&Batch->CompletionWaiter, 0);
-        DxgkpVidMmFreeDestroyBatch(Batch);
-        return ResourceOperationLockHeld ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
-    }
-    if (ResourceOperationLockHeld)
-    {
-        DxgkpVidMmFreeDestroyBatch(Batch);
-        return STATUS_SUCCESS;
-    }
     DxgkpVidMmFreeDestroyBatch(Batch);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 static NTSTATUS
@@ -7193,6 +7442,9 @@ DxgkVidMmDestroyContextAllocation(
             Allocation = Candidate;
             InternalAllocationHandle =
                 (HANDLE)(ULONG_PTR)Candidate->Handle;
+            /* Destruction may commit and drop the public handle below. Keep
+             * the wrapper alive until its borrowed driver identity is gone. */
+            InterlockedIncrement(&Allocation->ReferenceCount);
             break;
         }
     }
@@ -7204,6 +7456,24 @@ DxgkVidMmDestroyContextAllocation(
              DxgkpVidMmDestroyAllocation(Adapter, NULL, NULL,
                                          InternalAllocationHandle) :
              STATUS_INVALID_HANDLE;
+    if (Allocation != NULL)
+    {
+        if (InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
+        {
+            PDXGKP_CONTEXT_ALLOCATION_HANDLE ContextHandle =
+                Allocation->ContextAllocationHandle;
+
+            /* hDriverAllocation is borrowed only until this callback returns;
+             * a retained backing must not keep using the freed driver object. */
+            Allocation->MiniportHandle = NULL;
+            if (ContextHandle != NULL)
+            {
+                ContextHandle->hDriverAllocation = NULL;
+                ContextHandle->ContextResource = NULL;
+            }
+        }
+        DxgkVidMmDereferenceAllocation(Allocation);
+    }
     DxgkEndKmdTransaction(Adapter);
     return Status;
 }
@@ -9190,7 +9460,7 @@ DxgkDestroyAllocation(
     }
     KmdTransactionStarted = TRUE;
     Status = DxgkpVidMmDestroyAllocationList(Adapter, Device, AllocationHandles,
-                 pDestroyAllocation->AllocationCount, FALSE, &KmdTransactionStarted, NULL);
+                 pDestroyAllocation->AllocationCount, FALSE, &KmdTransactionStarted, NULL, NULL);
 
 Cleanup:
     if (Resource != NULL)
@@ -14545,6 +14815,7 @@ DxgkpVidMmWaitForDeviceDestroyWorkers(
     for (;;)
     {
         PDXGKVMM_DESTROY_BATCH Batch = NULL;
+        PKEVENT CompletionEvent = NULL;
         PLIST_ENTRY Entry;
         LONG References;
 
@@ -14559,7 +14830,9 @@ DxgkpVidMmWaitForDeviceDestroyWorkers(
             if (Candidate->Adapter != Adapter ||
                 Candidate->MiniportDeviceHandle != MiniportDeviceHandle ||
                 InterlockedCompareExchange(&Candidate->Listed, 0, 0) == 0 ||
-                InterlockedCompareExchange(&Candidate->WorkerCounted, 0, 0) == 0)
+                (InterlockedCompareExchange(&Candidate->WorkerCounted, 0, 0) == 0 &&
+                 InterlockedCompareExchange(&Candidate->RetirementCounted,
+                                             0, 0) == 0))
             {
                 continue;
             }
@@ -14567,6 +14840,11 @@ DxgkpVidMmWaitForDeviceDestroyWorkers(
             References = InterlockedIncrement(&Candidate->LifetimeReferenceCount);
             ASSERT(References > 1);
             Batch = Candidate;
+            CompletionEvent =
+                InterlockedCompareExchange(&Candidate->RetirementCounted,
+                                            0, 0) != 0 ?
+                    &Candidate->RetirementCompletionEvent :
+                    &Candidate->WorkerCompletionEvent;
             break;
         }
         ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
@@ -14574,7 +14852,7 @@ DxgkpVidMmWaitForDeviceDestroyWorkers(
         if (Batch == NULL)
             return;
 
-        KeWaitForSingleObject(&Batch->WorkerCompletionEvent,
+        KeWaitForSingleObject(CompletionEvent,
                               Executive,
                               KernelMode,
                               FALSE,

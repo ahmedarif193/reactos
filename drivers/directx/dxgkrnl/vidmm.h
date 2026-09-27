@@ -130,6 +130,10 @@ typedef struct _DXGKVMM_RESOURCE
     KEVENT             ReferencesDrainedEvent;
     WORK_QUEUE_ITEM    FinalizeWorkItem;
 
+    /* Destroys the parent miniport resource once every allocation, open
+     * alias and earlier partial-destroy batch has released it. */
+    struct _DXGKVMM_DESTROY_BATCH * volatile DestroyBatch;
+
     /* Owning logical device. */
     PDXGKRNL_DEVICE    Device;
 
