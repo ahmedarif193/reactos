@@ -99,6 +99,7 @@ AddReg=Classes
 11,,msi.dll,1
 11,,msimtf.dll,1
 11,,msisip.dll,1
+11,,msmpeg2vdec.dll,1
 11,,mstask.dll,1
 11,,taskschd.dll,1
 11,,msxml.dll,1
