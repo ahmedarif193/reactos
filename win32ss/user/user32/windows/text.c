@@ -95,6 +95,14 @@ CharLowerW(LPWSTR x)
     else return (LPWSTR)((UINT_PTR)tolowerW(LOWORD(x)));
 }
 
+static BOOL
+IntIsNonSpacingChar(WCHAR ch)
+{
+    WORD Type;
+
+    return GetStringTypeW(CT_CTYPE3, &ch, 1, &Type) && (Type & (C3_NONSPACING | C3_ALPHA)) == C3_NONSPACING;
+}
+
 /*
  * @implemented
  */
@@ -102,8 +110,13 @@ LPWSTR
 WINAPI
 CharPrevW(LPCWSTR start, LPCWSTR x)
 {
-    if (x > start) return (LPWSTR)(x - 1);
-    else return (LPWSTR)x;
+    while (x > start)
+    {
+        x--;
+        if (!IntIsNonSpacingChar(*x))
+            break;
+    }
+    return (LPWSTR)x;
 }
 
 /*
@@ -138,6 +151,8 @@ WINAPI
 CharNextW(LPCWSTR x)
 {
     if (*x) x++;
+    while (*x && IntIsNonSpacingChar(*x))
+        x++;
     return (LPWSTR)x;
 }
 
@@ -451,7 +466,7 @@ WINAPI
 OemToCharBuffW(LPCSTR s, LPWSTR d, DWORD len)
 {
     if ( !s || !d ) return FALSE;
-    MultiByteToWideChar(CP_OEMCP, 0, s, len, d, len);
+    MultiByteToWideChar(CP_OEMCP, MB_PRECOMPOSED | MB_USEGLYPHCHARS, s, len, d, len);
     return TRUE;
 }
 

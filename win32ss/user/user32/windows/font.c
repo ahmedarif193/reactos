@@ -295,7 +295,8 @@ INT WINAPI DrawTextExA( HDC hdc, LPSTR str, INT count,
         if (dtp && dtp->cbSize != sizeof(DRAWTEXTPARAMS))
             return 0;
 
-        GetTextMetricsA(hdc, &tm);
+        if (!GetTextMetricsA(hdc, &tm))
+            return 0;
         if (flags & DT_EXTERNALLEADING)
             lh = tm.tmHeight + tm.tmExternalLeading;
         else

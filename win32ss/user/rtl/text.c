@@ -1087,8 +1087,8 @@ INT WINAPI DrawTextExWorker( HDC hdc,
     int len, lh, count=i_count;
     TEXTMETRICW tm;
     int lmargin = 0, rmargin = 0;
-    int x = rect->left, y = rect->top;
-    int width = rect->right - rect->left;
+    int x, y;
+    int width;
     int max_width = 0;
     int last_line;
     int tabwidth /* to keep gcc happy */ = 0;
@@ -1114,8 +1114,19 @@ INT WINAPI DrawTextExWorker( HDC hdc,
 #ifdef _WIN32K_
     GreGetTextMetricsW(hdc, &tm);
 #else
-    GetTextMetricsW(hdc, &tm);
+    {
+        DWORD dwError = GetLastError();
+        if (!GetTextMetricsW(hdc, &tm))
+        {
+            SetLastError(dwError);
+            return 0;
+        }
+    }
 #endif
+    x = rect->left;
+    y = rect->top;
+    width = rect->right - rect->left;
+
     if (flags & DT_EXTERNALLEADING)
 	lh = tm.tmHeight + tm.tmExternalLeading;
     else
@@ -1344,5 +1355,5 @@ INT WINAPI DrawTextExWorker( HDC hdc,
         HeapFree (GetProcessHeap(), 0, retstr);
 #endif
     }
-    return y - rect->top;
+    return (y == rect->top) ? 1 : y - rect->top;
 }
