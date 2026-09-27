@@ -369,7 +369,7 @@ MiInitializePhase0(
     MmtotalCommitLimitMaximum = MmTotalCommitLimit;
     MmLowMemoryThreshold = MmNumberOfPhysicalPages / 32;
     MmHighMemoryThreshold = MmNumberOfPhysicalPages / 8;
-    MmReadClusterSize = 7;
+    MmReadClusterSize = MI_MAX_FILE_IO_PAGES - 1;
     MmSecondaryColors = 1;
     MmAllocationFragment = 64 * _1KB;
 

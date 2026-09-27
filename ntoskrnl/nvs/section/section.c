@@ -2332,7 +2332,8 @@ MiSegmentReadCluster(
 NTSTATUS
 MiSegmentFaultIn(
     _Inout_ PMI_SEGMENT Segment,
-    _In_ ULONG64 Page)
+    _In_ ULONG64 Page,
+    _In_ ULONG ReadAhead)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG Frame;
@@ -2346,9 +2347,12 @@ MiSegmentFaultIn(
     {
         PMI_PTE Proto = MiSegmentProto(Segment, Page);
         MI_SOFT_KIND Kind = MiSoftKind(MiArchPteRead(Proto));
+        ULONG64 Last = MiSegmentPages(Segment);
 
+        if (Last - Page > (ULONG64)ReadAhead + 1)
+            Last = Page + ReadAhead + 1;
         if (Kind != MiSoftResident && Kind != MiSoftTransition &&
-            MiSegmentReadCluster(Segment, Page, MiSegmentPages(Segment), ~0ULL) == 0)
+            MiSegmentReadCluster(Segment, Page, Last, ~0ULL) == 0)
         {
             Status = MiSegmentMaterialize(Segment, Proto, ~0ULL, &Frame);
             if (NT_SUCCESS(Status))

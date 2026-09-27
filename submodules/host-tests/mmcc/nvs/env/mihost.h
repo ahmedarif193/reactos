@@ -138,6 +138,7 @@ static inline void MiHostSpinAcquire(PMI_SPINLOCK Lock)
 
 extern _Thread_local ULONG MiHostCpu;
 extern _Thread_local KIRQL MiHostIrql;
+extern _Thread_local ULONG MiHostReadClusterSize;
 
 typedef VOID (*MI_HOST_DPC_ROUTINE)(PVOID Context);
 
@@ -178,6 +179,7 @@ static inline __attribute__((no_sanitize("thread"))) ULONG64 MiHostPeek(const vo
 #define MI_ATOMIC_WRITE_POINTER(v, n)    __atomic_store_n((v), (n), __ATOMIC_SEQ_CST)
 #define MI_PAUSE()                      sched_yield()
 #define MI_ASSERT(e)                    do { if (!(e)) { fprintf(stderr, "MI_ASSERT %s:%d %s\n", __FILE__, __LINE__, #e); abort(); } } while (0)
+#define MI_FAULT_READ_AHEAD()           MiHostReadClusterSize
 
 static inline void MiHostAcquireShared(PMI_RWLOCK Lock)
 {

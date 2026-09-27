@@ -187,6 +187,7 @@ CcMmMakeViewResident(
 {
     ULONG_PTR Address = (ULONG_PTR)Base;
     ULONG_PTR End = Address + Length;
+    ULONG ReadAhead = MI_FAULT_READ_AHEAD();
     NTSTATUS Status = STATUS_SUCCESS;
 
     UNREFERENCED_PARAMETER(Context);
@@ -195,6 +196,7 @@ CcMmMakeViewResident(
     {
         while (Address < End)
         {
+            MI_FAULT_READ_AHEAD() = (ULONG)(((End - 1) >> PAGE_SHIFT) - (Address >> PAGE_SHIFT));
             (VOID)*(volatile UCHAR *)Address;
             Address = (Address | (PAGE_SIZE - 1)) + 1;
         }
@@ -205,6 +207,7 @@ CcMmMakeViewResident(
     }
     _SEH2_END;
 
+    MI_FAULT_READ_AHEAD() = ReadAhead;
     return Status;
 }
 

@@ -387,7 +387,7 @@ RetryPage:
         MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
         MI_RW_RELEASE_SHARED(&Space->Lock);
 
-        Status = MiSegmentFaultIn(Segment, Page);
+        Status = MiSegmentFaultIn(Segment, Page, MI_FAULT_READ_AHEAD());
         MiSegmentDereference(Segment);
         if (!NT_SUCCESS(Status))
             goto Failed;

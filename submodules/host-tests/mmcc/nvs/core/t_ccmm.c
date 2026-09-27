@@ -29,6 +29,8 @@ typedef struct _CCMM_FILE
     MI_READ_COMPLETION ReadCompletion[2];
     PVOID ReadContext[2];
     ULONG ReadCount;
+    ULONG ClusterReads;
+    ULONG ClusterPages;
 } CCMM_FILE;
 
 typedef struct _CCMM_MOVE
@@ -111,18 +113,21 @@ CcmmMakeViewResident(PVOID Context, PVOID Base, ULONG Length)
     CCMM_FILE *File = Context;
     ULONG64 Address = (ULONG64)(ULONG_PTR)Base;
     ULONG64 End = Address + Length;
+    ULONG ReadAhead = MI_FAULT_READ_AHEAD();
+    NTSTATUS Status = STATUS_SUCCESS;
 
     while (Address < End)
     {
         UCHAR Byte;
-        NTSTATUS Status = MachineAccessMemory(&File->World->Machine, MiHostCpu, Address, &Byte, 1,
-                                               MachineRead, FALSE);
 
+        MI_FAULT_READ_AHEAD() = (ULONG)(((End - 1) >> PAGE_SHIFT) - (Address >> PAGE_SHIFT));
+        Status = MachineAccessMemory(&File->World->Machine, MiHostCpu, Address, &Byte, 1, MachineRead, FALSE);
         if (!NT_SUCCESS(Status))
-            return Status;
+            break;
         Address = (Address | (PAGE_SIZE - 1)) + 1;
     }
-    return STATUS_SUCCESS;
+    MI_FAULT_READ_AHEAD() = ReadAhead;
+    return Status;
 }
 
 static CC_BACKING_OPS CcmmOps =
@@ -297,6 +302,63 @@ CcmmExtendingCopy(void)
     WorldDestroy(&World);
     free(Buffer);
     free(Data);
+}
+
+static
+NTSTATUS
+CcmmReadPages(PVOID Context, ULONG64 Offset, const ULONG *Frames, ULONG Count)
+{
+    CCMM_FILE *File = CONTAINING_RECORD(Context, CCMM_FILE, File);
+    ULONG i;
+
+    File->ClusterReads++;
+    File->ClusterPages += Count;
+    for (i = 0; i < Count; i++)
+    {
+        PVOID Buffer = MiArchMapFrame(Frames[i]);
+
+        memcpy(Buffer, File->File.Data + Offset + i * PAGE_SIZE, PAGE_SIZE);
+        MiArchUnmapFrame(Buffer);
+    }
+    return STATUS_SUCCESS;
+}
+
+/* A cached copy reads the pages it spans, not a fault cluster around them. */
+static
+void
+CcmmCopyReadsSpannedPages(void)
+{
+    TEST_WORLD World;
+    CCMM_FILE File;
+    CC_CACHE Cache;
+    PUCHAR Buffer = malloc(3 * PAGE_SIZE);
+
+    WorldCreate(&World, 256, 1, 100000);
+    WorldAttach(&World, 0, NULL);
+    CHECK(NT_SUCCESS(CcCacheInitialize(&Cache, CC_MIN_VIEWS, 1024)));
+    CcmmFileCreate(&File, &World, &Cache, 32 * PAGE_SIZE);
+    File.Segment->FileOps.ReadPages = CcmmReadPages;
+
+    CHECK(NT_SUCCESS(CachedRead(&File, 0, 0, Buffer, 10)));
+    CHECK(File.File.Reads == 1 && File.ClusterReads == 0);
+    CHECK(memcmp(Buffer, File.File.Data, 10) == 0);
+    CHECK(!MiSegmentIsResident(File.Segment, PAGE_SIZE, PAGE_SIZE));
+
+    memset(Buffer, 0x3C, 10);
+    CHECK(NT_SUCCESS(CachedWrite(&File, 0, 2 * PAGE_SIZE, Buffer, 10)));
+    CHECK(File.File.Reads == 2 && File.ClusterReads == 0);
+    CHECK(!MiSegmentIsResident(File.Segment, 3 * PAGE_SIZE, PAGE_SIZE));
+
+    CHECK(NT_SUCCESS(CachedRead(&File, 0, 4 * PAGE_SIZE + 100, Buffer, 2 * PAGE_SIZE)));
+    CHECK(File.File.Reads == 2 && File.ClusterReads == 1 && File.ClusterPages == 3);
+    CHECK(memcmp(Buffer, File.File.Data + 4 * PAGE_SIZE + 100, 2 * PAGE_SIZE) == 0);
+    CHECK(!MiSegmentIsResident(File.Segment, 7 * PAGE_SIZE, PAGE_SIZE));
+
+    CcmmFileDestroy(&File);
+    CcCacheUninitialize(&Cache);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+    free(Buffer);
 }
 
 static
@@ -1439,6 +1501,7 @@ TestCcOnMm(void)
     InitializeListHead(&CcNtMapList);
     CcmmFaultableCopy();
     CcmmExtendingCopy();
+    CcmmCopyReadsSpannedPages();
     CcmmTruncation();
     CcmmNtCloseReclaim(FALSE);
     CcmmNtCloseReclaim(TRUE);

@@ -11,6 +11,7 @@
 
 _Thread_local ULONG MiHostCpu;
 _Thread_local KIRQL MiHostIrql;
+_Thread_local ULONG MiHostReadClusterSize = MI_MAX_FILE_IO_PAGES - 1;
 _Thread_local ULONG64 MiHostIrqlRaises;
 static _Thread_local MI_HOST_DPC_ROUTINE MiHostPendingDpc;
 static _Thread_local PVOID MiHostDpcContext;
