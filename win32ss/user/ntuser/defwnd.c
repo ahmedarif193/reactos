@@ -106,6 +106,7 @@ DefWndHandleWindowPosChanged(PWND pWnd, WINDOWPOS* Pos)
 
    if (!(Pos->flags & SWP_NOCLIENTSIZE) || (Pos->flags & SWP_STATECHANGED))
    {
+      pWnd->state &= ~WNDS_SENDSIZEMOVEMSGS;
       if (style & WS_MINIMIZE) co_IntSendMessage(UserHMGetHandle(pWnd), WM_SIZE, SIZE_MINIMIZED, 0 );
       else
       {

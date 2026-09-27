@@ -105,7 +105,7 @@ RealAdjustWindowRectEx(LPRECT lpRect,
       else
          lpRect->top -= GetSystemMetrics(SM_CYCAPTION);
    }
-   UserGetWindowBorders(dwStyle, dwExStyle, &BorderSize, TRUE);
+   UserGetWindowBorders(dwStyle & ~WS_MINIMIZE, dwExStyle, &BorderSize, TRUE);
    InflateRect(
       lpRect,
       BorderSize.cx,

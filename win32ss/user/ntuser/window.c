@@ -2667,7 +2667,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    /* Send the WM_SIZE and WM_MOVE messages. */
    if (!(Window->state & WNDS_SENDSIZEMOVEMSGS))
    {
-        co_WinPosSendSizeMove(Window);
+        co_WinPosSendSizeMove(Window, TRUE);
    }
 
    /* Show or maybe minimize or maximize the window. */
@@ -2679,7 +2679,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
       UINT SwFlag = (style & WS_MINIMIZE) ? SW_MINIMIZE : SW_MAXIMIZE;
 
       SwFlag = co_WinPosMinMaximize(Window, SwFlag, &NewPos);
-      SwFlag |= SWP_NOZORDER|SWP_FRAMECHANGED; /* Frame always gets changed */
+      SwFlag |= SWP_FRAMECHANGED; /* Frame always gets changed */
       if (!(style & WS_VISIBLE) || (style & WS_CHILD) || UserGetActiveWindow() ||
           (Window->ExStyle & WS_EX_NOACTIVATE))
       {

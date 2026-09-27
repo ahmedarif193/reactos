@@ -90,11 +90,8 @@ WinPosGetMinMaxInfo(HWND hwnd, POINT* maxSize, POINT* maxPos,
 
         rc_work = mon_info.rcMonitor;
 
-        if (style & WS_MAXIMIZEBOX)
-        {
-            if ((style & WS_CAPTION) == WS_CAPTION || !(style & (WS_CHILD | WS_POPUP)))
-                rc_work = mon_info.rcWork;
-        }
+        if ((style & WS_MAXIMIZEBOX) && (style & WS_CAPTION) == WS_CAPTION && !(style & WS_CHILD))
+            rc_work = mon_info.rcWork;
 
         if (MinMax.ptMaxSize.x == GetSystemMetrics(SM_CXSCREEN) + 2 * xinc &&
             MinMax.ptMaxSize.y == GetSystemMetrics(SM_CYSCREEN) + 2 * yinc)

@@ -1400,19 +1400,6 @@ LRESULT NC_HandleNCCalcSize( PWND Wnd, WPARAM wparam, RECTL *Rect, BOOL Suspende
 
    Wnd->state &= ~WNDS_HASCAPTION;
 
-   if (wparam)
-   {
-      if (Wnd->pcls->style & CS_VREDRAW)
-      {
-         Result |= WVR_VREDRAW;
-      }
-      if (Wnd->pcls->style & CS_HREDRAW)
-      {
-         Result |= WVR_HREDRAW;
-      }
-      Result |= WVR_VALIDRECTS;
-   }
-
    if (!(Wnd->style & WS_MINIMIZE))
    {
       if (UserHasWindowEdge(Wnd->style, Wnd->ExStyle))

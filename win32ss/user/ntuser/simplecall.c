@@ -1236,16 +1236,8 @@ NtUserCallHwndParam(
                 if (Routine == HWNDPARAM_ROUTINE_ROS_GETCLIENTRECT)
                 {
                     Rect.left = Rect.top = 0;
-                    if (Window->style & WS_MINIMIZED)
-                    {
-                        Rect.right = UserGetSystemMetrics(SM_CXMINIMIZED);
-                        Rect.bottom = UserGetSystemMetrics(SM_CYMINIMIZED);
-                    }
-                    else
-                    {
-                        Rect.right = Window->rcClient.right - Window->rcClient.left;
-                        Rect.bottom = Window->rcClient.bottom - Window->rcClient.top;
-                    }
+                    Rect.right = Window->rcClient.right - Window->rcClient.left;
+                    Rect.bottom = Window->rcClient.bottom - Window->rcClient.top;
                 }
                 else
                 {
