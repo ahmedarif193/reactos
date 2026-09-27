@@ -119,6 +119,39 @@ GpStatus WINGDIPAPI GdipCreateCustomLineCap(GpPath* fillPath, GpPath* strokePath
     if(!customCap || !(fillPath || strokePath))
         return InvalidParameter;
 
+#ifdef __REACTOS__
+    if (!strokePath)
+    {
+        const GpPathData *fill = &fillPath->pathdata;
+        BOOL crosses = FALSE;
+        INT i, start = 0;
+
+        for (i = 0; i < fill->Count && !crosses; i++)
+        {
+            const GpPointF *a = &fill->Points[i], *b;
+
+            if ((fill->Types[i] & PathPointTypePathTypeMask) == PathPointTypeStart)
+                start = i;
+            if (i + 1 < fill->Count && (fill->Types[i + 1] & PathPointTypePathTypeMask) != PathPointTypeStart)
+                b = &fill->Points[i + 1];
+            else
+                b = &fill->Points[start];
+
+            if ((a->X <= 0.0f && b->X >= 0.0f) || (a->X >= 0.0f && b->X <= 0.0f))
+            {
+                REAL y = (a->X == b->X) ? min(a->Y, b->Y) : a->Y + (b->Y - a->Y) * (0.0f - a->X) / (b->X - a->X);
+                crosses = (y <= 0.0f);
+            }
+        }
+
+        if (!crosses)
+        {
+            *customCap = NULL;
+            return NotImplemented;
+        }
+    }
+#endif
+
     *customCap = calloc(1, sizeof(GpCustomLineCap));
     if(!*customCap) return OutOfMemory;
 
