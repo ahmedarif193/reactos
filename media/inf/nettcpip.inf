@@ -329,6 +329,8 @@ HKR,"Parameters\PersistentRoutes",,0x00000010
 HKR,"Parameters","DataBasePath",0x00020000,"%SystemRoot%\System32\drivers\etc"
 HKR,"Parameters","Domain",0x00000000,""
 HKR,"Parameters","Hostname",0x00000000,"ROSHost"
+HKR,"Parameters","NV Domain",0x00000000,""
+HKR,"Parameters","NV Hostname",0x00000000,"ROSHost"
 HKR,"Parameters","NameServer",0x00000000,""
 HKR,"Parameters","ForwardBroadcasts",0x00010001,0x00000000
 HKR,"Parameters","IPEnableRouter",0x00010001,0x00000000
