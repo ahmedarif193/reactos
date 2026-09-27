@@ -94,7 +94,7 @@ EXTERN_C HRESULT SHELL32_AssocGetFileDescription(PCWSTR Name, PWSTR Buf, UINT cc
  * METHODS
  */
 
-CQueryAssociations::CQueryAssociations() : hkeySource(0), hkeyProgID(0)
+CQueryAssociations::CQueryAssociations() : hkeySource(0), hkeyProgID(0), bByExeName(FALSE)
 {
 }
 
@@ -140,13 +140,32 @@ HRESULT STDMETHODCALLTYPE CQueryAssociations::Init(
     }
 
     RegCloseKey(this->hkeySource);
-    RegCloseKey(this->hkeyProgID);
+    if (this->hkeyProgID != this->hkeySource)
+        RegCloseKey(this->hkeyProgID);
     this->hkeySource = this->hkeyProgID = NULL;
+    this->bByExeName = FALSE;
     if (pszAssoc != NULL)
     {
         WCHAR *progId;
         HRESULT hr;
         LPCWSTR pchDotExt;
+
+        if (!*pszAssoc)
+            return E_INVALIDARG;
+
+        if (cfFlags & ASSOCF_INIT_BYEXENAME)
+        {
+            WCHAR szKey[MAX_PATH];
+
+            hr = StringCchPrintfW(szKey, _countof(szKey), L"Applications\\%s", PathFindFileNameW(pszAssoc));
+            if (FAILED(hr))
+                return E_INVALIDARG;
+
+            this->bByExeName = TRUE;
+            if (RegOpenKeyExW(HKEY_CLASSES_ROOT, szKey, 0, KEY_READ, &this->hkeySource) == ERROR_SUCCESS)
+                this->hkeyProgID = this->hkeySource;
+            return S_OK;
+        }
 
         if (StrChrW(pszAssoc, L'\\'))
         {
@@ -491,9 +510,50 @@ HRESULT STDMETHODCALLTYPE CQueryAssociations::GetKey(
     LPCWSTR pszExtra,
     HKEY *phkeyOut)
 {
-    FIXME("(%p,0x%8x,0x%8x,%s,%p)-stub!\n", this, cfFlags, assockey,
-            debugstr_w(pszExtra), phkeyOut);
-    return E_NOTIMPL;
+    WCHAR path[MAX_PATH];
+    WCHAR szKey[MAX_PATH];
+    DWORD len = 0;
+    HKEY hKey;
+    HRESULT hr;
+
+    TRACE("(%p,0x%8x,0x%8x,%s,%p)\n", this, cfFlags, assockey,
+          debugstr_w(pszExtra), phkeyOut);
+
+    *phkeyOut = NULL;
+
+    switch (assockey)
+    {
+        case ASSOCKEY_SHELLEXECCLASS:
+        case ASSOCKEY_CLASS:
+            hKey = this->hkeyProgID ? this->hkeyProgID : this->hkeySource;
+            if (!hKey)
+                return HRESULT_FROM_WIN32(ERROR_NO_ASSOCIATION);
+            return HRESULT_FROM_WIN32(RegOpenKeyExW(hKey, NULL, 0, KEY_READ, phkeyOut));
+
+        case ASSOCKEY_APP:
+            if (this->bByExeName)
+            {
+                if (!this->hkeySource)
+                    return HRESULT_FROM_WIN32(ERROR_NO_ASSOCIATION);
+                return HRESULT_FROM_WIN32(RegOpenKeyExW(this->hkeySource, NULL, 0, KEY_READ, phkeyOut));
+            }
+            if (!this->hkeySource && !this->hkeyProgID)
+                return HRESULT_FROM_WIN32(ERROR_NO_ASSOCIATION);
+            hr = this->GetExecutable(pszExtra, path, _countof(path), &len);
+            if (FAILED(hr))
+                return hr;
+            hr = StringCchPrintfW(szKey, _countof(szKey), L"Applications\\%s", PathFindFileNameW(path));
+            if (FAILED(hr))
+                return hr;
+            return HRESULT_FROM_WIN32(RegOpenKeyExW(HKEY_CLASSES_ROOT, szKey, 0, KEY_READ, phkeyOut));
+
+        case ASSOCKEY_BASECLASS:
+            FIXME("ASSOCKEY_BASECLASS unimplemented\n");
+            return E_NOTIMPL;
+
+        default:
+            return E_INVALIDARG;
+    }
 }
 
 /**************************************************************************
@@ -660,7 +720,16 @@ HRESULT CQueryAssociations::GetCommand(const WCHAR *extra, WCHAR **command)
         /* check for default verb */
         hr = this->GetValue(hkeyShell, NULL, (void**)&extra_from_reg, NULL);
         if (FAILED(hr))
-            hr = this->GetValue(hkeyShell, L"open", (void**)&extra_from_reg, NULL);
+        {
+            HKEY hkeyOpen;
+
+            if (RegOpenKeyExW(hkeyShell, L"open", 0, KEY_READ, &hkeyOpen) == ERROR_SUCCESS)
+            {
+                RegCloseKey(hkeyOpen);
+                extra = L"open";
+                hr = S_OK;
+            }
+        }
         if (FAILED(hr))
         {
             /* no default verb, try first subkey */
@@ -689,7 +758,8 @@ HRESULT CQueryAssociations::GetCommand(const WCHAR *extra, WCHAR **command)
                 return HRESULT_FROM_WIN32(ret);
             }
         }
-        extra = extra_from_reg;
+        if (extra_from_reg)
+            extra = extra_from_reg;
     }
 
     /* open verb subkey */

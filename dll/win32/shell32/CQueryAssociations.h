@@ -8,6 +8,7 @@ class CQueryAssociations :
 private:
     HKEY hkeySource;
     HKEY hkeyProgID;
+    BOOL bByExeName;
 
     HRESULT GetValue(HKEY hkey, const WCHAR *name, void **data, DWORD *data_size);
     HRESULT GetCommand(const WCHAR *extra, WCHAR **command);
