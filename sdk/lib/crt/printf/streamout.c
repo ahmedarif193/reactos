@@ -544,10 +544,19 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
 #endif
                 }
 
+#ifdef _USER32_WSPRINTF
+                if (flags & FLAG_WIDECHAR)
+                    len = wcslen((wchar_t*)string);
+                else
+                    len = strlen((char*)string);
+                if (precision >= 0 && len > precision)
+                    len = precision;
+#else
                 if (flags & FLAG_WIDECHAR)
                     len = wcsnlen((wchar_t*)string, (unsigned)precision);
                 else
                     len = strnlen((char*)string, (unsigned)precision);
+#endif
                 precision = 0;
                 break;
 

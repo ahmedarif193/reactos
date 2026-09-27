@@ -115,7 +115,11 @@ _sxprintf(
     buffer[result] = _T('\0');
 #else
     /* Only zero terminate if there is enough space left */
+#ifdef _USER32_WSPRINTF
+    if (stream._cnt >= sizeof(_TCHAR))
+#else
     if ((stream._cnt >= sizeof(_TCHAR)) && (stream._ptr))
+#endif
         *(_TCHAR*)stream._ptr = _T('\0');
 #endif
 
