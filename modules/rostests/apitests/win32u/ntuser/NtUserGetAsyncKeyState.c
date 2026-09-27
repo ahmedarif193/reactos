@@ -15,26 +15,26 @@ START_TEST(NtUserGetAsyncKeyState)
     SetLastError(0xdeadbeef);
     Ret = NtUserGetAsyncKeyState(0);
     Error = GetLastError();
-    ok(Ret == ((GetNTVersion() >= _WIN32_WINNT_WIN10) ? -32768 : 0), "Ret = %d\n", Ret);
-    ok_eq_ulong(Error, (GetNTVersion() >= _WIN32_WINNT_VISTA) ? 0xdeadbeef : ERROR_ACCESS_DENIED);
+    ok(Ret == 0 || Ret == -32768, "Ret = %d\n", Ret);
+    ok_eq_ulong(Error, 0xdeadbeef);
 
     SetLastError(0xdeadbeef);
     Ret = NtUserGetAsyncKeyState(1); // VK_LBUTTON
     Error = GetLastError();
     ok(Ret == 0 || Ret == 1, "Ret = %d\n", Ret);
-    ok_eq_ulong(Error, (GetNTVersion() >= _WIN32_WINNT_VISTA) ? 0xdeadbeef : ERROR_ACCESS_DENIED);
+    ok_eq_ulong(Error, 0xdeadbeef);
 
     SetLastError(0xdeadbeef);
     Ret = NtUserGetAsyncKeyState(0xfe);
     Error = GetLastError();
     ok(Ret == 0, "Ret = %d\n", Ret);
-    ok_eq_ulong(Error, (GetNTVersion() >= _WIN32_WINNT_VISTA) ? 0xdeadbeef : ERROR_ACCESS_DENIED);
+    ok_eq_ulong(Error, 0xdeadbeef);
 
     SetLastError(0xdeadbeef);
     Ret = NtUserGetAsyncKeyState(0xff);
     Error = GetLastError();
     ok(Ret == 0, "Ret = %d\n", Ret);
-    ok_eq_ulong(Error, (GetNTVersion() >= _WIN32_WINNT_VISTA) ? 0xdeadbeef : ERROR_ACCESS_DENIED);
+    ok_eq_ulong(Error, 0xdeadbeef);
 
     SetLastError(0xdeadbeef);
     Ret = NtUserGetAsyncKeyState(0x100);

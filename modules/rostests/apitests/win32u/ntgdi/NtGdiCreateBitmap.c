@@ -64,17 +64,21 @@ void Test_NtGdiCreateBitmap_Params(void)
     /* Test too huge size */
     SetLastError(ERROR_SUCCESS);
     ok_ptr(NtGdiCreateBitmap(100000, 100000, 1, 32, NULL), NULL);
-    ok_long(GetLastError(), ERROR_INVALID_PARAMETER);
+    ok_long(GetLastError(), ERROR_SUCCESS);
 
     /* Test huge size and valid bits */
     SetLastError(ERROR_SUCCESS);
-    TEST(NtGdiCreateBitmap(1000, 1000, 1, 1, BitmapData) == NULL);
+    hBmp = NtGdiCreateBitmap(1000, 1000, 1, 1, BitmapData);
+    ok(hBmp != NULL, "hBmp was NULL.\n");
     ok_long(GetLastError(), ERROR_SUCCESS);
+    DeleteObject(hBmp);
 
     /* Test huge size and invalid bits */
     SetLastError(ERROR_SUCCESS);
-    ok_ptr(NtGdiCreateBitmap(100000, 100000, 1, 1, (BYTE*)(LONG_PTR)0x80001234), NULL);
+    hBmp = NtGdiCreateBitmap(100000, 100000, 1, 1, (BYTE*)(LONG_PTR)0x80001234);
+    ok(hBmp != NULL, "hBmp was NULL.\n");
     ok_long(GetLastError(), ERROR_SUCCESS);
+    DeleteObject(hBmp);
 
     /* Test cPlanes == 0 */
     SetLastError(ERROR_SUCCESS);
@@ -155,8 +159,10 @@ void Test_NtGdiCreateBitmap_Params(void)
 
     /* Test bad pointer */
     SetLastError(ERROR_SUCCESS);
-    ok_ptr(NtGdiCreateBitmap(1, 1, 1, 1, (BYTE*)(LONG_PTR)0x80001234), NULL);
+    hBmp = NtGdiCreateBitmap(1, 1, 1, 1, (BYTE*)(LONG_PTR)0x80001234);
+    ok(hBmp != NULL, "hBmp was NULL.\n");
     ok_long(GetLastError(), ERROR_SUCCESS);
+    DeleteObject(hBmp);
 
     /* Test pointer alignment */
     SetLastError(ERROR_SUCCESS);

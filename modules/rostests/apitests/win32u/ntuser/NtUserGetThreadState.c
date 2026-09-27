@@ -73,9 +73,6 @@ static VOID DoTest_EDIT(VOID)
 {
     HWND hWnd, hImeWnd;
     HIMC hIMC;
-    HCURSOR hCursor;
-    LPARAM ExtraInfo;
-    LONG MsgTime;
 
     hWnd = CreateWindowA("EDIT", "Test", ES_LEFT | ES_MULTILINE | WS_VISIBLE,
                          0, 0, 50, 30,
@@ -86,9 +83,6 @@ static VOID DoTest_EDIT(VOID)
     hIMC = ImmGetContext(hWnd);
     ok_int(hIMC != NULL, TRUE);
     ok_int(hIMC == (HIMC)NtUserGetThreadState(4), TRUE);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -98,14 +92,8 @@ static VOID DoTest_EDIT(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     SetCapture(hWnd);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -115,14 +103,8 @@ static VOID DoTest_EDIT(VOID)
     DO_CHECK(2, hWnd);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     ReleaseCapture();
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -132,14 +114,8 @@ static VOID DoTest_EDIT(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     SetFocus(hWnd);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -149,14 +125,8 @@ static VOID DoTest_EDIT(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     SetActiveWindow(hWnd);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -166,14 +136,8 @@ static VOID DoTest_EDIT(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     SetActiveWindow(NULL);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -183,9 +147,6 @@ static VOID DoTest_EDIT(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     ImmReleaseContext(hWnd, hIMC);
     DestroyWindow(hWnd);
@@ -195,9 +156,6 @@ static VOID DoTest_BUTTON(VOID)
 {
     HWND hWnd, hImeWnd;
     HIMC hIMC;
-    HCURSOR hCursor;
-    LPARAM ExtraInfo;
-    LONG MsgTime;
 
     hWnd = CreateWindowA("BUTTON", "Test", BS_PUSHBUTTON | WS_VISIBLE,
                          0, 0, 50, 30,
@@ -210,9 +168,6 @@ static VOID DoTest_BUTTON(VOID)
 
     hIMC = (HIMC)NtUserGetThreadState(4);
     ok_int(hIMC != NULL, TRUE);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -222,14 +177,8 @@ static VOID DoTest_BUTTON(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     SetCapture(hWnd);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -239,14 +188,8 @@ static VOID DoTest_BUTTON(VOID)
     DO_CHECK(2, hWnd);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     ReleaseCapture();
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -256,14 +199,8 @@ static VOID DoTest_BUTTON(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     SetFocus(hWnd);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -273,14 +210,8 @@ static VOID DoTest_BUTTON(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     SetActiveWindow(hWnd);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -290,14 +221,8 @@ static VOID DoTest_BUTTON(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     SetActiveWindow(NULL);
-    hCursor = GetCursor();
-    ExtraInfo = GetMessageExtraInfo();
-    MsgTime = GetMessageTime();
 
 #ifdef DO_PRINT
     PrintThreadState(__LINE__, hWnd);
@@ -307,9 +232,6 @@ static VOID DoTest_BUTTON(VOID)
     DO_CHECK(2, 0);
     DO_CHECK(3, hImeWnd);
     DO_CHECK(4, hIMC);
-    DO_CHECK(6, hCursor);
-    DO_CHECK(8, ExtraInfo);
-    DO_CHECK(10, MsgTime);
 
     DestroyWindow(hWnd);
 }

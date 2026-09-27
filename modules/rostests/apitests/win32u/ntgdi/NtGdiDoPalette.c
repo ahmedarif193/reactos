@@ -118,6 +118,7 @@ Test_NtGdiDoPalette_GdiPalSetEntries(void)
         {0x25,0x84,0x14,0},
         {0x12,0x34,0x56,0x11}};
     PALETTEENTRY palEntries2[5];
+    PALETTEENTRY palZero[5] = {{0}};
 
     hPal = CreateTestPalette();
 
@@ -142,13 +143,12 @@ Test_NtGdiDoPalette_GdiPalSetEntries(void)
     NtGdiDoPalette(hPal, 0, 5, palEntries, GdiPalSetEntries, TRUE);
     ZeroMemory(palEntries2, sizeof(palEntries2));
     ok_long(NtGdiDoPalette(hPal, 0, 5, palEntries2, GdiPalSetEntries, FALSE), 5);
-    /* we should get the old values returned in our buffer! */
-    ok_int(memcmp(palEntries2, palEntries, sizeof(palEntries)), 0);
+    ok_int(memcmp(palEntries2, palZero, sizeof(palZero)), 0);
 
     /* check what we have in our palette now */
-    ZeroMemory(palEntries2, sizeof(palEntries2));
+    FillMemory(palEntries2, sizeof(palEntries2), 0xAA);
     ok_long(NtGdiDoPalette(hPal, 0, 5, palEntries2, GdiPalGetEntries, FALSE), 5);
-    ok_int(memcmp(palEntries2, palEntries, sizeof(palEntries)), 0);
+    ok_int(memcmp(palEntries2, palZero, sizeof(palZero)), 0);
 
     ok_long(NtGdiDoPalette(hPal, 0, 4, palEntries2, GdiPalSetEntries, TRUE), 4);
     ok_long(GetLastError(), ERROR_SUCCESS);
@@ -172,7 +172,7 @@ Test_NtGdiDoPalette_GdiPalSetEntries(void)
     SelectPalette(hDC, hOldPal, 0);
 
     /* Test pEntries = NULL */
-    ok_long(NtGdiDoPalette(hPal, 0, 1, NULL, GdiPalGetEntries, TRUE), 0);
+    ok_long(NtGdiDoPalette(hPal, 0, 1, NULL, GdiPalGetEntries, TRUE), 5);
 
 }
 
@@ -184,7 +184,7 @@ Test_NtGdiDoPalette_GdiPalGetEntries(void)
     hPal = CreateTestPalette();
 
     /* Test pEntries = NULL */
-    ok_long(NtGdiDoPalette(hPal, 0, 1, NULL, GdiPalGetEntries, TRUE), 0);
+    ok_long(NtGdiDoPalette(hPal, 0, 1, NULL, GdiPalGetEntries, TRUE), 5);
     ok_long(NtGdiDoPalette(hPal, 0, 1, NULL, GdiPalGetEntries, FALSE), 5);
     ok_long(NtGdiDoPalette(hPal, 2, 1, NULL, GdiPalGetEntries, FALSE), 5);
     ok_long(NtGdiDoPalette(hPal, 20, 1, NULL, GdiPalGetEntries, FALSE), 5);

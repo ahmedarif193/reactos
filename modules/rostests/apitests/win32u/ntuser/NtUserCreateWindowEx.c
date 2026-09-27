@@ -5,6 +5,7 @@
  */
 
 #include "../win32nt.h"
+#include <versionhelpers.h>
 
 static
 inline
@@ -67,7 +68,6 @@ START_TEST(NtUserCreateWindowEx)
     LARGE_STRING l_ver_cls = {ver_cls.Length, 32, 0, ver_cls.Buffer};
     WCHAR bufMe[255] = {0};
     UNICODE_STRING capture = {255, 255, bufMe};
-    PWSTR pwstr = NULL;
     CLSMENUNAME clsMenuName, outClsMnu = {0};
     ATOM atom, atom2, atom3;
     HWND hwnd;
@@ -138,66 +138,73 @@ START_TEST(NtUserCreateWindowEx)
     TEST(NtUserGetWOWClass(hinst, &ver_cls) != NtUserGetWOWClass(hinst, &cls));    TEST(atom2 != 0);
     TEST(atom == atom2 && (atom | atom2) != 0);
 
-    /* Create a window without versioned class */
-    TEST(CreateWnd(hinst, &l_cls, NULL, &l_wndName) == 0);
-    TEST(CreateWnd(hinst, &l_cls, &l_wndName, &l_wndName) == 0);
-
-    /* Now, create our first window */
-    hwnd = CreateWnd(hinst, &l_cls, &l_cls, &l_wndName);
-    TEST(hwnd != 0);
-    if(hwnd)
+    if (!IsReactOS())
     {
-        /* Test some settings about the window */
-        TEST((WNDPROC)GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wndProc1);
-
-        /* Check class name isn't versioned */
-        TEST(NtUserGetClassName(hwnd, TRUE, &capture) != 0);
-        TEST(wcscmp(capture.Buffer, cls.Buffer) == 0);
-        TEST(wcscmp(capture.Buffer, ver_cls.Buffer) != 0);
-        ZeroMemory(capture.Buffer, 255);
-
-        /* Check what return GetClassLong */
-        TEST(GetClassLong(hwnd, GCW_ATOM) == atom);
-        TEST(NtUserSetClassLong(hwnd, GCW_ATOM, atom3, FALSE) == atom);
-        NtUserGetClassName(hwnd, TRUE, &capture);
-        TEST(wcscmp(capture.Buffer, another_cls.Buffer) == 0);
-
-        /* Finally destroy it */
-        DestroyWindow(hwnd);
+        skip("NtUserCreateWindowEx takes the NT10 17-parameter form\n");
     }
-
-    /* Create our second version */
-    hwnd = CreateWnd(hinst, &l_cls, &l_ver_cls, &l_wndName);
-    TEST(hwnd != 0);
-    if (hwnd)
+    else
     {
-        /* Test settings about window */
-        TEST((WNDPROC)GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wndProc2);
+        /* Create a window without versioned class */
+        TEST(CreateWnd(hinst, &l_cls, NULL, &l_wndName) == 0);
+        TEST(CreateWnd(hinst, &l_cls, &l_wndName, &l_wndName) == 0);
 
-        /* Check class name isn't versioned */
-        TEST(NtUserGetClassName(hwnd, TRUE, &capture) != 0);
-        TEST(wcscmp(capture.Buffer, cls.Buffer) == 0);
-        TEST(wcscmp(capture.Buffer, ver_cls.Buffer) != 0);
-        ZeroMemory(capture.Buffer, 255);
+        /* Now, create our first window */
+        hwnd = CreateWnd(hinst, &l_cls, &l_cls, &l_wndName);
+        TEST(hwnd != 0);
+        if(hwnd)
+        {
+            /* Test some settings about the window */
+            TEST((WNDPROC)GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wndProc1);
 
-        /* Check what return GetClassLong */
-        TEST(GetClassLong(hwnd, GCW_ATOM) == atom);
+            /* Check class name isn't versioned */
+            TEST(NtUserGetClassName(hwnd, TRUE, &capture) != 0);
+            TEST(wcscmp(capture.Buffer, cls.Buffer) == 0);
+            TEST(wcscmp(capture.Buffer, ver_cls.Buffer) != 0);
+            ZeroMemory(capture.Buffer, 255);
 
-        TEST(NtUserFindWindowEx(NULL, NULL, &cls, (UNICODE_STRING*)&l_empty, 0) == hwnd);
+            /* Check what return GetClassLong */
+            TEST(GetClassLong(hwnd, GCW_ATOM) == atom);
+            ok_long(NtUserSetClassLong(hwnd, GCW_ATOM, atom3, FALSE), atom);
+            NtUserGetClassName(hwnd, TRUE, &capture);
+            ok(wcscmp(capture.Buffer, another_cls.Buffer) == 0, "class name is '%ls'\n", capture.Buffer);
 
-        /* Finally destroy it */
-        DestroyWindow(hwnd);
+            /* Finally destroy it */
+            DestroyWindow(hwnd);
+        }
+
+        /* Create our second version */
+        hwnd = CreateWnd(hinst, &l_cls, &l_ver_cls, &l_wndName);
+        TEST(hwnd != 0);
+        if (hwnd)
+        {
+            /* Test settings about window */
+            TEST((WNDPROC)GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == wndProc2);
+
+            /* Check class name isn't versioned */
+            TEST(NtUserGetClassName(hwnd, TRUE, &capture) != 0);
+            TEST(wcscmp(capture.Buffer, cls.Buffer) == 0);
+            TEST(wcscmp(capture.Buffer, ver_cls.Buffer) != 0);
+            ZeroMemory(capture.Buffer, 255);
+
+            /* Check what return GetClassLong */
+            TEST(GetClassLong(hwnd, GCW_ATOM) == atom);
+
+            TEST(NtUserFindWindowEx(NULL, NULL, &cls, (UNICODE_STRING*)&l_empty, 0) == hwnd);
+
+            /* Finally destroy it */
+            DestroyWindow(hwnd);
+        }
+
+        /* Create a nonexistent window */
+        hwnd = CreateWnd(hinst, &l_cls, &l_dummy, &l_wndName);
+        TEST(hwnd == 0);
+        if (hwnd) DestroyWindow(hwnd);
     }
-
-    /* Create a nonexistent window */
-    hwnd = CreateWnd(hinst, &l_cls, &l_dummy, &l_wndName);
-    TEST(hwnd == 0);
-    if (hwnd) DestroyWindow(hwnd);
 
     /* Get non-versioned class info */
     res.cbSize = sizeof(res);
     SetLastError(0);
-    TEST(NtUserGetClassInfo(hinst, &cls, &res, &pwstr, 0) != 0);
+    TEST(GetClassInfoExW(hinst, cls.Buffer, &res) != 0);
     TEST(GetLastError() == 0);
     TEST(res.cbSize == wclex.cbSize);
     TEST(res.style == wclex.style);
@@ -208,12 +215,10 @@ START_TEST(NtUserCreateWindowEx)
     TEST(res.hIcon == wclex.hIcon);
     TEST(res.hCursor == wclex.hCursor);
     TEST(res.hbrBackground == wclex.hbrBackground);
-    TEST(res.lpszMenuName == 0);
-    TEST(res.lpszClassName == 0);
     TEST(res.hIconSm == wclex.hIconSm);
 
     /* Get versioned class info */
-    TEST(NtUserGetClassInfo(hinst, &ver_cls, &res, &pwstr, 0) == atom2);
+    TEST(GetClassInfoExW(hinst, ver_cls.Buffer, &res) == atom2);
     TEST(GetLastError() == 0);
     TEST(res.cbSize == wclex2.cbSize);
     TEST(res.style == wclex2.style);
@@ -224,22 +229,27 @@ START_TEST(NtUserCreateWindowEx)
     TEST(res.hIcon == wclex2.hIcon);
     TEST(res.hCursor == wclex2.hCursor);
     TEST(res.hbrBackground == wclex2.hbrBackground);
-    TEST(res.lpszMenuName == 0);
-    TEST(res.lpszClassName == 0);
     TEST(res.hIconSm == wclex2.hIconSm);
 
-    /* Create a new window from our old class. Since we set a new class atom,
-     * it should be set to our new atom
-     */
-    hwnd = NULL;
-    hwnd = CreateWnd(hinst, &l_cls, &l_cls, &l_wndName);
-    TEST(hwnd != NULL);
-    if (hwnd)
+    if (!IsReactOS())
     {
-        TEST(GetClassLong(hwnd, GCW_ATOM) == atom3);
-        TEST(NtUserGetClassName(hwnd, TRUE, &capture) != 0);
-        TEST(wcscmp(capture.Buffer, another_cls.Buffer) == 0);
-        DestroyWindow(hwnd);
+        skip("NtUserCreateWindowEx takes the NT10 17-parameter form\n");
+    }
+    else
+    {
+        /* Create a new window from our old class. Since we set a new class atom,
+         * it should be set to our new atom
+         */
+        hwnd = NULL;
+        hwnd = CreateWnd(hinst, &l_cls, &l_cls, &l_wndName);
+        TEST(hwnd != NULL);
+        if (hwnd)
+        {
+            TEST(GetClassLong(hwnd, GCW_ATOM) == atom3);
+            TEST(NtUserGetClassName(hwnd, TRUE, &capture) != 0);
+            TEST(wcscmp(capture.Buffer, another_cls.Buffer) == 0);
+            DestroyWindow(hwnd);
+        }
     }
 
     /* Test class destruction */

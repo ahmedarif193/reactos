@@ -8,54 +8,6 @@
 #include <windows.h>
 #include <delayimp.h>
 #include <stdio.h>
-#include <versionhelpers.h>
-
-static
-FARPROC
-WINAPI
-DliNotifyHook(
-    unsigned code,
-    PDelayLoadInfo pdli)
-{
-    if (code != dliNotePreLoadLibrary)
-    {
-        return NULL;
-    }
-
-    if (strcmp(pdli->szDll, "win32u.dll") != 0)
-    {
-        return NULL;
-    }
-
-    if (IsReactOS())
-    {
-        return NULL;
-    }
-
-    switch (_winver)
-    {
-        case _WIN32_WINNT_WINXP:
-            pdli->szDll = "win32u_xpsp2.dll";
-            break;
-
-        case _WIN32_WINNT_WS03:
-            pdli->szDll = "win32u_2k3sp2.dll";
-            break;
-
-        case _WIN32_WINNT_VISTA:
-            pdli->szDll = "win32u_vista.dll";
-            break;
-
-        default:
-            break;
-    }
-
-    printf("_winver = 0x%x, _osver = 0x%x, loading %s\n", _winver, _osver, pdli->szDll);
-
-    return NULL;
-}
-
-PfnDliHook __pfnDliNotifyHook2 = DliNotifyHook;
 
 static
 FARPROC

@@ -46,10 +46,10 @@ START_TEST(NtGdiGetRandomRgn)
     ok_long(GetLastError(), ERROR_INVALID_HANDLE);
 
     SetLastError(ERROR_SUCCESS);
-    ok_int(NtGdiGetRandomRgn(hDC, 0, 0), 0);
-    ok_int(NtGdiGetRandomRgn(hDC, 0, 1), 0);
-    ok_int(NtGdiGetRandomRgn(hDC, (HRGN)-5, 0), 0);
-    ok_int(NtGdiGetRandomRgn(hDC, (HRGN)-5, 1), 0);
+    ok_int(NtGdiGetRandomRgn(hDC, 0, 0), -1);
+    ok_int(NtGdiGetRandomRgn(hDC, 0, 1), -1);
+    ok_int(NtGdiGetRandomRgn(hDC, (HRGN)-5, 0), -1);
+    ok_int(NtGdiGetRandomRgn(hDC, (HRGN)-5, 1), -1);
     ok_int(NtGdiGetRandomRgn(hDC, hrgn, 0), 0);
     ok_int(NtGdiGetRandomRgn(hDC, hrgn, 1), 0);
     ok_int(NtGdiGetRandomRgn(hDC, hrgn, 2), 0);

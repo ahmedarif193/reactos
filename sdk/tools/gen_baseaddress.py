@@ -212,9 +212,6 @@ EXCLUDE = (
     'redirtest1.dll',
     'redirtest2.dll',
     'testvdd.dll',
-    'win32u_2k3sp2.dll',
-    'win32u_vista.dll',
-    'win32u_xpsp2.dll',
     'wlntfytests.dll',
 )
 

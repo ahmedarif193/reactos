@@ -29,10 +29,10 @@ START_TEST(NtGdiExtSelectClipRgn)
 
     SetLastError(0xDEADFACE);
     ok_int(NtGdiExtSelectClipRgn(NULL, NULL, RGN_AND-1), ERROR);
-    ok_long(GetLastError(), ERROR_INVALID_PARAMETER);
+    ok_long(GetLastError(), ERROR_INVALID_HANDLE);
     SetLastError(0xDEADFACE);
     ok_int(NtGdiExtSelectClipRgn(NULL, NULL, RGN_COPY+1), ERROR);
-    ok_long(GetLastError(), ERROR_INVALID_PARAMETER);
+    ok_long(GetLastError(), ERROR_INVALID_HANDLE);
     SetLastError(0xDEADFACE);
     ok_int(NtGdiExtSelectClipRgn(NULL, NULL, RGN_COPY), ERROR);
     ok_long(GetLastError(), ERROR_INVALID_HANDLE);

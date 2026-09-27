@@ -31,7 +31,7 @@ START_TEST(NtUserCreateAcceleratorTable)
     }
     _SEH2_END;
 
-    ok_long(GetLastError(), 0xdeadbeef);
+    ok_long(GetLastError(), ERROR_INVALID_PARAMETER);
     ok_bool_false(bCrashed, "bCrashed");
     ok_hdl(hAccel, NULL);
 
@@ -67,7 +67,7 @@ START_TEST(NtUserCreateAcceleratorTable)
     }
     _SEH2_END;
 
-    ok_long(GetLastError(), ERROR_NOACCESS);
+    ok_long(GetLastError(), 0xdeadbeef);
     ok_bool_false(bCrashed, "bCrashed");
     ok_hdl(hAccel, NULL);
 
@@ -85,7 +85,7 @@ START_TEST(NtUserCreateAcceleratorTable)
     }
     _SEH2_END;
 
-    ok_long(GetLastError(), 0xdeadbeef);
+    ok_long(GetLastError(), ERROR_INVALID_PARAMETER);
     ok_bool_false(bCrashed, "bCrashed");
     ok_hdl(hAccel, NULL);
 
@@ -132,7 +132,7 @@ START_TEST(NtUserCreateAcceleratorTable)
         DestroyAcceleratorTable(hAccel);
 
     /* Try maximum */
-    pEntries = HeapAlloc(GetProcessHeap(), 0, MAX_VALID_NUMBER * sizeof(*pEntries));
+    pEntries = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, MAX_VALID_NUMBER * sizeof(*pEntries));
     if (pEntries == NULL)
     {
         skip("pEntries is NULL\n");
@@ -163,7 +163,7 @@ START_TEST(NtUserCreateAcceleratorTable)
     }
 
     /* Try maximum +1 */
-    pEntries = HeapAlloc(GetProcessHeap(), 0, (MAX_VALID_NUMBER + 1) * sizeof(*pEntries));
+    pEntries = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (MAX_VALID_NUMBER + 1) * sizeof(*pEntries));
     if (pEntries == NULL)
     {
         skip("pEntries is NULL\n");
@@ -183,9 +183,9 @@ START_TEST(NtUserCreateAcceleratorTable)
         }
         _SEH2_END;
 
-        ok_long(GetLastError(), 0xdeadbeef);
+        ok_long(GetLastError(), ERROR_INVALID_PARAMETER);
         ok_bool_false(bCrashed, "bCrashed");
-        ok(hAccel != NULL, "hAccel is NULL\n");
+        ok_hdl(hAccel, NULL);
 
         if (hAccel != NULL)
             DestroyAcceleratorTable(hAccel);

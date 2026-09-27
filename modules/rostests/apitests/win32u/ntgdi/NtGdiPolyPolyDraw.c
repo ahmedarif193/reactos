@@ -187,8 +187,8 @@ Test_Params(void)
 
     SetLastError(0);
     ret = NtGdiPolyPolyDraw(hDC, Points, Count3, 2, 1);
-    TEST(ret == 0);
-    TEST(GetLastError() == 0);
+    ok_long(ret, 0);
+    ok_long(GetLastError(), ERROR_INVALID_PARAMETER);
 
     SetLastError(0);
     ret = NtGdiPolyPolyDraw(hDC, Points, Count4, 2, 1);

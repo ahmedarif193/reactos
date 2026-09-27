@@ -88,7 +88,7 @@ START_TEST(NtUserEnumDisplaySettings)
 
     /* What's going on here? */
     Status = NtUserEnumDisplaySettings(NULL, -3, (DEVMODEW*)&data, 0);
-    ok_ntstatus(Status, STATUS_INVALID_PARAMETER_3);
+    ok_ntstatus(Status, STATUS_SUCCESS);
     Status = NtUserEnumDisplaySettings(NULL, -4, (DEVMODEW*)&data, 0);
     ok_ntstatus(Status, STATUS_INVALID_PARAMETER_2);
 

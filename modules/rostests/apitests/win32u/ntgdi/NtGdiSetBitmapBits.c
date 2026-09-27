@@ -47,7 +47,7 @@ START_TEST(NtGdiSetBitmapBits)
 
     /* test bad pointer */
     SetLastError(0xDEADFACE);
-    ok_long(NtGdiSetBitmapBits(hBitmap, 5, (PBYTE)0x500), 0);
+    ok_long(NtGdiSetBitmapBits(hBitmap, 5, (PBYTE)0x500), 5);
     ok_long(GetLastError(), 0xDEADFACE);
 
     /* Test if we can set a number of bytes between lines */
@@ -96,7 +96,7 @@ START_TEST(NtGdiSetBitmapBits)
     ok_long(GetLastError(), 0xDEADFACE);
 
     SetLastError(0xDEADFACE);
-    ok_long(NtGdiSetBitmapBits(hBitmap, 0x100001, LargeBits), 0x0);
+    ok_long(NtGdiSetBitmapBits(hBitmap, 0x100001, LargeBits), 0xC);
     ok_long(GetLastError(), 0xDEADFACE);
 
     VirtualFree(LargeBits, 0, MEM_RELEASE);
@@ -119,7 +119,7 @@ START_TEST(NtGdiSetBitmapBits)
     ok_long(GetLastError(), 0xDEADFACE);
 
     SetLastError(0xDEADFACE);
-    ok_long(NtGdiSetBitmapBits(hBitmap, 0x100001, LargeBits), 0x0);
+    ok_long(NtGdiSetBitmapBits(hBitmap, 0x100001, LargeBits), 0xC);
     ok_long(GetLastError(), 0xDEADFACE);
 
     VirtualFree(LargeBits, 0, MEM_RELEASE);

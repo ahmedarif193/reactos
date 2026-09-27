@@ -24,13 +24,13 @@ static void Test_NtGdiBitBlt_generic(void)
     SetLastError(0xDEADBEEF);
     bRet = NtGdiBitBlt((HDC)0, 0, 0, 10, 10, (HDC)0, 10, 10, SRCCOPY, 0, 0);
     ok_int(bRet, FALSE);
-    ok_long(GetLastError(), 0xDEADBEEF);
+    ok_long(GetLastError(), ERROR_INVALID_HANDLE);
 
     /* Test invalid dc */
     SetLastError(0xDEADBEEF);
     bRet = NtGdiBitBlt((HDC)0x123456, 0, 0, 10, 10, (HDC)0x123456, 10, 10, SRCCOPY, 0, 0);
     ok_int(bRet, FALSE);
-    ok_long(GetLastError(), 0xDEADBEEF);
+    ok_long(GetLastError(), ERROR_INVALID_HANDLE);
 
     hdc1 = NtGdiCreateCompatibleDC(0);
     ok(hdc1 != NULL, "hdc1 was NULL.\n");

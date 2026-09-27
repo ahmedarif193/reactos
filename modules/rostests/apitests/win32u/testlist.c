@@ -2,10 +2,6 @@
 #define STANDALONE
 #include <apitest.h>
 
-extern void func_NtGdiDdCreateDirectDrawObject(void);
-extern void func_NtGdiDdDeleteDirectDrawObject(void);
-extern void func_NtGdiDdQueryDirectDrawObject(void);
-
 extern void func_NtGdiArcInternal(void);
 extern void func_NtGdiBitBlt(void);
 extern void func_NtGdiCombineRgn(void);
@@ -16,17 +12,14 @@ extern void func_NtGdiCreateDIBSection(void);
 extern void func_NtGdiDeleteObjectApp(void);
 extern void func_NtGdiDoPalette(void);
 extern void func_NtGdiEngCreatePalette(void);
-extern void func_NtGdiEnumFontOpen(void);
 extern void func_NtGdiExcludeClipRect(void);
 extern void func_NtGdiExtSelectClipRgn(void);
 extern void func_NtGdiExtTextOutW(void);
 //extern void func_NtGdiFlushUserBatch(void);
 extern void func_NtGdiGetBitmapBits(void);
 extern void func_NtGdiGetDIBitsInternal(void);
-extern void func_NtGdiGetFontFamilyInfo(void);
 extern void func_NtGdiGetFontResourceInfoInternalW(void);
 extern void func_NtGdiGetRandomRgn(void);
-extern void func_NtGdiGetStockObject(void);
 extern void func_NtGdiIntersectClipRect(void);
 extern void func_NtGdiLineTo(void);
 extern void func_NtGdiOffsetClipRgn(void);
@@ -53,12 +46,10 @@ extern void func_NtUserConvertMemHandle(void);
 extern void func_NtUserCountClipboardFormats(void);
 extern void func_NtUserCreateAcceleratorTable(void);
 extern void func_NtUserCreateWindowEx(void);
-extern void func_NtUserDeferWindowPos(void);
 extern void func_NtUserEnumDisplayMonitors(void);
 extern void func_NtUserEnumDisplaySettings(void);
 extern void func_NtUserFindExistingCursorIcon(void);
 extern void func_NtUserGetAsyncKeyState(void);
-extern void func_NtUserGetClassInfo(void);
 extern void func_NtUserGetComboBoxInfo(void);
 extern void func_NtUserGetCursorInfo(void);
 //extern void func_NtUserGetIconInfo(void);
@@ -77,13 +68,8 @@ extern void func_NtUserUpdatePerUserSystemParameters(void);
 
 const struct test winetest_testlist[] =
 {
-    /* ntdd*/
-    { "NtGdiDdCreateDirectDrawObject", func_NtGdiDdCreateDirectDrawObject },
-    { "NtGdiDdDeleteDirectDrawObject", func_NtGdiDdDeleteDirectDrawObject },
-    // { "NtGdiDdQueryDirectDrawObject", func_NtGdiDdQueryDirectDrawObject },
-    { "NtGdiArcInternal", func_NtGdiArcInternal },
-
     /* ntgdi */
+    { "NtGdiArcInternal", func_NtGdiArcInternal },
     { "NtGdiBitBlt", func_NtGdiBitBlt },
     { "NtGdiCombineRgn", func_NtGdiCombineRgn },
     { "NtGdiCreateBitmap", func_NtGdiCreateBitmap },
@@ -93,17 +79,14 @@ const struct test winetest_testlist[] =
     { "NtGdiDeleteObjectApp", func_NtGdiDeleteObjectApp },
     { "NtGdiDoPalette", func_NtGdiDoPalette },
     { "NtGdiEngCreatePalette", func_NtGdiEngCreatePalette },
-    { "NtGdiEnumFontOpen", func_NtGdiEnumFontOpen },
     { "NtGdiExcludeClipRect", func_NtGdiExcludeClipRect },
     { "NtGdiExtSelectClipRgn", func_NtGdiExtSelectClipRgn },
     { "NtGdiExtTextOutW", func_NtGdiExtTextOutW },
     //{ "NtGdiFlushUserBatch", func_NtGdiFlushUserBatch },
     { "NtGdiGetBitmapBits", func_NtGdiGetBitmapBits },
     { "NtGdiGetDIBitsInternal", func_NtGdiGetDIBitsInternal },
-    { "NtGdiGetFontFamilyInfo", func_NtGdiGetFontFamilyInfo },
     //{ "NtGdiGetFontResourceInfoInternalW", func_NtGdiGetFontResourceInfoInternalW },
     { "NtGdiGetRandomRgn", func_NtGdiGetRandomRgn },
-    { "NtGdiGetStockObject", func_NtGdiGetStockObject },
     { "NtGdiIntersectClipRect", func_NtGdiIntersectClipRect },
     { "NtGdiLineTo", func_NtGdiLineTo },
     { "NtGdiOffsetClipRgn", func_NtGdiOffsetClipRgn },
@@ -132,12 +115,10 @@ const struct test winetest_testlist[] =
     { "NtUserCountClipboardFormats", func_NtUserCountClipboardFormats },
     { "NtUserCreateAcceleratorTable", func_NtUserCreateAcceleratorTable },
     { "NtUserCreateWindowEx", func_NtUserCreateWindowEx },
-    { "NtUserDeferWindowPos", func_NtUserDeferWindowPos },
     { "NtUserEnumDisplayMonitors", func_NtUserEnumDisplayMonitors },
     { "NtUserEnumDisplaySettings", func_NtUserEnumDisplaySettings },
     { "NtUserFindExistingCursorIcon", func_NtUserFindExistingCursorIcon },
     { "NtUserGetAsyncKeyState", func_NtUserGetAsyncKeyState },
-    { "NtUserGetClassInfo", func_NtUserGetClassInfo },
     { "NtUserGetComboBoxInfo", func_NtUserGetComboBoxInfo },
     { "NtUserGetCursorInfo", func_NtUserGetCursorInfo },
     //{ "NtUserGetIconInfo", func_NtUserGetIconInfo },

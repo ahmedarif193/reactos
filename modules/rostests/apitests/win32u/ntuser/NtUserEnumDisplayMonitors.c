@@ -7,23 +7,54 @@
 
 #include "../win32nt.h"
 
+static ULONG gMonitorCount;
+static HMONITOR ghMonitor;
+static HDC ghdcMonitor;
+static RECT grcMonitor;
+static LPARAM gData;
+static BOOL gContinue;
+
+static
+BOOL
+CALLBACK
+MonitorEnumProc(
+    HMONITOR hMonitor,
+    HDC hdcMonitor,
+    LPRECT lprcMonitor,
+    LPARAM dwData)
+{
+    gMonitorCount++;
+    if (gMonitorCount == 1)
+    {
+        ghMonitor = hMonitor;
+        ghdcMonitor = hdcMonitor;
+        grcMonitor = *lprcMonitor;
+        gData = dwData;
+    }
+    return gContinue;
+}
+
 START_TEST(NtUserEnumDisplayMonitors)
 {
-    HMONITOR Monitors[8];
     MONITORINFO Info;
-    RECT Rects[8];
-    INT Count, Filled, Index;
+    BOOL ret;
 
-    Count = NtUserEnumDisplayMonitors(NULL, NULL, NULL, NULL, 0);
-    ok(Count > 0, "Monitor count is %d\n", Count);
-    if (Count <= 0) return;
+    gMonitorCount = 0;
+    gContinue = TRUE;
+    ret = NtUserEnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0x1234);
+    ok_int(ret, TRUE);
+    ok(gMonitorCount > 0, "gMonitorCount is %lu\n", gMonitorCount);
+    ok_ptr(ghdcMonitor, NULL);
+    ok_long((LONG)gData, 0x1234);
 
-    Filled = NtUserEnumDisplayMonitors(NULL, NULL, Monitors, Rects, RTL_NUMBER_OF(Monitors));
-    ok_int(Filled, min(Count, (INT)RTL_NUMBER_OF(Monitors)));
-    for (Index = 0; Index < Filled; ++Index)
-    {
-        Info.cbSize = sizeof(Info);
-        ok(GetMonitorInfoW(Monitors[Index], &Info), "GetMonitorInfoW(%p) failed\n", Monitors[Index]);
-        ok(EqualRect(&Info.rcMonitor, &Rects[Index]), "Monitor %d rectangle mismatch\n", Index);
-    }
+    Info.cbSize = sizeof(Info);
+    ok(GetMonitorInfoW(ghMonitor, &Info), "GetMonitorInfoW(%p) failed\n", ghMonitor);
+    ok((Info.dwFlags & MONITORINFOF_PRIMARY) != 0, "The first monitor is not the primary one\n");
+    ok(EqualRect(&Info.rcMonitor, &grcMonitor), "Monitor rectangle mismatch\n");
+
+    gMonitorCount = 0;
+    gContinue = FALSE;
+    ret = NtUserEnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0);
+    ok_int(ret, FALSE);
+    ok_long(gMonitorCount, 1);
 }
