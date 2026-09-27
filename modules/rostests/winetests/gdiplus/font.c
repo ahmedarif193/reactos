@@ -269,6 +269,19 @@ static void test_createfont_charset(void)
     DeleteDC(hdc);
 }
 
+static BOOL has_font_table(HDC hdc, const LOGFONTA *lf, DWORD table)
+{
+    HFONT hfont, hfont_old;
+    DWORD size;
+
+    hfont = CreateFontIndirectA(lf);
+    hfont_old = SelectObject(hdc, hfont);
+    size = GetFontData(hdc, table, 0, NULL, 0);
+    SelectObject(hdc, hfont_old);
+    DeleteObject(hfont);
+    return size != GDI_ERROR && size != 0;
+}
+
 static void test_logfont(void)
 {
     LOGFONTA lfa, lfa2;
@@ -421,6 +434,10 @@ static void test_logfont(void)
     if (!lstrlenA(lfa.lfFaceName) || lstrcmpA(lfa.lfFaceName, lfa2.lfFaceName))
     {
         skip("Times New Roman not installed\n");
+    }
+    else if (!has_font_table(hdc, &lfa, 0x584d4456))
+    {
+        skip("Times New Roman has no VDMX table\n");
     }
     else
     {
