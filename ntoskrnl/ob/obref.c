@@ -245,6 +245,8 @@ ObReferenceFileObjectForWrite(IN HANDLE Handle,
                         &DesiredAccess)))
         {
             Status = STATUS_OBJECT_TYPE_MISMATCH;
+
+            ExUnlockHandleTableEntry(HandleTable, HandleEntry);
         }
         else
         {
