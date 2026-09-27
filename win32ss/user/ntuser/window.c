@@ -634,17 +634,13 @@ LRESULT co_UserFreeWindow(PWND Window,
          if ((Child = IntGetWindowObject(*ChildHandle)))
          {
             if (!IntWndBelongsToThread(Child, ThreadData))
-            {
-               /* send WM_DESTROY messages to windows not belonging to the same thread */
-               co_IntSendMessage( UserHMGetHandle(Child), WM_ASYNC_DESTROYWINDOW, 0, 0 );
-            }
+               IntUnlinkWindow(Child);
             else
                co_UserFreeWindow(Child, ProcessData, ThreadData, SendMessages);
 
             UserDereferenceObject(Child);
          }
       }
-      ExFreePoolWithTag(Children, USERTAG_WINDOWLIST);
    }
 
    if (SendMessages)
@@ -658,6 +654,21 @@ LRESULT co_UserFreeWindow(PWND Window,
                           RDW_NOINTERNALPAINT | RDW_NOCHILDREN);
       if (BelongsToThreadData)
          co_IntSendMessage(UserHMGetHandle(Window), WM_NCDESTROY, 0, 0);
+   }
+
+   if (Children)
+   {
+      for (ChildHandle = Children; *ChildHandle; ++ChildHandle)
+      {
+         if ((Child = IntGetWindowObject(*ChildHandle)))
+         {
+            if (!IntWndBelongsToThread(Child, ThreadData))
+               co_IntSendMessageNoWait(UserHMGetHandle(Child), WM_ASYNC_DESTROYWINDOW, 0, 0);
+
+            UserDereferenceObject(Child);
+         }
+      }
+      ExFreePoolWithTag(Children, USERTAG_WINDOWLIST);
    }
 
    UserClipboardFreeWindow(Window);
@@ -1369,6 +1380,12 @@ co_UserSetParent(HWND hWndChild, HWND hWndNewParent)
    if (!(Wnd = UserGetWindowObject(hWndChild)))
    {
       ERR("UserSetParent Bad Child!\n");
+      return NULL;
+   }
+
+   if (Wnd->state2 & WNDS2_INDESTROY)
+   {
+      EngSetLastError(ERROR_INVALID_PARAMETER);
       return NULL;
    }
 
@@ -3101,6 +3118,11 @@ BOOLEAN co_UserDestroyWindow(PVOID Object)
       }
    }
 
+   if (IntIsWindow(hWnd) && Window->head.pti == ti && ti->MessageQueue->spwndActive == Window)
+   {
+      co_WinPosActivateOtherWindow(Window);
+   }
+
    /* Adjust last active */
    if ((pwndTemp = Window->spwndOwner))
    {
@@ -3545,11 +3567,11 @@ UserGetAncestor(_In_ PWND pWnd, _In_ UINT uType)
                 WndAncestor = Parent;
 
                 pDesktop = Parent->head.rpdesk;
-                ASSERT(pDesktop);
-                ASSERT(pDesktop->pDeskInfo);
+                if (!pDesktop || !pDesktop->pDeskInfo)
+                    break;
 
                 Parent = Parent->spwndParent;
-            } while (Parent != pDesktop->pDeskInfo->spwnd);
+            } while (Parent && Parent != pDesktop->pDeskInfo->spwnd);
             break;
 
         case GA_ROOTOWNER:
