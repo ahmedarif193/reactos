@@ -1235,6 +1235,19 @@ static void thread_init(void)
 
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
 #ifdef __REACTOS__
+            {
+                PEB32 *peb32 = ULongToPtr( NtCurrentTeb32()->Peb );
+                IMAGE_NT_HEADERS32 *nt32 = (IMAGE_NT_HEADERS32 *)RtlImageNtHeader( ULongToPtr( peb32->ImageBaseAddress ) );
+
+                if (nt32 && nt32->OptionalHeader.AddressOfEntryPoint &&
+                    ctx.Eip == peb32->ImageBaseAddress + nt32->OptionalHeader.AddressOfEntryPoint)
+                {
+                    ctx.Eax = ctx.Eip;
+                    ctx.Ebx = PtrToUlong( peb32 );
+                    ctx.Eip = pLdrSystemDllInitBlock->pRtlUserThreadStart;
+                    ctx.Esp = (ctx.Esp & ~3) - 3 * sizeof(ULONG);
+                }
+            }
             ctx_ptr = (I386_CONTEXT *)ULongToPtr( ((ctx.Esp & ~3) - 8) & ~3 ) - 1;
 #else
             ctx_ptr = (I386_CONTEXT *)ULongToPtr( ctx.Esp ) - 1;
