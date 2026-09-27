@@ -50,7 +50,7 @@
 #define W32PF_JOBRESTRICTED          (0x40000000)
 #define W32PF_DEFAULTSYSCOLORS       (0x80000000)
 
-#define QSIDCOUNTS 7
+#define QSIDCOUNTS 8
 
 typedef enum _QS_ROS_TYPES
 {
@@ -61,6 +61,7 @@ typedef enum _QS_ROS_TYPES
     QSRosSendMessage,
     QSRosHotKey,
     QSRosEvent,
+    QSRosRawInput,
 } QS_ROS_TYPES, *PQS_ROS_TYPES;
 
 extern BOOL ClientPfnInit;
@@ -158,6 +159,9 @@ typedef struct _THREADINFO
     WCHAR               wchInjected;
     UINT                cWindows;
     UINT                cVisWindows;
+    HRAWINPUT           hRawInputData;
+    PRAWINPUT           pRawInputData;
+    UINT                cRawInputPending;
 #ifndef __cplusplus /// FIXME!
     LIST_ENTRY          aphkStart[NB_HOOKS];
     CLIENTTHREADINFO    cti;  // Used only when no Desktop or pcti NULL.
@@ -321,6 +325,8 @@ typedef struct _PROCESSINFO
     ULONG DpiContext;             /* NTUSER_DPI_* context; 0 = never set (reads as unaware) */
     BOOLEAN MouseInPointerEnabled;
     BOOLEAN MouseInPointerSet;
+    PRAWINPUTDEVICE pRawInputDevices;
+    UINT cRawInputDevices;
 
     /* ReactOS */
     FAST_MUTEX PrivateFontListLock;

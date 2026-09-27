@@ -21,6 +21,8 @@ INT PostMsgCount = 0;
 INT SendMsgCount = 0;
 PUSER_MESSAGE_QUEUE gpqCursor;
 ULONG_PTR gdwMouseMoveExtraInfo = 0;
+INPUT_MESSAGE_SOURCE gMouseInputSource = { IMDT_UNAVAILABLE, IMO_SYSTEM };
+static INPUT_MESSAGE_SOURCE gMouseMoveSource = { IMDT_UNAVAILABLE, IMO_SYSTEM };
 DWORD gdwMouseMoveTimeStamp = 0;
 LIST_ENTRY usmList;
 
@@ -208,6 +210,37 @@ int UserShowCursor(BOOL bShow)
     return MessageQueue->iCursorLevel;
 }
 
+static VOID FASTCALL
+MsqSyncKeyState(PUSER_MESSAGE_QUEUE MessageQueue)
+{
+   PLIST_ENTRY Entry;
+   BOOL bDown, bLocked;
+   UINT i;
+
+   for (Entry = MessageQueue->HardwareMessagesListHead.Flink;
+        Entry != &MessageQueue->HardwareMessagesListHead;
+        Entry = Entry->Flink)
+   {
+      if (CONTAINING_RECORD(Entry, USER_MESSAGE, ListEntry)->QS_Flags & (QS_KEY | QS_MOUSEBUTTON))
+         return;
+   }
+
+   for (i = 0; i < 256; i++)
+   {
+      bDown = IS_KEY_DOWN(gafAsyncKeyState, i);
+      bLocked = IS_KEY_LOCKED(gafAsyncKeyState, i);
+      if (bDown == IS_KEY_DOWN(MessageQueue->afKeyStateSync, i) &&
+          bLocked == IS_KEY_LOCKED(MessageQueue->afKeyStateSync, i))
+      {
+         continue;
+      }
+      SET_KEY_DOWN(MessageQueue->afKeyState, i, bDown);
+      SET_KEY_LOCKED(MessageQueue->afKeyState, i, bLocked);
+      SET_KEY_DOWN(MessageQueue->afKeyStateSync, i, bDown);
+      SET_KEY_LOCKED(MessageQueue->afKeyStateSync, i, bLocked);
+   }
+}
+
 DWORD FASTCALL
 UserGetKeyState(DWORD dwKey)
 {
@@ -220,6 +253,7 @@ UserGetKeyState(DWORD dwKey)
 
    if (dwKey < 0x100)
    {
+       MsqSyncKeyState(MessageQueue);
        if (IS_KEY_DOWN(MessageQueue->afKeyState, dwKey))
            dwRet |= 0xFF80; // If down, windows returns 0xFF80.
        if (IS_KEY_LOCKED(MessageQueue->afKeyState, dwKey))
@@ -432,6 +466,7 @@ MsqWakeQueue(PTHREADINFO pti, DWORD MessageBits, BOOL KeyEvent)
    if (MessageBits & QS_SENDMESSAGE) pti->nCntsQBits[QSRosSendMessage]++;
    if (MessageBits & QS_HOTKEY)      pti->nCntsQBits[QSRosHotKey]++;
    if (MessageBits & QS_EVENT)       pti->nCntsQBits[QSRosEvent]++;
+   if (MessageBits & QS_RAWINPUT)    pti->nCntsQBits[QSRosRawInput]++;
 
    if (KeyEvent)
       KeSetEvent(pti->pEventQueueServer, MESSAGE_QUEUE_INCREMENT, FALSE);
@@ -490,6 +525,10 @@ ClearMsgBitsMask(PTHREADINFO pti, UINT MessageBits)
    {
       if (--pti->nCntsQBits[QSRosEvent] == 0) ClrMask |= QS_EVENT;
    }
+   if (MessageBits & QS_RAWINPUT)
+   {
+      if (--pti->nCntsQBits[QSRosRawInput] == 0) ClrMask |= QS_RAWINPUT;
+   }
 
    pti->pcti->fsWakeBits &= ~ClrMask;
    pti->pcti->fsChangeBits &= ~ClrMask;
@@ -533,13 +572,14 @@ MsqPostMouseMove(PTHREADINFO pti, MSG* Msg, LONG_PTR ExtraInfo)
        {
           // Overwrite the message with updated data!
           Message->Msg = *Msg;
+          Message->Source = gMouseMoveSource;
 
           MsqWakeQueue(pti, QS_MOUSEMOVE, TRUE);
           return;
        }
     }
 
-    MsqPostMessage(pti, Msg, TRUE, QS_MOUSEMOVE, 0, ExtraInfo);
+    MsqPostMessageEx(pti, Msg, TRUE, QS_MOUSEMOVE, 0, ExtraInfo, &gMouseMoveSource);
 }
 
 /*
@@ -686,12 +726,16 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
            gpqCursor = MessageQueue;
 
            /* Mouse move is a special case */
-           MessageQueue->QF_flags |= QF_MOUSEMOVED;
-           gdwMouseMoveExtraInfo = dwExtraInfo;
-           gdwMouseMoveTimeStamp = Msg->time;
-           MsqWakeQueue(pti, QS_MOUSEMOVE, TRUE);
+           if (!RawInputIsNoLegacy(pti->ppi, RIM_TYPEMOUSE))
+           {
+               MessageQueue->QF_flags |= QF_MOUSEMOVED;
+               gdwMouseMoveExtraInfo = dwExtraInfo;
+               gMouseMoveSource = gMouseInputSource;
+               gdwMouseMoveTimeStamp = Msg->time;
+               MsqWakeQueue(pti, QS_MOUSEMOVE, TRUE);
+           }
        }
-       else
+       else if (!RawInputIsNoLegacy(pti->ppi, RIM_TYPEMOUSE))
        {
            if (!IntGetCaptureWindow())
            {
@@ -707,7 +751,7 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
            }
 
            TRACE("Posting mouse message to hwnd=%p!\n", UserHMGetHandle(pwnd));
-           MsqPostMessage(pti, Msg, TRUE, QS_MOUSEBUTTON, 0, dwExtraInfo);
+           MsqPostMessageEx(pti, Msg, TRUE, QS_MOUSEBUTTON, 0, dwExtraInfo, &gMouseInputSource);
        }
    }
    else if (hdcScreen)
@@ -747,6 +791,12 @@ MsqDestroyMessage(PUSER_MESSAGE Message)
    UserDomainLockExclusive(DLT_POST);
    RemoveEntryList(&Message->ListEntry);
    UserDomainUnlockExclusive(DLT_POST);
+   if (Message->RawInput)
+   {
+      InterlockedDecrement((PLONG)&Message->pti->cRawInputPending);
+      ExFreePoolWithTag(Message->RawInput, USERTAG_HIDDATA);
+      Message->RawInput = NULL;
+   }
    Message->pti = NULL;
    ExFreeToPagedLookasideList(pgMessageLookasideList, Message);
    PostMsgCount--;
@@ -1348,6 +1398,18 @@ MsqPostMessage(PTHREADINFO pti,
                DWORD dwQEvent,
                LONG_PTR ExtraInfo)
 {
+   MsqPostMessageEx(pti, Msg, HardwareMessage, MessageBits, dwQEvent, ExtraInfo, NULL);
+}
+
+VOID FASTCALL
+MsqPostMessageEx(PTHREADINFO pti,
+                 MSG* Msg,
+                 BOOLEAN HardwareMessage,
+                 DWORD MessageBits,
+                 DWORD dwQEvent,
+                 LONG_PTR ExtraInfo,
+                 const INPUT_MESSAGE_SOURCE *Source)
+{
    PUSER_MESSAGE Message;
    PUSER_MESSAGE_QUEUE MessageQueue;
 
@@ -1370,6 +1432,8 @@ MsqPostMessage(PTHREADINFO pti,
    Message->ExtraInfo = ExtraInfo;
    Message->QS_Flags = MessageBits;
    Message->pti = pti;
+   if (Source)
+      Message->Source = *Source;
 
    UserDomainLockExclusive(DLT_POST);
    if (!HardwareMessage)
@@ -1384,6 +1448,36 @@ MsqPostMessage(PTHREADINFO pti,
    MsqWakeQueue(pti, MessageBits, TRUE);
    UserDomainUnlockExclusive(DLT_POST);
    TRACE("Post Message %d\n", PostMsgCount);
+}
+
+BOOL FASTCALL
+MsqPostRawInputMessage(PTHREADINFO pti,
+                       MSG* Msg,
+                       PRAWINPUT RawInput,
+                       LONG_PTR ExtraInfo,
+                       const INPUT_MESSAGE_SOURCE *Source)
+{
+   PUSER_MESSAGE Message;
+
+   if ((pti->TIF_flags & TIF_INCLEANUP) || (pti->MessageQueue->QF_flags & QF_INDESTROY))
+      return FALSE;
+
+   Message = MsqCreateMessage(Msg);
+   if (!Message)
+      return FALSE;
+
+   Message->ExtraInfo = ExtraInfo;
+   Message->QS_Flags = QS_RAWINPUT;
+   Message->pti = pti;
+   Message->Source = *Source;
+   Message->RawInput = RawInput;
+   InterlockedIncrement((PLONG)&pti->cRawInputPending);
+
+   UserDomainLockExclusive(DLT_POST);
+   InsertTailList(&pti->PostedMessagesListHead, &Message->ListEntry);
+   MsqWakeQueue(pti, QS_RAWINPUT, TRUE);
+   UserDomainUnlockExclusive(DLT_POST);
+   return TRUE;
 }
 
 VOID FASTCALL
@@ -1963,6 +2057,7 @@ co_MsqPeekHardwareMessage(IN PTHREADINFO pti,
    MSG clk_msg;
    BOOL Ret = FALSE;
    PUSER_MESSAGE_QUEUE MessageQueue = pti->MessageQueue;
+   INPUT_MESSAGE_SOURCE Source = { IMDT_UNAVAILABLE, IMO_UNAVAILABLE };
 
    if (!filter_contains_hw_range( MsgFilterLow, MsgFilterHigh )) return FALSE;
 
@@ -2010,6 +2105,7 @@ co_MsqPeekHardwareMessage(IN PTHREADINFO pti,
          msg = CurrentMessage->Msg;
          ExtraInfo = CurrentMessage->ExtraInfo;
          QS_Flags = CurrentMessage->QS_Flags;
+         Source = CurrentMessage->Source;
          clk_msg = MessageQueue->msgDblClk;
 
          NotForUs = FALSE;
@@ -2056,6 +2152,8 @@ co_MsqPeekHardwareMessage(IN PTHREADINFO pti,
             pti->timeLast = msg.time;
             pti->ptLast   = msg.pt;
             MessageQueue->ExtraInfo = ExtraInfo;
+            if (pti->pClientInfo)
+               pti->pClientInfo->MsgSource = Source;
             Ret = TRUE;
             break;
          }
@@ -2097,6 +2195,9 @@ MsqPeekMessage(IN PTHREADINFO pti,
  2: retrieves only messages on the current thread's message queue whose hwnd value is NULL.
  3: handle to the window whose messages are to be retrieved.
  */
+      if (!(QSflags & QS_POSTMESSAGE) && !(CurrentMessage->QS_Flags & QSflags))
+         continue;
+
       if ( ( !Window || // 1
             ( Window == PWND_BOTTOM && CurrentMessage->Msg.hwnd == NULL ) || // 2
             ( Window != PWND_BOTTOM && UserHMGetHandle(Window) == CurrentMessage->Msg.hwnd ) ) && // 3
@@ -2107,6 +2208,9 @@ MsqPeekMessage(IN PTHREADINFO pti,
          *ExtraInfo = CurrentMessage->ExtraInfo;
          QS_Flags   = CurrentMessage->QS_Flags;
          if (dwQEvent) *dwQEvent = CurrentMessage->dwQEvent;
+
+         if (CurrentMessage->RawInput)
+            RawInputSetThreadData(pti, CurrentMessage, Remove);
 
          if (Remove)
          {
@@ -2209,6 +2313,8 @@ HungAppSysTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
 BOOLEAN FASTCALL
 MsqInitializeMessageQueue(PTHREADINFO pti, PUSER_MESSAGE_QUEUE MessageQueue)
 {
+   UINT i;
+
    InitializeListHead(&MessageQueue->HardwareMessagesListHead); // Keep here!
    MessageQueue->spwndFocus = NULL;
    MessageQueue->iCursorLevel = 0;
@@ -2219,6 +2325,9 @@ MsqInitializeMessageQueue(PTHREADINFO pti, PUSER_MESSAGE_QUEUE MessageQueue)
       UserReferenceObject(MessageQueue->CursorObject);
    }
    RtlCopyMemory(MessageQueue->afKeyState, gafAsyncKeyState, sizeof(gafAsyncKeyState));
+   RtlCopyMemory(MessageQueue->afKeyStateSync, gafAsyncKeyState, sizeof(gafAsyncKeyState));
+   for (i = 0; i < 256; i++)
+      SET_KEY_DOWN(MessageQueue->afKeyState, i, FALSE);
    MessageQueue->ptiMouse = pti;
    MessageQueue->ptiKeyboard = pti;
    MessageQueue->cThreads++;
@@ -2642,6 +2751,7 @@ NtUserSetKeyboardState(LPBYTE pKeyState)
             SET_KEY_DOWN(MessageQueue->afKeyState, i, pKeyState[i] & KS_DOWN_BIT);
             SET_KEY_LOCKED(MessageQueue->afKeyState, i, pKeyState[i] & KS_LOCK_BIT);
        }
+       RtlCopyMemory(MessageQueue->afKeyStateSync, gafAsyncKeyState, sizeof(gafAsyncKeyState));
    }
    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
    {

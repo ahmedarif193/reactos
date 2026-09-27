@@ -217,6 +217,7 @@ UserProcessDestroy(PEPROCESS Process)
     /* Destroy user objects */
     UserDestroyObjectsForOwner(gHandleTable, ppiCurrent);
     IntUipiFreeProcessFilters(ppiCurrent);
+    RawInputCleanupProcess(ppiCurrent);
 
     TRACE_CH(UserProcess, "Freeing ppi 0x%p\n", ppiCurrent);
 #if DBG
@@ -950,6 +951,7 @@ ExitThreadCallback(PETHREAD Thread)
         DestroyTimersForThread(ptiCurrent);
         KeSetEvent(ptiCurrent->pEventQueueServer, IO_NO_INCREMENT, FALSE);
         UnregisterThreadHotKeys(ptiCurrent);
+        RawInputCleanupThread(ptiCurrent);
 
         if (!UserDestroyObjectsForOwner(gHandleTable, ptiCurrent))
         {

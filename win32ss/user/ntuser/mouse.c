@@ -13,6 +13,17 @@ DBG_DEFAULT_CHANNEL(UserInput);
 MOUSEMOVEPOINT gMouseHistoryOfMoves[64];
 INT gcMouseHistoryOfMoves = 0;
 
+VOID
+IntAddMouseMoveHistory(LONG x, LONG y, DWORD Time, ULONG_PTR ExtraInfo)
+{
+    gMouseHistoryOfMoves[gcMouseHistoryOfMoves].x = x;
+    gMouseHistoryOfMoves[gcMouseHistoryOfMoves].y = y;
+    gMouseHistoryOfMoves[gcMouseHistoryOfMoves].time = Time;
+    gMouseHistoryOfMoves[gcMouseHistoryOfMoves].dwExtraInfo = ExtraInfo;
+    if (++gcMouseHistoryOfMoves == ARRAYSIZE(gMouseHistoryOfMoves))
+       gcMouseHistoryOfMoves = 0;
+}
+
 static LONG FASTCALL
 IntApplyMouseAcceleration(LONG Delta)
 {
@@ -64,6 +75,8 @@ VOID NTAPI
 UserProcessMouseInput(PMOUSE_INPUT_DATA mid)
 {
     MOUSEINPUT mi;
+
+    RawInputProcessMouseData(mid);
 
     /* Convert MOUSE_INPUT_DATA to MOUSEINPUT. First init all fields. */
     mi.dx = mid->LastX;
@@ -188,8 +201,8 @@ IntFixMouseInputButtons(DWORD dwFlags)
  *
  * Process mouse input from input devices and SendInput API
  */
-BOOL NTAPI
-UserSendMouseInput(MOUSEINPUT *pmi, BOOL bInjected)
+static BOOL
+UserSendMouseInputWorker(MOUSEINPUT *pmi, BOOL bInjected)
 {
     POINT ptCursor;
     PSYSTEM_CURSORINFO pCurInfo;
@@ -203,6 +216,9 @@ UserSendMouseInput(MOUSEINPUT *pmi, BOOL bInjected)
     dwFlags = IntFixMouseInputButtons(pmi->dwFlags);
 
     gppiInputProvider = ((PTHREADINFO)PsGetCurrentThreadWin32Thread())->ppi;
+
+    if (bInjected)
+        RawInputProcessMouseInput(pmi);
 
     if (pmi->dwFlags & MOUSEEVENTF_MOVE)
     {
@@ -237,13 +253,8 @@ UserSendMouseInput(MOUSEINPUT *pmi, BOOL bInjected)
         Msg.time = EngGetTickCount32();
     }
 
-    /* Do GetMouseMovePointsEx FIFO. */
-    gMouseHistoryOfMoves[gcMouseHistoryOfMoves].x = ptCursor.x;
-    gMouseHistoryOfMoves[gcMouseHistoryOfMoves].y = ptCursor.y;
-    gMouseHistoryOfMoves[gcMouseHistoryOfMoves].time = Msg.time;
-    gMouseHistoryOfMoves[gcMouseHistoryOfMoves].dwExtraInfo = pmi->dwExtraInfo;
-    if (++gcMouseHistoryOfMoves == ARRAYSIZE(gMouseHistoryOfMoves))
-       gcMouseHistoryOfMoves = 0; // 0 - 63 is 64, FIFO forwards.
+    if (dwFlags & MOUSEEVENTF_MOVE)
+        IntAddMouseMoveHistory(ptCursor.x, ptCursor.y, Msg.time, pmi->dwExtraInfo);
 
     /* Update cursor position */
     if (dwFlags & MOUSEEVENTF_MOVE)
@@ -374,6 +385,19 @@ UserSendMouseInput(MOUSEINPUT *pmi, BOOL bInjected)
     UserRecordMousePointerInput(&gpsi->ptCursor, dwFlags, Msg.time);
 
     return TRUE;
+}
+
+BOOL NTAPI
+UserSendMouseInput(MOUSEINPUT *pmi, BOOL bInjected)
+{
+    INPUT_MESSAGE_SOURCE SavedSource = gMouseInputSource;
+    BOOL Ret;
+
+    gMouseInputSource.deviceType = IMDT_MOUSE;
+    gMouseInputSource.originId = bInjected ? IMO_INJECTED : IMO_HARDWARE;
+    Ret = UserSendMouseInputWorker(pmi, bInjected);
+    gMouseInputSource = SavedSource;
+    return Ret;
 }
 
 VOID
@@ -576,6 +600,7 @@ NtUserGetMouseMovePointsEx(
     MOUSEMOVEPOINT Safeppt;
     //BOOL Hit;
     INT iRet = -1;
+    PTHREADINFO pti;
 
     TRACE("Enter NtUserGetMouseMovePointsEx\n");
 
@@ -605,61 +630,59 @@ NtUserGetMouseMovePointsEx(
 
     UserEnterShared();
 
-    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmousemovepointsex
-    // This explains the math issues in transforming points.
-    iRet = gcMouseHistoryOfMoves; // FIFO is forward so retrieve backward.
-    //Hit = FALSE;
-    do
+    pti = PsGetCurrentThreadWin32Thread();
+    if (!pti->rpdesk || (pti->rpdesk->rpwinstaParent->Flags & WSS_NOIO))
     {
-        if (Safeppt.x == 0 && Safeppt.y == 0)
-            break; // No test.
-        // Finds the point, it returns the last nBufPoints prior to and including the supplied point.
-        if (gMouseHistoryOfMoves[iRet].x == Safeppt.x && gMouseHistoryOfMoves[iRet].y == Safeppt.y)
-        {
-            if (Safeppt.time) // Now test time and it seems to be absolute.
-            {
-                if (Safeppt.time == gMouseHistoryOfMoves[iRet].time)
-                {
-                    //Hit = TRUE;
-                    break;
-                }
-                else
-                {
-                    if (--iRet < 0) iRet = 63;
-                    continue;
-                }
-            }
-            //Hit = TRUE;
-            break;
-        }
-        if (--iRet < 0) iRet = 63;
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        iRet = -1;
+        goto cleanup;
     }
-    while (iRet != gcMouseHistoryOfMoves);
 
-    switch(resolution)
+    if (resolution != GMMP_USE_DISPLAY_POINTS)
     {
-        case GMMP_USE_DISPLAY_POINTS:
-            if (nBufPoints)
+        EngSetLastError(ERROR_POINT_NOT_FOUND);
+        iRet = -1;
+        goto cleanup;
+    }
+
+    {
+        INT i, Copied;
+        INT Count = ARRAYSIZE(gMouseHistoryOfMoves);
+        PMOUSEMOVEPOINT pPos;
+
+        for (i = 0; i < Count; i++)
+        {
+            pPos = &gMouseHistoryOfMoves[(gcMouseHistoryOfMoves - 1 - i + Count) % Count];
+            if (pPos->x == Safeppt.x && pPos->y == Safeppt.y &&
+                (!Safeppt.time || Safeppt.time == pPos->time))
             {
-                _SEH2_TRY
-                {
-                    ProbeForWrite(lpptOut, cbSize, 1);
-                }
-                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                {
-                    SetLastNtError(_SEH2_GetExceptionCode());
-                    iRet = -1;
-                    _SEH2_YIELD(goto cleanup);
-                }
-                _SEH2_END;
+                break;
             }
-            iRet = nBufPoints;
-            break;
-        case GMMP_USE_HIGH_RESOLUTION_POINTS:
-            break;
-        default:
+        }
+
+        if (i == Count)
+        {
             EngSetLastError(ERROR_POINT_NOT_FOUND);
             iRet = -1;
+            goto cleanup;
+        }
+
+        _SEH2_TRY
+        {
+            if (nBufPoints)
+                ProbeForWrite(lpptOut, nBufPoints * sizeof(MOUSEMOVEPOINT), 1);
+            for (Copied = 0; Copied < nBufPoints && i < Count; Copied++, i++)
+            {
+                lpptOut[Copied] = gMouseHistoryOfMoves[(gcMouseHistoryOfMoves - 1 - i + Count) % Count];
+            }
+            iRet = Copied;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            SetLastNtError(_SEH2_GetExceptionCode());
+            iRet = -1;
+        }
+        _SEH2_END;
     }
 
 cleanup:

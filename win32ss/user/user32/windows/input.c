@@ -32,81 +32,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(user32);
 
-static RAWINPUTDEVICE *RegisteredRawInputDevices;
-static UINT RegisteredRawInputDeviceCount;
-
-static UINT
-FindRegisteredRawInputDevice(USHORT UsagePage, USHORT Usage)
-{
-    UINT i;
-
-    for (i = 0; i < RegisteredRawInputDeviceCount; ++i)
-    {
-        if (RegisteredRawInputDevices[i].usUsagePage == UsagePage &&
-            RegisteredRawInputDevices[i].usUsage == Usage)
-        {
-            return i;
-        }
-    }
-
-    return (UINT)-1;
-}
-
-static VOID
-RemoveRegisteredRawInputDevice(UINT Index)
-{
-    --RegisteredRawInputDeviceCount;
-    if (Index < RegisteredRawInputDeviceCount)
-    {
-        MoveMemory(&RegisteredRawInputDevices[Index],
-                   &RegisteredRawInputDevices[Index + 1],
-                   (RegisteredRawInputDeviceCount - Index) * sizeof(*RegisteredRawInputDevices));
-    }
-}
-
-static BOOL
-IsRawInputMouse(const RAWINPUTDEVICE *Device)
-{
-    return Device->usUsagePage == HID_USAGE_PAGE_GENERIC &&
-           Device->usUsage == HID_USAGE_GENERIC_MOUSE;
-}
-
-static BOOL
-IsRawInputKeyboard(const RAWINPUTDEVICE *Device)
-{
-    return Device->usUsagePage == HID_USAGE_PAGE_GENERIC &&
-           Device->usUsage == HID_USAGE_GENERIC_KEYBOARD;
-}
-
-static UINT
-CopyRegisteredRawInputDevices(RAWINPUTDEVICE *Devices)
-{
-    UINT i, Count = 0;
-
-    for (i = 0; i < RegisteredRawInputDeviceCount; ++i)
-    {
-        if (IsRawInputMouse(&RegisteredRawInputDevices[i]))
-            Devices[Count++] = RegisteredRawInputDevices[i];
-    }
-
-    for (i = 0; i < RegisteredRawInputDeviceCount; ++i)
-    {
-        if (!IsRawInputMouse(&RegisteredRawInputDevices[i]) &&
-            !IsRawInputKeyboard(&RegisteredRawInputDevices[i]))
-        {
-            Devices[Count++] = RegisteredRawInputDevices[i];
-        }
-    }
-
-    for (i = 0; i < RegisteredRawInputDeviceCount; ++i)
-    {
-        if (IsRawInputKeyboard(&RegisteredRawInputDevices[i]))
-            Devices[Count++] = RegisteredRawInputDevices[i];
-    }
-
-    return Count;
-}
-
 /*
  * @implemented
  */
@@ -118,40 +43,7 @@ GetRegisteredRawInputDevices(
     PUINT puiNumDevices,
     UINT cbSize)
 {
-    UINT Count;
-
-    if (!puiNumDevices || cbSize != sizeof(RAWINPUTDEVICE))
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return (UINT)-1;
-    }
-
-    Count = RegisteredRawInputDeviceCount;
-
-    if (!pRawInputDevices)
-    {
-        *puiNumDevices = Count;
-        return 0;
-    }
-
-    if (!*puiNumDevices)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return (UINT)-1;
-    }
-
-    if (*puiNumDevices < Count)
-    {
-        *puiNumDevices = Count;
-        SetLastError(ERROR_INSUFFICIENT_BUFFER);
-        return (UINT)-1;
-    }
-
-    if (Count)
-        CopyRegisteredRawInputDevices(pRawInputDevices);
-
-    *puiNumDevices = Count;
-    return Count;
+    return NtUserGetRegisteredRawInputDevices(pRawInputDevices, puiNumDevices, cbSize);
 }
 
 /*
@@ -165,83 +57,7 @@ RegisterRawInputDevices(
     UINT uiNumDevices,
     UINT cbSize)
 {
-    UINT i;
-
-    if (!pRawInputDevices || !uiNumDevices || cbSize != sizeof(RAWINPUTDEVICE))
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    for (i = 0; i < uiNumDevices; ++i)
-    {
-        const RAWINPUTDEVICE *Device = &pRawInputDevices[i];
-
-        if ((Device->dwFlags & RIDEV_REMOVE) && Device->hwndTarget)
-        {
-            SetLastError(ERROR_INVALID_PARAMETER);
-            return FALSE;
-        }
-
-        if ((Device->dwFlags & (RIDEV_INPUTSINK | RIDEV_EXINPUTSINK)) && !Device->hwndTarget)
-        {
-            SetLastError(ERROR_INVALID_PARAMETER);
-            return FALSE;
-        }
-    }
-
-    for (i = 0; i < uiNumDevices; ++i)
-    {
-        const RAWINPUTDEVICE *Device = &pRawInputDevices[i];
-        UINT Index = FindRegisteredRawInputDevice(Device->usUsagePage, Device->usUsage);
-
-        if (Device->dwFlags & RIDEV_REMOVE)
-        {
-            if (Index != (UINT)-1)
-                RemoveRegisteredRawInputDevice(Index);
-            continue;
-        }
-
-        if (Index != (UINT)-1)
-        {
-            RegisteredRawInputDevices[Index] = *Device;
-        }
-        else
-        {
-            RAWINPUTDEVICE *NewDevices;
-
-            if (RegisteredRawInputDevices)
-            {
-                NewDevices = HeapReAlloc(GetProcessHeap(),
-                                         HEAP_ZERO_MEMORY,
-                                         RegisteredRawInputDevices,
-                                         (RegisteredRawInputDeviceCount + 1) * sizeof(*RegisteredRawInputDevices));
-            }
-            else
-            {
-                NewDevices = HeapAlloc(GetProcessHeap(),
-                                       HEAP_ZERO_MEMORY,
-                                       sizeof(*RegisteredRawInputDevices));
-            }
-            if (!NewDevices)
-            {
-                SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-                return FALSE;
-            }
-
-            RegisteredRawInputDevices = NewDevices;
-            if (RegisteredRawInputDeviceCount)
-            {
-                MoveMemory(&RegisteredRawInputDevices[1],
-                           &RegisteredRawInputDevices[0],
-                           RegisteredRawInputDeviceCount * sizeof(*RegisteredRawInputDevices));
-            }
-            RegisteredRawInputDevices[0] = *Device;
-            ++RegisteredRawInputDeviceCount;
-        }
-    }
-
-    return TRUE;
+    return NtUserRegisterRawInputDevices(pRawInputDevices, uiNumDevices, cbSize);
 }
 
 typedef struct tagIMEHOTKEYENTRY
@@ -876,7 +692,7 @@ GetLastInputInfo(PLASTINPUTINFO plii)
         return FALSE;
     }
 
-    plii->dwTime = gpsi->dwLastRITEventTickCount;
+    plii->dwTime = (DWORD)UserGetServerInfo(dwLastRITEventTickCount, ROS_SERVERINFO_LASTRITEVENTTICKCOUNT);
     return TRUE;
 }
 
@@ -1120,11 +936,13 @@ MapVirtualKeyW(UINT uCode,
 DWORD WINAPI
 OemKeyScan(WORD wOemChar)
 {
+    CHAR chOem = (CHAR)LOBYTE(wOemChar);
     WCHAR p;
     SHORT Vk;
     UINT Scan;
 
-    MultiByteToWideChar(CP_OEMCP, 0, (PCSTR)&wOemChar, 1, &p, 1);
+    if (!OemToCharBuffW(&chOem, &p, 1) || (p == L'?' && (BYTE)chOem >= 0x80))
+        return -1;
     Vk = VkKeyScanW(p);
     Scan = MapVirtualKeyW((Vk & 0x00ff), 0);
     if (!Scan) return -1;
@@ -1355,8 +1173,7 @@ GetCurrentInputMessageSource(INPUT_MESSAGE_SOURCE *inputMessageSource)
         return FALSE;
     }
 
-    inputMessageSource->deviceType = IMDT_UNAVAILABLE;
-    inputMessageSource->originId = IMO_UNAVAILABLE;
+    *inputMessageSource = GetWin32ClientInfo()->MsgSource;
     return TRUE;
 }
 

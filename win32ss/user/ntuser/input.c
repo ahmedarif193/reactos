@@ -204,6 +204,8 @@ RawInputThreadMain(VOID)
             {
                 ++cMaxWaitObjects;
                 TRACE("Mouse connected!\n");
+                RawInputSetMouseAttributes(ghMouseDevice);
+                RawInputUpdateDevices();
             }
         }
         if (!ghKeyboardDevice)
@@ -216,6 +218,7 @@ RawInputThreadMain(VOID)
                 TRACE("Keyboard connected!\n");
                 // Get and load keyboard attributes.
                 UserInitKeyboard(ghKeyboardDevice);
+                RawInputUpdateDevices();
                 UserEnterExclusive();
                 // Register the Window hotkey.
                 UserRegisterHotKey(PWND_BOTTOM, IDHK_WINKEY, MOD_WIN, 0);
@@ -704,6 +707,7 @@ UserAttachThreadInput(PTHREADINFO ptiFrom, PTHREADINFO ptiTo, BOOL fAttach)
        ATM which one?
      */
     RtlCopyMemory(ptiTo->MessageQueue->afKeyState, gafAsyncKeyState, sizeof(gafAsyncKeyState));
+    RtlCopyMemory(ptiTo->MessageQueue->afKeyStateSync, gafAsyncKeyState, sizeof(gafAsyncKeyState));
 
     ptiTo->MessageQueue->msgDblClk.message = 0;
 

@@ -1248,6 +1248,9 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
             Msg.message = WM_KEYUP;
     }
 
+    if (!bPacket)
+        RawInputProcessKeyboard(wScanCode, wSimpleVk, dwFlags, Msg.message, dwExtraInfo, bInjected, dwTime);
+
     /* Update async state of not simplified vk here.
        See user32_apitest:GetKeyState */
     UpdateAsyncKeyState(wFixedVk, bIsDown);
@@ -1350,7 +1353,7 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
             if (bWasSimpleDown)
                 Msg.lParam |= KF_REPEAT << 16;
             if (!bIsDown)
-                Msg.lParam |= KF_UP << 16;
+                Msg.lParam |= (ULONG)KF_UP << 16;
             /* FIXME: Set KF_DLGMODE and KF_MENUMODE when needed */
             if (pFocusQueue->QF_flags & QF_DIALOGACTIVE)
                 Msg.lParam |= KF_DLGMODE << 16;
@@ -1367,7 +1370,11 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
         /* Post a keyboard message */
         TRACE("Posting keyboard msg %u wParam 0x%x lParam 0x%x\n", Msg.message, Msg.wParam, Msg.lParam);
         if (!Wnd) {ERR("Window is NULL\n");}
-        MsqPostMessage(pti, &Msg, TRUE, QS_KEY, 0, dwExtraInfo);
+        if (!RawInputIsNoLegacy(pti->ppi, RIM_TYPEKEYBOARD))
+        {
+            INPUT_MESSAGE_SOURCE KbdSource = { IMDT_KEYBOARD, bInjected ? IMO_INJECTED : IMO_HARDWARE };
+            MsqPostMessageEx(pti, &Msg, TRUE, QS_KEY, 0, dwExtraInfo, &KbdSource);
+        }
     }
     return TRUE;
 }
@@ -1664,9 +1671,7 @@ IntMapVirtualKeyEx(UINT uCode, UINT Type, PKBDTABLES pKbdTbl)
     {
         case MAPVK_VK_TO_VSC:
             uCode = IntFixVk(uCode, FALSE);
-            uRet = IntVkToVsc(uCode, pKbdTbl);
-            if (uRet > 0xFF) // Fail for scancodes with prefix (e0, e1)
-                uRet = 0;
+            uRet = IntVkToVsc(uCode, pKbdTbl) & 0xFF;
             break;
 
         case MAPVK_VSC_TO_VK:

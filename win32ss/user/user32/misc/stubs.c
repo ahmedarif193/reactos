@@ -228,8 +228,7 @@ GetRawInputDeviceInfoW(
     LPVOID pData,
     PUINT pcbSize)
 {
-  UNIMPLEMENTED;
-  return 0;
+    return NtUserGetRawInputDeviceInfo(hDevice, uiCommand, pData, pcbSize);
 }
 
 /*
@@ -260,8 +259,34 @@ GetRawInputDeviceInfoA(
     LPVOID pData,
     PUINT pcbSize)
 {
-  UNIMPLEMENTED;
-  return 0;
+    LPWSTR pszName = NULL;
+    UINT Ret, cchName;
+
+    if (uiCommand != RIDI_DEVICENAME)
+        return NtUserGetRawInputDeviceInfo(hDevice, uiCommand, pData, pcbSize);
+
+    if (!pcbSize)
+        return ~0U;
+
+    cchName = *pcbSize;
+    if (pData && cchName > 0)
+    {
+        pszName = HeapAlloc(GetProcessHeap(), 0, cchName * sizeof(WCHAR));
+        if (!pszName)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return ~0U;
+        }
+    }
+
+    Ret = NtUserGetRawInputDeviceInfo(hDevice, uiCommand, pszName, &cchName);
+    if (Ret && Ret != ~0U)
+        WideCharToMultiByte(CP_ACP, 0, pszName, -1, pData, *pcbSize, NULL, NULL);
+    *pcbSize = cchName;
+
+    if (pszName)
+        HeapFree(GetProcessHeap(), 0, pszName);
+    return Ret;
 }
 
 /*
@@ -287,7 +312,7 @@ DefRawInputProc(
 {
   if (cbSizeHeader == sizeof(RAWINPUTHEADER))
      return S_OK;
-  return 1;
+  return -1;
 }
 
 /*
@@ -301,8 +326,7 @@ GetRawInputBuffer(
     PUINT pcbSize,
     UINT cbSizeHeader)
 {
-  UNIMPLEMENTED;
-  return 0;
+    return NtUserGetRawInputBuffer(pData, pcbSize, cbSizeHeader);
 }
 
 /*
@@ -317,8 +341,7 @@ GetRawInputData(
     PUINT pcbSize,
     UINT cbSizeHeader)
 {
-  UNIMPLEMENTED;
-  return 0;
+    return NtUserGetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
 }
 
 /*
@@ -331,13 +354,7 @@ GetRawInputDeviceList(
     PUINT puiNumDevices,
     UINT cbSize)
 {
-    if(pRawInputDeviceList)
-        memset(pRawInputDeviceList, 0, sizeof *pRawInputDeviceList);
-    if(puiNumDevices)
-       *puiNumDevices = 0;
-
-    UNIMPLEMENTED;
-    return 0;
+    return NtUserGetRawInputDeviceList(pRawInputDeviceList, puiNumDevices, cbSize);
 }
 
 /*

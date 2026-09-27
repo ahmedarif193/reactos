@@ -13,6 +13,8 @@ typedef struct _USER_MESSAGE
   LONG_PTR ExtraInfo;
   DWORD dwQEvent;
   PTHREADINFO pti;
+  INPUT_MESSAGE_SOURCE Source;
+  PRAWINPUT RawInput;
 } USER_MESSAGE, *PUSER_MESSAGE;
 
 struct _USER_MESSAGE_QUEUE;
@@ -82,6 +84,7 @@ typedef struct _USER_MESSAGE_QUEUE
   /* State of each key */
   BYTE afKeyRecentDown[256 / 8]; // 1 bit per key
   BYTE afKeyState[256 * 2 / 8]; // 2 bits per key
+  BYTE afKeyStateSync[256 * 2 / 8];
 
   /* Showing cursor counter (value>=0 - cursor visible, value<0 - cursor hidden) */
   INT iCursorLevel;
@@ -136,6 +139,9 @@ NTSTATUS FASTCALL co_MsqSendMessage(PTHREADINFO ptirec,
 PUSER_MESSAGE FASTCALL MsqCreateMessage(LPMSG Msg);
 VOID FASTCALL MsqDestroyMessage(PUSER_MESSAGE Message);
 VOID FASTCALL MsqPostMessage(PTHREADINFO, MSG*, BOOLEAN, DWORD, DWORD, LONG_PTR);
+VOID FASTCALL MsqPostMessageEx(PTHREADINFO, MSG*, BOOLEAN, DWORD, DWORD, LONG_PTR, const INPUT_MESSAGE_SOURCE*);
+extern INPUT_MESSAGE_SOURCE gMouseInputSource;
+BOOL FASTCALL MsqPostRawInputMessage(PTHREADINFO, MSG*, PRAWINPUT, LONG_PTR, const INPUT_MESSAGE_SOURCE*);
 VOID FASTCALL MsqPostQuitMessage(PTHREADINFO pti, ULONG ExitCode);
 BOOLEAN APIENTRY
 MsqPeekMessage(IN PTHREADINFO pti,

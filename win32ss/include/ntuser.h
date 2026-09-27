@@ -345,7 +345,8 @@ typedef struct _CLIENTINFO
     UCHAR achDbcsCF[2];
     MSG msgDbcsCB;
     LPDWORD lpdwRegisteredClasses;
-    ULONG Win32ClientInfo3[26];
+    INPUT_MESSAGE_SOURCE MsgSource;
+    ULONG Win32ClientInfo3[24];
 /* It's just a pointer reference not to be used w the structure in user space. */
     struct _PROCESSINFO *ppi;
 } CLIENTINFO, *PCLIENTINFO;
@@ -400,7 +401,8 @@ typedef struct _CLIENTINFO32
     UCHAR achDbcsCF[2];
     CLIENTMSG32 msgDbcsCB;
     ULONG lpdwRegisteredClasses;
-    ULONG Win32ClientInfo3[26];
+    INPUT_MESSAGE_SOURCE MsgSource;
+    ULONG Win32ClientInfo3[24];
     ULONG ppi;
 } CLIENTINFO32, *PCLIENTINFO32;
 

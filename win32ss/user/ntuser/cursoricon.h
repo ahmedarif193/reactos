@@ -141,6 +141,7 @@ BOOL UserDrawIconEx(HDC hDc, INT xLeft, INT yTop, PCURICON_OBJECT pIcon, INT cxW
    INT cyHeight, UINT istepIfAniCur, HBRUSH hbrFlickerFreeDraw, UINT diFlags);
 PCURICON_OBJECT FASTCALL UserGetCurIconObject(HCURSOR hCurIcon);
 BOOL UserSetCursorPos( INT x, INT y, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook);
+VOID IntAddMouseMoveHistory(LONG x, LONG y, DWORD Time, ULONG_PTR ExtraInfo);
 BOOL APIENTRY UserClipCursor(RECTL *prcl);
 PSYSTEM_CURSORINFO IntGetSysCursorInfo(VOID);
 PCURICON_OBJECT IntSystemSetCursor(PCURICON_OBJECT);

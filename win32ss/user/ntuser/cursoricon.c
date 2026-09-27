@@ -507,6 +507,9 @@ BOOL UserSetCursorPos( INT x, INT y, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Ho
     if (y >= rcClip.bottom) y = rcClip.bottom - 1;
     if (y < rcClip.top)     y = rcClip.top;
 
+    if (!Hook)
+        IntAddMouseMoveHistory(x, y, EngGetTickCount32(), dwExtraInfo);
+
     if (!Hook && x == gpsi->ptCursor.x && y == gpsi->ptCursor.y)
         return TRUE;
 

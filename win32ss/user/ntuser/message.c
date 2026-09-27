@@ -1255,7 +1255,8 @@ co_IntPeekMessage( PMSG Msg,
 
         /* Now check for normal messages. */
         if (( (ProcessMask & QS_POSTMESSAGE) ||
-              (ProcessMask & QS_HOTKEY) ) &&
+              (ProcessMask & QS_HOTKEY) ||
+              (ProcessMask & QS_RAWINPUT) ) &&
             MsqPeekMessage( pti,
                             RemoveMessages,
                             Window,
@@ -1298,7 +1299,7 @@ co_IntPeekMessage( PMSG Msg,
                                        ProcessMask,
                                        Msg))
         {
-            goto GotMessage;
+            goto GotHardwareMessage;
         }
 
         /* Now check for System Event messages. */
@@ -1355,6 +1356,12 @@ co_IntPeekMessage( PMSG Msg,
     while (TRUE);
 
 GotMessage:
+    if (pti->pClientInfo)
+    {
+        pti->pClientInfo->MsgSource.deviceType = IMDT_UNAVAILABLE;
+        pti->pClientInfo->MsgSource.originId = IMO_UNAVAILABLE;
+    }
+GotHardwareMessage:
     /* Update the last message-queue access time */
     pti->pcti->timeLastRead = EngGetTickCount32();
     return TRUE;

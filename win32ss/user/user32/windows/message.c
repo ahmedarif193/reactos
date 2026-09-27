@@ -1985,6 +1985,30 @@ IntCallMessageProc(IN PWND Wnd, IN HWND hWnd, IN UINT Msg, IN WPARAM wParam, IN 
         return IntCallWindowProcA(IsAnsi, WndProc, Wnd, hWnd, Msg, wParam, lParam);
 }
 
+static LRESULT
+IntSendDirectMessageProc(IN PWND Wnd, IN HWND hWnd, IN UINT Msg, IN WPARAM wParam, IN LPARAM lParam, IN BOOL Ansi, IN WNDPROC Proc, IN BOOL IsAnsiProc)
+{
+    PCLIENTINFO ClientInfo = GetWin32ClientInfo();
+    INPUT_MESSAGE_SOURCE SavedSource = ClientInfo->MsgSource;
+    LRESULT Result;
+
+    ClientInfo->MsgSource.deviceType = IMDT_UNAVAILABLE;
+    ClientInfo->MsgSource.originId = IMO_UNAVAILABLE;
+    if (Proc)
+    {
+        if (Ansi)
+            Result = IntCallWindowProcA(IsAnsiProc, Proc, NULL, hWnd, Msg, wParam, lParam);
+        else
+            Result = IntCallWindowProcW(IsAnsiProc, Proc, NULL, hWnd, Msg, wParam, lParam);
+    }
+    else
+    {
+        Result = IntCallMessageProc(Wnd, hWnd, Msg, wParam, lParam, Ansi);
+    }
+    ClientInfo->MsgSource = SavedSource;
+    return Result;
+}
+
 
 /*
  * @implemented
@@ -2638,7 +2662,7 @@ SendMessageW(HWND Wnd,
       ROS_DIRECTSENDPROC Direct;
 
       if (NtUserCallHwndParam(Wnd, (DWORD_PTR)&Direct, HWNDPARAM_ROUTINE_ROS_GETDIRECTSENDPROC))
-          return IntCallWindowProcW(Direct.IsAnsi, (WNDPROC)(ULONG_PTR)Direct.Proc, NULL, Wnd, Msg, wParam, lParam);
+          return IntSendDirectMessageProc(NULL, Wnd, Msg, wParam, lParam, FALSE, (WNDPROC)(ULONG_PTR)Direct.Proc, Direct.IsAnsi);
 #endif
       Window = ValidateHwnd(Wnd);
 
@@ -2657,7 +2681,7 @@ SendMessageW(HWND Wnd,
                      Desktop, Switch, ScrollBar, Menu, IconTitle, or hWndMessage
            */
 
-          return IntCallMessageProc(Window, Wnd, Msg, wParam, lParam, FALSE);
+          return IntSendDirectMessageProc(Window, Wnd, Msg, wParam, lParam, FALSE, NULL, FALSE);
       }
   }
 
@@ -2705,7 +2729,7 @@ SendMessageA(HWND Wnd, UINT Msg, WPARAM wParam, LPARAM lParam)
       ROS_DIRECTSENDPROC Direct;
 
       if (NtUserCallHwndParam(Wnd, (DWORD_PTR)&Direct, HWNDPARAM_ROUTINE_ROS_GETDIRECTSENDPROC))
-          return IntCallWindowProcA(Direct.IsAnsi, (WNDPROC)(ULONG_PTR)Direct.Proc, NULL, Wnd, Msg, wParam, lParam);
+          return IntSendDirectMessageProc(NULL, Wnd, Msg, wParam, lParam, TRUE, (WNDPROC)(ULONG_PTR)Direct.Proc, Direct.IsAnsi);
 #endif
       Window = ValidateHwnd(Wnd);
 
@@ -2724,7 +2748,7 @@ SendMessageA(HWND Wnd, UINT Msg, WPARAM wParam, LPARAM lParam)
                      Desktop, Switch, ScrollBar, Menu, IconTitle, or hWndMessage
            */
 
-          return IntCallMessageProc(Window, Wnd, Msg, wParam, lParam, TRUE);
+          return IntSendDirectMessageProc(Window, Wnd, Msg, wParam, lParam, TRUE, NULL, FALSE);
       }
   }
 
@@ -3178,6 +3202,7 @@ BOOL WINAPI GetInputState(VOID)
 NTSTATUS WINAPI
 User32CallWindowProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
 {
+  INPUT_MESSAGE_SOURCE SavedSource;
   PWINDOWPROC_CALLBACK_ARGUMENTS CallbackArgs;
   MSG KMMsg, UMMsg;
   PWND pWnd = NULL;
@@ -3264,6 +3289,9 @@ User32CallWindowProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
   if (pci->CallbackWnd.hWnd == UMMsg.hwnd)
      pWnd = pci->CallbackWnd.pWnd;
 
+  SavedSource = GetWin32ClientInfo()->MsgSource;
+  GetWin32ClientInfo()->MsgSource.deviceType = IMDT_UNAVAILABLE;
+  GetWin32ClientInfo()->MsgSource.originId = IMO_UNAVAILABLE;
   if (IsTimerCallback)
   {
       _SEH2_TRY
@@ -3293,6 +3321,7 @@ User32CallWindowProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
                                                 UMMsg.wParam,
                                                 UMMsg.lParam);
   }
+  GetWin32ClientInfo()->MsgSource = SavedSource;
 
   if (! MsgiKMToUMReply(&KMMsg, &UMMsg, &CallbackArgs->Result))
     {

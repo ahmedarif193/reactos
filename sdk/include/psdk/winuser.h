@@ -1215,6 +1215,9 @@ extern "C" {
 #define MOUSEEVENTF_XDOWN       0x0080
 #define MOUSEEVENTF_XUP         0x0100
 #define MOUSEEVENTF_WHEEL       0x0800
+#if (_WIN32_WINNT >= 0x0600)
+#define MOUSEEVENTF_HWHEEL      0x1000
+#endif
 #define MOUSEEVENTF_VIRTUALDESK 0x4000
 #define MOUSEEVENTF_ABSOLUTE    0x8000
 #define PM_NOREMOVE 0
@@ -2982,6 +2985,9 @@ typedef enum tagHANDEDNESS
 #define RI_MOUSE_BUTTON_5_DOWN      0x0100
 #define RI_MOUSE_BUTTON_5_UP        0x0200
 #define RI_MOUSE_WHEEL              0x0400
+#if (WINVER >= 0x0600)
+#define RI_MOUSE_HWHEEL             0x0800
+#endif
 #define KEYBOARD_OVERRUN_MAKE_CODE 0xFF
 #define RI_KEY_MAKE            0x0000
 #define RI_KEY_BREAK           0x0001

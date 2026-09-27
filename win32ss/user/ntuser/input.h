@@ -82,6 +82,17 @@ VOID NTAPI UserProcessMouseInput(PMOUSE_INPUT_DATA pMouseInputData);
 BOOL NTAPI UserSendMouseInput(MOUSEINPUT *pMouseInput, BOOL bInjected);
 VOID NTAPI UserRecordMousePointerInput(const POINT *ppt, DWORD dwEventFlags, DWORD dwTime);
 
+/* Raw input */
+VOID NTAPI RawInputProcessKeyboard(WORD wScanCode, WORD wVk, DWORD dwFlags, UINT uMsg, ULONG_PTR dwExtraInfo, BOOL bInjected, DWORD dwTime);
+VOID NTAPI RawInputProcessMouseData(PMOUSE_INPUT_DATA pMouseInputData);
+VOID NTAPI RawInputProcessMouseInput(const MOUSEINPUT *pMouseInput);
+VOID NTAPI RawInputSetMouseAttributes(HANDLE hMouseDevice);
+VOID NTAPI RawInputUpdateDevices(VOID);
+BOOL FASTCALL RawInputIsNoLegacy(PPROCESSINFO ppi, DWORD dwType);
+VOID FASTCALL RawInputSetThreadData(PTHREADINFO pti, PUSER_MESSAGE Message, BOOL bRemove);
+VOID FASTCALL RawInputCleanupThread(PTHREADINFO pti);
+VOID FASTCALL RawInputCleanupProcess(PPROCESSINFO ppi);
+
 /* IMM */
 UINT FASTCALL IntImmProcessKey(
     _In_ PUSER_MESSAGE_QUEUE MessageQueue,

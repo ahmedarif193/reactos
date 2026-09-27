@@ -272,7 +272,7 @@ static const struct
     { AllocSysObject,           /*UserTimerCleanup*/NULL,   FreeSysObject },        /* TYPE_TIMER */
     { AllocInputContextObject,  UserDestroyInputContext,    UserFreeInputContext }, /* TYPE_INPUTCONTEXT */
     { NULL,                     NULL,                       NULL },                 /* TYPE_HIDDATA */
-    { NULL,                     NULL,                       NULL },                 /* TYPE_DEVICEINFO */
+    { AllocSysObject,           NULL,                       FreeSysObject },        /* TYPE_DEVICEINFO */
     { NULL,                     NULL,                       NULL },                 /* TYPE_TOUCHINPUTINFO */
     { NULL,                     NULL,                       NULL },                 /* TYPE_GESTUREINFOOBJ */
 };
