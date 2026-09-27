@@ -1049,7 +1049,13 @@ RealDefWindowProcA(HWND hWnd,
     LRESULT Result = 0;
     PWND Wnd;
 
+#ifdef WOW64_I386_RUNTIME
+    /* The 32-bit side cannot read the shared handle table, so the lookup is
+     * expected to fail here; the kernel fallback below reports bad handles. */
+    Wnd = ValidateHwndNoErr(hWnd);
+#else
     Wnd = ValidateHwnd(hWnd);
+#endif
 
 #ifdef WOW64_I386_RUNTIME
     if (!Wnd && Msg == WM_SETTEXT)
@@ -1291,7 +1297,13 @@ RealDefWindowProcW(HWND hWnd,
     LRESULT Result = 0;
     PWND Wnd;
 
+#ifdef WOW64_I386_RUNTIME
+    /* The 32-bit side cannot read the shared handle table, so the lookup is
+     * expected to fail here; the kernel fallback below reports bad handles. */
+    Wnd = ValidateHwndNoErr(hWnd);
+#else
     Wnd = ValidateHwnd(hWnd);
+#endif
 
 #ifdef WOW64_I386_RUNTIME
     if (!Wnd && Msg == WM_SETTEXT)
