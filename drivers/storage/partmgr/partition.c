@@ -931,9 +931,9 @@ PartitionHandleDeviceControl(
         {
             PMOUNTDEV_NAME name = Irp->AssociatedIrp.SystemBuffer;
 
-            if (!VerifyIrpOutBufferSize(Irp, sizeof(USHORT)))
+            if (!VerifyIrpOutBufferSize(Irp, sizeof(MOUNTDEV_NAME)))
             {
-                status = STATUS_BUFFER_TOO_SMALL;
+                status = STATUS_INVALID_PARAMETER;
                 break;
             }
 
@@ -961,9 +961,9 @@ PartitionHandleDeviceControl(
             PUNICODE_STRING InterfaceName;
 
             // Check whether the minimal header size was provided
-            if (!VerifyIrpOutBufferSize(Irp, headerSize))
+            if (!VerifyIrpOutBufferSize(Irp, sizeof(MOUNTDEV_UNIQUE_ID)))
             {
-                status = STATUS_BUFFER_TOO_SMALL;
+                status = STATUS_INVALID_PARAMETER;
                 break;
             }
 
@@ -1040,6 +1040,13 @@ PartitionHandleDeviceControl(
             break;
         }
         case IOCTL_MOUNTDEV_QUERY_SUGGESTED_LINK_NAME:
+        {
+            if (!VerifyIrpOutBufferSize(Irp, sizeof(MOUNTDEV_SUGGESTED_LINK_NAME)))
+                status = STATUS_INVALID_PARAMETER;
+            else
+                status = STATUS_NOT_FOUND;
+            break;
+        }
         case IOCTL_MOUNTDEV_LINK_CREATED:
         case IOCTL_MOUNTDEV_LINK_DELETED:
 #if (NTDDI_VERSION >= NTDDI_WS03)
