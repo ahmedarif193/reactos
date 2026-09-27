@@ -42,6 +42,9 @@
 #include "wine/debug.h"
 #include "wine/exception.h"
 #include "wine/list.h"
+#ifdef __REACTOS__
+#include "../../advapi32/reg/reg.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(reg);
 
@@ -470,6 +473,8 @@ static HKEY create_special_root_hkey( HKEY hkey, DWORD access )
 #ifdef __REACTOS__
         /* The native registry roots already exist and must only be opened. */
         if (open_key( &hkey, 0, &name, 0, access, FALSE )) return 0;
+        if (idx == HandleToUlong(HKEY_CLASSES_ROOT) - HandleToUlong(HKEY_SPECIAL_ROOT_FIRST))
+            MakeHKCRKey( &hkey );
 #else
         if (create_key( &hkey, 0, name, 0, access, NULL, NULL )) return 0;
 #endif
@@ -584,6 +589,10 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegCreateKeyExW( HKEY hkey, LPCWSTR name, DWORD
     if (!retkey) return ERROR_BADKEY;
     if (reserved) return ERROR_INVALID_PARAMETER;
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+        return CreateHKCRKey( hkey, name, reserved, class, options, access, sa, retkey, dispos );
+#endif
 
     RtlInitUnicodeString( &nameW, name );
     RtlInitUnicodeString( &classW, class );
@@ -640,6 +649,23 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegCreateKeyExA( HKEY hkey, LPCSTR name, DWORD 
     {
         if (!(status = RtlAnsiStringToUnicodeString( &classW, &classA, TRUE )))
         {
+#ifdef __REACTOS__
+            if (IsHKCRKey( hkey ))
+            {
+                UNICODE_STRING nameW;
+                LSTATUS ret;
+
+                if ((status = RtlAnsiStringToUnicodeString( &nameW, &nameA, TRUE )))
+                {
+                    RtlFreeUnicodeString( &classW );
+                    return RtlNtStatusToDosError( status );
+                }
+                ret = CreateHKCRKey( hkey, nameW.Buffer, reserved, classW.Buffer, options, access, sa, retkey, dispos );
+                RtlFreeUnicodeString( &nameW );
+                RtlFreeUnicodeString( &classW );
+                return ret;
+            }
+#endif
             status = create_key( retkey, hkey, NtCurrentTeb()->StaticUnicodeString, options, access, &classW, dispos );
             RtlFreeUnicodeString( &classW );
         }
@@ -657,6 +683,21 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegOpenKeyExW( HKEY hkey, LPCWSTR name, DWORD o
 {
     UNICODE_STRING nameW;
 
+#ifdef __REACTOS__
+    if ((ULONG_PTR)name & 1)
+    {
+        SIZE_T size = (lstrlenW( name ) + 1) * sizeof(WCHAR);
+        WCHAR *aligned;
+        LSTATUS ret;
+
+        if (!(aligned = HeapAlloc( GetProcessHeap(), 0, size ))) return ERROR_NOT_ENOUGH_MEMORY;
+        memcpy( aligned, name, size );
+        ret = RegOpenKeyExW( hkey, aligned, options, access, retkey );
+        HeapFree( GetProcessHeap(), 0, aligned );
+        return ret;
+    }
+#endif
+
     if (retkey && (!name || !name[0]) &&
         (HandleToUlong(hkey) >= HandleToUlong(HKEY_SPECIAL_ROOT_FIRST)) &&
         (HandleToUlong(hkey) <= HandleToUlong(HKEY_SPECIAL_ROOT_LAST)))
@@ -671,6 +712,10 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegOpenKeyExW( HKEY hkey, LPCWSTR name, DWORD o
     if (!retkey) return ERROR_INVALID_PARAMETER;
     *retkey = NULL;
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+        return OpenHKCRKey( hkey, name, options, access, retkey );
+#endif
 
     RtlInitUnicodeString( &nameW, name );
     return RtlNtStatusToDosError( open_key( retkey, hkey, &nameW, options, access, FALSE ) );
@@ -720,6 +765,21 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegOpenKeyExA( HKEY hkey, LPCSTR name, DWORD op
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
 
     RtlInitAnsiString( &nameA, name );
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+    {
+        UNICODE_STRING nameW;
+        LSTATUS ret;
+
+        if (!retkey) return ERROR_INVALID_PARAMETER;
+        *retkey = NULL;
+        if ((status = RtlAnsiStringToUnicodeString( &nameW, &nameA, TRUE )))
+            return RtlNtStatusToDosError( status );
+        ret = OpenHKCRKey( hkey, name ? nameW.Buffer : NULL, options, access, retkey );
+        RtlFreeUnicodeString( &nameW );
+        return ret;
+    }
+#endif
     if (!(status = RtlAnsiStringToUnicodeString( &NtCurrentTeb()->StaticUnicodeString,
                                                  &nameA, FALSE )))
     {
@@ -823,6 +883,10 @@ LSTATUS WINAPI RegEnumKeyExW( HKEY hkey, DWORD index, LPWSTR name, LPDWORD name_
 
     if (reserved) return ERROR_INVALID_PARAMETER;
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+        return EnumHKCRKey( hkey, index, name, name_len, reserved, class, class_len, ft );
+#endif
 
     status = NtEnumerateKey( hkey, index, KeyNodeInformation,
                              buffer, sizeof(buffer), &total_size );
@@ -981,6 +1045,12 @@ LSTATUS WINAPI RegQueryInfoKeyW( HKEY hkey, LPWSTR class, LPDWORD class_len, LPD
 
     if (class && !class_len && is_version_nt()) return ERROR_INVALID_PARAMETER;
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+        return QueryInfoHKCRKey( hkey, class, class_len, reserved, subkeys, max_subkey, max_class,
+                                 values, max_value, max_data, security, modif );
+    if (security) *security = 0;
+#endif
 
     status = NtQueryKey( hkey, KeyFullInformation, buffer, sizeof(buffer), &total_size );
     if (status && status != STATUS_BUFFER_OVERFLOW) goto done;
@@ -1022,8 +1092,14 @@ LSTATUS WINAPI RegQueryInfoKeyW( HKEY hkey, LPWSTR class, LPDWORD class_len, LPD
 
     if (security)
     {
+#ifdef __REACTOS__
+        if (NtQuerySecurityObject( hkey, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                                   DACL_SECURITY_INFORMATION, NULL, 0, security ) != STATUS_BUFFER_TOO_SMALL)
+            *security = 0;
+#else
         FIXME( "security argument not supported.\n");
         *security = 0;
+#endif
     }
 
  done:
@@ -1071,6 +1147,9 @@ LSTATUS WINAPI RegQueryInfoKeyA( HKEY hkey, LPSTR class, LPDWORD class_len, LPDW
 
     if (class && !class_len && is_version_nt()) return ERROR_INVALID_PARAMETER;
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifdef __REACTOS__
+    if (security) *security = 0;
+#endif
 
     status = NtQueryKey( hkey, KeyFullInformation, buffer, sizeof(buffer), &total_size );
     if (status && status != STATUS_BUFFER_OVERFLOW) goto done;
@@ -1117,8 +1196,14 @@ LSTATUS WINAPI RegQueryInfoKeyA( HKEY hkey, LPSTR class, LPDWORD class_len, LPDW
 
     if (security)
     {
+#ifdef __REACTOS__
+        if (NtQuerySecurityObject( hkey, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                                   DACL_SECURITY_INFORMATION, NULL, 0, security ) != STATUS_BUFFER_TOO_SMALL)
+            *security = 0;
+#else
         FIXME( "security argument not supported.\n");
         *security = 0;
+#endif
     }
 
  done:
@@ -1235,6 +1320,10 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegSetValueExW( HKEY hkey, LPCWSTR name, DWORD 
             count += sizeof(WCHAR);
     }
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+        return SetHKCRValue( hkey, name, reserved, type, data, count );
+#endif
 
     RtlInitUnicodeString( &nameW, name );
     return RtlNtStatusToDosError( NtSetValueKey( hkey, &nameW, 0, type, data, count ) );
@@ -1665,6 +1754,10 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegQueryValueExW( HKEY hkey, LPCWSTR name, LPDW
         return query_perf_data( name, type, data, count, TRUE );
 
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+        return QueryHKCRValue( hkey, name, reserved, type, data, count );
+#endif
 
     RtlInitUnicodeString( &name_str, name );
 
@@ -1711,6 +1804,9 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegQueryValueExW( HKEY hkey, LPCWSTR name, LPDW
     if (count) *count = total_size - info_size;
 
  done:
+#ifdef __REACTOS__
+    if (status && status != STATUS_BUFFER_OVERFLOW && type) *type = REG_NONE;
+#endif
     if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     return RtlNtStatusToDosError(status);
 }
@@ -2168,6 +2264,10 @@ LSTATUS WINAPI RegEnumValueW( HKEY hkey, DWORD index, LPWSTR value, LPDWORD val_
     if ((data && !count) || reserved || !value || !val_count)
         return ERROR_INVALID_PARAMETER;
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+        return EnumHKCRValue( hkey, index, value, val_count, reserved, type, data, count );
+#endif
 
     total_size = info_size + (MAX_PATH + 1) * sizeof(WCHAR);
     if (data) total_size += *count;
@@ -2372,6 +2472,11 @@ LONG WINAPI RegDeleteKeyValueW( HKEY hkey, LPCWSTR subkey, LPCWSTR name )
     }
 
     RtlInitUnicodeString( &nameW, name );
+#ifdef __REACTOS__
+    if (IsHKCRKey( hkey ))
+        ret = DeleteHKCRValue( hkey, &nameW );
+    else
+#endif
     ret = RtlNtStatusToDosError( NtDeleteValueKey( hkey, &nameW ) );
     if (hsubkey) RegCloseKey( hsubkey );
     return ret;

@@ -60,14 +60,21 @@ add_custom_target(advapi32_rpc_headers DEPENDS
     ${CMAKE_CURRENT_BINARY_DIR}/svcctl_c.h
     ${CMAKE_CURRENT_BINARY_DIR}/winreg_c.h)
 
+add_library(win32_registry_hkcr STATIC
+    reg/hkcr.c
+)
+
+add_dependencies(win32_registry_hkcr advapi32_rpc_headers)
+target_link_libraries(win32_registry_hkcr ${PSEH_LIB})
+target_compile_definitions(win32_registry_hkcr PRIVATE _KERNEL32_ UNICODE _UNICODE)
+
 # This static library is for kernelbase and vista APIs in kernel32
 add_library(win32_registry STATIC
-    reg/hkcr.c
     reg/reg.c
 )
 
 add_dependencies(win32_registry advapi32_rpc_headers)
-target_link_libraries(win32_registry ${PSEH_LIB})
+target_link_libraries(win32_registry win32_registry_hkcr ${PSEH_LIB})
 target_compile_definitions(win32_registry PRIVATE _KERNEL32_ UNICODE _UNICODE)
 
 add_library(advapi32 MODULE
