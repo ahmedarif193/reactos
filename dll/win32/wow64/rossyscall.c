@@ -872,9 +872,9 @@ NTSTATUS WINAPI wow64_NtCreateProfile( UINT *args )
     HANDLE handle = 0;
     NTSTATUS status;
 
-    status = NtCreateProfile( &handle, process, base, size, bucket, buffer, buffer_size,
+    status = NtCreateProfile( handle_ptr ? &handle : NULL, process, base, size, bucket, buffer, buffer_size,
                               source, affinity );
-    put_handle( handle_ptr, handle );
+    if (NT_SUCCESS(status)) put_handle( handle_ptr, handle );
     return status;
 }
 
