@@ -1163,6 +1163,13 @@ GpStatus WINGDIPAPI GdipBitmapLockBits(GpBitmap* bitmap, GDIPCONST GpRect* rect,
         return Ok;
     }
 
+    if (format != bitmap->format &&
+        (bitmap->format == PixelFormat16bppGrayScale || bitmap->format == PixelFormat32bppCMYK))
+    {
+        image_unlock(&bitmap->image);
+        return InvalidParameter;
+    }
+
     /* Make sure we can convert to the requested format. */
     if (flags & ImageLockModeRead)
     {
@@ -1455,7 +1462,7 @@ GpStatus WINGDIPAPI GdipCreateBitmapFromFile(GDIPCONST WCHAR* filename,
     stat = GdipCreateStreamOnFile(filename, GENERIC_READ, &stream);
 
     if(stat != Ok)
-        return stat;
+        return InvalidParameter;
 
     stat = GdipCreateBitmapFromStream(stream, bitmap);
 
@@ -1593,6 +1600,8 @@ GpStatus WINGDIPAPI GdipCreateHBITMAPFromBitmap(GpBitmap* bitmap,
     TRACE("(%p,%p,%lx)\n", bitmap, hbmReturn, background);
 
     if (!bitmap || !hbmReturn) return InvalidParameter;
+    if (bitmap->format == PixelFormat16bppGrayScale || bitmap->format == PixelFormat32bppCMYK)
+        return InvalidParameter;
     if (!image_lock(&bitmap->image)) return ObjectBusy;
 
     GdipGetImageWidth(&bitmap->image, &width);
@@ -2253,6 +2262,8 @@ GpStatus WINGDIPAPI GdipGetImageGraphicsContext(GpImage *image,
 
     if (image->type == ImageTypeMetafile)
         stat = METAFILE_GetGraphicsContext((GpMetafile*)image, graphics);
+    else if (image->type == ImageTypeBitmap && ((GpBitmap*)image)->format == PixelFormat16bppGrayScale)
+        stat = OutOfMemory;
     else
         stat = graphics_from_image(image, graphics);
 
@@ -2994,7 +3005,7 @@ GpStatus WINGDIPAPI GdipLoadImageFromFile(GDIPCONST WCHAR* filename,
     stat = GdipCreateStreamOnFile(filename, GENERIC_READ, &stream);
 
     if (stat != Ok)
-        return stat;
+        return OutOfMemory;
 
     stat = GdipLoadImageFromStream(stream, image);
 
@@ -4756,6 +4767,9 @@ static GpStatus encode_frame_wic(IWICBitmapEncoder *encoder, GpImage *image)
 
     bitmap = (GpBitmap*)image;
 
+    if (bitmap->format == PixelFormat16bppGrayScale)
+        return GenericError;
+
     GdipGetImageWidth(image, &width);
     GdipGetImageHeight(image, &height);
 
@@ -5905,6 +5919,11 @@ GpStatus WINGDIPAPI GdipGetImageThumbnail(GpImage *image, UINT width, UINT heigh
 
     if (!image || !ret_image)
         return InvalidParameter;
+
+    if (image->type == ImageTypeBitmap &&
+        (((GpBitmap *)image)->format == PixelFormat16bppGrayScale ||
+         ((GpBitmap *)image)->format == PixelFormat32bppCMYK))
+        return OutOfMemory;
 
     if (!width) width = 120;
     if (!height) height = 120;
