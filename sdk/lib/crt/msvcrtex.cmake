@@ -28,6 +28,8 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     list(APPEND MSVCRTEX_SOURCE
         math/round.c
         math/roundf.c
+        math/trunc.c
+        math/truncf.c
         )
 endif()
 
