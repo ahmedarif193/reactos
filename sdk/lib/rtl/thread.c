@@ -241,6 +241,21 @@ RtlpCreateUserStack(IN HANDLE ProcessHandle,
     }
     else
     {
+        SECTION_IMAGE_INFORMATION ImageInformation;
+
+        if ((StackReserve == 0 || StackCommit == 0) &&
+            NT_SUCCESS(ZwQueryInformationProcess(ProcessHandle,
+                                                 ProcessImageInformation,
+                                                 &ImageInformation,
+                                                 sizeof(ImageInformation),
+                                                 NULL)))
+        {
+            if (StackReserve == 0)
+                StackReserve = ImageInformation.MaximumStackSize;
+            if (StackCommit == 0)
+                StackCommit = ImageInformation.CommittedStackSize;
+        }
+
         /* Use the System Settings if needed */
         if (StackReserve == 0)
             StackReserve = SystemBasicInfo.AllocationGranularity;
