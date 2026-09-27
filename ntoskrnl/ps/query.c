@@ -1788,7 +1788,23 @@ NtQueryInformationProcess(
             if (!NT_SUCCESS(Status))
                 break;
 
-            Information.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+            _SEH2_TRY
+            {
+                Information.Version = ((PROCESS_POWER_THROTTLING_STATE *)ProcessInformation)->Version;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            if (NT_SUCCESS(Status) && Information.Version != PROCESS_POWER_THROTTLING_CURRENT_VERSION)
+                Status = STATUS_INVALID_PARAMETER;
+            if (!NT_SUCCESS(Status))
+            {
+                ObDereferenceObject(Process);
+                break;
+            }
+
             Information.ControlMask = 0;
             Information.StateMask = 0;
             {
