@@ -366,6 +366,87 @@ static int get_dib_image_size( int width, int height, int depth )
     return (((width * depth + 31) / 8) & ~3) * abs( height );
 }
 
+static int bitmap_info_size( const BITMAPINFO * info, WORD coloruse );
+
+static BOOL
+IntStretchDIBitsShrink(
+    _In_ HDC hdc,
+    _In_ INT cxDest,
+    _In_ INT cyDest,
+    _In_ INT cxSrc,
+    _In_ INT cySrc,
+    _In_ const VOID *pvBits,
+    _In_ const BITMAPINFO *pbmi)
+{
+    const BITMAPINFOHEADER *pbih = &pbmi->bmiHeader;
+    BITMAPINFO *pbmiDest;
+    const BYTE *pSrc = pvBits;
+    BYTE *pDest;
+    UINT cbInfo, bpp, cbSrcStride, cbDestStride;
+    BOOL bBottomUp, bRet;
+    INT x, y, sx, sy, srow, drow;
+
+    if (pbih->biSize < sizeof(BITMAPINFOHEADER) ||
+        (pbih->biCompression != BI_RGB && pbih->biCompression != BI_BITFIELDS) ||
+        pbih->biBitCount < 4 ||
+        cxDest <= 0 || cyDest <= 0 || cxSrc <= 0 || cySrc <= 0 ||
+        (cxDest >= cxSrc && cyDest >= cySrc))
+    {
+        return StretchDIBits(hdc, 0, 0, cxDest, cyDest, 0, 0, cxSrc, cySrc,
+                             pvBits, pbmi, DIB_RGB_COLORS, SRCCOPY) != 0;
+    }
+
+    bpp = pbih->biBitCount;
+    bBottomUp = pbih->biHeight > 0;
+    cbSrcStride = ((cxSrc * bpp + 31) / 32) * 4;
+    cbDestStride = ((cxDest * bpp + 31) / 32) * 4;
+
+    cbInfo = bitmap_info_size(pbmi, DIB_RGB_COLORS);
+    pbmiDest = HeapAlloc(GetProcessHeap(), 0, cbInfo);
+    pDest = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, cbDestStride * cyDest);
+    if (!pbmiDest || !pDest)
+    {
+        HeapFree(GetProcessHeap(), 0, pbmiDest);
+        HeapFree(GetProcessHeap(), 0, pDest);
+        return FALSE;
+    }
+
+    CopyMemory(pbmiDest, pbmi, cbInfo);
+    pbmiDest->bmiHeader.biWidth = cxDest;
+    pbmiDest->bmiHeader.biHeight = bBottomUp ? cyDest : -cyDest;
+    pbmiDest->bmiHeader.biSizeImage = cbDestStride * cyDest;
+
+    for (y = 0; y < cyDest; y++)
+    {
+        sy = (INT)(((2LL * y + 1) * cySrc) / (2LL * cyDest));
+        srow = bBottomUp ? cySrc - 1 - sy : sy;
+        drow = bBottomUp ? cyDest - 1 - y : y;
+        for (x = 0; x < cxDest; x++)
+        {
+            const BYTE *ps = pSrc + (SIZE_T)srow * cbSrcStride;
+            BYTE *pd = pDest + (SIZE_T)drow * cbDestStride;
+
+            sx = (INT)(((2LL * x + 1) * cxSrc) / (2LL * cxDest));
+            if (bpp == 4)
+            {
+                BYTE nibble = (ps[sx / 2] >> ((sx & 1) ? 0 : 4)) & 0x0f;
+                pd[x / 2] |= (x & 1) ? nibble : (BYTE)(nibble << 4);
+            }
+            else
+            {
+                CopyMemory(pd + x * (bpp / 8), ps + sx * (bpp / 8), bpp / 8);
+            }
+        }
+    }
+
+    bRet = StretchDIBits(hdc, 0, 0, cxDest, cyDest, 0, 0, cxDest, cyDest,
+                         pDest, pbmiDest, DIB_RGB_COLORS, SRCCOPY) != 0;
+
+    HeapFree(GetProcessHeap(), 0, pDest);
+    HeapFree(GetProcessHeap(), 0, pbmiDest);
+    return bRet;
+}
+
 static BOOL is_dib_monochrome( const BITMAPINFO* info )
 {
     if (info->bmiHeader.biSize == sizeof(BITMAPCOREHEADER))
@@ -751,7 +832,7 @@ get_best_icon_file_entry(
 {
     CURSORICONDIR* fakeDir;
     CURSORICONDIRENTRY* fakeEntry;
-    WORD i;
+    WORD i, cValid = 0;
     const CURSORICONFILEDIRENTRY* entry;
 
     /* Check our file is what it claims to be */
@@ -774,19 +855,17 @@ get_best_icon_file_entry(
     }
     fakeDir->idReserved = 0;
     fakeDir->idType = dir->idType;
-    fakeDir->idCount = dir->idCount;
     for(i = 0; i<dir->idCount; i++)
     {
-        fakeEntry = &fakeDir->idEntries[i];
         entry = &dir->idEntries[i];
         /* Take this as an occasion to perform a size check */
-        if ((entry->dwDIBOffset > dwFileSize)
-                || ((entry->dwDIBOffset + entry->dwDIBSize) > dwFileSize))
+        if ((dwFileSize < FIELD_OFFSET(BITMAPINFOHEADER, biCompression))
+                || (entry->dwDIBOffset > dwFileSize - FIELD_OFFSET(BITMAPINFOHEADER, biCompression))
+                || (entry->dwDIBSize > dwFileSize - entry->dwDIBOffset))
         {
-            ERR("Corrupted icon file?.\n");
-            HeapFree(GetProcessHeap(), 0, fakeDir);
-            return NULL;
+            continue;
         }
+        fakeEntry = &fakeDir->idEntries[cValid++];
         /* File icon/cursors are not like resource ones */
         if(bIcon)
         {
@@ -809,6 +888,13 @@ get_best_icon_file_entry(
             fakeEntry->wBitCount = ((BITMAPINFOHEADER *)((char *)dir + entry->dwDIBOffset))->biBitCount;
         fakeEntry->dwBytesInRes = entry->dwDIBSize;
         fakeEntry->wResId = i + 1;
+    }
+
+    fakeDir->idCount = cValid;
+    if (!cValid)
+    {
+        HeapFree(GetProcessHeap(), 0, fakeDir);
+        return NULL;
     }
 
     /* Now call LookupIconIdFromResourceEx */
@@ -1014,14 +1100,21 @@ static BOOL CURSORICON_GetCursorDataFromIconInfo(
     BITMAP bm;
 
     ZeroMemory(pCursorData, sizeof(*pCursorData));
+    if (!pIconInfo->hbmMask)
+        return FALSE;
     if(pIconInfo->hbmColor)
     {
         /* We must convert the color bitmap to screen format */
         HDC hdcScreen, hdcMem;
         HBITMAP hbmpPrev;
 
+        BITMAP bmColor;
+
         /* The mask dictates its dimensions */
         if (!GetObject(pIconInfo->hbmMask, sizeof(bm), &bm))
+            return FALSE;
+        if (!GetObject(pIconInfo->hbmColor, sizeof(bmColor), &bmColor) ||
+            bmColor.bmWidth < bm.bmWidth || bmColor.bmHeight < bm.bmHeight)
             return FALSE;
         hdcScreen = CreateDCW(DISPLAYW, NULL, NULL, NULL);
         if(!hdcScreen)
@@ -1678,9 +1771,8 @@ create_bitmap:
     hbmpOld = SelectObject(hdc, hbmpRet);
     if(!hbmpOld)
         goto end;
-    if(!StretchDIBits(hdc, 0, 0, cxDesired, cyDesired,
-                           0, 0, width, height,
-                           pvBits, pbmiCopy, DIB_RGB_COLORS, SRCCOPY))
+    if(!IntStretchDIBitsShrink(hdc, cxDesired, cyDesired, width, abs(height),
+                               pvBits, pbmiCopy))
     {
         ERR("StretchDIBits failed!.\n");
         SelectObject(hdc, hbmpOld);
@@ -2244,9 +2336,9 @@ BITMAP_CopyImage(
 
                 /* Copy it to the destination bitmap */
                 oldBmp = SelectObject(dc, res);
-                StretchDIBits(dc, 0, 0, desiredx, desiredy,
-                              0, 0, ds.dsBm.bmWidth, ds.dsBm.bmHeight,
-                              bits, bi, DIB_RGB_COLORS, SRCCOPY);
+                IntStretchDIBitsShrink(dc, desiredx, desiredy,
+                                       ds.dsBm.bmWidth, ds.dsBm.bmHeight,
+                                       bits, bi);
                 SelectObject(dc, oldBmp);
 
                 HeapFree(GetProcessHeap(), 0, bits);
@@ -2510,14 +2602,10 @@ CURSORICON_CopyImage(
         yHotspot = MulDiv(yHotspot, cyDesired, height);
     }
 
-    /* This is CreateIconIndirect with the LR_SHARED coat added */
     if  (!CURSORICON_GetCursorDataFromIconInfo(&CursorData, &ii))
         goto Leave;
     CursorData.xHotspot = xHotspot;
     CursorData.yHotspot = yHotspot;
-
-    if (fuFlags & LR_SHARED)
-        CursorData.CURSORF_flags |= CURSORF_LRSHARED;
 
     ret = NtUserxCreateEmptyCurObject(FALSE);
     if (!ret)
@@ -2566,7 +2654,7 @@ User32CallCopyImageFromKernel(PVOID Arguments, ULONG ArgumentLength)
 #define COPYIMAGE_VALID_FLAGS ( \
     LR_SHARED | LR_COPYFROMRESOURCE | LR_CREATEDIBSECTION | LR_LOADMAP3DCOLORS | 0x800 | \
     LR_VGACOLOR | LR_LOADREALSIZE | LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADFROMFILE | \
-    LR_COPYDELETEORG | LR_COPYRETURNORG | LR_COLOR | LR_MONOCHROME \
+    LR_COPYDELETEORG | LR_COPYRETURNORG | LR_COLOR | LR_MONOCHROME | 0x10000 \
 )
 
 HANDLE WINAPI CopyImage(
@@ -2821,8 +2909,17 @@ HANDLE WINAPI LoadImageW(
   _In_      UINT fuLoad
 )
 {
+    WCHAR szPath[MAX_PATH];
+
     TRACE("hinst 0x%p, name %s, uType 0x%08x, cxDesired %d, cyDesired %d, fuLoad 0x%08x.\n",
         hinst, debugstr_w(lpszName), uType, cxDesired, cyDesired, fuLoad);
+
+    if ((fuLoad & LR_LOADFROMFILE) && !IS_INTRESOURCE(lpszName) &&
+        SearchPathW(NULL, lpszName, NULL, ARRAYSIZE(szPath), szPath, NULL))
+    {
+        lpszName = szPath;
+    }
+
     /* Redirect to each implementation */
     switch(uType)
     {

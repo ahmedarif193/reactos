@@ -1117,6 +1117,7 @@ NtUserDestroyCursor(
         if (CurIcon->CURSORF_flags & CURSORF_CURRENT)
         {
             WARN("Trying to delete current cursor!\n");
+            IntDestroyCurIconObject(CurIcon);
             ret = FALSE;
             goto leave;
         }

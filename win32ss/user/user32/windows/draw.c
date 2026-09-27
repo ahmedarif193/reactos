@@ -1196,7 +1196,7 @@ static BOOL PAINTING_DrawStateJam(HDC hdc, UINT opcode,
                 return DrawTextA(hdc, (LPSTR)lp, (INT)wp, rc, dtflags);
 
         case DST_ICON:
-            return DrawIconEx(hdc, rc->left, rc->top, (HICON)lp, cx, cy, 0, NULL, DI_NORMAL);
+            return DrawIconEx(hdc, rc->left, rc->top, (HICON)lp, 0, 0, 0, NULL, DI_NORMAL);
 
         case DST_BITMAP:
             memdc = CreateCompatibleDC(hdc);
