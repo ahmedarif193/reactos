@@ -1965,6 +1965,13 @@ DWORD
 NTAPI
 NtUserCountClipboardFormats(VOID);
 
+BOOL
+NTAPI
+NtUserGetUpdatedClipboardFormats(
+    _Out_writes_opt_(cFormats) PUINT lpuiFormats,
+    _In_ UINT cFormats,
+    _Out_ PUINT pcFormatsOut);
+
 HACCEL
 NTAPI
 NtUserCreateAcceleratorTable(

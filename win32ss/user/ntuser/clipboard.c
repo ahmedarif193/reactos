@@ -852,6 +852,57 @@ cleanup:
     return cFormats;
 }
 
+BOOL APIENTRY
+NtUserGetUpdatedClipboardFormats(
+    _Out_writes_opt_(cFormats) PUINT lpuiFormats,
+    _In_ UINT cFormats,
+    _Out_ PUINT pcFormatsOut)
+{
+    PWINSTATION_OBJECT pWinStaObj;
+    BOOL bRet = FALSE;
+    UINT cAvailable, i;
+
+    UserEnterShared();
+
+    pWinStaObj = IntGetWinStaForCbAccess();
+    if (!pWinStaObj)
+        goto cleanup;
+
+    cAvailable = pWinStaObj->cNumClipFormats;
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(pcFormatsOut, sizeof(UINT), sizeof(UINT));
+        *pcFormatsOut = cAvailable;
+
+        if (cAvailable > cFormats)
+        {
+            EngSetLastError(ERROR_INSUFFICIENT_BUFFER);
+        }
+        else
+        {
+            if (cAvailable)
+                ProbeForWrite(lpuiFormats, cAvailable * sizeof(UINT), sizeof(UINT));
+            for (i = 0; i < cAvailable; ++i)
+                lpuiFormats[i] = pWinStaObj->pClipBase[i].fmt;
+            bRet = TRUE;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        SetLastNtError(_SEH2_GetExceptionCode());
+        bRet = FALSE;
+    }
+    _SEH2_END;
+
+    ObDereferenceObject(pWinStaObj);
+
+cleanup:
+    UserLeave();
+
+    return bRet;
+}
+
 BOOL NTAPI
 UserEmptyClipboard(VOID)
 {

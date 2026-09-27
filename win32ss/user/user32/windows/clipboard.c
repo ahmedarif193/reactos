@@ -647,15 +647,3 @@ RemoveClipboardFormatListener(HWND hwnd)
     return NtUserRemoveClipboardFormatListener(hwnd);
 }
 
-/*
- * @unimplemented
- */
-BOOL
-WINAPI
-GetUpdatedClipboardFormats(PUINT lpuiFormats,
-                           UINT cFormats,
-                           PUINT pcFormatsOut)
-{
-    UNIMPLEMENTED;
-    return FALSE;
-}

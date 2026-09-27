@@ -491,6 +491,7 @@
 @ stdcall NtUserGetTitleBarInfo(ptr ptr)
 @ stdcall NtUserGetUpdateRect(ptr ptr long)
 @ stdcall NtUserGetUpdateRgn(ptr ptr long)
+@ stdcall NtUserGetUpdatedClipboardFormats(ptr long ptr)
 @ stdcall NtUserGetWindowDC(ptr)
 @ stdcall NtUserGetWindowDpiAwarenessContext(ptr)
 @ stdcall NtUserGetWindowPlacement(ptr ptr)
