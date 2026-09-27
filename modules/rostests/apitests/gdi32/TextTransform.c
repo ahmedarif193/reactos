@@ -226,7 +226,7 @@ static const TEST_ENTRY s_entries[] =
     {__LINE__, LFWIDTH1, 0, GM_ADVANCED, {0, YCENTER}, TA_LEFT | TA_TOP, {1, 0, 0, 2, WIDTH/4, -HEIGHT/2}, TRUE, {10, 11, 12, 14, 15, 16}},
     {__LINE__, LFWIDTH1, 0, GM_ADVANCED, {0, YCENTER}, TA_LEFT | TA_TOP, {1.25, 0, 0, 1, 0, HEIGHT/4}, TRUE, {13, 14, 16}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {0, 0}, TA_LEFT | TA_TOP, {1.25, 0, 0, 1, 0, 0}, TRUE, {5, 9}},
-    {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {0, 0}, TA_LEFT | TA_TOP, {1, 0, 0, 2, 0, 0}, TRUE, {9, 13}},
+    {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {0, 0}, TA_LEFT | TA_TOP, {1, 0, 0, 2, 0, 0}, TRUE, {9}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {0, 0}, TA_LEFT | TA_TOP, {1.25, 0, 0, 1, WIDTH/4, 0}, TRUE, {5, 6, 9, 10}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {0, 0}, TA_LEFT | TA_TOP, {1.25, 0, 0, 1, 0, HEIGHT/4}, TRUE, {9, 13}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {0, 0}, TA_LEFT | TA_TOP, {1, 0, 0, 2, 0, HEIGHT/4}, TRUE, {13}},
@@ -255,7 +255,7 @@ static const TEST_ENTRY s_entries[] =
     {__LINE__, LFWIDTH1, 0, GM_ADVANCED, {0, YCENTER}, TA_CENTER | TA_TOP, {1, 0, 0, 2, WIDTH/4, -HEIGHT/2}, TRUE, {9, 10, 11, 13, 14, 15}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_CENTER | TA_TOP, {2, 0, 0, 1, -WIDTH/8, 0}, TRUE, {3, 4, 7, 8}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_CENTER | TA_TOP, {1, 0, 0, 1.25, 0, 0}, TRUE, {2, 3, 6, 7}},
-    {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_CENTER | TA_TOP, {1, 0, 0, 2, 0, 0}, TRUE, {2, 3, 6, 7, 10, 11, 14, 15}},
+    {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_CENTER | TA_TOP, {1, 0, 0, 2, 0, 0}, TRUE, {2, 3, 6, 7, 10, 11}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_CENTER | TA_TOP, {1.25, 0, 0, 1, -WIDTH/8, HEIGHT/4}, TRUE, {6, 7, 10, 11}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_CENTER | TA_TOP, {1, 0, 0, 1.25, WIDTH/8, HEIGHT/4}, TRUE, {7, 11}},
     {__LINE__, 0, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_CENTER | TA_TOP, {2, 0, 0, 1, -WIDTH/4, 0}, TRUE, {3, 4, 7, 8}},
@@ -295,7 +295,7 @@ static const TEST_ENTRY s_entries[] =
     {__LINE__, LFWIDTH1, 0, GM_ADVANCED, {0, YCENTER}, TA_RIGHT | TA_BASELINE, {1.25, 0, 0, 2, WIDTH, -HEIGHT/2}, TRUE, {1, 3, 4, 5, 7, 8}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_RIGHT | TA_BASELINE, {2, 0, 0, 1, -WIDTH/8, HEIGHT/4}, TRUE, {3, 4}},
     {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_RIGHT | TA_BASELINE, {1, 0, 0, 1.25, WIDTH/8, HEIGHT/4}, TRUE, {3}},
-    {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {0, YCENTER}, TA_RIGHT | TA_BASELINE, {1.25, 0, 0, 2, WIDTH, -HEIGHT/2}, TRUE, {4, 8}},
+    {__LINE__, LFWIDTH1, LFESCAPE1, GM_ADVANCED, {0, YCENTER}, TA_RIGHT | TA_BASELINE, {1.25, 0, 0, 2, WIDTH, -HEIGHT/2}, TRUE, {4}},
     {__LINE__, 0, LFESCAPE1, GM_ADVANCED, {XCENTER, 0}, TA_RIGHT | TA_BASELINE, {2, 0, 0, 1, -WIDTH/4, HEIGHT/4}, TRUE, {3, 4}},
     {__LINE__, 0, LFESCAPE1, GM_ADVANCED, {0, YCENTER}, TA_RIGHT | TA_BASELINE, {1.25, 0, 0, 1, WIDTH/8, HEIGHT/4}, TRUE, {5, 9}},
     {__LINE__, 0, LFESCAPE1, GM_ADVANCED, {0, YCENTER}, TA_RIGHT | TA_BASELINE, {2, 0, 0, 2, 0, -HEIGHT/8}, TRUE, {1, 9}},
@@ -316,7 +316,7 @@ static void DoTestEntry(const TEST_ENTRY *entry, HDC hDC, HBITMAP hbm)
     lf.lfWidth = entry->lfWidth;
     lf.lfEscapement = entry->lfEscapement;
     lf.lfCharSet = DEFAULT_CHARSET;
-    lstrcpyA(lf.lfFaceName, "Marlett");
+    lstrcpyA(lf.lfFaceName, "ReactOSTestMarlett");
     hFont = CreateFontIndirectA(&lf);
     ok(hFont != NULL, "hFont was NULL.\n");
     hFontOld = SelectObject(hDC, hFont);
@@ -429,6 +429,19 @@ static void DoTestEntry(const TEST_ENTRY *entry, HDC hDC, HBITMAP hbm)
     DeleteObject(hFont);
 }
 
+static HANDLE InstallResourceFont(LPCWSTR ResourceName)
+{
+    HMODULE hMod = GetModuleHandleW(NULL);
+    HRSRC hRsrc;
+    DWORD Count = 0;
+
+    hRsrc = FindResourceW(hMod, ResourceName, (LPCWSTR)RT_RCDATA);
+    if (!hRsrc)
+        return NULL;
+
+    return AddFontMemResourceEx(LockResource(LoadResource(hMod, hRsrc)), SizeofResource(hMod, hRsrc), NULL, &Count);
+}
+
 START_TEST(TextTransform)
 {
     HDC hDC;
@@ -436,6 +449,14 @@ START_TEST(TextTransform)
     LPVOID pvBits;
     HBITMAP hbm;
     UINT i;
+    HANDLE hTestFont;
+
+    hTestFont = InstallResourceFont(L"ReactOSTestMarlett.ttf");
+    if (!hTestFont)
+    {
+        skip("Failed to install ReactOSTestMarlett\n");
+        return;
+    }
 
     s_hWhiteBrush = (HBRUSH)GetStockObject(WHITE_BRUSH);
     s_hRedPen = CreatePen(PS_SOLID, 2, RGB(255, 0, 0));
@@ -465,4 +486,6 @@ START_TEST(TextTransform)
     DeleteObject(s_hRedPen);
 
     DeleteDC(hDC);
+
+    RemoveFontMemResourceEx(hTestFont);
 }

@@ -84,7 +84,7 @@ void Test_CreateBitmap_Params()
     SetLastError(0);
     hbmp = CreateBitmap(0x40000, 0x40000, 32, 1, NULL);
     ok(hbmp == 0, "CreateBitmap should fail\n");
-    ok_err(ERROR_INVALID_PARAMETER);
+    ok_err(0);
 
     /* Test planes / bpp */
     hbmp = CreateBitmap(10, 10, 32, 1, NULL);

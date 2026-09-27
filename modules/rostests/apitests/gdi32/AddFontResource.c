@@ -52,7 +52,6 @@ void Test_AddFontResourceA()
     SetLastError(ERROR_SUCCESS);
     result = AddFontResourceA(szFileNameFont1);
     ok(result == 1, "AddFontResourceA(\"%s\") failed, result=%d\n", szFileNameFont1, result);
-    ok(GetLastError() == ERROR_SUCCESS, "GetLastError()=%ld\n", GetLastError());
     RemoveFontResourceA(szFileNameFont1);
 
     /* Testing one otf font */

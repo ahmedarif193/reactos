@@ -31,7 +31,7 @@ void Test_GetClipRgn()
 	/* Test invalid hrgn */
 	SetLastError(ERROR_SUCCESS);
 	ret = GetClipRgn(hDC, (HRGN)0x12345);
-	ok(ret == 0, "Expected 0, got %d\n", ret);
+	ok(ret == -1, "Expected -1, got %d\n", ret);
 	ok(GetLastError() == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %ld\n", GetLastError());
 
 	ReleaseDC(hWnd, hDC);

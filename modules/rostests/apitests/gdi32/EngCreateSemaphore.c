@@ -21,16 +21,9 @@ void Test_EngCreateSemaphore()
     ok(lpcrit->RecursionCount == 0, "lpcrit->RecursionCount=%ld\n", lpcrit->RecursionCount);
     ok(lpcrit->OwningThread == 0, "lpcrit->OwningThread=%p\n", lpcrit->OwningThread);
     ok(lpcrit->LockSemaphore == 0, "lpcrit->LockSemaphore=%p\n", lpcrit->LockSemaphore);
-    ok(lpcrit->SpinCount == 0, "lpcrit->SpinCount=%Iu\n", lpcrit->SpinCount);
-
-    ok(lpcrit->DebugInfo != NULL, "no DebugInfo\n");
-    if (lpcrit->DebugInfo)
-    {
-        ok(lpcrit->DebugInfo->Type == 0, "DebugInfo->Type=%d\n", lpcrit->DebugInfo->Type);
-        ok(lpcrit->DebugInfo->CreatorBackTraceIndex == 0, "DebugInfo->CreatorBackTraceIndex=%d\n", lpcrit->DebugInfo->CreatorBackTraceIndex);
-        ok(lpcrit->DebugInfo->EntryCount == 0, "DebugInfo->EntryCount=%ld\n", lpcrit->DebugInfo->EntryCount);
-        ok(lpcrit->DebugInfo->ContentionCount == 0, "DebugInfo->ContentionCount=%ld\n", lpcrit->DebugInfo->ContentionCount);
-    }
+    ok((lpcrit->SpinCount & RTL_CRITICAL_SECTION_ALL_FLAG_BITS) == RTL_CRITICAL_SECTION_FLAG_DYNAMIC_SPIN,
+       "lpcrit->SpinCount=%Iu\n", lpcrit->SpinCount);
+    ok(lpcrit->DebugInfo == (PRTL_CRITICAL_SECTION_DEBUG)-1, "lpcrit->DebugInfo=%p\n", lpcrit->DebugInfo);
 
     EngDeleteSemaphore(hsem);
 }

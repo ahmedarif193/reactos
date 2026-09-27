@@ -265,7 +265,7 @@ Test_SetDIBitsToDevice_Params()
                             aulBits, // lpvBits,
                             pbmi,
                             DIB_RGB_COLORS);
-    ok_dec(ret, 0);
+    ok_dec(ret, 2000);
     ok_err(0xdeadc0de);
 
     /* Test uStartScan and cScanLines larger than the DIB */

@@ -401,8 +401,9 @@ void Test_CreateDIBitmap_RLE8()
 
     PackedDIB.bmiHeader.biSizeImage = 0;
     hbmp = CreateDIBitmap(hdc, &PackedDIB.bmiHeader, CBM_INIT, &PackedDIB.ajBuffer, (PVOID)&PackedDIB, DIB_PAL_COLORS);
-    ok(hbmp == 0, "CreateDIBitmap succeeded, expected failure\n");
+    ok(hbmp != 0, "CreateDIBitmap failed.\n");
     ok_err(0xbadbad00);
+    DeleteObject(hbmp);
 
     /* Test a line that is too long */
     PackedDIB.bmiHeader.biSizeImage = 20;

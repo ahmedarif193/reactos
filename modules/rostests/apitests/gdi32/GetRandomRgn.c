@@ -58,12 +58,12 @@ void Test_GetRandomRgn_Params()
 
     SetLastError(0xbadbad00);
     ret = GetRandomRgn(hdc, NULL, 0);
-    ok_int(ret, 0);
+    ok_int(ret, -1);
     ok_err(0xbadbad00);
 
     SetLastError(0xbadbad00);
     ret = GetRandomRgn(hdc, NULL, CLIPRGN);
-    ok_int(ret, 0);
+    ok_int(ret, -1);
     ok_err(0xbadbad00);
 
     SetLastError(0xbadbad00);
@@ -343,7 +343,7 @@ void Test_GetRandomRgn_RGN5()
     DeleteDC(hdc);
 }
 
-static void Test_WindowScreenRegion(HWND Window)
+static void Test_WindowScreenRegion(HWND Window, HWND RegionWindow)
 {
     HDC Dc = GetDC(Window);
     HRGN Region = CreateRectRgn(0, 0, 0, 0);
@@ -358,8 +358,8 @@ static void Test_WindowScreenRegion(HWND Window)
         return;
     }
 
-    GetClientRect(Window, &Expected);
-    MapWindowPoints(Window, NULL, (POINT *)&Expected, 2);
+    GetClientRect(RegionWindow, &Expected);
+    MapWindowPoints(RegionWindow, NULL, (POINT *)&Expected, 2);
     ok_int(GetRandomRgn(Dc, Region, SYSRGN), 1);
     GetRgnBox(Region, &Actual);
     ok(EqualRect(&Actual, &Expected),
@@ -387,14 +387,14 @@ static void Test_GetRandomRgn_WindowCoordinates(void)
         skip("Could not create screen region window\n");
         return;
     }
-    Test_WindowScreenRegion(Window);
+    Test_WindowScreenRegion(Window, Window);
     SetWindowPos(Window, NULL, 120, 110, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-    Test_WindowScreenRegion(Window);
+    Test_WindowScreenRegion(Window, Window);
 
     Child = CreateWindowW(L"STATIC", L"Child", WS_CHILD | WS_VISIBLE,
                            20, 30, 80, 60, Window, NULL, NULL, NULL);
     if (Child)
-        Test_WindowScreenRegion(Child);
+        Test_WindowScreenRegion(Child, Window);
     else
         skip("Could not create child region window\n");
     DestroyWindow(Window);

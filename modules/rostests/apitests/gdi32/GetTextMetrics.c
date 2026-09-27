@@ -176,51 +176,51 @@ static const TEST_ENTRY g_MSMINCHO[] =
 
 static const TEST_ENTRY g_TAHOMA[] =
 {
-    { __LINE__, 400, 0, 1953, 400, 400, 332, 68, 0, 0 },
-    { __LINE__, 300, 0, 1466, 300, 300, 249, 51, 0, 0 },
-    { __LINE__, 200, 0, 980, 200, 200, 166, 34, 0, 0 },
-    { __LINE__, 100, 0, 490, 100, 100, 83, 17, 0, 0 },
-    { __LINE__, 64, 0, 316, 64, 64, 53, 11, 0, 0 },
-    { __LINE__, 32, 0, 156, 32, 32, 27, 5, 6, 0 },
-    { __LINE__, 16, 0, 77, 16, 16, 13, 3, 0, 0 },
-    { __LINE__, 15, 0, 73, 15, 15, 12, 3, 0, 0 },
-    { __LINE__, 14, 0, 73, 14, 14, 12, 2, 0, 0 },
-    { __LINE__, 13, 0, 64, 13, 13, 11, 2, 0, 0 },
-    { __LINE__, 12, 0, 56, 12, 12, 10, 2, 0, 0 },
-    { __LINE__, 11, 0, 55, 11, 11, 9, 2, 0, 0 },
-    { __LINE__, 10, 0, 50, 10, 10, 8, 2, 0, 0 },
-    { __LINE__, 9, 0, 41, 9, 9, 7, 2, 0, 0 },
-    { __LINE__, 8, 0, 41, 8, 8, 7, 1, 0, 0 },
-    { __LINE__, 7, 0, 36, 7, 7, 6, 1, 0, 0 },
-    { __LINE__, 6, 0, 32, 6, 6, 5, 1, 0, 0 },
-    { __LINE__, 5, 0, 22, 5, 5, 4, 1, 0, 0 },
-    { __LINE__, 4, 0, 19, 4, 4, 3, 1, 0, 0 },
-    { __LINE__, 3, 0, 13, 4, 4, 3, 0, 0, 0 },
+    { __LINE__, 400, 0, 1954, 400, 400, 332, 68, 69, 0 },
+    { __LINE__, 300, 0, 1467, 300, 300, 249, 51, 51, 0 },
+    { __LINE__, 200, 0, 977, 200, 200, 166, 34, 34, 0 },
+    { __LINE__, 100, 0, 489, 100, 100, 83, 17, 17, 0 },
+    { __LINE__, 64, 0, 316, 64, 64, 53, 11, 11, 0 },
+    { __LINE__, 32, 0, 156, 32, 32, 27, 5, 5, 0 },
+    { __LINE__, 16, 0, 77, 16, 16, 13, 3, 3, 0 },
+    { __LINE__, 15, 0, 76, 15, 15, 12, 3, 3, 0 },
+    { __LINE__, 14, 0, 70, 14, 14, 12, 2, 2, 0 },
+    { __LINE__, 13, 0, 63, 13, 13, 11, 2, 2, 0 },
+    { __LINE__, 12, 0, 56, 12, 12, 10, 2, 2, 0 },
+    { __LINE__, 11, 0, 54, 11, 11, 9, 2, 2, 0 },
+    { __LINE__, 10, 0, 52, 10, 10, 8, 2, 2, 0 },
+    { __LINE__, 9, 0, 41, 9, 9, 7, 2, 2, 0 },
+    { __LINE__, 8, 0, 39, 8, 8, 7, 1, 1, 0 },
+    { __LINE__, 7, 0, 35, 7, 7, 6, 1, 1, 0 },
+    { __LINE__, 6, 0, 32, 6, 6, 5, 1, 1, 0 },
+    { __LINE__, 5, 0, 22, 5, 5, 4, 1, 1, 0 },
+    { __LINE__, 4, 0, 19, 4, 4, 3, 1, 1, 0 },
+    { __LINE__, 3, 0, 15, 4, 4, 3, 1, 1, 0 },
     { __LINE__, 2, 0, 13, 2, 2, 2, 0, 0, 0 },
     { __LINE__, 1, 0, 13, 2, 2, 2, 0, 0, 0 },
-    { __LINE__, 0, 0, -135, -18, -18, -15, -3, 0, 0 },
+    { __LINE__, 0, 0, 93, 19, 19, 16, 3, 3, 0 },
     { __LINE__, -1, 0, 13, 2, 2, 2, 0, 0, 0 },
     { __LINE__, -2, 0, 13, 2, 2, 2, 0, 0, 0 },
-    { __LINE__, -3, 0, 19, 4, 4, 3, 0, 0, 0 },
-    { __LINE__, -4, 0, 22, 5, 5, 4, 1, 0, 0 },
-    { __LINE__, -5, 0, 32, 6, 6, 5, 1, 0, 0 },
-    { __LINE__, -6, 0, 36, 7, 7, 6, 1, 0, 0 },
-    { __LINE__, -7, 0, 41, 8, 8, 7, 1, 0, 0 },
-    { __LINE__, -8, 0, 50, 10, 10, 8, 2, 0, 0 },
-    { __LINE__, -9, 0, 55, 11, 11, 9, 2, 0, 0 },
-    { __LINE__, -10, 0, 56, 12, 12, 10, 2, 0, 0 },
-    { __LINE__, -11, 0, 64, 13, 13, 11, 2, 0, 0 },
-    { __LINE__, -12, 0, 73, 14, 14, 12, 2, 0, 0 },
-    { __LINE__, -13, 0, 77, 16, 16, 13, 3, 0, 0 },
-    { __LINE__, -14, 0, 78, 17, 17, 14, 3, 0, 0 },
-    { __LINE__, -15, 0, 89, 18, 18, 15, 3, 0, 0 },
-    { __LINE__, -16, 0, 94, 19, 19, 16, 3, 0, 0 },
+    { __LINE__, -3, 0, 19, 4, 4, 3, 1, 1, 0 },
+    { __LINE__, -4, 0, 22, 5, 5, 4, 1, 1, 0 },
+    { __LINE__, -5, 0, 32, 6, 6, 5, 1, 1, 0 },
+    { __LINE__, -6, 0, 36, 7, 7, 6, 1, 1, 0 },
+    { __LINE__, -7, 0, 41, 8, 8, 7, 1, 1, 0 },
+    { __LINE__, -8, 0, 47, 10, 10, 8, 2, 2, 0 },
+    { __LINE__, -9, 0, 54, 11, 11, 9, 2, 2, 0 },
+    { __LINE__, -10, 0, 56, 12, 12, 10, 2, 2, 0 },
+    { __LINE__, -11, 0, 65, 13, 13, 11, 2, 2, 0 },
+    { __LINE__, -12, 0, 71, 14, 14, 12, 2, 2, 0 },
+    { __LINE__, -13, 0, 77, 16, 16, 13, 3, 3, 0 },
+    { __LINE__, -14, 0, 80, 17, 17, 14, 3, 3, 0 },
+    { __LINE__, -15, 0, 90, 18, 18, 15, 3, 3, 0 },
+    { __LINE__, -16, 0, 93, 19, 19, 16, 3, 3, 0 },
     { __LINE__, -32, 0, 189, 39, 39, 32, 7, 7, 0 },
-    { __LINE__, -64, 0, 379, 77, 77, 64, 13, 0, 0 },
-    { __LINE__, -100, 0, 589, 121, 121, 100, 21, 0, 0 },
-    { __LINE__, -200, 0, 1182, 241, 241, 200, 41, 0, 0 },
-    { __LINE__, -300, 0, 1770, 362, 362, 300, 62, 0, 0 },
-    { __LINE__, -400, 0, 2361, 483, 483, 400, 83, 0, 0 },
+    { __LINE__, -64, 0, 379, 77, 77, 64, 13, 13, 0 },
+    { __LINE__, -100, 0, 589, 121, 121, 100, 21, 21, 0 },
+    { __LINE__, -200, 0, 1179, 241, 241, 200, 41, 41, 0 },
+    { __LINE__, -300, 0, 1770, 362, 362, 300, 62, 62, 0 },
+    { __LINE__, -400, 0, 2359, 483, 483, 400, 83, 83, 0 },
 };
 #define g_TAHOMA_count _countof(g_TAHOMA)
 
@@ -240,14 +240,27 @@ static FONT_ENTRY g_font_entries[] =
 #ifdef EMIT_TESTCASES
     { "MSGOTHIC", "MS Gothic", "msgothic.ttc" },
     { "MSMINCHO", "MS Mincho", "msmincho.ttc" },
-    { "TAHOMA", "Tahoma", "tahoma.ttf" },
+    { "TAHOMA", "ReactOSTestTahoma", NULL },
 #else
     { "MSGOTHIC", "MS Gothic", "msgothic.ttc", g_MSGOTHIC_count, g_MSGOTHIC },
     { "MSMINCHO", "MS Mincho", "msmincho.ttc", g_MSMINCHO_count, g_MSMINCHO },
-    { "TAHOMA", "Tahoma", "Tahoma.ttf", g_TAHOMA_count, g_TAHOMA },
+    { "TAHOMA", "ReactOSTestTahoma", NULL, g_TAHOMA_count, g_TAHOMA },
 #endif
 };
 static size_t g_font_entry_count = _countof(g_font_entries);
+
+static HANDLE InstallResourceFont(LPCWSTR ResourceName)
+{
+    HMODULE hMod = GetModuleHandleW(NULL);
+    HRSRC hRsrc;
+    DWORD Count = 0;
+
+    hRsrc = FindResourceW(hMod, ResourceName, (LPCWSTR)RT_RCDATA);
+    if (!hRsrc)
+        return NULL;
+
+    return AddFontMemResourceEx(LockResource(LoadResource(hMod, hRsrc)), SizeofResource(hMod, hRsrc), NULL, &Count);
+}
 
 START_TEST(GetTextMetrics)
 {
@@ -260,6 +273,10 @@ START_TEST(GetTextMetrics)
     TEXTMETRIC tm;
     char szPath[MAX_PATH];
     static const char *text = "This is a test.";
+    HANDLE hTestFont;
+
+    hTestFont = InstallResourceFont(L"ReactOSTestTahoma.ttf");
+    ok(hTestFont != NULL, "Failed to install ReactOSTestTahoma\n");
 
     hDC = CreateCompatibleDC(NULL);
     for (i = 0; i < g_font_entry_count; ++i)
@@ -269,16 +286,24 @@ START_TEST(GetTextMetrics)
         lf.lfCharSet = DEFAULT_CHARSET;
         lstrcpyA(lf.lfFaceName, font->font_name);
 
-        GetWindowsDirectoryA(szPath, MAX_PATH);
-        lstrcatA(szPath, "\\Fonts\\");
-        lstrcatA(szPath, font->font_file);
-        if (GetFileAttributesA(szPath) == 0xFFFFFFFF)
+        if (font->font_file)
         {
-            skip("Font file '%s' doesn't exists\n", font->font_file);
+            GetWindowsDirectoryA(szPath, MAX_PATH);
+            lstrcatA(szPath, "\\Fonts\\");
+            lstrcatA(szPath, font->font_file);
+            if (GetFileAttributesA(szPath) == 0xFFFFFFFF)
+            {
+                skip("Font file '%s' doesn't exists\n", font->font_file);
+                continue;
+            }
+        }
+        else if (!hTestFont)
+        {
+            skip("Font '%s' is not installed\n", font->font_name);
             continue;
         }
 
-        trace("Testing '%s'.\n", font->font_file);
+        trace("Testing '%s'.\n", font->font_name);
 
 #ifdef EMIT_TESTCASES
         printf("static const TEST_ENTRY g_%s[] =\n", font->entry_name);
@@ -362,4 +387,7 @@ START_TEST(GetTextMetrics)
 #endif
     }
     DeleteDC(hDC);
+
+    if (hTestFont)
+        RemoveFontMemResourceEx(hTestFont);
 }

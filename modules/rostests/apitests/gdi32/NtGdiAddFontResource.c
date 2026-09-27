@@ -9,15 +9,16 @@
 
 #include <ndk/rtlfuncs.h>
 
-INT
-APIENTRY
-NtGdiAddFontResourceW(
+typedef INT
+(APIENTRY *PFN_NtGdiAddFontResourceW)(
     _In_reads_(cwc) WCHAR *pwszFiles,
     _In_ ULONG cwc,
     _In_ ULONG cFiles,
     _In_ FLONG f,
     _In_ DWORD dwPidTid,
     _In_opt_ DESIGNVECTOR *pdv);
+
+static PFN_NtGdiAddFontResourceW pNtGdiAddFontResourceW;
 
 void Test_NtGdiAddFontResourceW()
 {
@@ -54,7 +55,7 @@ void Test_NtGdiAddFontResourceW()
     RtlInitUnicodeString(&NtAbsPath, NULL);
     RtlDosPathNameToNtPathName_U(lpszFontPath, &NtAbsPath, NULL, NULL);
     cwc = 0;
-    ret =  NtGdiAddFontResourceW(NtAbsPath.Buffer, cwc, 1, 0, 0, 0);
+    ret =  pNtGdiAddFontResourceW(NtAbsPath.Buffer, cwc, 1, 0, 0, 0);
 
     ok(ret == 0, "Expected 0 files added. Added: %d\n", ret);
     ok(GetLastError() == 0xdeaddead, "Expected 0xdeaddead. Obtained: 0x%lx\n", GetLastError());
@@ -66,7 +67,7 @@ void Test_NtGdiAddFontResourceW()
     RtlInitUnicodeString(&NtAbsPath, NULL);
     RtlDosPathNameToNtPathName_U(lpszFontPath, &NtAbsPath, NULL, NULL);
     cwc = NtAbsPath.Length / sizeof(WCHAR);
-    ret =  NtGdiAddFontResourceW(NtAbsPath.Buffer, cwc, 1, 0, 0, 0);
+    ret =  pNtGdiAddFontResourceW(NtAbsPath.Buffer, cwc, 1, 0, 0, 0);
 
     ok(ret == 0, "Expected 0 files added. Added: %d\n", ret);
     ok(GetLastError() == 0xdeaddead, "Expected 0xdeaddead. Obtained: 0x%lx\n", GetLastError());
@@ -78,7 +79,7 @@ void Test_NtGdiAddFontResourceW()
     RtlInitUnicodeString(&NtAbsPath, NULL);
     RtlDosPathNameToNtPathName_U(lpszFontPath, &NtAbsPath, NULL, NULL);
     cwc = NtAbsPath.Length / sizeof(WCHAR) + 1;
-    ret =  NtGdiAddFontResourceW(NtAbsPath.Buffer, cwc, 1, 0, 0, 0);
+    ret =  pNtGdiAddFontResourceW(NtAbsPath.Buffer, cwc, 1, 0, 0, 0);
 
     ok(ret == 1, "Expected 1 files added. Added: %d\n", ret);
     ok(GetLastError() == 0xdeaddead, "Expected 0xdeaddead. Obtained: 0x%lx\n", GetLastError());
@@ -87,7 +88,7 @@ void Test_NtGdiAddFontResourceW()
 
     // Test an invalid pointer.
     SetLastError(0xdeadbeef);
-    ret =  NtGdiAddFontResourceW((PVOID)-4, 123, 1, 0, 0, NULL);
+    ret =  pNtGdiAddFontResourceW((PVOID)-4, 123, 1, 0, 0, NULL);
 
     ok(ret == 0, "Expected 0 files added. Added: %d\n", ret);
     ok(GetLastError() == 0xdeadbeef, "Expected 0xdeadbeef. Obtained: 0x%lx\n", GetLastError());
@@ -95,5 +96,12 @@ void Test_NtGdiAddFontResourceW()
 
 START_TEST(NtGdiAddFontResource)
 {
+    pNtGdiAddFontResourceW = (PFN_NtGdiAddFontResourceW)GetProcAddress(LoadLibraryW(L"win32u.dll"),
+                                                                       "NtGdiAddFontResourceW");
+    if (!pNtGdiAddFontResourceW)
+    {
+        skip("NtGdiAddFontResourceW is not available\n");
+        return;
+    }
     Test_NtGdiAddFontResourceW();
 }

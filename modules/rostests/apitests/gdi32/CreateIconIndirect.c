@@ -57,6 +57,11 @@ Test_GetIconInfo(BOOL fIcon)
 
     iconinfo.hbmColor = CreateBitmap(2, 2, 1, 1, NULL);
     hicon = CreateIconIndirect(&iconinfo);
+    ok(hicon == 0, "should fail\n");
+    DeleteObject(iconinfo.hbmColor);
+
+    iconinfo.hbmColor = CreateBitmap(8, 16, 1, 1, NULL);
+    hicon = CreateIconIndirect(&iconinfo);
     ok(hicon != 0, "should not fail\n");
 
     ok(GetIconInfo(hicon, &iconinfo2), "\n");

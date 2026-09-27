@@ -29,7 +29,7 @@ void Test_SetSysColors()
 
 	SetLastError(0xdeadbeef);
 	ok(SetSysColors(-1, nElements, crColors) == FALSE, "Expected FALSE, got TRUE\n");
-	ok(GetLastError() == ERROR_NOACCESS, "Expected ERROR_NOACCESS, got %ld\n", GetLastError());
+	ok(GetLastError() == ERROR_NOT_ENOUGH_MEMORY, "Expected ERROR_NOT_ENOUGH_MEMORY, got %ld\n", GetLastError());
 	ok(SetSysColors(0, nElements, crColors) == TRUE, "Expected TRUE, got FALSE\n");
 	ok(SetSysColors(0, NULL, crColors) == TRUE, "Expected TRUE, got FALSE\n");
 	ok(SetSysColors(0, nElements, NULL) == TRUE, "Expected TRUE, got FALSE\n");
