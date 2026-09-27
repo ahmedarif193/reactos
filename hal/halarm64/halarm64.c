@@ -6118,7 +6118,7 @@ HalArm64ProfileSample(
     HalpArm64ProfileAccum[Cpu] += (LONG)Increment;
     if (HalpArm64ProfileAccum[Cpu] >= (LONG)HalpArm64ProfileInterval)
     {
-        HalpArm64ProfileAccum[Cpu] -= (LONG)HalpArm64ProfileInterval;
+        HalpArm64ProfileAccum[Cpu] %= (LONG)HalpArm64ProfileInterval;
         return TRUE;
     }
 
@@ -6130,15 +6130,12 @@ NTAPI
 HalSetProfileInterval(
     _In_ ULONG_PTR Interval)
 {
-    ULONG_PTR Minimum = KeQueryTimeIncrement();
-
-    if (Minimum == 0)
-        Minimum = 100000;
-
-    /* The clock tick is the finest achievable resolution; coarser intervals are
-     * honored by accumulation in HalArm64ProfileSample. */
-    if (Interval < Minimum)
-        Interval = Minimum;
+    /* The clock tick is the finest achievable resolution, and a timer
+     * resolution request can shorten it to the 1 ms NT minimum that
+     * HalSetTimeIncrement accepts. A tick longer than the interval yields one
+     * sample per tick; longer intervals accumulate in HalArm64ProfileSample. */
+    if (Interval < 10000)
+        Interval = 10000;
 
     HalpArm64ProfileInterval = (ULONG)Interval;
     return Interval;
