@@ -470,6 +470,7 @@ ENTRY_vPushFreeEntry(PENTRY pentFree)
 
     /* Initialize entry */
     pentFree->Objt = GDIObjType_DEF_TYPE;
+    pentFree->Flags = 0;
     pentFree->ObjectOwner.ulObj = 0;
     pentFree->pUser = NULL;
 
@@ -1306,6 +1307,44 @@ GreSetObjectOwner(
     ULONG ulOwner)
 {
     return GreSetObjectOwnerEx(hobj, ulOwner, 0);
+}
+
+BOOL
+NTAPI
+GreSetObjectUndeletable(
+    HGDIOBJ hobj,
+    BOOL bUndeletable)
+{
+    PENTRY pentry;
+
+    pentry = ENTRY_ReferenceEntryByHandle(hobj, 0);
+    if (!pentry)
+        return FALSE;
+
+    if (bUndeletable)
+        pentry->Flags |= GDI_ENTRY_UNDELETABLE;
+    else
+        pentry->Flags &= ~GDI_ENTRY_UNDELETABLE;
+
+    GDIOBJ_vDereferenceObject(pentry->einfo.pobj);
+    return TRUE;
+}
+
+BOOL
+NTAPI
+GreIsObjectUndeletable(
+    HGDIOBJ hobj)
+{
+    PENTRY pentry;
+    BOOL bUndeletable;
+
+    pentry = ENTRY_ReferenceEntryByHandle(hobj, 0);
+    if (!pentry)
+        return FALSE;
+
+    bUndeletable = (pentry->Flags & GDI_ENTRY_UNDELETABLE) != 0;
+    GDIOBJ_vDereferenceObject(pentry->einfo.pobj);
+    return bUndeletable;
 }
 
 INT

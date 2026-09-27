@@ -107,7 +107,7 @@ GdiCreateLocalMetaFilePict(HANDLE hmo)
     //       the global heap. GlobalAlloc and LocalAlloc have same effect.
 
     // allocate for METAFILEPICT
-    hMetaFilePict = GlobalAlloc(GHND | GMEM_SHARE, sizeof(METAFILEPICT));
+    hMetaFilePict = GlobalAlloc(GPTR, sizeof(METAFILEPICT));
     pInfo = (METAFILEPICT *)GlobalLock(hMetaFilePict);
     if (pInfo == NULL)
         goto Exit;

@@ -1017,6 +1017,12 @@ NtGdiDeleteObjectApp(HANDLE hobj)
         goto Exit;
     }
 
+    if (GreIsObjectUndeletable(hobj))
+    {
+        bResult = TRUE;
+        goto Exit;
+    }
+
     if (GreGetObjectOwner(hobj) != GDI_OBJ_HMGR_POWNED)
     {
         bResult = FALSE;

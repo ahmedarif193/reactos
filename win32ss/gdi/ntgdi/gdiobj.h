@@ -106,6 +106,17 @@ GreSetObjectOwnerEx(
     ULONG ulOwner,
     ULONG Flags);
 
+BOOL
+NTAPI
+GreSetObjectUndeletable(
+    HGDIOBJ hobj,
+    BOOL bUndeletable);
+
+BOOL
+NTAPI
+GreIsObjectUndeletable(
+    HGDIOBJ hobj);
+
 INT
 NTAPI
 GreGetObject(
