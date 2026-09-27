@@ -978,10 +978,8 @@
 @ stdcall QueryPerformanceCounter(ptr)
 @ stdcall QueryPerformanceFrequency(ptr)
 @ stub -version=0x600+ QueryProcessAffinityUpdateMode
-@ stub -version=0x600+ -arch=i386 QueryProcessCycleTime
-@ stdcall -version=0x600+ -arch=win64 QueryProcessCycleTime(ptr ptr)
-@ stub -version=0x600+ -arch=i386 QueryThreadCycleTime
-@ stdcall -version=0x600+ -arch=win64 QueryThreadCycleTime(ptr ptr)
+@ stdcall -version=0x600+ QueryProcessCycleTime(ptr ptr)
+@ stdcall -version=0x600+ QueryThreadCycleTime(ptr ptr)
 @ stdcall -version=0x600+ QueryThreadpoolStackInformation(ptr ptr) kernelbase.QueryThreadpoolStackInformation
 @ stdcall -version=0x600+ QueryUnbiasedInterruptTime(ptr)
 @ stdcall -version=0x602+ QueryUnbiasedInterruptTimePrecise(ptr)
