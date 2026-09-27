@@ -356,6 +356,7 @@ GetDisplayConfigBufferSizes(
 
     if (numPathArrayElements == NULL || numModeInfoArrayElements == NULL)
         return ERROR_INVALID_PARAMETER;
+    *numPathArrayElements = 0;
     if (!DisplayConfigValidQueryFlags(flags))
         return ERROR_INVALID_PARAMETER;
 
@@ -363,7 +364,7 @@ GetDisplayConfigBufferSizes(
     if (Count < 0)
         return ERROR_GEN_FAILURE;
     *numPathArrayElements = Count;
-    *numModeInfoArrayElements = Count * 2;
+    *numModeInfoArrayElements = Count * ((flags & QDC_VIRTUAL_MODE_AWARE) ? 3 : 2);
     return ERROR_SUCCESS;
 }
 
@@ -378,11 +379,15 @@ QueryDisplayConfig(
     DISPLAYCONFIG_TOPOLOGY_ID *currentTopologyId)
 {
     DISPLAYCONFIG_LOCAL_PATH Paths[DISPLAYCONFIG_MAX_PATHS];
+    UINT32 ModesPerPath = (flags & QDC_VIRTUAL_MODE_AWARE) ? 3 : 2;
     int Count;
     int Index;
 
-    if (numPathArrayElements == NULL || pathArray == NULL ||
-        numModeInfoArrayElements == NULL || modeInfoArray == NULL)
+    if (numPathArrayElements == NULL || numModeInfoArrayElements == NULL)
+        return ERROR_INVALID_PARAMETER;
+    if (!*numPathArrayElements || !*numModeInfoArrayElements)
+        return ERROR_INVALID_PARAMETER;
+    if (pathArray == NULL || modeInfoArray == NULL)
         return ERROR_INVALID_PARAMETER;
     if (!DisplayConfigValidQueryFlags(flags))
         return ERROR_INVALID_PARAMETER;
@@ -393,25 +398,41 @@ QueryDisplayConfig(
     Count = DisplayConfigCollectPaths(Paths, ARRAY_SIZE(Paths));
     if (Count < 0)
         return ERROR_GEN_FAILURE;
-    if (*numPathArrayElements < (UINT32)Count || *numModeInfoArrayElements < (UINT32)Count * 2)
+    if (*numPathArrayElements < (UINT32)Count || *numModeInfoArrayElements < (UINT32)Count * ModesPerPath)
         return ERROR_INSUFFICIENT_BUFFER;
 
     for (Index = 0; Index < Count; Index++)
     {
         const DISPLAYCONFIG_LOCAL_PATH *Local = &Paths[Index];
         DISPLAYCONFIG_PATH_INFO *Path = &pathArray[Index];
-        DISPLAYCONFIG_MODE_INFO *SourceMode = &modeInfoArray[Index * 2];
-        DISPLAYCONFIG_MODE_INFO *TargetMode = &modeInfoArray[Index * 2 + 1];
+        DISPLAYCONFIG_MODE_INFO *SourceMode = &modeInfoArray[Index * ModesPerPath];
+        DISPLAYCONFIG_MODE_INFO *TargetMode = &modeInfoArray[Index * ModesPerPath + 1];
         UINT32 Refresh = Local->Mode.dmDisplayFrequency > 1 ? Local->Mode.dmDisplayFrequency : 60;
 
         memset(Path, 0, sizeof(*Path));
         Path->sourceInfo.adapterId = Local->AdapterId;
         Path->sourceInfo.id = Local->SourceId;
-        Path->sourceInfo.modeInfoIdx = Index * 2;
+        if (flags & QDC_VIRTUAL_MODE_AWARE)
+        {
+            Path->sourceInfo.sourceModeInfoIdx = Index * ModesPerPath;
+            Path->sourceInfo.cloneGroupId = DISPLAYCONFIG_PATH_CLONE_GROUP_INVALID;
+        }
+        else
+        {
+            Path->sourceInfo.modeInfoIdx = Index * ModesPerPath;
+        }
         Path->sourceInfo.statusFlags = DISPLAYCONFIG_SOURCE_IN_USE;
         Path->targetInfo.adapterId = Local->AdapterId;
         Path->targetInfo.id = Local->SourceId;
-        Path->targetInfo.modeInfoIdx = Index * 2 + 1;
+        if (flags & QDC_VIRTUAL_MODE_AWARE)
+        {
+            Path->targetInfo.targetModeInfoIdx = Index * ModesPerPath + 1;
+            Path->targetInfo.desktopModeInfoIdx = Index * ModesPerPath + 2;
+        }
+        else
+        {
+            Path->targetInfo.modeInfoIdx = Index * ModesPerPath + 1;
+        }
         Path->targetInfo.outputTechnology = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER;
         Path->targetInfo.rotation = DISPLAYCONFIG_ROTATION_IDENTITY;
         Path->targetInfo.scaling = DISPLAYCONFIG_SCALING_IDENTITY;
@@ -422,6 +443,8 @@ QueryDisplayConfig(
         Path->targetInfo.targetAvailable = TRUE;
         Path->targetInfo.statusFlags = DISPLAYCONFIG_TARGET_IN_USE;
         Path->flags = DISPLAYCONFIG_PATH_ACTIVE;
+        if (flags & QDC_VIRTUAL_MODE_AWARE)
+            Path->flags |= DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE;
 
         memset(SourceMode, 0, sizeof(*SourceMode));
         SourceMode->infoType = DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE;
@@ -438,10 +461,30 @@ QueryDisplayConfig(
         TargetMode->id = Local->SourceId;
         TargetMode->adapterId = Local->AdapterId;
         DisplayConfigFillSignal(&Local->Mode, &TargetMode->targetMode.targetVideoSignalInfo);
+        if (flags & QDC_DATABASE_CURRENT)
+        {
+            TargetMode->targetMode.targetVideoSignalInfo.totalSize.cx = 0;
+            TargetMode->targetMode.targetVideoSignalInfo.totalSize.cy = 0;
+        }
+
+        if (flags & QDC_VIRTUAL_MODE_AWARE)
+        {
+            DISPLAYCONFIG_MODE_INFO *DesktopMode = &modeInfoArray[Index * ModesPerPath + 2];
+
+            memset(DesktopMode, 0, sizeof(*DesktopMode));
+            DesktopMode->infoType = DISPLAYCONFIG_MODE_INFO_TYPE_DESKTOP_IMAGE;
+            DesktopMode->id = Local->SourceId;
+            DesktopMode->adapterId = Local->AdapterId;
+            DesktopMode->desktopImageInfo.PathSourceSize.x = Local->Mode.dmPelsWidth;
+            DesktopMode->desktopImageInfo.PathSourceSize.y = Local->Mode.dmPelsHeight;
+            DesktopMode->desktopImageInfo.DesktopImageRegion.right = Local->Mode.dmPelsWidth;
+            DesktopMode->desktopImageInfo.DesktopImageRegion.bottom = Local->Mode.dmPelsHeight;
+            DesktopMode->desktopImageInfo.DesktopImageClip = DesktopMode->desktopImageInfo.DesktopImageRegion;
+        }
     }
 
     *numPathArrayElements = Count;
-    *numModeInfoArrayElements = Count * 2;
+    *numModeInfoArrayElements = Count * ModesPerPath;
     if (currentTopologyId != NULL)
         *currentTopologyId = Count > 1 ? DISPLAYCONFIG_TOPOLOGY_EXTEND : DISPLAYCONFIG_TOPOLOGY_INTERNAL;
     return ERROR_SUCCESS;
@@ -467,7 +510,7 @@ LONG WINAPI DisplayConfigGetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_HEADER *packet)
     int Index;
 
     if (packet == NULL || packet->size < sizeof(*packet))
-        return ERROR_INVALID_PARAMETER;
+        return ERROR_GEN_FAILURE;
 
     switch (packet->type)
     {
