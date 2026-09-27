@@ -521,6 +521,11 @@ BOOL WINAPI SetPermLayerState(PCWSTR wszPath, PCWSTR wszLayer, DWORD dwFlags, BO
     if (dwWriteFlags & LAYER_APPLY_TO_SYSTEM_EXES)
         *(p++) = '#';
 
+    if (bEnable && wszLayer[0])
+    {
+        SdbpAppendLayer(newLayer, sizeof(newLayer), wszLayer, NULL);
+    }
+
     do
     {
         while (*start == ' ' || *start == '\t')
@@ -535,11 +540,6 @@ BOOL WINAPI SetPermLayerState(PCWSTR wszPath, PCWSTR wszLayer, DWORD dwFlags, BO
         }
         start = p + 1;
     } while (p);
-
-    if (bEnable && wszLayer[0])
-    {
-        SdbpAppendLayer(newLayer, sizeof(newLayer), wszLayer, NULL);
-    }
 
     return SdbSetPermLayerKeys(wszPath, newLayer, bMachine);
 }
