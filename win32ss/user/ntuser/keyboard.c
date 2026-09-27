@@ -741,17 +741,19 @@ UpdateAsyncKeyState(WORD wVk, BOOL bIsDown)
  * Calls WH_KEYBOARD_LL hook
  */
 static LRESULT
-co_CallLowLevelKeyboardHook(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD dwTime, DWORD dwExtraInfo)
+co_CallLowLevelKeyboardHook(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD dwTime, DWORD dwExtraInfo, WORD wSimpleVk, BOOL bIsSimpleDown)
 {
     KBDLLHOOKSTRUCT KbdHookData;
     UINT uMsg;
+    BOOL bAltDown = (wSimpleVk == VK_MENU) ? bIsSimpleDown : IS_KEY_DOWN(gafAsyncKeyState, VK_MENU);
+    BOOL bCtrlDown = (wSimpleVk == VK_CONTROL) ? bIsSimpleDown : IS_KEY_DOWN(gafAsyncKeyState, VK_CONTROL);
 
     KbdHookData.vkCode = wVk;
     KbdHookData.scanCode = wScanCode;
     KbdHookData.flags = 0;
     if (dwFlags & KEYEVENTF_EXTENDEDKEY)
         KbdHookData.flags |= LLKHF_EXTENDED;
-    if (IS_KEY_DOWN(gafAsyncKeyState, VK_MENU))
+    if (bAltDown)
         KbdHookData.flags |= LLKHF_ALTDOWN;
     if (dwFlags & KEYEVENTF_KEYUP)
         KbdHookData.flags |= LLKHF_UP;
@@ -763,7 +765,7 @@ co_CallLowLevelKeyboardHook(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjec
     /* Note: it doesnt support WM_SYSKEYUP */
     if (dwFlags & KEYEVENTF_KEYUP)
         uMsg = WM_KEYUP;
-    else if (IS_KEY_DOWN(gafAsyncKeyState, VK_MENU) && !IS_KEY_DOWN(gafAsyncKeyState, VK_CONTROL))
+    else if (bAltDown && !bCtrlDown)
         uMsg = WM_SYSKEYDOWN;
     else
         uMsg = WM_KEYDOWN;
@@ -1181,7 +1183,6 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
     /* Update key without shifts */
     wVk2 = IntFixVk(wSimpleVk, !bExt);
     bIsSimpleDown = bIsDown || IS_KEY_DOWN(gafAsyncKeyState, wVk2);
-    UpdateAsyncKeyState(wSimpleVk, bIsSimpleDown);
 
     if (bIsDown)
     {
@@ -1192,11 +1193,13 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
     }
 
     /* Call WH_KEYBOARD_LL hook */
-    if (co_CallLowLevelKeyboardHook(wVk, wScanCode, dwFlags, bInjected, dwTime, dwExtraInfo))
+    if (co_CallLowLevelKeyboardHook(wVk, wScanCode, dwFlags, bInjected, dwTime, dwExtraInfo, wSimpleVk, bIsSimpleDown))
     {
         ERR("Kbd msg dropped by WH_KEYBOARD_LL hook\n");
         bPostMsg = FALSE;
     }
+
+    UpdateAsyncKeyState(wSimpleVk, bIsSimpleDown);
 
     /* Check if this is a hotkey */
     if (co_UserProcessHotKeys(wSimpleVk, bIsDown)) //// Check if this is correct, refer to hotkey sequence message tests.
