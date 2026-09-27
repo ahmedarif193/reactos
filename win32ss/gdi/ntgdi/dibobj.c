@@ -213,10 +213,8 @@ CreateDIBPalette(
             }
             else
             {
-                /* This is an RGB 888 palette */
-                flRedMask = 0xFF0000;
-                flGreenMask = 0x00FF00;
-                flBlueMask = 0x0000FF;
+                GDIOBJ_vReferenceObjectByPointer(&gpalBGR.BaseObject);
+                return &gpalBGR;
             }
         }
 
@@ -741,7 +739,7 @@ NtGdiSetDIBitsToDeviceInternal(
 
     if (pDC->dctype == DCTYPE_INFO)
     {
-        ret = 0;
+        ret = ScanLines;
         goto Exit;
     }
 
@@ -1042,7 +1040,8 @@ GreGetDIBitsInternal(
     /* Image data can only be retrieved from a DDB that is compatible
        with the DC: same depth or monochrome. Pure header queries with
        biBitCount = 0 still work on any bitmap. */
-    if ((bpp != 0) && (psurf->hSecure == NULL))
+    if ((bpp != 0) && (psurf->hSecure == NULL) &&
+        (psurf->ppal == appalSurfaceDefault[psurf->SurfObj.iBitmapFormat]))
     {
         ULONG cBppSurf = BitsPerFormat(psurf->SurfObj.iBitmapFormat);
         ULONG cBppDC = pDC->ppdev->gdiinfo.cBitsPixel;
@@ -1093,7 +1092,8 @@ GreGetDIBitsInternal(
 
         /* If the bitmap is a DIB section and has the same format as what
          * is requested, go ahead! */
-        if((psurf->hSecure) &&
+        if(((psurf->hSecure) ||
+            (psurf->ppal != appalSurfaceDefault[psurf->SurfObj.iBitmapFormat])) &&
                 (BitsPerFormat(psurf->SurfObj.iBitmapFormat) == bpp))
         {
             if(Usage == DIB_RGB_COLORS)
@@ -1109,6 +1109,14 @@ GreGetDIBitsInternal(
                 if (colors < (1UL << bpp))
                     RtlZeroMemory(&rgbQuads[colors],
                                   ((1UL << bpp) - colors) * sizeof(RGBQUAD));
+            }
+            else if (psurf->ppal->flFlags & PAL_BRUSHHACK)
+            {
+                ULONG colors = min(psurf->ppal->NumColors, 256);
+                for(i = 0; i < colors; i++)
+                    ((WORD*)rgbQuads)[i] = (WORD)PALETTE_ulGetRGBColorFromIndex(psurf->ppal, i);
+                for(; i < 256; i++)
+                    ((WORD*)rgbQuads)[i] = 0;
             }
             else
             {
@@ -1276,7 +1284,14 @@ GreGetDIBitsInternal(
         Info->bmiHeader.biHeight = (height < 0) ?
                                    -(LONG)ScanLines : ScanLines;
         /* Create the DIB */
-        hBmpDest = DIB_CreateDIBSection(pDC, Info, Usage, &pDIBits, NULL, 0, 0);
+        hBmpDest = DIB_CreateDIBSection(pDC,
+                                        Info,
+                                        ((Usage == DIB_PAL_COLORS) && (psurf->ppal->flFlags & PAL_BRUSHHACK)) ?
+                                            DIB_PAL_BRUSHHACK : Usage,
+                                        &pDIBits,
+                                        NULL,
+                                        0,
+                                        0);
         /* Restore them */
         Info->bmiHeader.biHeight = height;
 
@@ -1532,8 +1547,11 @@ NtGdiStretchDIBitsInternal(
 {
     RECTL rcSrc, rcDst;
     PDC pdc;
-    HBITMAP hbmTmp = 0;
+    HBITMAP hbmTmp = 0, hbmMask = 0;
     PSURFACE psurfTmp = 0, psurfDst = 0;
+    SURFOBJ *psoMask = NULL;
+    BOOL bRleMask = FALSE;
+    POINTL ptlMask;
     PPALETTE ppalDIB = 0;
     EXLATEOBJ exlo;
     PBYTE pvBits;
@@ -1621,13 +1639,26 @@ NtGdiStretchDIBitsInternal(
         return 0;
     }
 
+    if (dwRop == SRCCOPY)
+    {
+        LinesCopied = abs(pbmiSafe->bmiHeader.biHeight);
+        if ((cxDst == cxSrc) && (cyDst == cySrc) && (cxSrc > 0) && (cySrc > 0) &&
+            ((LONGLONG)ySrc + cySrc < LinesCopied))
+        {
+            LinesCopied = (INT)max((LONGLONG)ySrc + cySrc, 0);
+        }
+    }
+    else
+    {
+        LinesCopied = pbmiSafe->bmiHeader.biHeight;
+    }
+
     /* Check for info / mem DC without surface */
     if (!pdc->dclevel.pSurface)
     {
         DC_UnlockDc(pdc);
-        // CHECKME
         ExFreePoolWithTag(pbmiSafe, 'imBG');
-        return TRUE;
+        return LinesCopied;
     }
     DC_UnlockDc(pdc);
 
@@ -1670,7 +1701,7 @@ NtGdiStretchDIBitsInternal(
         }
 
         {
-            LONG dstX, dstY, dstW, dstH;
+            LONG dstX, dstY, dstW, dstH, lAdjust;
             LONG srcX = xSrc, srcY = ySrc, srcW = cxSrc, srcH = cySrc;
             LONG biHeight = abs(pbmiSafe->bmiHeader.biHeight);
             BOOL bTopDown = (pbmiSafe->bmiHeader.biHeight < 0);
@@ -1690,6 +1721,10 @@ NtGdiStretchDIBitsInternal(
             bNonStretch = (srcX == 0) && (srcY == 0) &&
                           (srcW == dstW) && (srcH == dstH);
 
+            bRleMask = bNonStretch && (dwRop == SRCCOPY) &&
+                       (pbmiSafe->bmiHeader.biCompression == BI_RLE8 ||
+                        pbmiSafe->bmiHeader.biCompression == BI_RLE4);
+
             if ((dwRop != SRCCOPY) || bNonStretch)
             {
                 if ((dstW == 1) && (srcW > 1)) srcW--;
@@ -1699,6 +1734,10 @@ NtGdiStretchDIBitsInternal(
             if (!bTopDown || ((dwRop == SRCCOPY) && !bNonStretch))
                 srcY = biHeight - srcY - srcH;
 
+            lAdjust = ((dwRop != SRCCOPY) &&
+                       ((dstW < 0) == (srcW < 0)) && ((dstH < 0) == (srcH < 0)) &&
+                       ((dstW < 0) || (dstH < 0))) ? 0 : 1;
+
             if (srcW >= 0)
             {
                 rcSrc.left = srcX;
@@ -1706,8 +1745,8 @@ NtGdiStretchDIBitsInternal(
             }
             else
             {
-                rcSrc.left = srcX + srcW + 1;
-                rcSrc.right = srcX + 1;
+                rcSrc.left = srcX + srcW + lAdjust;
+                rcSrc.right = srcX + lAdjust;
             }
             if (srcH >= 0)
             {
@@ -1716,8 +1755,8 @@ NtGdiStretchDIBitsInternal(
             }
             else
             {
-                rcSrc.top = srcY + srcH + 1;
-                rcSrc.bottom = srcY + 1;
+                rcSrc.top = srcY + srcH + lAdjust;
+                rcSrc.bottom = srcY + lAdjust;
             }
 
             if (dstW >= 0)
@@ -1727,8 +1766,8 @@ NtGdiStretchDIBitsInternal(
             }
             else
             {
-                rcDst.left = dstX + dstW + 1;
-                rcDst.right = dstX + 1;
+                rcDst.left = dstX + dstW + lAdjust;
+                rcDst.right = dstX + lAdjust;
             }
             if (dstH >= 0)
             {
@@ -1737,8 +1776,8 @@ NtGdiStretchDIBitsInternal(
             }
             else
             {
-                rcDst.top = dstY + dstH + 1;
-                rcDst.bottom = dstY + 1;
+                rcDst.top = dstY + dstH + lAdjust;
+                rcDst.bottom = dstY + lAdjust;
             }
         }
 
@@ -1770,6 +1809,19 @@ NtGdiStretchDIBitsInternal(
             goto cleanup;
         }
 
+        if (bRleMask && pvBits)
+        {
+            hbmMask = IntGdiCreateMaskFromRLE(pbmiSafe->bmiHeader.biWidth,
+                                              abs(pbmiSafe->bmiHeader.biHeight),
+                                              pbmiSafe->bmiHeader.biCompression,
+                                              pvBits,
+                                              cjMaxBits);
+            if (hbmMask)
+                psoMask = EngLockSurface((HSURF)hbmMask);
+            ptlMask.x = rcSrc.left;
+            ptlMask.y = rcSrc.top;
+        }
+
         /* Create a palette for the DIB */
         ppalDIB = CreateDIBPalette(pbmiSafe, pdc, dwUsage);
         if (!ppalDIB)
@@ -1794,17 +1846,17 @@ NtGdiStretchDIBitsInternal(
          * IntEngBitBlt path inside IntEngStretchBlt). */
         IntEngStretchBlt(&psurfDst->SurfObj,
                          &psurfTmp->SurfObj,
-                         NULL,
+                         psoMask,
                          (CLIPOBJ *)&pdc->co,
                          &exlo.xlo,
                          &pdc->dclevel.ca,
                          &rcDst,
                          &rcSrc,
-                         NULL,
+                         psoMask ? &ptlMask : NULL,
                          &pdc->eboFill.BrushObject,
                          NULL,
                          pdc->pdcattr->jStretchBltMode,
-                         WIN32_ROP3_TO_ENG_ROP4(dwRop),
+                         psoMask ? ROP4_MASK : WIN32_ROP3_TO_ENG_ROP4(dwRop),
                          TRUE);
 
         /* Cleanup */
@@ -1815,22 +1867,12 @@ NtGdiStretchDIBitsInternal(
         if (ppalDIB) PALETTE_ShareUnlockPalette(ppalDIB);
         if (psurfTmp) SURFACE_ShareUnlockSurface(psurfTmp);
         if (hbmTmp) GreDeleteObject(hbmTmp);
+        if (psoMask) EngUnlockSurface(psoMask);
+        if (hbmMask) EngDeleteSurface((HSURF)hbmMask);
         if (pdc) DC_UnlockDc(pdc);
     }
 
     if (pvBits) ExFreePoolWithTag(pvBits, TAG_DIB);
-
-    /* This is not what MSDN says is returned from this function, but it
-     * follows Wine's dlls/gdi32/dib.c function nulldrv_StretchDIBits
-     * and it fixes over 100 gdi32:dib regression tests. */
-    if (dwRop == SRCCOPY)
-    {
-        LinesCopied = abs(pbmiSafe->bmiHeader.biHeight);
-    }
-    else
-    {
-        LinesCopied = pbmiSafe->bmiHeader.biHeight;
-    }
 
     ExFreePoolWithTag(pbmiSafe, 'imBG');
 

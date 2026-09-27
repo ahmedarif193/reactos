@@ -91,9 +91,7 @@ IntGdiPolygon(PDC    dc,
         /* Now fill the polygon with the current fill brush. */
         if (!(pbrFill->flAttrs & BR_IS_NULL))
         {
-            BrushOrigin = *((PPOINTL)&pbrFill->ptOrigin);
-            BrushOrigin.x += dc->ptlDCOrig.x;
-            BrushOrigin.y += dc->ptlDCOrig.y;
+            BrushOrigin = dc->ptlFillOrigin;
             ret = IntFillPolygon (dc,
                                   psurf,
                                   &dc->eboFill.BrushObject,
@@ -140,35 +138,24 @@ IntGdiPolygon(PDC    dc,
             }
             else
             {
-                for (i = 0; i < Count-1; i++)
-                {
-// DPRINT1("Polygon Making line from (%d,%d) to (%d,%d)\n",
-//                                 Points[0].x, Points[0].y,
-//                                 Points[1].x, Points[1].y );
+                MIX Mix = IntGdiLineMix(dc);
+                ULONG iBackColor = TranslateCOLORREF(dc, pdcattr->crBackgroundClr);
+                LONG lStyle = 0;
 
-                    ret = IntEngLineTo(&psurf->SurfObj,
-                                       (CLIPOBJ *)&dc->co,
-                                       &dc->eboLine.BrushObject,
-                                       Points[i].x,          /* From */
-                                       Points[i].y,
-                                       Points[i+1].x,        /* To */
-                                       Points[i+1].y,
-                                       &DestRect,
-                                       ROP2_TO_MIX(pdcattr->jROP2)); /* MIX */
-                    if (!ret) break;
-                }
-                /* Close the polygon */
-                if (ret)
+                for (i = 0; i < Count; i++)
                 {
-                    ret = IntEngLineTo(&psurf->SurfObj,
-                                       (CLIPOBJ *)&dc->co,
-                                       &dc->eboLine.BrushObject,
-                                       Points[Count-1].x, /* From */
-                                       Points[Count-1].y,
-                                       Points[0].x,       /* To */
-                                       Points[0].y,
-                                       &DestRect,
-                                       ROP2_TO_MIX(pdcattr->jROP2)); /* MIX */
+                    ret = IntEngLineToEx(&psurf->SurfObj,
+                                         (CLIPOBJ *)&dc->co,
+                                         &dc->eboLine.BrushObject,
+                                         Points[i].x,
+                                         Points[i].y,
+                                         Points[(i + 1) % Count].x,
+                                         Points[(i + 1) % Count].y,
+                                         &DestRect,
+                                         Mix,
+                                         iBackColor,
+                                         &lStyle);
+                    if (!ret) break;
                 }
             }
         }
@@ -347,10 +334,6 @@ NtGdiEllipse(
     else
     {
         RtlCopyMemory(&tmpFillBrushObj, pFillBrushObj, sizeof(tmpFillBrushObj));
-        //tmpFillBrushObj.ptOrigin.x += RectBounds.left - Left;
-        //tmpFillBrushObj.ptOrigin.y += RectBounds.top - Top;
-        tmpFillBrushObj.ptOrigin.x += dc->ptlDCOrig.x;
-        tmpFillBrushObj.ptOrigin.y += dc->ptlDCOrig.y;
 
         /* The stroked outline can extend outside the nominal fill bounds. */
         DC_vPrepareDCsForBlit(dc, (dc->fs & DC_REDIRECTION) ? NULL : &RectBounds, NULL, NULL);
@@ -448,7 +431,7 @@ NtGdiPolyPolyDraw( IN HDC hDC,
     PULONG SafeCounts;
     NTSTATUS Status = STATUS_SUCCESS;
     BOOL Ret = TRUE;
-    ULONG nPoints = 0, nMaxPoints = 0, nInvalid = 0, i;
+    ULONG nPoints = 0, nInvalid = 0, i;
     BOOL bOverflow = FALSE;
 
     if (!UnsafePoints || !UnsafeCounts ||
@@ -497,7 +480,6 @@ NtGdiPolyPolyDraw( IN HDC hDC,
                 bOverflow = TRUE;
             else
                 nPoints += UnsafeCounts[i];
-            nMaxPoints = max(nMaxPoints, UnsafeCounts[i]);
         }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -518,10 +500,9 @@ NtGdiPolyPolyDraw( IN HDC hDC,
         return FALSE;
     }
 
-    if (nPoints == 0 || nPoints < nMaxPoints)
+    if (nPoints == 0)
     {
-        /* If all polygon counts are zero, or we have overflow,
-           return without setting a last error code. */
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
@@ -725,20 +706,29 @@ IntRectangle(PDC dc,
     {
         if (!(pbrFill->flAttrs & BR_IS_NULL))
         {
-            BrushOrigin = *((PPOINTL)&pbrFill->ptOrigin);
-            BrushOrigin.x += dc->ptlDCOrig.x;
-            BrushOrigin.y += dc->ptlDCOrig.y;
-            ret = IntEngBitBlt(&psurf->SurfObj,
-                               NULL,
-                               NULL,
-                               (CLIPOBJ *)&dc->co,
-                               NULL,
-                               &DestRect,
-                               NULL,
-                               NULL,
-                               &dc->eboFill.BrushObject,
-                               &BrushOrigin,
-                               ROP4_FROM_INDEX(R3_OPINDEX_PATCOPY));
+            RECTL FillRect = DestRect;
+
+            if (!(pbrLine->flAttrs & BR_IS_NULL) && !IntIsEffectiveWidePen(pbrLine))
+            {
+                FillRect.left++;
+                FillRect.top++;
+            }
+
+            BrushOrigin = dc->ptlFillOrigin;
+            if (FillRect.left < FillRect.right && FillRect.top < FillRect.bottom)
+            {
+                ret = IntEngBitBlt(&psurf->SurfObj,
+                                   NULL,
+                                   NULL,
+                                   (CLIPOBJ *)&dc->co,
+                                   NULL,
+                                   &FillRect,
+                                   NULL,
+                                   NULL,
+                                   &dc->eboFill.BrushObject,
+                                   &BrushOrigin,
+                                   MIX_TO_ROP4(ROP2_TO_MIX(pdcattr->jROP2)));
+            }
         }
     }
 
@@ -782,34 +772,38 @@ IntRectangle(PDC dc,
         }
         else
         {
-            Mix = ROP2_TO_MIX(pdcattr->jROP2);
-            ret = ret && IntEngLineTo(&psurf->SurfObj,
-                                      (CLIPOBJ *)&dc->co,
-                                      &dc->eboLine.BrushObject,
-                                      DestRect.left, DestRect.top, DestRect.right, DestRect.top,
-                                      &DestRect, // Bounding rectangle
-                                      Mix);
+            POINT Corners[4];
+            ULONG iBackColor, i;
+            LONG lStyle = 0;
 
-            ret = ret && IntEngLineTo(&psurf->SurfObj,
-                                      (CLIPOBJ *)&dc->co,
-                                      &dc->eboLine.BrushObject,
-                                      DestRect.right, DestRect.top, DestRect.right, DestRect.bottom,
-                                      &DestRect, // Bounding rectangle
-                                      Mix);
+            Mix = IntGdiLineMix(dc);
+            iBackColor = TranslateCOLORREF(dc, pdcattr->crBackgroundClr);
 
-            ret = ret && IntEngLineTo(&psurf->SurfObj,
-                                      (CLIPOBJ *)&dc->co,
-                                      &dc->eboLine.BrushObject,
-                                      DestRect.right, DestRect.bottom, DestRect.left, DestRect.bottom,
-                                      &DestRect, // Bounding rectangle
-                                      Mix);
+            Corners[0].x = Corners[3].x = DestRect.right;
+            Corners[1].x = Corners[2].x = DestRect.left;
+            if (dc->dclevel.flPath & DCPATH_CLOCKWISE)
+            {
+                Corners[0].y = Corners[1].y = DestRect.bottom;
+                Corners[2].y = Corners[3].y = DestRect.top;
+            }
+            else
+            {
+                Corners[0].y = Corners[1].y = DestRect.top;
+                Corners[2].y = Corners[3].y = DestRect.bottom;
+            }
 
-            ret = ret && IntEngLineTo(&psurf->SurfObj,
-                                      (CLIPOBJ *)&dc->co,
-                                      &dc->eboLine.BrushObject,
-                                      DestRect.left, DestRect.bottom, DestRect.left, DestRect.top,
-                                      &DestRect, // Bounding rectangle
-                                      Mix);
+            for (i = 0; ret && i < 4; i++)
+            {
+                ret = IntEngLineToEx(&psurf->SurfObj,
+                                     (CLIPOBJ *)&dc->co,
+                                     &dc->eboLine.BrushObject,
+                                     Corners[i].x, Corners[i].y,
+                                     Corners[(i + 1) % 4].x, Corners[(i + 1) % 4].y,
+                                     &DestRect,
+                                     Mix,
+                                     iBackColor,
+                                     &lStyle);
+            }
         }
     }
 
@@ -977,8 +971,6 @@ IntRoundRect(
         DC_vPrepareDCsForBlit(dc, (dc->fs & DC_REDIRECTION) ? NULL : &RectBounds, NULL, NULL);
 
         RtlCopyMemory(&brushTemp, pbrFill, sizeof(brushTemp));
-        brushTemp.ptOrigin.x += RectBounds.left - Left;
-        brushTemp.ptOrigin.y += RectBounds.top - Top;
         ret = IntFillRoundRect( dc,
                                 RectBounds.left,
                                 RectBounds.top,

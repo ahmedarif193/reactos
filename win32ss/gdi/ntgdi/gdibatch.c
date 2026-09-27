@@ -800,7 +800,9 @@ NtGdiFlushUserBatch(VOID)
       PCHAR pHdr = (PCHAR)&pTeb->GdiTebBatch.Buffer[0];
       PDC pDC = NULL;
 
-      if (GDI_HANDLE_GET_TYPE(hDC) == GDILoObjType_LO_DC_TYPE && GreIsHandleValid(hDC))
+      if ((GDI_HANDLE_GET_TYPE(hDC) == GDILoObjType_LO_DC_TYPE ||
+           GDI_HANDLE_GET_TYPE(hDC) == GDILoObjType_LO_ALTDC_TYPE) &&
+          GreIsHandleValid(hDC))
       {
           pDC = DC_LockDc(hDC);
       }

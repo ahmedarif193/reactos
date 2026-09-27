@@ -257,6 +257,24 @@ IntGdiExtCreatePen(
 
     NT_ASSERT((pbrushPen->dwStyleCount == 0) || (pbrushPen->pStyle != NULL));
 
+    if (ulBrushStyle == BS_PATTERN)
+    {
+        HBITMAP hbmPattern = BITMAP_CopyBitmap((HBITMAP)ulHatch);
+
+        if (!hbmPattern)
+            goto ExitCleanup;
+        GreSetBitmapOwner(hbmPattern, GDI_OBJ_HMGR_PUBLIC);
+        pbrushPen->hbmPattern = hbmPattern;
+        pbrushPen->flAttrs &= ~BR_IS_SOLID;
+        pbrushPen->flAttrs |= BR_IS_BITMAP;
+    }
+    else if (ulBrushStyle == BS_HATCHED)
+    {
+        pbrushPen->iHatch = (ULONG)ulHatch;
+        pbrushPen->flAttrs &= ~BR_IS_SOLID;
+        pbrushPen->flAttrs |= BR_IS_HATCH;
+    }
+
     PEN_UnlockPen(pbrushPen);
     return hPen;
 

@@ -9,6 +9,11 @@ GreSetBitmapOwner(
     _In_ HBITMAP hbmp,
     _In_ ULONG ulOwner);
 
+BOOL
+NTAPI
+GreIsDIBSection(
+    _In_ HBITMAP hbmp);
+
 HBITMAP
 NTAPI
 GreCreateBitmap(

@@ -43,6 +43,23 @@ GreSetBitmapOwner(
     return GreSetObjectOwner(hbmp, ulOwner);
 }
 
+BOOL
+NTAPI
+GreIsDIBSection(
+    _In_ HBITMAP hbmp)
+{
+    PSURFACE psurf;
+    BOOL bDIBSection;
+
+    psurf = SURFACE_ShareLockSurface(hbmp);
+    if (!psurf)
+        return FALSE;
+
+    bDIBSection = (psurf->hDIBSection != NULL || psurf->hSecure != NULL);
+    SURFACE_ShareUnlockSurface(psurf);
+    return bDIBSection;
+}
+
 LONG
 NTAPI
 UnsafeSetBitmapBits(

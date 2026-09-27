@@ -148,6 +148,614 @@ IntGetCurrentPositionEx(PDC dc, LPPOINT pt)
     }
 }
 
+typedef struct _WIDEPEN_FACE
+{
+    POINT start, end;
+    INT dx, dy;
+} WIDEPEN_FACE, *PWIDEPEN_FACE;
+
+typedef struct _WIDEPEN
+{
+    PREGION prgnTotal;
+    PREGION prgnRound;
+    INT iWidth;
+    ULONG iEndCap;
+    ULONG iJoin;
+    FLOAT eMiterLimit;
+    ULONG aulDash[16];
+    ULONG cDash;
+    ULONG ulDashTotal;
+    ULONG iDash;
+    ULONG ulDashLeft;
+    BOOL bDashMark;
+} WIDEPEN, *PWIDEPEN;
+
+static LONG
+WidePenRound(double d)
+{
+    return (LONG)((d > 0) ? (d + 0.5) : (d - 0.5));
+}
+
+static VOID
+WidePenAddRect(PWIDEPEN pwp, const RECTL *prcl)
+{
+    if (prcl->left < prcl->right && prcl->top < prcl->bottom)
+        REGION_UnionRectWithRgn(pwp->prgnTotal, prcl);
+}
+
+static VOID
+WidePenAddPolygon(PWIDEPEN pwp, const POINT *ppt, ULONG cpt)
+{
+    PREGION prgn = IntSysCreateRectpRgn(0, 0, 0, 0);
+
+    if (!prgn)
+        return;
+    if (REGION_SetPolyPolygonRgn(prgn, ppt, &cpt, 1, ALTERNATE))
+        IntGdiCombineRgn(pwp->prgnTotal, pwp->prgnTotal, prgn, RGN_OR);
+    REGION_Delete(prgn);
+}
+
+static VOID
+WidePenAddRound(PWIDEPEN pwp, const POINT *ppt)
+{
+    if (!pwp->prgnRound)
+        return;
+    REGION_bOffsetRgn(pwp->prgnRound, ppt->x, ppt->y);
+    IntGdiCombineRgn(pwp->prgnTotal, pwp->prgnTotal, pwp->prgnRound, RGN_OR);
+    REGION_bOffsetRgn(pwp->prgnRound, -ppt->x, -ppt->y);
+}
+
+static VOID
+WidePenAddCap(PWIDEPEN pwp, const POINT *ppt)
+{
+    if (pwp->iEndCap == PS_ENDCAP_ROUND)
+        WidePenAddRound(pwp, ppt);
+}
+
+static BOOL
+WidePenAddMiter(PWIDEPEN pwp, const POINT *ppt, const WIDEPEN_FACE *pf1, const WIDEPEN_FACE *pf2)
+{
+    INT det = pf1->dx * pf2->dy - pf1->dy * pf2->dx;
+    POINT pt1, pt2, apt[5];
+    double a, b, x, y;
+
+    if (det == 0)
+        return FALSE;
+
+    if (det < 0)
+    {
+        const WIDEPEN_FACE *pfTmp = pf1;
+        pf1 = pf2;
+        pf2 = pfTmp;
+        det = -det;
+    }
+
+    pt1 = pf1->start;
+    pt2 = pf2->end;
+
+    a = (double)(pt2.x * pf2->dy - pt2.y * pf2->dx) / det;
+    b = (double)(pt1.x * pf1->dy - pt1.y * pf1->dx) / det;
+
+    x = a * pf1->dx - b * pf2->dx;
+    y = a * pf1->dy - b * pf2->dy;
+
+    if (((x - ppt->x) * (x - ppt->x) + (y - ppt->y) * (y - ppt->y)) * 4 >
+        (double)pwp->eMiterLimit * pwp->eMiterLimit * pwp->iWidth * pwp->iWidth)
+    {
+        return FALSE;
+    }
+
+    apt[0] = pf2->start;
+    apt[1] = pf1->start;
+    apt[2].x = WidePenRound(x);
+    apt[2].y = WidePenRound(y);
+    apt[3] = pf2->end;
+    apt[4] = pf1->end;
+    WidePenAddPolygon(pwp, apt, 5);
+    return TRUE;
+}
+
+static VOID
+WidePenAddJoin(PWIDEPEN pwp, const POINT *ppt, const WIDEPEN_FACE *pf1, const WIDEPEN_FACE *pf2)
+{
+    POINT apt[4];
+
+    if (pwp->iJoin == PS_JOIN_ROUND)
+    {
+        WidePenAddRound(pwp, ppt);
+        return;
+    }
+
+    if (pwp->iJoin == PS_JOIN_MITER && WidePenAddMiter(pwp, ppt, pf1, pf2))
+        return;
+
+    apt[0] = pf1->start;
+    apt[1] = pf2->end;
+    apt[2] = pf1->end;
+    apt[3] = pf2->start;
+    WidePenAddPolygon(pwp, apt, 4);
+}
+
+static BOOL
+WidePenSegment(PWIDEPEN pwp, const POINT *ppt1, const POINT *ppt2, INT dx, INT dy,
+               BOOL bCap1, BOOL bCap2, PWIDEPEN_FACE pf1, PWIDEPEN_FACE pf2)
+{
+    RECTL rcl;
+    INT iWidth = pwp->iWidth;
+    BOOL bSquare1 = bCap1 && (pwp->iEndCap == PS_ENDCAP_SQUARE);
+    BOOL bSquare2 = bCap2 && (pwp->iEndCap == PS_ENDCAP_SQUARE);
+
+    if (dx == 0 && dy == 0)
+        return FALSE;
+
+    if (dy == 0)
+    {
+        rcl.left = min(ppt1->x, ppt2->x);
+        rcl.right = max(ppt1->x, ppt2->x);
+        rcl.top = ppt1->y - iWidth / 2;
+        rcl.bottom = rcl.top + iWidth;
+        if ((bSquare1 && dx > 0) || (bSquare2 && dx < 0)) rcl.left -= iWidth / 2;
+        if ((bSquare2 && dx > 0) || (bSquare1 && dx < 0)) rcl.right += iWidth / 2;
+        WidePenAddRect(pwp, &rcl);
+        if (dx > 0)
+        {
+            pf1->start.x = pf1->end.x = rcl.left;
+            pf1->start.y = pf2->end.y = rcl.bottom;
+            pf1->end.y = pf2->start.y = rcl.top;
+            pf2->start.x = pf2->end.x = rcl.right - 1;
+        }
+        else
+        {
+            pf1->start.x = pf1->end.x = rcl.right;
+            pf1->start.y = pf2->end.y = rcl.top;
+            pf1->end.y = pf2->start.y = rcl.bottom;
+            pf2->start.x = pf2->end.x = rcl.left + 1;
+        }
+    }
+    else if (dx == 0)
+    {
+        rcl.top = min(ppt1->y, ppt2->y);
+        rcl.bottom = max(ppt1->y, ppt2->y);
+        rcl.left = ppt1->x - iWidth / 2;
+        rcl.right = rcl.left + iWidth;
+        if ((bSquare1 && dy > 0) || (bSquare2 && dy < 0)) rcl.top -= iWidth / 2;
+        if ((bSquare2 && dy > 0) || (bSquare1 && dy < 0)) rcl.bottom += iWidth / 2;
+        WidePenAddRect(pwp, &rcl);
+        if (dy > 0)
+        {
+            pf1->start.x = pf2->end.x = rcl.left;
+            pf1->start.y = pf1->end.y = rcl.top;
+            pf1->end.x = pf2->start.x = rcl.right;
+            pf2->start.y = pf2->end.y = rcl.bottom - 1;
+        }
+        else
+        {
+            pf1->start.x = pf2->end.x = rcl.right;
+            pf1->start.y = pf1->end.y = rcl.bottom;
+            pf1->end.x = pf2->start.x = rcl.left;
+            pf2->start.y = pf2->end.y = rcl.top + 1;
+        }
+    }
+    else
+    {
+        double len = sqrt((double)dx * dx + (double)dy * dy);
+        double width_x = iWidth * abs(dy) / len;
+        double width_y = iWidth * abs(dx) / len;
+        POINT apt[4], ptWide, ptNarrow;
+
+        ptNarrow.x = WidePenRound(width_x / 2);
+        ptNarrow.y = WidePenRound(width_y / 2);
+        ptWide.x = WidePenRound((width_x + 1) / 2);
+        ptWide.y = WidePenRound((width_y + 1) / 2);
+
+        if (dx < 0)
+        {
+            ptWide.y = -ptWide.y;
+            ptNarrow.y = -ptNarrow.y;
+        }
+
+        if (dy < 0)
+        {
+            POINT ptTmp = ptNarrow;
+            ptNarrow = ptWide;
+            ptWide = ptTmp;
+            ptWide.x = -ptWide.x;
+            ptNarrow.x = -ptNarrow.x;
+        }
+
+        apt[0].x = ppt1->x - ptNarrow.x;
+        apt[0].y = ppt1->y + ptNarrow.y;
+        apt[1].x = ppt1->x + ptWide.x;
+        apt[1].y = ppt1->y - ptWide.y;
+        apt[2].x = ppt2->x + ptWide.x;
+        apt[2].y = ppt2->y - ptWide.y;
+        apt[3].x = ppt2->x - ptNarrow.x;
+        apt[3].y = ppt2->y + ptNarrow.y;
+
+        if (bSquare1)
+        {
+            apt[0].x -= ptNarrow.y;
+            apt[1].x -= ptNarrow.y;
+            apt[0].y -= ptNarrow.x;
+            apt[1].y -= ptNarrow.x;
+        }
+
+        if (bSquare2)
+        {
+            apt[2].x += ptWide.y;
+            apt[3].x += ptWide.y;
+            apt[2].y += ptWide.x;
+            apt[3].y += ptWide.x;
+        }
+
+        WidePenAddPolygon(pwp, apt, 4);
+
+        pf1->start = apt[0];
+        pf1->end = apt[1];
+        pf2->start = apt[2];
+        pf2->end = apt[3];
+    }
+
+    pf1->dx = pf2->dx = dx;
+    pf1->dy = pf2->dy = dy;
+    return TRUE;
+}
+
+static VOID
+WidePenSegments(PWIDEPEN pwp, INT cpt, const POINT *ppt, BOOL bClose, INT iStart, INT cSeg,
+                const POINT *pptFirst, const POINT *pptLast)
+{
+    WIDEPEN_FACE f1, f2, fPrev, fFirst;
+    const POINT *ppt1, *ppt2;
+    INT i;
+
+    if (!bClose)
+    {
+        WidePenAddCap(pwp, pptFirst);
+        WidePenAddCap(pwp, pptLast);
+    }
+
+    if (cSeg == 1)
+    {
+        ppt1 = &ppt[iStart];
+        ppt2 = &ppt[(iStart + 1) % cpt];
+        WidePenSegment(pwp, pptFirst, pptLast, ppt2->x - ppt1->x, ppt2->y - ppt1->y,
+                       TRUE, TRUE, &f1, &f2);
+        return;
+    }
+
+    ppt1 = &ppt[iStart];
+    ppt2 = &ppt[(iStart + 1) % cpt];
+    WidePenSegment(pwp, pptFirst, ppt2, ppt2->x - ppt1->x, ppt2->y - ppt1->y,
+                   !bClose, FALSE, &fFirst, &fPrev);
+
+    for (i = 1; i < cSeg - 1; i++)
+    {
+        ppt1 = &ppt[(iStart + i) % cpt];
+        ppt2 = &ppt[(iStart + i + 1) % cpt];
+        if (WidePenSegment(pwp, ppt1, ppt2, ppt2->x - ppt1->x, ppt2->y - ppt1->y,
+                           FALSE, FALSE, &f1, &f2))
+        {
+            WidePenAddJoin(pwp, ppt1, &fPrev, &f1);
+            fPrev = f2;
+        }
+    }
+
+    ppt1 = &ppt[(iStart + cSeg - 1) % cpt];
+    ppt2 = &ppt[(iStart + cSeg) % cpt];
+    WidePenSegment(pwp, ppt1, pptLast, ppt2->x - ppt1->x, ppt2->y - ppt1->y,
+                   FALSE, !bClose, &f1, &f2);
+    WidePenAddJoin(pwp, ppt1, &fPrev, &f1);
+    if (bClose)
+        WidePenAddJoin(pwp, pptLast, &f2, &fFirst);
+}
+
+static VOID
+WidePenSkipDash(PWIDEPEN pwp, ULONG ulSkip)
+{
+    ulSkip %= pwp->ulDashTotal;
+    do
+    {
+        if (pwp->ulDashLeft > ulSkip)
+        {
+            pwp->ulDashLeft -= ulSkip;
+            return;
+        }
+        ulSkip -= pwp->ulDashLeft;
+        if (++pwp->iDash == pwp->cDash)
+            pwp->iDash = 0;
+        pwp->ulDashLeft = pwp->aulDash[pwp->iDash];
+        pwp->bDashMark = !pwp->bDashMark;
+    }
+    while (ulSkip);
+}
+
+static VOID
+WidePenDashedLines(PWIDEPEN pwp, INT cpt, const POINT *ppt, BOOL bClose)
+{
+    INT i, iStart = 0, iInitial = 0;
+    LONG lCur = 0;
+    POINT ptInitial = { 0, 0 }, ptStart = ppt[0], ptEnd;
+
+    for (i = 0; i < (bClose ? cpt : cpt - 1); i++)
+    {
+        const POINT *ppt1 = &ppt[i];
+        const POINT *ppt2 = &ppt[(bClose && i == cpt - 1) ? 0 : i + 1];
+        INT dx = ppt2->x - ppt1->x;
+        INT dy = ppt2->y - ppt1->y;
+
+        if (dx == 0 && dy == 0)
+            continue;
+
+        if (dy == 0)
+        {
+            if (abs(dx) - lCur < (LONG)pwp->ulDashLeft)
+            {
+                WidePenSkipDash(pwp, abs(dx) - lCur);
+                lCur = 0;
+                continue;
+            }
+            lCur += pwp->ulDashLeft;
+            dx = (dx > 0) ? lCur : -lCur;
+        }
+        else if (dx == 0)
+        {
+            if (abs(dy) - lCur < (LONG)pwp->ulDashLeft)
+            {
+                WidePenSkipDash(pwp, abs(dy) - lCur);
+                lCur = 0;
+                continue;
+            }
+            lCur += pwp->ulDashLeft;
+            dy = (dy > 0) ? lCur : -lCur;
+        }
+        else
+        {
+            double len = sqrt((double)dx * dx + (double)dy * dy);
+
+            if (len - lCur < pwp->ulDashLeft)
+            {
+                WidePenSkipDash(pwp, (ULONG)(len - lCur));
+                lCur = 0;
+                continue;
+            }
+            lCur += pwp->ulDashLeft;
+            dx = (INT)(dx * lCur / len);
+            dy = (INT)(dy * lCur / len);
+        }
+        ptEnd.x = ppt1->x + dx;
+        ptEnd.y = ppt1->y + dy;
+
+        if (pwp->bDashMark)
+        {
+            if (!iInitial && bClose)
+            {
+                iInitial = i - iStart + 1;
+                ptInitial = ptEnd;
+            }
+            else
+            {
+                WidePenSegments(pwp, cpt, ppt, FALSE, iStart, i - iStart + 1, &ptStart, &ptEnd);
+            }
+        }
+        if (!iInitial)
+            iInitial = -1;
+
+        WidePenSkipDash(pwp, pwp->ulDashLeft);
+        ptStart = ptEnd;
+        iStart = i;
+        i--;
+    }
+
+    if (pwp->bDashMark)
+    {
+        INT cSeg;
+
+        if (iInitial > 0)
+        {
+            cSeg = cpt - iStart + iInitial;
+            ptEnd = ptInitial;
+        }
+        else if (bClose)
+        {
+            cSeg = cpt - iStart;
+            ptEnd = ppt[0];
+        }
+        else
+        {
+            cSeg = cpt - iStart - 1;
+            ptEnd = ppt[cpt - 1];
+        }
+        WidePenSegments(pwp, cpt, ppt, FALSE, iStart, cSeg, &ptStart, &ptEnd);
+    }
+    else if (iInitial > 0)
+    {
+        WidePenSegments(pwp, cpt, ppt, FALSE, 0, iInitial, &ppt[0], &ptInitial);
+    }
+}
+
+static BOOL
+WidePenSetDashes(PWIDEPEN pwp, PBRUSH pbrLine)
+{
+    static const ULONG aulGeometric[4][6] =
+    {
+        { 3, 1 },
+        { 1, 1 },
+        { 3, 1, 1, 1 },
+        { 3, 1, 1, 1, 1, 1 }
+    };
+    static const ULONG acGeometric[4] = { 2, 2, 4, 6 };
+    ULONG iStyle = pbrLine->ulPenStyle & PS_STYLE_MASK;
+    BOOL bGeometric = (pbrLine->ulPenStyle & PS_TYPE_MASK) == PS_GEOMETRIC &&
+                      !(pbrLine->flAttrs & BR_IS_OLDSTYLEPEN);
+    ULONG i, ulScale;
+
+    pwp->cDash = 0;
+    if (!bGeometric || iStyle == PS_SOLID || iStyle == PS_INSIDEFRAME)
+        return TRUE;
+
+    if (iStyle >= PS_DASH && iStyle <= PS_DASHDOTDOT)
+    {
+        pwp->cDash = acGeometric[iStyle - PS_DASH];
+        RtlCopyMemory(pwp->aulDash, aulGeometric[iStyle - PS_DASH], pwp->cDash * sizeof(ULONG));
+        ulScale = pwp->iWidth;
+    }
+    else if (iStyle == PS_USERSTYLE && pbrLine->pStyle &&
+             pbrLine->dwStyleCount && pbrLine->dwStyleCount <= RTL_NUMBER_OF(pwp->aulDash))
+    {
+        pwp->cDash = pbrLine->dwStyleCount;
+        RtlCopyMemory(pwp->aulDash, pbrLine->pStyle, pwp->cDash * sizeof(ULONG));
+        ulScale = 1;
+    }
+    else
+    {
+        return FALSE;
+    }
+
+    pwp->ulDashTotal = 0;
+    for (i = 0; i < pwp->cDash; i++)
+        pwp->ulDashTotal += pwp->aulDash[i];
+    if (pwp->cDash % 2)
+        pwp->ulDashTotal *= 2;
+    if (!pwp->ulDashTotal)
+        return FALSE;
+
+    if (ulScale > 1)
+    {
+        for (i = 0; i < pwp->cDash; i++)
+            pwp->aulDash[i] *= ulScale;
+        pwp->ulDashTotal *= ulScale;
+        if (pwp->iEndCap != PS_ENDCAP_FLAT)
+        {
+            for (i = 0; i + 1 < pwp->cDash; i += 2)
+            {
+                pwp->aulDash[i] -= ulScale;
+                pwp->aulDash[i + 1] += ulScale;
+            }
+        }
+    }
+
+    pwp->iDash = 0;
+    pwp->ulDashLeft = pwp->aulDash[0];
+    pwp->bDashMark = TRUE;
+    return TRUE;
+}
+
+static BOOL
+WidePenPaint(PDC pdc, PREGION prgnPen)
+{
+    PREGION prgnClip;
+    XCLIPOBJ xcoClip;
+    DWORD rop2Fg;
+    MIX mix;
+    BOOL bRet;
+
+    prgnClip = IntSysCreateRectpRgn(0, 0, 0, 0);
+    if (!prgnClip)
+        return FALSE;
+
+    IntGdiCombineRgn(prgnClip, pdc->prgnRao ? pdc->prgnRao : pdc->prgnVis, NULL, RGN_COPY);
+    REGION_bOffsetRgn(prgnClip, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
+    IntGdiCombineRgn(prgnClip, prgnClip, prgnPen, RGN_AND);
+
+    IntEngInitClipObj(&xcoClip);
+    IntEngUpdateClipRegion(&xcoClip,
+                           prgnClip->rdh.nCount,
+                           prgnClip->Buffer,
+                           &prgnClip->rdh.rcBound);
+
+    rop2Fg = FIXUP_ROP2(pdc->pdcattr->jROP2);
+    mix = rop2Fg | (pdc->pdcattr->jBkMode == OPAQUE ? rop2Fg : R2_NOP) << 8;
+
+    bRet = IntEngPaint(&pdc->dclevel.pSurface->SurfObj,
+                       (CLIPOBJ *)&xcoClip,
+                       &pdc->eboLine.BrushObject,
+                       &pdc->ptlFillOrigin,
+                       mix);
+
+    REGION_Delete(prgnClip);
+    IntEngFreeClipResources(&xcoClip);
+    return bRet;
+}
+
+BOOL FASTCALL
+IntWidePenLines(PDC pdc, PPOINT ppt, INT cpt, BOOL bClose)
+{
+    PBRUSH pbrLine = pdc->dclevel.pbrLine;
+    WIDEPEN wp;
+    HRGN hrgnRound = NULL;
+    BOOL bRet;
+
+    if ((DC_pmxWorldToDevice(pdc)->flAccel & (XFORM_SCALE | XFORM_UNITY)) != (XFORM_SCALE | XFORM_UNITY))
+        return FALSE;
+
+    if (!pdc->dclevel.pSurface || cpt < 2)
+        return TRUE;
+
+    while (cpt > 2 && ppt[0].x == ppt[1].x && ppt[0].y == ppt[1].y)
+    {
+        ppt++;
+        cpt--;
+    }
+    while (cpt > 2 && ppt[cpt - 1].x == ppt[cpt - 2].x && ppt[cpt - 1].y == ppt[cpt - 2].y)
+        cpt--;
+
+    wp.iWidth = pbrLine->lWidth;
+    wp.iEndCap = pbrLine->ulPenStyle & PS_ENDCAP_MASK;
+    wp.iJoin = pbrLine->ulPenStyle & PS_JOIN_MASK;
+    wp.eMiterLimit = pdc->dclevel.laPath.eMiterLimit;
+    if (wp.iWidth <= 1)
+        wp.iEndCap = PS_ENDCAP_FLAT;
+    if (!WidePenSetDashes(&wp, pbrLine))
+        return FALSE;
+    wp.prgnRound = NULL;
+    wp.prgnTotal = IntSysCreateRectpRgn(0, 0, 0, 0);
+    if (!wp.prgnTotal)
+        return FALSE;
+
+    if (wp.iJoin == PS_JOIN_ROUND || wp.iEndCap == PS_ENDCAP_ROUND)
+    {
+        hrgnRound = NtGdiCreateEllipticRgn(-(wp.iWidth / 2), -(wp.iWidth / 2),
+                                           (wp.iWidth + 1) / 2 + 1, (wp.iWidth + 1) / 2 + 1);
+        if (hrgnRound)
+            wp.prgnRound = REGION_LockRgn(hrgnRound);
+    }
+
+    if (pdc->pdcattr->ulDirty_ & (DIRTY_LINE | DC_PEN_DIRTY))
+        DC_vUpdateLineBrush(pdc);
+
+    if (wp.cDash)
+        WidePenDashedLines(&wp, cpt, ppt, bClose);
+    else if (bClose)
+        WidePenSegments(&wp, cpt, ppt, TRUE, 0, cpt, &ppt[0], &ppt[0]);
+    else
+        WidePenSegments(&wp, cpt, ppt, FALSE, 0, cpt - 1, &ppt[0], &ppt[cpt - 1]);
+
+    bRet = WidePenPaint(pdc, wp.prgnTotal);
+
+    if (wp.prgnRound)
+        REGION_UnlockRgn(wp.prgnRound);
+    if (hrgnRound)
+        GreDeleteObject(hrgnRound);
+    REGION_Delete(wp.prgnTotal);
+    return bRet;
+}
+
+MIX FASTCALL
+IntGdiLineMix(DC *dc)
+{
+    PDC_ATTR pdcattr = dc->pdcattr;
+    ULONG Rop2Back = R2_NOP;
+
+    if (pdcattr->jBkMode == OPAQUE &&
+        (dc->dclevel.pbrLine->flAttrs & BR_IS_OLDSTYLEPEN))
+    {
+        Rop2Back = pdcattr->jROP2;
+    }
+
+    return pdcattr->jROP2 | (Rop2Back << 8);
+}
+
 BOOL FASTCALL
 IntGdiLineTo(DC  *dc,
              int XEnd,
@@ -172,11 +780,6 @@ IntGdiLineTo(DC  *dc,
     else
     {
         psurf = dc->dclevel.pSurface;
-        if (NULL == psurf)
-        {
-            EngSetLastError(ERROR_INVALID_HANDLE);
-            return FALSE;
-        }
 
         Points[0].x = pdcattr->ptlCurrent.x;
         Points[0].y = pdcattr->ptlCurrent.y;
@@ -207,9 +810,14 @@ IntGdiLineTo(DC  *dc,
            AddPenLinesBounds(dc, 2, Points);
         }
 
-        if (!(pbrLine->flAttrs & BR_IS_NULL))
+        if (psurf && !(pbrLine->flAttrs & BR_IS_NULL))
         {
-            if (IntIsEffectiveWidePen(pbrLine))
+            if ((IntIsEffectiveWidePen(pbrLine) || !(pbrLine->flAttrs & BR_IS_SOLID)) &&
+                IntWidePenLines(dc, Points, 2, FALSE))
+            {
+                Ret = TRUE;
+            }
+            else if (IntIsEffectiveWidePen(pbrLine))
             {
                 /* Clear the path */
                 PATH_Delete(dc->dclevel.hPath);
@@ -239,13 +847,15 @@ IntGdiLineTo(DC  *dc,
             }
             else
             {
-                Ret = IntEngLineTo(&psurf->SurfObj,
-                                   (CLIPOBJ *)&dc->co,
-                                   &dc->eboLine.BrushObject,
-                                   Points[0].x, Points[0].y,
-                                   Points[1].x, Points[1].y,
-                                   &Bounds,
-                                   ROP2_TO_MIX(pdcattr->jROP2));
+                Ret = IntEngLineToEx(&psurf->SurfObj,
+                                     (CLIPOBJ *)&dc->co,
+                                     &dc->eboLine.BrushObject,
+                                     Points[0].x, Points[0].y,
+                                     Points[1].x, Points[1].y,
+                                     &Bounds,
+                                     IntGdiLineMix(dc),
+                                     TranslateCOLORREF(dc, pdcattr->crBackgroundClr),
+                                     NULL);
             }
         }
     }
@@ -372,7 +982,12 @@ IntGdiPolyline(DC      *dc,
                AddPenLinesBounds(dc, Count, Points);
             }
 
-            if (IntIsEffectiveWidePen(pbrLine))
+            if ((IntIsEffectiveWidePen(pbrLine) || !(pbrLine->flAttrs & BR_IS_SOLID)) &&
+                IntWidePenLines(dc, Points, Count, FALSE))
+            {
+                Ret = TRUE;
+            }
+            else if (IntIsEffectiveWidePen(pbrLine))
             {
                 /* Clear the path */
                 PATH_Delete(dc->dclevel.hPath);
@@ -410,7 +1025,8 @@ IntGdiPolyline(DC      *dc,
                                      &dc->eboLine.BrushObject,
                                      Points,
                                      Count,
-                                     ROP2_TO_MIX(pdcattr->jROP2));
+                                     IntGdiLineMix(dc),
+                                     TranslateCOLORREF(dc, pdcattr->crBackgroundClr));
             }
             EngFreeMem(Points);
         }

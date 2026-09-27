@@ -69,6 +69,19 @@ IntEngLineTo(SURFOBJ *Surface,
              MIX mix);
 
 BOOL APIENTRY
+IntEngLineToEx(SURFOBJ *Surface,
+               CLIPOBJ *Clip,
+               BRUSHOBJ *Brush,
+               LONG x1,
+               LONG y1,
+               LONG x2,
+               LONG y2,
+               RECTL *RectBounds,
+               MIX mix,
+               ULONG iBackColor,
+               PLONG plStyle);
+
+BOOL APIENTRY
 IntEngBitBlt(SURFOBJ *DestObj,
                SURFOBJ *SourceObj,
                SURFOBJ *Mask,
@@ -128,7 +141,8 @@ IntEngPolyline(SURFOBJ *DestSurf,
                BRUSHOBJ *Brush,
                CONST LPPOINT  pt,
                LONG dCount,
-               MIX mix);
+               MIX mix,
+               ULONG iBackColor);
 
 VOID FASTCALL
 IntEngUpdateClipRegion(XCLIPOBJ* Clip,

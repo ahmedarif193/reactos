@@ -18,6 +18,9 @@ extern HSEMAPHORE hsemDriverMgmt;
 
 /* Line functions */
 
+MIX FASTCALL
+IntGdiLineMix(DC *dc);
+
 BOOL FASTCALL
 IntGdiLineTo(DC  *dc,
              int XEnd,

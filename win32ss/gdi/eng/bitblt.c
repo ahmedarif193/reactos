@@ -227,6 +227,43 @@ CallDibBitBlt(SURFOBJ* OutputObj,
     BLTINFO BltInfo;
     SURFOBJ *psoPattern;
     BOOLEAN Result;
+    HBITMAP hbmTemp = NULL;
+    SURFOBJ *psoTemp = NULL;
+
+    if ((InputObj == OutputObj) &&
+        ((OutputObj->iBitmapFormat == BMF_1BPP) || (OutputObj->iBitmapFormat == BMF_4BPP)))
+    {
+        RECTL rclDst = *OutputRect, rclSrc, rclOverlap;
+
+        RECTL_vMakeWellOrdered(&rclDst);
+        rclSrc.left = InputPoint->x;
+        rclSrc.top = InputPoint->y;
+        rclSrc.right = rclSrc.left + (rclDst.right - rclDst.left);
+        rclSrc.bottom = rclSrc.top + (rclDst.bottom - rclDst.top);
+
+        if (RECTL_bIntersectRect(&rclOverlap, &rclSrc, &rclDst))
+        {
+            SIZEL sizl;
+
+            sizl.cx = rclSrc.right - rclSrc.left;
+            sizl.cy = rclSrc.bottom - rclSrc.top;
+            hbmTemp = EngCreateBitmap(sizl, 0, OutputObj->iBitmapFormat, BMF_TOPDOWN, NULL);
+            if (hbmTemp)
+                psoTemp = EngLockSurface((HSURF)hbmTemp);
+            if (psoTemp)
+            {
+                RtlZeroMemory(&BltInfo, sizeof(BltInfo));
+                BltInfo.DestSurface = psoTemp;
+                BltInfo.SourceSurface = InputObj;
+                BltInfo.XlateSourceToDest = &gexloTrivial.xlo;
+                BltInfo.DestRect.right = sizl.cx;
+                BltInfo.DestRect.bottom = sizl.cy;
+                BltInfo.SourcePoint = *InputPoint;
+                DibFunctionsForBitmapFormat[psoTemp->iBitmapFormat].DIB_BitBltSrcCopy(&BltInfo);
+                InputObj = psoTemp;
+            }
+        }
+    }
 
     BltInfo.DestSurface = OutputObj;
     BltInfo.SourceSurface = InputObj;
@@ -234,9 +271,17 @@ CallDibBitBlt(SURFOBJ* OutputObj,
     BltInfo.XlateSourceToDest = ColorTranslation;
     BltInfo.DestRect = *OutputRect;
     BltInfo.SourcePoint = *InputPoint;
+    if (psoTemp)
+    {
+        BltInfo.SourcePoint.x = 0;
+        BltInfo.SourcePoint.y = 0;
+    }
 
     if ((Rop4 & 0xFF) == R3_OPINDEX_SRCCOPY)
-        return DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_BitBltSrcCopy(&BltInfo);
+    {
+        Result = DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_BitBltSrcCopy(&BltInfo);
+        goto Cleanup;
+    }
 
     BltInfo.Brush = pbo;
     BltInfo.BrushOrigin = *BrushOrigin;
@@ -268,6 +313,11 @@ CallDibBitBlt(SURFOBJ* OutputObj,
 
     Result = DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_BitBlt(&BltInfo);
 
+Cleanup:
+    if (psoTemp)
+        EngUnlockSurface(psoTemp);
+    if (hbmTemp)
+        EngDeleteSurface((HSURF)hbmTemp);
     return Result;
 }
 
@@ -687,6 +737,7 @@ IntEngBitBlt(
     RECTL rclSrc;
     RECTL rclSrcClipped;
     POINTL ptlBrush;
+    POINTL ptlMask;
     PFN_DrvBitBlt pfnBitBlt;
     LONG lTmp;
     BOOLEAN bTopToBottom, bLeftToRight;
@@ -759,6 +810,12 @@ IntEngBitBlt(
         psurfSrc = NULL;
     }
 
+    if (pptlMask)
+    {
+        ptlMask.x = pptlMask->x + rclClipped.left - prclTrg->left;
+        ptlMask.y = pptlMask->y + rclClipped.top - prclTrg->top;
+    }
+
     if (pptlBrush)
     {
 #ifdef _USE_DIBLIB_
@@ -817,7 +874,7 @@ IntEngBitBlt(
                         pxlo,
                         &rclClipped,
                         pptlSrc,
-                        pptlMask,
+                        pptlMask ? &ptlMask : NULL,
                         pbo,
                         pptlBrush ? &ptlBrush : NULL,
                         Rop4);

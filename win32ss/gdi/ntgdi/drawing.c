@@ -1278,8 +1278,7 @@ IntFillRect( DC *dc,
         DestRect.top = YLeft;
         DestRect.bottom = YLeft + Height;
 
-        BrushOrigin.x = pbrush->ptOrigin.x;
-        BrushOrigin.y = pbrush->ptOrigin.y;
+        BrushOrigin = dc->ptlFillOrigin;
 
         if (pdcattr->jROP2 == R2_XORPEN)
             ROP = ROP4_FROM_INDEX(R3_OPINDEX_PATINVERT);

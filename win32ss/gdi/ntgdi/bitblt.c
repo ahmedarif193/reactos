@@ -576,7 +576,7 @@ NtGdiMaskBlt(
                           &SourcePoint,
                           &MaskPoint,
                           &DCDest->eboFill.BrushObject,
-                          &DCDest->dclevel.pbrFill->ptOrigin,
+                          &DCDest->ptlFillOrigin,
                           rop4);
 
     if (UsesSource)
@@ -856,7 +856,7 @@ NtGdiPlgBlt(
     XlateInitialized = TRUE;
     MaskPoint.x = xMask;
     MaskPoint.y = yMask;
-    BrushOrigin = DCDest->ptlDCOrig;
+    BrushOrigin = DCDest->ptlFillOrigin;
     Result = IntEngPlgBlt(&BitmapDest->SurfObj,
                           &BitmapSrc->SurfObj,
                           BitmapMask != NULL ? &BitmapMask->SurfObj : NULL,
@@ -1059,8 +1059,7 @@ GreStretchBltMask(
         SourceRect.bottom += DCSrc->ptlDCOrig.y;
     }
 
-    BrushOrigin.x = 0;
-    BrushOrigin.y = 0;
+    BrushOrigin = DCDest->ptlFillOrigin;
 
     /* Only prepare Source and Dest, hdcMask represents a DIB */
     DC_vPrepareDCsForBlit(DCDest, &DestRect, DCSrc, &SourceRect);
@@ -1082,10 +1081,6 @@ GreStretchBltMask(
         EXLATEOBJ_vInitXlateFromDCsEx(&exlo, DCSrc, DCDest, dwBackColor);
         XlateObj = &exlo.xlo;
     }
-
-    /* Offset the brush */
-    BrushOrigin.x += DCDest->ptlDCOrig.x;
-    BrushOrigin.y += DCDest->ptlDCOrig.y;
 
     /* Make mask surface for source surface */
     if (BitmapSrc && DCMask)
@@ -1285,11 +1280,10 @@ IntPatBlt(
     }
 
 #ifdef _USE_DIBLIB_
-    BrushOrigin.x = pbrush->ptOrigin.x + pdc->ptlDCOrig.x + XLeft;
-    BrushOrigin.y = pbrush->ptOrigin.y + pdc->ptlDCOrig.y + YLeft;
+    BrushOrigin.x = pdc->ptlFillOrigin.x + XLeft;
+    BrushOrigin.y = pdc->ptlFillOrigin.y + YLeft;
 #else
-    BrushOrigin.x = pbrush->ptOrigin.x + pdc->ptlDCOrig.x;
-    BrushOrigin.y = pbrush->ptOrigin.y + pdc->ptlDCOrig.y;
+    BrushOrigin = pdc->ptlFillOrigin;
 #endif
 
     DC_vPrepareDCsForBlit(pdc, &DestRect, NULL, NULL);
@@ -1966,6 +1960,16 @@ NtGdiGetPixel(
     /* Prepare DC for blit */
     DC_vPrepareDCsForBlit(pdc, &rcDest, NULL, NULL);
     Prepared = TRUE;
+
+    {
+        PREGION prgnDC = pdc->prgnRao ? pdc->prgnRao : pdc->prgnVis;
+
+        if (prgnDC &&
+            !REGION_PtInRegion(prgnDC, ptlSrc.x - pdc->ptlDCOrig.x, ptlSrc.y - pdc->ptlDCOrig.y))
+        {
+            goto leave;
+        }
+    }
 
     /* Check if the pixel is outside the surface */
     psurfSrc = pdc->dclevel.pSurface;
