@@ -938,7 +938,7 @@ DIB_16BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
           DstPixel16.col.green = DstG >> 3;
           DstPixel16.col.blue = DstB >> 3;
 
-          DIB_16BPP_PutPixel(Dest, DstX, DstY, DstPixel16.us);
+          DIB_16BPP_PutPixel(Dest, DstX, DstY, DstPixel16.us & 0x7FFF);
 
           DstX++;
         }

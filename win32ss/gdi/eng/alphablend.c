@@ -135,7 +135,7 @@ EngAlphaBlend(
             if (((OutputObj->iBitmapFormat == BMF_16BPP) &&
                  !(ppalDst->flFlags & (PAL_RGB16_555 | PAL_RGB16_565))) ||
                 ((OutputObj->iBitmapFormat == BMF_32BPP) &&
-                 !(ppalDst->flFlags & (PAL_RGB | PAL_BGR))))
+                 !(ppalDst->flFlags & PAL_BGR)))
             {
                 pfnAlphaBlend = DIB_XXBPP_AlphaBlend;
             }

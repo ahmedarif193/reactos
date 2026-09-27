@@ -33,6 +33,7 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
                      XLATEOBJ* ColorTranslation, BLENDOBJ* BlendObj)
 {
   INT DstX, DstY, SrcX, SrcY;
+  LONG lDstShift;
   BLENDFUNCTION BlendFunc;
   register NICEPIXEL32 DstPixel32;
   register NICEPIXEL32 SrcPixel32;
@@ -80,7 +81,7 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
 
   pexlo = CONTAINING_RECORD(ColorTranslation, EXLATEOBJ, xlo);
   EXLATEOBJ_vInitialize(&exloSrcRGB, pexlo->ppalSrc, &gpalRGB, 0, 0, 0);
-  EXLATEOBJ_vInitialize(&exloDstRGB, pexlo->ppalDst, &gpalRGB, 0, 0, 0);
+  EXLATEOBJ_vInitialize(&exloDstRGB, pexlo->ppalDst, &gpalRGB, 0, CLR_INVALID, 0);
   EXLATEOBJ_vInitialize(&exloRGBDst, &gpalRGB, pexlo->ppalDst, 0, 0, 0);
 
   /* For bitfield destinations the conversion to RGB leaves the low bits
@@ -127,14 +128,22 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
     lC1Blue = pexlo->ppalDst->IndexedColors[1].peBlue;
   }
 
+  lDstShift = 0;
+  if ((Dest->iBitmapFormat == BMF_1BPP) &&
+      !((Source->iBitmapFormat == BMF_1BPP) && (pexlo->ppalDst->flFlags & PAL_DIBSECTION)) &&
+      (OrigDestRect->right - OrigDestRect->left == SourceRect->right - SourceRect->left))
+  {
+    lDstShift = min(OrigDestRect->left & 7, DestRect->left);
+  }
+
   DstY = DestRect->top;
   while ( DstY < DestRect->bottom )
   {
     SrcY = DIB_AlphaBlendSourceCoord(DstY, OrigDestRect->top, OrigDestRect->bottom, SourceRect->top, SourceRect->bottom);
-    DstX = DestRect->left;
-    while(DstX < DestRect->right)
+    DstX = DestRect->left - lDstShift;
+    while(DstX < DestRect->right - lDstShift)
     {
-      SrcX = DIB_AlphaBlendSourceCoord(DstX, OrigDestRect->left, OrigDestRect->right, SourceRect->left, SourceRect->right);
+      SrcX = DIB_AlphaBlendSourceCoord(DstX + lDstShift, OrigDestRect->left, OrigDestRect->right, SourceRect->left, SourceRect->right);
       SrcPixel32.ul = DIB_GetSource(Source, SrcX, SrcY, &exloSrcRGB.xlo);
       DstPixel32.ul = DIB_GetSource(Dest, DstX, DstY, &exloDstRGB.xlo);
 
@@ -208,6 +217,7 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
         /* Convert the blended RGB directly into the destination format,
            round-tripping through the source palette would collapse the
            blend result onto the source's colors */
+        DstPixel32.col.alpha = 0;
         pfnDibPutPixel(Dest, DstX, DstY,
                        XLATEOBJ_iXlate(&exloRGBDst.xlo, DstPixel32.ul));
       }

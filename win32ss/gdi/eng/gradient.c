@@ -76,7 +76,8 @@ GradientBegin(PGRADIENT_OUT pgo, INTENG_ENTER_LEAVE *pEnterLeave, SURFOBJ *psoDe
 
     pgo->pxlo = pxlo;
     pgo->bAlpha = (psoDest->iBitmapFormat == BMF_32BPP) && psurf->ppal &&
-                  (psurf->ppal->flFlags & PAL_BGR);
+                  (psurf->ppal->flFlags & PAL_BGR) &&
+                  !(psurf->ppal->flFlags & PAL_BITFIELDS);
     return TRUE;
 }
 
@@ -390,6 +391,12 @@ IntEngGradientFill(
 
     psurf = CONTAINING_RECORD(psoDest, SURFACE, SurfObj);
     ASSERT(psurf);
+
+    if ((psoDest->iBitmapFormat == BMF_1BPP) && psurf->ppal &&
+        !(psurf->ppal->flFlags & PAL_DIBSECTION))
+    {
+        return TRUE;
+    }
 
     if (psurf->flags & HOOK_GRADIENTFILL)
     {
