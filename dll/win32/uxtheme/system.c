@@ -50,6 +50,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 static const WCHAR szThemeManager[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager";
 
 ATOM atDialogThemeEnabled;
+ATOM atDialogBrush;
+ATOM atDialogHook;
 
 static DWORD dwThemeAppProperties = STAP_ALLOW_NONCLIENT | STAP_ALLOW_CONTROLS;
 static ATOM atWindowTheme;
@@ -534,6 +536,8 @@ void UXTHEME_InitSystem(HINSTANCE hInst)
     atSubAppName         = GlobalAddAtomW(L"ux_subapp");
     atSubIdList          = GlobalAddAtomW(L"ux_subidlst");
     atDialogThemeEnabled = GlobalAddAtomW(L"ux_dialogtheme");
+    atDialogBrush        = GlobalAddAtomW(L"wine_dialog_brush");
+    atDialogHook         = GlobalAddAtomW(L"uxtheme_dlg_hook");
 
     UXTHEME_LoadTheme();
 #ifndef __REACTOS__
@@ -552,6 +556,8 @@ void UXTHEME_UninitSystem(void)
     GlobalDeleteAtom(atSubAppName);
     GlobalDeleteAtom(atSubIdList);
     GlobalDeleteAtom(atDialogThemeEnabled);
+    GlobalDeleteAtom(atDialogBrush);
+    GlobalDeleteAtom(atDialogHook);
 #ifdef __REACTOS__
     UXTHEME_DeleteParseErrorInfo();
     TlsFree(gdwErrorInfoTlsIndex);

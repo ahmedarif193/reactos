@@ -29,7 +29,12 @@
 #include "vssym32.h"
 
 extern ATOM atDialogThemeEnabled;
-static const WCHAR wine_dialog_brush[] = L"wine_dialog_brush";
+extern ATOM atDialogBrush;
+
+/* Look the brush up by a preregistered atom: a string name would need an
+ * atom lookup on every WM_NCDESTROY, and a missing atom leaves
+ * ERROR_FILE_NOT_FOUND behind in a DestroyWindow call that succeeded. */
+#define wine_dialog_brush ((LPCWSTR)MAKEINTATOM(atDialogBrush))
 
 static HBRUSH get_dialog_background_brush(HWND hwnd, BOOL create)
 {

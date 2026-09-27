@@ -597,7 +597,8 @@ void HackFillStaticBg(HWND hwnd, HDC hdc, HBRUSH* result)
     *result = GetStockObject (NULL_BRUSH);
 }
 
-static const WCHAR uxtheme_dlg_hook_prop[] = L"uxtheme_dlg_hook";
+extern ATOM atDialogHook;
+#define uxtheme_dlg_hook_prop ((LPCWSTR)MAKEINTATOM(atDialogHook))
 
 static LRESULT CALLBACK
 ThemeDlgPreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR ret,PDWORD unknown)
