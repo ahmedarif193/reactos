@@ -1123,16 +1123,11 @@ GreGradientFill(
         return TRUE;
     }
 
-    /* Offset vertex for rectangles */
-    if (ulMode == GRADIENT_FILL_RECT_H ||
-        ulMode == GRADIENT_FILL_RECT_V)
+    for (i = 0; i < nVertex; i++)
     {
-        for (i = 0; i < nVertex; i++)
-        {
-            IntLPtoDP(pdc, (LPPOINT)&pVertex[i], 1);
-            pVertex[i].x += pdc->ptlDCOrig.x;
-            pVertex[i].y += pdc->ptlDCOrig.y;
-        }
+        IntLPtoDP(pdc, (LPPOINT)&pVertex[i], 1);
+        pVertex[i].x += pdc->ptlDCOrig.x;
+        pVertex[i].y += pdc->ptlDCOrig.y;
     }
 
     ptlDitherOrg.x = ptlDitherOrg.y = 0;

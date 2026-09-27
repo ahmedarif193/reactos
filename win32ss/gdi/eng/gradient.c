@@ -11,33 +11,82 @@
 #define NDEBUG
 #include <debug.h>
 
-/* MACROS *********************************************************************/
-
-const LONG LINC[2] = {-1, 1};
-
 #define VERTEX(n) (pVertex + gt->n)
 #define COMPAREVERTEX(a, b) ((a)->x == (b)->x && (a)->y == (b)->y)
 
-/* Check if all three vectors have the same color, either R, G, or B */
-#define VCMPCLR(a, b, c, color) (a->color == b->color && a->color == c->color)
-/* Check if all three vectors have the same colors for R, G, and B, then
- * NOT the result because we want to check for not using solid color logic */
-#define VCMPCLRS(a, b, c) \
-  !(VCMPCLR(a, b, c, Red) && VCMPCLR(a, b, c, Green) && VCMPCLR(a, b, c, Blue))
+static const BYTE gajBayer4x4[4][4] =
+{
+    {  0,  8,  2, 10 },
+    { 12,  4, 14,  6 },
+    {  3, 11,  1,  9 },
+    { 15,  7, 13,  5 }
+};
 
-/* Horizontal/Vertical gradients */
-#define HVINITCOL(Col, id) \
-  c[id] = v1->Col >> 8; \
-  dc[id] = abs((v2->Col >> 8) - c[id]); \
-  ec[id] = -(dy >> 1); \
-  ic[id] = LINC[(v2->Col >> 8) > c[id]]
-#define HVSTEPCOL(id) \
-  ec[id] += dc[id]; \
-  while(ec[id] > 0) \
-  { \
-    c[id] += ic[id]; \
-    ec[id] -= dy; \
-  }
+typedef struct _GRADIENT_OUT
+{
+    SURFOBJ *psoOutput;
+    XLATEOBJ *pxlo;
+    POINTL Translate;
+    BOOL bAlpha;
+} GRADIENT_OUT, *PGRADIENT_OUT;
+
+static ULONG
+GradientDither(ULONG c, LONG x, LONG y)
+{
+    LONG v = (LONG)(c / 128) + gajBayer4x4[y & 3][x & 3];
+
+    v = min(31, max(0, v / 16));
+    return (v << 3) | (v >> 2);
+}
+
+static VOID
+GradientPutPixel(PGRADIENT_OUT pgo, LONG x, LONG y, ULONG r, ULONG g, ULONG b, ULONG a)
+{
+    ULONG ulColor;
+
+    if (pgo->psoOutput->iBitmapFormat == BMF_16BPP)
+    {
+        r = GradientDither(r, x, y);
+        g = GradientDither(g, x, y);
+        b = GradientDither(b, x, y);
+    }
+    else
+    {
+        r >>= 8;
+        g >>= 8;
+        b >>= 8;
+    }
+
+    ulColor = XLATEOBJ_iXlate(pgo->pxlo, RGB(r, g, b));
+    if (pgo->bAlpha)
+        ulColor |= (a >> 8) << 24;
+
+    DibFunctionsForBitmapFormat[pgo->psoOutput->iBitmapFormat].DIB_PutPixel(
+        pgo->psoOutput, x + pgo->Translate.x, y + pgo->Translate.y, ulColor);
+}
+
+static BOOL
+GradientBegin(PGRADIENT_OUT pgo, INTENG_ENTER_LEAVE *pEnterLeave, SURFOBJ *psoDest,
+              XLATEOBJ *pxlo, RECTL *prclBounds)
+{
+    SURFACE *psurf = CONTAINING_RECORD(psoDest, SURFACE, SurfObj);
+
+    if (!IntEngEnter(pEnterLeave, psoDest, prclBounds, FALSE, &pgo->Translate, &pgo->psoOutput))
+        return FALSE;
+
+    pgo->pxlo = pxlo;
+    pgo->bAlpha = (psoDest->iBitmapFormat == BMF_32BPP) && psurf->ppal &&
+                  (psurf->ppal->flFlags & PAL_BGR);
+    return TRUE;
+}
+
+static LONG
+GradientEdgeCoord(LONG y, LONG x1, LONG y1, LONG x2, LONG y2)
+{
+    if (x2 > x1)
+        return x2 + (y - y2) * (x2 - x1) / (y2 - y1);
+    return x1 + (y - y1) * (x2 - x1) / (y2 - y1);
+}
 
 /* FUNCTIONS ******************************************************************/
 
@@ -54,129 +103,72 @@ IntEngGradientFillRect(
     IN POINTL  *pptlDitherOrg,
     IN BOOL Horizontal)
 {
-    SURFOBJ *psoOutput;
-    TRIVERTEX *v1, *v2;
-    RECTL rcGradient, rcSG;
-    RECT_ENUM RectEnum;
-    BOOL EnumMore;
-    ULONG i;
-    POINTL Translate;
+    GRADIENT_OUT go;
     INTENG_ENTER_LEAVE EnterLeave;
-    LONG y, dy, c[3], dc[3], ec[3], ic[3];
+    RECT_ENUM RectEnum;
+    TRIVERTEX v[2];
+    RECTL rcBounds, rcFill;
+    BOOL EnumMore;
+    ULONG i, i0, i1;
+    LONG x, y;
+    ULONGLONG len, pos;
 
-    v1 = (pVertex + gRect->UpperLeft);
-    v2 = (pVertex + gRect->LowerRight);
+    i0 = gRect->UpperLeft;
+    i1 = gRect->LowerRight;
+    if (i0 >= nVertex || i1 >= nVertex)
+        return FALSE;
 
-    rcGradient.left = min(v1->x, v2->x);
-    rcGradient.right = max(v1->x, v2->x);
-    rcGradient.top = min(v1->y, v2->y);
-    rcGradient.bottom = max(v1->y, v2->y);
-    rcSG = rcGradient;
-
-    if(Horizontal)
+    if (Horizontal ? (pVertex[i1].x < pVertex[i0].x) : (pVertex[i1].y < pVertex[i0].y))
     {
-        dy = abs(rcGradient.right - rcGradient.left);
+        ULONG iTmp = i0;
+        i0 = i1;
+        i1 = iTmp;
+    }
+    v[0] = pVertex[i0];
+    v[1] = pVertex[i1];
+
+    if (Horizontal)
+    {
+        rcBounds.left = v[0].x;
+        rcBounds.right = v[1].x;
+        rcBounds.top = min(v[0].y, v[1].y);
+        rcBounds.bottom = max(v[0].y, v[1].y);
+        len = v[1].x - v[0].x;
     }
     else
     {
-        dy = abs(rcGradient.bottom - rcGradient.top);
+        rcBounds.left = min(v[0].x, v[1].x);
+        rcBounds.right = max(v[0].x, v[1].x);
+        rcBounds.top = v[0].y;
+        rcBounds.bottom = v[1].y;
+        len = v[1].y - v[0].y;
     }
 
-    if(!IntEngEnter(&EnterLeave, psoDest, &rcSG, FALSE, &Translate, &psoOutput))
-    {
+    if (rcBounds.left >= rcBounds.right || rcBounds.top >= rcBounds.bottom || !len)
+        return TRUE;
+
+    if (!GradientBegin(&go, &EnterLeave, psoDest, pxlo, &rcBounds))
         return FALSE;
-    }
 
-    if((v1->Red != v2->Red || v1->Green != v2->Green || v1->Blue != v2->Blue) && dy > 1)
-    {
-        CLIPOBJ_cEnumStart(pco, FALSE, CT_RECTANGLES, CD_RIGHTDOWN, 0);
-        do
-        {
-            RECTL FillRect;
-            ULONG Color;
-
-            if (Horizontal)
-            {
-                EnumMore = CLIPOBJ_bEnum(pco, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
-                for (i = 0; i < RectEnum.c && RectEnum.arcl[i].top <= rcSG.bottom; i++)
-                {
-                    if (RECTL_bIntersectRect(&FillRect, &RectEnum.arcl[i], &rcSG))
-                    {
-                        HVINITCOL(Red, 0);
-                        HVINITCOL(Green, 1);
-                        HVINITCOL(Blue, 2);
-
-                        for (y = rcSG.left; y < FillRect.right; y++)
-                        {
-                            if (y >= FillRect.left)
-                            {
-                                Color = XLATEOBJ_iXlate(pxlo, RGB(c[0], c[1], c[2]));
-                                DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_VLine(
-                                    psoOutput, y + Translate.x, FillRect.top + Translate.y, FillRect.bottom + Translate.y, Color);
-                            }
-                            HVSTEPCOL(0);
-                            HVSTEPCOL(1);
-                            HVSTEPCOL(2);
-                        }
-                    }
-                }
-
-                continue;
-            }
-
-            /* vertical */
-            EnumMore = CLIPOBJ_bEnum(pco, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
-            for (i = 0; i < RectEnum.c && RectEnum.arcl[i].top <= rcSG.bottom; i++)
-            {
-                if (RECTL_bIntersectRect(&FillRect, &RectEnum.arcl[i], &rcSG))
-                {
-                    HVINITCOL(Red, 0);
-                    HVINITCOL(Green, 1);
-                    HVINITCOL(Blue, 2);
-
-                    for (y = rcSG.top; y < FillRect.bottom; y++)
-                    {
-                        if (y >= FillRect.top)
-                        {
-                            Color = XLATEOBJ_iXlate(pxlo, RGB(c[0], c[1], c[2]));
-                            DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_HLine(psoOutput,
-                                                                                            FillRect.left + Translate.x,
-                                                                                            FillRect.right + Translate.x,
-                                                                                            y + Translate.y,
-                                                                                            Color);
-                        }
-                        HVSTEPCOL(0);
-                        HVSTEPCOL(1);
-                        HVSTEPCOL(2);
-                    }
-                }
-            }
-
-        }
-        while (EnumMore);
-
-        return IntEngLeave(&EnterLeave);
-    }
-
-    /* rectangle has only one color, no calculation required */
     CLIPOBJ_cEnumStart(pco, FALSE, CT_RECTANGLES, CD_RIGHTDOWN, 0);
     do
     {
-        RECTL FillRect;
-        ULONG Color = XLATEOBJ_iXlate(pxlo, RGB(v1->Red >> 8, v1->Green >> 8, v1->Blue >> 8));
-
-        EnumMore = CLIPOBJ_bEnum(pco, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
-        for (i = 0; i < RectEnum.c && RectEnum.arcl[i].top <= rcSG.bottom; i++)
+        EnumMore = CLIPOBJ_bEnum(pco, (ULONG)sizeof(RectEnum), (PVOID)&RectEnum);
+        for (i = 0; i < RectEnum.c; i++)
         {
-            if (RECTL_bIntersectRect(&FillRect, &RectEnum.arcl[i], &rcSG))
+            if (!RECTL_bIntersectRect(&rcFill, &RectEnum.arcl[i], &rcBounds))
+                continue;
+
+            for (y = rcFill.top; y < rcFill.bottom; y++)
             {
-                for (; FillRect.top < FillRect.bottom; FillRect.top++)
+                for (x = rcFill.left; x < rcFill.right; x++)
                 {
-                    DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_HLine(psoOutput,
-                                                                                    FillRect.left + Translate.x,
-                                                                                    FillRect.right + Translate.x,
-                                                                                    FillRect.top + Translate.y,
-                                                                                    Color);
+                    pos = Horizontal ? (ULONGLONG)(x - v[0].x) : (ULONGLONG)(y - v[0].y);
+                    GradientPutPixel(&go, x, y,
+                        (ULONG)((v[0].Red   * (len - pos) + v[1].Red   * pos) / len),
+                        (ULONG)((v[0].Green * (len - pos) + v[1].Green * pos) / len),
+                        (ULONG)((v[0].Blue  * (len - pos) + v[1].Blue  * pos) / len),
+                        (ULONG)((v[0].Alpha * (len - pos) + v[1].Alpha * pos) / len));
                 }
             }
         }
@@ -185,130 +177,6 @@ IntEngGradientFillRect(
 
     return IntEngLeave(&EnterLeave);
 }
-
-/* Fill triangle with solid color */
-#define S_FILLLINE(linefrom,lineto) \
-  if(sx[lineto] < sx[linefrom]) \
-    DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_HLine(psoOutput, max(sx[lineto], FillRect.left), min(sx[linefrom], FillRect.right), sy, Color); \
-  else \
-    DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_HLine(psoOutput, max(sx[linefrom], FillRect.left), min(sx[lineto], FillRect.right), sy, Color);
-
-#define S_DOLINE(a,b,line) \
-  ex[line] += dx[line]; \
-  while(ex[line] > 0 && x[line] != destx[line]) \
-  { \
-    x[line] += incx[line]; \
-    sx[line] += incx[line]; \
-    ex[line] -= dy[line]; \
-  }
-
-#define S_GOLINE(a,b,line) \
-  if(y >= a->y && y <= b->y) \
-  {
-
-#define S_ENDLINE(a,b,line) \
-  }
-
-#define S_INITLINE(a,b,line) \
-  x[line] = a->x; \
-  sx[line] =  a->x + pptlDitherOrg->x; \
-  dx[line] = abs(b->x - a->x); \
-  dy[line] = abs(b->y - a->y); \
-  incx[line] = LINC[b->x > a->x]; \
-  ex[line] = -(dy[line]>>1); \
-  destx[line] = b->x
-
-/* Fill triangle with gradient */
-#define INITCOL(a,b,line,col,id) \
-  c[line][id] = a->col >> 8; \
-  dc[line][id] = abs((b->col >> 8) - c[line][id]); \
-  ec[line][id] = -(dy[line]>>1); \
-  ic[line][id] = LINC[(b->col >> 8) > c[line][id]]
-
-#define STEPCOL(a,b,line,col,id) \
-  ec[line][id] += dc[line][id]; \
-  if(dy[line] != 0) \
-  while(ec[line][id] > 0) \
-  { \
-    c[line][id] += ic[line][id]; \
-    ec[line][id] -= dy[line]; \
-  }
-
-#define FINITCOL(linefrom,lineto,colid) \
-  gc[colid] = c[linefrom][colid]; \
-  gd[colid] = abs(c[lineto][colid] - gc[colid]); \
-  ge[colid] = -(gx >> 1); \
-  gi[colid] = LINC[c[lineto][colid] > gc[colid]]
-
-#define FDOCOL(linefrom,lineto,colid) \
-  ge[colid] += gd[colid]; \
-  if (gx != 0) \
-  while(ge[colid] > 0) \
-  { \
-    gc[colid] += gi[colid]; \
-    ge[colid] -= gx; \
-  }
-
-#define FILLLINE(linefrom,lineto) \
-  gx = abs(sx[lineto] - sx[linefrom]); \
-  gxi = LINC[sx[linefrom] < sx[lineto]]; \
-  FINITCOL(linefrom, lineto, 0); \
-  FINITCOL(linefrom, lineto, 1); \
-  FINITCOL(linefrom, lineto, 2); \
-  g_end = sx[lineto] + gxi; \
-  for(g = sx[linefrom]; g != g_end; g += gxi) \
-  { \
-    if(InY && g >= FillRect.left && g < FillRect.right) \
-    { \
-      Color = XLATEOBJ_iXlate(pxlo, RGB(gc[0], gc[1], gc[2])); \
-      DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_PutPixel(psoOutput, g, sy, Color); \
-    } \
-    FDOCOL(linefrom, lineto, 0); \
-    FDOCOL(linefrom, lineto, 1); \
-    FDOCOL(linefrom, lineto, 2); \
-  }
-
-#define DOLINE(a,b,line) \
-  STEPCOL(a, b, line, Red, 0); \
-  STEPCOL(a, b, line, Green, 1); \
-  STEPCOL(a, b, line, Blue, 2); \
-  ex[line] += dx[line]; \
-  while(ex[line] > 0 && x[line] != destx[line]) \
-  { \
-    x[line] += incx[line]; \
-    sx[line] += incx[line]; \
-    ex[line] -= dy[line]; \
-  }
-
-#define GOLINE(a,b,line) \
-  if(y >= a->y && y <= b->y) \
-  {
-
-#define ENDLINE(a,b,line) \
-  }
-
-#define INITLINE(a,b,line) \
-  x[line] = a->x; \
-  sx[line] = a->x + pptlDitherOrg->x - 1; \
-  dx[line] = abs(b->x - a->x); \
-  dy[line] = abs(b->y - a->y); \
-  incx[line] = LINC[b->x > a->x]; \
-  ex[line] = -(dy[line]>>1); \
-  destx[line] = b->x
-
-#define DOINIT(a, b, line) \
-  INITLINE(a, b, line); \
-  INITCOL(a, b, line, Red, 0); \
-  INITCOL(a, b, line, Green, 1); \
-  INITCOL(a, b, line, Blue, 2);
-
-#define SMALLER(a,b)     (a->y < b->y) || (a->y == b->y && a->x < b->x)
-
-#define SWAP(a,b,c)  c = a;\
-                     a = b;\
-                     b = c
-
-#define NLINES 3
 
 BOOL
 FASTCALL
@@ -322,143 +190,93 @@ IntEngGradientFillTriangle(
     IN RECTL  *prclExtents,
     IN POINTL  *pptlDitherOrg)
 {
-    SURFOBJ *psoOutput;
-    PTRIVERTEX v1, v2, v3;
-    RECT_ENUM RectEnum;
-    BOOL EnumMore;
-    ULONG i;
-    POINTL Translate;
+    GRADIENT_OUT go;
     INTENG_ENTER_LEAVE EnterLeave;
-    RECTL FillRect = { 0, 0, 0, 0 };
-    ULONG Color;
+    RECT_ENUM RectEnum;
+    TRIVERTEX v[3];
+    RECTL rcBounds, rcFill;
+    BOOL EnumMore;
+    ULONG i, a, b, c;
+    LONG x, y, x1, x2, left, right;
+    LONGLONG det, l1, l2;
 
-    BOOL sx[NLINES];
-    LONG x[NLINES], dx[NLINES], dy[NLINES], incx[NLINES], ex[NLINES], destx[NLINES];
-    LONG c[NLINES][3], dc[NLINES][3], ec[NLINES][3], ic[NLINES][3]; /* colors on lines */
-    LONG g, gx, gxi, gc[3], gd[3], ge[3], gi[3]; /* colors in triangle */
-    LONG sy, y, bt, g_end;
-
-    v1 = (pVertex + gTriangle->Vertex1);
-    v2 = (pVertex + gTriangle->Vertex2);
-    v3 = (pVertex + gTriangle->Vertex3);
-
-    /* bubble sort */
-    if (SMALLER(v2, v1))
-    {
-        TRIVERTEX *t;
-        SWAP(v1, v2, t);
-    }
-
-    if (SMALLER(v3, v2))
-    {
-        TRIVERTEX *t;
-        SWAP(v2, v3, t);
-        if (SMALLER(v2, v1))
-        {
-            SWAP(v1, v2, t);
-        }
-    }
-
-    DPRINT("Triangle: (%i,%i) (%i,%i) (%i,%i)\n", v1->x, v1->y, v2->x, v2->y, v3->x, v3->y);
-
-    if (!IntEngEnter(&EnterLeave, psoDest, &FillRect, FALSE, &Translate, &psoOutput))
-    {
+    a = gTriangle->Vertex1;
+    b = gTriangle->Vertex2;
+    c = gTriangle->Vertex3;
+    if (a >= nVertex || b >= nVertex || c >= nVertex)
         return FALSE;
-    }
 
-    if (VCMPCLRS(v1, v2, v3))
+    if (pVertex[a].y > pVertex[b].y)
     {
-      CLIPOBJ_cEnumStart(pco, FALSE, CT_RECTANGLES, CD_RIGHTDOWN, 0);
-      do
-      {
-        EnumMore = CLIPOBJ_bEnum(pco, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
-        for (i = 0; i < RectEnum.c && RectEnum.arcl[i].top <= prclExtents->bottom; i++)
-        {
-          if (RECTL_bIntersectRect(&FillRect, &RectEnum.arcl[i], prclExtents))
-          {
-            BOOL InY;
-
-            DOINIT(v1, v3, 0);
-            DOINIT(v1, v2, 1);
-            DOINIT(v2, v3, 2);
-
-            y = v1->y;
-            sy = v1->y + pptlDitherOrg->y;
-            bt = min(v3->y + pptlDitherOrg->y, FillRect.bottom);
-
-            while (sy < bt)
-            {
-              InY = !(sy < FillRect.top || sy >= FillRect.bottom);
-              GOLINE(v1, v3, 0);
-              DOLINE(v1, v3, 0);
-              ENDLINE(v1, v3, 0);
-
-              GOLINE(v1, v2, 1);
-              DOLINE(v1, v2, 1);
-              FILLLINE(0, 1);
-              ENDLINE(v1, v2, 1);
-
-              GOLINE(v2, v3, 2);
-              FILLLINE(0, 2);
-              DOLINE(v2, v3, 2);
-              FILLLINE(0, 2);
-              ENDLINE(23, v3, 2);
-
-              y++;
-              sy++;
-            }
-          }
-        }
-      } while (EnumMore);
-
-      return IntEngLeave(&EnterLeave);
+        if (pVertex[c].y < pVertex[b].y)
+            { v[0] = pVertex[c]; v[1] = pVertex[b]; v[2] = pVertex[a]; }
+        else if (pVertex[c].y < pVertex[a].y)
+            { v[0] = pVertex[b]; v[1] = pVertex[c]; v[2] = pVertex[a]; }
+        else
+            { v[0] = pVertex[b]; v[1] = pVertex[a]; v[2] = pVertex[c]; }
+    }
+    else
+    {
+        if (pVertex[c].y < pVertex[a].y)
+            { v[0] = pVertex[c]; v[1] = pVertex[a]; v[2] = pVertex[b]; }
+        else if (pVertex[c].y < pVertex[b].y)
+            { v[0] = pVertex[a]; v[1] = pVertex[c]; v[2] = pVertex[b]; }
+        else
+            { v[0] = pVertex[a]; v[1] = pVertex[b]; v[2] = pVertex[c]; }
     }
 
-    /* fill triangle with one solid color */
+    det = (LONGLONG)(v[2].y - v[1].y) * (v[2].x - v[0].x) -
+          (LONGLONG)(v[2].x - v[1].x) * (v[2].y - v[0].y);
+    if (!det)
+        return FALSE;
 
-    Color = XLATEOBJ_iXlate(pxlo, RGB(v1->Red >> 8, v1->Green >> 8, v1->Blue >> 8));
+    rcBounds.left = min(v[0].x, min(v[1].x, v[2].x));
+    rcBounds.right = max(v[0].x, max(v[1].x, v[2].x));
+    rcBounds.top = v[0].y;
+    rcBounds.bottom = v[2].y;
+    if (rcBounds.left >= rcBounds.right || rcBounds.top >= rcBounds.bottom)
+        return TRUE;
+
+    if (!GradientBegin(&go, &EnterLeave, psoDest, pxlo, &rcBounds))
+        return FALSE;
+
     CLIPOBJ_cEnumStart(pco, FALSE, CT_RECTANGLES, CD_RIGHTDOWN, 0);
     do
     {
-      EnumMore = CLIPOBJ_bEnum(pco, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
-      for (i = 0; i < RectEnum.c && RectEnum.arcl[i].top <= prclExtents->bottom; i++)
-      {
-        if (RECTL_bIntersectRect(&FillRect, &RectEnum.arcl[i], prclExtents))
+        EnumMore = CLIPOBJ_bEnum(pco, (ULONG)sizeof(RectEnum), (PVOID)&RectEnum);
+        for (i = 0; i < RectEnum.c; i++)
         {
-          S_INITLINE(v1, v3, 0);
-          S_INITLINE(v1, v2, 1);
-          S_INITLINE(v2, v3, 2);
+            if (!RECTL_bIntersectRect(&rcFill, &RectEnum.arcl[i], &rcBounds))
+                continue;
 
-          y = v1->y;
-          sy = v1->y + pptlDitherOrg->y;
-          bt = min(v3->y + pptlDitherOrg->y, FillRect.bottom);
+            for (y = rcFill.top; y < rcFill.bottom; y++)
+            {
+                if (y < v[1].y)
+                    x1 = GradientEdgeCoord(y, v[0].x, v[0].y, v[1].x, v[1].y);
+                else
+                    x1 = GradientEdgeCoord(y, v[1].x, v[1].y, v[2].x, v[2].y);
+                x2 = GradientEdgeCoord(y, v[0].x, v[0].y, v[2].x, v[2].y);
 
-          while (sy < bt)
-          {
-            S_GOLINE(v1, v3, 0);
-            S_DOLINE(v1, v3, 0);
-            S_ENDLINE(v1, v3, 0);
+                left = max(rcFill.left, min(x1, x2));
+                right = min(rcFill.right, max(x1, x2));
 
-            S_GOLINE(v1, v2, 1);
-            S_DOLINE(v1, v2, 1);
-            S_FILLLINE(0, 1);
-            S_ENDLINE(v1, v2, 1);
-
-            S_GOLINE(v2, v3, 2);
-            S_DOLINE(v2, v3, 2);
-            S_FILLLINE(0, 2);
-            S_ENDLINE(23, v3, 2);
-
-            y++;
-            sy++;
-          }
+                for (x = left; x < right; x++)
+                {
+                    l1 = (LONGLONG)(v[1].y - v[2].y) * (x - v[2].x) - (LONGLONG)(v[1].x - v[2].x) * (y - v[2].y);
+                    l2 = (LONGLONG)(v[2].y - v[0].y) * (x - v[2].x) - (LONGLONG)(v[2].x - v[0].x) * (y - v[2].y);
+                    GradientPutPixel(&go, x, y,
+                        (ULONG)((v[0].Red   * l1 + v[1].Red   * l2 + v[2].Red   * (det - l1 - l2)) / det),
+                        (ULONG)((v[0].Green * l1 + v[1].Green * l2 + v[2].Green * (det - l1 - l2)) / det),
+                        (ULONG)((v[0].Blue  * l1 + v[1].Blue  * l2 + v[2].Blue  * (det - l1 - l2)) / det),
+                        (ULONG)((v[0].Alpha * l1 + v[1].Alpha * l2 + v[2].Alpha * (det - l1 - l2)) / det));
+                }
+            }
         }
-      }
-    } while (EnumMore);
+    }
+    while (EnumMore);
 
     return IntEngLeave(&EnterLeave);
 }
-
 
 static
 BOOL
