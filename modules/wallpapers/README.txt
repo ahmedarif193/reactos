@@ -1,9 +1,9 @@
 Wallpapers
 ===========
 
-All images are resampled to 1920 px wide (Lanczos) and re-encoded as progressive
-JPEG at quality 82 with metadata stripped, so the whole set costs ~3.4 MB on the
-installation media. "Sea Bridge" ships additionally as a PNG because the
+The JPEG wallpapers are resampled to 1920 px wide (Lanczos) and re-encoded as
+progressive JPEG at quality 82 with metadata stripped. "Sea Bridge" ships
+additionally as a PNG because the
 experimental early splash (base/system/winlogon/splash.c) decodes the default
 wallpaper with libpng before the shell is up. See LICENSE.txt for the governing
 terms, current clearance status, and required provenance record.
@@ -24,11 +24,17 @@ terms, current clearance status, and required provenance record.
 | Rain Lights.jpg         | Restricted*  | Unrecorded  | magnific.com (Freepik)  |
 | Sea Bridge.jpg          | Restricted*  | Unrecorded  | magnific.com (Freepik)  |
 | Sea Bridge.png          | Restricted*  | Unrecorded  | magnific.com (Freepik)  |
+| Sunlit Meadow.jpg        | Unrecorded   | Unrecorded  | User supplied          |
 |-------------------------|--------------|-------------|-------------------------|
 
 * The exact content type and account tier are not recorded. These images must
 not be pushed to upstream ReactOS or shipped in a public release until the
 per-file redistribution rights required by LICENSE.txt are documented.
+
+"Sunlit Meadow.jpg" was supplied as "8220trolley.jpg" and resampled to
+1920 x 1239 using the same JPEG settings as the other wallpapers.
+Its size is 321,869 bytes, down from 2,274,011 bytes. Its author and license
+have not been supplied; the provenance record is in LICENSE.txt.
 
 "Sea Bridge" is the default wallpaper. Changing it means updating all four of:
 

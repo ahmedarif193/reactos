@@ -57,3 +57,13 @@ underlying license.
 
 An asset described as "free" or downloaded at no charge is not automatically
 public domain, Creative Commons, or redistributable.
+
+User-supplied asset record
+-------------------------
+
+File: Sunlit Meadow.jpg
+Source: 8220trolley.jpg, supplied locally by the user
+Author: Not supplied
+License and redistribution clearance: Not supplied
+Processing: Lanczos resampling to 1920 x 1239; progressive JPEG quality 82
+            with Huffman optimization and metadata stripped
