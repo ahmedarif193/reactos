@@ -3345,6 +3345,9 @@ BOOL WINAPI UnlockFileEx(HANDLE,DWORD,DWORD,DWORD,LPOVERLAPPED);
 #define UnlockResource(handle) ((handle), 0)
 #define UnlockSegment(w) GlobalUnfix((HANDLE)(w)) /* Obsolete: Has no effect. */
 BOOL WINAPI UnmapViewOfFile(LPCVOID);
+#if (_WIN32_WINNT >= 0x0602)
+BOOL WINAPI UnmapViewOfFileEx(_In_ PVOID, _In_ ULONG);
+#endif
 #if (_WIN32_WINNT >= 0x0500)
 _Must_inspect_result_ BOOL WINAPI UnregisterWait(_In_ HANDLE);
 BOOL WINAPI UnregisterWaitEx(HANDLE,HANDLE);

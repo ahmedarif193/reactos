@@ -279,6 +279,24 @@ UnmapViewOfFile(LPCVOID lpBaseAddress)
 /*
  * @implemented
  */
+BOOL
+WINAPI
+UnmapViewOfFileEx(IN PVOID BaseAddress,
+                  IN ULONG UnmapFlags)
+{
+    /* The transient boost only hints how soon the pages may be trimmed */
+    if (UnmapFlags & ~MEM_UNMAP_WITH_TRANSIENT_BOOST)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    return UnmapViewOfFile(BaseAddress);
+}
+
+/*
+ * @implemented
+ */
 HANDLE
 NTAPI
 OpenFileMappingA(IN DWORD dwDesiredAccess,
