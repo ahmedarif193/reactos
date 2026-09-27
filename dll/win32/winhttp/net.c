@@ -193,7 +193,11 @@ static BOOL WINAPI winsock_startup( INIT_ONCE *once, void *param, void **ctx )
     return TRUE;
 }
 
+#ifdef __REACTOS__
+void winsock_init(void)
+#else
 static void winsock_init(void)
+#endif
 {
     static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
     InitOnceExecuteOnce( &once, winsock_startup, NULL, NULL );

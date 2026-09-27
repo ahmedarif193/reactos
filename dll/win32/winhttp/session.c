@@ -382,6 +382,9 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
     if (flags & ~WINHTTP_FLAG_ASYNC) FIXME( "flags %#lx not supported\n", flags );
 
     if (!(session = calloc( 1, sizeof(*session) ))) return NULL;
+#ifdef __REACTOS__
+    winsock_init();
+#endif
 
     session->hdr.type = WINHTTP_HANDLE_TYPE_SESSION;
     session->hdr.vtbl = &session_vtbl;

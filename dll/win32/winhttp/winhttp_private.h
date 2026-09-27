@@ -430,6 +430,9 @@ void stop_queue( struct queue * );
 DWORD queue_task( struct queue *, TASK_CALLBACK, struct task_header *, struct object_header * );
 BOOL task_needs_completion( struct task_header * );
 
+#ifdef __REACTOS__
+void winsock_init(void);
+#endif
 void netconn_addref( struct netconn * );
 void netconn_release( struct netconn * );
 DWORD netconn_create( struct hostdata *, const struct sockaddr_storage *, int, struct netconn ** );

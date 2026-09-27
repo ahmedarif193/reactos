@@ -1376,6 +1376,9 @@ HINTERNET WINAPI InternetOpenW(LPCWSTR lpszAgent, DWORD dwAccessType,
         return NULL;
     }
 
+#ifdef __REACTOS__
+    init_winsock();
+#endif
     lpwai = alloc_object(NULL, &APPINFOVtbl, sizeof(appinfo_t));
     if (!lpwai) {
         SetLastError(ERROR_OUTOFMEMORY);
