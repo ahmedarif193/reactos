@@ -35,6 +35,11 @@
 
 #include "wine/test.h"
 
+#ifdef __REACTOS__
+#undef wait_child_process
+#define wait_child_process(pi) wait_child_process_(__FILE__, __LINE__)((pi)->hProcess)
+#endif
+
 #ifndef WM_SYSTIMER
 #define WM_SYSTIMER 0x0118
 #endif

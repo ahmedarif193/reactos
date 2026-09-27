@@ -26,6 +26,11 @@
 #define WIN32_NO_STATUS
 #endif
 #include "wine/test.h"
+
+#ifdef __REACTOS__
+#undef wait_child_process
+#define wait_child_process(pi) wait_child_process_(__FILE__, __LINE__)((pi)->hProcess)
+#endif
 #include "windef.h"
 #include "winbase.h"
 #include "winnls.h"
@@ -2389,12 +2394,6 @@ static void test_class_name(void)
     UINT_PTR res;
     HWND hwnd;
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: ReactOS crashes on test_class_name()!\n");
-        return;
-    }
-#endif
     memset(&wcex, 0, sizeof wcex);
     wcex.cbSize        = sizeof wcex;
     wcex.lpfnWndProc   = ClassTest_WndProc;

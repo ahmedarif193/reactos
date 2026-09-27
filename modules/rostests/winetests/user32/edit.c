@@ -1833,12 +1833,6 @@ static void test_initialization(void)
     HWND hwEdit;
     WNDCLASSA cls;
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: ReactOS crashes on this test!\n");
-        return;
-    }
-#endif
     ret = GetClassInfoA(NULL, "Edit", &cls);
     ok(ret, "Failed to get class info.\n");
 

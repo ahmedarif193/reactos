@@ -36,6 +36,11 @@
 
 #include "wine/test.h"
 
+#ifdef __REACTOS__
+#undef wait_child_process
+#define wait_child_process(pi) wait_child_process_(__FILE__, __LINE__)((pi)->hProcess)
+#endif
+
 #define MDI_FIRST_CHILD_ID 2004
 
 /* undocumented SWP flags - from SDK 3.1 */
