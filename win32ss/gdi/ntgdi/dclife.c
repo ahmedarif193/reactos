@@ -176,10 +176,7 @@ DC_vInitDc(
         pdc->erclBounds.top = 0x7fffffff;
         pdc->erclBounds.right = 0x80000000;
         pdc->erclBounds.bottom = 0x80000000;
-        pdc->erclBoundsApp.left = 0xffffffff;
-        pdc->erclBoundsApp.top = 0xfffffffc;
-        pdc->erclBoundsApp.right = 0x00007ffc; // FIXME
-        pdc->erclBoundsApp.bottom = 0x00000333; // FIXME
+        pdc->erclBoundsApp = pdc->erclBounds;
         pdc->erclClip = pdc->erclBounds;
         pdc->co = gxcoTrivial;
     }

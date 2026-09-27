@@ -703,14 +703,23 @@ IntUpdateBoundsRect(PDC pdc, PRECTL pRect)
    if (pdc->fs & DC_DIRTY_RAO)
        CLIPPING_UpdateGCRegion(pdc);
 
-   if (!RECTL_bIntersectRect(&rcl, &rcl, &pdc->erclClip))
-       return;
-
    if (pdc->fs & DC_ACCUM_APP)
    {
-      RECTL_bUnionRect(&pdc->erclBoundsApp, &pdc->erclBoundsApp, &rcl);
+      RECTL rclApp = rcl;
+      BOOL bVisible = TRUE;
+
+      if (pdc->prgnAPI)
+      {
+         RECTL rclApi;
+         REGION_GetRgnBox(pdc->prgnAPI, &rclApi);
+         RECTL_vOffsetRect(&rclApi, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
+         bVisible = RECTL_bIntersectRect(&rclApp, &rclApp, &rclApi);
+      }
+
+      if (bVisible)
+         RECTL_bUnionRect(&pdc->erclBoundsApp, &pdc->erclBoundsApp, &rclApp);
    }
-   if (pdc->fs & DC_ACCUM_WMGR)
+   if ((pdc->fs & DC_ACCUM_WMGR) && RECTL_bIntersectRect(&rcl, &rcl, &pdc->erclClip))
    {
       RECTL_bUnionRect(&pdc->erclBounds, &pdc->erclBounds, &rcl);
    }
