@@ -753,11 +753,13 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
 
     // Windows 8
     /* ThreadCpuAccountingInformation */
-    IQS_SAME
+    IQS
     (
         BOOLEAN,
         BOOLEAN,
-        ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE
+        HANDLE,
+        ULONG,
+        ICIF_QUERY | ICIF_SET | ICIF_QUERY_SIZE_VARIABLE
     ),
 
     // Windows 8.1
@@ -771,7 +773,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
 
     // Windows 10
     /* ThreadHeterogeneousCpuPolicy */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_QUERY | ICIF_SET | ICIF_SET_SIZE_VARIABLE
+    ),
     /* ThreadContainerId */
     IQS_SAME
     (
@@ -783,9 +790,19 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadNameInformation */
     IQS_SAME(UNICODE_STRING, ULONG, ICIF_QUERY | ICIF_SET | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET_SIZE_VARIABLE),
     /* ThreadSelectedCpuSets */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG64,
+        ULONG,
+        ICIF_QUERY | ICIF_SET | ICIF_SIZE_VARIABLE
+    ),
     /* ThreadSystemThreadInformation */
-    IQS_NONE,
+    IQS_SAME
+    (
+        SYSTEM_THREAD_INFORMATION,
+        ULONG,
+        ICIF_QUERY
+    ),
     /* ThreadActualGroupAffinity */
     IQS_SAME
     (
@@ -804,7 +821,14 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
         ICIF_QUERY
     ),
     /* ThreadWorkOnBehalfTicket */
-    IQS_NONE,
+    IQS
+    (
+        RTL_WORK_ON_BEHALF_TICKET_EX,
+        ULONG,
+        ALPC_WORK_ON_BEHALF_TICKET,
+        ULONG,
+        ICIF_QUERY | ICIF_SET
+    ),
     /* ThreadSubsystemInformation */
     IQS_SAME
     (
@@ -813,9 +837,19 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
         ICIF_QUERY
     ),
     /* ThreadDbgkWerReportActive */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_SET
+    ),
     /* ThreadAttachContainer */
-    IQS_NONE,
+    IQS_SAME
+    (
+        HANDLE,
+        ULONG,
+        ICIF_SET
+    ),
     /* ThreadManageWritesToExecutableMemory */
     IQS_SAME
     (
@@ -828,10 +862,15 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     (
         THREAD_POWER_THROTTLING_STATE,
         ULONG,
-        ICIF_SET
+        ICIF_QUERY | ICIF_SET | ICIF_QUERY_SIZE_VARIABLE
     ),
     /* ThreadWorkloadClass */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_SET | ICIF_SET_SIZE_VARIABLE
+    ),
     /* ThreadCreateStateChange */
     IQS_NONE,
     /* ThreadApplyStateChange */

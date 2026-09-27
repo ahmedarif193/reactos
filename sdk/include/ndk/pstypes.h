@@ -497,6 +497,7 @@ typedef struct _PS_CREATE_INFO
 #define CT_BREAK_ON_TERMINATION_BIT             0x40
 #define CT_SKIP_CREATION_MSG_BIT                0x80
 #define CT_SKIP_TERMINATION_MSG_BIT             0x100
+#define CT_DBG_WER_USER_REPORT_ACTIVE_BIT       0x200000
 
 //
 // Same Thread Passive Flags
@@ -1368,6 +1369,33 @@ typedef struct _APPHELP_CACHE_SERVICE_LOOKUP
 //
 // Thread Information Structures for NtQueryProcessInformation
 //
+typedef struct _PS_PROPERTY_SET
+{
+    LIST_ENTRY ListHead;
+    ULONG_PTR Lock;
+} PS_PROPERTY_SET, *PPS_PROPERTY_SET;
+
+typedef struct _ALPC_WORK_ON_BEHALF_TICKET
+{
+    ULONG ThreadId;
+    ULONG ThreadCreationTimeLow;
+} ALPC_WORK_ON_BEHALF_TICKET, *PALPC_WORK_ON_BEHALF_TICKET;
+
+typedef struct _RTL_WORK_ON_BEHALF_TICKET_EX
+{
+    ALPC_WORK_ON_BEHALF_TICKET Ticket;
+    union
+    {
+        ULONG Flags;
+        struct
+        {
+            ULONG CurrentThread : 1;
+            ULONG Reserved1 : 31;
+        };
+    };
+    ULONG Reserved2;
+} RTL_WORK_ON_BEHALF_TICKET_EX, *PRTL_WORK_ON_BEHALF_TICKET_EX;
+
 typedef struct _THREAD_BASIC_INFORMATION
 {
     NTSTATUS ExitStatus;
@@ -1669,6 +1697,17 @@ typedef struct _ETHREAD
            ULONG ThreadPagePriority:3;
            ULONG PendingRatecontrol:1;
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+           ULONG IndirectCpuSets:1;
+           ULONG DisableDynamicCodeOptOut:1;
+           ULONG ExplicitCaseSensitivity:1;
+           ULONG PicoNotifyExit:1;
+           ULONG DbgWerUserReportActive:1;
+           ULONG ForcedSelfTrimActive:1;
+           ULONG SamplingCoverage:1;
+           ULONG ImpersonationSchedulingGroup:1;
+           ULONG ReservedCrossThreadFlags:7;
+#endif
         };
         ULONG CrossThreadFlags;
     };
@@ -1732,6 +1771,32 @@ typedef struct _ETHREAD
     LIST_ENTRY AlpcWaitListEntry;
     NTSTATUS ExitStatus;
     ULONG CacheManagerCount;
+    ULONG IoBoostCount;
+    ULONG IoQoSBoostCount;
+    ULONG IoQoSThrottleCount;
+    ULONG KernelStackReference;
+    LIST_ENTRY BoostList;
+    LIST_ENTRY DeboostList;
+    ULONG_PTR BoostListLock;
+    ULONG_PTR IrpListLock;
+    PVOID ReservedForSynchTracking;
+    SINGLE_LIST_ENTRY CmCallbackListHead;
+    const GUID *ActivityId;
+    SINGLE_LIST_ENTRY SeLearningModeListHead;
+    PVOID VerifierContext;
+    PVOID AdjustedClientToken;
+    PVOID WorkOnBehalfThread;
+    PS_PROPERTY_SET PropertySet;
+    PVOID PicoContext;
+    ULONG_PTR UserRoBase;
+    ULONG_PTR UserRwBase;
+    struct _THREAD_ENERGY_VALUES *EnergyValues;
+    union
+    {
+        ULONG64 SelectedCpuSets;
+        PULONG64 SelectedCpuSetsIndirect;
+    };
+    struct _EJOB *Silo;
 #elif (NTDDI_VERSION >= NTDDI_LONGHORN)
     ULONG AlpcMessageId;
     union
@@ -1761,6 +1826,13 @@ typedef struct _ETHREAD
 
 #if defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN10)
 C_ASSERT(FIELD_OFFSET(ETHREAD, LegacyPowerObject) == 0x550);
+C_ASSERT(FIELD_OFFSET(ETHREAD, CrossThreadFlags) == 0x580);
+C_ASSERT(FIELD_OFFSET(ETHREAD, CacheManagerCount) == 0x5BC);
+C_ASSERT(FIELD_OFFSET(ETHREAD, WorkOnBehalfThread) == 0x630);
+C_ASSERT(FIELD_OFFSET(ETHREAD, PropertySet) == 0x638);
+C_ASSERT(FIELD_OFFSET(ETHREAD, SelectedCpuSets) == 0x670);
+C_ASSERT(FIELD_OFFSET(ETHREAD, Silo) == 0x678);
+C_ASSERT(FIELD_OFFSET(ETHREAD, ThreadName) == 0x680);
 #endif
 
 typedef enum _PS_PROTECTED_TYPE

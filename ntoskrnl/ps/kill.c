@@ -452,6 +452,12 @@ PspDeleteThread(IN PVOID ObjectBody)
     /* Cleanup impersonation information */
     PspDeleteThreadSecurity(Thread);
 
+    if (Thread->WorkOnBehalfThread)
+    {
+        ObDereferenceObject(Thread->WorkOnBehalfThread);
+        Thread->WorkOnBehalfThread = NULL;
+    }
+
     /* Free the thread name if set */
     if (Thread->ThreadName)
     {

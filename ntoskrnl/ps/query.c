@@ -4315,7 +4315,8 @@ NtSetInformationThread(
 
             if ((PowerThrottling.Version != THREAD_POWER_THROTTLING_CURRENT_VERSION) ||
                 ((PowerThrottling.ControlMask | PowerThrottling.StateMask) &
-                 ~THREAD_POWER_THROTTLING_VALID_FLAGS))
+                 ~THREAD_POWER_THROTTLING_VALID_FLAGS) ||
+                (PowerThrottling.StateMask & ~PowerThrottling.ControlMask))
             {
                 Status = STATUS_INVALID_PARAMETER;
                 break;
@@ -4543,6 +4544,216 @@ NtSetInformationThread(
 #endif
             break;
         }
+
+        case ThreadEnableAlignmentFaultFixup:
+        {
+            BOOLEAN EnableFixup;
+
+            _SEH2_TRY
+            {
+                EnableFixup = *(PBOOLEAN)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            KeSetAutoAlignmentThread(&Thread->Tcb, EnableFixup != FALSE);
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadHeterogeneousCpuPolicy:
+            Status = STATUS_NOT_SUPPORTED;
+            break;
+
+        case ThreadSelectedCpuSets:
+        {
+            ULONG64 CpuSetMask = 0;
+            ULONG CpuSetCount = ThreadInformationLength / sizeof(ULONG64);
+
+            if ((ThreadInformationLength % sizeof(ULONG64)) != 0)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                ULONG Index;
+
+                for (Index = 0; Index < CpuSetCount; Index++)
+                {
+                    ULONG64 Mask = ((volatile ULONG64 *)ThreadInformation)[Index];
+
+                    if (Index == 0)
+                        CpuSetMask = Mask;
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (CpuSetCount > 1)
+            {
+                Status = STATUS_CPU_SET_INVALID;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            Status = KeSetSelectedCpuSetsThread(&Thread->Tcb, CpuSetCount, &CpuSetMask);
+            if (NT_SUCCESS(Status))
+            {
+                PspLockThreadSecurityExclusive(Thread);
+                Thread->SelectedCpuSets = CpuSetMask;
+                PspUnlockThreadSecurityExclusive(Thread);
+            }
+
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadWorkOnBehalfTicket:
+        {
+            ALPC_WORK_ON_BEHALF_TICKET Ticket;
+            PETHREAD TicketThread = NULL;
+            PETHREAD OldThread;
+
+            _SEH2_TRY
+            {
+                Ticket = *(ALPC_WORK_ON_BEHALF_TICKET *)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            if ((Ticket.ThreadId != 0) || (Ticket.ThreadCreationTimeLow != 0))
+            {
+                Status = PsLookupThreadByThreadId(ULongToHandle(Ticket.ThreadId), &TicketThread);
+                if (!NT_SUCCESS(Status))
+                {
+                    TicketThread = NULL;
+                    Status = STATUS_INVALID_CID;
+                }
+                else if (TicketThread->CreateTime.LowPart != Ticket.ThreadCreationTimeLow)
+                {
+                    ObDereferenceObject(TicketThread);
+                    TicketThread = NULL;
+                    Status = STATUS_INVALID_CID;
+                }
+                else if (TicketThread == Thread)
+                {
+                    ObDereferenceObject(TicketThread);
+                    TicketThread = NULL;
+                }
+            }
+
+            if (NT_SUCCESS(Status))
+            {
+                OldThread = InterlockedExchangePointer(&Thread->WorkOnBehalfThread, TicketThread);
+                if (OldThread != NULL)
+                    ObDereferenceObject(OldThread);
+            }
+
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadDbgkWerReportActive:
+        {
+            ULONG Value;
+
+            _SEH2_TRY
+            {
+                Value = *(ULONG *)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            if (Value != 0)
+                PspSetCrossThreadFlag(Thread, CT_DBG_WER_USER_REPORT_ACTIVE_BIT);
+            else
+                PspClearCrossThreadFlag(Thread, CT_DBG_WER_USER_REPORT_ACTIVE_BIT);
+
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadAttachContainer:
+        case ThreadCpuAccountingInformation:
+        {
+            HANDLE ObjectHandle;
+
+            _SEH2_TRY
+            {
+                ObjectHandle = *(HANDLE *)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (ObjectHandle != NULL)
+                Status = STATUS_NOT_SUPPORTED;
+            else if (ThreadInformationClass == ThreadAttachContainer)
+                Status = STATUS_INVALID_PARAMETER;
+            else
+                Status = STATUS_THREAD_NOT_IN_SESSION;
+            break;
+        }
+
+        case ThreadWorkloadClass:
+            Status = (PreviousMode != KernelMode) ? STATUS_ACCESS_DENIED : STATUS_NOT_SUPPORTED;
+            break;
 
         /* Anything else */
         default:
@@ -5455,6 +5666,10 @@ NtQueryInformationThread(
                     Value = (ULONG)Thread->DynamicCodeOptOut;
                     break;
 
+                case ThreadExplicitCaseSensitivity:
+                    Value = Thread->ExplicitCaseSensitivity;
+                    break;
+
                 case ThreadEffectivePagePriority:
                     Value = Thread->ThreadPagePriority;
                     break;
@@ -5480,14 +5695,15 @@ NtQueryInformationThread(
         case ThreadCounterProfiling:
         case ThreadCpuAccountingInformation:
         {
-            Length = sizeof(BOOLEAN);
-            if ((ThreadInformationLength < Length) ||
+            if ((ThreadInformationLength < sizeof(BOOLEAN)) ||
                 ((ThreadInformationClass == ThreadCounterProfiling) &&
-                 (ThreadInformationLength != Length)))
+                 (ThreadInformationLength != sizeof(BOOLEAN))))
             {
                 Status = STATUS_INFO_LENGTH_MISMATCH;
                 break;
             }
+
+            Length = sizeof(BOOLEAN);
 
             Status = ObReferenceObjectByHandle(ThreadHandle,
                                                THREAD_QUERY_LIMITED_INFORMATION,
@@ -5544,6 +5760,243 @@ NtQueryInformationThread(
             break;
         }
 
+        case ThreadHeterogeneousCpuPolicy:
+        {
+            KHETERO_CPU_POLICY Policy;
+
+            Length = sizeof(ULONG);
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            Policy = KeQueryHeteroCpuPolicyThread(&Thread->Tcb, TRUE);
+            ObDereferenceObject(Thread);
+
+            _SEH2_TRY
+            {
+                *(PULONG)ThreadInformation = (ULONG)Policy;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case ThreadSelectedCpuSets:
+        {
+            ULONG64 CpuSetMask;
+
+            Length = sizeof(ULONG64);
+            if ((ThreadInformationLength % sizeof(ULONG64)) != 0)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            PspLockThreadSecurityShared(Thread);
+            CpuSetMask = Thread->SelectedCpuSets;
+            PspUnlockThreadSecurityShared(Thread);
+            ObDereferenceObject(Thread);
+
+            if (ThreadInformationLength < Length)
+                break;
+
+            _SEH2_TRY
+            {
+                *(PULONG64)ThreadInformation = CpuSetMask;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case ThreadSystemThreadInformation:
+        {
+            SYSTEM_THREAD_INFORMATION Information;
+
+            Length = sizeof(Information);
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               Access,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            RtlZeroMemory(&Information, sizeof(Information));
+            Information.KernelTime.QuadPart = UInt32x32To64(Thread->Tcb.KernelTime, KeMaximumIncrement);
+            Information.UserTime.QuadPart = UInt32x32To64(Thread->Tcb.UserTime, KeMaximumIncrement);
+            Information.CreateTime.QuadPart = Thread->CreateTime.QuadPart;
+            Information.WaitTime = Thread->Tcb.WaitTime;
+            Information.StartAddress = Thread->StartAddress;
+            Information.ClientId = Thread->Cid;
+            Information.Priority = Thread->Tcb.Priority;
+            Information.BasePriority = Thread->Tcb.BasePriority;
+            Information.ContextSwitches = Thread->Tcb.ContextSwitches;
+            Information.ThreadState = Thread->Tcb.State;
+            Information.WaitReason = Thread->Tcb.WaitReason;
+            ObDereferenceObject(Thread);
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(ThreadInformation, &Information, sizeof(Information));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case ThreadWorkOnBehalfTicket:
+        {
+            RTL_WORK_ON_BEHALF_TICKET_EX Ticket;
+            PETHREAD WorkOnBehalfThread;
+
+            Length = sizeof(Ticket);
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            RtlZeroMemory(&Ticket, sizeof(Ticket));
+            PspLockThreadSecurityShared(Thread);
+            WorkOnBehalfThread = Thread->WorkOnBehalfThread;
+            if (WorkOnBehalfThread != NULL)
+                ObReferenceObject(WorkOnBehalfThread);
+            PspUnlockThreadSecurityShared(Thread);
+
+            if (WorkOnBehalfThread != NULL)
+            {
+                Ticket.Ticket.ThreadId = HandleToUlong(WorkOnBehalfThread->Cid.UniqueThread);
+                Ticket.Ticket.ThreadCreationTimeLow = WorkOnBehalfThread->CreateTime.LowPart;
+                ObDereferenceObject(WorkOnBehalfThread);
+            }
+            else
+            {
+                Ticket.Ticket.ThreadId = HandleToUlong(Thread->Cid.UniqueThread);
+                Ticket.Ticket.ThreadCreationTimeLow = Thread->CreateTime.LowPart;
+                Ticket.CurrentThread = 1;
+            }
+            ObDereferenceObject(Thread);
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(ThreadInformation, &Ticket, sizeof(Ticket));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case ThreadPowerThrottlingState:
+        {
+            THREAD_POWER_THROTTLING_STATE State;
+
+            Length = sizeof(State);
+            if (ThreadInformationLength < sizeof(ULONG))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                State.Version = *(ULONG *)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (State.Version != THREAD_POWER_THROTTLING_CURRENT_VERSION)
+            {
+                Length = 0;
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            PspLockThreadSecurityShared(Thread);
+            State.ControlMask = Thread->PowerThrottlingControlMask;
+            State.StateMask = Thread->PowerThrottlingStateMask;
+            PspUnlockThreadSecurityShared(Thread);
+            ObDereferenceObject(Thread);
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(ThreadInformation, &State, sizeof(State));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
         /* Anything else */
         default:
             /* Not yet implemented */
@@ -5557,7 +6010,7 @@ NtQueryInformationThread(
     _SEH2_TRY
     {
         /* Check if caller wanted return length */
-        if (ReturnLength) *ReturnLength = Length;
+        if (ReturnLength && Length) *ReturnLength = Length;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
