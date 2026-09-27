@@ -418,7 +418,7 @@
 @ stdcall NtUserEndMenu()
 @ stdcall NtUserEndPaint(ptr ptr)
 @ stdcall NtUserEnumDisplayDevices(ptr long ptr long)
-@ stdcall NtUserEnumDisplayMonitors(ptr ptr ptr ptr long)
+@ stdcall NtUserEnumDisplayMonitors(ptr ptr ptr long)
 @ stdcall NtUserEnumDisplaySettings(ptr long ptr long)
 @ stdcall NtUserEvent(long)
 @ stdcall NtUserExcludeUpdateRgn(ptr ptr)

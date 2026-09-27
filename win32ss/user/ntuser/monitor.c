@@ -82,7 +82,8 @@ UserGetMonitorObject(IN HMONITOR hMonitor)
     }
 
     pMonitor = (PMONITOR)UserGetObject(gHandleTable, hMonitor, TYPE_MONITOR);
-    if (!pMonitor)
+    if (!pMonitor ||
+        (ULONG)(ULONG_PTR)UserHMGetHandle(pMonitor) != (ULONG)(ULONG_PTR)hMonitor)
     {
         EngSetLastError(ERROR_INVALID_MONITOR_HANDLE);
         return NULL;
@@ -107,6 +108,20 @@ UserGetPrimaryMonitor(VOID)
     for (pMonitor = gMonitorList; pMonitor != NULL; pMonitor = pMonitor->pMonitorNext)
     {
         if (pMonitor->IsPrimary)
+            break;
+    }
+
+    return pMonitor;
+}
+
+PMONITOR NTAPI
+UserGetMonitorFromHDev(HDEV hDev)
+{
+    PMONITOR pMonitor;
+
+    for (pMonitor = gMonitorList; pMonitor != NULL; pMonitor = pMonitor->pMonitorNext)
+    {
+        if (pMonitor->hDev == hDev)
             break;
     }
 
@@ -517,62 +532,29 @@ UserMonitorFromPoint(
 
 /* PUBLIC FUNCTIONS ***********************************************************/
 
-/* NtUserEnumDisplayMonitors
- *
- * Enumerates display monitors which intersect the given HDC/cliprect
- *
- * Arguments
- *
- *   hdc
- *      Handle to a DC for which to enum intersecting monitors. If this is NULL
- *      it returns all monitors which are part of the current virtual screen.
- *
- *   pUnsafeRect
- *      Clipping rectangle with coordinate system origin at the DCs origin if the
- *      given HDC is not NULL or in virtual screen coordinated if it is NULL.
- *      Can be NULL
- *
- *   phUnsafeMonitorList
- *      Pointer to an array of HMONITOR which is filled with monitor handles.
- *      Can be NULL
- *
- *   prcUnsafeMonitorList
- *      Pointer to an array of RECT which is filled with intersection rectangles.
- *      Can be NULL
- *
- *   dwListSize
- *      Size of the hMonitorList and monitorRectList arguments. If this is zero
- *      hMonitorList and monitorRectList are ignored.
- *
- * Returns
- *   The number of monitors which intersect the specified region or -1 on failure.
- */
-INT
+BOOL
 APIENTRY
 NtUserEnumDisplayMonitors(
-    OPTIONAL IN HDC hdc,
-    OPTIONAL IN LPCRECTL pUnsafeRect,
-    OPTIONAL OUT HMONITOR *phUnsafeMonitorList,
-    OPTIONAL OUT PRECTL prcUnsafeMonitorList,
-    OPTIONAL IN DWORD dwListSize)
+    _In_opt_ HDC hdc,
+    _In_opt_ LPCRECTL pUnsafeRect,
+    _In_ MONITORENUMPROC lpfnEnum,
+    _In_ LPARAM dwData)
 {
     UINT cMonitors, i;
-    INT iRet = -1;
+    BOOL bRet = FALSE;
     HMONITOR *phMonitorList = NULL;
     PRECTL prcMonitorList = NULL;
     RECTL rc, *pRect;
     RECTL DcRect = {0};
     NTSTATUS Status;
 
-    /* Get rectangle */
     if (pUnsafeRect != NULL)
     {
         Status = MmCopyFromCaller(&rc, pUnsafeRect, sizeof(RECT));
         if (!NT_SUCCESS(Status))
         {
-            TRACE("MmCopyFromCaller() failed!\n");
             SetLastNtError(Status);
-            return -1;
+            return FALSE;
         }
     }
 
@@ -581,31 +563,20 @@ NtUserEnumDisplayMonitors(
         PDC pDc;
         INT iRgnType;
 
-        /* Get visible region bounding rect */
         pDc = DC_LockDc(hdc);
         if (pDc == NULL)
         {
-            TRACE("DC_LockDc() failed!\n");
-            /* FIXME: setlasterror? */
-            return -1;
+            EngSetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
         }
         iRgnType = REGION_GetRgnBox(pDc->prgnVis, &DcRect);
         DC_UnlockDc(pDc);
 
         if (iRgnType == 0)
-        {
-            TRACE("NtGdiGetRgnBox() failed!\n");
-            return -1;
-        }
+            return FALSE;
         if (iRgnType == NULLREGION)
-            return 0;
-        if (iRgnType == COMPLEXREGION)
-        {
-            /* TODO: Warning */
-        }
+            return TRUE;
 
-        /* If hdc and pRect are given the area of interest is pRect with
-           coordinate origin at the DC position */
         if (pUnsafeRect != NULL)
         {
             rc.left += DcRect.left;
@@ -613,8 +584,6 @@ NtUserEnumDisplayMonitors(
             rc.top += DcRect.top;
             rc.bottom += DcRect.top;
         }
-        /* If hdc is given and pRect is not the area of interest is the
-           bounding rect of hdc */
         else
         {
             rc = DcRect;
@@ -626,48 +595,47 @@ NtUserEnumDisplayMonitors(
     else
         pRect = &rc;
 
-    UserEnterShared();
+    UserEnterExclusive();
 
-    /* Find intersecting monitors */
     cMonitors = IntGetMonitorsFromRect(pRect, NULL, NULL, 0, MONITOR_DEFAULTTONULL);
-    if (cMonitors == 0 || dwListSize == 0 ||
-        (phUnsafeMonitorList == NULL && prcUnsafeMonitorList == NULL))
+    if (cMonitors == 0)
     {
-        /* Simple case - just return monitors count */
-        TRACE("cMonitors = %u\n", cMonitors);
-        iRet = cMonitors;
+        bRet = TRUE;
         goto cleanup;
     }
 
-    /* Allocate safe buffers */
-    if (phUnsafeMonitorList != NULL && dwListSize != 0)
+    phMonitorList = ExAllocatePoolWithTag(PagedPool, sizeof(HMONITOR) * cMonitors, USERTAG_MONITORRECTS);
+    prcMonitorList = ExAllocatePoolWithTag(PagedPool, sizeof(RECTL) * cMonitors, USERTAG_MONITORRECTS);
+    if (phMonitorList == NULL || prcMonitorList == NULL)
     {
-        phMonitorList = ExAllocatePoolWithTag(PagedPool, sizeof (HMONITOR) * dwListSize, USERTAG_MONITORRECTS);
-        if (phMonitorList == NULL)
-        {
-            EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
-            goto cleanup;
-        }
-    }
-    if (prcUnsafeMonitorList != NULL && dwListSize != 0)
-    {
-        prcMonitorList = ExAllocatePoolWithTag(PagedPool, sizeof(RECT) * dwListSize,USERTAG_MONITORRECTS);
-        if (prcMonitorList == NULL)
-        {
-            EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
-            goto cleanup;
-        }
+        EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        goto cleanup;
     }
 
-    /* Get intersecting monitors */
     cMonitors = IntGetMonitorsFromRect(pRect, phMonitorList, prcMonitorList,
-                                       dwListSize, MONITOR_DEFAULTTONULL);
+                                       cMonitors, MONITOR_DEFAULTTONULL);
 
-    if (hdc != NULL && pRect != NULL && prcMonitorList != NULL)
+    for (i = 1; i < cMonitors; i++)
     {
-        for (i = 0; i < min(cMonitors, dwListSize); i++)
+        PMONITOR pMonitor = UserGetMonitorObject(phMonitorList[i]);
+
+        if (pMonitor != NULL && pMonitor->IsPrimary)
         {
-            _Analysis_assume_(i < dwListSize);
+            HMONITOR hPrimary = phMonitorList[i];
+            RECTL rcPrimary = prcMonitorList[i];
+
+            RtlMoveMemory(&phMonitorList[1], &phMonitorList[0], sizeof(HMONITOR) * i);
+            RtlMoveMemory(&prcMonitorList[1], &prcMonitorList[0], sizeof(RECTL) * i);
+            phMonitorList[0] = hPrimary;
+            prcMonitorList[0] = rcPrimary;
+            break;
+        }
+    }
+
+    if (hdc != NULL)
+    {
+        for (i = 0; i < cMonitors; i++)
+        {
             prcMonitorList[i].left -= DcRect.left;
             prcMonitorList[i].right -= DcRect.left;
             prcMonitorList[i].top -= DcRect.top;
@@ -675,28 +643,16 @@ NtUserEnumDisplayMonitors(
         }
     }
 
-    /* Output result */
-    if (phUnsafeMonitorList != NULL && dwListSize != 0)
+    for (i = 0; i < cMonitors; i++)
     {
-        Status = MmCopyToCaller(phUnsafeMonitorList, phMonitorList, sizeof(HMONITOR) * dwListSize);
-        if (!NT_SUCCESS(Status))
+        if (!co_ClientMonitorEnumProc(lpfnEnum, phMonitorList[i], hdc,
+                                      &prcMonitorList[i], dwData))
         {
-            SetLastNtError(Status);
-            goto cleanup;
-        }
-    }
-    if (prcUnsafeMonitorList != NULL && dwListSize != 0)
-    {
-        Status = MmCopyToCaller(prcUnsafeMonitorList, prcMonitorList, sizeof(RECT) * dwListSize);
-        if (!NT_SUCCESS(Status))
-        {
-            SetLastNtError(Status);
             goto cleanup;
         }
     }
 
-    /* Return monitors count on success */
-    iRet = cMonitors;
+    bRet = TRUE;
 
 cleanup:
     if (phMonitorList)
@@ -705,7 +661,7 @@ cleanup:
         ExFreePoolWithTag(prcMonitorList, USERTAG_MONITORRECTS);
 
     UserLeave();
-    return iRet;
+    return bRet;
 }
 
 /* NtUserGetMonitorInfo

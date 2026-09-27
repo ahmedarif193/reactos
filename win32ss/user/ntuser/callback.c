@@ -1402,4 +1402,53 @@ co_ClientImmLoadLayout(
     return ret;
 }
 
+BOOL
+APIENTRY
+co_ClientMonitorEnumProc(
+    _In_ MONITORENUMPROC Proc,
+    _In_ HMONITOR hMonitor,
+    _In_opt_ HDC hdcMonitor,
+    _In_ const RECTL *prcMonitor,
+    _In_ LPARAM dwData)
+{
+    MONITORENUMPROC_CALLBACK_ARGUMENTS Common;
+    PVOID ResultPointer = NULL;
+    ULONG ResultLength = sizeof(BOOL);
+    NTSTATUS Status;
+    BOOL ret = FALSE;
+
+    Common.Proc = Proc;
+    Common.hMonitor = hMonitor;
+    Common.hdcMonitor = hdcMonitor;
+    Common.rcMonitor.left = prcMonitor->left;
+    Common.rcMonitor.top = prcMonitor->top;
+    Common.rcMonitor.right = prcMonitor->right;
+    Common.rcMonitor.bottom = prcMonitor->bottom;
+    Common.dwData = dwData;
+
+    UserLeaveCo();
+    Status = KeUserModeCallback(USER32_CALLBACK_MONITORENUMPROC,
+                                &Common,
+                                sizeof(Common),
+                                &ResultPointer,
+                                &ResultLength);
+    UserEnterCo();
+
+    if (!NT_SUCCESS(Status) || !ResultPointer || ResultLength != sizeof(BOOL))
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        ProbeForRead(ResultPointer, sizeof(BOOL), 1);
+        ret = *(PBOOL)ResultPointer;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ret = FALSE;
+    }
+    _SEH2_END;
+
+    return ret;
+}
+
 /* EOF */

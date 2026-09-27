@@ -374,7 +374,7 @@
     SVC_(UserEndMenu, 0)
     SVC_(UserEndPaint, 2)
     SVC_(UserEnumDisplayDevices, 4)
-    SVC_(UserEnumDisplayMonitors, 5) /* FIXME: 4 on XP/2k3 */
+    SVC_(UserEnumDisplayMonitors, 4)
     SVC_(UserEnumDisplaySettings, 4)
     SVC_(UserEvent, 1)
     SVC_(UserExcludeUpdateRgn, 2)

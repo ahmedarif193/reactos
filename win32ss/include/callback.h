@@ -190,6 +190,15 @@ typedef struct _IMMLOADLAYOUT_CALLBACK_OUTPUT
     IMEINFOEX iiex;
 } IMMLOADLAYOUT_CALLBACK_OUTPUT, *PIMMLOADLAYOUT_CALLBACK_OUTPUT;
 
+typedef struct _MONITORENUMPROC_CALLBACK_ARGUMENTS
+{
+    MONITORENUMPROC Proc;
+    HMONITOR hMonitor;
+    HDC hdcMonitor;
+    RECT rcMonitor;
+    LPARAM dwData;
+} MONITORENUMPROC_CALLBACK_ARGUMENTS, *PMONITORENUMPROC_CALLBACK_ARGUMENTS;
+
 NTSTATUS WINAPI
 User32CallCopyImageFromKernel(PVOID Arguments, ULONG ArgumentLength);
 NTSTATUS WINAPI
@@ -230,3 +239,5 @@ NTSTATUS WINAPI
 User32CallImmProcessKeyFromKernel(PVOID Arguments, ULONG ArgumentLength);
 NTSTATUS WINAPI
 User32CallImmLoadLayoutFromKernel(PVOID Arguments, ULONG ArgumentLength);
+NTSTATUS WINAPI
+User32CallMonitorEnumProcFromKernel(PVOID Arguments, ULONG ArgumentLength);

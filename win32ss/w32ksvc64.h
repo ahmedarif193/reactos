@@ -76,7 +76,7 @@
     SVC_(GdiDoPalette, 6)	//	 0x1046
     SVC_(GdiPolyPolyDraw, 5)	//	 0x1047
     SVC_(UserSetCapture, 1)	//	 0x1048
-    SVC_(UserEnumDisplayMonitors, 5) /* FIXME: 4 on XP/2k3 */	//	 0x1049
+    SVC_(UserEnumDisplayMonitors, 4)	//	 0x1049
     SVC_(GdiCreateCompatibleBitmap, 3)	//	 0x104a
     SVC_(UserSetProp, 3)	//	 0x104b
     SVC_(GdiGetTextCharsetInfo, 3)	//	 0x104c

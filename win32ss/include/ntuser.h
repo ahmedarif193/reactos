@@ -2195,24 +2195,13 @@ NtUserEnumDisplayDevices(
     PDISPLAY_DEVICEW lpDisplayDevice, /* device information */
     DWORD dwFlags); /* reserved */
 
-/*
 BOOL
 NTAPI
 NtUserEnumDisplayMonitors(
-    HDC hdc,
-    LPCRECT lprcClip,
-    MONITORENUMPROC lpfnEnum,
-    LPARAM dwData);
-*/
-/* FIXME:  The call below is ros-specific and should be rewritten to use the same params as the correct call above. */
-INT
-NTAPI
-NtUserEnumDisplayMonitors(
-    OPTIONAL IN HDC hDC,
-    OPTIONAL IN LPCRECT pRect,
-    OPTIONAL OUT HMONITOR *hMonitorList,
-    OPTIONAL OUT LPRECT monitorRectList,
-    OPTIONAL IN DWORD listSize);
+    _In_opt_ HDC hdc,
+    _In_opt_ LPCRECT lprcClip,
+    _In_ MONITORENUMPROC lpfnEnum,
+    _In_ LPARAM dwData);
 
 
 NTSTATUS

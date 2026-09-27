@@ -32,6 +32,7 @@ enum ros_user_callback
     ROS_USER_CALLBACK_UMPD,
     ROS_USER_CALLBACK_IMMPROCESSKEY,
     ROS_USER_CALLBACK_IMMLOADLAYOUT,
+    ROS_USER_CALLBACK_MONITORENUMPROC,
     ROS_USER_CALLBACK_COUNT
 };
 
@@ -186,6 +187,24 @@ typedef struct
     INT_PTR Mod;
     ULONG_PTR offPfn;
 } ROS_EVENTPROC_CALLBACK_ARGUMENTS64;
+
+typedef struct
+{
+    ULONG Proc;
+    ULONG hMonitor;
+    ULONG hdcMonitor;
+    RECT rcMonitor;
+    LONG dwData;
+} ROS_MONITORENUMPROC_CALLBACK_ARGUMENTS32;
+
+typedef struct
+{
+    MONITORENUMPROC Proc;
+    HMONITOR hMonitor;
+    HDC hdcMonitor;
+    RECT rcMonitor;
+    LPARAM dwData;
+} ROS_MONITORENUMPROC_CALLBACK_ARGUMENTS64;
 
 typedef struct
 {
@@ -378,6 +397,8 @@ C_ASSERT(ROS_HOOK_PAYLOAD_OFFSET(ROS_CWPR_STRUCT64) == 1136);
 C_ASSERT(sizeof(ROS_MOUSEHOOKSTRUCT32) == 20);
 C_ASSERT(sizeof(ROS_EVENTPROC_CALLBACK_ARGUMENTS32) == 40);
 C_ASSERT(sizeof(ROS_EVENTPROC_CALLBACK_ARGUMENTS64) == 64);
+C_ASSERT(sizeof(ROS_MONITORENUMPROC_CALLBACK_ARGUMENTS32) == 32);
+C_ASSERT(sizeof(ROS_MONITORENUMPROC_CALLBACK_ARGUMENTS64) == 48);
 C_ASSERT(sizeof(ROS_LOADMENU_CALLBACK_ARGUMENTS32) == 12);
 C_ASSERT(sizeof(ROS_LOADMENU_CALLBACK_ARGUMENTS64) == 24);
 C_ASSERT(sizeof(ROS_CLIENT_LOAD_LIBRARY_ARGUMENTS32) == 24);
@@ -396,7 +417,7 @@ C_ASSERT(sizeof(ROS_IMEINFOEX32) == 348);
 C_ASSERT(sizeof(ROS_IMEINFOEX64) == 352);
 C_ASSERT(sizeof(ROS_IMMLOADLAYOUT_CALLBACK_OUTPUT32) == 352);
 C_ASSERT(sizeof(ROS_IMMLOADLAYOUT_CALLBACK_OUTPUT64) == 360);
-C_ASSERT(ROS_USER_CALLBACK_COUNT == 20);
+C_ASSERT(ROS_USER_CALLBACK_COUNT == 21);
 
 static NTSTATUS ros_callback_bad_length(void)
 {
@@ -1044,6 +1065,20 @@ static NTSTATUS WINAPI ros_wow64_imm_load_layout(void *arg, ULONG size)
     return NtCallbackReturn(&result64, sizeof(result64), status);
 }
 
+static NTSTATUS WINAPI ros_wow64_monitor_enum_proc(void *arg, ULONG size)
+{
+    const ROS_MONITORENUMPROC_CALLBACK_ARGUMENTS64 *args64 = arg;
+    ROS_MONITORENUMPROC_CALLBACK_ARGUMENTS32 args32;
+
+    if (size != sizeof(*args64)) return ros_callback_bad_length();
+    args32.Proc = PtrToUlong(args64->Proc);
+    args32.hMonitor = HandleToUlong(args64->hMonitor);
+    args32.hdcMonitor = HandleToUlong(args64->hdcMonitor);
+    args32.rcMonitor = args64->rcMonitor;
+    args32.dwData = (LONG)args64->dwData;
+    return ros_callback_dispatch(ROS_USER_CALLBACK_MONITORENUMPROC, &args32, sizeof(args32));
+}
+
 ntuser_callback user_callbacks[ROS_USER_CALLBACK_COUNT] =
 {
     ros_wow64_window_proc,
@@ -1065,5 +1100,6 @@ ntuser_callback user_callbacks[ROS_USER_CALLBACK_COUNT] =
     ros_wow64_lpk,
     ros_wow64_umpd,
     ros_wow64_imm_process_key,
-    ros_wow64_imm_load_layout
+    ros_wow64_imm_load_layout,
+    ros_wow64_monitor_enum_proc
 };

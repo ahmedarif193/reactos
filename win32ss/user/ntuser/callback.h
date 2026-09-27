@@ -86,3 +86,12 @@ APIENTRY
 co_ClientImmLoadLayout(
     _In_ HKL hKL,
     _Inout_ PIMEINFOEX pImeInfoEx);
+
+BOOL
+APIENTRY
+co_ClientMonitorEnumProc(
+    _In_ MONITORENUMPROC Proc,
+    _In_ HMONITOR hMonitor,
+    _In_opt_ HDC hdcMonitor,
+    _In_ const RECTL *prcMonitor,
+    _In_ LPARAM dwData);
