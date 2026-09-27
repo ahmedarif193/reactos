@@ -31,6 +31,12 @@
 #include "native_stubs.h"
 
 #ifdef __REACTOS__
+W32KAPI ULONG WINAPI NtGdiEnumObjects( HDC hdc, INT type, ULONG size, void *buffer );
+W32KAPI DWORD WINAPI NtGdiGetCharacterPlacementW( HDC hdc, const WCHAR *str, INT count, INT max_extent,
+                                                  GCP_RESULTSW *results, DWORD flags );
+W32KAPI INT WINAPI NtGdiDrawEscape( HDC hdc, INT escape, INT size, char *data );
+typedef BOOL (WINAPI *ROS_NTGDI_GET_REALIZATION_INFO)(HDC, void *, HFONT);
+typedef HDC (WINAPI *ROS_NTGDI_OPEN_DCW)(UNICODE_STRING *, const DEVMODEW *, UNICODE_STRING *, ULONG, BOOL, HANDLE, void *);
 W32KAPI BOOL WINAPI NtGdiInit(void);
 W32KAPI HANDLE WINAPI NtGdiGetStockObject( INT object );
 W32KAPI HBITMAP WINAPI NtGdiSetBitmapAttributes( HBITMAP bitmap, DWORD flags );
@@ -2308,12 +2314,103 @@ NTSTATUS WINAPI wow64_NtGdiGetRasterizerCaps( UINT *args )
     return NtGdiGetRasterizerCaps( status, size );
 }
 
+#ifdef __REACTOS__
+NTSTATUS WINAPI wow64_NtGdiEnumObjects( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    INT type = get_ulong( &args );
+    ULONG size = get_ulong( &args );
+    void *buffer = get_ptr( &args );
+    struct
+    {
+        UINT  lbStyle;
+        COLORREF lbColor;
+        ULONG lbHatch;
+    } *brushes32 = buffer;
+    LOGBRUSH *brushes;
+    ULONG count, i;
+
+    if (type != OBJ_BRUSH || !buffer || !size)
+        return NtGdiEnumObjects( hdc, type, size, buffer );
+
+    count = size / sizeof(*brushes32);
+    if (!(brushes = Wow64AllocateTemp( count * sizeof(*brushes) ))) return 0;
+
+    count = NtGdiEnumObjects( hdc, type, count * sizeof(*brushes), brushes );
+    for (i = 0; i < count && i < size / sizeof(*brushes32); i++)
+    {
+        brushes32[i].lbStyle = brushes[i].lbStyle;
+        brushes32[i].lbColor = brushes[i].lbColor;
+        brushes32[i].lbHatch = (ULONG)brushes[i].lbHatch;
+    }
+    return count;
+}
+
+NTSTATUS WINAPI wow64_NtGdiGetCharacterPlacementW( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    const WCHAR *str = get_ptr( &args );
+    INT count = get_ulong( &args );
+    INT max_extent = get_ulong( &args );
+    struct
+    {
+        DWORD lStructSize;
+        ULONG lpOutString;
+        ULONG lpOrder;
+        ULONG lpDx;
+        ULONG lpCaretPos;
+        ULONG lpClass;
+        ULONG lpGlyphs;
+        UINT  nGlyphs;
+        UINT  nMaxFit;
+    } *results32 = get_ptr( &args );
+    DWORD flags = get_ulong( &args );
+    GCP_RESULTSW results;
+    DWORD ret;
+
+    if (!results32)
+        return NtGdiGetCharacterPlacementW( hdc, str, count, max_extent, NULL, flags );
+
+    results.lStructSize = sizeof(results);
+    results.lpOutString = UlongToPtr( results32->lpOutString );
+    results.lpOrder = UlongToPtr( results32->lpOrder );
+    results.lpDx = UlongToPtr( results32->lpDx );
+    results.lpCaretPos = UlongToPtr( results32->lpCaretPos );
+    results.lpClass = UlongToPtr( results32->lpClass );
+    results.lpGlyphs = UlongToPtr( results32->lpGlyphs );
+    results.nGlyphs = results32->nGlyphs;
+    results.nMaxFit = results32->nMaxFit;
+
+    ret = NtGdiGetCharacterPlacementW( hdc, str, count, max_extent, &results, flags );
+
+    results32->nGlyphs = results.nGlyphs;
+    results32->nMaxFit = results.nMaxFit;
+    return ret;
+}
+
+NTSTATUS WINAPI wow64_NtGdiDrawEscape( UINT *args )
+{
+    HDC hdc = get_handle( &args );
+    INT escape = get_ulong( &args );
+    INT size = get_ulong( &args );
+    char *data = get_ptr( &args );
+
+    return NtGdiDrawEscape( hdc, escape, size, data );
+}
+#endif
+
 NTSTATUS WINAPI wow64_NtGdiGetRealizationInfo( UINT *args )
 {
     HDC hdc = get_handle( &args );
     struct font_realization_info *info = get_ptr( &args );
+#ifdef __REACTOS__
+    HFONT font = get_handle( &args );
+
+    return ((ROS_NTGDI_GET_REALIZATION_INFO)NtGdiGetRealizationInfo)( hdc, info, font );
+#else
 
     return NtGdiGetRealizationInfo( hdc, info );
+#endif
 }
 
 NTSTATUS WINAPI wow64_NtGdiGetRegionData( UINT *args )
@@ -2638,12 +2735,24 @@ NTSTATUS WINAPI wow64_NtGdiOpenDCW( UINT *args )
     ULONG type = get_ulong( &args );
     BOOL is_display = get_ulong( &args );
     HANDLE hspool = get_handle( &args );
+#ifdef __REACTOS__
+    ULONG *dhpdev32 = get_ptr( &args );
+    void *dhpdev = NULL;
+
+    UNICODE_STRING device, output;
+    HDC ret = ((ROS_NTGDI_OPEN_DCW)NtGdiOpenDCW)( unicode_str_32to64( &device, device32 ), devmode,
+                                                 unicode_str_32to64( &output, output32 ), type, is_display, hspool,
+                                                 dhpdev32 ? &dhpdev : NULL );
+    if (dhpdev32) *dhpdev32 = PtrToUlong( dhpdev );
+    return HandleToUlong( ret );
+#else
     DRIVER_INFO_2W *driver_info = get_ptr( &args );
     void *pdev = get_ptr( &args );
 
     UNICODE_STRING device, output;
     HDC ret = NtGdiOpenDCW( unicode_str_32to64( &device, device32 ), devmode, unicode_str_32to64( &output, output32 ), type, is_display, hspool, driver_info, pdev );
     return HandleToUlong( ret );
+#endif
 }
 
 NTSTATUS WINAPI wow64_NtGdiPatBlt( UINT *args )

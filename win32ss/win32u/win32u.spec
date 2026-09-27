@@ -647,7 +647,7 @@
 @ stdcall NtUserSetLayeredWindowAttributes(ptr long long long)
 @ stdcall NtUserUpdatePerUserSystemParameters(long long)
 @ stdcall NtUserUserHandleGrantAccess(ptr ptr long)
-#@ stdcall NtUserValidateHandleSecure(ptr long)
+@ stdcall NtUserValidateHandleSecure(ptr)
 @ stdcall NtUserValidateRect(ptr ptr)
 @ stdcall NtUserValidateTimerCallback(ptr)
 @ stdcall NtUserVkKeyScanEx(long ptr long)

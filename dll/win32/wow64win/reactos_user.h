@@ -6,6 +6,18 @@
 #define ROS_WOW64_FNID_NUM 31
 
 W32KAPI BOOL WINAPI NtUserGetImeInfoEx(void *info, UINT search_type);
+W32KAPI DWORD WINAPI NtUserSetThreadLayoutHandles(HKL new_layout, HKL old_layout);
+W32KAPI DWORD WINAPI NtUserGetAppImeLevel(HWND hwnd);
+W32KAPI BOOL WINAPI NtUserSetAppImeLevel(HWND hwnd, DWORD level);
+W32KAPI BOOL WINAPI NtUserValidateHandleSecure(HANDLE handle);
+W32KAPI BOOL WINAPI NtUserRegisterUserApiHook(UNICODE_STRING *dll_name, UNICODE_STRING *func_name, DWORD unknown3, DWORD unknown4);
+W32KAPI BOOL WINAPI NtUserUnregisterUserApiHook(void);
+W32KAPI BOOL WINAPI NtUserRealInternalGetMessage(MSG *msg, HWND hwnd, UINT first, UINT last, UINT flags, BOOL get_message);
+W32KAPI BOOL WINAPI NtUserRealWaitMessageEx(DWORD wake_mask, UINT timeout);
+W32KAPI BOOL WINAPI NtUserUserHandleGrantAccess(HANDLE user_handle, HANDLE job, BOOL grant);
+W32KAPI DWORD WINAPI NtUserCalcMenuBar(HWND hwnd, DWORD x, DWORD width, DWORD y, RECT *rect);
+W32KAPI DWORD WINAPI NtUserPaintMenuBar(HWND hwnd, HDC hdc, ULONG left, ULONG right, ULONG top, BOOL active);
+W32KAPI DWORD WINAPI NtUserQuerySendMessage(DWORD unknown);
 W32KAPI BOOL WINAPI NtUserSetImeInfoEx(const void *info);
 
 typedef struct
@@ -24,6 +36,13 @@ typedef struct
 
 typedef HWND (WINAPI *ROS_NTUSER_CREATE_WINDOW_EX)(DWORD, PVOID, PVOID, PVOID, DWORD, INT, INT, INT, INT, HWND, HMENU, HINSTANCE, PVOID, DWORD, PVOID);
 typedef NTSTATUS (WINAPI *ROS_NTUSER_BUILD_HWND_LIST)(HDESK, HWND, BOOLEAN, BOOLEAN, ULONG, ULONG, HWND *, ULONG *);
+typedef UINT (WINAPI *ROS_NTUSER_MAP_VIRTUAL_KEY_EX)(UINT, UINT, DWORD, HKL);
+typedef BOOL (WINAPI *ROS_NTUSER_DRAW_ICON_EX)(HDC, int, int, HICON, int, int, UINT, HBRUSH, UINT, BOOL, PVOID);
+typedef DWORD (WINAPI *ROS_NTUSER_NOTIFY_IME_STATUS)(HWND, BOOL, DWORD);
+typedef BOOL (WINAPI *ROS_NTUSER_SET_MENU)(HWND, HMENU, BOOL);
+typedef BOOL (WINAPI *ROS_NTUSER_SET_SYS_COLORS)(INT, const INT *, const COLORREF *, ULONG);
+typedef UINT_PTR (WINAPI *ROS_NTUSER_SET_TIMER)(HWND, UINT_PTR, UINT, TIMERPROC);
+typedef DWORD (WINAPI *ROS_NTUSER_VK_KEY_SCAN_EX)(WCHAR, HKL, BOOL);
 
 typedef struct
 {
