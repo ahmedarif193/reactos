@@ -790,6 +790,12 @@ User32EnumWindows(HDESK hDesktop,
         return FALSE;
     }
 
+    if (!dwThreadId && (!dwCount || pHwnd[0] == HWND_BOTTOM))
+    {
+        HeapFree(hHeap, 0, pHwnd);
+        return FALSE;
+    }
+
     /* call the user's callback function until we're done or
        they tell us to quit */
     for ( i = 0; i < dwCount && pHwnd[i] != HWND_BOTTOM; i++ )
@@ -1831,11 +1837,14 @@ IsWindowVisible(HWND hWnd)
 BOOL WINAPI
 IsWindowEnabled(HWND hWnd)
 {
-    // AG: I don't know if child windows are affected if the parent is
-    // disabled. I think they stop processing messages but stay appearing
-    // as enabled.
+    LONG_PTR Style;
 
-    return !(GetWindowLongPtrW(hWnd, GWL_STYLE) & WS_DISABLED);
+    SetLastError(NO_ERROR);
+    Style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    if (!Style && GetLastError() != NO_ERROR)
+        return FALSE;
+
+    return !(Style & WS_DISABLED);
 }
 
 
@@ -2312,7 +2321,13 @@ IsTopLevelWindow(HWND hWnd)
 {
     HWND hWndDesktop = GetDesktopWindow();
 
-    if (!ValidateHwnd(hWnd) || hWnd == hWndDesktop)
+    if (!IsWindow(hWnd))
+    {
+        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        return FALSE;
+    }
+
+    if (hWnd == hWndDesktop)
         return FALSE;
 
     return GetAncestor(hWnd, GA_PARENT) == hWndDesktop;
@@ -2330,7 +2345,7 @@ GetWindowBand(HWND hWnd, PDWORD pdwBand)
         return FALSE;
     }
 
-    if (!ValidateHwnd(hWnd))
+    if (!IsWindow(hWnd))
     {
         SetLastError(ERROR_INVALID_WINDOW_HANDLE);
         return FALSE;

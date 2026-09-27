@@ -1366,7 +1366,14 @@ NtUserCallHwndParam(
                 case GWLP_ID: Ret = (LONG)Window->IDMenu; break;
                 case GWLP_HINSTANCE: Ret = (LONG_PTR)Window->hModule; break;
                 case GWLP_USERDATA: Ret = Window->dwUserData; break;
-                case GWLP_WNDPROC: Ret = (LONG_PTR)IntGetWindowProc(Window, Ansi); break;
+                case GWLP_WNDPROC:
+                    if (Window->head.pti->ppi != PsGetCurrentProcessWin32Process())
+                    {
+                        EngSetLastError(ERROR_ACCESS_DENIED);
+                        break;
+                    }
+                    Ret = (LONG_PTR)IntGetWindowProc(Window, Ansi);
+                    break;
                 case GWLP_HWNDPARENT:
                     RelatedWindow = (Window->style & WS_CHILD) ? Window->spwndParent : Window->spwndOwner;
                     Ret = RelatedWindow ? (LONG_PTR)UserHMGetHandle(RelatedWindow) : 0;
