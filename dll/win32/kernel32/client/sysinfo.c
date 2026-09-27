@@ -111,7 +111,16 @@ BaseQuerySystemFirmware(
 
         if (NT_SUCCESS(Status) && pFirmwareTableBuffer)
         {
-            RtlCopyMemory(pFirmwareTableBuffer, SysFirmwareInfo->TableBuffer, SysFirmwareInfo->TableBufferLength);
+            _SEH2_TRY
+            {
+                RtlCopyMemory(pFirmwareTableBuffer, SysFirmwareInfo->TableBuffer, SysFirmwareInfo->TableBufferLength);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                Result = 0;
+            }
+            _SEH2_END;
         }
     }
     _SEH2_FINALLY
