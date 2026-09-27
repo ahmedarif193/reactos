@@ -19,17 +19,28 @@ static DWORD get_interface_alias(const GUID *guid, WCHAR *name, ULONG *size)
 {
     WCHAR alias[IF_MAX_STRING_SIZE + 1];
     NET_LUID luid;
-    DWORD required, status;
+    DWORD required;
 
-    if (!guid || !size) return ERROR_INVALID_PARAMETER;
-    if ((status = ConvertInterfaceGuidToLuid(guid, &luid))) return status;
-    if ((status = ConvertInterfaceLuidToAlias(&luid, alias, ARRAYSIZE(alias)))) return status;
-    required = (wcslen(alias) + 1) * sizeof(WCHAR);
-    if (!name || *size < required)
+    if (!guid) return ERROR_INVALID_PARAMETER;
+    if (!name)
     {
-        *size = required;
-        return ERROR_INSUFFICIENT_BUFFER;
+        SetLastError(ERROR_SUCCESS);
+        return ERROR_INVALID_PARAMETER;
     }
+    required = *size;
+    if (ConvertInterfaceGuidToLuid(guid, &luid) ||
+        ConvertInterfaceLuidToAlias(&luid, alias, ARRAYSIZE(alias)))
+    {
+        SetLastError(ERROR_SUCCESS);
+        return ERROR_INVALID_PARAMETER;
+    }
+    SetLastError(ERROR_SUCCESS);
+    if (required < (wcslen(alias) + 1) * sizeof(WCHAR))
+    {
+        *size = MAX_INTERFACE_NAME_LEN * sizeof(WCHAR) + sizeof(WCHAR);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+    required = (wcslen(alias) + 1) * sizeof(WCHAR);
     CopyMemory(name, alias, required);
     *size = required;
     return ERROR_SUCCESS;
@@ -44,13 +55,9 @@ DWORD WINAPI NhGetInterfaceNameFromDeviceGuid(const GUID *guid, WCHAR *name, ULO
 
 DWORD WINAPI NhGetInterfaceNameFromGuid(const GUID *guid, WCHAR *name, ULONG *size, DWORD unknown4, DWORD unknown5)
 {
-    DWORD status;
-
     UNREFERENCED_PARAMETER(unknown4);
     UNREFERENCED_PARAMETER(unknown5);
-    status = get_interface_alias(guid, name, size);
-    if (status == ERROR_NOT_FOUND) SetLastError(ERROR_PATH_NOT_FOUND);
-    return status;
+    return get_interface_alias(guid, name, size);
 }
 
 DWORD WINAPI NhGetGuidFromInterfaceName(WCHAR *name, GUID *guid, DWORD unknown3, DWORD unknown4)
