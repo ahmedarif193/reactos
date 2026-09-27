@@ -151,6 +151,9 @@ GpStatus WINGDIPAPI GdipCreatePen1(ARGB color, REAL width, GpUnit unit,
 
     TRACE("(%lx, %.2f, %d, %p)\n", color, width, unit, pen);
 
+    if (!gdiplus_is_started())
+        return GdiplusNotInitialized;
+
     GdipCreateSolidFill(color, (GpSolidFill **)(&brush));
     status = GdipCreatePen2(brush, width, unit, pen);
     GdipDeleteBrush(brush);

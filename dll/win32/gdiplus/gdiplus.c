@@ -77,6 +77,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
     return TRUE;
 }
 
+static LONG volatile gdiplus_startup_count;
+
+BOOL gdiplus_is_started(void)
+{
+    return gdiplus_startup_count > 0;
+}
+
 /*****************************************************
  *      GdiplusStartup [GDIPLUS.@]
  */
@@ -103,6 +110,7 @@ Status WINAPI GdiplusStartup(ULONG_PTR *token, const struct GdiplusStartupInput 
     }
 
     *token = 0xdeadbeef;
+    InterlockedIncrement(&gdiplus_startup_count);
 
     /* FIXME: DebugEventCallback ignored */
 
@@ -131,6 +139,9 @@ ULONG WINAPI GdiplusShutdown_wrapper(ULONG_PTR token)
      */
 
     /* FIXME: no object tracking */
+
+    if (InterlockedDecrement(&gdiplus_startup_count) < 0)
+        InterlockedIncrement(&gdiplus_startup_count);
 
     /* "bricksntiles" expects a return value of 0, which native
      * coincidentally gives.

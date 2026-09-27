@@ -71,6 +71,7 @@ HBITMAP ARGB2BMP(ARGB color);
 extern INT arc2polybezier(GpPointF * points, REAL x1, REAL y1, REAL x2, REAL y2,
     REAL startAngle, REAL sweepAngle);
 extern REAL gdiplus_atan2(REAL dy, REAL dx);
+extern BOOL gdiplus_is_started(void);
 extern GpStatus hresult_to_status(HRESULT res);
 extern REAL units_to_pixels(REAL units, GpUnit unit, REAL dpi, BOOL printer_display);
 extern REAL pixels_to_units(REAL pixels, GpUnit unit, REAL dpi, BOOL printer_display);
