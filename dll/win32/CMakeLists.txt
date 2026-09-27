@@ -1,4 +1,6 @@
 
+include(${REACTOS_SOURCE_DIR}/submodules/ffmpeg.cmake)
+
 add_subdirectory(acledit)
 add_subdirectory(aclui)
 add_subdirectory(activeds)

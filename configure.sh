@@ -144,6 +144,30 @@ fex_arm64ec_enabled() {
 	return 0
 }
 
+# FFmpeg is opt-in for Clang builds of i386, AMD64 and ARM64. An explicit
+# CMake value takes precedence over menuconfig.
+ffmpeg_enabled() {
+	[ "$USE_CLANG" = "1" ] || return 1
+	case "$ARCH" in
+		i386|amd64|arm64) ;;
+		*) return 1 ;;
+	esac
+
+	FFMPEG_SETTING=$(rosconfig_cache_get ENABLE_FFMPEG)
+	for FFMPEG_ARG in $ROS_CMAKEOPTS; do
+		case "$FFMPEG_ARG" in
+			-DENABLE_FFMPEG=*|-DENABLE_FFMPEG:*=*)
+				FFMPEG_SETTING=$(printf '%s' "${FFMPEG_ARG#*=}" | tr '[:lower:]' '[:upper:]')
+				;;
+		esac
+	done
+
+	case "$FFMPEG_SETTING" in
+		y|1|ON|YES|TRUE|Y) return 0 ;;
+	esac
+	return 1
+}
+
 optional_fex_warning() {
 	echo "configure.sh: warning: $*. FEX ARM64EC is optional; configuration will continue." >&2
 }
@@ -177,6 +201,9 @@ sync_feeds() {
 	elif kdb_zydis_enabled; then
 		# KDBG takes its disassembler from the FEX feed even without ARM64EC.
 		FEEDS_WANTED="$FEEDS_WANTED fex-arm64ec"
+	fi
+	if ffmpeg_enabled; then
+		FEEDS_WANTED="$FEEDS_WANTED ffmpeg"
 	fi
 
 	echo "Updating source feeds:$FEEDS_WANTED"

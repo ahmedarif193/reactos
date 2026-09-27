@@ -1,31 +1,14 @@
-set(WINEDMO_FFMPEG_ROOT "$ENV{REACTOS_FFMPEG_ROOT}" CACHE PATH "Path to the target FFmpeg shared development package used by winedmo")
-
 spec2def(winedmo.dll winedmo.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
     main.c)
 
-if(EXISTS "${WINEDMO_FFMPEG_ROOT}/include/libavformat/avformat.h")
-    function(winedmo_find_import_library output_name library_name)
-        if(EXISTS "${WINEDMO_FFMPEG_ROOT}/lib/lib${library_name}.dll.a")
-            set(${output_name} "${WINEDMO_FFMPEG_ROOT}/lib/lib${library_name}.dll.a" PARENT_SCOPE)
-        elseif(EXISTS "${WINEDMO_FFMPEG_ROOT}/lib/${library_name}.lib")
-            set(${output_name} "${WINEDMO_FFMPEG_ROOT}/lib/${library_name}.lib" PARENT_SCOPE)
-        else()
-            message(FATAL_ERROR "winedmo requires an import library for ${library_name}")
-        endif()
-    endfunction()
-
-    winedmo_find_import_library(WINEDMO_AVFORMAT_IMPORT_LIBRARY avformat)
-    winedmo_find_import_library(WINEDMO_AVCODEC_IMPORT_LIBRARY avcodec)
-    winedmo_find_import_library(WINEDMO_AVUTIL_IMPORT_LIBRARY avutil)
-
+if(FFMPEG_ROOT)
     list(APPEND SOURCE
         reactos.c
         unix_demuxer.c
         unix_media_type.c)
 else()
-    message(STATUS "winedmo FFmpeg backend disabled; set WINEDMO_FFMPEG_ROOT to a target FFmpeg shared development package")
     list(APPEND SOURCE
         reactos_stubs.c)
 endif()
@@ -37,15 +20,14 @@ target_link_libraries(winedmo mfuuid wine)
 add_importlibs(winedmo msvcrt kernel32 ntdll)
 add_cd_file(TARGET winedmo DESTINATION reactos/system32 FOR all)
 
-if(EXISTS "${WINEDMO_FFMPEG_ROOT}/include/libavformat/avformat.h")
-    target_include_directories(winedmo PRIVATE "${WINEDMO_FFMPEG_ROOT}/include")
+if(FFMPEG_ROOT)
+    target_include_directories(winedmo PRIVATE "${FFMPEG_ROOT}/include")
     target_compile_definitions(winedmo PRIVATE HAVE_FFMPEG HAVE_LIBAVCODEC_BSF_H)
-    target_link_libraries(winedmo "${WINEDMO_AVFORMAT_IMPORT_LIBRARY}" "${WINEDMO_AVCODEC_IMPORT_LIBRARY}" "${WINEDMO_AVUTIL_IMPORT_LIBRARY}")
-    foreach(_winedmo_ffmpeg_dll avformat-62 avcodec-62 avutil-60 swresample-6)
-        add_cd_file(FILE "${WINEDMO_FFMPEG_ROOT}/bin/${_winedmo_ffmpeg_dll}.dll" DESTINATION reactos/system32 FOR all)
-        # Processes restricted to OS-signed images load these through msmpeg2vdec.
-        set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_FILES "${WINEDMO_FFMPEG_ROOT}/bin/${_winedmo_ffmpeg_dll}.dll")
-    endforeach()
+    target_link_libraries(winedmo
+        "${FFMPEG_ROOT}/lib/libavformat.dll.a"
+        "${FFMPEG_ROOT}/lib/libavcodec.dll.a"
+        "${FFMPEG_ROOT}/lib/libavutil.dll.a")
+    add_dependencies(winedmo ffmpeg)
 endif()
 
 set_wine_module(winedmo)

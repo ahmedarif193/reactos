@@ -1,11 +1,5 @@
 
 # The AAC decoder lives in msmpeg2vdec; applications load it by this name.
-set(WINEDMO_FFMPEG_ROOT "$ENV{REACTOS_FFMPEG_ROOT}" CACHE PATH "Path to the target FFmpeg shared development package used by winedmo")
-
-if(NOT EXISTS "${WINEDMO_FFMPEG_ROOT}/include/libavcodec/avcodec.h")
-    return()
-endif()
-
 spec2def(msauddecmft.dll msauddecmft.spec)
 
 add_library(msauddecmft MODULE ${CMAKE_CURRENT_BINARY_DIR}/msauddecmft.def)

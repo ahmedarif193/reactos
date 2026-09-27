@@ -15,3 +15,6 @@
 src-git fex-arm64ec https://github.com/eotics-com/FEX.git;main-ros External/Catch2,External/Vulkan-Headers,External/drm-headers,External/fmt,External/jemalloc_glibc,External/range-v3,External/rpmalloc,External/tracy,External/unordered_dense,External/vixl,External/xxhash,External/zydis,External/zydis/dependencies/zycore,Source/Common/cpp-optparse
 
 src-git mesa https://github.com/eotics-com/reactos-mesa.git;ros-dev
+
+# Pinned to a release tag; the build configures it for LGPL use only.
+src-git ffmpeg https://github.com/FFmpeg/FFmpeg.git;n8.1.3

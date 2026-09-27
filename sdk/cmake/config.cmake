@@ -224,6 +224,10 @@ cmake_dependent_option(MESA_GALLIUM_FROM_SOURCE
                        "ARCH STREQUAL i386 OR ARCH STREQUAL amd64 OR ARCH STREQUAL arm64;CMAKE_C_COMPILER_ID STREQUAL Clang;NOT MSVC" OFF)
 unset(ENABLE_MESA_SOFTPIPE CACHE)
 
+cmake_dependent_option(ENABLE_FFMPEG
+                       "Build the LGPL FFmpeg libraries behind the H.264 and AAC Media Foundation decoders" OFF
+                       "ARCH STREQUAL i386 OR ARCH STREQUAL amd64 OR ARCH STREQUAL arm64;CMAKE_C_COMPILER_ID STREQUAL Clang;NOT MSVC" OFF)
+
 set(_wow64_default OFF)
 if(ARCH STREQUAL "arm64" AND NOT ARM64EC_RUNTIME)
     set(_wow64_default ON)

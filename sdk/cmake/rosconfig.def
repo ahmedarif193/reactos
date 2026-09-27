@@ -390,6 +390,22 @@ config ENABLE_ROSAPPS
 
 endmenu
 
+menu "Submodules"
+
+config ENABLE_FFMPEG
+    prompt "FFmpeg (H.264 and AAC decoding)"
+    type bool
+    default n
+    depends TOOLCHAIN=clang
+    depends ARCH=i386 || ARCH=amd64 || ARCH=arm64
+    help
+      Build the LGPL FFmpeg libraries from the ffmpeg source feed and ship
+      them, so the Media Foundation H.264 and AAC decoders and the winedmo
+      demuxer work. When disabled, or when the feed is not checked out,
+      those modules are built without FFmpeg and decode nothing.
+
+endmenu
+
 menu "Kernel debugging"
 
 config KD_DEBUGGER
