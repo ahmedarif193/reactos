@@ -695,9 +695,13 @@ static void MENU_mnu2mnuii( UINT flags, UINT_PTR id, LPCWSTR str, LPMENUITEMINFO
         pmii->fMask |= MIIM_DATA;
         pmii->dwItemData = (ULONG_PTR) str;
     }
-    if( flags & MF_POPUP && MENU_GetMenu((HMENU)id)) {
-        pmii->fMask |= MIIM_SUBMENU;
-        pmii->hSubMenu = (HMENU)id;
+    if( flags & MF_POPUP) {
+        if (MENU_GetMenu((HMENU)id)) {
+            pmii->fMask |= MIIM_SUBMENU;
+            pmii->hSubMenu = (HMENU)id;
+        } else {
+            SetLastError(ERROR_INVALID_MENU_HANDLE);
+        }
     }
     if( flags & MF_SEPARATOR) flags |= MF_GRAYED | MF_DISABLED;
     pmii->fState = flags & MENUITEMINFO_STATE_MASK & ~MFS_DEFAULT;

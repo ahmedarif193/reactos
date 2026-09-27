@@ -2736,7 +2736,7 @@ PWND MENU_IsMenuActive(VOID)
 void MENU_EndMenu( PWND pwnd )
 {
     PMENU menu = NULL;
-    menu = UserGetMenuObject(top_popup_hmenu);
+    menu = UserGetObject(gHandleTable, top_popup_hmenu, TYPE_MENU);
     if ( menu && ( UserHMGetHandle(pwnd) == menu->hWnd || pwnd == menu->spwndNotify ) )
     {
        if (fInsideMenuLoop && top_popup)
@@ -4504,7 +4504,7 @@ static BOOL FASTCALL MENU_InitTracking(PWND pWnd, PMENU Menu, BOOL bPopup, UINT 
     /* Send WM_ENTERMENULOOP and WM_INITMENU message only if TPM_NONOTIFY flag is not specified */
     if (!(wFlags & TPM_NONOTIFY))
     {
-       co_IntSendMessage( UserHMGetHandle(pWnd), WM_ENTERMENULOOP, bPopup, 0 );
+       co_IntSendMessage( UserHMGetHandle(pWnd), WM_ENTERMENULOOP, bPopup && !(wFlags & TPM_SYSTEM_MENU), 0 );
     }
 
     //
@@ -4542,7 +4542,7 @@ static BOOL FASTCALL MENU_ExitTracking(PWND pWnd, BOOL bPopup, UINT wFlags)
     IntNotifyWinEvent( EVENT_SYSTEM_MENUEND, pWnd, OBJID_WINDOW, CHILDID_SELF, 0);
 
     if (!(wFlags & TPM_NONOTIFY))
-       co_IntSendMessage( UserHMGetHandle(pWnd), WM_EXITMENULOOP, bPopup, 0 );
+       co_IntSendMessage( UserHMGetHandle(pWnd), WM_EXITMENULOOP, bPopup && !(wFlags & TPM_SYSTEM_MENU), 0 );
 
     co_UserShowCaret(0);
 
@@ -6103,7 +6103,7 @@ NtUserGetMenuBarInfo(
    {
       Ret = IntGetMenuItemRect(pWnd, Menu, 0, &kmbi.rcBar);
       kmbi.rcBar.right = kmbi.rcBar.left + Menu->cxMenu;
-      kmbi.rcBar.bottom = kmbi.rcBar.top + Menu->cyMenu;
+      kmbi.rcBar.bottom = kmbi.rcBar.top + max((LONG)Menu->cyMenu - 1, 0);
       TRACE("idItem a 0 %d\n",Ret);
    }
    else
@@ -6724,6 +6724,12 @@ NtUserTrackPopupMenuEx(
     USER_REFERENCE_ENTRY WndRef, MenuRef;
 
     TRACE("Enter NtUserTrackPopupMenuEx\n");
+
+    if (fuFlags & TPM_WORKAREA)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Exit0;
+    }
 
     if (fuFlags & ~VALID_TPM_FLAGS)
     {
