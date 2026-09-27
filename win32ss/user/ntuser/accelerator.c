@@ -237,8 +237,13 @@ NtUserCreateAcceleratorTable(
           Entries, EntriesCount);
     UserEnterExclusive();
 
-    if (Entries == NULL || EntriesCount == 0 ||
-        EntriesCount > MAXULONG / sizeof(*Entries))
+    if (EntriesCount == 0 || EntriesCount > 0x7FFF)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Exit;
+    }
+
+    if (Entries == NULL)
     {
         goto Exit; // Return NULL
     }
@@ -302,7 +307,6 @@ NtUserCreateAcceleratorTable(
         ExFreePoolWithTag(Accel->Table, USERTAG_ACCEL);
         UserDereferenceObject(Accel);
         UserDeleteObject(hAccel, TYPE_ACCELTABLE);
-        SetLastNtError(Status);
         goto Exit; // Return NULL
     }
 
