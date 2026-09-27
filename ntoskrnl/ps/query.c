@@ -701,7 +701,7 @@ NtQueryInformationProcess(
                                          RTL_NUMBER_OF(PspProcessQueryUnprobedClasses),
                                          PspProcessQueryPointerAlignedClasses,
                                          RTL_NUMBER_OF(PspProcessQueryPointerAlignedClasses),
-                                         sizeof(ULONG),
+                                         1,
                                          PreviousMode);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -1788,20 +1788,22 @@ NtQueryInformationProcess(
             if (!NT_SUCCESS(Status))
                 break;
 
+            Information.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+            Information.ControlMask = 0;
+            Information.StateMask = 0;
+            {
+                PPO_PROCESS_ENERGY_CONTEXT EnergyContext = ReadPointerAcquire((volatile PVOID *)&Process->EnergyContext);
+
+                if (EnergyContext != NULL)
+                {
+                    Information.ControlMask = (ULONG)ReadAcquire(&EnergyContext->PowerThrottlingControlMask);
+                    Information.StateMask = (ULONG)ReadAcquire(&EnergyContext->PowerThrottlingStateMask);
+                }
+            }
+
             _SEH2_TRY
             {
-                RtlCopyMemory(&Information, ProcessInformation, sizeof(Information));
-                if (Information.Version != PROCESS_POWER_THROTTLING_CURRENT_VERSION)
-                {
-                    Status = STATUS_INVALID_PARAMETER;
-                }
-                else
-                {
-                    /* No process-level power throttling overrides are applied. */
-                    Information.ControlMask = 0;
-                    Information.StateMask = 0;
-                    RtlCopyMemory(ProcessInformation, &Information, sizeof(Information));
-                }
+                RtlCopyMemory(ProcessInformation, &Information, sizeof(Information));
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -2072,13 +2074,13 @@ NtQueryInformationProcess(
             Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
             if (!NT_SUCCESS(Status)) break;
 
-            if (ProcessInformationLength < Length)
+            if ((((ULONG_PTR)ProcessInformation | ProcessInformationLength) & (sizeof(USHORT) - 1)) != 0)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+            }
+            else if (ProcessInformationLength < Length)
             {
                 Status = STATUS_BUFFER_TOO_SMALL;
-            }
-            else if (!ProcessInformation)
-            {
-                Status = STATUS_ACCESS_VIOLATION;
             }
             else
             {
@@ -2090,7 +2092,7 @@ NtQueryInformationProcess(
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
-                    Status = _SEH2_GetExceptionCode();
+                    Status = STATUS_INVALID_PARAMETER;
                 }
                 _SEH2_END;
             }
@@ -2180,11 +2182,79 @@ NtQueryInformationProcess(
             break;
 
         case ProcessPooledUsageAndLimits:
-            DPRINT1("Pool limits not implemented: %lu\n", ProcessInformationClass);
-            Status = STATUS_NOT_IMPLEMENTED;
-            break;
+        {
+            POOLED_USAGE_AND_LIMITS Limits;
+            PEPROCESS_QUOTA_BLOCK QuotaBlock;
 
-        /* Not supported by Server 2003 */
+            Length = sizeof(Limits);
+            if (ProcessInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ProcessHandle,
+                                               PROCESS_QUERY_INFORMATION,
+                                               PsProcessType,
+                                               PreviousMode,
+                                               (PVOID*)&Process,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            QuotaBlock = Process->QuotaBlock;
+            Limits.PeakPagedPoolUsage = QuotaBlock->QuotaEntry[PsPagedPool].Peak;
+            Limits.PagedPoolUsage = QuotaBlock->QuotaEntry[PsPagedPool].Usage;
+            Limits.PagedPoolLimit = QuotaBlock->QuotaEntry[PsPagedPool].Limit;
+            Limits.PeakNonPagedPoolUsage = QuotaBlock->QuotaEntry[PsNonPagedPool].Peak;
+            Limits.NonPagedPoolUsage = QuotaBlock->QuotaEntry[PsNonPagedPool].Usage;
+            Limits.NonPagedPoolLimit = QuotaBlock->QuotaEntry[PsNonPagedPool].Limit;
+            Limits.PeakPagefileUsage = QuotaBlock->QuotaEntry[PsPageFile].Peak;
+            Limits.PagefileUsage = QuotaBlock->QuotaEntry[PsPageFile].Usage;
+            Limits.PagefileLimit = QuotaBlock->QuotaEntry[PsPageFile].Limit;
+            ObDereferenceObject(Process);
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(ProcessInformation, &Limits, sizeof(Limits));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case ProcessCheckStackExtentsMode:
+        {
+            ULONG CheckStackExtents;
+
+            if (ProcessInformationLength != sizeof(ULONG))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            CheckStackExtents = (Process->Pcb.ProcessFlags >> KPSF_CHECK_STACK_EXTENTS_BIT) & 1;
+            ObDereferenceObject(Process);
+
+            _SEH2_TRY
+            {
+                *(PULONG)ProcessInformation = CheckStackExtents;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
         default:
 #if DBG
             DPRINT1("Unsupported info class: %s\n", PspDumpProcessInfoClassName(ProcessInformationClass));
@@ -3416,6 +3486,43 @@ NtSetInformationProcess(
             Status = STATUS_NOT_SUPPORTED;
 #endif
             break;
+
+        case ProcessPowerThrottlingState:
+        {
+            PROCESS_POWER_THROTTLING_STATE PowerThrottlingState;
+            PPO_PROCESS_ENERGY_CONTEXT EnergyContext;
+
+            _SEH2_TRY
+            {
+                PowerThrottlingState = *(PROCESS_POWER_THROTTLING_STATE *)ProcessInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if ((PowerThrottlingState.Version != PROCESS_POWER_THROTTLING_CURRENT_VERSION) ||
+                (PowerThrottlingState.ControlMask & ~PSP_PROCESS_POWER_THROTTLING_VALID_FLAGS) ||
+                (PowerThrottlingState.StateMask & ~PowerThrottlingState.ControlMask))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            EnergyContext = PspGetEnergyContext(Process);
+            if (EnergyContext == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            InterlockedExchange(&EnergyContext->PowerThrottlingControlMask, (LONG)PowerThrottlingState.ControlMask);
+            InterlockedExchange(&EnergyContext->PowerThrottlingStateMask, (LONG)PowerThrottlingState.StateMask);
+            Status = STATUS_SUCCESS;
+            break;
+        }
 
         /* Anything else is invalid */
         default:

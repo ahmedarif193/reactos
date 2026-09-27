@@ -415,7 +415,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     (
         ULONG,
         ULONG,
-        ICIF_SET
+        ICIF_QUERY | ICIF_SET
     ),
     /* ProcessCommandLineInformation */
     IQS_NONE,
@@ -471,7 +471,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     (
         PROCESS_POWER_THROTTLING_STATE,
         ULONG,
-        ICIF_QUERY
+        ICIF_QUERY | ICIF_SET
     ),
     /* ProcessReserved3Information */
     IQS_NONE,

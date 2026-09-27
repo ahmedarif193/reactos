@@ -14,7 +14,6 @@
 
 C_ASSERT(sizeof(PROCESS_ENERGY_VALUES) == 432);
 
-static
 PPO_PROCESS_ENERGY_CONTEXT
 PspGetEnergyContext(
     _In_ PEPROCESS Process)

@@ -729,10 +729,18 @@ PspStoreMitigationPolicy(
     _In_ ULONG Policy,
     _In_ ULONG Flags);
 
+#define PSP_PROCESS_POWER_THROTTLING_VALID_FLAGS 0x7
+
 typedef struct _PO_PROCESS_ENERGY_CONTEXT
 {
     PROCESS_ENERGY_VALUES Values;
+    volatile LONG PowerThrottlingControlMask;
+    volatile LONG PowerThrottlingStateMask;
 } PO_PROCESS_ENERGY_CONTEXT, *PPO_PROCESS_ENERGY_CONTEXT;
+
+PPO_PROCESS_ENERGY_CONTEXT
+PspGetEnergyContext(
+    _In_ PEPROCESS Process);
 
 NTSTATUS
 NTAPI
