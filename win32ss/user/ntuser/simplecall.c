@@ -920,7 +920,7 @@ NtUserCallHwndLock(
     switch (Routine)
     {
         case HWNDLOCK_ROUTINE_ARRANGEICONICWINDOWS:
-            co_WinPosArrangeIconicWindows(Window);
+            Ret = (BOOL)co_WinPosArrangeIconicWindows(Window);
             break;
 
         case HWNDLOCK_ROUTINE_DRAWMENUBAR:

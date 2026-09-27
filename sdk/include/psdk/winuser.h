@@ -1101,6 +1101,9 @@ extern "C" {
 #define ARW_HIDE 8
 #define ARW_TOPLEFT 2
 #define ARW_TOPRIGHT 3
+#define ARW_STARTMASK 3
+#define ARW_STARTRIGHT 1
+#define ARW_STARTTOP 2
 #define ARW_DOWN 4
 #define ARW_LEFT 0
 #define ARW_RIGHT 0
