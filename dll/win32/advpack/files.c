@@ -308,6 +308,62 @@ done:
     return HRESULT_FROM_WIN32(dwLastError);
 }
 
+#ifdef __REACTOS__
+static HRESULT DELNODE_recurse_dirtree(LPWSTR fname, DWORD flags)
+{
+    DWORD fattrs = GetFileAttributesW(fname);
+    HRESULT ret = S_OK;
+    HANDLE hFindFile;
+    WIN32_FIND_DATAW w32fd;
+    int fname_len;
+
+    if (fattrs == INVALID_FILE_ATTRIBUTES)
+        return E_FAIL;
+
+    if (!(fattrs & FILE_ATTRIBUTE_DIRECTORY))
+    {
+        if (SetFileAttributesW(fname, FILE_ATTRIBUTE_NORMAL) && DeleteFileW(fname))
+            return S_OK;
+        return E_FAIL;
+    }
+
+    if (!(flags & ADN_DEL_IF_EMPTY))
+    {
+        fname_len = lstrlenW(fname);
+        if (fname_len && fname[fname_len-1] != '\\') fname[fname_len++] = '\\';
+        lstrcpyW(fname + fname_len, L"*");
+
+        if ((hFindFile = FindFirstFileW(fname, &w32fd)) != INVALID_HANDLE_VALUE)
+        {
+            do
+            {
+                if (!lstrcmpW(L".", w32fd.cFileName) || !lstrcmpW(L"..", w32fd.cFileName))
+                    continue;
+                if ((w32fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (flags & ADN_DONT_DEL_SUBDIRS))
+                    continue;
+                lstrcpyW(fname + fname_len, w32fd.cFileName);
+                if (DELNODE_recurse_dirtree(fname, flags & ~(ADN_DONT_DEL_DIR | ADN_DONT_DEL_SUBDIRS)) != S_OK)
+                {
+                    ret = E_FAIL;
+                    break;
+                }
+            } while (FindNextFileW(hFindFile, &w32fd));
+            FindClose(hFindFile);
+        }
+
+        fname[fname_len] = 0;
+
+        if (ret != S_OK || (flags & ADN_DONT_DEL_DIR))
+            return ret;
+    }
+
+    if (SetFileAttributesW(fname, FILE_ATTRIBUTE_NORMAL) && RemoveDirectoryW(fname))
+        return S_OK;
+    if ((flags & ADN_DONT_DEL_SUBDIRS) && !(flags & ADN_DEL_IF_EMPTY))
+        return S_OK;
+    return E_FAIL;
+}
+#else
 static HRESULT DELNODE_recurse_dirtree(LPWSTR fname, DWORD flags)
 {
     DWORD fattrs = GetFileAttributesW(fname);
@@ -368,6 +424,7 @@ static HRESULT DELNODE_recurse_dirtree(LPWSTR fname, DWORD flags)
     
     return ret;
 }
+#endif
 
 /***********************************************************************
  *              DelNodeA   (ADVPACK.@)
@@ -415,8 +472,10 @@ HRESULT WINAPI DelNodeW(LPCWSTR pszFileOrDirName, DWORD dwFlags)
     
     TRACE("(%s, %ld)\n", debugstr_w(pszFileOrDirName), dwFlags);
     
+#ifndef __REACTOS__
     if (dwFlags)
         FIXME("Flags ignored!\n");
+#endif
 
     if (pszFileOrDirName && *pszFileOrDirName)
     {
