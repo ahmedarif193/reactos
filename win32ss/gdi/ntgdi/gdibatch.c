@@ -770,6 +770,7 @@ NtGdiFlush(
     VOID)
 {
     SynchronizeDriver(GCAPS2_SYNCFLUSH);
+    IntCompositionBatchComplete();
     return STATUS_SUCCESS;
 }
 
@@ -804,6 +805,9 @@ NtGdiFlushUserBatch(VOID)
           pDC = DC_LockDc(hDC);
       }
 
+       if (pDC)
+           IntCompositionBatchBegin(pDC->dclevel.pSurface);
+
        // No need to init anything, just go!
        for (; GdiBatchCount > 0; GdiBatchCount--)
        {
@@ -816,6 +820,7 @@ NtGdiFlushUserBatch(VOID)
 
        if (pDC)
        {
+           IntCompositionBatchEnd(pDC->dclevel.pSurface);
            DC_UnlockDc(pDC);
        }
 

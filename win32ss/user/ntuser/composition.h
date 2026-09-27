@@ -166,6 +166,9 @@ VOID IntCompositionDamageWindowMetadata(_In_opt_ PWND Wnd);
  * window. Only flags the damage — the compose runs on the next tick. */
 VOID IntCompositionDamageBacking(_In_opt_ PSURFACE psurf,
                                   _In_ const RECTL *Bounds);
+VOID IntCompositionBatchBegin(_In_opt_ PSURFACE psurf);
+VOID IntCompositionBatchEnd(_In_opt_ PSURFACE psurf);
+VOID IntCompositionBatchComplete(VOID);
 
 /* Mark a completed full-client OpenGL DIB present. The buffer exchange is
  * deferred until DWM's next frame pull, after it has finished reading the

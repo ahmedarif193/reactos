@@ -46,6 +46,9 @@ typedef struct _REDIRECT_ENTRY
     LONG         DcCount;      /* GetDC..ReleaseDC depth on this tree          */
     PTHREADINFO  DcOwner;      /* thread that opened the outer DC bracket      */
     LONGLONG     DcStart;      /* when the outer DC bracket opened             */
+    PTHREADINFO  BatchOwner;
+    LONGLONG     BatchStart;
+    BOOL         BatchFlushing;
     BOOL         Damaged;      /* this window's backing changed since compose  */
     volatile LONG BackingDrawn;/* at least one GDI operation reached backing   */
     volatile LONG BackComplete;/* a complete GL client frame reached BACK      */
@@ -1808,6 +1811,19 @@ IntCompositionDamageBacking(_In_opt_ PSURFACE psurf,
                 InterlockedExchange(&Redirect->BackDirtyValid, TRUE);
                 InterlockedExchange(&g_Redirects[i].BackingDrawn, TRUE);
                 g_Redirects[i].Damaged = TRUE;
+                if (g_Redirects[i].BatchOwner == PsGetCurrentThreadWin32Thread())
+                {
+                    if (!g_Redirects[i].BatchFlushing)
+                    {
+                        g_Redirects[i].BatchOwner = NULL;
+                    }
+                    else if ((LONGLONG)KeQueryInterruptTime() - g_Redirects[i].BatchStart <
+                             COMPOSITION_DC_HOLD_100NS)
+                    {
+                        InterlockedExchange(&g_CompositionDamaged, TRUE);
+                        return;
+                    }
+                }
                 /* A bounded GetDC/ReleaseDC or BeginPaint/EndPaint bracket
                  * publishes the completed backing when it closes. Waking the
                  * compositor for every primitive inside that bracket only
@@ -1826,6 +1842,73 @@ IntCompositionDamageBacking(_In_opt_ PSURFACE psurf,
     }
 
     IntCompositionMarkDamage(TRUE);
+}
+
+VOID
+IntCompositionBatchBegin(_In_opt_ PSURFACE psurf)
+{
+    PTHREADINFO pti;
+    ULONG i;
+
+    if (!gbCompositionEnabled || psurf == NULL)
+        return;
+
+    pti = PsGetCurrentThreadWin32Thread();
+    for (i = 0; i < g_RedirectHighWater; i++)
+    {
+        if (g_Redirects[i].Redirect.psurf != psurf)
+            continue;
+        if (g_Redirects[i].BatchOwner != pti)
+        {
+            g_Redirects[i].BatchStart = (LONGLONG)KeQueryInterruptTime();
+            g_Redirects[i].BatchOwner = pti;
+        }
+        g_Redirects[i].BatchFlushing = TRUE;
+        return;
+    }
+}
+
+VOID
+IntCompositionBatchEnd(_In_opt_ PSURFACE psurf)
+{
+    PTHREADINFO pti;
+    ULONG i;
+
+    if (!gbCompositionEnabled || psurf == NULL)
+        return;
+
+    pti = PsGetCurrentThreadWin32Thread();
+    for (i = 0; i < g_RedirectHighWater; i++)
+    {
+        if (g_Redirects[i].Redirect.psurf != psurf)
+            continue;
+        if (g_Redirects[i].BatchOwner == pti)
+            g_Redirects[i].BatchFlushing = FALSE;
+        return;
+    }
+}
+
+VOID
+IntCompositionBatchComplete(VOID)
+{
+    PTHREADINFO pti;
+    BOOL Completed = FALSE;
+    ULONG i;
+
+    if (!gbCompositionEnabled)
+        return;
+
+    pti = PsGetCurrentThreadWin32Thread();
+    for (i = 0; i < g_RedirectHighWater; i++)
+    {
+        if (g_Redirects[i].BatchOwner != pti)
+            continue;
+        g_Redirects[i].BatchOwner = NULL;
+        g_Redirects[i].BatchFlushing = FALSE;
+        Completed = TRUE;
+    }
+    if (Completed)
+        IntCompositionMarkDamage(FALSE);
 }
 
 VOID
@@ -2177,6 +2260,12 @@ IntCompositionEndThreadPaints(_In_ PTHREADINFO pti)
             e->Damaged = TRUE;
             Ended = TRUE;
         }
+        if (e->BatchOwner == pti)
+        {
+            e->BatchOwner = NULL;
+            e->BatchFlushing = FALSE;
+            Ended = TRUE;
+        }
     }
     if (Ended)
         IntCompositionMarkDamage(FALSE);
@@ -2196,6 +2285,8 @@ IntCompositionPaintEnd(_In_ PWND Wnd)
 
     if (e->PaintCount > 0)
         InterlockedDecrement(&e->PaintCount);
+    if (e->BatchOwner == PsGetCurrentThreadWin32Thread())
+        e->BatchOwner = NULL;
 
     /* Thread's whole paint batch drained: all of its windows are quiescent,
      * so force the bracket counter to 0 (self-heals any acquire/release drift
@@ -2253,6 +2344,8 @@ IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State)
     DcCount = e->DcCount;
     if (DcCount > 0)
         DcCount = InterlockedDecrement(&e->DcCount);
+    if (e->BatchOwner == PsGetCurrentThreadWin32Thread())
+        e->BatchOwner = NULL;
 
     /* If the session drew, flag damage; the compose runs on the batch-done
      * commit, the throttled tick, or the pre-idle flush (not per release, so
@@ -2529,7 +2622,9 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
              * a message; only a long-held cache DC is published open. */
             BOOL bBusy = InterlockedCompareExchange(&e->PaintCount, 0, 0) > 0 ||
                          (InterlockedCompareExchange(&e->DcCount, 0, 0) > 0 &&
-                          now - e->DcStart < COMPOSITION_DC_HOLD_100NS);
+                          now - e->DcStart < COMPOSITION_DC_HOLD_100NS) ||
+                         (e->BatchOwner != NULL &&
+                          now - e->BatchStart < COMPOSITION_DC_HOLD_100NS);
             BOOL bBackingDrawn =
                 InterlockedCompareExchange(&e->BackingDrawn, FALSE, FALSE) != FALSE;
             BOOL bBackingDirty =
