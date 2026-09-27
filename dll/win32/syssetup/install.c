@@ -1141,6 +1141,7 @@ InstallLiveCD(VOID)
 {
     STARTUPINFOW StartupInfo;
     PROCESS_INFORMATION ProcessInformation;
+    LPVOID lpEnvironment;
     BOOL bRes;
 
     PreprocessUnattend(FALSE);
@@ -1183,7 +1184,12 @@ InstallLiveCD(VOID)
 
     SetupCloseInfFile(hSysSetupInf);
 
-    /* Run the shell */
+    /* Run the shell with a fresh system environment, as winlogon does for
+     * a shell without a user token: ours was inherited from SMSS before it
+     * wrote the per-boot variables such as PROCESSOR_IDENTIFIER. */
+    if (!CreateEnvironmentBlock(&lpEnvironment, NULL, TRUE))
+        lpEnvironment = NULL;
+
     ZeroMemory(&StartupInfo, sizeof(StartupInfo));
     StartupInfo.cb = sizeof(StartupInfo);
     bRes = CreateProcessW(L"userinit.exe",
@@ -1191,11 +1197,13 @@ InstallLiveCD(VOID)
                           NULL,
                           NULL,
                           FALSE,
-                          0,
-                          NULL,
+                          CREATE_UNICODE_ENVIRONMENT,
+                          lpEnvironment,
                           NULL,
                           &StartupInfo,
                           &ProcessInformation);
+    if (lpEnvironment)
+        DestroyEnvironmentBlock(lpEnvironment);
     if (!bRes)
         goto error;
 
