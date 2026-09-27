@@ -2296,13 +2296,16 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
                      PUNICODE_STRING ClassName,
                      PLARGE_STRING WindowName,
                      PVOID acbiBuffer,
-                     DWORD dwVer )
+                     DWORD dwVer,
+                     PUNICODE_STRING CreateClassName )
 {
    ULONG style;
    PWND Window = NULL, ParentWindow = NULL, OwnerWindow;
    HWND hWnd, hWndParent, hWndOwner, hwndInsertAfter;
    PWINSTATION_OBJECT WinSta;
    PCLS Class = NULL;
+   UNICODE_STRING NVClassName;
+   WCHAR NVClassBuffer[256 + 1];
    SIZE Size;
    POINT MaxSize, MaxPos, MinTrack, MaxTrack, Position;
    CBT_CREATEWNDW * pCbtCreate;
@@ -2431,7 +2434,27 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
 
    /* NCCREATE, WM_NCCALCSIZE and Hooks need the original values */
    Cs->lpszName = (LPCWSTR) WindowName;
-   Cs->lpszClass = (LPCWSTR) ClassName;
+   Cs->lpszClass = (LPCWSTR) (CreateClassName ? CreateClassName : ClassName);
+   if (CreateClassName && Class->atomNVClassName)
+   {
+      if (IS_ATOM(CreateClassName->Buffer))
+      {
+         NVClassName.Buffer = (PWSTR)(ULONG_PTR)Class->atomNVClassName;
+         NVClassName.Length = NVClassName.MaximumLength = 0;
+         Cs->lpszClass = (LPCWSTR)&NVClassName;
+      }
+      else
+      {
+         ULONG cbName = IntGetAtomName(Class->atomNVClassName, NVClassBuffer, sizeof(NVClassBuffer) - sizeof(WCHAR));
+         if (cbName)
+         {
+            NVClassName.Buffer = NVClassBuffer;
+            NVClassName.Length = (USHORT)cbName;
+            NVClassName.MaximumLength = sizeof(NVClassBuffer);
+            Cs->lpszClass = (LPCWSTR)&NVClassName;
+         }
+      }
+   }
 
    //// Check for a hook to eliminate overhead. ////
    if ( ISITHOOKED(WH_CBT) ||  (pti->rpdesk->pDeskInfo->fsHooks & HOOKID_TO_FLAG(WH_CBT)) )
@@ -2926,7 +2949,7 @@ NtUserCreateWindowEx(
     UserEnterExclusive();
 
     /* Call the internal function */
-    pwnd = co_UserCreateWindowEx(&Cs, &ustrClsVersion, plstrWindowName, acbiBuffer, dwFlags);
+    pwnd = co_UserCreateWindowEx(&Cs, &ustrClsVersion, plstrWindowName, acbiBuffer, dwFlags, &ustrClassName);
 
     if(!pwnd)
     {

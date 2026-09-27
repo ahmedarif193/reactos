@@ -68,7 +68,8 @@ PWND FASTCALL co_UserCreateWindowEx(CREATESTRUCTW* Cs,
                                     PUNICODE_STRING ClassName,
                                     PLARGE_STRING WindowName,
                                     PVOID acbiBuffer,
-                                    DWORD dwVer );
+                                    DWORD dwVer,
+                                    PUNICODE_STRING CreateClassName );
 BOOL FASTCALL IntEnableWindow(HWND,BOOL);
 BOOL FASTCALL IntIsWindowVisible(PWND);
 DWORD FASTCALL GetNCHitEx(PWND,POINT);

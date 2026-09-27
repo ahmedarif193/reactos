@@ -2118,7 +2118,7 @@ co_IntCreateDefaultImeWindow(
     Cs.lpszClass = ClassName.Buffer;
 
     // NOTE: LARGE_UNICODE_STRING is compatible to LARGE_STRING.
-    pImeWnd = co_UserCreateWindowEx(&Cs, &ClassName, (PLARGE_STRING)&WindowName, NULL, WINVER);
+    pImeWnd = co_UserCreateWindowEx(&Cs, &ClassName, (PLARGE_STRING)&WindowName, NULL, WINVER, NULL);
     if (pImeWnd)
     {
         pimeui = IntGetImeUIFromWnd(pImeWnd);

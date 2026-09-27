@@ -1374,7 +1374,9 @@ IntFindClass(IN RTL_ATOM Atom,
     while (Class != NULL)
     {
         if (Class->atomClassName == Atom &&
-            (hInstance == NULL || Class->hModule == hInstance) &&
+            (hInstance == NULL || Class->hModule == hInstance ||
+             (((ULONG_PTR)Class->hModule >> 16) &&
+              ((ULONG_PTR)Class->hModule & ~(ULONG_PTR)0xffff) == ((ULONG_PTR)hInstance & ~(ULONG_PTR)0xffff))) &&
             !(Class->CSF_flags & CSF_WOWDEFERDESTROY))
         {
             ASSERT(Class->pclsBase == Class);
@@ -2928,7 +2930,7 @@ NtUserGetClassName (IN HWND hWnd,
     Window = UserGetWindowObject(hWnd);
     if (Window != NULL)
     {
-        if (Real && Window->fnid && !(Window->fnid & FNID_DESTROY))
+        if (Real && Window->fnid && Window->fnid != FNID_MESSAGEWND && !(Window->fnid & FNID_DESTROY))
         {
            if (LookupFnIdToiCls(Window->fnid, &iCls))
            {

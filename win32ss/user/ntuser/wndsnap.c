@@ -113,7 +113,7 @@ co_IntSnapPreviewCreate(PWND pwndDrag, const RECT *prc)
     Cs.lpszName = (LPCWSTR)&WindowName;
     Cs.lpszClass = (LPCWSTR)&ClassName;
 
-    pwnd = co_UserCreateWindowEx(&Cs, &ClassName, &WindowName, NULL, WINVER);
+    pwnd = co_UserCreateWindowEx(&Cs, &ClassName, &WindowName, NULL, WINVER, NULL);
     if (pwnd == NULL)
     {
         ERR("Could not create the snap preview window\n");
