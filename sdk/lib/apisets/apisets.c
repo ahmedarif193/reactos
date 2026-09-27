@@ -28,6 +28,27 @@ WORD ExtensionSize = sizeof(L".dll") - sizeof(WCHAR);
 //    );
 
 
+// Strip the minor version: api-ms-win-core-file-l1-2-1 -> api-ms-win-core-file-l1-2
+static
+BOOLEAN
+ApiSetContractName(
+    _In_ PCUNICODE_STRING Name,
+    _Out_ PUNICODE_STRING Contract)
+{
+    USHORT Length = Name->Length / sizeof(WCHAR);
+    USHORT Index = Length;
+
+    while (Index > 0 && Name->Buffer[Index - 1] >= L'0' && Name->Buffer[Index - 1] <= L'9')
+        Index--;
+    if (Index == Length || Index < 2 || Name->Buffer[Index - 1] != L'-')
+        return FALSE;
+
+    Contract->Buffer = Name->Buffer;
+    Contract->Length = (USHORT)((Index - 1) * sizeof(WCHAR));
+    Contract->MaximumLength = Contract->Length;
+    return TRUE;
+}
+
 NTSTATUS
 ApiSetResolveToHost(
     _In_ DWORD ApisetVersion,
@@ -75,8 +96,9 @@ ApiSetResolveToHost(
                 // Return a static string (does not have to be freed)
                 *Resolved = TRUE;
                 *Output = g_Apisets[Index].Target;
+                return STATUS_SUCCESS;
             }
-            return STATUS_SUCCESS;
+            break;
         }
         else if (result < 0)
         {
@@ -87,6 +109,29 @@ ApiSetResolveToHost(
             LBnd = Index + 1;
         }
     }
+
+    // Windows 10 resolves a contract whatever minor version is requested,
+    // and its schema lists each contract only once.
+    if (ApisetVersion & APISET_WIN10)
+    {
+        UNICODE_STRING Contract, Candidate;
+
+        if (ApiSetContractName(&Tmp, &Contract))
+        {
+            for (LONG Index = 0; Index < g_ApisetsCount; Index++)
+            {
+                if ((g_Apisets[Index].dwOsVersions & ApisetVersion) &&
+                    ApiSetContractName(&g_Apisets[Index].Name, &Candidate) &&
+                    RtlEqualUnicodeString(&Contract, &Candidate, TRUE))
+                {
+                    *Resolved = TRUE;
+                    *Output = g_Apisets[Index].Target;
+                    return STATUS_SUCCESS;
+                }
+            }
+        }
+    }
+
     *Resolved = FALSE;
     return STATUS_SUCCESS;
 }
