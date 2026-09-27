@@ -244,6 +244,9 @@ IntFontFamilyCompareEx(const FONTFAMILYINFO *ffi1,
             return -1;
         if (plf1->lfItalic > plf2->lfItalic)
             return 1;
+        cmp = _wcsicmp(ffi1->EnumLogFontEx.elfFullName, ffi2->EnumLogFontEx.elfFullName);
+        if (cmp)
+            return cmp;
     }
     return 0;
 }
@@ -523,7 +526,7 @@ GetCharacterPlacementA(
     DWORD ret;
     UINT font_cp;
 
-    if ( !lpString || uCount <= 0 || !lpResults || (nMaxExtent < 0 && nMaxExtent != -1 ) )
+    if ( !lpString || uCount <= 0 || (nMaxExtent < 0 && nMaxExtent != -1 ) )
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
@@ -531,14 +534,20 @@ GetCharacterPlacementA(
     /*    TRACE("%s, %d, %d, 0x%08x\n",
               debugstr_an(lpString, uCount), uCount, nMaxExtent, dwFlags);
     */
-    /* both structs are equal in size */
-    memcpy(&resultsW, lpResults, sizeof(resultsW));
-
     lpStringW = FONT_mbtowc(hdc, lpString, uCount, &uCountW, &font_cp);
     if (lpStringW == NULL)
     {
         return 0;
     }
+    if (!lpResults)
+    {
+        ret = GetCharacterPlacementW(hdc, lpStringW, uCountW, nMaxExtent, NULL, dwFlags);
+        HeapFree(GetProcessHeap(), 0, lpStringW);
+        return ret;
+    }
+
+    /* both structs are equal in size */
+    memcpy(&resultsW, lpResults, sizeof(resultsW));
     if(lpResults->lpOutString)
     {
         resultsW.lpOutString = HeapAlloc(GetProcessHeap(), 0, sizeof(WCHAR)*uCountW);
@@ -585,6 +594,12 @@ GetCharacterPlacementW(
     SIZE size;
     UINT i, nSet;
     DPRINT("GetCharacterPlacementW\n");
+
+    if (!uCount)
+        return 0;
+
+    if (!lpResults)
+        return GetTextExtentPoint32W(hdc, lpString, uCount, &size) ? MAKELONG(size.cx, size.cy) : 0;
 
     if (dwFlags&(~GCP_REORDER)) DPRINT("flags 0x%08lx ignored\n", dwFlags);
     if (lpResults->lpClass) DPRINT("classes not implemented\n");
@@ -1403,16 +1418,20 @@ GetOutlineTextMetricsA(
 
         /* check if the string offsets really fit into the provided size */
         /* FIXME: should we check string length as well? */
-        if ((UINT_PTR)lpOTM->otmpFamilyName >= lpOTM->otmSize)
+        if (lpOTM->otmSize >= FIELD_OFFSET(OUTLINETEXTMETRICA, otmpFamilyName) + sizeof(char *) &&
+            (UINT_PTR)lpOTM->otmpFamilyName >= lpOTM->otmSize)
             lpOTM->otmpFamilyName = 0; /* doesn't fit */
 
-        if ((UINT_PTR)lpOTM->otmpFaceName >= lpOTM->otmSize)
+        if (lpOTM->otmSize >= FIELD_OFFSET(OUTLINETEXTMETRICA, otmpFaceName) + sizeof(char *) &&
+            (UINT_PTR)lpOTM->otmpFaceName >= lpOTM->otmSize)
             lpOTM->otmpFaceName = 0; /* doesn't fit */
 
-        if ((UINT_PTR)lpOTM->otmpStyleName >= lpOTM->otmSize)
+        if (lpOTM->otmSize >= FIELD_OFFSET(OUTLINETEXTMETRICA, otmpStyleName) + sizeof(char *) &&
+            (UINT_PTR)lpOTM->otmpStyleName >= lpOTM->otmSize)
             lpOTM->otmpStyleName = 0; /* doesn't fit */
 
-        if ((UINT_PTR)lpOTM->otmpFullName >= lpOTM->otmSize)
+        if (lpOTM->otmSize >= FIELD_OFFSET(OUTLINETEXTMETRICA, otmpFullName) + sizeof(char *) &&
+            (UINT_PTR)lpOTM->otmpFullName >= lpOTM->otmSize)
             lpOTM->otmpFullName = 0; /* doesn't fit */
     }
 
