@@ -1140,7 +1140,7 @@ GpStatus WINGDIPAPI GdipPrivateAddFontFile(GpFontCollection *collection, GDIPCON
 
 #define TT_MAC_ID_SIMPLIFIED_CHINESE    25
 
-#define NAME_ID_FULL_FONT_NAME  4
+#define NAME_ID_FONT_FAMILY     1
 
 typedef struct {
     ULONG version;
@@ -1488,7 +1488,7 @@ GpStatus WINGDIPAPI GdipPrivateAddMemoryFont(GpFontCollection* fontCollection,
     if (!fontCollection || !memory || !length)
         return InvalidParameter;
 
-    name = load_ttf_name_id(memory, length, NAME_ID_FULL_FONT_NAME);
+    name = load_ttf_name_id(memory, length, NAME_ID_FONT_FAMILY);
     if (!name)
         return OutOfMemory;
 
@@ -1507,13 +1507,13 @@ GpStatus WINGDIPAPI GdipPrivateAddMemoryFont(GpFontCollection* fontCollection,
         if(lstrlenW(name) > LF_FACESIZE - 1)
             name[LF_FACESIZE - 1] = 0;
 
+        memset(&lfw, 0, sizeof(lfw));
         lfw.lfCharSet = DEFAULT_CHARSET;
         lstrcpyW(lfw.lfFaceName, name);
-        lfw.lfPitchAndFamily = 0;
 
         param.collection = fontCollection;
         param.is_system = FALSE;
-        if (!EnumFontFamiliesExW(param.hdc, &lfw, add_font_proc, (LPARAM)&param, 0))
+        if (!add_font_proc(&lfw, NULL, TRUETYPE_FONTTYPE, (LPARAM)&param))
             ret = param.stat;
 
         DeleteDC(param.hdc);
