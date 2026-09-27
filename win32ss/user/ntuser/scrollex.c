@@ -197,6 +197,9 @@ UserScrollDC(
       IntGdiCombineRgn(RgnTmp, RgnTmp, pDC->prgnVis, RGN_AND);
       REGION_bOffsetRgn(RgnTmp, dx, dy);
       Result = IntGdiCombineRgn(RgnOwn, RgnOwn, RgnTmp, RGN_DIFF);
+      Result = IntGdiCombineRgn(RgnOwn, RgnOwn, pDC->prgnVis, RGN_AND);
+      if (pDC->dclevel.prgnClip)
+         Result = IntGdiCombineRgn(RgnOwn, RgnOwn, pDC->dclevel.prgnClip, RGN_AND);
 
       /* DO NOT Unlock DC while messing with prgnVis! */
       DC_UnlockDc(pDC);
@@ -363,6 +366,26 @@ IntScrollWindowEx(
               IntGdiCombineRgn( RgnWinupd, RgnWinupd, RgnTemp, RGN_OR );
 
           co_UserRedrawWindow(Window, NULL, RgnTemp, rdw_flags );
+
+          if (abs(dx) > abs(rcScroll.right - rcScroll.left) ||
+              abs(dy) > abs(rcScroll.bottom - rcScroll.top))
+          {
+              REGION_SetRectRgn(RgnTemp, rcScroll.left + dx, rcScroll.top + dy,
+                                rcScroll.right + dx, rcScroll.bottom + dy);
+              IntGdiCombineRgn(RgnTemp, RgnTemp, RgnClip, RGN_AND);
+              IntGdiCombineRgn(RgnUpdate, RgnUpdate, RgnTemp, RGN_OR);
+
+              if (prcUpdate)
+              {
+                  RECTL rcTemp;
+
+                  REGION_GetRgnBox(RgnTemp, &rcTemp);
+                  RECTL_bUnionRect((RECTL *)prcUpdate, (RECTL *)prcUpdate, &rcTemp);
+              }
+
+              if (hrgnUpdate)
+                  IntGdiCombineRgn(RgnWinupd, RgnWinupd, RgnTemp, RGN_OR);
+          }
 
           REGION_Delete(RgnClip);
       }

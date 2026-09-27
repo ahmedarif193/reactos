@@ -1435,9 +1435,9 @@ IntFlashWindowEx(PWND pWnd, PFLASHWINFO pfwi)
 HDC FASTCALL
 IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
 {
-   RECT Rect;
+   RECT Rect, rcUpdate;
    INT type;
-   BOOL Erase = FALSE;
+   BOOL Erase = FALSE, bParentDC;
 
    co_UserHideCaret(Window);
 
@@ -1473,9 +1473,22 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
       ERR("BP: Another thread invalidated this window\n");
    }
 
-   Ps->hdc = UserGetDCEx( Window,
-                          Window->hrgnUpdate,
-                          DCX_INTERSECTRGN | DCX_USESTYLE);
+   bParentDC = FALSE;
+   if ((Window->pcls->style & CS_PARENTDC) && (Window->style & WS_CHILD) &&
+       Window->spwndParent && Window->hrgnUpdate > HRGN_WINDOW &&
+       IntGdiGetRgnBox(Window->hrgnUpdate, &rcUpdate) == SIMPLEREGION &&
+       rcUpdate.left <= Window->rcClient.left && rcUpdate.top <= Window->rcClient.top &&
+       rcUpdate.right >= Window->rcClient.right && rcUpdate.bottom >= Window->rcClient.bottom)
+   {
+      bParentDC = TRUE;
+   }
+
+   if (bParentDC)
+      Ps->hdc = UserGetDCEx(Window, NULL, DCX_USESTYLE);
+   else
+      Ps->hdc = UserGetDCEx( Window,
+                             Window->hrgnUpdate,
+                             DCX_INTERSECTRGN | DCX_USESTYLE);
    if (!Ps->hdc)
    {
       return NULL;
@@ -1493,10 +1506,16 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
       Erase = TRUE;
    }
 
+   RECTL_vSetEmptyRect(&rcUpdate);
    if (Window->hrgnUpdate != NULL)
    {
       MsqDecPaintCountQueue(Window->head.pti);
       IntGdiSetRegionOwner(Window->hrgnUpdate, GDI_OBJ_HMGR_POWNED);
+      if (bParentDC)
+      {
+         IntGdiGetRgnBox(Window->hrgnUpdate, &rcUpdate);
+         GreDeleteObject(Window->hrgnUpdate);
+      }
       /* The region is part of the dc now and belongs to the process! */
       Window->hrgnUpdate = NULL;
    }
@@ -1509,6 +1528,13 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
    type = GdiGetClipBox(Ps->hdc, &Ps->rcPaint);
 
    IntGetClientRect(Window, &Rect);
+
+   if (bParentDC)
+   {
+      RECTL_vOffsetRect(&rcUpdate, -Window->rcClient.left, -Window->rcClient.top);
+      if (!RECTL_bIntersectRect(&Ps->rcPaint, &rcUpdate, &Rect))
+         RECTL_vSetEmptyRect(&Ps->rcPaint);
+   }
 
    Window->state &= ~WNDS_INTERNALPAINT;
 

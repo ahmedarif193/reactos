@@ -4354,6 +4354,7 @@ IntCompositionRedirectDC(_In_opt_ PWND Wnd, _In_ HDC hDC, _In_ ULONG DcxFlags, _
     DC_vSelectSurface(pdc, e->Redirect.psurf);
     pdc->ptlDCOrig.x = rcOwn.left - ancestor->rcWindow.left;
     pdc->ptlDCOrig.y = rcOwn.top - ancestor->rcWindow.top;
+    DC_vSetBrushOrigin(pdc, pdc->dclevel.ptlBrushOrigin.x, pdc->dclevel.ptlBrushOrigin.y);
     pdc->dclevel.sizl.cx = e->Redirect.cx;
     pdc->dclevel.sizl.cy = e->Redirect.cy;
     pdc->fs |= DC_REDIRECTION | DC_DIRTY_RAO;

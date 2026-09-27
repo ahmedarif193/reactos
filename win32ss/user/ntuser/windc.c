@@ -565,6 +565,8 @@ UserGetDCEx(PWND Wnd OPTIONAL, HANDLE ClipRegion, ULONG Flags)
    }
    else // If we are here, we are POWNED or having CLASS.
    {
+      PDCE DceClass = NULL;
+
       KeEnterCriticalRegion();
       ListEntry = LEDce.Flink;
       while (ListEntry != &LEDce)
@@ -575,17 +577,35 @@ UserGetDCEx(PWND Wnd OPTIONAL, HANDLE ClipRegion, ULONG Flags)
           // Skip Cache DCE entries.
           if (!(Dce->DCXFlags & DCX_CACHE))
           {
-             // Check for Window handle than HDC match for CLASS.
-             if (Dce->hwndCurrent == UserHMGetHandle(Wnd))
+             if (Dce != Wnd->pcls->pdce)
              {
-                bUpdateVisRgn = FALSE;
-                break;
+                if (Dce->hwndCurrent == UserHMGetHandle(Wnd))
+                {
+                   bUpdateVisRgn = FALSE;
+                   break;
+                }
              }
-             else if (Dce->hDC == hDC) break;
+             else if (hDC ? (Dce->hDC == hDC) : (Dce->hwndCurrent == UserHMGetHandle(Wnd)))
+             {
+                DceClass = Dce;
+             }
           }
           Dce = NULL; // Loop issue?
       }
       KeLeaveCriticalRegion();
+
+      if (Dce == NULL && DceClass != NULL)
+      {
+         Dce = DceClass;
+         bUpdateVisRgn = (Dce->hwndCurrent != UserHMGetHandle(Wnd));
+         if (bUpdateVisRgn)
+         {
+            Dce->DCXFlags &= ~(DCX_INTERSECTRGN | DCX_EXCLUDERGN | DCX_KEEPCLIPRGN);
+            Dce->hrgnClip = NULL;
+         }
+         Dce->hwndCurrent = UserHMGetHandle(Wnd);
+         Dce->pwndOrg = Dce->pwndClip = Wnd;
+      }
 
       if (Dce == NULL)
       {
@@ -609,6 +629,12 @@ UserGetDCEx(PWND Wnd OPTIONAL, HANDLE ClipRegion, ULONG Flags)
       ERR("FIXME: Got DCE with invalid hDC! %p\n", Dce->hDC);
       Dce->hDC = DceCreateDisplayDC();
       /* FIXME: Handle error */
+   }
+
+   if (!(Flags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN)) && !ClipRegion &&
+       Dce->hrgnClip && !(Dce->DCXFlags & DCX_CACHE))
+   {
+      Flags |= Dce->DCXFlags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN | DCX_KEEPCLIPRGN);
    }
 
    Dce->DCXFlags = Flags | DCX_DCEBUSY;
@@ -796,36 +822,17 @@ DceFreeWindowDCE(PWND Window)
 
         if (!(pDCE->DCXFlags & DCX_CACHE)) /* Owned or Class DCE */
         {
-           if (Window->pcls->style & CS_CLASSDC) /* Test Class first */
+           if (pDCE == Window->pcls->pdce)
            {
-              if (pDCE->DCXFlags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN)) /* Class DCE */
+              if (pDCE->DCXFlags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN))
                  DceDeleteClipRgn(pDCE);
-              // Update and reset Vis Rgn and clear the dirty bit.
-              // Should release VisRgn than reset it to default.
-              DceUpdateVisRgn(pDCE, Window, pDCE->DCXFlags);
-              pDCE->DCXFlags = DCX_DCEEMPTY|DCX_CACHE;
               pDCE->hwndCurrent = 0;
               pDCE->pwndOrg = pDCE->pwndClip = NULL;
-
-              TRACE("POWNED DCE going Cheap!! DCX_CACHE!! hDC-> %p \n",
-                    pDCE->hDC);
-              if (!GreSetDCOwner( pDCE->hDC, GDI_OBJ_HMGR_NONE))
-              {
-                  ERR("Fail Owner Switch hDC-> %p \n", pDCE->hDC);
-                  break;
-              }
-              /* Do not change owner so thread can clean up! */
-           }
-           else if (Window->pcls->style & CS_OWNDC) /* Owned DCE */
-           {
-              DceFreeDCE(pDCE, FALSE);
-              continue;
            }
            else
            {
-              ERR("Not POWNED or CLASSDC hwndCurrent -> %p \n",
-                  pDCE->hwndCurrent);
-              // ASSERT(FALSE); /* bug 5320 */
+              DceFreeDCE(pDCE, FALSE);
+              continue;
            }
         }
         else
@@ -1031,6 +1038,7 @@ DceResetActiveDCEs(PWND Window)
                dc->ptlDCOrig.x = CurrentWindow->rcClient.left;
                dc->ptlDCOrig.y = CurrentWindow->rcClient.top;
             }
+            DC_vSetBrushOrigin(dc, dc->dclevel.ptlBrushOrigin.x, dc->dclevel.ptlBrushOrigin.y);
 
             if (NULL != dc->dclevel.prgnClip)
             {
@@ -1067,6 +1075,8 @@ IntWindowFromDC(HDC hDc)
       {
          if (Dce->DCXFlags & DCX_INDESTROY)
             Ret = NULL;
+         else if ((Dce->DCXFlags & DCX_CACHE) && !(Dce->DCXFlags & DCX_DCEBUSY))
+            Ret = NULL;
          else if (!Dce->hwndCurrent &&
                   (Dce->DCXFlags & (DCX_CACHE | DCX_WINDOW | DCX_DCEBUSY)) ==
                   (DCX_CACHE | DCX_WINDOW | DCX_DCEBUSY))
@@ -1100,7 +1110,8 @@ UserReleaseDC(PWND Window, HDC hDc, BOOL EndPaint)
      }
   }
 
-  if ( Hit && (dce->DCXFlags & DCX_DCEBUSY))
+  if ( Hit && (dce->DCXFlags & DCX_DCEBUSY) &&
+       ((dce->DCXFlags & DCX_CACHE) || dce->hwndCurrent))
   {
      nRet = DceReleaseDC(dce, EndPaint);
   }
