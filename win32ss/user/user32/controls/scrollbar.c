@@ -676,7 +676,7 @@ IntScrollDrawSizeGrip(HWND Wnd, HDC Dc)
   RECT Rect;
 
   GetClientRect(Wnd, &Rect);
-  FillRect(Dc, &Rect, GetSysColorBrush(COLOR_SCROLLBAR));
+  FillRect(Dc, &Rect, GetSysColorBrush(COLOR_BTNFACE));
   Rect.left = max(Rect.left, Rect.right - GetSystemMetrics(SM_CXVSCROLL) - 1);
   Rect.top  = max(Rect.top, Rect.bottom - GetSystemMetrics(SM_CYHSCROLL) - 1);
   DrawFrameControl(Dc, &Rect, DFC_SCROLL, DFCS_SCROLLSIZEGRIP);
@@ -1255,6 +1255,11 @@ ScrollBarWndProc_common(WNDPROC DefWindowProc, HWND Wnd, UINT Msg, WPARAM wParam
       return 0;
     }
 
+  if (!pWnd && Msg == WM_CREATE)
+    {
+      NtUserSetWindowFNID(Wnd, FNID_SCROLLBAR);
+    }
+
   // Must be a scroll bar control!
   pSBWnd = (PSBWND)pWnd;
 
@@ -1380,7 +1385,7 @@ ScrollBarWndProc_common(WNDPROC DefWindowProc, HWND Wnd, UINT Msg, WPARAM wParam
             {
               RECT Rect;
               GetClientRect(Wnd, &Rect);
-              FillRect(Dc, &Rect, GetSysColorBrush(COLOR_SCROLLBAR));
+              FillRect(Dc, &Rect, GetSysColorBrush(COLOR_BTNFACE));
             }
           else
             {
@@ -1429,7 +1434,7 @@ ScrollBarWndProc_common(WNDPROC DefWindowProc, HWND Wnd, UINT Msg, WPARAM wParam
 
       case SBM_GETSCROLLINFO:
         {
-         PSBDATA pSBData = (PSBDATA)&pSBWnd->SBCalc;
+         PSBDATA pSBData = pSBWnd ? (PSBDATA)&pSBWnd->SBCalc : NULL;
          DWORD ret = NtUserSBGetParms(Wnd, SB_CTL, pSBData, (SCROLLINFO *) lParam);
          if (!ret)
          {

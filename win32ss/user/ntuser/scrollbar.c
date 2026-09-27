@@ -302,7 +302,14 @@ co_IntGetScrollInfo(PWND Window, INT nBar, PSBDATA pSBData, LPSCROLLINFO lpsi)
    }
 
    if (0 != (Mask & SIF_TRACKPOS))
-      lpsi->nTrackPos = psi->nTrackPos;
+   {
+      PUSER_MESSAGE_QUEUE MessageQueue = Window->head.pti->MessageQueue;
+
+      if (MessageQueue && MessageQueue->spwndCapture == Window)
+         lpsi->nTrackPos = psi->nTrackPos;
+      else
+         lpsi->nTrackPos = pSBData->pos;
+   }
 
    return TRUE;
 }
@@ -594,6 +601,12 @@ co_IntSetScrollInfo(PWND Window, INT nBar, LPCSCROLLINFO lpsi, BOOL bRedraw)
          }
       }
 
+      if (nBar == SB_CTL && bRedraw && IntIsWindowVisible(Window) &&
+          (new_flags == ESB_ENABLE_BOTH || new_flags == ESB_DISABLE_BOTH))
+      {
+         IntEnableWindow(UserHMGetHandle(Window), new_flags == ESB_ENABLE_BOTH);
+      }
+
       if (SBINFO_GETFLAGS(Window->pSBInfo, nBar) != new_flags) // Check arrow flags
       {
          SBINFO_SETFLAGS(Window->pSBInfo, nBar, new_flags);
@@ -716,6 +729,9 @@ co_IntGetScrollBarInfo(PWND Window, LONG idObject, PSCROLLBARINFO psbi)
             psbi->rgstate[0] |= STATE_SYSTEM_OFFSCREEN;
     }
     if (Bar == SB_CTL && (Window->style & WS_DISABLED))
+        psbi->rgstate[0] |= STATE_SYSTEM_UNAVAILABLE;
+    if (!(psbi->rgstate[0] & STATE_SYSTEM_INVISIBLE) &&
+        SBINFO_GETFLAGS(Window->pSBInfo, Bar) == ESB_DISABLE_BOTH)
         psbi->rgstate[0] |= STATE_SYSTEM_UNAVAILABLE;
 
    return TRUE;
@@ -1229,6 +1245,8 @@ NtUserSBGetParms(
 
       if ((fnBar == SB_HORZ || fnBar == SB_VERT) && Window->pSBInfo)
          pKernelSBData = IntGetSBData(Window, fnBar);
+      else if (fnBar == SB_CTL && Window->fnid == FNID_SCROLLBAR)
+         pKernelSBData = IntGetSBData(Window, SB_CTL);
 
       if (pKernelSBData)
          SBDataSafe = *pKernelSBData;
@@ -1285,6 +1303,12 @@ NtUserEnableScrollBar(
 
    if (wSBflags == SB_CTL)
    {
+      if (Window->fnid != FNID_SCROLLBAR)
+      {
+         EngSetLastError(ERROR_INVALID_PARAMETER);
+         goto Cleanup; // Return FALSE
+      }
+
       SBINFO_SETFLAGS(Window->pSBInfo, SB_CTL, wArrows);
       if ((wArrows == ESB_DISABLE_BOTH || wArrows == ESB_ENABLE_BOTH))
          IntEnableWindow(hWnd, (wArrows == ESB_ENABLE_BOTH));
