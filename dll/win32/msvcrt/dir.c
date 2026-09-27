@@ -1046,6 +1046,10 @@ errno_t CDECL _splitpath_s(const char* inpath,
             (!ext && sz_ext) ||
             (ext && !sz_ext))
     {
+        if (drive && sz_drive) drive[0] = '\0';
+        if (dir && sz_dir)     dir[0] = '\0';
+        if (fname && sz_fname) fname[0] = '\0';
+        if (ext && sz_ext)     ext[0] = '\0';
         *_errno() = EINVAL;
         return EINVAL;
     }
@@ -1146,6 +1150,10 @@ int CDECL _wsplitpath_s(const wchar_t* inpath,
             (!ext && sz_ext) ||
             (ext && !sz_ext))
     {
+        if (drive && sz_drive) drive[0] = '\0';
+        if (dir && sz_dir)     dir[0] = '\0';
+        if (fname && sz_fname) fname[0] = '\0';
+        if (ext && sz_ext)     ext[0] = '\0';
         *_errno() = EINVAL;
         return EINVAL;
     }

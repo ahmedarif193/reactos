@@ -890,6 +890,8 @@ int CDECL _vsnprintf( char *str, size_t len, const char *format, va_list valist 
     struct _str_ctx_a ctx = {len, str};
     int ret;
 
+    if (!MSVCRT_CHECK_PMT(str != NULL || len == 0)) return -1;
+
     ret = pf_printf_a(puts_clbk_str_a, &ctx, format, NULL, 0,
             arg_clbk_valist, NULL, &valist);
     puts_clbk_str_a(&ctx, 1, &nullbyte);
@@ -1374,6 +1376,8 @@ int CDECL _vsnwprintf(wchar_t *str, size_t len,
     struct _str_ctx_w ctx = {len, str};
     int ret;
 
+    if (!MSVCRT_CHECK_PMT(str != NULL || len == 0)) return -1;
+
     ret = pf_printf_w(puts_clbk_str_w, &ctx, format, NULL, 0,
             arg_clbk_valist, NULL, &valist);
     puts_clbk_str_w(&ctx, 1, L"");
@@ -1682,7 +1686,7 @@ int WINAPIV _scwprintf( const wchar_t *format, ... )
     int r;
 
     va_start( ap, format );
-    r = _vsnwprintf( NULL, INT_MAX, format, ap );
+    r = _vsnwprintf_l( NULL, INT_MAX, format, NULL, ap );
     va_end( ap );
     return r;
 }
@@ -1787,7 +1791,7 @@ int CDECL _vswprintf_l( wchar_t* str, const wchar_t* format,
  */
 int CDECL _vscwprintf( const wchar_t *format, va_list args )
 {
-    return _vsnwprintf( NULL, INT_MAX, format, args );
+    return _vsnwprintf_l( NULL, INT_MAX, format, NULL, args );
 }
 
 /*********************************************************************
@@ -2156,8 +2160,8 @@ int CDECL _wctomb_l(char *dst, wchar_t ch, _locale_t locale)
 #ifdef __REACTOS__
     int maxlen;
     if (!dst)
-        maxlen = 0;
-    else if (locale)
+        return 0;
+    if (locale)
         maxlen = locale->locinfo->mb_cur_max;
     else
         maxlen = get_locinfo()->mb_cur_max;
