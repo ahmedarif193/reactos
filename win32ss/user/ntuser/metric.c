@@ -41,6 +41,7 @@ InitMetrics(VOID)
 {
     INT *piSysMet = gpsi->aiSysMet;
     ULONG Width, Height;
+    PMONITOR pPrimary;
 
     /* Note: used for the SM_CLEANBOOT metric */
     DWORD dwValue = 0;
@@ -77,7 +78,7 @@ InitMetrics(VOID)
     /* NC area sizes */
     piSysMet[SM_CYCAPTION] = gspv.ncm.iCaptionHeight + 1;
     piSysMet[SM_CYSMCAPTION] = gspv.ncm.iSmCaptionHeight + 1;
-    piSysMet[SM_CXSIZE] = gspv.ncm.iCaptionHeight;              // 18;
+    piSysMet[SM_CXSIZE] = max(gspv.ncm.iCaptionWidth, 8);
     piSysMet[SM_CYSIZE] = gspv.ncm.iCaptionHeight;              // 18;
     piSysMet[SM_CXSMSIZE] = gspv.ncm.iSmCaptionWidth;   // 12; XP: piSysMet(SM_CYSMCAPTION) - 1
     piSysMet[SM_CYSMSIZE] = gspv.ncm.iSmCaptionHeight;  // 14;
@@ -104,9 +105,18 @@ InitMetrics(VOID)
                          + 4 * gspv.tmCaptionFont.tmAveCharWidth
                          + 2 * piSysMet[SM_CXFRAME];
     piSysMet[SM_CYMIN] = piSysMet[SM_CYCAPTION] + 2 * piSysMet[SM_CYFRAME]; // 27
-    piSysMet[SM_CXMAXIMIZED] = piSysMet[SM_CXSCREEN] + 2 * piSysMet[SM_CXFRAME];
-    piSysMet[SM_CYMAXIMIZED] = piSysMet[SM_CYSCREEN] - 20;
-    piSysMet[SM_CXFULLSCREEN] = piSysMet[SM_CXSCREEN];
+    pPrimary = UserGetPrimaryMonitor();
+    if (pPrimary)
+    {
+        piSysMet[SM_CXMAXIMIZED] = pPrimary->rcWork.right - pPrimary->rcWork.left + 2 * piSysMet[SM_CXFRAME];
+        piSysMet[SM_CYMAXIMIZED] = pPrimary->rcWork.bottom - pPrimary->rcWork.top + 2 * piSysMet[SM_CYFRAME];
+    }
+    else
+    {
+        piSysMet[SM_CXMAXIMIZED] = piSysMet[SM_CXSCREEN] + 2 * piSysMet[SM_CXFRAME];
+        piSysMet[SM_CYMAXIMIZED] = piSysMet[SM_CYSCREEN] + 2 * piSysMet[SM_CYFRAME];
+    }
+    piSysMet[SM_CXFULLSCREEN] = piSysMet[SM_CXMAXIMIZED] - 2 * piSysMet[SM_CXFRAME];
     piSysMet[SM_CYFULLSCREEN] = piSysMet[SM_CYMAXIMIZED] - piSysMet[SM_CYMIN];
     piSysMet[SM_CYKANJIWINDOW] = 0;
     piSysMet[SM_CXMINIMIZED] = gspv.mm.iWidth + 6;

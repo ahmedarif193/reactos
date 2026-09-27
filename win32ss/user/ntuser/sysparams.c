@@ -310,6 +310,60 @@ SpiLoadFont(PLOGFONTW plfOut, LPWSTR pwszValueName, PLOGFONTW plfDefault)
 
 static
 VOID
+SpiUpdateFontMetrics(VOID)
+{
+    HDC hdc;
+    HFONT hFont, hOldFont;
+    TEXTMETRICW tm;
+    DWORD dwAveCharWidth;
+
+    hdc = GreCreateCompatibleDC(NULL, FALSE);
+    if (!hdc)
+        return;
+
+    hFont = GreCreateFontIndirectW(&gspv.ncm.lfMenuFont);
+    if (hFont)
+    {
+        hOldFont = NtGdiSelectFont(hdc, hFont);
+        if (GreGetTextMetricsW(hdc, &tm))
+        {
+            gspv.tmMenuFont = tm;
+            gspv.ncm.iMenuHeight = max(gspv.ncm.iMenuHeight, 2 + tm.tmHeight + tm.tmExternalLeading);
+        }
+        NtGdiSelectFont(hdc, hOldFont);
+        GreDeleteObject(hFont);
+    }
+
+    hFont = GreCreateFontIndirectW(&gspv.ncm.lfSmCaptionFont);
+    if (hFont)
+    {
+        hOldFont = NtGdiSelectFont(hdc, hFont);
+        if (GreGetTextMetricsW(hdc, &tm))
+            gspv.ncm.iSmCaptionHeight = max(gspv.ncm.iSmCaptionHeight, 2 + tm.tmHeight);
+        NtGdiSelectFont(hdc, hOldFont);
+        GreDeleteObject(hFont);
+    }
+
+    hFont = GreCreateFontIndirectW(&gspv.ncm.lfCaptionFont);
+    if (hFont)
+    {
+        hOldFont = NtGdiSelectFont(hdc, hFont);
+        dwAveCharWidth = IntGetCharDimensions(hdc, &tm, NULL);
+        if (dwAveCharWidth)
+        {
+            gspv.tmCaptionFont = tm;
+            gspv.tmCaptionFont.tmAveCharWidth = dwAveCharWidth;
+            gspv.ncm.iCaptionHeight = max(gspv.ncm.iCaptionHeight, 2 + tm.tmHeight);
+        }
+        NtGdiSelectFont(hdc, hOldFont);
+        GreDeleteObject(hFont);
+    }
+
+    IntGdiDeleteDC(hdc, TRUE);
+}
+
+static
+VOID
 SpiFixupValues(VOID)
 {
     /* Fixup values */
@@ -323,13 +377,13 @@ SpiFixupValues(VOID)
 //                               gspv.tmMenuFont.tmExternalLeading);
     if (gspv.iDblClickTime == 0) gspv.iDblClickTime = 500;
 
-    // FIXME: Hack!!!
     gspv.tmMenuFont.tmHeight = UserScaleForSystemDpi(11);
     gspv.tmMenuFont.tmExternalLeading = UserScaleForSystemDpi(2);
 
     gspv.tmCaptionFont.tmHeight = UserScaleForSystemDpi(11);
     gspv.tmCaptionFont.tmExternalLeading = UserScaleForSystemDpi(2);
 
+    SpiUpdateFontMetrics();
 }
 
 static
