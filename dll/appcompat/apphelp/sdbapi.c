@@ -760,6 +760,141 @@ LONGLONG WINAPI SdbMakeIndexKeyFromString(LPCWSTR str)
 }
 
 
+static const PCWSTR g_TagNullNames[] =
+{
+    L"InvalidTag", L"INCLUDE", L"GENERAL", L"MATCH_LOGIC_NOT", L"APPLY_ALL_SHIMS", L"USE_SERVICE_PACK_FILES",
+    L"MITIGATION_OS", L"TRACE_PCA", L"INCLUDEEXCLUDEDLL", L"RAC_EVENT_OFF", L"TELEMETRY_OFF", L"SHIM_ENGINE_OFF",
+    L"LAYER_PROPAGATION_OFF", L"FORCE_CACHE", L"MONITORING_OFF", L"QUIRK_OFF", L"ELEVATED_PROP_OFF",
+    L"UPGRADE_ACTION_BLOCK_WEBSETUP", L"UPGRADE_ACTION_PROCEED_TO_MEDIASETUP", L"HWCOMPAT_DEVICE", L"HWEXCLUDE_DEVICE",
+    L"WUCOMPAT_DEVICE", L"APPEND_COMMANDLINE", L"COMPARE_CASE", L"InvalidTag", L"InvalidTag", L"MATCHED_OBJECT",
+    L"USE_INVENTORY"
+};
+
+static const PCWSTR g_TagWordNames[] =
+{
+    L"InvalidTag", L"MATCH_MODE", L"QUIRK_COMPONENT_CODE_ID", L"QUIRK_CODE_ID"
+};
+
+static const PCWSTR g_TagWordNamesIndex[] =
+{
+    L"InvalidTag", L"TAG", L"INDEX_TAG", L"INDEX_KEY"
+};
+
+static const PCWSTR g_TagDwordNames[] =
+{
+    L"InvalidTag", L"SIZE", L"OFFSET", L"CHECKSUM", L"SHIM_TAGID", L"PATCH_TAGID", L"MODULE_TYPE", L"VERDATEHI",
+    L"VERDATELO", L"VERFILEOS", L"VERFILETYPE", L"PE_CHECKSUM", L"PREVOSMAJORVER", L"PREVOSMINORVER",
+    L"PREVOSPLATFORMID", L"PREVOSBUILDNO", L"PROBLEMSEVERITY", L"LANGID", L"VER_LANGUAGE", L"OS_KIND", L"ENGINE",
+    L"HTMLHELPID", L"INDEX_FLAGS", L"FLAGS", L"DATA_VALUETYPE", L"DATA_DWORD", L"LAYER_TAGID", L"MSI_TRANSFORM_TAGID",
+    L"LINKER_VERSION", L"LINK_DATE", L"UPTO_LINK_DATE", L"InvalidTag", L"FLAG_TAGID", L"RUNTIME_PLATFORM",
+    L"InvalidTag", L"GUEST_TARGET_PLATFORM", L"APP_NAME_RC_ID", L"VENDOR_NAME_RC_ID", L"SUMMARY_MSG_RC_ID",
+    L"InvalidTag", L"DESCRIPTION_RC_ID", L"PARAMETER1_RC_ID", L"HWCOMPAT_HWID_COUNT", L"TITLE_MSG_RC_ID_BACKUP",
+    L"SUMMARY_MSG_RC_ID_BACKUP", L"InvalidTag", L"InvalidTag", L"InvalidTag", L"CONTEXT_TAGID", L"EXE_WRAPPER",
+    L"EXE_TYPE", L"FROM_LINK_DATE", L"REVISION_EQ", L"REVISION_LE", L"REVISION_GE", L"DATE_EQ", L"DATE_LE", L"DATE_GE",
+    L"CPU_MODEL_EQ", L"CPU_MODEL_LE", L"CPU_MODEL_GE", L"CPU_FAMILY_EQ", L"CPU_FAMILY_LE", L"CPU_FAMILY_GE",
+    L"CREATOR_REVISION_EQ", L"CREATOR_REVISION_LE", L"CREATOR_REVISION_GE", L"SIZE_OF_IMAGE", L"SHIM_CLASS",
+    L"PACKAGEID_ARCHITECTURE", L"REINSTALL_UPGRADE_TYPE", L"BLOCK_UPGRADE_TYPE", L"ROUTING_MODE", L"OS_VERSION_VALUE",
+    L"CRC_CHECKSUM", L"URL_ID", L"QUIRK_TAGID", L"InvalidTag", L"MIGRATION_DATA_TYPE", L"UPGRADE_DATA",
+    L"MIGRATION_DATA_TAGID", L"REG_VALUE_TYPE", L"REG_VALUE_DATA_DWORD", L"TEXT_ENCODING", L"UX_BLOCKTYPE_OVERRIDE",
+    L"EDITION", L"FW_LINK_ID", L"KB_ARTICLE_ID", L"InvalidTag", L"TITLE_MSG_RC_ID", L"LINK_TEXT_RC_ID",
+    L"LINK_TEXT_RC_ID_BACKUP", L"InvalidTag", L"InvalidTag", L"InvalidTag", L"InvalidTag", L"REQUESTED_ATTRIBUTES",
+    L"BACKUP_LABEL"
+};
+
+static const PCWSTR g_TagDwordNamesIndex[] =
+{
+    L"InvalidTag", L"TAGID"
+};
+
+static const PCWSTR g_TagQwordNames[] =
+{
+    L"InvalidTag", L"TIME", L"BIN_FILE_VERSION", L"BIN_PRODUCT_VERSION", L"MODTIME", L"FLAG_MASK_KERNEL",
+    L"UPTO_BIN_PRODUCT_VERSION", L"DATA_QWORD", L"FLAG_MASK_USER", L"FLAGS_NTVDM1", L"FLAGS_NTVDM2", L"FLAGS_NTVDM3",
+    L"FLAG_MASK_SHELL", L"UPTO_BIN_FILE_VERSION", L"FLAG_MASK_FUSION", L"FLAG_PROCESSPARAM", L"FLAG_LUA",
+    L"FLAG_INSTALL", L"FROM_BIN_PRODUCT_VERSION", L"FROM_BIN_FILE_VERSION", L"PACKAGEID_VERSION",
+    L"FROM_PACKAGEID_VERSION", L"UPTO_PACKAGEID_VERSION", L"OSMAXVERSIONTESTED", L"FROM_OSMAXVERSIONTESTED",
+    L"UPTO_OSMAXVERSIONTESTED", L"FLAG_MASK_WINRT", L"REG_VALUE_DATA_QWORD", L"QUIRK_ENABLED_VERSION_LT", L"SOURCE_OS",
+    L"SOURCE_OS_LTE", L"SOURCE_OS_GTE", L"FILESIZE"
+};
+
+static const PCWSTR g_TagStringRefNames[] =
+{
+    L"InvalidTag", L"NAME", L"DESCRIPTION", L"MODULE", L"API", L"VENDOR", L"APP_NAME", L"InvalidTag", L"COMMAND_LINE",
+    L"COMPANY_NAME", L"DLLFILE", L"WILDCARD_NAME", L"InvalidTag", L"InvalidTag", L"InvalidTag", L"InvalidTag",
+    L"PRODUCT_NAME", L"PRODUCT_VERSION", L"FILE_DESCRIPTION", L"FILE_VERSION", L"ORIGINAL_FILENAME", L"INTERNAL_NAME",
+    L"LEGAL_COPYRIGHT", L"16BIT_DESCRIPTION", L"APPHELP_DETAILS", L"LINK_URL", L"LINK_TEXT", L"APPHELP_TITLE",
+    L"APPHELP_CONTACT", L"SXS_MANIFEST", L"DATA_STRING", L"MSI_TRANSFORM_FILE", L"16BIT_MODULE_NAME",
+    L"LAYER_DISPLAYNAME", L"COMPILER_VERSION", L"ACTION_TYPE", L"EXPORT_NAME", L"VENDOR_ID", L"DEVICE_ID",
+    L"SUB_VENDOR_ID", L"SUB_SYSTEM_ID", L"PACKAGEID_NAME", L"PACKAGEID_PUBLISHER", L"PACKAGEID_LANGUAGE", L"URL",
+    L"MANUFACTURER", L"MODEL", L"DATE", L"REG_VALUE_NAME", L"REG_VALUE_DATA_SZ", L"MIGRATION_DATA_TEXT",
+    L"APP_STORE_PRODUCT_ID", L"MORE_INFO_URL", L"DEST_OS_VALUE_DEF", L"DEST_OS_GTE", L"DEST_OS_LT", L"DEST_OS",
+    L"PACKAGE_STRONGNAME", L"FALLBACK_XML", L"LINK_TEXT_OVERRIDE", L"MATCH_LOGIC_NOT_IF_SDB_CAPABILITY_EXISTS",
+    L"ESCAPE_CHARACTER", L"InvalidTag", L"InvalidTag", L"InvalidTag", L"InvalidTag", L"PUBLISHER", L"MATCHING_LABEL",
+    L"UPTO_PRODUCT_VERSION", L"UPTO_FILE_VERSION", L"FROM_PRODUCT_VERSION", L"FROM_FILE_VERSION", L"LANGUAGE"
+};
+
+static const PCWSTR g_TagListNames[] =
+{
+    L"InvalidTag", L"DATABASE", L"LIBRARY", L"INEXCLUDE", L"SHIM", L"PATCH", L"APP", L"EXE", L"MATCHING_FILE",
+    L"SHIM_REF", L"PATCH_REF", L"LAYER", L"FILE", L"APPHELP", L"LINK", L"DATA", L"MSI_TRANSFORM", L"MSI_TRANSFORM_REF",
+    L"MSI_PACKAGE", L"FLAG", L"MSI_CUSTOM_ACTION", L"FLAG_REF", L"ACTION", L"LOOKUP", L"CONTEXT", L"CONTEXT_REF",
+    L"KDEVICE", L"InvalidTag", L"KDRIVER", L"InvalidTag", L"MATCHING_DEVICE", L"ACPI", L"BIOS", L"CPU", L"OEM",
+    L"KFLAG", L"KFLAG_REF", L"KSHIM", L"KSHIM_REF", L"REINSTALL_UPGRADE", L"KDATA", L"BLOCK_UPGRADE", L"InvalidTag",
+    L"QUIRK", L"QUIRK_REF", L"BIOS_BLOCK", L"MATCHING_INFO_BLOCK", L"DEVICE_BLOCK", L"MIGRATION_DATA",
+    L"MIGRATION_DATA_REF", L"MATCHING_REG", L"MATCHING_TEXT", L"MACHINE_BLOCK", L"OS_UPGRADE", L"PACKAGE", L"PICK_ONE",
+    L"MATCH_PLUGIN", L"MIGRATION_SHIM", L"UPGRADE_DRIVER_BLOCK", L"InvalidTag", L"MIGRATION_SHIM_REF", L"CONTAINS_FILE",
+    L"CONTAINS_HWID", L"DRIVER_PACKAGE_BLOCK", L"DEST_OS_VALUES", L"XAP", L"HWCOMPAT_SOURCES", L"HWCOMPAT_SOURCE_INFO",
+    L"C_STRUCT", L"PROCESS_MODULE", L"C_STRUCT_REF", L"MATCHING_WILDCARD_FILE", L"MATCHING_WILDCARD_REG",
+    L"MATCHING_DIR", L"MATCHING_SDB_CAPABILITY", L"MATCHING_COMMAND_LINE", L"InvalidTag", L"InvalidTag", L"InvalidTag",
+    L"InvalidTag", L"InvalidTag", L"InvalidTag", L"InvalidTag", L"InvalidTag", L"BACKUP_FILE", L"BACKUP_APPLICATION",
+    L"BACKUP_PACKAGE", L"RESTORE_FILE", L"RESTORE_APPLICATION", L"RESTORE_PACKAGE", L"BACKUP_INCLUDE_FILE",
+    L"MATCHING_BACKUP_FILE", L"MATCHING_WILDCARD_BACKUP_FILE", L"RESTORE_ACTION", L"MATCHING_BACKUP_LABEL",
+    L"MATCHING_RESTORE_ACTION", L"MATCHING_APPLICATION_ATTRIBUTES"
+};
+
+static const PCWSTR g_TagListNamesIndex[] =
+{
+    L"InvalidTag", L"STRINGTABLE", L"INDEXES", L"INDEX"
+};
+
+static const PCWSTR g_TagStringNamesIndex[] =
+{
+    L"InvalidTag", L"STRINGTABLE_ITEM"
+};
+
+static const PCWSTR g_TagBinaryNames[] =
+{
+    L"InvalidTag", L"InvalidTag", L"PATCH_BITS", L"FILE_BITS", L"EXE_ID", L"DATA_BITS", L"MSI_PACKAGE_ID",
+    L"DATABASE_ID", L"CONTEXT_PLATFORM_ID", L"CONTEXT_BRANCH_ID", L"XAP_ID", L"C_STRUCT_BIN_DATA", L"C_STRUCT_VERSION",
+    L"InvalidTag", L"InvalidTag", L"InvalidTag", L"FIX_ID", L"APP_ID", L"REG_VALUE_DATA_BINARY", L"TEXT", L"BACKUP_ID"
+};
+
+static const PCWSTR g_TagBinaryNamesIndex[] =
+{
+    L"InvalidTag", L"INDEX_BITS"
+};
+
+static const struct
+{
+    TAG Base;
+    ULONG Count;
+    const PCWSTR *Names;
+} g_TagNames[] =
+{
+    { TAG_TYPE_NULL, sizeof(g_TagNullNames) / sizeof(g_TagNullNames[0]), g_TagNullNames },
+    { TAG_TYPE_WORD, sizeof(g_TagWordNames) / sizeof(g_TagWordNames[0]), g_TagWordNames },
+    { TAG_TYPE_WORD | 0x800, sizeof(g_TagWordNamesIndex) / sizeof(g_TagWordNamesIndex[0]), g_TagWordNamesIndex },
+    { TAG_TYPE_DWORD, sizeof(g_TagDwordNames) / sizeof(g_TagDwordNames[0]), g_TagDwordNames },
+    { TAG_TYPE_DWORD | 0x800, sizeof(g_TagDwordNamesIndex) / sizeof(g_TagDwordNamesIndex[0]), g_TagDwordNamesIndex },
+    { TAG_TYPE_QWORD, sizeof(g_TagQwordNames) / sizeof(g_TagQwordNames[0]), g_TagQwordNames },
+    { TAG_TYPE_STRINGREF, sizeof(g_TagStringRefNames) / sizeof(g_TagStringRefNames[0]), g_TagStringRefNames },
+    { TAG_TYPE_LIST, sizeof(g_TagListNames) / sizeof(g_TagListNames[0]), g_TagListNames },
+    { TAG_TYPE_LIST | 0x800, sizeof(g_TagListNamesIndex) / sizeof(g_TagListNamesIndex[0]), g_TagListNamesIndex },
+    { TAG_TYPE_STRING | 0x800, sizeof(g_TagStringNamesIndex) / sizeof(g_TagStringNamesIndex[0]), g_TagStringNamesIndex },
+    { TAG_TYPE_BINARY, sizeof(g_TagBinaryNames) / sizeof(g_TagBinaryNames[0]), g_TagBinaryNames },
+    { TAG_TYPE_BINARY | 0x800, sizeof(g_TagBinaryNamesIndex) / sizeof(g_TagBinaryNamesIndex[0]), g_TagBinaryNamesIndex },
+};
+
 /**
  * Converts specified tag into a string.
  *
@@ -770,178 +905,15 @@ LONGLONG WINAPI SdbMakeIndexKeyFromString(LPCWSTR str)
  */
 LPCWSTR WINAPI SdbTagToString(TAG tag)
 {
-    switch (tag)
+    ULONG i;
+
+    if (tag == TAG_NULL)
+        return L"NULL";
+
+    for (i = 0; i < ARRAYSIZE(g_TagNames); i++)
     {
-    case TAG_NULL: return L"NULL";
-
-    /* TAG_TYPE_NULL */
-    case TAG_INCLUDE: return L"INCLUDE";
-    case TAG_GENERAL: return L"GENERAL";
-    case TAG_MATCH_LOGIC_NOT: return L"MATCH_LOGIC_NOT";
-    case TAG_APPLY_ALL_SHIMS: return L"APPLY_ALL_SHIMS";
-    case TAG_USE_SERVICE_PACK_FILES: return L"USE_SERVICE_PACK_FILES";
-    case TAG_MITIGATION_OS: return L"MITIGATION_OS";
-    case TAG_BLOCK_UPGRADE: return L"BLOCK_UPGRADE";
-    case TAG_INCLUDEEXCLUDEDLL: return L"INCLUDEEXCLUDEDLL";
-    case TAG_RAC_EVENT_OFF: return L"RAC_EVENT_OFF";
-    case TAG_TELEMETRY_OFF: return L"TELEMETRY_OFF";
-    case TAG_SHIM_ENGINE_OFF: return L"SHIM_ENGINE_OFF";
-    case TAG_LAYER_PROPAGATION_OFF: return L"LAYER_PROPAGATION_OFF";
-    case TAG_REINSTALL_UPGRADE: return L"REINSTALL_UPGRADE";
-
-    /* TAG_TYPE_WORD */
-    case TAG_MATCH_MODE: return L"MATCH_MODE";
-    case TAG_TAG: return L"TAG";
-    case TAG_INDEX_TAG: return L"INDEX_TAG";
-    case TAG_INDEX_KEY: return L"INDEX_KEY";
-
-    /* TAG_TYPE_DWORD */
-    case TAG_SIZE: return L"SIZE";
-    case TAG_OFFSET: return L"OFFSET";
-    case TAG_CHECKSUM: return L"CHECKSUM";
-    case TAG_SHIM_TAGID: return L"SHIM_TAGID";
-    case TAG_PATCH_TAGID: return L"PATCH_TAGID";
-    case TAG_MODULE_TYPE: return L"MODULE_TYPE";
-    case TAG_VERDATEHI: return L"VERDATEHI";
-    case TAG_VERDATELO: return L"VERDATELO";
-    case TAG_VERFILEOS: return L"VERFILEOS";
-    case TAG_VERFILETYPE: return L"VERFILETYPE";
-    case TAG_PE_CHECKSUM: return L"PE_CHECKSUM";
-    case TAG_PREVOSMAJORVER: return L"PREVOSMAJORVER";
-    case TAG_PREVOSMINORVER: return L"PREVOSMINORVER";
-    case TAG_PREVOSPLATFORMID: return L"PREVOSPLATFORMID";
-    case TAG_PREVOSBUILDNO: return L"PREVOSBUILDNO";
-    case TAG_PROBLEMSEVERITY: return L"PROBLEMSEVERITY";
-    case TAG_LANGID: return L"LANGID";
-    case TAG_VER_LANGUAGE: return L"VER_LANGUAGE";
-    case TAG_ENGINE: return L"ENGINE";
-    case TAG_HTMLHELPID: return L"HTMLHELPID";
-    case TAG_INDEX_FLAGS: return L"INDEX_FLAGS";
-    case TAG_FLAGS: return L"FLAGS";
-    case TAG_DATA_VALUETYPE: return L"DATA_VALUETYPE";
-    case TAG_DATA_DWORD: return L"DATA_DWORD";
-    case TAG_LAYER_TAGID: return L"LAYER_TAGID";
-    case TAG_MSI_TRANSFORM_TAGID: return L"MSI_TRANSFORM_TAGID";
-    case TAG_LINKER_VERSION: return L"LINKER_VERSION";
-    case TAG_LINK_DATE: return L"LINK_DATE";
-    case TAG_UPTO_LINK_DATE: return L"UPTO_LINK_DATE";
-    case TAG_OS_SERVICE_PACK: return L"OS_SERVICE_PACK";
-    case TAG_FLAG_TAGID: return L"FLAG_TAGID";
-    case TAG_RUNTIME_PLATFORM: return L"RUNTIME_PLATFORM";
-    case TAG_OS_SKU: return L"OS_SKU";
-    case TAG_OS_PLATFORM: return L"OS_PLATFORM";
-    case TAG_APP_NAME_RC_ID: return L"APP_NAME_RC_ID";
-    case TAG_VENDOR_NAME_RC_ID: return L"VENDOR_NAME_RC_ID";
-    case TAG_SUMMARY_MSG_RC_ID: return L"SUMMARY_MSG_RC_ID";
-    case TAG_VISTA_SKU: return L"VISTA_SKU";
-    case TAG_DESCRIPTION_RC_ID: return L"DESCRIPTION_RC_ID";
-    case TAG_PARAMETER1_RC_ID: return L"PARAMETER1_RC_ID";
-    case TAG_CONTEXT_TAGID: return L"CONTEXT_TAGID";
-    case TAG_EXE_WRAPPER: return L"EXE_WRAPPER";
-    case TAG_URL_ID: return L"URL_ID";
-    case TAG_TAGID: return L"TAGID";
-
-    /* TAG_TYPE_QWORD */
-    case TAG_TIME: return L"TIME";
-    case TAG_BIN_FILE_VERSION: return L"BIN_FILE_VERSION";
-    case TAG_BIN_PRODUCT_VERSION: return L"BIN_PRODUCT_VERSION";
-    case TAG_MODTIME: return L"MODTIME";
-    case TAG_FLAG_MASK_KERNEL: return L"FLAG_MASK_KERNEL";
-    case TAG_UPTO_BIN_PRODUCT_VERSION: return L"UPTO_BIN_PRODUCT_VERSION";
-    case TAG_DATA_QWORD: return L"DATA_QWORD";
-    case TAG_FLAG_MASK_USER: return L"FLAG_MASK_USER";
-    case TAG_FLAGS_NTVDM1: return L"FLAGS_NTVDM1";
-    case TAG_FLAGS_NTVDM2: return L"FLAGS_NTVDM2";
-    case TAG_FLAGS_NTVDM3: return L"FLAGS_NTVDM3";
-    case TAG_FLAG_MASK_SHELL: return L"FLAG_MASK_SHELL";
-    case TAG_UPTO_BIN_FILE_VERSION: return L"UPTO_BIN_FILE_VERSION";
-    case TAG_FLAG_MASK_FUSION: return L"FLAG_MASK_FUSION";
-    case TAG_FLAG_PROCESSPARAM: return L"FLAG_PROCESSPARAM";
-    case TAG_FLAG_LUA: return L"FLAG_LUA";
-    case TAG_FLAG_INSTALL: return L"FLAG_INSTALL";
-
-    /* TAG_TYPE_STRINGREF */
-    case TAG_NAME: return L"NAME";
-    case TAG_DESCRIPTION: return L"DESCRIPTION";
-    case TAG_MODULE: return L"MODULE";
-    case TAG_API: return L"API";
-    case TAG_VENDOR: return L"VENDOR";
-    case TAG_APP_NAME: return L"APP_NAME";
-    case TAG_COMMAND_LINE: return L"COMMAND_LINE";
-    case TAG_COMPANY_NAME: return L"COMPANY_NAME";
-    case TAG_DLLFILE: return L"DLLFILE";
-    case TAG_WILDCARD_NAME: return L"WILDCARD_NAME";
-    case TAG_PRODUCT_NAME: return L"PRODUCT_NAME";
-    case TAG_PRODUCT_VERSION: return L"PRODUCT_VERSION";
-    case TAG_FILE_DESCRIPTION: return L"FILE_DESCRIPTION";
-    case TAG_FILE_VERSION: return L"FILE_VERSION";
-    case TAG_ORIGINAL_FILENAME: return L"ORIGINAL_FILENAME";
-    case TAG_INTERNAL_NAME: return L"INTERNAL_NAME";
-    case TAG_LEGAL_COPYRIGHT: return L"LEGAL_COPYRIGHT";
-    case TAG_16BIT_DESCRIPTION: return L"16BIT_DESCRIPTION";
-    case TAG_APPHELP_DETAILS: return L"APPHELP_DETAILS";
-    case TAG_LINK_URL: return L"LINK_URL";
-    case TAG_LINK_TEXT: return L"LINK_TEXT";
-    case TAG_APPHELP_TITLE: return L"APPHELP_TITLE";
-    case TAG_APPHELP_CONTACT: return L"APPHELP_CONTACT";
-    case TAG_SXS_MANIFEST: return L"SXS_MANIFEST";
-    case TAG_DATA_STRING: return L"DATA_STRING";
-    case TAG_MSI_TRANSFORM_FILE: return L"MSI_TRANSFORM_FILE";
-    case TAG_16BIT_MODULE_NAME: return L"16BIT_MODULE_NAME";
-    case TAG_LAYER_DISPLAYNAME: return L"LAYER_DISPLAYNAME";
-    case TAG_COMPILER_VERSION: return L"COMPILER_VERSION";
-    case TAG_ACTION_TYPE: return L"ACTION_TYPE";
-    case TAG_EXPORT_NAME: return L"EXPORT_NAME";
-    case TAG_URL: return L"URL";
-
-    /* TAG_TYPE_LIST */
-    case TAG_DATABASE: return L"DATABASE";
-    case TAG_LIBRARY: return L"LIBRARY";
-    case TAG_INEXCLUD: return L"INEXCLUDE";
-    case TAG_SHIM: return L"SHIM";
-    case TAG_PATCH: return L"PATCH";
-    case TAG_APP: return L"APP";
-    case TAG_EXE: return L"EXE";
-    case TAG_MATCHING_FILE: return L"MATCHING_FILE";
-    case TAG_SHIM_REF: return L"SHIM_REF";
-    case TAG_PATCH_REF: return L"PATCH_REF";
-    case TAG_LAYER: return L"LAYER";
-    case TAG_FILE: return L"FILE";
-    case TAG_APPHELP: return L"APPHELP";
-    case TAG_LINK: return L"LINK";
-    case TAG_DATA: return L"DATA";
-    case TAG_MSI_TRANSFORM: return L"MSI_TRANSFORM";
-    case TAG_MSI_TRANSFORM_REF: return L"MSI_TRANSFORM_REF";
-    case TAG_MSI_PACKAGE: return L"MSI_PACKAGE";
-    case TAG_FLAG: return L"FLAG";
-    case TAG_MSI_CUSTOM_ACTION: return L"MSI_CUSTOM_ACTION";
-    case TAG_FLAG_REF: return L"FLAG_REF";
-    case TAG_ACTION: return L"ACTION";
-    case TAG_LOOKUP: return L"LOOKUP";
-    case TAG_CONTEXT: return L"CONTEXT";
-    case TAG_CONTEXT_REF: return L"CONTEXT_REF";
-    case TAG_SPC: return L"SPC";
-    case TAG_STRINGTABLE: return L"STRINGTABLE";
-    case TAG_INDEXES: return L"INDEXES";
-    case TAG_INDEX: return L"INDEX";
-
-    /* TAG_TYPE_STRING */
-    case TAG_STRINGTABLE_ITEM: return L"STRINGTABLE_ITEM";
-
-    /* TAG_TYPE_BINARY */
-    case TAG_PATCH_BITS: return L"PATCH_BITS";
-    case TAG_FILE_BITS: return L"FILE_BITS";
-    case TAG_EXE_ID: return L"EXE_ID";
-    case TAG_DATA_BITS: return L"DATA_BITS";
-    case TAG_MSI_PACKAGE_ID: return L"MSI_PACKAGE_ID";
-    case TAG_DATABASE_ID: return L"DATABASE_ID";
-    case TAG_CONTEXT_PLATFORM_ID: return L"CONTEXT_PLATFORM_ID";
-    case TAG_CONTEXT_BRANCH_ID: return L"CONTEXT_BRANCH_ID";
-    case TAG_FIX_ID: return L"FIX_ID";
-    case TAG_APP_ID: return L"APP_ID";
-    case TAG_INDEX_BITS: return L"INDEX_BITS";
-
-        break;
+        if ((tag & (TAG_TYPE_MASK | 0x800)) == g_TagNames[i].Base && (tag & 0x7FF) < g_TagNames[i].Count)
+            return g_TagNames[i].Names[tag & 0x7FF];
     }
     return L"InvalidTag";
 }
