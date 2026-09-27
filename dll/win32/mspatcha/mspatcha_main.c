@@ -32,12 +32,16 @@
 #include <stdarg.h>
 #ifdef __REACTOS__
 #include <stdlib.h>
+#include <stdio.h>
 #endif
 
 #include "windef.h"
 #include "winbase.h"
 #include "winnls.h"
 #include "patchapi.h"
+#ifdef __REACTOS__
+#include "winternl.h"
+#endif
 #include "wine/debug.h"
 
 #include "pa19.h"
@@ -215,10 +219,23 @@ BOOL WINAPI GetFilePatchSignatureA(LPCSTR filename, ULONG flags, PVOID data, ULO
     PPATCH_IGNORE_RANGE ignore_range, ULONG retain_range_count,
     PPATCH_RETAIN_RANGE retain_range, ULONG bufsize, LPSTR buffer)
 {
+#ifdef __REACTOS__
+    HANDLE handle;
+    BOOL ret;
+
+    handle = CreateFileA(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (handle == INVALID_HANDLE_VALUE)
+        return FALSE;
+    ret = GetFilePatchSignatureByHandle(handle, flags, data, ignore_range_count, ignore_range,
+                                        retain_range_count, retain_range, bufsize, buffer);
+    CloseHandle(handle);
+    return ret;
+#else
     FIXME("stub - %s, %lx, %p, %lu, %p, %lu, %p, %lu, %p\n", debugstr_a(filename), flags, data,
         ignore_range_count, ignore_range, retain_range_count, retain_range, bufsize, buffer);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
+#endif
 }
 
 /*****************************************************
@@ -228,10 +245,34 @@ BOOL WINAPI GetFilePatchSignatureW(LPCWSTR filename, ULONG flags, PVOID data, UL
     PPATCH_IGNORE_RANGE ignore_range, ULONG retain_range_count,
     PPATCH_RETAIN_RANGE retain_range, ULONG bufsize, LPWSTR buffer)
 {
+#ifdef __REACTOS__
+    char signature[64];
+    HANDLE handle;
+    BOOL ret;
+    int len;
+
+    handle = CreateFileW(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (handle == INVALID_HANDLE_VALUE)
+        return FALSE;
+    ret = GetFilePatchSignatureByHandle(handle, flags, data, ignore_range_count, ignore_range,
+                                        retain_range_count, retain_range, sizeof(signature), signature);
+    CloseHandle(handle);
+    if (!ret)
+        return FALSE;
+    len = MultiByteToWideChar(CP_ACP, 0, signature, -1, NULL, 0);
+    if (bufsize < len * sizeof(WCHAR))
+    {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    MultiByteToWideChar(CP_ACP, 0, signature, -1, buffer, len);
+    return TRUE;
+#else
     FIXME("stub - %s, %lx, %p, %lu, %p, %lu, %p, %lu, %p\n", debugstr_w(filename), flags, data,
         ignore_range_count, ignore_range, retain_range_count, retain_range, bufsize, buffer);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
+#endif
 }
 
 /*****************************************************
@@ -241,10 +282,41 @@ BOOL WINAPI GetFilePatchSignatureByHandle(HANDLE handle, ULONG flags, PVOID opti
     PPATCH_IGNORE_RANGE ignore_range, ULONG retain_range_count,
     PPATCH_RETAIN_RANGE retain_range, ULONG bufsize, LPSTR buffer)
 {
+#ifdef __REACTOS__
+    static BYTE empty;
+    LARGE_INTEGER size;
+    HANDLE mapping;
+    BYTE *view;
+    BOOL ret;
+
+    if (!GetFileSizeEx(handle, &size))
+        return FALSE;
+    if (size.HighPart)
+    {
+        SetLastError(ERROR_FILE_TOO_LARGE);
+        return FALSE;
+    }
+    if (!size.LowPart)
+        return GetFilePatchSignatureByBuffer(&empty, 0, flags, options, ignore_range_count, ignore_range,
+                                             retain_range_count, retain_range, bufsize, buffer);
+
+    mapping = CreateFileMappingW(handle, NULL, PAGE_WRITECOPY, 0, 0, NULL);
+    if (!mapping)
+        return FALSE;
+    view = MapViewOfFile(mapping, FILE_MAP_COPY, 0, 0, 0);
+    CloseHandle(mapping);
+    if (!view)
+        return FALSE;
+    ret = GetFilePatchSignatureByBuffer(view, size.LowPart, flags, options, ignore_range_count, ignore_range,
+                                        retain_range_count, retain_range, bufsize, buffer);
+    UnmapViewOfFile(view);
+    return ret;
+#else
     FIXME("stub - %p, %lx, %p, %lu, %p, %lu, %p, %lu, %p\n", handle, flags, options,
         ignore_range_count, ignore_range, retain_range_count, retain_range, bufsize, buffer);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
+#endif
 }
 
 /*****************************************************
@@ -255,10 +327,36 @@ BOOL WINAPI GetFilePatchSignatureByBuffer(PBYTE file_buf, ULONG file_size, ULONG
     ULONG retain_range_count, PPATCH_RETAIN_RANGE retain_range,
     ULONG bufsize, LPSTR buffer)
 {
+#ifdef __REACTOS__
+    ULONG i, offset, length;
+
+    for (i = 0; i < ignore_range_count; ++i)
+    {
+        offset = ignore_range[i].OffsetInOldFile;
+        length = ignore_range[i].LengthInBytes;
+        if (offset < file_size)
+            memset(file_buf + offset, 0, min(length, file_size - offset));
+    }
+    for (i = 0; i < retain_range_count; ++i)
+    {
+        offset = retain_range[i].OffsetInOldFile;
+        length = retain_range[i].LengthInBytes;
+        if (offset < file_size)
+            memset(file_buf + offset, 0, min(length, file_size - offset));
+    }
+    if (bufsize < 9)
+    {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    sprintf(buffer, "%08x", (unsigned int)RtlComputeCrc32(0, file_buf, file_size));
+    return TRUE;
+#else
     FIXME("stub - %p, %lu, %lx, %p, %lu, %p, %lu, %p, %lu, %p\n", file_buf, file_size, flags, options,
         ignore_range_count, ignore_range, retain_range_count, retain_range, bufsize, buffer);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
+#endif
 }
 
 /*****************************************************
