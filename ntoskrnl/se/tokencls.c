@@ -1597,6 +1597,9 @@ NtQueryInformationToken(
                     case TokenElevationType:
                         Value = TokenElevationTypeDefault;
                         break;
+                    case TokenElevation:
+                        Value = SeTokenIsAdmin(Token);
+                        break;
                     case TokenHasRestrictions:
                     case TokenIsRestricted:
                         Value = (Token->RestrictedSidCount != 0);
