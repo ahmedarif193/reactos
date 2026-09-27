@@ -400,12 +400,12 @@ static LRESULT MDISetMenu( HWND hwnd, HMENU hmenuFrame,
 
             ci->hWindowMenu = hmenuWindow;
 
-            /* Add items to the new Window menu */
             ci->nActiveChildren = nActiveChildren_old;
-            MDI_RefreshMenu(ci);
         }
         else
             ci->hWindowMenu = hmenuWindow;
+
+        MDI_RefreshMenu(ci);
     }
 
     if (hmenuFrame)
@@ -423,12 +423,20 @@ static LRESULT MDISetMenu( HWND hwnd, HMENU hmenuFrame,
         }
     }
 
-    return 0;
+    return (LRESULT)ci->hFrameMenu;
 }
 
 /**********************************************************************
  *            MDIRefreshMenu
  */
+void MDI_UpdateMaximizedChildFrame( HWND client, HWND child )
+{
+    MDICLIENTINFO *ci = get_client_info( client );
+
+    if (ci && ci->hwndChildMaximized == child)
+        MDI_UpdateFrameText( GetParent(client), client, TRUE, NULL );
+}
+
 static LRESULT MDI_RefreshMenu(MDICLIENTINFO *ci)
 {
     UINT i, count, visible, id;
@@ -1121,6 +1129,15 @@ LRESULT WINAPI MDIClientWndProc_common( HWND hwnd, UINT message, WPARAM wParam, 
 
     TRACE("%p %04x (%s) %08lx %08lx\n", hwnd, message, SPY_GetMsgName(message, hwnd), wParam, lParam);
 
+#ifdef __REACTOS__
+    {
+        PWND pWnd = ValidateHwnd(hwnd);
+
+        if (pWnd && !pWnd->fnid)
+            NtUserSetWindowFNID(hwnd, FNID_MDICLIENT);
+    }
+#endif
+
     if (!(ci = get_client_info( hwnd )))
     {
 #ifdef __REACTOS__
@@ -1130,7 +1147,6 @@ LRESULT WINAPI MDIClientWndProc_common( HWND hwnd, UINT message, WPARAM wParam, 
              return FALSE;
            SetWindowLongPtrW( hwnd, GWLP_MDIWND, (LONG_PTR)ci );
            ci->hBmpClose = 0;
-           NtUserSetWindowFNID( hwnd, FNID_MDICLIENT); // wine uses WIN_ISMDICLIENT
         }
 #else
         if (message == WM_NCCREATE) win_set_flags( hwnd, WIN_ISMDICLIENT, 0 );
@@ -1672,14 +1688,6 @@ LRESULT WINAPI DefMDIChildProcW( HWND hwnd, UINT message,
             MDI_UpdateFrameText( frame, client, TRUE, NULL );
         }
 
-        if( wParam == SIZE_MINIMIZED )
-        {
-            HWND switchTo = MDI_GetWindow( ci, hwnd, TRUE, WS_MINIMIZE );
-
-            if (!switchTo) switchTo = hwnd;
-            SendMessageW( switchTo, WM_CHILDACTIVATE, 0, 0 );
-	}
-
         MDI_PostUpdate(client, ci, SB_BOTH+1);
         break;
 
@@ -2003,65 +2011,114 @@ void WINAPI ScrollChildren(HWND hWnd, UINT uMsg, WPARAM wParam,
 
 typedef struct CASCADE_INFO
 {
-    HWND hwndTop;
-    UINT wFlags;
     HWND hwndParent;
-    HWND hwndDesktop;
     HWND hTrayWnd;
     HWND hwndProgman;
-    HWND *ahwnd;
-    DWORD chwnd;
+    UINT wFlags;
 } CASCADE_INFO;
 
-static BOOL CALLBACK
-GetCascadeChildProc(HWND hwnd, LPARAM lParam)
+static BOOL
+IsArrangeCandidate(const CASCADE_INFO *pInfo, HWND hwnd)
 {
-    DWORD count, size;
-    HWND *ahwnd;
-    CASCADE_INFO *pInfo = (CASCADE_INFO *)lParam;
+    LONG_PTR style;
 
-    if (hwnd == pInfo->hwndDesktop || hwnd == pInfo->hTrayWnd ||
-        hwnd == pInfo->hwndProgman || hwnd == pInfo->hwndTop)
+    if (GetAncestor(hwnd, GA_PARENT) != pInfo->hwndParent)
+        return FALSE;
+
+    if (hwnd == pInfo->hTrayWnd || hwnd == pInfo->hwndProgman)
+        return FALSE;
+
+    style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if (!(style & WS_VISIBLE) || (style & WS_MINIMIZE))
+        return FALSE;
+
+    if ((style & WS_CAPTION) != WS_CAPTION)
+        return FALSE;
+
+    if ((pInfo->wFlags & MDITILE_SKIPDISABLED) && (style & WS_DISABLED))
+        return FALSE;
+
+    return TRUE;
+}
+
+static DWORD
+GetArrangeWindows(HWND hwndParent, UINT wFlags, UINT cKids, const HWND *lpKids, HWND **pahwnd)
+{
+    CASCADE_INFO info;
+    HWND hwnd, *ahwnd;
+    DWORD cAlloc = 0, count = 0, i;
+
+    *pahwnd = NULL;
+    info.hwndParent = hwndParent ? hwndParent : GetDesktopWindow();
+    info.hTrayWnd = hwndParent ? NULL : FindWindowW(L"Shell_TrayWnd", NULL);
+    info.hwndProgman = hwndParent ? NULL : FindWindowW(L"Progman", NULL);
+    info.wFlags = wFlags;
+
+    if (cKids && lpKids)
     {
-        return TRUE;
-    }
-
-    if (pInfo->hwndParent && GetParent(hwnd) != pInfo->hwndParent)
-        return TRUE;
-
-    if ((pInfo->wFlags & MDITILE_SKIPDISABLED) && !IsWindowEnabled(hwnd))
-        return TRUE;
-
-    if (!IsWindowVisible(hwnd) || IsIconic(hwnd))
-        return TRUE;
-
-    count = pInfo->chwnd;
-    size = (count + 1) * sizeof(HWND);
-
-    if (count == 0 || pInfo->ahwnd == NULL)
-    {
-        count = 0;
-        pInfo->ahwnd = (HWND *)HeapAlloc(GetProcessHeap(), 0, size);
+        cAlloc = cKids;
     }
     else
     {
-        ahwnd = (HWND *)HeapReAlloc(GetProcessHeap(), 0, pInfo->ahwnd, size);
-        if (ahwnd == NULL)
-        {
-            HeapFree(GetProcessHeap(), 0, pInfo->ahwnd);
-        }
-        pInfo->ahwnd = ahwnd;
+        for (hwnd = GetWindow(info.hwndParent, GW_CHILD); hwnd; hwnd = GetWindow(hwnd, GW_HWNDNEXT))
+            cAlloc++;
     }
 
-    if (pInfo->ahwnd == NULL)
+    if (!cAlloc)
+        return 0;
+
+    ahwnd = HeapAlloc(GetProcessHeap(), 0, cAlloc * sizeof(HWND));
+    if (!ahwnd)
+        return 0;
+
+    if (cKids && lpKids)
     {
-        pInfo->chwnd = 0;
-        return FALSE;
+        for (i = 0; i < cKids; i++)
+        {
+            if (lpKids[i] && IsArrangeCandidate(&info, lpKids[i]))
+                ahwnd[count++] = lpKids[i];
+        }
+    }
+    else
+    {
+        for (hwnd = GetWindow(info.hwndParent, GW_CHILD); hwnd && count < cAlloc;
+             hwnd = GetWindow(hwnd, GW_HWNDNEXT))
+        {
+            if (IsArrangeCandidate(&info, hwnd))
+                ahwnd[count++] = hwnd;
+        }
     }
 
-    pInfo->ahwnd[count] = hwnd;
-    pInfo->chwnd = count + 1;
-    return TRUE;
+    if (!count)
+    {
+        HeapFree(GetProcessHeap(), 0, ahwnd);
+        return 0;
+    }
+
+    *pahwnd = ahwnd;
+    return count;
+}
+
+static VOID
+GetArrangeWorkArea(HWND hwndParent, LPCRECT lpRect, PRECT prcWork)
+{
+    MONITORINFO mi;
+    POINT pt = { 0, 0 };
+
+    if (lpRect)
+    {
+        *prcWork = *lpRect;
+    }
+    else if (hwndParent)
+    {
+        GetClientRect(hwndParent, prcWork);
+    }
+    else
+    {
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY), &mi);
+        *prcWork = mi.rcWork;
+    }
 }
 
 static BOOL
@@ -2086,82 +2143,33 @@ WORD WINAPI
 CascadeWindows(HWND hwndParent, UINT wFlags, LPCRECT lpRect,
                UINT cKids, const HWND *lpKids)
 {
-    CASCADE_INFO info;
-    HWND hwnd, hwndTop, hwndPrev;
-    HMONITOR hMon;
-    MONITORINFO mi;
+    HWND hwnd, hwndPrev = NULL, *ahwnd;
     RECT rcWork, rcWnd;
-    DWORD i, ret = 0;
-    INT x, y, cx, cy, cxNew, cyNew, cxWork, cyWork, dx, dy;
+    DWORD i, chwnd, ret = 0;
+    INT x, y, cx, cy, cxNew, cyNew, cxWork, cyWork, spacing;
     HDWP hDWP;
-    POINT pt;
 
     TRACE("(%p,0x%08x,...,%u,...)\n", hwndParent, wFlags, cKids);
 
-    hwndTop = GetTopWindow(hwndParent);
+    chwnd = GetArrangeWindows(hwndParent, wFlags, cKids, lpKids, &ahwnd);
+    if (!chwnd)
+        return 0;
 
-    ZeroMemory(&info, sizeof(info));
-    info.hwndDesktop = GetDesktopWindow();
-    info.hTrayWnd = FindWindowW(L"Shell_TrayWnd", NULL);
-    info.hwndProgman = FindWindowW(L"Progman", NULL);
-    info.hwndParent = hwndParent;
-    info.wFlags = wFlags;
+    GetArrangeWorkArea(hwndParent, lpRect, &rcWork);
 
-    if (cKids == 0 || lpKids == NULL)
-    {
-        info.hwndTop = hwndTop;
-        EnumChildWindows(hwndParent, GetCascadeChildProc, (LPARAM)&info);
-
-        info.hwndTop = NULL;
-        GetCascadeChildProc(hwndTop, (LPARAM)&info);
-    }
-    else
-    {
-        info.chwnd = cKids;
-        info.ahwnd = (HWND *)lpKids;
-    }
-
-    if (info.chwnd == 0 || info.ahwnd == NULL)
-        return ret;
-
-    if (lpRect)
-    {
-        rcWork = *lpRect;
-    }
-    else if (hwndParent)
-    {
-        GetClientRect(hwndParent, &rcWork);
-    }
-    else
-    {
-        pt.x = pt.y = 0;
-        hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-        mi.cbSize = sizeof(mi);
-        GetMonitorInfoW(hMon, &mi);
-        rcWork = mi.rcWork;
-    }
-
-    hDWP = BeginDeferWindowPos(info.chwnd);
+    hDWP = BeginDeferWindowPos(chwnd);
     if (hDWP == NULL)
         goto cleanup;
 
     x = rcWork.left;
     y = rcWork.top;
-    dx = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXSIZE);
-    dy = GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CYSIZE);
+    spacing = GetSystemMetrics(SM_CYCAPTION) + GetSystemMetrics(SM_CYDLGFRAME);
     cxWork = rcWork.right - rcWork.left;
     cyWork = rcWork.bottom - rcWork.top;
-    hwndPrev = NULL;
-    for (i = info.chwnd; i > 0;)    /* in reverse order */
+    for (i = chwnd; i > 0;)
     {
         --i;
-        hwnd = info.ahwnd[i];
-
-        if (!IsWindowVisible(hwnd) || IsIconic(hwnd))
-            continue;
-
-        if ((info.wFlags & MDITILE_SKIPDISABLED) && !IsWindowEnabled(hwnd))
-            continue;
+        hwnd = ahwnd[i];
 
         if (IsZoomed(hwnd))
             ShowWindow(hwnd, SW_RESTORE | SW_SHOWNA);
@@ -2170,41 +2178,33 @@ CascadeWindows(HWND hwndParent, UINT wFlags, LPCRECT lpRect,
         cxNew = cx = rcWnd.right - rcWnd.left;
         cyNew = cy = rcWnd.bottom - rcWnd.top;
 
-        /* if we can change the window size and it is not only one */
-        if (info.chwnd != 1 && (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_THICKFRAME))
+        if (chwnd != 1)
         {
-            /* check the size */
-#define MIN_THRESHOLD(xy) (((xy) * 4) / 7)      /* in the rate 4/7 */
-#define MAX_THRESHOLD(xy) (((xy) * 5) / 7)      /* in the rate 5/7 */
-            cxNew = max(min(cxNew, MAX_THRESHOLD(cxWork)), MIN_THRESHOLD(cxWork));
-            cyNew = max(min(cyNew, MAX_THRESHOLD(cyWork)), MIN_THRESHOLD(cyWork));
-#undef MIN_THRESHOLD
-#undef MAX_THRESHOLD
-            if (cx != cxNew || cy != cyNew)
-            {
-                /* too large. shrink if we can */
-                if (QuerySizeFix(hwnd, &cxNew, &cyNew))
-                {
-                    cx = cxNew;
-                    cy = cyNew;
-                }
-            }
+            cxNew = (cxWork * 5) / 7;
+            cyNew = (cyWork * 5) / 7;
+            QuerySizeFix(hwnd, &cxNew, &cyNew);
         }
 
-        if (x + cx > rcWork.right)
+        if (x + cxNew > rcWork.right)
             x = rcWork.left;
-        if (y + cy > rcWork.bottom)
+        if (y + cyNew > rcWork.bottom)
             y = rcWork.top;
 
-        hDWP = DeferWindowPos(hDWP, hwnd, HWND_TOP, x, y, cx, cy, SWP_NOACTIVATE);
+        if (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_THICKFRAME)
+        {
+            cx = cxNew;
+            cy = cyNew;
+        }
+
+        hDWP = DeferWindowPos(hDWP, hwnd, NULL, x, y, cx, cy, SWP_NOACTIVATE | SWP_NOZORDER);
         if (hDWP == NULL)
         {
             ret = 0;
             goto cleanup;
         }
 
-        x += dx;
-        y += dy;
+        x += spacing;
+        y += spacing;
         hwndPrev = hwnd;
         ++ret;
     }
@@ -2215,8 +2215,7 @@ CascadeWindows(HWND hwndParent, UINT wFlags, LPCRECT lpRect,
         SetForegroundWindow(hwndPrev);
 
 cleanup:
-    if (cKids == 0 || lpKids == NULL)
-        HeapFree(GetProcessHeap(), 0, info.ahwnd);
+    HeapFree(GetProcessHeap(), 0, ahwnd);
 
     return (WORD)ret;
 }
@@ -2242,111 +2241,39 @@ WORD WINAPI
 TileWindows(HWND hwndParent, UINT wFlags, LPCRECT lpRect,
             UINT cKids, const HWND *lpKids)
 {
-    HWND hwnd, hwndTop, hwndPrev;
-    CASCADE_INFO info;
+    HWND hwnd, hwndPrev = NULL, *ahwnd;
     RECT rcWork, rcWnd;
-    DWORD i, iRow, iColumn, cRows, cColumns, ret = 0;
-    INT x, y, cx, cy, cxNew, cyNew, cxWork, cyWork, cxCell, cyCell, cxMin2, cyMin3;
+    DWORD i, chwnd, ret = 0, cRoot, cColumns, cRows, cBaseRows, cExtraColumns, iRow, iColumn;
+    INT x, y, cx, cy, cxCell, cyCell;
     HDWP hDWP;
-    MONITORINFO mi;
-    HMONITOR hMon;
-    POINT pt;
 
     TRACE("(%p,0x%08x,...,%u,...)\n", hwndParent, wFlags, cKids);
 
-    hwndTop = GetTopWindow(hwndParent);
+    chwnd = GetArrangeWindows(hwndParent, wFlags, cKids, lpKids, &ahwnd);
+    if (!chwnd)
+        return 0;
 
-    ZeroMemory(&info, sizeof(info));
-    info.hwndDesktop = GetDesktopWindow();
-    info.hTrayWnd = FindWindowW(L"Shell_TrayWnd", NULL);
-    info.hwndProgman = FindWindowW(L"Progman", NULL);
-    info.hwndParent = hwndParent;
-    info.wFlags = wFlags;
+    GetArrangeWorkArea(hwndParent, lpRect, &rcWork);
 
-    if (cKids == 0 || lpKids == NULL)
-    {
-        info.hwndTop = hwndTop;
-        EnumChildWindows(hwndParent, GetCascadeChildProc, (LPARAM)&info);
+    for (cRoot = 1; (cRoot + 1) * (cRoot + 1) <= chwnd; cRoot++);
+    cColumns = (wFlags & MDITILE_HORIZONTAL) ? cRoot : chwnd / cRoot;
+    cBaseRows = chwnd / cColumns;
+    cExtraColumns = chwnd % cColumns;
+    cxCell = (rcWork.right - rcWork.left) / (INT)cColumns;
 
-        info.hwndTop = NULL;
-        GetCascadeChildProc(hwndTop, (LPARAM)&info);
-    }
-    else
-    {
-        info.chwnd = cKids;
-        info.ahwnd = (HWND *)lpKids;
-    }
-
-    if (info.chwnd == 0 || info.ahwnd == NULL)
-        return ret;
-
-    if (lpRect)
-    {
-        rcWork = *lpRect;
-    }
-    else if (hwndParent)
-    {
-        GetClientRect(hwndParent, &rcWork);
-    }
-    else
-    {
-        pt.x = pt.y = 0;
-        hMon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-        mi.cbSize = sizeof(mi);
-        GetMonitorInfoW(hMon, &mi);
-        rcWork = mi.rcWork;
-    }
-
-    cxWork = rcWork.right - rcWork.left;
-    cyWork = rcWork.bottom - rcWork.top;
-
-    cxMin2 = GetSystemMetrics(SM_CXMIN) * 2;
-    cyMin3 = GetSystemMetrics(SM_CYMIN) * 3;
-
-    /* calculate the numbers and widths of columns and rows */
-    if (info.wFlags & MDITILE_HORIZONTAL)
-    {
-        cColumns = info.chwnd;
-        cRows = 1;
-        for (;;)
-        {
-            cxCell = cxWork / cColumns;
-            cyCell = cyWork / cRows;
-            if (cyCell <= cyMin3 || cxCell >= cxMin2)
-                break;
-
-            ++cRows;
-            cColumns = (info.chwnd + cRows - 1) / cRows;
-        }
-    }
-    else
-    {
-        cRows = info.chwnd;
-        cColumns = 1;
-        for (;;)
-        {
-            cxCell = cxWork / cColumns;
-            cyCell = cyWork / cRows;
-            if (cxCell <= cxMin2 || cyCell >= cyMin3)
-                break;
-
-            ++cColumns;
-            cRows = (info.chwnd + cColumns - 1) / cColumns;
-        }
-    }
-
-    hDWP = BeginDeferWindowPos(info.chwnd);
+    hDWP = BeginDeferWindowPos(chwnd);
     if (hDWP == NULL)
         goto cleanup;
 
-    x = rcWork.left;
-    y = rcWork.top;
-    hwndPrev = NULL;
     iRow = iColumn = 0;
-    for (i = info.chwnd; i > 0;)    /* in reverse order */
+    for (i = 0; i < chwnd; i++)
     {
-        --i;
-        hwnd = info.ahwnd[i];
+        hwnd = ahwnd[i];
+
+        cRows = cBaseRows + ((iColumn >= cColumns - cExtraColumns) ? 1 : 0);
+        cyCell = (rcWork.bottom - rcWork.top) / (INT)cRows;
+        x = rcWork.left + (INT)iColumn * cxCell;
+        y = rcWork.top + (INT)iRow * cyCell;
 
         if (IsZoomed(hwnd))
             ShowWindow(hwnd, SW_RESTORE | SW_SHOWNA);
@@ -2355,49 +2282,24 @@ TileWindows(HWND hwndParent, UINT wFlags, LPCRECT lpRect,
         cx = rcWnd.right - rcWnd.left;
         cy = rcWnd.bottom - rcWnd.top;
 
-        /* if we can change the window size */
         if (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_THICKFRAME)
         {
-            cxNew = cxCell;
-            cyNew = cyCell;
-            /* shrink if we can */
-            if (QuerySizeFix(hwnd, &cxNew, &cyNew))
-            {
-                cx = cxNew;
-                cy = cyNew;
-            }
+            cx = cxCell;
+            cy = cyCell;
+            QuerySizeFix(hwnd, &cx, &cy);
         }
 
-        hDWP = DeferWindowPos(hDWP, hwnd, HWND_TOP, x, y, cx, cy, SWP_NOACTIVATE);
+        hDWP = DeferWindowPos(hDWP, hwnd, NULL, x, y, cx, cy, SWP_NOACTIVATE | SWP_NOZORDER);
         if (hDWP == NULL)
         {
             ret = 0;
             goto cleanup;
         }
 
-        if (info.wFlags & MDITILE_HORIZONTAL)
+        if (++iRow >= cRows)
         {
-            x += cxCell;
+            iRow = 0;
             ++iColumn;
-            if (iColumn >= cColumns)
-            {
-                iColumn = 0;
-                ++iRow;
-                x = rcWork.left;
-                y += cyCell;
-            }
-        }
-        else
-        {
-            y += cyCell;
-            ++iRow;
-            if (iRow >= cRows)
-            {
-                iRow = 0;
-                ++iColumn;
-                x += cxCell;
-                y = rcWork.top;
-            }
         }
         hwndPrev = hwnd;
         ++ret;
@@ -2409,8 +2311,7 @@ TileWindows(HWND hwndParent, UINT wFlags, LPCRECT lpRect,
         SetForegroundWindow(hwndPrev);
 
 cleanup:
-    if (cKids == 0 || lpKids == NULL)
-        HeapFree(GetProcessHeap(), 0, info.ahwnd);
+    HeapFree(GetProcessHeap(), 0, ahwnd);
 
     return (WORD)ret;
 }
