@@ -200,6 +200,7 @@ extern	WDML_CONV* 	WDML_AddConv(WDML_INSTANCE* pInstance, WDML_SIDE side,
 				     HSZ hszService, HSZ hszTopic, HWND hwndClient, HWND hwndServer) DECLSPEC_HIDDEN;
 extern	void		WDML_RemoveConv(WDML_CONV* pConv, WDML_SIDE side) DECLSPEC_HIDDEN;
 extern	WDML_CONV*	WDML_GetConv(HCONV hConv, BOOL checkConnected) DECLSPEC_HIDDEN;
+extern void WDML_SetAllLastError(DWORD lastError) DECLSPEC_HIDDEN;
 extern	WDML_CONV*	WDML_GetConvFromWnd(HWND hWnd) DECLSPEC_HIDDEN;
 extern	WDML_CONV*	WDML_FindConv(WDML_INSTANCE* pInstance, WDML_SIDE side,
 				      HSZ hszService, HSZ hszTopic) DECLSPEC_HIDDEN;

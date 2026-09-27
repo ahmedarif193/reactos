@@ -276,7 +276,7 @@ UINT WINAPI DdeGetLastError(DWORD idInst)
  *
  *
  */
-static void	WDML_SetAllLastError(DWORD lastError)
+void	WDML_SetAllLastError(DWORD lastError)
 {
     DWORD		threadID;
     WDML_INSTANCE*	pInstance;
@@ -1306,7 +1306,7 @@ HDDEDATA WINAPI DdeCreateDataHandle(DWORD idInst, LPBYTE pSrc, DWORD cb, DWORD c
         return 0;
 
     /* we use the first 4 bytes to store the size */
-    if (!(hMem = GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE, cb + cbOff + sizeof(DDE_DATAHANDLE_HEAD))))
+    if (!(hMem = GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE | GMEM_ZEROINIT, cb + cbOff + sizeof(DDE_DATAHANDLE_HEAD))))
     {
 	ERR("GlobalAlloc failed\n");
 	return 0;
@@ -1325,7 +1325,7 @@ HDDEDATA WINAPI DdeCreateDataHandle(DWORD idInst, LPBYTE pSrc, DWORD cb, DWORD c
     pByte = (LPBYTE)(pDdh + 1);
     if (pSrc)
     {
-	memcpy(pByte, pSrc + cbOff, cb);
+	memcpy(pByte + cbOff, pSrc + cbOff, cb);
     }
     GlobalUnlock(hMem);
 
@@ -2451,6 +2451,8 @@ UINT WINAPI DdeQueryConvInfo(HCONV hConv, DWORD id, PCONVINFO lpConvInfo)
             if (pConv != NULL)
                 FIXME("Request on remote conversation information is not implemented yet\n");
         }
+        if (pConv == NULL)
+            WDML_SetAllLastError(DMLERR_INVALIDPARAMETER);
         ret = 0;
     }
 

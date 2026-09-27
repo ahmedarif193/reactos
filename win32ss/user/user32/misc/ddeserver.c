@@ -555,7 +555,7 @@ static	WDML_QUEUE_STATE WDML_ServerHandleRequest(WDML_CONV* pConv, WDML_XACT* pX
 
     default:
         {
-	    HGLOBAL	hMem = WDML_DataHandle2Global(hDdeData, TRUE, FALSE, FALSE, FALSE);
+	    HGLOBAL	hMem = WDML_DataHandle2Global(hDdeData, TRUE, TRUE, FALSE, FALSE);
 	    if (!PostMessageW(pConv->hwndClient, WM_DDE_DATA, (WPARAM)pConv->hwndServer,
 			      ReuseDDElParam(pXAct->lParam, WM_DDE_REQUEST, WM_DDE_DATA,
 					     (UINT_PTR)hMem, (UINT_PTR)pXAct->atom)))
@@ -748,11 +748,8 @@ static	WDML_XACT* WDML_ServerQueueExecute(WDML_CONV* pConv, LPARAM lParam)
 
 static BOOL data_looks_unicode( const WCHAR *data, DWORD size )
 {
-    DWORD i;
-
     if (size % sizeof(WCHAR)) return FALSE;
-    for (i = 0; i < size / sizeof(WCHAR); i++) if (data[i] > 255) return FALSE;
-    return TRUE;
+    return !size || data[0] <= 255;
 }
 
 /* convert data to Unicode, unless it looks like it's already Unicode */
@@ -881,7 +878,9 @@ static	WDML_QUEUE_STATE WDML_ServerHandlePoke(WDML_CONV* pConv, WDML_XACT* pXAct
     pDdePoke = GlobalLock(pXAct->hMem);
     if (!pDdePoke)
     {
-	return WDML_QS_ERROR;
+        WDML_PostAck(pConv, WDML_SERVER_SIDE, 0, FALSE, FALSE, pXAct->atom, pXAct->lParam, WM_DDE_POKE);
+        WDML_DecHSZ(pConv->instance, pXAct->hszItem);
+        return WDML_QS_HANDLED;
     }
 
     if (!(pConv->instance->CBFflags & CBF_FAIL_POKES))

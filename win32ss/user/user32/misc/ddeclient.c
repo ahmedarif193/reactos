@@ -1132,13 +1132,14 @@ HDDEDATA WINAPI DdeClientTransaction(LPBYTE pData, DWORD cbData, HCONV hConv, HS
     if (hConv == 0)
     {
 	WARN("Invalid conversation handle NULL\n");
+	WDML_SetAllLastError(DMLERR_INVALIDPARAMETER);
 	return 0;
     }
 
     pConv = WDML_GetConv(hConv, TRUE);
     if (pConv == NULL)
     {
-	/* cannot set error... cannot get back to DDE instance */
+	WDML_SetAllLastError(DMLERR_INVALIDPARAMETER);
         return 0;
     }
 
