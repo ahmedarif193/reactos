@@ -73,6 +73,7 @@ PartitionCreateDevice(
 
     // Both the PDO and parent FDO now install a completion routine.
     partitionDevice->StackSize = FDObject->StackSize + 1;
+    partitionDevice->AlignmentRequirement = FDObject->AlignmentRequirement;
     partitionDevice->Flags |= DO_DIRECT_IO;
 
     if (PartitionStyle == PARTITION_STYLE_MBR)

@@ -733,7 +733,7 @@ PortQueryAdapterProperty(
     Descriptor->Size = sizeof(*Descriptor);
     Descriptor->MaximumTransferLength = FdoExtension->Miniport.PortConfig.MaximumTransferLength;
     Descriptor->MaximumPhysicalPages = FdoExtension->Miniport.PortConfig.NumberOfPhysicalBreaks + 1;
-    Descriptor->AlignmentMask = 0;
+    Descriptor->AlignmentMask = FdoExtension->Miniport.PortConfig.AlignmentMask;
     Descriptor->AdapterUsesPio = FALSE;
     Descriptor->AdapterScansDown = FALSE;
     Descriptor->CommandQueueing = FdoExtension->Miniport.PortConfig.TaggedQueuing;

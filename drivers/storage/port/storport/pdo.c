@@ -48,6 +48,8 @@ PortCreatePdo(
     /* Initialize the device */
     Pdo->Flags |= DO_DIRECT_IO;
     Pdo->Flags |= DO_POWER_PAGABLE;
+    if (FdoDeviceExtension->Miniport.PortConfig.AlignmentMask > Pdo->AlignmentRequirement)
+        Pdo->AlignmentRequirement = FdoDeviceExtension->Miniport.PortConfig.AlignmentMask;
 
     DeviceExtension = (PPDO_DEVICE_EXTENSION)Pdo->DeviceExtension;
     RtlZeroMemory(DeviceExtension, sizeof(PDO_DEVICE_EXTENSION));
