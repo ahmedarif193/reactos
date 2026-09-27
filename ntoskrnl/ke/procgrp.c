@@ -13,32 +13,12 @@
 
 /* PRIVATE TYPES *************************************************************/
 
-/* Homogeneous scheduling policy. Public headers only forward-declare the type
- * on the platforms that expose it; on a non-heterogeneous system only the
- * "all classes" policy is meaningful. */
-typedef enum _KHETERO_CPU_POLICY
-{
-    KHeteroCpuPolicyAll = 0,
-    KHeteroCpuPolicyLarge,
-    KHeteroCpuPolicyLargeOrIdle,
-    KHeteroCpuPolicySmall,
-    KHeteroCpuPolicySmallOrIdle,
-    KHeteroCpuPolicyDynamic,
-    KHeteroCpuPolicyStaticMax,
-    KHeteroCpuPolicyBiasedSmall,
-    KHeteroCpuPolicyBiasedLarge,
-    KHeteroCpuPolicyDefault,
-    KHeteroCpuPolicyMax
-} KHETERO_CPU_POLICY;
-
 /* KeSetTimer2 and friends are internal exports not declared by the DDK. */
 NTKERNELAPI USHORT NTAPI KeQueryNodeActiveProcessorCount(_In_ USHORT NodeNumber);
 NTKERNELAPI PKPRCB NTAPI KeQueryPrcbAddress(_In_ ULONG Number);
 NTKERNELAPI ULONG NTAPI KeQueryActiveProcessorAffinity(_Out_ PKAFFINITY_EX Affinity);
 NTKERNELAPI NTSTATUS NTAPI KeQueryActiveProcessorAffinity2(_Out_ PGROUP_AFFINITY GroupAffinities, _Inout_ PUSHORT Count);
 NTKERNELAPI NTSTATUS NTAPI KeQueryNodeActiveAffinity2(_In_ USHORT NodeNumber, _Out_opt_ PGROUP_AFFINITY GroupAffinities, _Inout_ PUSHORT Count);
-NTKERNELAPI NTSTATUS NTAPI KeSetSelectedCpuSetsThread(_Inout_ PKTHREAD Thread, _In_ ULONG CpuSetCount, _In_reads_(CpuSetCount) PULONG64 CpuSetMasks);
-NTKERNELAPI KHETERO_CPU_POLICY NTAPI KeQueryHeteroCpuPolicyThread(_In_ PKTHREAD Thread, _In_ LOGICAL UserPolicy);
 NTKERNELAPI KHETERO_CPU_POLICY NTAPI KeSetHeteroCpuPolicyThread(_Inout_ PKTHREAD Thread, _In_ KHETERO_CPU_POLICY Policy, _In_ LOGICAL Reset);
 #if (NTDDI_VERSION >= NTDDI_WINBLUE)
 NTKERNELAPI BOOLEAN NTAPI KeSetTimer2(_Inout_ PKTIMER Timer, _In_ LARGE_INTEGER DueTime, _In_ LONGLONG Period, _In_opt_ PEXT_SET_PARAMETERS Parameters);
@@ -1581,6 +1561,9 @@ KeSetSelectedCpuSetsThread(
             return STATUS_NOT_SUPPORTED;
     }
 
+    if (CpuSetMasks[0] == 0)
+        return STATUS_SUCCESS;
+
     /* A selection covering every active processor imposes no real restriction.
      * A proper subset would require per-thread CPU-set state that cannot be
      * stored without changing the KTHREAD layout, so it is honestly rejected. */
@@ -1602,8 +1585,7 @@ KeQueryHeteroCpuPolicyThread(
     UNREFERENCED_PARAMETER(Thread);
     UNREFERENCED_PARAMETER(UserPolicy);
 
-    /* Homogeneous hardware: only the "all classes" policy is meaningful. */
-    return KHeteroCpuPolicyAll;
+    return KHeteroCpuPolicyDynamic;
 }
 
 /*
@@ -1620,8 +1602,7 @@ KeSetHeteroCpuPolicyThread(
     UNREFERENCED_PARAMETER(Policy);
     UNREFERENCED_PARAMETER(Reset);
 
-    /* No scheduling classes to bias; report the effective policy. */
-    return KHeteroCpuPolicyAll;
+    return KHeteroCpuPolicyDynamic;
 }
 
 /*

@@ -455,6 +455,21 @@ typedef enum _KTHREAD_STATE
 #endif
 } KTHREAD_STATE, *PKTHREAD_STATE;
 
+typedef enum _KHETERO_CPU_POLICY
+{
+    KHeteroCpuPolicyAll = 0,
+    KHeteroCpuPolicyLarge = 1,
+    KHeteroCpuPolicyLargeOrIdle = 2,
+    KHeteroCpuPolicySmall = 3,
+    KHeteroCpuPolicySmallOrIdle = 4,
+    KHeteroCpuPolicyDynamic = 5,
+    KHeteroCpuPolicyStaticMax = 5,
+    KHeteroCpuPolicyBiasedSmall = 6,
+    KHeteroCpuPolicyBiasedLarge = 7,
+    KHeteroCpuPolicyDefault = 8,
+    KHeteroCpuPolicyMax = 9
+} KHETERO_CPU_POLICY, *PKHETERO_CPU_POLICY;
+
 //
 // Kernel Object Types
 //
@@ -1775,6 +1790,7 @@ C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Previous.InitialStack) == 0x38);
 #ifdef KERNEL_LAYOUT_WIN11_ARM64
 
 #define KTHREAD_DISABLE_BOOST_BIT 3
+#define KTHREAD_AUTO_ALIGNMENT_BIT 2
 
 typedef struct _KTHREAD
 {
@@ -2126,6 +2142,7 @@ typedef struct _KTHREAD
 #elif defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN11_GE)
 
 #define KTHREAD_DISABLE_BOOST_BIT 3
+#define KTHREAD_AUTO_ALIGNMENT_BIT 2
 
 typedef struct _KTHREAD
 {
@@ -2514,6 +2531,7 @@ typedef struct _KTHREAD
 #elif (NTDDI_VERSION < NTDDI_WIN8)
 
 #define KTHREAD_DISABLE_BOOST_BIT 1
+#define KTHREAD_AUTO_ALIGNMENT_BIT 0
 #if (NTDDI_VERSION >= NTDDI_WIN7)
 #define KTHREAD_GROUP_AFFINITY
 #endif
@@ -2978,6 +2996,7 @@ typedef struct _KTHREAD
 #else // not (NTDDI_VERSION < NTDDI_WIN8)
 
 #define KTHREAD_DISABLE_BOOST_BIT 1
+#define KTHREAD_AUTO_ALIGNMENT_BIT 0
 #define KTHREAD_GROUP_AFFINITY
 
 #if defined(_WIN64) && (NTDDI_VERSION < 0x06032580) // since WIN 8.1 Update1 6.3.9600.16384

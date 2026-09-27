@@ -156,6 +156,20 @@ KeSetDisableBoostThread(IN OUT PKTHREAD Thread,
     }
 }
 
+BOOLEAN
+NTAPI
+KeSetAutoAlignmentThread(IN OUT PKTHREAD Thread,
+                         IN BOOLEAN Enable)
+{
+    const LONG AutoAlignmentBit = KTHREAD_AUTO_ALIGNMENT_BIT;
+    ASSERT_THREAD(Thread);
+
+    if (Enable)
+        return InterlockedBitTestAndSet(&Thread->MiscFlags, AutoAlignmentBit);
+
+    return InterlockedBitTestAndReset(&Thread->MiscFlags, AutoAlignmentBit);
+}
+
 VOID
 NTAPI
 KeReadyThread(IN PKTHREAD Thread)

@@ -277,6 +277,25 @@ KeSetCheckStackExtentsProcess(
     IN BOOLEAN Enable
 );
 
+BOOLEAN
+NTAPI
+KeSetAutoAlignmentThread(
+    IN OUT PKTHREAD Thread,
+    IN BOOLEAN Enable);
+
+NTSTATUS
+NTAPI
+KeSetSelectedCpuSetsThread(
+    _Inout_ PKTHREAD Thread,
+    _In_ ULONG CpuSetCount,
+    _In_reads_(CpuSetCount) PULONG64 CpuSetMasks);
+
+KHETERO_CPU_POLICY
+NTAPI
+KeQueryHeteroCpuPolicyThread(
+    _In_ PKTHREAD Thread,
+    _In_ LOGICAL UserPolicy);
+
 KAFFINITY
 NTAPI
 KeSetAffinityProcess(
