@@ -2056,7 +2056,7 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
    pWnd->pcls = Class;
    pWnd->hModule = Cs->hInstance;
    pWnd->style = Cs->style & ~WS_VISIBLE;
-   pWnd->ExStyle = Cs->dwExStyle;
+   pWnd->ExStyle = Cs->dwExStyle & ~WS_EX_LAYERED;
    pWnd->cbwndExtra = pWnd->pcls->cbwndExtra;
    pWnd->pActCtx = acbiBuffer;
 
@@ -2066,10 +2066,15 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
    pWnd->InternalPos.MaxPos.x  = pWnd->InternalPos.MaxPos.y  = -1;
    pWnd->InternalPos.IconPos.x = pWnd->InternalPos.IconPos.y = -1;
 
-   if (pWnd->spwndParent != NULL && Cs->hwndParent != 0)
+   if ((pWnd->style & WS_CHILD) && pWnd->spwndParent != NULL && Cs->hwndParent != 0)
    {
        pWnd->HideFocus = pWnd->spwndParent->HideFocus;
        pWnd->HideAccel = pWnd->spwndParent->HideAccel;
+   }
+   else
+   {
+       pWnd->HideFocus = !SPITESTPREF(UPM_KEYBOARDCUES);
+       pWnd->HideAccel = !SPITESTPREF(UPM_KEYBOARDCUES);
    }
 
    InitializeListHead(&pWnd->ThreadListEntry);
@@ -2200,28 +2205,6 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
 
    InitializeListHead(&pWnd->PropListHead);
    pWnd->PropListItems = 0;
-
-   /* Correct the window style. */
-   if ((pWnd->style & (WS_CHILD | WS_POPUP)) != WS_CHILD)
-   {
-      pWnd->style |= WS_CLIPSIBLINGS;
-      if (!(pWnd->style & WS_POPUP))
-      {
-         pWnd->style |= WS_CAPTION;
-      }
-   }
-
-   /* WS_EX_WINDOWEDGE depends on some other styles */
-   if (pWnd->ExStyle & WS_EX_DLGMODALFRAME)
-       pWnd->ExStyle |= WS_EX_WINDOWEDGE;
-   else if (pWnd->style & (WS_DLGFRAME | WS_THICKFRAME))
-   {
-       if (!((pWnd->ExStyle & WS_EX_STATICEDGE) &&
-            (pWnd->style & (WS_CHILD | WS_POPUP))))
-           pWnd->ExStyle |= WS_EX_WINDOWEDGE;
-   }
-    else
-        pWnd->ExStyle &= ~WS_EX_WINDOWEDGE;
 
    if (!(pWnd->style & (WS_CHILD | WS_POPUP)))
       pWnd->state |= WNDS_SENDSIZEMOVEMSGS;
@@ -2509,6 +2492,28 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
       hwndInsertAfter = pCbtCreate->hwndInsertAfter;
    }
 
+   Window->ExStyle |= Cs->dwExStyle & WS_EX_LAYERED;
+
+   if ((Window->style & (WS_CHILD | WS_POPUP)) != WS_CHILD)
+   {
+      Window->style |= WS_CLIPSIBLINGS;
+      if (!(Window->style & WS_POPUP))
+      {
+         Window->style |= WS_CAPTION;
+      }
+   }
+
+   if (Window->ExStyle & WS_EX_DLGMODALFRAME)
+       Window->ExStyle |= WS_EX_WINDOWEDGE;
+   else if (Window->style & (WS_DLGFRAME | WS_THICKFRAME))
+   {
+       if (!((Window->ExStyle & WS_EX_STATICEDGE) &&
+            (Window->style & (WS_CHILD | WS_POPUP))))
+           Window->ExStyle |= WS_EX_WINDOWEDGE;
+   }
+   else
+       Window->ExStyle &= ~WS_EX_WINDOWEDGE;
+
    Position.x = Cs->x;
    Position.y = Cs->y;
 
@@ -2595,7 +2600,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    if (ParentWindow != NULL)
    {
       /* Link the window into the siblings list */
-      if ((Cs->style & (WS_CHILD | WS_MAXIMIZE)) == WS_CHILD)
+      if ((Cs->style & (WS_CHILD | WS_MAXIMIZE)) == WS_CHILD && !UserIsDesktopWindow(ParentWindow))
           IntLinkHwnd(Window, HWND_BOTTOM);
       else
           IntLinkHwnd(Window, hwndInsertAfter);
