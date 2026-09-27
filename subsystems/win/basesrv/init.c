@@ -696,6 +696,14 @@ BaseInitializeStaticServerData(IN PCSR_SERVER_DLL LoadedServerDll)
                                      DIRECTORY_ALL_ACCESS,
                                      &ObjectAttributes);
     ASSERT(NT_SUCCESS(Status));
+    if (Status == STATUS_OBJECT_NAME_EXISTS)
+    {
+        Status = NtSetSecurityObject(BaseSrvNamedObjectDirectory,
+                                     DACL_SECURITY_INFORMATION |
+                                     LABEL_SECURITY_INFORMATION,
+                                     BnoSd);
+        ASSERT(NT_SUCCESS(Status));
+    }
 
     BaseSrvCreateAppContainerDirectory(SessionId, BnoSd);
 
