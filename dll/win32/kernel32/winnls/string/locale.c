@@ -262,6 +262,40 @@ static struct registry_value
 
 static RTL_CRITICAL_SECTION cache_section = { NULL, -1, 0, 0, 0, 0 };
 
+NTSYSAPI NTSTATUS NTAPI NtGetNlsSectionPtr(ULONG Type, ULONG Id, PVOID Unknown, PVOID *BaseAddress, PSIZE_T ViewSize);
+
+typedef struct _SORT_CTYPES
+{
+    const WORD *Ctypes;
+    const BYTE *Index;
+} SORT_CTYPES;
+
+static SORT_CTYPES SortCtypesData;
+static SORT_CTYPES *SortCtypes;
+
+static const SORT_CTYPES *
+GetSortCtypes(VOID)
+{
+    const UINT *Header;
+    const WORD *Ctype;
+    SIZE_T Size;
+
+    if (SortCtypes)
+        return SortCtypes;
+
+    RtlEnterCriticalSection(&cache_section);
+    if (!SortCtypes && NT_SUCCESS(NtGetNlsSectionPtr(9, 0, NULL, (PVOID *)&Header, &Size)))
+    {
+        Ctype = (const WORD *)((const BYTE *)Header + Header[2]);
+        SortCtypesData.Index = (const BYTE *)Ctype + Ctype[1] + 2;
+        SortCtypesData.Ctypes = Ctype + 2;
+        InterlockedExchangePointer((PVOID *)&SortCtypes, &SortCtypesData);
+    }
+    RtlLeaveCriticalSection(&cache_section);
+
+    return SortCtypes;
+}
+
 #ifndef __REACTOS__
 /* Copy Ascii string to Unicode without using codepages */
 static inline void strcpynAtoW( WCHAR *dst, const char *src, size_t n )
@@ -3134,6 +3168,21 @@ BOOL WINAPI GetStringTypeW( DWORD type, LPCWSTR src, INT count, LPWORD chartype 
         break;
     case CT_CTYPE3:
     {
+        const SORT_CTYPES *Sort = GetSortCtypes();
+
+        if (Sort)
+        {
+            while (count--)
+            {
+                WCHAR ch = *src++;
+                const BYTE *ptr = Sort->Index + ((const WORD *)Sort->Index)[ch >> 8];
+
+                ptr = Sort->Index + ((const WORD *)ptr)[(ch >> 4) & 0x0f] + (ch & 0x0f);
+                *chartype++ = Sort->Ctypes[*ptr * 3 + CT_CTYPE3 / 2];
+            }
+            break;
+        }
+
         WARN("CT_CTYPE3: semi-stub.\n");
         while (count--)
         {
