@@ -901,47 +901,23 @@ TranslateCOLORREF(PDC pdc, COLORREF crColor)
     if (!psurfDC)
         psurfDC = psurfDefaultBitmap;
 
-    /* Check what color type this is */
-    if ((crColor & 0xFF000000) == 0)
+    if (crColor & 0x01000000)
     {
-        /* This is an RGB color, use it as is for target translation below */
-    }
-    else if (crColor & 0x01000000)
-    {
-        /* This is a PALETTEINDEX, translate it to RGB using the DC palette */
         index = crColor & 0xFFFF;
         ppalDC = pdc->dclevel.ppal;
         if (index >= ppalDC->NumColors) index = 0;
         crColor = PALETTE_ulGetRGBColorFromIndex(ppalDC, index);
     }
-    else if (crColor & 0x02000000)
+    else if ((crColor & 0xFFFF0000) == 0x10FF0000)
     {
-        /* PALETTERGB is a raw RGB value, independent of the selected palette. */
-        crColor &= 0x00FFFFFF;
-    }
-    else if ((crColor & 0x10FF0000) == 0x10FF0000) // DIBINDEX flag
-    {
-        /* This is a DIBINDEX, check if the surface has an indexed palette */
-        if (psurfDC->ppal->flFlags & PAL_INDEXED)
-        {
-            /* Use the low 8 bits as the index */
-            index = crColor & 0xFF;
-            if (index >= psurfDC->ppal->NumColors)
-            {
-                index = 0;
-            }
-            return index;
-        }
-        else
-        {
-            /* Can't handle DIBINDEX, treat it as an RGB color */
-            crColor = crColor & 0x00FFFFFF;
-        }
+        index = crColor & 0xFFFF;
+        if (!(psurfDC->ppal->flFlags & PAL_INDEXED) || index >= psurfDC->ppal->NumColors)
+            return 0;
+        return index;
     }
     else
     {
-        DPRINT("Invalid COLORREF 0x08X\n", crColor);
-        crColor = 0;
+        crColor &= 0x00FFFFFF;
     }
 
     /* Initialize an XLATEOBJ from RGB to the target surface (no bg/fg colors) */

@@ -47,6 +47,7 @@ typedef struct _PALETTE
     ULONG ulGreenShift;
     ULONG ulBlueShift;
     HDEV  hPDev;
+    ULONG ulTime;
     PALETTEENTRY apalColors[0];
 } PALETTE, *PPALETTE;
 
@@ -114,6 +115,13 @@ NTAPI
 PALETTE_vGetBitMasks(
     PPALETTE ppal,
     PULONG pulColors);
+
+COLORREF
+NTAPI
+PALETTE_crResolveColor(
+    PPALETTE ppalDC,
+    PPALETTE ppalSurf,
+    COLORREF crColor);
 
 VOID
 NTAPI

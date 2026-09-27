@@ -26,14 +26,14 @@ EXLATEOBJ gexloTrivial = {{0, XO_TRIVIAL, 0, 0, 0, 0}, EXLATEOBJ_iXlateTrivial};
 static ULONG giUniqueXlate = 0;
 
 static const BYTE gajXlate5to8[32] =
-{  0,  8, 16, 25, 33, 41, 49, 58, 66, 74, 82, 90, 99,107,115,123,
- 132,140,148,156,165,173,181,189,197,206,214,222,231,239,247,255};
+{  0,  8, 16, 24, 33, 41, 49, 57, 66, 74, 82, 90, 99,107,115,123,
+ 132,140,148,156,165,173,181,189,198,206,214,222,231,239,247,255};
 
 static const BYTE gajXlate6to8[64] =
-{ 0,  4,  8, 12, 16, 20, 24, 28, 32, 36, 40, 45, 49, 52, 57, 61,
- 65, 69, 73, 77, 81, 85, 89, 93, 97,101,105,109,113,117,121,125,
-130,134,138,142,146,150,154,158,162,166,170,174,178,182,186,190,
-194,198,202,207,210,215,219,223,227,231,235,239,243,247,251,255};
+{  0,  4,  8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60,
+  65, 69, 73, 77, 81, 85, 89, 93, 97,101,105,109,113,117,121,125,
+ 130,134,138,142,146,150,154,158,162,166,170,174,178,182,186,190,
+ 195,199,203,207,211,215,219,223,227,231,235,239,243,247,251,255};
 
 
 /** iXlate functions **********************************************************/
@@ -483,6 +483,91 @@ EXLATEOBJ_iXlateBitfieldsToPal(PEXLATEOBJ pexlo, ULONG iColor)
     return PALETTE_ulGetNearestPaletteIndex(pexlo->ppalDst, iColor);
 }
 
+static const BYTE gajFieldMasks[9] =
+{ 0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, 0xff };
+
+static ULONG
+XlateFieldBits(ULONG ulMask, PULONG piShift)
+{
+    ULONG cBits;
+
+    if (!BitScanForward(piShift, ulMask))
+        return 0;
+
+    for (ulMask >>= *piShift, cBits = 0; ulMask & 1; ulMask >>= 1)
+        cBits++;
+
+    return cBits;
+}
+
+static ULONG
+XlateGetField(ULONG iColor, ULONG ulMask)
+{
+    ULONG iShift, cBits = XlateFieldBits(ulMask, &iShift);
+    LONG lShift = (LONG)iShift - (8 - (LONG)cBits);
+
+    if (!cBits)
+        return 0;
+
+    iColor = (lShift < 0) ? (iColor << -lShift) : (iColor >> lShift);
+    iColor &= gajFieldMasks[min(cBits, 8)];
+    return iColor | (iColor >> cBits);
+}
+
+static ULONG
+XlatePutField(ULONG ulField, ULONG ulMask)
+{
+    ULONG iShift, cBits = XlateFieldBits(ulMask, &iShift);
+    LONG lShift = (LONG)iShift - (8 - (LONG)cBits);
+
+    if (!cBits)
+        return 0;
+
+    ulField &= gajFieldMasks[min(cBits, 8)];
+    return (lShift < 0) ? (ulField >> -lShift) : (ulField << lShift);
+}
+
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlateExpandFields(PEXLATEOBJ pexlo, ULONG iColor)
+{
+    ULONG aulMasksSrc[3];
+
+    PALETTE_vGetBitMasks(pexlo->ppalSrc, aulMasksSrc);
+
+    return XlatePutField(XlateGetField(iColor, aulMasksSrc[0]), pexlo->ulRedMask) |
+           XlatePutField(XlateGetField(iColor, aulMasksSrc[1]), pexlo->ulGreenMask) |
+           XlatePutField(XlateGetField(iColor, aulMasksSrc[2]), pexlo->ulBlueMask);
+}
+
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlateExpandFieldsToPal(PEXLATEOBJ pexlo, ULONG iColor)
+{
+    iColor = EXLATEOBJ_iXlateExpandFields(pexlo, iColor);
+
+    return PALETTE_ulGetNearestPaletteIndex(pexlo->ppalDst, iColor);
+}
+
+static BOOL
+XlateNeedsFieldExpansion(PPALETTE ppalSrc, PPALETTE ppalDst)
+{
+    ULONG aulMasksSrc[3], aulMasksDst[3], i, iShift;
+
+    PALETTE_vGetBitMasks(ppalSrc, aulMasksSrc);
+    PALETTE_vGetBitMasks(ppalDst, aulMasksDst);
+
+    for (i = 0; i < 3; i++)
+    {
+        if (XlateFieldBits(aulMasksSrc[i], &iShift) < XlateFieldBits(aulMasksDst[i], &iShift))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 
 /** Private Functions *********************************************************/
 
@@ -807,6 +892,14 @@ EXLATEOBJ_vInitialize(
             pexlo->pfnXlate = EXLATEOBJ_iXlateShiftAndMask;
     }
 
+    if ((pexlo->pfnXlate == EXLATEOBJ_iXlateShiftAndMask ||
+         pexlo->pfnXlate == EXLATEOBJ_iXlateBitfieldsToPal) &&
+        XlateNeedsFieldExpansion(ppalSrc, ppalDst))
+    {
+        pexlo->pfnXlate = (pexlo->pfnXlate == EXLATEOBJ_iXlateShiftAndMask) ?
+            EXLATEOBJ_iXlateExpandFields : EXLATEOBJ_iXlateExpandFieldsToPal;
+    }
+
     /* Check for a trivial shift and mask operation */
     if (pexlo->pfnXlate == EXLATEOBJ_iXlateShiftAndMask &&
         !pexlo->ulRedShift && !pexlo->ulGreenShift && !pexlo->ulBlueShift)
@@ -830,16 +923,23 @@ EXLATEOBJ_vInitXlateFromDCs(
 {
     PSURFACE psurfDst, psurfSrc;
 
+    PPALETTE ppalSrc, ppalDst;
+
     psurfDst = pdcDst->dclevel.pSurface;
     psurfSrc = pdcSrc->dclevel.pSurface;
+    ppalSrc = psurfSrc ? psurfSrc->ppal : gppalMono;
+    ppalDst = psurfDst ? psurfDst->ppal : gppalMono;
 
     /* Normal initialisation. No surface means DEFAULT_BITMAP */
     EXLATEOBJ_vInitialize(pexlo,
-                          psurfSrc ? psurfSrc->ppal : gppalMono,
-                          psurfDst ? psurfDst->ppal : gppalMono,
-                          pdcSrc->pdcattr->crBackgroundClr,
-                          pdcDst->pdcattr->crBackgroundClr,
-                          pdcDst->pdcattr->crForegroundClr);
+                          ppalSrc,
+                          ppalDst,
+                          PALETTE_crResolveColor(pdcSrc->dclevel.ppal, ppalSrc,
+                                                 pdcSrc->pdcattr->crBackgroundClr),
+                          PALETTE_crResolveColor(pdcDst->dclevel.ppal, ppalDst,
+                                                 pdcDst->pdcattr->crBackgroundClr),
+                          PALETTE_crResolveColor(pdcDst->dclevel.ppal, ppalDst,
+                                                 pdcDst->pdcattr->crForegroundClr));
 
     pexlo->ppalDstDc = pdcDst->dclevel.ppal;
 }
@@ -853,9 +953,12 @@ EXLATEOBJ_vInitXlateFromDCsEx(
     _In_ COLORREF crBackColor)
 {
     PSURFACE psurfDst, psurfSrc;
+    PPALETTE ppalSrc, ppalDst;
 
     psurfDst = pdcDst->dclevel.pSurface;
     psurfSrc = pdcSrc->dclevel.pSurface;
+    ppalSrc = psurfSrc ? psurfSrc->ppal : gppalMono;
+    ppalDst = psurfDst ? psurfDst->ppal : gppalMono;
 
     if (crBackColor == CLR_INVALID)
     {
@@ -864,11 +967,13 @@ EXLATEOBJ_vInitXlateFromDCsEx(
 
     /* Normal initialisation. No surface means DEFAULT_BITMAP */
     EXLATEOBJ_vInitialize(pexlo,
-                          psurfSrc ? psurfSrc->ppal : gppalMono,
-                          psurfDst ? psurfDst->ppal : gppalMono,
-                          crBackColor,
-                          pdcDst->pdcattr->crBackgroundClr,
-                          pdcDst->pdcattr->crForegroundClr);
+                          ppalSrc,
+                          ppalDst,
+                          PALETTE_crResolveColor(pdcSrc->dclevel.ppal, ppalSrc, crBackColor),
+                          PALETTE_crResolveColor(pdcDst->dclevel.ppal, ppalDst,
+                                                 pdcDst->pdcattr->crBackgroundClr),
+                          PALETTE_crResolveColor(pdcDst->dclevel.ppal, ppalDst,
+                                                 pdcDst->pdcattr->crForegroundClr));
 
     pexlo->ppalDstDc = pdcDst->dclevel.ppal;
 }

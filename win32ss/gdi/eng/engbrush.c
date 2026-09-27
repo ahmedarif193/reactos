@@ -86,6 +86,10 @@ EBRUSHOBJ_vInit(EBRUSHOBJ *pebo,
     GDIOBJ_vReferenceObjectByPointer(&pebo->ppalDC->BaseObject);
     pebo->ppalDIB = NULL;
 
+    pebo->ulDCPalTime = pebo->ppalDC->ulTime;
+    pebo->crCurrentBack = PALETTE_crResolveColor(pebo->ppalDC, pebo->ppalSurf, crBackgroundClr);
+    pebo->crCurrentText = PALETTE_crResolveColor(pebo->ppalDC, pebo->ppalSurf, crForegroundClr);
+
     if (pbrush->flAttrs & BR_IS_NULL)
     {
         /* NULL brushes don't need a color */
@@ -103,7 +107,7 @@ EBRUSHOBJ_vInit(EBRUSHOBJ *pebo,
 
         /* Use foreground color of hatch brushes */
         if (pbrush->flAttrs & BR_IS_HATCH)
-            pebo->crCurrentText = pbrush->BrushAttr.lbColor;
+            pebo->crCurrentText = PALETTE_crResolveColor(pebo->ppalDC, pebo->ppalSurf, pbrush->BrushAttr.lbColor);
     }
 }
 
@@ -126,6 +130,34 @@ EBRUSHOBJ_vSetSolidRGBColor(EBRUSHOBJ *pebo, COLORREF crColor)
 
     /* Never use with non-solid brushes */
     ASSERT(pebo->flattrs & BR_IS_SOLID);
+
+    if (crColor & 0x01000000)
+    {
+        ULONG iIndex = crColor & 0xFFFF;
+
+        if (iIndex >= pebo->ppalDC->NumColors)
+            iIndex = 0;
+        crColor = PALETTE_ulGetRGBColorFromIndex(pebo->ppalDC, iIndex);
+    }
+    else if ((crColor & 0xFFFF0000) == 0x10FF0000)
+    {
+        ULONG iIndex = crColor & 0xFFFF;
+
+        if (!(pebo->ppalSurf->flFlags & PAL_INDEXED) ||
+            iIndex >= pebo->ppalSurf->NumColors)
+        {
+            iIndex = 0;
+            crColor = 0;
+        }
+        else
+        {
+            crColor = PALETTE_ulGetRGBColorFromIndex(pebo->ppalSurf, iIndex);
+        }
+        pebo->crRealize = crColor;
+        pebo->ulRGBColor = crColor;
+        pebo->BrushObject.iSolidColor = iIndex;
+        return;
+    }
 
     /* Set the RGB color */
     crColor &= 0xFFFFFF;

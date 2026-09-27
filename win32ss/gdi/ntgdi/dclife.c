@@ -515,6 +515,12 @@ DC_vPrepareDCsForBlit(
     PDC pdcFirst, pdcSecond;
     const RECT *prcFirst, *prcSecond;
 
+    if (pdcDest->dclevel.ppal &&
+        pdcDest->eboFill.ulDCPalTime != pdcDest->dclevel.ppal->ulTime)
+    {
+        pdcDest->pdcattr->ulDirty_ |= DIRTY_FILL | DIRTY_LINE | DIRTY_TEXT | DIRTY_BACKGROUND;
+    }
+
     /* Update brushes */
     if (pdcDest->pdcattr->ulDirty_ & (DIRTY_FILL | DC_BRUSH_DIRTY))
         DC_vUpdateFillBrush(pdcDest);

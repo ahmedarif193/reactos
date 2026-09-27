@@ -345,6 +345,37 @@ PALETTE_vGetBitMasks(PPALETTE ppal, PULONG pulColors)
     }
 }
 
+COLORREF
+NTAPI
+PALETTE_crResolveColor(PPALETTE ppalDC, PPALETTE ppalSurf, COLORREF crColor)
+{
+    ULONG iIndex = crColor & 0xFFFF;
+
+    if (crColor == CLR_INVALID)
+        return crColor;
+
+    if (crColor & 0x01000000)
+    {
+        if (!ppalDC)
+            return 0;
+        if (iIndex >= ppalDC->NumColors)
+            iIndex = 0;
+        return PALETTE_ulGetRGBColorFromIndex(ppalDC, iIndex);
+    }
+
+    if ((crColor & 0xFFFF0000) == 0x10FF0000)
+    {
+        if (!ppalSurf || !(ppalSurf->flFlags & PAL_INDEXED) ||
+            iIndex >= ppalSurf->NumColors)
+        {
+            return 0;
+        }
+        return PALETTE_ulGetRGBColorFromIndex(ppalSurf, iIndex);
+    }
+
+    return crColor & 0xFFFFFF;
+}
+
 VOID
 FASTCALL
 ColorCorrection(PPALETTE PalGDI, PPALETTEENTRY PaletteEntry, ULONG Colors)
@@ -790,6 +821,8 @@ IntAnimatePalette(HPALETTE hPal,
                 ret++;
             }
         }
+        if (ret)
+            palPtr->ulTime++;
 
         PALETTE_ShareUnlockPalette(palPtr);
 
@@ -962,6 +995,7 @@ IntSetPaletteEntries(
         Entries = numEntries - Start;
     }
     memcpy(palGDI->IndexedColors + Start, pe, Entries * sizeof(PALETTEENTRY));
+    palGDI->ulTime++;
     PALETTE_ShareUnlockPalette(palGDI);
 
     return Entries;
