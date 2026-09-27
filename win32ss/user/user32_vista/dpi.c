@@ -12,6 +12,7 @@
 #include <winbase.h>
 #include <wingdi.h>
 #include <winuser.h>
+#include <shtypes.h>
 
 HDC APIENTRY
 NtUserGetDC(HWND hWnd);
@@ -299,13 +300,37 @@ GetDpiFromDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT Context)
     return NTUSER_DPI_CONTEXT_GET_DPI(Value);
 }
 
+static BOOL
+IsScaleFactorDpi(_In_ UINT Dpi)
+{
+    static const DEVICE_SCALE_FACTOR ScaleFactors[] =
+    {
+        SCALE_100_PERCENT, SCALE_125_PERCENT, SCALE_150_PERCENT, SCALE_175_PERCENT,
+        SCALE_200_PERCENT, SCALE_225_PERCENT, SCALE_250_PERCENT, SCALE_300_PERCENT,
+        SCALE_350_PERCENT, SCALE_400_PERCENT, SCALE_450_PERCENT, SCALE_500_PERCENT
+    };
+    UINT i;
+
+    for (i = 0; i < ARRAYSIZE(ScaleFactors); i++)
+    {
+        if (Dpi * 100 == (UINT)ScaleFactors[i] * USER_DEFAULT_SCREEN_DPI)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 BOOL
 WINAPI
 IsValidDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT Context)
 {
     UINT SystemDpi = GetRawSystemDpi();
+    UINT Value = GetNtUserDpiContext(Context, SystemDpi);
 
-    return IsValidNtUserDpiContext(GetNtUserDpiContext(Context, SystemDpi), SystemDpi);
+    if (IsValidNtUserDpiContext(Value, SystemDpi))
+        return TRUE;
+    return NTUSER_DPI_CONTEXT_GET_AWARENESS(Value) == DPI_AWARENESS_SYSTEM_AWARE &&
+           IsValidNtUserDpiContext(Value, 0) &&
+           IsScaleFactorDpi(NTUSER_DPI_CONTEXT_GET_DPI(Value));
 }
 
 BOOL
@@ -384,7 +409,8 @@ BOOL
 WINAPI
 SetProcessDPIAware(VOID)
 {
-    return SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+    return TRUE;
 }
 
 BOOL
