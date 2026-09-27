@@ -268,10 +268,10 @@ INT cmd_chdir(LPTSTR param)
     if (bEnableExtensions)
     {
         /* Strip trailing whitespace */
-        tmp = param + _tcslen(param) - 1;
-        while (tmp > param && _istspace(*tmp))
+        tmp = param + _tcslen(param);
+        while (tmp > param && _istspace(*(tmp - 1)))
             --tmp;
-        *(tmp + 1) = _T('\0');
+        *tmp = _T('\0');
     }
 
     /* Reset the error level */
