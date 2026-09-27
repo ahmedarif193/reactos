@@ -5296,6 +5296,9 @@ static BOOL NLS_EnumSystemCodePages(ENUMSYSTEMCODEPAGES_CALLBACKS *lpProcs)
 
     switch (lpProcs->dwFlags)
     {
+        case 0:
+            lpProcs->dwFlags = CP_SUPPORTED;
+            break;
         case CP_INSTALLED:
         case CP_SUPPORTED:
             break;
@@ -5316,8 +5319,9 @@ static BOOL NLS_EnumSystemCodePages(ENUMSYSTEMCODEPAGES_CALLBACKS *lpProcs)
         if (NLS_RegEnumValue(hKey, ulIndex, szNumber, sizeof(szNumber),
                              szValue, sizeof(szValue)))
         {
-            if ((lpProcs->dwFlags == CP_SUPPORTED)||
-                ((lpProcs->dwFlags == CP_INSTALLED)&&(wcslen(szValue) > 2)))
+            if ((szNumber[0] != UNICODE_NULL) && (wcsspn(szNumber, L"0123456789") == wcslen(szNumber)) &&
+                ((lpProcs->dwFlags == CP_SUPPORTED)||
+                ((lpProcs->dwFlags == CP_INSTALLED)&&(wcslen(szValue) > 2))))
             {
                 if (lpProcs->procW)
                 {
