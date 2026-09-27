@@ -852,6 +852,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         FILE_ATTRIBUTE_VALID_FLAGS;
     if (FileAttributes & ~FILE_ATTRIBUTE_NORMAL)
         FileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
+    if (!(CreateOptions & FILE_DIRECTORY_FILE))
+        FileAttributes = (FileAttributes & ~FILE_ATTRIBUTE_NORMAL) | FILE_ATTRIBUTE_ARCHIVE;
     VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
 
     if ((CreateOptions & (FILE_DIRECTORY_FILE | FILE_NON_DIRECTORY_FILE)) ==
