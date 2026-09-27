@@ -300,7 +300,7 @@ RtlDispatchException(
     DISPATCHER_CONTEXT_NONVOLREG_ARM64 NonVolatileRegisters;
     PVOID HandlerData;
     EXCEPTION_DISPOSITION Disposition;
-    ULONG Frames;
+    ULONG64 PreviousSp;
     ULONG64 EstablisherFrame;
     ULONG64 NestedFrame;
     ULONG_PTR StackLow;
@@ -326,7 +326,7 @@ RtlDispatchException(
     NestedFrame = 0;
     RtlpGetStackLimits(&StackLow, &StackHigh);
 
-    for (Frames = 0; Frames < 128; Frames++)
+    for (;;)
     {
         ImageBase = 0;
         ControlPc = UnwindContext.Pc;
@@ -349,6 +349,7 @@ RtlDispatchException(
         }
 
         EstablisherFrame = 0;
+        PreviousSp = UnwindContext.Sp;
         RtlpArm64CaptureNonVolatileRegisters(&NonVolatileRegisters, &UnwindContext);
         ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_EHANDLER,
                                             (ULONG64)ImageBase,
@@ -361,7 +362,8 @@ RtlDispatchException(
 
         if ((EstablisherFrame < StackLow) ||
             (EstablisherFrame > StackHigh) ||
-            (EstablisherFrame & (sizeof(ULONG64) - 1)))
+            (EstablisherFrame & (sizeof(ULONG64) - 1)) ||
+            ((UnwindContext.Sp == PreviousSp) && (UnwindContext.Pc == ControlPc)))
         {
             ExceptionRecord->ExceptionFlags |= EXCEPTION_STACK_INVALID;
             break;

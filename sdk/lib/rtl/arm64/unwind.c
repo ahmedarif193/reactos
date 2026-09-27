@@ -809,7 +809,7 @@ RtlUnwindEx(
     ULONG_PTR LookupPc;
     ULONG64 ControlPc;
     BOOLEAN ControlPcIsUnwound;
-    ULONG FrameCount;
+    ULONG64 PreviousSp;
     BOOLEAN HaveTarget;
 
     if (ContextRecord == NULL)
@@ -841,7 +841,7 @@ RtlUnwindEx(
     if (TargetFrame != NULL)
         StackHigh = (ULONG_PTR)TargetFrame + 1;
 
-    for (FrameCount = 0; FrameCount < 1024; FrameCount++)
+    for (;;)
     {
         if ((UnwindContext.Sp < StackLow) ||
             (UnwindContext.Sp > StackHigh) ||
@@ -870,6 +870,7 @@ RtlUnwindEx(
 
         DispatcherContext.ControlPc = ControlPc;
         DispatcherContext.ControlPcIsUnwound = ControlPcIsUnwound;
+        PreviousSp = UnwindContext.Sp;
         RtlpArm64CaptureNonVolatileRegisters(&NonVolatileRegisters, &UnwindContext);
         ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_UHANDLER,
                                             ImageBase,
@@ -882,7 +883,8 @@ RtlUnwindEx(
 
         if ((EstablisherFrame < StackLow) ||
             (EstablisherFrame >= StackHigh) ||
-            (EstablisherFrame & (sizeof(ULONG64) - 1)))
+            (EstablisherFrame & (sizeof(ULONG64) - 1)) ||
+            ((UnwindContext.Sp == PreviousSp) && (UnwindContext.Pc == ControlPc)))
         {
             ExceptionRecord->ExceptionFlags |= EXCEPTION_STACK_INVALID;
             return;
