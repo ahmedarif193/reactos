@@ -361,9 +361,24 @@ TestPipelinedDispatch(
                  &State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
     ok_eq_hex(Status, STATUS_SUCCESS);
 
+    InitEngineStatus(&EngineStatus);
+    Status = Dxgmms2SchedCoreQueryEngine(
+                 &State->Core, 0, &EngineStatus);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(EngineStatus.PendingPacketCount, 3UL);
+    ok_eq_ulong(EngineStatus.OldestKickedFenceId, FirstFence);
+
+    /* TestDispatchWindow covers the depth limit; any retirement lets the
+     * next packet queue behind the one still in flight. */
+    Count = Dxgmms2SchedCoreNotifyCompletion(
+                &State->Core, 0, FirstFence,
+                Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 1UL);
+    ok_eq_pointer(Retired[0], First);
+
     InitClaim(&Claim);
     ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim),
-                 "claim third behind two in-flight packets");
+                 "claim third behind an in-flight packet");
     ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, Third);
     Status = Dxgmms2SchedCorePublishDispatch(
                  &State->Core, 0, Claim.ClaimToken);
@@ -373,29 +388,17 @@ TestPipelinedDispatch(
     ok_eq_hex(Status, STATUS_SUCCESS);
 
     InitEngineStatus(&EngineStatus);
-    Status = Dxgmms2SchedCoreQueryEngine(
-                 &State->Core, 0, &EngineStatus);
-    ok_eq_hex(Status, STATUS_SUCCESS);
-    ok_eq_ulong(EngineStatus.PendingPacketCount, 3UL);
-    ok_eq_ulong(EngineStatus.OldestKickedFenceId, FirstFence);
-
-    Count = Dxgmms2SchedCoreNotifyCompletion(
-                &State->Core, 0, SecondFence,
-                Retired, RTL_NUMBER_OF(Retired));
-    ok_eq_ulong(Count, 2UL);
-    ok_eq_pointer(Retired[0], First);
-    ok_eq_pointer(Retired[1], Second);
-    InitEngineStatus(&EngineStatus);
     (VOID)Dxgmms2SchedCoreQueryEngine(
         &State->Core, 0, &EngineStatus);
-    ok_eq_ulong(EngineStatus.PendingPacketCount, 1UL);
-    ok_eq_ulong(EngineStatus.OldestKickedFenceId, ThirdFence);
+    ok_eq_ulong(EngineStatus.PendingPacketCount, 2UL);
+    ok_eq_ulong(EngineStatus.OldestKickedFenceId, SecondFence);
 
     Count = Dxgmms2SchedCoreNotifyCompletion(
                 &State->Core, 0, ThirdFence,
                 Retired, RTL_NUMBER_OF(Retired));
-    ok_eq_ulong(Count, 1UL);
-    ok_eq_pointer(Retired[0], Third);
+    ok_eq_ulong(Count, 2UL);
+    ok_eq_pointer(Retired[0], Second);
+    ok_eq_pointer(Retired[1], Third);
     ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core),
                  "pipeline retires in FIFO order");
 }

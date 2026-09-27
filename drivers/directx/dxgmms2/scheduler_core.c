@@ -201,7 +201,9 @@ Dxgmms2SchedCoreNextReady(
              * must be resubmitted. Its published fence remains a barrier. */
             if (*First != NULL && !NT_SUCCESS(Packet->DeferredStatus))
                 return Best;
-            if (++Dispatched >= DXGMMS2_SCHED_MAX_DISPATCHED)
+            /* A rejected packet holds no slot in the hardware queue. */
+            if (NT_SUCCESS(Packet->DeferredStatus) &&
+                ++Dispatched >= DXGMMS2_SCHED_MAX_DISPATCHED)
                 return NULL;
             continue;
         }
