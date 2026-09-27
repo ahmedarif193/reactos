@@ -1926,14 +1926,77 @@ GpStatus WINGDIPAPI GdipWarpPath(GpPath *path, GpMatrix* matrix,
     GDIPCONST GpPointF *points, INT count, REAL x, REAL y, REAL width,
     REAL height, WarpMode warpmode, REAL flatness)
 {
-    FIXME("(%p,%s,%p,%i,%0.2f,%0.2f,%0.2f,%0.2f,%i,%0.2f)\n", path, debugstr_matrix(matrix),
+    GpPointF quad[4];
+    REAL a, b, c, d, e, f, g = 0.0f, h = 0.0f, sx, sy, det, u, v, w;
+    GpStatus stat;
+    INT i;
+
+    TRACE("(%p,%s,%p,%i,%0.2f,%0.2f,%0.2f,%0.2f,%i,%0.2f)\n", path, debugstr_matrix(matrix),
         points, count, x, y, width, height, warpmode, flatness);
 
     if (!path || !points || count < 1) {
         return InvalidParameter;
     }
 
-    return NotImplemented;
+    if (path->pathdata.Count == 0 || width == 0.0f || height == 0.0f)
+        return Ok;
+
+    stat = GdipFlattenPath(path, NULL, flatness);
+    if (stat != Ok)
+        return stat;
+
+    quad[0] = points[0];
+    quad[1] = points[1];
+    quad[2] = points[2];
+    if (count >= 4)
+        quad[3] = points[3];
+    else
+    {
+        quad[3].X = points[1].X + points[2].X - points[0].X;
+        quad[3].Y = points[1].Y + points[2].Y - points[0].Y;
+    }
+
+    sx = quad[0].X - quad[1].X + quad[3].X - quad[2].X;
+    sy = quad[0].Y - quad[1].Y + quad[3].Y - quad[2].Y;
+    det = (quad[1].X - quad[3].X) * (quad[2].Y - quad[3].Y) - (quad[2].X - quad[3].X) * (quad[1].Y - quad[3].Y);
+    if (warpmode == WarpModePerspective && det != 0.0f)
+    {
+        g = (sx * (quad[2].Y - quad[3].Y) - (quad[2].X - quad[3].X) * sy) / det;
+        h = ((quad[1].X - quad[3].X) * sy - sx * (quad[1].Y - quad[3].Y)) / det;
+    }
+    a = quad[1].X - quad[0].X + g * quad[1].X;
+    b = quad[2].X - quad[0].X + h * quad[2].X;
+    c = quad[0].X;
+    d = quad[1].Y - quad[0].Y + g * quad[1].Y;
+    e = quad[2].Y - quad[0].Y + h * quad[2].Y;
+    f = quad[0].Y;
+
+    for (i = 0; i < path->pathdata.Count; i++)
+    {
+        u = (path->pathdata.Points[i].X - x) / width;
+        v = (path->pathdata.Points[i].Y - y) / height;
+
+        if (warpmode == WarpModePerspective)
+        {
+            w = g * u + h * v + 1.0f;
+            if (w == 0.0f)
+                w = 1.0f;
+            path->pathdata.Points[i].X = (a * u + b * v + c) / w;
+            path->pathdata.Points[i].Y = (d * u + e * v + f) / w;
+        }
+        else
+        {
+            path->pathdata.Points[i].X = (1.0f - u) * (1.0f - v) * quad[0].X + u * (1.0f - v) * quad[1].X +
+                                         (1.0f - u) * v * quad[2].X + u * v * quad[3].X;
+            path->pathdata.Points[i].Y = (1.0f - u) * (1.0f - v) * quad[0].Y + u * (1.0f - v) * quad[1].Y +
+                                         (1.0f - u) * v * quad[2].Y + u * v * quad[3].Y;
+        }
+    }
+
+    if (matrix)
+        return GdipTransformMatrixPoints(matrix, path->pathdata.Points, path->pathdata.Count);
+
+    return Ok;
 }
 
 static void add_bevel_point(const GpPointF *endpoint, const GpPointF *nextpoint,
