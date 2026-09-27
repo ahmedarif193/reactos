@@ -48,7 +48,7 @@ static const COLORREF SysColors[] =
     RGB(236, 233, 216)  /* COLOR_MENUBAR  */
 };
 
-static const COLORREF DefaultSysColors[] =
+static COLORREF DefaultSysColors[] =
 {
     RGB(200, 200, 200),
     RGB(0, 0, 0),
@@ -342,6 +342,8 @@ NtGdiGetStockObject(INT Object)
 VOID FASTCALL
 IntSetSysColors(UINT nColors, CONST INT *Elements, CONST COLORREF *Colors)
 {
+    PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
+    BOOL bDefaultColors = ppi && (ppi->W32PF_flags & W32PF_DEFAULTSYSCOLORS);
     UINT i;
 
     for (i = 0; i < nColors; i++)
@@ -350,6 +352,12 @@ IntSetSysColors(UINT nColors, CONST INT *Elements, CONST COLORREF *Colors)
         {
             gpsi->argbSystem[*Elements] = *Colors;
             IntGdiSetSolidBrushColor(gpsi->ahbrSystem[*Elements], *Colors);
+            if (bDefaultColors)
+            {
+                DefaultSysColors[*Elements] = *Colors;
+                if (DefaultSysColorBrushes[*Elements])
+                    IntGdiSetSolidBrushColor(DefaultSysColorBrushes[*Elements], *Colors);
+            }
         }
         Elements++;
         Colors++;
