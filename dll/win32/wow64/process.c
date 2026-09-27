@@ -615,6 +615,147 @@ NTSTATUS WINAPI wow64_NtOpenThread( UINT *args )
 }
 
 
+#ifdef __REACTOS__
+#define PROCESS_HANDLE_TRACING_MAX_STACKS 16
+
+typedef struct _POOLED_USAGE_AND_LIMITS
+{
+    SIZE_T PeakPagedPoolUsage;
+    SIZE_T PagedPoolUsage;
+    SIZE_T PagedPoolLimit;
+    SIZE_T PeakNonPagedPoolUsage;
+    SIZE_T NonPagedPoolUsage;
+    SIZE_T NonPagedPoolLimit;
+    SIZE_T PeakPagefileUsage;
+    SIZE_T PagefileUsage;
+    SIZE_T PagefileLimit;
+} POOLED_USAGE_AND_LIMITS;
+
+typedef struct _PROCESS_WS_WATCH_INFORMATION
+{
+    PVOID FaultingPc;
+    PVOID FaultingVa;
+} PROCESS_WS_WATCH_INFORMATION;
+
+typedef struct _PROCESS_HANDLE_TRACING_ENTRY
+{
+    HANDLE Handle;
+    CLIENT_ID ClientId;
+    ULONG Type;
+    PVOID Stacks[PROCESS_HANDLE_TRACING_MAX_STACKS];
+} PROCESS_HANDLE_TRACING_ENTRY;
+
+typedef struct _PROCESS_HANDLE_TRACING_QUERY
+{
+    HANDLE Handle;
+    ULONG TotalTraces;
+    PROCESS_HANDLE_TRACING_ENTRY HandleTrace[1];
+} PROCESS_HANDLE_TRACING_QUERY;
+
+static NTSTATUS check_info_buffer32( const void *ptr, ULONG len, ULONG size, ULONG align )
+{
+    if (len != size) return STATUS_INFO_LENGTH_MISMATCH;
+    if ((ULONG_PTR)ptr & (align - 1)) return STATUS_DATATYPE_MISALIGNMENT;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS check_info_buffer32_min( const void *ptr, ULONG len, ULONG size, ULONG align )
+{
+    if (len < size) return STATUS_INFO_LENGTH_MISMATCH;
+    if ((ULONG_PTR)ptr & (align - 1)) return STATUS_DATATYPE_MISALIGNMENT;
+    return STATUS_SUCCESS;
+}
+
+typedef struct
+{
+    ULONG PagedPoolLimit;
+    ULONG NonPagedPoolLimit;
+    ULONG MinimumWorkingSetSize;
+    ULONG MaximumWorkingSetSize;
+    ULONG PagefileLimit;
+    LARGE_INTEGER TimeLimit;
+    ULONG WorkingSetLimit;
+    ULONG Reserved2;
+    ULONG Reserved3;
+    ULONG Reserved4;
+    ULONG Flags;
+    ULONG CpuRateLimit;
+} QUOTA_LIMITS_EX32;
+
+typedef struct
+{
+    ULONG PeakPagedPoolUsage;
+    ULONG PagedPoolUsage;
+    ULONG PagedPoolLimit;
+    ULONG PeakNonPagedPoolUsage;
+    ULONG NonPagedPoolUsage;
+    ULONG NonPagedPoolLimit;
+    ULONG PeakPagefileUsage;
+    ULONG PagefileUsage;
+    ULONG PagefileLimit;
+} POOLED_USAGE_AND_LIMITS32;
+
+typedef struct
+{
+    ULONG FaultingPc;
+    ULONG FaultingVa;
+} PROCESS_WS_WATCH_INFORMATION32;
+
+typedef struct
+{
+    ULONG Handle;
+    CLIENT_ID32 ClientId;
+    ULONG Type;
+    ULONG Stacks[PROCESS_HANDLE_TRACING_MAX_STACKS];
+} PROCESS_HANDLE_TRACING_ENTRY32;
+
+typedef struct
+{
+    ULONG Handle;
+    ULONG TotalTraces;
+    PROCESS_HANDLE_TRACING_ENTRY32 HandleTrace[1];
+} PROCESS_HANDLE_TRACING_QUERY32;
+
+C_ASSERT( sizeof(QUOTA_LIMITS_EX32) == 56 );
+C_ASSERT( sizeof(POOLED_USAGE_AND_LIMITS32) == 36 );
+C_ASSERT( sizeof(PROCESS_HANDLE_TRACING_QUERY32) == 88 );
+
+static void put_quota_limits( QUOTA_LIMITS_EX32 *info32, const QUOTA_LIMITS_EX *info, ULONG size )
+{
+    info32->PagedPoolLimit        = info->PagedPoolLimit;
+    info32->NonPagedPoolLimit     = info->NonPagedPoolLimit;
+    info32->MinimumWorkingSetSize = info->MinimumWorkingSetSize;
+    info32->MaximumWorkingSetSize = info->MaximumWorkingSetSize;
+    info32->PagefileLimit         = info->PagefileLimit;
+    info32->TimeLimit             = info->TimeLimit;
+    if (size < sizeof(QUOTA_LIMITS_EX32)) return;
+    info32->WorkingSetLimit       = info->Reserved1;
+    info32->Reserved2             = info->Reserved2;
+    info32->Reserved3             = info->Reserved3;
+    info32->Reserved4             = info->Reserved4;
+    info32->Flags                 = info->Flags;
+    info32->CpuRateLimit          = info->CpuRateLimit.RateData;
+}
+
+static void get_quota_limits( QUOTA_LIMITS_EX *info, const QUOTA_LIMITS_EX32 *info32, ULONG size )
+{
+    memset( info, 0, sizeof(*info) );
+    info->PagedPoolLimit        = info32->PagedPoolLimit;
+    info->NonPagedPoolLimit     = info32->NonPagedPoolLimit;
+    info->MinimumWorkingSetSize = info32->MinimumWorkingSetSize;
+    info->MaximumWorkingSetSize = info32->MaximumWorkingSetSize;
+    info->PagefileLimit         = info32->PagefileLimit;
+    info->TimeLimit             = info32->TimeLimit;
+    if (size < sizeof(QUOTA_LIMITS_EX32)) return;
+    info->Reserved1             = info32->WorkingSetLimit;
+    info->Reserved2             = info32->Reserved2;
+    info->Reserved3             = info32->Reserved3;
+    info->Reserved4             = info32->Reserved4;
+    info->Flags                 = info32->Flags;
+    info->CpuRateLimit.RateData = info32->CpuRateLimit;
+}
+#endif
+
 /**********************************************************************
  *           wow64_NtQueryInformationProcess
  */
@@ -659,7 +800,9 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
             }
             return status;
         }
+#ifndef __REACTOS__
         if (retlen) *retlen = sizeof(PROCESS_BASIC_INFORMATION32);
+#endif
         return STATUS_INFO_LENGTH_MISMATCH;
 
     case ProcessIoCounters:  /* IO_COUNTERS */
@@ -672,6 +815,16 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
     case ProcessDeviceMap:  /* PROCESS_DEVICEMAP_INFORMATION.Query */
     case ProcessMitigationPolicy:  /* ULONG policy, ULONG flags */
     case ProcessHandleCheckingMode:  /* ULONG */
+    case ProcessLdtInformation:  /* PROCESS_LDT_INFORMATION */
+    case ProcessWx86Information:  /* ULONG */
+    case ProcessLUIDDeviceMapsEnabled:  /* ULONG */
+    case ProcessBreakOnTermination:  /* ULONG */
+    case ProcessPagePriority:  /* PAGE_PRIORITY_INFORMATION */
+    case ProcessGroupInformation:  /* USHORT[] */
+    case ProcessHandleTable:  /* ULONG[] */
+    case ProcessCheckStackExtentsMode:  /* ULONG */
+    case ProcessTelemetryIdInformation:  /* PROCESS_TELEMETRY_ID_INFORMATION */
+    case ProcessPowerThrottlingState:  /* PROCESS_POWER_THROTTLING_STATE */
 #endif
     case ProcessSessionInformation:  /* ULONG */
     case ProcessDebugFlags:  /* ULONG */
@@ -681,6 +834,102 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
         /* FIXME: check buffer alignment */
         return NtQueryInformationProcess( handle, class, ptr, len, retlen );
 
+#ifdef __REACTOS__
+    case ProcessQuotaLimits:  /* QUOTA_LIMITS or QUOTA_LIMITS_EX */
+        if (len != sizeof(QUOTA_LIMITS32) && len != sizeof(QUOTA_LIMITS_EX32)) return STATUS_INFO_LENGTH_MISMATCH;
+        if ((status = check_info_buffer32( ptr, len, len, sizeof(ULONG) ))) return status;
+        {
+            QUOTA_LIMITS_EX info;
+            ULONG size = len == sizeof(QUOTA_LIMITS32) ? sizeof(QUOTA_LIMITS) : sizeof(QUOTA_LIMITS_EX);
+
+            if (!(status = NtQueryInformationProcess( handle, class, &info, size, NULL )))
+            {
+                put_quota_limits( ptr, &info, len );
+                if (retlen) *retlen = len;
+            }
+            return status;
+        }
+
+    case ProcessPooledUsageAndLimits:  /* POOLED_USAGE_AND_LIMITS */
+        if ((status = check_info_buffer32( ptr, len, sizeof(POOLED_USAGE_AND_LIMITS32), sizeof(ULONG) ))) return status;
+        {
+            POOLED_USAGE_AND_LIMITS info;
+            POOLED_USAGE_AND_LIMITS32 *info32 = ptr;
+
+            if (!(status = NtQueryInformationProcess( handle, class, &info, sizeof(info), NULL )))
+            {
+                info32->PeakPagedPoolUsage    = info.PeakPagedPoolUsage;
+                info32->PagedPoolUsage        = info.PagedPoolUsage;
+                info32->PagedPoolLimit        = info.PagedPoolLimit;
+                info32->PeakNonPagedPoolUsage = info.PeakNonPagedPoolUsage;
+                info32->NonPagedPoolUsage     = info.NonPagedPoolUsage;
+                info32->NonPagedPoolLimit     = info.NonPagedPoolLimit;
+                info32->PeakPagefileUsage     = info.PeakPagefileUsage;
+                info32->PagefileUsage         = info.PagefileUsage;
+                info32->PagefileLimit         = info.PagefileLimit;
+                if (retlen) *retlen = sizeof(*info32);
+            }
+            return status;
+        }
+
+    case ProcessWorkingSetWatch:  /* PROCESS_WS_WATCH_INFORMATION[] */
+        if ((status = check_info_buffer32_min( ptr, len, sizeof(PROCESS_WS_WATCH_INFORMATION32), sizeof(ULONG) ))) return status;
+        {
+            ULONG i, count = len / sizeof(PROCESS_WS_WATCH_INFORMATION32), size = 0;
+            PROCESS_WS_WATCH_INFORMATION *info = Wow64AllocateTemp( count * sizeof(*info) );
+            PROCESS_WS_WATCH_INFORMATION32 *info32 = ptr;
+
+            status = NtQueryInformationProcess( handle, class, info, count * sizeof(*info), &size );
+            count = size / sizeof(*info);
+            if (!status)
+            {
+                for (i = 0; i < count; i++)
+                {
+                    info32[i].FaultingPc = PtrToUlong( info[i].FaultingPc );
+                    info32[i].FaultingVa = PtrToUlong( info[i].FaultingVa );
+                }
+            }
+            if (retlen && (!status || status == STATUS_BUFFER_TOO_SMALL))
+                *retlen = count * sizeof(PROCESS_WS_WATCH_INFORMATION32);
+            return status;
+        }
+
+    case ProcessHandleTracing:  /* PROCESS_HANDLE_TRACING_QUERY */
+        if ((status = check_info_buffer32_min( ptr, len, FIELD_OFFSET( PROCESS_HANDLE_TRACING_QUERY32, HandleTrace ), sizeof(ULONG) )))
+            return status;
+        {
+            PROCESS_HANDLE_TRACING_QUERY32 *info32 = ptr;
+            PROCESS_HANDLE_TRACING_QUERY *info;
+            ULONG i, j, count, size;
+
+            count = (len - FIELD_OFFSET( PROCESS_HANDLE_TRACING_QUERY32, HandleTrace )) / sizeof(PROCESS_HANDLE_TRACING_ENTRY32);
+            size = FIELD_OFFSET( PROCESS_HANDLE_TRACING_QUERY, HandleTrace[count] );
+            if (!(info = Wow64AllocateTemp( max( size, sizeof(*info) ) ))) return STATUS_NO_MEMORY;
+            info->Handle = NULL;
+            status = NtQueryInformationProcess( handle, class, info, size, NULL );
+            if (!status && info32->Handle)
+            {
+                info->Handle = LongToHandle( info32->Handle );
+                status = NtQueryInformationProcess( handle, class, info, size, NULL );
+            }
+            if (!status)
+            {
+                info32->Handle = HandleToLong( info->Handle );
+                info32->TotalTraces = info->TotalTraces;
+                for (i = 0; i < min( count, info->TotalTraces ); i++)
+                {
+                    info32->HandleTrace[i].Handle = HandleToLong( info->HandleTrace[i].Handle );
+                    info32->HandleTrace[i].ClientId.UniqueProcess = HandleToULong( info->HandleTrace[i].ClientId.UniqueProcess );
+                    info32->HandleTrace[i].ClientId.UniqueThread = HandleToULong( info->HandleTrace[i].ClientId.UniqueThread );
+                    info32->HandleTrace[i].Type = info->HandleTrace[i].Type;
+                    for (j = 0; j < PROCESS_HANDLE_TRACING_MAX_STACKS; j++)
+                        info32->HandleTrace[i].Stacks[j] = PtrToUlong( info->HandleTrace[i].Stacks[j] );
+                }
+                if (retlen) *retlen = FIELD_OFFSET( PROCESS_HANDLE_TRACING_QUERY32, HandleTrace[min( count, info->TotalTraces )] );
+            }
+            return status;
+        }
+#else
     case ProcessQuotaLimits:  /* QUOTA_LIMITS */
         if (len == sizeof(QUOTA_LIMITS32))
         {
@@ -701,6 +950,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
         }
         if (retlen) *retlen = sizeof(QUOTA_LIMITS32);
         return STATUS_INFO_LENGTH_MISMATCH;
+#endif
 
     case ProcessVmCounters:  /* VM_COUNTERS_EX */
         if (len == sizeof(VM_COUNTERS32) || len == sizeof(VM_COUNTERS_EX32))
@@ -806,6 +1056,9 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
         THREAD_BASIC_INFORMATION32 info32;
         THREAD_BASIC_INFORMATION info;
 
+#ifdef __REACTOS__
+        if ((status = check_info_buffer32( ptr, len, sizeof(info32), sizeof(ULONG) ))) return status;
+#endif
         status = NtQueryInformationThread( handle, class, &info, sizeof(info), NULL );
         if (!status)
         {
@@ -832,14 +1085,67 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
     case ThreadSuspendCount:  /* ULONG */
     case ThreadPriorityBoost:   /* ULONG */
     case ThreadIdealProcessorEx: /* PROCESSOR_NUMBER */
+    case ThreadCycleTime:  /* THREAD_CYCLE_TIME_INFORMATION */
+#ifdef __REACTOS__
+    case ThreadPerformanceCount:  /* LARGE_INTEGER */
+    case ThreadBreakOnTermination:  /* ULONG */
+    case ThreadIoPriority:  /* ULONG */
+    case ThreadPagePriority:  /* PAGE_PRIORITY_INFORMATION */
+    case ThreadActualBasePriority:  /* LONG */
+    case ThreadCSwitchPmu:  /* not supported */
+    case ThreadCounterProfiling:  /* BOOLEAN */
+    case ThreadCpuAccountingInformation:  /* BOOLEAN */
+    case ThreadHeterogeneousCpuPolicy:  /* ULONG */
+    case ThreadContainerId:  /* GUID */
+    case ThreadSelectedCpuSets:  /* ULONG64[] */
+    case ThreadDynamicCodePolicyInfo:  /* ULONG */
+    case ThreadExplicitCaseSensitivity:  /* ULONG */
+    case ThreadWorkOnBehalfTicket:  /* RTL_WORK_ON_BEHALF_TICKET_EX */
+    case ThreadSubsystemInformation:  /* ULONG */
+    case ThreadPowerThrottlingState:  /* THREAD_POWER_THROTTLING_STATE */
+    case ThreadEffectiveIoPriority:  /* ULONG */
+    case ThreadEffectivePagePriority:  /* ULONG */
+#endif
         /* FIXME: check buffer alignment */
         return NtQueryInformationThread( handle, class, ptr, len, retlen );
+
+#ifdef __REACTOS__
+    case ThreadSystemThreadInformation:  /* SYSTEM_THREAD_INFORMATION */
+    {
+        SYSTEM_THREAD_INFORMATION info;
+        SYSTEM_THREAD_INFORMATION32 *info32 = ptr;
+
+        if ((status = check_info_buffer32( ptr, len, sizeof(*info32), sizeof(ULONG) ))) return status;
+        status = NtQueryInformationThread( handle, class, &info, sizeof(info), NULL );
+        if (!status)
+        {
+            info32->KernelTime        = info.KernelTime;
+            info32->UserTime          = info.UserTime;
+            info32->CreateTime        = info.CreateTime;
+            info32->dwTickCount       = info.dwTickCount;
+            info32->StartAddress      = PtrToUlong( info.StartAddress );
+            info32->ClientId.UniqueProcess = HandleToULong( info.ClientId.UniqueProcess );
+            info32->ClientId.UniqueThread = HandleToULong( info.ClientId.UniqueThread );
+            info32->dwCurrentPriority = info.dwCurrentPriority;
+            info32->dwBasePriority    = info.dwBasePriority;
+            info32->dwContextSwitches = info.dwContextSwitches;
+            info32->dwThreadState     = info.dwThreadState;
+            info32->dwWaitReason      = info.dwWaitReason;
+            info32->dwUnknown         = 0;
+            if (retlen) *retlen = sizeof(*info32);
+        }
+        return status;
+    }
+#endif
 
     case ThreadAffinityMask:  /* ULONG_PTR */
     case ThreadQuerySetWin32StartAddress:  /* PRTL_THREAD_START_ROUTINE */
     {
         ULONG_PTR data;
 
+#ifdef __REACTOS__
+        if ((status = check_info_buffer32( ptr, len, sizeof(ULONG), sizeof(ULONG) ))) return status;
+#endif
         status = NtQueryInformationThread( handle, class, &data, sizeof(data), NULL );
         if (!status)
         {
@@ -856,9 +1162,15 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
         return STATUS_INVALID_INFO_CLASS;
 
     case ThreadGroupInformation:  /* GROUP_AFFINITY */
+#ifdef __REACTOS__
+    case ThreadActualGroupAffinity:  /* GROUP_AFFINITY */
+#endif
     {
         GROUP_AFFINITY info;
 
+#ifdef __REACTOS__
+        if ((status = check_info_buffer32( ptr, len, sizeof(GROUP_AFFINITY32), sizeof(ULONG) ))) return status;
+#endif
         status = NtQueryInformationThread( handle, class, &info, sizeof(info), NULL );
         if (!status)
         {
@@ -1014,8 +1326,43 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
 #ifdef __REACTOS__
     case ProcessMitigationPolicy:  /* ULONG policy, ULONG flags */
     case ProcessHandleCheckingMode:  /* ULONG */
+    case ProcessRaisePriority:  /* ULONG */
+    case ProcessLdtInformation:  /* PROCESS_LDT_INFORMATION */
+    case ProcessLdtSize:  /* PROCESS_LDT_SIZE */
+    case ProcessIoPortHandlers:  /* not supported */
+    case ProcessWorkingSetWatch:  /* void */
+    case ProcessEnableAlignmentFaultFixup:  /* BOOLEAN */
+    case ProcessWx86Information:  /* ULONG */
+    case ProcessSessionInformation:  /* PROCESS_SESSION_INFORMATION */
+    case ProcessForegroundInformation:  /* PROCESS_FOREGROUND_BACKGROUND */
+    case ProcessBreakOnTermination:  /* ULONG */
+    case ProcessDebugFlags:  /* ULONG */
+    case ProcessHandleTracing:  /* PROCESS_HANDLE_TRACING_ENABLE(_EX) */
+    case ProcessCheckStackExtentsMode:  /* ULONG */
 #endif
         return NtSetInformationProcess( handle, class, ptr, len );
+
+#ifdef __REACTOS__
+    case ProcessQuotaLimits:  /* QUOTA_LIMITS or QUOTA_LIMITS_EX */
+        if (len != sizeof(QUOTA_LIMITS32) && len != sizeof(QUOTA_LIMITS_EX32)) return STATUS_INFO_LENGTH_MISMATCH;
+        if ((status = check_info_buffer32( ptr, len, len, sizeof(ULONG) ))) return status;
+        {
+            QUOTA_LIMITS_EX info;
+
+            get_quota_limits( &info, ptr, len );
+            return NtSetInformationProcess( handle, class, &info,
+                                            len == sizeof(QUOTA_LIMITS32) ? sizeof(QUOTA_LIMITS) : sizeof(QUOTA_LIMITS_EX) );
+        }
+
+    case ProcessExceptionPort:  /* HANDLE */
+    case ProcessDeviceMap:  /* PROCESS_DEVICEMAP_INFORMATION.Set */
+        if ((status = check_info_buffer32( ptr, len, sizeof(ULONG), sizeof(ULONG) ))) return status;
+        {
+            HANDLE value = LongToHandle( *(LONG *)ptr );
+
+            return NtSetInformationProcess( handle, class, &value, sizeof(value) );
+        }
+#endif
 
     case ProcessExecuteFlags:   /* ULONG */
         status = NtSetInformationProcess( handle, class, ptr, len );
@@ -1036,6 +1383,9 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
         else return STATUS_INFO_LENGTH_MISMATCH;
 
     case ProcessAffinityMask:   /* ULONG_PTR */
+#ifdef __REACTOS__
+        if ((status = check_info_buffer32( ptr, len, sizeof(ULONG), sizeof(ULONG) ))) return status;
+#endif
         if (len == sizeof(ULONG))
         {
             ULONG_PTR mask = *(ULONG *)ptr;
@@ -1124,9 +1474,39 @@ NTSTATUS WINAPI wow64_NtSetInformationThread( UINT *args )
     case ThreadPowerThrottlingState:  /* THREAD_POWER_THROTTLING_STATE */
     case ThreadIdealProcessor:   /* ULONG */
     case ThreadPriorityBoost:   /* ULONG */
+#ifdef __REACTOS__
+    case ThreadBreakOnTermination:  /* ULONG */
+    case ThreadSwitchLegacyState:  /* ULONG */
+    case ThreadCSwitchPmu:  /* not supported */
+    case ThreadCounterProfiling:  /* query only */
+    case ThreadIdealProcessorEx:  /* PROCESSOR_NUMBER */
+    case ThreadHeterogeneousCpuPolicy:  /* ULONG */
+    case ThreadSelectedCpuSets:  /* ULONG64[] */
+    case ThreadDynamicCodePolicyInfo:  /* ULONG */
+    case ThreadWorkOnBehalfTicket:  /* ALPC_WORK_ON_BEHALF_TICKET */
+    case ThreadDbgkWerReportActive:  /* ULONG */
+    case ThreadWorkloadClass:  /* ULONG */
+#endif
         return NtSetInformationThread( handle, class, ptr, len );
 
+#ifdef __REACTOS__
+    case ThreadSetTlsArrayAddress:  /* PVOID */
+    case ThreadAttachContainer:  /* HANDLE */
+    {
+        NTSTATUS status;
+        ULONG_PTR value;
+
+        if ((status = check_info_buffer32( ptr, len, sizeof(ULONG), sizeof(ULONG) ))) return status;
+        value = class == ThreadAttachContainer ? (ULONG_PTR)LongToHandle( *(LONG *)ptr ) : *(ULONG *)ptr;
+        return NtSetInformationThread( handle, class, &value, sizeof(value) );
+    }
+#endif
+
     case ThreadImpersonationToken:   /* HANDLE */
+#ifdef __REACTOS__
+        if (len != sizeof(ULONG)) return STATUS_INFO_LENGTH_MISMATCH;
+        if ((ULONG_PTR)ptr & (sizeof(ULONG) - 1)) return STATUS_DATATYPE_MISALIGNMENT;
+#endif
         if (len == sizeof(ULONG))
         {
             HANDLE token = LongToHandle( *(ULONG *)ptr );
@@ -1136,6 +1516,10 @@ NTSTATUS WINAPI wow64_NtSetInformationThread( UINT *args )
 
     case ThreadAffinityMask:  /* ULONG_PTR */
     case ThreadQuerySetWin32StartAddress:   /* PRTL_THREAD_START_ROUTINE */
+#ifdef __REACTOS__
+        if (len != sizeof(ULONG)) return STATUS_INFO_LENGTH_MISMATCH;
+        if ((ULONG_PTR)ptr & (sizeof(ULONG) - 1)) return STATUS_DATATYPE_MISALIGNMENT;
+#endif
         if (len == sizeof(ULONG))
         {
             ULONG_PTR mask = *(ULONG *)ptr;
@@ -1148,6 +1532,10 @@ NTSTATUS WINAPI wow64_NtSetInformationThread( UINT *args )
         return STATUS_INVALID_INFO_CLASS;
 
     case ThreadGroupInformation:   /* GROUP_AFFINITY */
+#ifdef __REACTOS__
+        if (len != sizeof(GROUP_AFFINITY32)) return STATUS_INFO_LENGTH_MISMATCH;
+        if ((ULONG_PTR)ptr & (sizeof(ULONG) - 1)) return STATUS_DATATYPE_MISALIGNMENT;
+#endif
         if (len == sizeof(GROUP_AFFINITY32))
         {
             GROUP_AFFINITY32 *info32 = ptr;
