@@ -336,6 +336,7 @@ LpkGetCharacterPlacement(
     if (nSet > lpResults->nGlyphs)
         nSet = lpResults->nGlyphs;
 
+    cGlyphs = (INT)nSet;
     BIDI_Reorder(hdc, lpString, uCount, dwFlags, WINE_GCPW_FORCE_LTR, lpResults->lpOutString,
                  nSet, lpResults->lpOrder, &lpGlyphs, &cGlyphs);
 
@@ -345,8 +346,9 @@ LpkGetCharacterPlacement(
     {
         if (lpGlyphs)
             StringCchCopyW(lpResults->lpGlyphs, cGlyphs, lpGlyphs);
-        else if (lpResults->lpOutString)
-            GetGlyphIndicesW(hdc, lpResults->lpOutString, nSet, lpResults->lpGlyphs, 0);
+        else
+            GetGlyphIndicesW(hdc, lpResults->lpOutString ? lpResults->lpOutString : lpString,
+                             nSet, lpResults->lpGlyphs, 0);
     }
 
     if (lpResults->lpDx)
@@ -368,9 +370,11 @@ LpkGetCharacterPlacement(
 
         else
         {
+            LPCWSTR lpDxString = lpResults->lpOutString ? lpResults->lpOutString : lpString;
+
             for (i = 0; i < nSet; i++)
             {
-                if (GetCharWidth32W(hdc, lpResults->lpOutString[i], lpResults->lpOutString[i], &c))
+                if (GetCharWidth32W(hdc, lpDxString[i], lpDxString[i], &c))
                     lpResults->lpDx[i] = c;
             }
         }
