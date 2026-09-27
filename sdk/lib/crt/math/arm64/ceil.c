@@ -9,5 +9,11 @@ double ceil(double x)
     if (f == x)
         return x;
 
-    return (x > f) ? f + 1.0 : f;
+    if (x > f)
+    {
+        f += 1.0;
+        if (f == 0.0 && x < 0.0)
+            return -0.0;
+    }
+    return f;
 }

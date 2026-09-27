@@ -27,5 +27,7 @@
 
 double asin(double __x)
 {
+    if (isnan(__x))
+        return __x + __x;
     return atan2(__x, sqrt(1.0 - __x * __x));
 }

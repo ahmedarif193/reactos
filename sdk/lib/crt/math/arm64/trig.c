@@ -218,7 +218,7 @@ double sin(double x)
         return TrigKernelSin(x, 0.0, 0);
     }
     if (ix >= 0x7ff00000)
-        return x - x;
+        return isnan(x) ? x - x : -NAN;
 
     n = TrigRemPio2(x, y);
     switch (n & 3)
@@ -243,7 +243,7 @@ double cos(double x)
         return TrigKernelCos(x, 0.0);
     }
     if (ix >= 0x7ff00000)
-        return x - x;
+        return isnan(x) ? x - x : -NAN;
 
     n = TrigRemPio2(x, y);
     switch (n & 3)
@@ -268,7 +268,7 @@ double tan(double x)
         return TrigKernelTan(x, 0.0, 0);
     }
     if (ix >= 0x7ff00000)
-        return x - x;
+        return isnan(x) ? x - x : -NAN;
 
     n = TrigRemPio2(x, y);
     return TrigKernelTan(y[0], y[1], n & 1);

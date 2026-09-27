@@ -27,16 +27,14 @@ double log(double x)
     int k = 0;
 
     /* Handle subnormals, zero and negative values up-front. */
+    if ((ix << 1) == 0)
+        return -INFINITY;
+    if (ix >> 63)
+        return isnan(x) ? x + x : -NAN;
     if (ix < 0x0010000000000000ULL) {
-        if ((ix << 1) == 0)
-            return -INFINITY;          /* log(0) */
-        if (ix >> 63)
-            return (x - x) / 0.0;      /* negative */
         k -= 54;
         x *= 0x1p54;
         ix = asuint64(x);
-    } else if (ix >> 63) {
-        return (x - x) / 0.0;          /* negative input */
     }
 
     /* NaN or inf. */

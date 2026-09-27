@@ -89,7 +89,9 @@ static inline double ret_nan( BOOL update_sw )
 {
     double x = 1.0;
     if (!update_sw) return -NAN;
-    return (x - x) / (x - x);
+    x = (x - x) / (x - x);
+    *(UINT64*)&x |= 0x8000000000000000ULL;
+    return x;
 }
 
 #define SET_X87_CW(MASK) \
@@ -371,7 +373,11 @@ double CDECL MSVCRT_asin( double x )
             return x87_asin(x);
     }
 #else
-    if (isnan(x)) return x;
+    if (isnan(x))
+    {
+        *(UINT64*)&x |= 0x0008000000000000ULL;
+        return x;
+    }
 #endif
 
     return asin( x );
@@ -383,7 +389,11 @@ double CDECL MSVCRT_asin( double x )
 #if _MSVCR_VER == 0  /* other versions call atan() directly */
 double CDECL MSVCRT_atan( double x )
 {
-    if (isnan(x)) return math_error(_DOMAIN, "atan", x, 0, x);
+    if (isnan(x))
+    {
+        *(UINT64*)&x |= 0x0008000000000000ULL;
+        return math_error(_DOMAIN, "atan", x, 0, x);
+    }
     return atan( x );
 }
 #endif

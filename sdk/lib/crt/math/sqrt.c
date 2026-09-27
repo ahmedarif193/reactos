@@ -32,9 +32,9 @@ sqrt(
     bits = *(long long *)&x;
 
     /* Check for !finite(x) */
-    if ((bits & 0x7ff7ffffffffffffLL) == 0x7ff0000000000000LL)
+    if ((bits & 0x7ff0000000000000LL) == 0x7ff0000000000000LL)
     {
-        return x;
+        return x + x;
     }
 
     /* Step 1: quick approximation of 1/sqrt(x) with bit magic
