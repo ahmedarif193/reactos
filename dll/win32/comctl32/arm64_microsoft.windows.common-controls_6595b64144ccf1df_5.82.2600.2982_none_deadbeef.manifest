@@ -17,7 +17,6 @@
     <windowClass versioned="no">SysDateTimePick32</windowClass>
     <windowClass versioned="no">SysHeader32</windowClass>
     <windowClass versioned="no">SysIPAddress32</windowClass>
-    <windowClass versioned="no">SysLink</windowClass>
     <windowClass versioned="no">SysListView32</windowClass>
     <windowClass versioned="no">SysMonthCal32</windowClass>
     <windowClass versioned="no">SysPager</windowClass>
