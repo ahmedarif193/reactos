@@ -1452,15 +1452,6 @@ DesktopWindowProc(PWND Wnd, UINT Msg, WPARAM wParam, LPARAM lParam, LRESULT *lRe
             return TRUE;
 
         case WM_CREATE:
-        {
-            /* Save process and thread IDs */
-            ULONG Value;
-            Value = HandleToULong(PsGetCurrentProcessId());
-            co_UserSetWindowLong(UserHMGetHandle(Wnd), DT_GWL_PROCESSID, Value, FALSE);
-            Value = HandleToULong(PsGetCurrentThreadId());
-            co_UserSetWindowLong(UserHMGetHandle(Wnd), DT_GWL_THREADID, Value, FALSE);
-            __fallthrough;
-        }
         case WM_CLOSE:
             return TRUE;
 
@@ -1894,6 +1885,8 @@ IntPaintDesktopContent(HDC hDC)
     if (!InSafeMode)
     {
         DesktopBrush = (HBRUSH)WndDesktop->pcls->hbrBackground;
+        if (DesktopBrush && DesktopBrush <= (HBRUSH)(COLOR_MENUBAR + 1))
+            DesktopBrush = IntGetSysColorBrush(HandleToUlong(DesktopBrush) - 1);
 
         /*
          * Paint desktop background

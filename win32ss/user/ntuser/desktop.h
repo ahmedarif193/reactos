@@ -59,10 +59,6 @@ C_ASSERT(sizeof(DESKTOP) == 360);
 #define DF_DESKWNDDESTROYED 0x00010000
 #define DF_DYING            0x00020000
 
-// Index offset for Desktop data. Should these be global?
-#define DT_GWL_PROCESSID 0
-#define DT_GWL_THREADID  4
-
 extern PDESKTOP gpdeskInputDesktop;
 extern PCLS DesktopWindowClass;
 extern HDC ScreenDeviceContext;

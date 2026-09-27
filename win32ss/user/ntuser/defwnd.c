@@ -1195,9 +1195,9 @@ IntDefWindowProc(
          RECT Rect;
          HBRUSH hBrush = Wnd->pcls->hbrBackground;
          if (!hBrush) return 0;
-         if (hBrush <= (HBRUSH)COLOR_MENUBAR)
+         if (hBrush <= (HBRUSH)(COLOR_MENUBAR + 1))
          {
-            hBrush = IntGetSysColorBrush(HandleToUlong(hBrush));
+            hBrush = IntGetSysColorBrush(HandleToUlong(hBrush) - 1);
          }
          if (Wnd->pcls->style & CS_PARENTDC)
          {

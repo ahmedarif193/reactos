@@ -50,9 +50,9 @@ REGISTER_SYSCLASS DefaultServerClasses[] =
   { ((PWSTR)WC_DESKTOP),
     CS_GLOBALCLASS|CS_DBLCLKS,
     NULL, // Use User32 procs
-    sizeof(ULONG)*2,
+    0,
     (HICON)OCR_NORMAL,
-    (HBRUSH)(COLOR_BACKGROUND),
+    (HBRUSH)(COLOR_BACKGROUND + 1),
     FNID_DESKTOP,
     ICLS_DESKTOP
   },
@@ -2338,7 +2338,6 @@ UserRegisterSystemClasses(VOID)
     WNDCLASSEXW wc;
     PCLS Class;
     BOOL Ret = TRUE;
-    HBRUSH hBrush;
     DWORD Flags = 0;
 
     if (ppi->W32PF_flags & W32PF_CLASSESREGISTERED)
@@ -2402,12 +2401,7 @@ UserRegisterSystemClasses(VOID)
             }
         }
 
-        hBrush = DefaultServerClasses[i].hBrush;
-        if (hBrush <= (HBRUSH)COLOR_MENUBAR)
-        {
-            hBrush = IntGetSysColorBrush(HandleToUlong(hBrush));
-        }
-        wc.hbrBackground = hBrush;
+        wc.hbrBackground = DefaultServerClasses[i].hBrush;
         wc.lpszMenuName = NULL;
         wc.lpszClassName = ClassName.Buffer;
         wc.hIconSm = NULL;
