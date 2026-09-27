@@ -1693,27 +1693,40 @@ GpStatus METAFILE_GraphicsDeleted(GpMetafile* metafile)
         MetafileHeader header;
 
         stat = GdipGetMetafileHeaderFromEmf(metafile->hemf, &header);
-        if (stat == Ok && metafile->auto_frame &&
-            metafile->auto_frame_max.X >= metafile->auto_frame_min.X)
+        if (stat == Ok && metafile->auto_frame)
         {
-            RECTL bounds_rc, gdi_bounds_rc;
-            REAL x_scale = 2540.0 / header.DpiX;
-            REAL y_scale = 2540.0 / header.DpiY;
-            BYTE* buffer;
-            UINT buffer_size;
+            RECTL gdi_bounds_rc = header.EmfHeader.rclBounds;
 
-            gdi_bounds_rc = header.EmfHeader.rclBounds;
             if (gdi_bounds_rc.right > gdi_bounds_rc.left &&
                 gdi_bounds_rc.bottom > gdi_bounds_rc.top)
             {
                 GpPointF *af_min = &metafile->auto_frame_min;
                 GpPointF *af_max = &metafile->auto_frame_max;
 
-                af_min->X = fmin(af_min->X, gdi_bounds_rc.left);
-                af_min->Y = fmin(af_min->Y, gdi_bounds_rc.top);
-                af_max->X = fmax(af_max->X, gdi_bounds_rc.right + 1);
-                af_max->Y = fmax(af_max->Y, gdi_bounds_rc.bottom + 1);
+                if (af_max->X < af_min->X)
+                {
+                    af_min->X = gdi_bounds_rc.left;
+                    af_min->Y = gdi_bounds_rc.top;
+                    af_max->X = gdi_bounds_rc.right + 1;
+                    af_max->Y = gdi_bounds_rc.bottom + 1;
+                }
+                else
+                {
+                    af_min->X = fmin(af_min->X, gdi_bounds_rc.left);
+                    af_min->Y = fmin(af_min->Y, gdi_bounds_rc.top);
+                    af_max->X = fmax(af_max->X, gdi_bounds_rc.right + 1);
+                    af_max->Y = fmax(af_max->Y, gdi_bounds_rc.bottom + 1);
+                }
             }
+        }
+        if (stat == Ok && metafile->auto_frame &&
+            metafile->auto_frame_max.X >= metafile->auto_frame_min.X)
+        {
+            RECTL bounds_rc;
+            REAL x_scale = 2540.0 / header.DpiX;
+            REAL y_scale = 2540.0 / header.DpiY;
+            BYTE* buffer;
+            UINT buffer_size;
 
             bounds_rc.left = floorf(metafile->auto_frame_min.X * x_scale);
             bounds_rc.top = floorf(metafile->auto_frame_min.Y * y_scale);
@@ -4085,6 +4098,8 @@ GpStatus WINGDIPAPI GdipGetMetafileHeaderFromMetafile(GpMetafile * metafile,
     {
         status = GdipGetMetafileHeaderFromEmf(metafile->hemf, header);
         if (status != Ok) return status;
+        if (metafile->recorded && metafile->metafile_type == MetafileTypeEmf)
+            header->Version = VERSION_MAGIC2;
     }
     else
     {
@@ -4097,6 +4112,25 @@ GpStatus WINGDIPAPI GdipGetMetafileHeaderFromMetafile(GpMetafile * metafile,
     header->DpiY = metafile->image.yres;
     header->Width = gdip_round(metafile->bounds.Width);
     header->Height = gdip_round(metafile->bounds.Height);
+
+    if (metafile->hwmf)
+    {
+        UINT size = GetMetaFileBitsEx(metafile->hwmf, 0, NULL);
+        BYTE *bits = (size >= sizeof(METAHEADER)) ? malloc(size) : NULL;
+
+        if (bits && GetMetaFileBitsEx(metafile->hwmf, size, bits) == size)
+        {
+            memset(&header->EmfHeader, 0, sizeof(header->EmfHeader));
+            memcpy(&header->WmfHeader, bits, sizeof(METAHEADER));
+            header->Size = size;
+            header->Version = header->WmfHeader.mtVersion;
+            header->EmfPlusFlags = 0;
+            header->EmfPlusHeaderSize = 0;
+            header->LogicalDpiX = 0;
+            header->LogicalDpiY = 0;
+        }
+        free(bits);
+    }
 
     return Ok;
 }
@@ -4547,6 +4581,7 @@ GpStatus WINGDIPAPI GdipRecordMetafileFileName(GDIPCONST WCHAR* fileName,
     (*metafile)->unit = UnitPixel;
     (*metafile)->metafile_type = (MetafileType)type;
     (*metafile)->record_dc = record_dc;
+    (*metafile)->recorded = TRUE;
     (*metafile)->comment_data = NULL;
     (*metafile)->comment_data_size = 0;
     (*metafile)->comment_data_length = 0;
