@@ -969,6 +969,11 @@ NtUserCallHwndLock(
 
         case HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW:
             TRACE("co_IntSetForegroundWindow 1 0x%p\n", hWnd);
+            if (Window->head.rpdesk != gpdeskInputDesktop)
+            {
+                Ret = FALSE;
+                break;
+            }
             Ret = co_IntSetForegroundWindow(Window);
             TRACE("co_IntSetForegroundWindow 2 0x%p\n", hWnd);
             break;

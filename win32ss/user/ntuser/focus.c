@@ -1703,7 +1703,13 @@ NtUserGetForegroundWindow(VOID)
    TRACE("Enter NtUserGetForegroundWindow\n");
    UserEnterShared();
 
-   Ret = UserGetForegroundWindow();
+   {
+      PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+      if (pti && pti->rpdesk && pti->rpdesk != gpdeskInputDesktop)
+         Ret = NULL;
+      else
+         Ret = UserGetForegroundWindow();
+   }
 
    TRACE("Leave NtUserGetForegroundWindow, ret=%p\n", Ret);
    UserLeave();
