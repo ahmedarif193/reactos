@@ -144,8 +144,41 @@ NTSTATUS WINAPI wow64_NtAdjustGroupsToken( UINT *args )
     TOKEN_GROUPS32 *prev = get_ptr( &args );
     ULONG *retlen = get_ptr( &args );
 
+#ifdef __REACTOS__
+    TOKEN_GROUPS *prev64;
+    ULONG i, size, ret_size = 0, count_off, sid_off;
+    NTSTATUS status;
+
+    if (!prev || !len)
+        return NtAdjustGroupsToken( handle, reset, token_groups_32to64( groups ), len, NULL, retlen );
+
+    size = len * 2 + sizeof(TOKEN_GROUPS);
+    prev64 = Wow64AllocateTemp( size );
+    status = NtAdjustGroupsToken( handle, reset, token_groups_32to64( groups ), size, prev64, &ret_size );
+    if (status == STATUS_SUCCESS || status == STATUS_NOT_ALL_ASSIGNED)
+    {
+        count_off = offsetof( TOKEN_GROUPS, Groups[prev64->GroupCount] );
+        sid_off = offsetof( TOKEN_GROUPS32, Groups[prev64->GroupCount] );
+        ret_size = ret_size - count_off + sid_off;
+        if (len < ret_size)
+        {
+            if (retlen) *retlen = ret_size;
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        prev->GroupCount = prev64->GroupCount;
+        for (i = 0; i < prev64->GroupCount; i++)
+        {
+            prev->Groups[i].Sid = PtrToUlong( prev ) + sid_off + (ULONG)((char *)prev64->Groups[i].Sid - ((char *)prev64 + count_off));
+            prev->Groups[i].Attributes = prev64->Groups[i].Attributes;
+        }
+        memcpy( (char *)prev + sid_off, (char *)prev64 + count_off, ret_size - sid_off );
+    }
+    if (retlen) *retlen = ret_size;
+    return status;
+#else
     FIXME( "%p %d %p %lu %p %p\n", handle, reset, groups, len, prev, retlen );
     return STATUS_NOT_IMPLEMENTED;
+#endif
 }
 
 
@@ -396,6 +429,47 @@ NTSTATUS WINAPI wow64_NtPrivilegeCheck( UINT *args )
 }
 
 
+#ifdef __REACTOS__
+typedef struct
+{
+    ULONG SidCount;
+    ULONG SidLength;
+    ULONG Sids;
+    ULONG RestrictedSidCount;
+    ULONG RestrictedSidLength;
+    ULONG RestrictedSids;
+    ULONG PrivilegeCount;
+    ULONG PrivilegeLength;
+    ULONG Privileges;
+    LUID AuthenticationId;
+} TOKEN_GROUPS_AND_PRIVILEGES32;
+
+C_ASSERT( sizeof(TOKEN_GROUPS_AND_PRIVILEGES32) == 44 );
+
+static ULONG sid_and_attributes_length32( const SID_AND_ATTRIBUTES *attrs, ULONG count )
+{
+    ULONG i, size = count * sizeof(SID_AND_ATTRIBUTES32);
+
+    for (i = 0; i < count; i++) size += (RtlLengthSid( attrs[i].Sid ) + 3) & ~3;
+    return size;
+}
+
+static void put_sid_and_attributes32( SID_AND_ATTRIBUTES32 *attrs32, const SID_AND_ATTRIBUTES *attrs, ULONG count )
+{
+    char *sid32 = (char *)(attrs32 + count);
+    ULONG i, sid_len;
+
+    for (i = 0; i < count; i++)
+    {
+        sid_len = RtlLengthSid( attrs[i].Sid );
+        memcpy( sid32, attrs[i].Sid, sid_len );
+        attrs32[i].Sid = PtrToUlong( sid32 );
+        attrs32[i].Attributes = attrs[i].Attributes;
+        sid32 += (sid_len + 3) & ~3;
+    }
+}
+#endif
+
 /**********************************************************************
  *           wow64_NtQueryInformationToken
  */
@@ -422,8 +496,54 @@ NTSTATUS WINAPI wow64_NtQueryInformationToken( UINT *args )
     case TokenVirtualizationEnabled:  /* ULONG */
     case TokenUIAccess:  /* ULONG */
     case TokenIsAppContainer:  /* ULONG */
+#ifdef __REACTOS__
+    case TokenSource:  /* TOKEN_SOURCE */
+    case TokenSandBoxInert:  /* ULONG */
+    case TokenOrigin:  /* TOKEN_ORIGIN */
+#endif
         /* nothing to map */
         return NtQueryInformationToken( handle, class, info, len, retlen );
+
+#ifdef __REACTOS__
+    case TokenGroupsAndPrivileges:  /* TOKEN_GROUPS_AND_PRIVILEGES */
+    {
+        TOKEN_GROUPS_AND_PRIVILEGES32 *gap32 = info;
+        TOKEN_GROUPS_AND_PRIVILEGES *gap;
+        ULONG sids_len, restricted_len;
+
+        status = NtQueryInformationToken( handle, class, NULL, 0, &ret_size );
+        if (status != STATUS_BUFFER_TOO_SMALL) return status;
+        gap = Wow64AllocateTemp( ret_size );
+        status = NtQueryInformationToken( handle, class, gap, ret_size, &ret_size );
+        if (status) return status;
+        sids_len = sid_and_attributes_length32( gap->Sids, gap->SidCount );
+        restricted_len = sid_and_attributes_length32( gap->RestrictedSids, gap->RestrictedSidCount );
+        ret_size = sizeof(*gap32) + sids_len + restricted_len + gap->PrivilegeLength;
+        if (len >= ret_size)
+        {
+            char *ptr = (char *)(gap32 + 1);
+
+            gap32->SidCount = gap->SidCount;
+            gap32->SidLength = sids_len;
+            gap32->Sids = PtrToUlong( ptr );
+            put_sid_and_attributes32( (SID_AND_ATTRIBUTES32 *)ptr, gap->Sids, gap->SidCount );
+            ptr += sids_len;
+            gap32->RestrictedSidCount = gap->RestrictedSidCount;
+            gap32->RestrictedSidLength = restricted_len;
+            gap32->RestrictedSids = gap->RestrictedSidCount ? PtrToUlong( ptr ) : 0;
+            put_sid_and_attributes32( (SID_AND_ATTRIBUTES32 *)ptr, gap->RestrictedSids, gap->RestrictedSidCount );
+            ptr += restricted_len;
+            gap32->PrivilegeCount = gap->PrivilegeCount;
+            gap32->PrivilegeLength = gap->PrivilegeLength;
+            gap32->Privileges = PtrToUlong( ptr );
+            memcpy( ptr, gap->Privileges, gap->PrivilegeLength );
+            gap32->AuthenticationId = gap->AuthenticationId;
+        }
+        else status = STATUS_BUFFER_TOO_SMALL;
+        if (retlen) *retlen = ret_size;
+        return status;
+    }
+#endif
 
     case TokenUser:  /* TOKEN_USER + SID */
     case TokenIntegrityLevel:  /* TOKEN_MANDATORY_LABEL + SID */
@@ -473,6 +593,9 @@ NTSTATUS WINAPI wow64_NtQueryInformationToken( UINT *args )
 
     case TokenGroups:  /* TOKEN_GROUPS */
     case TokenLogonSid:   /* TOKEN_GROUPS */
+#ifdef __REACTOS__
+    case TokenRestrictedSids:  /* TOKEN_GROUPS */
+#endif
     {
         TOKEN_GROUPS32 *groups32 = info;
         TOKEN_GROUPS *groups;
@@ -609,7 +732,28 @@ NTSTATUS WINAPI wow64_NtSetInformationToken( UINT *args )
         else return STATUS_INFO_LENGTH_MISMATCH;
 
     case TokenSessionId:   /* ULONG */
+#ifdef __REACTOS__
+    case TokenOrigin:  /* TOKEN_ORIGIN */
+    case TokenVirtualizationAllowed:  /* ULONG */
+    case TokenVirtualizationEnabled:  /* ULONG */
+    case TokenUIAccess:  /* ULONG */
+    case TokenMandatoryPolicy:  /* TOKEN_MANDATORY_POLICY */
+    case TokenSessionReference:  /* ULONG */
+    case TokenAuditPolicy:  /* TOKEN_AUDIT_POLICY */
+#endif
         return NtSetInformationToken( handle, class, ptr, len );
+
+#ifdef __REACTOS__
+    case TokenOwner:  /* TOKEN_OWNER */
+    case TokenPrimaryGroup:  /* TOKEN_PRIMARY_GROUP */
+        if (len >= sizeof(ULONG))
+        {
+            PSID sid = ULongToPtr( *(ULONG *)ptr );
+
+            return NtSetInformationToken( handle, class, &sid, sizeof(sid) );
+        }
+        return NtSetInformationToken( handle, class, ptr, len );
+#endif
 
     case TokenDefaultDacl:   /* TOKEN_DEFAULT_DACL */
         if (len >= sizeof(TOKEN_DEFAULT_DACL32))
@@ -624,10 +768,11 @@ NTSTATUS WINAPI wow64_NtSetInformationToken( UINT *args )
     default:
 #ifdef __REACTOS__
         FIXME( "wow64_NtSetInformationToken: unsupported class %u\n", class );
+        return STATUS_INVALID_INFO_CLASS;
 #else
         FIXME( "unsupported class %u\n", class );
-#endif
         return STATUS_NOT_IMPLEMENTED;
+#endif
     }
 }
 
