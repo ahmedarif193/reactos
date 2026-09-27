@@ -7,6 +7,8 @@ set(WOW64_I386_AUXILIARY_MODULES ${COMPAT_RUNTIME_AUXILIARY_MODULES})
 set(WOW64_I386_ALIASES ${COMPAT_RUNTIME_ALIASES})
 
 set(WOW64_I386_EXECUTABLES
+    autochk
+    cmd
     glgears
     glmark2
     glmark2_runner
