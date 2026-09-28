@@ -465,6 +465,9 @@ HRESULT DP_HandleMessage( IDirectPlayImpl *This, void *messageBody,
     case DPMSGCMD_ENUMSESSIONSREQUEST:
       /* Reply expected */
       NS_ReplyToEnumSessionsRequest( messageBody, lplpReply, lpdwMsgSize, This );
+#ifdef __REACTOS__
+      if (!*lplpReply) return DPERR_OUTOFMEMORY;
+#endif
       break;
 
     /* Name server needs to handle this request */
@@ -490,6 +493,13 @@ HRESULT DP_HandleMessage( IDirectPlayImpl *This, void *messageBody,
       *lpdwMsgSize = This->dp2->spData.dwSPHeaderSize + sizeof( *lpReply );
 
       *lplpReply = calloc( 1, *lpdwMsgSize );
+#ifdef __REACTOS__
+      if (!*lplpReply)
+      {
+        *lpdwMsgSize = 0;
+        return DPERR_OUTOFMEMORY;
+      }
+#endif
 
       FIXME( "Ignoring dwFlags 0x%08lx in request msg\n",
              lpcMsg->dwFlags );
@@ -1633,7 +1643,17 @@ static HRESULT DP_IF_CreateGroup( IDirectPlayImpl *This, void *lpMsgHdr, DPID *l
     msg.dwCurrentPlayers = 0; /* FIXME: Incorrect? */
     msg.lpData           = lpData;
     msg.dwDataSize       = dwDataSize;
+#ifdef __REACTOS__
+    if (lpGroupName)
+      msg.dpnName = *lpGroupName;
+    else
+    {
+      memset(&msg.dpnName, 0, sizeof(msg.dpnName));
+      msg.dpnName.dwSize = sizeof(msg.dpnName);
+    }
+#else
     msg.dpnName          = *lpGroupName;
+#endif
     msg.dpIdParent       = DPID_NOPARENT_GROUP;
     msg.dwFlags          = DPMSG_CREATEGROUP_DWFLAGS( dwFlags );
 
