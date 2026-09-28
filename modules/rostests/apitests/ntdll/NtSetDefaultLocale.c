@@ -9,7 +9,10 @@
 
 START_TEST(NtSetDefaultLocale)
 {
-    NTSTATUS Status, ExpectedStatus;
+    NTSTATUS Status, ExpectedStatus, QueryStatus;
+    LCID OriginalLocale;
+
+    QueryStatus = NtQueryDefaultLocale(TRUE, &OriginalLocale);
 
     if (GetNTVersion() >= _WIN32_WINNT_WIN10)
     {
@@ -62,4 +65,7 @@ START_TEST(NtSetDefaultLocale)
 
     Status = NtSetDefaultLocale(TRUE, 0x1000);
     ok_ntstatus(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+
+    if (NT_SUCCESS(QueryStatus))
+        NtSetDefaultLocale(TRUE, OriginalLocale);
 }
