@@ -42,6 +42,11 @@ convert_path(const char* origpath)
     int i;
 
     newpath = strdup(origpath);
+    if (!newpath)
+    {
+        fprintf(stderr, "Out of memory while converting path\n");
+        exit(1);
+    }
 
     i = 0;
     while (newpath[i] != 0)
@@ -75,7 +80,7 @@ LoadFile(const char* pszFileName, size_t* pFileSize)
 {
     FILE* file;
     void* pFileData = NULL;
-    int iFileSize;
+    long iFileSize;
 
     trace("Loading file...");
 
@@ -86,13 +91,17 @@ LoadFile(const char* pszFileName, size_t* pFileSize)
         return NULL;
     }
 
-    fseek(file, 0L, SEEK_END);
-    iFileSize = ftell(file);
-    fseek(file, 0L, SEEK_SET);
+    if (fseek(file, 0L, SEEK_END) != 0 ||
+        (iFileSize = ftell(file)) < 0 ||
+        fseek(file, 0L, SEEK_SET) != 0)
+    {
+        fclose(file);
+        return NULL;
+    }
     *pFileSize = iFileSize;
-    trace("ok. Size is %d\n", iFileSize);
+    trace("ok. Size is %ld\n", iFileSize);
 
-    pFileData = malloc(iFileSize + 1);
+    pFileData = malloc((size_t)iFileSize + 1);
 
     if (pFileData != NULL)
     {
@@ -378,7 +387,7 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
     if (!pInputData)
     {
         error("Could not load input file %s\n", pszInFile);
-        return -1;
+        goto Failure;
     }
 
     /* Zero terminate the file */
@@ -416,7 +425,7 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
             if (iIfLevel <= 0)
             {
                 error("Parse error: $endif without $if in %s:%d\n", pszInFile, iLine);
-                return -1;
+                goto Failure;
             }
             if (iCopyLevel == iIfLevel)
             {
@@ -450,7 +459,7 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
             {
                 error("Parse error: expected '(' at %s:%d\n",
                       pszInFile, iLine);
-                return -1;
+                goto Failure;
             }
 
             pchName = GetNextChar(p1 + 1);
@@ -477,7 +486,7 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
             {
                 error("Failed to allocate %u bytes\n",
                       sizeof(DEFINE) + cchName + cchValue + 2);
-                return -1;
+                goto Failure;
             }
 
             pDefine->pszName = pDefine->achBuffer;
@@ -508,7 +517,7 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
             {
                 error("Parse error: expected ')' at %s:%d\n",
                       pszInFile, iLine);
-                return -1;
+                goto Failure;
             }
         }
 
@@ -534,7 +543,7 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
             else if (val == -1)
             {
                 /* Parse error */
-                return -1;
+                goto Failure;
             }
         }
 
@@ -549,10 +558,15 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
             {
                 error("Parse error: expected '(' at %s:%d, found '%c'\n",
                       pszInFile, iLine, *p1);
-                return -1;
+                goto Failure;
             }
             p1++;
             p2 = strchr(p1, ')');
+            if (!p2)
+            {
+                error("Parse error: expected ')' at %s:%d\n", pszInFile, iLine);
+                goto Failure;
+            }
             *p2 = 0;
 
             /* Parse the included file */
@@ -566,7 +580,7 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
 
             if (ret == -1)
             {
-                return -1;
+                goto Failure;
             }
         }
 
@@ -595,6 +609,10 @@ ParseInputFile(const char *pszInFile, FILE *fileOut)
     trace("Done with file.\n\n");
 
     return 0;
+
+Failure:
+    free(pInputData);
+    return -1;
 }
 
 
