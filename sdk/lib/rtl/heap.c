@@ -3184,11 +3184,42 @@ RtlReAllocateHeap(HANDLE HeapPtr,
  * @unimplemented
  */
 ULONG NTAPI
-RtlCompactHeap(HANDLE Heap,
+RtlCompactHeap(HANDLE HeapPtr,
 		ULONG Flags)
 {
-   UNIMPLEMENTED;
-   return 0;
+    PHEAP Heap = (PHEAP)HeapPtr;
+    PLIST_ENTRY Entry;
+    PHEAP_FREE_ENTRY FreeEntry;
+    SIZE_T Largest = 0;
+    BOOLEAN HeapLocked = FALSE;
+
+    if (!Heap ||
+        (Heap->ForceFlags & HEAP_FLAG_PAGE_ALLOCS) ||
+        Heap->Signature != HEAP_SIGNATURE)
+    {
+        return 0;
+    }
+
+    Flags |= Heap->ForceFlags;
+
+    if (!(Flags & HEAP_NO_SERIALIZE))
+    {
+        RtlEnterHeapLock(Heap->LockVariable, TRUE);
+        HeapLocked = TRUE;
+    }
+
+    for (Entry = Heap->FreeLists.Flink; Entry != &Heap->FreeLists; Entry = Entry->Flink)
+    {
+        FreeEntry = CONTAINING_RECORD(Entry, HEAP_FREE_ENTRY, FreeList);
+        if (FreeEntry->Size > Largest)
+            Largest = FreeEntry->Size;
+    }
+
+    if (HeapLocked)
+        RtlLeaveHeapLock(Heap->LockVariable);
+
+    Largest <<= HEAP_ENTRY_SHIFT;
+    return (ULONG)min(Largest, (SIZE_T)MAXULONG);
 }
 
 

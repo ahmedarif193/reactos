@@ -718,7 +718,7 @@ RtlpWorkerThreadProc(IN PVOID Parameter)
             _SEH2_TRY
             {
                 /* Call the APC routine */
-                ApcRoutine(NULL,
+                ApcRoutine((PVOID)(ULONG_PTR)RtlNtStatusToDosError(IoStatusBlock.Status),
                            (PVOID)IoStatusBlock.Information,
                            SystemArgument2);
             }
@@ -934,6 +934,17 @@ RtlSetIoCompletionCallback(IN HANDLE FileHandle,
                                   &FileCompletionInfo,
                                   sizeof(FileCompletionInfo),
                                   FileCompletionInformation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = RtlEnterCriticalSection(&ThreadPoolLock);
+    if (NT_SUCCESS(Status))
+    {
+        if (*((volatile LONG*)&ThreadPoolWorkerThreads) == 0)
+            Status = RtlpStartWorkerThread(RtlpWorkerThreadProc);
+
+        RtlLeaveCriticalSection(&ThreadPoolLock);
+    }
 
     return Status;
 }

@@ -2036,19 +2036,36 @@ RtlGetFullPathName_U(
 {
     RTL_PATH_TYPE PathType;
     UNICODE_STRING FileNameString;
+    PWSTR FileNameCopy = NULL;
+    ULONG Length;
     NTSTATUS Status;
 
     Status = RtlInitUnicodeStringEx(&FileNameString, FileName);
     if (!NT_SUCCESS(Status)) return 0;
 
+    if (Buffer && Size &&
+        (ULONG_PTR)FileName < (ULONG_PTR)Buffer + Size &&
+        (ULONG_PTR)Buffer < (ULONG_PTR)FileName + FileNameString.MaximumLength)
+    {
+        FileNameCopy = RtlpAllocateStringMemory(FileNameString.MaximumLength, TAG_USTR);
+        if (!FileNameCopy) return 0;
+        RtlCopyMemory(FileNameCopy, FileName, FileNameString.MaximumLength);
+        FileNameString.Buffer = FileNameCopy;
+    }
+
     /* Call the internal function directly to get the ULONG result */
-    return RtlGetFullPathName_Ustr(
+    Length = RtlGetFullPathName_Ustr(
         &FileNameString,
         Size,
         Buffer,
         (PCWSTR*)ShortName,
         NULL,
         &PathType);
+
+    if (FileNameCopy)
+        RtlpFreeStringMemory(FileNameCopy, TAG_USTR);
+
+    return Length;
 }
 
 /*

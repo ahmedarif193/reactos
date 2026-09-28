@@ -198,6 +198,10 @@ RtlpWaitForCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
             /* One more try */
             LastChance = TRUE;
         }
+        else if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
         else
         {
             /* If we are here, everything went fine */
@@ -524,6 +528,7 @@ RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
     ULONG SpinCount;
     LONG OldValue;
     LONG NewValue;
+    NTSTATUS Status;
     BOOLEAN Woken = FALSE;
 
     if (CriticalSection->OwningThread == Thread)
@@ -581,7 +586,9 @@ RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
         if (InterlockedCompareExchange(&CriticalSection->LockCount, NewValue, OldValue) != OldValue)
             continue;
 
-        RtlpWaitForCriticalSection(CriticalSection);
+        Status = RtlpWaitForCriticalSection(CriticalSection);
+        if (!NT_SUCCESS(Status))
+            RtlRaiseStatus(Status);
         Woken = TRUE;
     }
 

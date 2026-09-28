@@ -748,7 +748,7 @@ RtlLcidToLocaleName(
     }
 
     /* Check if the LocaleName buffer is valid */
-    if ((LocaleName == NULL) || (LocaleName->Buffer == NULL))
+    if ((LocaleName == NULL) || (!AllocateDestinationString && (LocaleName->Buffer == NULL)))
     {
         DPRINT1("RtlLcidToLocaleName: Invalid buffer\n");
         return STATUS_INVALID_PARAMETER_2;
@@ -794,6 +794,16 @@ RtlLcidToLocaleName(
     {
         DPRINT("RtlLcidToLocaleName: LCID 0x%lx not found\n", Lcid);
         return STATUS_INVALID_PARAMETER_1;
+    }
+
+    if (AllocateDestinationString)
+    {
+        SIZE_T Bytes = (strlen(RtlpLocaleTable[LocaleIndex].Locale) + 1) * sizeof(WCHAR);
+
+        LocaleName->Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Bytes);
+        if (LocaleName->Buffer == NULL)
+            return STATUS_NO_MEMORY;
+        LocaleName->MaximumLength = (USHORT)Bytes;
     }
 
     /* Copy the locale name to the buffer */
@@ -936,8 +946,18 @@ RtlIsValidLocaleName(
     _In_ LPCWSTR LocaleName,
     _In_ ULONG Flags)
 {
-    UNIMPLEMENTED;
-    return TRUE;
+    UNICODE_STRING LocaleNameString;
+    LCID Lcid;
+
+    if (!LocaleName)
+        return FALSE;
+    if (!LocaleName[0])
+        return TRUE;
+
+    RtlInitUnicodeString(&LocaleNameString, LocaleName);
+    return NT_SUCCESS(RtlpLocaleNameToLcidInternal(&LocaleNameString,
+                                                   &Lcid,
+                                                   Flags & RTL_LOCALE_ALLOW_NEUTRAL_NAMES));
 }
 
 NTSTATUS

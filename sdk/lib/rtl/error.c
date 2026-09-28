@@ -32,7 +32,7 @@ struct error_table
     const DWORD *table;
 };
 
-static const struct error_table error_table[24];
+static const struct error_table error_table[25];
 
 /**************************************************************************
  *           RtlNtStatusToDosErrorNoTeb (NTDLL.@)
@@ -1554,6 +1554,11 @@ static const DWORD table_c0000604[] =
     ERROR_DYNAMIC_CODE_BLOCKED            /* c0000604 (STATUS_DYNAMIC_CODE_BLOCKED) */
 };
 
+static const DWORD table_c0000717[] =
+{
+    ERROR_NO_UNICODE_TRANSLATION          /* c0000717 (STATUS_NO_UNICODE_TRANSLATION) */
+};
+
 static const struct error_table error_table[] =
 {
     { 0x00000102, 0x00000122, table_00000102 },
@@ -1573,6 +1578,7 @@ static const struct error_table error_table[] =
     { 0xc0000446, 0xc0000447, table_c0000446 },
     { 0xc000049d, 0xc000049e, table_c000049d },
     { 0xc0000604, 0xc0000605, table_c0000604 },
+    { 0xc0000717, 0xc0000718, table_c0000717 },
     { 0xc0020001, 0xc0020064, table_c0020001 },
     { 0xc0030001, 0xc003000d, table_c0030001 },
     { 0xc0030059, 0xc0030062, table_c0030059 },

@@ -161,8 +161,17 @@ RtlFlsGetValue(
 {
     PRTL_FLS_DATA FlsData = NtCurrentTeb()->FlsData;
 
-    if (!Index || Index >= RTL_FLS_MAXIMUM_AVAILABLE || !FlsData)
+    if (!Index || Index >= RTL_FLS_MAXIMUM_AVAILABLE)
         return STATUS_INVALID_PARAMETER;
+
+    if (!FlsData)
+    {
+        if (!RtlAreBitsSet(RtlpGetFlsBitmap(NtCurrentPeb()), Index, 1))
+            return STATUS_INVALID_PARAMETER;
+
+        *Data = NULL;
+        return STATUS_SUCCESS;
+    }
 
     *Data = FlsData->Data[Index];
     return STATUS_SUCCESS;
@@ -360,6 +369,53 @@ RtlpFreeUserStack(IN HANDLE ProcessHandle,
 }
 
 /* FUNCTIONS ***************************************************************/
+
+NTSTATUS
+NTAPI
+RtlCreateUserStack(
+    _In_opt_ SIZE_T CommittedStackSize,
+    _In_opt_ SIZE_T MaximumStackSize,
+    _In_opt_ ULONG ZeroBits,
+    _In_ SIZE_T CommitAlignment,
+    _In_ SIZE_T ReserveAlignment,
+    _Out_ PINITIAL_TEB InitialTeb)
+{
+    PIMAGE_NT_HEADERS Headers;
+
+    if (!CommitAlignment || !ReserveAlignment)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!CommittedStackSize || !MaximumStackSize)
+    {
+        Headers = RtlImageNtHeader(NtCurrentPeb()->ImageBaseAddress);
+        if (!Headers)
+            return STATUS_INVALID_IMAGE_FORMAT;
+
+        if (!MaximumStackSize)
+            MaximumStackSize = Headers->OptionalHeader.SizeOfStackReserve;
+        if (!CommittedStackSize)
+            CommittedStackSize = Headers->OptionalHeader.SizeOfStackCommit;
+    }
+
+    MaximumStackSize = ROUND_UP(MaximumStackSize, ReserveAlignment);
+    CommittedStackSize = ROUND_UP(CommittedStackSize, CommitAlignment);
+    if (MaximumStackSize < CommittedStackSize)
+        MaximumStackSize = CommittedStackSize;
+    if (MaximumStackSize < 0x100000)
+        MaximumStackSize = 0x100000;
+
+    return RtlpCreateUserStack(NtCurrentProcess(), MaximumStackSize, CommittedStackSize, ZeroBits, InitialTeb);
+}
+
+VOID
+NTAPI
+RtlFreeUserStack(
+    _In_ PVOID AllocationBase)
+{
+    SIZE_T Size = 0;
+
+    ZwFreeVirtualMemory(NtCurrentProcess(), &AllocationBase, &Size, MEM_RELEASE);
+}
 
 
 /*

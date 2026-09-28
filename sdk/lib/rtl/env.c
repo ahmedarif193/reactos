@@ -112,6 +112,9 @@ RtlExpandEnvironmentStrings(
     DPRINT("RtlExpandEnvironmentStrings(%p, %S, %Iu, %p, %Iu, %p)\n",
            Environment, SourceBuffer, SourceLength, Destination, DestMax, Length);
 
+    if (!Destination)
+        DestMax = 0;
+
     while (SourceLength)
     {
         if (*SourceBuffer != L'%')

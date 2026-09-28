@@ -27,9 +27,9 @@ RtlValidSid(IN PSID Sid_)
     _SEH2_TRY
     {
         /* Validate the revision and subauthority count */
-        if ((Sid) &&
-            (((Sid->Revision & 0xF) != SID_REVISION) ||
-             (Sid->SubAuthorityCount > SID_MAX_SUB_AUTHORITIES)))
+        if (!Sid ||
+            ((Sid->Revision & 0xF) != SID_REVISION) ||
+            (Sid->SubAuthorityCount > SID_MAX_SUB_AUTHORITIES))
         {
             /* It's not, fail */
             _SEH2_YIELD(return FALSE);
