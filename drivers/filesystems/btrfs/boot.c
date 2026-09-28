@@ -198,6 +198,7 @@ static void mountmgr_notification(BTRFS_UUID* uuid) {
     mmtn = ExAllocatePoolWithTag(NonPagedPool, mmtnlen, ALLOC_TAG);
     if (!mmtn) {
         ERR("out of memory\n");
+        ObDereferenceObject(FileObject);
         return;
     }
 
@@ -220,6 +221,7 @@ static void mountmgr_notification(BTRFS_UUID* uuid) {
     *w = L'}';
 
     Status = dev_ioctl(mountmgr, IOCTL_MOUNTMGR_VOLUME_ARRIVAL_NOTIFICATION, mmtn, mmtnlen, NULL, 0, false, NULL);
+    ObDereferenceObject(FileObject);
     if (!NT_SUCCESS(Status)) {
         ERR("IOCTL_MOUNTMGR_VOLUME_ARRIVAL_NOTIFICATION returned %08lx\n", Status);
         ExFreePool(mmtn);

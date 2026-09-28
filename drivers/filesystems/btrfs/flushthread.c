@@ -4603,12 +4603,21 @@ static NTSTATUS insert_tree_item_batch(LIST_ENTRY* batchlist, device_extension* 
         bii->num_items++;
 
 end:
-        if (bii->num_items > BATCH_ITEM_LIMIT)
-            return split_batch_item_list(bii);
+        if (bii->num_items > BATCH_ITEM_LIMIT) {
+            NTSTATUS Status = split_batch_item_list(bii);
+
+            if (!NT_SUCCESS(Status)) {
+                RemoveEntryList(&bi->list_entry);
+                bii->num_items--;
+                ExFreeToPagedLookasideList(&Vcb->batch_item_lookaside, bi);
+            }
+            return Status;
+        }
 
         return STATUS_SUCCESS;
     }
 
+    ExFreeToPagedLookasideList(&Vcb->batch_item_lookaside, bi);
     return STATUS_INTERNAL_ERROR;
 }
 #ifdef _MSC_VER
@@ -6568,6 +6577,7 @@ static NTSTATUS flush_fileref(file_ref* fileref, LIST_ENTRY* batchlist, PIRP Irp
         di2 = ExAllocatePoolWithTag(PagedPool, disize, ALLOC_TAG);
         if (!di2) {
             ERR("out of memory\n");
+            ExFreePool(di);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
@@ -6577,6 +6587,8 @@ static NTSTATUS flush_fileref(file_ref* fileref, LIST_ENTRY* batchlist, PIRP Irp
                                         fileref->dc->index, di, disize, Batch_Insert);
         if (!NT_SUCCESS(Status)) {
             ERR("insert_tree_item_batch returned %08lx\n", Status);
+            ExFreePool(di);
+            ExFreePool(di2);
             return Status;
         }
 
@@ -6584,6 +6596,7 @@ static NTSTATUS flush_fileref(file_ref* fileref, LIST_ENTRY* batchlist, PIRP Irp
                                         di2, disize, Batch_DirItem);
         if (!NT_SUCCESS(Status)) {
             ERR("insert_tree_item_batch returned %08lx\n", Status);
+            ExFreePool(di2);
             return Status;
         }
 
@@ -7075,12 +7088,14 @@ static NTSTATUS flush_subvol(device_extension* Vcb, root* r, PIRP Irp) {
         Status = delete_tree_item(Vcb, &tp);
         if (!NT_SUCCESS(Status)) {
             ERR("delete_tree_item returned %08lx\n", Status);
+            ExFreePool(ri);
             return Status;
         }
 
         Status = insert_tree_item(Vcb, Vcb->root_root, tp.item->key.obj_id, tp.item->key.obj_type, tp.item->key.offset, ri, sizeof(ROOT_ITEM), NULL, Irp);
         if (!NT_SUCCESS(Status)) {
             ERR("insert_tree_item returned %08lx\n", Status);
+            ExFreePool(ri);
             return Status;
         }
     }

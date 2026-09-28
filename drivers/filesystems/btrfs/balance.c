@@ -1332,6 +1332,7 @@ static NTSTATUS add_data_reloc(_Requires_exclusive_lock_held_(_Curr_->tree_lock)
     dr->size = tp->item->key.offset;
     dr->ei = (EXTENT_ITEM*)tp->item->data;
     InitializeListHead(&dr->refs);
+    InsertTailList(items, &dr->list_entry);
 
     Status = delete_tree_item(Vcb, tp);
     if (!NT_SUCCESS(Status)) {
@@ -1471,8 +1472,6 @@ static NTSTATUS add_data_reloc(_Requires_exclusive_lock_held_(_Curr_->tree_lock)
                 break;
         }
     }
-
-    InsertTailList(items, &dr->list_entry);
 
     return STATUS_SUCCESS;
 }
