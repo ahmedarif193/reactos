@@ -2581,7 +2581,13 @@ NTSTATUS FileRecord::SetFileValidDataLength(_In_ AttributeType AttrType, _In_opt
     AttributeOwner = GetAttributeOwner(TargetAttribute);
     if (!AttributeOwner)
         return STATUS_FILE_CORRUPT_ERROR;
-    if (!TargetAttribute->IsNonResident || TargetAttribute->Flags != 0 || NewValidDataLength > TargetAttribute->NonResident.DataSize)
+    if (!TargetAttribute->IsNonResident)
+    {
+        return NewValidDataLength == TargetAttribute->Resident.DataLength
+            ? STATUS_SUCCESS
+            : STATUS_INVALID_PARAMETER;
+    }
+    if (TargetAttribute->Flags != 0 || NewValidDataLength > TargetAttribute->NonResident.DataSize)
     {
         return STATUS_INVALID_PARAMETER;
     }

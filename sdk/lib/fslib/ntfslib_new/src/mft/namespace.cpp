@@ -1517,3 +1517,87 @@ Done:
     delete OldParent;
     return Status;
 }
+
+NTSTATUS
+MasterFileTable::GetPathFromFileReference(
+    _In_ ULONGLONG FileReference,
+    _Out_ PWCHAR Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG PathLength)
+{
+    ULONGLONG Current = FileReference & 0x0000FFFFFFFFFFFFULL;
+    USHORT Sequence = (USHORT)(FileReference >> 48);
+    PFileRecord File = NULL;
+    ULONG Position = BufferLength;
+    ULONG Depth = 0;
+    NTSTATUS Status;
+
+    *PathLength = 0;
+    if (BufferLength < 2)
+        return STATUS_BUFFER_TOO_SMALL;
+    if (Current > MAXULONG)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = GetFileRecord((ULONG)Current, &File);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_PARAMETER;
+    if (!(File->Header->Flags & FR_IN_USE) ||
+        File->Header->BaseFileRecord != 0 ||
+        (Sequence != 0 && File->Header->SequenceNumber != Sequence))
+    {
+        delete File;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    while (Current != _Root)
+    {
+        PAttribute Attribute;
+        PFileNameEx FileName;
+        PFileNameEx Chosen = NULL;
+        ULONG Offset = 0;
+        ULONGLONG Parent;
+
+        for (;;)
+        {
+            Status = EnumerateFileNames(File, &Offset, &Attribute, &FileName);
+            if (!NT_SUCCESS(Status) || !FileName)
+                break;
+            if (FileName->NameType != NAME_TYPE_DOS)
+            {
+                Chosen = FileName;
+                break;
+            }
+        }
+        if (!Chosen)
+        {
+            delete File;
+            return NT_SUCCESS(Status) ? STATUS_FILE_CORRUPT_ERROR : Status;
+        }
+        if (Position < (ULONG)Chosen->NameLength + 1)
+        {
+            delete File;
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        Position -= Chosen->NameLength;
+        RtlCopyMemory(&Buffer[Position], Chosen->Name, Chosen->NameLength * sizeof(WCHAR));
+        Buffer[--Position] = L'\\';
+
+        Parent = Chosen->ParentFileReference & 0x0000FFFFFFFFFFFFULL;
+        delete File;
+        File = NULL;
+        if (++Depth > 4096 || Parent > MAXULONG)
+            return STATUS_FILE_CORRUPT_ERROR;
+        Status = GetFileRecord((ULONG)Parent, &File);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Current = Parent;
+    }
+    delete File;
+
+    if (Position == BufferLength)
+        Buffer[--Position] = L'\\';
+
+    RtlMoveMemory(Buffer, &Buffer[Position], (BufferLength - Position) * sizeof(WCHAR));
+    *PathLength = BufferLength - Position;
+    return STATUS_SUCCESS;
+}

@@ -279,6 +279,65 @@ NtfsTryDirectRead(
     return NtfsSubmitDirectRead(VolCB, Irp, DiskOffset, Length);
 }
 
+#define NTFS_POSTED_READ ((PVOID)(ULONG_PTR)0x4E524450)
+
+static IO_WORKITEM_ROUTINE NtfsPostedReadWorker;
+
+static
+VOID
+NTAPI
+NtfsPostedReadWorker(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID Context)
+{
+    PIRP Irp = (PIRP)Context;
+    PIO_WORKITEM WorkItem = (PIO_WORKITEM)Irp->Tail.Overlay.DriverContext[1];
+
+    Irp->Tail.Overlay.DriverContext[1] = NULL;
+    (VOID)NtfsFsdRead(DeviceObject, Irp);
+    IoFreeWorkItem(WorkItem);
+}
+
+static
+BOOLEAN
+NtfsPostAsyncRead(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    PFileContextBlock FileCB;
+    PIO_WORKITEM WorkItem;
+
+    if (VolumeDeviceObject == NtfsDiskFileSystemDeviceObject ||
+        Irp->Tail.Overlay.DriverContext[0] == NTFS_POSTED_READ ||
+        BooleanFlagOn(Irp->Flags, IRP_PAGING_IO) ||
+        IrpSp->MinorFunction != IRP_MN_NORMAL ||
+        IrpSp->Parameters.Read.Length == 0 ||
+        !IrpSp->FileObject ||
+        !(BooleanFlagOn(Irp->Flags, IRP_NOCACHE) ||
+          BooleanFlagOn(IrpSp->FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING)) ||
+        IoIsOperationSynchronous(Irp))
+    {
+        return FALSE;
+    }
+
+    FileCB = NtfsGetFileContext(IrpSp->FileObject);
+    if (!FileCB || FileCB->IsVolumeOpen || !FileCB->FileRec)
+        return FALSE;
+    if (!NT_SUCCESS(NtfsLockReadBuffer(Irp, IrpSp->Parameters.Read.Length)))
+        return FALSE;
+
+    WorkItem = IoAllocateWorkItem(VolumeDeviceObject);
+    if (!WorkItem)
+        return FALSE;
+
+    Irp->Tail.Overlay.DriverContext[0] = NTFS_POSTED_READ;
+    Irp->Tail.Overlay.DriverContext[1] = WorkItem;
+    IoMarkIrpPending(Irp);
+    IoQueueWorkItem(WorkItem, NtfsPostedReadWorker, DelayedWorkQueue, Irp);
+    return TRUE;
+}
+
 /* FUNCTIONS ****************************************************************/
 _Function_class_(IRP_MJ_READ)
 _Function_class_(DRIVER_DISPATCH)
@@ -289,6 +348,8 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 {
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
+    if (NtfsPostAsyncRead(VolumeDeviceObject, Irp))
+        return STATUS_PENDING;
     /* Overview:
      * Handles read requests.
      * See: https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/irp-mj-read

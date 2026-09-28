@@ -193,6 +193,61 @@ NtfsNormalizeRelatedName(
 
 static
 NTSTATUS
+NtfsResolveFileIdName(
+    _In_ PVolumeContextBlock VolCB,
+    _Inout_ PFILE_OBJECT FileObject)
+{
+    ULONGLONG Reference;
+    PWCHAR Scratch;
+    PWCHAR NewBuffer;
+    ULONG ScratchLength = (MAXUSHORT - sizeof(WCHAR)) / sizeof(WCHAR);
+    ULONG PathLength = 0;
+    NTSTATUS Status;
+
+    if (FileObject->FileName.Length != sizeof(ULONGLONG) || !FileObject->FileName.Buffer)
+        return STATUS_INVALID_PARAMETER;
+    if (!VolCB->DiskVolume)
+        return STATUS_VOLUME_DISMOUNTED;
+    RtlCopyMemory(&Reference, FileObject->FileName.Buffer, sizeof(Reference));
+
+    Scratch = ExAllocatePoolWithTag(PagedPool, ScratchLength * sizeof(WCHAR), TAG_NTFS);
+    if (!Scratch)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsMasterFileTableGetPathFromFileReference(NtfsVolumeGetMft(VolCB->DiskVolume),
+                                                         Reference,
+                                                         Scratch,
+                                                         ScratchLength,
+                                                         &PathLength);
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Scratch, TAG_NTFS);
+        return Status == STATUS_BUFFER_TOO_SMALL ? STATUS_NAME_TOO_LONG : Status;
+    }
+
+    NewBuffer = ExAllocatePoolWithTag(PagedPool, (PathLength + 1) * sizeof(WCHAR), TAG_NTFS);
+    if (!NewBuffer)
+    {
+        ExFreePoolWithTag(Scratch, TAG_NTFS);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlCopyMemory(NewBuffer, Scratch, PathLength * sizeof(WCHAR));
+    NewBuffer[PathLength] = UNICODE_NULL;
+    ExFreePoolWithTag(Scratch, TAG_NTFS);
+
+    ExFreePoolWithTag(FileObject->FileName.Buffer, 0);
+    FileObject->FileName.Buffer = NewBuffer;
+    FileObject->FileName.Length = (USHORT)(PathLength * sizeof(WCHAR));
+    FileObject->FileName.MaximumLength = (USHORT)((PathLength + 1) * sizeof(WCHAR));
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 NtfsValidateCreateName(
     _In_ PUNICODE_STRING Name)
 {
@@ -200,6 +255,7 @@ NtfsValidateCreateName(
     ULONG LeadingSeparators = 0;
     ULONG ComponentStart;
     ULONG Index;
+    BOOLEAN InStream;
 
     if (!Name->Length)
         return STATUS_SUCCESS;
@@ -213,12 +269,24 @@ NtfsValidateCreateName(
         return STATUS_OBJECT_NAME_INVALID;
 
     ComponentStart = LeadingSeparators;
+    InStream = FALSE;
     for (Index = LeadingSeparators; Index < CharacterCount; Index++)
     {
         ULONG ComponentLength;
+        WCHAR Character = Name->Buffer[Index];
 
-        if (Name->Buffer[Index] != L'\\')
+        if (Character != L'\\')
+        {
+            if (Character == L':')
+                InStream = TRUE;
+            else if (!InStream &&
+                     (Character < 0x20 || Character == L'/' || Character == L'|' ||
+                      FsRtlIsUnicodeCharacterWild(Character)))
+                return STATUS_OBJECT_NAME_INVALID;
             continue;
+        }
+        if (InStream)
+            return STATUS_OBJECT_NAME_INVALID;
         if (Index == ComponentStart)
             return STATUS_OBJECT_NAME_INVALID;
 
@@ -280,6 +348,71 @@ NtfsTranslateNotFoundStatus(
         Status = STATUS_OBJECT_PATH_NOT_FOUND;
     if (ParentFile)
         NtfsFileRecordDestroy(ParentFile);
+    return Status;
+}
+
+static
+NTSTATUS
+NtfsAssignCreateSecurity(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_opt_ PNtfsFileRecord Parent,
+    _In_ PUNICODE_STRING Name,
+    _In_ BOOLEAN IsDirectory,
+    _In_opt_ PACCESS_STATE AccessState,
+    _Out_ PSECURITY_DESCRIPTOR* NewDescriptor)
+{
+    PNtfsFileRecord ParentFile = NULL;
+    PUCHAR ParentDescriptor = NULL;
+    ULONG DescriptorLength = 0;
+    ULONG RemainingNameLength = 0;
+    PWCHAR LeafName;
+    USHORT ParentLength;
+    USHORT LeafLength;
+    NTSTATUS Status;
+
+    *NewDescriptor = NULL;
+    if (!AccessState)
+        return STATUS_SUCCESS;
+
+    if (!Parent &&
+        NtfsSplitParentName(Name, &ParentLength, &LeafName, &LeafLength) &&
+        NT_SUCCESS(NtfsMasterFileTableGetFileRecordFromQueryEx(Mft, Name->Buffer, ParentLength, TRUE, &RemainingNameLength, &ParentFile)) &&
+        RemainingNameLength == 0)
+    {
+        Parent = ParentFile;
+    }
+
+    if (Parent &&
+        NtfsFileRecordReadSecurityDescriptor(Parent, NULL, &DescriptorLength) == STATUS_BUFFER_TOO_SMALL)
+    {
+        ParentDescriptor = (PUCHAR)ExAllocatePoolWithTag(PagedPool, DescriptorLength, TAG_NTFS);
+        if (!ParentDescriptor)
+        {
+            if (ParentFile)
+                NtfsFileRecordDestroy(ParentFile);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        if (!NT_SUCCESS(NtfsFileRecordReadSecurityDescriptor(Parent, ParentDescriptor, &DescriptorLength)))
+        {
+            ExFreePoolWithTag(ParentDescriptor, TAG_NTFS);
+            ParentDescriptor = NULL;
+        }
+    }
+    if (ParentFile)
+        NtfsFileRecordDestroy(ParentFile);
+
+    Status = SeAssignSecurityEx(ParentDescriptor,
+                                AccessState->SecurityDescriptor,
+                                NewDescriptor,
+                                NULL,
+                                IsDirectory,
+                                SEF_DACL_AUTO_INHERIT | SEF_SACL_AUTO_INHERIT,
+                                &AccessState->SubjectSecurityContext,
+                                IoGetFileObjectGenericMapping(),
+                                PagedPool);
+
+    if (ParentDescriptor)
+        ExFreePoolWithTag(ParentDescriptor, TAG_NTFS);
     return Status;
 }
 
@@ -647,6 +780,17 @@ NtfsCompleteFailedCreate(
         }
         if (FileCB->StreamCB)
         {
+            if (FileCB->ShareAccessSet)
+            {
+                PVolumeContextBlock Vol =
+                    (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+
+                ExAcquireFastMutex(&Vol->StreamListMutex);
+                IoRemoveShareAccess(IoGetCurrentIrpStackLocation(Irp)->FileObject,
+                                    &FileCB->StreamCB->ShareAccess);
+                ExReleaseFastMutex(&Vol->StreamListMutex);
+                FileCB->ShareAccessSet = FALSE;
+            }
             NtfsDereferenceStreamContext(
                 (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension,
                 FileCB->StreamCB);
@@ -862,7 +1006,10 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         return NtfsCompleteCreate(Irp, STATUS_INVALID_PARAMETER, 0);
     }
 
-    Status = NtfsNormalizeRelatedName(FileObject);
+    if (IrpSp->Parameters.Create.Options & FILE_OPEN_BY_FILE_ID)
+        Status = NtfsResolveFileIdName(VolCB, FileObject);
+    else
+        Status = NtfsNormalizeRelatedName(FileObject);
     if (!NT_SUCCESS(Status))
         return NtfsCompleteCreate(Irp, Status, 0);
 
@@ -1170,6 +1317,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             case FILE_OVERWRITE_IF:
             {
                 BOOLEAN CreatedWithCachedParent = FALSE;
+                PSECURITY_DESCRIPTOR NewDescriptor = NULL;
                 PWCHAR LeafName;
                 USHORT LeafLength;
                 USHORT ParentLength;
@@ -1180,7 +1328,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 {
                     NtfsReleaseMetadata(VolCB);
                     KeLeaveCriticalRegion();
-                    return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, STATUS_NOT_A_DIRECTORY);
+                    return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, STATUS_OBJECT_NAME_INVALID);
                 }
 
                 /* In these cases, create the file and open it.
@@ -1212,30 +1360,72 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                             ParentLength * sizeof(WCHAR))
                     {
                         CreatedWithCachedParent = TRUE;
-                        Status =
-                            NtfsMasterFileTableCreateFileInDirectory(
-                                Mft,
-                                VolCB->CachedLookupParent,
-                                LeafName,
-                                LeafLength,
-                                !!(IrpSp->Parameters.Create.Options &
-                                   FILE_DIRECTORY_FILE),
-                                FileAttributes,
-                                TRUE,
-                                &CurrentFile);
+                        Status = NtfsAssignCreateSecurity(
+                            Mft,
+                            VolCB->CachedLookupParent,
+                            &FileObject->FileName,
+                            !!(IrpSp->Parameters.Create.Options &
+                               FILE_DIRECTORY_FILE),
+                            IrpSp->Parameters.Create.SecurityContext->AccessState,
+                            &NewDescriptor);
+                        if (NT_SUCCESS(Status))
+                        {
+                            Status =
+                                NtfsMasterFileTableCreateFileInDirectory(
+                                    Mft,
+                                    VolCB->CachedLookupParent,
+                                    LeafName,
+                                    LeafLength,
+                                    !!(IrpSp->Parameters.Create.Options &
+                                       FILE_DIRECTORY_FILE),
+                                    FileAttributes,
+                                    TRUE,
+                                    &CurrentFile);
+                        }
                     }
                 }
                 if (!CreatedWithCachedParent)
                 {
-                    Status = NtfsMasterFileTableCreateFile(
+                    Status = NtfsAssignCreateSecurity(
                         Mft,
-                        FileObject->FileName.Buffer,
-                        FileObject->FileName.Length / sizeof(WCHAR),
+                        NULL,
+                        &FileObject->FileName,
                         !!(IrpSp->Parameters.Create.Options &
                            FILE_DIRECTORY_FILE),
-                        FileAttributes,
-                        &CurrentFile);
+                        IrpSp->Parameters.Create.SecurityContext->AccessState,
+                        &NewDescriptor);
+                    if (NT_SUCCESS(Status))
+                    {
+                        Status = NtfsMasterFileTableCreateFile(
+                            Mft,
+                            FileObject->FileName.Buffer,
+                            FileObject->FileName.Length / sizeof(WCHAR),
+                            !!(IrpSp->Parameters.Create.Options &
+                               FILE_DIRECTORY_FILE),
+                            FileAttributes,
+                            &CurrentFile);
+                    }
                 }
+                if (NT_SUCCESS(Status) && NewDescriptor)
+                {
+                    Status = NtfsFileRecordSetSecurityDescriptor(
+                        CurrentFile,
+                        (const UCHAR*)NewDescriptor,
+                        RtlLengthSecurityDescriptor(NewDescriptor));
+                    if (!NT_SUCCESS(Status))
+                    {
+                        NtfsMasterFileTableDeleteFile(
+                            Mft,
+                            FileObject->FileName.Buffer,
+                            FileObject->FileName.Length / sizeof(WCHAR),
+                            !!(IrpSp->Parameters.Create.Options &
+                               FILE_DIRECTORY_FILE));
+                        NtfsFileRecordDestroy(CurrentFile);
+                        CurrentFile = NULL;
+                    }
+                }
+                if (NewDescriptor)
+                    SeDeassignSecurity(&NewDescriptor);
                 /* The name exists now, so any cached miss for it is wrong. */
                 if (NT_SUCCESS(Status))
                 {
@@ -1409,6 +1599,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     FileCB->FileRec = CurrentFile;
     FileCB->LastAccessStampPending = NtfsShouldStampLastAccess(FileCB);
     FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
+    FileCB->ManageVolumeAccess = SeSinglePrivilegeCheck(SeExports->SeManageVolumePrivilege, Irp->RequestorMode);
     FileCB->DesiredAccess = IrpSp->Parameters.Create.SecurityContext->DesiredAccess;
     if (IrpSp->Parameters.Create.SecurityContext->AccessState)
     {
@@ -1495,6 +1686,77 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                         CachedRecord,
                                         STATUS_INSUFFICIENT_RESOURCES);
     }
+
+    if (!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
+        ((FileCB->DesiredAccess & FILE_WRITE_DATA) ||
+         (IrpSp->Parameters.Create.Options & FILE_DELETE_ON_CLOSE)) &&
+        !MmFlushImageSection(&FileCB->StreamCB->SectionObjectPointers, MmFlushForWrite))
+    {
+        return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                        Irp,
+                                        FileCB,
+                                        CurrentFile,
+                                        CachedRecord,
+                                        (IrpSp->Parameters.Create.Options & FILE_DELETE_ON_CLOSE)
+                                            ? STATUS_CANNOT_DELETE
+                                            : STATUS_SHARING_VIOLATION);
+    }
+
+    if (FileExisted &&
+        !OpenTargetDirectory &&
+        !(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
+        (Disposition == FILE_SUPERSEDE ||
+         Disposition == FILE_OVERWRITE ||
+         Disposition == FILE_OVERWRITE_IF))
+    {
+        LARGE_INTEGER ZeroSize;
+
+        ExAcquireFastMutex(&VolCB->StreamListMutex);
+        Status = IoCheckShareAccess(FileCB->DesiredAccess,
+                                    IrpSp->Parameters.Create.ShareAccess,
+                                    FileObject,
+                                    &FileCB->StreamCB->ShareAccess,
+                                    FALSE);
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+        if (!NT_SUCCESS(Status))
+        {
+            return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                            Irp,
+                                            FileCB,
+                                            CurrentFile,
+                                            CachedRecord,
+                                            Status);
+        }
+
+        ZeroSize.QuadPart = 0;
+        if (!MmCanFileBeTruncated(&FileCB->StreamCB->SectionObjectPointers, &ZeroSize))
+        {
+            return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                            Irp,
+                                            FileCB,
+                                            CurrentFile,
+                                            CachedRecord,
+                                            STATUS_USER_MAPPED_FILE);
+        }
+    }
+
+    ExAcquireFastMutex(&VolCB->StreamListMutex);
+    Status = IoCheckShareAccess(FileCB->DesiredAccess,
+                                IrpSp->Parameters.Create.ShareAccess,
+                                FileObject,
+                                &FileCB->StreamCB->ShareAccess,
+                                TRUE);
+    ExReleaseFastMutex(&VolCB->StreamListMutex);
+    if (!NT_SUCCESS(Status))
+    {
+        return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                        Irp,
+                                        FileCB,
+                                        CurrentFile,
+                                        CachedRecord,
+                                        Status);
+    }
+    FileCB->ShareAccessSet = TRUE;
 
     if (!!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
     {
@@ -1628,6 +1890,15 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         KeEnterCriticalRegion();
         NtfsAcquireMetadata(VolCB);
         Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream, 0);
+        if (NT_SUCCESS(Status) && !FileCB->RequestedStream)
+        {
+            NtfsFileBasicInformation OverwriteBasic;
+
+            RtlZeroMemory(&OverwriteBasic, sizeof(OverwriteBasic));
+            OverwriteBasic.Fields = NTFS_BASIC_INFO_FILE_ATTRIBUTES;
+            OverwriteBasic.FileAttributes = FileAttributes;
+            Status = NtfsFileRecordSetBasicInformation(FileCB->FileRec, &OverwriteBasic);
+        }
         NtfsReleaseMetadata(VolCB);
         KeLeaveCriticalRegion();
         if (!NT_SUCCESS(Status))

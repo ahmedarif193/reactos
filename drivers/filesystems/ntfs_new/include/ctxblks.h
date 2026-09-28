@@ -202,6 +202,7 @@ typedef struct _SCB
     UNICODE_STRING RequestedStream;
     LONG ReferenceCount;
     FILE_LOCK FileLock;
+    SHARE_ACCESS ShareAccess;
     SECTION_OBJECT_POINTERS SectionObjectPointers;
     BOOLEAN SizePending;
     BOOLEAN Deleted;
@@ -222,6 +223,7 @@ typedef struct _FCB
     PNtfsFileRecord FileRec;
     BOOLEAN IsVolumeOpen;
     BOOLEAN CleanupComplete;
+    BOOLEAN ManageVolumeAccess;
     ULONG CreateOptions;
     ACCESS_MASK DesiredAccess;
     ULONG AutomaticTimestampMask;
@@ -246,6 +248,7 @@ typedef struct _FCB
      * the name is removed when the handle goes away. */
     BOOLEAN DeletePending;
     BOOLEAN WriteTimesStamped;
+    BOOLEAN ShareAccessSet;
 
     /* Decided once at open: whether the first data read still owes a
      * last-access refresh. Checking the record on every read cost more

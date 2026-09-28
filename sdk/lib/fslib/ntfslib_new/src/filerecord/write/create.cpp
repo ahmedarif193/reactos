@@ -150,26 +150,39 @@ FileRecord::InitializeNewFileRecord(
     ParentSecurity = Parent->GetAttribute(
         TypeSecurityDescriptor,
         NULL);
+    SecurityLength = 0;
     if (ParentSecurity &&
-        !ParentSecurity->IsNonResident &&
-        NT_SUCCESS(Parent->
-            ValidateResidentAttributeForUpdate(
-                ParentSecurity,
-                &SecurityLength)) &&
+        Parent->ReadSecurityDescriptor(NULL, &SecurityLength) ==
+            STATUS_BUFFER_TOO_SMALL &&
         SecurityLength != 0)
     {
-        Status = InsertResidentAttribute(
-            TypeSecurityDescriptor,
-            NULL,
-            &Attribute);
-        if (!NT_SUCCESS(Status))
+        PUCHAR ParentDescriptor =
+            new(PagedPool, TAG_FILE_RECORD)
+                UCHAR[SecurityLength];
+
+        if (!ParentDescriptor)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Done;
-        Status = ReplaceResidentData(
-            Attribute,
-            reinterpret_cast<PUCHAR>(
-                GetResidentDataPointer(
-                    ParentSecurity)),
-            SecurityLength);
+        }
+        Status = Parent->ReadSecurityDescriptor(
+            ParentDescriptor,
+            &SecurityLength);
+        if (NT_SUCCESS(Status))
+        {
+            Status = InsertResidentAttribute(
+                TypeSecurityDescriptor,
+                NULL,
+                &Attribute);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            Status = ReplaceResidentData(
+                Attribute,
+                ParentDescriptor,
+                SecurityLength);
+        }
+        delete[] ParentDescriptor;
         if (!NT_SUCCESS(Status))
             goto Done;
     }

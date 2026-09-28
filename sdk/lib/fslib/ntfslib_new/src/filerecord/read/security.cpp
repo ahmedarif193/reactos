@@ -927,10 +927,16 @@ FileRecord::ReadSecurityDescriptor(
             StandardAttribute->Length -
                 StandardAttribute->Resident.DataOffset ||
         StandardAttribute->Resident.DataLength <
-            FIELD_OFFSET(StandardInformationEx, SecurityId) +
-                sizeof(ULONG))
+            FIELD_OFFSET(StandardInformationEx, OwnerId))
     {
         return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    if (StandardAttribute->Resident.DataLength <
+        FIELD_OFFSET(StandardInformationEx, SecurityId) +
+            sizeof(ULONG))
+    {
+        return STATUS_NOT_FOUND;
     }
 
     StandardData = reinterpret_cast<PUCHAR>(

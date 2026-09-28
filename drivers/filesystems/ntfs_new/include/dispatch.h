@@ -325,6 +325,13 @@ NTAPI
 NtfsFsdQuerySecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                      _Inout_ PIRP Irp);
 
+_Function_class_(IRP_MJ_SET_SECURITY)
+_Function_class_(DRIVER_DISPATCH)
+NTSTATUS
+NTAPI
+NtfsFsdSetSecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                   _Inout_ PIRP Irp);
+
 // io/vol.cpp
 _Function_class_(IRP_MJ_QUERY_VOLUME_INFORMATION)
 _Function_class_(DRIVER_DISPATCH)

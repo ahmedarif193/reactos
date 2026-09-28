@@ -65,6 +65,7 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
     DriverObject->MajorFunction[IRP_MJ_QUERY_EA]                 = NtfsFsdQueryEa;
     DriverObject->MajorFunction[IRP_MJ_SET_EA]                   = NtfsFsdSetEa;
     DriverObject->MajorFunction[IRP_MJ_QUERY_SECURITY]           = NtfsFsdQuerySecurity;
+    DriverObject->MajorFunction[IRP_MJ_SET_SECURITY]             = NtfsFsdSetSecurity;
     DriverObject->MajorFunction[IRP_MJ_FLUSH_BUFFERS]            = NtfsFsdFlushBuffers;
     DriverObject->MajorFunction[IRP_MJ_QUERY_VOLUME_INFORMATION] = NtfsFsdQueryVolumeInformation;
     DriverObject->MajorFunction[IRP_MJ_SET_VOLUME_INFORMATION]   = NtfsFsdSetVolumeInformation;
@@ -154,6 +155,21 @@ NtfsFsdDeviceControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     // Shamelessly ripped from the old driver.
 
     PVolumeContextBlock DeviceExt;
+    PFILE_OBJECT FileObject;
+    PFileContextBlock FileCB;
+
+    FileObject = IoGetCurrentIrpStackLocation(Irp)->FileObject;
+    if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject && FileObject)
+    {
+        FileCB = NtfsGetFileContext(FileObject);
+        if (!FileCB || !FileCB->IsVolumeOpen)
+        {
+            Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+            Irp->IoStatus.Information = 0;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
 
     DeviceExt = (PVolumeContextBlock)(VolumeDeviceObject->DeviceExtension);
     IoSkipCurrentIrpStackLocation(Irp);
@@ -290,6 +306,14 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                IrpSp->FileObject,
                                IoGetRequestorProcess(Irp),
                                NULL);
+            if (FileCB->ShareAccessSet)
+            {
+                ExAcquireFastMutex(&VolCB->StreamListMutex);
+                IoRemoveShareAccess(IrpSp->FileObject,
+                                    &FileCB->StreamCB->ShareAccess);
+                ExReleaseFastMutex(&VolCB->StreamListMutex);
+                FileCB->ShareAccessSet = FALSE;
+            }
         }
 
         if (FileCB->StreamCB && FileCB->StreamCB->SizePending &&

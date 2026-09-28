@@ -324,3 +324,20 @@ NtfsMasterFileTableCreateHardLink(
 #ifdef __cplusplus
 }
 #endif
+
+NTSTATUS
+NtfsMasterFileTableGetPathFromFileReference(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ ULONGLONG FileReference,
+    _Out_ PWCHAR Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG PathLength)
+{
+    if (!Mft || !Buffer || !PathLength)
+        return STATUS_INVALID_PARAMETER;
+    return reinterpret_cast<PMasterFileTable>(Mft)->
+        GetPathFromFileReference(FileReference,
+                                 Buffer,
+                                 BufferLength,
+                                 PathLength);
+}

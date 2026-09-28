@@ -108,15 +108,16 @@ NtfsFastIoRead(
     _Out_ PIO_STATUS_BLOCK IoStatus,
     _In_ PDEVICE_OBJECT DeviceObject)
 {
-    DBG_UNREFERENCED_PARAMETER(FileObject);
-    DBG_UNREFERENCED_PARAMETER(FileOffset);
-    DBG_UNREFERENCED_PARAMETER(Length);
-    DBG_UNREFERENCED_PARAMETER(Wait);
-    DBG_UNREFERENCED_PARAMETER(LockKey);
-    DBG_UNREFERENCED_PARAMETER(Buffer);
-    DBG_UNREFERENCED_PARAMETER(IoStatus);
-    DBG_UNREFERENCED_PARAMETER(DeviceObject);
-    return FALSE;
+    PFileContextBlock FileCB = NtfsGetFileContext(FileObject);
+
+    if (!FileCB || FileCB->IsVolumeOpen || !FileCB->StreamCB ||
+        FileObject->FsContext != FileCB->StreamCB ||
+        FsRtlAreThereCurrentFileLocks(&FileCB->StreamCB->FileLock))
+    {
+        return FALSE;
+    }
+
+    return FsRtlCopyRead(FileObject, FileOffset, Length, Wait, LockKey, Buffer, IoStatus, DeviceObject);
 }
 
 BOOLEAN

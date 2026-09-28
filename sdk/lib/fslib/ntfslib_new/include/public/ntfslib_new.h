@@ -759,6 +759,14 @@ NtfsMasterFileTableCreateHardLink(
     _In_reads_(NewQueryLength) PWCHAR NewQuery,
     _In_ ULONG NewQueryLength);
 
+NTSTATUS
+NtfsMasterFileTableGetPathFromFileReference(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ ULONGLONG FileReference,
+    _Out_ PWCHAR Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG PathLength);
+
 /* Probe functions */
 NTSTATUS
 NtfsProbePartition(

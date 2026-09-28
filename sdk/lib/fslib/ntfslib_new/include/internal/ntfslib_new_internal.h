@@ -1470,6 +1470,13 @@ public:
         _Inout_ PWCHAR NewQuery);
 
     NTSTATUS
+    GetPathFromFileReference(
+        _In_ ULONGLONG FileReference,
+        _Out_ PWCHAR Buffer,
+        _In_ ULONG BufferLength,
+        _Out_ PULONG PathLength);
+
+    NTSTATUS
     GetFileAttributeFromFileRecordNumber(_In_  AttributeType Type,
                                          _In_  PWSTR Name,
                                          _In_  ULONG FileRecordNumber,
