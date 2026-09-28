@@ -195,6 +195,13 @@ static HRESULT get_default_device_id(EDataFlow direction, AudioDeviceRole role, 
     s = malloc((sizeof(id_fmt_pre) - sizeof(WCHAR)) +
             (sizeof(id_fmt_hash) - sizeof(WCHAR)) +
             (wcslen(devid) + GUID_STR_LEN + 1 /* nul */) * sizeof(WCHAR));
+#ifdef __REACTOS__
+    if (!s)
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+#endif
 
     wcscpy(s, id_fmt_pre);
     wcscat(s, devid);
@@ -211,6 +218,9 @@ static HRESULT get_default_device_id(EDataFlow direction, AudioDeviceRole role, 
 
     free(s);
 
+#ifdef __REACTOS__
+done:
+#endif
     CoTaskMemFree(devid);
     IMMDevice_Release(dev);
     IMMDeviceEnumerator_Release(devenum);
