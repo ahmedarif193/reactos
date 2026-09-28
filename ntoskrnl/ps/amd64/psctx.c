@@ -67,3 +67,28 @@ PspGetOrSetContextKernelRoutine(
 }
 
 /* EOF */
+
+VOID
+NTAPI
+PsArchInitializeUserThreadContext(
+    _Out_ PCONTEXT Context,
+    _In_ PVOID ThreadStart,
+    _In_ PVOID StartRoutine,
+    _In_opt_ PVOID Argument,
+    _In_ PVOID StackBase)
+{
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->ContextFlags = CONTEXT_FULL;
+    Context->Rip = (ULONG64)ThreadStart;
+    Context->Rcx = (ULONG64)StartRoutine;
+    Context->Rdx = (ULONG64)Argument;
+    Context->Rsp = (((ULONG64)StackBase - 6 * sizeof(PVOID)) & ~15ULL) - 8;
+    Context->EFlags = EFLAGS_INTERRUPT_MASK;
+    Context->SegCs = KGDT64_R3_CODE | RPL_MASK;
+    Context->SegDs = KGDT64_R3_DATA | RPL_MASK;
+    Context->SegEs = KGDT64_R3_DATA | RPL_MASK;
+    Context->SegFs = KGDT64_R3_CMTEB | RPL_MASK;
+    Context->SegGs = KGDT64_R3_DATA | RPL_MASK;
+    Context->SegSs = KGDT64_R3_DATA | RPL_MASK;
+    Context->MxCsr = INITIAL_MXCSR;
+}

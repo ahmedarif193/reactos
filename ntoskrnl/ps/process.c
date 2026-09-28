@@ -1709,7 +1709,7 @@ PspInitializeWow64Process(IN PEPROCESS Process,
 }
 #endif
 
-static NTSTATUS
+NTSTATUS
 PspAllocateUserStack(IN HANDLE ProcessHandle,
                      IN ULONG_PTR ZeroBits,
                      IN SIZE_T StackReserve,
@@ -2541,6 +2541,8 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     PAGED_CODE();
     PSTRACE(PS_PROCESS_DEBUG,
             "ProcessFlags: %lx ThreadFlags: %lx\n", ProcessFlags, ThreadFlags);
+
+    if (ThreadFlags & THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER) return STATUS_INVALID_PARAMETER;
 
     RtlInitUnicodeString(&ImageName, NULL);
     RtlInitUnicodeString(&CapturedImageName, NULL);
@@ -3448,7 +3450,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     Wow64InitialTebPointer = Wow64Peb ? &Wow64InitialTeb : NULL;
 #endif
     /* The native bootstrap registers do not carry the x86 Win32 entry point. */
-    Status = PspCreateThread(&hThread, ThreadDesiredAccess, ThreadObjectAttributes, hProcess, NULL, &ClientId, &ThreadContext, &InitialTeb, Wow64InitialTebPointer, (ThreadFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) ? TRUE : FALSE, NULL, NULL, Wow64InitialTebPointer ? ImageInformation.TransferAddress : NULL);
+    Status = PspCreateThread(&hThread, ThreadDesiredAccess, ThreadObjectAttributes, hProcess, NULL, &ClientId, &ThreadContext, &InitialTeb, Wow64InitialTebPointer, ThreadFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED, NULL, NULL, Wow64InitialTebPointer ? ImageInformation.TransferAddress : NULL);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtCreateUserProcess: PspCreateThread failed, Status=0x%lx\n", Status);

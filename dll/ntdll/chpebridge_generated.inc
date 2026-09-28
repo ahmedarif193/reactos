@@ -1418,6 +1418,12 @@ ULONG_PTR NTAPI ChpeStubNtCreateTransactionManager(PVOID a0, ULONG a1, PVOID a2,
     return 0;
 }
 
+NTSTATUS NTAPI ChpeAutoNtCreateThreadEx(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, HANDLE a3, PVOID a4, PVOID a5, ULONG a6, SIZE_T a7, SIZE_T a8, SIZE_T a9, PPS_ATTRIBUTE_LIST a10)
+{
+    return NtCreateThreadEx(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateThreadEx), __typeof__(&NtCreateThreadEx)), "NtCreateThreadEx bridge signature mismatch");
+
 NTSTATUS NTAPI ChpeAutoNtCreateUserProcess(PHANDLE a0, PHANDLE a1, ACCESS_MASK a2, ACCESS_MASK a3, POBJECT_ATTRIBUTES a4, POBJECT_ATTRIBUTES a5, ULONG a6, ULONG a7, PRTL_USER_PROCESS_PARAMETERS a8, PPS_CREATE_INFO a9, PPS_ATTRIBUTE_LIST a10)
 {
     return NtCreateUserProcess(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
@@ -8004,10 +8010,11 @@ NTSTATUS NTAPI ChpeAutoZwCreateThread(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIB
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreateThread), __typeof__(&ZwCreateThread)), "ZwCreateThread bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwCreateThreadEx(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, PVOID a5, ULONG a6, ULONG a7, ULONG a8, ULONG a9, PVOID a10)
+NTSTATUS NTAPI ChpeAutoZwCreateThreadEx(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, HANDLE a3, PVOID a4, PVOID a5, ULONG a6, SIZE_T a7, SIZE_T a8, SIZE_T a9, PPS_ATTRIBUTE_LIST a10)
 {
-    return 0;
+    return ZwCreateThreadEx(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreateThreadEx), __typeof__(&ZwCreateThreadEx)), "ZwCreateThreadEx bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoZwCreateTimer(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, TIMER_TYPE a3)
 {

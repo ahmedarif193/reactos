@@ -316,7 +316,7 @@
 @ stdcall NtCreateSemaphore(ptr long ptr long long)
 @ stdcall NtCreateSymbolicLinkObject(ptr long ptr ptr)
 @ stdcall NtCreateThread(ptr long ptr ptr ptr ptr ptr long)
-@ stub -version=0x600+ NtCreateThreadEx
+@ stdcall -version=0x600+ NtCreateThreadEx(ptr long ptr ptr ptr ptr long long long long ptr)
 @ stdcall NtCreateTimer(ptr long ptr long)
 @ stdcall NtCreateToken(ptr long ptr long ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ NtCreateTransaction(ptr long ptr ptr ptr long long long ptr wstr)
@@ -1612,7 +1612,7 @@
 @ stdcall ZwCreateSemaphore(ptr long ptr long long)
 @ stdcall ZwCreateSymbolicLinkObject(ptr long ptr ptr)
 @ stdcall ZwCreateThread(ptr long ptr ptr ptr ptr ptr long)
-@ stdcall -stub -version=0x600+ ZwCreateThreadEx(ptr long ptr ptr ptr ptr long long long long ptr)
+@ stdcall -version=0x600+ ZwCreateThreadEx(ptr long ptr ptr ptr ptr long long long long ptr) NtCreateThreadEx
 @ stdcall ZwCreateTimer(ptr long ptr long)
 @ stdcall ZwCreateToken(ptr long ptr long ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ ZwCreateTransaction(ptr long ptr ptr ptr long long long ptr wstr)

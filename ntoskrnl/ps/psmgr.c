@@ -106,6 +106,7 @@ PspThreadOpen(IN OB_OPEN_REASON Reason,
 PVOID PspSystemDllBase;
 PVOID PspSystemDllSection;
 PVOID PspSystemDllEntryPoint;
+PVOID PspRtlUserThreadStart;
 
 UNICODE_STRING PsNtDllPathName =
     RTL_CONSTANT_STRING(L"\\SystemRoot\\System32\\ntdll.dll");
@@ -155,6 +156,10 @@ PspLookupKernelUserEntryPoints(VOID)
     /* Get user-mode exception dispatcher */
     Status = PspLookupSystemDllEntryPoint("KiUserExceptionDispatcher",
                                           &KeUserExceptionDispatcher);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = PspLookupSystemDllEntryPoint("RtlUserThreadStart",
+                                          &PspRtlUserThreadStart);
     if (!NT_SUCCESS(Status)) return Status;
 
 #if defined(_M_ARM64)

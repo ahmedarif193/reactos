@@ -369,3 +369,20 @@ PspGetOrSetContextKernelRoutine(
     /* Signal the waiting thread that we are done */
     KeSetEvent(&GetSetContext->Event, IO_NO_INCREMENT, FALSE);
 }
+
+VOID
+NTAPI
+PsArchInitializeUserThreadContext(
+    _Out_ PCONTEXT Context,
+    _In_ PVOID ThreadStart,
+    _In_ PVOID StartRoutine,
+    _In_opt_ PVOID Argument,
+    _In_ PVOID StackBase)
+{
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->ContextFlags = CONTEXT_FULL;
+    Context->Pc = (ULONG64)(ULONG_PTR)ThreadStart;
+    Context->X0 = (ULONG64)(ULONG_PTR)StartRoutine;
+    Context->X1 = (ULONG64)(ULONG_PTR)Argument;
+    Context->Sp = (ULONG64)(ULONG_PTR)StackBase & ~15ULL;
+}

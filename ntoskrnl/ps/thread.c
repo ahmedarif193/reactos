@@ -178,7 +178,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
                 IN PCONTEXT ThreadContext,
                 IN PINITIAL_TEB InitialTeb,
                 IN PINITIAL_TEB Wow64InitialTeb OPTIONAL,
-                IN BOOLEAN CreateSuspended,
+                IN ULONG CreateFlags,
                 IN PKSTART_ROUTINE StartRoutine OPTIONAL,
                 IN PVOID StartContext OPTIONAL,
                 IN PVOID Win32StartAddress OPTIONAL)
@@ -196,6 +196,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     BOOLEAN Result, SdAllocated;
     PSECURITY_DESCRIPTOR SecurityDescriptor;
     SECURITY_SUBJECT_CONTEXT SubjectContext;
+    BOOLEAN CreateSuspended = (CreateFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) != 0;
     PAGED_CODE();
     PSTRACE(PS_THREAD_DEBUG,
             "ThreadContext: %p TargetProcess: %p ProcessHandle: %p\n",
@@ -383,6 +384,8 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
         ObDereferenceObject(Thread);
         return Status;
     }
+
+    if (CreateFlags & THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER) PspSetCrossThreadFlag(Thread, CT_HIDE_FROM_DEBUGGER_BIT);
 
     /* Lock the process */
     KeEnterCriticalRegion();
@@ -661,7 +664,7 @@ PsCreateSystemThread(OUT PHANDLE ThreadHandle,
     }
 
     /* Call the shared function */
-    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, Handle, TargetProcess, ClientId, NULL, NULL, NULL, FALSE, StartRoutine, StartContext, NULL);
+    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, Handle, TargetProcess, ClientId, NULL, NULL, NULL, 0, StartRoutine, StartContext, NULL);
 }
 
 /*
@@ -1081,13 +1084,182 @@ NtCreateThread(OUT PHANDLE ThreadHandle,
             Status = PspPrepareWow64Thread(ProcessHandle, &Wow64Context, &SafeContext, &Wow64InitialTeb, &SafeInitialTeb);
             if (!NT_SUCCESS(Status)) return Status;
 
-            return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, &SafeContext, &SafeInitialTeb, &Wow64InitialTeb, CreateSuspended, NULL, NULL, UlongToPtr(Wow64Context.Eax));
+            return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, &SafeContext, &SafeInitialTeb, &Wow64InitialTeb, CreateSuspended ? THREAD_CREATE_FLAGS_CREATE_SUSPENDED : 0, NULL, NULL, UlongToPtr(Wow64Context.Eax));
         }
     }
 #endif
 
     /* Call the shared function */
-    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, ThreadContext, &SafeInitialTeb, NULL, CreateSuspended, NULL, NULL, NULL);
+    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, ThreadContext, &SafeInitialTeb, NULL, CreateSuspended ? THREAD_CREATE_FLAGS_CREATE_SUSPENDED : 0, NULL, NULL, NULL);
+}
+
+NTSTATUS
+NTAPI
+NtCreateThreadEx(OUT PHANDLE ThreadHandle,
+                 IN ACCESS_MASK DesiredAccess,
+                 IN POBJECT_ATTRIBUTES ObjectAttributes OPTIONAL,
+                 IN HANDLE ProcessHandle,
+                 IN PVOID StartRoutine,
+                 IN PVOID Argument OPTIONAL,
+                 IN ULONG CreateFlags,
+                 IN SIZE_T ZeroBits,
+                 IN SIZE_T StackSize,
+                 IN SIZE_T MaximumStackSize,
+                 IN PPS_ATTRIBUTE_LIST AttributeList OPTIONAL)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    SECTION_IMAGE_INFORMATION ImageInformation;
+    INITIAL_TEB InitialTeb;
+    CLIENT_ID ClientId;
+    CONTEXT Context;
+    PEPROCESS Process;
+    PETHREAD Thread;
+    PPS_ATTRIBUTE Attribute;
+    HANDLE ProcessKernelHandle;
+    ULONG_PTR Wow64Peb = 0;
+    PVOID StackAllocation;
+    PVOID Teb = NULL;
+    PVOID Value;
+    SIZE_T AttributeCount = 0;
+    SIZE_T FreeSize = 0;
+    SIZE_T Size;
+    SIZE_T i;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForWriteHandle(ThreadHandle);
+            if (AttributeList) ProbeForRead(AttributeList, sizeof(SIZE_T), sizeof(ULONG_PTR));
+        }
+
+        if (AttributeList)
+        {
+            Size = AttributeList->TotalLength;
+            if (Size < FIELD_OFFSET(PS_ATTRIBUTE_LIST, Attributes)) _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+            if (PreviousMode != KernelMode) ProbeForRead(AttributeList, Size, sizeof(ULONG_PTR));
+            AttributeCount = (Size - FIELD_OFFSET(PS_ATTRIBUTE_LIST, Attributes)) / sizeof(PS_ATTRIBUTE);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    Status = ObReferenceObjectByHandle(ProcessHandle,
+                                       PROCESS_CREATE_THREAD,
+                                       PsProcessType,
+                                       PreviousMode,
+                                       (PVOID*)&Process,
+                                       NULL);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    RtlZeroMemory(&ImageInformation, sizeof(ImageInformation));
+    if (Process->SectionObject) MmGetSectionImageInformation(Process->SectionObject, &ImageInformation);
+
+    Status = ObOpenObjectByPointer(Process,
+                                   OBJ_KERNEL_HANDLE,
+                                   NULL,
+                                   PROCESS_ALL_ACCESS,
+                                   PsProcessType,
+                                   KernelMode,
+                                   &ProcessKernelHandle);
+    ObDereferenceObject(Process);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = ZwQueryInformationProcess(ProcessKernelHandle,
+                                       ProcessWow64Information,
+                                       &Wow64Peb,
+                                       sizeof(Wow64Peb),
+                                       NULL);
+    if (NT_SUCCESS(Status) && Wow64Peb) Status = STATUS_NOT_SUPPORTED;
+
+    if (NT_SUCCESS(Status))
+    {
+        Status = PspAllocateUserStack(ProcessKernelHandle,
+                                      ZeroBits,
+                                      MaximumStackSize ? MaximumStackSize : ImageInformation.MaximumStackSize,
+                                      StackSize ? StackSize : ImageInformation.CommittedStackSize,
+                                      MM_USER_STACK_GUARD_PAGES * PAGE_SIZE,
+                                      &InitialTeb);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        PsArchInitializeUserThreadContext(&Context,
+                                          PspRtlUserThreadStart,
+                                          StartRoutine,
+                                          Argument,
+                                          InitialTeb.StackBase);
+
+        Status = PspCreateThread(ThreadHandle,
+                                 DesiredAccess,
+                                 ObjectAttributes,
+                                 ProcessHandle,
+                                 NULL,
+                                 &ClientId,
+                                 &Context,
+                                 &InitialTeb,
+                                 NULL,
+                                 CreateFlags,
+                                 NULL,
+                                 NULL,
+                                 StartRoutine);
+        if (!NT_SUCCESS(Status))
+        {
+            StackAllocation = InitialTeb.AllocatedStackBase;
+            ZwFreeVirtualMemory(ProcessKernelHandle, &StackAllocation, &FreeSize, MEM_RELEASE);
+        }
+    }
+
+    ZwClose(ProcessKernelHandle);
+    if (!NT_SUCCESS(Status) || !AttributeCount) return Status;
+
+    if (NT_SUCCESS(PsLookupThreadByThreadId(ClientId.UniqueThread, &Thread)))
+    {
+        Teb = Thread->Tcb.Teb;
+        ObDereferenceObject(Thread);
+    }
+
+    _SEH2_TRY
+    {
+        for (i = 0; i < AttributeCount; i++)
+        {
+            Attribute = &AttributeList->Attributes[i];
+            if (Attribute->Attribute == PS_ATTRIBUTE_CLIENT_ID)
+            {
+                Value = &ClientId;
+                Size = min(Attribute->Size, sizeof(ClientId));
+            }
+            else if (Attribute->Attribute == PS_ATTRIBUTE_TEB_ADDRESS)
+            {
+                Value = &Teb;
+                Size = min(Attribute->Size, sizeof(Teb));
+            }
+            else
+            {
+                continue;
+            }
+
+            if (PreviousMode != KernelMode) ProbeForWrite(Attribute->ValuePtr, Size, 1);
+            RtlCopyMemory(Attribute->ValuePtr, Value, Size);
+            if (Attribute->ReturnLength)
+            {
+                if (PreviousMode != KernelMode) ProbeForWrite(Attribute->ReturnLength, sizeof(SIZE_T), sizeof(ULONG));
+                *Attribute->ReturnLength = Size;
+            }
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
 }
 
 /*

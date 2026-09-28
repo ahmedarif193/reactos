@@ -303,10 +303,30 @@ PspCreateThread(
     IN PCONTEXT ThreadContext,
     IN PINITIAL_TEB InitialTeb,
     IN PINITIAL_TEB Wow64InitialTeb OPTIONAL,
-    IN BOOLEAN CreateSuspended,
+    IN ULONG CreateFlags,
     IN PKSTART_ROUTINE StartRoutine OPTIONAL,
     IN PVOID StartContext OPTIONAL,
     IN PVOID Win32StartAddress OPTIONAL
+);
+
+NTSTATUS
+PspAllocateUserStack(
+    IN HANDLE ProcessHandle,
+    IN ULONG_PTR ZeroBits,
+    IN SIZE_T StackReserve,
+    IN SIZE_T StackCommit,
+    IN SIZE_T GuardSize,
+    OUT PINITIAL_TEB InitialTeb
+);
+
+VOID
+NTAPI
+PsArchInitializeUserThreadContext(
+    _Out_ PCONTEXT Context,
+    _In_ PVOID ThreadStart,
+    _In_ PVOID StartRoutine,
+    _In_opt_ PVOID Argument,
+    _In_ PVOID StackBase
 );
 
 //
@@ -758,6 +778,7 @@ NTAPI
 PsCheckImageLoadPolicy(
     _In_ PFILE_OBJECT FileObject);
 extern PVOID PspSystemDllEntryPoint;
+extern PVOID PspRtlUserThreadStart;
 extern PVOID PspSystemDllBase;
 extern BOOLEAN PspUseJobSchedulingClasses;
 extern CHAR PspJobSchedulingClasses[PSP_JOB_SCHEDULING_CLASSES];

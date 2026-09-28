@@ -674,6 +674,23 @@ NtCreateUserProcess(
     _Inout_ PPS_CREATE_INFO CreateInfo,
     _Inout_opt_ PPS_ATTRIBUTE_LIST AttributeList
 );
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtCreateThreadEx(
+    _Out_ PHANDLE ThreadHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ HANDLE ProcessHandle,
+    _In_ PVOID StartRoutine,
+    _In_opt_ PVOID Argument,
+    _In_ ULONG CreateFlags,
+    _In_ SIZE_T ZeroBits,
+    _In_ SIZE_T StackSize,
+    _In_ SIZE_T MaximumStackSize,
+    _In_opt_ PPS_ATTRIBUTE_LIST AttributeList
+);
 #endif
 
 #ifndef NTOS_MODE_USER
@@ -978,6 +995,25 @@ ZwCreateThread(
     _In_ PINITIAL_TEB UserStack,
     _In_ BOOLEAN CreateSuspended
 );
+
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwCreateThreadEx(
+    _Out_ PHANDLE ThreadHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ HANDLE ProcessHandle,
+    _In_ PVOID StartRoutine,
+    _In_opt_ PVOID Argument,
+    _In_ ULONG CreateFlags,
+    _In_ SIZE_T ZeroBits,
+    _In_ SIZE_T StackSize,
+    _In_ SIZE_T MaximumStackSize,
+    _In_opt_ PPS_ATTRIBUTE_LIST AttributeList
+);
+#endif
 
 NTSYSAPI
 NTSTATUS

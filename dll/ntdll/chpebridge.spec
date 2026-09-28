@@ -488,7 +488,7 @@
 270 stdcall NtCreateSectionEx(ptr long ptr ptr long long ptr ptr long) ChpeAutoNtCreateSectionEx
 271 stdcall NtCreateSemaphore(ptr long ptr long long) ChpeAutoNtCreateSemaphore
 272 stdcall NtCreateSymbolicLinkObject(ptr long ptr ptr) ChpeAutoNtCreateSymbolicLinkObject
-274 stub -version=0x600+ NtCreateThreadEx
+274 stdcall -version=0x600+ NtCreateThreadEx(ptr long ptr ptr ptr ptr long long long long ptr) ChpeAutoNtCreateThreadEx
 275 stdcall NtCreateTimer(ptr long ptr long) ChpeAutoNtCreateTimer
 276 stdcall NtCreateToken(ptr long ptr long ptr ptr ptr ptr ptr ptr ptr ptr ptr) ChpeAutoNtCreateToken
 277 stdcall -version=0x600+ NtCreateTransaction(ptr long ptr ptr ptr long long long ptr wstr) ChpeStubNtCreateTransaction
@@ -1546,7 +1546,7 @@
 1516 stdcall ZwCreateSemaphore(ptr long ptr long long) ChpeAutoZwCreateSemaphore
 1517 stdcall ZwCreateSymbolicLinkObject(ptr long ptr ptr) ChpeAutoZwCreateSymbolicLinkObject
 1518 stdcall ZwCreateThread(ptr long ptr ptr ptr ptr ptr long) ChpeAutoZwCreateThread
-1519 stdcall -version=0x600+ ZwCreateThreadEx(ptr long ptr ptr ptr ptr long long long long ptr) ChpeStubZwCreateThreadEx
+1519 stdcall -version=0x600+ ZwCreateThreadEx(ptr long ptr ptr ptr ptr long long long long ptr) ChpeAutoZwCreateThreadEx
 1520 stdcall ZwCreateTimer(ptr long ptr long) ChpeAutoZwCreateTimer
 1521 stdcall ZwCreateToken(ptr long ptr long ptr ptr ptr ptr ptr ptr ptr ptr ptr) ChpeAutoZwCreateToken
 1522 stdcall -version=0x600+ ZwCreateTransaction(ptr long ptr ptr ptr long long long ptr wstr) ChpeStubZwCreateTransaction

@@ -89,3 +89,26 @@ PspGetOrSetContextKernelRoutine(IN PKAPC Apc,
 }
 
 /* EOF */
+
+VOID
+NTAPI
+PsArchInitializeUserThreadContext(
+    _Out_ PCONTEXT Context,
+    _In_ PVOID ThreadStart,
+    _In_ PVOID StartRoutine,
+    _In_opt_ PVOID Argument,
+    _In_ PVOID StackBase)
+{
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->ContextFlags = CONTEXT_FULL;
+    Context->Eip = (ULONG)ThreadStart;
+    Context->Eax = (ULONG)StartRoutine;
+    Context->Ebx = (ULONG)Argument;
+    Context->Esp = (ULONG)StackBase - 3 * sizeof(ULONG);
+    Context->EFlags = EFLAGS_INTERRUPT_MASK;
+    Context->SegCs = KGDT_R3_CODE | RPL_MASK;
+    Context->SegDs = KGDT_R3_DATA | RPL_MASK;
+    Context->SegEs = KGDT_R3_DATA | RPL_MASK;
+    Context->SegFs = KGDT_R3_TEB | RPL_MASK;
+    Context->SegSs = KGDT_R3_DATA | RPL_MASK;
+}

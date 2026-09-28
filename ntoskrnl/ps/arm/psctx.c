@@ -45,3 +45,21 @@ PspGetOrSetContextKernelRoutine(IN PKAPC Apc,
 }
 
 /* EOF */
+
+VOID
+NTAPI
+PsArchInitializeUserThreadContext(
+    _Out_ PCONTEXT Context,
+    _In_ PVOID ThreadStart,
+    _In_ PVOID StartRoutine,
+    _In_opt_ PVOID Argument,
+    _In_ PVOID StackBase)
+{
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->ContextFlags = CONTEXT_FULL;
+    Context->Pc = (ULONG)ThreadStart;
+    Context->R0 = (ULONG)StartRoutine;
+    Context->R1 = (ULONG)Argument;
+    Context->Sp = (ULONG)StackBase;
+    Context->Cpsr = 0x10;
+}
