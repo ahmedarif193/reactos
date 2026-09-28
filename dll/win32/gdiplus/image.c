@@ -1404,9 +1404,41 @@ GpStatus WINGDIPAPI GdipCloneImage(GpImage *image, GpImage **cloneImage)
     if (image->type == ImageTypeBitmap)
     {
         GpBitmap *bitmap = (GpBitmap *)image;
+#ifdef __REACTOS__
+        GpBitmap *clone;
+        GpStatus status;
+        UINT size, count;
+#endif
 
+#ifdef __REACTOS__
+        status = GdipCloneBitmapAreaI(0, 0, bitmap->width, bitmap->height,
+#else
         return GdipCloneBitmapAreaI(0, 0, bitmap->width, bitmap->height,
+#endif
                                     bitmap->format, bitmap, (GpBitmap **)cloneImage);
+#ifdef __REACTOS__
+        if (status == Ok && bitmap->prop_item)
+        {
+            clone = (GpBitmap *)*cloneImage;
+            status = GdipGetPropertySize(image, &size, &count);
+            if (status == Ok)
+            {
+                clone->prop_item = malloc(size);
+                if (!clone->prop_item)
+                    status = OutOfMemory;
+                else
+                    status = GdipGetAllPropertyItems(image, size, count, clone->prop_item);
+            }
+            if (status == Ok)
+                clone->prop_count = count;
+            else
+            {
+                GdipDisposeImage(*cloneImage);
+                *cloneImage = NULL;
+            }
+        }
+        return status;
+#endif
     }
     else if (image->type == ImageTypeMetafile && ((GpMetafile*)image)->hemf)
     {
@@ -4189,9 +4221,58 @@ static GpStatus decode_image_bmp(IStream* stream, GpImage **image)
     return status;
 }
 
+#ifdef __REACTOS__
+static void jpeg_metadata_reader(GpBitmap *bitmap, IWICBitmapDecoder *decoder, UINT frame_index)
+{
+    IWICBitmapFrameDecode *frame;
+    IWICMetadataBlockReader *blocks;
+    IWICMetadataReader *reader;
+    PropertyItem *item;
+    UINT count, i;
+    GUID format;
+    HRESULT hr;
+
+    hr = IWICBitmapDecoder_GetFrame(decoder, frame_index, &frame);
+    if (FAILED(hr))
+        return;
+
+    hr = IWICBitmapFrameDecode_QueryInterface(frame, &IID_IWICMetadataBlockReader, (void **)&blocks);
+    IWICBitmapFrameDecode_Release(frame);
+    if (FAILED(hr))
+        return;
+
+    hr = IWICMetadataBlockReader_GetCount(blocks, &count);
+    for (i = 0; SUCCEEDED(hr) && i < count; i++)
+    {
+        if (FAILED(IWICMetadataBlockReader_GetReaderByIndex(blocks, i, &reader)))
+            continue;
+
+        if (SUCCEEDED(IWICMetadataReader_GetMetadataFormat(reader, &format)) &&
+                (IsEqualGUID(&format, &GUID_MetadataFormatJpegLuminance) ||
+                IsEqualGUID(&format, &GUID_MetadataFormatJpegChrominance)))
+        {
+            item = get_property(reader, &format, L"TableEntry");
+            if (item)
+            {
+                item->id = IsEqualGUID(&format, &GUID_MetadataFormatJpegLuminance) ?
+                        PropertyTagLuminanceTable : PropertyTagChrominanceTable;
+                add_property(bitmap, item);
+                free(item);
+            }
+        }
+        IWICMetadataReader_Release(reader);
+    }
+    IWICMetadataBlockReader_Release(blocks);
+}
+
+#endif
 static GpStatus decode_image_jpeg(IStream* stream, GpImage **image)
 {
+#ifdef __REACTOS__
+    return decode_image_wic(stream, &GUID_ContainerFormatJpeg, jpeg_metadata_reader, image);
+#else
     return decode_image_wic(stream, &GUID_ContainerFormatJpeg, NULL, image);
+#endif
 }
 
 static BOOL has_png_transparency_chunk(IStream *pIStream)
@@ -4247,6 +4328,9 @@ static GpStatus decode_image_png(IStream* stream, GpImage **image)
         if (hr == S_OK)
         {
             if (IsEqualGUID(&format, &GUID_WICPixelFormat8bppGray) ||
+#ifdef __REACTOS__
+                IsEqualGUID(&format, &GUID_WICPixelFormat48bppRGB) ||
+#endif
                 IsEqualGUID(&format, &GUID_WICPixelFormat64bppRGBA))
                 force_conversion = TRUE;
             else if ((IsEqualGUID(&format, &GUID_WICPixelFormat8bppIndexed) ||
