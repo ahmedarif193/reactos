@@ -1249,9 +1249,28 @@ static DWORD read_hex_data( RTF_Info *info, BYTE **out )
         {
             if (read >= size)
             {
+#ifdef __REACTOS__
+                BYTE *new_buf;
+
+                if (size > MAXDWORD / 2)
+                {
+                    free(buf);
+                    return 0;
+                }
+#endif
                 size *= 2;
+#ifdef __REACTOS__
+                new_buf = realloc(buf, size);
+                if (!new_buf)
+                {
+                    free(buf);
+                    return 0;
+                }
+                buf = new_buf;
+#else
                 buf = realloc(buf, size);
                 if (!buf) return 0;
+#endif
             }
             buf[read++] = RTFCharToHex(val) * 16 + RTFCharToHex(info->rtfMajor);
         }
@@ -1269,7 +1288,11 @@ static void ME_RTFReadPictGroup(RTF_Info *info)
     SIZEL sz;
     BYTE *buffer = NULL;
     DWORD size = 0;
+#ifdef __REACTOS__
+    METAFILEPICT mfp = {0};
+#else
     METAFILEPICT mfp;
+#endif
     HENHMETAFILE hemf;
     HBITMAP hbmp;
     enum gfxkind {gfx_unknown = 0, gfx_enhmetafile, gfx_metafile, gfx_dib} gfx = gfx_unknown;
@@ -1295,7 +1318,15 @@ static void ME_RTFReadPictGroup(RTF_Info *info)
             }
         } /* We potentially have a new token so fall through. */
 
+#ifdef __REACTOS__
+        if (info->rtfClass == rtfEOF)
+        {
+            free(buffer);
+            return;
+        }
+#else
         if (info->rtfClass == rtfEOF) return;
+#endif
 
         if (RTFCheckCM( info, rtfGroup, rtfEndGroup ))
         {
@@ -1354,14 +1385,57 @@ static void ME_RTFReadPictGroup(RTF_Info *info)
         case gfx_dib:
         {
             BITMAPINFO *bi = (BITMAPINFO*)buffer;
+#ifdef __REACTOS__
+            HDC hdc;
+            unsigned nc, offset;
+            ULONGLONG image_size;
+
+            if (size < sizeof(BITMAPINFOHEADER) ||
+                bi->bmiHeader.biSize < sizeof(BITMAPINFOHEADER) ||
+                bi->bmiHeader.biSize > size)
+                break;
+            offset = bi->bmiHeader.biSize;
+            if (bi->bmiHeader.biCompression == BI_BITFIELDS && offset == sizeof(BITMAPINFOHEADER))
+            {
+                if (size - offset < 3 * sizeof(DWORD)) break;
+                offset += 3 * sizeof(DWORD);
+            }
+            nc = bi->bmiHeader.biClrUsed;
+#else
             HDC hdc = GetDC(0);
             unsigned nc = bi->bmiHeader.biClrUsed;
+#endif
 
             /* not quite right, especially for bitfields type of compression */
+#ifdef __REACTOS__
+            if (!nc && bi->bmiHeader.biBitCount && bi->bmiHeader.biBitCount <= 8)
+                nc = 1u << bi->bmiHeader.biBitCount;
+            if (nc > (size - offset) / sizeof(RGBQUAD)) break;
+            offset += nc * sizeof(RGBQUAD);
+            if (bi->bmiHeader.biCompression == BI_RGB || bi->bmiHeader.biCompression == BI_BITFIELDS)
+            {
+                if (bi->bmiHeader.biWidth <= 0 || !bi->bmiHeader.biHeight ||
+                    (bi->bmiHeader.biBitCount != 1 && bi->bmiHeader.biBitCount != 4 &&
+                     bi->bmiHeader.biBitCount != 8 && bi->bmiHeader.biBitCount != 16 &&
+                     bi->bmiHeader.biBitCount != 24 && bi->bmiHeader.biBitCount != 32))
+                    break;
+                image_size = (((ULONGLONG)bi->bmiHeader.biWidth * bi->bmiHeader.biBitCount + 31) / 32) * 4;
+                image_size *= bi->bmiHeader.biHeight < 0 ? -(LONGLONG)bi->bmiHeader.biHeight : bi->bmiHeader.biHeight;
+            }
+            else
+                image_size = bi->bmiHeader.biSizeImage;
+            if (!image_size || image_size > size - offset) break;
+            if (!(hdc = GetDC(0))) break;
+#else
             if (!nc && bi->bmiHeader.biBitCount <= 8)
                 nc = 1 << bi->bmiHeader.biBitCount;
+#endif
             if ((hbmp = CreateDIBitmap( hdc, &bi->bmiHeader,
+#ifdef __REACTOS__
+                                        CBM_INIT, buffer + offset,
+#else
                                         CBM_INIT, (char*)(bi + 1) + nc * sizeof(RGBQUAD),
+#endif
                                         bi, DIB_RGB_COLORS)) )
                 insert_static_object( info->editor, NULL, hbmp, &sz );
             ReleaseDC( 0, hdc );
@@ -4679,7 +4753,11 @@ static BOOL ME_IsCandidateAnURL(ME_TextEditor *editor, const ME_Cursor *start, i
   WCHAR bufferW[MAX_PREFIX_LEN + 1];
   unsigned int i;
 
+#ifdef __REACTOS__
+  nChars = ME_GetTextW(editor, bufferW, MAX_PREFIX_LEN, start, nChars, FALSE, FALSE);
+#else
   ME_GetTextW(editor, bufferW, MAX_PREFIX_LEN, start, nChars, FALSE, FALSE);
+#endif
   for (i = 0; i < ARRAY_SIZE(prefixes); i++)
   {
     if (nChars < prefixes[i].length) continue;
