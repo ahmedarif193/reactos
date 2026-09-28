@@ -875,11 +875,18 @@ static WCHAR *get_binary_name( MSIPACKAGE *package, MSIRECORD *rec )
 static UINT dialog_set_property_event( msi_dialog *dialog, const WCHAR *event, const WCHAR *arg )
 {
     LPWSTR p, prop, arg_fmt = NULL;
+#ifndef __REACTOS__
     UINT len;
+#endif
 
+#ifdef __REACTOS__
+    prop = wcsdup( event + 1 );
+    if (!prop) return ERROR_OUTOFMEMORY;
+#else
     len = lstrlenW( event );
     prop = malloc( len * sizeof(WCHAR) );
     lstrcpyW( prop, &event[1] );
+#endif
     p = wcschr( prop, ']' );
     if (p && (p[1] == 0 || p[1] == ' '))
     {
@@ -2969,10 +2976,19 @@ static WCHAR *get_unique_folder_name( const WCHAR *root, int *ret_len )
 {
     WCHAR newfolder[MAX_PATH], *path, *ptr;
     int len, count = 2;
+#ifdef __REACTOS__
+    size_t root_len = wcslen( root ), size;
+#endif
 
     len = LoadStringW( msi_hInstance, IDS_NEWFOLDER, newfolder, ARRAY_SIZE(newfolder) );
+#ifdef __REACTOS__
+    if (!len || root_len > (size_t)-1 / sizeof(WCHAR) - len - 5) return NULL;
+    size = root_len + len + 5;
+    if (!(path = malloc( size * sizeof(WCHAR) ))) return NULL;
+#else
     len += lstrlenW(root) + 1;
     if (!(path = malloc( (len + 4) * sizeof(WCHAR) ))) return NULL;
+#endif
     lstrcpyW( path, root );
     lstrcatW( path, newfolder );
 
@@ -2984,12 +3000,24 @@ static WCHAR *get_unique_folder_name( const WCHAR *root, int *ret_len )
             free( path );
             return NULL;
         }
+#ifdef __REACTOS__
+        swprintf( path, size, L"%s%s %d", root, newfolder, count++ );
+#else
         swprintf( path, len + 4, L"%s%s %u", root, newfolder, count++ );
+#endif
     }
 
+#ifdef __REACTOS__
+    ptr = path + root_len;
+#else
     ptr = wcsrchr( path, '\\' ) + 1;
+#endif
     *ret_len = lstrlenW(ptr);
+#ifdef __REACTOS__
+    memmove( path, ptr, ((size_t)*ret_len + 1) * sizeof(WCHAR) );
+#else
     memmove( path, ptr, *ret_len * sizeof(WCHAR) );
+#endif
     return path;
 }
 

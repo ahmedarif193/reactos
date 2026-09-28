@@ -1294,9 +1294,24 @@ static custom_action_info *do_msidbCustomActionTypeScript(
     msiobj_addref( &package->hdr );
     info->package = package;
     info->type = type;
+#ifdef __REACTOS__
+    info->target = function ? wcsdup( function ) : NULL;
+    info->source = script ? wcsdup( script ) : NULL;
+    info->action = action ? wcsdup( action ) : NULL;
+    if ((function && !info->target) || (script && !info->source) || (action && !info->action))
+    {
+        free( info->target );
+        free( info->source );
+        free( info->action );
+        msiobj_release( &package->hdr );
+        free( info );
+        return NULL;
+    }
+#else
     info->target = wcsdup( function );
     info->source = wcsdup( script );
     info->action = wcsdup( action );
+#endif
     CoCreateGuid( &info->guid );
 
     EnterCriticalSection( &custom_action_cs );
