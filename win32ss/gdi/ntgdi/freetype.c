@@ -1535,7 +1535,7 @@ UINT FASTCALL IntGetCharSet(INT nIndex, FT_ULong CodePageRange1)
 
     for (BitIndex = 0; BitIndex < MAXTCIINDEX; ++BitIndex)
     {
-        if (CodePageRange1 & (1 << BitIndex))
+        if (CodePageRange1 & (1UL << BitIndex))
         {
             CharSet = g_FontTci[BitIndex].ciCharset;
             if ((nIndex >= 0) && (nCount == (UINT)nIndex))
@@ -1764,7 +1764,7 @@ IntGdiLoadFontsFromMemory(PGDI_LOAD_FONT pLoadFont,
 
         for (BitIndex = 0; BitIndex < MAXTCIINDEX; ++BitIndex)
         {
-            if (os2_ulCodePageRange1 & (1 << BitIndex))
+            if (os2_ulCodePageRange1 & (1UL << BitIndex))
             {
                 BYTE CharSet = IntCharSetFromCodePageRangeBit(BitIndex);
 
@@ -3884,7 +3884,7 @@ FontFamilyFillInfo(PFONTFAMILYINFO Info, LPCWSTR FaceName,
 
     for (i = 0; i < MAXTCIINDEX; i++)
     {
-        fs0 = 1L << i;
+        fs0 = 1UL << i;
         if (fs.fsCsb[0] & fs0)
         {
             if (!IntTranslateCharsetInfo(&fs0, &CharSetInfo, TCI_SRCFONTSIG))
@@ -4274,7 +4274,7 @@ static unsigned int get_native_glyph_outline(FT_Outline *outline, unsigned int b
         }
 
         pph_start = needed;
-        pph = (TTPOLYGONHEADER *)(buf + needed);
+        pph = buf ? (TTPOLYGONHEADER *)(buf + needed) : NULL;
         first_pt = point;
         if (buf)
         {
@@ -4285,7 +4285,7 @@ static unsigned int get_native_glyph_outline(FT_Outline *outline, unsigned int b
         point++;
         while (point <= outline->contours[contour])
         {
-            ppc = (TTPOLYCURVE *)(buf + needed);
+            ppc = buf ? (TTPOLYCURVE *)(buf + needed) : NULL;
             type = (outline->tags[point] & FT_Curve_Tag_On) ?
                 TT_PRIM_LINE : TT_PRIM_QSPLINE;
             cpfx = 0;
@@ -4357,7 +4357,7 @@ static unsigned int get_bezier_glyph_outline(FT_Outline *outline, unsigned int b
     for (contour = 0; contour < outline->n_contours; contour++)
     {
         pph_start = needed;
-        pph = (TTPOLYGONHEADER *)(buf + needed);
+        pph = buf ? (TTPOLYGONHEADER *)(buf + needed) : NULL;
         first_pt = point;
         if (buf)
         {
@@ -4368,7 +4368,7 @@ static unsigned int get_bezier_glyph_outline(FT_Outline *outline, unsigned int b
         point++;
         while (point <= outline->contours[contour])
         {
-            ppc = (TTPOLYCURVE *)(buf + needed);
+            ppc = buf ? (TTPOLYCURVE *)(buf + needed) : NULL;
             type = (outline->tags[point] & FT_Curve_Tag_On) ?
                 TT_PRIM_LINE : TT_PRIM_CSPLINE;
             cpfx = 0;
@@ -6211,7 +6211,7 @@ ftGdiGetTextCharsetInfo(
 
     for (i = 0; i < MAXTCIINDEX; i++)
     {
-        fs0 = 1L << i;
+        fs0 = 1UL << i;
         if (fs.fsCsb[0] & fs0)
         {
             if (IntTranslateCharsetInfo(&fs0, &csi, TCI_SRCFONTSIG))
