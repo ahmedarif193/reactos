@@ -258,8 +258,8 @@ RtlLargeIntegerArithmeticShift (
    else
    {
       /* copy the sign bit */
-      RC.u.HighPart = (LargeInteger.u.HighPart & 0x80000000);
-      RC.u.LowPart = LargeInteger.u.HighPart >> Shift;
+      RC.u.HighPart = LargeInteger.u.HighPart >> 31;
+      RC.u.LowPart = LargeInteger.u.HighPart >> (Shift - 32);
    }
 
    return RC;
