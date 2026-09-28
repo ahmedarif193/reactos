@@ -48,6 +48,10 @@
 #include "netiodef.h"
 #include "icmpapi.h"
 #include "psapi.h"
+#ifdef __REACTOS__
+#include "winsvc.h"
+#include <winsvc_undoc.h>
+#endif
 
 #include "wine/nsi.h"
 #include "wine/debug.h"
@@ -3341,7 +3345,12 @@ static DWORD get_owner_module_from_pid( TCPIP_OWNER_MODULE_INFO_CLASS class, voi
     if (!size) return ERROR_INVALID_PARAMETER;
     if (!pid) return ERROR_NOT_FOUND;
     if (!(process = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid ))) return GetLastError();
+#ifdef __REACTOS__
+    len = ARRAY_SIZE(path);
+    if (!QueryFullProcessImageNameW( process, 0, path, &len )) len = 0;
+#else
     len = GetModuleFileNameExW( process, NULL, path, ARRAY_SIZE(path) );
+#endif
     CloseHandle( process );
     if (!len) return ERROR_NOT_FOUND;
     if (len == ARRAY_SIZE(path)) return ERROR_PATH_NOT_FOUND;
@@ -3361,6 +3370,42 @@ static DWORD get_owner_module_from_pid( TCPIP_OWNER_MODULE_INFO_CLASS class, voi
     return ERROR_SUCCESS;
 }
 
+#ifdef __REACTOS__
+static DWORD get_owner_module( TCPIP_OWNER_MODULE_INFO_CLASS class, void *buffer, DWORD *size, DWORD pid, ULONGLONG tag )
+{
+    TCPIP_OWNER_MODULE_BASIC_INFO *info = buffer;
+    TAG_INFO_NAME_FROM_TAG tag_info;
+    DWORD len, ret_size, ret;
+
+    if (class != TCPIP_OWNER_MODULE_INFO_BASIC || !size || !pid || !(DWORD)tag)
+        return get_owner_module_from_pid( class, buffer, size, pid );
+
+    memset( &tag_info, 0, sizeof(tag_info) );
+    tag_info.InParams.dwPid = pid;
+    tag_info.InParams.dwTag = (DWORD)tag;
+    if (I_QueryTagInformation( NULL, TagInfoLevelNameFromTag, &tag_info ) || !tag_info.OutParams.pszName)
+        return get_owner_module_from_pid( class, buffer, size, pid );
+
+    len = wcslen( tag_info.OutParams.pszName ) + 1;
+    ret_size = sizeof(*info) + 2 * len * sizeof(WCHAR);
+    if (*size < ret_size)
+    {
+        *size = ret_size;
+        ret = ERROR_INSUFFICIENT_BUFFER;
+    }
+    else
+    {
+        info->pModuleName = (WCHAR *)(info + 1);
+        info->pModulePath = info->pModuleName + len;
+        memcpy( info->pModuleName, tag_info.OutParams.pszName, len * sizeof(WCHAR) );
+        memcpy( info->pModulePath, tag_info.OutParams.pszName, len * sizeof(WCHAR) );
+        ret = ERROR_SUCCESS;
+    }
+    LocalFree( tag_info.OutParams.pszName );
+    return ret;
+}
+#endif
+
 /******************************************************************
  *    GetOwnerModuleFromTcpEntry (IPHLPAPI.@)
  */
@@ -3371,7 +3416,11 @@ DWORD WINAPI GetOwnerModuleFromTcpEntry( PMIB_TCPROW_OWNER_MODULE entry, TCPIP_O
 
     if (!entry) return ERROR_INVALID_PARAMETER;
 
+#ifdef __REACTOS__
+    return get_owner_module( class, buffer, size, entry->dwOwningPid, entry->OwningModuleInfo[0] );
+#else
     return get_owner_module_from_pid( class, buffer, size, entry->dwOwningPid );
+#endif
 }
 
 /******************************************************************
@@ -3384,7 +3433,11 @@ DWORD WINAPI GetOwnerModuleFromTcp6Entry( PMIB_TCP6ROW_OWNER_MODULE entry, TCPIP
 
     if (!entry) return ERROR_INVALID_PARAMETER;
 
+#ifdef __REACTOS__
+    return get_owner_module( class, buffer, size, entry->dwOwningPid, entry->OwningModuleInfo[0] );
+#else
     return get_owner_module_from_pid( class, buffer, size, entry->dwOwningPid );
+#endif
 }
 
 #ifdef __REACTOS__
@@ -3392,7 +3445,7 @@ DWORD WINAPI GetOwnerModuleFromUdpEntry(PMIB_UDPROW_OWNER_MODULE entry, TCPIP_OW
 {
     TRACE("entry %p, class %d, buffer %p, size %p.\n", entry, class, buffer, size);
     if (!entry) return ERROR_INVALID_PARAMETER;
-    return get_owner_module_from_pid(class, buffer, size, entry->dwOwningPid);
+    return get_owner_module(class, buffer, size, entry->dwOwningPid, entry->OwningModuleInfo[0]);
 }
 #endif
 
