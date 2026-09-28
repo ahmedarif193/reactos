@@ -7,9 +7,9 @@
 
 #include <ntdll.h>
 
-static ULONG64 RtlpUserPfnClientA[32];
-static ULONG64 RtlpUserPfnClientW[32];
-static ULONG64 RtlpUserPfnClientWorker[16];
+static const VOID *RtlpUserPfnClientA;
+static const VOID *RtlpUserPfnClientW;
+static const VOID *RtlpUserPfnClientWorker;
 static LONG RtlpUserPfnInitialized;
 
 NTSTATUS
@@ -22,23 +22,19 @@ RtlInitializeNtUserPfn(
     _In_reads_bytes_(ClientWorkerSize) const VOID *ClientWorker,
     _In_ ULONG ClientWorkerSize)
 {
-    if (ClientASize > sizeof(RtlpUserPfnClientA) ||
-        ClientWSize > sizeof(RtlpUserPfnClientW) ||
-        ClientWorkerSize > sizeof(RtlpUserPfnClientWorker))
+    if (!ClientA || !ClientW || !ClientWorker ||
+        !ClientASize || !ClientWSize || !ClientWorkerSize)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (RtlpUserPfnInitialized)
+    if (InterlockedCompareExchange(&RtlpUserPfnInitialized, -1, FALSE) != FALSE)
         return STATUS_INVALID_PARAMETER;
 
-    RtlCopyMemory(RtlpUserPfnClientA, ClientA, ClientASize);
-    RtlCopyMemory(RtlpUserPfnClientW, ClientW, ClientWSize);
-    RtlCopyMemory(RtlpUserPfnClientWorker, ClientWorker, ClientWorkerSize);
-
-    if (InterlockedCompareExchange(&RtlpUserPfnInitialized, TRUE, FALSE))
-        return STATUS_INVALID_PARAMETER;
-
+    RtlpUserPfnClientA = ClientA;
+    RtlpUserPfnClientW = ClientW;
+    RtlpUserPfnClientWorker = ClientWorker;
+    InterlockedExchange(&RtlpUserPfnInitialized, TRUE);
     return STATUS_SUCCESS;
 }
 
@@ -49,7 +45,7 @@ RtlRetrieveNtUserPfn(
     _Out_ const VOID **ClientW,
     _Out_ const VOID **ClientWorker)
 {
-    if (!RtlpUserPfnInitialized)
+    if (ReadAcquire(&RtlpUserPfnInitialized) != TRUE)
         return STATUS_INVALID_PARAMETER;
 
     *ClientA = RtlpUserPfnClientA;
@@ -62,11 +58,8 @@ NTSTATUS
 NTAPI
 RtlResetNtUserPfn(VOID)
 {
-    if (!InterlockedExchange(&RtlpUserPfnInitialized, FALSE))
+    if (InterlockedCompareExchange(&RtlpUserPfnInitialized, FALSE, TRUE) != TRUE)
         return STATUS_INVALID_PARAMETER;
 
-    RtlZeroMemory(RtlpUserPfnClientA, sizeof(RtlpUserPfnClientA));
-    RtlZeroMemory(RtlpUserPfnClientW, sizeof(RtlpUserPfnClientW));
-    RtlZeroMemory(RtlpUserPfnClientWorker, sizeof(RtlpUserPfnClientWorker));
     return STATUS_SUCCESS;
 }

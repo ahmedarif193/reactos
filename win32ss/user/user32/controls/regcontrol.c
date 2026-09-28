@@ -15,6 +15,12 @@ DWORD RegisterDefaultClasses = FALSE;
 static PFNCLIENT pfnClientA;
 static PFNCLIENT pfnClientW;
 static PFNCLIENTWORKER pfnClientWorker;
+static struct
+{
+    PFNCLIENT ClientA;
+    PFNCLIENT ClientW;
+    PFNCLIENTWORKER ClientWorker;
+} User32PublishedPfn;
 
 
 /***********************************************************************
@@ -269,17 +275,16 @@ BOOL WINAPI RegisterClientPFN(VOID)
   pfnClientWorker.pfnGhostWndProc     = GhostWndProc_common;
   pfnClientWorker.pfnCtfHookProc      = User32DefWindowProc;
 
-  {
-      PFNCLIENT PublishedA = pfnClientA, PublishedW = pfnClientW;
-
-      PublishedA.pfnTitleWndProc = pfnClientA.pfnMessageWindowProc;
-      PublishedA.pfnMessageWindowProc = pfnClientA.pfnTitleWndProc;
-      PublishedW.pfnTitleWndProc = pfnClientW.pfnMessageWindowProc;
-      PublishedW.pfnMessageWindowProc = pfnClientW.pfnTitleWndProc;
-      RtlInitializeNtUserPfn(&PublishedA, sizeof(PublishedA),
-                             &PublishedW, sizeof(PublishedW),
-                             &pfnClientWorker, sizeof(pfnClientWorker));
-  }
+  User32PublishedPfn.ClientA = pfnClientA;
+  User32PublishedPfn.ClientW = pfnClientW;
+  User32PublishedPfn.ClientWorker = pfnClientWorker;
+  User32PublishedPfn.ClientA.pfnTitleWndProc = pfnClientA.pfnMessageWindowProc;
+  User32PublishedPfn.ClientA.pfnMessageWindowProc = pfnClientA.pfnTitleWndProc;
+  User32PublishedPfn.ClientW.pfnTitleWndProc = pfnClientW.pfnMessageWindowProc;
+  User32PublishedPfn.ClientW.pfnMessageWindowProc = pfnClientW.pfnTitleWndProc;
+  RtlInitializeNtUserPfn(&User32PublishedPfn.ClientA, sizeof(User32PublishedPfn.ClientA),
+                         &User32PublishedPfn.ClientW, sizeof(User32PublishedPfn.ClientW),
+                         &User32PublishedPfn.ClientWorker, sizeof(User32PublishedPfn.ClientWorker));
 
   Status = NtUserInitializeClientPfnArrays( &pfnClientA,
                                             &pfnClientW,
