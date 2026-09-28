@@ -1816,10 +1816,24 @@ HRESULT WINAPI AVISaveVW(LPCWSTR szFile, CLSID *pclsidHandler,
 	    hres = AVIStreamRead(pInStreams[curStream], lStart[curStream],
 				 lFirstVideo - lStart[curStream], lpBuffer,
 				 cbBuffer, &lReadBytes, &lReadSamples);
+#ifdef __REACTOS__
+	    if (hres == AVIERR_BUFFERTOOSMALL) {
+	      LPVOID newBuffer;
+	      if (cbBuffer > MAXLONG / 2 ||
+	          !(newBuffer = realloc(lpBuffer, cbBuffer * 2))) {
+	        hres = AVIERR_MEMORY;
+	        goto error;
+	      }
+	      lpBuffer = newBuffer;
+	      cbBuffer *= 2;
+	    }
+	  } while (hres == AVIERR_BUFFERTOOSMALL);
+#else
 	  } while ((hres == AVIERR_BUFFERTOOSMALL) &&
 		   (lpBuffer = realloc(lpBuffer, cbBuffer *= 2)) != NULL);
 	  if (lpBuffer == NULL)
 	    hres = AVIERR_MEMORY;
+#endif
 	  if (FAILED(hres))
 	    goto error;
 
@@ -1885,10 +1899,24 @@ HRESULT WINAPI AVISaveVW(LPCWSTR szFile, CLSID *pclsidHandler,
 	    lReadSamples = 0;
 	    hres = AVIStreamRead(pInStreams[curStream],sInfo.dwStart,lSamples,
 				 lpBuffer,cbBuffer,&lReadBytes,&lReadSamples);
+#ifdef __REACTOS__
+	    if (hres == AVIERR_BUFFERTOOSMALL) {
+	      LPVOID newBuffer;
+	      if (cbBuffer > MAXLONG / 2 ||
+	          !(newBuffer = realloc(lpBuffer, cbBuffer * 2))) {
+	        hres = AVIERR_MEMORY;
+	        goto error;
+	      }
+	      lpBuffer = newBuffer;
+	      cbBuffer *= 2;
+	    }
+	  } while (hres == AVIERR_BUFFERTOOSMALL);
+#else
 	  } while ((hres == AVIERR_BUFFERTOOSMALL) &&
 		   (lpBuffer = realloc(lpBuffer, cbBuffer *= 2)) != NULL);
 	  if (lpBuffer == NULL)
 	    hres = AVIERR_MEMORY;
+#endif
 	  if (FAILED(hres))
 	    goto error;
 	  if (lReadSamples != 0) {
@@ -1931,10 +1959,24 @@ HRESULT WINAPI AVISaveVW(LPCWSTR szFile, CLSID *pclsidHandler,
 	    lReadBytes   = cbBuffer;
 	    hres = AVIStreamRead(pInStreams[curStream], sInfo.dwStart, 1,
 				 lpBuffer, cbBuffer,&lReadBytes,&lReadSamples);
+#ifdef __REACTOS__
+	    if (hres == AVIERR_BUFFERTOOSMALL) {
+	      LPVOID newBuffer;
+	      if (cbBuffer > MAXLONG / 2 ||
+	          !(newBuffer = realloc(lpBuffer, cbBuffer * 2))) {
+	        hres = AVIERR_MEMORY;
+	        goto error;
+	      }
+	      lpBuffer = newBuffer;
+	      cbBuffer *= 2;
+	    }
+	  } while (hres == AVIERR_BUFFERTOOSMALL);
+#else
 	  } while ((hres == AVIERR_BUFFERTOOSMALL) &&
 		   (lpBuffer = realloc(lpBuffer, cbBuffer *= 2)) != NULL);
 	  if (lpBuffer == NULL)
 	    hres = AVIERR_MEMORY;
+#endif
 	  if (FAILED(hres))
 	    goto error;
 	  if (lReadSamples != 1) {
