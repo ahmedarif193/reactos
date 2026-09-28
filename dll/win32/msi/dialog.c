@@ -275,10 +275,21 @@ static UINT dialog_add_font( MSIRECORD *rec, void *param )
     LOGFONTW lf;
     INT style;
     HDC hdc;
+#ifdef __REACTOS__
+    size_t len;
+#endif
 
     /* create a font and add it to the list */
     name = MSI_RecordGetString( rec, 1 );
+#ifdef __REACTOS__
+    len = wcslen( name ) + 1;
+    if (len > ((size_t)-1 - offsetof( struct font, name )) / sizeof(WCHAR))
+        return ERROR_OUTOFMEMORY;
+    font = malloc( offsetof( struct font, name ) + len * sizeof(WCHAR) );
+    if (!font) return ERROR_OUTOFMEMORY;
+#else
     font = malloc( offsetof( struct font, name[wcslen( name ) + 1] ) );
+#endif
     lstrcpyW( font->name, name );
     list_add_head( &dialog->fonts, &font->entry );
 
@@ -319,9 +330,17 @@ static struct font *dialog_find_font( msi_dialog *dialog, const WCHAR *name )
 
     LIST_FOR_EACH_ENTRY( font, &dialog->fonts, struct font, entry )
         if( !wcscmp( font->name, name ) )  /* FIXME: case sensitive? */
+#ifdef __REACTOS__
+            return font;
+#else
             break;
+#endif
 
+#ifdef __REACTOS__
+    return NULL;
+#else
     return font;
+#endif
 }
 
 static UINT dialog_set_font( msi_dialog *dialog, HWND hwnd, const WCHAR *name )
@@ -1573,6 +1592,9 @@ static void dialog_combobox_update( msi_dialog *dialog, struct control *control 
             return;
         }
         if (text) free( text );
+#ifdef __REACTOS__
+        text = NULL;
+#endif
     }
 
     SendMessageW( control->hwnd, CB_SETCURSEL, -1, 0 );
@@ -1730,18 +1752,40 @@ static void mask_control_change( struct msi_maskedit_info *info )
     LPWSTR val;
     UINT i, n, r;
 
+#ifdef __REACTOS__
+    if ((SIZE_T)info->num_chars > ~(SIZE_T)0 / sizeof(WCHAR) - 1) return;
+    val = malloc( ((SIZE_T)info->num_chars + 1) * sizeof(WCHAR) );
+    if (!val) return;
+    val[0] = 0;
+#else
     val = malloc( (info->num_chars + 1) * sizeof(WCHAR) );
+#endif
     for( i=0, n=0; i<info->num_groups; i++ )
     {
         if (info->group[i].len == ~0u)
         {
             UINT len = SendMessageW( info->group[i].hwnd, WM_GETTEXTLENGTH, 0, 0 );
+#ifdef __REACTOS__
+            WCHAR *new_val;
+
+            if (len >= INT_MAX || (SIZE_T)len > ~(SIZE_T)0 / sizeof(WCHAR) - 1)
+                break;
+            new_val = realloc( val, ((SIZE_T)len + 1) * sizeof(WCHAR) );
+            if (!new_val)
+                break;
+            val = new_val;
+#else
             val = realloc( val, (len + 1) * sizeof(WCHAR) );
+#endif
             GetWindowTextW( info->group[i].hwnd, val, len + 1 );
         }
         else
         {
+#ifdef __REACTOS__
+            if (info->group[i].len > info->num_chars - n)
+#else
             if (info->group[i].len + n > info->num_chars)
+#endif
             {
                 ERR("can't fit control %d text into template\n",i);
                 break;
@@ -1837,6 +1881,9 @@ static void maskedit_set_text( struct msi_maskedit_info *info, const WCHAR *text
         if( info->group[i].len < lstrlenW( p ) )
         {
             WCHAR *chunk = wcsdup( p );
+#ifdef __REACTOS__
+            if (!chunk) return;
+#endif
             chunk[ info->group[i].len ] = 0;
             SetWindowTextW( info->group[i].hwnd, chunk );
             free( chunk );
@@ -2961,6 +3008,13 @@ static UINT dialog_directorylist_new( msi_dialog *dialog )
     item.iItem = 0;
     item.iSubItem = 0;
     item.pszText = get_unique_folder_name( path, &item.cchTextMax );
+#ifdef __REACTOS__
+    if (!item.pszText)
+    {
+        free( path );
+        return ERROR_FUNCTION_FAILED;
+    }
+#endif
 
     index = SendMessageW( control->hwnd, LVM_INSERTITEMW, 0, (LPARAM)&item );
     SendMessageW( control->hwnd, LVM_ENSUREVISIBLE, index, 0 );
@@ -3247,10 +3301,17 @@ static UINT dialog_volumecost_list( msi_dialog *dialog, MSIRECORD *rec )
 
 static UINT dialog_volsel_handler( msi_dialog *dialog, struct control *control, WPARAM param )
 {
+#ifdef __REACTOS__
+    WCHAR text[MAX_PATH] = L"";
+#else
     WCHAR text[MAX_PATH];
+#endif
     LPWSTR prop;
     BOOL indirect;
     int index;
+#ifdef __REACTOS__
+    LRESULT len;
+#endif
 
     if (HIWORD(param) != CBN_SELCHANGE)
         return ERROR_SUCCESS;
@@ -3262,10 +3323,20 @@ static UINT dialog_volsel_handler( msi_dialog *dialog, struct control *control, 
         return ERROR_FUNCTION_FAILED;
     }
 
+#ifdef __REACTOS__
+    len = SendMessageW( control->hwnd, CB_GETLBTEXTLEN, index, 0 );
+    if (len == CB_ERR || (SIZE_T)len >= ARRAY_SIZE(text)) return ERROR_FUNCTION_FAILED;
+    if (SendMessageW( control->hwnd, CB_GETLBTEXT, index, (LPARAM)text ) == CB_ERR)
+        return ERROR_FUNCTION_FAILED;
+#else
     SendMessageW( control->hwnd, CB_GETLBTEXT, index, (LPARAM)text );
+#endif
 
     indirect = control->attributes & msidbControlAttributesIndirect;
     prop = dialog_dup_property( dialog, control->property, indirect );
+#ifdef __REACTOS__
+    if (!prop) return ERROR_OUTOFMEMORY;
+#endif
 
     dialog_set_property( dialog->package, prop, text );
 
@@ -3732,7 +3803,15 @@ static LRESULT dialog_oncreate( HWND hwnd, CREATESTRUCTW *cs )
                   pos.right - pos.left, pos.bottom - pos.top,
                   SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOREDRAW );
 
+#ifdef __REACTOS__
+    if (dialog_build_font_list( dialog ) == ERROR_OUTOFMEMORY)
+    {
+        msiobj_release( &rec->hdr );
+        return -1;
+    }
+#else
     dialog_build_font_list( dialog );
+#endif
     dialog_fill_controls( dialog );
     dialog_evaluate_control_conditions( dialog );
     dialog_set_tab_order( dialog, MSI_RecordGetString( rec, 8 ) );

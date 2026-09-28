@@ -591,8 +591,16 @@ UINT ACTION_MsiPublishAssemblies( MSIPACKAGE *package )
         wants_feature_in_descriptor =
             (list_count(&package->features) >= 2 && assembly->feature);
         buffer_len = 43 + (wants_feature_in_descriptor ? lstrlenW(assembly->feature) : 0);
+#ifdef __REACTOS__
+        if (buffer_len > MAXDWORD / sizeof(WCHAR))
+            return ERROR_OUTOFMEMORY;
+#endif
         size = buffer_len * sizeof(WCHAR);
         buffer = malloc(size);
+#ifdef __REACTOS__
+        if (!buffer)
+            return ERROR_OUTOFMEMORY;
+#endif
 
         i = 0;
         CLSIDFromString( package->ProductCode, &guid );

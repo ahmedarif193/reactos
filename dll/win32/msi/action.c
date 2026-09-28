@@ -2679,9 +2679,17 @@ static BYTE *build_multi_string_value( BYTE *old_value, DWORD old_size,
     const WCHAR *new_ptr = NULL, *old_ptr = NULL;
     enum join_op op = JOIN_OP_REPLACE;
     WCHAR **old = NULL, **new = NULL;
+#ifdef __REACTOS__
+    BYTE *ret = NULL;
+#else
     BYTE *ret;
+#endif
 
+#ifdef __REACTOS__
+    if (new_size / sizeof(WCHAR) > 2)
+#else
     if (new_size / sizeof(WCHAR) - 1 > 1)
+#endif
     {
         new_ptr = (const WCHAR *)new_value;
         new_len = new_size / sizeof(WCHAR) - 1;
@@ -2704,16 +2712,32 @@ static BYTE *build_multi_string_value( BYTE *old_value, DWORD old_size,
             new_ptr++;
         }
         new = split_multi_string_values( new_ptr, new_len, &new_count );
+#ifdef __REACTOS__
+        if (!new) goto done;
+#endif
     }
+#ifdef __REACTOS__
+    if (old_size / sizeof(WCHAR) > 2)
+#else
     if (old_size / sizeof(WCHAR) - 1 > 1)
+#endif
     {
         old_ptr = (const WCHAR *)old_value;
         old_len = old_size / sizeof(WCHAR) - 1;
         old = split_multi_string_values( old_ptr, old_len, &old_count );
+#ifdef __REACTOS__
+        if (!old) goto done;
+#endif
     }
     ret = (BYTE *)join_multi_string_values( op, old, old_count, new, new_count, size );
+#ifdef __REACTOS__
+done:
+    if (old) for (i = 0; i < old_count; i++) free( old[i] );
+    if (new) for (i = 0; i < new_count; i++) free( new[i] );
+#else
     for (i = 0; i < old_count; i++) free( old[i] );
     for (i = 0; i < new_count; i++) free( new[i] );
+#endif
     free( old );
     free( new );
     return ret;
