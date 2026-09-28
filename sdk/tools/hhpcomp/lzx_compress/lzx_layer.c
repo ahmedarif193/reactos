@@ -107,7 +107,7 @@ cmp_pathlengths(const void *in_a, const void *in_b)
 }
 
 /* standard huffman building algorithm */
-static void
+static int
 build_huffman_tree(int nelem, int max_code_length, int *freq, huff_entry *tree)
 {
   h_elem *leaves = malloc(nelem * sizeof(h_elem));
@@ -122,6 +122,9 @@ build_huffman_tree(int nelem, int max_code_length, int *freq, huff_entry *tree)
   short codes_too_long = 0;
   ih_elem *f1, *f2;
   int i;
+
+  if (!leaves)
+    return -2;
 
   for (i = 0; i < nelem; i++) {
     leaves[i].freq = freq[i];
@@ -140,6 +143,10 @@ build_huffman_tree(int nelem, int max_code_length, int *freq, huff_entry *tree)
 
   if (nleaves >= 2) {
     inodes = malloc((nelem-1) * sizeof(ih_elem));
+    if (!inodes) {
+      free(leaves);
+      return -2;
+    }
     do {
       if (codes_too_long) {
 	for (leaves_left = 0; leaves_left < nelem; leaves_left++) {
@@ -366,6 +373,7 @@ build_huffman_tree(int nelem, int max_code_length, int *freq, huff_entry *tree)
   }
 
   free(leaves);
+  return 0;
 }
 
 /* from Stuart Caie's code -- I'm hoping this code is too small to encumber
@@ -946,6 +954,11 @@ lzx_write_compressed_tree(struct lzx_data *lzxd,
 
   codep = codes = malloc(treesize*sizeof(char));
   runp = runs = malloc(treesize*sizeof(char));
+  if (!codes || !runs) {
+    free(codes);
+    free(runs);
+    return -2;
+  }
   memset(freqs, 0, sizeof(freqs));
   cur_run = 1;
   last_len = tree[0].codelength;
@@ -1014,7 +1027,11 @@ lzx_write_compressed_tree(struct lzx_data *lzxd,
   }
 #endif
   /* now create the huffman table and write out the pretree */
-  build_huffman_tree(LZX_PRETREE_SIZE, 16, freqs, pretree);
+  if (build_huffman_tree(LZX_PRETREE_SIZE, 16, freqs, pretree) != 0) {
+    free(codes);
+    free(runs);
+    return -2;
+  }
   for (i = 0; i < LZX_PRETREE_SIZE; i++) {
     lzx_write_bits(lzxd, 4, pretree[i].codelength);
   }
@@ -1070,9 +1087,12 @@ int lzx_compress_block(lzx_data *lzxd, int block_size, int subdivide)
   long uncomp_length;
 
   if ((lzxd->block_size != block_size) || (lzxd->block_codes == NULL)) {
+    uint32_t *codes = malloc(block_size * sizeof(uint32_t));
+    if (!codes)
+      return -2;
     if (lzxd->block_codes != NULL) free(lzxd->block_codes);
     lzxd->block_size = block_size;
-    lzxd->block_codes =  malloc(block_size * sizeof(uint32_t));
+    lzxd->block_codes = codes;
   }
   lzxd->subdivide = subdivide?1:0;
 
@@ -1115,7 +1135,8 @@ int lzx_compress_block(lzx_data *lzxd, int block_size, int subdivide)
 
       /* handle extra bits */
       uncomp_bits = comp_bits = 0;
-      build_huffman_tree(LZX_ALIGNED_SIZE, 7, lzxd->aligned_freq_table, lzxd->aligned_tree);
+      if (build_huffman_tree(LZX_ALIGNED_SIZE, 7, lzxd->aligned_freq_table, lzxd->aligned_tree) != 0)
+        return -2;
       for (i = 0; i < LZX_ALIGNED_SIZE; i++) {
 	uncomp_bits += lzxd->aligned_freq_table[i]* 3;
 	comp_bits += lzxd->aligned_freq_table[i]* lzxd->aligned_tree[i].codelength;
@@ -1144,24 +1165,28 @@ int lzx_compress_block(lzx_data *lzxd, int block_size, int subdivide)
 	}
       }
       /* end extra bits */
-      build_huffman_tree(lzxd->main_tree_size, LZX_MAX_CODE_LENGTH,
-			 lzxd->main_freq_table, lzxd->main_tree);
-      build_huffman_tree(NUM_SECONDARY_LENGTHS, 16,
-			 lzxd->length_freq_table, lzxd->length_tree);
+      if (build_huffman_tree(lzxd->main_tree_size, LZX_MAX_CODE_LENGTH,
+			 lzxd->main_freq_table, lzxd->main_tree) != 0 ||
+          build_huffman_tree(NUM_SECONDARY_LENGTHS, 16,
+			 lzxd->length_freq_table, lzxd->length_tree) != 0)
+        return -2;
 
 
 
       /* now write the pre-tree and tree for main 1 */
-      lzx_write_compressed_tree(lzxd, lzxd->main_tree, lzxd->prev_main_treelengths, NUM_CHARS);
+      if (lzx_write_compressed_tree(lzxd, lzxd->main_tree, lzxd->prev_main_treelengths, NUM_CHARS) != 0)
+        return -2;
 
       /* now write the pre-tree and tree for main 2*/
-      lzx_write_compressed_tree(lzxd, lzxd->main_tree + NUM_CHARS,
+      if (lzx_write_compressed_tree(lzxd, lzxd->main_tree + NUM_CHARS,
 				lzxd->prev_main_treelengths + NUM_CHARS,
-				lzxd->main_tree_size - NUM_CHARS);
+				lzxd->main_tree_size - NUM_CHARS) != 0)
+        return -2;
 
       /* now write the pre tree and tree for length */
-      lzx_write_compressed_tree(lzxd, lzxd->length_tree, lzxd->prev_length_treelengths,
-				NUM_SECONDARY_LENGTHS);
+      if (lzx_write_compressed_tree(lzxd, lzxd->length_tree, lzxd->prev_length_treelengths,
+				NUM_SECONDARY_LENGTHS) != 0)
+        return -2;
 
       /* now write literals */
       lzx_write_compressed_literals(lzxd, block_type);
@@ -1195,12 +1220,13 @@ int lzx_init(struct lzx_data **lzxdp, int wsize_code,
   int wsize;
   struct lzx_data *lzxd;
 
+  *lzxdp = NULL;
   if ((wsize_code < 15) || (wsize_code > 21)) {
     return -1;
   }
   lzx_init_static();
 
-  *lzxdp = lzxd = malloc(sizeof(*lzxd));
+  lzxd = calloc(1, sizeof(*lzxd));
   if (lzxd == 0)
     return -2;
 
@@ -1224,13 +1250,26 @@ int lzx_init(struct lzx_data **lzxdp, int wsize_code,
   lzxd->prev_main_treelengths = malloc(sizeof(uint8_t)*lzxd->main_tree_size);
 
   lzxd->lzi = malloc(sizeof (*lzxd->lzi));
+  if (!lzxd->main_freq_table || !lzxd->main_tree ||
+      !lzxd->prev_main_treelengths || !lzxd->lzi)
+    goto nomem;
   /* the -3 prevents matches at wsize, wsize-1, wsize-2, all of which are illegal */
-  lz_init(lzxd->lzi, wsize, wsize - 3, MAX_MATCH, MIN_MATCH, LZX_FRAME_SIZE,
-	  lzx_get_chars, lzx_output_match, lzx_output_literal,lzxd);
+  if (lz_init(lzxd->lzi, wsize, wsize - 3, MAX_MATCH, MIN_MATCH, LZX_FRAME_SIZE,
+	  lzx_get_chars, lzx_output_match, lzx_output_literal,lzxd) != 0)
+    goto nomem;
   lzxd->len_uncompressed_input = 0;
   lzxd->len_compressed_output = 0;
   lzx_reset(lzxd);
+  *lzxdp = lzxd;
   return 0;
+
+nomem:
+  free(lzxd->lzi);
+  free(lzxd->prev_main_treelengths);
+  free(lzxd->main_tree);
+  free(lzxd->main_freq_table);
+  free(lzxd);
+  return -2;
 }
 
 int lzx_finish(struct lzx_data *lzxd, struct lzx_results *lzxr)
@@ -1242,6 +1281,7 @@ int lzx_finish(struct lzx_data *lzxd, struct lzx_results *lzxr)
   }
   lz_release(lzxd->lzi);
   free(lzxd->lzi);
+  free(lzxd->block_codes);
   free(lzxd->prev_main_treelengths);
   free(lzxd->main_tree);
   free(lzxd->main_freq_table);

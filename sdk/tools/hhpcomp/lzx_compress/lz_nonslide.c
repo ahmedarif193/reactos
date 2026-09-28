@@ -39,7 +39,7 @@
 #define MAX_MATCH 253
 #define MIN_MATCH 2
 
-void lz_init(lz_info *lzi, int wsize, int max_dist,
+int lz_init(lz_info *lzi, int wsize, int max_dist,
 	     int max_match, int min_match,
 	     int frame_size,
 	     get_chars_t get_chars,
@@ -63,6 +63,8 @@ void lz_init(lz_info *lzi, int wsize, int max_dist,
   lzi->max_dist = max_dist;
   lzi->block_buf_size = wsize + lzi->max_dist;
   lzi->block_buf = malloc(lzi->block_buf_size);
+  if (!lzi->block_buf)
+    return -2;
   lzi->block_bufe = lzi->block_buf + lzi->block_buf_size;
   assert(lzi->block_buf != NULL);
 
@@ -77,7 +79,14 @@ void lz_init(lz_info *lzi, int wsize, int max_dist,
   lzi->frame_size = frame_size;
   lzi->lentab = calloc(sizeof(int), lzi->block_buf_size);
   lzi->prevtab = calloc(sizeof(u_char *), lzi->block_buf_size);
+  if (!lzi->lentab || !lzi->prevtab) {
+    free(lzi->prevtab);
+    free(lzi->lentab);
+    free(lzi->block_buf);
+    return -2;
+  }
   lzi->analysis_valid = 0;
+  return 0;
 }
 
 void lz_release(lz_info *lzi)

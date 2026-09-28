@@ -96,7 +96,12 @@ int main(int argc, char** argv)
         }
     }
 
-    chmc_tree_done(&chm);
+    err = chmc_tree_done(&chm);
     chmc_term(&chm);
+    if (err)
+    {
+        cerr << "could not finish chmc" << endl;
+        return EXIT_FAILURE;
+    }
 
 }

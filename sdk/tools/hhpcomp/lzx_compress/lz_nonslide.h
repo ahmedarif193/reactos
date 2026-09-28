@@ -50,7 +50,7 @@ struct lz_info
   void *user_data;
 };
 
-void lz_init(lz_info *lzi, int wsize, int max_dist,
+int lz_init(lz_info *lzi, int wsize, int max_dist,
 	     int max_match, int min_match,
 	     int frame_size,
 	     get_chars_t get_chars,

@@ -733,6 +733,7 @@ int chmc_tree_done( struct chmcFile *chm )
 	struct chmcTreeNode *ctrl;
 	UInt32 str_index;
 	const char *val;
+	int err;
 
 	assert(chm);
 
@@ -881,7 +882,9 @@ int chmc_tree_done( struct chmcFile *chm )
 
 	// NOTE NOTE NOTE add any meta compressed before crunch ;-)
 
-	chmc_crunch_lzx(chm, 1);
+	err = chmc_crunch_lzx(chm, 1);
+	if (err)
+		return err;
 
 	chmc_control_data_done(chm);
 	chmc_reset_table_done(chm);
@@ -934,6 +937,7 @@ int chmc_crunch_lzx(struct chmcFile *chm, int sect_id)
 	int subd_ok = 1;
 	int do_reset = 1;
 	int block_size;
+	int err;
 	lzx_results lzxr;
 	int wsize_code = 16;
 
@@ -957,7 +961,9 @@ int chmc_crunch_lzx(struct chmcFile *chm, int sect_id)
 	lzx_info.fd = -1;
 	lzx_info.fd_offset = 0;
 
-	chmc_compressed_add_mark(lzx_info.chm, 0);
+	err = chmc_compressed_add_mark(lzx_info.chm, 0);
+	if (err)
+		return err;
 	lzx_info.section->reset_table_header.block_count++;
 
 	/* undocumented fact, according to Caie --
@@ -972,19 +978,27 @@ int chmc_crunch_lzx(struct chmcFile *chm, int sect_id)
 	//  lzx_info.section->control_data.windowSize = wsize_code;
 	//  lzx_info.section->control_data.windowsPerReset = block_size;
 
-	lzx_init(&lzxd, wsize_code,
+	err = lzx_init(&lzxd, wsize_code,
 	         _lzx_get_bytes, &lzx_info, _lzx_at_eof,
 	         _lzx_put_bytes, &lzx_info,
 	         _lzx_mark_frame, &lzx_info);
+	if (err)
+		return err == -2 ? CHMC_ENOMEM : CHMC_EINVAL;
 
 	while(! _lzx_at_eof(&lzx_info)) {
 		if (do_reset)
 			lzx_reset(lzxd);
-		lzx_compress_block(lzxd, block_size, subd_ok);
+		err = lzx_compress_block(lzxd, block_size, subd_ok);
+		if (err)
+			break;
 	}
 	lzx_finish(lzxd, &lzxr);
+	if (lzx_info.fd != -1)
+		close(lzx_info.fd);
+	if (err)
+		return err == -2 ? CHMC_ENOMEM : CHMC_EINVAL;
 
-	return CHMC_NOERR;
+	return lzx_info.error ? CHMC_EINVAL : CHMC_NOERR;
 }
 
 static int _lzx_at_eof(void *arg)
@@ -1023,7 +1037,10 @@ static void _lzx_mark_frame(void *arg, uint32_t uncomp, uint32_t comp)
 
 	section->reset_table_header.block_count++;
 
-	chmc_compressed_add_mark( lzx_info->chm, compressed );
+	if (chmc_compressed_add_mark(lzx_info->chm, compressed) != CHMC_NOERR) {
+		lzx_info->error = CHMC_ENOMEM;
+		return;
+	}
 
 	section->reset_table_header.uncompressed_len = uncomp;
 	section->reset_table_header.compressed_len = comp;
