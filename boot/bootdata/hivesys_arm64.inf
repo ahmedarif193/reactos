@@ -7,6 +7,8 @@
 [AddReg]
 
 HKLM,"SOFTWARE\Microsoft\Wow64\x86",,0x00000000,"wow64fex.dll"
+HKLM,"SOFTWARE\Wow6432Node",,0x00000012
+HKLM,"SOFTWARE\Classes\Wow6432Node",,0x00000012
 
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management","LargeStackSize",0x00010001,0x00028000
 
