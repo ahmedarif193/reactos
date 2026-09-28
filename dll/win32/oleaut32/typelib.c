@@ -1573,7 +1573,7 @@ static TYPEDESC std_typedesc[VT_LPWSTR+1] =
     {{0}, VT_CARRAY}, {{0}, VT_USERDEFINED}, {{0}, VT_LPSTR},   {{0}, VT_LPWSTR}
 };
 
-static void TLB_abort(void)
+static inline void TLB_abort(void)
 {
     DebugBreak();
 }

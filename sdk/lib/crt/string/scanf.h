@@ -130,7 +130,9 @@
 #endif /* CONSOLE */
 
 _FUNCTION_ {
+#if !defined(__REACTOS__) || !defined(_LIBCNT_)
     pthreadlocinfo locinfo;
+#endif
     int rd = 0, consumed = 0;
     int nch;
     if (!*format) return 0;
@@ -153,10 +155,14 @@ _FUNCTION_ {
         return _EOF_RET;
     }
 
+#if !defined(__REACTOS__) || !defined(_LIBCNT_)
     if(!locale)
         locinfo = get_locinfo();
     else
         locinfo = locale->locinfo;
+#else
+    (void)locale;
+#endif
 
     while (*format) {
 	/* a whitespace character in the format string causes scanf to read,
@@ -178,7 +184,9 @@ _FUNCTION_ {
 	    int base;
 	    int h_prefix = 0;
 	    int l_prefix = 0;
+#if !defined(__REACTOS__) || !defined(_LIBCNT_)
 	    int L_prefix = 0;
+#endif
 	    int w_prefix = 0;
 	    int prefix_finished = 0;
 	    int I64_prefix = 0;
@@ -207,7 +215,11 @@ _FUNCTION_ {
                     l_prefix = 1;
                     break;
 		case 'w': w_prefix = 1; break;
-		case 'L': L_prefix = 1; break;
+		case 'L':
+#if !defined(__REACTOS__) || !defined(_LIBCNT_)
+                    L_prefix = 1;
+#endif
+                    break;
 		case 'I':
 		    if (*(format + 1) == '6' &&
 			*(format + 2) == '4') {

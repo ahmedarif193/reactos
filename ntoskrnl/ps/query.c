@@ -3629,7 +3629,7 @@ NtSetInformationProcess(
 
         case ProcessPowerThrottlingState:
         {
-            PROCESS_POWER_THROTTLING_STATE PowerThrottlingState;
+            PROCESS_POWER_THROTTLING_STATE PowerThrottlingState = {0};
             PPO_PROCESS_ENERGY_CONTEXT EnergyContext;
 
             _SEH2_TRY
@@ -4794,7 +4794,7 @@ NtSetInformationThread(
 
         case ThreadEnableAlignmentFaultFixup:
         {
-            BOOLEAN EnableFixup;
+            BOOLEAN EnableFixup = FALSE;
 
             _SEH2_TRY
             {
@@ -4884,7 +4884,7 @@ NtSetInformationThread(
 
         case ThreadWorkOnBehalfTicket:
         {
-            ALPC_WORK_ON_BEHALF_TICKET Ticket;
+            ALPC_WORK_ON_BEHALF_TICKET Ticket = {0};
             PETHREAD TicketThread = NULL;
             PETHREAD OldThread;
 
@@ -4942,7 +4942,7 @@ NtSetInformationThread(
 
         case ThreadDbgkWerReportActive:
         {
-            ULONG Value;
+            ULONG Value = 0;
 
             _SEH2_TRY
             {
@@ -4976,7 +4976,7 @@ NtSetInformationThread(
         case ThreadAttachContainer:
         case ThreadCpuAccountingInformation:
         {
-            HANDLE ObjectHandle;
+            HANDLE ObjectHandle = NULL;
 
             _SEH2_TRY
             {
@@ -5030,7 +5030,7 @@ NtSetInformationThread(
         case ThreadExplicitCaseSensitivity:
         case ThreadStrongerBadHandleChecks:
         {
-            ULONG Value;
+            ULONG Value = 0;
 
             if (ThreadInformationLength != sizeof(ULONG))
             {

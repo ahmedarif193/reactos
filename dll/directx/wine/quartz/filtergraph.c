@@ -1294,7 +1294,7 @@ static HRESULT autoplug(struct filter_graph *graph, IPin *source, IPin *sink,
     IAMGraphBuilderCallback *callback = NULL;
     struct filter *graph_filter;
     IEnumMoniker *enummoniker;
-    unsigned int type_count;
+    unsigned int type_count = 0;
     IFilterMapper2 *mapper;
     IBaseFilter *filter;
     GUID *types = NULL;

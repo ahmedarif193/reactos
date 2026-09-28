@@ -1482,7 +1482,7 @@ NtUserSetObjectInformation(
 {
     NTSTATUS Status;
     PVOID Object;
-    USEROBJECTFLAGS ObjectFlags;
+    USEROBJECTFLAGS ObjectFlags = {0};
     OBJECT_HANDLE_ATTRIBUTE_INFORMATION HandleFlags;
 
     if (nIndex != UOI_FLAGS || !pvInformation || nLength < sizeof(ObjectFlags))

@@ -678,7 +678,7 @@ DxgkpAdmitPresentOverlays(
 {
     DXGK_CHECK_MULTIPLANE_OVERLAY_SUPPORT_PLANE Planes[1 + RXGK_PRESENT_MAX_OVERLAYS];
     DXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT Check;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     UINT Index, Other;
 
     /* Only an MMIO flip can arm every plane at once. */

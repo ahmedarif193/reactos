@@ -7,7 +7,6 @@
 
 #include <win32k.h>
 #include <hidusage.h>
-DBG_DEFAULT_CHANNEL(UserInput);
 
 #define RAWINPUT_MAX_PENDING 10000
 
@@ -752,7 +751,7 @@ NtUserGetRawInputDeviceInfo(
     PUINT pcbSize)
 {
     PRAWINPUT_DEVICE_OBJECT Device;
-    UINT cbData, Len = 0, cbCopy = 0;
+    UINT cbData = 0, Len = 0, cbCopy = 0;
     PVOID pSource = NULL;
     DWORD Ret = (DWORD)-1;
 
