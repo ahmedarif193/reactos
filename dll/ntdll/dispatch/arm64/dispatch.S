@@ -13,6 +13,36 @@
     .extern ChpeRtlUserThreadStart
     .extern ChpeInvokeUserApcRoutine
 
+    .global ChpeCallArm64Routine
+    .seh_proc ChpeCallArm64Routine
+ChpeCallArm64Routine:
+    stp     x29, x30, [sp, #-48]!
+    .seh_save_fplr_x 48
+    stp     x23, x24, [sp, #16]
+    .seh_save_regp x23, 16
+    str     x28, [sp, #32]
+    .seh_save_reg x28, 32
+    mov     x29, sp
+    .seh_set_fp
+    .seh_endprologue
+    mov     x16, x0
+    mov     x0, x1
+    mov     x1, x2
+    mov     x2, x3
+    mov     x3, x4
+    mov     x4, x5
+    blr     x16
+    .seh_startepilogue
+    ldr     x28, [sp, #32]
+    .seh_save_reg x28, 32
+    ldp     x23, x24, [sp, #16]
+    .seh_save_regp x23, 16
+    ldp     x29, x30, [sp], #48
+    .seh_save_fplr_x 48
+    .seh_endepilogue
+    ret
+    .seh_endproc
+
     /*
      * The kernel enters with sp pointing at a KUSER_EXCEPTION_STACK whose
      * first member is the interrupted CONTEXT. Describe that synthetic frame

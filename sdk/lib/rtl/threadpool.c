@@ -86,6 +86,7 @@ enum threadpool_callback_type
     THREADPOOL_CALLBACK_WORK,
     THREADPOOL_CALLBACK_TIMER,
     THREADPOOL_CALLBACK_WAIT,
+    THREADPOOL_CALLBACK_IO,
     THREADPOOL_CALLBACK_ALPC
 };
 
@@ -102,16 +103,14 @@ VOID
 NTAPI
 RtlpCallWaitOrTimerCallback(WAITORTIMERCALLBACKFUNC Callback, PVOID Context, BOOLEAN TimerOrWaitFired)
 {
-#if defined(_M_ARM64)
     PRTLP_THREADPOOL_CALLBACK_DISPATCHER dispatcher;
 
     dispatcher = (PRTLP_THREADPOOL_CALLBACK_DISPATCHER)InterlockedCompareExchangePointer((PVOID volatile *)&threadpool_callback_dispatcher, NULL, NULL);
-    if (dispatcher && !RtlIsEcCode((ULONG_PTR)Callback))
+    if (dispatcher)
     {
-        dispatcher((PVOID)Callback, (ULONG_PTR)Context, TimerOrWaitFired, 0, 0);
+        dispatcher((PVOID)Callback, (ULONG_PTR)Context, TimerOrWaitFired, 0, 0, 0);
         return;
     }
-#endif
 
     Callback(Context, TimerOrWaitFired);
 }
@@ -120,34 +119,30 @@ VOID
 NTAPI
 RtlpCallWorkItemCallback(WORKERCALLBACKFUNC Callback, PVOID Context)
 {
-#if defined(_M_ARM64)
     PRTLP_THREADPOOL_CALLBACK_DISPATCHER dispatcher;
 
     dispatcher = (PRTLP_THREADPOOL_CALLBACK_DISPATCHER)InterlockedCompareExchangePointer(
         (PVOID volatile *)&threadpool_callback_dispatcher, NULL, NULL);
-    if (dispatcher && !RtlIsEcCode((ULONG_PTR)Callback))
+    if (dispatcher)
     {
-        dispatcher((PVOID)Callback, (ULONG_PTR)Context, 0, 0, 0);
+        dispatcher((PVOID)Callback, (ULONG_PTR)Context, 0, 0, 0, 0);
         return;
     }
-#endif
 
     Callback(Context);
 }
 
 static void
-threadpool_call_callback(enum threadpool_callback_type type, void *callback, ULONG_PTR argument0, ULONG_PTR argument1, ULONG_PTR argument2, ULONG_PTR argument3)
+threadpool_call_callback(enum threadpool_callback_type type, void *callback, ULONG_PTR argument0, ULONG_PTR argument1, ULONG_PTR argument2, ULONG_PTR argument3, ULONG_PTR argument4)
 {
-#if defined(_M_ARM64)
     PRTLP_THREADPOOL_CALLBACK_DISPATCHER dispatcher;
 
     dispatcher = (PRTLP_THREADPOOL_CALLBACK_DISPATCHER)InterlockedCompareExchangePointer((PVOID volatile *)&threadpool_callback_dispatcher, NULL, NULL);
-    if (dispatcher && !RtlIsEcCode((ULONG_PTR)callback))
+    if (dispatcher)
     {
-        dispatcher(callback, argument0, argument1, argument2, argument3);
+        dispatcher(callback, argument0, argument1, argument2, argument3, argument4);
         return;
     }
-#endif
 
     switch (type)
     {
@@ -162,6 +157,9 @@ threadpool_call_callback(enum threadpool_callback_type type, void *callback, ULO
             break;
         case THREADPOOL_CALLBACK_WAIT:
             ((PTP_WAIT_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1, (TP_WAIT *)argument2, (TP_WAIT_RESULT)argument3);
+            break;
+        case THREADPOOL_CALLBACK_IO:
+            ((PTP_IO_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1, (void *)argument2, (IO_STATUS_BLOCK *)argument3, (TP_IO *)argument4);
             break;
         case THREADPOOL_CALLBACK_ALPC:
             ((PTP_ALPC_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1, (TP_ALPC *)argument2);
@@ -2749,7 +2747,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         {
             TRACE( "executing simple callback %p(%p, %p)\n",
                    object->u.simple.callback, callback_instance, object->userdata );
-            threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->u.simple.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, 0, 0);
+            threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->u.simple.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, 0, 0, 0);
             TRACE( "callback %p returned\n", object->u.simple.callback );
             break;
         }
@@ -2758,7 +2756,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         {
             TRACE( "executing work callback %p(%p, %p, %p)\n",
                    object->u.work.callback, callback_instance, object->userdata, object );
-            threadpool_call_callback(THREADPOOL_CALLBACK_WORK, object->u.work.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0);
+            threadpool_call_callback(THREADPOOL_CALLBACK_WORK, object->u.work.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0, 0);
             TRACE( "callback %p returned\n", object->u.work.callback );
             break;
         }
@@ -2767,7 +2765,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         {
             TRACE( "executing timer callback %p(%p, %p, %p)\n",
                    object->u.timer.callback, callback_instance, object->userdata, object );
-            threadpool_call_callback(THREADPOOL_CALLBACK_TIMER, object->u.timer.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0);
+            threadpool_call_callback(THREADPOOL_CALLBACK_TIMER, object->u.timer.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0, 0);
             TRACE( "callback %p returned\n", object->u.timer.callback );
             break;
         }
@@ -2776,7 +2774,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         {
             TRACE( "executing wait callback %p(%p, %p, %p, %lu)\n",
                    object->u.wait.callback, callback_instance, object->userdata, object, wait_result );
-            threadpool_call_callback(THREADPOOL_CALLBACK_WAIT, object->u.wait.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, wait_result);
+            threadpool_call_callback(THREADPOOL_CALLBACK_WAIT, object->u.wait.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, wait_result, 0);
             TRACE( "callback %p returned\n", object->u.wait.callback );
             break;
         }
@@ -2786,15 +2784,15 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
             TRACE( "executing I/O callback %p(%p, %p, %#Ix, %p, %p)\n",
                     object->u.io.callback, callback_instance, object->userdata,
                     completion.cvalue, &completion.iosb, (TP_IO *)object );
-            object->u.io.callback( callback_instance, object->userdata,
-                    (void *)completion.cvalue, &completion.iosb, (TP_IO *)object );
+            threadpool_call_callback(THREADPOOL_CALLBACK_IO, object->u.io.callback, (ULONG_PTR)callback_instance,
+                    (ULONG_PTR)object->userdata, completion.cvalue, (ULONG_PTR)&completion.iosb, (ULONG_PTR)object);
             TRACE( "callback %p returned\n", object->u.io.callback );
             break;
         }
 
         case TP_OBJECT_TYPE_ALPC:
         {
-            threadpool_call_callback( THREADPOOL_CALLBACK_ALPC, object->u.alpc.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0 );
+            threadpool_call_callback( THREADPOOL_CALLBACK_ALPC, object->u.alpc.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0, 0 );
             break;
         }
 
@@ -2808,7 +2806,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
     {
         TRACE( "executing finalization callback %p(%p, %p)\n",
                object->finalization_callback, callback_instance, object->userdata );
-        threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->finalization_callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, 0, 0);
+        threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->finalization_callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, 0, 0, 0);
         TRACE( "callback %p returned\n", object->finalization_callback );
     }
 
@@ -3513,7 +3511,7 @@ VOID WINAPI TpReleaseCleanupGroupMembers( TP_CLEANUP_GROUP *group, BOOL cancel_p
             {
                 TRACE( "executing group cancel callback %p(%p, %p)\n",
                        object->group_cancel_callback, object->userdata, userdata );
-                threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->group_cancel_callback, (ULONG_PTR)object->userdata, (ULONG_PTR)userdata, 0, 0);
+                threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->group_cancel_callback, (ULONG_PTR)object->userdata, (ULONG_PTR)userdata, 0, 0, 0);
                 TRACE( "callback %p returned\n", object->group_cancel_callback );
             }
 

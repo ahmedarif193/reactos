@@ -51,7 +51,7 @@ RtlpCallFlsCallback(
     _In_ PFLS_CALLBACK_FUNCTION Callback,
     _In_opt_ PVOID Data);
 
-typedef VOID (NTAPI *PRTLP_THREADPOOL_CALLBACK_DISPATCHER)(PVOID Callback, ULONG_PTR Argument0, ULONG_PTR Argument1, ULONG_PTR Argument2, ULONG_PTR Argument3);
+typedef VOID (NTAPI *PRTLP_THREADPOOL_CALLBACK_DISPATCHER)(PVOID Callback, ULONG_PTR Argument0, ULONG_PTR Argument1, ULONG_PTR Argument2, ULONG_PTR Argument3, ULONG_PTR Argument4);
 
 VOID
 NTAPI

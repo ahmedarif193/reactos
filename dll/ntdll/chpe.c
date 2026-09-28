@@ -1243,13 +1243,23 @@ ChpepEnsureCurrentCpuArea(VOID)
     return STATUS_SUCCESS;
 }
 
+ULONG_PTR
+NTAPI
+ChpeCallArm64Routine(PVOID EntryPoint,
+                     ULONG_PTR Arg0,
+                     ULONG_PTR Arg1,
+                     ULONG_PTR Arg2,
+                     ULONG_PTR Arg3,
+                     ULONG_PTR Arg4);
+
 static
 ULONG_PTR
 ChpepCallX64Routine(PVOID EntryPoint,
                     ULONG_PTR Arg0,
                     ULONG_PTR Arg1,
                     ULONG_PTR Arg2,
-                    ULONG_PTR Arg3)
+                    ULONG_PTR Arg3,
+                    ULONG_PTR Arg4)
 {
     ULONG_PTR Result;
 
@@ -1258,17 +1268,18 @@ ChpepCallX64Routine(PVOID EntryPoint,
 
     /* FEX uses the ARM64EC static register map, including x8 for x64 RAX. */
     __asm__ volatile(
-        "sub sp, sp, #0x100\n"
-        "stp x19, x20, [sp, #0x20]\n"
-        "stp x21, x22, [sp, #0x30]\n"
-        "stp x23, x24, [sp, #0x40]\n"
-        "stp x25, x26, [sp, #0x50]\n"
-        "stp x27, x28, [sp, #0x60]\n"
-        "str x29, [sp, #0x70]\n"
-        "stp q8, q9, [sp, #0x80]\n"
-        "stp q10, q11, [sp, #0xa0]\n"
-        "stp q12, q13, [sp, #0xc0]\n"
-        "stp q14, q15, [sp, #0xe0]\n"
+        "sub sp, sp, #0x110\n"
+        "stp x19, x20, [sp, #0x30]\n"
+        "stp x21, x22, [sp, #0x40]\n"
+        "stp x23, x24, [sp, #0x50]\n"
+        "stp x25, x26, [sp, #0x60]\n"
+        "stp x27, x28, [sp, #0x70]\n"
+        "str x29, [sp, #0x80]\n"
+        "stp q8, q9, [sp, #0x90]\n"
+        "stp q10, q11, [sp, #0xb0]\n"
+        "stp q12, q13, [sp, #0xd0]\n"
+        "stp q14, q15, [sp, #0xf0]\n"
+        "str %x[arg4], [sp, #0x20]\n"
         "mov x0, %x[arg0]\n"
         "mov x1, %x[arg1]\n"
         "mov x2, %x[arg2]\n"
@@ -1276,28 +1287,33 @@ ChpepCallX64Routine(PVOID EntryPoint,
         "mov x9, %x[target]\n"
         "mov x16, %x[dispatch]\n"
         "blr x16\n"
-        "ldp q14, q15, [sp, #0xe0]\n"
-        "ldp q12, q13, [sp, #0xc0]\n"
-        "ldp q10, q11, [sp, #0xa0]\n"
-        "ldp q8, q9, [sp, #0x80]\n"
-        "ldr x29, [sp, #0x70]\n"
-        "ldp x27, x28, [sp, #0x60]\n"
-        "ldp x25, x26, [sp, #0x50]\n"
-        "ldp x23, x24, [sp, #0x40]\n"
-        "ldp x21, x22, [sp, #0x30]\n"
-        "ldp x19, x20, [sp, #0x20]\n"
-        "add sp, sp, #0x100\n"
+        "ldp q14, q15, [sp, #0xf0]\n"
+        "ldp q12, q13, [sp, #0xd0]\n"
+        "ldp q10, q11, [sp, #0xb0]\n"
+        "ldp q8, q9, [sp, #0x90]\n"
+        "ldr x29, [sp, #0x80]\n"
+        "ldp x27, x28, [sp, #0x70]\n"
+        "ldp x25, x26, [sp, #0x60]\n"
+        "ldp x23, x24, [sp, #0x50]\n"
+        "ldp x21, x22, [sp, #0x40]\n"
+        "ldp x19, x20, [sp, #0x30]\n"
+        "add sp, sp, #0x110\n"
         "mov %x[result], x8\n"
         : [result] "=r" (Result)
         : [arg0] "r" (Arg0),
           [arg1] "r" (Arg1),
           [arg2] "r" (Arg2),
           [arg3] "r" (Arg3),
+          [arg4] "r" (Arg4),
           [target] "r" (EntryPoint),
           [dispatch] "r" (ChpeDispatchTable.ExitToX64)
         : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
           "x8", "x9", "x10", "x11", "x12", "x13", "x14",
-          "x15", "x16", "x17", "x30", "cc", "memory");
+          "x15", "x16", "x17", "x30",
+          "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
+          "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
+          "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31",
+          "cc", "memory");
 
     return Result;
 }
@@ -1323,7 +1339,7 @@ ChpepCallFlsCallback(PFLS_CALLBACK_FUNCTION Callback,
         return;
     }
 
-    ChpepCallX64Routine((PVOID)Callback, (ULONG_PTR)Data, 0, 0, 0);
+    ChpepCallX64Routine((PVOID)Callback, (ULONG_PTR)Data, 0, 0, 0, 0);
 }
 
 static
@@ -1350,6 +1366,7 @@ ChpepCallRunOnceCallback(PRTL_RUN_ONCE_INIT_FN InitFn,
                                (ULONG_PTR)RunOnce,
                                (ULONG_PTR)Parameter,
                                (ULONG_PTR)Context,
+                               0,
                                0) != 0;
 }
 
@@ -1360,7 +1377,8 @@ ChpepCallThreadpoolCallback(PVOID Callback,
                             ULONG_PTR Argument0,
                             ULONG_PTR Argument1,
                             ULONG_PTR Argument2,
-                            ULONG_PTR Argument3)
+                            ULONG_PTR Argument3,
+                            ULONG_PTR Argument4)
 {
     PVOID ImageBase = NULL;
     NTSTATUS Status;
@@ -1369,8 +1387,7 @@ ChpepCallThreadpoolCallback(PVOID Callback,
         (RtlPcToFileHeader(Callback, &ImageBase) &&
          ChpepGetImageMachine(ImageBase) == IMAGE_FILE_MACHINE_ARM64))
     {
-        ((VOID (NTAPI *)(ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR))Callback)(
-            Argument0, Argument1, Argument2, Argument3);
+        ChpeCallArm64Routine(Callback, Argument0, Argument1, Argument2, Argument3, Argument4);
         return;
     }
 
@@ -1381,7 +1398,7 @@ ChpepCallThreadpoolCallback(PVOID Callback,
         return;
     }
 
-    ChpepCallX64Routine(Callback, Argument0, Argument1, Argument2, Argument3);
+    ChpepCallX64Routine(Callback, Argument0, Argument1, Argument2, Argument3, Argument4);
 }
 
 static
@@ -1396,6 +1413,7 @@ ChpepCallDllNotification(PLDR_DLL_NOTIFICATION_FUNCTION Callback,
                                 NotificationReason,
                                 (ULONG_PTR)NotificationData,
                                 (ULONG_PTR)Context,
+                                0,
                                 0);
 }
 
@@ -1433,7 +1451,7 @@ ChpeInvokeUserApcRoutine(PVOID NormalContext, PVOID SystemArgument1,
 
     ChpepCallX64Routine((PVOID)NormalRoutine, (ULONG_PTR)NormalContext,
                          (ULONG_PTR)SystemArgument1, (ULONG_PTR)SystemArgument2,
-                         (ULONG_PTR)SavedContext);
+                         (ULONG_PTR)SavedContext, 0);
 }
 
 static
@@ -2274,7 +2292,7 @@ ChpeCallX64DllMain(PVOID EntryPoint,
     if (!NT_SUCCESS(Status))
         return FALSE;
 
-    Result = ChpepCallX64Routine(EntryPoint, (ULONG_PTR)BaseAddress, Reason, (ULONG_PTR)Context, 0);
+    Result = ChpepCallX64Routine(EntryPoint, (ULONG_PTR)BaseAddress, Reason, (ULONG_PTR)Context, 0, 0);
     return (BOOLEAN)Result;
 }
 
@@ -2314,7 +2332,7 @@ ChpeRtlUserThreadStart(PVOID StartAddress, PVOID Parameter)
                 RtlExitUserThread(InitStatus);
             }
 
-            Status = ChpepCallX64Routine(StartAddress, (ULONG_PTR)Parameter, 0, 0, 0);
+            Status = ChpepCallX64Routine(StartAddress, (ULONG_PTR)Parameter, 0, 0, 0, 0);
         }
         else if (!ChpeIsChpeProcess() && (Kernel32ThreadInitThunkFunction != NULL))
         {
