@@ -110,6 +110,14 @@ static BOOL process_pattern_string(const WCHAR *pattern, HANDLE file)
     size = wcstol(pattern, NULL, 10);
     mask = malloc(size);
     expect = malloc(size);
+#ifdef __REACTOS__
+    if (!mask || !expect)
+    {
+        free(mask);
+        free(expect);
+        return FALSE;
+    }
+#endif
     memset(mask, 0xff, size);
 
     if (!(pattern = wcschr(pattern, ',')))
@@ -119,7 +127,11 @@ static BOOL process_pattern_string(const WCHAR *pattern, HANDLE file)
         return FALSE;
     }
     pattern++;
+#ifdef __REACTOS__
+    while (*pattern && byte_from_hex_char(*pattern) == -1 && (*pattern != ','))
+#else
     while (byte_from_hex_char(*pattern) == -1 && (*pattern != ','))
+#endif
         pattern++;
 
     for (i = 0; (d = byte_from_hex_char(*pattern)) != -1 && (i/2 < size); pattern++, i++)
@@ -137,7 +149,11 @@ static BOOL process_pattern_string(const WCHAR *pattern, HANDLE file)
         return FALSE;
     }
     pattern++;
+#ifdef __REACTOS__
+    while (*pattern && byte_from_hex_char(*pattern) == -1 && (*pattern != ','))
+#else
     while (byte_from_hex_char(*pattern) == -1 && (*pattern != ','))
+#endif
         pattern++;
 
     for (i = 0; (d = byte_from_hex_char(*pattern)) != -1 && (i/2 < size); pattern++, i++)
@@ -148,7 +164,24 @@ static BOOL process_pattern_string(const WCHAR *pattern, HANDLE file)
             expect[i / 2] = d << 4;
     }
 
+#ifdef __REACTOS__
+    if (i / 2 != size || i % 2)
+    {
+        free(expect);
+        free(mask);
+        return FALSE;
+    }
+
+#endif
     actual = malloc(size);
+#ifdef __REACTOS__
+    if (!actual)
+    {
+        free(expect);
+        free(mask);
+        return FALSE;
+    }
+#endif
     SetFilePointer(file, offset, NULL, FILE_BEGIN);
     if (!ReadFile(file, actual, size, &ret_size, NULL) || ret_size != size)
     {

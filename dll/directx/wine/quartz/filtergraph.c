@@ -1214,12 +1214,23 @@ static HRESULT get_autoplug_types(IPin *source, unsigned int *ret_count, GUID **
     for (;;)
     {
         ULONG count;
+#ifdef __REACTOS__
+        AM_MEDIA_TYPE **new_mts;
+#endif
 
+#ifdef __REACTOS__
+        if (mt_capacity > ~(SIZE_T)0 / sizeof(*mts) ||
+            !(new_mts = realloc(mts, mt_capacity * sizeof(*mts))))
+#else
         if (!(mts = realloc(mts, mt_capacity * sizeof(*mts))))
+#endif
         {
             hr = E_OUTOFMEMORY;
             goto out;
         }
+#ifdef __REACTOS__
+        mts = new_mts;
+#endif
 
         if (FAILED(hr = IEnumMediaTypes_Next(enummt, mt_capacity - mt_count, mts + mt_count, &count)))
         {
@@ -1231,10 +1242,22 @@ static HRESULT get_autoplug_types(IPin *source, unsigned int *ret_count, GUID **
         if (hr == S_FALSE)
             break;
 
+#ifdef __REACTOS__
+        if (mt_capacity > UINT_MAX / 2)
+        {
+            hr = E_OUTOFMEMORY;
+            goto out;
+        }
+#endif
         mt_capacity *= 2;
     }
 
+#ifdef __REACTOS__
+    if (mt_count > ~(SIZE_T)0 / (2 * sizeof(*types)) ||
+        !(types = malloc(mt_count * (2 * sizeof(*types)))))
+#else
     if (!(types = malloc(mt_count * 2 * sizeof(*types))))
+#endif
     {
         hr = E_OUTOFMEMORY;
         goto out;
@@ -1244,7 +1267,9 @@ static HRESULT get_autoplug_types(IPin *source, unsigned int *ret_count, GUID **
     {
         types[i * 2] = mts[i]->majortype;
         types[i * 2 + 1] = mts[i]->subtype;
+#ifndef __REACTOS__
         DeleteMediaType(mts[i]);
+#endif
     }
 
     *ret_count = mt_count;
@@ -1252,6 +1277,10 @@ static HRESULT get_autoplug_types(IPin *source, unsigned int *ret_count, GUID **
 
     hr = S_OK;
 out:
+#ifdef __REACTOS__
+    for (i = 0; i < mt_count; ++i)
+        DeleteMediaType(mts[i]);
+#endif
     free(mts);
     IEnumMediaTypes_Release(enummt);
     return hr;
