@@ -89,7 +89,7 @@ int mbstowcsz(LPWSTR lpDest, LPCSTR lpSrc, int nLen)
     // In case of conversion success, null terminate the string
     if (Conv != 0)
     {
-        lpDest[nLen] = 0;
+        lpDest[Conv - 1] = 0;
     }
 
     return Conv;
@@ -294,13 +294,13 @@ void CHString::AllocBuffer(int nSize)
     }
 
     // Nor too big
-    if (nSize > (INT_MAX - (int)sizeof(CHStringData)) / (int)sizeof(WCHAR))
+    if (nSize > (INT_MAX - (int)sizeof(CHStringData)) / (int)sizeof(WCHAR) - 1)
     {
         RaiseException(STATUS_INTEGER_OVERFLOW, EXCEPTION_NONCONTINUABLE, 0, 0);
     }
 
     // Just allocate big enough buffer, using our own operator new
-    Data = (CHStringData *)operator new(nSize * sizeof(WCHAR) + sizeof(CHStringData));
+    Data = (CHStringData *)operator new((nSize + 1) * sizeof(WCHAR) + sizeof(CHStringData));
     // In case Data is null, throw an exception
     // Yes, this is stupid! Our operator new is already supposed to through an exception...
     // Thanks MS
@@ -313,6 +313,7 @@ void CHString::AllocBuffer(int nSize)
     Data->nDataLength = nSize;
     Data->nAllocLength = nSize;
     Data->data()[0] = 0;
+    Data->data()[nSize] = 0;
 
     // We only return the string
     // We can find back data with some mathematics
@@ -734,7 +735,7 @@ CHSTRING_LPWSTR CHString::GetBuffer(int nMinBufLength)
         // Allocate new buffer
         AllocBuffer(nMinBufLength);
         // Copy contents
-        wcsncpy(reinterpret_cast<LPWSTR>(m_pchData), reinterpret_cast<LPCWSTR>(OldBuffer), OldLen);
+        wcsncpy(reinterpret_cast<LPWSTR>(m_pchData), reinterpret_cast<LPCWSTR>(OldBuffer), OldLen + 1);
         GetData()->nDataLength = OldLen;
 
         // Release old
@@ -743,7 +744,7 @@ CHSTRING_LPWSTR CHString::GetBuffer(int nMinBufLength)
 
     // Weirdly, here Windows always returns the old buffer
     // Which basically exposes a wrong buffer
-    return OldBuffer;
+    return m_pchData;
 }
 
 /*
@@ -993,7 +994,7 @@ void CHString::ReleaseBuffer(int nNewLength)
     // Set appropriate size and null-terminate
     Data = GetData();
     Data->nDataLength = nNewLength;
-    Data->data()[nNewLength] = 0;
+    m_pchData[nNewLength] = 0;
 }
 
 /*
