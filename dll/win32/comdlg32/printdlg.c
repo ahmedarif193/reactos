@@ -1099,6 +1099,8 @@ static BOOL PRINTDLG_ChangePrinterA(HWND hDlg, char *name, PRINT_PTRA *PrintStru
 
     free(PrintStructures->lpPrinterInfo);
     free(PrintStructures->lpDriverInfo);
+    PrintStructures->lpPrinterInfo = NULL;
+    PrintStructures->lpDriverInfo = NULL;
     if(!OpenPrinterA(name, &hprn, NULL)) {
         ERR("Can't open printer %s\n", name);
 	return FALSE;
@@ -1306,6 +1308,8 @@ static BOOL PRINTDLG_ChangePrinterW(HWND hDlg, WCHAR *name,
 
     free(PrintStructures->lpPrinterInfo);
     free(PrintStructures->lpDriverInfo);
+    PrintStructures->lpPrinterInfo = NULL;
+    PrintStructures->lpDriverInfo = NULL;
     if(!OpenPrinterW(name, &hprn, NULL)) {
         ERR("Can't open printer %s\n", debugstr_w(name));
 	return FALSE;
@@ -2416,7 +2420,7 @@ BOOL WINAPI PrintDlgA(LPPRINTDLGA lppd)
 					   PrintDlgProcA,
 					   (LPARAM)PrintStructures));
 
-	if(bRet) {
+	if(bRet && PrintStructures->lpPrinterInfo && PrintStructures->lpDriverInfo) {
 	    PRINTER_INFO_2A *pi = PrintStructures->lpPrinterInfo;
 	    DRIVER_INFO_3A *di = PrintStructures->lpDriverInfo;
 
@@ -2552,7 +2556,7 @@ BOOL WINAPI PrintDlgW(LPPRINTDLGW lppd)
 					   PrintDlgProcW,
 					   (LPARAM)PrintStructures));
 
-	if(bRet) {
+	if(bRet && PrintStructures->lpPrinterInfo && PrintStructures->lpDriverInfo) {
 	    PRINTER_INFO_2W *pi = PrintStructures->lpPrinterInfo;
 	    DRIVER_INFO_3W *di = PrintStructures->lpDriverInfo;
 
@@ -2918,7 +2922,18 @@ static DEVMODEW *pagesetup_get_devmode(const pagesetup_data *data)
         memcpy(ret, dm, dm->dmSize + dm->dmDriverExtra);
     }
     else
-        ret = GdiConvertToDevmodeW((DEVMODEA *)dm);
+    {
+        DEVMODEW *converted = GdiConvertToDevmodeW((DEVMODEA *)dm);
+
+        ret = NULL;
+        if (converted)
+        {
+            ret = malloc(converted->dmSize + converted->dmDriverExtra);
+            if (ret)
+                memcpy(ret, converted, converted->dmSize + converted->dmDriverExtra);
+            HeapFree(GetProcessHeap(), 0, converted);
+        }
+    }
 
     GlobalUnlock(data->u.dlgw->hDevMode);
     return ret;
