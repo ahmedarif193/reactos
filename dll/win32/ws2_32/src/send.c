@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ws2_32.h>
+#include <mswsock.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -297,4 +298,33 @@ WSASendTo(IN SOCKET s,
     /* Return with an Error */
     SetLastError(ErrorCode);
     return SOCKET_ERROR;
+}
+
+INT
+WSAAPI
+WSASendMsg(IN SOCKET Handle,
+           IN LPWSAMSG lpMsg,
+           IN DWORD dwFlags,
+           OUT LPDWORD lpNumberOfBytesSent,
+           IN LPWSAOVERLAPPED lpOverlapped,
+           IN LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
+{
+    WSASENDMSG SendMsg;
+    DWORD BytesReturned;
+
+    SendMsg.lpMsg = lpMsg;
+    SendMsg.dwFlags = dwFlags;
+    SendMsg.lpNumberOfBytesSent = lpNumberOfBytesSent;
+    SendMsg.lpOverlapped = lpOverlapped;
+    SendMsg.lpCompletionRoutine = lpCompletionRoutine;
+
+    return WSAIoctl(Handle,
+                    SIO_EXT_SENDMSG,
+                    &SendMsg,
+                    sizeof(SendMsg),
+                    NULL,
+                    0,
+                    &BytesReturned,
+                    NULL,
+                    NULL);
 }

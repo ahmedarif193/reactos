@@ -2803,6 +2803,30 @@ WSPIoctl(IN  SOCKET Handle,
             }
 
             break;
+        case SIO_EXT_SENDMSG:
+        {
+            LPWSASENDMSG SendMsg = lpvInBuffer;
+
+            NeedsCompletion = FALSE;
+            if (IS_INTRESOURCE(SendMsg) || cbInBuffer < sizeof(*SendMsg) || IS_INTRESOURCE(SendMsg->lpMsg))
+            {
+                Errno = WSAEFAULT;
+                break;
+            }
+
+            Ret = WSPSendTo(Handle,
+                            SendMsg->lpMsg->lpBuffers,
+                            SendMsg->lpMsg->dwBufferCount,
+                            SendMsg->lpNumberOfBytesSent,
+                            SendMsg->dwFlags,
+                            SendMsg->lpMsg->name,
+                            SendMsg->lpMsg->namelen,
+                            SendMsg->lpOverlapped,
+                            SendMsg->lpCompletionRoutine,
+                            lpThreadId,
+                            &Errno);
+            break;
+        }
         case SIO_BASE_HANDLE:
             /*
              * This provider is the base service provider, so its socket is

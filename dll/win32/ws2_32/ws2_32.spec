@@ -115,7 +115,7 @@
 @ stdcall WSAResetEvent(long)
 @ stdcall WSASend(long ptr long ptr long ptr ptr)
 @ stdcall WSASendDisconnect(long ptr)
-@ stdcall -stub -version=0x600+ WSASendMsg(long ptr long ptr ptr ptr)
+@ stdcall -version=0x600+ WSASendMsg(long ptr long ptr ptr ptr)
 @ stdcall WSASendTo(long ptr long ptr long ptr long ptr ptr)
 @ stdcall WSASetEvent(long)
 @ stdcall WSASetServiceA(ptr long long)
