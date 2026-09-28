@@ -621,10 +621,7 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
         if ((btn_type == BS_RADIOBUTTON) || (btn_type == BS_AUTORADIOBUTTON))
         {
 #ifdef __REACTOS__
-            style = GetWindowLongPtrW( hWnd, GWL_STYLE );
-            if (wParam) style |= WS_TABSTOP;
-            else style &= ~WS_TABSTOP;
-            SetWindowLongPtrW( hWnd, GWL_STYLE, style );
+            NtUserAlterWindowStyle( hWnd, WS_TABSTOP, wParam ? WS_TABSTOP : 0 );
 #else
             if (wParam) WIN_SetStyle( hWnd, WS_TABSTOP, 0 );
             else WIN_SetStyle( hWnd, 0, WS_TABSTOP );

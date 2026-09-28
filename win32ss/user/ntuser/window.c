@@ -4341,7 +4341,7 @@ NtUserAlterWindowStyle(HWND hWnd, DWORD Mask, DWORD Style)
    }
 
    /* Only the bits supported by this specialized syscall can be changed. */
-   Mask &= WS_VSCROLL | WS_HSCROLL | 0x23f;
+   Mask &= WS_VSCROLL | WS_HSCROLL | WS_TABSTOP | 0x23f;
    NewStyle = (Window->style & ~Mask) | (Style & Mask);
 
    co_IntSetWindowLongPtr(hWnd,
