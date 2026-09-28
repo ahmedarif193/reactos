@@ -671,12 +671,23 @@ HRESULT WINAPI DECLSPEC_HOTPATCH VariantClear(VARIANTARG* pVarg)
 static HRESULT VARIANT_CopyIRecordInfo(VARIANT *dest, const VARIANT *src)
 {
   IRecordInfo *src_info = V_RECORDINFO(src);
+#ifdef __REACTOS__
+  void *src_record = V_RECORD(src), *record;
+#endif
   HRESULT hr = S_OK;
   ULONG size;
 
+#ifdef __REACTOS__
+  V_RECORD(dest) = NULL;
+  V_RECORDINFO(dest) = NULL;
+#endif
   if (!src_info)
   {
+#ifdef __REACTOS__
+    if (src_record) return E_INVALIDARG;
+#else
     if (V_RECORD(src)) return E_INVALIDARG;
+#endif
     return S_OK;
   }
 
@@ -685,13 +696,35 @@ static HRESULT VARIANT_CopyIRecordInfo(VARIANT *dest, const VARIANT *src)
 
   /* Windows does not use RecordCreate() here, memory should be allocated in compatible way so RecordDestroy()
      could free it later. */
+#ifdef __REACTOS__
+  record = CoTaskMemAlloc(size);
+  if (!record) return E_OUTOFMEMORY;
+#else
   V_RECORD(dest) = CoTaskMemAlloc(size);
   if (!V_RECORD(dest)) return E_OUTOFMEMORY;
+#endif
   if (size)
+#ifdef __REACTOS__
+      memset(record, 0, size);
+#else
       memset(V_RECORD(dest), 0, size);
+#endif
 
+#ifdef __REACTOS__
+  hr = IRecordInfo_RecordCopy(src_info, src_record, record);
+  if (FAILED(hr))
+  {
+    CoTaskMemFree(record);
+    return hr;
+  }
+  V_RECORD(dest) = record;
+#endif
   IRecordInfo_AddRef(V_RECORDINFO(dest) = src_info);
+#ifdef __REACTOS__
+  return hr;
+#else
   return IRecordInfo_RecordCopy(src_info, V_RECORD(src), V_RECORD(dest));
+#endif
 }
 
 /******************************************************************************
@@ -875,7 +908,11 @@ HRESULT WINAPI VariantCopyInd(VARIANT* pvargDest, const VARIANTARG* pvargSrc)
   }
   else if (V_VT(pSrc) == (VT_RECORD|VT_BYREF))
   {
+#ifdef __REACTOS__
+    hres = VARIANT_CopyIRecordInfo(pvargDest, pSrc);
+#else
     hres = VARIANT_CopyIRecordInfo(pvargDest, pvargSrc);
+#endif
   }
   else if (V_VT(pSrc) == (VT_DISPATCH|VT_BYREF) ||
            V_VT(pSrc) == (VT_UNKNOWN|VT_BYREF))
@@ -1189,7 +1226,11 @@ static HRESULT VARIANT_RollUdate(UDATE *lpUd)
 INT WINAPI DosDateTimeToVariantTime(USHORT wDosDate, USHORT wDosTime,
                                     DOUBLE *pDateOut)
 {
+#ifdef __REACTOS__
+  UDATE ud = {0};
+#else
   UDATE ud;
+#endif
 
   TRACE("(0x%x(%d/%d/%d),0x%x(%d:%d:%d),%p)\n",
         wDosDate, DOS_YEAR(wDosDate), DOS_MONTH(wDosDate), DOS_DAY(wDosDate),
@@ -1263,7 +1304,11 @@ INT WINAPI VariantTimeToDosDateTime(DOUBLE dateIn, USHORT *pwDosDate, USHORT *pw
  */
 INT WINAPI SystemTimeToVariantTime(LPSYSTEMTIME lpSt, DOUBLE *pDateOut)
 {
+#ifdef __REACTOS__
+  UDATE ud = {0};
+#else
   UDATE ud;
+#endif
 
   TRACE("(%p->%d/%d/%d %d:%d:%d,%p)\n", lpSt, lpSt->wDay, lpSt->wMonth,
         lpSt->wYear, lpSt->wHour, lpSt->wMinute, lpSt->wSecond, pDateOut);

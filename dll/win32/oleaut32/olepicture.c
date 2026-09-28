@@ -1240,6 +1240,12 @@ static HRESULT OLEPictureImpl_LoadIcon(OLEPictureImpl *This, BYTE *xbuf, ULONG x
     int	i;
 
     TRACE("(this %p, xbuf %p, xread %lu)\n", This, xbuf, xread);
+#ifdef __REACTOS__
+    if (xread < FIELD_OFFSET(CURSORICONFILEDIR, idEntries) ||
+        cifd->idCount > (xread - FIELD_OFFSET(CURSORICONFILEDIR, idEntries)) /
+                       sizeof(cifd->idEntries[0]))
+        return E_FAIL;
+#endif
 
     /*
     FIXME("icon.idReserved=%d\n",cifd->idReserved);
@@ -1275,7 +1281,12 @@ static HRESULT OLEPictureImpl_LoadIcon(OLEPictureImpl *This, BYTE *xbuf, ULONG x
 	}
 	if (i==cifd->idCount) i=0;
     }
+#ifdef __REACTOS__
+    if (cifd->idEntries[i].dwDIBOffset > xread ||
+        cifd->idEntries[i].dwDIBSize > xread - cifd->idEntries[i].dwDIBOffset)
+#else
     if (xread < cifd->idEntries[i].dwDIBOffset + cifd->idEntries[i].dwDIBSize)
+#endif
     {
         ERR("Icon data address %lu is over %lu bytes available.\n",
             cifd->idEntries[i].dwDIBOffset + cifd->idEntries[i].dwDIBSize, xread);
@@ -1283,7 +1294,17 @@ static HRESULT OLEPictureImpl_LoadIcon(OLEPictureImpl *This, BYTE *xbuf, ULONG x
     }
     if (cifd->idType == 2)
     {
+#ifdef __REACTOS__
+        BYTE *buf;
+
+        if (cifd->idEntries[i].dwDIBSize > MAXDWORD - 4)
+            return E_FAIL;
+        buf = malloc(cifd->idEntries[i].dwDIBSize + 4);
+        if (!buf)
+            return E_OUTOFMEMORY;
+#else
         BYTE *buf = malloc(cifd->idEntries[i].dwDIBSize + 4);
+#endif
         memcpy(buf, &cifd->idEntries[i].xHotspot, 4);
         memcpy(buf + 4, xbuf+cifd->idEntries[i].dwDIBOffset, cifd->idEntries[i].dwDIBSize);
         hicon = CreateIconFromResourceEx(
@@ -1474,6 +1495,10 @@ static HRESULT WINAPI OLEPictureImpl_Load(IPersistStream* iface, IStream *pStm) 
 
       TRACE("Reading all data from stream.\n");
       xbuf = calloc(1, origsize);
+#ifdef __REACTOS__
+      if (!xbuf)
+          return E_OUTOFMEMORY;
+#endif
       if (headerisdata)
           memcpy (xbuf, header, 8);
       while (1) {
@@ -1486,8 +1511,25 @@ static HRESULT WINAPI OLEPictureImpl_Load(IPersistStream* iface, IStream *pStm) 
           if (!nread || hr != S_OK) /* done, or error */
               break;
           if (xread == origsize) {
+#ifdef __REACTOS__
+              BYTE *new_buf;
+
+              if (sizeinc > (UINT_MAX - origsize) / 2) {
+                  free(xbuf);
+                  return E_OUTOFMEMORY;
+              }
+#endif
               sizeinc = 2*sizeinc; /* exponential increase */
+#ifdef __REACTOS__
+              new_buf = realloc(xbuf, origsize + sizeinc);
+              if (!new_buf) {
+                  free(xbuf);
+                  return E_OUTOFMEMORY;
+              }
+              xbuf = new_buf;
+#else
               xbuf = realloc(xbuf, origsize + sizeinc);
+#endif
               memset(xbuf + origsize, 0, sizeinc);
               origsize += sizeinc;
           }
@@ -1520,6 +1562,10 @@ static HRESULT WINAPI OLEPictureImpl_Load(IPersistStream* iface, IStream *pStm) 
       This->desc.picType = PICTYPE_NONE;
       return S_OK;
   }
+#ifdef __REACTOS__
+  if (xread < sizeof(magic))
+      return E_FAIL;
+#endif
 
 
   /****************************************************************************************
@@ -1700,17 +1746,32 @@ static BOOL serializeIcon(HICON hIcon, void ** ppBuffer, unsigned int * pLength)
 
 	*ppBuffer = NULL; *pLength = 0;
 	if (GetIconInfo(hIcon, &infoIcon)) {
+#ifdef __REACTOS__
+		HDC hDC = NULL;
+#else
 		HDC hDC;
+#endif
 		BITMAPINFO * pInfoBitmap;
 		unsigned char * pIconData = NULL;
 		unsigned int iDataSize = 0;
 
         pInfoBitmap = calloc(1, sizeof(BITMAPINFOHEADER) + 256 * sizeof(RGBQUAD));
+#ifdef __REACTOS__
+        if (!pInfoBitmap) goto done;
+#endif
 
 		/* Find out icon size */
 		hDC = GetDC(0);
+#ifdef __REACTOS__
+        if (!hDC) goto done;
+#endif
 		pInfoBitmap->bmiHeader.biSize = sizeof(pInfoBitmap->bmiHeader);
+#ifdef __REACTOS__
+        if (!GetDIBits(hDC, infoIcon.hbmColor, 0, 0, NULL, pInfoBitmap, DIB_RGB_COLORS))
+            goto done;
+#else
 		GetDIBits(hDC, infoIcon.hbmColor, 0, 0, NULL, pInfoBitmap, DIB_RGB_COLORS);
+#endif
 		if (1) {
 			/* Auxiliary pointers */
 			CURSORICONFILEDIR * pIconDir;
@@ -1722,7 +1783,16 @@ static BOOL serializeIcon(HICON hIcon, void ** ppBuffer, unsigned int * pLength)
 
 			unsigned int iLengthScanLineMask;
 			unsigned int iNumEntriesPalette;
+#ifdef __REACTOS__
+            unsigned char *new_data;
+            ULONGLONG total_size;
+#endif
 
+#ifdef __REACTOS__
+            if (pInfoBitmap->bmiHeader.biWidth <= 0 || pInfoBitmap->bmiHeader.biWidth > INT_MAX - 31 ||
+                pInfoBitmap->bmiHeader.biHeight <= 0 || pInfoBitmap->bmiHeader.biHeight > INT_MAX / 2)
+                goto done;
+#endif
 			iLengthScanLineMask = ((pInfoBitmap->bmiHeader.biWidth + 31) >> 5) << 2;
 /*
 			FIXME("DEBUG: bitmap size is %d x %d\n",
@@ -1738,6 +1808,9 @@ static BOOL serializeIcon(HICON hIcon, void ** ppBuffer, unsigned int * pLength)
 			/* Let's start with one CURSORICONFILEDIR and one CURSORICONFILEDIRENTRY */
 			iDataSize += 3 * sizeof(WORD) + sizeof(CURSORICONFILEDIRENTRY) + sizeof(BITMAPINFOHEADER);
 			pIconData = calloc(1, iDataSize);
+#ifdef __REACTOS__
+            if (!pIconData) goto done;
+#endif
 
 			/* Fill out the CURSORICONFILEDIR */
 			pIconDir = (CURSORICONFILEDIR *)pIconData;
@@ -1778,6 +1851,12 @@ static BOOL serializeIcon(HICON hIcon, void ** ppBuffer, unsigned int * pLength)
 			}
 
 			/*  Add bitmap size and header size to icon data size. */
+#ifdef __REACTOS__
+            total_size = iDataSize + (ULONGLONG)iNumEntriesPalette * sizeof(DWORD) +
+                         pIconBitmapHeader->biSizeImage +
+                         (ULONGLONG)pIconBitmapHeader->biHeight * iLengthScanLineMask;
+            if (total_size > UINT_MAX) goto done;
+#endif
 			iOffsetPalette = iDataSize;
 			iDataSize += iNumEntriesPalette * sizeof(DWORD);
 			iOffsetColorData = iDataSize;
@@ -1786,7 +1865,13 @@ static BOOL serializeIcon(HICON hIcon, void ** ppBuffer, unsigned int * pLength)
 			iDataSize += pIconBitmapHeader->biHeight * iLengthScanLineMask;
 			pIconBitmapHeader->biSizeImage += pIconBitmapHeader->biHeight * iLengthScanLineMask;
 			pIconBitmapHeader->biHeight *= 2;
+#ifdef __REACTOS__
+            new_data = realloc(pIconData, iDataSize);
+            if (!new_data) goto done;
+            pIconData = new_data;
+#else
 			pIconData = realloc(pIconData, iDataSize);
+#endif
 			pIconEntry = (CURSORICONFILEDIRENTRY *)(pIconData + 3 * sizeof(WORD));
 			pIconBitmapHeader = (BITMAPINFOHEADER *)(pIconData + 3 * sizeof(WORD) + sizeof(CURSORICONFILEDIRENTRY));
 			pIconEntry->dwDIBSize = iDataSize - (3 * sizeof(WORD) + sizeof(CURSORICONFILEDIRENTRY));
@@ -1833,6 +1918,10 @@ static BOOL serializeIcon(HICON hIcon, void ** ppBuffer, unsigned int * pLength)
 			these bitmaps and delete them when they are no longer
 			necessary.
 		 */
+#ifdef __REACTOS__
+done:
+        if (!success) free(pIconData);
+#endif
 		if (hDC) ReleaseDC(0, hDC);
 		DeleteObject(infoIcon.hbmMask);
 		if (infoIcon.hbmColor) DeleteObject(infoIcon.hbmColor);
