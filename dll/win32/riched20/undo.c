@@ -417,7 +417,7 @@ BOOL ME_Undo(ME_TextEditor *editor)
   assert(nMode == umAddToUndo || nMode == umIgnore);
 
   head = list_head( &editor->undo_stack );
-  if (!head) return FALSE;
+  if (!head) return editor->empty_undo_result;
 
   /* watch out for uncommitted transactions ! */
   undo = LIST_ENTRY( head, struct undo_item, entry );
@@ -441,6 +441,7 @@ BOOL ME_Undo(ME_TextEditor *editor)
   add_undo( editor, undo_end_transaction );
   editor->nUndoStackSize--;
   editor->nUndoMode = nMode;
+  editor->empty_undo_result = TRUE;
   ME_UpdateRepaint(editor, FALSE);
   return TRUE;
 }
@@ -456,7 +457,7 @@ BOOL ME_Redo(ME_TextEditor *editor)
   if (editor_undo_ignored(editor)) return FALSE;
 
   head = list_head( &editor->redo_stack );
-  if (!head) return FALSE;
+  if (!head) return editor->empty_redo_result;
 
   /* watch out for uncommitted transactions ! */
   undo = LIST_ENTRY( head, struct undo_item, entry );
@@ -476,6 +477,7 @@ BOOL ME_Redo(ME_TextEditor *editor)
   table_move_from_row_start( editor );
   add_undo( editor, undo_end_transaction );
   editor->nUndoMode = nMode;
+  editor->empty_redo_result = TRUE;
   ME_UpdateRepaint(editor, FALSE);
   return TRUE;
 }
@@ -484,6 +486,8 @@ void editor_disable_undo(ME_TextEditor *editor)
 {
     ME_EmptyUndoStack(editor);
     editor->undo_ctl_state = undoDisabled;
+    editor->empty_undo_result = FALSE;
+    editor->empty_redo_result = FALSE;
 }
 
 void editor_enable_undo(ME_TextEditor *editor)
@@ -492,4 +496,5 @@ void editor_enable_undo(ME_TextEditor *editor)
     {
         editor->undo_ctl_state = undoActive;
     }
+    editor->empty_undo_result = TRUE;
 }

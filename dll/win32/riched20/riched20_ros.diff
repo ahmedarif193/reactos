@@ -1,2 +1,359 @@
 diff -pudN e:\wine\dlls\riched20/ocr_reverse.cur e:\reactos\dll\win32\riched20/ocr_reverse.cur
 #cur file kept at older state of ros SVN r75865 to avoid CORE-15190
+diff -pudN e:\wine\dlls\riched20/editor.c e:\reactos\dll\win32\riched20/editor.c
+--- e:\wine\dlls\riched20/editor.c
++++ e:\reactos\dll\win32\riched20/editor.c
+@@ -2161,8 +2243,8 @@ static int ME_GetTextEx(ME_TextEditor *editor, GETTEXT
+     }
+     if (ex->codepage == CP_UNICODE)
+     {
+-      return ME_GetTextW(editor, (LPWSTR)pText, ex->cb / sizeof(WCHAR) - 1,
+-                         &start, nChars, ex->flags & GT_USECRLF, FALSE);
++      return ME_GetTextWObj(editor, (LPWSTR)pText, ex->cb / sizeof(WCHAR) - 1,
++                            &start, nChars, ex->flags & GT_USECRLF, FALSE, !(ex->flags & GT_USECRLF));
+     }
+     else
+     {
+@@ -3041,6 +3156,8 @@ ME_TextEditor *ME_MakeEditor(ITextHost *texthost, BOOL
+   ed->nUndoLimit = STACK_SIZE_DEFAULT;
+   ed->nUndoMode = umAddToUndo;
+   ed->undo_ctl_state = undoActive;
++  ed->empty_undo_result = FALSE;
++  ed->empty_redo_result = FALSE;
+   ed->nParagraphs = 1;
+   ed->nLastSelStart = ed->nLastSelEnd = 0;
+   ed->last_sel_start_para = ed->last_sel_end_para = ed->pCursors[0].para;
+@@ -4337,6 +4545,13 @@ int ME_GetTextW(ME_TextEditor *editor, WCHAR *buffer, 
+ int ME_GetTextW(ME_TextEditor *editor, WCHAR *buffer, int buflen,
+                 const ME_Cursor *start, int srcChars, BOOL bCRLF,
+                 BOOL bEOP)
++{
++  return ME_GetTextWObj(editor, buffer, buflen, start, srcChars, bCRLF, bEOP, FALSE);
++}
++
++int ME_GetTextWObj(ME_TextEditor *editor, WCHAR *buffer, int buflen,
++                   const ME_Cursor *start, int srcChars, BOOL bCRLF,
++                   BOOL bEOP, BOOL obj_char)
+ {
+   ME_Run *run, *next_run;
+   const WCHAR *pStart = buffer;
+@@ -4374,6 +4589,11 @@ int ME_GetTextW(ME_TextEditor *editor, WCHAR *buffer, 
+     buflen -= nLen;
+ 
+     CopyMemory(buffer, str, sizeof(WCHAR) * nLen);
++    if (obj_char && (run->nFlags & MERF_GRAPHICS))
++    {
++      int i;
++      for (i = 0; i < nLen; i++) buffer[i] = 0xfffc;
++    }
+ 
+     buffer += nLen;
+ 
+diff -pudN e:\wine\dlls\riched20/editor.h e:\reactos\dll\win32\riched20/editor.h
+--- e:\wine\dlls\riched20/editor.h
++++ e:\reactos\dll\win32\riched20/editor.h
+@@ -277,6 +281,8 @@ int ME_GetTextW(ME_TextEditor *editor, WCHAR *buffer, 
+                                LPARAM lParam, HRESULT* phresult );
+ int ME_GetTextW(ME_TextEditor *editor, WCHAR *buffer, int buflen,
+                 const ME_Cursor *start, int srcChars, BOOL bCRLF, BOOL bEOP);
++int ME_GetTextWObj(ME_TextEditor *editor, WCHAR *buffer, int buflen,
++                   const ME_Cursor *start, int srcChars, BOOL bCRLF, BOOL bEOP, BOOL obj_char);
+ void ME_RTFCharAttrHook(struct _RTF_Info *info);
+ void ME_RTFParAttrHook(struct _RTF_Info *info);
+ void ME_RTFTblAttrHook(struct _RTF_Info *info);
+diff -pudN e:\wine\dlls\riched20/editstr.h e:\reactos\dll\win32\riched20/editstr.h
+--- e:\wine\dlls\riched20/editstr.h
++++ e:\reactos\dll\win32\riched20/editstr.h
+@@ -415,6 +415,8 @@ typedef struct tagME_TextEditor
+   int nUndoLimit;
+   ME_UndoMode nUndoMode;
+   ME_UndoControlState undo_ctl_state;
++  BOOL empty_undo_result;
++  BOOL empty_redo_result;
+   int nParagraphs;
+   LONG nLastSelStart, nLastSelEnd;
+   ME_Paragraph *last_sel_start_para, *last_sel_end_para;
+@@ -495,6 +497,7 @@ struct text_services
+     struct text_selection *text_selection;
+     struct list rangelist;
+     struct list clientsites;
++    HANDLE file;
+     char spare[256]; /* for bug #12179 */
+ };
+ 
+diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole.c
+--- e:\wine\dlls\riched20/richole.c
++++ e:\reactos\dll\win32\riched20/richole.c
+@@ -1553,7 +1553,10 @@ static HRESULT WINAPI ITextRange_fnGetText(ITextRange 
+     TRACE("(%p)->(%p)\n", This, str);
+ 
+     if (!This->child.reole)
++    {
++        if (str) *str = NULL;
+         return CO_E_RELEASED;
++    }
+ 
+     if (!str)
+         return E_INVALIDARG;
+@@ -1574,7 +1577,7 @@ static HRESULT WINAPI ITextRange_fnGetText(ITextRange 
+         return E_OUTOFMEMORY;
+ 
+     bEOP = (!para_next( para_next( end.para )) && This->end > ME_GetTextLength(editor));
+-    ME_GetTextW(editor, *str, length, &start, length, FALSE, bEOP);
++    ME_GetTextWObj(editor, *str, length, &start, length, FALSE, bEOP, TRUE);
+     return S_OK;
+ }
+ 
+@@ -1628,7 +1631,7 @@ static HRESULT range_GetChar(ME_TextEditor *editor, ME
+ {
+     WCHAR wch[2];
+ 
+-    ME_GetTextW(editor, wch, 1, cursor, 1, FALSE, !para_next( para_next( cursor->para ) ));
++    ME_GetTextWObj(editor, wch, 1, cursor, 1, FALSE, !para_next( para_next( cursor->para ) ), TRUE);
+     *pch = wch[0];
+ 
+     return S_OK;
+@@ -4195,14 +4198,150 @@ static HRESULT WINAPI ITextDocument2Old_fnNew(ITextDoc
+     struct text_services *services = impl_from_ITextDocument2Old(iface);
+     FIXME("stub %p\n", services);
+     return E_NOTIMPL;
++}
++
++struct open_stream
++{
++    const BYTE *data;
++    DWORD size;
++    DWORD pos;
++};
++
++static DWORD CALLBACK open_stream_read(DWORD_PTR cookie, BYTE *buffer, LONG cb, LONG *pcb)
++{
++    struct open_stream *stream = (struct open_stream *)cookie;
++    DWORD count = min((DWORD)cb, stream->size - stream->pos);
++
++    memcpy(buffer, stream->data + stream->pos, count);
++    stream->pos += count;
++    *pcb = count;
++    return 0;
+ }
+ 
+ static HRESULT WINAPI ITextDocument2Old_fnOpen(ITextDocument2Old *iface, VARIANT *pVar,
+                                                LONG Flags, LONG CodePage)
+ {
+     struct text_services *services = impl_from_ITextDocument2Old(iface);
+-    FIXME("stub %p\n", services);
+-    return E_NOTIMPL;
++    DWORD access = GENERIC_READ | GENERIC_WRITE, share = FILE_SHARE_READ | FILE_SHARE_WRITE;
++    DWORD creation, size, read = 0, format;
++    struct open_stream stream = { NULL, 0, 0 };
++    const BYTE *src;
++    BYTE *data = NULL;
++    WCHAR *text = NULL;
++    EDITSTREAM es;
++    HRESULT hr = S_OK, msg_hr;
++    HANDLE file;
++    UINT cp;
++    int len;
++
++    TRACE("(%p)->(%p, %#lx, %ld)\n", services, pVar, Flags, CodePage);
++
++    if (!pVar || V_VT(pVar) != VT_BSTR)
++        return E_INVALIDARG;
++
++    switch (Flags & 0xf0)
++    {
++    case tomCreateNew:        creation = CREATE_NEW; break;
++    case tomCreateAlways:     creation = CREATE_ALWAYS; break;
++    case tomOpenExisting:     creation = OPEN_EXISTING; break;
++    case 0:
++    case tomOpenAlways:       creation = OPEN_ALWAYS; break;
++    case tomTruncateExisting: creation = TRUNCATE_EXISTING; break;
++    default: return E_INVALIDARG;
++    }
++
++    format = Flags & 0xf;
++    if (format > tomText)
++        return E_NOTIMPL;
++
++    if (Flags & tomReadOnly) access = GENERIC_READ;
++    if (Flags & tomShareDenyRead) share &= ~FILE_SHARE_READ;
++    if (Flags & tomShareDenyWrite) share &= ~FILE_SHARE_WRITE;
++
++    file = CreateFileW(V_BSTR(pVar), access, share, NULL, creation, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (file == INVALID_HANDLE_VALUE)
++        return HRESULT_FROM_WIN32(GetLastError());
++
++    size = GetFileSize(file, NULL);
++    if (size == INVALID_FILE_SIZE)
++    {
++        hr = HRESULT_FROM_WIN32(GetLastError());
++        goto done;
++    }
++    if (size)
++    {
++        if (!(data = malloc(size)))
++        {
++            hr = E_OUTOFMEMORY;
++            goto done;
++        }
++        if (!ReadFile(file, data, size, &read, NULL))
++        {
++            hr = HRESULT_FROM_WIN32(GetLastError());
++            goto done;
++        }
++    }
++
++    if (!format)
++        format = ((read >= 5 && !memcmp(data, "{\\rtf", 5)) || (read >= 6 && !memcmp(data, "{\\urtf", 6))) ? tomRTF : tomText;
++
++    if (format == tomRTF)
++    {
++        stream.data = data;
++        stream.size = read;
++        format = SF_RTF;
++    }
++    else
++    {
++        src = data;
++        cp = CodePage;
++        if (read >= 3 && !memcmp(src, "\xef\xbb\xbf", 3))
++        {
++            src += 3;
++            read -= 3;
++            cp = CP_UTF8;
++        }
++        else if (read >= 2 && src[0] == 0xff && src[1] == 0xfe)
++        {
++            src += 2;
++            read -= 2;
++            cp = 1200;
++        }
++
++        if (cp == 1200)
++        {
++            stream.data = src;
++            stream.size = read & ~1;
++        }
++        else if (read)
++        {
++            len = MultiByteToWideChar(cp, 0, (const char *)src, read, NULL, 0);
++            if (!(text = malloc(len * sizeof(WCHAR))))
++            {
++                hr = E_OUTOFMEMORY;
++                goto done;
++            }
++            MultiByteToWideChar(cp, 0, (const char *)src, read, text, len);
++            stream.data = (const BYTE *)text;
++            stream.size = len * sizeof(WCHAR);
++        }
++        format = SF_TEXT | SF_UNICODE;
++    }
++
++    if (Flags & tomPasteFile) format |= SFF_SELECTION;
++
++    es.dwCookie = (DWORD_PTR)&stream;
++    es.dwError = 0;
++    es.pfnCallback = open_stream_read;
++    editor_handle_message(services->editor, EM_STREAMIN, format, (LPARAM)&es, &msg_hr);
++
++done:
++    free(text);
++    free(data);
++    CloseHandle(file);
++    if (FAILED(hr))
++        return hr;
++    return S_OK;
+ }
+ 
+ static HRESULT WINAPI ITextDocument2Old_fnSave(ITextDocument2Old *iface, VARIANT *pVar,
+@@ -4690,7 +4829,10 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
+     TRACE("(%p)->(%p)\n", This, pbstr);
+ 
+     if (!This->services)
++    {
++        if (pbstr) *pbstr = NULL;
+         return CO_E_RELEASED;
++    }
+ 
+     if (!pbstr)
+         return E_INVALIDARG;
+@@ -4709,7 +4851,7 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
+         return E_OUTOFMEMORY;
+ 
+     bEOP = (!para_next( para_next( end->para ) ) && endOfs > ME_GetTextLength(This->services->editor));
+-    ME_GetTextW(This->services->editor, *pbstr, nChars, start, nChars, FALSE, bEOP);
++    ME_GetTextWObj(This->services->editor, *pbstr, nChars, start, nChars, FALSE, bEOP, TRUE);
+     TRACE("%s\n", wine_dbgstr_w(*pbstr));
+ 
+     return S_OK;
+diff -pudN e:\wine\dlls\riched20/txtsrv.c e:\reactos\dll\win32\riched20/txtsrv.c
+--- e:\wine\dlls\riched20/txtsrv.c
++++ e:\reactos\dll\win32\riched20/txtsrv.c
+@@ -84,6 +84,7 @@ static ULONG WINAPI ITextServicesImpl_Release(IUnknown *iface)
+     {
+         richole_release_children( services );
+         ME_DestroyEditor( services->editor );
++        if (services->file != INVALID_HANDLE_VALUE) CloseHandle( services->file );
+         free( services );
+     }
+     return ref;
+@@ -588,6 +589,7 @@ HRESULT create_text_services( IUnknown *outer, ITextHost *text_host, IUnknown **
+     services = malloc( sizeof(*services) );
+     if (services == NULL) return E_OUTOFMEMORY;
+     services->ref = 1;
++    services->file = INVALID_HANDLE_VALUE;
+     services->IUnknown_inner.lpVtbl = &textservices_inner_vtbl;
+     services->ITextServices_iface.lpVtbl = &textservices_vtbl;
+     services->IRichEditOle_iface.lpVtbl = &re_ole_vtbl;
+diff -pudN e:\wine\dlls\riched20/undo.c e:\reactos\dll\win32\riched20/undo.c
+--- e:\wine\dlls\riched20/undo.c
++++ e:\reactos\dll\win32\riched20/undo.c
+@@ -417,7 +417,7 @@ BOOL ME_Undo(ME_TextEditor *editor)
+   assert(nMode == umAddToUndo || nMode == umIgnore);
+ 
+   head = list_head( &editor->undo_stack );
+-  if (!head) return FALSE;
++  if (!head) return editor->empty_undo_result;
+ 
+   /* watch out for uncommitted transactions ! */
+   undo = LIST_ENTRY( head, struct undo_item, entry );
+@@ -441,6 +441,7 @@ BOOL ME_Undo(ME_TextEditor *editor)
+   add_undo( editor, undo_end_transaction );
+   editor->nUndoStackSize--;
+   editor->nUndoMode = nMode;
++  editor->empty_undo_result = TRUE;
+   ME_UpdateRepaint(editor, FALSE);
+   return TRUE;
+ }
+@@ -456,7 +457,7 @@ BOOL ME_Redo(ME_TextEditor *editor)
+   if (editor_undo_ignored(editor)) return FALSE;
+ 
+   head = list_head( &editor->redo_stack );
+-  if (!head) return FALSE;
++  if (!head) return editor->empty_redo_result;
+ 
+   /* watch out for uncommitted transactions ! */
+   undo = LIST_ENTRY( head, struct undo_item, entry );
+@@ -476,6 +477,7 @@ BOOL ME_Redo(ME_TextEditor *editor)
+   table_move_from_row_start( editor );
+   add_undo( editor, undo_end_transaction );
+   editor->nUndoMode = nMode;
++  editor->empty_redo_result = TRUE;
+   ME_UpdateRepaint(editor, FALSE);
+   return TRUE;
+ }
+@@ -484,6 +486,8 @@ void editor_disable_undo(ME_TextEditor *editor)
+ {
+     ME_EmptyUndoStack(editor);
+     editor->undo_ctl_state = undoDisabled;
++    editor->empty_undo_result = FALSE;
++    editor->empty_redo_result = FALSE;
+ }
+ 
+ void editor_enable_undo(ME_TextEditor *editor)
+@@ -492,4 +496,5 @@ void editor_enable_undo(ME_TextEditor *editor)
+     {
+         editor->undo_ctl_state = undoActive;
+     }
++    editor->empty_undo_result = TRUE;
+ }

@@ -1553,7 +1553,10 @@ static HRESULT WINAPI ITextRange_fnGetText(ITextRange *me, BSTR *str)
     TRACE("(%p)->(%p)\n", This, str);
 
     if (!This->child.reole)
+    {
+        if (str) *str = NULL;
         return CO_E_RELEASED;
+    }
 
     if (!str)
         return E_INVALIDARG;
@@ -1574,7 +1577,7 @@ static HRESULT WINAPI ITextRange_fnGetText(ITextRange *me, BSTR *str)
         return E_OUTOFMEMORY;
 
     bEOP = (!para_next( para_next( end.para )) && This->end > ME_GetTextLength(editor));
-    ME_GetTextW(editor, *str, length, &start, length, FALSE, bEOP);
+    ME_GetTextWObj(editor, *str, length, &start, length, FALSE, bEOP, TRUE);
     return S_OK;
 }
 
@@ -1628,7 +1631,7 @@ static HRESULT range_GetChar(ME_TextEditor *editor, ME_Cursor *cursor, LONG *pch
 {
     WCHAR wch[2];
 
-    ME_GetTextW(editor, wch, 1, cursor, 1, FALSE, !para_next( para_next( cursor->para ) ));
+    ME_GetTextWObj(editor, wch, 1, cursor, 1, FALSE, !para_next( para_next( cursor->para ) ), TRUE);
     *pch = wch[0];
 
     return S_OK;
@@ -4197,12 +4200,148 @@ static HRESULT WINAPI ITextDocument2Old_fnNew(ITextDocument2Old *iface)
     return E_NOTIMPL;
 }
 
+struct open_stream
+{
+    const BYTE *data;
+    DWORD size;
+    DWORD pos;
+};
+
+static DWORD CALLBACK open_stream_read(DWORD_PTR cookie, BYTE *buffer, LONG cb, LONG *pcb)
+{
+    struct open_stream *stream = (struct open_stream *)cookie;
+    DWORD count = min((DWORD)cb, stream->size - stream->pos);
+
+    memcpy(buffer, stream->data + stream->pos, count);
+    stream->pos += count;
+    *pcb = count;
+    return 0;
+}
+
 static HRESULT WINAPI ITextDocument2Old_fnOpen(ITextDocument2Old *iface, VARIANT *pVar,
                                                LONG Flags, LONG CodePage)
 {
     struct text_services *services = impl_from_ITextDocument2Old(iface);
-    FIXME("stub %p\n", services);
-    return E_NOTIMPL;
+    DWORD access = GENERIC_READ | GENERIC_WRITE, share = FILE_SHARE_READ | FILE_SHARE_WRITE;
+    DWORD creation, size, read = 0, format;
+    struct open_stream stream = { NULL, 0, 0 };
+    const BYTE *src;
+    BYTE *data = NULL;
+    WCHAR *text = NULL;
+    EDITSTREAM es;
+    HRESULT hr = S_OK, msg_hr;
+    HANDLE file;
+    UINT cp;
+    int len;
+
+    TRACE("(%p)->(%p, %#lx, %ld)\n", services, pVar, Flags, CodePage);
+
+    if (!pVar || V_VT(pVar) != VT_BSTR)
+        return E_INVALIDARG;
+
+    switch (Flags & 0xf0)
+    {
+    case tomCreateNew:        creation = CREATE_NEW; break;
+    case tomCreateAlways:     creation = CREATE_ALWAYS; break;
+    case tomOpenExisting:     creation = OPEN_EXISTING; break;
+    case 0:
+    case tomOpenAlways:       creation = OPEN_ALWAYS; break;
+    case tomTruncateExisting: creation = TRUNCATE_EXISTING; break;
+    default: return E_INVALIDARG;
+    }
+
+    format = Flags & 0xf;
+    if (format > tomText)
+        return E_NOTIMPL;
+
+    if (Flags & tomReadOnly) access = GENERIC_READ;
+    if (Flags & tomShareDenyRead) share &= ~FILE_SHARE_READ;
+    if (Flags & tomShareDenyWrite) share &= ~FILE_SHARE_WRITE;
+
+    file = CreateFileW(V_BSTR(pVar), access, share, NULL, creation, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    size = GetFileSize(file, NULL);
+    if (size == INVALID_FILE_SIZE)
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        goto done;
+    }
+    if (size)
+    {
+        if (!(data = malloc(size)))
+        {
+            hr = E_OUTOFMEMORY;
+            goto done;
+        }
+        if (!ReadFile(file, data, size, &read, NULL))
+        {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+            goto done;
+        }
+    }
+
+    if (!format)
+        format = ((read >= 5 && !memcmp(data, "{\\rtf", 5)) || (read >= 6 && !memcmp(data, "{\\urtf", 6))) ? tomRTF : tomText;
+
+    if (format == tomRTF)
+    {
+        stream.data = data;
+        stream.size = read;
+        format = SF_RTF;
+    }
+    else
+    {
+        src = data;
+        cp = CodePage;
+        if (read >= 3 && !memcmp(src, "\xef\xbb\xbf", 3))
+        {
+            src += 3;
+            read -= 3;
+            cp = CP_UTF8;
+        }
+        else if (read >= 2 && src[0] == 0xff && src[1] == 0xfe)
+        {
+            src += 2;
+            read -= 2;
+            cp = 1200;
+        }
+
+        if (cp == 1200)
+        {
+            stream.data = src;
+            stream.size = read & ~1;
+        }
+        else if (read)
+        {
+            len = MultiByteToWideChar(cp, 0, (const char *)src, read, NULL, 0);
+            if (!(text = malloc(len * sizeof(WCHAR))))
+            {
+                hr = E_OUTOFMEMORY;
+                goto done;
+            }
+            MultiByteToWideChar(cp, 0, (const char *)src, read, text, len);
+            stream.data = (const BYTE *)text;
+            stream.size = len * sizeof(WCHAR);
+        }
+        format = SF_TEXT | SF_UNICODE;
+    }
+
+    if (Flags & tomPasteFile) format |= SFF_SELECTION;
+
+    es.dwCookie = (DWORD_PTR)&stream;
+    es.dwError = 0;
+    es.pfnCallback = open_stream_read;
+    editor_handle_message(services->editor, EM_STREAMIN, format, (LPARAM)&es, &msg_hr);
+
+done:
+    free(text);
+    free(data);
+    CloseHandle(file);
+    if (FAILED(hr))
+        return hr;
+    return S_OK;
 }
 
 static HRESULT WINAPI ITextDocument2Old_fnSave(ITextDocument2Old *iface, VARIANT *pVar,
@@ -4690,7 +4829,10 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSelection *me, BSTR *pbstr)
     TRACE("(%p)->(%p)\n", This, pbstr);
 
     if (!This->services)
+    {
+        if (pbstr) *pbstr = NULL;
         return CO_E_RELEASED;
+    }
 
     if (!pbstr)
         return E_INVALIDARG;
@@ -4709,7 +4851,7 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSelection *me, BSTR *pbstr)
         return E_OUTOFMEMORY;
 
     bEOP = (!para_next( para_next( end->para ) ) && endOfs > ME_GetTextLength(This->services->editor));
-    ME_GetTextW(This->services->editor, *pbstr, nChars, start, nChars, FALSE, bEOP);
+    ME_GetTextWObj(This->services->editor, *pbstr, nChars, start, nChars, FALSE, bEOP, TRUE);
     TRACE("%s\n", wine_dbgstr_w(*pbstr));
 
     return S_OK;

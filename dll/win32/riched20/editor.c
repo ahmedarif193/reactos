@@ -2243,8 +2243,8 @@ static int ME_GetTextEx(ME_TextEditor *editor, GETTEXTEX *ex, LPARAM pText)
     }
     if (ex->codepage == CP_UNICODE)
     {
-      return ME_GetTextW(editor, (LPWSTR)pText, ex->cb / sizeof(WCHAR) - 1,
-                         &start, nChars, ex->flags & GT_USECRLF, FALSE);
+      return ME_GetTextWObj(editor, (LPWSTR)pText, ex->cb / sizeof(WCHAR) - 1,
+                            &start, nChars, ex->flags & GT_USECRLF, FALSE, !(ex->flags & GT_USECRLF));
     }
     else
     {
@@ -3156,6 +3156,8 @@ ME_TextEditor *ME_MakeEditor(ITextHost *texthost, BOOL bEmulateVersion10)
   ed->nUndoLimit = STACK_SIZE_DEFAULT;
   ed->nUndoMode = umAddToUndo;
   ed->undo_ctl_state = undoActive;
+  ed->empty_undo_result = FALSE;
+  ed->empty_redo_result = FALSE;
   ed->nParagraphs = 1;
   ed->nLastSelStart = ed->nLastSelEnd = 0;
   ed->last_sel_start_para = ed->last_sel_end_para = ed->pCursors[0].para;
@@ -4544,6 +4546,13 @@ int ME_GetTextW(ME_TextEditor *editor, WCHAR *buffer, int buflen,
                 const ME_Cursor *start, int srcChars, BOOL bCRLF,
                 BOOL bEOP)
 {
+  return ME_GetTextWObj(editor, buffer, buflen, start, srcChars, bCRLF, bEOP, FALSE);
+}
+
+int ME_GetTextWObj(ME_TextEditor *editor, WCHAR *buffer, int buflen,
+                   const ME_Cursor *start, int srcChars, BOOL bCRLF,
+                   BOOL bEOP, BOOL obj_char)
+{
   ME_Run *run, *next_run;
   const WCHAR *pStart = buffer;
   const WCHAR *str;
@@ -4580,6 +4589,11 @@ int ME_GetTextW(ME_TextEditor *editor, WCHAR *buffer, int buflen,
     buflen -= nLen;
 
     CopyMemory(buffer, str, sizeof(WCHAR) * nLen);
+    if (obj_char && (run->nFlags & MERF_GRAPHICS))
+    {
+      int i;
+      for (i = 0; i < nLen; i++) buffer[i] = 0xfffc;
+    }
 
     buffer += nLen;
 

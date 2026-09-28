@@ -281,6 +281,8 @@ LRESULT editor_handle_message( ME_TextEditor *editor, UINT msg, WPARAM wParam,
                                LPARAM lParam, HRESULT* phresult );
 int ME_GetTextW(ME_TextEditor *editor, WCHAR *buffer, int buflen,
                 const ME_Cursor *start, int srcChars, BOOL bCRLF, BOOL bEOP);
+int ME_GetTextWObj(ME_TextEditor *editor, WCHAR *buffer, int buflen,
+                   const ME_Cursor *start, int srcChars, BOOL bCRLF, BOOL bEOP, BOOL obj_char);
 void ME_RTFCharAttrHook(struct _RTF_Info *info);
 void ME_RTFParAttrHook(struct _RTF_Info *info);
 void ME_RTFTblAttrHook(struct _RTF_Info *info);
