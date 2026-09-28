@@ -189,6 +189,8 @@ RtlpCallQueryRegistryRoutine(IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
         {
             /* No default length given, try to calculate it */
             p = Data;
+            if (!p && ((Type == REG_SZ) || (Type == REG_EXPAND_SZ) || (Type == REG_MULTI_SZ)))
+                return STATUS_DATA_OVERRUN;
             if ((Type == REG_SZ) || (Type == REG_EXPAND_SZ))
             {
                 /* This is a string, count the characters */
