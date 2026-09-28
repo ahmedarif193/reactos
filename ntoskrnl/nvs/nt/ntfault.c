@@ -156,7 +156,6 @@ MmAccessFaultEx(
     NTSTATUS Status;
     BOOLEAN AllowExecutableWrite = (PsGetCurrentThread()->ExecutableWriteAllowed != 0);
 
-    UNREFERENCED_PARAMETER(TrapInformation);
     UNREFERENCED_PARAMETER(AddressSpaceLocked);
 
     if (MiArchIsSelfMapAddress((ULONG64)(ULONG_PTR)Address))
@@ -211,6 +210,9 @@ MmAccessFaultEx(
         if (Process->Vm.Instance.WorkingSetSize > Process->Vm.Instance.PeakWorkingSetSize)
             Process->Vm.Instance.PeakWorkingSetSize = Process->Vm.Instance.WorkingSetSize;
     }
+
+    if (NT_SUCCESS(Status) && Process != NULL && TrapInformation != NULL)
+        PsWatchWorkingSet(Process, (PVOID)KeGetTrapFramePc((PKTRAP_FRAME)TrapInformation), Address);
 
     if (Status == STATUS_GUARD_PAGE_VIOLATION && Process != NULL)
         Status = MiCheckForUserStackOverflow(Space, Address);

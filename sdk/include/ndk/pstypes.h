@@ -497,6 +497,7 @@ typedef struct _PS_CREATE_INFO
 #define CT_BREAK_ON_TERMINATION_BIT             0x40
 #define CT_SKIP_CREATION_MSG_BIT                0x80
 #define CT_SKIP_TERMINATION_MSG_BIT             0x100
+#define CT_EXPLICIT_CASE_SENSITIVITY_BIT        0x80000
 #define CT_DBG_WER_USER_REPORT_ACTIVE_BIT       0x200000
 
 //

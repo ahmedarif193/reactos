@@ -733,11 +733,13 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadUmsInformation */
     IQS_NONE,
     /* ThreadCounterProfiling */
-    IQS_SAME
+    IQS
     (
         BOOLEAN,
         BOOLEAN,
-        ICIF_QUERY
+        ULONG64[3],
+        ULONG64,
+        ICIF_QUERY | ICIF_SET
     ),
     /* ThreadIdealProcessorEx */
     IQS_SAME
@@ -814,7 +816,7 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     (
         ULONG,
         ULONG,
-        ICIF_QUERY
+        ICIF_QUERY | ICIF_SET
     ),
     /* ThreadWorkOnBehalfTicket */
     IQS
@@ -872,7 +874,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadApplyStateChange */
     IQS_NONE,
     /* ThreadStrongerBadHandleChecks */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_SET
+    ),
     /* ThreadEffectiveIoPriority */
     IQS_SAME
     (

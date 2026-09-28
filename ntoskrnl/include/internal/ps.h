@@ -186,9 +186,20 @@ PsInitSystem(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock
 );
 
+#define PSP_WS_WATCH_RECORDS 1024
+#define PSP_WS_WATCH_SIZE FIELD_OFFSET(PAGEFAULT_HISTORY, WatchInfo[PSP_WS_WATCH_RECORDS])
+
 //
 // Utility Routines
 //
+VOID
+NTAPI
+PsWatchWorkingSet(
+    _In_ PEPROCESS Process,
+    _In_ PVOID FaultingPc,
+    _In_ PVOID FaultingVa
+);
+
 BOOLEAN
 NTAPI
 PspGetLegacyXpdmVersion(

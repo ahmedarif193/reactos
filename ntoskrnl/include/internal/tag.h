@@ -148,6 +148,7 @@
 #define TAG_PS_API_SET          'sApP'
 #define TAG_WOW64_PROCESS       '46WP'
 #define TAG_PS_ENERGY           'nEsP'
+#define TAG_PS_WS_WATCH         'wWsP'
 
 /* Run-Time Library Tags */
 #define TAG_HDTB    'BTDH'

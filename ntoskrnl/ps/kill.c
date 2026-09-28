@@ -401,7 +401,7 @@ PspDeleteProcess(IN PVOID ObjectBody)
         ExFreePool(Process->WorkingSetWatch);
 
         /* And return the quota it was taking up */
-        PsReturnProcessNonPagedPoolQuota(Process, 0x2000);
+        PsReturnProcessNonPagedPoolQuota(Process, PSP_WS_WATCH_SIZE);
     }
 
     /* Dereference the Device Map */

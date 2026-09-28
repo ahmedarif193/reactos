@@ -21,7 +21,6 @@
 static const UCHAR PspThreadSetUnprobedClasses[] =
 {
     ThreadEnableAlignmentFaultFixup,
-    ThreadCounterProfiling,
 };
 
 static const UCHAR PspThreadQueryPointerAlignedClasses[] =
@@ -32,6 +31,7 @@ static const UCHAR PspThreadQueryPointerAlignedClasses[] =
 static const UCHAR PspThreadSetPointerAlignedClasses[] =
 {
     ThreadAffinityMask,
+    ThreadCounterProfiling,
     ThreadGroupInformation,
     ThreadCpuAccountingInformation,
     ThreadNameInformation,
@@ -666,6 +666,34 @@ PspEnumerateProcessHandle(
     UNREFERENCED_PARAMETER(HandleTableEntry);
     Query->Handles[Query->Count++] = HandleToUlong(Handle);
     return Query->Count == Query->Capacity;
+}
+
+VOID
+NTAPI
+PsWatchWorkingSet(
+    _In_ PEPROCESS Process,
+    _In_ PVOID FaultingPc,
+    _In_ PVOID FaultingVa)
+{
+    PPAGEFAULT_HISTORY History;
+    KIRQL OldIrql;
+
+    History = (PPAGEFAULT_HISTORY)ReadPointerAcquire((PVOID volatile *)&Process->WorkingSetWatch);
+    if ((History == NULL) || (FaultingPc == NULL))
+        return;
+
+    KeAcquireSpinLock(&History->SpinLock, &OldIrql);
+    if (History->CurrentIndex < PSP_WS_WATCH_RECORDS)
+    {
+        History->WatchInfo[History->CurrentIndex].FaultingPc = FaultingPc;
+        History->WatchInfo[History->CurrentIndex].FaultingVa = FaultingVa;
+        History->CurrentIndex++;
+    }
+    else
+    {
+        History->MapIndex++;
+    }
+    KeReleaseSpinLock(&History->SpinLock, OldIrql);
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/
@@ -2194,8 +2222,81 @@ NtQueryInformationProcess(
             break;
 
         case ProcessWorkingSetWatch:
-            Status = STATUS_UNSUCCESSFUL;
+        {
+            PPAGEFAULT_HISTORY History;
+            PPROCESS_WS_WATCH_INFORMATION Records;
+            ULONG Count, Lost, Needed;
+            KIRQL OldIrql;
+
+            Status = ObReferenceObjectByHandle(ProcessHandle,
+                                               PROCESS_QUERY_INFORMATION,
+                                               PsProcessType,
+                                               PreviousMode,
+                                               (PVOID*)&Process,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            History = (PPAGEFAULT_HISTORY)ReadPointerAcquire((PVOID volatile *)&Process->WorkingSetWatch);
+            if (History == NULL)
+            {
+                ObDereferenceObject(Process);
+                Status = STATUS_UNSUCCESSFUL;
+                break;
+            }
+
+            Records = ExAllocatePoolWithTag(NonPagedPool,
+                                            (PSP_WS_WATCH_RECORDS + 1) * sizeof(PROCESS_WS_WATCH_INFORMATION),
+                                            TAG_PS_WS_WATCH);
+            if (Records == NULL)
+            {
+                ObDereferenceObject(Process);
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            KeAcquireSpinLock(&History->SpinLock, &OldIrql);
+            Count = History->CurrentIndex;
+            Lost = History->MapIndex;
+            Needed = (Count + 1) * sizeof(PROCESS_WS_WATCH_INFORMATION);
+            if ((Count == 0) && (Lost == 0))
+            {
+                Status = STATUS_NO_MORE_ENTRIES;
+            }
+            else if (ProcessInformationLength < Needed)
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                Length = Needed;
+            }
+            else
+            {
+                RtlCopyMemory(Records, History->WatchInfo, Count * sizeof(PROCESS_WS_WATCH_INFORMATION));
+                Records[Count].FaultingPc = NULL;
+                Records[Count].FaultingVa = (PVOID)(ULONG_PTR)Lost;
+                History->CurrentIndex = 0;
+                History->MapIndex = 0;
+                Status = STATUS_SUCCESS;
+                Length = Needed;
+            }
+            KeReleaseSpinLock(&History->SpinLock, OldIrql);
+            ObDereferenceObject(Process);
+
+            if (Status == STATUS_SUCCESS)
+            {
+                _SEH2_TRY
+                {
+                    RtlCopyMemory(ProcessInformation, Records, Needed);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+            }
+
+            ExFreePoolWithTag(Records, TAG_PS_WS_WATCH);
             break;
+        }
 
         case ProcessPooledUsageAndLimits:
         {
@@ -2376,6 +2477,10 @@ NtSetInformationProcess(
     {
         /* Setting the exception port needs a special mask */
         Access |= PROCESS_SUSPEND_RESUME;
+    }
+    else if (ProcessInformationClass == ProcessWorkingSetWatch)
+    {
+        Access = PROCESS_QUERY_INFORMATION;
     }
 
     /* Reference the process */
@@ -3417,9 +3522,37 @@ NtSetInformationProcess(
             break;
 
         case ProcessWorkingSetWatch:
-            DPRINT1("WS watch not implemented\n");
-            Status = STATUS_NOT_IMPLEMENTED;
+        {
+            PPAGEFAULT_HISTORY History;
+
+            Status = PsChargeProcessNonPagedPoolQuota(Process, PSP_WS_WATCH_SIZE);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            History = ExAllocatePoolWithTag(NonPagedPool, PSP_WS_WATCH_SIZE, TAG_PS_WS_WATCH);
+            if (History == NULL)
+            {
+                PsReturnProcessNonPagedPoolQuota(Process, PSP_WS_WATCH_SIZE);
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            History->CurrentIndex = 0;
+            History->MapIndex = 0;
+            KeInitializeSpinLock(&History->SpinLock);
+            History->Reserved = NULL;
+
+            if (InterlockedCompareExchangePointer((PVOID*)&Process->WorkingSetWatch, History, NULL) != NULL)
+            {
+                ExFreePoolWithTag(History, TAG_PS_WS_WATCH);
+                PsReturnProcessNonPagedPoolQuota(Process, PSP_WS_WATCH_SIZE);
+                Status = STATUS_PORT_ALREADY_SET;
+                break;
+            }
+
+            Status = STATUS_SUCCESS;
             break;
+        }
 
         case ProcessHandleTracing:
             if (ProcessInformationLength == 0)
@@ -4868,6 +5001,81 @@ NtSetInformationThread(
         case ThreadWorkloadClass:
             Status = (PreviousMode != KernelMode) ? STATUS_ACCESS_DENIED : STATUS_NOT_SUPPORTED;
             break;
+
+        case ThreadCounterProfiling:
+        {
+            ULONG64 Profiling[3];
+
+            if (ThreadInformationLength != sizeof(Profiling))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(Profiling, ThreadInformation, sizeof(Profiling));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            Status = STATUS_NOT_IMPLEMENTED;
+            break;
+        }
+
+        case ThreadExplicitCaseSensitivity:
+        case ThreadStrongerBadHandleChecks:
+        {
+            ULONG Value;
+
+            if (ThreadInformationLength != sizeof(ULONG))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                Value = *(PULONG)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if ((ThreadInformationClass == ThreadExplicitCaseSensitivity) &&
+                !SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+            {
+                Status = STATUS_PRIVILEGE_NOT_HELD;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            if (ThreadInformationClass == ThreadExplicitCaseSensitivity)
+            {
+                if (Value)
+                    PspSetCrossThreadFlag(Thread, CT_EXPLICIT_CASE_SENSITIVITY_BIT);
+                else
+                    PspClearCrossThreadFlag(Thread, CT_EXPLICIT_CASE_SENSITIVITY_BIT);
+            }
+
+            ObDereferenceObject(Thread);
+            break;
+        }
 
         /* Anything else */
         default:
