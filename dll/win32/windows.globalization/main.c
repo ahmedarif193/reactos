@@ -341,7 +341,11 @@ static HRESULT hstring_vector_create(HSTRING *values, SIZE_T count, IVectorView_
     impl->IVectorView_HSTRING_iface.lpVtbl = &hstring_vector_vtbl;
     impl->IIterable_HSTRING_iface.lpVtbl = &iterable_view_hstring_vtbl;
     impl->count = count;
+#ifdef __REACTOS__
+    if (count) memcpy(impl->values, values, count * sizeof(HSTRING));
+#else
     memcpy(impl->values, values, count * sizeof(HSTRING));
+#endif
 
     *out = &impl->IVectorView_HSTRING_iface;
     return S_OK;
