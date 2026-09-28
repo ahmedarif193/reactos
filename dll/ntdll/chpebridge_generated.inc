@@ -2204,10 +2204,11 @@ NTSTATUS NTAPI ChpeAutoNtQueryIoCompletion(HANDLE a0, IO_COMPLETION_INFORMATION_
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtQueryIoCompletion), __typeof__(&NtQueryIoCompletion)), "NtQueryIoCompletion bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtQueryLicenseValue(PCWSTR a0, PVOID a1, PVOID a2, ULONG a3, PVOID a4)
+NTSTATUS NTAPI ChpeAutoNtQueryLicenseValue(PUNICODE_STRING a0, PULONG a1, PVOID a2, ULONG a3, PULONG a4)
 {
-    return 0;
+    return NtQueryLicenseValue(a0, a1, a2, a3, a4);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtQueryLicenseValue), __typeof__(&NtQueryLicenseValue)), "NtQueryLicenseValue bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoNtQueryMultipleValueKey(HANDLE a0, PKEY_VALUE_ENTRY a1, ULONG a2, PVOID a3, PULONG a4, PULONG a5)
 {
@@ -8937,10 +8938,11 @@ NTSTATUS NTAPI ChpeAutoZwQueryKey(HANDLE a0, KEY_INFORMATION_CLASS a1, PVOID a2,
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwQueryKey), __typeof__(&ZwQueryKey)), "ZwQueryKey bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwQueryLicenseValue(PVOID a0, PVOID a1, PVOID a2, ULONG a3, PVOID a4)
+NTSTATUS NTAPI ChpeAutoZwQueryLicenseValue(PUNICODE_STRING a0, PULONG a1, PVOID a2, ULONG a3, PULONG a4)
 {
-    return 0;
+    return ZwQueryLicenseValue(a0, a1, a2, a3, a4);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwQueryLicenseValue), __typeof__(&ZwQueryLicenseValue)), "ZwQueryLicenseValue bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoZwQueryMultipleValueKey(HANDLE a0, PKEY_VALUE_ENTRY a1, ULONG a2, PVOID a3, PULONG a4, PULONG a5)
 {

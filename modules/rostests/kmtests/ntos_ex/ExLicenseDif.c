@@ -9,15 +9,6 @@
 
 NTSTATUS
 NTAPI
-ZwQueryLicenseValue(
-    _In_ PCUNICODE_STRING ValueName,
-    _Out_opt_ PULONG Type,
-    _Out_writes_bytes_to_opt_(DataSize, *ResultDataSize) PVOID Data,
-    _In_ ULONG DataSize,
-    _Out_ PULONG ResultDataSize);
-
-NTSTATUS
-NTAPI
 DifRegisterClassDriverPlugin(
     _In_ ULONG Version,
     _In_opt_ PVOID Plugin,
@@ -27,9 +18,9 @@ DifRegisterClassDriverPlugin(
 START_TEST(ExLicenseDif)
 {
     static const WCHAR ExpectedLicenseData[] = L"EMPTY";
-    static const UNICODE_STRING LicenseName =
+    static UNICODE_STRING LicenseName =
         RTL_CONSTANT_STRING(L"Kernel-MUI-Language-Allowed");
-    static const UNICODE_STRING MissingLicenseName =
+    static UNICODE_STRING MissingLicenseName =
         RTL_CONSTANT_STRING(L"ReactOS-Missing-License-Value");
     WCHAR LicenseData[16];
     ULONG ResultDataSize;

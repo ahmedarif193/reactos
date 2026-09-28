@@ -126,15 +126,6 @@ extern NTKERNELAPI POBJECT_TYPE PsPartitionType;
 
 NTSTATUS
 NTAPI
-ZwQueryLicenseValue(
-    _In_ PCUNICODE_STRING ValueName,
-    _Out_opt_ PULONG Type,
-    _Out_writes_bytes_to_opt_(DataSize, *ResultDataSize) PVOID Data,
-    _In_ ULONG DataSize,
-    _Out_ PULONG ResultDataSize);
-
-NTSTATUS
-NTAPI
 InbvSetVirtualFrameBuffer(
     _In_opt_ PVOID VirtualFrameBuffer);
 
@@ -1444,8 +1435,8 @@ VOID
 TestModernProviderState(VOID)
 {
     static const WCHAR ExpectedLicenseData[] = L"EMPTY";
-    static const UNICODE_STRING LicenseName = RTL_CONSTANT_STRING(L"Kernel-MUI-Language-Allowed");
-    static const UNICODE_STRING MissingLicenseName = RTL_CONSTANT_STRING(L"ReactOS-Missing-License-Value");
+    static UNICODE_STRING LicenseName = RTL_CONSTANT_STRING(L"Kernel-MUI-Language-Allowed");
+    static UNICODE_STRING MissingLicenseName = RTL_CONSTANT_STRING(L"ReactOS-Missing-License-Value");
     static const UNICODE_STRING PartitionName = RTL_CONSTANT_STRING(L"\\??\\MemoryPartitionGraphics");
     UCHAR PartitionInformation[0xF0];
     OBJECT_ATTRIBUTES ObjectAttributes;

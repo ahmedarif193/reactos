@@ -35,9 +35,9 @@ ExQueryFastCacheDevLicense(VOID)
     return FALSE;
 }
 
+static
 NTSTATUS
-NTAPI
-ZwQueryLicenseValue(
+ExpQueryLicenseValue(
     _In_ PCUNICODE_STRING ValueName,
     _Out_opt_ PULONG Type,
     _Out_writes_bytes_to_opt_(DataSize, *ResultDataSize) PVOID Data,
@@ -89,5 +89,88 @@ ZwQueryLicenseValue(
     }
 
     ExFreePoolWithTag(ValueInformation, 'ciLE');
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+NtQueryLicenseValue(
+    _In_ PUNICODE_STRING ValueName,
+    _Out_opt_ PULONG Type,
+    _Out_writes_bytes_to_opt_(DataSize, *ResultDataSize) PVOID Data,
+    _In_ ULONG DataSize,
+    _Out_ PULONG ResultDataSize)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    UNICODE_STRING CapturedName;
+    PVOID Buffer = NULL;
+    ULONG CapturedType = 0;
+    ULONG CapturedSize = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (PreviousMode == KernelMode)
+        return ExpQueryLicenseValue(ValueName, Type, Data, DataSize, ResultDataSize);
+
+    if (ValueName == NULL || ResultDataSize == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    _SEH2_TRY
+    {
+        ProbeForWriteUlong(ResultDataSize);
+        if (Type != NULL)
+            ProbeForWriteUlong(Type);
+        if (DataSize != 0)
+            ProbeForWrite(Data, DataSize, 1);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    Status = ProbeAndCaptureUnicodeString(&CapturedName, PreviousMode, ValueName);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (CapturedName.Buffer == NULL || CapturedName.Length == 0)
+    {
+        ReleaseCapturedUnicodeString(&CapturedName, PreviousMode);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (DataSize != 0)
+    {
+        Buffer = ExAllocatePoolWithTag(PagedPool, DataSize, 'ciLE');
+        if (Buffer == NULL)
+        {
+            ReleaseCapturedUnicodeString(&CapturedName, PreviousMode);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+
+    Status = ExpQueryLicenseValue(&CapturedName, &CapturedType, Buffer, DataSize, &CapturedSize);
+    ReleaseCapturedUnicodeString(&CapturedName, PreviousMode);
+
+    if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_TOO_SMALL)
+    {
+        _SEH2_TRY
+        {
+            if (Type != NULL)
+                *Type = CapturedType;
+            *ResultDataSize = CapturedSize;
+            if (NT_SUCCESS(Status))
+                RtlCopyMemory(Data, Buffer, CapturedSize);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+    if (Buffer != NULL)
+        ExFreePoolWithTag(Buffer, 'ciLE');
     return Status;
 }

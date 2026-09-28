@@ -626,7 +626,7 @@
 432 stdcall NtQueryInstallUILanguage(ptr) ChpeAutoNtQueryInstallUILanguage
 433 stdcall NtQueryIntervalProfile(long ptr) ChpeAutoNtQueryIntervalProfile
 434 stdcall NtQueryIoCompletion(long long ptr long ptr) ChpeAutoNtQueryIoCompletion
-436 stdcall -version=0x600+ NtQueryLicenseValue(wstr ptr ptr long ptr) ChpeStubNtQueryLicenseValue
+436 stdcall -version=0x600+ NtQueryLicenseValue(ptr ptr ptr long ptr) ChpeAutoNtQueryLicenseValue
 437 stdcall NtQueryMultipleValueKey(long ptr long ptr long ptr) ChpeAutoNtQueryMultipleValueKey
 438 stdcall NtQueryMutant(long long ptr long ptr) ChpeAutoNtQueryMutant
 440 stdcall NtQueryOpenSubKeys(ptr ptr) ChpeAutoNtQueryOpenSubKeys
@@ -1705,7 +1705,7 @@
 1675 stdcall ZwQueryIntervalProfile(long ptr) ChpeAutoZwQueryIntervalProfile
 1676 stdcall ZwQueryIoCompletion(long long ptr long ptr) ChpeAutoZwQueryIoCompletion
 1677 stdcall ZwQueryKey(long long ptr long ptr) ChpeAutoZwQueryKey
-1678 stdcall -version=0x600+ ZwQueryLicenseValue(ptr ptr ptr long ptr) ChpeStubZwQueryLicenseValue
+1678 stdcall -version=0x600+ ZwQueryLicenseValue(ptr ptr ptr long ptr) ChpeAutoZwQueryLicenseValue
 1679 stdcall ZwQueryMultipleValueKey(long ptr long ptr long ptr) ChpeAutoZwQueryMultipleValueKey
 1680 stdcall ZwQueryMutant(long long ptr long ptr) ChpeAutoZwQueryMutant
 1681 stdcall ZwQueryObject(long long long long long) ChpeAutoZwQueryObject
