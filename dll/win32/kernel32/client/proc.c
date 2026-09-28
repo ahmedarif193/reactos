@@ -737,8 +737,11 @@ BasePushProcessParameters(IN ULONG ParameterFlags,
     }
 
     /* Also set the Console Flag */
-    if ((CreationFlags & CREATE_NEW_PROCESS_GROUP) &&
-        (!(CreationFlags & CREATE_NEW_CONSOLE)))
+    if (!(CreationFlags & CREATE_NEW_PROCESS_GROUP))
+    {
+        ProcessParameters->ConsoleFlags = Peb->ProcessParameters->ConsoleFlags;
+    }
+    else if (!(CreationFlags & CREATE_NEW_CONSOLE))
     {
         ProcessParameters->ConsoleFlags = 1;
     }
@@ -2837,7 +2840,11 @@ BasepCreateUserProcess(IN HANDLE UserToken,
         ProcessParameters->ConsoleHandle = HANDLE_CREATE_NEW_CONSOLE;
     else if (CreationFlags & CREATE_NO_WINDOW)
         ProcessParameters->ConsoleHandle = HANDLE_CREATE_NO_WINDOW;
-    else if (!(StartupInfo->dwFlags & (STARTF_USESTDHANDLES | STARTF_USEHOTKEY | STARTF_SHELLPRIVATE)))
+    else
+        ProcessParameters->ConsoleHandle = NtCurrentPeb()->ProcessParameters->ConsoleHandle;
+
+    if (!(CreationFlags & (DETACHED_PROCESS | CREATE_NEW_CONSOLE | CREATE_NO_WINDOW)) &&
+        !(StartupInfo->dwFlags & (STARTF_USESTDHANDLES | STARTF_USEHOTKEY | STARTF_SHELLPRIVATE)))
     {
         PRTL_USER_PROCESS_PARAMETERS Parent = NtCurrentPeb()->ProcessParameters;
 
@@ -2849,7 +2856,8 @@ BasepCreateUserProcess(IN HANDLE UserToken,
             ProcessParameters->StandardError = Parent->StandardError;
     }
 
-    if ((CreationFlags & CREATE_NEW_PROCESS_GROUP) && !(CreationFlags & CREATE_NEW_CONSOLE)) ProcessParameters->ConsoleFlags = 1;
+    if (!(CreationFlags & CREATE_NEW_PROCESS_GROUP)) ProcessParameters->ConsoleFlags = NtCurrentPeb()->ProcessParameters->ConsoleFlags;
+    else if (!(CreationFlags & CREATE_NEW_CONSOLE)) ProcessParameters->ConsoleFlags = 1;
     ProcessParameters->ProcessGroupId = (CreationFlags & CREATE_NEW_PROCESS_GROUP) ? 0 : NtCurrentPeb()->ProcessParameters->ProcessGroupId;
     if (ParameterFlags & 1) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_LOCAL_DLL_PATH;
     if (ParameterFlags & 2) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_IMAGE_KEY_MISSING;

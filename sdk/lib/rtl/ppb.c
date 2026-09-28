@@ -82,8 +82,8 @@ RtlCreateProcessParameters(PRTL_USER_PROCESS_PARAMETERS *ProcessParameters,
 	if (CurrentDirectory == NULL)
 	  CurrentDirectory = &NtCurrentPeb()->ProcessParameters->CurrentDirectory.DosPath;
 	CurrentDirectoryHandle = NtCurrentPeb()->ProcessParameters->CurrentDirectory.Handle;
-	ConsoleHandle = NtCurrentPeb()->ProcessParameters->ConsoleHandle;
-	ConsoleFlags = NtCurrentPeb()->ProcessParameters->ConsoleFlags;
+	ConsoleHandle = NULL;
+	ConsoleFlags = 0;
      }
    else
      {
