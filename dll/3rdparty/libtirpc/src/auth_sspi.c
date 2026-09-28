@@ -105,6 +105,13 @@ authsspi_create(CLIENT *clnt, sspi_name_t name, struct rpc_sspi_sec *sec)
 	else
 #else
     gd->name = strdup(name);
+    if (gd->name == NULL) {
+        rpc_createerr.cf_stat = RPC_SYSTEMERROR;
+        rpc_createerr.cf_error.re_errno = ENOMEM;
+        free(gd);
+        free(auth);
+        return (NULL);
+    }
 #endif
 
 	gd->clnt = clnt;

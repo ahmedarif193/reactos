@@ -59,11 +59,7 @@ extern int _rpc_dtablesize( void );
 #define NYEARS	(unsigned long)(1970 - 1900)
 #define TOFFSET (unsigned long)(60*60*24*(365*NYEARS + (NYEARS/4)))
 
-#ifndef __REACTOS__
 static void do_close( SOCKET );
-#else
-static void do_close( int );
-#endif
 
 int
 rtime(addrp, timep, timeout)
@@ -93,6 +89,7 @@ rtime(addrp, timep, timeout)
 
 	/* TCP and UDP port are the same in this case */
 	if ((serv = getservbyname("time", "tcp")) == NULL) {
+		do_close(s);
 		return(-1);
 	}
 
@@ -148,7 +145,7 @@ rtime(addrp, timep, timeout)
 
 static void
 do_close(s)
-	int s;
+	SOCKET s;
 {
 	int save;
 

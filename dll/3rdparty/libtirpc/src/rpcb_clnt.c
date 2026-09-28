@@ -213,11 +213,21 @@ add_cache(host, netid, taddr, uaddr)
 	ad_cache->ac_taddr = (struct netbuf *)malloc(sizeof (struct netbuf));
 	if (!ad_cache->ac_host || !ad_cache->ac_netid || !ad_cache->ac_taddr ||
 		(uaddr && !ad_cache->ac_uaddr)) {
+		free(ad_cache->ac_host);
+		free(ad_cache->ac_netid);
+		free(ad_cache->ac_uaddr);
+		free(ad_cache->ac_taddr);
+		free(ad_cache);
 		return;
 	}
 	ad_cache->ac_taddr->len = ad_cache->ac_taddr->maxlen = taddr->len;
 	ad_cache->ac_taddr->buf = (char *) malloc(taddr->len);
 	if (ad_cache->ac_taddr->buf == NULL) {
+		free(ad_cache->ac_host);
+		free(ad_cache->ac_netid);
+		free(ad_cache->ac_uaddr);
+		free(ad_cache->ac_taddr);
+		free(ad_cache);
 		return;
 	}
 	memcpy(ad_cache->ac_taddr->buf, taddr->buf, taddr->len);
@@ -301,7 +311,8 @@ getclnthandle(host, nconf, targaddr)
 		    (rpcprog_t)RPCBPROG, (rpcvers_t)RPCBVERS4, 0, 0, NULL, NULL, NULL);
 		if (client != NULL) {
 			if (targaddr)
-				*targaddr = strdup(ad_cache->ac_uaddr);
+				*targaddr = ad_cache->ac_uaddr ? strdup(ad_cache->ac_uaddr) :
+				    taddr2uaddr(nconf, addr);
 			rwlock_unlock(&rpcbaddr_cache_lock);
 			return (client);
 		}
@@ -347,11 +358,15 @@ getclnthandle(host, nconf, targaddr)
 #endif
 			return (NULL);
 		} else {
-			struct sockaddr_un sun;
-
-			*targaddr = malloc(sizeof(sun.sun_path));
-			strncpy(*targaddr, _PATH_RPCBINDSOCK,
-			    sizeof(sun.sun_path));
+			if (targaddr) {
+				*targaddr = strdup(_PATH_RPCBINDSOCK);
+				if (*targaddr == NULL) {
+					CLNT_DESTROY(client);
+					rpc_createerr.cf_stat = RPC_SYSTEMERROR;
+					rpc_createerr.cf_error.re_errno = ENOMEM;
+					return (NULL);
+				}
+			}
 			return (client);
 		}
 	} else {
