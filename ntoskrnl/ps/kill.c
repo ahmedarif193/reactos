@@ -1283,8 +1283,7 @@ NtTerminateProcess(IN HANDLE ProcessHandle OPTIONAL,
         return STATUS_PROCESS_IS_TERMINATING;
     }
 
-    /* Set the delete flag, unless the process is comitting suicide */
-    if (KillByHandle) PspSetProcessFlag(Process, PSF_PROCESS_DELETE_BIT);
+    PspSetProcessFlag(Process, PSF_PROCESS_DELETE_BIT);
 
     /* Get the first thread */
     Status = STATUS_NOTHING_TO_TERMINATE;
