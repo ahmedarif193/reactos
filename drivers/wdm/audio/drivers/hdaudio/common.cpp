@@ -186,6 +186,11 @@ CAdapterCommon::ReadRegistryKey(
         {
             break;
         }
+        if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_TOO_SMALL && Status != STATUS_BUFFER_OVERFLOW)
+        {
+            RegKey->Release();
+            return Status;
+        }
         BasicInformation = (PKEY_BASIC_INFORMATION)ExAllocatePoolZero(NonPagedPool, ResultLength, TAG_HDAUDIO);
         if (!BasicInformation)
         {
@@ -235,14 +240,11 @@ CAdapterCommon::ReadRegistryKey(
             }
             Status = SubKey->QueryValueKey(
                 &Name, KeyValuePartialInformation, PartialInformation, ResultLength, &ResultLength);
-            if (NT_SUCCESS(Status))
+            if (NT_SUCCESS(Status) && PartialInformation->DataLength == BufferLength)
             {
                 *Type = PartialInformation->Type;
                 *ParentKey = SubKey;
-                if (PartialInformation->DataLength == BufferLength)
-                {
-                    RtlCopyMemory(Value, PartialInformation->Data, PartialInformation->DataLength);
-                }
+                RtlCopyMemory(Value, PartialInformation->Data, PartialInformation->DataLength);
                 ExFreePool(PartialInformation);
                 ExFreePool(SubKeyName);
                 RegKey->Release();
