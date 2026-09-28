@@ -261,10 +261,10 @@ UDFCompressUnicode(
     }
 
     CS0 = (uint8*)MyAllocatePool__(NonPagedPool, *Length = (((compID==UDF_COMP_ID_8) ? 1 : 2)*len + 1) );
+    *_CS0 = CS0;
     if(!CS0) return;
 
     CS0[0] = compID;
-    *_CS0 = CS0;
     // init loop
     CS0++;
     unicodeIndex = 0;
