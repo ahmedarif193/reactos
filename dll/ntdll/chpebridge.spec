@@ -1052,7 +1052,7 @@
 933 stdcall -version=0x600+ RtlGetSystemPreferredUILanguages(long ptr ptr ptr ptr) ChpeStubRtlGetSystemPreferredUILanguages
 934 stdcall RtlGetThreadErrorMode() ChpeAutoRtlGetThreadErrorMode
 935 stdcall -version=0x600+ RtlGetThreadLangIdByIndex(long long ptr ptr) ChpeStubRtlGetThreadLangIdByIndex
-936 stdcall -version=0x600+ RtlGetThreadPreferredUILanguages(long long ptr ptr) ChpeStubRtlGetThreadPreferredUILanguages
+936 stdcall -version=0x600+ RtlGetThreadPreferredUILanguages(long ptr ptr ptr) ChpeStubRtlGetThreadPreferredUILanguages
 937 stdcall -version=0x600+ RtlGetUILanguageInfo(long ptr long ptr ptr) ChpeStubRtlGetUILanguageInfo
 939 stdcall -version=0x600+ RtlGetUnloadEventTraceEx(ptr ptr ptr) ChpeAutoRtlGetUnloadEventTraceEx
 940 stdcall RtlGetUserInfoHeap(ptr long ptr ptr ptr) ChpeAutoRtlGetUserInfoHeap
@@ -1129,7 +1129,7 @@
 1026 stdcall RtlIsGenericTableEmpty(ptr) ChpeAutoRtlIsGenericTableEmpty
 1027 stdcall RtlIsGenericTableEmptyAvl(ptr) ChpeAutoRtlIsGenericTableEmptyAvl
 1028 stdcall RtlIsNameLegalDOS8Dot3(ptr ptr ptr) ChpeAutoRtlIsNameLegalDOS8Dot3
-1029 stdcall -version=0x600+ RtlIsNormalizedString(long ptr long ptr) ChpeStubRtlIsNormalizedString
+1029 stdcall -version=0x600+ RtlIsNormalizedString(long ptr long ptr) ChpeAutoRtlIsNormalizedString
 1031 stdcall RtlIsTextUnicode(ptr long ptr) ChpeAutoRtlIsTextUnicode
 1032 stdcall RtlIsThreadWithinLoaderCallout() ChpeAutoRtlIsThreadWithinLoaderCallout
 1033 stdcall RtlIsValidHandle(ptr ptr) ChpeAutoRtlIsValidHandle
@@ -1172,7 +1172,7 @@
 1075 stdcall RtlNewSecurityObjectEx(ptr ptr ptr ptr long long ptr ptr) ChpeAutoRtlNewSecurityObjectEx
 1076 stdcall RtlNewSecurityObjectWithMultipleInheritance(ptr ptr ptr ptr long long long ptr ptr) ChpeAutoRtlNewSecurityObjectWithMultipleInheritance
 1077 stdcall RtlNormalizeProcessParams(ptr) ChpeAutoRtlNormalizeProcessParams
-1078 stdcall -version=0x600+ RtlNormalizeString(long long long long ptr) ChpeStubRtlNormalizeString
+1078 stdcall -version=0x600+ RtlNormalizeString(long ptr long ptr ptr) ChpeAutoRtlNormalizeString
 1079 stdcall RtlNtPathNameToDosPathName(long ptr ptr ptr) ChpeAutoRtlNtPathNameToDosPathName
 1081 stdcall RtlNtStatusToDosErrorNoTeb(long) ChpeAutoRtlNtStatusToDosErrorNoTeb
 1082 stub -version=0x600+ RtlNtdllName

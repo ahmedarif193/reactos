@@ -213,15 +213,11 @@ RtlpWritePreferredLanguages(DWORD Flags, PCWSTR Languages, ULONG LanguageCharact
 }
 
 static NTSTATUS
-RtlpGetDefaultPreferredLanguage(DWORD Flags, PULONG Count, PWSTR Buffer, PULONG Size)
+RtlpGetPreferredLanguageById(DWORD Flags, LANGID LanguageId, PULONG Count, PWSTR Buffer, PULONG Size)
 {
     WCHAR Languages[LOCALE_NAME_MAX_LENGTH + 1];
     UNICODE_STRING LocaleName;
-    LANGID LanguageId;
     NTSTATUS Status;
-
-    Status = NtQueryDefaultUILanguage(&LanguageId);
-    if (!NT_SUCCESS(Status)) return Status;
 
     LocaleName.Buffer = Languages;
     LocaleName.Length = 0;
@@ -232,6 +228,18 @@ RtlpGetDefaultPreferredLanguage(DWORD Flags, PULONG Count, PWSTR Buffer, PULONG 
     Languages[LocaleName.Length / sizeof(WCHAR)] = UNICODE_NULL;
     Languages[LocaleName.Length / sizeof(WCHAR) + 1] = UNICODE_NULL;
     return RtlpWritePreferredLanguages(Flags, Languages, LocaleName.Length / sizeof(WCHAR) + 2, Count, Buffer, Size);
+}
+
+static NTSTATUS
+RtlpGetDefaultPreferredLanguage(DWORD Flags, PULONG Count, PWSTR Buffer, PULONG Size)
+{
+    LANGID LanguageId;
+    NTSTATUS Status;
+
+    Status = NtQueryDefaultUILanguage(&LanguageId);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    return RtlpGetPreferredLanguageById(Flags, LanguageId, Count, Buffer, Size);
 }
 
 static INT
@@ -469,6 +477,38 @@ RtlGetUserPreferredUILanguages(DWORD Flags, ULONG Reserved, PULONG Count, PWSTR 
     {
         return Status;
     }
+
+    return RtlpGetDefaultPreferredLanguage(Flags, Count, Buffer, Size);
+}
+
+NTSTATUS
+NTAPI
+RtlGetSystemPreferredUILanguages(DWORD Flags, ULONG Reserved, PULONG Count, PWSTR Buffer, PULONG Size)
+{
+    LANGID LanguageId;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Reserved);
+
+    if (!Count || !Size ||
+        (Flags & ~(MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID | MUI_MACHINE_LANGUAGE_SETTINGS)) ||
+        ((Flags & MUI_LANGUAGE_NAME) && (Flags & MUI_LANGUAGE_ID)) ||
+        (*Size && !Buffer))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = NtQueryInstallUILanguage(&LanguageId);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    return RtlpGetPreferredLanguageById(Flags, LanguageId, Count, Buffer, Size);
+}
+
+NTSTATUS
+NTAPI
+RtlGetThreadPreferredUILanguages(DWORD Flags, PULONG Count, PWSTR Buffer, PULONG Size)
+{
+    if (!Count || !Size) return STATUS_INVALID_PARAMETER;
 
     return RtlpGetDefaultPreferredLanguage(Flags, Count, Buffer, Size);
 }

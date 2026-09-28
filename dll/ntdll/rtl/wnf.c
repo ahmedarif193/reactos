@@ -26,7 +26,7 @@ RtlQueryWnfStateData(
     UNREFERENCED_PARAMETER(TypeId);
     UNREFERENCED_PARAMETER(Flags);
 
-    DPRINT1("RtlQueryWnfStateData: no WNF provider\n");
+    DPRINT("RtlQueryWnfStateData: no WNF provider\n");
 
     if (ChangeStamp)
         *ChangeStamp = 0;
@@ -56,7 +56,7 @@ RtlSubscribeWnfStateChangeNotification(
     UNREFERENCED_PARAMETER(Unknown);
     UNREFERENCED_PARAMETER(Flags);
 
-    DPRINT1("RtlSubscribeWnfStateChangeNotification: no WNF provider\n");
+    DPRINT("RtlSubscribeWnfStateChangeNotification: no WNF provider\n");
 
     if (Subscription)
         *Subscription = NULL;
@@ -71,7 +71,7 @@ RtlUnsubscribeWnfNotificationWaitForCompletion(
 {
     UNREFERENCED_PARAMETER(Subscription);
 
-    DPRINT1("RtlUnsubscribeWnfNotificationWaitForCompletion: no WNF provider\n");
+    DPRINT("RtlUnsubscribeWnfNotificationWaitForCompletion: no WNF provider\n");
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -108,4 +108,23 @@ RtlFlushHeaps(VOID)
         RtlFreeHeap(RtlGetProcessHeap(), 0, HeapArray);
 
     return Status;
+}
+
+BOOL
+NTAPI
+WinSqmIsOptedIn(VOID)
+{
+    return FALSE;
+}
+
+BOOL
+NTAPI
+WinSqmEventEnabled(
+    _In_ ULONG EventId,
+    _In_opt_ PVOID Context)
+{
+    UNREFERENCED_PARAMETER(EventId);
+    UNREFERENCED_PARAMETER(Context);
+
+    return FALSE;
 }

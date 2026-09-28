@@ -36,7 +36,8 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
         {
             ULONG Type = ExtendedParameters[Index].Type;
 
-            if (ExtendedParameters[Index].Reserved || Type >= 32 || (Present & (1u << Type)))
+            if (ExtendedParameters[Index].Reserved || Type == MemExtendedParameterInvalidType ||
+                Type >= MemExtendedParameterMax || (Present & (1u << Type)))
                 _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
             Present |= 1u << Type;
 
@@ -50,13 +51,25 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
                         break;
                     if (!Requirements)
                         _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
-                    if (Requirements->LowestStartingAddress || Requirements->Alignment)
+                    if (Requirements->Alignment)
+                        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+                    if (Requirements->LowestStartingAddress)
                         _SEH2_YIELD(return STATUS_NOT_SUPPORTED);
                     if (Requirements->HighestEndingAddress)
                     {
-                        *ZeroBits = (ULONG_PTR)Requirements->HighestEndingAddress | 0xffff;
-                        if (*ZeroBits < 0xffff)
+                        SYSTEM_BASIC_INFORMATION BasicInfo;
+                        ULONG_PTR Highest = (ULONG_PTR)Requirements->HighestEndingAddress;
+
+                        if (!NT_SUCCESS(NtQuerySystemInformation(SystemBasicInformation,
+                                                                 &BasicInfo,
+                                                                 sizeof(BasicInfo),
+                                                                 NULL)))
+                        {
                             _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+                        }
+                        if (((Highest + 1) & (BasicInfo.PageSize - 1)) != 0 || Highest > BasicInfo.MaximumUserModeAddress)
+                            _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+                        *ZeroBits = Highest;
                     }
                     break;
                 }

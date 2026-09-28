@@ -3886,9 +3886,10 @@ NTSTATUS NTAPI ChpeAutoRtlCreateUserSecurityObject(PVOID a0, ULONG a1, PVOID a2,
     return RtlCreateUserSecurityObject(a0, a1, a2, a3, a4, a5, a6);
 }
 
-ULONG_PTR NTAPI ChpeStubRtlCreateUserStack(ULONG a0, ULONG a1, ULONG a2, ULONG a3, ULONG a4, PVOID a5)
+NTSTATUS NTAPI RtlCreateUserStack(SIZE_T, SIZE_T, ULONG, SIZE_T, SIZE_T, PINITIAL_TEB);
+ULONG_PTR NTAPI ChpeStubRtlCreateUserStack(ULONG_PTR a0, ULONG_PTR a1, ULONG a2, ULONG_PTR a3, ULONG_PTR a4, PVOID a5)
 {
-    return 0;
+    return (ULONG_PTR)RtlCreateUserStack(a0, a1, a2, a3, a4, (PINITIAL_TEB)a5);
 }
 
 BOOLEAN NTAPI ChpeAutoRtlCultureNameToLCID(PCUNICODE_STRING a0, PLCID a1)
@@ -4652,8 +4653,10 @@ void NTAPI ChpeAutoRtlFreeThreadActivationContextStack(VOID)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlFreeThreadActivationContextStack), __typeof__(&RtlFreeThreadActivationContextStack)), "RtlFreeThreadActivationContextStack bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlFreeUserStack(ULONG a0)
+VOID NTAPI RtlFreeUserStack(PVOID);
+ULONG_PTR NTAPI ChpeStubRtlFreeUserStack(PVOID a0)
 {
+    RtlFreeUserStack(a0);
     return 0;
 }
 
@@ -4882,7 +4885,7 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetSetBootSta
 
 ULONG_PTR NTAPI ChpeStubRtlGetSystemPreferredUILanguages(ULONG a0, PVOID a1, PVOID a2, PVOID a3, PVOID a4)
 {
-    return 0;
+    return (ULONG_PTR)RtlGetSystemPreferredUILanguages(a0, (ULONG)(ULONG_PTR)a1, (PULONG)a2, (PWSTR)a3, (PULONG)a4);
 }
 
 ULONG NTAPI ChpeAutoRtlGetThreadErrorMode(VOID)
@@ -4896,9 +4899,9 @@ ULONG_PTR NTAPI ChpeStubRtlGetThreadLangIdByIndex(ULONG a0, ULONG a1, PVOID a2, 
     return 0;
 }
 
-ULONG_PTR NTAPI ChpeStubRtlGetThreadPreferredUILanguages(ULONG a0, ULONG a1, PVOID a2, PVOID a3)
+ULONG_PTR NTAPI ChpeStubRtlGetThreadPreferredUILanguages(ULONG a0, PVOID a1, PVOID a2, PVOID a3)
 {
-    return 0;
+    return (ULONG_PTR)RtlGetThreadPreferredUILanguages(a0, (PULONG)a1, (PWSTR)a2, (PULONG)a3);
 }
 
 ULONG_PTR NTAPI ChpeStubRtlGetUILanguageInfo(ULONG a0, PVOID a1, ULONG a2, PVOID a3, PVOID a4)
@@ -5385,10 +5388,11 @@ BOOLEAN NTAPI ChpeAutoRtlIsNameLegalDOS8Dot3(PCUNICODE_STRING a0, POEM_STRING a1
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlIsNameLegalDOS8Dot3), __typeof__(&RtlIsNameLegalDOS8Dot3)), "RtlIsNameLegalDOS8Dot3 bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlIsNormalizedString(ULONG a0, PVOID a1, ULONG a2, PVOID a3)
+NTSTATUS NTAPI ChpeAutoRtlIsNormalizedString(ULONG a0, PCWSTR a1, LONG a2, PBOOLEAN a3)
 {
-    return 0;
+    return RtlIsNormalizedString(a0, a1, a2, a3);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlIsNormalizedString), __typeof__(&RtlIsNormalizedString)), "RtlIsNormalizedString bridge signature mismatch");
 
 BOOLEAN NTAPI ChpeAutoRtlIsTextUnicode(const void * a0, INT a1, INT * a2)
 {
@@ -5669,10 +5673,11 @@ PRTL_USER_PROCESS_PARAMETERS NTAPI ChpeAutoRtlNormalizeProcessParams(PRTL_USER_P
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlNormalizeProcessParams), __typeof__(&RtlNormalizeProcessParams)), "RtlNormalizeProcessParams bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlNormalizeString(ULONG a0, ULONG a1, ULONG a2, ULONG a3, PVOID a4)
+NTSTATUS NTAPI ChpeAutoRtlNormalizeString(ULONG a0, PCWSTR a1, LONG a2, PWSTR a3, PLONG a4)
 {
-    return 0;
+    return RtlNormalizeString(a0, a1, a2, a3, a4);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlNormalizeString), __typeof__(&RtlNormalizeString)), "RtlNormalizeString bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoRtlNtPathNameToDosPathName(ULONG a0, PRTL_UNICODE_STRING_BUFFER a1, PULONG a2, PULONG a3)
 {
