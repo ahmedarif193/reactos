@@ -93,7 +93,8 @@ static PUCHAR lznt1_decompress_chunk(UCHAR *dst, ULONG dst_size, UCHAR *src, ULO
 
 /* decompress data encoded with LZNT1 */
 static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG src_size,
-                                 ULONG offset, ULONG *final_size, UCHAR *workspace)
+                                 ULONG offset, ULONG *final_size, UCHAR *workspace,
+                                 BOOLEAN fragment)
 {
     UCHAR *src_cur = src, *src_end = src + src_size;
     UCHAR *dst_cur = dst, *dst_end = dst + dst_size;
@@ -134,6 +135,9 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
         if (src_cur + chunk_size > src_end)
             return STATUS_BAD_COMPRESSION_BUFFER;
 
+        if (fragment && !(chunk_header & 0x8000))
+            return STATUS_BAD_COMPRESSION_BUFFER;
+
         if (dst_cur >= dst_end)
             goto out;
 
@@ -147,6 +151,12 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
             {
                 block_size = min((ptr - workspace) - offset, dst_end - dst_cur);
                 memcpy(dst_cur, workspace + offset, block_size);
+                dst_cur += block_size;
+            }
+            else if ((ULONG)(ptr - workspace) < offset)
+            {
+                block_size = min(0x1000 - offset, dst_end - dst_cur);
+                memset(dst_cur, 0, block_size);
                 dst_cur += block_size;
             }
         }
@@ -174,6 +184,9 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
         chunk_size = (chunk_header & 0xFFF) + 1;
 
         if (src_cur + chunk_size > src_end)
+            return STATUS_BAD_COMPRESSION_BUFFER;
+
+        if (fragment && !(chunk_header & 0x8000))
             return STATUS_BAD_COMPRESSION_BUFFER;
 
         /* add padding if required */
@@ -216,28 +229,101 @@ out:
 }
 
 
+static ULONG
+lznt1_compress_chunk(const UCHAR *src, ULONG src_size, UCHAR *dst, ULONG dst_size)
+{
+    ULONG pos = 0, out = 0, flag_pos, bit, displacement_bits, length_bits;
+    ULONG max_length, max_displacement, best_length, best_displacement, length, displacement;
+    USHORT code;
+
+    while (pos < src_size)
+    {
+        if (out >= dst_size)
+            return 0;
+        flag_pos = out++;
+        dst[flag_pos] = 0;
+
+        for (bit = 0; bit < 8 && pos < src_size; bit++)
+        {
+            for (displacement_bits = 12; displacement_bits > 4; displacement_bits--)
+                if ((1UL << (displacement_bits - 1)) < pos) break;
+            length_bits = 16 - displacement_bits;
+            max_length = min((1UL << length_bits) + 2, src_size - pos);
+            max_displacement = min(pos, 1UL << displacement_bits);
+
+            best_length = 0;
+            best_displacement = 0;
+            for (displacement = 1; displacement <= max_displacement; displacement++)
+            {
+                if (src[pos] != src[pos - displacement])
+                    continue;
+                for (length = 1; length < max_length; length++)
+                {
+                    if (src[pos + length] != src[pos + length - displacement])
+                        break;
+                }
+                if (length > best_length)
+                {
+                    best_length = length;
+                    best_displacement = displacement;
+                    if (length == max_length)
+                        break;
+                }
+            }
+
+            if (best_length >= 3)
+            {
+                if (out + sizeof(WORD) > dst_size)
+                    return 0;
+                code = (USHORT)(((best_displacement - 1) << length_bits) | (best_length - 3));
+                dst[out++] = (UCHAR)code;
+                dst[out++] = (UCHAR)(code >> 8);
+                dst[flag_pos] |= (UCHAR)(1 << bit);
+                pos += best_length;
+            }
+            else
+            {
+                if (out >= dst_size)
+                    return 0;
+                dst[out++] = src[pos++];
+            }
+        }
+    }
+
+    return out;
+}
+
 static NTSTATUS
 RtlpCompressBufferLZNT1(UCHAR *src, ULONG src_size, UCHAR *dst, ULONG dst_size,
                         ULONG chunk_size, ULONG *final_size, UCHAR *workspace)
 {
         UCHAR *src_cur = src, *src_end = src + src_size;
         UCHAR *dst_cur = dst, *dst_end = dst + dst_size;
-        ULONG block_size;
+        ULONG block_size, packed_size;
 
         while (src_cur < src_end)
         {
-            /* determine size of current chunk */
             block_size = min(0x1000, src_end - src_cur);
-            if (dst_cur + sizeof(WORD) + block_size > dst_end)
+            if (dst_cur + sizeof(WORD) > dst_end)
                 return STATUS_BUFFER_TOO_SMALL;
 
-            /* write (uncompressed) chunk header */
-            *(WORD *)dst_cur = 0x3000 | (block_size - 1);
-            dst_cur += sizeof(WORD);
+            packed_size = lznt1_compress_chunk(src_cur, block_size, dst_cur + sizeof(WORD),
+                                               min(block_size - 1, (ULONG)(dst_end - dst_cur - sizeof(WORD))));
+            if (packed_size)
+            {
+                *(WORD *)dst_cur = 0xB000 | (packed_size - 1);
+                dst_cur += sizeof(WORD) + packed_size;
+            }
+            else
+            {
+                if (dst_cur + sizeof(WORD) + block_size > dst_end)
+                    return STATUS_BUFFER_TOO_SMALL;
 
-            /* write chunk content */
-            memcpy(dst_cur, src_cur, block_size);
-            dst_cur += block_size;
+                *(WORD *)dst_cur = 0x3000 | (block_size - 1);
+                dst_cur += sizeof(WORD);
+                memcpy(dst_cur, src_cur, block_size);
+                dst_cur += block_size;
+            }
             src_cur += block_size;
         }
 
@@ -355,7 +441,7 @@ RtlDecompressFragment(IN USHORT format,
     {
         case COMPRESSION_FORMAT_LZNT1:
             return lznt1_decompress(uncompressed, uncompressed_size, compressed,
-                                    compressed_size, offset, final_size, workspace);
+                                    compressed_size, offset, final_size, workspace, TRUE);
 
         case COMPRESSION_FORMAT_NONE:
         case COMPRESSION_FORMAT_DEFAULT:
@@ -378,8 +464,19 @@ RtlDecompressBuffer(IN USHORT CompressionFormat,
                     IN ULONG CompressedBufferSize,
                     OUT PULONG FinalUncompressedSize)
 {
-    return RtlDecompressFragment(CompressionFormat, UncompressedBuffer, UncompressedBufferSize,
-                                 CompressedBuffer, CompressedBufferSize, 0, FinalUncompressedSize, NULL);
+    switch (CompressionFormat & ~COMPRESSION_ENGINE_MAXIMUM)
+    {
+        case COMPRESSION_FORMAT_LZNT1:
+            return lznt1_decompress(UncompressedBuffer, UncompressedBufferSize, CompressedBuffer,
+                                    CompressedBufferSize, 0, FinalUncompressedSize, NULL, FALSE);
+
+        case COMPRESSION_FORMAT_NONE:
+        case COMPRESSION_FORMAT_DEFAULT:
+            return STATUS_INVALID_PARAMETER;
+
+        default:
+            return STATUS_UNSUPPORTED_COMPRESSION;
+    }
 }
 
 /*
