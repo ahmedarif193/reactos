@@ -65,6 +65,7 @@ struct file_op_queue
 
 struct file_queue
 {
+    DWORD                magic;
     struct file_op_queue copy_queue;
     struct file_op_queue delete_queue;
     struct file_op_queue rename_queue;
@@ -72,6 +73,8 @@ struct file_queue
     struct source_media **sources;
     unsigned int         source_count;
 };
+
+#define FILE_QUEUE_MAGIC 0x21514653
 
 
 static inline WCHAR *strdupW( const WCHAR *str )
@@ -137,6 +140,7 @@ static void concat_W( WCHAR *buffer, const WCHAR *src1, const WCHAR *src2, const
         strcpyW( buffer, src1 );
         buffer += strlenW(buffer );
         if (buffer[-1] != '\\') *buffer++ = '\\';
+        *buffer = 0;
         if (src2) while (*src2 == '\\') src2++;
     }
 
@@ -145,6 +149,7 @@ static void concat_W( WCHAR *buffer, const WCHAR *src1, const WCHAR *src2, const
         strcpyW( buffer, src2 );
         buffer += strlenW(buffer );
         if (buffer[-1] != '\\') *buffer++ = '\\';
+        *buffer = 0;
         if (src3) while (*src3 == '\\') src3++;
     }
 
@@ -482,6 +487,7 @@ HSPFILEQ WINAPI SetupOpenFileQueue(void)
 
     if (!(queue = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*queue))))
         return INVALID_HANDLE_VALUE;
+    queue->magic = FILE_QUEUE_MAGIC;
     return queue;
 }
 
@@ -494,6 +500,12 @@ BOOL WINAPI SetupCloseFileQueue( HSPFILEQ handle )
     struct file_queue *queue = handle;
 
     unsigned int i;
+
+    if (queue->magic != FILE_QUEUE_MAGIC)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
 
     free_file_op_queue( &queue->copy_queue );
     free_file_op_queue( &queue->rename_queue );
@@ -593,6 +605,7 @@ BOOL WINAPI SetupQueueCopyIndirectA( PSP_FILE_COPY_PARAMS_A params )
     op->media      = NULL;
 
     /* some defaults */
+    if (!op->dst_file) op->dst_file = op->src_file;
     if (!op->src_file) op->src_file = op->dst_file;
     if (params->LayoutInf)
     {
@@ -632,6 +645,7 @@ BOOL WINAPI SetupQueueCopyIndirectW( PSP_FILE_COPY_PARAMS_W params )
         ConvertStringSecurityDescriptorToSecurityDescriptorW( params->SecurityDescriptor, SDDL_REVISION_1, &op->dst_sd, NULL );
 
     /* some defaults */
+    if (!op->dst_file) op->dst_file = op->src_file;
     if (!op->src_file) op->src_file = op->dst_file;
     if (params->LayoutInf)
     {

@@ -2865,7 +2865,7 @@ HKEY WINAPI SetupDiCreateDeviceInterfaceRegKeyW(
     {
         if (InfHandle && InfSectionName)
         {
-            if (!SetupInstallFromInfSectionW(NULL /*FIXME */,
+            if (!SETUPAPI_InstallFromInfSectionWithIncludes(NULL /*FIXME */,
                                              InfHandle,
                                              InfSectionName,
                                              SPINST_INIFILES | SPINST_REGISTRY | SPINST_INI2REG |
@@ -6066,7 +6066,7 @@ SetupDiRegisterCoDeviceInstallers(
             if (!Context)
                 goto cleanup;
         }
-        Result = SetupInstallFromInfSectionW(InstallParams.hwndParent,
+        Result = SETUPAPI_InstallFromInfSectionWithIncludes(InstallParams.hwndParent,
             SelectedDriver->InfFileDetails->hInf, SectionName,
             DoAction, hKey, SelectedDriver->InfFileDetails->DirectoryName, SP_COPY_NEWER,
             SetupDefaultQueueCallbackW, Context,
@@ -6327,7 +6327,7 @@ SetupDiInstallDevice(
             goto cleanup;
     }
     *pSectionName = '\0';
-    Result = SetupInstallFromInfSectionW(InstallParams.hwndParent,
+    Result = SETUPAPI_InstallFromInfSectionWithIncludes(InstallParams.hwndParent,
         SelectedDriver->InfFileDetails->hInf, SectionName,
         DoAction, hKey, SourceInfFileDetails->DirectoryName, SP_COPY_NEWER,
         SetupDefaultQueueCallbackW, Context,
@@ -6438,7 +6438,7 @@ SetupDiInstallDevice(
     if (!(InstallParams.FlagsEx & DI_FLAGSEX_NO_DRVREG_MODIFY))
         DoAction |= SPINST_REGISTRY;
     strcpyW(pSectionName, DotHW);
-    Result = SetupInstallFromInfSectionW(InstallParams.hwndParent,
+    Result = SETUPAPI_InstallFromInfSectionWithIncludes(InstallParams.hwndParent,
         SelectedDriver->InfFileDetails->hInf, SectionName,
         DoAction, hHwKey, NULL, 0,
         NULL, NULL,

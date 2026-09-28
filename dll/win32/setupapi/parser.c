@@ -2223,140 +2223,120 @@ SetupGetInfFileListW(
     IN DWORD ReturnBufferSize OPTIONAL,
     OUT PDWORD RequiredSize OPTIONAL)
 {
-    HANDLE hSearch;
-    LPWSTR pFullFileName = NULL;
-    LPWSTR pFileName; /* Pointer into pFullFileName buffer */
-    LPWSTR pBuffer = ReturnBuffer;
-    WIN32_FIND_DATAW wfdFileInfo;
-    size_t len;
-    DWORD requiredSize = 0;
-    BOOL ret = FALSE;
+    WCHAR *filter, *fullname = NULL, *ptr = ReturnBuffer;
+    DWORD dir_len, name_len = 20, size;
+    WIN32_FIND_DATAW finddata;
+    HANDLE hdl;
 
     TRACE("%s %lx %p %ld %p\n", debugstr_w(DirectoryPath), InfStyle,
         ReturnBuffer, ReturnBufferSize, RequiredSize);
 
-    if (InfStyle & ~(INF_STYLE_OLDNT | INF_STYLE_WIN4))
+    if (InfStyle & ~(INF_STYLE_OLDNT | INF_STYLE_WIN4 | INF_STYLE_CACHE_ENABLE | INF_STYLE_CACHE_DISABLE))
     {
-        TRACE("Unknown flags: 0x%08lx\n", InfStyle & ~(INF_STYLE_OLDNT  | INF_STYLE_WIN4));
-        SetLastError(ERROR_INVALID_PARAMETER);
-        goto cleanup;
+        if (RequiredSize) *RequiredSize = 1;
+        return TRUE;
     }
-    else if (ReturnBufferSize == 0 && ReturnBuffer != NULL)
+    if ((InfStyle & (INF_STYLE_OLDNT | INF_STYLE_WIN4)) == INF_STYLE_NONE)
     {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        goto cleanup;
+        if (RequiredSize) *RequiredSize = 1;
+        return TRUE;
     }
-    else if (ReturnBufferSize > 0 && ReturnBuffer == NULL)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        goto cleanup;
-    }
-
-    /* Allocate memory for file filter */
-    if (DirectoryPath != NULL)
-        /* "DirectoryPath\" form */
-        len = strlenW(DirectoryPath) + 1 + 1;
-    else
-        /* "%SYSTEMROOT%\Inf\" form */
-        len = MAX_PATH + 1 + strlenW(InfDirectory) + 1;
-    len += MAX_PATH; /* To contain file name or "*.inf" string */
-    pFullFileName = MyMalloc(len * sizeof(WCHAR));
-    if (pFullFileName == NULL)
-    {
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-        goto cleanup;
-    }
-
-    /* Fill file filter buffer */
     if (DirectoryPath)
     {
-        strcpyW(pFullFileName, DirectoryPath);
-        if (*pFullFileName && pFullFileName[strlenW(pFullFileName) - 1] != '\\')
-            strcatW(pFullFileName, BackSlash);
+        DWORD att;
+
+        dir_len = strlenW(DirectoryPath);
+        if (!dir_len) return FALSE;
+        filter = MyMalloc((7 + dir_len) * sizeof(WCHAR));
+        if (!filter)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+        strcpyW(filter, DirectoryPath);
+        if (filter[dir_len - 1] == '\\')
+            filter[--dir_len] = 0;
+
+        att = GetFileAttributesW(filter);
+        if (att != INVALID_FILE_ATTRIBUTES && !(att & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            MyFree(filter);
+            SetLastError(ERROR_DIRECTORY);
+            return FALSE;
+        }
     }
     else
     {
-        len = GetSystemWindowsDirectoryW(pFullFileName, MAX_PATH);
-        if (len == 0 || len > MAX_PATH)
-            goto cleanup;
-        if (pFullFileName[strlenW(pFullFileName) - 1] != '\\')
-            strcatW(pFullFileName, BackSlash);
-        strcatW(pFullFileName, InfDirectory);
-    }
-    pFileName = &pFullFileName[strlenW(pFullFileName)];
+        DWORD msize;
 
-    /* Search for the first file */
-    strcpyW(pFileName, InfFileSpecification);
-    hSearch = FindFirstFileW(pFullFileName, &wfdFileInfo);
-    if (hSearch == INVALID_HANDLE_VALUE)
+        dir_len = GetWindowsDirectoryW(NULL, 0);
+        msize = (7 + 4 + dir_len) * sizeof(WCHAR);
+        filter = MyMalloc(msize);
+        if (!filter)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+        GetWindowsDirectoryW(filter, msize / sizeof(WCHAR));
+        strcatW(filter, L"\\inf");
+        dir_len = strlenW(filter);
+    }
+    strcatW(filter, L"\\*.inf");
+
+    hdl = FindFirstFileW(filter, &finddata);
+    if (hdl == INVALID_HANDLE_VALUE)
     {
-        TRACE("No file returned by %s\n", debugstr_w(pFullFileName));
-        goto cleanup;
+        if (RequiredSize) *RequiredSize = 1;
+        MyFree(filter);
+        return TRUE;
     }
-
+    size = 1;
     do
     {
-        HINF hInf;
-        struct InfFileDetails *details = NULL;
+        WCHAR signature[MAX_PATH];
+        BOOL valid = FALSE;
+        DWORD len = strlenW(finddata.cFileName);
 
-        strcpyW(pFileName, wfdFileInfo.cFileName);
-        if (InfStyle == INF_STYLE_WIN4)
+        if (!fullname || name_len < len)
         {
-            /* Reuse the immutable parse through a private handle graph. */
-            details = CreateInfFileDetails(pFullFileName);
-            hInf = (details != NULL) ? details->hInf : INVALID_HANDLE_VALUE;
-        }
-        else
-        {
-            hInf = SetupOpenInfFileW(
-                pFullFileName,
-                NULL, /* Inf class */
-                InfStyle,
-                NULL /* Error line */);
-        }
-        if (hInf == INVALID_HANDLE_VALUE)
-        {
-            if (GetLastError() == ERROR_CLASS_MISMATCH)
+            name_len = (name_len < len) ? len : name_len;
+            MyFree(fullname);
+            fullname = MyMalloc((2 + dir_len + name_len) * sizeof(WCHAR));
+            if (!fullname)
             {
-                /* InfStyle was not correct. Skip this file */
-                continue;
+                FindClose(hdl);
+                MyFree(filter);
+                SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+                return FALSE;
             }
-            TRACE("Invalid .inf file %s\n", debugstr_w(pFullFileName));
-            continue;
+            strcpyW(fullname, filter);
         }
-
-        len = strlenW(wfdFileInfo.cFileName) + 1;
-        requiredSize += (DWORD)len;
-        if (requiredSize <= ReturnBufferSize)
+        fullname[dir_len + 1] = 0;
+        strcatW(fullname, finddata.cFileName);
+        if (!GetPrivateProfileStringW(L"Version", L"Signature", NULL, signature, MAX_PATH, fullname))
+            signature[0] = 0;
+        if (InfStyle & INF_STYLE_OLDNT)
+            valid = strcmpiW(L"$Chicago$", signature) && strcmpiW(L"$WINDOWS NT$", signature);
+        if (InfStyle & INF_STYLE_WIN4)
+            valid = valid || !strcmpiW(L"$Chicago$", signature) || !strcmpiW(L"$WINDOWS NT$", signature);
+        if (valid)
         {
-            strcpyW(pBuffer, wfdFileInfo.cFileName);
-            pBuffer = &pBuffer[len];
+            size += 1 + strlenW(finddata.cFileName);
+            if (ptr && ReturnBufferSize >= size)
+            {
+                strcpyW(ptr, finddata.cFileName);
+                ptr += 1 + strlenW(finddata.cFileName);
+                *ptr = 0;
+            }
         }
-
-        if (details != NULL)
-            DereferenceInfFile(details);
-        else
-            SetupCloseInfFile(hInf);
-    } while (FindNextFileW(hSearch, &wfdFileInfo));
-    FindClose(hSearch);
-
-    requiredSize += 1; /* Final NULL char */
-    if (requiredSize <= ReturnBufferSize)
-    {
-        *pBuffer = '\0';
-        ret = TRUE;
     }
-    else
-    {
-        SetLastError(ERROR_INSUFFICIENT_BUFFER);
-        ret = FALSE;
-    }
-    if (RequiredSize)
-        *RequiredSize = requiredSize;
+    while (FindNextFileW(hdl, &finddata));
+    FindClose(hdl);
 
-cleanup:
-    MyFree(pFullFileName);
-    return ret;
+    MyFree(fullname);
+    MyFree(filter);
+    if (RequiredSize) *RequiredSize = size;
+    return TRUE;
 }
 
 /***********************************************************************

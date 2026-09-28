@@ -416,4 +416,9 @@ LPSTR WINAPI UnicodeToMultiByte(LPCWSTR lpUnicodeStr, UINT uCodePage);
 typedef BOOL (*FIND_CALLBACK)(LPCWSTR SectionName, PVOID Context);
 BOOL EnumerateSectionsStartingWith(HINF hInf, LPCWSTR pStr, FIND_CALLBACK Callback, PVOID Context);
 
+BOOL SETUPAPI_InstallFromInfSectionWithIncludes(HWND owner, HINF hinf, PCWSTR section, UINT flags,
+                                                HKEY key_root, PCWSTR src_root, UINT copy_flags,
+                                                PSP_FILE_CALLBACK_W callback, PVOID context,
+                                                HDEVINFO devinfo, PSP_DEVINFO_DATA devinfo_data);
+
 #endif /* __SETUPAPI_PRIVATE_H */

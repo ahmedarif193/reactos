@@ -823,7 +823,7 @@ SetupDiInstallClassExW(
             if (!callback_context)
                 goto cleanup;
 
-            ret = SetupInstallFromInfSectionW(
+            ret = SETUPAPI_InstallFromInfSectionWithIncludes(
                 hwndParent,
                 hInf,
                 SectionName,

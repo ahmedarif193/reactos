@@ -220,20 +220,43 @@ static HKEY get_root_key( const WCHAR *name, HKEY def_root )
  *
  * Append a multisz string to a multisz registry value.
  */
-static void append_multi_sz_value( HKEY hkey, const WCHAR *value, const WCHAR *strings,
+static BOOL append_multi_sz_value( HKEY hkey, const WCHAR *value, const WCHAR *strings,
                                    DWORD str_size )
 {
     DWORD size, type, total;
     WCHAR *buffer, *p;
+    LONG ret;
 
-    if (RegQueryValueExW( hkey, value, NULL, &type, NULL, &size )) return;
-    if (type != REG_MULTI_SZ) return;
+    if ((ret = RegQueryValueExW( hkey, value, NULL, &type, NULL, &size )))
+    {
+        if (ret != ERROR_FILE_NOT_FOUND)
+        {
+            SetLastError( ret );
+            return FALSE;
+        }
 
-    size = size + str_size * sizeof(WCHAR) ;
-    if (!(buffer = HeapAlloc( GetProcessHeap(), 0, size))) return;
-    if (RegQueryValueExW( hkey, value, NULL, NULL, (BYTE *)buffer, &size )) goto done;
+        if ((ret = RegSetValueExW( hkey, value, 0, REG_MULTI_SZ, (BYTE *)strings, str_size * sizeof(WCHAR) )))
+        {
+            SetLastError( ret );
+            return FALSE;
+        }
 
-    /* compare each string against all the existing ones */
+        return TRUE;
+    }
+
+    if (type != REG_MULTI_SZ)
+    {
+        SetLastError( ERROR_INVALID_DATA );
+        return FALSE;
+    }
+
+    if (!(buffer = HeapAlloc( GetProcessHeap(), 0, size + str_size * sizeof(WCHAR) ))) return FALSE;
+    if (RegQueryValueExW( hkey, value, NULL, NULL, (BYTE *)buffer, &size ))
+    {
+        HeapFree( GetProcessHeap(), 0, buffer );
+        return FALSE;
+    }
+
     total = size;
     while (*strings)
     {
@@ -242,7 +265,7 @@ static void append_multi_sz_value( HKEY hkey, const WCHAR *value, const WCHAR *s
         for (p = buffer; *p; p += strlenW(p) + 1)
             if (!strcmpiW( p, strings )) break;
 
-        if (!*p)  /* not found, need to append it */
+        if (!*p)
         {
             memcpy( p, strings, len * sizeof(WCHAR) );
             p[len] = 0;
@@ -251,12 +274,10 @@ static void append_multi_sz_value( HKEY hkey, const WCHAR *value, const WCHAR *s
         strings += len;
     }
     if (total != size)
-    {
-        TRACE( "setting value %s to %s\n", debugstr_w(value), debugstr_w(buffer) );
-        RegSetValueExW( hkey, value, 0, REG_MULTI_SZ, (BYTE *)buffer, total + sizeof(WCHAR) );
-    }
- done:
+        RegSetValueExW( hkey, value, 0, REG_MULTI_SZ, (BYTE *)buffer, total );
+
     HeapFree( GetProcessHeap(), 0, buffer );
+    return TRUE;
 }
 
 
@@ -324,7 +345,11 @@ static BOOL do_reg_operation( HKEY hkey, const WCHAR *value, INFCONTEXT *context
             }
             else RegDeleteValueW( hkey, value );
         }
-        else NtDeleteKey( hkey );
+        else
+        {
+            RegDeleteTreeW( hkey, NULL );
+            NtDeleteKey( hkey );
+        }
         return TRUE;
     }
 
@@ -365,7 +390,11 @@ static BOOL do_reg_operation( HKEY hkey, const WCHAR *value, INFCONTEXT *context
             if (flags & FLG_ADDREG_APPEND)
             {
                 if (!str) return TRUE;
-                append_multi_sz_value( hkey, value, str, size );
+                if (!append_multi_sz_value( hkey, value, str, size ))
+                {
+                    HeapFree( GetProcessHeap(), 0, str );
+                    return FALSE;
+                }
                 HeapFree( GetProcessHeap(), 0, str );
                 return TRUE;
             }
@@ -1333,11 +1362,11 @@ static BOOL needs_callback( HINF hinf, PCWSTR field, void *arg )
     switch (info->type)
     {
         case 0:
-            return SetupInstallFromInfSectionW(info->owner, *(HINF*)hinf, field, info->flags,
+            return SetupInstallFromInfSectionW(info->owner, hinf, field, info->flags,
                info->key_root, info->src_root, info->copy_flags, info->callback,
                info->context, info->devinfo, info->devinfo_data);
         case 1:
-            return SetupInstallServicesFromInfSectionExW(*(HINF*)hinf, field, info->flags,
+            return SetupInstallServicesFromInfSectionExW(hinf, field, info->flags,
                 info->devinfo, info->devinfo_data, info->reserved1, info->reserved2);
         default:
             ERR("Unknown info type %u\n", info->type);
@@ -1346,17 +1375,13 @@ static BOOL needs_callback( HINF hinf, PCWSTR field, void *arg )
 }
 
 
-/***********************************************************************
- *            SetupInstallFromInfSectionW   (SETUPAPI.@)
- */
-BOOL WINAPI SetupInstallFromInfSectionW( HWND owner, HINF hinf, PCWSTR section, UINT flags,
-                                         HKEY key_root, PCWSTR src_root, UINT copy_flags,
-                                         PSP_FILE_CALLBACK_W callback, PVOID context,
-                                         HDEVINFO devinfo, PSP_DEVINFO_DATA devinfo_data )
+BOOL SETUPAPI_InstallFromInfSectionWithIncludes( HWND owner, HINF hinf, PCWSTR section, UINT flags,
+                                                 HKEY key_root, PCWSTR src_root, UINT copy_flags,
+                                                 PSP_FILE_CALLBACK_W callback, PVOID context,
+                                                 HDEVINFO devinfo, PSP_DEVINFO_DATA devinfo_data )
 {
     struct needs_callback_info needs_info;
 
-    /* Parse 'Include' and 'Needs' directives */
     iterate_section_fields( hinf, section, Include, include_callback, NULL);
     needs_info.type = 0;
     needs_info.owner = owner;
@@ -1370,6 +1395,19 @@ BOOL WINAPI SetupInstallFromInfSectionW( HWND owner, HINF hinf, PCWSTR section, 
     needs_info.devinfo_data = devinfo_data;
     iterate_section_fields( hinf, section, Needs, needs_callback, &needs_info);
 
+    return SetupInstallFromInfSectionW( owner, hinf, section, flags, key_root, src_root, copy_flags,
+                                        callback, context, devinfo, devinfo_data );
+}
+
+
+/***********************************************************************
+ *            SetupInstallFromInfSectionW   (SETUPAPI.@)
+ */
+BOOL WINAPI SetupInstallFromInfSectionW( HWND owner, HINF hinf, PCWSTR section, UINT flags,
+                                         HKEY key_root, PCWSTR src_root, UINT copy_flags,
+                                         PSP_FILE_CALLBACK_W callback, PVOID context,
+                                         HDEVINFO devinfo, PSP_DEVINFO_DATA devinfo_data )
+{
     if (flags & SPINST_FILES)
     {
         SP_DEVINSTALL_PARAMS_W install_params;
@@ -1489,6 +1527,7 @@ BOOL WINAPI SetupInstallFromInfSectionW( HWND owner, HINF hinf, PCWSTR section, 
             return FALSE;
     }
 
+    SetLastError(ERROR_SUCCESS);
     return TRUE;
 }
 
@@ -1551,7 +1590,7 @@ void WINAPI InstallHinfSectionW( HWND hwnd, HINSTANCE handle, LPCWSTR cmdline, I
 
     /* Copy files and add registry entries */
     callback_context = SetupInitDefaultQueueCallback( hwnd );
-    ret = SetupInstallFromInfSectionW( hwnd, hinf, section, SPINST_ALL, NULL, NULL,
+    ret = SETUPAPI_InstallFromInfSectionWithIncludes( hwnd, hinf, section, SPINST_ALL, NULL, NULL,
                                        SP_COPY_NEWER | SP_COPY_IN_USE_NEEDS_REBOOT,
                                        SetupDefaultQueueCallbackW, callback_context,
                                        NULL, NULL );
@@ -1947,7 +1986,7 @@ static BOOL InstallOneService(
     hService = OpenServiceW(
         hSCManager,
         ServiceName,
-        DELETE | SERVICE_QUERY_CONFIG | SERVICE_CHANGE_CONFIG | WRITE_DAC);
+        DELETE | SERVICE_QUERY_CONFIG | SERVICE_CHANGE_CONFIG | WRITE_DAC | SERVICE_START);
     if (hService == NULL && GetLastError() != ERROR_SERVICE_DOES_NOT_EXIST)
         goto cleanup;
 
@@ -1965,7 +2004,7 @@ static BOOL InstallOneService(
             hSCManager,
             ServiceName,
             DisplayName,
-            WRITE_DAC,
+            WRITE_DAC | SERVICE_START,
             ServiceType,
             StartType,
             ErrorControl,
@@ -2147,6 +2186,9 @@ static BOOL InstallOneService(
         NULL);
     RegCloseKey(hServiceKey);
 
+    if (ret && (ServiceFlags & SPSVCINST_STARTSERVICE))
+        StartServiceW(hService, 0, NULL);
+
 cleanup:
     if (hSCManager != NULL)
         CloseServiceHandle(hSCManager);
@@ -2287,6 +2329,14 @@ SetupInstallServicesFromInfSectionExW(
             {
                 /* The field may be empty. Ignore the error */
                 ServiceFlags = 0;
+            }
+
+            if ((!ServiceName || !*ServiceName) && (ServiceFlags & SPSVCINST_ASSOCSERVICE))
+            {
+                HeapFree(GetProcessHeap(), 0, ServiceName);
+                ServiceName = NULL;
+                ret = SetupFindNextMatchLineW(&ContextService, AddService, &ContextService);
+                continue;
             }
 
             if (!GetStringField(&ContextService, 3, &ServiceSection))
