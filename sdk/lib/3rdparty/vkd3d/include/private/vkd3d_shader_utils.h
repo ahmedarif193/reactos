@@ -77,7 +77,7 @@ static inline enum vkd3d_result vkd3d_shader_code_from_file(struct vkd3d_shader_
     if (fstat(fileno(f), &st) == -1)
         return VKD3D_ERROR;
 
-    if (S_ISREG(st.st_mode))
+    if (S_ISREG(st.st_mode) && st.st_size > 0)
         size = st.st_size;
 
     if (!(data = malloc(size)))
@@ -87,11 +87,14 @@ static inline enum vkd3d_result vkd3d_shader_code_from_file(struct vkd3d_shader_
     {
         if (pos >= size)
         {
-            if (size > SIZE_MAX / 2 || !(data = realloc(data, size * 2)))
+            uint8_t *new_data;
+
+            if (size > SIZE_MAX / 2 || !(new_data = realloc(data, size * 2)))
             {
                 free(data);
                 return VKD3D_ERROR_OUT_OF_MEMORY;
             }
+            data = new_data;
             size *= 2;
         }
 

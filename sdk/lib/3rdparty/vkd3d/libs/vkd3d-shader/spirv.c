@@ -9566,6 +9566,8 @@ static void spirv_compiler_emit_bufinfo(struct spirv_compiler *compiler,
     if (compiler->ssbo_uavs && src->reg.type == VKD3DSPR_UAV)
     {
         resource_symbol = spirv_compiler_find_resource(compiler, &src->reg);
+        image.structure_stride = resource_symbol->info.resource.structure_stride;
+        image.raw = resource_symbol->info.resource.raw;
 
         type_id = spirv_get_type_id(compiler, VSIR_DATA_U32, 1);
         val_id = vkd3d_spirv_build_op_array_length(builder, type_id, resource_symbol->id, 0);
