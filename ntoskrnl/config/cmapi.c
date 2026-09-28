@@ -2405,6 +2405,7 @@ CmUnloadKey(
     PHHIVE Hive;
     PCMHIVE CmHive;
     HCELL_INDEX Cell;
+    ULONG i;
 
     DPRINT("CmUnloadKey(%p, %lx)\n", Kcb, Flags);
 
@@ -2430,6 +2431,12 @@ CmUnloadKey(
         return STATUS_INVALID_PARAMETER;
     }
 
+    for (i = 0; CmpMachineHiveList[i].Name; i++)
+    {
+        if (CmpMachineHiveList[i].CmHive == CmHive || CmpMachineHiveList[i].CmHive2 == CmHive)
+            return STATUS_ACCESS_DENIED;
+    }
+
     /* Mark this hive as being unloaded */
     Hive->HiveFlags |= HIVE_IS_UNLOADING;
 
@@ -2438,7 +2445,8 @@ CmUnloadKey(
     {
         if (Flags != REG_FORCE_UNLOAD)
         {
-            if (CmpEnumerateOpenSubKeys(Kcb, TRUE, FALSE) != 0)
+            if (CmpEnumerateOpenSubKeys(Kcb, TRUE, FALSE) != 0 ||
+                Kcb->RefCount > 2)
             {
                 /* There are open subkeys but we don't force hive unloading, fail */
                 Hive->HiveFlags &= ~HIVE_IS_UNLOADING;
