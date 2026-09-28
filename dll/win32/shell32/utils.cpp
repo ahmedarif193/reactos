@@ -1031,7 +1031,8 @@ SHGetUnreadMailCountW(
         if (pszShellExecuteCommand || cchShellExecuteCommand)
             return E_INVALIDARG;
 
-        *pdwCount = 0;
+        if (pdwCount)
+            *pdwCount = 0;
 
         error = RegOpenKeyExW(hKeyUser, L"Software\\Microsoft\\Windows\\CurrentVersion\\UnreadMail",
                               0, KEY_ENUMERATE_SUB_KEYS, &hKey);
@@ -1055,7 +1056,7 @@ SHGetUnreadMailCountW(
             FILETIME FileTime;
             DWORD dwCount;
             error = SHELL_ReadSingleUnreadMailCount(hSubKey, &dwCount, &FileTime, NULL, 0);
-            if (!error && (!pFileTime || CompareFileTime(&FileTime, pFileTime) >= 0))
+            if (!error && pdwCount && (!pFileTime || CompareFileTime(&FileTime, pFileTime) >= 0))
                 *pdwCount += dwCount;
 
             RegCloseKey(hSubKey);

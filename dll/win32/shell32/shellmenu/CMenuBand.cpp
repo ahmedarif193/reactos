@@ -148,7 +148,7 @@ HRESULT STDMETHODCALLTYPE  CMenuBand::SetMenu(
             return hr;
     }
 
-    if (m_site)
+    if (m_site && m_staticToolbar)
     {
         HWND hwndParent;
 

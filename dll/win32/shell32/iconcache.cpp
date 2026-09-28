@@ -728,6 +728,8 @@ BOOL PidlToSicIndex (
 
     TRACE("sf=%p pidl=%p %s\n", sh, pidl, bBigIcon?"Big":"Small");
 
+    *pIndex = INVALID_INDEX;
+
     if (!sic_hdpa)
         SIC_Initialize();
 
