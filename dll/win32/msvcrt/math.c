@@ -1743,6 +1743,10 @@ char * CDECL _ecvt( double number, int ndigits, int *decpt, int *sign )
                                       * terminating '\0' */
     if (!data->efcvt_buffer)
         data->efcvt_buffer = malloc( 80 ); /* ought to be enough */
+#ifdef __REACTOS__
+    if (!data->efcvt_buffer)
+        return NULL;
+#endif
 
     /* handle cases with zero ndigits or less */
     prec = ndigits;
@@ -1787,14 +1791,39 @@ int CDECL _ecvt_s( char *buffer, size_t length, double number, int ndigits, int 
     if (!MSVCRT_CHECK_PMT(decpt != NULL)) return EINVAL;
     if (!MSVCRT_CHECK_PMT(sign != NULL)) return EINVAL;
     if (!MSVCRT_CHECK_PMT_ERR( length > 2, ERANGE )) return ERANGE;
+#ifdef __REACTOS__
+    if (!MSVCRT_CHECK_PMT_ERR(ndigits < 0 || (size_t)ndigits < length - 1, ERANGE )) return ERANGE;
+#else
     if (!MSVCRT_CHECK_PMT_ERR(ndigits < (int)length - 1, ERANGE )) return ERANGE;
+#endif
 
     /* handle cases with zero ndigits or less */
     prec = ndigits;
     if( prec < 1) prec = 2;
+#ifdef __REACTOS__
+    result = malloc((size_t)prec + 8);
+    if (!result)
+    {
+        buffer[0] = 0;
+        *_errno() = ENOMEM;
+        return ENOMEM;
+    }
+#else
     result = malloc(prec + 8);
+#endif
 
+#ifdef __REACTOS__
+    len = _snprintf(result, (size_t)prec + 8, "%.*le", prec - 1, number);
+    if (len < 0)
+    {
+        free(result);
+        buffer[0] = 0;
+        *_errno() = ERANGE;
+        return ERANGE;
+    }
+#else
     len = _snprintf(result, prec + 8, "%.*le", prec - 1, number);
+#endif
     if (result[0] == '-') {
         memmove( result, result + 1, len-- );
         *sign = 1;
@@ -1835,6 +1864,10 @@ char * CDECL _fcvt( double number, int ndigits, int *decpt, int *sign )
 
     if (!data->efcvt_buffer)
         data->efcvt_buffer = malloc( 80 ); /* ought to be enough */
+#ifdef __REACTOS__
+    if (!data->efcvt_buffer)
+        return NULL;
+#endif
 
     stop = _snprintf(buf, 80, "%.*f", ndigits < 0 ? 0 : ndigits, number);
     ptr1 = buf;

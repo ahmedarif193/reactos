@@ -1015,8 +1015,16 @@ typedef struct
 
 static void* CDECL type_info_entry_malloc(size_t size)
 {
+#ifdef __REACTOS__
+    type_info_entry *ret;
+
+    if (size > ~(size_t)0 - FIELD_OFFSET(type_info_entry, name)) return NULL;
+    ret = malloc(FIELD_OFFSET(type_info_entry, name) + size);
+    return ret ? ret->name : NULL;
+#else
     type_info_entry *ret = malloc(FIELD_OFFSET(type_info_entry, name) + size);
     return ret->name;
+#endif
 }
 
 static void CDECL type_info_entry_free(void *ptr)
