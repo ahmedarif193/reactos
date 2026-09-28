@@ -1241,7 +1241,7 @@ DocumentPropertiesW(HWND hWnd, HANDLE hPrinter, LPWSTR pDeviceName, PDEVMODEW pD
         Result = DocumentPropertySheets( NULL, (LPARAM)&docprophdr );
     }
 
-    if ( Result != ERR_CPSUI_GETLASTERROR || Result != ERR_CPSUI_ALLOCMEM_FAILED )
+    if ( Result != ERR_CPSUI_GETLASTERROR && Result != ERR_CPSUI_ALLOCMEM_FAILED )
     {
         if ( pDevModeOutput )
         {
@@ -3153,6 +3153,7 @@ SetPrinterA(HANDLE hPrinter, DWORD Level, PBYTE pPrinter, DWORD Command)
 {
     BOOL Ret = FALSE;
     UNICODE_STRING usBuffer;
+    PRINTER_INFO_6 pi6;
     PPRINTER_INFO_STRESS ppisa = (PPRINTER_INFO_STRESS)pPrinter;
     PPRINTER_INFO_STRESS ppisw = (PPRINTER_INFO_STRESS)pPrinter;
     PPRINTER_INFO_2A ppi2a = (PPRINTER_INFO_2A)pPrinter;
@@ -3195,7 +3196,6 @@ SetPrinterA(HANDLE hPrinter, DWORD Level, PBYTE pPrinter, DWORD Command)
             if ( Command == PRINTER_CONTROL_SET_STATUS )
             {
                 // Set the pPrinter parameter to a pointer to a DWORD value that specifies the new printer status.
-                PRINTER_INFO_6 pi6;
                 pi6.dwStatus = (DWORD_PTR)pPrinter;
                 pPrinter = (LPBYTE)&pi6;
                 Level = 6;
@@ -3326,6 +3326,7 @@ BOOL WINAPI
 SetPrinterW(HANDLE hPrinter, DWORD Level, PBYTE pPrinter, DWORD Command)
 {
     DWORD dwErrorCode = 0;
+    PRINTER_INFO_6 pi6;
     WINSPOOL_PRINTER_CONTAINER PrinterContainer;
     WINSPOOL_DEVMODE_CONTAINER DevModeContainer;
     WINSPOOL_SECURITY_CONTAINER SecurityContainer;
@@ -3337,7 +3338,10 @@ SetPrinterW(HANDLE hPrinter, DWORD Level, PBYTE pPrinter, DWORD Command)
 
     // Sanity checks
     if (!pHandle)
-        return ERROR_INVALID_HANDLE;
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
 
     DevModeContainer.cbBuf = 0;
     DevModeContainer.pDevMode = NULL;
@@ -3351,7 +3355,6 @@ SetPrinterW(HANDLE hPrinter, DWORD Level, PBYTE pPrinter, DWORD Command)
             if ( Command == PRINTER_CONTROL_SET_STATUS )
             {
                 // Set the pPrinter parameter to a pointer to a DWORD value that specifies the new printer status.
-                PRINTER_INFO_6 pi6;
                 pi6.dwStatus = (DWORD_PTR)pPrinter;
                 pPrinter = (LPBYTE)&pi6;
                 Level = 6;
@@ -3600,8 +3603,8 @@ StartDocDlgW( HANDLE hPrinter, DOCINFOW *doc )
             return NULL;
         }
 
-        GetPrinterW(hPrinter, 5, (LPBYTE)pi5, len, &len);
-        if (!pi5->pPortName || _wcsicmp(pi5->pPortName, FILE_Port))
+        if (!GetPrinterW(hPrinter, 5, (LPBYTE)pi5, len, &len) ||
+            !pi5->pPortName || _wcsicmp(pi5->pPortName, FILE_Port))
         {
             HeapFree(GetProcessHeap(), 0, pi5);
             return NULL;
