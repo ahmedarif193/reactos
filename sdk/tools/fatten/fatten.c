@@ -803,8 +803,7 @@ static int add_files_from_list(const char* list_path)
         if (!line_complete)
         {
             fprintf(stderr, "Error: List entry %u in '%s' exceeds %u bytes.\n", line_number, list_path, LIST_LINE_SIZE - 1);
-            fclose(list_file);
-            return 1;
+            goto cleanup;
         }
 
         entry = trim_whitespace(line);
@@ -844,6 +843,12 @@ static int add_files_from_list(const char* list_path)
                 goto cleanup;
             }
         }
+    }
+
+    if (ferror(list_file))
+    {
+        fprintf(stderr, "Error: Unable to read list file '%s'.\n", list_path);
+        goto cleanup;
     }
 
     qsort(directories.items, directories.count, sizeof(directories.items[0]), compare_string_ptrs);

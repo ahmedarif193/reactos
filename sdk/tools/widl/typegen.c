@@ -3577,7 +3577,7 @@ static unsigned int write_union_tfs(FILE *file, const attr_list_t *attrs,
     unsigned int nbranch = 0;
     type_t *deftype = NULL;
     short nodeftype = 0xffff;
-    unsigned int dummy;
+    unsigned int dummy = 0;
     var_t *f;
 
     if (processed(type) &&

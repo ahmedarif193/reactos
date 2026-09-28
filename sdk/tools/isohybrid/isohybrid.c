@@ -1012,6 +1012,8 @@ main(int argc, char *argv[])
         err(1, "%s: seek error - 1", argv[0]);
 
     bufz = buf = calloc(BUFSIZE, sizeof(char));
+    if (buf == NULL)
+        err(1, "could not allocate boot catalogue buffer");
     if (fread(buf, sizeof(char), BUFSIZE, fp) != BUFSIZE)
         err(1, "%s", argv[0]);
 
