@@ -367,9 +367,20 @@ void FAudio_PlatformInit(
 
 	args = FAudio_malloc(sizeof(*args));
 	FAudio_assert(!!args && "Failed to allocate FAudio thread args!");
+	if (!args)
+	{
+		FAudio_PlatformRelease();
+		return;
+	}
 
 	data = FAudio_malloc(sizeof(*data));
 	FAudio_assert(!!data && "Failed to allocate FAudio platform data!");
+	if (!data)
+	{
+		FAudio_free(args);
+		FAudio_PlatformRelease();
+		return;
+	}
 	FAudio_zero(data, sizeof(*data));
 
 	args->format.Format.wFormatTag = mixFormat->Format.wFormatTag;
@@ -398,6 +409,15 @@ void FAudio_PlatformInit(
 	FAudio_assert(!!data->stopEvent && "Failed to create FAudio thread stop event!");
 
 	hr = FAudio_OpenDevice(deviceIndex, &device);
+	if (FAILED(hr))
+	{
+		CloseHandle(data->stopEvent);
+		CloseHandle(audioEvent);
+		FAudio_free(data);
+		FAudio_free(args);
+		FAudio_PlatformRelease();
+		return;
+	}
 	FAudio_assert(!FAILED(hr) && "Failed to get audio device!");
 
 	hr = IMMDevice_Activate(
@@ -588,6 +608,11 @@ uint32_t FAudio_PlatformGetDeviceDetails(
 	}
 
 	hr = FAudio_OpenDevice(index, &device);
+	if (FAILED(hr))
+	{
+		FAudio_PlatformRelease();
+		return hr;
+	}
 	FAudio_assert(!FAILED(hr) && "Failed to get audio endpoint!");
 
 	if (index == 0)
@@ -977,8 +1002,17 @@ static void XNA_SongSubmitBuffer(FAudioVoiceCallback *callback, void *pBufferCon
 
 		if (songBufferSize < buffer_size)
 		{
+			uint8_t *newBuffer = FAudio_realloc(songBuffer, buffer_size);
+			if (newBuffer == NULL)
+			{
+				IMFMediaBuffer_Unlock(media_buffer);
+				IMFMediaBuffer_Release(media_buffer);
+				IMFSample_Release(sample);
+				LOG_FUNC_EXIT(songAudio);
+				return;
+			}
 			songBufferSize = buffer_size;
-			songBuffer = FAudio_realloc(songBuffer, songBufferSize);
+			songBuffer = newBuffer;
 			FAudio_assert(songBuffer != NULL && "Failed to allocate song buffer!");
 		}
 		FAudio_memcpy(songBuffer, buffer_ptr, buffer_size);
