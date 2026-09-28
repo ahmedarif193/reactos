@@ -812,6 +812,13 @@ SetupDiInstallClassExW(
             if (!ret)
                 goto cleanup;
 
+            if (SetupGetLineCountW(hInf, SectionName) == -1)
+            {
+                SetLastError(ERROR_SECTION_NOT_FOUND);
+                ret = FALSE;
+                goto cleanup;
+            }
+
             callback_context = SetupInitDefaultQueueCallback(hwndParent);
             if (!callback_context)
                 goto cleanup;
@@ -841,6 +848,7 @@ SetupDiInstallClassExW(
                 NULL,
                 NULL,
                 NULL);
+            SetLastError(ERROR_SUCCESS);
             ret = TRUE;
         }
 

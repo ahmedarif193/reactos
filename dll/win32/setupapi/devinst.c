@@ -4288,6 +4288,7 @@ HKEY SETUP_CreateClassKey(HINF hInf)
                            sizeof(Buffer) / sizeof(WCHAR),
                            &RequiredSize))
     {
+        SetLastError(ERROR_INVALID_CLASS);
         return INVALID_HANDLE_VALUE;
     }
 
@@ -4305,6 +4306,7 @@ HKEY SETUP_CreateClassKey(HINF hInf)
                            sizeof(Buffer) / sizeof(WCHAR),
                            &RequiredSize))
     {
+        SetLastError(ERROR_INVALID_CLASS);
         return INVALID_HANDLE_VALUE;
     }
 
