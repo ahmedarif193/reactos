@@ -1696,8 +1696,8 @@ xmlSchemaValidateDates (xmlSchemaValType type,
     if (collapse)
 	while IS_WSP_BLANK_CH(*cur) cur++;
 
-    if ((*cur != '-') && (*cur < '0') && (*cur > '9'))
-	return 1;
+    if ((*cur != '-') && ((*cur < '0') || (*cur > '9')))
+        return 1;
 
     dt = xmlSchemaNewValue(XML_SCHEMAS_UNKNOWN);
     if (dt == NULL)
