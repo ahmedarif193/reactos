@@ -1651,6 +1651,7 @@ NtOpenObjectAuditAlarm(
     ClientToken = NULL;
     CapturedSecurityDescriptor = NULL;
     CapturedPrivilegeSet = NULL;
+    CapturedHandleId = NULL;
     CapturedSubsystemName.Buffer = NULL;
     CapturedObjectTypeName.Buffer = NULL;
     CapturedObjectName.Buffer = NULL;

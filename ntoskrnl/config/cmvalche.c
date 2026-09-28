@@ -108,6 +108,7 @@ CmpGetValueKeyFromCache(IN PCM_KEY_CONTROL_BLOCK Kcb,
 
     /* Set defaults */
     *CellToRelease = HCELL_NIL;
+    *CachedValue = NULL;
     *Value = NULL;
     *ValueIsCached = FALSE;
 
