@@ -382,11 +382,13 @@ static void duplicate_ppstrings (int ac, wchar_t ***av)
 	int i;
 	wchar_t **n = (wchar_t **) malloc (sizeof (wchar_t *) * (ac + 1));
 
+	if (!n) _amsg_exit (8);
 	avl=*av;
 	for (i=0; i < ac; i++)
 	  {
 		size_t l = wbytelen (avl[i]);
 		n[i] = (wchar_t *) malloc (l);
+		if (!n[i]) _amsg_exit (8);
 		memcpy (n[i], avl[i], l);
 	  }
 	n[i] = NULL;
@@ -399,11 +401,13 @@ static void duplicate_ppstrings (int ac, char ***av)
 	int i;
 	char **n = (char **) malloc (sizeof (char *) * (ac + 1));
 
+	if (!n) _amsg_exit (8);
 	avl=*av;
 	for (i=0; i < ac; i++)
 	  {
 		size_t l = strlen (avl[i]) + 1;
 		n[i] = (char *) malloc (l);
+		if (!n[i]) _amsg_exit (8);
 		memcpy (n[i], avl[i], l);
 	  }
 	n[i] = NULL;
