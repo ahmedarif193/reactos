@@ -455,6 +455,9 @@ START_TEST(SHExplorerParseCmdLine)
     UINT maxWrite = 0;
     FILE * ff;
     WCHAR winDir[MAX_PATH];
+    size_t MaxLength = 0;
+    int argc;
+    char **test_argv;
 
     HMODULE browseui = LoadLibraryA("browseui.dll");
     pSHExplorerParseCmdLine = (SHExplorerParseCmdLine_Type)GetProcAddress(browseui, MAKEINTRESOURCEA(107));
@@ -464,7 +467,48 @@ START_TEST(SHExplorerParseCmdLine)
         return;
     }
 
+    for (i = 0; i < TestCount; i++)
+    {
+        if (wcslen(Tests[i].CommandLine) > MaxLength)
+            MaxLength = wcslen(Tests[i].CommandLine);
+    }
+    MaxLength += wcslen(L"browseui_apitest.exe ");
+
     CommandLine = GetCommandLineW();
+    argc = winetest_get_mainargs(&test_argv);
+    if (argc < 3 && wcslen(CommandLine) < MaxLength)
+    {
+        WCHAR ModulePath[MAX_PATH];
+        PWSTR ChildCommandLine;
+        size_t ChildLength;
+        STARTUPINFOW si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+
+        GetModuleFileNameW(NULL, ModulePath, _countof(ModulePath));
+        ChildLength = wcslen(ModulePath) + MaxLength + 32;
+        ChildCommandLine = HeapAlloc(GetProcessHeap(), 0, (ChildLength + 1) * sizeof(WCHAR));
+        if (!ChildCommandLine)
+        {
+            skip("Out of memory\n");
+            return;
+        }
+        StringCchPrintfW(ChildCommandLine, ChildLength + 1, L"\"%s\" SHExplorerParseCmdLine ", ModulePath);
+        while (wcslen(ChildCommandLine) < ChildLength)
+            StringCchCatW(ChildCommandLine, ChildLength + 1, L"x");
+
+        if (CreateProcessW(NULL, ChildCommandLine, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
+        {
+            winetest_wait_child_process(pi.hProcess);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        }
+        else
+        {
+            ok(FALSE, "CreateProcessW failed with %lu\n", GetLastError());
+        }
+        HeapFree(GetProcessHeap(), 0, ChildCommandLine);
+        return;
+    }
     StringCbCopyW(OriginalCommandLine, sizeof(OriginalCommandLine), CommandLine);
 
     ff = fopen(TEST_PATHA, "wb");
