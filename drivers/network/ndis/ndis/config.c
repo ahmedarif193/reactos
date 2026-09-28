@@ -618,6 +618,8 @@ NdisReadConfiguration(
         if (!Buffer)
         {
             NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+            ExFreePool(*ParameterValue);
+            *ParameterValue = NULL;
             ExFreePool(MiniportResource);
             ExFreePool(KeyInformation);
             *Status = NDIS_STATUS_RESOURCES;
@@ -639,6 +641,8 @@ NdisReadConfiguration(
         if (!Buffer)
         {
             NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+            ExFreePool(*ParameterValue);
+            *ParameterValue = NULL;
             ExFreePool(MiniportResource);
             ExFreePool(KeyInformation);
             *Status = NDIS_STATUS_RESOURCES;
@@ -692,6 +696,8 @@ NdisReadConfiguration(
              if (!Buffer)
              {
                  NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+                 ExFreePool(*ParameterValue);
+                 *ParameterValue = NULL;
                  ExFreePool(MiniportResource);
                  ExFreePool(KeyInformation);
                  *Status = NDIS_STATUS_RESOURCES;
@@ -710,6 +716,9 @@ NdisReadConfiguration(
         NDIS_DbgPrint(MIN_TRACE, ("Requested type: %d\n", ParameterType));
         NDIS_DbgPrint(MIN_TRACE, ("Registry entry: %wZ\n", Keyword));
         *Status = NDIS_STATUS_FAILURE;
+        ExFreePool(*ParameterValue);
+        *ParameterValue = NULL;
+        ExFreePool(MiniportResource);
         ExFreePool(KeyInformation);
         return;
     }
