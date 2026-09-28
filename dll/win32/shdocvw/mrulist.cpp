@@ -838,7 +838,7 @@ HRESULT CMruNode::GetNode(BOOL bAdd, LPCITEMIDLIST pidl, CMruNode **ppNewNode)
         _SaveSlots();
 
         LPCITEMIDLIST pidl2 = (LPCITEMIDLIST)((LPBYTE)pidl + pidl->mkid.cb);
-        pNewNode->GetNode(bAdd, pidl2, ppNewNode);
+        hr = pNewNode->GetNode(bAdd, pidl2, ppNewNode);
         pNewNode->Release();
     }
 
@@ -880,10 +880,16 @@ BOOL CMruNode::_IsEqual(SLOTITEMDATA *pItem, LPCVOID pvData, UINT cbData)
 HRESULT CMruNode::GetNodeSlot(UINT *pnNodeSlot)
 {
     DWORD dwData, cbData = sizeof(dwData);
-    DWORD error = SHGetValueW(m_hKey, NULL, L"NodeSlot", NULL, &dwData, (pnNodeSlot ? &cbData : NULL));
+    DWORD error = SHGetValueW(m_hKey, NULL, L"NodeSlot", NULL,
+                             (pnNodeSlot ? &dwData : NULL), (pnNodeSlot ? &cbData : NULL));
     if (error != ERROR_SUCCESS)
         return E_FAIL;
-    *pnNodeSlot = (UINT)dwData;
+    if (pnNodeSlot)
+    {
+        if (cbData != sizeof(dwData))
+            return E_FAIL;
+        *pnNodeSlot = (UINT)dwData;
+    }
     return S_OK;
 }
 

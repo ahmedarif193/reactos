@@ -332,7 +332,11 @@ CNSCBand::_GetItemEnum(
         if (!pItemData && hItem == TVI_ROOT && !_WantsRootItem())
             hr = psfDesktop->BindToObject(m_pidlRoot, NULL, IID_PPV_ARG(IShellFolder, ppFolder));
         else
+        {
+            if (!pItemData)
+                return E_INVALIDARG;
             hr = psfDesktop->BindToObject(pItemData->absolutePidl, NULL, IID_PPV_ARG(IShellFolder, ppFolder));
+        }
         if (FAILED_UNEXPECTEDLY(hr))
             return hr;
     }
