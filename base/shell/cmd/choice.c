@@ -47,12 +47,27 @@ GetCharacterTimeout (LPTCH ch, DWORD dwMilliseconds)
 
     hInput = GetStdHandle (STD_INPUT_HANDLE);
 
+    if (!IsConsoleHandle(hInput))
+    {
+        CHAR chr;
+
+        if (!ReadFile(hInput, &chr, 1, &dwRead, NULL) || !dwRead)
+            return GC_TIMEOUT;
+#ifdef _UNICODE
+        MultiByteToWideChar(InputCodePage, 0, &chr, 1, ch, 1);
+#else
+        *ch = chr;
+#endif
+        return GC_KEYREAD;
+    }
+
     //if the timeout expired return GC_TIMEOUT
-    if (WaitForSingleObject (hInput, dwMilliseconds) == WAIT_TIMEOUT)
+    if (WaitForSingleObject (hInput, dwMilliseconds) != WAIT_OBJECT_0)
         return GC_TIMEOUT;
 
     //otherwise get the event
-    ReadConsoleInput (hInput, &lpBuffer, 1, &dwRead);
+    if (!ReadConsoleInput (hInput, &lpBuffer, 1, &dwRead) || !dwRead)
+        return GC_TIMEOUT;
 
     //if the event is a key pressed
     if ((lpBuffer.EventType == KEY_EVENT) &&
