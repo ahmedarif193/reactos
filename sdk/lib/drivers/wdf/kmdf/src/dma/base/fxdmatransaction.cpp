@@ -740,7 +740,7 @@ Notes:
         *PossibleTransferLength = possTransferLength;
     }
 
-    ASSERT(*PossibleTransferLength);
+    ASSERT(PossibleTransferLength == NULL || *PossibleTransferLength);
 
     *MapRegistersRequired = requiredMapRegisters;
 
