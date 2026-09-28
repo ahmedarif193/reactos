@@ -16,6 +16,9 @@
 #define IMAGE_FILE_MACHINE_AM33       0x1d3
 #define IMAGE_FILE_MACHINE_AMD64      0x8664
 #define IMAGE_FILE_MACHINE_ARM        0x1c0
+#ifndef IMAGE_FILE_MACHINE_ARM64
+#define IMAGE_FILE_MACHINE_ARM64      0xAA64
+#endif
 #define IMAGE_FILE_MACHINE_ARM64EC    0xA641
 #define IMAGE_FILE_MACHINE_ARMV7      0x1c4
 #define IMAGE_FILE_MACHINE_EBC        0xebc
@@ -71,6 +74,39 @@ typedef struct _IMAGE_DOS_HEADER {
   USHORT e_res2[10];
   LONG e_lfanew;
 } IMAGE_DOS_HEADER, *PIMAGE_DOS_HEADER;
+
+typedef struct _IMAGE_OS2_HEADER {
+  USHORT ne_magic;
+  CHAR ne_ver;
+  CHAR ne_rev;
+  USHORT ne_enttab;
+  USHORT ne_cbenttab;
+  LONG ne_crc;
+  USHORT ne_flags;
+  USHORT ne_autodata;
+  USHORT ne_heap;
+  USHORT ne_stack;
+  LONG ne_csip;
+  LONG ne_sssp;
+  USHORT ne_cseg;
+  USHORT ne_cmod;
+  USHORT ne_cbnrestab;
+  USHORT ne_segtab;
+  USHORT ne_rsrctab;
+  USHORT ne_restab;
+  USHORT ne_modtab;
+  USHORT ne_imptab;
+  LONG ne_nrestab;
+  USHORT ne_cmovent;
+  USHORT ne_align;
+  USHORT ne_cres;
+  UCHAR ne_exetyp;
+  UCHAR ne_flagsothers;
+  USHORT ne_pretthunks;
+  USHORT ne_psegrefbytes;
+  USHORT ne_swaparea;
+  USHORT ne_expver;
+} IMAGE_OS2_HEADER, *PIMAGE_OS2_HEADER;
 #include <poppack.h>
 
 //
@@ -583,5 +619,58 @@ typedef struct _IMAGE_IMPORT_DESCRIPTOR {
 } IMAGE_IMPORT_DESCRIPTOR, *PIMAGE_IMPORT_DESCRIPTOR;
 
 #include <poppack.h>
+
+#ifndef __IMAGE_COR20_HEADER_DEFINED__
+#define __IMAGE_COR20_HEADER_DEFINED__
+
+typedef enum ReplacesCorHdrNumericDefines
+{
+    COMIMAGE_FLAGS_ILONLY               =0x00000001,
+    COMIMAGE_FLAGS_32BITREQUIRED        =0x00000002,
+    COMIMAGE_FLAGS_IL_LIBRARY           =0x00000004,
+    COMIMAGE_FLAGS_STRONGNAMESIGNED     =0x00000008,
+    COMIMAGE_FLAGS_NATIVE_ENTRYPOINT    =0x00000010,
+    COMIMAGE_FLAGS_TRACKDEBUGDATA       =0x00010000,
+    COMIMAGE_FLAGS_32BITPREFERRED       =0x00020000,
+    COR_VERSION_MAJOR_V2                =2,
+    COR_VERSION_MAJOR                   =COR_VERSION_MAJOR_V2,
+    COR_VERSION_MINOR                   =5,
+    COR_DELETED_NAME_LENGTH             =8,
+    COR_VTABLEGAP_NAME_LENGTH           =8,
+    NATIVE_TYPE_MAX_CB                  =1,
+    COR_ILMETHOD_SECT_SMALL_MAX_DATASIZE=0xFF,
+    IMAGE_COR_MIH_METHODRVA             =0x01,
+    IMAGE_COR_MIH_EHRVA                 =0x02,
+    IMAGE_COR_MIH_BASICBLOCK            =0x08,
+    COR_VTABLE_32BIT                    =0x01,
+    COR_VTABLE_64BIT                    =0x02,
+    COR_VTABLE_FROM_UNMANAGED           =0x04,
+    COR_VTABLE_FROM_UNMANAGED_RETAIN_APPDOMAIN  =0x08,
+    COR_VTABLE_CALL_MOST_DERIVED        =0x10,
+    IMAGE_COR_EATJ_THUNK_SIZE           =32,
+    MAX_CLASS_NAME                      =1024,
+    MAX_PACKAGE_NAME                    =1024,
+} ReplacesCorHdrNumericDefines;
+
+typedef struct IMAGE_COR20_HEADER
+{
+    ULONG                   cb;
+    USHORT                  MajorRuntimeVersion;
+    USHORT                  MinorRuntimeVersion;
+    IMAGE_DATA_DIRECTORY    MetaData;
+    ULONG                   Flags;
+    union {
+        ULONG               EntryPointToken;
+        ULONG               EntryPointRVA;
+    } DUMMYUNIONNAME;
+    IMAGE_DATA_DIRECTORY    Resources;
+    IMAGE_DATA_DIRECTORY    StrongNameSignature;
+    IMAGE_DATA_DIRECTORY    CodeManagerTable;
+    IMAGE_DATA_DIRECTORY    VTableFixups;
+    IMAGE_DATA_DIRECTORY    ExportAddressTableJumps;
+    IMAGE_DATA_DIRECTORY    ManagedNativeHeader;
+} IMAGE_COR20_HEADER, *PIMAGE_COR20_HEADER;
+
+#endif
 
 #endif /* _NTIMAGE_ */

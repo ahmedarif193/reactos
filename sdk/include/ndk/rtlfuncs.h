@@ -1974,6 +1974,27 @@ WCHAR
 NTAPI
 RtlDowncaseUnicodeChar(IN WCHAR Source);
 
+#ifdef NTOS_MODE_USER
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlNormalizeString(
+    _In_ ULONG NormForm,
+    _In_ PCWSTR SourceString,
+    _In_ LONG SourceStringLength,
+    _Out_writes_to_(*DestinationStringLength, *DestinationStringLength) PWSTR DestinationString,
+    _Inout_ PLONG DestinationStringLength);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlIsNormalizedString(
+    _In_ ULONG NormForm,
+    _In_ PCWSTR SourceString,
+    _In_ LONG SourceStringLength,
+    _Out_ PBOOLEAN Normalized);
+#endif
+
 NTSYSAPI
 NTSTATUS
 NTAPI
@@ -5543,6 +5564,25 @@ NTAPI
 RtlGetUserPreferredUILanguages(
     _In_ DWORD Flags,
     _In_ ULONG Reserved,
+    _Out_ PULONG Count,
+    _Out_writes_opt_(*Size) PWSTR Buffer,
+    _Inout_ PULONG Size);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetSystemPreferredUILanguages(
+    _In_ DWORD Flags,
+    _In_ ULONG Reserved,
+    _Out_ PULONG Count,
+    _Out_writes_opt_(*Size) PWSTR Buffer,
+    _Inout_ PULONG Size);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetThreadPreferredUILanguages(
+    _In_ DWORD Flags,
     _Out_ PULONG Count,
     _Out_writes_opt_(*Size) PWSTR Buffer,
     _Inout_ PULONG Size);
