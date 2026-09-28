@@ -1299,6 +1299,7 @@
 @ stdcall WTSGetActiveConsoleSessionId()
 @ stdcall WaitCommEvent(long ptr ptr)
 @ stdcall WaitForDebugEvent(ptr long)
+@ stdcall -version=0xA00+ WaitForDebugEventEx(ptr long)
 @ stdcall WaitForMultipleObjects(long ptr long long)
 @ stdcall WaitForMultipleObjectsEx(long ptr long long long)
 @ stdcall WaitForSingleObject(long long)

@@ -199,6 +199,21 @@ DbgUiConvertStateChangeStructure(IN PDBGUI_WAIT_STATE_CHANGE WaitStateChange,
                     ExceptionInformation[0];
                 DebugEvent->u.DebugString.fUnicode = FALSE;
             }
+            else if ((WaitStateChange->StateInfo.Exception.ExceptionRecord.
+                      ExceptionCode == DBG_PRINTEXCEPTION_WIDE_C) &&
+                     (WaitStateChange->StateInfo.Exception.ExceptionRecord.
+                      NumberParameters >= 2))
+            {
+                DebugEvent->dwDebugEventCode = OUTPUT_DEBUG_STRING_EVENT;
+                DebugEvent->u.DebugString.lpDebugStringData =
+                    (PVOID)WaitStateChange->
+                           StateInfo.Exception.ExceptionRecord.
+                           ExceptionInformation[1];
+                DebugEvent->u.DebugString.nDebugStringLength =
+                    (WORD)WaitStateChange->StateInfo.Exception.ExceptionRecord.
+                    ExceptionInformation[0];
+                DebugEvent->u.DebugString.fUnicode = TRUE;
+            }
             else if (WaitStateChange->StateInfo.Exception.ExceptionRecord.
                      ExceptionCode == DBG_RIPEXCEPTION)
             {
@@ -289,7 +304,17 @@ NTAPI
 DbgUiRemoteBreakin(VOID)
 {
     /* Make sure a debugger is enabled; if so, breakpoint */
-    if (NtCurrentPeb()->BeingDebugged) DbgBreakPoint();
+    if (NtCurrentPeb()->BeingDebugged)
+    {
+        _SEH2_TRY
+        {
+            DbgBreakPoint();
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        _SEH2_END;
+    }
 
     /* Exit the thread */
     RtlExitUserThread(STATUS_SUCCESS);

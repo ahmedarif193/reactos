@@ -585,10 +585,11 @@ IsDebuggerPresent(VOID)
 /*
  * @implemented
  */
+static
 BOOL
-WINAPI
-WaitForDebugEvent(IN LPDEBUG_EVENT lpDebugEvent,
-                  IN DWORD dwMilliseconds)
+BasepWaitForDebugEvent(IN LPDEBUG_EVENT lpDebugEvent,
+                       IN DWORD dwMilliseconds,
+                       IN BOOLEAN UnicodeStrings)
 {
     LARGE_INTEGER WaitTime;
     PLARGE_INTEGER Timeout;
@@ -599,11 +600,25 @@ WaitForDebugEvent(IN LPDEBUG_EVENT lpDebugEvent,
     Timeout = BaseFormatTimeOut(&WaitTime, dwMilliseconds);
 
     /* Loop while we keep getting interrupted */
-    do
+    for (;;)
     {
         /* Call the native API */
         Status = DbgUiWaitStateChange(&WaitStateChange, Timeout);
-    } while ((Status == STATUS_ALERTED) || (Status == STATUS_USER_APC));
+        if ((Status == STATUS_ALERTED) || (Status == STATUS_USER_APC))
+            continue;
+
+        if (!UnicodeStrings &&
+            (Status == STATUS_SUCCESS) &&
+            (WaitStateChange.NewState == DbgExceptionStateChange) &&
+            (WaitStateChange.StateInfo.Exception.ExceptionRecord.ExceptionCode == DBG_PRINTEXCEPTION_WIDE_C) &&
+            (WaitStateChange.StateInfo.Exception.ExceptionRecord.NumberParameters >= 2))
+        {
+            DbgUiContinue(&WaitStateChange.AppClientId, DBG_EXCEPTION_NOT_HANDLED);
+            continue;
+        }
+
+        break;
+    }
 
     /* Check if the wait failed */
     if (!(NT_SUCCESS(Status)) || (Status == DBG_UNABLE_TO_PROVIDE_HANDLE))
@@ -683,6 +698,22 @@ WaitForDebugEvent(IN LPDEBUG_EVENT lpDebugEvent,
 
     /* Return success */
     return TRUE;
+}
+
+BOOL
+WINAPI
+WaitForDebugEvent(IN LPDEBUG_EVENT lpDebugEvent,
+                  IN DWORD dwMilliseconds)
+{
+    return BasepWaitForDebugEvent(lpDebugEvent, dwMilliseconds, FALSE);
+}
+
+BOOL
+WINAPI
+WaitForDebugEventEx(IN LPDEBUG_EVENT lpDebugEvent,
+                    IN DWORD dwMilliseconds)
+{
+    return BasepWaitForDebugEvent(lpDebugEvent, dwMilliseconds, TRUE);
 }
 
 /*
@@ -910,6 +941,7 @@ OutputDebugStringW(IN LPCWSTR OutputString)
     UNICODE_STRING UnicodeString;
     ANSI_STRING AnsiString;
     NTSTATUS Status;
+    volatile BOOLEAN Handled = FALSE;
 
     /* convert the string in ANSI */
     RtlInitUnicodeString(&UnicodeString, OutputString);
@@ -918,8 +950,29 @@ OutputDebugStringW(IN LPCWSTR OutputString)
     /* OutputDebugStringW always prints something, even if conversion fails */
     if (!NT_SUCCESS(Status)) AnsiString.Buffer = "";
 
+    if (NT_SUCCESS(Status))
+    {
+        _SEH2_TRY
+        {
+            ULONG_PTR Arguments[4];
+
+            Arguments[0] = (ULONG_PTR)(wcslen(OutputString) + 1);
+            Arguments[1] = (ULONG_PTR)OutputString;
+            Arguments[2] = (ULONG_PTR)(strlen(AnsiString.Buffer) + 1);
+            Arguments[3] = (ULONG_PTR)AnsiString.Buffer;
+            RaiseException(DBG_PRINTEXCEPTION_WIDE_C, 0, 4, Arguments);
+            Handled = TRUE;
+        }
+        _SEH2_EXCEPT((_SEH2_GetExceptionCode() == DBG_PRINTEXCEPTION_WIDE_C) ?
+                     EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            Handled = FALSE;
+        }
+        _SEH2_END;
+    }
+
     /* Output the converted string */
-    OutputDebugStringA(AnsiString.Buffer);
+    if (!Handled) OutputDebugStringA(AnsiString.Buffer);
 
     /* free the converted string */
     if (NT_SUCCESS(Status)) RtlFreeAnsiString(&AnsiString);

@@ -9208,14 +9208,6 @@ static void test_breakpoint(DWORD numexc)
     DWORD (CDECL *func)(void) = code_mem;
     void *vectored_handler;
 
-#if defined(__REACTOS__)
-    if (is_reactos())
-    {
-        skip("Skipping tests that crash\n");
-        return;
-    }
-#endif
-
     memcpy(code_mem, breakpoint_code, sizeof(breakpoint_code));
 #ifdef __arm__
     func = (void *)((char *)code_mem + 1);  /* thumb */

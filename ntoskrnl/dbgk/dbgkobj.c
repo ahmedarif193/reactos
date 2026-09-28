@@ -290,7 +290,7 @@ DbgkCopyProcessDebugPort(IN PEPROCESS Process,
 
     /* Make sure it still has one, and that we should inherit */
     DebugObject = Parent->DebugPort;
-    if ((DebugObject) && !(Process->NoDebugInherit))
+    if ((DebugObject) && !(Parent->NoDebugInherit))
     {
         /* Acquire the debug object's lock */
         ExAcquireFastMutex(&DebugObject->Mutex);
@@ -1867,6 +1867,8 @@ NtDebugActiveProcess(IN HANDLE ProcessHandle,
                                         DebugObject,
                                         Status,
                                         LastThread);
+    if (NT_SUCCESS(Status))
+        InterlockedOr((PLONG)&Process->Flags, PSF_NO_DEBUG_INHERIT_BIT);
 
     /* Release rundown protection */
     ExReleaseRundownProtection(&Process->RundownProtect);

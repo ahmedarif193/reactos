@@ -2878,6 +2878,9 @@ KiArm64HandleSynchronousException(
                             KeBugCheckWithTf(KERNEL_SECURITY_CHECK_FAILURE, Context->State.Registers.X[0], (ULONG_PTR)TrapFrame, (ULONG_PTR)&ExceptionRecord, 0, TrapFrame);
                         }
 
+                        if (PsGetCurrentProcess()->DebugPort)
+                            DbgkForwardException(&ExceptionRecord, TRUE, TRUE);
+
                         ZwTerminateProcess(NtCurrentProcess(),
                                            STATUS_STACK_BUFFER_OVERRUN);
                         KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED,
