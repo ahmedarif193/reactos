@@ -1449,7 +1449,7 @@ VfatQueryInformation(
     FCB = (PVFATFCB) IrpContext->FileObject->FsContext;
 
     DPRINT("VfatQueryInformation is called for '%s'\n",
-           FileInformationClass >= FileMaximumInformation - 1 ? "????" : FileInformationClassNames[FileInformationClass]);
+           (ULONG)FileInformationClass >= RTL_NUMBER_OF(FileInformationClassNames) ? "????" : FileInformationClassNames[FileInformationClass]);
 
     if (FCB == NULL)
     {
@@ -1579,7 +1579,7 @@ VfatSetInformation(
     SystemBuffer = IrpContext->Irp->AssociatedIrp.SystemBuffer;
 
     DPRINT("VfatSetInformation is called for '%s'\n",
-           FileInformationClass >= FileMaximumInformation - 1 ? "????" : FileInformationClassNames[ FileInformationClass]);
+           (ULONG)FileInformationClass >= RTL_NUMBER_OF(FileInformationClassNames) ? "????" : FileInformationClassNames[ FileInformationClass]);
 
     DPRINT("FileInformationClass %d\n", FileInformationClass);
     DPRINT("SystemBuffer %p\n", SystemBuffer);
