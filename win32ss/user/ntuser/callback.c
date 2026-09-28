@@ -291,6 +291,8 @@ co_IntCallWindowProc(WNDPROC Proc,
    PWINDOWPROC_CALLBACK_ARGUMENTS Arguments;
    NTSTATUS Status;
    PVOID ResultPointer, pActCtx;
+   PVOID CopyDataUser = NULL;
+   SIZE_T CopyDataUserSize = 0;
    PWND pWnd;
    ULONG ResultLength;
    ULONG ArgumentLength;
@@ -301,6 +303,43 @@ co_IntCallWindowProc(WNDPROC Proc,
 
    /* Do not allow the desktop thread to do callback to user mode */
    ASSERT(PsGetCurrentThreadWin32Thread() != gptiDesktopThread);
+
+   if (lParamBufferSize != -1 &&
+       Message == WM_COPYDATA &&
+       ((COPYDATASTRUCT *)lParam)->lpData &&
+       ((COPYDATASTRUCT *)lParam)->cbData > PAGE_SIZE)
+   {
+      COPYDATASTRUCT *Source = (COPYDATASTRUCT *)lParam;
+
+      CopyDataUserSize = Source->cbData;
+      Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                       &CopyDataUser,
+                                       0,
+                                       &CopyDataUserSize,
+                                       MEM_COMMIT | MEM_RESERVE,
+                                       PAGE_READWRITE);
+      if (!NT_SUCCESS(Status))
+      {
+         ERR("Unable to allocate WM_COPYDATA buffer 0x%lx\n", Status);
+         return 0;
+      }
+      _SEH2_TRY
+      {
+         RtlCopyMemory(CopyDataUser, Source->lpData, Source->cbData);
+      }
+      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+      {
+         Status = _SEH2_GetExceptionCode();
+      }
+      _SEH2_END;
+      if (!NT_SUCCESS(Status))
+      {
+         CopyDataUserSize = 0;
+         ZwFreeVirtualMemory(NtCurrentProcess(), &CopyDataUser, &CopyDataUserSize, MEM_RELEASE);
+         return 0;
+      }
+      lParamBufferSize = sizeof(COPYDATASTRUCT);
+   }
 
    if (lParamBufferSize != -1)
    {
@@ -325,9 +364,13 @@ co_IntCallWindowProc(WNDPROC Proc,
          COPYDATASTRUCT *Captured = CallbackLParam;
 
          *Captured = *Source;
-         if (Source->lpData)
+         if (CopyDataUser)
          {
-            Captured->lpData = Captured + 1;
+            Captured->lpData = CopyDataUser;
+         }
+         else if (Source->lpData)
+         {
+            Captured->lpData = (PVOID)(ULONG_PTR)sizeof(COPYDATASTRUCT);
             if (Source->cbData)
                RtlMoveMemory(Captured + 1, Source->lpData, Source->cbData);
          }
@@ -361,6 +404,11 @@ co_IntCallWindowProc(WNDPROC Proc,
                                ArgumentLength,
                                &ResultPointer,
                                &ResultLength);
+   if (CopyDataUser)
+   {
+      CopyDataUserSize = 0;
+      ZwFreeVirtualMemory(NtCurrentProcess(), &CopyDataUser, &CopyDataUserSize, MEM_RELEASE);
+   }
    if (!NT_SUCCESS(Status))
    {
       ERR("Error Callback to User space Status %lx Message %d\n",Status,Message);

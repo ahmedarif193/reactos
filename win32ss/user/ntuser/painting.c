@@ -2091,6 +2091,9 @@ NtUserRedrawWindow(
        ERR("NTRW: Caller is passing Window Region 1\n");
    }
 
+   if (hWnd && UserIsDesktopWindow(Wnd) && (flags & RDW_ALLCHILDREN))
+       flags = (flags & ~RDW_ALLCHILDREN) | RDW_NOCHILDREN;
+
    UserRefObjectCo(Wnd, &Ref);
 
    Ret = co_UserRedrawWindow( Wnd,

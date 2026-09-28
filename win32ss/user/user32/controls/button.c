@@ -474,34 +474,12 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
 // Patch: http://source.winehq.org/patches/data/70889
 // By: Alexander LAW, Replicate Windows behavior of WM_SETTEXT handler regarding WM_CTLCOLOR*
 //
-#ifdef __REACTOS__
-        if (style & WS_VISIBLE)
-#else
+        HDC hdc = NULL;
+        RECT client, rc;
+
         if (IsWindowVisible(hWnd))
-#endif
         {
-            HDC hdc = GetDC(hWnd);
-            HBRUSH hbrush;
-            RECT client, rc;
-            HWND parent = GetParent(hWnd);
-            UINT message = (btn_type == BS_PUSHBUTTON ||
-                            btn_type == BS_DEFPUSHBUTTON ||
-                            btn_type == BS_PUSHLIKE ||
-                            btn_type == BS_USERBUTTON ||
-                            btn_type == BS_OWNERDRAW) ?
-                            WM_CTLCOLORBTN : WM_CTLCOLORSTATIC;
-
-            if (!parent) parent = hWnd;
-#ifdef __REACTOS__
-            hbrush = GetControlColor(parent, hWnd, hdc, message);
-#else
-            hbrush = (HBRUSH)SendMessageW(parent, message,
-                                          (WPARAM)hdc, (LPARAM)hWnd);
-            if (!hbrush) /* did the app forget to call DefWindowProc ? */
-                hbrush = (HBRUSH)DefWindowProcW(parent, message,
-                                                (WPARAM)hdc, (LPARAM)hWnd);
-#endif
-
+            hdc = GetDC(hWnd);
             GetClientRect(hWnd, &client);
             rc = client;
             /* FIXME: check other BS_* handlers */
@@ -511,12 +489,27 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
             /* Clip by client rect bounds */
             if (rc.right > client.right) rc.right = client.right;
             if (rc.bottom > client.bottom) rc.bottom = client.bottom;
-            FillRect(hdc, &rc, hbrush);
-            ReleaseDC(hWnd, hdc);
         }
 
         if (unicode) DefWindowProcW( hWnd, WM_SETTEXT, wParam, lParam );
         else DefWindowProcA( hWnd, WM_SETTEXT, wParam, lParam );
+
+        if (hdc)
+        {
+            HBRUSH hbrush;
+            HWND parent = GetParent(hWnd);
+            UINT message = (btn_type == BS_PUSHBUTTON ||
+                            btn_type == BS_DEFPUSHBUTTON ||
+                            btn_type == BS_PUSHLIKE ||
+                            btn_type == BS_USERBUTTON ||
+                            btn_type == BS_OWNERDRAW) ?
+                            WM_CTLCOLORBTN : WM_CTLCOLORSTATIC;
+
+            if (!parent) parent = hWnd;
+            hbrush = GetControlColor(parent, hWnd, hdc, message);
+            FillRect(hdc, &rc, hbrush);
+            ReleaseDC(hWnd, hdc);
+        }
         if (btn_type == BS_GROUPBOX) /* Yes, only for BS_GROUPBOX */
             InvalidateRect( hWnd, NULL, TRUE );
         else
@@ -573,6 +566,8 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
 #else
         WIN_SetStyle( hWnd, style, BS_TYPEMASK & ~style );
 #endif
+
+        NotifyWinEvent( EVENT_OBJECT_STATECHANGE, hWnd, OBJID_CLIENT, 0 );
 
         /* Only redraw if lParam flag is set.*/
         if (lParam)
@@ -639,6 +634,8 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
         {
             set_button_state( hWnd, (state & ~3) | wParam );
             paint_button( hWnd, btn_type, ODA_SELECT );
+
+            NotifyWinEvent( EVENT_OBJECT_STATECHANGE, hWnd, OBJID_CLIENT, 0 );
         }
         break;
 
@@ -653,6 +650,8 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
             set_button_state( hWnd, state & ~BST_PUSHED );
 
         paint_button( hWnd, btn_type, ODA_SELECT );
+
+        NotifyWinEvent( EVENT_OBJECT_STATECHANGE, hWnd, OBJID_CLIENT, 0 );
         break;
 
 #ifdef __REACTOS__

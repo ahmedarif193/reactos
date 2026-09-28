@@ -1295,7 +1295,8 @@ IntDefWindowProc(
                 PREGION pRgn = REGION_LockRgn(hRgn);
                 if (pRgn) REGION_UnlockRgn(pRgn);
                 if (!wParam)
-                    wParam = (RDW_ERASENOW | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+                    wParam = RDW_ALLCHILDREN;
+                wParam = (wParam & (RDW_ALLCHILDREN | RDW_NOCHILDREN)) | RDW_ERASENOW;
                 co_UserRedrawWindow(Wnd, NULL, pRgn, wParam);
              }
              GreDeleteObject(hRgn);

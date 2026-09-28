@@ -2021,7 +2021,8 @@ co_IntSendMessageWithCallBack(HWND hWnd,
 
     Win32Thread = PsGetCurrentThreadWin32Thread();
 
-    if (Win32Thread == NULL || Win32Thread->TIF_flags & TIF_INCLEANUP)
+    if (Win32Thread == NULL ||
+        ((Win32Thread->TIF_flags & TIF_INCLEANUP) && CompletionCallback))
         goto Cleanup; // Return FALSE
 
     ptiSendTo = IntSendTo(Window, Win32Thread, Msg);
@@ -2142,7 +2143,7 @@ co_IntSendMessageWithCallBack(HWND hWnd,
     Message->QS_Flags = 0;
     Message->ptiReceiver = ptiSendTo;
     Message->ptiSender = NULL;
-    Message->ptiCallBackSender = Win32Thread;
+    Message->ptiCallBackSender = (Win32Thread->TIF_flags & TIF_INCLEANUP) ? NULL : Win32Thread;
     Message->CompletionCallback = CompletionCallback;
     Message->CompletionCallbackContext = CompletionCallbackContext;
     Message->HookMessage = MSQ_NORMAL;

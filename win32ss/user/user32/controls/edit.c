@@ -155,6 +155,7 @@ typedef struct
 	/*
 	 * IME Data
 	 */
+	UINT ime_status;
 #ifndef __REACTOS__ /* Rely on the composition window */
 	UINT composition_len;   /* length of composition, 0 == no composition */
 	int composition_start;  /* the character position for the composition */
@@ -5174,6 +5175,17 @@ LRESULT WINAPI EditWndProc_common( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 	case EM_CHARFROMPOS:
 		result = EDIT_EM_CharFromPos(es, (short)LOWORD(lParam), (short)HIWORD(lParam));
 		break;
+
+        case EM_SETIMESTATUS:
+            if (wParam == EMSIS_COMPOSITIONSTRING)
+                es->ime_status = lParam & 0xFFFF;
+
+            result = 1;
+            break;
+
+        case EM_GETIMESTATUS:
+            result = wParam == EMSIS_COMPOSITIONSTRING ? es->ime_status : 1;
+            break;
 
         /* End of the EM_ messages which were in numerical order; what order
          * are these in?  vaguely alphabetical?

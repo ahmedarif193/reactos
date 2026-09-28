@@ -2447,7 +2447,8 @@ co_WinPosBatchApply(PWINPOS_ENTRY Entry)
       CopyRgn = NULL;
    }
 
-   if(!(flags & SWP_DEFERERASE))
+   if(!(flags & SWP_DEFERERASE) &&
+      !((Window->state & WNDS_BEINGACTIVATED) && (WinPos.flags & SWP_AGG_STATUSFLAGS) == SWP_AGG_NOPOSCHANGE))
    {
        /* erase parent when hiding or resizing child */
        if (!bCompositedPureMove &&
@@ -2857,7 +2858,6 @@ co_WinPosMinMaximize(PWND Wnd, UINT ShowFlag, RECT* NewPos)
                      break;
                   }
                   SwpFlags |= SWP_STATECHANGED;
-                  Wnd->InternalPos.flags &= ~WPF_RESTORETOMAXIMIZED;
                   *NewPos = wpl.rcNormalPosition;
                   NewPos->right -= NewPos->left;
                   NewPos->bottom -= NewPos->top;
@@ -2986,7 +2986,7 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
             {
                IntShowOwnedPopups(Wnd, FALSE );
                // Fix wine Win test_SetFocus todo #1 & #2,
-               if (Cmd == SW_SHOWMINIMIZED)
+               if (Cmd == SW_SHOWMINIMIZED && Wnd == pti->MessageQueue->spwndFocus)
                {
                   //ERR("co_WinPosShowWindow Set focus 1\n");
                   if ((style & (WS_CHILD | WS_POPUP)) == WS_CHILD)
@@ -3029,20 +3029,20 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
                   //ERR("co_WinPosShowWindow Exit Good 1\n");
                   return TRUE;
                }
-               Swp |= SWP_NOSIZE | SWP_NOMOVE;
+               Swp |= SWP_FRAMECHANGED | co_WinPosMinMaximize(Wnd, SW_MAXIMIZE, &NewPos);
             }
             break;
          }
 
       case SW_SHOWNA:
          Swp |= SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE;
-         if (style & WS_CHILD && !(Wnd->ExStyle & WS_EX_MDICHILD)) Swp |= SWP_NOZORDER;
+         if (style & WS_CHILD) Swp |= SWP_NOZORDER;
          break;
       case SW_SHOW:
          if (WasVisible) return(TRUE); // Nothing to do!
          Swp |= SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE;
          /* Don't activate the topmost window. */
-         if (style & WS_CHILD && !(Wnd->ExStyle & WS_EX_MDICHILD)) Swp |= SWP_NOACTIVATE | SWP_NOZORDER;
+         if (style & WS_CHILD) Swp |= SWP_NOACTIVATE | SWP_NOZORDER;
          break;
 
       case SW_SHOWNOACTIVATE:
@@ -3067,7 +3067,6 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
             Swp |= SWP_NOSIZE | SWP_NOMOVE;
          }
          if ( style & WS_CHILD &&
-             !(Wnd->ExStyle & WS_EX_MDICHILD) &&
              !(Swp & SWP_STATECHANGED))
             Swp |= SWP_NOACTIVATE | SWP_NOZORDER;
          break;
@@ -3092,7 +3091,10 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
    /* We can't activate a child window */
    if ((Wnd->style & WS_CHILD) &&
        !(Wnd->ExStyle & WS_EX_MDICHILD) &&
-       Cmd != SW_SHOWNA)
+       Cmd != SW_SHOWNA &&
+       Cmd != SW_SHOWMAXIMIZED &&
+       Cmd != SW_SHOWMINIMIZED &&
+       !((Cmd == SW_RESTORE || Cmd == SW_SHOWNORMAL || Cmd == SW_SHOWDEFAULT) && (Swp & SWP_STATECHANGED)))
    {
       //ERR("SWP Child No active and ZOrder\n");
       Swp |= SWP_NOACTIVATE | SWP_NOZORDER;

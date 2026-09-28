@@ -3099,7 +3099,7 @@ BOOLEAN co_UserDestroyWindow(PVOID Object)
    }
 
    /* Inform the parent */
-   if (Window->style & WS_CHILD)
+   if ((Window->style & WS_CHILD) && !(ti->TIF_flags & TIF_INCLEANUP))
    {
       IntSendParentNotify(Window, WM_DESTROY);
    }

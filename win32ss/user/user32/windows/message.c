@@ -480,7 +480,7 @@ MsgiKMToUMMessage(PMSG KMMsg, PMSG UMMsg)
       case WM_COPYDATA:
         {
           PCOPYDATASTRUCT pKMCopyData = (PCOPYDATASTRUCT)KMMsg->lParam;
-          if (pKMCopyData->lpData)
+          if ((ULONG_PTR)pKMCopyData->lpData == sizeof(COPYDATASTRUCT))
               pKMCopyData->lpData = pKMCopyData + 1;
         }
         break;

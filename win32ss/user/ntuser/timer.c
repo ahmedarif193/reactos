@@ -455,7 +455,7 @@ PostTimerMessages(PWND Window)
 static
 BOOL
 FASTCALL
-IntRitTimerDue(VOID)
+IntRitTimerDue(LONG Elapsed)
 {
   PLIST_ENTRY pLE;
   PTIMER pTmr;
@@ -465,7 +465,7 @@ IntRitTimerDue(VOID)
     pTmr = CONTAINING_RECORD(pLE, TIMER, ptmrList);
     if ((pTmr->flags & TMRF_RIT) &&
         !(pTmr->flags & (TMRF_WAITING | TMRF_INIT | TMRF_READY)) &&
-        pTmr->cmsCountdown < 0)
+        pTmr->cmsCountdown - Elapsed <= 0)
     {
       return TRUE;
     }
@@ -482,15 +482,17 @@ ProcessTimers(BOOL Exclusive)
   PLIST_ENTRY pLE;
   PTIMER pTmr;
   LONG TimerCount = 0;
+  LONG MinCountdown = MAXLONG;
+  LONGLONG NextDue;
 
   TimerEnterExclusive();
-  if (!Exclusive && IntRitTimerDue())
+  Time = EngGetTickCount32();
+  if (!Exclusive && IntRitTimerDue(Time - TimeLast))
   {
     TimerLeave();
     return FALSE;
   }
   pLE = TimersListHead.Flink;
-  Time = EngGetTickCount32();
 
   DueTime.QuadPart = (LONGLONG)(-97656); // 1024hz .9765625 ms set to 10.0 ms
 
@@ -511,7 +513,8 @@ ProcessTimers(BOOL Exclusive)
     }
     else
     {
-       if (pTmr->cmsCountdown < 0)
+       pTmr->cmsCountdown -= Time - TimeLast;
+       if (pTmr->cmsCountdown <= 0)
        {
           ASSERT(pTmr->pti);
           if ((!(pTmr->flags & TMRF_READY)) && (!(pTmr->pti->TIF_flags & TIF_INCLEANUP)))
@@ -540,11 +543,20 @@ ProcessTimers(BOOL Exclusive)
           }
           pTmr->cmsCountdown = pTmr->cmsRate;
        }
-       else
-          pTmr->cmsCountdown -= Time - TimeLast;
     }
 
+    if (!(pTmr->flags & TMRF_WAITING) && pTmr->cmsCountdown < MinCountdown)
+       MinCountdown = pTmr->cmsCountdown;
+
     pLE = pLE->Flink;
+  }
+
+  if (MinCountdown != MAXLONG)
+  {
+     NextDue = (LONGLONG)max(MinCountdown, 0) * 10000;
+     NextDue = max(NextDue, (LONGLONG)KeQueryTimeIncrement());
+     if (NextDue < -DueTime.QuadPart)
+        DueTime.QuadPart = -NextDue;
   }
 
   // Restart the timer thread!
