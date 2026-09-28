@@ -24,6 +24,19 @@ ULONG DbgPrint(PCH Format,...);
 #include <shlwapi.h>
 #include <strsafe.h>
 
+static PCWSTR
+SysDrivePath(PCWSTR Tail)
+{
+    static WCHAR s_Buffer[4][MAX_PATH];
+    static UINT s_Index;
+    PWSTR Buffer = s_Buffer[s_Index++ % _countof(s_Buffer)];
+
+    GetWindowsDirectoryW(Buffer, MAX_PATH);
+    Buffer[2] = UNICODE_NULL;
+    StringCchCatW(Buffer, MAX_PATH, Tail);
+    return Buffer;
+}
+
 static bool g_ShowHidden;
 static DWORD g_WinVersion;
 #define WINVER_VISTA   0x0600
@@ -411,26 +424,26 @@ test_ACListISF_CURRENTDIR2()
     ok_hr(hr = ACList->SetOptions(ACLO_CURRENTDIR), S_OK);
     test_at_end(EnumStr);
 
-    CreateDirectoryW(L"C:\\BROWSEUI-1", NULL);
-    CreateDirectoryW(L"C:\\BROWSEUI-1\\TEST1", NULL);
-    CreateDirectoryW(L"C:\\BROWSEUI-1\\TEST2", NULL);
-    CreateDirectoryW(L"C:\\BROWSEUI-1\\TEST1\\TEST3", NULL);
-    CreateDirectoryW(L"C:\\BROWSEUI-2", NULL);
-    CreateDirectoryW(L"C:\\BROWSEUI-2\\TEST1", NULL);
-    CreateDirectoryW(L"C:\\BROWSEUI-2\\TEST2", NULL);
-    CreateDirectoryW(L"C:\\BROWSEUI-2\\TEST1\\TEST4", NULL);
+    CreateDirectoryW(SysDrivePath(L"\\BROWSEUI-1"), NULL);
+    CreateDirectoryW(SysDrivePath(L"\\BROWSEUI-1\\TEST1"), NULL);
+    CreateDirectoryW(SysDrivePath(L"\\BROWSEUI-1\\TEST2"), NULL);
+    CreateDirectoryW(SysDrivePath(L"\\BROWSEUI-1\\TEST1\\TEST3"), NULL);
+    CreateDirectoryW(SysDrivePath(L"\\BROWSEUI-2"), NULL);
+    CreateDirectoryW(SysDrivePath(L"\\BROWSEUI-2\\TEST1"), NULL);
+    CreateDirectoryW(SysDrivePath(L"\\BROWSEUI-2\\TEST2"), NULL);
+    CreateDirectoryW(SysDrivePath(L"\\BROWSEUI-2\\TEST1\\TEST4"), NULL);
 
-    ok_hr(hr = CurrentWorkingDir->SetDirectory(L"C:\\BROWSEUI-1\\TEST1"), S_OK);
+    ok_hr(hr = CurrentWorkingDir->SetDirectory(SysDrivePath(L"\\BROWSEUI-1\\TEST1")), S_OK);
     test_at_end(EnumStr);
 
-    ok_hr(hr = ACList->Expand(L"C:\\BROWSEUI-2\\TEST1\\"), S_OK);
+    ok_hr(hr = ACList->Expand(SysDrivePath(L"\\BROWSEUI-2\\TEST1\\")), S_OK);
 
     LPWSTR psz;
     ULONG cGot;
 
     hr = EnumStr->Next(1, &psz, &cGot);
     ok_hr(hr, S_OK);
-    ok_wstr(psz, L"C:\\BROWSEUI-2\\TEST1\\TEST4");
+    ok_wstr(psz, SysDrivePath(L"\\BROWSEUI-2\\TEST1\\TEST4"));
     CoTaskMemFree(psz);
 
     hr = EnumStr->Next(1, &psz, &cGot);
@@ -440,11 +453,11 @@ test_ACListISF_CURRENTDIR2()
 
     test_at_end(EnumStr);
 
-    ok_hr(hr = ACList->Expand(L"C:\\BROWSEUI-1\\TEST1\\"), S_OK);
+    ok_hr(hr = ACList->Expand(SysDrivePath(L"\\BROWSEUI-1\\TEST1\\")), S_OK);
 
     hr = EnumStr->Next(1, &psz, &cGot);
     ok_hr(hr, S_OK);
-    ok_wstr(psz, L"C:\\BROWSEUI-1\\TEST1\\TEST3");
+    ok_wstr(psz, SysDrivePath(L"\\BROWSEUI-1\\TEST1\\TEST3"));
     CoTaskMemFree(psz);
 
     hr = EnumStr->Next(1, &psz, &cGot);
@@ -454,7 +467,7 @@ test_ACListISF_CURRENTDIR2()
 
     test_at_end(EnumStr);
 
-    ok_hr(hr = CurrentWorkingDir->SetDirectory(L"C:\\BROWSEUI-2\\TEST1"), S_OK);
+    ok_hr(hr = CurrentWorkingDir->SetDirectory(SysDrivePath(L"\\BROWSEUI-2\\TEST1")), S_OK);
     test_at_end(EnumStr);
 
     ok_hr(hr = ACList->Expand(L"..\\TEST1\\"), S_OK);
@@ -485,14 +498,14 @@ test_ACListISF_CURRENTDIR2()
 
     test_at_end(EnumStr);
 
-    RemoveDirectoryW(L"C:\\BROWSEUI-1\\TEST1\\TEST3");
-    RemoveDirectoryW(L"C:\\BROWSEUI-1\\TEST1");
-    RemoveDirectoryW(L"C:\\BROWSEUI-1\\TEST2");
-    RemoveDirectoryW(L"C:\\BROWSEUI-1");
-    RemoveDirectoryW(L"C:\\BROWSEUI-2\\TEST1\\TEST4");
-    RemoveDirectoryW(L"C:\\BROWSEUI-2\\TEST1");
-    RemoveDirectoryW(L"C:\\BROWSEUI-2\\TEST2");
-    RemoveDirectoryW(L"C:\\BROWSEUI-2");
+    RemoveDirectoryW(SysDrivePath(L"\\BROWSEUI-1\\TEST1\\TEST3"));
+    RemoveDirectoryW(SysDrivePath(L"\\BROWSEUI-1\\TEST1"));
+    RemoveDirectoryW(SysDrivePath(L"\\BROWSEUI-1\\TEST2"));
+    RemoveDirectoryW(SysDrivePath(L"\\BROWSEUI-1"));
+    RemoveDirectoryW(SysDrivePath(L"\\BROWSEUI-2\\TEST1\\TEST4"));
+    RemoveDirectoryW(SysDrivePath(L"\\BROWSEUI-2\\TEST1"));
+    RemoveDirectoryW(SysDrivePath(L"\\BROWSEUI-2\\TEST2"));
+    RemoveDirectoryW(SysDrivePath(L"\\BROWSEUI-2"));
 }
 
 static void
