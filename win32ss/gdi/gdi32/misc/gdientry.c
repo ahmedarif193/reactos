@@ -703,8 +703,8 @@ DvpUpdateVideoPort(LPDDHAL_UPDATEVPORTDATA pDvdUpdateVideoPort)
      *
      */
 
-    HANDLE phSurfaceVideo[10];
-    HANDLE phSurfaceVbi[10];
+    HANDLE phSurfaceVideo[10] = {0};
+    HANDLE phSurfaceVbi[10] = {0};
 
     if (pDvdUpdateVideoPort->dwFlags != DDRAWI_VPORTSTOP)
     {
@@ -714,12 +714,12 @@ DvpUpdateVideoPort(LPDDHAL_UPDATEVPORTDATA pDvdUpdateVideoPort)
         /* Take copy of lplpDDSurface for the handle value will be modify in dxg */
         dwNumAutoflip = pDvdUpdateVideoPort->dwNumAutoflip;
         if ((dwNumAutoflip == 0) &&
-                (pDvdUpdateVideoPort->lplpDDSurface == 0))
+                (pDvdUpdateVideoPort->lplpDDSurface != NULL))
         {
             dwNumAutoflip++;
         }
 
-        if (dwNumAutoflip != 0)
+        if (dwNumAutoflip != 0 && pDvdUpdateVideoPort->lplpDDSurface != NULL)
         {
             if (dwNumAutoflip>10)
             {
@@ -731,12 +731,12 @@ DvpUpdateVideoPort(LPDDHAL_UPDATEVPORTDATA pDvdUpdateVideoPort)
         /* Take copy of lplpDDVBISurface for the handle value will be modify in dxg */
         dwNumVBIAutoflip = pDvdUpdateVideoPort->dwNumVBIAutoflip;
         if ( (dwNumVBIAutoflip == 0) &&
-                (pDvdUpdateVideoPort->lplpDDVBISurface == 0) )
+                (pDvdUpdateVideoPort->lplpDDVBISurface != NULL) )
         {
             dwNumVBIAutoflip++;
         }
 
-        if (dwNumVBIAutoflip != 0)
+        if (dwNumVBIAutoflip != 0 && pDvdUpdateVideoPort->lplpDDVBISurface != NULL)
         {
             if (dwNumVBIAutoflip>10)
             {
@@ -2078,7 +2078,6 @@ DdSetGammaRamp(LPDDRAWI_DIRECTDRAW_LCL pDDraw,
                                hdc,
                                lpGammaRamp);
 }
-
 
 
 
