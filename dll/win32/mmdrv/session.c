@@ -130,7 +130,10 @@ DestroySession(SessionInfo* session)
         if ( session_node == session )
         {
             /* Bridge the gap for when we go */
-            session_prev->next = session->next;
+            if (session_prev)
+                session_prev->next = session->next;
+            else
+                session_list = session->next;
             break;
         }
 
