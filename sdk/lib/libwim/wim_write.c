@@ -1141,11 +1141,21 @@ static char* xml_escape(const char* s)
         }
         if (rep) {
             size_t rlen = strlen(rep);
-            while (len + rlen + 1 > cap) { cap *= 2; out = (char*)realloc(out, cap); if (!out) return NULL; }
+            while (len + rlen + 1 > cap) {
+                cap *= 2;
+                char* grown = (char*)realloc(out, cap);
+                if (!grown) { free(out); return NULL; }
+                out = grown;
+            }
             memcpy(out + len, rep, rlen);
             len += rlen;
         } else {
-            if (len + 2 > cap) { cap *= 2; out = (char*)realloc(out, cap); if (!out) return NULL; }
+            if (len + 2 > cap) {
+                cap *= 2;
+                char* grown = (char*)realloc(out, cap);
+                if (!grown) { free(out); return NULL; }
+                out = grown;
+            }
             out[len++] = *s;
         }
     }
@@ -1157,12 +1167,18 @@ static char* generate_xml(WimCtx* ctx)
 {
     size_t cap = 4096;
     size_t len = 0;
+    char* esc = NULL;
     char* xml = (char*)malloc(cap);
     if (!xml) return NULL;
 
 #define XML_APPEND(s) do { \
     size_t _slen = strlen(s); \
-    while (len + _slen + 1 > cap) { cap *= 2; xml = (char*)realloc(xml, cap); if (!xml) return NULL; } \
+    while (len + _slen + 1 > cap) { \
+        cap *= 2; \
+        char* grown = (char*)realloc(xml, cap); \
+        if (!grown) goto failure; \
+        xml = grown; \
+    } \
     memcpy(xml + len, s, _slen); len += _slen; xml[len] = '\0'; \
 } while (0)
 
@@ -1236,12 +1252,18 @@ static char* generate_xml(WimCtx* ctx)
         XML_APPEND("</LOWPART></LASTMODIFICATIONTIME>\n");
 
         if (info->name[0] != '\0') {
-            char* esc = xml_escape(info->name);
-            if (esc) { XML_APPEND("<NAME>"); XML_APPEND(esc); XML_APPEND("</NAME>\n"); free(esc); }
+            esc = xml_escape(info->name);
+            if (!esc) goto failure;
+            XML_APPEND("<NAME>"); XML_APPEND(esc); XML_APPEND("</NAME>\n");
+            free(esc);
+            esc = NULL;
         }
         if (info->description[0] != '\0') {
-            char* esc = xml_escape(info->description);
-            if (esc) { XML_APPEND("<DESCRIPTION>"); XML_APPEND(esc); XML_APPEND("</DESCRIPTION>\n"); free(esc); }
+            esc = xml_escape(info->description);
+            if (!esc) goto failure;
+            XML_APPEND("<DESCRIPTION>"); XML_APPEND(esc); XML_APPEND("</DESCRIPTION>\n");
+            free(esc);
+            esc = NULL;
         }
 
         XML_APPEND("</IMAGE>\n");
@@ -1252,6 +1274,11 @@ static char* generate_xml(WimCtx* ctx)
 #undef XML_APPEND
 
     return xml;
+
+failure:
+    free(esc);
+    free(xml);
+    return NULL;
 }
 
 static int write_xml_data(WimCtx* ctx)

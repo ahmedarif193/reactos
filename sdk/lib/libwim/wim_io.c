@@ -111,11 +111,12 @@ char* filetime_to_string(uint64_t ft)
 {
     time_t t = filetime_to_unix(ft);
     struct tm tm_val;
-    char* buf = (char*)malloc(64);
+    char* buf;
 
     if (!wim_gmtime_utc(&t, &tm_val))
         return NULL;
 
+    buf = (char*)malloc(64);
     if (!buf)
         return NULL;
     strftime(buf, 64, "%Y-%m-%dT%H:%M:%SZ", &tm_val);
