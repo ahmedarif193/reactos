@@ -1219,7 +1219,7 @@ static HRESULT get_autoplug_types(IPin *source, unsigned int *ret_count, GUID **
 #endif
 
 #ifdef __REACTOS__
-        if (mt_capacity > ~(SIZE_T)0 / sizeof(*mts) ||
+        if ((SIZE_T)mt_capacity > ~(SIZE_T)0 / sizeof(*mts) ||
             !(new_mts = realloc(mts, mt_capacity * sizeof(*mts))))
 #else
         if (!(mts = realloc(mts, mt_capacity * sizeof(*mts))))
@@ -1253,7 +1253,7 @@ static HRESULT get_autoplug_types(IPin *source, unsigned int *ret_count, GUID **
     }
 
 #ifdef __REACTOS__
-    if (mt_count > ~(SIZE_T)0 / (2 * sizeof(*types)) ||
+    if ((SIZE_T)mt_count > ~(SIZE_T)0 / (2 * sizeof(*types)) ||
         !(types = malloc(mt_count * (2 * sizeof(*types)))))
 #else
     if (!(types = malloc(mt_count * 2 * sizeof(*types))))
