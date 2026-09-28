@@ -187,11 +187,15 @@ unsigned char BitScanForward(ULONG * Index, unsigned long Mask)
 
 unsigned char BitScanReverse(ULONG * const Index, unsigned long Mask)
 {
+    ULONG Value = (ULONG)Mask;
+
     *Index = 0;
-    while (Mask && ((Mask & (1 << 31)) == 0))
+    if (!Value)
+        return 0;
+
+    while ((Value >>= 1) != 0)
     {
-        Mask <<= 1;
         ++(*Index);
     }
-    return Mask ? 1 : 0;
+    return 1;
 }
