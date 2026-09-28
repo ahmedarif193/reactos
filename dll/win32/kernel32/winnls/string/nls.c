@@ -501,12 +501,9 @@ IntMultiByteToWideCharUTF8(DWORD Flags,
                            LPWSTR WideCharString,
                            INT WideCharCount)
 {
-    LPCSTR MbsEnd, MbsPtrSave;
-    UCHAR Char, TrailLength = 0;
-    UINT WideChar;
-    LONG Count;
-    BOOL CharIsValid, StringIsValid = TRUE;
-    const WCHAR InvalidChar = 0xFFFD;
+    NTSTATUS Status;
+    ULONG BytesInUnicodeString;
+    ULONG BytesRequired;
 
     if (Flags != 0 && Flags != MB_ERR_INVALID_CHARS)
     {
@@ -514,169 +511,35 @@ IntMultiByteToWideCharUTF8(DWORD Flags,
         return 0;
     }
 
-    /* Does caller query for output buffer size? */
-    if (WideCharCount == 0)
+    Status = RtlUTF8ToUnicodeN(NULL, 0, &BytesRequired, MultiByteString, (ULONG)MultiByteCount);
+    if (!NT_SUCCESS(Status))
     {
-        /* validate and count the wide characters */
-        MbsEnd = MultiByteString + MultiByteCount;
-        for (; MultiByteString < MbsEnd; WideCharCount++)
-        {
-            Char = *MultiByteString++;
-            if (Char < 0x80)
-            {
-                TrailLength = 0;
-                continue;
-            }
-            if ((Char & 0xC0) == 0x80)
-            {
-                TrailLength = 0;
-                StringIsValid = FALSE;
-                continue;
-            }
-
-            TrailLength = UTF8Length[Char - 0x80];
-            if (TrailLength == 0)
-            {
-                StringIsValid = FALSE;
-                continue;
-            }
-
-            CharIsValid = TRUE;
-            MbsPtrSave = MultiByteString;
-            WideChar = Char & UTF8Mask[TrailLength];
-
-            while (TrailLength && MultiByteString < MbsEnd)
-            {
-                if ((*MultiByteString & 0xC0) != 0x80)
-                {
-                    CharIsValid = StringIsValid = FALSE;
-                    break;
-                }
-
-                WideChar = (WideChar << 6) | (*MultiByteString++ & 0x7f);
-                TrailLength--;
-            }
-
-            if (!CharIsValid || WideChar < UTF8LBound[(UCHAR)UTF8Length[(UCHAR)Char - 0x80]])
-            {
-                MultiByteString = MbsPtrSave;
-            }
-
-            if (WideChar > 0xFFFF)
-            {
-                /* UTF-16 surrogate pair */
-                WideCharCount++;
-            }
-        }
-
-        if (TrailLength)
-        {
-            WideCharCount++;
-            StringIsValid = FALSE;
-        }
-
-        if (Flags == MB_ERR_INVALID_CHARS && !StringIsValid)
-        {
-            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
-            return 0;
-        }
-
-        return WideCharCount;
-    }
-
-    /* convert */
-    MbsEnd = MultiByteString + MultiByteCount;
-    for (Count = 0; Count < WideCharCount && MultiByteString < MbsEnd; Count++)
-    {
-        Char = *MultiByteString++;
-        if (Char < 0x80)
-        {
-            *WideCharString++ = Char;
-            TrailLength = 0;
-            continue;
-        }
-        if ((Char & 0xC0) == 0x80)
-        {
-            *WideCharString++ = InvalidChar;
-            TrailLength = 0;
-            StringIsValid = FALSE;
-            continue;
-        }
-
-        TrailLength = UTF8Length[(UCHAR)Char - 0x80];
-        if (TrailLength == 0)
-        {
-            *WideCharString++ = InvalidChar;
-            StringIsValid = FALSE;
-            continue;
-        }
-
-        CharIsValid = TRUE;
-        MbsPtrSave = MultiByteString;
-        WideChar = Char & UTF8Mask[TrailLength];
-
-        while (TrailLength && MultiByteString < MbsEnd)
-        {
-            if ((*MultiByteString & 0xC0) != 0x80)
-            {
-                CharIsValid = StringIsValid = FALSE;
-                break;
-            }
-
-            WideChar = (WideChar << 6) | (*MultiByteString++ & 0x7f);
-            TrailLength--;
-        }
-
-        if (CharIsValid && UTF8LBound[(UCHAR)UTF8Length[(UCHAR)Char - 0x80]] <= WideChar)
-        {
-            /* Check for UTF-16 surrogate pair */
-            if (WideChar > 0xFFFF)
-            {
-                WideChar -= 0x10000;
-                *WideCharString++ = 0xD800 | (WideChar >> 10);
-                Count++;
-
-                /* Check if we have space for the second surrogate */
-                if (Count >= WideCharCount)
-                {
-                    SetLastError(ERROR_INSUFFICIENT_BUFFER);
-                    return 0;
-                }
-
-                *WideCharString++ = 0xDC00 | (WideChar & 0x3FF);
-            }
-            else
-            {
-                *WideCharString++ = WideChar;
-            }
-        }
-        else
-        {
-            *WideCharString++ = InvalidChar;
-            MultiByteString = MbsPtrSave;
-            StringIsValid = FALSE;
-        }
-    }
-
-    if (TrailLength && Count < WideCharCount && MultiByteString < MbsEnd)
-    {
-        *WideCharString = InvalidChar;
-        WideCharCount++;
-    }
-
-    if (MultiByteString < MbsEnd)
-    {
-        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        SetLastError(RtlNtStatusToDosError(Status));
         return 0;
     }
 
-    if (Flags == MB_ERR_INVALID_CHARS && (!StringIsValid || TrailLength))
+    if (WideCharCount != 0)
+    {
+        RtlUTF8ToUnicodeN(WideCharString,
+                          (ULONG)WideCharCount * sizeof(WCHAR),
+                          &BytesInUnicodeString,
+                          MultiByteString,
+                          (ULONG)MultiByteCount);
+
+        if (BytesRequired > (ULONG)WideCharCount * sizeof(WCHAR))
+        {
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return 0;
+        }
+    }
+
+    if (Status == STATUS_SOME_NOT_MAPPED && (Flags & MB_ERR_INVALID_CHARS))
     {
         SetLastError(ERROR_NO_UNICODE_TRANSLATION);
         return 0;
     }
 
-    return Count;
+    return BytesRequired / sizeof(WCHAR);
 }
 
 /**
