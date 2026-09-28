@@ -113,11 +113,41 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
      *pch = wch[0];
  
      return S_OK;
-@@ -4195,14 +4198,150 @@ static HRESULT WINAPI ITextDocument2Old_fnNew(ITextDoc
-     struct text_services *services = impl_from_ITextDocument2Old(iface);
+@@ -2499,12 +2502,30 @@ static HRESULT WINAPI ITextRange_fnDelete(ITextRange *
+ static HRESULT WINAPI ITextRange_fnDelete(ITextRange *me, LONG unit, LONG count, LONG *delta)
+ {
+     ITextRangeImpl *This = impl_from_ITextRange(me);
++#ifdef __REACTOS__
++    ME_Cursor cursor;
++#endif
+ 
+     FIXME("(%p)->(%ld %ld %p): stub\n", This, unit, count, delta);
+ 
+     if (!This->child.reole)
+         return CO_E_RELEASED;
+ 
++#ifdef __REACTOS__
++    if (!count)
++    {
++        if (This->start == This->end)
++        {
++            if (delta) *delta = 0;
++            return S_FALSE;
++        }
++        cursor_from_char_ofs( This->child.reole->editor, This->start, &cursor );
++        ME_InternalDeleteText( This->child.reole->editor, &cursor, This->end - This->start, FALSE );
++        textranges_update_ranges( This->child.reole, This->start, This->end, RANGE_UPDATE_DELETE );
++        if (delta) *delta = 1;
++        return S_OK;
++    }
++#endif
+     return E_NOTIMPL;
+ }
+ 
+@@ -4196,13 +4217,149 @@ static HRESULT WINAPI ITextDocument2Old_fnNew(ITextDoc
      FIXME("stub %p\n", services);
      return E_NOTIMPL;
-+}
+ }
 +
 +struct open_stream
 +{
@@ -125,7 +155,7 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
 +    DWORD size;
 +    DWORD pos;
 +};
-+
+ 
 +static DWORD CALLBACK open_stream_read(DWORD_PTR cookie, BYTE *buffer, LONG cb, LONG *pcb)
 +{
 +    struct open_stream *stream = (struct open_stream *)cookie;
@@ -135,8 +165,8 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
 +    stream->pos += count;
 +    *pcb = count;
 +    return 0;
- }
- 
++}
++
  static HRESULT WINAPI ITextDocument2Old_fnOpen(ITextDocument2Old *iface, VARIANT *pVar,
                                                 LONG Flags, LONG CodePage)
  {
@@ -266,7 +296,7 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
  }
  
  static HRESULT WINAPI ITextDocument2Old_fnSave(ITextDocument2Old *iface, VARIANT *pVar,
-@@ -4690,7 +4829,10 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
+@@ -4690,7 +4847,10 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
      TRACE("(%p)->(%p)\n", This, pbstr);
  
      if (!This->services)
@@ -277,7 +307,7 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
  
      if (!pbstr)
          return E_INVALIDARG;
-@@ -4709,7 +4851,7 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
+@@ -4709,7 +4869,7 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
          return E_OUTOFMEMORY;
  
      bEOP = (!para_next( para_next( end->para ) ) && endOfs > ME_GetTextLength(This->services->editor));

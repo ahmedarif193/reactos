@@ -2502,12 +2502,30 @@ static HRESULT WINAPI ITextRange_fnFindTextEnd(ITextRange *me, BSTR text, LONG c
 static HRESULT WINAPI ITextRange_fnDelete(ITextRange *me, LONG unit, LONG count, LONG *delta)
 {
     ITextRangeImpl *This = impl_from_ITextRange(me);
+#ifdef __REACTOS__
+    ME_Cursor cursor;
+#endif
 
     FIXME("(%p)->(%ld %ld %p): stub\n", This, unit, count, delta);
 
     if (!This->child.reole)
         return CO_E_RELEASED;
 
+#ifdef __REACTOS__
+    if (!count)
+    {
+        if (This->start == This->end)
+        {
+            if (delta) *delta = 0;
+            return S_FALSE;
+        }
+        cursor_from_char_ofs( This->child.reole->editor, This->start, &cursor );
+        ME_InternalDeleteText( This->child.reole->editor, &cursor, This->end - This->start, FALSE );
+        textranges_update_ranges( This->child.reole, This->start, This->end, RANGE_UPDATE_DELETE );
+        if (delta) *delta = 1;
+        return S_OK;
+    }
+#endif
     return E_NOTIMPL;
 }
 
