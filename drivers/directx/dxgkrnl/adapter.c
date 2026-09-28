@@ -12239,6 +12239,11 @@ DxgkpRollbackAdapterStart(
         else
             DXGKRNL_ERR("DxgkAdapterStart: rollback could not disable the adapter interface 0x%08lX\n", InterfaceStatus);
     }
+    if (Adapter->DisplayAdapterInterfaceEnabled &&
+        NT_SUCCESS(IoSetDeviceInterfaceState(&Adapter->DisplayAdapterInterfaceName, FALSE)))
+    {
+        Adapter->DisplayAdapterInterfaceEnabled = FALSE;
+    }
     if (Progress->Mms2Started)
         BeginStatus = DxgkpMms2BeginStop(Adapter, Dxgmms2StopReasonStartRollback);
     VidSchPrepareForStop(Adapter);
@@ -13396,6 +13401,12 @@ DxgkAdapterStart(
         }
     }
 
+    if (Adapter->DisplayAdapterInterfaceName.Buffer != NULL &&
+        NT_SUCCESS(IoSetDeviceInterfaceState(&Adapter->DisplayAdapterInterfaceName, TRUE)))
+    {
+        Adapter->DisplayAdapterInterfaceEnabled = TRUE;
+    }
+
     /* Create \DosDevices\DISPLAY symlink pointing to \Device\DxgKrnl.
      * This is created once (first adapter to start).  If the symlink
      * already exists we silently ignore the collision. */
@@ -14255,6 +14266,17 @@ DxgkAdapterRemove(
     {
         RtlFreeUnicodeString(&Adapter->DeviceInterfaceName);
         RtlInitUnicodeString(&Adapter->DeviceInterfaceName, NULL);
+    }
+    if (Adapter->DisplayAdapterInterfaceEnabled)
+    {
+        if (!NT_SUCCESS(IoSetDeviceInterfaceState(&Adapter->DisplayAdapterInterfaceName, FALSE)))
+            DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &Adapter->DisplayAdapterInterfaceName);
+        Adapter->DisplayAdapterInterfaceEnabled = FALSE;
+    }
+    if (Adapter->DisplayAdapterInterfaceName.Buffer != NULL)
+    {
+        RtlFreeUnicodeString(&Adapter->DisplayAdapterInterfaceName);
+        RtlInitUnicodeString(&Adapter->DisplayAdapterInterfaceName, NULL);
     }
 
     /* Stop display dispatch and its present worker while callbacks remain
@@ -15579,6 +15601,18 @@ DxgkpAddDeviceRegistered(
     {
         DXGKRNL_TRACE("DxgkpAddDevice: registered device interface %wZ\n",
                       &Adapter->DeviceInterfaceName);
+    }
+
+    RtlInitUnicodeString(&Adapter->DisplayAdapterInterfaceName, NULL);
+    Status = IoRegisterDeviceInterface(PhysicalDeviceObject,
+                                       &GUID_DEVINTERFACE_DISPLAY_ADAPTER,
+                                       NULL,
+                                       &Adapter->DisplayAdapterInterfaceName);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_WARN("DxgkpAddDevice: display adapter interface registration failed "
+                      "0x%08lX (non-fatal)\n", Status);
+        RtlInitUnicodeString(&Adapter->DisplayAdapterInterfaceName, NULL);
     }
 
     /* Link into per-miniport adapter list. */

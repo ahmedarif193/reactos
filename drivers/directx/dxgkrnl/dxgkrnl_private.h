@@ -1257,6 +1257,8 @@ struct _DXGKRNL_ADAPTER
      */
     UNICODE_STRING              DeviceInterfaceName;
     BOOLEAN                     DeviceInterfaceEnabled;
+    UNICODE_STRING              DisplayAdapterInterfaceName;
+    BOOLEAN                     DisplayAdapterInterfaceEnabled;
     WCHAR                       DisplayDeviceName[24];
 
     /*
