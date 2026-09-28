@@ -98,7 +98,11 @@ static void add_cert_to_view(HWND lv, PCCERT_CONTEXT cert, DWORD *allocatedLen,
     WCHAR dateFmt[80]; /* sufficient for LOCALE_SSHORTDATE */
     WCHAR date[80];
     SYSTEMTIME sysTime;
+#ifdef __REACTOS__
+    LPWSTR none = L"";
+#else
     LPWSTR none;
+#endif
 
     item.mask = LVIF_IMAGE | LVIF_PARAM | LVIF_TEXT;
     item.iItem = SendMessageW(lv, LVM_GETITEMCOUNT, 0, 0);
@@ -162,7 +166,14 @@ static void add_cert_to_view(HWND lv, PCCERT_CONTEXT cert, DWORD *allocatedLen,
     {
         if (!CertGetCertificateContextProperty(cert, CERT_FRIENDLY_NAME_PROP_ID,
          *str, &len))
+#ifdef __REACTOS__
+        {
+            LoadStringW(hInstance, IDS_FRIENDLY_NAME_NONE, (LPWSTR)&none, 0);
+#endif
             item.pszText = none;
+#ifdef __REACTOS__
+        }
+#endif
         else
             item.pszText = *str;
         item.iSubItem = 3;
@@ -362,7 +373,14 @@ static void show_store_certs(HWND hwnd, HCERTSTORE store)
         }
     }
     if (filter == PurposeFilterShowAdvanced)
+#ifdef __REACTOS__
+    {
+#endif
         advanced = create_advanced_filter();
+#ifdef __REACTOS__
+        if (!advanced) return;
+    }
+#endif
     do {
         cert = CertEnumCertificatesInStore(store, cert);
         if (cert)
@@ -663,9 +681,22 @@ static void save_cert_mgr_usages(HWND hwnd)
                     str = malloc(strlen(info->pszOID) + 1);
                 else
                 {
+#ifdef __REACTOS__
+                    LPSTR new_str = realloc(str, strlen(str) + 1 + strlen(info->pszOID) + 1);
+                    if (!new_str)
+                    {
+                        free(str);
+                        return;
+                    }
+                    str = new_str;
+#else
                     str = realloc(str, strlen(str) + 1 + strlen(info->pszOID) + 1);
+#endif
                     firstString = FALSE;
                 }
+#ifdef __REACTOS__
+                if (!str) return;
+#endif
                 if (str)
                 {
                     LPSTR ptr = firstString ? str : str + strlen(str);
@@ -2259,6 +2290,13 @@ static void set_issuer_statement(HWND hwnd,
                     SetWindowLongPtrW(hwnd, DWLP_USER,
                      (ULONG_PTR)issuerStatement);
                 }
+#ifdef __REACTOS__
+                else
+                {
+                    free(cps);
+                    free(userNotice);
+                }
+#endif
             }
             LocalFree(policies);
         }
@@ -3520,12 +3558,30 @@ static void apply_general_changes(HWND hwnd)
                 if (state == CheckBitmapIndexChecked)
                 {
                     CRYPT_OID_INFO *info = (CRYPT_OID_INFO *)item.lParam;
+#ifdef __REACTOS__
+                    LPSTR *identifiers;
+#endif
 
+#ifdef __REACTOS__
+                    identifiers = realloc(usage.rgpszUsageIdentifier,
+#else
                     usage.rgpszUsageIdentifier = realloc(usage.rgpszUsageIdentifier,
+#endif
                      (usage.cUsageIdentifier + 1) * sizeof(char *));
+#ifdef __REACTOS__
+                    if (!identifiers)
+                    {
+                        free(usage.rgpszUsageIdentifier);
+                        return;
+                    }
+                    usage.rgpszUsageIdentifier = identifiers;
+                    usage.rgpszUsageIdentifier[usage.cUsageIdentifier++] =
+                     (LPSTR)info->pszOID;
+#else
                     if (usage.rgpszUsageIdentifier)
                         usage.rgpszUsageIdentifier[usage.cUsageIdentifier++] =
                          (LPSTR)info->pszOID;
+#endif
                 }
             }
         }
@@ -6950,7 +7006,11 @@ static void add_cert_to_list(HWND lv, PCCERT_CONTEXT cert, DWORD flags, DWORD *a
     WCHAR dateFmt[80]; /* sufficient for LOCALE_SSHORTDATE */
     WCHAR buf[80];
     SYSTEMTIME sysTime;
+#ifdef __REACTOS__
+    LPWSTR none = L"", usages;
+#else
     LPWSTR none, usages;
+#endif
 
     item.mask = LVIF_IMAGE | LVIF_PARAM | LVIF_TEXT;
     item.iItem = SendMessageW(lv, LVM_GETITEMCOUNT, 0, 0);
@@ -7035,7 +7095,14 @@ static void add_cert_to_list(HWND lv, PCCERT_CONTEXT cert, DWORD flags, DWORD *a
         if (*str)
         {
             if (!CertGetCertificateContextProperty(cert, CERT_FRIENDLY_NAME_PROP_ID, *str, &len))
+#ifdef __REACTOS__
+            {
+                LoadStringW(hInstance, IDS_FRIENDLY_NAME_NONE, (LPWSTR)&none, 0);
+#endif
                 item.pszText = none;
+#ifdef __REACTOS__
+            }
+#endif
             else
                 item.pszText = *str;
             if (!item.iSubItem)
@@ -7350,8 +7417,18 @@ static void free_prop_sheet_pages(PROPSHEETPAGEW *pages, DWORD num)
 static PROPSHEETPAGEW *prop_sheet_pages_AtoW(LPCPROPSHEETPAGEA pages, DWORD num)
 {
     PROPSHEETPAGEW *psp;
+#ifdef __REACTOS__
+    DWORD i;
+    SIZE_T size;
+#else
     DWORD i, size = sizeof(*psp) * num;
+#endif
 
+#ifdef __REACTOS__
+    if ((SIZE_T)num > ~(SIZE_T)0 / sizeof(*psp))
+        return NULL;
+    size = sizeof(*psp) * num;
+#endif
     psp = malloc(size);
     if (!psp)
         return NULL;
@@ -7441,7 +7518,11 @@ PCCERT_CONTEXT WINAPI CryptUIDlgSelectCertificateA(PCCRYPTUI_SELECTCERTIFICATE_S
 error:
     free(title);
     free(display_str);
+#ifdef __REACTOS__
+    if (pages)
+#else
     if (pcsc->cPropSheetPages)
+#endif
         free_prop_sheet_pages(pages, pcsc->cPropSheetPages);
     return cert;
 }
