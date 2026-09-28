@@ -11,6 +11,7 @@
 static void Test_PathIsTemporaryA(void)
 {
     CHAR szPath[MAX_PATH];
+    BOOL bCreated;
     ok_int(PathIsTemporaryA("C:\\"), FALSE);
     ok_int(PathIsTemporaryA("C:\\TestTestTest"), FALSE);
 
@@ -27,15 +28,17 @@ static void Test_PathIsTemporaryA(void)
         ok_int(PathIsTemporaryA(szPath), FALSE);
     }
 
-    CreateDirectoryA(szPath, NULL);
+    bCreated = CreateDirectoryA(szPath, NULL);
     ok_int(PathIsTemporaryA(szPath), TRUE);
 
-    RemoveDirectoryA(szPath);
+    if (bCreated)
+        RemoveDirectoryA(szPath);
 }
 
 static void Test_PathIsTemporaryW(void)
 {
     WCHAR szPath[MAX_PATH];
+    BOOL bCreated;
     ok_int(PathIsTemporaryW(L"C:\\"), FALSE);
     ok_int(PathIsTemporaryW(L"C:\\TestTestTest"), FALSE);
 
@@ -52,10 +55,11 @@ static void Test_PathIsTemporaryW(void)
         ok_int(PathIsTemporaryW(szPath), FALSE);
     }
 
-    CreateDirectoryW(szPath, NULL);
+    bCreated = CreateDirectoryW(szPath, NULL);
     ok_int(PathIsTemporaryW(szPath), TRUE);
 
-    RemoveDirectoryW(szPath);
+    if (bCreated)
+        RemoveDirectoryW(szPath);
 }
 
 START_TEST(PathIsTemporary)
