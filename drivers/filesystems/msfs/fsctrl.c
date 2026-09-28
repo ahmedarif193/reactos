@@ -30,6 +30,14 @@ MsfsFileSystemControl(PDEVICE_OBJECT DeviceObject,
     FileObject = IoStack->FileObject;
     Fcb = FileObject->FsContext;
 
+    if (!Fcb)
+    {
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
     DPRINT1("Mailslot name: %wZ\n", &Fcb->Name);
 
     switch (IoStack->Parameters.FileSystemControl.FsControlCode)

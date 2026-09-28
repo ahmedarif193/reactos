@@ -42,6 +42,14 @@ MsfsRead(PDEVICE_OBJECT DeviceObject,
     Fcb = (PMSFS_FCB)FileObject->FsContext;
     Ccb = (PMSFS_CCB)FileObject->FsContext2;
 
+    if (!Fcb)
+    {
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
     DPRINT("MailslotName: %wZ\n", &Fcb->Name);
 
     /* reading is not permitted on client side */
@@ -149,6 +157,14 @@ MsfsWrite(PDEVICE_OBJECT DeviceObject,
     FileObject = IoStack->FileObject;
     Fcb = (PMSFS_FCB)FileObject->FsContext;
     Ccb = (PMSFS_CCB)FileObject->FsContext2;
+
+    if (!Fcb)
+    {
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
 
     DPRINT("MailslotName: %wZ\n", &Fcb->Name);
 

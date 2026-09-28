@@ -90,7 +90,43 @@ MsfsQueryInformation(PDEVICE_OBJECT DeviceObject,
     Fcb = (PMSFS_FCB)FileObject->FsContext;
     Ccb = (PMSFS_CCB)FileObject->FsContext2;
 
+    if (!Fcb)
+    {
+        Status = FileInformationClass == FileNameInformation ? STATUS_INVALID_PARAMETER : STATUS_INVALID_DEVICE_REQUEST;
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
+
     DPRINT("Mailslot name: %wZ\n", &Fcb->Name);
+
+    if (FileInformationClass == FileNameInformation)
+    {
+        PFILE_NAME_INFORMATION NameInfo = Irp->AssociatedIrp.SystemBuffer;
+        ULONG Length = IoStack->Parameters.QueryFile.Length;
+        ULONG Copied;
+
+        if (Length < FIELD_OFFSET(FILE_NAME_INFORMATION, FileName))
+        {
+            Status = STATUS_INFO_LENGTH_MISMATCH;
+            Length = 0;
+        }
+        else
+        {
+            Copied = min(Fcb->Name.Length, Length - FIELD_OFFSET(FILE_NAME_INFORMATION, FileName));
+            NameInfo->FileNameLength = Fcb->Name.Length;
+            RtlCopyMemory(NameInfo->FileName, Fcb->Name.Buffer, Copied);
+            Length = FIELD_OFFSET(FILE_NAME_INFORMATION, FileName) + Copied;
+            Status = Copied < Fcb->Name.Length ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+        }
+
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = Length;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+        return Status;
+    }
 
     /* querying information is not permitted on client side */
     if (Fcb->ServerCcb != Ccb)
@@ -152,6 +188,14 @@ MsfsSetInformation(PDEVICE_OBJECT DeviceObject,
     FileObject = IoStack->FileObject;
     Fcb = (PMSFS_FCB)FileObject->FsContext;
     Ccb = (PMSFS_CCB)FileObject->FsContext2;
+
+    if (!Fcb)
+    {
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
 
     DPRINT("Mailslot name: %wZ\n", &Fcb->Name);
 
