@@ -414,7 +414,12 @@ static HRESULT WINAPI d3dx9_sprite_Flush(ID3DXSprite *iface)
     if(!This->sprite_count) return D3D_OK;
 
 /* TODO: use of a vertex buffer here */
+#ifdef __REACTOS__
+    if (!(vertices = malloc(sizeof(*vertices) * 6 * This->sprite_count)))
+        return D3DERR_INVALIDCALL;
+#else
     vertices = malloc(sizeof(*vertices) * 6 * This->sprite_count);
+#endif
 
     for(start=0;start<This->sprite_count;start+=count,count=0) {
         i=start;
@@ -479,13 +484,21 @@ static HRESULT WINAPI d3dx9_sprite_Flush(ID3DXSprite *iface)
 static HRESULT WINAPI d3dx9_sprite_End(ID3DXSprite *iface)
 {
     struct d3dx9_sprite *sprite = impl_from_ID3DXSprite(iface);
+#ifdef __REACTOS__
+    HRESULT hr;
+#endif
 
     TRACE("iface %p.\n", iface);
 
     if (!sprite->ready)
         return D3DERR_INVALIDCALL;
 
+#ifdef __REACTOS__
+    if (FAILED(hr = ID3DXSprite_Flush(iface)))
+        return hr;
+#else
     ID3DXSprite_Flush(iface);
+#endif
 
     if (sprite->stateblock && !(sprite->flags & D3DXSPRITE_DONOTSAVESTATE))
         IDirect3DStateBlock9_Apply(sprite->stateblock); /* Restore old state */
