@@ -281,7 +281,7 @@ SkipLines(VOID)
     while (NextLine(gBuf, sizeof(gBuf), gfpInput))
     {
         /* Read a single word */
-        if (sscanf(gBuf, "%s", KeyWordChars) == 1)
+        if (sscanf(gBuf, "%31s", KeyWordChars) == 1)
         {
             /* If the word is a keyword, stop skipping lines */
             KeyWord = isKeyWord(KeyWordChars);
@@ -401,7 +401,7 @@ DoDESCRIPTIONS(IN PKEYNAME* DescriptionData)
     while (NextLine(gBuf, 256, gfpInput))
     {
         /* Search for token */
-        if (sscanf(gBuf, "%s", Token) != 1) continue;
+        if (sscanf(gBuf, "%31s", Token) != 1) continue;
 
         /* Make sure it's not just a comment */
         if (*Token == ';') continue;
@@ -419,7 +419,7 @@ DoDESCRIPTIONS(IN PKEYNAME* DescriptionData)
         }
 
         /* Now get the actual description */
-        if (sscanf(gBuf, " %*4x %s[^\n]", Token) != 1)
+        if (sscanf(gBuf, " %*4x %31s[^\n]", Token) != 1)
         {
             /* Skip */
             printf("A language description is missing.\n");
@@ -476,7 +476,7 @@ DoLANGUAGENAMES(IN PKEYNAME* LanguageData)
     while (NextLine(gBuf, 256, gfpInput))
     {
         /* Search for token */
-        if (sscanf(gBuf, "%s", Token) != 1) continue;
+        if (sscanf(gBuf, "%31s", Token) != 1) continue;
 
         /* Make sure it's not just a comment */
         if (*Token == ';') continue;
@@ -494,7 +494,7 @@ DoLANGUAGENAMES(IN PKEYNAME* LanguageData)
         }
 
         /* Now get the actual language */
-        if (sscanf(gBuf, " %*4x %s[^\n]", Token) != 1)
+        if (sscanf(gBuf, " %*4x %31s[^\n]", Token) != 1)
         {
             /* Skip */
             printf("A language name is missing\n");
@@ -551,7 +551,7 @@ DoKEYNAME(IN PKEYNAME* KeyNameData)
     while (NextLine(gBuf, 256, gfpInput))
     {
         /* Search for token */
-        if (sscanf(gBuf, "%s", Token) != 1) continue;
+        if (sscanf(gBuf, "%31s", Token) != 1) continue;
 
         /* Make sure it's not just a comment */
         if (*Token == ';') continue;
@@ -569,7 +569,7 @@ DoKEYNAME(IN PKEYNAME* KeyNameData)
         }
 
         /* Now get the actual key name */
-        if (sscanf(gBuf, " %*4x %s[^\n]", Token) != 1)
+        if (sscanf(gBuf, " %*4x %31s[^\n]", Token) != 1)
         {
             /* Skip */
             printf("A key name is missing\n");
@@ -629,7 +629,7 @@ DoSHIFTSTATE(IN PULONG StateCount,
     while (NextLine(gBuf, 256, gfpInput))
     {
         /* Search for token */
-        if (sscanf(gBuf, "%s", Token) != 1) continue;
+        if (sscanf(gBuf, "%31s", Token) != 1) continue;
 
         /* Make sure it's not a keyword */
         KeyWord = isKeyWord(Token);
@@ -737,7 +737,7 @@ DoLAYOUT(IN PLAYOUT LayoutData,
     while (NextLine(gBuf, 256, gfpInput))
     {
         /* Search for token */
-        if (sscanf(gBuf, "%s", Token) != 1) continue;
+        if (sscanf(gBuf, "%31s", Token) != 1) continue;
 
         /* Make sure it's not just a comment */
         if (*Token == ';') continue;
@@ -747,7 +747,7 @@ DoLAYOUT(IN PLAYOUT LayoutData,
         if (KeyWord < KEYWORD_COUNT) break;
 
         /* Now read the entry */
-        TokenCount = sscanf(gBuf, " %x %s %s", &ScanCode, Token, Cap);
+        TokenCount = sscanf(gBuf, " %x %31s %7s", &ScanCode, Token, Cap);
         if (TokenCount == 3)
         {
             /* Full entry with cap */
@@ -845,7 +845,7 @@ DoLAYOUT(IN PLAYOUT LayoutData,
 
         /* Read the states */
         Count = sscanf(gBuf,
-                       " %*s %*s %*s %s %s %s %s %s %s %s %s",
+                       " %*s %*s %*s %7s %7s %7s %7s %7s %7s %7s %7s",
                        State[0],
                        State[1],
                        State[2],
@@ -854,6 +854,7 @@ DoLAYOUT(IN PLAYOUT LayoutData,
                        State[5],
                        State[6],
                        State[7]);
+        if (Count == (ULONG)EOF) Count = 0;
         Entry->StateCount = Count;
         DPRINT1("%d STATES: [", Count);
 
@@ -965,7 +966,7 @@ DoParsing(VOID)
 {
     ULONG KeyWords[KEYWORD_COUNT];
     ULONG KeyWord;
-    ULONG StateCount;
+    ULONG StateCount = 0;
     ULONG ShiftStates[8];
     PKEYNAME DescriptionData = NULL, LanguageData = NULL;
     PKEYNAME KeyNameData = NULL, KeyNameExtData = NULL, KeyNameDeadData = NULL;
@@ -1139,6 +1140,12 @@ DoParsing(VOID)
     fclose(gfpInput);
 
     /* Now enter the output phase */
+    if (StateCount < 2)
+    {
+        printf("At least two SHIFTSTATE entries are required.\n");
+        exit(1);
+    }
+
     return DoOutput(StateCount,
                     ShiftStates,
                     DescriptionData,
