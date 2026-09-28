@@ -1721,7 +1721,11 @@ static HRESULT find_next_drive(struct enumvariant *penum)
     int i = penum->data.u.drivecoll.cur == -1 ? 0 : penum->data.u.drivecoll.cur + 1;
 
     for (; i < 32; i++)
+#ifdef __REACTOS__
+        if (penum->data.u.drivecoll.coll->drives & (1u << i))
+#else
         if (penum->data.u.drivecoll.coll->drives & (1 << i))
+#endif
         {
             penum->data.u.drivecoll.cur = i;
             return S_OK;
@@ -4049,7 +4053,17 @@ static HRESULT WINAPI filesys_MoveFolder(IFileSystem3 *iface, BSTR src, BSTR dst
     if (!wildcard && !separator)
     {
         /* Ensure that we open a directory by appending a slash. */
+#ifdef __REACTOS__
+        WCHAR *src_copy;
+
+        if (src_len > ~(SIZE_T)0 / sizeof(WCHAR) - 2)
+            return E_OUTOFMEMORY;
+        src_copy = malloc(((SIZE_T)src_len + 2) * sizeof(WCHAR));
+        if (!src_copy)
+            return E_OUTOFMEMORY;
+#else
         WCHAR *src_copy = malloc((src_len + 2) * sizeof(WCHAR));
+#endif
 
         memcpy(src_copy, src, src_len * sizeof(WCHAR));
         wcscpy(src_copy + src_len, L"\\");
