@@ -53,7 +53,7 @@ IntCleanupMessageImpl(VOID)
 /* flag for messages that contain pointers */
 /* 32 messages per entry, messages 0..31 map to bits 0..31 */
 
-#define SET(msg) (1 << ((msg) & 31))
+#define SET(msg) (1U << ((msg) & 31))
 
 static const unsigned int message_pointer_flags[] =
 {
