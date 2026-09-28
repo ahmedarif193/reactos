@@ -404,7 +404,99 @@ MiImageSectionProtection(
     if (Characteristics & IMAGE_SCN_MEM_READ)
         return Execute ? MI_PROT_EXECUTE_READ : MI_PROT_READONLY;
 
-    return Execute ? MI_PROT_EXECUTE : MI_PROT_READONLY;
+    return Execute ? MI_PROT_EXECUTE : MI_PROT_NOACCESS;
+}
+
+static
+BOOLEAN
+MiIsImageMachine64Bit(
+    _In_ USHORT Machine)
+{
+    return (BOOLEAN)(Machine == IMAGE_FILE_MACHINE_AMD64 ||
+                     Machine == IMAGE_FILE_MACHINE_ARM64 ||
+                     Machine == IMAGE_FILE_MACHINE_ARM64EC ||
+                     Machine == IMAGE_FILE_MACHINE_RISCV64 ||
+                     Machine == IMAGE_FILE_MACHINE_IA64 ||
+                     Machine == IMAGE_FILE_MACHINE_ALPHA64);
+}
+
+static
+BOOLEAN
+MiIsImageMachine32Bit(
+    _In_ USHORT Machine)
+{
+    return (BOOLEAN)(Machine == IMAGE_FILE_MACHINE_I386 ||
+                     Machine == IMAGE_FILE_MACHINE_ARMV7 ||
+                     Machine == IMAGE_FILE_MACHINE_ARM ||
+                     Machine == IMAGE_FILE_MACHINE_THUMB);
+}
+
+static
+VOID
+MiReadImageClrFlags(
+    _In_ PMI_CONTROL_AREA Control,
+    _In_ BOOLEAN Image64,
+    _In_ PIMAGE_SECTION_HEADER SectionHeader,
+    _In_ USHORT SectionCount,
+    _In_ ULONG ClrAddress,
+    _In_ ULONG SizeOfHeaders,
+    _In_ ULONG64 FileSize,
+    _Inout_ PSECTION_IMAGE_INFORMATION Information)
+{
+    ULONG64 FileOffset = ClrAddress;
+    BOOLEAN Found = (BOOLEAN)(ClrAddress < SizeOfHeaders);
+    ULONG64 ReadOffset;
+    ULONG Transferred;
+    PUCHAR Buffer;
+    ULONG Flags;
+    USHORT i;
+
+    if (!Found)
+    {
+        for (i = 0; i < SectionCount; i++)
+        {
+            ULONG Size = max(SectionHeader[i].Misc.VirtualSize, SectionHeader[i].SizeOfRawData);
+
+            if (ClrAddress >= SectionHeader[i].VirtualAddress &&
+                ClrAddress - SectionHeader[i].VirtualAddress < Size)
+            {
+                if (ClrAddress - SectionHeader[i].VirtualAddress >= SectionHeader[i].SizeOfRawData)
+                    return;
+
+                FileOffset = (ULONG64)SectionHeader[i].PointerToRawData + (ClrAddress - SectionHeader[i].VirtualAddress);
+                Found = TRUE;
+                break;
+            }
+        }
+    }
+
+    if (!Found || FileOffset + sizeof(IMAGE_COR20_HEADER) > FileSize)
+        return;
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, 2 * 512, 'cImM');
+    if (Buffer == NULL)
+        return;
+
+    ReadOffset = FileOffset & ~511ULL;
+    RtlZeroMemory(Buffer, 2 * 512);
+    if (NT_SUCCESS(MiPagingIo(Control->FileObject, ReadOffset, 2 * 512, Buffer, FALSE, &Transferred)) &&
+        FileOffset - ReadOffset + sizeof(IMAGE_COR20_HEADER) <= Transferred)
+    {
+        IMAGE_COR20_HEADER CorHeader;
+
+        RtlCopyMemory(&CorHeader, Buffer + (FileOffset - ReadOffset), sizeof(CorHeader));
+        Flags = CorHeader.Flags;
+        if ((Flags & COMIMAGE_FLAGS_ILONLY) &&
+            (CorHeader.MajorRuntimeVersion > 2 ||
+             (CorHeader.MajorRuntimeVersion == 2 && CorHeader.MinorRuntimeVersion >= 5)))
+        {
+            Information->ComPlusILOnly = 1;
+            if (!Image64 && !(Flags & COMIMAGE_FLAGS_32BITREQUIRED))
+                Information->ComPlusNativeReady = 1;
+        }
+    }
+
+    ExFreePoolWithTag(Buffer, 'cImM');
 }
 
 static
@@ -413,6 +505,10 @@ MiBuildImageControlArea(
     _Inout_ PMI_CONTROL_AREA Control,
     _In_ ULONG64 FileSize)
 {
+    PIMAGE_DATA_DIRECTORY DataDirectory = NULL;
+    PIMAGE_DATA_DIRECTORY ClrDirectory = NULL;
+    ULONG DataDirectoryCount = 0;
+    BOOLEAN HasRelocations = FALSE;
     PSECTION_IMAGE_INFORMATION Information = &Control->ImageInformation;
     PIMAGE_SECTION_HEADER SectionHeader;
     PIMAGE_NT_HEADERS NtHeaders;
@@ -453,9 +549,31 @@ MiBuildImageControlArea(
 
     NtHeaders = (PIMAGE_NT_HEADERS)(Buffer + DosHeader->e_lfanew);
     if (NtHeaders->Signature != IMAGE_NT_SIGNATURE)
+    {
+        PIMAGE_OS2_HEADER Os2Header = (PIMAGE_OS2_HEADER)NtHeaders;
+
+        if (Os2Header->ne_magic != IMAGE_OS2_SIGNATURE)
+            Status = STATUS_INVALID_IMAGE_PROTECT;
+        else if (Os2Header->ne_exetyp == 2)
+            Status = STATUS_INVALID_IMAGE_WIN_16;
+        else if (Os2Header->ne_exetyp == 5)
+            Status = STATUS_INVALID_IMAGE_PROTECT;
+        else
+            Status = STATUS_INVALID_IMAGE_NE_FORMAT;
         goto Done;
+    }
 
     RtlZeroMemory(Information, sizeof(*Information));
+
+    if ((NtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
+         MiIsImageMachine32Bit(NtHeaders->FileHeader.Machine)) ||
+        (NtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
+         MiIsImageMachine64Bit(NtHeaders->FileHeader.Machine)) ||
+        (!MiIsImageMachine64Bit(NtHeaders->FileHeader.Machine) &&
+         !MiIsImageMachine32Bit(NtHeaders->FileHeader.Machine)))
+    {
+        goto Done;
+    }
 
     if (NtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
     {
@@ -473,12 +591,16 @@ MiBuildImageControlArea(
         Information->SubSystemMinorVersion = Optional->MinorSubsystemVersion;
         Information->SubSystemMajorVersion = Optional->MajorSubsystemVersion;
         Information->DllCharacteristics = Optional->DllCharacteristics;
-        Information->LoaderFlags = Optional->LoaderFlags;
         Information->CheckSum = Optional->CheckSum;
-        Information->TransferAddress = Optional->AddressOfEntryPoint
-                                           ? (PVOID)((ULONG_PTR)Optional->ImageBase + Optional->AddressOfEntryPoint)
-                                           : NULL;
-        Information->ImageContainsCode = (BOOLEAN)(Optional->SizeOfCode != 0 || Optional->AddressOfEntryPoint != 0);
+        Information->TransferAddress = (PVOID)((ULONG_PTR)Optional->ImageBase + Optional->AddressOfEntryPoint);
+        Information->ImageContainsCode = (BOOLEAN)(Optional->SizeOfCode != 0 || Optional->AddressOfEntryPoint != 0 ||
+                                                   (Optional->SectionAlignment & (PAGE_SIZE - 1)) != 0);
+        DataDirectory = Optional->DataDirectory;
+        if (NtHeaders->FileHeader.SizeOfOptionalHeader > FIELD_OFFSET(IMAGE_OPTIONAL_HEADER64, DataDirectory))
+            DataDirectoryCount = min(Optional->NumberOfRvaAndSizes,
+                                     (ULONG)((NtHeaders->FileHeader.SizeOfOptionalHeader -
+                                              FIELD_OFFSET(IMAGE_OPTIONAL_HEADER64, DataDirectory)) /
+                                             sizeof(IMAGE_DATA_DIRECTORY)));
     }
     else if (NtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
     {
@@ -495,14 +617,25 @@ MiBuildImageControlArea(
         Information->SubSystemMinorVersion = Optional->MinorSubsystemVersion;
         Information->SubSystemMajorVersion = Optional->MajorSubsystemVersion;
         Information->DllCharacteristics = Optional->DllCharacteristics;
-        Information->LoaderFlags = Optional->LoaderFlags;
         Information->CheckSum = Optional->CheckSum;
-        Information->TransferAddress = Optional->AddressOfEntryPoint
-                                           ? (PVOID)((ULONG_PTR)Optional->ImageBase + Optional->AddressOfEntryPoint)
-                                           : NULL;
-        Information->ImageContainsCode = (BOOLEAN)(Optional->SizeOfCode != 0 || Optional->AddressOfEntryPoint != 0);
+        Information->TransferAddress = (PVOID)((ULONG_PTR)Optional->ImageBase + Optional->AddressOfEntryPoint);
+        Information->ImageContainsCode = (BOOLEAN)(Optional->SizeOfCode != 0 || Optional->AddressOfEntryPoint != 0 ||
+                                                   (Optional->SectionAlignment & (PAGE_SIZE - 1)) != 0);
+        DataDirectory = Optional->DataDirectory;
+        if (NtHeaders->FileHeader.SizeOfOptionalHeader > FIELD_OFFSET(IMAGE_OPTIONAL_HEADER32, DataDirectory))
+            DataDirectoryCount = min(Optional->NumberOfRvaAndSizes,
+                                     (ULONG)((NtHeaders->FileHeader.SizeOfOptionalHeader -
+                                              FIELD_OFFSET(IMAGE_OPTIONAL_HEADER32, DataDirectory)) /
+                                             sizeof(IMAGE_DATA_DIRECTORY)));
     }
     else
+    {
+        goto Done;
+    }
+
+    if (NtHeaders->FileHeader.Machine == IMAGE_FILE_MACHINE_ARM64 &&
+        (Information->DllCharacteristics & (IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE | IMAGE_DLLCHARACTERISTICS_NX_COMPAT)) !=
+        (IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE | IMAGE_DLLCHARACTERISTICS_NX_COMPAT))
     {
         goto Done;
     }
@@ -525,6 +658,40 @@ MiBuildImageControlArea(
     {
         Status = STATUS_INVALID_IMAGE_PROTECT;
         goto Done;
+    }
+
+    for (i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++)
+    {
+        if (SectionHeader[i].Characteristics & IMAGE_SCN_MEM_EXECUTE)
+            Information->ImageContainsCode = TRUE;
+    }
+
+    if (DataDirectoryCount > IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR &&
+        DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].VirtualAddress &&
+        DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].Size)
+    {
+        ClrDirectory = &DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR];
+    }
+
+    if (DataDirectoryCount > IMAGE_DIRECTORY_ENTRY_BASERELOC &&
+        DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress &&
+        DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size &&
+        !(NtHeaders->FileHeader.Characteristics & IMAGE_FILE_RELOCS_STRIPPED))
+    {
+        HasRelocations = TRUE;
+    }
+
+    Information->LoaderFlags = (ClrDirectory != NULL);
+    if (ClrDirectory != NULL)
+    {
+        MiReadImageClrFlags(Control,
+                            Control->Image64,
+                            SectionHeader,
+                            NtHeaders->FileHeader.NumberOfSections,
+                            ClrDirectory->VirtualAddress,
+                            SizeOfHeaders,
+                            FileSize,
+                            Information);
     }
 
     Layout = ExAllocatePoolWithTag(NonPagedPool,
@@ -599,6 +766,14 @@ MiBuildImageControlArea(
             Entry->Protection = MiImageSectionProtection(SectionHeader[i].Characteristics);
             LayoutCount++;
         }
+    }
+
+    if (!Information->ImageMappedFlat &&
+        (Information->DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) &&
+        (HasRelocations || Information->ImageContainsCode) &&
+        ClrDirectory == NULL)
+    {
+        Information->ImageDynamicallyRelocated = 1;
     }
 
     Status = MiSegmentCreate(&MiSystem, MiSegmentImage, Control->ImageSize, MI_PROT_EXECUTE_READ, &MiControlImageOps,
@@ -694,9 +869,15 @@ MiDeleteSection(
         return;
 
     if (Section->Control->Physical)
+    {
         ExFreePoolWithTag(Section->Control, 'aCmM');
+    }
     else
+    {
+        if (!Section->Control->Image && Section->Control->FileObject != NULL)
+            MI_ATOMIC_ADD32(&Section->Control->Segment->SectionObjects, -1);
         MiDereferenceControlArea(Section->Control);
+    }
 }
 
 static
@@ -929,8 +1110,15 @@ MmCreateSection(
         if (NT_SUCCESS(Status))
             Status = MiCreateImageControlArea(File, &Control);
         if (NT_SUCCESS(Status))
+        {
             Size = (MaximumSize != NULL && MaximumSize->QuadPart != 0) ? (ULONG64)MaximumSize->QuadPart
                                                                       : Control->ImageSize;
+            if (Size > (ULONG64)ROUND_TO_PAGES(Control->ImageSize))
+            {
+                MiDereferenceControlArea(Control);
+                Status = STATUS_SECTION_TOO_BIG;
+            }
+        }
     }
     else
     {
@@ -946,7 +1134,7 @@ MmCreateSection(
         }
         else if (NT_SUCCESS(Status) && Size > (ULONG64)FileSize.QuadPart)
         {
-            if (!MI_PROT_IS_WRITABLE(Protection))
+            if (!MI_PROT_IS_WRITABLE(Protection) || ((Size - 1) >> PAGE_SHIFT) >= (1ULL << 40))
             {
                 Status = STATUS_SECTION_TOO_BIG;
             }
@@ -989,6 +1177,8 @@ MmCreateSection(
 
     RtlZeroMemory(Section, sizeof(*Section));
     Section->Control = Control;
+    if (!Control->Image && Control->FileObject != NULL)
+        MI_ATOMIC_ADD32(&Control->Segment->SectionObjects, 1);
     Section->SizeOfSection.QuadPart = (LONGLONG)Size;
     Section->InitialProtection = SectionPageProtection;
     Section->Protection = Protection;
@@ -1705,6 +1895,9 @@ NtCreateSection(
     if (SafeMaximumSize.QuadPart < 0)
         return STATUS_SECTION_TOO_BIG;
 
+    if (AllocationAttributes & SEC_FILE)
+        return STATUS_INVALID_PARAMETER_6;
+
     if (PreviousMode != KernelMode && !(AllocationAttributes & SEC_IMAGE) &&
         (SectionPageProtection & PAGE_IS_EXECUTABLE) && MiDynamicCodeBlocked(PsGetCurrentProcess()))
     {
@@ -1807,6 +2000,9 @@ NtMapViewOfSection(
     if ((AllocationType & MEM_REPLACE_PLACEHOLDER) && (AllocationType & (MEM_LARGE_PAGES | MEM_DOS_LIM | MEM_RESERVE)))
         return STATUS_INVALID_PARAMETER;
 
+    if ((AllocationType & MEM_DOS_LIM) && sizeof(ULONG_PTR) == sizeof(ULONG64))
+        return STATUS_INVALID_PARAMETER_9;
+
     if (!MiProtectionFromWin32(Protect, &Protection))
         return STATUS_INVALID_PAGE_PROTECTION;
 
@@ -1904,10 +2100,16 @@ NtMapViewOfSection(
     {
         Status = STATUS_INVALID_PARAMETER_5;
     }
+    else if (Process != PsGetCurrentProcess() && !ExAcquireRundownProtection(&Process->RundownProtect))
+    {
+        Status = STATUS_PROCESS_IS_TERMINATING;
+    }
     else
     {
         Status = MmMapViewOfSection(Section, Process, &SafeBase, ZeroBits, CommitSize, &SafeOffset, &SafeSize,
                                     InheritDisposition, AllocationType, Protect);
+        if (Process != PsGetCurrentProcess())
+            ExReleaseRundownProtection(&Process->RundownProtect);
         if (NT_SUCCESS(Status) && Section->Control->Image && !Section->Control->Image64 &&
             sizeof(ULONG_PTR) == sizeof(ULONG64) && PsGetProcessWow64Process(Process) == NULL)
         {
@@ -2175,9 +2377,17 @@ NtAreMappedFilesTheSame(
     PMI_CONTROL_AREA Second = MiReferenceControlForAddress(Space, File2MappedAsFile);
     NTSTATUS Status;
 
-    if (First == NULL || Second == NULL)
+    if (First == NULL)
     {
-        Status = (First == NULL) ? STATUS_INVALID_ADDRESS : STATUS_CONFLICTING_ADDRESSES;
+        Status = STATUS_INVALID_ADDRESS;
+    }
+    else if (Second == NULL)
+    {
+        MI_MEMORY_INFORMATION Info;
+
+        Status = MiQueryVirtualMemory(Space, (ULONG64)(ULONG_PTR)PAGE_ALIGN(File2MappedAsFile), &Info);
+        Status = (NT_SUCCESS(Status) && Info.State != MI_MEM_FREE) ? STATUS_CONFLICTING_ADDRESSES
+                                                                 : STATUS_INVALID_ADDRESS;
     }
     else if (!First->Image)
     {

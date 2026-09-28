@@ -78,6 +78,42 @@ NtSetInformationVirtualMemory(
 
     PAGED_CODE();
 
+    if ((ULONG)VmInformationClass > VmRemoveFromWorkingSetInformation)
+        return STATUS_INVALID_PARAMETER_2;
+
+    if (VmInformationClass == VmPrefetchInformation)
+    {
+        if (VmInformation == NULL)
+            return STATUS_INVALID_PARAMETER_5;
+        if (VmInformationLength != sizeof(ULONG))
+            return STATUS_INVALID_PARAMETER_6;
+        if (NumberOfEntries == 0 || NumberOfEntries > MAXULONG / sizeof(MEMORY_RANGE_ENTRY))
+            return STATUS_INVALID_PARAMETER_3;
+        if (VirtualAddresses == NULL)
+            return STATUS_ACCESS_VIOLATION;
+
+        Status = STATUS_SUCCESS;
+        _SEH2_TRY
+        {
+            if (ExGetPreviousMode() != KernelMode)
+                ProbeForRead(VirtualAddresses, NumberOfEntries * sizeof(MEMORY_RANGE_ENTRY), sizeof(PVOID));
+            for (Index = 0; Index < NumberOfEntries; Index++)
+            {
+                if (VirtualAddresses[Index].NumberOfBytes == 0)
+                {
+                    Status = STATUS_INVALID_PARAMETER_4;
+                    break;
+                }
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        return Status;
+    }
+
     if (VmInformationClass != VmPageDirtyStateInformation)
         return STATUS_SUCCESS;
     if (NumberOfEntries == 0 || NumberOfEntries > MAXULONG / sizeof(MEMORY_RANGE_ENTRY))

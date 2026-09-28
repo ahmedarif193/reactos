@@ -272,6 +272,8 @@ MiProtectLargePagesLocked(PMI_ADDRESS_SPACE Space, ULONG64 Start, ULONG64 End,
     }
     if (Vad->Segment != NULL && !MiViewProtectionAllowed(Vad->Segment, Vad->MaximumProtection, Protection))
         return STATUS_SECTION_PROTECTION;
+    if (Vad->Segment != NULL && !MiViewProtectionCompatible(Vad, Protection))
+        return STATUS_INVALID_PAGE_PROTECTION;
     for (Va = Start; Va < End; Va += Large)
     {
         PMI_PTE Slot = MiPtLookupLevel(Space, Va, Arch->LargePageLevel, NULL);

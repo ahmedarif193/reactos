@@ -1340,6 +1340,38 @@ MiViewProtectionAllowed(
     return TRUE;
 }
 
+static
+ULONG
+MiViewAccess(
+    _In_ ULONG Protection)
+{
+    ULONG Access;
+
+    if (!MI_PROT_IS_ACCESSIBLE(Protection))
+        return 0;
+
+    Access = 1;
+    if (MI_PROT_IS_WRITABLE(Protection))
+        Access |= 2;
+    if (MI_PROT_IS_EXECUTE(Protection))
+        Access |= 4;
+    return Access;
+}
+
+BOOLEAN
+MiViewProtectionCompatible(
+    _In_ PMI_VAD Vad,
+    _In_ ULONG Protection)
+{
+    ULONG Requested;
+
+    if (Vad->Type == MiVadImage)
+        return TRUE;
+
+    Requested = MiViewAccess(Protection);
+    return (MiViewAccess(Vad->Protection) & Requested) == Requested;
+}
+
 NTSTATUS
 MiSetMappedViewProtection(
     _Inout_ PMI_ADDRESS_SPACE Space,
@@ -1402,6 +1434,8 @@ MiProtectMappedView(
 {
     if (!MiViewProtectionAllowed(Vad->Segment, Vad->MaximumProtection, Protection))
         return STATUS_SECTION_PROTECTION;
+    if (!MiViewProtectionCompatible(Vad, Protection))
+        return STATUS_INVALID_PAGE_PROTECTION;
 
     return MiSetMappedViewProtection(Space, Vad, Start, End, Protection);
 }

@@ -357,7 +357,8 @@ SectionSharedDataFile(void)
         ULONG64 CommitBase = BaseA + 0x1000;
         ULONG64 CommitSize = 0x2000;
 
-        CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &CommitBase, &CommitSize, MI_MEM_COMMIT, MI_PROT_READWRITE)));
+        CHECK(MiAllocateVirtualMemory(&A, &CommitBase, &CommitSize, MI_MEM_COMMIT, MI_PROT_READWRITE) ==
+              STATUS_ALREADY_COMMITTED);
         CHECK(NT_SUCCESS(MiFlushVirtualMemory(&A, &FlushBase, &FlushSize, TRUE)));
         CHECK(FlushBase == BaseA + 0x3000 && FlushSize == 0x1000);
         CHECK(File.Writes == 1 && *(ULONG64 *)(File.Data + 0x3000) == 0xFEEDFACECAFEBEEFULL);
@@ -383,8 +384,10 @@ SectionSharedDataFile(void)
                                             &Old)));
     CHECK(Old == MI_PROT_READONLY);
     CHECK(NT_SUCCESS(UserWrite64(&World, 0, BaseA + 0x3008, 0x77)));
+    CHECK(MiProtectVirtualMemory(&B, &(ULONG64){BaseB}, &(ULONG64){0x1000}, MI_PROT_READWRITE | MI_PROT_GUARD,
+                                 &Old) == STATUS_INVALID_PAGE_PROTECTION);
     CHECK(NT_SUCCESS(MiProtectVirtualMemory(&B, &(ULONG64){BaseB}, &(ULONG64){0x1000},
-                                            MI_PROT_READWRITE | MI_PROT_GUARD, &Old)));
+                                            MI_PROT_READONLY | MI_PROT_GUARD, &Old)));
     CHECK(UserRead(&World, 1, BaseB + 5, &Byte, 1) == STATUS_GUARD_PAGE_VIOLATION);
     CHECK(NT_SUCCESS(UserRead(&World, 1, BaseB + 5, &Byte, 1)) && Byte == File.Data[5]);
 
@@ -548,6 +551,102 @@ SectionPageFileBacked(void)
 
     SpaceDestroy(&World, 0, &A);
     SpaceDestroy(&World, 1, &B);
+    WorldExpectClean(&World, 512);
+    WorldDestroy(&World);
+}
+
+static
+void
+SectionViewCommitCompatibility(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE A;
+    MI_MEMORY_INFORMATION Info;
+    PMI_SEGMENT Segment;
+    ULONG64 Base = 0;
+    ULONG64 Commit;
+    ULONG64 CommitSize;
+    ULONG64 Private;
+    ULONG64 PrivateSize;
+    ULONG Old;
+
+    WorldCreate(&World, 512, 1, 1000);
+    World.Machine.StrictTlb = TRUE;
+    WorldAttachPageFile(&World, 1024);
+    SpaceCreate(&World, 0, &A);
+
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentPageFileBacked, 4 * 4096, MI_PROT_READWRITE, NULL,
+                                     NULL, NULL, 0, &Segment)));
+    CHECK(NT_SUCCESS(Map(&A, Segment, &Base, 0, 0, MI_PROT_READONLY)));
+
+    CHECK(MiProtectVirtualMemory(&A, &(ULONG64){Base}, &(ULONG64){PAGE_SIZE}, MI_PROT_READWRITE, &Old) ==
+          STATUS_INVALID_PAGE_PROTECTION);
+    CHECK(MiProtectVirtualMemory(&A, &(ULONG64){Base}, &(ULONG64){PAGE_SIZE}, MI_PROT_EXECUTE_READ, &Old) ==
+          STATUS_SECTION_PROTECTION);
+    CHECK(NT_SUCCESS(MiProtectVirtualMemory(&A, &(ULONG64){Base}, &(ULONG64){PAGE_SIZE}, MI_PROT_WRITECOPY, &Old)));
+    CHECK(NT_SUCCESS(MiProtectVirtualMemory(&A, &(ULONG64){Base}, &(ULONG64){PAGE_SIZE}, MI_PROT_NOACCESS, &Old)));
+
+    Commit = Base + PAGE_SIZE;
+    CommitSize = PAGE_SIZE;
+    CHECK(MiAllocateVirtualMemory(&A, &Commit, &CommitSize, MI_MEM_COMMIT, MI_PROT_READWRITE) ==
+          STATUS_INVALID_PAGE_PROTECTION);
+    Commit = Base + PAGE_SIZE;
+    CommitSize = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Commit, &CommitSize, MI_MEM_COMMIT, MI_PROT_NOACCESS)));
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Base + PAGE_SIZE, &Info)));
+    CHECK(Info.Protect == MI_PROT_NOACCESS);
+    Commit = Base + PAGE_SIZE;
+    CommitSize = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Commit, &CommitSize, MI_MEM_COMMIT, MI_PROT_READONLY)));
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Base + PAGE_SIZE, &Info)));
+    CHECK(Info.Protect == MI_PROT_READONLY);
+    Commit = Base + PAGE_SIZE;
+    CommitSize = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Commit, &CommitSize, MI_MEM_COMMIT, MI_PROT_WRITECOPY)));
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Base + PAGE_SIZE, &Info)));
+    CHECK(Info.Protect == MI_PROT_WRITECOPY);
+
+    Private = 0;
+    PrivateSize = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Private, &PrivateSize, MI_MEM_RESERVE, MI_PROT_READWRITE)));
+    CHECK(MiAllocateVirtualMemory(&A, &Private, &PrivateSize, MI_MEM_COMMIT, MI_PROT_WRITECOPY) ==
+          STATUS_INVALID_PAGE_PROTECTION);
+    CHECK(MiAllocateVirtualMemory(&A, &(ULONG64){0}, &(ULONG64){PAGE_SIZE}, MI_MEM_RESERVE | MI_MEM_COMMIT,
+                                  MI_PROT_WRITECOPY) == STATUS_INVALID_PAGE_PROTECTION);
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&A, &Private, &(ULONG64){0}, MI_MEM_RELEASE)));
+
+    CHECK(NT_SUCCESS(MiUnmapView(&A, Base)));
+    MiSegmentDereference(Segment);
+
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentPageFileBacked, 4 * 4096, MI_PROT_EXECUTE_READWRITE, NULL,
+                                     NULL, NULL, 0, &Segment)));
+    Base = 0;
+    CHECK(NT_SUCCESS(Map(&A, Segment, &Base, 0, 0, MI_PROT_EXECUTE_WRITECOPY)));
+    {
+        static const ULONG Allowed[] = { MI_PROT_READONLY, MI_PROT_WRITECOPY, MI_PROT_EXECUTE, MI_PROT_EXECUTE_READ,
+                                         MI_PROT_EXECUTE_WRITECOPY };
+        static const ULONG Walk[] = { MI_PROT_NOACCESS, MI_PROT_READONLY, MI_PROT_READWRITE, MI_PROT_WRITECOPY,
+                                      MI_PROT_EXECUTE, MI_PROT_EXECUTE_READ, MI_PROT_EXECUTE_READWRITE,
+                                      MI_PROT_EXECUTE_WRITECOPY };
+        ULONG k;
+
+        for (k = 0; k < sizeof(Walk) / sizeof(Walk[0]); k++)
+            MiProtectVirtualMemory(&A, &(ULONG64){Base}, &(ULONG64){PAGE_SIZE}, Walk[k], &Old);
+
+        for (k = 0; k < sizeof(Allowed) / sizeof(Allowed[0]); k++)
+        {
+            Commit = Base;
+            CommitSize = PAGE_SIZE;
+            CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Commit, &CommitSize, MI_MEM_COMMIT, Allowed[k])));
+        }
+        Commit = Base;
+        CommitSize = PAGE_SIZE;
+        CHECK(MiAllocateVirtualMemory(&A, &Commit, &CommitSize, MI_MEM_COMMIT, MI_PROT_READWRITE) ==
+              STATUS_INVALID_PAGE_PROTECTION);
+    }
+    CHECK(NT_SUCCESS(MiUnmapView(&A, Base)));
+    MiSegmentDereference(Segment);
+    SpaceDestroy(&World, 0, &A);
     WorldExpectClean(&World, 512);
     WorldDestroy(&World);
 }
@@ -968,8 +1067,12 @@ SectionViewProtection(void)
     UserRead64(&World, 0, Base, &Status);
     CHECK(Status == STATUS_ACCESS_VIOLATION && File.Reads == 0);
     CHECK(UserWrite64(&World, 0, Base, 1) == STATUS_ACCESS_VIOLATION);
-    CHECK(NT_SUCCESS(MiProtectVirtualMemory(&Space, &Base, &Size, MI_PROT_READWRITE, &Old)));
-    CHECK(Old == MI_PROT_NOACCESS);
+    CHECK(MiProtectVirtualMemory(&Space, &(ULONG64){Base}, &(ULONG64){Size}, MI_PROT_READWRITE, &Old) ==
+          STATUS_INVALID_PAGE_PROTECTION);
+    CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
+
+    Base = 0;
+    CHECK(NT_SUCCESS(Map(&Space, Segment, &Base, 0, Size, MI_PROT_READWRITE)));
     CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base, 0xC0FFEE)));
     CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
 
@@ -1204,6 +1307,7 @@ TestSection(void)
     SectionUnmapBatch();
     SectionSharedDataFile();
     SectionPageFileBacked();
+    SectionViewCommitCompatibility();
     SectionReservedPageFile();
     SectionCopyOnWrite();
     SectionSystemSpaceView();
@@ -1251,6 +1355,7 @@ TestImage(void)
 
     CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, BaseA, &Info)));
     CHECK(Info.Type == MI_MEM_IMAGE && Info.Protect == MI_PROT_READONLY && Info.RegionSize == 0x1000);
+    CHECK(Info.AllocationProtect == MI_PROT_EXECUTE_WRITECOPY);
     CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, BaseA + 0x1000, &Info)));
     CHECK(Info.Protect == MI_PROT_EXECUTE_READ && Info.RegionSize == 0x4000);
     CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, BaseA + 0x5000, &Info)));

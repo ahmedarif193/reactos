@@ -419,6 +419,7 @@ typedef struct _MI_SEGMENT
     volatile LONG ReferenceCount;
     volatile LONG MappedViews;
     volatile LONG TruncationViews;
+    volatile LONG SectionObjects;
     volatile LONG WritableUserViews;
     ULONG ActiveWriters;
     UCHAR Kind;
@@ -495,6 +496,7 @@ NTSTATUS MiMapLargeSection(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_SEGMENT 
 NTSTATUS MiCloneLargeViewLocked(_Inout_ PMI_ADDRESS_SPACE Source, _Inout_ PMI_ADDRESS_SPACE Target,
                                 _Inout_ PMI_VAD Vad);
 BOOLEAN MiViewProtectionAllowed(_In_ PMI_SEGMENT Segment, _In_ ULONG Maximum, _In_ ULONG Protection);
+BOOLEAN MiViewProtectionCompatible(_In_ PMI_VAD Vad, _In_ ULONG Protection);
 NTSTATUS MiFlushVirtualMemory(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PULONG64 BaseAddress,
                               _Inout_ PULONG64 RegionSize, _In_ BOOLEAN AcquireFile);
 NTSTATUS MiSetRangeModified(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress, _In_ ULONG64 Length);

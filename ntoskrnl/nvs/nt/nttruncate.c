@@ -29,7 +29,8 @@ MmCanFileBeTruncated(
     if (Control == NULL)
         return TRUE;
 
-    if (MI_ATOMIC_READ32(&Control->Segment->TruncationViews) != 0)
+    if (MI_ATOMIC_READ32(&Control->Segment->TruncationViews) != 0 ||
+        MI_ATOMIC_READ32(&Control->Segment->SectionObjects) != 0)
     {
         ULONG64 NewSize = (NewFileSize != NULL) ? (ULONG64)NewFileSize->QuadPart : 0;
 

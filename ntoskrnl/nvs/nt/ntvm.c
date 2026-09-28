@@ -81,6 +81,17 @@ MiReferenceTargetProcess(
 
     if (Reference->Process != PsGetCurrentProcess())
     {
+        if (!ExAcquireRundownProtection(&Reference->Process->RundownProtect))
+        {
+            ObDereferenceObject(Reference->Process);
+            return STATUS_PROCESS_IS_TERMINATING;
+        }
+
+        Reference->RundownAcquired = TRUE;
+    }
+
+    if (Reference->Process != PsGetCurrentProcess())
+    {
         KeStackAttachProcess(&Reference->Process->Pcb, &Reference->ApcState);
         Reference->Attached = TRUE;
     }
@@ -94,6 +105,9 @@ MiReleaseTargetProcess(
 {
     if (Reference->Attached)
         KeUnstackDetachProcess(&Reference->ApcState);
+
+    if (Reference->RundownAcquired)
+        ExReleaseRundownProtection(&Reference->Process->RundownProtect);
 
     if (Reference->Referenced)
         ObDereferenceObject(Reference->Process);
@@ -335,7 +349,8 @@ MiAllocateVirtualMemoryNt(
         return STATUS_NOT_SUPPORTED;
     }
 
-    if (!MiAllocationProtectionFromWin32(Protect, &Protection) || MI_PROT_IS_COPY(Protection))
+    if (!MiAllocationProtectionFromWin32(Protect, &Protection) ||
+        (MI_PROT_IS_COPY(Protection) && (AllocationType & MEM_RESERVE)))
         return STATUS_INVALID_PAGE_PROTECTION;
 
     Status = MiCaptureRegion(UBaseAddress, URegionSize, &BaseAddress, &RegionSize);
@@ -359,12 +374,34 @@ MiAllocateVirtualMemoryNt(
     else if (Highest + 1 < PAGE_SIZE)
         return STATUS_INVALID_PARAMETER;
 
-    if (AllocationType & MEM_RESET)
-        return STATUS_SUCCESS;
-
     Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if (AllocationType & MEM_RESET)
+    {
+        MI_MEMORY_INFORMATION Info;
+        ULONG64 Va = (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress);
+        ULONG64 End = ((ULONG64)(ULONG_PTR)BaseAddress + RegionSize + PAGE_SIZE - 1) & ~((ULONG64)PAGE_SIZE - 1);
+        ULONG64 AllocationBase = 0;
+
+        Status = STATUS_SUCCESS;
+        while (Va < End)
+        {
+            Status = MiQueryVirtualMemory(MiSpaceOfProcess(Target.Process), Va, &Info);
+            if (!NT_SUCCESS(Status) || Info.State == MI_MEM_FREE ||
+                (AllocationBase != 0 && Info.AllocationBase != AllocationBase) ||
+                Info.RegionSize == 0)
+            {
+                Status = STATUS_NOT_MAPPED_VIEW;
+                break;
+            }
+            AllocationBase = Info.AllocationBase;
+            Va = Info.BaseAddress + Info.RegionSize;
+        }
+        MiReleaseTargetProcess(&Target);
+        return Status;
+    }
 
     DenyDynamicCode = (BOOLEAN)(ExGetPreviousMode() != KernelMode && MiDynamicCodeBlocked(Target.Process));
 
@@ -397,7 +434,7 @@ MiAllocateVirtualMemoryNt(
 
         Status = MiAllocateVirtualMemoryBounded(MiSpaceOfProcess(Target.Process), &Base, &Size, Type, Protection,
                                                 LowestAddress, Highest, Alignment, DenyDynamicCode);
-    } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
+    } while ((Type & MI_MEM_COMMIT) && NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
 
     if (NT_SUCCESS(Status))
     {
@@ -475,8 +512,8 @@ MiCaptureAddressRequirements(
             PMEM_ADDRESS_REQUIREMENTS Requirements;
             MEM_ADDRESS_REQUIREMENTS Captured;
 
-            if (Parameter.Reserved != 0 || Parameter.Type >= MemExtendedParameterMax ||
-                (Present & (1u << Parameter.Type)) != 0)
+            if (Parameter.Reserved != 0 || Parameter.Type == MemExtendedParameterInvalidType ||
+                Parameter.Type >= MemExtendedParameterMax || (Present & (1u << Parameter.Type)) != 0)
             {
                 _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
             }
@@ -529,12 +566,15 @@ MiCaptureAddressRequirements(
 
     if (*HighestEndingAddress != 0)
     {
-        if (((*HighestEndingAddress + 1) & (MI_ALLOCATION_GRANULARITY - 1)) != 0 ||
-            *HighestEndingAddress > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS ||
+        if (((*HighestEndingAddress + 1) & (PAGE_SIZE - 1)) != 0 ||
+            *HighestEndingAddress > (ULONG64)(ULONG_PTR)MmHighestUserAddress ||
             *HighestEndingAddress < *LowestAddress)
         {
             return STATUS_INVALID_PARAMETER;
         }
+
+        if (*HighestEndingAddress > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
+            *HighestEndingAddress = (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
     }
 
     if (*LowestAddress > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
@@ -847,6 +887,94 @@ MiQueryBasicInformation(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+MiQueryRegionInformation(
+    _In_ HANDLE ProcessHandle,
+    _In_ PVOID BaseAddress,
+    _Out_ PVOID MemoryInformation,
+    _In_ SIZE_T MemoryInformationLength,
+    _Out_opt_ PSIZE_T ReturnLength)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    MEMORY_REGION_INFORMATION Region;
+    MI_PROCESS_REFERENCE Target;
+    MI_MEMORY_INFORMATION Info;
+    PMI_ADDRESS_SPACE Space;
+    ULONG64 AllocationBase;
+    ULONG64 Query;
+    SIZE_T Length;
+    NTSTATUS Status;
+
+    if (MemoryInformationLength < FIELD_OFFSET(MEMORY_REGION_INFORMATION, CommitSize))
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    Length = min(MemoryInformationLength, sizeof(Region));
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForWrite(MemoryInformation, Length, sizeof(ULONG_PTR));
+            if (ReturnLength != NULL)
+                ProbeForWriteSize_t(ReturnLength);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_QUERY_INFORMATION, &Target);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Region, sizeof(Region));
+    Space = MiSpaceOfProcess(Target.Process);
+    Status = MiQueryVirtualMemory(Space, (ULONG64)(ULONG_PTR)BaseAddress, &Info);
+    if (NT_SUCCESS(Status) && Info.State == MI_MEM_FREE)
+        Status = STATUS_INVALID_ADDRESS;
+
+    if (NT_SUCCESS(Status))
+    {
+        AllocationBase = Info.AllocationBase;
+        Region.AllocationBase = (PVOID)(ULONG_PTR)AllocationBase;
+        Region.AllocationProtect = MiProtectionToWin32(Info.AllocationProtect);
+
+        Query = AllocationBase;
+        while (NT_SUCCESS(MiQueryVirtualMemory(Space, Query, &Info)) &&
+               Info.State != MI_MEM_FREE &&
+               Info.AllocationBase == AllocationBase &&
+               Info.RegionSize != 0)
+        {
+            Region.RegionSize += (SIZE_T)Info.RegionSize;
+            if (Info.State == MI_MEM_COMMIT)
+                Region.CommitSize += (SIZE_T)Info.RegionSize;
+            Query = Info.BaseAddress + Info.RegionSize;
+        }
+    }
+
+    MiReleaseTargetProcess(&Target);
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    _SEH2_TRY
+    {
+        RtlCopyMemory(MemoryInformation, &Region, Length);
+        if (ReturnLength != NULL)
+            *ReturnLength = sizeof(Region);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 NtQueryVirtualMemory(
@@ -871,6 +999,12 @@ NtQueryVirtualMemory(
     {
         return MiQuerySectionName(ProcessHandle, BaseAddress, MemoryInformation, MemoryInformationLength,
                                   ReturnLength);
+    }
+
+    if (MemoryInformationClass == MemoryRegionInformation)
+    {
+        return MiQueryRegionInformation(ProcessHandle, BaseAddress, MemoryInformation, MemoryInformationLength,
+                                        ReturnLength);
     }
 
     if (MemoryInformationClass != MemoryBasicInformation)
@@ -927,11 +1061,14 @@ MiCopyChunk(
     _Inout_ PVOID Bounce,
     _In_ SIZE_T Length,
     _In_ BOOLEAN FromProcess,
-    _In_ KPROCESSOR_MODE Mode)
+    _In_ KPROCESSOR_MODE Mode,
+    _Out_ PSIZE_T Copied)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     KAPC_STATE ApcState;
+    volatile SIZE_T Done = 0;
 
+    *Copied = 0;
     KeStackAttachProcess(&Process->Pcb, &ApcState);
 
     _SEH2_TRY
@@ -942,13 +1079,26 @@ MiCopyChunk(
                 ProbeForRead(ProcessAddress, Length, sizeof(CHAR));
 
             RtlCopyMemory(Bounce, ProcessAddress, Length);
+            Done = Length;
         }
         else
         {
-            if (Mode != KernelMode)
-                ProbeForWrite(ProcessAddress, Length, sizeof(CHAR));
+            if (Mode != KernelMode &&
+                ((ULONG_PTR)ProcessAddress + Length < (ULONG_PTR)ProcessAddress ||
+                 (ULONG_PTR)ProcessAddress + Length > MmUserProbeAddress))
+            {
+                ExRaiseStatus(STATUS_ACCESS_VIOLATION);
+            }
 
-            RtlCopyMemory(ProcessAddress, Bounce, Length);
+            while (Done < Length)
+            {
+                SIZE_T Piece = PAGE_SIZE - (((ULONG_PTR)ProcessAddress + Done) & (PAGE_SIZE - 1));
+
+                if (Piece > Length - Done)
+                    Piece = Length - Done;
+                RtlCopyMemory((PUCHAR)ProcessAddress + Done, (PUCHAR)Bounce + Done, Piece);
+                Done += Piece;
+            }
         }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -960,6 +1110,7 @@ MiCopyChunk(
     _SEH2_END;
 
     KeUnstackDetachProcess(&ApcState);
+    *Copied = FromProcess ? (NT_SUCCESS(Status) ? Length : 0) : Done;
     return Status;
 }
 
@@ -998,13 +1149,14 @@ MmCopyVirtualMemory(
     while (Done < BufferSize && NT_SUCCESS(Status))
     {
         SIZE_T Length = min(Chunk, BufferSize - Done);
+        SIZE_T Copied;
 
-        Status = MiCopyChunk(SourceProcess, (PUCHAR)SourceAddress + Done, Bounce, Length, TRUE, PreviousMode);
+        Status = MiCopyChunk(SourceProcess, (PUCHAR)SourceAddress + Done, Bounce, Length, TRUE, PreviousMode, &Copied);
         if (NT_SUCCESS(Status))
-            Status = MiCopyChunk(TargetProcess, (PUCHAR)TargetAddress + Done, Bounce, Length, FALSE, PreviousMode);
-
-        if (NT_SUCCESS(Status))
-            Done += Length;
+        {
+            Status = MiCopyChunk(TargetProcess, (PUCHAR)TargetAddress + Done, Bounce, Length, FALSE, PreviousMode, &Copied);
+            Done += Copied;
+        }
     }
 
     ExFreePoolWithTag(Bounce, 'wRmM');

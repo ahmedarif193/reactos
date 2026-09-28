@@ -977,6 +977,14 @@ CcmmTruncation(void)
     Pointers.ImageSectionObject = &Control;
     CHECK(!MmCanFileBeTruncated(&Pointers, &Size));
     Pointers.ImageSectionObject = NULL;
+    File.Segment->SectionObjects = 1;
+    CHECK(!MmCanFileBeTruncated(&Pointers, &Size));
+    CHECK(!MmCanFileBeTruncated(&Pointers, NULL));
+    Size.QuadPart = File.File.Size;
+    CHECK(MmCanFileBeTruncated(&Pointers, &Size));
+    Size.QuadPart = PAGE_SIZE;
+    File.Segment->SectionObjects = 0;
+    CHECK(MmCanFileBeTruncated(&Pointers, &Size));
     CHECK(NT_SUCCESS(CcDirtyFlush(&NtMap.Map, 0, File.File.Size, ~0u, NULL)));
     CHECK(CcMapUninitialize(&NtMap.Map));
     CHECK(File.Segment->MappedViews == 0 && File.Segment->TruncationViews == 0);

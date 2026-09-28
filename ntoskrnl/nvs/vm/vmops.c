@@ -682,7 +682,7 @@ MiAllocateVirtualMemoryBounded(
     NTSTATUS Status = STATUS_SUCCESS;
     LONG64 Charged = 0;
 
-    if (!MiProtectionIsValid(Protection) || MI_PROT_IS_COPY(Protection))
+    if (!MiProtectionIsValid(Protection) || (MI_PROT_IS_COPY(Protection) && (AllocationType & MI_MEM_RESERVE)))
         return STATUS_INVALID_PAGE_PROTECTION;
 
     if (DenyDynamicCode && MI_PROT_IS_EXECUTE(Protection) && (AllocationType & MI_MEM_RESERVE))
@@ -775,10 +775,23 @@ MiAllocateVirtualMemoryBounded(
 
         *BaseAddress = Start;
         *RegionSize = End - Start;
-        if (Segment == NULL || !Segment->Reserved)
+        if (Segment == NULL)
         {
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
             return STATUS_SUCCESS;
+        }
+        if (Segment->Kind != MiSegmentPageFileBacked)
+        {
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+            return STATUS_ALREADY_COMMITTED;
+        }
+        if (!Segment->Reserved)
+        {
+            Status = MiViewProtectionCompatible(Vad, Protection)
+                         ? MiSetMappedViewProtection(Space, Vad, Start, End, Protection)
+                         : STATUS_INVALID_PAGE_PROTECTION;
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+            return Status;
         }
 
         MiSegmentReference(Segment);
@@ -795,6 +808,12 @@ MiAllocateVirtualMemoryBounded(
         }
         MiSegmentDereference(Segment);
         return Status;
+    }
+
+    if (MI_PROT_IS_COPY(Protection))
+    {
+        MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        return STATUS_INVALID_PAGE_PROTECTION;
     }
 
     Charged = Vad->CommitCharge == 0 ? (LONG64)((End - Start) >> PAGE_SHIFT)
@@ -1314,7 +1333,7 @@ MiQueryVirtualMemory(
     MiPageStatus(Space, Vad, Start, TRUE, &Committed, &Protection);
     Information->BaseAddress = Start;
     Information->AllocationBase = MI_VAD_START(Vad);
-    Information->AllocationProtect = Vad->Protection;
+    Information->AllocationProtect = (Vad->Type == MiVadImage) ? MI_PROT_EXECUTE_WRITECOPY : Vad->Protection;
     Information->State = Committed ? MI_MEM_COMMIT : MI_MEM_RESERVE;
     Information->Protect = Protection;
     Information->Type = (Vad->Type == MiVadPrivate || (Vad->Type == MiVadLarge && Vad->Segment == NULL) ||

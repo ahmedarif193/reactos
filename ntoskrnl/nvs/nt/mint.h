@@ -61,6 +61,7 @@ typedef struct _MI_PROCESS_REFERENCE
     KAPC_STATE ApcState;
     BOOLEAN Referenced;
     BOOLEAN Attached;
+    BOOLEAN RundownAcquired;
 } MI_PROCESS_REFERENCE, *PMI_PROCESS_REFERENCE;
 
 NTSTATUS MiReferenceTargetProcess(_In_ HANDLE ProcessHandle, _In_ ACCESS_MASK Access,
