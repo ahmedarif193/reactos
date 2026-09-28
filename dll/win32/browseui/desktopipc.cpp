@@ -316,13 +316,13 @@ PIE_THREAD_PARAM_BLOCK ParseSharedPacket(HANDLE hData)
         if (FAILED(SHGetDesktopFolder(&psfDesktop)))
         {
             params->directoryPIDL = NULL;
-            goto cleanup0;
+            goto cleanup2;
         }
 
         if (FAILED(psfDesktop->ParseDisplayName(NULL, NULL, strPath, NULL, &params->directoryPIDL, NULL)))
         {
             params->directoryPIDL = NULL;
-            goto cleanup0;
+            goto cleanup2;
         }
     }
 
@@ -331,7 +331,7 @@ cleanup2:
     SHFreeShared(hData, pid);
 
 cleanup0:
-    if (!params->directoryPIDL)
+    if (!params || !params->directoryPIDL)
     {
         SHDestroyIETHREADPARAM(params);
         return NULL;
