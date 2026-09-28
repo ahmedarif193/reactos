@@ -243,17 +243,25 @@ BOOL ADVAPI_IsLocalComputer(LPCWSTR ServerName)
 {
     DWORD dwSize = MAX_COMPUTERNAME_LENGTH + 1;
     BOOL Result;
+#ifdef __REACTOS__
+    WCHAR buf[MAX_COMPUTERNAME_LENGTH + 1];
+#else
     LPWSTR buf;
+#endif
 
     if (!ServerName || !ServerName[0])
         return TRUE;
 
+#ifndef __REACTOS__
     buf = malloc(dwSize * sizeof(WCHAR));
+#endif
     Result = GetComputerNameW(buf,  &dwSize);
     if (Result && (ServerName[0] == '\\') && (ServerName[1] == '\\'))
         ServerName += 2;
     Result = Result && !wcscmp(ServerName, buf);
+#ifndef __REACTOS__
     free(buf);
+#endif
 
     return Result;
 }
@@ -1238,17 +1246,38 @@ static BOOL lookup_computer_account_name(PSID Sid, PDWORD cbSid, LPWSTR Referenc
 static void split_domain_account( const LSA_UNICODE_STRING *str, LSA_UNICODE_STRING *account,
                                   LSA_UNICODE_STRING *domain )
 {
+#ifdef __REACTOS__
+    USHORT count = str->Length / sizeof(WCHAR);
+#else
     WCHAR *p = str->Buffer + str->Length / sizeof(WCHAR) - 1;
+#endif
 
+#ifdef __REACTOS__
+    while (count && str->Buffer[count - 1] != '\\') count--;
+#else
     while (p > str->Buffer && *p != '\\') p--;
+#endif
 
+#ifdef __REACTOS__
+    if (count)
+#else
     if (p >= str->Buffer && *p == '\\')
+#endif
     {
         domain->Buffer = str->Buffer;
+#ifdef __REACTOS__
+        domain->Length = (count - 1) * sizeof(WCHAR);
+#else
         domain->Length = (p - str->Buffer) * sizeof(WCHAR);
+#endif
 
+#ifdef __REACTOS__
+        account->Buffer = str->Buffer + count;
+        account->Length = str->Length - count * sizeof(WCHAR);
+#else
         account->Buffer = p + 1;
         account->Length = str->Length - ((p - str->Buffer + 1) * sizeof(WCHAR));
+#endif
     }
     else
     {
