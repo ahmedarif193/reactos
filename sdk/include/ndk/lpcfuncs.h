@@ -229,8 +229,8 @@ NTSTATUS
 NTAPI
 NtRequestWaitReplyPort(
     _In_ HANDLE PortHandle,
-    _Out_ PPORT_MESSAGE LpcReply,
-    _In_ PPORT_MESSAGE LpcRequest
+    _In_ PPORT_MESSAGE LpcRequest,
+    _Out_ PPORT_MESSAGE LpcReply
 );
 
 NTSYSCALLAPI
