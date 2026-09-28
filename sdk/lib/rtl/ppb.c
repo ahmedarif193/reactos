@@ -133,7 +133,7 @@ RtlCreateProcessParameters(PRTL_USER_PROCESS_PARAMETERS *ProcessParameters,
        EnvironmentSize = (EnvEnd - Environment + 1) * sizeof(WCHAR);
    }
 
-   AllocationSize = Length + EnvironmentSize;
+   AllocationSize = ALIGN(Length + EnvironmentSize, sizeof(PVOID));
 
    /* Calculate the required block size */
    Param = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, AllocationSize);
@@ -224,7 +224,7 @@ RtlCreateProcessParameters(PRTL_USER_PROCESS_PARAMETERS *ProcessParameters,
    {
       RtlCopyMemory(Dest, Environment, EnvironmentSize);
       Param->Environment = Dest;
-      Param->EnvironmentSize = EnvironmentSize;
+      Param->EnvironmentSize = AllocationSize - ((PUCHAR)Dest - (PUCHAR)Param);
 
       /* Make sure we didn't go past the end of the buffer */
       ASSERT((PUCHAR)Dest + EnvironmentSize - (PUCHAR)Param <= AllocationSize);

@@ -2355,6 +2355,127 @@ LdrpInitializeDotLocalSupport(PRTL_USER_PROCESS_PARAMETERS ProcessParameters)
 }
 
 
+static
+VOID
+LdrpDoDebuggerBreak(VOID)
+{
+    _SEH2_TRY
+    {
+        __debugbreak();
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    _SEH2_END;
+}
+
+static
+PRTL_USER_PROCESS_PARAMETERS
+LdrpCopyProcessParameters(
+    _In_ PPEB Peb,
+    _In_ PRTL_USER_PROCESS_PARAMETERS Parameters)
+{
+    PUNICODE_STRING Strings[] =
+    {
+        &Parameters->DllPath,
+        &Parameters->ImagePathName,
+        &Parameters->CommandLine,
+        &Parameters->WindowTitle,
+        &Parameters->DesktopInfo,
+        &Parameters->ShellInfo,
+        &Parameters->RuntimeData
+    };
+    MEMORY_BASIC_INFORMATION ParametersInfo, EnvironmentInfo;
+    PRTL_USER_PROCESS_PARAMETERS NewParameters;
+    PUNICODE_STRING Target;
+    PWSTR CurrentDirectory = NULL, Environment = NULL, End;
+    SIZE_T Size = sizeof(*Parameters), EnvironmentSize = 0, FreeSize;
+    PVOID FreeBase;
+    PUCHAR Dest;
+    ULONG i;
+
+    for (i = 0; i < RTL_NUMBER_OF(Strings); i++)
+    {
+        if (Strings[i]->Buffer)
+            Size += Strings[i]->MaximumLength;
+    }
+
+    NewParameters = RtlAllocateHeap(Peb->ProcessHeap, 0, Size);
+    if (!NewParameters)
+        return NULL;
+
+    if (Parameters->CurrentDirectory.DosPath.Buffer && Parameters->CurrentDirectory.DosPath.MaximumLength)
+    {
+        CurrentDirectory = RtlAllocateHeap(Peb->ProcessHeap, 0, Parameters->CurrentDirectory.DosPath.MaximumLength);
+        if (!CurrentDirectory)
+        {
+            RtlFreeHeap(Peb->ProcessHeap, 0, NewParameters);
+            return NULL;
+        }
+    }
+
+    if (Parameters->Environment)
+    {
+        End = Parameters->Environment;
+        while (*End)
+            End += wcslen(End) + 1;
+        EnvironmentSize = (End + 1 - (PWSTR)Parameters->Environment) * sizeof(WCHAR);
+
+        Environment = RtlAllocateHeap(Peb->ProcessHeap, 0, EnvironmentSize);
+        if (!Environment)
+        {
+            if (CurrentDirectory) RtlFreeHeap(Peb->ProcessHeap, 0, CurrentDirectory);
+            RtlFreeHeap(Peb->ProcessHeap, 0, NewParameters);
+            return NULL;
+        }
+        RtlCopyMemory(Environment, Parameters->Environment, EnvironmentSize);
+    }
+
+    RtlCopyMemory(NewParameters, Parameters, sizeof(*Parameters));
+    NewParameters->MaximumLength = (ULONG)Size;
+    NewParameters->Length = (ULONG)Size;
+
+    Dest = (PUCHAR)(NewParameters + 1);
+    for (i = 0; i < RTL_NUMBER_OF(Strings); i++)
+    {
+        Target = (PUNICODE_STRING)((PUCHAR)NewParameters + ((PUCHAR)Strings[i] - (PUCHAR)Parameters));
+        if (Strings[i]->Buffer)
+        {
+            RtlCopyMemory(Dest, Strings[i]->Buffer, Strings[i]->MaximumLength);
+            Target->Buffer = (PWSTR)Dest;
+            Dest += Strings[i]->MaximumLength;
+        }
+    }
+
+    if (CurrentDirectory)
+    {
+        RtlCopyMemory(CurrentDirectory,
+                      Parameters->CurrentDirectory.DosPath.Buffer,
+                      Parameters->CurrentDirectory.DosPath.MaximumLength);
+        NewParameters->CurrentDirectory.DosPath.Buffer = CurrentDirectory;
+    }
+
+    NewParameters->Environment = Environment;
+    NewParameters->EnvironmentSize = EnvironmentSize;
+
+    if (Environment &&
+        NT_SUCCESS(NtQueryVirtualMemory(NtCurrentProcess(), Parameters, MemoryBasicInformation,
+                                        &ParametersInfo, sizeof(ParametersInfo), NULL)) &&
+        NT_SUCCESS(NtQueryVirtualMemory(NtCurrentProcess(), Parameters->Environment, MemoryBasicInformation,
+                                        &EnvironmentInfo, sizeof(EnvironmentInfo), NULL)) &&
+        (EnvironmentInfo.AllocationBase == Parameters->Environment) &&
+        (EnvironmentInfo.AllocationBase != ParametersInfo.AllocationBase) &&
+        (EnvironmentInfo.Type == MEM_PRIVATE))
+    {
+        FreeBase = Parameters->Environment;
+        FreeSize = 0;
+        NtFreeVirtualMemory(NtCurrentProcess(), &FreeBase, &FreeSize, MEM_RELEASE);
+    }
+
+    Peb->ProcessParameters = NewParameters;
+    return NewParameters;
+}
+
 NTSTATUS
 NTAPI
 LdrpInitializeProcess(IN PCONTEXT Context,
@@ -2652,6 +2773,16 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     {
         DPRINT1("Failed to create process heap\n");
         return STATUS_NO_MEMORY;
+    }
+
+    if (ProcessParameters)
+    {
+        ProcessParameters = LdrpCopyProcessParameters(Peb, ProcessParameters);
+        if (!ProcessParameters)
+            return STATUS_NO_MEMORY;
+
+        ImageFileName = ProcessParameters->ImagePathName;
+        CommandLine = ProcessParameters->CommandLine;
     }
 
     Status = RtlpInitializeLocaleTable();
@@ -3135,8 +3266,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     /* Notify the debugger now */
     if (Peb->BeingDebugged)
     {
-        /* Break */
-        DbgBreakPoint();
+        LdrpDoDebuggerBreak();
 
         /* Update show snaps again */
         ShowSnaps = Peb->NtGlobalFlag & FLG_SHOW_LDR_SNAPS;

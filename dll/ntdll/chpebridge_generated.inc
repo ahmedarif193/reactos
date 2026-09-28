@@ -4069,9 +4069,9 @@ NTSTATUS NTAPI ChpeAutoRtlDestroyAtomTable(PRTL_ATOM_TABLE a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlDestroyAtomTable), __typeof__(&RtlDestroyAtomTable)), "RtlDestroyAtomTable bridge signature mismatch");
 
-void NTAPI ChpeAutoRtlDestroyEnvironment(PWSTR a0)
+NTSTATUS NTAPI ChpeAutoRtlDestroyEnvironment(PWSTR a0)
 {
-    RtlDestroyEnvironment(a0);
+    return RtlDestroyEnvironment(a0);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlDestroyEnvironment), __typeof__(&RtlDestroyEnvironment)), "RtlDestroyEnvironment bridge signature mismatch");
 
@@ -6152,15 +6152,11 @@ NTSTATUS NTAPI ChpeAutoRtlSetCurrentDirectory_U(PUNICODE_STRING a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlSetCurrentDirectory_U), __typeof__(&RtlSetCurrentDirectory_U)), "RtlSetCurrentDirectory_U bridge signature mismatch");
 
-/* Native definition: sdk/lib/rtl/env.c */
-#ifdef RtlSetCurrentEnvironment
-#undef RtlSetCurrentEnvironment
-#endif
-VOID NTAPI RtlSetCurrentEnvironment(PCWSTR a0, PVOID a1);
-VOID NTAPI ChpeAutoRtlSetCurrentEnvironment(PCWSTR a0, PVOID a1)
+VOID NTAPI ChpeAutoRtlSetCurrentEnvironment(PWSTR a0, PWSTR *a1)
 {
     RtlSetCurrentEnvironment(a0, a1);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlSetCurrentEnvironment), __typeof__(&RtlSetCurrentEnvironment)), "RtlSetCurrentEnvironment bridge signature mismatch");
 
 ULONG_PTR NTAPI ChpeStubRtlSetCurrentTransaction(PVOID a0)
 {

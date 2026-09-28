@@ -3170,10 +3170,18 @@ RtlComputePrivatizedDllName_U(
 );
 
 NTSYSAPI
-VOID
+NTSTATUS
 NTAPI
 RtlDestroyEnvironment(
     _In_ PWSTR Environment
+);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlSetCurrentEnvironment(
+    _In_ PWSTR NewEnvironment,
+    _Out_opt_ PWSTR *OldEnvironment
 );
 
 NTSYSAPI

@@ -32,97 +32,57 @@ RtlCreateEnvironment(
     _In_ BOOLEAN Inherit,
     _Out_ PWSTR *OutEnvironment)
 {
-    MEMORY_BASIC_INFORMATION MemInfo;
-    PVOID CurrentEnvironment, NewEnvironment = NULL;
-    NTSTATUS Status = STATUS_SUCCESS;
-    SIZE_T RegionSize = PAGE_SIZE;
+    PWSTR CurrentEnvironment, End, NewEnvironment = NULL;
+    SIZE_T Size;
 
-    /* Check if we should inherit the current environment */
     if (Inherit)
     {
-        /* In this case we need to lock the PEB */
         RtlAcquirePebLock();
 
-        /* Get a pointer to the current Environment and check if it's not NULL */
         CurrentEnvironment = NtCurrentPeb()->ProcessParameters->Environment;
         if (CurrentEnvironment != NULL)
         {
-            /* Query the size of the current environment allocation */
-            Status = NtQueryVirtualMemory(NtCurrentProcess(),
-                                          CurrentEnvironment,
-                                          MemoryBasicInformation,
-                                          &MemInfo,
-                                          sizeof(MEMORY_BASIC_INFORMATION),
-                                          NULL);
-            if (!NT_SUCCESS(Status))
-            {
-                RtlReleasePebLock();
-                *OutEnvironment = NULL;
-                return Status;
-            }
+            End = CurrentEnvironment;
+            while (*End)
+                End += wcslen(End) + 1;
+            Size = (End + 1 - CurrentEnvironment) * sizeof(WCHAR);
 
-            /* Allocate a new region of the same size */
-            RegionSize = MemInfo.RegionSize;
-            Status = NtAllocateVirtualMemory(NtCurrentProcess(),
-                                             &NewEnvironment,
-                                             0,
-                                             &RegionSize,
-                                             MEM_RESERVE | MEM_COMMIT,
-                                             PAGE_READWRITE);
-            if (!NT_SUCCESS(Status))
-            {
-                RtlReleasePebLock();
-                *OutEnvironment = NULL;
-                return Status;
-            }
-
-            /* Copy the current environment */
-            RtlCopyMemory(NewEnvironment,
-                          CurrentEnvironment,
-                          MemInfo.RegionSize);
+            NewEnvironment = RtlAllocateHeap(RtlGetProcessHeap(), 0, Size);
+            if (NewEnvironment != NULL)
+                RtlCopyMemory(NewEnvironment, CurrentEnvironment, Size);
         }
 
-        /* We are done with the PEB, release the lock */
-        RtlReleasePebLock ();
+        RtlReleasePebLock();
     }
 
-    /* Check if we still need an environment */
-    if (NewEnvironment == NULL)
-    {
-        /* Allocate a new environment */
-        Status = NtAllocateVirtualMemory(NtCurrentProcess(),
-                                         &NewEnvironment,
-                                         0,
-                                         &RegionSize,
-                                         MEM_RESERVE | MEM_COMMIT,
-                                         PAGE_READWRITE);
-        if (NT_SUCCESS(Status))
-        {
-            RtlZeroMemory(NewEnvironment, RegionSize);
-        }
-    }
+    if ((NewEnvironment == NULL) && (!Inherit || !NtCurrentPeb()->ProcessParameters->Environment))
+        NewEnvironment = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, 2 * sizeof(WCHAR));
 
     *OutEnvironment = NewEnvironment;
-
-    return Status;
+    return NewEnvironment ? STATUS_SUCCESS : STATUS_NO_MEMORY;
 }
 
 
 /*
  * @implemented
  */
-VOID
+NTSTATUS
 NTAPI
 RtlDestroyEnvironment(_In_ PWSTR Environment)
 {
-    SIZE_T Size = 0;
-
-    NtFreeVirtualMemory(NtCurrentProcess(),
-                        (PVOID)&Environment,
-                        &Size,
-                        MEM_RELEASE);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Environment);
+    return STATUS_SUCCESS;
 }
 
+
+static
+SIZE_T
+RtlpEnvironmentSize(_In_opt_ PWSTR Environment)
+{
+    if (!Environment)
+        return 0;
+    return RtlSizeHeap(RtlGetProcessHeap(), 0, Environment);
+}
 
 /*
  * @implemented
@@ -139,19 +99,18 @@ RtlExpandEnvironmentStrings(
 {
     UNICODE_STRING Variable;
     UNICODE_STRING Value;
-    NTSTATUS ReturnStatus = STATUS_SUCCESS;
     NTSTATUS Status;
-    PWSTR DestBuffer;
     PCWSTR CopyBuffer;
     PCWSTR VariableEnd;
     SIZE_T CopyLength;
     SIZE_T Tail;
+    SIZE_T Position = 0;
+    SIZE_T Available;
     SIZE_T TotalLength = 1; /* for terminating NULL */
+    BOOLEAN Stopped = FALSE;
 
     DPRINT("RtlExpandEnvironmentStrings(%p, %S, %Iu, %p, %Iu, %p)\n",
            Environment, SourceBuffer, SourceLength, Destination, DestMax, Length);
-
-    DestBuffer = Destination;
 
     while (SourceLength)
     {
@@ -184,9 +143,10 @@ RtlExpandEnvironmentStrings(
                     Variable.Length = (USHORT)(VariableEnd - (SourceBuffer + 1)) * sizeof(WCHAR);
                 Variable.Buffer = (PWSTR)SourceBuffer + 1;
 
+                Available = Stopped ? 0 : DestMax - Position;
                 Value.Length = 0;
-                Value.MaximumLength = (USHORT)DestMax * sizeof(WCHAR);
-                Value.Buffer = DestBuffer;
+                Value.MaximumLength = (USHORT)min(Available, UNICODE_STRING_MAX_CHARS) * sizeof(WCHAR);
+                Value.Buffer = Destination + Position;
 
                 Status = RtlQueryEnvironmentVariable_U(Environment, &Variable,
                                                        &Value);
@@ -195,16 +155,10 @@ RtlExpandEnvironmentStrings(
                     SourceBuffer = VariableEnd + 1;
                     SourceLength = Tail - 1;
                     TotalLength += Value.Length / sizeof(WCHAR);
-                    if (Status != STATUS_BUFFER_TOO_SMALL)
-                    {
-                        DestBuffer += Value.Length / sizeof(WCHAR);
-                        DestMax -= Value.Length / sizeof(WCHAR);
-                    }
-                    else
-                    {
-                        DestMax = 0;
-                        ReturnStatus = STATUS_BUFFER_TOO_SMALL;
-                    }
+                    if (Status == STATUS_BUFFER_TOO_SMALL)
+                        Stopped = TRUE;
+                    else if (!Stopped)
+                        Position += Value.Length / sizeof(WCHAR);
                     continue;
                 }
                 else
@@ -226,37 +180,26 @@ RtlExpandEnvironmentStrings(
         }
 
         TotalLength += CopyLength;
-        if (DestMax)
+        if (!Stopped)
         {
-            if (DestMax < CopyLength)
+            Available = (DestMax > Position + 1) ? DestMax - Position - 1 : 0;
+            if (CopyLength > Available)
             {
-                CopyLength = DestMax;
-                ReturnStatus = STATUS_BUFFER_TOO_SMALL;
+                CopyLength = Available;
+                Stopped = TRUE;
             }
-            RtlCopyMemory(DestBuffer, CopyBuffer, CopyLength * sizeof(WCHAR));
-            DestMax -= CopyLength;
-            DestBuffer += CopyLength;
+            RtlCopyMemory(Destination + Position, CopyBuffer, CopyLength * sizeof(WCHAR));
+            Position += CopyLength;
         }
     }
 
-    /* NULL-terminate the buffer. */
-    if (DestMax)
-        *DestBuffer = 0;
-    else
-        ReturnStatus = STATUS_BUFFER_TOO_SMALL;
-
-    if (NT_SUCCESS(ReturnStatus))
-    {
-        ASSERT(TotalLength == (DestBuffer - Destination) + 1);
-        //ASSERT(Destination[TotalLength - 1] == UNICODE_NULL);
-    }
+    if (!Stopped && Position < DestMax)
+        Destination[Position] = UNICODE_NULL;
 
     if (Length != NULL)
         *Length = TotalLength;
 
-    DPRINT("Destination %wZ\n", Destination);
-
-    return ReturnStatus;
+    return (TotalLength > DestMax) ? STATUS_BUFFER_TOO_SMALL : STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -322,11 +265,14 @@ RtlSetCurrentEnvironment(
 
     EnvPtr = NtCurrentPeb()->ProcessParameters->Environment;
     NtCurrentPeb()->ProcessParameters->Environment = NewEnvironment;
+    NtCurrentPeb()->ProcessParameters->EnvironmentSize = RtlpEnvironmentSize(NewEnvironment);
+
+    RtlReleasePebLock();
 
     if (OldEnvironment != NULL)
         *OldEnvironment = EnvPtr;
-
-    RtlReleasePebLock();
+    else
+        RtlDestroyEnvironment(EnvPtr);
 }
 
 
@@ -340,12 +286,11 @@ RtlSetEnvironmentVariable(
     _In_ PUNICODE_STRING Name,
     _In_ PUNICODE_STRING Value)
 {
-    MEMORY_BASIC_INFORMATION mbi;
     UNICODE_STRING var;
     size_t hole_len, new_len, env_len = 0;
     WCHAR *new_env = 0, *env_end = 0, *wcs, *env, *val = 0, *tail = 0, *hole = 0;
     PWSTR head = NULL;
-    SIZE_T size = 0, new_size;
+    SIZE_T new_size;
     LONG f = 1;
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -438,44 +383,21 @@ found:
            /* enlarge environment size */
            /* check the size of available memory */
             new_size += (env_len - hole_len) * sizeof(WCHAR);
-            new_size = ROUND_UP(new_size, PAGE_SIZE);
-            mbi.RegionSize = 0;
+            if (!env)
+                new_size += sizeof(WCHAR);
             DPRINT("new_size %lu\n", new_size);
 
-            if (env)
-            {
-                Status = NtQueryVirtualMemory(NtCurrentProcess(),
-                                              env,
-                                              MemoryBasicInformation,
-                                              &mbi,
-                                              sizeof(MEMORY_BASIC_INFORMATION),
-                                              NULL);
-                if (!NT_SUCCESS(Status))
-                {
-                    if (Environment == NULL)
-                    {
-                        RtlReleasePebLock();
-                    }
-                    return(Status);
-                }
-            }
-
-            if (new_size > mbi.RegionSize)
+            if (!env || new_size > RtlSizeHeap(RtlGetProcessHeap(), 0, env))
             {
                /* reallocate memory area */
-                Status = NtAllocateVirtualMemory(NtCurrentProcess(),
-                                                 (PVOID)&new_env,
-                                                 0,
-                                                 &new_size,
-                                                 MEM_RESERVE | MEM_COMMIT,
-                                                 PAGE_READWRITE);
-                if (!NT_SUCCESS(Status))
+                new_env = RtlAllocateHeap(RtlGetProcessHeap(), 0, new_size);
+                if (new_env == NULL)
                 {
                     if (Environment == NULL)
                     {
                         RtlReleasePebLock();
                     }
-                    return(Status);
+                    return STATUS_NO_MEMORY;
                 }
 
                 if (env)
@@ -507,13 +429,7 @@ found:
                 NtCurrentPeb()->ProcessParameters->Environment = new_env;
 
             if (env)
-            {
-                size = 0;
-                NtFreeVirtualMemory(NtCurrentProcess(),
-                                    (PVOID)&env,
-                                    &size,
-                                    MEM_RELEASE);
-            }
+                RtlFreeHeap(RtlGetProcessHeap(), 0, env);
         }
 
         /* and now copy given stuff */
@@ -547,6 +463,8 @@ found:
 
     if (Environment == NULL)
     {
+        NtCurrentPeb()->ProcessParameters->EnvironmentSize =
+            RtlpEnvironmentSize(NtCurrentPeb()->ProcessParameters->Environment);
         RtlReleasePebLock();
     }
 
