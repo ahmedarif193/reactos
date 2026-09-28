@@ -569,6 +569,10 @@ static HRESULT STDMETHODCALLTYPE debugclient_DetachProcesses(IDebugClient7 *ifac
 
 static HRESULT STDMETHODCALLTYPE debugclient_EndSession(IDebugClient7 *iface, ULONG flags)
 {
+#ifdef __REACTOS__
+    if (flags == DEBUG_END_ACTIVE_DETACH)
+        return debugclient_DetachProcesses(iface);
+#endif
     FIXME("%p, %#lx stub.\n", iface, flags);
 
     return E_NOTIMPL;
