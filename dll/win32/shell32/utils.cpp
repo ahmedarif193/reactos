@@ -966,7 +966,9 @@ SHELL_ReadSingleUnreadMailCount(
     DWORD error = SHQueryValueExW(hKey, L"MessageCount", 0, &dwType, &dwCount, &cbSize);
     if (error)
         return error;
-    if (pdwCount && dwType == REG_DWORD)
+    if (dwType != REG_DWORD || cbSize != sizeof(dwCount))
+        return ERROR_INVALID_DATA;
+    if (pdwCount)
         *pdwCount = dwCount;
 
     FILETIME FileTime;
@@ -974,7 +976,9 @@ SHELL_ReadSingleUnreadMailCount(
     error = SHQueryValueExW(hKey, L"TimeStamp", 0, &dwType, &FileTime, &cbSize);
     if (error)
         return error;
-    if (pFileTime && dwType == REG_BINARY)
+    if (dwType != REG_BINARY || cbSize != sizeof(FileTime))
+        return ERROR_INVALID_DATA;
+    if (pFileTime)
         *pFileTime = FileTime;
 
     WCHAR szName[2 * MAX_PATH];
@@ -982,8 +986,13 @@ SHELL_ReadSingleUnreadMailCount(
     error = SHQueryValueExW(hKey, L"Application", 0, &dwType, szName, &cbSize);
     if (error)
         return error;
+    if (dwType != REG_SZ || cbSize < sizeof(WCHAR) || cbSize > sizeof(szName) ||
+        cbSize % sizeof(WCHAR) || szName[cbSize / sizeof(WCHAR) - 1])
+    {
+        return ERROR_INVALID_DATA;
+    }
 
-    if (pszShellExecuteCommand && dwType == REG_SZ &&
+    if (pszShellExecuteCommand &&
         FAILED(StringCchCopyW(pszShellExecuteCommand, cchShellExecuteCommand, szName)))
     {
         return ERROR_INSUFFICIENT_BUFFER;
