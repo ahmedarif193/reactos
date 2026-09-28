@@ -1049,33 +1049,82 @@ HRESULT RuntimeHost_GetIUnknownForObject(RuntimeHost *This, MonoObject *obj,
     return hr;
 }
 
+#ifdef __REACTOS__
+static BOOL get_utf8_args(int *argc, char ***argv)
+#else
 static void get_utf8_args(int *argc, char ***argv)
+#endif
 {
     WCHAR **argvw;
+#ifdef __REACTOS__
+    int size, i, len;
+#else
     int size=0, i;
+#endif
     char *current_arg;
 
+#ifdef __REACTOS__
+    *argc = 0;
+    *argv = NULL;
+#endif
     argvw = CommandLineToArgvW(GetCommandLineW(), argc);
+#ifdef __REACTOS__
+    if (!argvw) return FALSE;
+    if (*argc < 0 || (SIZE_T)*argc >= MAXLONG / sizeof(char *))
+        goto failed;
+    size = ((SIZE_T)*argc + 1) * sizeof(char *);
+#endif
 
     for (i=0; i<*argc; i++)
     {
+#ifdef __REACTOS__
+        len = WideCharToMultiByte(CP_UTF8, 0, argvw[i], -1, NULL, 0, NULL, NULL);
+        if (!len || len > MAXLONG - size) goto failed;
+        size += len;
+#else
         size += sizeof(char*);
         size += WideCharToMultiByte(CP_UTF8, 0, argvw[i], -1, NULL, 0, NULL, NULL);
+#endif
     }
+#ifndef __REACTOS__
     size += sizeof(char*);
+#endif
 
     *argv = malloc(size);
+#ifdef __REACTOS__
+    if (!*argv) goto failed;
+#endif
     current_arg = (char*)(*argv + *argc + 1);
+#ifdef __REACTOS__
+    size -= ((SIZE_T)*argc + 1) * sizeof(char *);
+#endif
 
     for (i=0; i<*argc; i++)
     {
         (*argv)[i] = current_arg;
+#ifdef __REACTOS__
+        len = WideCharToMultiByte(CP_UTF8, 0, argvw[i], -1, current_arg, size, NULL, NULL);
+        if (!len) goto failed;
+        current_arg += len;
+        size -= len;
+#else
         current_arg += WideCharToMultiByte(CP_UTF8, 0, argvw[i], -1, current_arg, size, NULL, NULL);
+#endif
     }
 
     (*argv)[*argc] = NULL;
 
     LocalFree(argvw);
+#ifdef __REACTOS__
+    return TRUE;
+
+failed:
+    free(*argv);
+    *argv = NULL;
+    *argc = 0;
+    LocalFree(argvw);
+    return FALSE;
+#endif
 }
 
 #if __i386__
@@ -1421,7 +1470,11 @@ __int32 WINAPI _CorExeMain(void)
     HRESULT hr;
     int i, number_of_private_paths = 0;
 
+#ifdef __REACTOS__
+    if (!get_utf8_args(&argc, &argv)) return -1;
+#else
     get_utf8_args(&argc, &argv);
+#endif
 
     GetModuleFileNameW(NULL, filename, MAX_PATH);
 
