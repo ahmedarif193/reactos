@@ -262,13 +262,14 @@ static const FAPO FAPO_Vtbl = {
     XAPO_GetParameters,
 };
 
-static XA2XAPOImpl *wrap_xapo(IUnknown *unk)
+static HRESULT wrap_xapo(IUnknown *unk, XA2XAPOImpl **wrapper)
 {
     XA2XAPOImpl *ret;
     IXAPO *xapo;
     IXAPOParameters *xapo_params;
     HRESULT hr;
 
+    *wrapper = NULL;
 #if XAUDIO2_VER <= 7
     hr = IUnknown_QueryInterface(unk, &IID_IXAPO27, (void**)&xapo);
 #else
@@ -276,7 +277,7 @@ static XA2XAPOImpl *wrap_xapo(IUnknown *unk)
 #endif
     if(FAILED(hr)){
         WARN("XAPO doesn't support IXAPO? %p\n", unk);
-        return NULL;
+        return hr;
     }
 
 #if XAUDIO2_VER <= 7
@@ -290,6 +291,12 @@ static XA2XAPOImpl *wrap_xapo(IUnknown *unk)
     }
 
     ret = malloc(sizeof(*ret));
+    if (!ret)
+    {
+        if (xapo_params) IXAPOParameters_Release(xapo_params);
+        IXAPO_Release(xapo);
+        return E_OUTOFMEMORY;
+    }
 
     ret->xapo = xapo;
     ret->xapo_params = xapo_params;
@@ -298,29 +305,45 @@ static XA2XAPOImpl *wrap_xapo(IUnknown *unk)
 
     TRACE("wrapped IXAPO %p with %p\n", xapo, ret);
 
-    return ret;
+    *wrapper = ret;
+    return S_OK;
 }
 
-FAudioEffectChain *wrap_effect_chain(const XAUDIO2_EFFECT_CHAIN *pEffectChain)
+HRESULT wrap_effect_chain(const XAUDIO2_EFFECT_CHAIN *pEffectChain, FAudioEffectChain **chain)
 {
     FAudioEffectChain *ret;
-    int i;
+    UINT32 i;
+    HRESULT hr;
 
+    *chain = NULL;
     if(!pEffectChain)
-        return NULL;
+        return S_OK;
 
+    if ((SIZE_T)pEffectChain->EffectCount > (~(SIZE_T)0 - sizeof(*ret)) / sizeof(FAudioEffectDescriptor))
+        return E_OUTOFMEMORY;
     ret = malloc(sizeof(*ret) + sizeof(FAudioEffectDescriptor) * pEffectChain->EffectCount);
+    if (!ret) return E_OUTOFMEMORY;
 
     ret->EffectCount = pEffectChain->EffectCount;
     ret->pEffectDescriptors = (void*)(ret + 1);
 
     for(i = 0; i < ret->EffectCount; ++i){
-        ret->pEffectDescriptors[i].pEffect = &wrap_xapo(pEffectChain->pEffectDescriptors[i].pEffect)->FAPO_vtbl;
+        XA2XAPOImpl *wrapper;
+
+        hr = wrap_xapo(pEffectChain->pEffectDescriptors[i].pEffect, &wrapper);
+        if (FAILED(hr))
+        {
+            while (i) XAPO_Release(ret->pEffectDescriptors[--i].pEffect);
+            free(ret);
+            return hr;
+        }
+        ret->pEffectDescriptors[i].pEffect = &wrapper->FAPO_vtbl;
         ret->pEffectDescriptors[i].InitialState = pEffectChain->pEffectDescriptors[i].InitialState;
         ret->pEffectDescriptors[i].OutputChannels = pEffectChain->pEffectDescriptors[i].OutputChannels;
     }
 
-    return ret;
+    *chain = ret;
+    return S_OK;
 }
 
 static void free_effect_chain(FAudioEffectChain *chain)
@@ -331,6 +354,23 @@ static void free_effect_chain(FAudioEffectChain *chain)
     for(i = 0; i < chain->EffectCount; ++i)
         XAPO_Release(chain->pEffectDescriptors[i].pEffect);
     free(chain);
+}
+
+static HRESULT set_effect_chain(XA2VoiceImpl *voice, const XAUDIO2_EFFECT_CHAIN *effects)
+{
+    FAudioEffectChain *chain;
+    HRESULT hr;
+
+    if (FAILED(hr = wrap_effect_chain(effects, &chain))) return hr;
+    hr = FAudioVoice_SetEffectChain(voice->faudio_voice, chain);
+    if (FAILED(hr))
+        free_effect_chain(chain);
+    else
+    {
+        free_effect_chain(voice->effect_chain);
+        voice->effect_chain = chain;
+    }
+    return hr;
 }
 
 /* Send Wrapping */
@@ -344,7 +384,10 @@ static FAudioVoiceSends *wrap_voice_sends(const XAUDIO2_VOICE_SENDS *sends)
         return NULL;
 
 #if XAUDIO2_VER <= 3
+    if ((SIZE_T)sends->OutputCount > (~(SIZE_T)0 - sizeof(*ret)) / sizeof(FAudioSendDescriptor))
+        return NULL;
     ret = malloc(sizeof(*ret) + sends->OutputCount * sizeof(FAudioSendDescriptor));
+    if (!ret) return NULL;
     ret->SendCount = sends->OutputCount;
     ret->pSends = (FAudioSendDescriptor*)(ret + 1);
     for(i = 0; i < sends->OutputCount; ++i){
@@ -353,7 +396,10 @@ static FAudioVoiceSends *wrap_voice_sends(const XAUDIO2_VOICE_SENDS *sends)
         ret->pSends[i].Flags = 0;
     }
 #else
+    if ((SIZE_T)sends->SendCount > (~(SIZE_T)0 - sizeof(*ret)) / sizeof(FAudioSendDescriptor))
+        return NULL;
     ret = malloc(sizeof(*ret) + sends->SendCount * sizeof(FAudioSendDescriptor));
+    if (!ret) return NULL;
     ret->SendCount = sends->SendCount;
     ret->pSends = (FAudioSendDescriptor*)(ret + 1);
     for(i = 0; i < sends->SendCount; ++i){
@@ -548,6 +594,7 @@ static HRESULT WINAPI XA2SRC_SetOutputVoices(IXAudio2SourceVoice *iface,
     TRACE("%p, %p\n", This, pSendList);
 
     faudio_sends = wrap_voice_sends(pSendList);
+    if (pSendList && !faudio_sends) return E_OUTOFMEMORY;
 
     hr = FAudioVoice_SetOutputVoices(This->faudio_voice, faudio_sends);
 
@@ -560,16 +607,10 @@ static HRESULT WINAPI XA2SRC_SetEffectChain(IXAudio2SourceVoice *iface,
         const XAUDIO2_EFFECT_CHAIN *pEffectChain)
 {
     XA2VoiceImpl *This = impl_from_IXAudio2SourceVoice(iface);
-    HRESULT hr;
 
     TRACE("%p, %p\n", This, pEffectChain);
 
-    free_effect_chain(This->effect_chain);
-    This->effect_chain = wrap_effect_chain(pEffectChain);
-
-    hr = FAudioVoice_SetEffectChain(This->faudio_voice, This->effect_chain);
-
-    return hr;
+    return set_effect_chain(This, pEffectChain);
 }
 
 static HRESULT WINAPI XA2SRC_EnableEffect(IXAudio2SourceVoice *iface, UINT32 EffectIndex,
@@ -910,6 +951,7 @@ static HRESULT WINAPI XA2SUB_SetOutputVoices(IXAudio2SubmixVoice *iface,
     TRACE("%p, %p\n", This, pSendList);
 
     faudio_sends = wrap_voice_sends(pSendList);
+    if (pSendList && !faudio_sends) return E_OUTOFMEMORY;
 
     hr = FAudioVoice_SetOutputVoices(This->faudio_voice, faudio_sends);
 
@@ -922,16 +964,10 @@ static HRESULT WINAPI XA2SUB_SetEffectChain(IXAudio2SubmixVoice *iface,
         const XAUDIO2_EFFECT_CHAIN *pEffectChain)
 {
     XA2VoiceImpl *This = impl_from_IXAudio2SubmixVoice(iface);
-    HRESULT hr;
 
     TRACE("%p, %p\n", This, pEffectChain);
 
-    free_effect_chain(This->effect_chain);
-    This->effect_chain = wrap_effect_chain(pEffectChain);
-
-    hr = FAudioVoice_SetEffectChain(This->faudio_voice, This->effect_chain);
-
-    return hr;
+    return set_effect_chain(This, pEffectChain);
 }
 
 static HRESULT WINAPI XA2SUB_EnableEffect(IXAudio2SubmixVoice *iface, UINT32 EffectIndex,
@@ -1155,6 +1191,7 @@ static HRESULT WINAPI XA2M_SetOutputVoices(IXAudio2MasteringVoice *iface,
     TRACE("%p, %p\n", This, pSendList);
 
     faudio_sends = wrap_voice_sends(pSendList);
+    if (pSendList && !faudio_sends) return E_OUTOFMEMORY;
 
     hr = FAudioVoice_SetOutputVoices(This->faudio_voice, faudio_sends);
 
@@ -1167,16 +1204,10 @@ static HRESULT WINAPI XA2M_SetEffectChain(IXAudio2MasteringVoice *iface,
         const XAUDIO2_EFFECT_CHAIN *pEffectChain)
 {
     XA2VoiceImpl *This = impl_from_IXAudio2MasteringVoice(iface);
-    HRESULT hr;
 
     TRACE("%p, %p\n", This, pEffectChain);
 
-    free_effect_chain(This->effect_chain);
-    This->effect_chain = wrap_effect_chain(pEffectChain);
-
-    hr = FAudioVoice_SetEffectChain(This->faudio_voice, This->effect_chain);
-
-    return hr;
+    return set_effect_chain(This, pEffectChain);
 }
 
 static HRESULT WINAPI XA2M_EnableEffect(IXAudio2MasteringVoice *iface, UINT32 EffectIndex,
@@ -1602,13 +1633,30 @@ static HRESULT WINAPI IXAudio2Impl_CreateSourceVoice(IXAudio2 *iface,
 
     if(&src->entry == &This->voices){
         src = create_voice(This);
+        if (!src)
+        {
+            LeaveCriticalSection(&This->lock);
+            return E_OUTOFMEMORY;
+        }
         EnterCriticalSection(&src->lock);
     }
 
     LeaveCriticalSection(&This->lock);
 
-    src->effect_chain = wrap_effect_chain(pEffectChain);
+    hr = wrap_effect_chain(pEffectChain, &src->effect_chain);
+    if (FAILED(hr))
+    {
+        LeaveCriticalSection(&src->lock);
+        return hr;
+    }
     faudio_sends = wrap_voice_sends(pSendList);
+    if (pSendList && !faudio_sends)
+    {
+        free_effect_chain(src->effect_chain);
+        src->effect_chain = NULL;
+        LeaveCriticalSection(&src->lock);
+        return E_OUTOFMEMORY;
+    }
 
     hr = FAudio_CreateSourceVoice(This->faudio, &src->faudio_voice,
             (FAudioWaveFormatEx*)pSourceFormat, flags, maxFrequencyRatio,
@@ -1616,7 +1664,9 @@ static HRESULT WINAPI IXAudio2Impl_CreateSourceVoice(IXAudio2 *iface,
             src->effect_chain);
     free_voice_sends(faudio_sends);
     if(FAILED(hr)){
-        LeaveCriticalSection(&This->lock);
+        free_effect_chain(src->effect_chain);
+        src->effect_chain = NULL;
+        LeaveCriticalSection(&src->lock);
         return hr;
     }
     src->in_use = TRUE;
@@ -1657,19 +1707,38 @@ static HRESULT WINAPI IXAudio2Impl_CreateSubmixVoice(IXAudio2 *iface,
 
     if(&sub->entry == &This->voices){
         sub = create_voice(This);
+        if (!sub)
+        {
+            LeaveCriticalSection(&This->lock);
+            return E_OUTOFMEMORY;
+        }
         EnterCriticalSection(&sub->lock);
     }
 
     LeaveCriticalSection(&This->lock);
 
-    sub->effect_chain = wrap_effect_chain(pEffectChain);
+    hr = wrap_effect_chain(pEffectChain, &sub->effect_chain);
+    if (FAILED(hr))
+    {
+        LeaveCriticalSection(&sub->lock);
+        return hr;
+    }
     faudio_sends = wrap_voice_sends(pSendList);
+    if (pSendList && !faudio_sends)
+    {
+        free_effect_chain(sub->effect_chain);
+        sub->effect_chain = NULL;
+        LeaveCriticalSection(&sub->lock);
+        return E_OUTOFMEMORY;
+    }
 
     hr = FAudio_CreateSubmixVoice(This->faudio, &sub->faudio_voice, inputChannels,
             inputSampleRate, flags, processingStage, faudio_sends,
             sub->effect_chain);
     free_voice_sends(faudio_sends);
     if(FAILED(hr)){
+        free_effect_chain(sub->effect_chain);
+        sub->effect_chain = NULL;
         LeaveCriticalSection(&sub->lock);
         return hr;
     }
@@ -1699,6 +1768,7 @@ static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
         )
 {
     IXAudio2Impl *This = impl_from_IXAudio2(iface);
+    HRESULT hr;
 
     TRACE("(%p)->(%p, %u, %u, 0x%x, %p)\n", This,
             ppMasteringVoice, inputChannels, inputSampleRate, flags, pEffectChain);
@@ -1717,20 +1787,33 @@ static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
 
     LeaveCriticalSection(&This->lock);
 
-    This->mst.effect_chain = wrap_effect_chain(pEffectChain);
+    hr = wrap_effect_chain(pEffectChain, &This->mst.effect_chain);
+    if (FAILED(hr))
+    {
+        LeaveCriticalSection(&This->mst.lock);
+        return hr;
+    }
 
 #if XAUDIO2_VER >= 8
     TRACE("device id %s, category %#x\n", debugstr_w(deviceId), streamCategory);
 
-    FAudio_CreateMasteringVoice8(This->faudio, &This->mst.faudio_voice, inputChannels,
+    hr = FAudio_CreateMasteringVoice8(This->faudio, &This->mst.faudio_voice, inputChannels,
             inputSampleRate, flags, NULL /* TODO: (uint16_t*)deviceId */,
             This->mst.effect_chain, (FAudioStreamCategory)streamCategory);
 #else
     TRACE("device index %u\n", index);
 
-    FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
+    hr = FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
             inputSampleRate, flags, index, This->mst.effect_chain);
 #endif
+
+    if (FAILED(hr))
+    {
+        free_effect_chain(This->mst.effect_chain);
+        This->mst.effect_chain = NULL;
+        LeaveCriticalSection(&This->mst.lock);
+        return hr;
+    }
 
     This->mst.in_use = TRUE;
 
@@ -1953,6 +2036,8 @@ static inline HRESULT make_xaudio2_factory(REFIID riid, void **ppv)
 {
     HRESULT hr;
     struct xaudio2_cf *ret = malloc(sizeof(struct xaudio2_cf));
+    *ppv = NULL;
+    if (!ret) return E_OUTOFMEMORY;
     ret->IClassFactory_iface.lpVtbl = &XAudio2CF_Vtbl;
     ret->ref = 0;
     hr = IClassFactory_QueryInterface(&ret->IClassFactory_iface, riid, ppv);

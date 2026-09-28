@@ -105,7 +105,7 @@ typedef struct _IXAudio2Impl {
 
 /* xaudio_dll.c */
 extern HRESULT xaudio2_initialize(IXAudio2Impl *This, UINT32 flags, XAUDIO2_PROCESSOR proc);
-extern FAudioEffectChain *wrap_effect_chain(const XAUDIO2_EFFECT_CHAIN *pEffectChain);
+extern HRESULT wrap_effect_chain(const XAUDIO2_EFFECT_CHAIN *pEffectChain, FAudioEffectChain **chain);
 extern void engine_cb(FAudioEngineCallEXT proc, FAudio *faudio, float *stream, void *user);
 extern DWORD WINAPI engine_thread(void *user);
 
