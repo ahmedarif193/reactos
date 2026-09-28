@@ -455,6 +455,9 @@ static LRESULT MCIWND_KeyDown(MCIWndInfo *mwi, UINT key)
 
 static LRESULT WINAPI MCIWndProc(HWND hWnd, UINT wMsg, WPARAM wParam, LPARAM lParam)
 {
+#ifdef __REACTOS__
+    UNICODE_STRING stringW = {0};
+#endif
     MCIWndInfo *mwi;
 
     TRACE("%p %04x %08Ix %08Ix\n", hWnd, wMsg, wParam, lParam);
@@ -1007,17 +1010,32 @@ end_of_mci_open:
 
     case MCIWNDM_SENDSTRINGA:
         {
+#ifndef __REACTOS__
             UNICODE_STRING stringW;
 
+#endif
             TRACE("MCIWNDM_SENDSTRINGA %s\n", debugstr_a((LPCSTR)lParam));
 
+#ifdef __REACTOS__
+            if (!RtlCreateUnicodeStringFromAsciiz(&stringW, (LPCSTR)lParam))
+            {
+                mwi->lasterror = MCIERR_OUT_OF_MEMORY;
+                MCIWND_notify_error(mwi);
+                return MCIERR_OUT_OF_MEMORY;
+            }
+#else
             RtlCreateUnicodeStringFromAsciiz(&stringW, (LPCSTR)lParam);
+#endif
             lParam = (LPARAM)stringW.Buffer;
         }
         /* fall through */
     case MCIWNDM_SENDSTRINGW:
         {
+#ifdef __REACTOS__
+            WCHAR *cmdW = (LPWSTR)lParam, *p;
+#else
             WCHAR *cmdW, *p;
+#endif
 
             TRACE("MCIWNDM_SENDSTRINGW %s\n", debugstr_w((LPCWSTR)lParam));
 
@@ -1025,12 +1043,34 @@ end_of_mci_open:
             if (p)
             {
                 static const WCHAR formatW[] = {'%','d',' ',0};
+#ifdef __REACTOS__
+                SIZE_T len, pos;
+#else
                 int len, pos;
+#endif
 
                 pos = p - (WCHAR *)lParam + 1;
+#ifdef __REACTOS__
+                len = (SIZE_T)lstrlenW((LPCWSTR)lParam) + 64;
+#else
                 len = lstrlenW((LPCWSTR)lParam) + 64;
+#endif
 
+#ifdef __REACTOS__
+                if (len > ~(SIZE_T)0 / sizeof(WCHAR))
+                {
+                    mwi->lasterror = MCIERR_OUT_OF_MEMORY;
+                    goto sendstring_done;
+                }
+#endif
                 cmdW = malloc(len * sizeof(WCHAR));
+#ifdef __REACTOS__
+                if (!cmdW)
+                {
+                    mwi->lasterror = MCIERR_OUT_OF_MEMORY;
+                    goto sendstring_done;
+                }
+#endif
 
                 memcpy(cmdW, (void *)lParam, pos * sizeof(WCHAR));
                 wsprintfW(cmdW + pos, formatW, mwi->alias);
@@ -1041,6 +1081,9 @@ end_of_mci_open:
 
             mwi->lasterror = mciSendStringW(cmdW, mwi->return_string,
                                             ARRAY_SIZE(mwi->return_string), 0);
+#ifdef __REACTOS__
+sendstring_done:
+#endif
             if (mwi->lasterror)
                 MCIWND_notify_error(mwi);
 
@@ -1048,7 +1091,11 @@ end_of_mci_open:
                 free(cmdW);
 
             if (wMsg == MCIWNDM_SENDSTRINGA)
+#ifdef __REACTOS__
+                RtlFreeUnicodeString(&stringW);
+#else
                 free((void *)lParam);
+#endif
 
             MCIWND_UpdateState(mwi);
             return mwi->lasterror;
