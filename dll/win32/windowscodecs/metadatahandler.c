@@ -143,7 +143,11 @@ static HRESULT WINAPI MetadataHandler_GetMetadataHandlerInfo(IWICMetadataWriter 
 
     TRACE("%p,%p\n", iface, ppIHandler);
 
+#ifdef __REACTOS__
+    hr = GetCachedComponentInfo(This->vtable->clsid, &component_info);
+#else
     hr = CreateComponentInfo(This->vtable->clsid, &component_info);
+#endif
     if (FAILED(hr)) return hr;
 
     hr = IWICComponentInfo_QueryInterface(component_info, &IID_IWICMetadataHandlerInfo,
@@ -163,7 +167,19 @@ static HRESULT WINAPI MetadataHandler_GetMetadataFormat(IWICMetadataWriter *ifac
 
     if (!pguidMetadataFormat) return E_INVALIDARG;
 
+#ifdef __REACTOS__
+    {
+        IWICComponentInfo *component_info;
+        MetadataHandler *This = impl_from_IWICMetadataWriter(iface);
+
+        hr = CreateComponentInfo(This->vtable->clsid, &component_info);
+        if (FAILED(hr)) return hr;
+        hr = IWICComponentInfo_QueryInterface(component_info, &IID_IWICMetadataHandlerInfo, (void **)&metadata_info);
+        IWICComponentInfo_Release(component_info);
+    }
+#else
     hr = MetadataHandler_GetMetadataHandlerInfo(iface, &metadata_info);
+#endif
     if (FAILED(hr)) return hr;
 
     hr = IWICMetadataHandlerInfo_GetMetadataFormat(metadata_info, pguidMetadataFormat);

@@ -182,6 +182,9 @@ extern HRESULT CreatePropertyBag2(const PROPBAG2 *options, UINT count,
                                   IPropertyBag2 **property);
 
 extern HRESULT CreateComponentInfo(REFCLSID clsid, IWICComponentInfo **ppIInfo);
+#ifdef __REACTOS__
+extern HRESULT GetCachedComponentInfo(REFCLSID clsid, IWICComponentInfo **ppIInfo);
+#endif
 extern void ReleaseComponentInfos(void);
 extern HRESULT CreateComponentEnumerator(DWORD componentTypes, DWORD options, IEnumUnknown **ppIEnumUnknown);
 extern HRESULT get_decoder_info(REFCLSID clsid, IWICBitmapDecoderInfo **info);

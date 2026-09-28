@@ -2339,6 +2339,26 @@ HRESULT CreateComponentInfo(REFCLSID clsid, IWICComponentInfo **ppIInfo)
     return hr;
 }
 
+#ifdef __REACTOS__
+HRESULT GetCachedComponentInfo(REFCLSID clsid, IWICComponentInfo **ppIInfo)
+{
+    struct wine_rb_entry *cache_entry;
+    ComponentInfo *info;
+    HRESULT hr = WINCODEC_ERR_COMPONENTNOTFOUND;
+
+    EnterCriticalSection(&component_info_cache_cs);
+    cache_entry = wine_rb_get(&component_info_cache, clsid);
+    if (cache_entry)
+    {
+        info = WINE_RB_ENTRY_VALUE(cache_entry, ComponentInfo, entry);
+        IWICComponentInfo_AddRef(*ppIInfo = &info->IWICComponentInfo_iface);
+        hr = S_OK;
+    }
+    LeaveCriticalSection(&component_info_cache_cs);
+    return hr;
+}
+
+#endif
 void ReleaseComponentInfos(void)
 {
     ComponentInfo *info, *next_info;
