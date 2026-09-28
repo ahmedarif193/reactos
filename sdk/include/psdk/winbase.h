@@ -1935,6 +1935,8 @@ DWORD WINAPI FormatMessageA(DWORD dwFlags, LPCVOID lpSource, DWORD dwMessageId, 
 DWORD WINAPI FormatMessageW(DWORD dwFlags, LPCVOID lpSource, DWORD dwMessageId, DWORD dwLanguageId, LPWSTR lpBuffer, DWORD nSize, va_list* Arguments);
 BOOL WINAPI FreeEnvironmentStringsA(LPSTR);
 BOOL WINAPI FreeEnvironmentStringsW(LPWSTR);
+BOOL WINAPI SetEnvironmentStringsA(LPCH);
+BOOL WINAPI SetEnvironmentStringsW(LPWCH);
 BOOL WINAPI FreeLibrary(HMODULE);
 DECLSPEC_NORETURN void WINAPI FreeLibraryAndExitThread(HMODULE,DWORD);
 #define FreeModule(m) FreeLibrary(m)
