@@ -8365,7 +8365,7 @@ RxTableLookupName(
     else
     {
         /* Otherwise, that's the whole name */
-        RemainingName = Name;
+        *RemainingName = *Name;
     }
 
     return Container;
