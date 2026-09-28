@@ -53,6 +53,7 @@ typedef struct _SOCKET_CONTEXT {
     BOOL DontRoute;
     ULONG MulticastInterface;
     ULONG MulticastTTL;
+    BOOL V6Only;
 } SOCKET_CONTEXT, *PSOCKET_CONTEXT;
 
 INT

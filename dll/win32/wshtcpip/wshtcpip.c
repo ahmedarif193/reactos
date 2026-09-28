@@ -257,6 +257,16 @@ WSHGetSocketInformation(
         *OptionLength = sizeof(ULONG);
         return NO_ERROR;
     }
+    if (Level == IPPROTO_IPV6 && OptionName == IPV6_V6ONLY)
+    {
+        if (!OptionLength || !OptionValue || *OptionLength < sizeof(DWORD))
+            return WSAEFAULT;
+        *(DWORD *)OptionValue = Context->V6Only ? 1 : 0;
+        *OptionLength = sizeof(DWORD);
+        return NO_ERROR;
+    }
+    if (Level != SOL_SOCKET)
+        return WSAENOPROTOOPT;
     UNIMPLEMENTED;
 
     DPRINT1("Get: Unknown level/option name: %d %d\n", Level, OptionName);
@@ -730,6 +740,7 @@ WSHOpenSocket2(
     Context->Flags         = Flags;
     Context->SocketState   = SocketStateCreated;
     Context->MulticastTTL  = 1;
+    Context->V6Only        = TRUE;
 
     *HelperDllSocketContext = Context;
     *NotificationEvents = WSH_NOTIFY_CLOSE | WSH_NOTIFY_BIND;
@@ -872,6 +883,16 @@ WSHSetSocketInformation(
                     return 0;
             }
             break;
+
+        case IPPROTO_IPV6:
+            if (OptionName != IPV6_V6ONLY)
+                return 0;
+            if (!OptionValue || OptionLength < sizeof(DWORD))
+                return WSAEFAULT;
+            if (Context->SocketState != SocketStateCreated)
+                return WSAEINVAL;
+            Context->V6Only = *(DWORD *)OptionValue != 0;
+            return 0;
 
         default:
             DPRINT1("Set: Received unexpected %d option %d\n", Level, OptionName);

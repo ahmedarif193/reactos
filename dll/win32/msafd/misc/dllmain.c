@@ -3082,8 +3082,7 @@ WSPGetSockOpt(IN SOCKET Handle,
             return 0;
 
         default:
-            if (lpErrno) *lpErrno = WSAEINVAL;
-            return SOCKET_ERROR;
+            break;
     }
 
 SendToHelper:
