@@ -77,6 +77,10 @@ static const SHPOLICY_ITEM g_PolicyItems[] =
 class CPolicyCache
 {
 public:
+    CPolicyCache() : m_hGlobalCounter(NULL), m_pResults(NULL)
+    {
+    }
+
     ~CPolicyCache()
     {
         LocalFree(m_pResults);

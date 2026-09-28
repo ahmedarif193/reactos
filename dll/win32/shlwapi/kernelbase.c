@@ -422,6 +422,10 @@ LONG WINAPI SHRegOpenUSKeyW(LPCWSTR Path, REGSAM AccessType, HUSKEY hRelativeUSK
 
     /* Create internal HUSKEY */
     hKey = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*hKey));
+#ifdef __REACTOS__
+    if (!hKey)
+        return ERROR_NOT_ENOUGH_MEMORY;
+#endif
     lstrcpynW(hKey->lpszPath, Path, sizeof(hKey->lpszPath)/sizeof(WCHAR));
 
     if (hRelativeUSKey)
@@ -1020,14 +1024,23 @@ BOOL WINAPI SHRegGetBoolUSValueA(
 	    /* process returned data via type into bool */
 	    switch (type) {
 	    case REG_SZ:
+#ifdef __REACTOS__
+		data[datalen] = '\0';     /* set end of string */
+#else
 		data[9] = '\0';     /* set end of string */
+#endif
 		if (lstrcmpiA(data, "YES") == 0) ret = TRUE;
 		if (lstrcmpiA(data, "TRUE") == 0) ret = TRUE;
 		if (lstrcmpiA(data, "NO") == 0) ret = FALSE;
 		if (lstrcmpiA(data, "FALSE") == 0) ret = FALSE;
 		break;
 	    case REG_DWORD:
+#ifdef __REACTOS__
+		if (datalen != sizeof(work)) break;
+		memcpy(&work, data, sizeof(work));
+#else
 		work = *(LPDWORD)data;
+#endif
 		ret = (work != 0);
 		break;
 	    case REG_BINARY:
@@ -1073,21 +1086,35 @@ BOOL WINAPI SHRegGetBoolUSValueW(
 	      debugstr_w(pszSubKey), debugstr_w(pszValue),
 	      (fIgnoreHKCU) ? "Ignoring HKCU" : "Tries HKCU then HKLM");
 
+#ifdef __REACTOS__
+	datalen = (ARRAY_SIZE(data)-1) * sizeof(WCHAR);
+#else
 	datalen = (sizeof(data)-1) * sizeof(WCHAR);
+#endif
 	if (!SHRegGetUSValueW( pszSubKey, pszValue, &type,
 			       data, &datalen,
 			       fIgnoreHKCU, 0, 0)) {
 	    /* process returned data via type into bool */
 	    switch (type) {
 	    case REG_SZ:
+#ifdef __REACTOS__
+		if (datalen % sizeof(WCHAR)) break;
+		data[datalen / sizeof(WCHAR)] = '\0';     /* set end of string */
+#else
 		data[9] = '\0';     /* set end of string */
+#endif
 		if (lstrcmpiW(data, wYES)==0 || lstrcmpiW(data, wTRUE)==0)
 		    ret = TRUE;
 		else if (lstrcmpiW(data, wNO)==0 || lstrcmpiW(data, wFALSE)==0)
 		    ret = FALSE;
 		break;
 	    case REG_DWORD:
+#ifdef __REACTOS__
+		if (datalen != sizeof(work)) break;
+		memcpy(&work, data, sizeof(work));
+#else
 		work = *(LPDWORD)data;
+#endif
 		ret = (work != 0);
 		break;
 	    case REG_BINARY:
