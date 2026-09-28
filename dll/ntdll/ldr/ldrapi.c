@@ -1730,7 +1730,8 @@ LdrUnloadDll(
 
 #if (_WIN32_WINNT >= _WIN32_WINNT_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
         /* Send shutdown notification */
-        LdrpSendDllNotifications(CurrentEntry, LDR_DLL_NOTIFICATION_REASON_UNLOADED);
+        if (CurrentEntry->Flags & LDRP_LOAD_NOTIFICATIONS_SENT)
+            LdrpSendDllNotifications(CurrentEntry, LDR_DLL_NOTIFICATION_REASON_UNLOADED);
 #endif
 
         /* Check if this is a .NET executable */

@@ -1682,16 +1682,6 @@ RelocDone:;
     }
 #endif
 
-#if (_WIN32_WINNT >= _WIN32_WINNT_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
-    if (NT_SUCCESS(Status) && LdrEntry)
-    {
-        LdrpSendDllNotifications(LdrEntry, LDR_DLL_NOTIFICATION_REASON_LOADED);
-#if (_WIN32_WINNT >= _WIN32_WINNT_WIN8)
-        LdrEntry->Flags |= LDRP_LOAD_NOTIFICATIONS_SENT; /* LdrEntry->LoadNotificationsSent = TRUE; */
-#endif
-    }
-#endif
-
     /* Check if this is an SMP Machine and a DLL */
     if ((LdrpNumberOfProcessors > 1) &&
         (LdrEntry && (LdrEntry->Flags & LDRP_IMAGE_DLL)))
@@ -2761,6 +2751,12 @@ LdrpLoadDll(IN BOOLEAN Redirected,
             {
                 /* Increase load count */
                 LdrEntry->LoadCount++;
+            }
+
+            if (!(LdrEntry->Flags & LDRP_LOAD_NOTIFICATIONS_SENT))
+            {
+                LdrpSendDllNotifications(LdrEntry, LDR_DLL_NOTIFICATION_REASON_LOADED);
+                LdrEntry->Flags |= LDRP_LOAD_NOTIFICATIONS_SENT;
             }
 
             /* Insert it into the list */

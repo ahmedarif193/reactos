@@ -997,6 +997,14 @@ LdrpWalkImportDescriptor(IN LPWSTR DllPath OPTIONAL,
     /* Release the activation context */
     RtlDeactivateActivationContextUnsafeFast(&ActCtx);
 
+    if (NT_SUCCESS(Status) &&
+        (LdrEntry->Flags & LDRP_IMAGE_DLL) &&
+        !(LdrEntry->Flags & LDRP_LOAD_NOTIFICATIONS_SENT))
+    {
+        LdrpSendDllNotifications(LdrEntry, LDR_DLL_NOTIFICATION_REASON_LOADED);
+        LdrEntry->Flags |= LDRP_LOAD_NOTIFICATIONS_SENT;
+    }
+
     DPRINT("LdrpWalkImportDescriptor - END (%wZ %p)\n", &LdrEntry->BaseDllName, LdrEntry);
 
     /* Return status */
