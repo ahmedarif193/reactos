@@ -87,7 +87,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/dbcsname.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/fastio.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/faulttol.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/filelock.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/bytelock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/filter.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/filtrctx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/fsfilter.c
