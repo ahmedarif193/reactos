@@ -1189,7 +1189,7 @@ RControlService(
         dwError = ScmControlService(lpService->lpImage->hControlPipe,
                                     lpService->lpServiceName,
                                     dwControl,
-                                    (SERVICE_STATUS_HANDLE)lpService);
+                                    lpService->dwResumeCount);
 
         /* Return service status information */
         RtlCopyMemory(lpServiceStatus,
@@ -1628,7 +1628,7 @@ ScmStopThread(PVOID pParam)
         ScmControlService(lpService->lpImage->hControlPipe,
                           L"",
                           SERVICE_CONTROL_STOP,
-                          (SERVICE_STATUS_HANDLE)lpService);
+                          lpService->dwResumeCount);
     }
 
     /* Lock the service database exclusively */
@@ -1715,7 +1715,11 @@ RSetServiceStatus(
         return ERROR_INVALID_HANDLE;
     }
 
-    lpService = (PSERVICE)hServiceStatus;
+    ScmLockDatabaseShared();
+    lpService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
+    ScmUnlockDatabase();
+    if (lpService == NULL)
+        return ERROR_INVALID_HANDLE;
 
     /* Check current state */
     if (!ScmIsValidServiceState(lpServiceStatus->dwCurrentState))
@@ -1888,7 +1892,7 @@ RI_ScSetServiceBitsW(
 {
     PSERVICE pService;
 
-    DPRINT("RI_ScSetServiceBitsW(%p %lx %d %d %S)\n",
+    DPRINT("RI_ScSetServiceBitsW(%lu %lx %d %d %S)\n",
            hServiceStatus, dwServiceBits, bSetBitsOn,
            bUpdateImmediately, lpString);
 
@@ -1904,8 +1908,11 @@ RI_ScSetServiceBitsW(
         return ERROR_INVALID_HANDLE;
     }
 
-    // FIXME: Validate the status handle
-    pService = (PSERVICE)hServiceStatus;
+    ScmLockDatabaseShared();
+    pService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
+    ScmUnlockDatabase();
+    if (pService == NULL)
+        return ERROR_INVALID_HANDLE;
 
     if (bSetBitsOn)
     {
@@ -6730,11 +6737,14 @@ RI_ScSendPnPMessage(
     DWORD dwControlsAccepted, dwCurrentState;
     DWORD dwError = ERROR_SUCCESS;
 
-    DPRINT("RI_ScSendPnPMessage(%p %lx %lu %lu %p)\n",
+    DPRINT("RI_ScSendPnPMessage(%lu %lx %lu %lu %p)\n",
            hServiceStatus, dwControl, dwEventType, dwEventSize, pEventData);
 
-    /* FIXME: Verify the status handle */
-    pService = (PSERVICE)hServiceStatus;
+    ScmLockDatabaseShared();
+    pService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
+    ScmUnlockDatabase();
+    if (pService == NULL)
+        return ERROR_INVALID_HANDLE;
 
     /* Fail, if the service is a driver */
     if (pService->Status.dwServiceType & SERVICE_DRIVER)
@@ -6847,7 +6857,7 @@ RI_ScValidatePnPService(
     if (pService == NULL)
         return ERROR_SERVICE_DOES_NOT_EXIST;
 
-    *phServiceStatus = (RPC_SERVICE_STATUS_HANDLE)pService;
+    *phServiceStatus = pService->dwResumeCount;
 
     return ERROR_SUCCESS;
 }

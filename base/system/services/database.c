@@ -841,6 +841,27 @@ ScmGetServiceEntryByDisplayName(LPCWSTR lpDisplayName)
 
 
 PSERVICE
+ScmGetServiceEntryByStatusHandle(DWORD hServiceStatus)
+{
+    PLIST_ENTRY ServiceEntry;
+    PSERVICE CurrentService;
+
+    for (ServiceEntry = ServiceListHead.Flink;
+         ServiceEntry != &ServiceListHead;
+         ServiceEntry = ServiceEntry->Flink)
+    {
+        CurrentService = CONTAINING_RECORD(ServiceEntry,
+                                           SERVICE,
+                                           ServiceListEntry);
+        if (CurrentService->dwResumeCount == hServiceStatus)
+            return CurrentService;
+    }
+
+    return NULL;
+}
+
+
+PSERVICE
 ScmGetServiceEntryByResumeCount(DWORD dwResumeCount)
 {
     PLIST_ENTRY ServiceEntry;
@@ -1623,7 +1644,7 @@ ScmControlServiceEx(
     _In_ HANDLE hControlPipe,
     _In_ PCWSTR pServiceName,
     _In_ DWORD dwControl,
-    _In_ SERVICE_STATUS_HANDLE hServiceStatus,
+    _In_ DWORD hServiceStatus,
     _In_opt_ DWORD dwServiceTag,
     _In_opt_ DWORD argc,
     _In_reads_opt_(argc) const PCWSTR* argv)
@@ -1651,8 +1672,8 @@ ScmControlServiceEx(
      */
     if (argc > 0 && argv != NULL)
     {
-        PacketSize = ALIGN_UP(PacketSize, PWSTR);
-        PacketSize += (argc * sizeof(PWSTR));
+        PacketSize = ALIGN_UP(PacketSize, DWORD);
+        PacketSize += (argc * sizeof(DWORD));
 
         DPRINT("Argc: %lu\n", argc);
         for (i = 0; i < argc; i++)
@@ -1683,11 +1704,12 @@ ScmControlServiceEx(
     /* Copy the argument vector */
     if (argc > 0 && argv != NULL)
     {
-        PWSTR *pOffPtr, pArgPtr;
+        PDWORD pOffPtr;
+        PWSTR pArgPtr;
 
         Ptr += wcslen(pServiceName) + 1;
-        pOffPtr = (PWSTR*)ALIGN_UP_POINTER(Ptr, PWSTR);
-        pArgPtr = (PWSTR)((ULONG_PTR)pOffPtr + argc * sizeof(PWSTR));
+        pOffPtr = (PDWORD)ALIGN_UP_POINTER(Ptr, DWORD);
+        pArgPtr = (PWSTR)((ULONG_PTR)pOffPtr + argc * sizeof(DWORD));
 
         ControlPacket->dwArgumentsCount  = argc;
         ControlPacket->dwArgumentsOffset = (DWORD)((ULONG_PTR)pOffPtr - (ULONG_PTR)ControlPacket);
@@ -1698,8 +1720,8 @@ ScmControlServiceEx(
         for (i = 0; i < argc; i++)
         {
             wcscpy(pArgPtr, argv[i]);
-            pOffPtr[i] = (PWSTR)((ULONG_PTR)pArgPtr - (ULONG_PTR)pOffPtr);
-            DPRINT("offset[%lu]: %p\n", i, pOffPtr[i]);
+            pOffPtr[i] = (DWORD)((ULONG_PTR)pArgPtr - (ULONG_PTR)pOffPtr);
+            DPRINT("offset[%lu]: %lu\n", i, pOffPtr[i]);
             pArgPtr += wcslen(argv[i]) + 1;
         }
     }
@@ -1723,7 +1745,7 @@ ScmControlService(
     _In_ HANDLE hControlPipe,
     _In_ PCWSTR pServiceName,
     _In_ DWORD dwControl,
-    _In_ SERVICE_STATUS_HANDLE hServiceStatus)
+    _In_ DWORD hServiceStatus)
 {
     DWORD dwError = ERROR_SUCCESS;
     PSCM_CONTROL_PACKET ControlPacket;
@@ -2122,7 +2144,7 @@ Quit:
                                   Service->lpServiceName,
                                   (Service->Status.dwServiceType & SERVICE_WIN32_OWN_PROCESS)
                                      ? SERVICE_CONTROL_START_OWN : SERVICE_CONTROL_START_SHARE,
-                                  (SERVICE_STATUS_HANDLE)Service,
+                                  Service->dwResumeCount,
                                   Service->dwServiceTag,
                                   argc, argv);
     return dwError;
@@ -2459,7 +2481,7 @@ ScmAutoShutdownServices(VOID)
             ScmControlService(CurrentService->lpImage->hControlPipe,
                               CurrentService->lpServiceName,
                               SERVICE_CONTROL_SHUTDOWN,
-                              (SERVICE_STATUS_HANDLE)CurrentService);
+                              CurrentService->dwResumeCount);
         }
 
         ServiceEntry = ServiceEntry->Flink;
