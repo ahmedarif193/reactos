@@ -1533,7 +1533,8 @@ RealGetScrollInfo(HWND Wnd, INT SBType, LPSCROLLINFO Info)
 
   if (SB_CTL == SBType)
   {
-     return SendMessageW(Wnd, SBM_GETSCROLLINFO, 0, (LPARAM) Info);
+     SendMessageW(Wnd, SBM_GETSCROLLINFO, 0, (LPARAM) Info);
+     return TRUE;
   }
 
 #ifdef WOW64_I386_RUNTIME
@@ -1687,7 +1688,8 @@ GetScrollRange(HWND Wnd, int Bar, LPINT MinPos, LPINT MaxPos)
   /* Refer SB_CTL requests to the window */
   if (SB_CTL == Bar)
   {
-      return SendMessageW(Wnd, SBM_GETRANGE, (WPARAM) MinPos, (LPARAM) MaxPos);
+      SendMessageW(Wnd, SBM_GETRANGE, (WPARAM) MinPos, (LPARAM) MaxPos);
+      return TRUE;
   }
   else if (Bar == SB_HORZ || Bar == SB_VERT )
   {

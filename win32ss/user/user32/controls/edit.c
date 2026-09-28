@@ -3838,6 +3838,10 @@ static LRESULT EDIT_WM_LButtonDown(EDITSTATE *es, DWORD keys, INT x, INT y)
 	INT e;
 	BOOL after_wrap;
 
+#ifdef __REACTOS__
+	if (!(es->style & ES_MULTILINE) && !(es->flags & EF_FOCUSED))
+            SetFocus(es->hwndSelf);
+#endif
 	es->bCaptureState = TRUE;
 	SetCapture(es->hwndSelf);
 	EDIT_ConfinePoint(es, &x, &y);
