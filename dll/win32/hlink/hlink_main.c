@@ -88,6 +88,9 @@ HRESULT WINAPI HlinkCreateFromString( LPCWSTR pwzTarget, LPCWSTR pwzLocation,
             debugstr_w(pwzLocation), debugstr_w(pwzFriendlyName), pihlsite,
             dwSiteData, piunkOuter, debugstr_guid(riid), ppvObj);
 
+#ifdef __REACTOS__
+    *ppvObj = NULL;
+#endif
     hr = CoCreateInstance(&CLSID_StdHlink, piunkOuter, CLSCTX_INPROC_SERVER, &IID_IHlink, (void **)&hl);
     if (FAILED(hr))
         return hr;
@@ -101,10 +104,26 @@ HRESULT WINAPI HlinkCreateFromString( LPCWSTR pwzTarget, LPCWSTR pwzLocation,
                 tgt = NULL;
             else
             {
+#ifdef __REACTOS__
+                SIZE_T tgt_len = hash - pwzTarget;
+                if (tgt_len >= ~(SIZE_T)0 / sizeof(WCHAR))
+                {
+                    IHlink_Release(hl);
+                    return E_OUTOFMEMORY;
+                }
+#else
                 int tgt_len = hash - pwzTarget;
+#endif
                 tgt = malloc((tgt_len + 1) * sizeof(WCHAR));
                 if (!tgt)
+#ifdef __REACTOS__
+                {
+                    IHlink_Release(hl);
+#endif
                     return E_OUTOFMEMORY;
+#ifdef __REACTOS__
+                }
+#endif
                 memcpy(tgt, pwzTarget, tgt_len * sizeof(WCHAR));
                 tgt[tgt_len] = 0;
             }
@@ -117,7 +136,14 @@ HRESULT WINAPI HlinkCreateFromString( LPCWSTR pwzTarget, LPCWSTR pwzLocation,
         {
             tgt = wcsdup(pwzTarget);
             if (!tgt)
+#ifdef __REACTOS__
+            {
+                IHlink_Release(hl);
+#endif
                 return E_OUTOFMEMORY;
+#ifdef __REACTOS__
+            }
+#endif
             loc = pwzLocation;
         }
     }

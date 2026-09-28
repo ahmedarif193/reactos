@@ -138,8 +138,24 @@ static HRESULT WINAPI Authenticate_Authenticate(IAuthenticate *iface,
         return E_INVALIDARG;
 
     *phwnd = This->hwnd;
+#ifdef __REACTOS__
+    *pszPassword = NULL;
+#endif
     *pszUsername = hlink_co_strdupW(This->username);
+#ifdef __REACTOS__
+    if (This->username && !*pszUsername)
+        return E_OUTOFMEMORY;
+
+#endif
     *pszPassword = hlink_co_strdupW(This->password);
+#ifdef __REACTOS__
+    if (This->password && !*pszPassword)
+    {
+        CoTaskMemFree(*pszUsername);
+        *pszUsername = NULL;
+        return E_OUTOFMEMORY;
+    }
+#endif
 
     return S_OK;
 }
@@ -186,6 +202,10 @@ static HRESULT WINAPI HttpNegotiate_BeginningTransaction(IHttpNegotiate *iface,
         return E_INVALIDARG;
 
     *pszAdditionalHeaders = hlink_co_strdupW(This->headers);
+#ifdef __REACTOS__
+    if (This->headers && !*pszAdditionalHeaders)
+        return E_OUTOFMEMORY;
+#endif
     return S_OK;
 }
 
