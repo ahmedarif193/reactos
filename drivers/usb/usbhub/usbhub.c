@@ -1805,7 +1805,13 @@ USBH_SyncGetStatus(IN PDEVICE_OBJECT DeviceObject,
 
     NtStatus = USBH_FdoSyncSubmitUrb(DeviceObject, (PURB)Urb);
 
-    *OutStatus = UsbStatus;
+    if (NT_SUCCESS(NtStatus))
+    {
+        if (Urb->TransferBufferLength == sizeof(UsbStatus))
+            *OutStatus = UsbStatus;
+        else
+            NtStatus = STATUS_DEVICE_DATA_ERROR;
+    }
 
     ExFreePoolWithTag(Urb, USB_HUB_TAG);
 
