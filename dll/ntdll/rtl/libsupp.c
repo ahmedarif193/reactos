@@ -91,6 +91,13 @@ RtlGetCurrentPeb(VOID)
     return NtCurrentPeb();
 }
 
+int *
+__cdecl
+_errno(void)
+{
+    return (int *)&NtCurrentTeb()->TlsSlots[16];
+}
+
 /*
  * @implemented
  */

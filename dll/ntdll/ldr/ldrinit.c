@@ -2724,6 +2724,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
                         Peb->TlsBitmapBits,
                         TLS_MINIMUM_AVAILABLE);
     RtlSetBits(&TlsBitMap, 0, IsWow64 ? WOW64_TLS_MAX_NUMBER : 1);
+    RtlSetBit(&TlsBitMap, 16);
     RtlInitializeBitMap(&TlsExpansionBitMap,
                         Peb->TlsExpansionBitmapBits,
                         TLS_EXPANSION_SLOTS);
