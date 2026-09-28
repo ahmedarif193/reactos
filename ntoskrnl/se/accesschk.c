@@ -2276,14 +2276,14 @@ SepAccessCheck(
         {
             for (ResultListIndex = 0; ResultListIndex < ObjectTypeListLength; ResultListIndex++)
             {
-                AccessStatus[ResultListIndex] = STATUS_SUCCESS;
+                AccessStatus[ResultListIndex] = PreviouslyGrantedAccess ? STATUS_SUCCESS : STATUS_ACCESS_DENIED;
                 GrantedAccess[ResultListIndex] = PreviouslyGrantedAccess;
             }
         }
         else
         {
             *GrantedAccess = PreviouslyGrantedAccess;
-            *AccessStatus = STATUS_SUCCESS;
+            *AccessStatus = PreviouslyGrantedAccess ? STATUS_SUCCESS : STATUS_ACCESS_DENIED;
         }
     }
     else
