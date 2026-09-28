@@ -5537,6 +5537,8 @@ INT WINAPI GetGeoInfoW(GEOID geoid, GEOTYPE geotype, LPWSTR data, int data_len, 
 #endif
     }
     case GEO_NATION:
+        if (ptr->kind == LOCATION_REGION)
+            return 0;
         val = geoid;
         break;
     case GEO_ISO_UN_NUMBER:
