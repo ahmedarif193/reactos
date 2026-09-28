@@ -983,10 +983,10 @@ DoLogon(
     BOOL result = FALSE;
     NTSTATUS Status, SubStatus = STATUS_SUCCESS;
 
-    if (GetTextboxText(hwndDlg, IDC_LOGON_USERNAME, &UserName) && *UserName == '\0')
+    if (!GetTextboxText(hwndDlg, IDC_LOGON_USERNAME, &UserName) || *UserName == '\0')
         goto done;
 
-    if (GetTextboxText(hwndDlg, IDC_LOGON_DOMAIN, &Domain) && *Domain == '\0')
+    if (!GetTextboxText(hwndDlg, IDC_LOGON_DOMAIN, &Domain) || *Domain == '\0')
         goto done;
 
     if (!GetTextboxText(hwndDlg, IDC_LOGON_PASSWORD, &Password))
@@ -1399,7 +1399,7 @@ DoUnlock(
     LPWSTR Password = NULL;
     BOOL res = FALSE;
 
-    if (GetTextboxText(hwndDlg, IDC_UNLOCK_USERNAME, &UserName) && *UserName == '\0')
+    if (!GetTextboxText(hwndDlg, IDC_UNLOCK_USERNAME, &UserName) || *UserName == '\0')
     {
         HeapFree(GetProcessHeap(), 0, UserName);
         return FALSE;
