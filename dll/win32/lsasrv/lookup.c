@@ -2502,7 +2502,9 @@ LsapLookupSids(PLSAPR_SID_ENUM_BUFFER SidEnumBuffer,
 done:
     TRACE("done Status: %lx  Mapped: %lu\n", Status, Mapped);
 
-    if (!NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status) &&
+        Status != STATUS_NONE_MAPPED &&
+        Status != STATUS_SOME_NOT_MAPPED)
     {
         if (DomainsBuffer != NULL)
         {
@@ -2517,6 +2519,28 @@ done:
     }
     else
     {
+        for (i = 0; i < SidEnumBuffer->Entries; i++)
+        {
+            UNICODE_STRING SidString;
+
+            if (NamesBuffer[i].Use != SidTypeUnknown || NamesBuffer[i].Name.Buffer != NULL)
+                continue;
+
+            if (!NT_SUCCESS(RtlConvertSidToUnicodeString(&SidString, (PSID)SidEnumBuffer->SidInfo[i].Sid, TRUE)))
+                continue;
+
+            NamesBuffer[i].Name.Buffer = MIDL_user_allocate(SidString.Length + sizeof(WCHAR));
+            if (NamesBuffer[i].Name.Buffer != NULL)
+            {
+                RtlCopyMemory(NamesBuffer[i].Name.Buffer, SidString.Buffer, SidString.Length);
+                NamesBuffer[i].Name.Buffer[SidString.Length / sizeof(WCHAR)] = UNICODE_NULL;
+                NamesBuffer[i].Name.Length = SidString.Length;
+                NamesBuffer[i].Name.MaximumLength = SidString.Length + sizeof(WCHAR);
+            }
+
+            RtlFreeUnicodeString(&SidString);
+        }
+
         *ReferencedDomains = DomainsBuffer;
         TranslatedNames->Entries = SidEnumBuffer->Entries;
         TranslatedNames->Names = NamesBuffer;
