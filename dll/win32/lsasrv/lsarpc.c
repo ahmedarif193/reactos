@@ -2897,12 +2897,12 @@ LsarEnumerateAccountRights(
         goto done;
     }
 
-    RightsCount = PrivilegeSet->PrivilegeCount;
+    RightsCount = PrivilegeSet ? PrivilegeSet->PrivilegeCount : 0;
 
     /* Count account rights */
     for (i = 0; i < sizeof(ACCESS_MASK) * 8; i++)
     {
-        if (SystemAccess & (1 << i))
+        if (SystemAccess & (1U << i))
             RightsCount++;
     }
 
@@ -2951,9 +2951,9 @@ LsarEnumerateAccountRights(
     /* Copy account rights into the buffer */
     for (i = 0; i < sizeof(ACCESS_MASK) * 8; i++)
     {
-        if (SystemAccess & (1 << i))
+        if (SystemAccess & (1U << i))
         {
-            Status = LsapLookupAccountRightName(1 << i,
+            Status = LsapLookupAccountRightName(1U << i,
                                                 &PrivilegeString);
             if (!NT_SUCCESS(Status))
             {
