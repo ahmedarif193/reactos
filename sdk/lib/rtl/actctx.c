@@ -3624,6 +3624,8 @@ static NTSTATUS find_query_actctx( ACTIVATION_CONTEXT **actctx, DWORD flags, ULO
         if (*actctx) return STATUS_INVALID_PARAMETER;
 
         *actctx = get_current_actctx_no_addref();
+        if (!*actctx && (class != ActivationContextBasicInformation))
+            *actctx = process_actctx;
     }
     else if (flags & (RTL_QUERY_ACTIVATION_CONTEXT_FLAG_IS_ADDRESS | RTL_QUERY_ACTIVATION_CONTEXT_FLAG_IS_HMODULE))
     {
@@ -5954,7 +5956,14 @@ NTSTATUS WINAPI RtlQueryInformationActivationContext( ULONG flags, HANDLE handle
             if (!subinst) return STATUS_INVALID_PARAMETER;
 
             index = *(DWORD*)subinst;
-            if (!index || index > actctx->num_assemblies) return STATUS_INVALID_PARAMETER;
+            if (!index)
+            {
+                if (retlen) *retlen = sizeof(*afdi);
+                if (!buffer || bufsize < sizeof(*afdi)) return STATUS_BUFFER_TOO_SMALL;
+                RtlZeroMemory(afdi, sizeof(*afdi));
+                break;
+            }
+            if (index > actctx->num_assemblies) return STATUS_INVALID_PARAMETER;
 
             assembly = &actctx->assemblies[index - 1];
 
