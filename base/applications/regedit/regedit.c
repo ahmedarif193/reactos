@@ -19,12 +19,17 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(regedit);
 
+#ifdef __REACTOS__
+static BOOL silent;
+#endif
+
 static void output_writeconsole(const WCHAR *str, DWORD wlen)
 {
 #ifdef __REACTOS__
     /* This is win32gui application, don't ever try writing to console.
      * For the console version we have a separate reg.exe application. */
-    MessageBoxW(NULL, str, NULL, MB_ICONERROR);
+    if (!silent)
+        MessageBoxW(NULL, str, NULL, MB_ICONERROR);
 #else
     DWORD count;
 
@@ -218,9 +223,6 @@ BOOL ProcessCmdLine(WCHAR *cmdline)
     WCHAR **argv;
     int argc, i;
     REGEDIT_ACTION action = ACTION_ADD;
-#ifdef __REACTOS__
-    BOOL silent = FALSE;
-#endif
 
     argv = CommandLineToArgvW(cmdline, &argc);
 
