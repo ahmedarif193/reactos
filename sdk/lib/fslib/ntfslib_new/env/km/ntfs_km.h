@@ -42,8 +42,19 @@ NtfsDirectoryGetFileBothDirInfo(
     _In_    BOOLEAN ReturnSingleEntry,
     _In_    BOOLEAN RestartScan,
     _In_    PUNICODE_STRING FileNameFilter,
-    _Inout_ PFILE_BOTH_DIR_INFORMATION Buffer,
+    _In_    FILE_INFORMATION_CLASS InformationClass,
+    _Inout_ PVOID Buffer,
     _Inout_ PULONG BufferLength);
+
+NTSTATUS
+NtfsDirectoryStoreInfo(
+    _In_ FILE_INFORMATION_CLASS InformationClass,
+    _Inout_ PFILE_ID_BOTH_DIR_INFORMATION Info,
+    _In_reads_bytes_(NameLength) PCWSTR Name,
+    _In_ ULONG NameLength,
+    _Out_writes_bytes_(*BufferLength) PVOID Buffer,
+    _Inout_ PULONG BufferLength,
+    _Out_ PULONG EntrySize);
 
 NTSTATUS
 NtfsDirectoryLoadForEnumeration(

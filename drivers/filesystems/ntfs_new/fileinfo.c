@@ -508,36 +508,31 @@ NTSTATUS
 NtfsAppendDotDirectoryEntry(_In_ PFileContextBlock FileCB,
                             _In_reads_(NameLength) PCWSTR Name,
                             _In_ USHORT NameLength,
-                            _Out_ PFILE_BOTH_DIR_INFORMATION Buffer,
+                            _In_ FILE_INFORMATION_CLASS InformationClass,
+                            _Out_ PVOID Buffer,
                             _Inout_ PULONG Length,
                             _Out_ PULONG EntrySize)
 {
     NtfsFileBasicInformation Information;
+    FILE_ID_BOTH_DIR_INFORMATION Info;
     PFSRTL_ADVANCED_FCB_HEADER Header;
     NTSTATUS Status;
-
-    *EntrySize = ALIGN_UP_BY(FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) + NameLength * sizeof(WCHAR), sizeof(ULONGLONG));
-    if (*Length < *EntrySize)
-        return STATUS_BUFFER_OVERFLOW;
 
     Status = NtfsFileRecordGetBasicInformation(FileCB->FileRec, &Information);
     if (!NT_SUCCESS(Status))
         return Status;
     Header = NtfsGetCommonFcbHeader(FileCB);
 
-    RtlZeroMemory(Buffer, *EntrySize);
-    Buffer->NextEntryOffset = *EntrySize;
-    Buffer->CreationTime.QuadPart = Information.CreationTime;
-    Buffer->LastAccessTime.QuadPart = Information.LastAccessTime;
-    Buffer->LastWriteTime.QuadPart = Information.LastWriteTime;
-    Buffer->ChangeTime.QuadPart = Information.ChangeTime;
-    Buffer->EndOfFile = Header->FileSize;
-    Buffer->AllocationSize = Header->AllocationSize;
-    Buffer->FileAttributes = Information.FileAttributes | FILE_ATTRIBUTE_DIRECTORY;
-    Buffer->FileNameLength = NameLength * sizeof(WCHAR);
-    RtlCopyMemory(Buffer->FileName, Name, Buffer->FileNameLength);
-    *Length -= *EntrySize;
-    return STATUS_SUCCESS;
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.CreationTime.QuadPart = Information.CreationTime;
+    Info.LastAccessTime.QuadPart = Information.LastAccessTime;
+    Info.LastWriteTime.QuadPart = Information.LastWriteTime;
+    Info.ChangeTime.QuadPart = Information.ChangeTime;
+    Info.EndOfFile = Header->FileSize;
+    Info.AllocationSize = Header->AllocationSize;
+    Info.FileAttributes = Information.FileAttributes | FILE_ATTRIBUTE_DIRECTORY;
+    Info.FileId.QuadPart = NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber;
+    return NtfsDirectoryStoreInfo(InformationClass, &Info, Name, NameLength * sizeof(WCHAR), Buffer, Length, EntrySize);
 }
 
 static
@@ -545,12 +540,13 @@ NTSTATUS
 GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
                                 _In_    UCHAR IrpFlags,
                                 _In_    PUNICODE_STRING FileNameFilter,
-                                _Out_   PFILE_BOTH_DIR_INFORMATION Buffer,
+                                _In_    FILE_INFORMATION_CLASS InformationClass,
+                                _Out_   PVOID Buffer,
                                 _Inout_ PULONG Length)
 {
     static const WCHAR DotNames[2][3] = { L".", L".." };
-    PFILE_BOTH_DIR_INFORMATION Current;
-    PFILE_BOTH_DIR_INFORMATION Previous = NULL;
+    PUCHAR Current;
+    PFILE_NAMES_INFORMATION Previous = NULL;
     PNtfsDirectory FileDir;
     ULONG EntrySize;
     ULONG RealLength;
@@ -603,7 +599,7 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
             continue;
         }
 
-        Status = NtfsAppendDotDirectoryEntry(FileCB, DotNames[DotIndex], NameLength, Current, Length, &EntrySize);
+        Status = NtfsAppendDotDirectoryEntry(FileCB, DotNames[DotIndex], NameLength, InformationClass, Current, Length, &EntrySize);
         if (!NT_SUCCESS(Status))
         {
             if (!Previous)
@@ -613,8 +609,8 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
         }
 
         FileCB->DirDotIndex++;
-        Previous = Current;
-        Current = (PFILE_BOTH_DIR_INFORMATION)((PUCHAR)Current + EntrySize);
+        Previous = (PFILE_NAMES_INFORMATION)Current;
+        Current += EntrySize;
         if (ReturnSingleEntry)
         {
             Previous->NextEntryOffset = 0;
@@ -625,7 +621,7 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
     RealLength = *Length;
     RestartScan = !FileCB->DirRealScanStarted;
     FileCB->DirRealScanStarted = TRUE;
-    Status = NtfsDirectoryGetFileBothDirInfo(FileDir, ReturnSingleEntry, RestartScan, FileNameFilter, Current, Length);
+    Status = NtfsDirectoryGetFileBothDirInfo(FileDir, ReturnSingleEntry, RestartScan, FileNameFilter, InformationClass, Current, Length);
     if (Previous && (Status == STATUS_NO_MORE_FILES || Status == STATUS_BUFFER_OVERFLOW || RealLength == *Length))
     {
         Previous->NextEntryOffset = 0;
@@ -673,7 +669,7 @@ GetFileDirectoryInformation(_In_ PFileContextBlock FileCB,
         return STATUS_INSUFFICIENT_RESOURCES;
 
     Remaining = Available;
-    Status = GetFileBothDirectoryInformation(FileCB, IrpFlags, FileNameFilter, (PFILE_BOTH_DIR_INFORMATION)TemporaryBuffer, &Remaining);
+    Status = GetFileBothDirectoryInformation(FileCB, IrpFlags, FileNameFilter, FileBothDirectoryInformation, TemporaryBuffer, &Remaining);
     SourceBytes = Available - Remaining;
     if (!NT_SUCCESS(Status) || SourceBytes == 0)
     {
@@ -785,7 +781,7 @@ GetFileFullDirectoryInformation(_In_ PFileContextBlock FileCB,
         return STATUS_INSUFFICIENT_RESOURCES;
 
     Remaining = SourceCapacity;
-    Status = GetFileBothDirectoryInformation(FileCB, IrpFlags, FileNameFilter, (PFILE_BOTH_DIR_INFORMATION)TemporaryBuffer, &Remaining);
+    Status = GetFileBothDirectoryInformation(FileCB, IrpFlags, FileNameFilter, FileBothDirectoryInformation, TemporaryBuffer, &Remaining);
     SourceBytes = SourceCapacity - Remaining;
     if (!NT_SUCCESS(Status) || SourceBytes == 0)
     {
@@ -1807,10 +1803,14 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         switch(FileInformationRequest)
         {
             case FileBothDirectoryInformation:
+            case FileNamesInformation:
+            case FileIdBothDirectoryInformation:
+            case FileIdFullDirectoryInformation:
                 Status = GetFileBothDirectoryInformation(FileCB,
                                                          IrpSp->Flags,
                                                          IrpSp->Parameters.QueryDirectory.FileName,
-                                                         (PFILE_BOTH_DIR_INFORMATION)SystemBuffer,
+                                                         FileInformationRequest,
+                                                         SystemBuffer,
                                                          &BufferLength);
                 break;
             case FileDirectoryInformation:
@@ -1824,9 +1824,6 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             case FileFullDirectoryInformation:
                 Status = GetFileFullDirectoryInformation(FileCB, IrpSp->Flags, IrpSp->Parameters.QueryDirectory.FileName, (PFILE_FULL_DIR_INFORMATION)SystemBuffer, &BufferLength);
                 break;
-            case FileIdBothDirectoryInformation:
-            case FileIdFullDirectoryInformation:
-            case FileNamesInformation:
             case FileObjectIdInformation:
             case FileReparsePointInformation:
             default:

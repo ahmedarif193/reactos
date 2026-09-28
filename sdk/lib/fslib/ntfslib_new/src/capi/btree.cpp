@@ -32,14 +32,93 @@ NtfsDirectoryGetFileBothDirInfo(
     _In_    BOOLEAN ReturnSingleEntry,
     _In_    BOOLEAN RestartScan,
     _In_    PUNICODE_STRING FileNameFilter,
-    _Inout_ PFILE_BOTH_DIR_INFORMATION Buffer,
+    _In_    FILE_INFORMATION_CLASS InformationClass,
+    _Inout_ PVOID Buffer,
     _Inout_ PULONG BufferLength)
 {
     return reinterpret_cast<PDirectory>(Dir)->GetFileBothDirInfo(ReturnSingleEntry,
                                                                  RestartScan,
                                                                  FileNameFilter,
+                                                                 InformationClass,
                                                                  Buffer,
                                                                  BufferLength);
+}
+
+NTSTATUS
+NtfsDirectoryStoreInfo(
+    _In_ FILE_INFORMATION_CLASS InformationClass,
+    _Inout_ PFILE_ID_BOTH_DIR_INFORMATION Info,
+    _In_reads_bytes_(NameLength) PCWSTR Name,
+    _In_ ULONG NameLength,
+    _Out_writes_bytes_(*BufferLength) PVOID Buffer,
+    _Inout_ PULONG BufferLength,
+    _Out_ PULONG EntrySize)
+{
+    PUCHAR Entry = static_cast<PUCHAR>(Buffer);
+    ULONG NameOffset;
+
+    switch (InformationClass)
+    {
+        case FileDirectoryInformation:
+            NameOffset = FIELD_OFFSET(FILE_DIRECTORY_INFORMATION, FileName);
+            break;
+        case FileFullDirectoryInformation:
+            NameOffset = FIELD_OFFSET(FILE_FULL_DIR_INFORMATION, FileName);
+            break;
+        case FileBothDirectoryInformation:
+            NameOffset = FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName);
+            break;
+        case FileNamesInformation:
+            NameOffset = FIELD_OFFSET(FILE_NAMES_INFORMATION, FileName);
+            break;
+        case FileIdBothDirectoryInformation:
+            NameOffset = FIELD_OFFSET(FILE_ID_BOTH_DIR_INFORMATION, FileName);
+            break;
+        case FileIdFullDirectoryInformation:
+            NameOffset = FIELD_OFFSET(FILE_ID_FULL_DIR_INFORMATION, FileName);
+            break;
+        default:
+            return STATUS_INVALID_INFO_CLASS;
+    }
+
+    *EntrySize = ALIGN_UP_BY(NameOffset + NameLength, sizeof(ULONGLONG));
+    if (*BufferLength < *EntrySize)
+        return STATUS_BUFFER_OVERFLOW;
+
+    Info->NextEntryOffset = *EntrySize;
+    Info->FileNameLength = NameLength;
+    RtlZeroMemory(Entry, *EntrySize);
+
+    if (InformationClass == FileNamesInformation)
+    {
+        PFILE_NAMES_INFORMATION Names = reinterpret_cast<PFILE_NAMES_INFORMATION>(Entry);
+
+        Names->NextEntryOffset = Info->NextEntryOffset;
+        Names->FileIndex = Info->FileIndex;
+        Names->FileNameLength = NameLength;
+    }
+    else
+    {
+        RtlCopyMemory(Entry, Info, FIELD_OFFSET(FILE_DIRECTORY_INFORMATION, FileName));
+        if (InformationClass != FileDirectoryInformation)
+            reinterpret_cast<PFILE_FULL_DIR_INFORMATION>(Entry)->EaSize = Info->EaSize;
+        if (InformationClass == FileBothDirectoryInformation ||
+            InformationClass == FileIdBothDirectoryInformation)
+        {
+            reinterpret_cast<PFILE_BOTH_DIR_INFORMATION>(Entry)->ShortNameLength = Info->ShortNameLength;
+            RtlCopyMemory(reinterpret_cast<PFILE_BOTH_DIR_INFORMATION>(Entry)->ShortName,
+                          Info->ShortName,
+                          sizeof(Info->ShortName));
+        }
+        if (InformationClass == FileIdBothDirectoryInformation)
+            reinterpret_cast<PFILE_ID_BOTH_DIR_INFORMATION>(Entry)->FileId = Info->FileId;
+        if (InformationClass == FileIdFullDirectoryInformation)
+            reinterpret_cast<PFILE_ID_FULL_DIR_INFORMATION>(Entry)->FileId = Info->FileId;
+    }
+
+    RtlCopyMemory(Entry + NameOffset, Name, NameLength);
+    *BufferLength -= *EntrySize;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS

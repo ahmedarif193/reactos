@@ -14,63 +14,54 @@ NTSTATUS
 AddKeyToBothDirInfo(_In_     PBTreeKey Key,
                     _In_opt_ PBTreeKey ShortNameKey,
                     _In_     BOOLEAN IsLastEntry,
-                    _Inout_  PFILE_BOTH_DIR_INFORMATION Buffer,
+                    _In_     FILE_INFORMATION_CLASS InformationClass,
+                    _Inout_  PVOID Buffer,
                     _Inout_  PULONG BufferLength,
                     _Out_    PULONG EntryLength = NULL)
 {
+    FILE_ID_BOTH_DIR_INFORMATION Info = {};
     PFileNameEx FileNameData;
+    PFileNameEx ShortNameData;
     ULONG EntrySize;
+    NTSTATUS Status;
 
-    // Set the file name data pointer
     FileNameData = GetFileName(Key);
-    EntrySize = ALIGN_UP_BY(FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) + GetWStrLength(FileNameData->NameLength), sizeof(ULONGLONG));
 
-    if (*BufferLength < EntrySize)
-        return STATUS_BUFFER_OVERFLOW;
+    Info.FileIndex = 0;
+    Info.CreationTime.QuadPart = FileNameData->CreationTime;
+    Info.LastAccessTime.QuadPart = FileNameData->LastAccessTime;
+    Info.LastWriteTime.QuadPart = FileNameData->LastWriteTime;
+    Info.ChangeTime.QuadPart = FileNameData->ChangeTime;
+    Info.EndOfFile.QuadPart = FileNameData->DataSize;
+    Info.AllocationSize.QuadPart = FileNameData->AllocatedSize;
+    Info.FileAttributes = FileNameData->Flags;
+    Info.EaSize = FileNameData->Extended.EAInfo.PackedEASize;
+    Info.FileId.QuadPart = GetFRNFromFileRef(FileRef(Key));
 
-    Buffer->FileIndex = 0; // Undefined for NTFS
-    Buffer->CreationTime.QuadPart = FileNameData->CreationTime;
-    Buffer->LastAccessTime.QuadPart = FileNameData->LastAccessTime;
-    Buffer->LastWriteTime.QuadPart = FileNameData->LastWriteTime;
-    Buffer->ChangeTime.QuadPart = FileNameData->ChangeTime;
-    Buffer->EndOfFile.QuadPart = FileNameData->DataSize;
-    Buffer->AllocationSize.QuadPart = FileNameData->AllocatedSize;
-    Buffer->FileAttributes = FileNameData->Flags;
-    Buffer->FileNameLength = GetWStrLength(FileNameData->NameLength);
-    Buffer->EaSize = FileNameData->Extended.EAInfo.PackedEASize;
-    RtlCopyMemory(Buffer->FileName,
-                  FileNameData->Name,
-                  GetWStrLength(FileNameData->NameLength));
-
-    // Mark file as folder if it is a directory
     if (FileNameData->Flags & FN_DIRECTORY)
-        Buffer->FileAttributes |= FILE_ATTRIBUTE_DIRECTORY;
-
-    // Let's get the short name
-    RtlZeroMemory(Buffer->ShortName, MAX_SHORTNAME_LENGTH * sizeof(WCHAR));
-    Buffer->ShortNameLength = 0;
+        Info.FileAttributes |= FILE_ATTRIBUTE_DIRECTORY;
 
     if (ShortNameKey)
     {
-        FileNameData = GetFileName(ShortNameKey);
-        Buffer->ShortNameLength = GetWStrLength(FileNameData->NameLength);
-        RtlCopyMemory(Buffer->ShortName,
-                      FileNameData->Name,
-                      GetWStrLength(FileNameData->NameLength));
-
+        ShortNameData = GetFileName(ShortNameKey);
+        Info.ShortNameLength = (UCHAR)GetWStrLength(ShortNameData->NameLength);
+        RtlCopyMemory(Info.ShortName,
+                      ShortNameData->Name,
+                      GetWStrLength(ShortNameData->NameLength));
     }
 
-    /* Set the entry size.
-     * Note: Entries in the buffer must be aligned to 8-byte boundaries
-     * See: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/270df317-9ba5-4ccb-ba00-8d22be139bc5
-     */
-    *BufferLength -= EntrySize;
+    Status = NtfsDirectoryStoreInfo(InformationClass,
+                                    &Info,
+                                    FileNameData->Name,
+                                    GetWStrLength(FileNameData->NameLength),
+                                    Buffer,
+                                    BufferLength,
+                                    &EntrySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
-    // Set next entry offset
     if (IsLastEntry)
-        Buffer->NextEntryOffset = 0;
-    else
-        Buffer->NextEntryOffset = EntrySize;
+        static_cast<PFILE_NAMES_INFORMATION>(Buffer)->NextEntryOffset = 0;
 
     if (EntryLength)
         *EntryLength = EntrySize;
@@ -536,10 +527,11 @@ Directory::GetFileBothDirInfoDirect(
     _In_ BOOLEAN ReturnSingleEntry,
     _In_ BOOLEAN RestartScan,
     _In_ PUNICODE_STRING FileNameFilter,
-    _Inout_ PFILE_BOTH_DIR_INFORMATION Buffer,
+    _In_ FILE_INFORMATION_CLASS InformationClass,
+    _Inout_ PVOID Buffer,
     _Inout_ PULONG BufferLength)
 {
-    PFILE_BOTH_DIR_INFORMATION PreviousBuffer = NULL;
+    PFILE_NAMES_INFORMATION PreviousBuffer = NULL;
     ULONG EntrySize = 0;
     ULONG TotalBufferLength = *BufferLength;
     BOOLEAN SkipToResume = FALSE;
@@ -640,6 +632,7 @@ Directory::GetFileBothDirInfoDirect(
                 &Key,
                 NULL,
                 FALSE,
+                InformationClass,
                 Buffer,
                 BufferLength,
                 &EntrySize);
@@ -666,17 +659,19 @@ Directory::GetFileBothDirInfoDirect(
             if (!NT_SUCCESS(Status))
                 break;
 
-            if (FindShortName)
+            if (FindShortName &&
+                (InformationClass == FileBothDirectoryInformation ||
+                 InformationClass == FileIdBothDirectoryInformation))
             {
                 UCHAR ShortNameLength;
 
                 Status = FindDirectShortName(
                     IndexEntry->Data.Directory.IndexedFile,
-                    Buffer->ShortName,
+                    static_cast<PFILE_BOTH_DIR_INFORMATION>(Buffer)->ShortName,
                     &ShortNameLength);
                 if (!NT_SUCCESS(Status))
                     break;
-                Buffer->ShortNameLength =
+                static_cast<PFILE_BOTH_DIR_INFORMATION>(Buffer)->ShortNameLength =
                     ShortNameLength;
             }
 
@@ -686,13 +681,12 @@ Directory::GetFileBothDirInfoDirect(
 
             if (ReturnSingleEntry)
             {
-                Buffer->NextEntryOffset = 0;
+                static_cast<PFILE_NAMES_INFORMATION>(Buffer)->NextEntryOffset = 0;
                 break;
             }
 
-            PreviousBuffer = Buffer;
-            Buffer = (PFILE_BOTH_DIR_INFORMATION)(
-                (ULONG_PTR)Buffer + EntrySize);
+            PreviousBuffer = static_cast<PFILE_NAMES_INFORMATION>(Buffer);
+            Buffer = static_cast<PUCHAR>(Buffer) + EntrySize;
         }
     }
 
@@ -772,12 +766,13 @@ NTSTATUS
 Directory::GetFileBothDirInfo(_In_    BOOLEAN ReturnSingleEntry,
                               _In_    BOOLEAN RestartScan,
                               _In_    PUNICODE_STRING FileNameFilter,
-                              _Inout_ PFILE_BOTH_DIR_INFORMATION Buffer,
+                              _In_    FILE_INFORMATION_CLASS InformationClass,
+                              _Inout_ PVOID Buffer,
                               _Inout_ PULONG BufferLength)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG EntrySize, TotalBufferLength;
-    PFILE_BOTH_DIR_INFORMATION PreviousBuffer;
+    PFILE_NAMES_INFORMATION PreviousBuffer;
     BOOLEAN SkipToResume = FALSE;
 
     if (DirectEnumeration)
@@ -786,6 +781,7 @@ Directory::GetFileBothDirInfo(_In_    BOOLEAN ReturnSingleEntry,
             ReturnSingleEntry,
             RestartScan,
             FileNameFilter,
+            InformationClass,
             Buffer,
             BufferLength);
     }
@@ -860,6 +856,7 @@ Directory::GetFileBothDirInfo(_In_    BOOLEAN ReturnSingleEntry,
             Status = AddKeyToBothDirInfo(CurrentKey,
                                          GetShortNameKey(CurrentKey),
                                          FALSE,
+                                         InformationClass,
                                          Buffer,
                                          BufferLength,
                                          &EntrySize);
@@ -887,14 +884,14 @@ Directory::GetFileBothDirInfo(_In_    BOOLEAN ReturnSingleEntry,
 
             if (ReturnSingleEntry)
             {
-                Buffer->NextEntryOffset = 0;
+                static_cast<PFILE_NAMES_INFORMATION>(Buffer)->NextEntryOffset = 0;
                 CurrentKey = GetNextKey(CurrentKey);
                 break;
             }
 
             // Adjust buffer
-            PreviousBuffer = Buffer;
-            Buffer = (PFILE_BOTH_DIR_INFORMATION)((ULONG_PTR)Buffer + EntrySize);
+            PreviousBuffer = static_cast<PFILE_NAMES_INFORMATION>(Buffer);
+            Buffer = static_cast<PUCHAR>(Buffer) + EntrySize;
         }
 
         CurrentKey = GetNextKey(CurrentKey);

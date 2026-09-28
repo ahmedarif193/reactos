@@ -35,6 +35,7 @@ typedef wchar_t WCHAR;
 typedef size_t SIZE_T;
 typedef uintptr_t ULONG_PTR;
 
+typedef void* PVOID;
 typedef UCHAR* PUCHAR;
 typedef USHORT* PUSHORT;
 typedef ULONG* PULONG;
@@ -113,6 +114,91 @@ typedef struct _FILE_BOTH_DIR_INFORMATION
     WCHAR FileName[1];
 } FILE_BOTH_DIR_INFORMATION, *PFILE_BOTH_DIR_INFORMATION;
 
+typedef enum _FILE_INFORMATION_CLASS
+{
+    FileDirectoryInformation = 1,
+    FileFullDirectoryInformation = 2,
+    FileBothDirectoryInformation = 3,
+    FileNamesInformation = 12,
+    FileIdBothDirectoryInformation = 37,
+    FileIdFullDirectoryInformation = 38
+} FILE_INFORMATION_CLASS;
+
+typedef struct _FILE_DIRECTORY_INFORMATION
+{
+    ULONG NextEntryOffset;
+    ULONG FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG FileAttributes;
+    ULONG FileNameLength;
+    WCHAR FileName[1];
+} FILE_DIRECTORY_INFORMATION, *PFILE_DIRECTORY_INFORMATION;
+
+typedef struct _FILE_FULL_DIR_INFORMATION
+{
+    ULONG NextEntryOffset;
+    ULONG FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG FileAttributes;
+    ULONG FileNameLength;
+    ULONG EaSize;
+    WCHAR FileName[1];
+} FILE_FULL_DIR_INFORMATION, *PFILE_FULL_DIR_INFORMATION;
+
+typedef struct _FILE_ID_FULL_DIR_INFORMATION
+{
+    ULONG NextEntryOffset;
+    ULONG FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG FileAttributes;
+    ULONG FileNameLength;
+    ULONG EaSize;
+    LARGE_INTEGER FileId;
+    WCHAR FileName[1];
+} FILE_ID_FULL_DIR_INFORMATION, *PFILE_ID_FULL_DIR_INFORMATION;
+
+typedef struct _FILE_NAMES_INFORMATION
+{
+    ULONG NextEntryOffset;
+    ULONG FileIndex;
+    ULONG FileNameLength;
+    WCHAR FileName[1];
+} FILE_NAMES_INFORMATION, *PFILE_NAMES_INFORMATION;
+
+typedef struct _FILE_ID_BOTH_DIR_INFORMATION
+{
+    ULONG NextEntryOffset;
+    ULONG FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG FileAttributes;
+    ULONG FileNameLength;
+    ULONG EaSize;
+    UCHAR ShortNameLength;
+    WCHAR ShortName[12];
+    LARGE_INTEGER FileId;
+    WCHAR FileName[1];
+} FILE_ID_BOTH_DIR_INFORMATION, *PFILE_ID_BOTH_DIR_INFORMATION;
+
 #define TRUE 1
 #define FALSE 0
 
@@ -123,6 +209,7 @@ typedef struct _FILE_BOTH_DIR_INFORMATION
 #define STATUS_NO_MORE_EAS ((NTSTATUS)0x80000012)
 #define STATUS_INVALID_EA_NAME ((NTSTATUS)0x80000013)
 #define STATUS_NOT_IMPLEMENTED ((NTSTATUS)0xC0000002)
+#define STATUS_INVALID_INFO_CLASS ((NTSTATUS)0xC0000003)
 #define STATUS_OBJECT_NOT_EXTERNALLY_BACKED ((NTSTATUS)0xC000046D)
 #define STATUS_INVALID_PARAMETER ((NTSTATUS)0xC000000D)
 #define STATUS_END_OF_FILE ((NTSTATUS)0xC0000011)
