@@ -2597,6 +2597,7 @@ NtQueryEaFile(IN HANDLE FileHandle,
     PDEVICE_OBJECT DeviceObject;
     PIO_STACK_LOCATION StackPtr;
     PIRP Irp;
+    PMDL Mdl;
     PKEVENT Event = NULL;
     BOOLEAN LocalEvent = FALSE;
     BOOLEAN LockedForSync = FALSE;
@@ -2733,7 +2734,7 @@ NtQueryEaFile(IN HANDLE FileHandle,
 
     _SEH2_TRY
     {
-        if (Length)
+        if (Length && (DeviceObject->Flags & DO_BUFFERED_IO))
         {
             Irp->AssociatedIrp.SystemBuffer =
                 ExAllocatePoolWithQuotaTag(NonPagedPool,
@@ -2741,6 +2742,12 @@ NtQueryEaFile(IN HANDLE FileHandle,
                                            TAG_IOBUF);
             RtlZeroMemory(Irp->AssociatedIrp.SystemBuffer,
                           Length);
+        }
+        else if (Length && (DeviceObject->Flags & DO_DIRECT_IO))
+        {
+            Mdl = IoAllocateMdl(Buffer, Length, FALSE, TRUE, Irp);
+            if (!Mdl) ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+            MmProbeAndLockPages(Mdl, PreviousMode, IoWriteAccess);
         }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -3090,6 +3097,20 @@ NtQueryInformationFile(IN HANDLE FileHandle,
         AlignmentBuffer = Irp->AssociatedIrp.SystemBuffer;
         AlignmentBuffer->AlignmentRequirement = DeviceObject->AlignmentRequirement;
         Irp->IoStatus.Information = sizeof(FILE_ALIGNMENT_INFORMATION);
+        CallDriver = FALSE;
+    }
+    else if (FileInformationClass == FileIoCompletionNotificationInformation)
+    {
+        PFILE_IO_COMPLETION_NOTIFICATION_INFORMATION NotificationInfo = Irp->AssociatedIrp.SystemBuffer;
+
+        NotificationInfo->Flags = 0;
+        if (FileObject->Flags & FO_SKIP_COMPLETION_PORT)
+            NotificationInfo->Flags |= FILE_SKIP_COMPLETION_PORT_ON_SUCCESS;
+        if (FileObject->Flags & FO_SKIP_SET_EVENT)
+            NotificationInfo->Flags |= FILE_SKIP_SET_EVENT_ON_HANDLE;
+        if (FileObject->Flags & FO_SKIP_SET_FAST_IO)
+            NotificationInfo->Flags |= FILE_SKIP_SET_USER_EVENT_ON_FAST_IO;
+        Irp->IoStatus.Information = sizeof(FILE_IO_COMPLETION_NOTIFICATION_INFORMATION);
         CallDriver = FALSE;
     }
     else if (FileInformationClass == FileAllInformation)
@@ -4353,9 +4374,8 @@ NtSetInformationFile(IN HANDLE FileHandle,
     {
         PFILE_IO_COMPLETION_NOTIFICATION_INFORMATION NotificationInfo = Irp->AssociatedIrp.SystemBuffer;
 
-        if (NotificationInfo->Flags & ~(FILE_SKIP_COMPLETION_PORT_ON_SUCCESS |
-                                        FILE_SKIP_SET_EVENT_ON_HANDLE |
-                                        FILE_SKIP_SET_USER_EVENT_ON_FAST_IO))
+        if ((NotificationInfo->Flags & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS) &&
+            (FileObject->Flags & FO_SYNCHRONOUS_IO))
         {
             Status = STATUS_INVALID_PARAMETER;
         }

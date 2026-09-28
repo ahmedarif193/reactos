@@ -9,7 +9,7 @@
 //
 // File Information Classes
 //
-UCHAR IopQueryOperationLength[] =
+UCHAR IopQueryOperationLength[FileMaximumInformation] =
 {
     0,
     0,
@@ -63,10 +63,10 @@ UCHAR IopQueryOperationLength[] =
     0,
     sizeof(FILE_NETWORK_PHYSICAL_NAME_INFORMATION),
 #endif
-    0xFF
+    sizeof(FILE_IO_COMPLETION_NOTIFICATION_INFORMATION)
 };
 
-UCHAR IopSetOperationLength[] =
+UCHAR IopSetOperationLength[FileMaximumInformation] =
 {
     0,
     0,
@@ -109,11 +109,10 @@ UCHAR IopSetOperationLength[] =
     0,
     sizeof(FILE_VALID_DATA_LENGTH_INFORMATION),
     sizeof(UNICODE_STRING),
-    sizeof(FILE_IO_COMPLETION_NOTIFICATION_INFORMATION),
-    0xFF
+    sizeof(FILE_IO_COMPLETION_NOTIFICATION_INFORMATION)
 };
 
-ACCESS_MASK IopQueryOperationAccess[] =
+ACCESS_MASK IopQueryOperationAccess[FileMaximumInformation] =
 {
     0,
     0,
@@ -156,10 +155,10 @@ ACCESS_MASK IopQueryOperationAccess[] =
     0,
     0,
     0,
-    0xFFFFFFFF
+    0
 };
 
-ACCESS_MASK IopSetOperationAccess[] =
+ACCESS_MASK IopSetOperationAccess[FileMaximumInformation] =
 {
     0,
     0,
@@ -202,8 +201,7 @@ ACCESS_MASK IopSetOperationAccess[] =
     0,
     FILE_WRITE_DATA,
     DELETE,
-    0,
-    0xFFFFFFFF
+    0
 };
 
 //
