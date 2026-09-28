@@ -28,6 +28,9 @@
 
 #define COBJMACROS
 
+#ifdef __REACTOS__
+#include <limits.h>
+#endif
 #include "windef.h"
 #include "winbase.h"
 #include "winreg.h"
@@ -81,12 +84,26 @@ static inline WCHAR *strdupAtoW(const char *str)
     LPWSTR ret = NULL;
 
     if(str) {
+#ifdef __REACTOS__
+        int len;
+#else
         DWORD len;
+#endif
 
         len = MultiByteToWideChar(CP_ACP, 0, str, -1, NULL, 0);
+#ifdef __REACTOS__
+        if (!len || (size_t)len > (size_t)-1 / sizeof(WCHAR)) return NULL;
+        ret = malloc((size_t)len * sizeof(WCHAR));
+        if (ret && !MultiByteToWideChar(CP_ACP, 0, str, -1, ret, len))
+        {
+            free(ret);
+            ret = NULL;
+        }
+#else
         ret = malloc(len * sizeof(WCHAR));
         if(ret)
             MultiByteToWideChar(CP_ACP, 0, str, -1, ret, len);
+#endif
     }
 
     return ret;
@@ -104,17 +121,43 @@ static LPWSTR SQLInstall_strdup_multi(LPCSTR str)
 {
     LPCSTR p;
     LPWSTR ret = NULL;
+#ifdef __REACTOS__
+    size_t count = 0, size;
+    int len;
+#else
     DWORD len;
+#endif
 
     if (!str)
         return ret;
 
+#ifdef __REACTOS__
+    for (p = str; *p; p += size)
+    {
+        size = strlen(p) + 1;
+        if (size > INT_MAX - count) return NULL;
+        count += size;
+    }
+#else
     for (p = str; *p; p += lstrlenA(p) + 1)
         ;
+#endif
 
+#ifdef __REACTOS__
+    len = count ? MultiByteToWideChar(CP_ACP, 0, str, count, NULL, 0) : 0;
+    if ((count && !len) || (size_t)len >= (size_t)-1 / sizeof(WCHAR)) return NULL;
+    ret = malloc(((size_t)len + 1) * sizeof(WCHAR));
+    if (!ret) return NULL;
+    if (count && !MultiByteToWideChar(CP_ACP, 0, str, count, ret, len))
+    {
+        free(ret);
+        return NULL;
+    }
+#else
     len = MultiByteToWideChar(CP_ACP, 0, str, p - str, NULL, 0 );
     ret = malloc((len + 1) * sizeof(WCHAR));
     MultiByteToWideChar(CP_ACP, 0, str, p - str, ret, len );
+#endif
     ret[len] = 0;
 
     return ret;
@@ -124,17 +167,43 @@ static LPSTR SQLInstall_strdup_multiWtoA(LPCWSTR str)
 {
     LPCWSTR p;
     LPSTR ret = NULL;
+#ifdef __REACTOS__
+    size_t count = 0, size;
+    int len;
+#else
     DWORD len;
+#endif
 
     if (!str)
         return ret;
 
+#ifdef __REACTOS__
+    for (p = str; *p; p += size)
+    {
+        size = wcslen(p) + 1;
+        if (size > INT_MAX - count) return NULL;
+        count += size;
+    }
+#else
     for (p = str; *p; p += lstrlenW(p) + 1)
         ;
+#endif
 
+#ifdef __REACTOS__
+    len = count ? WideCharToMultiByte(CP_ACP, 0, str, count, NULL, 0, NULL, NULL) : 0;
+    if (count && !len) return NULL;
+    ret = malloc((size_t)len + 1);
+    if (!ret) return NULL;
+    if (count && !WideCharToMultiByte(CP_ACP, 0, str, count, ret, len, NULL, NULL))
+    {
+        free(ret);
+        return NULL;
+    }
+#else
     len = WideCharToMultiByte(CP_ACP, 0, str,   p - str, NULL, 0, NULL, NULL );
     ret = malloc((len + 1));
     WideCharToMultiByte(CP_ACP, 0, str, p - str, ret, len, NULL, NULL );
+#endif
     ret[len] = 0;
 
     return ret;
@@ -145,15 +214,29 @@ static inline char *strdupWtoA( const WCHAR *str )
     char *ret = NULL;
     if (str)
     {
+#ifdef __REACTOS__
+        int len = WideCharToMultiByte( CP_ACP, 0, str, -1, NULL, 0, NULL, NULL );
+        if (!len) return NULL;
+        ret = malloc( len );
+        if (ret && !WideCharToMultiByte( CP_ACP, 0, str, -1, ret, len, NULL, NULL ))
+        {
+            free( ret );
+            ret = NULL;
+        }
+#else
         DWORD len = WideCharToMultiByte( CP_ACP, 0, str, -1, NULL, 0, NULL, NULL );
         if ((ret = malloc( len )))
             WideCharToMultiByte( CP_ACP, 0, str, -1, ret, len, NULL, NULL );
+#endif
     }
     return ret;
 }
 
 static LPWSTR SQLInstall_strdup(LPCSTR str)
 {
+#ifdef __REACTOS__
+    return strdupAtoW(str);
+#else
     DWORD len;
     LPWSTR ret = NULL;
 
@@ -165,6 +248,7 @@ static LPWSTR SQLInstall_strdup(LPCSTR str)
     MultiByteToWideChar(CP_ACP, 0, str, -1, ret, len );
 
     return ret;
+#endif
 }
 
 /* Convert the wide string or zero-length-terminated list of wide strings to a
@@ -203,6 +287,9 @@ static BOOL SQLInstall_narrow(int mode, LPSTR buffer, LPCWSTR str, WORD str_leng
         if (len > buffer_length)
         {
             pbuf = malloc(len);
+#ifdef __REACTOS__
+            if (!pbuf) return FALSE;
+#endif
         }
         else
         {
@@ -424,7 +511,14 @@ BOOL WINAPI SQLConfigDataSourceW(HWND hwnd, WORD request, LPCWSTR driver, LPCWST
             char *driverA = strdupWtoA(driver);
             TRACE("Calling ConfigDSN\n");
 
+#ifdef __REACTOS__
+            if (!driverA || (attributes && !attr))
+                push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+            else
+                ret = pConfigDSN(hwnd, mapped_request, driverA, attr);
+#else
             ret = pConfigDSN(hwnd, mapped_request, driverA, attr);
+#endif
             free(attr);
             free(driverA);
         }
@@ -673,6 +767,9 @@ BOOL WINAPI SQLGetInstalledDriversW(WCHAR *buf, WORD size, WORD *sizeout)
 
     valuelen = 256;
     value = malloc(valuelen * sizeof(WCHAR));
+#ifdef __REACTOS__
+    if (!value) goto out_of_memory;
+#endif
 
     size--;
 
@@ -682,7 +779,19 @@ BOOL WINAPI SQLGetInstalledDriversW(WCHAR *buf, WORD size, WORD *sizeout)
         res = RegEnumValueW(drivers, index, value, &len, NULL, NULL, NULL, NULL);
         while (res == ERROR_MORE_DATA)
         {
+#ifdef __REACTOS__
+            WCHAR *new_value;
+
+            if (valuelen > MAXDWORD / 2 || (SIZE_T)valuelen > ~(SIZE_T)0 / sizeof(WCHAR) / 2)
+                goto out_of_memory;
+            valuelen *= 2;
+            new_value = realloc(value, valuelen * sizeof(WCHAR));
+            if (!new_value) goto out_of_memory;
+            value = new_value;
+            len = valuelen;
+#else
             value = realloc(value, ++len * sizeof(WCHAR));
+#endif
             res = RegEnumValueW(drivers, index, value, &len, NULL, NULL, NULL, NULL);
         }
         if (res == ERROR_SUCCESS)
@@ -701,6 +810,9 @@ BOOL WINAPI SQLGetInstalledDriversW(WCHAR *buf, WORD size, WORD *sizeout)
         index++;
     }
 
+#ifdef __REACTOS__
+done:
+#endif
     buf[written++] = 0;
 
     free(value);
@@ -708,6 +820,13 @@ BOOL WINAPI SQLGetInstalledDriversW(WCHAR *buf, WORD size, WORD *sizeout)
     if (sizeout)
         *sizeout = written;
     return ret;
+#ifdef __REACTOS__
+
+out_of_memory:
+    push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+    ret = FALSE;
+    goto done;
+#endif
 }
 
 BOOL WINAPI SQLGetInstalledDrivers(char *buf, WORD size, WORD *sizeout)
@@ -1338,14 +1457,27 @@ SQLRETURN WINAPI SQLInstallerError(WORD iError, DWORD *pfErrorCode,
             return SQL_ERROR;
     }
     ret = SQLInstallerErrorW(iError, pfErrorCode, wbuf, cbErrorMsgMax, &cbwbuf);
+#ifdef __REACTOS__
+    if (wbuf && ret != SQL_ERROR)
+#else
     if (wbuf)
+#endif
     {
         WORD cbBuf = 0;
+#ifdef __REACTOS__
+        if (!SQLInstall_narrow(1, lpszErrorMsg, wbuf, cbwbuf+1, cbErrorMsgMax, &cbBuf))
+            ret = SQL_ERROR;
+        else if (pcbErrorMsg)
+#else
         SQLInstall_narrow(1, lpszErrorMsg, wbuf, cbwbuf+1, cbErrorMsgMax, &cbBuf);
         free(wbuf);
         if (pcbErrorMsg)
+#endif
             *pcbErrorMsg = cbBuf-1;
     }
+#ifdef __REACTOS__
+    free(wbuf);
+#endif
     return ret;
 }
 
@@ -1573,6 +1705,13 @@ BOOL WINAPI SQLRemoveDriver(LPCSTR lpszDriver, BOOL fRemoveDSN,
     TRACE("%s %d %p\n", debugstr_a(lpszDriver), fRemoveDSN, lpdwUsageCount);
 
     driver = SQLInstall_strdup(lpszDriver);
+#ifdef __REACTOS__
+    if (lpszDriver && !driver)
+    {
+        push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+        return FALSE;
+    }
+#endif
 
     ret =  SQLRemoveDriverW(driver, fRemoveDSN, lpdwUsageCount);
 
@@ -1734,6 +1873,13 @@ BOOL WINAPI SQLRemoveTranslator(LPCSTR lpszTranslator, LPDWORD lpdwUsageCount)
     TRACE("%s %p\n", debugstr_a(lpszTranslator), lpdwUsageCount);
 
     translator = SQLInstall_strdup(lpszTranslator);
+#ifdef __REACTOS__
+    if (lpszTranslator && !translator)
+    {
+        push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+        return FALSE;
+    }
+#endif
     ret =  SQLRemoveTranslatorW(translator, lpdwUsageCount);
 
     free(translator);
@@ -1789,6 +1935,9 @@ BOOL WINAPI SQLWriteDSNToIniW(LPCWSTR lpszDSN, LPCWSTR lpszDriver)
     DWORD ret;
     HKEY hkey, hkeydriver, hkeyroot = HKEY_CURRENT_USER;
     WCHAR filename[MAX_PATH];
+#ifdef __REACTOS__
+    size_t driverlen;
+#endif
 
     TRACE("%s %s\n", debugstr_w(lpszDSN), debugstr_w(lpszDriver));
 
@@ -1799,6 +1948,19 @@ BOOL WINAPI SQLWriteDSNToIniW(LPCWSTR lpszDSN, LPCWSTR lpszDriver)
         push_error(ODBC_ERROR_INVALID_DSN, L"Invalid DSN");
         return FALSE;
     }
+#ifdef __REACTOS__
+    if (!lpszDriver || !*lpszDriver)
+    {
+        push_error(ODBC_ERROR_INVALID_NAME, L"Invalid driver name");
+        return FALSE;
+    }
+    driverlen = wcslen(lpszDriver);
+    if (driverlen >= MAXDWORD / sizeof(WCHAR))
+    {
+        push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+        return FALSE;
+    }
+#endif
 
     /* It doesn't matter if we cannot find the driver, windows just writes a blank value. */
     filename[0] = 0;
@@ -1809,7 +1971,12 @@ BOOL WINAPI SQLWriteDSNToIniW(LPCWSTR lpszDSN, LPCWSTR lpszDriver)
         if (RegOpenKeyW(hkey, lpszDriver, &hkeydriver) == ERROR_SUCCESS)
         {
             DWORD size = MAX_PATH * sizeof(WCHAR);
+#ifdef __REACTOS__
+            if (RegGetValueW(hkeydriver, NULL, L"driver", RRF_RT_REG_SZ, NULL, filename, &size) != ERROR_SUCCESS)
+                filename[0] = 0;
+#else
             RegGetValueW(hkeydriver, NULL, L"driver", RRF_RT_REG_SZ, NULL, filename, &size);
+#endif
             RegCloseKey(hkeydriver);
         }
         RegCloseKey(hkey);
@@ -1830,11 +1997,20 @@ BOOL WINAPI SQLWriteDSNToIniW(LPCWSTR lpszDSN, LPCWSTR lpszDriver)
 
         /* Check for existing entry */
         if (RegOpenKeyW(HKEY_LOCAL_MACHINE, regpath, &hkey) == ERROR_SUCCESS)
+#ifdef __REACTOS__
+        {
+#endif
             hkeyroot = HKEY_LOCAL_MACHINE;
+#ifdef __REACTOS__
+            RegCloseKey(hkey);
+        }
+#endif
         else
             hkeyroot = HKEY_CURRENT_USER;
 
+#ifndef __REACTOS__
         RegCloseKey(hkey);
+#endif
         free(regpath);
     }
 
@@ -1844,13 +2020,33 @@ BOOL WINAPI SQLWriteDSNToIniW(LPCWSTR lpszDSN, LPCWSTR lpszDriver)
 
         if ((ret = RegCreateKeyW(hkey, L"ODBC Data Sources", &sources)) == ERROR_SUCCESS)
         {
+#ifdef __REACTOS__
+            ret = RegSetValueExW(sources, lpszDSN, 0, REG_SZ, (BYTE*)lpszDriver,
+                                 (driverlen + 1) * sizeof(WCHAR));
+#else
             RegSetValueExW(sources, lpszDSN, 0, REG_SZ, (BYTE*)lpszDriver, (lstrlenW(lpszDriver)+1)*sizeof(WCHAR));
+#endif
             RegCloseKey(sources);
 
+#ifdef __REACTOS__
+            if (ret == ERROR_SUCCESS)
+#else
             RegDeleteTreeW(hkey, lpszDSN);
             if ((ret = RegCreateKeyW(hkey, lpszDSN, &hkeydriver)) == ERROR_SUCCESS)
+#endif
             {
+#ifdef __REACTOS__
+                ret = RegDeleteTreeW(hkey, lpszDSN);
+                if (ret == ERROR_FILE_NOT_FOUND) ret = ERROR_SUCCESS;
+            }
+            if (ret == ERROR_SUCCESS &&
+                (ret = RegCreateKeyW(hkey, lpszDSN, &hkeydriver)) == ERROR_SUCCESS)
+            {
+                ret = RegSetValueExW(hkeydriver, L"driver", 0, REG_SZ, (BYTE*)filename,
+                                     (wcslen(filename) + 1) * sizeof(WCHAR));
+#else
                 RegSetValueExW(sources, L"driver", 0, REG_SZ, (BYTE*)filename, (lstrlenW(filename)+1)*sizeof(WCHAR));
+#endif
                 RegCloseKey(hkeydriver);
             }
         }
@@ -1870,6 +2066,9 @@ BOOL WINAPI SQLWriteDSNToIni(LPCSTR lpszDSN, LPCSTR lpszDriver)
 
     TRACE("%s %s\n", debugstr_a(lpszDSN), debugstr_a(lpszDriver));
 
+#ifdef __REACTOS__
+    clear_errors();
+#endif
     dsn = SQLInstall_strdup(lpszDSN);
     driver = SQLInstall_strdup(lpszDriver);
     if (dsn && driver)
