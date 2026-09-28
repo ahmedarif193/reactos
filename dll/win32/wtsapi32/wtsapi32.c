@@ -186,11 +186,21 @@ BOOL WINAPI WTSEnumerateProcessesExW(HANDLE server, DWORD *level, DWORD session_
                 TOKEN_USER *user = (TOKEN_USER *)buffer;
                 DWORD size;
 
+#ifdef __REACTOS__
+                if (GetTokenInformation(token, TokenUser, buffer, sizeof(buffer), &size))
+                {
+                    info[count].pUserSid = p;
+                    size = GetLengthSid(user->User.Sid);
+                    memcpy(p, user->User.Sid, size);
+                    p += size;
+                }
+#else
                 GetTokenInformation(token, TokenUser, buffer, sizeof(buffer), &size);
                 info[count].pUserSid = p;
                 size = GetLengthSid(user->User.Sid);
                 memcpy(p, user->User.Sid, size);
                 p += size;
+#endif
                 CloseHandle(token);
             }
             CloseHandle(process);
@@ -341,6 +351,11 @@ BOOL WINAPI WTSEnumerateSessionsA(HANDLE server, DWORD reserved, DWORD version,
             ERR("WideCharToMultiByte failed.\n");
             WTSFreeMemory(*session_info);
             WTSFreeMemory(infoW);
+#ifdef __REACTOS__
+            *session_info = NULL;
+            *count = 0;
+            return FALSE;
+#endif
         }
         offset += len;
     }
