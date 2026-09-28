@@ -1109,18 +1109,26 @@ GetEnvironmentVariables(HWND hwndListView,
             continue;
 
         VarData = GlobalAlloc(GPTR, sizeof(VARIABLE_DATA));
+        if (VarData == NULL)
+            goto Cleanup;
 
         VarData->dwType = dwType;
 
         VarData->lpName = GlobalAlloc(GPTR, (dwNameLength + 1) * sizeof(TCHAR));
+        if (VarData->lpName == NULL)
+            goto FreeVariable;
         _tcscpy(VarData->lpName, lpName);
 
         VarData->lpRawValue = GlobalAlloc(GPTR, (dwDataLength + 1) * sizeof(TCHAR));
+        if (VarData->lpRawValue == NULL)
+            goto FreeVariable;
         _tcscpy(VarData->lpRawValue, lpData);
 
         ExpandEnvironmentStrings(lpData, lpExpandData, 2048);
 
         VarData->lpCookedValue = GlobalAlloc(GPTR, (_tcslen(lpExpandData) + 1) * sizeof(TCHAR));
+        if (VarData->lpCookedValue == NULL)
+            goto FreeVariable;
         _tcscpy(VarData->lpCookedValue, lpExpandData);
 
         memset(&lvi, 0x00, sizeof(lvi));
@@ -1129,10 +1137,21 @@ GetEnvironmentVariables(HWND hwndListView,
         lvi.pszText = VarData->lpName;
         lvi.state = (i == 0) ? LVIS_SELECTED : 0;
         iItem = ListView_InsertItem(hwndListView, &lvi);
+        if (iItem == -1)
+            goto FreeVariable;
 
         ListView_SetItemText(hwndListView, iItem, 1, VarData->lpCookedValue);
     }
 
+    goto Cleanup;
+
+FreeVariable:
+    GlobalFree(VarData->lpName);
+    GlobalFree(VarData->lpRawValue);
+    GlobalFree(VarData->lpCookedValue);
+    GlobalFree(VarData);
+
+Cleanup:
     GlobalFree(lpExpandData);
     GlobalFree(lpName);
     GlobalFree(lpData);
@@ -1230,26 +1249,16 @@ OnNewVariable(HWND hwndDlg,
 
     DlgData->VarData = GlobalAlloc(GPTR, sizeof(VARIABLE_DATA));
     if (!DlgData->VarData)
+    {
+        GlobalFree(DlgData);
         return;
+    }
 
     if (DialogBoxParam(hApplet,
                        MAKEINTRESOURCE(DlgData->dwDlgID),
                        hwndDlg,
                        EditVariableDlgProc,
-                       (LPARAM)DlgData) <= 0)
-    {
-        if (DlgData->VarData->lpName != NULL)
-            GlobalFree(DlgData->VarData->lpName);
-
-        if (DlgData->VarData->lpRawValue != NULL)
-            GlobalFree(DlgData->VarData->lpRawValue);
-
-        if (DlgData->VarData->lpCookedValue != NULL)
-            GlobalFree(DlgData->VarData->lpCookedValue);
-
-        GlobalFree(DlgData);
-    }
-    else
+                       (LPARAM)DlgData) > 0)
     {
         if (DlgData->VarData->lpName != NULL && (DlgData->VarData->lpCookedValue || DlgData->VarData->lpRawValue))
         {
@@ -1260,9 +1269,29 @@ OnNewVariable(HWND hwndDlg,
             lvi.state = 0;
             iItem = ListView_InsertItem(hwndListView, &lvi);
 
-            ListView_SetItemText(hwndListView, iItem, 1, DlgData->VarData->lpCookedValue);
+            if (iItem != -1)
+            {
+                ListView_SetItemText(hwndListView, iItem, 1, DlgData->VarData->lpCookedValue);
+                DlgData->VarData = NULL;
+            }
         }
     }
+
+    if (DlgData->VarData != NULL)
+    {
+        if (DlgData->VarData->lpName != NULL)
+            GlobalFree(DlgData->VarData->lpName);
+
+        if (DlgData->VarData->lpRawValue != NULL)
+            GlobalFree(DlgData->VarData->lpRawValue);
+
+        if (DlgData->VarData->lpCookedValue != NULL)
+            GlobalFree(DlgData->VarData->lpCookedValue);
+
+        GlobalFree(DlgData->VarData);
+    }
+
+    GlobalFree(DlgData);
 }
 
 
@@ -1323,9 +1352,9 @@ OnEditVariable(HWND hwndDlg,
                 ListView_SetItemText(hwndListView, iItem, 1, DlgData->VarData->lpCookedValue);
             }
         }
-
-        GlobalFree(DlgData);
     }
+
+    GlobalFree(DlgData);
 }
 
 
