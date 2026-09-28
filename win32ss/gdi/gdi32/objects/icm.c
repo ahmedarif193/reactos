@@ -467,6 +467,7 @@ SetICMMode(
 )
 {
     PDC_ATTR pdcattr;
+    PLDC pldc;
 
     pdcattr = GdiGetDcAttr(hdc);
     if (pdcattr == NULL)
@@ -485,6 +486,13 @@ SetICMMode(
         (iEnableICM != ICM_DONE_OUTSIDEDC))
     {
         return 0;
+    }
+
+    if (GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_ALTDC_TYPE)
+    {
+        pldc = GdiGetLDC(hdc);
+        if (!pldc || (pldc->iType == LDC_EMFLDC && !EMFDC_SetICMMode(pldc, iEnableICM)))
+            return 0;
     }
 
     /* Color management is not actually performed, we only track the mode */

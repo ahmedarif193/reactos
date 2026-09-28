@@ -887,6 +887,7 @@ extern BOOL EMFDC_SetDIBitsToDevice( LDC *dc_attr, INT x_dest, INT y_dest, DWORD
                                      UINT coloruse ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetLayout( LDC *dc_attr, DWORD layout ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetMapMode( LDC *dc_attr, INT mode ) DECLSPEC_HIDDEN;
+extern BOOL EMFDC_SetICMMode( LDC *dc_attr, DWORD mode ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetMapperFlags( LDC *dc_attr, DWORD flags ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetPixel( LDC *dc_attr, INT x, INT y, COLORREF color ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetPolyFillMode( LDC *dc_attr, INT mode ) DECLSPEC_HIDDEN;
