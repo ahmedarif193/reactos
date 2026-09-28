@@ -952,6 +952,9 @@ static LRESULT WINMM_OpenDevice(WINMM_Device *device, WINMM_OpenInfo *info,
         /* we aren't guaranteed that the struct in lpFormat is a full
          * WAVEFORMATEX struct, which IAC::IsFormatSupported requires */
         device->orig_fmt = malloc(sizeof(WAVEFORMATEX));
+#ifdef __REACTOS__
+        if (!device->orig_fmt) goto error;
+#endif
         memcpy(device->orig_fmt, info->format, sizeof(PCMWAVEFORMAT));
         device->orig_fmt->cbSize = 0;
         if(device->orig_fmt->wBitsPerSample % 8 != 0){
@@ -969,6 +972,9 @@ static LRESULT WINMM_OpenDevice(WINMM_Device *device, WINMM_OpenInfo *info,
         }
     }else{
         device->orig_fmt = malloc(sizeof(WAVEFORMATEX) + info->format->cbSize);
+#ifdef __REACTOS__
+        if (!device->orig_fmt) goto error;
+#endif
         memcpy(device->orig_fmt, info->format,
                 sizeof(WAVEFORMATEX) + info->format->cbSize);
     }
@@ -1015,22 +1021,48 @@ static LRESULT WINMM_OpenDevice(WINMM_Device *device, WINMM_OpenInfo *info,
             (void**)&device->clock);
     if(FAILED(hr)){
         WARN("GetService failed: %08lx\n", hr);
+#ifdef __REACTOS__
+        ret = hr2mmr(hr);
+#endif
         goto error;
     }
 
     if(!device->event){
+#ifdef __REACTOS__
+        HANDLE *new_handles;
+        WINMM_Device **new_devices;
+
+#endif
         device->event = CreateEventW(NULL, FALSE, FALSE, NULL);
         if(!device->event){
             WARN("CreateEvent failed: %08lx\n", hr);
+#ifdef __REACTOS__
+            ret = MMSYSERR_NOMEM;
+#endif
             goto error;
         }
 
         /* As the devices thread is waiting on g_device_handles, it can
          * only be modified from within this same thread. */
+#ifdef __REACTOS__
+        if (g_devhandle_count == UINT_MAX ||
+            (size_t)g_devhandle_count >= ~(size_t)0 / sizeof(*g_device_handles) ||
+            (size_t)g_devhandle_count >= ~(size_t)0 / sizeof(*g_handle_devices))
+            goto event_error;
+        new_handles = realloc(g_device_handles,
+                sizeof(*new_handles) * ((size_t)g_devhandle_count + 1));
+        if (!new_handles) goto event_error;
+        g_device_handles = new_handles;
+        new_devices = realloc(g_handle_devices,
+                sizeof(*new_devices) * ((size_t)g_devhandle_count + 1));
+        if (!new_devices) goto event_error;
+        g_handle_devices = new_devices;
+#else
         g_device_handles = realloc(g_device_handles,
                 sizeof(HANDLE) * (g_devhandle_count + 1));
         g_handle_devices = realloc(g_handle_devices,
                 sizeof(WINMM_Device *) * (g_devhandle_count + 1));
+#endif
         g_device_handles[g_devhandle_count] = device->event;
         g_handle_devices[g_devhandle_count] = device;
         ++g_devhandle_count;
@@ -1039,6 +1071,9 @@ static LRESULT WINMM_OpenDevice(WINMM_Device *device, WINMM_OpenInfo *info,
     hr = IAudioClient_SetEventHandle(device->client, device->event);
     if(FAILED(hr)){
         WARN("SetEventHandle failed: %08lx\n", hr);
+#ifdef __REACTOS__
+        ret = hr2mmr(hr);
+#endif
         goto error;
     }
 
@@ -1061,7 +1096,17 @@ static LRESULT WINMM_OpenDevice(WINMM_Device *device, WINMM_OpenInfo *info,
 
     return MMSYSERR_NOERROR;
 
+#ifdef __REACTOS__
+event_error:
+    CloseHandle(device->event);
+    device->event = NULL;
+    ret = MMSYSERR_NOMEM;
+
+#endif
 error:
+#ifdef __REACTOS__
+    if (!(info->flags & WAVE_FORMAT_QUERY) && !ret) ret = MMSYSERR_ERROR;
+#endif
     if(device->client){
         IAudioClient_Release(device->client);
         device->client = NULL;
@@ -4280,7 +4325,11 @@ UINT WINAPI mixerGetLineInfoW(HMIXEROBJ hmix, LPMIXERLINEW lpmliW, DWORD fdwInfo
 UINT WINAPI mixerGetLineInfoA(HMIXEROBJ hmix, LPMIXERLINEA lpmliA,
 			      DWORD fdwInfo)
 {
+#ifdef __REACTOS__
+    MIXERLINEW		mliW = {0};
+#else
     MIXERLINEW		mliW;
+#endif
     UINT		ret;
 
     TRACE("(%p, %p, %lx)\n", hmix, lpmliA, fdwInfo);
