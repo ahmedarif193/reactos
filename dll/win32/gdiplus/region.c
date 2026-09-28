@@ -75,6 +75,9 @@ WINE_DEFAULT_DEBUG_CHANNEL(gdiplus);
  *
  */
 
+#ifdef __REACTOS__
+#define FLAGS_WINDING   0x2000
+#endif
 #define FLAGS_INTPATH   0x4000
 
 struct region_header
@@ -553,7 +556,11 @@ GpStatus WINGDIPAPI GdipCreateRegionHrgn(HRGN hrgn, GpRegion **region)
         return Ok;
     }
 
+#ifdef __REACTOS__
+    if((stat = GdipCreatePath(FillModeWinding, &path)) != Ok){
+#else
     if((stat = GdipCreatePath(FillModeAlternate, &path)) != Ok){
+#endif
         free(buf);
         return stat;
     }
@@ -690,7 +697,14 @@ static void write_element(const region_element* element, DWORD *buffer,
             break;
         case RegionDataPath:
         {
+#ifdef __REACTOS__
+            struct path_header *header = (struct path_header *)(buffer + *filled);
+#endif
             DWORD size = write_path_data(element->elementdata.path, buffer + *filled + 1);
+#ifdef __REACTOS__
+            if (element->elementdata.path->fill == FillModeWinding)
+                header->flags |= FLAGS_WINDING;
+#endif
             write_dword(buffer, filled, size);
             *filled += size / sizeof(DWORD);
             break;
@@ -871,7 +885,11 @@ static GpStatus read_element(struct memory_buffer *mbuf, GpRegion *region, regio
             return GenericError;
         }
 
+#ifdef __REACTOS__
+        status = GdipCreatePath(path_header->flags & FLAGS_WINDING ? FillModeWinding : FillModeAlternate, &path);
+#else
         status = GdipCreatePath(FillModeAlternate, &path);
+#endif
         if (status) return status;
 
         node->elementdata.path = path;
@@ -881,7 +899,11 @@ static GpStatus read_element(struct memory_buffer *mbuf, GpRegion *region, regio
 
         path->pathdata.Count = path_header->count;
 
+#ifdef __REACTOS__
+        if (path_header->flags & ~(FLAGS_INTPATH | FLAGS_WINDING))
+#else
         if (path_header->flags & ~FLAGS_INTPATH)
+#endif
             FIXME("unhandled path flags %#lx\n", path_header->flags);
 
         if (path_header->flags & FLAGS_INTPATH)

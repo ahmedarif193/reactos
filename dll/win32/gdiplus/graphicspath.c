@@ -1670,13 +1670,35 @@ GpStatus WINGDIPAPI GdipGetPathWorldBounds(GpPath* path, GpRectF* bounds,
     }
 
     if(pen){
+#ifdef __REACTOS__
+        REAL scale = 1.0;
+
+#endif
         path_width = pen->width / 2.0;
+#ifdef __REACTOS__
+        if (matrix)
+        {
+            scale = (hypotf(matrix->matrix[0] + matrix->matrix[3],
+                            matrix->matrix[1] - matrix->matrix[2]) +
+                     hypotf(matrix->matrix[0] - matrix->matrix[3],
+                            matrix->matrix[1] + matrix->matrix[2])) / 2.0;
+            path_width = pen->width * scale;
+        }
+#endif
 
         if(count > 2)
+#ifdef __REACTOS__
+            path_width = max(path_width, pen->width * pen->miterlimit * scale / 2.0);
+#else
             path_width = max(path_width,  pen->width * pen->miterlimit / 2.0);
+#endif
         /* FIXME: this should probably also check for the startcap */
         if(pen->endcap & LineCapNoAnchor)
+#ifdef __REACTOS__
+            path_width = max(path_width, pen->width * (2.0 * scale + 0.2));
+#else
             path_width = max(path_width,  pen->width * 2.2);
+#endif
 
         low_x -= path_width;
         low_y -= path_width;
