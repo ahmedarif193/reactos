@@ -305,7 +305,7 @@ _FUNCTION_ {
 		    }
                 }
                 break;
-#ifndef _LIBCNT_
+#if !defined(__REACTOS__) || !defined(_LIBCNT_)
             case 'e':
             case 'E':
             case 'f':
