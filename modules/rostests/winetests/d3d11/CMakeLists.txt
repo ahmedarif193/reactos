@@ -7,6 +7,7 @@ add_executable(d3d11_winetest
     d3d11.c
     resource.rc
     testlist.c)
+target_compile_definitions(d3d11_winetest PRIVATE WINETEST_WAIT_CHILD_PROCESS_INFO)
 
 target_include_directories(d3d11_winetest BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 target_link_libraries(d3d11_winetest dx10guid uuid)

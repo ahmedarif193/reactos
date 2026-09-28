@@ -25,6 +25,7 @@ list(APPEND PCH_SKIP_SOURCE
 add_executable(shlwapi_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE})
+target_compile_definitions(shlwapi_winetest PRIVATE WINETEST_WAIT_CHILD_PROCESS_INFO)
 
 target_link_libraries(shlwapi_winetest uuid)
 set_module_type(shlwapi_winetest win32cui)

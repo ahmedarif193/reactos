@@ -3405,12 +3405,6 @@ static void test_async_file_errors(void)
     HANDLE hFile;
     LPVOID lpBuffer = HeapAlloc(GetProcessHeap(), 0, 4096);
     OVERLAPPED ovl;
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: test_async_file_errors() crashes on ReactOS!\n");
-        return;
-    }
-#endif
     ovl.Offset = 0;
     ovl.OffsetHigh = 0;
     ovl.hEvent = hSem;
@@ -4959,18 +4953,10 @@ static void test_WriteFileGather(void)
     ok( ret, "GetQueuedCompletionStatus failed err %lu\n", GetLastError());
     ok( povl == &ovl, "wrong ovl %p\n", povl );
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Calls to GetOverlappedResult hang on ReactOS!\n");
-    } else {
-#endif
     tx = 0;
     br = GetOverlappedResult( hfile, &ovl, &tx, TRUE );
     ok( br == TRUE, "GetOverlappedResult failed: %lu\n", GetLastError() );
     ok( tx == si.dwPageSize, "got unexpected bytes transferred: %lu\n", tx );
-#ifdef __REACTOS__
-    }
-#endif
 
     ResetEvent( evt );
 
@@ -4989,18 +4975,10 @@ static void test_WriteFileGather(void)
     ok( ret, "GetQueuedCompletionStatus failed err %lu\n", GetLastError());
     ok( povl == &ovl, "wrong ovl %p\n", povl );
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Calls to GetOverlappedResult hang on ReactOS!\n");
-    } else {
-#endif
     tx = 0;
     br = GetOverlappedResult( hfile, &ovl, &tx, TRUE );
     ok( br == TRUE, "GetOverlappedResult failed: %lu\n", GetLastError() );
     ok( tx == si.dwPageSize, "got unexpected bytes transferred: %lu\n", tx );
-#ifdef __REACTOS__
-    }
-#endif
 
     ok( memcmp( rbuf1, wbuf, si.dwPageSize ) == 0,
             "data was not read into buffer\n" );
@@ -5060,18 +5038,10 @@ static void test_WriteFileGather(void)
     ok( ret, "GetQueuedCompletionStatus failed err %lu\n", GetLastError() );
     ok( povl == &ovl, "wrong ovl %p\n", povl );
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Calls to GetOverlappedResult hang on ReactOS!\n");
-    } else {
-#endif
     tx = 0;
     br = GetOverlappedResult( hfile, &ovl, &tx, TRUE );
     ok( br == TRUE, "GetOverlappedResult failed: %lu\n", GetLastError() );
     ok( tx == si.dwPageSize, "got unexpected bytes transferred: %lu\n", tx );
-#ifdef __REACTOS__
-    }
-#endif
 
     ok( memcmp( rbuf1, wbuf, si.dwPageSize ) == 0,
             "data was not read into buffer\n" );
@@ -5096,18 +5066,10 @@ static void test_WriteFileGather(void)
     ok( ret, "GetQueuedCompletionStatus failed err %lu\n", GetLastError() );
     ok( povl == &ovl, "wrong ovl %p\n", povl );
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Calls to GetOverlappedResult hang on ReactOS!\n");
-    } else {
-#endif
     tx = 0;
     br = GetOverlappedResult( hfile, &ovl, &tx, TRUE );
     ok( br == TRUE, "GetOverlappedResult failed: %lu\n", GetLastError() );
     ok( tx == si.dwPageSize / 2, "got unexpected bytes transferred: %lu\n", tx );
-#ifdef __REACTOS__
-    }
-#endif
 
     ok( memcmp( rbuf1, wbuf, si.dwPageSize / 2 ) == 0,
             "invalid data was read into buffer\n" );
@@ -5128,17 +5090,9 @@ static void test_WriteFileGather(void)
         ok(br, "GetQueuedCompletionStatus failed, err %lu.\n", GetLastError());
         ok(povl == &ovl, "Wrong ovl %p.\n", povl);
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Calls to GetOverlappedResult hang on ReactOS!\n");
-    } else {
-#endif
         br = GetOverlappedResult(hfile, &ovl, &tx, TRUE);
         ok(br, "GetOverlappedResult failed, err %lu.\n", GetLastError());
         ok(tx == si.dwPageSize, "Got unexpected size %lu.\n", tx);
-#ifdef __REACTOS__
-    }
-#endif
 
         ResetEvent(evt);
     }

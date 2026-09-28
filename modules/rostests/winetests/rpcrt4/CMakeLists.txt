@@ -48,6 +48,7 @@ if(MSVC)
 endif()
 
 add_executable(rpcrt4_winetest ${SOURCE})
+target_compile_definitions(rpcrt4_winetest PRIVATE WINETEST_WAIT_CHILD_PROCESS_INFO)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(rpcrt4_winetest PRIVATE "-Wno-cast-calling-convention")

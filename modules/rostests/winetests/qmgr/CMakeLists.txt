@@ -10,6 +10,7 @@ list(APPEND SOURCE
     testlist.c)
 
 add_executable(qmgr_winetest ${SOURCE})
+target_compile_definitions(qmgr_winetest PRIVATE WINETEST_WAIT_CHILD_PROCESS_INFO)
 target_compile_definitions(qmgr_winetest PRIVATE CONST_VTABLE)
 set_module_type(qmgr_winetest win32cui)
 target_link_libraries(qmgr_winetest uuid)

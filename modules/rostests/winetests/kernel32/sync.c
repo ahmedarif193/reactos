@@ -521,7 +521,7 @@ static void test_event(void)
     BOOL val;
 
     /* no sd */
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle = CreateEventA(NULL, FALSE, FALSE, __FILE_FW_SLASH__ ": Test Event");
 #else
     handle = CreateEventA(NULL, FALSE, FALSE, __FILE__ ": Test Event");
@@ -536,7 +536,7 @@ static void test_event(void)
     InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
 
     /* blank sd */
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle = CreateEventA(&sa, FALSE, FALSE, __FILE_FW_SLASH__ ": Test Event");
 #else
     handle = CreateEventA(&sa, FALSE, FALSE, __FILE__ ": Test Event");
@@ -546,7 +546,7 @@ static void test_event(void)
 
     /* sd with NULL dacl */
     SetSecurityDescriptorDacl(&sd, TRUE, NULL, FALSE);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle = CreateEventA(&sa, FALSE, FALSE, __FILE_FW_SLASH__ ": Test Event");
 #else
     handle = CreateEventA(&sa, FALSE, FALSE, __FILE__ ": Test Event");
@@ -557,7 +557,7 @@ static void test_event(void)
     /* sd with empty dacl */
     InitializeAcl(&acl, sizeof(acl), ACL_REVISION);
     SetSecurityDescriptorDacl(&sd, TRUE, &acl, FALSE);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle = CreateEventA(&sa, FALSE, FALSE, __FILE_FW_SLASH__ ": Test Event");
 #else
     handle = CreateEventA(&sa, FALSE, FALSE, __FILE__ ": Test Event");
@@ -568,7 +568,7 @@ static void test_event(void)
     /* test case sensitivity */
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle = CreateEventA(NULL, FALSE, FALSE, __FILE_FW_SLASH__ ": Test Event");
 #else
     handle = CreateEventA(NULL, FALSE, FALSE, __FILE__ ": Test Event");
@@ -577,7 +577,7 @@ static void test_event(void)
     ok( GetLastError() == 0, "wrong error %lu\n", GetLastError());
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = CreateEventA(NULL, FALSE, FALSE, __FILE_FW_SLASH__ ": Test Event");
 #else
     handle2 = CreateEventA(NULL, FALSE, FALSE, __FILE__ ": Test Event");
@@ -587,7 +587,7 @@ static void test_event(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = CreateEventA(NULL, FALSE, FALSE, __FILE_FW_SLASH__ ": TEST EVENT");
 #else
     handle2 = CreateEventA(NULL, FALSE, FALSE, __FILE__ ": TEST EVENT");
@@ -597,7 +597,7 @@ static void test_event(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = OpenEventA( EVENT_ALL_ACCESS, FALSE, __FILE_FW_SLASH__ ": Test Event");
 #else
     handle2 = OpenEventA( EVENT_ALL_ACCESS, FALSE, __FILE__ ": Test Event");
@@ -606,7 +606,7 @@ static void test_event(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = OpenEventA( EVENT_ALL_ACCESS, FALSE, __FILE_FW_SLASH__ ": TEST EVENT");
 #else
     handle2 = OpenEventA( EVENT_ALL_ACCESS, FALSE, __FILE__ ": TEST EVENT");
@@ -652,7 +652,7 @@ static void test_event(void)
     ret = CloseHandle( handle );
     ok( ret, "CloseHandle failed err %lu\n", GetLastError() );
 
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle = CreateEventA(NULL, FALSE, FALSE, __FILE_FW_SLASH__ ": Test Event");
 #else
     handle = CreateEventA(NULL, FALSE, FALSE, __FILE__ ": Test Event");
@@ -671,7 +671,7 @@ static void test_semaphore(void)
     /* test case sensitivity */
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle = CreateSemaphoreA(NULL, 0, 1, __FILE_FW_SLASH__ ": Test Semaphore");
 #else
     handle = CreateSemaphoreA(NULL, 0, 1, __FILE__ ": Test Semaphore");
@@ -680,7 +680,7 @@ static void test_semaphore(void)
     ok(GetLastError() == 0, "wrong error %lu\n", GetLastError());
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = CreateSemaphoreA(NULL, 0, 1, __FILE_FW_SLASH__ ": Test Semaphore");
 #else
     handle2 = CreateSemaphoreA(NULL, 0, 1, __FILE__ ": Test Semaphore");
@@ -690,7 +690,7 @@ static void test_semaphore(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = CreateSemaphoreA(NULL, 0, 1, __FILE_FW_SLASH__ ": TEST SEMAPHORE");
 #else
     handle2 = CreateSemaphoreA(NULL, 0, 1, __FILE__ ": TEST SEMAPHORE");
@@ -700,7 +700,7 @@ static void test_semaphore(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = OpenSemaphoreA( SEMAPHORE_ALL_ACCESS, FALSE, __FILE_FW_SLASH__ ": Test Semaphore");
 #else
     handle2 = OpenSemaphoreA( SEMAPHORE_ALL_ACCESS, FALSE, __FILE__ ": Test Semaphore");
@@ -709,7 +709,7 @@ static void test_semaphore(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = OpenSemaphoreA( SEMAPHORE_ALL_ACCESS, FALSE, __FILE_FW_SLASH__ ": TEST SEMAPHORE");
 #else
     handle2 = OpenSemaphoreA( SEMAPHORE_ALL_ACCESS, FALSE, __FILE__ ": TEST SEMAPHORE");
@@ -737,7 +737,7 @@ static void test_waitable_timer(void)
     /* test case sensitivity */
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle = CreateWaitableTimerA(NULL, FALSE, __FILE_FW_SLASH__ ": Test WaitableTimer");
 #else
     handle = CreateWaitableTimerA(NULL, FALSE, __FILE__ ": Test WaitableTimer");
@@ -746,7 +746,7 @@ static void test_waitable_timer(void)
     ok(GetLastError() == 0, "wrong error %lu\n", GetLastError());
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = CreateWaitableTimerA(NULL, FALSE, __FILE_FW_SLASH__ ": Test WaitableTimer");
 #else
     handle2 = CreateWaitableTimerA(NULL, FALSE, __FILE__ ": Test WaitableTimer");
@@ -756,7 +756,7 @@ static void test_waitable_timer(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = CreateWaitableTimerA(NULL, FALSE, __FILE_FW_SLASH__ ": TEST WAITABLETIMER");
 #else
     handle2 = CreateWaitableTimerA(NULL, FALSE, __FILE__ ": TEST WAITABLETIMER");
@@ -766,7 +766,7 @@ static void test_waitable_timer(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = OpenWaitableTimerA( TIMER_ALL_ACCESS, FALSE, __FILE_FW_SLASH__ ": Test WaitableTimer");
 #else
     handle2 = OpenWaitableTimerA( TIMER_ALL_ACCESS, FALSE, __FILE__ ": Test WaitableTimer");
@@ -775,7 +775,7 @@ static void test_waitable_timer(void)
     CloseHandle( handle2 );
 
     SetLastError(0xdeadbeef);
-#if defined(__REACTOS__) && defined(_MSC_VER)
+#ifdef __FILE_FW_SLASH__
     handle2 = OpenWaitableTimerA( TIMER_ALL_ACCESS, FALSE, __FILE_FW_SLASH__ ": TEST WAITABLETIMER");
 #else
     handle2 = OpenWaitableTimerA( TIMER_ALL_ACCESS, FALSE, __FILE__ ": TEST WAITABLETIMER");

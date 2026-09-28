@@ -75,18 +75,18 @@ endif()
 if (MSVC)
     # error C4101: unreferenced local variable
     target_compile_options(kernel32_winetest PRIVATE /wd4101)
-
-    # Approximates a __FILE__ macro with forward slashes instead of back slashes
-    # and defines it as __FILE_FW_SLASH__.
-    foreach(source_file ${SOURCE})
-        get_filename_component(abs_source_file "${source_file}" ABSOLUTE)
-        file(RELATIVE_PATH rel_path "${CMAKE_SOURCE_DIR}" "${abs_source_file}")
-        string(REPLACE "\\" "/" rel_path_forward "${rel_path}")
-        set_source_files_properties(${source_file} PROPERTIES
-            COMPILE_DEFINITIONS "__FILE_FW_SLASH__=\"../${rel_path_forward}\""
-        )
-    endforeach()
 endif()
+
+# Approximates a __FILE__ macro with forward slashes instead of back slashes
+# and defines it as __FILE_FW_SLASH__.
+foreach(source_file ${SOURCE})
+    get_filename_component(abs_source_file "${source_file}" ABSOLUTE)
+    file(RELATIVE_PATH rel_path "${CMAKE_SOURCE_DIR}" "${abs_source_file}")
+    string(REPLACE "\\" "/" rel_path_forward "${rel_path}")
+    set_source_files_properties(${source_file} PROPERTIES
+        COMPILE_DEFINITIONS "__FILE_FW_SLASH__=\"../${rel_path_forward}\""
+    )
+endforeach()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(kernel32_winetest PRIVATE

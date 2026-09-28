@@ -23,6 +23,7 @@ add_executable(advapi32_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
     rsrc.rc)
+target_compile_definitions(advapi32_winetest PRIVATE WINETEST_WAIT_CHILD_PROCESS_INFO)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(advapi32_winetest PRIVATE

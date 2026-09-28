@@ -31,6 +31,7 @@ list(APPEND PCH_SKIP_SOURCE
 add_executable(ole32_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE})
+target_compile_definitions(ole32_winetest PRIVATE WINETEST_WAIT_CHILD_PROCESS_INFO)
 
 # CMake 3.9 and higher requires to specify this dependency manually
 # see https://gitlab.kitware.com/cmake/cmake/issues/19933

@@ -28,6 +28,7 @@ list(APPEND PCH_SKIP_SOURCE
 add_executable(windowscodecs_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE})
+target_compile_definitions(windowscodecs_winetest PRIVATE WINETEST_WAIT_CHILD_PROCESS_INFO)
 
 target_compile_definitions(windowscodecs_winetest PRIVATE _FORCENAMELESSUNION)
 target_include_directories(windowscodecs_winetest BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)

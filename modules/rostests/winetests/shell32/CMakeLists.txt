@@ -34,6 +34,7 @@ add_executable(shell32_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
     rsrc.rc)
+target_compile_definitions(shell32_winetest PRIVATE WINETEST_WAIT_CHILD_PROCESS_INFO)
 
 target_link_libraries(shell32_winetest uuid)
 set_module_type(shell32_winetest win32cui)

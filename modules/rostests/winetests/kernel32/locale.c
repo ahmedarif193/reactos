@@ -2777,11 +2777,6 @@ static void test_lcmapstring_unicode(lcmapstring_wrapper func_ptr, const char *f
     ok(!memcmp(p_buf, p_buf2, ret), "%s sort keys must be equal\n", func_name);
 
     /* test contents with short buffer */
-#if defined(__REACTOS__) && defined(_WIN64)
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: These tests crash on ReactOS x64\n");
-    } else {
-#endif
     memset( buf, 0xcc, sizeof(buf) );
     ret = func_ptr(LCMAP_SORTKEY, upper_case, -1, buf, ret - 1);
     ok( !ret, "%s succeeded with %u\n", func_name, ret );
@@ -2799,9 +2794,6 @@ static void test_lcmapstring_unicode(lcmapstring_wrapper func_ptr, const char *f
     ok( ret, "%s buffer not filled\n", func_name );
     ok( p_buf[ret - 1] == 0x01, "%s buffer filled up to %02x\n", func_name, (BYTE)p_buf[ret - 1] );
     ok( !memcmp( p_buf, p_buf2, ret - 1 ), "%s buffers differ\n", func_name );
-#if defined(__REACTOS__) && defined(_WIN64)
-    }
-#endif
 
     /* test LCMAP_SORTKEY | NORM_IGNORECASE */
     ret = func_ptr(LCMAP_SORTKEY | NORM_IGNORECASE,
@@ -2991,12 +2983,6 @@ static void test_LocaleNameToLCID(void)
         win_skip( "LocaleNameToLCID not available\n" );
         return;
     }
-#if defined(__REACTOS__) && defined(_WIN64)
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Most of test_LocaleNameToLCID() crashes on ReactOS x64\n");
-        return;
-    }
-#endif
 
     /* special cases */
     buffer[0] = 0;
@@ -6055,11 +6041,6 @@ static void test_GetLocaleInfoEx(void)
         ret = pGetLocaleInfoEx(dummyW, LOCALE_SNAME, bufferW, ARRAY_SIZE(bufferW));
         ok(!ret && GetLastError() == ERROR_INVALID_PARAMETER, "got %d, error %ld\n", ret, GetLastError());
 
-#if defined(__REACTOS__) && defined(_WIN64)
-        if (is_reactos()) {
-            ok(FALSE, "FIXME: These tests crash on ReactOS x64\n");
-        } else {
-#endif
         while (*ptr->name)
         {
             val = 0;
@@ -6077,9 +6058,6 @@ static void test_GetLocaleInfoEx(void)
         ret = GetLocaleInfoW(GetUserDefaultLCID(), LOCALE_SNAME, buffer2, ARRAY_SIZE(buffer2));
         ok(ret && ret == lstrlenW(buffer2)+1, "got ret value %d\n", ret);
         ok(!lstrcmpW(bufferW, buffer2), "LOCALE_SNAMEs don't match %s %s\n", wine_dbgstr_w(bufferW), wine_dbgstr_w(buffer2));
-#if defined(__REACTOS__) && defined(_WIN64)
-        }
-#endif
     }
 }
 
