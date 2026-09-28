@@ -314,7 +314,11 @@ static void print_rights(DWORD mask, WCHAR **pwptr, ULONG *plen)
     /* then check if it can be built from bit names */
     for (i = 0; i < 32; i++)
     {
+#ifdef __REACTOS__
+        if ((mask & (1u << i)) && !bit_names[i])
+#else
         if ((mask & (1 << i)) && !bit_names[i])
+#endif
         {
             /* can't be built from bit names */
             swprintf(buf, ARRAY_SIZE(buf), L"0x%x", mask);
@@ -325,7 +329,11 @@ static void print_rights(DWORD mask, WCHAR **pwptr, ULONG *plen)
 
     /* build from bit names */
     for (i = 0; i < 32; i++)
+#ifdef __REACTOS__
+        if (mask & (1u << i))
+#else
         if (mask & (1 << i))
+#endif
             print_string(bit_names[i], -1, pwptr, plen);
 }
 
