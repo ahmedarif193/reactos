@@ -14,6 +14,7 @@ extern "C" {
 
 /* Applied to volumes subsequently opened by this library instance. */
 BOOLEAN NtfsDefaultShowMetadataFiles = FALSE;
+BOOLEAN NtfsDefaultGenerate8dot3Names = FALSE;
 BOOLEAN NtfsDefaultReadOnlyMode = FALSE;
 
 void
@@ -21,6 +22,13 @@ NtfsSetShowMetadataFiles(
     _In_ BOOLEAN Show)
 {
     NtfsDefaultShowMetadataFiles = Show;
+}
+
+void
+NtfsSetGenerate8dot3Names(
+    _In_ BOOLEAN Generate)
+{
+    NtfsDefaultGenerate8dot3Names = Generate;
 }
 
 void

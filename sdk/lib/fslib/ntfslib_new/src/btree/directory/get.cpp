@@ -107,7 +107,27 @@ Directory::IsEligibleForFileDir(PIndexEntry Entry,
     if (FileNameFilter &&
         !DoesFileNameMatch(FileNameFilter, Entry))
     {
-        return FALSE;
+        WCHAR ShortName[MAX_SHORTNAME_LENGTH + 1];
+        UCHAR ShortNameLength;
+        UNICODE_STRING ShortNameString;
+
+        if (!DirectEnumeration ||
+            FileNameData->NameType != NAME_TYPE_WIN32 ||
+            !NT_SUCCESS(FindDirectShortName(Entry->Data.Directory.IndexedFile,
+                                            ShortName,
+                                            &ShortNameLength)) ||
+            ShortNameLength == 0)
+        {
+            return FALSE;
+        }
+        ShortNameString = NtfsMakeCountedUnicodeString(ShortName, ShortNameLength);
+        if (!NtfsIsNameInExpression(FileNameFilter,
+                                    &ShortNameString,
+                                    TRUE,
+                                    DiskVolume->GetUpcaseTable()))
+        {
+            return FALSE;
+        }
     }
 
     if (GetFRNFromFileRef(Entry->Data.Directory.IndexedFile) <=
@@ -472,7 +492,7 @@ Directory::FindDirectShortName(
     *ShortNameLength = 0;
     RtlZeroMemory(
         ShortName,
-        (MAX_SHORTNAME_LENGTH + 1) * sizeof(WCHAR));
+        MAX_SHORTNAME_LENGTH * sizeof(WCHAR));
 
     Status = ResetDirectEnumeration();
     if (NT_SUCCESS(Status))
@@ -519,6 +539,13 @@ Directory::FindDirectShortName(
     EnumerationDepth = SavedDepth;
     EnumerationLoadedDepth = -1;
     EnumerationLoadedVCN = ~(ULONGLONG)0;
+    if (NT_SUCCESS(Status) && EnumerationDepth != 0)
+    {
+        PIndexNodeHeader Header;
+        ULONG HeaderBytes;
+
+        Status = LoadDirectNode(EnumerationDepth - 1, &Header, &HeaderBytes);
+    }
     return Status;
 }
 

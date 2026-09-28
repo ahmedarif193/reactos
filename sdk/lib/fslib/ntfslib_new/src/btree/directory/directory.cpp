@@ -548,7 +548,11 @@ Directory::DoesFileNameMatch(PUNICODE_STRING NameFilter,
                              PBTreeKey Key,
                              BOOLEAN IgnoreCase)
 {
-    return DoesFileNameMatch(NameFilter, Key->Entry, IgnoreCase);
+    if (DoesFileNameMatch(NameFilter, Key->Entry, IgnoreCase))
+        return TRUE;
+
+    return Key->ShortNameKey &&
+           DoesFileNameMatch(NameFilter, Key->ShortNameKey->Entry, IgnoreCase);
 }
 
 BOOLEAN

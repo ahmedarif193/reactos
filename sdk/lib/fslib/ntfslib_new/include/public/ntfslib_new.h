@@ -340,6 +340,10 @@ NtfsFileRecordRefresh(
     _Inout_ NtfsFileRecord *FileRecord,
     _In_ NtfsFileRecord *RefreshedRecord);
 
+USHORT
+NtfsFileRecordGetLinkCount(
+    _In_ PNtfsFileRecord Fr);
+
 PFileRecordHeader
 NtfsFileRecordGetHeader(
     _In_ NtfsFileRecord *FileRecord);
@@ -791,6 +795,10 @@ NtfsProbePartitionAndOpenVolumeEx(
 void
 NtfsSetShowMetadataFiles(
     _In_ BOOLEAN Show);
+
+void
+NtfsSetGenerate8dot3Names(
+    _In_ BOOLEAN Generate);
 
 /*
  * Opens subsequent volumes without journal recovery or write support.

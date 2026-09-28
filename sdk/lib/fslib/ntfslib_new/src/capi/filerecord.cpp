@@ -44,6 +44,40 @@ NtfsFileRecordGetHeader(
     return reinterpret_cast<PFileRecord>(Fr)->Header;
 }
 
+USHORT
+NtfsFileRecordGetLinkCount(
+    _In_ PNtfsFileRecord Fr)
+{
+    PFileRecord Record = reinterpret_cast<PFileRecord>(Fr);
+    PFileRecordHeader Header = Record->Header;
+    ULONG Offset = Header->AttributeOffset;
+    USHORT Links = Header->HardLinkCount;
+
+    while (Offset + 0x18 <= Header->ActualSize &&
+           Header->ActualSize <= Header->AllocatedSize)
+    {
+        PAttribute Attribute = reinterpret_cast<PAttribute>(Record->Data + Offset);
+
+        if (Attribute->AttributeType == TypeAttributeEndMarker ||
+            Attribute->AttributeType > (ULONG)TypeFileName ||
+            Attribute->Length < 0x18 ||
+            Attribute->Length > Header->ActualSize - Offset)
+        {
+            break;
+        }
+        if (Attribute->AttributeType == (ULONG)TypeFileName &&
+            !Attribute->IsNonResident &&
+            Attribute->Resident.DataLength >= FIELD_OFFSET(FileNameEx, Name) &&
+            reinterpret_cast<PFileNameEx>(GetResidentDataPointer(Attribute))->NameType == NAME_TYPE_DOS &&
+            Links > 1)
+        {
+            Links--;
+        }
+        Offset += Attribute->Length;
+    }
+    return Links;
+}
+
 NTSTATUS
 NtfsFileRecordRefresh(
     _Inout_ PNtfsFileRecord Fr,

@@ -137,6 +137,7 @@ NtfsQueryTicks(void);
 
 /* Default copied into each volume when it is initialized. */
 extern BOOLEAN NtfsDefaultShowMetadataFiles;
+extern BOOLEAN NtfsDefaultGenerate8dot3Names;
 extern BOOLEAN NtfsDefaultReadOnlyMode;
 
 #ifdef __cplusplus
@@ -501,6 +502,7 @@ public:
     class LogFileService* LFS;
     BOOLEAN IsReadOnly = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
+    BOOLEAN Generate8dot3Names = FALSE;
 
     /*
      * Where to begin the free-cluster search. Without it every allocation

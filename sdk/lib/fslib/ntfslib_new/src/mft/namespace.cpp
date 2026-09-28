@@ -223,16 +223,20 @@ MasterFileTable::FindFileNamePair(
             &Comparison);
         if (!NT_SUCCESS(Status))
             return Status;
-        if (Comparison == 0 &&
-            !*NameAttribute)
+        if (Comparison == 0)
         {
-            *NameAttribute = Attribute;
-            *NameValue = Value;
-        }
-        else if (!*AliasAttribute)
-        {
-            *AliasAttribute = Attribute;
-            *AliasValue = Value;
+            if (!*NameAttribute)
+            {
+                *NameAttribute = Attribute;
+                *NameValue = Value;
+            }
+            if (Candidate.Length == Name->Length &&
+                RtlCompareMemory(Candidate.Buffer, Name->Buffer, Name->Length) == Name->Length)
+            {
+                *NameAttribute = Attribute;
+                *NameValue = Value;
+                break;
+            }
         }
     }
 
@@ -243,19 +247,25 @@ MasterFileTable::FindFileNamePair(
      * Only a DOS/WIN32 sibling of the removed name forms a dying pair;
      * an unrelated POSIX name in the same directory is a hard link.
      */
-    if (*AliasAttribute)
+    Offset = 0;
+    for (;;)
     {
+        PAttribute Attribute;
+        PFileNameEx Value;
         UCHAR NameType = (*NameValue)->NameType;
-        UCHAR AliasType =
-            (*AliasValue)->NameType;
 
-        if (!((NameType == NAME_TYPE_WIN32 &&
-               AliasType == NAME_TYPE_DOS) ||
-              (NameType == NAME_TYPE_DOS &&
-               AliasType == NAME_TYPE_WIN32)))
+        Status = EnumerateFileNames(File, &Offset, &Attribute, &Value);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (!Attribute)
+            break;
+        if (Value->ParentFileReference == ParentReference &&
+            ((NameType == NAME_TYPE_WIN32 && Value->NameType == NAME_TYPE_DOS) ||
+             (NameType == NAME_TYPE_DOS && Value->NameType == NAME_TYPE_WIN32)))
         {
-            *AliasAttribute = NULL;
-            *AliasValue = NULL;
+            *AliasAttribute = Attribute;
+            *AliasValue = Value;
+            break;
         }
     }
     return STATUS_SUCCESS;

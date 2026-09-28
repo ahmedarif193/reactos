@@ -252,6 +252,7 @@ Volume::Initialize(_In_ PUCHAR BootSectorData,
     IoContext = Context;
     VolumeFile = NULL;
     ShowMetadataFiles = NtfsDefaultShowMetadataFiles;
+    Generate8dot3Names = NtfsDefaultGenerate8dot3Names;
     IsReadOnly = NtfsDefaultReadOnlyMode;
 
     // Pull in relevant information from the boot sector.

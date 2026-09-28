@@ -168,6 +168,7 @@ GetGlobalSettingsFromRegistry()
     gDisable8dot3NameCreation = QueryBooleanRegistryValueEx(RegistryKey,
                                                             L"NtfsDisable8dot3NameCreation",
                                                             FALSE);
+    NtfsSetGenerate8dot3Names(!gDisable8dot3NameCreation);
 
     /* Enables or disables the last access time on all files and all volumes.
      * Options:
