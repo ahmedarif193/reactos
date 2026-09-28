@@ -2566,6 +2566,35 @@ static HWND DIALOG_IdToHwnd( HWND hwndDlg, INT id )
     return ret;
 }
 
+static BOOL DIALOG_IsTabControl( HWND hwnd )
+{
+    WCHAR szClass[32];
+
+    return IsWindowVisible( hwnd ) && IsWindowEnabled( hwnd ) &&
+           GetClassNameW( hwnd, szClass, ARRAYSIZE(szClass) ) &&
+           !_wcsicmp( szClass, L"SysTabControl32" );
+}
+
+static HWND DIALOG_FindTabControl( HWND hwnd )
+{
+    HWND hwndChild;
+
+    while (hwnd)
+    {
+        if (DIALOG_IsTabControl( hwnd )) return hwnd;
+
+        for (hwndChild = GetWindow( hwnd, GW_CHILD ); hwndChild; hwndChild = GetWindow( hwndChild, GW_HWNDNEXT ))
+        {
+            if (DIALOG_IsTabControl( hwndChild )) return hwndChild;
+        }
+
+        if (!(GetWindowLongW( hwnd, GWL_STYLE ) & WS_CHILD)) break;
+        hwnd = GetParent( hwnd );
+    }
+
+    return NULL;
+}
+
 
 /*
  * @implemented
@@ -2690,6 +2719,19 @@ IsDialogMessageW(
                  else
                      SendMessageW( hDlg, WM_NEXTDLGCTL, (WPARAM)hwndNext, 1 );
                  return TRUE;
+             }
+             break;
+
+         case VK_PRIOR:
+         case VK_NEXT:
+             if ((GetKeyState( VK_CONTROL ) & 0x8000) && !(GetKeyState( VK_SHIFT ) & 0x8000))
+             {
+                 HWND hwndTab = DIALOG_FindTabControl( lpMsg->hwnd );
+                 if (hwndTab)
+                 {
+                     SendMessageW( hwndTab, WM_KEYDOWN, lpMsg->wParam, lpMsg->lParam );
+                     return TRUE;
+                 }
              }
              break;
 

@@ -532,6 +532,17 @@ static LRESULT TAB_KeyDown(TAB_INFO* infoPtr, WPARAM keyCode, LPARAM lParam)
     case VK_RIGHT:
       newItem = infoPtr->uFocus + 1;
       break;
+    case VK_PRIOR:
+    case VK_NEXT:
+      if ((GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_SHIFT) & 0x8000) && infoPtr->uNumItem)
+      {
+        newItem = infoPtr->uFocus + (keyCode == VK_NEXT ? 1 : -1);
+        if (newItem < 0)
+          newItem = infoPtr->uNumItem - 1;
+        else if (newItem >= infoPtr->uNumItem)
+          newItem = 0;
+      }
+      break;
   }
 
   /* If we changed to a valid item, change focused item */
