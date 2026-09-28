@@ -417,7 +417,7 @@ HvpDoAllocateCell(
         if (Bin == NULL)
             return HCELL_NIL;
         FreeCellOffset = Bin->FileOffset + sizeof(HBIN);
-        FreeCellOffset |= Storage << HCELL_TYPE_SHIFT;
+        FreeCellOffset |= (ULONG)Storage << HCELL_TYPE_SHIFT;
     }
 
     FreeCell = HvpGetCellHeader(RegistryHive, FreeCellOffset);
