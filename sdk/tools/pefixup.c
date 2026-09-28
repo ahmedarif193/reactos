@@ -49,7 +49,8 @@ enum fixup_mode
     MODE_KERNELDRIVER,
     MODE_WDMDRIVER,
     MODE_KERNELDLL,
-    MODE_KERNEL
+    MODE_KERNEL,
+    MODE_CHECKSUM
 };
 
 void *rva_to_ptr(unsigned char *buffer, PIMAGE_NT_HEADERS nt_header, DWORD rva)
@@ -384,6 +385,7 @@ print_usage(void)
            "  --wdmdriver           Fix code, data and resource sections for WDM drivers;\n"
            "  --kerneldll           Fix code, data and resource sections for Kernel-Mode DLLs;\n"
            "  --kernel              Fix code, data and resource sections for kernels;\n"
+           "  --checksum            Compute the PE image checksum;\n"
            "\n"
            "and/or a combination of the following ones:\n"
            "  --section:name[=newname][,[[!]{CDEIKOMPRSUW}][A{1248PTSX}]]\n"
@@ -443,6 +445,12 @@ int main(int argc, char **argv)
             if (mode != MODE_NONE)
                 goto mode_error;
             mode = MODE_KERNEL;
+        }
+        else if (strcmp(&argv[i][2], "checksum") == 0)
+        {
+            if (mode != MODE_NONE)
+                goto mode_error;
+            mode = MODE_CHECKSUM;
         }
         else if (strncmp(&argv[i][2], "section:", 8) == 0)
         {
@@ -517,7 +525,7 @@ int main(int argc, char **argv)
     result = 0;
 
     /* Apply mode fixups */
-    if (mode != MODE_NONE)
+    if (mode != MODE_NONE && mode != MODE_CHECKSUM)
     {
         if (mode == MODE_LOADCONFIG)
             result = add_loadconfig(buffer, nt_header);
@@ -546,10 +554,11 @@ int main(int argc, char **argv)
 
         /*
          * Preserve linker-produced zero checksums unless this is a kernel-mode
-         * image, where the NT loader requires a valid checksum. This fixes
+         * image, where the NT loader requires a valid checksum, or --checksum
+         * was requested. This fixes
          * lld-built drivers, which otherwise keep the reproducible zero value.
          */
-        if (nt_header->OptionalHeader.CheckSum != 0 || is_kernel_image)
+        if (nt_header->OptionalHeader.CheckSum != 0 || is_kernel_image || mode == MODE_CHECKSUM)
             fix_checksum(buffer, len, nt_header);
 
         /* We could optimize by only writing the changed parts, but keep it simple for now */

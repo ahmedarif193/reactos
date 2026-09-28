@@ -406,6 +406,14 @@ function(set_module_type_toolchain MODULE TYPE)
             COMMAND native-pefixup --${TYPE} $<TARGET_FILE:${MODULE}>)
 
         set_property(TARGET ${MODULE} APPEND PROPERTY LINK_DEPENDS $<TARGET_PROPERTY:native-pefixup,IMPORTED_LOCATION>)
+    else()
+        get_target_property(_target_type ${MODULE} TYPE)
+        if(_target_type STREQUAL "MODULE_LIBRARY" OR _target_type STREQUAL "SHARED_LIBRARY" OR _target_type STREQUAL "EXECUTABLE")
+            add_custom_command(TARGET ${MODULE} POST_BUILD
+                COMMAND native-pefixup --checksum $<TARGET_FILE:${MODULE}>)
+
+            set_property(TARGET ${MODULE} APPEND PROPERTY LINK_DEPENDS $<TARGET_PROPERTY:native-pefixup,IMPORTED_LOCATION>)
+        endif()
     endif()
 endfunction()
 
