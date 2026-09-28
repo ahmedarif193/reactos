@@ -1443,8 +1443,16 @@ TOOLTIPS_DelToolT (TOOLTIPS_INFO *infoPtr, const TTTOOLINFOW *ti, BOOL isW)
 
     /* destroying tool that mouse was on on last relayed mouse move */
     if (infoPtr->nTool == nTool)
+#ifdef __REACTOS__
+    {
+        KillTimer(infoPtr->hwndSelf, ID_TIMERSHOW);
+        KillTimer(infoPtr->hwndSelf, ID_TIMERLEAVE);
+#endif
         /* -1 means no current tool (0 means first tool) */
         infoPtr->nTool = -1;
+#ifdef __REACTOS__
+    }
+#endif
     else if (infoPtr->nTool > nTool)
         infoPtr->nTool--;
 
