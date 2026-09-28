@@ -5774,76 +5774,37 @@ Cleanup:
 
 BOOL WINAPI PathResolveW(_Inout_ LPWSTR path, _Inout_opt_ LPCWSTR *dirs, _In_ DWORD flags)
 {
-    DWORD dwWhich = WHICH_DEFAULT; /* The extensions to be searched */
+    BOOL is_file_spec = PathIsFileSpecW(path);
+    DWORD dwWhich = (flags & PRF_DONTFINDLNK) ? (WHICH_PIF | WHICH_COM | WHICH_EXE | WHICH_BAT) : WHICH_DEFAULT;
 
     TRACE("(%s,%p,0x%08x)\n", debugstr_w(path), dirs, flags);
 
-    if (flags & PRF_DONTFINDLNK)
-        dwWhich &= ~WHICH_LNK; /* Don't search '.LNK' (shortcut) */
-
     if (flags & PRF_VERIFYEXISTS)
-        SetLastError(ERROR_FILE_NOT_FOUND); /* We set this error code at first in verification */
-
-    PathUnquoteSpacesW(path);
-
-    if (PathIsRootW(path)) /* Root path */
     {
-        if (path[0] == L'\\' && path[1] == UNICODE_NULL) /* '\' only? */
-            PathQualifyExW(path, ((flags & PRF_FIRSTDIRDEF) ? *dirs : NULL), 0); /* Qualify */
-
-        if (flags & PRF_VERIFYEXISTS)
-            return PathFileExistsAndAttributesW(path, NULL); /* Check the existence */
-
-        return TRUE;
-    }
-
-    if (PathIsFileSpecW(path)) /* Filename only */
-    {
-        /* Try to find the path with program extensions applied? */
-        if ((flags & PRF_TRYPROGRAMEXTENSIONS) &&
-            PathSearchOnExtensionsW(path, dirs, TRUE, dwWhich))
+        if (PathFindOnPathExW(path, dirs, dwWhich))
         {
-            return TRUE; /* Found */
+            if (!PathIsFileSpecW(path))
+                GetFullPathNameW(path, MAX_PATH, path, NULL);
+            return TRUE;
         }
-
-        /* Try to find the filename in the directories */
-        if (PathFindOnPathW(path, dirs))
-            goto CheckAbsoluteAndFinish;
-
-        return FALSE; /* Not found */
+        if (!is_file_spec)
+        {
+            GetFullPathNameW(path, MAX_PATH, path, NULL);
+            if (PathFileExistsDefExtW(path, dwWhich))
+                return TRUE;
+        }
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return FALSE;
     }
 
-    if (PathIsURLW(path)) /* URL? */
-        return FALSE;
-
-    /* Qualify the path */
-    PathQualifyExW(path, ((flags & PRF_FIRSTDIRDEF) ? *dirs : NULL), 1);
-
-    TRACE("(%s)\n", debugstr_w(path));
-
-    if (!(flags & PRF_VERIFYEXISTS)) /* Don't verify the existence? */
-        return TRUE;
-
-    /* Try to find the path with program extensions applied? */
-    if (!(flags & PRF_TRYPROGRAMEXTENSIONS) ||
-        !PathSearchOnExtensionsW(path, dirs, FALSE, dwWhich))
+    if (is_file_spec)
     {
-        if (!PathFileExistsAndAttributesW(path, NULL))
-            return FALSE; /* Not found */
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return FALSE;
     }
 
-CheckAbsoluteAndFinish:
-#if (_WIN32_WINNT >= _WIN32_WINNT_WS03)
-    if (!(flags & PRF_REQUIREABSOLUTE) || PathIsAbsoluteW(path))
-        return TRUE;
-
-    if (!PathMakeAbsoluteW(path))
-        return FALSE;
-
-    return PathFileExistsAndAttributesW(path, NULL);
-#else
-    return TRUE; /* Found */
-#endif
+    GetFullPathNameW(path, MAX_PATH, path, NULL);
+    return TRUE;
 }
 
 /*************************************************************************
@@ -6682,9 +6643,9 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x6e */
         &FOLDERID_UserProgramFiles,
-        CSIDL_Type_Disallowed, /* FIXME */
+        CSIDL_Type_User,
         NULL,
-        NULL
+        L"AppData\\Local\\Programs"
     },
     { /* 0x6f */
         &FOLDERID_UserProgramFilesCommon,
@@ -7528,6 +7489,9 @@ HRESULT WINAPI SHGetKnownFolderPath(
 
     csidl = SHELL_CsidlFromKnownFolderId(rfid);
     if (csidl < 0)
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+
+    if ((dwFlags & (KF_FLAG_DEFAULT_PATH | KF_FLAG_NOT_PARENT_RELATIVE)) == KF_FLAG_NOT_PARENT_RELATIVE)
         return E_INVALIDARG;
 
     if (dwFlags & KF_FLAG_CREATE)
@@ -7575,7 +7539,7 @@ HRESULT WINAPI SHGetKnownFolderIDList(
 
     csidl = SHELL_CsidlFromKnownFolderId(rfid);
     if (csidl < 0)
-        return E_INVALIDARG;
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 
     if (dwFlags & KF_FLAG_CREATE)
         csidl |= CSIDL_FLAG_CREATE;
