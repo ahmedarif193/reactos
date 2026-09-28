@@ -364,14 +364,21 @@ static VOID
 OnUpdate(
     HWND hwndDlg)
 {
+    HANDLE hThread;
+
     if ((BOOL)GetWindowLongPtr(hwndDlg, DWLP_USER) == FALSE)
     {
         SetWindowLongPtr(hwndDlg, DWLP_USER, (LONG_PTR)TRUE);
 
-        if (CreateThread(NULL, 0, UpdateThread, (PVOID)hwndDlg, 0, NULL) == NULL)
+        hThread = CreateThread(NULL, 0, UpdateThread, (PVOID)hwndDlg, 0, NULL);
+        if (hThread == NULL)
         {
             UpdateNTPStatus(hwndDlg, GetLastError());
             SetWindowLongPtr(hwndDlg, DWLP_USER, (LONG_PTR)FALSE);
+        }
+        else
+        {
+            CloseHandle(hThread);
         }
     }
 }
