@@ -2233,10 +2233,22 @@ static BOOL push_dir( struct dirstack *dirstack, WCHAR *dir, UINT len )
         WCHAR **tmp;
         UINT *len_tmp;
 
+#ifdef __REACTOS__
+        if (dirstack->num_allocated > UINT_MAX / 2) return FALSE;
+        size = dirstack->num_allocated ? dirstack->num_allocated * 2 : 2;
+        if ((size_t)size > ~(size_t)0 / sizeof(WCHAR *) ||
+            (size_t)size > ~(size_t)0 / sizeof(UINT)) return FALSE;
+        if (!(tmp = realloc( dirstack->dirs, (size_t)size * sizeof(WCHAR *) ))) return FALSE;
+#else
         size = dirstack->num_allocated * 2;
         if (!(tmp = realloc( dirstack->dirs, size * sizeof(WCHAR *) ))) return FALSE;
+#endif
         dirstack->dirs = tmp;
+#ifdef __REACTOS__
+        if (!(len_tmp = realloc( dirstack->len_dirs, (size_t)size * sizeof(UINT) ))) return FALSE;
+#else
         if (!(len_tmp = realloc( dirstack->len_dirs, size * sizeof(UINT) ))) return FALSE;
+#endif
         dirstack->len_dirs = len_tmp;
         dirstack->num_allocated = size;
     }
@@ -2461,6 +2473,9 @@ static enum fill_status fill_datafile( struct table *table, const struct expr *c
     if (!resize_table( table, 8, sizeof(*rec) )) return FILL_STATUS_FAILED;
 
     dirstack = alloc_dirstack(2);
+#ifdef __REACTOS__
+    if (!dirstack) return FILL_STATUS_FAILED;
+#endif
 
     for (i = 0; i < 26; i++)
     {
@@ -2590,6 +2605,9 @@ static enum fill_status fill_directory( struct table *table, const struct expr *
     if (!resize_table( table, 4, sizeof(*rec) )) return FILL_STATUS_FAILED;
 
     dirstack = alloc_dirstack(2);
+#ifdef __REACTOS__
+    if (!dirstack) return FILL_STATUS_FAILED;
+#endif
 
     for (i = 0; i < 26; i++)
     {
@@ -2642,7 +2660,9 @@ static enum fill_status fill_directory( struct table *table, const struct expr *
                     rec = (struct record_directory *)(table->data + offset);
                     rec->accessmask = FILE_ALL_ACCESS;
                     rec->name       = build_name( root[0], new_path );
+#ifndef __REACTOS__
                     free( new_path );
+#endif
                     if (!match_row( table, row, cond, &status ))
                     {
                         free_row_values( table, row );
@@ -3987,7 +4007,17 @@ static enum fill_status fill_cache_memory( struct table *table, const struct exp
 
     while (1)
     {
+#ifdef __REACTOS__
+        char *new_buffer = realloc( buffer, size );
+        if (!new_buffer)
+        {
+            free( buffer );
+            return FILL_STATUS_FAILED;
+        }
+        buffer = new_buffer;
+#else
         buffer = realloc( buffer, size );
+#endif
         if (GetLogicalProcessorInformationEx( RelationCache, (void *)buffer, &size )) break;
         if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
         {
@@ -4761,7 +4791,15 @@ static struct display_adapter *get_display_adapters( UINT *count )
 
     if (!(ret = malloc( nb_allocated * sizeof(*ret) ))) return NULL;
 
+#ifdef __REACTOS__
+    if ((devs = SetupDiGetClassDevsW( &GUID_DEVCLASS_DISPLAY, NULL, NULL, DIGCF_PRESENT )) == INVALID_HANDLE_VALUE)
+    {
+        free( ret );
+        return NULL;
+    }
+#else
     if ((devs = SetupDiGetClassDevsW( &GUID_DEVCLASS_DISPLAY, NULL, NULL, DIGCF_PRESENT )) == INVALID_HANDLE_VALUE) return NULL;
+#endif
 
     while(SetupDiEnumDeviceInfo( devs, idx_devinfo++, &dev_info ))
     {
