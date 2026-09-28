@@ -16,7 +16,8 @@ VOID
 MiArmExecutableWriteRangeLocked(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 Start,
-    _In_ ULONG64 End)
+    _In_ ULONG64 End,
+    _In_ BOOLEAN ResetWriteWatch)
 {
     ULONG64 Va = Start & ~((ULONG64)PAGE_SIZE - 1);
     ULONG64 TableSpan = 1ULL << (Space->System->Arch->Level[0].Shift +
@@ -63,10 +64,19 @@ MiArmExecutableWriteRangeLocked(
             OldIrql = MiPfnLock(&Space->System->Pfn, TableFrame);
             Pte = MiArchPteRead(Slot);
             if (MiArchPteIsLeafDescriptor(Pte) && MiArchPteIsWritable(Pte) &&
-                MiArchPteIsExecutable(Pte, TRUE) && MiArchPteIsDirty(Pte))
+                MiArchPteIsExecutable(Pte, TRUE))
             {
-                MiArchPteWrite(Slot, MiArchPteSetDirty(Pte, FALSE));
-                MiArchTlbInvalidate(Va, 1, TRUE);
+                if (ResetWriteWatch && Vad->WriteWatchBits != NULL)
+                {
+                    ULONG64 Page = (Va - Vad->WriteWatchBase) >> PAGE_SHIFT;
+
+                    MI_ATOMIC_AND8(&Vad->WriteWatchBits[Page / 8], ~(1u << (Page % 8)));
+                }
+                if (MiArchPteIsDirty(Pte))
+                {
+                    MiArchPteWrite(Slot, MiArchPteSetDirty(Pte, FALSE));
+                    MiArchTlbInvalidate(Va, 1, TRUE);
+                }
             }
             MiPfnUnlock(&Space->System->Pfn, TableFrame, OldIrql);
             Va += PAGE_SIZE;
@@ -90,7 +100,7 @@ MiSetExecutableWriteTracking(
             PMI_VAD Vad = CONTAINING_RECORD(Node, MI_VAD, Node);
 
             if (!Vad->EcCode)
-                MiArmExecutableWriteRangeLocked(Space, MI_VAD_START(Vad), MI_VAD_END(Vad));
+                MiArmExecutableWriteRangeLocked(Space, MI_VAD_START(Vad), MI_VAD_END(Vad), FALSE);
         }
     }
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
@@ -138,7 +148,7 @@ MiResetExecutableWriteTracking(
             Va = End;
     }
 
-    MiArmExecutableWriteRangeLocked(Space, Start, End);
+    MiArmExecutableWriteRangeLocked(Space, Start, End, TRUE);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
     return STATUS_SUCCESS;
 }

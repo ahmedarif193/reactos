@@ -1317,7 +1317,15 @@ MiMapSectionView(
         if (ZeroBits != 0 && ZeroBits < 32)
             Highest = min(Highest, ~0ULL >> (ZeroBits + 32));
         else if (ZeroBits >= 32)
-            Highest = min(Highest, (ULONG64)ZeroBits);
+        {
+            ULONG64 Mask = ZeroBits;
+            ULONG Shift;
+
+            for (Shift = 1; Shift < sizeof(Mask) * 8; Shift <<= 1)
+                Mask |= Mask >> Shift;
+
+            Highest = min(Highest, Mask);
+        }
     }
 
     if (Control->Image)

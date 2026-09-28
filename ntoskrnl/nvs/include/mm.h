@@ -346,7 +346,7 @@ NTSTATUS MiResetWriteWatch(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Base, _
 NTSTATUS MiResetExecutableWriteTracking(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Base,
                                         _In_ ULONG64 Size);
 VOID MiArmExecutableWriteRangeLocked(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Start,
-                                     _In_ ULONG64 End);
+                                     _In_ ULONG64 End, _In_ BOOLEAN ResetWriteWatch);
 VOID MiRepurposeStandbyPage(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);
 VOID MiDeletePte(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _Inout_ PMI_PTE Slot,
                  _In_ ULONG TableFrame, _In_ MI_PTE NewValue);

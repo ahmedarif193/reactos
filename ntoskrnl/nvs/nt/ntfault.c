@@ -13,6 +13,29 @@
 #define MM_USER_STACK_GUARD_PAGES 1
 #endif
 
+VOID
+MiShrinkUserStackToGuard(
+    _In_ PEPROCESS Process,
+    _In_ ULONG64 Base,
+    _In_ ULONG64 Size)
+{
+    PTEB Teb = PsGetCurrentThread()->Tcb.Teb;
+    ULONG64 End = Base + Size;
+
+    if (Process != PsGetCurrentProcess() || Teb == NULL || KeIsAttachedProcess())
+        return;
+
+    _SEH2_TRY
+    {
+        if (Base >= (ULONG64)(ULONG_PTR)Teb->NtTib.StackLimit && End <= (ULONG64)(ULONG_PTR)Teb->NtTib.StackBase)
+            Teb->NtTib.StackLimit = (PVOID)(ULONG_PTR)End;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    _SEH2_END;
+}
+
 static
 NTSTATUS
 MiCheckForUserStackOverflow(

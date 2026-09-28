@@ -1267,9 +1267,9 @@ MiProtectVirtualMemoryEx(
     }
 
     if (NT_SUCCESS(Status) && Space->TrackExecutableWrites &&
-        MI_PROT_IS_EXECUTE(NewProtection) && MI_PROT_IS_WRITABLE(NewProtection))
+        MI_PROT_IS_EXECUTE(NewProtection) && (MI_PROT_IS_WRITABLE(NewProtection) || MI_PROT_IS_COPY(NewProtection)))
     {
-        MiArmExecutableWriteRangeLocked(Space, Start, End);
+        MiArmExecutableWriteRangeLocked(Space, Start, End, FALSE);
     }
 
     *BaseAddress = Start;

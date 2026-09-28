@@ -139,6 +139,7 @@ MiCacheTypeFromNt(
 BOOLEAN MiProtectionFromWin32(_In_ ULONG Win32Protect, _Out_ PULONG Protection);
 BOOLEAN MiAllocationProtectionFromWin32(_In_ ULONG Win32Protect, _Out_ PULONG Protection);
 ULONG MiProtectionToWin32(_In_ ULONG Protection);
+VOID MiShrinkUserStackToGuard(_In_ PEPROCESS Process, _In_ ULONG64 Base, _In_ ULONG64 Size);
 NTSTATUS MiWaitForMemory(_In_ NTSTATUS Status, _Inout_ PULONG Attempts);
 NTSTATUS MiControlRead(_In_opt_ PVOID Context, _In_ ULONG64 Offset, _In_ ULONG Length, _Out_ PVOID Buffer);
 NTSTATUS MiControlReadPages(_In_opt_ PVOID Context, _In_ ULONG64 Offset,

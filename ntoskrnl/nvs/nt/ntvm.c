@@ -403,6 +403,14 @@ MiAllocateVirtualMemoryNt(
         return Status;
     }
 
+    if (EcCode && (!MiSystem.Arch->SupportsEcCode ||
+                   (Target.Process->Machine != IMAGE_FILE_MACHINE_AMD64 &&
+                    Target.Process->Machine != IMAGE_FILE_MACHINE_ARM64EC)))
+    {
+        MiReleaseTargetProcess(&Target);
+        return STATUS_INVALID_PARAMETER;
+    }
+
     DenyDynamicCode = (BOOLEAN)(ExGetPreviousMode() != KernelMode && MiDynamicCodeBlocked(Target.Process));
 
     if (AllocationType & MEM_COMMIT)
@@ -449,6 +457,9 @@ MiAllocateVirtualMemoryNt(
                 Vad->EcCode = TRUE;
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
         }
+
+        if ((Type & MI_MEM_COMMIT) && (Protect & PAGE_GUARD))
+            MiShrinkUserStackToGuard(Target.Process, Base, Size);
 
         if ((Type & MI_MEM_RESERVE) && !(Type & MI_MEM_REPLACE_PLACEHOLDER))
         {
@@ -729,6 +740,9 @@ MiProtectVirtualMemoryNt(
 
     if (NT_SUCCESS(Status))
     {
+        if (NewAccessProtection & PAGE_GUARD)
+            MiShrinkUserStackToGuard(Process, Base, Size);
+
         *BaseAddress = (PVOID)(ULONG_PTR)Base;
         *NumberOfBytesToProtect = (SIZE_T)Size;
     }

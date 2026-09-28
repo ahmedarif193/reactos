@@ -63,6 +63,7 @@ typedef struct _MI_ARCH_DESCRIPTOR
 
     ULONG64 SystemReservedEnd;
     BOOLEAN SharedUserDataReadOnly;
+    BOOLEAN SupportsEcCode;
 } MI_ARCH_DESCRIPTOR, *PMI_ARCH_DESCRIPTOR;
 
 typedef struct _MI_PHYSICAL_RANGE

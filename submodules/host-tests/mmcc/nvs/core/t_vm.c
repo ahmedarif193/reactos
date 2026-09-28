@@ -757,6 +757,64 @@ VmWriteWatch(void)
     WorldDestroy(&World);
 }
 
+static void
+VmExecutableWriteTrackingReset(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    PMI_SEGMENT Segment = NULL;
+    ULONG64 View = 0;
+    ULONG64 ViewSize = PAGE_SIZE;
+    ULONG64 Watch = 0;
+    ULONG64 Addresses[4];
+    NTSTATUS Status;
+    ULONG Old;
+
+    WorldCreate(&World, 256, 2, 100000);
+    World.Machine.StrictTlb = TRUE;
+    WorldAttachPageFile(&World, 1024);
+    ProcessCreate(&World, &Space);
+    WorldAttach(&World, 1, &Space);
+    CHECK(NT_SUCCESS(MiSetExecutableWriteTracking(&Space, TRUE)));
+
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentPageFileBacked, PAGE_SIZE, MI_PROT_EXECUTE_READWRITE,
+                                     NULL, NULL, NULL, 0, &Segment)));
+    CHECK(NT_SUCCESS(MiMapView(&Space, Segment, &View, 0, &ViewSize, MI_PROT_EXECUTE_WRITECOPY, 0)));
+    CHECK(UserWrite64(&World, 0, View, 1) == STATUS_EXECUTABLE_MEMORY_WRITE);
+    CHECK(NT_SUCCESS(MiFaultWithWriteAllowance(&Space, View, MiFaultWrite, TRUE, TRUE)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, View, 1)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, View + 8, 2)));
+    CHECK(NT_SUCCESS(Protect(&Space, View, PAGE_SIZE, MI_PROT_EXECUTE_WRITECOPY, &Old)));
+    CHECK(UserWrite64(&World, 0, View + 16, 3) == STATUS_EXECUTABLE_MEMORY_WRITE);
+    CHECK(NT_SUCCESS(MiFaultWithWriteAllowance(&Space, View + 16, MiFaultWrite, TRUE, TRUE)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, View + 16, 3)));
+    CHECK(NT_SUCCESS(MiResetExecutableWriteTracking(&Space, View + 24, 1)));
+    CHECK(UserWrite64(&World, 0, View + 24, 4) == STATUS_EXECUTABLE_MEMORY_WRITE);
+    CHECK(NT_SUCCESS(MiUnmapView(&Space, View)));
+    MiSegmentDereference(Segment);
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Watch, PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_WRITE_WATCH,
+                           MI_PROT_READWRITE)));
+    CHECK(NT_SUCCESS(Protect(&Space, Watch, PAGE_SIZE, MI_PROT_EXECUTE_READWRITE, &Old)));
+    CHECK(UserWrite64(&World, 0, Watch, 1) == STATUS_EXECUTABLE_MEMORY_WRITE);
+    CHECK(NT_SUCCESS(MiFaultWithWriteAllowance(&Space, Watch, MiFaultWrite, TRUE, TRUE)));
+    CHECK(VmGetWatch(&Space, Watch, PAGE_SIZE, FALSE, Addresses, 4, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Watch + 8, 2)));
+    CHECK(VmGetWatch(&Space, Watch, PAGE_SIZE, TRUE, Addresses, 4, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(UserWrite64(&World, 0, Watch + 16, 3) == STATUS_EXECUTABLE_MEMORY_WRITE);
+    CHECK(NT_SUCCESS(MiFaultWithWriteAllowance(&Space, Watch + 16, MiFaultWrite, TRUE, TRUE)));
+    CHECK(VmGetWatch(&Space, Watch, PAGE_SIZE, FALSE, Addresses, 4, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(NT_SUCCESS(MiResetExecutableWriteTracking(&Space, Watch, 1)));
+    CHECK(VmGetWatch(&Space, Watch, PAGE_SIZE, FALSE, Addresses, 4, &Status) == 0 && NT_SUCCESS(Status));
+    CHECK(UserWrite64(&World, 0, Watch + 24, 4) == STATUS_EXECUTABLE_MEMORY_WRITE);
+    CHECK(NT_SUCCESS(Free(&Space, Watch, 0, MI_MEM_RELEASE)));
+
+    WorldAttach(&World, 1, NULL);
+    ProcessDestroy(&World, &Space);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+}
+
 void
 TestVm(void)
 {
@@ -769,6 +827,7 @@ TestVm(void)
     VmAddressRequirements();
     VmPlaceholders();
     VmWriteWatch();
+    VmExecutableWriteTrackingReset();
 }
 
 static
