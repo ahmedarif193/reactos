@@ -206,6 +206,8 @@ typedef struct _SCB
     SECTION_OBJECT_POINTERS SectionObjectPointers;
     BOOLEAN SizePending;
     BOOLEAN Deleted;
+    BOOLEAN DeletePending;
+    LONG UncleanCount;
 } StreamContextBlock, *PStreamContextBlock;
 
 typedef struct _FCB

@@ -17,7 +17,12 @@ NtfsGetVolumeInformation(PDEVICE_OBJECT DeviceObject,
                          PFILE_FS_VOLUME_INFORMATION Buffer,
                          PULONG Length)
 {
+    static WCHAR VolumeFileName[] = L"\\$Volume";
+    PVolumeContextBlock VolCB = (PVolumeContextBlock)DeviceObject->DeviceExtension;
     ULONG LabelOffset = FIELD_OFFSET(FILE_FS_VOLUME_INFORMATION, VolumeLabel);
+    PNtfsFileRecord VolumeRecord = NULL;
+    NtfsFileBasicInformation Basic;
+    ULONG RemainingNameLength = 0;
     ULONG BytesToCopy;
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -27,9 +32,28 @@ NtfsGetVolumeInformation(PDEVICE_OBJECT DeviceObject,
     Buffer->VolumeSerialNumber = DeviceObject->Vpb->SerialNumber;
     Buffer->VolumeLabelLength = DeviceObject->Vpb->VolumeLabelLength;
 
-    // TODO: Fix this
     Buffer->VolumeCreationTime.QuadPart = 0;
-    Buffer->SupportsObjects = FALSE;
+    if (VolCB->DiskVolume)
+    {
+        KeEnterCriticalRegion();
+        NtfsAcquireMetadata(VolCB);
+        if (NT_SUCCESS(NtfsMasterFileTableGetFileRecordFromQueryEx(NtfsVolumeGetMft(VolCB->DiskVolume),
+                                                                   VolumeFileName,
+                                                                   ARRAYSIZE(VolumeFileName) - 1,
+                                                                   TRUE,
+                                                                   &RemainingNameLength,
+                                                                   &VolumeRecord)) &&
+            RemainingNameLength == 0 && VolumeRecord &&
+            NT_SUCCESS(NtfsFileRecordGetBasicInformation(VolumeRecord, &Basic)))
+        {
+            Buffer->VolumeCreationTime.QuadPart = Basic.CreationTime;
+        }
+        if (VolumeRecord)
+            NtfsFileRecordDestroy(VolumeRecord);
+        NtfsReleaseMetadata(VolCB);
+        KeLeaveCriticalRegion();
+    }
+    Buffer->SupportsObjects = TRUE;
 
     BytesToCopy = min(*Length - LabelOffset, (ULONG)DeviceObject->Vpb->VolumeLabelLength);
     if (BytesToCopy < DeviceObject->Vpb->VolumeLabelLength)
@@ -66,6 +90,34 @@ NtfsGetSizeInfo(PDEVICE_OBJECT DeviceObject,
     Buffer->BytesPerSector = NtfsVolumeGetBytesPerSector(DiskVolume);
 
     *Length -= sizeof(FILE_FS_SIZE_INFORMATION);
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NtfsGetFullSizeInfo(PDEVICE_OBJECT DeviceObject,
+                    PFILE_FS_FULL_SIZE_INFORMATION Buffer,
+                    PULONG Length)
+{
+    FILE_FS_SIZE_INFORMATION SizeInfo;
+    ULONG SizeLength = sizeof(SizeInfo);
+    NTSTATUS Status;
+
+    if (*Length < sizeof(FILE_FS_FULL_SIZE_INFORMATION))
+        return STATUS_BUFFER_OVERFLOW;
+
+    Status = NtfsGetSizeInfo(DeviceObject, &SizeInfo, &SizeLength);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Buffer->TotalAllocationUnits = SizeInfo.TotalAllocationUnits;
+    Buffer->CallerAvailableAllocationUnits = SizeInfo.AvailableAllocationUnits;
+    Buffer->ActualAvailableAllocationUnits = SizeInfo.AvailableAllocationUnits;
+    Buffer->SectorsPerAllocationUnit = SizeInfo.SectorsPerAllocationUnit;
+    Buffer->BytesPerSector = SizeInfo.BytesPerSector;
+
+    *Length -= sizeof(FILE_FS_FULL_SIZE_INFORMATION);
 
     return STATUS_SUCCESS;
 }
@@ -210,10 +262,14 @@ NtfsFsdQueryVolumeInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                           (PFILE_FS_ATTRIBUTE_INFORMATION)SystemBuffer,
                                           &BufferLength);
             break;
+        case FileFsFullSizeInformation:
+            Status = NtfsGetFullSizeInfo(VolumeDeviceObject,
+                                         (PFILE_FS_FULL_SIZE_INFORMATION)SystemBuffer,
+                                         &BufferLength);
+            break;
         case FileFsControlInformation:
         case FileFsDeviceInformation:
         case FileFsDriverPathInformation:
-        case FileFsFullSizeInformation:
             Status = STATUS_NOT_IMPLEMENTED;
             break;
         case FileFsObjectIdInformation:

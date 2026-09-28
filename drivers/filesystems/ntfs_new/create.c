@@ -790,6 +790,7 @@ NtfsCompleteFailedCreate(
                                     &FileCB->StreamCB->ShareAccess);
                 ExReleaseFastMutex(&Vol->StreamListMutex);
                 FileCB->ShareAccessSet = FALSE;
+                InterlockedDecrement(&FileCB->StreamCB->UncleanCount);
             }
             NtfsDereferenceStreamContext(
                 (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension,
@@ -1294,6 +1295,15 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             Status = IsDirectory && RootName ? STATUS_ACCESS_DENIED : STATUS_OBJECT_NAME_COLLISION;
             return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, Status);
         }
+        if (IsDirectory &&
+            (Disposition == FILE_SUPERSEDE ||
+             Disposition == FILE_OVERWRITE ||
+             Disposition == FILE_OVERWRITE_IF))
+        {
+            NtfsReleaseMetadata(VolCB);
+            KeLeaveCriticalRegion();
+            return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, STATUS_OBJECT_NAME_COLLISION);
+        }
 
         // In every other case, we should continue to open the file.
     }
@@ -1616,7 +1626,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         !OpenTargetDirectory &&
         !(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
         ((FileCB->DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)) ||
-         Disposition == FILE_SUPERSEDE ||
          Disposition == FILE_OVERWRITE ||
          Disposition == FILE_OVERWRITE_IF))
     {
@@ -1685,6 +1694,15 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                         CurrentFile,
                                         CachedRecord,
                                         STATUS_INSUFFICIENT_RESOURCES);
+    }
+    if (FileCB->StreamCB->DeletePending)
+    {
+        return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                        Irp,
+                                        FileCB,
+                                        CurrentFile,
+                                        CachedRecord,
+                                        STATUS_DELETE_PENDING);
     }
 
     if (!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
@@ -1757,6 +1775,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                         Status);
     }
     FileCB->ShareAccessSet = TRUE;
+    InterlockedIncrement(&FileCB->StreamCB->UncleanCount);
 
     if (!!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
     {
@@ -1871,7 +1890,21 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (NT_SUCCESS(Status) && (DeleteOnCloseBasic.FileAttributes & FILE_ATTRIBUTE_READONLY))
             Status = STATUS_CANNOT_DELETE;
         if (!NT_SUCCESS(Status))
-            return NtfsCompleteCreate(Irp, Status, 0);
+        {
+            ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+            if (VolCB->OpenHandleCount > 0)
+                VolCB->OpenHandleCount--;
+            ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+            FileObject->FsContext = NULL;
+            FileObject->FsContext2 = NULL;
+            FileObject->SectionObjectPointer = NULL;
+            return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                            Irp,
+                                            FileCB,
+                                            CurrentFile,
+                                            CachedRecord,
+                                            Status);
+        }
     }
 
     /*
@@ -1902,7 +1935,21 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         NtfsReleaseMetadata(VolCB);
         KeLeaveCriticalRegion();
         if (!NT_SUCCESS(Status))
-            return NtfsCompleteCreate(Irp, Status, 0);
+        {
+            ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+            if (VolCB->OpenHandleCount > 0)
+                VolCB->OpenHandleCount--;
+            ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+            FileObject->FsContext = NULL;
+            FileObject->FsContext2 = NULL;
+            FileObject->SectionObjectPointer = NULL;
+            return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                            Irp,
+                                            FileCB,
+                                            CurrentFile,
+                                            CachedRecord,
+                                            Status);
+        }
 
         if (FileCB->StreamCB)
             FileCB->StreamCB->SizePending = FALSE;

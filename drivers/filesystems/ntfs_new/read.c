@@ -393,6 +393,13 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Status = STATUS_INVALID_PARAMETER;
         goto Complete;
     }
+    if ((NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY) &&
+        !FileCB->RequestedStream &&
+        !(Irp->Flags & IRP_PAGING_IO))
+    {
+        Status = STATUS_INVALID_DEVICE_REQUEST;
+        goto Complete;
+    }
     if (ReadOffset.QuadPart < 0)
     {
         Status = STATUS_INVALID_PARAMETER;

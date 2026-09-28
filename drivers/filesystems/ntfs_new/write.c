@@ -272,6 +272,13 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Status = STATUS_INVALID_PARAMETER;
         goto Complete;
     }
+    if ((NtfsFileRecordGetHeader(FileRec)->Flags & FR_IS_DIRECTORY) &&
+        !FileCB->RequestedStream &&
+        !(Irp->Flags & IRP_PAGING_IO))
+    {
+        Status = STATUS_INVALID_DEVICE_REQUEST;
+        goto Complete;
+    }
 
     DiskVolume = VolCB->DiskVolume;
     if (!DiskVolume)

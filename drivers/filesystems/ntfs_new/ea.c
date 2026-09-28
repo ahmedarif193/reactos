@@ -512,10 +512,21 @@ NtfsFsdQueryEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
-    Status = NtfsQueryEa(FileCB,
-                         IrpSp,
-                         Output,
-                         &BytesWritten);
+    _SEH2_TRY
+    {
+        if (IrpSp->Parameters.QueryEa.Length != 0)
+            RtlZeroMemory(Output, IrpSp->Parameters.QueryEa.Length);
+        Status = NtfsQueryEa(FileCB,
+                             IrpSp,
+                             Output,
+                             &BytesWritten);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+        BytesWritten = 0;
+    }
+    _SEH2_END;
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
 

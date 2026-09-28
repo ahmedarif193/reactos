@@ -290,6 +290,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         PVolumeContextBlock VolCB =
             (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+        BOOLEAN LastHandle;
 
         if (FileCB->FileDir && VolCB->NotifySync)
         {
@@ -299,8 +300,11 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                FileCB);
             KeLeaveCriticalRegion();
         }
+        LastHandle = TRUE;
         if (FileCB->StreamCB)
         {
+            if (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE)
+                FileCB->StreamCB->DeletePending = TRUE;
             // Byte-range locks belong to the handle, so they end with it.
             FsRtlFastUnlockAll(&FileCB->StreamCB->FileLock,
                                IrpSp->FileObject,
@@ -313,6 +317,11 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                     &FileCB->StreamCB->ShareAccess);
                 ExReleaseFastMutex(&VolCB->StreamListMutex);
                 FileCB->ShareAccessSet = FALSE;
+                LastHandle = InterlockedDecrement(&FileCB->StreamCB->UncleanCount) == 0;
+            }
+            else
+            {
+                LastHandle = FileCB->StreamCB->UncleanCount == 0;
             }
         }
 
@@ -327,8 +336,9 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
 
         /* The handle is going away, so a requested delete happens now. */
-        if ((FileCB->DeletePending ||
-             (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE)) &&
+        if ((FileCB->StreamCB
+                 ? (FileCB->StreamCB->DeletePending && LastHandle)
+                 : (FileCB->DeletePending || (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE))) &&
             VolCB->DiskVolume &&
             !NtfsVolumeIsReadOnly(VolCB->DiskVolume) &&
             FileCB->FileName.Length != 0)
@@ -336,6 +346,9 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             BOOLEAN IsDirectory =
                 !!(NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY);
             NTSTATUS DeleteStatus;
+            PWCHAR DeletePath;
+            PWCHAR ResolvedPath = NULL;
+            ULONG DeletePathLength;
 
             /*
              * Cached pages of a file that is about to stop existing must go
@@ -368,21 +381,65 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
             KeEnterCriticalRegion();
             NtfsAcquireMetadata(VolCB);
+            DeletePath = FileCB->FileName.Buffer;
+            DeletePathLength = FileCB->FileName.Length / sizeof(WCHAR);
+            if (FileCB->StreamCB)
+            {
+                PNtfsFileRecord NamedRecord = NULL;
+                ULONG RemainingNameLength = 0;
+                BOOLEAN SameFile;
+
+                SameFile = NT_SUCCESS(NtfsMasterFileTableGetFileRecordFromQueryEx(
+                               NtfsVolumeGetMft(VolCB->DiskVolume),
+                               DeletePath,
+                               DeletePathLength,
+                               TRUE,
+                               &RemainingNameLength,
+                               &NamedRecord)) &&
+                           RemainingNameLength == 0 &&
+                           NamedRecord &&
+                           NtfsFileRecordGetHeader(NamedRecord)->MFTRecordNumber ==
+                               NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber;
+                if (NamedRecord)
+                    NtfsFileRecordDestroy(NamedRecord);
+                if (!SameFile)
+                {
+                    ULONG ResolvedLength = 0;
+
+                    ResolvedPath = ExAllocatePoolWithTag(PagedPool, MAXUSHORT, TAG_NTFS);
+                    if (ResolvedPath &&
+                        NT_SUCCESS(NtfsMasterFileTableGetPathFromFileReference(
+                            NtfsVolumeGetMft(VolCB->DiskVolume),
+                            FileCB->StreamCB->FileReference,
+                            ResolvedPath,
+                            MAXUSHORT / sizeof(WCHAR) - 1,
+                            &ResolvedLength)))
+                    {
+                        DeletePath = ResolvedPath;
+                        DeletePathLength = ResolvedLength;
+                    }
+                }
+            }
             DeleteStatus = NtfsMasterFileTableDeleteFile(
                 NtfsVolumeGetMft(VolCB->DiskVolume),
-                FileCB->FileName.Buffer,
-                FileCB->FileName.Length / sizeof(WCHAR),
+                DeletePath,
+                DeletePathLength,
                 IsDirectory);
             NtfsReleaseMetadata(VolCB);
             KeLeaveCriticalRegion();
 
             InterlockedIncrement(&VolCB->DirGeneration);
             NtfsEvictCachedRecord(VolCB,
-                                  FileCB->FileName.Buffer,
-                                  (USHORT)(FileCB->FileName.Length / sizeof(WCHAR)),
+                                  DeletePath,
+                                  (USHORT)DeletePathLength,
                                   NT_SUCCESS(DeleteStatus));
+            if (ResolvedPath)
+                ExFreePoolWithTag(ResolvedPath, TAG_NTFS);
             if (!NT_SUCCESS(DeleteStatus) && FileCB->StreamCB)
+            {
                 FileCB->StreamCB->Deleted = FALSE;
+                FileCB->StreamCB->DeletePending = FALSE;
+            }
 
             if (!NT_SUCCESS(DeleteStatus))
                 DPRINT1("NtfsFsdCleanup: delete failed 0x%08lx\n", DeleteStatus);

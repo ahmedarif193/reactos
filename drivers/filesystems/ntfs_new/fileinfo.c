@@ -99,10 +99,11 @@
 
      // Information from file header
      Buffer->Directory = !!(NtfsFileRecordGetHeader(File)->Flags & FR_IS_DIRECTORY);
-     Buffer->NumberOfLinks = NtfsFileRecordGetHeader(File)->HardLinkCount;
+     Buffer->NumberOfLinks = NtfsFileRecordGetLinkCount(File);
 
      // Information from file context block
-     Buffer->DeletePending = !!(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE);
+     Buffer->DeletePending = !!(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE) ||
+                             (FileCB->StreamCB && FileCB->StreamCB->DeletePending);
 
      *Length -= FileInfoSize;
 
@@ -593,7 +594,9 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
         UCHAR DotIndex = FileCB->DirDotIndex;
         USHORT NameLength = DotIndex + 1;
 
-        if (!NtfsDirectoryNameMatches(FileNameFilter, DotNames[DotIndex], NameLength))
+        if (!NtfsDirectoryNameMatches(FileNameFilter, DotNames[0], 1) &&
+            !(FileNameFilter && !ContainsWildcard(FileNameFilter) &&
+              NtfsDirectoryNameMatches(FileNameFilter, DotNames[DotIndex], NameLength)))
         {
             FileCB->DirDotIndex++;
             continue;
@@ -1084,11 +1087,15 @@ NtfsSetLinkInformation(_In_ PVolumeContextBlock VolCB,
         NtfsFileRecordDestroy(ExistingRecord);
         ExistingRecord = NULL;
 
-        if (!ReplaceIfExists ||
-            ExistingRecordNumber == NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber)
+        if (!ReplaceIfExists)
         {
             ExFreePoolWithTag(NewName.Buffer, TAG_NTFS);
             return STATUS_OBJECT_NAME_COLLISION;
+        }
+        if (ExistingRecordNumber == NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber)
+        {
+            ExFreePoolWithTag(NewName.Buffer, TAG_NTFS);
+            return STATUS_SUCCESS;
         }
         if (ExistingIsDirectory || NtfsIsFileRecordOpen(VolCB, ExistingRecordNumber))
         {
@@ -1549,6 +1556,8 @@ NtfsCheckDirectoryEmpty(_In_ PVolumeContextBlock VolCB,
 {
     NtfsDirectoryEntry Entry;
     PNtfsDirectory Directory;
+    PNtfsFileRecord CurrentRecord = NULL;
+    ULONG RemainingNameLength = 0;
     NTSTATUS Status;
 
     if (!(NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY))
@@ -1558,10 +1567,21 @@ NtfsCheckDirectoryEmpty(_In_ PVolumeContextBlock VolCB,
     if (!Directory)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    Status = NtfsDirectoryLoadDirectory(Directory, FileCB->FileRec);
+    Status = NtfsMasterFileTableGetFileRecordFromQueryEx(NtfsVolumeGetMft(VolCB->DiskVolume),
+                                                         FileCB->FileName.Buffer,
+                                                         FileCB->FileName.Length / sizeof(WCHAR),
+                                                         TRUE,
+                                                         &RemainingNameLength,
+                                                         &CurrentRecord);
+    if (NT_SUCCESS(Status) && (RemainingNameLength != 0 || !CurrentRecord))
+        Status = STATUS_OBJECT_NAME_NOT_FOUND;
+    if (NT_SUCCESS(Status))
+        Status = NtfsDirectoryLoadDirectory(Directory, CurrentRecord);
     if (NT_SUCCESS(Status))
         Status = NtfsDirectoryReadNext(Directory, TRUE, &Entry);
     NtfsDirectoryDestroy(Directory);
+    if (CurrentRecord)
+        NtfsFileRecordDestroy(CurrentRecord);
 
     if (NT_SUCCESS(Status))
         return STATUS_DIRECTORY_NOT_EMPTY;
@@ -1613,7 +1633,8 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Status = STATUS_INVALID_PARAMETER;
         goto Complete;
     }
-    if (NtfsVolumeIsReadOnly(VolCB->DiskVolume))
+    if (NtfsVolumeIsReadOnly(VolCB->DiskVolume) &&
+        IrpSp->Parameters.SetFile.FileInformationClass != FilePositionInformation)
     {
         Status = STATUS_MEDIA_WRITE_PROTECTED;
         goto Complete;
@@ -1809,6 +1830,8 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             /* The name is only removed once the last handle is gone. */
             FileCB->DeletePending = !!Disposition->DeleteFile;
             FileObject->DeletePending = FileCB->DeletePending;
+            if (FileCB->StreamCB)
+                FileCB->StreamCB->DeletePending = FileCB->DeletePending;
             Status = STATUS_SUCCESS;
             goto Complete;
         }
@@ -1881,6 +1904,28 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     SystemBuffer)->AllocationSize;
             AllocationRequest = TRUE;
             break;
+
+        case FilePositionInformation:
+        {
+            PFILE_POSITION_INFORMATION Position = (PFILE_POSITION_INFORMATION)SystemBuffer;
+            ULONG BytesPerSector = NtfsVolumeGetBytesPerSector(VolCB->DiskVolume);
+
+            if (BufferLength < sizeof(FILE_POSITION_INFORMATION))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                goto Complete;
+            }
+            if ((FileObject->Flags & FO_NO_INTERMEDIATE_BUFFERING) &&
+                BytesPerSector &&
+                (Position->CurrentByteOffset.QuadPart & (BytesPerSector - 1)))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Complete;
+            }
+            FileObject->CurrentByteOffset = Position->CurrentByteOffset;
+            Status = STATUS_SUCCESS;
+            goto Complete;
+        }
 
         default:
             Status = STATUS_NOT_IMPLEMENTED;
