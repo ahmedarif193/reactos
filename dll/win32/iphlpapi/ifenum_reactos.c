@@ -628,21 +628,6 @@ DWORD getInterfaceEntryByIndex(DWORD index, PMIB_IFROW entry)
     return status;
 }
 
-char *toIPAddressString(unsigned int addr, char string[16])
-{
-    struct in_addr iAddr;
-
-    iAddr.s_addr = addr;
-
-    if (string)
-    {
-        strncpy(string, inet_ntoa(iAddr), 15);
-        string[15] = '\0';
-    }
-
-    return inet_ntoa(iAddr);
-}
-
 NTSTATUS addIPAddress( IPAddr Address, IPMask Mask, DWORD IfIndex,
                        PULONG NteContext, PULONG NteInstance )
 {

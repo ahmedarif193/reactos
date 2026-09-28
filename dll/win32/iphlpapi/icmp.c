@@ -204,6 +204,12 @@ IcmpCloseHandle(
 {
     NTSTATUS Status;
 
+    if (IcmpHandle == NULL || IcmpHandle == INVALID_HANDLE_VALUE)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
     Status = NtClose(IcmpHandle);
     if (!NT_SUCCESS(Status))
     {

@@ -1384,7 +1384,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
                             sizeof(AFD_DEVICE_EXTENSION),
                             &wstrDeviceName,
                             FILE_DEVICE_NAMED_PIPE,
-                            0,
+                            FILE_DEVICE_ALLOW_APPCONTAINER_TRAVERSAL,
                             FALSE,
                             &DeviceObject);
 

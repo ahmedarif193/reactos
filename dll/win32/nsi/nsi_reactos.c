@@ -114,7 +114,7 @@ static UINT oper_status(DWORD status)
 
 static BYTE prefix_length(DWORD mask)
 {
-    DWORD value = ntohl(mask);
+    DWORD value = RtlUlongByteSwap(mask);
     BYTE length = 0;
 
     while (value & 0x80000000)

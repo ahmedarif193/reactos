@@ -528,6 +528,12 @@ GetAddrInfoW(IN PCWSTR pszNodeName,
     CHAR AnsiNodeName[256];
     DPRINT("GetAddrInfoW: %S, %S, %p, %p\n", pszNodeName, pszServiceName, ptHints, pptResult);
 
+    if ((iError = WsQuickProlog()) != ERROR_SUCCESS)
+    {
+        SetLastError(iError);
+        return iError;
+    }
+
     /* Assume error */
     *pptResult  = NULL;
 
