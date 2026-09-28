@@ -34,6 +34,7 @@ typedef struct _SAVE_POWER_SCHEME_DATA
     PPOWER_SCHEMES_PAGE_DATA pPageData;
     PPOWER_SCHEME pNewScheme;
     HWND hwndPage;
+    POWER_POLICY PowerPolicy;
 } SAVE_POWER_SCHEME_DATA, *PSAVE_POWER_SCHEME_DATA;
 
 
@@ -72,6 +73,10 @@ AddPowerScheme(
     PPOWER_SCHEME pScheme;
     BOOL bResult = FALSE;
 
+    if (dwName < sizeof(TCHAR) || pszName == NULL ||
+        (dwDescription != 0 && (dwDescription < sizeof(TCHAR) || pszDescription == NULL)))
+        return NULL;
+
     pScheme = HeapAlloc(GetProcessHeap(),
                         HEAP_ZERO_MEMORY,
                         sizeof(POWER_SCHEME));
@@ -89,7 +94,8 @@ AddPowerScheme(
         if (pScheme->pszName == NULL)
             goto done;
 
-        _tcscpy(pScheme->pszName, pszName);
+        if (FAILED(StringCchCopy(pScheme->pszName, dwName / sizeof(TCHAR), pszName)))
+            goto done;
     }
 
     if (dwDescription != 0)
@@ -100,7 +106,9 @@ AddPowerScheme(
         if (pScheme->pszDescription == NULL)
             goto done;
 
-        _tcscpy(pScheme->pszDescription, pszDescription);
+        if (FAILED(StringCchCopy(pScheme->pszDescription,
+                                 dwDescription / sizeof(TCHAR), pszDescription)))
+            goto done;
     }
 
     InsertTailList(&pPageData->PowerSchemesList, &pScheme->ListEntry);
@@ -154,13 +162,13 @@ EnumPowerSchemeCallback(
 {
     if (ValidatePowerPolicies(0, pp))
     {
-        AddPowerScheme((PPOWER_SCHEMES_PAGE_DATA)lParam,
-                       uiIndex,
-                       dwName,
-                       pszName,
-                       dwDesc,
-                       pszDesc,
-                       pp);
+        return AddPowerScheme((PPOWER_SCHEMES_PAGE_DATA)lParam,
+                              uiIndex,
+                              dwName,
+                              pszName,
+                              dwDesc,
+                              pszDesc,
+                              pp) != NULL;
     }
 
     return TRUE;
@@ -235,16 +243,38 @@ Pos_InitData(
 
 static
 VOID
+Pos_SelectTimeout(
+    HWND hwndCtrl,
+    ULONG Timeout)
+{
+    LRESULT Count, Index, Value;
+
+    if (hwndCtrl == NULL)
+        return;
+
+    Count = SendMessage(hwndCtrl, CB_GETCOUNT, 0, 0);
+    for (Index = 0; Index < Count; Index++)
+    {
+        Value = SendMessage(hwndCtrl, CB_GETITEMDATA, Index, 0);
+        if (Value != CB_ERR && (ULONG)Value == Timeout)
+            break;
+    }
+
+    SendMessage(hwndCtrl, CB_SETCURSEL, Index < Count ? Index : -1, 0);
+}
+
+
+static
+VOID
 LoadConfig(
     HWND hwndDlg,
     PPOWER_SCHEMES_PAGE_DATA pPageData,
     PPOWER_SCHEME pScheme)
 {
-    INT i = 0, iCurSel = 0;
+    INT iCurSel = 0;
     TCHAR szTemp[MAX_PATH];
     TCHAR szConfig[MAX_PATH];
     PPOWER_POLICY pp;
-    HWND hwndCtrl;
 
     iCurSel = (INT)SendDlgItemMessage(hwndDlg,
                                           IDC_ENERGYLIST,
@@ -264,7 +294,7 @@ LoadConfig(
                                                     CB_GETITEMDATA,
                                                     (WPARAM)iCurSel,
                                                     0);
-        if (pScheme == (PPOWER_SCHEME)CB_ERR)
+        if (pScheme == NULL || pScheme == (PPOWER_SCHEME)CB_ERR)
             return;
     }
 
@@ -272,62 +302,22 @@ LoadConfig(
 
     if (LoadString(hApplet, IDS_CONFIG1, szTemp, _countof(szTemp)))
     {
-        _stprintf(szConfig, szTemp, pScheme->pszName);
-        SetWindowText(GetDlgItem(hwndDlg, IDC_GRPDETAIL), szConfig);
+        if (SUCCEEDED(StringCchPrintf(szConfig, _countof(szConfig), szTemp, pScheme->pszName)))
+            SetWindowText(GetDlgItem(hwndDlg, IDC_GRPDETAIL), szConfig);
+        else
+            SetWindowText(GetDlgItem(hwndDlg, IDC_GRPDETAIL), pScheme->pszName);
     }
 
     pp = &pScheme->PowerPolicy;
 
-    for (i = 0; i < 16; i++)
-    {
-        hwndCtrl = GetDlgItem(hwndDlg, IDC_MONITORACLIST);
-        if (hwndCtrl != NULL && Sec[i] == pp->user.VideoTimeoutAc)
-        {
-            SendMessage(hwndCtrl, CB_SETCURSEL, i, 0);
-        }
-
-        hwndCtrl = GetDlgItem(hwndDlg, IDC_MONITORDCLIST);
-        if (hwndCtrl != NULL && Sec[i] == pp->user.VideoTimeoutDc)
-        {
-            SendMessage(hwndCtrl, CB_SETCURSEL, i, 0);
-        }
-
-        hwndCtrl = GetDlgItem(hwndDlg, IDC_DISKACLIST);
-        if (hwndCtrl != NULL && Sec[i] == pp->user.SpindownTimeoutAc)
-        {
-            SendMessage(hwndCtrl, CB_SETCURSEL, i - 2, 0);
-        }
-
-        hwndCtrl = GetDlgItem(hwndDlg, IDC_DISKDCLIST);
-        if (hwndCtrl != NULL && Sec[i] == pp->user.SpindownTimeoutDc)
-        {
-            SendMessage(hwndCtrl, CB_SETCURSEL, i - 2, 0);
-        }
-
-        hwndCtrl = GetDlgItem(hwndDlg, IDC_STANDBYACLIST);
-        if (hwndCtrl != NULL && Sec[i] == pp->user.IdleTimeoutAc)
-        {
-            SendMessage(hwndCtrl, CB_SETCURSEL, i, 0);
-        }
-
-        hwndCtrl = GetDlgItem(hwndDlg, IDC_STANDBYDCLIST);
-        if (hwndCtrl != NULL && Sec[i] == pp->user.IdleTimeoutDc)
-        {
-            SendMessage(hwndCtrl, CB_SETCURSEL, i, 0);
-        }
-
-        hwndCtrl = GetDlgItem(hwndDlg, IDC_HIBERNATEACLIST);
-        if (hwndCtrl != NULL && Sec[i] == pp->mach.DozeS4TimeoutAc)
-        {
-            SendMessage(hwndCtrl, CB_SETCURSEL, i, 0);
-        }
-
-        hwndCtrl = GetDlgItem(hwndDlg, IDC_HIBERNATEDCLIST);
-        if (hwndCtrl != NULL && Sec[i] == pp->mach.DozeS4TimeoutDc)
-        {
-            SendMessage(hwndCtrl, CB_SETCURSEL, i, 0);
-        }
-    }
+    Pos_SelectTimeout(GetDlgItem(hwndDlg, IDC_MONITORACLIST), pp->user.VideoTimeoutAc);
+    Pos_SelectTimeout(GetDlgItem(hwndDlg, IDC_MONITORDCLIST), pp->user.VideoTimeoutDc);
+    Pos_SelectTimeout(GetDlgItem(hwndDlg, IDC_DISKACLIST), pp->user.SpindownTimeoutAc);
+    Pos_SelectTimeout(GetDlgItem(hwndDlg, IDC_DISKDCLIST), pp->user.SpindownTimeoutDc);
+    Pos_SelectTimeout(GetDlgItem(hwndDlg, IDC_STANDBYACLIST), pp->user.IdleTimeoutAc);
+    Pos_SelectTimeout(GetDlgItem(hwndDlg, IDC_STANDBYDCLIST), pp->user.IdleTimeoutDc);
+    Pos_SelectTimeout(GetDlgItem(hwndDlg, IDC_HIBERNATEACLIST), pp->mach.DozeS4TimeoutAc);
+    Pos_SelectTimeout(GetDlgItem(hwndDlg, IDC_HIBERNATEDCLIST), pp->mach.DozeS4TimeoutDc);
 }
 
 
@@ -399,13 +389,17 @@ Pos_InitPage(HWND hwndDlg)
                                      CB_ADDSTRING,
                                      0,
                                     (LPARAM)szName);
-                if (index == CB_ERR)
+                if (index == CB_ERR || index == CB_ERRSPACE)
                     return;
 
-                SendMessage(hwnd,
-                             CB_SETITEMDATA,
-                             index,
-                             (LPARAM)Sec[ifrom - IDS_TIMEOUT16]);
+                if (SendMessage(hwnd,
+                                CB_SETITEMDATA,
+                                index,
+                                (LPARAM)Sec[ifrom - IDS_TIMEOUT1]) == CB_ERR)
+                {
+                    SendMessage(hwnd, CB_DELETESTRING, index, 0);
+                    return;
+                }
             }
         }
 
@@ -415,113 +409,101 @@ Pos_InitPage(HWND hwndDlg)
                                  CB_ADDSTRING,
                                  0,
                                  (LPARAM)szName);
-            if (index == CB_ERR)
+            if (index == CB_ERR || index == CB_ERRSPACE)
                 return;
 
-            SendMessage(hwnd,
-                         CB_SETITEMDATA,
-                         index,
-                         (LPARAM)Sec[0]);
+            if (SendMessage(hwnd,
+                            CB_SETITEMDATA,
+                            index,
+                            (LPARAM)Sec[_countof(Sec) - 1]) == CB_ERR)
+            {
+                SendMessage(hwnd, CB_DELETESTRING, index, 0);
+                return;
+            }
         }
     }
 }
 
 
 static VOID
+Pos_SaveTimeout(
+    HWND hwndCtrl,
+    PULONG Timeout)
+{
+    LRESULT Index, Value;
+
+    if (hwndCtrl == NULL)
+        return;
+
+    Index = SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
+    if (Index == CB_ERR)
+        return;
+
+    Value = SendMessage(hwndCtrl, CB_GETITEMDATA, Index, 0);
+    if (Value != CB_ERR)
+        *Timeout = (ULONG)Value;
+}
+
+
+static VOID
+Pos_ReadData(
+    HWND hwndDlg,
+    PPOWER_POLICY pp)
+{
+    Pos_SaveTimeout(GetDlgItem(hwndDlg, IDC_MONITORACLIST), &pp->user.VideoTimeoutAc);
+    Pos_SaveTimeout(GetDlgItem(hwndDlg, IDC_MONITORDCLIST), &pp->user.VideoTimeoutDc);
+    Pos_SaveTimeout(GetDlgItem(hwndDlg, IDC_DISKACLIST), &pp->user.SpindownTimeoutAc);
+    Pos_SaveTimeout(GetDlgItem(hwndDlg, IDC_DISKDCLIST), &pp->user.SpindownTimeoutDc);
+    Pos_SaveTimeout(GetDlgItem(hwndDlg, IDC_STANDBYACLIST), &pp->user.IdleTimeoutAc);
+    Pos_SaveTimeout(GetDlgItem(hwndDlg, IDC_STANDBYDCLIST), &pp->user.IdleTimeoutDc);
+    Pos_SaveTimeout(GetDlgItem(hwndDlg, IDC_HIBERNATEACLIST), &pp->mach.DozeS4TimeoutAc);
+    Pos_SaveTimeout(GetDlgItem(hwndDlg, IDC_HIBERNATEDCLIST), &pp->mach.DozeS4TimeoutDc);
+
+}
+
+
+static BOOL
 Pos_SaveData(
     HWND hwndDlg,
     PPOWER_SCHEMES_PAGE_DATA pPageData)
 {
     PPOWER_SCHEME pScheme;
-    HWND hwndCtrl;
-    INT tmp;
+    POWER_POLICY PowerPolicy;
+
+    if (pPageData == NULL || pPageData->pSelectedPowerScheme == NULL)
+        return FALSE;
 
     pScheme = pPageData->pSelectedPowerScheme;
+    PowerPolicy = pScheme->PowerPolicy;
+    Pos_ReadData(hwndDlg, &PowerPolicy);
 
-    hwndCtrl = GetDlgItem(hwndDlg, IDC_MONITORACLIST);
-    if (hwndCtrl != NULL)
+    if (!SetActivePwrScheme(pScheme->uId, NULL, &PowerPolicy))
+        return FALSE;
+
+    pScheme->PowerPolicy = PowerPolicy;
+    pPageData->pActivePowerScheme = pScheme;
+    return TRUE;
+}
+
+
+static INT
+FindPowerSchemeIndex(
+    HWND hwndList,
+    PPOWER_SCHEME pScheme)
+{
+    INT Count, Index;
+
+    if (pScheme == NULL)
+        return CB_ERR;
+
+    Count = (INT)SendMessage(hwndList, CB_GETCOUNT, 0, 0);
+    for (Index = 0; Index < Count; Index++)
     {
-        tmp = (INT)SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
-        if (tmp > 0 && tmp < 16)
-        {
-            pScheme->PowerPolicy.user.VideoTimeoutAc = Sec[tmp];
-        }
+        if ((PPOWER_SCHEME)SendMessage(hwndList, CB_GETITEMDATA, Index, 0) == pScheme)
+            return Index;
     }
 
-    hwndCtrl = GetDlgItem(hwndDlg, IDC_MONITORDCLIST);
-    if (hwndCtrl != NULL)
-    {
-        tmp = (INT)SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
-        if (tmp > 0 && tmp < 16)
-        {
-            pScheme->PowerPolicy.user.VideoTimeoutDc = Sec[tmp];
-        }
-    }
-
-    hwndCtrl = GetDlgItem(hwndDlg, IDC_DISKACLIST);
-    if (hwndCtrl != NULL)
-    {
-        tmp = (INT)SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
-        if (tmp > 0 && tmp < 16)
-        {
-            pScheme->PowerPolicy.user.SpindownTimeoutAc = Sec[tmp + 2];
-        }
-    }
-
-    hwndCtrl = GetDlgItem(hwndDlg, IDC_DISKDCLIST);
-    if (hwndCtrl != NULL)
-    {
-        tmp = (INT)SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
-        if (tmp > 0 && tmp < 16)
-        {
-            pScheme->PowerPolicy.user.SpindownTimeoutDc = Sec[tmp + 2];
-        }
-    }
-
-    hwndCtrl = GetDlgItem(hwndDlg, IDC_STANDBYACLIST);
-    if (hwndCtrl != NULL)
-    {
-        tmp = (INT)SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
-        if (tmp > 0 && tmp < 16)
-        {
-            pScheme->PowerPolicy.user.IdleTimeoutAc = Sec[tmp];
-        }
-    }
-
-    hwndCtrl = GetDlgItem(hwndDlg, IDC_STANDBYDCLIST);
-    if (hwndCtrl != NULL)
-    {
-        tmp = (INT)SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
-        if (tmp > 0 && tmp < 16)
-        {
-            pScheme->PowerPolicy.user.IdleTimeoutDc = Sec[tmp];
-        }
-    }
-
-    hwndCtrl = GetDlgItem(hwndDlg, IDC_HIBERNATEACLIST);
-    if (hwndCtrl != NULL)
-    {
-        tmp = (INT)SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
-        if (tmp > 0 && tmp < 16)
-        {
-            pScheme->PowerPolicy.mach.DozeS4TimeoutAc = Sec[tmp];
-        }
-    }
-
-    hwndCtrl = GetDlgItem(hwndDlg, IDC_HIBERNATEDCLIST);
-    if (hwndCtrl != NULL)
-    {
-        tmp = (INT)SendMessage(hwndCtrl, CB_GETCURSEL, 0, 0);
-        if (tmp > 0 && tmp < 16)
-        {
-            pScheme->PowerPolicy.mach.DozeS4TimeoutDc = Sec[tmp];
-        }
-    }
-
-    if (SetActivePwrScheme(pScheme->uId, NULL, &pScheme->PowerPolicy))
-    {
-        pPageData->pActivePowerScheme = pScheme;
-    }
+    return CB_ERR;
 }
 
 
@@ -547,36 +529,42 @@ DelScheme(
     SendMessage(hList, CB_SETCURSEL, iCurSel, 0);
 
     pScheme = (PPOWER_SCHEME)SendMessage(hList, CB_GETITEMDATA, (WPARAM)iCurSel, 0);
-    if (pScheme == (PPOWER_SCHEME)CB_ERR)
+    if (pScheme == NULL || pScheme == (PPOWER_SCHEME)CB_ERR)
         return FALSE;
 
-    LoadStringW(hApplet, IDS_DEL_SCHEME_TITLE, szTitleBuffer, _countof(szTitleBuffer));
-    LoadStringW(hApplet, IDS_DEL_SCHEME, szRawBuffer, _countof(szRawBuffer));
-    StringCchPrintfW(szCookedBuffer, _countof(szCookedBuffer), szRawBuffer, pScheme->pszName);
+    if (!LoadStringW(hApplet, IDS_DEL_SCHEME_TITLE, szTitleBuffer, _countof(szTitleBuffer)) ||
+        !LoadStringW(hApplet, IDS_DEL_SCHEME, szRawBuffer, _countof(szRawBuffer)) ||
+        FAILED(StringCchPrintfW(szCookedBuffer, _countof(szCookedBuffer), szRawBuffer, pScheme->pszName)))
+        return FALSE;
 
     if (MessageBoxW(hwnd, szCookedBuffer, szTitleBuffer, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES)
     {
         if (!DeletePwrScheme(pScheme->uId))
         {
-            LoadStringW(hApplet, IDS_DEL_SCHEME_ERROR, szErrorText, sizeof(szErrorText) / sizeof(WCHAR));
-            MessageBoxW(NULL, szErrorText, NULL, MB_OK | MB_ICONERROR);
+            if (LoadStringW(hApplet, IDS_DEL_SCHEME_ERROR, szErrorText, _countof(szErrorText)))
+                MessageBoxW(NULL, szErrorText, NULL, MB_OK | MB_ICONERROR);
             return FALSE;
         }
 
-        iCurSel = SendMessage(hList, CB_FINDSTRING, -1, (LPARAM)pScheme->pszName);
-        if (iCurSel != CB_ERR)
-            SendMessage(hList, CB_DELETESTRING, iCurSel, 0);
+        iCurSel = FindPowerSchemeIndex(hList, pScheme);
+        if (iCurSel == CB_ERR || SendMessage(hList, CB_DELETESTRING, iCurSel, 0) == CB_ERR)
+            return FALSE;
+
+        if (pPageData->pSelectedPowerScheme == pScheme)
+            pPageData->pSelectedPowerScheme = NULL;
+        if (pPageData->pActivePowerScheme == pScheme)
+            pPageData->pActivePowerScheme = NULL;
 
         DeletePowerScheme(pScheme);
 
-        iCurSel = SendMessage(hList, CB_FINDSTRING, -1, (LPARAM)pPageData->pActivePowerScheme->pszName);
-        if (iCurSel != CB_ERR)
+        iCurSel = FindPowerSchemeIndex(hList, pPageData->pActivePowerScheme);
+        if (iCurSel == CB_ERR)
+            iCurSel = 0;
+
+        if (SendMessage(hList, CB_SETCURSEL, iCurSel, 0) == CB_ERR)
         {
-            SendMessage(hList, CB_SETCURSEL, iCurSel, 0);
-        }
-        else
-        {
-            SendMessage(hList, CB_SETCURSEL, 0, 0);
+            EnableWindow(GetDlgItem(hwnd, IDC_DELETE_BTN), FALSE);
+            EnableWindow(GetDlgItem(hwnd, IDC_SAVEAS_BTN), FALSE);
         }
 
         LoadConfig(hwnd, pPageData, NULL);
@@ -600,7 +588,8 @@ SavePowerScheme(
 
     pPageData = pSaveSchemeData->pPageData;
 
-    GetDlgItemText(hwndDlg, IDC_SCHEMENAME, szSchemeName, _countof(szSchemeName));
+    if (!GetDlgItemText(hwndDlg, IDC_SCHEMENAME, szSchemeName, _countof(szSchemeName)))
+        return FALSE;
 
     pScheme = AddPowerScheme(pPageData,
                              -1,
@@ -608,7 +597,7 @@ SavePowerScheme(
                              szSchemeName,
                              sizeof(TCHAR),
                              TEXT(""),
-                             &pPageData->pSelectedPowerScheme->PowerPolicy);
+                             &pSaveSchemeData->PowerPolicy);
     if (pScheme != NULL)
     {
         if (WritePwrScheme(&pScheme->uId,
@@ -677,61 +666,52 @@ SaveScheme(
     PPOWER_SCHEMES_PAGE_DATA pPageData)
 {
     SAVE_POWER_SCHEME_DATA SaveSchemeData;
-    POWER_POLICY BackupPowerPolicy;
     HWND hwndList;
     INT index;
+
+    if (pPageData->pSelectedPowerScheme == NULL)
+        return;
 
     SaveSchemeData.pPageData = pPageData;
     SaveSchemeData.pNewScheme = NULL;
     SaveSchemeData.hwndPage = hwndDlg;
 
-    CopyMemory(&BackupPowerPolicy,
-               &pPageData->pSelectedPowerScheme->PowerPolicy,
-               sizeof(POWER_POLICY));
-
-    Pos_SaveData(hwndDlg, pPageData);
+    SaveSchemeData.PowerPolicy = pPageData->pSelectedPowerScheme->PowerPolicy;
+    Pos_ReadData(hwndDlg, &SaveSchemeData.PowerPolicy);
 
     if (DialogBoxParam(hApplet,
                        MAKEINTRESOURCE(IDD_SAVEPOWERSCHEME),
                        hwndDlg,
                        SaveSchemeDlgProc,
-                       (LPARAM)&SaveSchemeData))
+                       (LPARAM)&SaveSchemeData) == TRUE)
     {
         if (SaveSchemeData.pNewScheme)
         {
             hwndList = GetDlgItem(hwndDlg, IDC_ENERGYLIST);
 
-            index = (INT)SendDlgItemMessage(hwndDlg,
-                                          IDC_ENERGYLIST,
-                                          CB_FINDSTRING,
-                                          -1,
-                                          (LPARAM)SaveSchemeData.pNewScheme->pszName);
+            index = (INT)SendMessage(hwndList,
+                                     CB_ADDSTRING,
+                                     0,
+                                     (LPARAM)SaveSchemeData.pNewScheme->pszName);
+            if (index == CB_ERR || index == CB_ERRSPACE)
+                return;
 
-            if (index == CB_ERR)
+            if (SendMessage(hwndList,
+                            CB_SETITEMDATA,
+                            index,
+                            (LPARAM)SaveSchemeData.pNewScheme) == CB_ERR)
             {
-                index = (INT)SendMessage(hwndList,
-                                         CB_ADDSTRING,
-                                         0,
-                                         (LPARAM)SaveSchemeData.pNewScheme->pszName);
-                if (index != CB_ERR)
-                {
-                    SendMessage(hwndList,
-                                CB_SETITEMDATA,
-                                index,
-                                (LPARAM)SaveSchemeData.pNewScheme);
-
-                    SendMessage(hwndList, CB_SETCURSEL, (WPARAM)index, 0);
-                    EnableWindow(GetDlgItem(hwndDlg, IDC_DELETE_BTN), TRUE);
-                }
-
+                SendMessage(hwndList, CB_DELETESTRING, index, 0);
+                return;
             }
+
+            if (SendMessage(hwndList, CB_SETCURSEL, (WPARAM)index, 0) == CB_ERR)
+                return;
+
             LoadConfig(hwndDlg, pPageData, SaveSchemeData.pNewScheme);
+            PropSheet_Changed(GetParent(hwndDlg), hwndDlg);
         }
     }
-
-    CopyMemory(&pPageData->pSelectedPowerScheme->PowerPolicy,
-               &BackupPowerPolicy,
-               sizeof(POWER_POLICY));
 }
 
 
@@ -790,20 +770,22 @@ CreateEnergyList(
                                  CB_ADDSTRING,
                                  0,
                                  (LPARAM)pScheme->pszName);
-        if (index == CB_ERR)
-            break;
+        if (index == CB_ERR || index == CB_ERRSPACE)
+            return FALSE;
 
-        SendMessage(hwndList,
-                    CB_SETITEMDATA,
-                    index,
-                    (LPARAM)pScheme);
+        if (SendMessage(hwndList,
+                        CB_SETITEMDATA,
+                        index,
+                        (LPARAM)pScheme) == CB_ERR)
+        {
+            SendMessage(hwndList, CB_DELETESTRING, index, 0);
+            return FALSE;
+        }
 
         if (aps == pScheme->uId)
         {
-            SendMessage(hwndList,
-                        CB_SELECTSTRING,
-                        TRUE,
-                        (LPARAM)pScheme->pszName);
+            if (SendMessage(hwndList, CB_SETCURSEL, index, 0) == CB_ERR)
+                return FALSE;
 
             pPageData->pActivePowerScheme = pScheme;
             LoadConfig(hwndDlg, pPageData, pScheme);
@@ -839,6 +821,11 @@ PowerSchemesDlgProc(
             pPageData = (PPOWER_SCHEMES_PAGE_DATA)HeapAlloc(GetProcessHeap(),
                                                             HEAP_ZERO_MEMORY,
                                                             sizeof(POWER_SCHEMES_PAGE_DATA));
+            if (pPageData == NULL)
+            {
+                EnableWindow(hwndDlg, FALSE);
+                return TRUE;
+            }
             SetWindowLongPtr(hwndDlg, DWLP_USER, (LONG_PTR)pPageData);
 
             BuildSchemesList(pPageData);
@@ -870,6 +857,9 @@ PowerSchemesDlgProc(
             break;
 
         case WM_COMMAND:
+            if (pPageData == NULL)
+                return FALSE;
+
             switch(LOWORD(wParam))
             {
                 case IDC_ENERGYLIST:
