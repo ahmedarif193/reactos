@@ -74,7 +74,7 @@ BEGIN
     END
     POPUP "עזרה", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "אודות ReactOS", IDM_HELP_ABOUT
+        MENUITEM "אודות LiberNT", IDM_HELP_ABOUT
     END
 END
 

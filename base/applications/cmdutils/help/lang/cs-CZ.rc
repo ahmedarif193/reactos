@@ -14,7 +14,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_USAGE "Poskytuje informace nápovědy pro příkazy ReactOS.\n\n\
+    IDS_USAGE "Poskytuje informace nápovědy pro příkazy LiberNT.\n\n\
 HELP [command]\n\n\
   command - Zobrazí nápovědu pro daný příkaz.\n"
     IDS_HELP1 "Vypíše všechny dostupné příkazy (+ jejich popis)\n\n\
@@ -29,7 +29,7 @@ CD       Zobrazí název pracovní složky, nebo ji změní.\n\
 CHCP     Zobrazí nebo nastaví aktivní číslo znakové stránky.\n\
 CHOICE   Počká na uživatele, až vybere jednu z několika možností.\n\
 CLS      Vyčistí obrazovku.\n\
-CMD      Spustí novou instanci interpreteru příkazového řádku ReactOS.\n\
+CMD      Spustí novou instanci interpreteru příkazového řádku LiberNT.\n\
 COLOR    Nastaví výchozí barvu popředí a pozadí konzole.\n\
 COPY     Zkopíruje jeden nebo více souborů na jiné místo.\n\
 DATE     Zobrazí nebo nastaví datum.\n\
@@ -40,9 +40,9 @@ ERASE    Odstraní jeden nebo vícero souborů.\n\
 EXIT     Ukončí program CMD.EXE (interpreter příkazů).\n\
 FOR      Spustí určitý příkaz pro každý soubor v množině souborů.\n\
 FREE     (volné) místo na disku.\n\
-GOTO     Navede interpreter příkazového řádku ReactOS na označený řádek\n\
+GOTO     Navede interpreter příkazového řádku LiberNT na označený řádek\n\
          v dávkovém souboru.\n\
-HELP     Poskytuje informace nápovědy pro příkazy ReactOS.\n\
+HELP     Poskytuje informace nápovědy pro příkazy LiberNT.\n\
 HISTORY  Vypíše všechny příkazy, které byly použity\n\
 IF       Provede podmíněné vyhodnocení v dávkovém souboru.\n\
 LABEL    Vytvoří, změní nebo smaže název svazku disku.\n\
@@ -63,7 +63,7 @@ RENAME   Přejmenuje jeden nebo více souborů.\n\
 REPLACE  Nahradí soubory.\n\
 RMDIR    Odstraní složku.\n\
 SCREEN   Přemístí kurzor a volitelně vypíše text.\n\
-SET      Zobrazí, nastaví nebo odstraní proměnné prostředí ReactOS.\n\
+SET      Zobrazí, nastaví nebo odstraní proměnné prostředí LiberNT.\n\
 SHIFT    Posune pozici nahraditelných parametrů v dávkovém souboru.\n"
     IDS_HELP2 "START    Spustí nové okno pro provedení určitého programu nebo příkazu.\n\
          Spustí příkaz.\n\
@@ -71,8 +71,8 @@ TIME     Zobrazí nebo nastaví systémový čas.\n\
 TIMER    Umožňuje použití až deseti měřičů času.\n\
 TITLE    Nastaví titulek okna pro sezení CMD.EXE.\n\
 TYPE     Zobrazí obsah textového souboru.\n\
-VER      Zobrazí verzi ReactOS.\n\
-VERIFY   Určí ReactOS jestli má ověřit, že vaše soubory byly zapsány\n\
+VER      Zobrazí verzi LiberNT.\n\
+VERIFY   Určí LiberNT jestli má ověřit, že vaše soubory byly zapsány\n\
          na disk správně.\n\
 VOL      Zobrazí název a sériové číslo svazku disku.\n"
 END

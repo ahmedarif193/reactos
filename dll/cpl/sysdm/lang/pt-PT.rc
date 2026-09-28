@@ -75,7 +75,7 @@ CAPTION "Definições do sistema"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
     GROUPBOX "Informações de versão", IDC_STATIC, 6, 3, 210, 73
-    LTEXT "O ReactOS é construído como um sistema operativo servidor e responde como tal. Marque esta opção para aplicar isso apenas a aplicações.", IDC_STATIC, 15, 15, 183, 41
+    LTEXT "O LiberNT é construído como um sistema operativo servidor e responde como tal. Marque esta opção para aplicar isso apenas a aplicações.", IDC_STATIC, 15, 15, 183, 41
     CONTROL "&Comportamento de estação de trabalho", IDC_REPORTASWORKSTATION, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 57, 190, 10
     PUSHBUTTON "OK", IDOK, 166, 83, 50, 14
 END
@@ -96,7 +96,7 @@ BEGIN
     PUSHBUTTON "&Mudar o nome", IDC_HRDPROFRENAME, 118, 106, 50, 14, WS_DISABLED
     PUSHBUTTON "&Eliminar", IDC_HRDPROFDEL, 173, 106, 50, 14, WS_DISABLED
     GROUPBOX "Selecção de perfis de hardware", IDC_STATIC, 7, 130, 240, 75
-    LTEXT "Quando o ReactOS inicia:", IDC_STATIC, 14, 142, 210, 8
+    LTEXT "Quando o LiberNT inicia:", IDC_STATIC, 14, 142, 210, 8
     AUTORADIOBUTTON "&Aguardar que eu seleccione um perfil de hardware", IDC_HRDPROFWAIT, 14, 158, 200, 8, WS_GROUP
     AUTORADIOBUTTON "&Seleccionar o primeiro perfil listado se eu não eleger um perfil em:", IDC_HRDPROFSELECT, 14, 173, 230, 8
     LTEXT "segundos", IDC_STATIC, 65, 187, 35, 8
@@ -124,7 +124,7 @@ BEGIN
     AUTORADIOBUTTON "O computador está &ancorado", IDC_HWPPROP_DOCKED, 22, 97, 160, 10
     AUTORADIOBUTTON "O computador está &desancorado", IDC_HWPPROP_UNDOCKED, 22, 109, 160, 10
     GROUPBOX "Selecção de perfis de hardware", IDC_STATIC, 10, 138, 192, 42
-    AUTOCHECKBOX "&Incluir sempre este perfil como opção no arranque do ReactOS", IDC_HWPPROP_INCLUDE, 17, 150, 164, 20, WS_GROUP | WS_TABSTOP | BS_MULTILINE
+    AUTOCHECKBOX "&Incluir sempre este perfil como opção no arranque do LiberNT", IDC_HWPPROP_INCLUDE, 17, 150, 164, 20, WS_GROUP | WS_TABSTOP | BS_MULTILINE
 END
 
 IDD_COPYPROFILE DIALOGEX 12, 26, 256, 52
@@ -335,7 +335,7 @@ CAPTION "Efeitos visuais"
 FONT 8, "MS Shell Dlg"
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 BEGIN
-   LTEXT "Seleccione as definições que pretende utilizar para a aparência e o desempenho do ReactOS neste computador.", IDC_STATIC, 7, 6, 208, 18
+   LTEXT "Seleccione as definições que pretende utilizar para a aparência e o desempenho do LiberNT neste computador.", IDC_STATIC, 7, 6, 208, 18
    CONTROL "", IDC_TREE, "SysTreeView32", TVS_LINESATROOT | TVS_DISABLEDRAGDROP | WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, 7, 32, 213, 168
 END
 
@@ -349,7 +349,7 @@ BEGIN
    AUTORADIOBUTTON "&Programas", IDC_CPUCLIENT, 14, 36, 75, 12
    AUTORADIOBUTTON "Histórico e &serviços", IDC_CPUSERVER, 96, 36, 85, 12
    GROUPBOX "Memória virtual", IDC_STATIC, 7, 60, 213, 57
-   LTEXT "Um ficheiro de paginação é uma área no disco rígido que o ReactOS utiliza como se fosse RAM.", IDC_STATIC, 14, 74, 199, 16
+   LTEXT "Um ficheiro de paginação é uma área no disco rígido que o LiberNT utiliza como se fosse RAM.", IDC_STATIC, 14, 74, 199, 16
    PUSHBUTTON "&Alterar...", IDC_CHANGESWAP, 163, 97, 50, 14
 END
 

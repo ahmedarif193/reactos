@@ -230,19 +230,19 @@ Severity=Warning
 Facility=System
 SymbolicName=EVENT_EventLogProductInfo
 Language=English
-ReactOS %1 %2 %3 %4.
+LiberNT %1 %2 %3 %4.
 .
 Language=Russian
-ReactOS %1 %2 %3 %4.
+LiberNT %1 %2 %3 %4.
 .
 Language=French
-ReactOS %1 %2 %3 %4.
+LiberNT %1 %2 %3 %4.
 .
 Language=Polish
-ReactOS %1 %2 %3 %4.
+LiberNT %1 %2 %3 %4.
 .
 Language=Romanian
-ReactOS %1 %2 %3 %4.
+LiberNT %1 %2 %3 %4.
 .
 
 MessageId=6010
@@ -860,19 +860,19 @@ Severity=Error
 Facility=System
 SymbolicName=EVENT_RUNNING_LASTKNOWNGOOD
 Language=English
-ReactOS could not be started as configured.  A previous working configuration was used instead.
+LiberNT could not be started as configured.  A previous working configuration was used instead.
 .
 Language=Russian
-ReactOS could not be started as configured.  A previous working configuration was used instead.
+LiberNT could not be started as configured.  A previous working configuration was used instead.
 .
 Language=French
-ReactOS n'a pas pu démarrer tel que configuré. Une précédente configuration fonctionnelle a été utilisé à la place.
+LiberNT n'a pas pu démarrer tel que configuré. Une précédente configuration fonctionnelle a été utilisé à la place.
 .
 Language=Polish
-Nie można uruchomić systemu ReactOS zgodnie z aktualną konfiguracją. Zamiast niej użyto poprzedniej działającej konfiguracji.
+Nie można uruchomić systemu LiberNT zgodnie z aktualną konfiguracją. Zamiast niej użyto poprzedniej działającej konfiguracji.
 .
 Language=Romanian
-ReactOS nu a putut fi pornit după configurație. În locul ei, a fost folosită o configurație funcțională anterioară.
+LiberNT nu a putut fi pornit după configurație. În locul ei, a fost folosită o configurație funcțională anterioară.
 .
 
 MessageId=7028

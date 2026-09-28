@@ -91,7 +91,7 @@ BEGIN
     END
     POPUP "&Bantuan", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&Tentang ReactOS", IDM_HELP_ABOUT
+        MENUITEM "&Tentang LiberNT", IDM_HELP_ABOUT
     END
 END
 

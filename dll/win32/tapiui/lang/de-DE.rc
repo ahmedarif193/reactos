@@ -406,7 +406,7 @@ BEGIN
     80 "Sind Sie sicher, dass diese Vorwahlregel gelöscht werden soll?"
     81 "Sie müssen die zu wählenden Ziffern eingeben."
     82 "Der eingegebene Callingcardname wird bereits verwendet. Geben Sie einen eindeutigen Namen ein."
-    83 "ReactOS benötigt Telefoninformation bezüglich des Standorts, von dem aus gewählt werden soll. Wenn Sie diese Informationen nicht angeben, kann das Programm eventuell nicht korrekt wählen. Zusätzlich kann es sein, dass dieser Dialog sofort wieder angezeigt wird, wenn Sie versuchen, ihn abzubrechen.\nSind Sie sicher, dass Sie den Vorgang abbrechen möchten?"
+    83 "LiberNT benötigt Telefoninformation bezüglich des Standorts, von dem aus gewählt werden soll. Wenn Sie diese Informationen nicht angeben, kann das Programm eventuell nicht korrekt wählen. Zusätzlich kann es sein, dass dieser Dialog sofort wieder angezeigt wird, wenn Sie versuchen, ihn abzubrechen.\nSind Sie sicher, dass Sie den Vorgang abbrechen möchten?"
     84 "Abbrechen bestätigen"
     85 "Eigener Standort"
     86 "<keine Dienstanbieter für die Installation verfügbar>"

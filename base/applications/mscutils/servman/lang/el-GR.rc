@@ -269,10 +269,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "Το ReactOS προσπαθεί να εκκινήσει την παρακάτω υπηρεσία"
-    IDS_PROGRESS_INFO_STOP "Το ReactOS προσπαθεί να σταματήσει την παρακάτω υπηρεσία"
-    IDS_PROGRESS_INFO_PAUSE "Το ReactOS προσπαθεί να παύσει την παρακάτω υπηρεσία"
-    IDS_PROGRESS_INFO_RESUME "Το ReactOS προσπαθεί να συνεχίσει την παρακάτω υπηρεσία"
+    IDS_PROGRESS_INFO_START "Το LiberNT προσπαθεί να εκκινήσει την παρακάτω υπηρεσία"
+    IDS_PROGRESS_INFO_STOP "Το LiberNT προσπαθεί να σταματήσει την παρακάτω υπηρεσία"
+    IDS_PROGRESS_INFO_PAUSE "Το LiberNT προσπαθεί να παύσει την παρακάτω υπηρεσία"
+    IDS_PROGRESS_INFO_RESUME "Το LiberNT προσπαθεί να συνεχίσει την παρακάτω υπηρεσία"
     IDS_CREATE_SUCCESS "Η υπηρεσία δημιουργήθηκε επιτυχώς"
     IDS_DELETE_SUCCESS "Η υπηρεσία διαγράφηκε επιτυχώς"
     IDS_CREATE_REQ "Τα πεδία με έναν\nαστερίσκο είναι υποχρεωτικά"

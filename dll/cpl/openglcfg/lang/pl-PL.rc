@@ -19,7 +19,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_RENDERER_DEFAULT "Domyślny"
-    IDS_RENDERER_RSWR "Implementacja progamowa ReactOS"
+    IDS_RENDERER_RSWR "Implementacja progamowa LiberNT"
     IDS_CPLNAME "Konfiguracja OpenGL"
     IDS_CPLDESCRIPTION "Ustawia renderer dla OpenGL."
     IDS_DEBUG_SET "Set"

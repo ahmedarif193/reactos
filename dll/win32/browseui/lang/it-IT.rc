@@ -72,7 +72,7 @@ BEGIN
     END
     POPUP "&Aiuto", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&Informazioni su ReactOS", IDM_HELP_ABOUT
+        MENUITEM "&Informazioni su LiberNT", IDM_HELP_ABOUT
     END
 END
 

@@ -269,10 +269,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "ReactOS は次のサービスを開始しようとしています"
-    IDS_PROGRESS_INFO_STOP "ReactOS は次のサービスを停止しようとしています"
-    IDS_PROGRESS_INFO_PAUSE "ReactOS は次のサービスを一時停止しようとしています"
-    IDS_PROGRESS_INFO_RESUME "ReactOS は次のサービスを再開しようとしています"
+    IDS_PROGRESS_INFO_START "LiberNT は次のサービスを開始しようとしています"
+    IDS_PROGRESS_INFO_STOP "LiberNT は次のサービスを停止しようとしています"
+    IDS_PROGRESS_INFO_PAUSE "LiberNT は次のサービスを一時停止しようとしています"
+    IDS_PROGRESS_INFO_RESUME "LiberNT は次のサービスを再開しようとしています"
     IDS_CREATE_SUCCESS "サービスの作成に成功しました"
     IDS_DELETE_SUCCESS "サービスの削除に成功しました"
     IDS_CREATE_REQ "アスタリスクのついて\nいる項目は必須です"

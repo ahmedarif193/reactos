@@ -10,29 +10,29 @@ LANGUAGE LANG_ALBANIAN, SUBLANG_NEUTRAL
 
 IDD_WELCOMEPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Mirë se vini në Magjistari Ndërtues i ReactOS", IDC_WELCOMETITLE, 115, 8, 195, 24
-    LTEXT "Ky magjistar instalon ReactOS në kompjuterin tuaj.\nMagjistari ka nevojë për të mbledhur disa informacione në lidhje me ju dhe kompjuterin tuaj për të ndërtuat ReactOS si duhet.", IDC_STATIC, 115, 40, 195, 50
+    LTEXT "Mirë se vini në Magjistari Ndërtues i LiberNT", IDC_WELCOMETITLE, 115, 8, 195, 24
+    LTEXT "Ky magjistar instalon LiberNT në kompjuterin tuaj.\nMagjistari ka nevojë për të mbledhur disa informacione në lidhje me ju dhe kompjuterin tuaj për të ndërtuat LiberNT si duhet.", IDC_STATIC, 115, 40, 195, 50
     LTEXT "Klikoni Tjetër për të vazhduar me Ndërtimin.", IDC_STATIC, 115, 169, 195, 17
 END
 
 IDD_ACKPAGE DIALOGEX 0, 0, 317, 145
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Zhvilluesit e ReactOS dëshirojnë të vlerësojë projektet e mëposhtme Burim i Hapur, (pjesëve të) të cilave u përdorën për të krijuar ReactOS:", IDC_STATIC, 15, 7, 286, 19
+    LTEXT "Zhvilluesit e LiberNT dëshirojnë të vlerësojë projektet e mëposhtme Burim i Hapur, (pjesëve të) të cilave u përdorën për të krijuar LiberNT:", IDC_STATIC, 15, 7, 286, 19
     LISTBOX IDC_PROJECTS, 15, 30, 286, 75, LBS_NOSEL | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_VSCROLL
-    LTEXT "ReactOS publikohet nën lejen GPL, kështu që nëse doni të ripërdorni ose rishpërndani (pjesëve të) atë që ju duhet të respektojnë GPL.", IDC_STATIC, 15, 110, 227, 19
+    LTEXT "LiberNT publikohet nën lejen GPL, kështu që nëse doni të ripërdorni ose rishpërndani (pjesëve të) atë që ju duhet të respektojnë GPL.", IDC_STATIC, 15, 110, 227, 19
     PUSHBUTTON "&Vëzhgo GPL...", IDC_VIEWGPL, 251, 110, 50, 19
     LTEXT "Klikoni Tjetër për të vazhduar me Ndërtimin.", IDC_STATIC, 15, 136, 195, 17
 END
 
 IDD_INSTALLATION DIALOGEX 0, 0, 317, 143
 STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUPWINDOW | WS_CAPTION | WS_VISIBLE
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", IDC_INSTALLATION_ICON, 5, 5, 20, 20
@@ -46,7 +46,7 @@ END
 
 IDD_OWNERPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON2, IDC_STATIC, 21, 7, 20, 20
@@ -59,7 +59,7 @@ END
 
 IDD_COMPUTERPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON1, IDC_STATIC, 21, 7, 20, 20
@@ -77,7 +77,7 @@ END
 
 IDD_LOCALEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON4, IDC_STATIC, 21, 7, 20, 20
@@ -94,7 +94,7 @@ END
 
 IDD_DATETIMEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON3, IDC_STATIC, 21, 10, 20, 20
@@ -108,7 +108,7 @@ END
 
 IDD_THEMEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_THEMEPICKER, "SysListView32", LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_TABSTOP, 18, 8, 288, 130
@@ -116,7 +116,7 @@ END
 
 IDD_PROCESSPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Regjistrimi Komponenteve", IDC_TASKTEXT1, 65, 27, 232, 8
@@ -135,11 +135,11 @@ END
 
 IDD_FINISHPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Ndërto ReactOS"
+CAPTION "Ndërto LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Kompletimi i Magjistarit Ndërtues të ReactOS", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "Ju keni përfunduar me sukses Ndërtuesin e ReactOS.\n\nNëse ka një CD në drive, hiqni atë. Pastaj, për të rinisur kompjuterin tuaj, klikoni Mbaroj.", IDC_STATIC, 115, 40, 195, 48
+    LTEXT "Kompletimi i Magjistarit Ndërtues të LiberNT", IDC_FINISHTITLE, 115, 8, 195, 24
+    LTEXT "Ju keni përfunduar me sukses Ndërtuesin e LiberNT.\n\nNëse ka një CD në drive, hiqni atë. Pastaj, për të rinisur kompjuterin tuaj, klikoni Mbaroj.", IDC_STATIC, 115, 40, 195, 48
     LTEXT "Your computer will automatically restart in 15 seconds.", IDC_STATIC, 115, 110, 195, 24
     CONTROL "", IDC_RESTART_PROGRESS, "msctls_progress32", PBS_SMOOTH | WS_CHILD | WS_VISIBLE | WS_BORDER, 115, 135, 188, 12
 END
@@ -185,13 +185,13 @@ END
 STRINGTABLE
 BEGIN
     IDS_ACKTITLE "Falenderime"
-    IDS_ACKSUBTITLE "Supet e ReactOS qëndrojnë mbi licencën dhe informacionet"
+    IDS_ACKSUBTITLE "Supet e LiberNT qëndrojnë mbi licencën dhe informacionet"
     IDS_OWNERTITLE "Personalizoni Softwarin tuaj"
-    IDS_OWNERSUBTITLE "Ndërtuesi përdor këtë informacion në lidhje me veten tuaj për të personalizuar ReactOS."
+    IDS_OWNERSUBTITLE "Ndërtuesi përdor këtë informacion në lidhje me veten tuaj për të personalizuar LiberNT."
     IDS_COMPUTERTITLE "Emri Kompjuterit dhe Fjalëkalimi Administratorit"
     IDS_COMPUTERSUBTITLE "Ju duhet të siguroni një emër dhe një Fjalëkalim Administratori për kompjuterin tuaj."
     IDS_LOCALETITLE "Cilësimet Rajonale"
-    IDS_LOCALESUBTITLE "Ju mund ta rregulloje ReactOS për rajone dhe gjuhë të ndryshme."
+    IDS_LOCALESUBTITLE "Ju mund ta rregulloje LiberNT për rajone dhe gjuhë të ndryshme."
     IDS_LOCALETEXT "The Standards and formats are set to %s, and the location is set to %s."
     IDS_LAYOUTTEXT "Your default text input language and method is: %s keyboard layout"
     IDS_DATETIMETITLE "Data dhe Ora"
@@ -204,7 +204,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_REACTOS_SETUP "Ndërtuesi ReactOS"
+    IDS_REACTOS_SETUP "Ndërtuesi LiberNT"
     IDS_UNKNOWN_ERROR "gabim i panjohur"
     IDS_LOADLIBRARY_FAILED "LoadLibrary dështoj: "
     IDS_GETPROCADDR_FAILED "GetProcAddr dështoj: "
@@ -264,11 +264,11 @@ STRINGTABLE
 BEGIN
     IDS_INSTALLATIONTITLE "Installation Type"
     IDS_INSTALLATIONSUBTITLE "Choose an installation type that determines how the system is configured."
-    IDS_INSTALLATIONSERVERNAME "ReactOS Server"
+    IDS_INSTALLATIONSERVERNAME "LiberNT Server"
     IDS_INSTALLATIONSERVERINFO "The system will be recognized as a server. Private folders ""My Pictures"", ""My Videos"" and ""My Music"" are independent from ""My Documents""."
-    IDS_INSTALLATIONWORKSTATIONNAME "ReactOS Workstation"
+    IDS_INSTALLATIONWORKSTATIONNAME "LiberNT Workstation"
     IDS_INSTALLATIONWORKSTATIONINFO "The system will be recognized as a workstation. Private folders ""My Pictures"", ""My Videos"" and ""My Music"" are in ""My Documents""."
-    IDS_INSTALLATIONSERVERCORENAME "ReactOS Server Core"
+    IDS_INSTALLATIONSERVERCORENAME "LiberNT Server Core"
     IDS_INSTALLATIONSERVERCOREINFO "The system will be recognized as a server. The graphical shell is not installed, and the system starts in a command‑line environment to reduce resource usage and attack surface."
     /* Reserved for future use
      * IDS_INSTALLATIONNANOSERVERNAME "ReactOS Nano Server"

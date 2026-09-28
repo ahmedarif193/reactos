@@ -81,7 +81,7 @@ BEGIN
     END
     POPUP "Pomo&c", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&ReactOS - informacje", IDM_HELP_ABOUT
+        MENUITEM "&LiberNT - informacje", IDM_HELP_ABOUT
     END
 END
 

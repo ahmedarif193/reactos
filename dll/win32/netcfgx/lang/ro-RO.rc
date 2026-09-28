@@ -233,7 +233,7 @@ BEGIN
     IDS_DHCPACTIVE "DHCP activat"
     IDS_AUTOMATIC "Automată"
     IDS_NOITEMSEL "Nu aţi selectat un element. Selectaţi întâi unul."
-    IDS_TCPIP "ReactOS-TCP/IP"
+    IDS_TCPIP "LiberNT-TCP/IP"
     IDS_ADD "Adăugare"
     IDS_MOD "OK"
     IDS_TCP_PORTS "Porturi TCP"

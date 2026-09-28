@@ -59,7 +59,7 @@ BEGIN
     IDS_PREPARETOSTANDBY "Se pregăteşte pentru starea de veghe…"
     IDS_PREPARETOHIBERNATE "Se pregăteşte pentru hibernare…"
     IDS_SAVEYOURSETTINGS "Se salvează setările…"
-    IDS_REACTOSISSTARTINGUP "Se porneşte ReactOS…"
+    IDS_REACTOSISSTARTINGUP "Se porneşte LiberNT…"
     IDS_LOGGINGOFF "Logging off…"
     IDS_TIMEOUTSHORTFORMAT "%02d:%02d:%02d"
     IDS_TIMEOUTLONGFORMAT "%d zile"

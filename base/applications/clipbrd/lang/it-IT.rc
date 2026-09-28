@@ -44,7 +44,7 @@ BEGIN
     STRING_CLIPFILE  "Elemento appunti condivisi"
     STRING_DELETE_MSG "Cancella i contenuti degli appunti condivisi?"
     STRING_DELETE_TITLE "Cancella appunti condivisi"
-    STRING_FORMAT_NT "Appunti condivisi di ReactOS (*.clp)"
+    STRING_FORMAT_NT "Appunti condivisi di LiberNT (*.clp)"
     STRING_FORMAT_GEN "Appunti condivisi (*.clp)"
 END
 

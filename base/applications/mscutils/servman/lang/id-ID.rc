@@ -269,10 +269,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "ReactOS sedang mencoba untuk memulai layanan berikut"
-    IDS_PROGRESS_INFO_STOP "ReactOS sedang mencoba untuk menghentikan layanan berikut"
-    IDS_PROGRESS_INFO_PAUSE "ReactOS sedang mencoba menjeda layanan berikut"
-    IDS_PROGRESS_INFO_RESUME "ReactOS sedang mencoba melanjutkan layanan tersebut"
+    IDS_PROGRESS_INFO_START "LiberNT sedang mencoba untuk memulai layanan berikut"
+    IDS_PROGRESS_INFO_STOP "LiberNT sedang mencoba untuk menghentikan layanan berikut"
+    IDS_PROGRESS_INFO_PAUSE "LiberNT sedang mencoba menjeda layanan berikut"
+    IDS_PROGRESS_INFO_RESUME "LiberNT sedang mencoba melanjutkan layanan tersebut"
     IDS_CREATE_SUCCESS "Layanan Berhasil Dibuat"
     IDS_DELETE_SUCCESS "Layanan Berhasil Dihapus"
     IDS_CREATE_REQ "Kotak yang ditandai dengan\nbintang adalah penting"

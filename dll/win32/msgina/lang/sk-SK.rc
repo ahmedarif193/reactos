@@ -20,7 +20,7 @@ END
 
 IDD_WELCOME DIALOGEX 0, 0, 275, 78
 STYLE NOT WS_VISIBLE | DS_CENTER | DS_MODALFRAME | DS_SHELLFONT | WS_BORDER | WS_CAPTION | WS_DLGFRAME | WS_POPUP
-CAPTION "Vitajte v systéme ReactOS"
+CAPTION "Vitajte v systéme LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL IDI_ROSLOGO, IDC_ROSLOGO, "Static", SS_BITMAP, 0, 0, 275, 54
@@ -116,7 +116,7 @@ END
 
 IDD_LOGOFF DIALOGEX 0, 0, 188, 60
 STYLE NOT WS_VISIBLE | DS_CENTER | DS_MODALFRAME | DS_SHELLFONT | WS_BORDER | WS_CAPTION | WS_DLGFRAME | WS_SYSMENU | WS_POPUP
-CAPTION "Odhlásiť sa z ReactOS"
+CAPTION "Odhlásiť sa z LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_LOGOFF, IDC_STATIC, 7, 7, 20, 20
@@ -127,7 +127,7 @@ END
 
 IDD_SHUTDOWN DIALOGEX 0, 0, 275, 146
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUPWINDOW | WS_CAPTION
-CAPTION "Vypnutie systému ReactOS"
+CAPTION "Vypnutie systému LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL IDI_ROSLOGO, IDC_ROSLOGO, "Static", SS_BITMAP, 0, 0, 275, 54
@@ -147,7 +147,7 @@ END
 IDD_SHUTDOWN_REASON DIALOGEX 0, 0, 275, 297
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUPWINDOW | WS_CAPTION
 // STYLE NOT WS_VISIBLE | DS_CENTER | DS_MODALFRAME | DS_SHELLFONT | WS_BORDER | WS_CAPTION | WS_DLGFRAME | WS_POPUP
-CAPTION "Vypnutie systému ReactOS"
+CAPTION "Vypnutie systému LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL IDI_ROSLOGO, IDC_ROSLOGO, "Static", SS_BITMAP, 0, 0, 275, 54
@@ -191,7 +191,7 @@ BEGIN
     PUSHBUTTON "&Vypnúť", IDC_BUTTON_SHUTDOWN, 93, 46, 22, 20, BS_OWNERDRAW
     PUSHBUTTON "&Reštartovať", IDC_BUTTON_REBOOT, 150, 46, 22, 20, BS_OWNERDRAW
     PUSHBUTTON "Zrušiť", IDCANCEL, 162, 103, 40, 12, BS_FLAT | WS_GROUP
-    LTEXT "Vypnutie systému ReactOS", IDC_TURN_OFF_STATIC, 4, 7, 155, 19
+    LTEXT "Vypnutie systému LiberNT", IDC_TURN_OFF_STATIC, 4, 7, 155, 19
     CTEXT "Uspať", IDC_SLEEP_STATIC, 22, 70, 51, 11
     CTEXT "Vypnúť", IDC_SHUTDOWN_STATIC, 79, 70, 51, 11
     CTEXT "Reštartovať", IDC_RESTART_STATIC, 136, 70, 51, 11
@@ -208,7 +208,7 @@ BEGIN
     PUSHBUTTON "&Vypnúť", IDC_BUTTON_SHUTDOWN, 150, 46, 22, 20, BS_OWNERDRAW
     PUSHBUTTON "&Reštartovať", IDC_BUTTON_REBOOT, 207, 46, 22, 20, BS_OWNERDRAW
     PUSHBUTTON "Zrušiť", IDCANCEL, 218, 103, 40, 12, BS_FLAT | WS_GROUP
-    LTEXT "Vypnutie systému ReactOS", IDC_TURN_OFF_STATIC, 4, 7, 155, 19
+    LTEXT "Vypnutie systému LiberNT", IDC_TURN_OFF_STATIC, 4, 7, 155, 19
     CTEXT "Hibernovať", IDC_HIBERNATE_STATIC, 22, 70, 51, 11
     CTEXT "Uspať", IDC_SLEEP_STATIC, 79, 70, 51, 11
     CTEXT "Vypnúť", IDC_SHUTDOWN_STATIC, 136, 70, 51, 11
@@ -242,7 +242,7 @@ BEGIN
     IDS_INVALIDLOGONHOURS "Váš účet má časové obmedzenie, ktoré vám bráni sa teraz prihlásiť. Skúste to prosím neskôr."
     IDS_INVALIDWORKSTATION "Váš účet je nastavený tak, že sa nemôžete prihlásiť k tomuto počítaču. Skúste prosím iný počítač."
     IDS_ACCOUNTRESTRICTION "Nemožno vás prihlásiť z dôvodu obmedzenia vášho účtu."
-    IDS_EMERGENCYLOGOFFTITLE "Odhlásiť sa z ReactOS"
+    IDS_EMERGENCYLOGOFFTITLE "Odhlásiť sa z LiberNT"
     IDS_EMERGENCYLOGOFF "Kliknite na OK pre okamžité odhlásenie. Akékoľvek neuložené dáta budú stratená. Použite len ako poslednú možnosť."
     IDS_EMERGENCYRESTARTTITLE "Núdzový reštart"
     IDS_EMERGENCYRESTART "Kliknite na OK pre okamžitý reštart. Akékoľvek neuložené dáta budú stratená. Použite len ako poslednú možnosť."

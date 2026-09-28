@@ -277,10 +277,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "ReactOS 正在嘗試啟動以下服務"
-    IDS_PROGRESS_INFO_STOP "ReactOS 正在嘗試停止以下服務"
-    IDS_PROGRESS_INFO_PAUSE "ReactOS 正在嘗試暫停以下服務"
-    IDS_PROGRESS_INFO_RESUME "ReactOS 正在嘗試恢復以下服務"
+    IDS_PROGRESS_INFO_START "LiberNT 正在嘗試啟動以下服務"
+    IDS_PROGRESS_INFO_STOP "LiberNT 正在嘗試停止以下服務"
+    IDS_PROGRESS_INFO_PAUSE "LiberNT 正在嘗試暫停以下服務"
+    IDS_PROGRESS_INFO_RESUME "LiberNT 正在嘗試恢復以下服務"
     IDS_CREATE_SUCCESS "成功建立服務"
     IDS_DELETE_SUCCESS "成功刪除服務"
     IDS_CREATE_REQ "標記有\n星號（*）的欄位是必需的"

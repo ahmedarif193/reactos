@@ -4,41 +4,41 @@ LANGUAGE LANG_INDONESIAN, SUBLANG_DEFAULT
 
 IDD_STARTPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Penyetelan ReactOS"
+CAPTION "Penyetelan LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Selamat datang di Penuntun Penyetelan ReactOS", IDC_STARTTITLE, 115, 8, 195, 24
-    LTEXT "Wisaya ini akan memasang atau meningkatkan ReactOS pada komputermu, \
+    LTEXT "Selamat datang di Penuntun Penyetelan LiberNT", IDC_STARTTITLE, 115, 8, 195, 24
+    LTEXT "Wisaya ini akan memasang atau meningkatkan LiberNT pada komputermu, \
 dan menyiapkan penyetelan bagian kedua.", IDC_STATIC, 115, 40, 195, 27
 ////
     GROUPBOX " INFORMASI PENTING ", IDC_WARNTEXT1, 115, 70, 195, 90, BS_CENTER
-    LTEXT "ReactOS saat ini pada babak Alpha: Fitur belum lengkap dan \
+    LTEXT "LiberNT saat ini pada babak Alpha: Fitur belum lengkap dan \
 masih dalam tahap pengembangan besar. Sebaiknya gunakan hanya untuk \
 evaluasi dan pengujian, bukan sebagai OS yang digunakan sehari-hari.\n\
 Ini dapat merusak data, bahkan perangkat kerasmu.", IDC_WARNTEXT2, 120, 80, 185, 50, SS_CENTER
     LTEXT "Cadangkan datamu atau uji pada komputer sekunder \
-jika kamu mencoba menjalankan ReactOS pada perangkat keras yang asli.", IDC_WARNTEXT3, 120, 130, 185, 27, SS_CENTER
+jika kamu mencoba menjalankan LiberNT pada perangkat keras yang asli.", IDC_WARNTEXT3, 120, 130, 185, 27, SS_CENTER
 ////
     LTEXT "Klik Lanjut untuk melanjutkan Penyetelan.", IDC_STATIC, 115, 169, 195, 17
 END
 
 IDD_TYPEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Penyetelan ReactOS"
+CAPTION "Penyetelan LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    AUTORADIOBUTTON "&Pasang ReactOS", IDC_INSTALL, 7, 20, 277, 10, WS_GROUP | WS_TABSTOP
-    LTEXT "Pasang instalasi ReactOS yang baru. Ini tidak akan menjaga file, pengaturan, dan program Anda. Anda bisa membuat perubahan pada disk dan partisi.", IDC_INSTALLTEXT, 19, 36, 279, 27, NOT WS_GROUP
-    AUTORADIOBUTTON "P&erbarui atau perbaiki ReactOS", IDC_UPDATE, 7, 80, 277, 10
-    LTEXT "Perbarui atau perbaiki salinan terpasang dari ReactOS. Pilihan ini tetap menyimpan file, Pengaturan dan program. Pilihan ini hanya tersedia jika ReactOS telah terpasang di komputer ini.", IDC_UPDATETEXT, 19, 96, 279, 27, NOT WS_GROUP
+    AUTORADIOBUTTON "&Pasang LiberNT", IDC_INSTALL, 7, 20, 277, 10, WS_GROUP | WS_TABSTOP
+    LTEXT "Pasang instalasi LiberNT yang baru. Ini tidak akan menjaga file, pengaturan, dan program Anda. Anda bisa membuat perubahan pada disk dan partisi.", IDC_INSTALLTEXT, 19, 36, 279, 27, NOT WS_GROUP
+    AUTORADIOBUTTON "P&erbarui atau perbaiki LiberNT", IDC_UPDATE, 7, 80, 277, 10
+    LTEXT "Perbarui atau perbaiki salinan terpasang dari LiberNT. Pilihan ini tetap menyimpan file, Pengaturan dan program. Pilihan ini hanya tersedia jika LiberNT telah terpasang di komputer ini.", IDC_UPDATETEXT, 19, 96, 279, 27, NOT WS_GROUP
 END
 
 IDD_UPDATEREPAIRPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Penyetelan ReactOS"
+CAPTION "Penyetelan LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT       "Program penyetelan bisa meningkatkan pemasangan ReactOS yang tersedia di daftar berikut, atau jika pemasangan ReactOS gagal atau rusak, program penyetelan bisa mencoba memperbaikinya.", IDC_STATIC, 6, 4, 303, 26
+    LTEXT       "Program penyetelan bisa meningkatkan pemasangan LiberNT yang tersedia di daftar berikut, atau jika pemasangan LiberNT gagal atau rusak, program penyetelan bisa mencoba memperbaikinya.", IDC_STATIC, 6, 4, 303, 26
     CONTROL     "", IDC_NTOSLIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_BORDER | WS_TABSTOP, 6, 30, 303, 90
     PUSHBUTTON  "&Jangan tingkatkan", IDC_SKIPUPGRADE, 230, 128, 80, 14
     LTEXT       "Click Next to upgrade the selected OS installation, or on 'Do not upgrade' to perform a new installation.", IDC_STATIC, 7, 124, 222, 16
@@ -46,7 +46,7 @@ END
 
 IDD_DEVICEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Penyetelan ReactOS"
+CAPTION "Penyetelan LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Komputer:", IDC_STATIC, 20, 15, 80, 10
@@ -60,7 +60,7 @@ END
 
 IDD_DRIVEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Penyetelan ReactOS"
+CAPTION "Penyetelan LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_PARTITION, "SysTreeList32", WS_BORDER | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL, 7, 7, 303, 112
@@ -108,7 +108,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSM
 CAPTION "Opsi Pemasangan Tingkat Lanjut"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Pilih &direktori yang ingin kamu pasang ReactOS:", IDC_STATIC, 7, 9, 291, 10
+    LTEXT "Pilih &direktori yang ingin kamu pasang LiberNT:", IDC_STATIC, 7, 9, 291, 10
     EDITTEXT IDC_PATH, 7, 23, 291, 13
     GROUPBOX "Bootloader", IDC_STATIC, 7, 45, 291, 60
     LTEXT "Memilih lokasi di mana Freeloader\nbootloader seharusnya dipasang.\n\nPada Aslinya, ini terpasang pada partisi sistem dari disk boot(bisa juga di Master atau Volume Boot Record untuk komputer berbasis BIOS).", IDC_STATIC, 13, 57, 279, 44
@@ -119,7 +119,7 @@ END
 
 IDD_SUMMARYPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Penyetelan ReactOS"
+CAPTION "Penyetelan LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Jenis pemasangan:", IDC_STATIC, 18, 5, 74, 11
@@ -145,7 +145,7 @@ END
 
 IDD_PROCESSPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Penyetelan ReactOS"
+CAPTION "Penyetelan LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Pasang berkas...", IDC_ACTIVITY, 20, 50, 277, 10
@@ -155,11 +155,11 @@ END
 
 IDD_FINISHPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Penyetelan ReactOS"
+CAPTION "Penyetelan LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Restarting your Computer", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "The first ReactOS installation step has completed successfully.", IDC_STATIC, 115, 40, 195, 24
+    LTEXT "The first LiberNT installation step has completed successfully.", IDC_STATIC, 115, 40, 195, 24
     // The following text can be replaced by IDS_FINISH_NO_REBOOT at runtime;
     // please ensure it can hold in the text control!
     LTEXT "Setup will now restart your computer to continue with the second installation step.\n\nYour computer will automatically restart in 15 seconds or when you click on Restart.", IDC_FINISHTEXT, 115, 78, 195, 56
@@ -168,11 +168,11 @@ END
 
 IDD_ABORTPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Setup"
+CAPTION "LiberNT Setup"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "The ReactOS Setup Wizard ended prematurely", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "The first ReactOS installation step prematurely ended because of an error or because you have canceled it.\n\nYou will be able to run the Setup Wizard at a later time to install or upgrade ReactOS.", IDC_STATIC, 115, 40, 195, 48
+    LTEXT "The LiberNT Setup Wizard ended prematurely", IDC_FINISHTITLE, 115, 8, 195, 24
+    LTEXT "The first LiberNT installation step prematurely ended because of an error or because you have canceled it.\n\nYou will be able to run the Setup Wizard at a later time to install or upgrade LiberNT.", IDC_STATIC, 115, 40, 195, 48
     // The following text can be replaced by IDS_ABORT_NO_REBOOT at runtime;
     // please ensure it can hold in the text control!
     LTEXT "Your computer will automatically restart in 15 seconds or when you click on Restart.", IDC_FINISHTEXT, 115, 110, 195, 24
@@ -183,11 +183,11 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_CAPTION "Penyetelan ReactOS"
+    IDS_CAPTION "Penyetelan LiberNT"
     IDS_TYPETITLE "Jenis Pemasangan"
-    IDS_TYPESUBTITLE "Kamu bisa menyetel pemasangan baru ReactOS, atau memperbarui/meningkatkan pemasangan yang telah ada."
-    IDS_UPDATETITLE "Perbarui atau Perbaiki ReactOS"
-    IDS_UPDATESUBTITLE "Pilih pemasangan ReactOS yang ada yang ingin kamu perbarui atau perbaiki."
+    IDS_TYPESUBTITLE "Kamu bisa menyetel pemasangan baru LiberNT, atau memperbarui/meningkatkan pemasangan yang telah ada."
+    IDS_UPDATETITLE "Perbarui atau Perbaiki LiberNT"
+    IDS_UPDATESUBTITLE "Pilih pemasangan LiberNT yang ada yang ingin kamu perbarui atau perbaiki."
     IDS_DEVICETITLE "Menyetel perangkat dasar"
     IDS_DEVICESUBTITLE "Setel pengaturan tampilan dan papan ketik."
     IDS_DRIVETITLE "Penyetelan pemasangan partisi dan folder sistem"
@@ -196,7 +196,7 @@ BEGIN
     IDS_SUMMARYSUBTITLE "Cek daftar properti pemasangan sebelum menerapkan pemasangan perangkat."
     IDS_PROCESSTITLE "Penyetelan partisi, penyalinan berkas dan sistem"
     IDS_PROCESSSUBTITLE "Buat dan format partisi, salin berkas, pasang dan setel bootloader."
-    IDS_ABORTSETUP "ReactOS tidak sepenuhnya terpasang pada komputer ini. Jika kamu keluar dari penyetelan ini, kamu harus menjalankan lagi penyetelan ini untuk memasang ReactOS. Yakin ingin keluar?"
+    IDS_ABORTSETUP "LiberNT tidak sepenuhnya terpasang pada komputer ini. Jika kamu keluar dari penyetelan ini, kamu harus menjalankan lagi penyetelan ini untuk memasang LiberNT. Yakin ingin keluar?"
     IDS_ABORTSETUP2 "Gugurkan pemasangan?"
     IDS_NO_TXTSETUP_SIF "Tidak bisa menemukan 'txtsetup.sif'.\nPenyetelan tidak bisa dilanjutkan."
     IDS_FINISH_NO_REBOOT "Setup needs to restart your computer to continue with the second installation step.\n\nClick on Restart to immediately restart your computer.\nClick on Postpone to quit the installer and restart your computer at a later time."
@@ -282,7 +282,7 @@ alfanumerik (a-z, A-Z, 0-9), dan\n . \\ - _\n\
 Spasi tidak diperbolehkan."
 
     IDS_ERROR_DIRECTORY_NAME_TITLE "Jalur pemasangan tidak sah"
-    IDS_ERROR_DIRECTORY_NAME "Jalur pemasangan ReactOS harus mengikuti skema penamaan DOS 8.3 , \
+    IDS_ERROR_DIRECTORY_NAME "Jalur pemasangan LiberNT harus mengikuti skema penamaan DOS 8.3 , \
 dan hanya mengandung huruf, angka, dan hanya berisi huruf, angka, tanda hubung, dan titik. Spasi tidak diperbolehkan."
 
     IDS_ERROR_CREATE_PARTITION_TITLE "Membuat partisi"
@@ -294,9 +294,9 @@ dan hanya mengandung huruf, angka, dan hanya berisi huruf, angka, tanda hubung, 
 
     IDS_ERROR_WRITE_PTABLE "Penyetelan gagal menulis tabel partisi."
 
-    IDS_ERROR_SYSTEM_PARTITION "Penyetelan ReactOS tidak bisa menemukan partisi sistem yang didukung\n\
+    IDS_ERROR_SYSTEM_PARTITION "Penyetelan LiberNT tidak bisa menemukan partisi sistem yang didukung\n\
 pada sistemmu atau tidak bisa membuat baru. Tanpa partisi tersebut\n\
-Program penyetelan tidak bisa memasang ReactOS.\
+Program penyetelan tidak bisa memasang LiberNT.\
 \nKlik OK untuk kembali ke to kembali ke daftar pilihan partisi."
 
     IDS_ERROR_FORMAT_UNRECOGNIZED_VOLUME "Volume tidak dikenal ketika mencoba memformat partisi."

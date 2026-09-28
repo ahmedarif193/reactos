@@ -49,7 +49,7 @@ MIDIERR_STILLPLAYING, 		"Nemohu provést tuto operaci dokud jsou data přehráv�
 MIDIERR_NOMAP, 			"MIDI map nebyla nalezena. To můľe ukazovat na problém s ovladačem nebo je soubor MIDIMAP.CFG poąkozen či chybí."
 MIDIERR_NOTREADY, 		"Port přenáąí data na zařízení. Počkejte na dokončení přenosu a zkuste to znovu."
 MIDIERR_NODEVICE, 		"Současné nastavení MIDI mapperu se odkazuje na MIDI zařízení nepřítomné v systému. Upravte nastavení MIDI mapperu."
-MIDIERR_INVALIDSETUP, 		"Současné nastavení MIDI je poąkozené. Přepiąte soubor MIDIMAP.CFG ve ReactOS sloľce SYSTEM originálem a zkuste to znovu."
+MIDIERR_INVALIDSETUP, 		"Současné nastavení MIDI je poąkozené. Přepiąte soubor MIDIMAP.CFG ve LiberNT sloľce SYSTEM originálem a zkuste to znovu."
 
 /* MCI errors */
 MCIERR_INVALID_DEVICE_ID, 	"Neplatný identifikátor MCI zařízení. Pouľijte identifikátor vrácený při otevření MCI zařízení."
@@ -70,7 +70,7 @@ MCIERR_MISSING_PARAMETER, 	"Tento příkaz vyľaduje parametr. Zadejte ho."
 MCIERR_UNSUPPORTED_FUNCTION, 	"Vámi pouľité MCI zařízení nepodporuje uvedený příkaz."
 MCIERR_FILE_NOT_FOUND, 		"Soubor nebyl nalezen. Ujistěte se, ľe cesta k souboru a jeho jméno jsou platné."
 MCIERR_DEVICE_NOT_READY, 	"Ovladač zařízení není připraven."
-MCIERR_INTERNAL, 		"Při inicialiazaci MCI doąlo k problémům. Zkuste zrestartovat ReactOS."
+MCIERR_INTERNAL, 		"Při inicialiazaci MCI doąlo k problémům. Zkuste zrestartovat LiberNT."
 MCIERR_DRIVER, 			"Ovladač má problémy a ukončil svou činnost. Ovladač nevrátil popis chyby."
 MCIERR_CANNOT_USE_ALL, 		"Nemohu pouľít 'all' jako jméno zařízení při provádění tohoto příkazu."
 MCIERR_MULTIPLE, 		"Vyskytly se chyby na více zařízeních. Zadejte příkazy zvláą» pro kaľdé jedno zařízeníify, aby bylo zjiątěno, které zařízení chybuje."

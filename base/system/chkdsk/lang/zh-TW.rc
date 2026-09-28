@@ -24,7 +24,7 @@ Usage: %s [磁碟機:] [-F] [-V] [-R] [-C]\n\n\
     IDS_ABOUT "\n\
 Chkdskx v1.0.1 by Mark Russinovich\n\
 Systems Internals - http://www.sysinternals.com\n\
-ReactOS 於 1999 年由 Emanuele Aliberti 編寫"
+LiberNT 於 1999 年由 Emanuele Aliberti 編寫"
 END
 
 STRINGTABLE

@@ -60,7 +60,7 @@ ERRORLEVEL ustawiony jest na kompensowanie wyboru użytkownika domyślnym.\n"
     STRING_CMD_HELP5 "  [dopełnianie nazw Bash]"
     STRING_CMD_HELP6 "  [stos katalogu]"
     STRING_CMD_HELP7 "  [przekierowania i potoki]"
-    STRING_CMD_HELP8 "Uruchamia nowe okno konsoli ReactOS (interpreter linii poleceń).\n\n\
+    STRING_CMD_HELP8 "Uruchamia nowe okno konsoli LiberNT (interpreter linii poleceń).\n\n\
 CMD [/[C|K] komenda][/P][/Q][/T:bf]\n\n\
   /C komenda  Wykonuje podaną komendę i zamyka okno.\n\
   /K komenda  Wykonuje podaną komendę i pozostawia okno.\n\
@@ -421,7 +421,7 @@ przez Free Software Foundation; wersja 2 albo dowolna późniejsza.\n"
     STRING_VERSION_HELP5 "\nRaporty o błędach prosimy przesyłać pod adres: <ros-dev@reactos.org>.\n\
 Uaktualnienia dostępne na stronie: https://reactos.org"
     STRING_VERSION_HELP6 "\nwersja FreeDOS, napisana przez:\n"
-    STRING_VERSION_HELP7 "\nwersja ReactOS, napisana przez:\n"
+    STRING_VERSION_HELP7 "\nwersja LiberNT, napisana przez:\n"
     STRING_VOL_HELP1 " Wolumin w napędzie %c ma etykietę: %s"
     STRING_VOL_HELP2 " Wolumin w napędzie %c nie posiada etykiety.\n"
     STRING_VOL_HELP3 " Numer seryjny woluminu to: %04X-%04X\n"
@@ -506,8 +506,8 @@ title         nowy tytuł okna\n"
     STRING_ERROR_WHILE_PROCESSING "Wystąpił błąd podczas przetwarzania: %s.\n"
     STRING_SET_ENV_ERROR "Zmienna środowiskowa '%s' nie jest zdefiniowana\n"
     STRING_CMD_INFOLINE "  Wiersz polecenia ReactOS                                    Type HELP = Help  "
-    STRING_CMD_COPYRIGHT "(C) Copyright 1996-%s ReactOS Team.\n"
-    STRING_REACTOS_VERSION "ReactOS [Wersja %s %s]\n"
+    STRING_CMD_COPYRIGHT "(C) Copyright 2026 LiberNT Team.\n(C) Copyright 1996-%s ReactOS Team.\n"
+    STRING_REACTOS_VERSION "LiberNT [Wersja %s %s]\n"
     STRING_CMD_SHELLINFO "\nInterpreter linii poleceń ReactOS\nWersja %s %s"
     STRING_VERSION_RUNNING_ON "Działający na: "
     STRING_VERSION_RUNVER "%s [Wersja %d.%d.%d] %s"

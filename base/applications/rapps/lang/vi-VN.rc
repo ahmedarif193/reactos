@@ -171,7 +171,7 @@ BEGIN
     IDS_APPTITLE "Trình quản lý ứng dụng ReactOS"
     IDS_APP_AUTHORS "Bản quyền 2009 Dmitry Chapyshev"
     IDS_WELCOME_TITLE "Chào mừng bạn đến với Trình quản lý ứng dụng ReactOS!"
-    IDS_WELCOME_TEXT "Chọn một danh mục bên trái, sau đó chọn một ứng dụng để cài đặt hoặc gỡ bỏ.\nTrang web ReactOS: "
+    IDS_WELCOME_TEXT "Chọn một danh mục bên trái, sau đó chọn một ứng dụng để cài đặt hoặc gỡ bỏ.\nTrang web LiberNT: "
     IDS_WELCOME_URL "https://reactos.org"
 
     IDS_APPWIZ_TITLE "Thêm/Xóa chương trình"

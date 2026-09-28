@@ -171,7 +171,7 @@ BEGIN
     IDS_APPTITLE "Central de Aplicativos ReactOS"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
     IDS_WELCOME_TITLE "Bem-vindo(a) a Central de Aplicativos ReactOS!"
-    IDS_WELCOME_TEXT "Escolha uma categoria à esquerda, então escolha um aplicativo para instalar ou desinstalar.\nWeb Site ReactOS: "
+    IDS_WELCOME_TEXT "Escolha uma categoria à esquerda, então escolha um aplicativo para instalar ou desinstalar.\nWeb Site LiberNT: "
     IDS_WELCOME_URL "https://reactos.org"
 
     IDS_APPWIZ_TITLE "Add/Remove Programs"

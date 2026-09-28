@@ -269,10 +269,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "ReactOS versucht den folgenden Dienst zu starten"
-    IDS_PROGRESS_INFO_STOP "ReactOS versucht den folgenden Dienst zu beenden"
-    IDS_PROGRESS_INFO_PAUSE "ReactOS versucht den folgenden Dienst zu pausieren"
-    IDS_PROGRESS_INFO_RESUME "ReactOS versucht den folgenden Dienst fortzusetzen"
+    IDS_PROGRESS_INFO_START "LiberNT versucht den folgenden Dienst zu starten"
+    IDS_PROGRESS_INFO_STOP "LiberNT versucht den folgenden Dienst zu beenden"
+    IDS_PROGRESS_INFO_PAUSE "LiberNT versucht den folgenden Dienst zu pausieren"
+    IDS_PROGRESS_INFO_RESUME "LiberNT versucht den folgenden Dienst fortzusetzen"
     IDS_CREATE_SUCCESS "Der Dienst wurde erfolgreich erstellt"
     IDS_DELETE_SUCCESS "Der Dienst wurde erfolgreich gelöscht"
     IDS_CREATE_REQ "Mit einem Stern (*) gekennzeichnete Felder sind erforderlich"

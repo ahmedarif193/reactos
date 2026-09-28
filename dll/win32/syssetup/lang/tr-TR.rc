@@ -11,29 +11,29 @@ LANGUAGE LANG_TURKISH, SUBLANG_DEFAULT
 
 IDD_WELCOMEPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "ReactOS Kur Sihirbazına'na Hoş Geldiniz", IDC_WELCOMETITLE, 115, 8, 195, 24
-    LTEXT "Bu sihirbaz ReactOS'u bilgisayarınıza kurar.\nReactOS Kurulum Sihirbazı, ReactOS'u düzgünce kurmak için siz ve bilgisayarınız hakkında bazı bilgiler toplamaya gerek duymaktadır.", IDC_STATIC, 115, 40, 195, 50
+    LTEXT "LiberNT Kur Sihirbazına'na Hoş Geldiniz", IDC_WELCOMETITLE, 115, 8, 195, 24
+    LTEXT "Bu sihirbaz LiberNT'u bilgisayarınıza kurar.\nReactOS Kurulum Sihirbazı, LiberNT'u düzgünce kurmak için siz ve bilgisayarınız hakkında bazı bilgiler toplamaya gerek duymaktadır.", IDC_STATIC, 115, 40, 195, 50
     LTEXT "Kuruluma devam etmek için İleri'ye tıklayınız.", IDC_STATIC, 115, 169, 195, 17
 END
 
 IDD_ACKPAGE DIALOGEX 0, 0, 317, 145
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "ReactOS geliştiricileri, ReactOS'u (ve bileşenlerini) oluşturmak için kullanılan, aşağıdaki açık kaynaklı projelere teşekkür etmek istiyorlar:", IDC_STATIC, 15, 7, 286, 19
+    LTEXT "LiberNT geliştiricileri, LiberNT'u (ve bileşenlerini) oluşturmak için kullanılan, aşağıdaki açık kaynaklı projelere teşekkür etmek istiyorlar:", IDC_STATIC, 15, 7, 286, 19
     LISTBOX IDC_PROJECTS, 15, 30, 286, 75, LBS_NOSEL | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_VSCROLL
-    LTEXT "ReactOS, GPL altında lisanslanmıştır, bu yüzden onu (ve bileşenlerini) yeniden kullanmak veya dağıtmak isterseniz GPL'ye uymalısınız.", IDC_STATIC, 15, 110, 220, 25
+    LTEXT "LiberNT, GPL altında lisanslanmıştır, bu yüzden onu (ve bileşenlerini) yeniden kullanmak veya dağıtmak isterseniz GPL'ye uymalısınız.", IDC_STATIC, 15, 110, 220, 25
     PUSHBUTTON "&GPL'yi Görüntüle...", IDC_VIEWGPL, 236, 110, 65, 19
     LTEXT "Kuruluma devam etmek için İleri'ye tıklayınız.", IDC_STATIC, 15, 136, 195, 17
 END
 
 IDD_INSTALLATION DIALOGEX 0, 0, 317, 143
 STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUPWINDOW | WS_CAPTION | WS_VISIBLE
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", IDC_INSTALLATION_ICON, 5, 5, 20, 20
@@ -47,7 +47,7 @@ END
 
 IDD_OWNERPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON2, IDC_STATIC, 21, 7, 20, 20
@@ -60,7 +60,7 @@ END
 
 IDD_COMPUTERPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON1, IDC_STATIC, 21, 7, 20, 20
@@ -78,7 +78,7 @@ END
 
 IDD_LOCALEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON4, IDC_STATIC, 21, 7, 20, 20
@@ -95,7 +95,7 @@ END
 
 IDD_DATETIMEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON3, IDC_STATIC, 21, 10, 20, 20
@@ -109,7 +109,7 @@ END
 
 IDD_THEMEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_THEMEPICKER, "SysListView32", LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_TABSTOP, 18, 8, 288, 130
@@ -117,7 +117,7 @@ END
 
 IDD_PROCESSPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Bileşenler kaydediliyor", IDC_TASKTEXT1, 65, 27, 232, 8
@@ -136,11 +136,11 @@ END
 
 IDD_FINISHPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Kur"
+CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "ReactOS Kurulum Sihirbazı, Kurulumu Tamamladı", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "ReactOS Kurulumu başarı ile tamamlandı.\n\nEğer bir sürücüde herhangi bir CD varsa, onu çıkarınız. Sonra bilgisayarınızı yeniden başlatmak için Bitir'e tıklayınız.", IDC_STATIC, 115, 40, 195, 48
+    LTEXT "LiberNT Kurulum Sihirbazı, Kurulumu Tamamladı", IDC_FINISHTITLE, 115, 8, 195, 24
+    LTEXT "LiberNT Kurulumu başarı ile tamamlandı.\n\nEğer bir sürücüde herhangi bir CD varsa, onu çıkarınız. Sonra bilgisayarınızı yeniden başlatmak için Bitir'e tıklayınız.", IDC_STATIC, 115, 40, 195, 48
     LTEXT "Your computer will automatically restart in 15 seconds.", IDC_STATIC, 115, 110, 195, 24
     CONTROL "", IDC_RESTART_PROGRESS, "msctls_progress32", PBS_SMOOTH | WS_CHILD | WS_VISIBLE | WS_BORDER, 115, 135, 188, 12
 END
@@ -186,13 +186,13 @@ END
 STRINGTABLE
 BEGIN
     IDS_ACKTITLE "Teşekkürler"
-    IDS_ACKSUBTITLE "ReactOS'u ayakta tutanlar ve lisans bilgisi:"
+    IDS_ACKSUBTITLE "LiberNT'u ayakta tutanlar ve lisans bilgisi:"
     IDS_OWNERTITLE "Yazılımınızı Kişiselleştirin"
-    IDS_OWNERSUBTITLE "Kurulum Sihirbazı, ReactOS'u kişiselleştirmek için kendiniz hakkında bu bilgiyi kullanır."
+    IDS_OWNERSUBTITLE "Kurulum Sihirbazı, LiberNT'u kişiselleştirmek için kendiniz hakkında bu bilgiyi kullanır."
     IDS_COMPUTERTITLE "Bilgisayar Adı ve Yönetici Şifresi"
     IDS_COMPUTERSUBTITLE "Bilgisayarınız için bir ad ve bir Yönetici Şifresi sağlamalısınız."
     IDS_LOCALETITLE "Yerel Ayarlar"
-    IDS_LOCALESUBTITLE "Farklı bölgeler ve diller için ReactOS'u özelleştirebilirsiniz."
+    IDS_LOCALESUBTITLE "Farklı bölgeler ve diller için LiberNT'u özelleştirebilirsiniz."
     IDS_LOCALETEXT "Standartlar ve biçimler %s olarak ayarlandı ve konum %s olarak ayarlandı."
     IDS_LAYOUTTEXT "Varsayılan metin giriş diliniz ve yönteminiz: %s klavye düzeni"
     IDS_DATETIMETITLE "Tarih ve Saat"
@@ -205,7 +205,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_REACTOS_SETUP "ReactOS Kur"
+    IDS_REACTOS_SETUP "LiberNT Kur"
     IDS_UNKNOWN_ERROR "Bilinmeyen hata"
     IDS_LOADLIBRARY_FAILED "LoadLibrary başarısız oldu: "
     IDS_GETPROCADDR_FAILED "GetProcAddr başarısız oldu: "
@@ -265,11 +265,11 @@ STRINGTABLE
 BEGIN
     IDS_INSTALLATIONTITLE "Ürün Seçenekleri"
     IDS_INSTALLATIONSUBTITLE "Sisteminizin davranışını etkileyen bir ürün seçeneği seçebilirsiniz."
-    IDS_INSTALLATIONSERVERNAME "ReactOS Sunucu"
+    IDS_INSTALLATIONSERVERNAME "LiberNT Sunucu"
     IDS_INSTALLATIONSERVERINFO "Sistem bir sunucu olarak tanınacaktır. ""Resimlerim"", ""Videolarım"" ve ""Müziklerim"" özel dizinleri, ""Belgelerim""den bağımsızdır."
-    IDS_INSTALLATIONWORKSTATIONNAME "ReactOS İş İstasyonu"
+    IDS_INSTALLATIONWORKSTATIONNAME "LiberNT İş İstasyonu"
     IDS_INSTALLATIONWORKSTATIONINFO "Sistem bir iş istasyonu olarak tanınacaktır. ""Resimlerim"", ""Videolarım"" ve ""Müziklerim"" özel dizinleri ""Belgelerim""in içindedir."
-    IDS_INSTALLATIONSERVERCORENAME "ReactOS Server Core"
+    IDS_INSTALLATIONSERVERCORENAME "LiberNT Server Core"
     IDS_INSTALLATIONSERVERCOREINFO "The system will be recognized as a server. The graphical shell is not installed, and the system starts in a command‑line environment to reduce resource usage and attack surface."
     /* Reserved for future use
      * IDS_INSTALLATIONNANOSERVERNAME "ReactOS Nano Server"

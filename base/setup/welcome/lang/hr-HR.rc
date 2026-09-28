@@ -12,9 +12,9 @@ LANGUAGE LANG_CROATIAN, SUBLANG_CROATIAN_CROATIA
 /* Default settings */
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "ReactOS - Dobrodošli"
-    IDS_DEFAULT_TOPIC_TITLE "ReactOS"
-    IDS_DEFAULT_TOPIC_DESC "Dobrodošli u ReactOS.\n\nOdaberite temu s lijeve strane."
+    IDS_APPTITLE "LiberNT - Dobrodošli"
+    IDS_DEFAULT_TOPIC_TITLE "LiberNT"
+    IDS_DEFAULT_TOPIC_DESC "Dobrodošli u LiberNT.\n\nOdaberite temu s lijeve strane."
     IDS_FONTNAME "Tahoma"
     IDS_CHECKTEXT "&Prikaži ovaj dijalog ponovno"
     IDS_CLOSETEXT "&Izlaz"
@@ -39,7 +39,7 @@ END
 /* Topic descriptions */
 STRINGTABLE
 BEGIN
-    IDS_TOPIC_DESC0 "Pokrenite novu instalaciju ReactOS-a ili nadogradite postojeću."
+    IDS_TOPIC_DESC0 "Pokrenite novu instalaciju LiberNT-a ili nadogradite postojeću."
     IDS_TOPIC_DESC1 "Pregledajte sadržaj CD-a."
     IDS_TOPIC_DESC2 "Zatvorite ovu aplikaciju."
 END

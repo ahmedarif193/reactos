@@ -278,10 +278,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "ReactOS încearcă să pornească următorul serviciu"
-    IDS_PROGRESS_INFO_STOP "ReactOS încearcă să oprească următorul serviciu"
-    IDS_PROGRESS_INFO_PAUSE "ReactOS încearcă să întrerupă următorul serviciu"
-    IDS_PROGRESS_INFO_RESUME "ReactOS încearcă să reia următorului serviciu"
+    IDS_PROGRESS_INFO_START "LiberNT încearcă să pornească următorul serviciu"
+    IDS_PROGRESS_INFO_STOP "LiberNT încearcă să oprească următorul serviciu"
+    IDS_PROGRESS_INFO_PAUSE "LiberNT încearcă să întrerupă următorul serviciu"
+    IDS_PROGRESS_INFO_RESUME "LiberNT încearcă să reia următorului serviciu"
     IDS_CREATE_SUCCESS "Serviciul a fost creat cu succes"
     IDS_DELETE_SUCCESS "Serviciul a fost eliminat cu succes"
     IDS_CREATE_REQ "Câmpurile marcate cu un\nasterisc sunt obligatorii"

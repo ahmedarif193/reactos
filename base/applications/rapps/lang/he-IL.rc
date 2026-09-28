@@ -176,7 +176,7 @@ BEGIN
     IDS_APPTITLE "מנהל היישומים של ReactOS"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
     IDS_WELCOME_TITLE "ברוכים הבאים למנהל היישומים של ReactOS!"
-    IDS_WELCOME_TEXT "בחר קטגוריה בצד שמאל, לאחר מכן בחר יישום להתקנה או להסרה.\nהאתר של ReactOS: "
+    IDS_WELCOME_TEXT "בחר קטגוריה בצד שמאל, לאחר מכן בחר יישום להתקנה או להסרה.\nהאתר של LiberNT: "
     IDS_WELCOME_URL "https://reactos.org"
 
     IDS_APPWIZ_TITLE "Add/Remove Programs"

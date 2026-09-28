@@ -79,7 +79,7 @@ BEGIN
     END
     POPUP "&Laguntza", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&ReactOS-i buruz", IDM_HELP_ABOUT
+        MENUITEM "&LiberNT-i buruz", IDM_HELP_ABOUT
     END
 END
 

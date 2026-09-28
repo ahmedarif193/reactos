@@ -79,7 +79,7 @@ BEGIN
     END
     POPUP "&Spikker", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&Teave ReactOS'i kohta", IDM_HELP_ABOUT
+        MENUITEM "&Teave LiberNT'i kohta", IDM_HELP_ABOUT
     END
 END
 

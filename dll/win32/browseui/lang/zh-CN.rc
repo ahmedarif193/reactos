@@ -94,7 +94,7 @@ BEGIN
     END
     POPUP "帮助(&H)", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "关于 ReactOS(&A)", IDM_HELP_ABOUT
+        MENUITEM "关于 LiberNT(&A)", IDM_HELP_ABOUT
     END
 END
 

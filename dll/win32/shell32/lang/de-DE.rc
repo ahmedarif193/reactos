@@ -418,7 +418,7 @@ BEGIN
     GROUPBOX "Aufgaben", -1, 7, 10, 249, 40
     CONTROL "", IDC_FOLDER_OPTIONS_TASKICON, "Static", SS_ICON | WS_CHILD | WS_VISIBLE, 14, 20, 21, 20
     AUTORADIOBUTTON "&Allgemeine Aufgaben in Ordnern anzeigen", IDC_FOLDER_OPTIONS_COMMONTASKS, 40, 20, 210, 10, WS_TABSTOP | WS_GROUP
-    AUTORADIOBUTTON "ReactOS Klassisc&he Ansicht verwenden", IDC_FOLDER_OPTIONS_CLASSICFOLDERS, 40, 32, 210, 10
+    AUTORADIOBUTTON "LiberNT Klassisc&he Ansicht verwenden", IDC_FOLDER_OPTIONS_CLASSICFOLDERS, 40, 32, 210, 10
     GROUPBOX "Ordner durchsuchen", -1, 7, 60, 249, 40, WS_TABSTOP
     CONTROL "", IDC_FOLDER_OPTIONS_FOLDERICON, "Static", SS_ICON | WS_CHILD | WS_VISIBLE, 14, 70, 21, 20
     AUTORADIOBUTTON "Jeden Ordner im &selben Fenster öffnen", IDC_FOLDER_OPTIONS_SAMEWINDOW, 40, 70, 210, 10, WS_TABSTOP | WS_GROUP
@@ -513,7 +513,7 @@ END
 
 IDD_DISCONNECT DIALOGEX 0, 0, 188, 60
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUPWINDOW | WS_CAPTION
-CAPTION "ReactOS trennen"
+CAPTION "LiberNT trennen"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_SHELL_DISCONN, IDC_STATIC, 8, 6, 21, 20
@@ -543,7 +543,7 @@ FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", 1000, 5, 7, 21, 20
     LTEXT "Dieser Datenträger bzw. das Gerät enthält Inhalte verschiedener Typen.", 1001, 32, 7, 191, 20
-    LTEXT "&Welche Aktion soll ReactOS durchführen?", 1002, 32, 31, 188, 8
+    LTEXT "&Welche Aktion soll LiberNT durchführen?", 1002, 32, 31, 188, 8
     CONTROL "", 1003, "SYSLISTVIEW32", WS_BORDER | WS_TABSTOP | 0x0000C04D, 32, 43, 188, 139
     DEFPUSHBUTTON "OK", IDOK, 96, 186, 60, 14
     PUSHBUTTON "Abbrechen", IDCANCEL, 160, 186, 60, 14
@@ -555,10 +555,10 @@ CAPTION "Gemischter Inhalt"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", 1000, 5, 7, 21, 20
-    LTEXT "ReactOS kann immer dieselbe Aktion durchführen, wenn ein Datenträger eingelegt wird / ein Gerät angeschlossen wird:", 1001, 30, 7, 193, 20
+    LTEXT "LiberNT kann immer dieselbe Aktion durchführen, wenn ein Datenträger eingelegt wird / ein Gerät angeschlossen wird:", 1001, 30, 7, 193, 20
     ICON "", 1005, 32, 27, 11, 10, SS_REALSIZECONTROL
     EDITTEXT 1006, 49, 28, 177, 14, ES_AUTOHSCROLL | ES_READONLY | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "&Welche Aktion soll ReactOS durchführen?", 1002, 32, 41, 190, 8
+    LTEXT "&Welche Aktion soll LiberNT durchführen?", 1002, 32, 41, 190, 8
     CONTROL "", 1003, "SYSLISTVIEW32", WS_BORDER | WS_TABSTOP | 0x0000C04D, 32, 55, 188, 112
     AUTOCHECKBOX "&Ausgewählte Aktion immer durchführen", 1004, 32, 171, 190, 10
     DEFPUSHBUTTON "OK", IDOK, 96, 185, 60, 14
@@ -571,8 +571,8 @@ CAPTION "AutoPlay"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", 1000, 5, 7, 21, 20
-    LTEXT "Bei jeder Verbindungsherstellung mit dem Gerät kann ReactOS dieselbe Aktion durchführen.", 1001, 32, 7, 190, 22
-    LTEXT "&Welche Aktion soll ReactOS durchführen?", 1002, 32, 31, 190, 8
+    LTEXT "Bei jeder Verbindungsherstellung mit dem Gerät kann LiberNT dieselbe Aktion durchführen.", 1001, 32, 7, 190, 22
+    LTEXT "&Welche Aktion soll LiberNT durchführen?", 1002, 32, 31, 190, 8
     CONTROL "", 1003, "SYSLISTVIEW32", WS_BORDER | WS_TABSTOP | 0x0000C04D, 32, 43, 187, 96
     AUTOCHECKBOX "&Ausgewählte Aktion immer durchführen", 1004, 32, 143, 190, 8
     DEFPUSHBUTTON "OK", IDOK, 94, 160, 60, 14
@@ -581,7 +581,7 @@ END
 
 IDD_SHUTDOWN DIALOGEX 0, 0, 211, 103
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUPWINDOW | WS_CAPTION
-CAPTION "ReactOS herunterfahren"
+CAPTION "LiberNT herunterfahren"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON 8240, -1, 6, 6, 21, 20, SS_REALSIZECONTROL | WS_GROUP
@@ -853,7 +853,7 @@ BEGIN
 
     /* Warning format system drive dialog strings */
     IDS_NO_FORMAT_TITLE "Formatieren des Laufwerks nicht möglich"
-    IDS_NO_FORMAT "Dieses Laufwerk kann nicht formatiert werden!\nEs enthält wichtige Systemdateien, welche zur Ausführung von ReactOS benötigt werden."
+    IDS_NO_FORMAT "Dieses Laufwerk kann nicht formatiert werden!\nEs enthält wichtige Systemdateien, welche zur Ausführung von LiberNT benötigt werden."
 
     /* Run File dialog */
     IDS_RUNDLG_ERROR "Anzeigen der Datei Ausführen Dialogbox nicht möglich (interner Fehler)"
@@ -939,8 +939,8 @@ BEGIN
 
     /* Friendly File Type Names */
     IDS_DIRECTORY "Dateiordner"
-    IDS_BAT_FILE "ReactOS-Stapelverarbeitungsdatei"
-    IDS_CMD_FILE "ReactOS-Befehlsskript"
+    IDS_BAT_FILE "LiberNT-Stapelverarbeitungsdatei"
+    IDS_CMD_FILE "LiberNT-Befehlsskript"
     IDS_COM_FILE "DOS-Anwendung"
     IDS_CPL_FILE "Systemsteuerungselement"
     IDS_CUR_FILE "Cursor"
@@ -1074,7 +1074,7 @@ BEGIN
     IDS_SYSTEMFOLDER "Systemordner"
 
     /* For IDD_LOG_OFF_FANCY */
-    IDS_LOG_OFF_DESC "Schließt Ihre Programme und beendet Ihre ReactOS-Sitzung."
+    IDS_LOG_OFF_DESC "Schließt Ihre Programme und beendet Ihre LiberNT-Sitzung."
     IDS_SWITCH_USER_DESC "Ermöglicht es einem anderen Benutzer sich anzumelden, während Ihre Programme und Dateien geöffnet bleiben.\r\n\r\n(Sie können Benutzer auch mittels des Drückens von Windows + L wechseln.)"
     IDS_LOG_OFF_TITLE "Abmelden"
     IDS_SWITCH_USER_TITLE "Benutzer wechseln"

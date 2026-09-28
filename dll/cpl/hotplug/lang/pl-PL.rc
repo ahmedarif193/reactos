@@ -14,7 +14,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYS
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_HOTPLUG, IDC_SAFE_REMOVE_ICON, 7, 10, 20, 20
-    LTEXT "Wybierz urządzenie, które chcesz odłączyć lub wysunąć, a następnie kliknij przycisk Zatrzymaj. Odłącz urządzenie od komputera, gdy system ReactOS powiadomi Cię, że można to bezpiecznie uczynić.", IDC_STATIC, 36, 10, 234, 24, WS_CHILD | WS_VISIBLE | WS_GROUP
+    LTEXT "Wybierz urządzenie, które chcesz odłączyć lub wysunąć, a następnie kliknij przycisk Zatrzymaj. Odłącz urządzenie od komputera, gdy system LiberNT powiadomi Cię, że można to bezpiecznie uczynić.", IDC_STATIC, 36, 10, 234, 24, WS_CHILD | WS_VISIBLE | WS_GROUP
     LTEXT "&Urządzenia sprzętowe:", IDC_STATIC, 7, 42, 248, 8, WS_CHILD | WS_VISIBLE | WS_GROUP
     CONTROL "", IDC_SAFE_REMOVE_DEVICE_TREE, "SysTreeView32", TVS_HASBUTTONS | TVS_HASLINES | TVS_DISABLEDRAGDROP | TVS_SHOWSELALWAYS | WS_CHILD | WS_VISIBLE | WS_BORDER | WS_GROUP | WS_TABSTOP, 7, 52, 264, 102
     LTEXT "", IDC_SAFE_REMOVE_TEXT, 7, 156, 264, 16, WS_CHILD | WS_VISIBLE | WS_GROUP
@@ -31,7 +31,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYS
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Potwierdź, które urządzenia mają zostać zatrzymane. Wybierz przycisk OK, aby kontynuować.", IDC_STATIC, 7, 7, 241, 17, WS_CHILD | WS_VISIBLE | WS_GROUP
-    LTEXT "System ReactOS spróbuje zatrzymać następujące urządzenia. Po zatrzymaniu będzie można je bezpiecznie usunąć.", IDC_STATIC, 7, 28, 240, 18, WS_CHILD | WS_VISIBLE | WS_GROUP
+    LTEXT "System LiberNT spróbuje zatrzymać następujące urządzenia. Po zatrzymaniu będzie można je bezpiecznie usunąć.", IDC_STATIC, 7, 28, 240, 18, WS_CHILD | WS_VISIBLE | WS_GROUP
     CONTROL "", IDC_CONFIRM_STOP_DEVICE_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS | LVS_ALIGNLEFT | LVS_NOCOLUMNHEADER | LVS_NOSORTHEADER | WS_CHILD | WS_VISIBLE | WS_BORDER | WS_GROUP | WS_TABSTOP, 8, 51, 240, 78
     DEFPUSHBUTTON "OK", IDOK, 144, 133, 50, 14
     PUSHBUTTON "Anuluj", IDCANCEL, 198, 133, 50, 14

@@ -90,7 +90,7 @@ BEGIN
     END
     POPUP "&Aide", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "À &propos de ReactOS", IDM_HELP_ABOUT
+        MENUITEM "À &propos de LiberNT", IDM_HELP_ABOUT
     END
 END
 

@@ -24,7 +24,7 @@ Uz: %s [disc:] [-F] [-V] [-R] [-C]\n\n\
     IDS_ABOUT "\n\
 Chkdskx v1.0.1 de către Mark Russinovich\n\
 Systems Internals - http://www.sysinternals.com\n\
-Adaptarea pentru ReactOS din 1999 de către Emanuele Aliberti\n\n"
+Adaptarea pentru LiberNT din 1999 de către Emanuele Aliberti\n\n"
 END
 
 STRINGTABLE

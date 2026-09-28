@@ -82,7 +82,7 @@ BEGIN
     END
     POPUP "Ya&rdım", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&ReactOS Hakkında", IDM_HELP_ABOUT
+        MENUITEM "&LiberNT Hakkında", IDM_HELP_ABOUT
     END
 END
 

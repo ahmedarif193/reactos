@@ -747,10 +747,10 @@ Language=English
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -765,10 +765,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -784,10 +784,10 @@ Language=German
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Ermöglicht es ReactOS, dem System hinzugefügten Volumes
+    ENABLE      Ermöglicht es LiberNT, dem System hinzugefügten Volumes
                 automatisch Laufwerkbuchstaben zuzuordnen.
 
-    DISABLE     Verhindert, dass ReactOS dem System hinzugefügten
+    DISABLE     Verhindert, dass LiberNT dem System hinzugefügten
                 Volumes Laufwerkbuchstaben zuordnet.
 
     SCRUB       Entfernt eingebundene Ordnerpfadnamen, Laufwerkbuchstaben,
@@ -823,10 +823,10 @@ Language=Polish
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -841,10 +841,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -859,10 +859,10 @@ Language=Portugese
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -877,10 +877,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -895,10 +895,10 @@ Language=Romanian
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -913,10 +913,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -931,10 +931,10 @@ Language=Russian
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -949,10 +949,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -967,10 +967,10 @@ Language=Albanian
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -985,10 +985,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -1003,10 +1003,10 @@ Language=Turkish
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -1021,10 +1021,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -1039,10 +1039,10 @@ Language=Chinese
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -1057,10 +1057,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -1075,10 +1075,10 @@ Language=Taiwanese
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables ReactOS to automatically assign drive letters
+    ENABLE      Enables LiberNT to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents ReactOS from automatically assigning drive letters
+    DISABLE     Prevents LiberNT from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -1093,10 +1093,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, ReactOS automatically brings the
+    When the AutoMount feature is enabled, LiberNT automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents ReactOS from automatically
+    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -2904,12 +2904,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -2946,13 +2946,13 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Gehen Sie bei Verwendung dieses Befehls mit äußerster Vorsicht vor.
         Da GPT-Datenträger ein bestimmtes Partitionslayout erfordern, könnte
         der Datenträger beim Erstellen von MSR-Partitionen unlesbar werden.
-        Auf GPT-Datenträgern, die zum Starten von ReactOS verwendet werden, ist
+        Auf GPT-Datenträgern, die zum Starten von LiberNT verwendet werden, ist
         die EFI-Systempartition die erste Partition auf dem Datenträger,
         gefolgt von der MSR-Partition. GPT-Datenträger, die nur zum Speichern
         von Daten verwendet werden, haben keine, EFI-Systempartition. Die
         MSR-Partition ist daher in einem solchen Fall die erste Partition.
 
-    Von ReactOS werden online keine MSR-Partitionen bereitgestellt.
+    Von LiberNT werden online keine MSR-Partitionen bereitgestellt.
     Auf MSR-Partitionen können Sie keine Daten speichern, und Sie können
     MSR-Partitionen nicht löschen.
 
@@ -2987,12 +2987,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -3026,12 +3026,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -3065,12 +3065,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -3104,12 +3104,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -3143,12 +3143,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -3182,12 +3182,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -3221,12 +3221,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -3260,12 +3260,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        ReactOS, the EFI System partition is the first partition on the disk,
+        LiberNT, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    ReactOS does not online Microsoft Reserved partitions. You cannot store data
+    LiberNT does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -5402,7 +5402,7 @@ SymbolicName=MSG_COMMAND_FORMAT
 Severity=Informational
 Facility=System
 Language=English
-    Formats the specified volume for use with ReactOS.
+    Formats the specified volume for use with LiberNT.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5467,7 +5467,7 @@ Examples:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=German
-    Formatiert das angegebene Volume für die Verwendung mit ReactOS.
+    Formatiert das angegebene Volume für die Verwendung mit LiberNT.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5541,7 +5541,7 @@ Beispiele:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=Polish
-    Formats the specified volume for use with ReactOS.
+    Formats the specified volume for use with LiberNT.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5606,7 +5606,7 @@ Examples:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=Portugese
-    Formats the specified volume for use with ReactOS.
+    Formats the specified volume for use with LiberNT.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5671,7 +5671,7 @@ Examples:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=Romanian
-    Formatează volumul specificat pentru folosire cu ReactOS.
+    Formatează volumul specificat pentru folosire cu LiberNT.
 
 Sintaxă:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5738,7 +5738,7 @@ De exemplu:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=Russian
-    Formats the specified volume for use with ReactOS.
+    Formats the specified volume for use with LiberNT.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5803,7 +5803,7 @@ Examples:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=Albanian
-    Formats the specified volume for use with ReactOS.
+    Formats the specified volume for use with LiberNT.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5868,7 +5868,7 @@ Examples:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=Turkish
-    Formats the specified volume for use with ReactOS.
+    Formats the specified volume for use with LiberNT.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5933,7 +5933,7 @@ Examples:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=Chinese
-    Formats the specified volume for use with ReactOS.
+    Formats the specified volume for use with LiberNT.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -5998,7 +5998,7 @@ Examples:
     FORMAT RECOMMENDED OVERRIDE
 .
 Language=Taiwanese
-    格式化指定的磁碟區以供 ReactOS 使用。
+    格式化指定的磁碟區以供 LiberNT 使用。
 
 語法:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -7046,7 +7046,7 @@ Syntax:  INACTIVE
 
         Your computer might not start without an active partition. Do not mark
         a system or boot partition as inactive unless you are an experienced
-        user with a thorough understanding of ReactOS storage management.
+        user with a thorough understanding of LiberNT storage management.
 
 Example:
 
@@ -7071,7 +7071,7 @@ Syntax:  INACTIVE
         Möglicherweise kann der Computer nicht gestartet werden, wenn es
         keine aktive Partition gibt. Markieren Sie eine System- oder
         Startpartition nur dann als inaktiv, wenn Sie ein erfahrener
-        Benutzer und mit der ReactOS-Speicherverwaltung umfassend vertraut
+        Benutzer und mit der LiberNT-Speicherverwaltung umfassend vertraut
         sind.
 
 Beispiel:
@@ -7119,7 +7119,7 @@ Syntax:  INACTIVE
 
         Your computer might not start without an active partition. Do not mark
         a system or boot partition as inactive unless you are an experienced
-        user with a thorough understanding of ReactOS storage management.
+        user with a thorough understanding of LiberNT storage management.
 
 Example:
 
@@ -7144,7 +7144,7 @@ Sintaxă:  INACTIVE
         Calculatorul dumneavoastră ar putea să nu pornească fără o partiție
         activă. Nu marcați o partiție de sistem sau de inițializare ca inactivă
         dacă nu sunteți un utilizator experimentat cu o înțelegere aprofundată
-        a gestionării stocării ReactOS.
+        a gestionării stocării LiberNT.
 
 De exemplu:
 
@@ -7167,7 +7167,7 @@ Syntax:  INACTIVE
 
         Your computer might not start without an active partition. Do not mark
         a system or boot partition as inactive unless you are an experienced
-        user with a thorough understanding of ReactOS storage management.
+        user with a thorough understanding of LiberNT storage management.
 
 Example:
 
@@ -7190,7 +7190,7 @@ Syntax:  INACTIVE
 
         Your computer might not start without an active partition. Do not mark
         a system or boot partition as inactive unless you are an experienced
-        user with a thorough understanding of ReactOS storage management.
+        user with a thorough understanding of LiberNT storage management.
 
 Example:
 
@@ -7213,7 +7213,7 @@ Syntax:  INACTIVE
 
         Your computer might not start without an active partition. Do not mark
         a system or boot partition as inactive unless you are an experienced
-        user with a thorough understanding of ReactOS storage management.
+        user with a thorough understanding of LiberNT storage management.
 
 Example:
 
@@ -7236,7 +7236,7 @@ Syntax:  INACTIVE
 
         Your computer might not start without an active partition. Do not mark
         a system or boot partition as inactive unless you are an experienced
-        user with a thorough understanding of ReactOS storage management.
+        user with a thorough understanding of LiberNT storage management.
 
 Example:
 
@@ -7257,7 +7257,7 @@ Language=Taiwanese
     注意:
 
         如果沒有使用中的磁碟分割，您的電腦將無法啟動。
-        除非您是非常熟悉 ReactOS 存放管理的進階使用者，
+        除非您是非常熟悉 LiberNT 存放管理的進階使用者，
         否則請勿將系統或開機磁碟分割標示為非使用中。
 
 範例:

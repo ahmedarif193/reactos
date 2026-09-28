@@ -70,7 +70,7 @@ CAPTION "System Settings"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
     GROUPBOX "Version Info", IDC_STATIC, 6, 3, 210, 73
-    LTEXT "ReactOS is built as a server OS and reports as such. Check this box to change this for applications only.", IDC_STATIC, 15, 15, 183, 41
+    LTEXT "LiberNT is built as a server OS and reports as such. Check this box to change this for applications only.", IDC_STATIC, 15, 15, 183, 41
     CONTROL "Report as Workstation", IDC_REPORTASWORKSTATION, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 57, 190, 10
     PUSHBUTTON "OK", IDOK, 166, 83, 50, 14
 END
@@ -91,7 +91,7 @@ BEGIN
     PUSHBUTTON "&Byt namn", IDC_HRDPROFRENAME, 118, 106, 50, 14, WS_DISABLED
     PUSHBUTTON "&Ta bort", IDC_HRDPROFDEL, 173, 106, 50, 14, WS_DISABLED
     GROUPBOX "Val av hårdvaruprofiler", IDC_STATIC, 7, 130, 240, 75
-    LTEXT "När ReactOS startar:", IDC_STATIC, 14, 142, 210, 8
+    LTEXT "När LiberNT startar:", IDC_STATIC, 14, 142, 210, 8
     AUTORADIOBUTTON "&Vänta tills jag väljer en hårdvaruprofil", IDC_HRDPROFWAIT, 14, 158, 133, 8, WS_GROUP
     AUTORADIOBUTTON "&Använd den första profilen i listan om jag inte väljer en profil", IDC_HRDPROFSELECT, 14, 173, 190, 8
     LTEXT "sekunder", IDC_STATIC, 65, 187, 35, 8
@@ -119,7 +119,7 @@ BEGIN
     AUTORADIOBUTTON "The computer is &docked", IDC_HWPPROP_DOCKED, 22, 97, 160, 10
     AUTORADIOBUTTON "The computer is &undocked", IDC_HWPPROP_UNDOCKED, 22, 109, 160, 10
     GROUPBOX "Hardware profiles selection", IDC_STATIC, 10, 138, 192, 42
-    AUTOCHECKBOX "Always &include this profile as an option when ReactOS starts", IDC_HWPPROP_INCLUDE, 17, 150, 164, 20, WS_GROUP | WS_TABSTOP | BS_MULTILINE
+    AUTOCHECKBOX "Always &include this profile as an option when LiberNT starts", IDC_HWPPROP_INCLUDE, 17, 150, 164, 20, WS_GROUP | WS_TABSTOP | BS_MULTILINE
 END
 
 IDD_COPYPROFILE DIALOGEX 12, 26, 256, 52
@@ -330,7 +330,7 @@ CAPTION "Visual Effects"
 FONT 8, "MS Shell Dlg"
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 BEGIN
-   LTEXT "Select the settings you want to use for the appearance and performance of ReactOS on this computer.", IDC_STATIC, 7, 6, 208, 18
+   LTEXT "Select the settings you want to use for the appearance and performance of LiberNT on this computer.", IDC_STATIC, 7, 6, 208, 18
    CONTROL "", IDC_TREE, "SysTreeView32", TVS_LINESATROOT | TVS_DISABLEDRAGDROP | WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, 7, 32, 213, 168
 END
 
@@ -344,7 +344,7 @@ BEGIN
    AUTORADIOBUTTON "&Programs", IDC_CPUCLIENT, 14, 36, 75, 12
    AUTORADIOBUTTON "Background &services", IDC_CPUSERVER, 96, 36, 85, 12
    GROUPBOX "Virtual memory", IDC_STATIC, 7, 60, 213, 57
-   LTEXT "A paging file is an area on the hard disk that ReactOS uses as if it were RAM.", IDC_STATIC, 14, 74, 199, 16
+   LTEXT "A paging file is an area on the hard disk that LiberNT uses as if it were RAM.", IDC_STATIC, 14, 74, 199, 16
    PUSHBUTTON "&Change...", IDC_CHANGESWAP, 163, 97, 50, 14
 END
 

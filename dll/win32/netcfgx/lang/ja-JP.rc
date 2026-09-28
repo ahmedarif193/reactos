@@ -225,7 +225,7 @@ BEGIN
     IDS_DHCPACTIVE "DHCP有効"
     IDS_AUTOMATIC "自動"
     IDS_NOITEMSEL "項目が選択されていません。まず項目を 1 つ選択してください。"
-    IDS_TCPIP "ReactOS の TCP/IP"
+    IDS_TCPIP "LiberNT の TCP/IP"
     IDS_ADD "追加"
     IDS_MOD "OK"
     IDS_TCP_PORTS "TCP ポート"

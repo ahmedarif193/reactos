@@ -81,7 +81,7 @@ BEGIN
     END
     POPUP "&Справка", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&О ReactOS", IDM_HELP_ABOUT
+        MENUITEM "&О LiberNT", IDM_HELP_ABOUT
     END
 END
 

@@ -90,7 +90,7 @@ BEGIN
     END
     POPUP "ヘルプ(&H)", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "ReactOSについて(&A)", IDM_HELP_ABOUT
+        MENUITEM "LiberNTについて(&A)", IDM_HELP_ABOUT
     END
 END
 

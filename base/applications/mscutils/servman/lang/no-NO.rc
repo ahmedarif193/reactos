@@ -269,10 +269,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "ReactOS forsøker å starte følgende tjeneste"
-    IDS_PROGRESS_INFO_STOP "ReactOS forsøker å stoppe følgende tjeneste"
-    IDS_PROGRESS_INFO_PAUSE "ReactOS forsøker å pause følgende tjeneste"
-    IDS_PROGRESS_INFO_RESUME "ReactOS forsøker å fortsette følgende tjeneste"
+    IDS_PROGRESS_INFO_START "LiberNT forsøker å starte følgende tjeneste"
+    IDS_PROGRESS_INFO_STOP "LiberNT forsøker å stoppe følgende tjeneste"
+    IDS_PROGRESS_INFO_PAUSE "LiberNT forsøker å pause følgende tjeneste"
+    IDS_PROGRESS_INFO_RESUME "LiberNT forsøker å fortsette følgende tjeneste"
     IDS_CREATE_SUCCESS "Tjenesten ble opprettet"
     IDS_DELETE_SUCCESS "Tjenesten ble slettet"
     IDS_CREATE_REQ "Fields marked with an\nasterix are mandatory"

@@ -2,29 +2,29 @@ LANGUAGE LANG_ITALIAN, SUBLANG_NEUTRAL
 
 IDD_WELCOMEPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Benvenuti alla configurazione guidata di ReactOS", IDC_WELCOMETITLE, 115, 8, 195, 24
-    LTEXT "Questa procedura guidata installa ReactOS su questo computer.\nLa procedura deve raccogliere alcune informazioni sull'utente e sul computer per configurare ReactOS adeguatamente.", IDC_STATIC, 115, 40, 195, 50
+    LTEXT "Benvenuti alla configurazione guidata di LiberNT", IDC_WELCOMETITLE, 115, 8, 195, 24
+    LTEXT "Questa procedura guidata installa LiberNT su questo computer.\nLa procedura deve raccogliere alcune informazioni sull'utente e sul computer per configurare LiberNT adeguatamente.", IDC_STATIC, 115, 40, 195, 50
     LTEXT "Selezionare Avanti per proseguire con la configurazione.", IDC_STATIC, 115, 169, 195, 17
 END
 
 IDD_ACKPAGE DIALOGEX 0, 0, 317, 145
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Gli sviluppatori di ReactOS desiderano citare i seguenti progetti Open Source, che sono stati usati (in tutto o in parte) per creare ReactOS:", IDC_STATIC, 15, 7, 286, 19
+    LTEXT "Gli sviluppatori di LiberNT desiderano citare i seguenti progetti Open Source, che sono stati usati (in tutto o in parte) per creare LiberNT:", IDC_STATIC, 15, 7, 286, 19
     LISTBOX IDC_PROJECTS, 15, 30, 286, 75, LBS_NOSEL | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_VSCROLL
-    LTEXT "ReactOS è soggetto alla licenza GPL, per cui se si desidera riusarlo o ridistribuirlo (in tutto o in parte) è necessario rispettare la GPL.", IDC_STATIC, 15, 110, 217, 22
+    LTEXT "LiberNT è soggetto alla licenza GPL, per cui se si desidera riusarlo o ridistribuirlo (in tutto o in parte) è necessario rispettare la GPL.", IDC_STATIC, 15, 110, 217, 22
     PUSHBUTTON "&Mostra la GPL...", IDC_VIEWGPL, 241, 110, 60, 19
     LTEXT "Selezionare Avanti per proseguire con la configurazione.", IDC_STATIC, 15, 136, 195, 17
 END
 
 IDD_INSTALLATION DIALOGEX 0, 0, 317, 143
 STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUPWINDOW | WS_CAPTION | WS_VISIBLE
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", IDC_INSTALLATION_ICON, 5, 5, 20, 20
@@ -38,7 +38,7 @@ END
 
 IDD_OWNERPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON2, IDC_STATIC, 21, 7, 20, 20
@@ -51,7 +51,7 @@ END
 
 IDD_COMPUTERPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON1, IDC_STATIC, 21, 7, 20, 20
@@ -69,7 +69,7 @@ END
 
 IDD_LOCALEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON4, IDC_STATIC, 21, 7, 20, 20
@@ -86,7 +86,7 @@ END
 
 IDD_DATETIMEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON3, IDC_STATIC, 21, 10, 20, 20
@@ -100,7 +100,7 @@ END
 
 IDD_THEMEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_THEMEPICKER, "SysListView32", LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_TABSTOP, 18, 8, 288, 130
@@ -108,7 +108,7 @@ END
 
 IDD_PROCESSPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Registrazione dei componenti", IDC_TASKTEXT1, 65, 27, 232, 8
@@ -127,11 +127,11 @@ END
 
 IDD_FINISHPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installazione di ReactOS"
+CAPTION "Installazione di LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Completamento della procedura guidata di installazione di ReactOS", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "La procedura guidata di installazione di ReactOS è completata.\n\nSe c'è un CD in un lettore, è necessario rimuoverlo. Poi, per riavviare il computer, selezionare Fine.", IDC_STATIC, 115, 40, 195, 48
+    LTEXT "Completamento della procedura guidata di installazione di LiberNT", IDC_FINISHTITLE, 115, 8, 195, 24
+    LTEXT "La procedura guidata di installazione di LiberNT è completata.\n\nSe c'è un CD in un lettore, è necessario rimuoverlo. Poi, per riavviare il computer, selezionare Fine.", IDC_STATIC, 115, 40, 195, 48
     LTEXT "Your computer will automatically restart in 15 seconds.", IDC_STATIC, 115, 110, 195, 24
     CONTROL "", IDC_RESTART_PROGRESS, "msctls_progress32", PBS_SMOOTH | WS_CHILD | WS_VISIBLE | WS_BORDER, 115, 135, 188, 12
 END
@@ -177,13 +177,13 @@ END
 STRINGTABLE
 BEGIN
     IDS_ACKTITLE "Riconoscimenti"
-    IDS_ACKSUBTITLE "Le spalle su cui ReactOS poggia e le informazioni sulla licenza"
+    IDS_ACKSUBTITLE "Le spalle su cui LiberNT poggia e le informazioni sulla licenza"
     IDS_OWNERTITLE "Personalizzare il software"
-    IDS_OWNERSUBTITLE "La procedura usa queste informazioni su di voi per personalizzare ReactOS."
+    IDS_OWNERSUBTITLE "La procedura usa queste informazioni su di voi per personalizzare LiberNT."
     IDS_COMPUTERTITLE "Il nome del computer e la password di Administrator"
     IDS_COMPUTERSUBTITLE "È necessario fornire un nome e una password di Administrator per il proprio computer."
     IDS_LOCALETITLE "Impostazioni regionali"
-    IDS_LOCALESUBTITLE "È possibile personalizzare ReactOS per regioni e lingue differenti."
+    IDS_LOCALESUBTITLE "È possibile personalizzare LiberNT per regioni e lingue differenti."
     IDS_LOCALETEXT "The Standards and formats are set to %s, and the location is set to %s."
     IDS_LAYOUTTEXT "Your default text input language and method is: %s keyboard layout"
     IDS_DATETIMETITLE "Data e ora"
@@ -196,7 +196,7 @@ END
 
 STRINGTABLE
 BEGIN
-IDS_REACTOS_SETUP "Installazione di ReactOS"
+IDS_REACTOS_SETUP "Installazione di LiberNT"
     IDS_UNKNOWN_ERROR "Errore sconosciuto"
     IDS_LOADLIBRARY_FAILED "LoadLibrary fallito: "
     IDS_GETPROCADDR_FAILED "GetProcAddr fallito: "
@@ -256,11 +256,11 @@ STRINGTABLE
 BEGIN
     IDS_INSTALLATIONTITLE "Installation Type"
     IDS_INSTALLATIONSUBTITLE "Choose an installation type that determines how the system is configured."
-    IDS_INSTALLATIONSERVERNAME "ReactOS Server"
+    IDS_INSTALLATIONSERVERNAME "LiberNT Server"
     IDS_INSTALLATIONSERVERINFO "The system will be recognized as a server. Private folders ""My Pictures"", ""My Videos"" and ""My Music"" are independent from ""My Documents""."
-    IDS_INSTALLATIONWORKSTATIONNAME "ReactOS Workstation"
+    IDS_INSTALLATIONWORKSTATIONNAME "LiberNT Workstation"
     IDS_INSTALLATIONWORKSTATIONINFO "The system will be recognized as a workstation. Private folders ""My Pictures"", ""My Videos"" and ""My Music"" are in ""My Documents""."
-    IDS_INSTALLATIONSERVERCORENAME "ReactOS Server Core"
+    IDS_INSTALLATIONSERVERCORENAME "LiberNT Server Core"
     IDS_INSTALLATIONSERVERCOREINFO "The system will be recognized as a server. The graphical shell is not installed, and the system starts in a command‑line environment to reduce resource usage and attack surface."
     /* Reserved for future use
      * IDS_INSTALLATIONNANOSERVERNAME "ReactOS Nano Server"

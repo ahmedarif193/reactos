@@ -36,7 +36,8 @@ IDI_CROSSICON ICON "resources/cross-16x16.ico"
 
 STRINGTABLE
 BEGIN
-    IDS_ACKPROJECTS "Wine - http://winehq.org\
+    IDS_ACKPROJECTS "ReactOS - https://reactos.org\
+\nWine - http://winehq.org\
 \nFreeType - http://freetype.org\
 \nSYSLINUX - http://syslinux.zytor.com\
 \nMinGW - http://mingw.org\

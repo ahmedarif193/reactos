@@ -256,11 +256,11 @@ STRINGTABLE
 BEGIN
     IDS_INSTALLATIONTITLE "Installation Type"
     IDS_INSTALLATIONSUBTITLE "Choose an installation type that determines how the system is configured."
-    IDS_INSTALLATIONSERVERNAME "ReactOS Server"
+    IDS_INSTALLATIONSERVERNAME "LiberNT Server"
     IDS_INSTALLATIONSERVERINFO "The system will be recognized as a server. Private folders ""My Pictures"", ""My Videos"" and ""My Music"" are independent from ""My Documents""."
-    IDS_INSTALLATIONWORKSTATIONNAME "ReactOS Workstation"
+    IDS_INSTALLATIONWORKSTATIONNAME "LiberNT Workstation"
     IDS_INSTALLATIONWORKSTATIONINFO "The system will be recognized as a workstation. Private folders ""My Pictures"", ""My Videos"" and ""My Music"" are in ""My Documents""."
-    IDS_INSTALLATIONSERVERCORENAME "ReactOS Server Core"
+    IDS_INSTALLATIONSERVERCORENAME "LiberNT Server Core"
     IDS_INSTALLATIONSERVERCOREINFO "The system will be recognized as a server. The graphical shell is not installed, and the system starts in a command‑line environment to reduce resource usage and attack surface."
     /* Reserved for future use
      * IDS_INSTALLATIONNANOSERVERNAME "ReactOS Nano Server"

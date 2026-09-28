@@ -91,7 +91,7 @@ BEGIN
     END
     POPUP "&Ndihmë", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&Rreth ReactOS", IDM_HELP_ABOUT
+        MENUITEM "&Rreth LiberNT", IDM_HELP_ABOUT
     END
 END
 

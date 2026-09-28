@@ -4,37 +4,37 @@ LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
 
 IDD_STARTPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS セットアップ"
+CAPTION "LiberNT セットアップ"
 FONT 9, "MS UI Gothic"
 BEGIN
-    LTEXT "ReactOS セットアップウィザードへようこそ", IDC_STARTTITLE, 115, 8, 195, 24
-    LTEXT "このウィザードは、あなたのコンピュータに ReactOS をインストールまたはアップグレードし、追加のセットアップの準備をします。", IDC_STATIC, 115, 40, 195, 27
+    LTEXT "LiberNT セットアップウィザードへようこそ", IDC_STARTTITLE, 115, 8, 195, 24
+    LTEXT "このウィザードは、あなたのコンピュータに LiberNT をインストールまたはアップグレードし、追加のセットアップの準備をします。", IDC_STATIC, 115, 40, 195, 27
 ////
     GROUPBOX " 重要なお知らせ ", IDC_WARNTEXT1, 115, 70, 195, 90, BS_CENTER
-    LTEXT "ReactOS はアルファ段階にあります: 機能は未完成で、現在、活発に開発されています。日常的に使用する OS としては使用せず、評価とテストにのみ使用することをオススメします。\n\
+    LTEXT "LiberNT はアルファ段階にあります: 機能は未完成で、現在、活発に開発されています。日常的に使用する OS としては使用せず、評価とテストにのみ使用することをオススメします。\n\
 データが破損したり、ハードウェアが損傷する恐れがあります。", IDC_WARNTEXT2, 120, 80, 185, 50, SS_CENTER
-    LTEXT "実際のハードウェアで ReactOS を実行する場合は、データをバックアップするか、予備のコンピュータでテストしてください。", IDC_WARNTEXT3, 120, 130, 185, 27, SS_CENTER
+    LTEXT "実際のハードウェアで LiberNT を実行する場合は、データをバックアップするか、予備のコンピュータでテストしてください。", IDC_WARNTEXT3, 120, 130, 185, 27, SS_CENTER
 ////
     LTEXT "セットアップを続行するには [次へ] をクリックしてください。", IDC_STATIC, 115, 169, 195, 17
 END
 
 IDD_TYPEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS セットアップ"
+CAPTION "LiberNT セットアップ"
 FONT 9, "MS UI Gothic"
 BEGIN
-    AUTORADIOBUTTON "ReactOS をインストールする(&I)", IDC_INSTALL, 7, 20, 277, 10, WS_GROUP | WS_TABSTOP
-    LTEXT "ReactOS を新しくインストールします。このオプションは、あなたのファイル、設定、プログラムを維持しません。あなたはディスクとパーティションに変更を加えることができます。", IDC_INSTALLTEXT, 19, 36, 279, 27, NOT WS_GROUP
-    AUTORADIOBUTTON "ReactOS を更新または修正する(&U)", IDC_UPDATE, 7, 80, 277, 10
-    LTEXT "インストールされた ReactOS を更新または修正します。このオプションはあなたのファイル、設定、プログラムを保持します。このオプションは、このコンピュータですでに ReactOS がインストール済みのときのみ利用できます。", IDC_UPDATETEXT, 19, 96, 279, 27, NOT WS_GROUP
+    AUTORADIOBUTTON "LiberNT をインストールする(&I)", IDC_INSTALL, 7, 20, 277, 10, WS_GROUP | WS_TABSTOP
+    LTEXT "LiberNT を新しくインストールします。このオプションは、あなたのファイル、設定、プログラムを維持しません。あなたはディスクとパーティションに変更を加えることができます。", IDC_INSTALLTEXT, 19, 36, 279, 27, NOT WS_GROUP
+    AUTORADIOBUTTON "LiberNT を更新または修正する(&U)", IDC_UPDATE, 7, 80, 277, 10
+    LTEXT "インストールされた LiberNT を更新または修正します。このオプションはあなたのファイル、設定、プログラムを保持します。このオプションは、このコンピュータですでに LiberNT がインストール済みのときのみ利用できます。", IDC_UPDATETEXT, 19, 96, 279, 27, NOT WS_GROUP
 END
 
 IDD_UPDATEREPAIRPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS セットアップ"
+CAPTION "LiberNT セットアップ"
 FONT 9, "MS UI Gothic"
 BEGIN
-    LTEXT       "セットアップは、以下のリストのうち、一つをアップグレードできます。また、ReactOS インストールが壊れていれば、セットアップは修正を試すことができます。", IDC_STATIC, 6, 6, 303, 18
+    LTEXT       "セットアップは、以下のリストのうち、一つをアップグレードできます。また、LiberNT インストールが壊れていれば、セットアップは修正を試すことができます。", IDC_STATIC, 6, 6, 303, 18
     CONTROL     "", IDC_NTOSLIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_BORDER | WS_TABSTOP, 6, 30, 303, 90
     PUSHBUTTON  "アップグレードしない(&D)", IDC_SKIPUPGRADE, 218, 127, 92, 14
     LTEXT       "次へをクリックしてOSのインストールをアップグレードするか、「アップグレードしない」をクリックしてください。", IDC_STATIC, 7, 124, 207, 16
@@ -42,7 +42,7 @@ END
 
 IDD_DEVICEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS セットアップ"
+CAPTION "LiberNT セットアップ"
 FONT 9, "MS UI Gothic"
 BEGIN
     LTEXT "コンピュータ:", IDC_STATIC, 20, 15, 80, 10
@@ -56,7 +56,7 @@ END
 
 IDD_DRIVEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS セットアップ"
+CAPTION "LiberNT セットアップ"
 FONT 9, "MS UI Gothic"
 BEGIN
     CONTROL "", IDC_PARTITION, "SysTreeList32", WS_BORDER | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL, 7, 7, 303, 112
@@ -104,7 +104,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSM
 CAPTION "高度なインストール オプション"
 FONT 9, "MS UI Gothic"
 BEGIN
-    LTEXT "ReactOS をインストールするディレクトリを選択してください(&D)", IDC_STATIC, 7, 9, 291, 10
+    LTEXT "LiberNT をインストールするディレクトリを選択してください(&D)", IDC_STATIC, 7, 9, 291, 10
     EDITTEXT IDC_PATH, 7, 23, 291, 13
     GROUPBOX "ブートローダー", IDC_STATIC, 7, 45, 291, 60
     LTEXT "FreeLoader ブートローダーのインストール位置:\n\nデフォルトでは、ブート ディスクのシステム パーティション (および BIOS ベースのコンピュータの場合はマスター ブート レコードまたはボリューム ブート レコード) にインストールされます。", IDC_STATIC, 13, 57, 279, 44
@@ -115,7 +115,7 @@ END
 
 IDD_SUMMARYPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS セットアップ"
+CAPTION "LiberNT セットアップ"
 FONT 9, "MS UI Gothic"
 BEGIN
     LTEXT "インストールの種類:", IDC_STATIC, 6, 5, 88, 11
@@ -134,14 +134,14 @@ BEGIN
     EDITTEXT IDC_DESTDRIVE, 95, 76, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
     LTEXT "インストール先フォルダ:", IDC_STATIC, 6, 89, 88, 11
     EDITTEXT IDC_PATH, 95, 88, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    AUTOCHECKBOX "すべてのインストール設定が正しいことを確認しました。また、ReactOS がまだアルファ版であり、あなたのコンピュータやデータを壊す恐れがあることを理解しています。",
+    AUTOCHECKBOX "すべてのインストール設定が正しいことを確認しました。また、LiberNT がまだアルファ版であり、あなたのコンピュータやデータを壊す恐れがあることを理解しています。",
         IDC_CONFIRM_INSTALL, 7, 104, 303, 18, BS_MULTILINE | WS_TABSTOP
     LTEXT "すべてのインストール設定が正しいことを確認し、インストール プロセスを開始するために、インストールをクリックしてください。", IDC_STATIC, 7, 124, 303, 18
 END
 
 IDD_PROCESSPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS セットアップ"
+CAPTION "LiberNT セットアップ"
 FONT 9, "MS UI Gothic"
 BEGIN
     LTEXT "ファイルをインストール中...", IDC_ACTIVITY, 20, 50, 277, 10
@@ -151,11 +151,11 @@ END
 
 IDD_FINISHPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS セットアップ"
+CAPTION "LiberNT セットアップ"
 FONT 9, "MS UI Gothic"
 BEGIN
     LTEXT "Restarting your Computer", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "ReactOS セットアップの最初の段階が正しく完了しました。", IDC_STATIC, 115, 40, 195, 24
+    LTEXT "LiberNT セットアップの最初の段階が正しく完了しました。", IDC_STATIC, 115, 40, 195, 24
     // The following text can be replaced by IDS_FINISH_NO_REBOOT at runtime;
     // please ensure it can hold in the text control!
     LTEXT "Setup will now restart your computer to continue with the second installation step.\n\nYour computer will automatically restart in 15 seconds or when you click on Restart.", IDC_FINISHTEXT, 115, 78, 195, 56
@@ -164,11 +164,11 @@ END
 
 IDD_ABORTPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Setup"
+CAPTION "LiberNT Setup"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "The ReactOS Setup Wizard ended prematurely", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "The first ReactOS installation step prematurely ended because of an error or because you have canceled it.\n\nYou will be able to run the Setup Wizard at a later time to install or upgrade ReactOS.", IDC_STATIC, 115, 40, 195, 48
+    LTEXT "The LiberNT Setup Wizard ended prematurely", IDC_FINISHTITLE, 115, 8, 195, 24
+    LTEXT "The first LiberNT installation step prematurely ended because of an error or because you have canceled it.\n\nYou will be able to run the Setup Wizard at a later time to install or upgrade LiberNT.", IDC_STATIC, 115, 40, 195, 48
     // The following text can be replaced by IDS_ABORT_NO_REBOOT at runtime;
     // please ensure it can hold in the text control!
     LTEXT "Your computer will automatically restart in 15 seconds or when you click on Restart.", IDC_FINISHTEXT, 115, 110, 195, 24
@@ -179,11 +179,11 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_CAPTION "ReactOS セットアップ"
+    IDS_CAPTION "LiberNT セットアップ"
     IDS_TYPETITLE "インストールの種類"
-    IDS_TYPESUBTITLE "新しい ReactOS インストールをセットアップしたり、既存のインストールを更新/修復したりできます。"
-    IDS_UPDATETITLE "ReactOS のアップデートまたは修復"
-    IDS_UPDATESUBTITLE "更新または修復する既存の ReactOS インストールを選択します。"
+    IDS_TYPESUBTITLE "新しい LiberNT インストールをセットアップしたり、既存のインストールを更新/修復したりできます。"
+    IDS_UPDATETITLE "LiberNT のアップデートまたは修復"
+    IDS_UPDATESUBTITLE "更新または修復する既存の LiberNT インストールを選択します。"
     IDS_DEVICETITLE "基本デバイスをセットアップします"
     IDS_DEVICESUBTITLE "ディスプレイとキーボードの設定をします。"
     IDS_DRIVETITLE "インストール先パーティションとシステムフォルダをセットアップします"
@@ -192,7 +192,7 @@ BEGIN
     IDS_SUMMARYSUBTITLE "インストールするデバイスを適用する前にチェックするインストール プロパティをリストアップします。"
     IDS_PROCESSTITLE "パーティションをセットアップし、ファイルをコピーし、システムをセットアップします"
     IDS_PROCESSSUBTITLE "パーティションを作成・フォーマットし、ファイルをコピーし、ブートローダをインストール・セットアップします。"
-    IDS_ABORTSETUP "ReactOS はあなたのコンピュータへのインストールが完了していません。もしセットアップをここで中断すれば、ReactOS をインストールするために、セットアップを再起動する必要があります。本当に中断しますか?"
+    IDS_ABORTSETUP "LiberNT はあなたのコンピュータへのインストールが完了していません。もしセットアップをここで中断すれば、LiberNT をインストールするために、セットアップを再起動する必要があります。本当に中断しますか?"
     IDS_ABORTSETUP2 "インストールを中断しますか?"
     IDS_NO_TXTSETUP_SIF "'txtsetup.sif'が見つかりません。\nセットアップは続行できません。"
     IDS_FINISH_NO_REBOOT "Setup needs to restart your computer to continue with the second installation step.\n\nClick on Restart to immediately restart your computer.\nClick on Postpone to quit the installer and restart your computer at a later time."
@@ -278,7 +278,7 @@ BEGIN
 スペースは使用できません。"
 
     IDS_ERROR_DIRECTORY_NAME_TITLE "インストール パスが無効です"
-    IDS_ERROR_DIRECTORY_NAME "ReactOS のインストールパスは DOS 8.3の命名規則に従い、英数字、ハイフン(-)、ピリオド(.)のみを含める必要があります。スペースは使用できません。"
+    IDS_ERROR_DIRECTORY_NAME "LiberNT のインストールパスは DOS 8.3の命名規則に従い、英数字、ハイフン(-)、ピリオド(.)のみを含める必要があります。スペースは使用できません。"
 
     IDS_ERROR_CREATE_PARTITION_TITLE "パーティションの作成"
     IDS_ERROR_CREATE_PARTITION "新しいパーティションの作成に失敗しました。"
@@ -289,8 +289,8 @@ BEGIN
 
     IDS_ERROR_WRITE_PTABLE "セットアップはパーティション テーブルの書き込みに失敗しました。"
 
-    IDS_ERROR_SYSTEM_PARTITION "ReactOS セットアップは、システム上でサポートされているシステム パーティションを見つけられなかったか、\
-新しいパーティションを作成できませんでした。そのようなパーティションがないと、セットアップ プログラムは ReactOS をインストールできません。\n\
+    IDS_ERROR_SYSTEM_PARTITION "LiberNT セットアップは、システム上でサポートされているシステム パーティションを見つけられなかったか、\
+新しいパーティションを作成できませんでした。そのようなパーティションがないと、セットアップ プログラムは LiberNT をインストールできません。\n\
 「OK」をクリックしてパーティション選択リストに戻ります。"
 
     IDS_ERROR_FORMAT_UNRECOGNIZED_VOLUME "パーティションをフォーマットしようとしましたが、ボリュームが認識されませんでした。"

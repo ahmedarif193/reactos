@@ -59,7 +59,7 @@ ERRORLEVEL устанавливается равным номеру выбран
     STRING_CMD_HELP5 "  [завершение имен файлов Bash]"
     STRING_CMD_HELP6 "  [стек директорий]"
     STRING_CMD_HELP7 "  [перенаправление и piping]"
-    STRING_CMD_HELP8 "Запуск новой копии интерпретатора команд ReactOS.\n\n\
+    STRING_CMD_HELP8 "Запуск новой копии интерпретатора команд LiberNT.\n\n\
 CMD [/[C|K] команда][/P][/Q][/T:bf]\n\n\
   /C команда  Выполнение указанной команды с последующим завершением.\n\
   /K команда  Выполнение указанной команды без последующего завершения.\n\
@@ -517,8 +517,8 @@ RESTORE       восстанавливает окно\n\
     STRING_ERROR_WHILE_PROCESSING "Error occurred while processing: %s.\n"
     STRING_SET_ENV_ERROR "Переменная окружения '%s' не определена\n"
     STRING_CMD_INFOLINE "  ReactOS Командная строка                            Введите HELP для Справки  "
-    STRING_CMD_COPYRIGHT "(C) Copyright 1996-%s ReactOS Team.\n"
-    STRING_REACTOS_VERSION "ReactOS [Версия %s %s]\n"
+    STRING_CMD_COPYRIGHT "(C) Copyright 2026 LiberNT Team.\n(C) Copyright 1996-%s ReactOS Team.\n"
+    STRING_REACTOS_VERSION "LiberNT [Версия %s %s]\n"
     STRING_CMD_SHELLINFO "\nИнтерпретатор командной строки ReactOS\nВерсия %s %s"
     STRING_VERSION_RUNNING_ON "Запущен на: "
     STRING_VERSION_RUNVER "%s [Версия %d.%d.%d] %s"

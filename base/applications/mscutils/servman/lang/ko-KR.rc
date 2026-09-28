@@ -271,10 +271,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "ReactOS는 다음 서비스를 시작하려고 합니다"
-    IDS_PROGRESS_INFO_STOP "ReactOS는 다음 서비스를 중지하려고 합니다"
-    IDS_PROGRESS_INFO_PAUSE "ReactOS는 다음 서비스를 일시 정지하려고 합니다"
-    IDS_PROGRESS_INFO_RESUME "ReactOS는 다음 서비스를 다시 시작하려고 합니다"
+    IDS_PROGRESS_INFO_START "LiberNT는 다음 서비스를 시작하려고 합니다"
+    IDS_PROGRESS_INFO_STOP "LiberNT는 다음 서비스를 중지하려고 합니다"
+    IDS_PROGRESS_INFO_PAUSE "LiberNT는 다음 서비스를 일시 정지하려고 합니다"
+    IDS_PROGRESS_INFO_RESUME "LiberNT는 다음 서비스를 다시 시작하려고 합니다"
     IDS_CREATE_SUCCESS "서비스가 성공적으로 만들어짐"
     IDS_DELETE_SUCCESS "서비스가 성공적으로 삭제됨"
     IDS_CREATE_REQ "별표가 있는 것는 필수입니다"

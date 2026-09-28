@@ -13,41 +13,41 @@ LANGUAGE LANG_ROMANIAN, SUBLANG_NEUTRAL
 
 IDD_STARTPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Expert de instalare ReactOS"
+CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Bun venit la instalarea ReactOS", IDC_STARTTITLE, 115, 8, 195, 24
-    LTEXT "Acest expert va instala sau va face upgrade la ReactOS pe computer \
+    LTEXT "Bun venit la instalarea LiberNT", IDC_STARTTITLE, 115, 8, 195, 24
+    LTEXT "Acest expert va instala sau va face upgrade la LiberNT pe computer \
 și va pregăti a doua parte a instalatorului.", IDC_STATIC, 115, 40, 195, 27
 ////
     GROUPBOX " IMPORTANT INFORMATION ", IDC_WARNTEXT1, 115, 70, 195, 90, BS_CENTER
-    LTEXT "ReactOS este în stadiu Alfa: nu e o caracteristică- completă și e \
+    LTEXT "LiberNT este în stadiu Alfa: nu e o caracteristică- completă și e \
 în curs de dezvoltare intensă. E recomandat să îl folosiți numai pentru \
 evaluare și testare și nu ca SO de utilizare zilnică.\n\
 Vă poate deteriora datele sau vă poate deteriora hardware-ul.", IDC_WARNTEXT2, 120, 80, 185, 50, SS_CENTER
     LTEXT "Faceți o copie de rezervă a datelor sau testați-l pe un computer secundar \
-dacă încrecați să folosiți ReactOS pe hardware real.", IDC_WARNTEXT3, 120, 130, 185, 27, SS_CENTER
+dacă încrecați să folosiți LiberNT pe hardware real.", IDC_WARNTEXT3, 120, 130, 185, 27, SS_CENTER
 ////
     LTEXT "Apăsați Înainte pentru a continua.", IDC_STATIC, 115, 169, 195, 17
 END
 
 IDD_TYPEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Expert de instalare ReactOS"
+CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    AUTORADIOBUTTON "&Instalează ReactOS", IDC_INSTALL, 7, 20, 277, 10, WS_GROUP | WS_TABSTOP
-    LTEXT "Instalarea unei noi copii a ReactOS. Fișierele, configurațiile și programele existente nu vor fi păstrate. Sunt posibile ajustări asupra discurilor și partițiilor.", IDC_INSTALLTEXT, 19, 36, 279, 27, NOT WS_GROUP
-    AUTORADIOBUTTON "&Repară sau actualizează ReactOS", IDC_UPDATE, 7, 80, 277, 10
-    LTEXT "Repararea sau actualizarea ReactOS. Această opțiune menține fișierele, configurațiile și programele existente. Opțiune validă doar dacă ReactOS e deja instalat în calculator.", IDC_UPDATETEXT, 19, 96, 279, 27, NOT WS_GROUP
+    AUTORADIOBUTTON "&Instalează LiberNT", IDC_INSTALL, 7, 20, 277, 10, WS_GROUP | WS_TABSTOP
+    LTEXT "Instalarea unei noi copii a LiberNT. Fișierele, configurațiile și programele existente nu vor fi păstrate. Sunt posibile ajustări asupra discurilor și partițiilor.", IDC_INSTALLTEXT, 19, 36, 279, 27, NOT WS_GROUP
+    AUTORADIOBUTTON "&Repară sau actualizează LiberNT", IDC_UPDATE, 7, 80, 277, 10
+    LTEXT "Repararea sau actualizarea LiberNT. Această opțiune menține fișierele, configurațiile și programele existente. Opțiune validă doar dacă LiberNT e deja instalat în calculator.", IDC_UPDATETEXT, 19, 96, 279, 27, NOT WS_GROUP
 END
 
 IDD_UPDATEREPAIRPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Expert de instalare ReactOS"
+CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT       "Expertul de instalare poate actualiza una dintre instalările enumerate mai jos, sau, dacă o instalare ReactOS este deteriorată, să încerce să o repare.", IDC_STATIC, 6, 6, 303, 18
+    LTEXT       "Expertul de instalare poate actualiza una dintre instalările enumerate mai jos, sau, dacă o instalare LiberNT este deteriorată, să încerce să o repare.", IDC_STATIC, 6, 6, 303, 18
     CONTROL     "", IDC_NTOSLIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_BORDER | WS_TABSTOP, 6, 30, 303, 90
     PUSHBUTTON  "N&u actualiza", IDC_SKIPUPGRADE, 230, 128, 80, 14
     LTEXT       "Apăsați Înainte pentru a actualiza instalarea selectată, sau pentru a efectua o nouă instalare dacă aveți bifată opțiunea „Nu actualiza”.", IDC_STATIC, 7, 124, 222, 16
@@ -55,7 +55,7 @@ END
 
 IDD_DEVICEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Expert de instalare ReactOS"
+CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Computer:", IDC_STATIC, 20, 15, 80, 10
@@ -69,7 +69,7 @@ END
 
 IDD_DRIVEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Expert de instalare ReactOS"
+CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_PARTITION, "SysTreeList32", WS_BORDER | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL, 7, 7, 303, 112
@@ -117,7 +117,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSM
 CAPTION "Opțiuni de instalare complexă"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Alegeți &directorul unde vreți să instalați ReactOS:", IDC_STATIC, 7, 9, 291, 10
+    LTEXT "Alegeți &directorul unde vreți să instalați LiberNT:", IDC_STATIC, 7, 9, 291, 10
     EDITTEXT IDC_PATH, 7, 23, 291, 13
     GROUPBOX "Bootloader", IDC_STATIC, 7, 45, 291, 60
     LTEXT "Selectați locația unde ar trebui\ninstalat bootloader-ul FreeLoader.\n\nÎn mod implicit, este instalat pe partiția de sistem a discului de pornire (și fie în Master, fie în Volume Boot Record pentru computerele bazate pe BIOS).", IDC_STATIC, 13, 57, 279, 44
@@ -128,7 +128,7 @@ END
 
 IDD_SUMMARYPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Expert de instalare ReactOS"
+CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Tip de instalare:", IDC_STATIC, 18, 5, 74, 11
@@ -154,7 +154,7 @@ END
 
 IDD_PROCESSPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Expert de instalare ReactOS"
+CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Fișiere în copiere…", IDC_ACTIVITY, 20, 50, 277, 10
@@ -164,11 +164,11 @@ END
 
 IDD_FINISHPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Expert de instalare ReactOS"
+CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Restarting your Computer", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "The first ReactOS installation step has completed successfully.", IDC_STATIC, 115, 40, 195, 24
+    LTEXT "The first LiberNT installation step has completed successfully.", IDC_STATIC, 115, 40, 195, 24
     // The following text can be replaced by IDS_FINISH_NO_REBOOT at runtime;
     // please ensure it can hold in the text control!
     LTEXT "Setup will now restart your computer to continue with the second installation step.\n\nYour computer will automatically restart in 15 seconds or when you click on Restart.", IDC_FINISHTEXT, 115, 78, 195, 56
@@ -177,11 +177,11 @@ END
 
 IDD_ABORTPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "ReactOS Setup"
+CAPTION "LiberNT Setup"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "The ReactOS Setup Wizard ended prematurely", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "The first ReactOS installation step prematurely ended because of an error or because you have canceled it.\n\nYou will be able to run the Setup Wizard at a later time to install or upgrade ReactOS.", IDC_STATIC, 115, 40, 195, 48
+    LTEXT "The LiberNT Setup Wizard ended prematurely", IDC_FINISHTITLE, 115, 8, 195, 24
+    LTEXT "The first LiberNT installation step prematurely ended because of an error or because you have canceled it.\n\nYou will be able to run the Setup Wizard at a later time to install or upgrade LiberNT.", IDC_STATIC, 115, 40, 195, 48
     // The following text can be replaced by IDS_ABORT_NO_REBOOT at runtime;
     // please ensure it can hold in the text control!
     LTEXT "Your computer will automatically restart in 15 seconds or when you click on Restart.", IDC_FINISHTEXT, 115, 110, 195, 24
@@ -192,11 +192,11 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_CAPTION "Expertul de instalare ReactOS"
+    IDS_CAPTION "Expertul de instalare LiberNT"
     IDS_TYPETITLE "Tipul de instalare"
-    IDS_TYPESUBTITLE "Puteți configura o nouă instalare ReactOS sau puteți actualiza/repara o instalare existentă."
-    IDS_UPDATETITLE "Actualizare sau reparare ReactOS"
-    IDS_UPDATESUBTITLE "Alegeți instalarea existentă ReactOS pe care doriți să o actualizați sau să reparați."
+    IDS_TYPESUBTITLE "Puteți configura o nouă instalare LiberNT sau puteți actualiza/repara o instalare existentă."
+    IDS_UPDATETITLE "Actualizare sau reparare LiberNT"
+    IDS_UPDATESUBTITLE "Alegeți instalarea existentă LiberNT pe care doriți să o actualizați sau să reparați."
     IDS_DEVICETITLE "Configurare a dispozitivelor de bază"
     IDS_DEVICESUBTITLE "Setați setările pentru afișaj și tastatură."
     IDS_DRIVETITLE "Configurați partiția de instalare și folderul de sistem"
@@ -205,7 +205,7 @@ BEGIN
     IDS_SUMMARYSUBTITLE "Listează proprietățile de instalare de verificat înainte de le a aplica dispozitivului de instalare."
     IDS_PROCESSTITLE "Se configurează partiția, se copiază fișierele și se configurează sistemul"
     IDS_PROCESSSUBTITLE "Crează sau formatează partiția, copiază fișierele, instalează și configurează bootloader-ul"
-    IDS_ABORTSETUP "ReactOS nu este isntalat complet în computer. Dacă părăsiți Instalatorul acum, va trebui să rulați din nou Instalatorul pentru a instala ReactOS. Chiar renunțați?"
+    IDS_ABORTSETUP "LiberNT nu este isntalat complet în computer. Dacă părăsiți Instalatorul acum, va trebui să rulați din nou Instalatorul pentru a instala LiberNT. Chiar renunțați?"
     IDS_ABORTSETUP2 "Renunțați la instalare?"
     IDS_NO_TXTSETUP_SIF "Nu s-a putut găsi 'txtsetup.sif'.\nInstalatorul nu poate continua."
     IDS_FINISH_NO_REBOOT "Setup needs to restart your computer to continue with the second installation step.\n\nClick on Restart to immediately restart your computer.\nClick on Postpone to quit the installer and restart your computer at a later time."
@@ -291,7 +291,7 @@ alfanumerice (a-z, A-Z, 0-9) și\n . \\ - _\n\
 Spațiile nu sunt permise."
 
     IDS_ERROR_DIRECTORY_NAME_TITLE "Calea instalării nu e validă"
-    IDS_ERROR_DIRECTORY_NAME "Calea de isntalare ReactOS trebuie să urmeze schema de denumire DOS 8.3 \
+    IDS_ERROR_DIRECTORY_NAME "Calea de isntalare LiberNT trebuie să urmeze schema de denumire DOS 8.3 \
 și să conțină numai litere, cifre, liniuțe și puncte. Spațiile nu sunt permise."
 
     IDS_ERROR_CREATE_PARTITION_TITLE "Crearea partiției"
@@ -303,9 +303,9 @@ Spațiile nu sunt permise."
 
     IDS_ERROR_WRITE_PTABLE "Instalatorul a eșuat să scrie tabelele de partiții."
 
-    IDS_ERROR_SYSTEM_PARTITION "Instalatorul ReactOS nu a putut găsi o partiție de sistem acceptată\n\
+    IDS_ERROR_SYSTEM_PARTITION "Instalatorul LiberNT nu a putut găsi o partiție de sistem acceptată\n\
 pe sistem sau nu a putut crea unul nou. Fără o astfel de partiție\n\
-programul de instalare nu poate instala ReactOS.\
+programul de instalare nu poate instala LiberNT.\
 \nApăsați OK pentru a reveni la lista de selecție a partițiilor."
 
     IDS_ERROR_FORMAT_UNRECOGNIZED_VOLUME "Volum necunoscut în timpul încercării de a formata partiția."

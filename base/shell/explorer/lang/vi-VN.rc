@@ -118,7 +118,7 @@ EXSTYLE WS_EX_CONTEXTHELP
 CAPTION "Tùy chỉnh thông báo"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT            "ReactOS hiển thị các biểu tượng cho các thông báo đang hoạt động hoặc khẩn cấp, và ẩn các biểu tượng không hoạt động. Bạn có thể thay đổi hành vi này cho các mục trong danh sách dưới đây.", IDC_STATIC, 6, 6, 220, 30
+    LTEXT            "LiberNT hiển thị các biểu tượng cho các thông báo đang hoạt động hoặc khẩn cấp, và ẩn các biểu tượng không hoạt động. Bạn có thể thay đổi hành vi này cho các mục trong danh sách dưới đây.", IDC_STATIC, 6, 6, 220, 30
     LTEXT            "Chọn một mục, sau đó chọn hành vi thông báo của nó:", IDC_STATIC, 6, 40, 220, 10
     CONTROL          "", IDC_NOTIFICATION_LIST, "SysListView32", WS_CLIPSIBLINGS | WS_BORDER | 0x00008005, 6, 50, 220, 128
     COMBOBOX         IDC_NOTIFICATION_BEHAVIOUR, 103, 178, 78, 200, CBS_DROPDOWNLIST | NOT WS_VISIBLE | WS_CLIPSIBLINGS

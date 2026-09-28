@@ -234,7 +234,7 @@ BEGIN
     IDS_DHCPACTIVE "启用 DHCP"
     IDS_AUTOMATIC "自动"
     IDS_NOITEMSEL "没有选择项目。先选择一个。"
-    IDS_TCPIP "ReactOS-TCP/IP"
+    IDS_TCPIP "LiberNT-TCP/IP"
     IDS_ADD "添加"
     IDS_MOD "确定"
     IDS_TCP_PORTS "TCP 端口"

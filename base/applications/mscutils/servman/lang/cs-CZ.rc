@@ -269,10 +269,10 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PROGRESS_INFO_START "ReactOS se pokouší spustit následující službu"
-    IDS_PROGRESS_INFO_STOP "ReactOS se pokouší zastavit následující službu"
-    IDS_PROGRESS_INFO_PAUSE "ReactOS se pokouší pozastavit následující službu"
-    IDS_PROGRESS_INFO_RESUME "ReactOS se pokouší pokračovat s následující službou"
+    IDS_PROGRESS_INFO_START "LiberNT se pokouší spustit následující službu"
+    IDS_PROGRESS_INFO_STOP "LiberNT se pokouší zastavit následující službu"
+    IDS_PROGRESS_INFO_PAUSE "LiberNT se pokouší pozastavit následující službu"
+    IDS_PROGRESS_INFO_RESUME "LiberNT se pokouší pokračovat s následující službou"
     IDS_CREATE_SUCCESS "Služba úspěšně vytvořena"
     IDS_DELETE_SUCCESS "Služba úspěšně odstraněna"
     IDS_CREATE_REQ "Položky označené hvězdičkou\njsou povinné"

@@ -27,7 +27,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_RENDERER_DEFAULT "系統預設值"
-    IDS_RENDERER_RSWR "ReactOS Software Implementation"
+    IDS_RENDERER_RSWR "LiberNT Software Implementation"
     IDS_CPLNAME "OpenGL 設定"
     IDS_CPLDESCRIPTION "設定 OpenGL 轉譯器。"
     IDS_DEBUG_SET "設定"

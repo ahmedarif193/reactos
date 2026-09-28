@@ -341,7 +341,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_REM_NOT_LIST
 Language=German
-ERROR_REM_NOT_LIST - ReactOS konnte den Netzwerkpfad nicht finden. Stellen Sie sicher, dass der Netzwerkpfad korrekt ist und der Zielcomputer nicht belegt oder aus ist. Wenn ReactOS den Netzwerkpfad immer noch nicht finden kann, kontaktieren Sie den Netzwerkadministrator.
+ERROR_REM_NOT_LIST - LiberNT konnte den Netzwerkpfad nicht finden. Stellen Sie sicher, dass der Netzwerkpfad korrekt ist und der Zielcomputer nicht belegt oder aus ist. Wenn LiberNT den Netzwerkpfad immer noch nicht finden kann, kontaktieren Sie den Netzwerkadministrator.
 .
 
 MessageId=52
@@ -1877,7 +1877,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_NET_OPEN_FAILED
 Language=German
-ERROR_NET_OPEN_FAILED - Die NtCreateFile-API schlug fehl. Dieser Fehler sollte nie einem Programm zurückgegeben werden, es ist ein Platzhalter für den ReactOS Lan Manager Redirector zur verwendung in dessen internen Fehlerbehandlungsroutinen.
+ERROR_NET_OPEN_FAILED - Die NtCreateFile-API schlug fehl. Dieser Fehler sollte nie einem Programm zurückgegeben werden, es ist ein Platzhalter für den LiberNT Lan Manager Redirector zur verwendung in dessen internen Fehlerbehandlungsroutinen.
 .
 
 MessageId=571
@@ -2077,7 +2077,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_LOST_WRITEBEHIND_DATA
 Language=German
-ERROR_LOST_WRITEBEHIND_DATA - ReactOS konnte nicht alle Daten für die Datei %hs speichern, die Daten gingen verloren. Dieser Fehler könnte von einer fehlerhaften Hardware oder einer getrennten Netzwerkverbindung kommen. Bitte versuchen Sie, die Datei woanders zu speichern.
+ERROR_LOST_WRITEBEHIND_DATA - LiberNT konnte nicht alle Daten für die Datei %hs speichern, die Daten gingen verloren. Dieser Fehler könnte von einer fehlerhaften Hardware oder einer getrennten Netzwerkverbindung kommen. Bitte versuchen Sie, die Datei woanders zu speichern.
 .
 
 MessageId=597
@@ -2285,7 +2285,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_EVALUATION_EXPIRATION
 Language=German
-ERROR_EVALUATION_EXPIRATION - ReactOS ist ein freies Open-Source-Betriebsystem und lizenziert under der GNU GPL.  Daher gibt es auch keine Evaluationszeit, die ablaufen könnte. Wenn Sie diesen Fehler sehen, dann lesen Sie vermutlich den Quellcode.
+ERROR_EVALUATION_EXPIRATION - LiberNT ist ein freies Open-Source-Betriebsystem und lizenziert under der GNU GPL.  Daher gibt es auch keine Evaluationszeit, die ablaufen könnte. Wenn Sie diesen Fehler sehen, dann lesen Sie vermutlich den Quellcode.
 .
 
 MessageId=623
@@ -2293,7 +2293,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_ILLEGAL_DLL_RELOCATION
 Language=German
-ERROR_ILLEGAL_DLL_RELOCATION - Die System-DLL %hs wurde im Speicher neu adressiert. Die Anwendung wird nicht korrekt funktionieren. Die Neuadressierung wurde durchgeführt, weil die DLL %hs einen Adressbereich belegte, der für ReactOS-System-DLLs reserviert ist. Der Entwickler sollte wegen Auslieferung einer neuen DLL kontaktiert werden.
+ERROR_ILLEGAL_DLL_RELOCATION - Die System-DLL %hs wurde im Speicher neu adressiert. Die Anwendung wird nicht korrekt funktionieren. Die Neuadressierung wurde durchgeführt, weil die DLL %hs einen Adressbereich belegte, der für LiberNT-System-DLLs reserviert ist. Der Entwickler sollte wegen Auslieferung einer neuen DLL kontaktiert werden.
 .
 
 MessageId=624
@@ -2389,7 +2389,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_COMMITMENT_MINIMUM
 Language=German
-ERROR_COMMITMENT_MINIMUM - Ihr System hat nur noch wenig virtuellen Speicher. ReactOS vergrößert ihre Pagingdatei. Während dieses Vorgangs könnten Speicheranfragen von Anwendungen abgelehnt werden. Für weitere Informationen siehe Hilfe.
+ERROR_COMMITMENT_MINIMUM - Ihr System hat nur noch wenig virtuellen Speicher. LiberNT vergrößert ihre Pagingdatei. Während dieses Vorgangs könnten Speicheranfragen von Anwendungen abgelehnt werden. Für weitere Informationen siehe Hilfe.
 .
 
 MessageId=636
@@ -2445,7 +2445,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_DS_VERSION_CHECK_FAILURE
 Language=German
-ERROR_DS_VERSION_CHECK_FAILURE - This version of ReactOS is not compatible with the behavior version of directory forest, domain or domain controller.
+ERROR_DS_VERSION_CHECK_FAILURE - This version of LiberNT is not compatible with the behavior version of directory forest, domain or domain controller.
 .
 
 MessageId=644
@@ -2661,7 +2661,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_GUID_SUBSTITUTION_MADE
 Language=German
-ERROR_GUID_SUBSTITUTION_MADE - During the translation of a global identifier (GUID) to a ReactOS security ID (SID), no administratively-defined GUID prefix was found. A substitute prefix was used, which will not compromise system security. However, this may provide a more restrictive access than intended.
+ERROR_GUID_SUBSTITUTION_MADE - During the translation of a global identifier (GUID) to a LiberNT security ID (SID), no administratively-defined GUID prefix was found. A substitute prefix was used, which will not compromise system security. However, this may provide a more restrictive access than intended.
 .
 
 MessageId=681
@@ -3013,7 +3013,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_FIRMWARE_UPDATED
 Language=German
-ERROR_FIRMWARE_UPDATED - ReactOS hat festgestellt, dass die Systemfirmware (BIOS) aktualisiert wurde [voriges Firmwaredatum = %2, aktuelles Firmwaredatum = %3].
+ERROR_FIRMWARE_UPDATED - LiberNT hat festgestellt, dass die Systemfirmware (BIOS) aktualisiert wurde [voriges Firmwaredatum = %2, aktuelles Firmwaredatum = %3].
 .
 
 MessageId=729
@@ -4125,7 +4125,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_OLD_WIN_VERSION
 Language=German
-ERROR_OLD_WIN_VERSION - The specified program requires a newer version of ReactOS.
+ERROR_OLD_WIN_VERSION - The specified program requires a newer version of LiberNT.
 .
 
 MessageId=1151
@@ -4853,7 +4853,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_ACCESS_DISABLED_BY_POLICY
 Language=German
-ERROR_ACCESS_DISABLED_BY_POLICY - ReactOS cannot open this program because it has been prevented by a software restriction policy. For more information, open Event Viewer or contact your system administrator.
+ERROR_ACCESS_DISABLED_BY_POLICY - LiberNT cannot open this program because it has been prevented by a software restriction policy. For more information, open Event Viewer or contact your system administrator.
 .
 
 MessageId=1261
@@ -4981,7 +4981,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_ACCESS_DISABLED_WEBBLADE
 Language=German
-ERROR_ACCESS_DISABLED_WEBBLADE - ReactOS cannot open this program since it has been disabled.
+ERROR_ACCESS_DISABLED_WEBBLADE - LiberNT cannot open this program since it has been disabled.
 .
 
 MessageId=1278
@@ -4989,7 +4989,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_ACCESS_DISABLED_WEBBLADE_TAMPER
 Language=German
-ERROR_ACCESS_DISABLED_WEBBLADE_TAMPER - ReactOS cannot open this program because the license enforcement system has been tampered with or become corrupted.
+ERROR_ACCESS_DISABLED_WEBBLADE_TAMPER - LiberNT cannot open this program because the license enforcement system has been tampered with or become corrupted.
 .
 
 MessageId=1279
@@ -6477,7 +6477,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_SERVICE_FAILURE
 Language=German
-ERROR_INSTALL_SERVICE_FAILURE - The ReactOS Installer service could not be accessed. This can occur if you are running ReactOS in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
+ERROR_INSTALL_SERVICE_FAILURE - The ReactOS Installer service could not be accessed. This can occur if you are running LiberNT in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
 .
 
 MessageId=1602
@@ -6573,7 +6573,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_PACKAGE_VERSION
 Language=German
-ERROR_INSTALL_PACKAGE_VERSION - This installation package cannot be installed by the ReactOS Installer service. You must install a ReactOS service pack that contains a newer version of the ReactOS Installer service.
+ERROR_INSTALL_PACKAGE_VERSION - This installation package cannot be installed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
 .
 
 MessageId=1614
@@ -6765,7 +6765,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_PATCH_PACKAGE_UNSUPPORTED
 Language=German
-ERROR_PATCH_PACKAGE_UNSUPPORTED - This patch package cannot be processed by the ReactOS Installer service. You must install a ReactOS service pack that contains a newer version of the ReactOS Installer service.
+ERROR_PATCH_PACKAGE_UNSUPPORTED - This patch package cannot be processed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
 .
 
 MessageId=1638
@@ -7789,7 +7789,7 @@ Severity=Success
 Facility=System
 SymbolicName=RPC_S_NOT_RPC_ERROR
 Language=German
-RPC_S_NOT_RPC_ERROR - The error specified is not a valid ReactOS RPC error code.
+RPC_S_NOT_RPC_ERROR - The error specified is not a valid LiberNT RPC error code.
 .
 
 MessageId=1824
@@ -10045,7 +10045,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_CLUSTER_WRONG_OS_VERSION
 Language=German
-ERROR_CLUSTER_WRONG_OS_VERSION - This computer cannot be made a member of a cluster because it does not have the correct version of ReactOS installed.
+ERROR_CLUSTER_WRONG_OS_VERSION - This computer cannot be made a member of a cluster because it does not have the correct version of LiberNT installed.
 .
 
 MessageId=5900
@@ -10085,7 +10085,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_CLUSTER_OLD_VERSION
 Language=German
-ERROR_CLUSTER_OLD_VERSION - One or more nodes in the cluster are running a version of ReactOS that does not support this operation.
+ERROR_CLUSTER_OLD_VERSION - One or more nodes in the cluster are running a version of LiberNT that does not support this operation.
 .
 
 MessageId=5905
@@ -14841,7 +14841,7 @@ Severity=Success
 Facility=System
 SymbolicName=WSAEPROCLIM
 Language=German
-WSAEPROCLIM - A ReactOS Sockets implementation may have a limit on the number of applications that may use it simultaneously.
+WSAEPROCLIM - A LiberNT Sockets implementation may have a limit on the number of applications that may use it simultaneously.
 .
 
 MessageId=10068
@@ -14889,7 +14889,7 @@ Severity=Success
 Facility=System
 SymbolicName=WSAVERNOTSUPPORTED
 Language=German
-WSAVERNOTSUPPORTED - The ReactOS Sockets version requested is not supported.
+WSAVERNOTSUPPORTED - The LiberNT Sockets version requested is not supported.
 .
 
 MessageId=10093

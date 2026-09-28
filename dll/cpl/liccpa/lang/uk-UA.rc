@@ -31,5 +31,5 @@ STRINGTABLE
 BEGIN
     IDS_CPLNAME_1 "Менеджер ліцензій"
     IDS_CPLDESCRIPTION_1 "Менеджер ліцензій"
-    IDS_REACTOS "ReactOS - Вільне ПЗ"
+    IDS_REACTOS "LiberNT - Вільне ПЗ"
 END

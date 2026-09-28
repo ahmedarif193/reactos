@@ -233,7 +233,7 @@ BEGIN
     IDS_DHCPACTIVE "DHCP Etkin"
     IDS_AUTOMATIC "Otomatik"
     IDS_NOITEMSEL "Bir öge seçmediniz. İlk önce birini seçiniz."
-    IDS_TCPIP "ReactOS TCP/IP"
+    IDS_TCPIP "LiberNT TCP/IP"
     IDS_ADD "Ekle"
     IDS_MOD "Tamam"
     IDS_TCP_PORTS "TCP Bağlantı Noktaları"

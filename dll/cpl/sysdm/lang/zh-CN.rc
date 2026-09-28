@@ -77,7 +77,7 @@ CAPTION "系统设置"
 FONT 9, "宋体", 0, 0, 0x1
 BEGIN
     GROUPBOX "版本信息", IDC_STATIC, 6, 3, 210, 73
-    LTEXT "ReactOS 作为服务器操作系统被构建，并如此被报告。选中此框可更改（仅对于应用程序有效）。", IDC_STATIC, 15, 15, 183, 41
+    LTEXT "LiberNT 作为服务器操作系统被构建，并如此被报告。选中此框可更改（仅对于应用程序有效）。", IDC_STATIC, 15, 15, 183, 41
     CONTROL "报告为工作站(&R)", IDC_REPORTASWORKSTATION, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 57, 190, 10
     PUSHBUTTON "确定", IDOK, 166, 83, 50, 14
 END
@@ -98,7 +98,7 @@ BEGIN
     PUSHBUTTON "重命名(&R)", IDC_HRDPROFRENAME, 118, 106, 50, 14, WS_DISABLED
     PUSHBUTTON "删除(&D)", IDC_HRDPROFDEL, 173, 106, 50, 14, WS_DISABLED
     GROUPBOX "硬件配置文件选择", IDC_STATIC, 7, 130, 240, 75
-    LTEXT "启动 ReactOS 时：", IDC_STATIC, 14, 142, 210, 8
+    LTEXT "启动 LiberNT 时：", IDC_STATIC, 14, 142, 210, 8
     AUTORADIOBUTTON "等待用户选定硬件配置文件(&W)", IDC_HRDPROFWAIT, 14, 158, 133, 8, WS_GROUP
     AUTORADIOBUTTON "秒内还没有选定配置文件，就请从列出的文件中选择第一个(&S)", IDC_HRDPROFSELECT, 14, 173, 190, 8
     LTEXT "编辑", IDC_STATIC, 65, 187, 35, 8
@@ -337,7 +337,7 @@ CAPTION "Visual Effects"
 FONT 8, "MS Shell Dlg"
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 BEGIN
-   LTEXT "Select the settings you want to use for the appearance and performance of ReactOS on this computer.", IDC_STATIC, 7, 6, 208, 18
+   LTEXT "Select the settings you want to use for the appearance and performance of LiberNT on this computer.", IDC_STATIC, 7, 6, 208, 18
    CONTROL "", IDC_TREE, "SysTreeView32", TVS_LINESATROOT | TVS_DISABLEDRAGDROP | WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, 7, 32, 213, 168
 END
 
@@ -351,7 +351,7 @@ BEGIN
    AUTORADIOBUTTON "&Programs", IDC_CPUCLIENT, 14, 36, 75, 12
    AUTORADIOBUTTON "Background &services", IDC_CPUSERVER, 96, 36, 85, 12
    GROUPBOX "Virtual memory", IDC_STATIC, 7, 60, 213, 57
-   LTEXT "A paging file is an area on the hard disk that ReactOS uses as if it were RAM.", IDC_STATIC, 14, 74, 199, 16
+   LTEXT "A paging file is an area on the hard disk that LiberNT uses as if it were RAM.", IDC_STATIC, 14, 74, 199, 16
    PUSHBUTTON "&Change...", IDC_CHANGESWAP, 163, 97, 50, 14
 END
 

@@ -11,29 +11,29 @@ LANGUAGE LANG_UKRAINIAN, SUBLANG_DEFAULT
 
 IDD_WELCOMEPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Ласкаво просимо до майстра встановлення ReactOS", IDC_WELCOMETITLE, 115, 8, 195, 24
-    LTEXT "Цей майстер встановлює ReactOS на Ваш комп'ютер.\nЙому потрібно зібрати деякі відомості про Вас і Ваш комп'ютер щоб встановити ReactOS належним чином.", IDC_STATIC, 115, 40, 195, 50
+    LTEXT "Ласкаво просимо до майстра встановлення LiberNT", IDC_WELCOMETITLE, 115, 8, 195, 24
+    LTEXT "Цей майстер встановлює LiberNT на Ваш комп'ютер.\nЙому потрібно зібрати деякі відомості про Вас і Ваш комп'ютер щоб встановити LiberNT належним чином.", IDC_STATIC, 115, 40, 195, 50
     LTEXT "Натисніть ""Далі"", щоб продовжити встановлення.", IDC_STATIC, 115, 169, 195, 17
 END
 
 IDD_ACKPAGE DIALOGEX 0, 0, 317, 145
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Розробники ReactOS хотіли б подякувати наступним Open Source проектам, що (частково) використовувалися при створенні ReactOS:", IDC_STATIC, 15, 7, 286, 19
+    LTEXT "Розробники LiberNT хотіли б подякувати наступним Open Source проектам, що (частково) використовувалися при створенні LiberNT:", IDC_STATIC, 15, 7, 286, 19
     LISTBOX IDC_PROJECTS, 15, 30, 286, 75, LBS_NOSEL | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_VSCROLL
-    LTEXT "ReactOS ліцензується за GPL, так що якщо Ви хочете повторно використовувати або поширювати його (частини), Ви повинні поважати GPL.", IDC_STATIC, 15, 110, 224, 24
+    LTEXT "LiberNT ліцензується за GPL, так що якщо Ви хочете повторно використовувати або поширювати його (частини), Ви повинні поважати GPL.", IDC_STATIC, 15, 110, 224, 24
     PUSHBUTTON "&Перегляд GPL...", IDC_VIEWGPL, 242, 110, 60, 19
     LTEXT "Натисніть ""Далі"", щоб продовжити встановлення.", IDC_STATIC, 15, 136, 195, 17
 END
 
 IDD_INSTALLATION DIALOGEX 0, 0, 317, 143
 STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUPWINDOW | WS_CAPTION | WS_VISIBLE
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", IDC_INSTALLATION_ICON, 5, 5, 20, 20
@@ -47,7 +47,7 @@ END
 
 IDD_OWNERPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON2, IDC_STATIC, 21, 7, 20, 20
@@ -60,7 +60,7 @@ END
 
 IDD_COMPUTERPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON1, IDC_STATIC, 21, 7, 20, 20
@@ -78,7 +78,7 @@ END
 
 IDD_LOCALEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON4, IDC_STATIC, 21, 7, 20, 20
@@ -95,7 +95,7 @@ END
 
 IDD_DATETIMEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_ICON3, IDC_STATIC, 21, 10, 20, 20
@@ -109,7 +109,7 @@ END
 
 IDD_THEMEPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_THEMEPICKER, "SysListView32", LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_TABSTOP, 18, 8, 288, 130
@@ -117,7 +117,7 @@ END
 
 IDD_PROCESSPAGE DIALOGEX 0, 0, 317, 143
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "Реєстрація компонентів", IDC_TASKTEXT1, 65, 27, 232, 8
@@ -136,11 +136,11 @@ END
 
 IDD_FINISHPAGE DIALOGEX 0, 0, 317, 193
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Встановлення ReactOS"
+CAPTION "Встановлення LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Завершення встановлення ReactOS", IDC_FINISHTITLE, 115, 8, 195, 24
-    LTEXT "Ви успішно завершили встановлення ReactOS.\n\nЯкщо в дисковод вставлений компакт-диск, вийміть його. Для перезавантаження комп'ютера натистніть ""Завершити"".", IDC_STATIC, 115, 40, 195, 48
+    LTEXT "Завершення встановлення LiberNT", IDC_FINISHTITLE, 115, 8, 195, 24
+    LTEXT "Ви успішно завершили встановлення LiberNT.\n\nЯкщо в дисковод вставлений компакт-диск, вийміть його. Для перезавантаження комп'ютера натистніть ""Завершити"".", IDC_STATIC, 115, 40, 195, 48
     LTEXT "Your computer will automatically restart in 15 seconds.", IDC_STATIC, 115, 110, 195, 24
     CONTROL "", IDC_RESTART_PROGRESS, "msctls_progress32", PBS_SMOOTH | WS_CHILD | WS_VISIBLE | WS_BORDER, 115, 135, 188, 12
 END
@@ -186,13 +186,13 @@ END
 STRINGTABLE
 BEGIN
     IDS_ACKTITLE "Подяки"
-    IDS_ACKSUBTITLE "Інформація про розробників ReactOS і лізензійна угода"
+    IDS_ACKSUBTITLE "Інформація про розробників LiberNT і лізензійна угода"
     IDS_OWNERTITLE "Персональні дані"
-    IDS_OWNERSUBTITLE "Встановлення інформації про користувачів ReactOS."
+    IDS_OWNERSUBTITLE "Встановлення інформації про користувачів LiberNT."
     IDS_COMPUTERTITLE "Ім'я комп'ютера та пароль адміністратора"
     IDS_COMPUTERSUBTITLE "Ви маєте вказати ім'я та пароль адміністратора Вашого комп'ютера."
     IDS_LOCALETITLE "Регіональні налаштування"
-    IDS_LOCALESUBTITLE "Ви можете налаштувати ReactOS для різних регіонів і мов."
+    IDS_LOCALESUBTITLE "Ви можете налаштувати LiberNT для різних регіонів і мов."
     IDS_LOCALETEXT "The Standards and formats are set to %s, and the location is set to %s."
     IDS_LAYOUTTEXT "Your default text input language and method is: %s keyboard layout"
     IDS_DATETIMETITLE "Дата та час"
@@ -205,7 +205,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_REACTOS_SETUP "Встановлення ReactOS"
+    IDS_REACTOS_SETUP "Встановлення LiberNT"
     IDS_UNKNOWN_ERROR "Невідома помилка"
     IDS_LOADLIBRARY_FAILED "Помилка LoadLibrary: "
     IDS_GETPROCADDR_FAILED "Помилка GetProcAddr: "
@@ -265,11 +265,11 @@ STRINGTABLE
 BEGIN
     IDS_INSTALLATIONTITLE "Тип продукту"
     IDS_INSTALLATIONSUBTITLE "Ви можете вибрати тип продукту. Це вплине на поведінку системи."
-    IDS_INSTALLATIONSERVERNAME "Сервер ReactOS"
+    IDS_INSTALLATIONSERVERNAME "Сервер LiberNT"
     IDS_INSTALLATIONSERVERINFO "Система буде розпізнаватися як сервер. Особисті папки ""Мої зображення"", ""Мої відео"" та ""Моя музика"" не будуть залежати від папки ""Мої документи""."
-    IDS_INSTALLATIONWORKSTATIONNAME "Робоча станція ReactOS"
+    IDS_INSTALLATIONWORKSTATIONNAME "Робоча станція LiberNT"
     IDS_INSTALLATIONWORKSTATIONINFO "Система буде розпізнаватися як робоча станція. Особисті папки ""Мої зображення"", ""Мої відео"" та ""Моя музика"" будуть в папці ""Мої документи""."
-    IDS_INSTALLATIONSERVERCORENAME "ReactOS Server Core"
+    IDS_INSTALLATIONSERVERCORENAME "LiberNT Server Core"
     IDS_INSTALLATIONSERVERCOREINFO "The system will be recognized as a server. The graphical shell is not installed, and the system starts in a command‑line environment to reduce resource usage and attack surface."
     /* Reserved for future use
      * IDS_INSTALLATIONNANOSERVERNAME "ReactOS Nano Server"
