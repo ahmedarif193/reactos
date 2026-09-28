@@ -77,6 +77,11 @@ AddStringToHash(struct StringHashTable *StringTable,
                 ULONG Offset)
 {
     struct StringEntry *entry = calloc(1, sizeof(struct StringEntry));
+    if (!entry)
+    {
+        fprintf(stderr, "Out of memory while adding a symbol string\n");
+        exit(1);
+    }
     entry->Offset = Offset;
     entry->Next = StringTable->Table[hash];
     StringTable->Table[hash] = entry;
@@ -91,6 +96,11 @@ StringHashTableInit(struct StringHashTable *StringTable,
     char *End = *StringsBase + StringsLength;
     StringTable->TableSize = 1024;
     StringTable->Table = calloc(1024, sizeof(struct StringEntry *));
+    if (!StringTable->Table)
+    {
+        fprintf(stderr, "Out of memory while allocating the symbol string table\n");
+        exit(1);
+    }
     StringTable->StringsBase = StringsBase;
     while (Start < End)
     {
@@ -377,17 +387,20 @@ ConvertStabs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
                 if (First || Address != Current->Address)
                 {
                     if (!First)
+                    {
                         memset(++Current, 0, sizeof(*Current));
+                        Current->FileOffset = Current[-1].FileOffset;
+                    }
                     else
                         First = 0;
                     Current->Address = Address;
-                    Current->FileOffset = Current[-1].FileOffset;
                 }
                 Name = (char *)StabStringsBase + StabEntry[i].n_strx;
                 NameLen = strcspn(Name, ":");
                 if (sizeof(FuncName) <= NameLen)
                 {
                     free(*SymbolsBase);
+                    StringHashTableFree(&StringHash);
                     fprintf(stderr, "Function name too long\n");
                     return 1;
                 }
@@ -490,6 +503,7 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
                 if (PEFileHeader->NumberOfSections < CoffEntry[i].e_scnum)
                 {
                     free(*SymbolsBase);
+                    StringHashTableFree(&StringHash);
                     fprintf(stderr,
                             "Invalid section number %d in COFF symbols (only %d sections present)\n",
                             CoffEntry[i].e_scnum,
@@ -623,10 +637,16 @@ DbgHelpAddLineEntry(struct DbgHelpStringTab *tab)
 static int
 DbgHelpAddStringToTable(struct DbgHelpStringTab *tab, char *name)
 {
-    unsigned int bucket = ComputeDJBHash(name) % tab->Length;
-    char **tabEnt = tab->Table[bucket];
+    unsigned int bucket;
+    char **tabEnt;
     int i;
     char **newBucket;
+
+    if (!name)
+        return -1;
+
+    bucket = ComputeDJBHash(name) % tab->Length;
+    tabEnt = tab->Table[bucket];
 
     if (tabEnt)
     {
@@ -641,16 +661,16 @@ DbgHelpAddStringToTable(struct DbgHelpStringTab *tab, char *name)
         i = 0;
 
     /* At this point, we need to insert */
-    tab->Bytes += strlen(name) + 1;
-
     newBucket = realloc(tab->Table[bucket], (i+2) * sizeof(char *));
 
     if (!newBucket)
     {
         fprintf(stderr, "realloc failed!\n");
+        free(name);
         return -1;
     }
 
+    tab->Bytes += strlen(name) + 1;
     tab->Table[bucket] = newBucket;
     tab->Table[bucket][i+1] = 0;
     tab->Table[bucket][i] = name;
@@ -715,6 +735,11 @@ DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
                     char *synthname = malloc(strlen(tab->SourcePath) +
                                              strlen(LineInfo->FileName + i + 1)
                                              + 2);
+                    if (!synthname)
+                    {
+                        free(pSymbol);
+                        return FALSE;
+                    }
                     strcpy(synthname, tab->SourcePath);
                     strcat(synthname, "/");
                     strcat(synthname, LineInfo->FileName + i + 1);
@@ -730,6 +755,11 @@ DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
 
             i++; /* Be in the string or past the next slash */
             tab->PathChop = malloc(i + 1);
+            if (!tab->PathChop)
+            {
+                free(pSymbol);
+                return FALSE;
+            }
             memcpy(tab->PathChop, LineInfo->FileName, i);
             tab->PathChop[i] = 0;
         }
@@ -803,11 +833,19 @@ ConvertDbgHelp(void *process, DWORD64 module_base, char *SourcePath,
     strtab.Bytes = 1;
     strtab.Length = 1024;
     strtab.Table = calloc(1024, sizeof(const char **));
+    if (!strtab.Table)
+        return 1;
     strtab.Table[0] = calloc(2, sizeof(const char *));
+    if (!strtab.Table[0])
+        goto Failure;
     strtab.Table[0][0] = strdup(""); // The zero string
+    if (!strtab.Table[0][0])
+        goto Failure;
     strtab.CurLineEntries = 0;
     strtab.LineEntries = 16384;
     strtab.LineEntryData = calloc(strtab.LineEntries, sizeof(struct DbgHelpLineEntry));
+    if (!strtab.LineEntryData)
+        goto Failure;
     strtab.PathChop = NULL;
     strtab.SourcePath = SourcePath ? SourcePath : "";
 
@@ -817,6 +855,17 @@ ConvertDbgHelp(void *process, DWORD64 module_base, char *SourcePath,
     *StringsLength = strtab.Bytes;
     *StringsCapacity = strtab.Bytes;
     strings = strings_copy = (*StringsBase = malloc(strtab.Bytes));
+    if (!strings)
+        goto Failure;
+
+    *SymbolsBase = calloc(strtab.CurLineEntries, sizeof(ROSSYM_ENTRY));
+    if (strtab.CurLineEntries && !*SymbolsBase)
+    {
+        free(*StringsBase);
+        *StringsBase = NULL;
+        goto Failure;
+    }
+    *SymbolsCount = strtab.CurLineEntries;
 
     /* Copy in strings */
     for (i = 0; i < strtab.Length; i++)
@@ -833,9 +882,6 @@ ConvertDbgHelp(void *process, DWORD64 module_base, char *SourcePath,
     }
 
     assert(strings_copy == strings + strtab.Bytes);
-
-    *SymbolsBase = calloc(strtab.CurLineEntries, sizeof(ROSSYM_ENTRY));
-    *SymbolsCount = strtab.CurLineEntries;
 
     /* Copy symbols into rossym entries */
     for (i = 0; i < strtab.CurLineEntries; i++)
@@ -864,6 +910,21 @@ ConvertDbgHelp(void *process, DWORD64 module_base, char *SourcePath,
     qsort(*SymbolsBase, *SymbolsCount, sizeof(ROSSYM_ENTRY), (int (*)(const void *, const void *))CompareSymEntry);
 
     return 0;
+
+Failure:
+    for (i = 0; i < strtab.Length; i++)
+    {
+        if (strtab.Table[i])
+        {
+            for (j = 0; strtab.Table[i][j]; j++)
+                free(strtab.Table[i][j]);
+            free(strtab.Table[i]);
+        }
+    }
+    free(strtab.Table);
+    free(strtab.LineEntryData);
+    free(strtab.PathChop);
+    return 1;
 }
 
 static int
@@ -1070,6 +1131,8 @@ CreateOutputFile(FILE *OutFile, void *InData,
 {
     ULONG StartOfRawData;
     unsigned Section;
+    unsigned OutputSections = (RosSymLength != 0);
+    size_t HeaderSize;
     void *OutHeader, *ProcessedRelocs, *PaddedRosSym, *Data;
     unsigned char *PaddedStringTable;
     PIMAGE_DOS_HEADER OutDosHeader;
@@ -1099,13 +1162,25 @@ CreateOutputFile(FILE *OutFile, void *InData,
             StringTableLength = atoi((const char *)InSectionHeaders[Section].Name + 1) +
                                 strlen((const char *)SectionName) + 1;
         }
-        if ((StartOfRawData == 0 || InSectionHeaders[Section].PointerToRawData < StartOfRawData)
-            && InSectionHeaders[Section].PointerToRawData != 0
-            && (strncmp((char *) SectionName, ".stab", 5)) != 0
+        if ((strncmp((char *) SectionName, ".stab", 5)) != 0
             && (strncmp((char *) SectionName, ".debug_", 7)) != 0)
         {
-            StartOfRawData = InSectionHeaders[Section].PointerToRawData;
+            OutputSections++;
+            if ((StartOfRawData == 0 || InSectionHeaders[Section].PointerToRawData < StartOfRawData)
+                && InSectionHeaders[Section].PointerToRawData != 0)
+            {
+                StartOfRawData = InSectionHeaders[Section].PointerToRawData;
+            }
         }
+    }
+    HeaderSize = (size_t)InDosHeader->e_lfanew + sizeof(ULONG) + sizeof(IMAGE_FILE_HEADER) +
+                 InFileHeader->SizeOfOptionalHeader + OutputSections * sizeof(IMAGE_SECTION_HEADER);
+    if (InDosHeader->e_lfanew < 0 ||
+        InFileHeader->SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER) ||
+        HeaderSize > StartOfRawData)
+    {
+        fprintf(stderr, "Insufficient space for output file headers\n");
+        return 1;
     }
     OutHeader = malloc(StartOfRawData);
     if (OutHeader == NULL)

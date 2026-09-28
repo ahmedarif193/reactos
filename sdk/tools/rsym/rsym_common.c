@@ -13,6 +13,11 @@ convert_path ( const char* origpath )
 	int i;
 
 	newpath = strdup(origpath);
+	if (!newpath)
+	{
+		fprintf(stderr, "Out of memory while converting path\n");
+		exit(1);
+	}
 
 	i = 0;
 	while (newpath[i] != 0)
