@@ -2,7 +2,7 @@
  * Setupapi install routines
  *
  * Copyright 2002 Alexandre Julliard for CodeWeavers
- *           2005-2006 Hervé Poussineau (hpoussin@reactos.org)
+ *           2005-2006 Hervï¿½ Poussineau (hpoussin@reactos.org)
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -657,6 +657,28 @@ done:
     return TRUE;
 }
 
+
+static HMODULE register_dlls_com_enter( HRESULT *hr )
+{
+    HMODULE ole32 = LoadLibraryW( L"ole32.dll" );
+    COINITIALIZE pCoInitialize;
+
+    *hr = E_FAIL;
+    if (ole32 && (pCoInitialize = (COINITIALIZE)GetProcAddress( ole32, "CoInitialize" )))
+        *hr = pCoInitialize( NULL );
+    return ole32;
+}
+
+static void register_dlls_com_leave( HMODULE ole32, HRESULT hr )
+{
+    COUNINITIALIZE pCoUninitialize;
+
+    if (!ole32)
+        return;
+    if (SUCCEEDED(hr) && (pCoUninitialize = (COUNINITIALIZE)GetProcAddress( ole32, "CoUninitialize" )))
+        pCoUninitialize();
+    FreeLibrary( ole32 );
+}
 
 /***********************************************************************
  *            register_dlls_callback
@@ -1395,6 +1417,9 @@ BOOL WINAPI SetupInstallFromInfSectionW( HWND owner, HINF hinf, PCWSTR section, 
     if (flags & SPINST_REGSVR)
     {
         struct register_dll_info info;
+        HMODULE ole32;
+        HRESULT hr;
+        BOOL registered;
 
         info.unregister = FALSE;
         if (flags & SPINST_REGISTERCALLBACKAWARE)
@@ -1404,7 +1429,10 @@ BOOL WINAPI SetupInstallFromInfSectionW( HWND owner, HINF hinf, PCWSTR section, 
         }
         else info.callback = NULL;
 
-        if (!iterate_section_fields( hinf, section, RegisterDlls, register_dlls_callback, &info ))
+        ole32 = register_dlls_com_enter( &hr );
+        registered = iterate_section_fields( hinf, section, RegisterDlls, register_dlls_callback, &info );
+        register_dlls_com_leave( ole32, hr );
+        if (!registered)
             return FALSE;
 
 #ifdef __WINESRC__
@@ -1415,6 +1443,9 @@ BOOL WINAPI SetupInstallFromInfSectionW( HWND owner, HINF hinf, PCWSTR section, 
     if (flags & SPINST_UNREGSVR)
     {
         struct register_dll_info info;
+        HMODULE ole32;
+        HRESULT hr;
+        BOOL registered;
 
         info.unregister = TRUE;
         if (flags & SPINST_REGISTERCALLBACKAWARE)
@@ -1424,7 +1455,10 @@ BOOL WINAPI SetupInstallFromInfSectionW( HWND owner, HINF hinf, PCWSTR section, 
         }
         else info.callback = NULL;
 
-        if (!iterate_section_fields( hinf, section, UnregisterDlls, register_dlls_callback, &info ))
+        ole32 = register_dlls_com_enter( &hr );
+        registered = iterate_section_fields( hinf, section, UnregisterDlls, register_dlls_callback, &info );
+        register_dlls_com_leave( ole32, hr );
+        if (!registered)
             return FALSE;
     }
     if (flags & SPINST_REGISTRY)
