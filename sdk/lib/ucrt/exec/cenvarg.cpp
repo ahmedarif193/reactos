@@ -292,6 +292,8 @@ static Character** __cdecl common_capture_argv(
     _In_ size_t                                     const   caller_array_count
     ) throw()
 {
+    _VALIDATE_RETURN_NOEXC(caller_array_count != 0, EINVAL, nullptr);
+
     Character** argv       = caller_array;
     size_t      argv_count = caller_array_count;
 
@@ -303,7 +305,7 @@ static Character** __cdecl common_capture_argv(
     {
         if (i >= argv_count)
         {
-            _VALIDATE_RETURN_NOEXC(SIZE_MAX / 2 > argv_count, ENOMEM, nullptr);
+            _VALIDATE_RETURN_NOEXC(SIZE_MAX / sizeof(Character*) / 2 > argv_count, ENOMEM, nullptr);
 
             // If we have run out of room in the caller-provided array, allocate
             // an array on the heap and copy the contents of the caller-provided
@@ -313,7 +315,8 @@ static Character** __cdecl common_capture_argv(
                 local_array = _calloc_crt_t(Character*, argv_count * 2);
                 _VALIDATE_RETURN_NOEXC(local_array.get() != nullptr, ENOMEM, nullptr);
 
-                _ERRCHECK(memcpy_s(local_array.get(), argv_count * 2, caller_array, caller_array_count));
+                _ERRCHECK(memcpy_s(local_array.get(), argv_count * 2 * sizeof(Character*),
+                    caller_array, caller_array_count * sizeof(Character*)));
 
                 argv = local_array.get();
             }

@@ -21,7 +21,6 @@ extern "C" size_t __cdecl mbrtoc32(char32_t* pc32, const char* s, size_t n, mbst
 
 size_t __cdecl __crt_mbstring::__mbrtoc32_utf8(char32_t* pc32, const char* s, size_t n, mbstate_t* ps, __crt_cached_ptd_host& ptd)
 {
-    const char* begin = s;
     static mbstate_t internal_pst{};
     if (ps == nullptr)
     {
@@ -34,6 +33,8 @@ size_t __cdecl __crt_mbstring::__mbrtoc32_utf8(char32_t* pc32, const char* s, si
         n = 1;
         pc32 = nullptr;
     }
+
+    const char* begin = s;
 
     if (n == 0)
     {
