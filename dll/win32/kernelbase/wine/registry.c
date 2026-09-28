@@ -444,7 +444,11 @@ static NTSTATUS create_key( HKEY *retkey, HKEY root, UNICODE_STRING name, ULONG 
         {
             status = create_subkey( &subkey, subkey_root, &name, options, access, class, dispos );
             if (subkey_root && subkey_root != root) NtClose( subkey_root );
+#ifdef __REACTOS__
+            if (!status) subkey_root = subkey;
+#else
             subkey_root = subkey;
+#endif
         }
     }
 
@@ -3840,6 +3844,9 @@ LONG WINAPI SHRegOpenUSKeyW(const WCHAR *path, REGSAM access_mask, HUSKEY relati
 
     /* Create internal HUSKEY */
     key = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*key));
+#ifdef __REACTOS__
+    if (!key) return ERROR_NOT_ENOUGH_MEMORY;
+#endif
     lstrcpynW(key->path, path, ARRAY_SIZE(key->path));
 
     if (relative_key)
@@ -4182,7 +4189,11 @@ LONG WINAPI SHRegGetUSValueW(const WCHAR *subkey, const WCHAR *value, DWORD *typ
 BOOL WINAPI SHRegGetBoolUSValueA(const char *subkey, const char *value, BOOL ignore_hkcu, BOOL default_value)
 {
     BOOL ret = default_value;
+#ifdef __REACTOS__
+    DWORD type, datalen, number;
+#else
     DWORD type, datalen;
+#endif
     char data[10];
 
     TRACE("%s, %s, %d\n", debugstr_a(subkey), debugstr_a(value), ignore_hkcu);
@@ -4193,14 +4204,24 @@ BOOL WINAPI SHRegGetBoolUSValueA(const char *subkey, const char *value, BOOL ign
         switch (type)
         {
             case REG_SZ:
+#ifdef __REACTOS__
+                data[datalen] = '\0';
+#else
                 data[9] = '\0';
+#endif
                 if (!lstrcmpiA(data, "YES") || !lstrcmpiA(data, "TRUE"))
                     ret = TRUE;
                 else if (!lstrcmpiA(data, "NO") || !lstrcmpiA(data, "FALSE"))
                     ret = FALSE;
                 break;
             case REG_DWORD:
+#ifdef __REACTOS__
+                if (datalen != sizeof(number)) break;
+                memcpy(&number, data, sizeof(number));
+                ret = number != 0;
+#else
                 ret = *(DWORD *)data != 0;
+#endif
                 break;
             case REG_BINARY:
                 if (datalen == 1)
@@ -4223,7 +4244,11 @@ BOOL WINAPI SHRegGetBoolUSValueA(const char *subkey, const char *value, BOOL ign
 BOOL WINAPI SHRegGetBoolUSValueW(const WCHAR *subkey, const WCHAR *value, BOOL ignore_hkcu, BOOL default_value)
 {
     BOOL ret = default_value;
+#ifdef __REACTOS__
+    DWORD type, datalen, number;
+#else
     DWORD type, datalen;
+#endif
     WCHAR data[10];
 
     TRACE("%s, %s, %d\n", debugstr_w(subkey), debugstr_w(value), ignore_hkcu);
@@ -4234,14 +4259,25 @@ BOOL WINAPI SHRegGetBoolUSValueW(const WCHAR *subkey, const WCHAR *value, BOOL i
         switch (type)
         {
             case REG_SZ:
+#ifdef __REACTOS__
+                if (datalen % sizeof(WCHAR)) break;
+                data[datalen / sizeof(WCHAR)] = '\0';
+#else
                 data[9] = '\0';
+#endif
                 if (!lstrcmpiW(data, L"yes") || !lstrcmpiW(data, L"true"))
                     ret = TRUE;
                 else if (!lstrcmpiW(data, L"no") || !lstrcmpiW(data, L"false"))
                     ret = FALSE;
                 break;
             case REG_DWORD:
+#ifdef __REACTOS__
+                if (datalen != sizeof(number)) break;
+                memcpy(&number, data, sizeof(number));
+                ret = number != 0;
+#else
                 ret = *(DWORD *)data != 0;
+#endif
                 break;
             case REG_BINARY:
                 if (datalen == 1)
