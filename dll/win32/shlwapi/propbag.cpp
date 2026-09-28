@@ -645,7 +645,8 @@ SHGetIniStringW(
     if (pszWideBuff.IsEmpty()) // It's empty or not found
     {
         // Try the normal section name
-        return GetPrivateProfileStringW(appName, keyName, NULL, out, outLen, filename);
+        GetPrivateProfileStringW(appName, keyName, NULL, out, outLen, filename);
+        return lstrlenW(out);
     }
 
     // Okay, now ".W" version is valid. Its value is a UTF-7 string in UTF-16

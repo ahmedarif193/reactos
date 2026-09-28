@@ -812,6 +812,24 @@ LONG WINAPI SHSetWindowBits(HWND hwnd, INT offset, UINT mask, UINT flags)
  */
 HWND WINAPI SHSetParentHwnd(HWND hWnd, HWND hWndParent)
 {
+#ifdef __REACTOS__
+  HWND hWndOld;
+
+  TRACE("%p, %p\n", hWnd, hWndParent);
+
+  hWndOld = GetParent(hWnd);
+  if (!hWndParent)
+  {
+    if (hWndOld)
+      SHSetWindowBits(hWnd, GWL_STYLE, WS_CHILD | WS_POPUP, WS_POPUP);
+    return NULL;
+  }
+
+  SHSetWindowBits(hWnd, GWL_STYLE, WS_CHILD | WS_POPUP, WS_CHILD);
+  if (hWndOld != hWndParent)
+    SetParent(hWnd, hWndParent);
+  return hWndOld;
+#else
   TRACE("%p, %p\n", hWnd, hWndParent);
 
   if(GetParent(hWnd) == hWndParent)
@@ -823,6 +841,7 @@ HWND WINAPI SHSetParentHwnd(HWND hWnd, HWND hWndParent)
     SHSetWindowBits(hWnd, GWL_STYLE, WS_CHILD | WS_POPUP, WS_POPUP);
 
   return hWndParent ? SetParent(hWnd, hWndParent) : NULL;
+#endif
 }
 
 /*************************************************************************
@@ -4568,20 +4587,40 @@ PSECURITY_DESCRIPTOR WINAPI GetShellSecurityDescriptor(const PSHELL_USER_PERMISS
                 case ACCESS_ALLOWED_ACE_TYPE:
                     if (!AddAccessAllowedAce(pAcl, ACL_REVISION, sup->dwAccessMask, sid))
                         goto error;
+#ifdef __REACTOS__
+                    if (sup->fInherit && !AddAccessAllowedAce(pAcl, ACL_REVISION, sup->dwInheritAccessMask, sid))
+                        goto error;
+#else
                     if (sup->fInherit && !AddAccessAllowedAceEx(pAcl, ACL_REVISION, 
                                 (BYTE)sup->dwInheritMask, sup->dwInheritAccessMask, sid))
                         goto error;
+#endif
                     break;
                 case ACCESS_DENIED_ACE_TYPE:
                     if (!AddAccessDeniedAce(pAcl, ACL_REVISION, sup->dwAccessMask, sid))
                         goto error;
+#ifdef __REACTOS__
+                    if (sup->fInherit && !AddAccessDeniedAce(pAcl, ACL_REVISION, sup->dwInheritAccessMask, sid))
+                        goto error;
+#else
                     if (sup->fInherit && !AddAccessDeniedAceEx(pAcl, ACL_REVISION, 
                                 (BYTE)sup->dwInheritMask, sup->dwInheritAccessMask, sid))
                         goto error;
+#endif
                     break;
                 default:
                     goto error;
             }
+#ifdef __REACTOS__
+            if (sup->fInherit)
+            {
+                PACE_HEADER ace;
+
+                if (!GetAce(pAcl, pAcl->AceCount - 1, (LPVOID *)&ace))
+                    goto error;
+                ace->AceFlags = (BYTE)sup->dwInheritMask;
+            }
+#endif
         }
 
         if (!SetSecurityDescriptorDacl(psd, TRUE, pAcl, FALSE))
