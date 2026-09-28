@@ -1210,7 +1210,7 @@ RtlpDphAllocateNodeForTable(IN PRTL_AVL_TABLE Table,
     PDPH_HEAP_ROOT DphRoot;
 
     /* This mega-assert comes from a text search over Windows 2003 checked binary of ntdll.dll */
-    ASSERT((ULONG_PTR)(((PRTL_BALANCED_LINKS)0)+1) + sizeof(PUCHAR) == ByteSize);
+    ASSERT(sizeof(RTL_BALANCED_LINKS) + sizeof(PUCHAR) == ByteSize);
 
     /* Get pointer to the containing heap root record */
     DphRoot = CONTAINING_RECORD(Table, DPH_HEAP_ROOT, BusyNodesTable);
@@ -2403,12 +2403,14 @@ RtlpDphNormalHeapValidate(PDPH_HEAP_ROOT DphRoot,
                           ULONG Flags,
                           PVOID BaseAddress)
 {
-    PDPH_BLOCK_INFORMATION BlockInfo = (PDPH_BLOCK_INFORMATION)BaseAddress - 1;
+    PDPH_BLOCK_INFORMATION BlockInfo;
     if (!BaseAddress)
     {
         /* Validate all normal heap */
         return RtlValidateHeap(DphRoot->NormalHeap, Flags, NULL);
     }
+
+    BlockInfo = (PDPH_BLOCK_INFORMATION)BaseAddress - 1;
 
     // FIXME: Check is this a normal heap block
     /*if (!RtlpDphIsNormalHeapBlock(DphRoot, BaseAddress, &ValidationInfo))
