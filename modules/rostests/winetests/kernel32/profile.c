@@ -1183,17 +1183,9 @@ static void test_profile_struct(void)
     todo_wine ok(GetLastError() == ERROR_BAD_LENGTH, "got error %lu\n", GetLastError());
 
     /* Test deleting struct */
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Deleting private profile struct crashes on ReactOS!\n");
-    } else {
-#endif
     ret = WritePrivateProfileStructA("s", "key", NULL, sizeof("abacus"), "./winetest.ini");
     ok(ret, "got error %lu\n", GetLastError());
     ok(check_file_data("./winetest.ini", expect_data_empty), "file doesn't match\n");
-#ifdef __REACTOS__
-    }
-#endif
 
     ret = DeleteFileA("./winetest.ini");
     ok(ret, "got error %lu\n", GetLastError());

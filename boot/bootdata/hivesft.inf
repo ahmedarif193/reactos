@@ -647,6 +647,14 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Network\World Full Access Sha
 
 ; INI File Mappings
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping\win.ini","desktop",0x00000000,"USR:Control Panel\Desktop"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping\win.ini","devices",0x00000000,"USR:Software\Microsoft\Windows NT\CurrentVersion\Devices"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping\win.ini","extensions",0x00000000,"USR:Software\Microsoft\Windows NT\CurrentVersion\Extensions"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping\win.ini","intl",0x00000000,"USR:Control Panel\International"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping\win.ini","printerports",0x00000000,"USR:Software\Microsoft\Windows NT\CurrentVersion\PrinterPorts"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping\win.ini","sounds",0x00000000,"USR:Control Panel\Sounds"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping\win.ini\windows","",0x00000000,"USR:Software\Microsoft\Windows NT\CurrentVersion\Windows"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IniFileMapping\win.ini\windows","CursorBlinkRate",0x00000000,"USR:Control Panel\Desktop"
 
 ; Global Console settings
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Console",,0x00000012
