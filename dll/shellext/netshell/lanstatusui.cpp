@@ -753,8 +753,6 @@ LANStatusUiDetailsDlg(
                         while (pCurAdapter && pCurAdapter->Index != pContext->dwAdapterIndex)
                             pCurAdapter = pCurAdapter->Next;
 
-                        if (pCurAdapter->Index != pContext->dwAdapterIndex)
-                            pCurAdapter = NULL;
                     }
                 }
             }

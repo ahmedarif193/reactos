@@ -255,7 +255,8 @@ NetworkInitPageDlgProc(
                     PropSheet_SetWizButtons(GetParent(hwndDlg), 0);
                     TRACE("Starting install thread!\n");
                     pNetworkSetupData->hwndPage = hwndDlg;
-                    CreateThread(NULL, 0, InstallThreadProc, (LPVOID)pNetworkSetupData, 0, NULL);
+                    if (HANDLE hThread = CreateThread(NULL, 0, InstallThreadProc, (LPVOID)pNetworkSetupData, 0, NULL))
+                        CloseHandle(hThread);
                     TRACE("Install thread done!\n");
                     break;
 
