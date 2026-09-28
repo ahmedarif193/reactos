@@ -764,7 +764,7 @@ NTSTATUS get_buffer(LPWSTR *buffer, SIZE_T needed, PUNICODE_STRING CallerBuffer,
 static NTSTATUS
 find_actctx_dll_load_from( const ACTCTX_SECTION_KEYED_DATA *data,
                            const ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION *dll,
-                           const ACTIVATION_CONTEXT_ASSEMBLY_DETAILED_INFORMATION *info,
+                           const WCHAR *manifest_path,
                            PUNICODE_STRING pnameW, LPWSTR *fullname,
                            PUNICODE_STRING CallerBuffer, BOOLEAN bAllocateBuffer )
 {
@@ -799,10 +799,10 @@ find_actctx_dll_load_from( const ACTCTX_SECTION_KEYED_DATA *data,
     append_name = path.Buffer[path.Length / sizeof(WCHAR) - 1] == L'\\' ||
                   path.Buffer[path.Length / sizeof(WCHAR) - 1] == L'/';
     if (RtlDetermineDosPathNameType_U( path.Buffer ) == RtlPathTypeRelative &&
-        info->lpAssemblyManifestPath &&
-        (p = wcsrchr( info->lpAssemblyManifestPath, L'\\' )))
+        manifest_path &&
+        (p = wcsrchr( manifest_path, L'\\' )))
     {
-        dirlen = p + 1 - info->lpAssemblyManifestPath;
+        dirlen = p + 1 - manifest_path;
     }
 
     needed = (dirlen + 1) * sizeof(WCHAR) + path.Length + (append_name ? pnameW->Length : 0);
@@ -810,7 +810,7 @@ find_actctx_dll_load_from( const ACTCTX_SECTION_KEYED_DATA *data,
     if (!NT_SUCCESS(status)) return status;
 
     p = *fullname;
-    memcpy( p, info->lpAssemblyManifestPath, dirlen * sizeof(WCHAR) );
+    memcpy( p, manifest_path, dirlen * sizeof(WCHAR) );
     p += dirlen;
     memcpy( p, path.Buffer, path.Length );
     p += path.Length / sizeof(WCHAR);
@@ -828,15 +828,16 @@ NTSTATUS find_actctx_dll( PUNICODE_STRING pnameW, LPWSTR *fullname, PUNICODE_STR
     static const WCHAR winsxsW[] = {'\\','w','i','n','s','x','s','\\'};
     static const WCHAR dotManifestW[] = {'.','m','a','n','i','f','e','s','t',0};
 
-    ACTIVATION_CONTEXT_ASSEMBLY_DETAILED_INFORMATION *info;
+    PACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION info;
     const ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION *dll;
     ACTCTX_SECTION_KEYED_DATA data;
     NTSTATUS status;
-    SIZE_T needed, size = 1024;
-    WCHAR *p;
+    SIZE_T needed;
+    WCHAR *p, *manifest_path, *directory_name;
 
     data.cbSize = sizeof(data);
-    status = RtlFindActivationContextSectionString( FIND_ACTCTX_SECTION_KEY_RETURN_HACTCTX, NULL,
+    status = RtlFindActivationContextSectionString( FIND_ACTCTX_SECTION_KEY_RETURN_HACTCTX |
+                                                    FIND_ACTCTX_SECTION_KEY_RETURN_ASSEMBLY_METADATA, NULL,
                                                     ACTIVATION_CONTEXT_SECTION_DLL_REDIRECTION,
                                                     pnameW, &data );
     if (status != STATUS_SUCCESS)
@@ -845,49 +846,45 @@ NTSTATUS find_actctx_dll( PUNICODE_STRING pnameW, LPWSTR *fullname, PUNICODE_STR
         return status;
     }
 
-    for (;;)
-    {
-        if (!(info = RtlAllocateHeap( RtlGetProcessHeap(), 0, size )))
-        {
-            status = STATUS_NO_MEMORY;
-            goto done;
-        }
-        status = RtlQueryInformationActivationContext( 0, data.hActCtx, &data.ulAssemblyRosterIndex,
-                                                       AssemblyDetailedInformationInActivationContext,
-                                                       info, size, &needed );
-        if (status == STATUS_SUCCESS) break;
-        if (status != STATUS_BUFFER_TOO_SMALL) goto done;
-        RtlFreeHeap( RtlGetProcessHeap(), 0, info );
-        size = needed;
-    }
-
-    DPRINT("manifestpath === %S\n", info->lpAssemblyManifestPath);
-    DPRINT("DirectoryName === %S\n", info->lpAssemblyDirectoryName);
-
-    dll = data.lpData;
-    if (dll && dll->PathSegmentCount &&
-        !(dll->Flags & ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION_PATH_OMITS_ASSEMBLY_ROOT))
-    {
-        status = find_actctx_dll_load_from( &data, dll, info, pnameW, fullname, CallerBuffer, bAllocateBuffer );
-        goto done;
-    }
-
-    if (!info->lpAssemblyManifestPath /*|| !info->lpAssemblyDirectoryName*/)
+    info = data.AssemblyMetadata.lpInformation;
+    if (!info)
     {
         status = STATUS_SXS_KEY_NOT_FOUND;
         goto done;
     }
 
-    if ((p = wcsrchr( info->lpAssemblyManifestPath, '\\' )))
+    manifest_path = info->ManifestPathLength ?
+                    (WCHAR *)((BYTE *)data.AssemblyMetadata.lpSectionBase + info->ManifestPathOffset) : NULL;
+    directory_name = info->AssemblyDirectoryNameLength ?
+                     (WCHAR *)((BYTE *)data.AssemblyMetadata.lpSectionBase + info->AssemblyDirectoryNameOffset) : NULL;
+
+    DPRINT("manifestpath === %S\n", manifest_path);
+    DPRINT("DirectoryName === %S\n", directory_name);
+
+    dll = data.lpData;
+    if (dll && dll->PathSegmentCount &&
+        !(dll->Flags & ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION_PATH_OMITS_ASSEMBLY_ROOT))
     {
-        DWORD dirlen = info->ulAssemblyDirectoryNameLength / sizeof(WCHAR);
+        status = find_actctx_dll_load_from( &data, dll, manifest_path, pnameW, fullname, CallerBuffer, bAllocateBuffer );
+        goto done;
+    }
+
+    if (!manifest_path)
+    {
+        status = STATUS_SXS_KEY_NOT_FOUND;
+        goto done;
+    }
+
+    if ((p = wcsrchr( manifest_path, '\\' )))
+    {
+        DWORD dirlen = info->AssemblyDirectoryNameLength / sizeof(WCHAR);
 
         p++;
-        if (!info->lpAssemblyDirectoryName || _wcsnicmp( p, info->lpAssemblyDirectoryName, dirlen ) || _wcsicmp( p + dirlen, dotManifestW ))
+        if (!directory_name || _wcsnicmp( p, directory_name, dirlen ) || _wcsicmp( p + dirlen, dotManifestW ))
         {
             /* manifest name does not match directory name, so it's not a global
              * windows/winsxs manifest; use the manifest directory name instead */
-            dirlen = p - info->lpAssemblyManifestPath;
+            dirlen = p - manifest_path;
             needed = (dirlen + 1) * sizeof(WCHAR) + pnameW->Length;
 
             status = get_buffer(fullname, needed, CallerBuffer, bAllocateBuffer);
@@ -896,7 +893,7 @@ NTSTATUS find_actctx_dll( PUNICODE_STRING pnameW, LPWSTR *fullname, PUNICODE_STR
 
             p = *fullname;
 
-            memcpy( p, info->lpAssemblyManifestPath, dirlen * sizeof(WCHAR) );
+            memcpy( p, manifest_path, dirlen * sizeof(WCHAR) );
             p += dirlen;
             memcpy( p, pnameW->Buffer, pnameW->Length);
             p += (pnameW->Length / sizeof(WCHAR));
@@ -907,7 +904,7 @@ NTSTATUS find_actctx_dll( PUNICODE_STRING pnameW, LPWSTR *fullname, PUNICODE_STR
     }
 
     needed = (wcslen(SharedUserData->NtSystemRoot) * sizeof(WCHAR) +
-              sizeof(winsxsW) + info->ulAssemblyDirectoryNameLength + pnameW->Length + 2*sizeof(WCHAR));
+              sizeof(winsxsW) + info->AssemblyDirectoryNameLength + pnameW->Length + 2*sizeof(WCHAR));
 
     status = get_buffer(fullname, needed, CallerBuffer, bAllocateBuffer);
     if (!NT_SUCCESS(status))
@@ -919,15 +916,14 @@ NTSTATUS find_actctx_dll( PUNICODE_STRING pnameW, LPWSTR *fullname, PUNICODE_STR
     p += wcslen(p);
     memcpy( p, winsxsW, sizeof(winsxsW) );
     p += sizeof(winsxsW) / sizeof(WCHAR);
-    memcpy( p, info->lpAssemblyDirectoryName, info->ulAssemblyDirectoryNameLength );
-    p += info->ulAssemblyDirectoryNameLength / sizeof(WCHAR);
+    memcpy( p, directory_name, info->AssemblyDirectoryNameLength );
+    p += info->AssemblyDirectoryNameLength / sizeof(WCHAR);
     *p++ = L'\\';
     memcpy( p, pnameW->Buffer, pnameW->Length);
     p += (pnameW->Length / sizeof(WCHAR));
     *p = L'\0';
 
 done:
-    RtlFreeHeap( RtlGetProcessHeap(), 0, info );
     RtlReleaseActivationContext( data.hActCtx );
     DPRINT("%S\n", fullname);
     return status;

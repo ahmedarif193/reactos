@@ -619,6 +619,9 @@ typedef struct _ACTIVATION_CONTEXT
     DWORD               sections;
     struct strsection_header  *wndclass_section;
     struct strsection_header  *dllredirect_section;
+#ifdef __REACTOS__
+    struct strsection_header  *assemblyinfo_section;
+#endif
     struct strsection_header  *progid_section;
     struct strsection_header  *activatable_class_section;
     struct guidsection_header *tlib_section;
@@ -1174,6 +1177,9 @@ static void actctx_release( ACTIVATION_CONTEXT *actctx )
         RtlFreeHeap( GetProcessHeap(), 0, actctx->appdir.info );
         RtlFreeHeap( GetProcessHeap(), 0, actctx->assemblies );
         RtlFreeHeap( GetProcessHeap(), 0, actctx->dllredirect_section );
+#ifdef __REACTOS__
+        RtlFreeHeap( GetProcessHeap(), 0, actctx->assemblyinfo_section );
+#endif
         RtlFreeHeap( GetProcessHeap(), 0, actctx->wndclass_section );
         RtlFreeHeap( GetProcessHeap(), 0, actctx->tlib_section );
         RtlFreeHeap( GetProcessHeap(), 0, actctx->comserver_section );
@@ -3872,6 +3878,228 @@ static NTSTATUS find_dll_redirection(ACTIVATION_CONTEXT* actctx, const UNICODE_S
     return STATUS_SUCCESS;
 }
 
+#ifdef __REACTOS__
+C_ASSERT(sizeof(ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION) == 0x6c);
+C_ASSERT(sizeof(ACTIVATION_CONTEXT_DATA_ASSEMBLY_GLOBAL_INFORMATION) == 0x38);
+C_ASSERT(sizeof(struct strsection_header) == 0x2c);
+
+static ULONG assemblyinfo_string_len(const WCHAR *str)
+{
+    return str ? (ULONG)(wcslen(str) * sizeof(WCHAR)) : 0;
+}
+
+static NTSTATUS build_assemblyinfo_section(ACTIVATION_CONTEXT *actctx, struct strsection_header **section)
+{
+    ACTIVATION_CONTEXT_DATA_ASSEMBLY_GLOBAL_INFORMATION *global;
+    ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION *info;
+    struct strsection_header *header;
+    struct string_index *index;
+    UNICODE_STRING str;
+    WCHAR **ids;
+    ULONG total_len, offset, global_len, appdir_len, name_len, id_len, path_len, dir_len, lang_len, i;
+    BYTE *base;
+
+    ids = RtlAllocateHeap(GetProcessHeap(), HEAP_ZERO_MEMORY, actctx->num_assemblies * sizeof(*ids));
+    if (!ids) return STATUS_NO_MEMORY;
+
+    appdir_len = assemblyinfo_string_len(actctx->appdir.info);
+    global_len = sizeof(*global) + appdir_len + sizeof(WCHAR);
+    total_len = sizeof(*header) + aligned_string_len(global_len) + actctx->num_assemblies * sizeof(*index);
+
+    for (i = 0; i < actctx->num_assemblies; i++)
+    {
+        struct assembly *assembly = &actctx->assemblies[i];
+
+        if (!(ids[i] = build_assembly_id(&assembly->id)))
+        {
+            total_len = 0;
+            break;
+        }
+        total_len += aligned_string_len(assemblyinfo_string_len(assembly->id.name) + sizeof(WCHAR));
+        total_len += aligned_string_len(sizeof(*info) + assemblyinfo_string_len(ids[i]) +
+                                        assemblyinfo_string_len(assembly->manifest.info) + sizeof(WCHAR) +
+                                        assemblyinfo_string_len(assembly->directory) + sizeof(WCHAR) +
+                                        assemblyinfo_string_len(assembly->id.language) + sizeof(WCHAR));
+    }
+
+    header = total_len ? RtlAllocateHeap(GetProcessHeap(), HEAP_ZERO_MEMORY, total_len) : NULL;
+    if (!header)
+    {
+        for (i = 0; i < actctx->num_assemblies; i++)
+            RtlFreeHeap(GetProcessHeap(), 0, ids[i]);
+        RtlFreeHeap(GetProcessHeap(), 0, ids);
+        return STATUS_NO_MEMORY;
+    }
+
+    base = (BYTE *)header;
+    header->magic = STRSECTION_MAGIC;
+    header->size = sizeof(*header);
+    header->unk1[0] = 1;
+    header->unk1[1] = 1;
+    header->unk1[2] = 1;
+    header->count = actctx->num_assemblies;
+    header->unk2[0] = HASH_STRING_ALGORITHM_X65599;
+    header->global_offset = sizeof(*header);
+    header->global_len = global_len;
+    header->index_offset = header->global_offset + aligned_string_len(global_len);
+
+    global = (ACTIVATION_CONTEXT_DATA_ASSEMBLY_GLOBAL_INFORMATION *)(base + header->global_offset);
+    global->Size = global_len;
+    global->ApplicationDirectoryPathType = appdir_len ? ACTIVATION_CONTEXT_PATH_TYPE_WIN32_FILE : ACTIVATION_CONTEXT_PATH_TYPE_NONE;
+    global->ApplicationDirectoryLength = appdir_len;
+    global->ApplicationDirectoryOffset = sizeof(*global);
+    if (appdir_len) memcpy((BYTE *)global + sizeof(*global), actctx->appdir.info, appdir_len);
+
+    index = (struct string_index *)(base + header->index_offset);
+    offset = header->index_offset + actctx->num_assemblies * sizeof(*index);
+
+    for (i = 0; i < actctx->num_assemblies; i++, index++)
+    {
+        struct assembly *assembly = &actctx->assemblies[i];
+
+        name_len = assemblyinfo_string_len(assembly->id.name);
+        id_len = assemblyinfo_string_len(ids[i]);
+        path_len = assemblyinfo_string_len(assembly->manifest.info);
+        dir_len = assemblyinfo_string_len(assembly->directory);
+        lang_len = assemblyinfo_string_len(assembly->id.language);
+        if (lang_len && !wcscmp(assembly->id.language, L"*")) lang_len = 0;
+
+        index->name_offset = offset;
+        index->name_len = name_len;
+        if (name_len) memcpy(base + offset, assembly->id.name, name_len);
+        str.Buffer = (WCHAR *)(base + offset);
+        str.Length = str.MaximumLength = (USHORT)name_len;
+        RtlHashUnicodeString(&str, TRUE, HASH_STRING_ALGORITHM_X65599, &index->hash);
+        offset += aligned_string_len(name_len + sizeof(WCHAR));
+
+        info = (ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION *)(base + offset);
+        index->data_offset = offset;
+        index->rosterindex = i + 1;
+
+        info->Size = sizeof(*info);
+        info->Flags = i ? 0 : ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION_ROOT_ASSEMBLY;
+        info->ManifestPathType = path_len ? ACTIVATION_CONTEXT_PATH_TYPE_WIN32_FILE : ACTIVATION_CONTEXT_PATH_TYPE_NONE;
+        info->PolicyPathType = ACTIVATION_CONTEXT_PATH_TYPE_NONE;
+        info->ManifestVersionMajor = 1;
+        info->NumOfFilesInAssembly = assembly->num_dlls;
+        info->RunLevel = assembly->run_level;
+        info->UiAccess = assembly->ui_access;
+        offset += sizeof(*info);
+
+        info->EncodedAssemblyIdentityLength = id_len;
+        info->EncodedAssemblyIdentityOffset = offset;
+        memcpy(base + offset, ids[i], id_len);
+        offset += id_len;
+
+        if (path_len)
+        {
+            info->ManifestPathLength = path_len;
+            info->ManifestPathOffset = offset;
+            memcpy(base + offset, assembly->manifest.info, path_len);
+            offset += path_len + sizeof(WCHAR);
+        }
+
+        if (dir_len)
+        {
+            info->AssemblyDirectoryNameLength = dir_len;
+            info->AssemblyDirectoryNameOffset = offset;
+            memcpy(base + offset, assembly->directory, dir_len);
+            offset += dir_len + sizeof(WCHAR);
+        }
+
+        if (lang_len)
+        {
+            info->LanguageLength = lang_len;
+            info->LanguageOffset = offset;
+            memcpy(base + offset, assembly->id.language, lang_len);
+            offset += lang_len + sizeof(WCHAR);
+        }
+
+        index->data_len = offset - index->data_offset;
+        offset = index->data_offset + aligned_string_len(index->data_len);
+        RtlFreeHeap(GetProcessHeap(), 0, ids[i]);
+    }
+
+    RtlFreeHeap(GetProcessHeap(), 0, ids);
+    *section = header;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS get_assemblyinfo_section(ACTIVATION_CONTEXT *actctx, struct strsection_header **section)
+{
+    NTSTATUS status;
+
+    if (!actctx->assemblyinfo_section)
+    {
+        status = build_assemblyinfo_section(actctx, section);
+        if (status) return status;
+
+        if (InterlockedCompareExchangePointer((void **)&actctx->assemblyinfo_section, *section, NULL))
+            RtlFreeHeap(GetProcessHeap(), 0, *section);
+    }
+
+    *section = actctx->assemblyinfo_section;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS find_assembly_information(ACTIVATION_CONTEXT *actctx, const UNICODE_STRING *name,
+                                          PACTCTX_SECTION_KEYED_DATA data)
+{
+    struct strsection_header *section;
+    struct string_index *index;
+    NTSTATUS status;
+
+    if (!actctx->num_assemblies) return STATUS_SXS_KEY_NOT_FOUND;
+
+    status = get_assemblyinfo_section(actctx, &section);
+    if (status) return status;
+
+    index = find_string_index(section, name);
+    if (!index) return STATUS_SXS_KEY_NOT_FOUND;
+
+    if (data)
+    {
+        data->ulDataFormatVersion = 1;
+        data->lpData = (BYTE *)section + index->data_offset;
+        data->ulLength = index->data_len;
+        data->lpSectionGlobalData = (BYTE *)section + section->global_offset;
+        data->ulSectionGlobalDataLength = section->global_len;
+        data->lpSectionBase = section;
+        data->ulSectionTotalLength = RtlSizeHeap(GetProcessHeap(), 0, section);
+        data->hActCtx = NULL;
+
+        if (data->cbSize >= FIELD_OFFSET(ACTCTX_SECTION_KEYED_DATA, ulAssemblyRosterIndex) + sizeof(ULONG))
+            data->ulAssemblyRosterIndex = index->rosterindex;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS fill_assembly_metadata(ACTIVATION_CONTEXT *actctx, PACTCTX_SECTION_KEYED_DATA data)
+{
+    struct strsection_header *section;
+    struct string_index *index;
+    NTSTATUS status;
+
+    if (data->cbSize < RTL_SIZEOF_THROUGH_FIELD(ACTCTX_SECTION_KEYED_DATA, AssemblyMetadata))
+        return STATUS_SUCCESS;
+
+    RtlZeroMemory(&data->AssemblyMetadata, sizeof(data->AssemblyMetadata));
+    if (!actctx->num_assemblies || !data->ulAssemblyRosterIndex ||
+        data->ulAssemblyRosterIndex > actctx->num_assemblies)
+        return STATUS_SUCCESS;
+
+    status = get_assemblyinfo_section(actctx, &section);
+    if (status) return status;
+
+    index = (struct string_index *)((BYTE *)section + section->index_offset) + (data->ulAssemblyRosterIndex - 1);
+    data->AssemblyMetadata.lpInformation = (BYTE *)section + index->data_offset;
+    data->AssemblyMetadata.lpSectionBase = section;
+    data->AssemblyMetadata.ulSectionLength = RtlSizeHeap(GetProcessHeap(), 0, section);
+    return STATUS_SUCCESS;
+}
+#endif
+
 static inline struct string_index *get_wndclass_first_index(ACTIVATION_CONTEXT *actctx)
 {
     return (struct string_index*)((BYTE*)actctx->wndclass_section + actctx->wndclass_section->index_offset);
@@ -5419,8 +5647,8 @@ static NTSTATUS find_string(ACTIVATION_CONTEXT* actctx, ULONG section_kind,
     {
 #ifdef __REACTOS__
     case ACTIVATION_CONTEXT_SECTION_ASSEMBLY_INFORMATION:
-        DPRINT1("Unsupported yet section_kind %x\n", section_kind);
-        return STATUS_SXS_KEY_NOT_FOUND;
+        status = find_assembly_information(actctx, section_name, data);
+        break;
 #endif // __REACTOS__
     case ACTIVATION_CONTEXT_SECTION_DLL_REDIRECTION:
         status = find_dll_redirection(actctx, section_name, data);
@@ -5444,7 +5672,17 @@ static NTSTATUS find_string(ACTIVATION_CONTEXT* actctx, ULONG section_kind,
 
     if (status != STATUS_SUCCESS) return status;
 
+#ifdef __REACTOS__
+    if (data && (flags & FIND_ACTCTX_SECTION_KEY_RETURN_ASSEMBLY_METADATA))
+    {
+        status = fill_assembly_metadata(actctx, data);
+        if (status != STATUS_SUCCESS) return status;
+    }
+
+    if (data && (flags & FIND_ACTCTX_SECTION_KEY_RETURN_HACTCTX) && actctx != implicit_actctx)
+#else
     if (data && (flags & FIND_ACTCTX_SECTION_KEY_RETURN_HACTCTX))
+#endif
     {
         actctx_addref(actctx);
         data->hActCtx = actctx;
@@ -5958,6 +6196,7 @@ NTSTATUS WINAPI RtlQueryInformationActivationContext( ULONG flags, HANDLE handle
             if (!subinst) return STATUS_INVALID_PARAMETER;
 
             index = *(DWORD*)subinst;
+#ifdef __REACTOS__
             if (!index)
             {
                 if (retlen) *retlen = sizeof(*afdi);
@@ -6161,8 +6400,7 @@ RtlpFindActivationContextSection_CheckParameters( ULONG flags, const GUID *guid,
     }
 
     /* TODO */
-    if (flags & FIND_ACTCTX_RETURN_FLAGS ||
-        flags & FIND_ACTCTX_RETURN_ASSEMBLY_METADATA)
+    if (flags & FIND_ACTCTX_RETURN_FLAGS)
     {
         DPRINT1("unknown flags %08x\n", flags);
         return STATUS_INVALID_PARAMETER;

@@ -5015,6 +5015,51 @@ typedef struct _ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION {
   DWORD UiAccess;
 } ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION, *PACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION;
 
+#include <pshpack4.h>
+typedef struct _ACTIVATION_CONTEXT_DATA_ASSEMBLY_GLOBAL_INFORMATION
+{
+    ULONG Size;
+    ULONG Flags;
+    GUID PolicyCoherencyGuid;
+    GUID PolicyOverrideGuid;
+    ULONG ApplicationDirectoryPathType;
+    ULONG ApplicationDirectoryLength;
+    ULONG ApplicationDirectoryOffset;
+    ULONG ResourceName;
+} ACTIVATION_CONTEXT_DATA_ASSEMBLY_GLOBAL_INFORMATION, *PACTIVATION_CONTEXT_DATA_ASSEMBLY_GLOBAL_INFORMATION;
+
+#define ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION_ROOT_ASSEMBLY 0x00000001
+
+typedef struct _ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION
+{
+    ULONG Size;
+    ULONG Flags;
+    ULONG EncodedAssemblyIdentityLength;
+    ULONG EncodedAssemblyIdentityOffset;
+    ULONG ManifestPathType;
+    ULONG ManifestPathLength;
+    ULONG ManifestPathOffset;
+    LARGE_INTEGER ManifestLastWriteTime;
+    ULONG PolicyPathType;
+    ULONG PolicyPathLength;
+    ULONG PolicyPathOffset;
+    LARGE_INTEGER PolicyLastWriteTime;
+    ULONG MetadataSatelliteRosterIndex;
+    ULONG Unused2;
+    ULONG ManifestVersionMajor;
+    ULONG ManifestVersionMinor;
+    ULONG PolicyVersionMajor;
+    ULONG PolicyVersionMinor;
+    ULONG AssemblyDirectoryNameLength;
+    ULONG AssemblyDirectoryNameOffset;
+    ULONG NumOfFilesInAssembly;
+    ULONG LanguageLength;
+    ULONG LanguageOffset;
+    ACTCTX_REQUESTED_RUN_LEVEL RunLevel;
+    ULONG UiAccess;
+} ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION, *PACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION;
+#include <poppack.h>
+
 typedef struct _ACTIVATION_CONTEXT_DATA_DLL_REDIRECTION
 {
     ULONG Size;
