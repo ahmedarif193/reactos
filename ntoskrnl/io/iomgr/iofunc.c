@@ -2329,6 +2329,9 @@ IopQueryDirectoryFile(IN HANDLE FileHandle,
         CHECK_LENGTH(FileNamesInformation, FILE_NAMES_INFORMATION);
         CHECK_LENGTH(FileBothDirectoryInformation, FILE_BOTH_DIR_INFORMATION);
         CHECK_LENGTH(FileIdBothDirectoryInformation, FILE_ID_BOTH_DIR_INFORMATION);
+        CHECK_LENGTH(FileObjectIdInformation, FILE_OBJECTID_INFORMATION);
+        CHECK_LENGTH(FileQuotaInformation, FILE_QUOTA_INFORMATION);
+        CHECK_LENGTH(FileReparsePointInformation, FILE_REPARSE_POINT_INFORMATION);
         default:
             break;
 #undef CHECK_LENGTH
