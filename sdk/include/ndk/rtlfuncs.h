@@ -4958,6 +4958,12 @@ RtlQueryTimeZoneInformation(
     _Out_ PRTL_TIME_ZONE_INFORMATION TimeZoneInformation);
 
 NTSYSAPI
+NTSTATUS
+NTAPI
+RtlQueryDynamicTimeZoneInformation(
+    _Out_ PRTL_DYNAMIC_TIME_ZONE_INFORMATION TimeZoneInformation);
+
+NTSYSAPI
 VOID
 NTAPI
 RtlSecondsSince1970ToTime(

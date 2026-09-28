@@ -3125,7 +3125,7 @@
 @ stub -arch=arm64 RtlPcToFilePath
 @ stub -arch=arm64 RtlQueryAllFeatureConfigurations
 @ stub -arch=arm64 RtlQueryAllInternalFeatureConfigurations
-@ stub -arch=arm64 RtlQueryDynamicTimeZoneInformation
+@ stdcall RtlQueryDynamicTimeZoneInformation(ptr)
 @ stdcall -arch=i386,win64 RtlQueryElevationFlags(ptr)
 @ stdcall RtlQueryFeatureConfiguration(long long ptr ptr)
 @ stdcall RtlQueryFeatureConfigurationChangeStamp()

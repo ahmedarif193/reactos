@@ -31,6 +31,14 @@ RtlQueryTimeZoneInformation(PRTL_TIME_ZONE_INFORMATION TimeZoneInformation)
 
     PAGED_CODE_RTL();
 
+    if (RtlpGetMode() == UserMode)
+    {
+        return ZwQuerySystemInformation(SystemCurrentTimeZoneInformation,
+                                        TimeZoneInformation,
+                                        sizeof(*TimeZoneInformation),
+                                        NULL);
+    }
+
     RtlZeroMemory(QueryTable,
                   sizeof(QueryTable));
 
@@ -79,6 +87,18 @@ RtlQueryTimeZoneInformation(PRTL_TIME_ZONE_INFORMATION TimeZoneInformation)
     return Status;
 }
 
+
+NTSTATUS
+NTAPI
+RtlQueryDynamicTimeZoneInformation(PRTL_DYNAMIC_TIME_ZONE_INFORMATION TimeZoneInformation)
+{
+    PAGED_CODE_RTL();
+
+    return ZwQuerySystemInformation(SystemDynamicTimeZoneInformation,
+                                    TimeZoneInformation,
+                                    sizeof(*TimeZoneInformation),
+                                    NULL);
+}
 
 /*
  * @implemented

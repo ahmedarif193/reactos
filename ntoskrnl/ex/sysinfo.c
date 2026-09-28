@@ -2367,6 +2367,47 @@ QSI_DEF(SystemCurrentTimeZoneInformation)
     return STATUS_SUCCESS;
 }
 
+QSI_DEF(SystemDynamicTimeZoneInformation)
+{
+    PRTL_DYNAMIC_TIME_ZONE_INFORMATION Info = (PRTL_DYNAMIC_TIME_ZONE_INFORMATION)Buffer;
+    RTL_QUERY_REGISTRY_TABLE QueryTable[3];
+    WCHAR KeyNameBuffer[RTL_NUMBER_OF(Info->TimeZoneKeyName)];
+    UNICODE_STRING KeyName;
+    ULONG Disabled = 0;
+
+    *ReqSize = sizeof(RTL_DYNAMIC_TIME_ZONE_INFORMATION);
+
+    if (sizeof(RTL_DYNAMIC_TIME_ZONE_INFORMATION) != Size)
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    RtlZeroMemory(KeyNameBuffer, sizeof(KeyNameBuffer));
+    KeyName.Length = 0;
+    KeyName.MaximumLength = sizeof(KeyNameBuffer) - sizeof(WCHAR);
+    KeyName.Buffer = KeyNameBuffer;
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+    QueryTable[0].Name = L"TimeZoneKeyName";
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[0].EntryContext = &KeyName;
+    QueryTable[1].Name = L"DynamicDaylightTimeDisabled";
+    QueryTable[1].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[1].EntryContext = &Disabled;
+    RtlQueryRegistryValues(RTL_REGISTRY_CONTROL | RTL_REGISTRY_OPTIONAL,
+                           L"TimeZoneInformation",
+                           QueryTable,
+                           NULL,
+                           NULL);
+
+    RtlZeroMemory(Info, sizeof(*Info));
+    RtlCopyMemory(Info, &ExpTimeZoneInfo, sizeof(RTL_TIME_ZONE_INFORMATION));
+    RtlCopyMemory(Info->TimeZoneKeyName, KeyNameBuffer, KeyName.Length);
+    Info->DynamicDaylightTimeDisabled = (Disabled != 0);
+
+    return STATUS_SUCCESS;
+}
+
 SSI_DEF(SystemCurrentTimeZoneInformation)
 {
     /* Check user buffer's size */
@@ -3529,6 +3570,7 @@ CallQS[] =
     // Vista and later
     SI_QX(SystemModuleInformationEx),
     SI_QX(SystemBootEnvironmentInformation),
+    SI_QX(SystemDynamicTimeZoneInformation),
     SI_QX(SystemProcessorBrandString),
 
     // Win10 RS4 and later (gaps in between stay NULL and fail

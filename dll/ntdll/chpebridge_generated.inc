@@ -5809,11 +5809,6 @@ ULONG_PTR NTAPI ChpeStubRtlQueryCriticalSectionOwner(PVOID a0)
     return 0;
 }
 
-ULONG_PTR NTAPI ChpeStubRtlQueryDynamicTimeZoneInformation(PVOID a0)
-{
-    return 0;
-}
-
 ULONG_PTR NTAPI ChpeStubRtlQueryElevationFlags(PVOID a0)
 {
     return 0;
@@ -5909,6 +5904,12 @@ PWSTR NTAPI ChpeAutoRtlQueryTagHeap(PVOID a0, ULONG a1, USHORT a2, BOOLEAN a3, P
     return RtlQueryTagHeap(a0, a1, a2, a3, a4);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlQueryTagHeap), __typeof__(&RtlQueryTagHeap)), "RtlQueryTagHeap bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoRtlQueryDynamicTimeZoneInformation(PRTL_DYNAMIC_TIME_ZONE_INFORMATION a0)
+{
+    return RtlQueryDynamicTimeZoneInformation(a0);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlQueryDynamicTimeZoneInformation), __typeof__(&RtlQueryDynamicTimeZoneInformation)), "RtlQueryDynamicTimeZoneInformation bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoRtlQueryTimeZoneInformation(PRTL_TIME_ZONE_INFORMATION a0)
 {
