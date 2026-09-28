@@ -834,6 +834,10 @@ static UINT ConvertJISJapaneseToUnicode(LPCSTR input, DWORD count,
     CHAR *sjis_string;
     UINT rc = 0;
     sjis_string = malloc(count);
+#ifdef __REACTOS__
+    if (!sjis_string)
+        return 0;
+#endif
     rc = ConvertJIS2SJIS(input,count,sjis_string);
     if (rc)
     {
@@ -881,6 +885,10 @@ static UINT ConvertUnknownJapaneseToUnicode(LPCSTR input, DWORD count,
 
     case 50220:
         sjis_string = malloc(count);
+#ifdef __REACTOS__
+        if (!sjis_string)
+            return 0;
+#endif
         rc = ConvertJIS2SJIS(input,count,sjis_string);
         if (rc)
         {
@@ -904,8 +912,22 @@ static UINT ConvertJapaneseUnicodeToJIS(LPCWSTR input, DWORD count,
     UINT rc = 0;
 
     len = WideCharToMultiByte(932,0,input,count,0,0,NULL,NULL);
+#ifdef __REACTOS__
+    if (!len)
+        return 0;
+#endif
     sjis_string = malloc(len);
+#ifdef __REACTOS__
+    if (!sjis_string)
+        return 0;
+    if (!WideCharToMultiByte(932,0,input,count,sjis_string,len,NULL,NULL))
+    {
+        free(sjis_string);
+        return 0;
+    }
+#else
     WideCharToMultiByte(932,0,input,count,sjis_string,len,NULL,NULL);
+#endif
     TRACE("%s\n",debugstr_an(sjis_string,len));
 
     rc = ConvertSJIS2JIS(sjis_string, len, NULL);
@@ -974,10 +996,22 @@ HRESULT WINAPI ConvertINetMultiByteToUnicode(
     case 50220:
     case 50221:
     case 50222:
+#ifdef __REACTOS__
+        if (*pcSrcSize == -1)
+            *pcSrcSize = lstrlenA(pSrcStr);
+        *pcDstSize = ConvertJISJapaneseToUnicode(pSrcStr,*pcSrcSize,pDstStr,pDstStr ? *pcDstSize : 0);
+#else
         *pcDstSize = ConvertJISJapaneseToUnicode(pSrcStr,*pcSrcSize,pDstStr,*pcDstSize);
+#endif
         break;
     case 50932:
+#ifdef __REACTOS__
+        if (*pcSrcSize == -1)
+            *pcSrcSize = lstrlenA(pSrcStr);
+        *pcDstSize = ConvertUnknownJapaneseToUnicode(pSrcStr,*pcSrcSize,pDstStr,pDstStr ? *pcDstSize : 0);
+#else
         *pcDstSize = ConvertUnknownJapaneseToUnicode(pSrcStr,*pcSrcSize,pDstStr,*pcDstSize);
+#endif
         break;
 
     default:
@@ -1124,6 +1158,10 @@ HRESULT WINAPI ConvertINetString(
             return hr;
 
         pDstStrW = malloc(cDstSizeW * sizeof(WCHAR));
+#ifdef __REACTOS__
+        if (!pDstStrW)
+            return E_OUTOFMEMORY;
+#endif
         hr = ConvertINetMultiByteToUnicode(pdwMode, dwSrcEncoding, pSrcStr, pcSrcSize, pDstStrW, &cDstSizeW);
         if (hr == S_OK)
             hr = ConvertINetUnicodeToMultiByte(pdwMode, dwDstEncoding, pDstStrW, &cDstSizeW, pDstStr, pcDstSize);
@@ -1368,7 +1406,11 @@ static HRESULT map_font(HDC hdc, DWORD codepages, HFONT src_font, HFONT *dst_fon
 
     for (i = 0; i < 32; i++)
     {
+#ifdef __REACTOS__
+        mask = 1U << i;
+#else
         mask = (DWORD)(1 << i);
+#endif
         if (codepages & mask)
         {
             Csb[0] = mask;
@@ -3441,7 +3483,11 @@ static HRESULT WINAPI fnIMLangFontLink2_CodePagesToCodePage(IMLangFontLink2* ifa
 
     for (i = 0; i < 32; i++)
     {
+#ifdef __REACTOS__
+        mask = 1U << i;
+#else
         mask = 1 << i;
+#endif
         if (codepages & mask)
         {
             DWORD Csb[2];
