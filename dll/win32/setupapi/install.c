@@ -988,6 +988,27 @@ profile_items_callback(
             goto cleanup;
     }
 
+    if (LinkAttributes & FLG_PROFITEM_GROUP)
+    {
+        WCHAR GroupPath[MAX_PATH];
+        int Result;
+
+        if (LinkAttributes & FLG_PROFITEM_CSIDL)
+            CSIDL = LinkFolder;
+        else if (LinkAttributes & FLG_PROFITEM_CURRENTUSER)
+            CSIDL = CSIDL_PROGRAMS;
+        if (!SHGetSpecialFolderPathW(NULL, GroupPath, CSIDL, TRUE))
+            goto cleanup;
+        if (wcslen(GroupPath) + 1 + wcslen(LinkName) >= MAX_PATH)
+            goto cleanup;
+        if (GroupPath[wcslen(GroupPath) - 1] != '\\')
+            wcscat(GroupPath, BackSlash);
+        wcscat(GroupPath, LinkName);
+        Result = SHCreateDirectoryExW(NULL, GroupPath, NULL);
+        ret = Result == ERROR_SUCCESS || Result == ERROR_ALREADY_EXISTS;
+        goto cleanup;
+    }
+
     /* Read 'CmdLine' entry */
     if (!SetupFindFirstLineW(hInf, SectionName, CmdLine, &Context))
         goto cleanup;
@@ -1160,7 +1181,12 @@ profile_items_callback(
                             wcscat(FullLinkName, BackSlash);
                         if (LinkSubDir)
                         {
+                            int Result;
+
                             wcscat(FullLinkName, LinkSubDir);
+                            Result = SHCreateDirectoryExW(NULL, FullLinkName, NULL);
+                            if (Result != ERROR_SUCCESS && Result != ERROR_ALREADY_EXISTS)
+                                hr = HRESULT_FROM_WIN32(Result);
                             if (FullLinkName[wcslen(FullLinkName) - 1] != '\\')
                                 wcscat(FullLinkName, BackSlash);
                         }
@@ -1169,7 +1195,8 @@ profile_items_callback(
                             wcscat(FullLinkName, LinkName);
                             wcscat(FullLinkName, DotLnk);
                         }
-                        hr = IPersistFile_Save(ppf, FullLinkName, TRUE);
+                        if (SUCCEEDED(hr))
+                            hr = IPersistFile_Save(ppf, FullLinkName, TRUE);
                     }
                     else
                         hr = HRESULT_FROM_WIN32(GetLastError());
@@ -1300,7 +1327,9 @@ BOOL WINAPI SetupInstallFilesFromInfSectionW( HINF hinf, HINF hlayout, HSPFILEQ 
     info.src_root   = src_root;
     info.copy_flags = flags;
     info.layout     = hlayout;
-    return iterate_section_fields( hinf, section, CopyFiles, copy_files_callback, &info );
+    return iterate_section_fields( hinf, section, CopyFiles, copy_files_callback, &info ) &&
+           iterate_section_fields( hinf, section, DelFiles, delete_files_callback, &info ) &&
+           iterate_section_fields( hinf, section, RenFiles, rename_files_callback, &info );
 }
 
 

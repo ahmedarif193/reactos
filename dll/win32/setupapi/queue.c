@@ -346,13 +346,13 @@ static void get_src_file_info( HINF hinf, struct file_op *op )
 
     if (!op->src_descr)
     {
-        if (SetupGetStringFieldW( &disk_ctx, 1, NULL, 0, &len ) &&
+        if (SetupGetStringFieldW( &disk_ctx, 1, NULL, 0, &len ) && len > 1 &&
             (op->src_descr = HeapAlloc( GetProcessHeap(), 0, len*sizeof(WCHAR) )))
             SetupGetStringFieldW( &disk_ctx, 1, op->src_descr, len, NULL );
     }
     if (!op->src_tag)
     {
-        if (SetupGetStringFieldW( &disk_ctx, 2, NULL, 0, &len ) &&
+        if (SetupGetStringFieldW( &disk_ctx, 2, NULL, 0, &len ) && len > 1 &&
             (op->src_tag = HeapAlloc( GetProcessHeap(), 0, len*sizeof(WCHAR) )))
             SetupGetStringFieldW( &disk_ctx, 2, op->src_tag, len, NULL );
     }
@@ -824,7 +824,7 @@ BOOL WINAPI SetupQueueRenameA( HSPFILEQ handle, PCSTR SourcePath, PCSTR SourceFi
     op->src_file   = strdupAtoW( SourceFilename );
     op->src_descr  = NULL;
     op->src_tag    = NULL;
-    op->dst_path   = strdupAtoW( TargetPath );
+    op->dst_path   = strdupAtoW( TargetPath ? TargetPath : SourcePath );
     op->dst_file   = strdupAtoW( TargetFilename );
     op->dst_sd     = NULL;
     op->media      = NULL;
@@ -849,7 +849,7 @@ BOOL WINAPI SetupQueueRenameW( HSPFILEQ handle, PCWSTR SourcePath, PCWSTR Source
     op->src_file   = strdupW( SourceFilename );
     op->src_descr  = NULL;
     op->src_tag    = NULL;
-    op->dst_path   = strdupW( TargetPath );
+    op->dst_path   = strdupW( TargetPath ? TargetPath : SourcePath );
     op->dst_file   = strdupW( TargetFilename );
     op->dst_sd     = NULL;
     op->media      = NULL;
