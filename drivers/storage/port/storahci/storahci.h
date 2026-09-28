@@ -67,7 +67,7 @@ typedef enum _AHCI_PORT_RECOVERY_STATE
 } AHCI_PORT_RECOVERY_STATE;
 
 // section 3.1.2
-#define AHCI_Global_HBA_CAP_S64A            (1 << 31)
+#define AHCI_Global_HBA_CAP_S64A            (1U << 31)
 #define AHCI_Global_HBA_CAP_SNCQ            (1UL << 30)
 
 // FIS Types : https://wiki.osdev.org/AHCI

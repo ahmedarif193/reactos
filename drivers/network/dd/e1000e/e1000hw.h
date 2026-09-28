@@ -491,7 +491,7 @@ C_ASSERT(sizeof(E1000_TRANSMIT_DESCRIPTOR) == 16);
 #define E1000_IMS_OTHER             (1 << 24)   /* Other Interrupts */
 
 /* 82574L Extended interrupts for MSI-X */
-#define E1000_IMS_INT_ASSERTED      (1 << 31)   /* Interrupt Asserted (set in ICR when any interrupt) */
+#define E1000_IMS_INT_ASSERTED      (1U << 31)   /* Interrupt Asserted (set in ICR when any interrupt) */
 
 /*
  * Extended Interrupt Mask bits for 82574L MSI-X
@@ -602,7 +602,7 @@ C_ASSERT(sizeof(E1000_TRANSMIT_DESCRIPTOR) == 16);
 
 
 /* E1000_REG_RAH */
-#define E1000_RAH_AV                (1 << 31)   /* Address Valid */
+#define E1000_RAH_AV                (1U << 31)   /* Address Valid */
 #define E1000_RAH_ASEL_SHIFT        16          /* Address Select */
 #define E1000_RAH_ASEL_DEST         (0 << 16)   /* Destination Address */
 #define E1000_RAH_ASEL_SRC          (1 << 16)   /* Source Address */

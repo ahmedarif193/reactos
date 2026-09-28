@@ -173,7 +173,7 @@ BOOLEAN NTAPI AhciPortInitialize(__in PVOID DeviceExtension)
     // clear pending interrupts
     StorPortWriteRegisterUlong(adapterExtension, &PortExtension->Port->SERR, (ULONG)~0);
     StorPortWriteRegisterUlong(adapterExtension, &PortExtension->Port->IS, (ULONG)~0);
-    StorPortWriteRegisterUlong(adapterExtension, adapterExtension->IS, (1 << PortExtension->PortNumber));
+    StorPortWriteRegisterUlong(adapterExtension, adapterExtension->IS, (1U << PortExtension->PortNumber));
 
     return TRUE;
 }// -- AhciPortInitialize();
@@ -210,7 +210,7 @@ BOOLEAN AhciAllocateResourceForAdapter(__in PAHCI_ADAPTER_EXTENSION AdapterExten
 
     NT_ASSERT(portImplemented != 0);
     for (index = MAXIMUM_AHCI_PORT_COUNT - 1; index > 0; index--)
-        if ((portImplemented & (1 << index)) != 0)
+        if ((portImplemented & (1U << index)) != 0)
             break;
 
     portCount = index + 1;
@@ -249,7 +249,7 @@ BOOLEAN AhciAllocateResourceForAdapter(__in PAHCI_ADAPTER_EXTENSION AdapterExten
         PortExtension = &AdapterExtension->PortExtension[index];
 
         PortExtension->DeviceParams.IsActive = FALSE;
-        if ((AdapterExtension->PortImplemented & (1 << index)) != 0)
+        if ((AdapterExtension->PortImplemented & (1U << index)) != 0)
         {
             PortExtension->PortNumber = index;
             PortExtension->DeviceParams.IsActive = TRUE;
@@ -425,7 +425,7 @@ BOOLEAN AhciStartPort(__in PAHCI_PORT_EXTENSION PortExtension)
                 // clear pending interrupts
                 StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->SERR, (ULONG)~0);
                 StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, (ULONG)~0);
-                StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1 << PortExtension->PortNumber));
+                StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1U << PortExtension->PortNumber));
 
                 // set IE
                 ie.Status = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->IE);
@@ -1421,7 +1421,7 @@ AhciPortRecoveryStep(
                 StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, PxIs);
                 StorPortWriteRegisterUlong(AdapterExtension,
                                            AdapterExtension->IS,
-                                           (1 << PortExtension->PortNumber));
+                                           (1U << PortExtension->PortNumber));
             }
 
             SlotMask = 1UL << PortExtension->RecoveryInternalSlot;
@@ -1678,7 +1678,7 @@ VOID AhciInterruptHandler(__in PAHCI_PORT_EXTENSION PortExtension)
         }
 
         StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, PxIS.Status);
-        StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1 << PortExtension->PortNumber));
+        StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1U << PortExtension->PortNumber));
         return;
     }
 
@@ -1696,7 +1696,7 @@ VOID AhciInterruptHandler(__in PAHCI_PORT_EXTENSION PortExtension)
         // non-queued commands were being issued or native command queuing commands were being issued.
 
         StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, PxIS.Status);
-        StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1 << PortExtension->PortNumber));
+        StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1U << PortExtension->PortNumber));
 
         CommandError = PxIS.TFES &&
                        !PxIS.HBFS &&
@@ -1749,7 +1749,7 @@ VOID AhciInterruptHandler(__in PAHCI_PORT_EXTENSION PortExtension)
      * turns one event into a shared-interrupt storm.
      */
     StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, PxIS.Status);
-    StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1 << PortExtension->PortNumber));
+    StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1U << PortExtension->PortNumber));
 
     ci = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->CI);
     sact = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->SACT);
@@ -1843,14 +1843,14 @@ BOOLEAN NTAPI AhciHwInterrupt(__in PVOID DeviceExtension)
                                        PxIS.Status);
             StorPortWriteRegisterUlong(AdapterExtension,
                                        AdapterExtension->IS,
-                                       (1 << nextPort));
-            portPending &= ~(1 << nextPort);
+                                       (1U << nextPort));
+            portPending &= ~(1U << nextPort);
             continue;
         }
 
         AhciInterruptHandler(&AdapterExtension->PortExtension[nextPort]);
 
-        portPending &= ~(1 << nextPort);
+        portPending &= ~(1U << nextPort);
     }
 
     return InterruptHandled;
@@ -2069,7 +2069,7 @@ BOOLEAN NTAPI AhciHwResetBus(__in PVOID AdapterExtension, __in ULONG PathId)
         return FALSE;
     }
 
-    if ((adapterExtension->PortImplemented & (1 << PathId)) == 0)
+    if ((adapterExtension->PortImplemented & (1U << PathId)) == 0)
     {
         return FALSE;
     }
