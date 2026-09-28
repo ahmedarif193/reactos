@@ -1858,7 +1858,12 @@ CmRenameKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
     }
     ExistingCell = CmpFindSubKeyByName(Hive, Parent, NewName);
     HvReleaseCell(Hive, ParentCell);
-    if ((ExistingCell != HCELL_NIL) && (ExistingCell != Cell))
+    if (ExistingCell == Cell)
+    {
+        Status = STATUS_CANNOT_DELETE;
+        goto ExitFlusher;
+    }
+    if (ExistingCell != HCELL_NIL)
     {
         Status = STATUS_ACCESS_DENIED;
         goto ExitFlusher;

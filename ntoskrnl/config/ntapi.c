@@ -282,6 +282,7 @@ NtCreateKey(OUT PHANDLE KeyHandle,
             ProbeForRead(ObjectAttributes,
                          sizeof(OBJECT_ATTRIBUTES),
                          sizeof(ULONG));
+            (VOID)ProbeForReadUlong(&ObjectAttributes->Length);
 
             if (Disposition)
                 ProbeForWriteUlong(Disposition);
@@ -366,6 +367,7 @@ NtOpenKeyEx(OUT PHANDLE KeyHandle,
             ProbeForRead(ObjectAttributes,
                          sizeof(OBJECT_ATTRIBUTES),
                          sizeof(ULONG));
+            (VOID)ProbeForReadUlong(&ObjectAttributes->Length);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -1144,7 +1146,7 @@ NtLoadKey(IN POBJECT_ATTRIBUTES KeyObjectAttributes,
           IN POBJECT_ATTRIBUTES FileObjectAttributes)
 {
     /* Call the newer API */
-    return NtLoadKeyEx(KeyObjectAttributes, FileObjectAttributes, 0, NULL);
+    return NtLoadKeyEx(KeyObjectAttributes, FileObjectAttributes, 0, NULL, NULL, 0, NULL, NULL);
 }
 
 NTSTATUS
@@ -1154,7 +1156,7 @@ NtLoadKey2(IN POBJECT_ATTRIBUTES KeyObjectAttributes,
            IN ULONG Flags)
 {
     /* Call the newer API */
-    return NtLoadKeyEx(KeyObjectAttributes, FileObjectAttributes, Flags, NULL);
+    return NtLoadKeyEx(KeyObjectAttributes, FileObjectAttributes, Flags, NULL, NULL, 0, NULL, NULL);
 }
 
 NTSTATUS
@@ -1162,7 +1164,11 @@ NTAPI
 NtLoadKeyEx(IN POBJECT_ATTRIBUTES TargetKey,
             IN POBJECT_ATTRIBUTES SourceFile,
             IN ULONG Flags,
-            IN HANDLE TrustClassKey)
+            IN HANDLE TrustClassKey OPTIONAL,
+            IN HANDLE Event OPTIONAL,
+            IN ACCESS_MASK DesiredAccess OPTIONAL,
+            OUT PHANDLE RootHandle OPTIONAL,
+            OUT PIO_STATUS_BLOCK IoStatus OPTIONAL)
 {
     NTSTATUS Status;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
@@ -1173,6 +1179,13 @@ NtLoadKeyEx(IN POBJECT_ATTRIBUTES TargetKey,
     PCM_KEY_BODY KeyBody = NULL;
 
     PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(Event);
+    UNREFERENCED_PARAMETER(DesiredAccess);
+    UNREFERENCED_PARAMETER(IoStatus);
+
+    if (RootHandle != NULL && !(Flags & REG_APP_HIVE))
+        return STATUS_INVALID_PARAMETER_7;
 
     /* Validate flags */
     if (Flags & ~REG_NO_LAZY_FLUSH)
@@ -1488,8 +1501,7 @@ NtNotifyChangeMultipleKeys(IN HANDLE MasterKeyHandle,
 
     PAGED_CODE();
 
-    if (!(CompletionFilter & REG_LEGAL_CHANGE_FILTER) ||
-        (CompletionFilter & ~(REG_LEGAL_CHANGE_FILTER | REG_NOTIFY_THREAD_AGNOSTIC)))
+    if (CompletionFilter & ~(REG_LEGAL_CHANGE_FILTER | REG_NOTIFY_THREAD_AGNOSTIC))
         return STATUS_INVALID_PARAMETER;
 
     if (Count || ApcRoutine)

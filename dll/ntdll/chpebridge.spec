@@ -549,7 +549,7 @@
 344 stdcall NtLoadDriver(ptr) ChpeAutoNtLoadDriver
 345 stdcall NtLoadKey2(ptr ptr long) ChpeAutoNtLoadKey2
 346 stdcall NtLoadKey(ptr ptr) ChpeAutoNtLoadKey
-347 stdcall NtLoadKeyEx(ptr ptr long ptr) ChpeAutoNtLoadKeyEx
+347 stdcall NtLoadKeyEx(ptr ptr long ptr ptr long ptr ptr) ChpeAutoNtLoadKeyEx
 348 stdcall NtLockFile(long long ptr ptr ptr ptr ptr ptr long long) ChpeAutoNtLockFile
 349 stdcall NtLockProductActivationKeys(ptr ptr) ChpeAutoNtLockProductActivationKeys
 350 stdcall NtLockRegistryKey(ptr) ChpeAutoNtLockRegistryKey
@@ -1618,7 +1618,7 @@
 1588 stdcall ZwLoadDriver(ptr) ChpeAutoZwLoadDriver
 1589 stdcall ZwLoadKey2(ptr ptr long) ChpeAutoZwLoadKey2
 1590 stdcall ZwLoadKey(ptr ptr) ChpeAutoZwLoadKey
-1591 stdcall ZwLoadKeyEx(ptr ptr long ptr) ChpeAutoZwLoadKeyEx
+1591 stdcall ZwLoadKeyEx(ptr ptr long ptr ptr long ptr ptr) ChpeAutoZwLoadKeyEx
 1592 stdcall ZwLockFile(long long ptr ptr ptr ptr ptr ptr long long) ChpeAutoZwLockFile
 1593 stdcall ZwLockProductActivationKeys(ptr ptr) ChpeAutoZwLockProductActivationKeys
 1594 stdcall ZwLockRegistryKey(ptr) ChpeAutoZwLockRegistryKey

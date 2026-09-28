@@ -1756,9 +1756,9 @@ NTSTATUS NTAPI ChpeAutoNtLoadKey(POBJECT_ATTRIBUTES a0, POBJECT_ATTRIBUTES a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtLoadKey), __typeof__(&NtLoadKey)), "NtLoadKey bridge signature mismatch");
 
-NTSTATUS NTAPI ChpeAutoNtLoadKeyEx(POBJECT_ATTRIBUTES a0, POBJECT_ATTRIBUTES a1, ULONG a2, HANDLE a3)
+NTSTATUS NTAPI ChpeAutoNtLoadKeyEx(POBJECT_ATTRIBUTES a0, POBJECT_ATTRIBUTES a1, ULONG a2, HANDLE a3, HANDLE a4, ACCESS_MASK a5, PHANDLE a6, PIO_STATUS_BLOCK a7)
 {
-    return NtLoadKeyEx(a0, a1, a2, a3);
+    return NtLoadKeyEx(a0, a1, a2, a3, a4, a5, a6, a7);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtLoadKeyEx), __typeof__(&NtLoadKeyEx)), "NtLoadKeyEx bridge signature mismatch");
 
@@ -8434,9 +8434,9 @@ NTSTATUS NTAPI ChpeAutoZwLoadKey(POBJECT_ATTRIBUTES a0, POBJECT_ATTRIBUTES a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwLoadKey), __typeof__(&ZwLoadKey)), "ZwLoadKey bridge signature mismatch");
 
-NTSTATUS NTAPI ChpeAutoZwLoadKeyEx(POBJECT_ATTRIBUTES a0, POBJECT_ATTRIBUTES a1, ULONG a2, HANDLE a3)
+NTSTATUS NTAPI ChpeAutoZwLoadKeyEx(POBJECT_ATTRIBUTES a0, POBJECT_ATTRIBUTES a1, ULONG a2, HANDLE a3, HANDLE a4, ACCESS_MASK a5, PHANDLE a6, PIO_STATUS_BLOCK a7)
 {
-    return NtLoadKeyEx(a0, a1, a2, a3);
+    return NtLoadKeyEx(a0, a1, a2, a3, a4, a5, a6, a7);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwLoadKeyEx), __typeof__(&NtLoadKeyEx)), "ZwLoadKeyEx bridge signature mismatch");
 
