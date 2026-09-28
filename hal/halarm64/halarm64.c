@@ -2788,13 +2788,7 @@ HalInitSystem(
         HalpWriteIccIgrpen1(0);
     }
 
-    /*
-     * Initialize system time increment values for the scheduler tick.
-     * ARM64 generic timer targets 100 Hz (10ms period = 100,000 100ns units).
-     * The maximum increment is 10ms (100000), minimum is 1ms (10000).
-     * This matches the configuration in KiArm64StartTimer().
-     */
-    KeSetTimeIncrement(100000, 10000);
+    KeSetTimeIncrement(156250, 10000);
 
     /*
      * Set up HAL dispatch table callbacks.

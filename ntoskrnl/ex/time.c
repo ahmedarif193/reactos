@@ -29,7 +29,8 @@ ULONG ExpTimeZoneId;
 ULONG ExpTickCountMultiplier;
 ERESOURCE ExpTimeRefreshLock;
 ULONG ExpKernelResolutionCount = 0;
-ULONG ExpTimerResolutionCount = 0;
+ULONG ExpKernelRequestedResolution;
+LIST_ENTRY ExpTimerResolutionListHead = { &ExpTimerResolutionListHead, &ExpTimerResolutionListHead };
 
 /* FUNCTIONS ****************************************************************/
 
@@ -184,6 +185,43 @@ ExReleaseTimeRefreshLock(VOID)
     KeLeaveCriticalRegion();
 }
 
+static
+ULONG
+ExpClampTimerResolution(IN ULONG DesiredTime)
+{
+    if (DesiredTime < KeMinimumIncrement) return KeMinimumIncrement;
+    if (DesiredTime > KeMaximumIncrement) return KeMaximumIncrement;
+    return DesiredTime;
+}
+
+static
+ULONG
+ExpUpdateTimerResolution(VOID)
+{
+    PLIST_ENTRY ListEntry;
+    PEPROCESS Process;
+    ULONG DesiredTime = KeMaximumIncrement;
+
+    if (ExpKernelResolutionCount) DesiredTime = min(DesiredTime, ExpKernelRequestedResolution);
+
+    for (ListEntry = ExpTimerResolutionListHead.Flink;
+         ListEntry != &ExpTimerResolutionListHead;
+         ListEntry = ListEntry->Flink)
+    {
+        Process = CONTAINING_RECORD(ListEntry, EPROCESS, TimerResolutionLink);
+        DesiredTime = min(DesiredTime, Process->RequestedTimerResolution);
+    }
+
+    if (DesiredTime != KeTimeIncrement)
+    {
+        KeSetSystemAffinityThread(1);
+        KeTimeIncrement = HalSetTimeIncrement(DesiredTime);
+        KeRevertToUserAffinityThread();
+    }
+
+    return KeTimeIncrement;
+}
+
 /*++
  * @name ExSetTimerResolution
  * @exported
@@ -230,82 +268,25 @@ ExSetTimerResolution(IN ULONG DesiredTime,
 {
     ULONG CurrentIncrement;
 
-    /* Wait for clock interrupt frequency and power requests to synchronize */
     ExAcquireTimeRefreshLock(TRUE);
 
-    /* Obey remark 2*/
-    CurrentIncrement = KeTimeIncrement;
-
-    /* Check the type of operation this is */
     if (SetResolution)
     {
-        /*
-         * If this is the first kernel change, bump the timer resolution change
-         * count, then bump the kernel change count as well.
-         *
-         * These two variables are tracked differently since user-mode processes
-         * can also change the timer resolution through the NtSetTimerResolution
-         * system call. A per-process flag in the EPROCESS then stores the per-
-         * process change state.
-         *
-         */
-        if (!ExpKernelResolutionCount++) ExpTimerResolutionCount++;
-
-        /* Obey remark 3 */
-        if (DesiredTime < KeMinimumIncrement) DesiredTime = KeMinimumIncrement;
-
-        /* Obey remark 1 */
-        if (DesiredTime < KeTimeIncrement)
-        {
-            /* Force this thread on CPU zero, since we don't want it to drift */
-            KeSetSystemAffinityThread(1);
-
-            /* Now call the platform driver (HAL) to make the change */
-            CurrentIncrement = HalSetTimeIncrement(DesiredTime);
-
-            /* Put the thread back to its original affinity */
-            KeRevertToUserAffinityThread();
-
-            /* Finally, keep track of the new value in the kernel */
-            KeTimeIncrement = CurrentIncrement;
-        }
+        DesiredTime = ExpClampTimerResolution(DesiredTime);
+        if (!ExpKernelResolutionCount++ || DesiredTime < ExpKernelRequestedResolution)
+            ExpKernelRequestedResolution = DesiredTime;
+        CurrentIncrement = ExpUpdateTimerResolution();
+    }
+    else if (ExpKernelResolutionCount && !--ExpKernelResolutionCount)
+    {
+        CurrentIncrement = ExpUpdateTimerResolution();
     }
     else
     {
-        /* First, make sure that a driver has actually changed the resolution */
-        if (ExpKernelResolutionCount)
-        {
-            /* Obey remark 4 */
-            if (!--ExpKernelResolutionCount)
-            {
-                /*
-                 * All kernel drivers have requested the original frequency to
-                 * be restored, but there might still be user processes with an
-                 * ongoing clock interrupt frequency change, so make sure that
-                 * this isn't the case.
-                 */
-                if (!--ExpTimerResolutionCount)
-                {
-                    /* Force this thread on one CPU so that it doesn't drift */
-                    KeSetSystemAffinityThread(1);
-
-                    /* Call the HAL to restore the frequency to its default */
-                    CurrentIncrement = HalSetTimeIncrement(KeMaximumIncrement);
-
-                    /* Put the thread back to its original affinity */
-                    KeRevertToUserAffinityThread();
-
-                    /* Finally, keep track of the new value in the kernel */
-                    KeTimeIncrement = CurrentIncrement;
-                }
-            }
-        }
+        CurrentIncrement = KeTimeIncrement;
     }
 
-    /* Release the clock interrupt frequency lock since changes are done */
     ExReleaseTimeRefreshLock();
-
-    /* And return the current value -- which could reflect the new frequency */
     return CurrentIncrement;
 }
 
@@ -750,40 +731,44 @@ NtSetTimerResolution(IN ULONG DesiredResolution,
         _SEH2_END;
     }
 
-    /* Set and return the new resolution */
-    NewResolution = ExSetTimerResolution(DesiredResolution, SetResolution);
+    ExAcquireTimeRefreshLock(TRUE);
 
-    if (PreviousMode != KernelMode)
+    if (SetResolution)
     {
-        _SEH2_TRY
+        DesiredResolution = ExpClampTimerResolution(DesiredResolution);
+        Process->RequestedTimerResolution = DesiredResolution;
+        if (!Process->SmallestTimerResolution || DesiredResolution < Process->SmallestTimerResolution)
+            Process->SmallestTimerResolution = DesiredResolution;
+        if (!Process->SetTimerResolution)
         {
-            *CurrentResolution = NewResolution;
+            InsertTailList(&ExpTimerResolutionListHead, &Process->TimerResolutionLink);
+            PspSetProcessFlag(Process, PSF_SET_TIMER_RESOLUTION_BIT);
         }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            /* Return the exception code */
-            _SEH2_YIELD(return _SEH2_GetExceptionCode());
-        }
-        _SEH2_END;
+        Status = STATUS_SUCCESS;
     }
-    else
+    else if (Process->SetTimerResolution)
     {
-        *CurrentResolution = NewResolution;
-    }
-
-    if (SetResolution || Process->SetTimerResolution)
-    {
-        /* The resolution has been changed now or in an earlier call */
+        RemoveEntryList(&Process->TimerResolutionLink);
+        PspClearProcessFlag(Process, PSF_SET_TIMER_RESOLUTION_BIT);
         Status = STATUS_SUCCESS;
     }
     else
     {
-        /* The resolution hasn't been changed */
         Status = STATUS_TIMER_RESOLUTION_NOT_SET;
     }
 
-    /* Update the flag */
-    Process->SetTimerResolution = SetResolution;
+    NewResolution = ExpUpdateTimerResolution();
+    ExReleaseTimeRefreshLock();
+
+    _SEH2_TRY
+    {
+        *CurrentResolution = NewResolution;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
 
     return Status;
 }
