@@ -76,9 +76,21 @@ static HRESULT get_protocol_cf(LPCWSTR schema, DWORD schema_len, CLSID *pclsid, 
     static const WCHAR wszProtocolsKey[] =
         {'P','R','O','T','O','C','O','L','S','\\','H','a','n','d','l','e','r','\\'};
 
+#ifdef __REACTOS__
+    if ((size_t)schema_len > (~(size_t)0 - sizeof(wszProtocolsKey)) / sizeof(WCHAR) - 1)
+        return E_OUTOFMEMORY;
+    wszKey = malloc(sizeof(wszProtocolsKey) + ((size_t)schema_len + 1) * sizeof(WCHAR));
+    if (!wszKey) return E_OUTOFMEMORY;
+#else
     wszKey = malloc(sizeof(wszProtocolsKey) + (schema_len + 1) * sizeof(WCHAR));
+#endif
     memcpy(wszKey, wszProtocolsKey, sizeof(wszProtocolsKey));
+#ifdef __REACTOS__
+    memcpy(wszKey + ARRAY_SIZE(wszProtocolsKey), schema, (size_t)schema_len * sizeof(WCHAR));
+    wszKey[ARRAY_SIZE(wszProtocolsKey) + schema_len] = 0;
+#else
     memcpy(wszKey + ARRAY_SIZE(wszProtocolsKey), schema, (schema_len+1)*sizeof(WCHAR));
+#endif
 
     res = RegOpenKeyW(HKEY_CLASSES_ROOT, wszKey, &hkey);
     free(wszKey);
