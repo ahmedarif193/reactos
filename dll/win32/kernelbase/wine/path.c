@@ -983,14 +983,22 @@ BOOL WINAPI PathIsUNCA(const char *path)
 {
     TRACE("%s\n", wine_dbgstr_a(path));
 
-    return path && (path[0] == '\\') && (path[1] == '\\');
+    if (!path || path[0] != '\\' || path[1] != '\\')
+        return FALSE;
+    if (path[2] == '?' && (path[3] == '\\' || !path[3]))
+        return path[3] && !_strnicmp(path + 4, "UNC\\", 4);
+    return TRUE;
 }
 
 BOOL WINAPI PathIsUNCW(const WCHAR *path)
 {
     TRACE("%s\n", wine_dbgstr_w(path));
 
-    return path && (path[0] == '\\') && (path[1] == '\\');
+    if (!path || path[0] != '\\' || path[1] != '\\')
+        return FALSE;
+    if (path[2] == '?' && (path[3] == '\\' || !path[3]))
+        return path[3] && !_wcsnicmp(path + 4, L"UNC\\", 4);
+    return TRUE;
 }
 
 BOOL WINAPI PathIsRelativeA(const char *path)
@@ -1839,6 +1847,9 @@ BOOL WINAPI PathIsUNCServerA(const char *path)
     if (!(path && path[0] == '\\' && path[1] == '\\'))
         return FALSE;
 
+    if (path[2] == '?' && (path[3] == '\\' || !path[3]))
+        return FALSE;
+
     while (*path)
     {
         if (*path == '\\')
@@ -1854,6 +1865,9 @@ BOOL WINAPI PathIsUNCServerW(const WCHAR *path)
     TRACE("%s\n", wine_dbgstr_w(path));
 
     if (!(path && path[0] == '\\' && path[1] == '\\'))
+        return FALSE;
+
+    if (path[2] == '?' && (path[3] == '\\' || !path[3]))
         return FALSE;
 
     return !wcschr(path + 2, '\\');
