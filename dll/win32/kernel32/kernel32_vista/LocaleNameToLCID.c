@@ -55,6 +55,19 @@ LocaleNameToLCID(
         USHORT SubLangId = SUBLANGID(LangId);
         if (SubLangId == SUBLANG_NEUTRAL)
         {
+            switch (Lcid)
+            {
+                case 0x00004: return 0x00804;
+                case 0x0000A: return 0x00C0A;
+                case 0x0003C: return 0x0083C;
+                case 0x00045: return 0x00845;
+                case 0x00059: return 0x00859;
+                case 0x0005D: return 0x0085D;
+                case 0x0005F: return 0x0085F;
+                case 0x00067: return 0x00867;
+                case 0x00073: return 0x00873;
+            }
+
             /* Adjust it to be the default locale */
             Lcid = MAKELCID(MAKELANGID(PRIMARYLANGID(LangId), SUBLANG_DEFAULT), SORT_DEFAULT);
         }
@@ -94,11 +107,13 @@ LocaleNameToLCID(
                 case 0x07C43: return 0x00443; // "uz-Latn" -> "uz-Latn-UZ"
                 case 0x07804: return 0x00804; // "zh" -> "zh-CN"
                 case 0x07C04: return 0x00C04; // "zh-Hant" -> "zh-HK"
+                case 0x07C1A: return 0x0241A;
+                case 0x07C86: return 0x00486;
             }
 
             /* Should not happen */
             DPRINT1("Unandled neutral LCID %x\n", Lcid);
-            ASSERT(FALSE);
+            SetLastError(ERROR_INVALID_PARAMETER);
             return 0;
         }
     }

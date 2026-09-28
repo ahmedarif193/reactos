@@ -2033,112 +2033,56 @@ WriteProcessMemory(IN HANDLE hProcess,
                    IN SIZE_T nSize,
                    OUT SIZE_T *lpNumberOfBytesWritten)
 {
-    NTSTATUS Status;
-    ULONG OldValue;
+    MEMORY_BASIC_INFORMATION Info;
+    NTSTATUS Status, Status2;
+    ULONG OldProtect, Protect;
     SIZE_T RegionSize;
     PVOID Base;
-    BOOLEAN UnProtect;
 
-    /* Set parameters for protect call */
-    RegionSize = nSize;
-    Base = lpBaseAddress;
+    if (!VirtualQueryEx(hProcess, lpBaseAddress, &Info, sizeof(Info)))
+        return FALSE;
 
-    /* Check the current status */
-    Status = NtProtectVirtualMemory(hProcess,
-                                    &Base,
-                                    &RegionSize,
-                                    PAGE_EXECUTE_READWRITE,
-                                    &OldValue);
-    if (NT_SUCCESS(Status))
+    switch (Info.Protect & ~(PAGE_GUARD | PAGE_NOCACHE))
     {
-        /* Check if we are unprotecting */
-        UnProtect = OldValue & (PAGE_READWRITE |
-                                PAGE_WRITECOPY |
-                                PAGE_EXECUTE_READWRITE |
-                                PAGE_EXECUTE_WRITECOPY) ? FALSE : TRUE;
-        if (!UnProtect)
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        Status = NtWriteVirtualMemory(hProcess, lpBaseAddress, (PVOID)lpBuffer, nSize, lpNumberOfBytesWritten);
+        if (NT_SUCCESS(Status))
         {
-            /* Set the new protection */
-            Status = NtProtectVirtualMemory(hProcess,
-                                            &Base,
-                                            &RegionSize,
-                                            OldValue,
-                                            &OldValue);
-
-            /* Write the memory */
-            Status = NtWriteVirtualMemory(hProcess,
-                                          lpBaseAddress,
-                                          (LPVOID)lpBuffer,
-                                          nSize,
-                                          &nSize);
-
-            /* In Win32, the parameter is optional, so handle this case */
-            if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = nSize;
-
-            if (!NT_SUCCESS(Status))
-            {
-                /* We failed */
-                BaseSetLastNTError(Status);
-                return FALSE;
-            }
-
-            /* Flush the ITLB */
             NtFlushInstructionCache(hProcess, lpBaseAddress, nSize);
             return TRUE;
         }
-        else
-        {
-            /* Check if we were read only */
-            if (OldValue & (PAGE_NOACCESS | PAGE_READONLY))
-            {
-                /* Restore protection and fail */
-                NtProtectVirtualMemory(hProcess,
-                                       &Base,
-                                       &RegionSize,
-                                       OldValue,
-                                       &OldValue);
-                BaseSetLastNTError(STATUS_ACCESS_VIOLATION);
+        break;
 
-                /* Note: This is what Windows returns and code depends on it */
-                return STATUS_ACCESS_VIOLATION;
-            }
+    case PAGE_EXECUTE:
+    case PAGE_EXECUTE_READ:
+        Base = (PVOID)((ULONG_PTR)lpBaseAddress & ~((ULONG_PTR)PAGE_SIZE - 1));
+        RegionSize = (((ULONG_PTR)lpBaseAddress + nSize + PAGE_SIZE - 1) & ~((ULONG_PTR)PAGE_SIZE - 1)) - (ULONG_PTR)Base;
+        RegionSize = min(RegionSize, (SIZE_T)((ULONG_PTR)Info.BaseAddress + Info.RegionSize - (ULONG_PTR)Base));
+        Protect = (Info.Type == MEM_PRIVATE) ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_WRITECOPY;
+        Status = NtProtectVirtualMemory(hProcess, &Base, &RegionSize, Protect, &OldProtect);
+        if (!NT_SUCCESS(Status))
+            break;
+        Status = NtWriteVirtualMemory(hProcess, lpBaseAddress, (PVOID)lpBuffer, nSize, lpNumberOfBytesWritten);
+        NtFlushInstructionCache(hProcess, lpBaseAddress, nSize);
+        Status2 = NtProtectVirtualMemory(hProcess, &Base, &RegionSize, OldProtect, &Protect);
+        if (NT_SUCCESS(Status))
+            Status = Status2;
+        break;
 
-            /* Otherwise, do the write */
-            Status = NtWriteVirtualMemory(hProcess,
-                                          lpBaseAddress,
-                                          (LPVOID)lpBuffer,
-                                          nSize,
-                                          &nSize);
-
-            /* In Win32, the parameter is optional, so handle this case */
-            if (lpNumberOfBytesWritten) *lpNumberOfBytesWritten = nSize;
-
-            /* And restore the protection */
-            NtProtectVirtualMemory(hProcess,
-                                   &Base,
-                                   &RegionSize,
-                                   OldValue,
-                                   &OldValue);
-            if (!NT_SUCCESS(Status))
-            {
-                /* We failed */
-                BaseSetLastNTError(STATUS_ACCESS_VIOLATION);
-
-                /* Note: This is what Windows returns and code depends on it */
-                return STATUS_ACCESS_VIOLATION;
-            }
-
-            /* Flush the ITLB */
-            NtFlushInstructionCache(hProcess, lpBaseAddress, nSize);
-            return TRUE;
-        }
+    default:
+        Status = STATUS_ACCESS_VIOLATION;
+        break;
     }
-    else
+
+    if (!NT_SUCCESS(Status))
     {
-        /* We failed */
         BaseSetLastNTError(Status);
         return FALSE;
     }
+    return TRUE;
 }
 
 /*

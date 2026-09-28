@@ -5976,6 +5976,8 @@ BOOL WINAPI /* DECLSPEC_HOTPATCH */ GetFileMUIPath( DWORD flags, const WCHAR *fi
 }
 
 
+#endif
+
 /******************************************************************************
  *	GetGeoInfoW   (kernelbase.@)
  */
@@ -5992,7 +5994,6 @@ INT WINAPI DECLSPEC_HOTPATCH GetGeoInfoW( GEOID id, GEOTYPE type, WCHAR *data, i
     }
     return get_geo_info( ptr, type, data, count, lang );
 }
-
 
 INT WINAPI DECLSPEC_HOTPATCH GetGeoInfoEx( WCHAR *location, GEOTYPE type, WCHAR *data, int data_count )
 {
@@ -6014,6 +6015,8 @@ INT WINAPI DECLSPEC_HOTPATCH GetGeoInfoEx( WCHAR *location, GEOTYPE type, WCHAR 
 
     return get_geo_info( ptr, type, data, data_count, 0 );
 }
+
+#ifndef __REACTOS__
 
 
 /******************************************************************************
@@ -6106,6 +6109,8 @@ INT WINAPI DECLSPEC_HOTPATCH GetLocaleInfoEx( const WCHAR *name, LCTYPE info, WC
 }
 
 
+#endif
+
 /******************************************************************************
  *	GetNLSVersion   (kernelbase.@)
  */
@@ -6125,7 +6130,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetNLSVersion( NLS_FUNCTION func, LCID lcid, NLSVE
     }
     return GetNLSVersionEx( func, locale, (NLSVERSIONINFOEX *)info );
 }
-
 
 /******************************************************************************
  *	GetNLSVersionEx   (kernelbase.@)
@@ -6158,6 +6162,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetNLSVersionEx( NLS_FUNCTION func, const WCHAR *l
     return TRUE;
 }
 
+#ifndef __REACTOS__
+
 
 /******************************************************************************
  *	GetOEMCP   (kernelbase.@)
@@ -6168,6 +6174,8 @@ UINT WINAPI GetOEMCP(void)
 }
 
 
+#endif
+
 /***********************************************************************
  *      GetProcessPreferredUILanguages   (kernelbase.@)
  */
@@ -6176,7 +6184,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetProcessPreferredUILanguages( DWORD flags, ULONG
 {
     return set_ntstatus( RtlGetProcessPreferredUILanguages( flags, count, buffer, size ));
 }
-
 
 /***********************************************************************
  *	GetStringTypeA   (kernelbase.@)
@@ -6207,7 +6214,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetStringTypeA( LCID locale, DWORD type, const cha
     return ret;
 }
 
-
 /***********************************************************************
  *	GetStringTypeW   (kernelbase.@)
  */
@@ -6231,7 +6237,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetStringTypeW( DWORD type, const WCHAR *src, INT 
     return TRUE;
 }
 
-
 /***********************************************************************
  *	GetStringTypeExW   (kernelbase.@)
  */
@@ -6241,6 +6246,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetStringTypeExW( LCID locale, DWORD type, const W
     /* locale is ignored for Unicode */
     return GetStringTypeW( type, src, count, chartype );
 }
+
+#ifndef __REACTOS__
 
 
 /***********************************************************************
@@ -6281,6 +6288,8 @@ LANGID WINAPI DECLSPEC_HOTPATCH GetSystemDefaultUILanguage(void)
 }
 
 
+#endif
+
 /***********************************************************************
  *      GetSystemPreferredUILanguages   (kernelbase.@)
  */
@@ -6290,7 +6299,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetSystemPreferredUILanguages( DWORD flags, ULONG 
     return set_ntstatus( RtlGetSystemPreferredUILanguages( flags, 0, count, buffer, size ));
 }
 
-
 /***********************************************************************
  *      GetThreadPreferredUILanguages   (kernelbase.@)
  */
@@ -6299,6 +6307,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetThreadPreferredUILanguages( DWORD flags, ULONG 
 {
     return set_ntstatus( RtlGetThreadPreferredUILanguages( flags, count, buffer, size ));
 }
+
+#ifndef __REACTOS__
 
 
 /***********************************************************************
@@ -6426,6 +6436,8 @@ LANGID WINAPI DECLSPEC_HOTPATCH GetUserDefaultUILanguage(void)
 }
 
 
+#endif
+
 /******************************************************************************
  *	GetUserGeoID   (kernelbase.@)
  */
@@ -6458,7 +6470,6 @@ GEOID WINAPI DECLSPEC_HOTPATCH GetUserGeoID( GEOCLASS geoclass )
     return ret;
 }
 
-
 /******************************************************************************
  *      GetUserPreferredUILanguages   (kernelbase.@)
  */
@@ -6467,6 +6478,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetUserPreferredUILanguages( DWORD flags, ULONG *c
 {
     return set_ntstatus( RtlGetUserPreferredUILanguages( flags, 0, count, buffer, size ));
 }
+
+#ifndef __REACTOS__
 
 
 /******************************************************************************
@@ -6674,6 +6687,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH IsDBCSLeadByteEx( UINT codepage, BYTE testchar )
 }
 
 
+#endif
+
 /******************************************************************************
  *	IsNormalizedString   (kernelbase.@)
  */
@@ -6683,6 +6698,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH IsNormalizedString( NORM_FORM form, const WCHAR *s
     if (!set_ntstatus( RtlIsNormalizedString( form, str, len, &res ))) res = FALSE;
     return res;
 }
+
+#ifndef __REACTOS__
 
 
 /******************************************************************************
@@ -6741,6 +6758,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH IsValidLocale( LCID lcid, DWORD flags )
 }
 
 
+#endif
+
 /******************************************************************************
  *	IsValidLocaleName   (kernelbase.@)
  */
@@ -6749,7 +6768,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH IsValidLocaleName( const WCHAR *locale )
     if (locale == LOCALE_NAME_USER_DEFAULT) return FALSE;
     return !!find_lcname_entry( locale );
 }
-
 
 /******************************************************************************
  *	IsNLSDefinedString   (kernelbase.@)
@@ -6791,7 +6809,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH IsNLSDefinedString( NLS_FUNCTION func, DWORD flags
     return TRUE;
 }
 
-
 /******************************************************************************
  *	IsValidNLSVersion   (kernelbase.@)
  */
@@ -6824,7 +6841,6 @@ DWORD WINAPI DECLSPEC_HOTPATCH IsValidNLSVersion( NLS_FUNCTION func, const WCHAR
     return ret;
 }
 
-
 /***********************************************************************
  *	LCIDToLocaleName   (kernelbase.@)
  */
@@ -6839,7 +6855,6 @@ INT WINAPI DECLSPEC_HOTPATCH LCIDToLocaleName( LCID lcid, WCHAR *name, INT count
     }
     return get_locale_info( locale, lcid, LOCALE_SNAME, name, count );
 }
-
 
 /***********************************************************************
  *	LCMapStringEx   (kernelbase.@)
@@ -6894,7 +6909,6 @@ INT WINAPI DECLSPEC_HOTPATCH LCMapStringEx( const WCHAR *locale, DWORD flags, co
 
     return lcmap_string( sortid, flags, src, srclen, dst, dstlen );
 }
-
 
 /***********************************************************************
  *	LCMapStringA   (kernelbase.@)
@@ -6964,7 +6978,6 @@ done:
     return ret;
 }
 
-
 /***********************************************************************
  *	LCMapStringW   (kernelbase.@)
  */
@@ -6998,7 +7011,6 @@ INT WINAPI DECLSPEC_HOTPATCH LCMapStringW( LCID lcid, DWORD flags, const WCHAR *
     return LCMapStringEx( locale, flags, src, srclen, dst, dstlen, NULL, NULL, 0 );
 }
 
-
 /***********************************************************************
  *	LocaleNameToLCID   (kernelbase.@)
  */
@@ -7016,6 +7028,8 @@ LCID WINAPI DECLSPEC_HOTPATCH LocaleNameToLCID( const WCHAR *name, DWORD flags )
         lcid = locale->idefaultlanguage;
     return lcid;
 }
+
+#ifndef __REACTOS__
 
 
 /******************************************************************************
@@ -7067,6 +7081,8 @@ INT WINAPI DECLSPEC_HOTPATCH MultiByteToWideChar( UINT codepage, DWORD flags, co
 }
 
 
+#endif
+
 /******************************************************************************
  *	NormalizeString   (kernelbase.@)
  */
@@ -7088,7 +7104,6 @@ INT WINAPI DECLSPEC_HOTPATCH NormalizeString(NORM_FORM form, const WCHAR *src, I
     SetLastError( RtlNtStatusToDosError( status ));
     return dst_len;
 }
-
 
 /******************************************************************************
  *	ResolveLocaleName   (kernelbase.@)
@@ -7131,6 +7146,8 @@ INT WINAPI DECLSPEC_HOTPATCH ResolveLocaleName( LPCWSTR name, LPWSTR buffer, INT
     }
     return datalen;
 }
+
+#ifndef __REACTOS__
 
 
 /******************************************************************************
@@ -7230,6 +7247,8 @@ INT WINAPI /* DECLSPEC_HOTPATCH */ SetCalendarInfoW( LCID lcid, CALID calendar, 
 }
 
 
+#endif
+
 /***********************************************************************
  *      SetProcessPreferredUILanguages   (kernelbase.@)
  */
@@ -7238,7 +7257,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetProcessPreferredUILanguages( DWORD flags, PCZZW
     return set_ntstatus( RtlSetProcessPreferredUILanguages( flags, buffer, count ));
 }
 
-
 /***********************************************************************
  *      SetThreadPreferredUILanguages   (kernelbase.@)
  */
@@ -7246,6 +7264,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetThreadPreferredUILanguages( DWORD flags, PCZZWS
 {
     return set_ntstatus( RtlSetThreadPreferredUILanguages( flags, buffer, count ));
 }
+
+#ifndef __REACTOS__
 
 
 /***********************************************************************
@@ -7256,6 +7276,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetTimeZoneInformation( const TIME_ZONE_INFORMATIO
     return set_ntstatus( RtlSetTimeZoneInformation( (const RTL_TIME_ZONE_INFORMATION *)info ));
 }
 
+
+#endif
 
 /******************************************************************************
  *	SetUserGeoID   (kernelbase.@)
@@ -7277,15 +7299,15 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetUserGeoID( GEOID id )
         swprintf( bufferW, ARRAY_SIZE(bufferW), L"%u", geo->id );
         RegSetValueExW( hkey, name, 0, REG_SZ, (BYTE *)bufferW, (lstrlenW(bufferW) + 1) * sizeof(WCHAR) );
 
-        if (geo->class == GEOCLASS_NATION || wcscmp( geo->iso2, L"XX" ))
-            lstrcpyW( bufferW, geo->iso2 );
-        else
-            swprintf( bufferW, ARRAY_SIZE(bufferW), L"%03u", geo->uncode );
-        RegSetValueExW( hkey, L"Name", 0, REG_SZ, (BYTE *)bufferW, (lstrlenW(bufferW) + 1) * sizeof(WCHAR) );
+        if (geo->class == GEOCLASS_NATION && wcscmp( geo->iso2, L"XX" ))
+            RegSetValueExW( hkey, L"Name", 0, REG_SZ,
+                            (BYTE *)geo->iso2, (lstrlenW(geo->iso2) + 1) * sizeof(WCHAR) );
         RegCloseKey( hkey );
     }
     return TRUE;
 }
+
+#ifndef __REACTOS__
 
 
 /***********************************************************************

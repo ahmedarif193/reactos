@@ -217,6 +217,43 @@ LoadLibraryW(LPCWSTR lpLibFileName)
 }
 
 
+typedef struct _BASEP_EXCLUSIVE_DATAFILE
+{
+    LIST_ENTRY Entry;
+    HMODULE Module;
+    HANDLE File;
+} BASEP_EXCLUSIVE_DATAFILE, *PBASEP_EXCLUSIVE_DATAFILE;
+
+static LIST_ENTRY BasepExclusiveDatafileList = { &BasepExclusiveDatafileList, &BasepExclusiveDatafileList };
+
+static
+VOID
+BasepCloseExclusiveDatafile(HMODULE Module)
+{
+    PLIST_ENTRY Entry;
+    PBASEP_EXCLUSIVE_DATAFILE Datafile = NULL;
+
+    RtlAcquirePebLock();
+    for (Entry = BasepExclusiveDatafileList.Flink; Entry != &BasepExclusiveDatafileList; Entry = Entry->Flink)
+    {
+        PBASEP_EXCLUSIVE_DATAFILE Current = CONTAINING_RECORD(Entry, BASEP_EXCLUSIVE_DATAFILE, Entry);
+
+        if (Current->Module == Module)
+        {
+            RemoveEntryList(&Current->Entry);
+            Datafile = Current;
+            break;
+        }
+    }
+    RtlReleasePebLock();
+
+    if (Datafile)
+    {
+        NtClose(Datafile->File);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Datafile);
+    }
+}
+
 static
 NTSTATUS
 BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, DWORD Flags, HMODULE *hModule)
@@ -276,11 +313,18 @@ BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, DWORD Flags, HMODULE *hModu
     /* Create file mapping */
     hMapping = CreateFileMappingW(hFile, NULL, Protect, 0, 0, NULL);
 
-    /* Close the file handle */
-    CloseHandle(hFile);
+    if (!(Flags & LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE) || (Flags & LOAD_LIBRARY_AS_IMAGE_RESOURCE))
+    {
+        CloseHandle(hFile);
+        hFile = INVALID_HANDLE_VALUE;
+    }
 
     /* If creating file mapping failed - return last status value */
-    if (!hMapping) return NtCurrentTeb()->LastStatusValue;
+    if (!hMapping)
+    {
+        if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
+        return NtCurrentTeb()->LastStatusValue;
+    }
 
     /* Map view of section */
     Status = NtMapViewOfSection(hMapping,
@@ -298,13 +342,18 @@ BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, DWORD Flags, HMODULE *hModu
     CloseHandle(hMapping);
 
     /* If mapping view of section failed - return last status value */
-    if (!NT_SUCCESS(Status)) return NtCurrentTeb()->LastStatusValue;
+    if (!NT_SUCCESS(Status))
+    {
+        if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
+        return Status;
+    }
 
     /* Make sure it's a valid PE file */
     if (!RtlImageNtHeader(lpBaseAddress))
     {
         /* Unmap the view and return failure status */
         UnmapViewOfFile(lpBaseAddress);
+        if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
         return STATUS_INVALID_IMAGE_FORMAT;
     }
 
@@ -313,6 +362,25 @@ BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, DWORD Flags, HMODULE *hModu
         *hModule = (HMODULE)((ULONG_PTR)lpBaseAddress | 2);
     else
         *hModule = (HMODULE)((ULONG_PTR)lpBaseAddress | 1);
+
+    if (hFile != INVALID_HANDLE_VALUE)
+    {
+        PBASEP_EXCLUSIVE_DATAFILE Datafile = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(*Datafile));
+
+        if (!Datafile)
+        {
+            UnmapViewOfFile(lpBaseAddress);
+            CloseHandle(hFile);
+            *hModule = 0;
+            return STATUS_NO_MEMORY;
+        }
+
+        Datafile->Module = *hModule;
+        Datafile->File = hFile;
+        RtlAcquirePebLock();
+        InsertHeadList(&BasepExclusiveDatafileList, &Datafile->Entry);
+        RtlReleasePebLock();
+    }
 
     /* Load alternate resource module */
     //LdrLoadAlternateResourceModule(*hModule, FilenameW);
@@ -360,7 +428,7 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
         LdrEnumerateLoadedModules(0, BasepLocateExeLdrEntry, NtCurrentPeb()->ImageBaseAddress);
 
     /* Check if that module is our exe*/
-    if (BasepExeLdrEntry && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) &&
+    if (BasepExeLdrEntry && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) &&
         DllName.Length == BasepExeLdrEntry->FullDllName.Length)
     {
         /* Lengths match and it's not a datafile, so perform name comparison */
@@ -428,7 +496,7 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
 
     _SEH2_TRY
     {
-        if (dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))
+        if (dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))
         {
             /* If the image is loaded as a datafile, try to get its handle */
             Status = LdrGetDllHandleEx(0, SearchPath, NULL, &DllName, (PVOID*)&hInst);
@@ -572,6 +640,7 @@ FreeLibrary(HINSTANCE hLibModule)
         {
             /* Unmap view */
             Status = NtUnmapViewOfSection(NtCurrentProcess(), (PVOID)((ULONG_PTR)hLibModule & ~(ULONG_PTR)3));
+            BasepCloseExclusiveDatafile(hLibModule);
 
             /* Unload alternate resource module */
             LdrUnloadAlternateResourceModule(hLibModule);

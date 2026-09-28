@@ -53,8 +53,7 @@ INT WINAPI FoldStringA(DWORD dwFlags, LPCSTR src, INT srclen,
         return 0;
     }
 
-    srclenW = MultiByteToWideChar(CP_ACP, dwFlags & MAP_COMPOSITE ? MB_COMPOSITE : 0,
-                                  src, srclen, NULL, 0);
+    srclenW = MultiByteToWideChar(CP_ACP, 0, src, srclen, NULL, 0);
     srcW = HeapAlloc(GetProcessHeap(), 0, srclenW * sizeof(WCHAR));
 
     if (!srcW)
@@ -63,10 +62,7 @@ INT WINAPI FoldStringA(DWORD dwFlags, LPCSTR src, INT srclen,
         goto FoldStringA_exit;
     }
 
-    MultiByteToWideChar(CP_ACP, dwFlags & MAP_COMPOSITE ? MB_COMPOSITE : 0,
-                        src, srclen, srcW, srclenW);
-
-    dwFlags = (dwFlags & ~MAP_PRECOMPOSED) | MAP_FOLDCZONE;
+    MultiByteToWideChar(CP_ACP, 0, src, srclen, srcW, srclenW);
 
     ret = FoldStringW(dwFlags, srcW, srclenW, NULL, 0);
     if (ret && dstlen)

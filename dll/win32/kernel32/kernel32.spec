@@ -262,12 +262,12 @@
 @ stdcall EnumSystemCodePagesA(ptr long)
 @ stdcall EnumSystemCodePagesW(ptr long)
 @ stdcall EnumSystemFirmwareTables(long ptr long)
-@ stdcall EnumSystemGeoID(long long ptr)
+@ stdcall EnumSystemGeoID(long long ptr) kernelbase.EnumSystemGeoID
 @ stdcall EnumSystemLanguageGroupsA(ptr long ptr)
 @ stdcall EnumSystemLanguageGroupsW(ptr long ptr)
-@ stdcall EnumSystemLocalesA(ptr long)
-@ stdcall -version=0x600+ EnumSystemLocalesEx(ptr long long ptr)
-@ stdcall EnumSystemLocalesW(ptr long)
+@ stdcall EnumSystemLocalesA(ptr long) kernelbase.EnumSystemLocalesA
+@ stdcall -version=0x600+ EnumSystemLocalesEx(ptr long long ptr) kernelbase.EnumSystemLocalesEx
+@ stdcall EnumSystemLocalesW(ptr long) kernelbase.EnumSystemLocalesW
 @ stdcall EnumTimeFormatsA(ptr long long)
 @ stdcall -version=0x600+ EnumTimeFormatsEx(ptr wstr long long)
 @ stdcall EnumTimeFormatsW(ptr long long)
@@ -522,7 +522,8 @@
 @ stub -version=0x600+ GetFullPathNameTransactedW
 @ stdcall GetFullPathNameW(wstr long ptr ptr)
 @ stdcall GetGeoInfoA(long long ptr long long)
-@ stdcall GetGeoInfoW(long long ptr long long)
+@ stdcall -version=0xA00+ GetGeoInfoEx(ptr long ptr long) kernelbase.GetGeoInfoEx
+@ stdcall GetGeoInfoW(long long ptr long long) kernelbase.GetGeoInfoW
 @ stdcall -i386 GetHandleContext(long) ; missing on x64
 @ stdcall GetHandleInformation(long ptr)
 @ stdcall GetLargePageMinimum()
@@ -535,7 +536,7 @@
 @ stdcall GetLocaleInfoW(long long ptr long)
 @ stdcall -version=0x602+ GetOsSafeBootMode(ptr)
 @ stdcall -version=0x602+ GetStateSettingsFolder(ptr ptr ptr)
-@ stdcall -version=0x600+ IsValidLocaleName(wstr)
+@ stdcall -version=0x600+ IsValidLocaleName(wstr) kernelbase.IsValidLocaleName
 @ stdcall GetLogicalDriveStringsA(long ptr)
 @ stdcall GetLogicalDriveStringsW(long ptr)
 @ stdcall GetLogicalDrives()
@@ -555,8 +556,8 @@
 @ stdcall GetModuleHandleExA(long ptr ptr)
 @ stdcall GetModuleHandleExW(long ptr ptr)
 @ stdcall GetModuleHandleW(wstr)
-@ stdcall GetNLSVersion(long long ptr)
-@ stdcall GetNLSVersionEx(long wstr ptr)
+@ stdcall GetNLSVersion(long long ptr) kernelbase.GetNLSVersion
+@ stdcall GetNLSVersionEx(long wstr ptr) kernelbase.GetNLSVersionEx
 @ stub -version=0x600+ GetNamedPipeAttribute
 @ stub -version=0x600+ GetNamedPipeClientComputerNameA
 @ stub -version=0x600+ GetNamedPipeClientComputerNameW
@@ -614,7 +615,7 @@
 @ stdcall GetProcessId(long)
 @ stdcall GetProcessIdOfThread(ptr)
 @ stdcall GetProcessIoCounters(long ptr)
-@ stdcall -version=0x601+ GetProcessPreferredUILanguages(long ptr ptr ptr)
+@ stdcall -version=0x601+ GetProcessPreferredUILanguages(long ptr ptr ptr) kernelbase.GetProcessPreferredUILanguages
 @ stdcall -version=0x602+ GetProcessInformation(long long ptr long)
 @ stdcall -version=0x602+ GetAppContainerNamedObjectPath(ptr ptr long ptr ptr) kernelbase.GetAppContainerNamedObjectPath
 @ stdcall -version=0x602+ GetProcessMitigationPolicy(long long ptr long)
@@ -639,10 +640,10 @@
 @ stdcall GetStartupInfoW(ptr)
 @ stdcall GetStdHandle(long)
 @ stub -version=0x600+ GetStringScripts
-@ stdcall GetStringTypeA(long long str long ptr)
+@ stdcall GetStringTypeA(long long str long ptr) kernelbase.GetStringTypeA
 @ stdcall GetStringTypeExA(long long str long ptr)
-@ stdcall GetStringTypeExW(long long wstr long ptr)
-@ stdcall GetStringTypeW(long wstr long ptr)
+@ stdcall GetStringTypeExW(long long wstr long ptr) kernelbase.GetStringTypeExW
+@ stdcall GetStringTypeW(long wstr long ptr) kernelbase.GetStringTypeW
 @ stdcall -version=0xA00+ GetSystemCpuSetInformation(ptr long ptr ptr long) kernelbase.GetSystemCpuSetInformation
 @ stub -version=0x600+ GetSystemDEPPolicy
 @ stdcall GetSystemDefaultLCID()
@@ -655,7 +656,7 @@
 @ stdcall GetSystemFirmwareTable(long long ptr long)
 @ stdcall GetSystemInfo(ptr)
 @ stdcall GetSystemPowerStatus(ptr)
-@ stdcall -version=0x600+ GetSystemPreferredUILanguages(long ptr wstr ptr)
+@ stdcall -version=0x600+ GetSystemPreferredUILanguages(long ptr wstr ptr) kernelbase.GetSystemPreferredUILanguages
 @ stdcall GetSystemRegistryQuota(ptr ptr)
 @ stdcall GetSystemTime(ptr)
 @ stdcall GetSystemTimeAdjustment(ptr ptr ptr)
@@ -681,7 +682,7 @@
 @ stdcall GetThreadIOPendingFlag(long ptr)
 @ stdcall GetThreadId(ptr)
 @ stdcall GetThreadLocale()
-@ stdcall -version=0x600+ GetThreadPreferredUILanguages(long ptr wstr ptr)
+@ stdcall -version=0x600+ GetThreadPreferredUILanguages(long ptr wstr ptr) kernelbase.GetThreadPreferredUILanguages
 @ stdcall GetThreadPriority(long)
 @ stdcall GetThreadPriorityBoost(long ptr)
 @ stdcall GetThreadSelectorEntry(long long ptr)
@@ -700,8 +701,8 @@
 @ stdcall GetUserDefaultLangID()
 @ stdcall -version=0x600+ GetUserDefaultLocaleName(wstr long)
 @ stdcall GetUserDefaultUILanguage()
-@ stdcall GetUserGeoID(long)
-@ stdcall -version=0x600+ GetUserPreferredUILanguages(long ptr wstr ptr)
+@ stdcall GetUserGeoID(long) kernelbase.GetUserGeoID
+@ stdcall -version=0x600+ GetUserPreferredUILanguages(long ptr wstr ptr) kernelbase.GetUserPreferredUILanguages
 @ stdcall GetVDMCurrentDirectories(long long)
 @ stdcall GetVersion()
 @ stdcall GetVersionExA(ptr)
@@ -805,8 +806,8 @@
 @ stdcall IsDBCSLeadByte(long)
 @ stdcall IsDBCSLeadByteEx(long long)
 @ stdcall IsDebuggerPresent()
-@ stdcall IsNLSDefinedString(long long ptr long long)
-@ stdcall -stub -version=0x600+ IsNormalizedString(long wstr long)
+@ stdcall IsNLSDefinedString(long long ptr long long) kernelbase.IsNLSDefinedString
+@ stdcall -version=0x600+ IsNormalizedString(long wstr long) kernelbase.IsNormalizedString
 @ stdcall IsProcessInJob(long long ptr)
 @ stdcall IsProcessorFeaturePresent(long)
 @ stdcall IsSystemResumeAutomatic()
@@ -817,6 +818,7 @@
 @ stdcall IsValidCodePage(long)
 @ stdcall IsValidLanguageGroup(long long)
 @ stdcall IsValidLocale(long long)
+@ stdcall -version=0x600+ IsValidNLSVersion(long wstr ptr) kernelbase.IsValidNLSVersion
 @ stdcall -version=0x501-0x502 IsValidUILanguage(long)
 @ stdcall IsWow64Process(ptr ptr)
 @ stdcall -version=0xA00+ IsWow64Process2(ptr ptr ptr)
@@ -848,10 +850,10 @@
 @ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) InitializeProcessForWsWatch
 @ stdcall -version=0x601+ K32QueryWorkingSet(long ptr long) QueryWorkingSet
 @ stdcall -version=0x601+ K32QueryWorkingSetEx(long ptr long) QueryWorkingSetEx
-@ stdcall -version=0x600+ LCIDToLocaleName(long wstr long long)
-@ stdcall LCMapStringA(long long str long ptr long)
-@ stdcall -version=0x600+ LCMapStringEx(long long wstr long ptr long ptr ptr long)
-@ stdcall LCMapStringW(long long wstr long ptr long)
+@ stdcall -version=0x600+ LCIDToLocaleName(long wstr long long) kernelbase.LCIDToLocaleName
+@ stdcall LCMapStringA(long long str long ptr long) kernelbase.LCMapStringA
+@ stdcall -version=0x600+ LCMapStringEx(long long wstr long ptr long ptr ptr long) kernelbase.LCMapStringEx
+@ stdcall LCMapStringW(long long wstr long ptr long) kernelbase.LCMapStringW
 @ stdcall LZClose(long)
 @ stdcall LZCloseFile(long)
 @ stdcall LZCopy(long long)
@@ -884,7 +886,7 @@
 @ stdcall LocalShrink(long long)
 @ stdcall LocalSize(long)
 @ stdcall LocalUnlock(long)
-@ stdcall -version=0x600+ LocaleNameToLCID(wstr long)
+@ stdcall -version=0x600+ LocaleNameToLCID(wstr long) kernelbase.LocaleNameToLCID
 @ stdcall -version=0x601+ -arch=x86_64,arm64ec LocateXStateFeature(ptr long ptr) kernelbase.LocateXStateFeature
 @ stdcall LockFile(long long long long long)
 @ stdcall LockFileEx(long long long long long ptr)
@@ -919,7 +921,7 @@
 @ stub -version=0x600+ NlsUpdateLocale
 @ stub -version=0x600+ NlsUpdateSystemLocale
 @ stub -version=0x600+ NlsWriteEtwEvent
-@ stdcall -stub -version=0x600+ NormalizeString(long wstr long ptr long)
+@ stdcall -version=0x600+ NormalizeString(long wstr long ptr long) kernelbase.NormalizeString
 @ stdcall -stub -version=0x600+ NotifyUILanguageChange(long wstr wstr long ptr)
 @ stdcall OpenConsoleW(wstr long long long)
 @ stdcall -version=0x500-0x502 OpenDataFile(long long)
@@ -1044,7 +1046,7 @@
 @ stdcall ResetEvent(long)
 @ stdcall ResetWriteWatch(ptr long)
 @ stdcall -version=0xA00+ ResizePseudoConsole(ptr long) kernelbase.ResizePseudoConsole
-@ stdcall -version=0x601+ ResolveLocaleName(wstr ptr long)
+@ stdcall -version=0x601+ ResolveLocaleName(wstr ptr long) kernelbase.ResolveLocaleName
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 @ stdcall ResumeThread(long)
 @ stdcall -arch=win64 RtlAddFunctionTable(ptr long long) ntdll.RtlAddFunctionTable
@@ -1175,7 +1177,7 @@
 @ stdcall -version=0x602+ SetProcessInformation(long long ptr long)
 @ stdcall -version=0x602+ SetProcessMitigationPolicy(long ptr long)
 @ stdcall -version=0xA00+ SetProcessValidCallTargets(long ptr long long ptr)
-@ stdcall -version=0x601+ SetProcessPreferredUILanguages(long ptr ptr)
+@ stdcall -version=0x601+ SetProcessPreferredUILanguages(long ptr ptr) kernelbase.SetProcessPreferredUILanguages
 @ stdcall SetProcessPriorityBoost(long long)
 @ stdcall SetProcessShutdownParameters(long long)
 @ stdcall SetProcessWorkingSetSize(long long long)
@@ -1200,7 +1202,7 @@
 @ stdcall SetThreadIdealProcessorEx(ptr ptr ptr)
 @ stdcall -version=0x602+ SetThreadInformation(long long ptr long) kernelbase.SetThreadInformation
 @ stdcall SetThreadLocale(long)
-@ stdcall -version=0x600+ SetThreadPreferredUILanguages(long wstr ptr)
+@ stdcall -version=0x600+ SetThreadPreferredUILanguages(long wstr ptr) kernelbase.SetThreadPreferredUILanguages
 @ stdcall SetThreadPriority(long long)
 @ stdcall SetThreadPriorityBoost(long long)
 @ stdcall SetThreadStackGuarantee(ptr)
@@ -1215,7 +1217,7 @@
 @ stdcall SetTimeZoneInformation(ptr)
 @ stdcall SetTimerQueueTimer(long ptr ptr long long long)
 @ stdcall SetUnhandledExceptionFilter(ptr)
-@ stdcall SetUserGeoID(long)
+@ stdcall SetUserGeoID(long) kernelbase.SetUserGeoID
 @ stdcall SetUserGeoName(wstr) kernelbase.SetUserGeoName
 @ stdcall SetVDMCurrentDirectories(long long)
 @ stdcall SetVolumeLabelA(str str)

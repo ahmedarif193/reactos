@@ -104,6 +104,11 @@ HANDLE WINAPI CreateFileW (LPCWSTR			lpFileName,
 	break;
 
       case TRUNCATE_EXISTING:
+        if (!(dwDesiredAccess & GENERIC_WRITE))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return INVALID_HANDLE_VALUE;
+        }
 	dwCreationDisposition = FILE_OVERWRITE;
         break;
 
@@ -194,7 +199,7 @@ HANDLE WINAPI CreateFileW (LPCWSTR			lpFileName,
 
    TrailingBackslash = FALSE;
    if (NtPathU.Length >= sizeof(WCHAR) &&
-       NtPathU.Buffer[NtPathU.Length / sizeof(WCHAR) - 1])
+       NtPathU.Buffer[NtPathU.Length / sizeof(WCHAR) - 1] == L'\\')
    {
       TrailingBackslash = TRUE;
    }
@@ -396,10 +401,15 @@ OpenFile(LPCSTR lpFileName,
 		return HFILE_ERROR;
 	}
 
-	if (!GetFullPathNameA(lpFileName,
-						  sizeof(lpReOpenBuff->szPathName),
-						  lpReOpenBuff->szPathName,
-						  NULL))
+	Len = GetFullPathNameA(lpFileName,
+						   sizeof(lpReOpenBuff->szPathName),
+						   lpReOpenBuff->szPathName,
+						   NULL);
+	if (Len >= sizeof(lpReOpenBuff->szPathName))
+	{
+		SetLastError(ERROR_INVALID_DATA);
+	}
+	if (!Len || Len >= sizeof(lpReOpenBuff->szPathName))
 	{
 	    lpReOpenBuff->nErrCode = (WORD)GetLastError();
 		return HFILE_ERROR;
@@ -557,7 +567,7 @@ OpenDataFile(HANDLE hFile, DWORD dwUnused)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 HANDLE
 WINAPI
@@ -566,8 +576,69 @@ ReOpenFile(IN HANDLE hOriginalFile,
            IN DWORD dwShareMode,
            IN DWORD dwFlags)
 {
-   STUB;
-   return INVALID_HANDLE_VALUE;
+   SECURITY_QUALITY_OF_SERVICE Qos;
+   OBJECT_ATTRIBUTES ObjectAttributes;
+   UNICODE_STRING EmptyName = { 0, 0, NULL };
+   IO_STATUS_BLOCK IoStatusBlock;
+   NTSTATUS Status;
+   HANDLE FileHandle;
+   ULONG Options = FILE_NON_DIRECTORY_FILE;
+
+   if (dwFlags & 0x7FFFF)
+   {
+      SetLastError(ERROR_INVALID_PARAMETER);
+      return INVALID_HANDLE_VALUE;
+   }
+
+   if (dwFlags & FILE_FLAG_DELETE_ON_CLOSE)
+   {
+      Options |= FILE_DELETE_ON_CLOSE;
+      dwDesiredAccess |= DELETE;
+   }
+   if (!(dwFlags & FILE_FLAG_OVERLAPPED))
+      Options |= FILE_SYNCHRONOUS_IO_NONALERT;
+   if (dwFlags & FILE_FLAG_WRITE_THROUGH)
+      Options |= FILE_WRITE_THROUGH;
+   if (dwFlags & FILE_FLAG_NO_BUFFERING)
+      Options |= FILE_NO_INTERMEDIATE_BUFFERING;
+   if (dwFlags & FILE_FLAG_RANDOM_ACCESS)
+      Options |= FILE_RANDOM_ACCESS;
+   if (dwFlags & FILE_FLAG_SEQUENTIAL_SCAN)
+      Options |= FILE_SEQUENTIAL_ONLY;
+   if (dwFlags & FILE_FLAG_OPEN_REPARSE_POINT)
+      Options |= FILE_OPEN_REPARSE_POINT;
+   if (dwFlags & FILE_FLAG_BACKUP_SEMANTICS)
+      Options |= FILE_OPEN_FOR_BACKUP_INTENT;
+
+   InitializeObjectAttributes(&ObjectAttributes, &EmptyName, OBJ_CASE_INSENSITIVE, hOriginalFile, NULL);
+   if (dwFlags & SECURITY_SQOS_PRESENT)
+   {
+      Qos.Length = sizeof(Qos);
+      Qos.ImpersonationLevel = (dwFlags >> 16) & 0x3;
+      Qos.ContextTrackingMode = (dwFlags & SECURITY_CONTEXT_TRACKING) ? SECURITY_DYNAMIC_TRACKING
+                                                                     : SECURITY_STATIC_TRACKING;
+      Qos.EffectiveOnly = (dwFlags & SECURITY_EFFECTIVE_ONLY) != 0;
+      ObjectAttributes.SecurityQualityOfService = &Qos;
+   }
+
+   Status = NtCreateFile(&FileHandle,
+                         dwDesiredAccess | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
+                         &ObjectAttributes,
+                         &IoStatusBlock,
+                         NULL,
+                         0,
+                         dwShareMode,
+                         FILE_OPEN,
+                         Options,
+                         NULL,
+                         0);
+   if (!NT_SUCCESS(Status))
+   {
+      BaseSetLastNTError(Status);
+      return INVALID_HANDLE_VALUE;
+   }
+
+   return FileHandle;
 }
 
 /* EOF */

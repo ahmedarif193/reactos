@@ -1207,6 +1207,7 @@ GetFullPathNameA(IN LPCSTR lpFileName,
     {
         /* Reset the path size since the buffer is not large enough */
         PathSize = 0;
+        SetLastError(ERROR_FILENAME_EXCED_RANGE);
     }
 
     /* Either no path, or local buffer was too small, enter failure code */

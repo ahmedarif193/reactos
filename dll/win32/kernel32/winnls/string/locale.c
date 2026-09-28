@@ -206,6 +206,7 @@ static const WCHAR sThousandW[] = {'s','T','h','o','u','s','a','n','d',0};
 static const WCHAR sTimeFormatW[] = {'s','T','i','m','e','F','o','r','m','a','t',0};
 static const WCHAR sTimeW[] = {'s','T','i','m','e',0};
 static const WCHAR sYearMonthW[] = {'s','Y','e','a','r','M','o','n','t','h',0};
+static const WCHAR sShortTimeW[] = {'s','S','h','o','r','t','T','i','m','e',0};
 static const WCHAR NumShapeW[] = {'N','u','m','s','h','a','p','e',0};
 
 static struct registry_value
@@ -245,6 +246,7 @@ static struct registry_value
     { LOCALE_STIME, sTimeW },
     { LOCALE_STIMEFORMAT, sTimeFormatW },
     { LOCALE_SYEARMONTH, sYearMonthW },
+    { LOCALE_SSHORTTIME, sShortTimeW },
     /* The following are not listed under MSDN as supported,
      * but seem to be used and also stored in the registry.
      */
@@ -413,6 +415,8 @@ static LANGID get_default_sublang( LANGID lang )
     case MAKELANGID( LANG_CHINESE, SUBLANG_CHINESE_TRADITIONAL ):
     case MAKELANGID( LANG_CHINESE, SUBLANG_CHINESE_MACAU ):
         return MAKELANGID( LANG_CHINESE, SUBLANG_CHINESE_HONGKONG );
+    case MAKELANGID( LANG_IRISH, SUBLANG_NEUTRAL ):
+        return MAKELANGID( LANG_IRISH, SUBLANG_IRISH_IRELAND );
     }
     if (SUBLANGID( lang ) == SUBLANG_NEUTRAL) lang = MAKELANGID( PRIMARYLANGID(lang), SUBLANG_DEFAULT );
     return lang;
@@ -1965,13 +1969,15 @@ BOOL WINAPI SetLocaleInfoW( LCID lcid, LCTYPE lctype, LPCWSTR data )
     lctype &= 0xffff;
     value = get_locale_registry_value( lctype );
 
-    if (!data || !value)
+    if (!data)
     {
         SetLastError( ERROR_INVALID_PARAMETER );
         return FALSE;
     }
 
-    if (lctype == LOCALE_IDATE || lctype == LOCALE_ILDATE)
+    if (!value || lctype == LOCALE_IDATE || lctype == LOCALE_ILDATE ||
+        lctype == LOCALE_ICOUNTRY || lctype == LOCALE_ITLZERO || lctype == LOCALE_SCOUNTRY ||
+        lctype == LOCALE_SABBREVLANGNAME || lctype == LOCALE_ITIMEMARKPOSN)
     {
         SetLastError( ERROR_INVALID_FLAGS );
         return FALSE;
@@ -2929,7 +2935,7 @@ LCID WINAPI ConvertDefaultLocale( LCID lcid )
     default:
         /* Replace SUBLANG_NEUTRAL with SUBLANG_DEFAULT */
         langid = LANGIDFROMLCID(lcid);
-        if (SUBLANGID(langid) == SUBLANG_NEUTRAL)
+        if (SUBLANGID(langid) == SUBLANG_NEUTRAL && SORTIDFROMLCID(lcid) == SORT_DEFAULT)
         {
           langid = get_default_sublang( langid );
           lcid = MAKELCID(langid, SORTIDFROMLCID(lcid));
@@ -2958,6 +2964,9 @@ LCID WINAPI ConvertDefaultLocale( LCID lcid )
  */
 BOOL WINAPI IsValidLocale( LCID lcid, DWORD flags )
 {
+    if (lcid == LOCALE_NEUTRAL || lcid == LOCALE_USER_DEFAULT || lcid == LOCALE_SYSTEM_DEFAULT)
+        return FALSE;
+
     /* check if language is registered in the kernel32 resources */
     return FindResourceExW( kernel32_handle, (LPWSTR)RT_STRING,
                             (LPCWSTR)LOCALE_ILANGUAGE, LANGIDFROMLCID(lcid)) != 0;
@@ -3860,6 +3869,12 @@ INT WINAPI LCMapStringW(LCID lcid, DWORD flags, LPCWSTR src, INT srclen,
     TRACE("(0x%04x,0x%08x,%s,%d,%p,%d)\n",
           lcid, flags, debugstr_wn(src, srclen), srclen, dst, dstlen);
 
+    if (!IsValidLocale(ConvertDefaultLocale(lcid), 0))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
     return LCMapStringEx(NULL, flags, src, srclen, dst, dstlen, NULL, NULL, 0);
 }
 
@@ -3979,6 +3994,52 @@ INT WINAPI FoldStringW(DWORD dwFlags, LPCWSTR src, INT srclen,
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
+    }
+
+    switch (dwFlags)
+    {
+    case MAP_PRECOMPOSED:
+    case MAP_FOLDCZONE:
+    case MAP_PRECOMPOSED | MAP_FOLDCZONE:
+    case MAP_COMPOSITE:
+    case MAP_COMPOSITE | MAP_FOLDCZONE:
+    {
+        ULONG form = (dwFlags & MAP_COMPOSITE)
+            ? ((dwFlags & MAP_FOLDCZONE) ? NormalizationKD : NormalizationD)
+            : ((dwFlags & MAP_FOLDCZONE) ? NormalizationKC : NormalizationC);
+        WCHAR *buf = dst;
+        LONG len = dstlen;
+        NTSTATUS status;
+
+        if (srclen == -1) srclen = strlenW(src) + 1;
+        if (!dstlen)
+        {
+            len = srclen * 4;
+            if (!(buf = RtlAllocateHeap(RtlGetProcessHeap(), 0, len * sizeof(WCHAR))))
+            {
+                SetLastError(ERROR_OUTOFMEMORY);
+                return 0;
+            }
+        }
+        for (;;)
+        {
+            status = RtlNormalizeString(form, src, srclen, buf, &len);
+            if (buf != dst) RtlFreeHeap(RtlGetProcessHeap(), 0, buf);
+            if (status != STATUS_BUFFER_TOO_SMALL) break;
+            if (!(buf = RtlAllocateHeap(RtlGetProcessHeap(), 0, len * sizeof(WCHAR))))
+            {
+                SetLastError(ERROR_OUTOFMEMORY);
+                return 0;
+            }
+        }
+        if (!NT_SUCCESS(status))
+        {
+            SetLastError(RtlNtStatusToDosError(status));
+            return 0;
+        }
+        if (dstlen && dstlen < len) SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return len;
+    }
     }
 
     ret = wine_fold_string(dwFlags, src, srclen, dst, dstlen);

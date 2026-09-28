@@ -1068,6 +1068,9 @@ FindFirstStreamW(IN LPCWSTR lpFileName,
 
     } while (Status == STATUS_BUFFER_TOO_SMALL);
 
+    if (NT_SUCCESS(Status) && IoStatusBlock.Information == 0)
+        Status = STATUS_END_OF_FILE;
+
     if (NT_SUCCESS(Status))
     {
         /* Select the first stream and return the information */
@@ -1084,6 +1087,7 @@ FindFirstStreamW(IN LPCWSTR lpFileName,
             RtlFreeHeap(RtlGetProcessHeap(), 0, FindStreamData->FileStreamInfo);
         }
 
+        RtlDeleteCriticalSection(&FindDataHandle->Lock);
         RtlFreeHeap(RtlGetProcessHeap(), 0, FindDataHandle);
     }
 

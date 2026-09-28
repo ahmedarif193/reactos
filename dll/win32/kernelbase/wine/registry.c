@@ -1048,6 +1048,20 @@ LSTATUS WINAPI RegQueryInfoKeyW( HKEY hkey, LPWSTR class, LPDWORD class_len, LPD
            reserved, subkeys, max_subkey, values, max_value, max_data, security, modif );
 
     if (class && !class_len && is_version_nt()) return ERROR_INVALID_PARAMETER;
+    if (is_perf_key( hkey ))
+    {
+        if (class_len) *class_len = 0;
+        if (class && class_len) *class = 0;
+        if (subkeys) *subkeys = 0;
+        if (max_subkey) *max_subkey = 0;
+        if (max_class) *max_class = 0;
+        if (values) *values = 2;
+        if (max_value) *max_value = 0;
+        if (max_data) *max_data = 0;
+        if (security) *security = 0;
+        if (modif) modif->dwLowDateTime = modif->dwHighDateTime = 0;
+        return ERROR_SUCCESS;
+    }
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
 #ifdef __REACTOS__
     if (IsHKCRKey( hkey ))
@@ -1085,7 +1099,11 @@ LSTATUS WINAPI RegQueryInfoKeyW( HKEY hkey, LPWSTR class, LPDWORD class_len, LPD
     }
     else status = STATUS_SUCCESS;
 
+#ifdef __REACTOS__
+    if (class_len && !(class && !*class_len)) *class_len = info->ClassLength / sizeof(WCHAR);
+#else
     if (class_len) *class_len = info->ClassLength / sizeof(WCHAR);
+#endif
     if (subkeys) *subkeys = info->SubKeys;
     if (max_subkey) *max_subkey = info->MaxNameLen / sizeof(WCHAR);
     if (max_class) *max_class = info->MaxClassLen / sizeof(WCHAR);
@@ -1150,6 +1168,20 @@ LSTATUS WINAPI RegQueryInfoKeyA( HKEY hkey, LPSTR class, LPDWORD class_len, LPDW
            reserved, subkeys, max_subkey, values, max_value, max_data, security, modif );
 
     if (class && !class_len && is_version_nt()) return ERROR_INVALID_PARAMETER;
+    if (is_perf_key( hkey ))
+    {
+        if (class_len) *class_len = 0;
+        if (class && class_len) *class = 0;
+        if (subkeys) *subkeys = 0;
+        if (max_subkey) *max_subkey = 0;
+        if (max_class) *max_class = 0;
+        if (values) *values = 2;
+        if (max_value) *max_value = 0;
+        if (max_data) *max_data = 0;
+        if (security) *security = 0;
+        if (modif) modif->dwLowDateTime = modif->dwHighDateTime = 0;
+        return ERROR_SUCCESS;
+    }
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
 #ifdef __REACTOS__
     if (security) *security = 0;
@@ -1184,7 +1216,11 @@ LSTATUS WINAPI RegQueryInfoKeyA( HKEY hkey, LPSTR class, LPDWORD class_len, LPDW
             }
             class[*class_len] = 0;
         }
+#ifdef __REACTOS__
+        else if (class_len && !class)
+#else
         else if (class_len)
+#endif
             RtlUnicodeToMultiByteSize( class_len,
                                        (WCHAR *)(buf_ptr + info->ClassOffset), info->ClassLength );
     }
@@ -1623,7 +1659,6 @@ static DWORD query_perf_data( const WCHAR *query, DWORD *type, void *data, DWORD
         return query_perf_help( type, data, ret_size, unicode );
 
     data_size = *ret_size;
-    *ret_size = 0;
 
     if (type)
         *type = REG_BINARY;
@@ -1647,7 +1682,7 @@ static DWORD query_perf_data( const WCHAR *query, DWORD *type, void *data, DWORD
     pdb->TotalByteLength = 0;
     pdb->HeaderLength = sizeof(*pdb);
     pdb->NumObjectTypes = 0;
-    pdb->DefaultObject = 0;
+    pdb->DefaultObject = 238;
     NtQueryPerformanceCounter( &pdb->PerfTime, &pdb->PerfFreq );
 
     data = pdb + 1;
@@ -2201,11 +2236,19 @@ LSTATUS WINAPI RegGetValueA( HKEY hKey, LPCSTR pszSubKey, LPCSTR pszValue,
             /* Recheck dwType in case it changed since the first call */
             if (dwType == REG_EXPAND_SZ && !(dwFlags & RRF_NOEXPAND))
             {
+#ifdef __REACTOS__
+                DWORD cbRaw = cbData;
+
+#endif
                 cbData = ExpandEnvironmentStringsA(pvBuf, pvData,
                                                    pcbData ? *pcbData : 0);
                 dwType = REG_SZ;
                 if (pvData && cbData > *pcbData)
                     ret = ERROR_MORE_DATA;
+#ifdef __REACTOS__
+                else if (pvData && cbData < cbRaw)
+                    cbData = cbRaw;
+#endif
             }
             else if (pvData)
             {
@@ -2267,6 +2310,7 @@ LSTATUS WINAPI RegEnumValueW( HKEY hkey, DWORD index, LPWSTR value, LPDWORD val_
 
     if ((data && !count) || reserved || !value || !val_count)
         return ERROR_INVALID_PARAMETER;
+    if (is_perf_key( hkey )) return ERROR_MORE_DATA;
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
 #ifdef __REACTOS__
     if (IsHKCRKey( hkey ))
@@ -2304,17 +2348,17 @@ LSTATUS WINAPI RegEnumValueW( HKEY hkey, DWORD index, LPWSTR value, LPDWORD val_
 
     if (data)
     {
-        if (total_size - info->DataOffset > *count)
+        if (info->DataLength > *count)
         {
             status = STATUS_BUFFER_OVERFLOW;
             goto overflow;
         }
-        memcpy( data, buf_ptr + info->DataOffset, total_size - info->DataOffset );
-        if (total_size - info->DataOffset <= *count-sizeof(WCHAR) && is_string(info->Type))
+        if (info->DataLength) memcpy( data, buf_ptr + info->DataOffset, info->DataLength );
+        if (info->DataLength <= *count-sizeof(WCHAR) && is_string(info->Type))
         {
             /* if the type is REG_SZ and data is not 0-terminated
              * and there is enough space in the buffer NT appends a \0 */
-            WCHAR *ptr = (WCHAR *)(data + total_size - info->DataOffset);
+            WCHAR *ptr = (WCHAR *)(data + info->DataLength);
             if (ptr > (WCHAR *)data && ptr[-1]) *ptr = 0;
         }
     }
@@ -2348,6 +2392,7 @@ LSTATUS WINAPI RegEnumValueA( HKEY hkey, DWORD index, LPSTR value, LPDWORD val_c
 
     if ((data && !count) || reserved || !value || !val_count)
         return ERROR_INVALID_PARAMETER;
+    if (is_perf_key( hkey )) return ERROR_MORE_DATA;
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
 
     total_size = info_size + (MAX_PATH + 1) * sizeof(WCHAR);
@@ -2377,14 +2422,14 @@ LSTATUS WINAPI RegEnumValueA( HKEY hkey, DWORD index, LPSTR value, LPDWORD val_c
     {
         DWORD len;
         RtlUnicodeToMultiByteSize( &len, (WCHAR *)(buf_ptr + info->DataOffset),
-                                   total_size - info->DataOffset );
+                                   info->DataLength );
         if (data && len)
         {
             if (len > *count) status = STATUS_BUFFER_OVERFLOW;
             else
             {
                 RtlUnicodeToMultiByteN( (char*)data, len, NULL, (WCHAR *)(buf_ptr + info->DataOffset),
-                                        total_size - info->DataOffset );
+                                        info->DataLength );
                 /* if the type is REG_SZ and data is not 0-terminated
                  * and there is enough space in the buffer NT appends a \0 */
                 if (len < *count && data[len-1]) data[len] = 0;
@@ -2394,8 +2439,8 @@ LSTATUS WINAPI RegEnumValueA( HKEY hkey, DWORD index, LPSTR value, LPDWORD val_c
     }
     else if (data)
     {
-        if (total_size - info->DataOffset > *count) status = STATUS_BUFFER_OVERFLOW;
-        else memcpy( data, buf_ptr + info->DataOffset, total_size - info->DataOffset );
+        if (info->DataLength > *count) status = STATUS_BUFFER_OVERFLOW;
+        else if (info->DataLength) memcpy( data, buf_ptr + info->DataOffset, info->DataLength );
     }
 
     if (!status)

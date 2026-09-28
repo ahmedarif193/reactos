@@ -446,61 +446,56 @@ GetFinalPathNameByHandleA(IN HANDLE hFile,
                           IN DWORD cchFilePath,
                           IN DWORD dwFlags)
 {
-    WCHAR FilePathW[MAX_PATH];
     UNICODE_STRING FilePathU;
-    DWORD PrevLastError;
-    DWORD Ret = 0;
+    ANSI_STRING FilePathA;
+    DWORD Length, Result;
+    NTSTATUS Status;
 
-    if (cchFilePath != 0 &&
-        cchFilePath > sizeof(FilePathW) / sizeof(FilePathW[0]))
+    Length = GetFinalPathNameByHandleW(hFile, NULL, 0, dwFlags);
+    if (Length == 0)
+        return 0;
+
+    FilePathU.Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length * sizeof(WCHAR));
+    if (FilePathU.Buffer == NULL)
     {
-        FilePathU.Length = 0;
-        FilePathU.MaximumLength = (USHORT)cchFilePath * sizeof(WCHAR);
-        FilePathU.Buffer = RtlAllocateHeap(RtlGetProcessHeap(),
-                                           0,
-                                           FilePathU.MaximumLength);
-        if (FilePathU.Buffer == NULL)
-        {
-            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-            return 0;
-        }
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
     }
+
+    Result = GetFinalPathNameByHandleW(hFile, FilePathU.Buffer, Length, dwFlags);
+    if (Result != Length - 1)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, FilePathU.Buffer);
+        return 0;
+    }
+
+    FilePathU.Length = (USHORT)(Result * sizeof(WCHAR));
+    FilePathU.MaximumLength = (USHORT)(Length * sizeof(WCHAR));
+
+    Length = AreFileApisANSI() ? RtlUnicodeStringToAnsiSize(&FilePathU) : RtlUnicodeStringToOemSize(&FilePathU);
+    if (cchFilePath < Length)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, FilePathU.Buffer);
+        return Length - 1;
+    }
+
+    FilePathA.Buffer = lpszFilePath;
+    FilePathA.Length = 0;
+    FilePathA.MaximumLength = (USHORT)min(cchFilePath, MAXUSHORT);
+    if (AreFileApisANSI())
+        Status = RtlUnicodeStringToAnsiString(&FilePathA, &FilePathU, FALSE);
     else
+        Status = RtlUnicodeStringToOemString(&FilePathA, &FilePathU, FALSE);
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, FilePathU.Buffer);
+
+    if (!NT_SUCCESS(Status))
     {
-        FilePathU.Length = 0;
-        FilePathU.MaximumLength = sizeof(FilePathW);
-        FilePathU.Buffer = FilePathW;
+        BaseSetLastNTError(Status);
+        return 0;
     }
 
-    /* save the last error code */
-    PrevLastError = GetLastError();
-    SetLastError(ERROR_SUCCESS);
-
-    /* call the unicode version that does all the work */
-    Ret = GetFinalPathNameByHandleW(hFile,
-                                    FilePathU.Buffer,
-                                    cchFilePath,
-                                    dwFlags);
-
-    if (GetLastError() == ERROR_SUCCESS)
-    {
-        /* no error, restore the last error code and convert the string */
-        SetLastError(PrevLastError);
-
-        Ret = FilenameU2A_FitOrFail(lpszFilePath,
-                                    cchFilePath,
-                                    &FilePathU);
-    }
-
-    /* free allocated memory if necessary */
-    if (FilePathU.Buffer != FilePathW)
-    {
-        RtlFreeHeap(RtlGetProcessHeap(),
-                    0,
-                    FilePathU.Buffer);
-    }
-
-    return Ret;
+    return Length - 1;
 }
 
 /*
@@ -538,7 +533,7 @@ GetFileBandwidthReservation(IN HANDLE hFile,
 
 
 /*
- * @unimplemented
+ * @implemented
  */
 HANDLE
 WINAPI
@@ -549,8 +544,71 @@ OpenFileById(IN HANDLE hFile,
              IN LPSECURITY_ATTRIBUTES lpSecurityAttributes  OPTIONAL,
              IN DWORD dwFlags)
 {
-    UNIMPLEMENTED;
-    return INVALID_HANDLE_VALUE;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    UNICODE_STRING FileId;
+    HANDLE FileHandle;
+    ULONG Options;
+    NTSTATUS Status;
+
+    if (!lpFileID || lpFileID->dwSize < sizeof(*lpFileID))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    if (lpFileID->Type == FileIdType)
+    {
+        FileId.Length = sizeof(lpFileID->FileId);
+    }
+    else if (lpFileID->Type == ObjectIdType)
+    {
+        FileId.Length = sizeof(lpFileID->ObjectId);
+    }
+    else
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+    FileId.MaximumLength = FileId.Length;
+    FileId.Buffer = (PWSTR)&lpFileID->FileId;
+
+    Options = FILE_OPEN_BY_FILE_ID;
+    if (dwFlags & FILE_FLAG_BACKUP_SEMANTICS)
+        Options |= FILE_OPEN_FOR_BACKUP_INTENT;
+    if (dwFlags & FILE_FLAG_NO_BUFFERING)
+        Options |= FILE_NO_INTERMEDIATE_BUFFERING;
+    if (!(dwFlags & FILE_FLAG_OVERLAPPED))
+        Options |= FILE_SYNCHRONOUS_IO_NONALERT;
+    if (dwFlags & FILE_FLAG_RANDOM_ACCESS)
+        Options |= FILE_RANDOM_ACCESS;
+    if (dwFlags & FILE_FLAG_SEQUENTIAL_SCAN)
+        Options |= FILE_SEQUENTIAL_ONLY;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &FileId,
+                               (lpSecurityAttributes && lpSecurityAttributes->bInheritHandle) ? OBJ_INHERIT : 0,
+                               hFile,
+                               lpSecurityAttributes ? lpSecurityAttributes->lpSecurityDescriptor : NULL);
+
+    Status = NtCreateFile(&FileHandle,
+                          dwDesiredAccess | SYNCHRONIZE,
+                          &ObjectAttributes,
+                          &IoStatusBlock,
+                          NULL,
+                          dwFlags & FILE_ATTRIBUTE_VALID_FLAGS,
+                          dwShareMode,
+                          FILE_OPEN,
+                          Options,
+                          NULL,
+                          0);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    return FileHandle;
 }
 
 

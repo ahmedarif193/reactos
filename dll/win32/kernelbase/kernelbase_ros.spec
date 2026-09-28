@@ -319,11 +319,11 @@
 #@ stdcall EnumResourceTypesExW(long ptr long long long)
 #@ stdcall EnumSystemCodePagesW(ptr long)
 #@ stdcall EnumSystemFirmwareTables(long ptr long)
-#@ stdcall EnumSystemGeoID(long long ptr)
+@ stdcall EnumSystemGeoID(long long ptr)
 #@ stdcall EnumSystemLanguageGroupsW(ptr long ptr)
-#@ stdcall EnumSystemLocalesA(ptr long)
-#@ stdcall EnumSystemLocalesEx(ptr long long ptr)
-#@ stdcall EnumSystemLocalesW(ptr long)
+@ stdcall EnumSystemLocalesA(ptr long)
+@ stdcall EnumSystemLocalesEx(ptr long long ptr)
+@ stdcall EnumSystemLocalesW(ptr long)
 #@ stdcall EnumTimeFormatsEx(ptr wstr long long)
 #@ stdcall EnumTimeFormatsW(ptr long long)
 #@ stdcall EnumUILanguagesW(ptr long long)
@@ -561,8 +561,8 @@
 #@ stdcall GetFullPathNameW(wstr long ptr ptr)
 # #@ stub GetGPOListInternalA
 # #@ stub GetGPOListInternalW
-#@ stdcall GetGeoInfoW(long long ptr long long)
-#@ stdcall GetGeoInfoEx(ptr long ptr long)
+@ stdcall GetGeoInfoW(long long ptr long long)
+@ stdcall GetGeoInfoEx(ptr long ptr long)
 #@ stdcall GetHandleInformation(long ptr)
 # #@ stub GetHivePath
 @ stdcall GetIntegratedDisplaySize(ptr)
@@ -597,8 +597,8 @@
 #@ stdcall GetModuleHandleExW(long ptr ptr)
 #@ stdcall GetModuleHandleW(wstr)
 #@ stdcall GetModuleInformation(long long ptr long)
-#@ stdcall GetNLSVersion(long long ptr)
-#@ stdcall GetNLSVersionEx(long wstr ptr)
+@ stdcall GetNLSVersion(long long ptr)
+@ stdcall GetNLSVersionEx(long wstr ptr)
 #@ stub GetNamedLocaleHashNode
 #@ stub GetNamedPipeAttribute
 #@ stub GetNamedPipeClientComputerNameW
@@ -665,7 +665,7 @@
 @ stdcall GetProcessInformation(long long ptr long) kernel32.GetProcessInformation
 #@ stdcall GetProcessMemoryInfo(long ptr long)
 @ stdcall GetProcessMitigationPolicy(long long ptr long) kernel32.GetProcessMitigationPolicy
-#@ stdcall GetProcessPreferredUILanguages(long ptr ptr ptr)
+@ stdcall GetProcessPreferredUILanguages(long ptr ptr ptr)
 #@ stdcall GetProcessPriorityBoost(long ptr)
 #@ stdcall GetProcessShutdownParameters(ptr ptr)
 @ stdcall GetProcessTimes(long ptr ptr ptr ptr) kernel32.GetProcessTimes
@@ -707,9 +707,9 @@
 #@ stdcall GetStdHandle(long)
 # #@ stub GetStringScripts
 #@ stub GetStringTableEntry
-#@ stdcall GetStringTypeA(long long str long ptr)
-#@ stdcall GetStringTypeExW(long long wstr long ptr)
-#@ stdcall GetStringTypeW(long wstr long ptr)
+@ stdcall GetStringTypeA(long long str long ptr)
+@ stdcall GetStringTypeExW(long long wstr long ptr)
+@ stdcall GetStringTypeW(long wstr long ptr)
 # #@ stub GetSystemAppDataFolder
 # #@ stub GetSystemAppDataKey
 @ stdcall GetSystemCpuSetInformation(ptr long ptr ptr long)
@@ -725,7 +725,7 @@
 # #@ stub GetSystemMetadataPath
 # #@ stub GetSystemMetadataPathForPackage
 # #@ stub GetSystemMetadataPathForPackageFamily
-#@ stdcall GetSystemPreferredUILanguages(long ptr ptr ptr)
+@ stdcall GetSystemPreferredUILanguages(long ptr ptr ptr)
 # #@ stub GetSystemStateRootFolder
 #@ stdcall GetSystemTime(ptr)
 #@ stdcall GetSystemTimeAdjustment(ptr ptr ptr)
@@ -754,7 +754,7 @@
 @ stdcall GetThreadIdealProcessorEx(long ptr) kernel32.GetThreadIdealProcessorEx
 @ stdcall GetThreadInformation(long long ptr long)
 #@ stdcall GetThreadLocale()
-#@ stdcall GetThreadPreferredUILanguages(long ptr ptr ptr)
+@ stdcall GetThreadPreferredUILanguages(long ptr ptr ptr)
 @ stdcall GetThreadPriority(long) kernel32.GetThreadPriority
 @ stdcall GetThreadPriorityBoost(long ptr) kernel32.GetThreadPriorityBoost
 # #@ stub GetThreadSelectedCpuSets
@@ -779,12 +779,12 @@
 #@ stdcall GetUserDefaultLangID()
 #@ stdcall GetUserDefaultLocaleName(ptr long)
 #@ stdcall GetUserDefaultUILanguage()
-#@ stdcall GetUserGeoID(long)
+@ stdcall GetUserGeoID(long)
 #@ stub GetUserInfo
 #@ stub GetUserInfoWord
 # #@ stub GetUserOverrideString
 # #@ stub GetUserOverrideWord
-#@ stdcall GetUserPreferredUILanguages(long ptr ptr ptr)
+@ stdcall GetUserPreferredUILanguages(long ptr ptr ptr)
 #@ stdcall GetVersion()
 #@ stdcall GetVersionExA(ptr)
 #@ stdcall GetVersionExW(ptr)
@@ -899,8 +899,8 @@
 # #@ stub IsEnclaveTypeSupported
 # #@ stub IsGlobalizationUserSettingsKeyRedirected
 @ stdcall IsInternetESCEnabled()
-#@ stdcall IsNLSDefinedString(long long ptr wstr long)
-#@ stdcall IsNormalizedString(long wstr long)
+@ stdcall IsNLSDefinedString(long long ptr wstr long)
+@ stdcall IsNormalizedString(long wstr long)
 # #@ stub IsProcessCritical
 @ stdcall IsProcessInJob(long long ptr) kernel32.IsProcessInJob
 #@ stdcall IsProcessorFeaturePresent(long)
@@ -915,8 +915,8 @@
 #@ stdcall IsValidCodePage(long)
 #@ stdcall IsValidLanguageGroup(long long)
 #@ stdcall IsValidLocale(long long)
-#@ stdcall IsValidLocaleName(wstr)
-#@ stdcall IsValidNLSVersion(long wstr ptr)
+@ stdcall IsValidLocaleName(wstr)
+@ stdcall IsValidNLSVersion(long wstr ptr)
 #@ stub IsValidRelativeSecurityDescriptor
 @ stdcall IsValidSecurityDescriptor(ptr)
 @ stdcall IsValidSid(ptr)
@@ -951,10 +951,10 @@
 #@ stdcall K32QueryWorkingSet(long ptr long) QueryWorkingSet
 #@ stdcall K32QueryWorkingSetEx(long ptr long) QueryWorkingSetEx
 #@ stdcall KernelBaseGetGlobalData()
-#@ stdcall LCIDToLocaleName(long ptr long long)
-#@ stdcall LCMapStringA(long long str long ptr long)
-#@ stdcall LCMapStringEx(wstr long wstr long ptr long ptr ptr long)
-#@ stdcall LCMapStringW(long long wstr long ptr long)
+@ stdcall LCIDToLocaleName(long ptr long long)
+@ stdcall LCMapStringA(long long str long ptr long)
+@ stdcall LCMapStringEx(wstr long wstr long ptr long ptr ptr long)
+@ stdcall LCMapStringW(long long wstr long ptr long)
 # #@ stub LeaveCriticalPolicySectionInternal
 #@ stdcall LeaveCriticalSection(ptr) ntdll.RtlLeaveCriticalSection
 #@ stdcall LeaveCriticalSectionWhenCallbackReturns(ptr ptr) ntdll.TpCallbackLeaveCriticalSectionOnCompletion
@@ -976,7 +976,7 @@
 #@ stdcall LocalLock(long)
 #@ stdcall LocalReAlloc(long long long)
 #@ stdcall LocalUnlock(long)
-#@ stdcall LocaleNameToLCID(wstr long)
+@ stdcall LocaleNameToLCID(wstr long)
 @ stdcall -arch=x86_64,arm64ec LocateXStateFeature(ptr long ptr)
 #@ stdcall LockFile(long long long long long)
 #@ stdcall LockFileEx(long long long long long ptr)
@@ -1011,7 +1011,7 @@
 #@ stub NlsUpdateSystemLocale
 #@ stdcall NlsValidateLocale(ptr long)
 #@ stub NlsWriteEtwEvent
-#@ stdcall NormalizeString(long wstr long ptr long)
+@ stdcall NormalizeString(long wstr long ptr long)
 #@ stub NotifyMountMgr
 #@ stub NotifyRedirectedStringChange
 @ stdcall ObjectCloseAuditAlarmW(wstr ptr long)
@@ -1386,7 +1386,7 @@
 @ stdcall ResizePseudoConsole(ptr long)
 #@ stdcall -import ResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) LdrResolveDelayLoadedAPI
 # #@ stub ResolveDelayLoadsFromDll
-#@ stdcall ResolveLocaleName(wstr ptr long)
+@ stdcall ResolveLocaleName(wstr ptr long)
 #@ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 @ stdcall ResumeThread(long) kernel32.ResumeThread
 @ stdcall RevertToSelf()
@@ -1502,7 +1502,7 @@
 #@ stdcall SetProcessGroupAffinity(long ptr ptr)
 @ stdcall SetProcessInformation(long long ptr long) kernel32.SetProcessInformation
 @ stdcall SetProcessMitigationPolicy(long ptr long) kernel32.SetProcessMitigationPolicy
-#@ stdcall SetProcessPreferredUILanguages(long ptr ptr)
+@ stdcall SetProcessPreferredUILanguages(long ptr ptr)
 #@ stdcall SetProcessPriorityBoost(long long)
 @ stdcall SetProcessShutdownParameters(long long) kernel32.SetProcessShutdownParameters
 @ stdcall SetProcessValidCallTargets(long ptr long long ptr) kernel32.SetProcessValidCallTargets
@@ -1530,7 +1530,7 @@
 @ stdcall SetThreadIdealProcessorEx(long ptr ptr) kernel32.SetThreadIdealProcessorEx
 @ stdcall SetThreadInformation(long long ptr long)
 #@ stdcall SetThreadLocale(long)
-#@ stdcall SetThreadPreferredUILanguages(long ptr ptr)
+@ stdcall SetThreadPreferredUILanguages(long ptr ptr)
 @ stdcall SetThreadPriority(long long) kernel32.SetThreadPriority
 @ stdcall SetThreadPriorityBoost(long long) kernel32.SetThreadPriorityBoost
 #@ stdcall SetThreadSelectedCpuSets(ptr ptr long)
@@ -1547,7 +1547,7 @@
 #@ stdcall SetTimeZoneInformation(ptr)
 @ stdcall SetTokenInformation(long long ptr long)
 #@ stdcall SetUnhandledExceptionFilter(ptr)
-#@ stdcall SetUserGeoID(long)
+@ stdcall SetUserGeoID(long)
 @ stdcall SetUserGeoName(wstr)
 #@ stdcall SetWaitableTimer(long ptr long ptr ptr long)
 @ stdcall SetWaitableTimerEx(long ptr long ptr ptr ptr long) kernel32.SetWaitableTimerEx

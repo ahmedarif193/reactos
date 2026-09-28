@@ -355,16 +355,16 @@ ReadFileScatter(HANDLE hFile,
     pIOStatus->Information = 0;
 
     Status = NtReadFileScatter(hFile,
+                               lpOverlapped->hEvent,
                                NULL,
-                               NULL,
-                               NULL,
+                               ((ULONG_PTR)lpOverlapped->hEvent & 1) ? NULL : lpOverlapped,
                                pIOStatus,
                                aSegmentArray,
                                nNumberOfBytesToRead,
                                &Offset,
                                NULL);
 
-    if (!NT_SUCCESS(Status))
+    if (Status != STATUS_SUCCESS)
     {
         SetLastError(RtlNtStatusToDosError(Status));
         return FALSE;
@@ -397,16 +397,16 @@ WriteFileGather(HANDLE hFile,
     IOStatus->Information = 0;
 
     Status = NtWriteFileGather(hFile,
+                               lpOverlapped->hEvent,
                                NULL,
-                               NULL,
-                               NULL,
+                               ((ULONG_PTR)lpOverlapped->hEvent & 1) ? NULL : lpOverlapped,
                                IOStatus,
                                aSegmentArray,
                                nNumberOfBytesToWrite,
                                &Offset,
                                NULL);
 
-    if (!NT_SUCCESS(Status))
+    if (Status != STATUS_SUCCESS)
     {
         SetLastError(RtlNtStatusToDosError(Status));
         return FALSE;

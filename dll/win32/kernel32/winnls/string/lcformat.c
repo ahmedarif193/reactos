@@ -877,24 +877,19 @@ static INT NLS_GetDateTimeFormatA(LCID lcid, DWORD dwFlags,
     cp = node->dwCodePage;
   }
 
+  if (cchOut < 0 || (cchOut && !lpStr))
+  {
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return 0;
+  }
+
   if (lpFormat)
     MultiByteToWideChar(cp, 0, lpFormat, -1, szFormat, ARRAY_SIZE(szFormat));
 
-  if (cchOut > (int) ARRAY_SIZE(szOut))
-    cchOut = ARRAY_SIZE(szOut);
-
-  szOut[0] = '\0';
-
   iRet = NLS_GetDateTimeFormatW(lcid, dwFlags, lpTime, lpFormat ? szFormat : NULL,
-                                lpStr ? szOut : NULL, cchOut);
-
-  if (lpStr)
-  {
-    if (szOut[0])
-      WideCharToMultiByte(cp, 0, szOut, iRet ? -1 : cchOut, lpStr, cchOut, 0, 0);
-    else if (cchOut && iRet)
-      *lpStr = '\0';
-  }
+                                szOut, ARRAY_SIZE(szOut));
+  if (iRet)
+    iRet = WideCharToMultiByte(cp, 0, szOut, -1, lpStr, cchOut, 0, 0);
   return iRet;
 }
 
@@ -1127,240 +1122,262 @@ INT WINAPI GetTimeFormatW(LCID lcid, DWORD dwFlags, const SYSTEMTIME* lpTime,
  *
  * See GetNumberFormatA.
  */
+static void NLS_GroupingToString(UINT grouping, WCHAR *buffer)
+{
+    UINT last_digit = grouping % 10;
+    WCHAR tmp[10], *p = tmp;
+
+    if (last_digit == 0)
+    {
+        grouping /= 10;
+        if (grouping % 10 == 0)
+            last_digit = ~0;
+    }
+
+    while (grouping)
+    {
+        *p++ = '0' + grouping % 10;
+        grouping /= 10;
+    }
+    while (p > tmp)
+    {
+        *buffer++ = *(--p);
+        if (p > tmp) *buffer++ = ';';
+    }
+    if (last_digit != 0)
+    {
+        *buffer++ = ';';
+        *buffer++ = '0';
+        if (last_digit == ~0)
+        {
+            *buffer++ = ';';
+            *buffer++ = '0';
+        }
+    }
+    *buffer = 0;
+}
+
+static WCHAR *NLS_PrependStr(WCHAR *end, const WCHAR *str)
+{
+    UINT len = strlenW(str);
+    return memcpy(end - len, str, len * sizeof(WCHAR));
+}
+
+static WCHAR *NLS_FormatNumber(WCHAR *end, const WCHAR *value, const WCHAR *decimal_sep,
+                               const WCHAR *thousand_sep, const WCHAR *grouping, UINT digits, BOOL lzero)
+{
+    BOOL round = FALSE, repeat = FALSE;
+    UINT i, len = 0, prev = ~0;
+    const WCHAR *frac = NULL;
+
+    *(--end) = 0;
+
+    for (i = 0; value[i]; i++)
+    {
+        if (value[i] >= '0' && value[i] <= '9') continue;
+        if (value[i] != '.') return NULL;
+        if (frac) return NULL;
+        frac = value + i + 1;
+    }
+
+    len = frac ? strlenW(frac) : 0;
+
+    if (len > digits)
+    {
+        round = frac[digits] >= '5';
+        len = digits;
+    }
+    while (digits > len)
+    {
+        (*--end) = '0';
+        digits--;
+    }
+    while (len)
+    {
+        WCHAR ch = frac[--len];
+        if (round)
+        {
+            if (ch != '9')
+            {
+                ch++;
+                round = FALSE;
+            }
+            else ch = '0';
+        }
+        *(--end) = ch;
+    }
+    if (*end) end = NLS_PrependStr(end, decimal_sep);
+
+    len = frac ? frac - value - 1 : strlenW(value);
+
+    while (len && *value == '0')
+    {
+        value++;
+        len--;
+    }
+    if (len) lzero = FALSE;
+
+    while (grouping[0] == '0' && grouping[1] == ';')
+        grouping += 2;
+
+    while (len)
+    {
+        UINT limit = prev;
+
+        if (!repeat)
+        {
+            limit = *grouping - '0';
+            if (grouping[1] == ';')
+            {
+                grouping += 2;
+                if (limit)
+                    prev = limit;
+                else
+                {
+                    prev = ~0;
+                    if (grouping[0] == '0' && grouping[1] != ';')
+                    {
+                        repeat = TRUE;
+                        limit = prev;
+                    }
+                }
+            }
+            else
+            {
+                repeat = TRUE;
+                if (!limit)
+                    limit = prev;
+                else
+                    prev = ~0;
+            }
+        }
+
+        while (len && limit--)
+        {
+            WCHAR ch = value[--len];
+            if (round)
+            {
+                if (ch != '9')
+                {
+                    ch++;
+                    round = FALSE;
+                }
+                else ch = '0';
+            }
+            *(--end) = ch;
+        }
+        if (len) end = NLS_PrependStr(end, thousand_sep);
+    }
+    if (round) *(--end) = '1';
+    else if (lzero) *(--end) = '0';
+    return end;
+}
+
+static INT NLS_ReturnFormatted(const WCHAR *num, WCHAR *buffer, int len)
+{
+    INT ret = strlenW(num) + 1;
+
+    if (!len) return ret;
+    lstrcpynW(buffer, num, len);
+    if (ret > len)
+    {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    return ret;
+}
+
 INT WINAPI GetNumberFormatW(LCID lcid, DWORD dwFlags,
                             LPCWSTR lpszValue,  const NUMBERFMTW *lpFormat,
                             LPWSTR lpNumberStr, int cchOut)
 {
-  WCHAR szBuff[128], *szOut = szBuff + ARRAY_SIZE(szBuff) - 1;
-  WCHAR szNegBuff[8];
-  const WCHAR *lpszNeg = NULL, *lpszNegStart, *szSrc;
-  DWORD dwState = 0, dwDecimals = 0, dwGroupCount = 0, dwCurrentGroupCount = 0;
-  INT iRet;
+    WCHAR *num, fmt_decimal[4], fmt_thousand[4], fmt_neg[5], grouping[24], output[256];
+    const WCHAR *decimal_sep = fmt_decimal, *thousand_sep = fmt_thousand;
+    DWORD digits, lzero, order;
+    BOOL negative;
 
-  TRACE("(0x%04x,0x%08x,%s,%p,%p,%d)\n", lcid, dwFlags, debugstr_w(lpszValue),
-        lpFormat, lpNumberStr, cchOut);
+    TRACE("(0x%04x,0x%08x,%s,%p,%p,%d)\n", lcid, dwFlags, debugstr_w(lpszValue),
+          lpFormat, lpNumberStr, cchOut);
 
-  if (!lpszValue || cchOut < 0 || (cchOut > 0 && !lpNumberStr) ||
-      !IsValidLocale(lcid, 0) ||
-      (lpFormat && (dwFlags || !lpFormat->lpDecimalSep || !lpFormat->lpThousandSep)))
-  {
-    goto error;
-  }
-
-  if (!lpFormat)
-  {
-    const NLS_FORMAT_NODE *node = NLS_GetFormats(lcid, dwFlags);
-
-    if (!node)
-      goto error;
-    lpFormat = &node->fmt;
-    lpszNegStart = lpszNeg = GetNegative(node);
-  }
-  else
-  {
-    GetLocaleInfoW(lcid, LOCALE_SNEGATIVESIGN|(dwFlags & LOCALE_NOUSEROVERRIDE),
-                   szNegBuff, ARRAY_SIZE(szNegBuff));
-    lpszNegStart = lpszNeg = szNegBuff;
-  }
-  lpszNeg = lpszNeg + strlenW(lpszNeg) - 1;
-
-  dwFlags &= (LOCALE_NOUSEROVERRIDE|LOCALE_USE_CP_ACP);
-
-  /* Format the number backwards into a temporary buffer */
-
-  szSrc = lpszValue;
-  *szOut-- = '\0';
-
-  /* Check the number for validity */
-  while (*szSrc)
-  {
-    if (*szSrc >= '0' && *szSrc <= '9')
+    if (!lpszValue || cchOut < 0 || (cchOut > 0 && !lpNumberStr) || !IsValidLocale(ConvertDefaultLocale(lcid), 0))
     {
-      dwState |= NF_DIGITS;
-      if (dwState & NF_ISREAL)
-        dwDecimals++;
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
     }
-    else if (*szSrc == '-')
-    {
-      if (dwState)
-        goto error; /* '-' not first character */
-      dwState |= NF_ISNEGATIVE;
-    }
-    else if (*szSrc == '.')
-    {
-      if (dwState & NF_ISREAL)
-        goto error; /* More than one '.' */
-      dwState |= NF_ISREAL;
-    }
-    else
-      goto error; /* Invalid char */
-    szSrc++;
-  }
-  szSrc--; /* Point to last character */
 
-  if (!(dwState & NF_DIGITS))
-    goto error; /* No digits */
+    negative = (*lpszValue == '-');
+    dwFlags &= LOCALE_NOUSEROVERRIDE;
 
-  /* Add any trailing negative sign */
-  if (dwState & NF_ISNEGATIVE)
-  {
-    switch (lpFormat->NegativeOrder)
+    if (!lpFormat)
     {
-    case NLS_NEG_PARENS:
-      *szOut-- = ')';
-      break;
-    case NLS_NEG_RIGHT:
-    case NLS_NEG_RIGHT_SPACE:
-      while (lpszNeg >= lpszNegStart)
-        *szOut-- = *lpszNeg--;
-     if (lpFormat->NegativeOrder == NLS_NEG_RIGHT_SPACE)
-       *szOut-- = ' ';
-      break;
-    }
-  }
-
-  /* Copy all digits up to the decimal point */
-  if (!lpFormat->NumDigits)
-  {
-    if (dwState & NF_ISREAL)
-    {
-      while (*szSrc != '.') /* Don't write any decimals or a separator */
-      {
-        if (*szSrc >= '5' || (*szSrc == '4' && (dwState & NF_ROUND)))
-          dwState |= NF_ROUND;
-        else
-          dwState &= ~NF_ROUND;
-        szSrc--;
-      }
-      szSrc--;
-    }
-  }
-  else
-  {
-    LPWSTR lpszDec = lpFormat->lpDecimalSep + strlenW(lpFormat->lpDecimalSep) - 1;
-
-    if (dwDecimals <= lpFormat->NumDigits)
-    {
-      dwDecimals = lpFormat->NumDigits - dwDecimals;
-      while (dwDecimals--)
-        *szOut-- = '0'; /* Pad to correct number of dp */
+        GetLocaleInfoW(lcid, LOCALE_SGROUPING | dwFlags, grouping, ARRAY_SIZE(grouping));
+        GetLocaleInfoW(lcid, LOCALE_SDECIMAL | dwFlags, fmt_decimal, ARRAY_SIZE(fmt_decimal));
+        GetLocaleInfoW(lcid, LOCALE_STHOUSAND | dwFlags, fmt_thousand, ARRAY_SIZE(fmt_thousand));
+        GetLocaleInfoW(lcid, LOCALE_IDIGITS | LOCALE_RETURN_NUMBER | dwFlags,
+                       (WCHAR *)&digits, sizeof(DWORD) / sizeof(WCHAR));
+        GetLocaleInfoW(lcid, LOCALE_ILZERO | LOCALE_RETURN_NUMBER | dwFlags,
+                       (WCHAR *)&lzero, sizeof(DWORD) / sizeof(WCHAR));
+        GetLocaleInfoW(lcid, LOCALE_INEGNUMBER | LOCALE_RETURN_NUMBER | dwFlags,
+                       (WCHAR *)&order, sizeof(DWORD) / sizeof(WCHAR));
     }
     else
     {
-      dwDecimals -= lpFormat->NumDigits;
-      /* Skip excess decimals, and determine if we have to round the number */
-      while (dwDecimals--)
-      {
-        if (*szSrc >= '5' || (*szSrc == '4' && (dwState & NF_ROUND)))
-          dwState |= NF_ROUND;
-        else
-          dwState &= ~NF_ROUND;
-        szSrc--;
-      }
-    }
-
-    if (dwState & NF_ISREAL)
-    {
-      while (*szSrc != '.')
-      {
-        if (dwState & NF_ROUND)
+        if (dwFlags)
         {
-          if (*szSrc == '9')
-            *szOut-- = '0'; /* continue rounding */
-          else
-          {
-            dwState &= ~NF_ROUND;
-            *szOut-- = (*szSrc)+1;
-          }
-          szSrc--;
+            SetLastError(ERROR_INVALID_FLAGS);
+            return 0;
         }
-        else
-          *szOut-- = *szSrc--; /* Write existing decimals */
-      }
-      szSrc--; /* Skip '.' */
+        decimal_sep = lpFormat->lpDecimalSep;
+        thousand_sep = lpFormat->lpThousandSep;
+        NLS_GroupingToString(lpFormat->Grouping, grouping);
+        digits = lpFormat->NumDigits;
+        lzero = lpFormat->LeadingZero;
+        order = lpFormat->NegativeOrder;
+        if (!decimal_sep || !thousand_sep)
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
     }
 
-    while (lpszDec >= lpFormat->lpDecimalSep)
-      *szOut-- = *lpszDec--; /* Write decimal separator */
-  }
-
-  dwGroupCount = lpFormat->Grouping == 32 ? 3 : lpFormat->Grouping;
-
-  /* Write the remaining whole number digits, including grouping chars */
-  while (szSrc >= lpszValue && *szSrc >= '0' && *szSrc <= '9')
-  {
-    if (dwState & NF_ROUND)
+    if (negative)
     {
-      if (*szSrc == '9')
-        *szOut-- = '0'; /* continue rounding */
-      else
-      {
-        dwState &= ~NF_ROUND;
-        *szOut-- = (*szSrc)+1;
-      }
-      szSrc--;
+        lpszValue++;
+        GetLocaleInfoW(lcid, LOCALE_SNEGATIVESIGN | dwFlags, fmt_neg, ARRAY_SIZE(fmt_neg));
     }
-    else
-      *szOut-- = *szSrc--;
 
-    dwState |= NF_DIGITS_OUT;
-    dwCurrentGroupCount++;
-    if (szSrc >= lpszValue && dwCurrentGroupCount == dwGroupCount && *szSrc != '-')
+    if (!(num = NLS_FormatNumber(output + ARRAY_SIZE(output) - 6, lpszValue,
+                                 decimal_sep, thousand_sep, grouping, digits, lzero)))
     {
-      LPWSTR lpszGrp = lpFormat->lpThousandSep + strlenW(lpFormat->lpThousandSep) - 1;
-
-      while (lpszGrp >= lpFormat->lpThousandSep)
-        *szOut-- = *lpszGrp--; /* Write grouping char */
-
-      dwCurrentGroupCount = 0;
-      if (lpFormat->Grouping == 32)
-        dwGroupCount = 2; /* Indic grouping: 3 then 2 */
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
     }
-  }
-  if (dwState & NF_ROUND)
-  {
-    *szOut-- = '1'; /* e.g. .6 > 1.0 */
-  }
-  else if (!(dwState & NF_DIGITS_OUT) && lpFormat->LeadingZero)
-    *szOut-- = '0'; /* Add leading 0 if we have no digits before the decimal point */
 
-  /* Add any leading negative sign */
-  if (dwState & NF_ISNEGATIVE)
-  {
-    switch (lpFormat->NegativeOrder)
+    if (negative)
     {
-    case NLS_NEG_PARENS:
-      *szOut-- = '(';
-      break;
-    case NLS_NEG_LEFT_SPACE:
-      *szOut-- = ' ';
-      /* Fall through */
-    case NLS_NEG_LEFT:
-      while (lpszNeg >= lpszNegStart)
-        *szOut-- = *lpszNeg--;
-      break;
+        switch (order)
+        {
+        case 0:
+            num = NLS_PrependStr(num, L"(");
+            strcatW(num, L")");
+            break;
+        case 2:
+            num = NLS_PrependStr(num, L" ");
+        case 1:
+            num = NLS_PrependStr(num, fmt_neg);
+            break;
+        case 4:
+            strcatW(num, L" ");
+        case 3:
+            strcatW(num, fmt_neg);
+            break;
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
     }
-  }
-  szOut++;
 
-  iRet = strlenW(szOut) + 1;
-  if (cchOut)
-  {
-    if (iRet <= cchOut)
-      memcpy(lpNumberStr, szOut, iRet * sizeof(WCHAR));
-    else
-    {
-      memcpy(lpNumberStr, szOut, cchOut * sizeof(WCHAR));
-      lpNumberStr[cchOut - 1] = '\0';
-      SetLastError(ERROR_INSUFFICIENT_BUFFER);
-      iRet = 0;
-    }
-  }
-  return iRet;
-
-error:
-  SetLastError(lpFormat && dwFlags ? ERROR_INVALID_FLAGS : ERROR_INVALID_PARAMETER);
-  return 0;
+    return NLS_ReturnFormatted(num, lpNumberStr, cchOut);
 }
 
 #if _WIN32_WINNT >= 0x600
@@ -1402,286 +1419,159 @@ INT WINAPI GetCurrencyFormatW(LCID lcid, DWORD dwFlags,
                               LPCWSTR lpszValue,  const CURRENCYFMTW *lpFormat,
                               LPWSTR lpCurrencyStr, int cchOut)
 {
-  static const BYTE NLS_NegCyFormats[16] =
-  {
-    CF_PARENS|CF_CY_LEFT,                       /* ($1.1) */
-    CF_MINUS_LEFT|CF_MINUS_BEFORE|CF_CY_LEFT,   /* -$1.1  */
-    CF_MINUS_LEFT|CF_CY_LEFT,                   /* $-1.1  */
-    CF_MINUS_RIGHT|CF_CY_LEFT,                  /* $1.1-  */
-    CF_PARENS|CF_CY_RIGHT,                      /* (1.1$) */
-    CF_MINUS_LEFT|CF_CY_RIGHT,                  /* -1.1$  */
-    CF_MINUS_RIGHT|CF_MINUS_BEFORE|CF_CY_RIGHT, /* 1.1-$  */
-    CF_MINUS_RIGHT|CF_CY_RIGHT,                 /* 1.1$-  */
-    CF_MINUS_LEFT|CF_CY_RIGHT|CF_CY_SPACE,      /* -1.1 $ */
-    CF_MINUS_LEFT|CF_MINUS_BEFORE|CF_CY_LEFT|CF_CY_SPACE,   /* -$ 1.1 */
-    CF_MINUS_RIGHT|CF_CY_RIGHT|CF_CY_SPACE,     /* 1.1 $-  */
-    CF_MINUS_RIGHT|CF_CY_LEFT|CF_CY_SPACE,      /* $ 1.1-  */
-    CF_MINUS_LEFT|CF_CY_LEFT|CF_CY_SPACE,       /* $ -1.1  */
-    CF_MINUS_RIGHT|CF_MINUS_BEFORE|CF_CY_RIGHT|CF_CY_SPACE, /* 1.1- $ */
-    CF_PARENS|CF_CY_LEFT|CF_CY_SPACE,           /* ($ 1.1) */
-    CF_PARENS|CF_CY_RIGHT|CF_CY_SPACE,          /* (1.1 $) */
-  };
-  static const BYTE NLS_PosCyFormats[4] =
-  {
-    CF_CY_LEFT,              /* $1.1  */
-    CF_CY_RIGHT,             /* 1.1$  */
-    CF_CY_LEFT|CF_CY_SPACE,  /* $ 1.1 */
-    CF_CY_RIGHT|CF_CY_SPACE, /* 1.1 $ */
-  };
-  WCHAR szBuff[128], *szOut = szBuff + ARRAY_SIZE(szBuff) - 1;
-  WCHAR szNegBuff[8];
-  const WCHAR *lpszNeg = NULL, *lpszNegStart, *szSrc, *lpszCy, *lpszCyStart;
-  DWORD dwState = 0, dwDecimals = 0, dwGroupCount = 0, dwCurrentGroupCount = 0, dwFmt;
-  INT iRet;
+    WCHAR *num, fmt_decimal[4], fmt_thousand[4], fmt_symbol[13], fmt_neg[5], grouping[20], output[256];
+    const WCHAR *decimal_sep = fmt_decimal, *thousand_sep = fmt_thousand, *symbol = fmt_symbol;
+    DWORD digits, lzero, pos_order, neg_order;
+    BOOL negative;
 
-  TRACE("(0x%04x,0x%08x,%s,%p,%p,%d)\n", lcid, dwFlags, debugstr_w(lpszValue),
-        lpFormat, lpCurrencyStr, cchOut);
+    TRACE("(0x%04x,0x%08x,%s,%p,%p,%d)\n", lcid, dwFlags, debugstr_w(lpszValue),
+          lpFormat, lpCurrencyStr, cchOut);
 
-  if (!lpszValue || cchOut < 0 || (cchOut > 0 && !lpCurrencyStr) ||
-      !IsValidLocale(lcid, 0) ||
-      (lpFormat && (dwFlags || !lpFormat->lpDecimalSep || !lpFormat->lpThousandSep ||
-      !lpFormat->lpCurrencySymbol || lpFormat->NegativeOrder > 15 ||
-      lpFormat->PositiveOrder > 3)))
-  {
-    goto error;
-  }
-
-  if (!lpFormat)
-  {
-    const NLS_FORMAT_NODE *node = NLS_GetFormats(lcid, dwFlags);
-
-    if (!node)
-      goto error;
-
-    lpFormat = &node->cyfmt;
-    lpszNegStart = lpszNeg = GetNegative(node);
-  }
-  else
-  {
-    GetLocaleInfoW(lcid, LOCALE_SNEGATIVESIGN|(dwFlags & LOCALE_NOUSEROVERRIDE),
-                   szNegBuff, ARRAY_SIZE(szNegBuff));
-    lpszNegStart = lpszNeg = szNegBuff;
-  }
-  dwFlags &= (LOCALE_NOUSEROVERRIDE|LOCALE_USE_CP_ACP);
-
-  lpszNeg = lpszNeg + strlenW(lpszNeg) - 1;
-  lpszCyStart = lpFormat->lpCurrencySymbol;
-  lpszCy = lpszCyStart + strlenW(lpszCyStart) - 1;
-
-  /* Format the currency backwards into a temporary buffer */
-
-  szSrc = lpszValue;
-  *szOut-- = '\0';
-
-  /* Check the number for validity */
-  while (*szSrc)
-  {
-    if (*szSrc >= '0' && *szSrc <= '9')
+    if (!lpszValue || cchOut < 0 || (cchOut > 0 && !lpCurrencyStr) || !IsValidLocale(ConvertDefaultLocale(lcid), 0))
     {
-      dwState |= NF_DIGITS;
-      if (dwState & NF_ISREAL)
-        dwDecimals++;
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
     }
-    else if (*szSrc == '-')
+
+    negative = (*lpszValue == '-');
+    dwFlags &= LOCALE_NOUSEROVERRIDE;
+
+    if (!lpFormat)
     {
-      if (dwState)
-        goto error; /* '-' not first character */
-      dwState |= NF_ISNEGATIVE;
-    }
-    else if (*szSrc == '.')
-    {
-      if (dwState & NF_ISREAL)
-        goto error; /* More than one '.' */
-      dwState |= NF_ISREAL;
-    }
-    else
-      goto error; /* Invalid char */
-    szSrc++;
-  }
-  szSrc--; /* Point to last character */
-
-  if (!(dwState & NF_DIGITS))
-    goto error; /* No digits */
-
-  if (dwState & NF_ISNEGATIVE)
-    dwFmt = NLS_NegCyFormats[lpFormat->NegativeOrder];
-  else
-    dwFmt = NLS_PosCyFormats[lpFormat->PositiveOrder];
-
-  /* Add any trailing negative or currency signs */
-  if (dwFmt & CF_PARENS)
-    *szOut-- = ')';
-
-  while (dwFmt & (CF_MINUS_RIGHT|CF_CY_RIGHT))
-  {
-    switch (dwFmt & (CF_MINUS_RIGHT|CF_MINUS_BEFORE|CF_CY_RIGHT))
-    {
-    case CF_MINUS_RIGHT:
-    case CF_MINUS_RIGHT|CF_CY_RIGHT:
-      while (lpszNeg >= lpszNegStart)
-        *szOut-- = *lpszNeg--;
-      dwFmt &= ~CF_MINUS_RIGHT;
-      break;
-
-    case CF_CY_RIGHT:
-    case CF_MINUS_BEFORE|CF_CY_RIGHT:
-    case CF_MINUS_RIGHT|CF_MINUS_BEFORE|CF_CY_RIGHT:
-      while (lpszCy >= lpszCyStart)
-        *szOut-- = *lpszCy--;
-      if (dwFmt & CF_CY_SPACE)
-        *szOut-- = ' ';
-      dwFmt &= ~(CF_CY_RIGHT|CF_MINUS_BEFORE);
-      break;
-    }
-  }
-
-  /* Copy all digits up to the decimal point */
-  if (!lpFormat->NumDigits)
-  {
-    if (dwState & NF_ISREAL)
-    {
-      while (*szSrc != '.') /* Don't write any decimals or a separator */
-      {
-        if (*szSrc >= '5' || (*szSrc == '4' && (dwState & NF_ROUND)))
-          dwState |= NF_ROUND;
-        else
-          dwState &= ~NF_ROUND;
-        szSrc--;
-      }
-      szSrc--;
-    }
-  }
-  else
-  {
-    LPWSTR lpszDec = lpFormat->lpDecimalSep + strlenW(lpFormat->lpDecimalSep) - 1;
-
-    if (dwDecimals <= lpFormat->NumDigits)
-    {
-      dwDecimals = lpFormat->NumDigits - dwDecimals;
-      while (dwDecimals--)
-        *szOut-- = '0'; /* Pad to correct number of dp */
+        GetLocaleInfoW(lcid, LOCALE_SCURRENCY | dwFlags, fmt_symbol, ARRAY_SIZE(fmt_symbol));
+        GetLocaleInfoW(lcid, LOCALE_SMONGROUPING | dwFlags, grouping, ARRAY_SIZE(grouping));
+        GetLocaleInfoW(lcid, LOCALE_SMONDECIMALSEP | dwFlags, fmt_decimal, ARRAY_SIZE(fmt_decimal));
+        GetLocaleInfoW(lcid, LOCALE_SMONTHOUSANDSEP | dwFlags, fmt_thousand, ARRAY_SIZE(fmt_thousand));
+        GetLocaleInfoW(lcid, LOCALE_ICURRDIGITS | LOCALE_RETURN_NUMBER | dwFlags,
+                       (WCHAR *)&digits, sizeof(DWORD) / sizeof(WCHAR));
+        GetLocaleInfoW(lcid, LOCALE_ILZERO | LOCALE_RETURN_NUMBER | dwFlags,
+                       (WCHAR *)&lzero, sizeof(DWORD) / sizeof(WCHAR));
+        GetLocaleInfoW(lcid, LOCALE_ICURRENCY | LOCALE_RETURN_NUMBER | dwFlags,
+                       (WCHAR *)&pos_order, sizeof(DWORD) / sizeof(WCHAR));
+        GetLocaleInfoW(lcid, LOCALE_INEGCURR | LOCALE_RETURN_NUMBER | dwFlags,
+                       (WCHAR *)&neg_order, sizeof(DWORD) / sizeof(WCHAR));
     }
     else
     {
-      dwDecimals -= lpFormat->NumDigits;
-      /* Skip excess decimals, and determine if we have to round the number */
-      while (dwDecimals--)
-      {
-        if (*szSrc >= '5' || (*szSrc == '4' && (dwState & NF_ROUND)))
-          dwState |= NF_ROUND;
-        else
-          dwState &= ~NF_ROUND;
-        szSrc--;
-      }
-    }
-
-    if (dwState & NF_ISREAL)
-    {
-      while (*szSrc != '.')
-      {
-        if (dwState & NF_ROUND)
+        if (dwFlags)
         {
-          if (*szSrc == '9')
-            *szOut-- = '0'; /* continue rounding */
-          else
-          {
-            dwState &= ~NF_ROUND;
-            *szOut-- = (*szSrc)+1;
-          }
-          szSrc--;
+            SetLastError(ERROR_INVALID_FLAGS);
+            return 0;
         }
-        else
-          *szOut-- = *szSrc--; /* Write existing decimals */
-      }
-      szSrc--; /* Skip '.' */
+        decimal_sep = lpFormat->lpDecimalSep;
+        thousand_sep = lpFormat->lpThousandSep;
+        symbol = lpFormat->lpCurrencySymbol;
+        NLS_GroupingToString(lpFormat->Grouping, grouping);
+        digits = lpFormat->NumDigits;
+        lzero = lpFormat->LeadingZero;
+        pos_order = lpFormat->PositiveOrder;
+        neg_order = lpFormat->NegativeOrder;
+        if (!decimal_sep || !thousand_sep || !symbol)
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
     }
-    while (lpszDec >= lpFormat->lpDecimalSep)
-      *szOut-- = *lpszDec--; /* Write decimal separator */
-  }
 
-  dwGroupCount = lpFormat->Grouping == 32 ? 3 : lpFormat->Grouping;
-
-  /* Write the remaining whole number digits, including grouping chars */
-  while (szSrc >= lpszValue && *szSrc >= '0' && *szSrc <= '9')
-  {
-    if (dwState & NF_ROUND)
+    if (negative)
     {
-      if (*szSrc == '9')
-        *szOut-- = '0'; /* continue rounding */
-      else
-      {
-        dwState &= ~NF_ROUND;
-        *szOut-- = (*szSrc)+1;
-      }
-      szSrc--;
+        lpszValue++;
+        GetLocaleInfoW(lcid, LOCALE_SNEGATIVESIGN | dwFlags, fmt_neg, ARRAY_SIZE(fmt_neg));
+    }
+
+    if (!(num = NLS_FormatNumber(output + ARRAY_SIZE(output) - 20, lpszValue,
+                                 decimal_sep, thousand_sep, grouping, digits, lzero)))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    if (negative)
+    {
+        switch (neg_order)
+        {
+        case 14:
+            num = NLS_PrependStr(num, L" ");
+        case 0:
+            num = NLS_PrependStr(num, symbol);
+            num = NLS_PrependStr(num, L"(");
+            strcatW(num, L")");
+            break;
+        case 9:
+            num = NLS_PrependStr(num, L" ");
+        case 1:
+            num = NLS_PrependStr(num, symbol);
+            num = NLS_PrependStr(num, fmt_neg);
+            break;
+        case 2:
+            num = NLS_PrependStr(num, fmt_neg);
+            num = NLS_PrependStr(num, symbol);
+            break;
+        case 11:
+            num = NLS_PrependStr(num, L" ");
+        case 3:
+            num = NLS_PrependStr(num, symbol);
+            strcatW(num, fmt_neg);
+            break;
+        case 15:
+            strcatW(num, L" ");
+        case 4:
+            strcatW(num, symbol);
+            num = NLS_PrependStr(num, L"(");
+            strcatW(num, L")");
+            break;
+        case 8:
+            strcatW(num, L" ");
+        case 5:
+            num = NLS_PrependStr(num, fmt_neg);
+            strcatW(num, symbol);
+            break;
+        case 6:
+            strcatW(num, fmt_neg);
+            strcatW(num, symbol);
+            break;
+        case 10:
+            strcatW(num, L" ");
+        case 7:
+            strcatW(num, symbol);
+            strcatW(num, fmt_neg);
+            break;
+        case 12:
+            num = NLS_PrependStr(num, fmt_neg);
+            num = NLS_PrependStr(num, L" ");
+            num = NLS_PrependStr(num, symbol);
+            break;
+        case 13:
+            strcatW(num, fmt_neg);
+            strcatW(num, L" ");
+            strcatW(num, symbol);
+            break;
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
     }
     else
-      *szOut-- = *szSrc--;
-
-    dwState |= NF_DIGITS_OUT;
-    dwCurrentGroupCount++;
-    if (szSrc >= lpszValue && dwCurrentGroupCount == dwGroupCount && *szSrc != '-')
     {
-      LPWSTR lpszGrp = lpFormat->lpThousandSep + strlenW(lpFormat->lpThousandSep) - 1;
-
-      while (lpszGrp >= lpFormat->lpThousandSep)
-        *szOut-- = *lpszGrp--; /* Write grouping char */
-
-      dwCurrentGroupCount = 0;
-      if (lpFormat->Grouping == 32)
-        dwGroupCount = 2; /* Indic grouping: 3 then 2 */
+        switch (pos_order)
+        {
+        case 2:
+            num = NLS_PrependStr(num, L" ");
+        case 0:
+            num = NLS_PrependStr(num, symbol);
+            break;
+        case 3:
+            strcatW(num, L" ");
+        case 1:
+            strcatW(num, symbol);
+            break;
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
     }
-  }
-  if (dwState & NF_ROUND)
-    *szOut-- = '1'; /* e.g. .6 > 1.0 */
-  else if (!(dwState & NF_DIGITS_OUT) && lpFormat->LeadingZero)
-    *szOut-- = '0'; /* Add leading 0 if we have no digits before the decimal point */
 
-  /* Add any leading negative or currency sign */
-  while (dwFmt & (CF_MINUS_LEFT|CF_CY_LEFT))
-  {
-    switch (dwFmt & (CF_MINUS_LEFT|CF_MINUS_BEFORE|CF_CY_LEFT))
-    {
-    case CF_MINUS_LEFT:
-    case CF_MINUS_LEFT|CF_CY_LEFT:
-      while (lpszNeg >= lpszNegStart)
-        *szOut-- = *lpszNeg--;
-      dwFmt &= ~CF_MINUS_LEFT;
-      break;
-
-    case CF_CY_LEFT:
-    case CF_CY_LEFT|CF_MINUS_BEFORE:
-    case CF_MINUS_LEFT|CF_MINUS_BEFORE|CF_CY_LEFT:
-      if (dwFmt & CF_CY_SPACE)
-        *szOut-- = ' ';
-      while (lpszCy >= lpszCyStart)
-        *szOut-- = *lpszCy--;
-      dwFmt &= ~(CF_CY_LEFT|CF_MINUS_BEFORE);
-      break;
-    }
-  }
-  if (dwFmt & CF_PARENS)
-    *szOut-- = '(';
-  szOut++;
-
-  iRet = strlenW(szOut) + 1;
-  if (cchOut)
-  {
-    if (iRet <= cchOut)
-      memcpy(lpCurrencyStr, szOut, iRet * sizeof(WCHAR));
-    else
-    {
-      memcpy(lpCurrencyStr, szOut, cchOut * sizeof(WCHAR));
-      lpCurrencyStr[cchOut - 1] = '\0';
-      SetLastError(ERROR_INSUFFICIENT_BUFFER);
-      iRet = 0;
-    }
-  }
-  return iRet;
-
-error:
-  SetLastError(lpFormat && dwFlags ? ERROR_INVALID_FLAGS : ERROR_INVALID_PARAMETER);
-  return 0;
+    return NLS_ReturnFormatted(num, lpCurrencyStr, cchOut);
 }
 
 #if _WIN32_WINNT >= 0x600
@@ -1841,6 +1731,11 @@ BOOL WINAPI EnumDateFormatsExEx(DATEFMT_ENUMPROCEXEX proc, const WCHAR *locale, 
     ctxt.type = CALLBACK_ENUMPROCEXEX;
     ctxt.u.callbackexex = proc;
     ctxt.lcid = LocaleNameToLCID(locale, 0);
+    if (!ctxt.lcid)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
     ctxt.flags = flags;
     ctxt.lParam = lParam;
     ctxt.unicode = TRUE;
@@ -1960,6 +1855,7 @@ BOOL NLS_EnumCalendarInfo(const struct enumcalendar_context *ctxt)
 {
   WCHAR *buf, *opt = NULL, *iter = NULL;
   CALID calendar = ctxt->calendar;
+  CALTYPE caltype = ctxt->caltype & ~CAL_RETURN_NUMBER;
   BOOL ret = FALSE;
   int bufSz = 200;		/* the size of the buffer */
 
@@ -1997,11 +1893,9 @@ BOOL NLS_EnumCalendarInfo(const struct enumcalendar_context *ctxt)
   {
     do				/* loop until there's no error */
     {
-      if (ctxt->caltype & CAL_RETURN_NUMBER)
-        ret = GetCalendarInfoW(ctxt->lcid, calendar, ctxt->caltype, NULL, bufSz / sizeof(WCHAR), (LPDWORD)buf);
-      else if (ctxt->unicode)
-        ret = GetCalendarInfoW(ctxt->lcid, calendar, ctxt->caltype, buf, bufSz / sizeof(WCHAR), NULL);
-      else ret = GetCalendarInfoA(ctxt->lcid, calendar, ctxt->caltype, (CHAR*)buf, bufSz / sizeof(CHAR), NULL);
+      if (ctxt->unicode)
+        ret = GetCalendarInfoW(ctxt->lcid, calendar, caltype, buf, bufSz / sizeof(WCHAR), NULL);
+      else ret = GetCalendarInfoA(ctxt->lcid, calendar, caltype, (CHAR*)buf, bufSz / sizeof(CHAR), NULL);
 
       if (!ret)
       {
@@ -2009,8 +1903,8 @@ BOOL NLS_EnumCalendarInfo(const struct enumcalendar_context *ctxt)
         {				/* so resize it */
           int newSz;
           if (ctxt->unicode)
-            newSz = GetCalendarInfoW(ctxt->lcid, calendar, ctxt->caltype, NULL, 0, NULL) * sizeof(WCHAR);
-          else newSz = GetCalendarInfoA(ctxt->lcid, calendar, ctxt->caltype, NULL, 0, NULL) * sizeof(CHAR);
+            newSz = GetCalendarInfoW(ctxt->lcid, calendar, caltype, NULL, 0, NULL) * sizeof(WCHAR);
+          else newSz = GetCalendarInfoA(ctxt->lcid, calendar, caltype, NULL, 0, NULL) * sizeof(CHAR);
           if (bufSz >= newSz)
           {
             ERR("Buffer resizing disorder: was %d, requested %d.\n", bufSz, newSz);
@@ -2057,7 +1951,9 @@ BOOL NLS_EnumCalendarInfo(const struct enumcalendar_context *ctxt)
     while ((*iter >= '0') && (*iter <= '9'))
       calendar = calendar * 10 + *iter++ - '0';
 
-    if (*iter++ != 0)
+    if (*iter == ';')
+      iter++;
+    else if (*iter != 0)
     {
       SetLastError(ERROR_BADDB);
       ret = FALSE;
