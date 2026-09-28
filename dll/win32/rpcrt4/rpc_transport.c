@@ -54,22 +54,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(rpc);
 
-#ifdef __REACTOS__ /* FIXME: Inspect */
-static BOOL WINAPI CancelIoEx_(HANDLE handle, LPOVERLAPPED lpOverlapped)
-{
-     IO_STATUS_BLOCK    io_status;
-
-    NtCancelIoFile(handle, &io_status);
-    if (io_status.Status)
-    {
-        SetLastError( RtlNtStatusToDosError( io_status.Status ) );
-        return FALSE;
-    }
-    return TRUE;
-}
-#define CancelIoEx CancelIoEx_
-#endif
-
 static RpcConnection *rpcrt4_spawn_connection(RpcConnection *old_connection);
 
 /**** ncacn_np support ****/
@@ -687,11 +671,7 @@ static int rpcrt4_conn_np_read(RpcConnection *conn, void *buffer, unsigned int c
         if (connection->read_closed)
         {
             IO_STATUS_BLOCK io_status;
-#ifdef __REACTOS__ /* FIXME: We should also cancel I/O for other threads */
-            NtCancelIoFile(connection->pipe, &io_status);
-#else
             NtCancelIoFileEx(connection->pipe, &connection->io_status, &io_status);
-#endif
         }
         WaitForSingleObject(event, INFINITE);
         status = connection->io_status.Status;
@@ -753,11 +733,7 @@ static void rpcrt4_conn_np_close_read(RpcConnection *conn)
     IO_STATUS_BLOCK io_status;
 
     connection->read_closed = TRUE;
-#ifdef __REACTOS__ /* FIXME: We should also cancel I/O for other threads */
-    NtCancelIoFile(connection->pipe, &io_status);
-#else
     NtCancelIoFileEx(connection->pipe, &connection->io_status, &io_status);
-#endif
 }
 
 static void rpcrt4_conn_np_cancel_call(RpcConnection *conn)

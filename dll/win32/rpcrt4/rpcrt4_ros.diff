@@ -106,7 +106,7 @@ diff -pudN e:\wine\dlls\rpcrt4/rpc_transport.c e:\reactos\dll\win32\rpcrt4/rpc_t
  #include "winioctl.h"
  #include "wine/unicode.h"
  
-@@ -54,10 +59,26 @@
+@@ -54,10 +59,11 @@
  
  #define DEFAULT_NCACN_HTTP_TIMEOUT (60 * 1000)
  
@@ -115,21 +115,6 @@ diff -pudN e:\wine\dlls\rpcrt4/rpc_transport.c e:\reactos\dll\win32\rpcrt4/rpc_t
  
  WINE_DEFAULT_DEBUG_CHANNEL(rpc);
  
-+#ifdef __REACTOS__ /* FIXME: Inspect */
-+BOOL WINAPI CancelIoEx(HANDLE handle, LPOVERLAPPED lpOverlapped)
-+{
-+     IO_STATUS_BLOCK    io_status;
-+
-+    NtCancelIoFile(handle, &io_status);
-+    if (io_status.u.Status)
-+    {
-+        SetLastError( RtlNtStatusToDosError( io_status.u.Status ) );
-+        return FALSE;
-+    }
-+    return TRUE;
-+}
-+#endif
-+
  static RpcConnection *rpcrt4_spawn_connection(RpcConnection *old_connection);
  
  /**** ncacn_np support ****/
@@ -213,15 +198,11 @@ diff -pudN e:\wine\dlls\rpcrt4/rpc_transport.c e:\reactos\dll\win32\rpcrt4/rpc_t
    status = is_pipe_listening(pipe_name);
    I_RpcFree(pipe_name);
    return status;
-@@ -395,10 +426,14 @@ static int rpcrt4_conn_np_read(RpcConnec
+@@ -395,10 +426,10 @@ static int rpcrt4_conn_np_read(RpcConnec
          if (connection->read_closed)
          {
              IO_STATUS_BLOCK io_status;
-+#ifdef __REACTOS__ /* FIXME: We should also cancel I/O for other threads */
-+            NtCancelIoFile(connection->pipe, &io_status);
-+#else
              NtCancelIoFileEx(connection->pipe, &connection->io_status, &io_status);
-+#endif
          }
          WaitForSingleObject(event, INFINITE);
 -        status = connection->io_status.Status;
@@ -238,18 +219,6 @@ diff -pudN e:\wine\dlls\rpcrt4/rpc_transport.c e:\reactos\dll\win32\rpcrt4/rpc_t
      }
      release_np_event(connection, event);
      if (status)
-@@ -457,7 +492,11 @@ static void rpcrt4_conn_np_close_read(Rp
-     IO_STATUS_BLOCK io_status;
- 
-     connection->read_closed = TRUE;
-+#ifdef __REACTOS__ /* FIXME: We should also cancel I/O for other threads */
-+    NtCancelIoFile(connection->pipe, &io_status);
-+#else
-     NtCancelIoFileEx(connection->pipe, &connection->io_status, &io_status);
-+#endif
- }
- 
- static void rpcrt4_conn_np_cancel_call(RpcConnection *conn)
 @@ -675,7 +714,7 @@ static void *rpcrt4_protseq_np_get_wait_
              {
              case STATUS_SUCCESS:
