@@ -72,8 +72,14 @@ PUXINI_FILE UXINI_LoadINI(HMODULE hTheme, LPCWSTR lpName) {
         }
     }
 
+#ifdef __REACTOS__
+    if (!hrsc) return NULL;
+#endif
     dwIniSize = SizeofResource(hTheme, hrsc) / sizeof(WCHAR);
     uf = malloc(sizeof(*uf));
+#ifdef __REACTOS__
+    if (!uf) return NULL;
+#endif
     uf->lpIni = lpThemesIni;
     uf->lpCurLoc = lpThemesIni;
     uf->lpEnd = lpThemesIni + dwIniSize;
