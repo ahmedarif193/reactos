@@ -180,12 +180,48 @@ static HRESULT voice_information_create( const WCHAR *display_name, const WCHAR 
 
     if (!(voice_info = calloc(1, sizeof(*voice_info)))) return E_OUTOFMEMORY;
 
+#ifdef __REACTOS__
+    len = wcslen(display_name);
+#else
     len = wcslen(display_name) + 3;
+#endif
     langlen = GetLocaleInfoEx(locale, LOCALE_SLOCALIZEDDISPLAYNAME, NULL, 0);
+#ifdef __REACTOS__
+    if (!langlen)
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        voice_information_delete(voice_info);
+        return hr;
+    }
+    if (len > UINT_MAX - 3 || len + 3 > ~(size_t)0 / sizeof(WCHAR) - langlen ||
+        len + 3 > UINT_MAX - langlen)
+    {
+        voice_information_delete(voice_info);
+        return E_OUTOFMEMORY;
+    }
+    len += 3;
+#endif
     description = malloc((len + langlen)  * sizeof(WCHAR));
+#ifdef __REACTOS__
+    if (!description)
+    {
+        voice_information_delete(voice_info);
+        return E_OUTOFMEMORY;
+    }
+#endif
     wcscpy(description, display_name);
     wcscat(description, L" - ");
+#ifdef __REACTOS__
+    if (!GetLocaleInfoEx(locale, LOCALE_SLOCALIZEDDISPLAYNAME, description + len, langlen))
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        free(description);
+        voice_information_delete(voice_info);
+        return hr;
+    }
+#else
     GetLocaleInfoEx(locale, LOCALE_SLOCALIZEDDISPLAYNAME, description + len, langlen);
+#endif
 
     hr = WindowsCreateString(display_name, wcslen(display_name), &voice_info->display_name);
     if (SUCCEEDED(hr))
