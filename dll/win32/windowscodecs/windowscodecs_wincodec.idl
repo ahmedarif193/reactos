@@ -209,6 +209,22 @@ coclass WICApp1MetadataReader { interface IWICMetadataReader; }
 ]
 coclass WICApp1MetadataWriter { interface IWICMetadataWriter; }
 
+#ifdef __REACTOS__
+[
+    helpstring("WIC JPEG Luminance Metadata Reader"),
+    threading(both),
+    uuid(356f2f88-05a6-4728-b9a4-1bfbce04d838)
+]
+coclass WICJpegLuminanceMetadataReader { interface IWICMetadataReader; }
+
+[
+    helpstring("WIC JPEG Chrominance Metadata Reader"),
+    threading(both),
+    uuid(50b1904b-f28f-4574-93f4-0bade82c69e9)
+]
+coclass WICJpegChrominanceMetadataReader { interface IWICMetadataReader; }
+
+#endif
 [
     helpstring("WIC Png cHRM Metadata Reader"),
     threading(both),

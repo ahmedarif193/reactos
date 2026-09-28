@@ -228,6 +228,10 @@ typedef struct _MetadataHandlerVtbl
     HRESULT (*fnLoad)(MetadataHandler *handler, IStream *stream, const GUID *preferred_vendor,
         DWORD persist_options);
     HRESULT (*fnCreate)(MetadataHandler *handler);
+#ifdef __REACTOS__
+    HRESULT empty_value_error;
+    HRESULT invalid_index_error;
+#endif
 } MetadataHandlerVtbl;
 
 typedef struct MetadataHandler
@@ -259,6 +263,10 @@ extern HRESULT ExifMetadataReader_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT ExifMetadataWriter_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT App1MetadataReader_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT App1MetadataWriter_CreateInstance(REFIID iid, void **ppv);
+#ifdef __REACTOS__
+extern HRESULT JpegLuminanceReader_CreateInstance(REFIID iid, void **ppv);
+extern HRESULT JpegChrominanceReader_CreateInstance(REFIID iid, void **ppv);
+#endif
 extern HRESULT PngBkgdReader_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngBkgdWriter_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngChrmReader_CreateInstance(REFIID iid, void** ppv);

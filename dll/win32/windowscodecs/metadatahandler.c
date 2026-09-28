@@ -198,7 +198,11 @@ static HRESULT WINAPI MetadataHandler_GetValueByIndex(IWICMetadataWriter *iface,
     if (index >= This->item_count)
     {
         LeaveCriticalSection(&This->lock);
+#ifdef __REACTOS__
+        return This->vtable->invalid_index_error ? This->vtable->invalid_index_error : E_INVALIDARG;
+#else
         return E_INVALIDARG;
+#endif
     }
 
     if (schema)
@@ -292,6 +296,11 @@ static HRESULT WINAPI MetadataHandler_GetValue(IWICMetadataWriter *iface,
 
     EnterCriticalSection(&This->lock);
 
+#ifdef __REACTOS__
+    if (!This->item_count && This->vtable->empty_value_error)
+        hr = This->vtable->empty_value_error;
+
+#endif
     if ((item = metadatahandler_get_item(This, schema, id, NULL)))
     {
         hr = value ? PropVariantCopy(value, &item->value) : S_OK;
@@ -963,6 +972,73 @@ HRESULT UnknownMetadataWriter_CreateInstance(REFIID iid, void** ppv)
     return MetadataReader_Create(&UnknownMetadataWriter_Vtbl, iid, ppv);
 }
 
+#ifdef __REACTOS__
+static HRESULT LoadJpegQuantizationTable(MetadataHandler *handler, IStream *input,
+        const GUID *vendor, DWORD options)
+{
+    static const WCHAR name[] = L"TableEntry";
+    USHORT table[64];
+    MetadataItem *item;
+    ULONG size;
+    HRESULT hr;
+
+    hr = IStream_Read(input, table, sizeof(table), &size);
+    if (FAILED(hr))
+        return hr;
+
+    MetadataHandler_FreeItems(handler);
+    if (size != sizeof(table))
+        return S_OK;
+
+    if (!(item = calloc(1, sizeof(*item))))
+        return E_OUTOFMEMORY;
+
+    item->id.vt = VT_LPWSTR;
+    item->id.pwszVal = CoTaskMemAlloc(sizeof(name));
+    item->value.vt = VT_VECTOR | VT_UI2;
+    item->value.caui.cElems = ARRAY_SIZE(table);
+    item->value.caui.pElems = CoTaskMemAlloc(sizeof(table));
+    if (!item->id.pwszVal || !item->value.caui.pElems)
+    {
+        clear_metadata_item(item);
+        free(item);
+        return E_OUTOFMEMORY;
+    }
+
+    memcpy(item->id.pwszVal, name, sizeof(name));
+    memcpy(item->value.caui.pElems, table, sizeof(table));
+    handler->items = item;
+    handler->item_count = 1;
+    return S_OK;
+}
+
+static const MetadataHandlerVtbl JpegLuminanceReader_Vtbl =
+{
+    .clsid = &CLSID_WICJpegLuminanceMetadataReader,
+    .fnLoad = LoadJpegQuantizationTable,
+    .empty_value_error = WINCODEC_ERR_STREAMREAD,
+    .invalid_index_error = WINCODEC_ERR_PROPERTYNOTFOUND,
+};
+
+HRESULT JpegLuminanceReader_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&JpegLuminanceReader_Vtbl, iid, ppv);
+}
+
+static const MetadataHandlerVtbl JpegChrominanceReader_Vtbl =
+{
+    .clsid = &CLSID_WICJpegChrominanceMetadataReader,
+    .fnLoad = LoadJpegQuantizationTable,
+    .empty_value_error = WINCODEC_ERR_STREAMREAD,
+    .invalid_index_error = WINCODEC_ERR_PROPERTYNOTFOUND,
+};
+
+HRESULT JpegChrominanceReader_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&JpegChrominanceReader_Vtbl, iid, ppv);
+}
+
+#endif
 #define SWAP_USHORT(x) do { if (!native_byte_order) (x) = RtlUshortByteSwap(x); } while(0)
 #define SWAP_ULONG(x) do { if (!native_byte_order) (x) = RtlUlongByteSwap(x); } while(0)
 #define SWAP_ULONGLONG(x) do { if (!native_byte_order) (x) = RtlUlonglongByteSwap(x); } while(0)

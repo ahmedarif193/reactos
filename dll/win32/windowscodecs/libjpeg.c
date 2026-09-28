@@ -341,6 +341,9 @@ static HRESULT CDECL jpeg_decoder_get_metadata_blocks(struct decoder* iface, UIN
     BYTE header[4];
     bool add_block;
     HRESULT hr;
+#ifdef __REACTOS__
+    int table;
+#endif
 
     *count = 0;
     *blocks = NULL;
@@ -350,8 +353,10 @@ static HRESULT CDECL jpeg_decoder_get_metadata_blocks(struct decoder* iface, UIN
     if (FAILED(hr))
         return hr;
 
+#ifndef __REACTOS__
     /* TODO: support for App0, Xmp, and chrominance/luminance blocks is missing. */
 
+#endif
     marker = 0;
     offset = 2;
     memset(&results, 0, sizeof(results));
@@ -404,6 +409,28 @@ static HRESULT CDECL jpeg_decoder_get_metadata_blocks(struct decoder* iface, UIN
         offset += length;
     }
 
+#ifdef __REACTOS__
+    for (table = 1; table >= 0 && hr == S_OK; table--)
+    {
+        if (!This->cinfo.quant_tbl_ptrs[table])
+            continue;
+
+        if (!wincodecs_array_reserve((void **)&results.blocks, &results.capacity,
+                results.count + 1, sizeof(*results.blocks)))
+        {
+            hr = E_OUTOFMEMORY;
+            break;
+        }
+
+        block.offset = (ULONG_PTR)This->cinfo.quant_tbl_ptrs[table]->quantval;
+        block.length = sizeof(This->cinfo.quant_tbl_ptrs[table]->quantval);
+        block.options = DECODER_BLOCK_OFFSET_IS_PTR | DECODER_BLOCK_READER_CLSID;
+        block.reader_clsid = table ? CLSID_WICJpegChrominanceMetadataReader :
+                CLSID_WICJpegLuminanceMetadataReader;
+        results.blocks[results.count++] = block;
+    }
+
+#endif
     if (hr == S_OK)
     {
         *count = results.count;

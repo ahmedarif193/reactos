@@ -1957,6 +1957,28 @@ static struct regsvr_metadatareader const metadatareader_list[] = {
         1, 1, 0,
         app1_containers
     },
+#ifdef __REACTOS__
+    {   &CLSID_WICJpegLuminanceMetadataReader,
+        "ReactOS",
+        "JPEG Luminance Reader",
+        "1.0.0.0",
+        "1.0.0.0",
+        &GUID_VendorMicrosoft,
+        &GUID_MetadataFormatJpegLuminance,
+        0, 0, 0,
+        NULL
+    },
+    {   &CLSID_WICJpegChrominanceMetadataReader,
+        "ReactOS",
+        "JPEG Chrominance Reader",
+        "1.0.0.0",
+        "1.0.0.0",
+        &GUID_VendorMicrosoft,
+        &GUID_MetadataFormatJpegChrominance,
+        0, 0, 0,
+        NULL
+    },
+#endif
     {   &CLSID_WICPngChrmMetadataReader,
         "The Wine Project",
         "Chunk cHRM Reader",

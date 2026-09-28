@@ -23,6 +23,9 @@
 #include "windef.h"
 #include "winbase.h"
 #include "objbase.h"
+#ifdef __REACTOS__
+#include "ole2.h"
+#endif
 
 #include "wincodecs_private.h"
 
@@ -339,9 +342,31 @@ static HRESULT metadata_block_reader_get_reader(struct metadata_block_reader *bl
         else if (block_reader->metadata_blocks[index].options & DECODER_BLOCK_OFFSET_IS_PTR)
         {
             BYTE *data = (BYTE *)(ULONG_PTR)block_reader->metadata_blocks[index].offset;
+#ifdef __REACTOS__
+            ULONGLONG size = block_reader->metadata_blocks[index].length;
+            IStream *copy;
+            ULARGE_INTEGER offset, length;
+            ULONG written;
+#else
             UINT size = block_reader->metadata_blocks[index].length;
+#endif
 
+#ifdef __REACTOS__
+            hr = size > MAXDWORD ? E_INVALIDARG : CreateStreamOnHGlobal(NULL, TRUE, &copy);
+            if (SUCCEEDED(hr))
+            {
+                hr = IStream_Write(copy, data, size, &written);
+                if (SUCCEEDED(hr) && written != size)
+                    hr = E_FAIL;
+                offset.QuadPart = 0;
+                length.QuadPart = size;
+                if (SUCCEEDED(hr))
+                    hr = IWICStream_InitializeFromIStreamRegion(stream, copy, offset, length);
+                IStream_Release(copy);
+            }
+#else
             hr = IWICStream_InitializeFromMemory(stream, data, size);
+#endif
         }
         else
         {

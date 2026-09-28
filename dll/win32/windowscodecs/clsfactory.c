@@ -70,6 +70,10 @@ static const classinfo wic_classes[] = {
     {&CLSID_WICExifMetadataWriter, ExifMetadataWriter_CreateInstance},
     {&CLSID_WICApp1MetadataReader, App1MetadataReader_CreateInstance},
     {&CLSID_WICApp1MetadataWriter, App1MetadataWriter_CreateInstance},
+#ifdef __REACTOS__
+    {&CLSID_WICJpegLuminanceMetadataReader, JpegLuminanceReader_CreateInstance},
+    {&CLSID_WICJpegChrominanceMetadataReader, JpegChrominanceReader_CreateInstance},
+#endif
     {&CLSID_WICPngBkgdMetadataReader, PngBkgdReader_CreateInstance},
     {&CLSID_WICPngBkgdMetadataWriter, PngBkgdWriter_CreateInstance},
     {&CLSID_WICPngChrmMetadataReader, PngChrmReader_CreateInstance},
