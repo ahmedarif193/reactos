@@ -106,6 +106,7 @@ RtlDebugDestroyHeap(HANDLE HeapPtr)
     if (Heap->Signature != HEAP_SIGNATURE)
     {
         DPRINT1("HEAP: Invalid heap %p signature 0x%x\n", Heap, Heap->Signature);
+        if (RtlGetCurrentPeb()->BeingDebugged) DbgBreakPoint();
         return FALSE;
     }
 

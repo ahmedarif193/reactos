@@ -241,7 +241,6 @@ RtlLookupFunctionEntry(
     }
 
 LookupDynamic:
-    *ImageBase = 0;
     return RtlpLookupDynamicFunctionEntry(ControlPc, ImageBase, HistoryTable);
 }
 

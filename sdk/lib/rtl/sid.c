@@ -72,6 +72,9 @@ RtlInitializeSid(IN PSID Sid_,
     PISID Sid = Sid_;
     PAGED_CODE_RTL();
 
+    if (SubAuthorityCount > SID_MAX_SUB_AUTHORITIES)
+        return STATUS_INVALID_PARAMETER;
+
     /* Fill out the header */
     Sid->Revision = SID_REVISION;
     Sid->SubAuthorityCount = SubAuthorityCount;

@@ -41,6 +41,7 @@ RtlpStringToUlongBase(
 {
     NTSTATUS Status = STATUS_INVALID_PARAMETER;
     ULONG Result = 0;
+    ULONG Previous = 0;
     ULONG Digit;
 
     while (1)
@@ -53,19 +54,14 @@ RtlpStringToUlongBase(
         else
             break;
 
-        Status = RtlULongMult(Result, Base, &Result);
-        if (!NT_SUCCESS(Status))
+        Result = Result * Base + Digit;
+        if (Result < Previous)
         {
             Status = STATUS_INVALID_PARAMETER;
             break;
         }
-
-        Status = RtlULongAdd(Result, Digit, &Result);
-        if (!NT_SUCCESS(Status))
-        {
-            Status = STATUS_INVALID_PARAMETER;
-            break;
-        }
+        Previous = Result;
+        Status = STATUS_SUCCESS;
         String++;
     }
 

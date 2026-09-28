@@ -847,20 +847,6 @@ NTSTATUS
 NTAPI
 RtlLeaveCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
 {
-#if DBG
-    HANDLE Thread = (HANDLE)NtCurrentTeb()->ClientId.UniqueThread;
-
-    /*
-     * In win this case isn't checked. However it's a valid check so it should
-     * only be performed in debug builds!
-     */
-    if (Thread != CriticalSection->OwningThread)
-    {
-       DPRINT1("Releasing critical section not owned!\n");
-       return STATUS_INVALID_PARAMETER;
-    }
-#endif
-
     /*
      * Decrease the Recursion Count. No need to do this atomically because only
      * the thread who holds the lock can call this function (unless the program
@@ -871,7 +857,7 @@ RtlLeaveCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
         if (CriticalSection->RecursionCount < 0)
         {
             DPRINT1("CRITICAL SECTION MESS: Section %p is not acquired!\n", CriticalSection);
-            return STATUS_UNSUCCESSFUL;
+            return STATUS_SUCCESS;
         }
     }
     else

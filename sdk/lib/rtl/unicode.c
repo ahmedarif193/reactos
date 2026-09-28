@@ -1756,10 +1756,8 @@ RtlHashUnicodeString(
                 {
                     for (c = String->Buffer; c != end; c++)
                     {
-                        /* only uppercase characters if they are 'a' ... 'z'! */
                         *HashValue = ((65599 * (*HashValue)) +
-                                      (ULONG)(((*c) >= L'a' && (*c) <= L'z') ?
-                                              (*c) - L'a' + L'A' : (*c)));
+                                      (ULONG)RtlUpcaseUnicodeChar(*c));
                     }
                 }
                 else
