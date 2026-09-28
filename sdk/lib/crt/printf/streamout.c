@@ -438,8 +438,11 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
             }
             else if (chr == _T('l'))
             {
-                /* Check if this is the 2nd 'l' in a row */
-                if (format[-2] == 'l') flags |= FLAG_INT64;
+                if (*format == _T('l'))
+                {
+                    format++;
+                    flags |= FLAG_INT64;
+                }
                 else flags |= FLAG_LONG;
             }
             else if (chr == _T('I'))
@@ -485,12 +488,15 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
             case _T('C'):
 #ifndef _UNICODE
                 if (!(flags & FLAG_SHORT)) flags |= FLAG_WIDECHAR;
+#else
+                if (flags & FLAG_SHORT) flags &= ~FLAG_WIDECHAR;
 #endif
                 goto case_char;
 
             case _T('c'):
 #ifdef _UNICODE
                 if (!(flags & FLAG_SHORT)) flags |= FLAG_WIDECHAR;
+                else flags &= ~FLAG_WIDECHAR;
 #endif
             case_char:
                 string = buffer;
@@ -522,6 +528,8 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
                 string = va_arg(argptr, void*);
 #ifndef _UNICODE
                 if (!(flags & FLAG_SHORT)) flags |= FLAG_WIDECHAR;
+#else
+                if (flags & FLAG_SHORT) flags &= ~FLAG_WIDECHAR;
 #endif
                 goto case_string;
 
@@ -529,6 +537,7 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
                 string = va_arg(argptr, void*);
 #ifdef _UNICODE
                 if (!(flags & FLAG_SHORT)) flags |= FLAG_WIDECHAR;
+                else flags &= ~FLAG_WIDECHAR;
 #endif
 
             case_string:
@@ -628,6 +637,9 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
             case _T('u'):
             case_unsigned:
                 val64 = va_arg_fu(argptr, flags);
+#ifndef _USER32_WSPRINTF
+                if (!val64 && base == 16) prefix = 0;
+#endif
 
             case_number:
 #ifdef _UNICODE
@@ -649,6 +661,14 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
                 break;
 
             default:
+#ifndef _USER32_WSPRINTF
+                if (chr == _T('%'))
+                {
+                    if ((written = streamout_char(stream, chr)) == 0) return -1;
+                    written_all += written;
+                    continue;
+                }
+#endif
                 /* Treat anything else as a new character */
                 format--;
                 continue;

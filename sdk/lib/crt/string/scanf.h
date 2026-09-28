@@ -305,6 +305,7 @@ _FUNCTION_ {
 		    }
                 }
                 break;
+#ifndef _LIBCNT_
             case 'e':
             case 'E':
             case 'f':
@@ -440,6 +441,7 @@ _FUNCTION_ {
 #endif /* __REACTOS__ */
                 }
                 break;
+#endif
 		/* According to msdn,
 		 * 's' reads a character string in a call to fscanf
 		 * and 'S' a wide character string and vice versa in a
