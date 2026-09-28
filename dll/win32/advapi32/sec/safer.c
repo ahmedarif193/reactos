@@ -54,14 +54,16 @@ SaferIdentifyLevel(
         return FALSE;
     }
 
-    for (i = 0; i < dwNumProperties; i++)
+    i = 0;
+    do
     {
-        if (pCodeProperties[i].cbSize != sizeof(SAFER_CODE_PROPERTIES_V1))
+        if (pCodeProperties[i].cbSize != sizeof(SAFER_CODE_PROPERTIES_V1) &&
+            pCodeProperties[i].cbSize != sizeof(SAFER_CODE_PROPERTIES_V2))
         {
-            SetLastError(ERROR_BAD_LENGTH);
+            SetLastError(ERROR_INVALID_PARAMETER);
             return FALSE;
         }
-    }
+    } while (++i < dwNumProperties);
 
     FIXME("(%lu, %p, %p, %p) stub\n", dwNumProperties, pCodeProperties, pLevelHandle, pReserved);
 

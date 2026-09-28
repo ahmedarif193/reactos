@@ -36,7 +36,7 @@ START_TEST(SaferIdentifyLevel)
         ret = SaferIdentifyLevel(16, props, &handle, NULL);
         error = GetLastError();
         ok(ret == FALSE, "ret = %d\n", ret);
-        ok(error == ERROR_BAD_LENGTH, "error = %lu\n", error);
+        ok(error == ERROR_INVALID_PARAMETER, "error = %lu\n", error);
     EndSeh(STATUS_SUCCESS);
 
     StartSeh()
@@ -56,7 +56,7 @@ START_TEST(SaferIdentifyLevel)
         error = GetLastError();
         ok(ret == FALSE, "ret = %d\n", ret);
         ok(handle == InvalidPointer, "handle = %p\n", handle);
-        ok(error == ERROR_BAD_LENGTH, "error = %lu\n", error);
+        ok(error == ERROR_INVALID_PARAMETER, "error = %lu\n", error);
         if (handle && handle != InvalidPointer)
             SaferCloseLevel(handle);
     EndSeh(STATUS_SUCCESS);
@@ -86,9 +86,9 @@ START_TEST(SaferIdentifyLevel)
         SetLastError(0xbadbad00);
         ret = SaferIdentifyLevel(1, props, &handle, NULL);
         error = GetLastError();
-        ok(ret == FALSE, "ret = %d\n", ret);
-        ok(handle == InvalidPointer, "handle = %p\n", handle);
-        ok(error == ERROR_BAD_LENGTH, "error = %lu\n", error);
+        ok(ret == TRUE, "ret = %d\n", ret);
+        ok(handle != NULL && handle != INVALID_HANDLE_VALUE && handle != InvalidPointer, "handle = %p\n", handle);
+        ok(error == 0xbadbad00, "error = %lu\n", error);
         if (handle && handle != InvalidPointer)
             SaferCloseLevel(handle);
     EndSeh(STATUS_SUCCESS);
