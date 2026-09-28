@@ -2503,6 +2503,46 @@ IntGdiRemoveFontResource(
     PWSTR pchFile = FileName->Buffer;
     SIZE_T cchFile = 0;
 
+    if (cFiles == 2)
+    {
+        SIZE_T cchFirst, cchSecond;
+        BOOL bPair = FALSE;
+
+        _SEH2_TRY
+        {
+            cchFirst = wcslen(pchFile);
+            cchSecond = wcslen(pchFile + cchFirst + 1);
+            bPair = cchFirst > 4 && cchSecond > 4 &&
+                    _wcsicmp(pchFile + cchFirst - 4, L".pfm") == 0 &&
+                    _wcsicmp(pchFile + cchFirst + 1 + cchSecond - 4, L".pfb") == 0;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return FALSE);
+        }
+        _SEH2_END;
+
+        if (bPair)
+        {
+            UNICODE_STRING ustrPair;
+            SIZE_T cbPair = (cchFirst + 1 + cchSecond) * sizeof(WCHAR);
+            BOOL ret;
+
+            ustrPair.Buffer = ExAllocatePoolWithTag(PagedPool, cbPair + sizeof(UNICODE_NULL), TAG_USTR);
+            if (!ustrPair.Buffer)
+                return FALSE;
+            RtlCopyMemory(ustrPair.Buffer, pchFile, cchFirst * sizeof(WCHAR));
+            ustrPair.Buffer[cchFirst] = L'|';
+            RtlCopyMemory(ustrPair.Buffer + cchFirst + 1, pchFile + cchFirst + 1, cchSecond * sizeof(WCHAR));
+            ustrPair.Buffer[cchFirst + 1 + cchSecond] = UNICODE_NULL;
+            ustrPair.Length = (USHORT)cbPair;
+            ustrPair.MaximumLength = (USHORT)(cbPair + sizeof(UNICODE_NULL));
+            ret = IntGdiRemoveFontResourceSingle(&ustrPair, dwFlags);
+            ExFreePoolWithTag(ustrPair.Buffer, TAG_USTR);
+            return ret;
+        }
+    }
+
     while (cFiles--)
     {
         _SEH2_TRY
