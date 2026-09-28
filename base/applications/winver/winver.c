@@ -27,12 +27,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (!Winver_GetOSInfo(&OSInfo))
     {
         /* OS info is not available, display the default contents */
-        StringCchCopyW(OSInfo.szName, _countof(OSInfo.szName), L"ReactOS");
+        StringCchCopyW(OSInfo.szName, _countof(OSInfo.szName), L"LiberNT");
         OSInfo.szCompatInfo[0] = UNICODE_NULL;
     }
 
     if (lstrcmpiW(OSInfo.szName, L"ReactOS") == 0)
-        StringCchCopyW(OSInfo.szName, _countof(OSInfo.szName), L"ReactOS Unofficial Build");
+        StringCchCopyW(OSInfo.szName, _countof(OSInfo.szName), L"LiberNT");
 
     return ShellAboutW(NULL, OSInfo.szName, OSInfo.szCompatInfo, NULL);
 }

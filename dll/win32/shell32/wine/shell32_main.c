@@ -1269,7 +1269,23 @@ HRESULT WINAPI SHCreateDataObject(PCIDLIST_ABSOLUTE pidl_folder, UINT count, PCU
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
-const char * const SHELL_Authors[] = { "Copyright 1993-"COPYRIGHT_YEAR" WINE team", "Copyright 1998-"COPYRIGHT_YEAR" ReactOS Team", 0 };
+const char * const SHELL_Authors[] =
+{
+    "Copyright 2026 LiberNT Team",
+    "Copyright 1993-"COPYRIGHT_YEAR" WINE team",
+    "Copyright 1998-"COPYRIGHT_YEAR" ReactOS Team",
+#ifdef ENABLE_FEX_ARM64EC
+    "Copyright 2019 Ryan Houdek (FEX-Emu)",
+#endif
+    "Copyright 1995 Brian Paul and the Mesa project",
+#ifdef ENABLE_MESA_LLVMPIPE
+    "Copyright 2014 Khronos Group, Valve, LunarG (Vulkan loader)",
+#endif
+#ifdef ENABLE_FFMPEG
+    "Copyright 2000-"COPYRIGHT_YEAR" the FFmpeg developers",
+#endif
+    0
+};
 
 /*************************************************************************
  * CommandLineToArgvW            [SHELL32.@]

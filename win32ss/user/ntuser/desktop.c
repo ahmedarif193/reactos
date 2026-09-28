@@ -336,8 +336,8 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
     WCHAR VersionBuffer[256];
     PWCHAR EndBuffer;
     PWCHAR Hash, Revision, Compiler, Scan;
-    PCSTR Flavor;
-    PCWSTR ReleaseSuffix;
+    PCSTR Arch, ArchEnd;
+    INT ArchLength;
 
     VerInfo.dwOSVersionInfoSize = sizeof(VerInfo);
 
@@ -403,9 +403,21 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         }
     }
 
-    Flavor = strchr(KERNEL_VERSION_STR, '-');
-    Flavor = Flavor ? Flavor + 1 : KERNEL_VERSION_STR;
-    ReleaseSuffix = strchr(Flavor, '-') ? L"" : L"-release";
+    Scan = BuildLabString.Buffer + wcsspn(BuildLabString.Buffer, L"0123456789");
+    if (Scan > BuildLabString.Buffer && *Scan == L'-')
+    {
+        ++Scan;
+        RtlMoveMemory(BuildLabString.Buffer, Scan, (wcslen(Scan) + 1) * sizeof(WCHAR));
+        BuildLabString.Length = (USHORT)(wcslen(BuildLabString.Buffer) * sizeof(WCHAR));
+    }
+    Scan = wcsrchr(BuildLabString.Buffer, L'_');
+    if (Scan)
+        *Scan = L'-';
+
+    Arch = strchr(KERNEL_VERSION_STR, '-');
+    Arch = Arch ? Arch + 1 : KERNEL_VERSION_STR;
+    ArchEnd = strchr(Arch, '-');
+    ArchLength = ArchEnd ? (INT)(ArchEnd - Arch) : (INT)strlen(Arch);
 
     EndBuffer = VersionBuffer;
     if ( /* VerInfo.wServicePackMajor != 0 && */ CSDVersionString.Length)
@@ -435,28 +447,28 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* String for Safe Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Unofficial Build (%S%s) (Target: Windows 11 24H2 %u.%u%s) %wZ\n",
-                                     Flavor,
-                                     ReleaseSuffix,
+                                     L"LiberNT Beta Build (Target: Windows 11 24H2 %u.%u%s) %wZ-%.*S\n",
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      (ULONG)VER_PRODUCTBUILD_QFE,
                                      VersionBuffer,
-                                     &BuildLabString);
+                                     &BuildLabString,
+                                     ArchLength,
+                                     Arch);
     }
     else
     {
         /* Multi-string for Normal Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Unofficial Build (%S%s)\n"
+                                     L"LiberNT Beta Build\n"
                                      L"Target: Windows 11 24H2 %u.%u%s\n"
-                                     L"Build %wZ\n",
-                                     Flavor,
-                                     ReleaseSuffix,
+                                     L"Build %wZ-%.*S\n",
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      (ULONG)VER_PRODUCTBUILD_QFE,
                                      VersionBuffer,
-                                     &BuildLabString);
+                                     &BuildLabString,
+                                     ArchLength,
+                                     Arch);
     }
 
     if (!NT_SUCCESS(Status))
@@ -464,10 +476,10 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* Fall-back string */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Unofficial Build (%S%s) %wZ\n",
-                                     Flavor,
-                                     ReleaseSuffix,
-                                     &BuildLabString);
+                                     L"LiberNT Beta Build %wZ-%.*S\n",
+                                     &BuildLabString,
+                                     ArchLength,
+                                     Arch);
         if (!NT_SUCCESS(Status))
         {
             /* General failure, NULL-terminate the string */

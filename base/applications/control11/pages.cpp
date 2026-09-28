@@ -147,7 +147,7 @@ static int PaintSystem(HDC hdc, int x, int y, int cx)
     RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"CurrentVersion", szVersion, _countof(szVersion));
     RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"CurrentBuildNumber", szBuild, _countof(szBuild));
     if (!szProduct[0] || lstrcmpiW(szProduct, L"ReactOS") == 0)
-        StringCchCopyW(szProduct, _countof(szProduct), L"ReactOS Unofficial Build");
+        StringCchCopyW(szProduct, _countof(szProduct), L"LiberNT");
 
     y += SectionTitle(hdc, x, y, cx, L"Windows edition");
     int lx = x + S(16);
@@ -158,7 +158,7 @@ static int PaintSystem(HDC hdc, int x, int y, int cx)
     StringCchPrintfW(szText, _countof(szText), L"Version %u.%u (Build %u)%s%s", osv.dwMajorVersion, osv.dwMinorVersion, osv.dwBuildNumber,
                      osv.szCSDVersion[0] ? L" " : L"", osv.szCSDVersion);
     y += DrawWrapped(hdc, lx, y, lcx, szText, g_f.hfText, g_f.pal.Text) + S(2);
-    y += DrawWrapped(hdc, lx, y, lcx, L"ReactOS is free software released under the GNU GPL.", g_f.hfText, g_f.pal.DimText) + S(14);
+    y += DrawWrapped(hdc, lx, y, lcx, L"LiberNT is free software released under the GNU GPL.", g_f.hfText, g_f.pal.DimText) + S(14);
 
     y += SectionTitle(hdc, x, y, cx, L"System");
     int cxLabel = S(150);

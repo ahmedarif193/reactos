@@ -128,6 +128,18 @@ add_library(shell32 MODULE
 
 target_compile_definitions(shell32 PRIVATE CONST_VTABLE)
 
+if(ARCH STREQUAL "arm64" AND ENABLE_FEX_ARM64EC AND EXISTS "${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec/CMakeLists.txt")
+    target_compile_definitions(shell32 PRIVATE ENABLE_FEX_ARM64EC)
+endif()
+
+if(ENABLE_MESA_LLVMPIPE)
+    target_compile_definitions(shell32 PRIVATE ENABLE_MESA_LLVMPIPE)
+endif()
+
+if(ENABLE_FFMPEG)
+    target_compile_definitions(shell32 PRIVATE ENABLE_FFMPEG)
+endif()
+
 if(MSVC)
     # error C4311: 'type cast': pointer truncation from 'HANDLE' to 'INT'
     remove_target_compile_option(shell32 "/we4311")

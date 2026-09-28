@@ -12,7 +12,7 @@
 #define NTOS_MODE_USER
 #include <ndk/pstypes.h> /* For SharedUserData */
 
-static TCHAR BugLink[] = _T("http://jira.reactos.org/");
+static TCHAR BugLink[] = _T("https://bugs.libernt.com/");
 static TCHAR ReportAsWorkstationKey[] = _T("SYSTEM\\CurrentControlSet\\Control\\ReactOS\\Settings\\Version");
 
 
