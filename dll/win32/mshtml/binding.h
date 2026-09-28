@@ -149,7 +149,11 @@ HRESULT super_navigate(HTMLOuterWindow*,IUri*,DWORD,const WCHAR*,BYTE*,DWORD);
 HRESULT load_uri(HTMLOuterWindow*,IUri*,DWORD);
 HRESULT navigate_new_window(HTMLOuterWindow*,IUri*,const WCHAR*,request_data_t*,IHTMLWindow2**);
 HRESULT navigate_url(HTMLOuterWindow*,const WCHAR*,IUri*,DWORD);
+#ifdef __REACTOS__
+HRESULT submit_form(HTMLOuterWindow*,HTMLOuterWindow*,const WCHAR*,IUri*,nsIInputStream*);
+#else
 HRESULT submit_form(HTMLOuterWindow*,const WCHAR*,IUri*,nsIInputStream*);
+#endif
 void process_document_response_headers(HTMLDocumentNode*,IBinding*);
 
 void init_bscallback(BSCallback*,const BSCallbackVtbl*,IMoniker*,DWORD);
