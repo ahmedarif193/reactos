@@ -318,7 +318,7 @@ CountPrefixBits(
 
     for (i = 0; i < sizeof(ULONG) * 8; i++)
     {
-        if ((Netmask & (1 << i)) == 0)
+        if ((Netmask & (1U << i)) == 0)
             break;
         BitCount++;
     }
