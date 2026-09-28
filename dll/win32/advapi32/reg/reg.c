@@ -125,11 +125,9 @@ OpenPredefinedKey(IN ULONG Index,
         case 3: /* HKEY_USERS */
             Status = OpenUsersKey (Handle);
             break;
-#if 0
         case 4: /* HKEY_PERFORMANCE_DATA */
-            Status = OpenPerformanceDataKey (Handle);
+            Status = STATUS_INVALID_HANDLE;
             break;
-#endif
 
         case 5: /* HKEY_CURRENT_CONFIG */
             Status = OpenCurrentConfigKey (Handle);
@@ -1180,6 +1178,9 @@ RegCreateKeyA(HKEY hKey,
               LPCSTR lpSubKey,
               PHKEY phkResult)
 {
+    if (!phkResult)
+        return ERROR_INVALID_PARAMETER;
+
     return RegCreateKeyExA(hKey,
                            lpSubKey,
                            0,
@@ -1202,6 +1203,9 @@ RegCreateKeyW(HKEY hKey,
               LPCWSTR lpSubKey,
               PHKEY phkResult)
 {
+    if (!phkResult)
+        return ERROR_INVALID_PARAMETER;
+
     return RegCreateKeyExW(hKey,
                            lpSubKey,
                            0,

@@ -2662,7 +2662,10 @@ BOOL WINAPI ConvertStringSecurityDescriptorToSecurityDescriptorA(
           SecurityDescriptor, SecurityDescriptorSize);
 
     if(!StringSecurityDescriptor)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
+    }
 
     StringSecurityDescriptorW = strdupAW(StringSecurityDescriptor);
     ret = ConvertStringSecurityDescriptorToSecurityDescriptorW(StringSecurityDescriptorW,
@@ -2685,7 +2688,7 @@ BOOL WINAPI ConvertSecurityDescriptorToStringSecurityDescriptorA(PSECURITY_DESCR
         int lenA;
 
         lenA = WideCharToMultiByte(CP_ACP, 0, wstr, len, NULL, 0, NULL, NULL);
-        *OutputString = malloc(lenA);
+        *OutputString = LocalAlloc(0, lenA);
         WideCharToMultiByte(CP_ACP, 0, wstr, len, *OutputString, lenA, NULL, NULL);
         LocalFree(wstr);
 
