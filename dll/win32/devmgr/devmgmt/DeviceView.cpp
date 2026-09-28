@@ -29,6 +29,23 @@ struct RefreshThreadData
     BOOL UpdateView;
 };
 
+class CSelectionSnapshot : public CNode
+{
+    CAtlStringW m_DeviceIdCopy;
+
+public:
+    explicit CSelectionSnapshot(const CNode &Node) : CNode(Node)
+    {
+        if (m_DeviceId)
+        {
+            m_DeviceIdCopy = m_DeviceId;
+            m_DeviceId = m_DeviceIdCopy.GetBuffer();
+        }
+    }
+
+    virtual bool SetupNode() { return true; }
+};
+
 
 // PUBLIC METHODS ************************************/
 
@@ -403,18 +420,7 @@ unsigned int __stdcall CDeviceView::RefreshThread(void *Param)
 
     // Get a copy of the currently selected node
     CNode *LastSelectedNode = This->GetSelectedNode();
-    if (LastSelectedNode == nullptr || (LastSelectedNode->GetNodeType() == RootNode))
-    {
-        LastSelectedNode = new CRootNode(*This->m_RootNode);
-    }
-    else if (LastSelectedNode->GetNodeType() == ClassNode)
-    {
-        LastSelectedNode = new CClassNode(*dynamic_cast<CClassNode *>(LastSelectedNode));
-    }
-    else if (LastSelectedNode->GetNodeType() == DeviceNode)
-    {
-        LastSelectedNode = new CDeviceNode(*dynamic_cast<CDeviceNode *>(LastSelectedNode));
-    }
+    CSelectionSnapshot Selection(LastSelectedNode ? *LastSelectedNode : *This->m_RootNode);
 
     // Empty the treeview
     This->EmptyDeviceView();
@@ -447,7 +453,7 @@ unsigned int __stdcall CDeviceView::RefreshThread(void *Param)
                 break;
         }
 
-        This->SelectNode(LastSelectedNode);
+        This->SelectNode(&Selection);
     }
 
     delete ThreadData;
@@ -1161,7 +1167,12 @@ CDeviceView::RecurseFindDevice(
         {
             // check if this is a class node, or a device with matching ID's
             if ((FoundNode->GetNodeType() == ClassNode) ||
-                (wcscmp(FoundNode->GetDeviceId(), Node->GetDeviceId()) == 0))
+                (FoundNode->GetNodeType() == ResourceTypeNode &&
+                 wcscmp(FoundNode->GetDisplayName(), Node->GetDisplayName()) == 0) ||
+                (FoundNode->GetDeviceId() && Node->GetDeviceId() &&
+                 wcscmp(FoundNode->GetDeviceId(), Node->GetDeviceId()) == 0 &&
+                 (FoundNode->GetNodeType() != ResourceNode ||
+                  wcscmp(FoundNode->GetDisplayName(), Node->GetDisplayName()) == 0)))
             {
                 return hItem;
             }
@@ -1184,7 +1195,7 @@ CDeviceView::RecurseFindDevice(
         // The lParam contains the node pointer data
         tvItem.hItem = hItem;
         tvItem.mask = TVIF_PARAM;
-        if (TreeView_GetItem(m_hTreeView, &tvItem))
+        if (TreeView_GetItem(m_hTreeView, &tvItem) && tvItem.lParam != NULL)
         {
             // check for a matching class
             FoundNode = reinterpret_cast<CNode *>(tvItem.lParam);
@@ -1193,7 +1204,12 @@ CDeviceView::RecurseFindDevice(
             {
                 // check if this is a class node, or a device with matching ID's
                 if ((FoundNode->GetNodeType() == ClassNode) ||
-                    (wcscmp(FoundNode->GetDeviceId(), Node->GetDeviceId()) == 0))
+                    (FoundNode->GetNodeType() == ResourceTypeNode &&
+                     wcscmp(FoundNode->GetDisplayName(), Node->GetDisplayName()) == 0) ||
+                    (FoundNode->GetDeviceId() && Node->GetDeviceId() &&
+                     wcscmp(FoundNode->GetDeviceId(), Node->GetDeviceId()) == 0 &&
+                     (FoundNode->GetNodeType() != ResourceNode ||
+                      wcscmp(FoundNode->GetDisplayName(), Node->GetDisplayName()) == 0)))
                 {
                     return hItem;
                 }
