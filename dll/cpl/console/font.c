@@ -234,9 +234,11 @@ FontSizeList_GetSelectedFontSize(
             if (nSel == CB_ERR) return 0;
 
             Length = (INT)SendMessageW(SizeList->hWndTTSizeList, CB_GETLBTEXTLEN, nSel, 0);
+            if (Length < 0 || (SIZE_T)Length >= ARRAYSIZE(szFontSize)) return 0;
             ASSERT((Length != LB_ERR) && (Length < ARRAYSIZE(szFontSize)));
 
             Length = (INT)SendMessageW(SizeList->hWndTTSizeList, CB_GETLBTEXT, nSel, (LPARAM)szFontSize);
+            if (Length < 0 || (SIZE_T)Length >= ARRAYSIZE(szFontSize)) return 0;
             ASSERT((Length != LB_ERR) && (Length < ARRAYSIZE(szFontSize)));
             szFontSize[Length] = L'\0';
 
@@ -249,7 +251,8 @@ FontSizeList_GetSelectedFontSize(
         {
             /* Read the ComboBox edit string, as the user has entered a custom size */
             // ComboBox_GetText(...)
-            GetWindowTextW(SizeList->hWndTTSizeList, szFontSize, ARRAYSIZE(szFontSize));
+            if (!GetWindowTextW(SizeList->hWndTTSizeList, szFontSize, ARRAYSIZE(szFontSize)))
+                return 0;
 
             /* Validate the font size */
             FontSize = wcstoul(szFontSize, &pszNext, 10);
@@ -546,6 +549,7 @@ FontTypeChange(
 {
     HWND hFontList = GetDlgItem(hDlg, IDC_LBOX_FONTTYPE);
     INT Length, nSel;
+    SIZE_T FaceNameSize;
     LPWSTR FaceName;
     DWORD FontType;
     LPCWSTR FontGrpBoxLabelTpl = NULL;
@@ -566,14 +570,22 @@ FontTypeChange(
 #endif
 
     Length = (INT)SendMessageW(hFontList, LB_GETTEXTLEN, nSel, 0);
-    if (Length == LB_ERR) return FALSE;
+    if (Length < 0) return FALSE;
+
+    FaceNameSize = (SIZE_T)Length + 1;
+    if (FaceNameSize > ~(SIZE_T)0 / sizeof(WCHAR)) return FALSE;
 
     FaceName = HeapAlloc(GetProcessHeap(),
                          HEAP_ZERO_MEMORY,
-                         (Length + 1) * sizeof(WCHAR));
+                         FaceNameSize * sizeof(WCHAR));
     if (FaceName == NULL) return FALSE;
 
     Length = (INT)SendMessageW(hFontList, LB_GETTEXT, nSel, (LPARAM)FaceName);
+    if (Length < 0 || (SIZE_T)Length >= FaceNameSize)
+    {
+        HeapFree(GetProcessHeap(), 0, FaceName);
+        return FALSE;
+    }
     ASSERT(Length != LB_ERR);
     FaceName[Length] = L'\0';
 
