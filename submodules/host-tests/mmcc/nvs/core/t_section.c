@@ -1121,6 +1121,80 @@ SectionClusterRead(void)
     WorldDestroy(&World);
 }
 
+static
+void
+SectionPlaceholderView(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE A;
+    MI_MEMORY_INFORMATION Info;
+    PMI_SEGMENT Segment;
+    ULONG64 Place = 0;
+    ULONG64 Base;
+    ULONG64 Size;
+    ULONG64 ViewSize;
+    NTSTATUS Status;
+
+    WorldCreate(&World, 256, 1, 1000);
+    SpaceCreate(&World, 0, &A);
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentPageFileBacked, 0x10000, MI_PROT_READWRITE, NULL,
+                                     NULL, NULL, 0, &Segment)));
+
+    Size = 0x20000;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Place, &Size, MI_MEM_RESERVE | MI_MEM_RESERVE_PLACEHOLDER,
+                                             MI_PROT_NOACCESS)));
+    Base = Place;
+    Size = 0x10000;
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&A, &Base, &Size, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER)));
+
+    Base = Place + PAGE_SIZE;
+    ViewSize = 0x10000;
+    CHECK(MiMapViewEx(&A, Segment, &Base, 0, &ViewSize, MI_PROT_READWRITE, MI_MEM_REPLACE_PLACEHOLDER, ~0ULL,
+                      MI_PROT_READWRITE, FALSE) == STATUS_CONFLICTING_ADDRESSES);
+    Base = Place;
+    ViewSize = 0x10000;
+    CHECK(MiMapViewEx(&A, Segment, &Base, 0, &ViewSize, MI_PROT_READWRITE, 0, ~0ULL, MI_PROT_READWRITE, FALSE) ==
+          STATUS_CONFLICTING_ADDRESSES);
+    CHECK(NT_SUCCESS(MiMapViewEx(&A, Segment, &Base, 0, &ViewSize, MI_PROT_READWRITE, MI_MEM_REPLACE_PLACEHOLDER,
+                                 ~0ULL, MI_PROT_READWRITE, FALSE)));
+    CHECK(Base == Place && ViewSize == 0x10000);
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Place + PAGE_SIZE, 0x5EC7)));
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Place, &Info)));
+    CHECK(Info.Type == MI_MEM_MAPPED && Info.RegionSize == 0x10000);
+
+    CHECK(MiUnmapViewEx(&A, Place + 0x10000, TRUE) == STATUS_NOT_MAPPED_VIEW);
+    CHECK(NT_SUCCESS(MiUnmapViewEx(&A, Place, TRUE)));
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, Place, &Info)));
+    CHECK(Info.State == MI_MEM_RESERVE && Info.Type == MI_MEM_PRIVATE && Info.RegionSize == 0x10000 &&
+          Info.AllocationProtect == MI_PROT_NOACCESS);
+
+    Base = Place;
+    ViewSize = 0x10000;
+    CHECK(NT_SUCCESS(MiMapViewEx(&A, Segment, &Base, 0, &ViewSize, MI_PROT_READONLY, MI_MEM_REPLACE_PLACEHOLDER,
+                                 ~0ULL, MI_PROT_READWRITE, FALSE)));
+    CHECK(UserRead64(&World, 0, Place + PAGE_SIZE, &Status) == 0x5EC7 && NT_SUCCESS(Status));
+    CHECK(NT_SUCCESS(MiUnmapViewEx(&A, Place, TRUE)));
+
+    Base = Place;
+    Size = 0x20000;
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&A, &Base, &Size, MI_MEM_RELEASE | MI_MEM_COALESCE_PLACEHOLDERS)));
+
+    Base = 0;
+    ViewSize = 0x10000;
+    CHECK(NT_SUCCESS(MiMapViewEx(&A, Segment, &Base, 0, &ViewSize, MI_PROT_READWRITE, 0, ~0ULL, MI_PROT_READWRITE,
+                                 FALSE)));
+    CHECK(MiUnmapViewEx(&A, Base, TRUE) == STATUS_CONFLICTING_ADDRESSES);
+    CHECK(NT_SUCCESS(MiUnmapView(&A, Base)));
+
+    Base = Place;
+    Size = 0;
+    CHECK(NT_SUCCESS(MiFreeVirtualMemory(&A, &Base, &Size, MI_MEM_RELEASE)));
+    MiSegmentDereference(Segment);
+    SpaceDestroy(&World, 0, &A);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+}
+
 void
 TestSection(void)
 {
@@ -1137,6 +1211,7 @@ TestSection(void)
     SectionUnusedCache();
     SectionViewProtection();
     SectionClusterRead();
+    SectionPlaceholderView();
 }
 
 void

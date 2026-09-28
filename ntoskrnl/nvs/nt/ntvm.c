@@ -252,7 +252,8 @@ MiAllocateVirtualMemoryNt(
     _In_ ULONG64 LowestAddress,
     _In_ ULONG64 HighestEndingAddress,
     _In_ ULONG64 Alignment,
-    _In_ BOOLEAN EcCode)
+    _In_ BOOLEAN EcCode,
+    _In_ BOOLEAN Extended)
 {
     MI_PROCESS_REFERENCE Target;
     ULONG64 Base, Size, Highest;
@@ -273,7 +274,25 @@ MiAllocateVirtualMemoryNt(
         Highest = HighestEndingAddress;
 
     if (AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_RESET | MEM_PHYSICAL | MEM_TOP_DOWN | MEM_WRITE_WATCH |
-                           MEM_LARGE_PAGES | MEM_ROTATE))
+                           MEM_LARGE_PAGES | MEM_ROTATE |
+                           (Extended ? (MEM_RESERVE_PLACEHOLDER | MEM_REPLACE_PLACEHOLDER) : 0)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((AllocationType & MEM_RESERVE_PLACEHOLDER) &&
+        ((AllocationType & (MEM_RESERVE | MEM_COMMIT | MEM_RESET | MEM_REPLACE_PLACEHOLDER | MEM_PHYSICAL |
+                            MEM_LARGE_PAGES | MEM_WRITE_WATCH | MEM_ROTATE)) != MEM_RESERVE ||
+         Protect != PAGE_NOACCESS))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((AllocationType & MEM_WRITE_WATCH) && !(AllocationType & MEM_RESERVE))
+        return STATUS_INVALID_PARAMETER;
+
+    if ((AllocationType & MEM_REPLACE_PLACEHOLDER) &&
+        (!(AllocationType & MEM_RESERVE) || (AllocationType & (MEM_RESET | MEM_PHYSICAL | MEM_LARGE_PAGES | MEM_ROTATE))))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -361,6 +380,12 @@ MiAllocateVirtualMemoryNt(
         Type |= MI_MEM_PHYSICAL;
     if (AllocationType & MEM_ROTATE)
         Type |= MI_MEM_ROTATE;
+    if (AllocationType & MEM_RESERVE_PLACEHOLDER)
+        Type |= MI_MEM_RESERVE_PLACEHOLDER;
+    if (AllocationType & MEM_REPLACE_PLACEHOLDER)
+        Type |= MI_MEM_REPLACE_PLACEHOLDER;
+    if (AllocationType & MEM_WRITE_WATCH)
+        Type |= MI_MEM_WRITE_WATCH;
 
     do
     {
@@ -388,7 +413,7 @@ MiAllocateVirtualMemoryNt(
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
         }
 
-        if (Type & MI_MEM_RESERVE)
+        if ((Type & MI_MEM_RESERVE) && !(Type & MI_MEM_REPLACE_PLACEHOLDER))
         {
             Target.Process->VirtualSize += (SIZE_T)Size;
             if (Target.Process->VirtualSize > Target.Process->PeakVirtualSize)
@@ -417,7 +442,7 @@ NtAllocateVirtualMemory(
     _In_ ULONG Protect)
 {
     return MiAllocateVirtualMemoryNt(ProcessHandle, UBaseAddress, ZeroBits, URegionSize, AllocationType, Protect,
-                                     0, 0, 0, FALSE);
+                                     0, 0, 0, FALSE, FALSE);
 }
 
 static
@@ -553,7 +578,7 @@ NtAllocateVirtualMemoryEx(
     }
 
     return MiAllocateVirtualMemoryNt(ProcessHandle, BaseAddress, 0, RegionSize, AllocationType, PageProtection,
-                                     LowestAddress, HighestEndingAddress, Alignment, EcCode);
+                                     LowestAddress, HighestEndingAddress, Alignment, EcCode, TRUE);
 }
 
 NTSTATUS
@@ -572,12 +597,18 @@ NtFreeVirtualMemory(
 
     PAGED_CODE();
 
-    if (FreeType != MEM_DECOMMIT && FreeType != MEM_RELEASE)
+    if (FreeType != MEM_DECOMMIT && FreeType != MEM_RELEASE &&
+        FreeType != (MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) && FreeType != (MEM_RELEASE | MEM_COALESCE_PLACEHOLDERS))
+    {
         return STATUS_INVALID_PARAMETER_4;
+    }
 
     Status = MiCaptureRegion(UBaseAddress, URegionSize, &BaseAddress, &RegionSize);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if ((FreeType & (MEM_PRESERVE_PLACEHOLDER | MEM_COALESCE_PLACEHOLDERS)) && RegionSize == 0)
+        return STATUS_INVALID_PARAMETER_3;
 
     if ((ULONG_PTR)BaseAddress > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
         return STATUS_INVALID_PARAMETER;
@@ -610,7 +641,10 @@ NtFreeVirtualMemory(
     Base = (ULONG64)(ULONG_PTR)BaseAddress;
     Size = RegionSize;
     Status = MiFreeVirtualMemory(MiSpaceOfProcess(Target.Process), &Base, &Size,
-                                 (FreeType == MEM_RELEASE) ? MI_MEM_RELEASE : MI_MEM_DECOMMIT);
+                                 (FreeType == MEM_DECOMMIT) ? MI_MEM_DECOMMIT :
+                                 (FreeType & MEM_PRESERVE_PLACEHOLDER) ? (MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER) :
+                                 (FreeType & MEM_COALESCE_PLACEHOLDERS) ? (MI_MEM_RELEASE | MI_MEM_COALESCE_PLACEHOLDERS) :
+                                 MI_MEM_RELEASE);
 
     if (NT_SUCCESS(Status))
     {
@@ -1315,14 +1349,82 @@ NtGetWriteWatch(
     _Out_ PULONG_PTR EntriesInUserAddressArray,
     _Out_ PULONG Granularity)
 {
-    UNREFERENCED_PARAMETER(ProcessHandle);
-    UNREFERENCED_PARAMETER(Flags);
-    UNREFERENCED_PARAMETER(BaseAddress);
-    UNREFERENCED_PARAMETER(RegionSize);
-    UNREFERENCED_PARAMETER(UserAddressArray);
-    UNREFERENCED_PARAMETER(EntriesInUserAddressArray);
-    UNREFERENCED_PARAMETER(Granularity);
-    return STATUS_NOT_IMPLEMENTED;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    MI_PROCESS_REFERENCE Target;
+    ULONG_PTR Capacity = 0;
+    ULONG_PTR Index;
+    ULONG64 Base = (ULONG64)(ULONG_PTR)BaseAddress;
+    ULONG64 Count;
+    PULONG64 Addresses;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+
+    if (Flags & ~WRITE_WATCH_FLAG_RESET)
+        return STATUS_INVALID_PARAMETER;
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForWrite(EntriesInUserAddressArray, sizeof(ULONG_PTR), sizeof(ULONG_PTR));
+            ProbeForWriteUlong(Granularity);
+        }
+
+        Capacity = *EntriesInUserAddressArray;
+        if (Capacity > MAXULONG_PTR / sizeof(PVOID))
+            _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+
+        if (PreviousMode != KernelMode && Capacity != 0)
+            ProbeForWrite(UserAddressArray, Capacity * sizeof(PVOID), sizeof(PVOID));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Capacity == 0 || RegionSize == 0 || Base > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS ||
+        (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - Base < RegionSize)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Count = (((Base + RegionSize + PAGE_SIZE - 1) & ~((ULONG64)PAGE_SIZE - 1)) -
+             (Base & ~((ULONG64)PAGE_SIZE - 1))) >> PAGE_SHIFT;
+    if (Count > Capacity)
+        Count = Capacity;
+
+    Addresses = ExAllocatePoolWithTag(PagedPool, (SIZE_T)Count * sizeof(ULONG64), 'wWmM');
+    if (Addresses == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
+    if (NT_SUCCESS(Status))
+    {
+        Status = MiGetWriteWatch(MiSpaceOfProcess(Target.Process), Base, RegionSize,
+                                 (BOOLEAN)((Flags & WRITE_WATCH_FLAG_RESET) != 0), Addresses, &Count);
+        MiReleaseTargetProcess(&Target);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        _SEH2_TRY
+        {
+            for (Index = 0; Index < Count; Index++)
+                UserAddressArray[Index] = (PVOID)(ULONG_PTR)Addresses[Index];
+            *EntriesInUserAddressArray = (ULONG_PTR)Count;
+            *Granularity = PAGE_SIZE;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+    ExFreePoolWithTag(Addresses, 'wWmM');
+    return Status;
 }
 
 NTSTATUS
@@ -1332,10 +1434,25 @@ NtResetWriteWatch(
     _In_ PVOID BaseAddress,
     _In_ SIZE_T RegionSize)
 {
-    UNREFERENCED_PARAMETER(ProcessHandle);
-    UNREFERENCED_PARAMETER(BaseAddress);
-    UNREFERENCED_PARAMETER(RegionSize);
-    return STATUS_NOT_IMPLEMENTED;
+    MI_PROCESS_REFERENCE Target;
+    ULONG64 Base = (ULONG64)(ULONG_PTR)BaseAddress;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (RegionSize == 0 || Base > (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS ||
+        (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - Base < RegionSize)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = MiResetWriteWatch(MiSpaceOfProcess(Target.Process), Base, RegionSize);
+    MiReleaseTargetProcess(&Target);
+    return Status;
 }
 
 static NTSTATUS

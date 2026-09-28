@@ -341,6 +341,15 @@ NtUnmapViewOfSection(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtUnmapViewOfSectionEx(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ PVOID BaseAddress,
+    _In_ ULONG Flags
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtWriteVirtualMemory(
     _In_ HANDLE ProcessHandle,
     _In_ PVOID  BaseAddress,

@@ -254,13 +254,4 @@ NtSetInformationVirtualMemory(HANDLE ProcessHandle,
 }
 #endif
 
-NTSTATUS
-NTAPI
-NtUnmapViewOfSectionEx(HANDLE ProcessHandle, PVOID BaseAddress, ULONG Flags)
-{
-    if (Flags & ~1u)
-        return STATUS_INVALID_PARAMETER_3;
-    return NtUnmapViewOfSection(ProcessHandle, BaseAddress);
-}
-
 #endif /* _WIN64 */

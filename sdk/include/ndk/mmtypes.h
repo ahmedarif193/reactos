@@ -95,6 +95,12 @@ extern "C" {
 #define MEM_ROTATE                                          0x800000
 #define MEM_IMAGE                                           SEC_IMAGE
 #define MEM_DOS_LIM                                         0x40000000
+#define MEM_COALESCE_PLACEHOLDERS                           0x00000001
+#define MEM_PRESERVE_PLACEHOLDER                            0x00000002
+#define MEM_REPLACE_PLACEHOLDER                             0x00004000
+#define MEM_RESERVE_PLACEHOLDER                             0x00040000
+#define WRITE_WATCH_FLAG_RESET                              0x01
+#define MEM_UNMAP_WITH_TRANSIENT_BOOST                      0x00000001
 
 //
 // Section Flags for NtCreateSection

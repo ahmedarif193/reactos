@@ -1163,7 +1163,7 @@ MiMapSectionView(
             return STATUS_INVALID_VIEW_SIZE;
     }
 
-    Base &= ~(MI_ALLOCATION_GRANULARITY - 1);
+    Base &= ~(((AllocationType & MEM_REPLACE_PLACEHOLDER) ? PAGE_SIZE : MI_ALLOCATION_GRANULARITY) - 1);
 
     for (;;)
     {
@@ -1171,8 +1171,9 @@ MiMapSectionView(
         ULONG64 TrySize = Size;
 
         Status = MiMapViewEx(Space, Control->Segment, &TryBase, Offset, &TrySize, Protection,
-                             AllocationType & (MEM_TOP_DOWN | MEM_RESERVE | MEM_LARGE_PAGES), Highest,
-                             Control->Image ? 0 : Section->Protection, Inherit);
+                             (AllocationType & (MEM_TOP_DOWN | MEM_RESERVE | MEM_LARGE_PAGES)) |
+                             ((AllocationType & MEM_REPLACE_PLACEHOLDER) ? MI_MEM_REPLACE_PLACEHOLDER : 0),
+                             Highest, Control->Image ? 0 : Section->Protection, Inherit);
 
         if (NT_SUCCESS(Status))
         {
@@ -1253,7 +1254,7 @@ MmMapViewOfSection(
     Status = MiMapSectionView(Section, MiSpaceOfProcess(Process), BaseAddress, ZeroBits, SectionOffset, ViewSize,
                               AllocationType, Protect, (BOOLEAN)(InheritDisposition == ViewShare));
 
-    if (NT_SUCCESS(Status))
+    if (NT_SUCCESS(Status) && !(AllocationType & MEM_REPLACE_PLACEHOLDER))
     {
         Process->VirtualSize += *ViewSize;
         if (Process->VirtualSize > Process->PeakVirtualSize)
@@ -1266,11 +1267,12 @@ MmMapViewOfSection(
     return Status;
 }
 
+static
 NTSTATUS
-NTAPI
-MmUnmapViewOfSection(
+MiUnmapProcessView(
     _In_ PEPROCESS Process,
-    _In_ PVOID BaseAddress)
+    _In_ PVOID BaseAddress,
+    _In_ BOOLEAN PreservePlaceholder)
 {
     BOOLEAN Attached = FALSE;
     KAPC_STATE ApcState;
@@ -1285,14 +1287,23 @@ MmUnmapViewOfSection(
         Attached = TRUE;
     }
 
-    Status = MiUnmapView(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)BaseAddress);
-    if (Status == STATUS_NOT_MAPPED_VIEW)
+    Status = MiUnmapViewEx(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)BaseAddress, PreservePlaceholder);
+    if (Status == STATUS_NOT_MAPPED_VIEW && !PreservePlaceholder)
         Status = MiUnmapFramesUser(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress), FALSE);
 
     if (Attached)
         KeUnstackDetachProcess(&ApcState);
 
     return Status;
+}
+
+NTSTATUS
+NTAPI
+MmUnmapViewOfSection(
+    _In_ PEPROCESS Process,
+    _In_ PVOID BaseAddress)
+{
+    return MiUnmapProcessView(Process, BaseAddress, FALSE);
 }
 
 NTSTATUS
@@ -1789,7 +1800,11 @@ NtMapViewOfSection(
 
     PAGED_CODE();
 
-    if (AllocationType & ~(MEM_TOP_DOWN | MEM_LARGE_PAGES | MEM_DOS_LIM | SEC_NO_CHANGE | MEM_RESERVE))
+    if (AllocationType & ~(MEM_TOP_DOWN | MEM_LARGE_PAGES | MEM_DOS_LIM | SEC_NO_CHANGE | MEM_RESERVE |
+                           MEM_REPLACE_PLACEHOLDER))
+        return STATUS_INVALID_PARAMETER;
+
+    if ((AllocationType & MEM_REPLACE_PLACEHOLDER) && (AllocationType & (MEM_LARGE_PAGES | MEM_DOS_LIM | MEM_RESERVE)))
         return STATUS_INVALID_PARAMETER;
 
     if (!MiProtectionFromWin32(Protect, &Protection))
@@ -1860,8 +1875,14 @@ NtMapViewOfSection(
     {
         Status = STATUS_DYNAMIC_CODE_BLOCKED;
     }
+    else if ((AllocationType & MEM_REPLACE_PLACEHOLDER) &&
+             (SafeBase == NULL || Section->Control->Image || Section->Control->Physical))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+    }
     else if (!Section->Control->Physical && !(AllocationType & MEM_DOS_LIM) &&
-             (((ULONG_PTR)SafeBase | (ULONG64)SafeOffset.QuadPart) & (MI_ALLOCATION_GRANULARITY - 1)))
+             ((((AllocationType & MEM_REPLACE_PLACEHOLDER) ? 0 : (ULONG_PTR)SafeBase) |
+               (ULONG64)SafeOffset.QuadPart) & (MI_ALLOCATION_GRANULARITY - 1)))
     {
         Status = STATUS_MAPPED_ALIGNMENT;
     }
@@ -1920,11 +1941,12 @@ NtMapViewOfSection(
     return Status;
 }
 
+static
 NTSTATUS
-NTAPI
-NtUnmapViewOfSection(
+MiUnmapViewOfSectionNt(
     _In_ HANDLE ProcessHandle,
-    _In_ PVOID BaseAddress)
+    _In_ PVOID BaseAddress,
+    _In_ BOOLEAN PreservePlaceholder)
 {
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PEPROCESS Process;
@@ -1957,9 +1979,32 @@ NtUnmapViewOfSection(
         DbgkUnMapViewOfSection(BaseAddress);
     }
 
-    Status = MmUnmapViewOfSection(Process, BaseAddress);
+    Status = MiUnmapProcessView(Process, BaseAddress, PreservePlaceholder);
     ObDereferenceObject(Process);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+NtUnmapViewOfSection(
+    _In_ HANDLE ProcessHandle,
+    _In_ PVOID BaseAddress)
+{
+    return MiUnmapViewOfSectionNt(ProcessHandle, BaseAddress, FALSE);
+}
+
+NTSTATUS
+NTAPI
+NtUnmapViewOfSectionEx(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ PVOID BaseAddress,
+    _In_ ULONG Flags)
+{
+    if (Flags & ~(MEM_UNMAP_WITH_TRANSIENT_BOOST | MEM_PRESERVE_PLACEHOLDER))
+        return STATUS_INVALID_PARAMETER_3;
+
+    return MiUnmapViewOfSectionNt(ProcessHandle, BaseAddress,
+                                  (BOOLEAN)((Flags & MEM_PRESERVE_PLACEHOLDER) != 0));
 }
 
 NTSTATUS

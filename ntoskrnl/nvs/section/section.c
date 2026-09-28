@@ -1508,8 +1508,12 @@ MiMapViewInternal(
     ULONG64 SegmentSize;
     ULONG64 Pages;
     PMI_VAD Vad;
+    PMI_VAD Placeholder = NULL;
+    BOOLEAN Replace = (BOOLEAN)((AllocationType & MI_MEM_REPLACE_PLACEHOLDER) != 0);
 
-    if ((SectionOffset & (MI_ALLOCATION_GRANULARITY - 1)) || (Start & (MI_ALLOCATION_GRANULARITY - 1)))
+    if ((SectionOffset & (MI_ALLOCATION_GRANULARITY - 1)) ||
+        (Start & ((Replace ? PAGE_SIZE : MI_ALLOCATION_GRANULARITY) - 1)) ||
+        (Replace && (Start == 0 || (AllocationType & MI_MEM_LARGE_PAGES))))
         return STATUS_INVALID_PARAMETER;
 
     if ((Protection & ~MI_PROT_MASK) ||
@@ -1566,6 +1570,20 @@ MiMapViewInternal(
 
         Start = Vpn << PAGE_SHIFT;
     }
+    else if (Replace)
+    {
+        Placeholder = MiVadLocate(Space, Start);
+        if (Placeholder == NULL || !Placeholder->Placeholder || MI_VAD_START(Placeholder) != Start ||
+            MI_VAD_END(Placeholder) != Start + Size || Start + Size - 1 > HighestAddress)
+        {
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+            MI_FREE(Vad);
+            MI_ATOMIC_ADD32(&Segment->MappedViews, -1);
+            MiSegmentDereference(Segment);
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
+        MiVadRemove(&Space->VadRoot, &Placeholder->Node);
+    }
     else if (Start < Space->LowestVa || Start + Size - 1 > Space->HighestVa || Start + Size < Start ||
              Start + Size - 1 > HighestAddress ||
              MiVadFindOverlap(&Space->VadRoot, Start >> PAGE_SHIFT, (Start + Size - 1) >> PAGE_SHIFT) != NULL)
@@ -1588,9 +1606,12 @@ MiMapViewInternal(
     Vad->WritableUser = (BOOLEAN)(!Space->IsSystem && !CacheView && MI_PROT_IS_WRITABLE(Protection));
     Vad->Segment = Segment;
     Vad->SegmentPageOffset = SectionOffset >> PAGE_SHIFT;
+    Vad->FromPlaceholder = (BOOLEAN)(Placeholder != NULL);
 
     if (!MiVadInsert(&Space->VadRoot, &Vad->Node))
     {
+        if (Placeholder != NULL)
+            MiVadInsert(&Space->VadRoot, &Placeholder->Node);
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
         goto Fail;
     }
@@ -1600,6 +1621,9 @@ MiMapViewInternal(
     if (Vad->WritableUser)
         MI_ATOMIC_ADD32(&Segment->WritableUserViews, 1);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+
+    if (Placeholder != NULL)
+        MI_FREE(Placeholder);
 
     *BaseAddress = Start;
     *ViewSize = Size;
@@ -1641,16 +1665,24 @@ MiMapCacheView(
 }
 
 NTSTATUS
-MiUnmapView(
+MiUnmapViewEx(
     _Inout_ PMI_ADDRESS_SPACE Space,
-    _In_ ULONG64 BaseAddress)
+    _In_ ULONG64 BaseAddress,
+    _In_ BOOLEAN PreservePlaceholder)
 {
     PMI_SEGMENT Segment;
     PMI_VAD Vad;
+    ULONG64 StartingVpn;
+    ULONG64 EndingVpn;
 
     MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
 
     Vad = MiVadLocate(Space, BaseAddress);
+    if (PreservePlaceholder && Vad != NULL && (!Vad->FromPlaceholder || Vad->Type == MiVadPrivate))
+    {
+        MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        return (Vad->Type == MiVadPrivate) ? STATUS_NOT_MAPPED_VIEW : STATUS_CONFLICTING_ADDRESSES;
+    }
     if (Vad != NULL && Vad->Type == MiVadLarge && Vad->Segment != NULL)
     {
         Segment = MiReleaseLargePagesLocked(Space, Vad);
@@ -1664,15 +1696,38 @@ MiUnmapView(
         return STATUS_NOT_MAPPED_VIEW;
     }
 
+    StartingVpn = Vad->Node.StartingVpn;
+    EndingVpn = Vad->Node.EndingVpn;
     Segment = MiDetachMappedView(Space, Vad, TRUE);
-    if (MiVadCacheFree(Space, Vad))
+    if (PreservePlaceholder)
+    {
+        RtlZeroMemory(Vad, sizeof(*Vad));
+        Vad->Node.StartingVpn = StartingVpn;
+        Vad->Node.EndingVpn = EndingVpn;
+        Vad->Protection = MI_PROT_NOACCESS;
+        Vad->Type = MiVadPrivate;
+        Vad->Placeholder = TRUE;
+        MiVadInsert(&Space->VadRoot, &Vad->Node);
         Vad = NULL;
+    }
+    else if (MiVadCacheFree(Space, Vad))
+    {
+        Vad = NULL;
+    }
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
 
     if (Vad != NULL)
         MI_FREE(Vad);
     MiSegmentDereference(Segment);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+MiUnmapView(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 BaseAddress)
+{
+    return MiUnmapViewEx(Space, BaseAddress, FALSE);
 }
 
 NTSTATUS

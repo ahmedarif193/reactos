@@ -61,6 +61,7 @@ typedef struct _MI_ADDRESS_SPACE
     ULONG64 TopDownVa;
     PVOID CommitOwner;
     BOOLEAN TrackExecutableWrites;
+    BOOLEAN HasWriteWatch;
 
     volatile LONG64 CommittedPages;
     volatile LONG64 ResidentPages;
@@ -156,6 +157,11 @@ VOID MiPtUnpinRange(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress
 #define MI_MEM_IMAGE                0x01000000
 #define MI_MEM_LARGE_PAGES          0x20000000
 #define MI_MEM_ROTATE               0x00800000
+#define MI_MEM_RESERVE_PLACEHOLDER  0x00080000
+#define MI_MEM_REPLACE_PLACEHOLDER  0x02000000
+#define MI_MEM_WRITE_WATCH          0x04000000
+#define MI_MEM_COALESCE_PLACEHOLDERS 0x00000001
+#define MI_MEM_PRESERVE_PLACEHOLDER 0x00000002
 
 typedef enum _MI_VAD_KIND
 {
@@ -184,11 +190,15 @@ typedef struct _MI_VAD
     BOOLEAN WritableUser;
     BOOLEAN LockedPages;
     BOOLEAN EcCode;
+    BOOLEAN Placeholder;
+    BOOLEAN FromPlaceholder;
     volatile LONG PteTouched;
     struct _MI_SEGMENT *Segment;
     ULONG64 SegmentPageOffset;
     volatile LONG64 CommitCharge;
     PMI_FRAME_NUMBER RotateFrames;
+    PUCHAR WriteWatchBits;
+    ULONG64 WriteWatchBase;
 } MI_VAD, *PMI_VAD;
 
 #define MI_VAD_IS_DIRECT(v)   ((v)->Type == MiVadSystem || (v)->Type == MiVadPhysical || \
@@ -326,6 +336,13 @@ NTSTATUS MiFaultWithWriteAllowance(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64
                                    _In_ MI_FAULT_ACCESS Access, _In_ BOOLEAN UserMode,
                                    _In_ BOOLEAN AllowExecutableWrite);
 NTSTATUS MiSetExecutableWriteTracking(_Inout_ PMI_ADDRESS_SPACE Space, _In_ BOOLEAN Enable);
+NTSTATUS MiWriteWatchAttach(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_VAD Vad);
+NTSTATUS MiWriteWatchDuplicate(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_VAD Vad);
+VOID MiWriteWatchRelease(_Inout_ PMI_VAD Vad);
+VOID MiWriteWatchNoteWrite(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress);
+NTSTATUS MiGetWriteWatch(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Base, _In_ ULONG64 Size, _In_ BOOLEAN Reset,
+                         _Out_ PULONG64 Addresses, _Inout_ PULONG64 Count);
+NTSTATUS MiResetWriteWatch(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Base, _In_ ULONG64 Size);
 NTSTATUS MiResetExecutableWriteTracking(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Base,
                                         _In_ ULONG64 Size);
 VOID MiArmExecutableWriteRangeLocked(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Start,
@@ -468,6 +485,7 @@ NTSTATUS MiMapViewEx(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_SEGMENT Segmen
                      _In_ ULONG AllocationType, _In_ ULONG64 HighestAddress, _In_ ULONG MaximumProtection,
                      _In_ BOOLEAN Inherit);
 NTSTATUS MiUnmapView(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress);
+NTSTATUS MiUnmapViewEx(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress, _In_ BOOLEAN PreservePlaceholder);
 NTSTATUS MiMapCacheView(_Inout_ PMI_SEGMENT Segment, _Inout_ PULONG64 BaseAddress,
                         _In_ ULONG64 SectionOffset, _Inout_ PULONG64 ViewSize);
 NTSTATUS MiMapLargeSection(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_SEGMENT Segment,

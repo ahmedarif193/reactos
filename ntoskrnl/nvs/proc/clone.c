@@ -498,6 +498,7 @@ MiCloneRollback(PMI_ADDRESS_SPACE Target)
             MiSegmentDereference(Vad->Segment);
         }
         MiVadRemove(&Target->VadRoot, Node);
+        MiWriteWatchRelease(Vad);
         MI_FREE(Vad);
     }
 }
@@ -543,8 +544,15 @@ MiCloneAddressSpace(PMI_ADDRESS_SPACE Source, PMI_ADDRESS_SPACE Target)
             goto Rollback;
         }
         *Vad = *Original;
+        if (!NT_SUCCESS(MiWriteWatchDuplicate(Target, Vad)))
+        {
+            MI_FREE(Vad);
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Rollback;
+        }
         if (!MiChargeCommit(Target, Vad->CommitCharge))
         {
+            MiWriteWatchRelease(Vad);
             MI_FREE(Vad);
             Status = STATUS_COMMITMENT_LIMIT;
             goto Rollback;

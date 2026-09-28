@@ -560,6 +560,203 @@ VmAddressRequirements(void)
     WorldDestroy(&World);
 }
 
+static void
+VmCheckRegion(PMI_ADDRESS_SPACE Space, ULONG64 Base, ULONG64 Size, ULONG State, ULONG AllocationProtect)
+{
+    MI_MEMORY_INFORMATION Info;
+
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(Space, Base, &Info)));
+    CHECK(Info.AllocationBase == Base);
+    CHECK(Info.RegionSize == Size);
+    CHECK(Info.State == State);
+    CHECK(Info.Type == MI_MEM_PRIVATE);
+    CHECK(Info.AllocationProtect == AllocationProtect);
+}
+
+static void
+VmPlaceholders(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    ULONG64 Base = 0;
+    ULONG64 Normal = 0;
+    ULONG64 Size;
+    NTSTATUS Status;
+
+    WorldCreate(&World, 256, 2, 100000);
+    ProcessCreate(&World, &Space);
+    WorldAttach(&World, 0, &Space);
+
+    CHECK(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE | MI_MEM_RESERVE_PLACEHOLDER, MI_PROT_READWRITE) ==
+          STATUS_INVALID_PARAMETER);
+    CHECK(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_RESERVE_PLACEHOLDER, MI_PROT_NOACCESS) ==
+          STATUS_INVALID_PARAMETER);
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE | MI_MEM_RESERVE_PLACEHOLDER, MI_PROT_NOACCESS)));
+    VmCheckRegion(&Space, Base, KB64, MI_MEM_RESERVE, MI_PROT_NOACCESS);
+
+    CHECK(Alloc(&Space, &Base, KB64, MI_MEM_COMMIT, MI_PROT_READWRITE) == STATUS_CONFLICTING_ADDRESSES);
+    CHECK(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE, MI_PROT_NOACCESS) == STATUS_CONFLICTING_ADDRESSES);
+    CHECK(Alloc(&Space, &Base, PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_REPLACE_PLACEHOLDER, MI_PROT_NOACCESS) ==
+          STATUS_CONFLICTING_ADDRESSES);
+    CHECK(Alloc(&Space, &Base, KB64, MI_MEM_COMMIT | MI_MEM_REPLACE_PLACEHOLDER, MI_PROT_READWRITE) ==
+          STATUS_INVALID_PARAMETER);
+    CHECK(Free(&Space, Base, KB64, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER) == STATUS_CONFLICTING_ADDRESSES);
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_REPLACE_PLACEHOLDER,
+                           MI_PROT_READWRITE)));
+    VmCheckRegion(&Space, Base, KB64, MI_MEM_COMMIT, MI_PROT_READWRITE);
+    CHECK(MI_ATOMIC_READ64(&Space.CommittedPages) == (KB64 >> PAGE_SHIFT));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + PAGE_SIZE, 0xccccccccccccccccULL)));
+
+    CHECK(NT_SUCCESS(Free(&Space, Base, KB64, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER)));
+    VmCheckRegion(&Space, Base, KB64, MI_MEM_RESERVE, MI_PROT_NOACCESS);
+    CHECK(MI_ATOMIC_READ64(&Space.CommittedPages) == 0);
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_REPLACE_PLACEHOLDER,
+                           MI_PROT_READONLY)));
+    CHECK(UserRead64(&World, 0, Base + PAGE_SIZE, &Status) == 0);
+    CHECK(NT_SUCCESS(Status));
+    VmCheckRegion(&Space, Base, KB64, MI_MEM_COMMIT, MI_PROT_READONLY);
+    CHECK(NT_SUCCESS(Free(&Space, Base, KB64, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER)));
+
+    CHECK(NT_SUCCESS(Free(&Space, Base + KB64 / 2, KB64 / 4, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER)));
+    VmCheckRegion(&Space, Base, KB64 / 2, MI_MEM_RESERVE, MI_PROT_NOACCESS);
+    VmCheckRegion(&Space, Base + KB64 / 2, KB64 / 4, MI_MEM_RESERVE, MI_PROT_NOACCESS);
+    VmCheckRegion(&Space, Base + 3 * KB64 / 4, KB64 / 4, MI_MEM_RESERVE, MI_PROT_NOACCESS);
+
+    CHECK(Free(&Space, Base, KB64 / 2, MI_MEM_RELEASE | MI_MEM_COALESCE_PLACEHOLDERS) ==
+          STATUS_CONFLICTING_ADDRESSES);
+    CHECK(Free(&Space, Base, KB64 + PAGE_SIZE, MI_MEM_RELEASE | MI_MEM_COALESCE_PLACEHOLDERS) ==
+          STATUS_CONFLICTING_ADDRESSES);
+    CHECK(Free(&Space, Base, KB64 - PAGE_SIZE, MI_MEM_RELEASE | MI_MEM_COALESCE_PLACEHOLDERS) ==
+          STATUS_CONFLICTING_ADDRESSES);
+    CHECK(Free(&Space, Base + PAGE_SIZE, KB64 - PAGE_SIZE, MI_MEM_RELEASE | MI_MEM_COALESCE_PLACEHOLDERS) ==
+          STATUS_CONFLICTING_ADDRESSES);
+    CHECK(Free(&Space, Base, KB64, MI_MEM_RELEASE) == STATUS_UNABLE_TO_FREE_VM);
+
+    Size = KB64 / 4;
+    CHECK(NT_SUCCESS(Alloc(&Space, &(ULONG64){ Base + KB64 / 2 }, Size,
+                           MI_MEM_RESERVE | MI_MEM_REPLACE_PLACEHOLDER, MI_PROT_READWRITE)));
+    CHECK(Free(&Space, Base, KB64, MI_MEM_RELEASE | MI_MEM_COALESCE_PLACEHOLDERS) == STATUS_CONFLICTING_ADDRESSES);
+    CHECK(NT_SUCCESS(Free(&Space, Base + KB64 / 2, KB64 / 4, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER)));
+
+    CHECK(NT_SUCCESS(Free(&Space, Base, KB64, MI_MEM_RELEASE | MI_MEM_COALESCE_PLACEHOLDERS)));
+    VmCheckRegion(&Space, Base, KB64, MI_MEM_RESERVE, MI_PROT_NOACCESS);
+    CHECK(Space.VadRoot.NodeCount == 1);
+
+    CHECK(NT_SUCCESS(Free(&Space, Base, KB64 / 4, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER)));
+    CHECK(NT_SUCCESS(Free(&Space, Base + KB64 / 4, 3 * KB64 / 4, MI_MEM_RELEASE)));
+    CHECK(Free(&Space, Base + KB64 / 2, 0, MI_MEM_RELEASE) == STATUS_MEMORY_NOT_ALLOCATED);
+    CHECK(NT_SUCCESS(Free(&Space, Base, KB64 / 4, MI_MEM_RELEASE)));
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Normal, KB64, MI_MEM_RESERVE, MI_PROT_NOACCESS)));
+    CHECK(Free(&Space, Normal, KB64, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER) == STATUS_CONFLICTING_ADDRESSES);
+    CHECK(Alloc(&Space, &Normal, KB64, MI_MEM_RESERVE | MI_MEM_REPLACE_PLACEHOLDER, MI_PROT_READWRITE) ==
+          STATUS_CONFLICTING_ADDRESSES);
+    CHECK(NT_SUCCESS(Free(&Space, Normal, 0, MI_MEM_RELEASE)));
+
+    Base = 0;
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE | MI_MEM_RESERVE_PLACEHOLDER, MI_PROT_NOACCESS)));
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_REPLACE_PLACEHOLDER,
+                           MI_PROT_READWRITE)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base, 1)));
+
+    WorldAttach(&World, 0, NULL);
+    ProcessDestroy(&World, &Space);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+}
+
+static ULONG64
+VmGetWatch(PMI_ADDRESS_SPACE Space, ULONG64 Base, ULONG64 Size, BOOLEAN Reset, ULONG64 *Addresses, ULONG64 Capacity,
+           NTSTATUS *Status)
+{
+    ULONG64 Count = Capacity;
+
+    *Status = MiGetWriteWatch(Space, Base, Size, Reset, Addresses, &Count);
+    return Count;
+}
+
+static void
+VmWriteWatch(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    ULONG64 Base = 0;
+    ULONG64 Plain = 0;
+    ULONG64 Place = 0;
+    ULONG64 Addresses[16];
+    NTSTATUS Status;
+
+    WorldCreate(&World, 256, 2, 100000);
+    World.Machine.StrictTlb = TRUE;
+    ProcessCreate(&World, &Space);
+    WorldAttach(&World, 1, &Space);
+
+    CHECK(Alloc(&Space, &Base, KB64, MI_MEM_COMMIT | MI_MEM_WRITE_WATCH, MI_PROT_READWRITE) ==
+          STATUS_INVALID_PARAMETER);
+    CHECK(NT_SUCCESS(Alloc(&Space, &Base, KB64, MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_WRITE_WATCH,
+                           MI_PROT_READWRITE)));
+    CHECK(VmGetWatch(&Space, Base, KB64, FALSE, Addresses, 16, &Status) == 0 && NT_SUCCESS(Status));
+
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + PAGE_SIZE, 1)));
+    CHECK(UserRead64(&World, 1, Base + 2 * PAGE_SIZE, &Status) == 0);
+    CHECK(VmGetWatch(&Space, Base, KB64, FALSE, Addresses, 16, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(Addresses[0] == Base + PAGE_SIZE);
+
+    CHECK(VmGetWatch(&Space, Base, KB64, TRUE, Addresses, 16, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(VmGetWatch(&Space, Base, KB64, FALSE, Addresses, 16, &Status) == 0 && NT_SUCCESS(Status));
+
+    CHECK(NT_SUCCESS(UserWrite64(&World, 1, Base + PAGE_SIZE, 2)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + 3 * PAGE_SIZE, 3)));
+    CHECK(VmGetWatch(&Space, Base, KB64, FALSE, Addresses, 16, &Status) == 2 && NT_SUCCESS(Status));
+    CHECK(Addresses[0] == Base + PAGE_SIZE && Addresses[1] == Base + 3 * PAGE_SIZE);
+    CHECK(UserRead64(&World, 0, Base + PAGE_SIZE, &Status) == 2 && NT_SUCCESS(Status));
+
+    CHECK(VmGetWatch(&Space, Base, KB64, TRUE, Addresses, 1, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(VmGetWatch(&Space, Base, KB64, FALSE, Addresses, 16, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(Addresses[0] == Base + 3 * PAGE_SIZE);
+
+    CHECK(NT_SUCCESS(MiResetWriteWatch(&Space, Base, KB64)));
+    CHECK(VmGetWatch(&Space, Base, KB64, FALSE, Addresses, 16, &Status) == 0 && NT_SUCCESS(Status));
+    CHECK(VmGetWatch(&Space, Base, KB64, FALSE, Addresses, 0, &Status) == 0 && Status == STATUS_INVALID_PARAMETER);
+    CHECK(VmGetWatch(&Space, Base, KB64 + PAGE_SIZE, FALSE, Addresses, 16, &Status) == 16 &&
+          Status == STATUS_INVALID_PARAMETER);
+
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + 8 * PAGE_SIZE, 4)));
+    CHECK(NT_SUCCESS(Free(&Space, Base + 2 * PAGE_SIZE, 2 * PAGE_SIZE, MI_MEM_RELEASE)));
+    CHECK(VmGetWatch(&Space, Base + 4 * PAGE_SIZE, KB64 - 4 * PAGE_SIZE, FALSE, Addresses, 16, &Status) == 1 &&
+          NT_SUCCESS(Status));
+    CHECK(Addresses[0] == Base + 8 * PAGE_SIZE);
+    CHECK(NT_SUCCESS(Free(&Space, Base, 0, MI_MEM_RELEASE)));
+    CHECK(NT_SUCCESS(Free(&Space, Base + 4 * PAGE_SIZE, 0, MI_MEM_RELEASE)));
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Plain, KB64, MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Plain, 5)));
+    VmGetWatch(&Space, Plain, KB64, FALSE, Addresses, 16, &Status);
+    CHECK(Status == STATUS_INVALID_PARAMETER);
+    CHECK(MiResetWriteWatch(&Space, Plain, KB64) == STATUS_INVALID_PARAMETER);
+    CHECK(NT_SUCCESS(Free(&Space, Plain, 0, MI_MEM_RELEASE)));
+
+    CHECK(NT_SUCCESS(Alloc(&Space, &Place, KB64, MI_MEM_RESERVE | MI_MEM_RESERVE_PLACEHOLDER, MI_PROT_NOACCESS)));
+    CHECK(NT_SUCCESS(Alloc(&Space, &Place, KB64, MI_MEM_RESERVE | MI_MEM_REPLACE_PLACEHOLDER | MI_MEM_WRITE_WATCH,
+                           MI_PROT_READONLY)));
+    CHECK(NT_SUCCESS(Alloc(&Space, &Place, KB64, MI_MEM_COMMIT, MI_PROT_READWRITE)));
+    CHECK(VmGetWatch(&Space, Place, KB64, TRUE, Addresses, 16, &Status) == 0 && NT_SUCCESS(Status));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 1, Place + PAGE_SIZE, 6)));
+    CHECK(VmGetWatch(&Space, Place, KB64, TRUE, Addresses, 16, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(Addresses[0] == Place + PAGE_SIZE);
+    CHECK(NT_SUCCESS(Free(&Space, Place, KB64, MI_MEM_RELEASE | MI_MEM_PRESERVE_PLACEHOLDER)));
+    VmGetWatch(&Space, Place, KB64, FALSE, Addresses, 16, &Status);
+    CHECK(Status == STATUS_INVALID_PARAMETER);
+    CHECK(NT_SUCCESS(Free(&Space, Place, 0, MI_MEM_RELEASE)));
+
+    WorldAttach(&World, 1, NULL);
+    ProcessDestroy(&World, &Space);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+}
+
 void
 TestVm(void)
 {
@@ -570,6 +767,8 @@ TestVm(void)
     VmReserveCommitMatrix();
     VmMemCommitAndLimits();
     VmAddressRequirements();
+    VmPlaceholders();
+    VmWriteWatch();
 }
 
 static

@@ -257,8 +257,9 @@ MiMakePageValid(
 
 #define MI_FAULT_PAGE_IN_ATTEMPTS 64
 
+static
 NTSTATUS
-MiFaultWithWriteAllowance(
+MiFaultWorker(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 VirtualAddress,
     _In_ MI_FAULT_ACCESS Access,
@@ -593,6 +594,22 @@ Failed:
     MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
     MiPtPruneEmpty(Space, PageVa);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+    return Status;
+}
+
+NTSTATUS
+MiFaultWithWriteAllowance(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 VirtualAddress,
+    _In_ MI_FAULT_ACCESS Access,
+    _In_ BOOLEAN UserMode,
+    _In_ BOOLEAN AllowExecutableWrite)
+{
+    NTSTATUS Status = MiFaultWorker(Space, VirtualAddress, Access, UserMode, AllowExecutableWrite);
+
+    if (NT_SUCCESS(Status) && Access == MiFaultWrite && Space->HasWriteWatch)
+        MiWriteWatchNoteWrite(Space, VirtualAddress);
+
     return Status;
 }
 
