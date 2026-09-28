@@ -475,6 +475,8 @@ WSPDuplicateSocket(
             *lpErrno = WSAENOTSOCK;
         return SOCKET_ERROR;
     }
+    if (!lpProtocolInfo)
+        return MsafdReturnWithErrno(STATUS_ACCESS_VIOLATION, lpErrno, 0, NULL);
     if ( !(hProcess = OpenProcess(PROCESS_DUP_HANDLE, FALSE, dwProcessId)) )
         return MsafdReturnWithErrno(STATUS_INVALID_PARAMETER, lpErrno, 0, NULL);
 
@@ -487,13 +489,24 @@ WSPDuplicateSocket(
                                                      0,
                                                      (sizeof(SOCK_SHARED_INFO) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1),
                                                      NULL);
-        if( Socket->SharedDataHandle == INVALID_HANDLE_VALUE )
+        if( Socket->SharedDataHandle == NULL )
+        {
+            Socket->SharedDataHandle = INVALID_HANDLE_VALUE;
+            NtClose(hProcess);
             return MsafdReturnWithErrno(STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL);
+        }
         pSharedData = MapViewOfFile(Socket->SharedDataHandle,
                                     FILE_MAP_ALL_ACCESS,
                                     0,
                                     0,
                                     sizeof(SOCK_SHARED_INFO));
+        if (!pSharedData)
+        {
+            NtClose(Socket->SharedDataHandle);
+            Socket->SharedDataHandle = INVALID_HANDLE_VALUE;
+            NtClose(hProcess);
+            return MsafdReturnWithErrno(STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL);
+        }
 
         RtlCopyMemory(pSharedData, Socket->SharedData, sizeof(SOCK_SHARED_INFO));
         pOldSharedData = Socket->SharedData;
@@ -520,13 +533,14 @@ WSPDuplicateSocket(
                                   0,
                                   FALSE,
                                   DUPLICATE_SAME_ACCESS);
-    NtClose(hProcess);
     if( !bDuplicated )
+    {
+        DuplicateHandle(hProcess, hDuplicatedSharedData, NULL, NULL, 0, FALSE,
+                        DUPLICATE_CLOSE_SOURCE);
+        NtClose(hProcess);
         return MsafdReturnWithErrno(STATUS_ACCESS_DENIED, lpErrno, 0, NULL);
-
-
-    if (!lpProtocolInfo)
-        return MsafdReturnWithErrno(STATUS_ACCESS_VIOLATION, lpErrno, 0, NULL);
+    }
+    NtClose(hProcess);
 
     RtlCopyMemory(lpProtocolInfo, &Socket->ProtocolInfo, sizeof(*lpProtocolInfo));
 
