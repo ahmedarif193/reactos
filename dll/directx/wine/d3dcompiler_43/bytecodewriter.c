@@ -661,8 +661,13 @@ static uint32_t d3d9_opcode(uint32_t bwriter_opcode)
 
 static uint32_t d3dsp_register(D3DSHADER_PARAM_REGISTER_TYPE type, uint32_t num)
 {
+#ifdef __REACTOS__
+    return (((uint32_t)type << D3DSP_REGTYPE_SHIFT) & D3DSP_REGTYPE_MASK) |
+           (((uint32_t)type << D3DSP_REGTYPE_SHIFT2) & D3DSP_REGTYPE_MASK2) |
+#else
     return ((type << D3DSP_REGTYPE_SHIFT) & D3DSP_REGTYPE_MASK) |
            ((type << D3DSP_REGTYPE_SHIFT2) & D3DSP_REGTYPE_MASK2) |
+#endif
            (num & D3DSP_REGNUM_MASK); /* No shift */
 }
 
