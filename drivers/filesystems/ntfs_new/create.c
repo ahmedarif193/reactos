@@ -1174,6 +1174,15 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 USHORT LeafLength;
                 USHORT ParentLength;
 
+                if (!(CreateOptions & FILE_DIRECTORY_FILE) &&
+                    FileObject->FileName.Length != 0 &&
+                    FileObject->FileName.Buffer[FileObject->FileName.Length / sizeof(WCHAR) - 1] == L'\\')
+                {
+                    NtfsReleaseMetadata(VolCB);
+                    KeLeaveCriticalRegion();
+                    return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile, CachedRecord, STATUS_NOT_A_DIRECTORY);
+                }
+
                 /* In these cases, create the file and open it.
                  * Algorithm will probably be something like:
                  *     - Call MFT to allocate a new file record.
