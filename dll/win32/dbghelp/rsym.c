@@ -21,6 +21,7 @@ typedef struct rsym_file_entry_s
 typedef struct rsym_func_entry_s
 {
     DWORD64 Address;
+    DWORD64 End;
     struct symt_function* func;
     struct rsym_func_entry_s* next;
 } rsym_func_entry_t;
@@ -64,6 +65,45 @@ static void rsym_finalize_function(struct module* module, struct symt_function* 
     }
 }
 
+
+static int __cdecl rsym_compare_func(const void* a, const void* b)
+{
+    const rsym_func_entry_t* fa = *(const rsym_func_entry_t* const*)a;
+    const rsym_func_entry_t* fb = *(const rsym_func_entry_t* const*)b;
+
+    if (fa->Address < fb->Address) return -1;
+    return fa->Address > fb->Address;
+}
+
+static void rsym_size_functions(rsym_func_entry_t* first_func)
+{
+    rsym_func_entry_t** sorted;
+    rsym_func_entry_t* func;
+    ULONG count = 0;
+    ULONG i;
+
+    for (func = first_func; func; func = func->next)
+        count++;
+    if (!count || !(sorted = HeapAlloc(GetProcessHeap(), 0, count * sizeof(*sorted))))
+        return;
+
+    count = 0;
+    for (func = first_func; func; func = func->next)
+        sorted[count++] = func;
+    qsort(sorted, count, sizeof(*sorted), rsym_compare_func);
+
+    for (i = 0; i < count; i++)
+    {
+        DWORD64 end = sorted[i]->End;
+
+        if (i + 1 < count && sorted[i + 1]->Address > sorted[i]->Address)
+            end = sorted[i + 1]->Address;
+        if (end > sorted[i]->Address)
+            sorted[i]->func->ranges[0].high = end;
+    }
+
+    HeapFree(GetProcessHeap(), 0, sorted);
+}
 
 static int is_metadata_sym(const char* name)
 {
@@ -217,14 +257,20 @@ BOOL rsym_parse(struct module* module, DWORD64 load_offset,
                 func->func = symt_new_function(module, 0, Strings + Entry.FunctionOffset,
                     Address, 0, 0, 0);
                 func->Address = Address;
+                func->End = Address;
                 func->next = first_func;
                 first_func = func;
             }
+
+            if (Address + 1 > func->End)
+                func->End = Address + 1;
 
             /* TODO: What if we have multiple chunks scattered around? */
             symt_add_func_line(module, func->func, file->Source, Entry.SourceLine, Address - func->Address);
         }
     }
+
+    rsym_size_functions(first_func);
 
     while (first_func)
     {
