@@ -4,8 +4,8 @@
 @ stdcall -version=0x601+ AddDllDirectory(wstr)
 @ stdcall AddAtomA(str)
 @ stdcall AddAtomW(wstr)
-@ stdcall AddConsoleAliasA(str str str) ;check
-@ stdcall AddConsoleAliasW(wstr wstr wstr) ;check
+@ stdcall AddConsoleAliasA(str str str) kernelbase.AddConsoleAliasA
+@ stdcall AddConsoleAliasW(wstr wstr wstr) kernelbase.AddConsoleAliasW
 @ stdcall AddLocalAlternateComputerNameA(str ptr)
 @ stdcall AddLocalAlternateComputerNameW(wstr ptr)
 @ stdcall AddRefActCtx(ptr)
@@ -16,14 +16,14 @@
 @ stdcall AddVectoredContinueHandler(long ptr) ntdll.RtlAddVectoredContinueHandler
 @ stdcall AddVectoredExceptionHandler(long ptr) ntdll.RtlAddVectoredExceptionHandler
 @ stdcall -stub -version=0x600+ AdjustCalendarDate(ptr long long)
-@ stdcall AllocConsole()
+@ stdcall AllocConsole() kernelbase.AllocConsole
 @ stdcall AllocateUserPhysicalPages(long ptr ptr)
 @ stdcall -stub -version=0x600+ AllocateUserPhysicalPagesNuma(ptr ptr ptr long)
 @ stdcall -version=0x600+ ApplicationRecoveryFinished(long)
 @ stdcall -version=0x600+ ApplicationRecoveryInProgress(ptr)
 @ stdcall AreFileApisANSI()
 @ stdcall AssignProcessToJobObject(ptr ptr)
-@ stdcall AttachConsole(long)
+@ stdcall AttachConsole(long) kernelbase.AttachConsole
 @ stdcall BackupRead(ptr ptr long ptr long long ptr)
 @ stdcall BackupSeek(ptr long long ptr ptr ptr)
 @ stdcall BackupWrite(ptr ptr long ptr long long ptr)
@@ -72,7 +72,7 @@
 @ stdcall CheckRemoteDebuggerPresent(long ptr)
 @ stdcall ClearCommBreak(long)
 @ stdcall ClearCommError(long ptr ptr)
-@ stdcall CloseConsoleHandle(long)
+@ stdcall CloseConsoleHandle(long) kernelbase.CloseConsoleHandle
 @ stdcall CloseHandle(long)
 @ stdcall -version=0xA00+ ClosePseudoConsole(ptr) kernelbase.ClosePseudoConsole
 @ stdcall -version=0x600+ ClosePrivateNamespace(ptr long)
@@ -96,8 +96,8 @@
 @ stdcall -version=0x600+ CompareStringOrdinal(wstr long wstr long long)
 @ stdcall CompareStringW(long long wstr long wstr long) kernelbase.CompareStringW
 @ stdcall ConnectNamedPipe(long ptr)
-@ stdcall -version=0x502-0x600 -arch=win64 ConsoleIMERoutine(ptr)
-@ stdcall ConsoleMenuControl(long long long)
+@ stdcall -version=0x502-0x600 -arch=win64 ConsoleIMERoutine(ptr) kernelbase.ConsoleIMERoutine
+@ stdcall ConsoleMenuControl(long long long) kernelbase.ConsoleMenuControl
 @ stdcall ContinueDebugEvent(long long long)
 @ stdcall -stub -version=0x600+ ConvertCalDateTimeToSystemTime(ptr ptr)
 @ stdcall ConvertDefaultLocale(long)
@@ -118,7 +118,7 @@
 @ stdcall CreateActCtxW(ptr)
 @ stdcall -version=0x600+ CreateBoundaryDescriptorA(str long)
 @ stdcall -version=0x600+ CreateBoundaryDescriptorW(wstr long)
-@ stdcall CreateConsoleScreenBuffer(long long ptr long ptr)
+@ stdcall CreateConsoleScreenBuffer(long long ptr long ptr) kernelbase.CreateConsoleScreenBuffer
 @ stdcall CreateDirectoryA(str ptr)
 @ stdcall CreateDirectoryExA(str str ptr)
 @ stdcall CreateDirectoryExW(wstr wstr ptr)
@@ -192,7 +192,7 @@
 @ stdcall -version=0x600+ CreateWaitableTimerExA(ptr str long long)
 @ stdcall -version=0x600+ CreateWaitableTimerExW(ptr wstr long long)
 @ stdcall CreateWaitableTimerW(ptr long wstr)
-;@ stdcall -arch=x86_64 CtrlRoutine()
+@ stdcall CtrlRoutine(ptr) kernelbase.CtrlRoutine
 @ stdcall DeactivateActCtx(long ptr)
 @ stdcall DebugActiveProcess(long)
 @ stdcall DebugActiveProcessStop(long)
@@ -228,7 +228,7 @@
 @ stdcall DosDateTimeToFileTime(long long ptr)
 @ stdcall DosPathToSessionPathA(long str str)
 @ stdcall DosPathToSessionPathW(long wstr wstr)
-@ stdcall DuplicateConsoleHandle(long long long long)
+@ stdcall DuplicateConsoleHandle(long long long long) kernelbase.DuplicateConsoleHandle
 @ stdcall DuplicateHandle(long long long ptr long long long)
 @ stdcall EncodePointer(ptr) ntdll.RtlEncodePointer
 @ stdcall EncodeSystemPointer(ptr) ntdll.RtlEncodeSystemPointer
@@ -292,17 +292,17 @@
 @ stdcall ExitVDM(long long)
 @ stdcall ExpandEnvironmentStringsA(str ptr long)
 @ stdcall ExpandEnvironmentStringsW(wstr ptr long)
-@ stdcall ExpungeConsoleCommandHistoryA(long)
-@ stdcall ExpungeConsoleCommandHistoryW(long)
+@ stdcall ExpungeConsoleCommandHistoryA(long) kernelbase.ExpungeConsoleCommandHistoryA
+@ stdcall ExpungeConsoleCommandHistoryW(long) kernelbase.ExpungeConsoleCommandHistoryW
 @ stdcall FatalAppExitA(long str)
 @ stdcall FatalAppExitW(long wstr)
 @ stdcall FatalExit(long)
 @ stdcall FileTimeToDosDateTime(ptr ptr ptr)
 @ stdcall FileTimeToLocalFileTime(ptr ptr)
 @ stdcall FileTimeToSystemTime(ptr ptr)
-@ stdcall FillConsoleOutputAttribute(long long long long ptr)
-@ stdcall FillConsoleOutputCharacterA(long long long long ptr)
-@ stdcall FillConsoleOutputCharacterW(long long long long ptr)
+@ stdcall FillConsoleOutputAttribute(long long long long ptr) kernelbase.FillConsoleOutputAttribute
+@ stdcall FillConsoleOutputCharacterA(long long long long ptr) kernelbase.FillConsoleOutputCharacterA
+@ stdcall FillConsoleOutputCharacterW(long long long long ptr) kernelbase.FillConsoleOutputCharacterW
 @ stdcall FindActCtxSectionGuid(long ptr long ptr ptr)
 @ stdcall FindActCtxSectionStringA(long ptr long str ptr)
 @ stdcall FindActCtxSectionStringW(long ptr long wstr ptr)
@@ -349,7 +349,7 @@
 @ stdcall FlsFree(long)
 @ stdcall FlsGetValue(long)
 @ stdcall FlsSetValue(long ptr)
-@ stdcall FlushConsoleInputBuffer(long)
+@ stdcall FlushConsoleInputBuffer(long) kernelbase.FlushConsoleInputBuffer
 @ stdcall FlushFileBuffers(long)
 @ stdcall FlushInstructionCache(long long long)
 @ stdcall -version=0x600+ FlushProcessWriteBuffers()
@@ -358,7 +358,7 @@
 @ stdcall FoldStringW(long wstr long ptr long)
 @ stdcall FormatMessageA(long ptr long long ptr long ptr)
 @ stdcall FormatMessageW(long ptr long long ptr long ptr)
-@ stdcall FreeConsole()
+@ stdcall FreeConsole() kernelbase.FreeConsole
 @ stdcall FreeEnvironmentStringsA(ptr)
 @ stdcall FreeEnvironmentStringsW(ptr)
 @ stdcall FreeLibrary(long)
@@ -366,7 +366,7 @@
 @ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr ptr) ntdll.TpCallbackUnloadDllOnCompletion
 @ stdcall FreeResource(long)
 @ stdcall FreeUserPhysicalPages(long long long)
-@ stdcall GenerateConsoleCtrlEvent(long long)
+@ stdcall GenerateConsoleCtrlEvent(long long) kernelbase.GenerateConsoleCtrlEvent
 @ stdcall GetACP()
 @ stdcall -version=0x601+ GetActiveProcessorCount(long)
 @ stdcall -version=0x601+ GetActiveProcessorGroupCount()
@@ -408,51 +408,51 @@
 @ stdcall GetComputerNameExA(long ptr ptr)
 @ stdcall GetComputerNameExW(long ptr ptr)
 @ stdcall GetComputerNameW(ptr ptr)
-@ stdcall GetConsoleAliasA(str str long str)
-@ stdcall GetConsoleAliasExesA(str long)
-@ stdcall GetConsoleAliasExesLengthA()
-@ stdcall GetConsoleAliasExesLengthW()
-@ stdcall GetConsoleAliasExesW(wstr long)
-@ stdcall GetConsoleAliasW(wstr ptr long wstr)
-@ stdcall GetConsoleAliasesA(str long str)
-@ stdcall GetConsoleAliasesLengthA(str)
-@ stdcall GetConsoleAliasesLengthW(wstr)
-@ stdcall GetConsoleAliasesW(wstr long wstr)
-@ stdcall GetConsoleCP()
-@ stdcall GetConsoleCharType(long long ptr)
-@ stdcall GetConsoleCommandHistoryA(long long long)
-@ stdcall GetConsoleCommandHistoryLengthA(long)
-@ stdcall GetConsoleCommandHistoryLengthW(long)
-@ stdcall GetConsoleCommandHistoryW(long long long)
-@ stdcall GetConsoleCursorInfo(long ptr)
-@ stdcall GetConsoleCursorMode(long ptr ptr)
-@ stdcall GetConsoleDisplayMode(ptr)
-@ stdcall GetConsoleFontInfo(long long long ptr)
-@ stdcall GetConsoleFontSize(long long)
-@ stdcall GetConsoleHardwareState(long long ptr)
+@ stdcall GetConsoleAliasA(str str long str) kernelbase.GetConsoleAliasA
+@ stdcall GetConsoleAliasExesA(str long) kernelbase.GetConsoleAliasExesA
+@ stdcall GetConsoleAliasExesLengthA() kernelbase.GetConsoleAliasExesLengthA
+@ stdcall GetConsoleAliasExesLengthW() kernelbase.GetConsoleAliasExesLengthW
+@ stdcall GetConsoleAliasExesW(wstr long) kernelbase.GetConsoleAliasExesW
+@ stdcall GetConsoleAliasW(wstr ptr long wstr) kernelbase.GetConsoleAliasW
+@ stdcall GetConsoleAliasesA(str long str) kernelbase.GetConsoleAliasesA
+@ stdcall GetConsoleAliasesLengthA(str) kernelbase.GetConsoleAliasesLengthA
+@ stdcall GetConsoleAliasesLengthW(wstr) kernelbase.GetConsoleAliasesLengthW
+@ stdcall GetConsoleAliasesW(wstr long wstr) kernelbase.GetConsoleAliasesW
+@ stdcall GetConsoleCP() kernelbase.GetConsoleCP
+@ stdcall GetConsoleCharType(long long ptr) kernelbase.GetConsoleCharType
+@ stdcall GetConsoleCommandHistoryA(long long long) kernelbase.GetConsoleCommandHistoryA
+@ stdcall GetConsoleCommandHistoryLengthA(long) kernelbase.GetConsoleCommandHistoryLengthA
+@ stdcall GetConsoleCommandHistoryLengthW(long) kernelbase.GetConsoleCommandHistoryLengthW
+@ stdcall GetConsoleCommandHistoryW(long long long) kernelbase.GetConsoleCommandHistoryW
+@ stdcall GetConsoleCursorInfo(long ptr) kernelbase.GetConsoleCursorInfo
+@ stdcall GetConsoleCursorMode(long ptr ptr) kernelbase.GetConsoleCursorMode
+@ stdcall GetConsoleDisplayMode(ptr) kernelbase.GetConsoleDisplayMode
+@ stdcall GetConsoleFontInfo(long long long ptr) kernelbase.GetConsoleFontInfo
+@ stdcall GetConsoleFontSize(long long) kernelbase.GetConsoleFontSize
+@ stdcall GetConsoleHardwareState(long long ptr) kernelbase.GetConsoleHardwareState
 @ stdcall -version=0x600+ GetConsoleHistoryInfo(ptr)
-@ stdcall GetConsoleInputExeNameA(long ptr)
-@ stdcall GetConsoleInputExeNameW(long ptr)
-@ stdcall GetConsoleInputWaitHandle()
-@ stdcall GetConsoleKeyboardLayoutNameA(ptr)
-@ stdcall GetConsoleKeyboardLayoutNameW(ptr)
-@ stdcall GetConsoleMode(long ptr)
-@ stdcall GetConsoleNlsMode(long ptr)
+@ stdcall GetConsoleInputExeNameA(long ptr) kernelbase.GetConsoleInputExeNameA
+@ stdcall GetConsoleInputExeNameW(long ptr) kernelbase.GetConsoleInputExeNameW
+@ stdcall GetConsoleInputWaitHandle() kernelbase.GetConsoleInputWaitHandle
+@ stdcall GetConsoleKeyboardLayoutNameA(ptr) kernelbase.GetConsoleKeyboardLayoutNameA
+@ stdcall GetConsoleKeyboardLayoutNameW(ptr) kernelbase.GetConsoleKeyboardLayoutNameW
+@ stdcall GetConsoleMode(long ptr) kernelbase.GetConsoleMode
+@ stdcall GetConsoleNlsMode(long ptr) kernelbase.GetConsoleNlsMode
 @ stdcall -version=0x600+ GetConsoleOriginalTitleA(ptr long)
 @ stdcall -version=0x600+ GetConsoleOriginalTitleW(ptr long)
-@ stdcall GetConsoleOutputCP()
-@ stdcall GetConsoleProcessList(ptr long) ; missing in XP SP3
-@ stdcall GetConsoleScreenBufferInfo(long ptr)
+@ stdcall GetConsoleOutputCP() kernelbase.GetConsoleOutputCP
+@ stdcall GetConsoleProcessList(ptr long) kernelbase.GetConsoleProcessList
+@ stdcall GetConsoleScreenBufferInfo(long ptr) kernelbase.GetConsoleScreenBufferInfo
 @ stdcall -version=0x600+ GetConsoleScreenBufferInfoEx(ptr ptr)
-@ stdcall GetConsoleSelectionInfo(ptr)
-@ stdcall GetConsoleTitleA(ptr long)
-@ stdcall GetConsoleTitleW(ptr long)
-@ stdcall GetConsoleWindow()
+@ stdcall GetConsoleSelectionInfo(ptr) kernelbase.GetConsoleSelectionInfo
+@ stdcall GetConsoleTitleA(ptr long) kernelbase.GetConsoleTitleA
+@ stdcall GetConsoleTitleW(ptr long) kernelbase.GetConsoleTitleW
+@ stdcall GetConsoleWindow() kernelbase.GetConsoleWindow
 @ stdcall GetCurrencyFormatA(long long str ptr str long)
 @ stdcall -version=0x600+ GetCurrencyFormatEx(wstr long wstr ptr wstr long)
 @ stdcall GetCurrencyFormatW(long long wstr ptr wstr long)
 @ stdcall GetCurrentActCtx(ptr)
-@ stdcall GetCurrentConsoleFont(long long ptr)
+@ stdcall GetCurrentConsoleFont(long long ptr) kernelbase.GetCurrentConsoleFont
 @ stdcall -version=0x600+ GetCurrentConsoleFontEx(ptr long ptr)
 @ stdcall GetCurrentDirectoryA(long ptr)
 @ stdcall GetCurrentDirectoryW(long ptr)
@@ -527,7 +527,7 @@
 @ stdcall -i386 GetHandleContext(long) ; missing on x64
 @ stdcall GetHandleInformation(long ptr)
 @ stdcall GetLargePageMinimum()
-@ stdcall GetLargestConsoleWindowSize(long)
+@ stdcall GetLargestConsoleWindowSize(long) kernelbase.GetLargestConsoleWindowSize
 @ stdcall GetLastError() ntdll.RtlGetLastWin32Error
 @ stdcall -version=0x500-0x502 GetLinguistLangSize(ptr)
 @ stdcall GetLocalTime(ptr)
@@ -581,9 +581,9 @@
 @ stdcall GetNumberFormatA(long long str ptr ptr long)
 @ stdcall -version=0x600+ GetNumberFormatEx(wstr long wstr ptr wstr long)
 @ stdcall GetNumberFormatW(long long wstr ptr ptr long)
-@ stdcall GetNumberOfConsoleFonts()
-@ stdcall GetNumberOfConsoleInputEvents(long ptr)
-@ stdcall GetNumberOfConsoleMouseButtons(ptr)
+@ stdcall GetNumberOfConsoleFonts() kernelbase.GetNumberOfConsoleFonts
+@ stdcall GetNumberOfConsoleInputEvents(long ptr) kernelbase.GetNumberOfConsoleInputEvents
+@ stdcall GetNumberOfConsoleMouseButtons(ptr) kernelbase.GetNumberOfConsoleMouseButtons
 @ stdcall GetOEMCP()
 @ stdcall GetOverlappedResult(long ptr ptr long)
 @ stdcall -version=0x602+ GetOverlappedResultEx(long ptr ptr long long)
@@ -638,7 +638,7 @@
 @ stdcall GetShortPathNameW(wstr ptr long)
 @ stdcall GetStartupInfoA(ptr)
 @ stdcall GetStartupInfoW(ptr)
-@ stdcall GetStdHandle(long)
+@ stdcall GetStdHandle(long) kernelbase.GetStdHandle
 @ stub -version=0x600+ GetStringScripts
 @ stdcall GetStringTypeA(long long str long ptr) kernelbase.GetStringTypeA
 @ stdcall GetStringTypeExA(long long str long ptr)
@@ -792,7 +792,7 @@
 @ stdcall InterlockedPushEntrySList(ptr ptr) ntdll.RtlInterlockedPushEntrySList
 @ fastcall -version=0x600+ InterlockedPushListSList(ptr ptr ptr long) ntdll.RtlInterlockedPushListSList
 @ stdcall -version=0x602+ InterlockedPushListSListEx(ptr ptr ptr long) ntdll.RtlInterlockedPushListSListEx
-@ stdcall InvalidateConsoleDIBits(long long)
+@ stdcall InvalidateConsoleDIBits(long long) kernelbase.InvalidateConsoleDIBits
 @ stdcall IsBadCodePtr(ptr)
 @ stdcall IsBadHugeReadPtr(ptr long)
 @ stdcall IsBadHugeWritePtr(ptr long)
@@ -923,7 +923,7 @@
 @ stub -version=0x600+ NlsWriteEtwEvent
 @ stdcall -version=0x600+ NormalizeString(long wstr long ptr long) kernelbase.NormalizeString
 @ stdcall -stub -version=0x600+ NotifyUILanguageChange(long wstr wstr long ptr)
-@ stdcall OpenConsoleW(wstr long long long)
+@ stdcall OpenConsoleW(wstr long long long) kernelbase.OpenConsoleW
 @ stdcall -version=0x500-0x502 OpenDataFile(long long)
 @ stdcall OpenEventA(long long str)
 @ stdcall OpenEventW(long long wstr)
@@ -948,8 +948,8 @@
 @ stdcall OpenWaitableTimerW(long long wstr)
 @ stdcall OutputDebugStringA(str)
 @ stdcall OutputDebugStringW(wstr)
-@ stdcall PeekConsoleInputA(ptr ptr long ptr)
-@ stdcall PeekConsoleInputW(ptr ptr long ptr)
+@ stdcall PeekConsoleInputA(ptr ptr long ptr) kernelbase.PeekConsoleInputA
+@ stdcall PeekConsoleInputW(ptr ptr long ptr) kernelbase.PeekConsoleInputW
 @ stdcall PeekNamedPipe(long ptr long ptr ptr ptr)
 @ stdcall PostQueuedCompletionStatus(long long ptr ptr)
 @ stdcall -version=0x602+ PrefetchVirtualMemory(ptr ptr ptr long)
@@ -992,17 +992,17 @@
 @ stdcall -norelay RaiseException(long long long ptr)
 @ stdcall -version=0x602+ RaiseFailFastException(ptr ptr long) kernelbase.RaiseFailFastException
 @ stdcall ReOpenFile(ptr long long long)
-@ stdcall ReadConsoleA(long ptr long ptr ptr)
-@ stdcall ReadConsoleInputA(long ptr long ptr)
-@ stdcall ReadConsoleInputExA(long ptr long ptr long)
-@ stdcall ReadConsoleInputExW(long ptr long ptr long)
-@ stdcall ReadConsoleInputW(long ptr long ptr)
-@ stdcall ReadConsoleOutputA(long ptr long long ptr)
-@ stdcall ReadConsoleOutputAttribute(long ptr long long ptr)
-@ stdcall ReadConsoleOutputCharacterA(long ptr long long ptr)
-@ stdcall ReadConsoleOutputCharacterW(long ptr long long ptr)
-@ stdcall ReadConsoleOutputW(long ptr long long ptr)
-@ stdcall ReadConsoleW(long ptr long ptr ptr)
+@ stdcall ReadConsoleA(long ptr long ptr ptr) kernelbase.ReadConsoleA
+@ stdcall ReadConsoleInputA(long ptr long ptr) kernelbase.ReadConsoleInputA
+@ stdcall ReadConsoleInputExA(long ptr long ptr long) kernelbase.ReadConsoleInputExA
+@ stdcall ReadConsoleInputExW(long ptr long ptr long) kernelbase.ReadConsoleInputExW
+@ stdcall ReadConsoleInputW(long ptr long ptr) kernelbase.ReadConsoleInputW
+@ stdcall ReadConsoleOutputA(long ptr long long ptr) kernelbase.ReadConsoleOutputA
+@ stdcall ReadConsoleOutputAttribute(long ptr long long ptr) kernelbase.ReadConsoleOutputAttribute
+@ stdcall ReadConsoleOutputCharacterA(long ptr long long ptr) kernelbase.ReadConsoleOutputCharacterA
+@ stdcall ReadConsoleOutputCharacterW(long ptr long long ptr) kernelbase.ReadConsoleOutputCharacterW
+@ stdcall ReadConsoleOutputW(long ptr long long ptr) kernelbase.ReadConsoleOutputW
+@ stdcall ReadConsoleW(long ptr long ptr ptr) kernelbase.ReadConsoleW
 @ stdcall ReadDirectoryChangesW(long ptr long long long ptr ptr ptr)
 @ stdcall ReadFile(long ptr long ptr ptr)
 @ stdcall ReadFileEx(long ptr long ptr ptr)
@@ -1010,8 +1010,8 @@
 @ stdcall ReadProcessMemory(long ptr ptr long ptr)
 @ stdcall -version=0x600+ RegisterApplicationRecoveryCallback(ptr ptr long long)
 @ stdcall -version=0x600+ RegisterApplicationRestart(wstr long)
-@ stdcall RegisterConsoleIME(ptr ptr)
-@ stdcall RegisterConsoleOS2(long)
+@ stdcall RegisterConsoleIME(ptr ptr) kernelbase.RegisterConsoleIME
+@ stdcall RegisterConsoleOS2(long) kernelbase.RegisterConsoleOS2
 @ stdcall RegisterConsoleVDM(long long long long long long long long long long long)
 @ stdcall RegisterWaitForInputIdle(ptr)
 @ stdcall RegisterWaitForSingleObject(ptr long ptr ptr long long)
@@ -1066,8 +1066,8 @@
 @ stdcall -arch=win64 RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ntdll.RtlUnwindEx
 @ stdcall -arch=win64 RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr) ntdll.RtlVirtualUnwind
 @ stdcall RtlZeroMemory(ptr long) ntdll.RtlZeroMemory
-@ stdcall ScrollConsoleScreenBufferA(long ptr ptr ptr ptr)
-@ stdcall ScrollConsoleScreenBufferW(long ptr ptr ptr ptr)
+@ stdcall ScrollConsoleScreenBufferA(long ptr ptr ptr ptr) kernelbase.ScrollConsoleScreenBufferA
+@ stdcall ScrollConsoleScreenBufferW(long ptr ptr ptr ptr) kernelbase.ScrollConsoleScreenBufferW
 @ stdcall SearchPathA(str str str long ptr ptr)
 @ stdcall SearchPathW(wstr wstr wstr long ptr ptr)
 @ stdcall SetSearchPathMode(long)
@@ -1085,38 +1085,38 @@
 @ stdcall SetComputerNameExA(long str)
 @ stdcall SetComputerNameExW(long wstr)
 @ stdcall SetComputerNameW(wstr)
-@ stdcall SetConsoleActiveScreenBuffer(long)
-@ stdcall SetConsoleCP(long)
-@ stdcall -version=0x351-0x502 SetConsoleCommandHistoryMode(long)
-@ stdcall SetConsoleCtrlHandler(ptr long)
-@ stdcall SetConsoleCursor(long long)
-@ stdcall SetConsoleCursorInfo(long ptr)
-@ stdcall SetConsoleCursorMode(long long long)
-@ stdcall SetConsoleCursorPosition(long long)
-@ stdcall SetConsoleDisplayMode(long long ptr)
-@ stdcall SetConsoleFont(long long)
-@ stdcall SetConsoleHardwareState(long long long)
+@ stdcall SetConsoleActiveScreenBuffer(long) kernelbase.SetConsoleActiveScreenBuffer
+@ stdcall SetConsoleCP(long) kernelbase.SetConsoleCP
+@ stdcall -version=0x351-0x502 SetConsoleCommandHistoryMode(long) kernelbase.SetConsoleCommandHistoryMode
+@ stdcall SetConsoleCtrlHandler(ptr long) kernelbase.SetConsoleCtrlHandler
+@ stdcall SetConsoleCursor(long long) kernelbase.SetConsoleCursor
+@ stdcall SetConsoleCursorInfo(long ptr) kernelbase.SetConsoleCursorInfo
+@ stdcall SetConsoleCursorMode(long long long) kernelbase.SetConsoleCursorMode
+@ stdcall SetConsoleCursorPosition(long long) kernelbase.SetConsoleCursorPosition
+@ stdcall SetConsoleDisplayMode(long long ptr) kernelbase.SetConsoleDisplayMode
+@ stdcall SetConsoleFont(long long) kernelbase.SetConsoleFont
+@ stdcall SetConsoleHardwareState(long long long) kernelbase.SetConsoleHardwareState
 @ stdcall -version=0x600+ SetConsoleHistoryInfo(ptr)
-@ stdcall SetConsoleIcon(ptr)
-@ stdcall SetConsoleInputExeNameA(ptr)
-@ stdcall SetConsoleInputExeNameW(ptr)
-@ stdcall SetConsoleKeyShortcuts(long long long long)
-@ stdcall SetConsoleLocalEUDC(long long long long)
-@ stdcall SetConsoleMaximumWindowSize(long long)
-@ stdcall SetConsoleMenuClose(long)
-@ stdcall SetConsoleMode(long long)
-@ stdcall SetConsoleNlsMode(long long)
-@ stdcall SetConsoleNumberOfCommandsA(long long)
-@ stdcall SetConsoleNumberOfCommandsW(long long)
-@ stdcall SetConsoleOS2OemFormat(long)
-@ stdcall SetConsoleOutputCP(long)
-@ stdcall SetConsolePalette(long long long)
+@ stdcall SetConsoleIcon(ptr) kernelbase.SetConsoleIcon
+@ stdcall SetConsoleInputExeNameA(ptr) kernelbase.SetConsoleInputExeNameA
+@ stdcall SetConsoleInputExeNameW(ptr) kernelbase.SetConsoleInputExeNameW
+@ stdcall SetConsoleKeyShortcuts(long long long long) kernelbase.SetConsoleKeyShortcuts
+@ stdcall SetConsoleLocalEUDC(long long long long) kernelbase.SetConsoleLocalEUDC
+@ stdcall SetConsoleMaximumWindowSize(long long) kernelbase.SetConsoleMaximumWindowSize
+@ stdcall SetConsoleMenuClose(long) kernelbase.SetConsoleMenuClose
+@ stdcall SetConsoleMode(long long) kernelbase.SetConsoleMode
+@ stdcall SetConsoleNlsMode(long long) kernelbase.SetConsoleNlsMode
+@ stdcall SetConsoleNumberOfCommandsA(long long) kernelbase.SetConsoleNumberOfCommandsA
+@ stdcall SetConsoleNumberOfCommandsW(long long) kernelbase.SetConsoleNumberOfCommandsW
+@ stdcall SetConsoleOS2OemFormat(long) kernelbase.SetConsoleOS2OemFormat
+@ stdcall SetConsoleOutputCP(long) kernelbase.SetConsoleOutputCP
+@ stdcall SetConsolePalette(long long long) kernelbase.SetConsolePalette
 @ stdcall -version=0x600+ SetConsoleScreenBufferInfoEx(ptr ptr)
-@ stdcall SetConsoleScreenBufferSize(long long)
-@ stdcall SetConsoleTextAttribute(long long)
-@ stdcall SetConsoleTitleA(str)
-@ stdcall SetConsoleTitleW(wstr)
-@ stdcall SetConsoleWindowInfo(long long ptr)
+@ stdcall SetConsoleScreenBufferSize(long long) kernelbase.SetConsoleScreenBufferSize
+@ stdcall SetConsoleTextAttribute(long long) kernelbase.SetConsoleTextAttribute
+@ stdcall SetConsoleTitleA(str) kernelbase.SetConsoleTitleA
+@ stdcall SetConsoleTitleW(wstr) kernelbase.SetConsoleTitleW
+@ stdcall SetConsoleWindowInfo(long long ptr) kernelbase.SetConsoleWindowInfo
 @ stdcall SetCriticalSectionSpinCount(ptr long) ntdll.RtlSetCriticalSectionSpinCount
 @ stub -version=0x600+ SetCurrentConsoleFontEx
 @ stdcall SetCurrentDirectoryA(str)
@@ -1159,7 +1159,7 @@
 @ stdcall SetHandleCount(long)
 @ stdcall SetHandleInformation(long long long)
 @ stdcall SetInformationJobObject(long long ptr long)
-@ stdcall SetLastConsoleEventActive() ; missing in XP SP3
+@ stdcall SetLastConsoleEventActive() kernelbase.SetLastConsoleEventActive
 @ stdcall SetLastError(long) ntdll.RtlSetLastWin32Error
 @ stdcall SetLocalPrimaryComputerNameA(long long) ; missing in XP SP3
 @ stdcall SetLocalPrimaryComputerNameW(long long) ; missing in XP SP3
@@ -1182,7 +1182,7 @@
 @ stdcall SetProcessShutdownParameters(long long)
 @ stdcall SetProcessWorkingSetSize(long long long)
 @ stdcall SetProcessWorkingSetSizeEx(long long long long)
-@ stdcall SetStdHandle(long long)
+@ stdcall SetStdHandle(long long) kernelbase.SetStdHandle
 @ stub -version=0x600+ SetStdHandleEx
 @ stdcall SetSystemFileCacheSize(long long long)
 @ stdcall SetSystemPowerState(long long)
@@ -1228,7 +1228,7 @@
 @ stdcall -version=0x601+ SetWaitableTimerEx(long ptr long ptr ptr ptr long)
 @ stdcall -version=0x601+ -arch=x86_64,arm64ec SetXStateFeaturesMask(ptr int64) kernelbase.SetXStateFeaturesMask
 @ stdcall SetupComm(long long long)
-@ stdcall ShowConsoleCursor(long long)
+@ stdcall ShowConsoleCursor(long long) kernelbase.ShowConsoleCursor
 @ stdcall SignalObjectAndWait(long long long long)
 @ stdcall SizeofResource(long long)
 @ stdcall Sleep(long)
@@ -1269,7 +1269,7 @@
 @ stdcall -version=0x602+ UnmapViewOfFileEx(ptr long)
 @ stub -version=0x600+ UnregisterApplicationRecoveryCallback
 @ stdcall -version=0x600+ UnregisterApplicationRestart()
-@ stdcall UnregisterConsoleIME()
+@ stdcall UnregisterConsoleIME() kernelbase.UnregisterConsoleIME
 @ stdcall UnregisterWait(long)
 @ stdcall UnregisterWaitEx(long long)
 @ stub -version=0x600+ UpdateCalendarDayOfWeek
@@ -1283,7 +1283,7 @@
 @ stdcall VerLanguageNameA(long str long)
 @ stdcall VerLanguageNameW(long wstr long)
 @ stdcall -ret64 VerSetConditionMask(long long long long) ntdll.VerSetConditionMask
-@ stdcall VerifyConsoleIoHandle(long)
+@ stdcall VerifyConsoleIoHandle(long) kernelbase.VerifyConsoleIoHandle
 @ stub -version=0x600+ VerifyScripts
 @ stdcall VerifyVersionInfoA(long long double)
 @ stdcall VerifyVersionInfoW(long long double)
@@ -1336,17 +1336,17 @@
 @ stdcall Wow64RevertWow64FsRedirection(ptr)
 @ stdcall -version=0x600+ Wow64SetThreadContext(ptr ptr) kernelbase.Wow64SetThreadContext
 @ stub -version=0x600+ Wow64SuspendThread
-@ stdcall WriteConsoleA(long ptr long ptr ptr)
-@ stdcall WriteConsoleInputA(long ptr long ptr)
-@ stdcall WriteConsoleInputVDMA(long long long long)
-@ stdcall WriteConsoleInputVDMW(long long long long)
-@ stdcall WriteConsoleInputW(long ptr long ptr)
-@ stdcall WriteConsoleOutputA(long ptr long long ptr)
-@ stdcall WriteConsoleOutputAttribute(long ptr long long ptr)
-@ stdcall WriteConsoleOutputCharacterA(long ptr long long ptr)
-@ stdcall WriteConsoleOutputCharacterW(long ptr long long ptr)
-@ stdcall WriteConsoleOutputW(long ptr long long ptr)
-@ stdcall WriteConsoleW(long ptr long ptr ptr)
+@ stdcall WriteConsoleA(long ptr long ptr ptr) kernelbase.WriteConsoleA
+@ stdcall WriteConsoleInputA(long ptr long ptr) kernelbase.WriteConsoleInputA
+@ stdcall WriteConsoleInputVDMA(long long long long) kernelbase.WriteConsoleInputVDMA
+@ stdcall WriteConsoleInputVDMW(long long long long) kernelbase.WriteConsoleInputVDMW
+@ stdcall WriteConsoleInputW(long ptr long ptr) kernelbase.WriteConsoleInputW
+@ stdcall WriteConsoleOutputA(long ptr long long ptr) kernelbase.WriteConsoleOutputA
+@ stdcall WriteConsoleOutputAttribute(long ptr long long ptr) kernelbase.WriteConsoleOutputAttribute
+@ stdcall WriteConsoleOutputCharacterA(long ptr long long ptr) kernelbase.WriteConsoleOutputCharacterA
+@ stdcall WriteConsoleOutputCharacterW(long ptr long long ptr) kernelbase.WriteConsoleOutputCharacterW
+@ stdcall WriteConsoleOutputW(long ptr long long ptr) kernelbase.WriteConsoleOutputW
+@ stdcall WriteConsoleW(long ptr long ptr ptr) kernelbase.WriteConsoleW
 @ stdcall WriteFile(long ptr long ptr ptr)
 @ stdcall WriteFileEx(long ptr long ptr ptr)
 @ stdcall WriteFileGather(long ptr long ptr ptr)

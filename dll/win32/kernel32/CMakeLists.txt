@@ -13,6 +13,15 @@ add_library(kernel32_shared
 target_link_libraries(kernel32_shared PRIVATE pseh)
 add_dependencies(kernel32_shared psdk)
 
+add_library(kernelbase_console STATIC
+    client/console/alias.c
+    client/console/console.c
+    client/console/history.c
+    client/console/init.c
+    client/console/readwrite.c)
+target_link_libraries(kernelbase_console PRIVATE ${PSEH_LIB})
+add_dependencies(kernelbase_console psdk)
+
 list(APPEND SOURCE
     client/actctx.c
     client/appcache.c
@@ -52,11 +61,6 @@ list(APPEND SOURCE
     client/version.c
     client/versionansi.c
     client/virtmem.c
-    client/console/alias.c
-    client/console/console.c
-    client/console/history.c
-    client/console/init.c
-    client/console/readwrite.c
     client/file/backup.c
     client/file/cnotify.c
     client/file/copy.c
@@ -157,7 +161,7 @@ set_subsystem(kernel32 console)
 ################# END  HACK #################
 
 target_link_libraries(kernel32 psapi_static kernel32_vista_static kernel32_shared wine chkstk ${PSEH_LIB})
-add_importlibs(kernel32 ntdll)
+add_importlibs(kernel32 kernelbase ntdll)
 add_pch(kernel32 k32.h SOURCE)
 if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64") AND CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
     set_property(SOURCE client/except.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
