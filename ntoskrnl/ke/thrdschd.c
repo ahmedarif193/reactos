@@ -1074,14 +1074,22 @@ KiSwapThread(IN PKTHREAD CurrentThread,
         }
     }
 
-    if (!NextThread)
+    if (!NextThread && !SelfPlaced)
     {
         NextThread = KiSelectReadyThread(0, Prcb);
         if (NextThread == CurrentThread)
         {
             SelfPlaced = TRUE;
-            NextThread = KiSelectReadyThread(0, Prcb);
+            NextThread = NULL;
         }
+    }
+
+    if (SelfPlaced)
+    {
+        if (CurrentThread->State == Terminated)
+            NextThread = KiSelectReadyThread(0, Prcb);
+        else if (CurrentThread->Priority < HIGH_PRIORITY)
+            NextThread = KiSelectReadyThread(CurrentThread->Priority + 1, Prcb);
     }
 
     ASSERT(CurrentThread != Prcb->IdleThread);
