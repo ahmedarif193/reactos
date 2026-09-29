@@ -708,7 +708,7 @@ ChpeDispatchExceptionNative(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT
 ULONG NTAPI vDbgPrintEx(ULONG ComponentId, ULONG Level, PCCH Format, va_list Arguments);
 ULONG NTAPI vDbgPrintExWithPrefix(PCCH Prefix, ULONG ComponentId, ULONG Level, PCCH Format, va_list Arguments);
 NTSTATUS NTAPI RtlDecompressFragment(USHORT CompressionFormat, PUCHAR UncompressedFragment, ULONG UncompressedFragmentSize, PUCHAR CompressedBuffer, ULONG CompressedBufferSize, ULONG FragmentOffset, PULONG FinalUncompressedSize, PVOID WorkSpace);
-VOID NTAPI RtlGenerate8dot3Name(PCUNICODE_STRING Name, BOOLEAN AllowExtendedCharacters, PGENERATE_NAME_CONTEXT Context, PUNICODE_STRING Name8dot3);
+NTSTATUS NTAPI RtlGenerate8dot3Name(PCUNICODE_STRING Name, BOOLEAN AllowExtendedCharacters, PGENERATE_NAME_CONTEXT Context, PUNICODE_STRING Name8dot3);
 NTSTATUS NTAPI RtlGetLengthWithoutLastFullDosOrNtPathElement(ULONG Flags, PCUNICODE_STRING Path, PULONG LengthOut);
 PRTL_UNLOAD_EVENT_TRACE NTAPI RtlGetUnloadEventTrace(VOID);
 typedef NTSTATUS (NTAPI *PCHPE_LENGTH_FUNCTION)(ULONG, PUNICODE_STRING, PULONG);
@@ -3076,11 +3076,11 @@ ChpeRtlDecompressFragment(USHORT CompressionFormat, PUCHAR UncompressedFragment,
                                  FinalUncompressedSize, WorkSpace);
 }
 
-VOID NTAPI
+NTSTATUS NTAPI
 ChpeRtlGenerate8dot3Name(PCUNICODE_STRING Name, BOOLEAN AllowExtendedCharacters,
                          PGENERATE_NAME_CONTEXT Context, PUNICODE_STRING Name8dot3)
 {
-    RtlGenerate8dot3Name(Name, AllowExtendedCharacters, Context, Name8dot3);
+    return RtlGenerate8dot3Name(Name, AllowExtendedCharacters, Context, Name8dot3);
 }
 
 NTSTATUS NTAPI

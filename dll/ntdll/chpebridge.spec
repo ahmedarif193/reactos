@@ -220,7 +220,7 @@
 550 stdcall NtSetTimer(long ptr ptr ptr long long ptr) ChpeAutoNtSetTimer
 744 stdcall RtlCreateUserThread(long ptr long long ptr ptr ptr ptr ptr) ChpeRtlCreateUserThread
 756 stdcall RtlDecompressFragment(long ptr long ptr long long ptr ptr) ChpeRtlDecompressFragment
-890 stdcall RtlGenerate8dot3Name(ptr ptr long ptr) ChpeRtlGenerate8dot3Name
+890 stdcall RtlGenerate8dot3Name(ptr long ptr ptr) ChpeRtlGenerate8dot3Name
 918 stdcall RtlGetLengthWithoutLastFullDosOrNtPathElement(long ptr ptr) ChpeRtlGetLengthWithoutLastFullDosOrNtPathElement
 938 stdcall RtlGetUnloadEventTrace() ChpeRtlGetUnloadEventTrace
 1126 stdcall RtlQueueWorkItem(ptr ptr long) ChpeRtlQueueWorkItem

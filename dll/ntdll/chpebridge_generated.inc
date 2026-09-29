@@ -4804,15 +4804,11 @@ BOOLEAN NTAPI ChpeAutoRtlGetIntegerAtom(PCWSTR a0, PVOID a1)
     return RtlGetIntegerAtom(a0, a1);
 }
 
-/* Native definition: dll/ntdll/rtl/nls.c */
-#ifdef RtlGetLocaleFileMappingAddress
-#undef RtlGetLocaleFileMappingAddress
-#endif
-NTSTATUS NTAPI RtlGetLocaleFileMappingAddress(PVOID a0, PVOID a1, PVOID a2);
-NTSTATUS NTAPI ChpeAutoRtlGetLocaleFileMappingAddress(PVOID a0, PVOID a1, PVOID a2)
+NTSTATUS NTAPI ChpeAutoRtlGetLocaleFileMappingAddress(PVOID * a0, PLCID a1, PLARGE_INTEGER a2)
 {
     return RtlGetLocaleFileMappingAddress(a0, a1, a2);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetLocaleFileMappingAddress), __typeof__(&RtlGetLocaleFileMappingAddress)), "RtlGetLocaleFileMappingAddress bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoRtlGetLengthWithoutTrailingPathSeperators(ULONG a0, PCUNICODE_STRING a1, PULONG a2)
 {
