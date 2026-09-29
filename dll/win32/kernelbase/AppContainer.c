@@ -5,7 +5,7 @@
  */
 
 #include <windows.h>
-#include <sddl.h>
+#include <winternl.h>
 #include <strsafe.h>
 
 #define APPCONTAINER_MAPPINGS_KEY \
@@ -17,20 +17,23 @@ BasepFormatAppContainerMappingPath(
     _Out_writes_(PathCount) PWSTR Path,
     _In_ SIZE_T PathCount)
 {
-    LPWSTR SidString = NULL;
+    UNICODE_STRING SidString;
+    NTSTATUS Status;
     HRESULT Result;
 
     if (!AppContainerSid || !IsValidSid(AppContainerSid))
         return E_INVALIDARG;
-    if (!ConvertSidToStringSidW(AppContainerSid, &SidString))
-        return HRESULT_FROM_WIN32(GetLastError());
+    Status = RtlConvertSidToUnicodeString(&SidString, AppContainerSid, TRUE);
+    if (!NT_SUCCESS(Status))
+        return HRESULT_FROM_WIN32(RtlNtStatusToDosError(Status));
 
     Result = StringCchPrintfW(Path,
                               PathCount,
-                              L"%s\\%s",
+                              L"%s\\%.*s",
                               APPCONTAINER_MAPPINGS_KEY,
-                              SidString);
-    LocalFree(SidString);
+                              (int)(SidString.Length / sizeof(WCHAR)),
+                              SidString.Buffer);
+    RtlFreeUnicodeString(&SidString);
     return Result;
 }
 
@@ -91,7 +94,7 @@ AppContainerRegisterSid(
     RegCloseKey(Key);
     if (Error != ERROR_SUCCESS)
     {
-        RegDeleteKeyW(HKEY_CURRENT_USER, Path);
+        RegDeleteKeyExW(HKEY_CURRENT_USER, Path, 0, 0);
         return HRESULT_FROM_WIN32(Error);
     }
     return S_OK;
@@ -112,7 +115,7 @@ AppContainerUnregisterSid(
     if (FAILED(Result))
         return Result;
 
-    Error = RegDeleteKeyW(HKEY_CURRENT_USER, Path);
+    Error = RegDeleteKeyExW(HKEY_CURRENT_USER, Path, 0, 0);
     return Error == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(Error);
 }
 

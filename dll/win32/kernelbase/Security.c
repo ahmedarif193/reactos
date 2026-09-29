@@ -5,10 +5,9 @@
  */
 
 #include <windows.h>
-#include <sddl.h>
+#include <winternl.h>
 
 LONG NTAPI RtlCheckTokenMembershipEx(HANDLE TokenHandle, PSID SidToCheck, ULONG Flags, PBOOLEAN IsMember);
-ULONG NTAPI RtlNtStatusToDosError(LONG Status);
 
 #define CTMF_INCLUDE_APPCONTAINER 0x00000001UL
 #define CTMF_INCLUDE_LPAC 0x00000002UL
@@ -165,7 +164,8 @@ GetAppContainerNamedObjectPath(
     HANDLE Effective;
     BOOL Opened = FALSE, Result = FALSE;
     PTOKEN_APPCONTAINER_INFORMATION Package = NULL;
-    LPWSTR SidString = NULL;
+    UNICODE_STRING SidString = { 0 };
+    NTSTATUS Status;
     ULONG Needed;
 
     if (!ReturnLength)
@@ -190,10 +190,14 @@ GetAppContainerNamedObjectPath(
         AppContainerSid = Package->TokenAppContainer;
     }
 
-    if (!ConvertSidToStringSidW(AppContainerSid, &SidString))
+    Status = RtlConvertSidToUnicodeString(&SidString, AppContainerSid, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
         goto Cleanup;
+    }
 
-    Needed = (ULONG)(ARRAYSIZE(Prefix) - 1 + lstrlenW(SidString) + 1);
+    Needed = (ULONG)(ARRAYSIZE(Prefix) - 1 + SidString.Length / sizeof(WCHAR) + 1);
     *ReturnLength = Needed;
     if (!ObjectPath || ObjectPathLength < Needed)
     {
@@ -201,12 +205,13 @@ GetAppContainerNamedObjectPath(
         goto Cleanup;
     }
 
-    lstrcpyW(ObjectPath, Prefix);
-    lstrcatW(ObjectPath, SidString);
+    CopyMemory(ObjectPath, Prefix, sizeof(Prefix) - sizeof(WCHAR));
+    CopyMemory(ObjectPath + ARRAYSIZE(Prefix) - 1, SidString.Buffer, SidString.Length);
+    ObjectPath[Needed - 1] = UNICODE_NULL;
     Result = TRUE;
 
 Cleanup:
-    if (SidString) LocalFree(SidString);
+    RtlFreeUnicodeString(&SidString);
     if (Package) HeapFree(GetProcessHeap(), 0, Package);
     return Result;
 }

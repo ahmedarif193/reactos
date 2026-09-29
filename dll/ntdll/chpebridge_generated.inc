@@ -10507,6 +10507,12 @@ wchar_t * NTAPI ChpeAutowcsncpy(wchar_t * a0, const wchar_t * a1, size_t a2)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutowcsncpy), __typeof__(&wcsncpy)), "wcsncpy bridge signature mismatch");
 
+size_t NTAPI ChpeAutowcsnlen(const wchar_t * a0, size_t a1)
+{
+    return wcsnlen(a0, a1);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutowcsnlen), __typeof__(&wcsnlen)), "wcsnlen bridge signature mismatch");
+
 wchar_t * NTAPI ChpeAutowcspbrk(const wchar_t * a0, const wchar_t * a1)
 {
     return wcspbrk(a0, a1);

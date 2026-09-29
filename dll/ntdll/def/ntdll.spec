@@ -2084,6 +2084,7 @@
 @ cdecl wcsncat(wstr wstr long)
 @ cdecl wcsncmp(wstr wstr long)
 @ cdecl wcsncpy(ptr wstr long)
+@ cdecl wcsnlen(wstr long)
 @ cdecl wcspbrk(wstr wstr)
 @ cdecl wcsrchr(wstr long)
 @ cdecl wcsspn(wstr wstr)

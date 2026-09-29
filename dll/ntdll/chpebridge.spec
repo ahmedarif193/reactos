@@ -1970,6 +1970,7 @@
 1958 cdecl wcsncat(wstr wstr long) ChpeAutowcsncat
 1959 cdecl wcsncmp(wstr wstr long) ChpeAutowcsncmp
 1960 cdecl wcsncpy(ptr wstr long) ChpeAutowcsncpy
+1979 cdecl wcsnlen(wstr long) ChpeAutowcsnlen
 1961 cdecl wcspbrk(wstr wstr) ChpeAutowcspbrk
 1962 cdecl wcsrchr(wstr long) ChpeAutowcsrchr
 1963 cdecl wcsspn(wstr wstr) ChpeAutowcsspn
