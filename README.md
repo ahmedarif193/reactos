@@ -5,7 +5,7 @@
 <p align=center>
   <a href="COPYING3">
     <img alt="License" src="https://img.shields.io/badge/license-GNU_GPL_3.0-0161B6.svg"></a>
-  <a href="https://paypal.me/staillar">
+  <a href="https://github.com/sponsors/ahmedarif193">
     <img alt="Support this fork" src="https://img.shields.io/badge/%24-donate-E44E4A.svg"></a>
 </p>
 
