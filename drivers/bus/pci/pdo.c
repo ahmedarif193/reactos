@@ -72,6 +72,8 @@ PciPdoGetArm64MsiMessage(
     _In_ PPCI_DEVICE Device,
     _In_ ULONG Vector,
     _In_ KAFFINITY Affinity,
+    _In_ ULONG MessageIndex,
+    _In_ ULONG MessageCount,
     _Out_ PULONG AddressLow,
     _Out_ PULONG AddressHigh,
     _Out_ PUSHORT Data)
@@ -82,6 +84,8 @@ PciPdoGetArm64MsiMessage(
     if (!HalGetMsiMessageAddressEx(RequesterId,
                                    Vector,
                                    Affinity,
+                                   MessageIndex,
+                                   MessageCount,
                                    AddressLow,
                                    AddressHigh,
                                    Data))
@@ -1433,6 +1437,8 @@ PciPdoEnableMsi(
         Status = PciPdoGetArm64MsiMessage(Device,
                                           Vector,
                                           Affinity,
+                                          0,
+                                          Device->MsiMaxCount,
                                           &MessageAddressLow,
                                           &MessageAddressHigh,
                                           &MessageData);
@@ -1666,12 +1672,28 @@ PciPdoEnableMsix(
         AddressHigh = RoutingInfo.MessageAddress.HighPart;
         Data = RoutingInfo.MessageData;
 #elif defined(_M_ARM64)
-        Status = PciPdoGetArm64MsiMessage(Device,
-                                          MsgVector,
-                                          MsgAffinity,
-                                          &AddressLow,
-                                          &AddressHigh,
-                                          &Data);
+        {
+            ULONG MsgIndex = i;
+            ULONG j;
+
+            for (j = 0; j < i; ++j)
+            {
+                if (Messages[j].Vector == MsgVector)
+                {
+                    MsgIndex = j;
+                    break;
+                }
+            }
+
+            Status = PciPdoGetArm64MsiMessage(Device,
+                                              MsgVector,
+                                              MsgAffinity,
+                                              MsgIndex,
+                                              Device->MsixTableSize ? Device->MsixTableSize : ProgramCount,
+                                              &AddressLow,
+                                              &AddressHigh,
+                                              &Data);
+        }
         if (!NT_SUCCESS(Status))
             goto CleanupMapping;
 #elif (NTDDI_VERSION >= NTDDI_WIN7)

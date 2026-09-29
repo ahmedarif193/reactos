@@ -1392,6 +1392,7 @@ NTSTATUS
 HalpGicItsAllocateMsi(
     _In_ ULONG DeviceId,
     _In_ ULONG EventId,
+    _In_ ULONG NrEvents,
     _In_ ULONG TargetCpu,
     _In_ ULONG RequestedLpi,
     _Out_ PULONG Lpi,

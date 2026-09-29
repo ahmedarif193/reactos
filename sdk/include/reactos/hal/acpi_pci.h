@@ -259,6 +259,8 @@ HalGetMsiMessageAddressEx(
     _In_ USHORT RequesterId,
     _In_ ULONGLONG Vector,
     _In_ ULONGLONG Affinity,
+    _In_ ULONG MessageIndex,
+    _In_ ULONG MessageCount,
     _Out_ PULONG AddressLow,
     _Out_opt_ PULONG AddressHigh,
     _Out_ PUSHORT Data

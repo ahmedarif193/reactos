@@ -1740,6 +1740,8 @@ HalGetMsiMessageAddressEx(
     _In_ USHORT RequesterId,
     _In_ ULONGLONG Vector,
     _In_ ULONGLONG Affinity,
+    _In_ ULONG MessageIndex,
+    _In_ ULONG MessageCount,
     _Out_ PULONG AddressLow,
     _Out_opt_ PULONG AddressHigh,
     _Out_ PUSHORT Data)
@@ -1752,8 +1754,8 @@ HalGetMsiMessageAddressEx(
     ULONG MsiData;
     NTSTATUS Status;
 
-    DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: ReqId=0x%04x Vec=%llu Aff=0x%llx\n",
-            (unsigned)RequesterId, Vector, Affinity);
+    DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: ReqId=0x%04x Vec=%llu Aff=0x%llx Msg=%lu/%lu\n",
+            (unsigned)RequesterId, Vector, Affinity, MessageIndex, MessageCount);
 
     if (!AddressLow || !Data)
     {
@@ -1804,8 +1806,8 @@ HalGetMsiMessageAddressEx(
         return FALSE;
     }
 
-    EventId = (ULONG)(Vector - HAL_ARM64_LPI_BASE);
-    if (EventId > 0xFFFFu)
+    EventId = MessageIndex;
+    if (EventId >= MessageCount || EventId > 0xFFFFu)
     {
         DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: EventId %lu out of range\n", EventId);
         return FALSE;
@@ -1831,7 +1833,7 @@ HalGetMsiMessageAddressEx(
     /* DeviceId is the PCI RequesterId (BDF) for ITS translation. */
     DeviceId = (ULONG)RequesterId;
 
-    Status = HalpGicItsAllocateMsi(DeviceId, EventId, Cpu, (ULONG)Vector, &Lpi, &MsiAddress, &MsiData);
+    Status = HalpGicItsAllocateMsi(DeviceId, EventId, MessageCount, Cpu, (ULONG)Vector, &Lpi, &MsiAddress, &MsiData);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: HalpGicItsAllocateMsi failed (0x%lx)\n", Status);
@@ -7094,6 +7096,7 @@ NTSTATUS
 HalpGicItsAllocateMsi(
     _In_ ULONG DeviceId,
     _In_ ULONG EventId,
+    _In_ ULONG NrEvents,
     _In_ ULONG TargetCpu,
     _In_ ULONG RequestedLpi,
     _Out_ PULONG Lpi,

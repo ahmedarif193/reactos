@@ -565,6 +565,18 @@ HalpGicItsBuildIntCmd(
 }
 
 static VOID
+HalpGicItsBuildDiscardCmd(
+    _Out_writes_(4) UINT64 *Cmd,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId)
+{
+    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
+    Cmd[0] = (UINT64)GITS_CMD_DISCARD;
+    Cmd[0] |= ((UINT64)DeviceId) << 32;
+    Cmd[1] = (UINT64)EventId;
+}
+
+static VOID
 HalpGicItsBuildSyncCmd(
     _Out_writes_(4) UINT64 *Cmd,
     _In_ ULONGLONG Rdbase)
@@ -675,6 +687,19 @@ HalpGicItsSendIntOnNode(
     UINT64 Cmd[4];
 
     HalpGicItsBuildIntCmd(Cmd, DeviceId, EventId);
+    return HalpGicItsPostCommandOnNode(ItsNode, Cmd);
+}
+
+static
+BOOLEAN
+HalpGicItsSendDiscardOnNode(
+    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId)
+{
+    UINT64 Cmd[4];
+
+    HalpGicItsBuildDiscardCmd(Cmd, DeviceId, EventId);
     return HalpGicItsPostCommandOnNode(ItsNode, Cmd);
 }
 
@@ -1723,6 +1748,28 @@ HalpGicItsInitialize(VOID)
     return TRUE;
 }
 
+static
+BOOLEAN
+HalpGicItsDiscardEvent(
+    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
+    _Inout_ PHALP_ARM64_ITS_DEVICE Device,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId)
+{
+    ULONG OldLpi = Device->EventToLpi[EventId];
+    ULONG OldCpu = Device->EventToCollection[EventId];
+
+    if (!HalpGicItsSendDiscardOnNode(ItsNode, DeviceId, EventId))
+        return FALSE;
+    HalpGicItsSendSyncOnNode(ItsNode, OldCpu, ItsNode->CollectionTarget[OldCpu]);
+    Device->EventToLpi[EventId] = 0;
+    Device->AllocatedEvents--;
+    if ((OldLpi >= HAL_ARM64_LPI_BASE) && ((OldLpi - HAL_ARM64_LPI_BASE) < HAL_ARM64_LPI_COUNT))
+        HalpGicLpiTarget[OldLpi - HAL_ARM64_LPI_BASE].Valid = 0;
+    HalpGicItsFreeLpi(OldLpi, 1);
+    return TRUE;
+}
+
 /*
  * ============================================================================
  * MSI Allocation API
@@ -1743,6 +1790,7 @@ NTSTATUS
 HalpGicItsAllocateMsi(
     _In_ ULONG DeviceId,
     _In_ ULONG EventId,
+    _In_ ULONG NrEvents,
     _In_ ULONG TargetCpu,
     _In_ ULONG RequestedLpi,
     _Out_ PULONG Lpi,
@@ -1752,7 +1800,7 @@ HalpGicItsAllocateMsi(
     PHALP_GIC_ITS_NODE ItsNode;
     PHALP_ARM64_ITS_DEVICE Device;
     ULONG AllocatedLpi;
-    ULONG NrEvents;
+    ULONG StaleEventId;
     NTSTATUS Status;
 
     if (!HalpGicItsInitialized)
@@ -1770,7 +1818,8 @@ HalpGicItsAllocateMsi(
     if (!ItsNode || !ItsNode->Enabled)
         return STATUS_DEVICE_NOT_READY;
 
-    NrEvents = HAL_ARM64_LPI_COUNT;
+    if (NrEvents == 0)
+        NrEvents = 1;
     if (ItsNode->EventIdBits < 32 && NrEvents > (1u << ItsNode->EventIdBits))
         NrEvents = 1u << ItsNode->EventIdBits;
 
@@ -1786,14 +1835,32 @@ HalpGicItsAllocateMsi(
     /* Check if already allocated */
     if (Device->EventToLpi && Device->EventToLpi[EventId] != 0)
     {
-        if (RequestedLpi != 0 && Device->EventToLpi[EventId] != RequestedLpi)
-            return STATUS_CONFLICTING_ADDRESSES;
+        if (RequestedLpi == 0 || Device->EventToLpi[EventId] == RequestedLpi)
+        {
+            /* Already allocated, return existing mapping */
+            *Lpi = Device->EventToLpi[EventId];
+            MsiAddress->QuadPart = ItsNode->PhysicalBase.QuadPart + GITS_TRANSLATER;
+            *MsiData = EventId;
+            return STATUS_SUCCESS;
+        }
 
-        /* Already allocated, return existing mapping */
-        *Lpi = Device->EventToLpi[EventId];
-        MsiAddress->QuadPart = ItsNode->PhysicalBase.QuadPart + GITS_TRANSLATER;
-        *MsiData = EventId;
-        return STATUS_SUCCESS;
+        if (!HalpGicItsDiscardEvent(ItsNode, Device, DeviceId, EventId))
+            return STATUS_UNSUCCESSFUL;
+    }
+
+    if ((RequestedLpi >= HAL_ARM64_LPI_BASE) &&
+        ((RequestedLpi - HAL_ARM64_LPI_BASE) < HAL_ARM64_LPI_COUNT) &&
+        HalpGicLpiTarget[RequestedLpi - HAL_ARM64_LPI_BASE].Valid &&
+        HalpGicLpiTarget[RequestedLpi - HAL_ARM64_LPI_BASE].DeviceId == DeviceId)
+    {
+        StaleEventId = HalpGicLpiTarget[RequestedLpi - HAL_ARM64_LPI_BASE].EventId;
+        if (Device->EventToLpi &&
+            StaleEventId < Device->MaxEvents &&
+            Device->EventToLpi[StaleEventId] == RequestedLpi &&
+            !HalpGicItsDiscardEvent(ItsNode, Device, DeviceId, StaleEventId))
+        {
+            return STATUS_UNSUCCESSFUL;
+        }
     }
 
     /* Ensure collection for target CPU */
