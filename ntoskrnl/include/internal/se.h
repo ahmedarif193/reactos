@@ -360,11 +360,6 @@ SepCreateSystemAnonymousLogonTokenNoEveryone(VOID);
 
 VOID
 NTAPI
-SepSetTokenObjectSecurity(
-    _In_ PTOKEN Token);
-
-VOID
-NTAPI
 SepRefreshTokenProcUnique(
     _Inout_ PTOKEN Token);
 

@@ -2419,7 +2419,7 @@ NtSetInformationToken(
                 SepReleaseTokenLock(Token);
                 SeSetObjectMandatoryLabel(Token,
                                           NewRid,
-                                          SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP);
+                                          SYSTEM_MANDATORY_LABEL_NO_WRITE_UP);
                 break;
             }
 

@@ -516,7 +516,7 @@ SepShouldPropagateAce(
     {
         if (AceFlags & OBJECT_INHERIT_ACE)
         {
-            *NewAceFlags = AceFlags & ~VALID_INHERIT_FLAGS;
+            *NewAceFlags = (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE;
             return TRUE;
         }
         return FALSE;
@@ -526,7 +526,7 @@ SepShouldPropagateAce(
     {
         if (AceFlags & CONTAINER_INHERIT_ACE)
         {
-            *NewAceFlags = AceFlags & ~VALID_INHERIT_FLAGS;
+            *NewAceFlags = (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE;
             return TRUE;
         }
         return FALSE;
@@ -534,13 +534,13 @@ SepShouldPropagateAce(
 
     if (AceFlags & CONTAINER_INHERIT_ACE)
     {
-        *NewAceFlags = CONTAINER_INHERIT_ACE | (AceFlags & OBJECT_INHERIT_ACE) | (AceFlags & ~VALID_INHERIT_FLAGS);
+        *NewAceFlags = CONTAINER_INHERIT_ACE | (AceFlags & OBJECT_INHERIT_ACE) | (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE;
         return TRUE;
     }
 
     if (AceFlags & OBJECT_INHERIT_ACE)
     {
-        *NewAceFlags = INHERIT_ONLY_ACE | OBJECT_INHERIT_ACE | (AceFlags & ~VALID_INHERIT_FLAGS);
+        *NewAceFlags = INHERIT_ONLY_ACE | OBJECT_INHERIT_ACE | (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE;
         return TRUE;
     }
 
@@ -714,7 +714,7 @@ SepPropagateAcl(
             if (*AclLength >= Written + AceSize)
             {
                 AceDest->Header.AceType = AceSource->Header.AceType;
-                AceDest->Header.AceFlags = WriteTwoAces ? AceFlags & ~VALID_INHERIT_FLAGS
+                AceDest->Header.AceFlags = WriteTwoAces ? (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE
                                                         : AceFlags;
                 AceDest->Header.AceSize = AceSize;
                 AceDest->Mask = Mask;

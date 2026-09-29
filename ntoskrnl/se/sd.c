@@ -66,6 +66,7 @@ SepAclCopySelected(
     PUCHAR Current;
 
     if (!Source) return;
+    Dest->AclRevision = max(Dest->AclRevision, Source->AclRevision);
     for (Index = 0; Index < Source->AceCount; Index++)
     {
         if (!NT_SUCCESS(RtlGetAce(Source, Index, (PVOID*)&Ace))) break;
@@ -97,6 +98,199 @@ SepBuildMergedSacl(
     SepAclCopySelected(Acl, LabelSource, TRUE);
     Acl->AclSize = (USHORT)Length;
     return Acl;
+}
+
+static
+VOID
+SepMapAclGenericAccess(
+    _Inout_ PACL Acl,
+    _In_ PGENERIC_MAPPING GenericMapping)
+{
+    ULONG Index;
+    PACE_HEADER Ace;
+
+    for (Index = 0; Index < Acl->AceCount; Index++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Acl, Index, (PVOID*)&Ace))) break;
+        if (Ace->AceFlags & INHERIT_ONLY_ACE) continue;
+        if (Ace->AceSize < FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart)) continue;
+
+        switch (Ace->AceType)
+        {
+            case ACCESS_ALLOWED_ACE_TYPE:
+            case ACCESS_DENIED_ACE_TYPE:
+            case SYSTEM_AUDIT_ACE_TYPE:
+            case SYSTEM_ALARM_ACE_TYPE:
+            case ACCESS_ALLOWED_OBJECT_ACE_TYPE:
+            case ACCESS_DENIED_OBJECT_ACE_TYPE:
+            case SYSTEM_AUDIT_OBJECT_ACE_TYPE:
+            case SYSTEM_ALARM_OBJECT_ACE_TYPE:
+            case ACCESS_ALLOWED_CALLBACK_ACE_TYPE:
+            case ACCESS_DENIED_CALLBACK_ACE_TYPE:
+            case ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE:
+            case ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE:
+            case SYSTEM_AUDIT_CALLBACK_ACE_TYPE:
+            case SYSTEM_ALARM_CALLBACK_ACE_TYPE:
+            case SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE:
+            case SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE:
+            case SYSTEM_ACCESS_FILTER_ACE_TYPE:
+                RtlMapGenericMask(&((PACCESS_ALLOWED_ACE)Ace)->Mask, GenericMapping);
+                break;
+        }
+    }
+}
+
+static
+NTSTATUS
+SepAssignAcl(
+    _In_opt_ PACL ExplicitAcl,
+    _In_ BOOLEAN ExplicitPresent,
+    _In_ BOOLEAN ExplicitDefaulted,
+    _In_ BOOLEAN Protected,
+    _In_opt_ PACL ParentAcl,
+    _In_opt_ PACL DefaultAcl,
+    _In_ BOOLEAN AutoInherit,
+    _In_ BOOLEAN DefaultDescriptor,
+    _In_ PSID Owner,
+    _In_ PSID Group,
+    _In_ BOOLEAN IsDirectoryObject,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _Out_ PACL *SelectedAcl,
+    _Out_ PULONG AclLength,
+    _Out_ PBOOLEAN Present,
+    _Out_ PBOOLEAN IsInherited,
+    _Out_ PACL *AllocatedAcl)
+{
+    PACL InheritedAcl = NULL;
+    PACL FilteredAcl = NULL;
+    PACL CombinedAcl = NULL;
+    PACL Selected;
+    PACE_HEADER Ace;
+    ULONG InheritedLength = 0;
+    ULONG ExplicitLength = 0;
+    ULONG CombinedLength;
+    ULONG Index;
+    BOOLEAN DefaultSelected = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    *AllocatedAcl = NULL;
+    if (Protected) ParentAcl = NULL;
+    if (!AutoInherit)
+    {
+        *SelectedAcl = SepSelectAcl(ExplicitAcl, ExplicitPresent, ExplicitDefaulted,
+                                    ParentAcl, DefaultAcl, AclLength, Owner, Group,
+                                    Present, IsInherited, IsDirectoryObject, GenericMapping);
+        return STATUS_SUCCESS;
+    }
+
+    if (ParentAcl)
+    {
+        Status = SepPropagateAcl(NULL, &InheritedLength, ParentAcl, Owner, Group,
+                                 TRUE, IsDirectoryObject, GenericMapping);
+        if (Status != STATUS_BUFFER_TOO_SMALL) return Status;
+        if (InheritedLength > sizeof(ACL))
+        {
+            if (InheritedLength > MAXUSHORT) return STATUS_ALLOTTED_SPACE_EXCEEDED;
+            InheritedAcl = ExAllocatePoolWithTag(PagedPool, InheritedLength, TAG_ACL);
+            if (!InheritedAcl) return STATUS_INSUFFICIENT_RESOURCES;
+            Status = SepPropagateAcl(InheritedAcl, &InheritedLength, ParentAcl, Owner,
+                                     Group, TRUE, IsDirectoryObject, GenericMapping);
+            if (!NT_SUCCESS(Status)) goto Done;
+        }
+        else InheritedLength = 0;
+    }
+
+    Selected = ExplicitAcl;
+    if (InheritedAcl && DefaultDescriptor) Selected = NULL;
+    if (!InheritedAcl && !ExplicitPresent)
+    {
+        Selected = DefaultAcl;
+        DefaultSelected = TRUE;
+    }
+    if (Selected)
+    {
+        FilteredAcl = ExAllocatePoolWithTag(PagedPool, Selected->AclSize, TAG_ACL);
+        if (!FilteredAcl)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Done;
+        }
+        Status = RtlCreateAcl(FilteredAcl, Selected->AclSize, Selected->AclRevision);
+        if (!NT_SUCCESS(Status)) goto Done;
+        for (Index = 0; Index < Selected->AceCount; ++Index)
+        {
+            Status = RtlGetAce(Selected, Index, (PVOID *)&Ace);
+            if (!NT_SUCCESS(Status)) goto Done;
+            if (!DefaultSelected && !Protected && (Ace->AceFlags & INHERITED_ACE)) continue;
+            Status = RtlAddAce(FilteredAcl, Selected->AclRevision, MAXULONG,
+                               Ace, Ace->AceSize);
+            if (!NT_SUCCESS(Status)) goto Done;
+            if (!DefaultSelected && Protected)
+            {
+                Status = RtlGetAce(FilteredAcl, FilteredAcl->AceCount - 1, (PVOID *)&Ace);
+                if (!NT_SUCCESS(Status)) goto Done;
+                Ace->AceFlags &= ~INHERITED_ACE;
+            }
+        }
+        Status = SepPropagateAcl(NULL, &ExplicitLength, FilteredAcl, Owner, Group,
+                                 FALSE, IsDirectoryObject, GenericMapping);
+        if (Status != STATUS_BUFFER_TOO_SMALL) goto Done;
+    }
+
+    *Present = ExplicitPresent || InheritedAcl || Selected;
+    *IsInherited = FALSE;
+    *AclLength = 0;
+    *SelectedAcl = NULL;
+    if (!InheritedAcl && !FilteredAcl)
+    {
+        Status = STATUS_SUCCESS;
+        goto Done;
+    }
+
+    CombinedLength = sizeof(ACL);
+    if (FilteredAcl) CombinedLength += ExplicitLength - sizeof(ACL);
+    if (InheritedAcl) CombinedLength += InheritedLength - sizeof(ACL);
+    if (CombinedLength > MAXUSHORT)
+    {
+        Status = STATUS_ALLOTTED_SPACE_EXCEEDED;
+        goto Done;
+    }
+    CombinedAcl = ExAllocatePoolWithTag(PagedPool, CombinedLength, TAG_ACL);
+    if (!CombinedAcl)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
+    }
+    if (FilteredAcl)
+    {
+        Status = SepPropagateAcl(CombinedAcl, &ExplicitLength, FilteredAcl, Owner,
+                                 Group, FALSE, IsDirectoryObject, GenericMapping);
+        if (!NT_SUCCESS(Status)) goto Done;
+    }
+    else
+    {
+        Status = RtlCreateAcl(CombinedAcl, CombinedLength, InheritedAcl->AclRevision);
+        if (!NT_SUCCESS(Status)) goto Done;
+        ExplicitLength = sizeof(ACL);
+    }
+    CombinedAcl->AclSize = (USHORT)CombinedLength;
+    if (InheritedAcl)
+    {
+        RtlCopyMemory((PUCHAR)CombinedAcl + ExplicitLength, InheritedAcl + 1,
+                       InheritedLength - sizeof(ACL));
+        CombinedAcl->AceCount += InheritedAcl->AceCount;
+        CombinedAcl->AclRevision = max(CombinedAcl->AclRevision, InheritedAcl->AclRevision);
+    }
+    *SelectedAcl = *AllocatedAcl = CombinedAcl;
+    *AclLength = CombinedLength;
+    CombinedAcl = NULL;
+    Status = STATUS_SUCCESS;
+
+Done:
+    if (CombinedAcl) ExFreePoolWithTag(CombinedAcl, TAG_ACL);
+    if (FilteredAcl) ExFreePoolWithTag(FilteredAcl, TAG_ACL);
+    if (InheritedAcl) ExFreePoolWithTag(InheritedAcl, TAG_ACL);
+    return Status;
 }
 
 /* GLOBALS ********************************************************************/
@@ -757,7 +951,9 @@ SeQuerySecurityDescriptorInfo(
             DaclLength = ROUND_UP((ULONG)Dacl->AclSize, 4);
         }
 
-        Control |= (ObjectSd->Control & (SE_DACL_DEFAULTED | SE_DACL_PRESENT));
+        Control |= (ObjectSd->Control & (SE_DACL_DEFAULTED | SE_DACL_PRESENT |
+                                         SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ |
+                                         SE_DACL_PROTECTED));
     }
 
     SaclInfo = *SecurityInformation & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION);
@@ -775,7 +971,9 @@ SeQuerySecurityDescriptorInfo(
             SaclLength = ROUND_UP(Sacl->AclSize, 4);
         }
 
-        Control |= (ObjectSd->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT));
+        Control |= (ObjectSd->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT |
+                                         SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ |
+                                         SE_SACL_PROTECTED));
     }
 
     SdLength = OwnerLength + GroupLength + DaclLength +
@@ -1037,13 +1235,19 @@ SeSetSecurityDescriptorInfoEx(
     if (SecurityInformation & DACL_SECURITY_INFORMATION)
     {
         Dacl = SepGetDaclFromDescriptor(SecurityDescriptor);
-        Control |= (SecurityDescriptor->Control & (SE_DACL_DEFAULTED | SE_DACL_PRESENT));
+        Control |= (SecurityDescriptor->Control & (SE_DACL_DEFAULTED | SE_DACL_PRESENT |
+                                                    SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ |
+                                                    SE_DACL_PROTECTED));
     }
     else
     {
         Dacl = SepGetDaclFromDescriptor(ObjectSd);
-        Control |= (ObjectSd->Control & (SE_DACL_DEFAULTED | SE_DACL_PRESENT));
+        Control |= (ObjectSd->Control & (SE_DACL_DEFAULTED | SE_DACL_PRESENT |
+                                         SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ |
+                                         SE_DACL_PROTECTED));
     }
+    if (SecurityInformation & PROTECTED_DACL_SECURITY_INFORMATION) Control |= SE_DACL_PROTECTED;
+    if (SecurityInformation & UNPROTECTED_DACL_SECURITY_INFORMATION) Control &= ~SE_DACL_PROTECTED;
     DaclLength = Dacl ? ROUND_UP((ULONG)Dacl->AclSize, 4) : 0;
 
     /* Get SACL and SACL size */
@@ -1051,12 +1255,16 @@ SeSetSecurityDescriptorInfoEx(
     if (SaclInfo == (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION))
     {
         Sacl = SepGetSaclFromDescriptor(SecurityDescriptor);
-        Control |= (SecurityDescriptor->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT));
+        Control |= (SecurityDescriptor->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT |
+                                                    SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ |
+                                                    SE_SACL_PROTECTED));
     }
     else if (SaclInfo == 0)
     {
         Sacl = SepGetSaclFromDescriptor(ObjectSd);
-        Control |= (ObjectSd->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT));
+        Control |= (ObjectSd->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT |
+                                         SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ |
+                                         SE_SACL_PROTECTED));
     }
     else
     {
@@ -1071,7 +1279,11 @@ SeSetSecurityDescriptorInfoEx(
             return STATUS_INSUFFICIENT_RESOURCES;
         Sacl = MergedSacl;
         Control |= SE_SACL_PRESENT;
+        Control |= ((SaclInfo & SACL_SECURITY_INFORMATION ? SecurityDescriptor->Control : ObjectSd->Control) &
+                    (SE_SACL_DEFAULTED | SE_SACL_PROTECTED));
     }
+    if (SecurityInformation & PROTECTED_SACL_SECURITY_INFORMATION) Control |= SE_SACL_PROTECTED;
+    if (SecurityInformation & UNPROTECTED_SACL_SECURITY_INFORMATION) Control &= ~SE_SACL_PROTECTED;
     SaclLength = Sacl ? ROUND_UP((ULONG)Sacl->AclSize, 4) : 0;
 
     NewSd = ExAllocatePoolWithTag(PoolType,
@@ -1106,6 +1318,8 @@ SeSetSecurityDescriptorInfoEx(
     if (DaclLength != 0)
     {
         RtlCopyMemory((PUCHAR)NewSd + Current, Dacl, DaclLength);
+        if (SecurityInformation & DACL_SECURITY_INFORMATION)
+            SepMapAclGenericAccess((PACL)((PUCHAR)NewSd + Current), GenericMapping);
         NewSd->Dacl = Current;
         Current += DaclLength;
     }
@@ -1113,6 +1327,8 @@ SeSetSecurityDescriptorInfoEx(
     if (SaclLength != 0)
     {
         RtlCopyMemory((PUCHAR)NewSd + Current, Sacl, SaclLength);
+        if (SecurityInformation & SACL_SECURITY_INFORMATION)
+            SepMapAclGenericAccess((PACL)((PUCHAR)NewSd + Current), GenericMapping);
         NewSd->Sacl = Current;
         Current += SaclLength;
     }
@@ -1425,6 +1641,8 @@ SeAssignSecurityEx(
     PACL ParentAcl;
     PACL Dacl = NULL;
     PACL Sacl = NULL;
+    PACL AllocatedDacl = NULL;
+    PACL AllocatedSacl = NULL;
     PSID LabelSid = NULL;
     ULONG LabelAceLength = 0;
     ULONG TokenRid;
@@ -1548,20 +1766,34 @@ SeAssignSecurityEx(
     {
         ParentAcl = SepGetDaclFromDescriptor(ParentDescriptor);
     }
-    Dacl = SepSelectAcl(ExplicitAcl,
+    Status = SepAssignAcl(ExplicitAcl,
                         ExplicitPresent,
                         ExplicitDefaulted,
+                        ExplicitDescriptor && (ExplicitDescriptor->Control & SE_DACL_PROTECTED),
                         ParentAcl,
                         Token->DefaultDacl,
-                        &DaclLength,
+                        !!(AutoInheritFlags & SEF_DACL_AUTO_INHERIT),
+                        !!(AutoInheritFlags & SEF_DEFAULT_DESCRIPTOR_FOR_OBJECT),
                         Owner,
                         Group,
+                        IsDirectoryObject,
+                        GenericMapping,
+                        &Dacl,
+                        &DaclLength,
                         &DaclPresent,
                         &DaclIsInherited,
-                        IsDirectoryObject,
-                        GenericMapping);
+                        &AllocatedDacl);
+    if (!NT_SUCCESS(Status))
+    {
+        SeUnlockSubjectContext(SubjectContext);
+        return Status;
+    }
     if (DaclPresent)
+    {
         Control |= SE_DACL_PRESENT;
+        if (AutoInheritFlags & SEF_DACL_AUTO_INHERIT) Control |= SE_DACL_AUTO_INHERITED;
+    }
+    if (ExplicitDescriptor) Control |= ExplicitDescriptor->Control & SE_DACL_PROTECTED;
     ASSERT(DaclLength % sizeof(ULONG) == 0);
 
     /* Inherit the SACL */
@@ -1583,20 +1815,35 @@ SeAssignSecurityEx(
     {
         ParentAcl = SepGetSaclFromDescriptor(ParentDescriptor);
     }
-    Sacl = SepSelectAcl(ExplicitAcl,
+    Status = SepAssignAcl(ExplicitAcl,
                         ExplicitPresent,
                         ExplicitDefaulted,
+                        ExplicitDescriptor && (ExplicitDescriptor->Control & SE_SACL_PROTECTED),
                         ParentAcl,
                         NULL,
-                        &SaclLength,
+                        !!(AutoInheritFlags & SEF_SACL_AUTO_INHERIT),
+                        !!(AutoInheritFlags & SEF_DEFAULT_DESCRIPTOR_FOR_OBJECT),
                         Owner,
                         Group,
+                        IsDirectoryObject,
+                        GenericMapping,
+                        &Sacl,
+                        &SaclLength,
                         &SaclPresent,
                         &SaclIsInherited,
-                        IsDirectoryObject,
-                        GenericMapping);
+                        &AllocatedSacl);
+    if (!NT_SUCCESS(Status))
+    {
+        if (AllocatedDacl) ExFreePoolWithTag(AllocatedDacl, TAG_ACL);
+        SeUnlockSubjectContext(SubjectContext);
+        return Status;
+    }
     if (SaclPresent)
+    {
         Control |= SE_SACL_PRESENT;
+        if (AutoInheritFlags & SEF_SACL_AUTO_INHERIT) Control |= SE_SACL_AUTO_INHERITED;
+    }
+    if (ExplicitDescriptor) Control |= ExplicitDescriptor->Control & SE_SACL_PROTECTED;
     ASSERT(SaclLength % sizeof(ULONG) == 0);
 
     if (!SepAclHasMandatoryLabel(Sacl))
@@ -1631,6 +1878,8 @@ SeAssignSecurityEx(
     if (Descriptor == NULL)
     {
         DPRINT1("ExAlloctePool() failed\n");
+        if (AllocatedSacl) ExFreePoolWithTag(AllocatedSacl, TAG_ACL);
+        if (AllocatedDacl) ExFreePoolWithTag(AllocatedDacl, TAG_ACL);
         SeUnlockSubjectContext(SubjectContext);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -1717,6 +1966,9 @@ SeAssignSecurityEx(
     SeUnlockSubjectContext(SubjectContext);
 
     *NewDescriptor = Descriptor;
+
+    if (AllocatedSacl) ExFreePoolWithTag(AllocatedSacl, TAG_ACL);
+    if (AllocatedDacl) ExFreePoolWithTag(AllocatedDacl, TAG_ACL);
 
     DPRINT("Descriptor %p\n", Descriptor);
     ASSERT(RtlLengthSecurityDescriptor(Descriptor));

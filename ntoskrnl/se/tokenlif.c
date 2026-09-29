@@ -18,53 +18,6 @@
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
-VOID
-NTAPI
-SepSetTokenObjectSecurity(
-    _In_ PTOKEN Token)
-{
-    SECURITY_DESCRIPTOR SecurityDescriptor;
-    PACL Dacl;
-    PACE_HEADER Ace;
-    ULONG i;
-    NTSTATUS Status;
-
-    PAGED_CODE();
-
-    SeSetObjectMandatoryLabel(Token,
-                              SepGetTokenIntegrityRid(Token),
-                              SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP);
-
-    if (!Token->DefaultDacl)
-        return;
-
-    Dacl = ExAllocatePoolWithTag(PagedPool, Token->DefaultDacl->AclSize, TAG_ACL);
-    if (!Dacl)
-        return;
-
-    RtlCopyMemory(Dacl, Token->DefaultDacl, Token->DefaultDacl->AclSize);
-    for (i = 0; i < Dacl->AceCount; i++)
-    {
-        if (!NT_SUCCESS(RtlGetAce(Dacl, i, (PVOID*)&Ace)))
-            break;
-        if (Ace->AceType == ACCESS_ALLOWED_ACE_TYPE || Ace->AceType == ACCESS_DENIED_ACE_TYPE)
-            RtlMapGenericMask(&((PACCESS_ALLOWED_ACE)Ace)->Mask, &SeTokenObjectType->TypeInfo.GenericMapping);
-    }
-
-    RtlCreateSecurityDescriptor(&SecurityDescriptor, SECURITY_DESCRIPTOR_REVISION);
-    RtlSetOwnerSecurityDescriptor(&SecurityDescriptor, Token->UserAndGroups[Token->DefaultOwnerIndex].Sid, FALSE);
-    RtlSetGroupSecurityDescriptor(&SecurityDescriptor, Token->PrimaryGroup, FALSE);
-    RtlSetDaclSecurityDescriptor(&SecurityDescriptor, TRUE, Dacl, FALSE);
-
-    Status = ObSetSecurityObjectByPointer(Token,
-                                          OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-                                          &SecurityDescriptor);
-    if (!NT_SUCCESS(Status))
-        DPRINT1("SepSetTokenObjectSecurity(): failed to set token security (Status 0x%lx)\n", Status);
-
-    ExFreePoolWithTag(Dacl, TAG_ACL);
-}
-
 static
 ULONG
 SepFindIntegrityGroupIndex(
@@ -525,7 +478,6 @@ SepCreateToken(
             return Status;
         }
 
-        SepSetTokenObjectSecurity(AccessToken);
     }
     else
     {
@@ -877,7 +829,7 @@ SepDuplicateToken(
                  * this group.
                  */
                 if (RtlEqualSid(SeAliasAdminsSid,
-                                &AccessToken->UserAndGroups[GroupsIndex].Sid))
+                                AccessToken->UserAndGroups[GroupsIndex].Sid))
                 {
                     AccessToken->TokenFlags &= ~TOKEN_HAS_ADMIN_GROUP;
                 }
@@ -1499,8 +1451,8 @@ SepPerformTokenFiltering(
             for (GroupsInList = 0; GroupsInList < RegularGroupsSidCount; GroupsInList++)
             {
                 /* Does this group SID exist in the token? */
-                if (RtlEqualSid(&AccessToken->UserAndGroups[GroupsInToken].Sid,
-                                &SidsToBeDisabled[GroupsInList].Sid))
+                if (RtlEqualSid(AccessToken->UserAndGroups[GroupsInToken].Sid,
+                                SidsToBeDisabled[GroupsInList].Sid))
                 {
                     /* Mark that we found it */
                     FoundGroup = TRUE;
@@ -1524,7 +1476,7 @@ SepPerformTokenFiltering(
                  * away TOKEN_HAS_ADMIN_GROUP flag from the token.
                  */
                 if (RtlEqualSid(SeAliasAdminsSid,
-                                &AccessToken->UserAndGroups[GroupsInToken].Sid))
+                                AccessToken->UserAndGroups[GroupsInToken].Sid))
                 {
                     AccessToken->TokenFlags &= ~TOKEN_HAS_ADMIN_GROUP;
                 }
@@ -1550,7 +1502,6 @@ SepPerformTokenFiltering(
                 AccessToken->UserAndGroups[GroupsInToken].Attributes |= SE_GROUP_USE_FOR_DENY_ONLY;
 
                 /* Adjust the index and continue with the next group */
-                GroupsInToken--;
                 FoundGroup = FALSE;
                 continue;
             }
@@ -1673,8 +1624,6 @@ SeFilterToken(
         DPRINT1("SeFilterToken(): Failed to insert the filtered token (Status 0x%lx)\n", Status);
         return Status;
     }
-
-    SepSetTokenObjectSecurity(AccessToken);
 
     /* Return it to the caller */
     *FilteredToken = AccessToken;
@@ -2166,8 +2115,6 @@ NtDuplicateToken(
                                 &hToken);
         if (NT_SUCCESS(Status))
         {
-            SepSetTokenObjectSecurity(NewToken);
-
             _SEH2_TRY
             {
                 *NewTokenHandle = hToken;
@@ -2427,8 +2374,6 @@ NtFilterToken(
         /* Note: ObInsertObject dereferences FilteredToken on failure */
         goto Quit;
     }
-
-    SepSetTokenObjectSecurity(FilteredToken);
 
     /* And return it to the caller once we're done */
     _SEH2_TRY
@@ -2835,7 +2780,6 @@ NtCreateLowBoxToken(
         NewToken = NULL;
         goto Quit;
     }
-    SepSetTokenObjectSecurity(NewToken);
     NewToken = NULL;
 
     _SEH2_TRY

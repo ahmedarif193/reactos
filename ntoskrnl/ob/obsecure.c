@@ -520,6 +520,91 @@ ObCheckObjectAccess(IN PVOID Object,
     return Result;
 }
 
+static
+NTSTATUS
+ObpAssignTokenSecurity(
+    _In_ PACCESS_STATE AccessState,
+    _In_opt_ PSECURITY_DESCRIPTOR ParentDescriptor,
+    _In_ PTOKEN Token,
+    _Out_ PSECURITY_DESCRIPTOR *NewDescriptor,
+    _In_ POBJECT_TYPE Type)
+{
+    PISECURITY_DESCRIPTOR ExplicitDescriptor = AccessState->SecurityDescriptor;
+    SECURITY_DESCRIPTOR TokenDescriptor;
+    PACL OldSacl = NULL, Sacl;
+    PACE_HEADER Ace;
+    PSID LabelSid;
+    ULONG Index, Length;
+    NTSTATUS Status;
+
+    LabelSid = SeMediumMandatorySid;
+    if (Token->IntegrityLevelIndex != 0 &&
+        Token->IntegrityLevelIndex < Token->UserAndGroupCount)
+        LabelSid = Token->UserAndGroups[Token->IntegrityLevelIndex].Sid;
+
+    RtlCreateSecurityDescriptor(&TokenDescriptor, SECURITY_DESCRIPTOR_REVISION);
+    if (ExplicitDescriptor)
+    {
+        TokenDescriptor.Sbz1 = ExplicitDescriptor->Sbz1;
+        TokenDescriptor.Control = ExplicitDescriptor->Control & ~SE_SELF_RELATIVE;
+        TokenDescriptor.Owner = SepGetOwnerFromDescriptor(ExplicitDescriptor);
+        TokenDescriptor.Group = SepGetGroupFromDescriptor(ExplicitDescriptor);
+        TokenDescriptor.Dacl = SepGetDaclFromDescriptor(ExplicitDescriptor);
+        OldSacl = SepGetSaclFromDescriptor(ExplicitDescriptor);
+    }
+
+    Length = sizeof(ACL) + FIELD_OFFSET(SYSTEM_MANDATORY_LABEL_ACE, SidStart) + RtlLengthSid(LabelSid);
+    if (OldSacl)
+    {
+        for (Index = 0; Index < OldSacl->AceCount; ++Index)
+        {
+            Status = RtlGetAce(OldSacl, Index, (PVOID *)&Ace);
+            if (!NT_SUCCESS(Status)) return Status;
+            if (Ace->AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+                Length += Ace->AceSize;
+        }
+    }
+    if (Length > MAXUSHORT) return STATUS_ALLOTTED_SPACE_EXCEEDED;
+
+    Sacl = ExAllocatePoolWithTag(PagedPool, Length, TAG_ACL);
+    if (!Sacl) return STATUS_INSUFFICIENT_RESOURCES;
+    Status = RtlCreateAcl(Sacl, Length, OldSacl ? OldSacl->AclRevision : ACL_REVISION);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+
+    if (OldSacl)
+    {
+        for (Index = 0; Index < OldSacl->AceCount; ++Index)
+        {
+            Status = RtlGetAce(OldSacl, Index, (PVOID *)&Ace);
+            if (!NT_SUCCESS(Status)) goto Cleanup;
+            if (Ace->AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+            Status = RtlAddAce(Sacl, Sacl->AclRevision, MAXULONG, Ace, Ace->AceSize);
+            if (!NT_SUCCESS(Status)) goto Cleanup;
+        }
+    }
+    Status = RtlAddMandatoryAce(Sacl,
+                                Sacl->AclRevision,
+                                0,
+                                SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+                                SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+                                LabelSid);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    RtlSetSaclSecurityDescriptor(&TokenDescriptor, TRUE, Sacl, FALSE);
+
+    Status = SeAssignSecurityEx(ParentDescriptor,
+                                &TokenDescriptor,
+                                NewDescriptor,
+                                NULL,
+                                FALSE,
+                                SEF_SACL_AUTO_INHERIT,
+                                &AccessState->SubjectSecurityContext,
+                                &Type->TypeInfo.GenericMapping,
+                                PagedPool);
+Cleanup:
+    ExFreePoolWithTag(Sacl, TAG_ACL);
+    return Status;
+}
+
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*++
@@ -558,13 +643,24 @@ ObAssignSecurity(IN PACCESS_STATE AccessState,
     PAGED_CODE();
 
     /* Build the new security descriptor */
-    Status = SeAssignSecurity(SecurityDescriptor,
-                              AccessState->SecurityDescriptor,
-                              &NewDescriptor,
-                              (Type == ObpDirectoryObjectType),
-                              &AccessState->SubjectSecurityContext,
-                              &Type->TypeInfo.GenericMapping,
-                              PagedPool);
+    if (Type == SeTokenObjectType)
+    {
+        Status = ObpAssignTokenSecurity(AccessState,
+                                        SecurityDescriptor,
+                                        Object,
+                                        &NewDescriptor,
+                                        Type);
+    }
+    else
+    {
+        Status = SeAssignSecurity(SecurityDescriptor,
+                                  AccessState->SecurityDescriptor,
+                                  &NewDescriptor,
+                                  (Type == ObpDirectoryObjectType),
+                                  &AccessState->SubjectSecurityContext,
+                                  &Type->TypeInfo.GenericMapping,
+                                  PagedPool);
+    }
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Call the security method */
