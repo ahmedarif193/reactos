@@ -1,6 +1,6 @@
 /*
  * PROJECT:         ReactOS Kernel
- * LICENSE:         GPL v2 - See COPYING in the top level directory
+ * LICENSE:         GPL v2 - See COPYING2 in the top level directory
  * FILE:            ntoskrnl/fsrtl/largemcb.c
  * PURPOSE:         Large Mapped Control Block (MCB) support for File System Drivers
  * PROGRAMMERS:     Aleksey Bragin <aleksey@reactos.org>

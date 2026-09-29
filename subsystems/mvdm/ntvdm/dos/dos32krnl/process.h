@@ -1,5 +1,5 @@
 /*
- * COPYRIGHT:       GPLv2 - See COPYING in the top level directory
+ * COPYRIGHT:       GPLv2 - See COPYING2 in the top level directory
  * PROJECT:         ReactOS Virtual DOS Machine
  * FILE:            subsystems/mvdm/ntvdm/dos/dos32krnl/process.h
  * PURPOSE:         DOS32 Processes

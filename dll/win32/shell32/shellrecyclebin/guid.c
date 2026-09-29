@@ -1,6 +1,6 @@
 /*
  * PROJECT:     Recycle bin management
- * LICENSE:     GPL v2 - See COPYING in the top level directory
+ * LICENSE:     GPL v2 - See COPYING2 in the top level directory
  * FILE:        lib/recyclebin/guid.c
  * PURPOSE:     Define GUID values
  * PROGRAMMERS: Copyright 2007 Hervé Poussineau (hpoussin@reactos.org)
