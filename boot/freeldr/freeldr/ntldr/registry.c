@@ -65,6 +65,21 @@ CmpFree(
     FrLdrHeapFree(Ptr, 0);
 }
 
+BOOLEAN
+NTAPI
+CmpFileFlush(
+    IN PHHIVE RegistryHive,
+    IN ULONG FileType,
+    IN PLARGE_INTEGER FileOffset,
+    IN ULONG Length)
+{
+    UNREFERENCED_PARAMETER(RegistryHive);
+    UNREFERENCED_PARAMETER(FileType);
+    UNREFERENCED_PARAMETER(FileOffset);
+    UNREFERENCED_PARAMETER(Length);
+    return FALSE;
+}
+
 /**
  * @brief
  * Initializes a flat hive descriptor for the
@@ -109,8 +124,6 @@ RegInitializeHive(
                           ChunkBase,
                           CmpAllocate,
                           CmpFree,
-                          NULL,
-                          NULL,
                           NULL,
                           NULL,
                           1,
