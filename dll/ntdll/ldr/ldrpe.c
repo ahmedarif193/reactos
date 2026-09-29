@@ -175,7 +175,8 @@ LdrpSnapIAT(IN PLDR_DATA_TABLE_ENTRY ExportLdrEntry,
             IN PLDR_DATA_TABLE_ENTRY ImportLdrEntry,
             IN PIMAGE_IMPORT_DESCRIPTOR IatEntry,
             IN BOOLEAN EntriesValid,
-            IN OUT PLDRP_IAT_PROTECTION_CONTEXT ProtectionContext OPTIONAL)
+            IN OUT PLDRP_IAT_PROTECTION_CONTEXT ProtectionContext OPTIONAL,
+            IN PWSTR DllPath OPTIONAL)
 {
     PVOID Iat = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -339,7 +340,8 @@ IatReady:
                                        ExportDirectory,
                                        ExportSize,
                                        TRUE,
-                                       ImportName);
+                                       ImportName,
+                                       DllPath);
 
                 /* Move to the next thunk */
                 FirstThunk++;
@@ -395,7 +397,8 @@ IatReady:
                                        ExportDirectory,
                                        ExportSize,
                                        TRUE,
-                                       ImportName);
+                                       ImportName,
+                                       DllPath);
 
                 /* Next thunks */
                 OriginalThunk++;
@@ -635,7 +638,8 @@ LdrpHandleOneNewFormatImportDescriptor(IN LPWSTR DllPath OPTIONAL,
                              LdrEntry,
                              ImportEntry,
                              FALSE,
-                             NULL);
+                             NULL,
+                             DllPath);
 
         /* Make sure we didn't fail */
         if (!NT_SUCCESS(Status))
@@ -758,7 +762,7 @@ LdrpHandleOneOldFormatImportDescriptor(IN LPWSTR DllPath OPTIONAL,
     }
 
     /* Now snap the IAT Entry */
-    Status = LdrpSnapIAT(DllLdrEntry, LdrEntry, *ImportEntry, FALSE, ProtectionContext);
+    Status = LdrpSnapIAT(DllLdrEntry, LdrEntry, *ImportEntry, FALSE, ProtectionContext, DllPath);
     if (!NT_SUCCESS(Status))
     {
         /* Fail */
@@ -1201,7 +1205,8 @@ LdrpSnapThunk(IN PVOID ExportBase,
               IN PIMAGE_EXPORT_DIRECTORY ExportDirectory,
               IN ULONG ExportSize,
               IN BOOLEAN Static,
-              IN LPSTR DllName)
+              IN LPSTR DllName,
+              IN PWSTR DllPath OPTIONAL)
 {
     BOOLEAN IsOrdinal;
     USHORT Ordinal;
@@ -1451,7 +1456,7 @@ FailurePath:
 
                 /* Load the forwarder */
                 if (NT_SUCCESS(Status))
-                    Status = LdrpLoadDll(Redirected, NULL, NULL, RedirectedImportName, &ForwarderHandle, FALSE);
+                    Status = LdrpLoadDll(Redirected, DllPath, NULL, RedirectedImportName, &ForwarderHandle, FALSE);
 
 #if LDRP_CHPE_IMPORT_REDIRECTION
                 if (ChpeImportName.Buffer)
@@ -1493,7 +1498,8 @@ FailurePath:
                                              ForwardName,
                                              ForwardOrdinal,
                                              (PVOID*)&Thunk->u1.Function,
-                                             FALSE);
+                                             FALSE,
+                                             DllPath);
             /* If this fails, then error out */
             if (!NT_SUCCESS(Status)) goto FailurePath;
         }

@@ -2411,7 +2411,8 @@ LdrpGetProcedureAddress(
     _In_opt_ _When_(Ordinal == 0, _Notnull_) PANSI_STRING Name,
     _In_opt_ _When_(Name == NULL, _In_range_(>, 0)) ULONG Ordinal,
     _Out_ PVOID *ProcedureAddress,
-    _In_ BOOLEAN ExecuteInit)
+    _In_ BOOLEAN ExecuteInit,
+    _In_opt_ PWSTR DllPath)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     UCHAR ImportBuffer[64]; // 128 since NT6.2
@@ -2529,7 +2530,8 @@ LdrpGetProcedureAddress(
                                ExportDir,
                                ExportDirSize,
                                FALSE,
-                               NULL);
+                               NULL,
+                               DllPath);
 
         /* Finally, see if we're supposed to run the init routines */
         if ((NT_SUCCESS(Status)) && (ExecuteInit))
@@ -2887,7 +2889,7 @@ PVOID LdrpGetShimEngineFunction(PCSZ FunctionName)
     PVOID Address;
     RtlInitAnsiString(&Function, FunctionName);
     /* Skip Dll init */
-    Status = LdrpGetProcedureAddress(g_pShimEngineModule, &Function, 0, &Address, FALSE);
+    Status = LdrpGetProcedureAddress(g_pShimEngineModule, &Function, 0, &Address, FALSE, NULL);
     return NT_SUCCESS(Status) ? Address : NULL;
 }
 

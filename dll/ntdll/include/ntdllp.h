@@ -131,7 +131,8 @@ LdrpSnapThunk(IN PVOID ExportBase,
               IN PIMAGE_EXPORT_DIRECTORY ExportEntry,
               IN ULONG ExportSize,
               IN BOOLEAN Static,
-              IN LPSTR DllName);
+              IN LPSTR DllName,
+              IN PWSTR DllPath OPTIONAL);
 
 NTSTATUS NTAPI
 LdrpWalkImportDescriptor(IN LPWSTR DllPath OPTIONAL,
@@ -176,7 +177,8 @@ LdrpGetProcedureAddress(
     _In_opt_ _When_(Ordinal == 0, _Notnull_) PANSI_STRING Name,
     _In_opt_ _When_(Name == NULL, _In_range_(>, 0)) ULONG Ordinal,
     _Out_ PVOID *ProcedureAddress,
-    _In_ BOOLEAN ExecuteInit);
+    _In_ BOOLEAN ExecuteInit,
+    _In_opt_ PWSTR DllPath);
 
 PLDR_DATA_TABLE_ENTRY NTAPI
 LdrpAllocateDataTableEntry(IN PVOID BaseAddress);

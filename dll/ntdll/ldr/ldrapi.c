@@ -960,7 +960,7 @@ LdrGetProcedureAddress(
     _Out_ PVOID *ProcedureAddress)
 {
     /* Call the internal routine and tell it to execute DllInit */
-    return LdrpGetProcedureAddress(BaseAddress, Name, Ordinal, ProcedureAddress, TRUE);
+    return LdrpGetProcedureAddress(BaseAddress, Name, Ordinal, ProcedureAddress, TRUE, NULL);
 }
 
 NTSTATUS
@@ -974,7 +974,7 @@ LdrGetProcedureAddressEx(
 {
     /* Call the internal routine and execute DllInit depending of flags */
     BOOLEAN ExecuteInit = !(Flags & LDR_GET_PROCEDURE_ADDRESS_DONT_RECORD_FORWARDER);
-    return LdrpGetProcedureAddress(BaseAddress, Name, Ordinal, ProcedureAddress, ExecuteInit);
+    return LdrpGetProcedureAddress(BaseAddress, Name, Ordinal, ProcedureAddress, ExecuteInit, NULL);
 }
 
 PVOID
