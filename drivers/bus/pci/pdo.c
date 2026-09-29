@@ -4264,11 +4264,16 @@ PdoStartDevice(
 
     if (HadMessageResource && !(UsingMsix || UsingMsi))
     {
-        DPRINT1("PCI PDO: Device %u:%02x:%02x.%u provided message interrupts but is running in legacy mode.\n",
+        DPRINT1("PCI PDO: Device %u:%02x:%02x.%u was assigned message interrupts it cannot signal; failing START_DEVICE\n",
                 Segment,
                 (UCHAR)DeviceExtension->PciDevice->BusNumber,
                 DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
                 DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+        if (!NT_SUCCESS(MsixStatus))
+            return MsixStatus;
+        if (!NT_SUCCESS(MsiStatus))
+            return MsiStatus;
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
     Command = 0;
