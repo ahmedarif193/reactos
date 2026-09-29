@@ -1752,6 +1752,7 @@ HalpGicItsAllocateMsi(
     PHALP_GIC_ITS_NODE ItsNode;
     PHALP_ARM64_ITS_DEVICE Device;
     ULONG AllocatedLpi;
+    ULONG NrEvents;
     NTSTATUS Status;
 
     if (!HalpGicItsInitialized)
@@ -1769,8 +1770,12 @@ HalpGicItsAllocateMsi(
     if (!ItsNode || !ItsNode->Enabled)
         return STATUS_DEVICE_NOT_READY;
 
+    NrEvents = HAL_ARM64_LPI_COUNT;
+    if (ItsNode->EventIdBits < 32 && NrEvents > (1u << ItsNode->EventIdBits))
+        NrEvents = 1u << ItsNode->EventIdBits;
+
     /* Get or create device */
-    Device = HalpGicItsCreateDevice(ItsNode, DeviceId, EventId + 1);
+    Device = HalpGicItsCreateDevice(ItsNode, DeviceId, NrEvents);
     if (!Device)
         return STATUS_INSUFFICIENT_RESOURCES;
 
