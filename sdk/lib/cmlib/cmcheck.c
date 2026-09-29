@@ -23,7 +23,7 @@ typedef struct _CMP_REGISTRY_STACK_WORK_STATE
 
 #define GET_HHIVE(CmHive) (&((CmHive)->Hive))
 #define GET_HHIVE_ROOT_CELL(Hive) ((Hive)->BaseBlock->RootCell)
-#define GET_HHIVE_BIN(Hive, StorageIndex, BlockIndex) ((PHBIN)Hive->Storage[StorageIndex].BlockList[BlockIndex].BinAddress)
+#define GET_HHIVE_BIN(Hive, StorageIndex, BlockIndex) HvpLookupBin(Hive, StorageIndex, BlockIndex)
 #define GET_CELL_BIN(Bin) ((PHCELL)((PUCHAR)Bin + sizeof(HBIN)))
 
 #define IS_CELL_VOLATILE(Cell) (HvGetCellType(Cell) == Volatile)
@@ -1530,12 +1530,12 @@ HvValidateHive(
     for (StorageIndex = 0; StorageIndex < Hive->StorageTypeCount; StorageIndex++)
     {
         /* Get the storage length at this index */
-        StorageLength = Hive->Storage[StorageIndex].Length;
+        StorageLength = Hive->Storage[StorageIndex].Length / HBLOCK_SIZE;
 
         for (BlockIndex = 0; BlockIndex < StorageLength;)
         {
             /* Go to the next if this bin does not exist */
-            if (Hive->Storage[StorageIndex].BlockList[BlockIndex].BinAddress == (ULONG_PTR)NULL)
+            if (!HvpLookupBin(Hive, StorageIndex, BlockIndex))
             {
                 BlockIndex++;
                 continue;

@@ -44,7 +44,7 @@ HIVE_LIST_ENTRY CmpMachineHiveList[] =
     { L"SECURITY", L"MACHINE\\", NULL, 0                , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
     { L"SOFTWARE", L"MACHINE\\", NULL, 0                , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
     { L"SYSTEM",   L"MACHINE\\", NULL, 0                , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
-    { L"DEFAULT",  L"USER\\.DEFAULT", NULL, 0           , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
+    { L"DEFAULT",  L"USER\\S-1-5-18", NULL, 0           , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
     { L"SAM",      L"MACHINE\\", NULL, HIVE_NOLAZYFLUSH , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
     { NULL,        NULL,         0, 0                   , 0 ,   NULL,   FALSE,  FALSE,  FALSE}
 };

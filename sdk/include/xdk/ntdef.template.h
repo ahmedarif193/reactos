@@ -345,6 +345,18 @@ typedef struct _RTL_BALANCED_NODE
         ULONG_PTR ParentValue;
     } DUMMYUNIONNAME2;
 } RTL_BALANCED_NODE, *PRTL_BALANCED_NODE;
+#ifndef _RTL_RB_TREE_DEFINED
+#define _RTL_RB_TREE_DEFINED
+typedef struct _RTL_RB_TREE
+{
+    PRTL_BALANCED_NODE Root;
+    _ANONYMOUS_UNION union
+    {
+        UCHAR Encoded : 1;
+        PRTL_BALANCED_NODE Min;
+    } DUMMYUNIONNAME;
+} RTL_RB_TREE, *PRTL_RB_TREE;
+#endif
 #ifdef _MSC_VER
  #pragma warning(pop)
 #endif /* _MSC_VER */

@@ -1387,15 +1387,6 @@ typedef struct _KTHREAD_COUNTERS
 }KTHREAD_COUNTERS, *PKTHREAD_COUNTERS;
 #endif
 
-/// FIXME: should move to rtltypes.h, but we can't include it here.
-#if (NTDDI_VERSION >= NTDDI_WIN8)
-typedef struct _RTL_RB_TREE
-{
-    PRTL_BALANCED_NODE Root;
-    PRTL_BALANCED_NODE Min;
-} RTL_RB_TREE, *PRTL_RB_TREE;
-#endif
-
 #if (NTDDI_VERSION >= NTDDI_WINBLUE)
 #if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN11_GE)
 

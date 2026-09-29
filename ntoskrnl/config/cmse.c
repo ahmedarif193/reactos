@@ -146,118 +146,285 @@ CmpHiveRootSecurityDescriptor(VOID)
     return SecurityDescriptor;
 }
 
+VOID
+NTAPI
+CmpLockHiveSecurity(IN PHHIVE Hive)
+{
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&((PCMHIVE)Hive)->SecurityLock);
+}
+
+VOID
+NTAPI
+CmpUnlockHiveSecurity(IN PHHIVE Hive)
+{
+    ExReleasePushLockExclusive(&((PCMHIVE)Hive)->SecurityLock);
+    KeLeaveCriticalRegion();
+}
+
+static NTSTATUS
+CmpGetSecurityCell(IN PHHIVE Hive,
+                   IN HCELL_INDEX Cell,
+                   OUT PCM_KEY_SECURITY *Security)
+{
+    LONG Size;
+
+    *Security = NULL;
+    if (Cell == HCELL_NIL)
+        return STATUS_NO_SECURITY_ON_OBJECT;
+    if (!HvIsCellAllocated(Hive, Cell))
+        return STATUS_REGISTRY_CORRUPT;
+    *Security = (PCM_KEY_SECURITY)HvGetCell(Hive, Cell);
+    if (!*Security)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Size = HvGetCellSize(Hive, *Security);
+    if (Size < sizeof(CM_KEY_SECURITY) ||
+        (*Security)->Signature != CM_KEY_SECURITY_SIGNATURE ||
+        (*Security)->ReferenceCount == 0 ||
+        (*Security)->Flink == HCELL_NIL ||
+        (*Security)->Blink == HCELL_NIL ||
+        !HvIsCellAllocated(Hive, (*Security)->Flink) ||
+        !HvIsCellAllocated(Hive, (*Security)->Blink) ||
+        (*Security)->DescriptorLength > (ULONG)Size - FIELD_OFFSET(CM_KEY_SECURITY, Descriptor) ||
+        !RtlValidRelativeSecurityDescriptor(&(*Security)->Descriptor,
+                                            (*Security)->DescriptorLength, 0))
+    {
+        HvReleaseCell(Hive, Cell);
+        *Security = NULL;
+        return STATUS_REGISTRY_CORRUPT;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+CmpGetKeySecurityDescriptor(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                            OUT PSECURITY_DESCRIPTOR *Descriptor)
+{
+    PHHIVE Hive = Kcb->KeyHive;
+    PCM_KEY_NODE Node;
+    PCM_KEY_SECURITY Security = NULL;
+    HCELL_INDEX Cell = HCELL_NIL;
+    NTSTATUS Status;
+
+    *Descriptor = NULL;
+    CmpLockHiveSecurity(Hive);
+    Node = (PCM_KEY_NODE)HvGetCell(Hive, Kcb->KeyCell);
+    if (!Node)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+    }
+    else
+    {
+        Cell = Node->Security;
+        HvReleaseCell(Hive, Kcb->KeyCell);
+        Status = CmpGetSecurityCell(Hive, Cell, &Security);
+        if (NT_SUCCESS(Status))
+        {
+            *Descriptor = ExAllocatePoolWithTag(PagedPool, Security->DescriptorLength, TAG_CMSD);
+            if (!*Descriptor)
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+            else
+                RtlCopyMemory(*Descriptor, &Security->Descriptor, Security->DescriptorLength);
+            HvReleaseCell(Hive, Cell);
+        }
+    }
+    CmpUnlockHiveSecurity(Hive);
+    return Status;
+}
+
 NTSTATUS
 CmpQuerySecurityDescriptor(IN PCM_KEY_CONTROL_BLOCK Kcb,
                            IN SECURITY_INFORMATION SecurityInformation,
                            OUT PSECURITY_DESCRIPTOR SecurityDescriptor,
                            IN OUT PULONG BufferLength)
 {
-    PISECURITY_DESCRIPTOR_RELATIVE RelSd;
-    ULONG SidSize;
-    ULONG AclSize;
-    ULONG SdSize;
+    PSECURITY_DESCRIPTOR StoredDescriptor;
     NTSTATUS Status;
-    SECURITY_DESCRIPTOR_CONTROL Control = 0;
-    ULONG Owner = 0;
-    ULONG Group = 0;
-    ULONG Dacl = 0;
 
-    DBG_UNREFERENCED_PARAMETER(Kcb);
-
-    DPRINT("CmpQuerySecurityDescriptor()\n");
-
-    if (SecurityInformation == 0)
-    {
+    if (!SecurityInformation)
         return STATUS_ACCESS_DENIED;
-    }
-
-    SidSize = RtlLengthSid(SeWorldSid);
-    RelSd = SecurityDescriptor;
-    SdSize = sizeof(*RelSd);
-
-    if (SecurityInformation & OWNER_SECURITY_INFORMATION)
-    {
-        Owner = SdSize;
-        SdSize += SidSize;
-    }
-
-    if (SecurityInformation & GROUP_SECURITY_INFORMATION)
-    {
-        Group = SdSize;
-        SdSize += SidSize;
-    }
-
-    if (SecurityInformation & DACL_SECURITY_INFORMATION)
-    {
-        Control |= SE_DACL_PRESENT;
-        Dacl = SdSize;
-        AclSize = sizeof(ACL) + sizeof(ACE) + SidSize + sizeof(ACE) + RtlLengthSid(SeAllAppPackagesSid) +
-                  sizeof(ACE) + RtlLengthSid(SeAllRestrictedAppPackagesSid);
-        SdSize += AclSize;
-    }
-
-    if (SecurityInformation & SACL_SECURITY_INFORMATION)
-    {
-        Control |= SE_SACL_PRESENT;
-    }
-
-    if (*BufferLength < SdSize)
-    {
-        *BufferLength = SdSize;
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-
-    *BufferLength = SdSize;
-
-    Status = RtlCreateSecurityDescriptorRelative(RelSd,
-                                                 SECURITY_DESCRIPTOR_REVISION);
+    Status = CmpGetKeySecurityDescriptor(Kcb, &StoredDescriptor);
     if (!NT_SUCCESS(Status))
         return Status;
+    Status = SeQuerySecurityDescriptorInfo(&SecurityInformation, SecurityDescriptor,
+                                           BufferLength, &StoredDescriptor);
+    ExFreePoolWithTag(StoredDescriptor, TAG_CMSD);
+    return Status;
+}
 
-    RelSd->Control |= Control;
-    RelSd->Owner = Owner;
-    RelSd->Group = Group;
-    RelSd->Dacl = Dacl;
+static NTSTATUS
+CmpStoreKeySecurityDescriptor(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                              IN PSECURITY_DESCRIPTOR Descriptor,
+                              IN ULONG Length)
+{
+    PHHIVE Hive = Kcb->KeyHive;
+    PCM_KEY_NODE Node = NULL, RootNode;
+    PCM_KEY_SECURITY Security = NULL, Anchor = NULL, Next = NULL, Old = NULL;
+    HCELL_INDEX Cell = HCELL_NIL, OldCell = HCELL_NIL;
+    HCELL_INDEX AnchorCell = HCELL_NIL, NextCell = HCELL_NIL;
+    NTSTATUS Status = STATUS_INSUFFICIENT_RESOURCES;
 
-    if (Owner)
-        RtlCopyMemory((PUCHAR)RelSd + Owner,
-                      SeWorldSid,
-                      SidSize);
-
-    if (Group)
-        RtlCopyMemory((PUCHAR)RelSd + Group,
-                      SeWorldSid,
-                      SidSize);
-
-    if (Dacl)
+    Node = (PCM_KEY_NODE)HvGetCell(Hive, Kcb->KeyCell);
+    if (!Node)
+        goto Done;
+    OldCell = Node->Security;
+    if (OldCell != HCELL_NIL)
     {
-        Status = RtlCreateAcl((PACL)((PUCHAR)RelSd + Dacl),
-                              AclSize,
-                              ACL_REVISION);
-        if (NT_SUCCESS(Status))
+        Status = CmpGetSecurityCell(Hive, OldCell, &Old);
+        if (!NT_SUCCESS(Status))
+            goto Done;
+        if (!HvMarkCellDirty(Hive, OldCell, FALSE) ||
+            !HvMarkCellDirty(Hive, Old->Flink, FALSE) ||
+            !HvMarkCellDirty(Hive, Old->Blink, FALSE))
         {
-            Status = RtlAddAccessAllowedAce((PACL)((PUCHAR)RelSd + Dacl),
-                                            ACL_REVISION,
-                                            GENERIC_ALL,
-                                            SeWorldSid);
+            Status = STATUS_NO_LOG_SPACE;
+            goto Done;
         }
-        if (NT_SUCCESS(Status))
+        AnchorCell = Old->ReferenceCount == 1 ? Old->Blink : OldCell;
+        if (AnchorCell == OldCell && Old->ReferenceCount == 1)
+            AnchorCell = HCELL_NIL;
+    }
+    else if (Hive->BaseBlock->RootCell != HCELL_NIL)
+    {
+        RootNode = (PCM_KEY_NODE)HvGetCell(Hive, Hive->BaseBlock->RootCell);
+        if (!RootNode)
+            goto Done;
+        AnchorCell = RootNode->Security;
+        HvReleaseCell(Hive, Hive->BaseBlock->RootCell);
+    }
+    if (AnchorCell != HCELL_NIL && HvGetCellType(AnchorCell) != HvGetCellType(Kcb->KeyCell))
+        AnchorCell = HCELL_NIL;
+    if (AnchorCell != HCELL_NIL)
+    {
+        Status = CmpGetSecurityCell(Hive, AnchorCell, &Anchor);
+        if (!NT_SUCCESS(Status))
+            goto Done;
+        NextCell = Old && Old->ReferenceCount == 1 ? Old->Flink : Anchor->Flink;
+        Status = CmpGetSecurityCell(Hive, NextCell, &Next);
+        if (!NT_SUCCESS(Status))
+            goto Done;
+        if ((Old && Old->ReferenceCount == 1)
+                ? (Next->Blink != OldCell || Anchor->Flink != OldCell)
+                : (Next->Blink != AnchorCell))
         {
-            Status = RtlAddAccessAllowedAce((PACL)((PUCHAR)RelSd + Dacl),
-                                            ACL_REVISION,
-                                            GENERIC_ALL,
-                                            SeAllAppPackagesSid);
+            Status = STATUS_REGISTRY_CORRUPT;
+            goto Done;
         }
-        if (NT_SUCCESS(Status))
+        if (!HvMarkCellDirty(Hive, AnchorCell, FALSE) ||
+            !HvMarkCellDirty(Hive, NextCell, FALSE))
         {
-            Status = RtlAddAccessAllowedAce((PACL)((PUCHAR)RelSd + Dacl),
-                                            ACL_REVISION,
-                                            GENERIC_ALL,
-                                            SeAllRestrictedAppPackagesSid);
+            Status = STATUS_NO_LOG_SPACE;
+            goto Done;
         }
     }
+    if (!HvMarkCellDirty(Hive, Kcb->KeyCell, FALSE))
+    {
+        Status = STATUS_NO_LOG_SPACE;
+        goto Done;
+    }
+    Cell = HvAllocateCell(Hive, FIELD_OFFSET(CM_KEY_SECURITY, Descriptor) + Length,
+                           HvGetCellType(Kcb->KeyCell), HCELL_NIL);
+    if (Cell == HCELL_NIL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
+    }
+    Security = (PCM_KEY_SECURITY)HvGetCell(Hive, Cell);
+    if (!Security)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
+    }
+    Security->Signature = CM_KEY_SECURITY_SIGNATURE;
+    Security->Reserved = 0;
+    Security->ReferenceCount = 1;
+    Security->DescriptorLength = Length;
+    Security->Flink = Anchor ? NextCell : Cell;
+    Security->Blink = Anchor ? AnchorCell : Cell;
+    RtlCopyMemory(&Security->Descriptor, Descriptor, Length);
+    if (Old)
+    {
+        HvReleaseCell(Hive, OldCell);
+        Old = NULL;
+        Status = CmpDereferenceSecurityCell(Hive, OldCell);
+        if (!NT_SUCCESS(Status))
+            goto Done;
+    }
+    if (Anchor)
+    {
+        Anchor->Flink = Cell;
+        Next->Blink = Cell;
+    }
+    Node->Security = Cell;
+    HvReleaseCell(Hive, Cell);
+    Security = NULL;
+    Cell = HCELL_NIL;
+    Status = STATUS_SUCCESS;
 
-    ASSERT(Status == STATUS_SUCCESS);
+Done:
+    if (Security)
+        HvReleaseCell(Hive, Cell);
+    if (Cell != HCELL_NIL)
+        HvFreeCell(Hive, Cell);
+    if (Next)
+        HvReleaseCell(Hive, NextCell);
+    if (Anchor)
+        HvReleaseCell(Hive, AnchorCell);
+    if (Old)
+        HvReleaseCell(Hive, OldCell);
+    if (Node)
+        HvReleaseCell(Hive, Kcb->KeyCell);
+    return Status;
+}
+
+NTSTATUS
+CmpAssignSecurityDescriptorLocked(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                            IN PSECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    PSECURITY_DESCRIPTOR Relative;
+    SECURITY_DESCRIPTOR_CONTROL Control;
+    ULONG Revision, Length;
+    NTSTATUS Status;
+
+    if (!SecurityDescriptor || !RtlValidSecurityDescriptor(SecurityDescriptor))
+        return STATUS_INVALID_SECURITY_DESCR;
+    Status = RtlGetControlSecurityDescriptor(SecurityDescriptor, &Control, &Revision);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Length = RtlLengthSecurityDescriptor(SecurityDescriptor);
+    if (Length > MAXLONG - FIELD_OFFSET(CM_KEY_SECURITY, Descriptor))
+        return STATUS_INVALID_SECURITY_DESCR;
+    Relative = ExAllocatePoolWithTag(PagedPool, Length, TAG_CMSD);
+    if (!Relative)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    if (Control & SE_SELF_RELATIVE)
+    {
+        RtlCopyMemory(Relative, SecurityDescriptor, Length);
+        Status = STATUS_SUCCESS;
+    }
+    else
+    {
+        Status = RtlAbsoluteToSelfRelativeSD(SecurityDescriptor, Relative, &Length);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        CmpLockHiveSecurity(Kcb->KeyHive);
+        Status = CmpStoreKeySecurityDescriptor(Kcb, Relative, Length);
+        CmpUnlockHiveSecurity(Kcb->KeyHive);
+    }
+    ExFreePoolWithTag(Relative, TAG_CMSD);
+    return Status;
+}
+
+NTSTATUS
+CmpAssignSecurityDescriptor(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                            IN PSECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    NTSTATUS Status;
+
+    CmpLockHiveFlusherShared((PCMHIVE)Kcb->KeyHive);
+    Status = CmpAssignSecurityDescriptorLocked(Kcb, SecurityDescriptor);
+    CmpUnlockHiveFlusher((PCMHIVE)Kcb->KeyHive);
     return Status;
 }
 
@@ -268,16 +435,37 @@ CmpSetSecurityDescriptor(IN PCM_KEY_CONTROL_BLOCK Kcb,
                          IN POOL_TYPE PoolType,
                          IN PGENERIC_MAPPING GenericMapping)
 {
-    DPRINT("CmpSetSecurityDescriptor()\n");
-    return STATUS_SUCCESS;
+    PSECURITY_DESCRIPTOR StoredDescriptor, ModifiedDescriptor;
+    NTSTATUS Status;
+
+    Status = CmpGetKeySecurityDescriptor(Kcb, &StoredDescriptor);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ModifiedDescriptor = StoredDescriptor;
+    Status = SeSetSecurityDescriptorInfoEx(NULL, SecurityInformation,
+                                           SecurityDescriptor, &ModifiedDescriptor,
+                                           0, PoolType, GenericMapping);
+    if (NT_SUCCESS(Status))
+        Status = CmpAssignSecurityDescriptor(Kcb, ModifiedDescriptor);
+    if (ModifiedDescriptor != StoredDescriptor)
+        ExFreePool(ModifiedDescriptor);
+    ExFreePoolWithTag(StoredDescriptor, TAG_CMSD);
+    return Status;
 }
 
 NTSTATUS
-CmpAssignSecurityDescriptor(IN PCM_KEY_CONTROL_BLOCK Kcb,
-                            IN PSECURITY_DESCRIPTOR SecurityDescriptor)
+NTAPI
+CmpAppHiveAccessMode(PCMHIVE Hive,
+                     ACCESS_MASK DesiredAccess,
+                     KPROCESSOR_MODE AccessMode,
+                     KPROCESSOR_MODE *EffectiveMode)
 {
-    DPRINT("CmpAssignSecurityDescriptor(%p %p)\n",
-           Kcb, SecurityDescriptor);
+    *EffectiveMode = AccessMode;
+    if (!(Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE)) return STATUS_SUCCESS;
+    if ((DesiredAccess & ACCESS_SYSTEM_SECURITY) &&
+        !SeSinglePrivilegeCheck(SeSecurityPrivilege, AccessMode))
+        return STATUS_PRIVILEGE_NOT_HELD;
+    *EffectiveMode = KernelMode;
     return STATUS_SUCCESS;
 }
 
@@ -337,6 +525,11 @@ CmpSecurityMethod(IN PVOID ObjectBody,
     switch (OperationCode)
     {
         case SetSecurityDescriptor:
+            if (((PCMHIVE)Kcb->KeyHive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
             DPRINT("Set security descriptor\n");
             ASSERT((PoolType == PagedPool) || ((PoolType & 1) == NonPagedPool));
             Status = CmpSetSecurityDescriptor(Kcb,

@@ -156,7 +156,12 @@ int main(int argc, char *argv[])
     }
 
     /* Initialize the registry */
-    RegInitializeRegistry(HiveList);
+    if (!RegInitializeRegistry(HiveList))
+    {
+        fprintf(stderr, "Registry initialization failed.\n");
+        RegShutdownRegistry();
+        return -1;
+    }
 
     /* Default to failure */
     ret = -1;

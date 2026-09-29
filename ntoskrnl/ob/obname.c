@@ -611,7 +611,9 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
 
                     /* Return the object and normalized status */
                     *FoundObject = Object;
-                    if (!Object) Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                    if (!Object)
+                        Status = ParseObjectType == CmpKeyObjectType ?
+                                 STATUS_INVALID_PARAMETER : STATUS_OBJECT_NAME_NOT_FOUND;
                     return Status;
                 }
             }
@@ -1025,6 +1027,8 @@ ReparseObject:
                     --MaxReparse;
                     if (MaxReparse == 0)
                     {
+                        if (ParseObjectType == CmpKeyObjectType)
+                            Status = STATUS_INVALID_PARAMETER;
                         Object = NULL;
                         break;
                     }

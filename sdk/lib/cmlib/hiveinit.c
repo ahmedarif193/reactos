@@ -90,28 +90,43 @@ CMAPI
 HvpFreeHiveBins(
     _In_ PHHIVE Hive)
 {
-    ULONG i;
-    PHBIN Bin;
+    ULONG i, TableIndex, DisplayIndex;
+    PHBIN Bin, PreviousBin;
     ULONG Storage;
+    PHMAP_DIRECTORY Map;
 
     for (Storage = 0; Storage < Hive->StorageTypeCount; Storage++)
     {
-        Bin = NULL;
-        for (i = 0; i < Hive->Storage[Storage].Length; i++)
+        PreviousBin = NULL;
+        for (i = 0; i < Hive->Storage[Storage].Length / HBLOCK_SIZE; ++i)
         {
-            if (Hive->Storage[Storage].BlockList[i].BinAddress == (ULONG_PTR)NULL)
-                continue;
-            if (Hive->Storage[Storage].BlockList[i].BinAddress != (ULONG_PTR)Bin)
+            Bin = HvpLookupBin(Hive, Storage, i);
+            if (Bin && Bin != PreviousBin)
             {
-                Bin = (PHBIN)Hive->Storage[Storage].BlockList[i].BinAddress;
-                Hive->Free((PHBIN)Hive->Storage[Storage].BlockList[i].BinAddress, 0);
+                Hive->Free(Bin, 0);
+                PreviousBin = Bin;
             }
-            Hive->Storage[Storage].BlockList[i].BinAddress = (ULONG_PTR)NULL;
-            Hive->Storage[Storage].BlockList[i].BlockAddress = (ULONG_PTR)NULL;
         }
-
-        if (Hive->Storage[Storage].Length)
-            Hive->Free(Hive->Storage[Storage].BlockList, 0);
+        Map = Hive->Storage[Storage].Map;
+        if (Map)
+        {
+            for (TableIndex = 0; TableIndex < (sizeof(Map->Directory) / sizeof(Map->Directory[0])); ++TableIndex)
+            {
+                if (Map->Directory[TableIndex])
+                    Hive->Free(Map->Directory[TableIndex], 0);
+            }
+            Hive->Free(Map, 0);
+        }
+        for (DisplayIndex = 0; DisplayIndex < 24; ++DisplayIndex)
+        {
+            PFREE_DISPLAY Display = &Hive->Storage[Storage].FreeDisplay[DisplayIndex];
+            if (Display->Display.Buffer)
+                Hive->Free(Display->Display.Buffer, Display->RealVectorSize);
+            RtlZeroMemory(Display, sizeof(*Display));
+        }
+        Hive->Storage[Storage].FreeSummary = 0;
+        Hive->Storage[Storage].Map = NULL;
+        Hive->Storage[Storage].Length = 0;
     }
 }
 
@@ -240,7 +255,6 @@ HvpCreateHive(
     _In_opt_ PCUNICODE_STRING FileName)
 {
     PHBASE_BLOCK BaseBlock;
-    ULONG Index;
 
     /* Allocate the base block */
     BaseBlock = HvpAllocBaseBlockAligned(RegistryHive, FALSE, TAG_CM);
@@ -275,11 +289,7 @@ HvpCreateHive(
     RegistryHive->BaseBlock = BaseBlock;
     RegistryHive->Version = BaseBlock->Minor; // == HSYS_MINOR
 
-    for (Index = 0; Index < 24; Index++)
-    {
-        RegistryHive->Storage[Stable].FreeDisplay[Index] = HCELL_NIL;
-        RegistryHive->Storage[Volatile].FreeDisplay[Index] = HCELL_NIL;
-    }
+
 
     HvpInitFileName(BaseBlock, FileName);
 
@@ -322,7 +332,6 @@ HvpInitializeMemoryHive(
 {
     SIZE_T BlockIndex;
     PHBIN Bin, NewBin;
-    ULONG i;
     ULONG BitmapSize;
     PULONG BitmapBuffer;
     SIZE_T ChunkSize;
@@ -330,7 +339,8 @@ HvpInitializeMemoryHive(
     ChunkSize = ChunkBase->Length;
     DPRINT("ChunkSize: %zx\n", (size_t)ChunkSize);
 
-    if (ChunkSize < sizeof(HBASE_BLOCK) ||
+    if (ChunkSize < sizeof(HBASE_BLOCK) || ChunkSize > HCELL_TYPE_MASK ||
+        ChunkSize % HBLOCK_SIZE ||
         !HvpVerifyHiveHeader(ChunkBase, HFILE_TYPE_PRIMARY))
     {
         DPRINT1("Registry is corrupt: ChunkSize 0x%zx < sizeof(HBASE_BLOCK) 0x%zx, "
@@ -353,23 +363,13 @@ HvpInitializeMemoryHive(
      * we go.
      */
 
-    Hive->Storage[Stable].Length = (ULONG)(ChunkSize / HBLOCK_SIZE);
-    Hive->Storage[Stable].BlockList =
-        Hive->Allocate(Hive->Storage[Stable].Length *
-                       sizeof(HMAP_ENTRY), FALSE, TAG_CM);
-    if (Hive->Storage[Stable].BlockList == NULL)
-    {
-        DPRINT1("Allocating block list failed\n");
-        Hive->Free(Hive->BaseBlock, Hive->BaseBlockAlloc);
-        return STATUS_NO_MEMORY;
-    }
-
-    for (BlockIndex = 0; BlockIndex < Hive->Storage[Stable].Length; )
+    for (BlockIndex = 0; BlockIndex < ChunkSize / HBLOCK_SIZE; )
     {
         Bin = (PHBIN)((ULONG_PTR)ChunkBase + (BlockIndex + 1) * HBLOCK_SIZE);
         if (Bin->Signature != HV_HBIN_SIGNATURE ||
+           !Bin->Size || Bin->Size > ChunkSize - BlockIndex * HBLOCK_SIZE ||
            (Bin->Size % HBLOCK_SIZE) != 0 ||
-           (Bin->FileOffset / HBLOCK_SIZE) != BlockIndex)
+           Bin->FileOffset != BlockIndex * HBLOCK_SIZE)
         {
             /*
              * Bin is toast but luckily either the signature, size or offset
@@ -382,7 +382,7 @@ HvpInitializeMemoryHive(
             {
                 DPRINT1("Invalid bin at BlockIndex %lu, Signature 0x%x, Size 0x%x. Self-heal not possible!\n",
                     (unsigned long)BlockIndex, (unsigned)Bin->Signature, (unsigned)Bin->Size);
-                Hive->Free(Hive->Storage[Stable].BlockList, 0);
+                HvpFreeHiveBins(Hive);
                 Hive->Free(Hive->BaseBlock, Hive->BaseBlockAlloc);
                 return STATUS_REGISTRY_CORRUPT;
             }
@@ -395,27 +395,28 @@ HvpInitializeMemoryHive(
             DPRINT1("Bin at index %lu is corrupt and it has been repaired!\n", (unsigned long)BlockIndex);
         }
 
+        if (!HvpCheckBinCells(Bin))
+        {
+            HvpFreeHiveBins(Hive);
+            Hive->Free(Hive->BaseBlock, Hive->BaseBlockAlloc);
+            return STATUS_REGISTRY_CORRUPT;
+        }
+
         NewBin = Hive->Allocate(Bin->Size, TRUE, TAG_CM);
         if (NewBin == NULL)
         {
-            Hive->Free(Hive->Storage[Stable].BlockList, 0);
+            HvpFreeHiveBins(Hive);
             Hive->Free(Hive->BaseBlock, Hive->BaseBlockAlloc);
             return STATUS_NO_MEMORY;
         }
 
-        Hive->Storage[Stable].BlockList[BlockIndex].BinAddress = (ULONG_PTR)NewBin;
-        Hive->Storage[Stable].BlockList[BlockIndex].BlockAddress = (ULONG_PTR)NewBin;
-
         RtlCopyMemory(NewBin, Bin, Bin->Size);
-
-        if (Bin->Size > HBLOCK_SIZE)
+        if (!HvpMapHiveBin(Hive, Stable, NewBin))
         {
-            for (i = 1; i < Bin->Size / HBLOCK_SIZE; i++)
-            {
-                Hive->Storage[Stable].BlockList[BlockIndex + i].BinAddress = (ULONG_PTR)NewBin;
-                Hive->Storage[Stable].BlockList[BlockIndex + i].BlockAddress =
-                    ((ULONG_PTR)NewBin + (i * HBLOCK_SIZE));
-            }
+            Hive->Free(NewBin, 0);
+            HvpFreeHiveBins(Hive);
+            Hive->Free(Hive->BaseBlock, Hive->BaseBlockAlloc);
+            return STATUS_NO_MEMORY;
         }
 
         BlockIndex += Bin->Size / HBLOCK_SIZE;
@@ -428,7 +429,7 @@ HvpInitializeMemoryHive(
         return STATUS_NO_MEMORY;
     }
 
-    BitmapSize = ROUND_UP(Hive->Storage[Stable].Length,
+    BitmapSize = ROUND_UP(Hive->Storage[Stable].Length / HBLOCK_SIZE,
                           sizeof(ULONG) * 8) / 8;
     BitmapBuffer = (PULONG)Hive->Allocate(BitmapSize, TRUE, TAG_CM);
     if (BitmapBuffer == NULL)
@@ -1092,14 +1093,6 @@ HvLoadHive(
         }
 #else
         {
-            /* Check if this hive has a log at hand to begin with */
-            #if (NTDDI_VERSION < NTDDI_VISTA)
-            if (!Hive->Log)
-            {
-                DPRINT1("The hive has no log for header recovery\n");
-                return STATUS_REGISTRY_CORRUPT;
-            }
-            #endif
 
             /* The header needs to be recovered so do it */
             DPRINT1("Attempting to heal the header...\n");
@@ -1149,6 +1142,14 @@ HvLoadHive(
     Hive->BaseBlock = BaseBlock;
     Hive->Version = BaseBlock->Minor;
 
+    if (!BaseBlock->Length || BaseBlock->Length > HCELL_TYPE_MASK ||
+        BaseBlock->Length % HBLOCK_SIZE)
+    {
+        Hive->Free(BaseBlock, Hive->BaseBlockAlloc);
+        Hive->BaseBlock = NULL;
+        return STATUS_REGISTRY_CORRUPT;
+    }
+
     /* Allocate a buffer large enough to hold the hive */
     FileSize = HBLOCK_SIZE + BaseBlock->Length; // == sizeof(HBASE_BLOCK) + BaseBlock->Length;
     HiveData = Hive->Allocate(FileSize, TRUE, TAG_CM);
@@ -1191,10 +1192,10 @@ HvLoadHive(
      */
     Hive->Free(BaseBlock, Hive->BaseBlockAlloc);
     Status = HvpInitializeMemoryHive(Hive, HiveData, FileName);
+    Hive->Free(HiveData, FileSize);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to initialize hive from memory\n");
-        Hive->Free(HiveData, FileSize);
         return Status;
     }
 
@@ -1264,11 +1265,6 @@ HvLoadHive(
  * the main memory freeing routine for this hive. This parameter
  * can be NULL.
  *
- * @param[in] FileSetSize
- * A pointer to a FILE_SET_SIZE_ROUTINE function that describes
- * the file set size routine for this hive. This parameter
- * can be NULL.
- *
  * @param[in] FileWrite
  * A pointer to a FILE_WRITE_ROUTINE function that describes
  * the file writing routine for this hive. This parameter
@@ -1277,11 +1273,6 @@ HvLoadHive(
  * @param[in] FileRead
  * A pointer to a FILE_READ_ROUTINE function that describes
  * the file reading routine for this hive. This parameter
- * can be NULL.
- *
- * @param[in] FileFlush
- * A pointer to a FILE_FLUSH_ROUTINE function that describes
- * the file flushing routine for this hive. This parameter
  * can be NULL.
  *
  * @param[in] Cluster
@@ -1357,10 +1348,8 @@ HvInitialize(
     _In_opt_ PVOID HiveData,
     _In_opt_ PALLOCATE_ROUTINE Allocate,
     _In_opt_ PFREE_ROUTINE Free,
-    _In_opt_ PFILE_SET_SIZE_ROUTINE FileSetSize,
     _In_opt_ PFILE_WRITE_ROUTINE FileWrite,
     _In_opt_ PFILE_READ_ROUTINE FileRead,
-    _In_opt_ PFILE_FLUSH_ROUTINE FileFlush,
     _In_ ULONG Cluster,
     _In_opt_ PCUNICODE_STRING FileName)
 {
@@ -1376,10 +1365,8 @@ HvInitialize(
 
     Hive->Allocate = Allocate;
     Hive->Free = Free;
-    Hive->FileSetSize = FileSetSize;
     Hive->FileWrite = FileWrite;
     Hive->FileRead = FileRead;
-    Hive->FileFlush = FileFlush;
 
     Hive->RefreshCount = 0;
     Hive->StorageTypeCount = HTYPE_COUNT;
@@ -1387,10 +1374,6 @@ HvInitialize(
     Hive->BaseBlockAlloc = sizeof(HBASE_BLOCK); // == HBLOCK_SIZE
 
     Hive->Version = HSYS_MINOR;
-#if (NTDDI_VERSION < NTDDI_VISTA)
-    Hive->Log = (FileType == HFILE_TYPE_LOG);
-    Hive->Alternate = (FileType == HFILE_TYPE_ALTERNATE);
-#endif
     Hive->HiveFlags = HiveFlags & ~HIVE_NOLAZYFLUSH;
 
     // TODO: The CellRoutines point to different callbacks
@@ -1444,6 +1427,7 @@ HvInitialize(
                 if (!HvSyncHiveFromRecover(Hive))
                 {
                     DPRINT1("Fail to write healthy data back to hive\n");
+                    HvFree(Hive);
                     return STATUS_REGISTRY_IO_FAILED;
                 }
 

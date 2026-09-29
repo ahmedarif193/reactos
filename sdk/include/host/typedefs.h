@@ -84,6 +84,19 @@ typedef WORD LANGID;
 
 /* Widely used structures */
 
+#ifndef _RTL_RB_TREE_DEFINED
+#define _RTL_RB_TREE_DEFINED
+typedef struct _RTL_RB_TREE
+{
+    struct _RTL_BALANCED_NODE *Root;
+    union
+    {
+        UCHAR Encoded : 1;
+        struct _RTL_BALANCED_NODE *Min;
+    };
+} RTL_RB_TREE, *PRTL_RB_TREE;
+#endif
+
 #ifndef _HAVE_RTL_BITMAP
 typedef struct _RTL_BITMAP
 {
@@ -273,4 +286,3 @@ typedef const UNICODE_STRING *PCUNICODE_STRING;
 #define RTL_H
 
 #endif
-

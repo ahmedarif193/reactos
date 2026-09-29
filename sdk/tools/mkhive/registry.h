@@ -46,7 +46,7 @@ extern HIVE_LIST_ENTRY RegistryHives[];
 #define REG_QWORD                          11
 #define REG_QWORD_LITTLE_ENDIAN            11
 
-VOID
+BOOL
 RegInitializeRegistry(
     IN PCSTR HiveList);
 

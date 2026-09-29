@@ -21,9 +21,7 @@ HvLockHiveWriter(
 {
     PCMHIVE CmHive = CONTAINING_RECORD(RegistryHive, CMHIVE, Hive);
 
-    ExAcquirePushLockExclusive(&CmHive->WriterLock);
-    ASSERT(CmHive->WriterLockOwner == NULL);
-    CmHive->WriterLockOwner = KeGetCurrentThread();
+    ExAcquirePushLockExclusive((PEX_PUSH_LOCK)&CmHive->Hive.WriterLock.Reserved);
 }
 
 VOID
@@ -33,9 +31,7 @@ HvUnlockHiveWriter(
 {
     PCMHIVE CmHive = CONTAINING_RECORD(RegistryHive, CMHIVE, Hive);
 
-    ASSERT(CmHive->WriterLockOwner == KeGetCurrentThread());
-    CmHive->WriterLockOwner = NULL;
-    ExReleasePushLockExclusive(&CmHive->WriterLock);
+    ExReleasePushLockExclusive((PEX_PUSH_LOCK)&CmHive->Hive.WriterLock.Reserved);
 }
 
 BOOLEAN
@@ -45,10 +41,7 @@ HvLockHiveReader(
 {
     PCMHIVE CmHive = CONTAINING_RECORD(RegistryHive, CMHIVE, Hive);
 
-    if (CmHive->WriterLockOwner == KeGetCurrentThread())
-        return FALSE;
-
-    ExAcquirePushLockShared(&CmHive->WriterLock);
+    ExAcquirePushLockShared((PEX_PUSH_LOCK)&CmHive->Hive.WriterLock.Reserved);
     return TRUE;
 }
 
@@ -61,7 +54,7 @@ HvUnlockHiveReader(
     PCMHIVE CmHive = CONTAINING_RECORD(RegistryHive, CMHIVE, Hive);
 
     if (LockAcquired)
-        ExReleasePushLockShared(&CmHive->WriterLock);
+        ExReleasePushLockShared((PEX_PUSH_LOCK)&CmHive->Hive.WriterLock.Reserved);
 }
 
 NTSTATUS
@@ -141,7 +134,7 @@ CmpFileRead(IN PHHIVE RegistryHive,
                         Buffer, (ULONG)BufferLength, &_FileOffset, NULL);
     /* We do synchronous I/O for simplicity - see CmpOpenHiveFiles. */
     ASSERT(Status != STATUS_PENDING);
-    return NT_SUCCESS(Status) ? TRUE : FALSE;
+    return NT_SUCCESS(Status) && IoStatusBlock.Information == BufferLength;
 }
 
 BOOLEAN
@@ -174,7 +167,7 @@ CmpFileWrite(IN PHHIVE RegistryHive,
      * then waiting for all writes to complete at once.
      */
     ASSERT(Status != STATUS_PENDING);
-    return NT_SUCCESS(Status) ? TRUE : FALSE;
+    return NT_SUCCESS(Status) && IoStatusBlock.Information == BufferLength;
 }
 
 BOOLEAN

@@ -103,14 +103,6 @@ CmpDoFlushAll(IN BOOLEAN ForceFlush)
             /* Acquire the flusher lock */
             CmpLockHiveFlusherExclusive(Hive);
 
-            /* Check for illegal state */
-            if (ForceFlush && Hive->UseCount)
-            {
-                /* Registry needs to be locked down */
-                CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK();
-                UNIMPLEMENTED_DBGBREAK("FIXME: Hive is damaged and needs fixup\n");
-            }
-
             /* Only sync if we are forced to or if it won't cause a hive shrink */
             if (ForceFlush || !HvHiveWillShrink(&Hive->Hive))
             {
@@ -283,7 +275,6 @@ CmpSetValueKeyExisting(IN PHHIVE Hive,
     BOOLEAN WasSmall, IsSmall;
 
     /* Registry writes must be blocked */
-    CMP_ASSERT_FLUSH_LOCK(Hive);
 
     /* Mark the old child cell dirty */
     if (!HvMarkCellDirty(Hive, OldChild, FALSE)) return STATUS_NO_LOG_SPACE;
@@ -2160,30 +2151,6 @@ CmFlushKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
         ASSERT(CM_CHECK_REGISTRY_SUCCESS(CheckStatus));
 #endif
 
-        ASSERT(CmHive->ViewLock);
-        KeAcquireGuardedMutex(CmHive->ViewLock);
-        CmHive->ViewLockOwner = KeGetCurrentThread();
-
-        /* Will the hive shrink? */
-        if (HvHiveWillShrink(Hive))
-        {
-            /* I don't believe the current Hv does shrinking */
-            ASSERT(FALSE);
-            // CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK_OR_LOADING(CmHive);
-        }
-        else
-        {
-            /* Now we can release views */
-            ASSERT(CmHive->ViewLock);
-            // CMP_ASSERT_VIEW_LOCK_OWNED(CmHive);
-            ASSERT((CmpSpecialBootCondition == TRUE) ||
-                   (CmHive->HiveIsLoading == TRUE) ||
-                   (CmHive->ViewLockOwner == KeGetCurrentThread()) ||
-                   (CmpTestRegistryLockExclusive() == TRUE));
-            CmHive->ViewLockOwner = NULL;
-            KeReleaseGuardedMutex(CmHive->ViewLock);
-        }
-
         /* Flush only this hive */
         if (!HvSyncHive(Hive))
         {
@@ -2326,8 +2293,6 @@ CmLoadKey(IN POBJECT_ATTRIBUTES TargetKey,
     {
         DPRINT1("CmpLinkHiveToMaster failed, Status %lx\n", Status);
 
-        /* We're touching this hive, set the loading flag */
-        CmHive->HiveIsLoading = TRUE;
 
         /* Close associated file handles */
         CmpCloseHiveFiles(CmHive);
@@ -2417,6 +2382,9 @@ CmUnloadKey(
     Cell = Kcb->KeyCell;
     CmHive = (PCMHIVE)Hive;
 
+    if (CmHive->Flags & CMHIVE_FLAG_APPLICATION_HIVE)
+        return STATUS_INVALID_PARAMETER;
+
     /* Fail if the key is not a hive root key */
     if (Cell != Hive->BaseBlock->RootCell)
     {
@@ -2464,8 +2432,6 @@ CmUnloadKey(
         }
     }
 
-    /* Set the loading flag */
-    CmHive->HiveIsLoading = TRUE;
 
     /* Flush the hive */
     CmFlushKey(Kcb, TRUE);
@@ -2479,7 +2445,7 @@ CmUnloadKey(
         Hive->HiveFlags &= ~HIVE_IS_UNLOADING;
 
         /* Reset the loading flag */
-        CmHive->HiveIsLoading = FALSE;
+
 
         /* Return failure */
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -2518,12 +2484,6 @@ CmUnloadKey(
     /* Destroy the view list */
     CmpDestroyHiveViewList(CmHive);
 
-    /* Delete the flusher lock */
-    ExDeleteResourceLite(CmHive->FlusherLock);
-    ExFreePoolWithTag(CmHive->FlusherLock, TAG_CMHIVE);
-
-    /* Delete the view lock */
-    ExFreePoolWithTag(CmHive->ViewLock, TAG_CMHIVE);
 
     /* Free the hive storage */
     HvFree(Hive);
@@ -2532,6 +2492,108 @@ CmUnloadKey(
     CmpFree(CmHive, TAG_CM);
 
     return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+CmpReferenceHive(PCMHIVE Hive)
+{
+    ASSERT(Hive->ReferenceCount > 0);
+    InterlockedIncrement(&Hive->ReferenceCount);
+}
+
+VOID
+NTAPI
+CmpDereferenceHive(PCMHIVE Hive)
+{
+    ASSERT(Hive->ReferenceCount > 0);
+    if (InterlockedDecrement(&Hive->ReferenceCount) != 0) return;
+    ASSERT(Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE);
+    ASSERT(Hive->RootKcb == NULL);
+    CmpCloseHiveFiles(Hive);
+    if (Hive->DeletedKcbTable) CmpFree(Hive->DeletedKcbTable, TAG_CM);
+    RtlFreeUnicodeString(&Hive->FileFullPath);
+    RtlFreeUnicodeString(&Hive->FileUserName);
+    RtlFreeUnicodeString(&Hive->HiveRootPath);
+    CmpDestroyHive(Hive);
+}
+
+static
+BOOLEAN
+CmpKcbHasHandles(PCM_KEY_CONTROL_BLOCK Kcb)
+{
+    PCM_KEY_BODY Body;
+    PLIST_ENTRY Entry;
+    ULONG i;
+    for (i = 0; i < RTL_NUMBER_OF(Kcb->KeyBodyArray); i++)
+    {
+        Body = Kcb->KeyBodyArray[i];
+        if (Body && InterlockedCompareExchangeSizeT(&OBJECT_TO_OBJECT_HEADER(Body)->HandleCount, 0, 0))
+            return TRUE;
+    }
+    for (Entry = Kcb->KeyBodyListHead.Flink; Entry != &Kcb->KeyBodyListHead; Entry = Entry->Flink)
+    {
+        Body = CONTAINING_RECORD(Entry, CM_KEY_BODY, KeyBodyList);
+        if (InterlockedCompareExchangeSizeT(&OBJECT_TO_OBJECT_HEADER(Body)->HandleCount, 0, 0))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+VOID
+NTAPI
+CmpUnloadAppHiveIfUnused(PCMHIVE Hive)
+{
+    PCM_KEY_HASH Entry, Next;
+    PCM_KEY_CONTROL_BLOCK Kcb;
+    ULONG i;
+
+    CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK();
+    if (Hive->Hive.HiveFlags & HIVE_IS_UNLOADING) return;
+    for (i = 0; i < CmpHashTableSize; i++)
+    {
+        for (Entry = CmpCacheTable[i].Entry; Entry; Entry = Entry->NextHash)
+        {
+            if (Entry->KeyHive == &Hive->Hive &&
+                CmpKcbHasHandles(CONTAINING_RECORD(Entry, CM_KEY_CONTROL_BLOCK, KeyHash)))
+                return;
+        }
+    }
+    for (i = 0; i < Hive->DeletedKcbTableSize; i++)
+    {
+        for (Entry = Hive->DeletedKcbTable[i].Entry; Entry; Entry = Entry->NextHash)
+        {
+            if (CmpKcbHasHandles(CONTAINING_RECORD(Entry, CM_KEY_CONTROL_BLOCK, KeyHash)))
+                return;
+        }
+    }
+    Hive->Hive.HiveFlags |= HIVE_IS_UNLOADING | HIVE_NOLAZYFLUSH;
+    CmpLockHiveFlusherExclusive(Hive);
+    if (!HvSyncHive(&Hive->Hive))
+        DPRINT1("Application hive final flush failed\n");
+    CmpCloseHiveFiles(Hive);
+    CmpUnlockHiveFlusher(Hive);
+    for (i = 0; i < CmpHashTableSize; i++)
+    {
+        for (Entry = CmpCacheTable[i].Entry; Entry; Entry = Next)
+        {
+            Next = Entry->NextHash;
+            if (Entry->KeyHive != &Hive->Hive) continue;
+            Kcb = CONTAINING_RECORD(Entry, CM_KEY_CONTROL_BLOCK, KeyHash);
+            Kcb->Delete = TRUE;
+            CmpRemoveKeyControlBlock(Kcb);
+        }
+    }
+}
+
+VOID
+NTAPI
+CmpCompleteAppHiveLoad(PCMHIVE Hive)
+{
+    CmpLockRegistryExclusive();
+    CmpUnloadAppHiveIfUnused(Hive);
+    CmpUnlockRegistry();
+    CmpDereferenceHive(Hive);
 }
 
 ULONG
@@ -2653,11 +2715,90 @@ CmpEnumerateOpenSubKeys(
 
 static
 NTSTATUS
+CmpCopyKeySecurity(IN PHHIVE SourceHive,
+                    IN HCELL_INDEX SourceCell,
+                    IN PHHIVE DestinationHive,
+                    IN HSTORAGE_TYPE StorageType,
+                    IN OUT PHCELL_INDEX AnchorCell,
+                    OUT PHCELL_INDEX NewCell)
+{
+    HCELL_INDEX Cell, NextCell = HCELL_NIL;
+    PCM_KEY_SECURITY Security = NULL, Anchor = NULL, Next = NULL;
+    LONG Size;
+    NTSTATUS Status = STATUS_INSUFFICIENT_RESOURCES;
+
+    *NewCell = HCELL_NIL;
+    Cell = CmpCopyCell(SourceHive, SourceCell, DestinationHive, StorageType);
+    if (Cell == HCELL_NIL) return Status;
+    Security = (PCM_KEY_SECURITY)HvGetCell(DestinationHive, Cell);
+    if (!Security) goto Exit;
+    Size = HvGetCellSize(DestinationHive, Security);
+    if (Size < sizeof(*Security) || Security->Signature != CM_KEY_SECURITY_SIGNATURE ||
+        Security->DescriptorLength > (ULONG)Size - FIELD_OFFSET(CM_KEY_SECURITY, Descriptor) ||
+        !RtlValidRelativeSecurityDescriptor(&Security->Descriptor, Security->DescriptorLength, 0))
+    {
+        Status = STATUS_REGISTRY_CORRUPT;
+        goto Exit;
+    }
+    if (*AnchorCell != HCELL_NIL)
+    {
+        if (!HvIsCellAllocated(DestinationHive, *AnchorCell))
+        {
+            Status = STATUS_REGISTRY_CORRUPT;
+            goto Exit;
+        }
+        Anchor = (PCM_KEY_SECURITY)HvGetCell(DestinationHive, *AnchorCell);
+        if (!Anchor) goto Exit;
+        NextCell = Anchor->Flink;
+        if (Anchor->Signature != CM_KEY_SECURITY_SIGNATURE || NextCell == HCELL_NIL ||
+            !HvIsCellAllocated(DestinationHive, NextCell))
+        {
+            Status = STATUS_REGISTRY_CORRUPT;
+            goto Exit;
+        }
+        Next = (PCM_KEY_SECURITY)HvGetCell(DestinationHive, NextCell);
+        if (!Next) goto Exit;
+        if (Next->Signature != CM_KEY_SECURITY_SIGNATURE || Next->Blink != *AnchorCell)
+        {
+            Status = STATUS_REGISTRY_CORRUPT;
+            goto Exit;
+        }
+        if (!HvMarkCellDirty(DestinationHive, *AnchorCell, FALSE) ||
+            !HvMarkCellDirty(DestinationHive, NextCell, FALSE))
+        {
+            Status = STATUS_NO_LOG_SPACE;
+            goto Exit;
+        }
+        Security->Flink = NextCell;
+        Security->Blink = *AnchorCell;
+        Next->Blink = Cell;
+        Anchor->Flink = Cell;
+    }
+    else
+    {
+        Security->Flink = Cell;
+        Security->Blink = Cell;
+        *AnchorCell = Cell;
+    }
+    Security->ReferenceCount = 1;
+    *NewCell = Cell;
+    Status = STATUS_SUCCESS;
+Exit:
+    if (Next) HvReleaseCell(DestinationHive, NextCell);
+    if (Anchor) HvReleaseCell(DestinationHive, *AnchorCell);
+    if (Security) HvReleaseCell(DestinationHive, Cell);
+    if (!NT_SUCCESS(Status)) HvFreeCell(DestinationHive, Cell);
+    return Status;
+}
+
+static
+NTSTATUS
 CmpDeepCopyKeyInternal(IN PHHIVE SourceHive,
                        IN HCELL_INDEX SrcKeyCell,
                        IN PHHIVE DestinationHive,
                        IN HCELL_INDEX Parent,
                        IN HSTORAGE_TYPE StorageType,
+                       IN OUT PHCELL_INDEX SecurityAnchor,
                        OUT PHCELL_INDEX DestKeyCell OPTIONAL)
 {
     NTSTATUS Status;
@@ -2733,19 +2874,11 @@ CmpDeepCopyKeyInternal(IN PHHIVE SourceHive,
         DestNode->ClassLength = 0;
     }
 
-    /* Copy the security cell (FIXME: HACKish poor-man version) */
     if (SrcNode->Security != HCELL_NIL)
     {
-        NewSecCell = CmpCopyCell(SourceHive,
-                                 SrcNode->Security,
-                                 DestinationHive,
-                                 StorageType);
-        if (NewSecCell == HCELL_NIL)
-        {
-            /* Not enough storage space */
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Cleanup;
-        }
+        Status = CmpCopyKeySecurity(SourceHive, SrcNode->Security, DestinationHive,
+                                    StorageType, SecurityAnchor, &NewSecCell);
+        if (!NT_SUCCESS(Status)) goto Cleanup;
     }
     DestNode->Security = NewSecCell;
 
@@ -2781,6 +2914,7 @@ CmpDeepCopyKeyInternal(IN PHHIVE SourceHive,
                                         DestinationHive,
                                         NewKeyCell,
                                         StorageType,
+                                        SecurityAnchor,
                                         &NewSubKey);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
@@ -2811,7 +2945,10 @@ Cleanup:
     if (!NT_SUCCESS(Status))
     {
         if (NewSecCell != HCELL_NIL)
-            HvFreeCell(DestinationHive, NewSecCell);
+        {
+            if (NT_SUCCESS(CmpRemoveSecurityCellList(DestinationHive, NewSecCell)))
+                HvFreeCell(DestinationHive, NewSecCell);
+        }
 
         if (NewClassCell != HCELL_NIL)
             HvFreeCell(DestinationHive, NewClassCell);
@@ -2835,12 +2972,26 @@ CmpDeepCopyKey(IN PHHIVE SourceHive,
                IN HSTORAGE_TYPE StorageType,
                OUT PHCELL_INDEX DestKeyCell OPTIONAL)
 {
+    HCELL_INDEX SecurityAnchor = HCELL_NIL;
+    PCM_KEY_NODE RootNode;
+
+    if (DestinationHive->BaseBlock->RootCell != HCELL_NIL)
+    {
+        RootNode = (PCM_KEY_NODE)HvGetCell(DestinationHive, DestinationHive->BaseBlock->RootCell);
+        if (!RootNode) return STATUS_INSUFFICIENT_RESOURCES;
+        SecurityAnchor = RootNode->Security;
+        HvReleaseCell(DestinationHive, DestinationHive->BaseBlock->RootCell);
+        if (SecurityAnchor != HCELL_NIL && HvGetCellType(SecurityAnchor) != StorageType)
+            SecurityAnchor = HCELL_NIL;
+    }
+
     /* Call the internal function */
     return CmpDeepCopyKeyInternal(SourceHive,
                                   SrcKeyCell,
                                   DestinationHive,
                                   HCELL_NIL,
                                   StorageType,
+                                  &SecurityAnchor,
                                   DestKeyCell);
 }
 
@@ -2917,7 +3068,7 @@ CmSaveKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
     KeyHive->FileHandles[HFILE_TYPE_PRIMARY] = FileHandle;
 
     /* Dump the hive into the file */
-    HvWriteHive(&KeyHive->Hive);
+    if (!HvWriteHive(&KeyHive->Hive)) Status = STATUS_REGISTRY_IO_FAILED;
 
 Cleanup:
 
@@ -3027,7 +3178,7 @@ CmSaveMergedKeys(IN PCM_KEY_CONTROL_BLOCK HighKcb,
     KeyHive->FileHandles[HFILE_TYPE_PRIMARY] = FileHandle;
 
     /* Dump the hive into the file */
-    HvWriteHive(&KeyHive->Hive);
+    if (!HvWriteHive(&KeyHive->Hive)) Status = STATUS_REGISTRY_IO_FAILED;
 
 done:
     /* Free the hive */

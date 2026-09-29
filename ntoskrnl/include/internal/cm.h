@@ -160,10 +160,14 @@ typedef struct _CM_KEY_HASH_TABLE_ENTRY
     EX_PUSH_LOCK Lock;
     PKTHREAD Owner;
     PCM_KEY_HASH Entry;
-#if DBG
-    PVOID LockBackTrace[5];
-#endif
 } CM_KEY_HASH_TABLE_ENTRY, *PCM_KEY_HASH_TABLE_ENTRY;
+
+#ifdef _M_ARM64
+C_ASSERT(sizeof(CM_KEY_HASH_TABLE_ENTRY) == 24);
+C_ASSERT(FIELD_OFFSET(CM_KEY_HASH_TABLE_ENTRY, Lock) == 0);
+C_ASSERT(FIELD_OFFSET(CM_KEY_HASH_TABLE_ENTRY, Owner) == 8);
+C_ASSERT(FIELD_OFFSET(CM_KEY_HASH_TABLE_ENTRY, Entry) == 16);
+#endif
 
 //
 // Name Hash
@@ -518,6 +522,18 @@ CmpDestroyHiveViewList(
 // Security Management Functions
 //
 NTSTATUS
+CmpGetKeySecurityDescriptor(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    OUT PSECURITY_DESCRIPTOR *Descriptor
+);
+
+NTSTATUS
+CmpAssignSecurityDescriptorLocked(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN PSECURITY_DESCRIPTOR SecurityDescriptor
+);
+
+NTSTATUS
 CmpAssignSecurityDescriptor(
     IN PCM_KEY_CONTROL_BLOCK Kcb,
     IN PSECURITY_DESCRIPTOR SecurityDescriptor
@@ -861,6 +877,14 @@ CmpTestRegistryLock(
     VOID
 );
 
+NTSTATUS NTAPI CmpAppHiveAccessMode(PCMHIVE Hive, ACCESS_MASK DesiredAccess, KPROCESSOR_MODE AccessMode, KPROCESSOR_MODE *EffectiveMode);
+BOOLEAN NTAPI CmpCreateRootNode(PHHIVE Hive, PCWSTR Name, PHCELL_INDEX Index);
+NTSTATUS NTAPI CmpLoadAppHive(POBJECT_ATTRIBUTES TargetKey, POBJECT_ATTRIBUTES SourceFile, ULONG Flags, KPROCESSOR_MODE AccessMode, PCM_KEY_BODY *RootBody, PCMHIVE *LoadedHive);
+VOID NTAPI CmpReferenceHive(PCMHIVE Hive);
+VOID NTAPI CmpDereferenceHive(PCMHIVE Hive);
+VOID NTAPI CmpCompleteAppHiveLoad(PCMHIVE Hive);
+VOID NTAPI CmpUnloadAppHiveIfUnused(PCMHIVE Hive);
+
 VOID
 NTAPI
 CmpLockRegistryExclusive(
@@ -891,17 +915,7 @@ CmpLockHiveFlusherShared(
     IN PCMHIVE Hive
 );
 
-BOOLEAN
-NTAPI
-CmpTestHiveFlusherLockExclusive(
-    IN PCMHIVE Hive
-);
 
-BOOLEAN
-NTAPI
-CmpTestHiveFlusherLockShared(
-    IN PCMHIVE Hive
-);
 
 VOID
 NTAPI

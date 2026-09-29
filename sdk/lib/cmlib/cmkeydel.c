@@ -56,6 +56,7 @@ CmpMarkKeyDirty(IN PHHIVE Hive,
         HvMarkCellDirty(Hive, CellData->Class, FALSE);
     }
 
+    CmpLockHiveSecurity(Hive);
     /* Check if we have security */
     if (CellData->Security != HCELL_NIL)
     {
@@ -65,12 +66,13 @@ CmpMarkKeyDirty(IN PHHIVE Hive,
         /* Get the security data and release it */
         SecurityData = (PCM_KEY_SECURITY)HvGetCell(Hive, CellData->Security);
         ASSERT(SecurityData);
-        HvReleaseCell(Hive, CellData->Security);
 
         /* Mark the security links dirty too */
         HvMarkCellDirty(Hive, SecurityData->Flink, FALSE);
         HvMarkCellDirty(Hive, SecurityData->Blink, FALSE);
+        HvReleaseCell(Hive, CellData->Security);
     }
+    CmpUnlockHiveSecurity(Hive);
 
     // TODO: Handle predefined keys (Flags: KEY_PREDEF_HANDLE)
     /* Check if we have any values */
@@ -137,7 +139,11 @@ CmpFreeKeyBody(IN PHHIVE Hive,
         if (CellData->Security != HCELL_NIL)
         {
             /* Free the security cell */
-            HvFreeCell(Hive, CellData->Security);
+            if (!NT_SUCCESS(CmpFreeSecurityDescriptor(Hive, Cell)))
+            {
+                HvReleaseCell(Hive, Cell);
+                return FALSE;
+            }
         }
 
         /* Check if we have a class */
@@ -164,6 +170,7 @@ CmpFreeKeyByCell(IN PHHIVE Hive,
     PCELL_DATA ListData;
     ULONG i;
     BOOLEAN Result;
+    NTSTATUS Status;
 
     /* Mark the entire key dirty */
     CmpMarkKeyDirty(Hive, Cell, TRUE);
@@ -222,7 +229,9 @@ CmpFreeKeyByCell(IN PHHIVE Hive,
         }
 
         /* Free the key security descriptor */
-        CmpFreeSecurityDescriptor(Hive, Cell);
+        Status = CmpFreeSecurityDescriptor(Hive, Cell);
+        if (!NT_SUCCESS(Status))
+            return Status;
     }
 
     /* Free the key body itself, and then return our status */

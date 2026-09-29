@@ -6,18 +6,6 @@
 * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
 */
 
-#if DBG
-FORCEINLINE
-VOID
-CmpCaptureLockBackTraceByIndex(_In_ ULONG Index)
-{
-    /* Capture the backtrace */
-    RtlCaptureStackBackTrace(1,
-                             _countof(CmpCacheTable[Index].LockBackTrace),
-                             CmpCacheTable[Index].LockBackTrace,
-                             NULL);
-}
-#endif
 
 //
 // Returns the hashkey corresponding to a convkey
@@ -71,7 +59,7 @@ CmpCaptureLockBackTraceByIndex(_In_ ULONG Index)
 //
 #define CMP_ASSERT_REGISTRY_LOCK_OR_LOADING(h)                      \
     ASSERT((CmpSpecialBootCondition == TRUE) ||                     \
-           (((PCMHIVE)h)->HiveIsLoading == TRUE) ||                 \
+           (((PCMHIVE)h)->CreatorOwner == KeGetCurrentThread()) ||                 \
            (CmpTestRegistryLock() == TRUE))
 
 //
@@ -86,7 +74,7 @@ CmpCaptureLockBackTraceByIndex(_In_ ULONG Index)
 //
 #define CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK_OR_LOADING(h)            \
     ASSERT((CmpSpecialBootCondition == TRUE) ||                     \
-           (((PCMHIVE)h)->HiveIsLoading == TRUE) ||                 \
+           (((PCMHIVE)h)->CreatorOwner == KeGetCurrentThread()) ||                 \
            (CmpTestRegistryLockExclusive() == TRUE))
 
 //
@@ -120,9 +108,6 @@ CmpAcquireKcbLockExclusiveByIndex(ULONG Index)
     ASSERT(CmpCacheTable[Index].Owner != KeGetCurrentThread());
     ExAcquirePushLockExclusive(&CmpCacheTable[Index].Lock);
     CmpCacheTable[Index].Owner = KeGetCurrentThread();
-#if DBG
-    CmpCaptureLockBackTraceByIndex(Index);
-#endif
 }
 
 //
@@ -292,13 +277,3 @@ CmpConvertKcbSharedToExclusive(IN PCM_KEY_CONTROL_BLOCK k)
 //
 #define CmpGetAllocPageFromDelayAlloc(a)                            \
     (PCM_ALLOC_PAGE)(((ULONG_PTR)(a)) & ~(PAGE_SIZE - 1))
-
-//
-// Makes sure that the registry is locked for flushes
-//
-#define CMP_ASSERT_FLUSH_LOCK(h)                                    \
-    ASSERT((CmpSpecialBootCondition == TRUE) ||                     \
-           (((PCMHIVE)h)->HiveIsLoading == TRUE) ||                 \
-           (CmpTestHiveFlusherLockShared((PCMHIVE)h) == TRUE) ||    \
-           (CmpTestHiveFlusherLockExclusive((PCMHIVE)h) == TRUE) || \
-           (CmpTestRegistryLockExclusive() == TRUE));

@@ -83,11 +83,14 @@ typedef struct _CONTEXT_EX
 #endif
 } CONTEXT_EX, *PCONTEXT_EX;
 
+#ifndef _RTL_RB_TREE_DEFINED
+#define _RTL_RB_TREE_DEFINED
 typedef struct _RTL_RB_TREE
 {
     RTL_BALANCED_NODE *root;
     RTL_BALANCED_NODE *min;
 } RTL_RB_TREE, *PRTL_RB_TREE;
+#endif
 
 #endif /* __REACTOS__ */
 

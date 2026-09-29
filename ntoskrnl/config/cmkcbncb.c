@@ -310,6 +310,15 @@ CmpRemoveKeyControlBlock(IN PCM_KEY_CONTROL_BLOCK Kcb)
 
     /* Remove the key hash */
     CmpRemoveKeyHash(&Kcb->KeyHash);
+    if (Kcb->Delete && (((PCMHIVE)Kcb->KeyHive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE))
+    {
+        PCMHIVE Hive = (PCMHIVE)Kcb->KeyHive;
+        PCM_KEY_HASH_TABLE_ENTRY Bucket = &Hive->DeletedKcbTable[Kcb->ConvKey % Hive->DeletedKcbTableSize];
+        ExAcquirePushLockExclusive(&Bucket->Lock);
+        Kcb->NextHash = Bucket->Entry;
+        Bucket->Entry = &Kcb->KeyHash;
+        ExReleasePushLockExclusive(&Bucket->Lock);
+    }
 }
 
 typedef struct _CMP_KCB_RENAME_CONTEXT
@@ -627,6 +636,7 @@ CmpCleanUpKcbCacheWithLock(IN PCM_KEY_CONTROL_BLOCK Kcb,
                            IN BOOLEAN LockHeldExclusively)
 {
     PCM_KEY_CONTROL_BLOCK Parent;
+    PCMHIVE Hive = (PCMHIVE)Kcb->KeyHive;
     PAGED_CODE();
 
     /* Sanity checks */
@@ -645,6 +655,17 @@ CmpCleanUpKcbCacheWithLock(IN PCM_KEY_CONTROL_BLOCK Kcb,
     /* Check if we were already deleted */
     Parent = Kcb->ParentKcb;
     if (!Kcb->Delete) CmpRemoveKeyControlBlock(Kcb);
+    else if (Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE)
+    {
+        PCM_KEY_HASH_TABLE_ENTRY Bucket = &Hive->DeletedKcbTable[Kcb->ConvKey % Hive->DeletedKcbTableSize];
+        PCM_KEY_HASH *Entry;
+        ExAcquirePushLockExclusive(&Bucket->Lock);
+        for (Entry = &Bucket->Entry; *Entry != &Kcb->KeyHash; Entry = &(*Entry)->NextHash)
+            ASSERT(*Entry != NULL);
+        *Entry = Kcb->NextHash;
+        ExReleasePushLockExclusive(&Bucket->Lock);
+    }
+    if (Hive->RootKcb == Kcb) Hive->RootKcb = NULL;
 
     /* Set invalid KCB signature */
     Kcb->Signature = CM_KCB_INVALID_SIGNATURE;
@@ -660,6 +681,7 @@ CmpCleanUpKcbCacheWithLock(IN PCM_KEY_CONTROL_BLOCK Kcb,
             CmpDereferenceKeyControlBlockWithLock(Parent,LockHeldExclusively) :
             CmpDelayDerefKeyControlBlock(Parent);
     }
+    if (Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE) CmpDereferenceHive(Hive);
 }
 
 VOID
@@ -1001,7 +1023,7 @@ CmpCreateKeyControlBlock(IN PHHIVE Hive,
             else
             {
                 /* Dereference the KCB */
-                CmpDereferenceKeyControlBlockWithLock(Parent, FALSE);
+                if (Parent) CmpDereferenceKeyControlBlockWithLock(Parent, FALSE);
 
                 /* Remove the KCB and free it */
                 CmpRemoveKeyControlBlock(Kcb);
@@ -1010,6 +1032,12 @@ CmpCreateKeyControlBlock(IN PHHIVE Hive,
                 Kcb = NULL;
             }
         }
+    }
+
+    if (Kcb && !FoundKcb && (((PCMHIVE)Hive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE))
+    {
+        Kcb->ExtFlags |= CM_KCB_NO_DELAY_CLOSE;
+        CmpReferenceHive((PCMHIVE)Hive);
     }
 
     /* Check if this is a KCB inside a frozen hive */
@@ -1139,7 +1167,9 @@ CmpConstructName(IN PCM_KEY_CONTROL_BLOCK Kcb)
         {
             /* Get the pointer to the name (from the keynode, if possible) */
             if ((MyKcb->Flags & (KEY_HIVE_ENTRY | KEY_HIVE_EXIT)) ||
-                !KeyNode)
+                !KeyNode ||
+                (!MyKcb->ParentKcb &&
+                 (((PCMHIVE)MyKcb->KeyHive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE)))
             {
                 CurrentNameW = MyKcb->NameBlock->Name;
             }
@@ -1154,7 +1184,9 @@ CmpConstructName(IN PCM_KEY_CONTROL_BLOCK Kcb)
         {
             /* Get the pointer to the name (from the keynode, if possible) */
             if ((MyKcb->Flags & (KEY_HIVE_ENTRY | KEY_HIVE_EXIT)) ||
-                !KeyNode)
+                !KeyNode ||
+                (!MyKcb->ParentKcb &&
+                 (((PCMHIVE)MyKcb->KeyHive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE)))
             {
                 CurrentName = (PUCHAR)MyKcb->NameBlock->Name;
             }

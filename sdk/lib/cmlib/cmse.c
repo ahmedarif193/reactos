@@ -14,7 +14,7 @@
 
 /* FUNCTIONS *****************************************************************/
 
-VOID
+NTSTATUS
 NTAPI
 CmpRemoveSecurityCellList(IN PHHIVE Hive,
                           IN HCELL_INDEX SecurityCell)
@@ -23,16 +23,15 @@ CmpRemoveSecurityCellList(IN PHHIVE Hive,
 
     PAGED_CODE();
 
-    // ASSERT( (((PCMHIVE)Hive)->HiveSecurityLockOwner == KeGetCurrentThread()) || (CmpTestRegistryLockExclusive() == TRUE) );
 
     SecurityData = (PCM_KEY_SECURITY)HvGetCell(Hive, SecurityCell);
-    if (!SecurityData) return;
+    if (!SecurityData) return STATUS_INSUFFICIENT_RESOURCES;
 
     FlinkCell = (PCM_KEY_SECURITY)HvGetCell(Hive, SecurityData->Flink);
     if (!FlinkCell)
     {
         HvReleaseCell(Hive, SecurityCell);
-        return;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     BlinkCell = (PCM_KEY_SECURITY)HvGetCell(Hive, SecurityData->Blink);
@@ -40,12 +39,16 @@ CmpRemoveSecurityCellList(IN PHHIVE Hive,
     {
         HvReleaseCell(Hive, SecurityData->Flink);
         HvReleaseCell(Hive, SecurityCell);
-        return;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    /* Sanity checks */
-    ASSERT(FlinkCell->Blink == SecurityCell);
-    ASSERT(BlinkCell->Flink == SecurityCell);
+    if (FlinkCell->Blink != SecurityCell || BlinkCell->Flink != SecurityCell)
+    {
+        HvReleaseCell(Hive, SecurityData->Blink);
+        HvReleaseCell(Hive, SecurityData->Flink);
+        HvReleaseCell(Hive, SecurityCell);
+        return STATUS_REGISTRY_CORRUPT;
+    }
 
     /* Unlink the security block and free it */
     FlinkCell->Blink = SecurityData->Blink;
@@ -58,57 +61,78 @@ CmpRemoveSecurityCellList(IN PHHIVE Hive,
     HvReleaseCell(Hive, SecurityData->Blink);
     HvReleaseCell(Hive, SecurityData->Flink);
     HvReleaseCell(Hive, SecurityCell);
+    return STATUS_SUCCESS;
 }
 
-VOID
+NTSTATUS
+NTAPI
+CmpDereferenceSecurityCell(IN PHHIVE Hive,
+                           IN HCELL_INDEX SecurityCell)
+{
+    PCM_KEY_SECURITY SecurityData;
+    HCELL_INDEX Flink, Blink;
+    BOOLEAN FreeCell = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    SecurityData = (PCM_KEY_SECURITY)HvGetCell(Hive, SecurityCell);
+    if (!SecurityData)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    ASSERT(SecurityData->Signature == CM_KEY_SECURITY_SIGNATURE);
+    ASSERT(SecurityData->ReferenceCount != 0);
+    Flink = SecurityData->Flink;
+    Blink = SecurityData->Blink;
+    if (!HvMarkCellDirty(Hive, SecurityCell, FALSE))
+    {
+        Status = STATUS_REGISTRY_IO_FAILED;
+        goto Done;
+    }
+    if (SecurityData->ReferenceCount > 1)
+    {
+        SecurityData->ReferenceCount--;
+    }
+    else if (HvMarkCellDirty(Hive, Flink, FALSE) &&
+             HvMarkCellDirty(Hive, Blink, FALSE))
+    {
+        Status = CmpRemoveSecurityCellList(Hive, SecurityCell);
+        FreeCell = NT_SUCCESS(Status);
+    }
+    else
+    {
+        Status = STATUS_REGISTRY_IO_FAILED;
+    }
+Done:
+    HvReleaseCell(Hive, SecurityCell);
+    if (FreeCell)
+        HvFreeCell(Hive, SecurityCell);
+    return Status;
+}
+
+NTSTATUS
 NTAPI
 CmpFreeSecurityDescriptor(IN PHHIVE Hive,
                           IN HCELL_INDEX Cell)
 {
     PCM_KEY_NODE CellData;
-    PCM_KEY_SECURITY SecurityData;
+    HCELL_INDEX SecurityCell;
+    NTSTATUS Status = STATUS_INSUFFICIENT_RESOURCES;
 
     PAGED_CODE();
 
-    // ASSERT( (((PCMHIVE)Hive)->HiveSecurityLockOwner == KeGetCurrentThread()) || (CmpTestRegistryLockExclusive() == TRUE) );
-
+    CmpLockHiveSecurity(Hive);
     CellData = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
-    if (!CellData) return;
-
-    ASSERT(CellData->Signature == CM_KEY_NODE_SIGNATURE);
-
-    // FIXME: ReactOS-specific: check whether this key has a security block.
-    // On Windows there is no such check, all keys seem to have a valid
-    // security block.
-    // If we remove this check on ReactOS (and continue running) then we get
-    // a BSOD at the end...
-    if (CellData->Security == HCELL_NIL)
+    if (CellData)
     {
-        DPRINT("Cell 0x%08x (data 0x%p) has no security block!\n", Cell, CellData);
+        ASSERT(CellData->Signature == CM_KEY_NODE_SIGNATURE);
+        SecurityCell = CellData->Security;
+        Status = STATUS_SUCCESS;
+        if (SecurityCell != HCELL_NIL)
+        {
+            Status = CmpDereferenceSecurityCell(Hive, SecurityCell);
+            if (NT_SUCCESS(Status))
+                CellData->Security = HCELL_NIL;
+        }
         HvReleaseCell(Hive, Cell);
-        return;
     }
-
-    SecurityData = (PCM_KEY_SECURITY)HvGetCell(Hive, CellData->Security);
-    if (!SecurityData)
-    {
-        HvReleaseCell(Hive, Cell);
-        return;
-    }
-
-    ASSERT(SecurityData->Signature == CM_KEY_SECURITY_SIGNATURE);
-
-    if (SecurityData->ReferenceCount > 1)
-    {
-        SecurityData->ReferenceCount--;
-    }
-    else // if (SecurityData->ReferenceCount <= 1)
-    {
-        CmpRemoveSecurityCellList(Hive, CellData->Security);
-        HvFreeCell(Hive, CellData->Security);
-    }
-
-    CellData->Security = HCELL_NIL;
-    HvReleaseCell(Hive, CellData->Security);
-    HvReleaseCell(Hive, Cell);
+    CmpUnlockHiveSecurity(Hive);
+    return Status;
 }

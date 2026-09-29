@@ -23,7 +23,7 @@ BOOLEAN CmpForceForceFlush;
 BOOLEAN CmpHoldLazyFlush = TRUE;
 ULONG CmpLazyFlushIntervalInSeconds = 5;
 ULONG CmpLazyFlushHiveCount = 7;
-ULONG CmpLazyFlushCount = 1;
+ULONG CmpLazyFlushCount;
 LONG CmpFlushStarveWriters;
 
 /* FUNCTIONS ******************************************************************/
@@ -34,96 +34,61 @@ CmpDoFlushNextHive(_In_  BOOLEAN ForceFlush,
                    _Out_ PBOOLEAN Error,
                    _Out_ PULONG DirtyCount)
 {
-    NTSTATUS Status;
     PLIST_ENTRY NextEntry;
     PCMHIVE CmHive;
-    BOOLEAN Result;
+    BOOLEAN MoreWork;
+    ULONG Position = 0;
     ULONG HiveCount = CmpLazyFlushHiveCount;
 
-    /* Set Defaults */
     *Error = FALSE;
     *DirtyCount = 0;
+    if (CmpNoWrite)
+        return FALSE;
+    if (!HiveCount)
+        HiveCount = 1;
 
-    /* Don't do anything if we're not supposed to */
-    if (CmpNoWrite) return TRUE;
-
-    /* Make sure we have to flush at least one hive */
-    if (!HiveCount) HiveCount = 1;
-
-    /* Acquire the list lock and loop */
     ExAcquirePushLockShared(&CmpHiveListHeadLock);
     NextEntry = CmpHiveListHead.Flink;
-    while ((NextEntry != &CmpHiveListHead) && HiveCount)
+    while (NextEntry != &CmpHiveListHead && Position < CmpLazyFlushCount)
     {
-        /* Get the hive and check if we should flush it */
         CmHive = CONTAINING_RECORD(NextEntry, CMHIVE, HiveList);
-        if (!(CmHive->Hive.HiveFlags & HIVE_NOLAZYFLUSH) &&
-            (CmHive->FlushCount != CmpLazyFlushCount))
-        {
-            /* Great success! */
-            Result = TRUE;
-
-            /* One less to flush */
-            HiveCount--;
-
-            /* Ignore clean or volatile hives */
-            if ((!CmHive->Hive.DirtyCount && !ForceFlush) ||
-                (CmHive->Hive.HiveFlags & HIVE_VOLATILE))
-            {
-                /* Don't do anything but do update the count */
-                CmHive->FlushCount = CmpLazyFlushCount;
-                DPRINT("Hive %wZ is clean.\n", &CmHive->FileFullPath);
-            }
-            else
-            {
-                /* Do the sync */
-                DPRINT("Flushing: %wZ\n", &CmHive->FileFullPath);
-                DPRINT("Handle: %p\n", CmHive->FileHandles[HFILE_TYPE_PRIMARY]);
-                CmpLockHiveFlusherExclusive(CmHive);
-                Status = HvSyncHive(&CmHive->Hive) ?
-                         STATUS_SUCCESS : STATUS_REGISTRY_IO_FAILED;
-                CmpUnlockHiveFlusher(CmHive);
-                if (!NT_SUCCESS(Status))
-                {
-                    /* Let them know we failed */
-                    DPRINT1("Failed to flush %wZ on handle %p (status 0x%08lx)\n",
-                        &CmHive->FileFullPath,  CmHive->FileHandles[HFILE_TYPE_PRIMARY], Status);
-                    *Error = TRUE;
-                    Result = FALSE;
-                    break;
-                }
-                CmHive->FlushCount = CmpLazyFlushCount;
-            }
-        }
-        else if (CmHive->Hive.DirtyCount &&
-                 !(CmHive->Hive.HiveFlags & HIVE_VOLATILE) &&
-                 !(CmHive->Hive.HiveFlags & HIVE_NOLAZYFLUSH))
-        {
-            /* Use another lazy flusher for this hive */
-            ASSERT(CmHive->FlushCount == CmpLazyFlushCount);
-            *DirtyCount += CmHive->Hive.DirtyCount;
-            DPRINT("CmHive %wZ already uptodate.\n", &CmHive->FileFullPath);
-        }
-
-        /* Try the next one */
+        if (!(CmHive->Hive.HiveFlags & (HIVE_NOLAZYFLUSH | HIVE_VOLATILE)) &&
+            CmHive->Hive.DirtyCount)
+            *DirtyCount = 1;
         NextEntry = NextEntry->Flink;
+        ++Position;
     }
-
-    /* Check if we've flushed everything */
     if (NextEntry == &CmpHiveListHead)
     {
-        /* We have, tell the caller we're done */
-        Result = FALSE;
+        NextEntry = CmpHiveListHead.Flink;
+        Position = 0;
+        *DirtyCount = 0;
     }
-    else
+    while (NextEntry != &CmpHiveListHead && HiveCount)
     {
-        /* We need to be called again */
-        Result = TRUE;
-    }
+        CmHive = CONTAINING_RECORD(NextEntry, CMHIVE, HiveList);
+        NextEntry = NextEntry->Flink;
+        ++Position;
+        if (CmHive->Hive.HiveFlags & HIVE_NOLAZYFLUSH)
+            continue;
+        --HiveCount;
+        if (CmHive->Hive.HiveFlags & HIVE_VOLATILE)
+            continue;
+        if (!CmHive->Hive.DirtyCount && !ForceFlush)
+            continue;
 
-    /* Unlock the list and return the result */
-    ExReleasePushLock(&CmpHiveListHeadLock);
-    return Result;
+        CmpLockHiveFlusherExclusive(CmHive);
+        if (!HvSyncHive(&CmHive->Hive))
+        {
+            *Error = TRUE;
+            *DirtyCount = 1;
+        }
+        CmpUnlockHiveFlusher(CmHive);
+    }
+    MoreWork = NextEntry != &CmpHiveListHead;
+    CmpLazyFlushCount = MoreWork ? Position : 0;
+    ExReleasePushLockShared(&CmpHiveListHeadLock);
+    return MoreWork;
 }
 
 _Function_class_(KDEFERRED_ROUTINE)
@@ -207,12 +172,6 @@ CmpLazyFlushWorker(IN PVOID Parameter)
 
     /* Flush the next hive */
     MoreWork = CmpDoFlushNextHive(ForceFlush, &Result, &DirtyCount);
-    if (!MoreWork)
-    {
-        /* We're done */
-        InterlockedIncrement((PLONG)&CmpLazyFlushCount);
-    }
-
     /* Check if we have starved writers */
     if (!ForceFlush)
         InterlockedDecrement(&CmpFlushStarveWriters);
@@ -221,10 +180,10 @@ CmpLazyFlushWorker(IN PVOID Parameter)
     CmpLazyFlushPending = FALSE;
     CmpUnlockRegistry();
 
-    DPRINT("Lazy flush done. More work to be done: %s. Entries still dirty: %u.\n",
-        MoreWork ? "Yes" : "No", DirtyCount);
+    DPRINT("Lazy flush done. More work to be done: %s. Dirty hives remain: %s.\n",
+        MoreWork ? "Yes" : "No", DirtyCount ? "Yes" : "No");
 
-    if (MoreWork)
+    if (MoreWork || DirtyCount || Result)
     {
         /* Relaunch the flush timer, so the remaining hives get flushed */
         CmpLazyFlush();

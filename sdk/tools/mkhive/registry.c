@@ -348,6 +348,35 @@ static UCHAR SystemSecurity[] =
 
 /* GLOBALS ******************************************************************/
 
+static UCHAR SecurityHiveSecurity[] =
+{
+    0x01, 0x00, 0x14, 0x80,
+    0x48, 0x00, 0x00, 0x00,
+    0x58, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x14, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x34, 0x00,
+    0x02, 0x00, 0x00, 0x00,
+    0x00, 0x02, 0x14, 0x00,
+    0x3F, 0x00, 0x0F, 0x00,
+    0x01, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x05,
+    0x12, 0x00, 0x00, 0x00,
+    0x00, 0x02, 0x18, 0x00,
+    0x00, 0x00, 0x06, 0x00,
+    0x01, 0x02, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x05,
+    0x20, 0x00, 0x00, 0x00,
+    0x20, 0x02, 0x00, 0x00,
+    0x01, 0x02, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x05,
+    0x20, 0x00, 0x00, 0x00,
+    0x20, 0x02, 0x00, 0x00,
+    0x01, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x05,
+    0x12, 0x00, 0x00, 0x00
+};
+
 HIVE_LIST_ENTRY RegistryHives[/*MAX_NUMBER_OF_REGISTRY_HIVES*/] =
 {
     /* Special Setup system registry hive */
@@ -359,7 +388,7 @@ HIVE_LIST_ENTRY RegistryHives[/*MAX_NUMBER_OF_REGISTRY_HIVES*/] =
     { "SOFTWARE", L"Registry\\Machine\\SOFTWARE"   , &SoftwareHive, SoftwareSecurity, sizeof(SoftwareSecurity) },
     { "DEFAULT" , L"Registry\\User\\.DEFAULT"      , &DefaultHive , SystemSecurity  , sizeof(SystemSecurity)   },
     { "SAM"     , L"Registry\\Machine\\SAM"        , &SamHive     , SystemSecurity  , sizeof(SystemSecurity)   },
-    { "SECURITY", L"Registry\\Machine\\SECURITY"   , &SecurityHive, NULL            , 0                        },
+    { "SECURITY", L"Registry\\Machine\\SECURITY"   , &SecurityHive, SecurityHiveSecurity, sizeof(SecurityHiveSecurity) },
     { "BCD"     , L"Registry\\Machine\\BCD00000000", &BcdHive     , BcdSecurity     , sizeof(BcdSecurity)      },
 };
 C_ASSERT(_countof(RegistryHives) == MAX_NUMBER_OF_REGISTRY_HIVES);
@@ -1048,7 +1077,11 @@ ConnectRegistry(
                                   HiveToConnect->Hive.BaseBlock->RootCell,
                                   SecurityDescriptor, SecurityDescriptorLength);
     if (!NT_SUCCESS(Status))
+    {
         DPRINT1("Failed to add security for root key '%S'\n", Path);
+        free(ReparsePoint);
+        return FALSE;
+    }
 
     /* Create the key */
     rc = RegCreateKeyExW(RootKey,
@@ -1130,7 +1163,7 @@ CreateSymLink(
     return TRUE;
 }
 
-VOID
+BOOL
 RegInitializeRegistry(
     IN PCSTR HiveList)
 {
@@ -1145,11 +1178,13 @@ RegInitializeRegistry(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CmiInitializeHive() failed with status 0x%08x\n", Status);
-        return;
+        return FALSE;
     }
 
     RootKey = CreateInMemoryStructure(&RootHive,
                                       RootHive.Hive.BaseBlock->RootCell);
+    if (!RootKey)
+        return FALSE;
 
     for (i = 0; i < _countof(RegistryHives); ++i)
     {
@@ -1158,11 +1193,12 @@ RegInitializeRegistry(
             continue;
 
         /* Create the registry key */
-        ConnectRegistry(NULL,
+        if (!ConnectRegistry(NULL,
                         RegistryHives[i].HiveRegistryPath,
                         RegistryHives[i].CmHive,
                         RegistryHives[i].SecurityDescriptor,
-                        RegistryHives[i].SecurityDescriptorLength);
+                        RegistryHives[i].SecurityDescriptorLength))
+            return FALSE;
 
         /* If we happen to deal with the special setup registry hive, stop there */
         // if (strcmp(RegistryHives[i].HiveName, "SETUPREG") == 0)
@@ -1187,6 +1223,7 @@ RegInitializeRegistry(
     /* Link S-1-5-18 to .Default */
     CmpLinkKeyToHive(L"\\Registry\\User\\S-1-5-18", L"\\Registry\\User\\.Default");
 #endif
+    return TRUE;
 }
 
 VOID

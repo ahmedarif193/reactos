@@ -132,8 +132,6 @@ CmGetSystemControlValues(IN PVOID SystemHiveData,
                           NULL,
                           NULL,
                           NULL,
-                          NULL,
-                          NULL,
                           1,
                           NULL);
     if (!NT_SUCCESS(Status)) KeBugCheckEx(BAD_SYSTEM_CONFIG_INFO, 1, 1, 0, 0);

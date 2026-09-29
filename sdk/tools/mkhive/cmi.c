@@ -30,6 +30,10 @@
 #define NDEBUG
 #include "mkhive.h"
 
+#ifdef _WIN32
+#include <malloc.h>
+#endif
+
 /* FUNCTIONS ****************************************************************/
 
 PVOID
@@ -39,7 +43,15 @@ CmpAllocate(
     IN BOOLEAN Paged,
     IN ULONG Tag)
 {
-    return (PVOID)malloc((size_t)Size);
+#ifdef _WIN32
+    return _aligned_malloc((size_t)Size, 16);
+#else
+    PVOID Buffer;
+
+    if (posix_memalign(&Buffer, 16, (size_t)Size))
+        return NULL;
+    return Buffer;
+#endif
 }
 
 VOID
@@ -48,7 +60,11 @@ CmpFree(
     IN PVOID Ptr,
     IN ULONG Quota)
 {
+#ifdef _WIN32
+    _aligned_free(Ptr);
+#else
     free(Ptr);
+#endif
 }
 
 static BOOLEAN
@@ -85,19 +101,7 @@ CmpFileWrite(
     return (fwrite(Buffer, 1, BufferLength, File) == BufferLength);
 }
 
-static BOOLEAN
-NTAPI
-CmpFileSetSize(
-    IN PHHIVE RegistryHive,
-    IN ULONG FileType,
-    IN ULONG FileSize,
-    IN ULONG OldFileSize)
-{
-    DPRINT1("CmpFileSetSize() unimplemented\n");
-    return FALSE;
-}
-
-static BOOLEAN
+BOOLEAN
 NTAPI
 CmpFileFlush(
     IN PHHIVE RegistryHive,
@@ -128,10 +132,8 @@ CmiInitializeHive(
                           0,
                           CmpAllocate,
                           CmpFree,
-                          CmpFileSetSize,
                           CmpFileWrite,
                           CmpFileRead,
-                          CmpFileFlush,
                           1,
                           NULL);
     if (!NT_SUCCESS(Status))
@@ -163,6 +165,9 @@ CmiCreateSecurityKey(
     HCELL_INDEX SecurityCell;
     PCM_KEY_NODE Node;
     PCM_KEY_SECURITY Security;
+
+    if (!Descriptor || DescriptorLength < sizeof(SECURITY_DESCRIPTOR_RELATIVE))
+        return STATUS_INVALID_PARAMETER;
 
     Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
     SecurityCell = HvAllocateCell(Hive,

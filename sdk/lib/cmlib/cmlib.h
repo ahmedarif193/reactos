@@ -19,20 +19,6 @@
     #include <stdio.h>
     #include <string.h>
 
-    // NTDDI_xxx versions we allude to in the library (see psdk/sdkddkver.h)
-    #define NTDDI_WS03SP4                       0x05020400
-    #define NTDDI_WIN6                          0x06000000
-    #define NTDDI_LONGHORN                      NTDDI_WIN6
-    #define NTDDI_VISTA                         NTDDI_WIN6
-    #define NTDDI_WIN7                          0x06010000
-
-    // Track the kernel's NTDDI level — CMakeLists.txt forwards
-    // -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI} for both kernel and host builds.
-    // Fall back to WS03SP4 if no explicit value was provided (legacy behaviour).
-    #ifndef NTDDI_VERSION
-    #define NTDDI_VERSION   NTDDI_WS03SP4
-    #endif
-
     /* C_ASSERT Definition */
     #define C_ASSERT(expr) extern char (*c_assert(void)) [(expr) ? 1 : -1]
 
@@ -126,6 +112,12 @@
         IN ULONG NumberToSet);
 
     VOID NTAPI
+    RtlClearBits(
+        IN PRTL_BITMAP BitMapHeader,
+        IN ULONG StartingIndex,
+        IN ULONG NumberToClear);
+
+    VOID NTAPI
     RtlSetAllBits(
         IN PRTL_BITMAP BitMapHeader);
 
@@ -143,6 +135,15 @@
     #define PKEVENT PVOID
     #define PWORK_QUEUE_ITEM PVOID
     #define EX_PUSH_LOCK PULONG_PTR
+
+    typedef struct _EX_RUNDOWN_REF
+    {
+        union
+        {
+            ULONG_PTR Count;
+            PVOID Ptr;
+        };
+    } EX_RUNDOWN_REF, *PEX_RUNDOWN_REF;
 
     // Definitions copied from <ntifs.h>
     // We only want to include host headers, so we define them manually
@@ -317,51 +318,164 @@ typedef struct _CM_USE_COUNT_LOG
 //
 // Configuration Manager Hive Structure
 //
+typedef enum _CM_DIRTY_VECTOR_OPERATION
+{
+    DirtyVectorModified = 0,
+    DirtyDataCaptureStart = 1,
+    DirtyDataCaptureEnd = 2
+} CM_DIRTY_VECTOR_OPERATION;
+
+typedef struct _CM_DIRTY_VECTOR_LOG_ENTRY
+{
+    struct _ETHREAD *Thread;
+    CM_DIRTY_VECTOR_OPERATION Operation;
+    union
+    {
+        struct
+        {
+            ULONG Start;
+            ULONG Length;
+        } DirtyVectorModifiedContext;
+        struct
+        {
+            ULONG RangeCount;
+            ULONG SetBitCount;
+        } DirtyDataCaptureContext;
+        struct
+        {
+            ULONG Context1;
+            ULONG Context2;
+        } Raw;
+    } Data;
+    PVOID Stack[6];
+} CM_DIRTY_VECTOR_LOG_ENTRY, *PCM_DIRTY_VECTOR_LOG_ENTRY;
+
+typedef struct _CM_DIRTY_VECTOR_LOG
+{
+    volatile ULONG Next;
+    ULONG Size;
+    CM_DIRTY_VECTOR_LOG_ENTRY Log[16];
+} CM_DIRTY_VECTOR_LOG, *PCM_DIRTY_VECTOR_LOG;
+
+typedef struct _HIVE_WRITE_WAIT_QUEUE
+{
+    struct _ETHREAD *ActiveThread;
+    struct _HIVE_WAIT_PACKET *WaitList;
+} HIVE_WRITE_WAIT_QUEUE, *PHIVE_WRITE_WAIT_QUEUE;
+
+#define CMHIVE_FLAG_APPLICATION_HIVE 0x20
+
 typedef struct _CMHIVE
 {
     HHIVE Hive;
-    HANDLE FileHandles[HFILE_TYPE_MAX];
+    HANDLE FileHandles[6];
     LIST_ENTRY NotifyList;
     LIST_ENTRY HiveList;
-    EX_PUSH_LOCK HiveLock;
-    PKTHREAD HiveLockOwner;
-    PKGUARDED_MUTEX ViewLock;
-    PKTHREAD ViewLockOwner;
-    EX_PUSH_LOCK WriterLock;
-    PKTHREAD WriterLockOwner;
-    PERESOURCE FlusherLock;
+    LIST_ENTRY PreloadedHiveList;
+    EX_RUNDOWN_REF HiveRundown;
+    struct _CM_KEY_HASH_TABLE_ENTRY *KcbCacheTable;
+    ULONG KcbCacheTableSize;
+    struct _CM_KEY_HASH_TABLE_ENTRY *DeletedKcbTable;
+    ULONG DeletedKcbTableSize;
+    ULONG Identity;
+    CMSI_RW_LOCK HiveLock;
+    RTL_BITMAP FlushDirtyVector;
+    ULONG FlushDirtyVectorSize;
+    PULONG FlushLogEntryOffsetArray;
+    ULONG FlushLogEntryOffsetArrayCount;
+    ULONG FlushLogEntrySize;
+    ULONG FlushHiveTruncated;
+    BOOLEAN FlushBaseBlockDirty;
+    RTL_BITMAP CapturedUnreconciledVector;
+    ULONG CapturedUnreconciledVectorSize;
+    PULONG UnreconciledOffsetArray;
+    ULONG UnreconciledOffsetArrayCount;
+    PHBASE_BLOCK UnreconciledBaseBlock;
     EX_PUSH_LOCK SecurityLock;
-    PKTHREAD HiveSecurityLockOwner;
-    LIST_ENTRY LRUViewListHead;
-    LIST_ENTRY PinViewListHead;
-    PFILE_OBJECT FileObject;
+    ULONG LastShrinkHiveSize;
+    LARGE_INTEGER ActualFileSize;
+    LARGE_INTEGER LogFileSizes[2];
     UNICODE_STRING FileFullPath;
     UNICODE_STRING FileUserName;
-    USHORT MappedViews;
-    USHORT PinnedViews;
-    ULONG UseCount;
+    UNICODE_STRING HiveRootPath;
     ULONG SecurityCount;
     ULONG SecurityCacheSize;
     LONG SecurityHitHint;
     PCM_KEY_SECURITY_CACHE_ENTRY SecurityCache;
     LIST_ENTRY SecurityHash[CMP_SECURITY_HASH_LISTS];
-    PKEVENT UnloadEvent;
+    ULONG UnloadEventCount;
+    struct _KEVENT **UnloadEventArray;
     PCM_KEY_CONTROL_BLOCK RootKcb;
     BOOLEAN Frozen;
-    PWORK_QUEUE_ITEM UnloadWorkItem;
-    BOOLEAN GrowOnlyMode;
-    ULONG GrowOffset;
-    LIST_ENTRY KcbConvertListHead;
-    LIST_ENTRY KnodeConvertListHead;
-    PCM_CELL_REMAP_BLOCK CellRemapArray;
-    CM_USE_COUNT_LOG UseCountLog;
-    CM_USE_COUNT_LOG LockHiveLog;
+    CM_DIRTY_VECTOR_LOG DirtyVectorLog;
     ULONG Flags;
     LIST_ENTRY TrustClassEntry;
-    ULONG FlushCount;
-    BOOLEAN HiveIsLoading;
+    ULONGLONG DirtyTime;
+    ULONGLONG UnreconciledTime;
+    struct _CM_RM *CmRm;
+    ULONG CmRmInitFailPoint;
+    NTSTATUS CmRmInitFailStatus;
     PKTHREAD CreatorOwner;
+    PKTHREAD RundownThread;
+    LARGE_INTEGER LastWriteTime;
+    HIVE_WRITE_WAIT_QUEUE FlushQueue;
+    HIVE_WRITE_WAIT_QUEUE ReconcileQueue;
+    union
+    {
+        ULONG FlushFlags;
+        struct
+        {
+            ULONG PrimaryFilePurged : 1;
+            ULONG DiskFileBad : 1;
+        };
+    };
+    ULONG PrimaryFileSizeBeforeLastFlush;
+    volatile LONG ReferenceCount;
+    LONG UnloadHistoryIndex;
+    ULONG UnloadHistory[128];
+    ULONG BootStart;
+    ULONG UnaccessedStart;
+    ULONG UnaccessedEnd;
+    ULONG LoadedKeyCount;
+    volatile ULONG HandleClosePending;
+    EX_PUSH_LOCK HandleClosePendingEvent;
+    BOOLEAN FinalFlushSucceeded;
+    struct _CMP_VOLUME_CONTEXT *VolumeContext;
+    ULONG LateUnloadWorkItemState;
+    EX_PUSH_LOCK LateUnloadFinishedEvent;
+    PWORK_QUEUE_ITEM LateUnloadWorkItem;
 } CMHIVE, *PCMHIVE;
+
+#if defined(_M_ARM64)
+C_ASSERT(sizeof(CM_DIRTY_VECTOR_LOG_ENTRY) == 72);
+C_ASSERT(FIELD_OFFSET(CM_DIRTY_VECTOR_LOG_ENTRY, Thread) == 0);
+C_ASSERT(FIELD_OFFSET(CM_DIRTY_VECTOR_LOG_ENTRY, Operation) == 8);
+C_ASSERT(FIELD_OFFSET(CM_DIRTY_VECTOR_LOG_ENTRY, Data) == 12);
+C_ASSERT(FIELD_OFFSET(CM_DIRTY_VECTOR_LOG_ENTRY, Stack) == 24);
+C_ASSERT(sizeof(CM_DIRTY_VECTOR_LOG) == 1160);
+C_ASSERT(FIELD_OFFSET(CM_DIRTY_VECTOR_LOG, Next) == 0);
+C_ASSERT(FIELD_OFFSET(CM_DIRTY_VECTOR_LOG, Size) == 4);
+C_ASSERT(FIELD_OFFSET(CM_DIRTY_VECTOR_LOG, Log) == 8);
+C_ASSERT(sizeof(HIVE_WRITE_WAIT_QUEUE) == 16);
+C_ASSERT(FIELD_OFFSET(HIVE_WRITE_WAIT_QUEUE, ActiveThread) == 0);
+C_ASSERT(FIELD_OFFSET(HIVE_WRITE_WAIT_QUEUE, WaitList) == 8);
+C_ASSERT(sizeof(CMHIVE) == 4824);
+C_ASSERT(FIELD_OFFSET(CMHIVE, FileHandles) == 1544);
+C_ASSERT(FIELD_OFFSET(CMHIVE, HiveList) == 1608);
+C_ASSERT(FIELD_OFFSET(CMHIVE, HiveRundown) == 1640);
+C_ASSERT(FIELD_OFFSET(CMHIVE, HiveLock) == 1680);
+C_ASSERT(FIELD_OFFSET(CMHIVE, SecurityLock) == 1784);
+C_ASSERT(FIELD_OFFSET(CMHIVE, FileFullPath) == 1824);
+C_ASSERT(FIELD_OFFSET(CMHIVE, SecurityCache) == 1888);
+C_ASSERT(FIELD_OFFSET(CMHIVE, RootKcb) == 2936);
+C_ASSERT(FIELD_OFFSET(CMHIVE, DirtyVectorLog) == 2952);
+C_ASSERT(FIELD_OFFSET(CMHIVE, Flags) == 4112);
+C_ASSERT(FIELD_OFFSET(CMHIVE, CreatorOwner) == 4168);
+C_ASSERT(FIELD_OFFSET(CMHIVE, FlushQueue) == 4192);
+C_ASSERT(FIELD_OFFSET(CMHIVE, ReferenceCount) == 4232);
+C_ASSERT(FIELD_OFFSET(CMHIVE, LoadedKeyCount) == 4764);
+C_ASSERT(FIELD_OFFSET(CMHIVE, LateUnloadWorkItem) == 4816);
+#endif
 
 typedef struct _HV_HIVE_CELL_PAIR
 {
@@ -439,6 +553,13 @@ CmpIsKeyValueBig(IN PHHIVE Hive,
 /*
  * Public Hive functions.
  */
+BOOLEAN CMAPI
+CmpFileFlush(
+    PHHIVE RegistryHive,
+    ULONG FileType,
+    PLARGE_INTEGER FileOffset,
+    ULONG Length);
+
 NTSTATUS CMAPI
 HvInitialize(
     PHHIVE RegistryHive,
@@ -448,10 +569,8 @@ HvInitialize(
     PVOID HiveData OPTIONAL,
     PALLOCATE_ROUTINE Allocate,
     PFREE_ROUTINE Free,
-    PFILE_SET_SIZE_ROUTINE FileSetSize,
     PFILE_WRITE_ROUTINE FileWrite,
     PFILE_READ_ROUTINE FileRead,
-    PFILE_FLUSH_ROUTINE FileFlush,
     ULONG Cluster OPTIONAL,
     PCUNICODE_STRING FileName OPTIONAL);
 
@@ -542,12 +661,6 @@ BOOLEAN CMAPI
 HvWriteHive(
    PHHIVE RegistryHive);
 
-#if (NTDDI_VERSION < NTDDI_VISTA)
-BOOLEAN
-CMAPI
-HvWriteAlternateHive(
-    _In_ PHHIVE RegistryHive);
-#endif
 
 BOOLEAN
 CMAPI
@@ -576,6 +689,34 @@ PCELL_DATA CMAPI
 HvpGetCellData(
     _In_ PHHIVE Hive,
     _In_ HCELL_INDEX CellIndex);
+
+PHMAP_ENTRY CMAPI
+HvpLookupCellMap(
+    PHHIVE Hive,
+    HSTORAGE_TYPE Storage,
+    ULONG BlockIndex);
+
+PVOID CMAPI
+HvpLookupBlock(
+    PHHIVE Hive,
+    HSTORAGE_TYPE Storage,
+    ULONG BlockIndex);
+
+PHBIN CMAPI
+HvpLookupBin(
+    PHHIVE Hive,
+    HSTORAGE_TYPE Storage,
+    ULONG BlockIndex);
+
+BOOLEAN CMAPI
+HvpCheckBinCells(
+    PHBIN Bin);
+
+BOOLEAN CMAPI
+HvpMapHiveBin(
+    PHHIVE Hive,
+    HSTORAGE_TYPE Storage,
+    PHBIN Bin);
 
 PHBIN CMAPI
 HvpAddBin(
@@ -911,14 +1052,29 @@ CmpFreeKeyByCell(
     IN BOOLEAN Unlink
 );
 
-VOID
+NTSTATUS
 NTAPI
 CmpRemoveSecurityCellList(
     IN PHHIVE Hive,
     IN HCELL_INDEX SecurityCell
 );
 
-VOID
+NTSTATUS
+NTAPI
+CmpDereferenceSecurityCell(
+    IN PHHIVE Hive,
+    IN HCELL_INDEX SecurityCell
+);
+
+#if !defined(CMLIB_HOST) && !defined(_BLDR_)
+VOID NTAPI CmpLockHiveSecurity(IN PHHIVE Hive);
+VOID NTAPI CmpUnlockHiveSecurity(IN PHHIVE Hive);
+#else
+#define CmpLockHiveSecurity(Hive) ((void)(Hive))
+#define CmpUnlockHiveSecurity(Hive) ((void)(Hive))
+#endif
+
+NTSTATUS
 NTAPI
 CmpFreeSecurityDescriptor(
     IN PHHIVE Hive,

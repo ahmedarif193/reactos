@@ -1177,22 +1177,30 @@ NtLoadKeyEx(IN POBJECT_ATTRIBUTES TargetKey,
     UNICODE_STRING TargetKeyName, SourceFileName;
     HANDLE KmTargetKeyRootDir = NULL, KmSourceFileRootDir = NULL;
     PCM_KEY_BODY KeyBody = NULL;
+    PCM_KEY_BODY AppRoot = NULL;
+    PCMHIVE AppHive = NULL;
+    HANDLE AppHandle = NULL;
+    ULONG HandleAttributes;
+    KPROCESSOR_MODE AppAccessMode;
 
     PAGED_CODE();
 
     UNREFERENCED_PARAMETER(Event);
-    UNREFERENCED_PARAMETER(DesiredAccess);
     UNREFERENCED_PARAMETER(IoStatus);
 
     if (RootHandle != NULL && !(Flags & REG_APP_HIVE))
         return STATUS_INVALID_PARAMETER_7;
 
+    if ((Flags & REG_APP_HIVE) && !RootHandle)
+        return STATUS_INVALID_PARAMETER_7;
+
     /* Validate flags */
-    if (Flags & ~REG_NO_LAZY_FLUSH)
+    if (Flags & ~(REG_NO_LAZY_FLUSH | REG_APP_HIVE))
         return STATUS_INVALID_PARAMETER;
 
     /* Validate privilege */
-    if (!SeSinglePrivilegeCheck(SeRestorePrivilege, PreviousMode))
+    if (!(Flags & REG_APP_HIVE) &&
+        !SeSinglePrivilegeCheck(SeRestorePrivilege, PreviousMode))
     {
         DPRINT1("Restore Privilege missing!\n");
         return STATUS_PRIVILEGE_NOT_HELD;
@@ -1216,6 +1224,9 @@ NtLoadKeyEx(IN POBJECT_ATTRIBUTES TargetKey,
             ProbeForRead(SourceFile,
                          sizeof(OBJECT_ATTRIBUTES),
                          sizeof(ULONG));
+
+            if (RootHandle)
+                ProbeForWriteHandle(RootHandle);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -1234,6 +1245,8 @@ NtLoadKeyEx(IN POBJECT_ATTRIBUTES TargetKey,
                                              TRUE);
     if (!NT_SUCCESS(Status))
         goto Quit;
+
+    HandleAttributes = CapturedTargetKey.Attributes;
 
     /*
      * Probe and capture the source file attributes, but not the security.
@@ -1282,13 +1295,67 @@ NtLoadKeyEx(IN POBJECT_ATTRIBUTES TargetKey,
                                            PreviousMode,
                                            (PVOID*)&KeyBody,
                                            NULL);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
     }
 
-    /* Call the internal API */
-    Status = CmLoadKey(&CapturedTargetKey,
-                       &CapturedSourceFile,
-                       Flags,
-                       KeyBody);
+    if (Flags & REG_APP_HIVE)
+    {
+        CmpLockRegistryExclusive();
+        Status = CmpLoadAppHive(&CapturedTargetKey,
+                               &CapturedSourceFile,
+                               Flags,
+                               PreviousMode,
+                               &AppRoot,
+                               &AppHive);
+        if (NT_SUCCESS(Status))
+        {
+            ObDeleteCapturedInsertInfo(AppRoot);
+            Status = CmpAppHiveAccessMode(AppHive,
+                                          DesiredAccess,
+                                          (HandleAttributes & OBJ_FORCE_ACCESS_CHECK) ?
+                                              UserMode : PreviousMode,
+                                          &AppAccessMode);
+            if (NT_SUCCESS(Status))
+            {
+                Status = ObOpenObjectByPointer(AppRoot,
+                                               HandleAttributes & ~OBJ_FORCE_ACCESS_CHECK,
+                                               NULL,
+                                               DesiredAccess,
+                                               CmpKeyObjectType,
+                                               AppAccessMode,
+                                               &AppHandle);
+            }
+        }
+        CmpUnlockRegistry();
+        if (NT_SUCCESS(Status))
+        {
+            _SEH2_TRY
+            {
+                *RootHandle = AppHandle;
+                AppHandle = NULL;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
+        if (AppHandle)
+            ObCloseHandle(AppHandle, KernelMode);
+        if (AppRoot)
+            ObDereferenceObject(AppRoot);
+        if (AppHive)
+            CmpCompleteAppHiveLoad(AppHive);
+    }
+    else
+    {
+        /* Call the internal API */
+        Status = CmLoadKey(&CapturedTargetKey,
+                           &CapturedSourceFile,
+                           Flags,
+                           KeyBody);
+    }
 
     /* Dereference the trust key, if any */
     if (KeyBody) ObDereferenceObject(KeyBody);

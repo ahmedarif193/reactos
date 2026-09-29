@@ -78,7 +78,11 @@ CmpFreeValue(IN PHHIVE Hive,
 
     /* Get the cell data */
     Value = (PCM_KEY_VALUE)HvGetCell(Hive, Cell);
-    if (!Value) ASSERT(FALSE);
+    if (!Value)
+    {
+        ASSERT(FALSE);
+        return FALSE;
+    }
 
     /* Free it */
     if (!CmpFreeValueData(Hive, Value->Data, Value->DataLength))
@@ -306,10 +310,17 @@ CmpSetValueDataNew(IN PHHIVE Hive,
 
     /* Get the actual data */
     CellData = HvGetCell(Hive, *DataCell);
-    if (!CellData) ASSERT(FALSE);
+    if (!CellData)
+    {
+        ASSERT(FALSE);
+        HvFreeCell(Hive, *DataCell);
+        *DataCell = HCELL_NIL;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     /* Copy our buffer into it */
     RtlCopyMemory(CellData, Data, DataSize);
+    HvReleaseCell(Hive, *DataCell);
 
     /* All done */
     return STATUS_SUCCESS;

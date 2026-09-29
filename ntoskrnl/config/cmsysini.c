@@ -114,24 +114,15 @@ NTAPI
 CmpDeleteKeyObject(PVOID DeletedObject)
 {
     PCM_KEY_BODY KeyBody = (PCM_KEY_BODY)DeletedObject;
-    PCM_KEY_CONTROL_BLOCK Kcb;
+    PCM_KEY_CONTROL_BLOCK Kcb = NULL;
     REG_KEY_HANDLE_CLOSE_INFORMATION KeyHandleCloseInfo;
     REG_POST_OPERATION_INFORMATION PostOperationInfo;
-    NTSTATUS Status;
     PAGED_CODE();
 
     /* First off, prepare the handle close information callback */
     PostOperationInfo.Object = KeyBody;
     KeyHandleCloseInfo.Object = KeyBody;
-    Status = CmiCallRegisteredCallbacks(RegNtPreKeyHandleClose,
-                                        &KeyHandleCloseInfo);
-    if (!NT_SUCCESS(Status))
-    {
-        /* If we failed, notify the post routine */
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostKeyHandleClose, &PostOperationInfo);
-        return;
-    }
+    CmiCallRegisteredCallbacks(RegNtPreKeyHandleClose, &KeyHandleCloseInfo);
 
     /* Acquire hive lock */
     CmpLockRegistry();
@@ -148,8 +139,6 @@ CmpDeleteKeyObject(PVOID DeletedObject)
             /* Delist the key */
             DelistKeyBodyFromKCB(KeyBody, KeyBody->KcbLocked);
 
-            /* Dereference the KCB */
-            CmpDelayDerefKeyControlBlock(Kcb);
         }
     }
 
@@ -159,6 +148,22 @@ CmpDeleteKeyObject(PVOID DeletedObject)
     /* Do the post callback */
     PostOperationInfo.Status = STATUS_SUCCESS;
     CmiCallRegisteredCallbacks(RegNtPostKeyHandleClose, &PostOperationInfo);
+    if (Kcb)
+    {
+        if ((((PCMHIVE)Kcb->KeyHive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE) &&
+            !KeyBody->KcbLocked)
+        {
+            CmpLockRegistryExclusive();
+            CmpDereferenceKeyControlBlockWithLock(Kcb, TRUE);
+            CmpUnlockRegistry();
+        }
+        else
+        {
+            CmpLockRegistry();
+            CmpDelayDerefKeyControlBlock(Kcb);
+            CmpUnlockRegistry();
+        }
+    }
 }
 
 VOID
@@ -178,7 +183,40 @@ CmpCloseKeyObject(IN PEPROCESS Process OPTIONAL,
     if (KeyBody->Type == CM_KEY_BODY_TYPE)
     {
         CmpCloseNotify(KeyBody);
+        if (((PCMHIVE)KeyBody->KeyControlBlock->KeyHive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE)
+        {
+            CmpLockRegistryExclusive();
+            CmpUnloadAppHiveIfUnused((PCMHIVE)KeyBody->KeyControlBlock->KeyHive);
+            CmpUnlockRegistry();
+        }
     }
+}
+
+static
+NTSTATUS
+NTAPI
+CmpOpenKeyObject(OB_OPEN_REASON Reason,
+                 KPROCESSOR_MODE AccessMode,
+                 PEPROCESS Process,
+                 PVOID ObjectBody,
+                 PACCESS_MASK GrantedAccess,
+                 ULONG HandleCount)
+{
+    PCM_KEY_BODY Body = ObjectBody;
+    PCMHIVE Hive = (PCMHIVE)Body->KeyControlBlock->KeyHive;
+    NTSTATUS Status = STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(Reason);
+    UNREFERENCED_PARAMETER(AccessMode);
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(GrantedAccess);
+    UNREFERENCED_PARAMETER(HandleCount);
+    if (Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE)
+    {
+        CmpLockRegistry();
+        if (Hive->Hive.HiveFlags & HIVE_IS_UNLOADING) Status = STATUS_KEY_DELETED;
+        CmpUnlockRegistry();
+    }
+    return Status;
 }
 
 NTSTATUS
@@ -1022,6 +1060,7 @@ CmpCreateObjectTypes(VOID)
     ObjectTypeInitializer.SecurityProcedure = CmpSecurityMethod;
     ObjectTypeInitializer.QueryNameProcedure = CmpQueryKeyName;
     ObjectTypeInitializer.CloseProcedure = CmpCloseKeyObject;
+    ObjectTypeInitializer.OpenProcedure = CmpOpenKeyObject;
     ObjectTypeInitializer.SecurityRequired = TRUE;
     ObjectTypeInitializer.CaseInsensitive = TRUE;
     ObjectTypeInitializer.ObjectTypeCode = 0x100;
@@ -1036,7 +1075,6 @@ CmpCreateObjectTypes(VOID)
     }
 }
 
-CODE_SEG("INIT")
 BOOLEAN
 NTAPI
 CmpCreateRootNode(IN PHHIVE Hive,
@@ -1216,77 +1254,6 @@ CmpGetRegistryPath(VOID)
     return ConfigPath;
 }
 
-/**
- * @brief
- * Checks if the primary and alternate backing hive are
- * the same, by determining the time stamp of both hives.
- *
- * @param[in] FileName
- * A pointer to a string containing the file name of the
- * primary hive.
- *
- * @param[in] CmMainmHive
- * A pointer to a CM hive descriptor associated with the
- * primary hive.
- *
- * @param[in] AlternateHandle
- * A handle to a file that represents the alternate hive.
- *
- * @param[in] Diverged
- * A pointer to a boolean value, if both hives are the same
- * it returns TRUE. Otherwise it returns FALSE.
- */
-#if (NTDDI_VERSION < NTDDI_VISTA)
-static
-VOID
-CmpHasAlternateHiveDiverged(
-    _In_ PCUNICODE_STRING FileName,
-    _In_ PCMHIVE CmMainmHive,
-    _In_ HANDLE AlternateHandle,
-    _Out_ PBOOLEAN Diverged)
-{
-    PHHIVE Hive, AlternateHive;
-    NTSTATUS Status;
-    PCMHIVE CmiAlternateHive;
-
-    /* Assume it has not diverged */
-    *Diverged = FALSE;
-
-    /* Initialize the SYSTEM alternate hive */
-    Status = CmpInitializeHive(&CmiAlternateHive,
-                               HINIT_FILE,
-                               0,
-                               HFILE_TYPE_PRIMARY,
-                               NULL,
-                               AlternateHandle,
-                               NULL,
-                               NULL,
-                               NULL,
-                               FileName,
-                               CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES);
-    if (!NT_SUCCESS(Status))
-    {
-        /* Assume it has diverged... */
-        DPRINT1("Failed to initialize the alternate hive to check for diversion (Status 0x%lx)\n", Status);
-        *Diverged = TRUE;
-        return;
-    }
-
-    /*
-     * Check the timestamp of both hives. If they do not match they
-     * have diverged, the kernel has to synchronize the both hives.
-     */
-    Hive = &CmMainmHive->Hive;
-    AlternateHive = &CmiAlternateHive->Hive;
-    if (AlternateHive->BaseBlock->TimeStamp.QuadPart !=
-        Hive->BaseBlock->TimeStamp.QuadPart)
-    {
-        *Diverged = TRUE;
-    }
-
-    CmpDestroyHive(CmiAlternateHive);
-}
-#endif /* NTDDI_VERSION < NTDDI_VISTA */
 
 _Function_class_(KSTART_ROUTINE)
 VOID
@@ -1303,7 +1270,6 @@ CmpLoadHiveThread(IN PVOID StartContext)
     HANDLE PrimaryHandle = NULL, AlternateHandle = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
     PVOID ErrorParameters;
-    BOOLEAN HasDiverged;
     PAGED_CODE();
 
     /* Get the hive index, make sure it makes sense */
@@ -1447,33 +1413,6 @@ CmpLoadHiveThread(IN PVOID StartContext)
                 CmHive->Hive.DirtyCount = CmHive->Hive.DirtyVector.SizeOfBitMap;
                 HvSyncHive((PHHIVE)CmHive);
             }
-            else
-            {
-#if (NTDDI_VERSION < NTDDI_VISTA)
-                /*
-                 * Check whether the both primary and alternate hives are the same,
-                 * or that the primary or alternate were created for the first time.
-                 * Do a write against the alternate hive in these cases.
-                 */
-                CmpHasAlternateHiveDiverged(&FileName,
-                                            CmHive,
-                                            AlternateHandle,
-                                            &HasDiverged);
-                if (HasDiverged ||
-                    PrimaryDisposition == FILE_CREATED ||
-                    SecondaryDisposition == FILE_CREATED)
-                {
-                    if (!HvWriteAlternateHive((PHHIVE)CmHive))
-                    {
-                        DPRINT1("Failed to write to alternate hive\n");
-                        goto Exit;
-                    }
-                }
-#else
-                /* TODO: Vista+ uses dual-log mechanism instead of alternate hives */
-                UNREFERENCED_PARAMETER(HasDiverged);
-#endif /* NTDDI_VERSION < NTDDI_VISTA */
-            }
 
             /* Finally, set our allocated hive to the same hive we've had */
             CmpMachineHiveList[i].CmHive2 = CmHive;
@@ -1481,9 +1420,6 @@ CmpLoadHiveThread(IN PVOID StartContext)
         }
     }
 
-#if (NTDDI_VERSION < NTDDI_VISTA)
-Exit:
-#endif
     /* We're done */
     CmpMachineHiveList[i].ThreadFinished = TRUE;
 
@@ -1647,8 +1583,50 @@ CmpInitializeHiveList(VOID)
 
     /* Link S-1-5-18 to .Default */
     CmpNoVolatileCreates = FALSE;
-    CmpLinkKeyToHive(L"\\Registry\\User\\S-1-5-18",
-                     L"\\Registry\\User\\.Default");
+    CmpLinkKeyToHive(L"\\Registry\\User\\.Default",
+                     L"\\Registry\\User\\S-1-5-18");
+    if (sizeof(PVOID) == sizeof(ULONGLONG))
+    {
+        static const PCWSTR ParentNames[] =
+        {
+            L"\\Registry\\Machine\\Software\\Wow6432Node",
+            L"\\Registry\\Machine\\Software\\Classes\\Wow6432Node"
+        };
+        OBJECT_ATTRIBUTES Attributes;
+        UNICODE_STRING ParentName;
+        HANDLE ParentKey;
+
+        for (i = 0; i < RTL_NUMBER_OF(ParentNames); ++i)
+        {
+            RtlInitUnicodeString(&ParentName, ParentNames[i]);
+            InitializeObjectAttributes(&Attributes,
+                                       &ParentName,
+                                       OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                       NULL,
+                                       NULL);
+            Status = ZwCreateKey(&ParentKey,
+                                 KEY_CREATE_SUB_KEY,
+                                 &Attributes,
+                                 0,
+                                 NULL,
+                                 REG_OPTION_NON_VOLATILE,
+                                 NULL);
+            if (!NT_SUCCESS(Status)) break;
+            ZwClose(ParentKey);
+        }
+
+        if (NT_SUCCESS(Status))
+        {
+            CmpLinkKeyToHive(L"\\Registry\\Machine\\Software\\Wow6432Node\\Classes",
+                            L"\\Registry\\Machine\\Software\\Classes\\Wow6432Node");
+            CmpLinkKeyToHive(L"\\Registry\\Machine\\Software\\Classes\\Wow6432Node\\AppId",
+                            L"\\Registry\\Machine\\Software\\Classes\\AppId");
+            CmpLinkKeyToHive(L"\\Registry\\Machine\\Software\\Classes\\Wow6432Node\\PROTOCOLS",
+                            L"\\Registry\\Machine\\Software\\Classes\\PROTOCOLS");
+            CmpLinkKeyToHive(L"\\Registry\\Machine\\Software\\Classes\\Wow6432Node\\Typelib",
+                            L"\\Registry\\Machine\\Software\\Classes\\Typelib");
+        }
+    }
     CmpNoVolatileCreates = TRUE;
 }
 
@@ -2052,9 +2030,7 @@ CmpLockHiveFlusherExclusive(IN PCMHIVE Hive)
 {
     /* Lock the flusher. We should already be in a critical section */
     CMP_ASSERT_REGISTRY_LOCK_OR_LOADING(Hive);
-    ASSERT((ExIsResourceAcquiredShared(Hive->FlusherLock) == 0) &&
-           (ExIsResourceAcquiredExclusiveLite(Hive->FlusherLock) == 0));
-    ExAcquireResourceExclusiveLite(Hive->FlusherLock, TRUE);
+    ExAcquirePushLockExclusive((PEX_PUSH_LOCK)&Hive->Hive.FlusherLock.Reserved);
 }
 
 VOID
@@ -2063,9 +2039,7 @@ CmpLockHiveFlusherShared(IN PCMHIVE Hive)
 {
     /* Lock the flusher. We should already be in a critical section */
     CMP_ASSERT_REGISTRY_LOCK_OR_LOADING(Hive);
-    ASSERT((ExIsResourceAcquiredShared(Hive->FlusherLock) == 0) &&
-           (ExIsResourceAcquiredExclusiveLite(Hive->FlusherLock) == 0));
-    ExAcquireResourceSharedLite(Hive->FlusherLock, TRUE);
+    ExAcquirePushLockShared((PEX_PUSH_LOCK)&Hive->Hive.FlusherLock.Reserved);
 }
 
 VOID
@@ -2074,26 +2048,9 @@ CmpUnlockHiveFlusher(IN PCMHIVE Hive)
 {
     /* Sanity check */
     CMP_ASSERT_REGISTRY_LOCK_OR_LOADING(Hive);
-    CMP_ASSERT_FLUSH_LOCK(Hive);
 
     /* Release the lock */
-    ExReleaseResourceLite(Hive->FlusherLock);
-}
-
-BOOLEAN
-NTAPI
-CmpTestHiveFlusherLockShared(IN PCMHIVE Hive)
-{
-    /* Test the lock */
-    return !ExIsResourceAcquiredSharedLite(Hive->FlusherLock) ? FALSE : TRUE;
-}
-
-BOOLEAN
-NTAPI
-CmpTestHiveFlusherLockExclusive(IN PCMHIVE Hive)
-{
-    /* Test the lock */
-    return !ExIsResourceAcquiredExclusiveLite(Hive->FlusherLock) ? FALSE : TRUE;
+    ExReleasePushLock((PEX_PUSH_LOCK)&Hive->Hive.FlusherLock.Reserved);
 }
 
 VOID

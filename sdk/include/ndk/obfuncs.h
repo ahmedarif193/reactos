@@ -69,6 +69,13 @@ ObCreateObject(
 );
 
 NTKERNELAPI
+VOID
+NTAPI
+ObDeleteCapturedInsertInfo(
+    _In_ PVOID Object
+);
+
+NTKERNELAPI
 NTSTATUS
 NTAPI
 ObCreateObjectType(

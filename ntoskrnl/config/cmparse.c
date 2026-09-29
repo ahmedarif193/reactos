@@ -220,7 +220,32 @@ CmpDoCreateChild(IN PHHIVE Hive,
     PCELL_DATA CellData;
     ULONG StorageType;
     PCM_KEY_CONTROL_BLOCK Kcb;
-    PSECURITY_DESCRIPTOR NewDescriptor;
+    PSECURITY_DESCRIPTOR NewDescriptor = NULL;
+    PSECURITY_DESCRIPTOR ParentCopy = NULL;
+    ACCESS_MASK GrantedAccess;
+    KPROCESSOR_MODE EffectiveMode;
+
+    Status = CmpAppHiveAccessMode((PCMHIVE)Hive, AccessState->RemainingDesiredAccess,
+                                  AccessMode, &EffectiveMode);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    if (!ParentDescriptor && ParentKcb)
+    {
+        Status = CmpGetKeySecurityDescriptor(ParentKcb, &ParentCopy);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        ParentDescriptor = ParentCopy;
+    }
+    if (ParentDescriptor &&
+        !SeAccessCheck(ParentDescriptor, &AccessState->SubjectSecurityContext,
+                       FALSE, KEY_CREATE_SUB_KEY, 0, NULL,
+                       &CmpKeyObjectType->TypeInfo.GenericMapping, EffectiveMode,
+                       &GrantedAccess, &Status))
+    {
+        if (ParentCopy)
+            ExFreePoolWithTag(ParentCopy, TAG_CMSD);
+        return Status;
+    }
 
     /* Get the storage type */
     StorageType = Stable;
@@ -359,23 +384,18 @@ CmpDoCreateChild(IN PHHIVE Hive,
     EnlistKeyBodyWithKCB(KeyBody, CMP_ENLIST_KCB_LOCKED_EXCLUSIVE);
 
     /* Assign security */
-    Status = SeAssignSecurity(ParentDescriptor,
+    Status = SeAssignSecurityEx(ParentDescriptor,
                               AccessState->SecurityDescriptor,
                               &NewDescriptor,
+                              NULL,
                               TRUE,
+                              SEF_DACL_AUTO_INHERIT | SEF_SACL_AUTO_INHERIT,
                               &AccessState->SubjectSecurityContext,
                               &CmpKeyObjectType->TypeInfo.GenericMapping,
                               CmpKeyObjectType->TypeInfo.PoolType);
     if (NT_SUCCESS(Status))
     {
-        /*
-         * FIXME: We must acquire a security lock when assigning
-         * a security descriptor to this hive but since the
-         * CmpAssignSecurityDescriptor function does nothing
-         * (we lack the necessary security management implementations
-         * anyway), do not do anything for now.
-         */
-        Status = CmpAssignSecurityDescriptor(Kcb, NewDescriptor);
+        Status = CmpAssignSecurityDescriptorLocked(Kcb, NewDescriptor);
     }
 
     /* Now that the security descriptor is copied in the hive, we can free the original */
@@ -386,14 +406,23 @@ CmpDoCreateChild(IN PHHIVE Hive,
         /* Send notification to registered callbacks */
         CmpReportNotify(Kcb, Hive, Kcb->KeyCell, REG_NOTIFY_CHANGE_NAME);
     }
+    else
+    {
+        Kcb->Delete = TRUE;
+        CmpRemoveKeyControlBlock(Kcb);
+        ObDereferenceObjectDeferDelete(*Object);
+        *Object = NULL;
+    }
 
 Quickie:
+    if (ParentCopy)
+        ExFreePoolWithTag(ParentCopy, TAG_CMSD);
     /* Check if we got here because of failure */
     if (!NT_SUCCESS(Status))
     {
         /* Free any cells we might've allocated */
-        if (ParseContext->Class.Length > 0) HvFreeCell(Hive, ClassCell);
-        HvFreeCell(Hive, *KeyCell);
+        if (ClassCell != HCELL_NIL) HvFreeCell(Hive, ClassCell);
+        if (*KeyCell != HCELL_NIL) HvFreeCell(Hive, *KeyCell);
     }
 
     /* Return status */
@@ -613,6 +642,7 @@ CmpDoOpen(IN PHHIVE Hive,
           OUT PVOID *Object)
 {
     NTSTATUS Status;
+    KPROCESSOR_MODE EffectiveMode;
     BOOLEAN LockKcb = FALSE;
     BOOLEAN IsLockShared = FALSE;
     PCM_KEY_BODY KeyBody = NULL;
@@ -625,6 +655,10 @@ CmpDoOpen(IN PHHIVE Hive,
         /* It is, don't touch it */
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
+
+    Status = CmpAppHiveAccessMode((PCMHIVE)Hive, AccessState->RemainingDesiredAccess,
+                                  AccessMode, &EffectiveMode);
+    if (!NT_SUCCESS(Status)) return Status;
 
     /* Check if we have a context */
     if (Context)
@@ -804,18 +838,17 @@ CmpDoOpen(IN PHHIVE Hive,
         if (!ObCheckObjectAccess(*Object,
                                  AccessState,
                                  FALSE,
-                                 AccessMode,
+                                 EffectiveMode,
                                  &Status))
         {
             /* Access check failed */
             ObDereferenceObject(*Object);
+            *Object = NULL;
         }
-
-        /*
-         * We are done, the lock we are holding will be released
-         * once the registry parsing is done.
-         */
-        KeyBody->KcbLocked = FALSE;
+        else
+        {
+            KeyBody->KcbLocked = FALSE;
+        }
     }
     else
     {
@@ -842,9 +875,13 @@ CmpCreateLinkNode(IN PHHIVE Hive,
 {
     NTSTATUS Status;
     HCELL_INDEX KeyCell, LinkCell, ChildCell;
+    HCELL_INDEX OldParent = HCELL_NIL;
+    HCELL_INDEX OldRootCell = Context->ChildHive.KeyHive->BaseBlock->RootCell;
+    USHORT OldFlags = 0;
     PCM_KEY_BODY KeyBody;
     LARGE_INTEGER TimeStamp;
     PCM_KEY_NODE KeyNode;
+    PCM_KEY_NODE OldChildNode = NULL;
     PCM_KEY_CONTROL_BLOCK Kcb = ParentKcb;
 
     /* Link nodes only allowed on the master */
@@ -907,6 +944,9 @@ CmpCreateLinkNode(IN PHHIVE Hive,
         }
 
         /* Fill out the data */
+        OldChildNode = KeyNode;
+        OldParent = KeyNode->Parent;
+        OldFlags = KeyNode->Flags;
         KeyNode->Parent = LinkCell;
         KeyNode->Flags |= KEY_HIVE_ENTRY | KEY_NO_DELETE;
         HvReleaseCell(Context->ChildHive.KeyHive, ChildCell);
@@ -1027,7 +1067,25 @@ CmpCreateLinkNode(IN PHHIVE Hive,
         if (!CmpAddSubKey(Hive, Cell, LinkCell))
         {
             /* Failure! We don't handle this yet! */
-            ASSERT(FALSE);
+            HvReleaseCell(Hive, Cell);
+            if (KeyCell == HCELL_NIL)
+            {
+                CmpFreeKeyByCell(Context->ChildHive.KeyHive, ChildCell, FALSE);
+                Context->ChildHive.KeyHive->BaseBlock->RootCell = OldRootCell;
+            }
+            else
+            {
+                OldChildNode->Parent = OldParent;
+                OldChildNode->Flags = OldFlags;
+            }
+            KeyBody = (PCM_KEY_BODY)*Object;
+            KeyBody->KeyControlBlock->Delete = TRUE;
+            CmpRemoveKeyControlBlock(KeyBody->KeyControlBlock);
+            ObDereferenceObjectDeferDelete(*Object);
+            *Object = NULL;
+            HvFreeCell(Hive, LinkCell);
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Exit;
         }
 
         /* Get the key body */
@@ -1908,6 +1966,15 @@ CmpParseKey(IN PVOID ParseObject,
     /* Fail if the key was marked as deleted */
     if (Kcb->Delete)
         return STATUS_KEY_DELETED;
+
+    if (Kcb->KeyHive == &CmiVolatileHive->Hive && Kcb->ParentKcb == NULL)
+    {
+        UNICODE_STRING NamespaceName = Current;
+        if (CmpGetNextName(&NamespaceName, &NextName, &Last) &&
+            NextName.Length == sizeof(WCHAR) &&
+            RtlUpcaseUnicodeChar(NextName.Buffer[0]) == L'A')
+            return STATUS_ACCESS_DENIED;
+    }
 
     /* Lookup in the cache */
     Status = CmpBuildHashStackAndLookupCache(ParseObject,

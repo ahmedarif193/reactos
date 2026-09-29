@@ -923,7 +923,7 @@ CmpAddToLeaf(IN PHHIVE Hive,
              IN HCELL_INDEX NewKey,
              IN PCUNICODE_STRING Name)
 {
-    PCM_KEY_INDEX Leaf;
+    PCM_KEY_INDEX Leaf, OldLeaf;
     PCM_KEY_FAST_INDEX FastLeaf;
     ULONG Size, OldSize, EntrySize, i, j;
     HCELL_INDEX NewCell, Child;
@@ -967,6 +967,9 @@ CmpAddToLeaf(IN PHHIVE Hive,
 
     /* Calculate the size of the free entries */
     Size = OldSize;
+    if (Leaf->Count == MAXUSHORT ||
+        Size < EntrySize * Leaf->Count + FIELD_OFFSET(CM_KEY_INDEX, List))
+        return HCELL_NIL;
     Size -= EntrySize * Leaf->Count + FIELD_OFFSET(CM_KEY_INDEX, List);
 
     /* Assume we'll re-use the same leaf */
@@ -980,17 +983,20 @@ CmpAddToLeaf(IN PHHIVE Hive,
         if (Size < (OldSize + EntrySize)) Size = OldSize + EntrySize;
 
         /* Re-allocate the leaf */
-        NewCell = HvReallocateCell(Hive, LeafCell, Size);
+        NewCell = HvAllocateCell(Hive, Size, HvGetCellType(LeafCell), LeafCell);
         if (NewCell == HCELL_NIL) return HCELL_NIL;
 
         /* Get the leaf cell */
+        OldLeaf = Leaf;
         Leaf = (PCM_KEY_INDEX)HvGetCell(Hive, NewCell);
         if (!Leaf)
         {
             /* This shouldn't happen */
             ASSERT(FALSE);
+            HvFreeCell(Hive, NewCell);
             return HCELL_NIL;
         }
+        RtlCopyMemory(Leaf, OldLeaf, OldSize);
 
         /* Release the cell */
         HvReleaseCell(Hive, NewCell);
@@ -1001,7 +1007,7 @@ CmpAddToLeaf(IN PHHIVE Hive,
 
     /* Find the insertion point for our entry */
     i = CmpFindSubKeyInLeaf(Hive, Leaf, Name, &Child);
-    if (i & INVALID_INDEX) return HCELL_NIL;
+    if (i & INVALID_INDEX) goto Failure;
     ASSERT(Child == HCELL_NIL);
 
     /* Check if we're not last */
@@ -1013,7 +1019,7 @@ CmpAddToLeaf(IN PHHIVE Hive,
                                    i,
                                    Leaf,
                                    &Child);
-        if (Result == 2) return HCELL_NIL;
+        if (Result == 2) goto Failure;
         ASSERT(Result != 0);
 
         /* Check if we come after */
@@ -1078,14 +1084,15 @@ CmpAddToLeaf(IN PHHIVE Hive,
             }
 
             /* Now fill out the name hint */
-            do
+            while (j)
             {
                 /* Look for invalid characters and break out if we found one */
                 if ((USHORT)Name->Buffer[j - 1] > (UCHAR)-1) break;
 
                 /* Otherwise, copy the a character */
                 FastLeaf->List[i].NameHint[j - 1] = (UCHAR)Name->Buffer[j - 1];
-            } while (--j > 0);
+                --j;
+            }
         }
     }
     else
@@ -1096,7 +1103,14 @@ CmpAddToLeaf(IN PHHIVE Hive,
 
     /* Update the leaf count and return the new cell */
     Leaf->Count += 1;
+    if (NewCell != LeafCell)
+        HvFreeCell(Hive, LeafCell);
     return NewCell;
+
+Failure:
+    if (NewCell != LeafCell)
+        HvFreeCell(Hive, NewCell);
+    return HCELL_NIL;
 }
 
 HCELL_INDEX
@@ -1106,9 +1120,9 @@ CmpSplitLeaf(IN PHHIVE Hive,
              IN ULONG RootSelect,
              IN HSTORAGE_TYPE Type)
 {
-    PCM_KEY_INDEX IndexKey, LeafKey, NewKey;
+    PCM_KEY_INDEX IndexKey, LeafKey, NewKey, OldIndex;
     PCM_KEY_FAST_INDEX FastLeaf;
-    HCELL_INDEX LeafCell, NewCell;
+    HCELL_INDEX LeafCell, NewCell, OldRootCell = RootCell;
     USHORT FirstHalf, LastHalf;
     ULONG EntrySize, TotalSize;
 
@@ -1117,6 +1131,10 @@ CmpSplitLeaf(IN PHHIVE Hive,
 
     /* Check if we've got valid IndexKey */
     if (!IndexKey) return HCELL_NIL;
+    if (RootSelect >= IndexKey->Count || IndexKey->Count == MAXUSHORT ||
+        (ULONG)HvGetCellSize(Hive, IndexKey) <
+            IndexKey->Count * sizeof(HCELL_INDEX) + FIELD_OFFSET(CM_KEY_INDEX, List))
+        return HCELL_NIL;
 
     /* Get the leaf cell and key */
     LeafCell = IndexKey->List[RootSelect];
@@ -1128,6 +1146,8 @@ CmpSplitLeaf(IN PHHIVE Hive,
     /* We are going to divide this leaf into two halves */
     FirstHalf = (LeafKey->Count / 2);
     LastHalf = LeafKey->Count - FirstHalf;
+    if (!FirstHalf || !LastHalf)
+        return HCELL_NIL;
 
     /* Now check what kind of hive we're dealing with,
      * and compute entry size
@@ -1146,6 +1166,9 @@ CmpSplitLeaf(IN PHHIVE Hive,
     }
 
     /* Compute the total size */
+    if ((ULONG)HvGetCellSize(Hive, LeafKey) <
+        LeafKey->Count * EntrySize + FIELD_OFFSET(CM_KEY_INDEX, List))
+        return HCELL_NIL;
     TotalSize = (EntrySize * LastHalf) + FIELD_OFFSET(CM_KEY_INDEX, List) + 1;
 
     /* Mark the leaf cell dirty */
@@ -1195,7 +1218,7 @@ CmpSplitLeaf(IN PHHIVE Hive,
         TotalSize = HvGetCellSize(Hive, IndexKey) + sizeof(HCELL_INDEX);
 
         /* Re-allocate the root */
-        RootCell = HvReallocateCell(Hive, RootCell, TotalSize);
+        RootCell = HvAllocateCell(Hive, TotalSize, Type, OldRootCell);
         if (RootCell == HCELL_NIL)
         {
             /* Free the cell and exit */
@@ -1204,13 +1227,17 @@ CmpSplitLeaf(IN PHHIVE Hive,
         }
 
         /* Get the leaf cell */
+        OldIndex = IndexKey;
         IndexKey = (PCM_KEY_INDEX)HvGetCell(Hive, RootCell);
         if (!IndexKey)
         {
             /* This shouldn't happen */
             ASSERT(FALSE);
+            HvFreeCell(Hive, RootCell);
+            HvFreeCell(Hive, NewCell);
             return HCELL_NIL;
         }
+        RtlCopyMemory(IndexKey, OldIndex, HvGetCellSize(Hive, OldIndex));
     }
 
     /* Splitting is done, now we need to copy the contents,
@@ -1256,6 +1283,8 @@ CmpSplitLeaf(IN PHHIVE Hive,
     IndexKey->List[RootSelect + 1] = NewCell;
 
     /* Return the root cell */
+    if (RootCell != OldRootCell)
+        HvFreeCell(Hive, OldRootCell);
     return RootCell;
 }
 
@@ -1473,7 +1502,8 @@ CmpAddSubKey(IN PHHIVE Hive,
     HCELL_INDEX IndexCell = HCELL_NIL, CellToRelease = HCELL_NIL, LeafCell;
     PHCELL_INDEX RootPointer = NULL;
     ULONG Type, i;
-    BOOLEAN IsCompressed;
+    BOOLEAN IsCompressed, Result = FALSE, NewLeaf = FALSE;
+    HCELL_INDEX OldList = HCELL_NIL;
     PAGED_CODE();
 
     /* Get the key node */
@@ -1529,18 +1559,21 @@ CmpAddSubKey(IN PHHIVE Hive,
     {
         /* Not handled */
         ASSERT(FALSE);
+        goto Exit;
     }
 
     /* Find out the type of the cell, and check if this is the first subkey */
     Type = HvGetCellType(Child);
     if (!KeyNode->SubKeyCounts[Type])
     {
+        OldList = KeyNode->SubKeyLists[Type];
         /* Allocate a fast leaf */
         IndexCell = HvAllocateCell(Hive, sizeof(CM_KEY_FAST_INDEX), Type, HCELL_NIL);
         if (IndexCell == HCELL_NIL)
         {
             /* Not handled */
             ASSERT(FALSE);
+            goto Exit;
         }
 
         /* Get the leaf cell */
@@ -1549,6 +1582,9 @@ CmpAddSubKey(IN PHHIVE Hive,
         {
             /* Shouldn't happen */
             ASSERT(FALSE);
+            HvFreeCell(Hive, IndexCell);
+            IndexCell = HCELL_NIL;
+            goto Exit;
         }
 
         /* Now check what kind of hive we're dealing with */
@@ -1571,6 +1607,7 @@ CmpAddSubKey(IN PHHIVE Hive,
         /* Setup the index list */
         Index->Count = 0;
         KeyNode->SubKeyLists[Type] = IndexCell;
+        NewLeaf = TRUE;
     }
     else
     {
@@ -1580,6 +1617,7 @@ CmpAddSubKey(IN PHHIVE Hive,
         {
             /* Not handled */
             ASSERT(FALSE);
+            goto Exit;
         }
 
         /* Remember to release the cell later */
@@ -1619,6 +1657,7 @@ CmpAddSubKey(IN PHHIVE Hive,
             {
                 /* Not handled */
                 ASSERT(FALSE);
+                goto Exit;
             }
 
             /* Get the index cell */
@@ -1627,6 +1666,9 @@ CmpAddSubKey(IN PHHIVE Hive,
             {
                 /* Shouldn't happen */
                 ASSERT(FALSE);
+                HvFreeCell(Hive, IndexCell);
+                IndexCell = HCELL_NIL;
+                goto Exit;
             }
 
             /* Mark the index as a root, and set the index cell */
@@ -1653,6 +1695,7 @@ CmpAddSubKey(IN PHHIVE Hive,
         {
             /* Not handled */
             ASSERT(FALSE);
+            goto Exit;
         }
     }
 
@@ -1662,6 +1705,7 @@ CmpAddSubKey(IN PHHIVE Hive,
     {
         /* Not handled */
         ASSERT(FALSE);
+        goto Exit;
     }
 
     /* Update the key counts */
@@ -1679,14 +1723,24 @@ CmpAddSubKey(IN PHHIVE Hive,
         KeyNode->SubKeyLists[Type] = LeafCell;
     }
 
+    Result = TRUE;
+
+Exit:
+    if (!Result && NewLeaf)
+    {
+        HvReleaseCell(Hive, IndexCell);
+        HvFreeCell(Hive, IndexCell);
+        IndexCell = HCELL_NIL;
+        KeyNode->SubKeyLists[Type] = OldList;
+    }
     /* If the name was compressed, free our copy */
     if (IsCompressed) Hive->Free(Name.Buffer, 0);
 
     /* Release all our cells */
     if (IndexCell != HCELL_NIL) HvReleaseCell(Hive, IndexCell);
     if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
-    HvReleaseCell(Hive, Parent);
-    return TRUE;
+    if (KeyNode) HvReleaseCell(Hive, Parent);
+    return Result;
 }
 
 BOOLEAN
