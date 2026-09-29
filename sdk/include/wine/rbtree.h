@@ -23,8 +23,15 @@
 #ifndef __WINE_WINE_RBTREE_H
 #define __WINE_WINE_RBTREE_H
 
+#include <stddef.h>
+
+static inline void *rb_entry_value(const void *entry, size_t offset)
+{
+    return entry ? (char *)entry - offset : NULL;
+}
+
 #define RB_ENTRY_VALUE(element, type, field) \
-    ((type *)((char *)(element) - offsetof(type, field)))
+    ((type *)rb_entry_value((element), offsetof(type, field)))
 
 struct rb_entry
 {
@@ -147,7 +154,7 @@ static inline struct rb_entry *rb_postorder_next(struct rb_entry *iter)
 /* iterate through the tree using a tree entry */
 #define RB_FOR_EACH_ENTRY(elem, tree, type, field) \
     for ((elem) = RB_ENTRY_VALUE(rb_head((tree)->root), type, field); \
-         (elem) != RB_ENTRY_VALUE(0, type, field); \
+         (elem); \
          (elem) = RB_ENTRY_VALUE(rb_next(&elem->field), type, field))
 
 /* iterate through the tree using using postorder, making it safe to free the entry */
@@ -159,7 +166,7 @@ static inline struct rb_entry *rb_postorder_next(struct rb_entry *iter)
 /* iterate through the tree using a tree entry and postorder, making it safe to free the entry */
 #define RB_FOR_EACH_ENTRY_DESTRUCTOR(elem, elem2, tree, type, field) \
     for ((elem) = RB_ENTRY_VALUE(rb_postorder_head((tree)->root), type, field); \
-         (elem) != RB_ENTRY_VALUE(0, type, field) \
+         (elem) \
              && (((elem2) = RB_ENTRY_VALUE(rb_postorder_next(&(elem)->field), type, field)) || 1); \
          (elem) = (elem2))
 
