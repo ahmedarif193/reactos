@@ -2173,6 +2173,12 @@ IopQueryNameInternal(IN PVOID ObjectBody,
             }
         }
 
+        if (Status == STATUS_BUFFER_OVERFLOW && !LengthMismatch)
+        {
+            LengthMismatch = TRUE;
+            *ReturnLength = (ULONG)((ULONG_PTR)p - (ULONG_PTR)ObjectNameInfo) + sizeof(WCHAR);
+        }
+
         /* If the provided buffer is too small, return the required size */
         if (LengthMismatch)
         {
