@@ -78,6 +78,7 @@ set(COMPAT_RUNTIME_MODULES
     jsproxy
     kernel32
     kernel32_vista
+    kernelbase
     kernelbase_ros
     ksuser
     libjpeg
@@ -191,5 +192,4 @@ set(COMPAT_RUNTIME_AUXILIARY_MODULES
     comctl32_v6)
 
 set(COMPAT_RUNTIME_ALIASES
-    "comctl32_v6=comctl32_v6.dll"
-    "kernelbase_ros=kernelbase.dll")
+    "comctl32_v6=comctl32_v6.dll")
