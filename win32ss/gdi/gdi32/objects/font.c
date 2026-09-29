@@ -2411,10 +2411,14 @@ IntGetScalableFontFileName(
     PCHAR Data;
     PWSTR Name = NULL;
     DWORD Length;
+    DWORD LastError = GetLastError();
 
     Ptr = IntMapFontResourceFile(ResourceFile, &Size);
     if (!Ptr)
+    {
+        SetLastError(LastError);
         return NULL;
+    }
 
     if (Size.LowPart < sizeof(*Dos))
         goto Exit;
@@ -2441,6 +2445,7 @@ IntGetScalableFontFileName(
 
 Exit:
     UnmapViewOfFile(Ptr);
+    SetLastError(LastError);
     return Name;
 }
 
