@@ -1142,6 +1142,7 @@ InstallLiveCD(VOID)
     STARTUPINFOW StartupInfo;
     PROCESS_INFORMATION ProcessInformation;
     LPVOID lpEnvironment;
+    HANDLE hToken = NULL;
     BOOL bRes;
 
     PreprocessUnattend(FALSE);
@@ -1187,8 +1188,11 @@ InstallLiveCD(VOID)
     /* Run the shell with a fresh system environment, as winlogon does for
      * a shell without a user token: ours was inherited from SMSS before it
      * wrote the per-boot variables such as PROCESSOR_IDENTIFIER. */
-    if (!CreateEnvironmentBlock(&lpEnvironment, NULL, TRUE))
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &hToken) ||
+        !CreateEnvironmentBlock(&lpEnvironment, hToken, TRUE))
         lpEnvironment = NULL;
+    if (hToken)
+        CloseHandle(hToken);
 
     ZeroMemory(&StartupInfo, sizeof(StartupInfo));
     StartupInfo.cb = sizeof(StartupInfo);

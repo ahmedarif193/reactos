@@ -29,15 +29,16 @@ HKLM,"SYSTEM\Setup","CmdLine",0x00020000,"setup -mini"
 
 ; User Profile List
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList",,0x00000012
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Profiles"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","AllUsersProfile",0x00000000,"All Users"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","DefaultUserProfile",0x00000000,"Default User"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Users"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProgramData",0x00020000,"%SystemDrive%\ProgramData"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","Default",0x00020000,"%SystemDrive%\Users\Default"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","Public",0x00020000,"%SystemDrive%\Users\Public"
 
 ; Shell Folders
-HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Documents",0x00020000,""
-HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Desktop",0x00020000,"%SystemDrive%\Profiles\All Users\Desktop"
-HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Desktop",0x00020000,"%SystemDrive%\Profiles\Default User\Desktop"
-HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Personal",0x00020000,"%SystemDrive%\Profiles\Default User\My Documents"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Documents",0x00020000,"%SystemDrive%\Users\Public\Documents"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Desktop",0x00020000,"%SystemDrive%\Users\Public\Desktop"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Desktop",0x00020000,"%USERPROFILE%\Desktop"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Personal",0x00020000,"%USERPROFILE%\Documents"
 
 ; ComDlg32
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32",,0x00000012
@@ -45,10 +46,12 @@ HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedMRU
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSaveMRU",,0x00000012
 
 ; User Profile environment variables
-HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","USERPROFILE",0x00020000,"%SystemDrive%\Profiles\Default User"
-HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","ALLUSERSPROFILE",0x00020000,"%SystemDrive%\Profiles\All Users"
-HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","APPDATA",0x00020000,"%USERPROFILE%\Application Data"
-HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","LOCALAPPDATA",0x00020000,"%USERPROFILE%\Local Settings\Application Data"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","USERPROFILE",0x00020000,"%SystemRoot%\system32\config\systemprofile"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","ALLUSERSPROFILE",0x00020000,"%SystemDrive%\ProgramData"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","ProgramData",0x00020000,"%SystemDrive%\ProgramData"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","PUBLIC",0x00020000,"%SystemDrive%\Users\Public"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","APPDATA",0x00020000,"%USERPROFILE%\AppData\Roaming"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","LOCALAPPDATA",0x00020000,"%USERPROFILE%\AppData\Local"
 
 ; Font Substitution
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Courier",0x00000000,"Courier New"

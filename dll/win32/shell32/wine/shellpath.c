@@ -5900,6 +5900,7 @@ typedef enum _CSIDL_Type {
     CSIDL_Type_InAppData,
 #endif
     CSIDL_Type_AllUsers,
+    CSIDL_Type_ProgramData,
     CSIDL_Type_CurrVer,
     CSIDL_Type_Disallowed,
     CSIDL_Type_NonExistent,
@@ -5933,7 +5934,7 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_Desktop,
         CSIDL_Type_User,
         L"Desktop",
-        MAKEINTRESOURCEW(IDS_DESKTOPDIRECTORY),
+        L"Desktop",
         0
     },
     { /* 0x01 - CSIDL_INTERNET */
@@ -5946,7 +5947,7 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_Programs,
         CSIDL_Type_User,
         L"Programs",
-        MAKEINTRESOURCEW(IDS_PROGRAMS),
+        L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
         0
     },
     { /* 0x03 - CSIDL_CONTROLS (.CPL files) */
@@ -5967,34 +5968,34 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_Documents,
         CSIDL_Type_User,
         L"Personal",
-        MAKEINTRESOURCEW(IDS_PERSONAL),
+        L"Documents",
         -IDI_SHELL_MY_DOCUMENTS
     },
     { /* 0x06 - CSIDL_FAVORITES */
         &FOLDERID_Favorites,
         CSIDL_Type_User,
         L"Favorites",
-        MAKEINTRESOURCEW(IDS_FAVORITES),
+        L"Favorites",
         -IDI_SHELL_FAVORITES
     },
     { /* 0x07 - CSIDL_STARTUP */
         &FOLDERID_Startup,
         CSIDL_Type_User,
         L"StartUp",
-        MAKEINTRESOURCEW(IDS_STARTUP)
+        L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
     },
     { /* 0x08 - CSIDL_RECENT */
         &FOLDERID_Recent,
         CSIDL_Type_User,
         L"Recent",
-        MAKEINTRESOURCEW(IDS_RECENT),
+        L"AppData\\Roaming\\Microsoft\\Windows\\Recent",
         -IDI_SHELL_RECENT_DOCUMENTS
     },
     { /* 0x09 - CSIDL_SENDTO */
         &FOLDERID_SendTo,
         CSIDL_Type_User,
         L"SendTo",
-        MAKEINTRESOURCEW(IDS_SENDTO)
+        L"AppData\\Roaming\\Microsoft\\Windows\\SendTo"
     },
     { /* 0x0a - CSIDL_BITBUCKET - Recycle Bin */
         &FOLDERID_RecycleBinFolder,
@@ -6006,7 +6007,7 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_StartMenu,
         CSIDL_Type_User,
         L"Start Menu",
-        MAKEINTRESOURCEW(IDS_STARTMENU),
+        L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu",
         -IDI_SHELL_TSKBAR_STARTMENU
     },
     { /* 0x0c - CSIDL_MYDOCUMENTS */
@@ -6018,24 +6019,16 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x0d - CSIDL_MYMUSIC */
         &FOLDERID_Music,
-#ifdef __REACTOS__
-        CSIDL_Type_InMyDocuments,
-#else
         CSIDL_Type_User,
-#endif
         L"My Music",
-        MAKEINTRESOURCEW(IDS_MYMUSIC),
+        L"Music",
         -IDI_SHELL_MY_MUSIC
     },
     { /* 0x0e - CSIDL_MYVIDEO */
         &FOLDERID_Videos,
-#ifdef __REACTOS__
-        CSIDL_Type_InMyDocuments,
-#else
         CSIDL_Type_User,
-#endif
         L"My Video",
-        MAKEINTRESOURCEW(IDS_MYVIDEO),
+        L"Videos",
         -IDI_SHELL_MY_MOVIES
     },
     { /* 0x0f - unassigned */
@@ -6048,7 +6041,7 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_Desktop,
         CSIDL_Type_User,
         L"Desktop",
-        MAKEINTRESOURCEW(IDS_DESKTOPDIRECTORY),
+        L"Desktop",
         0
     },
     { /* 0x11 - CSIDL_DRIVES */
@@ -6069,7 +6062,7 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_NetHood,
         CSIDL_Type_User,
         L"NetHood",
-        MAKEINTRESOURCEW(IDS_NETHOOD),
+        L"AppData\\Roaming\\Microsoft\\Windows\\Network Shortcuts",
         -IDI_SHELL_NETWORK
     },
     { /* 0x14 - CSIDL_FONTS */
@@ -6083,53 +6076,53 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_Templates,
         CSIDL_Type_User,
         L"Templates",
-        MAKEINTRESOURCEW(IDS_TEMPLATES)
+        L"AppData\\Roaming\\Microsoft\\Windows\\Templates"
     },
     { /* 0x16 - CSIDL_COMMON_STARTMENU */
         &FOLDERID_CommonStartMenu,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         L"Common Start Menu",
-        MAKEINTRESOURCEW(IDS_STARTMENU),
+        L"Microsoft\\Windows\\Start Menu",
         -IDI_SHELL_TSKBAR_STARTMENU
     },
     { /* 0x17 - CSIDL_COMMON_PROGRAMS */
         &FOLDERID_CommonPrograms,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         L"Common Programs",
-        MAKEINTRESOURCEW(IDS_PROGRAMS),
+        L"Microsoft\\Windows\\Start Menu\\Programs",
         0
     },
     { /* 0x18 - CSIDL_COMMON_STARTUP */
         &FOLDERID_CommonStartup,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         L"Common StartUp",
-        MAKEINTRESOURCEW(IDS_STARTUP)
+        L"Microsoft\\Windows\\Start Menu\\Programs\\Startup"
     },
     { /* 0x19 - CSIDL_COMMON_DESKTOPDIRECTORY */
         &FOLDERID_PublicDesktop,
         CSIDL_Type_AllUsers,
         L"Common Desktop",
-        MAKEINTRESOURCEW(IDS_DESKTOPDIRECTORY),
+        L"Desktop",
         0
     },
     { /* 0x1a - CSIDL_APPDATA */
         &FOLDERID_RoamingAppData,
         CSIDL_Type_User,
         L"AppData",
-        MAKEINTRESOURCEW(IDS_APPDATA)
+        L"AppData\\Roaming"
     },
     { /* 0x1b - CSIDL_PRINTHOOD */
         &FOLDERID_PrintHood,
         CSIDL_Type_User,
         L"PrintHood",
-        MAKEINTRESOURCEW(IDS_PRINTHOOD),
+        L"AppData\\Roaming\\Microsoft\\Windows\\Printer Shortcuts",
         -IDI_SHELL_PRINTERS_FOLDER
     },
     { /* 0x1c - CSIDL_LOCAL_APPDATA */
         &FOLDERID_LocalAppData,
         CSIDL_Type_User,
         L"Local AppData",
-        MAKEINTRESOURCEW(IDS_LOCAL_APPDATA)
+        L"AppData\\Local"
     },
     { /* 0x1d - CSIDL_ALTSTARTUP */
         &GUID_NULL,
@@ -6147,32 +6140,32 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_Favorites,
         CSIDL_Type_AllUsers,
         L"Common Favorites",
-        MAKEINTRESOURCEW(IDS_FAVORITES),
+        L"Favorites",
         -IDI_SHELL_FAVORITES
     },
     { /* 0x20 - CSIDL_INTERNET_CACHE */
         &FOLDERID_InternetCache,
         CSIDL_Type_User,
         L"Cache",
-        MAKEINTRESOURCEW(IDS_INTERNET_CACHE)
+        L"AppData\\Local\\Microsoft\\Windows\\INetCache"
     },
     { /* 0x21 - CSIDL_COOKIES */
         &FOLDERID_Cookies,
         CSIDL_Type_User,
         L"Cookies",
-        MAKEINTRESOURCEW(IDS_COOKIES)
+        L"AppData\\Local\\Microsoft\\Windows\\INetCookies"
     },
     { /* 0x22 - CSIDL_HISTORY */
         &FOLDERID_History,
         CSIDL_Type_User,
         L"History",
-        MAKEINTRESOURCEW(IDS_HISTORY)
+        L"AppData\\Local\\Microsoft\\Windows\\History"
     },
     { /* 0x23 - CSIDL_COMMON_APPDATA */
         &FOLDERID_ProgramData,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         L"Common AppData",
-        MAKEINTRESOURCEW(IDS_APPDATA)
+        L""
     },
     { /* 0x24 - CSIDL_WINDOWS */
         &FOLDERID_Windows,
@@ -6197,13 +6190,9 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x27 - CSIDL_MYPICTURES */
         &FOLDERID_Pictures,
-#ifdef __REACTOS__
-        CSIDL_Type_InMyDocuments,
-#else
         CSIDL_Type_User,
-#endif
         L"My Pictures",
-        MAKEINTRESOURCEW(IDS_MYPICTURES),
+        L"Pictures",
         -IDI_SHELL_MY_PICTURES
     },
     { /* 0x28 - CSIDL_PROFILE */
@@ -6242,28 +6231,28 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x2d - CSIDL_COMMON_TEMPLATES */
         &FOLDERID_CommonTemplates,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         L"Common Templates",
-        MAKEINTRESOURCEW(IDS_TEMPLATES)
+        L"Microsoft\\Windows\\Templates"
     },
     { /* 0x2e - CSIDL_COMMON_DOCUMENTS */
         &FOLDERID_PublicDocuments,
         CSIDL_Type_AllUsers,
         L"Common Documents",
-        MAKEINTRESOURCEW(IDS_PERSONAL),
+        L"Documents",
         -IDI_SHELL_MY_DOCUMENTS
     },
     { /* 0x2f - CSIDL_COMMON_ADMINTOOLS */
         &FOLDERID_CommonAdminTools,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         L"Common Administrative Tools",
-        MAKEINTRESOURCEW(IDS_ADMINTOOLS)
+        L"Microsoft\\Windows\\Start Menu\\Programs\\Administrative Tools"
     },
     { /* 0x30 - CSIDL_ADMINTOOLS */
         &FOLDERID_AdminTools,
         CSIDL_Type_User,
         L"Administrative Tools",
-        MAKEINTRESOURCEW(IDS_ADMINTOOLS)
+        L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Administrative Tools"
     },
     { /* 0x31 - CSIDL_CONNECTIONS */
         &FOLDERID_ConnectionsFolder,
@@ -6294,21 +6283,21 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_PublicMusic,
         CSIDL_Type_AllUsers,
         L"CommonMusic",
-        MAKEINTRESOURCEW(IDS_COMMON_MUSIC),
+        L"Music",
         -IDI_SHELL_MY_MUSIC
     },
     { /* 0x36 - CSIDL_COMMON_PICTURES */
         &FOLDERID_PublicPictures,
         CSIDL_Type_AllUsers,
         L"CommonPictures",
-        MAKEINTRESOURCEW(IDS_COMMON_PICTURES),
+        L"Pictures",
         -IDI_SHELL_MY_PICTURES
     },
     { /* 0x37 - CSIDL_COMMON_VIDEO */
         &FOLDERID_PublicVideos,
         CSIDL_Type_AllUsers,
         L"CommonVideo",
-        MAKEINTRESOURCEW(IDS_COMMON_VIDEO),
+        L"Videos",
         -IDI_SHELL_MY_MOVIES
     },
     { /* 0x38 - CSIDL_RESOURCES */
@@ -6325,7 +6314,7 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x3a - CSIDL_COMMON_OEM_LINKS */
         &FOLDERID_CommonOEMLinks,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         NULL,
         L"OEM Links"
     },
@@ -6333,7 +6322,7 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_CDBurning,
         CSIDL_Type_User,
         L"CD Burning",
-        L"Local Settings\\Application Data\\Microsoft\\CD Burning"
+        L"AppData\\Local\\Microsoft\\Windows\\Burn\\Burn"
     },
     { /* 0x3c unassigned */
         &GUID_NULL,
@@ -6391,9 +6380,9 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x45 */
         &GUID_NULL,
-        CSIDL_Type_User,
+        CSIDL_Type_Disallowed,
         NULL,
-        L"Documents"
+        NULL
     },
     { /* 0x46 */
         &FOLDERID_DocumentsLibrary,
@@ -6511,7 +6500,7 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x58 */
         &FOLDERID_PublicGameTasks,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         NULL,
         L"Microsoft\\Windows\\GameExplorer"
     },
@@ -6523,7 +6512,7 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x5a */
         &FOLDERID_PublicRingtones,
-        CSIDL_Type_AllUsers,
+        CSIDL_Type_ProgramData,
         NULL,
         L"Microsoft\\Windows\\Ringtones"
     },
@@ -6921,11 +6910,10 @@ static HRESULT _SHGetDefaultValue(HANDLE hToken, BYTE folder, LPWSTR pszPath)
             break;
 #endif
         case CSIDL_Type_AllUsers:
-#ifndef __REACTOS__
             strcpyW(pszPath, L"%PUBLIC%");
-#else
-            strcpyW(pszPath, L"%ALLUSERSPROFILE%");
-#endif
+            break;
+        case CSIDL_Type_ProgramData:
+            strcpyW(pszPath, L"%ProgramData%");
             break;
         case CSIDL_Type_CurrVer:
             strcpyW(pszPath, L"%SystemDrive%");
@@ -7182,7 +7170,8 @@ static HRESULT _SHGetAllUsersProfilePath(DWORD dwFlags, BYTE folder,
 
     if (folder >= ARRAY_SIZE(CSIDL_Data))
         return E_INVALIDARG;
-    if (CSIDL_Data[folder].type != CSIDL_Type_AllUsers)
+    if (CSIDL_Data[folder].type != CSIDL_Type_AllUsers &&
+        CSIDL_Data[folder].type != CSIDL_Type_ProgramData)
         return E_INVALIDARG;
     if (!pszPath)
         return E_INVALIDARG;
@@ -7487,6 +7476,9 @@ HRESULT WINAPI SHGetKnownFolderPath(
 
     *ppszPath = NULL;
 
+    hr = SHELL_GetRegisteredFolderPath(rfid, dwFlags, hToken, ppszPath);
+    if (hr != S_FALSE) return hr;
+
     csidl = SHELL_CsidlFromKnownFolderId(rfid);
     if (csidl < 0)
         return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
@@ -7539,7 +7531,15 @@ HRESULT WINAPI SHGetKnownFolderIDList(
 
     csidl = SHELL_CsidlFromKnownFolderId(rfid);
     if (csidl < 0)
-        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    {
+        PWSTR path;
+        DWORD attributes = 0;
+        HRESULT hr = SHGetKnownFolderPath(rfid, dwFlags, hToken, &path);
+        if (FAILED(hr)) return hr;
+        hr = SHILCreateFromPathW(path, ppidl, &attributes);
+        CoTaskMemFree(path);
+        return hr;
+    }
 
     if (dwFlags & KF_FLAG_CREATE)
         csidl |= CSIDL_FLAG_CREATE;
@@ -7701,6 +7701,7 @@ HRESULT WINAPI SHGetFolderPathAndSubDirW(
             hr = _SHGetUserProfilePath(hToken, dwFlags, folder, szTemp);
             break;
         case CSIDL_Type_AllUsers:
+        case CSIDL_Type_ProgramData:
             hr = _SHGetAllUsersProfilePath(dwFlags, folder, szTemp);
             break;
         default:
@@ -7897,7 +7898,8 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
 #endif
                 _SHGetUserProfilePath(hToken, SHGFP_TYPE_CURRENT, folders[i],
                  path);
-            else if (CSIDL_Data[folders[i]].type == CSIDL_Type_AllUsers)
+            else if (CSIDL_Data[folders[i]].type == CSIDL_Type_AllUsers ||
+                     CSIDL_Data[folders[i]].type == CSIDL_Type_ProgramData)
                 _SHGetAllUsersProfilePath(SHGFP_TYPE_CURRENT, folders[i], path);
             else if (CSIDL_Data[folders[i]].type == CSIDL_Type_WindowsPath)
             {
@@ -8259,6 +8261,7 @@ HRESULT SHELL_GetKnownFolderInfo(UINT index, KNOWNFOLDERID *id, KF_CATEGORY *cat
         *category = KF_CATEGORY_PERUSER;
         break;
     case CSIDL_Type_AllUsers:
+    case CSIDL_Type_ProgramData:
         *category = KF_CATEGORY_COMMON;
         break;
     case CSIDL_Type_Disallowed:

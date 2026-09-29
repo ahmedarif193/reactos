@@ -4,9 +4,103 @@
  * PURPOSE:     Known-folder COM access to the shell's folder table
  */
 #include "precomp.h"
+#include <sddl.h>
 
 extern "C" HRESULT SHELL_GetKnownFolderInfo(UINT, KNOWNFOLDERID *, KF_CATEGORY *);
 extern "C" UINT SHELL_GetKnownFolderCount(void);
+
+static const WCHAR FolderDescriptionsKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FolderDescriptions";
+static const WCHAR FolderRedirectionsKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders";
+
+static HRESULT OpenFolderDescription(REFKNOWNFOLDERID id, REGSAM access, BOOL create, HKEY *key)
+{
+    WCHAR guid[39], path[MAX_PATH];
+    StringFromGUID2(id, guid, _countof(guid));
+    HRESULT hr = StringCchPrintfW(path, _countof(path), L"%s\\%s", FolderDescriptionsKey, guid);
+    if (FAILED(hr)) return hr;
+    LONG error = create ? RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, NULL, 0, access, NULL, key, NULL) :
+                         RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, access, key);
+    return HRESULT_FROM_WIN32(error);
+}
+
+static HRESULT ReadFolderString(HKEY key, PCWSTR name, PWSTR *value)
+{
+    DWORD type, bytes = 0;
+    *value = NULL;
+    LONG error = RegQueryValueExW(key, name, NULL, &type, NULL, &bytes);
+    if (error != ERROR_SUCCESS) return HRESULT_FROM_WIN32(error);
+    if ((type != REG_SZ && type != REG_EXPAND_SZ) || bytes % sizeof(WCHAR))
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    if (bytes > MAXDWORD - sizeof(WCHAR)) return E_OUTOFMEMORY;
+    PWSTR buffer = static_cast<PWSTR>(CoTaskMemAlloc(bytes + sizeof(WCHAR)));
+    if (!buffer) return E_OUTOFMEMORY;
+    error = RegQueryValueExW(key, name, NULL, &type, reinterpret_cast<BYTE *>(buffer), &bytes);
+    if (error != ERROR_SUCCESS)
+    {
+        CoTaskMemFree(buffer);
+        return HRESULT_FROM_WIN32(error);
+    }
+    buffer[bytes / sizeof(WCHAR)] = 0;
+    *value = buffer;
+    return S_OK;
+}
+
+static HRESULT ReadFolderDword(HKEY key, PCWSTR name, DWORD *value)
+{
+    DWORD bytes = sizeof(*value), type;
+    LONG error = RegQueryValueExW(key, name, NULL, &type, reinterpret_cast<BYTE *>(value), &bytes);
+    if (error != ERROR_SUCCESS) return HRESULT_FROM_WIN32(error);
+    return type == REG_DWORD && bytes == sizeof(*value) ? S_OK : HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+}
+
+static HRESULT ReadRegisteredCategory(REFKNOWNFOLDERID id, KF_CATEGORY *category)
+{
+    HKEY key;
+    DWORD value;
+    HRESULT hr = OpenFolderDescription(id, KEY_QUERY_VALUE, FALSE, &key);
+    if (FAILED(hr)) return hr;
+    hr = ReadFolderDword(key, L"Category", &value);
+    RegCloseKey(key);
+    if (SUCCEEDED(hr))
+    {
+        if (value < KF_CATEGORY_VIRTUAL || value > KF_CATEGORY_PERUSER) return E_INVALIDARG;
+        *category = static_cast<KF_CATEGORY>(value);
+    }
+    return hr;
+}
+
+static HRESULT OpenFolderRedirections(KF_CATEGORY category, HANDLE token, REGSAM access, BOOL create, HKEY *key)
+{
+    HKEY root = HKEY_LOCAL_MACHINE;
+    LONG error;
+    if (category == KF_CATEGORY_PERUSER)
+    {
+        if (!token)
+            error = RegOpenCurrentUser(access, &root);
+        else if (token == INVALID_HANDLE_VALUE)
+            error = RegOpenKeyExW(HKEY_USERS, L".Default", 0, access, &root);
+        else
+        {
+            DWORD bytes = 0;
+            GetTokenInformation(token, TokenUser, NULL, 0, &bytes);
+            if (!bytes) return HRESULT_FROM_WIN32(GetLastError());
+            CHeapPtr<BYTE> info;
+            if (!info.Allocate(bytes)) return E_OUTOFMEMORY;
+            if (!GetTokenInformation(token, TokenUser, info, bytes, &bytes))
+                return HRESULT_FROM_WIN32(GetLastError());
+            PWSTR sid;
+            if (!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER *>(info.m_pData)->User.Sid, &sid))
+                return HRESULT_FROM_WIN32(GetLastError());
+            error = RegOpenKeyExW(HKEY_USERS, sid, 0, access, &root);
+            LocalFree(sid);
+        }
+        if (error != ERROR_SUCCESS) return HRESULT_FROM_WIN32(error);
+    }
+    error = create ? RegCreateKeyExW(root, FolderRedirectionsKey, 0, NULL, 0, access, NULL, key, NULL) :
+                     RegOpenKeyExW(root, FolderRedirectionsKey, 0, access, key);
+    if (root != HKEY_LOCAL_MACHINE) RegCloseKey(root);
+    return HRESULT_FROM_WIN32(error);
+}
 
 static HRESULT FindKnownFolder(REFKNOWNFOLDERID id, int *csidl, KF_CATEGORY *category)
 {
@@ -19,7 +113,8 @@ static HRESULT FindKnownFolder(REFKNOWNFOLDERID id, int *csidl, KF_CATEGORY *cat
             return S_OK;
         }
     }
-    return E_INVALIDARG;
+    *csidl = -1;
+    return SUCCEEDED(ReadRegisteredCategory(id, category)) ? S_OK : E_INVALIDARG;
 }
 
 struct KNOWN_FOLDER_DEF
@@ -36,16 +131,15 @@ struct KNOWN_FOLDER_DEF
 
 static const KNOWN_FOLDER_DEF KnownFolderDefs[] =
 {
-    { &FOLDERID_Desktop, KF_CATEGORY_PERUSER, L"Desktop", NULL, L"Desktop", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(0) },
     { &FOLDERID_InternetFolder, KF_CATEGORY_VIRTUAL, L"InternetFolder", NULL, NULL, L"::{871C5380-42A0-1069-A2EA-08002B30309D}", 0, (KF_DEFINITION_FLAGS)(0) },
     { &FOLDERID_Programs, KF_CATEGORY_PERUSER, L"Programs", &FOLDERID_StartMenu, L"Programs", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(0) },
-    { &FOLDERID_ControlPanelFolder, KF_CATEGORY_VIRTUAL, L"ControlPanelFolder", NULL, L"::{21EC2020-3AEA-1069-A2DD-08002B30309D}", L"::{26EE0668-A00A-44D7-9371-BEB064C98683}\\0", 0, (KF_DEFINITION_FLAGS)(0) },
+    { &FOLDERID_ControlPanelFolder, KF_CATEGORY_VIRTUAL, L"ControlPanelFolder", NULL, NULL, L"::{26EE0668-A00A-44D7-9371-BEB064C98683}\\0", 0, (KF_DEFINITION_FLAGS)(0) },
     { &FOLDERID_PrintersFolder, KF_CATEGORY_VIRTUAL, L"PrintersFolder", NULL, NULL, L"::{21EC2020-3AEA-1069-A2DD-08002B30309D}\\::{2227A280-3AEA-1069-A2DE-08002B30309D}", 0, (KF_DEFINITION_FLAGS)(0) },
     { &FOLDERID_Documents, KF_CATEGORY_PERUSER, L"Personal", &FOLDERID_Profile, L"Documents", L"::{59031a47-3f72-44a7-89c5-5595fe6b30ee}\\{FDD39AD0-238F-46AF-ADB4-6C85480369C7}", FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_ROAMABLE | KFDF_PRECREATE) },
-    { &FOLDERID_Favorites, KF_CATEGORY_PERUSER, L"Favorites", NULL, L"Favorites", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_ROAMABLE | KFDF_PRECREATE | KFDF_PUBLISHEXPANDEDPATH) },
+    { &FOLDERID_Favorites, KF_CATEGORY_PERUSER, L"Favorites", &FOLDERID_Profile, L"Favorites", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_ROAMABLE | KFDF_PRECREATE | KFDF_PUBLISHEXPANDEDPATH) },
     { &FOLDERID_Startup, KF_CATEGORY_PERUSER, L"Startup", &FOLDERID_Programs, L"StartUp", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_Recent, KF_CATEGORY_PERUSER, L"Recent", &FOLDERID_RoamingAppData, L"Microsoft\\Windows\\Recent", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
-    { &FOLDERID_SendTo, KF_CATEGORY_PERUSER, L"SendTo", &FOLDERID_RoamingAppData, L"Microsoft\\Windows\\SendTo", NULL, 0, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
+    { &FOLDERID_SendTo, KF_CATEGORY_PERUSER, L"SendTo", &FOLDERID_RoamingAppData, L"Microsoft\\Windows\\SendTo", NULL, 0, (KF_DEFINITION_FLAGS)(0) },
     { &FOLDERID_RecycleBinFolder, KF_CATEGORY_VIRTUAL, L"RecycleBinFolder", NULL, NULL, L"::{645FF040-5081-101B-9F08-00AA002F954E}", 0, (KF_DEFINITION_FLAGS)(0) },
     { &FOLDERID_StartMenu, KF_CATEGORY_PERUSER, L"Start Menu", &FOLDERID_RoamingAppData, L"Microsoft\\Windows\\Start Menu", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_Music, KF_CATEGORY_PERUSER, L"My Music", &FOLDERID_Profile, L"Music", L"::{59031a47-3f72-44a7-89c5-5595fe6b30ee}\\{4BD8D571-6D19-48D3-BE97-422220080E43}", FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_ROAMABLE | KFDF_PRECREATE) },
@@ -81,7 +175,7 @@ static const KNOWN_FOLDER_DEF KnownFolderDefs[] =
     { &FOLDERID_PublicDocuments, KF_CATEGORY_COMMON, L"Common Documents", &FOLDERID_Public, L"Documents", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_CommonAdminTools, KF_CATEGORY_COMMON, L"Common Administrative Tools", &FOLDERID_CommonPrograms, L"Administrative Tools", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_AdminTools, KF_CATEGORY_PERUSER, L"Administrative Tools", &FOLDERID_Programs, L"Administrative Tools", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
-    { &FOLDERID_ConnectionsFolder, KF_CATEGORY_VIRTUAL, L"ConnectionsFolder", NULL, L"Administrative Tools", L"::{21EC2020-3AEA-1069-A2DD-08002B30309D}\\::{7007ACC7-3202-11D1-AAD2-00805FC1270E}", 0, (KF_DEFINITION_FLAGS)(0) },
+    { &FOLDERID_ConnectionsFolder, KF_CATEGORY_VIRTUAL, L"ConnectionsFolder", NULL, NULL, L"::{21EC2020-3AEA-1069-A2DD-08002B30309D}\\::{7007ACC7-3202-11D1-AAD2-00805FC1270E}", 0, (KF_DEFINITION_FLAGS)(0) },
     { &FOLDERID_PublicMusic, KF_CATEGORY_COMMON, L"CommonMusic", &FOLDERID_Public, L"Music", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_PublicPictures, KF_CATEGORY_COMMON, L"CommonPictures", &FOLDERID_Public, L"Pictures", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_PublicVideos, KF_CATEGORY_COMMON, L"CommonVideo", &FOLDERID_Public, L"Videos", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
@@ -121,7 +215,7 @@ static const KNOWN_FOLDER_DEF KnownFolderDefs[] =
     { &FOLDERID_Ringtones, KF_CATEGORY_PERUSER, L"Ringtones", &FOLDERID_LocalAppData, L"Microsoft\\Windows\\Ringtones", NULL, 0, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_SampleMusic, KF_CATEGORY_COMMON, L"SampleMusic", &FOLDERID_PublicMusic, L"Sample Music", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_SamplePictures, KF_CATEGORY_COMMON, L"SamplePictures", &FOLDERID_PublicPictures, L"Sample Pictures", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
-    { &FOLDERID_SamplePlaylists, KF_CATEGORY_COMMON, L"SamplePlaylists", &FOLDERID_PublicMusic, L"Sample Playlists", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
+    { &FOLDERID_SamplePlaylists, KF_CATEGORY_COMMON, L"SamplePlaylists", &FOLDERID_PublicMusic, L"Sample Playlists", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(0) },
     { &FOLDERID_SampleVideos, KF_CATEGORY_COMMON, L"SampleVideos", &FOLDERID_PublicVideos, L"Sample Videos", NULL, FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE) },
     { &FOLDERID_SavedGames, KF_CATEGORY_PERUSER, L"SavedGames", &FOLDERID_Profile, L"Saved Games", L"::{59031a47-3f72-44a7-89c5-5595fe6b30ee}\\{4C5C32FF-BB9D-43b0-B5B4-2D72E54EAAA4}", FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_ROAMABLE | KFDF_PRECREATE | KFDF_PUBLISHEXPANDEDPATH) },
     { &FOLDERID_SavedSearches, KF_CATEGORY_PERUSER, L"Searches", &FOLDERID_Profile, L"Searches", L"::{59031a47-3f72-44a7-89c5-5595fe6b30ee}\\{7d1d3a04-debb-4115-95cf-2f29da2920da}", FILE_ATTRIBUTE_READONLY, (KF_DEFINITION_FLAGS)(KFDF_PRECREATE | KFDF_PUBLISHEXPANDEDPATH) },
@@ -155,9 +249,318 @@ static const KNOWN_FOLDER_DEF *FindKnownFolderDefinition(REFKNOWNFOLDERID id)
     return NULL;
 }
 
-class CKnownFolder : public CComObjectRootEx<CComMultiThreadModelNoCS>, public IKnownFolder
+static HRESULT ReadRegisteredDefinition(REFKNOWNFOLDERID id, KNOWNFOLDER_DEFINITION *definition)
 {
+    HKEY key;
+    HRESULT hr = OpenFolderDescription(id, KEY_QUERY_VALUE, FALSE, &key);
+    if (FAILED(hr)) return hr;
+    DWORD category;
+    hr = ReadFolderDword(key, L"Category", &category);
+    if (SUCCEEDED(hr))
+    {
+        definition->category = static_cast<KF_CATEGORY>(category);
+        hr = ReadFolderString(key, L"Name", &definition->pszName);
+    }
+    if (SUCCEEDED(hr))
+    {
+        CComHeapPtr<WCHAR> parent;
+        HRESULT parentHr = ReadFolderString(key, L"ParentFolder", &parent);
+        if (SUCCEEDED(parentHr)) hr = CLSIDFromString(parent, &definition->fidParent);
+        else if (parentHr != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) hr = parentHr;
+    }
+    if (SUCCEEDED(hr))
+    {
+        HRESULT valueHr = ReadFolderDword(key, L"Attributes", &definition->dwAttributes);
+        if (FAILED(valueHr) && valueHr != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) hr = valueHr;
+    }
+    const struct { PCWSTR name; PWSTR *value; } strings[] = {
+        { L"RelativePath", &definition->pszRelativePath },
+        { L"ParsingName", &definition->pszParsingName }
+    };
+    for (UINT i = 0; SUCCEEDED(hr) && i < _countof(strings); ++i)
+    {
+        HRESULT valueHr = ReadFolderString(key, strings[i].name, strings[i].value);
+        if (FAILED(valueHr) && valueHr != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) hr = valueHr;
+    }
+    RegCloseKey(key);
+    if (FAILED(hr))
+    {
+        FreeKnownFolderDefinitionFields(definition);
+        ZeroMemory(definition, sizeof(*definition));
+    }
+    return hr;
+}
+
+static HRESULT GetKnownFolderDefinition(REFKNOWNFOLDERID id, KNOWNFOLDER_DEFINITION *definition)
+{
+    const KNOWN_FOLDER_DEF *def;
+    HRESULT hr;
+    if (!definition) return E_INVALIDARG;
+    ZeroMemory(definition, sizeof(*definition));
+    def = FindKnownFolderDefinition(id);
+    if (!def) return ReadRegisteredDefinition(id, definition);
+    definition->category = def->Category;
+    if (def->Parent) definition->fidParent = *def->Parent;
+    definition->dwAttributes = def->Attributes;
+    definition->kfdFlags = def->Flags;
+    hr = SHStrDupW(def->Name, &definition->pszName);
+    if (SUCCEEDED(hr) && def->RelativePath)
+        hr = SHStrDupW(def->RelativePath, &definition->pszRelativePath);
+    if (SUCCEEDED(hr) && def->ParsingName)
+        hr = SHStrDupW(def->ParsingName, &definition->pszParsingName);
+    if (FAILED(hr))
+    {
+        CoTaskMemFree(definition->pszName);
+        CoTaskMemFree(definition->pszRelativePath);
+        CoTaskMemFree(definition->pszParsingName);
+        ZeroMemory(definition, sizeof(*definition));
+    }
+    return hr;
+}
+
+static HRESULT CollectKnownFolders(CAtlArray<GUID> &ids)
+{
+    GUID id;
+    KF_CATEGORY category;
+    for (UINT i = 0; i < SHELL_GetKnownFolderCount(); ++i)
+    {
+        if (FAILED(SHELL_GetKnownFolderInfo(i, &id, &category))) continue;
+        SIZE_T j;
+        for (j = 0; j < ids.GetCount(); ++j)
+            if (IsEqualGUID(ids[j], id)) break;
+        if (j != ids.GetCount()) continue;
+        if (!ids.SetCount(j + 1)) return E_OUTOFMEMORY;
+        ids[j] = id;
+    }
+    HKEY key;
+    LONG error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, FolderDescriptionsKey, 0, KEY_ENUMERATE_SUB_KEYS, &key);
+    if (error == ERROR_FILE_NOT_FOUND) return S_OK;
+    if (error != ERROR_SUCCESS) return HRESULT_FROM_WIN32(error);
+    HRESULT hr = S_OK;
+    for (DWORD index = 0;; ++index)
+    {
+        WCHAR name[256];
+        DWORD length = _countof(name);
+        error = RegEnumKeyExW(key, index, name, &length, NULL, NULL, NULL, NULL);
+        if (error == ERROR_NO_MORE_ITEMS) break;
+        if (error != ERROR_SUCCESS) { hr = HRESULT_FROM_WIN32(error); break; }
+        if (FAILED(CLSIDFromString(name, &id)) || FAILED(ReadRegisteredCategory(id, &category))) continue;
+        SIZE_T j;
+        for (j = 0; j < ids.GetCount(); ++j)
+            if (IsEqualGUID(ids[j], id)) break;
+        if (j != ids.GetCount()) continue;
+        if (!ids.SetCount(j + 1)) { hr = E_OUTOFMEMORY; break; }
+        ids[j] = id;
+    }
+    RegCloseKey(key);
+    return hr;
+}
+
+extern "C" HRESULT SHELL_GetRegisteredFolderPath(REFKNOWNFOLDERID id, DWORD flags, HANDLE token, PWSTR *path)
+{
+    KF_CATEGORY category;
+    HRESULT hr = ReadRegisteredCategory(id, &category);
+    if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || hr == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND))
+        return S_FALSE;
+    if (FAILED(hr)) return hr;
+    if (category == KF_CATEGORY_VIRTUAL) return E_INVALIDARG;
+    if ((flags & (KF_FLAG_DEFAULT_PATH | KF_FLAG_NOT_PARENT_RELATIVE)) == KF_FLAG_NOT_PARENT_RELATIVE)
+        return E_INVALIDARG;
+
+    CAtlArray<GUID> visited;
+    GUID current = id;
+    WCHAR suffix[MAX_PATH] = L"", result[MAX_PATH];
+    for (;;)
+    {
+        for (SIZE_T i = 0; i < visited.GetCount(); ++i)
+            if (IsEqualGUID(visited[i], current)) return E_INVALIDARG;
+        SIZE_T index = visited.GetCount();
+        if (!visited.SetCount(index + 1)) return E_OUTOFMEMORY;
+        visited[index] = current;
+
+        KNOWNFOLDER_DEFINITION definition;
+        hr = GetKnownFolderDefinition(current, &definition);
+        if (FAILED(hr)) return hr;
+        CComHeapPtr<WCHAR> redirected;
+        if (!(flags & KF_FLAG_DEFAULT_PATH))
+        {
+            HKEY key;
+            if (SUCCEEDED(OpenFolderRedirections(definition.category, token, KEY_QUERY_VALUE, FALSE, &key)))
+            {
+                WCHAR guid[39];
+                StringFromGUID2(current, guid, _countof(guid));
+                ReadFolderString(key, guid, &redirected);
+                RegCloseKey(key);
+            }
+        }
+        GUID parent = definition.fidParent;
+        if (redirected)
+        {
+            hr = PathCombineW(result, redirected, suffix) ? S_OK : HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+            FreeKnownFolderDefinitionFields(&definition);
+            break;
+        }
+        if (FindKnownFolderDefinition(current))
+        {
+            WCHAR base[MAX_PATH];
+            int csidl;
+            KF_CATEGORY parentCategory;
+            hr = FindKnownFolder(current, &csidl, &parentCategory);
+            if (SUCCEEDED(hr))
+                hr = SHGetFolderPathW(NULL, csidl | CSIDL_FLAG_DONT_VERIFY, token,
+                                     flags & KF_FLAG_DEFAULT_PATH ? SHGFP_TYPE_DEFAULT : SHGFP_TYPE_CURRENT, base);
+            if (SUCCEEDED(hr) && !PathCombineW(result, base, suffix))
+                hr = HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+            FreeKnownFolderDefinitionFields(&definition);
+            break;
+        }
+        if (!definition.pszRelativePath)
+            hr = HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+        else if (!PathCombineW(result, definition.pszRelativePath, suffix))
+            hr = HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+        FreeKnownFolderDefinitionFields(&definition);
+        if (FAILED(hr) || IsEqualGUID(parent, GUID_NULL)) break;
+        StringCchCopyW(suffix, _countof(suffix), result);
+        current = parent;
+    }
+    if (FAILED(hr)) return hr;
+    if (!ExpandEnvironmentStringsForUserW(token, result, suffix, _countof(suffix)))
+        return HRESULT_FROM_WIN32(GetLastError());
+    if (flags & KF_FLAG_CREATE)
+    {
+        LONG error = SHCreateDirectoryExW(NULL, suffix, NULL);
+        if (error != ERROR_SUCCESS && error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS)
+            return HRESULT_FROM_WIN32(error);
+    }
+    if (!(flags & KF_FLAG_DONT_VERIFY) && GetFileAttributesW(suffix) == INVALID_FILE_ATTRIBUTES)
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    return SHStrDupW(suffix, path);
+}
+
+extern "C" HRESULT WINAPI SHSetKnownFolderPath(REFKNOWNFOLDERID id, DWORD flags, HANDLE token, PCWSTR path)
+{
+    if (!path || !*path || (flags & ~KF_FLAG_DONT_UNEXPAND)) return E_INVALIDARG;
+    if (wcslen(path) >= MAX_PATH) return HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+    KNOWNFOLDER_DEFINITION definition;
+    HRESULT hr = GetKnownFolderDefinition(id, &definition);
+    if (FAILED(hr)) return hr;
+    if (definition.category != KF_CATEGORY_PERUSER && definition.category != KF_CATEGORY_COMMON)
+    {
+        FreeKnownFolderDefinitionFields(&definition);
+        return E_INVALIDARG;
+    }
+    HKEY key;
+    hr = OpenFolderRedirections(definition.category, token, KEY_SET_VALUE, TRUE, &key);
+    if (SUCCEEDED(hr))
+    {
+        WCHAR guid[39];
+        StringFromGUID2(id, guid, _countof(guid));
+        DWORD bytes = (wcslen(path) + 1) * sizeof(WCHAR);
+        hr = HRESULT_FROM_WIN32(RegSetValueExW(key, guid, 0, REG_EXPAND_SZ, reinterpret_cast<const BYTE *>(path), bytes));
+        if (SUCCEEDED(hr) && FindKnownFolderDefinition(id))
+            hr = HRESULT_FROM_WIN32(RegSetValueExW(key, definition.pszName, 0, REG_EXPAND_SZ,
+                                                 reinterpret_cast<const BYTE *>(path), bytes));
+        RegCloseKey(key);
+    }
+    FreeKnownFolderDefinitionFields(&definition);
+    return hr;
+}
+
+static HRESULT RegisterKnownFolder(REFKNOWNFOLDERID id, const KNOWNFOLDER_DEFINITION *definition)
+{
+    if (!definition || !definition->pszName || !*definition->pszName || IsEqualGUID(id, GUID_NULL) ||
+        IsEqualGUID(id, definition->fidParent) || definition->category < KF_CATEGORY_VIRTUAL ||
+        definition->category > KF_CATEGORY_PERUSER) return E_INVALIDARG;
+    if (definition->category != KF_CATEGORY_VIRTUAL && definition->pszRelativePath)
+    {
+        WCHAR candidate[MAX_PATH], expanded[MAX_PATH];
+        CComHeapPtr<WCHAR> parent;
+        HRESULT hr;
+        if (!IsEqualGUID(definition->fidParent, GUID_NULL))
+        {
+            hr = SHGetKnownFolderPath(definition->fidParent, KF_FLAG_DONT_VERIFY, NULL, &parent);
+            if (FAILED(hr)) return hr;
+        }
+        if (!PathCombineW(candidate, parent ? static_cast<PCWSTR>(parent) : L"", definition->pszRelativePath))
+            return HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+        if (!ExpandEnvironmentStringsForUserW(NULL, candidate, expanded, _countof(expanded)))
+            return HRESULT_FROM_WIN32(GetLastError());
+        CAtlArray<GUID> folders;
+        hr = CollectKnownFolders(folders);
+        if (FAILED(hr)) return hr;
+        for (SIZE_T i = 0; i < folders.GetCount(); ++i)
+        {
+            CComHeapPtr<WCHAR> existing;
+            if (IsEqualGUID(folders[i], id) ||
+                FAILED(SHGetKnownFolderPath(folders[i], KF_FLAG_DONT_VERIFY, NULL, &existing))) continue;
+            if (!wcsicmp(expanded, existing)) return E_INVALIDARG;
+        }
+    }
+    HKEY key;
+    HRESULT hr = OpenFolderDescription(id, KEY_SET_VALUE, TRUE, &key);
+    if (FAILED(hr)) return hr;
+    DWORD category = definition->category;
+    hr = HRESULT_FROM_WIN32(RegSetValueExW(key, L"Category", 0, REG_DWORD,
+                                         reinterpret_cast<const BYTE *>(&category), sizeof(category)));
+    if (SUCCEEDED(hr))
+        hr = HRESULT_FROM_WIN32(RegSetValueExW(key, L"Attributes", 0, REG_DWORD,
+                              reinterpret_cast<const BYTE *>(&definition->dwAttributes), sizeof(definition->dwAttributes)));
+    WCHAR parent[39];
+    StringFromGUID2(definition->fidParent, parent, _countof(parent));
+    const struct { PCWSTR name; PCWSTR value; } strings[] = {
+        { L"Name", definition->pszName },
+        { L"RelativePath", definition->pszRelativePath },
+        { L"ParsingName", definition->pszParsingName },
+        { L"ParentFolder", IsEqualGUID(definition->fidParent, GUID_NULL) ? NULL : parent }
+    };
+    for (UINT i = 0; SUCCEEDED(hr) && i < _countof(strings); ++i)
+    {
+        LONG error = strings[i].value ? RegSetValueExW(key, strings[i].name, 0, REG_SZ,
+            reinterpret_cast<const BYTE *>(strings[i].value), (wcslen(strings[i].value) + 1) * sizeof(WCHAR)) :
+            RegDeleteValueW(key, strings[i].name);
+        if (error != ERROR_FILE_NOT_FOUND) hr = HRESULT_FROM_WIN32(error);
+    }
+    RegCloseKey(key);
+    return hr;
+}
+
+static HRESULT RedirectKnownFolder(REFKNOWNFOLDERID id, HWND hwnd, KF_REDIRECT_FLAGS flags, PCWSTR path,
+                                   UINT count, const KNOWNFOLDERID *exclude, PWSTR *error)
+{
+    if (error) *error = NULL;
+    if (!path || !*path || (count && !exclude)) return E_INVALIDARG;
+    CComHeapPtr<WCHAR> source;
+    HRESULT hr = SHGetKnownFolderPath(id, KF_FLAG_DONT_VERIFY, NULL, &source);
+    if (FAILED(hr)) return hr;
+    LONG status = SHCreateDirectoryExW(hwnd, path, NULL);
+    if (status != ERROR_SUCCESS && status != ERROR_ALREADY_EXISTS && status != ERROR_FILE_EXISTS)
+        return HRESULT_FROM_WIN32(status);
+    if ((flags & KF_REDIRECT_COPY_CONTENTS) && wcsicmp(source, path))
+    {
+        WCHAR from[MAX_PATH + 1] = {0}, to[MAX_PATH + 1] = {0};
+        hr = StringCchPrintfW(from, MAX_PATH, L"%s\\*", static_cast<PWSTR>(source));
+        if (SUCCEEDED(hr)) hr = StringCchCopyW(to, MAX_PATH, path);
+        if (FAILED(hr)) return hr;
+        SHFILEOPSTRUCTW operation = {0};
+        operation.hwnd = hwnd;
+        operation.wFunc = flags & KF_REDIRECT_DEL_SOURCE_CONTENTS ? FO_MOVE : FO_COPY;
+        operation.pFrom = from;
+        operation.pTo = to;
+        operation.fFlags = flags & KF_REDIRECT_WITH_UI ? 0 : FOF_NO_UI;
+        status = SHFileOperationW(&operation);
+        if (status) return HRESULT_FROM_WIN32(status);
+        if (operation.fAnyOperationsAborted) return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+        if ((flags & KF_REDIRECT_DEL_SOURCE_CONTENTS) && !RemoveDirectoryW(source))
+            return HRESULT_FROM_WIN32(GetLastError());
+    }
+    return SHSetKnownFolderPath(id, 0, NULL, path);
+}
+
+class CKnownFolder : public CComObjectRootEx<CComMultiThreadModel>, public IKnownFolder
+{
+    WCHAR m_verifiedPath[MAX_PATH];
 public:
+    CKnownFolder() { m_verifiedPath[0] = 0; }
     KNOWNFOLDERID m_id;
     KF_CATEGORY m_category;
     BEGIN_COM_MAP(CKnownFolder)
@@ -180,9 +583,31 @@ public:
         return hr;
     }
     STDMETHOD(GetPath)(DWORD flags, LPWSTR *path) override
-    { return SHGetKnownFolderPath(m_id, flags, NULL, path); }
+    {
+        if (!path) return E_INVALIDARG;
+        *path = NULL;
+        CComHeapPtr<WCHAR> candidate;
+        HRESULT hr = SHGetKnownFolderPath(m_id, flags | KF_FLAG_DONT_VERIFY, NULL, &candidate);
+        if (FAILED(hr)) return hr;
+        Lock();
+        BOOL verified = !wcscmp(m_verifiedPath, candidate);
+        Unlock();
+        if ((flags & KF_FLAG_DONT_VERIFY) || (verified && !(flags & KF_FLAG_CREATE)))
+        {
+            *path = candidate.Detach();
+            return S_OK;
+        }
+        hr = SHGetKnownFolderPath(m_id, flags, NULL, path);
+        if (SUCCEEDED(hr))
+        {
+            Lock();
+            StringCchCopyW(m_verifiedPath, _countof(m_verifiedPath), *path);
+            Unlock();
+        }
+        return hr;
+    }
     STDMETHOD(SetPath)(DWORD flags, LPCWSTR path) override
-    { return m_category == KF_CATEGORY_FIXED ? E_INVALIDARG : E_NOTIMPL; }
+    { return SHSetKnownFolderPath(m_id, flags, NULL, path); }
     STDMETHOD(GetIDList)(DWORD flags, PIDLIST_ABSOLUTE *pidl) override
     { return SHGetKnownFolderIDList(m_id, flags, NULL, pidl); }
     STDMETHOD(GetFolderType)(FOLDERTYPEID *type) override
@@ -194,31 +619,7 @@ public:
         return S_OK;
     }
     STDMETHOD(GetFolderDefinition)(KNOWNFOLDER_DEFINITION *definition) override
-    {
-        const KNOWN_FOLDER_DEF *def;
-        HRESULT hr;
-        if (!definition) return E_INVALIDARG;
-        ZeroMemory(definition, sizeof(*definition));
-        def = FindKnownFolderDefinition(m_id);
-        if (!def) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-        definition->category = def->Category;
-        if (def->Parent) definition->fidParent = *def->Parent;
-        definition->dwAttributes = def->Attributes;
-        definition->kfdFlags = def->Flags;
-        hr = SHStrDupW(def->Name, &definition->pszName);
-        if (SUCCEEDED(hr) && def->RelativePath)
-            hr = SHStrDupW(def->RelativePath, &definition->pszRelativePath);
-        if (SUCCEEDED(hr) && def->ParsingName)
-            hr = SHStrDupW(def->ParsingName, &definition->pszParsingName);
-        if (FAILED(hr))
-        {
-            CoTaskMemFree(definition->pszName);
-            CoTaskMemFree(definition->pszRelativePath);
-            CoTaskMemFree(definition->pszParsingName);
-            ZeroMemory(definition, sizeof(*definition));
-        }
-        return hr;
-    }
+    { return GetKnownFolderDefinition(m_id, definition); }
 };
 
 class CKnownFolderManager : public CComObjectRootEx<CComMultiThreadModelNoCS>, public IKnownFolderManager
@@ -240,24 +641,21 @@ public:
         KF_CATEGORY category;
         if (!csidl) return E_POINTER;
         *csidl = -1;
-        return FindKnownFolder(id, csidl, &category);
+        HRESULT hr = FindKnownFolder(id, csidl, &category);
+        return SUCCEEDED(hr) && *csidl < 0 ? E_INVALIDARG : hr;
     }
     STDMETHOD(GetFolderIds)(KNOWNFOLDERID **ids, UINT *count) override
     {
-        KNOWNFOLDERID id;
-        KF_CATEGORY category;
         if (!ids || !count) return E_POINTER;
         *count = 0;
-        *ids = static_cast<KNOWNFOLDERID *>(CoTaskMemAlloc(SHELL_GetKnownFolderCount() * sizeof(**ids)));
+        *ids = NULL;
+        CAtlArray<GUID> folders;
+        HRESULT hr = CollectKnownFolders(folders);
+        if (FAILED(hr)) return hr;
+        *ids = static_cast<KNOWNFOLDERID *>(CoTaskMemAlloc(folders.GetCount() * sizeof(**ids)));
         if (!*ids) return E_OUTOFMEMORY;
-        for (UINT i = 0; i < SHELL_GetKnownFolderCount(); ++i)
-        {
-            if (FAILED(SHELL_GetKnownFolderInfo(i, &id, &category))) continue;
-            UINT j;
-            for (j = 0; j < *count; ++j)
-                if (IsEqualGUID((*ids)[j], id)) break;
-            if (j == *count) (*ids)[(*count)++] = id;
-        }
+        *count = folders.GetCount();
+        CopyMemory(*ids, folders.GetData(), *count * sizeof(**ids));
         return S_OK;
     }
     STDMETHOD(GetFolder)(REFKNOWNFOLDERID id, IKnownFolder **out) override
@@ -277,22 +675,33 @@ public:
     }
     STDMETHOD(GetFolderByName)(LPCWSTR name, IKnownFolder **out) override;
     STDMETHOD(RegisterFolder)(REFKNOWNFOLDERID id, const KNOWNFOLDER_DEFINITION *definition) override
-    { return E_NOTIMPL; }
+    { return RegisterKnownFolder(id, definition); }
     STDMETHOD(UnregisterFolder)(REFKNOWNFOLDERID id) override
-    { return E_NOTIMPL; }
+    {
+        HKEY key;
+        LONG error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, FolderDescriptionsKey, 0, KEY_WRITE, &key);
+        if (error != ERROR_SUCCESS) return HRESULT_FROM_WIN32(error);
+        WCHAR guid[39];
+        StringFromGUID2(id, guid, _countof(guid));
+        error = SHDeleteKeyW(key, guid);
+        RegCloseKey(key);
+        return HRESULT_FROM_WIN32(error);
+    }
     STDMETHOD(FindFolderFromPath)(LPCWSTR path, FFFP_MODE mode, IKnownFolder **out) override
     {
         KNOWNFOLDERID id, best = GUID_NULL;
-        KF_CATEGORY category;
         SIZE_T bestLength = 0;
         if (!out) return E_POINTER;
         *out = NULL;
         if (!path || (mode != FFFP_EXACTMATCH && mode != FFFP_NEARESTPARENTMATCH)) return E_INVALIDARG;
-        for (UINT i = 0; i < SHELL_GetKnownFolderCount(); ++i)
+        CAtlArray<GUID> folders;
+        HRESULT hr = CollectKnownFolders(folders);
+        if (FAILED(hr)) return hr;
+        for (SIZE_T i = 0; i < folders.GetCount(); ++i)
         {
             PWSTR candidate;
-            if (FAILED(SHELL_GetKnownFolderInfo(i, &id, &category)) ||
-                FAILED(SHGetKnownFolderPath(id, KF_FLAG_DONT_VERIFY, NULL, &candidate))) continue;
+            id = folders[i];
+            if (FAILED(SHGetKnownFolderPath(id, KF_FLAG_DONT_VERIFY, NULL, &candidate))) continue;
             SIZE_T length = wcslen(candidate);
             BOOL match = !wcsicmp(path, candidate);
             if (!match && mode == FFFP_NEARESTPARENTMATCH && length && wcslen(path) > length)
@@ -313,7 +722,7 @@ public:
     }
     STDMETHOD(Redirect)(REFKNOWNFOLDERID id, HWND hwnd, KF_REDIRECT_FLAGS flags, LPCWSTR path,
                        UINT count, const KNOWNFOLDERID *exclude, LPWSTR *error) override
-    { if (error) *error = NULL; return E_NOTIMPL; }
+    { return RedirectKnownFolder(id, hwnd, flags, path, count, exclude, error); }
 };
 
 STDMETHODIMP CKnownFolderManager::GetFolderByName(LPCWSTR name, IKnownFolder **out)
@@ -428,6 +837,17 @@ STDMETHODIMP CKnownFolderManager::GetFolderByName(LPCWSTR name, IKnownFolder **o
     if (!name) return E_INVALIDARG;
     for (UINT i = 0; i < _countof(folders); ++i)
         if (!wcsicmp(name, folders[i].name)) return GetFolder(*folders[i].id, out);
+    CAtlArray<GUID> registered;
+    HRESULT hr = CollectKnownFolders(registered);
+    if (FAILED(hr)) return hr;
+    for (SIZE_T i = 0; i < registered.GetCount(); ++i)
+    {
+        KNOWNFOLDER_DEFINITION definition;
+        if (FAILED(GetKnownFolderDefinition(registered[i], &definition))) continue;
+        BOOL match = !wcsicmp(name, definition.pszName);
+        FreeKnownFolderDefinitionFields(&definition);
+        if (match) return GetFolder(registered[i], out);
+    }
     return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 }
 

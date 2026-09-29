@@ -576,6 +576,19 @@ CreateEnvironmentBlock(OUT LPVOID *lpEnvironment,
                                    L"ALLUSERSPROFILE",
                                    Buffer,
                                    FALSE);
+        SetUserEnvironmentVariable(Environment, L"ProgramData", Buffer, FALSE);
+    }
+
+    lError = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList",
+                          0, KEY_QUERY_VALUE, &hKey);
+    if (lError == ERROR_SUCCESS)
+    {
+        Length = sizeof(Buffer);
+        lError = RegQueryValueExW(hKey, L"Public", NULL, &dwType, (LPBYTE)Buffer, &Length);
+        if (lError == ERROR_SUCCESS && (dwType == REG_SZ || dwType == REG_EXPAND_SZ))
+            SetUserEnvironmentVariable(Environment, L"PUBLIC", Buffer, dwType == REG_EXPAND_SZ);
+        RegCloseKey(hKey);
     }
 
     /* Set 'USERPROFILE' variable to the default users profile */

@@ -18,7 +18,6 @@ typedef struct _FOLDERDATA
 {
     LPWSTR lpValueName;
     LPWSTR lpPath;
-    UINT uId;
     BOOL bHidden;
     BOOL bShellFolder;
     BOOL bUserShellFolder;
@@ -28,42 +27,52 @@ typedef struct _FOLDERDATA
 static FOLDERDATA
 UserShellFolders[] =
 {
-    {L"AppData", L"Application Data", IDS_APPDATA, TRUE, TRUE, TRUE},
-    {L"Desktop", L"Desktop", IDS_DESKTOP, FALSE, TRUE, TRUE},
-    {L"Favorites", L"Favorites", IDS_FAVORITES, FALSE, TRUE, TRUE},
-    {L"Personal", L"My Documents", IDS_MYDOCUMENTS, FALSE, TRUE, TRUE},
-    {L"NetHood", L"NetHood", IDS_NETHOOD, TRUE, TRUE, TRUE},
-    {L"PrintHood", L"PrintHood", IDS_PRINTHOOD, TRUE, TRUE, TRUE},
-    {L"Recent", L"Recent", IDS_RECENT, TRUE, TRUE, TRUE},
-    {L"SendTo", L"SendTo", IDS_SENDTO, FALSE, TRUE, TRUE},
-    {L"Templates", L"Templates", IDS_TEMPLATES, FALSE, TRUE, TRUE},
-    {L"Start Menu", L"Start Menu", IDS_STARTMENU, FALSE, TRUE, TRUE},
-    {L"Programs", L"Start Menu\\Programs", IDS_PROGRAMS, FALSE, TRUE, TRUE},
-    {L"Startup", L"Start Menu\\Programs\\Startup", IDS_STARTUP, FALSE, TRUE, TRUE},
-    {L"Local Settings", L"Local Settings", IDS_LOCALSETTINGS, TRUE, TRUE, TRUE},
-    {L"Local AppData", L"Local Settings\\Application Data", IDS_LOCALAPPDATA, TRUE, TRUE, TRUE},
-    {L"Temp", L"Local Settings\\Temp", IDS_TEMP, FALSE, FALSE, FALSE},
-    {L"Cache", L"Local Settings\\Temporary Internet Files", IDS_CACHE, FALSE, TRUE, TRUE},
-    {L"History", L"Local Settings\\History", IDS_HISTORY, FALSE, TRUE, TRUE},
-    {L"Cookies", L"Cookies", IDS_COOKIES, FALSE, TRUE, TRUE},
-    {NULL, NULL, -1, FALSE, FALSE, FALSE}
+    {L"AppData", L"AppData\\Roaming", TRUE, TRUE, TRUE},
+    {L"Desktop", L"Desktop", FALSE, TRUE, TRUE},
+    {L"Favorites", L"Favorites", FALSE, TRUE, TRUE},
+    {L"Personal", L"Documents", FALSE, TRUE, TRUE},
+    {L"My Music", L"Music", FALSE, TRUE, TRUE},
+    {L"My Pictures", L"Pictures", FALSE, TRUE, TRUE},
+    {L"My Video", L"Videos", FALSE, TRUE, TRUE},
+    {L"NetHood", L"AppData\\Roaming\\Microsoft\\Windows\\Network Shortcuts", TRUE, TRUE, TRUE},
+    {L"PrintHood", L"AppData\\Roaming\\Microsoft\\Windows\\Printer Shortcuts", TRUE, TRUE, TRUE},
+    {L"Recent", L"AppData\\Roaming\\Microsoft\\Windows\\Recent", TRUE, TRUE, TRUE},
+    {L"SendTo", L"AppData\\Roaming\\Microsoft\\Windows\\SendTo", FALSE, TRUE, TRUE},
+    {L"Templates", L"AppData\\Roaming\\Microsoft\\Windows\\Templates", FALSE, TRUE, TRUE},
+    {L"Start Menu", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu", FALSE, TRUE, TRUE},
+    {L"Programs", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs", FALSE, TRUE, TRUE},
+    {L"Startup", L"AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup", FALSE, TRUE, TRUE},
+    {L"Local Settings", L"AppData\\Local", TRUE, TRUE, TRUE},
+    {L"Local AppData", L"AppData\\Local", TRUE, TRUE, TRUE},
+    {L"Temp", L"AppData\\Local\\Temp", FALSE, FALSE, FALSE},
+    {L"Cache", L"AppData\\Local\\Microsoft\\Windows\\INetCache", FALSE, TRUE, TRUE},
+    {L"History", L"AppData\\Local\\Microsoft\\Windows\\History", FALSE, TRUE, TRUE},
+    {L"Cookies", L"AppData\\Local\\Microsoft\\Windows\\INetCookies", FALSE, TRUE, TRUE},
+    {NULL, NULL, FALSE, FALSE, FALSE}
 };
 
 
 static FOLDERDATA
 CommonShellFolders[] =
 {
-    {L"Common AppData", L"Application Data", IDS_APPDATA, TRUE, TRUE, TRUE},
-    {L"Common Desktop", L"Desktop", IDS_DESKTOP, FALSE, TRUE, TRUE},
-    {L"Common Favorites", L"Favorites", IDS_FAVORITES, FALSE, TRUE, TRUE},
-    {L"Common Documents", L"My Documents", IDS_MYDOCUMENTS, FALSE, TRUE, TRUE},
-    {L"Common Templates", L"Templates", IDS_TEMPLATES, TRUE, TRUE, TRUE},
-    {L"Common Start Menu", L"Start Menu", IDS_STARTMENU, FALSE, TRUE, TRUE},
-    {L"Common Programs", L"Start Menu\\Programs", IDS_PROGRAMS, FALSE, TRUE, TRUE},
-    {L"Common Startup", L"Start Menu\\Programs\\Startup", IDS_STARTUP, FALSE, TRUE, TRUE},
-    {NULL, NULL, -1, FALSE, FALSE, FALSE}
+    {L"Common AppData", L"", TRUE, TRUE, TRUE},
+    {L"Common Templates", L"Microsoft\\Windows\\Templates", TRUE, TRUE, TRUE},
+    {L"Common Start Menu", L"Microsoft\\Windows\\Start Menu", FALSE, TRUE, TRUE},
+    {L"Common Programs", L"Microsoft\\Windows\\Start Menu\\Programs", FALSE, TRUE, TRUE},
+    {L"Common Startup", L"Microsoft\\Windows\\Start Menu\\Programs\\Startup", FALSE, TRUE, TRUE},
+    {NULL, NULL, FALSE, FALSE, FALSE}
 };
 
+static FOLDERDATA
+PublicShellFolders[] =
+{
+    {L"Common Desktop", L"Desktop", FALSE, TRUE, TRUE},
+    {L"Common Documents", L"Documents", FALSE, TRUE, TRUE},
+    {L"CommonMusic", L"Music", FALSE, TRUE, TRUE},
+    {L"CommonPictures", L"Pictures", FALSE, TRUE, TRUE},
+    {L"CommonVideo", L"Videos", FALSE, TRUE, TRUE},
+    {NULL, NULL, FALSE, FALSE, FALSE}
+};
 
 typedef struct _PROFILEPARAMS
 {
@@ -82,7 +91,7 @@ static PROFILEPARAMS
 StandardProfiles[] =
 {
     {
-        L"Default User", L"DefaultUserProfile",
+        L"%SystemDrive%\\Users\\Default", L"Default",
         L"USERPROFILE", L"%USERPROFILE%",
         UserShellFolders,
         HKEY_USERS,
@@ -90,9 +99,17 @@ StandardProfiles[] =
         L".Default\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders"
     },
     {
-        L"All Users", L"AllUsersProfile",
-        L"ALLUSERSPROFILE", L"%ALLUSERSPROFILE%",
+        L"%SystemDrive%\\ProgramData", L"ProgramData",
+        L"ProgramData", L"%ProgramData%",
         CommonShellFolders,
+        HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders"
+    },
+    {
+        L"%SystemDrive%\\Users\\Public", L"Public",
+        L"PUBLIC", L"%PUBLIC%",
+        PublicShellFolders,
         HKEY_LOCAL_MACHINE,
         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders"
@@ -102,8 +119,7 @@ StandardProfiles[] =
 
 static
 BOOL
-CreateStandardProfile(IN LPCWSTR pszProfilesPath,
-                      IN HKEY hProfileListKey,
+CreateStandardProfile(IN HKEY hProfileListKey,
                       IN PPROFILEPARAMS pProfileParams)
 {
     LONG Error;
@@ -119,43 +135,10 @@ CreateStandardProfile(IN LPCWSTR pszProfilesPath,
 
     StringCbCopyW(szBuffer, sizeof(szBuffer), pProfileParams->pszProfileName);
 
-    /* Build the profile directory path */
-    StringCbCopyW(szProfilePath, sizeof(szProfilePath), pszProfilesPath);
-    StringCbCatW(szProfilePath, sizeof(szProfilePath), L"\\");
-    StringCbCatW(szProfilePath, sizeof(szProfilePath), szBuffer);
-
-    /* Attempt profile directory creation */
-    // FIXME: Security!
-    if (!CreateDirectoryW(szProfilePath, NULL))
-    {
-        if (GetLastError() != ERROR_ALREADY_EXISTS)
-        {
-            DPRINT1("Error: %lu\n", GetLastError());
-            return FALSE;
-        }
-
-        /* Directory existed, let's try to append the postfix */
-        if (!AppendSystemPostfix(szBuffer, ARRAYSIZE(szBuffer)))
-        {
-            DPRINT1("AppendSystemPostfix() failed\n", GetLastError());
-            return FALSE;
-        }
-
-        /* Attempt again creation with appended postfix */
-        StringCbCopyW(szProfilePath, sizeof(szProfilePath), pszProfilesPath);
-        StringCbCatW(szProfilePath, sizeof(szProfilePath), L"\\");
-        StringCbCatW(szProfilePath, sizeof(szProfilePath), szBuffer);
-
-        // FIXME: Security!
-        if (!CreateDirectoryW(szProfilePath, NULL))
-        {
-            if (GetLastError() != ERROR_ALREADY_EXISTS)
-            {
-                DPRINT1("Error: %lu\n", GetLastError());
-                return FALSE;
-            }
-        }
-    }
+    if (!ExpandEnvironmentStringsW(szBuffer, szProfilePath, ARRAYSIZE(szProfilePath)))
+        return FALSE;
+    if (!CreateDirectoryPath(szProfilePath, NULL))
+        return FALSE;
 
     /* Set 'DefaultUserProfile' / 'AllUsersProfile' value */
     /* Store the default user / all users profile path in the registry */
@@ -163,7 +146,7 @@ CreateStandardProfile(IN LPCWSTR pszProfilesPath,
     Error = RegSetValueExW(hProfileListKey,
                            pProfileParams->pszProfileRegValue,
                            0,
-                           REG_SZ,
+                           REG_EXPAND_SZ,
                            (LPBYTE)szBuffer,
                            dwLength);
     if (Error != ERROR_SUCCESS)
@@ -188,21 +171,14 @@ CreateStandardProfile(IN LPCWSTR pszProfilesPath,
     while (lpFolderData->lpValueName != NULL)
     {
         StringCbCopyW(szBuffer, sizeof(szBuffer), szProfilePath);
-        StringCbCatW(szBuffer, sizeof(szBuffer), L"\\");
+        if (*lpFolderData->lpPath)
+            StringCbCatW(szBuffer, sizeof(szBuffer), L"\\");
 
         /* Append the folder name */
-        dwLength = wcslen(szBuffer);
-        if (!LoadStringW(hInstance,
-                         lpFolderData->uId,
-                         &szBuffer[dwLength],
-                         ARRAYSIZE(szBuffer) - dwLength))
-        {
-            /* Use the default name instead */
-            StringCbCatW(szBuffer, sizeof(szBuffer), lpFolderData->lpPath);
-        }
+        StringCbCatW(szBuffer, sizeof(szBuffer), lpFolderData->lpPath);
 
         // FIXME: Security!
-        if (!CreateDirectoryW(szBuffer, NULL))
+        if (!CreateDirectoryPath(szBuffer, NULL))
         {
             if (GetLastError() != ERROR_ALREADY_EXISTS)
             {
@@ -239,18 +215,11 @@ CreateStandardProfile(IN LPCWSTR pszProfilesPath,
         if (lpFolderData->bShellFolder)
         {
             StringCbCopyW(szBuffer, sizeof(szBuffer), szProfilePath);
-            StringCbCatW(szBuffer, sizeof(szBuffer), L"\\");
+            if (*lpFolderData->lpPath)
+                StringCbCatW(szBuffer, sizeof(szBuffer), L"\\");
 
             /* Append the folder name */
-            dwLength = wcslen(szBuffer);
-            if (!LoadStringW(hInstance,
-                             lpFolderData->uId,
-                             &szBuffer[dwLength],
-                             ARRAYSIZE(szBuffer) - dwLength))
-            {
-                /* Use the default name instead */
-                StringCbCatW(szBuffer, sizeof(szBuffer), lpFolderData->lpPath);
-            }
+            StringCbCatW(szBuffer, sizeof(szBuffer), lpFolderData->lpPath);
 
             dwLength = (wcslen(szBuffer) + 1) * sizeof(WCHAR);
             Error = RegSetValueExW(hKey,
@@ -292,18 +261,11 @@ CreateStandardProfile(IN LPCWSTR pszProfilesPath,
         if (lpFolderData->bUserShellFolder)
         {
             StringCbCopyW(szBuffer, sizeof(szBuffer), pProfileParams->pszEnvVarProfilePath);
-            StringCbCatW(szBuffer, sizeof(szBuffer), L"\\");
+            if (*lpFolderData->lpPath)
+                StringCbCatW(szBuffer, sizeof(szBuffer), L"\\");
 
             /* Append the folder name */
-            dwLength = wcslen(szBuffer);
-            if (!LoadStringW(hInstance,
-                             lpFolderData->uId,
-                             &szBuffer[dwLength],
-                             ARRAYSIZE(szBuffer) - dwLength))
-            {
-                /* Use the default name instead */
-                StringCbCatW(szBuffer, sizeof(szBuffer), lpFolderData->lpPath);
-            }
+            StringCbCatW(szBuffer, sizeof(szBuffer), lpFolderData->lpPath);
 
             dwLength = (wcslen(szBuffer) + 1) * sizeof(WCHAR);
             Error = RegSetValueExW(hKey,
@@ -343,14 +305,7 @@ InitializeProfiles(VOID)
     DPRINT("InitializeProfiles()\n");
 
     /* Load profiles directory path */
-    if (!LoadStringW(hInstance,
-                     IDS_PROFILEPATH,
-                     szBuffer,
-                     ARRAYSIZE(szBuffer)))
-    {
-        DPRINT1("Error: %lu\n", GetLastError());
-        return FALSE;
-    }
+    StringCbCopyW(szBuffer, sizeof(szBuffer), L"%SystemDrive%\\Users");
 
     Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
                           L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList",
@@ -403,7 +358,7 @@ InitializeProfiles(VOID)
     }
 
     /* Create 'Default User' profile directory path */
-    if (!CreateStandardProfile(szProfilesPath, hKey, &StandardProfiles[0]))
+    if (!CreateStandardProfile(hKey, &StandardProfiles[0]))
     {
         DPRINT1("CreateStandardProfile(L\"%S\") failed.\n", StandardProfiles[0].pszProfileName);
         RegCloseKey(hKey);
@@ -411,9 +366,15 @@ InitializeProfiles(VOID)
     }
 
     /* Create 'All Users' profile directory path */
-    if (!CreateStandardProfile(szProfilesPath, hKey, &StandardProfiles[1]))
+    if (!CreateStandardProfile(hKey, &StandardProfiles[1]))
     {
         DPRINT1("CreateStandardProfile(L\"%S\") failed.\n", StandardProfiles[1].pszProfileName);
+        RegCloseKey(hKey);
+        return FALSE;
+    }
+
+    if (!CreateStandardProfile(hKey, &StandardProfiles[2]))
+    {
         RegCloseKey(hKey);
         return FALSE;
     }
@@ -462,18 +423,11 @@ UpdateUsersShellFolderSettings(LPCWSTR lpUserProfilePath,
         if (lpFolderData->bShellFolder)
         {
             StringCbCopyW(szBuffer, sizeof(szBuffer), lpUserProfilePath);
-            StringCbCatW(szBuffer, sizeof(szBuffer), L"\\");
+            if (*lpFolderData->lpPath)
+                StringCbCatW(szBuffer, sizeof(szBuffer), L"\\");
 
             /* Append the folder name */
-            dwLength = wcslen(szBuffer);
-            if (!LoadStringW(hInstance,
-                             lpFolderData->uId,
-                             &szBuffer[dwLength],
-                             ARRAYSIZE(szBuffer) - dwLength))
-            {
-                /* Use the default name instead */
-                StringCbCatW(szBuffer, sizeof(szBuffer), lpFolderData->lpPath);
-            }
+            StringCbCatW(szBuffer, sizeof(szBuffer), lpFolderData->lpPath);
 
             DPRINT("%S: %S\n", lpFolderData->lpValueName, szBuffer);
 

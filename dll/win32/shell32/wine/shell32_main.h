@@ -48,6 +48,7 @@ extern "C" {
 
 HRESULT WINAPI ApplicationAssociationRegistration_Constructor(IUnknown *, REFIID, void **);
 HRESULT WINAPI KnownFolderManager_Constructor(IUnknown *, REFIID, void **);
+HRESULT SHELL_GetRegisteredFolderPath(REFKNOWNFOLDERID, DWORD, HANDLE, PWSTR *);
 
 /* explorer ("cabinet") window messages */
 #ifndef CWM_GETISHELLBROWSER
