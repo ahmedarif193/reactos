@@ -32,7 +32,6 @@ list(APPEND PCH_SKIP_SOURCE
     propbag.cpp
     querysrc.cpp
     utils.cpp
-    wsprintf.c
     zonechk.c
     ${CMAKE_CURRENT_BINARY_DIR}/shlwapi_stubs.c)
 

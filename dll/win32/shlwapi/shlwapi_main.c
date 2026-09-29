@@ -29,9 +29,7 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
-#ifndef __REACTOS__
 WINE_DECLARE_DEBUG_CHANNEL(string);
-#endif
 
 #ifdef __REACTOS__
 DECLSPEC_HIDDEN HINSTANCE shlwapi_hInstance = 0;
@@ -44,6 +42,7 @@ VOID SHPolicyCache_DllProcessAttach(VOID);
 VOID SHPolicyCache_DllProcessDetach(VOID);
 #else
 HINSTANCE shlwapi_hInstance = 0;
+#endif
 
 static int (CDECL *ntdll__vsnprintf)( char *str, size_t len, const char *format, va_list args );
 static int (CDECL *ntdll__vsnwprintf)( WCHAR *str, size_t len, const WCHAR *format, va_list args );
@@ -142,7 +141,6 @@ int WINAPIV wnsprintfW(LPWSTR lpOut, int cchLimitIn, LPCWSTR lpFmt, ...)
     va_end( valist );
     return res;
 }
-#endif
 
 /*************************************************************************
  * SHLWAPI {SHLWAPI}
@@ -171,13 +169,20 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID fImpLoad)
 	switch (fdwReason)
 	{
 	  case DLL_PROCESS_ATTACH:
+        {
+            HMODULE hntdll = GetModuleHandleW(L"ntdll.dll");
+
+            ntdll__vsnprintf = (void *)GetProcAddress(hntdll, "_vsnprintf");
+            ntdll__vsnwprintf = (void *)GetProcAddress(hntdll, "_vsnwprintf");
             DisableThreadLibraryCalls(hinstDLL);
 	    shlwapi_hInstance = hinstDLL;
 	    SHLWAPI_ThreadRef_index = TlsAlloc();
 	    InitializeCriticalSection(&g_csZoneMgrLock);
 	    InitializeCriticalSection(&g_csBagCacheLock);
 	    SHPolicyCache_DllProcessAttach();
+            if (!ntdll__vsnprintf || !ntdll__vsnwprintf) return FALSE;
 	    break;
+        }
 	  case DLL_PROCESS_DETACH:
             if (fImpLoad) break;
 	    FreeViewStatePropertyBagCache();
