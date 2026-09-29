@@ -1,6 +1,6 @@
 /*
  * PROJECT:     FreeLoader UEFI Support
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     ARM64 UEFI exception/interrupt stubs and vector helpers
  * COPYRIGHT:   Copyright 2025 Ahmed Arif (arif.ing@outlook.com)
  */

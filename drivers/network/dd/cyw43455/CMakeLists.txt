@@ -1,5 +1,5 @@
 # PROJECT:     ReactOS Broadcom/Cypress CYW43xx Native 802.11 Miniport
-# LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+# LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
 # PURPOSE:     CYW43xx Native Wi-Fi miniport build rules
 # COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 

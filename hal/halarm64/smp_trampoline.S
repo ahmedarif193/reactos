@@ -1,5 +1,6 @@
 /*
  * PROJECT:         ReactOS HAL (ARM64)
+ * LICENSE:         GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * FILE:            hal/halarm64/smp_trampoline.S
  * PURPOSE:         AP (Application Processor) startup trampoline for SMP boot
  *

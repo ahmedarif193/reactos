@@ -1,6 +1,6 @@
 /*
  * PROJECT:     FreeLoader UEFI Support
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     ARM64 assembly UEFI escape helper functions
  * COPYRIGHT:   Copyright 2024 Ahmed ARIF (contact@eotics.com)
  */

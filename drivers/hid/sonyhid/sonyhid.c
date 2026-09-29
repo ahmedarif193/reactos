@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS HID Stack
- * LICENSE:     GPL-2.0-or-later
+ * LICENSE:     GPL-3.0-or-later
  * FILE:        drivers/hid/sonyhid/sonyhid.c
  * PURPOSE:     Sony DualShock 3 / DualShock 4 / DualSense HID support
  *

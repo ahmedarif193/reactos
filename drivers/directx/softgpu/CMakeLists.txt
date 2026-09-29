@@ -1,5 +1,5 @@
 # PROJECT:  ReactOS WDDM Null/Software GPU Miniport
-# LICENSE:  GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+# LICENSE:  GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
 # PURPOSE:  Build file for BasicDisplay.sys — configurable WDDM software miniport
 #           with a physical scanout provider and software command engine.
 # COPYRIGHT: Copyright 2024 ReactOS WDDM Team

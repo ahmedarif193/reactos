@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS Intel PRO/1000 Driver
- * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     NDIS 6.x NET_BUFFER_LIST receive path
  * COPYRIGHT:       2026 Ahmed ARIF (arif.ing@outlook.com)
  *

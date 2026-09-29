@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS Canonical Display Driver (cdd.dll)
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     WDDM canonical GDI display driver - private declarations.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *

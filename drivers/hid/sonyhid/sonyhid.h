@@ -1,3 +1,10 @@
+/*
+ * PROJECT:     LiberNT Sony HID Driver
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Sony HID controller driver definitions
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
 #pragma once
 
 #define _HIDPI_NO_FUNCTION_MACROS_

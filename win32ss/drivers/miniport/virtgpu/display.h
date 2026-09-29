@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS VirtIO GPU Display Driver
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     XPDM display driver paired with the VirtIO GPU miniport
  */
 

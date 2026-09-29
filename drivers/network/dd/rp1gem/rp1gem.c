@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS RP1 Ethernet Driver
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * FILE:        drivers/network/dd/rp1gem/rp1gem.c
  * PURPOSE:     Raspberry Pi 5 RP1 Cadence GEM NDIS 6.30 miniport
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>

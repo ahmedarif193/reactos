@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS HAL — ARM64 BCM2711 PCIe host + config backend
- * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     Broadcom BCM2711 (Raspberry Pi 4 / CM4) brcmstb PCIe root
  *              complex: controller bring-up + link training (the firmware
  *              leaves the CM4 link down) and indirect PCI configuration

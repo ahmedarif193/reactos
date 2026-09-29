@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS USB Port Driver
- * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * COPYRIGHT:   Copyright 2025 Ahmed ARIF <arif.ing@outlook.com>
  */
 

@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS Raspberry Pi 5 WDDM miniport
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     BCM2712 V3D 7.1 (VideoCore VII) 3D engine plumbing —
  *              SMS power sequencing, hub/core identification, GPU MMU
  *              page table, and control-list (CLE) job submission.

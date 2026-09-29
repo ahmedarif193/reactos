@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS Run-Time Library
- * LICENSE:     GPL-2.0-or-later
+ * LICENSE:     GPL-3.0-or-later
  * PURPOSE:     ARM64 nested exception handler thunk
  */
 

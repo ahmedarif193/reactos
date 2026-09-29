@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS Raspberry Pi 5 WDDM miniport
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     BCM2712 system IOMMU in front of the HVS — register layout
  *              transcribed from the Linux driver, a read-only state dump
  *              for first-boot verification, and the single helper every

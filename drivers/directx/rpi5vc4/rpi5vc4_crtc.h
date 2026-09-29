@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS Raspberry Pi 5 (BCM2712) display miniport
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     BCM2712 CRTC / PixelValve (timing generator) access.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *

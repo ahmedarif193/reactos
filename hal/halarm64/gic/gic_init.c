@@ -1,5 +1,6 @@
 /*
  * PROJECT:         ReactOS HAL (ARM64)
+ * LICENSE:         GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * FILE:            hal/halarm64/gic/gic_init.c
  * PURPOSE:         GIC Detection and Initialization
  *

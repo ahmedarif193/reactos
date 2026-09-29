@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS Storport NVMe miniport
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     I/O queue pairs, submission slots and interrupt service
  * COPYRIGHT:   Copyright 2026 ReactOS Project
  */

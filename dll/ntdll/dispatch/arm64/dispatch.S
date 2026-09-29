@@ -1,3 +1,10 @@
+/*
+ * PROJECT:     LiberNT NT Layer DLL
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     ARM64 user-mode exception, APC, loader and thread start dispatchers
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
 #include <asm.h>
 #include <ksarm64.h>
 

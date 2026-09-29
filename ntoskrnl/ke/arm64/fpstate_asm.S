@@ -1,5 +1,6 @@
 /*
  * PROJECT:         ReactOS Kernel (ARM64)
+ * LICENSE:         GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:         Win11-style eager KARM64_VFP_STATE transfer leaves.
  * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
