@@ -338,6 +338,21 @@ ConvertStabs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
     LastFunctionAddress = 0;
     for (i = 0; i < Count; i++)
     {
+        if ((StabEntry[i].n_type == N_SO ||
+             StabEntry[i].n_type == N_SOL ||
+             StabEntry[i].n_type == N_BINCL ||
+             (StabEntry[i].n_type == N_FUN &&
+              StabEntry[i].n_desc != 0 && StabEntry[i].n_value >= ImageBase)) &&
+            (!StabStringsBase || StabEntry[i].n_strx >= StabStringsLength ||
+             !memchr((char *)StabStringsBase + StabEntry[i].n_strx,
+                     '\0', StabStringsLength - StabEntry[i].n_strx)))
+        {
+            free(*SymbolsBase);
+            StringHashTableFree(&StringHash);
+            fprintf(stderr, "Invalid .stab string offset or terminator\n");
+            return 1;
+        }
+
         if (LastFunctionAddress == 0)
         {
             Address = StabEntry[i].n_value - ImageBase;
@@ -352,8 +367,7 @@ ConvertStabs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
             case N_SOL:
             case N_BINCL:
                 Name = (char *) StabStringsBase + StabEntry[i].n_strx;
-                if (StabStringsLength < StabEntry[i].n_strx
-                    || *Name == '\0' || Name[strlen(Name) - 1] == '/'
+                if (*Name == '\0' || Name[strlen(Name) - 1] == '/'
                     || Name[strlen(Name) - 1] == '\\'
                     || StabEntry[i].n_value < ImageBase)
                 {
