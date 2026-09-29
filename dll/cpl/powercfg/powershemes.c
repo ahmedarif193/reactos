@@ -898,7 +898,8 @@ PowerSchemesDlgProc(
             switch (((LPNMHDR)lParam)->code)
             {
                 case PSN_APPLY:
-                    Pos_SaveData(hwndDlg, pPageData);
+                    SetWindowLongPtr(hwndDlg, DWLP_MSGRESULT,
+                                     Pos_SaveData(hwndDlg, pPageData) ? PSNRET_NOERROR : PSNRET_INVALID_NOCHANGEPAGE);
                     return TRUE;
 
                 case PSN_SETACTIVE:
