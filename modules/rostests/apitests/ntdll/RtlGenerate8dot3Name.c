@@ -12,7 +12,7 @@
 #include "precomp.h"
 
 NTSYSAPI
-VOID
+NTSTATUS
 NTAPI
 RtlGenerate8dot3Name(
   _In_ PCUNICODE_STRING Name,
