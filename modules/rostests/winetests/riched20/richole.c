@@ -3615,6 +3615,9 @@ static void test_Select(void)
   int scroll_pos1;
   int scroll_pos2;
   LONG value;
+  POINT endpoint;
+  RECT client;
+  CHARFORMAT2A format = {sizeof(format)};
   HRESULT hr;
   HWND hwnd;
 
@@ -3643,14 +3646,25 @@ static void test_Select(void)
   ok(hr == S_OK, "got 0x%08lx\n", hr);
 
   SendMessageA(hwnd, WM_SETTEXT, 0, (LPARAM)test_text2);
+  format.dwMask = CFM_SIZE;
+  format.yHeight = 24 * 20;
+  SendMessageA(hwnd, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&format);
   SendMessageA(hwnd, EM_SETSEL, 1, 2);
+  SendMessageA(hwnd, EM_POSFROMCHAR, (WPARAM)&endpoint, 16);
+  GetClientRect(hwnd, &client);
+  ok(endpoint.y >= client.bottom, "endpoint %ld is inside viewport ending at %ld\n", endpoint.y, client.bottom);
   hr = ITextDocument_Range(doc, 10, 16, &range);
   ok(hr == S_OK, "got 0x%08lx\n", hr);
   scroll_pos1 = get_scroll_pos_y(hwnd);
   hr = ITextRange_Select(range);
   ok(hr == S_OK, "got 0x%08lx\n", hr);
   scroll_pos2 = get_scroll_pos_y(hwnd);
-  ok(scroll_pos1 != scroll_pos2, "%d == %d\n", scroll_pos1, scroll_pos2);
+  SendMessageA(hwnd, EM_POSFROMCHAR, (WPARAM)&endpoint, 16);
+  SendMessageA(hwnd, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&format);
+  GetClientRect(hwnd, &client);
+  ok(scroll_pos1 != scroll_pos2, "%d == %d, endpoint %ld,%ld client %ld,%ld font %s height %ld\n",
+     scroll_pos1, scroll_pos2, endpoint.x, endpoint.y, client.right, client.bottom,
+     format.szFaceName, format.yHeight);
 
   release_interfaces(&hwnd, &reOle, &doc, NULL);
 
