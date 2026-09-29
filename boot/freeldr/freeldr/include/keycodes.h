@@ -64,3 +64,6 @@
 #define KEY_END         0x4F
 #define KEY_SEND        0xE7
 #endif
+
+#define KEY_VOLUME_UP   0x100
+#define KEY_VOLUME_DOWN 0x101

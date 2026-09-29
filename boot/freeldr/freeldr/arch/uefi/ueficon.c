@@ -18,7 +18,9 @@ static UCHAR CurrentAttr = ATTR(COLOR_GRAY, COLOR_BLACK);
 
 extern EFI_SYSTEM_TABLE* GlobalSystemTable;
 static BOOLEAN ExtendedKey = FALSE;
-static char ExtendedScanCode = 0;
+static int ExtendedScanCode = 0;
+static EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL* TextInputEx;
+static BOOLEAN TextInputInitialized;
 
 /* FUNCTIONS ******************************************************************/
 
@@ -63,11 +65,15 @@ UefiConsPutChar(int c)
 }
 
 static
-UCHAR
-ConvertToBiosExtValue(UCHAR KeyIn)
+int
+ConvertToBiosExtValue(USHORT KeyIn)
 {
     switch (KeyIn)
     {
+        case SCAN_VOLUME_UP:
+            return KEY_VOLUME_UP;
+        case SCAN_VOLUME_DOWN:
+            return KEY_VOLUME_DOWN;
         case SCAN_UP:
             return KEY_UP;
         case SCAN_DOWN:
@@ -120,14 +126,26 @@ ConvertToBiosExtValue(UCHAR KeyIn)
 BOOLEAN
 UefiConsKbHit(VOID)
 {
+    static EFI_GUID TextInputExGuid = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID;
+    if (!TextInputInitialized)
+    {
+        TextInputInitialized = TRUE;
+        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(GlobalSystemTable->ConsoleInHandle,
+                                                                      &TextInputExGuid, (PVOID*)&TextInputEx)))
+            TextInputEx = NULL;
+    }
+    if (ExtendedKey)
+        return TRUE;
     return (GlobalSystemTable->BootServices->CheckEvent(
-                GlobalSystemTable->ConIn->WaitForKey) == EFI_SUCCESS);
+                TextInputEx ? TextInputEx->WaitForKeyEx :
+                              GlobalSystemTable->ConIn->WaitForKey) == EFI_SUCCESS);
 }
 
 int
 UefiConsGetCh(VOID)
 {
     EFI_INPUT_KEY Key;
+    EFI_KEY_DATA KeyData;
     EFI_STATUS Status;
     UCHAR KeyOutput = 0;
 
@@ -139,7 +157,15 @@ UefiConsGetCh(VOID)
         return ExtendedScanCode;
     }
 
-    Status = GlobalSystemTable->ConIn->ReadKeyStroke(GlobalSystemTable->ConIn, &Key);
+    if (TextInputEx)
+    {
+        Status = TextInputEx->ReadKeyStrokeEx(TextInputEx, &KeyData);
+        if (EFI_ERROR(Status))
+            return 0;
+        Key = KeyData.Key;
+    }
+    else
+        Status = GlobalSystemTable->ConIn->ReadKeyStroke(GlobalSystemTable->ConIn, &Key);
     if (EFI_ERROR(Status))
         return 0;
 

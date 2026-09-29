@@ -281,6 +281,14 @@ InitOperatingSystemList(
         }
 
         /* Copy the OS section ID and its identifier */
+        Items[i].StartupMode = 0;
+        Items[i].StartupFlags = 0;
+        Items[i].StartupProfile = 0;
+        Items[i].MenuIcon = UiMenuIconNone;
+        if (IniReadSettingByName(SectionId, "BootLogo", TempBuffer, sizeof(TempBuffer)) &&
+            !_stricmp(TempBuffer, "LiberNT"))
+            Items[i].MenuIcon = UiMenuIconLiberNT;
+        Items[i].AdvBootOptsDesc[0] = 0;
         Items[i].SectionId = SectionId;
         Items[i].LoadIdentifier = CopyString(TitleStart);
         // TRACE("We did Items[%lu]: SectionName = '%s' (SectionId = 0x%p), LoadIdentifier = '%s'\n",

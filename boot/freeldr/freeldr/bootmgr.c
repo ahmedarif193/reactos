@@ -21,44 +21,18 @@
 
 #include <freeldr.h>
 
-#define MAIN_BOOT_MENU_KEY_HINT \
-    "Press F8 for troubleshooting and advanced startup options." \
-    "     F2: FreeLdr SETUP"
-
-#define MAIN_BOOT_MENU_PROMPT \
-    "Press any key to enter the FreeLdr boot menu"
-
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
 
 /* GLOBALS ********************************************************************/
 
 typedef VOID
-(*EDIT_OS_ENTRY_PROC)(
-    _Inout_ OperatingSystemItem* OperatingSystem);
-
-typedef VOID
 (*OS_MENU_PROC)(
     _Inout_ OperatingSystemItem* OperatingSystem);
-
-static VOID
-EditCustomBootReactOSSetup(
-    _Inout_ OperatingSystemItem* OperatingSystem)
-{
-    EditCustomBootReactOS(OperatingSystem, TRUE);
-}
-
-static VOID
-EditCustomBootNTOS(
-    _Inout_ OperatingSystemItem* OperatingSystem)
-{
-    EditCustomBootReactOS(OperatingSystem, FALSE);
-}
 
 typedef struct _OS_LOADING_METHOD
 {
     PCSTR BootType;
-    EDIT_OS_ENTRY_PROC EditOsEntry;
     OS_MENU_PROC OsMenu OPTIONAL;
     ARC_ENTRY_POINT OsLoader;
 } OS_LOADING_METHOD, *POS_LOADING_METHOD;
@@ -68,17 +42,17 @@ OSLoadingMethods[] =
 {
 #if defined(_M_IX86) || defined(_M_AMD64)
 #ifndef UEFIBOOT
-    {"BootSector", EditCustomBootSector, NULL, LoadAndBootSector},
-    {"Linux"     , EditCustomBootLinux , NULL, LoadAndBootLinux },
+    {"BootSector", NULL, LoadAndBootSector},
+    {"Linux"     , NULL, LoadAndBootLinux },
 #endif
 #endif
 #ifdef _M_IX86
-    {"WindowsNT40" , EditCustomBootNTOS, NULL, LoadAndBootWindows},
+    {"WindowsNT40" , NULL, LoadAndBootWindows},
 #endif
-    {"Windows"     , EditCustomBootNTOS, MenuNTOptions, LoadAndBootWindows},
-    {"Windows2003" , EditCustomBootNTOS, MenuNTOptions, LoadAndBootWindows},
-    {"WindowsVista", EditCustomBootNTOS, MenuNTOptions, LoadAndBootWindows},
-    {"ReactOSSetup", EditCustomBootReactOSSetup, MenuNTOptions, LoadReactOSSetup},
+    {"Windows"     , MenuNTOptions, LoadAndBootWindows},
+    {"Windows2003" , MenuNTOptions, LoadAndBootWindows},
+    {"WindowsVista", MenuNTOptions, LoadAndBootWindows},
+    {"ReactOSSetup", MenuNTOptions, LoadReactOSSetup},
 };
 
 /* FUNCTIONS ******************************************************************/
@@ -318,8 +292,17 @@ LoadOperatingSystem(
 #endif
 
     /* Start the OS loader */
+    PrepareBootOptions(OperatingSystem);
+    UiDrawProgressBarCenter("Starting...");
     OSLoadingMethod->OsLoader(Argc, Argv, NULL);
     FrLdrHeapFree(Argv, TAG_STRING);
+    OperatingSystem->StartupProfile = 0;
+    GetBootMgrInfo()->TimeOut = -1;
+    UiKeepFirmwareScreen = FALSE;
+#ifndef _M_ARM
+    UiUnInitialize("");
+#endif
+    UiInitialize(TRUE);
 }
 
 #ifdef HAS_OPTION_MENU_EDIT_CMDLINE
@@ -327,16 +310,37 @@ VOID
 EditOperatingSystemEntry(
     _Inout_ OperatingSystemItem* OperatingSystem)
 {
-    /* Find the suitable OS entry editor and open it */
-    const OS_LOADING_METHOD* OSLoadingMethod =
-        GetOSLoadingMethod(OperatingSystem->SectionId);
-    if (OSLoadingMethod)
-    {
-        ASSERT(OSLoadingMethod->EditOsEntry);
-        OSLoadingMethod->EditOsEntry(OperatingSystem);
-    }
+    CHAR Options[1024] = "";
+    CHAR BootType[80] = "";
+    CHAR Prompt[360];
+    PCSTR Setting;
+    IniReadSettingByName(OperatingSystem->SectionId, "BootType", BootType, sizeof(BootType));
+    Setting = !_stricmp(BootType, "Linux") ? "CommandLine" : "Options";
+    IniReadSettingByName(OperatingSystem->SectionId, Setting, Options, sizeof(Options));
+    RtlStringCbPrintfA(Prompt, sizeof(Prompt), "Edit startup command\n%s\n\nChanges apply to this session only.",
+                       OperatingSystem->LoadIdentifier);
+    if (UiEditBox(Prompt, Options, sizeof(Options)) &&
+        !IniModifySettingValue(OperatingSystem->SectionId, Setting, Options))
+        UiMessageBox("Unable to update the startup command.");
 }
 #endif // HAS_OPTION_MENU_EDIT_CMDLINE
+
+typedef struct _BOOT_MENU_CONTEXT
+{
+    OperatingSystemItem* Systems;
+    ULONG Count;
+    ULONG Selected;
+} BOOT_MENU_CONTEXT;
+
+static VOID
+ShowStartupOptions(OperatingSystemItem* OperatingSystem)
+{
+    const OS_LOADING_METHOD* Method = GetOSLoadingMethod(OperatingSystem->SectionId);
+    if (Method && Method->OsMenu)
+        Method->OsMenu(OperatingSystem);
+    else
+        UiMessageBox("This boot entry does not provide startup options.");
+}
 
 BOOLEAN
 MainBootMenuKeyPressFilter(
@@ -344,8 +348,11 @@ MainBootMenuKeyPressFilter(
     IN ULONG SelectedMenuItem,
     IN PVOID Context OPTIONAL)
 {
-    OperatingSystemItem* OperatingSystem =
-        &((OperatingSystemItem*)Context)[SelectedMenuItem];
+    BOOT_MENU_CONTEXT* Menu = Context;
+    OperatingSystemItem* OperatingSystem;
+    if (SelectedMenuItem < Menu->Count)
+        Menu->Selected = SelectedMenuItem;
+    OperatingSystem = &Menu->Systems[Menu->Selected];
 
     /* Any key-press cancels the global timeout */
     GetBootMgrInfo()->TimeOut = -1;
@@ -368,12 +375,8 @@ MainBootMenuKeyPressFilter(
     case KEY_F5:
     case KEY_F8:
     {
-        /* Find the suitable OS menu procedure and display it */
-        const OS_LOADING_METHOD* OSLoadingMethod =
-            GetOSLoadingMethod(OperatingSystem->SectionId);
-        if (OSLoadingMethod && OSLoadingMethod->OsMenu)
-            OSLoadingMethod->OsMenu(OperatingSystem);
-        DisplayBootTimeOptions(OperatingSystem); // TODO: Do this also elsewhere
+        ShowStartupOptions(OperatingSystem);
+        DisplayBootTimeOptions(OperatingSystem);
         return TRUE;
     }
 
@@ -390,59 +393,15 @@ MainBootMenuKeyPressFilter(
     }
 }
 
-static BOOLEAN
-BootMenuTimeoutPrompt(
-    _In_ LONG TimeOut,
-    _In_ OperatingSystemItem* OperatingSystemList,
-    _In_ ULONG SelectedOperatingSystem)
-{
-    ULONG LastClockSecond, CurrentClockSecond;
-    ULONG Elapsed = 0;
-    ULONG KeyPress;
-
-    UiDrawProgressBarCenter(MAIN_BOOT_MENU_PROMPT);
-
-    LastClockSecond = ArcGetTime()->Second;
-
-    for (;;)
-    {
-        if (MachConsKbHit())
-        {
-            KeyPress = MachConsGetCh();
-            if (KeyPress == KEY_EXTENDED)
-                KeyPress = MachConsGetCh();
-
-            UiDiscardFirmwareScreen();
-            MainBootMenuKeyPressFilter(KeyPress,
-                                       SelectedOperatingSystem,
-                                       OperatingSystemList);
-            return TRUE;
-        }
-
-        CurrentClockSecond = ArcGetTime()->Second;
-        if (CurrentClockSecond != LastClockSecond)
-        {
-            LastClockSecond = CurrentClockSecond;
-
-            if (++Elapsed >= (ULONG)TimeOut)
-            {
-                UiKeepFirmwareScreen = FALSE;
-                return FALSE;
-            }
-
-            UiUpdateProgressBar(Elapsed * 100 / TimeOut, NULL);
-        }
-
-        MachHwIdle();
-    }
-}
-
 VOID RunLoader(VOID)
 {
     OperatingSystemItem* OperatingSystemList;
     PCSTR* OperatingSystemDisplayNames;
+    UI_MENU_ICON* OperatingSystemIcons;
     ULONG OperatingSystemCount;
     ULONG SelectedOperatingSystem;
+    ULONG SelectedMenuItem;
+    BOOT_MENU_CONTEXT MenuContext;
     ULONG i;
 
 #ifdef _M_IX86
@@ -488,66 +447,62 @@ VOID RunLoader(VOID)
     ASSERT(OperatingSystemCount != 0);
 
     /* Create list of display names */
-    OperatingSystemDisplayNames = FrLdrTempAlloc(sizeof(PCSTR) * OperatingSystemCount, 'mNSO');
+    OperatingSystemDisplayNames = FrLdrTempAlloc(sizeof(PCSTR) * (OperatingSystemCount + 3), 'mNSO');
     if (!OperatingSystemDisplayNames)
+        goto Fallback;
+    OperatingSystemIcons = FrLdrTempAlloc(sizeof(*OperatingSystemIcons) * (OperatingSystemCount + 3), 'mISO');
+    if (!OperatingSystemIcons)
         goto Fallback;
 
     for (i = 0; i < OperatingSystemCount; i++)
     {
         OperatingSystemDisplayNames[i] = OperatingSystemList[i].LoadIdentifier;
+        OperatingSystemIcons[i] = OperatingSystemList[i].MenuIcon;
     }
+
+    OperatingSystemDisplayNames[OperatingSystemCount] = NULL;
+    OperatingSystemDisplayNames[OperatingSystemCount + 1] = "Startup options";
+    OperatingSystemDisplayNames[OperatingSystemCount + 2] = "Settings";
+    OperatingSystemIcons[OperatingSystemCount] = UiMenuIconNone;
+    OperatingSystemIcons[OperatingSystemCount + 1] = UiMenuIconNone;
+    OperatingSystemIcons[OperatingSystemCount + 2] = UiMenuIconNone;
+    MenuContext.Systems = OperatingSystemList;
+    MenuContext.Count = OperatingSystemCount;
+    MenuContext.Selected = SelectedOperatingSystem;
+    SelectedMenuItem = SelectedOperatingSystem;
 
     for (;;)
     {
         LONG TimeOut = GetBootMgrInfo()->TimeOut;
-
-        if (TimeOut > 0)
+        DisplayBootTimeOptions(&OperatingSystemList[MenuContext.Selected]);
+        if (!UiDisplayMenuWithIcons("Choose boot option", NULL,
+                           OperatingSystemDisplayNames, OperatingSystemCount + 3,
+                           SelectedMenuItem, TimeOut, &SelectedMenuItem,
+                           FALSE, OperatingSystemIcons, MainBootMenuKeyPressFilter, &MenuContext))
+            goto Fallback;
+        GetBootMgrInfo()->TimeOut = -1;
+        if (SelectedMenuItem == OperatingSystemCount + 1)
         {
-            if (!BootMenuTimeoutPrompt(TimeOut,
-                                       OperatingSystemList,
-                                       SelectedOperatingSystem))
-            {
-                GetBootMgrInfo()->TimeOut = 0;
-            }
-            TimeOut = GetBootMgrInfo()->TimeOut;
+            if (OperatingSystemCount == 1 ||
+                UiDisplayMenuWithIcons("Startup options / Choose a system", NULL,
+                              OperatingSystemDisplayNames, OperatingSystemCount,
+                              MenuContext.Selected, -1, &MenuContext.Selected,
+                              TRUE, OperatingSystemIcons, NULL, NULL))
+                ShowStartupOptions(&OperatingSystemList[MenuContext.Selected]);
+            SelectedMenuItem = MenuContext.Selected;
+            continue;
         }
-
-        if (TimeOut != 0)
+        if (SelectedMenuItem == OperatingSystemCount + 2)
         {
-            /* Redraw the backdrop, but don't overwrite boot options */
-            UiDrawBackdrop(UiGetScreenHeight() - 2);
-            DisplayBootTimeOptions(&OperatingSystemList[SelectedOperatingSystem]);
+            FreeLdrSetupMenu(&OperatingSystemList[MenuContext.Selected]);
+            continue;
         }
-
-        /* Show the operating system list menu */
-        if (!UiDisplayMenu("Please select the operating system to start:",
-                           /* The string is 80 characters long; don't make it longer! */
-                           MAIN_BOOT_MENU_KEY_HINT,
-                           OperatingSystemDisplayNames,
-                           OperatingSystemCount,
-                           SelectedOperatingSystem,
-                           TimeOut,
-                           &SelectedOperatingSystem,
-                           FALSE,
-                           MainBootMenuKeyPressFilter,
-                           OperatingSystemList))
-        {
-            UiMessageBox("Press ENTER to reboot.");
-            goto Reboot;
-        }
+        SelectedOperatingSystem = SelectedMenuItem;
+        MenuContext.Selected = SelectedOperatingSystem;
 
         /* Load the chosen operating system */
         LoadOperatingSystem(&OperatingSystemList[SelectedOperatingSystem]);
 
-        GetBootMgrInfo()->TimeOut = -1;
-        UiKeepFirmwareScreen = FALSE;
-
-        /* If we get there, the OS loader failed. As it may have
-         * messed up the display, re-initialize the UI. */
-#ifndef _M_ARM
-        UiUnInitialize("");
-#endif
-        UiInitialize(TRUE);
     }
 
 Fallback:
@@ -557,7 +512,6 @@ Fallback:
     FreeLdrSetupMenu(NULL);
     UiMessageBox("The system will now reboot.");
 
-Reboot:
     UiUnInitialize("Rebooting...");
     IniCleanup();
     return;

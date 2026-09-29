@@ -36,6 +36,16 @@ typedef enum tagVIDEODISPLAYMODE
     VideoGraphicsMode
 } VIDEODISPLAYMODE, *PVIDEODISPLAYMODE;
 
+typedef struct _MACH_POINTER_STATE
+{
+    ULONG X;
+    ULONG Y;
+    LONG Wheel;
+    BOOLEAN LeftButton;
+    BOOLEAN RightButton;
+    BOOLEAN Absolute;
+} MACH_POINTER_STATE, *PMACH_POINTER_STATE;
+
 typedef struct tagMACHVTBL
 {
     VOID (*ConsPutChar)(int Ch);
@@ -76,6 +86,9 @@ typedef struct tagMACHVTBL
     BOOLEAN (*InitializeBootDevices)(VOID);
     PCONFIGURATION_COMPONENT_DATA (*HwDetect)(_In_opt_ PCSTR Options);
     VOID (*HwIdle)(VOID);
+    BOOLEAN (*GetPointerState)(ULONG Width, ULONG Height, PMACH_POINTER_STATE State);
+    BOOLEAN (*SetInputTimer)(ULONG Milliseconds);
+    BOOLEAN (*InputTimerExpired)(VOID);
 } MACHVTBL, *PMACHVTBL;
 
 extern FLDRAPI MACHVTBL MachVtbl;
@@ -129,6 +142,13 @@ VOID MachInit(const char *CmdLine);
 
 #define MachHwIdle() \
     MachVtbl.HwIdle()
+
+#define MachGetPointerState(W, H, State) \
+    (MachVtbl.GetPointerState && MachVtbl.GetPointerState((W), (H), (State)))
+#define MachSetInputTimer(Milliseconds) \
+    (MachVtbl.SetInputTimer && MachVtbl.SetInputTimer(Milliseconds))
+#define MachInputTimerExpired() \
+    (MachVtbl.InputTimerExpired && MachVtbl.InputTimerExpired())
 
 
 /* ARC FUNCTIONS **************************************************************/

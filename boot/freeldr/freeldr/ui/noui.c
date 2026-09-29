@@ -169,6 +169,7 @@ NoUiDisplayMenu(
     IN LONG MenuTimeOut,
     OUT PULONG SelectedMenuItem,
     IN BOOLEAN CanEscape,
+    IN const UI_MENU_ICON* MenuItemIcons OPTIONAL,
     IN UiMenuKeyPressFilterCallback KeyPressFilter OPTIONAL,
     IN PVOID Context OPTIONAL)
 {

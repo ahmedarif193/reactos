@@ -306,6 +306,40 @@ VidFbBlendPixels(
     return VidFbComposePixel(OutRed, OutGreen, OutBlue);
 }
 
+VOID
+VidFbPresent(
+    _In_ const ULONG* Pixels,
+    _In_ ULONG Left,
+    _In_ ULONG Top,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    ULONG X, Y, Color;
+    PULONG Destination;
+
+    if (!Pixels || Left >= framebufInfo.ScreenWidth ||
+        Top >= framebufInfo.ScreenHeight || framebufInfo.BytesPerPixel != 4)
+    {
+        return;
+    }
+
+    Width = min(Width, framebufInfo.ScreenWidth - Left);
+    Height = min(Height, framebufInfo.ScreenHeight - Top);
+    for (Y = Top; Y < Top + Height; ++Y)
+    {
+        Destination = (PULONG)(framebufInfo.BaseAddress + Y * framebufInfo.Delta);
+        for (X = Left; X < Left + Width; ++X)
+        {
+            Color = Pixels[Y * framebufInfo.ScreenWidth + X];
+            Destination[X] = VidFbComposePixel((UCHAR)(Color >> 16),
+                                               (UCHAR)(Color >> 8),
+                                               (UCHAR)Color);
+        }
+    }
+    FbConsCachedTextBufferValid = FALSE;
+    FbConsMarkDirtyRect(Left, Top, Width, Height);
+}
+
 static
 VOID
 VidFbFillRect(

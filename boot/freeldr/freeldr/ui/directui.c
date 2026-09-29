@@ -148,6 +148,25 @@ UiDisplayMenu(
     IN UiMenuKeyPressFilterCallback KeyPressFilter OPTIONAL,
     IN PVOID Context OPTIONAL)
 {
+    return UiDisplayMenuWithIcons(MenuHeader, MenuFooter, MenuItemList, MenuItemCount,
+                                   DefaultMenuItem, MenuTimeOut, SelectedMenuItem,
+                                   CanEscape, NULL, KeyPressFilter, Context);
+}
+
+BOOLEAN
+UiDisplayMenuWithIcons(
+    IN PCSTR MenuHeader,
+    IN PCSTR MenuFooter OPTIONAL,
+    IN PCSTR MenuItemList[],
+    IN ULONG MenuItemCount,
+    IN ULONG DefaultMenuItem,
+    IN LONG MenuTimeOut,
+    OUT PULONG SelectedMenuItem,
+    IN BOOLEAN CanEscape,
+    IN const UI_MENU_ICON* MenuItemIcons OPTIONAL,
+    IN UiMenuKeyPressFilterCallback KeyPressFilter OPTIONAL,
+    IN PVOID Context OPTIONAL)
+{
     return TuiDisplayMenu(MenuHeader,
                           MenuFooter,
                           MenuItemList,
@@ -156,6 +175,7 @@ UiDisplayMenu(
                           MenuTimeOut,
                           SelectedMenuItem,
                           CanEscape,
+                          MenuItemIcons,
                           KeyPressFilter,
                           Context);
 }

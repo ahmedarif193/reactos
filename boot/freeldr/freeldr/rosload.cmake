@@ -10,15 +10,14 @@ spec2def(rosload.exe rosload.spec)
 list(APPEND ROSLOAD_SOURCE
     include/freeldr.h
     bootmgr.c
-    custom.c
     linuxboot.c
     miscboot.c
-    options.c
+    settingsmenu.c
     oslist.c
     lib/rtl/libsupp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmboot.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/config.c
-    ntldr/advopts.c
+    ntldr/startup.c
     ntldr/conversion.c
     ntldr/headless.c
     ntldr/inffile.c

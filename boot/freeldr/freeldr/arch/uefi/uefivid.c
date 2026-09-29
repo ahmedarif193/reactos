@@ -708,7 +708,7 @@ UefiDrawBgrtLogo(VOID)
     if (!UefiBgrtLogo.Valid)
         return;
 
-    if (!UiProgressBar.Show)
+    if (!UiKeepFirmwareScreen && !UiProgressBar.Show)
     {
         UefiBgrtLogoShown = FALSE;
         return;
@@ -1454,6 +1454,7 @@ UefiVideoCopyOffScreenBufferToVRAM(PVOID Buffer)
 VOID
 UefiVideoSync(VOID)
 {
+    UefiDrawBgrtLogo();
     UefiVideoFlushDirty();
 }
 

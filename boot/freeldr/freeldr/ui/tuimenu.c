@@ -32,6 +32,7 @@ TuiDisplayMenu(
     IN LONG MenuTimeOut,
     OUT PULONG SelectedMenuItem,
     IN BOOLEAN CanEscape,
+    IN const UI_MENU_ICON* MenuItemIcons OPTIONAL,
     IN UiMenuKeyPressFilterCallback KeyPressFilter OPTIONAL,
     IN PVOID Context OPTIONAL)
 {
@@ -76,6 +77,7 @@ TuiDisplayMenu(
     MenuInformation.MenuHeader = MenuHeader;
     MenuInformation.MenuFooter = MenuFooter;
     MenuInformation.MenuItemList = MenuItemList;
+    MenuInformation.MenuItemIcons = MenuItemIcons;
     MenuInformation.MenuItemCount = MenuItemCount;
     MenuInformation.SelectedMenuItem = DefaultMenuItem;
     MenuInformation.Context = Context;
@@ -93,6 +95,8 @@ TuiDisplayMenu(
     while (TRUE)
     {
         /* Process key presses */
+        if (MachConsKbHit())
+            MenuTimeOut = -1;
         KeyPress = TuiProcessMenuKeyboardEvent(&MenuInformation, KeyPressFilter);
 
         /* Check for ENTER or ESC */
@@ -105,6 +109,8 @@ TuiDisplayMenu(
         {
             /* Update the time information */
             LastClockSecond = CurrentClockSecond;
+            if (MenuTimeOut > 0 && --MenuTimeOut == 0)
+                break;
 
             // FIXME: Theme-specific
             /* Update the date & time */

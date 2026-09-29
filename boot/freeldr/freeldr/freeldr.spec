@@ -68,6 +68,7 @@
 # UI
 @ cdecl UiDiscardFirmwareScreen()
 @ cdecl UiDisplayMenu()
+@ cdecl UiDisplayMenuWithIcons()
 @ cdecl UiDrawBackdrop()
 @ cdecl UiDrawProgressBarCenter()
 @ cdecl UiDrawStatusText()

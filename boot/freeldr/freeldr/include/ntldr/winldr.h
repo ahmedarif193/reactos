@@ -74,6 +74,9 @@ MenuNTOptions(
     _Inout_ OperatingSystemItem* OperatingSystem);
 
 VOID
+PrepareBootOptions(OperatingSystemItem* OperatingSystem);
+
+VOID
 AppendBootTimeOptions(
     _Inout_z_bytecount_(BootOptionsSize)
          PSTR BootOptions,

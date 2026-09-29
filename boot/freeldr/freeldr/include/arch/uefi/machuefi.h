@@ -17,6 +17,15 @@ UefiConsKbHit(VOID);
 int
 UefiConsGetCh(void);
 
+BOOLEAN
+UefiGetPointerState(ULONG Width, ULONG Height, PMACH_POINTER_STATE State);
+
+BOOLEAN
+UefiSetInputTimer(ULONG Milliseconds);
+
+BOOLEAN
+UefiInputTimerExpired(VOID);
+
 EFI_STATUS
 UefiInitializeVideo(VOID);
 

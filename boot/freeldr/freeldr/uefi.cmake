@@ -19,6 +19,7 @@ list(APPEND UEFILDR_ARC_SOURCE
     arch/uefi/ueficon.c
     arch/uefi/uefidisk.c
     arch/uefi/uefihw.c
+    arch/uefi/uefiinput.c
     arch/uefi/uefimem.c
     arch/uefi/uefireboot.c
     arch/uefi/uefisetup.c
@@ -69,18 +70,34 @@ endif()
 
 list(APPEND UEFILDR_BOOTMGR_SOURCE
     ${FREELDR_BOOTMGR_SOURCE}
-    custom.c
-    options.c
+    settingsmenu.c
     oslist.c
-    ui/guifb.c
+    ui/bootui.c
 )
+
+foreach(asset font icons logo)
+    if(asset STREQUAL "font")
+        set(asset_source ${REACTOS_SOURCE_DIR}/media/fonts/selawk.ttf)
+    elseif(asset STREQUAL "icons")
+        set(asset_source ${CMAKE_CURRENT_SOURCE_DIR}/ui/assets/icons.alpha)
+    else()
+        set(asset_source ${CMAKE_CURRENT_SOURCE_DIR}/ui/assets/logo.rgba)
+    endif()
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/bootui_${asset}.c ${CMAKE_CURRENT_BINARY_DIR}/bootui_${asset}.h
+        COMMAND native-bin2c ${asset_source}
+                ${CMAKE_CURRENT_BINARY_DIR}/bootui_${asset}.c
+                ${CMAKE_CURRENT_BINARY_DIR}/bootui_${asset}.h BIN bootui_${asset}
+        DEPENDS native-bin2c ${asset_source})
+    list(APPEND UEFILDR_BOOTMGR_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/bootui_${asset}.c)
+endforeach()
 
 add_asm_files(uefifreeldr_common_asm ${FREELDR_COMMON_ASM_SOURCE} ${UEFILDR_COMMON_ASM_SOURCE})
 
 list(APPEND FREELDR_NTLDR_SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmboot.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/config.c
-    ntldr/advopts.c
+    ntldr/startup.c
     ntldr/conversion.c
     ntldr/headless.c
     ntldr/inffile.c

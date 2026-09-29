@@ -66,6 +66,9 @@ MachInit(const char *CmdLine)
     MachVtbl.InitializeBootDevices = UefiInitializeBootDevices;
     MachVtbl.HwDetect = UefiHwDetect;
     MachVtbl.HwIdle = UefiHwIdle;
+    MachVtbl.GetPointerState = UefiGetPointerState;
+    MachVtbl.SetInputTimer = UefiSetInputTimer;
+    MachVtbl.InputTimerExpired = UefiInputTimerExpired;
 
     /* Setup GOP (common to all UEFI architectures) */
     if (UefiInitializeVideo() != EFI_SUCCESS)

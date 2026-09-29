@@ -26,6 +26,10 @@ typedef struct tagOperatingSystemItem
     ULONG_PTR SectionId;        //< Boot entry ID
     PCSTR LoadIdentifier;       //< Boot entry identifier
     CHAR AdvBootOptsDesc[260];  //< Per-OS human-readable boot-option descriptions.
+    ULONG StartupMode;
+    ULONG StartupFlags;
+    ULONG StartupProfile;
+    ULONG MenuIcon;
 } OperatingSystemItem;
 
 OperatingSystemItem*

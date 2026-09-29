@@ -208,12 +208,19 @@ VOID    UiFadeOut(VOID);                                        // Fades the scr
 
 /* Menu Functions ************************************************************/
 
+typedef enum
+{
+    UiMenuIconNone,
+    UiMenuIconLiberNT
+} UI_MENU_ICON;
+
 typedef struct tagUI_MENU_INFO
 {
     PCSTR   MenuHeader;
     PCSTR   MenuFooter;
 
     PCSTR*  MenuItemList;
+    const UI_MENU_ICON* MenuItemIcons;
     ULONG   MenuItemCount;
     ULONG   SelectedMenuItem;
     PVOID   Context;
@@ -241,6 +248,20 @@ UiDisplayMenu(
     IN LONG MenuTimeOut,
     OUT PULONG SelectedMenuItem,
     IN BOOLEAN CanEscape,
+    IN UiMenuKeyPressFilterCallback KeyPressFilter OPTIONAL,
+    IN PVOID Context OPTIONAL);
+
+BOOLEAN
+UiDisplayMenuWithIcons(
+    IN PCSTR MenuHeader,
+    IN PCSTR MenuFooter OPTIONAL,
+    IN PCSTR MenuItemList[],
+    IN ULONG MenuItemCount,
+    IN ULONG DefaultMenuItem,
+    IN LONG MenuTimeOut,
+    OUT PULONG SelectedMenuItem,
+    IN BOOLEAN CanEscape,
+    IN const UI_MENU_ICON* MenuItemIcons OPTIONAL,
     IN UiMenuKeyPressFilterCallback KeyPressFilter OPTIONAL,
     IN PVOID Context OPTIONAL);
 
@@ -297,6 +318,7 @@ typedef struct tagUIVTBL
         IN LONG MenuTimeOut,
         OUT PULONG SelectedMenuItem,
         IN BOOLEAN CanEscape,
+        IN const UI_MENU_ICON* MenuItemIcons OPTIONAL,
         IN UiMenuKeyPressFilterCallback KeyPressFilter OPTIONAL,
         IN PVOID Context OPTIONAL);
 

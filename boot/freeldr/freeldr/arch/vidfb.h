@@ -93,6 +93,14 @@ ULONG
 VidFbGetBufferSize(VOID);
 
 VOID
+VidFbPresent(
+    _In_ const ULONG* Pixels,
+    _In_ ULONG Left,
+    _In_ ULONG Top,
+    _In_ ULONG Width,
+    _In_ ULONG Height);
+
+VOID
 VidFbScrollUp(
     _In_ UINT32 Color,
     _In_ ULONG Scroll);
