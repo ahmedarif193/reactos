@@ -3,7 +3,7 @@
 </p>
 
 <p align=center>
-  <a href="COPYING3">
+  <a href="COPYING">
     <img alt="License" src="https://img.shields.io/badge/license-GNU_GPL_3.0-0161B6.svg"></a>
   <a href="https://github.com/sponsors/ahmedarif193">
     <img alt="Support LiberNT" src="https://img.shields.io/badge/support-LiberNT-E44E4A.svg"></a>
@@ -24,7 +24,7 @@ LiberNT is based on ReactOS, the Open Source effort to develop an operating syst
 
 Our goal is a system that stays maintainable in the long run: stable, reliable and efficient, running on embedded devices too, and able to support every feature a modern operating system should have.
 
-LiberNT is licensed under the [GNU GPL 3.0](COPYING3). Code inherited from ReactOS keeps the licence stated in its file headers, most of it GPL 2.0 or later.
+LiberNT is licensed under the [GNU GPL 3.0](COPYING). Code inherited from ReactOS keeps the licence stated in its file headers, most of it GPL 2.0 or later. The GPL 2.0, LGPL 2.1 and BSD texts those files refer to are in [COPYING2](COPYING2), [COPYING.LIB](COPYING.LIB) and [COPYING.ARM](COPYING.ARM).
 
 ### Status
 
@@ -40,7 +40,7 @@ LiberNT would not exist without ReactOS. With all our respect and gratitude to t
 
 ## Building
 
-LiberNT builds with RosBE, a cross-build toolchain for Linux, macOS and Windows. The steps below use `configure.sh` on Linux and macOS.
+LiberNT builds with RosBE, a cross-build toolchain. The steps below work on Linux and macOS, and on Windows through WSL2.
 
 ### 1. Install the tools
 
@@ -52,7 +52,7 @@ On Linux or macOS:
 curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-unix-bootstrap.sh | sh
 ```
 
-On Windows, install RosBE with `winget install AhmedArif.RosBE`, then run `rosbe install` and `rosbe enable`. See [winget-rosbe](https://github.com/ahmedarif193/winget-rosbe) for details.
+On Windows, we suggest WSL2. Install it with `wsl --install`, open the Linux terminal it adds, and follow the Linux steps there. Keep the source inside the Linux file system rather than under `/mnt/c`, where builds run slower.
 
 ### 2. Get the source
 
@@ -89,6 +89,14 @@ For example:
 ./configure.sh -a i386 --gcc         # 32-bit x86 build with GCC
 ./configure.sh -a amd64 --release    # optimized AMD64 build
 ```
+
+For a more personalized build, add `menuconfig`:
+
+```sh
+./configure.sh menuconfig
+```
+
+It opens a menu, much like the Linux kernel's, where you choose the target, compiler and build type, and switch features on or off: code generation and tuning, graphics driver model and Mesa, WoW64 and FEX, kernel debugging, test runs and more. Press `?` on any option for help, `S` to save and `Q` to quit. Your choices are saved in the output folder and used every time you configure it again.
 
 ### 4. Build
 
