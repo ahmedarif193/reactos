@@ -322,12 +322,9 @@ int WINAPI GetCalendarInfoA(LCID lcid, CALID Calendar, CALTYPE CalType,
     if (!(CalType & CAL_USE_CP_ACP))
     {
         DWORD dwFlags = ((CalType & CAL_NOUSEROVERRIDE) ? LOCALE_NOUSEROVERRIDE : 0);
-        cp = NLS_GetAnsiCodePage(lcid, dwFlags);
-        if (!cp)
-        {
-            SetLastError(ERROR_INVALID_PARAMETER);
+        if (!GetLocaleInfoW(lcid, LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER | dwFlags,
+                            (LPWSTR)&cp, sizeof(cp) / sizeof(WCHAR)))
             return 0;
-        }
     }
     if ((CalType & 0xFFFF) == CAL_SABBREVERASTRING)
     {
@@ -336,12 +333,6 @@ int WINAPI GetCalendarInfoA(LCID lcid, CALID Calendar, CALTYPE CalType,
         return 0;
     }
 #endif
-
-    if (NLS_IsUnicodeOnlyLcid(lcid))
-    {
-      SetLastError(ERROR_INVALID_PARAMETER);
-      return 0;
-    }
 
     if (!cchData && !(CalType & CAL_RETURN_NUMBER))
         cchDataW = GetCalendarInfoW(lcid, Calendar, CalType, NULL, 0, NULL);

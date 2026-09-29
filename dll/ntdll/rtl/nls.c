@@ -377,7 +377,8 @@ static inline BOOL reorderable_pair( const struct norm_table *info, unsigned int
     return ccc2 && (ccc1 > ccc2);
 }
 
-static inline void canonical_order_substring( const struct norm_table *info, WCHAR *str, unsigned int len )
+static inline void canonical_order_substring( const struct norm_table *info, WCHAR *str, unsigned int len,
+                                              LONG *origins )
 {
     unsigned int i, ch1, ch2, len1, len2;
     BOOL swapped;
@@ -396,6 +397,13 @@ static inline void canonical_order_substring( const struct norm_table *info, WCH
                 memcpy( tmp, str + i, len1 * sizeof(WCHAR) );
                 memcpy( str + i, str + i + len1, len2 * sizeof(WCHAR) );
                 memcpy( str + i + len2, tmp, len1 * sizeof(WCHAR) );
+                if (origins)
+                {
+                    LONG positions[2];
+                    memcpy( positions, origins + i, len1 * sizeof(*origins) );
+                    memmove( origins + i, origins + i + len1, len2 * sizeof(*origins) );
+                    memcpy( origins + i + len2, positions, len1 * sizeof(*origins) );
+                }
                 swapped = TRUE;
                 i += len2 - len1;
             }
@@ -403,7 +411,8 @@ static inline void canonical_order_substring( const struct norm_table *info, WCH
     } while (swapped);
 }
 
-static inline void canonical_order_string( const struct norm_table *info, WCHAR *str, unsigned int len )
+static inline void canonical_order_string( const struct norm_table *info, WCHAR *str, unsigned int len,
+                                           LONG *origins )
 {
     unsigned int ch, i, r, next = 0;
 
@@ -413,15 +422,30 @@ static inline void canonical_order_string( const struct norm_table *info, WCHAR 
         if (i && !get_combining_class( info, ch ))
         {
             if (i > next + 1)
-                canonical_order_substring( info, str + next, i - next );
+                canonical_order_substring( info, str + next, i - next, origins ? origins + next : NULL );
             next = i + r;
         }
     }
-    if (i > next + 1) canonical_order_substring( info, str + next, i - next );
+    if (i > next + 1) canonical_order_substring( info, str + next, i - next, origins ? origins + next : NULL );
 }
 
+static inline LONG estimate_normalized_length( const struct norm_table *info, LONG src_len )
+{
+    LONG length = (LONG)((ULONG)src_len * info->len_factor);
+
+    if (length > 64) length = max( 64, (LONG)((ULONG)src_len + (ULONG)(src_len / 8)) );
+    return length;
+}
+
+struct norm_progress
+{
+    LONG source;
+    LONG output;
+};
+
 static inline NTSTATUS decompose_string( const struct norm_table *info, const WCHAR *src, int src_len,
-                                         WCHAR *dst, LONG *dst_len )
+                                         WCHAR *dst, LONG *dst_len, struct norm_progress *progress,
+                                         LONG *origins )
 {
     BYTE props;
     int src_pos, dst_pos;
@@ -433,6 +457,11 @@ static inline NTSTATUS decompose_string( const struct norm_table *info, const WC
     {
         if (!(len = get_utf16( src + src_pos, src_len - src_pos, &ch )))
         {
+            if (progress)
+            {
+                progress->source = src_pos;
+                progress->output = dst_pos;
+            }
             *dst_len = src_pos + IS_HIGH_SURROGATE( src[src_pos] );
             return STATUS_NO_UNICODE_TRANSLATION;
         }
@@ -445,19 +474,39 @@ static inline NTSTATUS decompose_string( const struct norm_table *info, const WC
                 dst[dst_pos++] = 0;
                 break;
             }
+            if (progress)
+            {
+                progress->source = src_pos;
+                progress->output = dst_pos;
+            }
             *dst_len = src_pos;
             return STATUS_NO_UNICODE_TRANSLATION;
         }
         if (dst_pos + decomp_len > *dst_len)
         {
-            *dst_len += (src_len - src_pos) * info->len_factor;
+            LONG remaining = src_len - src_pos;
+            LONG estimate;
+
+            if (len == 2 && decomp_len == 2 && decomp[0] == src[src_pos] &&
+                decomp[1] == src[src_pos + 1])
+                remaining -= *dst_len - dst_pos;
+            estimate = estimate_normalized_length( info, remaining );
+            *dst_len = (LONG)((ULONG)*dst_len + (ULONG)estimate + (ULONG)(estimate / 8));
             return STATUS_BUFFER_TOO_SMALL;
         }
         memcpy( dst + dst_pos, decomp, decomp_len * sizeof(WCHAR) );
+        if (origins)
+        {
+            unsigned int i;
+            BOOL identity = len == decomp_len && !memcmp( decomp, src + src_pos, len * sizeof(WCHAR) );
+
+            for (i = 0; i < decomp_len; ++i)
+                origins[dst_pos + i] = src_pos + (identity ? i : 0);
+        }
         dst_pos += decomp_len;
     }
 
-    canonical_order_string( info, dst, dst_pos );
+    canonical_order_string( info, dst, dst_pos, origins );
     *dst_len = dst_pos;
     return STATUS_SUCCESS;
 }
@@ -500,7 +549,8 @@ static inline unsigned int compose_chars( const struct norm_table *info, unsigne
     return 0;
 }
 
-static inline unsigned int compose_string( const struct norm_table *info, WCHAR *str, unsigned int srclen )
+static inline unsigned int compose_string( const struct norm_table *info, WCHAR *str, unsigned int srclen,
+                                          LONG *origins )
 {
     unsigned int i, ch, comp, len, start_ch = 0, last_starter = srclen;
     BYTE class, prev_class = 0;
@@ -529,6 +579,19 @@ static inline unsigned int compose_string( const struct norm_table *info, WCHAR 
                 memmove( str + last_starter + comp_len, str + last_starter + start_len,
                          (i - (last_starter + start_len)) * sizeof(WCHAR) );
             memmove( str + i + comp_len - start_len, str + i + len, (srclen - i - len) * sizeof(WCHAR) );
+            if (origins)
+            {
+                LONG positions[2];
+
+                positions[0] = origins[last_starter];
+                positions[1] = origins[last_starter + start_len - 1];
+                if (comp_len != start_len)
+                    memmove( origins + last_starter + comp_len, origins + last_starter + start_len,
+                             (i - (last_starter + start_len)) * sizeof(*origins) );
+                memmove( origins + i + comp_len - start_len, origins + i + len,
+                         (srclen - i - len) * sizeof(*origins) );
+                memcpy( origins + last_starter, positions, comp_len * sizeof(*origins) );
+            }
             srclen += comp_len - start_len - len;
             start_ch = comp;
             i = last_starter;
@@ -538,6 +601,34 @@ static inline unsigned int compose_string( const struct norm_table *info, WCHAR 
         }
     }
     return srclen;
+}
+
+static NTSTATUS composition_prefix_status( const struct norm_table *info, const WCHAR *src,
+                                          LONG src_len, WCHAR *buffer, const struct norm_progress *progress,
+                                          LONG capacity, LONG *length )
+{
+    SIZE_T count = progress->output;
+    LONG *origins, prefix_len = progress->output;
+    NTSTATUS status;
+
+    if (count > ~(SIZE_T)0 / sizeof(*origins)) return STATUS_NO_MEMORY;
+    origins = RtlAllocateHeap( RtlGetProcessHeap(), 0, count * sizeof(*origins) );
+    if (!origins) return STATUS_NO_MEMORY;
+    status = decompose_string( info, src, progress->source, buffer, &prefix_len, NULL, origins );
+    if (!status)
+    {
+        prefix_len = compose_string( info, buffer, prefix_len, origins );
+        status = STATUS_NO_UNICODE_TRANSLATION;
+        if (prefix_len > capacity)
+        {
+            LONG estimate = estimate_normalized_length( info, src_len - origins[capacity] );
+
+            *length = (LONG)((ULONG)capacity + (ULONG)estimate + (ULONG)(estimate / 8));
+            status = STATUS_BUFFER_TOO_SMALL;
+        }
+    }
+    RtlFreeHeap( RtlGetProcessHeap(), 0, origins );
+    return status;
 }
 
 static NTSTATUS load_norm_table( ULONG form, const struct norm_table **info )
@@ -646,6 +737,7 @@ NTSTATUS NTAPI RtlIsNormalizedString( ULONG form, const WCHAR *str, LONG len, BO
 NTSTATUS NTAPI RtlNormalizeString( ULONG form, const WCHAR *src, LONG src_len, WCHAR *dst, LONG *dst_len )
 {
     LONG buf_len;
+    struct norm_progress progress;
     WCHAR *buf = NULL;
     const struct norm_table *info;
     NTSTATUS status = STATUS_SUCCESS;
@@ -656,8 +748,7 @@ NTSTATUS NTAPI RtlNormalizeString( ULONG form, const WCHAR *src, LONG src_len, W
 
     if (!*dst_len)
     {
-        *dst_len = src_len * info->len_factor;
-        if (*dst_len > 64) *dst_len = max( 64, src_len + src_len / 8 );
+        *dst_len = estimate_normalized_length( info, src_len );
         return STATUS_SUCCESS;
     }
     if (!src_len)
@@ -666,23 +757,29 @@ NTSTATUS NTAPI RtlNormalizeString( ULONG form, const WCHAR *src, LONG src_len, W
         return STATUS_SUCCESS;
     }
 
-    if (!info->comp_size) return decompose_string( info, src, src_len, dst, dst_len );
+    if (!info->comp_size) return decompose_string( info, src, src_len, dst, dst_len, NULL, NULL );
 
-    buf_len = src_len * 4;
+    buf_len = (LONG)((ULONG)src_len * 4);
     for (;;)
     {
+        LONG capacity = buf_len;
+
+        if (buf_len <= 0 || (SIZE_T)buf_len > ~(SIZE_T)0 / sizeof(WCHAR)) return STATUS_NO_MEMORY;
         buf = RtlAllocateHeap( RtlGetProcessHeap(), 0, buf_len * sizeof(WCHAR) );
         if (!buf) return STATUS_NO_MEMORY;
-        status = decompose_string( info, src, src_len, buf, &buf_len );
+        status = decompose_string( info, src, src_len, buf, &buf_len, &progress, NULL );
         if (status != STATUS_BUFFER_TOO_SMALL) break;
         RtlFreeHeap( RtlGetProcessHeap(), 0, buf );
+        if (buf_len <= capacity) return STATUS_NO_MEMORY;
     }
     if (!status)
     {
-        buf_len = compose_string( info, buf, buf_len );
+        buf_len = compose_string( info, buf, buf_len, NULL );
         if (*dst_len >= buf_len) memcpy( dst, buf, buf_len * sizeof(WCHAR) );
         else status = STATUS_BUFFER_TOO_SMALL;
     }
+    else if (status == STATUS_NO_UNICODE_TRANSLATION && *dst_len > 0 && progress.output > *dst_len)
+        status = composition_prefix_status( info, src, src_len, buf, &progress, *dst_len, &buf_len );
     RtlFreeHeap( RtlGetProcessHeap(), 0, buf );
     *dst_len = buf_len;
     return status;

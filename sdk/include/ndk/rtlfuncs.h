@@ -5538,6 +5538,14 @@ RtlLCIDToCultureName(
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlGetLocaleFileMappingAddress(
+    _Out_ PVOID *BaseAddress,
+    _Out_ PLCID DefaultLocaleId,
+    _Out_opt_ PLARGE_INTEGER DefaultCasingTableSize);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlLcidToLocaleName(
     _In_ LCID Lcid,
     _Inout_ PUNICODE_STRING LocaleName,

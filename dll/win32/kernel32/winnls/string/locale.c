@@ -2964,12 +2964,53 @@ LCID WINAPI ConvertDefaultLocale( LCID lcid )
  */
 BOOL WINAPI IsValidLocale( LCID lcid, DWORD flags )
 {
+    const struct
+    {
+        UINT ctypes, unknown1, unknown2, unknown3, locales, charmaps, geoids, scripts;
+    } *header;
+    const struct
+    {
+        UINT offset, unknown1, version, magic, unknown2[3];
+        USHORT header_size, nb_lcids, nb_locales, locale_size;
+        UINT locales_offset;
+        USHORT nb_lcnames, pad;
+        UINT lcids_offset, lcnames_offset, unknown3;
+        USHORT nb_calendars, calendar_size;
+        UINT calendars_offset, strings_offset;
+        USHORT unknown4[4];
+    } *locales;
+    const struct
+    {
+        UINT id;
+        USHORT idx, name;
+    } *index;
+    void *address;
+    LCID system_lcid;
+    int low, high, mid;
+
     if (lcid == LOCALE_NEUTRAL || lcid == LOCALE_USER_DEFAULT || lcid == LOCALE_SYSTEM_DEFAULT)
         return FALSE;
 
-    /* check if language is registered in the kernel32 resources */
-    return FindResourceExW( kernel32_handle, (LPWSTR)RT_STRING,
-                            (LPCWSTR)LOCALE_ILANGUAGE, LANGIDFROMLCID(lcid)) != 0;
+    if (lcid == LOCALE_CUSTOM_DEFAULT || lcid == LOCALE_CUSTOM_UNSPECIFIED ||
+        lcid == LOCALE_CUSTOM_UI_DEFAULT)
+        lcid = GetUserDefaultLCID();
+
+    if (!NT_SUCCESS(RtlGetLocaleFileMappingAddress(&address, &system_lcid, NULL)))
+        return FALSE;
+
+    header = address;
+    locales = (const void *)((const BYTE *)header + header->locales);
+    index = (const void *)((const BYTE *)locales + locales->lcids_offset);
+    low = 0;
+    high = locales->nb_lcids - 1;
+    while (low <= high)
+    {
+        mid = low + (high - low) / 2;
+        if (lcid < index[mid].id) high = mid - 1;
+        else if (lcid > index[mid].id) low = mid + 1;
+        else return TRUE;
+    }
+    return FALSE;
 }
 
 #ifndef __REACTOS__
