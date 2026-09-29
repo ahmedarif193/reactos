@@ -172,7 +172,7 @@ void CompleteSwitch(BOOL doSwitch)
       {
          HWND hwnd = windowList[selectedWindow];
 
-         GetWindowTextW(hwnd, windowText, _countof(windowText));
+         InternalGetWindowText(hwnd, windowText, _countof(windowText));
 
          TRACE("[ATbot] CompleteSwitch Switching to 0x%08x (%ls)\n", hwnd, windowText);
 
@@ -426,7 +426,7 @@ void OnPaint(HWND hWnd)
                      DFCS_BUTTONPUSH | DFCS_PUSHED);
 
     // get text
-    CharCount = GetWindowTextW(windowList[selectedWindow], windowText,
+    CharCount = InternalGetWindowText(windowList[selectedWindow], windowText,
                                _countof(windowText));
 
     // draw text

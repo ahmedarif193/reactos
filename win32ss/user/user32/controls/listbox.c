@@ -117,7 +117,7 @@ static const WCHAR listboxW[] = {'L','i','s','t','B','o','x',0};
 const struct builtin_class_descr LISTBOX_builtin_class =
 {
     listboxW,             /* name */
-    CS_DBLCLKS /*| CS_PARENTDC*/,  /* style */
+    CS_DBLCLKS | CS_PARENTDC,
     ListBoxWndProcA,      /* procA */
     ListBoxWndProcW,      /* procW */
     sizeof(LB_DESCR *),   /* extra */
@@ -506,7 +506,7 @@ static void LISTBOX_UpdateSize( LB_DESCR *descr )
             remaining = height % descr->item_height;
         else
             remaining = 0;
-        if ((height > descr->item_height) && remaining)
+        if (remaining)
         {
             TRACE( "[%p]: changing height %d -> %d\n", descr->self, height, height - remaining );
             SetWindowPos( descr->self, 0, 0, 0, rect.right - rect.left,
@@ -2770,7 +2770,10 @@ LRESULT WINAPI ListBoxWndProc_common( HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             _wcslwr(textW);
         else if (msg == LB_ADDSTRING_UPPER)
             _wcsupr(textW);
-        wParam = LISTBOX_FindStringPos( descr, textW, FALSE );
+        if ((descr->style & LBS_SORT) && HAS_STRINGS(descr))
+            wParam = LISTBOX_FindFileStrPos( descr, textW ? textW : L"" );
+        else
+            wParam = LISTBOX_FindStringPos( descr, textW, FALSE );
         ret = LISTBOX_InsertString( descr, wParam, textW );
         if (!unicode && HAS_STRINGS(descr))
             HeapFree(GetProcessHeap(), 0, textW);

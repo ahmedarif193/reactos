@@ -141,7 +141,6 @@ typedef enum {
 
 #define HAS_MENU(hwnd,style)  ((((style) & (WS_CHILD | WS_POPUP)) != WS_CHILD) && GetMenu(hwnd))
 
-#define SWP_UXTHEME_REFRAME 0x01000000
 #define BUTTON_GAP_SIZE 2
 
 #define MENU_BAR_ITEMS_SPACE (12)

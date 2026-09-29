@@ -385,8 +385,8 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
         /* fall through */
     case WM_LBUTTONDOWN:
         SetCapture( hWnd );
-        SetFocus( hWnd );
         set_button_state( hWnd, get_button_state( hWnd ) | BUTTON_BTNPRESSED );
+        SetFocus( hWnd );
         SendMessageW( hWnd, BM_SETSTATE, TRUE, 0 );
         break;
 
@@ -491,8 +491,11 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
             if (rc.bottom > client.bottom) rc.bottom = client.bottom;
         }
 
-        if (unicode) DefWindowProcW( hWnd, WM_SETTEXT, wParam, lParam );
-        else DefWindowProcA( hWnd, WM_SETTEXT, wParam, lParam );
+        if (btn_type != BS_GROUPBOX)
+        {
+            if (unicode) DefWindowProcW( hWnd, WM_SETTEXT, wParam, lParam );
+            else DefWindowProcA( hWnd, WM_SETTEXT, wParam, lParam );
+        }
 
         if (hdc)
         {
@@ -510,16 +513,18 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
             FillRect(hdc, &rc, hbrush);
             ReleaseDC(hWnd, hdc);
         }
-        if (btn_type == BS_GROUPBOX) /* Yes, only for BS_GROUPBOX */
-            InvalidateRect( hWnd, NULL, TRUE );
-        else
-            paint_button( hWnd, btn_type, ODA_DRAWENTIRE );
+        if (btn_type == BS_GROUPBOX)
+        {
+            if (unicode) DefWindowProcW( hWnd, WM_SETTEXT, wParam, lParam );
+            else DefWindowProcA( hWnd, WM_SETTEXT, wParam, lParam );
+        }
+        paint_button( hWnd, btn_type, ODA_DRAWENTIRE );
         return 1; /* success. FIXME: check text length */
     }
 
     case WM_SETFONT:
         set_button_font( hWnd, (HFONT)wParam );
-        if (lParam) InvalidateRect(hWnd, NULL, TRUE);
+        if (lParam) InvalidateRect(hWnd, NULL, btn_type != BS_OWNERDRAW);
         break;
 
     case WM_GETFONT:
@@ -533,7 +538,7 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
             BUTTON_NOTIFY_PARENT(hWnd, BN_SETFOCUS);
 #ifdef __REACTOS__
         if (((btn_type == BS_RADIOBUTTON) || (btn_type == BS_AUTORADIOBUTTON)) &&
-            !(get_button_state(hWnd) & BST_CHECKED))
+            !(get_button_state(hWnd) & (BST_CHECKED | BUTTON_BTNPRESSED)))
         {
             BUTTON_NOTIFY_PARENT(hWnd, BN_CLICKED);
         }
@@ -1339,7 +1344,7 @@ static void OB_Paint( HWND hwnd, HDC hDC, UINT action )
     DRAWITEMSTRUCT dis;
     LONG_PTR id = GetWindowLongPtrW( hwnd, GWLP_ID );
     HWND parent;
-    HFONT hFont, hPrevFont = 0;
+    HFONT hFont;
     HRGN hrgn;
 
     dis.CtlType    = ODT_BUTTON;
@@ -1354,7 +1359,7 @@ static void OB_Paint( HWND hwnd, HDC hDC, UINT action )
     dis.itemData   = 0;
     GetClientRect( hwnd, &dis.rcItem );
 
-    if ((hFont = get_button_font( hwnd ))) hPrevFont = SelectObject( hDC, hFont );
+    if ((hFont = get_button_font( hwnd ))) SelectObject( hDC, hFont );
     parent = GetParent(hwnd);
     if (!parent) parent = hwnd;
 #ifdef __REACTOS__
@@ -1366,7 +1371,6 @@ static void OB_Paint( HWND hwnd, HDC hDC, UINT action )
     hrgn = set_control_clipping( hDC, &dis.rcItem );
 
     SendMessageW( GetParent(hwnd), WM_DRAWITEM, id, (LPARAM)&dis );
-    if (hPrevFont) SelectObject(hDC, hPrevFont);
     SelectClipRgn( hDC, hrgn );
     if (hrgn) DeleteObject( hrgn );
 }

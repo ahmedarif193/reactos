@@ -1121,6 +1121,16 @@ static void COMBO_SetFocus( LPHEADCOMBO lphc )
 {
    if( !(lphc->wState & CBF_FOCUSED) )
    {
+       if ((lphc->wState & CBF_EDIT) && !(lphc->wState & CBF_BEENFOCUSED))
+       {
+           HWND hwnd = lphc->self;
+           lphc->wState |= CBF_BEENFOCUSED;
+           SendMessageW(lphc->hWndEdit, EM_SETSEL, 0, INT_MAX);
+           if (!IsWindow(hwnd)) return;
+           UpdateWindow(lphc->hWndEdit);
+           if (!IsWindow(hwnd)) return;
+       }
+
        if( CB_GETTYPE(lphc) == CBS_DROPDOWNLIST )
            SendMessageW(lphc->hWndLBox, LB_CARETON, 0, 0);
 
@@ -1830,11 +1840,6 @@ LRESULT WINAPI ComboWndProc_common( HWND hwnd, UINT message, WPARAM wParam, LPAR
 	case WM_SETFOCUS:
                if( lphc->wState & CBF_EDIT ) {
                    SetFocus( lphc->hWndEdit );
-                   /* The first time focus is received, select all the text */
-                   if( !(lphc->wState & CBF_BEENFOCUSED) ) {
-                       SendMessageW(lphc->hWndEdit, EM_SETSEL, 0, INT_MAX);
-                       lphc->wState |= CBF_BEENFOCUSED;
-                   }
                }
 		else
 		    COMBO_SetFocus( lphc );
@@ -2163,7 +2168,13 @@ LRESULT WINAPI ComboWndProc_common( HWND hwnd, UINT message, WPARAM wParam, LPAR
 		if (lphc->hWndEdit != NULL)
 		{
 		    SendMessageW(lphc->self, WM_LBUTTONUP, 0, 0xFFFFFFFF);
+		    if (!IsWindow(hwnd)) return TRUE;
+		    CBRollUp(lphc, FALSE, TRUE);
+		    if (!IsWindow(hwnd)) return TRUE;
 		    SendMessageW(lphc->hWndEdit, EM_SETSEL, 0, 0);
+		    if (!IsWindow(hwnd)) return TRUE;
+		    UpdateWindow(lphc->hWndEdit);
+		    if (!IsWindow(hwnd)) return TRUE;
 		    lphc->wState &= ~(CBF_FOCUSED | CBF_BEENFOCUSED);
 		    CB_NOTIFY(lphc, CBN_KILLFOCUS);
 		}

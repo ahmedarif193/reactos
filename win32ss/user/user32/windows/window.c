@@ -243,6 +243,9 @@ User32CreateWindowEx(DWORD dwExStyle,
         PSTR AnsiBuffer = WindowName.Buffer;
         ULONG AnsiLength = WindowName.Length;
 
+        if (AnsiBuffer && (BYTE)AnsiBuffer[0] == 0xff)
+            AnsiLength = 3;
+
         WindowName.Length = 0;
         WindowName.MaximumLength = (AnsiLength + 1) * sizeof(WCHAR);
         WindowName.Buffer = RtlAllocateHeap(RtlGetProcessHeap(),
@@ -484,7 +487,7 @@ CreateWindowExA(DWORD dwExStyle,
             {
                 TRACE("Restoring current maximized child %p\n", top_child);
                 SendMessageW( top_child, WM_SETREDRAW, FALSE, 0 );
-                ShowWindow(top_child, SW_RESTORE);
+                NtUserMinMaximize(top_child, SW_SHOWNORMAL, 1);
                 SendMessageW( top_child, WM_SETREDRAW, TRUE, 0 );
             }
         }
@@ -520,7 +523,7 @@ CreateWindowExA(DWORD dwExStyle,
                                 hInstance,
                                 lpParam,
                                 NUCWE_ANSI);
-    if (hwnd && lpParam == (LPVOID)&mdi)
+    if (hwnd && lpParam == (LPVOID)&mdi && (dwStyle & WS_VISIBLE))
         MDI_UpdateMaximizedChildFrame(hWndParent, hwnd);
     return hwnd;
 }
@@ -626,7 +629,7 @@ CreateWindowExW(DWORD dwExStyle,
             {
                 TRACE("Restoring current maximized child %p\n", top_child);
                 SendMessageW( top_child, WM_SETREDRAW, FALSE, 0 );
-                ShowWindow(top_child, SW_RESTORE);
+                NtUserMinMaximize(top_child, SW_SHOWNORMAL, 1);
                 SendMessageW( top_child, WM_SETREDRAW, TRUE, 0 );
             }
         }
@@ -662,7 +665,7 @@ CreateWindowExW(DWORD dwExStyle,
                                 hInstance,
                                 lpParam,
                                 0);
-    if (hwnd && lpParam == (LPVOID)&mdi)
+    if (hwnd && lpParam == (LPVOID)&mdi && (dwStyle & WS_VISIBLE))
         MDI_UpdateMaximizedChildFrame(hWndParent, hwnd);
     return hwnd;
 }

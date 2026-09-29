@@ -192,6 +192,16 @@ ScrollDC(
                           lprcUpdate);
 }
 
+int WINAPI
+RealSetWindowRgn(HWND hWnd, HRGN hRgn, BOOL bRedraw)
+{
+   int Ret = NtUserSetWindowRgn(hWnd, hRgn, bRedraw);
+
+   if (Ret && hRgn)
+      DeleteObject(hRgn);
+   return Ret;
+}
+
 /*
  * @implemented
  */
@@ -212,10 +222,7 @@ SetWindowRgn(
    /* Bypass SEH and go direct. */
    if (!Hook)
    {
-      Ret = NtUserSetWindowRgn(hWnd, hRgn, bRedraw);
-      if (Ret)
-          DeleteObject(hRgn);
-      return Ret;
+      return RealSetWindowRgn(hWnd, hRgn, bRedraw);
    }
 
    _SEH2_TRY

@@ -51,6 +51,7 @@ extern HINSTANCE ghImm32;
 extern RTL_CRITICAL_SECTION gcsUserApiHook;
 extern USERAPIHOOK guah;
 extern HINSTANCE ghmodUserApiHook;
+int WINAPI RealSetWindowRgn(HWND hWnd, HRGN hRgn, BOOL bRedraw);
 extern HICON hIconSmWindows, hIconWindows;
 extern Imm32ApiTable gImmApiEntries;
 
@@ -92,6 +93,7 @@ VOID FASTCALL ResetUserApiHook(PUSERAPIHOOK);
 BOOL FASTCALL IsMsgOverride(UINT,PUAHOWP);
 BOOL WINAPI InitUserApiHook(HINSTANCE hInstance, USERAPIHOOKPROC pfn);
 BOOL WINAPI ClearUserApiHook(HINSTANCE hInstance);
+BOOL WINAPI MDIRedrawFrame(HWND hWnd, DWORD flags);
 
 /* definitions for message.c */
 BOOL FASTCALL MessageInit(VOID);

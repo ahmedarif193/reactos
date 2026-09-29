@@ -1543,6 +1543,7 @@ static void EDIT_SL_InvalidateText(EDITSTATE *es, INT start, INT end)
  */
 static void EDIT_ML_InvalidateText(EDITSTATE *es, INT start, INT end)
 {
+	HWND hwnd = es->hwndSelf;
 	INT vlc = get_vertical_line_count(es);
 	INT sl = EDIT_EM_LineFromChar(es, start);
 	INT el = EDIT_EM_LineFromChar(es, end);
@@ -1580,6 +1581,7 @@ static void EDIT_ML_InvalidateText(EDITSTATE *es, INT start, INT end)
 				&rcLine);
 		if (IntersectRect(&rcUpdate, &rcWnd, &rcLine))
 			EDIT_UpdateText(es, &rcUpdate, TRUE);
+		if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return;
 		for (l = sl + 1 ; l < el ; l++) {
 			EDIT_GetLineRect(es, l, 0,
 				EDIT_EM_LineLength(es,
@@ -1587,6 +1589,7 @@ static void EDIT_ML_InvalidateText(EDITSTATE *es, INT start, INT end)
 				&rcLine);
 			if (IntersectRect(&rcUpdate, &rcWnd, &rcLine))
 				EDIT_UpdateText(es, &rcUpdate, TRUE);
+			if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return;
 		}
 		EDIT_GetLineRect(es, el, 0, ec, &rcLine);
 		if (IntersectRect(&rcUpdate, &rcWnd, &rcLine))
@@ -1638,6 +1641,7 @@ static void EDIT_InvalidateText(EDITSTATE *es, INT start, INT end)
  */
 static void EDIT_EM_SetSel(EDITSTATE *es, UINT start, UINT end, BOOL after_wrap)
 {
+	HWND hwnd = es->hwndSelf;
 	UINT old_start = es->selection_start;
 	UINT old_end = es->selection_end;
 	UINT len = get_text_length(es);
@@ -1685,11 +1689,13 @@ static void EDIT_EM_SetSel(EDITSTATE *es, UINT start, UINT end, BOOL after_wrap)
             if (old_start > end )
             {
                 EDIT_InvalidateText(es, start, end);
+                if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return;
                 EDIT_InvalidateText(es, old_start, old_end);
             }
             else
             {
                 EDIT_InvalidateText(es, start, old_start);
+                if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return;
                 EDIT_InvalidateText(es, end, old_end);
             }
 	}
@@ -1704,6 +1710,7 @@ static void EDIT_EM_SetSel(EDITSTATE *es, UINT start, UINT end, BOOL after_wrap)
  */
 static void EDIT_UpdateScrollInfo(EDITSTATE *es)
 {
+    HWND hwnd = es->hwndSelf;
     if ((es->style & WS_VSCROLL) && !(es->flags & EF_VSCROLL_TRACK))
     {
 	SCROLLINFO si;
@@ -1716,6 +1723,7 @@ static void EDIT_UpdateScrollInfo(EDITSTATE *es)
 	TRACE("SB_VERT, nMin=%d, nMax=%d, nPage=%d, nPos=%d\n",
 		si.nMin, si.nMax, si.nPage, si.nPos);
 	SetScrollInfo(es->hwndSelf, SB_VERT, &si, TRUE);
+        if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return;
     }
 
     if ((es->style & WS_HSCROLL) && !(es->flags & EF_HSCROLL_TRACK))
@@ -1747,6 +1755,7 @@ static BOOL EDIT_EM_LineScroll_internal(EDITSTATE *es, INT dx, INT dy)
 {
 	INT nyoff;
 	INT x_offset_in_pixels;
+	HWND hwnd = es->hwndSelf;
 	INT lines_per_page = (es->format_rect.bottom - es->format_rect.top) /
 			      es->line_height;
 
@@ -1782,11 +1791,14 @@ static BOOL EDIT_EM_LineScroll_internal(EDITSTATE *es, INT dx, INT dy)
 		IntersectRect(&rc, &rc1, &es->format_rect);
 		ScrollWindowEx(es->hwndSelf, -dx, dy,
 				NULL, &rc, NULL, NULL, SW_INVALIDATE);
+		if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return FALSE;
 		/* force scroll info update */
 		EDIT_UpdateScrollInfo(es);
+		if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return FALSE;
 	}
 	if (dx && !(es->flags & EF_HSCROLL_TRACK))
 		notify_parent(es, EN_HSCROLL);
+	if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return FALSE;
 	if (dy && !(es->flags & EF_VSCROLL_TRACK))
 		notify_parent(es, EN_VSCROLL);
 	return TRUE;
@@ -1864,7 +1876,8 @@ static LRESULT EDIT_EM_Scroll(EDITSTATE *es, INT action)
 static void EDIT_ImmSetCompositionWindow(EDITSTATE *es, POINT pt)
 {
     COMPOSITIONFORM CompForm;
-    HIMC hIMC = ImmGetContext(es->hwndSelf);
+    HWND hwnd = es->hwndSelf;
+    HIMC hIMC = ImmGetContext(hwnd);
     if (!hIMC)
     {
         ERR("!hIMC\n");
@@ -1884,7 +1897,7 @@ static void EDIT_ImmSetCompositionWindow(EDITSTATE *es, POINT pt)
     }
 
     ImmSetCompositionWindow(hIMC, &CompForm);
-    ImmReleaseContext(es->hwndSelf, hIMC);
+    ImmReleaseContext(hwnd, hIMC);
 }
 #endif
 /*********************************************************************
@@ -1899,12 +1912,14 @@ static void EDIT_SetCaretPos(EDITSTATE *es, INT pos,
 #ifdef __REACTOS__
     HKL hKL = GetKeyboardLayout(0);
     POINT pt = { (short)LOWORD(res), (short)HIWORD(res) };
+    HWND hwnd = es->hwndSelf;
 
     /* Don't set caret if not focused */
     if ((es->flags & EF_FOCUSED) == 0)
         return;
 
     SetCaretPos(pt.x, pt.y);
+    if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return;
 
     /* Cicero/TSF layouts manage their UI through the text service. */
     if (IS_IME_HKL(hKL))
@@ -1923,6 +1938,7 @@ static void EDIT_SetCaretPos(EDITSTATE *es, INT pos,
  */
 static void EDIT_EM_ScrollCaret(EDITSTATE *es)
 {
+	HWND hwnd = es->hwndSelf;
 	if (es->style & ES_MULTILINE) {
 		INT l;
 		INT vlc;
@@ -1981,6 +1997,7 @@ static void EDIT_EM_ScrollCaret(EDITSTATE *es)
 		}
 	}
 
+    if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return;
     if(es->flags & EF_FOCUSED)
 	EDIT_SetCaretPos(es, es->selection_end, es->flags & EF_AFTER_WRAP);
 }
@@ -3000,19 +3017,25 @@ static void EDIT_EM_SetLimitText(EDITSTATE *es, UINT limit)
  * size.  Though there is an exception for the empty client rect case
  * with small font sizes.
  */
-static BOOL is_cjk(UINT charset)
+DWORD WINAPI GdiGetCodePage(HDC);
+
+static BOOL is_cjk_charset(HDC dc)
 {
-    switch(charset)
+    switch (GdiGetCodePage(dc))
     {
-    case SHIFTJIS_CHARSET:
-    case HANGUL_CHARSET:
-    case GB2312_CHARSET:
-    case CHINESEBIG5_CHARSET:
+    case 932: case 936: case 949: case 950: case 1361:
         return TRUE;
+    default:
+        return FALSE;
     }
-    /* HANGUL_CHARSET is strange, though treated as CJK by Win 8, it is
-     * not by other versions including Win 10. */
-    return FALSE;
+}
+
+static BOOL is_cjk_font(HDC dc)
+{
+    const DWORD mask = FS_JISJAPAN | FS_CHINESESIMP | FS_WANSUNG | FS_CHINESETRAD | FS_JOHAB;
+    FONTSIGNATURE fs;
+
+    return GetTextCharsetInfo(dc, &fs, 0) != DEFAULT_CHARSET && (fs.fsCsb[0] & mask);
 }
 
 static int get_cjk_fontinfo_margin(int width, int side_bearing)
@@ -3047,34 +3070,23 @@ static void EDIT_EM_SetMargins(EDITSTATE *es, INT action,
 
             /* The default margins are only non zero for TrueType or Vector fonts */
             if (tm.tmPitchAndFamily & ( TMPF_VECTOR | TMPF_TRUETYPE )) {
-                if (!is_cjk(tm.tmCharSet)) {
+                struct char_width_info width_info;
+                LONG rc_width;
+
+                if ((is_cjk_charset(dc) || is_cjk_font(dc)) &&
+                    GetCharWidthInfo(dc, &width_info)) {
+                    default_left_margin = get_cjk_fontinfo_margin(width, width_info.min_lsb);
+                    default_right_margin = get_cjk_fontinfo_margin(width, width_info.min_rsb);
+                } else {
                     default_left_margin = width / 2;
                     default_right_margin = width / 2;
+                }
 
-                    GetClientRect(es->hwndSelf, &rc);
-                    if (rc.right - rc.left < (width / 2 + width) * 2 &&
-                        (width >= 28 || !IsRectEmpty(&rc)) ) {
-                        default_left_margin = es->left_margin;
-                        default_right_margin = es->right_margin;
-                    }
-                } else {
-                    struct char_width_info width_info;
-                    LONG rc_width;
-
-                    if (GetCharWidthInfo(dc, &width_info)) {
-                        default_left_margin = get_cjk_fontinfo_margin(width, width_info.min_lsb);
-                        default_right_margin = get_cjk_fontinfo_margin(width, width_info.min_rsb);
-                    } else {
-                        default_left_margin = width / 2;
-                        default_right_margin = width / 2;
-                    }
-
-                    GetClientRect(es->hwndSelf, &rc);
-                    rc_width = !IsRectEmpty(&rc) ? rc.right - rc.left : 80;
-                    if (rc_width < default_left_margin + default_right_margin + width * 2) {
-                        default_left_margin = es->left_margin;
-                        default_right_margin = es->right_margin;
-                    }
+                GetClientRect(es->hwndSelf, &rc);
+                rc_width = !IsRectEmpty(&rc) ? rc.right - rc.left : 80;
+                if (rc_width < default_left_margin + default_right_margin + width * 2) {
+                    default_left_margin = es->left_margin;
+                    default_right_margin = es->right_margin;
                 }
             }
             SelectObject(dc, old_font);
@@ -3865,11 +3877,17 @@ static LRESULT EDIT_WM_LButtonDown(EDITSTATE *es, DWORD keys, INT x, INT y)
  */
 static LRESULT EDIT_WM_LButtonUp(EDITSTATE *es)
 {
+	BOOL hide_caret = !(es->style & ES_MULTILINE) && (es->flags & EF_FOCUSED);
+	HWND hwnd = es->hwndSelf;
+	if (hide_caret) HideCaret(hwnd);
+	if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 0;
 	if (es->bCaptureState) {
 		KillTimer(es->hwndSelf, 0);
 		if (GetCapture() == es->hwndSelf) ReleaseCapture();
 	}
+	if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 0;
 	es->bCaptureState = FALSE;
+	if (hide_caret && (es->flags & EF_FOCUSED)) ShowCaret(hwnd);
 	return 0;
 }
 
@@ -4025,8 +4043,11 @@ static void EDIT_WM_SetFocus(EDITSTATE *es)
         if (!(es->style & ES_NOHIDESEL))
             EDIT_InvalidateText(es, es->selection_start, es->selection_end);
 
+        if (es->hwndListBox && (!notify_parent(es, EN_SETFOCUS) || !(es->flags & EF_FOCUSED)))
+            return;
+
         /* single line edit updates itself */
-        if (IsWindowVisible(es->hwndSelf) && !(es->style & ES_MULTILINE))
+        if (!es->hwndListBox && IsWindowVisible(es->hwndSelf) && !(es->style & ES_MULTILINE))
         {
             HDC hdc = GetDC(es->hwndSelf);
             EDIT_WM_Paint(es, hdc);
@@ -4042,9 +4063,37 @@ static void EDIT_WM_SetFocus(EDITSTATE *es)
 	EDIT_SetCaretPos(es, es->selection_end,
 			 es->flags & EF_AFTER_WRAP);
 	ShowCaret(es->hwndSelf);
-	notify_parent(es, EN_SETFOCUS);
+	if (!es->hwndListBox) notify_parent(es, EN_SETFOCUS);
 }
 
+
+static DWORD get_font_margins(HDC dc, const TEXTMETRICW *tm, BOOL unicode)
+{
+    ABC abc[256];
+    SHORT left = 0, right = 0;
+    UINT i;
+
+    if (!(tm->tmPitchAndFamily & (TMPF_VECTOR | TMPF_TRUETYPE)))
+        return MAKELONG(EC_USEFONTINFO, EC_USEFONTINFO);
+
+    if (unicode) {
+        if (!is_cjk_charset(dc) && !is_cjk_font(dc))
+            return MAKELONG(EC_USEFONTINFO, EC_USEFONTINFO);
+        if (!GetCharABCWidthsW(dc, 0, 255, abc))
+            return 0;
+    } else if (is_cjk_charset(dc)) {
+        if (!GetCharABCWidthsA(dc, 0, 255, abc))
+            return 0;
+    } else {
+        return MAKELONG(EC_USEFONTINFO, EC_USEFONTINFO);
+    }
+
+    for (i = 0; i < sizeof(abc) / sizeof(abc[0]); ++i) {
+        if (-abc[i].abcA > right) right = -abc[i].abcA;
+        if (-abc[i].abcC > left) left = -abc[i].abcC;
+    }
+    return MAKELONG(left, right);
+}
 
 /*********************************************************************
  *
@@ -4061,6 +4110,7 @@ static void EDIT_WM_SetFont(EDITSTATE *es, HFONT font, BOOL redraw)
 	HDC dc;
 	HFONT old_font = 0;
 	RECT clientRect;
+	DWORD margins;
 
 	es->font = font;
 	EDIT_InvalidateUniscribeData(es);
@@ -4070,6 +4120,7 @@ static void EDIT_WM_SetFont(EDITSTATE *es, HFONT font, BOOL redraw)
 	GetTextMetricsW(dc, &tm);
 	es->line_height = tm.tmHeight;
 	es->char_width = tm.tmAveCharWidth;
+	margins = get_font_margins(dc, &tm, es->is_unicode);
 	if (font)
 		SelectObject(dc, old_font);
 	ReleaseDC(es->hwndSelf, dc);
@@ -4077,8 +4128,9 @@ static void EDIT_WM_SetFont(EDITSTATE *es, HFONT font, BOOL redraw)
 	/* Reset the format rect and the margins */
 	GetClientRect(es->hwndSelf, &clientRect);
 	EDIT_SetRectNP(es, &clientRect);
-	EDIT_EM_SetMargins(es, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-			   EC_USEFONTINFO, EC_USEFONTINFO, FALSE);
+	if (margins)
+		EDIT_EM_SetMargins(es, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+				   LOWORD(margins), HIWORD(margins), FALSE);
 
 	if (es->style & ES_MULTILINE)
 		EDIT_BuildLineDefs_ML(es, 0, get_text_length(es), 0, NULL);
@@ -4961,10 +5013,18 @@ LRESULT WINAPI EditWndProc_common( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 		break;
 
 	case EM_SETSEL:
+	{
+		BOOL hide_caret = (es->flags & EF_FOCUSED) != 0;
+		if (hide_caret) HideCaret(hwnd);
+		if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 1;
 		EDIT_EM_SetSel(es, wParam, lParam, FALSE);
+		if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 1;
 		EDIT_EM_ScrollCaret(es);
+		if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 1;
+		if (hide_caret && (es->flags & EF_FOCUSED)) ShowCaret(hwnd);
 		result = 1;
 		break;
+	}
 
 	case EM_GETRECT:
 		if (lParam)
@@ -5526,10 +5586,10 @@ LRESULT WINAPI EditWndProc_common( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 		break;
 
 	case WM_IME_COMPOSITION:
-                EDIT_ImeComposition(hwnd, lParam, es);
-#ifdef __REACTOS__
-        result = DefWindowProcT(hwnd, msg, wParam, lParam, unicode);
-#endif
+		if ((lParam & GCS_RESULTSTR) && (es->ime_status & EIMES_GETCOMPSTRATONCE))
+		    EDIT_ImeComposition(hwnd, lParam, es);
+		else
+		    result = DefWindowProcT(hwnd, msg, wParam, lParam, unicode);
 		break;
 
 	case WM_IME_ENDCOMPOSITION:
@@ -5588,7 +5648,7 @@ LRESULT WINAPI EditWndProc_common( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
 #ifdef __REACTOS__
         /* ReactOS: check GetWindowLong in case es has been destroyed during processing */
-        if (IsWindow(hwnd) && es && msg != EM_GETHANDLE && GetWindowLongPtrW(hwnd, 0))
+        if (IsWindow(hwnd) && es && msg != EM_GETHANDLE && (EDITSTATE *)GetWindowLongPtrW(hwnd, 0) == es)
 #else
         if (IsWindow(hwnd) && es && msg != EM_GETHANDLE)
 #endif

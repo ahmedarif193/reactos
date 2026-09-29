@@ -1204,9 +1204,7 @@ ScrollTrackScrollBar(HWND Wnd, INT SBType, POINT Pt)
 static DWORD FASTCALL
 IntSetScrollInfo(HWND Wnd, LPCSCROLLINFO Info, BOOL bRedraw)
 {
-   DWORD Ret = NtUserSetScrollInfo(Wnd, SB_CTL, Info, bRedraw);
-   if (Ret) IntNotifyWinEvent(EVENT_OBJECT_VALUECHANGE, Wnd, OBJID_CLIENT, CHILDID_SELF, WEF_SETBYWNDPTI);
-   return Ret;
+   return NtUserSetScrollInfo(Wnd, SB_CTL, Info, bRedraw);
 }
 
 

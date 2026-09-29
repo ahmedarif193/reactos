@@ -140,7 +140,7 @@ ResetUserApiHook(PUSERAPIHOOK puah)
   puah->SetScrollInfo = RealSetScrollInfo;
   puah->EnableScrollBar = NtUserEnableScrollBar;
   puah->AdjustWindowRectEx = RealAdjustWindowRectEx;
-  puah->SetWindowRgn = NtUserSetWindowRgn;
+  puah->SetWindowRgn = RealSetWindowRgn;
   puah->PreWndProc = DefaultOWP;
   puah->PostWndProc = DefaultOWP;
   puah->WndProcArray.MsgBitArray = NULL;
@@ -351,7 +351,7 @@ USERAPIHOOK guah =
   RealSetScrollInfo,
   NtUserEnableScrollBar,
   RealAdjustWindowRectEx,
-  NtUserSetWindowRgn,
+  RealSetWindowRgn,
   DefaultOWP,
   DefaultOWP,
   {NULL, 0},

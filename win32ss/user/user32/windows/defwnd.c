@@ -333,7 +333,7 @@ UserSendUiUpdateMsg(HWND hwnd, LPARAM lParam)
 /* WARNING: Redundant with /ntuser/defwnd.c!UserPaintCaption !!
    Use TWOPARAM_ROUTINE_REDRAWTITLE/REDRAWFRAME or HWNDLOCK_ROUTINE_REDRAWFRAMEANDHOOK .
  */
-static void
+void
 UserPaintCaption(PWND pwnd, INT Flags)
 {
   if ( pwnd->style & WS_VISIBLE && (pwnd->style & WS_CAPTION) == WS_CAPTION )
@@ -353,7 +353,7 @@ UserPaintCaption(PWND pwnd, INT Flags)
          * RealUserDrawCaption in order to draw the classic caption when themes
          * are disabled but the themes service is enabled
          */
-        SendMessageW(UserHMGetHandle(pwnd), WM_NCUAHDRAWCAPTION, Flags, 0);
+        DefWindowProcW(UserHMGetHandle(pwnd), WM_NCUAHDRAWCAPTION, Flags, 0);
     }
     else
     {

@@ -56,6 +56,8 @@ typedef struct
     UINT      flags;       /* EndDialog() called for this dialog */
 } DIALOGINFO;
 
+static void DIALOG_UpdateDefaultButton(HWND hwndDlg, HWND hwndOld, HWND hwndNext);
+
 /* Dialog control information */
 typedef struct
 {
@@ -590,6 +592,7 @@ INT DIALOG_DoDialogBox( HWND hwnd, HWND owner )
         }
     }
     retval = dlgInfo->idResult;
+    IntNotifyWinEvent(EVENT_SYSTEM_DIALOGEND, hwnd, OBJID_WINDOW, CHILDID_SELF, 0);
     DestroyWindow( hwnd );
     return retval;
 }
@@ -772,7 +775,7 @@ static void DEFDLG_RestoreFocus( HWND hwnd, BOOL justActivate )
         /* If there are no WS_TABSTOP controls, set focus to the first visible,
            non-disabled control in the dialog */
         if (!infoPtr->hwndFocus) infoPtr->hwndFocus = GetNextDlgGroupItem( hwnd, 0, FALSE );
-        if (!IsWindow( infoPtr->hwndFocus )) return;
+        if (!IsWindow( infoPtr->hwndFocus )) infoPtr->hwndFocus = hwnd;
     }
     if (justActivate)
         SetFocus( infoPtr->hwndFocus );
@@ -1049,6 +1052,7 @@ static HWND DIALOG_CreateIndirect( HINSTANCE hInst, LPCVOID dlgTemplate,
             HWND focus = GetNextDlgTabItem( hwnd, 0, FALSE );
             if (!focus) focus = GetNextDlgGroupItem( hwnd, 0, FALSE );
             if (SendMessageW( hwnd, WM_INITDIALOG, (WPARAM)focus, param ) && IsWindow( hwnd ) &&
+                !(dlgInfo->flags & DF_END) &&
                 ((~template.style & DS_CONTROL) || (template.style & WS_VISIBLE)))
             {
                 /* By returning TRUE, app has requested a default focus assignment.
@@ -1061,11 +1065,12 @@ static HWND DIALOG_CreateIndirect( HINSTANCE hInst, LPCVOID dlgTemplate,
                     if (SendMessageW( focus, WM_GETDLGCODE, 0, 0 ) & DLGC_HASSETSEL)
                         SendMessageW( focus, EM_SETSEL, 0, MAXLONG );
                     SetFocus( focus );
+                    DIALOG_UpdateDefaultButton(hwnd, NULL, focus);
                 }
                 else
                 {
                     if (!(template.style & WS_CHILD))
-                        SetFocus( hwnd );
+                        DEFDLG_SetFocus( hwnd );
                 }
             }
 //// ReactOS see 43396, Fixes setting focus on Open and Close dialogs to the FileName edit control in OpenOffice.
@@ -1077,11 +1082,13 @@ static HWND DIALOG_CreateIndirect( HINSTANCE hInst, LPCVOID dlgTemplate,
         if (!(GetWindowLongPtrW( hwnd, GWL_STYLE ) & WS_CHILD))
             SendMessageW( hwnd, WM_CHANGEUISTATE, MAKEWPARAM(UIS_INITIALIZE, 0), 0);
 ////
-        if (template.style & WS_VISIBLE && !(GetWindowLongPtrW( hwnd, GWL_STYLE ) & WS_VISIBLE))
+        if (!(dlgInfo->flags & DF_END) && template.style & WS_VISIBLE &&
+            !(GetWindowLongPtrW( hwnd, GWL_STYLE ) & WS_VISIBLE))
         {
            ShowWindow( hwnd, SW_SHOWNORMAL );   /* SW_SHOW doesn't always work */
            UpdateWindow( hwnd );
-           IntNotifyWinEvent(EVENT_SYSTEM_DIALOGSTART, hwnd, OBJID_WINDOW, CHILDID_SELF, 0);
+           if (modal_owner)
+               IntNotifyWinEvent(EVENT_SYSTEM_DIALOGSTART, hwnd, OBJID_WINDOW, CHILDID_SELF, 0);
         }
         return hwnd;
     }
@@ -2596,6 +2603,27 @@ static HWND DIALOG_FindTabControl( HWND hwnd )
 }
 
 
+static void DIALOG_UpdateDefaultButton(HWND hwndDlg, HWND hwndOld, HWND hwndNext)
+{
+    DWORD next_code = SendMessageW(hwndNext, WM_GETDLGCODE, 0, 0);
+    DWORD old_code = hwndOld ? SendMessageW(hwndOld, WM_GETDLGCODE, 0, 0) : 0;
+    DWORD def_id = SendMessageW(hwndDlg, DM_GETDEFID, 0, 0);
+    HWND hwndDefault = HIWORD(def_id) == DC_HASDEFID ? GetDlgItem(hwndDlg, LOWORD(def_id)) : NULL;
+    HWND hwndTarget = next_code & (DLGC_DEFPUSHBUTTON | DLGC_UNDEFPUSHBUTTON) ? hwndNext : hwndDefault;
+
+    if (hwndOld != hwndTarget && old_code & DLGC_DEFPUSHBUTTON)
+        SendMessageW(hwndOld, BM_SETSTYLE, BS_PUSHBUTTON, TRUE);
+    if (hwndDefault && hwndDefault != hwndOld && hwndDefault != hwndTarget &&
+        SendMessageW(hwndDefault, WM_GETDLGCODE, 0, 0) & DLGC_DEFPUSHBUTTON)
+        SendMessageW(hwndDefault, BM_SETSTYLE, BS_PUSHBUTTON, TRUE);
+    if (hwndTarget)
+    {
+        DWORD code = hwndTarget == hwndNext ? next_code : SendMessageW(hwndTarget, WM_GETDLGCODE, 0, 0);
+        if (code & DLGC_UNDEFPUSHBUTTON)
+            SendMessageW(hwndTarget, BM_SETSTYLE, BS_DEFPUSHBUTTON, TRUE);
+    }
+}
+
 /*
  * @implemented
  */
@@ -2703,18 +2731,21 @@ IsDialogMessageW(
                       hwndNext && hwndFirst != hwndNext;
                       hwndNext = GetNextDlgGroupItem(hDlg, hwndNext, fPrevious))
                   {
-                      if (!(SendMessageW(hwndNext, WM_GETDLGCODE, 0, 0) & DLGC_STATIC))
+                      dlgCode = SendMessageW(hwndNext, WM_GETDLGCODE, lpMsg->wParam, (LPARAM)lpMsg);
+                      if (!(dlgCode & DLGC_STATIC))
                           break;
                   }
 
-                 if (hwndNext &&
-                     ((SendMessageW(hwndNext, WM_GETDLGCODE, lpMsg->wParam, (LPARAM)lpMsg) &
-                       (DLGC_BUTTON | DLGC_RADIOBUTTON)) == (DLGC_BUTTON | DLGC_RADIOBUTTON)))
+                 if (!hwndNext) return TRUE;
+                 if (hwndNext == hwndFirst)
+                     dlgCode = SendMessageW(hwndNext, WM_GETDLGCODE, lpMsg->wParam, (LPARAM)lpMsg);
+                 if ((dlgCode & (DLGC_BUTTON | DLGC_RADIOBUTTON)) == (DLGC_BUTTON | DLGC_RADIOBUTTON))
                  {
-                     SetFocus( hwndNext );
+                     DEFDLG_SetFocus( hwndNext );
+                     DIALOG_UpdateDefaultButton(hDlg, lpMsg->hwnd, hwndNext);
                      if ((GetWindowLongW( hwndNext, GWL_STYLE ) & BS_TYPEMASK) == BS_AUTORADIOBUTTON &&
                          SendMessageW( hwndNext, BM_GETCHECK, 0, 0 ) != BST_CHECKED)
-                         SendMessageW(hwndNext, BM_CLICK, 0, 0);
+                         SendMessageW(hwndNext, BM_CLICK, 1, 0);
                  }
                  else
                      SendMessageW( hDlg, WM_NEXTDLGCTL, (WPARAM)hwndNext, 1 );

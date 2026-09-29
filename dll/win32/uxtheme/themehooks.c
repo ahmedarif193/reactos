@@ -21,6 +21,9 @@ typedef struct _WND_DATA_ENTRY
     struct _WND_DATA_ENTRY *Next;
     HWND hWnd;
     PWND_DATA Data;
+    ULONG References;
+    ULONG AppRegionGeneration;
+    ULONG AppRegionOperations;
 } WND_DATA_ENTRY, *PWND_DATA_ENTRY;
 
 static PWND_DATA_ENTRY g_WndDataBuckets[WND_DATA_BUCKETS];
@@ -86,6 +89,9 @@ PWND_DATA ThemeGetWndData(HWND hWnd)
     }
     Entry->hWnd = hWnd;
     Entry->Data = pwndData;
+    Entry->References = 1;
+    Entry->AppRegionGeneration = 0;
+    Entry->AppRegionOperations = 0;
     Entry->Next = *Bucket;
     *Bucket = Entry;
     ReleaseSRWLockExclusive(&g_WndDataLock);
@@ -93,7 +99,53 @@ PWND_DATA ThemeGetWndData(HWND hWnd)
     return pwndData;
 }
 
-void ThemeDestroyWndData(HWND hWnd)
+static PWND_DATA_ENTRY
+ThemeReferenceWndData(HWND hWnd)
+{
+    PWND_DATA_ENTRY Entry;
+
+    if (!ThemeGetWndData(hWnd))
+        return NULL;
+    AcquireSRWLockExclusive(&g_WndDataLock);
+    for (Entry = *ThemeWndDataBucket(hWnd); Entry; Entry = Entry->Next)
+    {
+        if (Entry->hWnd == hWnd)
+        {
+            ++Entry->References;
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_WndDataLock);
+    return Entry;
+}
+
+static BOOL
+ThemeWndDataCurrentLocked(PWND_DATA_ENTRY Entry)
+{
+    PWND_DATA_ENTRY Current;
+
+    for (Current = *ThemeWndDataBucket(Entry->hWnd); Current; Current = Current->Next)
+        if (Current == Entry)
+            return TRUE;
+    return FALSE;
+}
+
+static void
+ThemeDereferenceWndData(PWND_DATA_ENTRY Entry)
+{
+    BOOL Free;
+
+    AcquireSRWLockExclusive(&g_WndDataLock);
+    Free = --Entry->References == 0;
+    ReleaseSRWLockExclusive(&g_WndDataLock);
+    if (Free)
+    {
+        HeapFree(GetProcessHeap(), 0, Entry->Data);
+        HeapFree(GetProcessHeap(), 0, Entry);
+    }
+}
+
+static void ThemeDestroyWndDataInternal(HWND hWnd, BOOL ClearRegion)
 {
     PWND_DATA_ENTRY Entry = NULL, *Link;
     PWND_DATA pwndData;
@@ -124,9 +176,8 @@ void ThemeDestroyWndData(HWND hWnd)
     }
 
     pwndData = Entry->Data;
-    HeapFree(GetProcessHeap(), 0, Entry);
 
-    if(pwndData->HasThemeRgn)
+    if (ClearRegion && pwndData->HasThemeRgn)
     {
         g_user32ApiHook.SetWindowRgn(hWnd, 0, TRUE);
     }
@@ -156,7 +207,12 @@ void ThemeDestroyWndData(HWND hWnd)
         CloseThemeData(pwndData->hthemeTab);
     }
 
-    HeapFree(GetProcessHeap(), 0, pwndData);
+    ThemeDereferenceWndData(Entry);
+}
+
+void ThemeDestroyWndData(HWND hWnd)
+{
+    ThemeDestroyWndDataInternal(hWnd, TRUE);
 }
 
 HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style)
@@ -240,18 +296,20 @@ static BOOL CALLBACK ThemeCleanupWndContext(HWND hWnd, LPARAM msg)
     return TRUE;
 }
 
-void SetThemeRegion(HWND hWnd)
+static BOOL SetThemeRegion(HWND hWnd, BOOL Force)
 {
     HTHEME hTheme;
     RECT rcWindow;
-    HRGN hrgn, hrgn1;
+    HRGN hrgn = NULL, hrgn1 = NULL;
     int CaptionHeight, iPart;
     WINDOWINFO wi;
+    BOOL Ret = FALSE;
 
     TRACE("SetThemeRegion %d\n", hWnd);
 
     wi.cbSize = sizeof(wi);
-    GetWindowInfo(hWnd, &wi);
+    if (!GetWindowInfo(hWnd, &wi))
+        return FALSE;
 
     /* Get the caption part id */
     if (wi.dwStyle & WS_MINIMIZE)
@@ -266,83 +324,110 @@ void SetThemeRegion(HWND hWnd)
     CaptionHeight = wi.cyWindowBorders;
     CaptionHeight += GetSystemMetrics(wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMCAPTION : SM_CYCAPTION );
 
-    GetWindowRect(hWnd, &rcWindow);
+    rcWindow = wi.rcWindow;
     rcWindow.right -= rcWindow.left;
     rcWindow.bottom = CaptionHeight;
     rcWindow.top = 0;
     rcWindow.left = 0;
 
     hTheme = GetNCCaptionTheme(hWnd, wi.dwStyle);
-    GetThemeBackgroundRegion(hTheme, 0, iPart, FS_ACTIVE, &rcWindow, &hrgn);
+    if (!hTheme || FAILED(GetThemeBackgroundRegion(hTheme, 0, iPart, FS_ACTIVE, &rcWindow, &hrgn)) || !hrgn)
+        goto Cleanup;
 
-    GetWindowRect(hWnd, &rcWindow);
+    rcWindow = wi.rcWindow;
     rcWindow.right -= rcWindow.left;
     rcWindow.bottom -= rcWindow.top;
     rcWindow.top = CaptionHeight;
     rcWindow.left = 0;
     hrgn1 = CreateRectRgnIndirect(&rcWindow);
+    if (!hrgn1 || CombineRgn(hrgn, hrgn, hrgn1, RGN_OR) == ERROR)
+        goto Cleanup;
 
-    CombineRgn(hrgn, hrgn, hrgn1, RGN_OR );
+    if (!Force && GetWindowRgn(hWnd, hrgn1) != ERROR && EqualRgn(hrgn, hrgn1))
+    {
+        Ret = TRUE;
+        goto Cleanup;
+    }
 
-    DeleteObject(hrgn1);
+    Ret = g_user32ApiHook.SetWindowRgn(hWnd, hrgn, TRUE) != 0;
+    if (Ret)
+        hrgn = NULL;
 
-    g_user32ApiHook.SetWindowRgn(hWnd, hrgn, TRUE);
+Cleanup:
+    if (hrgn1)
+        DeleteObject(hrgn1);
+    if (hrgn)
+        DeleteObject(hrgn);
+    return Ret;
 }
 
 int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
 {
+    PWND_DATA_ENTRY Entry;
     PWND_DATA pwndData;
     DWORD style;
+    ULONG Generation;
+    BOOL Ret, Clear, Force;
 
     style = GetWindowLongW(hWnd, GWL_STYLE);
 
-    if ((pWinPos->flags & (SWP_STATECHANGED | SWP_UXTHEME_REFRAME)) == SWP_STATECHANGED &&
-        (GetWindowLongW(hWnd, GWL_EXSTYLE) & WS_EX_MDICHILD) && (style & WS_MAXIMIZE))
-    {
-        SetWindowPos(hWnd, NULL, 0, 0, 0, 0,
-                     SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_UXTHEME_REFRAME);
-    }
-
     /* Get theme data for this window */
-    pwndData = ThemeGetWndData(hWnd);
-    if (pwndData == NULL)
+    Entry = ThemeReferenceWndData(hWnd);
+    if (Entry == NULL)
         return 0;
+    pwndData = Entry->Data;
+    Clear = (style & WS_CAPTION) != WS_CAPTION || !UXTHEME_IsAppThemed() ||
+            !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT) ||
+            (!(style & WS_CHILD) && IsCompositionActive());
+    AcquireSRWLockExclusive(&g_WndDataLock);
+    if (!ThemeWndDataCurrentLocked(Entry))
+        goto Unlock;
 
     /* We don't touch the shape of the window if the application sets it on its own */
     if (pwndData->HasAppDefinedRgn != FALSE)
-        return 0;
+        goto Unlock;
 
     /* Calling SetWindowRgn will call SetWindowPos again so we need to avoid this recursion */
     if (pwndData->UpdatingRgn != FALSE)
-        return 0;
+        goto Unlock;
 
     /* A former caption must not keep clipping a borderless window to the
      * old themed frame, even when the style change did not resize it. */
-    if ((style & WS_CAPTION) != WS_CAPTION || !UXTHEME_IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT) ||
-        IsCompositionActive())
+    if (Clear)
     {
-        if(pwndData->HasThemeRgn)
-        {
-            pwndData->UpdatingRgn = TRUE;
-            if (g_user32ApiHook.SetWindowRgn(hWnd, 0, TRUE))
-                pwndData->HasThemeRgn = FALSE;
-            pwndData->UpdatingRgn = FALSE;
-        }
-        return 0;
+        if (!pwndData->HasThemeRgn)
+            goto Unlock;
+    }
+    else
+    {
+        /* Do not rebuild an unchanged themed frame. */
+        if ((pWinPos->flags & SWP_NOSIZE) != 0 && pwndData->DirtyThemeRegion == FALSE)
+            goto Unlock;
     }
 
-    /* Do not rebuild an unchanged themed frame. */
-    if ((pWinPos->flags & SWP_NOSIZE) != 0 && pwndData->DirtyThemeRegion == FALSE)
-        return 0;
-
-    pwndData->DirtyThemeRegion = FALSE;
-    pwndData->HasThemeRgn = TRUE;
+    Generation = Entry->AppRegionGeneration;
+    Force = pwndData->DirtyThemeRegion;
     pwndData->UpdatingRgn = TRUE;
-    SetThemeRegion(hWnd);
-    pwndData->UpdatingRgn = FALSE;
+    ReleaseSRWLockExclusive(&g_WndDataLock);
+    Ret = Clear ? g_user32ApiHook.SetWindowRgn(hWnd, 0, TRUE) != 0 : SetThemeRegion(hWnd, Force);
+    AcquireSRWLockExclusive(&g_WndDataLock);
+    if (ThemeWndDataCurrentLocked(Entry))
+    {
+        if (Entry->AppRegionGeneration == Generation)
+        {
+            if (Ret)
+                pwndData->HasThemeRgn = !Clear;
+            if (!Clear)
+                pwndData->DirtyThemeRegion = !Ret;
+        }
+        pwndData->UpdatingRgn = FALSE;
+    }
 
-     return 0;
- }
+Unlock:
+    ReleaseSRWLockExclusive(&g_WndDataLock);
+    ThemeDereferenceWndData(Entry);
+    return 0;
+}
 
 /**********************************************************************
  *      Hook Functions
@@ -414,10 +499,26 @@ ThemeDefWindowProcA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 static LRESULT CALLBACK
 ThemePreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR ret,PDWORD unknown)
 {
-    if ((Msg == WM_WINDOWPOSCHANGING || Msg == WM_WINDOWPOSCHANGED) &&
-        (((WINDOWPOS *)lParam)->flags & SWP_UXTHEME_REFRAME))
+    if (Msg == WM_WINDOWPOSCHANGING || Msg == WM_WINDOWPOSCHANGED)
     {
-        return TRUE;
+        PWND_DATA_ENTRY Entry;
+        BOOL InternalRegion = FALSE;
+
+        AcquireSRWLockShared(&g_WndDataLock);
+        for (Entry = *ThemeWndDataBucket(hWnd); Entry; Entry = Entry->Next)
+        {
+            if (Entry->hWnd == hWnd)
+            {
+                InternalRegion = Entry->Data->UpdatingRgn && Entry->AppRegionOperations == 0;
+                break;
+            }
+        }
+        ReleaseSRWLockShared(&g_WndDataLock);
+        if (InternalRegion)
+        {
+            *(LRESULT *)ret = 0;
+            return TRUE;
+        }
     }
 
     switch(Msg)
@@ -513,7 +614,7 @@ ThemePostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR
         case WM_NCDESTROY:
         {
             UXTHEME_DestroyDialogBrush(hWnd);
-            ThemeDestroyWndData(hWnd);
+            ThemeDestroyWndDataInternal(hWnd, FALSE);
             return 0;
         }
     }
@@ -712,16 +813,48 @@ ThemeDlgPostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_
 
 int WINAPI ThemeSetWindowRgn(HWND hWnd, HRGN hRgn, BOOL bRedraw)
 {
-    PWND_DATA pwndData = ThemeGetWndData(hWnd);
-    if(pwndData)
-    {
-        pwndData->HasAppDefinedRgn = (hRgn != NULL);
-        pwndData->HasThemeRgn = FALSE;
-        if (hRgn == NULL)
-            pwndData->DirtyThemeRegion = TRUE;
-    }
+    PWND_DATA_ENTRY Entry = ThemeReferenceWndData(hWnd);
+    PWND_DATA pwndData;
+    ULONG Generation;
+    BOOL HadAppRegion, HadThemeRegion, WasDirty;
+    int Ret;
 
-    return g_user32ApiHook.SetWindowRgn(hWnd, hRgn, bRedraw);
+    if (!Entry)
+        return g_user32ApiHook.SetWindowRgn(hWnd, hRgn, bRedraw);
+    pwndData = Entry->Data;
+    AcquireSRWLockExclusive(&g_WndDataLock);
+    if (!ThemeWndDataCurrentLocked(Entry))
+    {
+        ReleaseSRWLockExclusive(&g_WndDataLock);
+        ThemeDereferenceWndData(Entry);
+        return g_user32ApiHook.SetWindowRgn(hWnd, hRgn, bRedraw);
+    }
+    Generation = ++Entry->AppRegionGeneration;
+    HadAppRegion = pwndData->HasAppDefinedRgn;
+    HadThemeRegion = pwndData->HasThemeRgn;
+    WasDirty = pwndData->DirtyThemeRegion;
+    pwndData->HasAppDefinedRgn = hRgn != NULL;
+    pwndData->HasThemeRgn = FALSE;
+    if (!hRgn)
+        pwndData->DirtyThemeRegion = TRUE;
+    ++Entry->AppRegionOperations;
+    ReleaseSRWLockExclusive(&g_WndDataLock);
+    Ret = g_user32ApiHook.SetWindowRgn(hWnd, hRgn, bRedraw);
+    AcquireSRWLockExclusive(&g_WndDataLock);
+    --Entry->AppRegionOperations;
+    if (ThemeWndDataCurrentLocked(Entry))
+    {
+        if (!Ret && Entry->AppRegionGeneration == Generation)
+        {
+            Entry->AppRegionGeneration = Generation - 1;
+            pwndData->HasAppDefinedRgn = HadAppRegion;
+            pwndData->HasThemeRgn = HadThemeRegion;
+            pwndData->DirtyThemeRegion = WasDirty;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_WndDataLock);
+    ThemeDereferenceWndData(Entry);
+    return Ret;
 }
 
 BOOL WINAPI ThemeGetScrollInfo(HWND hwnd, int fnBar, LPSCROLLINFO lpsi)

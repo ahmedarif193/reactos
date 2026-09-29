@@ -39,8 +39,9 @@ DesktopWndProcW(HWND Wnd,
 
    switch(Msg)
    {
-      case WM_ERASEBKGND:
       case WM_NCCREATE:
+          if (!DefWindowProcW(Wnd, Msg, wParam, lParam)) return FALSE;
+      case WM_ERASEBKGND:
       case WM_CREATE:
       case WM_CLOSE:
       case WM_DISPLAYCHANGE:
