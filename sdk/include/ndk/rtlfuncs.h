@@ -3379,6 +3379,17 @@ RtlIsDosDeviceName_Ustr(
 );
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGenerate8dot3Name(
+    _In_ PCUNICODE_STRING Name,
+    _In_ BOOLEAN AllowExtendedCharacters,
+    _Inout_ PGENERATE_NAME_CONTEXT Context,
+    _Inout_ PUNICODE_STRING Name8dot3
+);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTSYSAPI
 BOOLEAN

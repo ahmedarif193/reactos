@@ -956,7 +956,7 @@
 @ stdcall -version=0x600+ RtlFreeUserStack(ptr)
 @ stdcall -version=0x502 RtlFreeUserThreadStack(ptr ptr)
 @ stdcall RtlGUIDFromString(ptr ptr)
-@ stdcall RtlGenerate8dot3Name(ptr ptr long ptr)
+@ stdcall RtlGenerate8dot3Name(ptr long ptr ptr)
 @ stdcall RtlGetAce(ptr long ptr)
 @ stdcall RtlGetActiveActivationContext(ptr)
 @ stdcall RtlGetCallersAddress(ptr ptr)

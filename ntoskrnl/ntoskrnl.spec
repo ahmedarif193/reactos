@@ -1272,7 +1272,7 @@
 @ stdcall RtlFreeRangeList(ptr)
 @ stdcall RtlFreeUnicodeString(ptr)
 @ stdcall RtlGUIDFromString(ptr ptr)
-@ stdcall RtlGenerate8dot3Name(ptr ptr long ptr)
+@ stdcall RtlGenerate8dot3Name(ptr long ptr ptr)
 @ stdcall RtlGetAce(ptr long ptr)
 @ stdcall RtlGetCallersAddress(ptr ptr)
 @ stdcall RtlGetCompressionWorkSpaceSize(long ptr ptr)

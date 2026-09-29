@@ -1623,7 +1623,6 @@ RtlUpcaseUnicodeToOemN(
   _In_reads_bytes_(BytesInUnicodeString) PCWCH UnicodeString,
   _In_ ULONG BytesInUnicodeString);
 
-#if (NTDDI_VERSION >= NTDDI_VISTASP1)
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSYSAPI
 NTSTATUS
@@ -1633,17 +1632,6 @@ RtlGenerate8dot3Name(
   _In_ BOOLEAN AllowExtendedCharacters,
   _Inout_ PGENERATE_NAME_CONTEXT Context,
   _Inout_ PUNICODE_STRING Name8dot3);
-#else
-_IRQL_requires_max_(PASSIVE_LEVEL)
-NTSYSAPI
-VOID
-NTAPI
-RtlGenerate8dot3Name(
-  _In_ PCUNICODE_STRING Name,
-  _In_ BOOLEAN AllowExtendedCharacters,
-  _Inout_ PGENERATE_NAME_CONTEXT Context,
-  _Inout_ PUNICODE_STRING Name8dot3);
-#endif
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
