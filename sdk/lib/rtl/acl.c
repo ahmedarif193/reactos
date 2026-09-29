@@ -654,7 +654,7 @@ RtlAddAce(IN PACL Acl,
 
     /* Update the header and return */
     Acl->AceCount += NewAceCount;
-    Acl->AclRevision = (UCHAR)min(Acl->AclRevision, AclRevision);
+    Acl->AclRevision = (UCHAR)max(Acl->AclRevision, AclRevision);
     return STATUS_SUCCESS;
 }
 

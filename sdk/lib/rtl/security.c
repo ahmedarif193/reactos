@@ -14,6 +14,534 @@
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+typedef struct _RTL_SECURITY_ACE_VIEW
+{
+    PSID Sid;
+    ULONG SidOffset;
+    ULONG SidLength;
+    GUID *InheritedType;
+    BOOLEAN MapMask;
+    BOOLEAN Opaque;
+} RTL_SECURITY_ACE_VIEW;
+
+typedef struct _RTL_SECURITY_ACL_BUFFER
+{
+    PACL Acl;
+    ULONG Length;
+    ULONG Count;
+    ULONG Capacity;
+    UCHAR Revision;
+} RTL_SECURITY_ACL_BUFFER;
+
+static NTSTATUS
+RtlpSecurityAceView(PACE_HEADER Ace, RTL_SECURITY_ACE_VIEW *View)
+{
+    ULONG Offset = FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart);
+    ULONG Flags;
+
+    RtlZeroMemory(View, sizeof(*View));
+    View->MapMask = TRUE;
+    switch (Ace->AceType)
+    {
+        case ACCESS_ALLOWED_ACE_TYPE:
+        case ACCESS_DENIED_ACE_TYPE:
+        case SYSTEM_AUDIT_ACE_TYPE:
+        case SYSTEM_ALARM_ACE_TYPE:
+            break;
+        case ACCESS_ALLOWED_CALLBACK_ACE_TYPE:
+        case ACCESS_DENIED_CALLBACK_ACE_TYPE:
+        case SYSTEM_AUDIT_CALLBACK_ACE_TYPE:
+        case SYSTEM_ALARM_CALLBACK_ACE_TYPE:
+            View->Opaque = TRUE;
+            break;
+        case ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE:
+        case ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE:
+        case SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE:
+        case SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE:
+            View->Opaque = TRUE;
+        case ACCESS_ALLOWED_OBJECT_ACE_TYPE:
+        case ACCESS_DENIED_OBJECT_ACE_TYPE:
+        case SYSTEM_AUDIT_OBJECT_ACE_TYPE:
+        case SYSTEM_ALARM_OBJECT_ACE_TYPE:
+            Offset = FIELD_OFFSET(ACCESS_ALLOWED_OBJECT_ACE, ObjectType);
+            if (Ace->AceSize < Offset) return STATUS_INVALID_ACL;
+            Flags = ((PACCESS_ALLOWED_OBJECT_ACE)Ace)->Flags;
+            if (Flags & ~(ACE_OBJECT_TYPE_PRESENT | ACE_INHERITED_OBJECT_TYPE_PRESENT))
+                return STATUS_INVALID_ACL;
+            if (Flags & ACE_OBJECT_TYPE_PRESENT) Offset += sizeof(GUID);
+            if (Flags & ACE_INHERITED_OBJECT_TYPE_PRESENT)
+            {
+                View->InheritedType = (GUID *)((PUCHAR)Ace + Offset);
+                Offset += sizeof(GUID);
+            }
+            break;
+        case SYSTEM_MANDATORY_LABEL_ACE_TYPE:
+            View->MapMask = FALSE;
+            break;
+        default:
+            return STATUS_NOT_IMPLEMENTED;
+    }
+
+    if (Ace->AceSize < Offset + FIELD_OFFSET(SID, SubAuthority))
+        return STATUS_INVALID_ACL;
+    View->Sid = (PSID)((PUCHAR)Ace + Offset);
+    View->SidLength = RtlLengthRequiredSid(((PISID)View->Sid)->SubAuthorityCount);
+    if (View->SidLength > Ace->AceSize - Offset || !RtlValidSid(View->Sid))
+        return STATUS_INVALID_ACL;
+    View->SidOffset = Offset;
+    return STATUS_SUCCESS;
+}
+
+static PSID
+RtlpSecurityMapSid(PSID Sid, PSID Owner, PSID Group)
+{
+    static const SID_IDENTIFIER_AUTHORITY CreatorAuthority = SECURITY_CREATOR_SID_AUTHORITY;
+    PISID Isid = Sid;
+
+    if (Isid->SubAuthorityCount == 1 &&
+        !memcmp(&Isid->IdentifierAuthority, &CreatorAuthority, sizeof(CreatorAuthority)))
+    {
+        if (Isid->SubAuthority[0] == SECURITY_CREATOR_OWNER_RID) return Owner;
+        if (Isid->SubAuthority[0] == SECURITY_CREATOR_GROUP_RID) return Group;
+    }
+    return Sid;
+}
+
+static NTSTATUS
+RtlpSecurityEmitAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
+                   UCHAR Flags, BOOLEAN Map, PSID Owner, PSID Group,
+                   PGENERIC_MAPPING Mapping, PACCESS_MASK OverrideMask)
+{
+    RTL_SECURITY_ACE_VIEW View;
+    NTSTATUS Status;
+    PSID Sid;
+    ULONG Length, SidLength;
+    PACE_HEADER Dest;
+    ACCESS_MASK Mask;
+
+    Status = RtlpSecurityAceView(Ace, &View);
+    if (!NT_SUCCESS(Status)) return Status;
+    Sid = Map && View.MapMask ? RtlpSecurityMapSid(View.Sid, Owner, Group) : View.Sid;
+    if (!Sid) return STATUS_INVALID_SID;
+    SidLength = RtlLengthSid(Sid);
+    Length = Ace->AceSize - View.SidLength + SidLength;
+    if (Length > MAXUSHORT || Buffer->Length > MAXUSHORT - Length ||
+        Buffer->Count == MAXUSHORT) return STATUS_ALLOTTED_SPACE_EXCEEDED;
+    if (Buffer->Acl && (Buffer->Length > Buffer->Capacity ||
+                        Length > Buffer->Capacity - Buffer->Length))
+        return STATUS_BUFFER_TOO_SMALL;
+    if (Buffer->Acl)
+    {
+        Dest = (PACE_HEADER)((PUCHAR)Buffer->Acl + Buffer->Length);
+        RtlCopyMemory(Dest, Ace, View.SidOffset);
+        RtlCopyMemory((PUCHAR)Dest + View.SidOffset, Sid, SidLength);
+        RtlCopyMemory((PUCHAR)Dest + View.SidOffset + SidLength,
+                      (PUCHAR)Ace + View.SidOffset + View.SidLength,
+                      Ace->AceSize - View.SidOffset - View.SidLength);
+        Dest->AceFlags = Flags;
+        Dest->AceSize = (USHORT)Length;
+        Mask = OverrideMask ? *OverrideMask : ((PACCESS_ALLOWED_ACE)Ace)->Mask;
+        if (Map && View.MapMask) RtlMapGenericMask(&Mask, Mapping);
+        ((PACCESS_ALLOWED_ACE)Dest)->Mask = Mask;
+    }
+    Buffer->Length += Length;
+    Buffer->Count++;
+    if (View.SidOffset > FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart))
+        Buffer->Revision = ACL_REVISION_DS;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+RtlpSecurityTransformAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
+                        BOOLEAN Parent, BOOLEAN ClearInherited, BOOLEAN Container,
+                        LPGUID *Types, ULONG TypeCount, PSID Owner, PSID Group,
+                        PGENERIC_MAPPING Mapping)
+{
+    RTL_SECURITY_ACE_VIEW View;
+    UCHAR Flags = Ace->AceFlags, EffectiveFlags;
+    BOOLEAN Effective, Propagate, Mappable, Matches = TRUE;
+    ACCESS_MASK Mask;
+    ULONG Index;
+    NTSTATUS Status;
+
+    Status = RtlpSecurityAceView(Ace, &View);
+    if (!NT_SUCCESS(Status)) return Status;
+    Mask = ((PACCESS_ALLOWED_ACE)Ace)->Mask;
+    Mappable = View.MapMask && ((Mask & (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL)) ||
+                               RtlpSecurityMapSid(View.Sid, Owner, Group) != View.Sid);
+    if (ClearInherited) Flags &= ~INHERITED_ACE;
+    if (Parent)
+    {
+        if (View.InheritedType)
+        {
+            Matches = FALSE;
+            for (Index = 0; Index < TypeCount; ++Index)
+                if (Types[Index] && !memcmp(Types[Index], View.InheritedType, sizeof(GUID)))
+                    Matches = TRUE;
+        }
+        Effective = Matches && (Flags & (Container ? CONTAINER_INHERIT_ACE : OBJECT_INHERIT_ACE));
+        Propagate = Container && (Flags & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) &&
+                    !(Flags & NO_PROPAGATE_INHERIT_ACE);
+        Flags |= INHERITED_ACE;
+        EffectiveFlags = Flags & ~(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE |
+                                   NO_PROPAGATE_INHERIT_ACE | INHERIT_ONLY_ACE);
+        if (Effective && Propagate && !Mappable)
+            return RtlpSecurityEmitAce(Buffer, Ace, Flags & ~INHERIT_ONLY_ACE, TRUE,
+                                      Owner, Group, Mapping, NULL);
+        if (Effective)
+        {
+            Status = RtlpSecurityEmitAce(Buffer, Ace, EffectiveFlags, TRUE,
+                                        Owner, Group, Mapping, NULL);
+            if (!NT_SUCCESS(Status)) return Status;
+        }
+        if (Propagate)
+            return RtlpSecurityEmitAce(Buffer, Ace, Flags | INHERIT_ONLY_ACE, FALSE,
+                                      Owner, Group, Mapping, NULL);
+        return STATUS_SUCCESS;
+    }
+
+    if (!(Flags & INHERIT_ONLY_ACE) && Mappable &&
+        (Flags & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)))
+    {
+        if (ClearInherited) return STATUS_NOT_IMPLEMENTED;
+        EffectiveFlags = (Flags & ~(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE |
+                                    NO_PROPAGATE_INHERIT_ACE | INHERIT_ONLY_ACE)) | INHERITED_ACE;
+        Status = RtlpSecurityEmitAce(Buffer, Ace, EffectiveFlags, TRUE,
+                                    Owner, Group, Mapping, NULL);
+        if (!NT_SUCCESS(Status)) return Status;
+        if (Container && !(Flags & NO_PROPAGATE_INHERIT_ACE))
+            return RtlpSecurityEmitAce(Buffer, Ace, Flags | INHERIT_ONLY_ACE, FALSE,
+                                      Owner, Group, Mapping, NULL);
+        return STATUS_SUCCESS;
+    }
+    return RtlpSecurityEmitAce(Buffer, Ace, Flags, !(Flags & INHERIT_ONLY_ACE),
+                              Owner, Group, Mapping, NULL);
+}
+
+static NTSTATUS
+RtlpSecurityTransformAcl(PACL Source, BOOLEAN Parent, BOOLEAN ClearInherited,
+                        INT Filter, BOOLEAN Container, LPGUID *Types, ULONG TypeCount,
+                        PSID Owner, PSID Group, PGENERIC_MAPPING Mapping, PACL *Result)
+{
+    RTL_SECURITY_ACL_BUFFER Buffer;
+    PACE_HEADER Ace;
+    ULONG Index, Pass;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    *Result = NULL;
+    if (!Source) return STATUS_SUCCESS;
+    if (!RtlValidAcl(Source)) return STATUS_INVALID_ACL;
+    RtlZeroMemory(&Buffer, sizeof(Buffer));
+    for (Pass = 0; Pass < 2; ++Pass)
+    {
+        Buffer.Length = sizeof(ACL);
+        Buffer.Count = 0;
+        Buffer.Revision = Source->AclRevision;
+        for (Index = 0; Index < Source->AceCount; ++Index)
+        {
+            Status = RtlGetAce(Source, Index, (PVOID *)&Ace);
+            if (!NT_SUCCESS(Status)) goto Done;
+            if (Filter >= 0 && !!(Ace->AceFlags & INHERITED_ACE) != Filter) continue;
+            Status = RtlpSecurityTransformAce(&Buffer, Ace, Parent, ClearInherited,
+                                              Container, Types, TypeCount, Owner, Group, Mapping);
+            if (!NT_SUCCESS(Status)) goto Done;
+        }
+        if (!Pass)
+        {
+            Buffer.Capacity = Buffer.Length;
+            Buffer.Acl = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Buffer.Length);
+            if (!Buffer.Acl)
+            {
+                Status = STATUS_NO_MEMORY;
+                goto Done;
+            }
+        }
+    }
+    Buffer.Acl->AclRevision = Buffer.Revision;
+    Buffer.Acl->AclSize = (USHORT)Buffer.Length;
+    Buffer.Acl->AceCount = (USHORT)Buffer.Count;
+    *Result = Buffer.Acl;
+    return STATUS_SUCCESS;
+Done:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer.Acl);
+    return Status;
+}
+
+static NTSTATUS
+RtlpSecurityMergeAcls(PACL First, PACL Second, PACL *Result)
+{
+    ACL_SIZE_INFORMATION FirstSize = {0}, SecondSize = {0};
+    ULONG Length;
+    PACL Acl;
+    NTSTATUS Status;
+
+    *Result = NULL;
+    if (!First && !Second) return STATUS_SUCCESS;
+    FirstSize.AclBytesInUse = SecondSize.AclBytesInUse = sizeof(ACL);
+    if (First)
+    {
+        Status = RtlQueryInformationAcl(First, &FirstSize, sizeof(FirstSize), AclSizeInformation);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+    if (Second)
+    {
+        Status = RtlQueryInformationAcl(Second, &SecondSize, sizeof(SecondSize), AclSizeInformation);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+    Length = FirstSize.AclBytesInUse + SecondSize.AclBytesInUse - sizeof(ACL);
+    if (Length > MAXUSHORT || FirstSize.AceCount + SecondSize.AceCount > MAXUSHORT)
+        return STATUS_ALLOTTED_SPACE_EXCEEDED;
+    Acl = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Length);
+    if (!Acl) return STATUS_NO_MEMORY;
+    Acl->AclRevision = max(First ? First->AclRevision : ACL_REVISION,
+                           Second ? Second->AclRevision : ACL_REVISION);
+    Acl->AclSize = (USHORT)Length;
+    Acl->AceCount = (USHORT)(FirstSize.AceCount + SecondSize.AceCount);
+    if (First) RtlCopyMemory(Acl + 1, First + 1, FirstSize.AclBytesInUse - sizeof(ACL));
+    if (Second) RtlCopyMemory((PUCHAR)Acl + FirstSize.AclBytesInUse,
+                              Second + 1, SecondSize.AclBytesInUse - sizeof(ACL));
+    *Result = Acl;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+RtlpSecurityReadDescriptor(PSECURITY_DESCRIPTOR Source, PISECURITY_DESCRIPTOR Dest)
+{
+    BOOLEAN Present, Defaulted;
+    ULONG Revision;
+    NTSTATUS Status;
+
+    RtlCreateSecurityDescriptor(Dest, SECURITY_DESCRIPTOR_REVISION);
+    if (!Source) return STATUS_SUCCESS;
+    if (!RtlValidSecurityDescriptor(Source)) return STATUS_INVALID_SECURITY_DESCR;
+    Status = RtlGetControlSecurityDescriptor(Source, &Dest->Control, &Revision);
+    if (!NT_SUCCESS(Status)) return Status;
+    Dest->Control &= ~SE_SELF_RELATIVE;
+    Dest->Sbz1 = ((PISECURITY_DESCRIPTOR)Source)->Sbz1;
+    RtlGetOwnerSecurityDescriptor(Source, &Dest->Owner, &Defaulted);
+    RtlGetGroupSecurityDescriptor(Source, &Dest->Group, &Defaulted);
+    RtlGetDaclSecurityDescriptor(Source, &Present, &Dest->Dacl, &Defaulted);
+    RtlGetSaclSecurityDescriptor(Source, &Present, &Dest->Sacl, &Defaulted);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+RtlpSecurityPublishDescriptor(PSECURITY_DESCRIPTOR Source, PSECURITY_DESCRIPTOR *Dest)
+{
+    ULONG Size = 0;
+    PSECURITY_DESCRIPTOR Buffer;
+    NTSTATUS Status;
+
+    Status = RtlMakeSelfRelativeSD(Source, NULL, &Size);
+    if (Status != STATUS_BUFFER_TOO_SMALL) return Status;
+    Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Size);
+    if (!Buffer) return STATUS_NO_MEMORY;
+    Status = RtlMakeSelfRelativeSD(Source, Buffer, &Size);
+    if (!NT_SUCCESS(Status)) RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+    else *Dest = Buffer;
+    return Status;
+}
+
+static NTSTATUS
+RtlpSecurityQueryToken(HANDLE Token, TOKEN_INFORMATION_CLASS Class, PVOID *Result)
+{
+    ULONG Size = 0;
+    NTSTATUS Status;
+
+    *Result = NULL;
+    if (!Token) return STATUS_NO_TOKEN;
+    Status = NtQueryInformationToken(Token, Class, NULL, 0, &Size);
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+        return NT_SUCCESS(Status) ? STATUS_INVALID_PARAMETER : Status;
+    if (!Size) return STATUS_INVALID_PARAMETER;
+    *Result = RtlAllocateHeap(RtlGetProcessHeap(), 0, Size);
+    if (!*Result) return STATUS_NO_MEMORY;
+    Status = NtQueryInformationToken(Token, Class, *Result, Size, &Size);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, *Result);
+        *Result = NULL;
+    }
+    return Status;
+}
+
+static NTSTATUS
+RtlpSecurityValidateOwner(HANDLE Token, PSID Owner)
+{
+    PTOKEN_USER User = NULL;
+    PTOKEN_GROUPS Groups = NULL;
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = RtlpSecurityQueryToken(Token, TokenUser, (PVOID *)&User);
+    if (!NT_SUCCESS(Status)) return Status;
+    if (RtlEqualSid(User->User.Sid, Owner)) goto Done;
+    Status = RtlpSecurityQueryToken(Token, TokenGroups, (PVOID *)&Groups);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Status = STATUS_INVALID_OWNER;
+    for (Index = 0; Index < Groups->GroupCount; ++Index)
+        if ((Groups->Groups[Index].Attributes & (SE_GROUP_OWNER | SE_GROUP_USE_FOR_DENY_ONLY)) == SE_GROUP_OWNER &&
+            RtlEqualSid(Groups->Groups[Index].Sid, Owner))
+        {
+            Status = STATUS_SUCCESS;
+            break;
+        }
+Done:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Groups);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, User);
+    return Status;
+}
+
+static NTSTATUS
+RtlpSecurityCheckPrivilege(HANDLE Token)
+{
+    PRIVILEGE_SET Privileges = {0};
+    BOOLEAN Result;
+    NTSTATUS Status;
+
+    if (!Token) return STATUS_NO_TOKEN;
+    Privileges.PrivilegeCount = 1;
+    Privileges.Control = PRIVILEGE_SET_ALL_NECESSARY;
+    Privileges.Privilege[0].Luid.LowPart = SE_SECURITY_PRIVILEGE;
+    Status = NtPrivilegeCheck(Token, &Privileges, &Result);
+    if (!NT_SUCCESS(Status)) return Status;
+    return Result ? STATUS_SUCCESS : STATUS_PRIVILEGE_NOT_HELD;
+}
+
+
+
+static NTSTATUS
+RtlpSecurityHasOwnerRights(PACL Acl, PBOOLEAN Found)
+{
+    static const SID_IDENTIFIER_AUTHORITY CreatorAuthority = SECURITY_CREATOR_SID_AUTHORITY;
+    RTL_SECURITY_ACE_VIEW View;
+    PACE_HEADER Ace;
+    PISID Sid;
+    ULONG Index;
+    NTSTATUS Status;
+
+    *Found = FALSE;
+    if (!Acl) return STATUS_SUCCESS;
+    if (!RtlValidAcl(Acl)) return STATUS_INVALID_ACL;
+    for (Index = 0; Index < Acl->AceCount; ++Index)
+    {
+        Status = RtlGetAce(Acl, Index, (PVOID *)&Ace);
+        if (!NT_SUCCESS(Status)) return Status;
+        Status = RtlpSecurityAceView(Ace, &View);
+        if (!NT_SUCCESS(Status)) return Status;
+        Sid = View.Sid;
+        if (Sid->SubAuthorityCount == 1 &&
+            Sid->SubAuthority[0] == SECURITY_CREATOR_OWNER_RIGHTS_RID &&
+            !memcmp(&Sid->IdentifierAuthority, &CreatorAuthority, sizeof(CreatorAuthority)))
+        {
+            *Found = TRUE;
+            break;
+        }
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+RtlpSecurityCheckOwnerRestriction(PACL ParentAcl, PACL DefaultAcl, HANDLE Token)
+{
+    PSECURITY_DESCRIPTOR TokenDescriptor = NULL;
+    SECURITY_DESCRIPTOR Descriptor;
+    HANDLE QueryToken = Token, Duplicate = NULL;
+    ULONG Length = 0;
+    BOOLEAN Found;
+    NTSTATUS Status;
+
+    Status = RtlpSecurityHasOwnerRights(ParentAcl, &Found);
+    if (!NT_SUCCESS(Status)) return Status;
+    if (Found) return STATUS_NOT_IMPLEMENTED;
+    Status = RtlpSecurityHasOwnerRights(DefaultAcl, &Found);
+    if (!NT_SUCCESS(Status)) return Status;
+    if (Found) return STATUS_NOT_IMPLEMENTED;
+    if (!Token) return STATUS_SUCCESS;
+    Status = NtQuerySecurityObject(Token, DACL_SECURITY_INFORMATION, NULL, 0, &Length);
+    if (Status == STATUS_ACCESS_DENIED)
+    {
+        Status = NtDuplicateObject(NtCurrentProcess(), Token, NtCurrentProcess(),
+                                   &Duplicate, READ_CONTROL, 0, 0);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Status == STATUS_ACCESS_DENIED) Status = STATUS_NOT_IMPLEMENTED;
+            goto Done;
+        }
+        QueryToken = Duplicate;
+        Status = NtQuerySecurityObject(QueryToken, DACL_SECURITY_INFORMATION, NULL, 0, &Length);
+    }
+    if (Status == STATUS_ACCESS_DENIED)
+    {
+        Status = STATUS_NOT_IMPLEMENTED;
+        goto Done;
+    }
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+    {
+        if (NT_SUCCESS(Status)) Status = STATUS_INVALID_SECURITY_DESCR;
+        goto Done;
+    }
+    if (Length < sizeof(SECURITY_DESCRIPTOR_RELATIVE))
+    {
+        Status = STATUS_INVALID_SECURITY_DESCR;
+        goto Done;
+    }
+    TokenDescriptor = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length);
+    if (!TokenDescriptor)
+    {
+        Status = STATUS_NO_MEMORY;
+        goto Done;
+    }
+    Status = NtQuerySecurityObject(QueryToken, DACL_SECURITY_INFORMATION, TokenDescriptor, Length, &Length);
+    if (Status == STATUS_ACCESS_DENIED) Status = STATUS_NOT_IMPLEMENTED;
+    if (NT_SUCCESS(Status))
+        Status = RtlpSecurityReadDescriptor(TokenDescriptor, &Descriptor);
+    if (NT_SUCCESS(Status))
+    {
+        Status = RtlpSecurityHasOwnerRights(Descriptor.Dacl, &Found);
+        if (NT_SUCCESS(Status) && Found) Status = STATUS_NOT_IMPLEMENTED;
+    }
+Done:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, TokenDescriptor);
+    if (Duplicate) NtClose(Duplicate);
+    return Status;
+}
+
+
+static NTSTATUS
+RtlpSecuritySetAcl(PACL Current, PACL Modification,
+                   SECURITY_DESCRIPTOR_CONTROL CurrentControl,
+                   SECURITY_DESCRIPTOR_CONTROL ModificationControl,
+                   BOOLEAN Sacl, BOOLEAN Auto, PSID Owner, PSID Group,
+                   PGENERIC_MAPPING Mapping, PACL *Result)
+{
+    SECURITY_DESCRIPTOR_CONTROL Protected = Sacl ? SE_SACL_PROTECTED : SE_DACL_PROTECTED;
+    PACL ExplicitAcl = NULL, InheritedAcl = NULL;
+    INT Filter = -1;
+    NTSTATUS Status;
+
+    *Result = NULL;
+    if (Auto && !(CurrentControl & Protected) && !(ModificationControl & Protected))
+    {
+        Filter = 0;
+        Status = RtlpSecurityTransformAcl(Current, FALSE, FALSE, 1, TRUE, NULL, 0,
+                                          Owner, Group, Mapping, &InheritedAcl);
+        if (!NT_SUCCESS(Status)) return Status;
+        if (InheritedAcl && !InheritedAcl->AceCount)
+        {
+            RtlFreeHeap(RtlGetProcessHeap(), 0, InheritedAcl);
+            InheritedAcl = NULL;
+        }
+    }
+    Status = RtlpSecurityTransformAcl(Modification, FALSE,
+                                      Auto && (ModificationControl & Protected), Filter,
+                                      TRUE, NULL, 0, Owner, Group, Mapping, &ExplicitAcl);
+    if (NT_SUCCESS(Status)) Status = RtlpSecurityMergeAcls(ExplicitAcl, InheritedAcl, Result);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, ExplicitAcl);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, InheritedAcl);
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 RtlpSetSecurityObject(IN PVOID Object OPTIONAL,
@@ -25,177 +553,201 @@ RtlpSetSecurityObject(IN PVOID Object OPTIONAL,
                       IN PGENERIC_MAPPING GenericMapping,
                       IN HANDLE Token OPTIONAL)
 {
-    PISECURITY_DESCRIPTOR_RELATIVE pNewSd = NULL;
-    PSID pOwnerSid = NULL;
-    PSID pGroupSid = NULL;
-    PACL pDacl = NULL;
-    PACL pSacl = NULL;
-    BOOLEAN Defaulted;
-    BOOLEAN Present;
-    ULONG ulOwnerSidSize = 0, ulGroupSidSize = 0;
-    ULONG ulDaclSize = 0, ulSaclSize = 0;
-    ULONG ulNewSdSize;
-    SECURITY_DESCRIPTOR_CONTROL Control = SE_SELF_RELATIVE;
-    PUCHAR pDest;
-    NTSTATUS Status = STATUS_SUCCESS;
+    SECURITY_DESCRIPTOR Current, Modification, Descriptor;
+    PSECURITY_DESCRIPTOR Result = NULL;
+    PACL Dacl = NULL, Sacl = NULL;
+    SECURITY_DESCRIPTOR_CONTROL Bits;
+    BOOLEAN SetDacl, SetSacl, Restricted;
+    NTSTATUS Status;
+    ULONG SupportedFlags = SEF_DACL_AUTO_INHERIT | SEF_SACL_AUTO_INHERIT |
+                           SEF_AVOID_PRIVILEGE_CHECK | SEF_AVOID_OWNER_CHECK |
+                           SEF_AVOID_OWNER_RESTRICTION;
+    SECURITY_INFORMATION SupportedInformation = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+        DACL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION |
+        PROTECTED_DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION |
+        PROTECTED_SACL_SECURITY_INFORMATION | UNPROTECTED_SACL_SECURITY_INFORMATION;
 
-    DPRINT("RtlpSetSecurityObject()\n");
-
-    /* Change the Owner SID */
+    UNREFERENCED_PARAMETER(Object);
+    UNREFERENCED_PARAMETER(PoolType);
+    if (!ObjectsSecurityDescriptor || !*ObjectsSecurityDescriptor || !ModificationDescriptor ||
+        !GenericMapping) return STATUS_INVALID_PARAMETER;
+    if ((AutoInheritFlags & ~SupportedFlags) || (SecurityInformation & ~SupportedInformation))
+        return STATUS_NOT_IMPLEMENTED;
+    if ((SecurityInformation & (PROTECTED_DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION)) &&
+        !(SecurityInformation & DACL_SECURITY_INFORMATION)) return STATUS_NOT_IMPLEMENTED;
+    if ((SecurityInformation & (PROTECTED_SACL_SECURITY_INFORMATION | UNPROTECTED_SACL_SECURITY_INFORMATION)) &&
+        !(SecurityInformation & SACL_SECURITY_INFORMATION)) return STATUS_NOT_IMPLEMENTED;
+    Status = RtlpSecurityReadDescriptor(*ObjectsSecurityDescriptor, &Current);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = RtlpSecurityReadDescriptor(ModificationDescriptor, &Modification);
+    if (!NT_SUCCESS(Status)) return Status;
+    if ((SecurityInformation & DACL_SECURITY_INFORMATION) &&
+        ((Current.Control | Modification.Control) & SE_SERVER_SECURITY)) return STATUS_NOT_IMPLEMENTED;
+    Descriptor = Current;
     if (SecurityInformation & OWNER_SECURITY_INFORMATION)
     {
-        Status = RtlGetOwnerSecurityDescriptor(ModificationDescriptor, &pOwnerSid, &Defaulted);
-        if (!NT_SUCCESS(Status))
-            return Status;
+        Descriptor.Owner = Modification.Owner;
+        if (!Descriptor.Owner || !RtlValidSid(Descriptor.Owner)) return STATUS_INVALID_OWNER;
+        if (!(AutoInheritFlags & (SEF_AVOID_OWNER_CHECK | SEF_AVOID_PRIVILEGE_CHECK)))
+        {
+            Status = RtlpSecurityValidateOwner(Token, Descriptor.Owner);
+            if (!NT_SUCCESS(Status)) return Status;
+        }
+        Descriptor.Control = (Descriptor.Control & ~SE_OWNER_DEFAULTED) |
+                             (Modification.Control & SE_OWNER_DEFAULTED);
     }
-    else
-    {
-        Status = RtlGetOwnerSecurityDescriptor(*ObjectsSecurityDescriptor, &pOwnerSid, &Defaulted);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
-
-    if (pOwnerSid == NULL || !RtlValidSid(pOwnerSid))
-        return STATUS_INVALID_OWNER;
-
-    ulOwnerSidSize = RtlLengthSid(pOwnerSid);
-
-    /* Change the Group SID */
     if (SecurityInformation & GROUP_SECURITY_INFORMATION)
     {
-        Status = RtlGetGroupSecurityDescriptor(ModificationDescriptor, &pGroupSid, &Defaulted);
-        if (!NT_SUCCESS(Status))
-            return Status;
+        Descriptor.Group = Modification.Group;
+        if (!Descriptor.Group || !RtlValidSid(Descriptor.Group)) return STATUS_INVALID_PRIMARY_GROUP;
+        Descriptor.Control = (Descriptor.Control & ~SE_GROUP_DEFAULTED) |
+                             (Modification.Control & SE_GROUP_DEFAULTED);
     }
-    else
+    SetDacl = !!(SecurityInformation & (DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION |
+                                       UNPROTECTED_DACL_SECURITY_INFORMATION));
+    SetSacl = !!(SecurityInformation & (SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION |
+                                       UNPROTECTED_SACL_SECURITY_INFORMATION));
+    if (!(SecurityInformation & DACL_SECURITY_INFORMATION))
     {
-        Status = RtlGetGroupSecurityDescriptor(*ObjectsSecurityDescriptor, &pGroupSid, &Defaulted);
-        if (!NT_SUCCESS(Status))
-            return Status;
+        Modification.Dacl = Current.Dacl;
+        Modification.Control = (Modification.Control & ~(SE_DACL_PRESENT | SE_DACL_PROTECTED)) |
+                               (Current.Control & (SE_DACL_PRESENT | SE_DACL_PROTECTED));
     }
-
-    if (pGroupSid == NULL || !RtlValidSid(pGroupSid))
-        return STATUS_INVALID_PRIMARY_GROUP;
-
-    ulGroupSidSize = ROUND_UP(RtlLengthSid(pGroupSid), sizeof(ULONG));
-
-    /* Change the DACL */
-    if (SecurityInformation & DACL_SECURITY_INFORMATION)
+    if (!(SecurityInformation & SACL_SECURITY_INFORMATION))
     {
-        Status = RtlGetDaclSecurityDescriptor(ModificationDescriptor, &Present, &pDacl, &Defaulted);
-        if (!NT_SUCCESS(Status))
-            return Status;
-
-        Control |= SE_DACL_PRESENT;
+        Modification.Sacl = Current.Sacl;
+        Modification.Control = (Modification.Control & ~(SE_SACL_PRESENT | SE_SACL_PROTECTED)) |
+                               (Current.Control & (SE_SACL_PRESENT | SE_SACL_PROTECTED));
     }
-    else
+    if (SecurityInformation & PROTECTED_DACL_SECURITY_INFORMATION)
+        Modification.Control |= SE_DACL_PROTECTED;
+    if (SecurityInformation & UNPROTECTED_DACL_SECURITY_INFORMATION)
+        Modification.Control &= ~SE_DACL_PROTECTED;
+    if (SecurityInformation & PROTECTED_SACL_SECURITY_INFORMATION)
+        Modification.Control |= SE_SACL_PROTECTED;
+    if (SecurityInformation & UNPROTECTED_SACL_SECURITY_INFORMATION)
+        Modification.Control &= ~SE_SACL_PROTECTED;
+    if (SetDacl && !(AutoInheritFlags & SEF_AVOID_OWNER_RESTRICTION))
     {
-        Status = RtlGetDaclSecurityDescriptor(*ObjectsSecurityDescriptor, &Present, &pDacl, &Defaulted);
-        if (!NT_SUCCESS(Status))
-            return Status;
-
-        if (Present)
-            Control |= SE_DACL_PRESENT;
-
-        if (Defaulted)
-            Control |= SE_DACL_DEFAULTED;
+        Status = RtlpSecurityHasOwnerRights(Current.Dacl, &Restricted);
+        if (!NT_SUCCESS(Status)) return Status;
+        if (Restricted) return STATUS_NOT_IMPLEMENTED;
     }
-
-    if (pDacl != NULL)
-        ulDaclSize = pDacl->AclSize;
-
-    /* Change the SACL */
-    if (SecurityInformation & SACL_SECURITY_INFORMATION)
+    if (SetDacl)
     {
-        Status = RtlGetSaclSecurityDescriptor(ModificationDescriptor, &Present, &pSacl, &Defaulted);
-        if (!NT_SUCCESS(Status))
-            return Status;
-
-        Control |= SE_SACL_PRESENT;
+        Status = RtlpSecuritySetAcl(Current.Dacl, Modification.Dacl, Current.Control,
+                                    Modification.Control, FALSE,
+                                    !!(AutoInheritFlags & SEF_DACL_AUTO_INHERIT),
+                                    Descriptor.Owner, Descriptor.Group, GenericMapping, &Dacl);
+        if (!NT_SUCCESS(Status)) goto Done;
+        Descriptor.Dacl = Dacl;
+        Bits = SE_DACL_PRESENT | SE_DACL_DEFAULTED | SE_DACL_PROTECTED |
+               SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ;
+        Descriptor.Control = (Descriptor.Control & ~Bits) | SE_DACL_PRESENT |
+                             (Modification.Control & SE_DACL_PROTECTED);
+        if (AutoInheritFlags & SEF_DACL_AUTO_INHERIT) Descriptor.Control |= SE_DACL_AUTO_INHERITED;
+        else Descriptor.Control |= Modification.Control & SE_DACL_AUTO_INHERITED;
     }
-    else
+    if (SetSacl)
     {
-        Status = RtlGetSaclSecurityDescriptor(*ObjectsSecurityDescriptor, &Present, &pSacl, &Defaulted);
-        if (!NT_SUCCESS(Status))
-            return Status;
-
-        if (Present)
-            Control |= SE_SACL_PRESENT;
-
-        if (Defaulted)
-            Control |= SE_SACL_DEFAULTED;
+        Status = RtlpSecuritySetAcl(Current.Sacl, Modification.Sacl, Current.Control,
+                                    Modification.Control, TRUE,
+                                    !!(AutoInheritFlags & SEF_SACL_AUTO_INHERIT),
+                                    Descriptor.Owner, Descriptor.Group, GenericMapping, &Sacl);
+        if (!NT_SUCCESS(Status)) goto Done;
+        Descriptor.Sacl = Sacl;
+        Bits = SE_SACL_PRESENT | SE_SACL_DEFAULTED | SE_SACL_PROTECTED |
+               SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ;
+        Descriptor.Control = (Descriptor.Control & ~Bits) | SE_SACL_PRESENT |
+                             (Modification.Control & SE_SACL_PROTECTED);
+        if (AutoInheritFlags & SEF_SACL_AUTO_INHERIT) Descriptor.Control |= SE_SACL_AUTO_INHERITED;
+        else Descriptor.Control |= Modification.Control & SE_SACL_AUTO_INHERITED;
     }
-
-    if (pSacl != NULL)
-        ulSaclSize = pSacl->AclSize;
-
-    /* Calculate the size of the new security descriptor */
-    ulNewSdSize = sizeof(SECURITY_DESCRIPTOR_RELATIVE) +
-                  ROUND_UP(ulOwnerSidSize, sizeof(ULONG)) +
-                  ROUND_UP(ulGroupSidSize, sizeof(ULONG)) +
-                  ROUND_UP(ulDaclSize, sizeof(ULONG)) +
-                  ROUND_UP(ulSaclSize, sizeof(ULONG));
-
-    /* Allocate the new security descriptor */
-    pNewSd = RtlAllocateHeap(RtlGetProcessHeap(), 0, ulNewSdSize);
-    if (pNewSd == NULL)
+    Status = RtlpSecurityPublishDescriptor(&Descriptor, &Result);
+    if (NT_SUCCESS(Status))
     {
-        Status = STATUS_NO_MEMORY;
-        DPRINT1("New security descriptor allocation failed (Status 0x%08lx)\n", Status);
-        goto done;
+        RtlFreeHeap(RtlGetProcessHeap(), 0, *ObjectsSecurityDescriptor);
+        *ObjectsSecurityDescriptor = Result;
     }
+Done:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Dacl);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Sacl);
+    return Status;
+}
 
-    /* Initialize the new security descriptor */
-    Status = RtlCreateSecurityDescriptorRelative(pNewSd, SECURITY_DESCRIPTOR_REVISION);
-    if (!NT_SUCCESS(Status))
+
+static NTSTATUS
+RtlpSecurityNewAcl(PACL Parent, PACL Creator, PACL DefaultAcl,
+                   SECURITY_DESCRIPTOR_CONTROL CreatorControl,
+                   BOOLEAN Sacl, BOOLEAN Container, ULONG Flags,
+                   LPGUID *Types, ULONG TypeCount, PSID Owner, PSID Group,
+                   PGENERIC_MAPPING Mapping, PACL *Result,
+                   PSECURITY_DESCRIPTOR_CONTROL ResultControl)
+{
+    SECURITY_DESCRIPTOR_CONTROL Present = Sacl ? SE_SACL_PRESENT : SE_DACL_PRESENT;
+    SECURITY_DESCRIPTOR_CONTROL Defaulted = Sacl ? SE_SACL_DEFAULTED : SE_DACL_DEFAULTED;
+    SECURITY_DESCRIPTOR_CONTROL Protected = Sacl ? SE_SACL_PROTECTED : SE_DACL_PROTECTED;
+    SECURITY_DESCRIPTOR_CONTROL Inherited = Sacl ? SE_SACL_AUTO_INHERITED : SE_DACL_AUTO_INHERITED;
+    BOOLEAN Auto = !!(Flags & (Sacl ? SEF_SACL_AUTO_INHERIT : SEF_DACL_AUTO_INHERIT));
+    BOOLEAN CreatorPresent = !!(CreatorControl & Present);
+    BOOLEAN UseDefault = FALSE;
+    BOOLEAN ParentUsed = FALSE;
+    PACL ParentAcl = NULL, CreatorAcl = NULL, Selected;
+    NTSTATUS Status;
+
+    *Result = NULL;
+    if (Auto) *ResultControl |= Inherited;
+    if (CreatorControl & Protected) *ResultControl |= Protected;
+    if (!(CreatorControl & Protected) && Parent &&
+        (Auto || !CreatorPresent ||
+         (Flags & SEF_DEFAULT_DESCRIPTOR_FOR_OBJECT)))
     {
-        DPRINT1("New security descriptor creation failed (Status 0x%08lx)\n", Status);
-        goto done;
+        Status = RtlpSecurityTransformAcl(Parent, TRUE, FALSE, -1, Container,
+                                          Types, TypeCount, Owner, Group, Mapping, &ParentAcl);
+        if (!NT_SUCCESS(Status)) return Status;
+        if (!ParentAcl->AceCount)
+        {
+            RtlFreeHeap(RtlGetProcessHeap(), 0, ParentAcl);
+            ParentAcl = NULL;
+        }
     }
-
-    /* Set the security descriptor control flags */
-    pNewSd->Control = Control;
-
-    pDest = (PUCHAR)((ULONG_PTR)pNewSd + sizeof(SECURITY_DESCRIPTOR_RELATIVE));
-
-    /* Copy the SACL */
-    if (pSacl != NULL)
+    if (ParentAcl && (Flags & SEF_DEFAULT_DESCRIPTOR_FOR_OBJECT))
     {
-        RtlCopyMemory(pDest, pSacl, ulSaclSize);
-        pNewSd->Sacl = (ULONG_PTR)pDest - (ULONG_PTR)pNewSd;
-        pDest = pDest + ROUND_UP(ulSaclSize, sizeof(ULONG));
+        Status = STATUS_NOT_IMPLEMENTED;
+        goto Done;
     }
-
-    /* Copy the DACL */
-    if (pDacl != NULL)
+    Selected = CreatorPresent ? Creator : NULL;
+    if (ParentAcl && !CreatorPresent)
     {
-        RtlCopyMemory(pDest, pDacl, ulDaclSize);
-        pNewSd->Dacl = (ULONG_PTR)pDest - (ULONG_PTR)pNewSd;
-        pDest = pDest + ROUND_UP(ulDaclSize, sizeof(ULONG));
+        Selected = NULL;
+        ParentUsed = TRUE;
     }
-
-    /* Copy the Owner SID */
-    RtlCopyMemory(pDest, pOwnerSid, ulOwnerSidSize);
-    pNewSd->Owner = (ULONG_PTR)pDest - (ULONG_PTR)pNewSd;
-    pDest = pDest + ROUND_UP(ulOwnerSidSize, sizeof(ULONG));
-
-    /* Copy the Group SID */
-    RtlCopyMemory(pDest, pGroupSid, ulGroupSidSize);
-    pNewSd->Group = (ULONG_PTR)pDest - (ULONG_PTR)pNewSd;
-
-    /* Free the old security descriptor */
-    RtlFreeHeap(RtlGetProcessHeap(), 0, (PVOID)*ObjectsSecurityDescriptor);
-
-    /* Return the new security descriptor */
-    *ObjectsSecurityDescriptor = (PSECURITY_DESCRIPTOR)pNewSd;
-
-done:
-    if (!NT_SUCCESS(Status))
+    else if (ParentAcl && Auto)
     {
-        if (pNewSd != NULL)
-            RtlFreeHeap(RtlGetProcessHeap(), 0, pNewSd);
+        ParentUsed = TRUE;
     }
-
+    if (!CreatorPresent && !ParentUsed && !Sacl)
+    {
+        Selected = DefaultAcl;
+        UseDefault = TRUE;
+    }
+    if (Selected)
+    {
+        Status = RtlpSecurityTransformAcl(Selected, FALSE,
+                                          !!(CreatorControl & Protected),
+                                          UseDefault || (CreatorControl & Protected) ? -1 : 0,
+                                          Container, Types, TypeCount, Owner, Group, Mapping,
+                                          &CreatorAcl);
+        if (!NT_SUCCESS(Status)) goto Done;
+    }
+    Status = RtlpSecurityMergeAcls(CreatorAcl, ParentUsed ? ParentAcl : NULL, Result);
+    if (!NT_SUCCESS(Status)) goto Done;
+    if (CreatorPresent || ParentUsed || DefaultAcl) *ResultControl |= Present;
+    if (!ParentUsed && (UseDefault || (CreatorControl & Defaulted)))
+        *ResultControl |= Defaulted;
+Done:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, CreatorAcl);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, ParentAcl);
     return Status;
 }
 
@@ -211,8 +763,321 @@ RtlpNewSecurityObject(IN PSECURITY_DESCRIPTOR ParentDescriptor,
                       IN HANDLE Token,
                       IN PGENERIC_MAPPING GenericMapping)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    SECURITY_DESCRIPTOR Parent, Creator, Descriptor;
+    TOKEN_STATISTICS Statistics;
+    PTOKEN_OWNER TokenOwnerInfo = NULL;
+    PTOKEN_PRIMARY_GROUP TokenGroupInfo = NULL;
+    PTOKEN_DEFAULT_DACL TokenDaclInfo = NULL;
+    ULONG Length;
+    NTSTATUS Status;
+    ULONG SupportedFlags = SEF_DACL_AUTO_INHERIT | SEF_SACL_AUTO_INHERIT |
+                           SEF_DEFAULT_DESCRIPTOR_FOR_OBJECT | SEF_AVOID_PRIVILEGE_CHECK |
+                           SEF_AVOID_OWNER_CHECK | SEF_DEFAULT_OWNER_FROM_PARENT |
+                           SEF_DEFAULT_GROUP_FROM_PARENT | SEF_AVOID_OWNER_RESTRICTION;
+
+    if (!NewDescriptor || !GenericMapping || (GuidCount && !ObjectTypes))
+        return STATUS_INVALID_PARAMETER;
+    if (AutoInheritFlags & ~SupportedFlags) return STATUS_NOT_IMPLEMENTED;
+    Status = RtlpSecurityReadDescriptor(ParentDescriptor, &Parent);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = RtlpSecurityReadDescriptor(CreatorDescriptor, &Creator);
+    if (!NT_SUCCESS(Status)) return Status;
+    if (Creator.Control & SE_SERVER_SECURITY) return STATUS_NOT_IMPLEMENTED;
+    RtlCreateSecurityDescriptor(&Descriptor, SECURITY_DESCRIPTOR_REVISION);
+    Descriptor.Control = Creator.Control & (SE_DACL_UNTRUSTED | SE_SERVER_SECURITY | SE_RM_CONTROL_VALID);
+    Descriptor.Sbz1 = Creator.Sbz1;
+    if (Token)
+    {
+        Status = NtQueryInformationToken(Token, TokenStatistics, &Statistics,
+                                          sizeof(Statistics), &Length);
+        if (!NT_SUCCESS(Status)) return Status;
+        if (Statistics.TokenType == TokenImpersonation &&
+            Statistics.ImpersonationLevel < SecurityIdentification)
+            return STATUS_BAD_IMPERSONATION_LEVEL;
+    }
+    Descriptor.Owner = Creator.Owner;
+    if (!Descriptor.Owner)
+    {
+        if (AutoInheritFlags & SEF_DEFAULT_OWNER_FROM_PARENT)
+            Descriptor.Owner = Parent.Owner;
+        else
+        {
+            Status = RtlpSecurityQueryToken(Token, TokenOwner, (PVOID *)&TokenOwnerInfo);
+            if (!NT_SUCCESS(Status)) goto Done;
+            Descriptor.Owner = TokenOwnerInfo->Owner;
+        }
+        Descriptor.Control |= SE_OWNER_DEFAULTED;
+    }
+    else Descriptor.Control |= Creator.Control & SE_OWNER_DEFAULTED;
+    if (!Descriptor.Owner || !RtlValidSid(Descriptor.Owner))
+    {
+        Status = STATUS_INVALID_OWNER;
+        goto Done;
+    }
+    Descriptor.Group = Creator.Group;
+    if (!Descriptor.Group)
+    {
+        if (AutoInheritFlags & SEF_DEFAULT_GROUP_FROM_PARENT)
+            Descriptor.Group = Parent.Group;
+        else
+        {
+            Status = RtlpSecurityQueryToken(Token, TokenPrimaryGroup, (PVOID *)&TokenGroupInfo);
+            if (!NT_SUCCESS(Status)) goto Done;
+            Descriptor.Group = TokenGroupInfo->PrimaryGroup;
+        }
+        Descriptor.Control |= SE_GROUP_DEFAULTED;
+    }
+    else Descriptor.Control |= Creator.Control & SE_GROUP_DEFAULTED;
+    if (!Descriptor.Group || !RtlValidSid(Descriptor.Group))
+    {
+        Status = STATUS_INVALID_PRIMARY_GROUP;
+        goto Done;
+    }
+    if (!(AutoInheritFlags & SEF_AVOID_OWNER_CHECK))
+    {
+        Status = RtlpSecurityValidateOwner(Token, Descriptor.Owner);
+        if (!NT_SUCCESS(Status)) goto Done;
+    }
+    if ((Creator.Control & SE_SACL_PRESENT) && !(AutoInheritFlags & SEF_AVOID_PRIVILEGE_CHECK))
+    {
+        Status = RtlpSecurityCheckPrivilege(Token);
+        if (!NT_SUCCESS(Status)) goto Done;
+    }
+    if (!(Creator.Control & SE_DACL_PRESENT) && Token)
+    {
+        Status = RtlpSecurityQueryToken(Token, TokenDefaultDacl, (PVOID *)&TokenDaclInfo);
+        if (!NT_SUCCESS(Status)) goto Done;
+    }
+    if (CreatorDescriptor && !(AutoInheritFlags & SEF_AVOID_OWNER_RESTRICTION))
+    {
+        Status = RtlpSecurityCheckOwnerRestriction(Parent.Dacl,
+                    TokenDaclInfo ? TokenDaclInfo->DefaultDacl : NULL, Token);
+        if (!NT_SUCCESS(Status)) goto Done;
+    }
+    Status = RtlpSecurityNewAcl(Parent.Dacl, Creator.Dacl,
+                                TokenDaclInfo ? TokenDaclInfo->DefaultDacl : NULL,
+                                Creator.Control, FALSE, IsDirectoryObject, AutoInheritFlags,
+                                ObjectTypes, GuidCount, Descriptor.Owner, Descriptor.Group,
+                                GenericMapping, &Descriptor.Dacl, &Descriptor.Control);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Status = RtlpSecurityNewAcl(Parent.Sacl, Creator.Sacl, NULL, Creator.Control,
+                                TRUE, IsDirectoryObject, AutoInheritFlags,
+                                ObjectTypes, GuidCount, Descriptor.Owner, Descriptor.Group,
+                                GenericMapping, &Descriptor.Sacl, &Descriptor.Control);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Status = RtlpSecurityPublishDescriptor(&Descriptor, NewDescriptor);
+Done:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Descriptor.Dacl);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Descriptor.Sacl);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, TokenOwnerInfo);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, TokenGroupInfo);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, TokenDaclInfo);
+    return Status;
+}
+
+
+typedef struct _RTL_SECURITY_CONVERSION_ACE
+{
+    PACE_HEADER Ace;
+    ACCESS_MASK InheritedMask;
+    BOOLEAN Inherited;
+} RTL_SECURITY_CONVERSION_ACE;
+
+static BOOLEAN
+RtlpSecuritySameAceSubject(PACE_HEADER First, PACE_HEADER Second)
+{
+    ULONG Offset = FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart);
+
+    return First->AceType == Second->AceType &&
+           (First->AceFlags & ~INHERITED_ACE) == (Second->AceFlags & ~INHERITED_ACE) &&
+           First->AceSize == Second->AceSize && First->AceSize >= Offset &&
+           !memcmp((PUCHAR)First + Offset, (PUCHAR)Second + Offset, First->AceSize - Offset);
+}
+
+static INT
+RtlpSecurityAceAccessKind(PACE_HEADER Ace)
+{
+    switch (Ace->AceType)
+    {
+        case ACCESS_ALLOWED_ACE_TYPE:
+        case ACCESS_ALLOWED_OBJECT_ACE_TYPE:
+        case ACCESS_ALLOWED_CALLBACK_ACE_TYPE:
+        case ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE:
+            return 1;
+        case ACCESS_DENIED_ACE_TYPE:
+        case ACCESS_DENIED_OBJECT_ACE_TYPE:
+        case ACCESS_DENIED_CALLBACK_ACE_TYPE:
+        case ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE:
+            return -1;
+        default:
+            return 0;
+    }
+}
+
+static NTSTATUS
+RtlpSecurityConvertAcl(PACL Current, PACL Parent, BOOLEAN Container,
+                       LPGUID *Types, ULONG TypeCount, PSID Owner, PSID Group,
+                       PGENERIC_MAPPING Mapping, PBOOLEAN Protected, PACL *Result)
+{
+    PACL ParentAcl = NULL;
+    RTL_SECURITY_CONVERSION_ACE *Entries = NULL;
+    RTL_SECURITY_ACL_BUFFER Buffer;
+    RTL_SECURITY_ACE_VIEW View;
+    PACE_HEADER ParentAce;
+    ULONG Index, Other, Pass, Kind;
+    ACCESS_MASK ParentMask, CurrentMask, Mask, ExplicitMask;
+    BOOLEAN AnyInherited = FALSE;
+    NTSTATUS Status;
+    INT AccessKind;
+
+    *Result = NULL;
+    if (!Current)
+    {
+        *Protected = TRUE;
+        return STATUS_SUCCESS;
+    }
+    if (!RtlValidAcl(Current)) return STATUS_INVALID_ACL;
+    RtlZeroMemory(&Buffer, sizeof(Buffer));
+    Entries = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY,
+                               max(Current->AceCount, 1) * sizeof(*Entries));
+    if (!Entries) return STATUS_NO_MEMORY;
+    if (!*Protected)
+    {
+        Status = RtlpSecurityTransformAcl(Parent, TRUE, FALSE, -1, Container,
+                                          Types, TypeCount, Owner, Group, Mapping, &ParentAcl);
+        if (!NT_SUCCESS(Status)) goto Done;
+    }
+    for (Index = 0; Index < Current->AceCount; ++Index)
+    {
+        Status = RtlGetAce(Current, Index, (PVOID *)&Entries[Index].Ace);
+        if (!NT_SUCCESS(Status)) goto Done;
+        Status = RtlpSecurityAceView(Entries[Index].Ace, &View);
+        if (!NT_SUCCESS(Status)) goto Done;
+    }
+    if (!*Protected && ParentAcl)
+    {
+        for (Index = 0; Index < Current->AceCount; ++Index)
+        {
+            Status = RtlpSecurityAceView(Entries[Index].Ace, &View);
+            if (!NT_SUCCESS(Status)) goto Done;
+            Mask = ((PACCESS_ALLOWED_ACE)Entries[Index].Ace)->Mask;
+            ParentMask = 0;
+            for (Other = 0; Other < ParentAcl->AceCount; ++Other)
+            {
+                Status = RtlGetAce(ParentAcl, Other, (PVOID *)&ParentAce);
+                if (!NT_SUCCESS(Status)) goto Done;
+                if (!RtlpSecuritySameAceSubject(Entries[Index].Ace, ParentAce)) continue;
+                ParentMask |= ((PACCESS_ALLOWED_ACE)ParentAce)->Mask;
+                if (!Mask && !((PACCESS_ALLOWED_ACE)ParentAce)->Mask)
+                    Entries[Index].Inherited = TRUE;
+            }
+            if (ParentMask && View.MapMask &&
+                (Mask & (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL)))
+            {
+                Status = STATUS_NOT_IMPLEMENTED;
+                goto Done;
+            }
+            CurrentMask = 0;
+            for (Other = 0; Other < Current->AceCount; ++Other)
+                if (RtlpSecuritySameAceSubject(Entries[Index].Ace, Entries[Other].Ace))
+                    CurrentMask |= ((PACCESS_ALLOWED_ACE)Entries[Other].Ace)->Mask;
+            if ((ParentMask & CurrentMask) && (ParentMask & ~CurrentMask))
+            {
+                Status = STATUS_NOT_IMPLEMENTED;
+                goto Done;
+            }
+            if ((Mask & ParentMask) && (Mask & ~ParentMask))
+            {
+                Status = STATUS_NOT_IMPLEMENTED;
+                goto Done;
+            }
+            if (!(ParentMask & ~CurrentMask))
+            {
+                Entries[Index].InheritedMask = Mask & ParentMask;
+                if (Entries[Index].InheritedMask) Entries[Index].Inherited = TRUE;
+                if (View.Opaque && Entries[Index].InheritedMask != Mask &&
+                    Entries[Index].InheritedMask)
+                {
+                    Status = STATUS_NOT_IMPLEMENTED;
+                    goto Done;
+                }
+            }
+            AnyInherited |= Entries[Index].Inherited;
+        }
+        for (Index = 0; Index < Current->AceCount && !*Protected; ++Index)
+        {
+            if (!Entries[Index].Inherited) continue;
+            AccessKind = RtlpSecurityAceAccessKind(Entries[Index].Ace);
+            if (!AccessKind) continue;
+            for (Other = Index + 1; Other < Current->AceCount; ++Other)
+            {
+                Mask = ((PACCESS_ALLOWED_ACE)Entries[Other].Ace)->Mask;
+                if ((Mask & ~Entries[Other].InheritedMask) &&
+                    RtlpSecurityAceAccessKind(Entries[Other].Ace) == -AccessKind)
+                {
+                    *Protected = TRUE;
+                    break;
+                }
+            }
+        }
+    }
+    if (!AnyInherited) *Protected = TRUE;
+    for (Pass = 0; Pass < 2; ++Pass)
+    {
+        Buffer.Length = sizeof(ACL);
+        Buffer.Count = 0;
+        Buffer.Revision = Current->AclRevision;
+        for (Kind = 0; Kind < (*Protected ? 1u : 2u); ++Kind)
+        {
+            for (Index = 0; Index < Current->AceCount; ++Index)
+            {
+                Mask = ((PACCESS_ALLOWED_ACE)Entries[Index].Ace)->Mask;
+                if (*Protected)
+                {
+                    Status = RtlpSecurityEmitAce(&Buffer, Entries[Index].Ace,
+                              Entries[Index].Ace->AceFlags & ~INHERITED_ACE, FALSE,
+                              Owner, Group, Mapping, NULL);
+                }
+                else if (!Kind)
+                {
+                    ExplicitMask = Mask & ~Entries[Index].InheritedMask;
+                    if (!ExplicitMask && (Mask || Entries[Index].Inherited)) continue;
+                    Status = RtlpSecurityEmitAce(&Buffer, Entries[Index].Ace,
+                              Entries[Index].Ace->AceFlags & ~INHERITED_ACE, FALSE,
+                              Owner, Group, Mapping, &ExplicitMask);
+                }
+                else
+                {
+                    if (!Entries[Index].Inherited) continue;
+                    Status = RtlpSecurityEmitAce(&Buffer, Entries[Index].Ace,
+                              Entries[Index].Ace->AceFlags | INHERITED_ACE, FALSE,
+                              Owner, Group, Mapping, &Entries[Index].InheritedMask);
+                }
+                if (!NT_SUCCESS(Status)) goto Done;
+            }
+        }
+        if (!Pass)
+        {
+            Buffer.Capacity = Buffer.Length;
+            Buffer.Acl = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Buffer.Capacity);
+            if (!Buffer.Acl)
+            {
+                Status = STATUS_NO_MEMORY;
+                goto Done;
+            }
+        }
+    }
+    Buffer.Acl->AclRevision = Buffer.Revision;
+    Buffer.Acl->AclSize = (USHORT)Buffer.Length;
+    Buffer.Acl->AceCount = (USHORT)Buffer.Count;
+    *Result = Buffer.Acl;
+    Buffer.Acl = NULL;
+    Status = STATUS_SUCCESS;
+Done:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer.Acl);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Entries);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, ParentAcl);
+    return Status;
 }
 
 NTSTATUS
@@ -224,8 +1089,42 @@ RtlpConvertToAutoInheritSecurityObject(IN PSECURITY_DESCRIPTOR ParentDescriptor,
                                        IN BOOLEAN IsDirectoryObject,
                                        IN PGENERIC_MAPPING GenericMapping)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    SECURITY_DESCRIPTOR Parent, Descriptor;
+    PACL Dacl = NULL, Sacl = NULL;
+    BOOLEAN Protected;
+    NTSTATUS Status;
+
+    if (!CreatorDescriptor || !NewDescriptor || !GenericMapping) return STATUS_INVALID_PARAMETER;
+    Status = RtlpSecurityReadDescriptor(ParentDescriptor, &Parent);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = RtlpSecurityReadDescriptor(CreatorDescriptor, &Descriptor);
+    if (!NT_SUCCESS(Status)) return Status;
+    if ((Parent.Control | Descriptor.Control) & SE_SERVER_SECURITY) return STATUS_NOT_IMPLEMENTED;
+    Protected = !!(Descriptor.Control & SE_DACL_PROTECTED);
+    Status = RtlpSecurityConvertAcl(Descriptor.Dacl, Parent.Dacl, IsDirectoryObject,
+                                    ObjectType ? &ObjectType : NULL, ObjectType ? 1 : 0,
+                                    Descriptor.Owner, Descriptor.Group, GenericMapping,
+                                    &Protected, &Dacl);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Descriptor.Dacl = Dacl;
+    Descriptor.Control |= SE_DACL_AUTO_INHERITED;
+    Descriptor.Control &= ~SE_DACL_AUTO_INHERIT_REQ;
+    if (Protected) Descriptor.Control |= SE_DACL_PROTECTED;
+    Protected = !!(Descriptor.Control & SE_SACL_PROTECTED);
+    Status = RtlpSecurityConvertAcl(Descriptor.Sacl, Parent.Sacl, IsDirectoryObject,
+                                    ObjectType ? &ObjectType : NULL, ObjectType ? 1 : 0,
+                                    Descriptor.Owner, Descriptor.Group, GenericMapping,
+                                    &Protected, &Sacl);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Descriptor.Sacl = Sacl;
+    Descriptor.Control |= SE_SACL_AUTO_INHERITED;
+    Descriptor.Control &= ~SE_SACL_AUTO_INHERIT_REQ;
+    if (Protected) Descriptor.Control |= SE_SACL_PROTECTED;
+    Status = RtlpSecurityPublishDescriptor(&Descriptor, NewDescriptor);
+Done:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Dacl);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Sacl);
+    return Status;
 }
 
 /* PUBLIC FUNCTIONS ***********************************************************/
