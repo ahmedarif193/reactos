@@ -54,6 +54,13 @@ License: libtiff (https://spdx.org/licenses/libtiff.html)
 URL: http://www.simplesystems.org/libtiff/
 Modifications: added .spec file
 
+Title: JPEG XR reference codec
+Path: sdk/lib/3rdparty/jxr
+Used Version: Wine 11.14 libs/jxr (1012f3d99507b80d4869eabf0853567660a7ecbb)
+License: BSD-2-Clause (https://spdx.org/licenses/BSD-2-Clause.html)
+URL: https://gitlab.winehq.org/wine/wine/-/tree/wine-11.14/libs/jxr
+Modifications: portable C build and bounded bitstream reads, see README.md
+
 Title: Libxslt
 Path: dll/3rdparty/libxslt
 Used Version: 1.1.37
