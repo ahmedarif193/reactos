@@ -189,6 +189,10 @@ VOID
 Rpi5HvsInstallScanoutLocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
 
+VOID
+Rpi5HvsInstallCursorLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
 BOOLEAN
 Rpi5HvsColdStartChannel(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,

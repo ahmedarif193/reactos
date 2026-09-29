@@ -1377,7 +1377,7 @@ Rpi5Vc4DdiSetPointerShape(
      * change therefore installs a complete list in the inactive HVS slot and
      * switches the head only after both pixels and list are complete. */
     if (DeviceExtension->CursorVisible)
-        Rpi5HvsInstallScanoutLocked(DeviceExtension);
+        Rpi5HvsInstallCursorLocked(DeviceExtension);
 
     KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
     return STATUS_SUCCESS;
@@ -1427,12 +1427,12 @@ Rpi5Vc4DdiSetPointerPosition(
     else if (DeviceExtension->CursorVisible)
     {
         if (!WasVisible || !Rpi5HvsMoveCursorLocked(DeviceExtension))
-            Rpi5HvsInstallScanoutLocked(DeviceExtension);
+            Rpi5HvsInstallCursorLocked(DeviceExtension);
     }
     else if (WasVisible)
     {
         /* Rebuild the display list without the cursor overlay. */
-        Rpi5HvsInstallScanoutLocked(DeviceExtension);
+        Rpi5HvsInstallCursorLocked(DeviceExtension);
     }
 
     KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);

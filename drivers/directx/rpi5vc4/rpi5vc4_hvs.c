@@ -518,6 +518,7 @@ Rpi5HvsInstallScanoutLocked(
         return;
 
     DeviceExtension->HvsCursorFastValid = FALSE;
+    DeviceExtension->HvsPlaneCount = 0;
 
     HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
@@ -878,6 +879,12 @@ Rpi5HvsInstallPlaneListUnlocked(
     DeviceExtension->HvsActivePrivateSlot = Slot;
     DeviceExtension->HvsLptrsReg = LptrsReg;
     DeviceExtension->HvsLptrsVal = LptrsVal;
+    DeviceExtension->HvsPlaneCount = 0;
+    if (Count <= RTL_NUMBER_OF(DeviceExtension->HvsPlanes))
+    {
+        RtlMoveMemory(DeviceExtension->HvsPlanes, Planes, Count * sizeof(*Planes));
+        DeviceExtension->HvsPlaneCount = Count;
+    }
 
     /* Keep the cursor-move fast path alive on the private list. */
     if (CursorAt != 0)
@@ -903,6 +910,22 @@ Rpi5HvsInstallPlaneList(
     Result = Rpi5HvsInstallPlaneListUnlocked(DeviceExtension, Planes, Count, TRUE);
     KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
     return Result;
+}
+
+VOID
+Rpi5HvsInstallCursorLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    RPI5VC4_HVS_PLANE Planes[RPI5VC4_MMIO_FLIP_PLANES];
+    ULONG Count = DeviceExtension->HvsPlaneCount;
+
+    if (DeviceExtension->HvsOverlayActive && Count != 0 && Count <= RTL_NUMBER_OF(Planes))
+    {
+        RtlCopyMemory(Planes, DeviceExtension->HvsPlanes, Count * sizeof(*Planes));
+        if (Rpi5HvsInstallPlaneListUnlocked(DeviceExtension, Planes, Count, FALSE))
+            return;
+    }
+    Rpi5HvsInstallScanoutLocked(DeviceExtension);
 }
 
 static BOOLEAN

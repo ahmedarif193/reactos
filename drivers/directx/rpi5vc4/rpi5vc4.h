@@ -487,6 +487,8 @@ struct _RPI5VC4_DEVICE_EXTENSION
     RPI5VC4_HVS_PLANE FlipPendingPlanes[RPI5VC4_MMIO_FLIP_PLANES];
     volatile LONG FlipPendingPlaneCount;
     BOOLEAN HvsOverlayActive; /* the scanned list has more than the primary */
+    RPI5VC4_HVS_PLANE HvsPlanes[RPI5VC4_MMIO_FLIP_PLANES];
+    ULONG HvsPlaneCount;
 
     /* ---- V3D 7.1 (3D engine) state -------------------------------------- */
     BOOLEAN V3dReady;
