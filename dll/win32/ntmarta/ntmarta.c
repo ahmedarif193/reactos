@@ -1580,6 +1580,56 @@ AccpAppendKeptAces(PACL OldAcl,
 }
 
 
+static DWORD
+AccpAppendExplicitAce(PACL Acl, PEXPLICIT_ACCESS_W Entry, PLSA_HANDLE PolicyHandle)
+{
+    GUID ObjectType, InheritedObjectType;
+    GUID *Object = NULL, *InheritedObject = NULL;
+    DWORD ObjectsPresent, Ret;
+    PSID Sid;
+    BOOL Allocated, Success;
+    ACCESS_MODE Mode = Entry->grfAccessMode;
+
+    Ret = AccpGetTrusteeSid(&Entry->Trustee, PolicyHandle, &Sid, &Allocated);
+    if (Ret != ERROR_SUCCESS) return Ret;
+    ObjectsPresent = AccpGetTrusteeObjects(&Entry->Trustee, &ObjectType, &InheritedObjectType);
+    if (ObjectsPresent & ACE_OBJECT_TYPE_PRESENT) Object = &ObjectType;
+    if (ObjectsPresent & ACE_INHERITED_OBJECT_TYPE_PRESENT) InheritedObject = &InheritedObjectType;
+    if (Mode == DENY_ACCESS)
+    {
+        if (ObjectsPresent)
+            Success = AddAccessDeniedObjectAce(Acl, ACL_REVISION_DS, Entry->grfInheritance,
+                                                Entry->grfAccessPermissions, Object, InheritedObject, Sid);
+        else
+            Success = AddAccessDeniedAceEx(Acl, Acl->AclRevision, Entry->grfInheritance,
+                                            Entry->grfAccessPermissions, Sid);
+    }
+    else if (Mode == GRANT_ACCESS || Mode == SET_ACCESS)
+    {
+        if (ObjectsPresent)
+            Success = AddAccessAllowedObjectAce(Acl, ACL_REVISION_DS, Entry->grfInheritance,
+                                                 Entry->grfAccessPermissions, Object, InheritedObject, Sid);
+        else
+            Success = AddAccessAllowedAceEx(Acl, Acl->AclRevision, Entry->grfInheritance,
+                                             Entry->grfAccessPermissions, Sid);
+    }
+    else
+    {
+        if (ObjectsPresent)
+            Success = AddAuditAccessObjectAce(Acl, ACL_REVISION_DS, Entry->grfInheritance,
+                                               Entry->grfAccessPermissions, Object, InheritedObject, Sid,
+                                               Mode != SET_AUDIT_FAILURE, Mode != SET_AUDIT_SUCCESS);
+        else
+            Success = AddAuditAccessAceEx(Acl, Acl->AclRevision, Entry->grfInheritance,
+                                           Entry->grfAccessPermissions, Sid,
+                                           Mode != SET_AUDIT_FAILURE, Mode != SET_AUDIT_SUCCESS);
+    }
+    Ret = Success ? ERROR_SUCCESS : GetLastError();
+    if (Allocated) LocalFree(Sid);
+    return Ret;
+}
+
+
 /**********************************************************************
  * AccRewriteSetEntriesInAcl				EXPORTED
  *
@@ -1593,16 +1643,15 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
 {
     PACL pNew = NULL;
     ACL_SIZE_INFORMATION SizeInformation;
+    ULONGLONG NewAclSize;
     PACE_HEADER pAce;
     BOOLEAN KeepAceBuf[8];
     BOOLEAN *pKeepAce = NULL;
-    GUID ObjectTypeGuid, InheritedObjectTypeGuid;
-    DWORD ObjectsPresent;
-    BOOL needToClean;
-    PSID pSid1, pSid2;
+    DWORD ObjectsPresent, Needed, Offset, Revision = ACL_REVISION;
+    BOOL needToClean = FALSE;
+    PSID pSid1 = NULL, pSid2;
     ULONG i, j;
     LSA_HANDLE PolicyHandle = NULL;
-    BOOL bRet;
     DWORD LastErr;
     DWORD Ret = ERROR_SUCCESS;
     DWORD KeptAceIndex = 0;
@@ -1610,7 +1659,9 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     /* save the last error code */
     LastErr = GetLastError();
 
+    if (!NewAcl) return ERROR_INVALID_PARAMETER;
     *NewAcl = NULL;
+    if (cCountOfExplicitEntries && !pListOfExplicitEntries) return ERROR_INVALID_PARAMETER;
 
     if (!cCountOfExplicitEntries && !OldAcl)
         goto Cleanup;
@@ -1618,6 +1669,12 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     /* Get information about previous ACL */
     if (OldAcl)
     {
+        if (!IsValidAcl(OldAcl))
+        {
+            Ret = ERROR_INVALID_ACL;
+            goto Cleanup;
+        }
+        Revision = max(Revision, OldAcl->AclRevision);
         if (!GetAclInformation(OldAcl, &SizeInformation, sizeof(ACL_SIZE_INFORMATION), AclSizeInformation))
         {
             Ret = GetLastError();
@@ -1644,6 +1701,8 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
         SizeInformation.AclBytesInUse = sizeof(ACL);
     }
 
+    NewAclSize = SizeInformation.AclBytesInUse;
+
     /* Get size required for new entries */
     for (i = 0; i < cCountOfExplicitEntries; i++)
     {
@@ -1657,6 +1716,18 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
         ObjectsPresent = AccpGetTrusteeObjects(&pListOfExplicitEntries[i].Trustee,
                                                NULL,
                                                NULL);
+        if (!IsValidSid(pSid1))
+        {
+            Ret = ERROR_INVALID_SID;
+            goto Cleanup;
+        }
+        if (ObjectsPresent & ~(ACE_OBJECT_TYPE_PRESENT | ACE_INHERITED_OBJECT_TYPE_PRESENT))
+        {
+            Ret = ERROR_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        if (ObjectsPresent) Revision = ACL_REVISION_DS;
+        Needed = 0;
 
         switch (pListOfExplicitEntries[i].grfAccessMode)
         {
@@ -1673,7 +1744,27 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
                         goto Cleanup;
                     }
 
-                    pSid2 = AccpGetAceSid(pAce);
+                    if (AccpGetAceAccessMode(pAce) == NOT_USED_ACCESS) continue;
+                    if (AccpIsObjectAce(pAce) &&
+                        pAce->AceSize < FIELD_OFFSET(ACCESS_ALLOWED_OBJECT_ACE, ObjectType))
+                    {
+                        Ret = ERROR_INVALID_ACL;
+                        goto Cleanup;
+                    }
+                    Offset = AccpGetAceStructureSize(pAce);
+                    if (!Offset || Offset > pAce->AceSize ||
+                        pAce->AceSize - Offset < FIELD_OFFSET(SID, SubAuthority))
+                    {
+                        Ret = ERROR_INVALID_ACL;
+                        goto Cleanup;
+                    }
+                    pSid2 = (PSID)((PBYTE)pAce + Offset);
+                    if (GetSidLengthRequired(((SID *)pSid2)->SubAuthorityCount) > pAce->AceSize - Offset ||
+                        !IsValidSid(pSid2))
+                    {
+                        Ret = ERROR_INVALID_ACL;
+                        goto Cleanup;
+                    }
                     if (pListOfExplicitEntries[i].grfAccessMode == REVOKE_ACCESS &&
                         AccpGetAceAccessMode(pAce) != GRANT_ACCESS &&
                         AccpGetAceAccessMode(pAce) != SET_AUDIT_SUCCESS &&
@@ -1682,7 +1773,7 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
                     if (RtlEqualSid(pSid1, pSid2))
                     {
                         pKeepAce[j] = FALSE;
-                        SizeInformation.AclBytesInUse -= pAce->AceSize;
+                        NewAclSize -= pAce->AceSize;
                     }
                 }
                 if (pListOfExplicitEntries[i].grfAccessMode == REVOKE_ACCESS)
@@ -1691,25 +1782,36 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
             case GRANT_ACCESS:
             case DENY_ACCESS:
                 /* Add to ACL */
-                SizeInformation.AclBytesInUse += AccpCalcNeededAceSize(pSid1, ObjectsPresent);
+                Needed = AccpCalcNeededAceSize(pSid1, ObjectsPresent);
                 break;
             case SET_AUDIT_SUCCESS:
             case SET_AUDIT_FAILURE:
-                /* FIXME */
-                DPRINT1("Case not implemented!\n");
+            case SET_AUDIT_SUCCESS | SET_AUDIT_FAILURE:
+                Needed = AccpCalcNeededAceSize(pSid1, ObjectsPresent);
                 break;
             default:
-                DPRINT1("Unknown access mode 0x%x. Ignoring it\n", pListOfExplicitEntries[i].grfAccessMode);
-                break;
+                Ret = ERROR_INVALID_PARAMETER;
+                goto Cleanup;
         }
 
+        NewAclSize += Needed;
         if (needToClean)
             LocalFree((HLOCAL)pSid1);
+        pSid1 = NULL;
+        needToClean = FALSE;
     }
 
     /* Succeed, if no ACL needs to be allocated */
-    if (SizeInformation.AclBytesInUse == 0)
+    if (NewAclSize == 0)
         goto Cleanup;
+
+    if (NewAclSize > (MAXUSHORT & ~(sizeof(ULONG) - 1)))
+    {
+        Ret = ERROR_ALLOTTED_SPACE_EXCEEDED;
+        goto Cleanup;
+    }
+    SizeInformation.AclBytesInUse = (DWORD)((NewAclSize + sizeof(ULONG) - 1) &
+                                           ~((ULONGLONG)sizeof(ULONG) - 1));
 
     /* OK, now create the new ACL */
     DPRINT("Allocating %u bytes for the new ACL\n", SizeInformation.AclBytesInUse);
@@ -1719,8 +1821,7 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
         Ret = ERROR_NOT_ENOUGH_MEMORY;
         goto Cleanup;
     }
-    if (!InitializeAcl(pNew, SizeInformation.AclBytesInUse,
-                       (OldAcl && OldAcl->AclRevision > ACL_REVISION) ? OldAcl->AclRevision : ACL_REVISION))
+    if (!InitializeAcl(pNew, SizeInformation.AclBytesInUse, Revision))
     {
         Ret = GetLastError();
         goto Cleanup;
@@ -1728,7 +1829,16 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
 
     /* Fill it */
     /* 1a) New audit entries (SET_AUDIT_SUCCESS, SET_AUDIT_FAILURE) */
-    /* FIXME */
+    for (i = 0; i < cCountOfExplicitEntries; i++)
+    {
+        ACCESS_MODE Mode = pListOfExplicitEntries[i].grfAccessMode;
+        if (Mode == SET_AUDIT_SUCCESS || Mode == SET_AUDIT_FAILURE ||
+            Mode == (SET_AUDIT_SUCCESS | SET_AUDIT_FAILURE))
+        {
+            Ret = AccpAppendExplicitAce(pNew, &pListOfExplicitEntries[i], &PolicyHandle);
+            if (Ret != ERROR_SUCCESS) goto Cleanup;
+        }
+    }
 
     /* 1b) Existing audit entries */
 
@@ -1737,37 +1847,8 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     {
         if (pListOfExplicitEntries[i].grfAccessMode == DENY_ACCESS)
         {
-            /* FIXME: take care of pListOfExplicitEntries[i].grfInheritance */
-            Ret = AccpGetTrusteeSid(&pListOfExplicitEntries[i].Trustee,
-                                    &PolicyHandle,
-                                    &pSid1,
-                                    &needToClean);
-            if (Ret != ERROR_SUCCESS)
-                goto Cleanup;
-
-            ObjectsPresent = AccpGetTrusteeObjects(&pListOfExplicitEntries[i].Trustee,
-                                                   &ObjectTypeGuid,
-                                                   &InheritedObjectTypeGuid);
-
-            if (ObjectsPresent == 0)
-            {
-                /* FIXME: Call AddAccessDeniedAceEx instead! */
-                bRet = AddAccessDeniedAce(pNew, ACL_REVISION, pListOfExplicitEntries[i].grfAccessPermissions, pSid1);
-            }
-            else
-            {
-                /* FIXME: Call AddAccessDeniedObjectAce */
-                DPRINT1("Object ACEs not yet supported!\n");
-                SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-                bRet = FALSE;
-            }
-
-            if (needToClean) LocalFree((HLOCAL)pSid1);
-            if (!bRet)
-            {
-                Ret = GetLastError();
-                goto Cleanup;
-            }
+            Ret = AccpAppendExplicitAce(pNew, &pListOfExplicitEntries[i], &PolicyHandle);
+            if (Ret != ERROR_SUCCESS) goto Cleanup;
         }
     }
 
@@ -1784,37 +1865,8 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
         if (pListOfExplicitEntries[i].grfAccessMode == SET_ACCESS ||
             pListOfExplicitEntries[i].grfAccessMode == GRANT_ACCESS)
         {
-            /* FIXME: take care of pListOfExplicitEntries[i].grfInheritance */
-            Ret = AccpGetTrusteeSid(&pListOfExplicitEntries[i].Trustee,
-                                    &PolicyHandle,
-                                    &pSid1,
-                                    &needToClean);
-            if (Ret != ERROR_SUCCESS)
-                goto Cleanup;
-
-            ObjectsPresent = AccpGetTrusteeObjects(&pListOfExplicitEntries[i].Trustee,
-                                                   &ObjectTypeGuid,
-                                                   &InheritedObjectTypeGuid);
-
-            if (ObjectsPresent == 0)
-            {
-                /* FIXME: Call AddAccessAllowedAceEx instead! */
-                bRet = AddAccessAllowedAce(pNew, ACL_REVISION, pListOfExplicitEntries[i].grfAccessPermissions, pSid1);
-            }
-            else
-            {
-                /* FIXME: Call AddAccessAllowedObjectAce */
-                DPRINT1("Object ACEs not yet supported!\n");
-                SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-                bRet = FALSE;
-            }
-
-            if (needToClean) LocalFree((HLOCAL)pSid1);
-            if (!bRet)
-            {
-                Ret = GetLastError();
-                goto Cleanup;
-            }
+            Ret = AccpAppendExplicitAce(pNew, &pListOfExplicitEntries[i], &PolicyHandle);
+            if (Ret != ERROR_SUCCESS) goto Cleanup;
         }
     }
 
@@ -1828,6 +1880,7 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     *NewAcl = pNew;
 
 Cleanup:
+    if (needToClean) LocalFree((HLOCAL)pSid1);
     if (pKeepAce && pKeepAce != KeepAceBuf)
         LocalFree((HLOCAL)pKeepAce);
 
