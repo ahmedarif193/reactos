@@ -12,6 +12,8 @@
 ## Quick Links
 [Website](https://libernt.com/) &bull;
 [Source code](https://github.com/ahmedarif193/LiberNT) &bull;
+[Issues](https://github.com/ahmedarif193/LiberNT/issues) &bull;
+[Wiki](https://github.com/ahmedarif193/LiberNT/wiki) &bull;
 [Build environment](https://github.com/ahmedarif193/winget-rosbe)
 
 ## What is LiberNT?
@@ -38,46 +40,72 @@ LiberNT would not exist without ReactOS. With all our respect and gratitude to t
 
 ## Building
 
-Use the RosBE package from [winget-rosbe](https://github.com/ahmedarif193/winget-rosbe). This is the RosBE setup associated with this fork and is the expected build environment.
+LiberNT builds with RosBE, a cross-build toolchain for Linux, macOS and Windows. The steps below use `configure.sh` on Linux and macOS.
 
-The Linux build path is proven to work with `configure.sh`.
+### 1. Install the tools
 
-From the repository root:
+You need Git, CMake, Ninja and a C/C++ compiler for your own machine. RosBE adds the compilers that build LiberNT.
+
+On Linux or macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-unix-bootstrap.sh | sh
+```
+
+On Windows, install RosBE with `winget install AhmedArif.RosBE`, then run `rosbe install` and `rosbe enable`. See [winget-rosbe](https://github.com/ahmedarif193/winget-rosbe) for details.
+
+### 2. Get the source
+
+```sh
+git clone https://github.com/ahmedarif193/LiberNT.git
+cd LiberNT
+```
+
+The first configure run also fetches the submodule and external sources the build needs.
+
+### 3. Configure
 
 ```sh
 ./configure.sh
 ```
 
-That default configuration sets up an `amd64` debug build using GCC.
+With no options, this sets up an AMD64 Debug build with Clang in the folder `output-Clang-amd64-debug`. The folder name always follows the pattern `output-<compiler>-<architecture>-<debug|release>`.
 
-For Clang:
+| Option | What it does |
+|---|---|
+| `-a`, `--arch <arch>` | Chooses the target architecture: `amd64` (default), `i386`, `arm64` or `riscv64`. |
+| `--clang` | Builds with Clang/LLVM from RosBE. This is the default. |
+| `--gcc` | Builds with GCC from RosBE instead of Clang. The macOS RosBE does not include GCC. |
+| `-r`, `--release` | Makes an optimized Release build. Without it you get a Debug build, which is easier to debug. |
+| `menuconfig` | Opens a menu to choose optional components first. Your choices are kept in the output folder. |
+| `makefiles` | Uses `make` instead of Ninja. |
+| `--no-feeds-update` | Skips fetching the external sources listed in `feeds.conf`, for example when offline. |
+| `-D<name>=<value>` | Passes a setting straight to CMake. |
 
-```sh
-./configure.sh --clang
-```
-
-For other architectures, use `-a`:
-
-```sh
-./configure.sh -a arm64       # ARM64 (debug, GCC)
-./configure.sh --clang -a arm64
-./configure.sh -a i386        # 32-bit x86
-```
-
-For release builds, add `-r` or `--release`:
+For example:
 
 ```sh
-./configure.sh -r
-./configure.sh --clang -a arm64 --release
+./configure.sh -a arm64              # ARM64 Debug build with Clang
+./configure.sh -a i386 --gcc         # 32-bit x86 build with GCC
+./configure.sh -a amd64 --release    # optimized AMD64 build
 ```
 
-After configuring, build from the generated output directory with Ninja:
+### 4. Build
+
+Go to the output folder and run Ninja with the target you want:
 
 ```sh
-ninja
-ninja bootcd
-ninja livecd
+cd output-Clang-amd64-debug
+ninja reactosimg
 ```
+
+| Command | Creates | Use it to |
+|---|---|---|
+| `ninja bootcd` | `bootcd.iso` | Install LiberNT from a CD image, in a virtual machine or on a PC. |
+| `ninja reactosimg` | `ReactOS.img` | Boot a disk with LiberNT already installed. Start it in a virtual machine such as QEMU, or write it to a USB drive or SD card. It boots with UEFI or BIOS. |
+| `ninja reactosvhd` | `ReactOS.vhd` | Use the same preinstalled disk in virtual machines that take VHD disks, such as Hyper-V and VirtualBox. |
+
+Each target builds everything it needs first, and the files are written to the output folder.
 
 ## What LiberNT Enables
 
@@ -96,6 +124,8 @@ ninja install
 ```
 
 ## Contributing
+
+Report bugs and suggest features in [Issues](https://github.com/ahmedarif193/LiberNT/issues), and find guides and notes in the [Wiki](https://github.com/ahmedarif193/LiberNT/wiki).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [PULL_REQUEST_MANAGEMENT.md](PULL_REQUEST_MANAGEMENT.md).
 
