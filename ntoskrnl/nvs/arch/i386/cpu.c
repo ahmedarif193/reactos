@@ -9,6 +9,29 @@ MiI386SetDirectMapReady(VOID)
     MiI386DirectMapReady = TRUE;
 }
 
+NTSTATUS
+MiArchSetFrameCache(ULONG Frame, ULONG Flags)
+{
+    return MiSetDirectFrameCache(Frame, Flags);
+}
+
+ULONG64
+MiArchBootFrameAlias(ULONG Frame)
+{
+    return MI_I386_DIRECT_BASE + ((ULONG64)Frame << PAGE_SHIFT);
+}
+
+VOID
+MiArchWriteBootPte(PMI_PTE Slot, MI_PTE Value)
+{
+    KIRQL OldIrql;
+
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    MiArchPteWrite(Slot, Value);
+    MiArchTlbInvalidateAll(FALSE);
+    KeLowerIrql(OldIrql);
+}
+
 PVOID
 MiArchMapFrame(ULONG64 Frame)
 {

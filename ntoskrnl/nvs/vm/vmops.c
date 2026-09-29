@@ -816,6 +816,18 @@ MiAllocateVirtualMemoryBounded(
         return STATUS_INVALID_PAGE_PROTECTION;
     }
 
+    if (Protection != MI_PROT_NOACCESS)
+    {
+        Protection &= ~MI_PROT_NOCACHE;
+        if (MI_PROT_IS_ACCESSIBLE(Vad->Protection))
+            Protection |= Vad->Protection & MI_PROT_NOCACHE;
+        if (!MiProtectionIsValid(Protection))
+        {
+            MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+            return STATUS_INVALID_PAGE_PROTECTION;
+        }
+    }
+
     Charged = Vad->CommitCharge == 0 ? (LONG64)((End - Start) >> PAGE_SHIFT)
                                     : MiCountUncommittedPrivate(Space, Vad, Start, End);
 
@@ -1262,6 +1274,17 @@ MiProtectVirtualMemoryEx(
     }
     else
     {
+        if (NewProtection != MI_PROT_NOACCESS)
+        {
+            NewProtection &= ~MI_PROT_NOCACHE;
+            if (MI_PROT_IS_ACCESSIBLE(Vad->Protection))
+                NewProtection |= Vad->Protection & MI_PROT_NOCACHE;
+            if (!MiProtectionIsValid(NewProtection))
+            {
+                MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+                return STATUS_INVALID_PAGE_PROTECTION;
+            }
+        }
         Vad->PteTouched = TRUE;
         Status = MiSetPrivateRangeProtection(Space, Start, End, NewProtection);
     }

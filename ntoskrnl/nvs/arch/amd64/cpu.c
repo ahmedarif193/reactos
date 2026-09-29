@@ -11,6 +11,31 @@
 #include "hardware.h"
 #include "tlb.h"
 
+NTSTATUS
+MiArchSetFrameCache(ULONG Frame, ULONG Flags)
+{
+    return MiSetDirectFrameCache(Frame, Flags);
+}
+
+ULONG64
+MiArchBootFrameAlias(ULONG Frame)
+{
+    ULONG64 Physical = (ULONG64)Frame << PAGE_SHIFT;
+
+    return Physical <= ~MI_LOADER_MAPPINGS ? MI_LOADER_MAPPINGS + Physical : 0;
+}
+
+VOID
+MiArchWriteBootPte(PMI_PTE Slot, MI_PTE Value)
+{
+    KIRQL OldIrql;
+
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    MiArchPteWrite(Slot, Value);
+    MiArchTlbInvalidateAll(FALSE);
+    KeLowerIrql(OldIrql);
+}
+
 PVOID
 MiArchMapFrame(_In_ ULONG64 Frame)
 {

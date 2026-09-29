@@ -39,7 +39,7 @@ static VOID
 MiCloneDropShare(PMI_CLONE_PAGE Page, ULONG Frame)
 {
     MiPfnShareDecrementEx(&Page->System->Pfn, Frame, FALSE, &Page->Proto,
-                          MiSoftMake(MiSoftTransition, MI_PROT_READWRITE, Frame));
+                          MiSoftMake(MiSoftTransition, MiSoftProtection(MiArchPteRead(&Page->Proto)), Frame));
 }
 
 static VOID
@@ -139,7 +139,7 @@ MiCloneAcquirePage(PMI_CLONE_PAGE Page, PULONG Frame)
         return MiPfnShareIncrementIfMapped(&Page->System->Pfn, *Frame, &Page->Proto, Pte);
     if (MiSoftKind(Pte) == MiSoftTransition)
         return MiPfnReactivateEx(&Page->System->Pfn, *Frame, (ULONG64)(ULONG_PTR)&Page->Proto,
-                                 &Page->Proto, Pte, MiSoftMake(MiSoftResident, MI_PROT_READWRITE, *Frame));
+                                 &Page->Proto, Pte, MiSoftMake(MiSoftResident, MiSoftProtection(Pte), *Frame));
     return FALSE;
 }
 
@@ -184,8 +184,17 @@ MiCloneMakeResident(PMI_CLONE_PAGE Page)
         }
         MI_ATOMIC_ADD64(&System->PageFile->PagesRead, 1);
     }
+    if (MiSoftProtection(Pte) & MI_PROT_NOCACHE)
+    {
+        Status = MiPfnSetCache(&System->Pfn, Frame, MI_LEAF_NOCACHE);
+        if (!NT_SUCCESS(Status))
+        {
+            MiPfnShareDecrement(&System->Pfn, Frame, TRUE);
+            goto Done;
+        }
+    }
     MiPfnInitializePage(&System->Pfn, Frame, (ULONG64)(ULONG_PTR)&Page->Proto, 0, Pte, MI_PFN_FLAG_PROTOTYPE);
-    MiArchPteWrite(&Page->Proto, MiSoftMake(MiSoftResident, MI_PROT_READWRITE, Frame));
+    MiArchPteWrite(&Page->Proto, MiSoftMake(MiSoftResident, MiSoftProtection(Pte), Frame));
     MiCloneDropShare(Page, Frame);
 Done:
     MI_MUTEX_RELEASE(&Page->Lock);
@@ -266,6 +275,15 @@ MiCloneFault(PMI_ADDRESS_SPACE Space, ULONG64 Va, ULONG Access)
             RtlCopyMemory(Target, Source, PAGE_SIZE);
             MiArchUnmapFrame(Target);
             MiArchUnmapFrame(Source);
+            if (Protection & MI_PROT_NOCACHE)
+            {
+                Status = MiPfnSetCache(&System->Pfn, NewFrame, MI_LEAF_NOCACHE);
+                if (!NT_SUCCESS(Status))
+                {
+                    MiPfnShareDecrement(&System->Pfn, NewFrame, TRUE);
+                    break;
+                }
+            }
             Protection = (Protection & ~MI_PROT_ACCESS_MASK) |
                          (MI_PROT_IS_EXECUTE(Protection) ? MI_PROT_EXECUTE_READWRITE : MI_PROT_READWRITE);
             MiPfnInitializePage(&System->Pfn, NewFrame, MiPtSlotAddress(Slot, TableFrame, Va), TableFrame,
@@ -337,6 +355,7 @@ MiClonePreparePage(PMI_ADDRESS_SPACE Source, ULONG64 Va, MI_PTE Pte, PMI_CLONE_W
         KIRQL OldIrql = MiPfnLock(&Source->System->Pfn, Frame);
         BOOLEAN Locked = Entry->ReferenceCount > (Entry->ShareCount != 0 ? 1 : 0) +
                                                 ((MI_PFN_FLAGS(Entry) & MI_PFN_FLAG_IN_FLIGHT) != 0);
+        ULONG CacheFlags = MI_ATOMIC_READ32(&Entry->CacheFlags);
 
         MiPfnUnlock(&Source->System->Pfn, Frame, OldIrql);
         if (Locked)
@@ -344,6 +363,8 @@ MiClonePreparePage(PMI_ADDRESS_SPACE Source, ULONG64 Va, MI_PTE Pte, PMI_CLONE_W
             Work->CopyFrame = MiPfnAllocatePage(&Source->System->Pfn, 0);
             if (Work->CopyFrame == MI_FRAME_INVALID)
                 return STATUS_NO_MEMORY;
+            if (CacheFlags != 0)
+                return MiPfnSetCache(&Source->System->Pfn, Work->CopyFrame, CacheFlags);
         }
     }
     return STATUS_SUCCESS;
@@ -359,7 +380,8 @@ MiClonePublishPage(PMI_ADDRESS_SPACE Source, PMI_ADDRESS_SPACE Target, PMI_CLONE
     PMI_CLONE_PAGE Page = Work->Page;
     MI_PTE Pte;
     ULONG Frame = MI_FRAME_INVALID;
-    ULONG Protection;
+    ULONG Protection, PrototypeProtection, AllocationProtection;
+    PMI_VAD Vad;
     BOOLEAN Valid;
 
     if (Page == NULL)
@@ -390,7 +412,12 @@ MiClonePublishPage(PMI_ADDRESS_SPACE Source, PMI_ADDRESS_SPACE Target, PMI_CLONE
         return;
     }
 
-    Protection = Valid ? MiViewPageProtection(Source, MiVadLocate(Source, Va), Va, Pte) : MiSoftProtection(Pte);
+    Vad = MiVadLocate(Source, Va);
+    AllocationProtection = Vad->Segment != NULL ? Vad->Segment->Protection : Vad->Protection;
+    PrototypeProtection = MI_PROT_READWRITE;
+    if (MI_PROT_IS_ACCESSIBLE(AllocationProtection))
+        PrototypeProtection |= AllocationProtection & MI_PROT_NOCACHE;
+    Protection = Valid ? MiViewPageProtection(Source, Vad, Va, Pte) : MiSoftProtection(Pte);
     Work->Target->Protection = Protection;
     Work->Target->Page = Page;
     Page->References = 1;
@@ -407,9 +434,9 @@ MiClonePublishPage(PMI_ADDRESS_SPACE Source, PMI_ADDRESS_SPACE Target, PMI_CLONE
         Frame = Work->CopyFrame;
         Work->CopyFrame = MI_FRAME_INVALID;
         MiPfnInitializePage(&Source->System->Pfn, Frame, (ULONG64)(ULONG_PTR)&Page->Proto, 0,
-                            MiSoftMake(MiSoftDemandZero, MI_PROT_READWRITE, 0), MI_PFN_FLAG_PROTOTYPE);
+                            MiSoftMake(MiSoftDemandZero, PrototypeProtection, 0), MI_PFN_FLAG_PROTOTYPE);
         MiPfnSetModified(&Source->System->Pfn, Frame);
-        MiArchPteWrite(&Page->Proto, MiSoftMake(MiSoftResident, MI_PROT_READWRITE, Frame));
+        MiArchPteWrite(&Page->Proto, MiSoftMake(MiSoftResident, PrototypeProtection, Frame));
         MiCloneDropShare(Page, Frame);
     }
     else
@@ -442,14 +469,15 @@ MiClonePublishPage(PMI_ADDRESS_SPACE Source, PMI_ADDRESS_SPACE Target, PMI_CLONE
             OldIrql = MiPfnLock(&Source->System->Pfn, Frame);
             Entry->PteAddress = (ULONG64)(ULONG_PTR)&Page->Proto;
             Entry->PteFrame = 0;
+            Entry->OriginalPte = MiSoftWithProtection(Entry->OriginalPte, PrototypeProtection);
             MI_ATOMIC_OR8(&Entry->Flags, MI_PFN_FLAG_PROTOTYPE);
-            MiArchPteWrite(&Page->Proto, MiSoftMake(MiSoftResident, MI_PROT_READWRITE, Frame));
+            MiArchPteWrite(&Page->Proto, MiSoftMake(MiSoftResident, PrototypeProtection, Frame));
             MiPfnUnlock(&Source->System->Pfn, Frame, OldIrql);
             if (!Valid)
                 MiCloneDropShare(Page, Frame);
         }
         else
-            MiArchPteWrite(&Page->Proto, Pte);
+            MiArchPteWrite(&Page->Proto, MiSoftWithProtection(Pte, PrototypeProtection));
         MI_ATOMIC_ADD64(&Source->PrivatePages, -1);
     }
     Work->Page = NULL;

@@ -84,6 +84,21 @@ MiArchPteIsValid(_In_ MI_PTE Pte)
     return MiAmd64PteHas(Pte, 0);
 }
 
+MI_PTE
+MiArchPteBlockToPage(MI_PTE Pte, ULONG64 Frame)
+{
+    return (Pte & ~(MI_AMD64_PTE_FRAME | MI_AMD64_PTE_LARGE)) |
+           ((Frame << PAGE_SHIFT) & MI_AMD64_PTE_FRAME) | ((Pte & (1ULL << 12)) >> 5);
+}
+
+MI_PTE
+MiArchPteWithCache(MI_PTE Pte, ULONG Flags)
+{
+    MI_PTE Mask = MI_AMD64_PTE_PCD | MI_AMD64_PTE_PWT | MI_AMD64_PTE_LARGE;
+
+    return (Pte & ~Mask) | (MiArchPteMakeLeaf(0, MI_PROT_READWRITE, Flags) & Mask);
+}
+
 ULONG64
 MiArchPteFrame(_In_ MI_PTE Pte)
 {

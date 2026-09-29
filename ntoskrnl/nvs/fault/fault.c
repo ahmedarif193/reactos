@@ -425,7 +425,11 @@ RetryPage:
             Frame = (ULONG)MiSoftValue(Pte);
             PageIrql = MiPfnLock(&System->Pfn, Frame);
             if (MiArchPteRead(Slot) == Pte)
+            {
+                System->Pfn.Pfn[Frame].OriginalPte =
+                    MiSoftWithProtection(System->Pfn.Pfn[Frame].OriginalPte, Protection & ~MI_PROT_GUARD);
                 MiArchPteWrite(Slot, Cleared);
+            }
             MiPfnUnlock(&System->Pfn, Frame, PageIrql);
         }
         else
@@ -460,6 +464,15 @@ RetryPage:
                 break;
             }
 
+            if (Protection & MI_PROT_NOCACHE)
+            {
+                Status = MiPfnSetCache(&System->Pfn, Frame, MI_LEAF_NOCACHE);
+                if (!NT_SUCCESS(Status))
+                {
+                    MiPfnShareDecrement(&System->Pfn, Frame, TRUE);
+                    break;
+                }
+            }
             MiPfnInitializePage(&System->Pfn, Frame, SlotAddress, TableFrame,
                                 MiSoftMake(MiSoftDemandZero, Protection, 0), 0);
             Status = MiMakePageValid(Space, PageVa, Slot, TableFrame, Frame, Protection,
@@ -522,6 +535,16 @@ RetryPage:
             {
                 MiPfnShareDecrement(&System->Pfn, Frame, TRUE);
                 return STATUS_IN_PAGE_ERROR;
+            }
+
+            if (Protection & MI_PROT_NOCACHE)
+            {
+                Status = MiPfnSetCache(&System->Pfn, Frame, MI_LEAF_NOCACHE);
+                if (!NT_SUCCESS(Status))
+                {
+                    MiPfnShareDecrement(&System->Pfn, Frame, TRUE);
+                    return Status;
+                }
             }
 
             MI_RW_ACQUIRE_SHARED(&Space->Lock);

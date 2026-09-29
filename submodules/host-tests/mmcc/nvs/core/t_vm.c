@@ -861,6 +861,10 @@ FaultGuardAndCounters(void)
     UserRead64(&World, 0, Base + 0x2000, &Status);
     CHECK(Status == STATUS_GUARD_PAGE_VIOLATION);
     CHECK(UserRead64(&World, 0, Base + 0x2000, &Status) == 7 && NT_SUCCESS(Status));
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&Space, Base + 0x2000, &Info)));
+    CHECK(Info.Protect == MI_PROT_READWRITE);
+    CHECK(NT_SUCCESS(Protect(&Space, Base + 0x2000, 0x1000, MI_PROT_READWRITE, &Old)));
+    CHECK(Old == MI_PROT_READWRITE);
 
     CHECK(MI_ATOMIC_READ64(&Space.DemandZeroFaults) == 2);
     CHECK(MI_ATOMIC_READ64(&Space.TransitionFaults) == 1);

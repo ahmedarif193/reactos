@@ -191,6 +191,38 @@ MiPtSlotAddress(
     return ((ULONG64)TableFrame << PAGE_SHIFT) + ((ULONG_PTR)Slot & (PAGE_SIZE - 1));
 }
 
+NTSTATUS
+MiPtSplitBootBlock(PMI_ADDRESS_SPACE Space, ULONG64 VirtualAddress, PMI_PTE AliasSlot, ULONG ParentFrame)
+{
+    PMI_SYSTEM System = Space->System;
+    const MI_ARCH_DESCRIPTOR *Arch = System->Arch;
+    MI_PTE Block = MiArchPteRead(AliasSlot);
+    ULONG64 Pages = Arch->Level[0].EntryCount;
+    ULONG64 First = MiArchPteFrame(Block) & ~(Pages - 1);
+    ULONG Frame, Index;
+    PMI_PTE Table;
+
+    if (Arch->LargePageLevel != 1 || !MiArchPteIsBlock(Block, 1))
+        return STATUS_INVALID_PARAMETER;
+
+    Frame = MiPfnAllocatePage(&System->Pfn, MI_ALLOCATE_ZEROED);
+    if (Frame == MI_FRAME_INVALID)
+        return STATUS_NO_MEMORY;
+    Table = MiArchMapFrame(Frame);
+    for (Index = 0; Index < Pages; Index++)
+        MiArchPteWrite(&Table[Index], MiArchPteBlockToPage(Block, First + Index));
+    MiArchUnmapFrame(Table);
+    MiPfnInitializePage(&System->Pfn, Frame,
+                        ((ULONG64)ParentFrame << PAGE_SHIFT) +
+                        MiPtIndex(Arch, VirtualAddress, 1) * sizeof(MI_PTE),
+                        ParentFrame, 0, MI_PFN_FLAG_PAGE_TABLE | MI_PFN_FLAG_PINNED);
+    System->Pfn.Pfn[Frame].PageTableOwner = Space;
+    System->Pfn.Pfn[Frame].UsedEntries = (LONG)Pages;
+    MI_ATOMIC_ADD64(&Space->PageTablePages, 1);
+    MiArchWriteBootPte(AliasSlot, MiArchPteMakeTable(Frame, MiArchPteIsUser(Block) ? MI_LEAF_USER : 0));
+    return STATUS_SUCCESS;
+}
+
 BOOLEAN
 MiPtVirtualAddressFromSlot(
     _In_ PMI_ADDRESS_SPACE Space,

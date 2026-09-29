@@ -57,7 +57,8 @@ MachineCreate(PMACHINE Machine, ULONG64 FrameCount, ULONG CpuCount)
         abort();
     memset(Machine->Ram, 0, (size_t)FrameCount * PAGE_SIZE);
     Machine->FrameBusy = calloc(FrameCount, sizeof(*Machine->FrameBusy));
-    if (Machine->FrameBusy == NULL)
+    Machine->FrameCache = calloc(FrameCount, sizeof(*Machine->FrameCache));
+    if (Machine->FrameBusy == NULL || Machine->FrameCache == NULL)
         abort();
     Machine->FrameCount = FrameCount;
     Machine->CpuCount = CpuCount;
@@ -70,6 +71,7 @@ MachineDestroy(PMACHINE Machine)
 {
     free(Machine->Ram);
     free(Machine->FrameBusy);
+    free(Machine->FrameCache);
     if (MachineCurrent == Machine)
         MachineCurrent = NULL;
 }
@@ -96,6 +98,29 @@ VOID
 MiArchUnmapFrame(_In_ PVOID Mapping)
 {
     UNREFERENCED_PARAMETER(Mapping);
+}
+
+NTSTATUS
+MiArchSetFrameCache(ULONG Frame, ULONG Flags)
+{
+    if (Frame >= MachineCurrent->FrameCount)
+        return STATUS_INVALID_PARAMETER;
+    __atomic_store_n(&MachineCurrent->FrameCache[Frame], Flags, __ATOMIC_RELEASE);
+    return STATUS_SUCCESS;
+}
+
+ULONG64
+MiArchBootFrameAlias(ULONG Frame)
+{
+    UNREFERENCED_PARAMETER(Frame);
+    return 0;
+}
+
+VOID
+MiArchWriteBootPte(PMI_PTE Slot, MI_PTE Value)
+{
+    MiArchPteWrite(Slot, Value);
+    MiArchTlbInvalidateAll(FALSE);
 }
 
 MI_PTE

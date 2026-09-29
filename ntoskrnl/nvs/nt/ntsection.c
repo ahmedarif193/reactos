@@ -1075,6 +1075,13 @@ MmCreateSection(
     if (File == NULL)
     {
         ULONG64 SizeLimit = ((ULONG64)MmSizeOfPagedPoolInBytes / sizeof(MI_PTE)) << PAGE_SHIFT;
+        ULONG SegmentProtection = MI_PROT_EXECUTE_READWRITE;
+
+        if (AllocationAttributes & SEC_NOCACHE)
+        {
+            Protection |= MI_PROT_NOCACHE;
+            SegmentProtection |= MI_PROT_NOCACHE;
+        }
 
         if (Size == 0)
             return STATUS_INVALID_PARAMETER_4;
@@ -1094,9 +1101,9 @@ MmCreateSection(
         Status = (AllocationAttributes & SEC_LARGE_PAGES)
             ? MiSegmentCreateLarge(&MiSystem, Size, Protection, &MiControlAnonymousOps, Control, &Control->Segment)
             : (AllocationAttributes & SEC_RESERVE)
-            ? MiSegmentCreateReserved(&MiSystem, Size, MI_PROT_EXECUTE_READWRITE, &MiControlAnonymousOps, Control,
+            ? MiSegmentCreateReserved(&MiSystem, Size, SegmentProtection, &MiControlAnonymousOps, Control,
                                       &Control->Segment)
-            : MiSegmentCreate(&MiSystem, MiSegmentPageFileBacked, Size, MI_PROT_EXECUTE_READWRITE,
+            : MiSegmentCreate(&MiSystem, MiSegmentPageFileBacked, Size, SegmentProtection,
                                &MiControlAnonymousOps, Control, NULL, 0, &Control->Segment);
         if (!NT_SUCCESS(Status))
         {
@@ -1308,7 +1315,7 @@ MiMapSectionView(
     }
 
     if (Protection != MI_PROT_NOACCESS)
-        Protection &= ~MI_PROT_NOCACHE;
+        Protection = (Protection & ~MI_PROT_NOCACHE) | (Control->Segment->Protection & MI_PROT_NOCACHE);
 
     if (!Space->IsSystem)
     {

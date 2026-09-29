@@ -115,12 +115,30 @@ CloneGenerations(void)
 }
 
 static void
-ClonePagingAndMdl(void)
+CloneCheckCache(TEST_WORLD *World, MI_ADDRESS_SPACE *Space, ULONG64 Va, ULONG Cache)
+{
+    ULONG64 Physical;
+    MI_PTE Leaf;
+    MI_MEMORY_INFORMATION Info;
+    ULONG Frame;
+
+    CHECK(MiPtTranslate(Space, Va, &Physical, &Leaf));
+    CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == Cache);
+    Frame = (ULONG)(Physical >> PAGE_SHIFT);
+    CHECK((ULONG)MI_ATOMIC_READ32(&World->System.Pfn.Pfn[Frame].CacheFlags) == Cache);
+    CHECK(World->Machine.FrameCache[Frame] == Cache);
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(Space, Va, &Info)));
+    CHECK(Info.Protect != MI_PROT_NOACCESS && (Info.Protect & MI_PROT_NOCACHE) == Cache);
+}
+
+static void
+ClonePagingAndMdl(ULONG Cache)
 {
     static TEST_WORLD World;
     MI_ADDRESS_SPACE Parent, Child, Grandchild;
     ULONG64 Base = USER_BASE, Size = 16 * PAGE_SIZE;
-    ULONG Held[512], Count = 0, Frame, i;
+    ULONG Held[512], Count = 0, Frame, i, Old;
+    ULONG64 Va, Length;
     MI_FRAME_NUMBER Locked;
     NTSTATUS Status;
 
@@ -134,15 +152,29 @@ ClonePagingAndMdl(void)
     WorldAttach(&World, 1, &Child);
     WorldAttach(&World, 2, &Grandchild);
     CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&Parent, &Base, &Size,
-                                             MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE)));
+                                             MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE | Cache)));
     for (i = 0; i < 16; i++)
         CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + i * PAGE_SIZE, 0x1000 + i)));
+    Va = Base; Length = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiProtectVirtualMemory(&Parent, &Va, &Length,
+                                            MI_PROT_READONLY | MI_PROT_NOCACHE, &Old)));
+    CHECK(Old == (MI_PROT_READWRITE | Cache));
+    CloneCheckCache(&World, &Parent, Base, Cache);
+    CHECK(UserWrite64(&World, 0, Base, 0x5000) == STATUS_ACCESS_VIOLATION);
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&Parent, &Va, &Length, MI_MEM_COMMIT, MI_PROT_READWRITE)));
+    CloneCheckCache(&World, &Parent, Base, Cache);
     CHECK(NT_SUCCESS(MiLockPages(&Parent, Base, 1, TRUE, TRUE, &Locked)));
     CHECK(MiTrimAddressSpace(&Parent, 16, TRUE) == 16);
+    Va = Base + 2 * PAGE_SIZE; Length = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiProtectVirtualMemory(&Parent, &Va, &Length, MI_PROT_NOACCESS, &Old)));
     CHECK(NT_SUCCESS(MiCloneAddressSpace(&Parent, &Child)));
+    CHECK(NT_SUCCESS(MiProtectVirtualMemory(&Parent, &Va, &Length, MI_PROT_READWRITE, &Old)));
+    CHECK(NT_SUCCESS(MiProtectVirtualMemory(&Child, &Va, &Length, MI_PROT_READWRITE, &Old)));
     *(ULONG64 *)MachineFrame(&World.Machine, (ULONG)Locked) = 0x2000;
     CHECK(UserRead64(&World, 0, Base, &Status) == 0x2000);
     CHECK(UserRead64(&World, 1, Base, &Status) == 0x1000);
+    CloneCheckCache(&World, &Parent, Base, Cache);
+    CloneCheckCache(&World, &Child, Base, Cache);
     MiUnlockFrames(&World.System, &Locked, 1, TRUE);
     CHECK(MiTrimAddressSpace(&Parent, 16, TRUE) == 1);
     CHECK(MiTrimAddressSpace(&Child, 16, TRUE) == 1);
@@ -160,12 +192,17 @@ ClonePagingAndMdl(void)
     World.Paging.FailReads = 0;
     World.Paging.ProbeLock = &Child.Lock;
     for (i = 0; i < 16; i++)
+    {
         CHECK(UserRead64(&World, 1, Base + i * PAGE_SIZE, &Status) == 0x1000 + i && NT_SUCCESS(Status));
+        CloneCheckCache(&World, &Child, Base + i * PAGE_SIZE, Cache);
+    }
     CHECK(World.Paging.IoUnderLock == 0);
     World.Paging.ProbeLock = NULL;
     CHECK(UserRead64(&World, 2, Base, &Status) == 0x2000);
     CHECK(NT_SUCCESS(UserWrite64(&World, 2, Base + PAGE_SIZE, 0x3000)));
     CHECK(UserRead64(&World, 1, Base + PAGE_SIZE, &Status) == 0x1001);
+    CloneCheckCache(&World, &Grandchild, Base, Cache);
+    CloneCheckCache(&World, &Grandchild, Base + PAGE_SIZE, Cache);
 
     CHECK(NT_SUCCESS(MiLockPages(&Child, Base + 2 * PAGE_SIZE, 1, TRUE, FALSE, &Locked)));
     WorldAttach(&World, 0, NULL);
@@ -177,6 +214,8 @@ ClonePagingAndMdl(void)
     CHECK(*(ULONG64 *)MachineFrame(&World.Machine, (ULONG)Locked) == 0x1002);
     MiUnlockFrames(&World.System, &Locked, 1, FALSE);
     WorldExpectClean(&World, 512);
+    for (i = 0; i < World.System.Pfn.FrameCount; i++)
+        CHECK(World.Machine.FrameCache[i] == 0);
     WorldDestroy(&World);
 }
 
@@ -318,7 +357,8 @@ TestClone(void)
 {
     CloneBasic();
     CloneGenerations();
-    ClonePagingAndMdl();
+    ClonePagingAndMdl(0);
+    ClonePagingAndMdl(MI_PROT_NOCACHE);
     CloneSectionsAndRollback();
     CloneSmp();
 }

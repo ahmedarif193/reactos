@@ -31,6 +31,30 @@ MiInitializeKernelVaLayout(
     MmSystemRangeStart = (PVOID)(ULONG_PTR)MiArchDescribe()->SystemAddressStart;
 }
 
+NTSTATUS
+MiArchSetFrameCache(ULONG Frame, ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(Frame);
+    return Flags == 0 ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+
+ULONG64
+MiArchBootFrameAlias(ULONG Frame)
+{
+    return RISCV64_LOADER_KSEG0_BASE + ((ULONG64)Frame << PAGE_SHIFT);
+}
+
+VOID
+MiArchWriteBootPte(PMI_PTE Slot, MI_PTE Value)
+{
+    KIRQL OldIrql;
+
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    MiArchPteWrite(Slot, Value);
+    MiArchTlbInvalidateAll(FALSE);
+    KeLowerIrql(OldIrql);
+}
+
 PVOID
 MiArchMapFrame(_In_ ULONG64 Frame)
 {

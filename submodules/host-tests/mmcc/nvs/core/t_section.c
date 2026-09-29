@@ -8,6 +8,7 @@
  */
 
 #include "mmharness.h"
+#include <nvs/include/misys.h>
 
 #define KB64 0x10000ULL
 
@@ -1298,6 +1299,251 @@ SectionPlaceholderView(void)
     WorldDestroy(&World);
 }
 
+static void
+SectionSplitBootMapping(void)
+{
+    TEST_WORLD World;
+    PMI_ADDRESS_SPACE Space;
+    ULONG64 Base, Physical, Pages;
+    ULONG ParentFrame, TableFrame, Index;
+    PMI_PTE Slot, Leaf;
+    MI_PTE Pte;
+
+    WorldCreate(&World, 2048, 1, 1000);
+    Space = &World.System.SystemSpace;
+    Base = World.System.Arch->SystemAddressStart;
+    Pages = World.System.Arch->Level[0].EntryCount;
+    Slot = MiPtEnsureLevel(Space, Base, 1, &ParentFrame);
+    CHECK(Slot != NULL);
+    if (Slot == NULL)
+        goto Done;
+    Pte = MiArchPteMakeBlock(Pages, MI_PROT_READWRITE, MI_LEAF_GLOBAL | MI_LEAF_DIRTY);
+    MiPtWrite(Space, Base, Slot, ParentFrame, Pte);
+    CHECK(MiPtTranslate(Space, Base + PAGE_SIZE, &Physical, NULL));
+    CHECK(Physical == (Pages + 1) * PAGE_SIZE);
+    CHECK(NT_SUCCESS(MiPtSplitBootBlock(Space, Base, Slot, ParentFrame)));
+    CHECK(!MiArchPteIsBlock(MiArchPteRead(Slot), 1));
+    for (Index = 0; Index < Pages; Index++)
+    {
+        ULONG64 Address = Base + (ULONG64)Index * PAGE_SIZE;
+
+        CHECK(MiPtTranslate(Space, Address, &Physical, &Pte));
+        CHECK(Physical == (Pages + Index) * PAGE_SIZE);
+        CHECK(MiArchPteIsHardwareWritable(Pte));
+        CHECK(!MiArchPteIsUser(Pte));
+    }
+    Leaf = MiPtLookup(Space, Base + PAGE_SIZE, &TableFrame);
+    CHECK(Leaf != NULL);
+    Pte = MiArchPteRead(Leaf);
+    MiArchPteWrite(Leaf, MiArchPteWithCache(Pte, MI_LEAF_NOCACHE));
+    CHECK(MiPtTranslate(Space, Base + PAGE_SIZE, &Physical, &Pte));
+    CHECK((MiArchPteLeafFlags(Pte) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+    CHECK(MiPtTranslate(Space, Base + 2 * PAGE_SIZE, &Physical, &Pte));
+    CHECK((MiArchPteLeafFlags(Pte) & MI_LEAF_CACHE_MASK) == 0);
+    CHECK(World.Machine.BreakBeforeMakeViolations == 0);
+    CHECK(MiPtCheck(Space) == 0);
+    MI_ATOMIC_AND8(&World.System.Pfn.Pfn[TableFrame].Flags, (UCHAR)~MI_PFN_FLAG_PINNED);
+    for (Index = 0; Index < Pages; Index++)
+    {
+        ULONG64 Address = Base + (ULONG64)Index * PAGE_SIZE;
+
+        Leaf = MiPtLookup(Space, Address, &TableFrame);
+        MiPtWrite(Space, Address, Leaf, TableFrame, 0);
+    }
+    MiPtPruneEmpty(Space, Base);
+Done:
+    WorldExpectClean(&World, 2048);
+    WorldDestroy(&World);
+}
+
+static void
+SectionUncachedLargePages(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE Space;
+    MI_MEMORY_INFORMATION Info;
+    PMI_SEGMENT Segment;
+    ULONG64 Base = 0, Size, ProtectBase, ProtectSize;
+    ULONG Old, Index;
+    NTSTATUS Status;
+
+    WorldCreate(&World, 2048, 1, 10000);
+    SpaceCreate(&World, 0, &Space);
+    Size = World.System.Arch->LargePageSize;
+    Status = MiSegmentCreateLarge(&World.System, Size, MI_PROT_READWRITE | MI_PROT_NOCACHE,
+                                  NULL, NULL, &Segment);
+    CHECK(NT_SUCCESS(Status));
+    if (!NT_SUCCESS(Status))
+        goto Done;
+    Status = MiMapView(&Space, Segment, &Base, 0, &Size, MI_PROT_READWRITE, MI_MEM_LARGE_PAGES);
+    CHECK(NT_SUCCESS(Status));
+    if (NT_SUCCESS(Status))
+    {
+        CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base, 0xCAFE)));
+        CHECK(NT_SUCCESS(MiQueryVirtualMemory(&Space, Base, &Info)));
+        CHECK(Info.Protect == (MI_PROT_READWRITE | MI_PROT_NOCACHE));
+        ProtectBase = Base;
+        ProtectSize = Size;
+        CHECK(NT_SUCCESS(MiProtectVirtualMemory(&Space, &ProtectBase, &ProtectSize, MI_PROT_READONLY, &Old)));
+        CHECK(Old == (MI_PROT_READWRITE | MI_PROT_NOCACHE));
+        CHECK(UserRead64(&World, 0, Base, &Status) == 0xCAFE && NT_SUCCESS(Status));
+        CHECK(UserWrite64(&World, 0, Base, 0) == STATUS_ACCESS_VIOLATION);
+        CHECK(NT_SUCCESS(MiQueryVirtualMemory(&Space, Base, &Info)));
+        CHECK(Info.Protect == (MI_PROT_READONLY | MI_PROT_NOCACHE));
+        for (Index = 0; Index < Size >> PAGE_SHIFT; Index++)
+        {
+            ULONG Frame = Segment->LargeFrames[0] + Index;
+
+            CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
+            CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+        }
+        CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
+    }
+    MiSegmentDereference(Segment);
+    for (Index = 0; Index < World.System.Pfn.FrameCount; Index++)
+        CHECK(World.Machine.FrameCache[Index] == 0);
+Done:
+    SpaceDestroy(&World, 0, &Space);
+    WorldExpectClean(&World, 2048);
+    WorldDestroy(&World);
+}
+
+static void
+SectionUncachedPageFile(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE A, B;
+    MI_MEMORY_INFORMATION Info;
+    PMI_SEGMENT Segment;
+    PMI_MDL Mdl;
+    MI_PTE Leaf;
+    ULONG64 BaseA = 0, BaseB = 0, BaseCopy = 0, Physical, SystemVa;
+    ULONG64 Commit, Size;
+    ULONG Frame, Old, Held[256], HeldCount = 0, Index;
+    NTSTATUS Status;
+
+    WorldCreate(&World, 256, 2, 1000);
+    WorldAttachPageFile(&World, 64);
+    CHECK(NT_SUCCESS(MiSystemPtesInitialize(&World.System, 1024, 2)));
+    SpaceCreate(&World, 0, &A);
+    SpaceCreate(&World, 1, &B);
+    Status = MiSegmentCreate(&World.System, MiSegmentPageFileBacked, 2 * PAGE_SIZE,
+                             MI_PROT_READWRITE | MI_PROT_NOCACHE, NULL, NULL, NULL, 0, &Segment);
+    CHECK(NT_SUCCESS(Status));
+    if (!NT_SUCCESS(Status))
+        goto Done;
+    CHECK(NT_SUCCESS(Map(&A, Segment, &BaseA, 0, 0, MI_PROT_READWRITE)));
+    CHECK(NT_SUCCESS(Map(&B, Segment, &BaseB, 0, 0, MI_PROT_READONLY)));
+    if (BaseA == 0 || BaseB == 0)
+        goto Release;
+
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, BaseA, &Info)));
+    CHECK(Info.AllocationProtect == (MI_PROT_READWRITE | MI_PROT_NOCACHE));
+    CHECK(Info.Protect == (MI_PROT_READWRITE | MI_PROT_NOCACHE));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, BaseA, 0x5EC70CAC)));
+    CHECK(UserRead64(&World, 1, BaseB, &Status) == 0x5EC70CAC && NT_SUCCESS(Status));
+    CHECK(MiPtTranslate(&A, BaseA, &Physical, &Leaf));
+    CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+    Frame = (ULONG)(Physical >> PAGE_SHIFT);
+    CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
+    CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+    CHECK(MiPtTranslate(&B, BaseB, &Physical, &Leaf));
+    CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+    CHECK((Physical >> PAGE_SHIFT) == Frame);
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, BaseA, &Info)));
+    CHECK(Info.Protect == (MI_PROT_READWRITE | MI_PROT_NOCACHE));
+
+    Mdl = MiMdlAllocate(&A, BaseA, PAGE_SIZE);
+    CHECK(Mdl != NULL);
+    if (Mdl != NULL)
+    {
+        Status = MiProbeAndLockPages(Mdl, TRUE, FALSE);
+        CHECK(NT_SUCCESS(Status));
+        if (NT_SUCCESS(Status))
+        {
+            Status = MiMapLockedPages(Mdl, MiCacheFull, &SystemVa);
+            CHECK(NT_SUCCESS(Status));
+            if (NT_SUCCESS(Status))
+            {
+                CHECK(MiPtTranslate(&World.System.SystemSpace, SystemVa, &Physical, &Leaf));
+                CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+                CHECK((Physical >> PAGE_SHIFT) == Frame);
+                MiUnmapLockedPages(Mdl);
+            }
+            MiUnlockPages(Mdl);
+        }
+        MiMdlFree(Mdl);
+    }
+
+    Commit = BaseA;
+    Size = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&A, &Commit, &Size, MI_MEM_COMMIT, MI_PROT_READONLY)));
+    CHECK(NT_SUCCESS(MiQueryVirtualMemory(&A, BaseA, &Info)));
+    CHECK(Info.AllocationProtect == (MI_PROT_READWRITE | MI_PROT_NOCACHE));
+    CHECK(Info.Protect == (MI_PROT_READONLY | MI_PROT_NOCACHE));
+    CHECK(UserRead64(&World, 0, BaseA, &Status) == 0x5EC70CAC && NT_SUCCESS(Status));
+    CHECK(MiPtTranslate(&A, BaseA, &Physical, &Leaf));
+    CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+    CHECK(UserWrite64(&World, 0, BaseA, 1) == STATUS_ACCESS_VIOLATION);
+    Commit = BaseA;
+    Size = PAGE_SIZE;
+    CHECK(NT_SUCCESS(MiProtectVirtualMemory(&A, &Commit, &Size, MI_PROT_READWRITE, &Old)));
+    CHECK(Old == (MI_PROT_READONLY | MI_PROT_NOCACHE));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, BaseA, 0x5EC70CB0)));
+    CHECK(UserRead64(&World, 1, BaseB, &Status) == 0x5EC70CB0 && NT_SUCCESS(Status));
+    CHECK(MiPtTranslate(&A, BaseA, &Physical, &Leaf));
+    CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+
+    CHECK(NT_SUCCESS(Map(&A, Segment, &BaseCopy, 0, PAGE_SIZE, MI_PROT_WRITECOPY)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, BaseCopy, 0xC0F10001)));
+    CHECK(UserRead64(&World, 1, BaseB, &Status) == 0x5EC70CB0 && NT_SUCCESS(Status));
+    CHECK(MiPtTranslate(&A, BaseCopy, &Physical, &Leaf));
+    CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+    Frame = (ULONG)(Physical >> PAGE_SHIFT);
+    CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
+    CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+
+    CHECK(MiTrimAddressSpace(&A, 256, TRUE) == 2);
+    CHECK(MiTrimAddressSpace(&B, 256, TRUE) == 1);
+    CHECK(MiWriteModifiedPages(&World.System, 256) == 2);
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    {
+        Held[HeldCount++] = Frame;
+        CHECK(World.Machine.FrameCache[Frame] == 0);
+    }
+    for (Index = 0; Index < HeldCount; Index++)
+        MiPfnShareDecrement(&World.System.Pfn, Held[Index], TRUE);
+    CHECK(UserRead64(&World, 0, BaseCopy, &Status) == 0xC0F10001 && NT_SUCCESS(Status));
+    CHECK(MiPtTranslate(&A, BaseCopy, &Physical, &Leaf));
+    CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+    Frame = (ULONG)(Physical >> PAGE_SHIFT);
+    CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
+    CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+    CHECK(UserRead64(&World, 1, BaseB, &Status) == 0x5EC70CB0 && NT_SUCCESS(Status));
+    CHECK(MiPtTranslate(&B, BaseB, &Physical, &Leaf));
+    CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
+    Frame = (ULONG)(Physical >> PAGE_SHIFT);
+    CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
+    CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+
+Release:
+    if (BaseCopy != 0)
+        CHECK(NT_SUCCESS(MiUnmapView(&A, BaseCopy)));
+    if (BaseA != 0)
+        CHECK(NT_SUCCESS(MiUnmapView(&A, BaseA)));
+    if (BaseB != 0)
+        CHECK(NT_SUCCESS(MiUnmapView(&B, BaseB)));
+    MiSegmentDereference(Segment);
+    for (Index = 0; Index < World.System.Pfn.FrameCount; Index++)
+        CHECK(World.Machine.FrameCache[Index] == 0);
+Done:
+    SpaceDestroy(&World, 0, &A);
+    SpaceDestroy(&World, 1, &B);
+    MiSystemPtesUninitialize(&World.System);
+    WorldExpectClean(&World, 256);
+    WorldDestroy(&World);
+}
+
 void
 TestSection(void)
 {
@@ -1316,6 +1562,9 @@ TestSection(void)
     SectionViewProtection();
     SectionClusterRead();
     SectionPlaceholderView();
+    SectionSplitBootMapping();
+    SectionUncachedLargePages();
+    SectionUncachedPageFile();
 }
 
 void

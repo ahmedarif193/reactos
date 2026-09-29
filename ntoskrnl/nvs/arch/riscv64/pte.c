@@ -88,6 +88,19 @@ MiArchPteIsValid(_In_ MI_PTE Pte)
     return (Pte & MI_RISCV_PTE_VALID) != 0;
 }
 
+MI_PTE
+MiArchPteBlockToPage(MI_PTE Pte, ULONG64 Frame)
+{
+    return (Pte & ~MI_RISCV_PTE_PFN_MASK) | ((Frame << MI_RISCV_PTE_PFN_SHIFT) & MI_RISCV_PTE_PFN_MASK);
+}
+
+MI_PTE
+MiArchPteWithCache(MI_PTE Pte, ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(Flags);
+    return Pte;
+}
+
 ULONG64
 MiArchPteFrame(_In_ MI_PTE Pte)
 {

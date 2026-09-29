@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: GPL-3.0-only
  */
 
-#include <ntoskrnl.h>
+#include <nvs/nt/mint.h>
 #include <nvs/include/miarch.h>
 #include <nvs/include/mienv.h>
 #include <nvs/include/mipte.h>
@@ -22,6 +22,29 @@ MiInitializeKernelVaLayout(
     _In_ const LOADER_PARAMETER_BLOCK *LoaderBlock)
 {
     UNREFERENCED_PARAMETER(LoaderBlock);
+}
+
+NTSTATUS
+MiArchSetFrameCache(ULONG Frame, ULONG Flags)
+{
+    return MiSetDirectFrameCache(Frame, Flags);
+}
+
+ULONG64
+MiArchBootFrameAlias(ULONG Frame)
+{
+    return KSEG0_BASE | ((ULONG64)Frame << PAGE_SHIFT);
+}
+
+VOID
+MiArchWriteBootPte(PMI_PTE Slot, MI_PTE Value)
+{
+    KIRQL OldIrql;
+
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    MiArchPteWrite(Slot, Value);
+    MiArchTlbInvalidateAll(FALSE);
+    KeLowerIrql(OldIrql);
 }
 
 PVOID

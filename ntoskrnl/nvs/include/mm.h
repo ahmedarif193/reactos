@@ -124,6 +124,8 @@ PMI_PTE MiPtLookupLevel(_In_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddres
                         _Out_opt_ PULONG TableFrame);
 PMI_PTE MiPtEnsureLevel(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ ULONG Level,
                         _Out_ PULONG TableFrame);
+NTSTATUS MiPtSplitBootBlock(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress,
+                            _Inout_ PMI_PTE AliasSlot, _In_ ULONG ParentFrame);
 VOID MiPtPruneEmpty(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress);
 VOID MiPtFlushEmpty(_Inout_ PMI_ADDRESS_SPACE Space);
 VOID MiPtCacheEmpty(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG TableFrame, _In_ ULONG64 VirtualAddress);

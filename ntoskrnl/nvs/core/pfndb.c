@@ -237,6 +237,32 @@ MiPfnZeroFrame(
     MiArchUnmapFrame(Mapping);
 }
 
+NTSTATUS
+MiPfnSetCache(PMI_PFN_DATABASE Db, ULONG Frame, ULONG Flags)
+{
+    NTSTATUS Status;
+
+    if (Flags & ~MI_LEAF_CACHE_MASK)
+        return STATUS_INVALID_PARAMETER;
+    Status = MiArchSetFrameCache(Frame, Flags);
+    if (NT_SUCCESS(Status))
+        MI_ATOMIC_WRITE32(&Db->Pfn[Frame].CacheFlags, Flags);
+    return Status;
+}
+
+static VOID
+MiPfnRestoreCache(PMI_PFN_DATABASE Db, ULONG Frame)
+{
+    PMI_PFN Entry = &Db->Pfn[Frame];
+
+    if (!(MI_PFN_FLAGS(Entry) & MI_PFN_FLAG_PAGE_TABLE) && Entry->CacheFlags != 0)
+    {
+        NTSTATUS Status = MiPfnSetCache(Db, Frame, 0);
+
+        MI_ASSERT(NT_SUCCESS(Status));
+    }
+}
+
 static
 ULONG
 MiPfnCacheRefill(
@@ -416,6 +442,7 @@ MiPfnAllocatePage(
     if (Frame == MI_FRAME_INVALID)
         return MI_FRAME_INVALID;
 
+    MiPfnRestoreCache(Db, Frame);
     if ((Flags & MI_ALLOCATE_ZEROED) && !IsZero)
     {
         MiPfnZeroFrame(Frame);
@@ -460,6 +487,7 @@ MiPfnClaimFrame(
 
     if (Claimed)
     {
+        MiPfnRestoreCache(Db, Frame);
         Entry->State = MiPageActive;
         Entry->ReferenceCount = 1;
         Entry->ShareCount = 1;
@@ -706,6 +734,7 @@ MiPfnFreeLocked(
     PMI_PFN Entry = &Db->Pfn[Frame];
     KIRQL OldIrql;
 
+    MiPfnRestoreCache(Db, Frame);
     Entry->ReferenceCount = 0;
     Entry->ShareCount = 0;
     Entry->PteAddress = 0;

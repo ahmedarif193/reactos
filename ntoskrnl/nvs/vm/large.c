@@ -263,6 +263,9 @@ MiProtectLargePagesLocked(PMI_ADDRESS_SPACE Space, ULONG64 Start, ULONG64 End,
     ULONG64 Large = Arch->LargePageSize, Va;
     PMI_VAD Vad = MiVadLocate(Space, Start);
 
+    if (Vad->Segment != NULL && Protection != MI_PROT_NOACCESS)
+        Protection = (Protection & ~MI_PROT_NOCACHE) | (Vad->Segment->Protection & MI_PROT_NOCACHE);
+
     if (((Start | End) & (Large - 1)) != 0)
         return STATUS_CONFLICTING_ADDRESSES;
     if (MI_PROT_IS_COPY(Protection) ||

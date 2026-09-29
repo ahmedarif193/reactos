@@ -146,6 +146,7 @@ ULONG MiPfnAllocatePageInRange(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG LowestFra
 ULONG MiPfnAllocatePage(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Flags);
 VOID MiPfnInitializePage(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame, _In_ ULONG64 PteAddress,
                          _In_ ULONG PteFrame, _In_ MI_PTE OriginalPte, _In_ UCHAR Flags);
+NTSTATUS MiPfnSetCache(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame, _In_ ULONG Flags);
 KIRQL MiPfnLock(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);
 VOID MiPfnUnlock(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame, _In_ KIRQL OldIrql);
 VOID MiPfnSetModified(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);
