@@ -1381,7 +1381,7 @@ static void test_NtMapViewOfSection(void)
 {
     static const char testfile[] = "testfile.xxx";
     static const char data[] = "test data for NtMapViewOfSection";
-    char buffer[sizeof(data)];
+    char buffer[sizeof(data)], version_path[MAX_PATH];
     HANDLE file, mapping, process;
     void *ptr, *ptr2;
     BOOL ret;
@@ -1620,7 +1620,9 @@ static void test_NtMapViewOfSection(void)
     /* test zero_bits > 31 with a 64-bit DLL file image mapping */
     if (is_win64)
     {
-        file = CreateFileA("c:\\windows\\system32\\version.dll", GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0);
+        GetSystemDirectoryA(version_path, ARRAY_SIZE(version_path) - sizeof("\\version.dll"));
+        strcat(version_path, "\\version.dll");
+        file = CreateFileA(version_path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0);
         ok(file != INVALID_HANDLE_VALUE, "Failed to open version.dll\n");
 
         mapping = CreateFileMappingA(file, NULL, PAGE_READONLY|SEC_IMAGE, 0, 0, NULL);
@@ -1656,7 +1658,7 @@ static void test_NtMapViewOfSectionEx(void)
 {
     static const char testfile[] = "testfile.xxx";
     static const char data[] = "test data for NtMapViewOfSectionEx";
-    char buffer[sizeof(data)];
+    char buffer[sizeof(data)], version_path[MAX_PATH];
     MEM_EXTENDED_PARAMETER ext[2];
     MEM_ADDRESS_REQUIREMENTS a;
     SYSTEM_INFO si;
@@ -1899,7 +1901,9 @@ static void test_NtMapViewOfSectionEx(void)
     CloseHandle(file);
     DeleteFileA(testfile);
 
-    file = CreateFileA( "c:\\windows\\system32\\version.dll", GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0 );
+    GetSystemDirectoryA(version_path, ARRAY_SIZE(version_path) - sizeof("\\version.dll"));
+    strcat(version_path, "\\version.dll");
+    file = CreateFileA(version_path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0 );
     ok( file != INVALID_HANDLE_VALUE, "Failed to open version.dll\n" );
     mapping = CreateFileMappingA( file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL );
     ok( mapping != 0, "CreateFileMapping failed\n" );

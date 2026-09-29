@@ -2532,7 +2532,7 @@ static void test_NtRegLoadKeyEx(void)
     HANDLE key = 0;
 
 #ifdef __REACTOS__
-    if (_winver < _WIN32_WINNT_VISTA)
+    if (GetNTVersion() < _WIN32_WINNT_VISTA)
     {
         win_skip("Skipping tests for NtLoadKeyEx on pre-NT6\n");
         return;
@@ -2711,6 +2711,8 @@ static struct
 }
 query_reg_values_direct_typed;
 
+static WCHAR query_reg_values_system_drive[MAX_PATH];
+
 static struct query_reg_values_test query_reg_values_tests[] =
 {
     /* Empty table */
@@ -2735,7 +2737,7 @@ static struct query_reg_values_test query_reg_values_tests[] =
     /* NOVALUE is ignored when the name is not null */
     {
         {{ query_routine, RTL_QUERY_REGISTRY_NOVALUE, (WCHAR*)L"WindowsDrive" }},
-        STATUS_SUCCESS, 1, WINE_TODO_TYPE | WINE_TODO_SIZE, REG_SZ, L"C:"
+        STATUS_SUCCESS, 1, WINE_TODO_TYPE | WINE_TODO_SIZE, REG_SZ, query_reg_values_system_drive
     },
     /* NOVALUE calls the callback without enumerating any values */
     {
@@ -2757,7 +2759,7 @@ static struct query_reg_values_test query_reg_values_tests[] =
     },
     {
         {{ NULL, RTL_QUERY_REGISTRY_DIRECT, (WCHAR*)L"WindowsDrive", &query_reg_values_direct_str }},
-        STATUS_SUCCESS, 0, 0, REG_NONE, L"C:"
+        STATUS_SUCCESS, 0, 0, REG_NONE, query_reg_values_system_drive
     },
     {
         {{ NULL, RTL_QUERY_REGISTRY_DIRECT, (WCHAR*)L"WindowsDrive", &query_reg_values_direct_str }},
@@ -2850,7 +2852,7 @@ static struct query_reg_values_test query_reg_values_tests[] =
     },
     {
         {{ query_routine, 0, (WCHAR*)L"I don't exist", NULL, REG_EXPAND_SZ, (WCHAR*)L"%SYSTEMDRIVE%" }},
-        STATUS_SUCCESS, 1, 0, REG_SZ, L"C:"
+        STATUS_SUCCESS, 1, 0, REG_SZ, query_reg_values_system_drive
     },
     {
         {{ query_routine, 0, (WCHAR*)L"I don't exist", NULL, REG_MULTI_SZ, (WCHAR*)L"Brussels\0Paris\0%PATH%\0" }},
@@ -2888,7 +2890,7 @@ static struct query_reg_values_test query_reg_values_tests[] =
     {
         {{ NULL, RTL_QUERY_REGISTRY_DIRECT, (WCHAR*)L"I don't exist",
            &query_reg_values_direct_str, REG_EXPAND_SZ, (WCHAR*)L"%SYSTEMDRIVE%" }},
-        STATUS_SUCCESS, 0, 0, REG_NONE, L"C:"
+        STATUS_SUCCESS, 0, 0, REG_NONE, query_reg_values_system_drive
     },
     {
         {{ NULL, RTL_QUERY_REGISTRY_DIRECT, (WCHAR*)L"I don't exist",
@@ -2979,7 +2981,7 @@ static struct query_reg_values_test query_reg_values_tests[] =
     /* DELETE deletes the value after reading it */
     {
         {{ query_routine, RTL_QUERY_REGISTRY_DELETE, (WCHAR*)L"WindowsDrive" }},
-        STATUS_SUCCESS, 1, 0, REG_SZ, L"C:"
+        STATUS_SUCCESS, 1, 0, REG_SZ, query_reg_values_system_drive
     },
     {
         {{ query_routine, 0, (WCHAR*)L"I don't exist", NULL, REG_SZ, (WCHAR*)L"Some default" }},
@@ -2991,6 +2993,13 @@ static void test_RtlQueryRegistryValues(void)
 {
     NTSTATUS status;
     unsigned int i;
+    DWORD len;
+
+    len = GetEnvironmentVariableW(L"SYSTEMDRIVE", query_reg_values_system_drive,
+                                  ARRAY_SIZE(query_reg_values_system_drive));
+    ok(len && len < ARRAY_SIZE(query_reg_values_system_drive),
+       "Failed to get SYSTEMDRIVE: length %lu, error %lu\n", len, GetLastError());
+    if (!len || len >= ARRAY_SIZE(query_reg_values_system_drive)) return;
 
     status = RegSetKeyValueW(HKEY_CURRENT_USER, L"WineTest", L"WindowsDrive", REG_EXPAND_SZ,
                              L"%SYSTEMDRIVE%", sizeof(L"%SYSTEMDRIVE%"));

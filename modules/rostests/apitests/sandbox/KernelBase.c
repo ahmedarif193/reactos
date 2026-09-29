@@ -284,7 +284,9 @@ RunPreferChild(BOOL ExpectSystem32)
     }
     GetSystemDirectoryW(System32, ARRAYSIZE(System32));
     GetModuleFileNameW(Module, Loaded, ARRAYSIZE(Loaded));
-    FromSystem32 = _wcsnicmp(Loaded, System32, wcslen(System32)) == 0;
+    StringCchCatW(System32, ARRAYSIZE(System32), L"\\");
+    StringCchCatW(System32, ARRAYSIZE(System32), APPINIT_DLL);
+    FromSystem32 = _wcsicmp(Loaded, System32) == 0;
     if (FromSystem32 != ExpectSystem32)
         SbxChildFail(&Failures, CHILD_PREFER_MISMATCH, ExpectSystem32 ? "not loaded from system32" : "loaded from system32", 0);
     FreeLibrary(Module);
