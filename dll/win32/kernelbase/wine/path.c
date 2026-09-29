@@ -1430,7 +1430,11 @@ BOOL WINAPI PathCanonicalizeA(char *buffer, const char *path)
 
     len = MultiByteToWideChar(CP_ACP, 0, path, -1, pathW, ARRAY_SIZE(pathW));
     if (!len)
+    {
+        if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+            SetLastError(ERROR_FILENAME_EXCED_RANGE);
         return FALSE;
+    }
 
     ret = PathCanonicalizeW(bufferW, pathW);
     WideCharToMultiByte(CP_ACP, 0, bufferW, -1, buffer, MAX_PATH, 0, 0);
@@ -1501,6 +1505,7 @@ WCHAR * WINAPI PathCombineW(WCHAR *dst, const WCHAR *dir, const WCHAR *file)
 LPSTR WINAPI PathCombineA(char *dst, const char *dir, const char *file)
 {
     WCHAR dstW[MAX_PATH], dirW[MAX_PATH], fileW[MAX_PATH];
+    DWORD error = GetLastError();
 
     TRACE("%p, %s, %s\n", dst, wine_dbgstr_a(dir), wine_dbgstr_a(file));
 
@@ -1512,10 +1517,16 @@ LPSTR WINAPI PathCombineA(char *dst, const char *dir, const char *file)
         goto fail;
 
     if (dir && !MultiByteToWideChar(CP_ACP, 0, dir, -1, dirW, ARRAY_SIZE(dirW)))
+    {
+        SetLastError(error);
         goto fail;
+    }
 
     if (file && !MultiByteToWideChar(CP_ACP, 0, file, -1, fileW, ARRAY_SIZE(fileW)))
+    {
+        SetLastError(error);
         goto fail;
+    }
 
     if (PathCombineW(dstW, dir ? dirW : NULL, file ? fileW : NULL))
         if (WideCharToMultiByte(CP_ACP, 0, dstW, -1, dst, MAX_PATH, 0, 0))
@@ -1567,11 +1578,11 @@ int WINAPI PathCommonPrefixA(const char *file1, const char *file2, char *path)
 
     TRACE("%s, %s, %p.\n", wine_dbgstr_a(file1), wine_dbgstr_a(file2), path);
 
-    if (path)
-        *path = '\0';
-
     if (!file1 || !file2)
         return 0;
+
+    if (path)
+        *path = '\0';
 
     /* Handle roots first */
     if (PathIsUNCA(file1))
@@ -1617,11 +1628,11 @@ int WINAPI PathCommonPrefixW(const WCHAR *file1, const WCHAR *file2, WCHAR *path
 
     TRACE("%s, %s, %p\n", wine_dbgstr_w(file1), wine_dbgstr_w(file2), path);
 
-    if (path)
-        *path = '\0';
-
     if (!file1 || !file2)
         return 0;
+
+    if (path)
+        *path = '\0';
 
     /* Handle roots first */
     if (PathIsUNCW(file1))
@@ -2462,10 +2473,29 @@ BOOL WINAPI PathMatchSpecA(const char *path, const char *mask)
 
 static BOOL path_match_maskW(const WCHAR *name, const WCHAR *mask)
 {
-    while (*name && *mask && *mask != ';')
+    while (*mask == ' ')
+        mask++;
+
+    while (*mask && *mask != ';')
     {
+        if (mask[0] == '*' && mask[1] == '.' && mask[2] == '*' && (!mask[3] || mask[3] == ';'))
+            return TRUE;
+
+        if (!*name)
+            break;
+
         if (*mask == '*')
         {
+            if (mask[1] == '.')
+            {
+                do
+                {
+                    if (*name == '.' && path_match_maskW(name + 1, mask + 2))
+                        return TRUE;
+                } while (*name++);
+                return FALSE;
+            }
+
             do
             {
                 if (path_match_maskW(name, mask + 1))
