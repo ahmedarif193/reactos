@@ -1,49 +1,36 @@
 <p align=center>
-  <a href="https://reactos.org/">
-    <img alt="ReactOS" src="https://reactos.org/wiki/images/0/02/ReactOS_logo.png">
-  </a>
+  <img alt="LiberNT" src="media/graphics/branding/libernt-logo.png" width="480">
 </p>
 
----
-
 <p align=center>
-  <a href="https://reactos.org/project-news/reactos-0415-released/">
-    <img alt="ReactOS 0.4.15 Release" src="https://img.shields.io/badge/release-0.4.15-0688CB.svg"></a>
-  <a href="https://reactos.org/download/">
-    <img alt="Download ReactOS" src="https://img.shields.io/badge/download-latest-0688CB.svg"></a>
-  <a href="https://sourceforge.net/projects/reactos/">
-    <img alt="SourceForge Download" src="https://img.shields.io/sourceforge/dm/reactos.svg?colorB=0688CB"></a>
-  <a href="COPYING">
-    <img alt="License" src="https://img.shields.io/badge/license-GNU_GPL_2.0-0688CB.svg"></a>
+  <a href="COPYING3">
+    <img alt="License" src="https://img.shields.io/badge/license-GNU_GPL_3.0-0161B6.svg"></a>
   <a href="https://paypal.me/staillar">
     <img alt="Support this fork" src="https://img.shields.io/badge/%24-donate-E44E4A.svg"></a>
-  <a href="https://twitter.com/reactos">
-    <img alt="Follow on Twitter" src="https://img.shields.io/twitter/follow/reactos.svg?style=social&label=Follow%20%40reactos"></a>
 </p>
 
 ## Quick Links
-[Website](https://reactos.org/) &bull;
-[Official chat](https://chat.reactos.org/) &bull;
-[Wiki](https://reactos.org/wiki/) &bull;
-[Forum](https://reactos.org/forum/) &bull;
-[Community Discord](https://discord.gg/7knjvhT) &bull;
-[JIRA Bug Tracker](https://jira.reactos.org/issues/) &bull;
-[ReactOS Git mirror](https://git.reactos.org/) &bull;
-[Testman](https://reactos.org/testman/)
+[Website](https://libernt.com/) &bull;
+[Source code](https://github.com/ahmedarif193/LiberNT) &bull;
+[Build environment](https://github.com/ahmedarif193/winget-rosbe)
 
 ## What is LiberNT?
 
-LiberNT is a free NT operating system based on ReactOS, the Open Source effort to develop an operating system that is compatible with applications and drivers written for the Microsoft Windows NT family of operating systems.
+LiberNT is a free NT operating system, built out of love for the NT architecture. The name says it: *liber* is Latin for free. LiberNT targets Windows® 11 compatibility, with room for freestyle and experimental features.
 
-LiberNT is a fork with extensive changes to kernel-space components and drivers, aimed at stability and modern hardware. It brings up modern platforms (ARM64 first) and targets Windows 11 compatibility. Our goal is a usable, efficient system that also runs on embedded devices.
+LiberNT is based on ReactOS, the Open Source effort to develop an operating system that is compatible with applications and drivers written for the Microsoft Windows NT family of operating systems. It is a fork with extensive changes to kernel-space components and drivers, aimed at stability and modern hardware, and it brings up modern platforms, ARM64 first.
 
-Its drivers and features are developed by [ahmedarif193](https://github.com/ahmedarif193). Behavior is proven here first, then refined into patches for upstream ReactOS.
+Our goal is a system that stays maintainable in the long run: stable, reliable and efficient, running on embedded devices too, and able to support every feature a modern operating system should have.
 
-LiberNT, like ReactOS, is licensed under [GNU GPL 2.0](COPYING).
+LiberNT is licensed under the [GNU GPL 3.0](COPYING3). Code inherited from ReactOS keeps the licence stated in its file headers, most of it GPL 2.0 or later.
 
 ### Status
 
 So far, LiberNT has proven more stable and faster than ReactOS in CPU management, memory management and I/O resource handling. Windows 11 is the compatibility reference.
+
+## Upstream ReactOS
+
+LiberNT would not exist without ReactOS. With all our respect and gratitude to the ReactOS Team & Contributors, whose work LiberNT builds on, you can find the upstream source code at [github.com/reactos/reactos](https://github.com/reactos/reactos).
 
 ## Building
 
@@ -98,8 +85,6 @@ LiberNT brings modern hardware and platforms to the NT architecture. The current
 - SD/eMMC, USB/xHCI, PCI, PnP, and storage/bus drivers
 - Windows 11 (NT10) compatibility and driver-model work
 
-Proven pieces are cleaned up, validated, split into reviewable changes, and proposed upstream.
-
 See [INSTALL](INSTALL) for installation instructions. After building:
 
 ```sh
@@ -111,12 +96,6 @@ ninja install
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [PULL_REQUEST_MANAGEMENT.md](PULL_REQUEST_MANAGEMENT.md).
 
 **Legal notice:** If you have seen proprietary Microsoft Windows source code (including but not limited to the leaked Windows NT 3.5, NT 4, 2000 source code and the Windows Research Kernel), your contribution won't be accepted because of potential copyright violation.
-
-## Upstreaming
-
-LiberNT proves fixes, drivers, and platform bring-up work first, then splits them into smaller upstreamable changes for ReactOS master.
-
-Once a change is proven, it is cleaned up, reduced to the minimal correct diff, validated, and proposed back to upstream ReactOS master.
 
 ## Use of AI
 
