@@ -165,9 +165,9 @@ KeSetAutoAlignmentThread(IN OUT PKTHREAD Thread,
     ASSERT_THREAD(Thread);
 
     if (Enable)
-        return InterlockedBitTestAndSet(&Thread->MiscFlags, AutoAlignmentBit);
+        return InterlockedBitTestAndSet(&Thread->ThreadFlags, AutoAlignmentBit);
 
-    return InterlockedBitTestAndReset(&Thread->MiscFlags, AutoAlignmentBit);
+    return InterlockedBitTestAndReset(&Thread->ThreadFlags, AutoAlignmentBit);
 }
 
 VOID
