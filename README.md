@@ -6,7 +6,7 @@
   <a href="COPYING3">
     <img alt="License" src="https://img.shields.io/badge/license-GNU_GPL_3.0-0161B6.svg"></a>
   <a href="https://github.com/sponsors/ahmedarif193">
-    <img alt="Support this fork" src="https://img.shields.io/badge/%24-donate-E44E4A.svg"></a>
+    <img alt="Support LiberNT" src="https://img.shields.io/badge/support-LiberNT-E44E4A.svg"></a>
 </p>
 
 ## Quick Links
@@ -27,6 +27,10 @@ LiberNT is licensed under the [GNU GPL 3.0](COPYING3). Code inherited from React
 ### Status
 
 So far, LiberNT has proven more stable and faster than ReactOS in CPU management, memory management and I/O resource handling. Windows 11 is the compatibility reference.
+
+## Support LiberNT
+
+We want LiberNT to be a free NT operating system that everyone can rely on, every day. Support our goal by [donating](https://github.com/sponsors/ahmedarif193) or by joining our new community. See [Contributing](#contributing) to get started.
 
 ## Upstream ReactOS
 
