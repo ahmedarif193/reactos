@@ -25,6 +25,7 @@
 #include "winbase.h"
 #include "winternl.h"
 #include "objbase.h"
+#include "ole2.h"
 #include "propvarutil.h"
 
 #include "wincodecs_private.h"
@@ -197,7 +198,9 @@ static HRESULT WINAPI MetadataHandler_GetCount(IWICMetadataWriter *iface,
 
     if (!pcCount) return E_INVALIDARG;
 
+    EnterCriticalSection(&This->lock);
     *pcCount = This->item_count;
+    LeaveCriticalSection(&This->lock);
     return S_OK;
 }
 
@@ -242,6 +245,8 @@ static MetadataItem *metadatahandler_get_item(MetadataHandler *handler, const PR
     HRESULT hr;
     UINT i;
 
+    PROPVAR_COMPARE_FLAGS compare_flags = handler->vtable->flags & METADATAHANDLER_CASE_SENSITIVE ? 0 : PVCF_USESTRCMPI;
+
     if (item_index) *item_index = 0;
     PropVariantInit(&index);
     if (id->vt == VT_CLSID && SUCCEEDED(PropVariantChangeType(&index, schema, 0, VT_UI4)))
@@ -276,12 +281,13 @@ static MetadataItem *metadatahandler_get_item(MetadataHandler *handler, const PR
 
     for (i = 0; i < handler->item_count; i++)
     {
-        if (schema && handler->items[i].schema.vt != VT_EMPTY)
+        if (schema && handler->items[i].schema.vt != VT_EMPTY &&
+            (!(handler->vtable->flags & METADATAHANDLER_CASE_SENSITIVE) || schema->vt != VT_EMPTY))
         {
-            if (PropVariantCompareEx(schema, &handler->items[i].schema, 0, PVCF_USESTRCMPI) != 0) continue;
+            if (PropVariantCompareEx(schema, &handler->items[i].schema, 0, compare_flags) != 0) continue;
         }
 
-        if (PropVariantCompareEx(id, &handler->items[i].id, 0, PVCF_USESTRCMPI) != 0) continue;
+        if (PropVariantCompareEx(id, &handler->items[i].id, 0, compare_flags) != 0) continue;
 
         if (item_index) *item_index = i;
         return &handler->items[i];
@@ -293,6 +299,7 @@ static MetadataItem *metadatahandler_get_item(MetadataHandler *handler, const PR
 static void metadata_handler_remove_item(MetadataHandler *handler, unsigned int index)
 {
     clear_metadata_item(&handler->items[index]);
+    ++handler->modification;
     handler->item_count--;
     if (index != handler->item_count)
         memmove(&handler->items[index], &handler->items[index + 1],
@@ -309,6 +316,10 @@ static HRESULT WINAPI MetadataHandler_GetValue(IWICMetadataWriter *iface,
     TRACE("(%p,%s,%s,%p)\n", iface, wine_dbgstr_variant((const VARIANT *)schema), wine_dbgstr_variant((const VARIANT *)id), value);
 
     if (!id) return E_INVALIDARG;
+
+    if (This->vtable->flags & METADATAHANDLER_NAMED_ITEMS &&
+        id->vt != VT_LPSTR && id->vt != VT_LPWSTR && id->vt != VT_BSTR)
+        return E_INVALIDARG;
 
     EnterCriticalSection(&This->lock);
 
@@ -339,6 +350,7 @@ static HRESULT WINAPI MetadataHandler_SetValue(IWICMetadataWriter *iface,
 {
     MetadataHandler *This = impl_from_IWICMetadataWriter(iface);
     MetadataItem *item, *new_items;
+    PROPVARIANT normalized_id;
     HRESULT hr;
 
     TRACE("(%p,%p,%p,%p)\n", iface, schema, id, value);
@@ -346,12 +358,29 @@ static HRESULT WINAPI MetadataHandler_SetValue(IWICMetadataWriter *iface,
     if (!id || !value)
         return E_INVALIDARG;
 
+    if (This->vtable->flags & METADATAHANDLER_NAMED_ITEMS &&
+        id->vt != VT_LPSTR && id->vt != VT_LPWSTR && id->vt != VT_BSTR)
+        return E_INVALIDARG;
+
+    PropVariantInit(&normalized_id);
+    if (This->vtable->fnPrepareValue)
+    {
+        hr = This->vtable->fnPrepareValue(id, value, &normalized_id);
+        if (FAILED(hr))
+        {
+            PropVariantClear(&normalized_id);
+            return hr;
+        }
+        id = &normalized_id;
+    }
+
     /* Replace value of an existing item, or append a new one. */
 
     EnterCriticalSection(&This->lock);
 
     if ((item = metadatahandler_get_item(This, schema, id, NULL)))
     {
+        ++This->modification;
         PropVariantClear(&item->value);
         hr = PropVariantCopy(&item->value, value);
     }
@@ -374,7 +403,10 @@ static HRESULT WINAPI MetadataHandler_SetValue(IWICMetadataWriter *iface,
                 hr = PropVariantCopy(&item->value, value);
 
             if (SUCCEEDED(hr))
+            {
                 ++This->item_count;
+                ++This->modification;
+            }
             else
                 clear_metadata_item(item);
         }
@@ -386,14 +418,15 @@ static HRESULT WINAPI MetadataHandler_SetValue(IWICMetadataWriter *iface,
 
     LeaveCriticalSection(&This->lock);
 
+    PropVariantClear(&normalized_id);
     return hr;
 }
 
 static HRESULT WINAPI MetadataHandler_SetValueByIndex(IWICMetadataWriter *iface,
     UINT nIndex, const PROPVARIANT *pvarSchema, const PROPVARIANT *pvarId, const PROPVARIANT *pvarValue)
 {
-    FIXME("(%p,%u,%p,%p,%p): stub\n", iface, nIndex, pvarSchema, pvarId, pvarValue);
-    return E_NOTIMPL;
+    TRACE("(%p,%u,%p,%p,%p)\n", iface, nIndex, pvarSchema, pvarId, pvarValue);
+    return WINCODEC_ERR_UNSUPPORTEDOPERATION;
 }
 
 static HRESULT WINAPI MetadataHandler_RemoveValue(IWICMetadataWriter *iface,
@@ -494,10 +527,88 @@ static HRESULT WINAPI MetadataHandler_GetClassID(IWICPersistStream *iface, CLSID
     return S_OK;
 }
 
+struct metadata_snapshot
+{
+    MetadataItem *items;
+    DWORD count;
+    ULONGLONG modification, saved_modification;
+};
+
+static void free_metadata_snapshot(struct metadata_snapshot *snapshot)
+{
+    DWORD i;
+
+    for (i = 0; i < snapshot->count; ++i) clear_metadata_item(&snapshot->items[i]);
+    free(snapshot->items);
+}
+
+static HRESULT get_metadata_snapshot(MetadataHandler *handler, struct metadata_snapshot *snapshot,
+        IStream *destination, BOOL clear_dirty)
+{
+    DWORD i;
+    HRESULT hr = S_OK;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+    EnterCriticalSection(&handler->lock);
+    if (destination && destination == handler->stream)
+        hr = WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    else if (!(snapshot->items = calloc(handler->item_count ? handler->item_count : 1, sizeof(*snapshot->items))))
+        hr = E_OUTOFMEMORY;
+    else
+    {
+        snapshot->count = handler->item_count;
+        for (i = 0; i < snapshot->count; ++i)
+        {
+            hr = PropVariantCopy(&snapshot->items[i].schema, &handler->items[i].schema);
+            if (SUCCEEDED(hr)) hr = PropVariantCopy(&snapshot->items[i].id, &handler->items[i].id);
+            if (SUCCEEDED(hr)) hr = PropVariantCopy(&snapshot->items[i].value, &handler->items[i].value);
+            if (FAILED(hr)) break;
+        }
+        if (SUCCEEDED(hr) && clear_dirty && (handler->vtable->flags & METADATAHANDLER_NESTED_ITEMS))
+            ++handler->modification;
+        snapshot->modification = handler->modification;
+        snapshot->saved_modification = handler->saved_modification;
+    }
+    LeaveCriticalSection(&handler->lock);
+    if (FAILED(hr)) free_metadata_snapshot(snapshot);
+    return hr;
+}
+
 static HRESULT WINAPI MetadataHandler_IsDirty(IWICPersistStream *iface)
 {
-    FIXME("(%p): stub\n", iface);
-    return E_NOTIMPL;
+    MetadataHandler *handler = impl_from_IWICPersistStream(iface);
+    struct metadata_snapshot snapshot;
+    IWICPersistStream *child;
+    DWORD i;
+    HRESULT hr;
+
+    if (!handler->vtable->fnSerialize) return E_NOTIMPL;
+    if (!(handler->vtable->flags & METADATAHANDLER_NESTED_ITEMS))
+    {
+        EnterCriticalSection(&handler->lock);
+        hr = handler->modification != handler->saved_modification ? S_OK : S_FALSE;
+        LeaveCriticalSection(&handler->lock);
+        return hr;
+    }
+    hr = get_metadata_snapshot(handler, &snapshot, NULL, FALSE);
+    if (FAILED(hr)) return hr;
+    hr = snapshot.modification != snapshot.saved_modification ? S_OK : S_FALSE;
+    if (hr == S_FALSE && (handler->vtable->flags & METADATAHANDLER_NESTED_ITEMS))
+    {
+        for (i = 0; i < snapshot.count; ++i)
+        {
+            if (snapshot.items[i].value.vt != VT_UNKNOWN || !snapshot.items[i].value.punkVal) continue;
+            hr = IUnknown_QueryInterface(snapshot.items[i].value.punkVal, &IID_IWICPersistStream, (void **)&child);
+            if (SUCCEEDED(hr))
+            {
+                hr = IWICPersistStream_IsDirty(child);
+                IWICPersistStream_Release(child);
+            }
+            if (hr != S_FALSE) break;
+        }
+    }
+    free_metadata_snapshot(&snapshot);
+    return hr;
 }
 
 static HRESULT WINAPI MetadataHandler_Load(IWICPersistStream *iface,
@@ -511,15 +622,73 @@ static HRESULT WINAPI MetadataHandler_Load(IWICPersistStream *iface,
 static HRESULT WINAPI MetadataHandler_Save(IWICPersistStream *iface,
     IStream *pStm, BOOL fClearDirty)
 {
-    FIXME("(%p,%p,%i): stub\n", iface, pStm, fClearDirty);
-    return E_NOTIMPL;
+    return IWICPersistStream_SaveEx(iface, pStm, WICPersistOptionDefault, fClearDirty);
 }
 
 static HRESULT WINAPI MetadataHandler_GetSizeMax(IWICPersistStream *iface,
     ULARGE_INTEGER *pcbSize)
 {
-    FIXME("(%p,%p): stub\n", iface, pcbSize);
-    return E_NOTIMPL;
+    MetadataHandler *handler = impl_from_IWICPersistStream(iface);
+    struct metadata_snapshot snapshot;
+    BYTE *data = NULL;
+    ULONG size;
+    DWORD options;
+    HRESULT hr;
+
+    if (!pcbSize) return E_INVALIDARG;
+    if (!handler->vtable->fnSerialize) return E_NOTIMPL;
+    EnterCriticalSection(&handler->lock);
+    options = handler->persist_options;
+    LeaveCriticalSection(&handler->lock);
+    hr = get_metadata_snapshot(handler, &snapshot, NULL, FALSE);
+    if (FAILED(hr)) return hr;
+    hr = handler->vtable->fnSerialize(snapshot.items, snapshot.count, options, 0, FALSE, &data, &size);
+    free_metadata_snapshot(&snapshot);
+    if (SUCCEEDED(hr)) pcbSize->QuadPart = size;
+    free(data);
+    return hr;
+}
+
+static HRESULT metadata_handler_load_detached(MetadataHandler *handler, IStream *stream,
+        const GUID *vendor, DWORD options)
+{
+    MetadataHandler staged = {0}, old = {0};
+    LARGE_INTEGER move = {0};
+    ULARGE_INTEGER origin = {0};
+    IStream *old_stream = NULL;
+    HRESULT hr = S_OK;
+
+    IWICMetadataWriter_AddRef(&handler->IWICMetadataWriter_iface);
+    staged.vtable = handler->vtable;
+    if (stream)
+    {
+        IStream_AddRef(stream);
+        hr = IStream_Seek(stream, move, STREAM_SEEK_CUR, &origin);
+        if (SUCCEEDED(hr)) hr = handler->vtable->fnLoad(&staged, stream, vendor, options);
+    }
+    if (SUCCEEDED(hr))
+    {
+        EnterCriticalSection(&handler->lock);
+        old.items = handler->items;
+        old.item_count = handler->item_count;
+        old_stream = handler->stream;
+        handler->items = staged.items;
+        handler->item_count = staged.item_count;
+        staged.items = NULL;
+        staged.item_count = 0;
+        handler->stream = options & WICPersistOptionNoCacheStream ? NULL : stream;
+        if (handler->stream) stream = NULL;
+        handler->origin = origin;
+        handler->persist_options = options & WICPersistOptionMask;
+        handler->saved_modification = ++handler->modification;
+        LeaveCriticalSection(&handler->lock);
+    }
+    if (old_stream) IStream_Release(old_stream);
+    if (stream) IStream_Release(stream);
+    MetadataHandler_FreeItems(&old);
+    MetadataHandler_FreeItems(&staged);
+    IWICMetadataWriter_Release(&handler->IWICMetadataWriter_iface);
+    return hr;
 }
 
 static HRESULT WINAPI MetadataHandler_LoadEx(IWICPersistStream *iface,
@@ -530,6 +699,9 @@ static HRESULT WINAPI MetadataHandler_LoadEx(IWICPersistStream *iface,
     LARGE_INTEGER move;
 
     TRACE("(%p,%p,%s,%lx)\n", iface, stream, debugstr_guid(pguidPreferredVendor), dwPersistOptions);
+
+    if (This->vtable->flags & METADATAHANDLER_DETACHED_LOAD)
+        return metadata_handler_load_detached(This, stream, pguidPreferredVendor, dwPersistOptions);
 
     EnterCriticalSection(&This->lock);
 
@@ -553,6 +725,7 @@ static HRESULT WINAPI MetadataHandler_LoadEx(IWICPersistStream *iface,
             IStream_AddRef(This->stream);
     }
     This->persist_options = dwPersistOptions & WICPersistOptionMask;
+    if (SUCCEEDED(hr)) This->saved_modification = ++This->modification;
 
     LeaveCriticalSection(&This->lock);
 
@@ -562,8 +735,42 @@ static HRESULT WINAPI MetadataHandler_LoadEx(IWICPersistStream *iface,
 static HRESULT WINAPI MetadataHandler_SaveEx(IWICPersistStream *iface,
     IStream *pIStream, DWORD dwPersistOptions, BOOL fClearDirty)
 {
-    FIXME("(%p,%p,%lx,%i): stub\n", iface, pIStream, dwPersistOptions, fClearDirty);
-    return E_NOTIMPL;
+    MetadataHandler *handler = impl_from_IWICPersistStream(iface);
+    struct metadata_snapshot snapshot;
+    BYTE *data = NULL;
+    ULONG size, written;
+    ULARGE_INTEGER offset = {0};
+    LARGE_INTEGER move = {0};
+    HRESULT hr;
+
+    if (!(handler->vtable->flags & METADATAHANDLER_IS_WRITER))
+        return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    if (!pIStream) return E_INVALIDARG;
+    if (!handler->vtable->fnSerialize) return E_NOTIMPL;
+    if (handler->vtable->flags & METADATAHANDLER_ABSOLUTE_OFFSETS)
+    {
+        hr = IStream_Seek(pIStream, move, STREAM_SEEK_CUR, &offset);
+        if (FAILED(hr)) return hr;
+    }
+    hr = get_metadata_snapshot(handler, &snapshot, pIStream, fClearDirty);
+    if (FAILED(hr)) return hr;
+    hr = handler->vtable->fnSerialize(snapshot.items, snapshot.count, dwPersistOptions,
+            offset.QuadPart, fClearDirty, &data, &size);
+    if (SUCCEEDED(hr))
+    {
+        hr = IStream_Write(pIStream, data, size, &written);
+        if (SUCCEEDED(hr) && written != size) hr = WINCODEC_ERR_STREAMWRITE;
+        if (SUCCEEDED(hr) && fClearDirty)
+        {
+            EnterCriticalSection(&handler->lock);
+            if (handler->modification == snapshot.modification)
+                handler->saved_modification = snapshot.modification;
+            LeaveCriticalSection(&handler->lock);
+        }
+    }
+    free_metadata_snapshot(&snapshot);
+    free(data);
+    return hr;
 }
 
 static const IWICPersistStreamVtbl MetadataHandler_PersistStream_Vtbl = {
@@ -975,12 +1182,20 @@ HRESULT UnknownMetadataReader_CreateInstance(REFIID iid, void** ppv)
     return MetadataReader_Create(&UnknownMetadataReader_Vtbl, iid, ppv);
 }
 
+static HRESULT PrepareUnknownValue(const PROPVARIANT *id, const PROPVARIANT *value, PROPVARIANT *normalized_id)
+{
+    if (id->vt != VT_EMPTY || value->vt != VT_BLOB)
+        return E_INVALIDARG;
+    return S_OK;
+}
+
 static const MetadataHandlerVtbl UnknownMetadataWriter_Vtbl =
 {
     .flags = METADATAHANDLER_IS_WRITER | METADATAHANDLER_FIXED_ITEMS,
     .clsid = &CLSID_WICUnknownMetadataWriter,
     .fnLoad = LoadUnknownMetadata,
     .fnCreate = CreateUnknownHandler,
+    .fnPrepareValue = PrepareUnknownValue,
 };
 
 HRESULT UnknownMetadataWriter_CreateInstance(REFIID iid, void** ppv)
@@ -1584,6 +1799,186 @@ static HRESULT load_ifd_metadata_internal(MetadataHandler *handler, IStream *inp
     return S_OK;
 }
 
+struct serialized_ifd_entry
+{
+    USHORT tag, type;
+    ULONG count, width;
+    const BYTE *value;
+};
+
+static void store_ifd_integer(BYTE *dest, ULONGLONG value, unsigned int width, BOOL big_endian)
+{
+    unsigned int i;
+
+    for (i = 0; i < width; ++i)
+        dest[big_endian ? width - i - 1 : i] = value >> (i * 8);
+}
+
+static HRESULT prepare_ifd_entry(const MetadataItem *item, struct serialized_ifd_entry *entry)
+{
+    const PROPVARIANT *value = &item->value;
+    PROPVARIANT id;
+    BOOL vector = !!(value->vt & VT_VECTOR);
+    HRESULT hr;
+
+    PropVariantInit(&id);
+    hr = PropVariantChangeType(&id, &item->id, 0, VT_UI2);
+    if (FAILED(hr)) return WINCODEC_ERR_UNEXPECTEDMETADATATYPE;
+    entry->tag = id.uiVal;
+    PropVariantClear(&id);
+    entry->count = 1;
+    switch (value->vt & ~VT_VECTOR)
+    {
+#define IFD_VALUE(vt, field, array, format, bytes) \
+    case vt: \
+        entry->type = format; \
+        entry->width = bytes; \
+        if (vector) { entry->count = value->array.cElems; entry->value = (const BYTE *)value->array.pElems; } \
+        else entry->value = (const BYTE *)&value->field; \
+        break
+        IFD_VALUE(VT_UI1, bVal, caub, IFD_BYTE, 1);
+        IFD_VALUE(VT_I1, cVal, cac, IFD_SBYTE, 1);
+        IFD_VALUE(VT_UI2, uiVal, caui, IFD_SHORT, 2);
+        IFD_VALUE(VT_I2, iVal, cai, IFD_SSHORT, 2);
+        IFD_VALUE(VT_UI4, ulVal, caul, IFD_LONG, 4);
+        IFD_VALUE(VT_I4, lVal, cal, IFD_SLONG, 4);
+        IFD_VALUE(VT_R4, fltVal, caflt, IFD_FLOAT, 4);
+        IFD_VALUE(VT_R8, dblVal, cadbl, IFD_DOUBLE, 8);
+        IFD_VALUE(VT_UI8, uhVal, cauh, IFD_RATIONAL, 8);
+        IFD_VALUE(VT_I8, hVal, cah, IFD_SRATIONAL, 8);
+#undef IFD_VALUE
+    case VT_LPSTR:
+        if (vector || !value->pszVal) return WINCODEC_ERR_UNEXPECTEDMETADATATYPE;
+        if (strlen(value->pszVal) >= MAXDWORD) return WINCODEC_ERR_TOOMUCHMETADATA;
+        entry->type = IFD_ASCII;
+        entry->width = 1;
+        entry->count = strlen(value->pszVal) + 1;
+        entry->value = (const BYTE *)value->pszVal;
+        break;
+    case VT_BLOB:
+        if (vector) return WINCODEC_ERR_UNEXPECTEDMETADATATYPE;
+        entry->type = IFD_UNDEFINED;
+        entry->width = 1;
+        entry->count = value->blob.cbSize;
+        entry->value = value->blob.pBlobData;
+        break;
+    default:
+        return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    }
+    if (entry->count && !entry->value) return E_INVALIDARG;
+    if (entry->count > MAXDWORD / entry->width) return WINCODEC_ERR_TOOMUCHMETADATA;
+    return S_OK;
+}
+
+static int compare_ifd_entries(const void *left, const void *right)
+{
+    const struct serialized_ifd_entry *a = left, *b = right;
+    return (a->tag > b->tag) - (a->tag < b->tag);
+}
+
+static HRESULT SerializeIfdMetadata(const MetadataItem *items, DWORD count, DWORD options, ULONGLONG offset,
+        BOOL clear_dirty, BYTE **data, ULONG *size)
+{
+    struct serialized_ifd_entry *entries;
+    BOOL big_endian = !!(options & WICPersistOptionBigEndian);
+    ULONGLONG total;
+    ULONG i, j, cursor, length;
+    BYTE *buffer, *dest, *record;
+    HRESULT hr = S_OK;
+
+    if (count > 0xffff || offset > MAXDWORD)
+        return WINCODEC_ERR_TOOMUCHMETADATA;
+    entries = calloc(count ? count : 1, sizeof(*entries));
+    if (!entries) return E_OUTOFMEMORY;
+    total = 6 + 12 * count;
+    for (i = 0; i < count; ++i)
+    {
+        hr = prepare_ifd_entry(&items[i], &entries[i]);
+        if (FAILED(hr)) break;
+        length = entries[i].count * entries[i].width;
+        if (length > 4) total += (ULONGLONG)length + (length & 1);
+        if (total + offset > MAXDWORD)
+        {
+            hr = WINCODEC_ERR_TOOMUCHMETADATA;
+            break;
+        }
+    }
+    if (SUCCEEDED(hr) && total + offset > MAXDWORD) hr = WINCODEC_ERR_TOOMUCHMETADATA;
+    if (FAILED(hr))
+    {
+        free(entries);
+        return hr;
+    }
+    qsort(entries, count, sizeof(*entries), compare_ifd_entries);
+    for (i = 1; i < count; ++i)
+    {
+        if (entries[i - 1].tag == entries[i].tag)
+        {
+            free(entries);
+            return WINCODEC_ERR_BADMETADATAHEADER;
+        }
+    }
+    if (!(buffer = calloc(1, total)))
+    {
+        free(entries);
+        return E_OUTOFMEMORY;
+    }
+    store_ifd_integer(buffer, count, 2, big_endian);
+    cursor = 6 + 12 * count;
+    for (i = 0; i < count; ++i)
+    {
+        record = buffer + 2 + 12 * i;
+        store_ifd_integer(record, entries[i].tag, 2, big_endian);
+        store_ifd_integer(record + 2, entries[i].type, 2, big_endian);
+        store_ifd_integer(record + 4, entries[i].count, 4, big_endian);
+        length = entries[i].count * entries[i].width;
+        dest = record + 8;
+        if (length > 4)
+        {
+            store_ifd_integer(dest, offset + cursor, 4, big_endian);
+            dest = buffer + cursor;
+            cursor += length + (length & 1);
+        }
+        for (j = 0; j < entries[i].count; ++j)
+        {
+            const BYTE *source = entries[i].value + j * entries[i].width;
+            USHORT short_value;
+            ULONG long_value;
+            ULONGLONG longlong_value;
+
+            switch (entries[i].width)
+            {
+            case 1:
+                *dest = *source;
+                break;
+            case 2:
+                memcpy(&short_value, source, 2);
+                store_ifd_integer(dest, short_value, 2, big_endian);
+                break;
+            case 4:
+                memcpy(&long_value, source, 4);
+                store_ifd_integer(dest, long_value, 4, big_endian);
+                break;
+            case 8:
+                memcpy(&longlong_value, source, 8);
+                if (entries[i].type == IFD_DOUBLE)
+                    store_ifd_integer(dest, longlong_value, 8, big_endian);
+                else
+                {
+                    store_ifd_integer(dest, (ULONG)longlong_value, 4, big_endian);
+                    store_ifd_integer(dest + 4, longlong_value >> 32, 4, big_endian);
+                }
+                break;
+            }
+            dest += entries[i].width;
+        }
+    }
+    free(entries);
+    *data = buffer;
+    *size = total;
+    return S_OK;
+}
+
 static HRESULT LoadIfdMetadataReader(MetadataHandler *handler, IStream *input, const GUID *vendor,
         DWORD options)
 {
@@ -1744,9 +2139,10 @@ HRESULT IfdMetadataReader_CreateInstance(REFIID iid, void **ppv)
 
 static const MetadataHandlerVtbl IfdMetadataWriter_Vtbl =
 {
-    .flags = METADATAHANDLER_IS_WRITER,
+    .flags = METADATAHANDLER_IS_WRITER | METADATAHANDLER_ABSOLUTE_OFFSETS,
     &CLSID_WICIfdMetadataWriter,
-    LoadIfdMetadataWriter
+    LoadIfdMetadataWriter,
+    .fnSerialize = SerializeIfdMetadata
 };
 
 HRESULT IfdMetadataWriter_CreateInstance(REFIID iid, void **ppv)
@@ -1768,9 +2164,10 @@ HRESULT GpsMetadataReader_CreateInstance(REFIID iid, void **ppv)
 
 static const MetadataHandlerVtbl GpsMetadataWriter_Vtbl =
 {
-    .flags = METADATAHANDLER_IS_WRITER,
+    .flags = METADATAHANDLER_IS_WRITER | METADATAHANDLER_ABSOLUTE_OFFSETS,
     &CLSID_WICGpsMetadataWriter,
-    LoadGpsMetadataWriter
+    LoadGpsMetadataWriter,
+    .fnSerialize = SerializeIfdMetadata
 };
 
 HRESULT GpsMetadataWriter_CreateInstance(REFIID iid, void **ppv)
@@ -1792,9 +2189,10 @@ HRESULT ExifMetadataReader_CreateInstance(REFIID iid, void **ppv)
 
 static const MetadataHandlerVtbl ExifMetadataWriter_Vtbl =
 {
-    .flags = METADATAHANDLER_IS_WRITER,
+    .flags = METADATAHANDLER_IS_WRITER | METADATAHANDLER_ABSOLUTE_OFFSETS,
     &CLSID_WICExifMetadataWriter,
-    LoadExifMetadataWriter
+    LoadExifMetadataWriter,
+    .fnSerialize = SerializeIfdMetadata
 };
 
 HRESULT ExifMetadataWriter_CreateInstance(REFIID iid, void **ppv)
@@ -1809,16 +2207,237 @@ static const MetadataHandlerVtbl App1MetadataReader_Vtbl =
     LoadApp1MetadataReader
 };
 
+static HRESULT LoadApp0Metadata(MetadataHandler *handler, IStream *stream,
+        const GUID *vendor, DWORD options)
+{
+    static const VARTYPE types[] = {VT_UI2, VT_UI1, VT_UI2, VT_UI2, VT_UI1, VT_UI1, VT_BLOB};
+    BYTE data[14] = {0};
+    MetadataItem *items;
+    ULONG read, size;
+    unsigned int i;
+    HRESULT hr;
+
+    if (stream)
+    {
+        hr = IStream_Read(stream, data, sizeof(data), &read);
+        if (FAILED(hr)) return hr;
+        if (read != sizeof(data)) return WINCODEC_ERR_STREAMREAD;
+        if (memcmp(data, "JFIF", 5)) return WINCODEC_ERR_BADMETADATAHEADER;
+    }
+
+    if (!(items = calloc(ARRAY_SIZE(types), sizeof(*items)))) return E_OUTOFMEMORY;
+    for (i = 0; i < ARRAY_SIZE(types); ++i)
+    {
+        items[i].id.vt = VT_UI2;
+        items[i].id.uiVal = i;
+        items[i].value.vt = types[i];
+    }
+    items[0].value.uiVal = (data[5] << 8) | data[6];
+    items[1].value.bVal = data[7];
+    items[2].value.uiVal = (data[8] << 8) | data[9];
+    items[3].value.uiVal = (data[10] << 8) | data[11];
+    items[4].value.bVal = data[12];
+    items[5].value.bVal = data[13];
+    size = data[12] * data[13] * 3;
+    if (size)
+    {
+        items[6].value.blob.cbSize = size;
+        items[6].value.blob.pBlobData = CoTaskMemAlloc(size);
+        if (!items[6].value.blob.pBlobData)
+            hr = E_OUTOFMEMORY;
+        else
+        {
+            hr = IStream_Read(stream, items[6].value.blob.pBlobData, size, &read);
+            if (SUCCEEDED(hr) && read != size) hr = WINCODEC_ERR_STREAMREAD;
+        }
+        if (FAILED(hr))
+        {
+            for (i = 0; i < ARRAY_SIZE(types); ++i) clear_metadata_item(&items[i]);
+            free(items);
+            return hr;
+        }
+    }
+
+    MetadataHandler_FreeItems(handler);
+    handler->items = items;
+    handler->item_count = ARRAY_SIZE(types);
+    return S_OK;
+}
+
+static HRESULT CreateApp0Handler(MetadataHandler *handler)
+{
+    return LoadApp0Metadata(handler, NULL, NULL, 0);
+}
+
+static HRESULT SerializeApp0Metadata(const MetadataItem *items, DWORD count, DWORD options, ULONGLONG offset,
+        BOOL clear_dirty, BYTE **data, ULONG *size)
+{
+    static const VARTYPE types[] = {VT_UI2, VT_UI1, VT_UI2, VT_UI2, VT_UI1, VT_UI1, VT_BLOB};
+    const PROPVARIANT *values[ARRAY_SIZE(types)];
+    const MetadataItem *item;
+    PROPVARIANT id;
+    ULONG thumbnail_size;
+    unsigned int i, j;
+    BYTE *buffer;
+
+    if (count != ARRAY_SIZE(types)) return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    id.vt = VT_UI2;
+    for (i = 0; i < ARRAY_SIZE(types); ++i)
+    {
+        id.uiVal = i;
+        item = NULL;
+        for (j = 0; j < count; ++j)
+            if (!PropVariantCompareEx(&items[j].id, &id, 0, PVCF_USESTRCMPI))
+            {
+                item = &items[j];
+                break;
+            }
+        if (!item) return WINCODEC_ERR_PROPERTYNOTFOUND;
+        if (item->value.vt != types[i]) return WINCODEC_ERR_UNEXPECTEDMETADATATYPE;
+        values[i] = &item->value;
+    }
+    thumbnail_size = values[4]->bVal * values[5]->bVal * 3;
+    if (thumbnail_size != values[6]->blob.cbSize ||
+        (thumbnail_size && !values[6]->blob.pBlobData))
+        return WINCODEC_ERR_BADMETADATAHEADER;
+    if (thumbnail_size > 0xffff - 16) return WINCODEC_ERR_TOOMUCHMETADATA;
+    if (!(buffer = malloc(14 + thumbnail_size))) return E_OUTOFMEMORY;
+    memcpy(buffer, "JFIF", 5);
+    buffer[5] = values[0]->uiVal >> 8;
+    buffer[6] = values[0]->uiVal;
+    buffer[7] = values[1]->bVal;
+    buffer[8] = values[2]->uiVal >> 8;
+    buffer[9] = values[2]->uiVal;
+    buffer[10] = values[3]->uiVal >> 8;
+    buffer[11] = values[3]->uiVal;
+    buffer[12] = values[4]->bVal;
+    buffer[13] = values[5]->bVal;
+    if (thumbnail_size) memcpy(buffer + 14, values[6]->blob.pBlobData, thumbnail_size);
+    *data = buffer;
+    *size = 14 + thumbnail_size;
+    return S_OK;
+}
+
+static const MetadataHandlerVtbl App0MetadataReader_Vtbl =
+{
+    .clsid = &CLSID_WICApp0MetadataReader,
+    .fnLoad = LoadApp0Metadata,
+    .fnCreate = CreateApp0Handler,
+};
+
+HRESULT App0MetadataReader_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&App0MetadataReader_Vtbl, iid, ppv);
+}
+
+static const MetadataHandlerVtbl App0MetadataWriter_Vtbl =
+{
+    .flags = METADATAHANDLER_IS_WRITER | METADATAHANDLER_FIXED_ITEMS,
+    .clsid = &CLSID_WICApp0MetadataWriter,
+    .fnLoad = LoadApp0Metadata,
+    .fnCreate = CreateApp0Handler,
+    .fnSerialize = SerializeApp0Metadata,
+};
+
+HRESULT App0MetadataWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&App0MetadataWriter_Vtbl, iid, ppv);
+}
+
 HRESULT App1MetadataReader_CreateInstance(REFIID iid, void **ppv)
 {
     return MetadataReader_Create(&App1MetadataReader_Vtbl, iid, ppv);
 }
 
+static HRESULT PrepareApp1Value(const PROPVARIANT *id, const PROPVARIANT *value, PROPVARIANT *normalized_id)
+{
+    IWICMetadataReader *reader;
+    GUID format;
+    HRESULT hr;
+
+    if (id->vt == VT_LPSTR || id->vt == VT_LPWSTR || id->vt == VT_BSTR)
+        return WINCODEC_ERR_PROPERTYNOTFOUND;
+    if (id->vt == VT_R4 || id->vt == VT_R8)
+    {
+        normalized_id->vt = VT_UI2;
+        hr = id->vt == VT_R4 ? VarUI2FromR4(id->fltVal, &normalized_id->uiVal) :
+                VarUI2FromR8(id->dblVal, &normalized_id->uiVal);
+    }
+    else
+        hr = PropVariantChangeType(normalized_id, id, 0, VT_UI2);
+    if (FAILED(hr))
+        return WINCODEC_ERR_UNEXPECTEDMETADATATYPE;
+    if (normalized_id->uiVal)
+        return (id->vt == VT_R4 || id->vt == VT_R8) ? WINCODEC_ERR_UNEXPECTEDMETADATATYPE : E_INVALIDARG;
+    if (value->vt != VT_UNKNOWN || !value->punkVal)
+        return E_INVALIDARG;
+    hr = IUnknown_QueryInterface(value->punkVal, &IID_IWICMetadataReader, (void **)&reader);
+    if (FAILED(hr)) return E_INVALIDARG;
+    hr = IWICMetadataReader_GetMetadataFormat(reader, &format);
+    IWICMetadataReader_Release(reader);
+    if (FAILED(hr)) return hr;
+    return IsEqualGUID(&format, &GUID_MetadataFormatIfd) ? S_OK : E_INVALIDARG;
+}
+
+static HRESULT SerializeApp1Metadata(const MetadataItem *items, DWORD count, DWORD options,
+        ULONGLONG offset, BOOL clear_dirty, BYTE **data, ULONG *size)
+{
+    IWICPersistStream *persist;
+    IStream *stream;
+    BYTE header[8], *buffer = NULL;
+    BOOL big_endian = !!(options & WICPersistOptionBigEndian);
+    LARGE_INTEGER move = {{0}};
+    ULARGE_INTEGER end;
+    PROPVARIANT id;
+    ULONG written, read;
+    HRESULT hr;
+
+    if (count != 1) return WINCODEC_ERR_BADMETADATAHEADER;
+    PropVariantInit(&id);
+    hr = PropVariantChangeType(&id, &items[0].id, 0, VT_UI2);
+    if (FAILED(hr)) return WINCODEC_ERR_UNEXPECTEDMETADATATYPE;
+    if (id.uiVal || items[0].value.vt != VT_UNKNOWN || !items[0].value.punkVal)
+        return WINCODEC_ERR_BADMETADATAHEADER;
+    hr = IUnknown_QueryInterface(items[0].value.punkVal, &IID_IWICPersistStream, (void **)&persist);
+    if (FAILED(hr)) return hr;
+    hr = CreateStreamOnHGlobal(NULL, TRUE, &stream);
+    if (SUCCEEDED(hr))
+    {
+        header[0] = header[1] = big_endian ? 'M' : 'I';
+        store_ifd_integer(header + 2, 42, 2, big_endian);
+        store_ifd_integer(header + 4, 8, 4, big_endian);
+        hr = IStream_Write(stream, header, sizeof(header), &written);
+        if (SUCCEEDED(hr) && written != sizeof(header)) hr = WINCODEC_ERR_STREAMWRITE;
+        if (SUCCEEDED(hr)) hr = IWICPersistStream_SaveEx(persist, stream, options, clear_dirty);
+        if (SUCCEEDED(hr)) hr = IStream_Seek(stream, move, STREAM_SEEK_END, &end);
+        if (SUCCEEDED(hr) && end.QuadPart > 0xffff - 8) hr = WINCODEC_ERR_TOOMUCHMETADATA;
+        if (SUCCEEDED(hr) && !(buffer = malloc(6 + end.QuadPart))) hr = E_OUTOFMEMORY;
+        if (SUCCEEDED(hr))
+        {
+            memcpy(buffer, "Exif\0", 6);
+            hr = IStream_Seek(stream, move, STREAM_SEEK_SET, NULL);
+            if (SUCCEEDED(hr)) hr = IStream_Read(stream, buffer + 6, end.QuadPart, &read);
+            if (SUCCEEDED(hr) && read != end.QuadPart) hr = WINCODEC_ERR_STREAMREAD;
+            if (SUCCEEDED(hr))
+            {
+                *data = buffer;
+                *size = 6 + end.QuadPart;
+            }
+        }
+        IStream_Release(stream);
+    }
+    IWICPersistStream_Release(persist);
+    if (FAILED(hr)) free(buffer);
+    return hr;
+}
+
 static const MetadataHandlerVtbl App1MetadataWriter_Vtbl =
 {
-    .flags = METADATAHANDLER_IS_WRITER,
+    .flags = METADATAHANDLER_IS_WRITER | METADATAHANDLER_NESTED_ITEMS,
     &CLSID_WICApp1MetadataWriter,
-    LoadApp1MetadataWriter
+    LoadApp1MetadataWriter,
+    .fnPrepareValue = PrepareApp1Value,
+    .fnSerialize = SerializeApp1Metadata,
 };
 
 HRESULT App1MetadataWriter_CreateInstance(REFIID iid, void **ppv)

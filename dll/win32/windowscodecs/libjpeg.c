@@ -38,6 +38,7 @@ WINE_DECLARE_DEBUG_CHANNEL(jpeg);
 
 enum jpeg_markers
 {
+    APP0 = 0xffe0,
     APP1 = 0xffe1,
     SOS = 0xffda,
     EOI = 0xffd9,
@@ -370,7 +371,26 @@ static HRESULT CDECL jpeg_decoder_get_metadata_blocks(struct decoder* iface, UIN
         length = header[2] * 256 + header[3] - 2;
 
         add_block = false;
-        if (marker == APP1)
+        if (marker == APP0)
+        {
+            BYTE signature[5];
+            if (length >= sizeof(signature) &&
+                stream_read(This->stream, signature, sizeof(signature), NULL) == S_OK)
+            {
+                stream_seek(This->stream, -(LONGLONG)sizeof(signature), STREAM_SEEK_CUR, NULL);
+                if (!memcmp(signature, "JFIF", sizeof(signature)))
+                {
+                    block.offset = offset;
+                    block.length = length;
+                    block.options = DECODER_BLOCK_READER_CLSID;
+                    block.reader_clsid = CLSID_WICApp0MetadataReader;
+                    add_block = true;
+                }
+            }
+            else if (length >= sizeof(signature))
+                break;
+        }
+        else if (marker == APP1)
         {
             /* APP1 marker might appear multiple times, it's reused for different metadata blocks. */
             if (stream_read(This->stream, header, 4, NULL) != S_OK)
@@ -508,6 +528,10 @@ struct jpeg_encoder
     struct encoder_frame encoder_frame;
     const jpeg_compress_format *format;
     BYTE dest_buffer[1024];
+    BYTE *encoded_data;
+    size_t encoded_size, encoded_capacity;
+    BOOL frame_finished;
+    HRESULT result;
 };
 
 static inline struct jpeg_encoder *impl_from_encoder(struct encoder* iface)
@@ -528,21 +552,23 @@ static void dest_mgr_init_destination(j_compress_ptr cinfo)
     This->dest_mgr.free_in_buffer = sizeof(This->dest_buffer);
 }
 
+static void append_encoded_bytes(struct jpeg_encoder *encoder, ULONG size)
+{
+    if (encoder->encoded_size > SIZE_MAX - size ||
+        !wincodecs_array_reserve((void **)&encoder->encoded_data, &encoder->encoded_capacity,
+                encoder->encoded_size + size, 1))
+    {
+        encoder->result = E_OUTOFMEMORY;
+        longjmp(*(jmp_buf *)encoder->cinfo.client_data, 1);
+    }
+    memcpy(encoder->encoded_data + encoder->encoded_size, encoder->dest_buffer, size);
+    encoder->encoded_size += size;
+}
+
 static boolean dest_mgr_empty_output_buffer(j_compress_ptr cinfo)
 {
     struct jpeg_encoder *This = encoder_from_compress(cinfo);
-    HRESULT hr;
-    ULONG byteswritten;
-
-    hr = stream_write(This->stream, This->dest_buffer,
-        sizeof(This->dest_buffer), &byteswritten);
-
-    if (hr != S_OK || byteswritten == 0)
-    {
-        ERR("Failed writing data, hr=%lx\n", hr);
-        return FALSE;
-    }
-
+    append_encoded_bytes(This, sizeof(This->dest_buffer));
     This->dest_mgr.next_output_byte = This->dest_buffer;
     This->dest_mgr.free_in_buffer = sizeof(This->dest_buffer);
     return TRUE;
@@ -551,17 +577,8 @@ static boolean dest_mgr_empty_output_buffer(j_compress_ptr cinfo)
 static void dest_mgr_term_destination(j_compress_ptr cinfo)
 {
     struct jpeg_encoder *This = encoder_from_compress(cinfo);
-    ULONG byteswritten;
-    HRESULT hr;
-
     if (This->dest_mgr.free_in_buffer != sizeof(This->dest_buffer))
-    {
-        hr = stream_write(This->stream, This->dest_buffer,
-            sizeof(This->dest_buffer) - This->dest_mgr.free_in_buffer, &byteswritten);
-
-        if (hr != S_OK || byteswritten == 0)
-            ERR("Failed writing data, hr=%lx\n", hr);
-    }
+        append_encoded_bytes(This, sizeof(This->dest_buffer) - This->dest_mgr.free_in_buffer);
 }
 
 static HRESULT CDECL jpeg_encoder_initialize(struct encoder* iface, IStream *stream)
@@ -625,10 +642,11 @@ static HRESULT CDECL jpeg_encoder_create_frame(struct encoder* iface, const stru
     jmp_buf jmpbuf;
     int i;
 
+    if (FAILED(This->result)) return This->result;
     This->encoder_frame = *frame;
 
     if (setjmp(jmpbuf))
-        return E_FAIL;
+        return This->result = FAILED(This->result) ? This->result : E_FAIL;
 
     This->cinfo.client_data = jmpbuf;
 
@@ -653,6 +671,7 @@ static HRESULT CDECL jpeg_encoder_create_frame(struct encoder* iface, const stru
         This->cinfo.Y_density = frame->dpiy;
     }
 
+    This->cinfo.write_JFIF_header = FALSE;
     jpeg_start_compress(&This->cinfo, TRUE);
 
     return S_OK;
@@ -663,14 +682,16 @@ static HRESULT CDECL jpeg_encoder_write_lines(struct encoder* iface, BYTE *data,
 {
     struct jpeg_encoder *This = impl_from_encoder(iface);
     jmp_buf jmpbuf;
-    BYTE *swapped_data = NULL, *current_row;
+    BYTE *volatile swapped_data = NULL;
+    BYTE *current_row;
     UINT line;
     int row_size;
 
+    if (FAILED(This->result)) return This->result;
     if (setjmp(jmpbuf))
     {
         free(swapped_data);
-        return E_FAIL;
+        return This->result = FAILED(This->result) ? This->result : E_FAIL;
     }
 
     This->cinfo.client_data = jmpbuf;
@@ -710,7 +731,7 @@ static HRESULT CDECL jpeg_encoder_write_lines(struct encoder* iface, BYTE *data,
         {
             ERR("failed writing scanlines\n");
             free(swapped_data);
-            return E_FAIL;
+            return This->result = FAILED(This->result) ? This->result : E_FAIL;
         }
     }
 
@@ -719,19 +740,62 @@ static HRESULT CDECL jpeg_encoder_write_lines(struct encoder* iface, BYTE *data,
     return S_OK;
 }
 
-static HRESULT CDECL jpeg_encoder_commit_frame(struct encoder* iface)
+static HRESULT write_encoded_bytes(IStream *stream, const BYTE *data, size_t size)
+{
+    ULONG chunk, written;
+    HRESULT hr;
+
+    while (size)
+    {
+        chunk = min(size, MAXDWORD);
+        hr = stream_write(stream, data, chunk, &written);
+        if (FAILED(hr)) return hr;
+        if (written != chunk) return WINCODEC_ERR_STREAMWRITE;
+        size -= chunk;
+        data += chunk;
+    }
+    return S_OK;
+}
+
+static HRESULT CDECL jpeg_encoder_commit_frame(struct encoder* iface, const struct encoder_metadata *metadata, UINT metadata_count)
 {
     struct jpeg_encoder *This = impl_from_encoder(iface);
     jmp_buf jmpbuf;
+    HRESULT hr;
+    BYTE marker[4];
+    UINT i;
 
+    if (FAILED(This->result)) return This->result;
+    for (i = 0; i < metadata_count; ++i)
+    {
+        if (!IsEqualGUID(&metadata[i].format, &GUID_MetadataFormatApp0) &&
+                !IsEqualGUID(&metadata[i].format, &GUID_MetadataFormatApp1))
+            return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+        if (metadata[i].size > 0xffff - 2) return WINCODEC_ERR_TOOMUCHMETADATA;
+    }
     if (setjmp(jmpbuf))
-        return E_FAIL;
-
+        return This->result = FAILED(This->result) ? This->result : E_FAIL;
     This->cinfo.client_data = jmpbuf;
-
-    jpeg_finish_compress(&This->cinfo);
-
-    return S_OK;
+    if (!This->frame_finished)
+    {
+        jpeg_finish_compress(&This->cinfo);
+        This->frame_finished = TRUE;
+    }
+    if (This->encoded_size < 2 || This->encoded_data[0] != 0xff || This->encoded_data[1] != 0xd8)
+        return E_FAIL;
+    hr = write_encoded_bytes(This->stream, This->encoded_data, 2);
+    for (i = 0; SUCCEEDED(hr) && i < metadata_count; ++i)
+    {
+        marker[0] = 0xff;
+        marker[1] = IsEqualGUID(&metadata[i].format, &GUID_MetadataFormatApp0) ? 0xe0 : 0xe1;
+        marker[2] = (metadata[i].size + 2) >> 8;
+        marker[3] = metadata[i].size + 2;
+        hr = write_encoded_bytes(This->stream, marker, sizeof(marker));
+        if (SUCCEEDED(hr)) hr = write_encoded_bytes(This->stream, metadata[i].data, metadata[i].size);
+    }
+    if (SUCCEEDED(hr)) hr = write_encoded_bytes(This->stream, This->encoded_data + 2, This->encoded_size - 2);
+    This->result = hr;
+    return hr;
 }
 
 static HRESULT CDECL jpeg_encoder_commit_file(struct encoder* iface)
@@ -744,6 +808,7 @@ static void CDECL jpeg_encoder_destroy(struct encoder* iface)
     struct jpeg_encoder *This = impl_from_encoder(iface);
     if (This->cinfo_initialized)
         jpeg_destroy_compress(&This->cinfo);
+    free(This->encoded_data);
     free(This);
 };
 
@@ -761,7 +826,7 @@ HRESULT CDECL jpeg_encoder_create(struct encoder_info *info, struct encoder **re
 {
     struct jpeg_encoder *This;
 
-    This = malloc(sizeof(struct jpeg_encoder));
+    This = calloc(1, sizeof(struct jpeg_encoder));
     if (!This) return E_OUTOFMEMORY;
 
     This->encoder.vtable = &jpeg_encoder_vtable;

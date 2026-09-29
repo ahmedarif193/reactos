@@ -233,11 +233,25 @@ coclass WICJpegChrominanceMetadataReader { interface IWICMetadataReader; }
 coclass WICPngChrmMetadataReader { interface IWICMetadataReader; }
 
 [
+    helpstring("WIC Png cHRM Metadata Writer"),
+    threading(both),
+    uuid(e23ce3eb-5608-4e83-bcef-27b1987e51d7)
+]
+coclass WICPngChrmMetadataWriter { interface IWICMetadataWriter; }
+
+[
     helpstring("WIC Png gAMA Metadata Reader"),
     threading(both),
     uuid(3692ca39-e082-4350-9e1f-3704cb083cd5)
 ]
 coclass WICPngGamaMetadataReader { interface IWICMetadataReader; }
+
+[
+    helpstring("WIC Png gAMA Metadata Writer"),
+    threading(both),
+    uuid(ff036d13-5d4b-46dd-b10f-106693d9fe4f)
+]
+coclass WICPngGamaMetadataWriter { interface IWICMetadataWriter; }
 
 [
     helpstring("WIC Png hIST Metadata Reader"),
@@ -247,12 +261,26 @@ coclass WICPngGamaMetadataReader { interface IWICMetadataReader; }
 coclass WICPngHistMetadataReader { interface IWICMetadataReader; }
 
 [
+    helpstring("WIC Png hIST Metadata Writer"),
+    threading(both),
+    uuid(8a03e749-672e-446e-bf1f-2c11d233b6ff)
+]
+coclass WICPngHistMetadataWriter { interface IWICMetadataWriter; }
+
+[
     helpstring("WIC Png tEXt Metadata Reader"),
     threading(both),
     uuid(4b59afcc-b8c3-408a-b670-89e5fab6fda7)
 
 ]
 coclass WICPngTextMetadataReader { interface IWICMetadataReader; }
+
+[
+    helpstring("WIC Png tEXt Metadata Writer"),
+    threading(both),
+    uuid(b5ebafb9-253e-4a72-a744-0762d2685683)
+]
+coclass WICPngTextMetadataWriter { interface IWICMetadataWriter; }
 
 [
     helpstring("WIC Png tIME Metadata Reader"),
@@ -290,11 +318,25 @@ coclass WICPngBkgdMetadataWriter { interface IWICMetadataWriter; }
 coclass WICLSDMetadataReader { interface IWICMetadataReader; }
 
 [
+    helpstring("WIC Logical Screen Descriptor Metadata Writer"),
+    threading(both),
+    uuid(73c037e7-e5d9-4954-876a-6da81d6e5768)
+]
+coclass WICLSDMetadataWriter { interface IWICMetadataWriter; }
+
+[
     helpstring("WIC IMD Metadata Reader"),
     threading(both),
     uuid(7447a267-0015-42c8-a8f1-fb3b94c68361)
 ]
 coclass WICIMDMetadataReader { interface IWICMetadataReader; }
+
+[
+    helpstring("WIC Image Descriptor Metadata Writer"),
+    threading(both),
+    uuid(8c89071f-452e-4e95-9682-9d1024627172)
+]
+coclass WICIMDMetadataWriter { interface IWICMetadataWriter; }
 
 [
     helpstring("WIC GCE Metadata Reader"),
@@ -304,6 +346,13 @@ coclass WICIMDMetadataReader { interface IWICMetadataReader; }
 coclass WICGCEMetadataReader { interface IWICMetadataReader; }
 
 [
+    helpstring("WIC Graphic Control Extension Metadata Writer"),
+    threading(both),
+    uuid(af95dc76-16b2-47f4-b3ea-3c31796693e7)
+]
+coclass WICGCEMetadataWriter { interface IWICMetadataWriter; }
+
+[
     helpstring("WIC Application Extension Reader"),
     threading(both),
     uuid(1767b93a-b021-44ea-920f-863c11f4f768)
@@ -311,8 +360,50 @@ coclass WICGCEMetadataReader { interface IWICMetadataReader; }
 coclass WICAPEMetadataReader { interface IWICMetadataReader; }
 
 [
+    helpstring("WIC Application Extension Metadata Writer"),
+    threading(both),
+    uuid(bd6edfca-2890-482f-b233-8d7339a1cf8d)
+]
+coclass WICAPEMetadataWriter { interface IWICMetadataWriter; }
+
+[
     helpstring("WIC Comment Extension Reader"),
     threading(both),
     uuid(32557d3b-69dc-4f95-836e-f5972b2f6159)
 ]
 coclass WICGifCommentMetadataReader { interface IWICMetadataReader; }
+
+[
+    helpstring("WIC Comment Extension Metadata Writer"),
+    threading(both),
+    uuid(a02797fc-c4ae-418c-af95-e637c7ead2a1)
+]
+coclass WICGifCommentMetadataWriter { interface IWICMetadataWriter; }
+
+[
+    helpstring("WIC App0 Metadata Reader"),
+    threading(both),
+    uuid(43324b33-a78f-480f-9111-9638aaccc832)
+]
+coclass WICApp0MetadataReader { interface IWICMetadataReader; }
+
+[
+    helpstring("WIC App0 Metadata Writer"),
+    threading(both),
+    uuid(f3c633a2-46c8-498e-8fbb-cc6f721bbcde)
+]
+coclass WICApp0MetadataWriter { interface IWICMetadataWriter; }
+
+[
+    helpstring("WIC WMP Decoder"),
+    threading(both),
+    uuid(a26cec36-234c-4950-ae16-e34aace71d0d)
+]
+coclass WICWmpDecoder { interface IWICBitmapDecoder; }
+
+[
+    helpstring("WIC WMP Encoder"),
+    threading(both),
+    uuid(ac4ce3cb-e1c1-44cd-8215-5a1665509ec2)
+]
+coclass WICWmpEncoder { interface IWICBitmapEncoder; }

@@ -1641,9 +1641,8 @@ static HRESULT WINAPI MetadataReaderInfo_GetContainerFormats(IWICMetadataReaderI
     *actual_length = This->container_count;
     if (formats)
     {
-        if (This->container_count && length < This->container_count)
-            return WINCODEC_ERR_INSUFFICIENTBUFFER;
-        memcpy(formats, This->container_formats, This->container_count * sizeof(*formats));
+        *actual_length = min(length, This->container_count);
+        memcpy(formats, This->container_formats, *actual_length * sizeof(*formats));
     }
     return S_OK;
 }
@@ -1690,10 +1689,11 @@ static HRESULT WINAPI MetadataReaderInfo_GetPatterns(IWICMetadataReaderInfo *ifa
 {
     MetadataReaderInfo *This = impl_from_IWICMetadataReaderInfo(iface);
     struct metadata_container *container;
+    UINT i;
 
     TRACE("(%p,%s,%u,%p,%p,%p)\n", iface, debugstr_guid(container_guid), length, patterns, count, actual_length);
 
-    if (!actual_length || !container_guid) return E_INVALIDARG;
+    if (!actual_length || !count || !container_guid) return E_INVALIDARG;
 
     if (!(container = get_metadata_container(This, container_guid)))
         return WINCODEC_ERR_COMPONENTNOTFOUND;
@@ -1705,6 +1705,13 @@ static HRESULT WINAPI MetadataReaderInfo_GetPatterns(IWICMetadataReaderInfo *ifa
         if (container->patterns_size && length < container->patterns_size)
             return WINCODEC_ERR_INSUFFICIENTBUFFER;
         memcpy(patterns, container->patterns, container->patterns_size);
+        for (i = 0; i < container->pattern_count; ++i)
+        {
+            patterns[i].Pattern = (BYTE *)patterns +
+                    (container->patterns[i].Pattern - (BYTE *)container->patterns);
+            patterns[i].Mask = (BYTE *)patterns +
+                    (container->patterns[i].Mask - (BYTE *)container->patterns);
+        }
     }
     return S_OK;
 }

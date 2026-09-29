@@ -73,9 +73,9 @@ HRESULT CDECL encoder_write_lines(struct encoder* encoder, BYTE *data, DWORD lin
     return encoder->vtable->write_lines(encoder, data, line_count, stride);
 }
 
-HRESULT CDECL encoder_commit_frame(struct encoder* encoder)
+HRESULT CDECL encoder_commit_frame(struct encoder* encoder, const struct encoder_metadata *metadata, UINT metadata_count)
 {
-    return encoder->vtable->commit_frame(encoder);
+    return encoder->vtable->commit_frame(encoder, metadata, metadata_count);
 }
 
 HRESULT CDECL encoder_commit_file(struct encoder* encoder)

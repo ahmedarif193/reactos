@@ -1267,6 +1267,7 @@ struct iterator_context
     IStream *stream;
 
     void **result;
+    HRESULT failure;
 };
 
 typedef enum iterator_result (*iterator_func)(IUnknown *item, struct iterator_context *context);
@@ -1388,8 +1389,10 @@ static enum iterator_result create_metadata_reader_iterator(IUnknown *item,
 
         if (restore)
         {
+            HRESULT seek_hr;
             memcpy(&move, &pos, sizeof(pos));
-            hr = IStream_Seek(context->stream, move, STREAM_SEEK_SET, NULL);
+            seek_hr = IStream_Seek(context->stream, move, STREAM_SEEK_SET, NULL);
+            if (SUCCEEDED(hr)) hr = seek_hr;
         }
 
         if (persist_stream)
@@ -1405,6 +1408,7 @@ static enum iterator_result create_metadata_reader_iterator(IUnknown *item,
     if (reader)
         IWICMetadataReader_Release(reader);
 
+    context->failure = hr;
     return ITER_SKIP;
 }
 
@@ -1528,6 +1532,9 @@ HRESULT create_metadata_reader(REFGUID format, const GUID *vendor, DWORD options
         context.vendor = NULL;
         hr = foreach_component(WICMetadataReader, create_metadata_reader_iterator, &context);
     }
+
+    if (!*reader && FAILED(context.failure))
+        return context.failure;
 
     if (FAILED(hr))
         WARN("Failed to create a metadata reader instance, hr %#lx.\n", hr);

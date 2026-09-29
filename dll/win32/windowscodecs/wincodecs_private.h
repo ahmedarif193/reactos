@@ -220,6 +220,11 @@ enum metadatahandler_flags
 {
     METADATAHANDLER_IS_WRITER = 0x1,
     METADATAHANDLER_FIXED_ITEMS = 0x2, /* Items cannot be added or removed. */
+    METADATAHANDLER_NAMED_ITEMS = 0x4,
+    METADATAHANDLER_ABSOLUTE_OFFSETS = 0x8,
+    METADATAHANDLER_NESTED_ITEMS = 0x10,
+    METADATAHANDLER_CASE_SENSITIVE = 0x20,
+    METADATAHANDLER_DETACHED_LOAD = 0x40,
 };
 
 typedef struct MetadataHandler MetadataHandler;
@@ -235,6 +240,9 @@ typedef struct _MetadataHandlerVtbl
     HRESULT empty_value_error;
     HRESULT invalid_index_error;
 #endif
+    HRESULT (*fnPrepareValue)(const PROPVARIANT *id, const PROPVARIANT *value, PROPVARIANT *normalized_id);
+    HRESULT (*fnSerialize)(const MetadataItem *items, DWORD count, DWORD options, ULONGLONG offset,
+            BOOL clear_dirty, BYTE **data, ULONG *size);
 } MetadataHandlerVtbl;
 
 typedef struct MetadataHandler
@@ -250,6 +258,7 @@ typedef struct MetadataHandler
     IStream *stream;
     ULARGE_INTEGER origin;
     CRITICAL_SECTION lock;
+    ULONGLONG modification, saved_modification;
 } MetadataHandler;
 
 extern HRESULT MetadataReader_Create(const MetadataHandlerVtbl *vtable, REFIID iid, void** ppv);
@@ -257,6 +266,10 @@ extern void MetadataHandler_FreeItems(MetadataHandler *handler);
 extern void clear_metadata_item(MetadataItem *item);
 
 extern HRESULT UnknownMetadataReader_CreateInstance(REFIID iid, void** ppv);
+extern HRESULT XMPStructReader_CreateInstance(REFIID iid, void **out);
+extern HRESULT XMPBagReader_CreateInstance(REFIID iid, void **out);
+extern HRESULT XMPSeqReader_CreateInstance(REFIID iid, void **out);
+extern HRESULT XMPAltReader_CreateInstance(REFIID iid, void **out);
 extern HRESULT UnknownMetadataWriter_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT IfdMetadataReader_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT IfdMetadataWriter_CreateInstance(REFIID iid, void **ppv);
@@ -264,7 +277,9 @@ extern HRESULT GpsMetadataReader_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT GpsMetadataWriter_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT ExifMetadataReader_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT ExifMetadataWriter_CreateInstance(REFIID iid, void **ppv);
+extern HRESULT App0MetadataReader_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT App1MetadataReader_CreateInstance(REFIID iid, void **ppv);
+extern HRESULT App0MetadataWriter_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT App1MetadataWriter_CreateInstance(REFIID iid, void **ppv);
 #ifdef __REACTOS__
 extern HRESULT JpegLuminanceReader_CreateInstance(REFIID iid, void **ppv);
@@ -273,21 +288,32 @@ extern HRESULT JpegChrominanceReader_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT PngBkgdReader_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngBkgdWriter_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngChrmReader_CreateInstance(REFIID iid, void** ppv);
+extern HRESULT PngChrmWriter_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngGamaReader_CreateInstance(REFIID iid, void** ppv);
+extern HRESULT PngGamaWriter_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngHistReader_CreateInstance(REFIID iid, void** ppv);
+extern HRESULT PngHistWriter_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngTextReader_CreateInstance(REFIID iid, void** ppv);
+extern HRESULT PngTextWriter_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngTimeReader_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT PngTimeWriter_CreateInstance(REFIID iid, void** ppv);
 extern HRESULT LSDReader_CreateInstance(REFIID iid, void **ppv);
+extern HRESULT LSDWriter_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT IMDReader_CreateInstance(REFIID iid, void **ppv);
+extern HRESULT IMDWriter_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT GCEReader_CreateInstance(REFIID iid, void **ppv);
+extern HRESULT GCEWriter_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT APEReader_CreateInstance(REFIID iid, void **ppv);
+extern HRESULT APEWriter_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT GifCommentReader_CreateInstance(REFIID iid, void **ppv);
+extern HRESULT GifCommentWriter_CreateInstance(REFIID iid, void **ppv);
 extern HRESULT MetadataQueryReader_CreateInstanceFromBlockReader(IWICMetadataBlockReader *, IWICMetadataQueryReader **);
 extern HRESULT MetadataQueryWriter_CreateInstanceFromBlockWriter(IWICMetadataBlockWriter *, IWICMetadataQueryWriter **);
 extern HRESULT MetadataQueryReader_CreateInstance(IWICMetadataReader *, IWICMetadataQueryReader **);
 extern HRESULT MetadataQueryWriter_CreateInstance(IWICMetadataWriter *, IWICMetadataQueryWriter **);
 extern HRESULT stream_initialize_from_filehandle(IWICStream *iface, HANDLE hfile);
+
+HRESULT create_metadata_writer_enumerator(IUnknown **objects, UINT count, IEnumUnknown **ret);
 
 extern bool wincodecs_array_reserve(void **elements, size_t *capacity, size_t count, size_t size);
 
@@ -410,12 +436,14 @@ enum encoder_option
     ENCODER_OPTION_CHROMINANCE,
     ENCODER_OPTION_YCRCB_SUBSAMPLING,
     ENCODER_OPTION_SUPPRESS_APP0,
+    ENCODER_OPTION_LOSSLESS,
     ENCODER_OPTION_END
 };
 
 #define ENCODER_FLAGS_MULTI_FRAME 0x1
 #define ENCODER_FLAGS_ICNS_SIZE 0x2
 #define ENCODER_FLAGS_SUPPORTS_METADATA 0x4
+#define ENCODER_FLAGS_METADATA_UNINITIALIZED 0x8
 
 struct encoder_info
 {
@@ -435,6 +463,7 @@ struct encoder_frame
     UINT num_colors;
     WICColor palette[256];
     /* encoder options */
+    BOOL lossless;
     BOOL interlace;
     DWORD filter;
 };
@@ -444,13 +473,20 @@ struct encoder
     const struct encoder_funcs *vtable;
 };
 
+struct encoder_metadata
+{
+    GUID format;
+    BYTE *data;
+    ULONG size;
+};
+
 struct encoder_funcs
 {
     HRESULT (CDECL *initialize)(struct encoder* This, IStream *stream);
     HRESULT (CDECL *get_supported_format)(struct encoder* This, GUID *pixel_format, DWORD *bpp, BOOL *indexed);
     HRESULT (CDECL *create_frame)(struct encoder* This, const struct encoder_frame *frame);
     HRESULT (CDECL *write_lines)(struct encoder* This, BYTE *data, DWORD line_count, DWORD stride);
-    HRESULT (CDECL *commit_frame)(struct encoder* This);
+    HRESULT (CDECL *commit_frame)(struct encoder* This, const struct encoder_metadata *metadata, UINT metadata_count);
     HRESULT (CDECL *commit_file)(struct encoder* This);
     void (CDECL *destroy)(struct encoder* This);
 };
@@ -459,7 +495,7 @@ HRESULT CDECL encoder_initialize(struct encoder* This, IStream *stream);
 HRESULT CDECL encoder_get_supported_format(struct encoder* This, GUID *pixel_format, DWORD *bpp, BOOL *indexed);
 HRESULT CDECL encoder_create_frame(struct encoder* This, const struct encoder_frame *frame);
 HRESULT CDECL encoder_write_lines(struct encoder* This, BYTE *data, DWORD line_count, DWORD stride);
-HRESULT CDECL encoder_commit_frame(struct encoder* This);
+HRESULT CDECL encoder_commit_frame(struct encoder* This, const struct encoder_metadata *metadata, UINT metadata_count);
 HRESULT CDECL encoder_commit_file(struct encoder* This);
 void CDECL encoder_destroy(struct encoder* This);
 
@@ -477,5 +513,8 @@ extern HRESULT CommonDecoder_CreateInstance(struct decoder *decoder,
 
 extern HRESULT CommonEncoder_CreateInstance(struct encoder *encoder,
     const struct encoder_info *encoder_info, REFIID iid, void** ppv);
+
+HRESULT WmpEncoder_CreateInstance(REFIID iid, void **result);
+HRESULT WmpDecoder_CreateInstance(REFIID iid, void **result);
 
 #endif /* WINCODECS_PRIVATE_H */

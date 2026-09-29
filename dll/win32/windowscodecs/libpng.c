@@ -756,7 +756,7 @@ static HRESULT CDECL png_encoder_write_lines(struct encoder* encoder, BYTE *data
     return S_OK;
 }
 
-static HRESULT CDECL png_encoder_commit_frame(struct encoder *encoder)
+static HRESULT CDECL png_encoder_commit_frame(struct encoder *encoder, const struct encoder_metadata *metadata, UINT metadata_count)
 {
     struct png_encoder *This = impl_from_encoder(encoder);
     png_byte **row_pointers=NULL;

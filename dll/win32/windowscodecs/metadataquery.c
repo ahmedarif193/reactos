@@ -220,6 +220,7 @@ static const WCHAR *get_type_name(VARTYPE vt)
 struct query_component
 {
     unsigned int index;
+    bool wildcard;
     PROPVARIANT schema;
     PROPVARIANT id;
     union
@@ -288,7 +289,7 @@ static bool parser_skip_char(struct query_parser *parser, WCHAR ch)
     return false;
 }
 
-static void parse_query_index(struct query_parser *parser, unsigned int *ret)
+static void parse_query_index(struct query_parser *parser, struct query_component *comp)
 {
     unsigned int index = 0, d;
 
@@ -296,9 +297,11 @@ static void parse_query_index(struct query_parser *parser, unsigned int *ret)
 
     if (*parser->ptr == '*' && *(parser->ptr + 1) == ']')
     {
-        FIXME("[*] index value is not supported.\n");
         parser->ptr += 2;
-        parser->hr = E_UNEXPECTED;
+        if (parser->count)
+            parser->hr = WINCODEC_ERR_REQUESTONLYVALIDATMETADATAROOT;
+        else
+            comp->wildcard = true;
         return;
     }
 
@@ -327,7 +330,7 @@ static void parse_query_index(struct query_parser *parser, unsigned int *ret)
     }
     parser->ptr++;
 
-    *ret = index;
+    comp->index = index;
 }
 
 static bool parser_unescape(struct query_parser *parser)
@@ -424,9 +427,25 @@ static void parse_query_data_item(struct query_parser *parser, PROPVARIANT *item
     }
     else
     {
-        v.vt = VT_LPWSTR;
-        v.pwszVal = parser->scratch;
-        parser->hr = PropVariantChangeType(item, &v, 0, vt);
+        if (vt == VT_LPSTR || vt == VT_LPWSTR)
+        {
+            v.vt = VT_LPWSTR;
+            v.pwszVal = parser->scratch;
+            parser->hr = PropVariantChangeType(item, &v, 0, vt);
+        }
+        else
+        {
+            VARIANT source, converted;
+            VariantInit(&source);
+            VariantInit(&converted);
+            source.vt = VT_BSTR;
+            if (!(source.bstrVal = SysAllocString(parser->scratch)))
+                parser->hr = E_OUTOFMEMORY;
+            else if (SUCCEEDED(parser->hr = VariantChangeType(&converted, &source, 0, vt)))
+                parser->hr = VariantToPropVariant(&converted, item);
+            VariantClear(&converted);
+            VariantClear(&source);
+        }
     }
 }
 
@@ -456,6 +475,7 @@ static void parse_add_component(struct query_parser *parser, struct query_compon
 static void parse_query_component(struct query_parser *parser)
 {
     struct query_component comp = { 0 };
+    BOOL has_index;
     GUID guid;
 
     if (*parser->ptr != '/')
@@ -466,8 +486,9 @@ static void parse_query_component(struct query_parser *parser)
     parser->ptr++;
 
     /* Optional index */
-    if (*parser->ptr == '[')
-        parse_query_index(parser, &comp.index);
+    has_index = *parser->ptr == '[';
+    if (has_index)
+        parse_query_index(parser, &comp);
 
     parse_query_item(parser, &comp.id);
     if (*parser->ptr == ':')
@@ -480,7 +501,7 @@ static void parse_query_component(struct query_parser *parser)
     }
 
     /* Resolve known names. */
-    if (comp.id.vt == VT_LPWSTR)
+    if (comp.id.vt == VT_LPWSTR && !(comp.wildcard && !*parser->ptr))
     {
         if (SUCCEEDED(WICMapShortNameToGuid(comp.id.pwszVal, &guid)))
         {
@@ -491,6 +512,13 @@ static void parse_query_component(struct query_parser *parser)
 
     if (SUCCEEDED(parser->hr))
     {
+        if (has_index && !comp.wildcard && comp.id.vt != VT_CLSID)
+        {
+            PropVariantClear(&comp.schema);
+            PropVariantClear(&comp.id);
+            parser->hr = E_INVALIDARG;
+            return;
+        }
         if (comp.id.vt == VT_CLSID)
         {
             PropVariantClear(&comp.schema);
@@ -529,6 +557,43 @@ static HRESULT parser_set_top_level_metadata_handler(struct query_handler *query
         return S_OK;
 
     comp = &parser->components[0];
+
+    if (comp->wildcard && parser->count == 1)
+    {
+        PROPVARIANT value;
+
+        hr = IWICMetadataBlockReader_GetCount(query_handler->object.block_reader, &count);
+        if (FAILED(hr)) return hr;
+        for (i = 0; i < count; ++i)
+        {
+            if (is_writer_handler(query_handler))
+                hr = IWICMetadataBlockWriter_GetWriterByIndex(query_handler->object.block_writer, i,
+                        (IWICMetadataWriter **)&handler);
+            else
+                hr = IWICMetadataBlockReader_GetReaderByIndex(query_handler->object.block_reader, i, &handler);
+            if (FAILED(hr)) return hr;
+            PropVariantInit(&value);
+            hr = IWICMetadataReader_GetValue(handler, &comp->schema, &comp->id, &value);
+            PropVariantClear(&value);
+            if (SUCCEEDED(hr))
+            {
+                if (!wincodecs_array_reserve((void **)&parser->components, &parser->capacity,
+                        2, sizeof(*parser->components)))
+                {
+                    IWICMetadataReader_Release(handler);
+                    return E_OUTOFMEMORY;
+                }
+                comp = parser->components;
+                comp[1] = comp[0];
+                memset(comp, 0, sizeof(*comp));
+                comp->reader = handler;
+                parser->count = 2;
+                return S_OK;
+            }
+            IWICMetadataReader_Release(handler);
+        }
+        return WINCODEC_ERR_PROPERTYNOTFOUND;
+    }
 
     /* Root component has to be an object within block collection, it's located using {CLSID, index} pair. */
     if (comp->id.vt != VT_CLSID)
@@ -628,6 +693,7 @@ static HRESULT parse_query(struct query_handler *query_handler, const WCHAR *que
 {
     struct query_component comp = { 0 };
     size_t len;
+    UINT attempts = 1, i;
 
     memset(parser, 0, sizeof(*parser));
 
@@ -661,7 +727,25 @@ static HRESULT parse_query(struct query_handler *query_handler, const WCHAR *que
     if (!parser->count)
         return parser->hr = WINCODEC_ERR_INVALIDQUERYREQUEST;
 
-    parser_resolve_component_handlers(query_handler, parser);
+    if (is_block_handler(query_handler) && parser->components[0].wildcard && parser->count > 1)
+    {
+        parser->hr = IWICMetadataBlockReader_GetCount(query_handler->object.block_reader, &attempts);
+        if (FAILED(parser->hr)) return parser->hr;
+        if (!attempts) return parser->hr = WINCODEC_ERR_PROPERTYNOTFOUND;
+    }
+    for (i = 0; i < attempts; ++i)
+    {
+        parser_resolve_component_handlers(query_handler, parser);
+        if (SUCCEEDED(parser->hr) || i + 1 == attempts) break;
+        for (size_t j = 0; j < parser->count; ++j)
+        {
+            if (parser->components[j].handler)
+                IUnknown_Release(parser->components[j].handler);
+            parser->components[j].handler = NULL;
+        }
+        parser->components[0].index++;
+        parser->hr = S_OK;
+    }
 
     /* Validate that query is usable - it should produce an object or
        an object followed by a value id. */

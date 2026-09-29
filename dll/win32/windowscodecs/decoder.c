@@ -41,6 +41,7 @@ struct object_enumerator
     IUnknown **objects;
     unsigned int count;
     unsigned int position;
+    BOOL reset_clone;
 };
 
 static inline struct object_enumerator *impl_from_IEnumUnknown(IEnumUnknown *iface)
@@ -142,7 +143,7 @@ static HRESULT WINAPI object_enumerator_Reset(IEnumUnknown *iface)
 }
 
 static HRESULT create_object_enumerator(IUnknown **objects, unsigned int position,
-        unsigned int count, IEnumUnknown **ret);
+        unsigned int count, BOOL reset_clone, IEnumUnknown **ret);
 
 static HRESULT WINAPI object_enumerator_Clone(IEnumUnknown *iface, IEnumUnknown **ret)
 {
@@ -153,7 +154,8 @@ static HRESULT WINAPI object_enumerator_Clone(IEnumUnknown *iface, IEnumUnknown 
     if (!ret)
         return E_INVALIDARG;
 
-    return create_object_enumerator(enumerator->objects, enumerator->position, enumerator->count, ret);
+    return create_object_enumerator(enumerator->objects, enumerator->reset_clone ? 0 : enumerator->position,
+            enumerator->count, enumerator->reset_clone, ret);
 }
 
 static const IEnumUnknownVtbl object_enumerator_vtbl =
@@ -168,7 +170,7 @@ static const IEnumUnknownVtbl object_enumerator_vtbl =
 };
 
 static HRESULT create_object_enumerator(IUnknown **objects, unsigned int position,
-        unsigned int count, IEnumUnknown **ret)
+        unsigned int count, BOOL reset_clone, IEnumUnknown **ret)
 {
     struct object_enumerator *object;
     unsigned int i;
@@ -178,12 +180,13 @@ static HRESULT create_object_enumerator(IUnknown **objects, unsigned int positio
 
     object->IEnumUnknown_iface.lpVtbl = &object_enumerator_vtbl;
     object->refcount = 1;
-    if (!(object->objects = calloc(count, sizeof(*object->objects))))
+    if (!(object->objects = calloc(count ? count : 1, sizeof(*object->objects))))
     {
         free(object);
         return E_OUTOFMEMORY;
     }
     object->position = position;
+    object->reset_clone = reset_clone;
     object->count = count;
 
     for (i = 0; i < count; ++i)
@@ -196,6 +199,14 @@ static HRESULT create_object_enumerator(IUnknown **objects, unsigned int positio
 
     return S_OK;
 }
+
+HRESULT create_metadata_writer_enumerator(IUnknown **objects, UINT count, IEnumUnknown **ret)
+{
+    if (!ret) return E_INVALIDARG;
+    *ret = NULL;
+    return create_object_enumerator(objects, 0, count, TRUE, ret);
+}
+
 
 typedef struct CommonDecoder CommonDecoder;
 
@@ -312,7 +323,8 @@ static HRESULT metadata_block_reader_get_reader(struct metadata_block_reader *bl
     hr = metadata_block_reader_initialize_metadata(block_reader);
 
     if (SUCCEEDED(hr) && index >= block_reader->metadata_count)
-        hr = E_INVALIDARG;
+        hr = IsEqualGUID(&block_reader->decoder->decoder_info.container_format, &GUID_ContainerFormatPng) ?
+                WINCODEC_ERR_VALUEOUTOFRANGE : E_INVALIDARG;
 
     if (SUCCEEDED(hr) && block_reader->readers[index])
     {
@@ -460,7 +472,7 @@ static HRESULT metadata_block_reader_get_enumerator(struct metadata_block_reader
     }
 
     if (SUCCEEDED(hr))
-        hr = create_object_enumerator(objects, 0, count, enumerator);
+        hr = create_object_enumerator(objects, 0, count, FALSE, enumerator);
 
     for (i = 0; i < count; ++i)
     {

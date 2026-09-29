@@ -23,6 +23,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "objbase.h"
+#include "ole2.h"
 
 #include "wincodecs_private.h"
 
@@ -40,7 +41,8 @@ static const PROPBAG2 encoder_option_properties[ENCODER_OPTION_END] = {
     { PROPBAG2_TYPE_DATA, VT_I4 | VT_ARRAY, 0, 0, (LPOLESTR)L"Luminance" },
     { PROPBAG2_TYPE_DATA, VT_I4 | VT_ARRAY, 0, 0, (LPOLESTR)L"Chrominance" },
     { PROPBAG2_TYPE_DATA, VT_UI1,           0, 0, (LPOLESTR)L"JpegYCrCbSubsampling" },
-    { PROPBAG2_TYPE_DATA, VT_BOOL,          0, 0, (LPOLESTR)L"SuppressApp0" }
+    { PROPBAG2_TYPE_DATA, VT_BOOL,          0, 0, (LPOLESTR)L"SuppressApp0" },
+    { PROPBAG2_TYPE_DATA, VT_BOOL,          0, 0, (LPOLESTR)L"Lossless" }
 };
 
 typedef struct CommonEncoder {
@@ -65,6 +67,11 @@ typedef struct CommonEncoderFrame {
     BOOL frame_created;
     UINT lines_written;
     BOOL committed;
+    BOOL committing;
+    IWICMetadataWriter **metadata;
+    UINT metadata_count;
+    size_t metadata_capacity;
+    ULONGLONG metadata_revision;
 } CommonEncoderFrame;
 
 static inline CommonEncoder *impl_from_IWICBitmapEncoder(IWICBitmapEncoder *iface)
@@ -129,11 +136,40 @@ static ULONG WINAPI CommonEncoderFrame_Release(IWICBitmapFrameEncode *iface)
 
     if (ref == 0)
     {
+        UINT i;
+        for (i = 0; i < This->metadata_count; ++i) IWICMetadataWriter_Release(This->metadata[i]);
+        free(This->metadata);
         IWICBitmapEncoder_Release(&This->parent->IWICBitmapEncoder_iface);
         free(This);
     }
 
     return ref;
+}
+
+static HRESULT initialize_jpeg_metadata(CommonEncoderFrame *frame)
+{
+    IWICMetadataWriter *writer;
+    PROPVARIANT id, value;
+    HRESULT hr;
+    UINT i;
+
+    hr = App0MetadataWriter_CreateInstance(&IID_IWICMetadataWriter, (void **)&writer);
+    if (FAILED(hr)) return hr;
+    id.vt = VT_UI2;
+    value.vt = VT_UI2;
+    for (i = 0; i < 4; ++i)
+    {
+        if (i == 1) continue;
+        id.uiVal = i;
+        value.uiVal = i ? 1 : 0x101;
+        hr = IWICMetadataWriter_SetValue(writer, NULL, &id, &value);
+        if (FAILED(hr)) break;
+    }
+    if (SUCCEEDED(hr) && !wincodecs_array_reserve((void **)&frame->metadata,
+            &frame->metadata_capacity, 1, sizeof(*frame->metadata))) hr = E_OUTOFMEMORY;
+    if (SUCCEEDED(hr)) frame->metadata[frame->metadata_count++] = writer;
+    else IWICMetadataWriter_Release(writer);
+    return hr;
 }
 
 static HRESULT WINAPI CommonEncoderFrame_Initialize(IWICBitmapFrameEncode *iface,
@@ -146,6 +182,7 @@ static HRESULT WINAPI CommonEncoderFrame_Initialize(IWICBitmapFrameEncode *iface
     VARIANT opt_values[7];
     HRESULT opt_hres[7];
     DWORD num_opts, i;
+    BOOL suppress_app0 = FALSE;
 
     TRACE("(%p,%p)\n", iface, pIEncoderOptions);
 
@@ -180,6 +217,12 @@ static HRESULT WINAPI CommonEncoderFrame_Initialize(IWICBitmapFrameEncode *iface
                     options.filter = WICPngFilterUnspecified;
                 }
                 break;
+            case ENCODER_OPTION_LOSSLESS:
+                options.lossless = V_VT(val) == VT_BOOL && V_BOOL(val) != VARIANT_FALSE;
+                break;
+            case ENCODER_OPTION_SUPPRESS_APP0:
+                suppress_app0 = V_VT(val) == VT_BOOL && V_BOOL(val) != VARIANT_FALSE;
+                break;
             default:
                 break;
             }
@@ -198,7 +241,9 @@ static HRESULT WINAPI CommonEncoderFrame_Initialize(IWICBitmapFrameEncode *iface
     else
     {
         This->encoder_frame = options;
-        This->initialized = TRUE;
+        if (!suppress_app0 && IsEqualGUID(&This->parent->encoder_info.container_format, &GUID_ContainerFormatJpeg))
+            hr = initialize_jpeg_metadata(This);
+        if (SUCCEEDED(hr)) This->initialized = TRUE;
     }
 
     LeaveCriticalSection(&This->parent->lock);
@@ -366,7 +411,7 @@ static HRESULT WINAPI CommonEncoderFrame_WritePixels(IWICBitmapFrameEncode *ifac
 {
     CommonEncoderFrame *This = impl_from_IWICBitmapFrameEncode(iface);
     HRESULT hr=S_OK;
-    DWORD required_stride;
+    ULONGLONG required_stride;
 
     TRACE("(%p,%u,%u,%u,%p)\n", iface, lineCount, cbStride, cbBufferSize, pbPixels);
 
@@ -379,10 +424,10 @@ static HRESULT WINAPI CommonEncoderFrame_WritePixels(IWICBitmapFrameEncode *ifac
         return WINCODEC_ERR_WRONGSTATE;
     }
 
-    required_stride = (This->encoder_frame.width * This->encoder_frame.bpp + 7)/8;
+    required_stride = ((ULONGLONG)This->encoder_frame.width * This->encoder_frame.bpp + 7)/8;
 
     if (lineCount == 0 || This->encoder_frame.height - This->lines_written < lineCount ||
-        cbStride < required_stride || cbBufferSize < cbStride * (lineCount - 1) + required_stride ||
+        cbStride < required_stride || cbBufferSize < (ULONGLONG)cbStride * (lineCount - 1) + required_stride ||
         !pbPixels)
     {
         LeaveCriticalSection(&This->parent->lock);
@@ -434,32 +479,136 @@ static HRESULT WINAPI CommonEncoderFrame_WriteSource(IWICBitmapFrameEncode *ifac
     return hr;
 }
 
-static HRESULT WINAPI CommonEncoderFrame_Commit(IWICBitmapFrameEncode *iface)
+static void free_frame_metadata(struct encoder_metadata *metadata, UINT count)
 {
-    CommonEncoderFrame *This = impl_from_IWICBitmapFrameEncode(iface);
-    HRESULT hr;
+    UINT i;
+    for (i = 0; i < count; ++i) free(metadata[i].data);
+    free(metadata);
+}
 
-    TRACE("(%p)\n", iface);
+static HRESULT serialize_frame_metadata(CommonEncoderFrame *frame, struct encoder_metadata **data,
+        UINT *metadata_count, ULONGLONG *revision)
+{
+    IWICMetadataWriter **writers;
+    struct encoder_metadata *metadata;
+    IWICPersistStream *persist;
+    IStream *stream;
+    LARGE_INTEGER move = {{0}};
+    STATSTG stat;
+    ULONG read;
+    UINT count, i;
+    HRESULT hr = S_OK;
 
-    EnterCriticalSection(&This->parent->lock);
-
-    if (!This->frame_created || This->lines_written != This->encoder_frame.height ||
-        This->committed)
+    EnterCriticalSection(&frame->parent->lock);
+    count = frame->metadata_count;
+    *revision = frame->metadata_revision;
+    writers = calloc(count ? count : 1, sizeof(*writers));
+    if (writers)
+        for (i = 0; i < count; ++i)
+        {
+            writers[i] = frame->metadata[i];
+            IWICMetadataWriter_AddRef(writers[i]);
+        }
+    LeaveCriticalSection(&frame->parent->lock);
+    if (!writers) return E_OUTOFMEMORY;
+    metadata = calloc(count ? count : 1, sizeof(*metadata));
+    if (!metadata) hr = E_OUTOFMEMORY;
+    for (i = 0; SUCCEEDED(hr) && i < count; ++i)
     {
-        hr = WINCODEC_ERR_WRONGSTATE;
+        hr = IWICMetadataWriter_GetMetadataFormat(writers[i], &metadata[i].format);
+        if (FAILED(hr)) break;
+        if (IsEqualGUID(&metadata[i].format, &GUID_MetadataFormatApp0) && frame->encoder_frame.dpix && frame->encoder_frame.dpiy)
+        {
+            PROPVARIANT id, value;
+            id.vt = VT_UI2;
+            id.uiVal = 1;
+            value.vt = VT_UI1;
+            value.bVal = 1;
+            hr = IWICMetadataWriter_SetValue(writers[i], NULL, &id, &value);
+            id.uiVal = 2;
+            value.vt = VT_UI2;
+            value.uiVal = frame->encoder_frame.dpix;
+            if (SUCCEEDED(hr)) hr = IWICMetadataWriter_SetValue(writers[i], NULL, &id, &value);
+            id.uiVal = 3;
+            value.uiVal = frame->encoder_frame.dpiy;
+            if (SUCCEEDED(hr)) hr = IWICMetadataWriter_SetValue(writers[i], NULL, &id, &value);
+            if (FAILED(hr)) break;
+        }
+        hr = IWICMetadataWriter_QueryInterface(writers[i], &IID_IWICPersistStream, (void **)&persist);
+        if (FAILED(hr)) break;
+        hr = CreateStreamOnHGlobal(NULL, TRUE, &stream);
+        if (SUCCEEDED(hr))
+        {
+            hr = IWICPersistStream_SaveEx(persist, stream, WICPersistOptionLittleEndian, FALSE);
+            if (SUCCEEDED(hr)) hr = IStream_Stat(stream, &stat, STATFLAG_NONAME);
+            if (SUCCEEDED(hr) && stat.cbSize.QuadPart > MAXDWORD) hr = WINCODEC_ERR_TOOMUCHMETADATA;
+            if (SUCCEEDED(hr))
+            {
+                metadata[i].size = stat.cbSize.LowPart;
+                metadata[i].data = malloc(metadata[i].size ? metadata[i].size : 1);
+                if (!metadata[i].data) hr = E_OUTOFMEMORY;
+                else
+                {
+                    hr = IStream_Seek(stream, move, STREAM_SEEK_SET, NULL);
+                    if (SUCCEEDED(hr)) hr = IStream_Read(stream, metadata[i].data, metadata[i].size, &read);
+                    if (SUCCEEDED(hr) && read != metadata[i].size) hr = WINCODEC_ERR_STREAMREAD;
+                }
+            }
+            IStream_Release(stream);
+        }
+        IWICPersistStream_Release(persist);
+    }
+    for (i = 0; i < count; ++i) IWICMetadataWriter_Release(writers[i]);
+    free(writers);
+    if (FAILED(hr))
+    {
+        if (metadata) free_frame_metadata(metadata, count);
     }
     else
     {
-        hr = encoder_commit_frame(This->parent->encoder);
+        *data = metadata;
+        *metadata_count = count;
+    }
+    return hr;
+}
+
+static HRESULT WINAPI CommonEncoderFrame_Commit(IWICBitmapFrameEncode *iface)
+{
+    CommonEncoderFrame *This = impl_from_IWICBitmapFrameEncode(iface);
+    struct encoder_metadata *metadata = NULL;
+    UINT metadata_count = 0;
+    ULONGLONG revision;
+    HRESULT hr;
+
+    TRACE("(%p)\n", iface);
+    EnterCriticalSection(&This->parent->lock);
+    hr = !This->frame_created || This->lines_written != This->encoder_frame.height ||
+            This->committed || This->committing ? WINCODEC_ERR_WRONGSTATE : S_OK;
+    if (SUCCEEDED(hr)) This->committing = TRUE;
+    LeaveCriticalSection(&This->parent->lock);
+    if (FAILED(hr)) return hr;
+    hr = serialize_frame_metadata(This, &metadata, &metadata_count, &revision);
+    EnterCriticalSection(&This->parent->lock);
+    if (FAILED(hr))
+    {
+        This->committing = FALSE;
+        LeaveCriticalSection(&This->parent->lock);
+        return hr;
+    }
+    if (This->committed || This->metadata_revision != revision)
+        hr = WINCODEC_ERR_WRONGSTATE;
+    else
+    {
+        hr = encoder_commit_frame(This->parent->encoder, metadata, metadata_count);
         if (SUCCEEDED(hr))
         {
             This->committed = TRUE;
             This->parent->uncommitted_frame = FALSE;
         }
     }
-
+    This->committing = FALSE;
     LeaveCriticalSection(&This->parent->lock);
-
+    free_frame_metadata(metadata, metadata_count);
     return hr;
 }
 
@@ -473,7 +622,7 @@ static HRESULT WINAPI CommonEncoderFrame_GetMetadataQueryWriter(IWICBitmapFrameE
     if (!ppIMetadataQueryWriter)
         return E_INVALIDARG;
 
-    if (!encoder->initialized)
+    if (!encoder->initialized && !(encoder->parent->encoder_info.flags & ENCODER_FLAGS_METADATA_UNINITIALIZED))
         return WINCODEC_ERR_NOTINITIALIZED;
 
     if (!(encoder->parent->encoder_info.flags & ENCODER_FLAGS_SUPPORTS_METADATA))
@@ -673,69 +822,189 @@ static ULONG WINAPI CommonEncoderFrame_Block_Release(IWICMetadataBlockWriter *if
 
 static HRESULT WINAPI CommonEncoderFrame_Block_GetContainerFormat(IWICMetadataBlockWriter *iface, GUID *container_format)
 {
-    FIXME("iface %p, container_format %p stub.\n", iface, container_format);
-
-    return E_NOTIMPL;
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    if (!container_format) return E_INVALIDARG;
+    *container_format = frame->parent->encoder_info.container_format;
+    return S_OK;
 }
 
 static HRESULT WINAPI CommonEncoderFrame_Block_GetCount(IWICMetadataBlockWriter *iface, UINT *count)
 {
-    FIXME("iface %p, count %p stub.\n", iface, count);
-
-    return E_NOTIMPL;
-}
-
-static HRESULT WINAPI CommonEncoderFrame_Block_GetReaderByIndex(IWICMetadataBlockWriter *iface,
-        UINT index, IWICMetadataReader **metadata_reader)
-{
-    FIXME("iface %p, index %d, metadata_reader %p stub.\n", iface, index, metadata_reader);
-
-    return E_NOTIMPL;
-}
-
-static HRESULT WINAPI CommonEncoderFrame_Block_GetEnumerator(IWICMetadataBlockWriter *iface, IEnumUnknown **enum_metadata)
-{
-    FIXME("iface %p, ppIEnumMetadata %p stub.\n", iface, enum_metadata);
-
-    return E_NOTIMPL;
-}
-
-static HRESULT WINAPI CommonEncoderFrame_Block_InitializeFromBlockReader(IWICMetadataBlockWriter *iface,
-        IWICMetadataBlockReader *metadata_block_reader)
-{
-    FIXME("iface %p, metadata_block_reader %p stub.\n", iface, metadata_block_reader);
-
-    return E_NOTIMPL;
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    if (!count) return E_INVALIDARG;
+    EnterCriticalSection(&frame->parent->lock);
+    *count = frame->metadata_count;
+    LeaveCriticalSection(&frame->parent->lock);
+    return S_OK;
 }
 
 static HRESULT WINAPI CommonEncoderFrame_Block_GetWriterByIndex(IWICMetadataBlockWriter *iface, UINT index,
-        IWICMetadataWriter **metadata_writer)
+        IWICMetadataWriter **writer)
 {
-    FIXME("iface %p, index %u, metadata_writer %p stub.\n", iface, index, metadata_writer);
-
-    return E_NOTIMPL;
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    HRESULT hr = S_OK;
+    if (!writer) return E_INVALIDARG;
+    *writer = NULL;
+    EnterCriticalSection(&frame->parent->lock);
+    if (index >= frame->metadata_count) hr = WINCODEC_ERR_PROPERTYNOTFOUND;
+    else
+    {
+        *writer = frame->metadata[index];
+        IWICMetadataWriter_AddRef(*writer);
+    }
+    LeaveCriticalSection(&frame->parent->lock);
+    return hr;
 }
 
-static HRESULT WINAPI CommonEncoderFrame_Block_AddWriter(IWICMetadataBlockWriter *iface, IWICMetadataWriter *metadata_writer)
+static HRESULT WINAPI CommonEncoderFrame_Block_GetReaderByIndex(IWICMetadataBlockWriter *iface,
+        UINT index, IWICMetadataReader **reader)
 {
-    FIXME("iface %p, metadata_writer %p.\n", iface, metadata_writer);
+    IWICMetadataWriter *writer;
+    HRESULT hr;
+    if (!reader) return E_INVALIDARG;
+    *reader = NULL;
+    hr = CommonEncoderFrame_Block_GetWriterByIndex(iface, index, &writer);
+    if (SUCCEEDED(hr))
+    {
+        hr = IWICMetadataWriter_QueryInterface(writer, &IID_IWICMetadataReader, (void **)reader);
+        IWICMetadataWriter_Release(writer);
+    }
+    return hr;
+}
 
-    return E_NOTIMPL;
+static HRESULT WINAPI CommonEncoderFrame_Block_GetEnumerator(IWICMetadataBlockWriter *iface, IEnumUnknown **enumerator)
+{
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    HRESULT hr;
+    EnterCriticalSection(&frame->parent->lock);
+    hr = create_metadata_writer_enumerator((IUnknown **)frame->metadata, frame->metadata_count, enumerator);
+    LeaveCriticalSection(&frame->parent->lock);
+    return hr;
+}
+
+static HRESULT check_frame_metadata_writer(CommonEncoderFrame *frame, IWICMetadataWriter *writer)
+{
+    GUID format;
+    HRESULT hr;
+    if (!writer) return E_INVALIDARG;
+    hr = IWICMetadataWriter_GetMetadataFormat(writer, &format);
+    if (FAILED(hr)) return hr;
+    if (IsEqualGUID(&frame->parent->encoder_info.container_format, &GUID_ContainerFormatJpeg))
+        return IsEqualGUID(&format, &GUID_MetadataFormatApp0) || IsEqualGUID(&format, &GUID_MetadataFormatApp1) ?
+                S_OK : WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    if (IsEqualGUID(&frame->parent->encoder_info.container_format, &GUID_ContainerFormatWmp))
+        return IsEqualGUID(&format, &GUID_MetadataFormatExif) || IsEqualGUID(&format, &GUID_MetadataFormatGps) ?
+                S_OK : WINCODEC_ERR_UNSUPPORTEDOPERATION;
+    return WINCODEC_ERR_UNSUPPORTEDOPERATION;
+}
+
+static HRESULT WINAPI CommonEncoderFrame_Block_InitializeFromBlockReader(IWICMetadataBlockWriter *iface,
+        IWICMetadataBlockReader *reader)
+{
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    IWICMetadataWriter **writers, **old_writers;
+    IWICMetadataReader *item;
+    UINT count, old_count, i;
+    HRESULT hr;
+
+    if (!reader) return E_INVALIDARG;
+    hr = IWICMetadataBlockReader_GetCount(reader, &count);
+    if (FAILED(hr)) return hr;
+    if (!(writers = calloc(count ? count : 1, sizeof(*writers)))) return E_OUTOFMEMORY;
+    for (i = 0; i < count; ++i)
+    {
+        hr = IWICMetadataBlockReader_GetReaderByIndex(reader, i, &item);
+        if (SUCCEEDED(hr))
+        {
+            hr = create_metadata_writer_from_reader(item, NULL, &writers[i]);
+            IWICMetadataReader_Release(item);
+        }
+        if (SUCCEEDED(hr)) hr = check_frame_metadata_writer(frame, writers[i]);
+        if (FAILED(hr)) break;
+    }
+    if (SUCCEEDED(hr))
+    {
+        EnterCriticalSection(&frame->parent->lock);
+        if (!frame->initialized || frame->committed || frame->committing) hr = WINCODEC_ERR_WRONGSTATE;
+        else
+        {
+            old_writers = frame->metadata;
+            old_count = frame->metadata_count;
+            frame->metadata = writers;
+            frame->metadata_count = count;
+            frame->metadata_capacity = count;
+            ++frame->metadata_revision;
+            writers = old_writers;
+            count = old_count;
+        }
+        LeaveCriticalSection(&frame->parent->lock);
+    }
+    for (i = 0; i < count; ++i) if (writers[i]) IWICMetadataWriter_Release(writers[i]);
+    free(writers);
+    return hr;
+}
+
+static HRESULT WINAPI CommonEncoderFrame_Block_AddWriter(IWICMetadataBlockWriter *iface, IWICMetadataWriter *writer)
+{
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    HRESULT hr = check_frame_metadata_writer(frame, writer);
+    if (FAILED(hr)) return hr;
+    EnterCriticalSection(&frame->parent->lock);
+    if (!frame->initialized || frame->committed || frame->committing) hr = WINCODEC_ERR_WRONGSTATE;
+    else if (frame->metadata_count == UINT_MAX ||
+            !wincodecs_array_reserve((void **)&frame->metadata, &frame->metadata_capacity,
+                    frame->metadata_count + 1, sizeof(*frame->metadata))) hr = E_OUTOFMEMORY;
+    else
+    {
+        IWICMetadataWriter_AddRef(writer);
+        frame->metadata[frame->metadata_count++] = writer;
+        ++frame->metadata_revision;
+    }
+    LeaveCriticalSection(&frame->parent->lock);
+    return hr;
 }
 
 static HRESULT WINAPI CommonEncoderFrame_Block_SetWriterByIndex(IWICMetadataBlockWriter *iface, UINT index,
-        IWICMetadataWriter *metadata_writer)
+        IWICMetadataWriter *writer)
 {
-    FIXME("iface %p, index %u, metadata_writer %p stub.\n", iface, index, metadata_writer);
-
-    return E_NOTIMPL;
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    IWICMetadataWriter *old_writer = NULL;
+    HRESULT hr = check_frame_metadata_writer(frame, writer);
+    if (FAILED(hr)) return hr;
+    EnterCriticalSection(&frame->parent->lock);
+    if (!frame->initialized || frame->committed || frame->committing) hr = WINCODEC_ERR_WRONGSTATE;
+    else if (index >= frame->metadata_count) hr = WINCODEC_ERR_PROPERTYNOTFOUND;
+    else
+    {
+        IWICMetadataWriter_AddRef(writer);
+        old_writer = frame->metadata[index];
+        frame->metadata[index] = writer;
+        ++frame->metadata_revision;
+    }
+    LeaveCriticalSection(&frame->parent->lock);
+    if (old_writer) IWICMetadataWriter_Release(old_writer);
+    return hr;
 }
 
 static HRESULT WINAPI CommonEncoderFrame_Block_RemoveWriterByIndex(IWICMetadataBlockWriter *iface, UINT index)
 {
-    FIXME("iface %p, index %u.\n", iface, index);
-
-    return E_NOTIMPL;
+    CommonEncoderFrame *frame = impl_from_IWICMetadataBlockWriter(iface);
+    IWICMetadataWriter *writer = NULL;
+    HRESULT hr = S_OK;
+    EnterCriticalSection(&frame->parent->lock);
+    if (!frame->initialized || frame->committed || frame->committing) hr = WINCODEC_ERR_WRONGSTATE;
+    else if (index >= frame->metadata_count) hr = WINCODEC_ERR_PROPERTYNOTFOUND;
+    else
+    {
+        writer = frame->metadata[index];
+        --frame->metadata_count;
+        memmove(frame->metadata + index, frame->metadata + index + 1,
+                (frame->metadata_count - index) * sizeof(*frame->metadata));
+        ++frame->metadata_revision;
+    }
+    LeaveCriticalSection(&frame->parent->lock);
+    if (writer) IWICMetadataWriter_Release(writer);
+    return hr;
 }
 
 static const IWICMetadataBlockWriterVtbl CommonEncoderFrame_BlockVtbl =

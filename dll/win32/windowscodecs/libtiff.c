@@ -1405,7 +1405,7 @@ static HRESULT CDECL tiff_encoder_write_lines(struct encoder* iface,
     return S_OK;
 }
 
-static HRESULT CDECL tiff_encoder_commit_frame(struct encoder* iface)
+static HRESULT CDECL tiff_encoder_commit_frame(struct encoder* iface, const struct encoder_metadata *metadata, UINT metadata_count)
 {
     return S_OK;
 }

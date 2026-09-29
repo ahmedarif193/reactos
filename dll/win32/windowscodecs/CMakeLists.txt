@@ -46,7 +46,9 @@ list(APPEND SOURCE
     stream.c
     ungif.c
     uuid.c
-    wincodecs_common.c)
+    wincodecs_common.c
+    wmpformat.c
+    xmpmetadata.c)
 
 if(MSVC)
     if(ARCH STREQUAL "i386")
@@ -87,7 +89,7 @@ endif()
 
 set_module_type(windowscodecs win32dll)
 add_idl_reg_scripts(windowscodecs registry windowscodecs_wincodec.idl)
-target_link_libraries(windowscodecs wine wine_dll_canunload uuid ${PSEH_LIB} oldnames)
+target_link_libraries(windowscodecs jxr wine wine_dll_canunload uuid ${PSEH_LIB} oldnames)
 add_importlibs(windowscodecs libjpeg libpng libtiff ole32 oleaut32 rpcrt4 shlwapi user32 gdi32 advapi32 advapi32_vista propsys msvcrt kernel32 ntdll)
 add_pch(windowscodecs precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET windowscodecs DESTINATION reactos/system32 FOR all)

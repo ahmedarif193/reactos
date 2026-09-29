@@ -164,6 +164,17 @@ HRESULT LSDReader_CreateInstance(REFIID iid, void **ppv)
     return MetadataReader_Create(&LSDReader_Vtbl, iid, ppv);
 }
 
+static const MetadataHandlerVtbl LSDWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER,
+    &CLSID_WICLSDMetadataWriter,
+    load_LSD_metadata,
+};
+
+HRESULT LSDWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&LSDWriter_Vtbl, iid, ppv);
+}
+
 static HRESULT load_IMD_metadata(MetadataHandler *handler, IStream *stream, const GUID *vendor, DWORD options)
 {
     struct image_descriptor imd_data;
@@ -242,6 +253,17 @@ HRESULT IMDReader_CreateInstance(REFIID iid, void **ppv)
     return MetadataReader_Create(&IMDReader_Vtbl, iid, ppv);
 }
 
+static const MetadataHandlerVtbl IMDWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER,
+    &CLSID_WICIMDMetadataWriter,
+    load_IMD_metadata,
+};
+
+HRESULT IMDWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&IMDWriter_Vtbl, iid, ppv);
+}
+
 static HRESULT load_GCE_metadata(MetadataHandler *handler, IStream *stream, const GUID *vendor, DWORD options)
 {
 #pragma pack(push,1)
@@ -255,14 +277,17 @@ static HRESULT load_GCE_metadata(MetadataHandler *handler, IStream *stream, cons
          */
          USHORT delay;
          BYTE transparent_color_index;
-    } gce_data;
+    } gce_data = {0};
 #pragma pack(pop)
     HRESULT hr;
     ULONG bytesread, i;
     MetadataItem *result;
 
-    hr = IStream_Read(stream, &gce_data, sizeof(gce_data), &bytesread);
-    if (FAILED(hr) || bytesread != sizeof(gce_data)) return S_OK;
+    if (stream)
+    {
+        hr = IStream_Read(stream, &gce_data, sizeof(gce_data), &bytesread);
+        if (FAILED(hr) || bytesread != sizeof(gce_data)) return S_OK;
+    }
 
     result = calloc(5, sizeof(MetadataItem));
     if (!result) return E_OUTOFMEMORY;
@@ -306,15 +331,33 @@ static HRESULT load_GCE_metadata(MetadataHandler *handler, IStream *stream, cons
     return S_OK;
 }
 
+static HRESULT CreateGCEHandler(MetadataHandler *handler)
+{
+    return load_GCE_metadata(handler, NULL, NULL, 0);
+}
+
 static const MetadataHandlerVtbl GCEReader_Vtbl = {
     0,
     &CLSID_WICGCEMetadataReader,
-    load_GCE_metadata
+    load_GCE_metadata,
+    CreateGCEHandler,
 };
 
 HRESULT GCEReader_CreateInstance(REFIID iid, void **ppv)
 {
     return MetadataReader_Create(&GCEReader_Vtbl, iid, ppv);
+}
+
+static const MetadataHandlerVtbl GCEWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER | METADATAHANDLER_FIXED_ITEMS,
+    &CLSID_WICGCEMetadataWriter,
+    load_GCE_metadata,
+    CreateGCEHandler,
+};
+
+HRESULT GCEWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&GCEWriter_Vtbl, iid, ppv);
 }
 
 static HRESULT load_APE_metadata(MetadataHandler *handler, IStream *stream, const GUID *vendor, DWORD options)
@@ -334,17 +377,20 @@ static HRESULT load_APE_metadata(MetadataHandler *handler, IStream *stream, cons
     BYTE subblock_size;
     BYTE *data;
 
-    hr = IStream_Read(stream, &ape_data, sizeof(ape_data), &bytesread);
-    if (FAILED(hr) || bytesread != sizeof(ape_data)) return S_OK;
-    if (ape_data.extension_introducer != 0x21 ||
-        ape_data.extension_label != APPLICATION_EXT_FUNC_CODE ||
-        ape_data.block_size != 11)
-        return S_OK;
+    if (stream)
+    {
+        hr = IStream_Read(stream, &ape_data, sizeof(ape_data), &bytesread);
+        if (FAILED(hr) || bytesread != sizeof(ape_data)) return S_OK;
+        if (ape_data.extension_introducer != 0x21 ||
+            ape_data.extension_label != APPLICATION_EXT_FUNC_CODE ||
+            ape_data.block_size != 11)
+            return S_OK;
+    }
 
     data = NULL;
     data_size = 0;
 
-    for (;;)
+    while (stream)
     {
         hr = IStream_Read(stream, &subblock_size, sizeof(subblock_size), &bytesread);
         if (FAILED(hr) || bytesread != sizeof(subblock_size))
@@ -392,10 +438,20 @@ static HRESULT load_APE_metadata(MetadataHandler *handler, IStream *stream, cons
 
     result[0].id.vt = VT_LPWSTR;
     SHStrDupW(L"Application", &result[0].id.pwszVal);
-    result[0].value.vt = VT_UI1|VT_VECTOR;
-    result[0].value.caub.cElems = sizeof(ape_data.application);
-    result[0].value.caub.pElems = CoTaskMemAlloc(sizeof(ape_data.application));
-    memcpy(result[0].value.caub.pElems, ape_data.application, sizeof(ape_data.application));
+    if (stream)
+    {
+        result[0].value.vt = VT_UI1|VT_VECTOR;
+        result[0].value.caub.cElems = sizeof(ape_data.application);
+        result[0].value.caub.pElems = CoTaskMemAlloc(sizeof(ape_data.application));
+        if (!result[0].value.caub.pElems)
+        {
+            CoTaskMemFree(result[0].id.pwszVal);
+            CoTaskMemFree(data);
+            free(result);
+            return E_OUTOFMEMORY;
+        }
+        memcpy(result[0].value.caub.pElems, ape_data.application, sizeof(ape_data.application));
+    }
 
     result[1].id.vt = VT_LPWSTR;
     SHStrDupW(L"Data", &result[1].id.pwszVal);
@@ -410,15 +466,33 @@ static HRESULT load_APE_metadata(MetadataHandler *handler, IStream *stream, cons
     return S_OK;
 }
 
+static HRESULT CreateAPEHandler(MetadataHandler *handler)
+{
+    return load_APE_metadata(handler, NULL, NULL, 0);
+}
+
 static const MetadataHandlerVtbl APEReader_Vtbl = {
     0,
     &CLSID_WICAPEMetadataReader,
-    load_APE_metadata
+    load_APE_metadata,
+    CreateAPEHandler,
 };
 
 HRESULT APEReader_CreateInstance(REFIID iid, void **ppv)
 {
     return MetadataReader_Create(&APEReader_Vtbl, iid, ppv);
+}
+
+static const MetadataHandlerVtbl APEWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER | METADATAHANDLER_FIXED_ITEMS,
+    &CLSID_WICAPEMetadataWriter,
+    load_APE_metadata,
+    CreateAPEHandler,
+};
+
+HRESULT APEWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&APEWriter_Vtbl, iid, ppv);
 }
 
 static HRESULT create_gifcomment_item(char *data, MetadataItem **item)
@@ -543,6 +617,18 @@ static const MetadataHandlerVtbl GifCommentReader_Vtbl = {
 HRESULT GifCommentReader_CreateInstance(REFIID iid, void **ppv)
 {
     return MetadataReader_Create(&GifCommentReader_Vtbl, iid, ppv);
+}
+
+static const MetadataHandlerVtbl GifCommentWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER | METADATAHANDLER_FIXED_ITEMS,
+    &CLSID_WICGifCommentMetadataWriter,
+    load_GifComment_metadata,
+    CreateGifCommentHandler,
+};
+
+HRESULT GifCommentWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&GifCommentWriter_Vtbl, iid, ppv);
 }
 
 static void copy_palette(ColorMapObject *cm, Extensions *extensions, int count, WICColor *colors)

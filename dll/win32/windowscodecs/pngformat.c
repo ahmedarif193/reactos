@@ -112,6 +112,17 @@ HRESULT PngTextReader_CreateInstance(REFIID iid, void** ppv)
     return MetadataReader_Create(&TextReader_Vtbl, iid, ppv);
 }
 
+static const MetadataHandlerVtbl TextWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER,
+    &CLSID_WICPngTextMetadataWriter,
+    LoadTextMetadata,
+};
+
+HRESULT PngTextWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&TextWriter_Vtbl, iid, ppv);
+}
+
 static HRESULT create_gamma_item(ULONG gamma, MetadataItem **item)
 {
     HRESULT hr;
@@ -180,7 +191,7 @@ static HRESULT CreateGamaHandler(MetadataHandler *handler)
 }
 
 static const MetadataHandlerVtbl GamaReader_Vtbl = {
-    0,
+    METADATAHANDLER_NAMED_ITEMS,
     &CLSID_WICPngGamaMetadataReader,
     LoadGamaMetadata,
     CreateGamaHandler,
@@ -189,6 +200,18 @@ static const MetadataHandlerVtbl GamaReader_Vtbl = {
 HRESULT PngGamaReader_CreateInstance(REFIID iid, void** ppv)
 {
     return MetadataReader_Create(&GamaReader_Vtbl, iid, ppv);
+}
+
+static const MetadataHandlerVtbl GamaWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER | METADATAHANDLER_FIXED_ITEMS | METADATAHANDLER_NAMED_ITEMS,
+    &CLSID_WICPngGamaMetadataWriter,
+    LoadGamaMetadata,
+    CreateGamaHandler,
+};
+
+HRESULT PngGamaWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&GamaWriter_Vtbl, iid, ppv);
 }
 
 static HRESULT create_chrm_items(const ULONG *values, MetadataItem **ret)
@@ -283,7 +306,7 @@ static HRESULT CreateChrmHandler(MetadataHandler *handler)
 }
 
 static const MetadataHandlerVtbl ChrmReader_Vtbl = {
-    0,
+    METADATAHANDLER_NAMED_ITEMS,
     &CLSID_WICPngChrmMetadataReader,
     LoadChrmMetadata,
     CreateChrmHandler,
@@ -292,6 +315,18 @@ static const MetadataHandlerVtbl ChrmReader_Vtbl = {
 HRESULT PngChrmReader_CreateInstance(REFIID iid, void** ppv)
 {
     return MetadataReader_Create(&ChrmReader_Vtbl, iid, ppv);
+}
+
+static const MetadataHandlerVtbl ChrmWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER | METADATAHANDLER_FIXED_ITEMS | METADATAHANDLER_NAMED_ITEMS,
+    &CLSID_WICPngChrmMetadataWriter,
+    LoadChrmMetadata,
+    CreateChrmHandler,
+};
+
+HRESULT PngChrmWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&ChrmWriter_Vtbl, iid, ppv);
 }
 
 static HRESULT create_hist_item(USHORT *data, ULONG count, MetadataItem **item)
@@ -377,6 +412,18 @@ static const MetadataHandlerVtbl HistReader_Vtbl = {
 HRESULT PngHistReader_CreateInstance(REFIID iid, void** ppv)
 {
     return MetadataReader_Create(&HistReader_Vtbl, iid, ppv);
+}
+
+static const MetadataHandlerVtbl HistWriter_Vtbl = {
+    METADATAHANDLER_IS_WRITER | METADATAHANDLER_FIXED_ITEMS,
+    &CLSID_WICPngHistMetadataWriter,
+    LoadHistMetadata,
+    CreateHistHandler,
+};
+
+HRESULT PngHistWriter_CreateInstance(REFIID iid, void **ppv)
+{
+    return MetadataReader_Create(&HistWriter_Vtbl, iid, ppv);
 }
 
 struct time_data
@@ -630,12 +677,21 @@ HRESULT PngBkgdReader_CreateInstance(REFIID iid, void** ppv)
     return MetadataReader_Create(&BkgdReader_Vtbl, iid, ppv);
 }
 
+static HRESULT PrepareBkgdValue(const PROPVARIANT *id, const PROPVARIANT *value, PROPVARIANT *normalized_id)
+{
+    if (value->vt != VT_UI1 && value->vt != VT_UI2 &&
+        (value->vt != (VT_VECTOR | VT_UI2) || value->caui.cElems != 3))
+        return E_INVALIDARG;
+    return PropVariantCopy(normalized_id, id);
+}
+
 static const MetadataHandlerVtbl BkgdWriter_Vtbl =
 {
     METADATAHANDLER_FIXED_ITEMS | METADATAHANDLER_IS_WRITER,
     &CLSID_WICPngBkgdMetadataWriter,
     LoadBkgdMetadata,
     CreateBkgdHandler,
+    .fnPrepareValue = PrepareBkgdValue,
 };
 
 HRESULT PngBkgdWriter_CreateInstance(REFIID iid, void** ppv)
