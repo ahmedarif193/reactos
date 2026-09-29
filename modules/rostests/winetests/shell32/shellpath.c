@@ -2381,6 +2381,40 @@ static void test_knownFolders(void)
                     ok(hr == S_OK, "failed to get folder id: 0x%08lx\n", hr);
                     ok(IsEqualGUID(&folderId, &newFolderId)==TRUE, "invalid KNOWNFOLDERID returned\n");
 
+                    {
+                        IKnownFolder *named = NULL;
+                        PIDLIST_ABSOLUTE pidl = NULL;
+                        WCHAR resolved[MAX_PATH];
+                        BOOL found = FALSE;
+                        int csidl;
+
+                        hr = IKnownFolderManager_GetFolderIds(mgr, &folders, &nCount);
+                        ok(hr == S_OK, "GetFolderIds failed: %#lx\n", hr);
+                        if (SUCCEEDED(hr))
+                        {
+                            for (i = 0; i < nCount; ++i)
+                                if (IsEqualGUID(&folders[i], &newFolderId)) found = TRUE;
+                            ok(found, "registered folder missing from enumeration\n");
+                            CoTaskMemFree(folders);
+                        }
+                        hr = IKnownFolderManager_GetFolderByName(mgr, L"Example", &named);
+                        ok(hr == S_OK, "GetFolderByName failed: %#lx\n", hr);
+                        if (named) IKnownFolder_Release(named);
+                        hr = IKnownFolderManager_FolderIdToCsidl(mgr, &newFolderId, &csidl);
+                        ok(FAILED(hr), "custom folder unexpectedly has CSIDL %d\n", csidl);
+                        hr = IKnownFolder_GetIDList(folder, 0, &pidl);
+                        ok(hr == S_OK, "GetIDList failed: %#lx\n", hr);
+                        if (SUCCEEDED(hr))
+                        {
+                            bRes = SHGetPathFromIDListW(pidl, resolved);
+                            ok(bRes && !lstrcmpiW(resolved, sExamplePath), "unexpected path %s\n", wine_dbgstr_w(resolved));
+                            CoTaskMemFree(pidl);
+                        }
+                        hr = IKnownFolderManager_RegisterFolder(mgr, &subFolderId, &kfDefinition);
+                        ok(FAILED(hr), "duplicate filesystem path accepted\n");
+                        if (SUCCEEDED(hr)) IKnownFolderManager_UnregisterFolder(mgr, &subFolderId);
+                    }
+
                     /* current path should be Temp\Example */
                     hr = IKnownFolder_GetPath(folder, 0, &folderPath);
                     ok(hr == S_OK, "failed to get path from known folder: 0x%08lx\n", hr);
@@ -2422,6 +2456,11 @@ static void test_knownFolders(void)
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
                             ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExample2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExample2Path));
+                            CoTaskMemFree(folderPath);
+
+                            hr = IKnownFolder_GetPath(subFolder, KF_FLAG_DONT_VERIFY, &folderPath);
+                            ok(hr == S_OK, "unverified path lookup failed: %#lx\n", hr);
+                            ok(!lstrcmpiW(folderPath, sSubFolder2Path), "unexpected path %s\n", wine_dbgstr_w(folderPath));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder - it should fail now, as we redirected its parent folder, but we have no sub folder in new location */
@@ -2967,6 +3006,8 @@ static void test_PathResolve(void)
 {
     WCHAR testfile[MAX_PATH], testfile_lnk[MAX_PATH], regedit_in_testdir[MAX_PATH], regedit_cmd[MAX_PATH];
     WCHAR tempdir[MAX_PATH], path[MAX_PATH], curdir[MAX_PATH];
+    WCHAR windows_regedit[MAX_PATH], system_regedit[MAX_PATH], saved_path[32768];
+    DWORD saved_path_length;
     WCHAR argv0_dir[MAX_PATH] = {0}, argv0_base[MAX_PATH] = {0}, *argv0_basep = NULL;
     const WCHAR *dirs[2] = { tempdir, NULL };
     HANDLE file, file2;
@@ -3071,7 +3112,11 @@ static void test_PathResolve(void)
     lstrcpyW(path, L"regedit");
     ret = pPathResolve(path, NULL, PRF_VERIFYEXISTS);
     ok(ret, "resolving regedit failed unexpectedly\n");
-    ok(!lstrcmpiW(path, L"C:\\windows\\regedit.exe") || !lstrcmpiW(path, L"C:\\windows\\system32\\regedit.exe"),
+    GetWindowsDirectoryW(windows_regedit, ARRAY_SIZE(windows_regedit));
+    lstrcatW(windows_regedit, L"\\regedit.exe");
+    GetSystemDirectoryW(system_regedit, ARRAY_SIZE(system_regedit));
+    lstrcatW(system_regedit, L"\\regedit.exe");
+    ok(!lstrcmpiW(path, windows_regedit) || !lstrcmpiW(path, system_regedit),
             "unexpected path %s\n", wine_dbgstr_w(path));
 
     if (argv0_basep)
@@ -3085,6 +3130,9 @@ static void test_PathResolve(void)
         lstrcpyW(argv0_base, argv0_basep);
         GetCurrentDirectoryW(MAX_PATH, curdir);
         SetCurrentDirectoryW(argv0_dir);
+        saved_path_length = GetEnvironmentVariableW(L"PATH", saved_path, ARRAY_SIZE(saved_path));
+        ret = SetEnvironmentVariableW(L"PATH", NULL);
+        ok(ret, "could not clear PATH, error %lu\n", GetLastError());
         ret = pPathResolve(argv0_base, NULL, PRF_VERIFYEXISTS | PRF_TRYPROGRAMEXTENSIONS);
         ok(!ret, "resolving argv0 succeeded unexpectedly, result: %s\n", wine_dbgstr_w(argv0_base));
 
@@ -3109,6 +3157,8 @@ static void test_PathResolve(void)
             ok(ret, "resolving argv0 without extension with search path failed unexpectedly, result: %s\n", wine_dbgstr_w(argv0_base));
         }
 
+        ret = SetEnvironmentVariableW(L"PATH", saved_path_length ? saved_path : NULL);
+        ok(ret, "could not restore PATH, error %lu\n", GetLastError());
         SetCurrentDirectoryW(curdir);
     }
     else
