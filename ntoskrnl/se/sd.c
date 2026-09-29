@@ -154,6 +154,7 @@ SepAssignAcl(
     _In_ PSID Owner,
     _In_ PSID Group,
     _In_ BOOLEAN IsDirectoryObject,
+    _In_opt_ GUID *ObjectType,
     _In_ PGENERIC_MAPPING GenericMapping,
     _Out_ PACL *SelectedAcl,
     _Out_ PULONG AclLength,
@@ -177,16 +178,16 @@ SepAssignAcl(
     if (Protected) ParentAcl = NULL;
     if (!AutoInherit)
     {
-        *SelectedAcl = SepSelectAcl(ExplicitAcl, ExplicitPresent, ExplicitDefaulted,
+        return SepSelectAcl(ExplicitAcl, ExplicitPresent, ExplicitDefaulted,
                                     ParentAcl, DefaultAcl, AclLength, Owner, Group,
-                                    Present, IsInherited, IsDirectoryObject, GenericMapping);
-        return STATUS_SUCCESS;
+                                    Present, IsInherited, IsDirectoryObject, ObjectType,
+                                    GenericMapping, SelectedAcl);
     }
 
     if (ParentAcl)
     {
         Status = SepPropagateAcl(NULL, &InheritedLength, ParentAcl, Owner, Group,
-                                 TRUE, IsDirectoryObject, GenericMapping);
+                                 TRUE, IsDirectoryObject, ObjectType, GenericMapping);
         if (Status != STATUS_BUFFER_TOO_SMALL) return Status;
         if (InheritedLength > sizeof(ACL))
         {
@@ -194,7 +195,7 @@ SepAssignAcl(
             InheritedAcl = ExAllocatePoolWithTag(PagedPool, InheritedLength, TAG_ACL);
             if (!InheritedAcl) return STATUS_INSUFFICIENT_RESOURCES;
             Status = SepPropagateAcl(InheritedAcl, &InheritedLength, ParentAcl, Owner,
-                                     Group, TRUE, IsDirectoryObject, GenericMapping);
+                                     Group, TRUE, IsDirectoryObject, ObjectType, GenericMapping);
             if (!NT_SUCCESS(Status)) goto Done;
         }
         else InheritedLength = 0;
@@ -233,7 +234,7 @@ SepAssignAcl(
             }
         }
         Status = SepPropagateAcl(NULL, &ExplicitLength, FilteredAcl, Owner, Group,
-                                 FALSE, IsDirectoryObject, GenericMapping);
+                                 FALSE, IsDirectoryObject, ObjectType, GenericMapping);
         if (Status != STATUS_BUFFER_TOO_SMALL) goto Done;
     }
 
@@ -264,7 +265,7 @@ SepAssignAcl(
     if (FilteredAcl)
     {
         Status = SepPropagateAcl(CombinedAcl, &ExplicitLength, FilteredAcl, Owner,
-                                 Group, FALSE, IsDirectoryObject, GenericMapping);
+                                 Group, FALSE, IsDirectoryObject, ObjectType, GenericMapping);
         if (!NT_SUCCESS(Status)) goto Done;
     }
     else
@@ -1652,7 +1653,6 @@ SeAssignSecurityEx(
     BOOLEAN SaclPresent;
     NTSTATUS Status;
 
-    DBG_UNREFERENCED_PARAMETER(ObjectType);
     DBG_UNREFERENCED_PARAMETER(AutoInheritFlags);
     UNREFERENCED_PARAMETER(PoolType);
 
@@ -1777,6 +1777,7 @@ SeAssignSecurityEx(
                         Owner,
                         Group,
                         IsDirectoryObject,
+                        ObjectType,
                         GenericMapping,
                         &Dacl,
                         &DaclLength,
@@ -1826,6 +1827,7 @@ SeAssignSecurityEx(
                         Owner,
                         Group,
                         IsDirectoryObject,
+                        ObjectType,
                         GenericMapping,
                         &Sacl,
                         &SaclLength,
@@ -1861,6 +1863,14 @@ SeAssignSecurityEx(
                 Control |= SE_SACL_PRESENT;
             }
         }
+    }
+
+    if (SaclLength > MAXUSHORT)
+    {
+        if (AllocatedSacl) ExFreePoolWithTag(AllocatedSacl, TAG_ACL);
+        if (AllocatedDacl) ExFreePoolWithTag(AllocatedDacl, TAG_ACL);
+        SeUnlockSubjectContext(SubjectContext);
+        return STATUS_ALLOTTED_SPACE_EXCEEDED;
     }
 
     /* Allocate and initialize the new security descriptor */
@@ -1906,12 +1916,14 @@ SeAssignSecurityEx(
                                      Group,
                                      SaclIsInherited,
                                      IsDirectoryObject,
+                                     ObjectType,
                                      GenericMapping);
-            ASSERT(Status == STATUS_SUCCESS);
+            if (!NT_SUCCESS(Status)) goto AssignmentFailed;
         }
         else
         {
-            RtlCreateAcl(NewSacl, SaclLength, ACL_REVISION);
+            Status = RtlCreateAcl(NewSacl, SaclLength, ACL_REVISION);
+            if (!NT_SUCCESS(Status)) goto AssignmentFailed;
         }
 
         if (LabelSid)
@@ -1923,7 +1935,7 @@ SeAssignSecurityEx(
                                         SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
                                         SYSTEM_MANDATORY_LABEL_ACE_TYPE,
                                         LabelSid);
-            ASSERT(Status == STATUS_SUCCESS);
+            if (!NT_SUCCESS(Status)) goto AssignmentFailed;
         }
         Descriptor->Sacl = Current;
         Current += SaclLength;
@@ -1938,8 +1950,9 @@ SeAssignSecurityEx(
                                  Group,
                                  DaclIsInherited,
                                  IsDirectoryObject,
+                                 ObjectType,
                                  GenericMapping);
-        ASSERT(Status == STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status)) goto AssignmentFailed;
         Descriptor->Dacl = Current;
         Current += DaclLength;
     }
@@ -1974,6 +1987,13 @@ SeAssignSecurityEx(
     ASSERT(RtlLengthSecurityDescriptor(Descriptor));
 
     return STATUS_SUCCESS;
+
+AssignmentFailed:
+    ExFreePoolWithTag(Descriptor, TAG_SD);
+    if (AllocatedSacl) ExFreePoolWithTag(AllocatedSacl, TAG_ACL);
+    if (AllocatedDacl) ExFreePoolWithTag(AllocatedDacl, TAG_ACL);
+    SeUnlockSubjectContext(SubjectContext);
+    return Status;
 }
 
 /**

@@ -1946,7 +1946,7 @@
 @ stdcall -arch=arm64 SeCaptureSubjectContextEx()
 @ stdcall -arch=arm64 SeCreateAccessStateEx()
 @ stdcall -arch=arm64 SeLocateProcessImageName()
-@ stdcall -arch=arm64 SeTokenIsWriteRestricted()
+@ stdcall SeTokenIsWriteRestricted(ptr)
 @ stdcall ZwAllocateLocallyUniqueId(ptr)
 @ stdcall -arch=arm64 ZwCompareTokens()
 @ stdcall -arch=i386,win64 ZwCreateIoCompletion(ptr long ptr long)

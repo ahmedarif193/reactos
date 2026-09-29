@@ -133,7 +133,7 @@ SepCreateToken(
 {
     NTSTATUS Status;
     PTOKEN AccessToken;
-    ULONG TokenFlags = 0;
+    BOOLEAN HasAdminGroup = FALSE;
     ULONG PrimaryGroupIndex, DefaultOwnerIndex;
     LUID TokenId;
     LUID ModifiedId;
@@ -162,8 +162,7 @@ SepCreateToken(
         /* Check of the group is an admin group */
         if (RtlEqualSid(SeAliasAdminsSid, Groups[i].Sid))
         {
-            /* Remember this so we can optimize queries later */
-            TokenFlags |= TOKEN_HAS_ADMIN_GROUP;
+            HasAdminGroup = TRUE;
         }
     }
 
@@ -176,7 +175,7 @@ SepCreateToken(
     {
         if (SystemToken || RtlEqualSid(SeLocalSystemSid, User->Sid))
             IntegrityGroup.Sid = SeSystemMandatorySid;
-        else if (TokenFlags & TOKEN_HAS_ADMIN_GROUP)
+        else if (HasAdminGroup)
             IntegrityGroup.Sid = SeHighMandatorySid;
         else
             IntegrityGroup.Sid = SeMediumMandatorySid;
@@ -272,7 +271,7 @@ SepCreateToken(
     AccessToken->ModifiedId = ModifiedId;
     AccessToken->DynamicCharged = TokenPagedCharges - TotalSize;
 
-    AccessToken->TokenFlags = TokenFlags & ~TOKEN_SESSION_NOT_REFERENCED;
+    AccessToken->TokenFlags = 0;
 
     /* Copy and reference the logon session */
     AccessToken->AuthenticationId = *AuthenticationId;
@@ -821,20 +820,6 @@ SepDuplicateToken(
                 (AccessToken->UserAndGroups[GroupsIndex].Attributes & SE_GROUP_ENABLED) == 0)
             {
                 /*
-                 * If this group is an administrators group
-                 * and the token belongs to such group,
-                 * we've to take away TOKEN_HAS_ADMIN_GROUP
-                 * for the fact that's not enabled and as
-                 * such the token no longer belongs to
-                 * this group.
-                 */
-                if (RtlEqualSid(SeAliasAdminsSid,
-                                AccessToken->UserAndGroups[GroupsIndex].Sid))
-                {
-                    AccessToken->TokenFlags &= ~TOKEN_HAS_ADMIN_GROUP;
-                }
-
-                /*
                  * A group is not enabled, it's time to remove
                  * from the token and update the groups index
                  * accordingly and continue with the next group.
@@ -1080,7 +1065,7 @@ SepPerformTokenFiltering(
 
     /* Copy the mutable fields */
     AccessToken->SessionId = Token->SessionId;
-    AccessToken->TokenFlags = Token->TokenFlags & ~TOKEN_SESSION_NOT_REFERENCED;
+    AccessToken->TokenFlags = (Token->TokenFlags & ~TOKEN_SESSION_NOT_REFERENCED) | TOKEN_IS_FILTERED;
 
     /* Reference the logon session */
     Status = SepRmReferenceLogonSession(&AccessToken->AuthenticationId);
@@ -1471,17 +1456,6 @@ SepPerformTokenFiltering(
             if (FoundGroup)
             {
                 /*
-                 * If the acess token belongs to the administrators
-                 * group and this is the target group, we must take
-                 * away TOKEN_HAS_ADMIN_GROUP flag from the token.
-                 */
-                if (RtlEqualSid(SeAliasAdminsSid,
-                                AccessToken->UserAndGroups[GroupsInToken].Sid))
-                {
-                    AccessToken->TokenFlags &= ~TOKEN_HAS_ADMIN_GROUP;
-                }
-
-                /*
                  * If the target group that we have found it is the
                  * owner then from now on it no longer is but the user.
                  * Therefore assign the default owner index as the user.
@@ -1597,9 +1571,9 @@ SeFilterToken(
 
     /* Call the internal API */
     Status = SepPerformTokenFiltering(ExistingToken,
-                                      PrivilegesToDelete->Privileges,
-                                      SidsToDisable->Groups,
-                                      RestrictedSids->Groups,
+                                      PrivilegesToDelete ? PrivilegesToDelete->Privileges : NULL,
+                                      SidsToDisable ? SidsToDisable->Groups : NULL,
+                                      RestrictedSids ? RestrictedSids->Groups : NULL,
                                       PrivilegesCount,
                                       SidsCount,
                                       RestrictedSidsCount,

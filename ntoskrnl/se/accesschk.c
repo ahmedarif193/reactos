@@ -606,11 +606,6 @@ SepAllowAccessObjectTypeList(
  * A pointer to a security identifier that represents a principal. A principal
  * identifies a user object which is associated with its own security descriptor.
  *
- * @param[in] GenericMapping
- * A pointer to a generic mapping that is associated with the object in question
- * being checked for access. If certain set of desired access rights have
- * a generic access right, this parameter is needed to map generic rights.
- *
  * @param[in] ObjectTypeList
  * A pointer to a list array of object types. If such array is provided to the
  * function, the algorithm will perform a different approach by doing analysis
@@ -646,7 +641,6 @@ SepAnalyzeAcesFromDacl(
     _In_ ULONG SidSet,
     _In_ BOOLEAN TokenIsOwner,
     _In_opt_ PSID PrincipalSelfSid,
-    _In_ PGENERIC_MAPPING GenericMapping,
     _In_opt_ POBJECT_TYPE_LIST_INTERNAL ObjectTypeList,
     _In_ ULONG ObjectTypeListLength,
     _In_ BOOLEAN UseResultList,
@@ -714,12 +708,6 @@ SepAnalyzeAcesFromDacl(
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
 
-                            /* Map this access right if it has a generic mask right */
-                            if ((Access & GENERIC_ACCESS) && GenericMapping)
-                            {
-                                RtlMapGenericMask(&Access, GenericMapping);
-                            }
-
                             /* Deny access rights that have not been granted yet */
                             AccessCheckRights->DeniedAccessRights |= (Access & ~AccessCheckRights->GrantedAccessRights);
                             DPRINT("DeniedAccessRights 0x%08lx\n", AccessCheckRights->DeniedAccessRights);
@@ -744,12 +732,6 @@ SepAnalyzeAcesFromDacl(
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
 
-                            /* Map this access right if it has a generic mask right */
-                            if ((Access & GENERIC_ACCESS) && GenericMapping)
-                            {
-                                RtlMapGenericMask(&Access, GenericMapping);
-                            }
-
                             /* Grant access rights that have not been denied yet */
                             AccessCheckRights->GrantedAccessRights |= (Access & ~AccessCheckRights->DeniedAccessRights);
                             DPRINT("GrantedAccessRights 0x%08lx\n", AccessCheckRights->GrantedAccessRights);
@@ -766,12 +748,6 @@ SepAnalyzeAcesFromDacl(
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
-
-                            /* Map this access right if it has a generic mask right */
-                            if ((Access & GENERIC_ACCESS) && GenericMapping)
-                            {
-                                RtlMapGenericMask(&Access, GenericMapping);
-                            }
 
                             /* If no list was passed treat this is as ACCESS_DENIED_ACE_TYPE */
                             if (!ObjectTypeList && !ObjectTypeListLength)
@@ -815,12 +791,6 @@ SepAnalyzeAcesFromDacl(
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
-
-                            /* Map this access right if it has a generic mask right */
-                            if ((Access & GENERIC_ACCESS) && GenericMapping)
-                            {
-                                RtlMapGenericMask(&Access, GenericMapping);
-                            }
 
                             /* If no list was passed treat this is as ACCESS_ALLOWED_ACE_TYPE */
                             if (!ObjectTypeList && !ObjectTypeListLength)
@@ -918,12 +888,6 @@ SepAnalyzeAcesFromDacl(
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
 
-                            /* Map this access right if it has a generic mask right */
-                            if ((Access & GENERIC_ACCESS) && GenericMapping)
-                            {
-                                RtlMapGenericMask(&Access, GenericMapping);
-                            }
-
                             /*
                              * The caller requests a right that cannot be
                              * granted. Access is implicitly denied for
@@ -956,12 +920,6 @@ SepAnalyzeAcesFromDacl(
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
 
-                            /* Map this access right if it has a generic mask right */
-                            if ((Access & GENERIC_ACCESS) && GenericMapping)
-                            {
-                                RtlMapGenericMask(&Access, GenericMapping);
-                            }
-
                             /* Remove the remaining rights */
                             DPRINT("RemainingAccessRights 0x%08lx  Access 0x%08lx\n", AccessCheckRights->RemainingAccessRights, Access);
                             AccessCheckRights->RemainingAccessRights &= ~Access;
@@ -982,12 +940,6 @@ SepAnalyzeAcesFromDacl(
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
-
-                            /* Map this access right if it has a generic mask right */
-                            if ((Access & GENERIC_ACCESS) && GenericMapping)
-                            {
-                                RtlMapGenericMask(&Access, GenericMapping);
-                            }
 
                             /* If no list was passed treat this is as ACCESS_DENIED_ACE_TYPE */
                             if (!ObjectTypeList && !ObjectTypeListLength)
@@ -1032,12 +984,6 @@ SepAnalyzeAcesFromDacl(
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
-
-                            /* Map this access right if it has a generic mask right */
-                            if ((Access & GENERIC_ACCESS) && GenericMapping)
-                            {
-                                RtlMapGenericMask(&Access, GenericMapping);
-                            }
 
                             /* If no list was passed treat this is as ACCESS_ALLOWED_ACE_TYPE */
                             if (!ObjectTypeList && !ObjectTypeListLength)
@@ -1222,7 +1168,6 @@ SepIntersectSecondaryPass(
     _In_ PACCESS_TOKEN PrimaryAccessToken,
     _In_ BOOLEAN TokenIsOwner,
     _In_opt_ PSID PrincipalSelfSid,
-    _In_ PGENERIC_MAPPING GenericMapping,
     _In_opt_ POBJECT_TYPE_LIST_INTERNAL ObjectTypeList,
     _In_ ULONG ObjectTypeListLength,
     _In_ BOOLEAN UseResultList,
@@ -1260,7 +1205,6 @@ SepIntersectSecondaryPass(
                            SidSet,
                            TokenIsOwner,
                            PrincipalSelfSid,
-                           GenericMapping,
                            ObjectTypeList,
                            ObjectTypeListLength,
                            UseResultList,
@@ -1422,34 +1366,6 @@ SepAccessCheckWorker(
         goto ReturnCommonStatus;
     }
 
-    /*
-     * HACK: Temporary hack that checks if the caller passed an empty
-     * generic mapping. In such cases we cannot mask out the remaining
-     * access rights without a proper mapping so the only option we
-     * can do is to check if the client is an administrator,
-     * since they are powerful users.
-     *
-     * See CORE-18576 for information.
-     */
-    if (GenericMapping->GenericRead == 0 &&
-        GenericMapping->GenericWrite == 0 &&
-        GenericMapping->GenericExecute == 0 &&
-        GenericMapping->GenericAll == 0)
-    {
-        if (SeTokenIsAdmin(Token))
-        {
-            /* Grant him access */
-            PreviouslyGrantedAccess |= RemainingAccess;
-            Status = STATUS_SUCCESS;
-            goto ReturnCommonStatus;
-        }
-
-        /* It's not an admin so bail out */
-        PreviouslyGrantedAccess = 0;
-        Status = STATUS_ACCESS_DENIED;
-        goto ReturnCommonStatus;
-    }
-
     /* Get the DACL */
     Status = RtlGetDaclSecurityDescriptor(SecurityDescriptor,
                                           &Present,
@@ -1506,7 +1422,6 @@ SepAccessCheckWorker(
                                SEP_SID_SET_GROUPS,
                                TokenIsOwner,
                                PrincipalSelfSid,
-                               GenericMapping,
                                ObjectTypeList,
                                ObjectTypeListLength,
                                UseResultList,
@@ -1527,7 +1442,6 @@ SepAccessCheckWorker(
                                       PrimaryAccessToken,
                                       TokenIsOwner,
                                       PrincipalSelfSid,
-                                      GenericMapping,
                                       ObjectTypeList,
                                       ObjectTypeListLength,
                                       UseResultList,
@@ -1680,7 +1594,6 @@ SepAccessCheckWorker(
                            SEP_SID_SET_GROUPS,
                            TokenIsOwner,
                            PrincipalSelfSid,
-                           GenericMapping,
                            ObjectTypeList,
                            ObjectTypeListLength,
                            UseResultList,
@@ -1741,7 +1654,6 @@ SepAccessCheckWorker(
                                SidSet,
                                TokenIsOwner,
                                PrincipalSelfSid,
-                               GenericMapping,
                                ObjectTypeList,
                                ObjectTypeListLength,
                                UseResultList,
@@ -1985,6 +1897,7 @@ SepAccessCheck(
     _Out_ PNTSTATUS AccessStatus)
 {
     PSECURITY_DESCRIPTOR CapturedSecurityDescriptor = NULL;
+    GENERIC_MAPPING CapturedGenericMapping;
     POBJECT_TYPE_LIST_INTERNAL CapturedObjectTypeList = NULL;
     PSID CapturedPrincipalSelfSid = NULL;
     SECURITY_SUBJECT_CONTEXT SubjectSecurityContext;
@@ -2051,6 +1964,7 @@ SepAccessCheck(
 
         /* Capture the privilege set length and the mapping */
         CapturedPrivilegeSetLength = *PrivilegeSetLength;
+        CapturedGenericMapping = *GenericMapping;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -2058,6 +1972,8 @@ SepAccessCheck(
         _SEH2_YIELD(return _SEH2_GetExceptionCode());
     }
     _SEH2_END;
+
+    GenericMapping = &CapturedGenericMapping;
 
     /* Check for unmapped access rights */
     if (DesiredAccess & (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL))
@@ -2125,21 +2041,30 @@ SepAccessCheck(
          * Propagate the access and status for the whole hierarchy of the list
          * or just to single target object.
          */
-        if (UseResultList)
+        _SEH2_TRY
         {
-            for (ResultListIndex = 0; ResultListIndex < ObjectTypeListLength; ResultListIndex++)
+            if (UseResultList)
             {
-                AccessStatus[ResultListIndex] = Status;
-                GrantedAccess[ResultListIndex] = 0;
+                for (ResultListIndex = 0; ResultListIndex < ObjectTypeListLength; ResultListIndex++)
+                {
+                    AccessStatus[ResultListIndex] = Status;
+                    GrantedAccess[ResultListIndex] = 0;
+                }
             }
+            else
+            {
+                *AccessStatus = Status;
+                *GrantedAccess = 0;
+            }
+            Status = STATUS_SUCCESS;
         }
-        else
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            *AccessStatus = Status;
-            *GrantedAccess = 0;
+            Status = _SEH2_GetExceptionCode();
         }
+        _SEH2_END;
 
-        return STATUS_SUCCESS;
+        return Status;
     }
 
     /* Check the size of the privilege set and return the privileges */
@@ -2156,17 +2081,40 @@ SepAccessCheck(
             SeFreePrivileges(Privileges);
             SeReleaseObjectTypeList(CapturedObjectTypeList, PreviousMode);
             ObDereferenceObject(Token);
-            *PrivilegeSetLength = RequiredPrivilegeSetLength;
-            return STATUS_BUFFER_TOO_SMALL;
+            _SEH2_TRY
+            {
+                *PrivilegeSetLength = RequiredPrivilegeSetLength;
+                Status = STATUS_BUFFER_TOO_SMALL;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            return Status;
         }
 
         /* Copy the privilege set to the caller */
-        RtlCopyMemory(PrivilegeSet,
-                      Privileges,
-                      RequiredPrivilegeSetLength);
+        _SEH2_TRY
+        {
+            RtlCopyMemory(PrivilegeSet,
+                          Privileges,
+                          RequiredPrivilegeSetLength);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
 
         /* Free the local privilege set */
         SeFreePrivileges(Privileges);
+        if (!NT_SUCCESS(Status))
+        {
+            SeReleaseObjectTypeList(CapturedObjectTypeList, PreviousMode);
+            ObDereferenceObject(Token);
+            return Status;
+        }
     }
     else
     {
@@ -2177,13 +2125,36 @@ SepAccessCheck(
         {
             SeReleaseObjectTypeList(CapturedObjectTypeList, PreviousMode);
             ObDereferenceObject(Token);
-            *PrivilegeSetLength = sizeof(PRIVILEGE_SET);
-            return STATUS_BUFFER_TOO_SMALL;
+            _SEH2_TRY
+            {
+                *PrivilegeSetLength = sizeof(PRIVILEGE_SET);
+                Status = STATUS_BUFFER_TOO_SMALL;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            return Status;
         }
 
         /* Initialize the privilege set */
-        PrivilegeSet->PrivilegeCount = 0;
-        PrivilegeSet->Control = 0;
+        _SEH2_TRY
+        {
+            PrivilegeSet->PrivilegeCount = 0;
+            PrivilegeSet->Control = 0;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        if (!NT_SUCCESS(Status))
+        {
+            SeReleaseObjectTypeList(CapturedObjectTypeList, PreviousMode);
+            ObDereferenceObject(Token);
+            return Status;
+        }
     }
 
     /* Capture the security descriptor */
@@ -2246,7 +2217,12 @@ SepAccessCheck(
     SeCaptureSubjectContext(&SubjectSecurityContext);
 
     /* Lock the token */
+    SepAcquireTokenLockShared(SubjectSecurityContext.PrimaryToken);
     SepAcquireTokenLockShared(Token);
+
+    Status = STATUS_SUCCESS;
+    _SEH2_TRY
+    {
 
     /* Check if the token is the owner and grant WRITE_DAC and READ_CONTROL rights */
     if (DesiredAccess & (WRITE_DAC | READ_CONTROL | MAXIMUM_ALLOWED))
@@ -2291,7 +2267,7 @@ SepAccessCheck(
         /* Now perform the access check */
         SepAccessCheckWorker(CapturedSecurityDescriptor,
                              Token,
-                             &SubjectSecurityContext.PrimaryToken,
+                             SubjectSecurityContext.PrimaryToken,
                              CapturedPrincipalSelfSid,
                              DesiredAccess,
                              CapturedObjectTypeList,
@@ -2305,9 +2281,17 @@ SepAccessCheck(
                              AccessStatus);
     }
 
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
     /* Release subject context and unlock the token */
-    SeReleaseSubjectContext(&SubjectSecurityContext);
     SepReleaseTokenLock(Token);
+    SepReleaseTokenLock(SubjectSecurityContext.PrimaryToken);
+    SeReleaseSubjectContext(&SubjectSecurityContext);
 
     /* Release the caputed principal self SID */
     SepReleaseSid(CapturedPrincipalSelfSid,
@@ -2326,7 +2310,7 @@ SepAccessCheck(
     ObDereferenceObject(Token);
 
     /* Check succeeded */
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /* PUBLIC FUNCTIONS ***********************************************************/

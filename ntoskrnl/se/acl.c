@@ -8,6 +8,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/acltransform.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -476,75 +477,64 @@ SepReleaseAcl(
     }
 }
 
-/**
- * @brief
- * Determines if a certain ACE can or cannot be propagated based on
- * ACE inheritation flags and whatnot.
- *
- * @param[in] AceFlags
- * Bit flags of an ACE to perform propagation checks.
- *
- * @param[out] NewAceFlags
- * New ACE bit blags based on the specific ACE flags of the first
- * argument parameter.
- *
- * @param[in] IsInherited
- * If set to TRUE, an ACE is deemed as directly inherited from another
- * instance. In that case we're allowed to propagate.
- *
- * @param[in] IsDirectoryObject
- * If set to TRUE, an object directly inherits this ACE so we can propagate
- * it.
- *
- * @return
- * Returns TRUE if an ACE can be propagated, FALSE otherwise.
- */
-BOOLEAN
-SepShouldPropagateAce(
-    _In_ UCHAR AceFlags,
-    _Out_ PUCHAR NewAceFlags,
-    _In_ BOOLEAN IsInherited,
-    _In_ BOOLEAN IsDirectoryObject)
+static NTSTATUS
+SepTransformCreatorAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
+                       PSID Owner, PSID Group, PGENERIC_MAPPING Mapping)
 {
-    if (!IsInherited)
-    {
-        *NewAceFlags = AceFlags;
-        return TRUE;
-    }
+    RTL_SECURITY_ACE_VIEW View;
+    ACCESS_MASK Mask;
+    NTSTATUS Status;
 
-    if (!IsDirectoryObject)
+    Status = RtlpSecurityAceView(Ace, &View);
+    if (!NT_SUCCESS(Status)) return Status;
+    Mask = ((PACCESS_ALLOWED_ACE)Ace)->Mask;
+    if (Ace->AceType <= ACCESS_MAX_MS_V2_ACE_TYPE && !(Ace->AceFlags & INHERIT_ONLY_ACE))
     {
-        if (AceFlags & OBJECT_INHERIT_ACE)
+        RtlMapGenericMask(&Mask, Mapping);
+        Mask &= Mapping->GenericAll;
+    }
+    return RtlpSecurityEmitAce(Buffer, Ace, Ace->AceFlags, FALSE, Owner, Group, Mapping, &Mask);
+}
+
+static NTSTATUS
+SepPropagateOpaqueAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
+                      BOOLEAN Inherited, BOOLEAN Container)
+{
+    UCHAR Flags = Ace->AceFlags;
+    PACE_HEADER Dest;
+
+    if (Inherited)
+    {
+        if (!Container || (Flags & NO_PROPAGATE_INHERIT_ACE))
         {
-            *NewAceFlags = (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE;
-            return TRUE;
+            if (!(Flags & (Container ? CONTAINER_INHERIT_ACE : OBJECT_INHERIT_ACE)))
+                return STATUS_SUCCESS;
+            Flags &= ~VALID_INHERIT_FLAGS;
         }
-        return FALSE;
-    }
-
-    if (AceFlags & NO_PROPAGATE_INHERIT_ACE)
-    {
-        if (AceFlags & CONTAINER_INHERIT_ACE)
+        else if (Flags & CONTAINER_INHERIT_ACE)
         {
-            *NewAceFlags = (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE;
-            return TRUE;
+            Flags &= ~INHERIT_ONLY_ACE;
         }
-        return FALSE;
+        else if (Flags & OBJECT_INHERIT_ACE)
+        {
+            Flags |= INHERIT_ONLY_ACE;
+        }
+        else return STATUS_SUCCESS;
+        Flags |= INHERITED_ACE;
     }
-
-    if (AceFlags & CONTAINER_INHERIT_ACE)
+    if (Buffer->Length > MAXUSHORT - Ace->AceSize || Buffer->Count == MAXUSHORT)
+        return STATUS_ALLOTTED_SPACE_EXCEEDED;
+    if (Buffer->Acl)
     {
-        *NewAceFlags = CONTAINER_INHERIT_ACE | (AceFlags & OBJECT_INHERIT_ACE) | (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE;
-        return TRUE;
+        if (Buffer->Length > Buffer->Capacity || Ace->AceSize > Buffer->Capacity - Buffer->Length)
+            return STATUS_BUFFER_TOO_SMALL;
+        Dest = (PACE_HEADER)((PUCHAR)Buffer->Acl + Buffer->Length);
+        RtlCopyMemory(Dest, Ace, Ace->AceSize);
+        Dest->AceFlags = Flags;
     }
-
-    if (AceFlags & OBJECT_INHERIT_ACE)
-    {
-        *NewAceFlags = INHERIT_ONLY_ACE | OBJECT_INHERIT_ACE | (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE;
-        return TRUE;
-    }
-
-    return FALSE;
+    Buffer->Length += Ace->AceSize;
+    Buffer->Count++;
+    return STATUS_SUCCESS;
 }
 
 /**
@@ -592,168 +582,48 @@ SepPropagateAcl(
     _In_ PSID Group,
     _In_ BOOLEAN IsInherited,
     _In_ BOOLEAN IsDirectoryObject,
+    _In_opt_ GUID *ObjectType,
     _In_ PGENERIC_MAPPING GenericMapping)
 {
-    ACCESS_MASK Mask;
-    PACCESS_ALLOWED_ACE AceSource;
-    PACCESS_ALLOWED_ACE AceDest;
-    PUCHAR CurrentDest;
-    PUCHAR CurrentSource;
-    ULONG i;
-    ULONG Written;
-    UCHAR AceFlags;
-    USHORT AceSize;
-    USHORT AceCount = 0;
-    PSID Sid;
-    BOOLEAN WriteTwoAces;
+    RTL_SECURITY_ACL_BUFFER Buffer = {0};
+    PACE_HEADER Ace;
+    ULONG Index, Pass, Required;
+    NTSTATUS Status;
 
-    ASSERT(RtlValidAcl(AclSource));
-    ASSERT(AclSource->AclSize % sizeof(ULONG) == 0);
-    ASSERT(AclSource->Sbz1 == 0);
-    ASSERT(AclSource->Sbz2 == 0);
-
-    Written = 0;
-    if (*AclLength >= Written + sizeof(ACL))
+    if (!RtlValidAcl(AclSource)) return STATUS_INVALID_ACL;
+    for (Pass = 0; Pass < 2; ++Pass)
     {
-        RtlCopyMemory(AclDest,
-                      AclSource,
-                      sizeof(ACL));
-    }
-    Written += sizeof(ACL);
-
-    CurrentDest = (PUCHAR)(AclDest + 1);
-    CurrentSource = (PUCHAR)(AclSource + 1);
-    for (i = 0; i < AclSource->AceCount; i++)
-    {
-        ASSERT((ULONG_PTR)CurrentDest % sizeof(ULONG) == 0);
-        ASSERT((ULONG_PTR)CurrentSource % sizeof(ULONG) == 0);
-        AceDest = (PACCESS_ALLOWED_ACE)CurrentDest;
-        AceSource = (PACCESS_ALLOWED_ACE)CurrentSource;
-
-        if (AceSource->Header.AceType > ACCESS_MAX_MS_V2_ACE_TYPE)
+        Buffer.Length = sizeof(ACL);
+        Buffer.Count = 0;
+        Buffer.Revision = AclSource->AclRevision;
+        for (Index = 0; Index < AclSource->AceCount; ++Index)
         {
-            if (AceSource->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE &&
-                !SepShouldPropagateAce(AceSource->Header.AceFlags,
-                                       &AceFlags,
-                                       IsInherited,
-                                       IsDirectoryObject))
-            {
-                CurrentSource += AceSource->Header.AceSize;
-                continue;
-            }
-            /* FIXME: handle object & compound ACEs */
-            AceSize = AceSource->Header.AceSize;
-
-            if (*AclLength >= Written + AceSize)
-            {
-                RtlCopyMemory(AceDest, AceSource, AceSize);
-                if (AceSource->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE)
-                    AceDest->Header.AceFlags = AceFlags;
-            }
-            CurrentDest += AceSize;
-            CurrentSource += AceSize;
-            Written += AceSize;
-            AceCount++;
-            continue;
-        }
-
-        /* These all have the same structure */
-        ASSERT(AceSource->Header.AceType == ACCESS_ALLOWED_ACE_TYPE ||
-               AceSource->Header.AceType == ACCESS_DENIED_ACE_TYPE ||
-               AceSource->Header.AceType == SYSTEM_AUDIT_ACE_TYPE ||
-               AceSource->Header.AceType == SYSTEM_ALARM_ACE_TYPE);
-
-        ASSERT(AceSource->Header.AceSize % sizeof(ULONG) == 0);
-        ASSERT(AceSource->Header.AceSize >= sizeof(*AceSource));
-        if (!SepShouldPropagateAce(AceSource->Header.AceFlags,
-                                   &AceFlags,
-                                   IsInherited,
-                                   IsDirectoryObject))
-        {
-            CurrentSource += AceSource->Header.AceSize;
-            continue;
-        }
-
-        /* FIXME: filter out duplicate ACEs */
-        AceSize = AceSource->Header.AceSize;
-        Mask = AceSource->Mask;
-        Sid = (PSID)&AceSource->SidStart;
-        ASSERT(AceSize >= FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + RtlLengthSid(Sid));
-
-        WriteTwoAces = FALSE;
-        /* Map effective ACE to specific rights */
-        if (!(AceFlags & INHERIT_ONLY_ACE))
-        {
-            RtlMapGenericMask(&Mask, GenericMapping);
-            Mask &= GenericMapping->GenericAll;
-
+            Status = RtlGetAce(AclSource, Index, (PVOID *)&Ace);
+            if (!NT_SUCCESS(Status)) return Status;
             if (IsInherited)
-            {
-                if (RtlEqualSid(Sid, SeCreatorOwnerSid))
-                    Sid = Owner;
-                else if (RtlEqualSid(Sid, SeCreatorGroupSid))
-                    Sid = Group;
-                AceSize = FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + RtlLengthSid(Sid);
-
-                /*
-                 * A generic container ACE becomes two ACEs:
-                 * - a specific effective ACE with no inheritance flags
-                 * - an inherit-only ACE that keeps the generic rights
-                 */
-                if (IsDirectoryObject &&
-                    (AceFlags & CONTAINER_INHERIT_ACE) &&
-                    (Mask != AceSource->Mask || Sid != (PSID)&AceSource->SidStart))
-                {
-                    WriteTwoAces = TRUE;
-                }
-            }
+                Status = RtlpSecurityTransformAce(&Buffer, Ace, TRUE, FALSE,
+                                                   IsDirectoryObject, &ObjectType,
+                                                   ObjectType ? 1 : 0, Owner, Group,
+                                                   GenericMapping);
+            else
+                Status = SepTransformCreatorAce(&Buffer, Ace, Owner, Group, GenericMapping);
+            if (Status == STATUS_NOT_IMPLEMENTED)
+                Status = SepPropagateOpaqueAce(&Buffer, Ace, IsInherited, IsDirectoryObject);
+            if (!NT_SUCCESS(Status)) return Status;
         }
-
-        while (1)
+        if (!Pass)
         {
-            if (*AclLength >= Written + AceSize)
-            {
-                AceDest->Header.AceType = AceSource->Header.AceType;
-                AceDest->Header.AceFlags = WriteTwoAces ? (AceFlags & ~VALID_INHERIT_FLAGS) | INHERITED_ACE
-                                                        : AceFlags;
-                AceDest->Header.AceSize = AceSize;
-                AceDest->Mask = Mask;
-                RtlCopySid(AceSize - FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart),
-                           (PSID)&AceDest->SidStart,
-                           Sid);
-            }
-            Written += AceSize;
-
-            AceCount++;
-            CurrentDest += AceSize;
-
-            if (!WriteTwoAces)
-                break;
-
-            /* Second ACE keeps all the generics from the source ACE */
-            WriteTwoAces = FALSE;
-            AceDest = (PACCESS_ALLOWED_ACE)CurrentDest;
-            AceSize = AceSource->Header.AceSize;
-            Mask = AceSource->Mask;
-            Sid = (PSID)&AceSource->SidStart;
-            AceFlags |= INHERIT_ONLY_ACE;
+            Required = Buffer.Length;
+            Buffer.Capacity = *AclLength;
+            *AclLength = Required;
+            if (!AclDest || Buffer.Capacity < Required) return STATUS_BUFFER_TOO_SMALL;
+            Buffer.Acl = AclDest;
         }
-
-        CurrentSource += AceSource->Header.AceSize;
     }
-
-    if (*AclLength >= sizeof(ACL))
-    {
-        AclDest->AceCount = AceCount;
-        AclDest->AclSize = Written;
-    }
-
-    if (Written > *AclLength)
-    {
-        *AclLength = Written;
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-    *AclLength = Written;
+    RtlZeroMemory(AclDest, sizeof(ACL));
+    AclDest->AclRevision = Buffer.Revision;
+    AclDest->AclSize = (USHORT)Buffer.Length;
+    AclDest->AceCount = (USHORT)Buffer.Count;
     return STATUS_SUCCESS;
 }
 
@@ -807,11 +677,8 @@ SepPropagateAcl(
  * Generic mapping of access rights to map only certain effective
  * ACEs of an ACL that we want to select it.
  *
- * @return
- * Returns the selected access control list (ACL) to the caller,
- * NULL otherwise.
  */
-PACL
+NTSTATUS
 SepSelectAcl(
     _In_opt_ PACL ExplicitAcl,
     _In_ BOOLEAN ExplicitPresent,
@@ -824,11 +691,14 @@ SepSelectAcl(
     _Out_ PBOOLEAN AclPresent,
     _Out_ PBOOLEAN IsInherited,
     _In_ BOOLEAN IsDirectoryObject,
-    _In_ PGENERIC_MAPPING GenericMapping)
+    _In_opt_ GUID *ObjectType,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _Out_ PACL *SelectedAcl)
 {
     PACL Acl;
     NTSTATUS Status;
 
+    *SelectedAcl = NULL;
     *AclPresent = TRUE;
     if (ExplicitPresent && !ExplicitDefaulted)
     {
@@ -847,12 +717,16 @@ SepSelectAcl(
                                      Group,
                                      *IsInherited,
                                      IsDirectoryObject,
+                                     ObjectType,
                                      GenericMapping);
-            ASSERT(Status == STATUS_BUFFER_TOO_SMALL);
+            if (Status != STATUS_BUFFER_TOO_SMALL) return Status;
 
             /* Use the parent ACL only if it's not empty */
             if (*AclLength != sizeof(ACL))
-                return ParentAcl;
+            {
+                *SelectedAcl = ParentAcl;
+                return STATUS_SUCCESS;
+            }
         }
 
         if (ExplicitPresent)
@@ -882,10 +756,12 @@ SepSelectAcl(
                                  Group,
                                  *IsInherited,
                                  IsDirectoryObject,
+                                 ObjectType,
                                  GenericMapping);
-        ASSERT(Status == STATUS_BUFFER_TOO_SMALL);
+        if (Status != STATUS_BUFFER_TOO_SMALL) return Status;
     }
-    return Acl;
+    *SelectedAcl = Acl;
+    return STATUS_SUCCESS;
 }
 
 /* EOF */

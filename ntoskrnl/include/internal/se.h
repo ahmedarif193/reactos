@@ -753,16 +753,17 @@ SepReleaseAcl(
 
 NTSTATUS
 SepPropagateAcl(
-    _Out_writes_bytes_opt_(DaclLength) PACL AclDest,
+    _Out_writes_bytes_opt_(AclLength) PACL AclDest,
     _Inout_ PULONG AclLength,
     _In_reads_bytes_(AclSource->AclSize) PACL AclSource,
     _In_ PSID Owner,
     _In_ PSID Group,
     _In_ BOOLEAN IsInherited,
     _In_ BOOLEAN IsDirectoryObject,
+    _In_opt_ GUID *ObjectType,
     _In_ PGENERIC_MAPPING GenericMapping);
 
-PACL
+NTSTATUS
 SepSelectAcl(
     _In_opt_ PACL ExplicitAcl,
     _In_ BOOLEAN ExplicitPresent,
@@ -775,7 +776,9 @@ SepSelectAcl(
     _Out_ PBOOLEAN AclPresent,
     _Out_ PBOOLEAN IsInherited,
     _In_ BOOLEAN IsDirectoryObject,
-    _In_ PGENERIC_MAPPING GenericMapping);
+    _In_opt_ GUID *ObjectType,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _Out_ PACL *SelectedAcl);
 
 //
 // SD functions

@@ -1600,7 +1600,18 @@ NtQueryInformationToken(
                     case TokenElevation:
                         Value = SeTokenIsAdmin(Token);
                         break;
+                    case TokenVirtualizationAllowed:
+                        Value = !!(Token->TokenFlags & TOKEN_VIRTUALIZE_ALLOWED);
+                        break;
+                    case TokenVirtualizationEnabled:
+                        Value = !!(Token->TokenFlags & TOKEN_VIRTUALIZE_ENABLED);
+                        break;
+                    case TokenUIAccess:
+                        Value = !!(Token->TokenFlags & TOKEN_UIACCESS);
+                        break;
                     case TokenHasRestrictions:
+                        Value = !!(Token->TokenFlags & TOKEN_IS_FILTERED);
+                        break;
                     case TokenIsRestricted:
                         Value = (Token->RestrictedSidCount != 0);
                         break;
@@ -2158,8 +2169,15 @@ NtSetInformationToken(
                 /* Lock the token */
                 SepAcquireTokenLockExclusive(Token);
 
-                Token->SessionId = SessionId;
-                ExAllocateLocallyUniqueId(&Token->ModifiedId);
+                if (Token->TokenInUse && Token->SessionId != SessionId)
+                {
+                    Status = STATUS_TOKEN_ALREADY_IN_USE;
+                }
+                else
+                {
+                    Token->SessionId = SessionId;
+                    ExAllocateLocallyUniqueId(&Token->ModifiedId);
+                }
 
                 /* Unlock the token */
                 SepReleaseTokenLock(Token);
@@ -2359,6 +2377,7 @@ NtSetInformationToken(
                 PSID_AND_ATTRIBUTES Integrity;
                 PSID NewSid = NULL;
                 ULONG NewRid = 0, OldRid;
+                BOOLEAN HasTcbPrivilege;
 
                 _SEH2_TRY
                 {
@@ -2403,11 +2422,12 @@ NtSetInformationToken(
                     break;
                 }
 
+                HasTcbPrivilege = SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode);
                 SepAcquireTokenLockExclusive(Token);
 
                 Integrity = &Token->UserAndGroups[Token->IntegrityLevelIndex];
                 OldRid = *RtlSubAuthoritySid(Integrity->Sid, 0);
-                if (NewRid > OldRid && !SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+                if (NewRid > OldRid && !HasTcbPrivilege)
                 {
                     SepReleaseTokenLock(Token);
                     Status = STATUS_PRIVILEGE_NOT_HELD;

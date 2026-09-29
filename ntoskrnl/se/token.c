@@ -950,7 +950,9 @@ SeDeassignPrimaryToken(
     OldToken = ObFastReplaceObject(&Process->Token, NULL);
 
     /* Mark the Old Token as free */
+    SepAcquireTokenLockExclusive(OldToken);
     OldToken->TokenInUse = FALSE;
+    SepReleaseTokenLock(OldToken);
 
     /* Dereference the Token */
     ObDereferenceObject(OldToken);
@@ -2109,12 +2111,6 @@ SeTokenType(
 }
 
 /**
- * @brief
- * Determines if a token is either an admin token or not. Such
- * condition is checked based upon TOKEN_HAS_ADMIN_GROUP flag,
- * which means if the respective access token belongs to an
- * administrator group or not.
- *
  * @param[in] Token
  * A valid access token to determine if such token is admin or not.
  *
@@ -2126,11 +2122,14 @@ NTAPI
 SeTokenIsAdmin(
     _In_ PACCESS_TOKEN Token)
 {
+    BOOLEAN IsAdmin;
+
     PAGED_CODE();
 
-    // NOTE: Win7+ instead really checks the list of groups in the token
-    // (since TOKEN_HAS_ADMIN_GROUP == TOKEN_WRITE_RESTRICTED ...)
-    return (((PTOKEN)Token)->TokenFlags & TOKEN_HAS_ADMIN_GROUP) != 0;
+    SepAcquireTokenLockShared(Token);
+    IsAdmin = SepSidInToken(Token, SeAliasAdminsSid);
+    SepReleaseTokenLock(Token);
+    return IsAdmin;
 }
 
 /**
@@ -2176,9 +2175,7 @@ SeTokenIsWriteRestricted(
 {
     PAGED_CODE();
 
-    // NOTE: NT 5.1 SP2 x86 checks the SE_BACKUP_PRIVILEGES_CHECKED flag
-    // while Vista+ checks the TOKEN_WRITE_RESTRICTED flag as one expects.
-    return (((PTOKEN)Token)->TokenFlags & SE_BACKUP_PRIVILEGES_CHECKED) != 0;
+    return (((PTOKEN)Token)->TokenFlags & TOKEN_WRITE_RESTRICTED) != 0;
 }
 
 /**
