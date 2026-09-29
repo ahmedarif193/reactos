@@ -3814,7 +3814,7 @@ static const struct sorting_test_entry unicode_sorting_tests[] =
     { L"en-US", -1, CSTR_LESS_THAN,    0, L"\x013a", L"\x013f" },
     { L"vi-VN", -1, CSTR_LESS_THAN,    0, L"\x1d8f", L"\x1ea8" },
     { L"vi-VN", -1, CSTR_LESS_THAN,    0, L"\x0323", L"\xfe26" },
-    { L"vi-VN",  1, CSTR_GREATER_THAN, 0, L"R",      L"\xff32" },
+    { L"vi-VN", -1, CSTR_LESS_THAN,    0, L"R",      L"\xff32" },
     { L"en-US",  1, CSTR_GREATER_THAN, 0, L"\x1d8f", L"\x1ea8" },
     { L"en-US",  1, CSTR_GREATER_THAN, 0, L"\x0323", L"\xfe26" },
     { L"en-US", -1, CSTR_LESS_THAN,    0, L"R",      L"\xff32" },
@@ -4830,6 +4830,7 @@ static BOOL CALLBACK lgrplocale_procA(LGRPID lgrpid, LCID lcid, LPSTR lpszNum,
 static void test_EnumLanguageGroupLocalesA(void)
 {
   BOOL ret;
+  LGRPID group;
 
   if (!pEnumLanguageGroupLocalesA || !pIsValidLanguageGroup)
   {
@@ -4866,7 +4867,11 @@ static void test_EnumLanguageGroupLocalesA(void)
   ok( !ret && GetLastError() == ERROR_INVALID_PARAMETER,
       "Expected ERROR_INVALID_PARAMETER, got %ld\n", GetLastError());
 
-  pEnumLanguageGroupLocalesA(lgrplocale_procA, LGRPID_WESTERN_EUROPE, 0, 0);
+  for (group = LGRPID_WESTERN_EUROPE; group <= LGRPID_ARMENIAN; ++group)
+  {
+    ret = pEnumLanguageGroupLocalesA(lgrplocale_procA, group, 0, 0);
+    ok(ret, "EnumLanguageGroupLocalesA(%lu) failed with error %lu\n", group, GetLastError());
+  }
 }
 
 static void test_SetLocaleInfo(void)
@@ -6972,8 +6977,8 @@ static void test_GetThreadPreferredUILanguages(void)
 {
     BOOL ret;
     NTSTATUS status;
-    ULONG count, size, size_id;
-    WCHAR *buf;
+    ULONG count, size, size_id, size_name, count_name;
+    WCHAR *buf, *names;
 
     if (!pGetThreadPreferredUILanguages)
     {
@@ -7032,15 +7037,48 @@ static void test_GetThreadPreferredUILanguages(void)
        "Expected error ERROR_INSUFFICIENT_BUFFER, got %ld\n", GetLastError());
     ok(size == size_id, "expected %lu, got %lu\n", size_id, size);
 
-    size = size_id - 2;
+    HeapFree(GetProcessHeap(), 0, buf);
+    size_name = count_name = 0;
+    ret = pGetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, &count_name, NULL, &size_name);
+    ok(ret, "GetThreadPreferredUILanguages names failed: %lu\n", GetLastError());
+    ok(count_name && size_name >= 2, "Name query returned count %lu, size %lu\n", count_name, size_name);
+    if (!ret || size_name < 2) return;
+
+    buf = HeapAlloc(GetProcessHeap(), 0, size_name * sizeof(WCHAR));
+    names = HeapAlloc(GetProcessHeap(), 0, size_name * sizeof(WCHAR));
+    ok(buf && names, "Failed to allocate language buffers\n");
+    if (!buf || !names)
+    {
+        HeapFree(GetProcessHeap(), 0, names);
+        HeapFree(GetProcessHeap(), 0, buf);
+        return;
+    }
+
+    size = size_name - 1;
     SetLastError(0xdeadbeef);
     ret = pGetThreadPreferredUILanguages(0, &count, buf, &size);
     ok(!ret, "Expected GetThreadPreferredUILanguages to fail\n");
     ok(GetLastError() == ERROR_INSUFFICIENT_BUFFER,
        "Expected error ERROR_INSUFFICIENT_BUFFER, got %ld\n", GetLastError());
-    todo_wine
-    ok(size == size_id || size == size_id - 1 /* before win10 1809 */, "expected %lu, got %lu\n", size_id, size);
+    ok(size == size_name, "expected name size %lu, got %lu\n", size_name, size);
 
+    memset(buf, 0x5a, size_name * sizeof(WCHAR));
+    size = size_name;
+    ret = pGetThreadPreferredUILanguages(0, &count, buf, &size);
+    ok(ret, "GetThreadPreferredUILanguages default format failed: %lu\n", GetLastError());
+    ok(size == size_name && count == count_name,
+       "Default query returned count %lu, size %lu; expected %lu, %lu\n", count, size, count_name, size_name);
+    ok(!buf[size_name - 2] && !buf[size_name - 1], "Default language list is not double-NUL terminated\n");
+    memset(names, 0x5a, size_name * sizeof(WCHAR));
+    size = size_name;
+    ret = pGetThreadPreferredUILanguages(MUI_LANGUAGE_NAME, &count, names, &size);
+    ok(ret, "GetThreadPreferredUILanguages explicit names failed: %lu\n", GetLastError());
+    ok(size == size_name && count == count_name,
+       "Explicit name query returned count %lu, size %lu; expected %lu, %lu\n", count, size, count_name, size_name);
+    ok(!names[size_name - 2] && !names[size_name - 1], "Explicit language list is not double-NUL terminated\n");
+    ok(!memcmp(buf, names, size_name * sizeof(WCHAR)), "Default format differs from explicit language names\n");
+
+    HeapFree(GetProcessHeap(), 0, names);
     HeapFree(GetProcessHeap(), 0, buf);
 }
 
