@@ -95,16 +95,25 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
  
      if (!str)
          return E_INVALIDARG;
-@@ -1574,7 +1577,7 @@ static HRESULT WINAPI ITextRange_fnGetText(ITextRange 
+@@ -1569,12 +1572,15 @@ static HRESULT WINAPI ITextRange_fnGetText(ITextRange 
+     cursor_from_char_ofs( editor, This->end, &end );
+ 
+     length = This->end - This->start;
++    if (editor->mode & TM_PLAINTEXT)
++        length = max(0, min(This->end, ME_GetTextLength(editor)) - This->start);
+     *str = SysAllocStringLen(NULL, length);
+     if (!*str)
          return E_OUTOFMEMORY;
  
-     bEOP = (!para_next( para_next( end.para )) && This->end > ME_GetTextLength(editor));
+-    bEOP = (!para_next( para_next( end.para )) && This->end > ME_GetTextLength(editor));
 -    ME_GetTextW(editor, *str, length, &start, length, FALSE, bEOP);
++    bEOP = (editor->mode & TM_RICHTEXT) &&
++           !para_next( para_next( end.para )) && This->end > ME_GetTextLength(editor);
 +    ME_GetTextWObj(editor, *str, length, &start, length, FALSE, bEOP, TRUE);
      return S_OK;
  }
  
-@@ -1628,7 +1631,7 @@ static HRESULT range_GetChar(ME_TextEditor *editor, ME
+@@ -1628,7 +1634,7 @@ static HRESULT range_GetChar(ME_TextEditor *editor, ME
  {
      WCHAR wch[2];
  
@@ -113,7 +122,7 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
      *pch = wch[0];
  
      return S_OK;
-@@ -2499,12 +2502,30 @@ static HRESULT WINAPI ITextRange_fnDelete(ITextRange *
+@@ -2499,12 +2505,30 @@ static HRESULT WINAPI ITextRange_fnDelete(ITextRange *
  static HRESULT WINAPI ITextRange_fnDelete(ITextRange *me, LONG unit, LONG count, LONG *delta)
  {
      ITextRangeImpl *This = impl_from_ITextRange(me);
@@ -144,18 +153,17 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
      return E_NOTIMPL;
  }
  
-@@ -4196,13 +4217,149 @@ static HRESULT WINAPI ITextDocument2Old_fnNew(ITextDoc
-     FIXME("stub %p\n", services);
+@@ -4197,12 +4221,158 @@ static HRESULT WINAPI ITextDocument2Old_fnNew(ITextDoc
      return E_NOTIMPL;
  }
-+
+ 
 +struct open_stream
 +{
 +    const BYTE *data;
 +    DWORD size;
 +    DWORD pos;
 +};
- 
++
 +static DWORD CALLBACK open_stream_read(DWORD_PTR cookie, BYTE *buffer, LONG cb, LONG *pcb)
 +{
 +    struct open_stream *stream = (struct open_stream *)cookie;
@@ -289,14 +297,24 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
 +done:
 +    free(text);
 +    free(data);
-+    CloseHandle(file);
++    if (SUCCEEDED(hr) && !(Flags & tomPasteFile))
++    {
++        if (services->file != INVALID_HANDLE_VALUE) CloseHandle(services->file);
++        services->file = INVALID_HANDLE_VALUE;
++        if (Flags & (tomShareDenyRead | tomShareDenyWrite))
++        {
++            services->file = file;
++            file = INVALID_HANDLE_VALUE;
++        }
++    }
++    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
 +    if (FAILED(hr))
 +        return hr;
 +    return S_OK;
  }
  
  static HRESULT WINAPI ITextDocument2Old_fnSave(ITextDocument2Old *iface, VARIANT *pVar,
-@@ -4690,7 +4847,10 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
+@@ -4690,7 +4860,10 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
      TRACE("(%p)->(%p)\n", This, pbstr);
  
      if (!This->services)
@@ -307,11 +325,23 @@ diff -pudN e:\wine\dlls\riched20/richole.c e:\reactos\dll\win32\riched20/richole
  
      if (!pbstr)
          return E_INVALIDARG;
-@@ -4709,7 +4869,7 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
+@@ -4698,6 +4871,8 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
+     ME_GetSelection(This->services->editor, &start, &end);
+     endOfs = ME_GetCursorOfs(end);
+     nChars = endOfs - ME_GetCursorOfs(start);
++    if (This->services->editor->mode & TM_PLAINTEXT)
++        nChars = max(0, min(endOfs, ME_GetTextLength(This->services->editor)) - ME_GetCursorOfs(start));
+     if (!nChars)
+     {
+         *pbstr = NULL;
+@@ -4708,8 +4883,9 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSe
+     if (!*pbstr)
          return E_OUTOFMEMORY;
  
-     bEOP = (!para_next( para_next( end->para ) ) && endOfs > ME_GetTextLength(This->services->editor));
+-    bEOP = (!para_next( para_next( end->para ) ) && endOfs > ME_GetTextLength(This->services->editor));
 -    ME_GetTextW(This->services->editor, *pbstr, nChars, start, nChars, FALSE, bEOP);
++    bEOP = (This->services->editor->mode & TM_RICHTEXT) &&
++           !para_next( para_next( end->para ) ) && endOfs > ME_GetTextLength(This->services->editor);
 +    ME_GetTextWObj(This->services->editor, *pbstr, nChars, start, nChars, FALSE, bEOP, TRUE);
      TRACE("%s\n", wine_dbgstr_w(*pbstr));
  

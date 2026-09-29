@@ -1572,11 +1572,14 @@ static HRESULT WINAPI ITextRange_fnGetText(ITextRange *me, BSTR *str)
     cursor_from_char_ofs( editor, This->end, &end );
 
     length = This->end - This->start;
+    if (editor->mode & TM_PLAINTEXT)
+        length = max(0, min(This->end, ME_GetTextLength(editor)) - This->start);
     *str = SysAllocStringLen(NULL, length);
     if (!*str)
         return E_OUTOFMEMORY;
 
-    bEOP = (!para_next( para_next( end.para )) && This->end > ME_GetTextLength(editor));
+    bEOP = (editor->mode & TM_RICHTEXT) &&
+           !para_next( para_next( end.para )) && This->end > ME_GetTextLength(editor);
     ME_GetTextWObj(editor, *str, length, &start, length, FALSE, bEOP, TRUE);
     return S_OK;
 }
@@ -4356,7 +4359,17 @@ static HRESULT WINAPI ITextDocument2Old_fnOpen(ITextDocument2Old *iface, VARIANT
 done:
     free(text);
     free(data);
-    CloseHandle(file);
+    if (SUCCEEDED(hr) && !(Flags & tomPasteFile))
+    {
+        if (services->file != INVALID_HANDLE_VALUE) CloseHandle(services->file);
+        services->file = INVALID_HANDLE_VALUE;
+        if (Flags & (tomShareDenyRead | tomShareDenyWrite))
+        {
+            services->file = file;
+            file = INVALID_HANDLE_VALUE;
+        }
+    }
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
     if (FAILED(hr))
         return hr;
     return S_OK;
@@ -4858,6 +4871,8 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSelection *me, BSTR *pbstr)
     ME_GetSelection(This->services->editor, &start, &end);
     endOfs = ME_GetCursorOfs(end);
     nChars = endOfs - ME_GetCursorOfs(start);
+    if (This->services->editor->mode & TM_PLAINTEXT)
+        nChars = max(0, min(endOfs, ME_GetTextLength(This->services->editor)) - ME_GetCursorOfs(start));
     if (!nChars)
     {
         *pbstr = NULL;
@@ -4868,7 +4883,8 @@ static HRESULT WINAPI ITextSelection_fnGetText(ITextSelection *me, BSTR *pbstr)
     if (!*pbstr)
         return E_OUTOFMEMORY;
 
-    bEOP = (!para_next( para_next( end->para ) ) && endOfs > ME_GetTextLength(This->services->editor));
+    bEOP = (This->services->editor->mode & TM_RICHTEXT) &&
+           !para_next( para_next( end->para ) ) && endOfs > ME_GetTextLength(This->services->editor);
     ME_GetTextWObj(This->services->editor, *pbstr, nChars, start, nChars, FALSE, bEOP, TRUE);
     TRACE("%s\n", wine_dbgstr_w(*pbstr));
 
