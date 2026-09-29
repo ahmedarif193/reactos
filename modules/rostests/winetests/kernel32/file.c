@@ -5652,7 +5652,8 @@ static void test_SetFileRenameInfo(void)
 
 static void test_GetFileAttributesExW(void)
 {
-    static const struct
+    WCHAR system_dir[MAX_PATH], extended_path[3 * MAX_PATH];
+    const struct
     {
         const WCHAR *path;
         DWORD expected_error;
@@ -5662,11 +5663,16 @@ static void test_GetFileAttributesExW(void)
         {L"\\\\?\\", ERROR_INVALID_NAME},
         {L"\\??\\", ERROR_INVALID_NAME},
         {L"\\DosDevices\\", ERROR_FILE_NOT_FOUND},
-        {L"\\\\?\\C:\\windows\\system32\\..\\system32\\kernel32.dll", ERROR_INVALID_NAME},
+        {extended_path, ERROR_INVALID_NAME},
     };
     WIN32_FILE_ATTRIBUTE_DATA info;
     DWORD error, test_idx;
     BOOL ret;
+
+    ret = GetSystemDirectoryW(system_dir, ARRAY_SIZE(system_dir));
+    ok(ret, "GetSystemDirectoryW failed, error %lu.\n", GetLastError());
+    if (!ret) return;
+    wsprintfW(extended_path, L"\\\\?\\%s\\..\\%s\\kernel32.dll", system_dir, wcsrchr(system_dir, '\\') + 1);
 
     for (test_idx = 0; test_idx < ARRAY_SIZE(tests); ++test_idx)
     {

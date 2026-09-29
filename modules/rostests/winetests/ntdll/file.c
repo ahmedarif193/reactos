@@ -4899,7 +4899,7 @@ static void test_NtCreateFile(void)
 
     status = pNtCreateFile( &handle, GENERIC_READ, &attr, &io, NULL,
                             0, FILE_SHARE_READ|FILE_SHARE_WRITE, FILE_CREATE, 0, NULL, 0);
-    ok( status == STATUS_OBJECT_NAME_INVALID, "failed %s %lx\n", debugstr_w(nameW.Buffer), status );
+    ok( status == STATUS_NOT_A_DIRECTORY, "failed %s %lx\n", debugstr_w(nameW.Buffer), status );
     status = pNtCreateFile( &handle, GENERIC_READ, &attr, &io, NULL,
                             0, FILE_SHARE_READ|FILE_SHARE_WRITE, FILE_CREATE,
                             FILE_DIRECTORY_FILE, NULL, 0);
@@ -5983,12 +5983,24 @@ static void test_reparse_points(void)
     NTSTATUS status;
     UNICODE_STRING nameW;
     unsigned char reparse_data[1];
+    WCHAR system_path[MAX_PATH], volume_path[MAX_PATH];
+    BOOL ret;
 
-    pRtlInitUnicodeString( &nameW, L"\\??\\C:\\" );
+    ret = GetWindowsDirectoryW(system_path, ARRAY_SIZE(system_path));
+    ok(ret, "GetWindowsDirectoryW failed, error %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = pGetVolumePathNameW(system_path, volume_path, ARRAY_SIZE(volume_path));
+    ok(ret, "GetVolumePathNameW failed, error %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = pRtlDosPathNameToNtPathName_U(volume_path, &nameW, NULL, NULL);
+    ok(ret, "Could not convert volume path %s.\n", wine_dbgstr_w(volume_path));
+    if (!ret) return;
     InitializeObjectAttributes( &attr, &nameW, 0, NULL, NULL );
 
     status = pNtOpenFile( &handle, READ_CONTROL, &attr, &io, 0, 0 );
     ok( !status, "open %s failed %#lx\n", wine_dbgstr_w(nameW.Buffer), status );
+    pRtlFreeUnicodeString(&nameW);
+    if (status) return;
 
     status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, NULL, 0 );
     ok( status == STATUS_INVALID_USER_BUFFER, "expected %#lx, got %#lx\n", STATUS_INVALID_USER_BUFFER, status );
