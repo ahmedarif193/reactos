@@ -622,7 +622,7 @@
 @ stub SetNamedSecurityInfoExW
 @ stdcall SetNamedSecurityInfoW(wstr long ptr ptr ptr ptr ptr)
 @ stdcall SetPrivateObjectSecurity(long ptr ptr ptr long) kernelbase.SetPrivateObjectSecurity
-@ stub SetPrivateObjectSecurityEx
+@ stdcall SetPrivateObjectSecurityEx(long ptr ptr long ptr long) kernelbase.SetPrivateObjectSecurityEx
 @ stdcall SetSecurityDescriptorControl(ptr long long) kernelbase.SetSecurityDescriptorControl
 @ stdcall SetSecurityDescriptorDacl(ptr long ptr long) kernelbase.SetSecurityDescriptorDacl
 @ stdcall SetSecurityDescriptorGroup(ptr ptr long) kernelbase.SetSecurityDescriptorGroup

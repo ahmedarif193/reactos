@@ -249,6 +249,7 @@ GetUserNameA(LPSTR lpszName,
     UNICODE_STRING NameW;
     ANSI_STRING NameA;
     BOOL Ret;
+    DWORD LastError = GetLastError();
 
     /* apparently Win doesn't check whether lpSize is valid at all! */
 
@@ -276,6 +277,7 @@ GetUserNameA(LPSTR lpszName,
 
     LocalFree(NameW.Buffer);
 
+    if (Ret) SetLastError(LastError);
     return Ret;
 }
 
@@ -299,6 +301,7 @@ GetUserNameW(LPWSTR lpszName,
     SID_NAME_USE snu = SidTypeUser;
     WCHAR* domain_name = NULL;
     DWORD dn_len = 0;
+    DWORD LastError = GetLastError();
 
     if (!OpenThreadToken (GetCurrentThread(), TOKEN_QUERY, FALSE, &hToken))
     {
@@ -391,6 +394,7 @@ GetUserNameW(LPWSTR lpszName,
     LocalFree(domain_name);
     LocalFree(tu_buf);
     *lpSize = an_len + 1;
+    SetLastError(LastError);
     return TRUE;
 }
 
@@ -969,15 +973,13 @@ pGetSecurityInfoCheck(SECURITY_INFORMATION SecurityInfo,
                       PACL *ppSacl,
                       PSECURITY_DESCRIPTOR* ppSecurityDescriptor)
 {
-    if ((SecurityInfo & (OWNER_SECURITY_INFORMATION |
-                         GROUP_SECURITY_INFORMATION |
-                         DACL_SECURITY_INFORMATION |
-                         SACL_SECURITY_INFORMATION |
-                         LABEL_SECURITY_INFORMATION)) &&
-        ppSecurityDescriptor == NULL)
+    if ((!ppsidOwner && !ppsidGroup && !ppDacl && !ppSacl && !ppSecurityDescriptor) ||
+        (!ppSecurityDescriptor &&
+         (((SecurityInfo & OWNER_SECURITY_INFORMATION) && !ppsidOwner) ||
+          ((SecurityInfo & GROUP_SECURITY_INFORMATION) && !ppsidGroup) ||
+          ((SecurityInfo & DACL_SECURITY_INFORMATION) && !ppDacl) ||
+          ((SecurityInfo & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION)) && !ppSacl))))
     {
-        /* if one of the SIDs or ACLs are present, the security descriptor
-           most not be NULL */
         return ERROR_INVALID_PARAMETER;
     }
     else
@@ -1004,11 +1006,12 @@ pGetSecurityInfoCheck(SECURITY_INFORMATION SecurityInfo,
             *ppSacl = NULL;
         }
 
-        if (SecurityInfo & (OWNER_SECURITY_INFORMATION |
-                            GROUP_SECURITY_INFORMATION |
-                            DACL_SECURITY_INFORMATION |
-                            SACL_SECURITY_INFORMATION |
-                            LABEL_SECURITY_INFORMATION))
+        if (ppSecurityDescriptor &&
+            (SecurityInfo & (OWNER_SECURITY_INFORMATION |
+                             GROUP_SECURITY_INFORMATION |
+                             DACL_SECURITY_INFORMATION |
+                             SACL_SECURITY_INFORMATION |
+                             LABEL_SECURITY_INFORMATION)))
         {
             *ppSecurityDescriptor = NULL;
         }

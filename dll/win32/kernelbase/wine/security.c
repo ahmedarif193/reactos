@@ -35,6 +35,10 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(security);
 
+NTSYSAPI NTSTATUS WINAPI RtlSetSecurityObject(SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+                                             PSECURITY_DESCRIPTOR *, PGENERIC_MAPPING, HANDLE);
+NTSYSAPI NTSTATUS WINAPI RtlSetSecurityObjectEx(SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+                                               PSECURITY_DESCRIPTOR *, ULONG, PGENERIC_MAPPING, HANDLE);
 
 /******************************************************************************
  * SID functions
@@ -1149,7 +1153,7 @@ BOOL WINAPI MakeAbsoluteSD ( PSECURITY_DESCRIPTOR rel_descr, PSECURITY_DESCRIPTO
 BOOL WINAPI MakeSelfRelativeSD( PSECURITY_DESCRIPTOR abs_descr, PSECURITY_DESCRIPTOR rel_descr,
                                 LPDWORD len )
 {
-    return set_ntstatus( RtlMakeSelfRelativeSD( abs_descr, rel_descr, len ));
+    return set_ntstatus( RtlAbsoluteToSelfRelativeSD( abs_descr, rel_descr, len ));
 }
 
 /******************************************************************************
@@ -1190,8 +1194,7 @@ BOOL WINAPI SetPrivateObjectSecurity( SECURITY_INFORMATION info, PSECURITY_DESCR
                                       PSECURITY_DESCRIPTOR *obj_descr, PGENERIC_MAPPING mapping,
                                       HANDLE token )
 {
-    FIXME( "0x%08lx %p %p %p %p - stub\n", info, descr, obj_descr, mapping, token );
-    return TRUE;
+    return set_ntstatus( RtlSetSecurityObject( info, descr, obj_descr, mapping, token ));
 }
 
 /*************************************************************************
@@ -1201,8 +1204,7 @@ BOOL WINAPI SetPrivateObjectSecurityEx( SECURITY_INFORMATION info, PSECURITY_DES
                                         PSECURITY_DESCRIPTOR *obj_descr, ULONG flags,
                                         PGENERIC_MAPPING mapping, HANDLE token )
 {
-    FIXME( "0x%08lx %p %p %lu %p %p - stub\n", info, descr, obj_descr, flags, mapping, token );
-    return TRUE;
+    return set_ntstatus( RtlSetSecurityObjectEx( info, descr, obj_descr, flags, mapping, token ));
 }
 
 /******************************************************************************

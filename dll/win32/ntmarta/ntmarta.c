@@ -31,6 +31,9 @@
 #define NDEBUG
 #include <debug.h>
 
+NTSYSAPI NTSTATUS NTAPI RtlNewSecurityObjectEx(PSECURITY_DESCRIPTOR, PSECURITY_DESCRIPTOR,
+    PSECURITY_DESCRIPTOR *, GUID *, BOOLEAN, ULONG, HANDLE, PGENERIC_MAPPING);
+
 HINSTANCE hDllInstance;
 
 /* FIXME: Vista+ API */
@@ -577,6 +580,9 @@ AccpGetTrusteeSid(IN PTRUSTEE_W Trustee,
     *ppSid = NULL;
     *Allocated = FALSE;
 
+    if (Trustee->MultipleTrusteeOperation == TRUSTEE_IS_IMPERSONATE)
+        return ERROR_INVALID_PARAMETER;
+
     /* Windows ignores this */
 #if 0
     if (Trustee->pMultipleTrustee || Trustee->MultipleTrusteeOperation != NO_MULTIPLE_TRUSTEE)
@@ -665,6 +671,7 @@ AccRewriteGetHandleRights(HANDLE handle,
                           PSECURITY_DESCRIPTOR* ppSecurityDescriptor)
 {
     PSECURITY_DESCRIPTOR pSD = NULL;
+    HKEY QueryKey = NULL;
     ULONG SDSize = 0;
     NTSTATUS Status;
     DWORD LastErr;
@@ -673,12 +680,42 @@ AccRewriteGetHandleRights(HANDLE handle,
     /* save the last error code */
     LastErr = GetLastError();
 
+    if (ObjectType == SE_REGISTRY_KEY)
+    {
+        REGSAM Access = 0;
+        HKEY OpenedKey;
+
+        if (SecurityInfo & (OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                            DACL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION |
+                            LABEL_SECURITY_INFORMATION | ATTRIBUTE_SECURITY_INFORMATION |
+                            SCOPE_SECURITY_INFORMATION | PROCESS_TRUST_LABEL_SECURITY_INFORMATION |
+                            ACCESS_FILTER_SECURITY_INFORMATION))
+            Access |= READ_CONTROL;
+        if (SecurityInfo & SACL_SECURITY_INFORMATION)
+            Access |= ACCESS_SYSTEM_SECURITY;
+
+        Ret = RegOpenKeyExW((HKEY)handle, NULL, 0,
+                            Access | KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS,
+                            &OpenedKey);
+        if (Ret != ERROR_SUCCESS && Access != 0)
+            Ret = RegOpenKeyExW((HKEY)handle, NULL, 0, Access, &OpenedKey);
+        if (Ret != ERROR_SUCCESS && Access != 0)
+            goto Cleanup;
+        if (Ret == ERROR_SUCCESS)
+            QueryKey = OpenedKey;
+    }
+
     do
     {
         Ret = ERROR_SUCCESS;
 
         /* allocate a buffer large enough to hold the
            security descriptor we need to return */
+        if (SDSize > MAXDWORD - 0x100)
+        {
+            Ret = ERROR_NOT_ENOUGH_MEMORY;
+            goto Cleanup;
+        }
         SDSize += 0x100;
         if (pSD == NULL)
         {
@@ -694,6 +731,11 @@ AccRewriteGetHandleRights(HANDLE handle,
                                  LMEM_MOVEABLE);
             if (newSD != NULL)
                 pSD = newSD;
+            else
+            {
+                Ret = GetLastError();
+                goto Cleanup;
+            }
         }
 
         if (pSD == NULL)
@@ -707,8 +749,11 @@ AccRewriteGetHandleRights(HANDLE handle,
         {
             case SE_REGISTRY_KEY:
             {
-                Ret = (DWORD)RegGetKeySecurity((HKEY)handle,
-                                               SecurityInfo,
+                Ret = (DWORD)RegGetKeySecurity(QueryKey ? QueryKey : (HKEY)handle,
+                                               SecurityInfo & ~(PROTECTED_DACL_SECURITY_INFORMATION |
+                                                                PROTECTED_SACL_SECURITY_INFORMATION |
+                                                                UNPROTECTED_DACL_SECURITY_INFORMATION |
+                                                                UNPROTECTED_SACL_SECURITY_INFORMATION),
                                                pSD,
                                                &SDSize);
                 break;
@@ -717,6 +762,7 @@ AccRewriteGetHandleRights(HANDLE handle,
             case SE_FILE_OBJECT:
                 /* FIXME - handle console handles? */
             case SE_KERNEL_OBJECT:
+            case SE_WMIGUID_OBJECT:
             {
                 Status = NtQuerySecurityObject(handle,
                                                SecurityInfo,
@@ -756,12 +802,14 @@ AccRewriteGetHandleRights(HANDLE handle,
                 break;
             }
 
-            default:
-            {
-                UNIMPLEMENTED;
+            case SE_PRINTER:
+            case SE_LMSHARE:
                 Ret = ERROR_CALL_NOT_IMPLEMENTED;
                 break;
-            }
+
+            default:
+                Ret = ERROR_INVALID_PARAMETER;
+                break;
         }
 
     } while (Ret == ERROR_INSUFFICIENT_BUFFER);
@@ -820,7 +868,8 @@ AccRewriteGetHandleRights(HANDLE handle,
             }
         }
 
-        *ppSecurityDescriptor = pSD;
+        if (ppSecurityDescriptor)
+            *ppSecurityDescriptor = pSD;
     }
     else
     {
@@ -831,12 +880,174 @@ Cleanup:
         }
     }
 
+    if (QueryKey != NULL)
+        RegCloseKey(QueryKey);
+
     /* restore the last error code */
     SetLastError(LastErr);
 
     return Ret;
 }
 
+
+static NTSTATUS
+AccpQueryFileSecurity(HANDLE Handle,
+                     SECURITY_INFORMATION Information,
+                     PSECURITY_DESCRIPTOR *Descriptor)
+{
+    ULONG Length = 0;
+    ULONG Attempt;
+    NTSTATUS Status;
+
+    *Descriptor = NULL;
+    Status = NtQuerySecurityObject(Handle, Information, NULL, 0, &Length);
+    for (Attempt = 0; Status == STATUS_BUFFER_TOO_SMALL && Attempt < 3; ++Attempt)
+    {
+        ULONG Capacity = Length;
+        *Descriptor = HeapAlloc(GetProcessHeap(), 0, Capacity);
+        if (!*Descriptor) return STATUS_INSUFFICIENT_RESOURCES;
+        Status = NtQuerySecurityObject(Handle, Information, *Descriptor, Capacity, &Length);
+        if (NT_SUCCESS(Status)) return Status;
+        HeapFree(GetProcessHeap(), 0, *Descriptor);
+        *Descriptor = NULL;
+    }
+    return Status;
+}
+
+static NTSTATUS
+AccpSetFileSecurity(HANDLE Handle,
+                   SECURITY_INFORMATION Information,
+                   PSECURITY_DESCRIPTOR Descriptor)
+{
+    GENERIC_MAPPING Mapping = {FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+                               FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
+    PSECURITY_DESCRIPTOR Current = NULL, Parent = NULL, Inherited = NULL;
+    POBJECT_NAME_INFORMATION Name = NULL;
+    SECURITY_DESCRIPTOR Creator, Result;
+    SECURITY_DESCRIPTOR_CONTROL Control, InheritedControl;
+    const SECURITY_DESCRIPTOR_CONTROL DaclControl = SE_DACL_PRESENT | SE_DACL_DEFAULTED |
+        SE_DACL_AUTO_INHERIT_REQ | SE_DACL_AUTO_INHERITED | SE_DACL_PROTECTED;
+    FILE_STANDARD_INFORMATION Standard;
+    struct
+    {
+        ULONG Length;
+        WCHAR Name[2];
+    } FileName;
+    IO_STATUS_BLOCK IoStatus;
+    OBJECT_ATTRIBUTES Attributes;
+    UNICODE_STRING ParentName;
+    HANDLE ParentHandle = NULL;
+    PACL Dacl;
+    BOOLEAN Present, Defaulted;
+    ULONG Length, Revision, Attempt;
+    NTSTATUS Status;
+
+    if (!(Information & DACL_SECURITY_INFORMATION) ||
+        (Information & PROTECTED_DACL_SECURITY_INFORMATION))
+        return NtSetSecurityObject(Handle, Information, Descriptor);
+
+    Status = RtlGetDaclSecurityDescriptor(Descriptor, &Present, &Dacl, &Defaulted);
+    if (!NT_SUCCESS(Status)) return Status;
+    if (!Present || !Dacl)
+        return NtSetSecurityObject(Handle, Information, Descriptor);
+
+    Status = AccpQueryFileSecurity(Handle, OWNER_SECURITY_INFORMATION |
+                                  GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                                  &Current);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Status = RtlGetControlSecurityDescriptor(Current, &Control, &Revision);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    if ((Control & SE_DACL_PROTECTED) &&
+        !(Information & UNPROTECTED_DACL_SECURITY_INFORMATION)) goto Direct;
+
+    Status = NtQueryInformationFile(Handle, &IoStatus, &Standard,
+                                    sizeof(Standard), FileStandardInformation);
+    if (!NT_SUCCESS(Status)) goto Direct;
+    Status = NtQueryInformationFile(Handle, &IoStatus, &FileName,
+                                    sizeof(FileName), FileNameInformation);
+    if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW) goto Direct;
+    if (!FileName.Length ||
+        (FileName.Name[0] == L'\\' &&
+         (FileName.Length == sizeof(WCHAR) || FileName.Name[1] == L':'))) goto Direct;
+
+    Length = 0;
+    Status = NtQueryObject(Handle, ObjectNameInformation, NULL, 0, &Length);
+    for (Attempt = 0; Attempt < 3 &&
+         (Status == STATUS_INFO_LENGTH_MISMATCH || Status == STATUS_BUFFER_TOO_SMALL ||
+          Status == STATUS_BUFFER_OVERFLOW); ++Attempt)
+    {
+        HeapFree(GetProcessHeap(), 0, Name);
+        Name = HeapAlloc(GetProcessHeap(), 0, Length);
+        if (!Name)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        Status = NtQueryObject(Handle, ObjectNameInformation, Name, Length, &Length);
+    }
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    ParentName = Name->Name;
+    while (ParentName.Length && ParentName.Buffer[ParentName.Length / sizeof(WCHAR) - 1] == L'\\')
+        ParentName.Length -= sizeof(WCHAR);
+    while (ParentName.Length && ParentName.Buffer[ParentName.Length / sizeof(WCHAR) - 1] != L'\\')
+        ParentName.Length -= sizeof(WCHAR);
+    if (!ParentName.Length) goto Direct;
+
+    InitializeObjectAttributes(&Attributes, &ParentName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenFile(&ParentHandle, READ_CONTROL | SYNCHRONIZE, &Attributes, &IoStatus,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
+    if (!NT_SUCCESS(Status)) goto Direct;
+    Status = AccpQueryFileSecurity(ParentHandle, DACL_SECURITY_INFORMATION, &Parent);
+    if (!NT_SUCCESS(Status)) goto Direct;
+
+    RtlCreateSecurityDescriptor(&Creator, SECURITY_DESCRIPTOR_REVISION);
+    Status = RtlGetOwnerSecurityDescriptor((Information & OWNER_SECURITY_INFORMATION) ?
+                                           Descriptor : Current, &Creator.Owner, &Defaulted);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Status = RtlGetGroupSecurityDescriptor((Information & GROUP_SECURITY_INFORMATION) ?
+                                           Descriptor : Current, &Creator.Group, &Defaulted);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Creator.Dacl = Dacl;
+    Creator.Control |= SE_DACL_PRESENT | SE_SACL_PRESENT | SE_SACL_PROTECTED;
+    Status = RtlNewSecurityObjectEx(Parent, &Creator, &Inherited, NULL, Standard.Directory,
+                                    SEF_DACL_AUTO_INHERIT | SEF_AVOID_OWNER_CHECK |
+                                    SEF_AVOID_PRIVILEGE_CHECK | SEF_AVOID_OWNER_RESTRICTION,
+                                    NULL, &Mapping);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+
+    RtlCreateSecurityDescriptor(&Result, SECURITY_DESCRIPTOR_REVISION);
+    Status = RtlGetControlSecurityDescriptor(Descriptor, &Control, &Revision);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Status = RtlGetControlSecurityDescriptor(Inherited, &InheritedControl, &Revision);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Result.Control = (Control & ~(SE_SELF_RELATIVE | DaclControl)) |
+                     (InheritedControl & DaclControl);
+    Result.Sbz1 = ((PISECURITY_DESCRIPTOR)Descriptor)->Sbz1;
+    Status = RtlGetOwnerSecurityDescriptor(Descriptor, &Result.Owner, &Defaulted);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Status = RtlGetGroupSecurityDescriptor(Descriptor, &Result.Group, &Defaulted);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Status = RtlGetDaclSecurityDescriptor(Inherited, &Present, &Result.Dacl, &Defaulted);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Status = RtlGetSaclSecurityDescriptor(Descriptor, &Present, &Result.Sacl, &Defaulted);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Status = NtSetSecurityObject(Handle, Information, &Result);
+    goto Cleanup;
+
+Direct:
+    if (Status == STATUS_INSUFFICIENT_RESOURCES || Status == STATUS_NO_MEMORY ||
+        Status == STATUS_BUFFER_TOO_SMALL || Status == STATUS_INFO_LENGTH_MISMATCH)
+        goto Cleanup;
+    Status = NtSetSecurityObject(Handle, Information, Descriptor);
+Cleanup:
+    if (Inherited) RtlDeleteSecurityObject(&Inherited);
+    if (ParentHandle) NtClose(ParentHandle);
+    HeapFree(GetProcessHeap(), 0, Name);
+    HeapFree(GetProcessHeap(), 0, Parent);
+    HeapFree(GetProcessHeap(), 0, Current);
+    return Status;
+}
 
 /**********************************************************************
  * AccRewriteSetHandleRights				EXPORTED
@@ -869,7 +1080,11 @@ AccRewriteSetHandleRights(HANDLE handle,
 
         case SE_FILE_OBJECT:
             /* FIXME - handle console handles? */
+            Status = AccpSetFileSecurity(handle, SecurityInfo, pSecurityDescriptor);
+            if (!NT_SUCCESS(Status)) Ret = RtlNtStatusToDosError(Status);
+            break;
         case SE_KERNEL_OBJECT:
+        case SE_WMIGUID_OBJECT:
         {
             Status = NtSetSecurityObject(handle,
                                          SecurityInfo,
@@ -903,12 +1118,14 @@ AccRewriteSetHandleRights(HANDLE handle,
             break;
         }
 
-        default:
-        {
-            UNIMPLEMENTED;
+        case SE_PRINTER:
+        case SE_LMSHARE:
             Ret = ERROR_CALL_NOT_IMPLEMENTED;
             break;
-        }
+
+        default:
+            Ret = ERROR_INVALID_PARAMETER;
+            break;
     }
 
 
@@ -944,6 +1161,9 @@ AccpOpenNamedObject(LPWSTR pObjectName,
             {
                 SetSecurityAccessMask(SecurityInfo,
                                       (PDWORD)&DesiredAccess);
+                if (ObjectType == SE_FILE_OBJECT &&
+                    (SecurityInfo & DACL_SECURITY_INFORMATION))
+                    DesiredAccess |= READ_CONTROL | FILE_READ_ATTRIBUTES;
             }
             else
             {
@@ -1003,11 +1223,11 @@ AccpOpenNamedObject(LPWSTR pObjectName,
                                        NULL);
 
             Status = NtOpenFile(Handle,
-                                DesiredAccess | SYNCHRONIZE,
+                                DesiredAccess,
                                 &ObjectAttributes,
                                 &IoStatusBlock,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                FILE_SYNCHRONOUS_IO_NONALERT);
+                                0);
 
             RtlFreeHeap(RtlGetProcessHeap(),
                         0,
@@ -1336,30 +1556,23 @@ AccpAppendKeptAces(PACL OldAcl,
                    PACL NewAcl,
                    const BOOLEAN *pKeepAce,
                    DWORD AceCount,
-                   BOOLEAN Audit,
-                   BOOLEAN Denied)
+                   PDWORD Index,
+                   BOOLEAN StopAtAllowed)
 {
     DWORD i;
     PACE_HEADER pAce;
-    BOOLEAN IsAudit, IsDenied;
 
     if (!OldAcl)
         return TRUE;
 
-    for (i = 0; i < AceCount; i++)
+    for (i = *Index; i < AceCount; *Index = ++i)
     {
         if (!pKeepAce[i])
             continue;
         if (!GetAce(OldAcl, i, (PVOID*)&pAce))
             return FALSE;
-        IsAudit = (pAce->AceType >= SYSTEM_AUDIT_ACE_TYPE && pAce->AceType != ACCESS_ALLOWED_OBJECT_ACE_TYPE &&
-                   pAce->AceType != ACCESS_DENIED_OBJECT_ACE_TYPE && pAce->AceType != ACCESS_ALLOWED_CALLBACK_ACE_TYPE &&
-                   pAce->AceType != ACCESS_DENIED_CALLBACK_ACE_TYPE && pAce->AceType != ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE &&
-                   pAce->AceType != ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE);
-        IsDenied = (pAce->AceType == ACCESS_DENIED_ACE_TYPE || pAce->AceType == ACCESS_DENIED_OBJECT_ACE_TYPE ||
-                    pAce->AceType == ACCESS_DENIED_CALLBACK_ACE_TYPE || pAce->AceType == ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE);
-        if (IsAudit != Audit || (!Audit && IsDenied != Denied))
-            continue;
+        if (StopAtAllowed && AccpGetAceAccessMode(pAce) == GRANT_ACCESS)
+            break;
         if (!AddAce(NewAcl, NewAcl->AclRevision, MAXDWORD, pAce, pAce->AceSize))
             return FALSE;
     }
@@ -1392,11 +1605,15 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     BOOL bRet;
     DWORD LastErr;
     DWORD Ret = ERROR_SUCCESS;
+    DWORD KeptAceIndex = 0;
 
     /* save the last error code */
     LastErr = GetLastError();
 
     *NewAcl = NULL;
+
+    if (!cCountOfExplicitEntries && !OldAcl)
+        goto Cleanup;
 
     /* Get information about previous ACL */
     if (OldAcl)
@@ -1457,6 +1674,11 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
                     }
 
                     pSid2 = AccpGetAceSid(pAce);
+                    if (pListOfExplicitEntries[i].grfAccessMode == REVOKE_ACCESS &&
+                        AccpGetAceAccessMode(pAce) != GRANT_ACCESS &&
+                        AccpGetAceAccessMode(pAce) != SET_AUDIT_SUCCESS &&
+                        AccpGetAceAccessMode(pAce) != SET_AUDIT_FAILURE)
+                        continue;
                     if (RtlEqualSid(pSid1, pSid2))
                     {
                         pKeepAce[j] = FALSE;
@@ -1509,11 +1731,6 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     /* FIXME */
 
     /* 1b) Existing audit entries */
-    if (!AccpAppendKeptAces(OldAcl, pNew, pKeepAce, SizeInformation.AceCount, TRUE, FALSE))
-    {
-        Ret = GetLastError();
-        goto Cleanup;
-    }
 
     /* 2a) New denied entries (DENY_ACCESS) */
     for (i = 0; i < cCountOfExplicitEntries; i++)
@@ -1555,7 +1772,7 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     }
 
     /* 2b) Existing denied entries */
-    if (!AccpAppendKeptAces(OldAcl, pNew, pKeepAce, SizeInformation.AceCount, FALSE, TRUE))
+    if (!AccpAppendKeptAces(OldAcl, pNew, pKeepAce, SizeInformation.AceCount, &KeptAceIndex, TRUE))
     {
         Ret = GetLastError();
         goto Cleanup;
@@ -1602,7 +1819,7 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     }
 
     /* 3b) Existing allow entries */
-    if (!AccpAppendKeptAces(OldAcl, pNew, pKeepAce, SizeInformation.AceCount, FALSE, FALSE))
+    if (!AccpAppendKeptAces(OldAcl, pNew, pKeepAce, SizeInformation.AceCount, &KeptAceIndex, FALSE))
     {
         Ret = GetLastError();
         goto Cleanup;
@@ -1847,4 +2064,3 @@ DllMain(IN HINSTANCE hinstDLL,
     }
     return TRUE;
 }
-
