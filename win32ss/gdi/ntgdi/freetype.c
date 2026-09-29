@@ -177,9 +177,14 @@ FontLink_LoadDefaultCharset(VOID)
     return STATUS_SUCCESS;
 }
 
+static void SharedFace_AddRef(PSHARED_FACE Ptr);
+static void SharedFace_Release(PSHARED_FACE Ptr, BOOL bDoLock);
+
 static inline VOID
 FontLink_Destroy(_Inout_ PFONTLINK pLink)
 {
+    if (pLink->SharedFace)
+        SharedFace_Release(pLink->SharedFace, FALSE);
     ExFreePoolWithTag(pLink, TAG_FONT);
 }
 
@@ -401,6 +406,7 @@ FontLink_PrepareFontInfo(
 
     pFontGDI = ObjToGDI(pFontObj, FONT);
     pFontLink->SharedFace = pFontGDI->SharedFace;
+    SharedFace_AddRef(pFontLink->SharedFace);
 
     // FontLink uses family name
     RtlInitUnicodeString(&FaceName, pFontLink->LogFont.lfFaceName);
@@ -571,6 +577,50 @@ SharedFace_Release(PSHARED_FACE Ptr, BOOL bDoLock)
         IntUnLockFreeType();
 }
 
+
+static PFONTGDI
+IntCloneFontGdi(PFONTGDI Source)
+{
+    PFONTGDI Font;
+    SIZE_T Size;
+
+    ASSERT_FREETYPE_LOCK_HELD();
+    Font = EngAllocMem(0, sizeof(*Font), GDITAG_RFONT);
+    if (!Font)
+        return NULL;
+    *Font = *Source;
+    Font->Filename = NULL;
+    if (Source->Filename)
+    {
+        Size = (wcslen(Source->Filename) + 1) * sizeof(WCHAR);
+        Font->Filename = ExAllocatePoolWithTag(PagedPool, Size, GDITAG_PFF);
+        if (!Font->Filename)
+        {
+            EngFreeMem(Font);
+            return NULL;
+        }
+        RtlCopyMemory(Font->Filename, Source->Filename, Size);
+    }
+    SharedFace_AddRef(Font->SharedFace);
+    return Font;
+}
+
+VOID
+NTAPI
+LFONT_vCleanup(PVOID ObjectBody)
+{
+    PTEXTOBJ TextObj = ObjectBody;
+    PFONTGDI Font;
+
+    if (!TextObj->Font)
+        return;
+    Font = ObjToGDI(TextObj->Font, FONT);
+    TextObj->Font = NULL;
+    if (Font->Filename)
+        ExFreePoolWithTag(Font->Filename, GDITAG_PFF);
+    SharedFace_Release(Font->SharedFace, TRUE);
+    EngFreeMem(Font);
+}
 
 static VOID FASTCALL
 CleanupFontEntryEx(PFONT_ENTRY FontEntry, PFONTGDI FontGDI)
@@ -1205,7 +1255,20 @@ FontLink_Chain_Init(
     RtlZeroMemory(pChain, sizeof(*pChain));
     pChain->pBaseTextObj = pTextObj;
     pChain->pDefFace = face;
+    InitializeListHead(&pChain->FontLinkList);
     ASSERT(!FontLink_Chain_IsPopulated(pChain));
+}
+
+static VOID
+FontLink_Chain_Destroy(PFONTLINK_CHAIN pChain)
+{
+    ASSERT_FREETYPE_LOCK_HELD();
+    while (!IsListEmpty(&pChain->FontLinkList))
+    {
+        PFONTLINK Link = CONTAINING_RECORD(RemoveHeadList(&pChain->FontLinkList),
+                                           FONTLINK, ListEntry);
+        FontLink_Destroy(Link);
+    }
 }
 
 // The default FontLink data
@@ -1943,6 +2006,7 @@ IntGdiLoadFontByIndexFromMemory(PGDI_LOAD_FONT pLoadFont, FT_Long FontIndex)
     }
 
     FaceCount += IntGdiLoadFontsFromMemory(pLoadFont, SharedFace, FontIndex, -1, FALSE);
+    SharedFace_Release(SharedFace, TRUE);
     return FaceCount;
 }
 
@@ -6132,6 +6196,7 @@ TextIntGetTextExtentPoint(
     ASSERT(FontGDI->Magic == FONTGDI_MAGIC);
     ascender = FontGDI->tmAscent; /* Units above baseline */
     descender = FontGDI->tmDescent; /* Units below baseline */
+    FontLink_Chain_Destroy(&Chain);
     IntUnLockFreeType();
 
     if (bVerticalWriting)
@@ -7224,13 +7289,21 @@ TextIntRealizeFont(HFONT FontHandle, PTEXTOBJ pTextObj)
     /* Search system fonts */
     FindBestFontFromList(&TextObj->Font, &MatchPenalty, &SubstitutedLogFont,
                          &g_FontListHead);
+    if (TextObj->Font)
+    {
+        PFONTGDI Font = IntCloneFontGdi(ObjToGDI(TextObj->Font, FONT));
+        TextObj->Font = Font ? GDIToObj(Font, FONT) : NULL;
+        if (!Font)
+            Status = STATUS_NO_MEMORY;
+    }
     IntUnLockFreeType();
 
     if (NULL == TextObj->Font)
     {
         DPRINT1("Request font %S not found, no fonts loaded at all\n",
                 pLogFont->lfFaceName);
-        Status = STATUS_NOT_FOUND;
+        if (NT_SUCCESS(Status))
+            Status = STATUS_NOT_FOUND;
     }
     else
     {
@@ -8123,6 +8196,15 @@ IntExtTextOutW(
     FontGDI = ObjToGDI(FontObj, FONT);
     ASSERT(FontGDI);
 
+    if (pdcattr->flTextAlign & TA_UPDATECP)
+    {
+        if (!TextIntGetTextExtentPoint(dc, TextObj, L" ", 1, 0, NULL, NULL, &spaceWidth, 0))
+        {
+            bResult = FALSE;
+            goto Cleanup;
+        }
+    }
+
     IntLockFreeType();
     Cache.Hashed.Face = face = FontGDI->SharedFace->Face;
 
@@ -8194,6 +8276,7 @@ IntExtTextOutW(
         if (!IntGetTextDisposition(&DeltaX64, &DeltaY64, String, Count, Dx, &Cache,
                                    fuOptions, bNoTransform, &Chain))
         {
+            FontLink_Chain_Destroy(&Chain);
             IntUnLockFreeType();
             bResult = FALSE;
             goto Cleanup;
@@ -8300,10 +8383,7 @@ IntExtTextOutW(
         if ((pdcattr->flTextAlign & TA_UPDATECP) && glyphSize.cx == 0 &&
             (ch0 == L' ' || ch0 == nbsp)) // Space chars needing x-dim widths
         { 
-            IntUnLockFreeType();
             /* Get the width of the space character */
-            TextIntGetTextExtentPoint(dc, TextObj, L" ", 1, 0, NULL, NULL, &spaceWidth, 0);
-            IntLockFreeType();
             glyphSize.cx = IntFontScaleValue(&Scale, spaceWidth.cx, TRUE, TRUE);
             realglyph->left = 0;
         }
@@ -8508,6 +8588,7 @@ IntExtTextOutW(
         }
     }
 
+    FontLink_Chain_Destroy(&Chain);
     IntUnLockFreeType();
 
     EXLATEOBJ_vCleanup(&exloRGB2Dst);
@@ -9070,14 +9151,15 @@ GreGetGlyphIndicesW(
 
     PFONTGDI FontGDI = ObjToGDI(TextObj->Font, FONT);
     FT_Face Face = FontGDI->SharedFace->Face;
-    TEXTOBJ_UnlockText(TextObj);
 
     if (cwc == 0)
     {
+        DWORD GlyphCount = Face->num_glyphs;
+        TEXTOBJ_UnlockText(TextObj);
         // Only the exceptional query case (pwc == NULL && pgi == NULL && iMode == 0)
         // should return the number of glyphs. All other cwc == 0 cases must fail.
         if (!pwc && !pgi && !iMode)
-            return Face->num_glyphs; // Returns number of glyphs
+            return GlyphCount; // Returns number of glyphs
 
         return GDI_ERROR;
     }
@@ -9102,5 +9184,6 @@ GreGetGlyphIndicesW(
     }
     IntUnLockFreeType();
 
+    TEXTOBJ_UnlockText(TextObj);
     return cwc;
 }

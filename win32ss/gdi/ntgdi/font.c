@@ -82,7 +82,6 @@ GreGetKerningPairs(
   }
 
   FontGDI = ObjToGDI(TextObj->Font, FONT);
-  TEXTOBJ_UnlockText(TextObj);
 
   Count = ftGdiGetKerningPairs(FontGDI,0,NULL);
 
@@ -90,12 +89,14 @@ GreGetKerningPairs(
   {
      if (Count > NumPairs)
      {
+        TEXTOBJ_UnlockText(TextObj);
         EngSetLastError(ERROR_INSUFFICIENT_BUFFER);
         return 0;
      }
      pKP = ExAllocatePoolWithTag(PagedPool, Count * sizeof(KERNINGPAIR), GDITAG_TEXT);
      if (!pKP)
      {
+        TEXTOBJ_UnlockText(TextObj);
         EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return 0;
      }
@@ -105,6 +106,7 @@ GreGetKerningPairs(
 
      ExFreePoolWithTag(pKP,GDITAG_TEXT);
   }
+  TEXTOBJ_UnlockText(TextObj);
   return Count;
 }
 
@@ -306,6 +308,8 @@ FontGetObject(
     ASSERT(plfont);
     plf = &plfont->logfont;
 
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&plfont->lock);
     if (!(plfont->fl & TEXTOBJECT_INIT))
     {
         NTSTATUS Status;
@@ -317,6 +321,9 @@ FontGetObject(
             DPRINT1("FontGetObject(TextIntRealizeFont) Status = 0x%lx\n", Status);
         }
     }
+
+    ExReleasePushLockExclusive(&plfont->lock);
+    KeLeaveCriticalRegion();
 
     /* If buffer is NULL, only the size is requested */
     if (pvBuffer == NULL) return sizeof(LOGFONTW);
@@ -1052,7 +1059,6 @@ NtGdiGetKerningPairs(
   }
 
   FontGDI = ObjToGDI(TextObj->Font, FONT);
-  TEXTOBJ_UnlockText(TextObj);
 
   Count = ftGdiGetKerningPairs(FontGDI,0,NULL);
 
@@ -1060,12 +1066,14 @@ NtGdiGetKerningPairs(
   {
      if (Count > NumPairs)
      {
+        TEXTOBJ_UnlockText(TextObj);
         EngSetLastError(ERROR_INSUFFICIENT_BUFFER);
         return 0;
      }
      pKP = ExAllocatePoolWithTag(PagedPool, Count * sizeof(KERNINGPAIR), GDITAG_TEXT);
      if (!pKP)
      {
+        TEXTOBJ_UnlockText(TextObj);
         EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return 0;
      }
@@ -1087,6 +1095,7 @@ NtGdiGetKerningPairs(
      }
      ExFreePoolWithTag(pKP,GDITAG_TEXT);
   }
+  TEXTOBJ_UnlockText(TextObj);
   return Count;
 }
 
@@ -1138,22 +1147,28 @@ NtGdiGetOutlineTextMetricsInternalW(
   lfWidth = TextObj->logfont.elfEnumLogfontEx.elfLogFont.lfWidth;
   lfHeight = TextObj->logfont.elfEnumLogfontEx.elfLogFont.lfHeight;
   TextIntUpdateSize(TextObj, FontGDI, TRUE);
-  TEXTOBJ_UnlockText(TextObj);
   Size = IntGetOutlineTextMetrics(FontGDI, 0, NULL, FALSE);
-  if (!otm) return Size;
+  if (!otm)
+  {
+      TEXTOBJ_UnlockText(TextObj);
+      return Size;
+  }
   if (Size > Data)
   {
+      TEXTOBJ_UnlockText(TextObj);
       EngSetLastError(ERROR_INSUFFICIENT_BUFFER);
       return 0;
   }
   potm = ExAllocatePoolWithTag(PagedPool, Size, GDITAG_TEXT);
   if (!potm)
   {
+      TEXTOBJ_UnlockText(TextObj);
       EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
       return 0;
   }
   RtlZeroMemory(potm, Size);
   IntGetOutlineTextMetricsScaled(FontGDI, &Scale, lfWidth, lfHeight, Size, potm);
+  TEXTOBJ_UnlockText(TextObj);
 
   _SEH2_TRY
   {

@@ -169,7 +169,7 @@ apfnCleanup[] =
     GDIOBJ_vCleanup,   /* 07 GDIObjType_PATH_TYPE */
     PALETTE_vCleanup,  /* 08 GDIObjType_PAL_TYPE */
     GDIOBJ_vCleanup,   /* 09 GDIObjType_ICMLCS_TYPE */
-    GDIOBJ_vCleanup,   /* 0a GDIObjType_LFONT_TYPE */
+    LFONT_vCleanup,    /* 0a GDIObjType_LFONT_TYPE */
     NULL,              /* 0b GDIObjType_RFONT_TYPE, unused */
     NULL,              /* 0c GDIObjType_PFE_TYPE, unused */
     NULL,              /* 0d GDIObjType_PFT_TYPE, unused */
