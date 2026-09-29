@@ -83,7 +83,7 @@ PVOID HalpGicLpiPendingRaw[MAXIMUM_PROCESSORS] = {0};
 static volatile LONG HalpGicLpiCpuTableState[MAXIMUM_PROCESSORS] = {0};
 
 // Reverse map LPI -> (DeviceId, EventId) so a dropped LPI can be re-pended via the ITS INT command (Linux its_send_int). Populated at MAPTI, cleared at unmap.
-typedef struct _HALP_GIC_LPI_TARGET { ULONG DeviceId; ULONG EventId; UCHAR Valid; } HALP_GIC_LPI_TARGET;
+typedef struct _HALP_GIC_LPI_TARGET { ULONG DeviceId; ULONG EventId; ULONG CollectionId; UCHAR Valid; } HALP_GIC_LPI_TARGET;
 static HALP_GIC_LPI_TARGET HalpGicLpiTarget[HAL_ARM64_LPI_COUNT] = {0};
 
 /*
@@ -565,6 +565,18 @@ HalpGicItsBuildIntCmd(
 }
 
 static VOID
+HalpGicItsBuildInvCmd(
+    _Out_writes_(4) UINT64 *Cmd,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId)
+{
+    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
+    Cmd[0] = (UINT64)GITS_CMD_INV;
+    Cmd[0] |= ((UINT64)DeviceId) << 32;
+    Cmd[1] = (UINT64)EventId;
+}
+
+static VOID
 HalpGicItsBuildDiscardCmd(
     _Out_writes_(4) UINT64 *Cmd,
     _In_ ULONG DeviceId,
@@ -692,6 +704,19 @@ HalpGicItsSendIntOnNode(
 
 static
 BOOLEAN
+HalpGicItsSendInvOnNode(
+    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId)
+{
+    UINT64 Cmd[4];
+
+    HalpGicItsBuildInvCmd(Cmd, DeviceId, EventId);
+    return HalpGicItsPostCommandOnNode(ItsNode, Cmd);
+}
+
+static
+BOOLEAN
 HalpGicItsSendDiscardOnNode(
     _Inout_ PHALP_GIC_ITS_NODE ItsNode,
     _In_ ULONG DeviceId,
@@ -728,32 +753,26 @@ HalpGicItsSendSyncOnNode(
  */
 
 static VOID
-HalpGicItsInvalidateLpiConfig(VOID)
+HalpGicItsInvalidateLpi(
+    _In_ ULONG Index)
 {
-    ULONG Node;
+    PHALP_GIC_ITS_NODE ItsNode;
+    ULONG DeviceId;
+    ULONG EventId;
+    ULONG Cpu;
 
-    for (Node = 0; Node < HalpGicItsNodeCount; ++Node)
-    {
-        PHALP_GIC_ITS_NODE ItsNode = &HalpGicItsNodes[Node];
-        ULONG Cpu;
+    if (Index >= HAL_ARM64_LPI_COUNT || !HalpGicLpiTarget[Index].Valid)
+        return;
 
-        if (!ItsNode->Enabled)
-            continue;
+    DeviceId = HalpGicLpiTarget[Index].DeviceId;
+    EventId = HalpGicLpiTarget[Index].EventId;
+    Cpu = HalpGicLpiTarget[Index].CollectionId;
+    ItsNode = HalpGicItsSelectNodeForDevice(DeviceId);
+    if (!ItsNode || !ItsNode->Enabled || Cpu >= MAXIMUM_PROCESSORS)
+        return;
 
-        for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; ++Cpu)
-        {
-            UINT64 Cmd[4];
-
-            if (!ItsNode->CollectionMapped[Cpu])
-                continue;
-
-            RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-            Cmd[0] = (UINT64)GITS_CMD_INVALL;
-            Cmd[2] = (UINT64)(Cpu & 0xFFFFu); /* ICID = collection = CPU */
-            if (HalpGicItsPostCommandOnNode(ItsNode, Cmd))
-                HalpGicItsSendSyncOnNode(ItsNode, Cpu, ItsNode->CollectionTarget[Cpu]);
-        }
-    }
+    if (HalpGicItsSendInvOnNode(ItsNode, DeviceId, EventId))
+        HalpGicItsSendSyncOnNode(ItsNode, Cpu, ItsNode->CollectionTarget[Cpu]);
 }
 
 VOID
@@ -787,7 +806,7 @@ HalpGicItsEnableLpi(
      * its old priority. Invalidate all mapped collections because an MSI can be
      * routed to a CPU selected from affinity, not necessarily the current CPU.
      */
-    HalpGicItsInvalidateLpiConfig();
+    HalpGicItsInvalidateLpi(Index);
 }
 
 VOID
@@ -812,7 +831,7 @@ HalpGicItsDisableLpi(
         } while ((UCHAR)_InterlockedCompareExchange8((volatile char *)&HalpGicLpiConfig[Index], (char)New, (char)Old) != Old);
     }
     HalpArm64CleanDcacheRange(&HalpGicLpiConfig[Index], sizeof(UCHAR));
-    HalpGicItsInvalidateLpiConfig();
+    HalpGicItsInvalidateLpi(Index);
 }
 
 VOID
@@ -1905,7 +1924,9 @@ HalpGicItsAllocateMsi(
     {
         HalpGicLpiTarget[AllocatedLpi - HAL_ARM64_LPI_BASE].DeviceId = DeviceId;
         HalpGicLpiTarget[AllocatedLpi - HAL_ARM64_LPI_BASE].EventId = EventId;
+        HalpGicLpiTarget[AllocatedLpi - HAL_ARM64_LPI_BASE].CollectionId = TargetCpu;
         HalpGicLpiTarget[AllocatedLpi - HAL_ARM64_LPI_BASE].Valid = 1;
+        HalpGicItsInvalidateLpi(AllocatedLpi - HAL_ARM64_LPI_BASE);
     }
 
     /* Return MSI info */
