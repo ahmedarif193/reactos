@@ -9,6 +9,8 @@
 #include <win32k.h>
 DBG_DEFAULT_CHANNEL(UserScrollbar);
 
+static LONG FASTCALL IntScrollGetObjectId(INT SBType);
+
 /* Definitions for scrollbar hit testing [See SCROLLBARINFO in MSDN] */
 #define SCROLL_NOWHERE		0x00    /* Outside the scrollbar */
 #define SCROLL_TOP_ARROW	0x01    /* Top or left arrow */
@@ -622,7 +624,12 @@ co_IntSetScrollInfo(PWND Window, INT nBar, LPCSCROLLINFO lpsi, BOOL bRedraw)
    {
       if (action & SA_SSI_SHOW)
          if (co_UserShowScrollBar(Window, nBar, TRUE, TRUE))
+         {
+            if (bRedraw)
+               IntNotifyWinEvent(EVENT_OBJECT_VALUECHANGE, Window, IntScrollGetObjectId(nBar),
+                                 CHILDID_SELF, WEF_SETBYWNDPTI);
             return lpsi->fMask & SIF_PREVIOUSPOS ? OldPos : pSBData->pos; // SetWindowPos() already did the painting
+         }
 
       switch (nBar)
       {
@@ -671,6 +678,9 @@ co_IntSetScrollInfo(PWND Window, INT nBar, LPCSCROLLINFO lpsi, BOOL bRedraw)
                co_UserRedrawWindow(Window, &UpdateRect, 0, RDW_INVALIDATE | RDW_FRAME);
          }
       }
+      if (bRedraw && (bVisible || nBar == SB_CTL))
+         IntNotifyWinEvent(EVENT_OBJECT_VALUECHANGE, Window, IntScrollGetObjectId(nBar),
+                           CHILDID_SELF, WEF_SETBYWNDPTI);
    }
 
    if (bChangeParams && (nBar == SB_HORZ || nBar == SB_VERT) && (lpsi->fMask & SIF_DISABLENOSCROLL))

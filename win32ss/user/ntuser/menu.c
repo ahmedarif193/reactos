@@ -4527,7 +4527,7 @@ static BOOL FASTCALL MENU_InitTracking(PWND pWnd, PMENU Menu, BOOL bPopup, UINT 
 
     IntNotifyWinEvent( EVENT_SYSTEM_MENUSTART,
                        pWnd,
-                       Menu->fFlags & MNF_SYSMENU ? OBJID_SYSMENU : OBJID_MENU,
+                       bPopup ? OBJID_WINDOW : (Menu->fFlags & MNF_SYSMENU ? OBJID_SYSMENU : OBJID_MENU),
                        CHILDID_SELF, 0);
     return TRUE;
 }

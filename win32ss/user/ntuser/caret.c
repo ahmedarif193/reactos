@@ -106,7 +106,7 @@ CaretSystemTimerProc(HWND hwnd,
    pti = PsGetCurrentThreadWin32Thread();
    ThreadQueue = pti->MessageQueue;
 
-   if (ThreadQueue->CaretInfo.hWnd != hwnd)
+   if (ThreadQueue->CaretInfo.hWnd != hwnd || !ThreadQueue->CaretInfo.Visible)
    {
       TRACE("Not the same caret window!\n");
       return;
@@ -143,13 +143,21 @@ BOOL FASTCALL
 co_IntHideCaret(PTHRDCARETINFO CaretInfo)
 {
    PWND pWnd;
-   if(CaretInfo->hWnd && CaretInfo->Visible && CaretInfo->Showing)
+   USER_REFERENCE_ENTRY Ref;
+   if(CaretInfo->hWnd && CaretInfo->Visible)
    {
-      pWnd = UserGetWindowObject(CaretInfo->hWnd);
-      CaretInfo->Showing = 0;
+      pWnd = ValidateHwndNoErr(CaretInfo->hWnd);
+      if (!pWnd)
+         return FALSE;
+      UserRefObjectCo(pWnd, &Ref);
+      if (CaretInfo->Showing)
+      {
+         CaretInfo->Showing = 0;
+         co_IntDrawCaret(pWnd, CaretInfo);
+      }
 
-      co_IntDrawCaret(pWnd, CaretInfo);
       IntNotifyWinEvent(EVENT_OBJECT_HIDE, pWnd, OBJID_CARET, CHILDID_SELF, 0);
+      UserDerefObjectCo(pWnd);
       return TRUE;
    }
    return FALSE;
@@ -160,21 +168,30 @@ co_IntDestroyCaret(PTHREADINFO Win32Thread)
 {
    PUSER_MESSAGE_QUEUE ThreadQueue;
    PWND pWnd;
+   THRDCARETINFO OldCaret;
+   USER_REFERENCE_ENTRY Ref;
    ThreadQueue = Win32Thread->MessageQueue;
 
    if (!ThreadQueue)
       return FALSE;
 
-   pWnd = ValidateHwndNoErr(ThreadQueue->CaretInfo.hWnd);
-   co_IntHideCaret(&ThreadQueue->CaretInfo);
+   OldCaret = ThreadQueue->CaretInfo;
+   pWnd = ValidateHwndNoErr(OldCaret.hWnd);
+   if (pWnd)
+   {
+      UserRefObjectCo(pWnd, &Ref);
+      IntKillTimer(pWnd, IDCARETTIMER, TRUE);
+   }
    ThreadQueue->CaretInfo.Bitmap = (HBITMAP)0;
    ThreadQueue->CaretInfo.hWnd = (HWND)0;
    ThreadQueue->CaretInfo.Size.cx = ThreadQueue->CaretInfo.Size.cy = 0;
    ThreadQueue->CaretInfo.Showing = 0;
    ThreadQueue->CaretInfo.Visible = 0;
+   co_IntHideCaret(&OldCaret);
    if (pWnd)
    {
       IntNotifyWinEvent(EVENT_OBJECT_DESTROY, pWnd, OBJID_CARET, CHILDID_SELF, 0);
+      UserDerefObjectCo(pWnd);
    }
    return TRUE;
 }
@@ -194,6 +211,7 @@ co_IntSetCaretPos(int X, int Y)
    PTHREADINFO pti;
    PWND pWnd;
    PUSER_MESSAGE_QUEUE ThreadQueue;
+   USER_REFERENCE_ENTRY Ref;
 
    pti = PsGetCurrentThreadWin32Thread();
    ThreadQueue = pti->MessageQueue;
@@ -201,9 +219,24 @@ co_IntSetCaretPos(int X, int Y)
    if(ThreadQueue->CaretInfo.hWnd)
    {
       pWnd = UserGetWindowObject(ThreadQueue->CaretInfo.hWnd);
+      if (!pWnd)
+         return FALSE;
       if(ThreadQueue->CaretInfo.Pos.x != X || ThreadQueue->CaretInfo.Pos.y != Y)
       {
-         co_IntHideCaret(&ThreadQueue->CaretInfo);
+         UserRefObjectCo(pWnd, &Ref);
+         if (ThreadQueue->CaretInfo.Showing)
+            co_IntHideCaret(&ThreadQueue->CaretInfo);
+         if (ValidateHwndNoErr(ThreadQueue->CaretInfo.hWnd) != pWnd ||
+             (pWnd->state & WNDS_DESTROYED))
+         {
+            UserDerefObjectCo(pWnd);
+            return TRUE;
+         }
+         if (ThreadQueue->CaretInfo.Showing)
+         {
+            ThreadQueue->CaretInfo.Showing = 0;
+            co_IntDrawCaret(pWnd, &ThreadQueue->CaretInfo);
+         }
          ThreadQueue->CaretInfo.Pos.x = X;
          ThreadQueue->CaretInfo.Pos.y = Y;
          if (ThreadQueue->CaretInfo.Visible)
@@ -212,8 +245,14 @@ co_IntSetCaretPos(int X, int Y)
             co_IntDrawCaret(pWnd, &ThreadQueue->CaretInfo);
          }
 
-         IntSetTimer(pWnd, IDCARETTIMER, gpsi->dtCaretBlink, CaretSystemTimerProc, TMRF_SYSTEM);
+         if (ThreadQueue->CaretInfo.Visible && (INT)gpsi->dtCaretBlink > 0)
+            IntSetTimer(pWnd, IDCARETTIMER, gpsi->dtCaretBlink, CaretSystemTimerProc, TMRF_SYSTEM);
          IntNotifyWinEvent(EVENT_OBJECT_LOCATIONCHANGE, pWnd, OBJID_CARET, CHILDID_SELF, 0);
+         if (ThreadQueue->CaretInfo.Visible && ThreadQueue->CaretInfo.Showing &&
+             ValidateHwndNoErr(ThreadQueue->CaretInfo.hWnd) == pWnd &&
+             !(pWnd->state & WNDS_DESTROYED))
+            IntNotifyWinEvent(EVENT_OBJECT_SHOW, pWnd, OBJID_CARET, CHILDID_SELF, 0);
+         UserDerefObjectCo(pWnd);
       }
       return TRUE;
    }
@@ -245,12 +284,14 @@ BOOL FASTCALL co_UserHideCaret(PWND Window OPTIONAL)
 
    if(ThreadQueue->CaretInfo.Visible)
    {
+      THRDCARETINFO OldCaret = ThreadQueue->CaretInfo;
       PWND pwnd = UserGetWindowObject(ThreadQueue->CaretInfo.hWnd);
-      IntKillTimer(pwnd, IDCARETTIMER, TRUE);
+      if (pwnd)
+         IntKillTimer(pwnd, IDCARETTIMER, TRUE);
 
-      co_IntHideCaret(&ThreadQueue->CaretInfo);
       ThreadQueue->CaretInfo.Visible = 0;
       ThreadQueue->CaretInfo.Showing = 0;
+      co_IntHideCaret(&OldCaret);
    }
 
    return TRUE;
@@ -261,6 +302,7 @@ BOOL FASTCALL co_UserShowCaret(PWND Window OPTIONAL)
    PTHREADINFO pti;
    PUSER_MESSAGE_QUEUE ThreadQueue;
    PWND pWnd = NULL;
+   USER_REFERENCE_ENTRY Ref;
 
    if (Window) ASSERT_REFS_CO(Window);
 
@@ -285,16 +327,16 @@ BOOL FASTCALL co_UserShowCaret(PWND Window OPTIONAL)
       pWnd = ValidateHwndNoErr(ThreadQueue->CaretInfo.hWnd);
       if (!ThreadQueue->CaretInfo.Showing && pWnd)
       {
+         ThreadQueue->CaretInfo.Showing = 1;
+         co_IntDrawCaret(pWnd, &ThreadQueue->CaretInfo);
+         UserRefObjectCo(pWnd, &Ref);
          IntNotifyWinEvent(EVENT_OBJECT_SHOW, pWnd, OBJID_CARET, CHILDID_SELF, 0);
+         UserDerefObjectCo(pWnd);
       }
-      if ((INT)gpsi->dtCaretBlink > 0)
+      if (ThreadQueue->CaretInfo.Visible && (INT)gpsi->dtCaretBlink > 0 &&
+          (pWnd = ValidateHwndNoErr(ThreadQueue->CaretInfo.hWnd)))
       {
           IntSetTimer(pWnd, IDCARETTIMER, gpsi->dtCaretBlink, CaretSystemTimerProc, TMRF_SYSTEM);
-      }
-      else if (ThreadQueue->CaretInfo.Visible)
-      {
-          ThreadQueue->CaretInfo.Showing = 1;
-          co_IntDrawCaret(pWnd, &ThreadQueue->CaretInfo);
       }
    }
    return TRUE;
@@ -314,6 +356,7 @@ NtUserCreateCaret(
    PTHREADINFO pti;
    PUSER_MESSAGE_QUEUE ThreadQueue;
    BOOL Ret = FALSE;
+   USER_REFERENCE_ENTRY Ref;
 
    TRACE("Enter NtUserCreateCaret\n");
    UserEnterExclusive();
@@ -332,10 +375,32 @@ NtUserCreateCaret(
    pti = PsGetCurrentThreadWin32Thread();
    ThreadQueue = pti->MessageQueue;
 
-   if (ThreadQueue->CaretInfo.Visible)
+   if (ThreadQueue->CaretInfo.hWnd)
    {
-      IntKillTimer(Window, IDCARETTIMER, TRUE);
-      co_IntHideCaret(&ThreadQueue->CaretInfo);
+      THRDCARETINFO OldCaret = ThreadQueue->CaretInfo;
+      PWND OldWindow = ValidateHwndNoErr(ThreadQueue->CaretInfo.hWnd);
+      if (OldWindow)
+         IntKillTimer(OldWindow, IDCARETTIMER, TRUE);
+      ThreadQueue->CaretInfo.Visible = 0;
+      ThreadQueue->CaretInfo.Showing = 0;
+      co_IntHideCaret(&OldCaret);
+   }
+
+   if (!(Window = UserGetWindowObject(hWnd)))
+      goto Exit;
+
+   if (ThreadQueue->CaretInfo.hWnd)
+   {
+      PWND OldWindow = ValidateHwndNoErr(ThreadQueue->CaretInfo.hWnd);
+      if (OldWindow)
+      {
+         IntKillTimer(OldWindow, IDCARETTIMER, TRUE);
+         if (ThreadQueue->CaretInfo.Showing)
+         {
+            ThreadQueue->CaretInfo.Showing = 0;
+            co_IntDrawCaret(OldWindow, &ThreadQueue->CaretInfo);
+         }
+      }
    }
 
    ThreadQueue->CaretInfo.hWnd = hWnd;
@@ -361,9 +426,9 @@ NtUserCreateCaret(
    ThreadQueue->CaretInfo.Visible = 0;
    ThreadQueue->CaretInfo.Showing = 0;
 
-   IntSetTimer(Window, IDCARETTIMER, gpsi->dtCaretBlink, CaretSystemTimerProc, TMRF_SYSTEM);
-
+   UserRefObjectCo(Window, &Ref);
    IntNotifyWinEvent(EVENT_OBJECT_CREATE, Window, OBJID_CARET, CHILDID_SELF, 0);
+   UserDerefObjectCo(Window);
 
    Ret = TRUE;
 

@@ -2793,6 +2793,10 @@ NtUserMessageCall(
     DWORD dwType, /* FNID_XX types */
     BOOL Ansi);
 
+#ifndef SW_NORMALNA
+#define SW_NORMALNA 0xCC
+#endif
+
 DWORD
 NTAPI
 NtUserMinMaximize(

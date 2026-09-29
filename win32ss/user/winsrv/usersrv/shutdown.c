@@ -428,9 +428,8 @@ ThreadShutdownNotify(IN PCSR_THREAD CsrThread,
         return FALSE;
     }
 
-    Context->wParam = Flags2;
-    Context->lParam = (0 != (Flags & EWX_CALLER_WINLOGON_LOGOFF) ?
-                       ENDSESSION_LOGOFF : 0);
+    Context->wParam = Flags2 | ((Flags & EWX_CALLER_WINLOGON_LOGOFF) ? ENDSESSION_LOGOFF : 0);
+    Context->lParam = 0;
 
     Context->StartTime = 0;
     Context->UIThread = NULL;

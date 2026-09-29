@@ -30,7 +30,7 @@ IntClientShutdown(IN PWND pWindow,
     HWND *List;
 
     KillTimers = wParam & MCS_ENDSESSION ? TRUE : FALSE;
-    lParams = lParam & (ENDSESSION_LOGOFF | ENDSESSION_CRITICAL | ENDSESSION_CLOSEAPP);
+    lParams = (wParam & ENDSESSION_LOGOFF) | (lParam & (ENDSESSION_CRITICAL | ENDSESSION_CLOSEAPP));
 
     /* First, send end sessions to children */
     List = IntWinListChildren(pWindow);

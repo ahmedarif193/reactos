@@ -185,7 +185,7 @@ co_IntSendDeactivateMessages(HWND hWndPrev, HWND hWnd, BOOL Clear)
       if (co_IntSendMessage(hWndPrev, WM_NCACTIVATE, FALSE, lParam))
       {
          co_IntSendMessage(hWndPrev, WM_ACTIVATE,
-                    MAKEWPARAM(WA_INACTIVE, (WndPrev->style & WS_MINIMIZE) != 0),
+                    MAKEWPARAM(WA_INACTIVE, (WndPrev->style & WS_MINIMIZE) ? 0x20 : 0),
                     (LPARAM)hWnd);
 
          if (WndPrev && Clear)
@@ -249,12 +249,16 @@ IntDeactivateWindow(PTHREADINFO pti, HANDLE tid)
    PWND pwndPrev;
    BOOL InAAPM = FALSE;
    PTHREADINFO ptiCurrent = PsGetCurrentThreadWin32Thread();
+   PUSER_MESSAGE_QUEUE DeactivatedQueue;
 
    if ( !pti->MessageQueue->spwndActive )
    {
       TRACE("IDAW E : Nothing to do, Active is NULL! pti 0x%p tid 0x%p\n",pti,tid);
       return TRUE;
    }
+
+   DeactivatedQueue = pti->MessageQueue;
+   IntReferenceMessageQueue(DeactivatedQueue);
 
    TRACE("IDAW : pti 0x%p tid 0x%p\n",pti,tid);
 
@@ -301,6 +305,7 @@ IntDeactivateWindow(PTHREADINFO pti, HANDLE tid)
       if (!co_IntSendDeactivateMessages(UserHMGetHandle(pwndPrev), 0, TRUE))
       {
          if (InAAPM) pti->TIF_flags &= ~TIF_INACTIVATEAPPMSG;
+         IntDereferenceMessageQueue(DeactivatedQueue);
          if (ptiCurrent != pti)
          {
             IntDereferenceThreadInfo(pti);
@@ -359,6 +364,7 @@ IntDeactivateWindow(PTHREADINFO pti, HANDLE tid)
       if (!co_IntSendDeactivateMessages(UserHMGetHandle(pwndPrev), 0, FALSE))
       {
          if (InAAPM) pti->TIF_flags &= ~TIF_INACTIVATEAPPMSG;
+         IntDereferenceMessageQueue(DeactivatedQueue);
          if (ptiCurrent != pti)
          {
             IntDereferenceThreadInfo(pti);
@@ -399,6 +405,16 @@ IntDeactivateWindow(PTHREADINFO pti, HANDLE tid)
    MsqReleaseModifierKeys(pti->MessageQueue);
 
    if (InAAPM) pti->TIF_flags &= ~TIF_INACTIVATEAPPMSG;
+   if (pti->MessageQueue == DeactivatedQueue &&
+       DeactivatedQueue != gpqForeground &&
+       !(DeactivatedQueue->QF_flags & QF_INDESTROY) &&
+       !DeactivatedQueue->spwndActive &&
+       !DeactivatedQueue->spwndFocus &&
+       !DeactivatedQueue->CaretInfo.hWnd)
+   {
+      IntNotifyWinEvent(EVENT_OBJECT_HIDE, NULL, OBJID_CARET, CHILDID_SELF, 0);
+   }
+   IntDereferenceMessageQueue(DeactivatedQueue);
    if (ptiCurrent != pti)
    {
       IntDereferenceThreadInfo(pti);
@@ -504,6 +520,7 @@ co_IntSendActivateMessages(PWND WindowPrev, PWND Window, BOOL MouseActivate, BOO
    HANDLE OldTID, NewTID;
    PTHREADINFO pti, ptiOld, ptiNew;
    BOOL InAAPM = FALSE;
+   HWND hWndPrev = WindowPrev ? UserHMGetHandle(WindowPrev) : NULL;
 
    //ERR("SendActivateMessages\n");
 
@@ -546,30 +563,6 @@ co_IntSendActivateMessages(PWND WindowPrev, PWND Window, BOOL MouseActivate, BOO
          }
       }
       ////
-      //// CORE-1161 and CORE-6651
-      if (Window->spwndPrev)
-      {
-         HWND *phwndTopLevel, *phwndCurrent;
-         PWND pwndCurrent, pwndDesktop;
-
-         pwndDesktop = co_GetDesktopWindow(Window);//UserGetDesktopWindow();
-         if (Window->spwndParent == pwndDesktop )
-         {
-            phwndTopLevel = IntWinListChildren(pwndDesktop);
-            phwndCurrent = phwndTopLevel;
-            while(*phwndCurrent)
-            {
-                pwndCurrent = UserGetWindowObject(*phwndCurrent);
-
-                if (pwndCurrent && pwndCurrent->spwndOwner == Window )
-                {
-                    co_WinPosSetWindowPos(pwndCurrent, HWND_TOP, 0, 0, 0, 0, SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE|SWP_NOOWNERZORDER);
-                }
-                phwndCurrent++;
-            }
-            ExFreePoolWithTag(phwndTopLevel, USERTAG_WINDOWLIST);
-          }
-      }
       ////
    }
 
@@ -649,13 +642,14 @@ co_IntSendActivateMessages(PWND WindowPrev, PWND Window, BOOL MouseActivate, BOO
 
       co_IntSendMessage( UserHMGetHandle(Window),
                          WM_NCACTIVATE,
-                        (WPARAM)(Window == (gpqForeground ? gpqForeground->spwndActive : NULL)),
-                         0);
+                         Window == (gpqForeground ? gpqForeground->spwndActive : NULL) ?
+                         MAKEWPARAM(WA_ACTIVE, (Window->style & WS_MINIMIZE) ? 0x20 : 0) : 0,
+                         (LPARAM)hWndPrev);
 
       co_IntSendMessage( UserHMGetHandle(Window),
                          WM_ACTIVATE,
-                         MAKEWPARAM(MouseActivate ? WA_CLICKACTIVE : WA_ACTIVE, (Window->style & WS_MINIMIZE) != 0),
-                        (LPARAM)(WindowPrev ? UserHMGetHandle(WindowPrev) : 0));
+                         MAKEWPARAM(MouseActivate ? WA_CLICKACTIVE : WA_ACTIVE, (Window->style & WS_MINIMIZE) ? 0x20 : 0),
+                        (LPARAM)hWndPrev);
 
       if (Window->style & WS_VISIBLE)
          UpdateShellHook(Window);
@@ -1411,6 +1405,15 @@ co_UserSetFocus(PWND Window)
          return 0;
       }
 
+      if ((Window->state & WNDS_DESTROYED) || (Window->state2 & WNDS2_INDESTROY))
+         return 0;
+      for (pwndTop = Window; pwndTop; pwndTop = pwndTop->spwndParent)
+      {
+         if (pwndTop->style & (WS_MINIMIZED|WS_DISABLED)) return 0;
+         if ((pwndTop->style & (WS_POPUP|WS_CHILD)) != WS_CHILD) break;
+         if (pwndTop->spwndParent == NULL) break;
+      }
+
       /* Activate pwndTop if needed. */
       if (pwndTop != ThreadQueue->spwndActive)
       {
@@ -1534,7 +1537,7 @@ co_UserSetCapture(HWND hWnd)
    if (hWndPrev)
    {
       pWnd = UserGetWindowObject(hWndPrev);
-      if (pWnd)
+      if (pWnd && !(pWnd->state2 & WNDS2_INDESTROY))
          IntNotifyWinEvent(EVENT_SYSTEM_CAPTUREEND, pWnd, OBJID_WINDOW, CHILDID_SELF, WEF_SETBYWNDPTI);
    }
 

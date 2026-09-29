@@ -362,20 +362,19 @@ DefWndHandleSetCursor(PWND pWnd, WPARAM wParam, LPARAM lParam)
    return FALSE;
 }
 
-VOID FASTCALL DefWndPrint( PWND pwnd, HDC hdc, ULONG uFlags)
+LRESULT FASTCALL DefWndPrint( PWND pwnd, HDC hdc, ULONG uFlags)
 {
   /*
    * Visibility flag.
    */
   if ( (uFlags & PRF_CHECKVISIBLE) &&
        !IntIsWindowVisible(pwnd) )
-      return;
+      return 0;
 
   /*
    * Unimplemented flags.
    */
-  if ( (uFlags & PRF_CHILDREN) ||
-       (uFlags & PRF_OWNED)    ||
+  if ( (uFlags & PRF_OWNED)    ||
        (uFlags & PRF_NONCLIENT) )
   {
     FIXME("WM_PRINT message with unsupported flags\n");
@@ -391,7 +390,38 @@ VOID FASTCALL DefWndPrint( PWND pwnd, HDC hdc, ULONG uFlags)
    * Client area
    */
   if ( uFlags & PRF_CLIENT)
+  {
     co_IntSendMessage(UserHMGetHandle(pwnd), WM_PRINTCLIENT, (WPARAM)hdc, uFlags);
+
+    if (uFlags & PRF_CHILDREN)
+    {
+      HWND *Children = IntWinListChildren(pwnd);
+      HWND *Handle;
+      PWND Child;
+      POINT Origin;
+
+      if (Children)
+      {
+        for (Handle = Children; *Handle; ++Handle)
+        {
+          Child = UserGetWindowObject(*Handle);
+          if (!Child || Child->spwndParent != pwnd || !(Child->style & WS_VISIBLE))
+            continue;
+          if (!GreGetDCPoint(hdc, GdiGetViewPortOrg, &Origin))
+            continue;
+          GreSetViewportOrgEx(hdc,
+                              Origin.x + Child->rcClient.left - pwnd->rcClient.left,
+                              Origin.y + Child->rcClient.top - pwnd->rcClient.top,
+                              NULL);
+          co_IntSendMessage(*Handle, WM_PRINT, (WPARAM)hdc,
+                            PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN);
+          GreSetViewportOrgEx(hdc, Origin.x, Origin.y, NULL);
+        }
+        ExFreePoolWithTag(Children, USERTAG_WINDOWLIST);
+      }
+    }
+  }
+  return 1;
 }
 
 BOOL
@@ -1231,8 +1261,7 @@ IntDefWindowProc(
 
       case WM_PRINT:
       {
-         DefWndPrint(Wnd, (HDC)wParam, lParam);
-         return (0);
+         return DefWndPrint(Wnd, (HDC)wParam, lParam);
       }
 
       case WM_SYSCOLORCHANGE:

@@ -463,9 +463,12 @@ static void IntSendDestroyMsg(HWND hWnd)
 {
    PTHREADINFO ti;
    PWND Window;
+   USER_REFERENCE_ENTRY Ref;
 
    ti = PsGetCurrentThreadWin32Thread();
    Window = UserGetWindowObject(hWnd);
+   if (!Window) return;
+   UserRefObjectCo(Window, &Ref);
 
    if (Window)
    {
@@ -480,12 +483,18 @@ static void IntSendDestroyMsg(HWND hWnd)
          co_WinPosActivateOtherWindow(Window);
       }
 
+      if (ValidateHwndNoErr(hWnd) != Window) goto Cleanup;
+
       /* Fixes CMD properties closing and returning focus to CMD */
       if (ti->MessageQueue->spwndFocus == Window)
       {
          if ((Window->style & (WS_CHILD | WS_POPUP)) == WS_CHILD)
          {
-            co_UserSetFocus(Window->spwndParent);
+            PWND Parent = Window->spwndParent;
+            USER_REFERENCE_ENTRY ParentRef;
+            if (Parent) UserRefObjectCo(Parent, &ParentRef);
+            co_UserSetFocus(Parent);
+            if (Parent) UserDerefObjectCo(Parent);
          }
          else
          {
@@ -493,10 +502,14 @@ static void IntSendDestroyMsg(HWND hWnd)
          }
       }
 
+      if (ValidateHwndNoErr(hWnd) != Window) goto Cleanup;
+
       if (ti->MessageQueue->CaretInfo.hWnd == UserHMGetHandle(Window))
       {
          co_IntDestroyCaret(ti);
       }
+
+      if (ValidateHwndNoErr(hWnd) != Window) goto Cleanup;
 
       /* If the window being destroyed is currently tracked... */
       if (ti->rpdesk && ti->rpdesk->spwndTrack == Window)
@@ -512,6 +525,8 @@ static void IntSendDestroyMsg(HWND hWnd)
        UserClipboardRelease(Window);
    }
 
+   if (ValidateHwndNoErr(hWnd) != Window) goto Cleanup;
+
    /* Send the WM_DESTROY to the window */
    co_IntSendMessage(hWnd, WM_DESTROY, 0, 0);
 
@@ -524,7 +539,7 @@ static void IntSendDestroyMsg(HWND hWnd)
       HWND* pWndArray;
       int i;
 
-      if (!(pWndArray = IntWinListChildren( Window ))) return;
+      if (!(pWndArray = IntWinListChildren( Window ))) goto Cleanup;
 
       for (i = 0; pWndArray[i]; i++)
       {
@@ -536,6 +551,8 @@ static void IntSendDestroyMsg(HWND hWnd)
    {
       TRACE("destroyed itself while in WM_DESTROY!\n");
    }
+Cleanup:
+   UserDerefObjectCo(Window);
 }
 
 static VOID
@@ -602,6 +619,27 @@ LRESULT co_UserFreeWindow(PWND Window,
    }
    else
    {
+      if (SendMessages && Window->head.pti == ThreadData &&
+          ThreadData == PsGetCurrentThreadWin32Thread() &&
+          !(ThreadData->TIF_flags & TIF_INCLEANUP) &&
+          ThreadData->MessageQueue->spwndFocus == Window)
+      {
+         HWND hWnd = UserHMGetHandle(Window);
+         PWND Parent = (Window->style & (WS_CHILD | WS_POPUP)) == WS_CHILD
+                       ? Window->spwndParent : NULL;
+         USER_REFERENCE_ENTRY WindowRef, ParentRef;
+         BOOLEAN Destroyed;
+
+         UserRefObjectCo(Window, &WindowRef);
+         if (Parent) UserRefObjectCo(Parent, &ParentRef);
+         co_UserSetFocus(Parent);
+         if (Parent) UserDerefObjectCo(Parent);
+         Destroyed = ValidateHwndNoErr(hWnd) != Window ||
+                     (Window->state2 & WNDS2_INDESTROY);
+         UserDerefObjectCo(Window);
+         if (Destroyed) return 0;
+      }
+
       Window->state2 |= WNDS2_INDESTROY;
       Window->style &= ~WS_VISIBLE;
       IntUipiFreeWindowFilters(Window);
@@ -641,6 +679,11 @@ LRESULT co_UserFreeWindow(PWND Window,
             UserDereferenceObject(Child);
          }
       }
+   }
+
+   if (ThreadData->MessageQueue->spwndCapture == Window)
+   {
+      IntReleaseCapture();
    }
 
    if (SendMessages)
@@ -729,11 +772,6 @@ LRESULT co_UserFreeWindow(PWND Window,
    if (ThreadData->MessageQueue->spwndActive == Window)
       ThreadData->MessageQueue->spwndActive = NULL;
 
-   if (ThreadData->MessageQueue->spwndCapture == Window)
-   {
-      IntReleaseCapture();
-   }
-
    //// Now kill those remaining "PAINTING BUG: Thread marked as containing dirty windows" spam!!!
    if ( Window->hrgnUpdate != NULL || Window->state & WNDS_INTERNALPAINT )
    {
@@ -764,6 +802,12 @@ LRESULT co_UserFreeWindow(PWND Window,
    if (Window->SystemMenu
         && (Menu = UserGetMenuObject(Window->SystemMenu)))
    {
+      PMENU Popup = Menu->cItems && Menu->rgItems ? Menu->rgItems[0].spSubMenu : NULL;
+
+      if (Menu->spwndNotify == Window)
+         Menu->spwndNotify = NULL;
+      if (Popup && Popup->spwndNotify == Window)
+         Popup->spwndNotify = NULL;
       IntDestroyMenuObject(Menu, TRUE);
       Window->SystemMenu = (HMENU)0;
    }
@@ -2600,7 +2644,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    if (ParentWindow != NULL)
    {
       /* Link the window into the siblings list */
-      if ((Cs->style & (WS_CHILD | WS_MAXIMIZE)) == WS_CHILD && !UserIsDesktopWindow(ParentWindow))
+      if ((Cs->style & WS_CHILD) && !UserIsDesktopWindow(ParentWindow))
           IntLinkHwnd(Window, HWND_BOTTOM);
       else
           IntLinkHwnd(Window, hwndInsertAfter);
@@ -3152,13 +3196,8 @@ BOOLEAN co_UserDestroyWindow(PVOID Object)
 
    if (Window->head.pti->MessageQueue->spwndActive == Window)
       Window->head.pti->MessageQueue->spwndActive = NULL;
-   if (Window->head.pti->MessageQueue->spwndFocus == Window)
-      Window->head.pti->MessageQueue->spwndFocus = NULL;
    if (Window->head.pti->MessageQueue->spwndActivePrev == Window)
       Window->head.pti->MessageQueue->spwndActivePrev = NULL;
-   if (Window->head.pti->MessageQueue->spwndCapture == Window)
-      Window->head.pti->MessageQueue->spwndCapture = NULL;
-
    /*
     * Check if this window is the Shell's Desktop Window. If so set hShellWindow to NULL
     */

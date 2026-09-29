@@ -1391,6 +1391,7 @@ LRESULT NC_HandleNCCalcSize( PWND Wnd, WPARAM wparam, RECTL *Rect, BOOL Suspende
    RECT OrigRect;
    LONG Style = Wnd->style;
    LONG exStyle = Wnd->ExStyle;
+   ULONG FrameState = Wnd->state & (WNDS_HASMENU | WNDS_HASVERTICALSCROOLLBAR | WNDS_HASHORIZONTALSCROLLBAR);
 
    if (Rect == NULL)
    {
@@ -1398,7 +1399,7 @@ LRESULT NC_HandleNCCalcSize( PWND Wnd, WPARAM wparam, RECTL *Rect, BOOL Suspende
    }
    OrigRect = *Rect;
 
-   Wnd->state &= ~WNDS_HASCAPTION;
+   Wnd->state &= ~(WNDS_HASMENU | WNDS_HASCAPTION | WNDS_HASVERTICALSCROOLLBAR | WNDS_HASHORIZONTALSCROLLBAR);
 
    if (!(Wnd->style & WS_MINIMIZE))
    {
@@ -1482,6 +1483,13 @@ LRESULT NC_HandleNCCalcSize( PWND Wnd, WPARAM wparam, RECTL *Rect, BOOL Suspende
       Rect->right = Rect->left;
       Rect->bottom = Rect->top;
    }
+
+   if ((Wnd->state2 & WNDS2_WMCREATEMSGPROCESSED) &&
+       (FrameState != (Wnd->state & (WNDS_HASMENU | WNDS_HASVERTICALSCROOLLBAR | WNDS_HASHORIZONTALSCROLLBAR)) ||
+        (wparam && UserIsDesktopWindow(Wnd->spwndParent) &&
+         ((((NCCALCSIZE_PARAMS *)Rect)->lppos->flags &
+                     (SWP_STATECHANGED | SWP_NOCOPYBITS)) == (SWP_STATECHANGED | SWP_NOCOPYBITS)))))
+      IntNotifyWinEvent(EVENT_OBJECT_REORDER, Wnd, OBJID_WINDOW, CHILDID_SELF, WEF_SETBYWNDPTI);
 
    return Result;
 }

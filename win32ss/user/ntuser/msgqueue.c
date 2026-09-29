@@ -1766,7 +1766,7 @@ BOOL co_IntProcessMouseMessage(MSG* msg, BOOL* RemoveMessages, BOOL* NotForUs, L
     if (pti->TIF_flags & TIF_MSGPOSCHANGED)
     {
         pti->TIF_flags &= ~TIF_MSGPOSCHANGED;
-        IntNotifyWinEvent(EVENT_OBJECT_LOCATIONCHANGE, NULL, OBJID_CLIENT, CHILDID_SELF, 0);
+        IntNotifyWinEvent(EVENT_OBJECT_LOCATIONCHANGE, NULL, OBJID_CURSOR, CHILDID_SELF, 0);
     }
 
     /* message is accepted now (but still get dropped) */

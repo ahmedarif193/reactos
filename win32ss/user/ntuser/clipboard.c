@@ -85,6 +85,7 @@ static VOID
 IntNotifyClipboardViewer(PWINSTATION_OBJECT pWinStaObj)
 {
     PWND pwndViewer = pWinStaObj->spwndClipViewer;
+    HWND hwndOwner = pWinStaObj->spwndClipOwner ? UserHMGetHandle(pWinStaObj->spwndClipOwner) : NULL;
     PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
 
     if (!pwndViewer)
@@ -95,12 +96,12 @@ IntNotifyClipboardViewer(PWINSTATION_OBJECT pWinStaObj)
         if (!(pwndViewer->head.pti->TIF_flags & TIF_INCLEANUP))
         {
             co_MsqSendMessageAsync(pwndViewer->head.pti, UserHMGetHandle(pwndViewer), WM_DRAWCLIPBOARD,
-                                   0, 0, NULL, 0, FALSE, MSQ_NORMAL);
+                                   (WPARAM)hwndOwner, 0, NULL, 0, FALSE, MSQ_NORMAL);
         }
         return;
     }
 
-    co_IntSendMessageNoWait(UserHMGetHandle(pwndViewer), WM_DRAWCLIPBOARD, 0, 0);
+    co_IntSendMessageNoWait(UserHMGetHandle(pwndViewer), WM_DRAWCLIPBOARD, (WPARAM)hwndOwner, 0);
 }
 
 static PCLIP NTAPI
@@ -1421,7 +1422,7 @@ NtUserSetClipboardViewer(HWND hWndNewViewer)
     {
         TRACE("Clipboard: sending WM_DRAWCLIPBOARD to %p\n", UserHMGetHandle(pWinStaObj->spwndClipViewer));
         // For 32-bit applications this message is sent as a notification
-        co_IntSendMessageNoWait(UserHMGetHandle(pWinStaObj->spwndClipViewer), WM_DRAWCLIPBOARD, 0, 0);
+        IntNotifyClipboardViewer(pWinStaObj);
     }
 
 cleanup:

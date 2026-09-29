@@ -851,7 +851,7 @@ NtUserCallTwoParam(
                 break;
             }
 
-            co_IntSetForegroundWindowMouse(Window);
+            co_IntSetForegroundWindow(Window);
 
             if (fAltTab && (Window->style & WS_MINIMIZE))
             {
@@ -928,6 +928,12 @@ NtUserCallHwndLock(
             TRACE("HWNDLOCK_ROUTINE_DRAWMENUBAR\n");
             Ret = TRUE;
             if ((Window->style & (WS_CHILD | WS_POPUP)) != WS_CHILD)
+            {
+                PMENU Menu = Window->IDMenu ? UserGetMenuObject(UlongToHandle(Window->IDMenu)) : NULL;
+
+                if (Menu)
+                    Menu->cyMenu = 0;
+
                 co_WinPosSetWindowPos(Window,
                                       HWND_DESKTOP,
                                       0, 0, 0, 0,
@@ -936,6 +942,7 @@ NtUserCallHwndLock(
                                       SWP_NOZORDER |
                                       SWP_NOACTIVATE |
                                       SWP_FRAMECHANGED);
+            }
             break;
         }
 

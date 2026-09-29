@@ -182,6 +182,7 @@ IntNotifyWinEvent(
    PLIST_ENTRY ListEntry;
    PTHREADINFO pti, ptiCurrent;
    USER_REFERENCE_ENTRY Ref;
+   DWORD idEventThread;
 
    TRACE("IntNotifyWinEvent GlobalEvents = %p pWnd %p\n", GlobalEvents, pWnd);
 
@@ -195,6 +196,8 @@ IntNotifyWinEvent(
       pti = pWnd->head.pti;
    else
       pti = ptiCurrent;
+
+   idEventThread = PtrToUint(pti->pEThread->Cid.UniqueThread);
 
    ListEntry = GlobalEvents->Events.Flink;
    ASSERT(ListEntry != &GlobalEvents->Events);
@@ -223,7 +226,7 @@ IntNotifyWinEvent(
                                    pWnd ? UserHMGetHandle(pWnd) : NULL,
                                    idObject,
                                    idChild,
-                                   PtrToUint(NtCurrentTeb()->ClientId.UniqueThread),
+                                   idEventThread,
                                    EngGetTickCount32(),
                                    pEH->Proc,
                                    pEH->ihmod,
@@ -237,7 +240,7 @@ IntNotifyWinEvent(
                                     pWnd ? UserHMGetHandle(pWnd) : NULL,
                                     idObject,
                                     idChild,
-                                    PtrToUint(NtCurrentTeb()->ClientId.UniqueThread));
+                                    idEventThread);
            }
            UserDerefObjectCo(pEH);
         }

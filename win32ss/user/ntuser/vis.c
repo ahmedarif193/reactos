@@ -166,7 +166,7 @@ co_VIS_WindowLayoutChanged(
 
        UserRefObjectCo(Parent, &Ref);
        co_UserRedrawWindow(Parent, NULL, TempRgn,
-                           RDW_FRAME | RDW_ERASE | RDW_INVALIDATE |
+                           RDW_ERASE | RDW_INVALIDATE |
                            RDW_ALLCHILDREN);
        UserDerefObjectCo(Parent);
 

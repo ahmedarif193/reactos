@@ -238,17 +238,17 @@ IntScrollWindowEx(
    LPRECT prcUpdate,
    UINT flags)
 {
-   INT Result;
+   INT Result = NULLREGION;
    RECTL rcScroll, rcClip, rcCaret;
    PWND CaretWnd;
    HDC hDC;
    PREGION RgnUpdate = NULL, RgnTemp, RgnWinupd = NULL;
-   HWND hwndCaret;
+   HWND hwndCaret = NULL;
    DWORD dcxflags = 0;
    int rdw_flags;
    USER_REFERENCE_ENTRY CaretRef;
 
-   if (!Window || !IntIsWindowDrawable(Window))
+   if (!Window)
    {
       return ERROR;
    }
@@ -263,10 +263,15 @@ IntScrollWindowEx(
    if (prcClip)
       RECTL_bIntersectRect(&rcClip, &rcClip, prcClip);
 
-   if (rcClip.right <= rcClip.left || rcClip.bottom <= rcClip.top ||
+   if (!IntIsWindowDrawable(Window) ||
+         rcClip.right <= rcClip.left || rcClip.bottom <= rcClip.top ||
          (dx == 0 && dy == 0))
    {
-      return NULLREGION;
+      if (prcUpdate)
+         RECTL_vSetEmptyRect(prcUpdate);
+      if (hrgnUpdate && !NtGdiSetRectRgn(hrgnUpdate, 0, 0, 0, 0))
+         return ERROR;
+      goto ScrollChildren;
    }
 
    /* We must use a copy of the region, as we can't hold an exclusive lock
@@ -392,6 +397,7 @@ IntScrollWindowEx(
    }
    REGION_Delete(RgnTemp);
 
+ScrollChildren:
    if (flags & SW_SCROLLCHILDREN)
    {
       PWND Child;
@@ -408,18 +414,14 @@ IntScrollWindowEx(
          rcChild = Child->rcWindow;
          RECTL_vOffsetRect(&rcChild, -ClientOrigin.x, -ClientOrigin.y);
 
-         /* Adjust window positions */
-         RECTL_vOffsetRect(&Child->rcWindow, dx, dy);
-         RECTL_vOffsetRect(&Child->rcClient, dx, dy);
-
-         if (!prcScroll || RECTL_bIntersectRect(&rcDummy, &rcChild, &rcScroll))
+         if (!prcScroll || RECTL_bIntersectRect(&rcDummy, &rcChild, prcScroll))
          {
+            RECTL_vOffsetRect(&Child->rcWindow, dx, dy);
+            RECTL_vOffsetRect(&Child->rcClient, dx, dy);
             UserRefObjectCo(Child, &WndRef);
 
-            if (UserIsDesktopWindow(Window->spwndParent))
-               lParam = MAKELONG(Child->rcClient.left, Child->rcClient.top);
-            else
-               lParam = MAKELONG(rcChild.left + dx, rcChild.top + dy);
+            lParam = MAKELONG(Child->rcClient.left - ClientOrigin.x,
+                             Child->rcClient.top - ClientOrigin.y);
 
             /* wine sends WM_POSCHANGING, WM_POSCHANGED messages */
             /* windows sometimes a WM_MOVE */
@@ -430,7 +432,7 @@ IntScrollWindowEx(
       }
    }
 
-   if (flags & (SW_INVALIDATE | SW_ERASE))
+   if (RgnUpdate && (flags & (SW_INVALIDATE | SW_ERASE)))
    {
       co_UserRedrawWindow( Window,
                            NULL,
@@ -449,7 +451,7 @@ IntScrollWindowEx(
       UserDerefObjectCo(CaretWnd);
    }
 
-   if (hrgnUpdate && (Result != ERROR))
+   if (hrgnUpdate && RgnUpdate && (Result != ERROR))
    {
        /* Give everything back to the caller */
        RgnTemp = REGION_LockRgn(hrgnUpdate);
@@ -622,7 +624,7 @@ NtUserScrollWindowEx(
    UserEnterExclusive();
 
    Window = UserGetWindowObject(hWnd);
-   if (!Window || !IntIsWindowDrawable(Window))
+   if (!Window)
    {
       Window = NULL; /* prevent deref at cleanup */
       goto Cleanup; // Return ERROR
