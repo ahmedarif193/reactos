@@ -39,6 +39,7 @@
 @ stdcall -version=0x0601+ HalGetEnvironmentVariableEx(ptr ptr ptr ptr ptr)
 @ stdcall -version=0x0601+ HalGetInterruptTargetInformation(ptr)
 @ stdcall HalGetEnvironmentVariable(str long str)
+@ stdcall -arch=arm64 HalFreeMsiMessageAddressEx(long)
 @ stdcall -arch=arm64 HalGetMsiMessageAddressEx(long int64 int64 long long ptr ptr ptr)
 @ fastcall -arch=arm HalGetInterruptSource()
 @ stdcall HalGetInterruptVector(long long long long ptr ptr)

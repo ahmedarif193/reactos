@@ -107,6 +107,23 @@ PciPdoGetArm64MsiMessage(
 
     return STATUS_SUCCESS;
 }
+
+static
+VOID
+PciPdoReleaseMessageRoutes(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    if (DeviceExtension->PciDevice)
+        HalFreeMsiMessageAddressEx(PciPdoGetRequesterId(DeviceExtension->PciDevice));
+}
+#else
+static
+VOID
+PciPdoReleaseMessageRoutes(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    UNREFERENCED_PARAMETER(DeviceExtension);
+}
 #endif
 
 static
@@ -4591,11 +4608,13 @@ PdoPnpControl(
         case IRP_MN_STOP_DEVICE:
         case IRP_MN_SURPRISE_REMOVAL:
             PciPdoDisableDecodes(DeviceExtension);
+            PciPdoReleaseMessageRoutes(DeviceExtension);
             Status = STATUS_SUCCESS;
             break;
 
         case IRP_MN_REMOVE_DEVICE:
             PciPdoDisableDecodes(DeviceExtension);
+            PciPdoReleaseMessageRoutes(DeviceExtension);
             IoReleaseRemoveLockAndWait(&DeviceExtension->RemoveLock, Irp);
             Status = STATUS_SUCCESS;
             Irp->IoStatus.Status = Status;

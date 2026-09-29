@@ -1823,6 +1823,39 @@ HalpGicItsDiscardEvent(
  * ============================================================================
  */
 
+VOID
+HalpGicItsFreeDeviceMsi(
+    _In_ ULONG DeviceId)
+{
+    PHALP_GIC_ITS_NODE ItsNode;
+    PHALP_ARM64_ITS_DEVICE Device;
+    KIRQL OldIrql;
+    ULONG EventId;
+
+    if (!HalpGicItsInitialized)
+        return;
+
+    ItsNode = HalpGicItsSelectNodeForDevice(DeviceId);
+    if (!ItsNode || !ItsNode->Enabled || DeviceId >= ItsNode->MaxDeviceId)
+        return;
+
+    KeAcquireSpinLock(&ItsNode->DeviceLock, &OldIrql);
+    Device = HalpGicItsFindDeviceOnNode(ItsNode, (USHORT)DeviceId);
+    KeReleaseSpinLock(&ItsNode->DeviceLock, OldIrql);
+
+    if (!Device || Device->InitState != 2 || !Device->EventToLpi)
+        return;
+
+    for (EventId = 0; EventId < Device->MaxEvents; EventId++)
+    {
+        if (Device->EventToLpi[EventId] != 0 &&
+            !HalpGicItsDiscardEvent(ItsNode, Device, DeviceId, EventId))
+        {
+            DPRINT1("[arm64][ITS] Failed to discard dev %lu event %lu\n", DeviceId, EventId);
+        }
+    }
+}
+
 /*
  * HalpGicItsAllocateMsi - Allocate an MSI for a device
  *

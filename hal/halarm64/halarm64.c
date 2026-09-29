@@ -1850,6 +1850,15 @@ HalGetMsiMessageAddressEx(
     return TRUE;
 }
 
+VOID
+NTAPI
+HalFreeMsiMessageAddressEx(
+    _In_ USHORT RequesterId)
+{
+    if (HalpGicItsPresent)
+        HalpGicItsFreeDeviceMsi(RequesterId);
+}
+
 BOOLEAN
 NTAPI
 HalGetMsiVectorRange(

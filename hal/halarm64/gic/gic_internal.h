@@ -1388,6 +1388,10 @@ HalpGicItsSendSyncOnNode(
 /*
  * MSI allocation API
  */
+VOID
+HalpGicItsFreeDeviceMsi(
+    _In_ ULONG DeviceId);
+
 NTSTATUS
 HalpGicItsAllocateMsi(
     _In_ ULONG DeviceId,

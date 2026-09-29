@@ -265,6 +265,13 @@ HalGetMsiMessageAddressEx(
     _Out_opt_ PULONG AddressHigh,
     _Out_ PUSHORT Data
     );
+
+NTHALAPI
+VOID
+NTAPI
+HalFreeMsiMessageAddressEx(
+    _In_ USHORT RequesterId
+    );
 #endif
 
 NTHALAPI
