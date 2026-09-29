@@ -577,6 +577,20 @@ HalpGicItsBuildInvCmd(
 }
 
 static VOID
+HalpGicItsBuildMoviCmd(
+    _Out_writes_(4) UINT64 *Cmd,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId,
+    _In_ ULONG CollectionId)
+{
+    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
+    Cmd[0] = (UINT64)GITS_CMD_MOVI;
+    Cmd[0] |= ((UINT64)DeviceId) << 32;
+    Cmd[1] = (UINT64)EventId;
+    Cmd[2] = (UINT64)(CollectionId & 0xFFFFu);
+}
+
+static VOID
 HalpGicItsBuildDiscardCmd(
     _Out_writes_(4) UINT64 *Cmd,
     _In_ ULONG DeviceId,
@@ -712,6 +726,20 @@ HalpGicItsSendInvOnNode(
     UINT64 Cmd[4];
 
     HalpGicItsBuildInvCmd(Cmd, DeviceId, EventId);
+    return HalpGicItsPostCommandOnNode(ItsNode, Cmd);
+}
+
+static
+BOOLEAN
+HalpGicItsSendMoviOnNode(
+    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId,
+    _In_ ULONG CollectionId)
+{
+    UINT64 Cmd[4];
+
+    HalpGicItsBuildMoviCmd(Cmd, DeviceId, EventId, CollectionId);
     return HalpGicItsPostCommandOnNode(ItsNode, Cmd);
 }
 
@@ -1856,6 +1884,22 @@ HalpGicItsAllocateMsi(
     {
         if (RequestedLpi == 0 || Device->EventToLpi[EventId] == RequestedLpi)
         {
+            if (Device->EventToCollection[EventId] != TargetCpu)
+            {
+                if (!HalpGicItsEnsureCollectionOnNode(ItsNode, TargetCpu) ||
+                    !HalpGicItsSendMoviOnNode(ItsNode, DeviceId, EventId, TargetCpu))
+                {
+                    return STATUS_UNSUCCESSFUL;
+                }
+                HalpGicItsSendSyncOnNode(ItsNode, TargetCpu, ItsNode->CollectionTarget[TargetCpu]);
+                Device->EventToCollection[EventId] = TargetCpu;
+                if ((Device->EventToLpi[EventId] >= HAL_ARM64_LPI_BASE) &&
+                    ((Device->EventToLpi[EventId] - HAL_ARM64_LPI_BASE) < HAL_ARM64_LPI_COUNT))
+                {
+                    HalpGicLpiTarget[Device->EventToLpi[EventId] - HAL_ARM64_LPI_BASE].CollectionId = TargetCpu;
+                }
+            }
+
             /* Already allocated, return existing mapping */
             *Lpi = Device->EventToLpi[EventId];
             MsiAddress->QuadPart = ItsNode->PhysicalBase.QuadPart + GITS_TRANSLATER;
