@@ -11,18 +11,18 @@
 __MINGW_ATTRIB_MALLOC
 void * __cdecl malloc(size_t size)
 {
-    return LocalAlloc(0, size);
+    return RtlAllocateHeap(NtCurrentTeb()->Peb->ProcessHeap, 0, size);
 }
 
 void __cdecl free(void *ptr)
 {
-    LocalFree(ptr);
+    if (ptr) RtlFreeHeap(NtCurrentTeb()->Peb->ProcessHeap, 0, ptr);
 }
 
 void * __cdecl realloc(void *ptr, size_t size)
 {
     if (ptr == NULL) return malloc(size);
-    return LocalReAlloc(ptr, size, LMEM_MOVEABLE);
+    return RtlReAllocateHeap(NtCurrentTeb()->Peb->ProcessHeap, 0, ptr, size);
 }
 
 __MINGW_ATTRIB_MALLOC
