@@ -1311,16 +1311,19 @@ MasterFileTable::RenameFile(
     {
         CaseOnly = FALSE;
     }
-    if (CaseOnly &&
-        OldNameLength == NewNameLength &&
-        RtlCompareMemory(
-            OldName,
-            NewName,
-            NewNameLength * sizeof(WCHAR)) ==
-            NewNameLength * sizeof(WCHAR))
+    if (CaseOnly)
     {
-        Status = STATUS_SUCCESS;
-        goto Done;
+        Status = FindFileNamePair(Child, OldParentReference, &OldNameString,
+                                 &NameAttribute, &NameValue, &AliasAttribute, &AliasValue);
+        if (!NT_SUCCESS(Status))
+            goto Done;
+        if (NameValue->NameLength == NewNameLength &&
+            RtlCompareMemory(NameValue->Name, NewName, NewNameLength * sizeof(WCHAR)) ==
+                NewNameLength * sizeof(WCHAR))
+        {
+            Status = STATUS_SUCCESS;
+            goto Done;
+        }
     }
 
     Status = NewParentIndex.FindNextFile(
@@ -1610,4 +1613,97 @@ MasterFileTable::GetPathFromFileReference(
     RtlMoveMemory(Buffer, &Buffer[Position], (BufferLength - Position) * sizeof(WCHAR));
     *PathLength = BufferLength - Position;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+MasterFileTable::GetLinkName(
+    _In_ PFileRecord File,
+    _In_ ULONGLONG ParentReference,
+    _In_ PUNICODE_STRING Name,
+    _Out_ PUNICODE_STRING LinkName)
+{
+    PAttribute NameAttribute;
+    PAttribute AliasAttribute;
+    PFileNameEx NameValue;
+    PFileNameEx AliasValue;
+    NTSTATUS Status;
+
+    RtlZeroMemory(LinkName, sizeof(*LinkName));
+    Status = FindFileNamePair(File, ParentReference, Name,
+                             &NameAttribute, &NameValue, &AliasAttribute, &AliasValue);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (NameValue->NameType == NAME_TYPE_DOS && AliasValue)
+        NameValue = AliasValue;
+    *LinkName = NtfsMakeCountedUnicodeString(NameValue->Name,
+                                            NameValue->NameLength * sizeof(WCHAR));
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+MasterFileTable::IsDescendantDirectory(
+    _In_ ULONGLONG FileReference,
+    _In_ ULONGLONG AncestorReference,
+    _Out_ PBOOLEAN Descendant)
+{
+    ULONGLONG Checkpoint = FileReference;
+    ULONGLONG Distance = 0;
+    ULONGLONG Interval = 1;
+
+    *Descendant = FALSE;
+    for (;;)
+    {
+        ULONGLONG Number = FileReference & 0x0000FFFFFFFFFFFFULL;
+        PFileRecord File;
+        PAttribute Attribute;
+        PFileNameEx NameValue;
+        ULONGLONG ParentReference = 0;
+        ULONG Offset = 0;
+        NTSTATUS Status;
+
+        if (FileReference == AncestorReference)
+        {
+            *Descendant = TRUE;
+            return STATUS_SUCCESS;
+        }
+        if (Number == _Root)
+            return STATUS_SUCCESS;
+        if (Number > MAXULONG)
+            return STATUS_FILE_CORRUPT_ERROR;
+        Status = GetFileRecord((ULONG)Number, &File);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if ((File->Header->Flags & (FR_IN_USE | FR_IS_DIRECTORY)) !=
+                (FR_IN_USE | FR_IS_DIRECTORY) ||
+            File->Header->BaseFileRecord != 0 ||
+            File->Header->SequenceNumber != (USHORT)(FileReference >> 48))
+        {
+            delete File;
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+        for (;;)
+        {
+            Status = EnumerateFileNames(File, &Offset, &Attribute, &NameValue);
+            if (!NT_SUCCESS(Status) || !NameValue)
+                break;
+            if (ParentReference && ParentReference != NameValue->ParentFileReference)
+            {
+                Status = STATUS_FILE_CORRUPT_ERROR;
+                break;
+            }
+            ParentReference = NameValue->ParentFileReference;
+        }
+        delete File;
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (!ParentReference || ParentReference == Checkpoint)
+            return STATUS_FILE_CORRUPT_ERROR;
+        FileReference = ParentReference;
+        if (++Distance == Interval)
+        {
+            Checkpoint = FileReference;
+            Distance = 0;
+            Interval *= 2;
+        }
+    }
 }

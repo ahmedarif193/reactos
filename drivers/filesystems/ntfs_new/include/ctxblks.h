@@ -185,6 +185,66 @@ NtfsBindVolumeDisk(_In_ PVolumeContextBlock VolCB)
         NtfsDiskInitializeKm(VolCB->StorageDevice, VolCB->BytesPerSector);
 }
 
+typedef struct _NTFS_NATIVE_SCB
+{
+    UCHAR Unused0[sizeof(PVOID) == 8 ? 0x1e0 : 0x148];
+    LIST_ENTRY CcbList;
+    UCHAR Unused1[(sizeof(PVOID) == 8 ? 0x280 : 0x1b0) -
+                  (sizeof(PVOID) == 8 ? 0x1e0 : 0x148) - sizeof(LIST_ENTRY)];
+    LIST_ENTRY ChildLcbList;
+    UCHAR Unused2[(sizeof(PVOID) == 8 ? 0x308 : 0x1fc) -
+                  (sizeof(PVOID) == 8 ? 0x280 : 0x1b0) - sizeof(LIST_ENTRY)];
+} NTFS_NATIVE_SCB, *PNTFS_NATIVE_SCB;
+
+typedef struct _NTFS_NATIVE_LCB
+{
+    UCHAR Unused0[8];
+    LIST_ENTRY ParentEntry;
+    PNTFS_NATIVE_SCB ParentScb;
+    UCHAR Unused1[(sizeof(PVOID) == 8 ? 0x48 : 0x30) -
+                  8 - sizeof(LIST_ENTRY) - sizeof(PVOID)];
+    UNICODE_STRING FileName;
+    UCHAR Unused2[(sizeof(PVOID) == 8 ? 0x78 : 0x48) -
+                  (sizeof(PVOID) == 8 ? 0x48 : 0x30) - sizeof(UNICODE_STRING)];
+    LIST_ENTRY CcbList;
+    UCHAR Unused3[(sizeof(PVOID) == 8 ? 0xbc : 0x84) -
+                  (sizeof(PVOID) == 8 ? 0x78 : 0x48) - sizeof(LIST_ENTRY)];
+    ULONG CleanupCount;
+    UCHAR Unused4[(sizeof(PVOID) == 8 ? 0xd8 : 0xa0) -
+                  (sizeof(PVOID) == 8 ? 0xbc : 0x84) - sizeof(ULONG)];
+} NTFS_NATIVE_LCB, *PNTFS_NATIVE_LCB;
+
+typedef struct _NTFS_NATIVE_CCB
+{
+    UCHAR Unused0[sizeof(PVOID) == 8 ? 0x10 : 0x0c];
+    UNICODE_STRING FileName;
+    UCHAR Unused1[8];
+    LIST_ENTRY StreamEntry;
+    LIST_ENTRY LcbEntry;
+    PNTFS_NATIVE_LCB Lcb;
+    UCHAR Unused2[(sizeof(PVOID) == 8 ? 0x70 : 0x48) -
+                  (sizeof(PVOID) == 8 ? 0x48 : 0x2c) - sizeof(PVOID)];
+    PFILE_OBJECT FileObject;
+    UCHAR Unused3[(sizeof(PVOID) == 8 ? 0x88 : 0x58) -
+                  (sizeof(PVOID) == 8 ? 0x70 : 0x48) - sizeof(PVOID)];
+} NTFS_NATIVE_CCB, *PNTFS_NATIVE_CCB;
+
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_SCB, CcbList) == (sizeof(PVOID) == 8 ? 0x1e0 : 0x148));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_SCB, ChildLcbList) == (sizeof(PVOID) == 8 ? 0x280 : 0x1b0));
+C_ASSERT(sizeof(NTFS_NATIVE_SCB) == (sizeof(PVOID) == 8 ? 0x308 : 0x1fc));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_LCB, ParentEntry) == 8);
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_LCB, ParentScb) == (sizeof(PVOID) == 8 ? 0x18 : 0x10));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_LCB, FileName) == (sizeof(PVOID) == 8 ? 0x48 : 0x30));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_LCB, CcbList) == (sizeof(PVOID) == 8 ? 0x78 : 0x48));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_LCB, CleanupCount) == (sizeof(PVOID) == 8 ? 0xbc : 0x84));
+C_ASSERT(sizeof(NTFS_NATIVE_LCB) == (sizeof(PVOID) == 8 ? 0xd8 : 0xa0));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_CCB, FileName) == (sizeof(PVOID) == 8 ? 0x10 : 0x0c));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_CCB, StreamEntry) == (sizeof(PVOID) == 8 ? 0x28 : 0x1c));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_CCB, LcbEntry) == (sizeof(PVOID) == 8 ? 0x38 : 0x24));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_CCB, Lcb) == (sizeof(PVOID) == 8 ? 0x48 : 0x2c));
+C_ASSERT(FIELD_OFFSET(NTFS_NATIVE_CCB, FileObject) == (sizeof(PVOID) == 8 ? 0x70 : 0x48));
+C_ASSERT(sizeof(NTFS_NATIVE_CCB) == (sizeof(PVOID) == 8 ? 0x88 : 0x58));
+
 typedef struct _SCB
 {
     /*
@@ -208,6 +268,7 @@ typedef struct _SCB
     BOOLEAN Deleted;
     BOOLEAN DeletePending;
     LONG UncleanCount;
+    NTFS_NATIVE_SCB NativeScb;
 } StreamContextBlock, *PStreamContextBlock;
 
 typedef struct _FCB
@@ -277,6 +338,8 @@ typedef struct _FCB
     /* Links this block into the volume's idle list while it is not in use. */
     LIST_ENTRY IdleLink;
 
+    NTFS_NATIVE_CCB NativeCcb;
+
 } FileContextBlock, *PFileContextBlock;
 
 FORCEINLINE
@@ -334,6 +397,26 @@ VOID
 NtfsDereferenceStreamContext(
     _In_ PVolumeContextBlock VolCB,
     _In_ PStreamContextBlock StreamCB);
+
+NTSTATUS
+NtfsReferenceNameParent(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ PUNICODE_STRING Name,
+    _Out_ PStreamContextBlock* ParentStream,
+    _Out_ PUNICODE_STRING LeafName);
+
+NTSTATUS
+NtfsFindOpenLink(_In_ PVolumeContextBlock VolCB,
+                 _In_ PFileContextBlock FileCB,
+                 _Out_ PNTFS_NATIVE_LCB* Link);
+
+VOID
+NtfsRemoveOpenLink(_In_ PVolumeContextBlock VolCB,
+                   _In_ PFileContextBlock FileCB);
+
+NTSTATUS
+NtfsCheckDirectoryOpenChildren(_In_ PVolumeContextBlock VolCB,
+                               _In_ ULONGLONG DirectoryReference);
 
 /* Exported by ntoskrnl, but not declared by the DDK headers. */
 NTKERNELAPI VOID FASTCALL

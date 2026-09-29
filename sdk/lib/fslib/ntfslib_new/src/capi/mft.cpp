@@ -341,3 +341,56 @@ NtfsMasterFileTableGetPathFromFileReference(
                                  BufferLength,
                                  PathLength);
 }
+
+NTSTATUS
+NtfsMasterFileTableGetFileRecordByReference(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ ULONGLONG FileReference,
+    _Out_ PNtfsFileRecord* File)
+{
+    ULONGLONG Number = FileReference & 0x0000FFFFFFFFFFFFULL;
+    PFileRecord Record = NULL;
+    NTSTATUS Status;
+
+    if (!Mft || !File || Number > MAXULONG)
+        return STATUS_INVALID_PARAMETER;
+    *File = NULL;
+    Status = reinterpret_cast<PMasterFileTable>(Mft)->GetFileRecord((ULONG)Number, &Record);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!(Record->Header->Flags & FR_IN_USE) || Record->Header->BaseFileRecord != 0 ||
+        Record->Header->SequenceNumber != (USHORT)(FileReference >> 48))
+    {
+        delete Record;
+        return STATUS_FILE_DELETED;
+    }
+    *File = reinterpret_cast<PNtfsFileRecord>(Record);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NtfsMasterFileTableGetLinkName(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ PNtfsFileRecord File,
+    _In_ ULONGLONG ParentReference,
+    _In_ PUNICODE_STRING Name,
+    _Out_ PUNICODE_STRING LinkName)
+{
+    if (!Mft || !File || !Name || !LinkName)
+        return STATUS_INVALID_PARAMETER;
+    return reinterpret_cast<PMasterFileTable>(Mft)->
+        GetLinkName(reinterpret_cast<PFileRecord>(File), ParentReference, Name, LinkName);
+}
+
+NTSTATUS
+NtfsMasterFileTableIsDescendantDirectory(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ ULONGLONG FileReference,
+    _In_ ULONGLONG AncestorReference,
+    _Out_ PBOOLEAN Descendant)
+{
+    if (!Mft || !Descendant)
+        return STATUS_INVALID_PARAMETER;
+    return reinterpret_cast<PMasterFileTable>(Mft)->
+        IsDescendantDirectory(FileReference, AncestorReference, Descendant);
+}

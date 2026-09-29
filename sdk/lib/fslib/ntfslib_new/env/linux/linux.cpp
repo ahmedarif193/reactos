@@ -285,3 +285,11 @@ NtfsIsNameInExpression(_In_ PUNICODE_STRING Expression,
                                           IgnoreCase,
                                           UpcaseTable);
 }
+
+extern "C" NTSTATUS
+NtfsGenerate8dot3Name(_In_ PCUNICODE_STRING Name,
+                      _Inout_ PGENERATE_NAME_CONTEXT Context,
+                      _Inout_ PUNICODE_STRING ShortName)
+{
+    return NtfsGenerate8dot3NameFallback(Name, Context, ShortName);
+}

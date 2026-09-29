@@ -73,6 +73,7 @@ NtfsFsdQuerySecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
     PIO_STACK_LOCATION IrpSp;
     PFileContextBlock FileCB;
+    PVolumeContextBlock VolCB;
     SECURITY_INFORMATION SecurityInformation;
     PVOID Output;
     ULONG OutputLength;
@@ -92,7 +93,8 @@ NtfsFsdQuerySecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     FileCB = NtfsGetFileContext(IrpSp->FileObject);
-    if (!FileCB->FileRec)
+    VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    if (!FileCB->FileRec || !VolCB || !VolCB->DiskVolume)
     {
         Status = STATUS_INVALID_PARAMETER;
         goto Done;
@@ -130,11 +132,13 @@ NtfsFsdQuerySecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     KeEnterCriticalRegion();
     ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
     Status = NtfsQuerySecurityDescriptor(FileCB,
                                          SecurityInformation,
                                          Output,
                                          OutputLength,
                                          &ResultLength);
+    NtfsReleaseMetadata(VolCB);
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
 
@@ -292,9 +296,11 @@ NtfsFsdSetSecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
     Status = NtfsSetSecurityDescriptor(FileCB,
                                        SecurityInformation,
                                        IrpSp->Parameters.SetSecurity.SecurityDescriptor);
+    NtfsReleaseMetadata(VolCB);
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
 

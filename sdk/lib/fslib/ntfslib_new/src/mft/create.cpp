@@ -146,6 +146,77 @@ CopyShortNameCharacters(
     return Count;
 }
 
+NTSTATUS
+NtfsGenerate8dot3NameFallback(
+    _In_ PCUNICODE_STRING Name,
+    _Inout_ PGENERATE_NAME_CONTEXT Context,
+    _Inout_ PUNICODE_STRING ShortName)
+{
+    WCHAR Digits[7];
+    ULONG DigitCount = 0;
+    ULONG Length = 0;
+    ULONG Value;
+    ULONG Keep;
+
+    if (Context->LastIndexValue >= 1000000)
+        return STATUS_FILE_SYSTEM_LIMITATION;
+
+    if (!Context->NameLength)
+    {
+        ULONG NameLength = Name->Length / sizeof(WCHAR);
+        ULONG Start = 0;
+        ULONG LastDot = MAXULONG;
+
+        while (Start < NameLength && Name->Buffer[Start] == L'.')
+            Start++;
+        for (ULONG Index = Start; Index < NameLength; Index++)
+        {
+            if (Name->Buffer[Index] == L'.')
+                LastDot = Index;
+        }
+
+        Context->NameLength = CopyShortNameCharacters(
+            Name->Buffer + Start,
+            (LastDot == MAXULONG ? NameLength : LastDot) - Start,
+            Context->NameBuffer,
+            6);
+        if (!Context->NameLength)
+            return STATUS_NOT_FOUND;
+        Context->ExtensionLength = 0;
+        if (LastDot != MAXULONG)
+        {
+            Context->ExtensionLength = CopyShortNameCharacters(
+                Name->Buffer + LastDot + 1,
+                NameLength - LastDot - 1,
+                Context->ExtensionBuffer + 1,
+                RTL_NUMBER_OF(Context->ExtensionBuffer) - 1);
+            if (Context->ExtensionLength)
+            {
+                Context->ExtensionBuffer[0] = L'.';
+                Context->ExtensionLength++;
+            }
+        }
+    }
+
+    Value = ++Context->LastIndexValue;
+    while (Value)
+    {
+        Digits[DigitCount++] = (WCHAR)(L'0' + Value % 10);
+        Value /= 10;
+    }
+
+    Keep = min(Context->NameLength, 7 - DigitCount);
+    for (ULONG Index = 0; Index < Keep; Index++)
+        ShortName->Buffer[Length++] = Context->NameBuffer[Index];
+    ShortName->Buffer[Length++] = L'~';
+    while (DigitCount)
+        ShortName->Buffer[Length++] = Digits[--DigitCount];
+    for (ULONG Index = 0; Index < Context->ExtensionLength; Index++)
+        ShortName->Buffer[Length++] = Context->ExtensionBuffer[Index];
+    ShortName->Length = Length * sizeof(WCHAR);
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS
 GenerateShortName(
     _In_ PVolume DiskVolume,
@@ -155,79 +226,43 @@ GenerateShortName(
     _Out_ PWCHAR ShortName,
     _Out_ PULONG ShortNameLength)
 {
-    WCHAR Base[6];
-    WCHAR Extension[3];
-    ULONG Start = 0;
-    ULONG LastDot = MAXULONG;
-    ULONG BaseLength;
-    ULONG ExtensionLength = 0;
+    Directory Index(DiskVolume);
+    GENERATE_NAME_CONTEXT Context = {};
+    UNICODE_STRING LongName;
+    UNICODE_STRING Candidate;
 
     *ShortNameLength = 0;
+    LongName.Buffer = const_cast<PWSTR>(Name);
+    LongName.Length = LongName.MaximumLength = NameLength * sizeof(WCHAR);
+    Candidate.Buffer = ShortName;
+    Candidate.MaximumLength = 12 * sizeof(WCHAR);
 
-    while (Start < NameLength && Name[Start] == L'.')
-        Start++;
-    for (ULONG Index = Start; Index < NameLength; Index++)
+    for (ULONG Attempt = 0; Attempt < 1000000; Attempt++)
     {
-        if (Name[Index] == L'.')
-            LastDot = Index;
-    }
-
-    BaseLength = CopyShortNameCharacters(Name + Start,
-                                         (LastDot == MAXULONG ? NameLength : LastDot) - Start,
-                                         Base,
-                                         RTL_NUMBER_OF(Base));
-    if (LastDot != MAXULONG)
-    {
-        ExtensionLength = CopyShortNameCharacters(Name + LastDot + 1,
-                                                  NameLength - LastDot - 1,
-                                                  Extension,
-                                                  RTL_NUMBER_OF(Extension));
-    }
-    if (BaseLength == 0)
-        return STATUS_NOT_FOUND;
-
-    for (ULONG Tail = 1; Tail <= 999999; Tail++)
-    {
-        Directory Index(DiskVolume);
-        WCHAR Digits[7];
-        ULONG DigitCount = 0;
-        ULONG Value = Tail;
-        ULONG Keep;
-        ULONG Length = 0;
         ULONGLONG Reference;
         NTSTATUS Status;
 
-        while (Value)
+        Candidate.Length = 0;
+        Status = NtfsGenerate8dot3Name(&LongName, &Context, &Candidate);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (!Candidate.Length || Candidate.Length > Candidate.MaximumLength ||
+            Candidate.Length % sizeof(WCHAR))
         {
-            Digits[DigitCount++] = (WCHAR)(L'0' + Value % 10);
-            Value /= 10;
+            return STATUS_OBJECT_NAME_INVALID;
         }
-
-        Keep = BaseLength < 7 - DigitCount ? BaseLength : 7 - DigitCount;
-        for (ULONG Index2 = 0; Index2 < Keep; Index2++)
-            ShortName[Length++] = Base[Index2];
-        ShortName[Length++] = L'~';
-        while (DigitCount)
-            ShortName[Length++] = Digits[--DigitCount];
-        if (ExtensionLength)
-        {
-            ShortName[Length++] = L'.';
-            for (ULONG Index2 = 0; Index2 < ExtensionLength; Index2++)
-                ShortName[Length++] = Extension[Index2];
-        }
-        ShortName[Length] = L'\0';
+        ShortName[Candidate.Length / sizeof(WCHAR)] = L'\0';
 
         Status = Index.FindNextFile(Parent, ShortName, &Reference);
         if (Status == STATUS_NOT_FOUND)
         {
-            *ShortNameLength = Length;
+            *ShortNameLength = Candidate.Length / sizeof(WCHAR);
             return STATUS_SUCCESS;
         }
         if (!NT_SUCCESS(Status))
             return Status;
     }
-
-    return STATUS_OBJECT_NAME_COLLISION;
+    return STATUS_FILE_SYSTEM_LIMITATION;
 }
 
 NTSTATUS

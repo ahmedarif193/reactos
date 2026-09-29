@@ -11,7 +11,6 @@
 /* GLOBALS *****************************************************************/
 
 #define NTFS_CACHED_GROWTH_LIMIT     (64 * 1024 * 1024)
-#define NTFS_RESIDENT_WRITE_LIMIT    512
 
 /* FUNCTIONS ****************************************************************/
 
@@ -36,7 +35,10 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
             Target = EndOffset;
 
         NtfsAcquireMetadata(VolCB);
-        if (Allocation == 0 && EndOffset <= PAGE_SIZE)
+        DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType,
+                                                   FileCB->RequestedStream);
+        if (EndOffset <= PAGE_SIZE &&
+            (Allocation == 0 || (DataAttribute && !DataAttribute->IsNonResident)))
         {
             Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType,
                                                    FileCB->RequestedStream, EndOffset);
@@ -50,8 +52,12 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
         if (NT_SUCCESS(Status))
         {
             DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
-            if (DataAttribute && DataAttribute->IsNonResident)
-                Allocation = (LONGLONG)NtfsAttributeGetPhysicalAllocationSize(DataAttribute);
+            if (DataAttribute)
+            {
+                Allocation = DataAttribute->IsNonResident
+                    ? (LONGLONG)NtfsAttributeGetPhysicalAllocationSize(DataAttribute)
+                    : DataAttribute->Resident.DataLength;
+            }
             InterlockedIncrement(&VolCB->DirGeneration);
         }
         NtfsReleaseMetadata(VolCB);
@@ -161,7 +167,6 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
         ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
         if (!FileCB->StreamCB ||
             FileCB->StreamCB->Deleted ||
-            EndOffset <= NTFS_RESIDENT_WRITE_LIMIT ||
             ByteOffset->QuadPart > Header->ValidDataLength.QuadPart ||
             !NtfsGrowForCachedWrite(VolCB, FileCB, FileObj, EndOffset))
         {
@@ -173,12 +178,11 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
 
     if (EndOffset <= Header->ValidDataLength.QuadPart || Extending)
     {
-        if (FileObj->PrivateCacheMap == NULL)
-            NtfsInitializeStreamCache(FileCB, FileObj);
-
         Handled = TRUE;
         _SEH2_TRY
         {
+            if (FileObj->PrivateCacheMap == NULL)
+                NtfsInitializeStreamCache(FileCB, FileObj);
             *Status = CcCopyWrite(FileObj, ByteOffset, Length, TRUE, Buffer) ? STATUS_SUCCESS
                                                                               : STATUS_CANT_WAIT;
         }

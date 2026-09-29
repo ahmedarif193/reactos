@@ -112,7 +112,8 @@
 
  static
  NTSTATUS
- GetFileNameInformation(_In_ PFileContextBlock FileCB,
+ GetFileNameInformation(_In_ PVolumeContextBlock VolCB,
+                        _In_ PFileContextBlock FileCB,
                         _Out_ PFILE_NAME_INFORMATION Buffer,
                         _Inout_ PULONG Length)
  {
@@ -124,12 +125,16 @@
      if (*Length < HeaderSize)
          return STATUS_INFO_LENGTH_MISMATCH;
 
+     KeEnterCriticalRegion();
+     NtfsAcquireMetadata(VolCB);
      Buffer->FileNameLength = FileCB->FileName.Length;
      AvailableBytes = *Length - HeaderSize;
      BytesToCopy = min(AvailableBytes, Buffer->FileNameLength);
      BytesToCopy &= ~(sizeof(WCHAR) - 1);
      if (BytesToCopy)
          RtlCopyMemory(Buffer->FileName, FileCB->FileName.Buffer, BytesToCopy);
+     NtfsReleaseMetadata(VolCB);
+     KeLeaveCriticalRegion();
      *Length -= HeaderSize + BytesToCopy;
 
      return BytesToCopy < Buffer->FileNameLength
@@ -1094,8 +1099,13 @@ NtfsSetLinkInformation(_In_ PVolumeContextBlock VolCB,
         }
         if (ExistingRecordNumber == NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber)
         {
-            ExFreePoolWithTag(NewName.Buffer, TAG_NTFS);
-            return STATUS_SUCCESS;
+            Status = NtfsMasterFileTableRenameFile(Mft, NewName.Buffer, NewName.Length / sizeof(WCHAR),
+                                                   NewName.Buffer, NewName.Length / sizeof(WCHAR));
+            if (NT_SUCCESS(Status))
+            {
+                NtfsEvictCachedRecord(VolCB, NewName.Buffer, NewName.Length / sizeof(WCHAR), FALSE);
+            }
+            goto RefreshRecord;
         }
         if (ExistingIsDirectory || NtfsIsFileRecordOpen(VolCB, ExistingRecordNumber))
         {
@@ -1119,6 +1129,7 @@ NtfsSetLinkInformation(_In_ PVolumeContextBlock VolCB,
 
     Status = NtfsMasterFileTableCreateHardLink(Mft, FileCB->FileName.Buffer, FileCB->FileName.Length / sizeof(WCHAR),
                                                NewName.Buffer, NewName.Length / sizeof(WCHAR));
+RefreshRecord:
     if (NT_SUCCESS(Status))
     {
         NtfsEvictCachedRecord(VolCB, FileCB->FileName.Buffer, FileCB->FileName.Length / sizeof(WCHAR), FALSE);
@@ -1142,6 +1153,114 @@ NtfsSetLinkInformation(_In_ PVolumeContextBlock VolCB,
 }
 
 static
+VOID
+NtfsFreeRenameNames(_In_opt_ PFileContextBlock* Files,
+                     _In_opt_ PUNICODE_STRING Names,
+                     _In_ SIZE_T Count)
+{
+    SIZE_T Index;
+
+    if (Names)
+    {
+        for (Index = 0; Index < Count; Index++)
+        {
+            if (Names[Index].Buffer)
+                ExFreePoolWithTag(Names[Index].Buffer, TAG_NTFS);
+        }
+        ExFreePoolWithTag(Names, TAG_NTFS);
+    }
+    if (Files)
+        ExFreePoolWithTag(Files, TAG_NTFS);
+}
+
+static
+NTSTATUS
+NtfsPrepareRenameNames(_In_ PFileContextBlock FileCB,
+                        _In_opt_ PNTFS_NATIVE_LCB Lcb,
+                        _In_ PUNICODE_STRING NewName,
+                        _Out_ PFileContextBlock** Files,
+                        _Out_ PUNICODE_STRING* Names,
+                        _Out_ PSIZE_T Count)
+{
+    PLIST_ENTRY Entry;
+    SIZE_T Index = 1;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    *Files = NULL;
+    *Names = NULL;
+    *Count = 1;
+    if (Lcb)
+    {
+        for (Entry = Lcb->CcbList.Flink; Entry != &Lcb->CcbList; Entry = Entry->Flink)
+        {
+            PNTFS_NATIVE_CCB Ccb = CONTAINING_RECORD(Entry, NTFS_NATIVE_CCB, LcbEntry);
+
+            if (Ccb != &FileCB->NativeCcb)
+                (*Count)++;
+        }
+    }
+    if (*Count > MAXULONG_PTR / sizeof(**Files) ||
+        *Count > MAXULONG_PTR / sizeof(**Names))
+        return STATUS_INSUFFICIENT_RESOURCES;
+    *Files = ExAllocatePoolWithTag(PagedPool, *Count * sizeof(**Files), TAG_NTFS);
+    *Names = ExAllocatePoolZero(PagedPool, *Count * sizeof(**Names), TAG_NTFS);
+    if (!*Files || !*Names)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Failure;
+    }
+    (*Files)[0] = FileCB;
+    if (Lcb)
+    {
+        for (Entry = Lcb->CcbList.Flink; Entry != &Lcb->CcbList; Entry = Entry->Flink)
+        {
+            PNTFS_NATIVE_CCB Ccb = CONTAINING_RECORD(Entry, NTFS_NATIVE_CCB, LcbEntry);
+
+            if (Ccb != &FileCB->NativeCcb)
+                (*Files)[Index++] = CONTAINING_RECORD(Ccb, FileContextBlock, NativeCcb);
+        }
+    }
+    for (Index = 0; Index < *Count; Index++)
+    {
+        PFileContextBlock Other = (*Files)[Index];
+        ULONG Offset;
+        ULONG SuffixLength;
+        ULONG Length;
+
+        for (Offset = 0; Offset < Other->FileName.Length / sizeof(WCHAR); Offset++)
+        {
+            if (Other->FileName.Buffer[Offset] == L':')
+                break;
+        }
+        SuffixLength = Other->FileName.Length - Offset * sizeof(WCHAR);
+        Length = NewName->Length + SuffixLength;
+        if (Length > MAXUSHORT)
+        {
+            Status = STATUS_NAME_TOO_LONG;
+            goto Failure;
+        }
+        (*Names)[Index].Buffer = ExAllocatePoolWithTag(PagedPool, Length, TAG_NTFS);
+        if (!(*Names)[Index].Buffer)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Failure;
+        }
+        RtlCopyMemory((*Names)[Index].Buffer, NewName->Buffer, NewName->Length);
+        RtlCopyMemory((PUCHAR)(*Names)[Index].Buffer + NewName->Length,
+                      Other->FileName.Buffer + Offset, SuffixLength);
+        (*Names)[Index].Length = (*Names)[Index].MaximumLength = (USHORT)Length;
+    }
+    return STATUS_SUCCESS;
+
+Failure:
+    NtfsFreeRenameNames(*Files, *Names, *Count);
+    *Files = NULL;
+    *Names = NULL;
+    *Count = 0;
+    return Status;
+}
+
+static
 NTSTATUS
 NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
                          _In_ PFileContextBlock FileCB,
@@ -1158,7 +1277,14 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     UNICODE_STRING LeafName;
     UNICODE_STRING NewName;
     PWCHAR NameBuffer;
-    PWCHAR OldNameBuffer;
+    PNTFS_NATIVE_LCB Lcb = NULL;
+    PStreamContextBlock NewParent = NULL;
+    UNICODE_STRING NewLeaf;
+    PWCHAR NewLeafBuffer = NULL;
+    PFileContextBlock* RenamedFiles = NULL;
+    PUNICODE_STRING RenamedNames = NULL;
+    SIZE_T RenamedCount = 0;
+    SIZE_T NameIndex;
     ULONGLONG ExistingRecordNumber;
     ULONG RemainingNameLength = 0;
     USHORT PrefixLength;
@@ -1240,6 +1366,39 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     NewName.Buffer[PrefixLength / sizeof(WCHAR)] = L'\\';
     RtlCopyMemory((PUCHAR)NewName.Buffer + PrefixLength + sizeof(WCHAR), LeafName.Buffer, LeafName.Length);
 
+    if (NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY)
+    {
+        Status = NtfsCheckDirectoryOpenChildren(VolCB, FileCB->StreamCB->FileReference);
+        if (!NT_SUCCESS(Status))
+            goto Finish;
+    }
+    if (NewName.Length == FileCB->FileName.Length &&
+        RtlCompareMemory(NewName.Buffer, FileCB->FileName.Buffer, NewName.Length) == NewName.Length)
+    {
+        Status = STATUS_SUCCESS;
+        goto Finish;
+    }
+    Status = NtfsFindOpenLink(VolCB, FileCB, &Lcb);
+    if (!NT_SUCCESS(Status))
+        goto Finish;
+    Status = NtfsReferenceNameParent(VolCB, &NewName, &NewParent, &NewLeaf);
+    if (!NT_SUCCESS(Status))
+        goto Finish;
+    if (Lcb)
+    {
+        NewLeafBuffer = ExAllocatePoolWithTag(PagedPool, NewLeaf.Length, TAG_NTFS);
+        if (!NewLeafBuffer)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Finish;
+        }
+        RtlCopyMemory(NewLeafBuffer, NewLeaf.Buffer, NewLeaf.Length);
+    }
+    Status = NtfsPrepareRenameNames(FileCB, Lcb, &NewName,
+                                   &RenamedFiles, &RenamedNames, &RenamedCount);
+    if (!NT_SUCCESS(Status))
+        goto Finish;
+
     /*
      * A destination that already exists is only overwritten when the caller
      * asked for it, and never when it is a directory. Renaming a file onto
@@ -1258,19 +1417,19 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
             if (NewName.Length == FileCB->FileName.Length &&
                 RtlCompareMemory(NewName.Buffer, FileCB->FileName.Buffer, NewName.Length) == NewName.Length)
             {
-                ExFreePoolWithTag(NameBuffer, TAG_NTFS);
-                return STATUS_SUCCESS;
+                Status = STATUS_SUCCESS;
+                goto Finish;
             }
         }
         else if (!ReplaceIfExists)
         {
-            ExFreePoolWithTag(NameBuffer, TAG_NTFS);
-            return STATUS_OBJECT_NAME_COLLISION;
+            Status = STATUS_OBJECT_NAME_COLLISION;
+            goto Finish;
         }
         else if (ExistingIsDirectory || NtfsIsFileRecordOpen(VolCB, ExistingRecordNumber))
         {
-            ExFreePoolWithTag(NameBuffer, TAG_NTFS);
-            return STATUS_ACCESS_DENIED;
+            Status = STATUS_ACCESS_DENIED;
+            goto Finish;
         }
         else
         {
@@ -1279,8 +1438,7 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
             InterlockedIncrement(&VolCB->DirGeneration);
             if (!NT_SUCCESS(Status))
             {
-                ExFreePoolWithTag(NameBuffer, TAG_NTFS);
-                return Status;
+                goto Finish;
             }
         }
     }
@@ -1294,14 +1452,40 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     Status = NtfsMasterFileTableRenameFile(NtfsVolumeGetMft(VolCB->DiskVolume), FileCB->FileName.Buffer, FileCB->FileName.Length / sizeof(WCHAR), NewName.Buffer, NewName.Length / sizeof(WCHAR));
     if (!NT_SUCCESS(Status))
     {
-        ExFreePoolWithTag(NameBuffer, TAG_NTFS);
-        return Status;
+        goto Finish;
     }
 
-    NtfsEvictCachedRecord(VolCB, FileCB->FileName.Buffer, FileCB->FileName.Length / sizeof(WCHAR), FALSE);
-    NtfsRecordNameMissing(VolCB, FileCB->FileName.Buffer, FileCB->FileName.Length / sizeof(WCHAR));
+    for (NameIndex = 0; NameIndex < RenamedCount; NameIndex++)
+    {
+        PFileContextBlock Other = RenamedFiles[NameIndex];
+        PWCHAR OldBuffer = Other->FileName.Buffer;
+
+        NtfsEvictCachedRecord(VolCB, OldBuffer, Other->FileName.Length / sizeof(WCHAR), FALSE);
+        NtfsRecordNameMissing(VolCB, OldBuffer, Other->FileName.Length / sizeof(WCHAR));
+        Other->FileName = RenamedNames[NameIndex];
+        Other->NativeCcb.FileName = Other->FileName;
+        RenamedNames[NameIndex].Buffer = NULL;
+        if (OldBuffer != Other->InlineFileName)
+            ExFreePoolWithTag(OldBuffer, TAG_NTFS);
+    }
+    if (Lcb)
+    {
+        PStreamContextBlock OldParent =
+            CONTAINING_RECORD(Lcb->ParentScb, StreamContextBlock, NativeScb);
+
+        RemoveEntryList(&Lcb->ParentEntry);
+        Lcb->ParentScb = &NewParent->NativeScb;
+        InsertTailList(&NewParent->NativeScb.ChildLcbList, &Lcb->ParentEntry);
+        ExFreePoolWithTag(Lcb->FileName.Buffer, TAG_NTFS);
+        Lcb->FileName.Buffer = NewLeafBuffer;
+        Lcb->FileName.Length = Lcb->FileName.MaximumLength = NewLeaf.Length;
+        NewLeafBuffer = NULL;
+        NewParent = NULL;
+        NtfsDereferenceStreamContext(VolCB, OldParent);
+    }
     NtfsForgetMissingName(VolCB, NewName.Buffer, NewName.Length / sizeof(WCHAR));
     InterlockedIncrement(&VolCB->DirGeneration);
+    FileObject->Flags |= FO_FILE_MODIFIED;
 
     Status = NtfsMasterFileTableGetFileRecordFromQueryEx(NtfsVolumeGetMft(VolCB->DiskVolume), NewName.Buffer, NewName.Length / sizeof(WCHAR), TRUE, &RemainingNameLength, &RefreshedRecord);
     if (NT_SUCCESS(Status) && RemainingNameLength == 0)
@@ -1310,8 +1494,7 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
         NtfsFileRecordDestroy(RefreshedRecord);
         if (!NT_SUCCESS(Status))
         {
-            ExFreePoolWithTag(NameBuffer, TAG_NTFS);
-            return Status;
+            goto Finish;
         }
     }
     else
@@ -1321,23 +1504,16 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
         DPRINT1("NtfsSetRenameInformation: renamed file but failed to refresh its record (0x%08lx, remaining %lu)\n", Status, RemainingNameLength);
     }
 
-    OldNameBuffer = FileCB->FileName.Buffer;
-    if (NewName.Length <= sizeof(FileCB->InlineFileName))
-    {
-        RtlCopyMemory(FileCB->InlineFileName, NewName.Buffer, NewName.Length);
-        FileCB->FileName.Buffer = FileCB->InlineFileName;
-        ExFreePoolWithTag(NameBuffer, TAG_NTFS);
-    }
-    else
-    {
-        FileCB->FileName.Buffer = NameBuffer;
-    }
-    FileCB->FileName.Length = NewName.Length;
-    FileCB->FileName.MaximumLength = NewName.Length;
-    if (OldNameBuffer != FileCB->InlineFileName)
-        ExFreePool(OldNameBuffer);
-    FileObject->Flags |= FO_FILE_MODIFIED;
-    return STATUS_SUCCESS;
+    Status = STATUS_SUCCESS;
+
+Finish:
+    NtfsFreeRenameNames(RenamedFiles, RenamedNames, RenamedCount);
+    if (NewLeafBuffer)
+        ExFreePoolWithTag(NewLeafBuffer, TAG_NTFS);
+    if (NewParent)
+        NtfsDereferenceStreamContext(VolCB, NewParent);
+    ExFreePoolWithTag(NameBuffer, TAG_NTFS);
+    return Status;
 }
 
 /* GLOBALS *****************************************************************/
@@ -1416,7 +1592,7 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
                                           &BufferLength);
             break;
         case FileNameInformation:
-            Status = GetFileNameInformation(FileCB,
+            Status = GetFileNameInformation(VolumeDeviceObject->DeviceExtension, FileCB,
                                             (PFILE_NAME_INFORMATION)SystemBuffer,
                                             &BufferLength);
             break;
@@ -1512,7 +1688,8 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
             All->AlignmentInformation.AlignmentRequirement = FILE_BYTE_ALIGNMENT;
 
             NameLength = BufferLength - FixedLength;
-            Status = GetFileNameInformation(FileCB, &All->NameInformation, &NameLength);
+            Status = GetFileNameInformation(VolumeDeviceObject->DeviceExtension, FileCB,
+                                            &All->NameInformation, &NameLength);
             if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW)
             {
                 BufferLength = NameLength;
@@ -1820,7 +1997,8 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     goto Complete;
 
                 if (FileCB->StreamCB &&
-                    !MmFlushImageSection(&FileCB->StreamCB->SectionObjectPointers, MmFlushForDelete))
+                    (!MmFlushImageSection(&FileCB->StreamCB->SectionObjectPointers, MmFlushForDelete) ||
+                     !MmCanFileBeTruncated(&FileCB->StreamCB->SectionObjectPointers, NULL)))
                 {
                     Status = STATUS_CANNOT_DELETE;
                     goto Complete;
@@ -2101,6 +2279,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             else
             {
                 KeEnterCriticalRegion();
+                NtfsAcquireMetadata(VolCB);
                 FsRtlNotifyFullChangeDirectory(
                     VolCB->NotifySync,
                     &VolCB->NotifyList,
@@ -2112,6 +2291,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     Irp,
                     NULL,
                     NULL);
+                NtfsReleaseMetadata(VolCB);
                 KeLeaveCriticalRegion();
                 return STATUS_PENDING;
             }

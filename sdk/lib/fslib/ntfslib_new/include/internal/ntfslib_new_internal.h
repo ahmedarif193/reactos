@@ -132,6 +132,16 @@ NtfsIsNameInExpression(_In_     PUNICODE_STRING Expression,
 NTSTATUS
 NtfsQuerySystemTime(_Out_ PULONGLONG NtfsTime);
 
+NTSTATUS
+NtfsGenerate8dot3Name(_In_ PCUNICODE_STRING Name,
+                      _Inout_ PGENERATE_NAME_CONTEXT Context,
+                      _Inout_ PUNICODE_STRING ShortName);
+
+NTSTATUS
+NtfsGenerate8dot3NameFallback(_In_ PCUNICODE_STRING Name,
+                              _Inout_ PGENERATE_NAME_CONTEXT Context,
+                              _Inout_ PUNICODE_STRING ShortName);
+
 unsigned long long
 NtfsQueryTicks(void);
 
@@ -1477,6 +1487,19 @@ public:
         _Out_ PWCHAR Buffer,
         _In_ ULONG BufferLength,
         _Out_ PULONG PathLength);
+
+    NTSTATUS
+    GetLinkName(
+        _In_ PFileRecord File,
+        _In_ ULONGLONG ParentReference,
+        _In_ PUNICODE_STRING Name,
+        _Out_ PUNICODE_STRING LinkName);
+
+    NTSTATUS
+    IsDescendantDirectory(
+        _In_ ULONGLONG FileReference,
+        _In_ ULONGLONG AncestorReference,
+        _Out_ PBOOLEAN Descendant);
 
     NTSTATUS
     GetFileAttributeFromFileRecordNumber(_In_  AttributeType Type,

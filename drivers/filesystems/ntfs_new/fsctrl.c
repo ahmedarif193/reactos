@@ -58,7 +58,7 @@ NtfsGetReparsePoint(_Inout_ PIRP Irp,
 
     BufferLength =
         IrpSp->Parameters.FileSystemControl.OutputBufferLength;
-    if (BufferLength != 0 && !Irp->AssociatedIrp.SystemBuffer)
+    if (!BufferLength || !Irp->AssociatedIrp.SystemBuffer)
         return STATUS_INVALID_USER_BUFFER;
 
     Status = NtfsFileRecordReadReparsePoint(

@@ -645,6 +645,27 @@ NtfsLogFileServiceGetClientMinorVersion(
 
 /* MFT functions */
 NTSTATUS
+NtfsMasterFileTableGetFileRecordByReference(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ ULONGLONG FileReference,
+    _Out_ PNtfsFileRecord* File);
+
+NTSTATUS
+NtfsMasterFileTableGetLinkName(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ PNtfsFileRecord File,
+    _In_ ULONGLONG ParentReference,
+    _In_ PUNICODE_STRING Name,
+    _Out_ PUNICODE_STRING LinkName);
+
+NTSTATUS
+NtfsMasterFileTableIsDescendantDirectory(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ ULONGLONG FileReference,
+    _In_ ULONGLONG AncestorReference,
+    _Out_ PBOOLEAN Descendant);
+
+NTSTATUS
 NtfsMasterFileTableGetFileRecordFromQuery(
     _In_ PNtfsMasterFileTable Mft,
     _In_ PWCHAR Query,

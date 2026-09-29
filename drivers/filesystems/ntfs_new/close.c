@@ -46,6 +46,8 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         PFileContextBlock FileCB = NtfsGetFileContext(IrpSp->FileObject);
         if (FileCB)
         {
+            PVolumeContextBlock VolCB =
+                (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
             // Cleanup normally tore the private cache map down already; a
             // file object closed without one still needs this.
             if (IrpSp->FileObject->PrivateCacheMap)
@@ -56,6 +58,8 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             /* Resources are kept alive with the block; see the reuse path
              * in create. They are only torn down when it is really freed. */
 
+            KeEnterCriticalRegion();
+            NtfsAcquireMetadata(VolCB);
             if (FileCB->FileDir)
             {
                 PVolumeContextBlock Vol =
@@ -70,30 +74,15 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                         Vol->CachedDirBusy = FALSE;
                         Doomed = NULL;
                     }
-                    else if ((!Vol->CachedDir ||
-                              (!Vol->CachedDirBusy &&
-                               Vol->CachedDirGeneration != Vol->DirGeneration)) &&
-                             FileCB->FileName.Length != 0 &&
-                             FileCB->FileName.Length <= sizeof(Vol->CachedDirPath))
-                    {
-                        PNtfsDirectory Evicted = Vol->CachedDir;
-
-                        Vol->CachedDir = FileCB->FileDir;
-                        Vol->CachedDirBusy = FALSE;
-                        Vol->CachedDirGeneration = Vol->DirGeneration;
-                        Vol->CachedDirPathLength =
-                            (USHORT)(FileCB->FileName.Length / sizeof(WCHAR));
-                        RtlCopyMemory(Vol->CachedDirPath,
-                                      FileCB->FileName.Buffer,
-                                      FileCB->FileName.Length);
-                        Doomed = Evicted;
-                    }
                     ExReleaseFastMutex(&Vol->DirCacheMutex);
                 }
 
                 if (Doomed)
                     NtfsDirectoryDestroy(Doomed);
             }
+            NtfsRemoveOpenLink(VolCB, FileCB);
+            NtfsReleaseMetadata(VolCB);
+            KeLeaveCriticalRegion();
 
             /* A cached record outlives this handle and is freed by the cache. */
             if (FileCB->CachedRecord)

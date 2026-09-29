@@ -48,6 +48,14 @@ NtfsQuerySystemTime(_Out_ PULONGLONG NtfsTime)
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+NtfsGenerate8dot3Name(_In_ PCUNICODE_STRING Name,
+                      _Inout_ PGENERATE_NAME_CONTEXT Context,
+                      _Inout_ PUNICODE_STRING ShortName)
+{
+    return RtlGenerate8dot3Name(Name, FALSE, Context, ShortName);
+}
+
 #ifdef __cplusplus
 }
 #endif

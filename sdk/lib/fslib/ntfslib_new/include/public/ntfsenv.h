@@ -62,6 +62,25 @@ typedef struct _UNICODE_STRING
     PWSTR Buffer;
 } UNICODE_STRING, *PUNICODE_STRING;
 
+typedef const UNICODE_STRING* PCUNICODE_STRING;
+
+typedef struct _GENERATE_NAME_CONTEXT
+{
+    USHORT Checksum;
+    BOOLEAN ChecksumInserted;
+    UCHAR NameLength;
+    WCHAR NameBuffer[8];
+    ULONG ExtensionLength;
+    WCHAR ExtensionBuffer[4];
+    ULONG LastIndexValue;
+} GENERATE_NAME_CONTEXT, *PGENERATE_NAME_CONTEXT;
+
+static_assert(sizeof(GENERATE_NAME_CONTEXT) == 36, "GENERATE_NAME_CONTEXT size");
+static_assert(offsetof(GENERATE_NAME_CONTEXT, NameBuffer) == 4, "NameBuffer offset");
+static_assert(offsetof(GENERATE_NAME_CONTEXT, ExtensionLength) == 20, "ExtensionLength offset");
+static_assert(offsetof(GENERATE_NAME_CONTEXT, ExtensionBuffer) == 24, "ExtensionBuffer offset");
+static_assert(offsetof(GENERATE_NAME_CONTEXT, LastIndexValue) == 32, "LastIndexValue offset");
+
 typedef struct _GUID
 {
     UINT32 Data1;
@@ -226,6 +245,8 @@ typedef struct _FILE_ID_BOTH_DIR_INFORMATION
 #define STATUS_FILE_IS_A_DIRECTORY ((NTSTATUS)0xC00000BA)
 #define STATUS_DIRECTORY_NOT_EMPTY ((NTSTATUS)0xC0000101)
 #define STATUS_FILE_CORRUPT_ERROR ((NTSTATUS)0xC0000102)
+#define STATUS_FILE_DELETED ((NTSTATUS)0xC0000123)
+#define STATUS_FILE_SYSTEM_LIMITATION ((NTSTATUS)0xC0000427)
 #define STATUS_NOT_A_DIRECTORY ((NTSTATUS)0xC0000103)
 #define STATUS_NAME_TOO_LONG ((NTSTATUS)0xC0000106)
 #define STATUS_UNRECOGNIZED_VOLUME ((NTSTATUS)0xC000014F)

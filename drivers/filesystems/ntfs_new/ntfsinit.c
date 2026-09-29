@@ -226,6 +226,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
      */
     PIO_STACK_LOCATION IrpSp;
     PFileContextBlock FileCB;
+    BOOLEAN FirstCleanup = FALSE;
 
     if (VolumeDeviceObject == NtfsDiskFileSystemDeviceObject)
     {
@@ -273,6 +274,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (VolCB->OpenHandleCount > 0)
             VolCB->OpenHandleCount--;
         FileCB->CleanupComplete = TRUE;
+        FirstCleanup = TRUE;
         ExReleaseFastMutex(&VolCB->VolumeStateMutex);
 
         if (NotifyUnlock)
@@ -425,14 +427,13 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 DeletePath,
                 DeletePathLength,
                 IsDirectory);
-            NtfsReleaseMetadata(VolCB);
-            KeLeaveCriticalRegion();
-
             InterlockedIncrement(&VolCB->DirGeneration);
             NtfsEvictCachedRecord(VolCB,
                                   DeletePath,
                                   (USHORT)DeletePathLength,
                                   NT_SUCCESS(DeleteStatus));
+            NtfsReleaseMetadata(VolCB);
+            KeLeaveCriticalRegion();
             if (ResolvedPath)
                 ExFreePoolWithTag(ResolvedPath, TAG_NTFS);
             if (!NT_SUCCESS(DeleteStatus) && FileCB->StreamCB)
@@ -449,6 +450,18 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
          * release the private map prevents normal cached files from closing. */
         if (IrpSp->FileObject->PrivateCacheMap)
             CcUninitializeCacheMap(IrpSp->FileObject, NULL, NULL);
+        if (FirstCleanup)
+        {
+            KeEnterCriticalRegion();
+            NtfsAcquireMetadata(VolCB);
+            if (FileCB->NativeCcb.Lcb)
+            {
+                ASSERT(FileCB->NativeCcb.Lcb->CleanupCount != 0);
+                FileCB->NativeCcb.Lcb->CleanupCount--;
+            }
+            NtfsReleaseMetadata(VolCB);
+            KeLeaveCriticalRegion();
+        }
     }
 
     // TODO: How do we determine when the volume needs to get cleaned up?

@@ -10,6 +10,7 @@
 #include <ndk/umtypes.h> // NTSTATUS, STATUS_*, UNICODE_STRING
 #include <ndk/iofuncs.h>
 #include <ndk/obfuncs.h>
+#include <ndk/rtltypes.h>
 #include <ntfs_um.h>
 #include <debug.h>
 
@@ -32,6 +33,10 @@ BOOLEAN NtfsIsNameInExpressionFallback(
 HANDLE VolumeHandle = NULL;
 ULONG SectorSize = 0;
 static PRtlIsNameInExpression pRtlIsNameInExpression;
+static NTSTATUS (NTAPI *pRtlGenerate8dot3Name)(PCUNICODE_STRING,
+                                            BOOLEAN,
+                                            PGENERATE_NAME_CONTEXT,
+                                            PUNICODE_STRING);
 
 NTSTATUS
 NtfsDiskInitializeUm(
@@ -66,6 +71,8 @@ NtfsDiskInitializeUm(
     // Check if we have RtlIsNameInExpression() in ntdll. If we do, save the pointer.
     pRtlIsNameInExpression = reinterpret_cast<PRtlIsNameInExpression>(GetProcAddress(GetModuleHandleA("ntdll.dll"),
                                                                                      "RtlIsNameInExpression"));
+    pRtlGenerate8dot3Name = reinterpret_cast<decltype(pRtlGenerate8dot3Name)>(
+        GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlGenerate8dot3Name"));
 
     return STATUS_SUCCESS;
 }
@@ -86,6 +93,16 @@ void
 NtfsFreePool(void* pObject)
 {
     HeapFree(GetProcessHeap(), 0, pObject);
+}
+
+NTSTATUS
+NtfsGenerate8dot3Name(_In_ PCUNICODE_STRING Name,
+                      _Inout_ PGENERATE_NAME_CONTEXT Context,
+                      _Inout_ PUNICODE_STRING ShortName)
+{
+    if (!pRtlGenerate8dot3Name)
+        return STATUS_PROCEDURE_NOT_FOUND;
+    return pRtlGenerate8dot3Name(Name, FALSE, Context, ShortName);
 }
 
 NTSTATUS
