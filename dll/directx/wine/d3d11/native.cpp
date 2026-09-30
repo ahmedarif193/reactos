@@ -4955,6 +4955,8 @@ public:
     UINT transport_frame[3] = {}, transport_fills = 0;
     NativeTexture2D *transport = NULL; /* the latest frame, one of transports */
     RECT frame_damage[8] = {};
+    RECT back_damage[16] = {};
+    UINT back_presents = 0;
     DWM_DX_SURFACE_EXCHANGE publication = {};
     /* The overlay planes of the compositor output's present in progress. */
     UINT overlay_count = 0;
@@ -5016,6 +5018,7 @@ public:
     void CloseReleaseEvents();
     HRESULT Publish(NativeTexture2D *);
     HRESULT FillTransport(UINT, const DXGI_PRESENT_PARAMETERS *);
+    HRESULT CarryForward(const DXGI_PRESENT_PARAMETERS *);
     HRESULT QueuePublish(const DWM_DX_SURFACE_EXCHANGE &, HANDLE release);
     void CompletePublish(NativePublishRecord *);
     void DrainPublishes();
@@ -5419,6 +5422,83 @@ HRESULT NativeSwapChain::RetirePublication()
     return hr;
 }
 
+static RECT NativePresentDamage(const DXGI_SWAP_CHAIN_DESC1 &desc, const DXGI_PRESENT_PARAMETERS *parameters)
+{
+    RECT damage = {0, 0, static_cast<LONG>(desc.Width), static_cast<LONG>(desc.Height)};
+    if (parameters && parameters->DirtyRectsCount)
+    {
+        SetRectEmpty(&damage);
+        for (UINT i = 0; i < parameters->DirtyRectsCount; ++i)
+            UnionRect(&damage, &damage, &parameters->pDirtyRects[i]);
+    }
+    return damage;
+}
+
+static bool NativeSubtractRect(RECT *pieces, UINT &count, const RECT &cut)
+{
+    RECT kept[64];
+    UINT total = 0;
+    for (UINT i = 0; i < count; ++i)
+    {
+        const RECT &piece = pieces[i];
+        RECT overlap;
+        if (!IntersectRect(&overlap, &piece, &cut))
+        {
+            if (total == ARRAYSIZE(kept)) return false;
+            kept[total++] = piece;
+            continue;
+        }
+        RECT parts[4] = {{piece.left, piece.top, piece.right, overlap.top},
+                         {piece.left, overlap.bottom, piece.right, piece.bottom},
+                         {piece.left, overlap.top, overlap.left, overlap.bottom},
+                         {overlap.right, overlap.top, piece.right, overlap.bottom}};
+        for (UINT j = 0; j < ARRAYSIZE(parts); ++j)
+        {
+            if (IsRectEmpty(&parts[j])) continue;
+            if (total == ARRAYSIZE(kept)) return false;
+            kept[total++] = parts[j];
+        }
+    }
+    memcpy(pieces, kept, total * sizeof(*kept));
+    count = total;
+    return true;
+}
+
+HRESULT NativeSwapChain::CarryForward(const DXGI_PRESENT_PARAMETERS *parameters)
+{
+    UINT count = desc.BufferCount;
+    RECT full = {0, 0, static_cast<LONG>(desc.Width), static_cast<LONG>(desc.Height)};
+    RECT damage = NativePresentDamage(desc, parameters);
+    if ((desc.SwapEffect != DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL && desc.SwapEffect != DXGI_SWAP_EFFECT_FLIP_DISCARD)
+            || count < 2 || !back_presents || EqualRect(&damage, &full))
+        return S_OK;
+    RECT stale = {};
+    if (back_presents < count) stale = full;
+    for (UINT past = back_presents - (count - 1); back_presents >= count && past < back_presents; ++past)
+        UnionRect(&stale, &stale, &back_damage[past % ARRAYSIZE(back_damage)]);
+    if (IsRectEmpty(&stale)) return S_OK;
+    RECT pieces[64] = {stale};
+    UINT pieces_count = 1;
+    bool exact = true;
+    for (UINT i = 0; exact && i < parameters->DirtyRectsCount; ++i)
+        exact = NativeSubtractRect(pieces, pieces_count, parameters->pDirtyRects[i]);
+    if (!exact)
+    {
+        pieces[0] = stale;
+        pieces_count = 1;
+        NativeSubtractRect(pieces, pieces_count, damage);
+    }
+    device->BeginCall();
+    for (UINT i = 0; i < pieces_count; ++i)
+    {
+        D3D11_BOX box = {static_cast<UINT>(pieces[i].left), static_cast<UINT>(pieces[i].top), 0,
+                        static_cast<UINT>(pieces[i].right), static_cast<UINT>(pieces[i].bottom), 1};
+        device->context->CopySubresourceRegion(buffers[0], 0, pieces[i].left, pieces[i].top, 0,
+                                               buffers[count - 1], 0, &box);
+    }
+    return device->operation_error;
+}
+
 /* Copy the back buffer into a transport DWM has released. That transport
  * holds an older frame, so the damage of every present since is copied. */
 HRESULT NativeSwapChain::FillTransport(UINT flags, const DXGI_PRESENT_PARAMETERS *parameters)
@@ -5793,6 +5873,7 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
             transport_frame[i] = 0;
         }
         transport_fills = 0;
+        back_presents = 0;
         transport = NULL;
         transport_valid = false;
         desc = requested;
@@ -5956,7 +6037,8 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
     if (!sequence && !present_count) return S_OK;
     if (!primary && sequence)
     {
-        HRESULT hr = S_OK;
+        HRESULT hr = CarryForward(parameters);
+        if (FAILED(hr)) return hr;
         if (transports[0])
             hr = FillTransport(flags, parameters);
         /* The next buffer becomes the back buffer. With three or more, DWM
@@ -6018,6 +6100,7 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
         hr = device->dxgi_functions.pfnRotateResourceIdentities(&rotate);
         if (SUCCEEDED(hr)) hr = device->rotate_resources(device->runtime_device, runtime_resources, desc.BufferCount);
         if (FAILED(hr)) { device->removed_reason = DXGI_ERROR_DRIVER_INTERNAL_ERROR; return hr; }
+        back_damage[back_presents++ % ARRAYSIZE(back_damage)] = NativePresentDamage(desc, parameters);
         /* The application renders into the new back buffer once Present
          * returns, so DWM must have released that frame first. */
         if (window && !transports[0])

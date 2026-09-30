@@ -6,6 +6,7 @@ extern void func_d3d11_render_probe(void);
 extern void func_dwm_render(void);
 extern void func_completion_event(void);
 extern void func_composition(void);
+extern void func_composition_damage(void);
 extern void func_composition_lifetime(void);
 extern void func_texture_dimensions(void);
 extern void func_multisample(void);
@@ -22,6 +23,7 @@ const struct test winetest_testlist[] =
     { "dwm_render", func_dwm_render },
     { "completion_event", func_completion_event },
     { "composition", func_composition },
+    { "composition_damage", func_composition_damage },
     { "composition_lifetime", func_composition_lifetime },
     { "texture_dimensions", func_texture_dimensions },
     { "multisample", func_multisample },

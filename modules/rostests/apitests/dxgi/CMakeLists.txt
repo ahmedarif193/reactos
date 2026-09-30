@@ -3,6 +3,7 @@ add_executable(dxgi_apitest
     dxgi.c
     texture_dimensions.cpp
     composition.cpp
+    composition_damage.cpp
     composition_lifetime.cpp
     completion_event.cpp
     buffer_copy.cpp
@@ -13,5 +14,5 @@ add_executable(dxgi_apitest
 
 target_include_directories(dxgi_apitest PRIVATE ${REACTOS_SOURCE_DIR}/base/system/dwm)
 set_module_type(dxgi_apitest win32cui)
-add_importlibs(dxgi_apitest user32 msvcrt kernel32)
+add_importlibs(dxgi_apitest user32 gdi32 msvcrt kernel32)
 add_rostests_file(TARGET dxgi_apitest)
