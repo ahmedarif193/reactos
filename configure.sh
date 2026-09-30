@@ -189,6 +189,29 @@ sync_glmark2_submodule() {
 	[ -f "$GLMARK2_DIR/src/zlib/adler32.c" ] || fail "glmark2 submodule is incomplete after synchronization"
 }
 
+install_host_packages() {
+	[ "${ROSBE_DOCKER_ACTIVE:-0}" = "1" ] && return 0
+	HOST_PACKAGES_MISSING=
+	for HOST_TOOL in cmake:cmake ninja:ninja-build flex:flex bison:bison ccache:ccache wget:wget xz:xz-utils tar:tar python3:python3; do
+		command -v "${HOST_TOOL%%:*}" >/dev/null 2>&1 ||
+			HOST_PACKAGES_MISSING="$HOST_PACKAGES_MISSING ${HOST_TOOL#*:}"
+	done
+	for HOST_PYMOD in mako:python3-mako yaml:python3-yaml packaging:python3-packaging; do
+		python3 -c "import ${HOST_PYMOD%%:*}" >/dev/null 2>&1 ||
+			HOST_PACKAGES_MISSING="$HOST_PACKAGES_MISSING ${HOST_PYMOD#*:}"
+	done
+	[ -n "$HOST_PACKAGES_MISSING" ] || return 0
+	if ! command -v apt-get >/dev/null 2>&1; then
+		echo "configure.sh: warning: missing host packages:$HOST_PACKAGES_MISSING" >&2
+		return 0
+	fi
+	HOST_SUDO=
+	[ "$(id -u)" = "0" ] || HOST_SUDO=sudo
+	echo "Installing host packages:$HOST_PACKAGES_MISSING"
+	{ $HOST_SUDO apt-get update && $HOST_SUDO apt-get install -y $HOST_PACKAGES_MISSING; } ||
+		fail "could not install the host packages:$HOST_PACKAGES_MISSING"
+}
+
 # External sources live in their own repositories, declared in feeds.conf.
 # They are checked out under submodules/ and track their configured branch.
 sync_feeds() {
@@ -639,6 +662,7 @@ if [ "$ROSCONFIG_OK" = "1" ]; then
 fi
 echo
 
+install_host_packages
 sync_glmark2_submodule
 sync_feeds
 verify_kdb_sources
