@@ -13,6 +13,7 @@
  */
 
 #define TWM_GETTASKSWITCH (WM_USER + 236)
+#define TSWM_MARKFULLSCREEN (WM_USER + 7)
 
 CTaskbarList::CTaskbarList()
     : m_hTaskWnd(NULL)
@@ -48,8 +49,10 @@ void CTaskbarList::SendTaskWndShellHook(WPARAM wParam, HWND hWnd)
 
 HRESULT WINAPI CTaskbarList::MarkFullscreenWindow(HWND hwnd, BOOL fFullscreen)
 {
-    UNIMPLEMENTED;
-    return E_NOTIMPL;
+    HWND hTaskWnd = TaskWnd();
+    if (hTaskWnd)
+        ::PostMessageW(hTaskWnd, TSWM_MARKFULLSCREEN, (WPARAM)hwnd, fFullscreen);
+    return S_OK;
 }
 
 

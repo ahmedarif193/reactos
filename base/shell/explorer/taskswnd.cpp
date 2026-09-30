@@ -56,6 +56,7 @@
 #define TSWM_TASKDRAGBEGIN (WM_USER + 4)
 #define TSWM_TASKDRAGMOVE (WM_USER + 5)
 #define TSWM_TASKDRAGEND (WM_USER + 6)
+#define TSWM_MARKFULLSCREEN (WM_USER + 7)
 
 static BOOL
 SHELL_GetMonitorRect(
@@ -103,10 +104,13 @@ SHELL_IsRudeWindowActive(_In_ HWND hWnd)
 }
 
 static BOOL
-SHELL_IsRudeWindow(_In_opt_ HMONITOR hMonitor, _In_ HWND hWnd, _In_ BOOL bDontCheckActive)
+SHELL_IsRudeWindow(_In_opt_ HMONITOR hMonitor, _In_ HWND hWnd, _In_ BOOL bDontCheckActive, _In_ BOOL bMarked)
 {
-    if (!::IsWindowVisible(hWnd) || hWnd == ::GetDesktopWindow())
+    if (!::IsWindowVisible(hWnd) || hWnd == ::GetDesktopWindow() || ::GetPropW(hWnd, L"NonRudeHWND"))
         return FALSE;
+
+    if (bMarked)
+        return bDontCheckActive || SHELL_IsRudeWindowActive(hWnd);
 
     RECT rcMonitor;
     SHELL_GetMonitorRect(hMonitor, &rcMonitor, FALSE);
@@ -641,6 +645,8 @@ class CTaskSwitchWnd :
     BOOL m_IsDestroying;
 
     INT m_nRudeAppValidationCounter;
+    CSimpleArray<HWND> m_MarkedFullscreen;
+    BOOL m_bTrayLoweredForRude;
 
     SIZE m_ButtonSize;
 
@@ -680,6 +686,7 @@ public:
         m_IsGroupingEnabled(FALSE),
         m_IsDestroying(FALSE),
         m_nRudeAppValidationCounter(0),
+        m_bTrayLoweredForRude(FALSE),
         m_bDragging(FALSE),
         m_DropIndex(-1),
         m_DragGroup(NULL),
@@ -4174,6 +4181,7 @@ public:
         HMONITOR hTargetMonitor;
         HWND hwndFound;
         HWND hwndFirstCheck;
+        CTaskSwitchWnd *pThis;
     } RUDEAPPDATA, *PRUDEAPPDATA;
 
     // Find any rude app
@@ -4185,7 +4193,8 @@ public:
         HMONITOR hMon = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         if (!hMon ||
             (pData->hTargetMonitor && pData->hTargetMonitor != hMon) ||
-            !SHELL_IsRudeWindow(hMon, hwnd, (hwnd == pData->hwndFirstCheck)))
+            !SHELL_IsRudeWindow(hMon, hwnd, (hwnd == pData->hwndFirstCheck),
+                                pData->pThis->m_MarkedFullscreen.Find(hwnd) >= 0))
         {
             return TRUE; // Continue
         }
@@ -4235,15 +4244,20 @@ public:
         Data.pTray = m_Tray;
         ::EnumDisplayMonitors(NULL, NULL, FullScreenEnumProc, (LPARAM)&Data);
 
+        UINT uFlags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+        HWND hwndTray = m_Tray->GetHWND();
+        if (!hwndRude && m_bTrayLoweredForRude)
+        {
+            m_bTrayLoweredForRude = FALSE;
+            if (g_TaskbarSettings.sr.AlwaysOnTop)
+                ::SetWindowPos(hwndTray, HWND_TOPMOST, 0, 0, 0, 0, uFlags);
+        }
+
         if (hwndRude)
         {
-            if (!g_TaskbarSettings.sr.AlwaysOnTop)
-            {
-                // Make the taskbar bottom
-                UINT uFlags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
-                HWND hwndTray = m_Tray->GetHWND();
-                ::SetWindowPos(hwndTray, HWND_BOTTOM, 0, 0, 0, 0, uFlags);
-            }
+            // Make the taskbar bottom
+            ::SetWindowPos(hwndTray, HWND_BOTTOM, 0, 0, 0, 0, uFlags);
+            m_bTrayLoweredForRude = TRUE;
 
             // Switch to the rude app if necessary
             DWORD exstyle = (DWORD)::GetWindowLongPtrW(hwndRude, GWL_EXSTYLE);
@@ -4256,7 +4270,7 @@ public:
     {
         // Quick check
         HMONITOR hMon = MonitorFromWindow(hwndFirstCheck, MONITOR_DEFAULTTONEAREST);
-        RUDEAPPDATA data = { hMon, NULL, hwndFirstCheck };
+        RUDEAPPDATA data = { hMon, NULL, hwndFirstCheck, this };
         if (::IsWindow(hwndFirstCheck) && !IsRudeEnumProc(hwndFirstCheck, (LPARAM)&data))
             return hwndFirstCheck;
 
@@ -4277,6 +4291,22 @@ public:
         return 0;
     }
 
+    LRESULT OnMarkFullscreen(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        HWND hwndTarget = (HWND)wParam;
+        for (INT i = m_MarkedFullscreen.GetSize() - 1; i >= 0; --i)
+        {
+            if (!::IsWindow(m_MarkedFullscreen[i]))
+                m_MarkedFullscreen.RemoveAt(i);
+        }
+        m_MarkedFullscreen.Remove(hwndTarget);
+        if (lParam && ::IsWindow(hwndTarget))
+            m_MarkedFullscreen.Add(hwndTarget);
+        HandleFullScreenApp(FindRudeApp(hwndTarget));
+        OnWindowActivated(hwndTarget);
+        return 0;
+    }
+
     // HSHELL_WINDOWACTIVATED, HSHELL_RUDEAPPACTIVATED
     void OnWindowActivated(_In_ HWND hwndTarget)
     {
@@ -4289,6 +4319,7 @@ public:
     // HSHELL_WINDOWDESTROYED
     void OnWindowDestroyed(_In_ HWND hwndTarget)
     {
+        m_MarkedFullscreen.Remove(hwndTarget);
         if (!FindTaskItem(hwndTarget))
             return;
         HWND hwndRude = FindRudeApp(hwndTarget);
@@ -4525,7 +4556,7 @@ public:
 
                 KillTimer(wParam);
                 ++m_nRudeAppValidationCounter;
-                if (m_nRudeAppValidationCounter < VALIDATE_RUDE_MAX_COUNT && !hwndRude)
+                if (m_nRudeAppValidationCounter < VALIDATE_RUDE_MAX_COUNT)
                     SetTimer(wParam, VALIDATE_RUDE_INTERVAL, NULL);
                 break;
             }
@@ -4800,6 +4831,7 @@ public:
         MESSAGE_HANDLER(TSWM_TASKDRAGBEGIN, OnTaskDragBegin)
         MESSAGE_HANDLER(TSWM_TASKDRAGMOVE, OnTaskDragMove)
         MESSAGE_HANDLER(TSWM_TASKDRAGEND, OnTaskDragEnd)
+        MESSAGE_HANDLER(TSWM_MARKFULLSCREEN, OnMarkFullscreen)
         MESSAGE_HANDLER(WM_COPYDATA, OnCopyData)
         MESSAGE_HANDLER(WM_WINDOWPOSCHANGED, OnWindowPosChanged)
     END_MSG_MAP()
