@@ -935,6 +935,38 @@ CreatePinCallback(
     return MM_STATUS_SUCCESS;
 }
 
+typedef struct
+{
+    KEVENT Event;
+    PPIN_CREATE_CONTEXT Context;
+    ULONG DeviceIndex;
+    ULONG WaveIn;
+    LPWAVEFORMATEX WaveFormat;
+    PHANDLE PinHandle;
+    MIXER_STATUS Status;
+} OPEN_WAVE_WORK, *POPEN_WAVE_WORK;
+
+static
+VOID
+NTAPI
+OpenWaveWorker(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID Parameter)
+{
+    POPEN_WAVE_WORK Work = Parameter;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Work->Status = MMixerOpenWave(&MixerContext,
+                                  Work->DeviceIndex,
+                                  Work->WaveIn,
+                                  Work->WaveFormat,
+                                  CreatePinCallback,
+                                  Work->Context,
+                                  Work->PinHandle);
+    KeSetEvent(&Work->Event, IO_NO_INCREMENT, FALSE);
+}
+
 NTSTATUS
 WdmAudControlOpenWave(
     IN  PDEVICE_OBJECT DeviceObject,
@@ -945,6 +977,8 @@ WdmAudControlOpenWave(
     MIXER_STATUS Status;
     PIN_CREATE_CONTEXT Context;
     LPWAVEFORMATEX WaveFormat;
+    OPEN_WAVE_WORK Work;
+    PIO_WORKITEM WorkItem;
 
     WaveFormat = &DeviceInfo->u.WaveFormatEx;
     if ((WaveFormat->wFormatTag == WAVE_FORMAT_PCM && WaveFormat->cbSize != 0) ||
@@ -961,7 +995,22 @@ WdmAudControlOpenWave(
     Context.DeviceExtension = (PWDMAUD_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     Context.DeviceType = DeviceInfo->DeviceType;
 
-    Status = MMixerOpenWave(&MixerContext, DeviceInfo->DeviceIndex, DeviceInfo->DeviceType == WAVE_IN_DEVICE_TYPE, WaveFormat, CreatePinCallback, &Context, &DeviceInfo->hDevice);
+    WorkItem = IoAllocateWorkItem(DeviceObject);
+    if (!WorkItem)
+        return SetIrpIoStatus(Irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+
+    KeInitializeEvent(&Work.Event, NotificationEvent, FALSE);
+    Work.Context = &Context;
+    Work.DeviceIndex = DeviceInfo->DeviceIndex;
+    Work.WaveIn = DeviceInfo->DeviceType == WAVE_IN_DEVICE_TYPE;
+    Work.WaveFormat = WaveFormat;
+    Work.PinHandle = &DeviceInfo->hDevice;
+    Work.Status = MM_STATUS_UNSUCCESSFUL;
+
+    IoQueueWorkItem(WorkItem, OpenWaveWorker, DelayedWorkQueue, &Work);
+    KeWaitForSingleObject(&Work.Event, Executive, KernelMode, FALSE, NULL);
+    IoFreeWorkItem(WorkItem);
+    Status = Work.Status;
 
     if (Status == MM_STATUS_SUCCESS)
         return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));

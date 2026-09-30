@@ -15,6 +15,7 @@ extern void func_sessionapi(void);
 extern void func_sessioncrossproc(void);
 extern void func_sessionregistry(void);
 extern void func_sessionpublic(void);
+extern void func_wdmaudbroker(void);
 
 const struct test winetest_testlist[] =
 {
@@ -25,5 +26,6 @@ const struct test winetest_testlist[] =
     { "sessioncrossproc", func_sessioncrossproc },
     { "sessionregistry", func_sessionregistry },
     { "sessionpublic", func_sessionpublic },
+    { "wdmaudbroker", func_wdmaudbroker },
     { 0, 0 }
 };
