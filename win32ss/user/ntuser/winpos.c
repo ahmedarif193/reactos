@@ -3163,7 +3163,7 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
        !(Wnd->ExStyle & WS_EX_NOACTIVATE) &&
        !(Swp & SWP_NOACTIVATE))
    {
-      if (IntUserSetActiveWindow(Wnd, FALSE, TRUE, FALSE))
+      if (co_IntSetForegroundWindow(Wnd))
          Swp |= SWP_NOZORDER;
       if (!VerifyWnd(Wnd)) return WasVisible;
       Swp |= SWP_NOACTIVATE;
