@@ -1390,6 +1390,78 @@ MiQueryVirtualMemory(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+MiQueryWorkingSetEx(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 Address,
+    _Out_ PMI_WORKING_SET_EX_INFORMATION Information)
+{
+    PMI_PFN_DATABASE Db = &Space->System->Pfn;
+    ULONG64 Va = MI_PAGE_ALIGN_DOWN(Address);
+    ULONG64 Frame;
+    BOOLEAN Committed;
+    ULONG Protection;
+    PMI_PTE Slot;
+    MI_PTE Pte;
+    PMI_VAD Vad;
+
+    RtlZeroMemory(Information, sizeof(*Information));
+
+    if (Address < Space->LowestVa || Address > Space->HighestVa)
+        return STATUS_SUCCESS;
+
+    MI_RW_ACQUIRE_SHARED(&Space->Lock);
+
+    Vad = MiVadLocate(Space, Va);
+    if (Vad == NULL)
+    {
+        MI_RW_RELEASE_SHARED(&Space->Lock);
+        return STATUS_SUCCESS;
+    }
+
+    Information->Shared = (BOOLEAN)!(Vad->Type == MiVadPrivate || (Vad->Type == MiVadLarge && Vad->Segment == NULL) ||
+                                     Vad->Type == MiVadAwe || Vad->Type == MiVadRotate || Vad->LockedPages);
+
+    if (Vad->Type == MiVadLarge)
+    {
+        Slot = MiPtLookupLevel(Space, Va, Space->System->Arch->LargePageLevel, NULL);
+        Pte = (Slot != NULL) ? MiArchPteRead(Slot) : 0;
+        Frame = MiArchPteFrame(Pte) + ((Va & (Space->System->Arch->LargePageSize - 1)) >> PAGE_SHIFT);
+    }
+    else
+    {
+        Slot = MiPtLookup(Space, Va, NULL);
+        Pte = (Slot != NULL) ? MiArchPteRead(Slot) : 0;
+        Frame = MiArchPteFrame(Pte);
+    }
+
+    if (!MiArchPteIsValid(Pte))
+    {
+        MI_RW_RELEASE_SHARED(&Space->Lock);
+        return STATUS_SUCCESS;
+    }
+
+    MiPageStatus(Space, Vad, Va, TRUE, &Committed, &Protection);
+
+    Information->Valid = TRUE;
+    Information->Locked = Vad->LockedPages;
+    Information->LargePage = (BOOLEAN)(Vad->Type == MiVadLarge);
+    Information->Protection = Protection;
+    Information->ShareCount = 1;
+
+    if ((!MI_VAD_IS_DIRECT(Vad) || (Vad->Type == MiVadLarge && Vad->Segment != NULL)) && Frame < Db->FrameCount)
+    {
+        LONG Shares = MI_ATOMIC_READ32(&Db->Pfn[Frame].ShareCount);
+
+        Information->ShareCount = (ULONG)((Shares < 1) ? 1 : ((Shares > 7) ? 7 : Shares));
+        if (!MI_VAD_IS_DIRECT(Vad))
+            Information->Shared = (BOOLEAN)((MI_PFN_FLAGS(&Db->Pfn[Frame]) & MI_PFN_FLAG_PROTOTYPE) != 0);
+    }
+
+    MI_RW_RELEASE_SHARED(&Space->Lock);
+    return STATUS_SUCCESS;
+}
+
 VOID
 MiCleanAddressSpace(
     _Inout_ PMI_ADDRESS_SPACE Space)

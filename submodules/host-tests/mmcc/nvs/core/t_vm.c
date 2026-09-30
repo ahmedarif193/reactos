@@ -815,6 +815,68 @@ VmExecutableWriteTrackingReset(void)
     WorldDestroy(&World);
 }
 
+static void
+VmWorkingSetEx(void)
+{
+    TEST_WORLD World;
+    MI_ADDRESS_SPACE A, B;
+    MI_WORKING_SET_EX_INFORMATION Ws;
+    PMI_SEGMENT Segment;
+    ULONG64 Private = 0, Reserved = 0, ViewA = 0, ViewB = 0, ViewSize;
+    NTSTATUS Status;
+
+    WorldCreate(&World, 512, 2, 100000);
+    World.Machine.StrictTlb = TRUE;
+    WorldAttachPageFile(&World, 1024);
+    ProcessCreate(&World, &A);
+    CHECK(NT_SUCCESS(MiAddressSpaceCreate(&World.System, &B)));
+    WorldAttach(&World, 1, &B);
+
+    CHECK(NT_SUCCESS(Alloc(&A, &Private, 4 * PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Private, 1)));
+    CHECK(NT_SUCCESS(MiQueryWorkingSetEx(&A, Private + 8, &Ws)));
+    CHECK(Ws.Valid && Ws.ShareCount == 1 && Ws.Protection == MI_PROT_READWRITE);
+    CHECK(!Ws.Shared && !Ws.Locked && !Ws.LargePage);
+    CHECK(NT_SUCCESS(MiQueryWorkingSetEx(&A, Private + PAGE_SIZE, &Ws)));
+    CHECK(!Ws.Valid && !Ws.Shared && Ws.ShareCount == 0 && Ws.Protection == 0);
+
+    CHECK(NT_SUCCESS(Alloc(&A, &Reserved, PAGE_SIZE, MI_MEM_RESERVE, MI_PROT_READWRITE)));
+    CHECK(NT_SUCCESS(MiQueryWorkingSetEx(&A, Reserved, &Ws)));
+    CHECK(!Ws.Valid && !Ws.Shared);
+    CHECK(NT_SUCCESS(MiQueryWorkingSetEx(&A, Private + 0x10000000ULL, &Ws)));
+    CHECK(!Ws.Valid && !Ws.Shared);
+
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentPageFileBacked, 2 * PAGE_SIZE, MI_PROT_READWRITE,
+                                     NULL, NULL, NULL, 0, &Segment)));
+    ViewSize = 0;
+    CHECK(NT_SUCCESS(MiMapView(&A, Segment, &ViewA, 0, &ViewSize, MI_PROT_READWRITE, 0)));
+    ViewSize = 0;
+    CHECK(NT_SUCCESS(MiMapView(&B, Segment, &ViewB, 0, &ViewSize, MI_PROT_READWRITE, 0)));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, ViewA, 7)));
+    CHECK(UserRead64(&World, 1, ViewB, &Status) == 7 && NT_SUCCESS(Status));
+
+    CHECK(NT_SUCCESS(MiQueryWorkingSetEx(&A, ViewA, &Ws)));
+    CHECK(Ws.Valid && Ws.Shared && Ws.ShareCount == 2 && Ws.Protection == MI_PROT_READWRITE);
+    CHECK(NT_SUCCESS(MiQueryWorkingSetEx(&B, ViewB, &Ws)));
+    CHECK(Ws.Valid && Ws.Shared && Ws.ShareCount == 2);
+    CHECK(NT_SUCCESS(MiQueryWorkingSetEx(&A, ViewA + PAGE_SIZE, &Ws)));
+    CHECK(!Ws.Valid && Ws.Shared && Ws.ShareCount == 0);
+
+    CHECK(NT_SUCCESS(MiUnmapView(&B, ViewB)));
+    CHECK(NT_SUCCESS(MiQueryWorkingSetEx(&A, ViewA, &Ws)));
+    CHECK(Ws.Valid && Ws.Shared && Ws.ShareCount == 1);
+
+    CHECK(NT_SUCCESS(MiUnmapView(&A, ViewA)));
+    MiSegmentDereference(Segment);
+    CHECK(NT_SUCCESS(Free(&A, Private, 0, MI_MEM_RELEASE)));
+    CHECK(NT_SUCCESS(Free(&A, Reserved, 0, MI_MEM_RELEASE)));
+    WorldAttach(&World, 1, NULL);
+    ProcessDestroy(&World, &B);
+    ProcessDestroy(&World, &A);
+    WorldExpectClean(&World, 512);
+    WorldDestroy(&World);
+}
+
 void
 TestVm(void)
 {
@@ -828,6 +890,7 @@ TestVm(void)
     VmPlaceholders();
     VmWriteWatch();
     VmExecutableWriteTrackingReset();
+    VmWorkingSetEx();
 }
 
 static

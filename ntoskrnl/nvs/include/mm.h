@@ -242,6 +242,16 @@ typedef struct _MI_MEMORY_INFORMATION
     ULONG Type;
 } MI_MEMORY_INFORMATION, *PMI_MEMORY_INFORMATION;
 
+typedef struct _MI_WORKING_SET_EX_INFORMATION
+{
+    BOOLEAN Valid;
+    BOOLEAN Shared;
+    BOOLEAN Locked;
+    BOOLEAN LargePage;
+    ULONG ShareCount;
+    ULONG Protection;
+} MI_WORKING_SET_EX_INFORMATION, *PMI_WORKING_SET_EX_INFORMATION;
+
 typedef enum _MI_FAULT_ACCESS
 {
     MiFaultRead = 0,
@@ -290,6 +300,8 @@ NTSTATUS MiProtectVirtualMemoryEx(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PULON
                                   _In_ BOOLEAN DenyDynamicCode);
 NTSTATUS MiQueryVirtualMemory(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Address,
                               _Out_ PMI_MEMORY_INFORMATION Information);
+NTSTATUS MiQueryWorkingSetEx(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 Address,
+                             _Out_ PMI_WORKING_SET_EX_INFORMATION Information);
 NTSTATUS MiRotatePopulate(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress, _In_ ULONG64 RegionSize);
 VOID MiRotateReleaseLocked(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_VAD Vad);
 NTSTATUS MiRotateQuery(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress, _In_ ULONG64 Size,

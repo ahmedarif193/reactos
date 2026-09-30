@@ -989,6 +989,134 @@ MiQueryRegionInformation(
     return Status;
 }
 
+#define MI_WS_EX_CHUNK            64
+#define MI_WS_EX_VALID            0x00000001
+#define MI_WS_EX_SHARE_SHIFT      1
+#define MI_WS_EX_PROTECTION_SHIFT 4
+#define MI_WS_EX_PROTECTION_MASK  0x7FF
+#define MI_WS_EX_SHARED           0x00008000
+#define MI_WS_EX_LOCKED           0x00400000
+#define MI_WS_EX_LARGE_PAGE       0x00800000
+
+typedef struct _MI_WS_EX_ENTRY
+{
+    PVOID VirtualAddress;
+    ULONG_PTR Attributes;
+} MI_WS_EX_ENTRY, *PMI_WS_EX_ENTRY;
+
+static
+ULONG_PTR
+MiWorkingSetExAttributes(
+    _In_ PMI_ADDRESS_SPACE Space,
+    _In_ PVOID VirtualAddress)
+{
+    MI_WORKING_SET_EX_INFORMATION Ws;
+    ULONG_PTR Attributes;
+
+    if ((ULONG_PTR)VirtualAddress > (ULONG_PTR)MmHighestUserAddress ||
+        !NT_SUCCESS(MiQueryWorkingSetEx(Space, (ULONG64)(ULONG_PTR)VirtualAddress, &Ws)))
+        return 0;
+
+    if (!Ws.Valid)
+        return Ws.Shared ? MI_WS_EX_SHARED : 0;
+
+    Attributes = MI_WS_EX_VALID | ((ULONG_PTR)Ws.ShareCount << MI_WS_EX_SHARE_SHIFT) |
+                 (((ULONG_PTR)MiProtectionToWin32(Ws.Protection) & MI_WS_EX_PROTECTION_MASK)
+                  << MI_WS_EX_PROTECTION_SHIFT);
+    if (Ws.Shared)
+        Attributes |= MI_WS_EX_SHARED;
+    if (Ws.Locked)
+        Attributes |= MI_WS_EX_LOCKED;
+    if (Ws.LargePage)
+        Attributes |= MI_WS_EX_LARGE_PAGE;
+    return Attributes;
+}
+
+static
+NTSTATUS
+MiQueryWorkingSetExList(
+    _In_ HANDLE ProcessHandle,
+    _Inout_ PVOID MemoryInformation,
+    _In_ SIZE_T MemoryInformationLength,
+    _Out_opt_ PSIZE_T ReturnLength)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PMI_WS_EX_ENTRY User = MemoryInformation;
+    MI_WS_EX_ENTRY Entries[MI_WS_EX_CHUNK];
+    MI_PROCESS_REFERENCE Target;
+    SIZE_T Count, Index, Batch, Entry;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (MemoryInformationLength < sizeof(MI_WS_EX_ENTRY))
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    Count = MemoryInformationLength / sizeof(MI_WS_EX_ENTRY);
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForWrite(MemoryInformation, Count * sizeof(MI_WS_EX_ENTRY), sizeof(ULONG_PTR));
+            if (ReturnLength != NULL)
+                ProbeForWriteSize_t(ReturnLength);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    for (Index = 0; Index < Count; Index += Batch)
+    {
+        Batch = min(Count - Index, (SIZE_T)MI_WS_EX_CHUNK);
+
+        _SEH2_TRY
+        {
+            RtlCopyMemory(Entries, &User[Index], Batch * sizeof(MI_WS_EX_ENTRY));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+
+        Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_QUERY_INFORMATION, &Target);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        for (Entry = 0; Entry < Batch; Entry++)
+            Entries[Entry].Attributes = MiWorkingSetExAttributes(MiSpaceOfProcess(Target.Process),
+                                                                 Entries[Entry].VirtualAddress);
+
+        MiReleaseTargetProcess(&Target);
+
+        _SEH2_TRY
+        {
+            for (Entry = 0; Entry < Batch; Entry++)
+                User[Index + Entry].Attributes = Entries[Entry].Attributes;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    _SEH2_TRY
+    {
+        if (ReturnLength != NULL)
+            *ReturnLength = Count * sizeof(MI_WS_EX_ENTRY);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 NtQueryVirtualMemory(
@@ -1019,6 +1147,12 @@ NtQueryVirtualMemory(
     {
         return MiQueryRegionInformation(ProcessHandle, BaseAddress, MemoryInformation, MemoryInformationLength,
                                         ReturnLength);
+    }
+
+    if (MemoryInformationClass == MemoryWorkingSetExList)
+    {
+        return MiQueryWorkingSetExList(ProcessHandle, MemoryInformation, MemoryInformationLength,
+                                       ReturnLength);
     }
 
     if (MemoryInformationClass != MemoryBasicInformation)
