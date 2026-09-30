@@ -2663,6 +2663,7 @@ VidSchpKickEngine(
         {
             NTSTATUS FaultStatus =
                 STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE;
+            BOOLEAN FaultOrdered = Packet->ContextOrderOperation != NULL;
 
             /*
              * Provider cancellation can release GPU-VA and allocation state.
@@ -2680,13 +2681,18 @@ VidSchpKickEngine(
             }
 
             Packet->SchedulerClaimToken = 0;
+            if (FaultOrdered)
+                VidSchReferenceContextOrderPacket(Packet);
             (VOID)Sched->CompleteDispatch(
                 Sched->SchedulerHandle,
                 Engine->SchedulerOrdinal,
                 ClaimToken,
                 FaultStatus);
-            if (Packet->ContextOrderOperation != NULL)
+            if (FaultOrdered)
+            {
                 DxgkContextOrderCommitPacket(Packet, FaultStatus);
+                VidSchDereferenceContextOrderPacket(Packet);
+            }
             (VOID)VidSchpDrainRetirements(Adapter);
             KeSetEvent(
                 &Engine->CompletionEvent,
@@ -3575,6 +3581,7 @@ VidSchSubmitCommandTrackedMeasured(
     PDXGKRNL_CONTEXT OrderedContext = NULL;
     PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
     PDXGKRNL_DEVICE PacketDevice;
+    BOOLEAN OrderedPacket;
     DXGKRNL_TRACK_DMA_ARGS LocalTrackArgs;
     DXGKARG_PATCH PatchArgs;
     KIRQL OldIrql;
@@ -3890,6 +3897,10 @@ VidSchSubmitCommandTrackedMeasured(
     Packet->TrackerReservation = Reservation;
     DxgkAdoptTrackedDmaBuffer(Reservation);
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    OrderedPacket = Packet->ContextOrderOperation != NULL;
+    KickContext = NULL;
+    if (OrderedPacket && DxgkReferenceContext((PDXGKRNL_CONTEXT)Packet->Context))
+        KickContext = (PDXGKRNL_CONTEXT)Packet->Context;
     Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_SCHED_ADMIT);
     Status = VidSchpAdmitPacket(Adapter, Packet, DXGMMS2_SCHEDULER_ADMIT_CONSUME_RESERVATION, &AdmittedFenceId);
     DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
@@ -3897,20 +3908,16 @@ VidSchSubmitCommandTrackedMeasured(
     {
         Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
-        if (Packet->ContextOrderOperation != NULL)
+        if (OrderedPacket)
             DxgkContextOrderAbortPacket(Packet, Status);
         if (OrderedContext != NULL)
             ExReleaseRundownProtection(&OrderedContext->StreamAdmissionRundown);
         Packet->DmaBuffer = NULL;
         VidSchpDereferencePacket(Packet);
+        if (KickContext != NULL)
+            DxgkDereferenceContext(KickContext);
         VidSchpReleaseCall(Adapter);
         return Status;
-    }
-    KickContext = NULL;
-    if (Packet->ContextOrderOperation != NULL)
-    {
-        if (DxgkReferenceContext((PDXGKRNL_CONTEXT)Packet->Context))
-            KickContext = (PDXGKRNL_CONTEXT)Packet->Context;
     }
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
     if (OrderedContext != NULL)
@@ -3922,7 +3929,7 @@ VidSchSubmitCommandTrackedMeasured(
         DxgkContextOrderKickContext(KickContext);
         DxgkDereferenceContext(KickContext);
     }
-    else if (Packet->ContextOrderOperation == NULL)
+    else if (!OrderedPacket)
         (VOID)VidSchpKickEngine(Engine, NULL);
     DptEnd(&g_DxgPresentTrace, Trace, TRUE, 0);
     *OutFenceId = FenceId;
