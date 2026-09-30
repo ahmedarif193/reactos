@@ -55,18 +55,37 @@ HRESULT WINAPI HlinkCreateFromMoniker( IMoniker *pimkTrgt, LPCWSTR pwzLocation,
             debugstr_w(pwzFriendlyName), pihlsite, dwSiteData, piunkOuter,
             debugstr_guid(riid), ppvObj);
 
+#ifdef __REACTOS__
+    *ppvObj = NULL;
+#endif
     hr = CoCreateInstance(&CLSID_StdHlink, piunkOuter, CLSCTX_INPROC_SERVER, &IID_IHlink, (LPVOID*)&hl);
     if (FAILED(hr))
         return hr;
 
+#ifdef __REACTOS__
+    hr = IHlink_SetMonikerReference(hl, HLINKSETF_LOCATION | HLINKSETF_TARGET, pimkTrgt, pwzLocation);
+#else
     IHlink_SetMonikerReference(hl, HLINKSETF_LOCATION | HLINKSETF_TARGET, pimkTrgt, pwzLocation);
+#endif
 
+#ifdef __REACTOS__
+    if (SUCCEEDED(hr) && pwzFriendlyName)
+        hr = IHlink_SetFriendlyName(hl, pwzFriendlyName);
+    if (SUCCEEDED(hr) && pihlsite)
+        hr = IHlink_SetHlinkSite(hl, pihlsite, dwSiteData);
+#else
     if (pwzFriendlyName)
         IHlink_SetFriendlyName(hl, pwzFriendlyName);
     if (pihlsite)
         IHlink_SetHlinkSite(hl, pihlsite, dwSiteData);
+#endif
 
+#ifdef __REACTOS__
+    if (SUCCEEDED(hr))
+        hr = IHlink_QueryInterface(hl, riid, ppvObj);
+#else
     hr = IHlink_QueryInterface(hl, riid, ppvObj);
+#endif
     IHlink_Release(hl);
 
     return hr;
@@ -153,17 +172,36 @@ HRESULT WINAPI HlinkCreateFromString( LPCWSTR pwzTarget, LPCWSTR pwzLocation,
         loc = pwzLocation;
     }
 
+#ifdef __REACTOS__
+    hr = IHlink_SetStringReference(hl, HLINKSETF_TARGET | HLINKSETF_LOCATION, tgt, loc);
+#else
     IHlink_SetStringReference(hl, HLINKSETF_TARGET | HLINKSETF_LOCATION, tgt, loc);
+#endif
 
     free(tgt);
 
+#ifdef __REACTOS__
+    if (SUCCEEDED(hr) && pwzFriendlyName)
+        hr = IHlink_SetFriendlyName(hl, pwzFriendlyName);
+#else
     if (pwzFriendlyName)
         IHlink_SetFriendlyName(hl, pwzFriendlyName);
+#endif
 
+#ifdef __REACTOS__
+    if (SUCCEEDED(hr) && pihlsite)
+        hr = IHlink_SetHlinkSite(hl, pihlsite, dwSiteData);
+#else
     if (pihlsite)
         IHlink_SetHlinkSite(hl, pihlsite, dwSiteData);
+#endif
 
+#ifdef __REACTOS__
+    if (SUCCEEDED(hr))
+        hr = IHlink_QueryInterface(hl, riid, ppvObj);
+#else
     hr = IHlink_QueryInterface(hl, riid, ppvObj);
+#endif
     IHlink_Release(hl);
 
     return hr;
