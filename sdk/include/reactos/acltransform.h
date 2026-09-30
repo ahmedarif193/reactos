@@ -92,7 +92,7 @@ RtlpSecurityAceView(PACE_HEADER Ace, RTL_SECURITY_ACE_VIEW *View)
 static PSID
 RtlpSecurityMapSid(PSID Sid, PSID Owner, PSID Group)
 {
-    static const SID_IDENTIFIER_AUTHORITY CreatorAuthority = SECURITY_CREATOR_SID_AUTHORITY;
+    static const SID_IDENTIFIER_AUTHORITY CreatorAuthority = {SECURITY_CREATOR_SID_AUTHORITY};
     PISID Isid = Sid;
 
     if (Isid->SubAuthorityCount == 1 &&

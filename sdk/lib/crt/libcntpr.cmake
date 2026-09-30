@@ -32,3 +32,7 @@ target_compile_definitions(libcntpr
     __CRT__NO_INLINE
     CRTDLL)
 add_dependencies(libcntpr psdk asm)
+
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(libcntpr PRIVATE $<$<COMPILE_LANGUAGE:C>:-fno-builtin-sprintf -fno-builtin-vsprintf>)
+endif()

@@ -619,19 +619,21 @@ FsRtlProcessFileLock(
     switch (IoStack->MinorFunction)
     {
         case IRP_MN_LOCK:
-            (VOID)FsRtlPrivateLock(FileLock,
-                                   IoStack->FileObject,
-                                   &IoStack->Parameters.LockControl.ByteOffset,
-                                   IoStack->Parameters.LockControl.Length,
-                                   IoGetRequestorProcess(Irp),
-                                   IoStack->Parameters.LockControl.Key,
-                                   BooleanFlagOn(IoStack->Flags, SL_FAIL_IMMEDIATELY),
-                                   BooleanFlagOn(IoStack->Flags, SL_EXCLUSIVE_LOCK),
-                                   &IoStatus,
-                                   Irp,
-                                   Context,
-                                   FALSE);
-            return IoStatus.Status;
+            if (FsRtlPrivateLock(FileLock,
+                                 IoStack->FileObject,
+                                 &IoStack->Parameters.LockControl.ByteOffset,
+                                 IoStack->Parameters.LockControl.Length,
+                                 IoGetRequestorProcess(Irp),
+                                 IoStack->Parameters.LockControl.Key,
+                                 BooleanFlagOn(IoStack->Flags, SL_FAIL_IMMEDIATELY),
+                                 BooleanFlagOn(IoStack->Flags, SL_EXCLUSIVE_LOCK),
+                                 &IoStatus,
+                                 Irp,
+                                 Context,
+                                 FALSE))
+                return IoStatus.Status;
+            Status = IoStatus.Status;
+            break;
 
         case IRP_MN_UNLOCK_SINGLE:
             Status = FsRtlFastUnlockSingle(FileLock,
