@@ -830,6 +830,20 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_context_Map(ID3D11DeviceContext4 *
 
     wined3d_resource = wined3d_resource_from_d3d11_resource(resource);
 
+#ifdef __REACTOS__
+    {
+        struct wined3d_resource_desc desc;
+        BOOL dynamic;
+
+        wined3d_mutex_lock();
+        wined3d_resource_get_desc(wined3d_resource, &desc);
+        wined3d_mutex_unlock();
+        dynamic = !!(desc.usage & WINED3DUSAGE_DYNAMIC);
+        if ((map_type == D3D11_MAP_WRITE && dynamic) || (map_type == D3D11_MAP_WRITE_DISCARD && !dynamic))
+            return E_INVALIDARG;
+    }
+#endif
+
     if (SUCCEEDED(hr = wined3d_device_context_map(context->wined3d_context, wined3d_resource, subresource_idx,
             &map_desc, NULL, wined3d_map_flags_from_d3d11_map_type(map_type))))
     {
@@ -4729,6 +4743,76 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *
                 | D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET
                 | D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
     }
+
+#ifdef __REACTOS__
+    if (feature_level < D3D_FEATURE_LEVEL_10_0)
+    {
+        switch (format)
+        {
+            case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+            case DXGI_FORMAT_R8G8_UNORM: case DXGI_FORMAT_R8_UNORM: case DXGI_FORMAT_A8_UNORM:
+            case DXGI_FORMAT_B5G6R5_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8X8_UNORM:
+            case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+                break;
+            case DXGI_FORMAT_R16G16B16A16_FLOAT:
+                if (feature_level >= D3D_FEATURE_LEVEL_9_3)
+                    break;
+                /* fall through */
+            default:
+                *format_support &= ~D3D11_FORMAT_SUPPORT_BLENDABLE;
+                break;
+        }
+        switch (format)
+        {
+            case DXGI_FORMAT_R32G32B32A32_FLOAT: case DXGI_FORMAT_R32G32B32_FLOAT:
+            case DXGI_FORMAT_R32G32_FLOAT: case DXGI_FORMAT_R32_FLOAT:
+            case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UINT: case DXGI_FORMAT_R8G8B8A8_UNORM:
+            case DXGI_FORMAT_R16G16_SINT: case DXGI_FORMAT_R16G16B16A16_SINT:
+            case DXGI_FORMAT_R16G16_SNORM: case DXGI_FORMAT_R16G16B16A16_SNORM:
+            case DXGI_FORMAT_R16G16_UNORM: case DXGI_FORMAT_R16G16B16A16_UNORM:
+            case DXGI_FORMAT_R16G16_FLOAT: case DXGI_FORMAT_R16G16B16A16_FLOAT:
+                break;
+            default:
+                *format_support &= ~D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER;
+                break;
+        }
+        if (format == DXGI_FORMAT_R32_UINT && feature_level < D3D_FEATURE_LEVEL_9_2)
+            *format_support &= ~D3D11_FORMAT_SUPPORT_IA_INDEX_BUFFER;
+    }
+    switch (format)
+    {
+        case DXGI_FORMAT_R32G32B32A32_UINT: case DXGI_FORMAT_R32G32B32A32_SINT:
+        case DXGI_FORMAT_R32G32B32_UINT: case DXGI_FORMAT_R32G32B32_SINT:
+        case DXGI_FORMAT_R16G16B16A16_UINT: case DXGI_FORMAT_R16G16B16A16_SINT:
+        case DXGI_FORMAT_R32G32_UINT: case DXGI_FORMAT_R32G32_SINT: case DXGI_FORMAT_R10G10B10A2_UINT:
+        case DXGI_FORMAT_R8G8B8A8_UINT: case DXGI_FORMAT_R8G8B8A8_SINT:
+        case DXGI_FORMAT_R16G16_UINT: case DXGI_FORMAT_R16G16_SINT:
+        case DXGI_FORMAT_R32_UINT: case DXGI_FORMAT_R32_SINT:
+        case DXGI_FORMAT_R8G8_UINT: case DXGI_FORMAT_R8G8_SINT:
+        case DXGI_FORMAT_R16_UINT: case DXGI_FORMAT_R16_SINT:
+        case DXGI_FORMAT_R8_UINT: case DXGI_FORMAT_R8_SINT:
+            *format_support &= ~(D3D11_FORMAT_SUPPORT_SHADER_SAMPLE | D3D11_FORMAT_SUPPORT_BLENDABLE);
+            break;
+        default:
+            break;
+    }
+    if (*format_support & D3D11_FORMAT_SUPPORT_RENDER_TARGET)
+    {
+        switch (format)
+        {
+            case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+            case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+                *format_support |= D3D11_FORMAT_SUPPORT_DISPLAY;
+                break;
+            case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R10G10B10A2_UNORM:
+                if (feature_level >= D3D_FEATURE_LEVEL_10_0)
+                    *format_support |= D3D11_FORMAT_SUPPORT_DISPLAY;
+                break;
+            default:
+                break;
+        }
+    }
+#endif
 
     return *format_support ? S_OK : E_FAIL;
 }

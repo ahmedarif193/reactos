@@ -29,6 +29,8 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateUnorderedAccessView(ID3D11Resource
 {
     if (out) *out = NULL;
     if (!resource) return E_INVALIDARG;
+    if (NativeTexture2D *texture = NativeTexture(resource, this))
+        if (texture->read_only) return E_INVALIDARG;
     if (!functions.pfnCalcPrivateUnorderedAccessViewSize || !functions.pfnCreateUnorderedAccessView
             || !functions.pfnDestroyUnorderedAccessView) return E_NOTIMPL;
     D3D11_UNORDERED_ACCESS_VIEW_DESC desc = {};
@@ -163,7 +165,8 @@ void NativeContext::RefreshOutputBindings(const UINT *initial)
     UINT counts[8];
     for (UINT i = 0; i < 8; ++i)
     {
-        if (render_targets[i]) targets[i] = static_cast<NativeRenderTargetView *>(render_targets[i])->handle;
+        auto *target = static_cast<NativeRenderTargetView *>(render_targets[i]);
+        if (target && target->device == device) targets[i] = target->handle;
         if (pixel_uavs[i]) uavs[i] = static_cast<NativeUnorderedAccessView *>(pixel_uavs[i])->handle;
         counts[i] = initial ? initial[i] : ~0u;
     }
@@ -284,8 +287,6 @@ void STDMETHODCALLTYPE NativeContext::OMSetRenderTargetsAndUnorderedAccessViews(
     for (UINT i = 0; i < 8; ++i)
     {
         if (i < target_count) next_targets[i] = keep_targets ? render_targets[i] : targets[i];
-        auto *target = static_cast<NativeRenderTargetView *>(next_targets[i]);
-        if (target && target->device != device) return;
         next_uavs[i] = keep_uavs ? pixel_uavs[i] : i >= start && i - start < count && input ? input[i - start] : NULL;
         auto *view = static_cast<NativeUnorderedAccessView *>(next_uavs[i]);
         if (view && view->device != device) return;
@@ -349,7 +350,8 @@ void STDMETHODCALLTYPE NativeContext::OMSetRenderTargetsAndUnorderedAccessViews(
     {
         ReplaceObject(render_targets[i], next_targets[i]);
         ReplaceObject(pixel_uavs[i], next_uavs[i]);
-        if (!deferred && next_targets[i] && device->functions.pfnResourceReadAfterWriteHazard)
+        if (!deferred && next_targets[i] && device->functions.pfnResourceReadAfterWriteHazard
+                && static_cast<NativeRenderTargetView *>(next_targets[i])->device == device)
             device->functions.pfnResourceReadAfterWriteHazard(device->driver_device,
                     static_cast<NativeRenderTargetView *>(next_targets[i])->resource_handle);
     }

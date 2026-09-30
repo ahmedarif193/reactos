@@ -376,9 +376,67 @@ static Interface *NativeFindState(NativeDevice *device, NativeStateKind kind, co
 }
 
 class NativeContext final : public ID3D11DeviceContext1, public ID3D11Multithread,
-        public ID3DUserDefinedAnnotation, public NativeAllocation
+        public ID3DUserDefinedAnnotation, public ID3D11VideoContext, public NativeAllocation
 {
 public:
+    HRESULT STDMETHODCALLTYPE GetDecoderBuffer(ID3D11VideoDecoder *, D3D11_VIDEO_DECODER_BUFFER_TYPE, UINT *, void **) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE ReleaseDecoderBuffer(ID3D11VideoDecoder *, D3D11_VIDEO_DECODER_BUFFER_TYPE) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE DecoderBeginFrame(ID3D11VideoDecoder *, ID3D11VideoDecoderOutputView *, UINT, const void *) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE DecoderEndFrame(ID3D11VideoDecoder *) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE SubmitDecoderBuffers(ID3D11VideoDecoder *, UINT, const D3D11_VIDEO_DECODER_BUFFER_DESC *) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE DecoderExtension(ID3D11VideoDecoder *, const D3D11_VIDEO_DECODER_EXTENSION *) override { return E_INVALIDARG; }
+    void STDMETHODCALLTYPE VideoProcessorSetOutputTargetRect(ID3D11VideoProcessor *, BOOL, const RECT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetOutputBackgroundColor(ID3D11VideoProcessor *, BOOL, const D3D11_VIDEO_COLOR *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetOutputColorSpace(ID3D11VideoProcessor *, const D3D11_VIDEO_PROCESSOR_COLOR_SPACE *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetOutputAlphaFillMode(ID3D11VideoProcessor *, D3D11_VIDEO_PROCESSOR_ALPHA_FILL_MODE, UINT) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetOutputConstriction(ID3D11VideoProcessor *, BOOL, SIZE) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetOutputStereoMode(ID3D11VideoProcessor *, BOOL) override {}
+    HRESULT STDMETHODCALLTYPE VideoProcessorSetOutputExtension(ID3D11VideoProcessor *, const GUID *, UINT, void *) override { return E_INVALIDARG; }
+    void STDMETHODCALLTYPE VideoProcessorGetOutputTargetRect(ID3D11VideoProcessor *, BOOL *, RECT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetOutputBackgroundColor(ID3D11VideoProcessor *, BOOL *, D3D11_VIDEO_COLOR *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetOutputColorSpace(ID3D11VideoProcessor *, D3D11_VIDEO_PROCESSOR_COLOR_SPACE *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetOutputAlphaFillMode(ID3D11VideoProcessor *, D3D11_VIDEO_PROCESSOR_ALPHA_FILL_MODE *, UINT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetOutputConstriction(ID3D11VideoProcessor *, BOOL *, SIZE *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetOutputStereoMode(ID3D11VideoProcessor *, BOOL *) override {}
+    HRESULT STDMETHODCALLTYPE VideoProcessorGetOutputExtension(ID3D11VideoProcessor *, const GUID *, UINT, void *) override { return E_INVALIDARG; }
+    void STDMETHODCALLTYPE VideoProcessorSetStreamFrameFormat(ID3D11VideoProcessor *, UINT, D3D11_VIDEO_FRAME_FORMAT) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamColorSpace(ID3D11VideoProcessor *, UINT, const D3D11_VIDEO_PROCESSOR_COLOR_SPACE *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamOutputRate(ID3D11VideoProcessor *, UINT, D3D11_VIDEO_PROCESSOR_OUTPUT_RATE, BOOL, const DXGI_RATIONAL *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamSourceRect(ID3D11VideoProcessor *, UINT, BOOL, const RECT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamDestRect(ID3D11VideoProcessor *, UINT, BOOL, const RECT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamAlpha(ID3D11VideoProcessor *, UINT, BOOL, float) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamPalette(ID3D11VideoProcessor *, UINT, UINT, const UINT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamPixelAspectRatio(ID3D11VideoProcessor *, UINT, BOOL, const DXGI_RATIONAL *, const DXGI_RATIONAL *) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamLumaKey(ID3D11VideoProcessor *, UINT, BOOL, float, float) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamStereoFormat(ID3D11VideoProcessor *, UINT, BOOL, D3D11_VIDEO_PROCESSOR_STEREO_FORMAT, BOOL, BOOL, D3D11_VIDEO_PROCESSOR_STEREO_FLIP_MODE, int) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamAutoProcessingMode(ID3D11VideoProcessor *, UINT, BOOL) override {}
+    void STDMETHODCALLTYPE VideoProcessorSetStreamFilter(ID3D11VideoProcessor *, UINT, D3D11_VIDEO_PROCESSOR_FILTER, BOOL, int) override {}
+    HRESULT STDMETHODCALLTYPE VideoProcessorSetStreamExtension(ID3D11VideoProcessor *, UINT, const GUID *, UINT, void *) override { return E_INVALIDARG; }
+    void STDMETHODCALLTYPE VideoProcessorGetStreamFrameFormat(ID3D11VideoProcessor *, UINT, D3D11_VIDEO_FRAME_FORMAT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamColorSpace(ID3D11VideoProcessor *, UINT, D3D11_VIDEO_PROCESSOR_COLOR_SPACE *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamOutputRate(ID3D11VideoProcessor *, UINT, D3D11_VIDEO_PROCESSOR_OUTPUT_RATE *, BOOL *, DXGI_RATIONAL *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamSourceRect(ID3D11VideoProcessor *, UINT, BOOL *, RECT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamDestRect(ID3D11VideoProcessor *, UINT, BOOL *, RECT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamAlpha(ID3D11VideoProcessor *, UINT, BOOL *, float *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamPalette(ID3D11VideoProcessor *, UINT, UINT, UINT *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamPixelAspectRatio(ID3D11VideoProcessor *, UINT, BOOL *, DXGI_RATIONAL *, DXGI_RATIONAL *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamLumaKey(ID3D11VideoProcessor *, UINT, BOOL *, float *, float *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamStereoFormat(ID3D11VideoProcessor *, UINT, BOOL *, D3D11_VIDEO_PROCESSOR_STEREO_FORMAT *, BOOL *, BOOL *, D3D11_VIDEO_PROCESSOR_STEREO_FLIP_MODE *, int *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamAutoProcessingMode(ID3D11VideoProcessor *, UINT, BOOL *) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamFilter(ID3D11VideoProcessor *, UINT, D3D11_VIDEO_PROCESSOR_FILTER, BOOL *, int *) override {}
+    HRESULT STDMETHODCALLTYPE VideoProcessorGetStreamExtension(ID3D11VideoProcessor *, UINT, const GUID *, UINT, void *) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE VideoProcessorBlt(ID3D11VideoProcessor *, ID3D11VideoProcessorOutputView *, UINT, UINT, const D3D11_VIDEO_PROCESSOR_STREAM *) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE NegotiateCryptoSessionKeyExchange(ID3D11CryptoSession *, UINT, void *) override { return E_INVALIDARG; }
+    void STDMETHODCALLTYPE EncryptionBlt(ID3D11CryptoSession *, ID3D11Texture2D *, ID3D11Texture2D *, UINT, void *) override {}
+    void STDMETHODCALLTYPE DecryptionBlt(ID3D11CryptoSession *, ID3D11Texture2D *, ID3D11Texture2D *, D3D11_ENCRYPTED_BLOCK_INFO *, UINT, const void *, UINT, void *) override {}
+    void STDMETHODCALLTYPE StartSessionKeyRefresh(ID3D11CryptoSession *, UINT, void *) override {}
+    void STDMETHODCALLTYPE FinishSessionKeyRefresh(ID3D11CryptoSession *) override {}
+    HRESULT STDMETHODCALLTYPE GetEncryptionBltKey(ID3D11CryptoSession *, UINT, void *) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE NegotiateAuthenticatedChannelKeyExchange(ID3D11AuthenticatedChannel *, UINT, void *) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE QueryAuthenticatedChannel(ID3D11AuthenticatedChannel *, UINT, const void *, UINT, void *) override { return E_INVALIDARG; }
+    HRESULT STDMETHODCALLTYPE ConfigureAuthenticatedChannel(ID3D11AuthenticatedChannel *, UINT, const void *, D3D11_AUTHENTICATED_CONFIGURE_OUTPUT *) override { return E_INVALIDARG; }
+    void STDMETHODCALLTYPE VideoProcessorSetStreamRotation(ID3D11VideoProcessor *, UINT, BOOL, D3D11_VIDEO_PROCESSOR_ROTATION) override {}
+    void STDMETHODCALLTYPE VideoProcessorGetStreamRotation(ID3D11VideoProcessor *, UINT, BOOL *, D3D11_VIDEO_PROCESSOR_ROTATION *) override {}
     NativeDevice *device;
     LONG references = 0;
     bool deferred = false;
@@ -682,7 +740,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown *object) override { NativeLock guard(device); return private_data.Set(guid, sizeof(object), &object, const_cast<IUnknown *>(object)); }
 };
 
-class NativeTextureResource final : public IDXGIResource, public IDXGISurface
+class NativeTextureResource final : public IDXGIResource, public IDXGISurface1
 {
     ID3D11Resource *texture;
     NativeDevice *device;
@@ -704,6 +762,8 @@ public:
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SURFACE_DESC *) override;
     HRESULT STDMETHODCALLTYPE Map(DXGI_MAPPED_RECT *, UINT) override;
     HRESULT STDMETHODCALLTYPE Unmap() override;
+    HRESULT STDMETHODCALLTYPE GetDC(BOOL, HDC *) override;
+    HRESULT STDMETHODCALLTYPE ReleaseDC(RECT *) override;
 };
 
 class NativeTexture1D final : public NativeChild<ID3D11Texture1D, &IID_ID3D11Texture1D>
@@ -761,13 +821,25 @@ public:
     UINT priority = 0;
     bool created = false;
     bool registered = false;
+    bool read_only = false;
     DXGI_USAGE usage = 0;
     NativeTextureResource dxgi_resource;
     BYTE *mapped = NULL;
+    HDC gdi_dc = NULL;
+    HANDLE gdi_bitmap = NULL;
+    BYTE *gdi_memory = NULL;
     explicit NativeTexture2D(NativeDevice *d)
         : NativeChild(d), runtime_handle(d->AllocateResourceIdentity()), dxgi_resource(this, d, &usage) {}
     ~NativeTexture2D()
     {
+        if (gdi_dc)
+        {
+            D3DKMT_DESTROYDCFROMMEMORY destroy = {};
+            destroy.hDc = gdi_dc;
+            destroy.hBitmap = gdi_bitmap;
+            D3DKMTDestroyDCFromMemory(&destroy);
+        }
+        HeapFree(GetProcessHeap(), 0, gdi_memory);
         NativeLock guard(device);
         if (created) device->functions.pfnDestroyResource(device->driver_device, handle);
         if (registered) device->release_resource(device->runtime_device, runtime_handle.handle);
@@ -787,9 +859,10 @@ public:
             if (!out) return E_INVALIDARG;
             *out = static_cast<ID3D11Texture2D *>(this); AddRef(); return S_OK;
         }
-        if (IsEqualGUID(iid, IID_IDXGISurface) && desc.MipLevels == 1 && desc.ArraySize == 1)
+        if ((IsEqualGUID(iid, IID_IDXGISurface) || IsEqualGUID(iid, IID_IDXGISurface1))
+                && desc.MipLevels == 1 && desc.ArraySize == 1)
         {
-            *out = static_cast<IDXGISurface *>(&dxgi_resource); AddRef(); return S_OK;
+            *out = static_cast<IDXGISurface1 *>(&dxgi_resource); AddRef(); return S_OK;
         }
         return NativeChild::QueryInterface(iid, out);
     }
@@ -843,7 +916,10 @@ public:
     UINT priority = 0;
     bool created = false;
     BYTE *mapped = NULL;
-    explicit NativeTexture3D(NativeDevice *d) : NativeChild(d), runtime_handle(d->AllocateResourceIdentity()) {}
+    DXGI_USAGE usage = 0;
+    NativeTextureResource dxgi_resource;
+    explicit NativeTexture3D(NativeDevice *d)
+        : NativeChild(d), runtime_handle(d->AllocateResourceIdentity()), dxgi_resource(this, d, &usage) {}
     ~NativeTexture3D()
     {
         NativeLock guard(device);
@@ -857,6 +933,11 @@ public:
         if (IsEqualGUID(iid, IID_ID3D11Resource))
         {
             *out = static_cast<ID3D11Texture3D *>(this); AddRef(); return S_OK;
+        }
+        if (IsEqualGUID(iid, IID_IDXGIObject) || IsEqualGUID(iid, IID_IDXGIDeviceSubObject)
+                || IsEqualGUID(iid, IID_IDXGIResource))
+        {
+            *out = static_cast<IDXGIResource *>(&dxgi_resource); AddRef(); return S_OK;
         }
         return NativeChild::QueryInterface(iid, out);
     }
@@ -978,6 +1059,98 @@ HRESULT STDMETHODCALLTYPE NativeTextureResource::Unmap()
     NativeTextureInfo info;
     if (!GetNativeTexture(texture, device, &info) || !info.mapped[0]) return DXGI_ERROR_INVALID_CALL;
     device->context->Unmap(texture, 0);
+    return S_OK;
+}
+
+static NativeTexture2D *NativeGdiTexture(ID3D11Resource *resource, NativeDevice *device)
+{
+    NativeTextureInfo info;
+    if (!GetNativeTexture(resource, device, &info) || info.dimension == D3D10DDIRESOURCE_TEXTURE1D
+            || info.dimension == D3D10DDIRESOURCE_TEXTURE3D
+            || !(info.desc.MiscFlags & D3D11_RESOURCE_MISC_GDI_COMPATIBLE)) return NULL;
+    return static_cast<NativeTexture2D *>(static_cast<ID3D11Texture2D *>(resource));
+}
+
+HRESULT STDMETHODCALLTYPE NativeTextureResource::GetDC(BOOL discard, HDC *hdc)
+{
+    if (!hdc) return E_INVALIDARG;
+    NativeTexture2D *object = NativeGdiTexture(texture, device);
+    if (!object || object->gdi_dc) return DXGI_ERROR_INVALID_CALL;
+    UINT pitch = object->desc.Width * 4;
+    BYTE *memory = static_cast<BYTE *>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, pitch * object->desc.Height));
+    if (!memory) return E_OUTOFMEMORY;
+    if (!discard)
+    {
+        D3D11_TEXTURE2D_DESC staging_desc = object->desc;
+        staging_desc.Usage = D3D11_USAGE_STAGING;
+        staging_desc.BindFlags = 0;
+        staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        staging_desc.MiscFlags = 0;
+        ID3D11Texture2D *staging = NULL;
+        HRESULT hr = device->CreateTexture2D(&staging_desc, NULL, &staging);
+        if (SUCCEEDED(hr))
+        {
+            D3D11_MAPPED_SUBRESOURCE mapped = {};
+            device->context->CopyResource(staging, texture);
+            hr = device->context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
+            if (SUCCEEDED(hr))
+            {
+                for (UINT y = 0; y < object->desc.Height; ++y)
+                    memcpy(memory + y * pitch, static_cast<BYTE *>(mapped.pData) + y * mapped.RowPitch, pitch);
+                device->context->Unmap(staging, 0);
+            }
+            staging->Release();
+        }
+        if (FAILED(hr))
+        {
+            HeapFree(GetProcessHeap(), 0, memory);
+            return hr;
+        }
+    }
+    D3DKMT_CREATEDCFROMMEMORY create = {};
+    create.pMemory = memory;
+    create.Format = D3DDDIFMT_A8R8G8B8;
+    create.Width = object->desc.Width;
+    create.Height = object->desc.Height;
+    create.Pitch = pitch;
+    create.hDeviceDc = CreateCompatibleDC(NULL);
+    NTSTATUS status = D3DKMTCreateDCFromMemory(&create);
+    DeleteDC(create.hDeviceDc);
+    if (status < 0)
+    {
+        HeapFree(GetProcessHeap(), 0, memory);
+        return E_FAIL;
+    }
+    object->gdi_dc = create.hDc;
+    object->gdi_bitmap = create.hBitmap;
+    object->gdi_memory = memory;
+    *hdc = create.hDc;
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE NativeTextureResource::ReleaseDC(RECT *dirty)
+{
+    NativeTexture2D *object = NativeGdiTexture(texture, device);
+    if (!object || !object->gdi_dc) return DXGI_ERROR_INVALID_CALL;
+    UINT pitch = object->desc.Width * 4;
+    RECT bounds = {0, 0, static_cast<LONG>(object->desc.Width), static_cast<LONG>(object->desc.Height)};
+    RECT update = bounds;
+    if (dirty && !IntersectRect(&update, dirty, &bounds)) SetRectEmpty(&update);
+    if (!IsRectEmpty(&update))
+    {
+        D3D11_BOX box = {static_cast<UINT>(update.left), static_cast<UINT>(update.top), 0,
+                static_cast<UINT>(update.right), static_cast<UINT>(update.bottom), 1};
+        device->context->UpdateSubresource(texture, 0, &box,
+                object->gdi_memory + update.top * pitch + update.left * 4, pitch, 0);
+    }
+    D3DKMT_DESTROYDCFROMMEMORY destroy = {};
+    destroy.hDc = object->gdi_dc;
+    destroy.hBitmap = object->gdi_bitmap;
+    D3DKMTDestroyDCFromMemory(&destroy);
+    HeapFree(GetProcessHeap(), 0, object->gdi_memory);
+    object->gdi_dc = NULL;
+    object->gdi_bitmap = NULL;
+    object->gdi_memory = NULL;
     return S_OK;
 }
 
@@ -1778,6 +1951,8 @@ HRESULT STDMETHODCALLTYPE NativeContext::QueryInterface(REFIID iid, void **out)
         *out = static_cast<ID3D11Multithread *>(this);
     else if (IsEqualGUID(iid, IID_ID3DUserDefinedAnnotation))
         *out = static_cast<ID3DUserDefinedAnnotation *>(this);
+    else if (IsEqualGUID(iid, IID_ID3D11VideoContext) && !deferred)
+        *out = static_cast<ID3D11VideoContext *>(this);
     else return E_NOINTERFACE;
     AddRef();
     return S_OK;
@@ -1938,7 +2113,10 @@ public:
     UINT priority = 0;
     bool created = false;
     bool mapped = false;
-    explicit NativeBuffer(NativeDevice *d) : NativeChild(d), runtime_handle(d->AllocateResourceIdentity()) {}
+    DXGI_USAGE usage = 0;
+    NativeTextureResource dxgi_resource;
+    explicit NativeBuffer(NativeDevice *d)
+        : NativeChild(d), runtime_handle(d->AllocateResourceIdentity()), dxgi_resource(this, d, &usage) {}
     ~NativeBuffer()
     {
         NativeLock guard(device);
@@ -1951,6 +2129,12 @@ public:
         {
             if (!out) return E_INVALIDARG;
             *out = static_cast<ID3D11Buffer *>(this); AddRef(); return S_OK;
+        }
+        if (IsEqualGUID(iid, IID_IDXGIObject) || IsEqualGUID(iid, IID_IDXGIDeviceSubObject)
+                || IsEqualGUID(iid, IID_IDXGIResource))
+        {
+            if (!out) return E_INVALIDARG;
+            *out = static_cast<IDXGIResource *>(&dxgi_resource); AddRef(); return S_OK;
         }
         return NativeChild::QueryInterface(iid, out);
     }
@@ -1991,15 +2175,27 @@ NATIVE_RESOURCE_REFERENCE(NativeRetainResource, Retain)
 NATIVE_RESOURCE_REFERENCE(NativeDropResource, Drop)
 #undef NATIVE_RESOURCE_REFERENCE
 
+static bool NativeUsageValid(D3D11_USAGE usage, UINT bind_flags, UINT cpu_access)
+{
+    const UINT gpu_output = D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_RENDER_TARGET
+            | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS;
+    if ((usage == D3D11_USAGE_IMMUTABLE || usage == D3D11_USAGE_DYNAMIC) && (!bind_flags || (bind_flags & gpu_output)))
+        return false;
+    return usage != D3D11_USAGE_STAGING || cpu_access;
+}
+
 HRESULT STDMETHODCALLTYPE NativeDevice::CreateBuffer(const D3D11_BUFFER_DESC *desc,
         const D3D11_SUBRESOURCE_DATA *initial, ID3D11Buffer **out)
 {
     if (out) *out = NULL;
     if (!desc || !desc->ByteWidth || desc->Usage > D3D11_USAGE_STAGING) return E_INVALIDARG;
+    if (desc->MiscFlags & (D3D11_RESOURCE_MISC_GENERATE_MIPS | D3D11_RESOURCE_MISC_TEXTURECUBE
+            | D3D11_RESOURCE_MISC_GDI_COMPATIBLE)) return E_INVALIDARG;
     if (initial && !initial->pSysMem) return E_INVALIDARG;
     if ((desc->BindFlags & D3D11_BIND_CONSTANT_BUFFER) && (desc->BindFlags != D3D11_BIND_CONSTANT_BUFFER
             || desc->ByteWidth % 16 || desc->ByteWidth > D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16)) return E_INVALIDARG;
     if (desc->Usage == D3D11_USAGE_IMMUTABLE && !initial) return E_INVALIDARG;
+    if (!NativeUsageValid(desc->Usage, desc->BindFlags, desc->CPUAccessFlags)) return E_INVALIDARG;
     if ((desc->Usage == D3D11_USAGE_DEFAULT || desc->Usage == D3D11_USAGE_IMMUTABLE) && desc->CPUAccessFlags) return E_INVALIDARG;
     if (desc->Usage == D3D11_USAGE_DYNAMIC && desc->CPUAccessFlags != D3D11_CPU_ACCESS_WRITE) return E_INVALIDARG;
     if (desc->Usage == D3D11_USAGE_STAGING && (desc->BindFlags || desc->MiscFlags)) return E_INVALIDARG;
@@ -2023,6 +2219,9 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateBuffer(const D3D11_BUFFER_DESC *de
     if (!buffer) return E_OUTOFMEMORY;
     if (!buffer->runtime_handle.handle) { buffer->Release(); return E_OUTOFMEMORY; }
     buffer->desc = normalized;
+    if (normalized.BindFlags & D3D11_BIND_SHADER_RESOURCE) buffer->usage |= DXGI_USAGE_SHADER_INPUT;
+    if (normalized.BindFlags & D3D11_BIND_RENDER_TARGET) buffer->usage |= DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    if (normalized.BindFlags & D3D11_BIND_UNORDERED_ACCESS) buffer->usage |= DXGI_USAGE_UNORDERED_ACCESS;
     D3D10DDI_MIPINFO mip = {normalized.ByteWidth, 1, 1, normalized.ByteWidth, 1, 1};
     D3D11DDIARG_CREATERESOURCE args = {};
     args.pMipInfoList = &mip;
@@ -2170,6 +2369,7 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateTexture1D(const D3D11_TEXTURE1D_DE
     if (input->CPUAccessFlags & ~(D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE)) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_STAGING && (input->BindFlags || input->MiscFlags)) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_IMMUTABLE && !initial) return E_INVALIDARG;
+    if (!NativeUsageValid(input->Usage, input->BindFlags, input->CPUAccessFlags)) return E_INVALIDARG;
     if ((input->Usage == D3D11_USAGE_DEFAULT || input->Usage == D3D11_USAGE_IMMUTABLE) && input->CPUAccessFlags) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_DYNAMIC && (input->CPUAccessFlags != D3D11_CPU_ACCESS_WRITE
             || (input->BindFlags & ~D3D11_BIND_SHADER_RESOURCE) || input->ArraySize != 1)) return E_INVALIDARG;
@@ -2254,6 +2454,7 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateTexture3D(const D3D11_TEXTURE3D_DE
     if (input->CPUAccessFlags & ~(D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE)) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_STAGING && (input->BindFlags || input->MiscFlags)) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_IMMUTABLE && !initial) return E_INVALIDARG;
+    if (!NativeUsageValid(input->Usage, input->BindFlags, input->CPUAccessFlags)) return E_INVALIDARG;
     if ((input->Usage == D3D11_USAGE_DEFAULT || input->Usage == D3D11_USAGE_IMMUTABLE) && input->CPUAccessFlags) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_DYNAMIC && (input->CPUAccessFlags != D3D11_CPU_ACCESS_WRITE
             || (input->BindFlags & ~D3D11_BIND_SHADER_RESOURCE))) return E_INVALIDARG;
@@ -2269,6 +2470,9 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateTexture3D(const D3D11_TEXTURE3D_DE
     if (!texture) return E_OUTOFMEMORY;
     if (!texture->runtime_handle.handle) { texture->Release(); return E_OUTOFMEMORY; }
     texture->desc = *input;
+    if (input->BindFlags & D3D11_BIND_SHADER_RESOURCE) texture->usage |= DXGI_USAGE_SHADER_INPUT;
+    if (input->BindFlags & D3D11_BIND_RENDER_TARGET) texture->usage |= DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    if (input->BindFlags & D3D11_BIND_UNORDERED_ACCESS) texture->usage |= DXGI_USAGE_UNORDERED_ACCESS;
     texture->desc.MipLevels = mip_count;
     D3D10DDI_MIPINFO mips[12] = {};
     for (UINT i = 0; i < mip_count; ++i)
@@ -2318,6 +2522,7 @@ HRESULT NativeDevice::CreateTexture(const D3D11_TEXTURE2D_DESC *input,
     if (input->Usage > D3D11_USAGE_STAGING) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_STAGING && (input->BindFlags || input->MiscFlags || input->SampleDesc.Count != 1)) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_IMMUTABLE && !initial) return E_INVALIDARG;
+    if (!NativeUsageValid(input->Usage, input->BindFlags, input->CPUAccessFlags)) return E_INVALIDARG;
     if ((input->Usage == D3D11_USAGE_DEFAULT || input->Usage == D3D11_USAGE_IMMUTABLE) && input->CPUAccessFlags) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_DYNAMIC && input->CPUAccessFlags != D3D11_CPU_ACCESS_WRITE) return E_INVALIDARG;
     if ((input->MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE) && (input->Width != input->Height
@@ -2325,6 +2530,10 @@ HRESULT NativeDevice::CreateTexture(const D3D11_TEXTURE2D_DESC *input,
             || (feature_level < D3D_FEATURE_LEVEL_10_1 && input->ArraySize != 6))) return E_INVALIDARG;
     if ((input->MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX))
             == (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)) return E_INVALIDARG;
+    if ((input->MiscFlags & D3D11_RESOURCE_MISC_GDI_COMPATIBLE) && ((input->Format != DXGI_FORMAT_B8G8R8A8_UNORM
+            && input->Format != DXGI_FORMAT_B8G8R8A8_TYPELESS && input->Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
+            || input->Usage != D3D11_USAGE_DEFAULT || !(input->BindFlags & D3D11_BIND_RENDER_TARGET)
+            || (input->MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX))) return E_INVALIDARG;
     if (input->MiscFlags & (D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE)) return E_NOTIMPL;
     if ((input->MiscFlags & D3D11_RESOURCE_MISC_SHARED) && (input->Usage != D3D11_USAGE_DEFAULT
             || input->CPUAccessFlags || input->MipLevels != 1 || input->ArraySize != 1
@@ -2390,6 +2599,7 @@ HRESULT NativeDevice::CreateTexture(const D3D11_TEXTURE2D_DESC *input,
     args.SampleDesc = input->SampleDesc;
     args.MipLevels = mip_count;
     args.ArraySize = input->ArraySize;
+    if (input->MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE) args.ArraySize -= input->ArraySize % 6;
     args.pPrimaryDesc = const_cast<DXGI_DDI_PRIMARY_DESC *>(primary);
     SIZE_T size = functions.pfnCalcPrivateResourceSize(driver_device, &args);
     texture->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
@@ -2573,6 +2783,38 @@ static DXGI_FORMAT NativeFormatFamily(DXGI_FORMAT format)
     return DXGI_FORMAT_UNKNOWN;
 }
 
+static UINT NativeCompressedBlockBits(DXGI_FORMAT family)
+{
+    switch (family)
+    {
+        case DXGI_FORMAT_BC1_TYPELESS: case DXGI_FORMAT_BC4_TYPELESS: return 64;
+        case DXGI_FORMAT_BC2_TYPELESS: case DXGI_FORMAT_BC3_TYPELESS: case DXGI_FORMAT_BC5_TYPELESS:
+        case DXGI_FORMAT_BC6H_TYPELESS: case DXGI_FORMAT_BC7_TYPELESS: return 128;
+        default: return 0;
+    }
+}
+
+static UINT NativeBlockEdge(DXGI_FORMAT format)
+{
+    return NativeCompressedBlockBits(NativeFormatFamily(format)) ? 4 : 1;
+}
+
+static bool NativeCopyCompatible(DXGI_FORMAT dst, DXGI_FORMAT src, D3D_FEATURE_LEVEL level)
+{
+    if (dst == src) return true;
+    DXGI_FORMAT dst_family = NativeFormatFamily(dst), src_family = NativeFormatFamily(src);
+    if (dst_family != DXGI_FORMAT_UNKNOWN && dst_family == src_family) return true;
+    if (level < D3D_FEATURE_LEVEL_10_1) return false;
+    if (dst == DXGI_FORMAT_R9G9B9E5_SHAREDEXP || src == DXGI_FORMAT_R9G9B9E5_SHAREDEXP)
+        return (dst == DXGI_FORMAT_R9G9B9E5_SHAREDEXP ? src_family : dst_family) == DXGI_FORMAT_R32_TYPELESS;
+    UINT dst_block = NativeCompressedBlockBits(dst_family), src_block = NativeCompressedBlockBits(src_family);
+    if (!dst_block == !src_block) return false;
+    DXGI_FORMAT plain = dst_block ? src_family : dst_family;
+    UINT block = dst_block ? dst_block : src_block;
+    if (block == 64) return plain == DXGI_FORMAT_R16G16B16A16_TYPELESS || plain == DXGI_FORMAT_R32G32_TYPELESS;
+    return plain == DXGI_FORMAT_R32G32B32A32_TYPELESS;
+}
+
 static bool NativeViewFormatCompatible(const NativeTextureInfo &texture, DXGI_FORMAT format)
 {
     DXGI_FORMAT family = NativeFormatFamily(format);
@@ -2658,6 +2900,8 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateRenderTargetView(ID3D11Resource *r
         const D3D11_RENDER_TARGET_VIEW_DESC *input, ID3D11RenderTargetView **out)
 {
     if (out) *out = NULL;
+    if (NativeTexture2D *texture = NativeTexture(resource, this))
+        if (texture->read_only) return E_INVALIDARG;
     if (NativeBuffer *buffer = GetNativeBuffer(resource, this))
     {
         if (!input || input->ViewDimension != D3D11_RTV_DIMENSION_BUFFER
@@ -2717,7 +2961,7 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateRenderTargetView(ID3D11Resource *r
         /* 1D and 2D view unions have identical mip/array fields. */
         case D3D11_RTV_DIMENSION_TEXTURE1D:
         case D3D11_RTV_DIMENSION_TEXTURE2D:
-            if (texture->desc.SampleDesc.Count != 1 || texture->desc.ArraySize != 1) return E_INVALIDARG;
+            if (texture->desc.SampleDesc.Count != 1) return E_INVALIDARG;
             args.Tex2D.MipSlice = desc.Texture2D.MipSlice;
             args.Tex2D.ArraySize = 1;
             break;
@@ -2760,6 +3004,42 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateRenderTargetView(ID3D11Resource *r
     return NativeBuildRenderTargetView(this, resource, args, desc, out);
 }
 
+static bool NativeDisplayFormat(DXGI_FORMAT format);
+
+static bool NativeIntegerFormat(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_R32G32B32A32_UINT: case DXGI_FORMAT_R32G32B32A32_SINT:
+        case DXGI_FORMAT_R32G32B32_UINT: case DXGI_FORMAT_R32G32B32_SINT:
+        case DXGI_FORMAT_R16G16B16A16_UINT: case DXGI_FORMAT_R16G16B16A16_SINT:
+        case DXGI_FORMAT_R32G32_UINT: case DXGI_FORMAT_R32G32_SINT:
+        case DXGI_FORMAT_X32_TYPELESS_G8X24_UINT: case DXGI_FORMAT_R10G10B10A2_UINT:
+        case DXGI_FORMAT_R8G8B8A8_UINT: case DXGI_FORMAT_R8G8B8A8_SINT:
+        case DXGI_FORMAT_R16G16_UINT: case DXGI_FORMAT_R16G16_SINT:
+        case DXGI_FORMAT_R32_UINT: case DXGI_FORMAT_R32_SINT: case DXGI_FORMAT_X24_TYPELESS_G8_UINT:
+        case DXGI_FORMAT_R8G8_UINT: case DXGI_FORMAT_R8G8_SINT:
+        case DXGI_FORMAT_R16_UINT: case DXGI_FORMAT_R16_SINT:
+        case DXGI_FORMAT_R8_UINT: case DXGI_FORMAT_R8_SINT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool NativeSnormFormat(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_R16G16B16A16_SNORM: case DXGI_FORMAT_R8G8B8A8_SNORM:
+        case DXGI_FORMAT_R16G16_SNORM: case DXGI_FORMAT_R8G8_SNORM:
+        case DXGI_FORMAT_R16_SNORM: case DXGI_FORMAT_R8_SNORM:
+            return true;
+        default:
+            return false;
+    }
+}
+
 HRESULT STDMETHODCALLTYPE NativeDevice::CheckFormatSupport(DXGI_FORMAT format, UINT *support)
 {
     if (!support) return E_INVALIDARG;
@@ -2772,9 +3052,11 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CheckFormatSupport(DXGI_FORMAT format, U
     if (FAILED(operation_error)) return operation_error;
     /* The DDI describes format capabilities; API dimension/use flags are
      * derived by the runtime, rather than exposed as the DDI bit mask. */
-    if (ddi_support & 0x1) *support |= D3D11_FORMAT_SUPPORT_SHADER_SAMPLE;
+    bool integer = NativeIntegerFormat(format);
+    if ((ddi_support & 0x1) && !integer) *support |= D3D11_FORMAT_SUPPORT_SHADER_SAMPLE;
     if (ddi_support & 0x2) *support |= D3D11_FORMAT_SUPPORT_RENDER_TARGET;
-    if (ddi_support & 0x4) *support |= D3D11_FORMAT_SUPPORT_BLENDABLE;
+    if ((ddi_support & 0x4) && !integer && (feature_level >= D3D_FEATURE_LEVEL_10_1 || !NativeSnormFormat(format)))
+        *support |= D3D11_FORMAT_SUPPORT_BLENDABLE;
     if (ddi_support & 0x8) *support |= D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
     if (ddi_support & 0x10) *support |= D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
     /* Core vertex formats are required by feature level 10.0 and later.
@@ -2804,7 +3086,9 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CheckFormatSupport(DXGI_FORMAT format, U
      * its output-merger role follows from the format itself. */
     if (!(ddi_support & 0x80000000) && NativeDepthResourceFormat(format) != DXGI_FORMAT_UNKNOWN)
         *support |= D3D11_FORMAT_SUPPORT_DEPTH_STENCIL | D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_MIP;
-    return S_OK;
+    if (NativeDisplayFormat(format) && (*support & D3D11_FORMAT_SUPPORT_RENDER_TARGET))
+        *support |= D3D11_FORMAT_SUPPORT_DISPLAY;
+    return *support ? S_OK : E_FAIL;
 }
 
 HRESULT STDMETHODCALLTYPE NativeDevice::CheckMultisampleQualityLevels(DXGI_FORMAT format, UINT samples, UINT *quality)
@@ -2941,7 +3225,7 @@ HRESULT STDMETHODCALLTYPE NativeContext::Map(ID3D11Resource *resource, UINT subr
     if (deferred) return MapDeferred(resource, subresource, type, flags, mapped);
 
     if (!mapped) return E_INVALIDARG;
-    ZeroMemory(mapped, sizeof(*mapped));
+    mapped->pData = NULL;
     if (NativeBuffer *buffer = GetNativeBuffer(resource, device))
         return MapBuffer(device, buffer, subresource, type, flags, mapped);
     NativeTextureInfo info;
@@ -2952,7 +3236,7 @@ HRESULT STDMETHODCALLTYPE NativeContext::Map(ID3D11Resource *resource, UINT subr
     if ((type == D3D11_MAP_READ || type == D3D11_MAP_READ_WRITE) && !(texture->desc.CPUAccessFlags & D3D11_CPU_ACCESS_READ)) return E_INVALIDARG;
     if (type != D3D11_MAP_READ && !(texture->desc.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE)) return E_INVALIDARG;
     if (type == D3D11_MAP_WRITE_NO_OVERWRITE) return E_INVALIDARG;
-    if (type == D3D11_MAP_WRITE_DISCARD && texture->desc.Usage != D3D11_USAGE_DYNAMIC) return E_INVALIDARG;
+    if ((type == D3D11_MAP_WRITE_DISCARD) != (texture->desc.Usage == D3D11_USAGE_DYNAMIC)) return E_INVALIDARG;
     NativeLock guard(device);
     device->BeginCall();
     D3D10DDI_MAPPED_SUBRESOURCE result = {};
@@ -3086,11 +3370,12 @@ void STDMETHODCALLTYPE NativeContext::CopyResource(ID3D11Resource *dst, ID3D11Re
     NativeTextureInfo *d = GetNativeTexture(dst, device, &dst_info), *s = GetNativeTexture(src, device, &src_info);
     if (!d || !s || dst == src || d->depth != s->depth
             || (d->dimension == D3D10DDIRESOURCE_TEXTURE3D) != (s->dimension == D3D10DDIRESOURCE_TEXTURE3D)
-            || d->desc.Width != s->desc.Width || d->desc.Height != s->desc.Height
+            || (d->desc.Width + NativeBlockEdge(d->desc.Format) - 1) / NativeBlockEdge(d->desc.Format)
+                != (s->desc.Width + NativeBlockEdge(s->desc.Format) - 1) / NativeBlockEdge(s->desc.Format)
+            || (d->desc.Height + NativeBlockEdge(d->desc.Format) - 1) / NativeBlockEdge(d->desc.Format)
+                != (s->desc.Height + NativeBlockEdge(s->desc.Format) - 1) / NativeBlockEdge(s->desc.Format)
             || d->desc.ArraySize != s->desc.ArraySize || d->desc.MipLevels != s->desc.MipLevels
-            || (d->desc.Format != s->desc.Format
-                && (NativeFormatFamily(d->desc.Format) == DXGI_FORMAT_UNKNOWN
-                    || NativeFormatFamily(d->desc.Format) != NativeFormatFamily(s->desc.Format)))
+            || !NativeCopyCompatible(d->desc.Format, s->desc.Format, device->feature_level)
             || d->desc.SampleDesc.Count != s->desc.SampleDesc.Count
             || d->desc.SampleDesc.Quality != s->desc.SampleDesc.Quality || d->desc.Usage == D3D11_USAGE_IMMUTABLE) return;
     if ((d->desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) && device->feature_level < D3D_FEATURE_LEVEL_10_1) return;
@@ -3135,10 +3420,27 @@ void STDMETHODCALLTYPE NativeContext::CopySubresourceRegion(ID3D11Resource *dst,
     NativeTextureInfo *d = GetNativeTexture(dst, device, &dst_info), *s = GetNativeTexture(src, device, &src_info);
     if (!d || !s || dst_subresource >= d->desc.MipLevels * d->desc.ArraySize
             || src_subresource >= s->desc.MipLevels * s->desc.ArraySize || !device->functions.pfnResourceCopyRegion) return;
+    if (!NativeCopyCompatible(d->desc.Format, s->desc.Format, device->feature_level)) return;
+    if ((d->desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) || (s->desc.BindFlags & D3D11_BIND_DEPTH_STENCIL)
+            || d->desc.SampleDesc.Count > 1 || s->desc.SampleDesc.Count > 1)
+    {
+        UINT level = src_subresource % s->desc.MipLevels;
+        if (x || y || z || (box && (box->left || box->top || box->front
+                || box->right != max(1u, s->desc.Width >> level)
+                || box->bottom != max(1u, s->desc.Height >> level)))) return;
+    }
     if ((d->desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) && device->feature_level < D3D_FEATURE_LEVEL_10_1) return;
     NativeLock guard(device);
     device->functions.pfnResourceCopyRegion(device->driver_device, d->handle, dst_subresource,
             x, y, z, s->handle, src_subresource, reinterpret_cast<const D3D10_DDI_BOX *>(box));
+}
+
+static bool NativeResolveFormatValid(DXGI_FORMAT format, DXGI_FORMAT resource)
+{
+    if (format == resource) return NativeFormatFamily(format) != format;
+    DXGI_FORMAT family = NativeFormatFamily(resource);
+    return family == resource && family != DXGI_FORMAT_UNKNOWN && NativeFormatFamily(format) == family
+            && format != family;
 }
 
 void STDMETHODCALLTYPE NativeContext::ResolveSubresource(ID3D11Resource *dst, UINT dst_subresource,
@@ -3155,7 +3457,8 @@ void STDMETHODCALLTYPE NativeContext::ResolveSubresource(ID3D11Resource *dst, UI
     NativeTexture2D *d = NativeTexture(dst, device), *s = NativeTexture(src, device);
     if (!d || !s || d == s || !device->functions.pfnResourceResolveSubresource
             || d->desc.SampleDesc.Count != 1 || s->desc.SampleDesc.Count <= 1
-            || d->desc.Usage != D3D11_USAGE_DEFAULT || format != d->desc.Format || format != s->desc.Format
+            || d->desc.Usage != D3D11_USAGE_DEFAULT || !NativeResolveFormatValid(format, d->desc.Format)
+            || !NativeResolveFormatValid(format, s->desc.Format)
             || NativeDepthResourceFormat(format) != DXGI_FORMAT_UNKNOWN
             || dst_subresource >= d->desc.MipLevels * d->desc.ArraySize
             || src_subresource >= s->desc.MipLevels * s->desc.ArraySize
@@ -3170,6 +3473,7 @@ void STDMETHODCALLTYPE NativeContext::ResolveSubresource(ID3D11Resource *dst, UI
 void STDMETHODCALLTYPE NativeContext::UpdateSubresource(ID3D11Resource *resource, UINT subresource,
         const D3D11_BOX *box, const void *data, UINT row_pitch, UINT depth_pitch)
 {
+    if (box && (box->left >= box->right || box->top >= box->bottom || box->front >= box->back)) return;
     if (deferred) { UpdateDeferred(resource, subresource, box, data, row_pitch, depth_pitch); return; }
 
     if (NativeBuffer *buffer = GetNativeBuffer(resource, device))
@@ -3723,6 +4027,23 @@ public:
     }
 };
 
+#ifndef D3D11_SB_GLOBAL_FLAG_ENABLE_DOUBLE_PRECISION_FLOAT_OPS
+#define D3D11_SB_GLOBAL_FLAG_ENABLE_DOUBLE_PRECISION_FLOAT_OPS (1u << 12)
+#endif
+#ifndef D3D11_SB_GLOBAL_FLAG_ENABLE_RAW_AND_STRUCTURED_BUFFERS
+#define D3D11_SB_GLOBAL_FLAG_ENABLE_RAW_AND_STRUCTURED_BUFFERS (1u << 14)
+#endif
+
+static bool NativeShaderFeaturesSupported(NativeDevice *device, const UINT *tokens, UINT model)
+{
+    if (tokens[1] < 3 || (tokens[2] & 0x7ff) != D3D10_SB_OPCODE_DCL_GLOBAL_FLAGS) return true;
+    UINT flags = tokens[2];
+    if ((flags & D3D11_SB_GLOBAL_FLAG_ENABLE_DOUBLE_PRECISION_FLOAT_OPS)
+            && !(device->shader_caps & D3D11DDICAPS_SHADER_DOUBLES)) return false;
+    return model >= 0x50 || !(flags & D3D11_SB_GLOBAL_FLAG_ENABLE_RAW_AND_STRUCTURED_BUFFERS)
+            || (device->shader_caps & D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X);
+}
+
 template<class Interface, const GUID *iid>
 static HRESULT CreateNativeShader(NativeDevice *device, const void *code, SIZE_T length,
         ID3D11ClassLinkage *linkage, Interface **out, UINT type)
@@ -3739,8 +4060,18 @@ static HRESULT CreateNativeShader(NativeDevice *device, const void *code, SIZE_T
     if ((model != 0x40 && model != 0x41 && model != 0x50) || model > maximum
             || (tessellation && (model != 0x50 || device->feature_level < D3D_FEATURE_LEVEL_11_0))
             || (compute && device->feature_level < D3D_FEATURE_LEVEL_11_0
-                && !(device->shader_caps & D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X)))
+                && !(device->shader_caps & D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X))
+            || !NativeShaderFeaturesSupported(device, bytecode.tokens, model))
         return E_INVALIDARG;
+    if (type == 1 || type == 4)
+    {
+        for (UINT i = 0; i < bytecode.signatures.NumOutputSignatureEntries; ++i)
+        {
+            UINT system_value = bytecode.signatures.pOutputSignature[i].SystemValue;
+            if (system_value == D3D10_SB_NAME_RENDER_TARGET_ARRAY_INDEX
+                    || system_value == D3D10_SB_NAME_VIEWPORT_ARRAY_INDEX) return E_INVALIDARG;
+        }
+    }
     if (linkage) return E_NOTIMPL;
     auto &f = device->functions;
     auto &m = device->wddm20_functions;
@@ -3949,7 +4280,6 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateShaderResourceView(ID3D11Resource 
     {
         case D3D11_SRV_DIMENSION_TEXTURE1D:
         case D3D11_SRV_DIMENSION_TEXTURE2D:
-            if (texture->desc.ArraySize != 1) return E_INVALIDARG;
             mip = desc.Texture2D.MostDetailedMip;
             mips = desc.Texture2D.MipLevels;
             break;
@@ -4232,7 +4562,11 @@ void NativeContext::SetConstantBuffers(UINT stage, UINT start, UINT count, ID3D1
             : stage == 2 ? device->functions.pfnGsSetConstantBuffers
             : stage == 3 ? device->functions.pfnHsSetConstantBuffers
             : stage == 4 ? device->functions.pfnDsSetConstantBuffers : device->functions.pfnCsSetConstantBuffers;
-    if (!set) { Unimplemented("SetConstantBuffers"); return; }
+    if (!set)
+    {
+        for (UINT i = 0; i < count; ++i) if (buffers[i]) { Unimplemented("SetConstantBuffers"); break; }
+        return;
+    }
     NativeLock guard(device);
     if (deferred && !recording_disabled)
     {
@@ -4265,7 +4599,11 @@ void NativeContext::SetSamplers(UINT stage, UINT start, UINT count, ID3D11Sample
             : stage == 2 ? device->functions.pfnGsSetSamplers
             : stage == 3 ? device->functions.pfnHsSetSamplers
             : stage == 4 ? device->functions.pfnDsSetSamplers : device->functions.pfnCsSetSamplers;
-    if (!set) { Unimplemented("SetSamplers"); return; }
+    if (!set)
+    {
+        for (UINT i = 0; i < count; ++i) if (states[i]) { Unimplemented("SetSamplers"); break; }
+        return;
+    }
     NativeLock guard(device);
     if (deferred && !recording_disabled)
     {
@@ -4290,7 +4628,11 @@ void NativeContext::SetShaderResources(UINT stage, UINT start, UINT count, ID3D1
             : stage == 2 ? device->functions.pfnGsSetShaderResources
             : stage == 3 ? device->functions.pfnHsSetShaderResources
             : stage == 4 ? device->functions.pfnDsSetShaderResources : device->functions.pfnCsSetShaderResources;
-    if (!set) { Unimplemented("SetShaderResources"); return; }
+    if (!set)
+    {
+        for (UINT i = 0; i < count; ++i) if (views[i]) { Unimplemented("SetShaderResources"); break; }
+        return;
+    }
     NativeLock guard(device);
     D3D10DDI_HSHADERRESOURCEVIEW handles[128] = {};
     ID3D11ShaderResourceView *accepted[128] = {};
@@ -4637,6 +4979,8 @@ public:
     bool primary = false;
     bool composition = false;
     bool transport_valid = false;
+    bool device_child = false;
+    DXGI_FORMAT publish_format = DXGI_FORMAT_UNKNOWN;
 
     NativeSwapChain(NativeDevice *d, IDXGIFactory *f, HWND w) : device(d), factory(f), window(w)
     {
@@ -4656,10 +5000,11 @@ public:
         DeleteCriticalSection(&publish_lock);
         for (UINT i = 0; i < 16; ++i) if (publish_records[i].completion) CloseHandle(publish_records[i].completion);
         if (publishes_drained) CloseHandle(publishes_drained);
-        for (UINT i = 0; i < 3; ++i) if (transports[i]) transports[i]->Release();
-        for (UINT i = 0; i < 16; ++i) if (buffers[i]) buffers[i]->Release();
+        for (UINT i = 0; i < 3; ++i) if (transports[i]) transports[i]->Drop();
+        for (UINT i = 0; i < 16; ++i) if (buffers[i]) buffers[i]->Drop();
         factory->Release();
-        device->Release();
+        if (device_child) device->ChildRelease();
+        else device->Release();
     }
     HRESULT AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested);
     static DWORD WINAPI DestroyPending(void *);
@@ -4703,6 +5048,9 @@ public:
                 && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                 reinterpret_cast<LPCWSTR>(DestroyPending), &retirement_module))
         {
+            device->ChildAddRef();
+            device->Release();
+            device_child = true;
             HANDLE thread = CreateThread(NULL, 0, DestroyPending, this, 0, NULL);
             if (thread) { CloseHandle(thread); return 0; }
             FreeLibrary(retirement_module);
@@ -5116,7 +5464,21 @@ HRESULT NativeSwapChain::FillTransport(UINT flags, const DXGI_PRESENT_PARAMETERS
         UnionRect(&older, &older, &frame_damage[past % ARRAYSIZE(frame_damage)]);
     NativeTexture2D *target = transports[index];
     device->BeginCall();
-    if (EqualRect(&older, &full) || EqualRect(&damage, &full))
+    if (NativeFormatFamily(publish_format) != NativeFormatFamily(desc.Format))
+    {
+        if (!device->dxgi_functions.pfnBlt) return DXGI_ERROR_UNSUPPORTED;
+        DXGI_DDI_ARG_BLT blt = {};
+        blt.hDevice = reinterpret_cast<DXGI_DDI_HDEVICE>(device->driver_device.pDrvPrivate);
+        blt.hDstResource = reinterpret_cast<DXGI_DDI_HRESOURCE>(target->handle.pDrvPrivate);
+        blt.DstRight = desc.Width;
+        blt.DstBottom = desc.Height;
+        blt.hSrcResource = reinterpret_cast<DXGI_DDI_HRESOURCE>(buffers[0]->handle.pDrvPrivate);
+        blt.Flags.Convert = 1;
+        blt.Rotate = DXGI_DDI_MODE_ROTATION_IDENTITY;
+        HRESULT hr = device->dxgi_functions.pfnBlt(&blt);
+        if (FAILED(hr)) return hr;
+    }
+    else if (EqualRect(&older, &full) || EqualRect(&damage, &full))
         device->context->CopyResource(target, buffers[0]);
     else
     {
@@ -5139,7 +5501,8 @@ HRESULT NativeSwapChain::FillTransport(UINT flags, const DXGI_PRESENT_PARAMETERS
 
 HRESULT NativeSwapChain::Publish(NativeTexture2D *texture)
 {
-    if (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM)
+    DXGI_FORMAT format = texture->desc.Format;
+    if (format != DXGI_FORMAT_B8G8R8A8_UNORM && format != DXGI_FORMAT_R8G8B8A8_UNORM)
         return DXGI_ERROR_UNSUPPORTED;
     DWM_DX_SURFACE_EXCHANGE exchange = {};
     exchange.StructSize = sizeof(exchange);
@@ -5157,7 +5520,7 @@ HRESULT NativeSwapChain::Publish(NativeTexture2D *texture)
     exchange.Info.Version = DWM_DX_SURFACE_INFO_VERSION_GPU;
     exchange.Info.Width = desc.Width;
     exchange.Info.Height = desc.Height;
-    exchange.Info.Format = desc.Format;
+    exchange.Info.Format = format;
     exchange.Flags = DWM_DX_PUBLISH_RETAINED;
     if (desc.AlphaMode == DXGI_ALPHA_MODE_PREMULTIPLIED)
         exchange.Flags |= DWM_DX_PUBLISH_PREMULTIPLIED;
@@ -5333,8 +5696,26 @@ static HRESULT APIENTRY NativePresent(HANDLE runtime_device, DXGIDDICB_PRESENT *
     return context->result;
 }
 
+static DXGI_FORMAT NativePublishFormat(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: return DXGI_FORMAT_R8G8B8A8_UNORM;
+        default: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    }
+}
+
+static bool NativeDisplayFormat(DXGI_FORMAT format)
+{
+    return format == DXGI_FORMAT_R16G16B16A16_FLOAT || format == DXGI_FORMAT_R10G10B10A2_UNORM
+            || format == DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM || format == DXGI_FORMAT_R8G8B8A8_UNORM
+            || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || format == DXGI_FORMAT_B8G8R8A8_UNORM
+            || format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+}
+
 HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
 {
+    if (!NativeDisplayFormat(requested.Format)) return E_INVALIDARG;
     if (requested.Flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) return DXGI_ERROR_UNSUPPORTED;
     if (!requested.Width || !requested.Height || !requested.BufferCount || requested.BufferCount > 16
             || requested.SampleDesc.Count != 1 || requested.SampleDesc.Quality || requested.Stereo) return DXGI_ERROR_INVALID_CALL;
@@ -5344,8 +5725,8 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
     if (requested.BufferCount > 1 && (!device->dxgi_functions.pfnRotateResourceIdentities || !device->rotate_resources)) return DXGI_ERROR_UNSUPPORTED;
     if (requested.AlphaMode != DXGI_ALPHA_MODE_UNSPECIFIED && requested.AlphaMode != DXGI_ALPHA_MODE_IGNORE
             && !(composition && requested.AlphaMode == DXGI_ALPHA_MODE_PREMULTIPLIED)) return DXGI_ERROR_UNSUPPORTED;
-    if (!primary && requested.Format != DXGI_FORMAT_B8G8R8A8_UNORM
-            && requested.Format != DXGI_FORMAT_R8G8B8A8_UNORM) return DXGI_ERROR_UNSUPPORTED;
+    if (primary && requested.Format != DXGI_FORMAT_B8G8R8A8_UNORM) return DXGI_ERROR_UNSUPPORTED;
+    DXGI_FORMAT new_publish_format = NativePublishFormat(requested.Format);
     D3D11_TEXTURE2D_DESC texture_desc = {};
     texture_desc.Width = requested.Width;
     texture_desc.Height = requested.Height;
@@ -5373,27 +5754,40 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
         hr = device->CreateTexture(&texture_desc, NULL, &texture, true, primary ? &primary_desc : NULL);
         if (FAILED(hr)) break;
         new_buffers[i] = static_cast<NativeTexture2D *>(texture);
+        new_buffers[i]->read_only = i && !primary;
+        new_buffers[i]->Retain();
+        texture->Release();
     }
     /* Single buffering needs an immutable publication; composition also
      * needs retained history for damage across rotating back buffers. */
-    for (UINT i = 0; SUCCEEDED(hr) && !primary && (requested.BufferCount == 1 || composition) && i < 3; ++i)
+    D3D11_TEXTURE2D_DESC transport_desc = texture_desc;
+    transport_desc.Format = new_publish_format;
+    if (NativeFormatFamily(new_publish_format) != NativeFormatFamily(requested.Format))
+        transport_desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+    for (UINT i = 0; SUCCEEDED(hr) && !primary
+            && (requested.BufferCount == 1 || composition || new_publish_format != requested.Format) && i < 3; ++i)
     {
         ID3D11Texture2D *texture = NULL;
-        hr = device->CreateTexture(&texture_desc, NULL, &texture, true);
-        if (SUCCEEDED(hr)) new_transports[i] = static_cast<NativeTexture2D *>(texture);
+        hr = device->CreateTexture(&transport_desc, NULL, &texture, true);
+        if (SUCCEEDED(hr))
+        {
+            new_transports[i] = static_cast<NativeTexture2D *>(texture);
+            new_transports[i]->Retain();
+            texture->Release();
+        }
     }
     if (SUCCEEDED(hr)) hr = RetirePublication();
     if (SUCCEEDED(hr))
     {
         for (UINT i = 0; i < 16; ++i)
         {
-            if (buffers[i]) buffers[i]->Release();
+            if (buffers[i]) buffers[i]->Drop();
             buffers[i] = new_buffers[i];
             new_buffers[i] = NULL;
         }
         for (UINT i = 0; i < 3; ++i)
         {
-            if (transports[i]) transports[i]->Release();
+            if (transports[i]) transports[i]->Drop();
             transports[i] = new_transports[i];
             new_transports[i] = NULL;
             transport_frame[i] = 0;
@@ -5402,10 +5796,11 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
         transport = NULL;
         transport_valid = false;
         desc = requested;
+        publish_format = new_publish_format;
         CloseReleaseEvents();
     }
-    for (UINT i = 0; i < 3; ++i) if (new_transports[i]) new_transports[i]->Release();
-    for (UINT i = 0; i < 16; ++i) if (new_buffers[i]) new_buffers[i]->Release();
+    for (UINT i = 0; i < 3; ++i) if (new_transports[i]) new_transports[i]->Drop();
+    for (UINT i = 0; i < 16; ++i) if (new_buffers[i]) new_buffers[i]->Drop();
     return hr;
 }
 
@@ -5440,7 +5835,7 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::ResizeBuffers(UINT count, UINT width,
 {
     NativeLock guard(device);
     for (UINT i = 0; i < desc.BufferCount; ++i)
-        if (buffers[i] && buffers[i]->references != 1) return DXGI_ERROR_INVALID_CALL;
+        if (buffers[i] && buffers[i]->references) return DXGI_ERROR_INVALID_CALL;
     DXGI_SWAP_CHAIN_DESC1 requested = desc;
     RECT client = {};
     if (composition ? (!width || !height) : !GetClientRect(window, &client)) return DXGI_ERROR_INVALID_CALL;
@@ -5655,6 +6050,7 @@ static UINT NativeVertexFormatSize(DXGI_FORMAT format)
         case DXGI_FORMAT_R32G32_FLOAT: case DXGI_FORMAT_R32G32_UINT: case DXGI_FORMAT_R32G32_SINT: return 8;
         case DXGI_FORMAT_R10G10B10A2_UNORM: case DXGI_FORMAT_R10G10B10A2_UINT: case DXGI_FORMAT_R11G11B10_FLOAT:
         case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UINT: case DXGI_FORMAT_R8G8B8A8_SNORM: case DXGI_FORMAT_R8G8B8A8_SINT:
+        case DXGI_FORMAT_B8G8R8A8_UNORM:
         case DXGI_FORMAT_R16G16_FLOAT: case DXGI_FORMAT_R16G16_UNORM: case DXGI_FORMAT_R16G16_UINT:
         case DXGI_FORMAT_R16G16_SNORM: case DXGI_FORMAT_R16G16_SINT:
         case DXGI_FORMAT_R32_FLOAT: case DXGI_FORMAT_R32_UINT: case DXGI_FORMAT_R32_SINT: return 4;
@@ -5677,7 +6073,7 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateInputLayout(const D3D11_INPUT_ELEM
         const void *code, SIZE_T length, ID3D11InputLayout **out)
 {
     if (out) *out = NULL;
-    if ((count && !elements) || count > D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT || !code || !length) return E_INVALIDARG;
+    if (!elements || count > D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT || !code || !length) return E_INVALIDARG;
     if (!functions.pfnCalcPrivateElementLayoutSize || !functions.pfnCreateElementLayout || !functions.pfnDestroyElementLayout) return E_NOTIMPL;
     struct InputSignature
     {
@@ -5689,7 +6085,7 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateInputLayout(const D3D11_INPUT_ELEM
     if (result < 0) return result == VKD3D_ERROR_OUT_OF_MEMORY ? E_OUTOFMEMORY : E_INVALIDARG;
     D3D10DDIARG_INPUT_ELEMENT_DESC declarations[D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT] = {};
     UINT offsets[32] = {}, slot_classes[32] = {}, step_rates[32] = {}, used = 0;
-    bool used_slots[32] = {};
+    bool used_slots[32] = {}, provided[D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT] = {};
     for (UINT i = 0; i < count; ++i)
     {
         const D3D11_INPUT_ELEMENT_DESC &input = elements[i];
@@ -5711,6 +6107,9 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateInputLayout(const D3D11_INPUT_ELEM
         vkd3d_shader_signature_element *entry = vkd3d_shader_find_signature_element(&signature.value,
                 input.SemanticName, input.SemanticIndex, 0);
         if (!entry) continue;
+        UINT index = static_cast<UINT>(entry - signature.value.elements);
+        if (index < D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT) provided[index] = true;
+        if (entry->sysval_semantic != VKD3D_SHADER_SV_NONE) continue;
         for (UINT j = 0; j < used; ++j)
             if (declarations[j].InputRegister == entry->register_index) return E_INVALIDARG;
         D3D10DDIARG_INPUT_ELEMENT_DESC &declaration = declarations[used++];
@@ -5725,9 +6124,7 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateInputLayout(const D3D11_INPUT_ELEM
     {
         const vkd3d_shader_signature_element &entry = signature.value.elements[i];
         if (!_stricmp(entry.semantic_name, "SV_VertexID") || !_stricmp(entry.semantic_name, "SV_InstanceID")) continue;
-        bool found = false;
-        for (UINT j = 0; j < used; ++j) if (declarations[j].InputRegister == entry.register_index) found = true;
-        if (!found) return E_INVALIDARG;
+        if (i >= D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT || !provided[i]) return E_INVALIDARG;
     }
     if (!out) return S_FALSE;
     NativeLock guard(this);

@@ -176,6 +176,19 @@ static HRESULT d3d11_create_device(IDXGIAdapter *adapter, D3D_DRIVER_TYPE driver
     if (immediate_context)
         *immediate_context = NULL;
 
+#ifdef __REACTOS__
+    if (flags & D3D11_CREATE_DEVICE_DEBUG)
+    {
+        WARN("The Direct3D 11 SDK layers are not installed.\n");
+        return DXGI_ERROR_SDK_COMPONENT_MISSING;
+    }
+    if (!adapter && driver_type == D3D_DRIVER_TYPE_UNKNOWN)
+    {
+        WARN("No adapter for D3D_DRIVER_TYPE_UNKNOWN.\n");
+        return E_INVALIDARG;
+    }
+#endif
+
     if (adapter)
     {
         IDXGIAdapter_AddRef(adapter);
