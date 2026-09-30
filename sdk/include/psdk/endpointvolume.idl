@@ -150,7 +150,7 @@ interface IAudioEndpointVolumeEx : IAudioEndpointVolume
 [
     pointer_default(unique),
     nonextensible,
-    uuid(c02216f6-8c05-4d5e-8dfd-c3c1e0a2c9be),
+    uuid(c02216f6-8c67-4b5b-9d00-d008e73e0064),
     local,
     object
 ]
