@@ -173,6 +173,7 @@
 @ cdecl wined3d_output_get_mode(ptr long long long ptr long)
 @ cdecl wined3d_output_get_mode_count(ptr long long long)
 @ cdecl wined3d_output_get_raster_status(ptr ptr)
+@ cdecl wined3d_output_wait_vblank(ptr)
 @ cdecl wined3d_output_release_ownership(ptr)
 @ cdecl wined3d_output_set_display_mode(ptr ptr)
 @ cdecl wined3d_output_set_gamma_ramp(ptr ptr)

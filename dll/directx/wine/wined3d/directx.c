@@ -1866,6 +1866,24 @@ HRESULT CDECL wined3d_adapter_get_identifier(const struct wined3d_adapter *adapt
     return WINED3D_OK;
 }
 
+#ifdef __REACTOS__
+HRESULT CDECL wined3d_output_wait_vblank(const struct wined3d_output *output)
+{
+#if defined(REACTOS_WINE_WDDM)
+    D3DKMT_WAITFORVERTICALBLANKEVENT wait_desc;
+
+    TRACE("output %p.\n", output);
+
+    wait_desc.hAdapter = output->adapter->kmt_adapter;
+    wait_desc.hDevice = output->kmt_device;
+    wait_desc.VidPnSourceId = output->vidpn_source_id;
+    return D3DKMTWaitForVerticalBlankEvent(&wait_desc) ? WINED3DERR_INVALIDCALL : WINED3D_OK;
+#else
+    return WINED3DERR_INVALIDCALL;
+#endif
+}
+
+#endif
 HRESULT CDECL wined3d_output_get_raster_status(const struct wined3d_output *output,
         struct wined3d_raster_status *raster_status)
 {

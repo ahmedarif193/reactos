@@ -378,6 +378,13 @@ static HRESULT STDMETHODCALLTYPE dxgi_output_FindClosestMatchingMode(IDXGIOutput
 
 static HRESULT STDMETHODCALLTYPE dxgi_output_WaitForVBlank(IDXGIOutput6 *iface)
 {
+#ifdef __REACTOS__
+    struct dxgi_output *output = impl_from_IDXGIOutput6(iface);
+
+    TRACE("iface %p.\n", iface);
+
+    return wined3d_output_wait_vblank(output->wined3d_output);
+#else
     static BOOL once = FALSE;
 
     if (!once++)
@@ -386,6 +393,7 @@ static HRESULT STDMETHODCALLTYPE dxgi_output_WaitForVBlank(IDXGIOutput6 *iface)
         TRACE("iface %p stub!\n", iface);
 
     return E_NOTIMPL;
+#endif
 }
 
 static HRESULT STDMETHODCALLTYPE dxgi_output_TakeOwnership(IDXGIOutput6 *iface, IUnknown *device, BOOL exclusive)

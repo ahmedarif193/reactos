@@ -2663,6 +2663,9 @@ unsigned int __cdecl wined3d_output_get_mode_count(struct wined3d_output *output
         enum wined3d_format_id format_id, enum wined3d_scanline_ordering scanline_ordering, bool cached);
 HRESULT __cdecl wined3d_output_get_raster_status(const struct wined3d_output *output,
         struct wined3d_raster_status *raster_status);
+#ifdef __REACTOS__
+HRESULT __cdecl wined3d_output_wait_vblank(const struct wined3d_output *output);
+#endif
 void __cdecl wined3d_output_release_ownership(const struct wined3d_output *output);
 HRESULT __cdecl wined3d_output_set_display_mode(struct wined3d_output *output,
         const struct wined3d_display_mode *mode);

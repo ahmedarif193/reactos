@@ -9,6 +9,7 @@ add_executable(dxgi_apitest
     buffer_copy.cpp
     copy_depth_stencil.cpp
     volume_readback.cpp
+    wait_vblank.cpp
     dwm_render.cpp
     testlist.c)
 
