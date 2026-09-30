@@ -12,6 +12,8 @@
 #define READY_EVENT L"user32_apitest_UserHandleGrantAccess_ready"
 #define QUIT_EVENT  L"user32_apitest_UserHandleGrantAccess_quit"
 
+#define CHILD_NO_MESSAGE_WINDOW 2
+
 #define GrantAccess(handle, job)  UserHandleGrantAccess((handle), (job), TRUE)
 #define RevokeAccess(handle, job) UserHandleGrantAccess((handle), (job), FALSE)
 
@@ -296,7 +298,7 @@ RunProcessInJob(
 {
     JOBOBJECT_BASIC_UI_RESTRICTIONS Info;
     HANDLE hJob, hProcess, hThread;
-    DWORD Wait;
+    DWORD Wait, ExitCode;
     BOOL Success;
 
     ResetEvent(hReady);
@@ -362,7 +364,17 @@ RunProcessInJob(
     Wait = WaitForSingleObject(hProcess, 10000);
     ok(Wait == WAIT_OBJECT_0, "The child did not exit, wait returned %lu\n", Wait);
     if (Wait != WAIT_OBJECT_0)
+    {
         TerminateProcess(hProcess, 1);
+    }
+    else
+    {
+        ExitCode = 0xDEADBEEF;
+        GetExitCodeProcess(hProcess, &ExitCode);
+        ok(ExitCode == 0,
+           "The child could not create a message-only window, exit code %lu\n",
+           ExitCode);
+    }
 
     CloseHandle(hThread);
     CloseHandle(hProcess);
@@ -395,6 +407,7 @@ void
 RunChild(void)
 {
     HANDLE hReady, hQuit;
+    HWND hWnd;
 
     /* Any USER call connects us to win32k */
     (void)GetDesktopWindow();
@@ -413,6 +426,13 @@ RunChild(void)
         WaitForSingleObject(hQuit, 30000);
         CloseHandle(hQuit);
     }
+
+    hWnd = CreateWindowExW(0, L"Message", NULL, 0, 0, 0, 0, 0,
+                           HWND_MESSAGE, NULL, NULL, NULL);
+    if (hWnd == NULL)
+        ExitProcess(CHILD_NO_MESSAGE_WINDOW);
+    DestroyWindow(hWnd);
+    ExitProcess(0);
 }
 
 START_TEST(UserHandleGrantAccess)

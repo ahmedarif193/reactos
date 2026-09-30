@@ -511,7 +511,8 @@ PVOID UserGetObject(PUSER_HANDLE_TABLE ht, HANDLE handle, HANDLE_TYPE type )
    ASSERT(ht);
 
    ptr = UserGetObjectNoErr(ht, handle, type);
-   if (ptr && type == TYPE_WINDOW && ((PWND)ptr)->fnid != FNID_DESKTOP)
+   if (ptr && type == TYPE_WINDOW &&
+       ((PWND)ptr)->fnid != FNID_DESKTOP && ((PWND)ptr)->fnid != FNID_MESSAGEWND)
    {
       PUSER_HANDLE_ENTRY entry;
       PPROCESSINFO ppiOwner = NULL;
