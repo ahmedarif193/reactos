@@ -75,68 +75,21 @@ CreateFreeLoaderReactOSEntries(
 
     /* ReactOS */
     // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS");
-    BootEntry->FriendlyName = L"\"ReactOS\"";
-    Options->OsLoadOptions  = L"/FASTDETECT";
-    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS"));
-
-    /* ReactOS_Debug */
-    // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_Debug");
-    BootEntry->FriendlyName = L"\"ReactOS (Debug)\"";
-    Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS";
-    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_Debug"));
-
+    BootEntry->FriendlyName = L"\"LiberNT\"";
 #if DBG
 #ifndef _WINKD_
-    /* ReactOS_KdSerial */
-    // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_KdSerial");
-    BootEntry->FriendlyName = L"\"ReactOS (RosDbg)\"";
-    Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /KDSERIAL";
-    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_KdSerial"));
-#endif
-
-    /* ReactOS_Screen */
-    // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_Screen");
-    BootEntry->FriendlyName = L"\"ReactOS (Screen)\"";
-    Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=SCREEN /SOS";
-    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_Screen"));
-
-    /* ReactOS_LogFile */
-    // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_LogFile");
-    BootEntry->FriendlyName = L"\"ReactOS (Log file)\"";
-    Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=FILE /SOS";
-    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_LogFile"));
-
-    /* ReactOS_Ram */
-    // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_Ram");
-    BootEntry->FriendlyName = L"\"ReactOS (RAM Disk)\"";
-    Options->OsLoadPath     = L"ramdisk(0)\\ReactOS";
-    Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /RDPATH=reactos.img /RDIMAGEOFFSET=32256";
-    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_Ram"));
-
-    /* ReactOS_EMS */
-    // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_EMS");
-    BootEntry->FriendlyName = L"\"ReactOS (Emergency Management Services)\"";
-    Options->OsLoadPath     = ArcPath;
-    Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /redirect=com2 /redirectbaudrate=115200";
-    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_EMS"));
-#endif
-
-
-    /* DefaultOS=ReactOS */
-#if DBG && !defined(_WINKD_)
     if (IsUnattendedSetup)
-    {
-        BootOptions.NextBootEntryKey = MAKESTRKEY(L"ReactOS_KdSerial");
-    }
+        Options->OsLoadOptions = L"/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /KDSERIAL";
     else
 #endif
-    {
-#if DBG
-        BootOptions.NextBootEntryKey = MAKESTRKEY(L"ReactOS_Debug");
+        Options->OsLoadOptions = L"/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS";
 #else
-        BootOptions.NextBootEntryKey = MAKESTRKEY(L"ReactOS");
+    Options->OsLoadOptions  = L"/FASTDETECT";
 #endif
-    }
+    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS"));
+
+    /* DefaultOS=ReactOS */
+    BootOptions.NextBootEntryKey = MAKESTRKEY(L"ReactOS");
 
 #if DBG
     if (IsUnattendedSetup)
