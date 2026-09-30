@@ -127,7 +127,7 @@ CheckForLiveCD(VOID)
 
     if (dwSetupInProgress == 1)
     {
-        DPRINT1("ReactOS Setup currently in progress!\n");
+        DPRINT1("LiberNT Setup currently in progress!\n");
         ScmSetupInProgress = TRUE;
     }
 
