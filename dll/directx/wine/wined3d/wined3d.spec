@@ -177,6 +177,8 @@
 @ cdecl wined3d_output_set_display_mode(ptr ptr)
 @ cdecl wined3d_output_set_gamma_ramp(ptr ptr)
 @ cdecl wined3d_output_take_ownership(ptr long)
+@ cdecl wined3d_output_is_exclusively_owned(ptr)
+@ cdecl wined3d_output_query_gamma_ramp(ptr ptr)
 
 @ cdecl wined3d_palette_apply_to_dc(ptr ptr)
 @ cdecl wined3d_palette_create(ptr long long ptr ptr)

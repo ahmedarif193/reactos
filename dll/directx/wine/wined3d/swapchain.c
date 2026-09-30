@@ -2360,6 +2360,11 @@ static HRESULT wined3d_swapchain_state_set_display_mode(struct wined3d_swapchain
     return WINED3D_OK;
 }
 
+#ifdef __REACTOS__
+static void wined3d_swapchain_state_refresh_fullscreen(struct wined3d_swapchain_state *state,
+        HWND window, int x, int y, int width, int height);
+#endif
+
 HRESULT CDECL wined3d_swapchain_state_resize_target(struct wined3d_swapchain_state *state,
         const struct wined3d_display_mode *mode)
 {
@@ -2369,6 +2374,9 @@ HRESULT CDECL wined3d_swapchain_state_resize_target(struct wined3d_swapchain_sta
     int x, y, width, height;
     HWND window;
     HRESULT hr;
+#ifdef __REACTOS__
+    bool refresh = false;
+#endif
 
     TRACE("state %p, mode %p.\n", state, mode);
 
@@ -2405,6 +2413,9 @@ HRESULT CDECL wined3d_swapchain_state_resize_target(struct wined3d_swapchain_sta
         {
             TRACE("Update saved window state.\n");
             state->original_window_rect = window_rect;
+#ifdef __REACTOS__
+            refresh = !!(state->desc.flags & WINED3D_SWAPCHAIN_DXGI_WINDOW_STYLE);
+#endif
         }
 
         if (state->desc.flags & WINED3D_SWAPCHAIN_ALLOW_MODE_SWITCH)
@@ -2433,11 +2444,42 @@ HRESULT CDECL wined3d_swapchain_state_resize_target(struct wined3d_swapchain_sta
 
     wined3d_mutex_unlock();
 
+#ifdef __REACTOS__
+    if (refresh)
+    {
+        wined3d_swapchain_state_refresh_fullscreen(state, window, x, y, width, height);
+        return WINED3D_OK;
+    }
+#endif
     MoveWindow(window, x, y, width, height, TRUE);
 
     return WINED3D_OK;
 }
 
+#ifdef __REACTOS__
+static LONG fullscreen_style(LONG style, uint32_t flags)
+{
+    if (flags & WINED3D_SWAPCHAIN_DXGI_WINDOW_STYLE)
+        return style & ~(WS_POPUP | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_THICKFRAME
+                | WS_SYSMENU | WS_DLGFRAME | WS_BORDER);
+
+    style |= WS_POPUP | WS_SYSMENU;
+    style &= ~(WS_CAPTION | WS_THICKFRAME);
+
+    return style;
+}
+
+static LONG fullscreen_exstyle(LONG exstyle, uint32_t flags)
+{
+    if (flags & WINED3D_SWAPCHAIN_DXGI_WINDOW_STYLE)
+        return exstyle & ~(WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE
+                | WS_EX_CLIENTEDGE | WS_EX_CONTEXTHELP);
+
+    exstyle &= ~(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE);
+
+    return exstyle;
+}
+#else
 static LONG fullscreen_style(LONG style)
 {
     /* Make sure the window is managed, otherwise we won't get keyboard input. */
@@ -2454,6 +2496,7 @@ static LONG fullscreen_exstyle(LONG exstyle)
 
     return exstyle;
 }
+#endif
 
 struct wined3d_window_state
 {
@@ -2535,6 +2578,35 @@ static void set_window_state(struct wined3d_window_state *s)
     }
 }
 
+#ifdef __REACTOS__
+static void wined3d_swapchain_state_refresh_fullscreen(struct wined3d_swapchain_state *state,
+        HWND window, int x, int y, int width, int height)
+{
+    struct wined3d_window_state *s;
+
+    if (!(s = malloc(sizeof(*s))))
+        return;
+
+    state->style = GetWindowLongW(window, GWL_STYLE);
+    state->exstyle = GetWindowLongW(window, GWL_EXSTYLE);
+
+    s->window = window;
+    s->window_pos_after = NULL;
+    s->x = x;
+    s->y = y;
+    s->width = width;
+    s->height = height;
+    s->flags = SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE;
+    s->style = fullscreen_style(state->style, state->desc.flags);
+    s->exstyle = fullscreen_exstyle(state->exstyle, state->desc.flags);
+    s->set_style = true;
+    s->register_topmost_timer = false;
+    s->set_topmost_timer = false;
+
+    set_window_state(s);
+}
+#endif
+
 HRESULT wined3d_swapchain_state_setup_fullscreen(struct wined3d_swapchain_state *state,
         HWND window, int x, int y, int width, int height)
 {
@@ -2570,14 +2642,23 @@ HRESULT wined3d_swapchain_state_setup_fullscreen(struct wined3d_swapchain_state 
     s->flags = SWP_FRAMECHANGED | SWP_NOACTIVATE;
     if (state->desc.flags & WINED3D_SWAPCHAIN_NO_WINDOW_CHANGES)
         s->flags |= SWP_NOZORDER;
+#ifdef __REACTOS__
+    else if (!(state->desc.flags & WINED3D_SWAPCHAIN_DXGI_WINDOW_STYLE))
+#else
     else
+#endif
         s->flags |= SWP_SHOWWINDOW;
 
     state->style = GetWindowLongW(window, GWL_STYLE);
     state->exstyle = GetWindowLongW(window, GWL_EXSTYLE);
 
+#ifdef __REACTOS__
+    s->style = fullscreen_style(state->style, state->desc.flags);
+    s->exstyle = fullscreen_exstyle(state->exstyle, state->desc.flags);
+#else
     s->style = fullscreen_style(state->style);
     s->exstyle = fullscreen_exstyle(state->exstyle);
+#endif
     s->set_style = true;
     s->register_topmost_timer = !!(state->desc.flags & WINED3D_SWAPCHAIN_REGISTER_TOPMOST_TIMER);
     s->set_topmost_timer = true;
@@ -2638,7 +2719,12 @@ void wined3d_swapchain_state_restore_from_fullscreen(struct wined3d_swapchain_st
      * fullscreen phase. Some applications change it before calling Reset()
      * when switching between windowed and fullscreen modes (HL2), some
      * depend on the original style (Eve Online). */
+#ifdef __REACTOS__
+    s->set_style = style == fullscreen_style(state->style, state->desc.flags)
+            && exstyle == fullscreen_exstyle(state->exstyle, state->desc.flags);
+#else
     s->set_style = style == fullscreen_style(state->style) && exstyle == fullscreen_exstyle(state->exstyle);
+#endif
     s->register_topmost_timer = !!(state->desc.flags & WINED3D_SWAPCHAIN_REGISTER_TOPMOST_TIMER);
     s->set_topmost_timer = false;
 

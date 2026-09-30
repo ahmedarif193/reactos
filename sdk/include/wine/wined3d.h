@@ -923,6 +923,9 @@ enum wined3d_memory_segment_group
 /* Allow the swapchain flag, but not actual locking */
 #define WINED3D_SWAPCHAIN_ALLOW_MS_LOCKABLE_BACKBUFFER          0x00200000u
 #define WINED3D_SWAPCHAIN_FRAME_LATENCY_WAITABLE_OBJECT         0x00400000u
+#ifdef __REACTOS__
+#define WINED3D_SWAPCHAIN_DXGI_WINDOW_STYLE                     0x80000000u
+#endif
 
 #define WINED3DDP_MAXTEXCOORD                                   8
 
@@ -2665,6 +2668,10 @@ HRESULT __cdecl wined3d_output_set_display_mode(struct wined3d_output *output,
         const struct wined3d_display_mode *mode);
 HRESULT __cdecl wined3d_output_set_gamma_ramp(struct wined3d_output *output, const struct wined3d_gamma_ramp *ramp);
 HRESULT __cdecl wined3d_output_take_ownership(const struct wined3d_output *output, BOOL exclusive);
+#ifdef __REACTOS__
+BOOL __cdecl wined3d_output_is_exclusively_owned(const struct wined3d_output *output);
+HRESULT __cdecl wined3d_output_query_gamma_ramp(struct wined3d_output *output, struct wined3d_gamma_ramp *ramp);
+#endif
 
 HRESULT __cdecl wined3d_palette_create(struct wined3d_device *device, uint32_t flags,
         unsigned int entry_count, const PALETTEENTRY *entries, struct wined3d_palette **palette);

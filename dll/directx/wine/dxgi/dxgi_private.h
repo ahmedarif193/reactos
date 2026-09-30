@@ -190,6 +190,8 @@ struct d3d11_swapchain
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc;
 #ifdef __REACTOS__
     DXGI_ALPHA_MODE alpha_mode;
+    UINT flags;
+    DXGI_USAGE usage;
 #endif
     IDXGIOutput *target;
     LONG present_count;

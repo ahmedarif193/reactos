@@ -471,6 +471,27 @@ static HRESULT STDMETHODCALLTYPE dxgi_swapchain_factory_create_swapchain(IWineDX
     }
 
 #ifdef __REACTOS__
+    switch (desc->Format)
+    {
+        case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+        case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+            break;
+        case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R10G10B10A2_UNORM:
+        case DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM:
+        {
+            enum wined3d_feature_level level;
+
+            wined3d_mutex_lock();
+            level = wined3d_state_get_feature_level(wined3d_device_get_state(device->wined3d_device));
+            wined3d_mutex_unlock();
+            if (level >= WINED3D_FEATURE_LEVEL_10)
+                break;
+        }
+        /* fall through */
+        default:
+            WARN("Format %#x is not a display format.\n", desc->Format);
+            return E_INVALIDARG;
+    }
     if (!window && !(window = dxgi_factory_get_device_window(dxgi_factory)))
         return E_FAIL;
     /* Fullscreen and output-restricted swapchains need an enumerated output. */
@@ -508,6 +529,8 @@ static HRESULT STDMETHODCALLTYPE dxgi_swapchain_factory_create_swapchain(IWineDX
     }
 #ifdef __REACTOS__
     object->alpha_mode = desc->AlphaMode;
+    object->flags = desc->Flags;
+    object->usage = desc->BufferUsage;
 #endif
 
     TRACE("Created swapchain %p.\n", object);

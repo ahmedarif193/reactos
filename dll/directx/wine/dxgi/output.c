@@ -64,6 +64,20 @@ static HRESULT dxgi_output_find_closest_matching_mode(struct dxgi_output *output
     if (mode->format_id == WINED3DFMT_UNKNOWN && !device)
         return DXGI_ERROR_INVALID_CALL;
 
+#ifdef __REACTOS__
+    wined3d_mutex_lock();
+    if (mode->format_id == WINED3DFMT_UNKNOWN)
+    {
+        struct wined3d_display_mode current_mode;
+
+        if (FAILED(hr = wined3d_output_get_display_mode(output->wined3d_output, &current_mode, NULL)))
+        {
+            wined3d_mutex_unlock();
+            return hr;
+        }
+        mode->format_id = current_mode.format_id;
+    }
+#else
     if (mode->format_id == WINED3DFMT_UNKNOWN)
     {
         FIXME("Matching formats to device not implemented.\n");
@@ -71,6 +85,7 @@ static HRESULT dxgi_output_find_closest_matching_mode(struct dxgi_output *output
     }
 
     wined3d_mutex_lock();
+#endif
     hr = wined3d_output_find_closest_matching_mode(output->wined3d_output, mode);
     wined3d_mutex_unlock();
 
@@ -410,6 +425,10 @@ static HRESULT STDMETHODCALLTYPE dxgi_output_GetGammaControlCapabilities(IDXGIOu
 
     if (!gamma_caps)
         return E_INVALIDARG;
+#ifdef __REACTOS__
+    if (!wined3d_output_is_exclusively_owned(impl_from_IDXGIOutput6(iface)->wined3d_output))
+        return DXGI_ERROR_INVALID_CALL;
+#endif
 
     gamma_caps->ScaleAndOffsetSupported = FALSE;
     gamma_caps->MaxConvertedValue = 1.0f;
@@ -443,6 +462,12 @@ static HRESULT STDMETHODCALLTYPE dxgi_output_SetGammaControl(IDXGIOutput6 *iface
 
     TRACE("iface %p, gamma_control %p.\n", iface, gamma_control);
 
+#ifdef __REACTOS__
+    if (!gamma_control)
+        return E_INVALIDARG;
+    if (!wined3d_output_is_exclusively_owned(output->wined3d_output))
+        return DXGI_ERROR_INVALID_CALL;
+#endif
     if (gamma_control->Scale.Red != 1.0f || gamma_control->Scale.Green != 1.0f || gamma_control->Scale.Blue != 1.0f)
         FIXME("Ignoring unhandled scale {%.8e, %.8e, %.8e}.\n", gamma_control->Scale.Red,
                 gamma_control->Scale.Green, gamma_control->Scale.Blue);
@@ -468,9 +493,36 @@ static HRESULT STDMETHODCALLTYPE dxgi_output_SetGammaControl(IDXGIOutput6 *iface
 static HRESULT STDMETHODCALLTYPE dxgi_output_GetGammaControl(IDXGIOutput6 *iface,
         DXGI_GAMMA_CONTROL *gamma_control)
 {
+#ifdef __REACTOS__
+    struct dxgi_output *output = impl_from_IDXGIOutput6(iface);
+    struct wined3d_gamma_ramp ramp;
+    unsigned int i;
+
+    TRACE("iface %p, gamma_control %p.\n", iface, gamma_control);
+
+    if (!gamma_control)
+        return E_INVALIDARG;
+    if (!wined3d_output_is_exclusively_owned(output->wined3d_output))
+        return DXGI_ERROR_INVALID_CALL;
+
+    wined3d_mutex_lock();
+    wined3d_output_query_gamma_ramp(output->wined3d_output, &ramp);
+    wined3d_mutex_unlock();
+
+    memset(gamma_control, 0, sizeof(*gamma_control));
+    gamma_control->Scale.Red = gamma_control->Scale.Green = gamma_control->Scale.Blue = 1.0f;
+    for (i = 0; i < 256; ++i)
+    {
+        gamma_control->GammaCurve[i].Red = ramp.red[i] / 65535.0f;
+        gamma_control->GammaCurve[i].Green = ramp.green[i] / 65535.0f;
+        gamma_control->GammaCurve[i].Blue = ramp.blue[i] / 65535.0f;
+    }
+    return S_OK;
+#else
     FIXME("iface %p, gamma_control %p stub!\n", iface, gamma_control);
 
     return E_NOTIMPL;
+#endif
 }
 
 static HRESULT STDMETHODCALLTYPE dxgi_output_SetDisplaySurface(IDXGIOutput6 *iface, IDXGISurface *surface)

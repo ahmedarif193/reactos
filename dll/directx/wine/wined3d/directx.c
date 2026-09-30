@@ -1808,6 +1808,22 @@ HRESULT CDECL wined3d_output_set_gamma_ramp(struct wined3d_output *output, const
     return WINED3D_OK;
 }
 
+#ifdef __REACTOS__
+BOOL CDECL wined3d_output_is_exclusively_owned(const struct wined3d_output *output)
+{
+    D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP check = {0};
+
+    check.hAdapter = output->adapter->kmt_adapter;
+    check.VidPnSourceId = output->vidpn_source_id;
+    return D3DKMTCheckVidPnExclusiveOwnership(&check) == STATUS_GRAPHICS_PRESENT_OCCLUDED;
+}
+
+HRESULT CDECL wined3d_output_query_gamma_ramp(struct wined3d_output *output, struct wined3d_gamma_ramp *ramp)
+{
+    return wined3d_output_get_gamma_ramp(output, ramp);
+}
+#endif
+
 HRESULT wined3d_output_get_gamma_ramp(struct wined3d_output *output, struct wined3d_gamma_ramp *ramp)
 {
     HDC dc;

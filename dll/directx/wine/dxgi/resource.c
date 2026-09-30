@@ -230,6 +230,10 @@ static HRESULT STDMETHODCALLTYPE dxgi_surface_GetDC(IDXGISurface2 *iface, BOOL d
 
     if (SUCCEEDED(hr))
        resource->dc = *hdc;
+#ifdef __REACTOS__
+    else if (hr == WINED3DERR_INVALIDCALL)
+       hr = DXGI_ERROR_INVALID_CALL;
+#endif
 
     return hr;
 }
