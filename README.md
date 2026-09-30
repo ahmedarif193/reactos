@@ -20,7 +20,7 @@
 
 LiberNT is a free NT operating system, built out of love for the NT architecture. The name says it: *liber* is Latin for free. LiberNT targets Windows® 11 compatibility, with room for freestyle and experimental features.
 
-LiberNT is based on ReactOS, the Open Source effort to develop an operating system that is compatible with applications and drivers written for the Microsoft Windows NT family of operating systems. It is a fork with extensive changes to kernel-space components and drivers, aimed at stability and modern hardware, and it brings up modern platforms, ARM64 first.
+LiberNT is based on ReactOS, the Open Source effort to develop an operating system that is compatible with applications and drivers written for the Microsoft Windows NT family of operating systems. It is a fork with extensive changes to kernel-space components and drivers, aimed at stability and modern hardware, and it focuses on 64-bit platforms: amd64, arm64 and riscv64.
 
 Our goal is a system that stays maintainable in the long run: stable, reliable and efficient, running on embedded devices too, and able to support every feature a modern operating system should have.
 
@@ -119,10 +119,10 @@ Each target builds everything it needs first, and the files are written to the o
 
 LiberNT brings modern hardware and platforms to the NT architecture. The current focus is:
 
-- ARM64 kernel, HAL, and FreeLoader bring-up
+- 64-bit platform support on amd64, arm64 and riscv64: kernel, HAL and FreeLoader
 - UEFI boot, GOP framebuffer, and early display support
-- Raspberry Pi platform bring-up, including PCIe/RP1-oriented work
-- SD/eMMC, USB/xHCI, PCI, PnP, and storage/bus drivers
+- PCIe, PCI, PnP, USB/xHCI, SD/eMMC, and storage/bus drivers
+- Board support, including the Raspberry Pi and its RP1 I/O controller
 - Windows 11 (NT10) compatibility and driver-model work
 
 See [INSTALL](INSTALL) for installation instructions. After building:
