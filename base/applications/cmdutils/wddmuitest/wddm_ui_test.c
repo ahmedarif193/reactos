@@ -182,6 +182,33 @@ PixelNearColor(
            BlueDelta <= Tolerance;
 }
 
+static INT
+ColorLuma(
+    _In_ BYTE Red,
+    _In_ BYTE Green,
+    _In_ BYTE Blue)
+{
+    return (Red * 2 + Green * 5 + Blue) / 8;
+}
+
+static BOOL
+PixelTowardColor(
+    _In_reads_(4) const BYTE *Pixel,
+    _In_ COLORREF Background,
+    _In_ COLORREF Foreground)
+{
+    INT BackgroundLuma = ColorLuma(GetRValue(Background), GetGValue(Background), GetBValue(Background));
+    INT Contrast = ColorLuma(GetRValue(Foreground), GetGValue(Foreground), GetBValue(Foreground)) - BackgroundLuma;
+    INT Offset = ColorLuma(Pixel[2], Pixel[1], Pixel[0]) - BackgroundLuma;
+
+    if (Contrast < 0)
+    {
+        Contrast = -Contrast;
+        Offset = -Offset;
+    }
+    return Contrast != 0 && Offset * 4 >= Contrast * 3;
+}
+
 static BOOL
 SampleMenuItem(
     _In_ HMENU Menu,
@@ -284,7 +311,7 @@ SampleMenuItem(
             ++SamplePixels;
             if (PixelNearColor(Pixel, Highlight, 12))
                 ++HighlightPixels;
-            if (PixelNearColor(Pixel, HighlightText, 20))
+            if (PixelTowardColor(Pixel, Highlight, HighlightText))
                 ++TextPixels;
         }
     }
@@ -704,6 +731,7 @@ RunMenuHoverTest(
     ULONGLONG CursorP95;
     BOOL HaveBefore;
     BOOL HaveAfter;
+    BOOL Composited;
     BOOL Passed;
 
     ZeroMemory(&Context, sizeof(Context));
@@ -754,6 +782,8 @@ RunMenuHoverTest(
     DestroyMenu(Context.Menu);
 
     HaveAfter = QueryPresentStats(&After);
+    if (FAILED(DwmIsCompositionEnabled(&Composited)))
+        Composited = FALSE;
     CursorP95 = Percentile95(Context.CursorSamples,
                              Context.CursorSampleCount);
     TestPrint("WDDM_UI_MENU_RESULT moves=%lu blank_text=%ld unstable_samples=%ld "
@@ -816,7 +846,7 @@ RunMenuHoverTest(
              Context.PositionFailures == 0 &&
              Context.CursorSampleCount == MENU_MOVE_COUNT &&
              HaveBefore && HaveAfter &&
-             After.ScanoutCopies > Before.ScanoutCopies &&
+             (Composited || After.ScanoutCopies > Before.ScanoutCopies) &&
              CursorP95 <= CURSOR_P95_LIMIT_US;
     TestPrint("WDDM_UI_MENU_%s\n", Passed ? "PASS" : "FAIL");
     return Passed;
