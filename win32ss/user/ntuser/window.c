@@ -4101,18 +4101,22 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
    PWINSTATION_OBJECT WindowStation;
    LONG_PTR OldValue;
    STYLESTRUCT Style;
+   USER_REFERENCE_ENTRY Ref;
 
    if (!(Window = UserGetWindowObject(hWnd)))
    {
       return 0;
    }
 
+   UserRefObjectCo(Window, &Ref);
+
    if ((INT)Index >= 0)
    {
       if ((Index + Size) > Window->cbwndExtra)
       {
          EngSetLastError(ERROR_INVALID_INDEX);
-         return 0;
+         OldValue = 0;
+         goto Exit;
       }
 
       PVOID Address = (PUCHAR)(&Window[1]) + Index;
@@ -4150,7 +4154,8 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
          {
             ERR("NtUserSetWindowLong(): Index requires pointer size: %lu\n", Index);
             EngSetLastError(ERROR_INVALID_INDEX);
-            return 0;
+            OldValue = 0;
+            goto Exit;
          }
       }
 #endif
@@ -4163,6 +4168,11 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
             Style.styleNew = NewValue;
 
             co_IntSendMessage(hWnd, WM_STYLECHANGING, GWL_EXSTYLE, (LPARAM) &Style);
+            if (Window->state & WNDS_DESTROYED)
+            {
+               OldValue = 0;
+               goto Exit;
+            }
 
             /*
              * Remove extended window style bit WS_EX_TOPMOST for shell windows.
@@ -4201,7 +4211,14 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
             Style.styleNew = NewValue;
 
             if (!bAlter)
+            {
                 co_IntSendMessage(hWnd, WM_STYLECHANGING, GWL_STYLE, (LPARAM) &Style);
+                if (Window->state & WNDS_DESTROYED)
+                {
+                   OldValue = 0;
+                   goto Exit;
+                }
+            }
 
             /* WS_CLIPSIBLINGS can't be reset on top-level windows */
             if (UserIsDesktopWindow(Window->spwndParent)) Style.styleNew |= WS_CLIPSIBLINGS;
@@ -4255,7 +4272,8 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
                  Window->fnid & FNID_FREED)
             {
                EngSetLastError(ERROR_ACCESS_DENIED);
-               return 0;
+               OldValue = 0;
+               goto Exit;
             }
             OldValue = (LONG_PTR)IntSetWindowProc(Window,
                                                   (WNDPROC)NewValue,
@@ -4294,6 +4312,8 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
       }
    }
 
+Exit:
+   UserDerefObjectCo(Window);
    return OldValue;
 }
 
