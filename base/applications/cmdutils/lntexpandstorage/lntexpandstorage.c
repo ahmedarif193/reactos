@@ -1,10 +1,10 @@
 /*
  * PROJECT:     LiberNT storage expansion tool
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Grow the flashed ReactOS partition to fill the storage device
+ * PURPOSE:     Grow the flashed LiberNT partition to fill the storage device
  * COPYRIGHT:   Copyright 2026 Ahmed Arif
  *
- * Usage: rosexpandstorage [/d N] [/p N] [/pad MB] [/min MB] [/n] [/y] [/r]
+ * Usage: lntexpandstorage [/d N] [/p N] [/pad MB] [/min MB] [/n] [/y] [/r]
  */
 
 #include <windows.h>
@@ -268,8 +268,8 @@ RebootSystem(void)
 static void
 Usage(void)
 {
-    Print("Grows the last MBR partition and its NTFS volume to the end of the disk.\n\n");
-    Print("rosexpandstorage [/d N] [/p N] [/pad MB] [/min MB] [/n] [/y] [/r]\n\n");
+    Print("Grows the last MBR or GPT partition and its NTFS volume to the end of the disk.\n\n");
+    Print("lntexpandstorage [/d N] [/p N] [/pad MB] [/min MB] [/n] [/y] [/r]\n\n");
     Print("  /d N     physical drive number (default: the drive holding %%SystemRoot%%)\n");
     Print("  /p N     partition number to grow (default: the last one on the drive)\n");
     Print("  /pad MB  free space to leave at the end of the disk (default %u)\n", DEFAULT_PAD_MB);
@@ -369,7 +369,7 @@ main(int argc, char* argv[])
     {
         if (!QuerySystemDrive(&DriveNumber, &SystemPartition))
         {
-            Print("rosexpandstorage: cannot resolve the system drive, use /d\n");
+            Print("lntexpandstorage: cannot resolve the system drive, use /d\n");
             return 1;
         }
         if (PartitionNumber == 0)
@@ -390,7 +390,7 @@ main(int argc, char* argv[])
                               NULL);
     if (Disk.Handle == INVALID_HANDLE_VALUE)
     {
-        Print("rosexpandstorage: cannot open PhysicalDrive%lu (error %lu)\n",
+        Print("lntexpandstorage: cannot open PhysicalDrive%lu (error %lu)\n",
               DriveNumber,
               GetLastError());
         return 1;
@@ -398,7 +398,7 @@ main(int argc, char* argv[])
 
     if (!QueryDiskSize(Disk.Handle, &DiskSize, &SectorSize))
     {
-        Print("rosexpandstorage: cannot query the geometry of PhysicalDrive%lu\n", DriveNumber);
+        Print("lntexpandstorage: cannot query the geometry of PhysicalDrive%lu\n", DriveNumber);
         CloseHandle(Disk.Handle);
         return 1;
     }
@@ -407,7 +407,7 @@ main(int argc, char* argv[])
     Disk.Scratch = (PUCHAR)VirtualAlloc(NULL, SCRATCH_SIZE, MEM_COMMIT, PAGE_READWRITE);
     if (!Disk.Scratch)
     {
-        Print("rosexpandstorage: out of memory\n");
+        Print("lntexpandstorage: out of memory\n");
         CloseHandle(Disk.Handle);
         return 1;
     }
@@ -440,7 +440,7 @@ main(int argc, char* argv[])
 
     if (Status != EXPAND_OK)
     {
-        Print("rosexpandstorage: %s\n", ExpandStatusText(Status));
+        Print("lntexpandstorage: %s\n", ExpandStatusText(Status));
         VirtualFree(Disk.Scratch, 0, MEM_RELEASE);
         CloseHandle(Disk.Handle);
         return 1;
@@ -487,7 +487,7 @@ main(int argc, char* argv[])
 
     if (Status != EXPAND_OK)
     {
-        Print("rosexpandstorage: %s\n", ExpandStatusText(Status));
+        Print("lntexpandstorage: %s\n", ExpandStatusText(Status));
         VirtualFree(Disk.Scratch, 0, MEM_RELEASE);
         CloseHandle(Disk.Handle);
         return 1;
@@ -500,7 +500,7 @@ main(int argc, char* argv[])
     Print("Done. The new size takes effect on the next boot.\n");
 
     if (Reboot && !RebootSystem())
-        Print("rosexpandstorage: reboot request failed (error %lu)\n", GetLastError());
+        Print("lntexpandstorage: reboot request failed (error %lu)\n", GetLastError());
 
     return 0;
 }

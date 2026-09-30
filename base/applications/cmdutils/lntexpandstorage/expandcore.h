@@ -5,8 +5,8 @@
  * COPYRIGHT:   Copyright 2026 Ahmed Arif
  */
 
-#ifndef _ROSEXPANDSTORAGE_CORE_H_
-#define _ROSEXPANDSTORAGE_CORE_H_
+#ifndef _LNTEXPANDSTORAGE_CORE_H_
+#define _LNTEXPANDSTORAGE_CORE_H_
 
 #include <stdint.h>
 
@@ -70,4 +70,4 @@ int ExpandApplyPlan(EXPAND_DEVICE* Device, const EXPAND_PLAN* Plan);
 
 const char* ExpandStatusText(int Status);
 
-#endif /* _ROSEXPANDSTORAGE_CORE_H_ */
+#endif /* _LNTEXPANDSTORAGE_CORE_H_ */
