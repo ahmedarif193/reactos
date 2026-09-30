@@ -4958,6 +4958,9 @@ public:
     RECT back_damage[16] = {};
     UINT back_presents = 0;
     DWM_DX_SURFACE_EXCHANGE publication = {};
+    LONG layer_x = 0, layer_y = 0;
+    RECT layer_clip = {};
+    bool layer_has_clip = false;
     /* The overlay planes of the compositor output's present in progress. */
     UINT overlay_count = 0;
     D3DKMT_MULTIPLANE_OVERLAY overlays[DWM_MAX_OVERLAY_PLANES] = {};
@@ -5020,6 +5023,8 @@ public:
     HRESULT FillTransport(UINT, const DXGI_PRESENT_PARAMETERS *);
     HRESULT CarryForward(const DXGI_PRESENT_PARAMETERS *);
     HRESULT QueuePublish(const DWM_DX_SURFACE_EXCHANGE &, HANDLE release);
+    void SetLayer(DWM_DX_SURFACE_EXCHANGE &) const;
+    void Place();
     void CompletePublish(NativePublishRecord *);
     void DrainPublishes();
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
@@ -5201,6 +5206,8 @@ public:
     }
 };
 
+#define NATIVE_LAYER_LIMIT 0x1000000
+
 HRESULT STDMETHODCALLTYPE NativeSwapChain::SetPrivateData(REFGUID guid, UINT size, const void *data)
 {
     NativeLock guard(device);
@@ -5211,22 +5218,65 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::SetPrivateData(REFGUID guid, UINT siz
     reactos_dxgi_composition_target target;
     memcpy(&target, data, sizeof(target));
     if (!IsWindow(target.window)) return E_INVALIDARG;
-    /* The native publication currently represents a complete client layer.
-     * Reject transforms/clips that cannot be represented by that contract. */
-    if (target.offset_x || target.offset_y || (target.has_clip &&
-            (target.clip.left > 0 || target.clip.top > 0 ||
-             target.clip.right < static_cast<LONG>(desc.Width) ||
-             target.clip.bottom < static_cast<LONG>(desc.Height)))) return E_NOTIMPL;
+    const LONG limit = NATIVE_LAYER_LIMIT;
+    if (target.offset_x < -limit || target.offset_x > limit ||
+            target.offset_y < -limit || target.offset_y > limit) return E_INVALIDARG;
+    RECT clip = {};
+    if (target.has_clip)
+    {
+        clip.left = max(-limit, min(limit, target.clip.left));
+        clip.top = max(-limit, min(limit, target.clip.top));
+        clip.right = max(clip.left, min(limit, target.clip.right));
+        clip.bottom = max(clip.top, min(limit, target.clip.bottom));
+    }
+    bool moved = layer_x != target.offset_x || layer_y != target.offset_y ||
+            layer_has_clip != !!target.has_clip || (target.has_clip && !EqualRect(&layer_clip, &clip));
     if (window != target.window)
     {
         HRESULT hr = RetirePublication();
         if (FAILED(hr)) return hr;
         window = target.window;
     }
+    layer_x = target.offset_x;
+    layer_y = target.offset_y;
+    layer_has_clip = !!target.has_clip;
+    layer_clip = clip;
     DrainPublishes();
     if (transport_valid && !publication.GlobalShare)
         return Publish(transport);
+    if (moved && publication.GlobalShare)
+        Place();
     return S_OK;
+}
+
+void NativeSwapChain::SetLayer(DWM_DX_SURFACE_EXCHANGE &exchange) const
+{
+    const LONG limit = NATIVE_LAYER_LIMIT;
+    exchange.LayerOffsetX = layer_x;
+    exchange.LayerOffsetY = layer_y;
+    if (layer_has_clip)
+    {
+        exchange.LayerClip.left = layer_clip.left;
+        exchange.LayerClip.top = layer_clip.top;
+        exchange.LayerClip.right = layer_clip.right;
+        exchange.LayerClip.bottom = layer_clip.bottom;
+    }
+    else
+    {
+        exchange.LayerClip.left = layer_x;
+        exchange.LayerClip.top = layer_y;
+        exchange.LayerClip.right = min(limit, layer_x + static_cast<LONG>(desc.Width));
+        exchange.LayerClip.bottom = min(limit, layer_y + static_cast<LONG>(desc.Height));
+    }
+}
+
+void NativeSwapChain::Place()
+{
+    DWM_DX_SURFACE_EXCHANGE exchange = publication;
+    exchange.Action = DWM_DX_SURFACE_PLACE;
+    exchange.Flags = DWM_DX_PUBLISH_LAYER;
+    SetLayer(exchange);
+    NtUserCallOneParam(reinterpret_cast<DWORD_PTR>(&exchange), DWM_ROUTINE_DXSURFACE);
 }
 
 DWORD WINAPI NativeSwapChain::DestroyPending(void *argument)
@@ -5604,6 +5654,11 @@ HRESULT NativeSwapChain::Publish(NativeTexture2D *texture)
     exchange.Flags = DWM_DX_PUBLISH_RETAINED;
     if (desc.AlphaMode == DXGI_ALPHA_MODE_PREMULTIPLIED)
         exchange.Flags |= DWM_DX_PUBLISH_PREMULTIPLIED;
+    if (composition)
+    {
+        exchange.Flags |= DWM_DX_PUBLISH_LAYER;
+        SetLayer(exchange);
+    }
     exchange.ReadyEvent = reinterpret_cast<ULONG_PTR>(release);
     /* A transport retains undamaged pixels across Present1 calls, and a flip
      * buffer holds a complete frame, so the whole image is published. */

@@ -41,6 +41,32 @@ DwmGpuScaleWindowEdge(LONGLONG Edge, LONG SourceSize, LONG DestinationSize)
 }
 
 static BOOL
+DwmGpuClipClient(const DWM_WIN *Window, const DWM_GPU_WINDOW_GEOMETRY *Owner, RECT *Bounds)
+{
+    LONGLONG Left = Window->DxClip.left, Top = Window->DxClip.top;
+    LONGLONG Right = Window->DxClip.right, Bottom = Window->DxClip.bottom;
+
+    if (Window->AnimFlags != 0)
+    {
+        Left = DwmGpuScaleWindowEdge(Left, Window->cx, Owner->Width);
+        Top = DwmGpuScaleWindowEdge(Top, Window->cy, Owner->Height);
+        Right = DwmGpuScaleWindowEdge(Right, Window->cx, Owner->Width);
+        Bottom = DwmGpuScaleWindowEdge(Bottom, Window->cy, Owner->Height);
+    }
+    Left = max(Left + Owner->Left, (LONGLONG)Bounds->left);
+    Top = max(Top + Owner->Top, (LONGLONG)Bounds->top);
+    Right = min(Right + Owner->Left, (LONGLONG)Bounds->right);
+    Bottom = min(Bottom + Owner->Top, (LONGLONG)Bounds->bottom);
+    if (Right <= Left || Bottom <= Top)
+        return FALSE;
+    Bounds->left = (LONG)Left;
+    Bounds->top = (LONG)Top;
+    Bounds->right = (LONG)Right;
+    Bounds->bottom = (LONG)Bottom;
+    return TRUE;
+}
+
+static BOOL
 DwmGpuClientGeometry(const DWM_WIN *Window, const DWM_GPU_WINDOW_GEOMETRY *Owner,
                       DWM_GPU_WINDOW_GEOMETRY *Client)
 {

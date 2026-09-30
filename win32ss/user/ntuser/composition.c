@@ -733,6 +733,9 @@ IntCompositionFreeDxSurface(_Inout_ PWND_REDIRECT r)
     r->DxFlags = 0;
     r->DxClientX = 0;
     r->DxClientY = 0;
+    r->DxLayerX = 0;
+    r->DxLayerY = 0;
+    RtlZeroMemory(&r->DxLayerClip, sizeof(r->DxLayerClip));
     r->DxFrameWidth = 0;
     r->DxFrameHeight = 0;
     r->DxPublication = 0;
@@ -2467,6 +2470,12 @@ IntCompositionExchangeBuffers(_Inout_ PWND_REDIRECT r)
     IntCompositionCopyRect(r, &Rect);
 }
 
+static VOID
+IntCompositionExportDxLayer(
+    _In_ PWND TopWnd,
+    _Inout_ PWND_REDIRECT Redirect,
+    _Out_ PRECTL Visible);
+
 /*
  * NtUserDwmGetFrame (ONEPARAM_ROUTINE_DWMGETFRAME): hand the user-mode dwm.exe
  * one frame. Fills the dwm-provided buffer with [header][DWM_WIN...][pixels]:
@@ -2761,6 +2770,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             if (Publication != NULL)
                 Publication->Delivered = TRUE;
         }
+        IntCompositionExportDxLayer(w, &e->Redirect, &g_DwmFrameWindows[count].DxClip);
         g_DwmFrameWindows[count].DxClientX = e->Redirect.DxClientX;
         g_DwmFrameWindows[count].DxClientY = e->Redirect.DxClientY;
         g_DwmFrameWindows[count].DxWidth = e->Redirect.DxInfo.Width;
@@ -3416,6 +3426,77 @@ IntCompositionDwmOpenSurface(_In_ PVOID pUser)
     return Status;
 }
 
+#define DWM_DX_LAYER_COORDINATE_LIMIT 0x1000000
+#define DWM_DX_LAYER_DIMENSION_LIMIT 16384
+
+static BOOLEAN
+IntCompositionValidDxLayer(_In_ const DWM_DX_SURFACE_EXCHANGE *Request)
+{
+    const LONG Limit = DWM_DX_LAYER_COORDINATE_LIMIT;
+
+    return Request->Info.Width <= DWM_DX_LAYER_DIMENSION_LIMIT &&
+           Request->Info.Height <= DWM_DX_LAYER_DIMENSION_LIMIT &&
+           Request->LayerOffsetX >= -Limit && Request->LayerOffsetX <= Limit &&
+           Request->LayerOffsetY >= -Limit && Request->LayerOffsetY <= Limit &&
+           Request->LayerClip.left >= -Limit && Request->LayerClip.right <= Limit &&
+           Request->LayerClip.top >= -Limit && Request->LayerClip.bottom <= Limit &&
+           Request->LayerClip.left <= Request->LayerClip.right &&
+           Request->LayerClip.top <= Request->LayerClip.bottom;
+}
+
+static VOID
+IntCompositionSetDxLayer(
+    _In_ PWND SourceWnd,
+    _In_ PWND TopWnd,
+    _In_opt_ const DWM_DX_SURFACE_EXCHANGE *Layer,
+    _Inout_ PWND_REDIRECT Redirect)
+{
+    Redirect->DxClientX = SourceWnd->rcClient.left - TopWnd->rcWindow.left;
+    Redirect->DxClientY = SourceWnd->rcClient.top - TopWnd->rcWindow.top;
+    if (Layer == NULL)
+        return;
+    Redirect->DxLayerX = Layer->LayerOffsetX;
+    Redirect->DxLayerY = Layer->LayerOffsetY;
+    Redirect->DxLayerClip = Layer->LayerClip;
+    Redirect->DxClientX += Layer->LayerOffsetX;
+    Redirect->DxClientY += Layer->LayerOffsetY;
+}
+
+static VOID
+IntCompositionExportDxLayer(
+    _In_ PWND TopWnd,
+    _Inout_ PWND_REDIRECT Redirect,
+    _Out_ PRECTL Visible)
+{
+    PWND SourceWnd = Redirect->DxWindow ?
+        ValidateHwndNoErr((HWND)(ULONG_PTR)Redirect->DxWindow) : NULL;
+    RECTL Backing = {0, 0, Redirect->cx, Redirect->cy};
+    RECTL Client, Clip;
+
+    RtlZeroMemory(Visible, sizeof(*Visible));
+    if (SourceWnd == NULL)
+        return;
+    Client.left = SourceWnd->rcClient.left - TopWnd->rcWindow.left;
+    Client.top = SourceWnd->rcClient.top - TopWnd->rcWindow.top;
+    Client.right = Client.left + (SourceWnd->rcClient.right - SourceWnd->rcClient.left);
+    Client.bottom = Client.top + (SourceWnd->rcClient.bottom - SourceWnd->rcClient.top);
+    Redirect->DxClientX = Client.left;
+    Redirect->DxClientY = Client.top;
+    if (!RECTL_bIntersectRect(Visible, &Client, &Backing))
+    {
+        RtlZeroMemory(Visible, sizeof(*Visible));
+        return;
+    }
+    if (!(Redirect->DxFlags & DWM_DX_PUBLISH_LAYER))
+        return;
+    Redirect->DxClientX += Redirect->DxLayerX;
+    Redirect->DxClientY += Redirect->DxLayerY;
+    Clip = Redirect->DxLayerClip;
+    RECTL_vOffsetRect(&Clip, Client.left, Client.top);
+    if (!RECTL_bIntersectRect(Visible, Visible, &Clip))
+        RtlZeroMemory(Visible, sizeof(*Visible));
+}
+
 static BOOLEAN
 IntCompositionUpdateDxPlacement(
     _In_ PWND SourceWnd,
@@ -3432,10 +3513,7 @@ IntCompositionUpdateDxPlacement(
         return FALSE;
     }
 
-    Redirect->DxClientX =
-        SourceWnd->rcClient.left - TopWnd->rcWindow.left;
-    Redirect->DxClientY =
-        SourceWnd->rcClient.top - TopWnd->rcWindow.top;
+    IntCompositionSetDxLayer(SourceWnd, TopWnd, NULL, Redirect);
     return TRUE;
 }
 
@@ -3558,6 +3636,7 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             ULONG ClientWidth = SourceWnd->rcClient.right - SourceWnd->rcClient.left;
             ULONG ClientHeight = SourceWnd->rcClient.bottom - SourceWnd->rcClient.top;
             BOOL Publish = Request.Action == DWM_DX_SURFACE_PUBLISH;
+            BOOL Layer = Publish && (Request.Flags & DWM_DX_PUBLISH_LAYER) != 0;
             BOOL Supersede;
             BOOL SameResource;
             PKEVENT ReadyEvent;
@@ -3567,8 +3646,9 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 Request.ReadyEvent > (ULONGLONG)MAXULONG_PTR ||
                 Request.Info.Magic != DWM_DX_SURFACE_INFO_MAGIC ||
                 Request.Info.Width == 0 || Request.Info.Height == 0 ||
-                Request.Info.Width != ClientWidth ||
-                Request.Info.Height != ClientHeight ||
+                (!Layer && (Request.Info.Width != ClientWidth ||
+                            Request.Info.Height != ClientHeight)) ||
+                (Layer && !IntCompositionValidDxLayer(&Request)) ||
                 Request.Info.Width > MAXLONG || Request.Info.Height > MAXLONG)
             {
                 return STATUS_INVALID_PARAMETER;
@@ -3578,14 +3658,14 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 if (Request.Info.Version != DWM_DX_SURFACE_INFO_VERSION_GPU ||
                     Request.Info.Pitch != 0 ||
                     (Request.Flags & ~(DWM_DX_PUBLISH_PREMULTIPLIED | DWM_DX_PUBLISH_RETAINED |
-                                       DWM_DX_PUBLISH_SCANOUT)) != 0 ||
+                                       DWM_DX_PUBLISH_SCANOUT | DWM_DX_PUBLISH_LAYER)) != 0 ||
                     ((Request.Flags & DWM_DX_PUBLISH_SCANOUT) &&
                      !(Request.Flags & DWM_DX_PUBLISH_RETAINED)) ||
                     (Request.Info.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM &&
                      Request.Info.Format != DWM_DX_FORMAT_R8G8B8A8_UNORM) ||
                     Request.UpdateRect.left != 0 || Request.UpdateRect.top != 0 ||
-                    (ULONG)Request.UpdateRect.right != ClientWidth ||
-                    (ULONG)Request.UpdateRect.bottom != ClientHeight)
+                    (ULONG)Request.UpdateRect.right != Request.Info.Width ||
+                    (ULONG)Request.UpdateRect.bottom != Request.Info.Height)
                 {
                     return STATUS_INVALID_PARAMETER;
                 }
@@ -3708,10 +3788,8 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             Entry->Redirect.DxInfo = Request.Info;
             Entry->Redirect.DxFlags = Publish ? Request.Flags : 0;
             Entry->Redirect.DxWindow = Request.Window;
-            Entry->Redirect.DxClientX =
-                SourceWnd->rcClient.left - TopWnd->rcWindow.left;
-            Entry->Redirect.DxClientY =
-                SourceWnd->rcClient.top - TopWnd->rcWindow.top;
+            IntCompositionSetDxLayer(SourceWnd, TopWnd, Layer ? &Request : NULL,
+                                     &Entry->Redirect);
             Entry->Redirect.DxReadyEvent = ReadyEvent;
             if (!Publish)
             {
@@ -3776,8 +3854,23 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             IntCompositionDamageDxPublication(Entry, TopWnd);
             break;
 
+        case DWM_DX_SURFACE_PLACE:
+            if (Request.Window != Entry->Redirect.DxWindow ||
+                Request.GlobalShare == 0 ||
+                Request.GlobalShare != Entry->Redirect.DxGlobalShare ||
+                !(Entry->Redirect.DxFlags & DWM_DX_PUBLISH_LAYER) ||
+                Request.Flags != DWM_DX_PUBLISH_LAYER ||
+                !IntCompositionValidDxLayer(&Request))
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            IntCompositionSetDxLayer(SourceWnd, TopWnd, &Request, &Entry->Redirect);
+            IntCompositionDamageDxPublication(Entry, TopWnd);
+            break;
+
         case DWM_DX_SURFACE_ISSUE:
             if (Request.Window != Entry->Redirect.DxWindow ||
+                (Entry->Redirect.DxFlags & DWM_DX_PUBLISH_LAYER) ||
                 !IntCompositionUpdateDxPlacement(SourceWnd, TopWnd,
                                                  &Entry->Redirect) ||
                 Request.GlobalShare != Entry->Redirect.DxGlobalShare ||
@@ -3852,6 +3945,7 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
 
         case DWM_DX_SURFACE_UPDATE:
             if (Request.Window != Entry->Redirect.DxWindow ||
+                (Entry->Redirect.DxFlags & DWM_DX_PUBLISH_LAYER) ||
                 !IntCompositionUpdateDxPlacement(SourceWnd, TopWnd,
                                                  &Entry->Redirect) ||
                 Request.UpdateId == 0 ||

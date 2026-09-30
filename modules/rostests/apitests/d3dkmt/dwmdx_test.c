@@ -233,7 +233,7 @@ C_ASSERT(FIELD_OFFSET(DWM_DX_SHARED_SURFACE_INFO, Height) == 12);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SHARED_SURFACE_INFO, Pitch) == 16);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SHARED_SURFACE_INFO, Format) == 20);
 
-C_ASSERT(sizeof(DWM_DX_SURFACE_EXCHANGE) == 96);
+C_ASSERT(sizeof(DWM_DX_SURFACE_EXCHANGE) == 120);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, StructSize) == 0);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, Action) == 4);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, Window) == 8);
@@ -246,8 +246,11 @@ C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, Info) == 40);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, ReadyEvent) == 64);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, UpdateId) == 72);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, UpdateRect) == 80);
+C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, LayerOffsetX) == 96);
+C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, LayerOffsetY) == 100);
+C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, LayerClip) == 104);
 
-C_ASSERT(sizeof(DWM_WIN) == 232);
+C_ASSERT(sizeof(DWM_WIN) == 248);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxGlobalShare) == 44);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxGeneration) == 48);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxAdapterLuid) == 52);
@@ -268,16 +271,17 @@ C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseFormat) == 120);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, ContentBackdrop) == 156);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, BasePreviousUpdateId) == 208);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseDirtyRect) == 216);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, DxClip) == 232);
 
 C_ASSERT(sizeof(DWM_FRAME_HEADER) == 72);
 C_ASSERT(DWM_WINARRAY_BASE == 72);
-C_ASSERT(DWM_BLURRECTARRAY_BASE == 72 + 256 * 232);
-C_ASSERT(DWM_FRAME_BYTES == 72 + 256 * 232 + 4096 * 16);
+C_ASSERT(DWM_BLURRECTARRAY_BASE == 72 + 256 * 248);
+C_ASSERT(DWM_FRAME_BYTES == 72 + 256 * 248 + 4096 * 16);
 
 START_TEST(dwmdxabi)
 {
-    ok(sizeof(DWM_DX_SURFACE_EXCHANGE) == 96,
-       "DWM_DX_SURFACE_EXCHANGE must be 96 bytes on every architecture, got %u\n",
+    ok(sizeof(DWM_DX_SURFACE_EXCHANGE) == 120,
+       "DWM_DX_SURFACE_EXCHANGE must be 120 bytes on every architecture, got %u\n",
        (unsigned)sizeof(DWM_DX_SURFACE_EXCHANGE));
     ok(sizeof(DWM_DX_SHARED_SURFACE_INFO) == 24,
        "DWM_DX_SHARED_SURFACE_INFO must be 24 bytes, got %u\n",
@@ -1132,6 +1136,40 @@ TestNativePublicationArguments(PFN_NTUSERCALLONEPARAM pNtUserCallOneParam,
     Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
     ok(Status == STATUS_INVALID_PARAMETER,
        "a scanout publication must be retained: 0x%08lX\n", (unsigned long)Status);
+
+    Exchange.Info.Width = Client.right + 64;
+    Exchange.Info.Height = Client.bottom + 32;
+    Exchange.UpdateRect.right = Exchange.Info.Width;
+    Exchange.UpdateRect.bottom = Exchange.Info.Height;
+    Exchange.Flags = 0;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "a window publication must match its client, got 0x%08lX\n", (unsigned long)Status);
+    Exchange.Flags = DWM_DX_PUBLISH_LAYER;
+    Exchange.LayerOffsetX = -16;
+    Exchange.LayerOffsetY = 8;
+    Exchange.LayerClip.right = Client.right;
+    Exchange.LayerClip.bottom = Client.bottom;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_HANDLE,
+       "a clipped layer larger than its client must validate resource ownership, got 0x%08lX\n",
+       (unsigned long)Status);
+    Exchange.LayerClip.left = Exchange.LayerClip.right + 1;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "an inverted layer clip must be rejected, got 0x%08lX\n", (unsigned long)Status);
+    Exchange.LayerClip.left = 0;
+    Exchange.Action = DWM_DX_SURFACE_PLACE;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER || Status == STATUS_NOT_FOUND,
+       "PLACE must require the window's current layer, got 0x%08lX\n", (unsigned long)Status);
+    Exchange.Action = DWM_DX_SURFACE_PUBLISH;
+    Exchange.LayerOffsetX = Exchange.LayerOffsetY = 0;
+    memset(&Exchange.LayerClip, 0, sizeof(Exchange.LayerClip));
+    Exchange.Info.Width = Client.right;
+    Exchange.Info.Height = Client.bottom;
+    Exchange.UpdateRect.right = Client.right;
+    Exchange.UpdateRect.bottom = Client.bottom;
     Exchange.Flags = 0;
 
     Exchange.Info.Pitch = Client.right * sizeof(ULONG);

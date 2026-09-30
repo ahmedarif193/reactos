@@ -350,6 +350,7 @@ typedef struct _DWM_WIN
      * section-backed GDI surfaces; movement alone does not change them. */
     ULONGLONG BasePreviousUpdateId;
     RECTL BaseDirtyRect;
+    RECTL DxClip;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER
@@ -443,6 +444,7 @@ typedef struct _DWM_DX_SHARED_SURFACE_INFO
 #define DWM_DX_SURFACE_PUBLISH    7u
 #define DWM_DX_SURFACE_UNREGISTER 8u
 #define DWM_DX_SURFACE_RELEASE    9u
+#define DWM_DX_SURFACE_PLACE      10u
 
 #define DWM_DX_REDIRECTION_GDI_SURFACE 0x00000010u
 
@@ -450,6 +452,7 @@ typedef struct _DWM_DX_SHARED_SURFACE_INFO
 #define DWM_DX_PUBLISH_RETAINED      0x00000002u
 /* The retained buffer can also be scanned out as an overlay plane. */
 #define DWM_DX_PUBLISH_SCANOUT       0x00000004u
+#define DWM_DX_PUBLISH_LAYER         0x00000008u
 
 #define DWM_DX_UPDATE_CANCEL     0x80000000u
 
@@ -487,6 +490,9 @@ typedef struct _DWM_DX_SURFACE_EXCHANGE
     ULONGLONG ReadyEvent;
     ULONGLONG UpdateId;
     RECTL UpdateRect;
+    LONG LayerOffsetX;
+    LONG LayerOffsetY;
+    RECTL LayerClip;
 } DWM_DX_SURFACE_EXCHANGE, *PDWM_DX_SURFACE_EXCHANGE;
 
 #include <poppack.h>

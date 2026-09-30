@@ -1309,18 +1309,16 @@ BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
 BOOL DrawLayer(const DWM_WIN *Window, const BYTE *Pixels, BOOL Client, LONG OriginX, LONG OriginY,
                  Texture *Prepared = NULL)
 {
-    DWM_GPU_WINDOW_GEOMETRY Geometry;
+    DWM_GPU_WINDOW_GEOMETRY Geometry, Owner;
     if (!DwmGpuWindowGeometry(Window, OriginX, OriginY, &Geometry))
         return TRUE;
-    if (Client)
-    {
-        DWM_GPU_WINDOW_GEOMETRY Owner = Geometry;
-        if (!DwmGpuClientGeometry(Window, &Owner, &Geometry))
-            return TRUE;
-    }
+    Owner = Geometry;
+    if (Client && !DwmGpuClientGeometry(Window, &Owner, &Geometry))
+        return TRUE;
     RECT Bounds;
     if (!DwmGpuDamageBounds(&Bounds, State.Width, State.Height, Geometry.Left, Geometry.Top,
         Geometry.Left + Geometry.Width, Geometry.Top + Geometry.Height) ||
+        (Client && !DwmGpuClipClient(Window, &Owner, &Bounds)) ||
         !DrawIntersects(Bounds))
         return TRUE;
     FLOAT Alpha = (Window->LayerFlags & DWM_LWA_ALPHA) ? min(Window->Alpha, 255u) / 255.0f : 1.0f;
@@ -1616,7 +1614,8 @@ OpaqueClientRect(const DWM_WIN *Window, RECT *Rect)
         return FALSE;
     }
     return DwmGpuDamageBounds(Rect, State.Width, State.Height, Client.Left, Client.Top,
-                              Client.Left + Client.Width, Client.Top + Client.Height);
+                              Client.Left + Client.Width, Client.Top + Client.Height) &&
+           DwmGpuClipClient(Window, &Owner, Rect);
 }
 
 /* A client the display can show as an overlay plane: an opaque retained

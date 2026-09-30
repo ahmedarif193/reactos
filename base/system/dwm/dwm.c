@@ -2989,6 +2989,12 @@ DwmBlitWindowAnimated(ULONG *comp, LONG scrW,
         LONG cx = (LONG)((LONGLONG)w->DxWidth * w->AnimCx / w->cx);
         LONG cy = (LONG)((LONGLONG)w->DxHeight * w->AnimCy / w->cy);
 
+        clipL = max(clipL, dstX + (LONG)((LONGLONG)w->DxClip.left * w->AnimCx / w->cx));
+        clipT = max(clipT, dstY + (LONG)((LONGLONG)w->DxClip.top * w->AnimCy / w->cy));
+        clipR = min(clipR, dstX + (LONG)((LONGLONG)w->DxClip.right * w->AnimCx / w->cx));
+        clipB = min(clipB, dstY + (LONG)((LONGLONG)w->DxClip.bottom * w->AnimCy / w->cy));
+        if (clipL >= clipR || clipT >= clipB)
+            return;
         if (cx < 1) cx = 1;
         if (cy < 1) cy = 1;
         DwmBlitScaled(comp, scrW, clipL, clipT, clipR, clipB,
@@ -3990,6 +3996,10 @@ DwmComposeLoop(HANDLE hStopEvent)
                     if (dxpix != NULL)
                     {
                         DWM_WIN client = wins[i];
+                        LONG ClipL = max(cl, wins[i].x - g_originX + wins[i].DxClip.left);
+                        LONG ClipT = max(ct, wins[i].y - g_originY + wins[i].DxClip.top);
+                        LONG ClipR = min(cr, wins[i].x - g_originX + wins[i].DxClip.right);
+                        LONG ClipB = min(cb, wins[i].y - g_originY + wins[i].DxClip.bottom);
 
                         client.x += wins[i].DxClientX;
                         client.y += wins[i].DxClientY;
@@ -3998,11 +4008,14 @@ DwmComposeLoop(HANDLE hStopEvent)
                         client.Stride = wins[i].DxPitch;
                         if (client.BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT)
                             client.BackdropType = 0;
-                        DwmBlitWindowVisible((ULONG *)g_compBits, g_W,
-                                             cl, ct, cr, cb, dxpix,
-                                             (const ULONG *)g_backdropBits,
-                                             NULL, &client,
-                                             HaveCover ? &Cover : NULL);
+                        if (ClipL < ClipR && ClipT < ClipB)
+                        {
+                            DwmBlitWindowVisible((ULONG *)g_compBits, g_W,
+                                                 ClipL, ClipT, ClipR, ClipB, dxpix,
+                                                 (const ULONG *)g_backdropBits,
+                                                 NULL, &client,
+                                                 HaveCover ? &Cover : NULL);
+                        }
                     }
                 }
 
