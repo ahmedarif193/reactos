@@ -28,7 +28,8 @@ list(APPEND SOURCE
     pdo.c
     power.c)
 
-if(ARCH STREQUAL "i386")
+# PowerPC PReP machines also wire PATA channels to ISA legacy ports.
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "ppc")
     add_definitions(-DATA_DETECT_LEGACY_DEVICES)
     list(APPEND SOURCE chipset/pata_legacy.c)
 endif()

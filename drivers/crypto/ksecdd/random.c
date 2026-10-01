@@ -245,6 +245,13 @@ KsecReadMachineSpecificCounters(
         __asm__ volatile("rdtime %0" : "=r"(Time));
         *MachineSpecificCounters = (ULONG)Time;
     }
+#elif defined(_M_PPC)
+    {
+        ULONG TimeBase;
+
+        __asm__ volatile("mftb %0" : "=r"(TimeBase));
+        *MachineSpecificCounters = TimeBase;
+    }
 #else
     #error Implement me!
 #endif
