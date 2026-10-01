@@ -96,18 +96,32 @@ jobs:
         CFG_LOWER=$(echo "${{matrix.config}}" | tr '[:upper:]' '[:lower:]')
         echo "outdir=output-$ENV_NAME-${{matrix.arch}}-$CFG_LOWER" >> "$GITHUB_OUTPUT"
 
-    - name: Build ISOs
+    - name: Build images
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
-        ninja -C ${{steps.configure.outputs.outdir}} bootcd livecd -k0
+        ninja -C ${{steps.configure.outputs.outdir}} bootcd reactosimg reactosvhd -k0
 
     - name: Print ccache statistics
       run: ccache -s
 
-    - name: Upload ISOs
+    - name: Name artifacts
+      id: images
+      run: echo "tag=${{matrix.compiler}}-${{matrix.arch}}-${{matrix.config}}-target${{matrix.ntver}}-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload bootcd.iso
       uses: actions/upload-artifact@v7
       with:
-        name: reactos-${{matrix.compiler}}-${{matrix.arch}}-${{matrix.config}}-target${{matrix.ntver}}-${{github.sha}}
-        path: |
-          ${{steps.configure.outputs.outdir}}/bootcd.iso
-          ${{steps.configure.outputs.outdir}}/livecd.iso
+        name: bootcd-iso-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/bootcd.iso
+
+    - name: Upload ReactOS.img
+      uses: actions/upload-artifact@v7
+      with:
+        name: ReactOS-img-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/ReactOS.img
+
+    - name: Upload ReactOS.vhd
+      uses: actions/upload-artifact@v7
+      with:
+        name: ReactOS-vhd-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/ReactOS.vhd
