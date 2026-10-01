@@ -11,6 +11,7 @@
 
 #include <ntifs.h>
 #include "halp.h"
+#include "../arch/common/include/haldma_coherent.h"
 
 #define RISCV_DMA_TAG       'aDvR'
 #define RISCV_DMA_SIGNATURE 0x52444D41UL
@@ -206,7 +207,7 @@ HalpRiscvReadDmaCounter(PDMA_ADAPTER DmaAdapter)
 
 static DMA_OPERATIONS HalpRiscvDmaOperations =
 {
-    .Size = FIELD_OFFSET(DMA_OPERATIONS, GetScatterGatherList),
+    .Size = FIELD_OFFSET(DMA_OPERATIONS, CalculateScatterGatherList),
     .PutDmaAdapter = HalpRiscvPutDmaAdapter,
     .AllocateCommonBuffer = HalpRiscvAllocateCommonBuffer,
     .FreeCommonBuffer = HalpRiscvFreeCommonBuffer,
@@ -216,6 +217,8 @@ static DMA_OPERATIONS HalpRiscvDmaOperations =
     .FreeMapRegisters = HalpRiscvFreeMapRegisters,
     .MapTransfer = HalpRiscvMapTransfer,
     .GetDmaAlignment = HalpRiscvGetDmaAlignment,
+    .GetScatterGatherList = HalpCoherentGetScatterGatherList,
+    .PutScatterGatherList = HalpCoherentPutScatterGatherList,
     .ReadDmaCounter = HalpRiscvReadDmaCounter
 };
 

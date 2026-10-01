@@ -4,6 +4,7 @@ spec2def(hal.dll ../hal.spec ADD_IMPORTLIB)
 add_library(hal MODULE
     clock.c
     dma.c
+    ../arch/common/generic/dma_coherent.c
     halinit.c
     halpnpdd.c
     pci.c
