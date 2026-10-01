@@ -2046,6 +2046,7 @@ PiStartDeviceFinal(
     IopQueueTargetDeviceEvent(&GUID_DEVICE_ARRIVAL, &DeviceNode->InstancePath);
 
     PiSetDevNodeState(DeviceNode, DeviceNodeStarted);
+    PopFxNotifyDeviceStarted(DeviceNode->PhysicalDeviceObject);
 
     return STATUS_SUCCESS;
 }

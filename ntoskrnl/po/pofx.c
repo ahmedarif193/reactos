@@ -29,6 +29,7 @@ typedef struct _ROS_PO_FX_COMPONENT_STATE
     LONG ActiveReferences;
     ULONGLONG Latency;
     ULONGLONG Residency;
+    ULONGLONG IdleSince;
     ULONG CurrentIdleState;
     ULONG RequestedIdleState;
     BOOLEAN IdleConditionPending;
@@ -47,6 +48,7 @@ typedef struct _ROS_PO_FX_RELATION
 typedef struct _ROS_PO_FX_HANDLE
 {
     ULONG Signature;
+    LIST_ENTRY ListEntry;
     PDEVICE_OBJECT Pdo;
     /*
      * Normalized description.  PoFxRegisterDevice accepts a V1, V2 or V3
@@ -63,7 +65,12 @@ typedef struct _ROS_PO_FX_HANDLE
     KSPIN_LOCK StateLock;
     EX_RUNDOWN_REF Rundown;
     KEVENT UnregisterReady;
+    KTIMER IdleTimer;
+    KDPC IdleDpc;
+    WORK_QUEUE_ITEM IdleWorkItem;
+    LONG IdleWorkQueued;
     BOOLEAN Started;
+    BOOLEAN PnpStarted;
     BOOLEAN Unregistering;
     BOOLEAN Dispatching;
     BOOLEAN DevicePoweredOn;
@@ -76,6 +83,10 @@ typedef struct _ROS_PO_FX_HANDLE
 #define ROS_PO_FX_RELATION_TAG 'roFP'
 #define ROS_PO_FX_PERF_TAG 'poFP'
 #define ROS_PO_FX_HANDLE(Handle) ((PROS_PO_FX_HANDLE)(Handle))
+#define ROS_PO_FX_IDLE_STATE_DELAY (500 * 10000ULL)
+
+static LIST_ENTRY PopFxHandleList = {&PopFxHandleList, &PopFxHandleList};
+static KSPIN_LOCK PopFxHandleListLock;
 
 #ifndef PO_FX_UNKNOWN_TIME
 #define PO_FX_UNKNOWN_TIME MAXULONGLONG
@@ -142,6 +153,9 @@ PopFxNextAction(
     ULONG Index;
     BOOLEAN AllIdle = TRUE;
     BOOLEAN AllActive = TRUE;
+    BOOLEAN Managed = FxHandle->Started && FxHandle->PnpStarted;
+    ULONGLONG Now = KeQueryInterruptTime();
+    ULONGLONG Wait = 0;
 
     for (Index = 0; Index < FxHandle->ComponentCount; Index++)
     {
@@ -180,7 +194,7 @@ PopFxNextAction(
                 return PopFxActiveCondition;
             }
         }
-        else if (FxHandle->Started)
+        else if (Managed)
         {
             AllActive = FALSE;
             if (State->Active)
@@ -191,7 +205,15 @@ PopFxNextAction(
             *IdleState = PopFxSelectIdleState(FxHandle, Index);
             if (State->CurrentIdleState != *IdleState)
             {
+                ULONGLONG Elapsed = Now - State->IdleSince;
+
                 AllIdle = FALSE;
+                if (Elapsed < ROS_PO_FX_IDLE_STATE_DELAY)
+                {
+                    if (Wait == 0 || ROS_PO_FX_IDLE_STATE_DELAY - Elapsed < Wait)
+                        Wait = ROS_PO_FX_IDLE_STATE_DELAY - Elapsed;
+                    continue;
+                }
                 if (FxHandle->DevicePowerNotRequiredPending || FxHandle->DevicePowerRequiredPending)
                     continue;
                 if (!FxHandle->DevicePoweredOn)
@@ -210,11 +232,19 @@ PopFxNextAction(
         }
     }
 
-    if (FxHandle->Started && AllIdle && FxHandle->DevicePoweredOn &&
+    if (Managed && AllIdle && FxHandle->DevicePoweredOn &&
         !FxHandle->DevicePowerNotRequiredPending && !FxHandle->DevicePowerRequiredPending)
     {
         FxHandle->DevicePowerNotRequiredPending = TRUE;
         return PopFxPowerNotRequired;
+    }
+
+    if (Wait != 0)
+    {
+        LARGE_INTEGER DueTime;
+
+        DueTime.QuadPart = -(LONGLONG)Wait;
+        KeSetTimer(&FxHandle->IdleTimer, DueTime, &FxHandle->IdleDpc);
     }
 
     if (FxHandle->Unregistering && AllActive && FxHandle->DevicePoweredOn &&
@@ -291,6 +321,44 @@ PopFxDispatchTransitions(
         }
         KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
     }
+}
+
+static
+VOID
+NTAPI
+PopFxIdleWorker(
+    _In_ PVOID Context)
+{
+    PROS_PO_FX_HANDLE FxHandle = Context;
+
+    InterlockedExchange(&FxHandle->IdleWorkQueued, 0);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+}
+
+static
+VOID
+NTAPI
+PopFxIdleTimerDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID Context,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PROS_PO_FX_HANDLE FxHandle = Context;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (!ExAcquireRundownProtection(&FxHandle->Rundown))
+        return;
+    if (InterlockedCompareExchange(&FxHandle->IdleWorkQueued, 1, 0) != 0)
+    {
+        ExReleaseRundownProtection(&FxHandle->Rundown);
+        return;
+    }
+    ExQueueWorkItem(&FxHandle->IdleWorkItem, DelayedWorkQueue);
 }
 
 /*
@@ -422,6 +490,8 @@ PoFxRegisterDevice(
 {
     PROS_PO_FX_HANDLE NewHandle;
     PPO_FX_DEVICE_V3 DeviceCopy;
+    PDEVICE_NODE DeviceNode;
+    KIRQL OldIrql;
     ROS_PO_FX_SOURCE Source;
     NTSTATUS Status;
     SIZE_T AllocationSize;
@@ -539,7 +609,7 @@ PoFxRegisterDevice(
     }
 
     NewHandle->Signature = ROS_PO_FX_SIGNATURE;
-    NewHandle->Pdo = Pdo;
+    NewHandle->Pdo = IoGetDeviceAttachmentBaseRef(Pdo);
     NewHandle->Device = DeviceCopy;
     NewHandle->ComponentCount = Source.ComponentCount;
     NewHandle->DevicePoweredOn = TRUE;
@@ -548,7 +618,20 @@ PoFxRegisterDevice(
     KeInitializeEvent(&NewHandle->UnregisterReady, NotificationEvent, FALSE);
     KeInitializeSpinLock(&NewHandle->RelationLock);
     InitializeListHead(&NewHandle->RelationList);
-    ObReferenceObject(Pdo);
+    KeInitializeTimer(&NewHandle->IdleTimer);
+    KeInitializeDpc(&NewHandle->IdleDpc, PopFxIdleTimerDpc, NewHandle);
+    ExInitializeWorkItem(&NewHandle->IdleWorkItem, PopFxIdleWorker, NewHandle);
+    KeAcquireSpinLock(&PopFxHandleListLock, &OldIrql);
+    InsertTailList(&PopFxHandleList, &NewHandle->ListEntry);
+    KeReleaseSpinLock(&PopFxHandleListLock, OldIrql);
+    DeviceNode = IopGetDeviceNode(NewHandle->Pdo);
+    if (DeviceNode == NULL ||
+        (DeviceNode->State >= DeviceNodeStarted && DeviceNode->State <= DeviceNodeEnumerateCompletion))
+    {
+        KeAcquireSpinLock(&NewHandle->StateLock, &OldIrql);
+        NewHandle->PnpStarted = TRUE;
+        KeReleaseSpinLock(&NewHandle->StateLock, OldIrql);
+    }
     *Handle = (POHANDLE)NewHandle;
     return STATUS_SUCCESS;
 }
@@ -570,12 +653,17 @@ PoFxUnregisterDevice(
         KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
         FxHandle->Unregistering = TRUE;
         KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+        KeCancelTimer(&FxHandle->IdleTimer);
+        KeFlushQueuedDpcs();
         PopFxDispatchTransitions(FxHandle);
         ExReleaseRundownProtection(&FxHandle->Rundown);
 
         /* Complete outstanding driver handshakes and restore D0/F0 before
          * preventing callbacks from taking new references to the handle. */
         KeWaitForSingleObject(&FxHandle->UnregisterReady, Executive, KernelMode, FALSE, NULL);
+        KeAcquireSpinLock(&PopFxHandleListLock, &OldIrql);
+        RemoveEntryList(&FxHandle->ListEntry);
+        KeReleaseSpinLock(&PopFxHandleListLock, OldIrql);
         ExWaitForRundownProtectionRelease(&FxHandle->Rundown);
         FxHandle->Signature = 0;
         for (;;)
@@ -600,6 +688,42 @@ PoFxUnregisterDevice(
         ObDereferenceObject(FxHandle->Pdo);
         ExFreePoolWithTag(FxHandle->Device, ROS_PO_FX_SIGNATURE);
         ExFreePoolWithTag(FxHandle, ROS_PO_FX_SIGNATURE);
+    }
+}
+
+VOID
+NTAPI
+PopFxNotifyDeviceStarted(
+    _In_ PDEVICE_OBJECT Pdo)
+{
+    PROS_PO_FX_HANDLE FxHandle;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    for (;;)
+    {
+        FxHandle = NULL;
+        KeAcquireSpinLock(&PopFxHandleListLock, &OldIrql);
+        for (Entry = PopFxHandleList.Flink; Entry != &PopFxHandleList; Entry = Entry->Flink)
+        {
+            PROS_PO_FX_HANDLE Candidate = CONTAINING_RECORD(Entry, ROS_PO_FX_HANDLE, ListEntry);
+
+            if (Candidate->Pdo == Pdo && !Candidate->PnpStarted &&
+                ExAcquireRundownProtection(&Candidate->Rundown))
+            {
+                FxHandle = Candidate;
+                break;
+            }
+        }
+        KeReleaseSpinLock(&PopFxHandleListLock, OldIrql);
+        if (FxHandle == NULL)
+            return;
+
+        KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+        FxHandle->PnpStarted = TRUE;
+        KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+        PopFxDispatchTransitions(FxHandle);
+        ExReleaseRundownProtection(&FxHandle->Rundown);
     }
 }
 
@@ -681,6 +805,7 @@ PoFxCompleteIdleCondition(
     {
         FxHandle->ComponentState[Component].IdleConditionPending = FALSE;
         FxHandle->ComponentState[Component].Active = FALSE;
+        FxHandle->ComponentState[Component].IdleSince = KeQueryInterruptTime();
     }
     KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
     PopFxDispatchTransitions(FxHandle);

@@ -317,6 +317,11 @@ NTAPI
 PoRemoveVolumeDevice(
     IN PDEVICE_OBJECT DeviceObject);
 
+VOID
+NTAPI
+PopFxNotifyDeviceStarted(
+    _In_ PDEVICE_OBJECT Pdo);
+
 //
 // Power State routines
 //
