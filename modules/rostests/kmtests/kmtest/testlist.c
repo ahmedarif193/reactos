@@ -18,6 +18,7 @@ KMT_TESTFUNC Test_FindFile;
 KMT_TESTFUNC Test_FltMgrLoad;
 KMT_TESTFUNC Test_FltMgrReg;
 KMT_TESTFUNC Test_HidPDescription;
+KMT_TESTFUNC Test_IoAddDeviceUnload;
 KMT_TESTFUNC Test_IoCreateFile;
 KMT_TESTFUNC Test_IoDeviceObject;
 KMT_TESTFUNC Test_IoReadWrite;
@@ -60,6 +61,7 @@ const KMT_TEST TestList[] =
     { "-FltMgrLoad",                  Test_FltMgrLoad }, // TODO: WIP/untested/crashes.
     { "-FltMgrReg",                   Test_FltMgrReg }, // TODO: WIP/untested/crashes.
     { "HidPDescription",              Test_HidPDescription },
+    { "IoAddDeviceUnload",            Test_IoAddDeviceUnload },
     { "IoCreateFile",                 Test_IoCreateFile },
     { "IoDeviceObject",               Test_IoDeviceObject },
     { "IoReadWrite",                  Test_IoReadWrite },

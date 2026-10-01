@@ -1,0 +1,52 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%Provider%
+DriverVer=10/01/2026,1.0.0.0
+CatalogFile=kmtest_addfail.cat
+PnpLockdown=1
+
+[Manufacturer]
+%Provider%=Models,NTx86,NTamd64,NTarm64
+
+[Models.NTx86]
+%Device%=Fixture,ROOT\KMTESTADDFAIL
+
+[Models.NTamd64]
+%Device%=Fixture,ROOT\KMTESTADDFAIL
+
+[Models.NTarm64]
+%Device%=Fixture,ROOT\KMTESTADDFAIL
+
+[Fixture.NT]
+CopyFiles=DriverCopy
+
+[Fixture.NT.Services]
+AddService=KmtestAddFail,0x2,FixtureService
+
+[FixtureService]
+DisplayName=%Device%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\ioadddeviceunload_drv.sys
+
+[DestinationDirs]
+DriverCopy=12
+
+[DriverCopy]
+ioadddeviceunload_drv.sys,,,0x10
+
+[SourceDisksNames]
+1=%Disk%,,,
+
+[SourceDisksFiles]
+ioadddeviceunload_drv.sys=1
+
+[Strings]
+Provider="LiberNT kernel tests"
+Device="Kmtest failing AddDevice fixture"
+Disk="Kmtest driver package"
