@@ -150,7 +150,7 @@ Ndis6ValidateMiniportDriverCharacteristics(
         RequiredRevision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2;
     else
         RequiredRevision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1;
-    if (Characteristics->Header.Revision != RequiredRevision)
+    if (Characteristics->Header.Revision < RequiredRevision)
         return NDIS_STATUS_BAD_CHARACTERISTICS;
 
     *CopySize = Characteristics->Header.Size;
