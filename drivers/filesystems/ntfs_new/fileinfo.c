@@ -46,14 +46,71 @@
  }
 
  static
+ PAttribute
+ NtfsGetHandleDataAttribute(_In_ PFileContextBlock FileCB)
+ {
+     BOOLEAN NamedStream = FileCB->RequestedType == TypeData &&
+                           FileCB->RequestedStream && FileCB->RequestedStream[0];
+
+     if ((NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY) && !NamedStream)
+         return NULL;
+     return NtfsFileRecordGetAttribute(FileCB->FileRec,
+                                       FileCB->RequestedType,
+                                       FileCB->RequestedStream);
+ }
+
+ static
+ ULONG
+ NtfsCountDeletePendingLinks(_In_ PVolumeContextBlock VolCB,
+                             _In_ PFileContextBlock FileCB)
+ {
+     PLIST_ENTRY StreamEntry;
+     ULONG Count = 0;
+
+     if (!FileCB->StreamCB)
+         return 0;
+
+     ASSERT(ExIsResourceAcquiredExclusiveLite(&VolCB->MetadataResource));
+     ExAcquireFastMutex(&VolCB->StreamListMutex);
+     for (StreamEntry = VolCB->StreamList.Flink;
+          StreamEntry != &VolCB->StreamList;
+          StreamEntry = StreamEntry->Flink)
+     {
+         PStreamContextBlock Stream = CONTAINING_RECORD(StreamEntry, StreamContextBlock, ListEntry);
+         PLIST_ENTRY CcbEntry;
+
+         if (Stream->FileReference != FileCB->StreamCB->FileReference)
+             continue;
+         for (CcbEntry = Stream->NativeScb.CcbList.Flink;
+              CcbEntry != &Stream->NativeScb.CcbList;
+              CcbEntry = CcbEntry->Flink)
+         {
+             PNTFS_NATIVE_CCB Ccb = CONTAINING_RECORD(CcbEntry, NTFS_NATIVE_CCB, StreamEntry);
+             PFileContextBlock Other = CONTAINING_RECORD(Ccb, FileContextBlock, NativeCcb);
+
+             if (Other->DeletePending && Ccb->Lcb &&
+                 Ccb->Lcb->CcbList.Flink == &Ccb->LcbEntry)
+             {
+                 Count++;
+             }
+         }
+     }
+     ExReleaseFastMutex(&VolCB->StreamListMutex);
+     return Count;
+ }
+
+ static
  NTSTATUS
- GetFileStandardInformation(_In_ PFileContextBlock FileCB,
+ GetFileStandardInformation(_In_ PVolumeContextBlock VolCB,
+                            _In_ PFileContextBlock FileCB,
                             _Out_ PFILE_STANDARD_INFORMATION Buffer,
                             _Inout_ PULONG Length)
  {
      PNtfsFileRecord File;
      PAttribute DataAttribute;
      size_t FileInfoSize = sizeof(FILE_STANDARD_INFORMATION);
+     ULONG Links;
+     ULONG PendingLinks;
 
      if (*Length < FileInfoSize)
          return STATUS_BUFFER_TOO_SMALL;
@@ -64,10 +121,7 @@
      File = FileCB->FileRec;
 
      // Information from the stream represented by this file object.
-     DataAttribute = NtfsFileRecordGetAttribute(
-         File,
-         FileCB->RequestedType,
-         FileCB->RequestedStream);
+     DataAttribute = NtfsGetHandleDataAttribute(FileCB);
 
      if (DataAttribute && FileCB->StreamCB && FileCB->StreamCB->SizePending)
      {
@@ -101,11 +155,12 @@
      Buffer->Directory = !!(NtfsFileRecordGetHeader(File)->Flags & FR_IS_DIRECTORY) &&
                          !(FileCB->RequestedType == TypeData &&
                            FileCB->RequestedStream && FileCB->RequestedStream[0]);
-     Buffer->NumberOfLinks = NtfsFileRecordGetLinkCount(File);
+     Links = NtfsFileRecordGetLinkCount(File);
+     PendingLinks = NtfsCountDeletePendingLinks(VolCB, FileCB);
+     Buffer->NumberOfLinks = Links > PendingLinks ? Links - PendingLinks : 0;
 
      // Information from file context block
-     Buffer->DeletePending = !!(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE) ||
-                             FileCB->DeletePending ||
+     Buffer->DeletePending = FileCB->DeletePending ||
                              (FileCB->StreamCB && FileCB->StreamCB->DeletePending);
 
      *Length -= FileInfoSize;
@@ -220,10 +275,7 @@ GetFileNetworkOpenInformation(_In_ PFileContextBlock FileCB,
     File = FileCB->FileRec;
 
     // Information from the stream represented by this file object.
-    DataAttribute = NtfsFileRecordGetAttribute(
-        File,
-        FileCB->RequestedType,
-        FileCB->RequestedStream);
+    DataAttribute = NtfsGetHandleDataAttribute(FileCB);
 
     if (DataAttribute && FileCB->StreamCB && FileCB->StreamCB->SizePending)
     {
@@ -1721,7 +1773,7 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
                                              &BufferLength);
             break;
         case FileStandardInformation:
-            Status = GetFileStandardInformation(FileCB,
+            Status = GetFileStandardInformation(VolCB, FileCB,
                                                 (PFILE_STANDARD_INFORMATION)SystemBuffer,
                                                 &BufferLength);
             break;
@@ -1812,7 +1864,7 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
                 break;
 
             PartLength = sizeof(FILE_STANDARD_INFORMATION);
-            Status = GetFileStandardInformation(FileCB, &All->StandardInformation, &PartLength);
+            Status = GetFileStandardInformation(VolCB, FileCB, &All->StandardInformation, &PartLength);
             if (!NT_SUCCESS(Status))
                 break;
 
