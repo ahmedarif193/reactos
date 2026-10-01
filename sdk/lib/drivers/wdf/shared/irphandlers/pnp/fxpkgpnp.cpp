@@ -226,6 +226,10 @@ FxPkgPnp::~FxPkgPnp()
         //
         pDI->m_Entry.Next = NULL;
 
+        if (pDI->m_State) {
+            pDI->SetState(FALSE);
+        }
+
         delete pDI;
     }
     m_DeviceInterfaceHead.Next = NULL;
