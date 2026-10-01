@@ -664,7 +664,7 @@
 @ stdcall -version=0x600+ RtlAcquireSRWLockShared(ptr)
 @ stdcall RtlActivateActivationContext(long ptr ptr)
 @ stdcall RtlActivateActivationContextEx(long ptr ptr ptr)
-@ stdcall -arch=arm,win64 RtlActivateActivationContextUnsafeFast(ptr ptr)
+@ stdcall -arch=!i386 RtlActivateActivationContextUnsafeFast(ptr ptr)
 @ stdcall RtlAddAccessAllowedAce(ptr long long ptr)
 @ stdcall RtlAddAccessAllowedAceEx(ptr long long long ptr)
 @ stdcall RtlAddAccessAllowedObjectAce(ptr long long long ptr ptr ptr)
@@ -808,7 +808,7 @@
 @ stdcall -stub -version=0x600+ RtlDeCommitDebugInfo(long long long) ; doesn't exist in win11
 @ stdcall RtlDeNormalizeProcessParams(ptr)
 @ stdcall RtlDeactivateActivationContext(long long)
-@ stdcall -arch=arm,win64 RtlDeactivateActivationContextUnsafeFast(ptr)
+@ stdcall -arch=!i386 RtlDeactivateActivationContextUnsafeFast(ptr)
 @ stdcall -stub RtlDebugPrintTimes()
 @ stdcall RtlDecodePointer(ptr)
 @ stdcall RtlDecodeSystemPointer(ptr)
@@ -915,7 +915,7 @@
 @ stdcall -arch=win32 -ret64 RtlExtendedLargeIntegerDivide(double long ptr)
 @ stdcall -arch=win32 -ret64 RtlExtendedMagicDivide(double double long)
 @ stdcall RtlFillMemory(ptr long long)
-@ stdcall -arch=i386,arm,arm64,riscv64 RtlFillMemoryUlong(ptr long long)
+@ stdcall -arch=!x86_64 RtlFillMemoryUlong(ptr long long)
 @ stdcall RtlFinalReleaseOutOfProcessMemoryStream(ptr)
 @ stdcall -stub -version=0x600+ RtlFindAceByType(long long ptr)
 @ stdcall RtlFindActivationContextSectionGuid(long ptr long ptr ptr)
@@ -970,7 +970,7 @@
 @ stdcall -stub -version=0x600+ RtlGetCurrentTransaction()
 @ stdcall RtlGetDaclSecurityDescriptor(ptr ptr ptr ptr)
 @ stdcall -version=0xA00+ RtlGetDeviceFamilyInfoEnum(ptr ptr ptr)
-@ stdcall -version=0x600+ -arch=i386,win64 RtlGetEnabledExtendedFeatures(int64)
+@ stdcall -version=0x600+ RtlGetEnabledExtendedFeatures(int64)
 @ stdcall RtlGetElementGenericTable(ptr long)
 @ stdcall RtlGetElementGenericTableAvl(ptr long)
 @ stdcall -version=0x600+ -arch=win64 RtlGetExtendedContextLength(long ptr)
@@ -991,7 +991,7 @@
 @ stdcall RtlGetLengthWithoutTrailingPathSeperators(long ptr ptr) RtlGetLengthWithoutTrailingPathSeparators
 @ stdcall RtlGetLongestNtPathLength()
 @ stdcall -arch=i386 RtlGetNativeSystemInformation(long ptr long ptr) NtWow64GetNativeSystemInformation
-@ stdcall -arch=x86_64,arm,riscv64 RtlGetNativeSystemInformation(long long long long) NtQuerySystemInformation
+@ stdcall -arch=x86_64,arm,riscv64,ppc RtlGetNativeSystemInformation(long long long long) NtQuerySystemInformation
 @ stdcall -arch=arm64 RtlGetNativeSystemInformation(long ptr long ptr) ZwQuerySystemInformation
 @ stdcall RtlGetNtGlobalFlags()
 @ stdcall RtlGetNtProductType(ptr)
@@ -1142,12 +1142,12 @@
 @ stdcall RtlLookupElementGenericTableAvl(ptr ptr)
 @ stdcall RtlLookupElementGenericTableFull(ptr ptr ptr long)
 @ stdcall RtlLookupElementGenericTableFullAvl(ptr ptr ptr long)
-@ stdcall -arch=win64 RtlLookupFunctionEntry(long ptr ptr)
-@ stdcall -arch=win64 RtlLookupFunctionTable(int64 ptr ptr)
+@ stdcall -arch=win64,ppc RtlLookupFunctionEntry(long ptr ptr)
+@ stdcall -arch=win64,ppc RtlLookupFunctionTable(int64 ptr ptr)
 @ stdcall RtlMakeSelfRelativeSD(ptr ptr ptr)
 @ stdcall RtlMapGenericMask(long ptr)
 @ stdcall RtlMapSecurityErrorToNtStatus(long)
-@ stdcall -arch=i386,x86_64,arm,riscv64 RtlMoveMemory(ptr ptr long)
+@ stdcall -arch=!arm64 RtlMoveMemory(ptr ptr long)
 @ stdcall -arch=arm64 RtlMoveMemory(ptr ptr long) RtlpUserMemmove
 @ stdcall RtlMultiAppendUnicodeStringBuffer(ptr long ptr)
 @ stdcall RtlMultiByteToUnicodeN(ptr long ptr ptr long)
@@ -1239,7 +1239,7 @@
 @ stdcall -stub -version=0x600+ RtlResetMemoryZone(long)
 @ stdcall -version=0x600+ RtlResetNtUserPfn()
 @ stdcall RtlResetRtlTranslations(ptr)
-@ stdcall -arch=win64 RtlRestoreContext(ptr ptr)
+@ stdcall -arch=win64,ppc RtlRestoreContext(ptr ptr)
 @ stdcall RtlRestoreLastWin32Error(long) RtlSetLastWin32Error
 @ stdcall -version=0x600+ RtlRetrieveNtUserPfn(ptr ptr ptr)
 @ stdcall RtlRevertMemoryStream(ptr)
@@ -1353,7 +1353,7 @@
 @ stdcall -stub -version=0x600+ RtlUnlockMemoryZone(long)
 @ stdcall -stub -version=0x600+ RtlUnlockModuleSection(long)
 @ stdcall -register RtlUnwind(ptr ptr ptr ptr)
-@ stdcall -arch=win64 RtlUnwindEx(ptr ptr ptr ptr ptr ptr)
+@ stdcall -arch=win64,ppc RtlUnwindEx(ptr ptr ptr ptr ptr ptr)
 @ stdcall RtlUnregisterCfgTargetRange(ptr)
 @ stdcall RtlUpcaseUnicodeChar(long)
 @ stdcall RtlUpcaseUnicodeString(ptr ptr long)
@@ -1371,7 +1371,7 @@
 @ stdcall -version=0x502 RtlUsageHeap(ptr long ptr)
 @ stdcall -stub -version=0x600+ -arch=arm RtlUserThreadStart(long long)
 @ stdcall -version=0x600+ -arch=i386,arm64 RtlUserThreadStart(long long)
-@ stdcall -version=0x600+ -arch=x86_64,riscv64 RtlUserThreadStart(ptr ptr) RtlpUserThreadStart
+@ stdcall -version=0x600+ -arch=x86_64,riscv64,ppc RtlUserThreadStart(ptr ptr) RtlpUserThreadStart
 @ stdcall RtlValidAcl(ptr)
 @ stdcall RtlValidRelativeSecurityDescriptor(ptr long long)
 @ stdcall RtlValidSecurityDescriptor(ptr)
@@ -1380,7 +1380,7 @@
 @ stdcall RtlValidateProcessHeaps()
 @ stdcall RtlValidateUnicodeString(long ptr)
 @ stdcall RtlVerifyVersionInfo(ptr long double)
-@ stdcall -arch=win64 RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr)
+@ stdcall -arch=win64,ppc RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr)
 @ stdcall -arch=win64 RtlVirtualUnwind2(long int64 int64 ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
 @ stdcall -version=0x602+ RtlWaitOnAddress(ptr ptr long ptr)
 @ stdcall -version=0x600+ RtlWakeAllConditionVariable(ptr)
@@ -1939,7 +1939,7 @@
 @ cdecl -arch=i386 _CIpow()
 @ cdecl -arch=i386 _CIsin()
 @ cdecl -arch=i386 _CIsqrt()
-@ cdecl -arch=arm,win64 __C_specific_handler(ptr long ptr ptr)
+@ cdecl -arch=!i386 __C_specific_handler(ptr long ptr ptr)
 @ cdecl -arch=x86_64,arm,arm64 __chkstk()
 @ cdecl __isascii(long)
 @ cdecl __iscsym(long)
@@ -2006,7 +2006,7 @@
 @ cdecl _wtoi64(wstr)
 @ cdecl _wtol(wstr)
 @ cdecl abs(long)
-@ cdecl -arch=i386,win64 atan(double)
+@ cdecl atan(double)
 @ cdecl atoi(str)
 @ cdecl atol(str)
 @ cdecl bsearch(ptr ptr long long ptr)
@@ -2032,21 +2032,21 @@
 @ cdecl iswxdigit(long)
 @ cdecl isxdigit(long)
 @ cdecl labs(long)
-@ cdecl -arch=i386,win64 log(double)
+@ cdecl log(double)
 @ cdecl -arch=win64 longjmp(ptr)
 @ cdecl mbstowcs(ptr str long)
 @ cdecl memchr(ptr long long)
 @ cdecl memcmp(ptr ptr long)
-@ cdecl -arch=i386,x86_64,arm,riscv64 memcpy(ptr ptr long) memmove
+@ cdecl -arch=!arm64 memcpy(ptr ptr long) memmove
 @ cdecl -arch=arm64 memcpy(ptr ptr long) RtlpUserMemmove
-@ cdecl -arch=i386,x86_64,arm,riscv64 memmove(ptr ptr long)
+@ cdecl -arch=!arm64 memmove(ptr ptr long)
 @ cdecl -arch=arm64 memmove(ptr ptr long) RtlpUserMemmove
 @ cdecl memset(ptr long long)
-@ cdecl -arch=i386,arm,win64 pow(double double)
+@ cdecl pow(double double)
 @ cdecl qsort(ptr long long ptr)
 @ cdecl sin(double)
 @ varargs sprintf(ptr str)
-@ cdecl -arch=i386,win64 sqrt(double)
+@ cdecl sqrt(double)
 @ varargs sscanf(str str)
 @ cdecl strcat(str str)
 @ cdecl strchr(str long)
@@ -2067,7 +2067,7 @@
 @ cdecl strtol(str ptr long)
 @ cdecl strtoul(str ptr long)
 @ varargs swprintf(ptr wstr) _swprintf # Non-conforming swprintf
-@ cdecl -arch=i386,win64 tan(double)
+@ cdecl tan(double)
 @ cdecl tolower(long)
 @ cdecl toupper(long) toupper_nt_mb
 @ cdecl towlower(long)

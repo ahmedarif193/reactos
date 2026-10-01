@@ -176,7 +176,7 @@
 @ cdecl _Strftime(ptr long str ptr ptr)
 @ cdecl _XcptFilter(long ptr)
 @ stdcall -arch=x86_64,arm,arm64 __C_specific_handler(ptr long ptr ptr)
-@ cdecl -arch=riscv64 __C_specific_handler(ptr long ptr ptr) ntdll.__C_specific_handler
+@ cdecl -arch=riscv64,ppc __C_specific_handler(ptr long ptr ptr) ntdll.__C_specific_handler
 @ cdecl __CppXcptFilter(long ptr)
 # stub -version=0x600+ -arch=i386 __CxxCallUnwindDelDtor
 # stub -arch=i386 __CxxCallUnwindDtor
@@ -201,8 +201,8 @@
 @ cdecl ___lc_collate_cp_func()
 @ cdecl ___lc_handle_func()
 @ cdecl ___mb_cur_max_func()
-@ cdecl -arch=i386,win64 ___setlc_active_func()
-@ cdecl -arch=i386,win64 ___unguarded_readlc_active_add_func()
+@ cdecl ___setlc_active_func()
+@ cdecl ___unguarded_readlc_active_add_func()
 @ extern __argc MSVCRT___argc
 @ extern __argv MSVCRT___argv
 @ extern __badioinfo MSVCRT___badioinfo
@@ -218,14 +218,14 @@
 @ cdecl -version=0x600+ __dstbias() __p__dstbias
 @ cdecl __fpecode()
 @ cdecl __getmainargs(ptr ptr ptr long ptr)
-@ extern -arch=i386,win64 __initenv MSVCRT___initenv
+@ extern __initenv MSVCRT___initenv
 @ cdecl __iob_func()
 @ cdecl __isascii(long)
 @ cdecl __iscsym(long)
 @ cdecl __iscsymf(long)
 @ stdcall -arch=arm __jump_unwind(ptr ptr) ntdll.__jump_unwind
-@ extern -arch=i386,win64 __lc_codepage MSVCRT___lc_codepage
-@ extern -arch=i386,win64 __lc_collate_cp MSVCRT___lc_collate_cp
+@ extern __lc_codepage MSVCRT___lc_codepage
+@ extern __lc_collate_cp MSVCRT___lc_collate_cp
 @ extern __lc_handle MSVCRT___lc_handle
 @ cdecl __lconv_init()
 @ cdecl -version=0x600+ -arch=i386 -norelay __libm_sse2_acos()
@@ -440,7 +440,7 @@
 @ cdecl _fgetchar()
 @ cdecl _fgetwchar()
 @ cdecl _filbuf(ptr)
-@ extern -arch=i386,win64 _fileinfo
+@ extern _fileinfo
 @ cdecl _filelength(long)
 @ cdecl -ret64 _filelengthi64(long)
 @ cdecl _fileno(ptr)
@@ -1290,7 +1290,7 @@
 @ cdecl exp(double) MSVCRT_exp
 @ cdecl -arch=!i386 expf(float)
 @ cdecl fabs(double)
-@ cdecl -arch=arm,arm64,riscv64 fabsf(float)
+@ cdecl -arch=arm,arm64,riscv64,ppc fabsf(float)
 @ cdecl fclose(ptr)
 @ cdecl feof(ptr)
 @ cdecl ferror(ptr)
@@ -1536,3 +1536,4 @@
 @ varargs -version=0x600+ wprintf_s(wstr)
 @ varargs wscanf(wstr)
 @ varargs -version=0x600+ wscanf_s(wstr)
+@ cdecl -arch=ppc -norelay setjmp(ptr) _setjmp

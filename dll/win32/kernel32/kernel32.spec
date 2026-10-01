@@ -782,12 +782,12 @@
 @ stdcall InitializeSListHead(ptr) ntdll.RtlInitializeSListHead
 @ stdcall -version=0x600+ InitializeSRWLock(ptr) ntdll.RtlInitializeSRWLock
 @ stdcall -arch=i386 -ret64 InterlockedCompareExchange64(ptr double double) ntdll.RtlInterlockedCompareExchange64
-@ stdcall -arch=i386 InterlockedCompareExchange(ptr long long)
-@ stdcall -arch=i386 InterlockedDecrement(ptr)
-@ stdcall -arch=i386 InterlockedExchange(ptr long)
-@ stdcall -arch=i386 InterlockedExchangeAdd(ptr long)
+@ stdcall -arch=i386,ppc InterlockedCompareExchange(ptr long long)
+@ stdcall -arch=i386,ppc InterlockedDecrement(ptr)
+@ stdcall -arch=i386,ppc InterlockedExchange(ptr long)
+@ stdcall -arch=i386,ppc InterlockedExchangeAdd(ptr long)
 @ stdcall InterlockedFlushSList(ptr) ntdll.RtlInterlockedFlushSList
-@ stdcall -arch=i386 InterlockedIncrement(ptr)
+@ stdcall -arch=i386,ppc InterlockedIncrement(ptr)
 @ stdcall InterlockedPopEntrySList(ptr) ntdll.RtlInterlockedPopEntrySList
 @ stdcall InterlockedPushEntrySList(ptr ptr) ntdll.RtlInterlockedPushEntrySList
 @ fastcall -version=0x600+ InterlockedPushListSList(ptr ptr ptr long) ntdll.RtlInterlockedPushListSList
@@ -1053,18 +1053,18 @@
 @ stdcall -register RtlCaptureContext(ptr) ntdll.RtlCaptureContext
 @ stdcall RtlCaptureStackBackTrace(long long ptr ptr) ntdll.RtlCaptureStackBackTrace
 @ stdcall -arch=win64 RtlCompareMemory(ptr ptr ptr) ntdll.RtlCompareMemory
-@ stdcall -arch=win64 RtlCopyMemory(ptr ptr ptr) ntdll.memcpy
+@ stdcall -arch=win64,ppc RtlCopyMemory(ptr ptr ptr) ntdll.memcpy
 @ stdcall -arch=win64 RtlDeleteFunctionTable(ptr) ntdll.RtlDeleteFunctionTable
 @ stdcall RtlFillMemory(ptr long long) ntdll.RtlFillMemory
 @ stdcall -arch=win64 RtlInstallFunctionTableCallback(double double long ptr ptr ptr) ntdll.RtlInstallFunctionTableCallback
-@ stdcall -arch=win64 RtlLookupFunctionEntry(ptr ptr ptr) ntdll.RtlLookupFunctionEntry
+@ stdcall -arch=win64,ppc RtlLookupFunctionEntry(ptr ptr ptr) ntdll.RtlLookupFunctionEntry
 @ stdcall RtlMoveMemory(ptr ptr long) ntdll.RtlMoveMemory
 @ stdcall -arch=win64 RtlPcToFileHeader(ptr ptr) ntdll.RtlPcToFileHeader
 @ stdcall -arch=win64 RtlRaiseException(ptr) ntdll.RtlRaiseException
 @ stdcall -arch=win64 RtlRestoreContext(ptr ptr) ntdll.RtlRestoreContext
 @ stdcall RtlUnwind(ptr ptr ptr ptr) ntdll.RtlUnwind
 @ stdcall -arch=win64 RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ntdll.RtlUnwindEx
-@ stdcall -arch=win64 RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr) ntdll.RtlVirtualUnwind
+@ stdcall -arch=win64,ppc RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr) ntdll.RtlVirtualUnwind
 @ stdcall RtlZeroMemory(ptr long) ntdll.RtlZeroMemory
 @ stdcall ScrollConsoleScreenBufferA(long ptr ptr ptr ptr) kernelbase.ScrollConsoleScreenBufferA
 @ stdcall ScrollConsoleScreenBufferW(long ptr ptr ptr ptr) kernelbase.ScrollConsoleScreenBufferW
