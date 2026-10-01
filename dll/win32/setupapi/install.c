@@ -2565,6 +2565,7 @@ BOOL WINAPI SetupCopyOEMInfW(
         LPWSTR pFullFileName = NULL;
         LPWSTR pFileName; /* Pointer into pFullFileName buffer */
         HANDLE hSourceFile = INVALID_HANDLE_VALUE;
+        BOOL HasSourcePath = strchrW(SourceInfFileName, '\\') || strchrW(SourceInfFileName, '/');
 
         if (OEMSourceMediaType == SPOST_PATH || OEMSourceMediaType == SPOST_URL)
             FIXME("OEMSourceMediaType 0x%lx ignored\n", OEMSourceMediaType);
@@ -2665,12 +2666,14 @@ BOOL WINAPI SetupCopyOEMInfW(
                     {
                         if (GetFileSizeEx(hDestFile, &DestFileSize)
                          && DestFileSize.QuadPart == SourceFileSize.QuadPart
+                         && SetFilePointer(hSourceFile, 0, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER
                          && !compare_files(hSourceFile, hDestFile))
                         {
                             TRACE("%s already exists as %s\n",
                                 debugstr_w(SourceInfFileName), debugstr_w(pFileName));
                             AlreadyExists = TRUE;
                         }
+                        CloseHandle(hDestFile);
                     }
                 } while (!AlreadyExists && FindNextFileW(hSearch, &FindFileData));
             }
@@ -2699,6 +2702,39 @@ BOOL WINAPI SetupCopyOEMInfW(
                 SetLastError(ERROR_FILE_EXISTS);
                 strcpyW(DestinationInfFileName, pFileName);
             }
+            if (HasSourcePath)
+            {
+                DWORD LastError = GetLastError();
+
+                SETUPAPI_StageDriverPackage(SourceInfFileName);
+                SetLastError(LastError);
+            }
+            goto cleanup;
+        }
+        else if (AlreadyExists)
+        {
+            len = strlenW(pFullFileName) + 1;
+            if (RequiredSize)
+                *RequiredSize = len;
+            if (DestinationInfFileName)
+            {
+                if (DestinationInfFileNameSize < len)
+                {
+                    SetLastError(ERROR_INSUFFICIENT_BUFFER);
+                    goto cleanup;
+                }
+                strcpyW(DestinationInfFileName, pFullFileName);
+                if (DestinationInfFileNameComponent)
+                    *DestinationInfFileNameComponent = &DestinationInfFileName[pFileName - pFullFileName];
+            }
+
+            if (HasSourcePath && !SETUPAPI_StageDriverPackage(SourceInfFileName))
+                goto cleanup;
+
+            if ((CopyStyle & SP_COPY_DELETESOURCE) && !DeleteFileW(SourceInfFileName))
+                goto cleanup;
+
+            ret = TRUE;
             goto cleanup;
         }
 
@@ -2738,6 +2774,15 @@ BOOL WINAPI SetupCopyOEMInfW(
         if (!CopyFileW(SourceInfFileName, pFullFileName, TRUE))
         {
             TRACE("CopyFileW() failed with error 0x%lx\n", GetLastError());
+            goto cleanup;
+        }
+
+        if (HasSourcePath && !SETUPAPI_StageDriverPackage(SourceInfFileName))
+        {
+            DWORD LastError = GetLastError();
+
+            DeleteFileW(pFullFileName);
+            SetLastError(LastError);
             goto cleanup;
         }
 

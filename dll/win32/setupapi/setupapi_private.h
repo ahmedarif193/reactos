@@ -363,6 +363,24 @@ DereferenceInfFile(struct InfFileDetails* infFile);
 BOOL
 DestroyDriverInfoElement(struct DriverInfoElement* driverInfo);
 
+BOOL
+SETUPAPI_StageDriverPackage(
+    IN PCWSTR SourceInfFileName);
+
+BOOL
+SETUPAPI_FindDriverStoreInf(
+    IN PCWSTR FileName,
+    OUT PWSTR StoreInfFileName);
+
+PCWSTR
+SETUPAPI_GetInfSourceDirectory(
+    IN const struct InfFileDetails *InfFileDetails,
+    OUT PWSTR Buffer);
+
+BOOL
+SETUPAPI_DeleteDriverStorePackage(
+    IN PCWSTR PublishedInfFileName);
+
 /* install.c */
 
 BOOL

@@ -695,10 +695,34 @@ BOOL WINAPI SetupGetInfDriverStoreLocationW(
     PCWSTR LocaleName, PWSTR ReturnBuffer, DWORD ReturnBufferSize,
     PDWORD RequiredSize)
 {
-    FIXME("stub: %s %p %s %p %lu %p\n", debugstr_w(FileName), AlternativePlatformInfo, debugstr_w(LocaleName), ReturnBuffer, ReturnBufferSize, RequiredSize);
+    WCHAR StoreInf[MAX_PATH];
+    DWORD Length;
 
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    TRACE("%s %p %s %p %lu %p\n", debugstr_w(FileName), AlternativePlatformInfo, debugstr_w(LocaleName), ReturnBuffer, ReturnBufferSize, RequiredSize);
+
+    if (!FileName || (!ReturnBuffer && ReturnBufferSize))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!SETUPAPI_FindDriverStoreInf(FileName, StoreInf))
+    {
+        SetLastError(ERROR_NOT_FOUND);
+        return FALSE;
+    }
+
+    Length = lstrlenW(StoreInf) + 1;
+    if (RequiredSize)
+        *RequiredSize = Length;
+    if (ReturnBufferSize < Length)
+    {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    lstrcpyW(ReturnBuffer, StoreInf);
+    return TRUE;
 }
 
 BOOL WINAPI SetupQueryInfVersionInformationA(SP_INF_INFORMATION *info, UINT index, const char *key, char *buff,

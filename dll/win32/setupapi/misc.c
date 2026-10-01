@@ -1211,10 +1211,51 @@ pSetupGetVersionInfoFromImage(LPWSTR lpFileName,
 /***********************************************************************
  *      SetupUninstallOEMInfW  (SETUPAPI.@)
  */
+static BOOL
+IsOemInfInUse(
+    IN PCWSTR InfFileName)
+{
+    SP_DEVINFO_DATA DeviceInfoData;
+    HDEVINFO DeviceInfoSet;
+    BOOL InUse = FALSE;
+    DWORD Index;
+
+    DeviceInfoSet = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+    if (DeviceInfoSet == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    DeviceInfoData.cbSize = sizeof(DeviceInfoData);
+    for (Index = 0; !InUse && SetupDiEnumDeviceInfo(DeviceInfoSet, Index, &DeviceInfoData); Index++)
+    {
+        WCHAR InfPath[MAX_PATH];
+        DWORD Size = sizeof(InfPath) - sizeof(WCHAR);
+        DWORD Type;
+        HKEY hKey;
+
+        hKey = SetupDiOpenDevRegKey(DeviceInfoSet, &DeviceInfoData, DICS_FLAG_GLOBAL, 0, DIREG_DRV, KEY_QUERY_VALUE);
+        if (hKey == INVALID_HANDLE_VALUE)
+            continue;
+
+        if (RegQueryValueExW(hKey, REGSTR_VAL_INFPATH, NULL, &Type, (LPBYTE)InfPath, &Size) == ERROR_SUCCESS &&
+            Type == REG_SZ)
+        {
+            InfPath[Size / sizeof(WCHAR)] = UNICODE_NULL;
+            InUse = !strcmpiW(InfPath, InfFileName);
+        }
+        RegCloseKey(hKey);
+    }
+
+    SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+    return InUse;
+}
+
 BOOL WINAPI SetupUninstallOEMInfW( PCWSTR inf_file, DWORD flags, PVOID reserved )
 {
     static const WCHAR infW[] = {'\\','i','n','f','\\',0};
     WCHAR target[MAX_PATH];
+    PCWSTR digits;
+    DWORD attributes;
+    UINT length;
 
     TRACE("%s, 0x%08x, %p\n", debugstr_w(inf_file), flags, reserved);
 
@@ -1224,17 +1265,46 @@ BOOL WINAPI SetupUninstallOEMInfW( PCWSTR inf_file, DWORD flags, PVOID reserved 
         return FALSE;
     }
 
-    if (!GetWindowsDirectoryW( target, sizeof(target)/sizeof(WCHAR) )) return FALSE;
+    length = GetWindowsDirectoryW( target, sizeof(target)/sizeof(WCHAR) );
+    if (!length) return FALSE;
+    if (length + strlenW(infW) + strlenW(inf_file) >= sizeof(target)/sizeof(WCHAR))
+    {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return FALSE;
+    }
 
     strcatW( target, infW );
     strcatW( target, inf_file );
 
-    if (flags & SUOI_FORCEDELETE)
-        return DeleteFileW(target);
+    attributes = GetFileAttributesW(target);
+    if (!inf_file[0] || strchrW(inf_file, '\\') || strchrW(inf_file, '/') ||
+        attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
+    {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return FALSE;
+    }
 
-    FIXME("not deleting %s\n", debugstr_w(target));
+    digits = inf_file + 3;
+    if (strncmpiW(inf_file, L"oem", 3) || !isdigitW(*digits))
+    {
+        SetLastError(ERROR_NOT_AN_INSTALLED_OEM_INF);
+        return FALSE;
+    }
+    while (isdigitW(*digits)) digits++;
+    if (strcmpiW(digits, L".inf"))
+    {
+        SetLastError(ERROR_NOT_AN_INSTALLED_OEM_INF);
+        return FALSE;
+    }
 
-    return TRUE;
+    if (!(flags & SUOI_FORCEDELETE) && IsOemInfInUse(inf_file))
+    {
+        SetLastError(ERROR_INF_IN_USE_BY_DEVICES);
+        return FALSE;
+    }
+
+    SETUPAPI_DeleteDriverStorePackage(target);
+    return DeleteFileW(target);
 }
 
 /***********************************************************************

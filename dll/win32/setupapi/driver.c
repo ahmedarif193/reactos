@@ -1,7 +1,7 @@
 /*
  * SetupAPI driver-related functions
  *
- * Copyright 2005-2006 Hervé Poussineau (hpoussin@reactos.org)
+ * Copyright 2005-2006 Hervï¿½ Poussineau (hpoussin@reactos.org)
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -2035,7 +2035,9 @@ SetupDiGetDriverInstallParamsW(
         if (SetupDiGetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams))
         {
             struct DriverInfoElement *driverInfo;
-            driverInfo = (struct DriverInfoElement *)InstallParams.ClassInstallReserved;
+            driverInfo = (struct DriverInfoElement *)DriverInfoData->Reserved;
+            if (driverInfo == NULL)
+                driverInfo = (struct DriverInfoElement *)InstallParams.ClassInstallReserved;
             if (driverInfo == NULL)
                 SetLastError(ERROR_NO_DRIVER_SELECTED);
             else
@@ -2122,6 +2124,8 @@ SetupDiInstallDriverFiles(
         PVOID InstallMsgHandler;
         PVOID InstallMsgHandlerContext;
         PVOID Context = NULL;
+        WCHAR SourceBuffer[MAX_PATH];
+        PCWSTR SourceDirectory;
 
         InstallParams.cbSize = sizeof(SP_DEVINSTALL_PARAMS_W);
         ret = SetupDiGetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams);
@@ -2134,6 +2138,8 @@ SetupDiInstallDriverFiles(
             SetLastError(ERROR_NO_DRIVER_SELECTED);
             goto done;
         }
+
+        SourceDirectory = SETUPAPI_GetInfSourceDirectory(SelectedDriver->InfFileDetails, SourceBuffer);
 
         ret = SetupDiGetActualSectionToInstallW(
             SelectedDriver->InfFileDetails->hInf,
@@ -2157,7 +2163,7 @@ SetupDiInstallDriverFiles(
         }
         ret = SetupInstallFromInfSectionW(InstallParams.hwndParent,
             SelectedDriver->InfFileDetails->hInf, SectionName,
-            SPINST_FILES, NULL, SelectedDriver->InfFileDetails->DirectoryName, SP_COPY_NEWER,
+            SPINST_FILES, NULL, SourceDirectory, SP_COPY_NEWER,
             InstallMsgHandler, InstallMsgHandlerContext,
             DeviceInfoSet, DeviceInfoData);
         if (!ret)
@@ -2167,7 +2173,7 @@ SetupDiInstallDriverFiles(
         lstrcatW(SectionName, DotCoInstallers);
         ret = SetupInstallFromInfSectionW(InstallParams.hwndParent,
             SelectedDriver->InfFileDetails->hInf, SectionName,
-            SPINST_FILES, NULL, SelectedDriver->InfFileDetails->DirectoryName, SP_COPY_NEWER,
+            SPINST_FILES, NULL, SourceDirectory, SP_COPY_NEWER,
             InstallMsgHandler, InstallMsgHandlerContext,
             DeviceInfoSet, DeviceInfoData);
         if (!ret)

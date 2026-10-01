@@ -5799,6 +5799,65 @@ ResetDevice(
 }
 
 static BOOL
+RestartDevice(
+        IN HDEVINFO DeviceInfoSet,
+        IN PSP_DEVINFO_DATA DeviceInfoData,
+        IN BOOL RestartStarted,
+        IN BOOL PreviouslyInstalled)
+{
+    struct DeviceInfoSet *set = (struct DeviceInfoSet *)DeviceInfoSet;
+    struct DeviceInfo *deviceInfo = (struct DeviceInfo *)DeviceInfoData->Reserved;
+    SP_DEVINSTALL_PARAMS_W InstallParams;
+    ULONG Status, Problem;
+    DEVINST Parent;
+    CONFIGRET cr;
+
+    cr = CM_Get_DevNode_Status_Ex(&Status, &Problem, deviceInfo->dnDevInst, 0, set->hMachine);
+    if (cr != CR_SUCCESS)
+        return TRUE;
+
+    if (Status & DN_STARTED)
+    {
+        if (!RestartStarted)
+        {
+            if (!PreviouslyInstalled)
+                return TRUE;
+
+            cr = CR_FAILURE;
+            goto NeedReboot;
+        }
+
+        cr = CM_Query_And_Remove_SubTree_ExW(deviceInfo->dnDevInst,
+                                             NULL,
+                                             NULL,
+                                             0,
+                                             CM_REMOVE_UI_NOT_OK,
+                                             set->hMachine);
+    }
+
+    if (cr == CR_SUCCESS)
+    {
+        cr = CM_Setup_DevNode_Ex(deviceInfo->dnDevInst, CM_SETUP_DEVNODE_READY, set->hMachine);
+        if (cr != CR_SUCCESS &&
+            CM_Get_Parent_Ex(&Parent, deviceInfo->dnDevInst, 0, set->hMachine) == CR_SUCCESS)
+        {
+            cr = CM_Reenumerate_DevNode_Ex(Parent, CM_REENUMERATE_SYNCHRONOUS, set->hMachine);
+        }
+    }
+
+    if (cr == CR_SUCCESS)
+        return TRUE;
+
+NeedReboot:
+    InstallParams.cbSize = sizeof(InstallParams);
+    if (!SetupDiGetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams))
+        return FALSE;
+
+    InstallParams.Flags |= DI_NEEDREBOOT;
+    return SetupDiSetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams);
+}
+
+static BOOL
 HasAssociatedService(
         IN HDEVINFO DeviceInfoSet,
         IN PSP_DEVINFO_DATA DeviceInfoData)
@@ -5949,7 +6008,7 @@ SetupDiChangeState(
         }
         case DICS_PROPCHANGE:
         {
-            ret = ResetDevice(DeviceInfoSet, DeviceInfoData);
+            ret = RestartDevice(DeviceInfoSet, DeviceInfoData, TRUE, TRUE);
             break;
         }
         default:
@@ -6018,6 +6077,7 @@ SetupDiRegisterCoDeviceInstallers(
         DWORD SectionNameLength = 0;
         HKEY hKey = INVALID_HANDLE_VALUE;
         PVOID Context = NULL;
+        WCHAR SourceBuffer[MAX_PATH];
 
         InstallParams.cbSize = sizeof(SP_DEVINSTALL_PARAMS_W);
         Result = SetupDiGetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams);
@@ -6068,7 +6128,7 @@ SetupDiRegisterCoDeviceInstallers(
         }
         Result = SETUPAPI_InstallFromInfSectionWithIncludes(InstallParams.hwndParent,
             SelectedDriver->InfFileDetails->hInf, SectionName,
-            DoAction, hKey, SelectedDriver->InfFileDetails->DirectoryName, SP_COPY_NEWER,
+            DoAction, hKey, SETUPAPI_GetInfSourceDirectory(SelectedDriver->InfFileDetails, SourceBuffer), SP_COPY_NEWER,
             SetupDefaultQueueCallbackW, Context,
             DeviceInfoSet, DeviceInfoData);
         if (!Result)
@@ -6169,6 +6229,8 @@ SetupDiInstallDevice(
     LARGE_INTEGER fullVersion;
     LONG rc;
     PVOID Context = NULL;
+    WCHAR SourceBuffer[MAX_PATH];
+    BOOL PreviouslyInstalled = FALSE;
     BOOL ret = FALSE; /* Return value */
 
     TRACE("%s(%p %p)\n", __FUNCTION__, DeviceInfoSet, DeviceInfoData);
@@ -6315,6 +6377,8 @@ SetupDiInstallDevice(
     if (hKey == INVALID_HANDLE_VALUE)
         goto cleanup;
 
+    PreviouslyInstalled = RegQueryValueExW(hKey, REGSTR_VAL_INFPATH, NULL, NULL, NULL, NULL) == ERROR_SUCCESS;
+
     /* Install main section */
     DoAction = 0;
     if (!(InstallParams.FlagsEx & DI_FLAGSEX_NO_DRVREG_MODIFY))
@@ -6329,7 +6393,7 @@ SetupDiInstallDevice(
     *pSectionName = '\0';
     Result = SETUPAPI_InstallFromInfSectionWithIncludes(InstallParams.hwndParent,
         SelectedDriver->InfFileDetails->hInf, SectionName,
-        DoAction, hKey, SourceInfFileDetails->DirectoryName, SP_COPY_NEWER,
+        DoAction, hKey, SETUPAPI_GetInfSourceDirectory(SourceInfFileDetails, SourceBuffer), SP_COPY_NEWER,
         SetupDefaultQueueCallbackW, Context,
         DeviceInfoSet, DeviceInfoData);
     if (!Result)
@@ -6472,7 +6536,7 @@ SetupDiInstallDevice(
         !RebootRequired &&
         !(InstallParams.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT | DI_DONOTCALLCONFIGMG)))
     {
-        ret = ResetDevice(DeviceInfoSet, DeviceInfoData);
+        ret = RestartDevice(DeviceInfoSet, DeviceInfoData, FALSE, PreviouslyInstalled);
     }
     else
     {
@@ -6944,8 +7008,6 @@ SetupDiRestartDevices(
     PSP_DEVINFO_DATA DeviceInfoData)
 {
     struct DeviceInfoSet *set = (struct DeviceInfoSet *)DeviceInfoSet;
-    struct DeviceInfo *devInfo;
-    CONFIGRET cr;
 
     TRACE("%s(%p %p)\n", __FUNCTION__, DeviceInfoSet, DeviceInfoData);
 
@@ -6967,16 +7029,7 @@ SetupDiRestartDevices(
         return FALSE;
     }
 
-    devInfo = (struct DeviceInfo *)DeviceInfoData->Reserved;
-
-    cr = CM_Enable_DevNode_Ex(devInfo->dnDevInst, 0, set->hMachine);
-    if (cr != CR_SUCCESS)
-    {
-        SetLastError(GetErrorCodeFromCrCode(cr));
-        return FALSE;
-    }
-
-    return TRUE;
+    return RestartDevice(DeviceInfoSet, DeviceInfoData, FALSE, TRUE);
 }
 
 /***********************************************************************
