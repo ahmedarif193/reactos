@@ -126,7 +126,7 @@ CloneCheckCache(TEST_WORLD *World, MI_ADDRESS_SPACE *Space, ULONG64 Va, ULONG Ca
     CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == Cache);
     Frame = (ULONG)(Physical >> PAGE_SHIFT);
     CHECK((ULONG)MI_ATOMIC_READ32(&World->System.Pfn.Pfn[Frame].CacheFlags) == Cache);
-    CHECK(World->Machine.FrameCache[Frame] == Cache);
+    CHECK(World->Machine.FrameCache[Frame] == (Frame < World->System.Pfn.DirectFrames ? Cache : 0));
     CHECK(NT_SUCCESS(MiQueryVirtualMemory(Space, Va, &Info)));
     CHECK(Info.Protect != MI_PROT_NOACCESS && (Info.Protect & MI_PROT_NOCACHE) == Cache);
 }
@@ -180,7 +180,7 @@ ClonePagingAndMdl(ULONG Cache)
     CHECK(MiTrimAddressSpace(&Child, 16, TRUE) == 1);
     while (MiWriteModifiedPages(&World.System, 1024) != 0)
         ;
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[Count++] = Frame;
     for (i = 0; i < Count; i++)
         MiPfnShareDecrement(&World.System.Pfn, Held[i], TRUE);
@@ -254,7 +254,7 @@ CloneSectionsAndRollback(void)
     CHECK(Child.VadRoot.NodeCount == 0 && Parent.CloneRoot.NodeCount == 0);
     CHECK(World.System.CommittedPages == Commit);
     World.System.CommitLimit = 1024;
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[Count++] = Frame;
     CHECK(Count > 2);
     for (i = 0; i < 2; i++)

@@ -51,6 +51,10 @@ typedef struct _MACHINE
     ULONG64 SystemRoot;
     ULONG CpuCount;
     MACHINE_CPU Cpu[MACHINE_MAX_CPUS];
+    ULONG64 DirectFrames;
+    PUCHAR WindowShadow;
+    PUCHAR WindowOriginal;
+    ULONG WindowSlots;
     BOOLEAN HardwareAccessDirty;
     BOOLEAN StrictTlb;
     BOOLEAN TlbDisabled;
@@ -64,6 +68,7 @@ typedef struct _MACHINE
     volatile LONG StaleTlbUses;
     volatile LONG BreakBeforeMakeViolations;
     volatile LONG BadFrameAccesses;
+    volatile LONG DirectViolations;
 } MACHINE, *PMACHINE;
 
 extern PMACHINE MachineCurrent;

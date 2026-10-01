@@ -535,7 +535,7 @@ SectionPageFileBacked(void)
     CHECK(MiWriteModifiedPages(&World.System, 1000) == 128);
     CHECK(World.Paging.PageFile.SlotsInUse == 128);
 
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[HeldCount++] = Frame;
     CHECK(MiPfnListCount(&World.System.Pfn, MiPageStandby) == 0);
     for (i = 0; i < HeldCount; i++)
@@ -855,11 +855,11 @@ SectionSystemSpaceView(void)
 
     CHECK(NT_SUCCESS(MiUnmapView(System, Base)));
     MiSegmentDereference(Segment);
-    CHECK(MI_ATOMIC_READ64(&System->PageTablePages) == 0);
+    CHECK(MI_ATOMIC_READ64(&System->PageTablePages) == World.WindowTables);
 
     MiPfnDrainCaches(&World.System.Pfn);
     CHECK(WorldCheck(&World) == 0);
-    CHECK(MiPfnAvailablePages(&World.System.Pfn) == 1024 - 2);
+    CHECK(MiPfnAvailablePages(&World.System.Pfn) == 1024 - 2 - World.WindowPages);
     FileDestroy(&File);
     WorldDestroy(&World);
 }
@@ -1395,7 +1395,7 @@ SectionUncachedLargePages(void)
             ULONG Frame = Segment->LargeFrames[0] + Index;
 
             CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
-            CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+            CHECK(World.Machine.FrameCache[Frame] == (Frame < World.System.Pfn.DirectFrames ? MI_LEAF_NOCACHE : 0));
         }
         CHECK(NT_SUCCESS(MiUnmapView(&Space, Base)));
     }
@@ -1446,7 +1446,7 @@ SectionUncachedPageFile(void)
     CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
     Frame = (ULONG)(Physical >> PAGE_SHIFT);
     CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
-    CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+    CHECK(World.Machine.FrameCache[Frame] == (Frame < World.System.Pfn.DirectFrames ? MI_LEAF_NOCACHE : 0));
     CHECK(MiPtTranslate(&B, BaseB, &Physical, &Leaf));
     CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
     CHECK((Physical >> PAGE_SHIFT) == Frame);
@@ -1501,12 +1501,12 @@ SectionUncachedPageFile(void)
     CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
     Frame = (ULONG)(Physical >> PAGE_SHIFT);
     CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
-    CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+    CHECK(World.Machine.FrameCache[Frame] == (Frame < World.System.Pfn.DirectFrames ? MI_LEAF_NOCACHE : 0));
 
     CHECK(MiTrimAddressSpace(&A, 256, TRUE) == 2);
     CHECK(MiTrimAddressSpace(&B, 256, TRUE) == 1);
     CHECK(MiWriteModifiedPages(&World.System, 256) == 2);
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
     {
         Held[HeldCount++] = Frame;
         CHECK(World.Machine.FrameCache[Frame] == 0);
@@ -1518,13 +1518,13 @@ SectionUncachedPageFile(void)
     CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
     Frame = (ULONG)(Physical >> PAGE_SHIFT);
     CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
-    CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+    CHECK(World.Machine.FrameCache[Frame] == (Frame < World.System.Pfn.DirectFrames ? MI_LEAF_NOCACHE : 0));
     CHECK(UserRead64(&World, 1, BaseB, &Status) == 0x5EC70CB0 && NT_SUCCESS(Status));
     CHECK(MiPtTranslate(&B, BaseB, &Physical, &Leaf));
     CHECK((MiArchPteLeafFlags(Leaf) & MI_LEAF_CACHE_MASK) == MI_LEAF_NOCACHE);
     Frame = (ULONG)(Physical >> PAGE_SHIFT);
     CHECK(World.System.Pfn.Pfn[Frame].CacheFlags == MI_LEAF_NOCACHE);
-    CHECK(World.Machine.FrameCache[Frame] == MI_LEAF_NOCACHE);
+    CHECK(World.Machine.FrameCache[Frame] == (Frame < World.System.Pfn.DirectFrames ? MI_LEAF_NOCACHE : 0));
 
 Release:
     if (BaseCopy != 0)

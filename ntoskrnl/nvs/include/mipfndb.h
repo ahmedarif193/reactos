@@ -13,6 +13,7 @@
 
 typedef ULONG_PTR MI_FRAME_NUMBER, *PMI_FRAME_NUMBER;
 #define MI_PFN_SHARDS             16
+#define MI_PFN_ZONES              2
 #define MI_PFN_SHARD_SHIFT        10
 #define MI_PFN_LIST_SHARD_SHIFT   4
 #define MI_PFN_CPU_CACHES         64
@@ -30,6 +31,7 @@ typedef ULONG_PTR MI_FRAME_NUMBER, *PMI_FRAME_NUMBER;
 
 #define MI_ALLOCATE_ZEROED        0x01
 #define MI_ALLOCATE_NO_RECLAIM    0x02
+#define MI_ALLOCATE_HIGH          0x04
 #define MI_PFN_CACHE_UNASSIGNED   (-1L)
 
 typedef enum _MI_PAGE_STATE
@@ -95,6 +97,20 @@ typedef struct _MI_PFN_CPU_CACHE
     ULONG Frame[MI_PFN_CACHE_DEPTH];
 } MI_CACHE_ALIGNED MI_PFN_CPU_CACHE, *PMI_PFN_CPU_CACHE;
 
+typedef struct _MI_PFN_WINDOW
+{
+    MI_SPINLOCK Lock;
+    ULONG64 Base;
+    PMI_PTE *Slot;
+    PUCHAR State;
+    ULONG SlotCount;
+    ULONG Hint;
+    ULONG Busy;
+    ULONG Stale;
+    volatile LONG64 Maps;
+    volatile LONG64 Flushes;
+} MI_PFN_WINDOW, *PMI_PFN_WINDOW;
+
 struct _MI_PFN_DATABASE;
 
 typedef VOID (*MI_PFN_REPURPOSE_ROUTINE)(_Inout_ struct _MI_PFN_DATABASE *Db, _In_ ULONG Frame);
@@ -106,7 +122,9 @@ typedef struct _MI_PFN_DATABASE
     ULONG CacheCount;
     MI_PFN_REPURPOSE_ROUTINE Repurpose;
     PVOID Owner;
-    MI_PFN_SHARD Shard[MI_PFN_SHARDS];
+    ULONG DirectFrames;
+    MI_PFN_WINDOW Window;
+    MI_PFN_SHARD Shard[MI_PFN_ZONES * MI_PFN_SHARDS];
     MI_PFN_CPU_CACHE Cache[MI_PFN_CPU_CACHES];
     volatile LONG64 Repurposed;
     ULONG ContiguousHint;
@@ -137,6 +155,28 @@ MiPfnMappingFlags(_In_ PMI_PFN_DATABASE Db, _In_ MI_FRAME_NUMBER Frame, _In_ ULO
 }
 
 VOID MiPfnDbInitialize(_Out_ PMI_PFN_DATABASE Db, _In_ PMI_PFN Array, _In_ ULONG FrameCount, _In_ ULONG CpuCount);
+VOID MiPfnDbSetDirectFrames(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG64 DirectFrames);
+VOID MiPfnWindowAttach(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG64 Base, _In_ PMI_PTE *Slots, _In_ PUCHAR States,
+                       _In_ ULONG SlotCount);
+PVOID MiPfnWindowMap(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);
+VOID MiPfnWindowUnmap(_Inout_ PMI_PFN_DATABASE Db, _In_ PVOID Mapping);
+
+static __inline PVOID
+MiPfnMapFrame(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame)
+{
+    if (Frame < Db->DirectFrames)
+        return MiArchMapFrame(Frame);
+    return MiPfnWindowMap(Db, Frame);
+}
+
+static __inline VOID
+MiPfnUnmapFrame(_Inout_ PMI_PFN_DATABASE Db, _In_ PVOID Mapping)
+{
+    if (Db->DirectFrames >= Db->FrameCount)
+        MiArchUnmapFrame(Mapping);
+    else
+        MiPfnWindowUnmap(Db, Mapping);
+}
 VOID MiPfnMarkInUse(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG FirstFrame, _In_ ULONG Count);
 VOID MiPfnDbAddRange(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG FirstFrame, _In_ ULONG Count);
 ULONG MiPfnAllocateContiguous(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Count, _In_ ULONG LowestFrame,

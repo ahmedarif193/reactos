@@ -62,7 +62,7 @@ WorldExpectClean(TEST_WORLD *World, ULONG Frames)
     CHECK(WorldCheck(World) == 0);
     CHECK(MI_ATOMIC_READ64(&World->System.CommittedPages) == 0);
     CHECK(MiPfnListCount(&World->System.Pfn, MiPageModified) == 0);
-    CHECK(MiPfnAvailablePages(&World->System.Pfn) == Frames - 2);
+    CHECK(MiPfnAvailablePages(&World->System.Pfn) == Frames - 2 - World->WindowPages);
     if (World->System.PageFile != NULL)
         CHECK(World->System.PageFile->SlotsInUse == 0);
 }
@@ -1058,7 +1058,7 @@ FaultTableOutOfMemory(void)
             CHECK(NT_SUCCESS(MiMapView(&Space, Segment, &Base, 0, &Size, MI_PROT_READWRITE, 0)));
         }
 
-        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, MI_ALLOCATE_NO_RECLAIM)) != MI_FRAME_INVALID)
+        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, MI_ALLOCATE_NO_RECLAIM | TEST_ANY_FRAME)) != MI_FRAME_INVALID)
             Held[Count++] = Frame;
         for (i = 0; i < Available; i++)
             MiPfnFreePage(&World.System.Pfn, Held[--Count]);
@@ -1291,7 +1291,7 @@ PagingInPageError(void)
     CHECK(MiTrimAddressSpace(&Space, 16, TRUE) == 16);
     CHECK(MiWriteModifiedPages(&World.System, 16) == 16);
 
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[HeldCount++] = Frame;
 
     CHECK(MiPfnListCount(&World.System.Pfn, MiPageStandby) == 0);
@@ -1344,7 +1344,7 @@ PagingCleanPrivateAccounting(void)
         CHECK(MI_ATOMIC_READ64(&Spaces[i].PrivatePages) == 16);
     }
 
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[Count++] = Frame;
 
     CHECK(MI_ATOMIC_READ64(&World.System.Pfn.Repurposed) == 32);

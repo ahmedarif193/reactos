@@ -14,10 +14,19 @@ FORCEINLINE
 PMI_PFN_SHARD
 MiPfnShardOf(PMI_PFN_DATABASE Db, ULONG Frame, UCHAR State)
 {
-    if (State == MiPageStandby || State == MiPageModified)
-        return &Db->Shard[(Frame >> MI_PFN_LIST_SHARD_SHIFT) & (MI_PFN_SHARDS - 1)];
+    ULONG Zone = (Frame < Db->DirectFrames) ? 0 : MI_PFN_SHARDS;
 
-    return &Db->Shard[(Frame >> MI_PFN_SHARD_SHIFT) & (MI_PFN_SHARDS - 1)];
+    if (State == MiPageStandby || State == MiPageModified)
+        return &Db->Shard[Zone + ((Frame >> MI_PFN_LIST_SHARD_SHIFT) & (MI_PFN_SHARDS - 1))];
+
+    return &Db->Shard[Zone + ((Frame >> MI_PFN_SHARD_SHIFT) & (MI_PFN_SHARDS - 1))];
+}
+
+FORCEINLINE
+ULONG
+MiPfnShardCount(PMI_PFN_DATABASE Db)
+{
+    return (Db->DirectFrames < Db->FrameCount) ? MI_PFN_ZONES * MI_PFN_SHARDS : MI_PFN_SHARDS;
 }
 
 static
@@ -153,13 +162,14 @@ ULONG
 MiPfnListPop(
     _Inout_ PMI_PFN_DATABASE Db,
     _In_ UCHAR State,
-    _In_ ULONG StartShard)
+    _In_ ULONG StartShard,
+    _In_ ULONG Zone)
 {
     ULONG Attempt;
 
     for (Attempt = 0; Attempt < MI_PFN_SHARDS; Attempt++)
     {
-        PMI_PFN_SHARD Shard = &Db->Shard[(StartShard + Attempt) & (MI_PFN_SHARDS - 1)];
+        PMI_PFN_SHARD Shard = &Db->Shard[Zone + ((StartShard + Attempt) & (MI_PFN_SHARDS - 1))];
         ULONG Frame;
         KIRQL OldIrql;
 
@@ -189,9 +199,10 @@ MiPfnDbInitialize(
     RtlZeroMemory(Db, sizeof(*Db));
     Db->Pfn = Array;
     Db->FrameCount = FrameCount;
+    Db->DirectFrames = FrameCount;
     Db->CacheCount = (CpuCount == 0) ? 1 : ((CpuCount > MI_PFN_CPU_CACHES) ? MI_PFN_CPU_CACHES : CpuCount);
 
-    for (i = 0; i < MI_PFN_SHARDS; i++)
+    for (i = 0; i < MI_PFN_ZONES * MI_PFN_SHARDS; i++)
     {
         MI_SPIN_INIT(&Db->Shard[i].Lock);
         for (j = 0; j < MiPageListCount; j++)
@@ -229,12 +240,13 @@ MiPfnDbAddRange(
 static
 VOID
 MiPfnZeroFrame(
+    _Inout_ PMI_PFN_DATABASE Db,
     _In_ ULONG Frame)
 {
-    PVOID Mapping = MiArchMapFrame(Frame);
+    PVOID Mapping = MiPfnMapFrame(Db, Frame);
 
     RtlZeroMemory(Mapping, PAGE_SIZE);
-    MiArchUnmapFrame(Mapping);
+    MiPfnUnmapFrame(Db, Mapping);
 }
 
 NTSTATUS
@@ -244,7 +256,7 @@ MiPfnSetCache(PMI_PFN_DATABASE Db, ULONG Frame, ULONG Flags)
 
     if (Flags & ~MI_LEAF_CACHE_MASK)
         return STATUS_INVALID_PARAMETER;
-    Status = MiArchSetFrameCache(Frame, Flags);
+    Status = (Frame < Db->DirectFrames) ? MiArchSetFrameCache(Frame, Flags) : STATUS_SUCCESS;
     if (NT_SUCCESS(Status))
         MI_ATOMIC_WRITE32(&Db->Pfn[Frame].CacheFlags, Flags);
     return Status;
@@ -356,6 +368,47 @@ MiPfnCacheDrain(
     Cache->Drains++;
 }
 
+static
+ULONG
+MiPfnReclaimStandby(
+    _Inout_ PMI_PFN_DATABASE Db,
+    _In_ ULONG StartShard,
+    _In_ ULONG Zone)
+{
+    ULONG Frame = MI_FRAME_INVALID;
+    ULONG Attempt;
+    KIRQL OldIrql;
+
+    for (Attempt = 0; Attempt < MI_PFN_SHARDS && Frame == MI_FRAME_INVALID; Attempt++)
+    {
+        ULONG Candidate;
+        PMI_PFN_SHARD Shard = &Db->Shard[Zone + ((StartShard + Attempt) & (MI_PFN_SHARDS - 1))];
+
+        if (MI_PEEK(Shard->List[MiPageStandby].Count) == 0)
+            continue;
+
+        MI_SPIN_ACQUIRE(&Shard->Lock, &OldIrql);
+        Candidate = Shard->List[MiPageStandby].Head;
+        MI_SPIN_RELEASE(&Shard->Lock, OldIrql);
+
+        if (Candidate == MI_FRAME_INVALID)
+            continue;
+
+        OldIrql = MiPfnLock(Db, Candidate);
+        if (Db->Pfn[Candidate].ReferenceCount == 0 && MiPfnListRemove(Db, Candidate, MiPageStandby))
+        {
+            if (Db->Repurpose != NULL)
+                Db->Repurpose(Db, Candidate);
+
+            Frame = Candidate;
+            MI_ATOMIC_ADD64(&Db->Repurposed, 1);
+        }
+        MiPfnUnlock(Db, Candidate, OldIrql);
+    }
+
+    return Frame;
+}
+
 ULONG
 MiPfnAllocatePage(
     _Inout_ PMI_PFN_DATABASE Db,
@@ -368,9 +421,30 @@ MiPfnAllocatePage(
     PMI_PFN Entry;
     KIRQL OldIrql;
 
-    if (Flags & MI_ALLOCATE_ZEROED)
+    if ((Flags & MI_ALLOCATE_HIGH) && MI_PEEK(Db->Window.SlotCount) != 0)
     {
-        Frame = MiPfnListPop(Db, MiPageZeroed, Cpu);
+        if (Flags & MI_ALLOCATE_ZEROED)
+        {
+            Frame = MiPfnListPop(Db, MiPageZeroed, Cpu, MI_PFN_SHARDS);
+            IsZero = (Frame != MI_FRAME_INVALID);
+        }
+
+        if (Frame == MI_FRAME_INVALID)
+            Frame = MiPfnListPop(Db, MiPageFree, Cpu, MI_PFN_SHARDS);
+
+        if (Frame == MI_FRAME_INVALID && !(Flags & MI_ALLOCATE_ZEROED))
+        {
+            Frame = MiPfnListPop(Db, MiPageZeroed, Cpu, MI_PFN_SHARDS);
+            IsZero = (Frame != MI_FRAME_INVALID);
+        }
+
+        if (Frame == MI_FRAME_INVALID && !(Flags & MI_ALLOCATE_NO_RECLAIM))
+            Frame = MiPfnReclaimStandby(Db, Cpu, MI_PFN_SHARDS);
+    }
+
+    if (Frame == MI_FRAME_INVALID && (Flags & MI_ALLOCATE_ZEROED))
+    {
+        Frame = MiPfnListPop(Db, MiPageZeroed, Cpu, 0);
         IsZero = (Frame != MI_FRAME_INVALID);
     }
 
@@ -385,7 +459,7 @@ MiPfnAllocatePage(
 
     if (Frame == MI_FRAME_INVALID && !(Flags & MI_ALLOCATE_ZEROED))
     {
-        Frame = MiPfnListPop(Db, MiPageZeroed, Cpu);
+        Frame = MiPfnListPop(Db, MiPageZeroed, Cpu, 0);
         IsZero = (Frame != MI_FRAME_INVALID);
     }
 
@@ -408,36 +482,7 @@ MiPfnAllocatePage(
     }
 
     if (Frame == MI_FRAME_INVALID && !(Flags & MI_ALLOCATE_NO_RECLAIM))
-    {
-        ULONG Attempt;
-
-        for (Attempt = 0; Attempt < MI_PFN_SHARDS && Frame == MI_FRAME_INVALID; Attempt++)
-        {
-            ULONG Candidate;
-            PMI_PFN_SHARD Shard = &Db->Shard[(Cpu + Attempt) & (MI_PFN_SHARDS - 1)];
-
-            if (MI_PEEK(Shard->List[MiPageStandby].Count) == 0)
-                continue;
-
-            MI_SPIN_ACQUIRE(&Shard->Lock, &OldIrql);
-            Candidate = Shard->List[MiPageStandby].Head;
-            MI_SPIN_RELEASE(&Shard->Lock, OldIrql);
-
-            if (Candidate == MI_FRAME_INVALID)
-                continue;
-
-            OldIrql = MiPfnLock(Db, Candidate);
-            if (Db->Pfn[Candidate].ReferenceCount == 0 && MiPfnListRemove(Db, Candidate, MiPageStandby))
-            {
-                if (Db->Repurpose != NULL)
-                    Db->Repurpose(Db, Candidate);
-
-                Frame = Candidate;
-                MI_ATOMIC_ADD64(&Db->Repurposed, 1);
-            }
-            MiPfnUnlock(Db, Candidate, OldIrql);
-        }
-    }
+        Frame = MiPfnReclaimStandby(Db, Cpu, 0);
 
     if (Frame == MI_FRAME_INVALID)
         return MI_FRAME_INVALID;
@@ -445,7 +490,7 @@ MiPfnAllocatePage(
     MiPfnRestoreCache(Db, Frame);
     if ((Flags & MI_ALLOCATE_ZEROED) && !IsZero)
     {
-        MiPfnZeroFrame(Frame);
+        MiPfnZeroFrame(Db, Frame);
         MI_ATOMIC_ADD64(&Db->ZeroedOnDemand, 1);
     }
 
@@ -565,8 +610,8 @@ MiPfnAllocateContiguous(
     ULONG Found = MI_FRAME_INVALID;
     ULONG Pass;
 
-    if (Count == 0 || HighestFrame >= Db->FrameCount)
-        HighestFrame = Db->FrameCount - 1;
+    if (Count == 0 || HighestFrame >= Db->DirectFrames)
+        HighestFrame = Db->DirectFrames - 1;
 
     if (Count == 0 || LowestFrame > HighestFrame || HighestFrame - LowestFrame + 1 < Count)
         return MI_FRAME_INVALID;
@@ -632,8 +677,8 @@ MiPfnAllocatePageInRange(
     ULONG Scanned;
     ULONG Span;
 
-    if (HighestFrame >= Db->FrameCount)
-        HighestFrame = Db->FrameCount - 1;
+    if (HighestFrame >= Db->DirectFrames)
+        HighestFrame = Db->DirectFrames - 1;
 
     if (LowestFrame > HighestFrame)
         return MI_FRAME_INVALID;
@@ -741,9 +786,15 @@ MiPfnFreeLocked(
     Entry->OriginalPte = 0;
     Entry->PteFrame = 0;
     Entry->UsedEntries = 0;
-    Entry->State = MiPageCached;
+    Entry->State = (Frame < Db->DirectFrames) ? MiPageCached : MiPageTransition;
     MI_ATOMIC_AND8(&Entry->Flags, MI_PFN_FLAG_LOCK);
     MiPfnUnlock(Db, Frame, LockIrql);
+
+    if (Frame >= Db->DirectFrames)
+    {
+        MiPfnListInsert(Db, Frame, MiPageFree, TRUE);
+        return;
+    }
 
     MI_SPIN_ACQUIRE(&Cache->Lock, &OldIrql);
     if (Cache->Depth == MI_PFN_CACHE_DEPTH)
@@ -786,7 +837,7 @@ MiPfnListCount(
     ULONG64 Total = 0;
     ULONG i;
 
-    for (i = 0; i < MI_PFN_SHARDS; i++)
+    for (i = 0; i < MiPfnShardCount(Db); i++)
     {
         KIRQL OldIrql;
 
@@ -1017,7 +1068,7 @@ MiPfnTakeModified(
 {
     ULONG Attempt;
 
-    for (Attempt = 0; Attempt < MI_PFN_SHARDS; Attempt++)
+    for (Attempt = 0; Attempt < MiPfnShardCount(Db); Attempt++)
     {
         PMI_PFN_SHARD Shard = &Db->Shard[Attempt];
         ULONG Frame;
@@ -1094,7 +1145,7 @@ MiPfnDbCheck(
     ULONG Errors = 0;
     ULONG s, l;
 
-    for (s = 0; s < MI_PFN_SHARDS; s++)
+    for (s = 0; s < MI_PFN_ZONES * MI_PFN_SHARDS; s++)
     {
         for (l = 0; l < MiPageListCount; l++)
         {
@@ -1145,4 +1196,121 @@ MiPfnDbCheck(
     }
 
     return Errors;
+}
+
+VOID
+MiPfnDbSetDirectFrames(
+    _Inout_ PMI_PFN_DATABASE Db,
+    _In_ ULONG64 DirectFrames)
+{
+    if (DirectFrames == 0 || DirectFrames > Db->FrameCount)
+        DirectFrames = Db->FrameCount;
+
+    Db->DirectFrames = (ULONG)DirectFrames;
+}
+
+#define MI_WINDOW_CLEAN 0
+#define MI_WINDOW_BUSY  1
+#define MI_WINDOW_STALE 2
+
+/* TODO: verify against the future PPC32 and ARM32 backends. */
+VOID
+MiPfnWindowAttach(
+    _Inout_ PMI_PFN_DATABASE Db,
+    _In_ ULONG64 Base,
+    _In_ PMI_PTE *Slots,
+    _In_ PUCHAR States,
+    _In_ ULONG SlotCount)
+{
+    PMI_PFN_WINDOW Window = &Db->Window;
+
+    MI_SPIN_INIT(&Window->Lock);
+    Window->Base = Base;
+    Window->Slot = Slots;
+    Window->State = States;
+    Window->Hint = 0;
+    Window->Busy = 0;
+    Window->Stale = 0;
+    RtlZeroMemory(States, SlotCount);
+    Window->SlotCount = SlotCount;
+}
+
+PVOID
+MiPfnWindowMap(
+    _Inout_ PMI_PFN_DATABASE Db,
+    _In_ ULONG Frame)
+{
+    PMI_PFN_WINDOW Window = &Db->Window;
+    LONG Cache = (MI_PFN_FLAGS(&Db->Pfn[Frame]) & MI_PFN_FLAG_PAGE_TABLE)
+                     ? 0 : MI_ATOMIC_READ32(&Db->Pfn[Frame].CacheFlags);
+    PVOID Mapping;
+    KIRQL OldIrql;
+    ULONG Index;
+
+    MI_ASSERT(Window->SlotCount != 0);
+    if (Cache == MI_PFN_CACHE_UNASSIGNED)
+        Cache = 0;
+
+    for (;;)
+    {
+        MI_SPIN_ACQUIRE(&Window->Lock, &OldIrql);
+
+        if (Window->Stale != 0 && Window->Busy + Window->Stale == Window->SlotCount)
+        {
+            MiArchTlbInvalidate(Window->Base, Window->SlotCount, TRUE);
+            for (Index = 0; Index < Window->SlotCount; Index++)
+            {
+                if (Window->State[Index] == MI_WINDOW_STALE)
+                    Window->State[Index] = MI_WINDOW_CLEAN;
+            }
+            Window->Stale = 0;
+            Window->Flushes++;
+        }
+
+        if (Window->Busy != Window->SlotCount)
+            break;
+
+        MI_SPIN_RELEASE(&Window->Lock, OldIrql);
+        MI_PAUSE();
+    }
+
+    Index = Window->Hint;
+    while (Window->State[Index] != MI_WINDOW_CLEAN)
+        Index = (Index + 1 == Window->SlotCount) ? 0 : Index + 1;
+
+    Window->State[Index] = MI_WINDOW_BUSY;
+    Window->Busy++;
+    Window->Hint = (Index + 1 == Window->SlotCount) ? 0 : Index + 1;
+    Window->Maps++;
+    MiArchPteWrite(Window->Slot[Index],
+                   MiArchPteMakeLeaf(Frame, MI_PROT_READWRITE,
+                                     MI_LEAF_GLOBAL | MI_LEAF_DIRTY | ((ULONG)Cache & MI_LEAF_CACHE_MASK)));
+    Mapping = MI_WINDOW_POINTER(Window, Index);
+    MI_SPIN_RELEASE(&Window->Lock, OldIrql);
+    return Mapping;
+}
+
+VOID
+MiPfnWindowUnmap(
+    _Inout_ PMI_PFN_DATABASE Db,
+    _In_ PVOID Mapping)
+{
+    PMI_PFN_WINDOW Window = &Db->Window;
+    ULONG64 Index = (Window->SlotCount != 0) ? MI_WINDOW_SLOT(Window, Mapping) : ~0ULL;
+    KIRQL OldIrql;
+
+    if (Index >= Window->SlotCount)
+    {
+        MiArchUnmapFrame(Mapping);
+        return;
+    }
+
+    MI_SPIN_ACQUIRE(&Window->Lock, &OldIrql);
+    MI_ASSERT(Window->State[Index] == MI_WINDOW_BUSY);
+    MI_WINDOW_RELEASE(Window, (ULONG)Index);
+    MiArchPteWrite(Window->Slot[Index], 0);
+    Window->State[Index] = MI_WINDOW_STALE;
+    Window->Busy--;
+    Window->Stale++;
+    MI_SPIN_RELEASE(&Window->Lock, OldIrql);
 }

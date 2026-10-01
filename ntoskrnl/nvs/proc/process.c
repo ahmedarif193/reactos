@@ -400,12 +400,13 @@ MiCopyVirtualMemory(
                 Status = MiProbeAndLockPages(TargetMdl, UserMode, TRUE);
                 if (NT_SUCCESS(Status))
                 {
-                    PUCHAR From = MiArchMapFrame(SourceMdl->Frames[0]);
-                    PUCHAR To = MiArchMapFrame(TargetMdl->Frames[0]);
+                    PMI_PFN_DATABASE Db = &SourceSpace->System->Pfn;
+                    PUCHAR From = MiPfnMapFrame(Db, SourceMdl->Frames[0]);
+                    PUCHAR To = MiPfnMapFrame(Db, TargetMdl->Frames[0]);
 
                     RtlCopyMemory(To + TargetMdl->ByteOffset, From + SourceMdl->ByteOffset, Chunk);
-                    MiArchUnmapFrame(To);
-                    MiArchUnmapFrame(From);
+                    MiPfnUnmapFrame(Db, To);
+                    MiPfnUnmapFrame(Db, From);
                     MiUnlockPages(TargetMdl);
                     *BytesCopied += Chunk;
                 }

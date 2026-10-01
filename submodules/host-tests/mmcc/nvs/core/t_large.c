@@ -349,10 +349,10 @@ LargeSectionFailures(void)
     MI_ADDRESS_SPACE Space, Child;
     PMI_SEGMENT Segment = NULL;
     MI_FILE_OPS Ops = { .Release = LargeSectionReleased };
-    ULONG Releases = 0, Held[2048], Count, Keep;
+    ULONG Releases = 0, Held[TEST_FRAMES(2048)], Count, Keep;
     ULONG64 Large, Available, Base, Size, Before;
 
-    WorldCreate(&World, 2048, 1, 8192);
+    WorldCreate(&World, TEST_FRAMES(2048), 1, 8192);
     ProcessCreate(&World, &Space);
     ProcessCreate(&World, &Child);
     Large = World.System.Arch->LargePageSize;
@@ -386,7 +386,7 @@ LargeSectionFailures(void)
         ULONG Frame;
 
         Count = 0;
-        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
             Held[Count++] = Frame;
         for (ULONG i = 0; i < Keep; i++)
             MiPfnShareDecrement(&World.System.Pfn, Held[--Count], TRUE);
@@ -410,7 +410,7 @@ LargeSectionFailures(void)
         ULONG Frame;
 
         Count = 0;
-        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
             Held[Count++] = Frame;
         for (ULONG i = 0; i < Keep; i++)
             MiPfnShareDecrement(&World.System.Pfn, Held[--Count], TRUE);
@@ -434,7 +434,7 @@ LargeSectionFailures(void)
 Finish:
     ProcessDestroy(&World, &Space);
     ProcessDestroy(&World, &Child);
-    WorldExpectClean(&World, 2048);
+    WorldExpectClean(&World, TEST_FRAMES(2048));
     WorldDestroy(&World);
 }
 

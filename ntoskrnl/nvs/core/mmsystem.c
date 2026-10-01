@@ -118,12 +118,55 @@ MiSystemInitialize(
     System->Arch = MiArchDescribe();
     System->CommitLimit = CommitLimit;
     MiPfnDbInitialize(&System->Pfn, PfnArray, FrameCount, CpuCount);
+    MiPfnDbSetDirectFrames(&System->Pfn, System->Arch->DirectFrameCount);
     System->Pfn.Owner = System;
     MI_SPIN_INIT(&System->SegmentListLock);
     InitializeListHead(&System->SegmentList);
     InitializeListHead(&System->UnusedSegmentList);
     System->Pfn.Repurpose = MiRepurposeStandbyPage;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+MiSystemAttachFrameWindow(
+    _Inout_ PMI_SYSTEM System,
+    _In_ ULONG64 Base)
+{
+    PMI_PFN_DATABASE Db = &System->Pfn;
+    ULONG SlotCount = PAGE_SIZE / sizeof(PMI_PTE);
+    ULONG SlotFrame, StateFrame, Index;
+    PMI_PTE *Slots;
+    NTSTATUS Status;
+
+    if (Db->DirectFrames >= Db->FrameCount || Db->Window.SlotCount != 0)
+        return STATUS_SUCCESS;
+
+    Status = MiPtPinSystemRange(&System->SystemSpace, Base, (ULONG64)SlotCount << PAGE_SHIFT);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    SlotFrame = MiPfnAllocatePage(Db, MI_ALLOCATE_ZEROED);
+    StateFrame = MiPfnAllocatePage(Db, MI_ALLOCATE_ZEROED);
+    if (SlotFrame == MI_FRAME_INVALID || StateFrame == MI_FRAME_INVALID)
+        goto Fail;
+
+    Slots = MiArchMapFrame(SlotFrame);
+    for (Index = 0; Index < SlotCount; Index++)
+    {
+        Slots[Index] = MiPtLookup(&System->SystemSpace, Base + ((ULONG64)Index << PAGE_SHIFT), NULL);
+        if (Slots[Index] == NULL)
+            goto Fail;
+    }
+
+    MiPfnWindowAttach(Db, Base, Slots, MiArchMapFrame(StateFrame), SlotCount);
+    return STATUS_SUCCESS;
+
+Fail:
+    if (SlotFrame != MI_FRAME_INVALID)
+        MiPfnShareDecrement(Db, SlotFrame, TRUE);
+    if (StateFrame != MI_FRAME_INVALID)
+        MiPfnShareDecrement(Db, StateFrame, TRUE);
+    return STATUS_NO_MEMORY;
 }
 
 NTSTATUS

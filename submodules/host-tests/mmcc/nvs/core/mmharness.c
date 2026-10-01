@@ -83,13 +83,41 @@ WorldEnableFaults(TEST_WORLD *World)
 void
 WorldCreate(TEST_WORLD *World, ULONG Frames, ULONG Cpus, LONG64 CommitLimit)
 {
+#ifdef MACHINE_HIGHMEM
+    WorldCreateZoned(World, Frames, Frames / 2, Cpus, CommitLimit);
+#else
+    WorldCreateZoned(World, Frames, 0, Cpus, CommitLimit);
+#endif
+}
+
+void
+WorldCreateZoned(TEST_WORLD *World, ULONG Frames, ULONG DirectFrames, ULONG Cpus, LONG64 CommitLimit)
+{
     memset(World, 0, sizeof(*World));
     MachineCreate(&World->Machine, Frames, Cpus);
     World->PfnArray = calloc(Frames, sizeof(MI_PFN));
     MiSystemInitialize(&World->System, World->PfnArray, Frames, Cpus, CommitLimit);
+    if (DirectFrames != 0)
+    {
+        World->Machine.DirectFrames = DirectFrames;
+        MiPfnDbSetDirectFrames(&World->System.Pfn, DirectFrames);
+    }
     MiPfnDbAddRange(&World->System.Pfn, 1, Frames - 1);
     if (!NT_SUCCESS(MiAddressSpaceCreate(&World->System, &World->System.SystemSpace)))
         abort();
+    if (DirectFrames != 0)
+    {
+        const MI_ARCH_DESCRIPTOR *Arch = World->System.Arch;
+        ULONG64 Base = Arch->SystemAddressStart + (Arch->SystemAddressEnd - Arch->SystemAddressStart) / 2;
+
+        Base &= ~(Arch->LargePageSize - 1);
+        if (!NT_SUCCESS(MiSystemAttachFrameWindow(&World->System, Base)))
+            abort();
+        MiPfnDrainCaches(&World->System.Pfn);
+        World->WindowPages = Frames - 2 - (ULONG)MiPfnAvailablePages(&World->System.Pfn);
+        World->WindowTables = MI_ATOMIC_READ64(&World->System.SystemSpace.PageTablePages);
+        World->WindowVads = (ULONG)World->System.SystemSpace.VadRoot.NodeCount;
+    }
     World->Machine.SystemRoot = World->System.SystemSpace.RootFrame;
     World->Machine.Fault = WorldFault;
     World->Machine.FaultContext = World;
@@ -239,6 +267,8 @@ void
 WorldDestroy(TEST_WORLD *World)
 {
     CHECK(MiHostIrql == 0 && MiHostPendingDpc == NULL);
+    CHECK(World->System.Pfn.Window.Busy == 0);
+    CHECK(World->Machine.DirectViolations == 0);
     if (World->System.PageFile != NULL)
     {
         MiPageFileUninitialize(&World->Paging.PageFile);
@@ -302,6 +332,7 @@ static const TEST_ENTRY Tests[] =
     { "async", TestAsync, 0 },
     { "sys", TestSys, 0 },
     { "process", TestProcess, 0 },
+    { "highmem", TestHighMem, 0 },
     { "benchsys", TestBenchSys, 1 },
     { "benchvm", TestBenchVm, 1 },
     { "benchcc", TestBenchCcDirty, 1 },

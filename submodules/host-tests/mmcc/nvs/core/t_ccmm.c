@@ -491,10 +491,10 @@ CcmmBasic(void)
     CHECK(CcCacheCheck(&Cache) == 0);
     CcmmFileDestroy(&File);
     CcCacheUninitialize(&Cache);
-    CHECK(MI_ATOMIC_READ64(&World.System.SystemSpace.PageTablePages) == 0);
+    CHECK(MI_ATOMIC_READ64(&World.System.SystemSpace.PageTablePages) == World.WindowTables);
     MiPfnDrainCaches(&World.System.Pfn);
     CHECK(WorldCheck(&World) == 0);
-    CHECK(MiPfnAvailablePages(&World.System.Pfn) == 4096 - 2);
+    CHECK(MiPfnAvailablePages(&World.System.Pfn) == 4096 - 2 - World.WindowPages);
     free(Buffer);
     free(Shadow);
     WorldDestroy(&World);
@@ -714,11 +714,11 @@ CcmmSmp(void)
 
     CcCacheUninitialize(&Cache);
     CHECK(IsListEmpty(&World.System.SegmentList));
-    CHECK(MI_ATOMIC_READ64(&World.System.SystemSpace.PageTablePages) == 0);
+    CHECK(MI_ATOMIC_READ64(&World.System.SystemSpace.PageTablePages) == World.WindowTables);
     MiPfnDrainCaches(&World.System.Pfn);
     CHECK(WorldCheck(&World) == 0);
     CHECK(MiPfnListCount(&World.System.Pfn, MiPageModified) == 0);
-    CHECK(MiPfnAvailablePages(&World.System.Pfn) == 1536 - 2);
+    CHECK(MiPfnAvailablePages(&World.System.Pfn) == 1536 - 2 - World.WindowPages);
     WorldDestroy(&World);
 }
 

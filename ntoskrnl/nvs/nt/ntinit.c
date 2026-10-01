@@ -52,6 +52,7 @@ MiScanMemoryDescriptors(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     PMEMORY_ALLOCATION_DESCRIPTOR Largest = NULL;
+    ULONG64 Direct = MiArchDescribe()->DirectFrameCount;
     PLIST_ENTRY Entry;
 
     MmNumberOfPhysicalPages = 0;
@@ -77,6 +78,7 @@ MiScanMemoryDescriptors(
             MmHighestPhysicalPage = Descriptor->BasePage + Descriptor->PageCount - 1;
 
         if (Descriptor->MemoryType == LoaderFree &&
+            (Direct == 0 || (ULONG64)Descriptor->BasePage + Descriptor->PageCount <= Direct) &&
             (Largest == NULL || Descriptor->PageCount > Largest->PageCount))
         {
             Largest = Descriptor;
@@ -166,10 +168,15 @@ MiClampBytes(
 NTSTATUS
 MiSetDirectFrameCache(ULONG Frame, ULONG Flags)
 {
-    ULONG64 Addresses[2] = { (ULONG64)(ULONG_PTR)MiArchMapFrame(Frame), MiArchBootFrameAlias(Frame) };
+    ULONG64 Addresses[2];
     PMI_PTE Slots[2] = { NULL, NULL };
     MI_PTE Entries[2], Updated[2];
     ULONG Index;
+
+    if (Frame >= MiSystem.Pfn.DirectFrames)
+        return STATUS_SUCCESS;
+    Addresses[0] = (ULONG64)(ULONG_PTR)MiArchMapFrame(Frame);
+    Addresses[1] = MiArchBootFrameAlias(Frame);
 
     for (Index = 0; Index < RTL_NUMBER_OF(Addresses); Index++)
     {
@@ -226,7 +233,7 @@ MiPrepareDirectMap(VOID)
     Alias = MiReserveSystemPtes(&MiSystem, 1);
     if (Alias == 0)
         return STATUS_NO_MEMORY;
-    for (Frame = 0; Frame < MiSystem.Pfn.FrameCount; Frame += Pages)
+    for (Frame = 0; Frame < MiSystem.Pfn.DirectFrames; Frame += Pages)
     {
         ULONG64 VirtualAddress = (ULONG64)(ULONG_PTR)MiArchMapFrame(Frame);
         ULONG ParentFrame;
@@ -354,6 +361,14 @@ MiInitializePhase0(
     Status = MiPrepareDirectMap();
     if (!NT_SUCCESS(Status))
         KeBugCheckEx(MEMORY_MANAGEMENT, 0x53505445, (ULONG_PTR)Status, 0, 0);
+
+    if (MiSystem.Pfn.DirectFrames < MiSystem.Pfn.FrameCount)
+    {
+        ULONG64 Window = MiReserveSystemPtes(&MiSystem, PAGE_SIZE / sizeof(PMI_PTE));
+
+        if (Window != 0 && !NT_SUCCESS(MiSystemAttachFrameWindow(&MiSystem, Window)))
+            MiReleaseSystemPtes(&MiSystem, Window, PAGE_SIZE / sizeof(PMI_PTE));
+    }
 
     MiSystem.SystemPtes->DefaultStackPages = KERNEL_STACK_SIZE >> PAGE_SHIFT;
     MmNumberOfSystemPtes = (ULONG)(SystemPteBytes >> PAGE_SHIFT);

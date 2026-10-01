@@ -49,8 +49,8 @@ void
 SysWorldDestroy(TEST_WORLD *World, ULONG Frames)
 {
     MiSystemPtesUninitialize(&World->System);
-    CHECK(MI_ATOMIC_READ64(&World->System.SystemSpace.PageTablePages) == 0);
-    CHECK(World->System.SystemSpace.VadRoot.NodeCount == 0);
+    CHECK(MI_ATOMIC_READ64(&World->System.SystemSpace.PageTablePages) == World->WindowTables);
+    CHECK(World->System.SystemSpace.VadRoot.NodeCount == World->WindowVads);
     WorldExpectClean(World, Frames);
     WorldDestroy(World);
 }
@@ -186,7 +186,7 @@ SysPtePopulationFailure(void)
 
     SysWorldCreate(&World, RTL_NUMBER_OF(Held), 1);
     Tables = World.System.SystemSpace.PageTablePages;
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[Count++] = Frame;
     CHECK(Count > 1);
     MiPfnShareDecrement(&World.System.Pfn, Held[--Count], TRUE);
@@ -234,7 +234,7 @@ SysGraphicsMappingCapacity(void)
         WorldCreate(&World, 4096, 1, 1000000);
         WorldAttach(&World, 0, NULL);
         CHECK(NT_SUCCESS(MiSystemPtesInitialize(&World.System, Capacities[Case], 1)));
-        CHECK(World.System.SystemSpace.PageTablePages <= 8);
+        CHECK(World.System.SystemSpace.PageTablePages <= 8 + World.WindowTables);
         Basic = MiReserveSystemPtes(&World.System, BasicPages);
         Slab = MiReserveSystemPtes(&World.System, SlabPages + 1);
         CHECK(Basic != 0 && Slab != 0);
@@ -448,7 +448,7 @@ SysIoAndContiguous(void)
           STATUS_INSUFFICIENT_RESOURCES);
     MiFreeContiguousMemory(&World.System, Big);
 
-    while ((i = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((i = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[HeldCount++] = i;
     for (i = 0; i < HeldCount; i++)
     {

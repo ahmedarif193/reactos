@@ -49,7 +49,8 @@ set(MM_TESTS mmharness.c t_core.c t_vm.c t_fault_smp.c t_section.c t_stress.c t_
 list(APPEND MM_TESTS t_async.c t_large.c t_awe.c t_clone.c t_session.c ${NVS_ROOT}/nt/ntsession.c ${CC_ROOT}/api/ccflush.c)
 list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntprotect.c)
 list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntmapping.c ${NVS_ROOT}/nt/nttruncate.c)
-set(MM_AREAS pfn pagetable vad vm large awe clone session fault fault_smp paging section image stress ccmm ntfile writeback ntpaging async sys process)
+list(APPEND MM_TESTS t_highmem.c)
+set(MM_AREAS pfn pagetable vad vm large awe clone session fault fault_smp paging section image stress ccmm ntfile writeback ntpaging async sys process highmem)
 
 include(${NVS_ROOT}/check-standalone.cmake)
 nvs_assert_standalone(${MM_CORE} ${CC_ENGINE})
@@ -72,6 +73,9 @@ target_compile_options(mm_arm64 PRIVATE -O2)
 
 mm_test_variant(mm_amd64 amd64 MACHINE_AMD64)
 target_compile_options(mm_amd64 PRIVATE -O2)
+
+mm_test_variant(mm_amd64_highmem amd64 MACHINE_AMD64 MACHINE_HIGHMEM)
+target_compile_options(mm_amd64_highmem PRIVATE -O2)
 
 mm_test_variant(mm_arm64_asan arm64 MACHINE_ARM64 TEST_LIGHT)
 target_compile_options(mm_arm64_asan PRIVATE -O1 -fsanitize=address,undefined -fno-omit-frame-pointer)

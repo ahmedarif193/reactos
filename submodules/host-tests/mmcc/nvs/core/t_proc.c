@@ -155,7 +155,7 @@ ProcLifecycle(void)
 
     while (MiWriteModifiedPages(&World.System, 1024) != 0)
         ;
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[HeldCount++] = Frame;
     for (i = 0; i < HeldCount; i++)
         MiPfnShareDecrement(&World.System.Pfn, Held[i], TRUE);

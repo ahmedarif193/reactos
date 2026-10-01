@@ -51,11 +51,23 @@ typedef struct _TEST_WORLD
     PMI_PFN PfnArray;
     PMI_ADDRESS_SPACE CpuSpace[MACHINE_MAX_CPUS];
     TEST_PAGEFILE Paging;
+    ULONG WindowPages;
+    LONG64 WindowTables;
+    ULONG WindowVads;
 } TEST_WORLD;
 
 #define USER_BASE 0x10000000ULL
 
+#ifdef MACHINE_HIGHMEM
+#define TEST_ANY_FRAME MI_ALLOCATE_HIGH
+#define TEST_FRAMES(n) ((n) * 2)
+#else
+#define TEST_ANY_FRAME 0
+#define TEST_FRAMES(n) (n)
+#endif
+
 void WorldCreate(TEST_WORLD *World, ULONG Frames, ULONG Cpus, LONG64 CommitLimit);
+void WorldCreateZoned(TEST_WORLD *World, ULONG Frames, ULONG DirectFrames, ULONG Cpus, LONG64 CommitLimit);
 void WorldDestroy(TEST_WORLD *World);
 void WorldEnableFaults(TEST_WORLD *World);
 ULONG64 Rng(ULONG64 *State);
@@ -94,6 +106,7 @@ void TestNtPaging(void);
 void TestAsync(void);
 void TestSys(void);
 void TestProcess(void);
+void TestHighMem(void);
 void TestBenchSys(void);
 void TestBenchVm(void);
 void TestBenchCcDirty(void);

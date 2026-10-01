@@ -162,7 +162,8 @@ MiCloneMakeResident(PMI_CLONE_PAGE Page)
     if (MiSoftKind(Pte) != MiSoftDemandZero && MiSoftKind(Pte) != MiSoftPageFile)
         goto Done;
 
-    Frame = MiPfnAllocatePage(&System->Pfn, MiSoftKind(Pte) == MiSoftDemandZero ? MI_ALLOCATE_ZEROED : 0);
+    Frame = MiPfnAllocatePage(&System->Pfn,
+                              MI_ALLOCATE_HIGH | (MiSoftKind(Pte) == MiSoftDemandZero ? MI_ALLOCATE_ZEROED : 0));
     if (Frame == MI_FRAME_INVALID)
     {
         Status = STATUS_NO_MEMORY;
@@ -170,12 +171,12 @@ MiCloneMakeResident(PMI_CLONE_PAGE Page)
     }
     if (MiSoftKind(Pte) == MiSoftPageFile)
     {
-        PVOID Mapping = MiArchMapFrame(Frame);
+        PVOID Mapping = MiPfnMapFrame(&System->Pfn, Frame);
 
         Status = System->PageFile != NULL
             ? System->PageFile->Ops.Read(System->PageFile->Context, MiSoftValue(Pte), Mapping)
             : STATUS_IN_PAGE_ERROR;
-        MiArchUnmapFrame(Mapping);
+        MiPfnUnmapFrame(&System->Pfn, Mapping);
         if (!NT_SUCCESS(Status))
         {
             MiPfnShareDecrement(&System->Pfn, Frame, TRUE);
@@ -262,7 +263,7 @@ MiCloneFault(PMI_ADDRESS_SPACE Space, ULONG64 Va, ULONG Access)
         Frame = (ULONG)MiArchPteFrame(Pte);
         if (Access == MiFaultWrite)
         {
-            ULONG NewFrame = MiPfnAllocatePage(&System->Pfn, 0);
+            ULONG NewFrame = MiPfnAllocatePage(&System->Pfn, MI_ALLOCATE_HIGH);
             PVOID Source, Target;
 
             if (NewFrame == MI_FRAME_INVALID)
@@ -270,11 +271,11 @@ MiCloneFault(PMI_ADDRESS_SPACE Space, ULONG64 Va, ULONG Access)
                 Status = STATUS_NO_MEMORY;
                 break;
             }
-            Source = MiArchMapFrame(Frame);
-            Target = MiArchMapFrame(NewFrame);
+            Source = MiPfnMapFrame(&System->Pfn, Frame);
+            Target = MiPfnMapFrame(&System->Pfn, NewFrame);
             RtlCopyMemory(Target, Source, PAGE_SIZE);
-            MiArchUnmapFrame(Target);
-            MiArchUnmapFrame(Source);
+            MiPfnUnmapFrame(&System->Pfn, Target);
+            MiPfnUnmapFrame(&System->Pfn, Source);
             if (Protection & MI_PROT_NOCACHE)
             {
                 Status = MiPfnSetCache(&System->Pfn, NewFrame, MI_LEAF_NOCACHE);
@@ -360,7 +361,7 @@ MiClonePreparePage(PMI_ADDRESS_SPACE Source, ULONG64 Va, MI_PTE Pte, PMI_CLONE_W
         MiPfnUnlock(&Source->System->Pfn, Frame, OldIrql);
         if (Locked)
         {
-            Work->CopyFrame = MiPfnAllocatePage(&Source->System->Pfn, 0);
+            Work->CopyFrame = MiPfnAllocatePage(&Source->System->Pfn, MI_ALLOCATE_HIGH);
             if (Work->CopyFrame == MI_FRAME_INVALID)
                 return STATUS_NO_MEMORY;
             if (CacheFlags != 0)
@@ -423,12 +424,12 @@ MiClonePublishPage(PMI_ADDRESS_SPACE Source, PMI_ADDRESS_SPACE Target, PMI_CLONE
     Page->References = 1;
     if (Frame != MI_FRAME_INVALID && Work->CopyFrame != MI_FRAME_INVALID)
     {
-        PVOID From = MiArchMapFrame(Frame);
-        PVOID To = MiArchMapFrame(Work->CopyFrame);
+        PVOID From = MiPfnMapFrame(&Source->System->Pfn, Frame);
+        PVOID To = MiPfnMapFrame(&Source->System->Pfn, Work->CopyFrame);
 
         RtlCopyMemory(To, From, PAGE_SIZE);
-        MiArchUnmapFrame(To);
-        MiArchUnmapFrame(From);
+        MiPfnUnmapFrame(&Source->System->Pfn, To);
+        MiPfnUnmapFrame(&Source->System->Pfn, From);
         if (!Valid)
             MiPfnShareDecrement(&Source->System->Pfn, Frame, FALSE);
         Frame = Work->CopyFrame;

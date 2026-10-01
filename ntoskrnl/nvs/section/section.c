@@ -1286,18 +1286,18 @@ MiCopyOnWrite(
     if (!MiChargeCommit(Space, 1))
         return STATUS_COMMITMENT_LIMIT;
 
-    Frame = MiPfnAllocatePage(&System->Pfn, 0);
+    Frame = MiPfnAllocatePage(&System->Pfn, Space->IsSystem ? 0 : MI_ALLOCATE_HIGH);
     if (Frame == MI_FRAME_INVALID)
     {
         MiReturnCommit(Space, 1);
         return STATUS_NO_MEMORY;
     }
 
-    Source = MiArchMapFrame(OldFrame);
-    Target = MiArchMapFrame(Frame);
+    Source = MiPfnMapFrame(&System->Pfn, OldFrame);
+    Target = MiPfnMapFrame(&System->Pfn, Frame);
     RtlCopyMemory(Target, Source, PAGE_SIZE);
-    MiArchUnmapFrame(Target);
-    MiArchUnmapFrame(Source);
+    MiPfnUnmapFrame(&System->Pfn, Target);
+    MiPfnUnmapFrame(&System->Pfn, Source);
 
     if (MiArchPteLeafFlags(Pte) & MI_LEAF_NOCACHE)
     {

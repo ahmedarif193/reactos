@@ -96,7 +96,7 @@ TestPfn(void)
     Db = &World.System.Pfn;
     CHECK(MiPfnDbCheck(Db) == 0);
     Baseline = (LONG64)MiPfnAvailablePages(Db);
-    CHECK(Baseline == 4096 - 1 - 1);
+    CHECK(Baseline == 4096 - 1 - 1 - (LONG64)World.WindowPages);
     PfnLockIrql(Db);
 
     for (i = 0; i < 64; i++)
@@ -361,7 +361,7 @@ TestPageTable(void)
             MiPfnShareDecrement(&System->Pfn, Frame, FALSE);
         }
 
-        while ((Frame = MiPfnAllocatePage(&System->Pfn, MI_ALLOCATE_NO_RECLAIM)) != MI_FRAME_INVALID)
+        while ((Frame = MiPfnAllocatePage(&System->Pfn, MI_ALLOCATE_NO_RECLAIM | TEST_ANY_FRAME)) != MI_FRAME_INVALID)
             MiPfnInitializePage(&System->Pfn, Frame, 0, 0, 0, MI_PFN_FLAG_PAGE_TABLE);
 
         for (i = 0; i < 32; i++)

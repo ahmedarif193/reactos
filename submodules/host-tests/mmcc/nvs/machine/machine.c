@@ -8,6 +8,7 @@
  */
 
 #include "machine.h"
+#include <nvs/include/mipfndb.h>
 #include <sched.h>
 
 PMACHINE MachineCurrent;
@@ -72,6 +73,8 @@ MachineDestroy(PMACHINE Machine)
     free(Machine->Ram);
     free(Machine->FrameBusy);
     free(Machine->FrameCache);
+    free(Machine->WindowShadow);
+    free(Machine->WindowOriginal);
     if (MachineCurrent == Machine)
         MachineCurrent = NULL;
 }
@@ -91,7 +94,62 @@ MachineFrame(PMACHINE Machine, ULONG64 Frame)
 PVOID
 MiArchMapFrame(_In_ ULONG64 Frame)
 {
+    if (MachineCurrent->DirectFrames != 0 && Frame >= MachineCurrent->DirectFrames)
+    {
+        __sync_fetch_and_add(&MachineCurrent->DirectViolations, 1);
+        return NULL;
+    }
     return MachineFrame(MachineCurrent, Frame);
+}
+
+PVOID
+MiHostWindowPointer(PVOID Context, ULONG Slot)
+{
+    PMI_PFN_WINDOW Window = Context;
+    PMACHINE Machine = MachineCurrent;
+    PUCHAR Source = MachineFrame(Machine, MiArchPteFrame(MiArchPteRead(Window->Slot[Slot])));
+
+    if (Machine->WindowShadow == NULL)
+    {
+        Machine->WindowSlots = Window->SlotCount;
+        Machine->WindowShadow = malloc((size_t)Window->SlotCount * PAGE_SIZE);
+        Machine->WindowOriginal = malloc((size_t)Window->SlotCount * PAGE_SIZE);
+        if (Machine->WindowShadow == NULL || Machine->WindowOriginal == NULL)
+            abort();
+    }
+    memcpy(Machine->WindowShadow + (size_t)Slot * PAGE_SIZE, Source, PAGE_SIZE);
+    memcpy(Machine->WindowOriginal + (size_t)Slot * PAGE_SIZE, Source, PAGE_SIZE);
+    return Machine->WindowShadow + (size_t)Slot * PAGE_SIZE;
+}
+
+ULONG64
+MiHostWindowSlot(PVOID Context, PVOID Mapping)
+{
+    PMACHINE Machine = MachineCurrent;
+    ULONG_PTR Offset = (ULONG_PTR)Mapping - (ULONG_PTR)Machine->WindowShadow;
+
+    UNREFERENCED_PARAMETER(Context);
+    if (Machine->WindowShadow == NULL || Offset >= (ULONG_PTR)Machine->WindowSlots * PAGE_SIZE)
+        return ~0ULL;
+    return Offset >> PAGE_SHIFT;
+}
+
+VOID
+MiHostWindowRelease(PVOID Context, ULONG Slot)
+{
+    PMI_PFN_WINDOW Window = Context;
+    PMACHINE Machine = MachineCurrent;
+    PUCHAR Target = MachineFrame(Machine, MiArchPteFrame(MiArchPteRead(Window->Slot[Slot])));
+    PUCHAR Shadow = Machine->WindowShadow + (size_t)Slot * PAGE_SIZE;
+    PUCHAR Original = Machine->WindowOriginal + (size_t)Slot * PAGE_SIZE;
+    ULONG Index;
+
+    for (Index = 0; Index < PAGE_SIZE; Index++)
+    {
+        if (Shadow[Index] != Original[Index])
+            Target[Index] = Shadow[Index];
+    }
+    memset(Shadow, 0xDB, PAGE_SIZE);
 }
 
 VOID
@@ -172,6 +230,15 @@ MachineCopyRam(PMACHINE Machine, PVOID Buffer, PUCHAR Mapping, SIZE_T Length, BO
     PUCHAR Cursor = Buffer;
     ULONG_PTR Offset = (ULONG_PTR)Mapping - (ULONG_PTR)Machine->Ram;
     ULONG64 RamSize = Machine->FrameCount * PAGE_SIZE;
+
+    if (MiHostWindowSlot(NULL, Mapping) != ~0ULL)
+    {
+        if (Write)
+            memcpy(Mapping, Cursor, Length);
+        else
+            memcpy(Cursor, Mapping, Length);
+        return;
+    }
 
     MI_ASSERT(Offset <= RamSize && Length <= RamSize - Offset);
 

@@ -141,12 +141,12 @@ FaultSharedPte(ULONG Mode)
         ULONG Frame;
 
         CHECK(MiWriteModifiedPages(&World.System, 1) == 1);
-        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, MI_ALLOCATE_NO_RECLAIM)) != MI_FRAME_INVALID)
+        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, MI_ALLOCATE_NO_RECLAIM | TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         {
             MI_ASSERT(Count < RTL_NUMBER_OF(Held));
             Held[Count++] = Frame;
         }
-        Frame = MiPfnAllocatePage(&World.System.Pfn, 0);
+        Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME);
         CHECK(Frame != MI_FRAME_INVALID);
         if (Frame != MI_FRAME_INVALID)
             Held[Count++] = Frame;

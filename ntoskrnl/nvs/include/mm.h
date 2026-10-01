@@ -115,6 +115,7 @@ VOID MiAddressSpaceDestroy(_Inout_ PMI_ADDRESS_SPACE Space);
 NTSTATUS MiAddressSpaceAdopt(_Inout_ PMI_SYSTEM System, _Out_ PMI_ADDRESS_SPACE Space, _In_ ULONG RootFrame,
                              _In_ BOOLEAN IsSystem);
 NTSTATUS MiSystemAdoptBootMappings(_Inout_ PMI_SYSTEM System);
+NTSTATUS MiSystemAttachFrameWindow(_Inout_ PMI_SYSTEM System, _In_ ULONG64 Base);
 NTSTATUS MiSystemPopulateTopLevel(_Inout_ PMI_SYSTEM System);
 NTSTATUS MiSystemReserveTopLevelHole(_Inout_ PMI_SYSTEM System);
 

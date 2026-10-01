@@ -185,9 +185,9 @@ MiWriteModifiedPages(
             break;
         }
 
-        Mapping = MiArchMapFrame(Frame);
+        Mapping = MiPfnMapFrame(&System->Pfn, Frame);
         Status = PageFile->Ops.Write(PageFile->Context, Slot, Mapping);
-        MiArchUnmapFrame(Mapping);
+        MiPfnUnmapFrame(&System->Pfn, Mapping);
 
         if (!NT_SUCCESS(Status))
         {

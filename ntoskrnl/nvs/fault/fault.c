@@ -449,7 +449,7 @@ RetryPage:
     {
         case MiSoftDemandZero:
             MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
-            Frame = MiPfnAllocatePage(&System->Pfn, MI_ALLOCATE_ZEROED);
+            Frame = MiPfnAllocatePage(&System->Pfn, MI_ALLOCATE_ZEROED | (Space->IsSystem ? 0 : MI_ALLOCATE_HIGH));
             OldIrql = MiPfnLock(&System->Pfn, TableFrame);
 
             if (MiArchPteRead(Slot) != RawPte)
@@ -510,7 +510,7 @@ RetryPage:
             }
 
             MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
-            Frame = MiPfnAllocatePage(&System->Pfn, 0);
+            Frame = MiPfnAllocatePage(&System->Pfn, Space->IsSystem ? 0 : MI_ALLOCATE_HIGH);
             OldIrql = MiPfnLock(&System->Pfn, TableFrame);
             if (MiArchPteRead(Slot) != Pte)
             {
@@ -528,9 +528,9 @@ RetryPage:
             MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
             MI_RW_RELEASE_SHARED(&Space->Lock);
 
-            Mapping = MiArchMapFrame(Frame);
+            Mapping = MiPfnMapFrame(&System->Pfn, Frame);
             Status = System->PageFile->Ops.Read(System->PageFile->Context, MiSoftValue(Pte), Mapping);
-            MiArchUnmapFrame(Mapping);
+            MiPfnUnmapFrame(&System->Pfn, Mapping);
             if (!NT_SUCCESS(Status))
             {
                 MiPfnShareDecrement(&System->Pfn, Frame, TRUE);

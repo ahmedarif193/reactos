@@ -134,7 +134,7 @@ AweExhaustion(void)
     CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&Space, &Base, &Size, MI_MEM_RESERVE | MI_MEM_PHYSICAL,
                                              MI_PROT_READWRITE)));
     CHECK(NT_SUCCESS(MiAweAllocatePages(&Space, &Count, &Page)));
-    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+    while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
         Held[HeldCount++] = Frame;
     for (Count = 0; Count < 2; Count++)
         MiPfnShareDecrement(&World.System.Pfn, Held[--HeldCount], TRUE);
@@ -159,7 +159,7 @@ AweExhaustion(void)
         CHECK(NT_SUCCESS(MiAllocateVirtualMemory(&Space, &Other, &Size,
                         MI_MEM_RESERVE | MI_MEM_PHYSICAL, MI_PROT_READWRITE)));
         CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base, 0xD3D3)));
-        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, 0)) != MI_FRAME_INVALID)
+        while ((Frame = MiPfnAllocatePage(&World.System.Pfn, TEST_ANY_FRAME)) != MI_FRAME_INVALID)
             Held[HeldCount++] = Frame;
         MiPfnShareDecrement(&World.System.Pfn, Held[--HeldCount], TRUE);
         Available = MiPfnAvailablePages(&World.System.Pfn);

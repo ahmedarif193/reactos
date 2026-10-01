@@ -179,6 +179,12 @@ static inline __attribute__((no_sanitize("thread"))) ULONG64 MiHostPeek(const vo
 #define MI_ATOMIC_READ_POINTER(v)        __atomic_load_n((v), __ATOMIC_SEQ_CST)
 #define MI_ATOMIC_WRITE_POINTER(v, n)    __atomic_store_n((v), (n), __ATOMIC_SEQ_CST)
 #define MI_PAUSE()                      sched_yield()
+PVOID MiHostWindowPointer(PVOID Window, ULONG Slot);
+ULONG64 MiHostWindowSlot(PVOID Window, PVOID Mapping);
+VOID MiHostWindowRelease(PVOID Window, ULONG Slot);
+#define MI_WINDOW_POINTER(w, s)         MiHostWindowPointer((w), (s))
+#define MI_WINDOW_SLOT(w, p)            MiHostWindowSlot((w), (p))
+#define MI_WINDOW_RELEASE(w, s)         MiHostWindowRelease((w), (s))
 #define MI_ASSERT(e)                    do { if (!(e)) { fprintf(stderr, "MI_ASSERT %s:%d %s\n", __FILE__, __LINE__, #e); abort(); } } while (0)
 #define MI_FAULT_READ_AHEAD()           MiHostReadClusterSize
 

@@ -232,7 +232,7 @@ ExpKdbgExtVm(
     UNREFERENCED_PARAMETER(Argc);
     UNREFERENCED_PARAMETER(Argv);
 
-    for (Shard = 0; Shard < MI_PFN_SHARDS; Shard++)
+    for (Shard = 0; Shard < MI_PFN_ZONES * MI_PFN_SHARDS; Shard++)
     {
         for (List = 0; List < MiPageListCount; List++)
             Counts[List] += MiSystem.Pfn.Shard[Shard].List[List].Count;
