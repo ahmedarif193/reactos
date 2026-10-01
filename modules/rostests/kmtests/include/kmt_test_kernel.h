@@ -128,6 +128,10 @@ BOOLEAN KmtAreInterruptsEnabled(VOID)
 {
 #if defined(_M_IX86) || defined(_M_AMD64)
     return (__readeflags() & EFLAGS_INTERRUPT_MASK) != 0;
+#elif defined(_M_PPC)
+    ULONG Msr;
+    __asm__ __volatile__("mfmsr %0" : "=r"(Msr));
+    return (Msr & MSR_EE) != 0;
 #elif defined(_M_ARM64)
 #ifdef _MSC_VER
     return (_ReadStatusReg(ARM64_SYSREG(3, 3, 4, 2, 1)) & 0x80) == 0;

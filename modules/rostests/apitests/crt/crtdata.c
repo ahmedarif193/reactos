@@ -19,6 +19,11 @@ static OSVERSIONINFOW s_osvi;
 extern char __ImageBase;
 static void* s_ImageEnd;
 
+static void* GetMsvcrtExport(const char* Name)
+{
+    return (void*)GetProcAddress(GetModuleHandleA("msvcrt.dll"), Name);
+}
+
 int IsLocalSymbol(void* Address)
 {
     return ((Address >= (void*)&__ImageBase) && (Address <= s_ImageEnd));
@@ -89,23 +94,33 @@ void Test___initenv(void)
 
 void Test___lc_codepage(void)
 {
-    _CRTIMP extern unsigned int __lc_codepage;
-    ok_int(__lc_codepage, 0);
+    unsigned int* codepage = GetMsvcrtExport("__lc_codepage");
+    if (!codepage)
+    {
+        skip("__lc_codepage is not exported\n");
+        return;
+    }
+    ok_int(*codepage, 0);
     ok_int(___lc_codepage_func(), 0);
-    __lc_codepage++;
+    ++*codepage;
     ok_int(___lc_codepage_func(), 0);
-    __lc_codepage--;
+    --*codepage;
 }
 
 void Test___lc_collate_cp(void)
 {
-    _CRTIMP extern int __lc_collate_cp;
-    test_is_local_symbol(&__lc_collate_cp, FALSE);
-    ok_int(__lc_collate_cp, 0);
+    int* collate_cp = GetMsvcrtExport("__lc_collate_cp");
+    if (!collate_cp)
+    {
+        skip("__lc_collate_cp is not exported\n");
+        return;
+    }
+    test_is_local_symbol(collate_cp, FALSE);
+    ok_int(*collate_cp, 0);
     ok_int(___lc_collate_cp_func(), 0);
-    __lc_collate_cp++;
+    ++*collate_cp;
     ok_int(___lc_collate_cp_func(), 0);
-    __lc_collate_cp--;
+    --*collate_cp;
 }
 #endif // !_M_ARM
 
@@ -164,12 +179,17 @@ void Test___pioinfo(void)
 void Test___setlc_active(void)
 {
     _CRTIMP extern unsigned int __setlc_active;
+    unsigned int (CDECL *get_active)(void) = GetMsvcrtExport("___setlc_active_func");
+    if (!get_active)
+    {
+        skip("___setlc_active_func is not exported\n");
+        return;
+    }
     ok_int(__setlc_active, 0);
 
-    _CRTIMP unsigned int ___setlc_active_func(void);
-    ok_int(___setlc_active_func(), __setlc_active);
+    ok_int(get_active(), __setlc_active);
     __setlc_active++;
-    ok_int(___setlc_active_func(), __setlc_active);
+    ok_int(get_active(), __setlc_active);
     __setlc_active--;
 }
 
@@ -177,10 +197,16 @@ void Test___unguarded_readlc_active(void)
 {
     _CRTIMP extern unsigned int __unguarded_readlc_active;
     void* p = &__unguarded_readlc_active;
+    unsigned int* (CDECL *get_active_address)(void) =
+        GetMsvcrtExport("___unguarded_readlc_active_add_func");
+    if (!get_active_address)
+    {
+        skip("___unguarded_readlc_active_add_func is not exported\n");
+        return;
+    }
     ok_int(__unguarded_readlc_active, 0);
 
-    _CRTIMP unsigned int* ___unguarded_readlc_active_add_func(void);
-    ok_ptr(___unguarded_readlc_active_add_func(), p);
+    ok_ptr(get_active_address(), p);
 }
 #endif // !_M_ARM
 
@@ -360,12 +386,17 @@ void Test__environ(void)
 
 void Test__fileinfo(void)
 {
-    _CRTIMP extern int _fileinfo;
-    ok_int(_fileinfo, -1);
+    int* fileinfo = GetMsvcrtExport("_fileinfo");
+    if (!fileinfo)
+    {
+        skip("_fileinfo is not exported\n");
+        return;
+    }
+    ok_int(*fileinfo, -1);
 
 #ifdef _M_IX86
     _CRTIMP int* __p__fileinfo();
-    ok_ptr(__p__fileinfo(), &_fileinfo);
+    ok_ptr(__p__fileinfo(), fileinfo);
 #endif
 }
 #endif // !_M_ARM

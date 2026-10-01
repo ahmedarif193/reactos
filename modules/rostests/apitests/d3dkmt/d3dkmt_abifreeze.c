@@ -22,6 +22,9 @@
 
 #include "precomp.h"
 
+/* This frozen layout table was measured for native 64-bit D3DKMT. A 32-bit
+ * baseline must be measured separately; pointer-bearing structures differ. */
+#ifdef _WIN64
 /* Kernel telemetry uses packed payloads, unlike the public query buffers. */
 #if DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5
 C_ASSERT(sizeof(DXGK_NODE_PERFDATA) == 44);
@@ -141,6 +144,7 @@ C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECT) == 136);
 C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2) == 200);
 C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU) == 40);
 C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU) == 80);
+#endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
 C_ASSERT(D3DDDI_NATIVE_FENCE == 7);
@@ -201,7 +205,9 @@ C_ASSERT(D3DKMT_CLIENTHINT_MAX == 28);
 C_ASSERT(D3DDDI_DRIVERESCAPETYPE_BUILDTESTCOMMANDBUFFER == 3);
 C_ASSERT(D3DDDI_TESTCOMMANDBUFFEROP_INFINITE_PREEMPTABLE_LOOP == 4);
 C_ASSERT(sizeof(D3DDDI_TESTCOMMANDBUFFER) == 72);
+#ifdef _WIN64
 C_ASSERT(sizeof(D3DDDI_DRIVERESCAPE_BUILDTESTCOMMANDBUFFER) == 0x70);
+#endif
 C_ASSERT(D3DKMT_BRIGHTNESS_INFO_SUPPORTED_INTERFACE == 12);
 C_ASSERT(D3DKMT_BRIGHTNESS_INTERFACE_VERSION_3 == 3);
 C_ASSERT(D3DKMT_QUERYSTATISTICS_SEGMENT_TYPE_SYSMEM == 2);
@@ -214,7 +220,11 @@ static void Test_LayoutsAreFrozen(void)
 {
     /* The assertions above are compile-time; this reports the same values so a
      * deliberate change can be re-measured without editing anything. */
-    trace("frozen D3DKMT layouts compiled\n");
+#ifdef _WIN64
+    trace("frozen 64-bit D3DKMT layouts compiled\n");
+#else
+    skip("32-bit D3DKMT layout baseline not recorded yet\n");
+#endif
     ok(sizeof(D3DKMT_CREATEDEVICE) != 0, "CREATEDEVICE has no layout\n");
     ok(sizeof(D3DKMT_RENDER) != 0, "RENDER has no layout\n");
     ok(sizeof(D3DKMT_SUBMITCOMMAND) != 0, "SUBMITCOMMAND has no layout\n");
@@ -269,7 +279,11 @@ static void Test_PointerWidthAssumptions(void)
      * under WOW. Anything that assumed 32 bits here would misread every handle
      * array on ARM64.
      */
+#ifdef _WIN64
     ok_eq_ulong((ULONG)sizeof(void *), 8UL);
+#else
+    ok_eq_ulong((ULONG)sizeof(void *), 4UL);
+#endif
     ok_eq_ulong((ULONG)sizeof(D3DKMT_HANDLE), 4UL);
     ok(sizeof(D3DGPU_VIRTUAL_ADDRESS) == 8, "GPU virtual addresses are not 64-bit\n");
 }
