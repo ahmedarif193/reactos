@@ -63,6 +63,7 @@ KiArm64ReadCpuFeatures(VOID)
     Features.PanSupported = (((Mmfr1 >> 20) & 0xFULL) != 0);
     Features.SveSupported = (((Pfr0 >> 32) & 0xFULL) != 0);
     Features.SmeSupported = (((Pfr1 >> 24) & 0xFULL) != 0);
+    Features.SsbsSupported = (((Pfr1 >> 4) & 0xFULL) != 0);
     Features.El2Implemented = (((Pfr0 >> 8) & 0xFULL) != 0);
     Features.AtomicSupported = (ULONG)((Isar0 >> 20) & 0xFULL);
     Features.FpSupported = (((Pfr0 >> 16) & 0xFULL) != 0xFULL);
@@ -111,7 +112,8 @@ KiArm64ValidateProcessorFeatures(
         (Arm64CpuFeatures.FpSupported && !LocalFeatures.FpSupported) ||
         (Arm64CpuFeatures.PanSupported && !LocalFeatures.PanSupported) ||
         (Arm64CpuFeatures.SveSupported && !LocalFeatures.SveSupported) ||
-        (Arm64CpuFeatures.SmeSupported && !LocalFeatures.SmeSupported))
+        (Arm64CpuFeatures.SmeSupported && !LocalFeatures.SmeSupported) ||
+        (Arm64CpuFeatures.SsbsSupported && !LocalFeatures.SsbsSupported))
     {
         Mismatch = TRUE;
     }

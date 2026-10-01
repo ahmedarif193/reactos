@@ -36,6 +36,7 @@
 
 #define ARM64_PSTATE_ASYNC_ABORT_MASK 0x100UL
 #define ARM64_PSTATE_IRQ_MASK         0x080UL
+#define ARM64_PSTATE_SSBS             0x1000UL
 
 #ifndef KI_MAX_NUMA_NODES
 #define KI_MAX_NUMA_NODES MAXIMUM_PROCESSORS
@@ -745,6 +746,7 @@ typedef struct _ARM64_CPU_FEATURES
     ULONG AsidBits:5;           /* ID_AA64MMFR0_EL1[7:4] decoded as 8 or 16      */
     ULONG HaEnabled:1;          /* TCR_EL1.HA committed by BSP                   */
     ULONG HdEnabled:1;          /* TCR_EL1.HD committed (DBM hardware dirty)     */
+    ULONG SsbsSupported:1;
     ULONG DcacheLineSize;       /* CTR_EL0.DminLine decoded in bytes             */
     ULONG IcacheLineSize;       /* CTR_EL0.IminLine decoded in bytes             */
 } ARM64_CPU_FEATURES;

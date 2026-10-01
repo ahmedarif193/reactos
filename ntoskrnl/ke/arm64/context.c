@@ -87,6 +87,10 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
         if (PreviousMode != KernelMode)
         {
             TrapFrame->Spsr |= ARM64_PSTATE_ASYNC_ABORT_MASK;
+            if (Arm64CpuFeatures.SsbsSupported)
+            {
+                TrapFrame->Spsr |= ARM64_PSTATE_SSBS;
+            }
         }
 
         TrapFrame->PreviousMode = (CHAR)PreviousMode;
