@@ -1274,6 +1274,41 @@ IopGetDeviceDepth(PPLUGPLAY_CONTROL_DEPTH_DATA DepthData)
 }
 
 static
+VOID
+PiFlagParentsOfRemovedDevices(
+    _In_ PDEVICE_NODE Root)
+{
+    PDEVICE_NODE Node = Root;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
+
+    while (Node)
+    {
+        if (Node != Root &&
+            Node->Parent != NULL &&
+            Node->State == DeviceNodeRemoved &&
+            Node->Problem == 0 &&
+            !(Node->Flags & (DNF_HAS_PROBLEM | DNF_DEVICE_GONE)))
+        {
+            PiSetDevNodeFlag(Node->Parent, DNF_REENUMERATE);
+        }
+
+        if (Node->Child)
+        {
+            Node = Node->Child;
+            continue;
+        }
+        while (Node != Root && Node->Sibling == NULL)
+            Node = Node->Parent;
+        Node = (Node == Root) ? NULL : Node->Sibling;
+    }
+
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
+}
+
+static
 NTSTATUS
 PiControlSyncDeviceAction(
     _In_ PPLUGPLAY_CONTROL_DEVICE_CONTROL_DATA DeviceData,
@@ -1309,6 +1344,7 @@ PiControlSyncDeviceAction(
     switch (ControlClass)
     {
         case PlugPlayControlEnumerateDevice:
+            PiFlagParentsOfRemovedDevices(IopGetDeviceNode(DeviceObject));
             Action = PiActionEnumDeviceTree;
             break;
         case PlugPlayControlStartDevice:

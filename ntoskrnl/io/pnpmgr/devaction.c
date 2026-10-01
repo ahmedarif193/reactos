@@ -1565,6 +1565,34 @@ PiQueryDevNodeResources(
 }
 
 static
+VOID
+PiResetRemovedDevNode(
+    _In_ PDEVICE_NODE DeviceNode)
+{
+    if (DeviceNode->ResourceList)
+    {
+        ExFreePool(DeviceNode->ResourceList);
+        DeviceNode->ResourceList = NULL;
+    }
+    if (DeviceNode->ResourceListTranslated)
+    {
+        ExFreePool(DeviceNode->ResourceListTranslated);
+        DeviceNode->ResourceListTranslated = NULL;
+    }
+    if (DeviceNode->ResourceRequirements)
+    {
+        ExFreePool(DeviceNode->ResourceRequirements);
+        DeviceNode->ResourceRequirements = NULL;
+    }
+    if (DeviceNode->BootResources)
+    {
+        ExFreePool(DeviceNode->BootResources);
+        DeviceNode->BootResources = NULL;
+    }
+    PiClearDevNodeFlag(DeviceNode, DNF_HAS_BOOT_CONFIG | DNF_NO_RESOURCE_REQUIRED);
+}
+
+static
 NTSTATUS
 PiInitializeDevNode(
     _In_ PDEVICE_NODE DeviceNode)
@@ -1603,7 +1631,13 @@ PiInitializeDevNode(
     {
         PDEVICE_NODE OldDeviceNode = IopGetDeviceNode(OldDeviceObject);
 
-        if (OldDeviceNode->State == DeviceNodeRemoved &&
+        if (OldDeviceNode == DeviceNode)
+        {
+            ObDereferenceObject(OldDeviceObject);
+            RtlFreeUnicodeString(&InstancePathU);
+            InstancePathU = DeviceNode->InstancePath;
+        }
+        else if (OldDeviceNode->State == DeviceNodeRemoved &&
             OldDeviceNode->Child == NULL &&
             IsListEmpty(&OldDeviceNode->TargetDeviceNotify))
         {
@@ -2748,7 +2782,17 @@ PiEnumerateDevice(
         {
             /* Mark it as enumerated */
             PiSetDevNodeFlag(ChildDeviceNode, DNF_ENUMERATED);
-            ObDereferenceObject(ChildDeviceObject);
+            if (ChildDeviceNode->State == DeviceNodeRemoved &&
+                ChildDeviceNode->Problem == 0 &&
+                !(ChildDeviceNode->Flags & (DNF_HAS_PROBLEM | DNF_DEVICE_GONE)))
+            {
+                PiResetRemovedDevNode(ChildDeviceNode);
+                PiSetDevNodeState(ChildDeviceNode, DeviceNodeUninitialized);
+            }
+            else
+            {
+                ObDereferenceObject(ChildDeviceObject);
+            }
         }
     }
     ExFreePool(DeviceRelations);
@@ -3236,21 +3280,7 @@ PipRunDeviceActionRequest(
                 !(deviceNode->Flags & (DNF_HAS_PROBLEM | DNF_DEVICE_GONE)))
             {
                 ObReferenceObject(Request->DeviceObject);
-                if (deviceNode->ResourceList)
-                {
-                    ExFreePool(deviceNode->ResourceList);
-                    deviceNode->ResourceList = NULL;
-                }
-                if (deviceNode->ResourceListTranslated)
-                {
-                    ExFreePool(deviceNode->ResourceListTranslated);
-                    deviceNode->ResourceListTranslated = NULL;
-                }
-                if (deviceNode->ResourceRequirements)
-                    ExFreePool(deviceNode->ResourceRequirements);
-                if (deviceNode->BootResources)
-                    ExFreePool(deviceNode->BootResources);
-                PiClearDevNodeFlag(deviceNode, DNF_HAS_BOOT_CONFIG | DNF_NO_RESOURCE_REQUIRED);
+                PiResetRemovedDevNode(deviceNode);
                 PiQueryDevNodeResources(deviceNode);
                 PiSetDevNodeState(deviceNode, DeviceNodeInitialized);
             }
