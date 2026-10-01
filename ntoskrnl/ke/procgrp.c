@@ -392,7 +392,7 @@ KeInterlockedSetProcessorAffinityEx(
 {
     PROCESSOR_NUMBER ProcessorNumber;
     KAFFINITY ProcessorMask;
-    LONG64 PreviousMask;
+    KAFFINITY PreviousMask;
 
     if (!NT_SUCCESS(KeGetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber)))
         return FALSE;
@@ -401,8 +401,8 @@ KeInterlockedSetProcessorAffinityEx(
         return FALSE;
 
     ProcessorMask = (KAFFINITY)1 << ProcessorNumber.Number;
-    PreviousMask = InterlockedOr64((PLONG64)&Affinity->Bitmap[ProcessorNumber.Group], (LONG64)ProcessorMask);
-    return (((KAFFINITY)PreviousMask & ProcessorMask) != 0);
+    PreviousMask = (KAFFINITY)InterlockedOrAffinity((PVOID)&Affinity->Bitmap[ProcessorNumber.Group], (LONG_PTR)ProcessorMask);
+    return ((PreviousMask & ProcessorMask) != 0);
 }
 
 /*
@@ -416,7 +416,7 @@ KeInterlockedClearProcessorAffinityEx(
 {
     PROCESSOR_NUMBER ProcessorNumber;
     KAFFINITY ProcessorMask;
-    LONG64 PreviousMask;
+    KAFFINITY PreviousMask;
 
     if (!NT_SUCCESS(KeGetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber)))
         return FALSE;
@@ -425,8 +425,8 @@ KeInterlockedClearProcessorAffinityEx(
         return FALSE;
 
     ProcessorMask = (KAFFINITY)1 << ProcessorNumber.Number;
-    PreviousMask = InterlockedAnd64((PLONG64)&Affinity->Bitmap[ProcessorNumber.Group], (LONG64)~ProcessorMask);
-    return (((KAFFINITY)PreviousMask & ProcessorMask) != 0);
+    PreviousMask = (KAFFINITY)InterlockedAndAffinity((PVOID)&Affinity->Bitmap[ProcessorNumber.Group], (LONG_PTR)~ProcessorMask);
+    return ((PreviousMask & ProcessorMask) != 0);
 }
 
 /*

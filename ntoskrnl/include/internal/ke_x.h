@@ -529,9 +529,10 @@ KiAcquireWaitLock(IN PKPRCB Prcb)
         while (*(volatile LONG*)&Prcb->PrcbLock != 0) YieldProcessor();
     }
 #else
-    while (InterlockedExchange64((PLONG64)&Prcb->WaitLock, 1) != 0)
+    C_ASSERT(sizeof(Prcb->WaitLock) == sizeof(PVOID));
+    while (InterlockedExchangePointer((PVOID*)&Prcb->WaitLock, (PVOID)1) != NULL)
     {
-        while (*(volatile LONG64*)&Prcb->WaitLock != 0) YieldProcessor();
+        while (*(volatile ULONG_PTR*)&Prcb->WaitLock != 0) YieldProcessor();
     }
 #endif
 }
@@ -543,7 +544,7 @@ KiReleaseWaitLock(IN PKPRCB Prcb)
 #if defined(_M_IX86)
     InterlockedAnd((PLONG)&Prcb->PrcbLock, 0);
 #else
-    InterlockedExchange64((PLONG64)&Prcb->WaitLock, 0);
+    InterlockedExchangePointer((PVOID*)&Prcb->WaitLock, NULL);
 #endif
 }
 
