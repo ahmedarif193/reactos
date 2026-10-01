@@ -2708,7 +2708,7 @@ NdisIPnPStopDevice(
   Adapter->NdisMiniportBlock.OldPnPDeviceState = Adapter->NdisMiniportBlock.PnPDeviceState;
   Adapter->NdisMiniportBlock.PnPDeviceState = NdisPnPDeviceStopped;
 
-  (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler)(Adapter);
+  (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler)(Adapter->NdisMiniportBlock.MiniportAdapterContext);
 
   if (!NT_SUCCESS(IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, FALSE)))
       NDIS_DbgPrint(MIN_TRACE, ("IoSetDeviceInterfaceState(%wZ) failed\n", &Adapter->NdisMiniportBlock.SymbolicLinkName));
@@ -2849,7 +2849,7 @@ NdisIPnPRemoveDevice(
 
         MiniStopHangTimer(Adapter);
 
-        Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler(Adapter);
+        Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler(Adapter->NdisMiniportBlock.MiniportAdapterContext);
     }
 
     if (Adapter->NdisMiniportBlock.EthDB)
@@ -2897,6 +2897,8 @@ NdisIDispatchPnp(
   PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
   PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)DeviceObject->DeviceExtension;
   NTSTATUS Status;
+  BOOLEAN Bound;
+  KIRQL OldIrql;
 
   switch (Stack->MinorFunction)
     {
@@ -2921,7 +2923,11 @@ NdisIDispatchPnp(
 
       case IRP_MN_QUERY_REMOVE_DEVICE:
       case IRP_MN_QUERY_STOP_DEVICE:
-        Status = NdisIPnPQueryStopDevice(DeviceObject, Irp);
+        KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+        Bound = !IsListEmpty(&Adapter->ProtocolListHead);
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+        Status = Bound ? STATUS_UNSUCCESSFUL : NdisIPnPQueryStopDevice(DeviceObject, Irp);
         Irp->IoStatus.Status = Status;
         if (Status != STATUS_SUCCESS)
         {
