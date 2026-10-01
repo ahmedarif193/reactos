@@ -1777,6 +1777,19 @@ LoadAndBootWindowsCommon(
     }
 
     MachPrepareForReactOS();
+#elif defined(_M_PPC)
+    /* Open Firmware keeps the MMU until PpcJumpToKernel; build the kernel
+     * tables, HTAB and BAT values while firmware services still work. */
+    WinLdrSetupMachineDependent(LoaderBlock);
+    if (!PpcLoaderSetupSucceeded() ||
+        !WinLdrSetupMemoryLayout(LoaderBlock) ||
+        !PpcFinalizePageTables(LoaderBlock))
+    {
+        UiMessageBox("PowerPC kernel address-space preparation failed.");
+        return ENOEXEC;
+    }
+
+    MachPrepareForReactOS();
 #else
     /* "Stop all motors", change videomode */
     MachPrepareForReactOS();
@@ -1803,13 +1816,15 @@ LoadAndBootWindowsCommon(
     TRACE("Hello from paged mode, KiSystemStartup %p, LoaderBlockVA %p!\n",
           KiSystemStartup, LoaderBlockVA);
 
-    /* Zero KI_USER_SHARED_DATA page */
+#if !defined(_M_PPC)
+    /* Zero KI_USER_SHARED_DATA page (PowerPC: PpcFinalizePageTables) */
     {
         PVOID UserSharedData = (PVOID)KI_USER_SHARED_DATA;
         RtlZeroMemory(UserSharedData, MM_PAGE_SIZE);
     }
+#endif
 
-#if !defined(_M_ARM64) && !defined(_M_RISCV64)
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM)
     WinLdrpDumpMemoryDescriptors(LoaderBlockVA);
     WinLdrpDumpBootDriver(LoaderBlockVA);
 #ifndef _M_AMD64
@@ -1825,6 +1840,10 @@ LoadAndBootWindowsCommon(
     RiscvJumpToKernel((ULONG_PTR)KiSystemStartup,
                       (ULONG_PTR)LoaderBlockVA,
                       LoaderBlock->KernelStack);
+#elif defined(_M_PPC)
+    PpcJumpToKernel((ULONG_PTR)KiSystemStartup,
+                    (ULONG_PTR)LoaderBlockVA,
+                    LoaderBlock->KernelStack);
 #else
     /* Pass control */
     (*KiSystemStartup)(LoaderBlockVA);

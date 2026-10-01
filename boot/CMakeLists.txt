@@ -5,6 +5,11 @@ else()
     set(FREELDR_HAS_BIOS_BOOT FALSE)
 endif()
 
+set(FREELDR_HAS_OFW_BOOT FALSE)
+if(ARCH STREQUAL "ppc")
+    set(FREELDR_HAS_OFW_BOOT TRUE)
+endif()
+
 option(FREELDR_WIM_RAMDISK "Enable FreeLDR boot.wim ramdisk decompression support" OFF)
 
 include(boot_images.cmake)

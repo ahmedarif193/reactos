@@ -59,6 +59,9 @@ elseif(ARCH STREQUAL "arm64")
         ${NTOS_RTL_SOURCE_DIR}/bitmap64.c
         ${NTOS_RTL_SOURCE_DIR}/byteswap.c
         ${NTOS_RTL_SOURCE_DIR}/mem.c)
+elseif(ARCH STREQUAL "ppc")
+    list(APPEND SOURCE
+        ${NTOS_RTL_SOURCE_DIR}/mem.c)
 elseif(ARCH STREQUAL "riscv64")
     list(APPEND SOURCE
         ${NTOS_RTL_SOURCE_DIR}/bitmap64.c
