@@ -107,6 +107,25 @@ ExGetFirmwareEnvironmentVariable(IN PUNICODE_STRING VariableName,
 
 NTSTATUS
 NTAPI
+ExSetFirmwareEnvironmentVariable(IN PUNICODE_STRING VariableName,
+                                 IN LPGUID VendorGuid,
+                                 IN PVOID Value OPTIONAL,
+                                 IN ULONG ValueLength,
+                                 IN ULONG Attributes)
+{
+    UNREFERENCED_PARAMETER(Attributes);
+
+    if ((VariableName == NULL) || (VariableName->Buffer == NULL) ||
+        (VendorGuid == NULL) || ((Value == NULL) && (ValueLength != 0)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+NTSTATUS
+NTAPI
 NtAddBootEntry(IN PBOOT_ENTRY Entry,
                IN ULONG Id)
 {

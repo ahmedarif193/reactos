@@ -2271,6 +2271,59 @@ IoOpenDriverRegistryKey(
     return Status;
 }
 
+NTSTATUS
+NTAPI
+IoGetDriverDirectory(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ DRIVER_DIRECTORY_TYPE DirectoryType,
+    _In_ ULONG Flags,
+    _Out_ PHANDLE DriverDirectoryHandle)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    UNICODE_STRING Directory;
+    USHORT Length;
+
+    PAGED_CODE();
+
+    if (DriverDirectoryHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *DriverDirectoryHandle = NULL;
+
+    if ((DriverObject == NULL) || (Flags != 0))
+        return STATUS_INVALID_PARAMETER;
+
+    if (DirectoryType != DriverDirectoryImage)
+        return STATUS_NOT_SUPPORTED;
+
+    LdrEntry = DriverObject->DriverSection;
+    if ((LdrEntry == NULL) || (LdrEntry->FullDllName.Buffer == NULL))
+        return STATUS_OBJECT_PATH_NOT_FOUND;
+
+    Directory = LdrEntry->FullDllName;
+    Length = Directory.Length / sizeof(WCHAR);
+    while ((Length != 0) && (Directory.Buffer[Length - 1] != L'\\'))
+        Length--;
+    if (Length == 0)
+        return STATUS_OBJECT_PATH_NOT_FOUND;
+    Directory.Length = Length * sizeof(WCHAR);
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &Directory,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    return ZwOpenFile(DriverDirectoryHandle,
+                      FILE_LIST_DIRECTORY | FILE_TRAVERSE | SYNCHRONIZE,
+                      &ObjectAttributes,
+                      &IoStatusBlock,
+                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                      FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+}
+
 #endif /* NTDDI_VERSION >= NTDDI_WIN10_RS4 */
 
 /*

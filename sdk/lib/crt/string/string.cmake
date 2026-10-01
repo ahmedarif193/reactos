@@ -7,6 +7,7 @@ list(APPEND LIBCNTPR_STRING_SOURCE
     string/_strnicmp_nt.c
     string/_strupr_nt.c
     string/_wsplitpath.c
+    string/_wsplitpath_s.c
     string/atoi.c
     string/atoi64.c
     string/atol.c

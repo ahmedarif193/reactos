@@ -127,6 +127,14 @@ int CDECL ChpeVsscanf(const char *str, const char *format, __ms_va_list args)
 #undef SECURE
 #include "scanf.h"
 
+/* vsnwscanf_s_l */
+#define WIDE_SCANF 1
+#undef CONSOLE
+#define STRING 1
+#define STRING_LEN 1
+#define SECURE 1
+#include "scanf.h"
+
 #ifndef _LIBCNT_
 /* vcscanf_l */
 #undef WIDE_SCANF
@@ -284,6 +292,21 @@ int WINAPIV _snwscanf(const wchar_t *input, size_t length,
 
     __ms_va_start(valist, format);
     res = vsnwscanf_l(input, length, format, NULL, valist);
+    __ms_va_end(valist);
+    return res;
+}
+
+/*********************************************************************
+ *              _snwscanf_s (MSVCRT.@)
+ */
+int WINAPIV _snwscanf_s(const wchar_t *input, size_t length,
+        const wchar_t *format, ...)
+{
+    __ms_va_list valist;
+    int res;
+
+    __ms_va_start(valist, format);
+    res = vsnwscanf_s_l(input, length, format, NULL, valist);
     __ms_va_end(valist);
     return res;
 }

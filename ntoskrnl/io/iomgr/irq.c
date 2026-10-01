@@ -629,4 +629,20 @@ IoDisconnectInterruptEx(
     }
 }
 
+VOID
+NTAPI
+IoReportInterruptActive(
+    _In_ PIO_REPORT_INTERRUPT_ACTIVE_STATE_PARAMETERS Parameters)
+{
+    UNREFERENCED_PARAMETER(Parameters);
+}
+
+VOID
+NTAPI
+IoReportInterruptInactive(
+    _In_ PIO_REPORT_INTERRUPT_ACTIVE_STATE_PARAMETERS Parameters)
+{
+    UNREFERENCED_PARAMETER(Parameters);
+}
+
 /* EOF */

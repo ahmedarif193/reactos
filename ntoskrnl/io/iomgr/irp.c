@@ -2147,3 +2147,15 @@ IoRetrievePriorityInfo(IN PIRP Irp OPTIONAL,
     return STATUS_SUCCESS;
 }
 #endif
+
+NTSTATUS
+NTAPI
+IoGetActivityIdIrp(
+    _In_ PIRP Irp,
+    _Out_ LPGUID Guid)
+{
+    if ((Irp == NULL) || (Guid == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    return STATUS_NOT_FOUND;
+}

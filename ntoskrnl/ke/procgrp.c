@@ -1712,3 +1712,20 @@ KeQueryAuxiliaryCounterFrequency(
 
     return STATUS_NOT_SUPPORTED;
 }
+
+NTSTATUS
+NTAPI
+KeConvertAuxiliaryCounterToPerformanceCounter(
+    _In_ ULONG64 AuxiliaryCounterValue,
+    _Out_ PULONG64 PerformanceCounterValue,
+    _Out_opt_ PULONG64 ConversionError)
+{
+    UNREFERENCED_PARAMETER(AuxiliaryCounterValue);
+
+    if (PerformanceCounterValue != NULL)
+        *PerformanceCounterValue = 0;
+    if (ConversionError != NULL)
+        *ConversionError = 0;
+
+    return STATUS_NOT_SUPPORTED;
+}

@@ -1671,6 +1671,33 @@ IoOpenDriverRegistryKey(
   _In_ ACCESS_MASK DesiredAccess,
   _In_ ULONG Flags,
   _Out_ PHANDLE DriverRegKey);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoGetDriverDirectory(
+  _In_ PDRIVER_OBJECT DriverObject,
+  _In_ DRIVER_DIRECTORY_TYPE DirectoryType,
+  _In_ ULONG Flags,
+  _Out_ PHANDLE DriverDirectoryHandle);
+#endif
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+IoReportInterruptActive(
+  _In_ PIO_REPORT_INTERRUPT_ACTIVE_STATE_PARAMETERS Parameters);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+IoReportInterruptInactive(
+  _In_ PIO_REPORT_INTERRUPT_ACTIVE_STATE_PARAMETERS Parameters);
 #endif
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -2735,6 +2762,15 @@ IoAttachDeviceToDeviceStackSafe(
   _In_ PDEVICE_OBJECT SourceDevice,
   _In_ PDEVICE_OBJECT TargetDevice,
   _Outptr_ PDEVICE_OBJECT *AttachedToDeviceObject);
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoGetActivityIdIrp(
+  _In_ PIRP Irp,
+  _Out_ LPGUID Guid);
+#endif
 
 $endif (_NTDDK_)
 $if (_NTIFS_)

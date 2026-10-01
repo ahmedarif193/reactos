@@ -24,6 +24,16 @@ ExGetFirmwareEnvironmentVariable(
   _Out_writes_bytes_opt_(*ValueLength) PVOID Value,
   _Inout_ PULONG ValueLength,
   _Out_opt_ PULONG Attributes);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+ExSetFirmwareEnvironmentVariable(
+  _In_ PUNICODE_STRING VariableName,
+  _In_ LPGUID VendorGuid,
+  _In_reads_bytes_opt_(ValueLength) PVOID Value,
+  _In_ ULONG ValueLength,
+  _In_ ULONG Attributes);
 #endif
 
 NTKERNELAPI

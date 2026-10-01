@@ -2268,6 +2268,14 @@ typedef enum _DRIVER_REGKEY_TYPE {
 } DRIVER_REGKEY_TYPE, *PDRIVER_REGKEY_TYPE;
 #endif
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS4)
+typedef enum _DRIVER_DIRECTORY_TYPE {
+  DriverDirectoryImage = 0,
+  DriverDirectoryData,
+  DriverDirectorySharedData
+} DRIVER_DIRECTORY_TYPE, *PDRIVER_DIRECTORY_TYPE;
+#endif
+
 #define DRVO_UNLOAD_INVOKED               0x00000001
 #define DRVO_LEGACY_DRIVER                0x00000002
 #define DRVO_BUILTIN_DRIVER               0x00000004

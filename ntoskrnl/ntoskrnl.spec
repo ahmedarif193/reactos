@@ -2239,7 +2239,7 @@
 @ stdcall -arch=i386,win64 ExReleaseSpinLockSharedFromDpcLevel(ptr)
 @ stub -arch=arm64 ExSecurePoolUpdate
 @ stub -arch=arm64 ExSecurePoolValidate
-@ stub -arch=arm64 ExSetFirmwareEnvironmentVariable
+@ stdcall ExSetFirmwareEnvironmentVariable(ptr ptr ptr long long)
 @ stub -arch=arm64 ExSetLicenseTamperState
 @ stub -arch=arm64 ExSetResourceOwnerPointerEx
 @ stdcall -version=0x603+ -arch=i386,win64 ExSetTimer(ptr int64 int64 ptr)
@@ -2440,7 +2440,7 @@
 @ stub -arch=arm64 IoFreeKsrPersistentMemory
 @ stub -arch=arm64 IoFreeMiniCompletionPacket
 @ stub -arch=arm64 IoFreeSfioStreamIdentifier
-@ stub -arch=arm64 IoGetActivityIdIrp
+@ stdcall IoGetActivityIdIrp(ptr ptr)
 @ stub -arch=arm64 IoGetActivityIdThread
 @ stub -arch=arm64 IoGetAdapterCryptoEngineExtension
 @ stub -arch=arm64 IoGetAffinityInterrupt
@@ -2450,7 +2450,7 @@
 @ stub -arch=arm64 IoGetDeviceDirectory
 @ stdcall -arch=i386,win64 IoGetDeviceInterfacePropertyData(ptr ptr long long long ptr ptr ptr)
 @ stdcall -arch=i386,win64 IoGetDeviceNumaNode(ptr ptr)
-@ stub -arch=arm64 IoGetDriverDirectory
+@ stdcall IoGetDriverDirectory(ptr long long ptr)
 @ stub -arch=arm64 IoGetDriverProxyEndpointWrapper
 @ stub -arch=arm64 IoGetDriverProxyFeatures
 @ stub -arch=arm64 IoGetFsTrackOffsetState
@@ -2502,8 +2502,8 @@
 @ stub -arch=arm64 IoRemoveLinkShareAccessEx
 @ stub -arch=arm64 IoReplaceFileObjectName
 @ stub -arch=arm64 IoReplacePartitionUnit
-@ stub -arch=arm64 IoReportInterruptActive
-@ stub -arch=arm64 IoReportInterruptInactive
+@ stdcall IoReportInterruptActive(ptr)
+@ stdcall IoReportInterruptInactive(ptr)
 @ stdcall -arch=i386,win64 IoReportRootDevice(ptr)
 @ stub -arch=arm64 IoRequestDeviceEjectEx
 @ stub -arch=arm64 IoRequestDeviceRemovalForReset
@@ -2574,7 +2574,7 @@
 @ stub -arch=arm64 KeClockInterruptNotify
 @ stdcall -arch=win64 KeComplementAffinityEx(ptr ptr)
 @ stdcall -arch=win64 KeComplementAffinityEx2(ptr ptr)
-@ stub -arch=arm64 KeConvertAuxiliaryCounterToPerformanceCounter
+@ stdcall KeConvertAuxiliaryCounterToPerformanceCounter(int64 ptr ptr)
 @ stub -arch=arm64 KeConvertPerformanceCounterToAuxiliaryCounter
 @ stdcall -arch=arm64 KeCopyAffinityEx(ptr ptr)
 @ stdcall -arch=win64 KeCopyAffinityEx2(ptr ptr)
@@ -3432,7 +3432,7 @@
 @ cdecl _snprintf_s()
 @ stub -arch=arm64 _snscanf_s
 @ cdecl _snwprintf_s()
-@ stub -arch=arm64 _snwscanf_s
+@ cdecl _snwscanf_s()
 @ stub -arch=arm64 _splitpath_s
 @ stub -arch=arm64 _strnset_s
 @ stub -arch=arm64 _strset_s
@@ -3445,7 +3445,7 @@
 @ stub -arch=arm64 _wcsnset_s
 @ stub -arch=arm64 _wcsset_s
 @ stub -arch=arm64 _wmakepath_s
-@ stub -arch=arm64 _wsplitpath_s
+@ cdecl _wsplitpath_s()
 @ stub -arch=arm64 bsearch_s
 @ cdecl memcpy_s()
 @ cdecl memmove_s()
