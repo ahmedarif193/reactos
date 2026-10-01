@@ -540,6 +540,7 @@ NetClassInstaller(
     UUID Uuid;
     LPWSTR UuidRpcString = NULL;
     LPWSTR UuidString = NULL;
+    HKEY hDriverKey;
     LONG rc;
     DWORD dwLength;
 
@@ -621,6 +622,21 @@ NetClassInstaller(
             {
                 rc = GetLastError();
                 ERR("SetupGetStringFieldW() failed with error 0x%lx\n", rc);
+                goto cleanup;
+            }
+        }
+    }
+
+    if (IsEqualIID(&DeviceInfoData->ClassGuid, &GUID_DEVCLASS_NET))
+    {
+        hDriverKey = SetupDiOpenDevRegKey(DeviceInfoSet, DeviceInfoData, DICS_FLAG_GLOBAL, 0, DIREG_DRV, KEY_QUERY_VALUE);
+        if (hDriverKey != INVALID_HANDLE_VALUE)
+        {
+            rc = RegQueryValueExW(hDriverKey, L"NetCfgInstanceId", NULL, NULL, NULL, NULL);
+            RegCloseKey(hDriverKey);
+            if (rc == ERROR_SUCCESS)
+            {
+                rc = SetupDiInstallDevice(DeviceInfoSet, DeviceInfoData) ? ERROR_SUCCESS : GetLastError();
                 goto cleanup;
             }
         }
