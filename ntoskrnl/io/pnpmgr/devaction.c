@@ -1070,6 +1070,8 @@ PiCallDriverAddDevice(
         goto Cleanup;
     }
 
+    PiClearDevNodeFlag(DeviceNode, DNF_LEGACY_DRIVER);
+
     // finally loop through the stack and call AddDevice for every driver
     for (PLIST_ENTRY listEntry = drvListHead.Flink;
          listEntry != &drvListHead;
@@ -1099,10 +1101,9 @@ PiCallDriverAddDevice(
         }
         else
         {
-            // HACK: the driver doesn't have a AddDevice routine. We shouldn't be here,
-            // but ReactOS' PnP stack is not that correct yet
-            PiSetDevNodeFlag(DeviceNode, DNF_LEGACY_DRIVER);
-            Status = STATUS_UNSUCCESSFUL;
+            if (driverEntry->DriverType == DeviceDriver)
+                PiSetDevNodeFlag(DeviceNode, DNF_LEGACY_DRIVER);
+            Status = STATUS_SUCCESS;
         }
 
         // for filter drivers we don't care about the AddDevice result
