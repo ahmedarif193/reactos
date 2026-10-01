@@ -8,7 +8,7 @@
  */
 
 #include <nvs/include/nvsenv.h>
-#include "archdef.h"
+#include "hardware.h"
 #include <nvs/include/miarchcheck.h>
 
 static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
@@ -47,7 +47,9 @@ static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
     NULL,
     0,
     0xC0800000ULL,
-    FALSE
+    FALSE,
+    FALSE,
+    MI_I386_DIRECT_PAGES
 };
 
 const MI_ARCH_DESCRIPTOR *

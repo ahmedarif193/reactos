@@ -107,6 +107,13 @@ MiInitializeKernelVaLayout(const LOADER_PARAMETER_BLOCK *LoaderBlock)
             Descriptor->MemoryType == LoaderFirmwarePermanent || Descriptor->MemoryType == LoaderSpecialMemory ||
             Descriptor->MemoryType == LoaderHALCachedMemory || Descriptor->MemoryType == LoaderBBTMemory)
             continue;
+        if (Descriptor->MemoryType == LoaderFree && End >= First)
+        {
+            if (First >= MI_I386_DIRECT_PAGES)
+                continue;
+            if (End > MI_I386_DIRECT_PAGES)
+                End = MI_I386_DIRECT_PAGES;
+        }
         if (First >= MI_I386_DIRECT_PAGES || End > MI_I386_DIRECT_PAGES || End < First)
             KeBugCheckEx(MEMORY_MANAGEMENT, 0x444D4150, (ULONG_PTR)First, (ULONG_PTR)End, 0);
 
