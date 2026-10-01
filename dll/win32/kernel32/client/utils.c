@@ -952,6 +952,33 @@ BaseInitializeContext(IN PCONTEXT Context,
     }
 
     Context->ContextFlags = CONTEXT_FULL;
+#elif defined(_M_PPC)
+    {
+        /* Windows NT PowerPC function pointers address {code, TOC}
+         * descriptors: enter the routine at its code with its TOC. */
+        typedef struct { ULONG_PTR EntryPoint; ULONG_PTR Toc; } FUNCTION_DESCRIPTOR;
+        const FUNCTION_DESCRIPTOR *Routine;
+
+        DPRINT("BaseInitializeContext: %p\n", Context);
+
+        RtlZeroMemory(Context, sizeof(*Context));
+
+        if (ContextType == 1)      /* For Threads */
+            Routine = (const FUNCTION_DESCRIPTOR *)BaseThreadStartup;
+        else if (ContextType == 2) /* For Fibers */
+            Routine = (const FUNCTION_DESCRIPTOR *)BaseFiberStartup;
+        else                       /* For first thread in a Process */
+            Routine = (const FUNCTION_DESCRIPTOR *)BaseProcessStartup;
+
+        Context->Gpr3 = (ULONG_PTR)StartAddress;
+        Context->Gpr4 = (ULONG_PTR)Parameter;
+        /* Leave the callee's 24-byte frame header inside the stack. */
+        Context->Gpr1 = ALIGN_DOWN_BY((ULONG_PTR)StackAddress, 16) - 32;
+        Context->Lr = ((const FUNCTION_DESCRIPTOR *)ExitThread)->EntryPoint;
+        Context->Iar = Routine->EntryPoint;
+        Context->Gpr2 = Routine->Toc;
+        Context->ContextFlags = CONTEXT_FULL;
+    }
 #elif defined(_M_ARM)
     DPRINT("BaseInitializeContext: %p\n", Context);
 

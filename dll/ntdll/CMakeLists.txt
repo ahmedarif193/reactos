@@ -84,8 +84,11 @@ elseif(ARCH STREQUAL "riscv64")
     list(APPEND SOURCE
         dispatch/dispatch.c
         rtl/riscv64/rtlexcpt.c)
-else()
-    list(APPEND SOURCE dispatch/dispatch.c)
+elseif(ARCH STREQUAL "ppc")
+    list(APPEND ASM_SOURCE dispatch/ppc/dispatch.S)
+    list(APPEND SOURCE
+        dispatch/dispatch.c
+        rtl/ppc/rtlexcpt.c)
 endif()
 
 add_asm_files(ntdll_asm ${ASM_SOURCE})

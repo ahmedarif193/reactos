@@ -140,6 +140,9 @@ elseif(ARCH STREQUAL "arm64")
 elseif(ARCH STREQUAL "riscv64")
     list(APPEND SOURCE
         client/riscv64/fiber.c)
+elseif(ARCH STREQUAL "ppc")
+    list(APPEND SOURCE
+        client/ppc/fiber.c)
 endif()
 
 add_asm_files(kernel32_asm ${ASM_SOURCE})
