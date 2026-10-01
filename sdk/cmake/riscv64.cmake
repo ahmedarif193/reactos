@@ -17,8 +17,9 @@ endif()
 # As for Clang amd64/arm64: native SEH must also cover loads and stores, not
 # only calls. Keep it C-only, like there.
 add_compile_options("$<$<COMPILE_LANGUAGE:C>:SHELL:-Xclang -fasync-exceptions>")
-add_compile_definitions(_USE_NATIVE_SEH=1
+add_compile_definitions(_USE_NATIVE_SEH=1 _USE_NATIVE_SEH_CXX=1
     "$<$<NOT:$<BOOL:$<TARGET_PROPERTY:WITH_CXX_EXCEPTIONS>>>:_ATL_NO_EXCEPTIONS=1>")
+set(CLANG_NATIVE_SEH TRUE)
 
 set(_RISCV_NT_COMPILE_OPTIONS
     -ffreestanding -fno-builtin -fms-extensions -fsigned-char -fno-strict-aliasing
