@@ -256,7 +256,7 @@ BOOLEAN NTAPI KiUserTrap(_In_ PKTRAP_FRAME TrapFrame);
 
 /* Without a 128-bit compare-exchange, user-mode SList pops run under a lock:
  * ntdll has no pop sequence for the fault handler to roll back. */
-#define KI_USER_SLIST_POP_LOCKED
+#define KI_USER_SLIST_POP_NO_ROLLBACK
 VOID NTAPI KiRundownThread(_In_ PKTHREAD Thread);
 BOOLEAN NTAPI KiSwapContextResume(_In_ BOOLEAN ApcBypass, _In_ PKTHREAD OldThread, _In_ PKTHREAD NewThread);
 VOID NTAPI KiRetireDpcListInDpcStack(_In_ PKPRCB Prcb, _In_ PVOID DpcStack);
