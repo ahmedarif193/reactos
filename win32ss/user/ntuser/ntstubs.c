@@ -153,7 +153,7 @@ NtUserInitializeClientPfnArrays(
       RtlCopyMemory(&ClientProcs[1], pfnClientW, sizeof(ClientProcs[1]));
       RtlCopyMemory(&Workers, pfnClientWorker, sizeof(Workers));
 
-#ifdef _M_IX86
+#ifndef _WIN64
       if (!ClientPfnInit)
 #else
       if (!ClientPfnInit && !PsGetProcessWow64Process(ppi->peProcess))
