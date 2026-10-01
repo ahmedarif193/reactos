@@ -8,6 +8,7 @@
 #include "classlibrary.h"
 #include <gpio.h>
 #include <gpioclx.h>
+#include <acpiioct.h>
 #ifdef _M_ARM64
 #include <ndk/haltypes.h>
 #include <reactos/drivers/reshubio.h>
@@ -1253,6 +1254,48 @@ GpioCxDdiProcessAddDevicePreDeviceCreate(
 
 static
 NTSTATUS
+GpioCxEvaluateAcpiEventInformation(
+    _In_ WDFDEVICE DeviceHandle)
+{
+    PDEVICE_OBJECT Target = WdfDeviceWdmGetAttachedDevice(DeviceHandle);
+    ACPI_EVAL_INPUT_BUFFER Input;
+    ACPI_EVAL_OUTPUT_BUFFER Output;
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Input, sizeof(Input));
+    Input.Signature = ACPI_EVAL_INPUT_BUFFER_SIGNATURE;
+    Input.MethodName[0] = '_';
+    Input.MethodName[1] = 'A';
+    Input.MethodName[2] = 'E';
+    Input.MethodName[3] = 'I';
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IOCTL_ACPI_EVAL_METHOD,
+                                        Target,
+                                        &Input,
+                                        sizeof(Input),
+                                        &Output,
+                                        sizeof(Output),
+                                        FALSE,
+                                        &Event,
+                                        &IoStatus);
+    if (Irp == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = IoCallDriver(Target, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+    return Status;
+}
+
+static
+NTSTATUS
 NTAPI
 GpioCxDdiProcessAddDevicePostDeviceCreate(
     _In_ WDFDRIVER Driver,
@@ -1270,6 +1313,10 @@ GpioCxDdiProcessAddDevicePostDeviceCreate(
     Device = GpioCxGetDeviceContext(DeviceHandle);
     if (DriverContext == NULL || !DriverContext->Registered || Device == NULL)
         return STATUS_INVALID_DEVICE_STATE;
+
+    Status = GpioCxEvaluateAcpiEventInformation(DeviceHandle);
+    if (Status == STATUS_INVALID_DEVICE_REQUEST)
+        return Status;
 
     Device->Driver = Driver;
     Device->Packet = &DriverContext->Packet;
