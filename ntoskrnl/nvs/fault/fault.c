@@ -476,7 +476,9 @@ RetryPage:
             MiPfnInitializePage(&System->Pfn, Frame, SlotAddress, TableFrame,
                                 MiSoftMake(MiSoftDemandZero, Protection, 0), 0);
             Status = MiMakePageValid(Space, PageVa, Slot, TableFrame, Frame, Protection,
-                                     (BOOLEAN)(Access == MiFaultWrite));
+                                     (BOOLEAN)(Access == MiFaultWrite ||
+                                               (MI_PROT_IS_WRITABLE(Protection) && !MI_PROT_IS_EXECUTE(Protection) &&
+                                                Vad->WriteWatchBits == NULL)));
             MI_ATOMIC_ADD64(&Space->DemandZeroFaults, 1);
             MI_ATOMIC_ADD64(&Space->PrivatePages, 1);
             break;

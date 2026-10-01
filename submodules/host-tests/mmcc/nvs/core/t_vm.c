@@ -723,6 +723,11 @@ VmWriteWatch(void)
     CHECK(VmGetWatch(&Space, Base, KB64 + PAGE_SIZE, FALSE, Addresses, 16, &Status) == 16 &&
           Status == STATUS_INVALID_PARAMETER);
 
+    CHECK(UserRead64(&World, 0, Base + 5 * PAGE_SIZE, &Status) == 0 && NT_SUCCESS(Status));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + 5 * PAGE_SIZE, 6)));
+    CHECK(VmGetWatch(&Space, Base, KB64, TRUE, Addresses, 16, &Status) == 1 && NT_SUCCESS(Status));
+    CHECK(Addresses[0] == Base + 5 * PAGE_SIZE);
+
     CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + 8 * PAGE_SIZE, 4)));
     CHECK(NT_SUCCESS(Free(&Space, Base + 2 * PAGE_SIZE, 2 * PAGE_SIZE, MI_MEM_RELEASE)));
     CHECK(VmGetWatch(&Space, Base + 4 * PAGE_SIZE, KB64 - 4 * PAGE_SIZE, FALSE, Addresses, 16, &Status) == 1 &&
@@ -935,9 +940,9 @@ FaultGuardAndCounters(void)
     UserRead64(&World, 0, Base + 0x3000, &Status);
     CHECK(MI_ATOMIC_READ64(&Space.DemandZeroFaults) == 3);
     CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + 0x3000, 9)));
-    CHECK(MI_ATOMIC_READ64(&Space.DirtyFaults) == 1);
+    CHECK(MI_ATOMIC_READ64(&Space.DirtyFaults) == 0);
     CHECK(NT_SUCCESS(UserWrite64(&World, 0, Base + 0x3008, 9)));
-    CHECK(MI_ATOMIC_READ64(&Space.DirtyFaults) == 1);
+    CHECK(MI_ATOMIC_READ64(&Space.DirtyFaults) == 0);
 
     {
         ULONG64 Stack = 0;
@@ -1336,7 +1341,7 @@ PagingCleanPrivateAccounting(void)
         CHECK(NT_SUCCESS(MiAddressSpaceCreate(&World.System, &Spaces[i])));
         WorldAttach(&World, i, &Spaces[i]);
         CHECK(NT_SUCCESS(Alloc(&Spaces[i], &Bases[i], 16 * PAGE_SIZE, MI_MEM_RESERVE | MI_MEM_COMMIT,
-                               MI_PROT_READWRITE)));
+                               MI_PROT_READONLY)));
         for (j = 0; j < 16; j++)
             CHECK(UserRead64(&World, i, Bases[i] + (ULONG64)j * PAGE_SIZE, &Status) == 0 && NT_SUCCESS(Status));
         CHECK(MI_ATOMIC_READ64(&Spaces[i].PrivatePages) == 16);
