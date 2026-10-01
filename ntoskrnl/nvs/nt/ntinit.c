@@ -214,8 +214,9 @@ MiSetDirectFrameCache(ULONG Frame, ULONG Flags)
     {
         if (Slots[Index] != NULL && Updated[Index] != Entries[Index])
         {
-            MiArchPteWrite(Slots[Index], Updated[Index]);
+            MiArchPteWrite(Slots[Index], 0);
             MiArchTlbInvalidate(Addresses[Index], 1, TRUE);
+            MiArchPteWrite(Slots[Index], Updated[Index]);
         }
     }
     return STATUS_SUCCESS;

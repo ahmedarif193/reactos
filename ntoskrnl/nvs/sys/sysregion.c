@@ -133,10 +133,13 @@ MiSystemMapFrames(
 
         if (OwnFrames)
         {
+            ULONG CacheFlags = (LeafFlags & MI_LEAF_CACHE_MASK) |
+                               ((Protection & MI_PROT_NOCACHE) ? MI_LEAF_NOCACHE : 0);
+
             MiPfnInitializePage(&System->Pfn, (ULONG)Frames[i], MiPtSlotAddress(Slot, TableFrame, Va), TableFrame,
                                 MiSoftMake(MiSoftDemandZero, Protection, 0), 0);
-            System->Pfn.Pfn[Frames[i]].CacheFlags = (LeafFlags & MI_LEAF_CACHE_MASK) |
-                                                  ((Protection & MI_PROT_NOCACHE) ? MI_LEAF_NOCACHE : 0);
+            if (CacheFlags == 0 || !NT_SUCCESS(MiPfnSetCache(&System->Pfn, (ULONG)Frames[i], CacheFlags)))
+                System->Pfn.Pfn[Frames[i]].CacheFlags = CacheFlags;
         }
 
         if (LeafFlags & MI_LEAF_PFN_CACHE)
