@@ -14,6 +14,7 @@
 #endif
 
 #define GPIOCLX_MAX_CONNECTION_PINS 64
+#define GPIOCLX_CLIENT_VERSION_MAX 4
 
 typedef struct _GPIOCLX_DRIVER_CONTEXT
 {
@@ -1152,7 +1153,8 @@ GpioCxDdiRegisterClient(
     UNREFERENCED_PARAMETER(RegistryPath);
 
     if (Driver == NULL || Packet == NULL ||
-        Packet->Version != GPIO_CLIENT_VERSION ||
+        Packet->Version < GPIO_CLIENT_VERSION ||
+        Packet->Version > GPIOCLX_CLIENT_VERSION_MAX ||
         Packet->Size < sizeof(GPIO_CLIENT_REGISTRATION_PACKET) ||
         Packet->CLIENT_PrepareController == NULL ||
         Packet->CLIENT_ReleaseController == NULL ||
