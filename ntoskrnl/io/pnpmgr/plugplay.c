@@ -1021,7 +1021,9 @@ IopDeviceStatus(PPLUGPLAY_CONTROL_STATUS_DATA StatusData)
 
             if (DeviceStatus & DN_HAS_PROBLEM)
             {
-                if (DeviceProblem == 0)
+                if (DeviceProblem == 0 ||
+                    (DeviceNode->State >= DeviceNodeDriversAdded &&
+                     DeviceNode->State < DeviceNodeAwaitingQueuedDeletion))
                 {
                     Status = STATUS_INVALID_PARAMETER;
                     break;
