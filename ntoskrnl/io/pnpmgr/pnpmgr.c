@@ -1847,6 +1847,18 @@ IoOpenDeviceRegistryKey(IN PDEVICE_OBJECT DeviceObject,
         KeyNameLength += sizeof(ClassKeyName) - sizeof(UNICODE_NULL);
         Status = IoGetDeviceProperty(DeviceObject, DevicePropertyDriverKeyName,
                                      0, NULL, &DriverKeyLength);
+        if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+        {
+            HANDLE InstanceKey;
+
+            Status = IopCreateDeviceKeyPath(&DeviceNode->InstancePath, REG_OPTION_NON_VOLATILE, &InstanceKey);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            IopEnsureCriticalDeviceDriverKey(InstanceKey, NULL);
+            ZwClose(InstanceKey);
+            Status = IoGetDeviceProperty(DeviceObject, DevicePropertyDriverKeyName,
+                                         0, NULL, &DriverKeyLength);
+        }
         if (Status != STATUS_BUFFER_TOO_SMALL)
             return Status;
         KeyNameLength += DriverKeyLength;
