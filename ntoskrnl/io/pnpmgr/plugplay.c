@@ -914,8 +914,11 @@ IopGetDeviceNodeStatus(PDEVICE_NODE DeviceNode)
         Output |= DN_ROOT_ENUMERATED;
 
     // FIXME: review for deleted and removed states
-    if (DeviceNode->State >= DeviceNodeDriversAdded)
+    if (DeviceNode->State >= DeviceNodeDriversAdded &&
+        DeviceNode->State < DeviceNodeAwaitingQueuedDeletion)
+    {
         Output |= DN_DRIVER_LOADED;
+    }
 
     if (PiIsDevNodeStarted(DeviceNode))
         Output |= DN_STARTED;
