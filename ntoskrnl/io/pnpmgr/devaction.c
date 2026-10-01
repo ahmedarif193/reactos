@@ -1085,8 +1085,10 @@ PiCallDriverAddDevice(
 
         if (driverObject && driverObject->DriverExtension->AddDevice)
         {
+            IopAcquirePnpUnloadBarrier(driverObject);
             Status = driverObject->DriverExtension->AddDevice(driverEntry->DriverObject,
                                                               DeviceNode->PhysicalDeviceObject);
+            IopReleasePnpUnloadBarrier(driverObject);
         }
         else if (driverObject == NULL)
         {
