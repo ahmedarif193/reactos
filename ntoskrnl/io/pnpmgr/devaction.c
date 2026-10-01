@@ -2044,6 +2044,8 @@ PiStartDeviceFinal(
 
     // Query the device state (IRP_MN_QUERY_PNP_DEVICE_STATE)
     PiUpdateDeviceState(DeviceNode);
+    if (DeviceNode->State == DeviceNodeAwaitingQueuedRemoval)
+        return STATUS_SUCCESS;
 
     DPRINT("Sending GUID_DEVICE_ARRIVAL %wZ\n", &DeviceNode->InstancePath);
     IopQueueTargetDeviceEvent(&GUID_DEVICE_ARRIVAL, &DeviceNode->InstancePath);
