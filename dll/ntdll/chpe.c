@@ -1803,8 +1803,14 @@ BOOLEAN
 NTAPI
 ChpeIsChpeProcess(VOID)
 {
+    static volatile LONG ProcessKind;
     PPEB Peb = NtCurrentPeb();
     PIMAGE_NT_HEADERS NtHeader;
+    LONG Kind = ProcessKind;
+    BOOLEAN IsChpe;
+
+    if (Kind != 0)
+        return Kind == 2;
 
     if (Peb == NULL || Peb->ImageBaseAddress == NULL)
         return FALSE;
@@ -1813,8 +1819,10 @@ ChpeIsChpeProcess(VOID)
     if (NtHeader == NULL)
         return FALSE;
 
-    return NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 ||
-           NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_ARM64EC;
+    IsChpe = NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 ||
+             NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_ARM64EC;
+    InterlockedExchange(&ProcessKind, IsChpe ? 2 : 1);
+    return IsChpe;
 }
 
 /*
