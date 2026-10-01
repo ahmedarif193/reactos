@@ -474,14 +474,15 @@ NtfsFsdQueryEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     PIO_STACK_LOCATION IrpSp;
     PFileContextBlock FileCB;
+    PVolumeContextBlock VolCB;
     PUCHAR Output;
     ULONG BytesWritten = 0;
     NTSTATUS Status;
 
     PAGED_CODE();
-    UNREFERENCED_PARAMETER(VolumeDeviceObject);
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     Irp->IoStatus.Information = 0;
     if (!IrpSp->FileObject ||
         !IrpSp->FileObject->FsContext)
@@ -491,7 +492,7 @@ NtfsFsdQueryEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     FileCB = NtfsGetFileContext(IrpSp->FileObject);
-    if (!FileCB->FileRec)
+    if (!FileCB || !FileCB->FileRec || !VolCB || !VolCB->DiskVolume)
     {
         Status = STATUS_INVALID_PARAMETER;
         goto Done;
@@ -512,14 +513,19 @@ NtfsFsdQueryEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
     _SEH2_TRY
     {
         if (IrpSp->Parameters.QueryEa.Length != 0)
             RtlZeroMemory(Output, IrpSp->Parameters.QueryEa.Length);
-        Status = NtfsQueryEa(FileCB,
-                             IrpSp,
-                             Output,
-                             &BytesWritten);
+        Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+        if (NT_SUCCESS(Status))
+        {
+            Status = NtfsQueryEa(FileCB,
+                                 IrpSp,
+                                 Output,
+                                 &BytesWritten);
+        }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -527,6 +533,7 @@ NtfsFsdQueryEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         BytesWritten = 0;
     }
     _SEH2_END;
+    NtfsReleaseMetadata(VolCB);
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
 
@@ -702,12 +709,19 @@ NtfsFsdSetEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (!NT_SUCCESS(Status))
+        goto Done;
+
     Status = NtfsFileRecordUpdateExtendedAttributes(
         FileCB->FileRec,
         Updates,
         EntryCount);
     if (NT_SUCCESS(Status))
     {
+        if (NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY)
+            InterlockedIncrement(&VolCB->DirGeneration);
         FileCB->EaIndex = 1;
         FileObject->Flags |= FO_FILE_MODIFIED;
     }
@@ -715,6 +729,7 @@ NtfsFsdSetEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 Done:
     if (ResourceAcquired)
     {
+        NtfsReleaseMetadata(VolCB);
         ExReleaseResourceLite(NtfsGetMainResource(FileCB));
         KeLeaveCriticalRegion();
     }

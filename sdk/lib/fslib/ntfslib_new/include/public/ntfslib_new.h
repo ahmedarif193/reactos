@@ -542,6 +542,11 @@ NtfsFileRecordWriteFileData(
     _Inout_ PULONG Length,
     _In_ PLARGE_INTEGER Offset);
 
+NTSTATUS
+NtfsFileRecordCreateNamedDataStream(
+    _In_ NtfsFileRecord *FileRecord,
+    _In_ PWSTR StreamName);
+
 /*
  * Changes the logical size of an existing ordinary $DATA stream. Growth
  * reads as zero beyond the prior initialized size; shrink releases complete
@@ -757,6 +762,16 @@ NtfsMasterFileTableDeleteFile(
     _In_reads_(QueryLength) PWCHAR Query,
     _In_ ULONG QueryLength,
     _In_ BOOLEAN RemoveDirectory);
+
+NTSTATUS
+NtfsMasterFileTableDeleteFileEx(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_reads_(QueryLength) PWCHAR Query,
+    _In_ ULONG QueryLength,
+    _In_ BOOLEAN RemoveDirectory,
+    _In_opt_ PNtfsFileRecord CanonicalRecord,
+    _In_ BOOLEAN CanDeleteRecord,
+    _Out_opt_ PBOOLEAN RecordDeleted);
 
 /*
  * Renames or moves one file or directory between counted UTF-16 paths.

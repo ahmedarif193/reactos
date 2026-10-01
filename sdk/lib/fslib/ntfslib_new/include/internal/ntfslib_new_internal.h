@@ -823,6 +823,9 @@ public:
                   _In_     PLARGE_INTEGER Offset);
 
     NTSTATUS
+    CreateNamedDataStream(_In_ PWSTR StreamName);
+
+    NTSTATUS
     SetFileDataSize(_In_ AttributeType AttrType,
                     _In_opt_ PWSTR StreamName,
                     _In_ ULONGLONG NewSize);
@@ -1008,6 +1011,14 @@ private:
         _In_ ULONG FinalLength);
 
     NTSTATUS
+    ReplaceSecurityDescriptorData(
+        _In_reads_bytes_(BufferLength) const UCHAR* Buffer,
+        _In_ ULONG BufferLength);
+
+    NTSTATUS
+    NormalizeSecurityAttributeList();
+
+    NTSTATUS
     ResizeAttributeRecord(_In_ PAttribute TargetAttribute,
                           _In_ ULONG NewAttributeLength);
 
@@ -1025,7 +1036,9 @@ private:
     InsertAttributeListEntry(
         _In_ PAttribute TargetAttribute,
         _In_ FileRecord* AttributeOwner,
-        _In_ UINT32 TimestampFields);
+        _In_ UINT32 TimestampFields,
+        _In_ BOOLEAN SetArchiveBit,
+        _Out_ PBOOLEAN OwnerReferenced);
 
     NTSTATUS
     CreateInitialAttributeList();
@@ -1044,14 +1057,14 @@ private:
     NTSTATUS
     CreateNamedDataStream(
         _In_ PWSTR StreamName,
-        _In_ PUCHAR Buffer,
+        _In_opt_ PUCHAR Buffer,
         _Inout_ PULONG Length,
         _Inout_ PLARGE_INTEGER Offset);
 
     NTSTATUS
     CreateNamedDataStreamInExtension(
         _In_ PWSTR StreamName,
-        _In_ PUCHAR Buffer,
+        _In_opt_ PUCHAR Buffer,
         _Inout_ PULONG Length,
         _Inout_ PLARGE_INTEGER Offset);
 
@@ -1063,7 +1076,9 @@ private:
         _In_ ULONGLONG DataSize,
         _In_ ULONGLONG InitializedSize,
         _Out_ PNonResidentMappingUpdate* MappingUpdate,
-        _Out_opt_ FileRecord** ResultOwner = NULL);
+        _Out_opt_ FileRecord** ResultOwner = NULL,
+        _In_opt_ FileRecord* StagedOwner = NULL,
+        _Out_opt_ NTSTATUS* RecoveryStatus = NULL);
 
     NTSTATUS
     CommitNonResidentMappingUpdate(
@@ -1071,7 +1086,8 @@ private:
 
     void
     AbortNonResidentMappingUpdate(
-        _Inout_ PNonResidentMappingUpdate* MappingUpdate);
+        _Inout_ PNonResidentMappingUpdate* MappingUpdate,
+        _Out_opt_ NTSTATUS* RecoveryStatus = NULL);
 
     NTSTATUS
     BuildNonResidentMappingSegment(
@@ -1469,7 +1485,10 @@ public:
     NTSTATUS
     DeleteFile(
         _Inout_ PWCHAR Query,
-        _In_ BOOLEAN RemoveDirectory);
+        _In_ BOOLEAN RemoveDirectory,
+        _In_opt_ PFileRecord CanonicalRecord = NULL,
+        _In_ BOOLEAN CanDeleteRecord = TRUE,
+        _Out_opt_ PBOOLEAN RecordDeleted = NULL);
 
     NTSTATUS
     RenameFile(

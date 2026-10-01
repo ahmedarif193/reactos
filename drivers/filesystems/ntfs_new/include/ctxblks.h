@@ -421,12 +421,25 @@ NtfsFindOpenLink(_In_ PVolumeContextBlock VolCB,
                  _Out_ PNTFS_NATIVE_LCB* Link);
 
 VOID
+NtfsSetLinkDeletePending(_In_ PFileContextBlock FileCB,
+                         _In_ BOOLEAN DeletePending);
+
+VOID
+NtfsCleanupFailedCreate(_In_ PVolumeContextBlock VolCB,
+                        _In_ PFileContextBlock FileCB,
+                        _In_ PFILE_OBJECT FileObject);
+
+VOID
 NtfsRemoveOpenLink(_In_ PVolumeContextBlock VolCB,
                    _In_ PFileContextBlock FileCB);
 
 NTSTATUS
 NtfsCheckDirectoryOpenChildren(_In_ PVolumeContextBlock VolCB,
                                _In_ ULONGLONG DirectoryReference);
+
+NTSTATUS
+NtfsRefreshDirectoryRecord(_In_ PVolumeContextBlock VolCB,
+                            _In_ PFileContextBlock FileCB);
 
 /* Exported by ntoskrnl, but not declared by the DDK headers. */
 NTKERNELAPI VOID FASTCALL

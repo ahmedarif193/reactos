@@ -217,6 +217,7 @@ FileRecord::SetSecurityDescriptor(
     PStandardInformationEx Standard;
     PUCHAR RecordBackup = NULL;
     BOOLEAN Committed = FALSE;
+    BOOLEAN WriteAttempted = FALSE;
     NTSTATUS Status;
 
     if (!Buffer || BufferLength == 0)
@@ -225,10 +226,10 @@ FileRecord::SetSecurityDescriptor(
         return STATUS_INVALID_DEVICE_STATE;
     if (DiskVolume->IsReadOnly)
         return STATUS_ACCESS_DENIED;
-    if (FindAttributeInRecord(TypeAttributeList, NULL, NULL))
-        return STATUS_NOT_IMPLEMENTED;
     if (!ValidateSecurityDescriptor(Buffer, BufferLength))
         return STATUS_INVALID_PARAMETER;
+    if (FindAttributeInRecord(TypeAttributeList, NULL, NULL))
+        return ReplaceSecurityDescriptorData(Buffer, BufferLength);
 
     RecordBackup =
         new(PagedPool, TAG_FILE_RECORD) UCHAR[RecordBufferSize];
@@ -243,7 +244,7 @@ FileRecord::SetSecurityDescriptor(
     if (SecurityAttribute &&
         SecurityAttribute->IsNonResident)
     {
-        Status = STATUS_NOT_IMPLEMENTED;
+        Status = STATUS_BUFFER_TOO_SMALL;
         goto Restore;
     }
     if (!SecurityAttribute)
@@ -281,6 +282,7 @@ FileRecord::SetSecurityDescriptor(
         NULL);
     if (!NT_SUCCESS(Status))
         goto Restore;
+    WriteAttempted = TRUE;
     Status = DiskVolume->MFT->WriteFileRecordToMFT(this);
     if (!NT_SUCCESS(Status))
         goto Restore;
@@ -292,8 +294,17 @@ Restore:
         RtlCopyMemory(Data, RecordBackup, RecordBufferSize);
         Header = reinterpret_cast<PFileRecordHeader>(Data);
         ClearDataRunCache();
+        if (WriteAttempted)
+        {
+            NTSTATUS RestoreStatus =
+                DiskVolume->MFT->WriteFileRecordToMFT(this);
+            if (!NT_SUCCESS(RestoreStatus))
+                Status = RestoreStatus;
+        }
     }
     delete[] RecordBackup;
+    if (!WriteAttempted && Status == STATUS_BUFFER_TOO_SMALL)
+        return ReplaceSecurityDescriptorData(Buffer, BufferLength);
     return Status;
 }
 

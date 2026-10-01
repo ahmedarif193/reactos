@@ -221,9 +221,31 @@ NtfsMasterFileTableDeleteFile(
     _In_ ULONG QueryLength,
     _In_ BOOLEAN RemoveDirectory)
 {
+    return NtfsMasterFileTableDeleteFileEx(
+        Mft,
+        Query,
+        QueryLength,
+        RemoveDirectory,
+        NULL,
+        TRUE,
+        NULL);
+}
+
+NTSTATUS
+NtfsMasterFileTableDeleteFileEx(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_reads_(QueryLength) PWCHAR Query,
+    _In_ ULONG QueryLength,
+    _In_ BOOLEAN RemoveDirectory,
+    _In_opt_ PNtfsFileRecord CanonicalRecord,
+    _In_ BOOLEAN CanDeleteRecord,
+    _Out_opt_ PBOOLEAN RecordDeleted)
+{
     PWCHAR TerminatedQuery;
     NTSTATUS Status;
 
+    if (RecordDeleted)
+        *RecordDeleted = FALSE;
     if (!Mft)
         return STATUS_INVALID_PARAMETER;
     Status = NtfsCopyTerminatedQuery(
@@ -237,7 +259,10 @@ NtfsMasterFileTableDeleteFile(
         reinterpret_cast<PMasterFileTable>(Mft)->
             DeleteFile(
                 TerminatedQuery,
-                RemoveDirectory);
+                RemoveDirectory,
+                reinterpret_cast<PFileRecord>(CanonicalRecord),
+                CanDeleteRecord,
+                RecordDeleted);
     delete[] TerminatedQuery;
     return Status;
 }

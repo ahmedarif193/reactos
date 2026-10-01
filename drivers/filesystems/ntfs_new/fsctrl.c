@@ -38,10 +38,12 @@
 
 static
 NTSTATUS
-NtfsGetReparsePoint(_Inout_ PIRP Irp,
+NtfsGetReparsePoint(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                    _Inout_ PIRP Irp,
                     _In_ PIO_STACK_LOCATION IrpSp)
 {
     PFileContextBlock FileCB;
+    PVolumeContextBlock VolCB;
     ULONG BufferLength;
     NTSTATUS Status;
 
@@ -53,7 +55,8 @@ NtfsGetReparsePoint(_Inout_ PIRP Irp,
     }
 
     FileCB = NtfsGetFileContext(IrpSp->FileObject);
-    if (!FileCB->FileRec)
+    VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    if (!FileCB || !FileCB->FileRec || !VolCB || !VolCB->DiskVolume)
         return STATUS_INVALID_PARAMETER;
 
     BufferLength =
@@ -61,10 +64,20 @@ NtfsGetReparsePoint(_Inout_ PIRP Irp,
     if (!BufferLength || !Irp->AssociatedIrp.SystemBuffer)
         return STATUS_INVALID_USER_BUFFER;
 
-    Status = NtfsFileRecordReadReparsePoint(
-        FileCB->FileRec,
-        (PUCHAR)Irp->AssociatedIrp.SystemBuffer,
-        &BufferLength);
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtfsFileRecordReadReparsePoint(
+            FileCB->FileRec,
+            (PUCHAR)Irp->AssociatedIrp.SystemBuffer,
+            &BufferLength);
+    }
+    NtfsReleaseMetadata(VolCB);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+    KeLeaveCriticalRegion();
     if (NT_SUCCESS(Status))
     {
         ((PReparsePointEx)Irp->AssociatedIrp.SystemBuffer)->Padding = 0;
@@ -145,15 +158,24 @@ NtfsUpdateReparsePoint(
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
     NtfsAcquireMetadata(VolCB);
-    Status = Delete
-        ? NtfsFileRecordDeleteReparsePoint(
-            FileCB->FileRec,
-            Input,
-            InputLength)
-        : NtfsFileRecordSetReparsePoint(
-            FileCB->FileRec,
-            Input,
-            InputLength);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (NT_SUCCESS(Status))
+    {
+        Status = Delete
+            ? NtfsFileRecordDeleteReparsePoint(
+                FileCB->FileRec,
+                Input,
+                InputLength)
+            : NtfsFileRecordSetReparsePoint(
+                FileCB->FileRec,
+                Input,
+                InputLength);
+        if (NT_SUCCESS(Status) &&
+            (NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY))
+        {
+            InterlockedIncrement(&VolCB->DirGeneration);
+        }
+    }
     NtfsReleaseMetadata(VolCB);
     if (NT_SUCCESS(Status))
         FileObject->Flags |= FO_FILE_MODIFIED;
@@ -211,12 +233,22 @@ NtfsDeleteExternalBacking(
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     NtfsAcquireMetadata(VolCB);
-    Status = NtfsFileRecordDeleteExternalBacking(
-        FileCB->FileRec);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtfsFileRecordDeleteExternalBacking(
+            FileCB->FileRec);
+        if (NT_SUCCESS(Status) &&
+            (NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY))
+        {
+            InterlockedIncrement(&VolCB->DirGeneration);
+        }
+    }
     NtfsReleaseMetadata(VolCB);
     if (NT_SUCCESS(Status))
     {
-        NtfsRefreshFileSizes(FileCB,
+        NtfsRefreshFileSizes(VolCB,
+                             FileCB,
                              FileObject);
         FileObject->Flags |=
             FO_FILE_MODIFIED |
@@ -298,7 +330,8 @@ NtfsSetSparse(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     NtfsReleaseMetadata(VolCB);
     if (NT_SUCCESS(Status))
     {
-        NtfsRefreshFileSizes(FileCB,
+        NtfsRefreshFileSizes(VolCB,
+                             FileCB,
                              FileObject);
         FileObject->Flags |= FO_FILE_MODIFIED;
     }
@@ -407,7 +440,8 @@ NtfsSetZeroData(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     NtfsReleaseMetadata(VolCB);
     if (NT_SUCCESS(Status))
     {
-        NtfsRefreshFileSizes(FileCB,
+        NtfsRefreshFileSizes(VolCB,
+                             FileCB,
                              FileObject);
         FileObject->Flags |= FO_FILE_MODIFIED;
     }
@@ -583,6 +617,7 @@ NtfsQueryAllocatedRanges(
 static
 NTSTATUS
 NtfsGetRetrievalPointers(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
     _Inout_ PIRP Irp,
     _In_ PIO_STACK_LOCATION IrpSp)
 {
@@ -591,6 +626,7 @@ NtfsGetRetrievalPointers(
     PNtfsRetrievalExtent Extents = NULL;
     PFILE_OBJECT FileObject;
     PFileContextBlock FileCB;
+    PVolumeContextBlock VolCB;
     AttributeType RequestedType;
     PWSTR RequestedStream;
     ULONGLONG ReturnedStartingVcn;
@@ -604,7 +640,8 @@ NtfsGetRetrievalPointers(
     Irp->IoStatus.Information = 0;
     FileObject = IrpSp->FileObject;
     FileCB = NtfsGetFileContext(FileObject);
-    if (!FileObject || !FileCB || !FileCB->FileRec)
+    VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    if (!FileObject || !FileCB || !FileCB->FileRec || !VolCB || !VolCB->DiskVolume)
         return STATUS_INVALID_PARAMETER;
 
     InputLength =
@@ -692,14 +729,20 @@ NtfsGetRetrievalPointers(
     Count = Capacity;
     KeEnterCriticalRegion();
     ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
-    Status = NtfsFileRecordQueryRetrievalPointers(
-        FileCB->FileRec,
-        RequestedType,
-        RequestedStream,
-        (ULONGLONG)Input.StartingVcn.QuadPart,
-        &ReturnedStartingVcn,
-        Extents,
-        &Count);
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtfsFileRecordQueryRetrievalPointers(
+            FileCB->FileRec,
+            RequestedType,
+            RequestedStream,
+            (ULONGLONG)Input.StartingVcn.QuadPart,
+            &ReturnedStartingVcn,
+            Extents,
+            &Count);
+    }
+    NtfsReleaseMetadata(VolCB);
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     if (Status == STATUS_NOT_FOUND &&
@@ -1403,7 +1446,7 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
                     case FSCTL_GET_REPARSE_POINT:
                         Irp->IoStatus.Status =
-                            NtfsGetReparsePoint(Irp, IrpSp);
+                            NtfsGetReparsePoint(VolumeDeviceObject, Irp, IrpSp);
                         break;
 
                     case FSCTL_SET_REPARSE_POINT:
@@ -1458,6 +1501,7 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     case FSCTL_GET_RETRIEVAL_POINTERS:
                         Irp->IoStatus.Status =
                             NtfsGetRetrievalPointers(
+                                VolumeDeviceObject,
                                 Irp,
                                 IrpSp);
                         break;

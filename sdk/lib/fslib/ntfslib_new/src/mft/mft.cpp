@@ -444,6 +444,8 @@ MasterFileTable::GetFileRecordInDirectory(
         return Status;
 
     /* The high 16 bits are the sequence number, not part of the ordinal. */
+    if (GetFRNFromFileRef(FileReference) > MAXULONG)
+        return STATUS_NOT_IMPLEMENTED;
     Status = GetFileRecord(
         (ULONG)(FileReference & 0xFFFFFFFFFFFFULL),
         &FoundFile);

@@ -953,6 +953,404 @@ ZeroRunBytes(_In_ PVolume DiskVolume,
     return Status;
 }
 
+NTSTATUS
+FileRecord::NormalizeSecurityAttributeList()
+{
+    PAttribute Attribute = FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+    PDataRun Runs = NULL;
+    PUCHAR RecordBackup = NULL;
+    PUCHAR ListData = NULL;
+    ULONGLONG ClusterSize;
+    ULONGLONG ClusterCount;
+    ULONG Length;
+    BOOLEAN WriteAttempted = FALSE;
+    BOOLEAN Restored = TRUE;
+    NTSTATUS Status;
+
+    if (!Attribute || Attribute->IsNonResident)
+        return STATUS_SUCCESS;
+    Status = ValidateResidentAttributeForUpdate(Attribute, &Length);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Attribute->Flags != 0 || Length == 0)
+        return STATUS_FILE_CORRUPT_ERROR;
+    ClusterSize = BytesPerCluster(DiskVolume);
+    if (ClusterSize == 0)
+        return STATUS_FILE_CORRUPT_ERROR;
+    ClusterCount = Length / ClusterSize + (Length % ClusterSize != 0);
+    if (ClusterCount > MAXULONG)
+        return STATUS_FILE_TOO_LARGE;
+    RecordBackup = new(PagedPool, TAG_FILE_RECORD) UCHAR[RecordBufferSize];
+    ListData = new(PagedPool, TAG_NTFS) UCHAR[Length];
+    if (!RecordBackup || !ListData)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
+    }
+    RtlCopyMemory(RecordBackup, Data, RecordBufferSize);
+    RtlCopyMemory(ListData,
+                  reinterpret_cast<PUCHAR>(Attribute) + Attribute->Resident.DataOffset,
+                  Length);
+    Status = DiskVolume->AllocateClusters(0, (ULONG)ClusterCount,
+                                          RecordBufferSize / 3 ? RecordBufferSize / 3 : 1, &Runs);
+    if (!NT_SUCCESS(Status))
+        goto Done;
+    Status = WriteRunBytes(DiskVolume, Runs, 0, ListData, Length);
+    if (!NT_SUCCESS(Status))
+        goto Restore;
+    Status = BuildNonResidentMappingSegment(Attribute, Runs, 0, 0, 0,
+                                            ClusterCount * ClusterSize,
+                                            Length, Length, 0);
+    if (!NT_SUCCESS(Status))
+        goto Restore;
+    WriteAttempted = TRUE;
+    Status = DiskVolume->MFT->WriteFileRecordToMFT(this);
+    if (NT_SUCCESS(Status))
+    {
+        delete[] AttributeListData;
+        AttributeListData = NULL;
+        AttributeListLength = 0;
+        goto Done;
+    }
+
+Restore:
+    RtlCopyMemory(Data, RecordBackup, RecordBufferSize);
+    Header = reinterpret_cast<PFileRecordHeader>(Data);
+    ClearDataRunCache();
+    if (WriteAttempted)
+    {
+        NTSTATUS RestoreStatus = DiskVolume->MFT->WriteFileRecordToMFT(this);
+        if (!NT_SUCCESS(RestoreStatus))
+        {
+            Restored = FALSE;
+            Status = RestoreStatus;
+        }
+    }
+    if (Restored)
+        (void)DiskVolume->ReleaseClusters(Runs);
+
+Done:
+    FreeDataRun(Runs);
+    delete[] ListData;
+    delete[] RecordBackup;
+    return Status;
+}
+
+NTSTATUS
+FileRecord::ReplaceSecurityDescriptorData(
+    _In_reads_bytes_(BufferLength) const UCHAR* Buffer,
+    _In_ ULONG BufferLength)
+{
+    PAttribute Attribute;
+    PAttribute StandardAttribute;
+    PStandardInformationEx Standard;
+    PFileRecord AttributeOwner = NULL;
+    PFileRecord OriginalOwner = NULL;
+    PFileRecord StagedOwner = NULL;
+    PDataRun OldRuns = NULL;
+    PDataRun NewRuns = NULL;
+    PNonResidentMappingUpdate MappingUpdate = NULL;
+    PUCHAR BaseBackup = NULL;
+    PUCHAR OwnerBackup = NULL;
+    ULONGLONG ClusterSize;
+    ULONGLONG ClusterCount;
+    ULONGLONG OldAllocatedSize;
+    BOOLEAN BaseWriteAttempted = FALSE;
+    BOOLEAN OwnerWriteAttempted = FALSE;
+    BOOLEAN Restored = TRUE;
+    BOOLEAN Committed = FALSE;
+    NTSTATUS RecoveryStatus = STATUS_SUCCESS;
+    NTSTATUS Status;
+
+    if (!Buffer || !BufferLength || !Header || Header->BaseFileRecord != 0 ||
+        Header->SequenceNumber == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Status = NormalizeSecurityAttributeList();
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (FindAttributeInRecord(TypeAttributeList, NULL, NULL))
+    {
+        Status = LoadAttributeList();
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    Attribute = GetAttribute(TypeSecurityDescriptor, NULL);
+    if (Attribute)
+    {
+        OriginalOwner = GetAttributeOwner(Attribute);
+        if (!OriginalOwner)
+            return STATUS_FILE_CORRUPT_ERROR;
+        Status = OriginalOwner->ValidateAttributeForUpdate(
+            Attribute, !!Attribute->IsNonResident, NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (Attribute->NameLength != 0 || Attribute->Flags != 0 ||
+            (Attribute->IsNonResident && Attribute->NonResident.FirstVCN != 0))
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+        if (Attribute->IsNonResident)
+        {
+            OldRuns = FindNonResidentData(Attribute);
+            if (!OldRuns)
+                return STATUS_FILE_CORRUPT_ERROR;
+            Status = GetRunBytes(DiskVolume, OldRuns, &OldAllocatedSize);
+            if (!NT_SUCCESS(Status) ||
+                OldAllocatedSize != Attribute->NonResident.AllocatedSize)
+            {
+                Status = STATUS_FILE_CORRUPT_ERROR;
+                goto Done;
+            }
+        }
+    }
+    BaseBackup = new(PagedPool, TAG_FILE_RECORD) UCHAR[RecordBufferSize];
+    if (OriginalOwner && OriginalOwner != this)
+        OwnerBackup = new(PagedPool, TAG_FILE_RECORD) UCHAR[OriginalOwner->RecordBufferSize];
+    if (!BaseBackup || (OriginalOwner && OriginalOwner != this && !OwnerBackup))
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
+    }
+    RtlCopyMemory(BaseBackup, Data, RecordBufferSize);
+    if (OwnerBackup)
+        RtlCopyMemory(OwnerBackup, OriginalOwner->Data, OriginalOwner->RecordBufferSize);
+
+    AttributeOwner = OriginalOwner ? OriginalOwner : this;
+    if ((!Attribute || !Attribute->IsNonResident) &&
+        (Attribute || !FindAttributeInRecord(TypeAttributeList, NULL, NULL)))
+    {
+        if (!Attribute)
+        {
+            Status = InsertResidentAttribute(TypeSecurityDescriptor, NULL, &Attribute);
+            if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_TOO_SMALL)
+                goto Restore;
+        }
+        else
+        {
+            Status = STATUS_SUCCESS;
+        }
+        if (NT_SUCCESS(Status))
+            Status = AttributeOwner->ReplaceResidentData(Attribute, Buffer, BufferLength);
+        if (NT_SUCCESS(Status))
+            goto Publish;
+        if (Status != STATUS_BUFFER_TOO_SMALL)
+            goto Restore;
+        RtlCopyMemory(Data, BaseBackup, RecordBufferSize);
+        Header = reinterpret_cast<PFileRecordHeader>(Data);
+        ClearDataRunCache();
+        if (OwnerBackup)
+        {
+            RtlCopyMemory(OriginalOwner->Data, OwnerBackup, OriginalOwner->RecordBufferSize);
+            OriginalOwner->Header = reinterpret_cast<PFileRecordHeader>(OriginalOwner->Data);
+            OriginalOwner->ClearDataRunCache();
+        }
+    }
+
+    ClusterSize = BytesPerCluster(DiskVolume);
+    if (ClusterSize == 0)
+    {
+        Status = STATUS_FILE_CORRUPT_ERROR;
+        goto Restore;
+    }
+    ClusterCount = BufferLength / ClusterSize + (BufferLength % ClusterSize != 0);
+    if (ClusterCount == 0 || ClusterCount > MAXULONG)
+    {
+        Status = STATUS_FILE_TOO_LARGE;
+        goto Restore;
+    }
+    Status = DiskVolume->AllocateClusters(0, (ULONG)ClusterCount,
+                                          RecordBufferSize / 3 ? RecordBufferSize / 3 : 1, &NewRuns);
+    if (!NT_SUCCESS(Status))
+        goto Restore;
+    Status = WriteRunBytes(DiskVolume, NewRuns, 0, const_cast<PUCHAR>(Buffer), BufferLength);
+    if (!NT_SUCCESS(Status))
+        goto Restore;
+
+    for (ULONG Attempt = 0; Attempt < 2; Attempt++)
+    {
+        Attribute = GetAttribute(TypeSecurityDescriptor, NULL);
+        if (!Attribute && FindAttributeInRecord(TypeAttributeList, NULL, NULL))
+        {
+            Status = DiskVolume->MFT->AllocateExtensionFileRecord(
+                ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber,
+                &StagedOwner);
+            if (!NT_SUCCESS(Status))
+                goto Restore;
+            StagedOwner->BaseRecordOwner = this;
+            Status = StagedOwner->SetAutomaticTimestampMask(0);
+            if (NT_SUCCESS(Status))
+                Status = StagedOwner->InsertResidentAttribute(TypeSecurityDescriptor, NULL, &Attribute);
+            if (!NT_SUCCESS(Status))
+                goto Restore;
+            AttributeOwner = StagedOwner;
+        }
+        else if (!Attribute)
+        {
+            AttributeOwner = this;
+            Status = InsertResidentAttribute(TypeSecurityDescriptor, NULL, &Attribute);
+        }
+        else
+        {
+            AttributeOwner = GetAttributeOwner(Attribute);
+            Status = AttributeOwner ? STATUS_SUCCESS : STATUS_FILE_CORRUPT_ERROR;
+        }
+        if (NT_SUCCESS(Status))
+            Status = ReplaceNonResidentMappingPairs(
+                &Attribute, NewRuns, ClusterCount * ClusterSize,
+                BufferLength, BufferLength, &MappingUpdate,
+                &AttributeOwner, StagedOwner, &RecoveryStatus);
+        if (NT_SUCCESS(Status))
+            break;
+        if (!NT_SUCCESS(RecoveryStatus))
+            goto Restore;
+        if (Status != STATUS_BUFFER_TOO_SMALL || Attempt != 0 ||
+            FindAttributeInRecord(TypeAttributeList, NULL, NULL))
+        {
+            goto Restore;
+        }
+        RtlCopyMemory(Data, BaseBackup, RecordBufferSize);
+        Header = reinterpret_cast<PFileRecordHeader>(Data);
+        ClearDataRunCache();
+        Status = CreateInitialAttributeList();
+        if (!NT_SUCCESS(Status))
+        {
+            BaseWriteAttempted = TRUE;
+            goto Restore;
+        }
+        RtlCopyMemory(BaseBackup, Data, RecordBufferSize);
+        Status = NormalizeSecurityAttributeList();
+        if (!NT_SUCCESS(Status))
+        {
+            BaseWriteAttempted = TRUE;
+            goto Restore;
+        }
+        RtlCopyMemory(BaseBackup, Data, RecordBufferSize);
+        delete[] OwnerBackup;
+        OwnerBackup = NULL;
+        Attribute = GetAttribute(TypeSecurityDescriptor, NULL);
+        OriginalOwner = Attribute ? GetAttributeOwner(Attribute) : NULL;
+        if (Attribute && !OriginalOwner)
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            goto Restore;
+        }
+        if (OriginalOwner && OriginalOwner != this)
+        {
+            OwnerBackup = new(PagedPool, TAG_FILE_RECORD) UCHAR[OriginalOwner->RecordBufferSize];
+            if (!OwnerBackup)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto Restore;
+            }
+            RtlCopyMemory(OwnerBackup, OriginalOwner->Data, OriginalOwner->RecordBufferSize);
+        }
+    }
+
+Publish:
+    Status = GetStandardInformationForUpdate(&StandardAttribute, &Standard);
+    if (!NT_SUCCESS(Status))
+        goto Restore;
+    if (StandardAttribute->Resident.DataLength >=
+        FIELD_OFFSET(StandardInformationEx, SecurityId) + sizeof(UINT32))
+    {
+        Standard->SecurityId = 0;
+    }
+    Status = PrepareAutomaticTimestamps(NTFS_BASIC_INFO_CHANGE_TIME, NULL);
+    if (!NT_SUCCESS(Status))
+        goto Restore;
+    if (MappingUpdate)
+    {
+        Status = CommitNonResidentMappingUpdate(&MappingUpdate);
+    }
+    else
+    {
+        if (AttributeOwner != this)
+        {
+            OwnerWriteAttempted = TRUE;
+            Status = DiskVolume->MFT->WriteFileRecordToMFT(AttributeOwner);
+            if (!NT_SUCCESS(Status))
+                goto Restore;
+        }
+        BaseWriteAttempted = TRUE;
+        Status = DiskVolume->MFT->WriteFileRecordToMFT(this);
+    }
+    if (!NT_SUCCESS(Status))
+        goto Restore;
+    Committed = TRUE;
+    if (OldRuns)
+        (void)DiskVolume->ReleaseClusters(OldRuns);
+    ClearDataRunCache();
+    ClearExtentCache();
+    delete[] AttributeListData;
+    AttributeListData = NULL;
+    AttributeListLength = 0;
+    Status = STATUS_SUCCESS;
+    goto Done;
+
+Restore:
+    if (MappingUpdate)
+    {
+        NTSTATUS MappingRecovery;
+        AbortNonResidentMappingUpdate(&MappingUpdate, &MappingRecovery);
+        if (!NT_SUCCESS(MappingRecovery))
+            RecoveryStatus = MappingRecovery;
+    }
+    if (BaseBackup)
+    {
+        RtlCopyMemory(Data, BaseBackup, RecordBufferSize);
+        Header = reinterpret_cast<PFileRecordHeader>(Data);
+        ClearDataRunCache();
+    }
+    if (OwnerBackup)
+    {
+        RtlCopyMemory(OriginalOwner->Data, OwnerBackup, OriginalOwner->RecordBufferSize);
+        OriginalOwner->Header = reinterpret_cast<PFileRecordHeader>(OriginalOwner->Data);
+        OriginalOwner->ClearDataRunCache();
+        if (OwnerWriteAttempted)
+        {
+            NTSTATUS RestoreStatus = DiskVolume->MFT->WriteFileRecordToMFT(OriginalOwner);
+            if (!NT_SUCCESS(RestoreStatus))
+                RecoveryStatus = RestoreStatus;
+        }
+    }
+    if (BaseWriteAttempted)
+    {
+        NTSTATUS RestoreStatus = DiskVolume->MFT->WriteFileRecordToMFT(this);
+        if (!NT_SUCCESS(RestoreStatus))
+            RecoveryStatus = RestoreStatus;
+    }
+    Restored = NT_SUCCESS(RecoveryStatus);
+    if (StagedOwner && Restored)
+    {
+        NTSTATUS CleanupStatus = DiskVolume->MFT->DeallocateExtensionFileRecord(StagedOwner);
+        if (!NT_SUCCESS(CleanupStatus))
+        {
+            Restored = FALSE;
+            RecoveryStatus = CleanupStatus;
+        }
+    }
+    if (NewRuns && Restored)
+        (void)DiskVolume->ReleaseClusters(NewRuns);
+    if (!NT_SUCCESS(RecoveryStatus))
+        Status = RecoveryStatus;
+    ClearExtentCache();
+    delete[] AttributeListData;
+    AttributeListData = NULL;
+    AttributeListLength = 0;
+
+Done:
+    if (!Committed && !BaseBackup && NewRuns)
+        (void)DiskVolume->ReleaseClusters(NewRuns);
+    delete StagedOwner;
+    FreeDataRun(NewRuns);
+    FreeDataRun(OldRuns);
+    delete[] OwnerBackup;
+    delete[] BaseBackup;
+    return Status;
+}
+
 static ULONGLONG
 PreferredLCNAfterRuns(_In_ PDataRun Runs,
                       _In_ ULONGLONG ClustersInVolume)
@@ -973,9 +1371,33 @@ PreferredLCNAfterRuns(_In_ PDataRun Runs,
 }
 
 NTSTATUS
+FileRecord::CreateNamedDataStream(_In_ PWSTR StreamName)
+{
+    ULONG Length = 0;
+    LARGE_INTEGER Offset = {};
+
+    if (!StreamName || StreamName[0] == 0 ||
+        !Header || !Data || !DiskVolume)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (DiskVolume->IsReadOnly)
+        return STATUS_ACCESS_DENIED;
+    if (Header->BaseFileRecord != 0)
+        return STATUS_NOT_IMPLEMENTED;
+    if (GetAttribute(TypeData, StreamName))
+        return STATUS_OBJECT_NAME_COLLISION;
+
+    return CreateNamedDataStream(StreamName,
+                                 NULL,
+                                 &Length,
+                                 &Offset);
+}
+
+NTSTATUS
 FileRecord::CreateNamedDataStream(
     _In_ PWSTR StreamName,
-    _In_ PUCHAR Buffer,
+    _In_opt_ PUCHAR Buffer,
     _Inout_ PULONG Length,
     _Inout_ PLARGE_INTEGER Offset)
 {
@@ -988,8 +1410,8 @@ FileRecord::CreateNamedDataStream(
     NTSTATUS Status;
 
     if (!StreamName || StreamName[0] == 0 ||
-        !Buffer || !Length || !Offset ||
-        *Length == 0 || !Header)
+        !Length || !Offset ||
+        (!Buffer && *Length != 0) || !Header)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -1104,9 +1526,24 @@ FileRecord::CreateNamedDataStream(
     }
     else if (NT_SUCCESS(Status))
     {
+        if (RequestedLength == 0)
+        {
+            PAttribute StandardAttribute;
+            PStandardInformationEx Standard;
+
+            Status = GetStandardInformationForUpdate(
+                &StandardAttribute,
+                &Standard);
+            if (!NT_SUCCESS(Status))
+                goto Done;
+            Standard->FilePermissions =
+                (Standard->FilePermissions & ~(ULONG)FILE_PERM_NORMAL) | FILE_PERM_ARCHIVE;
+        }
         Status = PrepareAutomaticTimestamps(
-            NTFS_BASIC_INFO_LAST_WRITE_TIME |
-            NTFS_BASIC_INFO_CHANGE_TIME,
+            NTFS_BASIC_INFO_CHANGE_TIME |
+                (RequestedLength != 0
+                 ? NTFS_BASIC_INFO_LAST_WRITE_TIME
+                 : 0),
             NULL);
         if (NT_SUCCESS(Status))
         {
@@ -1136,7 +1573,7 @@ Done:
 NTSTATUS
 FileRecord::CreateNamedDataStreamInExtension(
     _In_ PWSTR StreamName,
-    _In_ PUCHAR Buffer,
+    _In_opt_ PUCHAR Buffer,
     _Inout_ PULONG Length,
     _Inout_ PLARGE_INTEGER Offset)
 {
@@ -1147,12 +1584,13 @@ FileRecord::CreateNamedDataStreamInExtension(
     ULONGLONG EndOffset;
     ULONG RequestedLength;
     ULONG WorkingLength;
-    NTSTATUS CleanupStatus;
+    BOOLEAN OwnerReferenced = FALSE;
+    NTSTATUS CleanupStatus = STATUS_SUCCESS;
     NTSTATUS Status;
 
     if (!StreamName || StreamName[0] == 0 ||
-        !Buffer || !Length || !Offset ||
-        *Length == 0 || !Header ||
+        !Length || !Offset ||
+        (!Buffer && *Length != 0) || !Header ||
         Header->BaseFileRecord != 0 ||
         !FindAttributeInRecord(
             TypeAttributeList,
@@ -1255,8 +1693,12 @@ FileRecord::CreateNamedDataStreamInExtension(
     Status = InsertAttributeListEntry(
         TargetAttribute,
         Extension,
-        NTFS_BASIC_INFO_LAST_WRITE_TIME |
-        NTFS_BASIC_INFO_CHANGE_TIME);
+        NTFS_BASIC_INFO_CHANGE_TIME |
+            (RequestedLength != 0
+             ? NTFS_BASIC_INFO_LAST_WRITE_TIME
+             : 0),
+        RequestedLength == 0,
+        &OwnerReferenced);
     if (!NT_SUCCESS(Status))
         goto Rollback;
 
@@ -1266,20 +1708,20 @@ FileRecord::CreateNamedDataStreamInExtension(
     return STATUS_SUCCESS;
 
 Rollback:
-    CleanupStatus =
-        DiskVolume->MFT->
-            DeallocateExtensionFileRecord(
-                Extension);
-    if (AllocatedRuns &&
-        NT_SUCCESS(CleanupStatus))
+    if (!OwnerReferenced)
     {
-        NTSTATUS ReleaseStatus =
-            DiskVolume->ReleaseClusters(
-                AllocatedRuns);
-        if (NT_SUCCESS(CleanupStatus) &&
-            !NT_SUCCESS(ReleaseStatus))
+        CleanupStatus =
+            DiskVolume->MFT->
+                DeallocateExtensionFileRecord(
+                    Extension);
+        if (AllocatedRuns &&
+            NT_SUCCESS(CleanupStatus))
         {
-            CleanupStatus = ReleaseStatus;
+            NTSTATUS ReleaseStatus =
+                DiskVolume->ReleaseClusters(
+                    AllocatedRuns);
+            if (!NT_SUCCESS(ReleaseStatus))
+                CleanupStatus = ReleaseStatus;
         }
     }
     FreeDataRun(AllocatedRuns);
@@ -3863,6 +4305,8 @@ FileRecord::PromoteResidentData(
     ULONG ClusterCount;
     ULONG MaxRuns;
     ULONG OldDataLength;
+    BOOLEAN WriteAttempted = FALSE;
+    BOOLEAN Restored = TRUE;
     NTSTATUS Status;
 
     if (!TargetAttribute ||
@@ -4023,6 +4467,7 @@ FileRecord::PromoteResidentData(
     if (!NT_SUCCESS(Status))
         goto Rollback;
 
+    WriteAttempted = TRUE;
     Status = DiskVolume->MFT->WriteFileRecordToMFT(this);
     if (NT_SUCCESS(Status))
         goto Done;
@@ -4031,7 +4476,16 @@ Rollback:
     RtlCopyMemory(Data, RecordBackup, RecordBufferSize);
     Header = reinterpret_cast<PFileRecordHeader>(Data);
     ClearDataRunCache();
-    if (AllocatedRuns)
+    if (WriteAttempted)
+    {
+        NTSTATUS RestoreStatus = DiskVolume->MFT->WriteFileRecordToMFT(this);
+        if (!NT_SUCCESS(RestoreStatus))
+        {
+            Restored = FALSE;
+            Status = RestoreStatus;
+        }
+    }
+    if (AllocatedRuns && Restored)
         (void)DiskVolume->ReleaseClusters(AllocatedRuns);
 
 Done:

@@ -35,6 +35,12 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
             Target = EndOffset;
 
         NtfsAcquireMetadata(VolCB);
+        Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+        if (!NT_SUCCESS(Status))
+        {
+            NtfsReleaseMetadata(VolCB);
+            return FALSE;
+        }
         DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType,
                                                    FileCB->RequestedStream);
         if (EndOffset <= PAGE_SIZE &&
@@ -98,6 +104,13 @@ NtfsPersistPendingSize(_In_ PVolumeContextBlock VolCB,
 
     ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
     NtfsAcquireMetadata(VolCB);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (!NT_SUCCESS(Status))
+    {
+        NtfsReleaseMetadata(VolCB);
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+        return Status;
+    }
     DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
     if (DataAttribute && DataAttribute->IsNonResident)
     {
@@ -148,6 +161,7 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
     LONGLONG EndOffset = ByteOffset->QuadPart + Length;
     BOOLEAN Handled = FALSE;
     BOOLEAN Extending;
+    NTSTATUS TimestampStatus;
 
     if (ByteOffset->QuadPart < 0 || !CcCanIWrite(FileObj, Length, TRUE, FALSE))
         return FALSE;
@@ -211,12 +225,15 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
         FileCB->WriteTimesStamped = TRUE;
         ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
         NtfsAcquireMetadata(VolCB);
-        NtfsFileRecordUpdateAutomaticTimestamps(FileCB->FileRec,
-                                                NTFS_BASIC_INFO_LAST_WRITE_TIME |
-                                                NTFS_BASIC_INFO_CHANGE_TIME);
+        TimestampStatus = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+        if (NT_SUCCESS(TimestampStatus))
+            TimestampStatus = NtfsFileRecordUpdateAutomaticTimestamps(
+                FileCB->FileRec,
+                NTFS_BASIC_INFO_LAST_WRITE_TIME | NTFS_BASIC_INFO_CHANGE_TIME);
+        if (NT_SUCCESS(TimestampStatus))
+            InterlockedIncrement(&VolCB->DirGeneration);
         NtfsReleaseMetadata(VolCB);
         ExReleaseResourceLite(NtfsGetMainResource(FileCB));
-        InterlockedIncrement(&VolCB->DirGeneration);
     }
 
     KeLeaveCriticalRegion();
@@ -445,18 +462,22 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
     else
     {
-        Status = NtfsFileRecordWriteFileData(FileRec,
-                                             RequestedType,
-                                             RequestedStream,
-                                             Buffer,
-                                             &Length,
-                                             &ByteOffset);
+        Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+        if (NT_SUCCESS(Status))
+            Status = NtfsFileRecordWriteFileData(FileRec,
+                                                 RequestedType,
+                                                 RequestedStream,
+                                                 Buffer,
+                                                 &Length,
+                                                 &ByteOffset);
 
         /* The library updates duplicated $FILE_NAME information through a
          * separate parent record. Invalidate parsed directory snapshots
          * before releasing MetadataResource or a later open can reuse the
          * pre-write sizes from CachedLookupParent. */
-        if (NT_SUCCESS(Status) && Length != 0 && RequestedType == TypeData && !RequestedStream)
+        if (NT_SUCCESS(Status) && Length != 0 &&
+            ((RequestedType == TypeData && !RequestedStream) ||
+             (NtfsFileRecordGetHeader(FileRec)->Flags & FR_IS_DIRECTORY)))
             InterlockedIncrement(&VolCB->DirGeneration);
     }
 
@@ -476,7 +497,7 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     if (NT_SUCCESS(Status))
     {
         if (!PagingIo)
-            NtfsRefreshFileSizes(FileCB, FileObj);
+            NtfsRefreshFileSizes(VolCB, FileCB, FileObj);
         if (!PagingIo && Length != 0 && RequestedType == TypeData)
             NtfsPurgeStreamCache(FileCB, FileObj, &ByteOffset, Length);
         FileObj->Flags |=

@@ -986,7 +986,9 @@ NTSTATUS
 FileRecord::InsertAttributeListEntry(
     _In_ PAttribute TargetAttribute,
     _In_ PFileRecord AttributeOwner,
-    _In_ UINT32 TimestampFields)
+    _In_ UINT32 TimestampFields,
+    _In_ BOOLEAN SetArchiveBit,
+    _Out_ PBOOLEAN OwnerReferenced)
 {
     PAttribute ListAttribute;
     PUCHAR BaseRecordBackup = NULL;
@@ -1001,11 +1003,16 @@ FileRecord::InsertAttributeListEntry(
     ULONG NameLength;
     ULONG NewEntryLength;
     ULONG NewListLength;
+    ULONG OldListLength;
     ULONG Offset;
     ULONG PreviousOffset = MAXULONG;
     ULONG WrittenLength;
     BOOLEAN ListWriteAttempted = FALSE;
     NTSTATUS Status;
+
+    if (!OwnerReferenced)
+        return STATUS_INVALID_PARAMETER;
+    *OwnerReferenced = FALSE;
 
     if (!TargetAttribute || !AttributeOwner ||
         !AttributeOwner->Header ||
@@ -1077,6 +1084,7 @@ FileRecord::InsertAttributeListEntry(
             ? STATUS_FILE_CORRUPT_ERROR
             : Status;
     }
+    OldListLength = AttributeListLength;
     ListAttribute = FindAttributeInRecord(
         TypeAttributeList,
         NULL,
@@ -1269,6 +1277,19 @@ FileRecord::InsertAttributeListEntry(
         goto Done;
     }
 
+    if (SetArchiveBit)
+    {
+        PAttribute StandardAttribute;
+        PStandardInformationEx Standard;
+
+        Status = GetStandardInformationForUpdate(
+            &StandardAttribute,
+            &Standard);
+        if (!NT_SUCCESS(Status))
+            goto Restore;
+        Standard->FilePermissions =
+            (Standard->FilePermissions & ~(ULONG)FILE_PERM_NORMAL) | FILE_PERM_ARCHIVE;
+    }
     Status = PrepareAutomaticTimestamps(
         TimestampFields,
         NULL);
@@ -1280,6 +1301,7 @@ FileRecord::InsertAttributeListEntry(
 
         WrittenLength = NewListLength;
         ListWriteAttempted = TRUE;
+        *OwnerReferenced = TRUE;
         Status = WriteFileData(
             TypeAttributeList,
             NULL,
@@ -1312,9 +1334,10 @@ Restore:
     {
         LARGE_INTEGER ListOffset = {};
         ULONG RestoreLength =
-            AttributeListLength;
+            OldListLength;
+        NTSTATUS RestoreStatus;
 
-        (void)WriteFileData(
+        RestoreStatus = WriteFileData(
             TypeAttributeList,
             NULL,
             OldList,
@@ -1327,7 +1350,25 @@ Restore:
             reinterpret_cast<PFileRecordHeader>(
                 Data);
         ClearDataRunCache();
+        if (NT_SUCCESS(RestoreStatus) &&
+            RestoreLength == OldListLength)
+        {
+            RestoreStatus = DiskVolume->MFT->
+                WriteFileRecordToMFT(this);
+            if (NT_SUCCESS(RestoreStatus))
+                *OwnerReferenced = FALSE;
+        }
+        else if (NT_SUCCESS(RestoreStatus))
+        {
+            RestoreStatus = STATUS_END_OF_FILE;
+        }
+        if (!NT_SUCCESS(RestoreStatus))
+            Status = RestoreStatus;
     }
+    ClearExtentCache();
+    delete[] AttributeListData;
+    AttributeListData = NULL;
+    AttributeListLength = 0;
 
 Done:
     delete[] BaseRecordBackup;
@@ -1350,6 +1391,7 @@ FileRecord::CreateInitialAttributeList()
     PINITIAL_ATTRIBUTE_LIST_ENTRY Entries = NULL;
     PUCHAR BaseRecordBackup = NULL;
     PUCHAR CandidateData[2] = {};
+    PDataRun CandidateRuns[2] = {};
     PUCHAR ListData = NULL;
     PWSTR CandidateNames[2] = {};
     ULONGLONG BaseFileReference;
@@ -1440,11 +1482,12 @@ FileRecord::CreateInitialAttributeList()
             CandidateRecordLength =
                 Attribute->Length;
         }
-        else if (!Attribute->IsNonResident &&
-                 Attribute->AttributeType ==
+        else if (Attribute->AttributeType ==
                     TypeSecurityDescriptor &&
                  Attribute->NameLength == 0 &&
                  Attribute->Flags == 0 &&
+                 (!Attribute->IsNonResident ||
+                  Attribute->NonResident.FirstVCN == 0) &&
                  (!FallbackCandidate ||
                   Attribute->Length >
                       FallbackCandidate->Length))
@@ -1523,9 +1566,20 @@ FileRecord::CreateInitialAttributeList()
         {
             CandidateNameLengths[Index] =
                 Candidates[Index]->NameLength;
-            CandidateDataLengths[Index] =
-                Candidates[Index]->
-                    Resident.DataLength;
+            if (Candidates[Index]->IsNonResident)
+            {
+                CandidateRuns[Index] = FindNonResidentData(Candidates[Index]);
+                if (!CandidateRuns[Index])
+                {
+                    Status = STATUS_FILE_CORRUPT_ERROR;
+                    goto Done;
+                }
+            }
+            else
+            {
+                CandidateDataLengths[Index] =
+                    Candidates[Index]->Resident.DataLength;
+            }
             CandidateNames[Index] =
                 new(PagedPool, TAG_NTFS)
                     WCHAR[
@@ -1598,11 +1652,20 @@ FileRecord::CreateInitialAttributeList()
                     &MovedAttributes[Index]);
             if (!NT_SUCCESS(Status))
                 goto Done;
-            Status = Extension->
-                ReplaceResidentData(
-                    MovedAttributes[Index],
-                    CandidateData[Index],
+            if (CandidateRuns[Index])
+            {
+                Status = Extension->BuildNonResidentMappingSegment(
+                    MovedAttributes[Index], CandidateRuns[Index], 0, 0, 0,
+                    Candidates[Index]->NonResident.AllocatedSize,
+                    Candidates[Index]->NonResident.DataSize,
+                    Candidates[Index]->NonResident.InitalizedDataSize, 0);
+            }
+            else
+            {
+                Status = Extension->ReplaceResidentData(
+                    MovedAttributes[Index], CandidateData[Index],
                     CandidateDataLengths[Index]);
+            }
             if (!NT_SUCCESS(Status))
                 goto Done;
             MovedCount++;
@@ -1961,6 +2024,7 @@ Done:
     {
         delete[] CandidateData[Index];
         delete[] CandidateNames[Index];
+        FreeDataRun(CandidateRuns[Index]);
     }
     delete[] BaseRecordBackup;
     return Status;
@@ -2309,7 +2373,9 @@ FileRecord::ReplaceNonResidentMappingPairs(
     _In_ ULONGLONG DataSize,
     _In_ ULONGLONG InitializedSize,
     _Out_ PNonResidentMappingUpdate* MappingUpdate,
-    _Out_opt_ PFileRecord* ResultOwner)
+    _Out_opt_ PFileRecord* ResultOwner,
+    _In_opt_ PFileRecord StagedOwner,
+    _Out_opt_ NTSTATUS* RecoveryStatus)
 {
     PNonResidentMappingUpdate Update = NULL;
     PNONRESIDENT_MAPPING_NEW_EXTENT NewTail = NULL;
@@ -2350,6 +2416,7 @@ FileRecord::ReplaceNonResidentMappingPairs(
     USHORT Flags;
     USHORT CompressionUnitSize;
     BOOLEAN FoundFirstEntry = FALSE;
+    BOOLEAN InsertFirstEntry = StagedOwner != NULL;
     BOOLEAN Sparse = FALSE;
     BOOLEAN Compressed = FALSE;
     NTSTATUS Status;
@@ -2359,6 +2426,8 @@ FileRecord::ReplaceNonResidentMappingPairs(
     {
         return STATUS_INVALID_PARAMETER;
     }
+    if (RecoveryStatus)
+        *RecoveryStatus = STATUS_SUCCESS;
     *MappingUpdate = NULL;
     if (ResultOwner)
         *ResultOwner = NULL;
@@ -2382,17 +2451,38 @@ FileRecord::ReplaceNonResidentMappingPairs(
                 DataSize,
                 InitializedSize,
                 MappingUpdate,
-                ResultOwner);
+                ResultOwner,
+                StagedOwner,
+                RecoveryStatus);
     }
 
-    AttributeOwner = GetAttributeOwner(Attribute);
+    AttributeOwner = StagedOwner
+        ? StagedOwner
+        : GetAttributeOwner(Attribute);
     if (!AttributeOwner)
         return STATUS_FILE_CORRUPT_ERROR;
+    if ((!Attribute->IsNonResident || StagedOwner) &&
+        (Attribute->AttributeType != TypeSecurityDescriptor ||
+         Attribute->NameLength != 0 || Attribute->Flags != 0))
+    {
+        return STATUS_NOT_IMPLEMENTED;
+    }
+    if (StagedOwner &&
+        (StagedOwner == this ||
+         !Header || !StagedOwner->Header ||
+         StagedOwner->GetAttributeOwner(Attribute) != StagedOwner ||
+         StagedOwner->Header->SequenceNumber == 0 ||
+         StagedOwner->Header->BaseFileRecord !=
+             (((ULONGLONG)Header->SequenceNumber << 48) |
+              Header->MFTRecordNumber)))
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
     AttributeId = Attribute->AttributeID;
     Status = AttributeOwner->
         ValidateAttributeForUpdate(
         Attribute,
-        TRUE,
+        !!Attribute->IsNonResident,
         NULL);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -2403,7 +2493,7 @@ FileRecord::ReplaceNonResidentMappingPairs(
      * unit-aligned. Other compression formats and combined flags remain
      * unsupported.
      */
-    Compressed =
+    Compressed = Attribute->IsNonResident &&
         (Attribute->Flags & ATTR_COMPRESSION_MASK) != 0;
     if ((Compressed &&
          (Attribute->Flags != ATTR_COMPRESSED ||
@@ -2412,7 +2502,8 @@ FileRecord::ReplaceNonResidentMappingPairs(
           AllocatedSize % (ClusterSize << 4) != 0)) ||
         (!Compressed &&
          (Attribute->Flags & ~ATTR_SPARSE) != 0) ||
-        Attribute->NonResident.FirstVCN != 0 ||
+        (Attribute->IsNonResident &&
+         Attribute->NonResident.FirstVCN != 0) ||
         ClusterSize == 0 ||
         AllocatedSize == 0 ||
         AllocatedSize % ClusterSize != 0 ||
@@ -2592,12 +2683,17 @@ FileRecord::ReplaceNonResidentMappingPairs(
     Update->BaseRecordBackup =
         new(PagedPool, TAG_FILE_RECORD)
             UCHAR[RecordBufferSize];
+    if (Update->BaseRecordBackup)
+        RtlCopyMemory(Update->BaseRecordBackup, Data, RecordBufferSize);
     if (AttributeOwner != this)
     {
         Update->OwnerRecordBackup =
             new(PagedPool, TAG_FILE_RECORD)
                 UCHAR[AttributeOwner->
                     RecordBufferSize];
+        if (Update->OwnerRecordBackup)
+            RtlCopyMemory(Update->OwnerRecordBackup, AttributeOwner->Data,
+                          AttributeOwner->RecordBufferSize);
     }
     Update->OldList =
         new(PagedPool, TAG_NTFS)
@@ -2616,16 +2712,6 @@ FileRecord::ReplaceNonResidentMappingPairs(
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Failure;
-    }
-    RtlCopyMemory(Update->BaseRecordBackup,
-                  Data,
-                  RecordBufferSize);
-    if (Update->OwnerRecordBackup)
-    {
-        RtlCopyMemory(
-            Update->OwnerRecordBackup,
-            AttributeOwner->Data,
-            AttributeOwner->RecordBufferSize);
     }
     RtlCopyMemory(Update->OldList,
                   AttributeListData,
@@ -2727,7 +2813,8 @@ FileRecord::ReplaceNonResidentMappingPairs(
         Offset += Entry->RecordLength;
     }
     }
-    if (!FoundFirstEntry ||
+    if ((InsertFirstEntry ? FoundFirstEntry : !FoundFirstEntry) ||
+        (InsertFirstEntry && Update->OldExtents) ||
         Offset != AttributeListLength)
     {
         Status = STATUS_FILE_CORRUPT_ERROR;
@@ -2736,7 +2823,7 @@ FileRecord::ReplaceNonResidentMappingPairs(
 
     if (FullAttributeLength <=
             MaximumAttributeLength &&
-        !Update->OldExtents)
+        !Update->OldExtents && !InsertFirstEntry)
     {
         Status = AttributeOwner->
             BuildNonResidentMappingSegment(
@@ -2765,7 +2852,8 @@ FileRecord::ReplaceNonResidentMappingPairs(
         {
             *MappingUpdate = Update;
             AbortNonResidentMappingUpdate(
-                MappingUpdate);
+                MappingUpdate,
+                RecoveryStatus);
         }
         return Status;
     }
@@ -2995,6 +3083,15 @@ FileRecord::ReplaceNonResidentMappingPairs(
     NewEntryLength = ALIGN_UP_BY(
         0x1a + NameBytes,
         sizeof(ULONGLONG));
+    if (InsertFirstEntry)
+    {
+        if (NewExtentCount == MAXULONG)
+        {
+            Status = STATUS_FILE_TOO_LARGE;
+            goto Failure;
+        }
+        NewExtentCount++;
+    }
     if (NewExtentCount >
         (MAXULONG -
          (AttributeListLength -
@@ -3025,6 +3122,57 @@ FileRecord::ReplaceNonResidentMappingPairs(
     OutputOffset = 0;
     Offset = 0;
     FoundFirstEntry = FALSE;
+    if (InsertFirstEntry)
+    {
+        while (Offset < AttributeListLength)
+        {
+            PAttributeListEx Entry =
+                reinterpret_cast<PAttributeListEx>(
+                    AttributeListData + Offset);
+            if (Entry->Type > Attribute->AttributeType)
+                break;
+            RtlCopyMemory(Update->NewList + OutputOffset,
+                          Entry,
+                          Entry->RecordLength);
+            OutputOffset += Entry->RecordLength;
+            Offset += Entry->RecordLength;
+        }
+        {
+            PAttributeListEx NewEntry =
+                reinterpret_cast<PAttributeListEx>(
+                    Update->NewList + OutputOffset);
+            NewEntry->Type = Attribute->AttributeType;
+            NewEntry->RecordLength = (USHORT)NewEntryLength;
+            NewEntry->FirstVCN = 0;
+            NewEntry->BaseFileRef =
+                ((ULONGLONG)AttributeOwner->Header->SequenceNumber << 48) |
+                AttributeOwner->Header->MFTRecordNumber;
+            NewEntry->AttributeId = Attribute->AttributeID;
+            OutputOffset += NewEntryLength;
+        }
+        for (PNONRESIDENT_MAPPING_NEW_EXTENT Current = Update->NewExtents;
+             Current;
+             Current = Current->Next)
+        {
+            PAttributeListEx NewEntry =
+                reinterpret_cast<PAttributeListEx>(
+                    Update->NewList + OutputOffset);
+            NewEntry->Type = Attribute->AttributeType;
+            NewEntry->RecordLength = (USHORT)NewEntryLength;
+            NewEntry->FirstVCN = Current->FirstVcn;
+            NewEntry->BaseFileRef =
+                ((ULONGLONG)Current->Record->Header->SequenceNumber << 48) |
+                Current->Record->Header->MFTRecordNumber;
+            NewEntry->AttributeId = Current->Attribute->AttributeID;
+            OutputOffset += NewEntryLength;
+        }
+        RtlCopyMemory(Update->NewList + OutputOffset,
+                      AttributeListData + Offset,
+                      AttributeListLength - Offset);
+        OutputOffset += AttributeListLength - Offset;
+        Offset = AttributeListLength;
+        FoundFirstEntry = TRUE;
+    }
     while (Offset < AttributeListLength)
     {
         PAttributeListEx Entry =
@@ -3322,7 +3470,8 @@ Failure:
     {
         *MappingUpdate = Update;
         AbortNonResidentMappingUpdate(
-            MappingUpdate);
+            MappingUpdate,
+            RecoveryStatus);
     }
     return Status;
 }
@@ -3369,6 +3518,26 @@ FileRecord::CommitNonResidentMappingUpdate(
             Update->OldListLength)
     {
         return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    if (Update->SupersededOwner == BaseRecord)
+    {
+        PAttribute OldAttribute = BaseRecord->FindAttributeInRecord(
+            Update->Type, Update->Name, &Update->SupersededAttributeId);
+        if (!OldAttribute ||
+            (OldAttribute->IsNonResident &&
+             OldAttribute->NonResident.FirstVCN != 0))
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+        Status = BaseRecord->RemoveAttributeRecord(OldAttribute);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        SupersededRemoved = TRUE;
+        ListAttribute = BaseRecord->FindAttributeInRecord(
+            TypeAttributeList, NULL, NULL);
+        if (!ListAttribute)
+            return STATUS_FILE_CORRUPT_ERROR;
     }
 
     /*
@@ -3432,7 +3601,8 @@ FileRecord::CommitNonResidentMappingUpdate(
      * streams. Failure here leaves an unreachable duplicate but cannot
      * invalidate the now-authoritative layout.
      */
-    if (Update->SupersededOwner)
+    if (Update->SupersededOwner &&
+        Update->SupersededOwner != BaseRecord)
     {
         PAttribute OldAttribute =
             Update->SupersededOwner->
@@ -3443,8 +3613,8 @@ FileRecord::CommitNonResidentMappingUpdate(
                         SupersededAttributeId);
 
         if (OldAttribute &&
-            OldAttribute->IsNonResident &&
-            OldAttribute->NonResident.FirstVCN == 0 &&
+            (!OldAttribute->IsNonResident ||
+             OldAttribute->NonResident.FirstVCN == 0) &&
             NT_SUCCESS(
                 Update->SupersededOwner->
                     RemoveAttributeRecord(
@@ -3598,13 +3768,18 @@ FileRecord::CommitNonResidentMappingUpdate(
 
 void
 FileRecord::AbortNonResidentMappingUpdate(
-    _Inout_ PNonResidentMappingUpdate* MappingUpdate)
+    _Inout_ PNonResidentMappingUpdate* MappingUpdate,
+    _Out_opt_ NTSTATUS* RecoveryStatus)
 {
     PNonResidentMappingUpdate Update;
     PFileRecord BaseRecord;
     PFileRecord AttributeOwner;
     PFileRecord BackupOwner;
     BOOLEAN MetadataRestored = TRUE;
+    NTSTATUS FirstFailure = STATUS_SUCCESS;
+
+    if (RecoveryStatus)
+        *RecoveryStatus = STATUS_SUCCESS;
 
     if (!MappingUpdate || !*MappingUpdate)
         return;
@@ -3628,14 +3803,16 @@ FileRecord::AbortNonResidentMappingUpdate(
         BackupOwner->ClearDataRunCache();
 
         if (!Update->SupersededOwner &&
-            Update->OwnerWriteAttempted &&
-            (!BaseRecord ||
-             !NT_SUCCESS(
-                 BaseRecord->DiskVolume->MFT->
-                     WriteFileRecordToMFT(
-                         BackupOwner))))
+            Update->OwnerWriteAttempted)
         {
-            MetadataRestored = FALSE;
+            NTSTATUS RestoreStatus = BaseRecord
+                ? BaseRecord->DiskVolume->MFT->WriteFileRecordToMFT(BackupOwner)
+                : STATUS_INVALID_DEVICE_STATE;
+            if (!NT_SUCCESS(RestoreStatus))
+            {
+                MetadataRestored = FALSE;
+                FirstFailure = RestoreStatus;
+            }
         }
     }
 
@@ -3708,6 +3885,10 @@ FileRecord::AbortNonResidentMappingUpdate(
                 Update->OldListLength)
         {
             MetadataRestored = FALSE;
+            if (NT_SUCCESS(FirstFailure))
+                FirstFailure = NT_SUCCESS(RestoreStatus)
+                    ? STATUS_END_OF_FILE
+                    : RestoreStatus;
         }
     }
 
@@ -3718,10 +3899,12 @@ FileRecord::AbortNonResidentMappingUpdate(
 
         if (MetadataRestored)
         {
-            (void)BaseRecord->DiskVolume->MFT->
+            NTSTATUS CleanupStatus = BaseRecord->DiskVolume->MFT->
                 DeallocateExtensionFileRecord(
                     Update->NewExtents->
                         Record);
+            if (!NT_SUCCESS(CleanupStatus) && NT_SUCCESS(FirstFailure))
+                FirstFailure = CleanupStatus;
         }
         delete Update->NewExtents->Record;
         delete Update->NewExtents;
@@ -3733,9 +3916,11 @@ FileRecord::AbortNonResidentMappingUpdate(
         if (MetadataRestored &&
             BaseRecord)
         {
-            (void)BaseRecord->DiskVolume->MFT->
+            NTSTATUS CleanupStatus = BaseRecord->DiskVolume->MFT->
                 DeallocateExtensionFileRecord(
                     AttributeOwner);
+            if (!NT_SUCCESS(CleanupStatus) && NT_SUCCESS(FirstFailure))
+                FirstFailure = CleanupStatus;
         }
         if (AttributeOwner != this)
             delete AttributeOwner;
@@ -3764,6 +3949,8 @@ FileRecord::AbortNonResidentMappingUpdate(
     delete[] Update->BaseRecordBackup;
     delete Update;
     *MappingUpdate = NULL;
+    if (RecoveryStatus)
+        *RecoveryStatus = FirstFailure;
 }
 
 NTSTATUS

@@ -9,6 +9,41 @@
 #include "ntfspch.h"
 
 extern NPAGED_LOOKASIDE_LIST FileCBLookasideList;
+
+NTSTATUS
+NtfsRefreshDirectoryRecord(_In_ PVolumeContextBlock VolCB,
+                            _In_ PFileContextBlock FileCB)
+{
+    PNtfsFileRecord FreshRecord = NULL;
+    PFileRecordHeader Header;
+    ULONGLONG FileReference;
+    NTSTATUS Status;
+
+    if (!VolCB || !VolCB->DiskVolume || !FileCB || !FileCB->FileRec)
+        return STATUS_INVALID_PARAMETER;
+
+    ASSERT(ExIsResourceAcquiredExclusiveLite(&VolCB->MetadataResource));
+    Header = NtfsFileRecordGetHeader(FileCB->FileRec);
+    if (!(Header->Flags & FR_IS_DIRECTORY))
+        return STATUS_SUCCESS;
+
+    FileReference = FileCB->StreamCB
+        ? FileCB->StreamCB->FileReference
+        : ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber;
+    Status = NtfsMasterFileTableGetFileRecordByReference(
+        NtfsVolumeGetMft(VolCB->DiskVolume), FileReference, &FreshRecord);
+    if (NT_SUCCESS(Status) &&
+        !(NtfsFileRecordGetHeader(FreshRecord)->Flags & FR_IS_DIRECTORY))
+    {
+        Status = STATUS_FILE_CORRUPT_ERROR;
+    }
+    if (NT_SUCCESS(Status))
+        Status = NtfsFileRecordRefresh(FileCB->FileRec, FreshRecord);
+    if (FreshRecord)
+        NtfsFileRecordDestroy(FreshRecord);
+    return Status;
+}
+
 //TODO:
 
 static

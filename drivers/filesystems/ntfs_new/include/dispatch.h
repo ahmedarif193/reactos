@@ -265,7 +265,8 @@ struct _FCB;
 struct _VolumeContextBlock;
 
 VOID
-NtfsRefreshFileSizes(_In_ struct _FCB* FileCB,
+NtfsRefreshFileSizes(_In_ struct _VolumeContextBlock* VolCB,
+                     _In_ struct _FCB* FileCB,
                      _In_opt_ PFILE_OBJECT FileObject);
 
 VOID

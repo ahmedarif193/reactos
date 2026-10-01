@@ -774,7 +774,10 @@ MasterFileTable::CollectDistinctExtentReferences(
 NTSTATUS
 MasterFileTable::DeleteFile(
     _Inout_ PWCHAR Query,
-    _In_ BOOLEAN RemoveDirectory)
+    _In_ BOOLEAN RemoveDirectory,
+    _In_opt_ PFileRecord CanonicalRecord,
+    _In_ BOOLEAN CanDeleteRecord,
+    _Out_opt_ PBOOLEAN RecordDeleted)
 {
     PFileRecord Parent = NULL;
     PFileRecord Child = NULL;
@@ -797,6 +800,8 @@ MasterFileTable::DeleteFile(
     BOOLEAN IsDirectory;
     NTSTATUS Status;
 
+    if (RecordDeleted)
+        *RecordDeleted = FALSE;
     if (!Query || !DiskVolume)
         return STATUS_INVALID_PARAMETER;
     if (DiskVolume->IsReadOnly)
@@ -813,6 +818,18 @@ MasterFileTable::DeleteFile(
         return Status;
     ParentReference =
         MakeFileReference(Parent->Header);
+
+    if (CanonicalRecord &&
+        (!CanonicalRecord->Data ||
+         CanonicalRecord->DiskVolume != Child->DiskVolume ||
+         CanonicalRecord->RecordBufferSize != Child->RecordBufferSize ||
+         CanonicalRecord->Header->MFTRecordNumber != Child->Header->MFTRecordNumber ||
+         CanonicalRecord->Header->SequenceNumber != Child->Header->SequenceNumber ||
+         CanonicalRecord->BaseRecordOwner || Child->BaseRecordOwner))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Done;
+    }
 
     IsDirectory =
         !!(Child->Header->Flags &
@@ -866,6 +883,12 @@ MasterFileTable::DeleteFile(
         RemovedLinks = 2;
     }
 
+    if (Child->Header->HardLinkCount <= RemovedLinks && !CanDeleteRecord)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Done;
+    }
+
     {
         Directory ParentIndex(DiskVolume);
 
@@ -907,6 +930,8 @@ MasterFileTable::DeleteFile(
         if (!NT_SUCCESS(Status))
             goto Done;
         Status = WriteFileRecordToMFT(Child);
+        if (NT_SUCCESS(Status) && CanonicalRecord)
+            Status = CanonicalRecord->RefreshFrom(*Child);
         goto Done;
     }
 
@@ -950,6 +975,8 @@ MasterFileTable::DeleteFile(
     Status = DeallocateBaseFileRecord(Child);
     if (!NT_SUCCESS(Status))
         goto Done;
+    if (RecordDeleted)
+        *RecordDeleted = TRUE;
 
     if (ReleaseRuns)
     {

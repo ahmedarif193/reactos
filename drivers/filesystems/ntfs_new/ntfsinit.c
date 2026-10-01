@@ -210,6 +210,423 @@ NtfsUnload(_In_ _Unreferenced_parameter_ PDRIVER_OBJECT DriverObject)
     ObDereferenceObject(NtfsDiskFileSystemDeviceObject);
 }
 
+static
+NTSTATUS
+NtfsPrepareFileDeletion(_In_ PVolumeContextBlock VolCB,
+                         _In_ PStreamContextBlock FileStream,
+                         _In_ BOOLEAN WholeFile,
+                         _Out_ PStreamContextBlock** DeleteStreams,
+                         _Out_ PSIZE_T DeleteStreamCount)
+{
+    PLIST_ENTRY Entry;
+    PStreamContextBlock* Streams;
+    SIZE_T Count = 0;
+    SIZE_T Index = 0;
+    BOOLEAN OpenHandles = FALSE;
+
+    *DeleteStreams = NULL;
+    *DeleteStreamCount = 0;
+    ExAcquireFastMutex(&VolCB->StreamListMutex);
+    for (Entry = VolCB->StreamList.Flink; Entry != &VolCB->StreamList; Entry = Entry->Flink)
+    {
+        PStreamContextBlock Stream = CONTAINING_RECORD(Entry, StreamContextBlock, ListEntry);
+
+        if (Stream == FileStream ||
+            (WholeFile && Stream->FileReference == FileStream->FileReference))
+        {
+            Count++;
+            OpenHandles |= Stream->UncleanCount != 0;
+        }
+    }
+    if (OpenHandles)
+    {
+        for (Entry = VolCB->StreamList.Flink; Entry != &VolCB->StreamList; Entry = Entry->Flink)
+        {
+            PStreamContextBlock Stream = CONTAINING_RECORD(Entry, StreamContextBlock, ListEntry);
+
+            if (Stream == FileStream ||
+                (WholeFile && Stream->FileReference == FileStream->FileReference))
+                Stream->DeletePending = TRUE;
+        }
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+        return STATUS_PENDING;
+    }
+    if (Count > MAXULONG_PTR / sizeof(*Streams))
+    {
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    Streams = ExAllocatePoolWithTag(PagedPool, Count * sizeof(*Streams), TAG_NTFS);
+    if (!Streams)
+    {
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    for (Entry = VolCB->StreamList.Flink; Entry != &VolCB->StreamList; Entry = Entry->Flink)
+    {
+        PStreamContextBlock Stream = CONTAINING_RECORD(Entry, StreamContextBlock, ListEntry);
+
+        if (Stream == FileStream ||
+            (WholeFile && Stream->FileReference == FileStream->FileReference))
+        {
+            Stream->DeletePending = TRUE;
+            Stream->ReferenceCount++;
+            Streams[Index++] = Stream;
+        }
+    }
+    ExReleaseFastMutex(&VolCB->StreamListMutex);
+    *DeleteStreams = Streams;
+    *DeleteStreamCount = Count;
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
+                          _In_ PFileContextBlock FileCB,
+                          _In_ PFILE_OBJECT FileObject,
+                          _In_ BOOLEAN DeleteLink)
+{
+    BOOLEAN IsDirectory =
+        !!(NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY);
+    NTSTATUS DeleteStatus;
+    PWCHAR DeletePath;
+    PWCHAR ResolvedPath = NULL;
+    ULONG DeletePathLength;
+    BOOLEAN LastLink = TRUE;
+    BOOLEAN MetadataAcquired = FALSE;
+    BOOLEAN Deleted = FALSE;
+    BOOLEAN RecordDeleted = FALSE;
+    PStreamContextBlock* DeleteStreams = NULL;
+    SIZE_T DeleteStreamCount = 0;
+    SIZE_T StreamIndex;
+    PStreamContextBlock BaseStream;
+    BOOLEAN FileDeletion;
+    BOOLEAN StreamOnly;
+
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    BaseStream = NtfsReferenceStreamContext(VolCB, FileCB->FileRec,
+                                             IsDirectory ? TypeIndexAllocation : TypeData,
+                                             IsDirectory ? L"$I30" : NULL);
+    NtfsReleaseMetadata(VolCB);
+    if (!BaseStream)
+    {
+        KeLeaveCriticalRegion();
+        return;
+    }
+    ExAcquireResourceExclusiveLite(&BaseStream->MainResource, TRUE);
+    if (BaseStream->Deleted || (FileCB->StreamCB && FileCB->StreamCB->Deleted))
+    {
+        ExReleaseResourceLite(&BaseStream->MainResource);
+        NtfsDereferenceStreamContext(VolCB, BaseStream);
+        KeLeaveCriticalRegion();
+        return;
+    }
+    FileDeletion = BaseStream->DeletePending;
+    StreamOnly = !DeleteLink && !FileDeletion && FileCB->RequestedType == TypeData &&
+                 FileCB->RequestedStream && FileCB->RequestedStream[0];
+    if (FileCB->StreamCB != BaseStream)
+        ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+    DeleteStatus = DeleteLink ? NtfsPersistPendingSize(VolCB, FileCB) : STATUS_SUCCESS;
+    if (FileCB->StreamCB != BaseStream)
+        ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+    if (!NT_SUCCESS(DeleteStatus))
+        goto DeleteDone;
+    NtfsAcquireMetadata(VolCB);
+    MetadataAcquired = TRUE;
+    DeletePath = FileCB->FileName.Buffer;
+    DeletePathLength = FileCB->FileName.Length / sizeof(WCHAR);
+    if (DeleteLink)
+    {
+        ULONG Index;
+
+        for (Index = 0; Index < DeletePathLength; Index++)
+        {
+            if (DeletePath[Index] == L':')
+            {
+                DeletePathLength = Index;
+                break;
+            }
+        }
+    }
+
+    if (FileCB->StreamCB && DeleteLink)
+    {
+        PNtfsFileRecord NamedRecord = NULL;
+        ULONG RemainingNameLength = 0;
+        BOOLEAN SameFile;
+
+        DeleteStatus = NtfsMasterFileTableGetFileRecordFromQueryEx(
+            NtfsVolumeGetMft(VolCB->DiskVolume),
+            DeletePath, DeletePathLength, TRUE,
+            &RemainingNameLength, &NamedRecord);
+        SameFile = NT_SUCCESS(DeleteStatus) &&
+                   RemainingNameLength == 0 && NamedRecord &&
+                   ((((ULONGLONG)NtfsFileRecordGetHeader(NamedRecord)->SequenceNumber << 48) |
+                      NtfsFileRecordGetHeader(NamedRecord)->MFTRecordNumber) ==
+                     FileCB->StreamCB->FileReference);
+        if (SameFile)
+            LastLink = NtfsFileRecordGetLinkCount(NamedRecord) <= 1;
+        if (NamedRecord)
+            NtfsFileRecordDestroy(NamedRecord);
+        if (!SameFile)
+        {
+            if (NT_SUCCESS(DeleteStatus))
+                DeleteStatus = STATUS_OBJECT_NAME_NOT_FOUND;
+            goto DeleteDone;
+        }
+    }
+    if (LastLink)
+    {
+        if (FileCB->StreamCB)
+        {
+            FileDeletion |= !StreamOnly;
+            DeleteStatus = NtfsPrepareFileDeletion(VolCB,
+                                                   StreamOnly ? FileCB->StreamCB : BaseStream,
+                                                   !StreamOnly,
+                                                   &DeleteStreams, &DeleteStreamCount);
+            if (DeleteStatus == STATUS_PENDING)
+            {
+                NtfsReleaseMetadata(VolCB);
+                ExReleaseResourceLite(&BaseStream->MainResource);
+                NtfsDereferenceStreamContext(VolCB, BaseStream);
+                KeLeaveCriticalRegion();
+                return;
+            }
+            if (!NT_SUCCESS(DeleteStatus))
+                goto DeleteDone;
+        }
+        NtfsReleaseMetadata(VolCB);
+        MetadataAcquired = FALSE;
+
+        for (StreamIndex = 0; StreamIndex < DeleteStreamCount; StreamIndex++)
+        {
+            PStreamContextBlock Stream = DeleteStreams[StreamIndex];
+
+            ExAcquireResourceExclusiveLite(&Stream->PagingIoResource, TRUE);
+            Stream->Deleted = TRUE;
+            Stream->SizePending = FALSE;
+            ExReleaseResourceLite(&Stream->PagingIoResource);
+        }
+        if (FileObject->SectionObjectPointer)
+        {
+            if (FileObject->PrivateCacheMap)
+            {
+                LARGE_INTEGER Empty = { { 0, 0 } };
+
+                CcUninitializeCacheMap(FileObject, &Empty, NULL);
+            }
+        }
+        for (StreamIndex = 0; StreamIndex < DeleteStreamCount; StreamIndex++)
+        {
+            PSECTION_OBJECT_POINTERS Sections = &DeleteStreams[StreamIndex]->SectionObjectPointers;
+
+            Sections->ImageSectionObject = NULL;
+            CcPurgeCacheSection(Sections, NULL, 0, TRUE);
+        }
+
+        NtfsAcquireMetadata(VolCB);
+        MetadataAcquired = TRUE;
+    }
+    DeleteStatus = STATUS_SUCCESS;
+    if (FileCB->StreamCB && LastLink)
+    {
+        PNtfsFileRecord NamedRecord = NULL;
+        ULONG RemainingNameLength = 0;
+        BOOLEAN SameFile;
+
+        SameFile = NT_SUCCESS(NtfsMasterFileTableGetFileRecordFromQueryEx(
+                       NtfsVolumeGetMft(VolCB->DiskVolume),
+                       DeletePath,
+                       DeletePathLength,
+                       TRUE,
+                       &RemainingNameLength,
+                       &NamedRecord)) &&
+                   RemainingNameLength == 0 &&
+                   NamedRecord &&
+                   NtfsFileRecordGetHeader(NamedRecord)->MFTRecordNumber ==
+                       NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber &&
+                   NtfsFileRecordGetHeader(NamedRecord)->SequenceNumber ==
+                       NtfsFileRecordGetHeader(FileCB->FileRec)->SequenceNumber;
+        if (NamedRecord)
+            NtfsFileRecordDestroy(NamedRecord);
+        if (!SameFile)
+        {
+            ULONG ResolvedLength = 0;
+            ULONG SuffixOffset = 0;
+            ULONG SuffixLength;
+            ULONG Capacity = MAXUSHORT / sizeof(WCHAR) - 1;
+
+            if (DeleteLink)
+            {
+                DeleteStatus = STATUS_OBJECT_NAME_NOT_FOUND;
+                goto DeleteDone;
+            }
+
+            while (SuffixOffset < DeletePathLength && DeletePath[SuffixOffset] != L':')
+                SuffixOffset++;
+            SuffixLength = DeletePathLength - SuffixOffset;
+
+            ResolvedPath = ExAllocatePoolWithTag(PagedPool, MAXUSHORT, TAG_NTFS);
+            if (!ResolvedPath)
+                DeleteStatus = STATUS_INSUFFICIENT_RESOURCES;
+            else
+            {
+                DeleteStatus = NtfsMasterFileTableGetPathFromFileReference(
+                    NtfsVolumeGetMft(VolCB->DiskVolume),
+                    FileCB->StreamCB->FileReference,
+                    ResolvedPath,
+                    Capacity,
+                    &ResolvedLength);
+            }
+            if (NT_SUCCESS(DeleteStatus) &&
+                (ResolvedLength > Capacity || SuffixLength > Capacity - ResolvedLength))
+            {
+                DeleteStatus = STATUS_NAME_TOO_LONG;
+            }
+            if (NT_SUCCESS(DeleteStatus))
+            {
+                RtlCopyMemory(ResolvedPath + ResolvedLength,
+                              DeletePath + SuffixOffset,
+                              SuffixLength * sizeof(WCHAR));
+                ResolvedLength += SuffixLength;
+                ResolvedPath[ResolvedLength] = UNICODE_NULL;
+                DeletePath = ResolvedPath;
+                DeletePathLength = ResolvedLength;
+            }
+        }
+    }
+    if (NT_SUCCESS(DeleteStatus))
+    {
+        DeleteStatus = NtfsMasterFileTableDeleteFileEx(
+            NtfsVolumeGetMft(VolCB->DiskVolume),
+            DeletePath,
+            DeletePathLength,
+            IsDirectory,
+            FileCB->FileRec,
+            LastLink,
+            &RecordDeleted);
+        Deleted = NT_SUCCESS(DeleteStatus);
+    }
+    InterlockedIncrement(&VolCB->DirGeneration);
+    NtfsEvictCachedRecord(VolCB,
+                          DeletePath,
+                          (USHORT)DeletePathLength,
+                          RecordDeleted);
+    if (Deleted)
+        NtfsRecordNameMissing(VolCB, DeletePath, (USHORT)DeletePathLength);
+
+DeleteDone:
+    if (!MetadataAcquired)
+    {
+        NtfsAcquireMetadata(VolCB);
+        MetadataAcquired = TRUE;
+    }
+    if (!RecordDeleted && FileCB->StreamCB)
+    {
+        PLIST_ENTRY Entry;
+
+        ExAcquireFastMutex(&VolCB->StreamListMutex);
+        for (Entry = VolCB->StreamList.Flink; Entry != &VolCB->StreamList; Entry = Entry->Flink)
+        {
+            PStreamContextBlock Stream = CONTAINING_RECORD(Entry, StreamContextBlock, ListEntry);
+
+            if (Stream == FileCB->StreamCB ||
+                (FileDeletion && Stream->FileReference == FileCB->StreamCB->FileReference))
+            {
+                PLIST_ENTRY CcbEntry;
+
+                Stream->DeletePending = FALSE;
+                if (FileDeletion)
+                {
+                    for (CcbEntry = Stream->NativeScb.CcbList.Flink;
+                         CcbEntry != &Stream->NativeScb.CcbList;
+                         CcbEntry = CcbEntry->Flink)
+                    {
+                        PNTFS_NATIVE_CCB Ccb = CONTAINING_RECORD(CcbEntry, NTFS_NATIVE_CCB, StreamEntry);
+                        PFileContextBlock Other = CONTAINING_RECORD(Ccb, FileContextBlock, NativeCcb);
+
+                        Other->DeletePending = FALSE;
+                        if (Ccb->FileObject)
+                            Ccb->FileObject->DeletePending = FALSE;
+                    }
+                }
+            }
+        }
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+    }
+    if (DeleteLink)
+        NtfsSetLinkDeletePending(FileCB, FALSE);
+    NtfsReleaseMetadata(VolCB);
+    if (ResolvedPath)
+        ExFreePoolWithTag(ResolvedPath, TAG_NTFS);
+    for (StreamIndex = 0; StreamIndex < DeleteStreamCount; StreamIndex++)
+    {
+        PStreamContextBlock Stream = DeleteStreams[StreamIndex];
+
+        if (!RecordDeleted)
+        {
+            ExAcquireResourceExclusiveLite(&Stream->PagingIoResource, TRUE);
+            Stream->Deleted = FALSE;
+            ExReleaseResourceLite(&Stream->PagingIoResource);
+        }
+        NtfsDereferenceStreamContext(VolCB, Stream);
+    }
+    if (DeleteStreams)
+        ExFreePoolWithTag(DeleteStreams, TAG_NTFS);
+    ExReleaseResourceLite(&BaseStream->MainResource);
+    NtfsDereferenceStreamContext(VolCB, BaseStream);
+    KeLeaveCriticalRegion();
+
+    if (!NT_SUCCESS(DeleteStatus))
+        DPRINT1("NtfsFsdCleanup: delete failed 0x%08lx\n", DeleteStatus);
+}
+
+VOID
+NtfsCleanupFailedCreate(_In_ PVolumeContextBlock VolCB,
+                        _In_ PFileContextBlock FileCB,
+                        _In_ PFILE_OBJECT FileObject)
+{
+    BOOLEAN DeleteLink = FALSE;
+    BOOLEAN DeleteRequested;
+
+    if (!FileCB->StreamCB || !FileCB->NativeCcb.StreamEntry.Flink)
+        return;
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    if (FileCB->CleanupComplete)
+    {
+        NtfsReleaseMetadata(VolCB);
+        KeLeaveCriticalRegion();
+        return;
+    }
+    FileCB->CleanupComplete = TRUE;
+    if (FileCB->ShareAccessSet)
+    {
+        ExAcquireFastMutex(&VolCB->StreamListMutex);
+        IoRemoveShareAccess(FileObject, &FileCB->StreamCB->ShareAccess);
+        FileCB->ShareAccessSet = FALSE;
+        InterlockedDecrement(&FileCB->StreamCB->UncleanCount);
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+    }
+    if (FileCB->NativeCcb.Lcb)
+    {
+        ASSERT(FileCB->NativeCcb.Lcb->CleanupCount != 0);
+        FileCB->NativeCcb.Lcb->CleanupCount--;
+        DeleteLink = FileCB->DeletePending && FileCB->NativeCcb.Lcb->CleanupCount == 0;
+    }
+    DeleteRequested = DeleteLink ||
+        (FileCB->StreamCB->DeletePending && FileCB->StreamCB->UncleanCount == 0);
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
+    if (DeleteRequested && VolCB->DiskVolume && FileCB->FileRec &&
+        !NtfsVolumeIsReadOnly(VolCB->DiskVolume) && FileCB->FileName.Length != 0)
+    {
+        NtfsFinalizePendingDelete(VolCB, FileCB, FileObject, DeleteLink);
+    }
+}
+
 _Function_class_(IRP_MJ_CLEANUP)
 _Function_class_(DRIVER_DISPATCH)
 NTSTATUS
@@ -293,6 +710,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         PVolumeContextBlock VolCB =
             (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
         BOOLEAN LastHandle;
+        BOOLEAN DeleteLink = FALSE;
 
         if (FileCB->FileDir && VolCB->NotifySync)
         {
@@ -305,8 +723,6 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         LastHandle = TRUE;
         if (FileCB->StreamCB)
         {
-            if (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE)
-                FileCB->StreamCB->DeletePending = TRUE;
             // Byte-range locks belong to the handle, so they end with it.
             FsRtlFastUnlockAll(&FileCB->StreamCB->FileLock,
                                IrpSp->FileObject,
@@ -327,6 +743,34 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             }
         }
 
+        if (FirstCleanup)
+        {
+            KeEnterCriticalRegion();
+            NtfsAcquireMetadata(VolCB);
+            if (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE)
+            {
+                if (FileCB->NativeCcb.Lcb &&
+                    !(FileCB->RequestedType == TypeData &&
+                      FileCB->RequestedStream && FileCB->RequestedStream[0]))
+                {
+                    NtfsSetLinkDeletePending(FileCB, TRUE);
+                }
+                else if (FileCB->StreamCB)
+                {
+                    FileCB->StreamCB->DeletePending = TRUE;
+                }
+            }
+            if (FileCB->NativeCcb.Lcb)
+            {
+                ASSERT(FileCB->NativeCcb.Lcb->CleanupCount != 0);
+                FileCB->NativeCcb.Lcb->CleanupCount--;
+                DeleteLink = FileCB->DeletePending &&
+                             FileCB->NativeCcb.Lcb->CleanupCount == 0;
+            }
+            NtfsReleaseMetadata(VolCB);
+            KeLeaveCriticalRegion();
+        }
+
         if (FileCB->StreamCB && FileCB->StreamCB->SizePending &&
             !FileCB->DeletePending && !(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE))
         {
@@ -338,130 +782,28 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
 
         /* The handle is going away, so a requested delete happens now. */
-        if ((FileCB->StreamCB
+        if (FirstCleanup &&
+            (DeleteLink || (FileCB->StreamCB
                  ? (FileCB->StreamCB->DeletePending && LastHandle)
-                 : (FileCB->DeletePending || (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE))) &&
+                 : (FileCB->DeletePending || (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE)))) &&
             VolCB->DiskVolume &&
             !NtfsVolumeIsReadOnly(VolCB->DiskVolume) &&
             FileCB->FileName.Length != 0)
         {
-            BOOLEAN IsDirectory =
-                !!(NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY);
-            NTSTATUS DeleteStatus;
-            PWCHAR DeletePath;
-            PWCHAR ResolvedPath = NULL;
-            ULONG DeletePathLength;
-
             /*
              * Cached pages of a file that is about to stop existing must go
              * before it does, or the cache manager keeps trying to write them
              * back to a record that has been freed.
              */
-            if (FileCB->StreamCB)
-            {
-                KeEnterCriticalRegion();
-                ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
-                FileCB->StreamCB->Deleted = TRUE;
-                FileCB->StreamCB->SizePending = FALSE;
-                ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
-                KeLeaveCriticalRegion();
-            }
-            if (IrpSp->FileObject->SectionObjectPointer)
-            {
-                IrpSp->FileObject->SectionObjectPointer->ImageSectionObject = NULL;
-                if (IrpSp->FileObject->PrivateCacheMap)
-                {
-                    LARGE_INTEGER Empty = { { 0, 0 } };
-
-                    CcUninitializeCacheMap(IrpSp->FileObject, &Empty, NULL);
-                }
                 /* TRUE also tears down the shared map, which outlives the
                  * private one and is what keeps retrying the write-back. */
-                CcPurgeCacheSection(IrpSp->FileObject->SectionObjectPointer,
-                                    NULL, 0, TRUE);
-            }
-
-            KeEnterCriticalRegion();
-            NtfsAcquireMetadata(VolCB);
-            DeletePath = FileCB->FileName.Buffer;
-            DeletePathLength = FileCB->FileName.Length / sizeof(WCHAR);
-            if (FileCB->StreamCB)
-            {
-                PNtfsFileRecord NamedRecord = NULL;
-                ULONG RemainingNameLength = 0;
-                BOOLEAN SameFile;
-
-                SameFile = NT_SUCCESS(NtfsMasterFileTableGetFileRecordFromQueryEx(
-                               NtfsVolumeGetMft(VolCB->DiskVolume),
-                               DeletePath,
-                               DeletePathLength,
-                               TRUE,
-                               &RemainingNameLength,
-                               &NamedRecord)) &&
-                           RemainingNameLength == 0 &&
-                           NamedRecord &&
-                           NtfsFileRecordGetHeader(NamedRecord)->MFTRecordNumber ==
-                               NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber;
-                if (NamedRecord)
-                    NtfsFileRecordDestroy(NamedRecord);
-                if (!SameFile)
-                {
-                    ULONG ResolvedLength = 0;
-
-                    ResolvedPath = ExAllocatePoolWithTag(PagedPool, MAXUSHORT, TAG_NTFS);
-                    if (ResolvedPath &&
-                        NT_SUCCESS(NtfsMasterFileTableGetPathFromFileReference(
-                            NtfsVolumeGetMft(VolCB->DiskVolume),
-                            FileCB->StreamCB->FileReference,
-                            ResolvedPath,
-                            MAXUSHORT / sizeof(WCHAR) - 1,
-                            &ResolvedLength)))
-                    {
-                        DeletePath = ResolvedPath;
-                        DeletePathLength = ResolvedLength;
-                    }
-                }
-            }
-            DeleteStatus = NtfsMasterFileTableDeleteFile(
-                NtfsVolumeGetMft(VolCB->DiskVolume),
-                DeletePath,
-                DeletePathLength,
-                IsDirectory);
-            InterlockedIncrement(&VolCB->DirGeneration);
-            NtfsEvictCachedRecord(VolCB,
-                                  DeletePath,
-                                  (USHORT)DeletePathLength,
-                                  NT_SUCCESS(DeleteStatus));
-            NtfsReleaseMetadata(VolCB);
-            KeLeaveCriticalRegion();
-            if (ResolvedPath)
-                ExFreePoolWithTag(ResolvedPath, TAG_NTFS);
-            if (!NT_SUCCESS(DeleteStatus) && FileCB->StreamCB)
-            {
-                FileCB->StreamCB->Deleted = FALSE;
-                FileCB->StreamCB->DeletePending = FALSE;
-            }
-
-            if (!NT_SUCCESS(DeleteStatus))
-                DPRINT1("NtfsFsdCleanup: delete failed 0x%08lx\n", DeleteStatus);
+            NtfsFinalizePendingDelete(VolCB, FileCB, IrpSp->FileObject, DeleteLink);
         }
 
         /* The cache holds a file-object reference, so waiting for CLOSE to
          * release the private map prevents normal cached files from closing. */
         if (IrpSp->FileObject->PrivateCacheMap)
             CcUninitializeCacheMap(IrpSp->FileObject, NULL, NULL);
-        if (FirstCleanup)
-        {
-            KeEnterCriticalRegion();
-            NtfsAcquireMetadata(VolCB);
-            if (FileCB->NativeCcb.Lcb)
-            {
-                ASSERT(FileCB->NativeCcb.Lcb->CleanupCount != 0);
-                FileCB->NativeCcb.Lcb->CleanupCount--;
-            }
-            NtfsReleaseMetadata(VolCB);
-            KeLeaveCriticalRegion();
-        }
     }
 
     // TODO: How do we determine when the volume needs to get cleaned up?

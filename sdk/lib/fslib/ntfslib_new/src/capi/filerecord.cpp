@@ -321,6 +321,16 @@ NtfsFileRecordWriteFileData(
 }
 
 NTSTATUS
+NtfsFileRecordCreateNamedDataStream(
+    _In_ PNtfsFileRecord Fr,
+    _In_ PWSTR StreamName)
+{
+    if (!Fr)
+        return STATUS_INVALID_PARAMETER;
+    return reinterpret_cast<PFileRecord>(Fr)->CreateNamedDataStream(StreamName);
+}
+
+NTSTATUS
 NtfsFileRecordSetFileDataSize(
     _In_ PNtfsFileRecord Fr,
     _In_ AttributeType AttrType,

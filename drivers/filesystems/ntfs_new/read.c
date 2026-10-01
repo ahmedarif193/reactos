@@ -457,6 +457,12 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
          BooleanFlagOn(FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING)))
     {
         NtfsAcquireMetadata(VolCB);
+        Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+        if (!NT_SUCCESS(Status))
+        {
+            NtfsReleaseMetadata(VolCB);
+            goto Complete;
+        }
         Status = NtfsTryDirectRead(VolCB,
                                    FileCB,
                                    Irp,
@@ -572,12 +578,14 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
         // Copy data from $DATA into file buffer.
         NtfsAcquireMetadata(VolCB);
-        Status = NtfsFileRecordCopyData(FileCB->FileRec,
-                                        FileCB->RequestedType,
-                                        FileCB->RequestedStream,
-                                        Bounce ? (PUCHAR)Bounce : Buffer,
-                                        &RequestedLength,
-                                        ReadOffset.QuadPart);
+        Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+        if (NT_SUCCESS(Status))
+            Status = NtfsFileRecordCopyData(FileCB->FileRec,
+                                            FileCB->RequestedType,
+                                            FileCB->RequestedStream,
+                                            Bounce ? (PUCHAR)Bounce : Buffer,
+                                            &RequestedLength,
+                                            ReadOffset.QuadPart);
         NtfsReleaseMetadata(VolCB);
         if (Bounce)
         {
@@ -622,10 +630,16 @@ ReadDone:
             KeEnterCriticalRegion();
             ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
             NtfsAcquireMetadata(VolCB);
-            TimestampStatus =
-                NtfsFileRecordUpdateAutomaticTimestamps(
+            TimestampStatus = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+            if (NT_SUCCESS(TimestampStatus))
+                TimestampStatus = NtfsFileRecordUpdateAutomaticTimestamps(
                     FileCB->FileRec,
                     NTFS_BASIC_INFO_LAST_ACCESS_TIME);
+            if (NT_SUCCESS(TimestampStatus) &&
+                (NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY))
+            {
+                InterlockedIncrement(&VolCB->DirGeneration);
+            }
             NtfsReleaseMetadata(VolCB);
             ExReleaseResourceLite(NtfsGetMainResource(FileCB));
             KeLeaveCriticalRegion();
