@@ -8,6 +8,8 @@
 
 #include <ntddk.h>
 
+#define WPP_RECORDER_LOG_TAG 'LppW'
+
 VOID
 NTAPI
 WppAutoLogStart(
@@ -57,6 +59,77 @@ imp_WppRecorderReplay(
     UNREFERENCED_PARAMETER(WppTraceHandle);
     UNREFERENCED_PARAMETER(EnableFlags);
     UNREFERENCED_PARAMETER(EnableLevel);
+}
+
+VOID
+NTAPI
+imp_WppRecorderConfigure(
+    _In_ PVOID WppCb,
+    _In_ PVOID ConfigureParams)
+{
+    UNREFERENCED_PARAMETER(WppCb);
+    UNREFERENCED_PARAMETER(ConfigureParams);
+}
+
+NTSTATUS
+NTAPI
+imp_WppRecorderLogCreate(
+    _In_ PVOID WppCb,
+    _In_ PVOID CreateParams,
+    _Out_ PVOID *RecorderLog)
+{
+    PULONG Log;
+
+    UNREFERENCED_PARAMETER(WppCb);
+
+    if (RecorderLog == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *RecorderLog = NULL;
+    if (CreateParams == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Log = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*Log), WPP_RECORDER_LOG_TAG);
+    if (Log == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    *Log = WPP_RECORDER_LOG_TAG;
+    *RecorderLog = Log;
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+imp_WppRecorderLogDelete(
+    _In_ PVOID WppCb,
+    _In_ PVOID RecorderLog)
+{
+    PULONG Log = RecorderLog;
+
+    UNREFERENCED_PARAMETER(WppCb);
+
+    if (Log == NULL || *Log != WPP_RECORDER_LOG_TAG)
+        return;
+
+    *Log = 0;
+    ExFreePoolWithTag(Log, WPP_RECORDER_LOG_TAG);
+}
+
+PVOID
+NTAPI
+imp_WppRecorderLogGetDefault(
+    _In_ PVOID WppCb)
+{
+    UNREFERENCED_PARAMETER(WppCb);
+    return NULL;
+}
+
+BOOLEAN
+NTAPI
+imp_WppRecorderIsDefaultLogAvailable(
+    _In_ PVOID WppCb)
+{
+    UNREFERENCED_PARAMETER(WppCb);
+    return FALSE;
 }
 
 NTSTATUS
