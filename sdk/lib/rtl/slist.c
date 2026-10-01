@@ -483,7 +483,7 @@ restart:
 
         /* Try to exchange atomically */
         Compare = OldHeader.Alignment;
-        OldHeader.Alignment = InterlockedCompareExchange64((PLONGLONG)SListHead->Alignment,
+        OldHeader.Alignment = InterlockedCompareExchange64((PLONGLONG)&SListHead->Alignment,
                                                            NewHeader.Alignment,
                                                            Compare);
     }
