@@ -56,6 +56,9 @@ $ZwFuncEndName
 
 #include <ksarm64.h>
 
+/* STUB_K, STUB_U and STUB_WRAP are GNU as macros taking the argument count. */
+#define SYSCALLS_GNU_AS_STUBS
+
     .set SyscallId, 0
 
     .macro ARM64_ZW_CALL_NT Name, CookieOff
@@ -269,6 +272,8 @@ Zw\Name:
 #elif defined(_M_RISCV64)
 
 #include <asm/ksriscv64.h>
+
+#define SYSCALLS_GNU_AS_STUBS
 
     /*
      * Kernel-mode Zw* wrappers. Like the ARM64 wrapper above, a
