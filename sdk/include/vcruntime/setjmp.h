@@ -195,6 +195,59 @@ typedef struct __JUMP_BUFFER {
     unsigned __int64 Reserved;
 } _JUMP_BUFFER;
 
+#elif defined(_M_PPC)
+
+/* Windows NT PowerPC layout: f14-f31, r1, r2 (TOC), r13 (TEB) and r14-r31
+ * are nonvolatile, together with the condition register fields. Iar holds
+ * the continuation (the return address of the setjmp call). */
+#define _JBLEN 64
+#define _JBTYPE double
+
+typedef struct __JUMP_BUFFER {
+    double Fpr14;
+    double Fpr15;
+    double Fpr16;
+    double Fpr17;
+    double Fpr18;
+    double Fpr19;
+    double Fpr20;
+    double Fpr21;
+    double Fpr22;
+    double Fpr23;
+    double Fpr24;
+    double Fpr25;
+    double Fpr26;
+    double Fpr27;
+    double Fpr28;
+    double Fpr29;
+    double Fpr30;
+    double Fpr31;
+    unsigned long Gpr1;
+    unsigned long Gpr2;
+    unsigned long Gpr13;
+    unsigned long Gpr14;
+    unsigned long Gpr15;
+    unsigned long Gpr16;
+    unsigned long Gpr17;
+    unsigned long Gpr18;
+    unsigned long Gpr19;
+    unsigned long Gpr20;
+    unsigned long Gpr21;
+    unsigned long Gpr22;
+    unsigned long Gpr23;
+    unsigned long Gpr24;
+    unsigned long Gpr25;
+    unsigned long Gpr26;
+    unsigned long Gpr27;
+    unsigned long Gpr28;
+    unsigned long Gpr29;
+    unsigned long Gpr30;
+    unsigned long Gpr31;
+    unsigned long Cr;
+    unsigned long Iar;
+    unsigned long Type;
+} _JUMP_BUFFER;
+
 #else
 
 #error Define Setjmp for this architecture!

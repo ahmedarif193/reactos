@@ -365,6 +365,95 @@ Zw\Name:
     .set SyscallId, SyscallId + 1
     .endm
 
+#elif defined(_M_PPC)
+
+#include <asm/ksppc.h>
+
+#define SYSCALLS_GNU_AS_STUBS
+
+    /*
+     * Windows NT PowerPC user system call stubs: r0 selects the service,
+     * r3-r10 carry the first eight arguments and the rest stay in the
+     * caller's parameter area at 56(r1). Each stub has a code entry ..NtName
+     * for direct calls and a {code, TOC} descriptor NtName.
+     */
+    .set SyscallId, 0
+
+    .macro STUB_U Name, ArgCount
+    .text
+    .p2align 2
+    .globl ..Nt\Name
+    .globl ..Zw\Name
+..Nt\Name:
+..Zw\Name:
+    li 0, SyscallId
+    sc
+    blr
+    .section .rdata,"dr"
+    .p2align 2
+    .globl Nt\Name
+    .globl Zw\Name
+Nt\Name:
+Zw\Name:
+    .long ..Nt\Name
+    .long .toc
+    .text
+    .set SyscallId, SyscallId + 1
+    .endm
+
+    .macro STUB_WRAP Name, ArgCount
+    STUB_U \Name, \ArgCount
+    .endm
+
+    /*
+     * Kernel Zw entry: call Nt directly with PreviousMode set to KernelMode.
+     * Arguments beyond the eighth are copied to this frame's parameter area.
+     */
+    .macro STUB_K Name, ArgCount
+    .text
+    .p2align 2
+    .globl ..Zw\Name
+..Zw\Name:
+/* The PowerPC assembler reads a single < or > as a shift, so compare with .ifgt. */
+.ifgt \ArgCount - 8
+    .set _nstk, (\ArgCount - 8)
+.else
+    .set _nstk, 0
+.endif
+    .set _frame, ((56 + _nstk * 4 + 8 + 15) & ~15)
+    mflr 0
+    stw 0, 8(1)
+    stwu 1, -_frame(1)
+    stw 30, _frame - 8(1)
+    stw 31, _frame - 4(1)
+    .set _i, 0
+    .rept _nstk
+    lwz 0, _frame + 56 + _i * 4(1)
+    stw 0, 56 + _i * 4(1)
+    .set _i, _i + 1
+    .endr
+    mfsprg 31, 0
+    lwz 31, PcCurrentThread(31)
+    lbz 30, ThPreviousMode(31)
+    li 0, 0
+    stb 0, ThPreviousMode(31)
+    bl ..Nt\Name
+    stb 30, ThPreviousMode(31)
+    lwz 30, _frame - 8(1)
+    lwz 31, _frame - 4(1)
+    addi 1, 1, _frame
+    lwz 0, 8(1)
+    mtlr 0
+    blr
+    .section .rdata,"dr"
+    .p2align 2
+    .globl Zw\Name
+Zw\Name:
+    .long ..Zw\Name
+    .long .toc
+    .text
+    .endm
+
 #else
 
 #include <asm.inc>

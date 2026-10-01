@@ -1299,6 +1299,8 @@ $if (_NTDDK_ || _WINNT_)
 
 #if defined(_M_RISCV64)
 $include(riscv64/ketypes.h)
+#elif defined(_M_PPC)
+$include(ppc/ketypes.h)
 #endif
 
 typedef union _ARM64_NT_NEON128

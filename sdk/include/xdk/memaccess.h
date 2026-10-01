@@ -59,6 +59,14 @@ MemoryBarrier (
 # define _ReleaseBarrier()                    __asm__ __volatile__("fence rw, w" ::: "memory")
 # define _DataSynchronizationBarrier()        MemoryBarrier()
 # define _InstructionSynchronizationBarrier() __asm__ __volatile__("fence.i" ::: "memory")
+#elif defined(_M_PPC)
+/* lwsync orders everything except store-load; it executes as sync on cores
+ * that predate it. */
+# define MemoryBarrier()                      __asm__ __volatile__("sync" ::: "memory")
+# define _AcquireBarrier()                    __asm__ __volatile__("lwsync" ::: "memory")
+# define _ReleaseBarrier()                    __asm__ __volatile__("lwsync" ::: "memory")
+# define _DataSynchronizationBarrier()        MemoryBarrier()
+# define _InstructionSynchronizationBarrier() __asm__ __volatile__("isync" ::: "memory")
 #else
 #error Unsupported architecture
 #endif /* _M_ARM */
