@@ -1152,7 +1152,18 @@ typedef struct _EXTENDED_DEVOBJ_EXTENSION
     LONG StartIoKey;
     ULONG StartIoFlags;
     struct _VPB *Vpb;
+    PVOID DependencyNode;
+    PVOID InterruptContext;
+    LONG InterruptCount;
+    PVOID VerifierContext;
 } EXTENDED_DEVOBJ_EXTENSION, *PEXTENDED_DEVOBJ_EXTENSION;
+
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(EXTENDED_DEVOBJ_EXTENSION, Vpb) == 0x48);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(EXTENDED_DEVOBJ_EXTENSION, DependencyNode) == 0x50);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(EXTENDED_DEVOBJ_EXTENSION, InterruptContext) == 0x58);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(EXTENDED_DEVOBJ_EXTENSION, InterruptCount) == 0x60);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(EXTENDED_DEVOBJ_EXTENSION, VerifierContext) == 0x68);
+C_ASSERT(sizeof(PVOID) != 8 || sizeof(EXTENDED_DEVOBJ_EXTENSION) == 0x70);
 
 //
 // Extended Driver Object Extension Structure

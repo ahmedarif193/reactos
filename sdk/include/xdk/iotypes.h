@@ -2203,6 +2203,19 @@ typedef struct _DEVOBJ_EXTENSION {
   CSHORT Type;
   USHORT Size;
   PDEVICE_OBJECT DeviceObject;
+  ULONG PowerFlags;
+  struct _DEVICE_OBJECT_POWER_EXTENSION *Dope;
+  ULONG ExtensionFlags;
+  PVOID DeviceNode;
+  PDEVICE_OBJECT AttachedTo;
+  volatile LONG StartIoCount;
+  LONG StartIoKey;
+  ULONG StartIoFlags;
+  PVPB Vpb;
+  PVOID DependencyNode;
+  PVOID InterruptContext;
+  LONG InterruptCount;
+  volatile PVOID VerifierContext;
 } DEVOBJ_EXTENSION, *PDEVOBJ_EXTENSION;
 
 typedef struct _SCATTER_GATHER_ELEMENT {
