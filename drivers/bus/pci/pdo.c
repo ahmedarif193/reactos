@@ -4616,6 +4616,7 @@ PdoPnpControl(
             PciPdoDisableDecodes(DeviceExtension);
             PciPdoReleaseMessageRoutes(DeviceExtension);
             IoReleaseRemoveLockAndWait(&DeviceExtension->RemoveLock, Irp);
+            IoInitializeRemoveLock(&DeviceExtension->RemoveLock, TAG_PCI, 0, 0);
             Status = STATUS_SUCCESS;
             Irp->IoStatus.Status = Status;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
