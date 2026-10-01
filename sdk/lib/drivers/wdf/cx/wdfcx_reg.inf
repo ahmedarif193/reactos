@@ -8,6 +8,10 @@ HKLM,"SYSTEM\CurrentControlSet\Services\GPIOClx0101","ErrorControl",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Services\GPIOClx0101","ImagePath",0x00020000,"system32\drivers\msgpioclx.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\GPIOClx0101","Start",0x00010001,3
 HKLM,"SYSTEM\CurrentControlSet\Services\GPIOClx0101","Type",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\HwNClx0101","ErrorControl",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\HwNClx0101","ImagePath",0x00020000,"system32\drivers\mshwnclx.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\HwNClx0101","Start",0x00010001,3
+HKLM,"SYSTEM\CurrentControlSet\Services\HwNClx0101","Type",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Services\spbcx","ErrorControl",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Services\spbcx","ImagePath",0x00020000,"system32\drivers\spbcx.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\spbcx","Start",0x00010001,3
@@ -17,5 +21,6 @@ HKLM,"SYSTEM\CurrentControlSet\Services\sercx2","ImagePath",0x00020000,"system32
 HKLM,"SYSTEM\CurrentControlSet\Services\sercx2","Start",0x00010001,3
 HKLM,"SYSTEM\CurrentControlSet\Services\sercx2","Type",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\GPIOClx\Versions\1\1","Service",0x00000000,"GPIOClx0101"
+HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\HwNClx\Versions\1\1","Service",0x00000000,"HwNClx0101"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\SPBCx\Versions\1\1","Service",0x00000000,"spbcx"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\SerCx\Versions\2\1","Service",0x00000000,"sercx2"
