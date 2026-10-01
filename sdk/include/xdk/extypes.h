@@ -215,14 +215,14 @@ LOOKASIDE_CHECK(Future);
 
 typedef struct LOOKASIDE_ALIGN _PAGED_LOOKASIDE_LIST {
   GENERAL_LOOKASIDE L;
-#if !defined(_AMD64_) && !defined(_IA64_)
+#if defined(_X86_)
   FAST_MUTEX Lock__ObsoleteButDoNotDelete;
 #endif
 } PAGED_LOOKASIDE_LIST, *PPAGED_LOOKASIDE_LIST;
 
 typedef struct LOOKASIDE_ALIGN _NPAGED_LOOKASIDE_LIST {
   GENERAL_LOOKASIDE L;
-#if !defined(_AMD64_) && !defined(_IA64_)
+#if defined(_X86_)
   KSPIN_LOCK Lock__ObsoleteButDoNotDelete;
 #endif
 } NPAGED_LOOKASIDE_LIST, *PNPAGED_LOOKASIDE_LIST;
