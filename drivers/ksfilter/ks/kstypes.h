@@ -110,6 +110,8 @@ typedef struct
     ULONG MaxMappingsByteCount;
     ULONG MappingTableStride;
 
+    KSDEVICE_THERMAL_DISPATCH ThermalDispatch;
+
 }KSIDEVICE_HEADER, *PKSIDEVICE_HEADER;
 
 typedef struct
