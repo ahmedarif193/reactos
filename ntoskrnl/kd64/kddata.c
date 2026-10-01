@@ -75,6 +75,17 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 #define KPCR_STACK_LIMIT_OFFSET        0
 #define KPRCB_PCR_PAGE_OFFSET          0
 
+#elif defined(_M_PPC)
+
+/* ReactOS-private KPCR (ndk/ppc/ketypes.h): no self pointer, the PRCB is
+ * contained, and the stack bounds live in the thread, not the PCR. */
+#define KPCR_SELF_PCR_OFFSET           0
+#define KPCR_CURRENT_PRCB_OFFSET       FIELD_OFFSET(KPCR, Prcb)
+#define KPCR_CONTAINED_PRCB_OFFSET     FIELD_OFFSET(KPCR, Prcb)
+#define KPCR_INITIAL_STACK_OFFSET      FIELD_OFFSET(KPCR, InitialStack)
+#define KPCR_STACK_LIMIT_OFFSET        0
+#define KPRCB_PCR_PAGE_OFFSET          0
+
 #else
 #error Unsupported Architecture
 #endif

@@ -57,6 +57,14 @@
 #define KdpGetParameterThree(Context)  ((Context)->A2)
 #define KdpGetParameterFour(Context)   ((Context)->A3)
 
+#elif defined(_M_PPC)
+
+//
+// R6/R7 on PowerPC (DebugService: r3 = service, r4-r7 = arguments)
+//
+#define KdpGetParameterThree(Context)  ((Context)->Gpr6)
+#define KdpGetParameterFour(Context)   ((Context)->Gpr7)
+
 #else
 #error Unsupported Architecture
 #endif
