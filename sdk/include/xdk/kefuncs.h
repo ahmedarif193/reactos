@@ -205,6 +205,15 @@ KeQueryInterruptTimePrecise(
   _Out_ PULONG64 QpcTimeStamp);
 #endif
 
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+_IRQL_requires_same_
+NTKERNELAPI
+ULONG64
+NTAPI
+KeQueryUnbiasedInterruptTimePrecise(
+  _Out_ PULONG64 QpcTimeStamp);
+#endif
+
 #if !defined(_X86_) && !defined(_M_ARM)
 _Requires_lock_not_held_(*SpinLock)
 _Acquires_lock_(*SpinLock)

@@ -2640,7 +2640,7 @@
 @ stdcall -arch=arm64 KeQueryTotalCycleTimeThread(ptr ptr)
 @ stdcall -arch=arm64 KeQueryTypeEvent(ptr)
 @ stdcall -arch=arm64 KeQueryUnbiasedInterruptTime()
-@ stdcall -arch=arm64 KeQueryUnbiasedInterruptTimePrecise(ptr)
+@ stdcall KeQueryUnbiasedInterruptTimePrecise(ptr)
 @ stub -arch=arm64 KeRcuReadLock
 @ stub -arch=arm64 KeRcuReadUnlock
 @ stub -arch=arm64 KeRcuSynchronize
