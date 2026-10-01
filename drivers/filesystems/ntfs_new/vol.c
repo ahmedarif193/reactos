@@ -23,6 +23,10 @@ NtfsRefreshDirectoryRecord(_In_ PVolumeContextBlock VolCB,
         return STATUS_INVALID_PARAMETER;
 
     ASSERT(ExIsResourceAcquiredExclusiveLite(&VolCB->MetadataResource));
+    Status = NtfsFileRecordSetAutomaticTimestampMask(FileCB->FileRec,
+                                                     FileCB->AutomaticTimestampMask);
+    if (!NT_SUCCESS(Status))
+        return Status;
     Header = NtfsFileRecordGetHeader(FileCB->FileRec);
     if (!(Header->Flags & FR_IS_DIRECTORY))
         return STATUS_SUCCESS;

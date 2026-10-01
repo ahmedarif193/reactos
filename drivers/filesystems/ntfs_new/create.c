@@ -2635,6 +2635,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     NtfsAcquireMetadata(VolCB);
     FileCB->CachedRecord = CachedRecord;
     FileCB->FileRec = CurrentFile;
+    FileCB->AutomaticTimestampMask = NTFS_AUTOMATIC_TIMESTAMP_FIELDS;
     if (ResolvedGeneration != VolCB->DirGeneration &&
         !(IrpSp->Parameters.Create.Options & FILE_OPEN_BY_FILE_ID))
     {
@@ -2737,10 +2738,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         FileCB->DesiredAccess |=
             IrpSp->Parameters.Create.SecurityContext->AccessState->PreviouslyGrantedAccess;
     }
-    FileCB->AutomaticTimestampMask =
-        NtfsFileRecordGetAutomaticTimestampMask(
-            CurrentFile);
-
     /* A read-only file may still be opened to change its attributes, but it
      * cannot be opened for data writes or an overwriting disposition. */
     if (FileExisted &&
