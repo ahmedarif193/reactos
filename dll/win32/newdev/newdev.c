@@ -25,6 +25,7 @@
 
 #include <cfgmgr32.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <winnls.h>
 
 /* Global variables */
@@ -56,6 +57,14 @@ InstallNullDriver(
 static BOOL
 InstallDevicesFromBatchPipe(
     IN HANDLE hPipe);
+
+static BOOL
+IsSelectedDriverBetter(
+    IN PDEVINSTDATA DevInstData);
+
+static BOOL
+InstallNeedsReboot(
+    IN PDEVINSTDATA DevInstData);
 
 static BOOL
 ReadPipeData(
@@ -190,6 +199,7 @@ UpdateDriverForPlugAndPlayDevicesW(
     LPCWSTR CurrentHardwareId; /* Pointer into Buffer */
     DWORD Property;
     BOOL FoundHardwareId, FoundAtLeastOneDevice = FALSE;
+    BOOL FoundCurrentDriver = FALSE;
     BOOL ret = FALSE;
 
     DevInstData.hDevInfo = INVALID_HANDLE_VALUE;
@@ -197,13 +207,26 @@ UpdateDriverForPlugAndPlayDevicesW(
     TRACE("UpdateDriverForPlugAndPlayDevicesW(%p %s %s 0x%x %p)\n",
         hwndParent, debugstr_w(HardwareId), debugstr_w(FullInfPath), InstallFlags, bRebootRequired);
 
-    /* FIXME: InstallFlags bRebootRequired ignored! */
+    if (bRebootRequired)
+        *bRebootRequired = FALSE;
+
+    if (!HardwareId || !FullInfPath)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        goto cleanup;
+    }
 
     /* Check flags */
     if (InstallFlags & ~(INSTALLFLAG_FORCE | INSTALLFLAG_READONLY | INSTALLFLAG_NONINTERACTIVE))
     {
         TRACE("Unknown flags: 0x%08lx\n", InstallFlags & ~(INSTALLFLAG_FORCE | INSTALLFLAG_READONLY | INSTALLFLAG_NONINTERACTIVE));
         SetLastError(ERROR_INVALID_FLAGS);
+        goto cleanup;
+    }
+
+    if (GetFileAttributesW(FullInfPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        SetLastError(ERROR_FILE_NOT_FOUND);
         goto cleanup;
     }
 
@@ -317,6 +340,24 @@ UpdateDriverForPlugAndPlayDevicesW(
             continue;
         }
 
+        if (!(InstallFlags & INSTALLFLAG_FORCE) && !IsSelectedDriverBetter(&DevInstData))
+        {
+            FoundCurrentDriver = TRUE;
+            continue;
+        }
+
+        if (InstallFlags & INSTALLFLAG_READONLY)
+        {
+            SP_DEVINSTALL_PARAMS_W InstallParams;
+
+            InstallParams.cbSize = sizeof(InstallParams);
+            if (SetupDiGetDeviceInstallParamsW(DevInstData.hDevInfo, &DevInstData.devInfoData, &InstallParams))
+            {
+                InstallParams.Flags |= DI_NOFILECOPY;
+                SetupDiSetDeviceInstallParamsW(DevInstData.hDevInfo, &DevInstData.devInfoData, &InstallParams);
+            }
+        }
+
         /* FIXME: HACK! We shouldn't check of ERROR_PRIVILEGE_NOT_HELD */
         //if (!InstallCurrentDriver(&DevInstData))
         if (!InstallCurrentDriver(&DevInstData) && GetLastError() != ERROR_PRIVILEGE_NOT_HELD)
@@ -325,6 +366,9 @@ UpdateDriverForPlugAndPlayDevicesW(
             continue;
         }
 
+        if (bRebootRequired && InstallNeedsReboot(&DevInstData))
+            *bRebootRequired = TRUE;
+
         FoundAtLeastOneDevice = TRUE;
     }
 
@@ -332,6 +376,10 @@ UpdateDriverForPlugAndPlayDevicesW(
     {
         SetLastError(NO_ERROR);
         ret = TRUE;
+    }
+    else if (FoundCurrentDriver)
+    {
+        SetLastError(ERROR_NO_MORE_ITEMS);
     }
     else
     {
@@ -391,6 +439,229 @@ UpdateDriverForPlugAndPlayDevicesA(
     HeapFree(GetProcessHeap(), 0, FullInfPathW);
 
     return Result;
+}
+
+static DWORD
+GetDeviceIdRank(
+    IN PCWSTR Ids OPTIONAL,
+    IN PCWSTR Id,
+    IN DWORD Base)
+{
+    DWORD Index = 0;
+
+    if (!Ids)
+        return MAXDWORD;
+
+    for (; *Ids != UNICODE_NULL; Ids += wcslen(Ids) + 1, Index++)
+    {
+        if (_wcsicmp(Ids, Id) == 0)
+            return Base + Index;
+    }
+
+    return MAXDWORD;
+}
+
+static BOOL
+IsSelectedDriverBetter(
+    IN PDEVINSTDATA DevInstData)
+{
+    SP_DRVINSTALL_PARAMS DriverParams;
+    WCHAR MatchingId[MAX_DEVICE_ID_LEN + 1];
+    WCHAR Version[64];
+    FILETIME InstalledDate = {0, 0};
+    ULARGE_INTEGER InstalledVersion;
+    PWSTR HardwareIds = NULL;
+    PWSTR CompatibleIds = NULL;
+    DWORD InstalledRank;
+    DWORD Parts[4] = {0, 0, 0, 0};
+    DWORD Size, Type;
+    LONG Compare;
+    HKEY hKey;
+    BOOL Better = TRUE;
+
+    hKey = SetupDiOpenDevRegKey(DevInstData->hDevInfo,
+                                &DevInstData->devInfoData,
+                                DICS_FLAG_GLOBAL,
+                                0,
+                                DIREG_DRV,
+                                KEY_QUERY_VALUE);
+    if (hKey == INVALID_HANDLE_VALUE)
+        return TRUE;
+
+    Size = sizeof(MatchingId) - sizeof(WCHAR);
+    if (RegQueryValueExW(hKey, REGSTR_VAL_MATCHINGDEVID, NULL, &Type, (LPBYTE)MatchingId, &Size) != ERROR_SUCCESS ||
+        Type != REG_SZ)
+    {
+        goto cleanup;
+    }
+    MatchingId[Size / sizeof(WCHAR)] = UNICODE_NULL;
+
+    DriverParams.cbSize = sizeof(DriverParams);
+    if (!SetupDiGetDriverInstallParamsW(DevInstData->hDevInfo,
+                                        &DevInstData->devInfoData,
+                                        &DevInstData->drvInfoData,
+                                        &DriverParams))
+    {
+        goto cleanup;
+    }
+
+    GetDeviceMultiSzProperty(DevInstData, SPDRP_HARDWAREID, &HardwareIds);
+    GetDeviceMultiSzProperty(DevInstData, SPDRP_COMPATIBLEIDS, &CompatibleIds);
+    InstalledRank = GetDeviceIdRank(HardwareIds, MatchingId, 0);
+    if (InstalledRank == MAXDWORD)
+        InstalledRank = GetDeviceIdRank(CompatibleIds, MatchingId, 0x2000);
+
+    Size = sizeof(InstalledDate);
+    if (RegQueryValueExW(hKey, L"DriverDateData", NULL, &Type, (LPBYTE)&InstalledDate, &Size) != ERROR_SUCCESS ||
+        Type != REG_BINARY || Size != sizeof(InstalledDate))
+    {
+        InstalledDate.dwLowDateTime = InstalledDate.dwHighDateTime = 0;
+    }
+
+    Size = sizeof(Version) - sizeof(WCHAR);
+    if (RegQueryValueExW(hKey, L"DriverVersion", NULL, &Type, (LPBYTE)Version, &Size) == ERROR_SUCCESS &&
+        Type == REG_SZ)
+    {
+        Version[Size / sizeof(WCHAR)] = UNICODE_NULL;
+        swscanf(Version, L"%lu.%lu.%lu.%lu", &Parts[0], &Parts[1], &Parts[2], &Parts[3]);
+    }
+    InstalledVersion.HighPart = (Parts[0] << 16) | (Parts[1] & 0xffff);
+    InstalledVersion.LowPart = (Parts[2] << 16) | (Parts[3] & 0xffff);
+
+    if (DriverParams.Rank != InstalledRank)
+    {
+        Better = DriverParams.Rank < InstalledRank;
+    }
+    else
+    {
+        Compare = CompareFileTime(&DevInstData->drvInfoData.DriverDate, &InstalledDate);
+        if (Compare != 0)
+            Better = Compare > 0;
+        else
+            Better = DevInstData->drvInfoData.DriverVersion > InstalledVersion.QuadPart;
+    }
+
+cleanup:
+    HeapFree(GetProcessHeap(), 0, HardwareIds);
+    HeapFree(GetProcessHeap(), 0, CompatibleIds);
+    RegCloseKey(hKey);
+    return Better;
+}
+
+static BOOL
+InstallNeedsReboot(
+    IN PDEVINSTDATA DevInstData)
+{
+    SP_DEVINSTALL_PARAMS_W InstallParams;
+
+    InstallParams.cbSize = sizeof(InstallParams);
+    if (!SetupDiGetDeviceInstallParamsW(DevInstData->hDevInfo, &DevInstData->devInfoData, &InstallParams))
+        return FALSE;
+
+    return (InstallParams.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT)) != 0;
+}
+
+BOOL WINAPI
+DiInstallDriverW(
+    IN HWND hwndParent OPTIONAL,
+    IN LPCWSTR InfPath,
+    IN DWORD Flags,
+    OUT PBOOL NeedReboot OPTIONAL)
+{
+    DEVINSTDATA DevInstData;
+    WCHAR FullInfPath[MAX_PATH];
+    DWORD Length;
+    DWORD Error = ERROR_SUCCESS;
+    DWORD i;
+
+    TRACE("DiInstallDriverW(%p %s 0x%lx %p)\n", hwndParent, debugstr_w(InfPath), Flags, NeedReboot);
+
+    if (NeedReboot)
+        *NeedReboot = FALSE;
+
+    if (!InfPath)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (Flags & ~DIIRFLAG_SYSTEM_BITS)
+    {
+        SetLastError(ERROR_INVALID_FLAGS);
+        return FALSE;
+    }
+    if (!IsUserAdmin())
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
+    Length = GetFullPathNameW(InfPath, _countof(FullInfPath), FullInfPath, NULL);
+    if (Length == 0 || Length >= _countof(FullInfPath) ||
+        GetFileAttributesW(FullInfPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return FALSE;
+    }
+
+    if (!(Flags & DIIRFLAG_INF_ALREADY_COPIED) &&
+        !SetupCopyOEMInfW(FullInfPath, NULL, SPOST_NONE, 0, NULL, 0, NULL, NULL))
+    {
+        return FALSE;
+    }
+
+    ZeroMemory(&DevInstData, sizeof(DevInstData));
+    DevInstData.hDevInfo = SetupDiGetClassDevsW(NULL, NULL, hwndParent, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+    if (DevInstData.hDevInfo == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    DevInstData.devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+    for (i = 0; SetupDiEnumDeviceInfo(DevInstData.hDevInfo, i, &DevInstData.devInfoData); i++)
+    {
+        if (!SearchDriver(&DevInstData, NULL, FullInfPath))
+            continue;
+
+        if (!(Flags & DIIRFLAG_FORCE_INF) && !IsSelectedDriverBetter(&DevInstData))
+            continue;
+
+        if (!InstallCurrentDriver(&DevInstData))
+        {
+            if (Error == ERROR_SUCCESS)
+                Error = GetLastError();
+            TRACE("InstallCurrentDriver() failed with error 0x%lx\n", GetLastError());
+            continue;
+        }
+
+        if (NeedReboot && InstallNeedsReboot(&DevInstData))
+            *NeedReboot = TRUE;
+    }
+
+    SetupDiDestroyDeviceInfoList(DevInstData.hDevInfo);
+
+    SetLastError(Error);
+    return Error == ERROR_SUCCESS;
+}
+
+BOOL WINAPI
+DiInstallDriverA(
+    IN HWND hwndParent OPTIONAL,
+    IN LPCSTR InfPath,
+    IN DWORD Flags,
+    OUT PBOOL NeedReboot OPTIONAL)
+{
+    WCHAR InfPathW[MAX_PATH];
+
+    if (!InfPath)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!MultiByteToWideChar(CP_ACP, 0, InfPath, -1, InfPathW, _countof(InfPathW)))
+    {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return FALSE;
+    }
+
+    return DiInstallDriverW(hwndParent, InfPathW, Flags, NeedReboot);
 }
 
 /* Directory and InfFile MUST NOT be specified simultaneously */
@@ -780,6 +1051,9 @@ SearchDriverRecursive(
     BOOL retval = FALSE;
     HANDLE hFindFile = INVALID_HANDLE_VALUE;
 
+    if (!Path || !*Path || wcslen(Path) >= MAX_PATH - 2)
+        return FALSE;
+
     wcscpy(DirPath, Path);
 
     if (DirPath[wcslen(DirPath) - 1] != '\\')
@@ -800,6 +1074,8 @@ SearchDriverRecursive(
         if (wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
             /* Recursive search */
+            if (wcslen(DirPath) + wcslen(FileName) >= MAX_PATH)
+                continue;
             wcscpy(FullPath, DirPath);
             wcscat(FullPath, FileName);
             if (SearchDriverRecursive(DevInstData, FullPath))
@@ -848,7 +1124,6 @@ ScanFoldersForDriverResult(
     IN PDEVINSTDATA DevInstData)
 {
     DRIVER_SEARCH_RESULT Result;
-    DRIVER_SEARCH_RESULT PathResult;
     DWORD SearchError = ERROR_SUCCESS;
 
     /* Search in default location */
@@ -866,19 +1141,8 @@ ScanFoldersForDriverResult(
         for (Path = DevInstData->CustomSearchPath; *Path != '\0'; Path += wcslen(Path) + 1)
         {
             TRACE("Search driver in %s\n", debugstr_w(Path));
-            if (wcslen(Path) == 2 && Path[1] == ':')
-            {
-                if (SearchDriverRecursive(DevInstData, Path))
-                    Result = DriverSearchFound;
-            }
-            else
-            {
-                PathResult = SearchDriverResult(DevInstData, Path, NULL);
-                if (PathResult == DriverSearchFound)
-                    Result = DriverSearchFound;
-                else if (PathResult == DriverSearchError && Result != DriverSearchFound && SearchError == ERROR_SUCCESS)
-                    SearchError = GetLastError();
-            }
+            if (SearchDriverRecursive(DevInstData, Path))
+                Result = DriverSearchFound;
         }
     }
 
@@ -912,7 +1176,6 @@ PrepareFoldersToScan(
     DWORD CustomTextLength = 0;
     DWORD LengthNeeded = 0;
     LPWSTR Buffer;
-    INT idx = (INT)SendMessageW(hwndCombo, CB_GETCURSEL, 0, 0);
 
     /* Calculate length needed to store the search paths */
     if (IncludeRemovableDevices)
@@ -932,8 +1195,7 @@ PrepareFoldersToScan(
     }
     if (IncludeCustomPath)
     {
-        CustomTextLength = 1 + ((idx != CB_ERR) ?
-        (INT)SendMessageW(hwndCombo, CB_GETLBTEXTLEN, idx, 0) : ComboBox_GetTextLength(hwndCombo));
+        CustomTextLength = 1 + ComboBox_GetTextLength(hwndCombo);
         LengthNeeded += CustomTextLength;
     }
 
@@ -967,9 +1229,7 @@ PrepareFoldersToScan(
     }
     if (IncludeCustomPath)
     {
-        Buffer += 1 + ((idx != CB_ERR) ?
-        SendMessageW(hwndCombo, CB_GETLBTEXT, idx, (LPARAM)Buffer) :
-        GetWindowTextW(hwndCombo, Buffer, CustomTextLength));
+        Buffer += 1 + GetWindowTextW(hwndCombo, Buffer, CustomTextLength);
     }
     *Buffer = '\0';
 
@@ -1085,6 +1345,8 @@ InstallCurrentDriver(
         TRACE("SetupDiCallClassInstaller(DIF_DESTROYPRIVATEDATA) failed with error 0x%x\n", GetLastError());
         return FALSE;
     }
+
+    NewDevSetFailedInstall(DevInstData->hDevInfo, &DevInstData->devInfoData, FALSE);
 
     return TRUE;
 }
@@ -1394,6 +1656,9 @@ InstallDevInstEx(
     TRACE("InstllDevInstEx(%p, %s, %d, %p, %lx)\n",
           hWndParent, debugstr_w(InstanceId), bUpdate, lpReboot, Unknown);
 
+    if (lpReboot)
+        *lpReboot = 0;
+
     DevInstData = HeapAlloc(GetProcessHeap(), 0, sizeof(DEVINSTDATA));
     if (!DevInstData)
     {
@@ -1468,7 +1733,11 @@ InstallDevInstEx(
 
     /* Prepare the wizard, and display it */
     TRACE("Need to show install wizard\n");
-    retval = DisplayWizard(DevInstData, hWndParent, IDD_WELCOMEPAGE);
+    DisplayWizard(DevInstData, hWndParent, IDD_WELCOMEPAGE);
+    retval = DevInstData->bInstalled;
+
+    if (retval && lpReboot && InstallNeedsReboot(DevInstData))
+        *lpReboot = DI_NEEDREBOOT;
 
 cleanup:
     if (DevInstData)
@@ -1483,6 +1752,7 @@ cleanup:
             if (!SetupDiDestroyDeviceInfoList(DevInstData->hDevInfo))
                 TRACE("SetupDiDestroyDeviceInfoList() failed with error 0x%lx\n", GetLastError());
         }
+        HeapFree(GetProcessHeap(), 0, DevInstData->CustomSearchPath);
         HeapFree(GetProcessHeap(), 0, DevInstData->buffer);
         HeapFree(GetProcessHeap(), 0, DevInstData);
     }

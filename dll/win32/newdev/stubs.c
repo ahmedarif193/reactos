@@ -20,6 +20,8 @@
 
 #include "newdev_private.h"
 
+#include <cfgmgr32.h>
+
 /*
 * @unimplemented
 */
@@ -61,13 +63,35 @@ DiShowUpdateDevice(
     IN DWORD Flags,
     OUT PBOOL NeedReboot OPTIONAL)
 {
+    WCHAR InstanceId[MAX_DEVICE_ID_LEN + 1];
+    DWORD Reboot = 0;
+
+    if (NeedReboot)
+        *NeedReboot = FALSE;
+
     if (Flags != 0)
     {
         SetLastError(ERROR_INVALID_FLAGS);
         return FALSE;
     }
 
-    UNIMPLEMENTED;
-    SetLastError(ERROR_GEN_FAILURE);
-    return FALSE;
+    if (!SetupDiGetDeviceInstanceIdW(DeviceInfoSet,
+                                     DeviceInfoData,
+                                     InstanceId,
+                                     sizeof(InstanceId) / sizeof(InstanceId[0]),
+                                     NULL))
+    {
+        return FALSE;
+    }
+
+    if (!InstallDevInstEx(hwndParent, InstanceId, TRUE, &Reboot, 0))
+    {
+        SetLastError(ERROR_CANCELLED);
+        return FALSE;
+    }
+
+    if (NeedReboot && Reboot != 0)
+        *NeedReboot = TRUE;
+
+    return TRUE;
 }

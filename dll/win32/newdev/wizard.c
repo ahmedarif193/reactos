@@ -87,19 +87,21 @@ NewDevSetFailedInstall(
         return FALSE;
     }
 
-    if (Set)
-        dwFlags |= CONFIGFLAG_FAILEDINSTALL;
-    else
-        dwFlags &= ~CONFIGFLAG_FAILEDINSTALL;
-
-    if (!SetupDiSetDeviceRegistryProperty(DeviceInfoSet,
-                                          DevInfoData,
-                                          SPDRP_CONFIGFLAGS,
-                                          (PBYTE)&dwFlags,
-                                          dwSize))
+    if (Set || (dwFlags & CONFIGFLAG_FAILEDINSTALL))
     {
+        if (Set)
+            dwFlags |= CONFIGFLAG_FAILEDINSTALL;
+        else
+            dwFlags &= ~CONFIGFLAG_FAILEDINSTALL;
 
-        return FALSE;
+        if (!SetupDiSetDeviceRegistryProperty(DeviceInfoSet,
+                                              DevInfoData,
+                                              SPDRP_CONFIGFLAGS,
+                                              (PBYTE)&dwFlags,
+                                              dwSize))
+        {
+            return FALSE;
+        }
     }
 
     if (Set)
@@ -943,6 +945,7 @@ InstallDrvDlgProc(
             {
                 SP_DEVINSTALL_PARAMS installParams;
 
+                DevInstData->bInstalled = TRUE;
                 NewDevSetFailedInstall(DevInstData->hDevInfo,
                                        &DevInstData->devInfoData,
                                        FALSE);

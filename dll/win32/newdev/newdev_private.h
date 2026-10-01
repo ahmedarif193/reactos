@@ -30,6 +30,7 @@ typedef struct _DEVINSTDATA
 {
 	HFONT hTitleFont;
 	BOOL bUpdate;
+	BOOL bInstalled;
 	PBYTE buffer;
 	DWORD requiredSize;
 	DWORD regDataType;
