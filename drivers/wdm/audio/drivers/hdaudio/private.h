@@ -278,7 +278,11 @@ class CAdapterCommon : public CUnknownImpl<IAdapterPowerManagement>
     }
 
     IMP_IAdapterPowerManagement;
-    CAdapterCommon(IUnknown* OuterUnknown)
+    CAdapterCommon(IUnknown* OuterUnknown) :
+        Interface(), m_CodecAddress(0), m_FunctionGroupStartNode(0), RevisionId(0), VendorId(0), m_Tags(),
+        m_TagIndex(0), m_WaveRTOutPortUnknown(NULL), m_WaveRTInPortUnknown(NULL), m_TopoOutPortUnknown(NULL),
+        m_TopoInPortUnknown(NULL), m_WaveInDataRange(), m_WaveInDataRanges(), m_WaveOutDataRange(),
+        m_WaveOutDataRanges()
     {
         RtlCopyMemory(m_WaveInPins, WaveInPins, sizeof(m_WaveInPins));
         RtlCopyMemory(m_WaveOutPins, WaveOutPins, sizeof(m_WaveOutPins));
