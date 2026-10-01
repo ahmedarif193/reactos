@@ -75,7 +75,8 @@ NTSTATUS
 IopLoadDriverWithImage(
     _In_ HANDLE ServiceHandle,
     _In_opt_ PIOP_SYSTEM_DRIVER_PREPARATION Preparation,
-    _Out_ PDRIVER_OBJECT *DriverObject);
+    _Out_ PDRIVER_OBJECT *DriverObject,
+    _Out_opt_ PNTSTATUS DriverEntryStatus);
 
 // Parameters packet for Load/Unload work item's context
 typedef struct _LOAD_UNLOAD_PARAMS
@@ -1798,7 +1799,7 @@ IopInitializeSystemDrivers(VOID)
                 if (NT_SUCCESS(IopOpenRegistryKeyEx(&ServiceHandle, NULL, *DriverList, KEY_READ)))
                 {
                     DriverObject = NULL;
-                    IopLoadDriverWithImage(ServiceHandle, Current, &DriverObject);
+                    IopLoadDriverWithImage(ServiceHandle, Current, &DriverObject, NULL);
                     ZwClose(ServiceHandle);
                 }
             }
@@ -2868,7 +2869,8 @@ NTSTATUS
 IopLoadDriverWithImage(
     _In_ HANDLE ServiceHandle,
     _In_opt_ PIOP_SYSTEM_DRIVER_PREPARATION Preparation,
-    _Out_ PDRIVER_OBJECT *DriverObject)
+    _Out_ PDRIVER_OBJECT *DriverObject,
+    _Out_opt_ PNTSTATUS DriverEntryStatus)
 {
     UNICODE_STRING ImagePath;
     UNICODE_STRING DriverName;
@@ -2971,7 +2973,7 @@ IopLoadDriverWithImage(
         }
     }
 
-    NTSTATUS driverEntryStatus;
+    NTSTATUS driverEntryStatus = STATUS_SUCCESS;
     Status = IopInitializeDriverModule(ModuleObject,
                                        ServiceHandle,
                                        DriverObject,
@@ -2980,6 +2982,8 @@ IopLoadDriverWithImage(
     {
         DPRINT1("IopInitializeDriverModule() failed (Status %lx)\n", Status);
     }
+    if (DriverEntryStatus != NULL)
+        *DriverEntryStatus = driverEntryStatus;
 
     IopReleaseDriverLoadSlot(LoadSlot);
     /* Reinitializers may load drivers themselves; never call them with a slot. */
@@ -2993,7 +2997,7 @@ IopLoadDriver(
     _In_ HANDLE ServiceHandle,
     _Out_ PDRIVER_OBJECT *DriverObject)
 {
-    return IopLoadDriverWithImage(ServiceHandle, NULL, DriverObject);
+    return IopLoadDriverWithImage(ServiceHandle, NULL, DriverObject, NULL);
 }
 
 static
@@ -3024,7 +3028,17 @@ IopLoadUnloadDriverWorker(
         }
         else
         {
-            LoadParams->Status = IopLoadDriver(serviceHandle, &LoadParams->DriverObject);
+            NTSTATUS driverEntryStatus = STATUS_SUCCESS;
+
+            LoadParams->Status = IopLoadDriverWithImage(serviceHandle,
+                                                        NULL,
+                                                        &LoadParams->DriverObject,
+                                                        &driverEntryStatus);
+            if ((LoadParams->Status == STATUS_FAILED_DRIVER_ENTRY) &&
+                !NT_SUCCESS(driverEntryStatus))
+            {
+                LoadParams->Status = driverEntryStatus;
+            }
             ZwClose(serviceHandle);
         }
     }
