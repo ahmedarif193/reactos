@@ -114,7 +114,8 @@ LdrpCallInitRoutine(IN PDLL_INIT_ROUTINE EntryPoint,
     USHORT ImageMachine;
 
     NtHeaders = RtlImageNtHeader(BaseAddress);
-    if (NtHeaders && (ULONG_PTR)EntryPoint >= (ULONG_PTR)BaseAddress)
+    if (NtHeaders && NtHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_ARM64 &&
+        (ULONG_PTR)EntryPoint >= (ULONG_PTR)BaseAddress)
     {
         EntryPointRva = (ULONG_PTR)EntryPoint - (ULONG_PTR)BaseAddress;
         if (EntryPointRva < NtHeaders->OptionalHeader.SizeOfImage)
