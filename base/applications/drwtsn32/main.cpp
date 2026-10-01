@@ -95,6 +95,10 @@ static void PrintThread(FILE* output, DumpData& data, DWORD tid, ThreadData& thr
                  (PVOID)(ULONG_PTR)ctx.S10, (PVOID)(ULONG_PTR)ctx.S11,
                  (PVOID)(ULONG_PTR)ctx.T3, (PVOID)(ULONG_PTR)ctx.T4,
                  (PVOID)(ULONG_PTR)ctx.T5, (PVOID)(ULONG_PTR)ctx.T6);
+#elif defined(_M_PPC)
+        for (int n = 0; n < 32; ++n)
+            xfprintf(output, "r%d:%p%s", n, (PVOID)(&ctx.Gpr0)[n], ((n % 8) == 7) ? NEWLINE : " ");
+        xfprintf(output, "cr:%p xer:%p" NEWLINE, (PVOID)ctx.Cr, (PVOID)ctx.Xer);
 #else
 #error Unknown architecture
 #endif
@@ -118,6 +122,9 @@ static void PrintThread(FILE* output, DumpData& data, DWORD tid, ThreadData& thr
         xfprintf(output, "sp:%p fp:%p ra:%p pc:%p" NEWLINE,
                  (PVOID)(ULONG_PTR)ctx.Sp, (PVOID)(ULONG_PTR)ctx.S0,
                  (PVOID)(ULONG_PTR)ctx.Ra, (PVOID)(ULONG_PTR)ctx.Pc);
+#elif defined(_M_PPC)
+        xfprintf(output, "iar:%p msr:%p lr:%p ctr:%p sp:%p" NEWLINE,
+                 (PVOID)ctx.Iar, (PVOID)ctx.Msr, (PVOID)ctx.Lr, (PVOID)ctx.Ctr, (PVOID)ctx.Gpr1);
 #else
 #error Unknown architecture
 #endif
@@ -126,7 +133,7 @@ static void PrintThread(FILE* output, DumpData& data, DWORD tid, ThreadData& thr
 #ifdef CONTEXT_DEBUG_REGISTERS
     if ((ctx.ContextFlags & CONTEXT_DEBUG_REGISTERS) == CONTEXT_DEBUG_REGISTERS)
     {
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_PPC)
         xfprintf(output, "dr0:%p dr1:%p dr2:%p dr3:%p dr6:%p dr7:%p" NEWLINE,
                  ctx.Dr0, ctx.Dr1, ctx.Dr2, ctx.Dr3, ctx.Dr6, ctx.Dr7);
 #elif defined(_M_ARM)

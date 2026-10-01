@@ -278,6 +278,39 @@ struct thunkCode
 static_assert(sizeof(thunkCode) == 32, "RISC-V ATL thunk layout changed");
 #pragma pack(pop)
 
+#elif defined(_M_PPC)
+
+/* A Windows NT PowerPC WNDPROC is a {code, TOC} function descriptor. The
+ * thunk is its own descriptor: its TOC word is the thunk address, so the
+ * callee sees the thunk in r2 and loads its data from there. */
+#pragma pack(push,4)
+struct thunkCode
+{
+    DWORD m_entry;      /* descriptor: code address (m_code) */
+    DWORD m_toc;        /* descriptor: TOC = this thunk */
+    DWORD m_code[6];
+    DWORD m_this;
+    DWORD m_proc;       /* target WNDPROC descriptor */
+
+    void
+    Init(WNDPROC proc, void *pThis)
+    {
+        m_entry = PtrToUlong(&m_code[0]);
+        m_toc = PtrToUlong(this);
+        m_code[0] = 0x80620020; /* lwz   r3, 32(r2)   (m_this) */
+        m_code[1] = 0x81620024; /* lwz   r11, 36(r2)  (m_proc) */
+        m_code[2] = 0x800B0000; /* lwz   r0, 0(r11) */
+        m_code[3] = 0x804B0004; /* lwz   r2, 4(r11) */
+        m_code[4] = 0x7C0903A6; /* mtctr r0 */
+        m_code[5] = 0x4E800420; /* bctr */
+        m_this = PtrToUlong(pThis);
+        m_proc = PtrToUlong(proc);
+        FlushInstructionCache(GetCurrentProcess(), this, sizeof(thunkCode));
+    }
+};
+static_assert(sizeof(thunkCode) == 40, "PowerPC ATL thunk layout changed");
+#pragma pack(pop)
+
 #else
 #error ARCH not supported
 #endif

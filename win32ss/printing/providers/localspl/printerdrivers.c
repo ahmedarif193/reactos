@@ -49,6 +49,10 @@ static const WCHAR x64_envnameW[] = {'W','i','n','d','o','w','s',' ','x','6','4'
 static const WCHAR x64_subdirW[] = {'x','6','4',0};
 static const WCHAR x86_envnameW[] = {'W','i','n','d','o','w','s',' ','N','T',' ','x','8','6',0};
 static const WCHAR x86_subdirW[] = {'w','3','2','x','8','6',0};
+static const WCHAR ppc_envnameW[] = L"Windows NT PowerPC";
+static const WCHAR ppc_subdirW[] = L"w32ppc";
+static const WCHAR arm_envnameW[] = L"Windows ARM";
+static const WCHAR arm_subdirW[] = L"ARM";
 static const WCHAR arm64_envnameW[] = {'W','i','n','d','o','w','s',' ','A','R','M','6','4',0};
 static const WCHAR arm64_subdirW[] = {'a','r','m','6','4',0};
 static const WCHAR riscv64_envnameW[] = {'R','e','a','c','t','O','S',' ','R','I','S','C','-','V','6','4',0};
@@ -60,6 +64,10 @@ static PRINTENV_T env_ia64 =  {ia64_envnameW, ia64_subdirW, 3, version3_regpathW
 
 static PRINTENV_T env_x86 =   {x86_envnameW, x86_subdirW, 3, version3_regpathW, version3_subdirW};
 
+static PRINTENV_T env_ppc =   {ppc_envnameW, ppc_subdirW, 3, version3_regpathW, version3_subdirW};
+
+static PRINTENV_T env_arm =   {arm_envnameW, arm_subdirW, 3, version3_regpathW, version3_subdirW};
+
 static PRINTENV_T env_x64 =   {x64_envnameW, x64_subdirW, 3, version3_regpathW, version3_subdirW};
 
 static PRINTENV_T env_arm64 = {arm64_envnameW, arm64_subdirW, 3, version3_regpathW, version3_subdirW};
@@ -68,7 +76,7 @@ static PRINTENV_T env_riscv64 = {riscv64_envnameW, riscv64_subdirW, 3, version3_
 
 static PRINTENV_T env_win40 = {win40_envnameW, win40_subdirW, 0, version0_regpathW, version0_subdirW};
 
-static PPRINTENV_T all_printenv[] = {&env_x86, &env_x64, &env_arm64, &env_riscv64, &env_ia64, &env_win40};
+static PPRINTENV_T all_printenv[] = {&env_x86, &env_ppc, &env_arm, &env_x64, &env_arm64, &env_riscv64, &env_ia64, &env_win40};
 
 static const DWORD di_sizeof[] = {0, sizeof(DRIVER_INFO_1W), sizeof(DRIVER_INFO_2W),
                                      sizeof(DRIVER_INFO_3W), sizeof(DRIVER_INFO_4W),
@@ -698,6 +706,9 @@ PPRINTENV_T validate_envW(LPCWSTR env)
     unsigned int i;
 
     TRACE("(%s)\n", debugstr_w(env));
+    if (!env || !env[0])
+        env = (GetVersion() & 0x80000000) ? win40_envnameW : wszCurrentEnvironment;
+
     if (env && env[0])
     {
         for (i = 0; i < ARRAYSIZE(all_printenv); i++)
@@ -715,11 +726,6 @@ PPRINTENV_T validate_envW(LPCWSTR env)
         }
         /* on win9x, only "Windows 4.0" is allowed, but we ignore this */
     }
-    else
-    {
-        result = (GetVersion() & 0x80000000) ? &env_win40 : &env_x86;
-    }
-
     TRACE("=> using %p: %s\n", result, debugstr_w(result ? result->envname : NULL));
     return result;
 }

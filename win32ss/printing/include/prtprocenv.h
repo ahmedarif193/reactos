@@ -19,6 +19,8 @@ const WCHAR wszCurrentEnvironment[] =
     L"Windows ARM64";
 #elif defined(_M_RISCV64) || (defined(__riscv) && (__riscv_xlen == 64))
     L"ReactOS RISC-V64";
+#elif defined(_M_PPC)
+    L"Windows NT PowerPC";
 #else
     #error Unsupported architecture
 #endif

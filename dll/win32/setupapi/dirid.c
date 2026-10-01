@@ -59,6 +59,8 @@ static const WCHAR printer_env[] = L"arm";
 static const WCHAR printer_env[] = L"arm64";
 #elif defined(__riscv) && (__riscv_xlen == 64)
 static const WCHAR printer_env[] = L"riscv64";
+#elif defined(__powerpc__) && !defined(__powerpc64__)
+static const WCHAR printer_env[] = L"w32ppc";
 #else
 #error not defined for this cpu
 #endif
