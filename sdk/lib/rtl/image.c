@@ -441,6 +441,15 @@ LdrProcessRelocationBlockLongLong(
             break;
 
         case IMAGE_REL_BASED_HIGHADJ:
+            /* The next slot holds the signed low half of the original value.
+             * Recompute the adjusted high half with the carry out of it. */
+            if (i + 1 >= Count)
+                return (PIMAGE_BASE_RELOCATION)NULL;
+            TypeOffset++;
+            i++;
+            *ShortPtr = HIWORD((LONG)((ULONG)SWAPW(*ShortPtr) << 16) + (SHORT)SWAPW(*TypeOffset) + (LONG)(Delta & 0xFFFFFFFF) + 0x8000);
+            break;
+
         case IMAGE_REL_BASED_MIPS_JMPADDR:
         default:
             DPRINT1("Unknown/unsupported fixup type %hu.\n", Type);
