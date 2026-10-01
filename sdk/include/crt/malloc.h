@@ -308,11 +308,9 @@ extern "C" {
 #define _ALLOCA_S_STACK_MARKER 0xCCCC
 #define _ALLOCA_S_HEAP_MARKER 0xDDDD
 
-#if(defined(_X86_) && !defined(__x86_64))
-#define _ALLOCA_S_MARKER_SIZE 8
-#elif defined(__ia64__) || defined(__x86_64) || defined(__arm64__) || defined(_M_RISCV64)
+#ifdef _WIN64
 #define _ALLOCA_S_MARKER_SIZE 16
-#elif defined(__arm__)
+#else
 #define _ALLOCA_S_MARKER_SIZE 8
 #endif
 

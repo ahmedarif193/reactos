@@ -200,10 +200,12 @@ _Check_return_ _CRTIMP int __cdecl _fpclassf(_In_ float x);
 #endif
 #endif
 
-#if defined(_WIN64) || defined(__arm__) || defined(_M_ARM)
+/* MSVCRT exports these float entry points on every target except legacy
+ * 32-bit x86, whose math.h supplies the compatibility inline forms. */
+#if !defined(__i386__) && !defined(_M_IX86)
 _Check_return_ _CRTIMP int __cdecl _finitef(_In_ float x);
 _Check_return_ _CRTIMP float __cdecl _logbf(_In_ float x);
-#endif /* _WIN64 || ARM */
+#endif
 
 #if defined(__ia64__) || defined (_M_IA64)
 _Check_return_ _CRTIMP float __cdecl ldexpf(_In_ float x, _In_ int y);

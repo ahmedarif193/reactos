@@ -42,7 +42,12 @@ typedef union
 NTSYSAPI PRUNTIME_FUNCTION WINAPI RtlLookupFunctionEntry(ULONG_PTR, ULONG_PTR*, PUNWIND_HISTORY_TABLE);
 NTSYSAPI PEXCEPTION_ROUTINE WINAPI RtlVirtualUnwind(ULONG, ULONG_PTR, ULONG_PTR, PRUNTIME_FUNCTION, CONTEXT*, void**, ULONG_PTR*, PKNONVOLATILE_CONTEXT_POINTERS);
 #endif
-#if !defined(_M_RISCV64)
+/* Report with a captured context where this code knows the context layout. */
+#if defined(_M_IX86) || defined(__i386__) || defined(_M_AMD64) || defined(__x86_64__) || \
+    defined(_M_ARM) || defined(__arm__) || defined(_M_ARM64) || defined(__aarch64__)
+#define GS_REPORT_WITH_CONTEXT
+#endif
+#ifdef GS_REPORT_WITH_CONTEXT
 static EXCEPTION_RECORD GS_ExceptionRecord;
 static CONTEXT GS_ContextRecord;
 
@@ -107,7 +112,7 @@ __declspec(noreturn) void __cdecl __report_gsfailure (ULONG_PTR);
 __declspec(noreturn) void __cdecl
 __report_gsfailure (ULONG_PTR StackCookie)
 {
-#ifdef _M_RISCV64
+#ifndef GS_REPORT_WITH_CONTEXT
   (void)StackCookie;
   __fastfail(FAST_FAIL_STACK_COOKIE_CHECK_FAILURE);
 #else
