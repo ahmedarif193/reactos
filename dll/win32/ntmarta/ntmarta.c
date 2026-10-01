@@ -3601,7 +3601,7 @@ AccpTreeWalk(ACCP_TREE_CONTEXT *Context, PACCP_TREE_FRAME Root)
     PACCP_TREE_FRAME Frame = Root, Child = NULL, Previous;
     WCHAR *Name = NULL;
     LARGE_INTEGER FileId;
-    BOOLEAN ById;
+    BOOLEAN ById = FALSE;
     DWORD Ret, Access, EnumerationError;
 
     if (Context->Type == SE_REGISTRY_KEY)
