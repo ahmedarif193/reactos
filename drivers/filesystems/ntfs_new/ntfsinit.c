@@ -297,6 +297,7 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
     BOOLEAN MetadataAcquired = FALSE;
     BOOLEAN Deleted = FALSE;
     BOOLEAN RecordDeleted = FALSE;
+    BOOLEAN StreamDeleted = FALSE;
     PStreamContextBlock* DeleteStreams = NULL;
     SIZE_T DeleteStreamCount = 0;
     SIZE_T StreamIndex;
@@ -497,7 +498,18 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
             }
         }
     }
-    if (NT_SUCCESS(DeleteStatus))
+    if (NT_SUCCESS(DeleteStatus) && StreamOnly)
+    {
+        DeleteStatus = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+        if (NT_SUCCESS(DeleteStatus))
+        {
+            DeleteStatus = NtfsFileRecordDeleteNamedDataStream(FileCB->FileRec,
+                                                               FileCB->RequestedStream);
+        }
+        Deleted = NT_SUCCESS(DeleteStatus);
+        StreamDeleted = Deleted;
+    }
+    else if (NT_SUCCESS(DeleteStatus))
     {
         DeleteStatus = NtfsMasterFileTableDeleteFileEx(
             NtfsVolumeGetMft(VolCB->DiskVolume),
@@ -510,10 +522,13 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
         Deleted = NT_SUCCESS(DeleteStatus);
     }
     InterlockedIncrement(&VolCB->DirGeneration);
-    NtfsEvictCachedRecord(VolCB,
-                          DeletePath,
-                          (USHORT)DeletePathLength,
-                          RecordDeleted);
+    if (!StreamOnly)
+    {
+        NtfsEvictCachedRecord(VolCB,
+                              DeletePath,
+                              (USHORT)DeletePathLength,
+                              RecordDeleted);
+    }
     if (Deleted)
         NtfsRecordNameMissing(VolCB, DeletePath, (USHORT)DeletePathLength);
 
@@ -523,7 +538,7 @@ DeleteDone:
         NtfsAcquireMetadata(VolCB);
         MetadataAcquired = TRUE;
     }
-    if (!RecordDeleted && FileCB->StreamCB)
+    if (!RecordDeleted && !StreamDeleted && FileCB->StreamCB)
     {
         PLIST_ENTRY Entry;
 
@@ -565,7 +580,7 @@ DeleteDone:
     {
         PStreamContextBlock Stream = DeleteStreams[StreamIndex];
 
-        if (!RecordDeleted)
+        if (!RecordDeleted && !StreamDeleted)
         {
             ExAcquireResourceExclusiveLite(&Stream->PagingIoResource, TRUE);
             Stream->Deleted = FALSE;

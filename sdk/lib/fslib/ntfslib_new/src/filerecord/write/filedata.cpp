@@ -1732,6 +1732,115 @@ Rollback:
 }
 
 NTSTATUS
+FileRecord::DeleteNamedDataStream(_In_ PWSTR StreamName)
+{
+    PAttribute StandardAttribute;
+    PAttribute TargetAttribute;
+    PStandardInformationEx Standard;
+    PDataRun OldRuns = NULL;
+    PDataRun* Link;
+    PUCHAR RecordBackup;
+    NTSTATUS Status;
+
+    if (!StreamName || StreamName[0] == 0 ||
+        !Header || !Data || !DiskVolume)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (DiskVolume->IsReadOnly)
+        return STATUS_ACCESS_DENIED;
+    if (Header->BaseFileRecord != 0)
+        return STATUS_NOT_IMPLEMENTED;
+
+    TargetAttribute = GetAttribute(TypeData, StreamName);
+    if (!TargetAttribute)
+        return STATUS_NOT_FOUND;
+    if (FindAttributeInRecord(TypeAttributeList,
+                              NULL,
+                              NULL) ||
+        GetAttributeOwner(TargetAttribute) != this)
+    {
+        return STATUS_NOT_IMPLEMENTED;
+    }
+    if (TargetAttribute->IsNonResident)
+    {
+        if (TargetAttribute->NonResident.FirstVCN != 0)
+            return STATUS_NOT_IMPLEMENTED;
+        if (TargetAttribute->NonResident.AllocatedSize != 0)
+        {
+            OldRuns = FindNonResidentData(TargetAttribute);
+            if (!OldRuns)
+                return STATUS_FILE_CORRUPT_ERROR;
+            Link = &OldRuns;
+            while (*Link)
+            {
+                PDataRun Run = *Link;
+
+                if (Run->IsSparse)
+                {
+                    *Link = Run->NextRun;
+                    delete Run;
+                }
+                else
+                {
+                    Link = &Run->NextRun;
+                }
+            }
+        }
+    }
+
+    RecordBackup =
+        NtfsAcquireRecordScratch(DiskVolume, RecordBufferSize);
+    if (!RecordBackup)
+    {
+        FreeDataRun(OldRuns);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlCopyMemory(RecordBackup,
+                  Data,
+                  RecordBufferSize);
+
+    Status = RemoveAttributeRecord(TargetAttribute);
+    if (NT_SUCCESS(Status))
+    {
+        Status = GetStandardInformationForUpdate(
+            &StandardAttribute,
+            &Standard);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        UNREFERENCED_PARAMETER(StandardAttribute);
+        Standard->FilePermissions =
+            (Standard->FilePermissions & ~(ULONG)FILE_PERM_NORMAL) | FILE_PERM_ARCHIVE;
+        Status = PrepareAutomaticTimestamps(
+            NTFS_BASIC_INFO_CHANGE_TIME,
+            NULL);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Status =
+            DiskVolume->MFT->WriteFileRecordToMFT(
+                this);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        RtlCopyMemory(Data,
+                      RecordBackup,
+                      RecordBufferSize);
+        Header =
+            reinterpret_cast<PFileRecordHeader>(Data);
+        ClearDataRunCache();
+    }
+    else if (OldRuns)
+    {
+        Status = DiskVolume->ReleaseClusters(OldRuns);
+    }
+    FreeDataRun(OldRuns);
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
+    return Status;
+}
+
+NTSTATUS
 FileRecord::MaterializeWofCompressedData(
     _Out_ PBOOLEAN Materialized)
 {

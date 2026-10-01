@@ -547,6 +547,11 @@ NtfsFileRecordCreateNamedDataStream(
     _In_ NtfsFileRecord *FileRecord,
     _In_ PWSTR StreamName);
 
+NTSTATUS
+NtfsFileRecordDeleteNamedDataStream(
+    _In_ NtfsFileRecord *FileRecord,
+    _In_ PWSTR StreamName);
+
 /*
  * Changes the logical size of an existing ordinary $DATA stream. Growth
  * reads as zero beyond the prior initialized size; shrink releases complete

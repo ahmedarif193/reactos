@@ -826,6 +826,9 @@ public:
     CreateNamedDataStream(_In_ PWSTR StreamName);
 
     NTSTATUS
+    DeleteNamedDataStream(_In_ PWSTR StreamName);
+
+    NTSTATUS
     SetFileDataSize(_In_ AttributeType AttrType,
                     _In_opt_ PWSTR StreamName,
                     _In_ ULONGLONG NewSize);
