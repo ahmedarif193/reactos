@@ -42,6 +42,13 @@ typedef struct _WND_REDIRECT
     BOOL      FrontValid;   /* front has been synced at least once            */
     LONG      cx;           /* buffer dimensions                              */
     LONG      cy;
+    LONG      FrontCx;
+    LONG      FrontCy;
+    BOOL      FrontHeld;
+    BOOL      FrontScaled;
+    POINTL    FrontOffset;
+    RECTL     rcFrontClient;
+    LONGLONG  HeldTime;
     LONGLONG  AllocFailTime;/* last backing-alloc failure (backoff, 100ns)    */
     /* Full WDDM adapters provide CDD-owned shared allocations. Display-only
      * and legacy paths retain section-backed buffers. Section-backed GL
