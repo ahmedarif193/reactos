@@ -417,8 +417,8 @@ NtfsFileRecordReadReparsePoint(
 /*
  * Creates or replaces the complete native $REPARSE_POINT value. The supplied
  * tag must match an existing point; third-party tags also require a matching
- * GUID. Directory-emptiness, symlink-data, EA-conflict, and 16 KiB limits are
- * enforced before mutation.
+ * GUID. Directory-emptiness, symlink-data, and 16 KiB limits are enforced
+ * before mutation.
  */
 NTSTATUS
 NtfsFileRecordSetReparsePoint(

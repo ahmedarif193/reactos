@@ -160,7 +160,6 @@ FileRecord::UpdateReparsePoint(
     ULONGLONG DataLength;
     ULONG ExistingLength = 0;
     USHORT PackedEaSize = 0;
-    BOOLEAN HasExtendedAttributes = FALSE;
     BOOLEAN IsDirectory;
     BOOLEAN Promote = FALSE;
     BOOLEAN Committed = FALSE;
@@ -315,16 +314,9 @@ FileRecord::UpdateReparsePoint(
 
     Status = GetPackedEaSize(this,
                              &PackedEaSize,
-                             &HasExtendedAttributes);
+                             NULL);
     if (!NT_SUCCESS(Status))
         goto Done;
-    if (!Delete && !ReparseAttribute &&
-        HasExtendedAttributes)
-    {
-        Status = STATUS_EAS_NOT_SUPPORTED;
-        goto Done;
-    }
-
     if (ReparseAttribute &&
         ReparseAttribute->IsNonResident)
     {
