@@ -2304,6 +2304,52 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 PWCHAR LeafName;
                 USHORT LeafLength;
                 USHORT ParentLength;
+                USHORT FullNameLength = FileObject->FileName.Length;
+
+                if (!OpenTargetDirectory)
+                {
+                    AttributeType NewType;
+                    PWSTR NewStream = NULL;
+                    USHORT StreamOffset = 0;
+                    BOOLEAN NamedStream;
+
+                    while (StreamOffset < FullNameLength / sizeof(WCHAR) &&
+                           FileObject->FileName.Buffer[StreamOffset] != L':')
+                    {
+                        ++StreamOffset;
+                    }
+                    if (StreamOffset < FullNameLength / sizeof(WCHAR) &&
+                        NT_SUCCESS(NtfsVolumeGetADSPreference(DiskVolume,
+                                                              &FileObject->FileName,
+                                                              &NewType,
+                                                              &NewStream)) &&
+                        NewType == TypeData)
+                    {
+                        NamedStream = NewStream && NewStream[0];
+                        if (NewStream)
+                            ExFreePool(NewStream);
+                        if (NamedStream && (CreateOptions & FILE_DIRECTORY_FILE))
+                        {
+                            NtfsReleaseMetadata(VolCB);
+                            KeLeaveCriticalRegion();
+                            return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, NULL, CurrentFile,
+                                                            CachedRecord, STATUS_NOT_A_DIRECTORY);
+                        }
+                        if (!(CreateOptions & FILE_DIRECTORY_FILE))
+                        {
+                            FileObject->FileName.Length = StreamOffset * sizeof(WCHAR);
+                            if (NamedStream)
+                            {
+                                NamedDataStream = TRUE;
+                                StreamExisted = FALSE;
+                            }
+                        }
+                    }
+                    else if (NewStream)
+                    {
+                        ExFreePool(NewStream);
+                    }
+                }
 
                 if (!(CreateOptions & FILE_DIRECTORY_FILE) &&
                     FileObject->FileName.Length != 0 &&
@@ -2431,6 +2477,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     NtfsForgetMissingName(VolCB,
                                           FileObject->FileName.Buffer,
                                           FileObject->FileName.Length / sizeof(WCHAR));
+                    FileObject->FileName.Length = FullNameLength;
                 }
                 else if (CreatedWithCachedParent)
                 {
