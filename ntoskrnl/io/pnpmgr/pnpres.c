@@ -659,6 +659,7 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
 {
     ULONG i, OldCount;
     BOOLEAN AlternateRequired = FALSE;
+    PBOOLEAN BootUsed = NULL;
     PIO_RESOURCE_LIST ResList;
     NTSTATUS Status = STATUS_CONFLICTING_ADDRESSES;
 
@@ -668,6 +669,13 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
     else
         OldCount = 0;
 
+    if (OldCount != 0)
+    {
+        BootUsed = ExAllocatePool(PagedPool, OldCount * sizeof(BOOLEAN));
+        if (!BootUsed)
+            goto NoMemory;
+    }
+
     ResList = &RequirementsList->List[0];
     for (i = 0; i < RequirementsList->AlternativeLists; i++, ResList = IopGetNextResourceList(ResList))
     {
@@ -676,6 +684,8 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
 
         AlternateRequired = FALSE;
         IopReleaseNewMessageVectors(*ResourceList, OldCount);
+        if (BootUsed)
+            RtlZeroMemory(BootUsed, OldCount * sizeof(BOOLEAN));
 
         /* We need to get back to where we were before processing the last alternative list */
         if (OldCount == 0 && *ResourceList != NULL)
@@ -729,11 +739,14 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                 break;
             }
 
-            for (iii = 0; PartialList && iii < PartialList->Count && !Matched; iii++)
+            for (iii = 0; PartialList && iii < OldCount && !Matched; iii++)
             {
                 /* Partial resource descriptors can be of variable size (CmResourceTypeDeviceSpecific),
                    but only one is allowed and it must be the last one in the list! */
                 PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc = &PartialList->PartialDescriptors[iii];
+
+                if (BootUsed[iii])
+                    continue;
 
                 /* The ordinary and large forms describe the same resource. */
                 if (IoDesc->Type != CmDesc->Type &&
@@ -865,6 +878,9 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                         Matched = TRUE;
                         break;
                 }
+
+                if (Matched)
+                    BootUsed[iii] = TRUE;
             }
 
             /* Check if we found a matching descriptor */
@@ -1070,6 +1086,8 @@ AppendFailed:
         }
 
         /* We're done because we satisfied one of the alternate lists */
+        if (BootUsed)
+            ExFreePool(BootUsed);
         return STATUS_SUCCESS;
     }
 
@@ -1081,6 +1099,8 @@ NoMemory:
     Status = STATUS_NO_MEMORY;
 
 Failure:
+    if (BootUsed)
+        ExFreePool(BootUsed);
     IopReleaseNewMessageVectors(*ResourceList, OldCount);
     /* Free the list */
     if (*ResourceList)
