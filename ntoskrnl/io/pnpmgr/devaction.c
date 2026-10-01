@@ -1521,6 +1521,50 @@ PiSetDevNodeText(
 }
 
 static
+VOID
+PiQueryDevNodeResources(
+    _In_ PDEVICE_NODE DeviceNode)
+{
+    IO_STATUS_BLOCK IoStatusBlock;
+    NTSTATUS Status;
+
+    DPRINT("Sending IRP_MN_QUERY_RESOURCES to device stack\n");
+
+    Status = IopInitiatePnpIrp(DeviceNode->PhysicalDeviceObject,
+                               &IoStatusBlock,
+                               IRP_MN_QUERY_RESOURCES,
+                               NULL);
+    if (NT_SUCCESS(Status) && IoStatusBlock.Information)
+    {
+        DeviceNode->BootResources = (PCM_RESOURCE_LIST)IoStatusBlock.Information;
+        IopDeviceNodeSetFlag(DeviceNode, DNF_HAS_BOOT_CONFIG);
+        IopResDbEnsureSeeded();
+        IopResDbReserve(DeviceNode, DeviceNode->BootResources, NULL);
+    }
+    else
+    {
+        DPRINT("IopInitiatePnpIrp() failed (Status %x) or IoStatusBlock.Information=NULL\n", Status);
+        DeviceNode->BootResources = NULL;
+    }
+
+    DPRINT("Sending IRP_MN_QUERY_RESOURCE_REQUIREMENTS to device stack\n");
+
+    Status = IopInitiatePnpIrp(DeviceNode->PhysicalDeviceObject,
+                               &IoStatusBlock,
+                               IRP_MN_QUERY_RESOURCE_REQUIREMENTS,
+                               NULL);
+    if (NT_SUCCESS(Status))
+    {
+        DeviceNode->ResourceRequirements = (PIO_RESOURCE_REQUIREMENTS_LIST)IoStatusBlock.Information;
+    }
+    else
+    {
+        DPRINT("IopInitiatePnpIrp() failed (Status %08lx)\n", Status);
+        DeviceNode->ResourceRequirements = NULL;
+    }
+}
+
+static
 NTSTATUS
 PiInitializeDevNode(
     _In_ PDEVICE_NODE DeviceNode)
@@ -1638,40 +1682,7 @@ PiInitializeDevNode(
         DeviceNode->ChildBusTypeIndex = -1;
     }
 
-    DPRINT("Sending IRP_MN_QUERY_RESOURCES to device stack\n");
-
-    Status = IopInitiatePnpIrp(DeviceNode->PhysicalDeviceObject,
-                               &IoStatusBlock,
-                               IRP_MN_QUERY_RESOURCES,
-                               NULL);
-    if (NT_SUCCESS(Status) && IoStatusBlock.Information)
-    {
-        DeviceNode->BootResources = (PCM_RESOURCE_LIST)IoStatusBlock.Information;
-        IopDeviceNodeSetFlag(DeviceNode, DNF_HAS_BOOT_CONFIG);
-        IopResDbEnsureSeeded();
-        IopResDbReserve(DeviceNode, DeviceNode->BootResources, NULL);
-    }
-    else
-    {
-        DPRINT("IopInitiatePnpIrp() failed (Status %x) or IoStatusBlock.Information=NULL\n", Status);
-        DeviceNode->BootResources = NULL;
-    }
-
-    DPRINT("Sending IRP_MN_QUERY_RESOURCE_REQUIREMENTS to device stack\n");
-
-    Status = IopInitiatePnpIrp(DeviceNode->PhysicalDeviceObject,
-                               &IoStatusBlock,
-                               IRP_MN_QUERY_RESOURCE_REQUIREMENTS,
-                               NULL);
-    if (NT_SUCCESS(Status))
-    {
-        DeviceNode->ResourceRequirements = (PIO_RESOURCE_REQUIREMENTS_LIST)IoStatusBlock.Information;
-    }
-    else
-    {
-        DPRINT("IopInitiatePnpIrp() failed (Status %08lx)\n", Status);
-        DeviceNode->ResourceRequirements = NULL;
-    }
+    PiQueryDevNodeResources(DeviceNode);
 
     if (InstanceKey != NULL)
     {
@@ -3220,6 +3231,30 @@ PipRunDeviceActionRequest(
         case PiActionStartDevice:
             // This action is triggered from usermode, when a driver is installed
             // for a non-critical PDO
+            if (deviceNode->State == DeviceNodeRemoved &&
+                deviceNode->Parent != NULL &&
+                !(deviceNode->Flags & (DNF_HAS_PROBLEM | DNF_DEVICE_GONE)))
+            {
+                ObReferenceObject(Request->DeviceObject);
+                if (deviceNode->ResourceList)
+                {
+                    ExFreePool(deviceNode->ResourceList);
+                    deviceNode->ResourceList = NULL;
+                }
+                if (deviceNode->ResourceListTranslated)
+                {
+                    ExFreePool(deviceNode->ResourceListTranslated);
+                    deviceNode->ResourceListTranslated = NULL;
+                }
+                if (deviceNode->ResourceRequirements)
+                    ExFreePool(deviceNode->ResourceRequirements);
+                if (deviceNode->BootResources)
+                    ExFreePool(deviceNode->BootResources);
+                PiClearDevNodeFlag(deviceNode, DNF_HAS_BOOT_CONFIG | DNF_NO_RESOURCE_REQUIRED);
+                PiQueryDevNodeResources(deviceNode);
+                PiSetDevNodeState(deviceNode, DeviceNodeInitialized);
+            }
+
             if (deviceNode->State == DeviceNodeInitialized &&
                 !(deviceNode->Flags & DNF_HAS_PROBLEM))
             {
