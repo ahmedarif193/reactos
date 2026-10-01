@@ -12,10 +12,6 @@ endif()
 
 project(REACTOS)
 
-if(ARCH STREQUAL "riscv64" AND CMAKE_CROSSCOMPILING)
-    set(PCH OFF CACHE BOOL "Whether to use precompiled headers")
-endif()
-
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_INCLUDE_DIRECTORIES_PROJECT_BEFORE ON)
 set(CMAKE_SHARED_LIBRARY_PREFIX "")
@@ -329,13 +325,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     add_definitions(-D_NEW_DELETE_OPERATORS_)
     if(ARCH STREQUAL "i386")
         add_definitions(-DUSE_COMPILER_EXCEPTIONS -D_USE_32BIT_TIME_T)
-    elseif(ARCH STREQUAL "amd64")
-        add_compile_definitions(USE_COMPILER_EXCEPTIONS)
-    elseif(ARCH STREQUAL "arm")
-        add_compile_definitions(USE_COMPILER_EXCEPTIONS)
-    elseif(ARCH STREQUAL "arm64")
-        add_compile_definitions(USE_COMPILER_EXCEPTIONS)
-    elseif(ARCH STREQUAL "riscv64")
+    else()
         add_compile_definitions(USE_COMPILER_EXCEPTIONS)
     endif()
 

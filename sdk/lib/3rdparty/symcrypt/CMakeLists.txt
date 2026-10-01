@@ -169,8 +169,8 @@ target_compile_definitions(symcrypt_km PRIVATE
     __WINE_PE_BUILD
     SYMCRYPT_PLATFORM_WINE=1
     _KERNEL_MODE=1)
-if(ARCH STREQUAL "riscv64")
-    # SymCrypt has no RISC-V optimized backend. Select its architecture-neutral
+if(NOT ARCH MATCHES "^(i386|amd64|arm|arm64)$")
+    # SymCrypt has no optimized backend for the other targets. Select its architecture-neutral
     # C implementation for both the library and every consumer of its layouts.
     target_compile_definitions(symcrypt PUBLIC SYMCRYPT_IGNORE_PLATFORM)
     target_compile_definitions(symcrypt_km PUBLIC SYMCRYPT_IGNORE_PLATFORM)
