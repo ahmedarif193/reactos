@@ -697,10 +697,73 @@ typedef PO_FX_DEVICE_V3 PO_FX_DEVICE, *PPO_FX_DEVICE;
 #error PO_FX_VERSION undefined!
 #endif
 
+typedef enum _PO_FX_PERF_STATE_UNIT {
+  PoFxPerfStateUnitOther,
+  PoFxPerfStateUnitFrequency,
+  PoFxPerfStateUnitBandwidth,
+  PoFxPerfStateUnitMaximum
+} PO_FX_PERF_STATE_UNIT, *PPO_FX_PERF_STATE_UNIT;
+
+typedef enum _PO_FX_PERF_STATE_TYPE {
+  PoFxPerfStateTypeDiscrete,
+  PoFxPerfStateTypeRange,
+  PoFxPerfStateTypeMaximum
+} PO_FX_PERF_STATE_TYPE, *PPO_FX_PERF_STATE_TYPE;
+
+typedef struct _PO_FX_PERF_STATE {
+  ULONGLONG Value;
+  PVOID Context;
+} PO_FX_PERF_STATE, *PPO_FX_PERF_STATE;
+
+typedef struct _PO_FX_COMPONENT_PERF_SET {
+  UNICODE_STRING Name;
+  ULONGLONG Flags;
+  PO_FX_PERF_STATE_UNIT Unit;
+  PO_FX_PERF_STATE_TYPE Type;
+  _ANONYMOUS_UNION union {
+    struct {
+      ULONG Count;
+      _Field_size_full_(Count) PPO_FX_PERF_STATE States;
+    } Discrete;
+    struct {
+      ULONGLONG Minimum;
+      ULONGLONG Maximum;
+    } Range;
+  } DUMMYUNIONNAME;
+} PO_FX_COMPONENT_PERF_SET, *PPO_FX_COMPONENT_PERF_SET;
+
+typedef struct _PO_FX_COMPONENT_PERF_INFO {
+  ULONG PerfStateSetsCount;
+  PO_FX_COMPONENT_PERF_SET PerfStateSets[ANYSIZE_ARRAY];
+} PO_FX_COMPONENT_PERF_INFO, *PPO_FX_COMPONENT_PERF_INFO;
+
+typedef struct _PO_FX_PERF_STATE_CHANGE {
+  ULONG Set;
+  _ANONYMOUS_UNION union {
+    ULONG StateIndex;
+    ULONGLONG StateValue;
+  } DUMMYUNIONNAME;
+} PO_FX_PERF_STATE_CHANGE, *PPO_FX_PERF_STATE_CHANGE;
+
+typedef
+_Function_class_(PO_FX_COMPONENT_PERF_STATE_CALLBACK)
+VOID
+PO_FX_COMPONENT_PERF_STATE_CALLBACK(
+  _In_ PVOID Context,
+  _In_ ULONG Component,
+  _In_ BOOLEAN Succeeded,
+  _In_ PVOID RequestContext);
+
+typedef PO_FX_COMPONENT_PERF_STATE_CALLBACK *PPO_FX_COMPONENT_PERF_STATE_CALLBACK;
+
 #define PO_FX_UNKNOWN_POWER                         0xFFFFFFFF
 #define PO_FX_UNKNOWN_TIME                          0xFFFFFFFFFFFFFFFFULL
 #define PO_FX_FLAG_BLOCKING                         0x01
 #define PO_FX_FLAG_ASYNC_ONLY                       0x02
+
+#define PO_FX_FLAG_PERF_PEP_OPTIONAL                0x01
+#define PO_FX_FLAG_PERF_QUERY_ON_F0                 0x02
+#define PO_FX_FLAG_PERF_QUERY_ON_ALL_IDLE_STATES    0x04
 
 #endif // NTDDI_WIN8
 

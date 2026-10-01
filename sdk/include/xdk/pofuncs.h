@@ -336,6 +336,55 @@ PoFxSetDeviceIdleTimeout(
     _In_ POHANDLE Handle,
     _In_ ULONGLONG IdleTimeout);
 
+_IRQL_requires_max_(APC_LEVEL)
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+PoFxRegisterComponentPerfStates(
+    _In_ POHANDLE Handle,
+    _In_ ULONG Component,
+    _In_ ULONGLONG Flags,
+    _In_ PPO_FX_COMPONENT_PERF_STATE_CALLBACK ComponentPerfStateCallback,
+    _In_opt_ PPO_FX_COMPONENT_PERF_INFO InputStateInfo,
+    _Out_opt_ PPO_FX_COMPONENT_PERF_INFO *OutputStateInfo);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKRNLVISTAAPI
+VOID
+NTAPI
+PoFxIssueComponentPerfStateChange(
+    _In_ POHANDLE Handle,
+    _In_ ULONG Flags,
+    _In_ ULONG Component,
+    _In_ PPO_FX_PERF_STATE_CHANGE PerfChange,
+    _In_opt_ PVOID Context);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+PoFxQueryCurrentComponentPerfState(
+    _In_ POHANDLE Handle,
+    _In_ ULONG Flags,
+    _In_ ULONG Component,
+    _In_ ULONG SetIndex,
+    _Out_ PULONGLONG CurrentPerf);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+PoFxRegisterCrashdumpDevice(
+    _In_ POHANDLE Handle);
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+PoFxPowerOnCrashdumpDevice(
+    _In_ POHANDLE Handle,
+    _In_opt_ PVOID Context);
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKRNLVISTAAPI
 VOID

@@ -8,8 +8,24 @@
 #include <ntoskrnl.h>
 #include <debug.h>
 
+struct _ROS_PO_FX_HANDLE;
+
+typedef struct _ROS_PO_FX_PERF
+{
+    PPO_FX_COMPONENT_PERF_STATE_CALLBACK Callback;
+    PPO_FX_COMPONENT_PERF_INFO Info;
+    struct _ROS_PO_FX_HANDLE *Owner;
+    ULONG Component;
+    WORK_QUEUE_ITEM WorkItem;
+    PVOID RequestContext;
+    BOOLEAN Succeeded;
+    BOOLEAN ChangePending;
+    ULONGLONG Current[ANYSIZE_ARRAY];
+} ROS_PO_FX_PERF, *PROS_PO_FX_PERF;
+
 typedef struct _ROS_PO_FX_COMPONENT_STATE
 {
+    PROS_PO_FX_PERF Perf;
     LONG ActiveReferences;
     ULONGLONG Latency;
     ULONGLONG Residency;
@@ -58,6 +74,7 @@ typedef struct _ROS_PO_FX_HANDLE
 
 #define ROS_PO_FX_SIGNATURE 'xoFP'
 #define ROS_PO_FX_RELATION_TAG 'roFP'
+#define ROS_PO_FX_PERF_TAG 'poFP'
 #define ROS_PO_FX_HANDLE(Handle) ((PROS_PO_FX_HANDLE)(Handle))
 
 #ifndef PO_FX_UNKNOWN_TIME
@@ -544,6 +561,7 @@ PoFxUnregisterDevice(
     PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
     PROS_PO_FX_RELATION Relation;
     PLIST_ENTRY Entry;
+    ULONG Component;
     KIRQL OldIrql;
 
     if (FxHandle != NULL)
@@ -573,6 +591,11 @@ PoFxUnregisterDevice(
             Relation = CONTAINING_RECORD(Entry, ROS_PO_FX_RELATION, ListEntry);
             ObDereferenceObject(Relation->RelatedDevice);
             ExFreePoolWithTag(Relation, ROS_PO_FX_RELATION_TAG);
+        }
+        for (Component = 0; Component != FxHandle->ComponentCount; Component++)
+        {
+            if (FxHandle->ComponentState[Component].Perf != NULL)
+                ExFreePoolWithTag(FxHandle->ComponentState[Component].Perf, ROS_PO_FX_PERF_TAG);
         }
         ObDereferenceObject(FxHandle->Pdo);
         ExFreePoolWithTag(FxHandle->Device, ROS_PO_FX_SIGNATURE);
@@ -905,4 +928,319 @@ PoFxRemoveComponentRelation(
     }
     KeReleaseSpinLock(&FxHandle->RelationLock, OldIrql);
     return STATUS_NOT_FOUND;
+}
+
+static
+VOID
+PopFxCompletePerfChange(
+    _In_ PROS_PO_FX_HANDLE FxHandle,
+    _In_ PROS_PO_FX_PERF Perf)
+{
+    PVOID RequestContext;
+    BOOLEAN Succeeded;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    RequestContext = Perf->RequestContext;
+    Succeeded = Perf->Succeeded;
+    Perf->ChangePending = FALSE;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+
+    Perf->Callback(FxHandle->Device->DeviceContext, Perf->Component, Succeeded, RequestContext);
+}
+
+static
+VOID
+NTAPI
+PopFxPerfWorker(
+    _In_ PVOID Parameter)
+{
+    PROS_PO_FX_PERF Perf = Parameter;
+    PROS_PO_FX_HANDLE FxHandle = Perf->Owner;
+
+    PopFxCompletePerfChange(FxHandle, Perf);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+}
+
+NTSTATUS
+NTAPI
+PoFxRegisterComponentPerfStates(
+    _In_ POHANDLE Handle,
+    _In_ ULONG Component,
+    _In_ ULONGLONG Flags,
+    _In_ PPO_FX_COMPONENT_PERF_STATE_CALLBACK ComponentPerfStateCallback,
+    _In_opt_ PPO_FX_COMPONENT_PERF_INFO InputStateInfo,
+    _Out_opt_ PPO_FX_COMPONENT_PERF_INFO *OutputStateInfo)
+{
+    PROS_PO_FX_HANDLE FxHandle;
+    PROS_PO_FX_PERF Perf;
+    PPO_FX_COMPONENT_PERF_INFO Info;
+    PPO_FX_PERF_STATE States;
+    PUCHAR Names;
+    SIZE_T HeaderSize;
+    SIZE_T InfoSize;
+    SIZE_T StatesSize;
+    SIZE_T NamesSize;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+    ULONG Index;
+
+    if ((InputStateInfo == NULL) == (OutputStateInfo == NULL))
+        return STATUS_INVALID_PARAMETER;
+    if (OutputStateInfo != NULL)
+        *OutputStateInfo = NULL;
+    if ((InputStateInfo != NULL) && (InputStateInfo->PerfStateSetsCount == 0))
+        return STATUS_INVALID_PARAMETER;
+    if (ComponentPerfStateCallback == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    FxHandle = PopFxReferenceHandle(Handle);
+    if (FxHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (Component >= FxHandle->ComponentCount)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Exit;
+    }
+    if ((InputStateInfo == NULL) || !(Flags & PO_FX_FLAG_PERF_PEP_OPTIONAL))
+    {
+        Status = STATUS_NOT_IMPLEMENTED;
+        goto Exit;
+    }
+
+    StatesSize = 0;
+    NamesSize = 0;
+    for (Index = 0; Index != InputStateInfo->PerfStateSetsCount; Index++)
+    {
+        PPO_FX_COMPONENT_PERF_SET Set = &InputStateInfo->PerfStateSets[Index];
+
+        if (Set->Type == PoFxPerfStateTypeDiscrete)
+        {
+            if ((Set->Discrete.Count == 0) || (Set->Discrete.States == NULL))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Exit;
+            }
+            StatesSize += (SIZE_T)Set->Discrete.Count * sizeof(PO_FX_PERF_STATE);
+        }
+        else if (Set->Type == PoFxPerfStateTypeRange)
+        {
+            if (Set->Range.Minimum > Set->Range.Maximum)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Exit;
+            }
+        }
+        else
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Exit;
+        }
+        if ((Set->Name.Length != 0) && (Set->Name.Buffer == NULL))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Exit;
+        }
+        NamesSize += Set->Name.Length;
+    }
+
+    HeaderSize = FIELD_OFFSET(ROS_PO_FX_PERF, Current) +
+                 (SIZE_T)InputStateInfo->PerfStateSetsCount * sizeof(ULONGLONG);
+    InfoSize = FIELD_OFFSET(PO_FX_COMPONENT_PERF_INFO, PerfStateSets) +
+               (SIZE_T)InputStateInfo->PerfStateSetsCount * sizeof(PO_FX_COMPONENT_PERF_SET);
+
+    Perf = ExAllocatePoolZero(NonPagedPool,
+                              HeaderSize + InfoSize + StatesSize + NamesSize,
+                              ROS_PO_FX_PERF_TAG);
+    if (Perf == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Exit;
+    }
+
+    Info = (PPO_FX_COMPONENT_PERF_INFO)((PUCHAR)Perf + HeaderSize);
+    States = (PPO_FX_PERF_STATE)((PUCHAR)Info + InfoSize);
+    Names = (PUCHAR)States + StatesSize;
+
+    Info->PerfStateSetsCount = InputStateInfo->PerfStateSetsCount;
+    for (Index = 0; Index != InputStateInfo->PerfStateSetsCount; Index++)
+    {
+        PPO_FX_COMPONENT_PERF_SET Source = &InputStateInfo->PerfStateSets[Index];
+        PPO_FX_COMPONENT_PERF_SET Target = &Info->PerfStateSets[Index];
+
+        *Target = *Source;
+        Target->Name.MaximumLength = Source->Name.Length;
+        Target->Name.Buffer = NULL;
+        if (Source->Name.Length != 0)
+        {
+            RtlCopyMemory(Names, Source->Name.Buffer, Source->Name.Length);
+            Target->Name.Buffer = (PWSTR)Names;
+            Names += Source->Name.Length;
+        }
+        if (Source->Type == PoFxPerfStateTypeDiscrete)
+        {
+            RtlCopyMemory(States,
+                          Source->Discrete.States,
+                          (SIZE_T)Source->Discrete.Count * sizeof(PO_FX_PERF_STATE));
+            Target->Discrete.States = States;
+            States += Source->Discrete.Count;
+            Perf->Current[Index] = 0;
+        }
+        else
+        {
+            Perf->Current[Index] = Source->Range.Minimum;
+        }
+    }
+
+    Perf->Callback = ComponentPerfStateCallback;
+    Perf->Info = Info;
+    Perf->Owner = FxHandle;
+    Perf->Component = Component;
+    ExInitializeWorkItem(&Perf->WorkItem, PopFxPerfWorker, Perf);
+
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (FxHandle->Unregistering || (FxHandle->ComponentState[Component].Perf != NULL))
+    {
+        KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+        ExFreePoolWithTag(Perf, ROS_PO_FX_PERF_TAG);
+        Status = STATUS_INVALID_PARAMETER;
+        goto Exit;
+    }
+    FxHandle->ComponentState[Component].Perf = Perf;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    Status = STATUS_SUCCESS;
+
+Exit:
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+    return Status;
+}
+
+VOID
+NTAPI
+PoFxIssueComponentPerfStateChange(
+    _In_ POHANDLE Handle,
+    _In_ ULONG Flags,
+    _In_ ULONG Component,
+    _In_ PPO_FX_PERF_STATE_CHANGE PerfChange,
+    _In_opt_ PVOID Context)
+{
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    PROS_PO_FX_PERF Perf = NULL;
+    BOOLEAN Succeeded = FALSE;
+    KIRQL OldIrql;
+
+    if (FxHandle == NULL)
+        return;
+
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if ((Component < FxHandle->ComponentCount) && !FxHandle->Unregistering)
+        Perf = FxHandle->ComponentState[Component].Perf;
+    if ((Perf == NULL) || (PerfChange == NULL) || Perf->ChangePending)
+    {
+        ASSERT((Perf == NULL) || !Perf->ChangePending);
+        KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+        ExReleaseRundownProtection(&FxHandle->Rundown);
+        return;
+    }
+
+    if (PerfChange->Set < Perf->Info->PerfStateSetsCount)
+    {
+        PPO_FX_COMPONENT_PERF_SET Set = &Perf->Info->PerfStateSets[PerfChange->Set];
+
+        if (Set->Type == PoFxPerfStateTypeDiscrete)
+        {
+            if (PerfChange->StateIndex < Set->Discrete.Count)
+            {
+                Perf->Current[PerfChange->Set] = PerfChange->StateIndex;
+                Succeeded = TRUE;
+            }
+        }
+        else if ((PerfChange->StateValue >= Set->Range.Minimum) &&
+                 (PerfChange->StateValue <= Set->Range.Maximum))
+        {
+            Perf->Current[PerfChange->Set] = PerfChange->StateValue;
+            Succeeded = TRUE;
+        }
+    }
+
+    Perf->ChangePending = TRUE;
+    Perf->Succeeded = Succeeded;
+    Perf->RequestContext = Context;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+
+    if (Flags & PO_FX_FLAG_ASYNC_ONLY)
+    {
+        ExQueueWorkItem(&Perf->WorkItem, DelayedWorkQueue);
+        return;
+    }
+
+    PopFxCompletePerfChange(FxHandle, Perf);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+}
+
+NTSTATUS
+NTAPI
+PoFxQueryCurrentComponentPerfState(
+    _In_ POHANDLE Handle,
+    _In_ ULONG Flags,
+    _In_ ULONG Component,
+    _In_ ULONG SetIndex,
+    _Out_ PULONGLONG CurrentPerf)
+{
+    PROS_PO_FX_HANDLE FxHandle;
+    PROS_PO_FX_PERF Perf = NULL;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
+    KIRQL OldIrql;
+
+    UNREFERENCED_PARAMETER(Flags);
+
+    if (CurrentPerf == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    FxHandle = PopFxReferenceHandle(Handle);
+    if (FxHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (Component < FxHandle->ComponentCount)
+        Perf = FxHandle->ComponentState[Component].Perf;
+    if ((Perf != NULL) && (SetIndex < Perf->Info->PerfStateSetsCount))
+    {
+        *CurrentPerf = Perf->Current[SetIndex];
+        Status = STATUS_SUCCESS;
+    }
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+PoFxRegisterCrashdumpDevice(
+    _In_ POHANDLE Handle)
+{
+    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+
+    if ((FxHandle == NULL) || (FxHandle->Signature != ROS_PO_FX_SIGNATURE))
+        return STATUS_INVALID_PARAMETER;
+
+    return STATUS_UNSUCCESSFUL;
+}
+
+NTSTATUS
+NTAPI
+PoFxPowerOnCrashdumpDevice(
+    _In_ POHANDLE Handle,
+    _In_opt_ PVOID Context)
+{
+    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+
+    UNREFERENCED_PARAMETER(Context);
+
+    if ((FxHandle == NULL) || (FxHandle->Signature != ROS_PO_FX_SIGNATURE))
+        return STATUS_INVALID_PARAMETER;
+
+    return STATUS_UNSUCCESSFUL;
 }
