@@ -31,8 +31,6 @@ WriteFile(
 {
     NTSTATUS Status;
 
-    TRACE("WriteFile(hFile %p)\n", hFile);
-
     if (lpNumberOfBytesWritten != NULL) *lpNumberOfBytesWritten = 0;
 
     hFile = TranslateStdHandle(hFile);
@@ -113,7 +111,6 @@ WriteFile(
         }
     }
 
-    TRACE("WriteFile() succeeded\n");
     return TRUE;
 }
 
@@ -131,8 +128,6 @@ ReadFile(
     _Inout_opt_ LPOVERLAPPED lpOverlapped)
 {
     NTSTATUS Status;
-
-    TRACE("ReadFile(hFile %p)\n", hFile);
 
     if (lpNumberOfBytesRead != NULL) *lpNumberOfBytesRead = 0;
 
@@ -237,7 +232,6 @@ ReadFile(
         }
     }
 
-    TRACE("ReadFile() succeeded\n");
     return TRUE;
 }
 
