@@ -34,10 +34,12 @@ jobs:
             arch: arm64
             config: Debug
             ntver: '0xA00'
+            profile: profile_raspberry
           - compiler: clang
             arch: arm64
             config: Release
             ntver: '0xA00'
+            profile: profile_raspberry
       fail-fast: false
     runs-on: ubuntu-24.04
     steps:
@@ -89,6 +91,7 @@ jobs:
         [ "${{matrix.compiler}}" = "clang" ] && FLAGS="$FLAGS --clang"
         [ "${{matrix.compiler}}" = "gcc" ] && FLAGS="$FLAGS --gcc"
         [ "${{matrix.config}}" = "Release" ] && FLAGS="$FLAGS -r"
+        [ -n "${{matrix.profile}}" ] && FLAGS="$FLAGS -DROSCONFIG_PROFILE=${{matrix.profile}}"
         ./configure.sh $FLAGS -a ${{matrix.arch}} \
           -DREACTOS_TARGET_NT=${{matrix.ntver}} \
           -DENABLE_CCACHE=1
