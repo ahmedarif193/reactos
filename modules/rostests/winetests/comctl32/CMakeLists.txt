@@ -64,4 +64,6 @@ if(MSVC)
 endif()
 
 add_pch(comctl32_winetest precomp.h "${PCH_SKIP_SOURCE}")
+
+add_pch_fallback(precomp.h ${SOURCE})
 add_rostests_file(TARGET comctl32_winetest)

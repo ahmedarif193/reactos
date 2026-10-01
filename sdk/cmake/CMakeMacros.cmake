@@ -1338,6 +1338,22 @@ else()
     endmacro()
 endif()
 
+# Some targets rely on declarations in their PCH source even when PCH is
+# disabled. Include it for only the sources that normally receive the PCH;
+# callers leave their PCH_SKIP_SOURCE files out of the list.
+function(add_pch_fallback _header)
+    if(PCH)
+        return()
+    endif()
+
+    if(MSVC)
+        set(_include_option "/FI${CMAKE_CURRENT_SOURCE_DIR}/${_header}")
+    else()
+        set(_include_option "-include;${CMAKE_CURRENT_SOURCE_DIR}/${_header}")
+    endif()
+    set_source_files_properties(${ARGN} PROPERTIES COMPILE_OPTIONS "${_include_option}")
+endfunction()
+
 function(set_target_cpp_properties _target)
     cmake_parse_arguments(_CPP "WITH_EXCEPTIONS;WITH_RTTI" "" "" ${ARGN})
 

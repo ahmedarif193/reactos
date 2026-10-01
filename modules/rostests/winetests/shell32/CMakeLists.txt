@@ -49,4 +49,5 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
 endif()
 
 add_pch(shell32_winetest precomp.h "${PCH_SKIP_SOURCE}")
+add_pch_fallback(precomp.h ${SOURCE})
 add_rostests_file(TARGET shell32_winetest)
