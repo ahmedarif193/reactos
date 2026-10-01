@@ -182,6 +182,11 @@ OpenAliasByName(SAM_HANDLE DomainHandle,
                                     &Use);
     if (!NT_SUCCESS(Status))
     {
+#ifdef __REACTOS__
+        if (Status == STATUS_NONE_MAPPED)
+            TRACE("SamLookupNamesInDomain(%wZ): name not found in domain\n", AliasName);
+        else
+#endif
         ERR("SamLookupNamesInDomain(%wZ) failed (Status %08lx)\n", AliasName, Status);
         return NetpNtStatusToApiStatus(Status);
     }

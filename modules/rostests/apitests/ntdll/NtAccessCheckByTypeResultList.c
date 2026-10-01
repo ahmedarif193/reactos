@@ -684,9 +684,116 @@ Quit:
     }
 }
 
+static
+VOID
+DaclResultListOutputs(VOID)
+{
+    GUID Object = {0xbf967a86, 0x0de6, 0x11d0, {0xa2,0x85,0x00,0xaa,0x00,0x30,0x49,0xe2}};
+    GUID PropertySet = {0x77b5b886, 0x944a, 0x11d1, {0xae,0xbd,0x00,0x00,0xf8,0x03,0x67,0xc1}};
+    OBJECT_TYPE_LIST Objects[] = {{ACCESS_OBJECT_GUID, 0, &Object}, {ACCESS_PROPERTY_SET_GUID, 0, &PropertySet}};
+    GENERIC_MAPPING Mapping = {FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
+    SID Everyone = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    SECURITY_DESCRIPTOR Sd;
+    SECURITY_QUALITY_OF_SERVICE Sqos;
+    OBJECT_ATTRIBUTES Attributes;
+    ACL Empty;
+    PRIVILEGE_SET Privileges;
+    ACCESS_MASK Grants[RTL_NUMBER_OF(Objects)];
+    NTSTATUS Statuses[RTL_NUMBER_OF(Objects)], Status;
+    ULONG Size, Capacity, i, j;
+    PTOKEN_PRIVILEGES PrivilegeInformation = NULL;
+    HANDLE Source = NULL, Token = NULL;
+
+    Status = NtOpenProcessToken(NtCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &Source);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Sqos.Length = sizeof(Sqos);
+    Sqos.ImpersonationLevel = SecurityImpersonation;
+    Sqos.ContextTrackingMode = SECURITY_STATIC_TRACKING;
+    Sqos.EffectiveOnly = FALSE;
+    InitializeObjectAttributes(&Attributes, NULL, 0, NULL, NULL);
+    Attributes.SecurityQualityOfService = &Sqos;
+    Status = NtDuplicateToken(Source, TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &Attributes,
+                               FALSE, TokenImpersonation, &Token);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Status = NtAdjustPrivilegesToken(Token, TRUE, NULL, 0, NULL, NULL);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Size = 0;
+    Status = NtQueryInformationToken(Token, TokenPrivileges, NULL, 0, &Size);
+    ok_hex(Status, STATUS_BUFFER_TOO_SMALL);
+    ok(Size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges), "Invalid privilege sizing %lu.\n", Size);
+    if (Status != STATUS_BUFFER_TOO_SMALL || Size < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) goto Done;
+    Capacity = Size;
+    PrivilegeInformation = RtlAllocateHeap(RtlGetProcessHeap(), 0, Capacity);
+    ok(!!PrivilegeInformation, "Privilege buffer allocation failed.\n");
+    if (!PrivilegeInformation) goto Done;
+    Status = NtQueryInformationToken(Token, TokenPrivileges, PrivilegeInformation, Capacity, &Size);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Done;
+    ok(Size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) && Size <= Capacity,
+       "Invalid privilege query size %lu, capacity %lu.\n", Size, Capacity);
+    if (Size < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) || Size > Capacity) goto Done;
+    ok(PrivilegeInformation->PrivilegeCount <= (Size - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES),
+       "Privilege count exceeds returned size.\n");
+    if (PrivilegeInformation->PrivilegeCount > (Size - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES)) goto Done;
+    for (i = 0; i < PrivilegeInformation->PrivilegeCount; ++i)
+    {
+        ok(!(PrivilegeInformation->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED), "Private token privilege %lu remains enabled.\n", i);
+        if (PrivilegeInformation->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED) goto Done;
+    }
+    Status = RtlCreateSecurityDescriptor(&Sd, SECURITY_DESCRIPTOR_REVISION);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Status = RtlSetOwnerSecurityDescriptor(&Sd, &Everyone, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Status = RtlSetGroupSecurityDescriptor(&Sd, &Everyone, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Done;
+    Status = RtlCreateAcl(&Empty, sizeof(Empty), ACL_REVISION);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Done;
+    for (i = 0; i < 3; ++i)
+    {
+        winetest_push_context("result-list %s DACL", i == 0 ? "NULL" : i == 1 ? "absent" : "empty");
+        Status = RtlSetDaclSecurityDescriptor(&Sd, i != 1, i == 2 ? &Empty : NULL, FALSE);
+        ok_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status)) { winetest_pop_context(); goto Done; }
+        for (j = 0; j < RTL_NUMBER_OF(Objects); ++j)
+        {
+            Grants[j] = 0xdeadbeef;
+            Statuses[j] = 0xdeadbeef;
+        }
+        memset(&Privileges, 0xcc, sizeof(Privileges));
+        Size = sizeof(Privileges);
+        Status = NtAccessCheckByTypeResultList(&Sd, NULL, Token, FILE_READ_DATA, Objects, RTL_NUMBER_OF(Objects),
+                                              &Mapping, &Privileges, &Size, Grants, Statuses);
+        ok_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+        {
+            for (j = 0; j < RTL_NUMBER_OF(Objects); ++j)
+            {
+                ok(Grants[j] == (i == 2 ? 0 : FILE_READ_DATA), "Entry %lu grant is %#lx.\n", j, Grants[j]);
+                ok(Statuses[j] == (i == 2 ? STATUS_ACCESS_DENIED : STATUS_SUCCESS),
+                   "Entry %lu status is %#lx.\n", j, Statuses[j]);
+            }
+            ok(!Privileges.PrivilegeCount, "Data access used %lu privileges.\n", Privileges.PrivilegeCount);
+        }
+        winetest_pop_context();
+    }
+
+Done:
+    if (PrivilegeInformation) RtlFreeHeap(RtlGetProcessHeap(), 0, PrivilegeInformation);
+    if (Token) NtClose(Token);
+    if (Source) NtClose(Source);
+}
+
 START_TEST(NtAccessCheckByTypeResultList)
 {
     ParamValidationNoObjsList();
+    DaclResultListOutputs();
     GrantedAccessTests();
     DenyAccessTests();
 }

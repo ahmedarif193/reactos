@@ -373,6 +373,16 @@ NtfsGetPagingIoResource(_In_ PFileContextBlock FileCB)
     return FileCB->StreamCB ? &FileCB->StreamCB->PagingIoResource : &FileCB->PagingIoResource;
 }
 
+NTSTATUS
+NtfsCheckRecordAccess(
+    _In_ PNtfsFileRecord File,
+    _In_ PSECURITY_SUBJECT_CONTEXT SubjectContext,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ACCESS_MASK PreviouslyGrantedAccess,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _Out_ PACCESS_MASK GrantedAccess,
+    _Out_ PPRIVILEGE_SET* Privileges);
+
 BOOLEAN
 NtfsSplitParentName(
     _In_ PUNICODE_STRING Name,

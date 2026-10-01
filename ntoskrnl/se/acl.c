@@ -498,7 +498,7 @@ SepTransformCreatorAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
 
 static NTSTATUS
 SepPropagateOpaqueAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
-                      BOOLEAN Inherited, BOOLEAN Container)
+                      BOOLEAN Inherited, BOOLEAN MarkInherited, BOOLEAN Container)
 {
     UCHAR Flags = Ace->AceFlags;
     PACE_HEADER Dest;
@@ -509,7 +509,8 @@ SepPropagateOpaqueAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
         {
             if (!(Flags & (Container ? CONTAINER_INHERIT_ACE : OBJECT_INHERIT_ACE)))
                 return STATUS_SUCCESS;
-            Flags &= ~VALID_INHERIT_FLAGS;
+            Flags &= ~(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE |
+                       NO_PROPAGATE_INHERIT_ACE | INHERIT_ONLY_ACE);
         }
         else if (Flags & CONTAINER_INHERIT_ACE)
         {
@@ -520,7 +521,7 @@ SepPropagateOpaqueAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
             Flags |= INHERIT_ONLY_ACE;
         }
         else return STATUS_SUCCESS;
-        Flags |= INHERITED_ACE;
+        if (MarkInherited) Flags |= INHERITED_ACE;
     }
     if (Buffer->Length > MAXUSHORT - Ace->AceSize || Buffer->Count == MAXUSHORT)
         return STATUS_ALLOTTED_SPACE_EXCEEDED;
@@ -581,6 +582,7 @@ SepPropagateAcl(
     _In_ PSID Owner,
     _In_ PSID Group,
     _In_ BOOLEAN IsInherited,
+    _In_ BOOLEAN MarkInherited,
     _In_ BOOLEAN IsDirectoryObject,
     _In_opt_ GUID *ObjectType,
     _In_ PGENERIC_MAPPING GenericMapping)
@@ -601,14 +603,15 @@ SepPropagateAcl(
             Status = RtlGetAce(AclSource, Index, (PVOID *)&Ace);
             if (!NT_SUCCESS(Status)) return Status;
             if (IsInherited)
-                Status = RtlpSecurityTransformAce(&Buffer, Ace, TRUE, FALSE,
+                Status = RtlpSecurityTransformAce(&Buffer, Ace, TRUE, MarkInherited, !MarkInherited,
                                                    IsDirectoryObject, &ObjectType,
                                                    ObjectType ? 1 : 0, Owner, Group,
                                                    GenericMapping);
             else
                 Status = SepTransformCreatorAce(&Buffer, Ace, Owner, Group, GenericMapping);
             if (Status == STATUS_NOT_IMPLEMENTED)
-                Status = SepPropagateOpaqueAce(&Buffer, Ace, IsInherited, IsDirectoryObject);
+                Status = SepPropagateOpaqueAce(&Buffer, Ace, IsInherited, MarkInherited,
+                                                IsDirectoryObject);
             if (!NT_SUCCESS(Status)) return Status;
         }
         if (!Pass)
@@ -716,6 +719,7 @@ SepSelectAcl(
                                      Owner,
                                      Group,
                                      *IsInherited,
+                                     FALSE,
                                      IsDirectoryObject,
                                      ObjectType,
                                      GenericMapping);
@@ -755,6 +759,7 @@ SepSelectAcl(
                                  Owner,
                                  Group,
                                  *IsInherited,
+                                 FALSE,
                                  IsDirectoryObject,
                                  ObjectType,
                                  GenericMapping);

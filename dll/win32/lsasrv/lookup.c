@@ -2079,7 +2079,7 @@ LsapLookupWellKnownSids(PLSAPR_SID_ENUM_BUFFER SidEnumBuffer,
         ptr = LsapLookupWellKnownSid(SidEnumBuffer->SidInfo[i].Sid);
         if (ptr != NULL)
         {
-            NamesBuffer[i].Use = ptr->Use;
+            NamesBuffer[i].Use = ptr->Sid == LsapLocalSystemSid ? SidTypeUser : ptr->Use;
             NamesBuffer[i].Flags = 0;
 
             NamesBuffer[i].Name.Length = ptr->AccountName.Length;

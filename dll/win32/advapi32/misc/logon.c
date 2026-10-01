@@ -685,8 +685,8 @@ CreateProcessAsUserCommon(
     NTSTATUS Status = STATUS_SUCCESS, StatusOnExit;
     BOOL Success;
     TOKEN_TYPE Type;
+    SECURITY_IMPERSONATION_LEVEL ImpersonationLevel;
     ULONG ReturnLength;
-    OBJECT_ATTRIBUTES ObjectAttributes;
     PSECURITY_DESCRIPTOR DefaultSd = NULL, ProcessSd, ThreadSd;
     HANDLE hTokenDup = NULL;
     HANDLE OriginalImpersonationToken = NULL;
@@ -694,9 +694,23 @@ CreateProcessAsUserCommon(
 
     if (hToken != NULL)
     {
+        Status = NtDuplicateObject(NtCurrentProcess(),
+                                   hToken,
+                                   NtCurrentProcess(),
+                                   &hTokenDup,
+                                   0,
+                                   0,
+                                   DUPLICATE_SAME_ACCESS);
+        if (!NT_SUCCESS(Status))
+        {
+            ERR("NtDuplicateObject() failed, Status 0x%08x\n", Status);
+            Success = FALSE;
+            goto Quit;
+        }
+
         /* Check whether the user-provided token is a primary token */
         // GetTokenInformation();
-        Status = NtQueryInformationToken(hToken,
+        Status = NtQueryInformationToken(hTokenDup,
                                          TokenType,
                                          &Type,
                                          sizeof(Type),
@@ -708,12 +722,20 @@ CreateProcessAsUserCommon(
             goto Quit;
         }
 
-        if (Type != TokenPrimary)
+        if (Type == TokenImpersonation)
         {
-            ERR("Wrong token type for token 0x%p, expected TokenPrimary, got %ld\n", hToken, Type);
-            Status = STATUS_BAD_TOKEN_TYPE;
-            Success = FALSE;
-            goto Quit;
+            Status = NtQueryInformationToken(hTokenDup,
+                                             TokenImpersonationLevel,
+                                             &ImpersonationLevel,
+                                             sizeof(ImpersonationLevel),
+                                             &ReturnLength);
+            if (NT_SUCCESS(Status) && ImpersonationLevel < SecurityImpersonation)
+                Status = STATUS_BAD_IMPERSONATION_LEVEL;
+            if (!NT_SUCCESS(Status))
+            {
+                Success = FALSE;
+                goto Quit;
+            }
         }
 
         /*
@@ -761,32 +783,9 @@ CreateProcessAsUserCommon(
          * Create a security descriptor that will be common for the
          * newly created process on behalf of the context user.
          */
-        if (!CreateDefaultProcessSecurityCommon(hToken, &DefaultSd))
+        if (!CreateDefaultProcessSecurityCommon(hTokenDup, &DefaultSd))
         {
             ERR("Failed to create common security descriptor for the token for new process\n");
-            Success = FALSE;
-            goto Quit;
-        }
-
-        /*
-         * Duplicate the token for this new process. This token
-         * object will get a default security descriptor that we
-         * have created ourselves in ADVAPI32.
-         */
-        InitializeObjectAttributes(&ObjectAttributes,
-                                   NULL,
-                                   0,
-                                   NULL,
-                                   DefaultSd);
-        Status = NtDuplicateToken(hToken,
-                                  0,
-                                  &ObjectAttributes,
-                                  FALSE,
-                                  TokenPrimary,
-                                  &hTokenDup);
-        if (!NT_SUCCESS(Status))
-        {
-            ERR("NtDuplicateToken() failed, Status 0x%08x\n", Status);
             Success = FALSE;
             goto Quit;
         }
@@ -817,7 +816,6 @@ CreateProcessAsUserCommon(
             if (!NT_SUCCESS(Status))
             {
                 ERR("Failed to restore impersonation token for setting process token, Status 0x%08lx\n", Status);
-                NtClose(hTokenDup);
                 Success = FALSE;
                 goto Quit;
             }
@@ -831,7 +829,6 @@ CreateProcessAsUserCommon(
             {
                 /* Even the second try failed, bail out... */
                 ERR("Failed to insert the primary token into process, Status 0x%08lx\n", Status);
-                NtClose(hTokenDup);
                 Success = FALSE;
                 goto Quit;
             }
@@ -844,7 +841,6 @@ CreateProcessAsUserCommon(
             if (!NT_SUCCESS(Status))
             {
                 ERR("Failed to unset impersonationg token after setting process token, Status 0x%08lx\n", Status);
-                NtClose(hTokenDup);
                 Success = FALSE;
                 goto Quit;
             }
@@ -899,13 +895,13 @@ CreateProcessAsUserCommon(
                                          ThreadSd))
         {
             ERR("Failed to set new security information for process and thread\n");
-            NtClose(hTokenDup);
             Success = FALSE;
             goto Quit;
         }
 
         /* Close the duplicated token */
         NtClose(hTokenDup);
+        hTokenDup = NULL;
         Success = TRUE;
     }
 
@@ -918,6 +914,8 @@ CreateProcessAsUserCommon(
     Success = TRUE;
 
 Quit:
+    if (hTokenDup != NULL) NtClose(hTokenDup);
+
     /*
      * If we successfully opened the thread token before
      * and stopped the impersonation then we have to assign

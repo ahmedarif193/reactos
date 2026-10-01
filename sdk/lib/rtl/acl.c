@@ -956,7 +956,9 @@ RtlValidAcl(IN PACL Acl)
                 }
             }
             else if (Ace->AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE ||
-                     Ace->AceType == ACCESS_DENIED_OBJECT_ACE_TYPE)
+                     Ace->AceType == ACCESS_DENIED_OBJECT_ACE_TYPE ||
+                     Ace->AceType == SYSTEM_AUDIT_OBJECT_ACE_TYPE ||
+                     Ace->AceType == SYSTEM_ALARM_OBJECT_ACE_TYPE)
             {
                 /* Object ACEs are supported starting with Revision 4 */
                 if (Acl->AclRevision < ACL_REVISION4)
@@ -994,6 +996,14 @@ RtlValidAcl(IN PACL Acl)
                     GuidSize += sizeof(GUID);
                 }
 
+                RequiredObjectAceSize = FIELD_OFFSET(ACCESS_ALLOWED_OBJECT_ACE, ObjectType) +
+                                        GuidSize + FIELD_OFFSET(SID, SubAuthority);
+                if (Ace->AceSize < RequiredObjectAceSize)
+                {
+                    DPRINT1("LiberNT: Object ACE is too small for its GUIDs and SID header\n");
+                    _SEH2_YIELD(return FALSE);
+                }
+
                 /* Check if the SID revision is valid */
                 Sid = (PISID)((ULONG_PTR)&((PKNOWN_OBJECT_ACE)Ace)->SidStart + GuidSize);
                 if (Sid->Revision != SID_REVISION)
@@ -1016,15 +1026,6 @@ RtlValidAcl(IN PACL Acl)
                     DPRINT1("Too small Object ACE size: AceSize %u RequiredSize %u\n", Ace->AceSize, RequiredObjectAceSize);
                     _SEH2_YIELD(return FALSE);
                 }
-            }
-            else if (Ace->AceType == ACCESS_ALLOWED_COMPOUND_ACE_TYPE)
-            {
-                DPRINT1("Unsupported ACE in ReactOS, assuming valid\n");
-            }
-            else if ((Ace->AceType >= ACCESS_MIN_MS_OBJECT_ACE_TYPE) &&
-                     (Ace->AceType <= ACCESS_MAX_MS_OBJECT_ACE_TYPE))
-            {
-                DPRINT1("Unsupported ACE in ReactOS, assuming valid\n");
             }
             else
             {

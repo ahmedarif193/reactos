@@ -15,7 +15,7 @@ OpenCurrentToken(VOID)
     HANDLE Token;
 
     Success = OpenProcessToken(GetCurrentProcess(),
-                               TOKEN_READ | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID,
+                               TOKEN_READ | TOKEN_DUPLICATE | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID,
                                &Token);
     if (!Success)
     {
@@ -197,17 +197,88 @@ SetTokenSessionIdTests(
     _In_ HANDLE Token)
 {
     NTSTATUS Status;
-    ULONG SessionId = 1;
+    ULONG SessionId, OriginalSessionId, QueriedSessionId, Length;
+    HANDLE Caller = NULL, Target = NULL, Previous = NULL;
+    TOKEN_PRIVILEGES Privileges;
+    BOOL Success, Impersonating = FALSE;
+    DWORD Error;
 
-    /*
-     * We're not allowed to set a session ID
-     * because we don't have the TCB privilege.
-     */
-    Status = NtSetInformationToken(Token,
-                                   TokenSessionId,
-                                   &SessionId,
-                                   sizeof(ULONG));
+    Status = NtQueryInformationToken(Token, TokenSessionId, &OriginalSessionId,
+                                     sizeof(OriginalSessionId), &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+    SessionId = OriginalSessionId ^ 1;
+    Success = OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &Previous);
+    Error = GetLastError();
+    if (!Success && Error != ERROR_NO_TOKEN)
+    {
+        ok(FALSE, "OpenThreadToken failed: %lu\n", Error);
+        return;
+    }
+    Success = DuplicateTokenEx(Token, TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES | TOKEN_IMPERSONATE,
+                              NULL, SecurityImpersonation, TokenImpersonation, &Caller);
+    ok(Success, "Caller token duplication failed: %lu\n", GetLastError());
+    if (!Success) goto Done;
+    Success = DuplicateTokenEx(Token, TOKEN_QUERY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID,
+                              NULL, SecurityImpersonation, TokenPrimary, &Target);
+    ok(Success, "Target token duplication failed: %lu\n", GetLastError());
+    if (!Success) goto Done;
+    Success = AdjustTokenPrivileges(Caller, TRUE, NULL, 0, NULL, NULL);
+    ok(Success, "Disabling private caller privileges failed: %lu\n", GetLastError());
+    if (!Success) goto Done;
+    Success = SetThreadToken(NULL, Caller);
+    ok(Success, "Setting caller token failed: %lu\n", GetLastError());
+    if (!Success) goto Done;
+    Impersonating = TRUE;
+    Status = NtSetInformationToken(Target, TokenSessionId, &SessionId, sizeof(SessionId));
     ok_ntstatus(Status, STATUS_PRIVILEGE_NOT_HELD);
+    Status = NtQueryInformationToken(Target, TokenSessionId, &QueriedSessionId,
+                                     sizeof(QueriedSessionId), &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ok(QueriedSessionId == OriginalSessionId, "Denied update changed session %lu to %lu\n",
+           OriginalSessionId, QueriedSessionId);
+
+    Privileges.PrivilegeCount = 1;
+    Privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    Success = LookupPrivilegeValue(NULL, SE_TCB_NAME, &Privileges.Privileges[0].Luid);
+    ok(Success, "SeTcbPrivilege lookup failed: %lu\n", GetLastError());
+    if (!Success) goto Done;
+    Success = AdjustTokenPrivileges(Caller, FALSE, &Privileges, 0, NULL, NULL);
+    Error = GetLastError();
+    ok(Success, "Enabling private caller TCB privilege failed: %lu\n", Error);
+    if (!Success) goto Done;
+    if (Error == ERROR_NOT_ALL_ASSIGNED)
+    {
+        skip("The caller has no SeTcbPrivilege for the privileged session cases\n");
+        goto Done;
+    }
+    ok(Error == ERROR_SUCCESS, "Enabling SeTcbPrivilege returned %lu\n", Error);
+    if (Error != ERROR_SUCCESS) goto Done;
+    Status = NtSetInformationToken(Token, TokenSessionId, &SessionId, sizeof(SessionId));
+    ok_ntstatus(Status, STATUS_TOKEN_ALREADY_IN_USE);
+    Status = NtQueryInformationToken(Token, TokenSessionId, &QueriedSessionId,
+                                     sizeof(QueriedSessionId), &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ok(QueriedSessionId == OriginalSessionId, "Assigned token session changed to %lu\n", QueriedSessionId);
+    Status = NtSetInformationToken(Target, TokenSessionId, &SessionId, sizeof(SessionId));
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    Status = NtQueryInformationToken(Target, TokenSessionId, &QueriedSessionId,
+                                     sizeof(QueriedSessionId), &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ok(QueriedSessionId == SessionId, "Private token session %lu expected %lu\n", QueriedSessionId, SessionId);
+
+Done:
+    if (Impersonating)
+    {
+        Success = SetThreadToken(NULL, Previous);
+        ok(Success, "Restoring caller token failed: %lu\n", GetLastError());
+    }
+    if (Target) CloseHandle(Target);
+    if (Caller) CloseHandle(Caller);
+    if (Previous) CloseHandle(Previous);
 }
 
 START_TEST(NtSetInformationToken)

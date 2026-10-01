@@ -1453,7 +1453,7 @@ AccessCheckByTypeResultList(
   _Out_writes_bytes_(*PrivilegeSetLength) PPRIVILEGE_SET PrivilegeSet,
   _Inout_ LPDWORD PrivilegeSetLength,
   _Out_writes_(ObjectTypeListLength) LPDWORD GrantedAccess,
-  _Out_writes_(ObjectTypeListLength) LPBOOL AccessStatus);
+  _Out_writes_(ObjectTypeListLength) LPDWORD AccessStatus);
 
 BOOL WINAPI AdjustTokenGroups(HANDLE,BOOL,PTOKEN_GROUPS,DWORD,PTOKEN_GROUPS,PDWORD);
 BOOL WINAPI AdjustTokenPrivileges(HANDLE,BOOL,PTOKEN_PRIVILEGES,DWORD,PTOKEN_PRIVILEGES,PDWORD);
@@ -1600,6 +1600,13 @@ BOOL WINAPI ContinueDebugEvent(DWORD,DWORD,DWORD);
 BOOL WINAPI ConvertFiberToThread(void);
 #endif
 _Ret_maybenull_ PVOID WINAPI ConvertThreadToFiber(_In_opt_ PVOID);
+BOOL WINAPI ConvertToAutoInheritPrivateObjectSecurity(
+    _In_opt_ PSECURITY_DESCRIPTOR ParentDescriptor,
+    _In_ PSECURITY_DESCRIPTOR CurrentSecurityDescriptor,
+    _Outptr_ PSECURITY_DESCRIPTOR *NewSecurityDescriptor,
+    _In_opt_ GUID *ObjectType,
+    _In_ BOOLEAN IsDirectoryObject,
+    _In_ PGENERIC_MAPPING GenericMapping);
 #if (_WIN32_WINNT >= 0x0600)
 _Ret_maybenull_ PVOID WINAPI ConvertThreadToFiberEx(_In_opt_ PVOID, _In_ DWORD);
 #endif

@@ -8,6 +8,52 @@
 #include "precomp.h"
 
 static
+PVOID
+QueryWin32TokenInformation(HANDLE Token, TOKEN_INFORMATION_CLASS Class, PULONG Length)
+{
+    PVOID Buffer;
+    DWORD Required = 0;
+    BOOL Success;
+
+    SetLastError(ERROR_SUCCESS);
+    Success = GetTokenInformation(Token, Class, NULL, 0, &Required);
+    ok(!Success, "GetTokenInformation(%u) unexpectedly succeeded\n", Class);
+    ok(GetLastError() == ERROR_INSUFFICIENT_BUFFER,
+       "GetTokenInformation(%u) error %lu\n", Class, GetLastError());
+    if (Success || GetLastError() != ERROR_INSUFFICIENT_BUFFER || !Required)
+        return NULL;
+    Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Required);
+    ok(Buffer != NULL, "Failed to allocate %lu bytes for class %u\n", Required, Class);
+    if (!Buffer)
+        return NULL;
+    Success = GetTokenInformation(Token, Class, Buffer, Required, &Required);
+    ok(Success, "GetTokenInformation(%u) error %lu\n", Class, GetLastError());
+    if (!Success)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        return NULL;
+    }
+    *Length = Required;
+    return Buffer;
+}
+
+static
+BOOL
+TokenSidInBuffer(PSID Sid, PVOID Buffer, ULONG Length)
+{
+    ULONG_PTR Offset;
+
+    if (!Sid || (ULONG_PTR)Sid < (ULONG_PTR)Buffer)
+        return FALSE;
+    Offset = (ULONG_PTR)Sid - (ULONG_PTR)Buffer;
+    if (Offset > Length || Length - Offset < FIELD_OFFSET(SID, SubAuthority))
+        return FALSE;
+    if (GetSidLengthRequired(((SID*)Sid)->SubAuthorityCount) > Length - Offset)
+        return FALSE;
+    return IsValidSid(Sid);
+}
+
+static
 HANDLE
 OpenCurrentToken(VOID)
 {
@@ -80,6 +126,11 @@ QueryTokenGroupsTests(
 {
     NTSTATUS Status;
     PTOKEN_GROUPS Groups;
+    PTOKEN_GROUPS Win32Groups;
+    TOKEN_STATISTICS Statistics;
+    HANDLE MembershipToken = NULL;
+    BOOL Success, Member, ExpectedMember;
+    ULONG Index, Other, Win32Length, StatisticsLength;
     ULONG BufferLength;
 
     /*
@@ -112,8 +163,80 @@ QueryTokenGroupsTests(
                                      BufferLength,
                                      &BufferLength);
     ok_ntstatus(Status, STATUS_SUCCESS);
-    ok(Groups->GroupCount == 10, "The number of groups must be 10 (current number %lu)!\n", Groups->GroupCount);
+    if (!NT_SUCCESS(Status))
+        goto Done;
+    ok(BufferLength >= FIELD_OFFSET(TOKEN_GROUPS, Groups), "Groups length %lu\n", BufferLength);
+    if (BufferLength < FIELD_OFFSET(TOKEN_GROUPS, Groups))
+        goto Done;
+    ok(Groups->GroupCount <= (BufferLength - FIELD_OFFSET(TOKEN_GROUPS, Groups)) / sizeof(SID_AND_ATTRIBUTES),
+       "Group count %lu exceeds buffer %lu\n", Groups->GroupCount, BufferLength);
+    if (Groups->GroupCount > (BufferLength - FIELD_OFFSET(TOKEN_GROUPS, Groups)) / sizeof(SID_AND_ATTRIBUTES))
+        goto Done;
+    Win32Groups = QueryWin32TokenInformation(Token, TokenGroups, &Win32Length);
+    if (!Win32Groups)
+        goto Done;
+    Success = Win32Length >= FIELD_OFFSET(TOKEN_GROUPS, Groups) &&
+              Win32Groups->GroupCount <= (Win32Length - FIELD_OFFSET(TOKEN_GROUPS, Groups)) / sizeof(SID_AND_ATTRIBUTES);
+    ok(Success, "Win32 groups exceed buffer %lu\n", Win32Length);
+    if (!Success)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Win32Groups);
+        goto Done;
+    }
+    ok(Win32Length == BufferLength, "Group lengths Nt %lu Win32 %lu\n", BufferLength, Win32Length);
+    ok(Win32Groups->GroupCount == Groups->GroupCount,
+       "Group counts Nt %lu Win32 %lu\n", Groups->GroupCount, Win32Groups->GroupCount);
+    Status = NtQueryInformationToken(Token, TokenStatistics, &Statistics, sizeof(Statistics), &StatisticsLength);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ok(Statistics.GroupCount == Groups->GroupCount,
+           "Statistics groups %lu, queried %lu\n", Statistics.GroupCount, Groups->GroupCount);
+    Success = DuplicateTokenEx(Token, TOKEN_QUERY, NULL, SecurityImpersonation,
+                              TokenImpersonation, &MembershipToken);
+    ok(Success, "DuplicateTokenEx membership error %lu\n", GetLastError());
+    for (Index = 0; Index < Groups->GroupCount; Index++)
+    {
+        BOOL Valid = TokenSidInBuffer(Groups->Groups[Index].Sid, Groups, BufferLength);
 
+        ok(Valid, "Group %lu has an invalid SID\n", Index);
+        if (!Valid)
+            continue;
+        if (Index < Win32Groups->GroupCount)
+        {
+            BOOL Win32Valid = TokenSidInBuffer(Win32Groups->Groups[Index].Sid, Win32Groups, Win32Length);
+
+            ok(Win32Valid, "Win32 group %lu has an invalid SID\n", Index);
+            if (Win32Valid)
+            {
+                ok(EqualSid(Groups->Groups[Index].Sid, Win32Groups->Groups[Index].Sid),
+                   "Group %lu SID differs between APIs\n", Index);
+                ok(Groups->Groups[Index].Attributes == Win32Groups->Groups[Index].Attributes,
+                   "Group %lu attributes Nt %#lx Win32 %#lx\n", Index,
+                   Groups->Groups[Index].Attributes, Win32Groups->Groups[Index].Attributes);
+            }
+        }
+        for (Other = 0; Other < Index; Other++)
+        {
+            if (TokenSidInBuffer(Groups->Groups[Other].Sid, Groups, BufferLength))
+                ok(!EqualSid(Groups->Groups[Index].Sid, Groups->Groups[Other].Sid),
+                   "Groups %lu and %lu duplicate a SID\n", Index, Other);
+        }
+        if (MembershipToken)
+        {
+            Success = CheckTokenMembership(MembershipToken, Groups->Groups[Index].Sid, &Member);
+            ok(Success, "CheckTokenMembership group %lu error %lu\n", Index, GetLastError());
+            ExpectedMember = !!(Groups->Groups[Index].Attributes & SE_GROUP_ENABLED) &&
+                             !(Groups->Groups[Index].Attributes & SE_GROUP_USE_FOR_DENY_ONLY);
+            if (Success)
+                ok(Member == ExpectedMember, "Group %lu membership %d expected %d\n",
+                   Index, Member, ExpectedMember);
+        }
+    }
+    if (MembershipToken)
+        CloseHandle(MembershipToken);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Win32Groups);
+
+Done:
     RtlFreeHeap(RtlGetProcessHeap(), 0, Groups);
 }
 
@@ -124,6 +247,9 @@ QueryTokenPrivilegesTests(
 {
     NTSTATUS Status;
     PTOKEN_PRIVILEGES Privileges;
+    PTOKEN_PRIVILEGES Win32Privileges;
+    TOKEN_STATISTICS Statistics;
+    ULONG Win32Length, StatisticsLength, Index, Other;
     ULONG BufferLength;
 
     /*
@@ -156,8 +282,56 @@ QueryTokenPrivilegesTests(
                                      BufferLength,
                                      &BufferLength);
     ok_ntstatus(Status, STATUS_SUCCESS);
-    ok(Privileges->PrivilegeCount == 20, "The number of privileges must be 20 (current number %lu)!\n", Privileges->PrivilegeCount);
+    if (!NT_SUCCESS(Status))
+        goto Done;
+    ok(BufferLength >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges), "Privileges length %lu\n", BufferLength);
+    if (BufferLength < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges))
+        goto Done;
+    ok(Privileges->PrivilegeCount <= (BufferLength - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES),
+       "Privilege count %lu exceeds buffer %lu\n", Privileges->PrivilegeCount, BufferLength);
+    if (Privileges->PrivilegeCount > (BufferLength - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES))
+        goto Done;
+    Win32Privileges = QueryWin32TokenInformation(Token, TokenPrivileges, &Win32Length);
+    if (!Win32Privileges)
+        goto Done;
+    if (Win32Length < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) ||
+        Win32Privileges->PrivilegeCount > (Win32Length - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES))
+    {
+        ok(FALSE, "Win32 privileges exceed buffer %lu\n", Win32Length);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Win32Privileges);
+        goto Done;
+    }
+    ok(Win32Length == BufferLength, "Privilege lengths Nt %lu Win32 %lu\n", BufferLength, Win32Length);
+    ok(Win32Privileges->PrivilegeCount == Privileges->PrivilegeCount,
+       "Privilege counts Nt %lu Win32 %lu\n", Privileges->PrivilegeCount, Win32Privileges->PrivilegeCount);
+    Status = NtQueryInformationToken(Token, TokenStatistics, &Statistics, sizeof(Statistics), &StatisticsLength);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ok(Statistics.PrivilegeCount == Privileges->PrivilegeCount,
+           "Statistics privileges %lu, queried %lu\n", Statistics.PrivilegeCount, Privileges->PrivilegeCount);
+    for (Index = 0; Index < Privileges->PrivilegeCount; Index++)
+    {
+        WCHAR Name[128];
+        DWORD NameLength = RTL_NUMBER_OF(Name);
+        BOOL Success;
 
+        if (Index < Win32Privileges->PrivilegeCount)
+        {
+            ok(RtlEqualLuid(&Privileges->Privileges[Index].Luid, &Win32Privileges->Privileges[Index].Luid),
+               "Privilege %lu LUID differs between APIs\n", Index);
+            ok(Privileges->Privileges[Index].Attributes == Win32Privileges->Privileges[Index].Attributes,
+               "Privilege %lu attributes Nt %#lx Win32 %#lx\n", Index,
+               Privileges->Privileges[Index].Attributes, Win32Privileges->Privileges[Index].Attributes);
+        }
+        for (Other = 0; Other < Index; Other++)
+            ok(!RtlEqualLuid(&Privileges->Privileges[Index].Luid, &Privileges->Privileges[Other].Luid),
+               "Privileges %lu and %lu duplicate a LUID\n", Index, Other);
+        Success = LookupPrivilegeNameW(NULL, &Privileges->Privileges[Index].Luid, Name, &NameLength);
+        ok(Success, "LookupPrivilegeNameW privilege %lu error %lu\n", Index, GetLastError());
+    }
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Win32Privileges);
+
+Done:
     RtlFreeHeap(RtlGetProcessHeap(), 0, Privileges);
 }
 
@@ -308,8 +482,11 @@ QueryTokenSourceTests(
 {
     NTSTATUS Status;
     PTOKEN_SOURCE Source;
+    TOKEN_SOURCE Win32Source, DuplicateSource;
+    HANDLE Duplicate = NULL, Limited = NULL;
+    BOOL Success;
     ULONG BufferLength;
-    CHAR SourceName[8];
+    DWORD Win32Length;
 
     /*
      * Query the exact buffer length to hold
@@ -322,6 +499,8 @@ QueryTokenSourceTests(
                                      0,
                                      &BufferLength);
     ok_ntstatus(Status, STATUS_BUFFER_TOO_SMALL);
+    ok(BufferLength == sizeof(TOKEN_SOURCE), "Required source length %lu\n", BufferLength);
+    if (Status != STATUS_BUFFER_TOO_SMALL || BufferLength != sizeof(TOKEN_SOURCE)) return;
 
     /* Allocate the buffer based on the size we got */
     Source = RtlAllocateHeap(RtlGetProcessHeap(), 0, BufferLength);
@@ -339,22 +518,48 @@ QueryTokenSourceTests(
                                      &BufferLength);
     ok_ntstatus(Status, STATUS_SUCCESS);
 
-    /*
-     * Subtract the source name from the queried buffer
-     * and compare it. The source name in question must be
-     * "User32" as the primary token of the current calling
-     * process is generated when the user has successfully
-     * logged in and he's into the desktop.
-     */
-    SourceName[0] = Source->SourceName[0];
-    SourceName[1] = Source->SourceName[1];
-    SourceName[2] = Source->SourceName[2];
-    SourceName[3] = Source->SourceName[3];
-    SourceName[4] = Source->SourceName[4];
-    SourceName[5] = Source->SourceName[5];
-    SourceName[6] = '\0';
-    ok_str(SourceName, "User32");
+    if (!NT_SUCCESS(Status))
+        goto Done;
+    ok(BufferLength == sizeof(TOKEN_SOURCE), "Source length %lu\n", BufferLength);
+    if (BufferLength != sizeof(TOKEN_SOURCE)) goto Done;
+    Success = GetTokenInformation(Token, TokenSource, &Win32Source, sizeof(Win32Source), &Win32Length);
+    ok(Success, "GetTokenInformation source error %lu\n", GetLastError());
+    if (Success)
+    {
+        ok(Win32Length == sizeof(Win32Source), "Win32 source length %lu\n", Win32Length);
+        ok(!memcmp(Source->SourceName, Win32Source.SourceName, TOKEN_SOURCE_LENGTH),
+           "All eight source-name bytes must match between APIs\n");
+        ok(RtlEqualLuid(&Source->SourceIdentifier, &Win32Source.SourceIdentifier),
+           "Source identifier differs between APIs\n");
+    }
+    trace("Token source %.*s identifier %lx:%lx\n", TOKEN_SOURCE_LENGTH, Source->SourceName,
+          Source->SourceIdentifier.HighPart, Source->SourceIdentifier.LowPart);
+    Success = DuplicateTokenEx(Token, TOKEN_QUERY | TOKEN_QUERY_SOURCE, NULL,
+                              SecurityImpersonation, TokenPrimary, &Duplicate);
+    ok(Success, "DuplicateTokenEx source error %lu\n", GetLastError());
+    if (Success)
+    {
+        Status = NtQueryInformationToken(Duplicate, TokenSource, &DuplicateSource, sizeof(DuplicateSource), &BufferLength);
+        ok_ntstatus(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+        {
+            ok(!memcmp(Source->SourceName, DuplicateSource.SourceName, TOKEN_SOURCE_LENGTH),
+               "Token duplication changed source-name bytes\n");
+            ok(RtlEqualLuid(&Source->SourceIdentifier, &DuplicateSource.SourceIdentifier),
+               "Token duplication changed source identifier\n");
+        }
+        CloseHandle(Duplicate);
+    }
+    Success = DuplicateHandle(GetCurrentProcess(), Token, GetCurrentProcess(), &Limited, TOKEN_QUERY, FALSE, 0);
+    ok(Success, "DuplicateHandle query-only token error %lu\n", GetLastError());
+    if (Success)
+    {
+        Status = NtQueryInformationToken(Limited, TokenSource, &DuplicateSource, sizeof(DuplicateSource), &BufferLength);
+        ok_ntstatus(Status, STATUS_ACCESS_DENIED);
+        CloseHandle(Limited);
+    }
 
+Done:
     RtlFreeHeap(RtlGetProcessHeap(), 0, Source);
 }
 
@@ -767,6 +972,10 @@ QueryTokenOriginTests(
 {
     NTSTATUS Status;
     TOKEN_ORIGIN Origin;
+    TOKEN_ORIGIN Win32Origin, DuplicateOrigin;
+    HANDLE Duplicate;
+    DWORD Win32Length;
+    BOOL Success;
     ULONG BufferLength;
 
     /* Query the token origin */
@@ -776,10 +985,25 @@ QueryTokenOriginTests(
                                      sizeof(TOKEN_ORIGIN),
                                      &BufferLength);
     ok_ntstatus(Status, STATUS_SUCCESS);
-    ok(Origin.OriginatingLogonSession.LowPart == 0x3e7, "The LowPart field of the originating logon session must be SYSTEM_LUID (current value %lu)!\n",
-       Origin.OriginatingLogonSession.LowPart);
-    ok(Origin.OriginatingLogonSession.HighPart == 0x0, "The HighPart field of the logon session must be 0 (current value %lu)!\n",
-       Origin.OriginatingLogonSession.HighPart);
+    if (!NT_SUCCESS(Status))
+        return;
+    ok(BufferLength == sizeof(Origin), "Origin length %lu\n", BufferLength);
+    Success = GetTokenInformation(Token, TokenOrigin, &Win32Origin, sizeof(Win32Origin), &Win32Length);
+    ok(Success, "GetTokenInformation origin error %lu\n", GetLastError());
+    if (Success)
+        ok(RtlEqualLuid(&Origin.OriginatingLogonSession, &Win32Origin.OriginatingLogonSession),
+           "Origin differs between APIs\n");
+    Success = DuplicateTokenEx(Token, TOKEN_QUERY, NULL, SecurityImpersonation, TokenPrimary, &Duplicate);
+    ok(Success, "DuplicateTokenEx origin error %lu\n", GetLastError());
+    if (Success)
+    {
+        Status = NtQueryInformationToken(Duplicate, TokenOrigin, &DuplicateOrigin, sizeof(DuplicateOrigin), &BufferLength);
+        ok_ntstatus(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+            ok(RtlEqualLuid(&Origin.OriginatingLogonSession, &DuplicateOrigin.OriginatingLogonSession),
+               "Token duplication changed originating logon session\n");
+        CloseHandle(Duplicate);
+    }
 }
 
 START_TEST(NtQueryInformationToken)
@@ -806,6 +1030,8 @@ START_TEST(NtQueryInformationToken)
     ok_ntstatus(Status, STATUS_INVALID_HANDLE);
 
     Token = OpenCurrentToken();
+    if (!Token)
+        return;
 
     /* Class 0 is unused on Windows */
     Status = NtQueryInformationToken(Token,

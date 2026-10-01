@@ -1,6 +1,7 @@
 @ stdcall AccessCheck(ptr long long ptr ptr ptr ptr ptr) kernelbase.AccessCheck
 @ stdcall AccessCheckAndAuditAlarmW(wstr ptr wstr wstr ptr long ptr long ptr ptr ptr) kernelbase.AccessCheckAndAuditAlarmW
 @ stdcall AccessCheckByType(ptr ptr long long ptr long ptr ptr ptr ptr ptr) kernelbase.AccessCheckByType
+@ stdcall AccessCheckByTypeResultList(ptr ptr long long ptr long ptr ptr ptr ptr ptr) kernelbase.AccessCheckByTypeResultList
 #@ stub AccessCheckByTypeAndAuditAlarmW
 #@ stub AccessCheckByTypeResultList
 #@ stub AccessCheckByTypeResultListAndAuditAlarmByHandleW

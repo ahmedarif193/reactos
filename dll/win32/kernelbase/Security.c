@@ -164,7 +164,7 @@ GetAppContainerNamedObjectPath(
     HANDLE Effective;
     BOOL Opened = FALSE, Result = FALSE;
     PTOKEN_APPCONTAINER_INFORMATION Package = NULL;
-    UNICODE_STRING SidString = { 0 };
+    UNICODE_STRING SidString = {0};
     NTSTATUS Status;
     ULONG Needed;
 
@@ -191,7 +191,7 @@ GetAppContainerNamedObjectPath(
     }
 
     Status = RtlConvertSidToUnicodeString(&SidString, AppContainerSid, TRUE);
-    if (!NT_SUCCESS(Status))
+    if (Status < 0)
     {
         SetLastError(RtlNtStatusToDosError(Status));
         goto Cleanup;
@@ -205,9 +205,8 @@ GetAppContainerNamedObjectPath(
         goto Cleanup;
     }
 
-    CopyMemory(ObjectPath, Prefix, sizeof(Prefix) - sizeof(WCHAR));
-    CopyMemory(ObjectPath + ARRAYSIZE(Prefix) - 1, SidString.Buffer, SidString.Length);
-    ObjectPath[Needed - 1] = UNICODE_NULL;
+    lstrcpyW(ObjectPath, Prefix);
+    lstrcatW(ObjectPath, SidString.Buffer);
     Result = TRUE;
 
 Cleanup:

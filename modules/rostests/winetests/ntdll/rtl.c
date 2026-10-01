@@ -3816,6 +3816,41 @@ static void test_RtlValidSecurityDescriptor(void)
     free(sd);
 }
 
+#ifdef __REACTOS__
+static void test_RtlValidRelativeSecurityDescriptor(void)
+{
+    struct
+    {
+        SECURITY_DESCRIPTOR_RELATIVE sd;
+        ACL acl;
+    } descriptor = {0};
+    SECURITY_INFORMATION required = DACL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION;
+    BOOLEAN ret;
+
+    descriptor.sd.Revision = SECURITY_DESCRIPTOR_REVISION;
+    descriptor.sd.Control = SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT;
+    ret = RtlValidRelativeSecurityDescriptor(&descriptor.sd, sizeof(descriptor.sd), required);
+    ok(ret, "NULL ACLs were rejected: %u\n", ret);
+    ret = RtlValidRelativeSecurityDescriptor(&descriptor.sd, sizeof(descriptor.sd) - 1, required);
+    ok(!ret, "Truncated descriptor was accepted\n");
+
+    descriptor.acl.AclRevision = ACL_REVISION;
+    descriptor.acl.AclSize = sizeof(descriptor.acl);
+    descriptor.sd.Dacl = sizeof(descriptor.sd);
+    ret = RtlValidRelativeSecurityDescriptor(&descriptor.sd, sizeof(descriptor), required);
+    ok(ret, "Empty DACL with NULL SACL was rejected\n");
+    ret = RtlValidRelativeSecurityDescriptor(&descriptor.sd, sizeof(descriptor.sd), required);
+    ok(!ret, "Out-of-bounds DACL was accepted\n");
+
+    descriptor.sd.Dacl = 0;
+    descriptor.sd.Sacl = sizeof(descriptor.sd);
+    ret = RtlValidRelativeSecurityDescriptor(&descriptor.sd, sizeof(descriptor), required);
+    ok(ret, "NULL DACL with empty SACL was rejected\n");
+    ret = RtlValidRelativeSecurityDescriptor(&descriptor.sd, sizeof(descriptor.sd), required);
+    ok(!ret, "Out-of-bounds SACL was accepted\n");
+}
+
+#endif
 static void test_RtlFindExportedRoutineByName(void)
 {
     void *proc;
@@ -4225,6 +4260,9 @@ START_TEST(rtl)
     test_RtlFirstFreeAce();
     test_RtlInitializeSid();
     test_RtlValidSecurityDescriptor();
+#ifdef __REACTOS__
+    test_RtlValidRelativeSecurityDescriptor();
+#endif
     test_RtlFindExportedRoutineByName();
     test_RtlGetDeviceFamilyInfoEnum();
     test_RtlConvertDeviceFamilyInfoToString();

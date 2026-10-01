@@ -1253,6 +1253,7 @@ SepAccessCheckWorker(
     BOOLEAN Defaulted;
     NTSTATUS Status;
     BOOLEAN AccessIsGranted = FALSE;
+    BOOLEAN ResultListWritten = FALSE;
     PACCESS_TOKEN Token = NULL;
     ACCESS_CHECK_RIGHTS AccessCheckRights = {0};
     ACCESS_MASK MandatoryDenied = 0;
@@ -1562,6 +1563,7 @@ SepAccessCheckWorker(
                 /* Return the access rights to the caller */
                 GrantedAccessList[ObjectTypeIndex] = GrantedRights;
             }
+            ResultListWritten = TRUE;
 
             /*
              * We have built a list of access statuses for each object but
@@ -1720,6 +1722,14 @@ SepAccessCheckWorker(
     Status = STATUS_SUCCESS;
 
 ReturnCommonStatus:
+    if (UseResultList && !ResultListWritten)
+    {
+        for (ResultListIndex = 0; ResultListIndex < ObjectTypeListLength; ResultListIndex++)
+        {
+            GrantedAccessList[ResultListIndex] = PreviouslyGrantedAccess;
+            AccessStatusList[ResultListIndex] = Status;
+        }
+    }
     if (MandatoryDenied && NT_SUCCESS(Status))
     {
         PreviouslyGrantedAccess &= ~MandatoryDenied;

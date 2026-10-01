@@ -17,7 +17,8 @@
 #include <reactos/acltransform.h>
 
 static NTSTATUS
-RtlpSecurityTransformAcl(PACL Source, BOOLEAN Parent, BOOLEAN ClearInherited,
+RtlpSecurityTransformAcl(PACL Source, BOOLEAN Parent, BOOLEAN MarkInherited,
+                        BOOLEAN ClearInherited,
                         INT Filter, BOOLEAN Container, LPGUID *Types, ULONG TypeCount,
                         PSID Owner, PSID Group, PGENERIC_MAPPING Mapping, PACL *Result)
 {
@@ -40,7 +41,7 @@ RtlpSecurityTransformAcl(PACL Source, BOOLEAN Parent, BOOLEAN ClearInherited,
             Status = RtlGetAce(Source, Index, (PVOID *)&Ace);
             if (!NT_SUCCESS(Status)) goto Done;
             if (Filter >= 0 && !!(Ace->AceFlags & INHERITED_ACE) != Filter) continue;
-            Status = RtlpSecurityTransformAce(&Buffer, Ace, Parent, ClearInherited,
+            Status = RtlpSecurityTransformAce(&Buffer, Ace, Parent, MarkInherited, ClearInherited,
                                               Container, Types, TypeCount, Owner, Group, Mapping);
             if (!NT_SUCCESS(Status)) goto Done;
         }
@@ -322,7 +323,7 @@ RtlpSecuritySetAcl(PACL Current, PACL Modification,
     if (Auto && !(CurrentControl & Protected) && !(ModificationControl & Protected))
     {
         Filter = 0;
-        Status = RtlpSecurityTransformAcl(Current, FALSE, FALSE, 1, TRUE, NULL, 0,
+        Status = RtlpSecurityTransformAcl(Current, FALSE, FALSE, FALSE, 1, TRUE, NULL, 0,
                                           Owner, Group, Mapping, &InheritedAcl);
         if (!NT_SUCCESS(Status)) return Status;
         if (InheritedAcl && !InheritedAcl->AceCount)
@@ -331,7 +332,7 @@ RtlpSecuritySetAcl(PACL Current, PACL Modification,
             InheritedAcl = NULL;
         }
     }
-    Status = RtlpSecurityTransformAcl(Modification, FALSE,
+    Status = RtlpSecurityTransformAcl(Modification, FALSE, FALSE,
                                       Auto && (ModificationControl & Protected), Filter,
                                       TRUE, NULL, 0, Owner, Group, Mapping, &ExplicitAcl);
     if (NT_SUCCESS(Status)) Status = RtlpSecurityMergeAcls(ExplicitAcl, InheritedAcl, Result);
@@ -500,7 +501,7 @@ RtlpSecurityNewAcl(PACL Parent, PACL Creator, PACL DefaultAcl,
         (Auto || !CreatorPresent ||
          (Flags & SEF_DEFAULT_DESCRIPTOR_FOR_OBJECT)))
     {
-        Status = RtlpSecurityTransformAcl(Parent, TRUE, FALSE, -1, Container,
+        Status = RtlpSecurityTransformAcl(Parent, TRUE, Auto, FALSE, -1, Container,
                                           Types, TypeCount, Owner, Group, Mapping, &ParentAcl);
         if (!NT_SUCCESS(Status)) return Status;
         if (!ParentAcl->AceCount)
@@ -515,7 +516,7 @@ RtlpSecurityNewAcl(PACL Parent, PACL Creator, PACL DefaultAcl,
         goto Done;
     }
     Selected = CreatorPresent ? Creator : NULL;
-    if (ParentAcl && !CreatorPresent)
+    if (ParentAcl && (!CreatorPresent || (CreatorControl & Defaulted)))
     {
         Selected = NULL;
         ParentUsed = TRUE;
@@ -531,7 +532,7 @@ RtlpSecurityNewAcl(PACL Parent, PACL Creator, PACL DefaultAcl,
     }
     if (Selected)
     {
-        Status = RtlpSecurityTransformAcl(Selected, FALSE,
+        Status = RtlpSecurityTransformAcl(Selected, FALSE, FALSE,
                                           !!(CreatorControl & Protected),
                                           UseDefault || (CreatorControl & Protected) ? -1 : 0,
                                           Container, Types, TypeCount, Owner, Group, Mapping,
@@ -604,7 +605,6 @@ RtlpNewSecurityObject(IN PSECURITY_DESCRIPTOR ParentDescriptor,
             if (!NT_SUCCESS(Status)) goto Done;
             Descriptor.Owner = TokenOwnerInfo->Owner;
         }
-        Descriptor.Control |= SE_OWNER_DEFAULTED;
     }
     else Descriptor.Control |= Creator.Control & SE_OWNER_DEFAULTED;
     if (!Descriptor.Owner || !RtlValidSid(Descriptor.Owner))
@@ -623,7 +623,6 @@ RtlpNewSecurityObject(IN PSECURITY_DESCRIPTOR ParentDescriptor,
             if (!NT_SUCCESS(Status)) goto Done;
             Descriptor.Group = TokenGroupInfo->PrimaryGroup;
         }
-        Descriptor.Control |= SE_GROUP_DEFAULTED;
     }
     else Descriptor.Control |= Creator.Control & SE_GROUP_DEFAULTED;
     if (!Descriptor.Group || !RtlValidSid(Descriptor.Group))
@@ -724,7 +723,7 @@ RtlpSecurityConvertAcl(PACL Current, PACL Parent, BOOLEAN Container,
     PACE_HEADER ParentAce;
     ULONG Index, Other, Pass, Kind;
     ACCESS_MASK ParentMask, CurrentMask, Mask, ExplicitMask;
-    BOOLEAN AnyInherited = FALSE;
+    BOOLEAN AnyInherited = FALSE, EmitInherited;
     NTSTATUS Status;
     INT AccessKind;
 
@@ -741,7 +740,7 @@ RtlpSecurityConvertAcl(PACL Current, PACL Parent, BOOLEAN Container,
     if (!Entries) return STATUS_NO_MEMORY;
     if (!*Protected)
     {
-        Status = RtlpSecurityTransformAcl(Parent, TRUE, FALSE, -1, Container,
+        Status = RtlpSecurityTransformAcl(Parent, TRUE, TRUE, FALSE, -1, Container,
                                           Types, TypeCount, Owner, Group, Mapping, &ParentAcl);
         if (!NT_SUCCESS(Status)) goto Done;
     }
@@ -827,29 +826,47 @@ RtlpSecurityConvertAcl(PACL Current, PACL Parent, BOOLEAN Container,
         Buffer.Revision = Current->AclRevision;
         for (Kind = 0; Kind < (*Protected ? 1u : 2u); ++Kind)
         {
-            for (Index = 0; Index < Current->AceCount; ++Index)
+            for (Index = 0; Index < (*Protected || !Kind ? Current->AceCount : ParentAcl->AceCount); ++Index)
             {
-                Mask = ((PACCESS_ALLOWED_ACE)Entries[Index].Ace)->Mask;
-                if (*Protected)
+                if (!*Protected && Kind)
                 {
-                    Status = RtlpSecurityEmitAce(&Buffer, Entries[Index].Ace,
-                              Entries[Index].Ace->AceFlags & ~INHERITED_ACE, FALSE,
+                    Status = RtlGetAce(ParentAcl, Index, (PVOID *)&ParentAce);
+                    if (!NT_SUCCESS(Status)) goto Done;
+                    Mask = ((PACCESS_ALLOWED_ACE)ParentAce)->Mask;
+                    EmitInherited = FALSE;
+                    for (Other = 0; Other < Current->AceCount; ++Other)
+                    {
+                        if (!Entries[Other].Inherited ||
+                            !RtlpSecuritySameAceSubject(Entries[Other].Ace, ParentAce)) continue;
+                        if ((Mask & Entries[Other].InheritedMask) ||
+                            (!Mask && !((PACCESS_ALLOWED_ACE)Entries[Other].Ace)->Mask))
+                        {
+                            EmitInherited = TRUE;
+                            break;
+                        }
+                    }
+                    if (!EmitInherited) continue;
+                    Status = RtlpSecurityEmitAce(&Buffer, ParentAce,
+                              ParentAce->AceFlags | INHERITED_ACE, FALSE,
                               Owner, Group, Mapping, NULL);
-                }
-                else if (!Kind)
-                {
-                    ExplicitMask = Mask & ~Entries[Index].InheritedMask;
-                    if (!ExplicitMask && (Mask || Entries[Index].Inherited)) continue;
-                    Status = RtlpSecurityEmitAce(&Buffer, Entries[Index].Ace,
-                              Entries[Index].Ace->AceFlags & ~INHERITED_ACE, FALSE,
-                              Owner, Group, Mapping, &ExplicitMask);
                 }
                 else
                 {
-                    if (!Entries[Index].Inherited) continue;
-                    Status = RtlpSecurityEmitAce(&Buffer, Entries[Index].Ace,
-                              Entries[Index].Ace->AceFlags | INHERITED_ACE, FALSE,
-                              Owner, Group, Mapping, &Entries[Index].InheritedMask);
+                    Mask = ((PACCESS_ALLOWED_ACE)Entries[Index].Ace)->Mask;
+                    if (*Protected)
+                    {
+                        Status = RtlpSecurityEmitAce(&Buffer, Entries[Index].Ace,
+                                  Entries[Index].Ace->AceFlags & ~INHERITED_ACE, FALSE,
+                                  Owner, Group, Mapping, NULL);
+                    }
+                    else
+                    {
+                        ExplicitMask = Mask & ~Entries[Index].InheritedMask;
+                        if (!ExplicitMask && (Mask || Entries[Index].Inherited)) continue;
+                        Status = RtlpSecurityEmitAce(&Buffer, Entries[Index].Ace,
+                                  Entries[Index].Ace->AceFlags & ~INHERITED_ACE, FALSE,
+                                  Owner, Group, Mapping, &ExplicitMask);
+                    }
                 }
                 if (!NT_SUCCESS(Status)) goto Done;
             }
@@ -1105,7 +1122,7 @@ NTSTATUS
 NTAPI
 RtlDeleteSecurityObject(IN PSECURITY_DESCRIPTOR *ObjectDescriptor)
 {
-    DPRINT1("RtlDeleteSecurityObject(%p)\n", ObjectDescriptor);
+    DPRINT("RtlDeleteSecurityObject(%p)\n", ObjectDescriptor);
 
     /* Free the object from the heap */
     RtlFreeHeap(RtlGetProcessHeap(), 0, *ObjectDescriptor);
@@ -1152,7 +1169,7 @@ RtlNewSecurityObjectEx(IN PSECURITY_DESCRIPTOR ParentDescriptor,
                        IN HANDLE Token,
                        IN PGENERIC_MAPPING GenericMapping)
 {
-    DPRINT1("RtlNewSecurityObjectEx(%p)\n", ParentDescriptor);
+    DPRINT("RtlNewSecurityObjectEx(%p)\n", ParentDescriptor);
 
     /* Call the internal API */
     return RtlpNewSecurityObject(ParentDescriptor,

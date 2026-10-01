@@ -67,7 +67,8 @@ RtlpSecurityAceView(PACE_HEADER Ace, RTL_SECURITY_ACE_VIEW *View)
             if (Flags & ACE_OBJECT_TYPE_PRESENT) Offset += sizeof(GUID);
             if (Flags & ACE_INHERITED_OBJECT_TYPE_PRESENT)
             {
-                View->InheritedType = (GUID *)((PUCHAR)Ace + Offset);
+                if (Ace->AceType != ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE)
+                    View->InheritedType = (GUID *)((PUCHAR)Ace + Offset);
                 Offset += sizeof(GUID);
             }
             break;
@@ -150,7 +151,8 @@ RtlpSecurityEmitAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
 
 static NTSTATUS
 RtlpSecurityTransformAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
-                        BOOLEAN Parent, BOOLEAN ClearInherited, BOOLEAN Container,
+                        BOOLEAN Parent, BOOLEAN MarkInherited, BOOLEAN ClearInherited,
+                        BOOLEAN Container,
                         LPGUID *Types, ULONG TypeCount, PSID Owner, PSID Group,
                         PGENERIC_MAPPING Mapping)
 {
@@ -179,7 +181,7 @@ RtlpSecurityTransformAce(RTL_SECURITY_ACL_BUFFER *Buffer, PACE_HEADER Ace,
         Effective = Matches && (Flags & (Container ? CONTAINER_INHERIT_ACE : OBJECT_INHERIT_ACE));
         Propagate = Container && (Flags & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) &&
                     !(Flags & NO_PROPAGATE_INHERIT_ACE);
-        Flags |= INHERITED_ACE;
+        if (MarkInherited) Flags |= INHERITED_ACE;
         EffectiveFlags = Flags & ~(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE |
                                    NO_PROPAGATE_INHERIT_ACE | INHERIT_ONLY_ACE);
         if (Effective && Propagate && !Mappable)

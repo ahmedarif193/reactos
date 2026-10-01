@@ -17,21 +17,20 @@ BasepFormatAppContainerMappingPath(
     _Out_writes_(PathCount) PWSTR Path,
     _In_ SIZE_T PathCount)
 {
-    UNICODE_STRING SidString;
+    UNICODE_STRING SidString = {0};
     NTSTATUS Status;
     HRESULT Result;
 
     if (!AppContainerSid || !IsValidSid(AppContainerSid))
         return E_INVALIDARG;
     Status = RtlConvertSidToUnicodeString(&SidString, AppContainerSid, TRUE);
-    if (!NT_SUCCESS(Status))
+    if (Status < 0)
         return HRESULT_FROM_WIN32(RtlNtStatusToDosError(Status));
 
     Result = StringCchPrintfW(Path,
                               PathCount,
-                              L"%s\\%.*s",
+                              L"%s\\%s",
                               APPCONTAINER_MAPPINGS_KEY,
-                              (int)(SidString.Length / sizeof(WCHAR)),
                               SidString.Buffer);
     RtlFreeUnicodeString(&SidString);
     return Result;

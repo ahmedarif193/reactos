@@ -864,10 +864,13 @@ SeExchangePrimaryToken(
     if (NewToken->TokenType != TokenPrimary)
         return STATUS_BAD_TOKEN_TYPE;
 
+    SepAcquireTokenLockExclusive(NewToken);
     if (NewToken->TokenInUse)
     {
         BOOLEAN IsEqual;
         NTSTATUS Status;
+
+        SepReleaseTokenLock(NewToken);
 
         /* Maybe we're trying to set the same token */
         OldToken = PsReferencePrimaryToken(Process);
@@ -899,7 +902,6 @@ SeExchangePrimaryToken(
     }
 
     /* Lock the new token */
-    SepAcquireTokenLockExclusive(NewToken);
 
     /* Mark new token in use */
     NewToken->TokenInUse = TRUE;

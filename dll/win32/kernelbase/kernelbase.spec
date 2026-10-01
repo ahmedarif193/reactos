@@ -1,6 +1,7 @@
 @ stdcall AccessCheck(ptr long long ptr ptr ptr ptr ptr)
 @ stdcall AccessCheckAndAuditAlarmW(wstr ptr wstr wstr ptr long ptr long ptr ptr ptr)
 @ stdcall AccessCheckByType(ptr ptr long long ptr long ptr ptr ptr ptr ptr)
+@ stdcall AccessCheckByTypeResultList(ptr ptr long long ptr long ptr ptr ptr ptr ptr)
 @ stdcall AddAccessAllowedAce(ptr long long ptr)
 @ stdcall AddAccessAllowedAceEx(ptr long long long ptr)
 @ stdcall AddAccessAllowedObjectAce(ptr long long long ptr ptr ptr)

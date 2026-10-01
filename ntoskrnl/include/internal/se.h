@@ -759,6 +759,7 @@ SepPropagateAcl(
     _In_ PSID Owner,
     _In_ PSID Group,
     _In_ BOOLEAN IsInherited,
+    _In_ BOOLEAN MarkInherited,
     _In_ BOOLEAN IsDirectoryObject,
     _In_opt_ GUID *ObjectType,
     _In_ PGENERIC_MAPPING GenericMapping);

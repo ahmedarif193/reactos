@@ -1017,6 +1017,11 @@ NtSetSecurityObject(IN HANDLE Handle,
     /* Make sure the caller doesn't pass a NULL security descriptor! */
     if (!SecurityDescriptor) return STATUS_ACCESS_VIOLATION;
 
+    SecurityInformation &= ~(PROTECTED_DACL_SECURITY_INFORMATION |
+                             UNPROTECTED_DACL_SECURITY_INFORMATION |
+                             PROTECTED_SACL_SECURITY_INFORMATION |
+                             UNPROTECTED_SACL_SECURITY_INFORMATION);
+
     /* Set the required access rights for the operation */
     SeSetSecurityAccessMask(SecurityInformation, &DesiredAccess);
 

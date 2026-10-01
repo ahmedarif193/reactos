@@ -21,7 +21,7 @@ BasepGetTokenMoniker(
     UCHAR Buffer[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE];
     PTOKEN_APPCONTAINER_INFORMATION Package = (PTOKEN_APPCONTAINER_INFORMATION)Buffer;
     WCHAR Path[512];
-    UNICODE_STRING SidString;
+    UNICODE_STRING SidString = {0};
     NTSTATUS Status;
     DWORD Returned, Type, Size;
     HKEY Key;
@@ -34,12 +34,11 @@ BasepGetTokenMoniker(
     }
 
     Status = RtlConvertSidToUnicodeString(&SidString, Package->TokenAppContainer, TRUE);
-    if (!NT_SUCCESS(Status))
+    if (Status < 0)
         return RtlNtStatusToDosError(Status);
 
     Error = ERROR_SUCCESS;
-    if (FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\%.*s", APPCONTAINER_MAPPINGS_KEY,
-                                (int)(SidString.Length / sizeof(WCHAR)), SidString.Buffer)))
+    if (FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\%s", APPCONTAINER_MAPPINGS_KEY, SidString.Buffer)))
         Error = ERROR_INVALID_PARAMETER;
     RtlFreeUnicodeString(&SidString);
     if (Error != ERROR_SUCCESS)
