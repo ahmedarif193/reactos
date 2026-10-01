@@ -80,6 +80,11 @@ typedef struct _TOKEN_ACCESS_INFORMATION
     SECURITY_IMPERSONATION_LEVEL ImpersonationLevel;
     TOKEN_MANDATORY_POLICY MandatoryPolicy;
     ULONG Flags;
+    ULONG AppContainerNumber;
+    PSID PackageSid;
+    struct _SID_AND_ATTRIBUTES_HASH *CapabilitiesHash;
+    PSID TrustLevelSid;
+    PVOID SecurityAttributes;
 } TOKEN_ACCESS_INFORMATION, *PTOKEN_ACCESS_INFORMATION;
 
 #else

@@ -5228,7 +5228,16 @@ typedef struct _IO_DRIVER_CREATE_CONTEXT {
   struct _ECP_LIST *ExtraCreateParameter;
   PVOID DeviceObjectHint;
   PTXN_PARAMETER_BLOCK TxnParameters;
+  PESILO SiloContext;
 } IO_DRIVER_CREATE_CONTEXT, *PIO_DRIVER_CREATE_CONTEXT;
+
+#define IO_DRIVER_CREATE_CONTEXT_IS_MIN_SIZE(DriverContext) \
+    (DriverContext->Size >= (FIELD_OFFSET(IO_DRIVER_CREATE_CONTEXT, TxnParameters) + sizeof(DriverContext->TxnParameters)))
+
+#define IO_DRIVER_CREATE_CONTEXT_CONTAINS_SILO_CONTEXT(DriverContext) \
+    (DriverContext->Size >= (FIELD_OFFSET(IO_DRIVER_CREATE_CONTEXT, SiloContext) + sizeof(DriverContext->SiloContext)))
+
+#define IO_USE_AMBIENT_SILO    ((PESILO)1)
 
 typedef struct _AGP_TARGET_BUS_INTERFACE_STANDARD {
   USHORT Size;
@@ -6036,6 +6045,13 @@ typedef VOID
   _In_ PVOID Context,
   _In_ BOOLEAN EnableWake);
 
+_Function_class_(PCI_PREPARE_MULTISTAGE_RESUME)
+_IRQL_requires_max_(HIGH_LEVEL)
+typedef VOID
+(NTAPI PCI_PREPARE_MULTISTAGE_RESUME)(
+  _In_ PVOID Context);
+typedef PCI_PREPARE_MULTISTAGE_RESUME *PPCI_PREPARE_MULTISTAGE_RESUME;
+
 typedef struct _PCI_BUS_INTERFACE_STANDARD {
   USHORT Size;
   USHORT Version;
@@ -6048,9 +6064,12 @@ typedef struct _PCI_BUS_INTERFACE_STANDARD {
   PCI_LINE_TO_PIN LineToPin;
   PCI_ROOT_BUS_CAPABILITY RootBusCapability;
   PCI_EXPRESS_WAKE_CONTROL ExpressWakeControl;
+  PPCI_PREPARE_MULTISTAGE_RESUME PrepareMultistageResume;
 } PCI_BUS_INTERFACE_STANDARD, *PPCI_BUS_INTERFACE_STANDARD;
 
-#define PCI_BUS_INTERFACE_STANDARD_VERSION 1
+#define PCI_BUS_INTERFACE_STANDARD_VERSION 2
+#define PCI_BUS_INTERFACE_STANDARD_VERSION_1_LENGTH \
+    FIELD_OFFSET(PCI_BUS_INTERFACE_STANDARD, PrepareMultistageResume)
 
 #endif /* _PCIINTRF_X_ */
 
@@ -8105,6 +8124,17 @@ typedef enum _FS_FILTER_SECTION_SYNC_TYPE {
   SyncTypeCreateSection
 } FS_FILTER_SECTION_SYNC_TYPE, *PFS_FILTER_SECTION_SYNC_TYPE;
 
+#define FS_FILTER_SECTION_SYNC_SUPPORTS_ASYNC_PARALLEL_IO         (0x00000001)
+#define FS_FILTER_SECTION_SYNC_SUPPORTS_DIRECT_MAP_DATA           (0x00000002)
+#define FS_FILTER_SECTION_SYNC_SUPPORTS_DIRECT_MAP_IMAGE          (0x00000004)
+
+typedef struct _FS_FILTER_SECTION_SYNC_OUTPUT {
+  ULONG StructureSize;
+  ULONG SizeReturned;
+  ULONG Flags;
+  ULONG DesiredReadAlignment;
+} FS_FILTER_SECTION_SYNC_OUTPUT, *PFS_FILTER_SECTION_SYNC_OUTPUT;
+
 typedef enum _FS_FILTER_STREAM_FO_NOTIFICATION_TYPE {
   NotifyTypeCreate = 0,
   NotifyTypeRetired
@@ -8121,11 +8151,19 @@ typedef union _FS_FILTER_PARAMETERS {
   struct {
     FS_FILTER_SECTION_SYNC_TYPE SyncType;
     ULONG PageProtection;
+    PFS_FILTER_SECTION_SYNC_OUTPUT OutputInformation;
   } AcquireForSectionSynchronization;
   struct {
     FS_FILTER_STREAM_FO_NOTIFICATION_TYPE NotificationType;
     BOOLEAN POINTER_ALIGNMENT SafeToRecurse;
   } NotifyStreamFileObject;
+  struct {
+    PIRP Irp;
+    PVOID FileInformation;
+    PULONG Length;
+    FILE_INFORMATION_CLASS FileInformationClass;
+    NTSTATUS CompletionStatus;
+  } QueryOpen;
   struct {
     PVOID Argument1;
     PVOID Argument2;
@@ -8141,6 +8179,7 @@ typedef union _FS_FILTER_PARAMETERS {
 #define FS_FILTER_RELEASE_FOR_MOD_WRITE                    (UCHAR)-4
 #define FS_FILTER_ACQUIRE_FOR_CC_FLUSH                     (UCHAR)-5
 #define FS_FILTER_RELEASE_FOR_CC_FLUSH                     (UCHAR)-6
+#define FS_FILTER_QUERY_OPEN                               (UCHAR)-7
 
 typedef struct _FS_FILTER_CALLBACK_DATA {
   ULONG SizeOfFsFilterCallbackData;
@@ -8177,6 +8216,8 @@ typedef struct _FS_FILTER_CALLBACKS {
   PFS_FILTER_COMPLETION_CALLBACK PostAcquireForModifiedPageWriter;
   PFS_FILTER_CALLBACK PreReleaseForModifiedPageWriter;
   PFS_FILTER_COMPLETION_CALLBACK PostReleaseForModifiedPageWriter;
+  PFS_FILTER_CALLBACK PreQueryOpen;
+  PFS_FILTER_COMPLETION_CALLBACK PostQueryOpen;
 } FS_FILTER_CALLBACKS, *PFS_FILTER_CALLBACKS;
 
 extern NTKERNELAPI KSPIN_LOCK    IoStatisticsLock;

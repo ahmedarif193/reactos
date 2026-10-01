@@ -1267,6 +1267,23 @@ SspiExcludePackage(
 #endif /* NTDDI_VERSION >= NTDDI_WIN7 */
 
 #define FreeCredentialHandle FreeCredentialsHandle
+
+typedef
+SECURITY_STATUS
+(SEC_ENTRY * QUERY_CONTEXT_ATTRIBUTES_EX_FN_W)(
+    PCtxtHandle,
+    ULONG,
+    PVOID,
+    ULONG);
+
+typedef
+SECURITY_STATUS
+(SEC_ENTRY * QUERY_CREDENTIALS_ATTRIBUTES_EX_FN_W)(
+    PCredHandle,
+    ULONG,
+    PVOID,
+    ULONG);
+
 struct _SECURITY_FUNCTION_TABLE_W
 {
     ULONG dwVersion;
@@ -1306,6 +1323,10 @@ struct _SECURITY_FUNCTION_TABLE_W
     CHANGE_PASSWORD_FN_W ChangeAccountPasswordW;
 #else
     PVOID Reserved9;
+#endif
+#if NTDDI_VERSION > NTDDI_WINBLUE
+    QUERY_CONTEXT_ATTRIBUTES_EX_FN_W QueryContextAttributesExW;
+    QUERY_CREDENTIALS_ATTRIBUTES_EX_FN_W QueryCredentialsAttributesExW;
 #endif
 };
 

@@ -1088,6 +1088,7 @@ IoInitializeDriverCreateContext(
 {
   RtlZeroMemory(DriverContext, sizeof(IO_DRIVER_CREATE_CONTEXT));
   DriverContext->Size = sizeof(IO_DRIVER_CREATE_CONTEXT);
+  DriverContext->SiloContext = IO_USE_AMBIENT_SILO;
 }
 
 $endif (_NTDDK_)
