@@ -306,6 +306,20 @@ extern int handle_fpieee_flt( __msvcrt_ulong exception_code, EXCEPTION_POINTERS 
 extern void *call_catch_handler( EXCEPTION_RECORD *rec );
 extern void *call_unwind_handler( void *func, uintptr_t frame, DISPATCHER_CONTEXT *dispatch );
 extern ULONG_PTR get_exception_pc( DISPATCHER_CONTEXT *dispatch );
+
+/* NT PowerPC's function table uses absolute addresses and its lookup API has
+ * one argument. Keep that ABI difference out of the shared C++ handler. */
+static inline void *lookup_function_start( ULONG_PTR pc )
+{
+    PRUNTIME_FUNCTION function;
+    ULONG_PTR base = 0;
+#ifdef __powerpc__
+    function = RtlLookupFunctionEntry( pc );
+#else
+    function = RtlLookupFunctionEntry( pc, &base, NULL );
+#endif
+    return (void *)(base + function->BeginAddress);
+}
 #endif
 
 #if _MSVCR_VER >= 80

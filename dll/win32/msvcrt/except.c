@@ -137,6 +137,30 @@ void *find_catch_handler( void *object, uintptr_t frame, uintptr_t exc_base,
 
 #ifndef __i386__  /* i386 implementation is in except_i386.c */
 
+static inline uintptr_t dispatch_image_base(const DISPATCHER_CONTEXT *dispatch)
+{
+#ifdef _PPC_
+    void *base = NULL;
+    RtlPcToFileHeader((void *)dispatch->ControlPc, &base);
+    return (uintptr_t)base;
+#elif defined(CXX_USE_RVA)
+    return dispatch->ImageBase;
+#else
+    /* Legacy descriptors already contain absolute addresses. */
+    UNREFERENCED_PARAMETER(dispatch);
+    return 0;
+#endif
+}
+
+static inline void *dispatch_handler_data(const DISPATCHER_CONTEXT *dispatch)
+{
+#ifdef _PPC_
+    return dispatch->FunctionEntry->HandlerData;
+#else
+    return dispatch->HandlerData;
+#endif
+}
+
 typedef struct
 {
     cxx_frame_info frame_info;
@@ -168,11 +192,11 @@ static inline int ip_to_state( const cxx_function_descr *descr, uintptr_t ip, ui
 static void cxx_local_unwind(ULONG_PTR frame, DISPATCHER_CONTEXT *dispatch,
                              const cxx_function_descr *descr, int last_level)
 {
-    const unwind_info *unwind_table = cxx_rva(descr->unwind_table, dispatch->ImageBase);
+    const unwind_info *unwind_table = cxx_rva(descr->unwind_table, dispatch_image_base(dispatch));
     int *unwind_help = (int *)(frame + descr->unwind_help);
     int trylevel = unwind_help[0];
 
-    if (trylevel == -2) trylevel = ip_to_state( descr, get_exception_pc(dispatch), dispatch->ImageBase );
+    if (trylevel == -2) trylevel = ip_to_state( descr, get_exception_pc(dispatch), dispatch_image_base(dispatch) );
 
     TRACE("current level: %d, last level: %d\n", trylevel, last_level);
     while (trylevel > last_level)
@@ -184,7 +208,7 @@ static void cxx_local_unwind(ULONG_PTR frame, DISPATCHER_CONTEXT *dispatch,
         }
         if (unwind_table[trylevel].handler)
         {
-            void *handler = cxx_rva( unwind_table[trylevel].handler, dispatch->ImageBase );
+            void *handler = cxx_rva( unwind_table[trylevel].handler, dispatch_image_base(dispatch) );
             call_unwind_handler( handler, frame, dispatch );
         }
         trylevel = unwind_table[trylevel].prev;
@@ -275,7 +299,7 @@ static inline void find_catch_block(EXCEPTION_RECORD *rec, CONTEXT *context,
 {
     ULONG_PTR exc_base = (rec->NumberParameters == 4 ? rec->ExceptionInformation[3] : 0);
     void *handler, *object = (void *)rec->ExceptionInformation[1];
-    int trylevel = ip_to_state( descr, get_exception_pc(dispatch), dispatch->ImageBase );
+    int trylevel = ip_to_state( descr, get_exception_pc(dispatch), dispatch_image_base(dispatch) );
     thread_data_t *data = msvcrt_get_thread_data();
     const tryblock_info *in_catch;
     EXCEPTION_RECORD catch_record;
@@ -286,7 +310,7 @@ static inline void find_catch_block(EXCEPTION_RECORD *rec, CONTEXT *context,
     data->processing_throw++;
     for (i=descr->tryblock_count; i>0; i--)
     {
-        in_catch = cxx_rva(descr->tryblock, dispatch->ImageBase);
+        in_catch = cxx_rva(descr->tryblock, dispatch_image_base(dispatch));
         in_catch = &in_catch[i-1];
 
         if (trylevel>in_catch->end_level && trylevel<=in_catch->catch_level)
@@ -304,7 +328,7 @@ static inline void find_catch_block(EXCEPTION_RECORD *rec, CONTEXT *context,
 
     for (i=0; i<descr->tryblock_count; i++)
     {
-        const tryblock_info *tryblock = cxx_rva(descr->tryblock, dispatch->ImageBase);
+        const tryblock_info *tryblock = cxx_rva(descr->tryblock, dispatch_image_base(dispatch));
         tryblock = &tryblock[i];
 
         if (trylevel < tryblock->start_level) continue;
@@ -316,7 +340,7 @@ static inline void find_catch_block(EXCEPTION_RECORD *rec, CONTEXT *context,
             if(tryblock->end_level > in_catch->catch_level) continue;
         }
 
-        handler = find_catch_handler( object, orig_frame, exc_base, tryblock, info, dispatch->ImageBase );
+        handler = find_catch_handler( object, orig_frame, exc_base, tryblock, info, dispatch_image_base(dispatch) );
         if (!handler) continue;
 
         /* unwind stack and call catch */
@@ -377,11 +401,9 @@ static DWORD cxx_frame_handler(EXCEPTION_RECORD *rec, ULONG_PTR frame,
                                CONTEXT *context, DISPATCHER_CONTEXT *dispatch,
                                const cxx_function_descr *descr)
 {
-    int trylevel = ip_to_state( descr, get_exception_pc(dispatch), dispatch->ImageBase );
+    int trylevel = ip_to_state( descr, get_exception_pc(dispatch), dispatch_image_base(dispatch) );
     cxx_exception_type *exc_type;
     ULONG_PTR orig_frame = frame;
-    ULONG_PTR throw_base;
-    DWORD throw_func_off;
     void *throw_func;
     UINT i, j;
     int unwindlevel = -1;
@@ -400,22 +422,21 @@ static DWORD cxx_frame_handler(EXCEPTION_RECORD *rec, ULONG_PTR frame,
         return ExceptionContinueSearch;  /* handle only c++ exceptions */
 
     /* update orig_frame if it's a nested exception */
-    throw_func_off = RtlLookupFunctionEntry(dispatch->ControlPc, &throw_base, NULL)->BeginAddress;
-    throw_func = cxx_rva(throw_func_off, throw_base);
+    throw_func = lookup_function_start(dispatch->ControlPc);
     TRACE("reconstructed handler pointer: %p\n", throw_func);
     for (i=descr->tryblock_count; i>0; i--)
     {
-        const tryblock_info *tryblock = cxx_rva(descr->tryblock, dispatch->ImageBase);
+        const tryblock_info *tryblock = cxx_rva(descr->tryblock, dispatch_image_base(dispatch));
         tryblock = &tryblock[i-1];
 
         if (trylevel>tryblock->end_level && trylevel<=tryblock->catch_level)
         {
             for (j=0; j<tryblock->catchblock_count; j++)
             {
-                const catchblock_info *catchblock = cxx_rva(tryblock->catchblock, dispatch->ImageBase);
+                const catchblock_info *catchblock = cxx_rva(tryblock->catchblock, dispatch_image_base(dispatch));
                 catchblock = &catchblock[j];
 
-                if (cxx_rva(catchblock->handler, dispatch->ImageBase) == throw_func)
+                if (cxx_rva(catchblock->handler, dispatch_image_base(dispatch)) == throw_func)
                 {
                     unwindlevel = tryblock->end_level;
 #ifdef _WIN64
@@ -458,7 +479,7 @@ static DWORD cxx_frame_handler(EXCEPTION_RECORD *rec, ULONG_PTR frame,
         {
             TRACE("handling C++ exception rec %p frame %Ix descr %p\n", rec, frame,  descr);
             TRACE_EXCEPTION_TYPE(exc_type, rec->ExceptionInformation[3]);
-            dump_function_descr(descr, dispatch->ImageBase);
+            dump_function_descr(descr, dispatch_image_base(dispatch));
         }
     }
     else
@@ -504,7 +525,7 @@ EXCEPTION_DISPOSITION CDECL __CxxFrameHandler( EXCEPTION_RECORD *rec, ULONG_PTR 
 {
     TRACE( "%p %Ix %p %p\n", rec, frame, context, dispatch );
     return cxx_frame_handler( rec, frame, context, dispatch,
-                              cxx_rva(*(UINT *)dispatch->HandlerData, dispatch->ImageBase) );
+                              cxx_rva(*(UINT *)dispatch_handler_data(dispatch), dispatch_image_base(dispatch)) );
 }
 
 #endif  /* __i386__ */
@@ -1112,8 +1133,8 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
                                                    DISPATCHER_CONTEXT_ARM64 *dispatch )
 #endif
 {
-    const SCOPE_TABLE *table = dispatch->HandlerData;
-    ULONG_PTR base = dispatch->ImageBase;
+    const SCOPE_TABLE *table = dispatch_handler_data(dispatch);
+    ULONG_PTR base = dispatch_image_base(dispatch);
     ULONG_PTR pc = dispatch->ControlPc;
     unsigned int i;
     void *handler;
@@ -1201,8 +1222,8 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
 EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *frame,
                                                    CONTEXT *context, DISPATCHER_CONTEXT *dispatch )
 {
-    const SCOPE_TABLE *table = dispatch->HandlerData;
-    ULONG_PTR base = dispatch->ImageBase;
+    const SCOPE_TABLE *table = dispatch_handler_data(dispatch);
+    ULONG_PTR base = dispatch_image_base(dispatch);
     ULONG_PTR pc = dispatch->ControlPc;
     unsigned int i;
     void *handler;
@@ -1286,8 +1307,8 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
 EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *frame, CONTEXT *context,
                                                    DISPATCHER_CONTEXT *dispatch )
 {
-    const SCOPE_TABLE *table = dispatch->HandlerData;
-    ULONG_PTR base = dispatch->ImageBase;
+    const SCOPE_TABLE *table = dispatch_handler_data(dispatch);
+    ULONG_PTR base = dispatch_image_base(dispatch);
     ULONG_PTR pc = dispatch->ControlPc;
     unsigned int i;
 
