@@ -2640,10 +2640,10 @@ IoAssignDriveLetters(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
                      OUT PUCHAR NtSystemPath,
                      OUT PSTRING NtSystemPathString)
 {
-    HALDISPATCH->HalIoAssignDriveLetters(LoaderBlock,
-                                         NtDeviceName,
-                                         NtSystemPath,
-                                         NtSystemPathString);
+    xHalIoAssignDriveLetters(LoaderBlock,
+                             NtDeviceName,
+                             NtSystemPath,
+                             NtSystemPathString);
 }
 
 /* EOF */

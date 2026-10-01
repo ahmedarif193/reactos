@@ -271,15 +271,6 @@ typedef VOID
 (NTAPI *pHalSetPciErrorHandlerCallback)(
   _In_ PCI_ERROR_HANDLER_CALLBACK Callback);
 
-#if 1 /* Not present in WDK 7600 */
-typedef VOID
-(FASTCALL *pHalIoAssignDriveLetters)(
-  _In_ struct _LOADER_PARAMETER_BLOCK *LoaderBlock,
-  _In_ PSTRING NtDeviceName,
-  _Out_ PUCHAR NtSystemPath,
-  _Out_ PSTRING NtSystemPathString);
-#endif
-
 typedef struct {
   ULONG Version;
   pHalQuerySystemInformation HalQuerySystemInformation;
@@ -287,9 +278,6 @@ typedef struct {
   pHalQueryBusSlots HalQueryBusSlots;
   ULONG Spare1;
   pHalExamineMBR HalExamineMBR;
-#if 1 /* Not present in WDK 7600 */
-  pHalIoAssignDriveLetters HalIoAssignDriveLetters;
-#endif
   pHalIoReadPartitionTable HalIoReadPartitionTable;
   pHalIoSetPartitionInformation HalIoSetPartitionInformation;
   pHalIoWritePartitionTable HalIoWritePartitionTable;

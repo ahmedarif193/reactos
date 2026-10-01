@@ -15,6 +15,8 @@
 
 /* GLOBALS *******************************************************************/
 
+C_ASSERT(sizeof(HAL_DISPATCH) == 23 * sizeof(PVOID));
+
 HAL_DISPATCH HalDispatchTable =
 {
     HAL_DISPATCH_VERSION,
@@ -23,7 +25,6 @@ HAL_DISPATCH HalDispatchTable =
     xHalQueryBusSlots,
     0,
     xHalExamineMBR,
-    xHalIoAssignDriveLetters,
     xHalIoReadPartitionTable,
     xHalIoSetPartitionInformation,
     xHalIoWritePartitionTable,

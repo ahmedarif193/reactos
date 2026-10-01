@@ -52,7 +52,6 @@ HAL_DISPATCH HalDispatchTable =
     (pHalQueryBusSlots)NULL,
     0,
     (pHalExamineMBR)NULL,
-    (pHalIoAssignDriveLetters)NULL,
     (pHalIoReadPartitionTable)xHalIoReadPartitionTable,
     (pHalIoSetPartitionInformation)NULL,
     (pHalIoWritePartitionTable)NULL,
