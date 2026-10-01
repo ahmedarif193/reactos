@@ -11,3 +11,6 @@
 #define IDS_FAILED        101
 #define IDS_UNSUPPORTED   102
 #define IDS_USAGE         103
+#define IDS_NO_SECTION    104
+#define IDS_ERROR_TITLE   105
+#define IDS_INSTALL_ERROR 106

@@ -4,6 +4,9 @@ STRINGTABLE
 BEGIN
     IDS_SUCCESS "The operation completed successfully."
     IDS_FAILED "Installation failed."
-    IDS_UNSUPPORTED "The INF file you selected does not support this method of installation."
+    IDS_UNSUPPORTED "The INF file you selected does not support this method of installation"
     IDS_USAGE "Usage: InfDefaultInstall.exe <INF file>"
+    IDS_NO_SECTION "The required section was not found in the INF."
+    IDS_ERROR_TITLE "Error"
+    IDS_INSTALL_ERROR "Install Error"
 END

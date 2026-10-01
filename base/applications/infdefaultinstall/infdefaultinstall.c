@@ -24,35 +24,45 @@
 
 static INT
 ShowMessage(
-    _In_ PCWSTR Title,
+    _In_opt_ PCWSTR Title,
+    _In_ UINT TitleId,
     _In_ UINT StringId,
+    _In_ UINT DetailId,
     _In_ DWORD Error,
     _In_ UINT Type)
 {
-    WCHAR Text[512], System[256];
+    WCHAR Text[512], Detail[256], Caption[64];
     DWORD Length;
 
     if (!LoadStringW(GetModuleHandleW(NULL), StringId, Text, _countof(Text)))
         Text[0] = UNICODE_NULL;
 
-    if (Error != ERROR_SUCCESS)
+    Detail[0] = UNICODE_NULL;
+    if (DetailId != 0)
+    {
+        LoadStringW(GetModuleHandleW(NULL), DetailId, Detail, _countof(Detail));
+    }
+    else if (Error != ERROR_SUCCESS)
     {
         Length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                                 NULL,
                                 Error,
                                 0,
-                                System,
-                                _countof(System),
+                                Detail,
+                                _countof(Detail),
                                 NULL);
         if (Length == 0)
-            swprintf(System, _countof(System), L"0x%08lx", Error);
-
-        if (wcslen(Text) + wcslen(System) + 2 < _countof(Text))
-        {
-            wcscat(Text, L"\n");
-            wcscat(Text, System);
-        }
+            swprintf(Detail, _countof(Detail), L"0x%08lx", Error);
     }
+
+    if (Detail[0] && wcslen(Text) + wcslen(Detail) + 3 < _countof(Text))
+    {
+        wcscat(Text, L"\n\n");
+        wcscat(Text, Detail);
+    }
+
+    if (TitleId != 0 && LoadStringW(GetModuleHandleW(NULL), TitleId, Caption, _countof(Caption)))
+        Title = Caption;
 
     return MessageBoxW(NULL, Text, Title, MB_OK | Type);
 }
@@ -81,7 +91,7 @@ wWinMain(
     Arguments = CommandLineToArgvW(GetCommandLineW(), &Count);
     if (!Arguments || Count < 2)
     {
-        ShowMessage(L"InfDefaultInstall", IDS_USAGE, ERROR_SUCCESS, MB_ICONINFORMATION);
+        ShowMessage(L"InfDefaultInstall", 0, IDS_USAGE, 0, ERROR_SUCCESS, MB_ICONINFORMATION);
         return ERROR_INVALID_PARAMETER;
     }
 
@@ -89,7 +99,7 @@ wWinMain(
     LocalFree(Arguments);
     if (Length == 0 || Length >= _countof(InfPath))
     {
-        ShowMessage(L"InfDefaultInstall", IDS_FAILED, ERROR_FILE_NOT_FOUND, MB_ICONERROR);
+        ShowMessage(NULL, IDS_ERROR_TITLE, IDS_FAILED, 0, ERROR_FILE_NOT_FOUND, MB_ICONERROR);
         return ERROR_FILE_NOT_FOUND;
     }
 
@@ -98,7 +108,7 @@ wWinMain(
     {
         DWORD Error = GetLastError();
 
-        ShowMessage(InfPath, IDS_FAILED, Error, MB_ICONERROR);
+        ShowMessage(NULL, IDS_ERROR_TITLE, IDS_FAILED, 0, Error, MB_ICONERROR);
         return (int)Error;
     }
 
@@ -109,14 +119,14 @@ wWinMain(
 
         swprintf(Command, _countof(Command), L"DefaultInstall 132 %s", InfPath);
         InstallHinfSectionW(NULL, NULL, Command, SW_SHOWNORMAL);
-        ShowMessage(InfPath, IDS_SUCCESS, ERROR_SUCCESS, MB_ICONINFORMATION);
+        ShowMessage(InfPath, 0, IDS_SUCCESS, 0, ERROR_SUCCESS, MB_ICONINFORMATION);
         return ERROR_SUCCESS;
     }
 
     if (!SetupFindFirstLineW(hInf, L"Manufacturer", NULL, &Context))
     {
         SetupCloseInfFile(hInf);
-        ShowMessage(InfPath, IDS_UNSUPPORTED, ERROR_SUCCESS, MB_ICONERROR);
+        ShowMessage(NULL, IDS_INSTALL_ERROR, IDS_UNSUPPORTED, IDS_NO_SECTION, ERROR_SUCCESS, MB_ICONERROR);
         return ERROR_BAD_FORMAT;
     }
 
@@ -126,11 +136,11 @@ wWinMain(
     {
         DWORD Error = GetLastError();
 
-        ShowMessage(InfPath, IDS_FAILED, Error, MB_ICONERROR);
+        ShowMessage(NULL, IDS_ERROR_TITLE, IDS_FAILED, 0, Error, MB_ICONERROR);
         return (int)Error;
     }
 
-    ShowMessage(InfPath, IDS_SUCCESS, ERROR_SUCCESS, MB_ICONINFORMATION);
+    ShowMessage(InfPath, 0, IDS_SUCCESS, 0, ERROR_SUCCESS, MB_ICONINFORMATION);
 
     if (NeedReboot)
         SetupPromptReboot(NULL, NULL, FALSE);
