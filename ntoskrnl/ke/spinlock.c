@@ -116,7 +116,7 @@ KeAcquireQueuedSpinLockAtDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 #endif
 
     /* Do the inlined function */
-#if defined(_WIN64)
+#if !defined(KX_LEGACY_HAL_QUEUED_LOCKS)
     KxAcquireQueuedSpinLock(LockHandle);
 #else
     KxAcquireSpinLock(LockHandle->Lock);
@@ -144,7 +144,7 @@ KeReleaseQueuedSpinLockFromDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 #endif
 
     /* Do the inlined function */
-#if defined(_WIN64)
+#if !defined(KX_LEGACY_HAL_QUEUED_LOCKS)
     KxReleaseQueuedSpinLock(LockHandle);
 #else
     KxReleaseSpinLock(LockHandle->Lock);
@@ -407,7 +407,7 @@ KeAcquireInStackQueuedSpinLockAtDpcLevel(IN PKSPIN_LOCK SpinLock,
 #endif
 
     /* Acquire the lock */
-#if defined(_WIN64)
+#if !defined(KX_LEGACY_HAL_QUEUED_LOCKS)
     KxAcquireQueuedSpinLock(&LockHandle->LockQueue);
 #else
     KxAcquireSpinLock(LockHandle->LockQueue.Lock); // HACK
@@ -442,7 +442,7 @@ KeReleaseInStackQueuedSpinLockFromDpcLevel(IN PKLOCK_QUEUE_HANDLE LockHandle)
 #endif
 
     /* Release the lock */
-#if defined(_WIN64)
+#if !defined(KX_LEGACY_HAL_QUEUED_LOCKS)
     KxReleaseQueuedSpinLock(&LockHandle->LockQueue);
 #else
     KxReleaseSpinLock(LockHandle->LockQueue.Lock); // HACK
