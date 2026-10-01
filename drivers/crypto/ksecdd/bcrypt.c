@@ -1015,6 +1015,181 @@ BCryptGenerateSymmetricKey(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+WINAPI
+BCryptImportKey(
+    BCRYPT_ALG_HANDLE AlgorithmHandle,
+    BCRYPT_KEY_HANDLE ImportKey,
+    LPCWSTR BlobType,
+    BCRYPT_KEY_HANDLE *KeyHandle,
+    PUCHAR Object,
+    ULONG ObjectSize,
+    PUCHAR Input,
+    ULONG InputSize,
+    ULONG Flags)
+{
+    BCRYPT_KEY_DATA_BLOB_HEADER *Header;
+    ULONG SecretSize;
+
+    if (KsecGetAlgorithm(AlgorithmHandle) == NULL)
+        return STATUS_INVALID_HANDLE;
+    if (BlobType == NULL || KeyHandle == NULL || Input == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (ImportKey != NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    if (KsecEqualWideString(BlobType, BCRYPT_KEY_DATA_BLOB))
+    {
+        Header = (BCRYPT_KEY_DATA_BLOB_HEADER *)Input;
+        if (InputSize < sizeof(*Header))
+            return STATUS_BUFFER_TOO_SMALL;
+        if (Header->dwMagic != BCRYPT_KEY_DATA_BLOB_MAGIC ||
+            Header->dwVersion != BCRYPT_KEY_DATA_BLOB_VERSION1)
+            return STATUS_INVALID_PARAMETER;
+        SecretSize = Header->cbKeyData;
+        if (SecretSize > InputSize - sizeof(*Header))
+            return STATUS_INVALID_PARAMETER;
+        return BCryptGenerateSymmetricKey(AlgorithmHandle,
+                                          KeyHandle,
+                                          Object,
+                                          ObjectSize,
+                                          (PUCHAR)(Header + 1),
+                                          SecretSize,
+                                          Flags);
+    }
+
+    if (KsecEqualWideString(BlobType, BCRYPT_OPAQUE_KEY_BLOB))
+        return STATUS_INVALID_PARAMETER;
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS
+KsecEncryptAes(
+    _Inout_ KSEC_BCRYPT_KEY *Key,
+    _In_reads_bytes_opt_(InputSize) PUCHAR Input,
+    _In_ ULONG InputSize,
+    _Inout_updates_bytes_opt_(IvSize) PUCHAR Iv,
+    _In_ ULONG IvSize,
+    _Out_writes_bytes_opt_(OutputSize) PUCHAR Output,
+    _In_ ULONG OutputSize,
+    _Out_ PULONG ResultSize,
+    _In_ ULONG Flags)
+{
+    UCHAR ChainingValue[KSEC_AES_BLOCK_SIZE];
+    UCHAR FinalBlock[KSEC_AES_BLOCK_SIZE];
+    ULONG PrefixSize = InputSize & ~(KSEC_AES_BLOCK_SIZE - 1);
+    ULONG TailSize = InputSize - PrefixSize;
+
+    if (ResultSize == NULL || (Input == NULL && InputSize != 0))
+        return STATUS_INVALID_PARAMETER;
+    if (Flags & ~BCRYPT_BLOCK_PADDING)
+        return STATUS_NOT_SUPPORTED;
+
+    if (Flags & BCRYPT_BLOCK_PADDING)
+    {
+        if (PrefixSize > MAXULONG - KSEC_AES_BLOCK_SIZE)
+            return STATUS_INTEGER_OVERFLOW;
+        *ResultSize = PrefixSize + KSEC_AES_BLOCK_SIZE;
+    }
+    else
+    {
+        *ResultSize = InputSize;
+        if (TailSize != 0)
+            return STATUS_INVALID_BUFFER_SIZE;
+    }
+
+    if (Output == NULL)
+        return STATUS_SUCCESS;
+    if (Key->ChainMode == KsecChainEcb && Iv != NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Key->ChainMode == KsecChainCbc && Iv != NULL && IvSize != KSEC_AES_BLOCK_SIZE)
+        return STATUS_INVALID_PARAMETER;
+    if (OutputSize < *ResultSize)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    if (Flags & BCRYPT_BLOCK_PADDING)
+    {
+        if (TailSize != 0)
+            RtlCopyMemory(FinalBlock, Input + PrefixSize, TailSize);
+        RtlFillMemory(FinalBlock + TailSize,
+                      KSEC_AES_BLOCK_SIZE - TailSize,
+                      KSEC_AES_BLOCK_SIZE - TailSize);
+    }
+
+    ExAcquireFastMutex(&Key->Lock);
+    if (Iv != NULL)
+        RtlCopyMemory(ChainingValue, Iv, sizeof(ChainingValue));
+    else
+        RtlCopyMemory(ChainingValue, Key->Data.Aes.Vector, sizeof(ChainingValue));
+
+    if (PrefixSize != 0)
+    {
+        if (Key->ChainMode == KsecChainEcb)
+            SymCryptAesEcbEncrypt(&Key->Data.Aes.ExpandedKey,
+                                  Input,
+                                  Output,
+                                  PrefixSize);
+        else
+            SymCryptAesCbcEncrypt(&Key->Data.Aes.ExpandedKey,
+                                  ChainingValue,
+                                  Input,
+                                  Output,
+                                  PrefixSize);
+    }
+
+    if (Flags & BCRYPT_BLOCK_PADDING)
+    {
+        if (Key->ChainMode == KsecChainEcb)
+            SymCryptAesEncrypt(&Key->Data.Aes.ExpandedKey,
+                               FinalBlock,
+                               Output + PrefixSize);
+        else
+            SymCryptAesCbcEncrypt(&Key->Data.Aes.ExpandedKey,
+                                  ChainingValue,
+                                  FinalBlock,
+                                  Output + PrefixSize,
+                                  sizeof(FinalBlock));
+    }
+
+    if (Key->ChainMode == KsecChainCbc)
+    {
+        RtlCopyMemory(Key->Data.Aes.Vector, ChainingValue, sizeof(ChainingValue));
+        if (Iv != NULL)
+            RtlCopyMemory(Iv, ChainingValue, sizeof(ChainingValue));
+    }
+    ExReleaseFastMutex(&Key->Lock);
+    RtlSecureZeroMemory(FinalBlock, sizeof(FinalBlock));
+    RtlSecureZeroMemory(ChainingValue, sizeof(ChainingValue));
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+WINAPI
+BCryptEncrypt(
+    BCRYPT_KEY_HANDLE Handle,
+    PUCHAR Input,
+    ULONG InputSize,
+    PVOID Padding,
+    PUCHAR Iv,
+    ULONG IvSize,
+    PUCHAR Output,
+    ULONG OutputSize,
+    PULONG ResultSize,
+    ULONG Flags)
+{
+    KSEC_BCRYPT_KEY *Key = KsecGetKey(Handle);
+
+    UNREFERENCED_PARAMETER(Padding);
+
+    if (Key == NULL)
+        return STATUS_INVALID_HANDLE;
+    if (Key->Id == KsecAlgAes)
+        return KsecEncryptAes(Key, Input, InputSize, Iv, IvSize,
+                              Output, OutputSize, ResultSize, Flags);
+    return STATUS_NOT_SUPPORTED;
+}
+
 static NTSTATUS
 KsecDecryptAes(
     _Inout_ KSEC_BCRYPT_KEY *Key,
