@@ -219,6 +219,8 @@ CmpDoCreateChild(IN PHHIVE Hive,
     PCM_KEY_NODE KeyNode;
     PCELL_DATA CellData;
     ULONG StorageType;
+    ULONG AutoInheritFlags = 0;
+    SECURITY_DESCRIPTOR_CONTROL ParentControl = 0, Control = 0;
     PCM_KEY_CONTROL_BLOCK Kcb;
     PSECURITY_DESCRIPTOR NewDescriptor = NULL;
     PSECURITY_DESCRIPTOR ParentCopy = NULL;
@@ -383,13 +385,22 @@ CmpDoCreateChild(IN PHHIVE Hive,
     /* Link it with the KCB */
     EnlistKeyBodyWithKCB(KeyBody, CMP_ENLIST_KCB_LOCKED_EXCLUSIVE);
 
+    if (ParentDescriptor)
+        ParentControl = ((PISECURITY_DESCRIPTOR)ParentDescriptor)->Control;
+    if (AccessState->SecurityDescriptor)
+        Control = ((PISECURITY_DESCRIPTOR)AccessState->SecurityDescriptor)->Control;
+    if (!(Control & SE_DACL_PRESENT) && (ParentControl & SE_DACL_AUTO_INHERITED))
+        AutoInheritFlags |= SEF_DACL_AUTO_INHERIT;
+    if (ParentControl & SE_SACL_AUTO_INHERITED)
+        AutoInheritFlags |= SEF_SACL_AUTO_INHERIT;
+
     /* Assign security */
     Status = SeAssignSecurityEx(ParentDescriptor,
                               AccessState->SecurityDescriptor,
                               &NewDescriptor,
                               NULL,
                               TRUE,
-                              SEF_DACL_AUTO_INHERIT | SEF_SACL_AUTO_INHERIT,
+                              AutoInheritFlags,
                               &AccessState->SubjectSecurityContext,
                               &CmpKeyObjectType->TypeInfo.GenericMapping,
                               CmpKeyObjectType->TypeInfo.PoolType);
@@ -844,6 +855,8 @@ CmpDoOpen(IN PHHIVE Hive,
             /* Access check failed */
             ObDereferenceObject(*Object);
             *Object = NULL;
+            if (Status == STATUS_PRIVILEGE_NOT_HELD)
+                Status = STATUS_ACCESS_DENIED;
         }
         else
         {

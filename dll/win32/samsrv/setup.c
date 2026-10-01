@@ -888,6 +888,7 @@ BOOL
 SampInitializeSAM(VOID)
 {
     PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomainInfo = NULL;
+    PWSTR AccountDomainName = NULL;
     HANDLE hSamKey = NULL;
     HANDLE hServerKey = NULL;
     HANDLE hBuiltinDomainKey = NULL;
@@ -970,6 +971,17 @@ SampInitializeSAM(VOID)
         bResult = FALSE;
         goto done;
     }
+
+    AccountDomainName = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY,
+                                       AccountDomainInfo->DomainName.Length + sizeof(WCHAR));
+    if (!AccountDomainName)
+    {
+        bResult = FALSE;
+        goto done;
+    }
+    if (AccountDomainInfo->DomainName.Length)
+        RtlCopyMemory(AccountDomainName, AccountDomainInfo->DomainName.Buffer,
+                      AccountDomainInfo->DomainName.Length);
 
     SampLoadString(hInstance, IDS_DOMAIN_BUILTIN_NAME, szName, 80);
 
@@ -1128,7 +1140,7 @@ SampInitializeSAM(VOID)
     /* Create the Account domain */
     Status = SampSetupCreateDomain(hServerKey,
                                    L"Account",
-                                   L"",
+                                   AccountDomainName,
                                    AccountDomainInfo->DomainSid,
                                    FALSE,
                                    &hAccountDomainKey);
@@ -1180,6 +1192,9 @@ SampInitializeSAM(VOID)
                               DOMAIN_USER_RID_GUEST);
 
 done:
+    if (AccountDomainName)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, AccountDomainName);
+
     if (AccountDomainInfo)
         LsaFreeMemory(AccountDomainInfo);
 

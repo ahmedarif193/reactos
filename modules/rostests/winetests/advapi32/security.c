@@ -28,7 +28,17 @@
 #include "winbase.h"
 #include "winerror.h"
 #include "winternl.h"
+#ifdef __REACTOS__
+#include <limits.h>
+#include "lmaccess.h"
+#include "lmerr.h"
+#include "winioctl.h"
+#endif
 #include "aclapi.h"
+#ifdef __REACTOS__
+#include "objbase.h"
+#include "iads.h"
+#endif
 #include "winnt.h"
 #include "sddl.h"
 #include "ntsecapi.h"
@@ -370,6 +380,211 @@ static void test_ConvertStringSidToSid(void)
     }
 }
 
+#ifdef __REACTOS__
+static void test_sddl_domain_aliases(void)
+{
+    static const struct
+    {
+        const WCHAR *name;
+        DWORD rid;
+        BOOL local;
+        BOOL invalid_revision;
+    }
+    aliases[] =
+    {
+        { L"LA", DOMAIN_USER_RID_ADMIN, TRUE, FALSE },
+        { L"LG", DOMAIN_USER_RID_GUEST, TRUE, FALSE },
+        { L"CA", DOMAIN_GROUP_RID_CERT_ADMINS, FALSE, FALSE },
+        { L"DA", DOMAIN_GROUP_RID_ADMINS, FALSE, FALSE },
+        { L"DC", DOMAIN_GROUP_RID_COMPUTERS, FALSE, FALSE },
+        { L"DD", DOMAIN_GROUP_RID_CONTROLLERS, FALSE, FALSE },
+        { L"DG", DOMAIN_GROUP_RID_GUESTS, FALSE, FALSE },
+        { L"DU", DOMAIN_GROUP_RID_USERS, FALSE, FALSE },
+        { L"EA", DOMAIN_GROUP_RID_ENTERPRISE_ADMINS, FALSE, FALSE },
+        { L"PA", DOMAIN_GROUP_RID_POLICY_ADMINS, FALSE, FALSE },
+        { L"RS", DOMAIN_ALIAS_RID_RAS_SERVERS, FALSE, FALSE },
+        { L"SA", DOMAIN_GROUP_RID_SCHEMA_ADMINS, FALSE, FALSE },
+        { L"ZZ", 0, FALSE, FALSE },
+        { L"S-0-5-1", 0, FALSE, TRUE },
+    };
+    static const WCHAR *prefixes[] = { L"", L"O:", L"G:", L"D:(A;;GR;;;" };
+    static const SID invalid_revision_sid = {0, 1, {SECURITY_NT_AUTHORITY}, {1}};
+    LSA_OBJECT_ATTRIBUTES attributes = {0};
+    LSA_HANDLE policy = NULL;
+    POLICY_ACCOUNT_DOMAIN_INFO *account = NULL;
+    POLICY_DNS_DOMAIN_INFO *domain = NULL;
+    DWORD expected_buffer[SECURITY_MAX_SID_SIZE / sizeof(DWORD)];
+    PSID base, expected = expected_buffer, sid;
+    PSECURITY_DESCRIPTOR sd;
+    SECURITY_DESCRIPTOR_RELATIVE *relative;
+    ACCESS_ALLOWED_ACE *ace;
+    ACL *acl;
+    WCHAR string[40];
+    DWORD error, size, expected_size, offset;
+    unsigned int i, j, count;
+    NTSTATUS status;
+    BOOL ret, valid, present, defaulted, expect_success;
+
+    attributes.Length = sizeof(attributes);
+    status = LsaOpenPolicy(NULL, &attributes, POLICY_VIEW_LOCAL_INFORMATION, &policy);
+    ok(status == STATUS_SUCCESS, "LsaOpenPolicy returned %#lx.\n", status);
+    if (status != STATUS_SUCCESS) return;
+
+    status = LsaQueryInformationPolicy(policy, PolicyAccountDomainInformation, (void **)&account);
+    ok(status == STATUS_SUCCESS, "Account domain query returned %#lx.\n", status);
+    if (status != STATUS_SUCCESS) goto done;
+    valid = account && account->DomainSid && IsValidSid(account->DomainSid);
+    ok(valid, "Account domain query did not return a valid SID.\n");
+    if (!valid) goto done;
+
+    status = LsaQueryInformationPolicy(policy, PolicyDnsDomainInformation, (void **)&domain);
+    ok(status == STATUS_SUCCESS, "DNS domain query returned %#lx.\n", status);
+    if (status != STATUS_SUCCESS) goto done;
+    valid = domain && (!domain->Sid || IsValidSid(domain->Sid));
+    ok(valid, "DNS domain query did not return valid domain information.\n");
+    if (!valid) goto done;
+
+    for (i = 0; i < ARRAY_SIZE(aliases); ++i)
+    {
+        base = !aliases[i].rid ? NULL : aliases[i].local ? account->DomainSid : domain->Sid;
+        if (base)
+        {
+            count = *GetSidSubAuthorityCount(base);
+            ok(count < SID_MAX_SUB_AUTHORITIES, "Domain SID has %u subauthorities.\n", count);
+            if (count >= SID_MAX_SUB_AUTHORITIES) goto done;
+            ret = CopySid(sizeof(expected_buffer), expected, base);
+            ok(ret, "CopySid failed: %lu.\n", GetLastError());
+            if (!ret) goto done;
+            *GetSidSubAuthorityCount(expected) = count + 1;
+            *GetSidSubAuthority(expected, count) = aliases[i].rid;
+        }
+
+        for (j = 0; j < ARRAY_SIZE(prefixes); ++j)
+        {
+            winetest_push_context("alias %s form %u", wine_dbgstr_w(aliases[i].name), j);
+            lstrcpyW(string, prefixes[j]);
+            lstrcatW(string, aliases[i].name);
+            if (j == 3) lstrcatW(string, L")");
+            sid = NULL;
+            sd = NULL;
+            size = 0xdeadbeef;
+            SetLastError(0xdeadbeef);
+            if (!j)
+                ret = ConvertStringSidToSidW(string, &sid);
+            else
+                ret = ConvertStringSecurityDescriptorToSecurityDescriptorW(string, SDDL_REVISION_1, &sd, &size);
+            error = GetLastError();
+            expect_success = base || (aliases[i].invalid_revision && j < 3);
+            ok(ret == expect_success, "Conversion returned %d, error %lu, expected success %u.\n",
+               ret, error, expect_success);
+            ok(error == (expect_success ? ERROR_SUCCESS : ERROR_INVALID_SID),
+               "Conversion error %lu, expected %lu.\n", error,
+               (DWORD)(expect_success ? ERROR_SUCCESS : ERROR_INVALID_SID));
+            if (!ret)
+            {
+                ok(!sid && !sd, "Failed conversion returned SID %p, descriptor %p.\n", sid, sd);
+                if (j) ok(!size, "Failed conversion returned size %lu.\n", size);
+            }
+
+            if (ret && j && aliases[i].invalid_revision)
+            {
+                expected_size = sizeof(*relative) + sizeof(invalid_revision_sid);
+                ok(sd != NULL, "Revision-zero conversion returned no descriptor.\n");
+                ok(size == expected_size, "Revision-zero descriptor size %lu, expected %lu.\n",
+                   size, expected_size);
+                if (sd && size == expected_size)
+                {
+                    ok(!IsValidSecurityDescriptor(sd), "Revision-zero descriptor was accepted as valid.\n");
+                    relative = sd;
+                    ok(relative->Revision == SECURITY_DESCRIPTOR_REVISION &&
+                       (relative->Control & SE_SELF_RELATIVE),
+                       "Descriptor revision %u, control %#x.\n", relative->Revision, relative->Control);
+                    offset = j == 1 ? relative->Owner : relative->Group;
+                    ok(offset == sizeof(*relative), "Revision-zero SID offset %lu, expected %u.\n",
+                       offset, (unsigned int)sizeof(*relative));
+                    if (offset == sizeof(*relative)) sid = (BYTE *)sd + offset;
+                }
+            }
+            else if (ret && j)
+            {
+                valid = sd && IsValidSecurityDescriptor(sd);
+                ok(valid, "Conversion returned an invalid descriptor.\n");
+                if (valid)
+                {
+                    ok(size == GetSecurityDescriptorLength(sd), "Descriptor size %lu, actual %lu.\n",
+                       size, GetSecurityDescriptorLength(sd));
+                    if (base)
+                    {
+                        expected_size = sizeof(SECURITY_DESCRIPTOR_RELATIVE) + GetLengthSid(expected);
+                        if (j == 3) expected_size += sizeof(ACL) + FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart);
+                        ok(size == expected_size, "Descriptor size %lu, expected %lu.\n", size, expected_size);
+                    }
+                    if (j == 1)
+                    {
+                        valid = GetSecurityDescriptorOwner(sd, &sid, &defaulted);
+                        ok(valid, "Owner query failed: %lu.\n", GetLastError());
+                    }
+                    else if (j == 2)
+                    {
+                        valid = GetSecurityDescriptorGroup(sd, &sid, &defaulted);
+                        ok(valid, "Group query failed: %lu.\n", GetLastError());
+                    }
+                    else
+                    {
+                        acl = NULL;
+                        present = FALSE;
+                        valid = GetSecurityDescriptorDacl(sd, &present, &acl, &defaulted);
+                        valid = valid && present && acl && IsValidAcl(acl) && acl->AceCount == 1;
+                        ok(valid, "Conversion did not return a one-ACE DACL.\n");
+                        if (valid)
+                        {
+                            valid = GetAce(acl, 0, (void **)&ace);
+                            ok(valid, "ACE query failed: %lu.\n", GetLastError());
+                            if (valid)
+                            {
+                                ok(ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE &&
+                                   !ace->Header.AceFlags && ace->Mask == GENERIC_READ,
+                                   "ACE type %u, flags %#x, mask %#lx.\n", ace->Header.AceType,
+                                   ace->Header.AceFlags, ace->Mask);
+                                sid = &ace->SidStart;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (ret)
+            {
+                valid = sid && IsValidSid(sid);
+                if (aliases[i].invalid_revision)
+                {
+                    ok(sid != NULL, "Revision-zero conversion returned no SID.\n");
+                    ok(!valid, "Revision-zero SID was accepted as valid.\n");
+                    if (sid)
+                        ok(!memcmp(sid, &invalid_revision_sid, sizeof(invalid_revision_sid)),
+                           "Revision-zero SID bytes differ.\n");
+                }
+                else
+                {
+                    ok(valid, "Conversion did not return a valid SID.\n");
+                    if (valid && base)
+                        ok(EqualSid(sid, expected), "SID %s differs from expected %s.\n",
+                           debugstr_sid(sid), debugstr_sid(expected));
+                }
+                if (!j) LocalFree(sid);
+                else LocalFree(sd);
+            }
+            winetest_pop_context();
+        }
+    }
+
+done:
+    if (domain) LsaFreeMemory(domain);
+    if (account) LsaFreeMemory(account);
+    LsaClose(policy);
+}
+
+#endif
 static void test_trustee(void)
 {
     GUID ObjectType = {0x12345678, 0x1234, 0x5678, {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}};
@@ -1758,6 +1973,11 @@ static void test_token_attr(void)
     TOKEN_DEFAULT_DACL *Dacl;
     BOOL ret;
     DWORD i, GLE;
+#ifdef __REACTOS__
+    DWORD logon_count = 0;
+    BYTE logon_sid[SECURITY_MAX_SID_SIZE];
+    TOKEN_GROUPS logon_groups;
+#endif
     LPSTR SidString;
     SECURITY_IMPERSONATION_LEVEL ImpersonationLevel;
     ACL *acl;
@@ -1829,6 +2049,14 @@ static void test_token_attr(void)
         DWORD DomainLength = 255;
         CHAR Domain[255];
         SID_NAME_USE SidNameUse;
+#ifdef __REACTOS__
+        if ((Groups->Groups[i].Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID)
+        {
+            ++logon_count;
+            ret = CopySid(sizeof(logon_sid), logon_sid, Groups->Groups[i].Sid);
+            ok(ret, "Logon SID copy failed: %lu\n", GetLastError());
+        }
+#endif
         Name[0] = '\0';
         Domain[0] = '\0';
         ret = LookupAccountSidA(NULL, Groups->Groups[i].Sid, Name, &NameLength, Domain, &DomainLength, &SidNameUse);
@@ -1871,9 +2099,23 @@ static void test_token_attr(void)
     free(Owner);
 
     /* logon */
+#ifdef __REACTOS__
+    ok(logon_count <= 1, "Found %lu logon SIDs\n", logon_count);
+#endif
     ret = GetTokenInformation(Token, TokenLogonSid, NULL, 0, &Size);
+#ifdef __REACTOS__
+    if (!logon_count)
+    {
+        ok(!ret && GetLastError() == ERROR_NOT_FOUND,
+           "Token without a logon SID returned %d, error %lu\n", ret, GetLastError());
+        ret = GetTokenInformation(Token, TokenLogonSid, &logon_groups, sizeof(logon_groups), &Size);
+        ok(!ret && GetLastError() == ERROR_NOT_FOUND,
+           "Token without a logon SID returned %d, error %lu\n", ret, GetLastError());
+    }
+#else
     if (!ret && (GetLastError() == ERROR_INVALID_PARAMETER))
         todo_wine win_skip("TokenLogonSid not supported. Skipping tests\n");
+#endif
     else
     {
         ok(!ret && (GetLastError() == ERROR_INSUFFICIENT_BUFFER),
@@ -1887,6 +2129,9 @@ static void test_token_attr(void)
             ok(Groups->GroupCount == 1, "got %ld\n", Groups->GroupCount);
             if(Groups->GroupCount == 1)
             {
+#ifdef __REACTOS__
+                ok(EqualSid(Groups->Groups[0].Sid, logon_sid), "Logon SID differs from TokenGroups\n");
+#endif
                 ConvertSidToStringSidA(Groups->Groups[0].Sid, &SidString);
                 trace("TokenLogon: %s\n", SidString);
                 LocalFree(SidString);
@@ -2048,6 +2293,15 @@ static const struct well_known_sid_value
 /* 29 */ {TRUE, "S-1-5-32-547"},  {TRUE, "S-1-5-32-548"}, {TRUE, "S-1-5-32-549"},
 /* 32 */ {TRUE, "S-1-5-32-550"},  {TRUE, "S-1-5-32-551"}, {TRUE, "S-1-5-32-552"},
 /* 35 */ {TRUE, "S-1-5-32-554"},  {TRUE, "S-1-5-32-555"}, {TRUE, "S-1-5-32-556"},
+#ifdef __REACTOS__
+/* 38 */ {FALSE, "S-1-5-21-12-23-34-500"}, {FALSE, "S-1-5-21-12-23-34-501"},
+/* 40 */ {FALSE, "S-1-5-21-12-23-34-502"}, {FALSE, "S-1-5-21-12-23-34-512"},
+/* 42 */ {FALSE, "S-1-5-21-12-23-34-513"}, {FALSE, "S-1-5-21-12-23-34-514"},
+/* 44 */ {FALSE, "S-1-5-21-12-23-34-515"}, {FALSE, "S-1-5-21-12-23-34-516"},
+/* 46 */ {FALSE, "S-1-5-21-12-23-34-517"}, {FALSE, "S-1-5-21-12-23-34-518"},
+/* 48 */ {FALSE, "S-1-5-21-12-23-34-519"}, {FALSE, "S-1-5-21-12-23-34-520"},
+/* 50 */ {FALSE, "S-1-5-21-12-23-34-553"},
+#else
 /* 38 */ {FALSE, "S-1-5-21-12-23-34-45-56-500"}, {FALSE, "S-1-5-21-12-23-34-45-56-501"},
 /* 40 */ {FALSE, "S-1-5-21-12-23-34-45-56-502"}, {FALSE, "S-1-5-21-12-23-34-45-56-512"},
 /* 42 */ {FALSE, "S-1-5-21-12-23-34-45-56-513"}, {FALSE, "S-1-5-21-12-23-34-45-56-514"},
@@ -2055,6 +2309,7 @@ static const struct well_known_sid_value
 /* 46 */ {FALSE, "S-1-5-21-12-23-34-45-56-517"}, {FALSE, "S-1-5-21-12-23-34-45-56-518"},
 /* 48 */ {FALSE, "S-1-5-21-12-23-34-45-56-519"}, {FALSE, "S-1-5-21-12-23-34-45-56-520"},
 /* 50 */ {FALSE, "S-1-5-21-12-23-34-45-56-553"},
+#endif
 /* Added in Windows Server 2003 */
 /* 51 */ {TRUE, "S-1-5-64-10"},   {TRUE, "S-1-5-64-21"},   {TRUE, "S-1-5-64-14"},
 /* 54 */ {TRUE, "S-1-5-15"},      {TRUE, "S-1-5-1000"},    {FALSE, "S-1-5-32-557"},
@@ -2065,9 +2320,15 @@ static const struct well_known_sid_value
 /* 63 */ {TRUE, "S-1-5-17"},      {FALSE, "S-1-5-32-569"}, {TRUE, "S-1-16-0"},
 /* 66 */ {TRUE, "S-1-16-4096"},   {TRUE, "S-1-16-8192"},   {TRUE, "S-1-16-12288"},
 /* 69 */ {TRUE, "S-1-16-16384"},  {TRUE, "S-1-5-33"},      {TRUE, "S-1-3-4"},
+#ifdef __REACTOS__
+/* 72 */ {FALSE, "S-1-5-21-12-23-34-571"},  {FALSE, "S-1-5-21-12-23-34-572"},
+/* 74 */ {TRUE, "S-1-5-22"}, {FALSE, "S-1-5-21-12-23-34-521"}, {TRUE, "S-1-5-32-573"},
+/* 77 */ {FALSE, "S-1-5-21-12-23-34-498"}, {TRUE, "S-1-5-32-574"}, {TRUE, "S-1-16-8448"},
+#else
 /* 72 */ {FALSE, "S-1-5-21-12-23-34-45-56-571"},  {FALSE, "S-1-5-21-12-23-34-45-56-572"},
 /* 74 */ {TRUE, "S-1-5-22"}, {FALSE, "S-1-5-21-12-23-34-45-56-521"}, {TRUE, "S-1-5-32-573"},
 /* 77 */ {FALSE, "S-1-5-21-12-23-34-45-56-498"}, {TRUE, "S-1-5-32-574"}, {TRUE, "S-1-16-8448"},
+#endif
 /* 80 */ {FALSE, NULL}, {TRUE, "S-1-2-1"}, {TRUE, "S-1-5-65-1"}, {FALSE, NULL},
 /* 84 */ {TRUE, "S-1-15-2-1"},
 };
@@ -2099,8 +2360,14 @@ static void test_CreateWellKnownSid(void)
     ok(ret, "CreateWellKnownSid failed %lu\n", GetLastError());
     free(sid);
 
+#ifdef __REACTOS__
+    ret = AllocateAndInitializeSid(&ident, 4, SECURITY_NT_NON_UNIQUE, 12, 23, 34, 0, 0, 0, 0, &domainsid);
+    ok(ret, "AllocateAndInitializeSid failed with %lu\n", GetLastError());
+    if (!ret) return;
+#else
     /* a domain sid usually have three subauthorities but we test that CreateWellKnownSid doesn't check it */
     AllocateAndInitializeSid(&ident, 6, SECURITY_NT_NON_UNIQUE, 12, 23, 34, 45, 56, 0, 0, &domainsid);
+#endif
 
     for (i = 0; i < ARRAY_SIZE(well_known_sid_values); i++)
     {
@@ -2112,6 +2379,7 @@ static void test_CreateWellKnownSid(void)
         if (value->sid_string == NULL)
             continue;
 
+#ifndef __REACTOS__
         /* some SIDs aren't implemented by all Windows versions - detect it */
         cb = sizeof(sid_buffer);
         if (!CreateWellKnownSid(i, NULL, sid_buffer, &cb))
@@ -2120,26 +2388,95 @@ static void test_CreateWellKnownSid(void)
             continue;
         }
 
+#endif
         cb = sizeof(sid_buffer);
+#ifdef __REACTOS__
+        ret = CreateWellKnownSid(i, value->without_domain ? NULL : domainsid, sid_buffer, &cb);
+        ok(ret, "Couldn't create well known sid %u, error %lu\n", i, GetLastError());
+        if (!ret) continue;
+#else
         ok(CreateWellKnownSid(i, value->without_domain ? NULL : domainsid, sid_buffer, &cb), "Couldn't create well known sid %u\n", i);
+#endif
         expect_eq(GetSidLengthRequired(*GetSidSubAuthorityCount(sid_buffer)), cb, DWORD, "%ld");
         ok(IsValidSid(sid_buffer), "The sid is not valid\n");
+#ifdef __REACTOS__
+        ok(IsWellKnownSid(sid_buffer, i), "SID type %u was not recognized\n", i);
+        if (*GetSidSubAuthorityCount(sid_buffer) == 5 &&
+            *GetSidSubAuthority(sid_buffer, 0) == SECURITY_NT_NON_UNIQUE)
+        {
+            char other[SECURITY_MAX_SID_SIZE];
+            memcpy(other, sid_buffer, cb);
+            ++*GetSidSubAuthority(other, 4);
+            ok(!IsWellKnownSid(other, i), "SID type %u accepted a different account RID\n", i);
+            memcpy(other, sid_buffer, cb);
+            ++*GetSidSubAuthority(other, 0);
+            ok(!IsWellKnownSid(other, i), "SID type %u accepted a different domain prefix\n", i);
+            memcpy(other, sid_buffer, cb);
+            ++GetSidIdentifierAuthority(other)->Value[5];
+            ok(!IsWellKnownSid(other, i), "SID type %u accepted a different authority\n", i);
+            memcpy(other, sid_buffer, cb);
+            --*GetSidSubAuthorityCount(other);
+            ok(!IsWellKnownSid(other, i), "SID type %u accepted a domain without an account RID\n", i);
+        }
+        ret = ConvertSidToStringSidA(sid_buffer, &str);
+        ok(ret, "Couldn't convert SID to string, error %lu\n", GetLastError());
+        if (ret)
+        {
+            ok(strcmp(str, value->sid_string) == 0, "%d: SID mismatch - expected %s, got %s\n", i,
+                value->sid_string, str);
+            LocalFree(str);
+        }
+#else
         ok(ConvertSidToStringSidA(sid_buffer, &str), "Couldn't convert SID to string\n");
         ok(strcmp(str, value->sid_string) == 0, "%d: SID mismatch - expected %s, got %s\n", i,
             value->sid_string, str);
         LocalFree(str);
+#endif
 
         if (value->without_domain)
         {
             char buf2[SECURITY_MAX_SID_SIZE];
             cb = sizeof(buf2);
+#ifdef __REACTOS__
+            ret = CreateWellKnownSid(i, domainsid, buf2, &cb);
+            ok(ret, "Couldn't create well known sid %u with optional domain, error %lu\n", i, GetLastError());
+            if (ret)
+            {
+                expect_eq(GetSidLengthRequired(*GetSidSubAuthorityCount(sid_buffer)), cb, DWORD, "%ld");
+                ok(cb <= sizeof(buf2) && !memcmp(buf2, sid_buffer, cb),
+                   "SID create with domain is different than without (%u)\n", i);
+            }
+#else
             ok(CreateWellKnownSid(i, domainsid, buf2, &cb), "Couldn't create well known sid %u with optional domain\n", i);
             expect_eq(GetSidLengthRequired(*GetSidSubAuthorityCount(sid_buffer)), cb, DWORD, "%ld");
             ok(memcmp(buf2, sid_buffer, cb) == 0, "SID create with domain is different than without (%u)\n", i);
+#endif
         }
     }
 
     FreeSid(domainsid);
+#ifdef __REACTOS__
+    ret = AllocateAndInitializeSid(&ident, 6, SECURITY_NT_NON_UNIQUE, 12, 23, 34, 45, 56, 0, 0, &domainsid);
+    ok(ret, "Extended domain SID allocation failed with %lu\n", GetLastError());
+    if (ret)
+    {
+        char sid_buffer[SECURITY_MAX_SID_SIZE], *string;
+        size = sizeof(sid_buffer);
+        ret = CreateWellKnownSid(WinAccountAdministratorSid, domainsid, sid_buffer, &size);
+        ok(ret, "Extended domain SID creation failed with %lu\n", GetLastError());
+        if (ret)
+        {
+            ret = ConvertSidToStringSidA(sid_buffer, &string);
+            ok(ret, "Extended SID conversion failed with %lu\n", GetLastError());
+            if (ret)
+            {
+                ok(!strcmp(string, "S-1-5-21-12-23-34-45-56-500"), "Unexpected extended SID %s\n", string);
+                LocalFree(string);
+            }
+        }
+        FreeSid(domainsid);
+    }
+#endif
 }
 
 static void test_LookupAccountSid(void)
@@ -2571,7 +2908,14 @@ static void test_LookupAccountName(void)
     ok(!lstrcmpiA(domain, sid_dom), "Expected %s, got %s\n", sid_dom, domain);
     ok(domain_size == domain_save - 1, "Expected %ld, got %ld\n", domain_save - 1, domain_size);
     ok(strlen(domain) == domain_size, "Expected %d, got %ld\n", lstrlenA(domain), domain_size);
+#ifdef __REACTOS__
+    if (IsWellKnownSid(psid, WinLocalSystemSid))
+        ok(sid_use == SidTypeWellKnownGroup, "Expected SidTypeWellKnownGroup, got %d\n", sid_use);
+    else
+        ok(sid_use == SidTypeUser, "Expected SidTypeUser (%d), got %d\n", SidTypeUser, sid_use);
+#else
     ok(sid_use == SidTypeUser, "Expected SidTypeUser (%d), got %d\n", SidTypeUser, sid_use);
+#endif
     domain_size = domain_save;
     sid_size = sid_save;
 
@@ -2924,11 +3268,23 @@ static void test_process_security(void)
     dom_size = sizeof(domain);
     ret = LookupAccountSidA( NULL, UsersSid, account, &acc_size, domain, &dom_size, &use );
     ok(ret, "LookupAccountSid failed with %ld\n", ret);
+#ifdef __REACTOS__
+    if (IsWellKnownSid(UsersSid, WinLocalSystemSid))
+        ok(use == SidTypeUser, "expect SidTypeUser, got %d\n", use);
+    else
+        ok(use == SidTypeGroup, "expect SidTypeGroup, got %d\n", use);
+#else
     ok(use == SidTypeGroup, "expect SidTypeGroup, got %d\n", use);
+#endif
     if (PRIMARYLANGID(GetSystemDefaultLangID()) != LANG_ENGLISH)
         skip("Non-English locale (test with hardcoded 'None')\n");
     else
+#ifdef __REACTOS__
+        ok(!strcmp(account, IsWellKnownSid(UsersSid, WinLocalSystemSid) ? "SYSTEM" : "None"),
+           "unexpected primary group account %s\n", account);
+#else
         ok(!strcmp(account, "None"), "expect None, got %s\n", account);
+#endif
 
     res = GetTokenInformation( token, TokenUser, NULL, 0, &size );
     ok(!res, "Expected failure, got %d\n", res);
@@ -3061,9 +3417,42 @@ static void test_process_security(void)
 
 static void test_process_security_child(void)
 {
+#ifdef __REACTOS__
+    TOKEN_PRIVILEGES privileges, previous;
+    HANDLE handle, handle1, token;
+#else
     HANDLE handle, handle1;
+#endif
     BOOL ret;
+#ifdef __REACTOS__
+    DWORD err, size;
+
+    ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &token);
+    ok(ret, "OpenProcessToken failed with error %ld\n", GetLastError());
+    if (!ret) return;
+    ret = LookupPrivilegeValueA(NULL, "SeDebugPrivilege", &privileges.Privileges[0].Luid);
+    ok(ret, "LookupPrivilegeValueA failed with error %ld\n", GetLastError());
+    if (!ret)
+    {
+        CloseHandle(token);
+        return;
+    }
+    privileges.PrivilegeCount = 1;
+    privileges.Privileges[0].Attributes = 0;
+    previous.PrivilegeCount = 0;
+    SetLastError(ERROR_SUCCESS);
+    ret = AdjustTokenPrivileges(token, FALSE, &privileges, sizeof(previous), &previous, &size);
+    err = GetLastError();
+    ok(ret && (err == ERROR_SUCCESS || err == ERROR_NOT_ALL_ASSIGNED),
+       "Disabling SeDebugPrivilege failed with error %ld\n", err);
+    if (!ret || (err != ERROR_SUCCESS && err != ERROR_NOT_ALL_ASSIGNED))
+    {
+        CloseHandle(token);
+        return;
+    }
+#else
     DWORD err;
+#endif
 
     handle = OpenProcess( PROCESS_TERMINATE, FALSE, GetCurrentProcessId() );
     ok(handle != NULL, "OpenProcess(PROCESS_TERMINATE) with err:%ld\n", GetLastError());
@@ -3088,8 +3477,14 @@ static void test_process_security_child(void)
     /* These two should fail - they are denied by ACL */
     handle = OpenProcess( PROCESS_VM_READ, FALSE, GetCurrentProcessId() );
     ok(handle == NULL, "OpenProcess(PROCESS_VM_READ) should have failed\n");
+#ifdef __REACTOS__
+    if (handle) CloseHandle(handle);
+#endif
     handle = OpenProcess( PROCESS_ALL_ACCESS, FALSE, GetCurrentProcessId() );
     ok(handle == NULL, "OpenProcess(PROCESS_ALL_ACCESS) should have failed\n");
+#ifdef __REACTOS__
+    if (handle) CloseHandle(handle);
+#endif
 
     /* Documented privilege elevation */
     ret = DuplicateHandle( GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(),
@@ -3121,6 +3516,18 @@ static void test_process_security_child(void)
 
     handle = OpenThread( THREAD_SET_THREAD_TOKEN, FALSE, GetCurrentThreadId() );
     ok(handle == NULL, "OpenThread(THREAD_SET_THREAD_TOKEN) should have failed\n");
+#ifdef __REACTOS__
+    if (handle) CloseHandle(handle);
+
+    if (previous.PrivilegeCount)
+    {
+        SetLastError(ERROR_SUCCESS);
+        ret = AdjustTokenPrivileges(token, FALSE, &previous, 0, NULL, NULL);
+        err = GetLastError();
+        ok(ret && err == ERROR_SUCCESS, "Restoring SeDebugPrivilege failed with error %ld\n", err);
+    }
+    CloseHandle(token);
+#endif
 }
 
 static void test_impersonation_level(void)
@@ -3228,6 +3635,2877 @@ static void test_impersonation_level(void)
     CloseHandle(ProcessToken);
 
     free(PrivilegeSet);
+}
+
+#ifdef __REACTOS__
+static void check_acl_constructor_ace(PACL acl, BYTE type, BYTE flags, DWORD mask, PSID sid)
+#else
+static void test_SetEntriesInAclW(void)
+#endif
+{
+#ifdef __REACTOS__
+    ACCESS_ALLOWED_ACE *ace;
+    BOOL ret;
+#else
+    DWORD res;
+    PSID EveryoneSid = NULL, UsersSid = NULL;
+    PACL OldAcl = NULL, NewAcl;
+    SID_IDENTIFIER_AUTHORITY SIDAuthWorld = { SECURITY_WORLD_SID_AUTHORITY };
+    SID_IDENTIFIER_AUTHORITY SIDAuthNT = { SECURITY_NT_AUTHORITY };
+    EXPLICIT_ACCESSW ExplicitAccess;
+
+    NewAcl = (PACL)0xdeadbeef;
+    res = SetEntriesInAclW(0, NULL, NULL, &NewAcl);
+    ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
+    ok(NewAcl == NULL, "NewAcl=%p, expected NULL\n", NewAcl);
+    LocalFree(NewAcl);
+
+    OldAcl = malloc(256);
+    res = InitializeAcl(OldAcl, 256, ACL_REVISION);
+    if(!res && GetLastError() == ERROR_CALL_NOT_IMPLEMENTED)
+    {
+        win_skip("ACLs not implemented - skipping tests\n");
+        free(OldAcl);
+        return;
+    }
+    ok(res, "InitializeAcl failed with error %ld\n", GetLastError());
+
+    res = AllocateAndInitializeSid( &SIDAuthWorld, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &EveryoneSid);
+    ok(res, "AllocateAndInitializeSid failed with error %ld\n", GetLastError());
+
+    res = AllocateAndInitializeSid( &SIDAuthNT, 2, SECURITY_BUILTIN_DOMAIN_RID,
+        DOMAIN_ALIAS_RID_USERS, 0, 0, 0, 0, 0, 0, &UsersSid);
+    ok(res, "AllocateAndInitializeSid failed with error %ld\n", GetLastError());
+#endif
+
+#ifdef __REACTOS__
+    ret = IsValidAcl(acl);
+    ok(ret, "Constructor returned an invalid ACL.\n");
+    if (!ret) return;
+    ok(acl->AceCount == 1, "Expected one ACE, got %u.\n", acl->AceCount);
+    if (acl->AceCount != 1) return;
+    ret = GetAce(acl, 0, (void **)&ace);
+    ok(ret, "GetAce failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ok(ace->Header.AceType == type, "ACE type %#x, expected %#x.\n", ace->Header.AceType, type);
+    ok(ace->Header.AceFlags == flags, "ACE flags %#x, expected %#x.\n", ace->Header.AceFlags, flags);
+    ok(ace->Header.AceSize == FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(sid),
+       "Unexpected ACE size %u.\n", ace->Header.AceSize);
+    if (ace->Header.AceType != type ||
+        ace->Header.AceSize < FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(sid)) return;
+    ok(ace->Mask == mask, "ACE mask %#lx, expected %#lx.\n", ace->Mask, mask);
+    ok(EqualSid(&ace->SidStart, sid), "Constructor changed the trustee SID.\n");
+}
+#else
+    res = AddAccessAllowedAce(OldAcl, ACL_REVISION, KEY_READ, UsersSid);
+    ok(res, "AddAccessAllowedAce failed with error %ld\n", GetLastError());
+#endif
+
+#ifdef __REACTOS__
+static void check_acl_audit_roundtrip(PACL acl, PSID sid)
+{
+    SYSTEM_AUDIT_ACE *ace;
+    DWORD i, flags = 0;
+    BOOL ret;
+#else
+    ExplicitAccess.grfAccessPermissions = KEY_WRITE;
+    ExplicitAccess.grfAccessMode = GRANT_ACCESS;
+    ExplicitAccess.grfInheritance = NO_INHERITANCE;
+    ExplicitAccess.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ExplicitAccess.Trustee.ptstrName = EveryoneSid;
+    ExplicitAccess.Trustee.MultipleTrusteeOperation = 0xDEADBEEF;
+    ExplicitAccess.Trustee.pMultipleTrustee = (PVOID)0xDEADBEEF;
+    res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
+    ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
+    ok(NewAcl != NULL, "returned acl was NULL\n");
+    LocalFree(NewAcl);
+#endif
+
+#ifdef __REACTOS__
+    ret = IsValidAcl(acl);
+    ok(ret, "Audit round trip returned an invalid ACL.\n");
+    if (!ret) return;
+    for (i = 0; i < acl->AceCount; ++i)
+    {
+        ret = GetAce(acl, i, (void **)&ace);
+        ok(ret, "GetAce(%lu) failed: %lu.\n", i, GetLastError());
+        if (!ret) continue;
+        ok(ace->Header.AceType == SYSTEM_AUDIT_ACE_TYPE, "Unexpected audit ACE type %#x.\n", ace->Header.AceType);
+        if (ace->Header.AceType != SYSTEM_AUDIT_ACE_TYPE ||
+            ace->Header.AceSize < FIELD_OFFSET(SYSTEM_AUDIT_ACE, SidStart) + GetLengthSid(sid)) continue;
+        ok(ace->Mask == FILE_READ_DATA, "Unexpected audit mask %#lx.\n", ace->Mask);
+        ok(EqualSid(&ace->SidStart, sid), "Audit round trip changed trustee.\n");
+        ok((ace->Header.AceFlags & OBJECT_INHERIT_ACE) != 0, "Audit round trip dropped inheritance.\n");
+        if (ace->Mask == FILE_READ_DATA && EqualSid(&ace->SidStart, sid))
+            flags |= ace->Header.AceFlags & (SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG);
+    }
+    ok(flags == (SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG),
+       "Audit round trip retained flags %#lx.\n", flags);
+}
+#else
+    ExplicitAccess.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+    ExplicitAccess.Trustee.pMultipleTrustee = NULL;
+    ExplicitAccess.Trustee.MultipleTrusteeOperation = NO_MULTIPLE_TRUSTEE;
+    res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
+    ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
+    ok(NewAcl != NULL, "returned acl was NULL\n");
+    LocalFree(NewAcl);
+#endif
+
+#ifdef __REACTOS__
+static void test_acl_constructor_output(void)
+{
+    static const struct
+#else
+    if (PRIMARYLANGID(GetSystemDefaultLangID()) != LANG_ENGLISH)
+#endif
+    {
+#ifdef __REACTOS__
+        ACCESS_MODE mode;
+        BYTE type, audit_flags;
+    } cases[] =
+#else
+        skip("Non-English locale (test with hardcoded 'Everyone')\n");
+    }
+    else
+#endif
+    {
+#ifdef __REACTOS__
+        {GRANT_ACCESS, ACCESS_ALLOWED_ACE_TYPE, 0},
+        {SET_ACCESS, ACCESS_ALLOWED_ACE_TYPE, 0},
+        {DENY_ACCESS, ACCESS_DENIED_ACE_TYPE, 0},
+        {SET_AUDIT_SUCCESS, SYSTEM_AUDIT_ACE_TYPE, SUCCESSFUL_ACCESS_ACE_FLAG},
+        {SET_AUDIT_FAILURE, SYSTEM_AUDIT_ACE_TYPE, FAILED_ACCESS_ACE_FLAG}
+    };
+    static const BYTE inheritance[] =
+    {
+        0,
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE | NO_PROPAGATE_INHERIT_ACE
+    };
+    static const GUID object_guid = {0xbf967a86, 0x0de6, 0x11d0, {0xa2,0x85,0x00,0xaa,0x00,0x30,0x49,0xe2}};
+    static const GUID inherited_guid = {0xbf967aba, 0x0de6, 0x11d0, {0xa2,0x85,0x00,0xaa,0x00,0x30,0x49,0xe2}};
+    SID everyone = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    union { DWORD align; BYTE bytes[128]; } audit_buffer;
+    EXPLICIT_ACCESSW entry, *entries_w = NULL;
+    EXPLICIT_ACCESSA entry_a, *entries_a = NULL;
+    ACCESS_ALLOWED_OBJECT_ACE *object_ace;
+    OBJECTS_AND_SID objects;
+    PACL acl = NULL, audit = (PACL)audit_buffer.bytes;
+    DWORD i, j, res, count;
+    BOOL ret;
+#else
+        ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
+        ExplicitAccess.Trustee.ptstrName = (WCHAR *)L"Everyone";
+        res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
+        ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
+        ok(NewAcl != NULL, "returned acl was NULL\n");
+        LocalFree(NewAcl);
+
+        ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_BAD_FORM;
+        res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
+        ok(res == ERROR_INVALID_PARAMETER,
+            "SetEntriesInAclW failed: %lu\n", res);
+        ok(NewAcl == NULL,
+            "returned acl wasn't NULL: %p\n", NewAcl);
+
+        ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
+        ExplicitAccess.Trustee.MultipleTrusteeOperation = TRUSTEE_IS_IMPERSONATE;
+        res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
+        ok(res == ERROR_INVALID_PARAMETER,
+            "SetEntriesInAclW failed: %lu\n", res);
+        ok(NewAcl == NULL,
+            "returned acl wasn't NULL: %p\n", NewAcl);
+#endif
+
+#ifdef __REACTOS__
+    for (i = 0; i < ARRAY_SIZE(cases); ++i)
+    {
+        for (j = 0; j < ARRAY_SIZE(inheritance); ++j)
+        {
+            winetest_push_context("constructor mode %u inheritance %#x", cases[i].mode, inheritance[j]);
+            memset(&entry, 0, sizeof(entry));
+            entry.grfAccessPermissions = FILE_READ_DATA;
+            entry.grfAccessMode = cases[i].mode;
+            entry.grfInheritance = inheritance[j];
+            BuildTrusteeWithSidW(&entry.Trustee, &everyone);
+            res = SetEntriesInAclW(1, &entry, NULL, &acl);
+            ok(res == ERROR_SUCCESS && acl, "SetEntriesInAclW returned %lu, ACL %p.\n", res, acl);
+            if (!res && acl)
+                check_acl_constructor_ace(acl, cases[i].type, inheritance[j] | cases[i].audit_flags,
+                                          FILE_READ_DATA, &everyone);
+            LocalFree(acl);
+            acl = NULL;
+
+            memset(&entry_a, 0, sizeof(entry_a));
+            entry_a.grfAccessPermissions = entry.grfAccessPermissions;
+            entry_a.grfAccessMode = entry.grfAccessMode;
+            entry_a.grfInheritance = entry.grfInheritance;
+            BuildTrusteeWithSidA(&entry_a.Trustee, &everyone);
+            res = SetEntriesInAclA(1, &entry_a, NULL, &acl);
+            ok(res == ERROR_SUCCESS && acl, "SetEntriesInAclA returned %lu, ACL %p.\n", res, acl);
+            if (!res && acl)
+                check_acl_constructor_ace(acl, cases[i].type, inheritance[j] | cases[i].audit_flags,
+                                          FILE_READ_DATA, &everyone);
+            LocalFree(acl);
+            acl = NULL;
+            winetest_pop_context();
+        }
+#else
+        ExplicitAccess.Trustee.MultipleTrusteeOperation = NO_MULTIPLE_TRUSTEE;
+        ExplicitAccess.grfAccessMode = SET_ACCESS;
+        res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
+        ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
+        ok(NewAcl != NULL, "returned acl was NULL\n");
+        LocalFree(NewAcl);
+#endif
+    }
+
+#ifdef __REACTOS__
+    memset(&objects, 0, sizeof(objects));
+    objects.ObjectsPresent = ACE_OBJECT_TYPE_PRESENT | ACE_INHERITED_OBJECT_TYPE_PRESENT;
+    objects.ObjectTypeGuid = object_guid;
+    objects.InheritedObjectTypeGuid = inherited_guid;
+    objects.pSid = &everyone;
+    memset(&entry, 0, sizeof(entry));
+    entry.grfAccessPermissions = FILE_READ_DATA;
+    entry.grfAccessMode = GRANT_ACCESS;
+    entry.grfInheritance = CONTAINER_INHERIT_ACE;
+    entry.Trustee.TrusteeForm = TRUSTEE_IS_OBJECTS_AND_SID;
+    entry.Trustee.ptstrName = (WCHAR *)&objects;
+    res = SetEntriesInAclW(1, &entry, NULL, &acl);
+    ok(res == ERROR_SUCCESS && acl, "Object ACE construction returned %lu, ACL %p.\n", res, acl);
+    if (!res && acl && IsValidAcl(acl))
+    {
+        ok(acl->AclRevision == ACL_REVISION_DS, "Object ACL revision is %u.\n", acl->AclRevision);
+        ok(acl->AceCount == 1, "Object ACL contains %u ACEs.\n", acl->AceCount);
+        ret = GetAce(acl, 0, (void **)&object_ace);
+        ok(ret, "GetAce failed: %lu.\n", GetLastError());
+        if (ret && object_ace->Header.AceSize >= FIELD_OFFSET(ACCESS_ALLOWED_OBJECT_ACE, SidStart) + GetLengthSid(&everyone))
+        {
+            ok(object_ace->Header.AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE,
+               "Object ACE type is %#x.\n", object_ace->Header.AceType);
+            ok(object_ace->Header.AceFlags == CONTAINER_INHERIT_ACE, "Object ACE flags are %#x.\n", object_ace->Header.AceFlags);
+            ok(object_ace->Mask == FILE_READ_DATA, "Object ACE mask is %#lx.\n", object_ace->Mask);
+            ok(object_ace->Flags == objects.ObjectsPresent, "Object presence flags are %#lx.\n", object_ace->Flags);
+            ok(!memcmp(&object_ace->ObjectType, &object_guid, sizeof(GUID)), "Object GUID changed.\n");
+            ok(!memcmp(&object_ace->InheritedObjectType, &inherited_guid, sizeof(GUID)), "Inherited object GUID changed.\n");
+            ok(EqualSid(&object_ace->SidStart, &everyone), "Object ACE trustee changed.\n");
+        }
+        else if (ret)
+            ok(0, "Object ACE is too short: %u.\n", object_ace->Header.AceSize);
+    }
+    else if (!res && acl)
+        ok(0, "Object ACL is invalid.\n");
+    LocalFree(acl);
+    acl = NULL;
+#else
+    ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
+    ExplicitAccess.Trustee.ptstrName = (WCHAR *)L"CURRENT_USER";
+    res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
+    ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
+    ok(NewAcl != NULL, "returned acl was NULL\n");
+    LocalFree(NewAcl);
+
+    ExplicitAccess.grfAccessMode = REVOKE_ACCESS;
+    ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ExplicitAccess.Trustee.ptstrName = UsersSid;
+    res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
+    ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
+    ok(NewAcl != NULL, "returned acl was NULL\n");
+    LocalFree(NewAcl);
+#endif
+
+#ifdef __REACTOS__
+    ret = InitializeAcl(audit, sizeof(audit_buffer), ACL_REVISION);
+    ok(ret, "InitializeAcl failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = AddAuditAccessAceEx(audit, ACL_REVISION, OBJECT_INHERIT_ACE, FILE_READ_DATA, &everyone, TRUE, TRUE);
+    ok(ret, "AddAuditAccessAceEx failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    count = 0;
+    res = GetExplicitEntriesFromAclW(audit, &count, &entries_w);
+    ok(res == ERROR_SUCCESS && count && entries_w, "Audit extraction W returned %lu, count %lu.\n", res, count);
+    if (!res && count && entries_w)
+    {
+        trace("Audit extraction W: count %lu, first mode %#lx, second mode %#lx.\n",
+              count, (DWORD)entries_w[0].grfAccessMode, count > 1 ? (DWORD)entries_w[1].grfAccessMode : 0);
+        ok(count == 2, "Dual audit extraction W returned %lu entries.\n", count);
+        if (count == 2)
+            ok(entries_w[0].grfAccessMode == SET_AUDIT_SUCCESS && entries_w[1].grfAccessMode == SET_AUDIT_FAILURE,
+               "Dual audit extraction W modes are %#lx, %#lx.\n",
+               (DWORD)entries_w[0].grfAccessMode, (DWORD)entries_w[1].grfAccessMode);
+        res = SetEntriesInAclW(count, entries_w, NULL, &acl);
+        ok(res == ERROR_SUCCESS && acl, "Audit reconstruction W returned %lu, ACL %p.\n", res, acl);
+        if (!res && acl) check_acl_audit_roundtrip(acl, &everyone);
+    }
+    LocalFree(entries_w);
+    LocalFree(acl);
+    acl = NULL;
+    count = 0;
+    res = GetExplicitEntriesFromAclA(audit, &count, &entries_a);
+    ok(res == ERROR_SUCCESS && count && entries_a, "Audit extraction A returned %lu, count %lu.\n", res, count);
+    if (!res && count && entries_a)
+    {
+        trace("Audit extraction A: count %lu, first mode %#lx, second mode %#lx.\n",
+              count, (DWORD)entries_a[0].grfAccessMode, count > 1 ? (DWORD)entries_a[1].grfAccessMode : 0);
+        ok(count == 2, "Dual audit extraction A returned %lu entries.\n", count);
+        if (count == 2)
+            ok(entries_a[0].grfAccessMode == SET_AUDIT_SUCCESS && entries_a[1].grfAccessMode == SET_AUDIT_FAILURE,
+               "Dual audit extraction A modes are %#lx, %#lx.\n",
+               (DWORD)entries_a[0].grfAccessMode, (DWORD)entries_a[1].grfAccessMode);
+        res = SetEntriesInAclA(count, entries_a, NULL, &acl);
+        ok(res == ERROR_SUCCESS && acl, "Audit reconstruction A returned %lu, ACL %p.\n", res, acl);
+        if (!res && acl) check_acl_audit_roundtrip(acl, &everyone);
+    }
+    LocalFree(entries_a);
+    LocalFree(acl);
+
+    ret = InitializeAcl(audit, sizeof(audit_buffer), ACL_REVISION_DS);
+    ok(ret, "InitializeAcl(object audit) failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = AddAuditAccessObjectAce(audit, ACL_REVISION_DS, OBJECT_INHERIT_ACE, FILE_READ_DATA,
+                                 &objects.ObjectTypeGuid, &objects.InheritedObjectTypeGuid, &everyone, TRUE, TRUE);
+    ok(ret, "AddAuditAccessObjectAce failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    count = 0;
+    entries_w = NULL;
+    res = GetExplicitEntriesFromAclW(audit, &count, &entries_w);
+    trace("Object audit extraction W: error %lu, count %lu.\n", res, count);
+    ok(res == ERROR_SUCCESS && count == 2 && entries_w,
+       "Object audit extraction W returned %lu, count %lu.\n", res, count);
+    if (!res && count && entries_w)
+    {
+        trace("Object audit extraction W: first mode %#lx, second mode %#lx, trustee form %u.\n",
+              (DWORD)entries_w[0].grfAccessMode, count > 1 ? (DWORD)entries_w[1].grfAccessMode : 0,
+              entries_w[0].Trustee.TrusteeForm);
+        if (count == 2)
+        {
+            ok(entries_w[0].grfAccessMode == SET_AUDIT_SUCCESS && entries_w[1].grfAccessMode == SET_AUDIT_FAILURE,
+               "Object audit extraction W modes are %#lx, %#lx.\n",
+               (DWORD)entries_w[0].grfAccessMode, (DWORD)entries_w[1].grfAccessMode);
+            ok(entries_w[0].Trustee.TrusteeForm == TRUSTEE_IS_OBJECTS_AND_SID &&
+               entries_w[1].Trustee.TrusteeForm == TRUSTEE_IS_OBJECTS_AND_SID,
+               "Object audit extraction W forms are %u, %u.\n",
+               entries_w[0].Trustee.TrusteeForm, entries_w[1].Trustee.TrusteeForm);
+        }
+    }
+    LocalFree(entries_w);
+    count = 0;
+    entries_a = NULL;
+    res = GetExplicitEntriesFromAclA(audit, &count, &entries_a);
+    trace("Object audit extraction A: error %lu, count %lu.\n", res, count);
+    ok(res == ERROR_SUCCESS && count == 2 && entries_a,
+       "Object audit extraction A returned %lu, count %lu.\n", res, count);
+    if (!res && count && entries_a)
+    {
+        trace("Object audit extraction A: first mode %#lx, second mode %#lx, trustee form %u.\n",
+              (DWORD)entries_a[0].grfAccessMode, count > 1 ? (DWORD)entries_a[1].grfAccessMode : 0,
+              entries_a[0].Trustee.TrusteeForm);
+        if (count == 2)
+        {
+            ok(entries_a[0].grfAccessMode == SET_AUDIT_SUCCESS && entries_a[1].grfAccessMode == SET_AUDIT_FAILURE,
+               "Object audit extraction A modes are %#lx, %#lx.\n",
+               (DWORD)entries_a[0].grfAccessMode, (DWORD)entries_a[1].grfAccessMode);
+            ok(entries_a[0].Trustee.TrusteeForm == TRUSTEE_IS_OBJECTS_AND_SID &&
+               entries_a[1].Trustee.TrusteeForm == TRUSTEE_IS_OBJECTS_AND_SID,
+               "Object audit extraction A forms are %u, %u.\n",
+               entries_a[0].Trustee.TrusteeForm, entries_a[1].Trustee.TrusteeForm);
+        }
+    }
+    LocalFree(entries_a);
+#else
+    FreeSid(UsersSid);
+    FreeSid(EveryoneSid);
+    free(OldAcl);
+#endif
+}
+
+#ifdef __REACTOS__
+static BOOL check_acl_file_access(PSECURITY_DESCRIPTOR sd, HANDLE token, DWORD desired, BOOL expected)
+#else
+static void test_SetEntriesInAclA(void)
+#endif
+{
+#ifdef __REACTOS__
+    GENERIC_MAPPING mapping = {FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
+    PRIVILEGE_SET privileges;
+    DWORD size = sizeof(privileges), granted = 0xdeadbeef;
+    BOOL ret, access = !expected;
+
+    MapGenericMask(&desired, &mapping);
+    ret = AccessCheck(sd, token, desired, &mapping, &privileges, &size, &granted, &access);
+    ok(ret, "AccessCheck(%#lx) failed: %lu.\n", desired, GetLastError());
+    if (!ret) return FALSE;
+    ok(access == expected, "AccessCheck(%#lx) returned %d, expected %d.\n", desired, access, expected);
+    ok(granted == (expected ? desired : 0), "AccessCheck(%#lx) granted %#lx.\n", desired, granted);
+    ok(!privileges.PrivilegeCount, "Data access used %lu privileges.\n", privileges.PrivilegeCount);
+    return TRUE;
+}
+#else
+    DWORD res;
+    PSID EveryoneSid = NULL, UsersSid = NULL;
+    PACL OldAcl = NULL, NewAcl;
+    SID_IDENTIFIER_AUTHORITY SIDAuthWorld = { SECURITY_WORLD_SID_AUTHORITY };
+    SID_IDENTIFIER_AUTHORITY SIDAuthNT = { SECURITY_NT_AUTHORITY };
+    EXPLICIT_ACCESSA ExplicitAccess;
+
+    NewAcl = (PACL)0xdeadbeef;
+    res = SetEntriesInAclA(0, NULL, NULL, &NewAcl);
+    if(res == ERROR_CALL_NOT_IMPLEMENTED)
+    {
+        win_skip("SetEntriesInAclA is not implemented\n");
+        return;
+    }
+    ok(res == ERROR_SUCCESS, "SetEntriesInAclA failed: %lu\n", res);
+    ok(NewAcl == NULL,
+        "NewAcl=%p, expected NULL\n", NewAcl);
+    LocalFree(NewAcl);
+#endif
+
+#ifdef __REACTOS__
+static BOOL check_acl_file_enforcement(HANDLE file, const char *path, HANDLE token,
+                                      HANDLE previous_token, PSID sid, BOOL deny_present, BOOL denied, BOOL protected, BOOL explicit_allow)
+{
+    PSECURITY_DESCRIPTOR sd = NULL;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    ACCESS_ALLOWED_ACE *ace;
+    HANDLE reopened;
+    PACL dacl = NULL;
+    DWORD res, revision, i, inherited_deny = 0, error, explicit_write = 0;
+    BOOL ret, restored, inherited_seen = FALSE;
+
+    res = GetSecurityInfo(file, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                          DACL_SECURITY_INFORMATION, NULL, NULL, &dacl, NULL, &sd);
+    ok(res == ERROR_SUCCESS && sd && dacl, "GetSecurityInfo returned %lu, SD %p, DACL %p.\n", res, sd, dacl);
+    if (res || !sd || !dacl) goto done;
+    ret = GetSecurityDescriptorControl(sd, &control, &revision);
+    ok(ret, "GetSecurityDescriptorControl failed: %lu.\n", GetLastError());
+    if (ret) ok(!!(control & SE_DACL_PROTECTED) == protected, "Unexpected DACL protection %#x.\n", control);
+    ret = IsValidAcl(dacl);
+    ok(ret, "File DACL is invalid.\n");
+    if (!ret) goto done;
+    for (i = 0; i < dacl->AceCount; ++i)
+    {
+        ret = GetAce(dacl, i, (void **)&ace);
+        ok(ret, "GetAce(%lu) failed: %lu.\n", i, GetLastError());
+        if (!ret) continue;
+        if (ace->Header.AceFlags & INHERITED_ACE) inherited_seen = TRUE;
+        else ok(!inherited_seen, "Explicit ACE %lu follows an inherited ACE.\n", i);
+        if ((ace->Header.AceType != ACCESS_DENIED_ACE_TYPE && ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE) ||
+            ace->Header.AceSize < FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(sid)) continue;
+        if (ace->Mask == FILE_WRITE_DATA && EqualSid(&ace->SidStart, sid))
+        {
+            if (ace->Header.AceType == ACCESS_DENIED_ACE_TYPE)
+            {
+                ++inherited_deny;
+                ok(ace->Header.AceFlags == INHERITED_ACE, "File deny flags are %#x.\n", ace->Header.AceFlags);
+            }
+            else if (!ace->Header.AceFlags) ++explicit_write;
+        }
+#else
+    OldAcl = malloc(256);
+    res = InitializeAcl(OldAcl, 256, ACL_REVISION);
+    if(!res && GetLastError() == ERROR_CALL_NOT_IMPLEMENTED)
+    {
+        win_skip("ACLs not implemented - skipping tests\n");
+        free(OldAcl);
+        return;
+#endif
+    }
+#ifdef __REACTOS__
+    ok(inherited_deny == !!deny_present, "File contains %lu inherited denies, expected %u.\n", inherited_deny, !!deny_present);
+    ok(explicit_write == !!explicit_allow, "Explicit write allow count is %lu, expected %u.\n", explicit_write, !!explicit_allow);
+    check_acl_file_access(sd, token, GENERIC_READ, TRUE);
+    check_acl_file_access(sd, token, FILE_WRITE_DATA, !denied);
+    check_acl_file_access(sd, token, FILE_READ_DATA | FILE_WRITE_DATA, !denied);
+#else
+    ok(res, "InitializeAcl failed with error %ld\n", GetLastError());
+#endif
+
+#ifdef __REACTOS__
+    ret = SetThreadToken(NULL, token);
+    ok(ret, "SetThreadToken failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    reopened = CreateFileA(path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    error = GetLastError();
+    restored = SetThreadToken(NULL, previous_token);
+    ok(restored, "Thread token restoration failed: %lu.\n", GetLastError());
+    ok(reopened != INVALID_HANDLE_VALUE, "Read reopen failed: %lu.\n", error);
+    if (reopened != INVALID_HANDLE_VALUE) CloseHandle(reopened);
+    if (!restored) { LocalFree(sd); return FALSE; }
+#else
+    res = AllocateAndInitializeSid( &SIDAuthWorld, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &EveryoneSid);
+    ok(res, "AllocateAndInitializeSid failed with error %ld\n", GetLastError());
+#endif
+
+#ifdef __REACTOS__
+    ret = SetThreadToken(NULL, token);
+    ok(ret, "SetThreadToken failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    reopened = CreateFileA(path, FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    error = GetLastError();
+    restored = SetThreadToken(NULL, previous_token);
+    ok(restored, "Thread token restoration failed: %lu.\n", GetLastError());
+    if (denied)
+        ok(reopened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+           "Write reopen returned %p, error %lu; expected access denied.\n", reopened, error);
+    else
+        ok(reopened != INVALID_HANDLE_VALUE, "Write reopen failed: %lu.\n", error);
+    if (reopened != INVALID_HANDLE_VALUE) CloseHandle(reopened);
+    if (!restored) { LocalFree(sd); return FALSE; }
+#else
+    res = AllocateAndInitializeSid( &SIDAuthNT, 2, SECURITY_BUILTIN_DOMAIN_RID,
+        DOMAIN_ALIAS_RID_USERS, 0, 0, 0, 0, 0, 0, &UsersSid);
+    ok(res, "AllocateAndInitializeSid failed with error %ld\n", GetLastError());
+#endif
+
+#ifdef __REACTOS__
+done:
+    LocalFree(sd);
+    return TRUE;
+}
+
+static void check_acl_public_access_checks(HANDLE token)
+{
+    BOOL (WINAPI *check_by_type)(PSECURITY_DESCRIPTOR, PSID, HANDLE, DWORD, POBJECT_TYPE_LIST, DWORD,
+                                 PGENERIC_MAPPING, PPRIVILEGE_SET, LPDWORD, LPDWORD, LPBOOL);
+    BOOL (WINAPI *check_result_list)(PSECURITY_DESCRIPTOR, PSID, HANDLE, DWORD, POBJECT_TYPE_LIST, DWORD,
+                                     PGENERIC_MAPPING, PPRIVILEGE_SET, LPDWORD, LPDWORD, LPDWORD);
+    GUID object = {0xbf967aba, 0x0de6, 0x11d0, {0xa2,0x85,0x00,0xaa,0x00,0x30,0x49,0xe2}};
+    GUID personal = {0x77b5b886, 0x944a, 0x11d1, {0xae,0xbd,0x00,0x00,0xf8,0x03,0x67,0xc1}};
+    GUID general = {0x59ba2f42, 0x79a2, 0x11d0, {0x90,0x20,0x00,0xc0,0x4f,0xc2,0xd3,0xcf}};
+    OBJECT_TYPE_LIST objects[] = {{ACCESS_OBJECT_GUID, 0, &object}, {ACCESS_PROPERTY_SET_GUID, 0, &personal},
+                                  {ACCESS_PROPERTY_SET_GUID, 0, &general}};
+    GENERIC_MAPPING mapping = {FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
+    GENERIC_MAPPING ds_mapping = {READ_CONTROL | ADS_RIGHT_DS_READ_PROP, READ_CONTROL | ADS_RIGHT_DS_WRITE_PROP,
+                                  READ_CONTROL, STANDARD_RIGHTS_ALL | ADS_RIGHT_DS_READ_PROP | ADS_RIGHT_DS_WRITE_PROP};
+    SID everyone = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    SECURITY_DESCRIPTOR sd;
+    ACL empty;
+    union { DWORD align; BYTE bytes[256]; } mixed_buffer;
+    PACL mixed = (PACL)mixed_buffer.bytes;
+    PRIVILEGE_SET privileges;
+    DWORD grants[ARRAY_SIZE(objects)], statuses[ARRAY_SIZE(objects)], size, i, j, error, granted, scalar_granted;
+    BOOL ret, access, scalar_access, scalar_ret;
+
+    check_by_type = (void *)GetProcAddress(hmod, "AccessCheckByType");
+    check_result_list = (void *)GetProcAddress(hmod, "AccessCheckByTypeResultList");
+    ok(!!check_by_type, "AccessCheckByType export is missing.\n");
+    ok(!!check_result_list, "AccessCheckByTypeResultList export is missing.\n");
+    if (!check_by_type || !check_result_list) return;
+    ret = InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorOwner(&sd, &everyone, FALSE) &&
+          SetSecurityDescriptorGroup(&sd, &everyone, FALSE) &&
+          InitializeAcl(&empty, sizeof(empty), ACL_REVISION);
+    ok(ret, "Public access descriptor initialization failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    for (i = 0; i < 3; ++i)
+    {
+        winetest_push_context("public %s DACL", i == 0 ? "NULL" : i == 1 ? "absent" : "empty");
+        ret = SetSecurityDescriptorDacl(&sd, i != 1, i == 2 ? &empty : NULL, FALSE);
+        ok(ret, "SetSecurityDescriptorDacl failed: %lu.\n", GetLastError());
+        if (!ret) { winetest_pop_context(); return; }
+        granted = 0xdeadbeef;
+        access = i == 2;
+        memset(&privileges, 0xcc, sizeof(privileges));
+        size = sizeof(privileges);
+        SetLastError(0xdeadbeef);
+        ret = check_by_type(&sd, NULL, token, FILE_READ_DATA, objects, 2, &mapping,
+                            &privileges, &size, &granted, &access);
+        error = GetLastError();
+        ok(ret, "AccessCheckByType failed: %lu.\n", error);
+        if (ret)
+        {
+            ok(!!access == (i != 2), "Scalar access is %d, expected %d.\n", access, i != 2);
+            ok(granted == (i == 2 ? 0 : FILE_READ_DATA), "Scalar grant is %#lx.\n", granted);
+            ok(!privileges.PrivilegeCount, "Scalar data access used %lu privileges.\n", privileges.PrivilegeCount);
+        }
+        for (j = 0; j < ARRAY_SIZE(objects); ++j)
+        {
+            grants[j] = 0xdeadbeef;
+            statuses[j] = 0xdeadbeef;
+        }
+        memset(&privileges, 0xcc, sizeof(privileges));
+        size = sizeof(privileges);
+        SetLastError(0xdeadbeef);
+        ret = check_result_list(&sd, NULL, token, FILE_READ_DATA, objects, 2, &mapping,
+                                &privileges, &size, grants, statuses);
+        error = GetLastError();
+        ok(grants[2] == 0xdeadbeef && statuses[2] == 0xdeadbeef, "Two-entry list API overwrote the guard entry.\n");
+        ok(ret, "AccessCheckByTypeResultList failed: %lu.\n", error);
+        if (ret)
+        {
+            for (j = 0; j < 2; ++j)
+            {
+                ok(grants[j] == (i == 2 ? 0 : FILE_READ_DATA), "List entry %lu grant is %#lx.\n", j, grants[j]);
+                ok(statuses[j] == (i == 2 ? ERROR_ACCESS_DENIED : ERROR_SUCCESS),
+                   "List entry %lu Win32 status is %#lx.\n", j, statuses[j]);
+            }
+            ok(!privileges.PrivilegeCount, "List data access used %lu privileges.\n", privileges.PrivilegeCount);
+        }
+        scalar_granted = 0xdeadbeef;
+        scalar_access = i == 2;
+        memset(&privileges, 0xcc, sizeof(privileges));
+        size = sizeof(privileges);
+        scalar_ret = AccessCheck(&sd, token, FILE_READ_DATA, &mapping, &privileges, &size, &scalar_granted, &scalar_access);
+        error = GetLastError();
+        ok(scalar_ret, "AccessCheck failed: %lu.\n", error);
+        granted = 0xdeadbeef;
+        access = i == 2;
+        memset(&privileges, 0xcc, sizeof(privileges));
+        size = sizeof(privileges);
+        ret = check_by_type(&sd, NULL, token, FILE_READ_DATA, NULL, 0, &mapping,
+                            &privileges, &size, &granted, &access);
+        error = GetLastError();
+        ok(!!ret == !!scalar_ret, "No-list return %d differs from AccessCheck %d, error %lu.\n", ret, scalar_ret, error);
+        if (ret && scalar_ret)
+        {
+            ok(!!access == !!scalar_access && !!access == (i != 2), "No-list access %d, AccessCheck %d.\n", access, scalar_access);
+            ok(granted == scalar_granted && granted == (i == 2 ? 0 : FILE_READ_DATA),
+               "No-list grant %#lx, AccessCheck %#lx.\n", granted, scalar_granted);
+            ok(!privileges.PrivilegeCount, "No-list data access used %lu privileges.\n", privileges.PrivilegeCount);
+        }
+        winetest_pop_context();
+    }
+
+    for (i = 0; i < 3; ++i)
+    {
+        winetest_push_context("public missing %s", i == 0 ? "owner" : i == 1 ? "group" : "owner and group");
+        ret = SetSecurityDescriptorOwner(&sd, i == 1 ? &everyone : NULL, FALSE) &&
+              SetSecurityDescriptorGroup(&sd, i == 0 ? &everyone : NULL, FALSE);
+        ok(ret, "Incomplete descriptor setup failed: %lu.\n", GetLastError());
+        if (!ret) { winetest_pop_context(); return; }
+        granted = 0xdeadbeef;
+        access = 0x12345678;
+        memset(&privileges, 0xcc, sizeof(privileges));
+        size = sizeof(privileges);
+        SetLastError(0xdeadbeef);
+        ret = check_by_type(&sd, NULL, token, FILE_READ_DATA, objects, 2, &mapping,
+                            &privileges, &size, &granted, &access);
+        error = GetLastError();
+        ok(!ret && error == ERROR_INVALID_SECURITY_DESCR, "Invalid descriptor returned %d, error %lu.\n", ret, error);
+        ok(granted == 0xdeadbeef, "Failed scalar API overwrote grant %#lx.\n", granted);
+        trace("Incomplete descriptor scalar BOOL output %#x.\n", access);
+        for (j = 0; j < ARRAY_SIZE(objects); ++j)
+        {
+            grants[j] = 0xdeadbeef;
+            statuses[j] = 0xdeadbeef;
+        }
+        memset(&privileges, 0xcc, sizeof(privileges));
+        size = sizeof(privileges);
+        SetLastError(0xdeadbeef);
+        ret = check_result_list(&sd, NULL, token, FILE_READ_DATA, objects, 2, &mapping,
+                                &privileges, &size, grants, statuses);
+        error = GetLastError();
+        ok(grants[2] == 0xdeadbeef && statuses[2] == 0xdeadbeef, "Failed two-entry list API overwrote the guard entry.\n");
+        ok(!ret && error == ERROR_INVALID_SECURITY_DESCR, "Invalid list descriptor returned %d, error %lu.\n", ret, error);
+        for (j = 0; j < 2; ++j)
+        {
+            ok(grants[j] == 0xdeadbeef, "Failed list API overwrote entry %lu grant %#lx.\n", j, grants[j]);
+            ok(statuses[j] == 0xdeadbeef, "Failed list API overwrote entry %lu status %#lx.\n", j, statuses[j]);
+        }
+        winetest_pop_context();
+    }
+
+    ret = SetSecurityDescriptorOwner(&sd, &everyone, FALSE) &&
+          SetSecurityDescriptorGroup(&sd, &everyone, FALSE) &&
+          InitializeAcl(mixed, sizeof(mixed_buffer), ACL_REVISION_DS) &&
+          AddAccessDeniedObjectAce(mixed, ACL_REVISION_DS, 0, ADS_RIGHT_DS_READ_PROP, &personal, NULL, &everyone) &&
+          AddAccessAllowedObjectAce(mixed, ACL_REVISION_DS, 0, ADS_RIGHT_DS_READ_PROP, &object, NULL, &everyone) &&
+          SetSecurityDescriptorDacl(&sd, TRUE, mixed, FALSE);
+    ok(ret, "Mixed hierarchy setup failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    winetest_push_context("public mixed property sets");
+    for (j = 0; j < ARRAY_SIZE(objects); ++j)
+    {
+        grants[j] = 0xdeadbeef;
+        statuses[j] = 0xdeadbeef;
+    }
+    memset(&privileges, 0xcc, sizeof(privileges));
+    size = sizeof(privileges);
+    SetLastError(0xdeadbeef);
+    ret = check_result_list(&sd, NULL, token, ADS_RIGHT_DS_READ_PROP, objects, ARRAY_SIZE(objects), &ds_mapping,
+                            &privileges, &size, grants, statuses);
+    error = GetLastError();
+    ok(ret, "Mixed result-list check failed: %lu.\n", error);
+    if (ret)
+    {
+        ok(grants[0] != 0xdeadbeef && statuses[0] != 0xdeadbeef, "Root result was not initialized.\n");
+        trace("Mixed root grant %#lx, status %#lx.\n", grants[0], statuses[0]);
+        ok(grants[1] == 0 && statuses[1] == ERROR_ACCESS_DENIED,
+           "Denied property set grant %#lx, Win32 status %#lx.\n", grants[1], statuses[1]);
+        ok(grants[2] == ADS_RIGHT_DS_READ_PROP && statuses[2] == ERROR_SUCCESS,
+           "Allowed property set grant %#lx, Win32 status %#lx.\n", grants[2], statuses[2]);
+        ok(!privileges.PrivilegeCount, "Mixed property access used %lu privileges.\n", privileges.PrivilegeCount);
+    }
+    winetest_pop_context();
+}
+
+static void check_ntfs_directory_dacl(HANDLE handle, PACL expected, BOOL inherited)
+{
+    PSECURITY_DESCRIPTOR sd;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    ACCESS_ALLOWED_ACE *actual_ace, *expected_ace;
+    PACL dacl = NULL;
+    DWORD size = 0, capacity, revision, i;
+    NTSTATUS status;
+    BOOL present = FALSE, defaulted = FALSE, ret;
+
+    status = NtQuerySecurityObject(handle, DACL_SECURITY_INFORMATION, NULL, 0, &size);
+    ok(status == STATUS_BUFFER_TOO_SMALL, "DACL sizing returned %#lx, size %lu.\n", (DWORD)status, size);
+    ok(size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= 65536, "Invalid DACL size %lu.\n", size);
+    if (size < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || size > 65536) return;
+    capacity = size;
+    sd = malloc(capacity);
+    ok(!!sd, "DACL allocation failed.\n");
+    if (!sd) return;
+    status = NtQuerySecurityObject(handle, DACL_SECURITY_INFORMATION, sd, capacity, &size);
+    ok(!status && size <= capacity, "DACL query returned %#lx, size %lu, capacity %lu.\n", (DWORD)status, size, capacity);
+    if (status || size > capacity) goto done;
+    ret = IsValidSecurityDescriptor(sd);
+    ok(ret, "Queried security descriptor is invalid.\n");
+    if (!ret) goto done;
+    ret = GetSecurityDescriptorControl(sd, &control, &revision);
+    ok(ret, "Descriptor control query failed: %lu.\n", GetLastError());
+    if (ret) ok(!!(control & SE_DACL_PROTECTED) == !inherited, "Unexpected DACL control %#x.\n", control);
+    ret = GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted);
+    ok(ret && present && dacl, "DACL query returned %d, present %d, DACL %p.\n", ret, present, dacl);
+    if (!ret || !present || !dacl) goto done;
+    ret = IsValidAcl(dacl);
+    ok(ret, "Queried DACL is invalid.\n");
+    if (!ret) goto done;
+    ok(dacl->AceCount == expected->AceCount, "DACL has %u ACEs, expected %u.\n", dacl->AceCount, expected->AceCount);
+    for (i = 0; i < dacl->AceCount && i < expected->AceCount; ++i)
+    {
+        ret = GetAce(dacl, i, (void **)&actual_ace) && GetAce(expected, i, (void **)&expected_ace);
+        ok(ret, "ACE %lu query failed: %lu.\n", i, GetLastError());
+        if (!ret) continue;
+        ok(actual_ace->Header.AceType == expected_ace->Header.AceType, "ACE %lu type %u, expected %u.\n",
+           i, actual_ace->Header.AceType, expected_ace->Header.AceType);
+        ok(actual_ace->Header.AceFlags == (inherited ? 0 : expected_ace->Header.AceFlags),
+           "ACE %lu flags %#x, expected %#x.\n", i, actual_ace->Header.AceFlags,
+           inherited ? 0 : expected_ace->Header.AceFlags);
+        if (actual_ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE &&
+            actual_ace->Header.AceType != ACCESS_DENIED_ACE_TYPE) continue;
+        ok(actual_ace->Header.AceSize >= FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) +
+           GetLengthSid(&expected_ace->SidStart), "ACE %lu is too small: %u.\n", i, actual_ace->Header.AceSize);
+        if (actual_ace->Header.AceSize < FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) +
+            GetLengthSid(&expected_ace->SidStart)) continue;
+        ok(actual_ace->Mask == expected_ace->Mask, "ACE %lu mask %#lx, expected %#lx.\n",
+           i, actual_ace->Mask, expected_ace->Mask);
+        ret = IsValidSid(&actual_ace->SidStart);
+        ok(ret && EqualSid(&actual_ace->SidStart, &expected_ace->SidStart), "ACE %lu SID differs.\n", i);
+    }
+done:
+    free(sd);
+}
+
+static void check_ntfs_child_access(HANDLE file, const char *path, HANDLE token)
+{
+    PSECURITY_DESCRIPTOR sd = NULL;
+    HANDLE reopened;
+    DWORD error;
+
+    error = GetSecurityInfo(file, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                            DACL_SECURITY_INFORMATION, NULL, NULL, NULL, NULL, &sd);
+    ok(error == ERROR_SUCCESS && sd, "Child access descriptor query returned %lu, SD %p.\n", error, sd);
+    if (!error && sd)
+    {
+        check_acl_file_access(sd, token, GENERIC_READ, TRUE);
+        check_acl_file_access(sd, token, FILE_WRITE_DATA, FALSE);
+        check_acl_file_access(sd, token, FILE_READ_DATA | FILE_WRITE_DATA, FALSE);
+    }
+    LocalFree(sd);
+    reopened = CreateFileA(path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    ok(reopened != INVALID_HANDLE_VALUE, "Child read reopen failed: %lu.\n", GetLastError());
+    if (reopened != INVALID_HANDLE_VALUE) CloseHandle(reopened);
+    reopened = CreateFileA(path, FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    error = GetLastError();
+    ok(reopened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+       "Child write reopen returned %p, error %lu; expected access denied.\n", reopened, error);
+    if (reopened != INVALID_HANDLE_VALUE) CloseHandle(reopened);
+}
+
+static void check_ntfs_directory_basic(HANDLE handle, LARGE_INTEGER creation)
+{
+    FILE_BASIC_INFORMATION basic;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+
+    memset(&basic, 0xcc, sizeof(basic));
+    status = NtQueryInformationFile(handle, &io, &basic, sizeof(basic), FileBasicInformation);
+    ok(!status, "Basic information query returned %#lx.\n", (DWORD)status);
+    if (!status)
+        ok(basic.CreationTime.QuadPart == creation.QuadPart, "Creation time %I64d, expected %I64d.\n",
+           basic.CreationTime.QuadPart, creation.QuadPart);
+}
+
+static void reopen_ntfs_directory_read_handle(HANDLE *handle, const char *path)
+{
+    if (*handle != INVALID_HANDLE_VALUE) CloseHandle(*handle);
+    *handle = CreateFileA(path, READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_EA,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    ok(*handle != INVALID_HANDLE_VALUE, "Fresh directory open failed: %lu.\n", GetLastError());
+}
+
+static void check_ntfs_directory_existing_child(HANDLE handle)
+{
+    union { DWORD align; BYTE bytes[1024]; } buffer;
+    FILE_NAMES_INFORMATION *info = (void *)buffer.bytes;
+    UNICODE_STRING name;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+
+    RtlInitUnicodeString(&name, L"existing");
+    memset(&buffer, 0xcc, sizeof(buffer));
+    status = NtQueryDirectoryFile(handle, NULL, NULL, NULL, &io, info, sizeof(buffer),
+                                  FileNamesInformation, TRUE, &name, TRUE);
+    ok(!status, "Retained directory enumeration returned %#lx.\n", (DWORD)status);
+    if (status) return;
+    ok(io.Information >= FIELD_OFFSET(FILE_NAMES_INFORMATION, FileName) + name.Length &&
+       io.Information <= sizeof(buffer), "Directory enumeration size %Iu.\n", io.Information);
+    if (io.Information < FIELD_OFFSET(FILE_NAMES_INFORMATION, FileName) + name.Length ||
+        io.Information > sizeof(buffer)) return;
+    ok(info->FileNameLength == name.Length && !memcmp(info->FileName, name.Buffer, name.Length),
+       "Retained directory did not enumerate the existing child.\n");
+}
+
+static void warm_ntfs_directory_lookup(const char *path)
+{
+    HANDLE handle = CreateFileA(path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                NULL, OPEN_EXISTING, 0, NULL);
+
+    ok(handle != INVALID_HANDLE_VALUE, "Existing child cache-warming open failed: %lu.\n", GetLastError());
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+}
+
+static void check_ntfs_directory_ea(HANDLE handle, FILE_FULL_EA_INFORMATION *expected, DWORD size)
+{
+    union { DWORD align; BYTE bytes[1024]; } buffer;
+    FILE_FULL_EA_INFORMATION *actual = (void *)buffer.bytes;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+
+    memset(&buffer, 0xcc, sizeof(buffer));
+    status = NtQueryEaFile(handle, &io, actual, sizeof(buffer), TRUE, NULL, 0, NULL, TRUE);
+    ok(!status, "EA query returned %#lx.\n", (DWORD)status);
+    if (status) return;
+    ok(io.Information == size, "EA query size %Iu, expected %lu.\n", io.Information, size);
+    if (io.Information != size) return;
+    ok(!memcmp(actual, expected, size), "Queried EA differs from the last write.\n");
+}
+
+static void check_ntfs_directory_reparse(HANDLE handle, const void *expected, DWORD size)
+{
+    union { DWORD align; BYTE bytes[16384]; } buffer;
+    DWORD returned = 0, error;
+    BOOL ret;
+
+    ret = DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, NULL, 0, buffer.bytes,
+                          sizeof(buffer), &returned, NULL);
+    error = GetLastError();
+    if (!expected)
+    {
+        ok(!ret && error == ERROR_NOT_A_REPARSE_POINT, "Deleted reparse query returned %d, error %lu.\n", ret, error);
+        return;
+    }
+    ok(ret, "Reparse query failed: %lu.\n", error);
+    if (!ret) return;
+    ok(returned == size, "Reparse query size %lu, expected %lu.\n", returned, size);
+    if (returned == size) ok(!memcmp(buffer.bytes, expected, size), "Queried reparse value differs from the last write.\n");
+}
+
+static void test_ntfs_directory_reparse(const char *root, SECURITY_DESCRIPTOR *initial_sd, PACL denied_acl)
+{
+    struct ntfs_mount_point
+    {
+        DWORD tag;
+        WORD data_length, reserved;
+        WORD substitute_offset, substitute_length, print_offset, print_length;
+        WCHAR path[2 * MAX_PATH + 8];
+    } reparse;
+    struct { DWORD tag; WORD data_length, reserved; } deletion;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), initial_sd, FALSE};
+    SECURITY_DESCRIPTOR sd;
+    char junction[MAX_PATH], target[MAX_PATH];
+    WCHAR wide_target[MAX_PATH];
+    HANDLE handles[3] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
+    DWORD length, size, returned, i;
+    NTSTATUS status;
+    BOOL ret, junction_created = FALSE, target_created = FALSE, reparse_set = FALSE;
+
+    sprintf(junction, "%s\\junction", root);
+    sprintf(target, "%s\\target", root);
+    ret = CreateDirectoryA(target, &attributes);
+    ok(ret, "Reparse target creation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    target_created = TRUE;
+    ret = CreateDirectoryA(junction, &attributes);
+    ok(ret, "Empty reparse directory creation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    junction_created = TRUE;
+    for (i = 0; i < 2; ++i)
+    {
+        handles[i] = CreateFileA(junction, READ_CONTROL | WRITE_DAC | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+        ok(handles[i] != INVALID_HANDLE_VALUE, "Old reparse directory handle %lu failed: %lu.\n", i, GetLastError());
+        if (handles[i] == INVALID_HANDLE_VALUE) goto done;
+    }
+    ret = InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&sd, TRUE, denied_acl, FALSE) &&
+          SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Reparse directory descriptor setup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    status = NtSetSecurityObject(handles[0], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &sd);
+    ok(!status, "Reparse directory DACL replacement returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    length = MultiByteToWideChar(CP_ACP, 0, target, -1, wide_target, ARRAY_SIZE(wide_target));
+    ok(!!length, "Reparse target conversion failed: %lu.\n", GetLastError());
+    if (!length) goto done;
+    --length;
+    memset(&reparse, 0, sizeof(reparse));
+    reparse.tag = IO_REPARSE_TAG_MOUNT_POINT;
+    reparse.substitute_length = (length + 4) * sizeof(WCHAR);
+    reparse.print_offset = reparse.substitute_length + sizeof(WCHAR);
+    reparse.print_length = length * sizeof(WCHAR);
+    memcpy(reparse.path, L"\\??\\", 4 * sizeof(WCHAR));
+    memcpy(reparse.path + 4, wide_target, (length + 1) * sizeof(WCHAR));
+    memcpy((BYTE *)reparse.path + reparse.print_offset, wide_target, (length + 1) * sizeof(WCHAR));
+    size = FIELD_OFFSET(struct ntfs_mount_point, path) + reparse.print_offset +
+           reparse.print_length + sizeof(WCHAR);
+    reparse.data_length = size - FIELD_OFFSET(struct ntfs_mount_point, substitute_offset);
+    ret = DeviceIoControl(handles[1], FSCTL_SET_REPARSE_POINT, &reparse, size, NULL, 0, &returned, NULL);
+    ok(ret, "Mount-point set without enabled privileges failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    reparse_set = TRUE;
+    handles[2] = CreateFileA(junction, READ_CONTROL | FILE_READ_ATTRIBUTES,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    ok(handles[2] != INVALID_HANDLE_VALUE, "Fresh reparse directory open failed: %lu.\n", GetLastError());
+    for (i = 0; i < ARRAY_SIZE(handles); ++i)
+    {
+        if (handles[i] == INVALID_HANDLE_VALUE) continue;
+        winetest_push_context("reparse retained/fresh handle %lu", i);
+        check_ntfs_directory_reparse(handles[i], &reparse, size);
+        check_ntfs_directory_dacl(handles[i], denied_acl, FALSE);
+        winetest_pop_context();
+    }
+    memset(&deletion, 0, sizeof(deletion));
+    deletion.tag = IO_REPARSE_TAG_MOUNT_POINT;
+    ret = DeviceIoControl(handles[1], FSCTL_DELETE_REPARSE_POINT, &deletion, sizeof(deletion), NULL, 0, &returned, NULL);
+    ok(ret, "Mount-point deletion failed: %lu.\n", GetLastError());
+    if (ret)
+    {
+        reparse_set = FALSE;
+        for (i = 0; i < ARRAY_SIZE(handles); ++i)
+        {
+            if (handles[i] == INVALID_HANDLE_VALUE) continue;
+            winetest_push_context("deleted reparse retained/fresh handle %lu", i);
+            check_ntfs_directory_reparse(handles[i], NULL, 0);
+            check_ntfs_directory_dacl(handles[i], denied_acl, FALSE);
+            winetest_pop_context();
+        }
+    }
+done:
+    if (reparse_set && handles[1] != INVALID_HANDLE_VALUE)
+    {
+        memset(&deletion, 0, sizeof(deletion));
+        deletion.tag = IO_REPARSE_TAG_MOUNT_POINT;
+        ret = DeviceIoControl(handles[1], FSCTL_DELETE_REPARSE_POINT, &deletion, sizeof(deletion), NULL, 0, &returned, NULL);
+        ok(ret, "Cleanup mount-point deletion failed: %lu.\n", GetLastError());
+    }
+    if (handles[0] != INVALID_HANDLE_VALUE)
+    {
+        status = NtSetSecurityObject(handles[0], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, initial_sd);
+        ok(!status, "Reparse directory ACL cleanup returned %#lx.\n", (DWORD)status);
+    }
+    for (i = 0; i < ARRAY_SIZE(handles); ++i)
+        if (handles[i] != INVALID_HANDLE_VALUE) CloseHandle(handles[i]);
+    if (junction_created) ok(RemoveDirectoryA(junction), "Reparse directory cleanup failed: %lu.\n", GetLastError());
+    if (target_created) ok(RemoveDirectoryA(target), "Reparse target cleanup failed: %lu.\n", GetLastError());
+}
+
+static void check_ntfs_inheritance_descriptor(PSECURITY_DESCRIPTOR sd, PACL expected,
+                                               DWORD expected_control, DWORD expected_flags)
+{
+    SECURITY_DESCRIPTOR_CONTROL control;
+    ACCESS_ALLOWED_ACE *ace, *expected_ace;
+    PACL acl = NULL;
+    DWORD revision, i, mask;
+    BOOL present = FALSE, defaulted = FALSE, ret;
+
+    ret = IsValidSecurityDescriptor(sd);
+    ok(ret, "Inheritance observation descriptor is invalid.\n");
+    if (!ret) return;
+    ret = GetSecurityDescriptorControl(sd, &control, &revision);
+    ok(ret, "Inheritance observation control failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = GetSecurityDescriptorDacl(sd, &present, &acl, &defaulted);
+    ok(ret, "Inheritance observation DACL failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ok(present && acl, "Inheritance DACL is missing.\n");
+    if (!present || !acl) return;
+    ret = IsValidAcl(acl);
+    ok(ret, "Inheritance observation ACL is invalid.\n");
+    if (!ret) return;
+    if (!expected)
+    {
+        trace("Public parent control %#x, ACE count %u.\n", control, acl->AceCount);
+        return;
+    }
+    ok(control == expected_control, "Inheritance control %#x, expected %#lx.\n", control, expected_control);
+    ok(!defaulted, "Inheritance DACL is defaulted.\n");
+    ok(acl->AceCount == expected->AceCount, "Inheritance ACE count %u, expected %u.\n", acl->AceCount, expected->AceCount);
+    for (i = 0; i < acl->AceCount && i < expected->AceCount; ++i)
+    {
+        ret = GetAce(acl, i, (void **)&ace) && GetAce(expected, i, (void **)&expected_ace);
+        ok(ret, "Inheritance observation ACE %lu failed: %lu.\n", i, GetLastError());
+        if (!ret) continue;
+        ok(ace->Header.AceType == expected_ace->Header.AceType, "Inheritance ACE %lu type %u, expected %u.\n",
+           i, ace->Header.AceType, expected_ace->Header.AceType);
+        ok(ace->Header.AceFlags == expected_flags, "Inheritance ACE %lu flags %#x, expected %#lx.\n",
+           i, ace->Header.AceFlags, expected_flags);
+        if (ace->Header.AceType != expected_ace->Header.AceType) continue;
+        ret = ace->Header.AceSize >= FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + FIELD_OFFSET(SID, SubAuthority);
+        ok(ret, "Inheritance ACE %lu is too small: %u.\n", i, ace->Header.AceSize);
+        if (!ret) continue;
+        ret = GetLengthSid(&ace->SidStart) <= ace->Header.AceSize - FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) &&
+              IsValidSid(&ace->SidStart);
+        ok(ret, "Inheritance observation ACE %lu SID is invalid.\n", i);
+        if (!ret) continue;
+        ok(EqualSid(&ace->SidStart, &expected_ace->SidStart), "Inheritance ACE %lu SID %s, expected %s.\n",
+           i, debugstr_sid(&ace->SidStart), debugstr_sid(&expected_ace->SidStart));
+        mask = expected_ace->Mask == GENERIC_ALL ? FILE_ALL_ACCESS : expected_ace->Mask;
+        ok(ace->Mask == mask, "Inheritance ACE %lu mask %#lx, expected %#lx.\n", i, ace->Mask, mask);
+    }
+}
+
+static void check_ntfs_inheritance_security(HANDLE handle, const char *path, DWORD api,
+                                           PACL expected, DWORD expected_control, DWORD expected_flags)
+{
+    SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    PSECURITY_DESCRIPTOR sd = NULL;
+    DWORD size = 0, capacity, error;
+    NTSTATUS status;
+
+    if (!api)
+    {
+        status = NtQuerySecurityObject(handle, information, NULL, 0, &size);
+        ok(status == STATUS_BUFFER_TOO_SMALL, "Inheritance observation sizing returned %#lx, size %lu.\n", (DWORD)status, size);
+        ok(size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= 65536, "Invalid inheritance observation size %lu.\n", size);
+        if (status != STATUS_BUFFER_TOO_SMALL || size < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || size > 65536) return;
+        capacity = size;
+        sd = malloc(capacity);
+        ok(!!sd, "Inheritance observation allocation failed.\n");
+        if (!sd) return;
+        status = NtQuerySecurityObject(handle, information, sd, capacity, &size);
+        ok(!status && size <= capacity, "Inheritance observation query returned %#lx, size %lu.\n", (DWORD)status, size);
+        if (!status && size <= capacity) check_ntfs_inheritance_descriptor(sd, expected, expected_control, expected_flags);
+        free(sd);
+    }
+    else
+    {
+        if (api == 1) error = GetSecurityInfo(handle, SE_FILE_OBJECT, information, NULL, NULL, NULL, NULL, &sd);
+        else error = GetNamedSecurityInfoA((char *)path, SE_FILE_OBJECT, information, NULL, NULL, NULL, NULL, &sd);
+        ok(!error && sd, "Inheritance observation public getter %lu returned %lu, SD %p.\n", api, error, sd);
+        if (!error && sd) check_ntfs_inheritance_descriptor(sd, expected, expected_control, expected_flags);
+        if (sd) LocalFree(sd);
+    }
+}
+
+static void test_ntfs_inheritance_attribute_denial(HANDLE setter, const char *path, OBJECT_ATTRIBUTES *attr, PSID sid)
+{
+    union { ULONG_PTR align; BYTE bytes[256]; } acl_buffer;
+    PACL acl = (PACL)acl_buffer.bytes, original_acl = NULL;
+    SECURITY_DESCRIPTOR denied;
+    PSECURITY_DESCRIPTOR original = NULL, result;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    SECURITY_INFORMATION restore = DACL_SECURITY_INFORMATION;
+    IO_STATUS_BLOCK io;
+    HANDLE limited = INVALID_HANDLE_VALUE;
+    DWORD size = 0, capacity, revision, api, error;
+    NTSTATUS status;
+    BOOL ret, changed = FALSE, present, defaulted;
+
+    winetest_push_context("denied read attributes");
+    status = NtQuerySecurityObject(setter, DACL_SECURITY_INFORMATION, NULL, 0, &size);
+    ok(status == STATUS_BUFFER_TOO_SMALL, "Attribute denial original DACL sizing returned %#lx.\n", (DWORD)status);
+    ok(size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= 65536, "Invalid attribute denial original DACL size %lu.\n", size);
+    if (status != STATUS_BUFFER_TOO_SMALL || size < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || size > 65536) goto done;
+    capacity = size;
+    original = malloc(capacity);
+    ok(!!original, "Attribute denial original DACL allocation failed.\n");
+    if (!original) goto done;
+    status = NtQuerySecurityObject(setter, DACL_SECURITY_INFORMATION, original, capacity, &size);
+    ok(!status && size <= capacity, "Attribute denial original DACL query returned %#lx, size %lu.\n", (DWORD)status, size);
+    if (status || size > capacity) goto done;
+    ret = IsValidSecurityDescriptor(original) && GetSecurityDescriptorControl(original, &control, &revision) &&
+          GetSecurityDescriptorDacl(original, &present, &original_acl, &defaulted) && present && original_acl &&
+          IsValidAcl(original_acl);
+    ok(ret, "Attribute denial original control query failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    restore |= control & SE_DACL_PROTECTED ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION;
+    ret = InitializeSecurityDescriptor(&denied, SECURITY_DESCRIPTOR_REVISION) &&
+          InitializeAcl(acl, sizeof(acl_buffer), ACL_REVISION) &&
+          AddAccessDeniedAceEx(acl, ACL_REVISION, 0, FILE_READ_ATTRIBUTES, sid) &&
+          AddAccessAllowedAceEx(acl, ACL_REVISION, 0, READ_CONTROL | WRITE_DAC | DELETE, sid) &&
+          SetSecurityDescriptorDacl(&denied, TRUE, acl, FALSE) &&
+          SetSecurityDescriptorControl(&denied, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Attribute denial DACL setup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    status = NtSetSecurityObject(setter, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &denied);
+    ok(!status, "Attribute denial DACL replacement returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    changed = TRUE;
+    status = NtCreateFile(&limited, READ_CONTROL, attr, &io, NULL, 0,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN, 0, NULL, 0);
+    ok(!status, "Attribute denial READ_CONTROL reopen returned %#lx.\n", (DWORD)status);
+    if (status) limited = INVALID_HANDLE_VALUE;
+    for (api = 1; api < 3; ++api)
+    {
+        if (api == 1 && limited == INVALID_HANDLE_VALUE) continue;
+        result = NULL;
+        if (api == 1) error = GetSecurityInfo(limited, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                             NULL, NULL, NULL, NULL, &result);
+        else error = GetNamedSecurityInfoA((char *)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                           NULL, NULL, NULL, NULL, &result);
+        ok(!error && result, "Attribute denial public getter %lu returned %lu, SD %p.\n", api, error, result);
+        if (!error && result)
+            check_ntfs_inheritance_descriptor(result, acl, SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_DACL_PROTECTED, 0);
+        if (result) LocalFree(result);
+    }
+done:
+    if (limited != INVALID_HANDLE_VALUE) CloseHandle(limited);
+    if (changed)
+    {
+        status = NtSetSecurityObject(setter, restore, original);
+        ok(!status, "Attribute denial original DACL restore returned %#lx.\n", (DWORD)status);
+        winetest_push_context("direct after original restore");
+        check_ntfs_inheritance_security(setter, path, 0, original_acl, control, 0);
+        winetest_pop_context();
+    }
+    free(original);
+    winetest_pop_context();
+}
+
+static void test_ntfs_inheritance_handle_access(const char *path, PSID sid, PACL expected)
+{
+    static const struct
+    {
+        ACCESS_MASK access;
+        ULONG options;
+    } cases[] =
+    {
+        {READ_CONTROL | SYNCHRONIZE, 0},
+        {READ_CONTROL | SYNCHRONIZE | FILE_READ_ATTRIBUTES, 0},
+        {READ_CONTROL | SYNCHRONIZE, FILE_SYNCHRONOUS_IO_NONALERT},
+        {READ_CONTROL | SYNCHRONIZE | FILE_READ_ATTRIBUTES, FILE_SYNCHRONOUS_IO_NONALERT},
+        {FILE_ALL_ACCESS, 0}
+    };
+    FILE_BASIC_INFORMATION basic;
+    FILE_STANDARD_INFORMATION standard;
+    OBJECT_ATTRIBUTES attr;
+    IO_STATUS_BLOCK io;
+    UNICODE_STRING name;
+    WCHAR wide[MAX_PATH];
+    PSECURITY_DESCRIPTOR sd;
+    PSID owner, group;
+    HANDLE handle;
+    NTSTATUS status, basic_status, standard_status;
+    DWORD i, shape, error, expected_control, expected_flags;
+    SECURITY_INFORMATION information;
+    BOOL ret, owner_defaulted, group_defaulted;
+
+    ret = MultiByteToWideChar(CP_ACP, 0, path, -1, wide, ARRAY_SIZE(wide)) &&
+          pRtlDosPathNameToNtPathName_U(wide, &name, NULL, NULL);
+    ok(ret, "Native reopen observation path conversion failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    InitializeObjectAttributes(&attr, &name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    for (i = 0; i < ARRAY_SIZE(cases); ++i)
+    {
+        winetest_push_context("native reopen access %#lx options %#lx", cases[i].access, cases[i].options);
+        handle = INVALID_HANDLE_VALUE;
+        status = NtCreateFile(&handle, cases[i].access, &attr, &io, NULL, 0,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              FILE_OPEN, cases[i].options, NULL, 0);
+        ok(!status, "Native reopen observation returned %#lx.\n", (DWORD)status);
+        if (!status)
+        {
+            expected_control = SE_SELF_RELATIVE | SE_DACL_PRESENT;
+            expected_flags = 0;
+            if (cases[i].access & FILE_READ_ATTRIBUTES) expected_flags = INHERITED_ACE;
+            else expected_control |= SE_DACL_PROTECTED;
+            winetest_push_context("direct before");
+            check_ntfs_inheritance_security(handle, path, 0, expected, SE_SELF_RELATIVE | SE_DACL_PRESENT, 0);
+            winetest_pop_context();
+            memset(&basic, 0, sizeof(basic));
+            memset(&standard, 0, sizeof(standard));
+            basic_status = NtQueryInformationFile(handle, &io, &basic, sizeof(basic), FileBasicInformation);
+            standard_status = NtQueryInformationFile(handle, &io, &standard, sizeof(standard), FileStandardInformation);
+            status = cases[i].access & FILE_READ_ATTRIBUTES ? STATUS_SUCCESS : STATUS_ACCESS_DENIED;
+            ok(basic_status == status, "Native reopen basic status %#lx, expected %#lx.\n", (DWORD)basic_status, (DWORD)status);
+            ok(!standard_status, "Native reopen standard status %#lx.\n", (DWORD)standard_status);
+            winetest_push_context("GetSecurityInfo");
+            check_ntfs_inheritance_security(handle, path, 1, expected, expected_control, expected_flags);
+            winetest_pop_context();
+            winetest_push_context("direct after");
+            check_ntfs_inheritance_security(handle, path, 0, expected, SE_SELF_RELATIVE | SE_DACL_PRESENT, 0);
+            winetest_pop_context();
+            if (i == ARRAY_SIZE(cases) - 1)
+            {
+                for (shape = 0; shape < 2; ++shape)
+                {
+                    information = DACL_SECURITY_INFORMATION;
+                    if (shape) information |= OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION;
+                    winetest_push_context("requested information %#lx", information);
+                    sd = NULL;
+                    error = GetSecurityInfo(handle, SE_FILE_OBJECT, information, NULL, NULL, NULL, NULL, &sd);
+                    ok(!error && sd, "Native reopen shape getter returned %lu, SD %p.\n", error, sd);
+                    if (!error && sd)
+                    {
+                        check_ntfs_inheritance_descriptor(sd, expected, expected_control, expected_flags);
+                        owner = group = NULL;
+                        ret = GetSecurityDescriptorOwner(sd, &owner, &owner_defaulted) &&
+                              GetSecurityDescriptorGroup(sd, &group, &group_defaulted);
+                        ok(ret && owner && group, "Native reopen shape owner/group query failed: %lu.\n", GetLastError());
+                        if (ret && owner && group)
+                        {
+                            ok(IsValidSid(owner) && IsValidSid(group), "Native reopen shape owner/group SID is invalid.\n");
+                            ok(!owner_defaulted && !group_defaulted, "Native reopen shape owner/group is defaulted.\n");
+                        }
+                    }
+                    if (sd) LocalFree(sd);
+                    winetest_pop_context();
+                }
+                winetest_push_context("direct after requested shapes");
+                check_ntfs_inheritance_security(handle, path, 0, expected, SE_SELF_RELATIVE | SE_DACL_PRESENT, 0);
+                winetest_pop_context();
+                test_ntfs_inheritance_attribute_denial(handle, path, &attr, sid);
+            }
+            CloseHandle(handle);
+        }
+        winetest_pop_context();
+    }
+    RtlFreeUnicodeString(&name);
+}
+
+static void test_ntfs_public_inheritance(const char *temp, HANDLE token)
+{
+    static const char *names[] = {"parent", "CreateFile", "NtCreateFile", "post-public child"};
+    union { DWORD align; BYTE bytes[256]; } acl_buffer, admin_buffer;
+    PSID admin = admin_buffer.bytes;
+    PACL acl = (PACL)acl_buffer.bytes;
+    SECURITY_DESCRIPTOR sd;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), &sd, FALSE};
+    OBJECT_ATTRIBUTES attr;
+    IO_STATUS_BLOCK io;
+    UNICODE_STRING name;
+    TOKEN_USER *user = NULL;
+    WCHAR wide[MAX_PATH];
+    char paths[4][MAX_PATH];
+    HANDLE objects[4];
+    DWORD size = 0, admin_size = sizeof(admin_buffer), protected, specific, i, api, error;
+    BOOL ret, created[4], reserved;
+    NTSTATUS status;
+
+    ret = GetTokenInformation(token, TokenUser, NULL, 0, &size);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INSUFFICIENT_BUFFER, "Inheritance observation TokenUser sizing returned %d, error %lu.\n", ret, error);
+    if (ret || error != ERROR_INSUFFICIENT_BUFFER || !size) goto done;
+    user = malloc(size);
+    ok(!!user, "Inheritance observation TokenUser allocation failed.\n");
+    if (!user) goto done;
+    ret = GetTokenInformation(token, TokenUser, user, size, &size) &&
+          CreateWellKnownSid(WinBuiltinAdministratorsSid, NULL, admin, &admin_size);
+    ok(ret, "Inheritance observation SID setup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ok(!!pRtlDosPathNameToNtPathName_U, "Inheritance observation NT path converter is missing.\n");
+    if (!pRtlDosPathNameToNtPathName_U) goto done;
+    for (protected = 0; protected < 2; ++protected)
+    {
+        for (specific = 0; specific < 2; ++specific)
+        {
+            winetest_push_context("NTFS getter inheritance protected %lu specific %lu", protected, specific);
+            memset(created, 0, sizeof(created));
+            reserved = FALSE;
+            for (i = 0; i < ARRAY_SIZE(objects); ++i) objects[i] = INVALID_HANDLE_VALUE;
+            ret = InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION) &&
+                  InitializeAcl(acl, sizeof(acl_buffer), ACL_REVISION) &&
+                  AddAccessAllowedAceEx(acl, ACL_REVISION, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                                        specific ? FILE_ALL_ACCESS : GENERIC_ALL, user->User.Sid) &&
+                  AddAccessAllowedAceEx(acl, ACL_REVISION, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                                        specific ? FILE_ALL_ACCESS : GENERIC_ALL, admin) &&
+                  SetSecurityDescriptorDacl(&sd, TRUE, acl, FALSE) &&
+                  SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, protected ? SE_DACL_PROTECTED : 0);
+            ok(ret, "Inheritance observation descriptor setup failed: %lu.\n", GetLastError());
+            if (!ret) goto cleanup;
+            ret = GetTempFileNameA(temp, "nio", 0, paths[0]);
+            ok(ret, "Inheritance observation reservation failed: %lu.\n", GetLastError());
+            if (!ret) goto cleanup;
+            reserved = TRUE;
+            ret = DeleteFileA(paths[0]);
+            ok(ret, "Inheritance observation reservation cleanup failed: %lu.\n", GetLastError());
+            if (!ret) goto cleanup;
+            reserved = FALSE;
+            ret = strlen(paths[0]) + sizeof("\\postchild") < MAX_PATH;
+            ok(ret, "Inheritance observation path is too long.\n");
+            if (!ret) goto cleanup;
+            sprintf(paths[1], "%s\\winchild", paths[0]);
+            sprintf(paths[2], "%s\\ntchild", paths[0]);
+            sprintf(paths[3], "%s\\postchild", paths[0]);
+            created[0] = CreateDirectoryA(paths[0], &attributes);
+            ok(created[0], "Inheritance observation parent creation failed: %lu.\n", GetLastError());
+            if (!created[0]) goto cleanup;
+            objects[0] = CreateFileA(paths[0], READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                     NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+            objects[1] = CreateFileA(paths[1], GENERIC_WRITE | READ_CONTROL | DELETE,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, 0, NULL);
+            created[1] = objects[1] != INVALID_HANDLE_VALUE;
+            ret = MultiByteToWideChar(CP_ACP, 0, paths[2], -1, wide, ARRAY_SIZE(wide)) &&
+                  pRtlDosPathNameToNtPathName_U(wide, &name, NULL, NULL);
+            ok(ret, "Inheritance observation NT path conversion failed: %lu.\n", GetLastError());
+            if (ret)
+            {
+                InitializeObjectAttributes(&attr, &name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+                status = NtCreateFile(&objects[2], GENERIC_WRITE | READ_CONTROL | DELETE, &attr, &io, NULL, 0,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_CREATE, 0, NULL, 0);
+                ok(!status, "Inheritance observation NtCreateFile returned %#lx.\n", (DWORD)status);
+                if (status) objects[2] = INVALID_HANDLE_VALUE;
+                else created[2] = TRUE;
+                RtlFreeUnicodeString(&name);
+            }
+            for (i = 0; i < 3; ++i)
+            {
+                ok(objects[i] != INVALID_HANDLE_VALUE, "Inheritance observation %s handle is invalid.\n", names[i]);
+                if (objects[i] == INVALID_HANDLE_VALUE) continue;
+                winetest_push_context("%s direct before public", names[i]);
+                check_ntfs_inheritance_security(objects[i], paths[i], 0, acl,
+                                                SE_SELF_RELATIVE | SE_DACL_PRESENT | (!i && protected ? SE_DACL_PROTECTED : 0),
+                                                i ? 0 : OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE);
+                winetest_pop_context();
+            }
+            for (api = 1; api < 3; ++api)
+            {
+                for (i = 0; i < 3; ++i)
+                {
+                    if (objects[i] == INVALID_HANDLE_VALUE) continue;
+                    winetest_push_context("%s public getter %lu", names[i], api);
+                    check_ntfs_inheritance_security(objects[i], paths[i], api, i ? acl : NULL,
+                                                    SE_SELF_RELATIVE | SE_DACL_PRESENT | (api == 1 && i == 2 ? SE_DACL_PROTECTED : 0),
+                                                    api == 1 && i == 2 ? 0 : INHERITED_ACE);
+                    winetest_pop_context();
+                }
+                for (i = 0; i < 3; ++i)
+                {
+                    if (objects[i] == INVALID_HANDLE_VALUE) continue;
+                    winetest_push_context("%s direct after public getter %lu", names[i], api);
+                    check_ntfs_inheritance_security(objects[i], paths[i], 0, acl,
+                                                    SE_SELF_RELATIVE | SE_DACL_PRESENT | (!i && protected ? SE_DACL_PROTECTED : 0),
+                                                    i ? 0 : OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE);
+                    winetest_pop_context();
+                }
+            }
+            objects[3] = CreateFileA(paths[3], GENERIC_WRITE | READ_CONTROL | DELETE,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, 0, NULL);
+            created[3] = objects[3] != INVALID_HANDLE_VALUE;
+            ok(created[3], "Inheritance observation post-public child creation failed: %lu.\n", GetLastError());
+            if (created[3])
+            {
+                for (api = 0; api < 3; ++api)
+                {
+                    winetest_push_context("post-public child %s", api == 1 ? "GetNamedSecurityInfo" : api ? "direct after" : "direct before");
+                    check_ntfs_inheritance_security(objects[3], paths[3], api == 1 ? 2 : 0, acl,
+                                                    SE_SELF_RELATIVE | SE_DACL_PRESENT, api == 1 ? INHERITED_ACE : 0);
+                    winetest_pop_context();
+                }
+            }
+            if (!protected && !specific && objects[2] != INVALID_HANDLE_VALUE)
+                test_ntfs_inheritance_handle_access(paths[2], user->User.Sid, acl);
+cleanup:
+            for (i = 0; i < ARRAY_SIZE(objects); ++i)
+                if (objects[i] != INVALID_HANDLE_VALUE) CloseHandle(objects[i]);
+            for (i = 1; i < ARRAY_SIZE(created); ++i)
+                if (created[i]) ok(DeleteFileA(paths[i]), "Inheritance observation child %lu cleanup failed: %lu.\n", i, GetLastError());
+            if (created[0]) ok(RemoveDirectoryA(paths[0]), "Inheritance observation parent cleanup failed: %lu.\n", GetLastError());
+            if (reserved) ok(DeleteFileA(paths[0]), "Inheritance observation reservation final cleanup failed: %lu.\n", GetLastError());
+            winetest_pop_context();
+        }
+    }
+done:
+    free(user);
+}
+
+static void check_ntfs_large_dacl(HANDLE handle, PACL expected)
+{
+    PSECURITY_DESCRIPTOR sd;
+    PACL acl = NULL;
+    ACL_SIZE_INFORMATION info;
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD size = 0, capacity, revision;
+    ULONG_PTR offset;
+    NTSTATUS status;
+    BOOL present = FALSE, defaulted = FALSE, ret;
+
+    status = NtQuerySecurityObject(handle, DACL_SECURITY_INFORMATION, NULL, 0, &size);
+    ok(status == STATUS_BUFFER_TOO_SMALL, "Large DACL sizing returned %#lx, size %lu.\n", (DWORD)status, size);
+    ok(size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= 65536, "Invalid large DACL size %lu.\n", size);
+    if (status != STATUS_BUFFER_TOO_SMALL || size < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || size > 65536) return;
+    capacity = size;
+    sd = malloc(capacity);
+    ok(!!sd, "Large DACL query allocation failed.\n");
+    if (!sd) return;
+    status = NtQuerySecurityObject(handle, DACL_SECURITY_INFORMATION, sd, capacity, &size);
+    ok(!status && size <= capacity, "Large DACL query returned %#lx, size %lu, capacity %lu.\n",
+       (DWORD)status, size, capacity);
+    if (status || size > capacity) goto done;
+    ret = IsValidSecurityDescriptor(sd);
+    ok(ret, "Large descriptor is invalid.\n");
+    if (!ret) goto done;
+    ret = GetSecurityDescriptorControl(sd, &control, &revision);
+    ok(ret && (control & SE_DACL_PROTECTED), "Large descriptor control %#x, error %lu.\n", control, GetLastError());
+    ret = GetSecurityDescriptorDacl(sd, &present, &acl, &defaulted);
+    ok(ret && present && acl, "Large descriptor DACL returned %d, present %d, ACL %p.\n", ret, present, acl);
+    if (!ret || !present || !acl) goto done;
+    offset = (ULONG_PTR)acl - (ULONG_PTR)sd;
+    ok(offset <= size && sizeof(*acl) <= size - offset, "Large DACL offset %Iu exceeds size %lu.\n", offset, size);
+    if (offset > size || sizeof(*acl) > size - offset) goto done;
+    ok(acl->AclSize <= size - offset, "Large DACL length %u exceeds descriptor remainder %Iu.\n", acl->AclSize, size - offset);
+    if (acl->AclSize > size - offset) goto done;
+    ret = IsValidAcl(acl) && GetAclInformation(acl, &info, sizeof(info), AclSizeInformation);
+    ok(ret, "Large ACL validation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ok(info.AceCount == expected->AceCount, "Large ACL has %lu ACEs, expected %u.\n", info.AceCount, expected->AceCount);
+    ok(info.AclBytesInUse == expected->AclSize, "Large ACL uses %lu bytes, expected %u.\n", info.AclBytesInUse, expected->AclSize);
+    if (info.AclBytesInUse == expected->AclSize)
+        ok(!memcmp(acl, expected, expected->AclSize), "Large ACL bytes differ after persistence.\n");
+done:
+    free(sd);
+}
+
+static void test_ntfs_large_security(const char *temp, PSID sid, PACL initial_acl)
+{
+    static const DWORD counts[] = {64, 256, 1024, 64, 2};
+    static const char content[] = "large security descriptor data preservation";
+    SID_IDENTIFIER_AUTHORITY authority = {SECURITY_NT_AUTHORITY};
+    SECURITY_DESCRIPTOR initial, replacement;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), &initial, FALSE};
+    FILE_BASIC_INFORMATION basic;
+    IO_STATUS_BLOCK io;
+    FILETIME now;
+    PACL acl = NULL;
+    PSID distinct_sid = NULL;
+    HANDLE handles[2] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE}, stream = INVALID_HANDLE_VALUE, opened;
+    char path[MAX_PATH] = "", stream_path[MAX_PATH], readback[sizeof(content)];
+    DWORD kind, phase, i, size, ace_size, distinct_ace_size, main_aces, transferred = 0, error, open_flags;
+    DWORD access = READ_CONTROL | WRITE_DAC | DELETE | FILE_READ_DATA | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES;
+    NTSTATUS status;
+    BOOL ret, created, denied;
+
+    ret = InitializeSecurityDescriptor(&initial, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&initial, TRUE, initial_acl, FALSE) &&
+          SetSecurityDescriptorControl(&initial, SE_DACL_PROTECTED, SE_DACL_PROTECTED) &&
+          InitializeSecurityDescriptor(&replacement, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorControl(&replacement, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Large security descriptor initialization failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = AllocateAndInitializeSid(&authority, 5, SECURITY_NT_NON_UNIQUE, 0, 0, 0, 1, 0, 0, 0, &distinct_sid);
+    ok(ret, "Distinct ACL test SID initialization failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ace_size = FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(sid);
+    distinct_ace_size = FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(distinct_sid);
+    GetSystemTimeAsFileTime(&now);
+    memset(&basic, 0, sizeof(basic));
+    basic.CreationTime.LowPart = now.dwLowDateTime;
+    basic.CreationTime.HighPart = now.dwHighDateTime;
+    basic.CreationTime.QuadPart -= (LONGLONG)24 * 60 * 60 * 10000000;
+    for (kind = 0; kind < 2; ++kind)
+    {
+        winetest_push_context("large NTFS security %s", kind ? "directory" : "file");
+        created = FALSE;
+        path[0] = 0;
+        open_flags = kind ? FILE_FLAG_BACKUP_SEMANTICS : 0;
+        ret = GetTempFileNameA(temp, "lac", 0, path);
+        ok(ret, "Large security reservation failed: %lu.\n", GetLastError());
+        if (!ret) { path[0] = 0; goto cleanup; }
+        ret = DeleteFileA(path);
+        ok(ret, "Large security reservation cleanup failed: %lu.\n", GetLastError());
+        if (!ret) goto cleanup;
+        ret = strlen(path) + sizeof(":securitydata") < MAX_PATH;
+        ok(ret, "Large security temporary path is too long.\n");
+        if (!ret) goto cleanup;
+        if (kind)
+        {
+            ret = CreateDirectoryA(path, &attributes);
+            ok(ret, "Large security directory creation failed: %lu.\n", GetLastError());
+            if (!ret) goto cleanup;
+            created = TRUE;
+        }
+        handles[0] = CreateFileA(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 &attributes, kind ? OPEN_EXISTING : CREATE_NEW, open_flags, NULL);
+        ok(handles[0] != INVALID_HANDLE_VALUE, "Large security base creation/open failed: %lu.\n", GetLastError());
+        if (handles[0] == INVALID_HANDLE_VALUE) goto cleanup;
+        created = TRUE;
+        handles[1] = CreateFileA(path, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 NULL, OPEN_EXISTING, open_flags, NULL);
+        ok(handles[1] != INVALID_HANDLE_VALUE, "Large security retained reader failed: %lu.\n", GetLastError());
+        if (handles[1] == INVALID_HANDLE_VALUE) goto cleanup;
+        sprintf(stream_path, "%s:securitydata", path);
+        stream = CreateFileA(stream_path, GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, open_flags, NULL);
+        ok(stream != INVALID_HANDLE_VALUE, "Large security stream creation failed: %lu.\n", GetLastError());
+        if (stream == INVALID_HANDLE_VALUE) goto cleanup;
+        ret = WriteFile(stream, content, sizeof(content), &transferred, NULL);
+        ok(ret && transferred == sizeof(content), "Large security initial data write failed: %lu, size %lu.\n", GetLastError(), transferred);
+        if (!ret || transferred != sizeof(content)) goto cleanup;
+        for (phase = 0; phase < ARRAY_SIZE(counts); ++phase)
+        {
+            winetest_push_context("replacement %lu ACEs", counts[phase]);
+            denied = !(phase & 1);
+            main_aces = denied ? 2 : 1;
+            size = sizeof(*acl) + main_aces * ace_size + (counts[phase] - main_aces) * distinct_ace_size;
+            acl = calloc(1, size);
+            ok(!!acl, "Large ACL allocation failed.\n");
+            if (!acl) { winetest_pop_context(); goto cleanup; }
+            ret = InitializeAcl(acl, size, ACL_REVISION);
+            for (i = 0; ret && i < counts[phase]; ++i)
+            {
+                if (!i && denied)
+                    ret = AddAccessDeniedAceEx(acl, ACL_REVISION, 0, FILE_WRITE_DATA, sid);
+                else if (i < main_aces)
+                    ret = AddAccessAllowedAceEx(acl, ACL_REVISION, 0, FILE_ALL_ACCESS, sid);
+                else
+                {
+                    *GetSidSubAuthority(distinct_sid, 4) = i + 1;
+                    ret = AddAccessAllowedAceEx(acl, ACL_REVISION, 0, FILE_READ_DATA, distinct_sid);
+                }
+            }
+            ok(ret, "Large ACL construction failed: %lu.\n", GetLastError());
+            if (!ret) { winetest_pop_context(); goto cleanup; }
+            ret = SetSecurityDescriptorDacl(&replacement, TRUE, acl, FALSE);
+            ok(ret, "Large replacement descriptor failed: %lu.\n", GetLastError());
+            if (!ret) { winetest_pop_context(); goto cleanup; }
+            status = NtSetSecurityObject(handles[0], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &replacement);
+            ok(!status, "Large descriptor replacement returned %#lx.\n", (DWORD)status);
+            if (status) { winetest_pop_context(); goto cleanup; }
+            for (i = 0; i < ARRAY_SIZE(handles); ++i) check_ntfs_large_dacl(handles[i], acl);
+            check_ntfs_large_dacl(stream, acl);
+            status = NtSetInformationFile(handles[0], &io, &basic, sizeof(basic), FileBasicInformation);
+            ok(!status, "Large security metadata update returned %#lx.\n", (DWORD)status);
+            for (i = 0; i < ARRAY_SIZE(handles); ++i) check_ntfs_large_dacl(handles[i], acl);
+            CloseHandle(stream);
+            stream = INVALID_HANDLE_VALUE;
+            for (i = 0; i < ARRAY_SIZE(handles); ++i)
+            {
+                CloseHandle(handles[i]);
+                handles[i] = INVALID_HANDLE_VALUE;
+            }
+            for (i = 0; i < ARRAY_SIZE(handles); ++i)
+            {
+                handles[i] = CreateFileA(path, i ? READ_CONTROL : access,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                         NULL, OPEN_EXISTING, open_flags, NULL);
+                ok(handles[i] != INVALID_HANDLE_VALUE, "Large security cold reopen %lu failed: %lu.\n", i, GetLastError());
+                if (handles[i] == INVALID_HANDLE_VALUE) { winetest_pop_context(); goto cleanup; }
+                check_ntfs_large_dacl(handles[i], acl);
+            }
+            opened = CreateFileA(path, FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 NULL, OPEN_EXISTING, open_flags, NULL);
+            error = GetLastError();
+            ok(denied ? opened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED : opened != INVALID_HANDLE_VALUE,
+               "Large security write access returned %p, error %lu, denied %d.\n", opened, error, denied);
+            if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+            stream = CreateFileA(stream_path, GENERIC_READ | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 NULL, OPEN_EXISTING, open_flags, NULL);
+            ok(stream != INVALID_HANDLE_VALUE, "Large security stream reopen failed: %lu.\n", GetLastError());
+            if (stream == INVALID_HANDLE_VALUE) { winetest_pop_context(); goto cleanup; }
+            check_ntfs_large_dacl(stream, acl);
+            memset(readback, 0, sizeof(readback));
+            ret = ReadFile(stream, readback, sizeof(readback), &transferred, NULL);
+            ok(ret && transferred == sizeof(readback) && !memcmp(readback, content, sizeof(readback)),
+               "Large security stream data differs, read %d, size %lu, error %lu.\n", ret, transferred, GetLastError());
+            free(acl);
+            acl = NULL;
+            winetest_pop_context();
+        }
+cleanup:
+        free(acl);
+        acl = NULL;
+        if (handles[0] != INVALID_HANDLE_VALUE)
+        {
+            status = NtSetSecurityObject(handles[0], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &initial);
+            ok(!status, "Large security cleanup descriptor restore returned %#lx.\n", (DWORD)status);
+        }
+        if (stream != INVALID_HANDLE_VALUE) { CloseHandle(stream); stream = INVALID_HANDLE_VALUE; }
+        for (i = 0; i < ARRAY_SIZE(handles); ++i)
+            if (handles[i] != INVALID_HANDLE_VALUE) { CloseHandle(handles[i]); handles[i] = INVALID_HANDLE_VALUE; }
+        if (created)
+        {
+            ret = kind ? RemoveDirectoryA(path) : DeleteFileA(path);
+            ok(ret, "Large security cleanup failed: %lu.\n", GetLastError());
+        }
+        else if (path[0]) DeleteFileA(path);
+        winetest_pop_context();
+    }
+    FreeSid(distinct_sid);
+}
+
+static NTSTATUS set_ntfs_path_denial(HANDLE handle, PSID sid, DWORD denied)
+{
+    union { DWORD align; BYTE bytes[256]; } buffer;
+    PACL acl = (PACL)buffer.bytes;
+    SECURITY_DESCRIPTOR sd;
+    BOOL ret;
+
+    ret = InitializeAcl(acl, sizeof(buffer), ACL_REVISION);
+    if (ret && denied) ret = AddAccessDeniedAceEx(acl, ACL_REVISION, 0, denied, sid);
+    ret = ret && AddAccessAllowedAceEx(acl, ACL_REVISION, 0, FILE_ALL_ACCESS, sid) &&
+          InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&sd, TRUE, acl, FALSE) &&
+          SetSecurityDescriptorControl(&sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Path authorization descriptor failed: %lu.\n", GetLastError());
+    if (!ret) return STATUS_INVALID_SECURITY_DESCR;
+    return NtSetSecurityObject(handle, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &sd);
+}
+
+static void test_ntfs_metadata_streams(const char *path, BOOL directory)
+{
+    static const char *types[] = {"::$STANDARD_INFORMATION", "::$SECURITY_DESCRIPTOR", "::$ATTRIBUTE_LIST",
+                                 "::$FILE_NAME", "::$INDEX_ROOT", "::$INDEX_ALLOCATION", "::$BITMAP", "::$EA",
+                                 "::$EA_INFORMATION", "::$REPARSE_POINT", "::$LOGGED_UTILITY_STREAM", "::$DATA",
+                                 ":$I30:$INDEX_ALLOCATION", ":other:$INDEX_ALLOCATION", ":$I30"};
+    char stream_path[MAX_PATH];
+    char byte = 0;
+    DWORD i, access, errors[2], transferred, error, expected;
+    HANDLE handle;
+    BOOL ret;
+
+    for (i = 0; i < ARRAY_SIZE(types); ++i)
+    {
+        if (strlen(path) + strlen(types[i]) + 1 > MAX_PATH) continue;
+        sprintf(stream_path, "%s%s", path, types[i]);
+        for (access = 0; access < 2; ++access)
+        {
+            handle = CreateFileA(stream_path, access ? FILE_WRITE_DATA : FILE_READ_DATA,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                 OPEN_EXISTING, directory ? FILE_FLAG_BACKUP_SEMANTICS : 0, NULL);
+            errors[access] = handle == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+            expected = i == 13 ? ERROR_INVALID_PARAMETER : i == 14 ? ERROR_FILE_NOT_FOUND :
+                       ((!directory && i == 11) || (directory && (i == 5 || i == 12))) ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
+            ok(errors[access] == expected, "Metadata stream %s %s %s returned %lu, expected %lu.\n",
+               directory ? "directory" : "file", types[i], access ? "write" : "read", errors[access], expected);
+            if (handle != INVALID_HANDLE_VALUE)
+            {
+                if (directory && (i == 5 || i == 12 || i == 14))
+                {
+                    transferred = 0;
+                    ret = access ? WriteFile(handle, &byte, 1, &transferred, NULL) :
+                                   ReadFile(handle, &byte, 1, &transferred, NULL);
+                    error = ret ? ERROR_SUCCESS : GetLastError();
+                    ok(!ret && error == ERROR_INVALID_FUNCTION && !transferred,
+                       "Directory index %s %s I/O returned %d, error %lu, bytes %lu.\n",
+                       types[i], access ? "write" : "read", ret, error, transferred);
+                    trace("Directory index %s %s I/O returned %d, error %lu, bytes %lu.\n",
+                          types[i], access ? "write" : "read", ret, error, transferred);
+                }
+                CloseHandle(handle);
+            }
+        }
+        trace("Metadata stream %s %s read %lu, write %lu.\n", directory ? "directory" : "file", types[i], errors[0], errors[1]);
+    }
+}
+
+static void test_ntfs_control_security(const char *path, HANDLE setter, HANDLE token, PACL initial_acl)
+{
+    void (WINAPI *set_access_mask)(SECURITY_INFORMATION, LPDWORD);
+    static const SECURITY_INFORMATION flags[2][2] =
+    {
+        {PROTECTED_DACL_SECURITY_INFORMATION, UNPROTECTED_DACL_SECURITY_INFORMATION},
+        {PROTECTED_SACL_SECURITY_INFORMATION, UNPROTECTED_SACL_SECURITY_INFORMATION}
+    };
+    SECURITY_DESCRIPTOR initial, empty;
+    union { DWORD align; BYTE bytes[1024]; } buffer;
+    union { DWORD align; BYTE bytes[sizeof(ACL)]; } acl_buffer;
+    PACL sacl = (PACL)acl_buffer.bytes;
+    TOKEN_PRIVILEGES privileges, previous;
+    SECURITY_DESCRIPTOR_CONTROL control, before_control, protected_bit;
+    SECURITY_INFORMATION information;
+    HANDLE reader = INVALID_HANDLE_VALUE, security = INVALID_HANDLE_VALUE, handles[2], queried;
+    DWORD kind, access, phase, api, size, revision, error, result, mapped_access;
+    NTSTATUS status, query_status;
+    BOOL ret, changed = FALSE;
+
+    set_access_mask = (void *)GetProcAddress(GetModuleHandleA("advapi32.dll"), "SetSecurityAccessMask");
+    ok(!!set_access_mask, "SetSecurityAccessMask export is missing.\n");
+    ret = InitializeSecurityDescriptor(&initial, SECURITY_DESCRIPTOR_REVISION) &&
+          InitializeSecurityDescriptor(&empty, SECURITY_DESCRIPTOR_REVISION) &&
+          InitializeAcl(sacl, sizeof(acl_buffer), ACL_REVISION) &&
+          SetSecurityDescriptorDacl(&initial, TRUE, initial_acl, FALSE) &&
+          SetSecurityDescriptorSacl(&initial, TRUE, sacl, FALSE);
+    ok(ret, "Control-only descriptor initialization failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    reader = CreateFileA(path, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, 0, NULL);
+    ok(reader != INVALID_HANDLE_VALUE, "Control-only reader open failed: %lu.\n", GetLastError());
+    if (reader == INVALID_HANDLE_VALUE) goto done;
+    memset(&privileges, 0, sizeof(privileges));
+    memset(&previous, 0, sizeof(previous));
+    privileges.PrivilegeCount = 1;
+    privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    ret = LookupPrivilegeValueA(NULL, SE_SECURITY_NAME, &privileges.Privileges[0].Luid);
+    ok(ret, "Control-only SACL privilege lookup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = AdjustTokenPrivileges(token, FALSE, &privileges, sizeof(previous), &previous, &size);
+    error = GetLastError();
+    ok(ret && error == ERROR_SUCCESS, "Control-only SACL privilege enable returned %d, error %lu.\n", ret, error);
+    if (!ret || error != ERROR_SUCCESS) goto done;
+    changed = TRUE;
+    security = CreateFileA(path, READ_CONTROL | ACCESS_SYSTEM_SECURITY,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+    ok(security != INVALID_HANDLE_VALUE, "Control-only SACL handle open failed: %lu.\n", GetLastError());
+    ret = AdjustTokenPrivileges(token, FALSE, &previous, 0, NULL, NULL);
+    error = GetLastError();
+    ok(ret && error == ERROR_SUCCESS, "Control-only SACL privilege restore returned %d, error %lu.\n", ret, error);
+    if (!ret || error != ERROR_SUCCESS) goto done;
+    changed = FALSE;
+    for (kind = 0; kind < 2; ++kind)
+    {
+        if (kind && security == INVALID_HANDLE_VALUE) continue;
+        information = kind ? SACL_SECURITY_INFORMATION : DACL_SECURITY_INFORMATION;
+        protected_bit = kind ? SE_SACL_PROTECTED : SE_DACL_PROTECTED;
+        queried = kind ? security : setter;
+        handles[0] = reader;
+        handles[1] = queried;
+        for (access = 0; access < 2; ++access)
+            for (phase = 0; phase < 2; ++phase)
+              for (api = 0; api < 2; ++api)
+            {
+                if (!access && !api && set_access_mask)
+                {
+                    mapped_access = 0xdeadbeef;
+                    set_access_mask(flags[kind][phase], &mapped_access);
+                    ok(!mapped_access, "Control-only access mask flag %#lx returned %#lx.\n",
+                       flags[kind][phase], mapped_access);
+                    trace("Control-only access mask flag %#lx returned %#lx.\n", flags[kind][phase], mapped_access);
+                }
+                ret = SetSecurityDescriptorControl(&initial, protected_bit, phase ? protected_bit : 0) &&
+                      SetSecurityDescriptorControl(&empty, protected_bit, phase ? 0 : protected_bit);
+                ok(ret, "Control-only input control failed: %lu.\n", GetLastError());
+                if (!ret) continue;
+                status = NtSetSecurityObject(queried, information | flags[kind][phase], &initial);
+                ok(!status, "Control-only initial ACL %lu returned %#lx.\n", kind, (DWORD)status);
+                if (status) continue;
+                before_control = 0;
+                query_status = NtQuerySecurityObject(queried, information, buffer.bytes, sizeof(buffer), &size);
+                ok(!query_status, "Control-only initial query returned %#lx.\n", (DWORD)query_status);
+                if (query_status) continue;
+                ret = GetSecurityDescriptorControl(buffer.bytes, &before_control, &revision);
+                ok(ret, "Control-only initial control failed: %lu.\n", GetLastError());
+                if (!ret) continue;
+                ok((before_control & protected_bit) == (phase ? protected_bit : 0),
+                   "Raw ACL setter used information flags instead of descriptor control: %#x.\n", before_control);
+                if (api)
+                    result = SetSecurityInfo(handles[access], SE_FILE_OBJECT, flags[kind][phase], NULL, NULL, NULL, NULL);
+                else
+                    result = NtSetSecurityObject(handles[access], flags[kind][phase], &empty);
+                ok(!result, "Control-only api %lu kind %lu access %lu returned %#lx.\n",
+                   api, kind, access, result);
+                control = 0;
+                query_status = NtQuerySecurityObject(queried, information, buffer.bytes, sizeof(buffer), &size);
+                ok(!query_status, "Control-only result query returned %#lx.\n", (DWORD)query_status);
+                if (!query_status)
+                {
+                    ret = GetSecurityDescriptorControl(buffer.bytes, &control, &revision);
+                    ok(ret, "Control-only result control failed: %lu.\n", GetLastError());
+                    ok(control == before_control, "Control-only call changed control from %#x to %#x.\n",
+                       before_control, control);
+                }
+                trace("Control-only api %lu kind %lu access %lu flag %#lx returned %#lx, before %#x, after %#x.\n",
+                      api, kind, access, flags[kind][phase], result, before_control, control);
+            }
+    }
+done:
+    if (changed)
+    {
+        ret = AdjustTokenPrivileges(token, FALSE, &previous, 0, NULL, NULL);
+        error = GetLastError();
+        ok(ret && error == ERROR_SUCCESS, "Control-only privilege cleanup returned %d, error %lu.\n", ret, error);
+    }
+    if (reader != INVALID_HANDLE_VALUE) CloseHandle(reader);
+    if (security != INVALID_HANDLE_VALUE) CloseHandle(security);
+}
+
+static void test_ntfs_path_security(const char *temp, HANDLE token, PSID sid, PACL initial_acl)
+{
+    SECURITY_DESCRIPTOR initial;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), &initial, FALSE};
+    TOKEN_PRIVILEGES privileges, previous_privileges;
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING name;
+    IO_STATUS_BLOCK io;
+    HANDLE root = INVALID_HANDLE_VALUE, parent = INVALID_HANDLE_VALUE, leaf = INVALID_HANDLE_VALUE;
+    HANDLE source = INVALID_HANDLE_VALUE, opened;
+    char path[MAX_PATH] = "", parent_path[MAX_PATH] = "", leaf_path[MAX_PATH] = "";
+    char source_path[MAX_PATH] = "", target_path[MAX_PATH] = "", link_path[MAX_PATH] = "", metadata_path[MAX_PATH] = "";
+    DWORD error, size;
+    NTSTATUS status;
+    BOOL ret, root_created = FALSE, parent_created = FALSE, leaf_created = FALSE, source_created = FALSE;
+    BOOL metadata_created = FALSE;
+    BOOL moved = FALSE, linked = FALSE, replaced = FALSE, privilege_changed = FALSE;
+
+    winetest_push_context("NTFS path authorization");
+    ret = InitializeSecurityDescriptor(&initial, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&initial, TRUE, initial_acl, FALSE) &&
+          SetSecurityDescriptorControl(&initial, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Path authorization initial descriptor failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = GetTempFileNameA(temp, "pac", 0, path);
+    ok(ret, "Path authorization reservation failed: %lu.\n", GetLastError());
+    if (!ret) { path[0] = 0; goto done; }
+    ret = DeleteFileA(path);
+    ok(ret, "Path authorization reservation cleanup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = strlen(path) + sizeof("\\parent\\linked") < MAX_PATH;
+    ok(ret, "Path authorization temporary path is too long.\n");
+    if (!ret) goto done;
+    root_created = CreateDirectoryA(path, &attributes);
+    ok(root_created, "Path authorization root creation failed: %lu.\n", GetLastError());
+    if (!root_created) goto done;
+    root = CreateFileA(path, FILE_ALL_ACCESS & ~DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(root != INVALID_HANDLE_VALUE, "Path authorization root open failed: %lu.\n", GetLastError());
+    if (root == INVALID_HANDLE_VALUE) goto done;
+    sprintf(parent_path, "%s\\parent", path);
+    sprintf(leaf_path, "%s\\leaf", parent_path);
+    sprintf(source_path, "%s\\source", path);
+    sprintf(target_path, "%s\\moved", parent_path);
+    sprintf(link_path, "%s\\linked", parent_path);
+    sprintf(metadata_path, "%s\\metadata", path);
+    parent_created = CreateDirectoryA(parent_path, &attributes);
+    ok(parent_created, "Path authorization parent creation failed: %lu.\n", GetLastError());
+    if (!parent_created) goto done;
+    parent = CreateFileA(parent_path, FILE_ALL_ACCESS & ~DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(parent != INVALID_HANDLE_VALUE, "Path authorization parent open failed: %lu.\n", GetLastError());
+    if (parent == INVALID_HANDLE_VALUE) goto done;
+    leaf = CreateFileA(leaf_path, FILE_ALL_ACCESS, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       &attributes, CREATE_NEW, 0, NULL);
+    ok(leaf != INVALID_HANDLE_VALUE, "Path authorization leaf creation failed: %lu.\n", GetLastError());
+    if (leaf == INVALID_HANDLE_VALUE) goto done;
+    leaf_created = TRUE;
+    source = CreateFileA(source_path, FILE_ALL_ACCESS, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         &attributes, CREATE_NEW, 0, NULL);
+    ok(source != INVALID_HANDLE_VALUE, "Path authorization source creation failed: %lu.\n", GetLastError());
+    if (source == INVALID_HANDLE_VALUE) goto done;
+    source_created = TRUE;
+    metadata_created = CreateDirectoryA(metadata_path, &attributes);
+    ok(metadata_created, "Metadata stream directory creation failed: %lu.\n", GetLastError());
+    if (!metadata_created) goto done;
+
+    moved = MoveFileExA(source_path, target_path, 0);
+    ok(moved, "Authorized rename to destination failed: %lu.\n", GetLastError());
+    if (!moved) goto done;
+    ret = MoveFileExA(target_path, source_path, 0);
+    ok(ret, "Authorized rename back to source failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    moved = FALSE;
+    linked = CreateHardLinkA(link_path, source_path, NULL);
+    ok(linked, "Authorized hard link to destination failed: %lu.\n", GetLastError());
+    if (!linked) goto done;
+    ret = DeleteFileA(link_path);
+    ok(ret, "Authorized hard link removal failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    linked = FALSE;
+    test_ntfs_metadata_streams(source_path, FALSE);
+    test_ntfs_metadata_streams(metadata_path, TRUE);
+    test_ntfs_control_security(source_path, source, token, initial_acl);
+    status = set_ntfs_path_denial(source, sid, 0);
+    ok(!status, "Path source control-test restore returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+
+    status = set_ntfs_path_denial(parent, sid, FILE_TRAVERSE);
+    ok(!status, "Parent traverse denial returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    opened = CreateFileA(leaf_path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, 0, NULL);
+    error = GetLastError();
+    ok(opened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+       "Disabled-privilege traversal returned %p, error %lu.\n", opened, error);
+    if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+    RtlInitUnicodeString(&name, L"leaf");
+    InitializeObjectAttributes(&attr, &name, OBJ_CASE_INSENSITIVE, parent, NULL);
+    opened = NULL;
+    status = NtOpenFile(&opened, FILE_READ_DATA, &attr, &io,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_NON_DIRECTORY_FILE);
+    ok(status == STATUS_ACCESS_DENIED,
+       "Relative traversal using previously granted parent handle returned %#lx.\n", (DWORD)status);
+    if (!status) CloseHandle(opened);
+    memset(&privileges, 0, sizeof(privileges));
+    memset(&previous_privileges, 0, sizeof(previous_privileges));
+    privileges.PrivilegeCount = 1;
+    privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    ret = LookupPrivilegeValueA(NULL, SE_CHANGE_NOTIFY_NAME, &privileges.Privileges[0].Luid);
+    ok(ret, "Traverse privilege lookup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    size = sizeof(previous_privileges);
+    SetLastError(0xdeadbeef);
+    ret = AdjustTokenPrivileges(token, FALSE, &privileges, sizeof(previous_privileges), &previous_privileges, &size);
+    error = GetLastError();
+    ok(ret && error == ERROR_SUCCESS, "Enabling private traverse privilege returned %d, error %lu.\n", ret, error);
+    if (!ret || error != ERROR_SUCCESS) goto done;
+    privilege_changed = TRUE;
+    opened = CreateFileA(leaf_path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, 0, NULL);
+    ok(opened != INVALID_HANDLE_VALUE, "Enabled traverse privilege did not permit leaf read: %lu.\n", GetLastError());
+    if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+    status = set_ntfs_path_denial(leaf, sid, FILE_READ_DATA);
+    ok(!status, "Leaf read denial returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    opened = CreateFileA(leaf_path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, 0, NULL);
+    error = GetLastError();
+    ok(opened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+       "Traverse privilege bypassed leaf read denial: %p, error %lu.\n", opened, error);
+    if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+    status = set_ntfs_path_denial(leaf, sid, 0);
+    ok(!status, "Leaf read restore returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    ret = AdjustTokenPrivileges(token, FALSE, &previous_privileges, 0, NULL, NULL);
+    error = GetLastError();
+    ok(ret && error == ERROR_SUCCESS, "Disabling private traverse privilege returned %d, error %lu.\n", ret, error);
+    if (!ret || error != ERROR_SUCCESS) goto done;
+    privilege_changed = FALSE;
+    opened = CreateFileA(leaf_path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, 0, NULL);
+    error = GetLastError();
+    ok(opened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+       "Restored disabled-privilege traversal returned %p, error %lu.\n", opened, error);
+    if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+
+    status = set_ntfs_path_denial(parent, sid, 0);
+    ok(!status, "Relative parent traverse restore returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    status = set_ntfs_path_denial(root, sid, FILE_TRAVERSE);
+    ok(!status, "Relative ancestor traverse denial returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    opened = CreateFileA(leaf_path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, 0, NULL);
+    error = GetLastError();
+    ok(opened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+       "Absolute traversal through denied ancestor returned %p, error %lu.\n", opened, error);
+    if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+    RtlInitUnicodeString(&name, L"leaf");
+    InitializeObjectAttributes(&attr, &name, OBJ_CASE_INSENSITIVE, parent, NULL);
+    opened = NULL;
+    status = NtOpenFile(&opened, FILE_READ_DATA, &attr, &io,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_NON_DIRECTORY_FILE);
+    ok(!status, "Relative traversal beneath denied ancestor returned %#lx.\n", (DWORD)status);
+    if (!status) CloseHandle(opened);
+    RtlInitUnicodeString(&name, L"parent\\leaf");
+    InitializeObjectAttributes(&attr, &name, OBJ_CASE_INSENSITIVE, root, NULL);
+    opened = NULL;
+    status = NtOpenFile(&opened, FILE_READ_DATA, &attr, &io,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_NON_DIRECTORY_FILE);
+    ok(status == STATUS_ACCESS_DENIED, "Relative traversal from denied root returned %#lx.\n", (DWORD)status);
+    if (!status) CloseHandle(opened);
+    status = set_ntfs_path_denial(root, sid, 0);
+    ok(!status, "Relative ancestor traverse restore returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+
+    status = set_ntfs_path_denial(parent, sid, FILE_ADD_FILE);
+    ok(!status, "Destination add-file denial returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    moved = MoveFileExA(source_path, target_path, 0);
+    error = GetLastError();
+    ok(!moved && error == ERROR_ACCESS_DENIED, "Rename under destination add denial returned %d, error %lu.\n", moved, error);
+    if (moved) goto done;
+    linked = CreateHardLinkA(link_path, source_path, NULL);
+    error = GetLastError();
+    ok(!linked && error == ERROR_ACCESS_DENIED, "Hard link under destination add denial returned %d, error %lu.\n", linked, error);
+    status = set_ntfs_path_denial(parent, sid, FILE_DELETE_CHILD);
+    ok(!status, "Destination delete-child denial returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    status = set_ntfs_path_denial(leaf, sid, DELETE);
+    ok(!status, "Replacement target delete denial returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    CloseHandle(leaf);
+    leaf = INVALID_HANDLE_VALUE;
+    replaced = MoveFileExA(source_path, leaf_path, MOVEFILE_REPLACE_EXISTING);
+    error = GetLastError();
+    ok(!replaced && error == ERROR_ACCESS_DENIED,
+       "Rename replacement under target/parent delete denial returned %d, error %lu.\n", replaced, error);
+    if (replaced) goto done;
+    status = set_ntfs_path_denial(parent, sid, 0);
+    ok(!status, "Replacement parent delete-child grant returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    replaced = MoveFileExA(source_path, leaf_path, MOVEFILE_REPLACE_EXISTING);
+    ok(replaced, "Parent delete-child grant did not permit replacement: %lu.\n", GetLastError());
+done:
+    if (privilege_changed)
+    {
+        ret = AdjustTokenPrivileges(token, FALSE, &previous_privileges, 0, NULL, NULL);
+        ok(ret && GetLastError() == ERROR_SUCCESS, "Path authorization privilege cleanup failed: %lu.\n", GetLastError());
+    }
+    if (root != INVALID_HANDLE_VALUE)
+    {
+        status = set_ntfs_path_denial(root, sid, 0);
+        ok(!status, "Path authorization root restore returned %#lx.\n", (DWORD)status);
+    }
+    if (parent != INVALID_HANDLE_VALUE)
+    {
+        status = set_ntfs_path_denial(parent, sid, 0);
+        ok(!status, "Path authorization parent restore returned %#lx.\n", (DWORD)status);
+    }
+    if (leaf_created && leaf == INVALID_HANDLE_VALUE && !replaced)
+    {
+        leaf = CreateFileA(leaf_path, WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, 0, NULL);
+        ok(leaf != INVALID_HANDLE_VALUE, "Path authorization leaf cleanup reopen failed: %lu.\n", GetLastError());
+    }
+    if (leaf != INVALID_HANDLE_VALUE)
+    {
+        status = set_ntfs_path_denial(leaf, sid, 0);
+        ok(!status, "Path authorization leaf restore returned %#lx.\n", (DWORD)status);
+        CloseHandle(leaf);
+    }
+    if (source != INVALID_HANDLE_VALUE) CloseHandle(source);
+    if (linked) ok(DeleteFileA(link_path), "Path authorization link cleanup failed: %lu.\n", GetLastError());
+    if (leaf_created) ok(DeleteFileA(leaf_path), "Path authorization leaf cleanup failed: %lu.\n", GetLastError());
+    if (source_created && !replaced)
+        ok(DeleteFileA(moved ? target_path : source_path), "Path authorization source cleanup failed: %lu.\n", GetLastError());
+    if (parent != INVALID_HANDLE_VALUE) CloseHandle(parent);
+    if (parent_created) ok(RemoveDirectoryA(parent_path), "Path authorization parent cleanup failed: %lu.\n", GetLastError());
+    if (metadata_created) ok(RemoveDirectoryA(metadata_path), "Metadata stream directory cleanup failed: %lu.\n", GetLastError());
+    if (root != INVALID_HANDLE_VALUE) CloseHandle(root);
+    if (root_created) ok(RemoveDirectoryA(path), "Path authorization root cleanup failed: %lu.\n", GetLastError());
+    else if (path[0]) DeleteFileA(path);
+    winetest_pop_context();
+}
+
+static void test_ntfs_propagation_access(const char *temp, PSID sid, PACL initial_acl, PACL denied_acl)
+{
+    static const DWORD accesses[] = {WRITE_DAC, READ_CONTROL | WRITE_DAC,
+        READ_CONTROL | WRITE_DAC | FILE_LIST_DIRECTORY, MAXIMUM_ALLOWED,
+        READ_CONTROL | WRITE_DAC | FILE_LIST_DIRECTORY, READ_CONTROL | WRITE_DAC | FILE_LIST_DIRECTORY,
+        FILE_ALL_ACCESS};
+    SECURITY_DESCRIPTOR initial, blocked;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), &initial, FALSE};
+    union { DWORD align; BYTE bytes[SECURITY_MAX_SID_SIZE]; } owner_buffer;
+    union { DWORD align; BYTE bytes[256]; } acl_buffer;
+    union { DWORD align; BYTE bytes[1024]; } sd_buffer;
+    PACL blocked_acl = (PACL)acl_buffer.bytes, acl;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    FILE_ACCESS_INFORMATION access_info;
+    FILE_MODE_INFORMATION mode_info;
+    OBJECT_BASIC_INFORMATION object_info;
+    IO_STATUS_BLOCK io;
+    HANDLE parent = INVALID_HANDLE_VALUE, setter = INVALID_HANDLE_VALUE, children[2], opened;
+    char path[MAX_PATH] = "", files[2][MAX_PATH];
+    DWORD size = sizeof(owner_buffer), phase, i, result, error, revision;
+    NTSTATUS status;
+    BOOL ret, created = FALSE, child_created[2], present, defaulted;
+
+    ret = CreateWellKnownSid(WinCreatorOwnerRightsSid, NULL, owner_buffer.bytes, &size) &&
+          InitializeAcl(blocked_acl, sizeof(acl_buffer), ACL_REVISION) &&
+          AddAccessDeniedAceEx(blocked_acl, ACL_REVISION, 0, WRITE_DAC, owner_buffer.bytes) &&
+          AddAccessAllowedAceEx(blocked_acl, ACL_REVISION, 0, FILE_ALL_ACCESS, sid) &&
+          InitializeSecurityDescriptor(&blocked, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&blocked, TRUE, blocked_acl, FALSE) &&
+          InitializeSecurityDescriptor(&initial, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&initial, TRUE, initial_acl, FALSE) &&
+          SetSecurityDescriptorControl(&initial, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Propagation access descriptors failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = GetTempFileNameA(temp, "pap", 0, path);
+    ok(ret, "Propagation access reservation failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = DeleteFileA(path);
+    ok(ret, "Propagation access reservation cleanup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    if (strlen(path) + sizeof("\\sibling") > MAX_PATH) goto done;
+    created = CreateDirectoryA(path, &attributes);
+    ok(created, "Propagation access directory creation failed: %lu.\n", GetLastError());
+    if (!created) goto done;
+    parent = CreateFileA(path, READ_CONTROL | WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(parent != INVALID_HANDLE_VALUE, "Propagation access parent open failed: %lu.\n", GetLastError());
+    if (parent == INVALID_HANDLE_VALUE) goto done;
+    sprintf(files[0], "%s\\child", path);
+    sprintf(files[1], "%s\\sibling", path);
+    for (phase = 0; phase < ARRAY_SIZE(accesses); ++phase)
+    {
+        winetest_push_context("propagation access phase %lu", phase);
+        children[0] = children[1] = INVALID_HANDLE_VALUE;
+        child_created[0] = child_created[1] = FALSE;
+        status = NtSetSecurityObject(parent, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &initial);
+        ok(!status, "Propagation access parent reset returned %#lx.\n", (DWORD)status);
+        if (status) goto phase_done;
+        for (i = 0; i < ARRAY_SIZE(children); ++i)
+        {
+            children[i] = CreateFileA(files[i], READ_CONTROL | WRITE_DAC,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      NULL, CREATE_NEW, 0, NULL);
+            child_created[i] = children[i] != INVALID_HANDLE_VALUE;
+            ok(child_created[i], "Propagation access child %lu creation failed: %lu.\n", i, GetLastError());
+            if (!child_created[i]) goto phase_done;
+        }
+        if (phase == 5)
+        {
+            status = NtSetSecurityObject(children[0], DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION, &blocked);
+            ok(!status, "Propagation child write-DAC denial returned %#lx.\n", (DWORD)status);
+            if (status) goto phase_done;
+            opened = CreateFileA(files[0], WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 NULL, OPEN_EXISTING, 0, NULL);
+            error = GetLastError();
+            ok(opened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+               "Propagation blocked-child control returned %p, error %lu.\n", opened, error);
+            if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+        }
+        setter = CreateFileA(path, accesses[phase], phase == 4 ? 0 : FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        ok(setter != INVALID_HANDLE_VALUE, "Propagation access setter %#lx open failed: %lu.\n", accesses[phase], GetLastError());
+        if (setter == INVALID_HANDLE_VALUE) goto phase_done;
+        memset(&access_info, 0, sizeof(access_info));
+        memset(&mode_info, 0, sizeof(mode_info));
+        memset(&object_info, 0, sizeof(object_info));
+        status = NtQueryInformationFile(setter, &io, &access_info, sizeof(access_info), FileAccessInformation);
+        ok(!status, "Propagation setter access query returned %#lx.\n", (DWORD)status);
+        status = NtQueryInformationFile(setter, &io, &mode_info, sizeof(mode_info), FileModeInformation);
+        ok(!status, "Propagation setter mode query returned %#lx.\n", (DWORD)status);
+        status = NtQueryObject(setter, ObjectBasicInformation, &object_info, sizeof(object_info), &size);
+        ok(!status, "Propagation setter object query returned %#lx.\n", (DWORD)status);
+        trace("Propagation access requested %#lx file %#lx object %#lx attributes %#lx mode %#lx.\n",
+              accesses[phase], access_info.AccessFlags, object_info.GrantedAccess, object_info.Attributes, mode_info.Mode);
+        result = SetSecurityInfo(setter, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                  NULL, NULL, denied_acl, NULL);
+        trace("Propagation setter %#lx exclusive %d blocked %d returned %lu.\n", accesses[phase], phase == 4, phase == 5, result);
+        ok(result == (phase ? ERROR_SUCCESS : ERROR_ACCESS_DENIED),
+           "Propagation setter phase %lu returned %lu.\n", phase, result);
+        CloseHandle(setter);
+        setter = INVALID_HANDLE_VALUE;
+        for (i = 0; i < ARRAY_SIZE(children); ++i)
+        {
+            control = 0;
+            acl = NULL;
+            status = NtQuerySecurityObject(children[i], DACL_SECURITY_INFORMATION, sd_buffer.bytes, sizeof(sd_buffer), &size);
+            ok(!status, "Propagation access child %lu query returned %#lx.\n", i, (DWORD)status);
+            if (!status)
+            {
+                ret = GetSecurityDescriptorControl(sd_buffer.bytes, &control, &revision) &&
+                      GetSecurityDescriptorDacl(sd_buffer.bytes, &present, &acl, &defaulted);
+                ok(ret, "Propagation access child %lu descriptor failed: %lu.\n", i, GetLastError());
+            }
+            opened = CreateFileA(files[i], FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                  NULL, OPEN_EXISTING, 0, NULL);
+            error = opened == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+            trace("Propagation child %lu control %#x ACEs %u write %lu.\n", i, control, acl ? acl->AceCount : 0, error);
+            ok(error == ((!phase || phase == 3 || phase == 4 || phase == 6 || (phase == 5 && !i)) ? ERROR_SUCCESS : ERROR_ACCESS_DENIED),
+               "Propagation phase %lu child %lu write returned %lu.\n", phase, i, error);
+            if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+        }
+phase_done:
+        if (setter != INVALID_HANDLE_VALUE) { CloseHandle(setter); setter = INVALID_HANDLE_VALUE; }
+        for (i = 0; i < ARRAY_SIZE(children); ++i)
+        {
+            if (children[i] != INVALID_HANDLE_VALUE)
+            {
+                status = NtSetSecurityObject(children[i], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &initial);
+                ok(!status, "Propagation access child %lu cleanup reset returned %#lx.\n", i, (DWORD)status);
+                CloseHandle(children[i]);
+            }
+            if (child_created[i])
+            {
+                ret = DeleteFileA(files[i]);
+                ok(ret, "Propagation access child %lu cleanup failed: %lu.\n", i, GetLastError());
+            }
+        }
+        winetest_pop_context();
+    }
+done:
+    if (parent != INVALID_HANDLE_VALUE) CloseHandle(parent);
+    if (created)
+    {
+        ret = RemoveDirectoryA(path);
+        ok(ret, "Propagation access directory cleanup failed: %lu.\n", GetLastError());
+    }
+    else if (path[0]) DeleteFileA(path);
+}
+
+static void test_ntfs_nested_propagation(const char *temp, PACL initial_acl, PACL denied_acl)
+{
+    SECURITY_DESCRIPTOR initial;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), &initial, FALSE};
+    HANDLE directories[3] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
+    HANDLE leaves[2] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE}, opened;
+    char paths[3][MAX_PATH] = {{0}}, files[2][MAX_PATH];
+    BOOL created[3] = {FALSE, FALSE, FALSE}, leaf_created[2] = {FALSE, FALSE};
+    DWORD i, phase, error, result;
+    BOOL ret, denied;
+
+    winetest_push_context("nested NTFS propagation");
+    ret = InitializeSecurityDescriptor(&initial, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&initial, TRUE, initial_acl, FALSE) &&
+          SetSecurityDescriptorControl(&initial, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Nested propagation descriptor initialization failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = GetTempFileNameA(temp, "nap", 0, paths[0]);
+    ok(ret, "Nested propagation reservation failed: %lu.\n", GetLastError());
+    if (!ret) { paths[0][0] = 0; goto done; }
+    ret = DeleteFileA(paths[0]);
+    ok(ret, "Nested propagation reservation cleanup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    if (strlen(paths[0]) + sizeof("\\protected\\leaf") > MAX_PATH) goto done;
+    sprintf(paths[1], "%s\\inherited", paths[0]);
+    sprintf(paths[2], "%s\\protected", paths[0]);
+    for (i = 0; i < ARRAY_SIZE(directories); ++i)
+    {
+        created[i] = CreateDirectoryA(paths[i], i == 1 ? NULL : &attributes);
+        ok(created[i], "Nested directory %lu creation failed: %lu.\n", i, GetLastError());
+        if (!created[i]) goto done;
+        directories[i] = CreateFileA(paths[i], READ_CONTROL | WRITE_DAC | FILE_LIST_DIRECTORY,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                     NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        ok(directories[i] != INVALID_HANDLE_VALUE, "Nested directory %lu open failed: %lu.\n", i, GetLastError());
+        if (directories[i] == INVALID_HANDLE_VALUE) goto done;
+    }
+    for (i = 0; i < ARRAY_SIZE(leaves); ++i)
+    {
+        sprintf(files[i], "%s\\leaf", paths[i + 1]);
+        leaves[i] = CreateFileA(files[i], READ_CONTROL | WRITE_DAC,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, 0, NULL);
+        leaf_created[i] = leaves[i] != INVALID_HANDLE_VALUE;
+        ok(leaf_created[i], "Nested leaf %lu creation failed: %lu.\n", i, GetLastError());
+        if (!leaf_created[i]) goto done;
+    }
+    for (phase = 0; phase < 3; ++phase)
+    {
+        if (phase)
+        {
+            result = SetSecurityInfo(directories[0], SE_FILE_OBJECT,
+                                      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                      NULL, NULL, phase == 1 ? denied_acl : initial_acl, NULL);
+            ok(result == ERROR_SUCCESS, "Nested parent phase %lu returned %lu.\n", phase, result);
+            if (result) goto done;
+        }
+        for (i = 0; i < ARRAY_SIZE(leaves); ++i)
+        {
+            denied = phase == 1 && !i;
+            opened = CreateFileA(files[i], FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 NULL, OPEN_EXISTING, 0, NULL);
+            ok(opened != INVALID_HANDLE_VALUE, "Nested phase %lu leaf %lu read failed: %lu.\n", phase, i, GetLastError());
+            if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+            opened = CreateFileA(files[i], FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 NULL, OPEN_EXISTING, 0, NULL);
+            error = GetLastError();
+            ok(denied ? opened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED : opened != INVALID_HANDLE_VALUE,
+               "Nested phase %lu leaf %lu write returned %p, error %lu, expected denied %d.\n", phase, i, opened, error, denied);
+            if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+        }
+    }
+done:
+    for (i = 0; i < ARRAY_SIZE(leaves); ++i)
+    {
+        if (leaves[i] != INVALID_HANDLE_VALUE) CloseHandle(leaves[i]);
+        if (leaf_created[i])
+        {
+            ret = DeleteFileA(files[i]);
+            ok(ret, "Nested leaf %lu cleanup failed: %lu.\n", i, GetLastError());
+        }
+    }
+    for (i = ARRAY_SIZE(directories); i-- > 0;)
+    {
+        if (directories[i] != INVALID_HANDLE_VALUE) CloseHandle(directories[i]);
+        if (created[i])
+        {
+            ret = RemoveDirectoryA(paths[i]);
+            ok(ret, "Nested directory %lu cleanup failed: %lu.\n", i, GetLastError());
+        }
+    }
+    if (!created[0] && paths[0][0]) DeleteFileA(paths[0]);
+    winetest_pop_context();
+}
+
+static void test_ntfs_directory_acl_coherence(const char *temp, const char *filesystem, DWORD volume_flags,
+                                             HANDLE token, HANDLE previous_token, PSID sid,
+                                             PACL initial_acl, PACL denied_acl)
+{
+    static const char *names[] = {"existing", "inherited", "blocked", "restored"};
+    static const char ea_name[] = "ACLCOHERENCE";
+    static const BYTE ea_value[] = {0x17, 0x29, 0x43, 0x61};
+    static const char stream_value[] = "directory stream ACL coherence";
+    SECURITY_DESCRIPTOR initial_sd, denied_sd, add_denied_sd;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), &initial_sd, FALSE};
+    union { DWORD align; BYTE bytes[256]; } acl_buffer, ea_buffer;
+    PACL add_denied_acl = (PACL)acl_buffer.bytes;
+    FILE_FULL_EA_INFORMATION *ea = (void *)ea_buffer.bytes;
+    FILE_BASIC_INFORMATION basic;
+    FILE_STANDARD_INFORMATION standard;
+    FILETIME creation, actual_creation;
+    LARGE_INTEGER position, stream_size;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+    char path[MAX_PATH] = "", files[ARRAY_SIZE(names)][MAX_PATH], stream_path[MAX_PATH];
+    char stream_case[MAX_PATH], denied_stream[MAX_PATH], readback[sizeof(stream_value)];
+    HANDLE parents[3] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
+    HANDLE children[ARRAY_SIZE(names)] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
+    HANDLE stream = INVALID_HANDLE_VALUE, reopened;
+    DWORD parent_access = READ_CONTROL | WRITE_DAC | FILE_LIST_DIRECTORY | FILE_ADD_FILE |
+                          FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | FILE_READ_EA | FILE_WRITE_EA;
+    DWORD i, j, ea_size, transferred = 0, error;
+    BOOL ret, impersonating = FALSE, directory_created = FALSE;
+    BOOL child_created[ARRAY_SIZE(names)] = {FALSE, FALSE, FALSE, FALSE};
+    BOOL case_stream_created = FALSE, denied_stream_created = FALSE;
+
+    if (lstrcmpiA(filesystem, "NTFS"))
+    {
+        win_skip("Directory ACL coherence requires NTFS, found %s.\n", filesystem);
+        return;
+    }
+    if (volume_flags & FILE_READ_ONLY_VOLUME)
+    {
+        win_skip("NTFS directory ACL coherence needs a writable volume.\n");
+        return;
+    }
+    winetest_push_context("NTFS directory ACL coherence");
+    trace("Testing NTFS security primitives independently of FILE_PERSISTENT_ACLS (%#lx).\n", volume_flags);
+    memset(files, 0, sizeof(files));
+    ret = InitializeSecurityDescriptor(&initial_sd, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&initial_sd, TRUE, initial_acl, FALSE) &&
+          SetSecurityDescriptorControl(&initial_sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED) &&
+          InitializeSecurityDescriptor(&denied_sd, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&denied_sd, TRUE, denied_acl, FALSE) &&
+          SetSecurityDescriptorControl(&denied_sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED) &&
+          InitializeAcl(add_denied_acl, sizeof(acl_buffer), ACL_REVISION) &&
+          AddAccessDeniedAceEx(add_denied_acl, ACL_REVISION, 0, FILE_ADD_FILE, sid) &&
+          AddAccessAllowedAceEx(add_denied_acl, ACL_REVISION, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE, FILE_ALL_ACCESS, sid) &&
+          InitializeSecurityDescriptor(&add_denied_sd, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&add_denied_sd, TRUE, add_denied_acl, FALSE) &&
+          SetSecurityDescriptorControl(&add_denied_sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Directory coherence descriptors failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = SetThreadToken(NULL, token);
+    ok(ret, "Directory coherence impersonation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    impersonating = TRUE;
+    test_ntfs_public_inheritance(temp, token);
+    test_ntfs_large_security(temp, sid, initial_acl);
+    test_ntfs_path_security(temp, token, sid, initial_acl);
+    test_ntfs_propagation_access(temp, sid, initial_acl, denied_acl);
+    test_ntfs_nested_propagation(temp, initial_acl, denied_acl);
+    ret = GetTempFileNameA(temp, "nac", 0, path);
+    ok(ret, "Directory coherence reservation failed: %lu.\n", GetLastError());
+    if (!ret) { path[0] = 0; goto done; }
+    ret = DeleteFileA(path);
+    ok(ret, "Directory coherence reservation cleanup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = strlen(path) + sizeof(":deniedcoherence") < MAX_PATH;
+    ok(ret, "Temporary path is too long for directory coherence.\n");
+    if (!ret) goto done;
+    ret = CreateDirectoryA(path, &attributes);
+    ok(ret, "Directory coherence creation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    directory_created = TRUE;
+    for (i = 0; i < ARRAY_SIZE(names); ++i) sprintf(files[i], "%s\\%s", path, names[i]);
+    for (i = 0; i < 2; ++i)
+    {
+        parents[i] = CreateFileA(path, parent_access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        ok(parents[i] != INVALID_HANDLE_VALUE, "Retained parent %lu open failed: %lu.\n", i, GetLastError());
+        if (parents[i] == INVALID_HANDLE_VALUE) goto done;
+    }
+    children[0] = CreateFileA(files[0], READ_CONTROL | WRITE_DAC | DELETE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, 0, NULL);
+    ok(children[0] != INVALID_HANDLE_VALUE, "Existing child creation failed: %lu.\n", GetLastError());
+    if (children[0] == INVALID_HANDLE_VALUE) goto done;
+    child_created[0] = TRUE;
+    check_ntfs_directory_existing_child(parents[1]);
+    sprintf(stream_path, "%s:aclcoherence", path);
+    sprintf(stream_case, "%s:ACLCOHERENCE", path);
+    sprintf(denied_stream, "%s:deniedcoherence", path);
+    stream = CreateFileA(stream_path, GENERIC_READ | GENERIC_WRITE | READ_CONTROL | WRITE_DAC,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW,
+                         FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(stream != INVALID_HANDLE_VALUE, "Retained directory stream creation failed: %lu.\n", GetLastError());
+    if (stream != INVALID_HANDLE_VALUE)
+    {
+        memset(&standard, 0, sizeof(standard));
+        status = NtQueryInformationFile(stream, &io, &standard, sizeof(standard), FileStandardInformation);
+        ok(!status, "Retained directory stream standard query returned %#lx.\n", (DWORD)status);
+        if (!status)
+        {
+            trace("Directory stream initial EOF %I64d, directory %u.\n",
+                  standard.EndOfFile.QuadPart, standard.Directory);
+            ok(!standard.Directory, "Named directory stream is reported as a directory.\n");
+        }
+        reopened = CreateFileA(stream_case, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               NULL, CREATE_NEW, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        error = GetLastError();
+        ok(reopened == INVALID_HANDLE_VALUE && error == ERROR_FILE_EXISTS,
+           "Case-variant stream creation returned %p, error %lu.\n", reopened, error);
+        if (reopened != INVALID_HANDLE_VALUE)
+        {
+            case_stream_created = TRUE;
+            CloseHandle(reopened);
+        }
+    }
+    warm_ntfs_directory_lookup(files[0]);
+    status = NtSetSecurityObject(parents[0], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &denied_sd);
+    ok(!status, "Direct parent DACL replacement returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    children[1] = CreateFileA(files[1], READ_CONTROL | WRITE_DAC | DELETE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, 0, NULL);
+    ok(children[1] != INVALID_HANDLE_VALUE, "New inherited child creation failed: %lu.\n", GetLastError());
+    if (children[1] != INVALID_HANDLE_VALUE)
+    {
+        child_created[1] = TRUE;
+        check_ntfs_directory_dacl(children[1], denied_acl, TRUE);
+        check_ntfs_child_access(children[1], files[1], token);
+    }
+    parents[2] = CreateFileA(path, READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_EA,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(parents[2] != INVALID_HANDLE_VALUE, "Fresh parent open failed: %lu.\n", GetLastError());
+    for (i = 0; i < ARRAY_SIZE(parents); ++i)
+    {
+        if (parents[i] == INVALID_HANDLE_VALUE) continue;
+        winetest_push_context("parent DACL retained/fresh handle %lu", i);
+        check_ntfs_directory_dacl(parents[i], denied_acl, FALSE);
+        winetest_pop_context();
+    }
+    reopened = CreateFileA(files[0], FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, 0, NULL);
+    ok(reopened != INVALID_HANDLE_VALUE, "Existing child disappeared or inherited a direct parent update: %lu.\n", GetLastError());
+    if (reopened != INVALID_HANDLE_VALUE) CloseHandle(reopened);
+    check_ntfs_directory_dacl(children[0], initial_acl, TRUE);
+    memset(&basic, 0, sizeof(basic));
+    GetSystemTimeAsFileTime(&creation);
+    basic.CreationTime.LowPart = creation.dwLowDateTime;
+    basic.CreationTime.HighPart = creation.dwHighDateTime;
+    basic.CreationTime.QuadPart -= (LONGLONG)24 * 60 * 60 * 10000000;
+    creation.dwLowDateTime = basic.CreationTime.LowPart;
+    creation.dwHighDateTime = basic.CreationTime.HighPart;
+    status = NtSetInformationFile(parents[1], &io, &basic, sizeof(basic), FileBasicInformation);
+    ok(!status, "Retained parent basic information set returned %#lx.\n", (DWORD)status);
+    reopen_ntfs_directory_read_handle(&parents[2], path);
+    for (i = 0; i < ARRAY_SIZE(parents); ++i)
+    {
+        if (parents[i] == INVALID_HANDLE_VALUE) continue;
+        winetest_push_context("basic retained/fresh handle %lu", i);
+        if (!status) check_ntfs_directory_basic(parents[i], basic.CreationTime);
+        check_ntfs_directory_dacl(parents[i], denied_acl, FALSE);
+        winetest_pop_context();
+    }
+    memset(&ea_buffer, 0, sizeof(ea_buffer));
+    ea->EaNameLength = sizeof(ea_name) - 1;
+    ea->EaValueLength = sizeof(ea_value);
+    memcpy(ea->EaName, ea_name, sizeof(ea_name));
+    memcpy(ea->EaName + sizeof(ea_name), ea_value, sizeof(ea_value));
+    ea_size = FIELD_OFFSET(FILE_FULL_EA_INFORMATION, EaName) + sizeof(ea_name) + sizeof(ea_value);
+    for (j = 0; j < 2; ++j)
+    {
+        ea->EaName[sizeof(ea_name)] = ea_value[0] + j;
+        status = NtSetEaFile(parents[1], &io, ea, ea_size);
+        ok(!status, "Retained parent EA write %lu returned %#lx.\n", j, (DWORD)status);
+        reopen_ntfs_directory_read_handle(&parents[2], path);
+        for (i = 0; i < ARRAY_SIZE(parents); ++i)
+        {
+            if (parents[i] == INVALID_HANDLE_VALUE) continue;
+            winetest_push_context("EA write %lu retained/fresh handle %lu", j, i);
+            if (!status) check_ntfs_directory_ea(parents[i], ea, ea_size);
+            check_ntfs_directory_dacl(parents[i], denied_acl, FALSE);
+            winetest_pop_context();
+        }
+    }
+    if (stream != INVALID_HANDLE_VALUE)
+    {
+        stream_size.QuadPart = 0;
+        ret = WriteFile(stream, stream_value, sizeof(stream_value), &transferred, NULL);
+        ok(ret && transferred == sizeof(stream_value), "Retained stream write returned %d, size %lu, error %lu.\n",
+           ret, transferred, GetLastError());
+        position.QuadPart = 8192;
+        ret = SetFilePointerEx(stream, position, NULL, FILE_BEGIN) && SetEndOfFile(stream);
+        ok(ret, "Retained stream EOF set failed: %lu.\n", GetLastError());
+        ret = GetFileSizeEx(stream, &stream_size);
+        ok(ret && stream_size.QuadPart == position.QuadPart, "Retained stream size %I64d, error %lu.\n",
+           stream_size.QuadPart, GetLastError());
+        position.QuadPart = 0;
+        ret = SetFilePointerEx(stream, position, NULL, FILE_BEGIN) &&
+              ReadFile(stream, readback, sizeof(readback), &transferred, NULL);
+        ok(ret && transferred == sizeof(readback) && !memcmp(readback, stream_value, sizeof(readback)),
+           "Retained directory stream readback returned %d, size %lu, error %lu.\n", ret, transferred, GetLastError());
+        ret = GetFileTime(stream, &actual_creation, NULL, NULL);
+        ok(ret && actual_creation.dwLowDateTime == creation.dwLowDateTime &&
+           actual_creation.dwHighDateTime == creation.dwHighDateTime, "Retained stream creation time differs, error %lu.\n", GetLastError());
+        reopened = CreateFileA(stream_case, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        ok(reopened != INVALID_HANDLE_VALUE, "Case-variant stream reopen failed: %lu.\n", GetLastError());
+        if (reopened != INVALID_HANDLE_VALUE)
+        {
+            memset(readback, 0, sizeof(readback));
+            ret = ReadFile(reopened, readback, sizeof(readback), &transferred, NULL);
+            ok(ret && transferred == sizeof(readback) && !memcmp(readback, stream_value, sizeof(readback)),
+               "Case-variant stream readback returned %d, size %lu, error %lu.\n", ret, transferred, GetLastError());
+            stream_size.QuadPart = 0;
+            ret = GetFileSizeEx(reopened, &stream_size);
+            ok(ret && stream_size.QuadPart == 8192, "Case-variant stream size %I64d, error %lu.\n",
+               stream_size.QuadPart, GetLastError());
+            CloseHandle(reopened);
+        }
+        reopen_ntfs_directory_read_handle(&parents[2], path);
+        for (i = 0; i < ARRAY_SIZE(parents); ++i)
+        {
+            if (parents[i] == INVALID_HANDLE_VALUE) continue;
+            winetest_push_context("directory stream retained/fresh parent %lu", i);
+            check_ntfs_directory_dacl(parents[i], denied_acl, FALSE);
+            check_ntfs_directory_basic(parents[i], basic.CreationTime);
+            winetest_pop_context();
+        }
+    }
+    check_ntfs_directory_existing_child(parents[1]);
+    test_ntfs_directory_reparse(path, &initial_sd, denied_acl);
+
+    warm_ntfs_directory_lookup(files[0]);
+    status = NtSetSecurityObject(parents[0], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &add_denied_sd);
+    ok(!status, "Parent add-file deny returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    for (i = 0; i < ARRAY_SIZE(parents); ++i)
+        if (parents[i] != INVALID_HANDLE_VALUE) check_ntfs_directory_dacl(parents[i], add_denied_acl, FALSE);
+    children[2] = CreateFileA(files[2], FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             NULL, CREATE_NEW, 0, NULL);
+    child_created[2] = children[2] != INVALID_HANDLE_VALUE;
+    error = GetLastError();
+    ok(children[2] == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+       "FILE_ADD_FILE deny returned %p, error %lu.\n", children[2], error);
+    reopened = CreateFileA(denied_stream, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, CREATE_NEW, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    error = GetLastError();
+    ok(reopened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+       "Read-only requested stream creation under base write deny returned %p, error %lu.\n", reopened, error);
+    if (reopened != INVALID_HANDLE_VALUE)
+    {
+        denied_stream_created = TRUE;
+        CloseHandle(reopened);
+    }
+    reopen_ntfs_directory_read_handle(&parents[2], path);
+    if (parents[2] != INVALID_HANDLE_VALUE) check_ntfs_directory_dacl(parents[2], add_denied_acl, FALSE);
+    reopened = CreateFileA(path, FILE_ADD_FILE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    error = GetLastError();
+    ok(reopened == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED,
+       "Fresh parent FILE_ADD_FILE open returned %p, error %lu.\n", reopened, error);
+    if (reopened != INVALID_HANDLE_VALUE) CloseHandle(reopened);
+    warm_ntfs_directory_lookup(files[0]);
+    status = NtSetSecurityObject(parents[0], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &initial_sd);
+    ok(!status, "Retained setter add-file restore returned %#lx.\n", (DWORD)status);
+    if (status) goto done;
+    children[3] = CreateFileA(files[3], READ_CONTROL | WRITE_DAC | DELETE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, 0, NULL);
+    ok(children[3] != INVALID_HANDLE_VALUE, "Creation after FILE_ADD_FILE restore failed: %lu.\n", GetLastError());
+    child_created[3] = children[3] != INVALID_HANDLE_VALUE;
+    if (children[3] != INVALID_HANDLE_VALUE) check_ntfs_directory_dacl(children[3], initial_acl, TRUE);
+    reopened = CreateFileA(path, FILE_ADD_FILE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(reopened != INVALID_HANDLE_VALUE, "Restored parent FILE_ADD_FILE open failed: %lu.\n", GetLastError());
+    if (reopened != INVALID_HANDLE_VALUE) CloseHandle(reopened);
+    reopen_ntfs_directory_read_handle(&parents[2], path);
+    for (i = 0; i < ARRAY_SIZE(parents); ++i)
+        if (parents[i] != INVALID_HANDLE_VALUE) check_ntfs_directory_dacl(parents[i], initial_acl, FALSE);
+    for (i = 0; i < ARRAY_SIZE(parents); ++i)
+    {
+        if (parents[i] == INVALID_HANDLE_VALUE) continue;
+        CloseHandle(parents[i]);
+        parents[i] = INVALID_HANDLE_VALUE;
+    }
+    if (stream != INVALID_HANDLE_VALUE) { CloseHandle(stream); stream = INVALID_HANDLE_VALUE; }
+    parents[0] = CreateFileA(path, parent_access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(parents[0] != INVALID_HANDLE_VALUE, "Parent close/reopen failed: %lu.\n", GetLastError());
+    if (parents[0] != INVALID_HANDLE_VALUE)
+    {
+        check_ntfs_directory_dacl(parents[0], initial_acl, FALSE);
+        check_ntfs_directory_basic(parents[0], basic.CreationTime);
+        check_ntfs_directory_ea(parents[0], ea, ea_size);
+    }
+    if (children[1] != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(children[1]);
+        children[1] = CreateFileA(files[1], READ_CONTROL | WRITE_DAC | DELETE,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+        ok(children[1] != INVALID_HANDLE_VALUE, "Inherited child close/reopen failed: %lu.\n", GetLastError());
+        if (children[1] != INVALID_HANDLE_VALUE)
+        {
+            check_ntfs_directory_dacl(children[1], denied_acl, TRUE);
+            check_ntfs_child_access(children[1], files[1], token);
+        }
+    }
+done:
+    if (parents[0] != INVALID_HANDLE_VALUE)
+    {
+        status = NtSetSecurityObject(parents[0], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, &initial_sd);
+        ok(!status, "Parent coherence ACL cleanup returned %#lx.\n", (DWORD)status);
+    }
+    for (i = 0; i < ARRAY_SIZE(children); ++i)
+    {
+        if (children[i] != INVALID_HANDLE_VALUE) CloseHandle(children[i]);
+        if (child_created[i])
+        {
+            ret = DeleteFileA(files[i]);
+            ok(ret, "Child %lu cleanup failed: %lu.\n", i, GetLastError());
+        }
+    }
+    if (stream != INVALID_HANDLE_VALUE) CloseHandle(stream);
+    if (case_stream_created) ok(DeleteFileA(stream_case), "Case-variant stream cleanup failed: %lu.\n", GetLastError());
+    if (denied_stream_created) ok(DeleteFileA(denied_stream), "Denied stream cleanup failed: %lu.\n", GetLastError());
+    for (i = 0; i < ARRAY_SIZE(parents); ++i)
+        if (parents[i] != INVALID_HANDLE_VALUE) CloseHandle(parents[i]);
+    if (directory_created) ok(RemoveDirectoryA(path), "Directory coherence cleanup failed: %lu.\n", GetLastError());
+    if (impersonating) ok(SetThreadToken(NULL, previous_token), "Directory coherence token restoration failed: %lu.\n", GetLastError());
+    winetest_pop_context();
+}
+
+static void test_acl_file_propagation(void)
+{
+    SID everyone = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    EXPLICIT_ACCESSW entries[2], explicit_entry;
+    SECURITY_DESCRIPTOR initial_sd, authorization_sd;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), &initial_sd, FALSE};
+    union { DWORD align; BYTE bytes[sizeof(ACL)]; } empty_buffer;
+    PACL initial_acl = NULL, denied_acl = NULL, authorization_acl = NULL, explicit_acl = NULL, empty_acl = (PACL)empty_buffer.bytes;
+    char temp[MAX_PATH], path[MAX_PATH] = "", volume[MAX_PATH], filesystem[MAX_PATH], files[4][MAX_PATH];
+    HANDLE source = NULL, previous = NULL, token = NULL, parent = INVALID_HANDLE_VALUE;
+    HANDLE children[4] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
+    TOKEN_PRIVILEGES *privileges = NULL;
+    DWORD flags, res, i, error, size, capacity;
+    BOOL ret, directory_created = FALSE;
+
+    ret = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE, TRUE, &previous);
+    if (ret) source = previous;
+    else
+    {
+        error = GetLastError();
+        ok(error == ERROR_NO_TOKEN, "OpenThreadToken failed: %lu.\n", error);
+        if (error != ERROR_NO_TOKEN) goto done;
+        ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &source);
+        ok(ret, "OpenProcessToken failed: %lu.\n", GetLastError());
+        if (!ret) goto done;
+    }
+    ret = DuplicateTokenEx(source, TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_ADJUST_PRIVILEGES, NULL,
+                           SecurityImpersonation, TokenImpersonation, &token);
+    ok(ret, "DuplicateTokenEx failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = AdjustTokenPrivileges(token, TRUE, NULL, 0, NULL, NULL);
+    ok(ret, "Disabling private token privileges failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    size = 0;
+    ret = GetTokenInformation(token, TokenPrivileges, NULL, 0, &size);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INSUFFICIENT_BUFFER && size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges),
+       "Private privilege sizing returned %d, error %lu, size %lu.\n", ret, error, size);
+    if (ret || error != ERROR_INSUFFICIENT_BUFFER || size < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) goto done;
+    capacity = size;
+    privileges = malloc(capacity);
+    ok(!!privileges, "Private privilege buffer allocation failed.\n");
+    if (!privileges) goto done;
+    ret = GetTokenInformation(token, TokenPrivileges, privileges, capacity, &size);
+    ok(ret, "Private privilege query failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ok(size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) && size <= capacity,
+       "Private privilege query returned invalid size %lu, capacity %lu.\n", size, capacity);
+    if (size < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) || size > capacity) goto done;
+    ok(privileges->PrivilegeCount <= (size - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES),
+       "Private privilege count exceeds returned size.\n");
+    if (privileges->PrivilegeCount > (size - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES)) goto done;
+    ret = TRUE;
+    for (i = 0; i < privileges->PrivilegeCount; ++i)
+    {
+        ok(!(privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED), "Private token privilege %lu remains enabled.\n", i);
+        if (privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED) ret = FALSE;
+    }
+    if (!ret) goto done;
+
+    memset(entries, 0, sizeof(entries));
+    entries[0].grfAccessPermissions = FILE_WRITE_DATA;
+    entries[0].grfAccessMode = DENY_ACCESS;
+    BuildTrusteeWithSidW(&entries[0].Trustee, &everyone);
+    entries[1].grfAccessPermissions = FILE_ALL_ACCESS;
+    entries[1].grfAccessMode = GRANT_ACCESS;
+    BuildTrusteeWithSidW(&entries[1].Trustee, &everyone);
+    res = SetEntriesInAclW(2, entries, NULL, &authorization_acl);
+    ok(res == ERROR_SUCCESS && authorization_acl, "Authorization ACL construction returned %lu.\n", res);
+    if (res || !authorization_acl) goto done;
+    ret = InitializeSecurityDescriptor(&authorization_sd, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorOwner(&authorization_sd, &everyone, FALSE) &&
+          SetSecurityDescriptorGroup(&authorization_sd, &everyone, FALSE) &&
+          SetSecurityDescriptorDacl(&authorization_sd, TRUE, authorization_acl, FALSE);
+    ok(ret, "Authorization SD initialization failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    check_acl_file_access(&authorization_sd, token, GENERIC_READ, TRUE);
+    check_acl_file_access(&authorization_sd, token, FILE_WRITE_DATA, FALSE);
+    check_acl_file_access(&authorization_sd, token, FILE_READ_DATA | FILE_WRITE_DATA, FALSE);
+    check_acl_public_access_checks(token);
+
+    entries[1].grfInheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    res = SetEntriesInAclW(1, entries + 1, NULL, &initial_acl);
+    ok(res == ERROR_SUCCESS && initial_acl, "Initial ACL construction returned %lu.\n", res);
+    if (res || !initial_acl) goto done;
+    entries[0].grfInheritance = OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE;
+    res = SetEntriesInAclW(2, entries, NULL, &denied_acl);
+    ok(res == ERROR_SUCCESS && denied_acl, "Parent deny ACL construction returned %lu.\n", res);
+    if (res || !denied_acl) goto done;
+    explicit_entry = entries[1];
+    explicit_entry.grfAccessPermissions = FILE_WRITE_DATA;
+    explicit_entry.grfInheritance = NO_INHERITANCE;
+    res = SetEntriesInAclW(1, &explicit_entry, NULL, &explicit_acl);
+    ok(res == ERROR_SUCCESS && explicit_acl, "Explicit child ACL construction returned %lu.\n", res);
+    if (res || !explicit_acl) goto done;
+    ret = InitializeAcl(empty_acl, sizeof(empty_buffer), ACL_REVISION) &&
+          InitializeSecurityDescriptor(&initial_sd, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&initial_sd, TRUE, initial_acl, FALSE) &&
+          SetSecurityDescriptorControl(&initial_sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ok(ret, "Initial descriptor setup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    res = GetTempPathA(ARRAY_SIZE(temp), temp);
+    ok(res && res < ARRAY_SIZE(temp), "GetTempPathA returned %lu.\n", res);
+    if (!res || res >= ARRAY_SIZE(temp)) goto done;
+    ret = GetVolumePathNameA(temp, volume, ARRAY_SIZE(volume));
+    ok(ret, "GetVolumePathNameA failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = GetVolumeInformationA(volume, NULL, 0, NULL, NULL, &flags, filesystem, ARRAY_SIZE(filesystem));
+    ok(ret, "GetVolumeInformationA failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    trace("ACL fixture temporary volume %s, filesystem %s, flags %#lx.\n", volume, filesystem, flags);
+    test_ntfs_directory_acl_coherence(temp, filesystem, flags, token, previous, &everyone, initial_acl, denied_acl);
+    if (!(flags & FILE_PERSISTENT_ACLS))
+    {
+        if (lstrcmpiA(filesystem, "NTFS") || (flags & FILE_READ_ONLY_VOLUME))
+        {
+            win_skip("Temporary volume does not support persistent ACLs.\n");
+            goto done;
+        }
+        trace("Testing NTFS ACL propagation independently of FILE_PERSISTENT_ACLS (%#lx).\n", flags);
+    }
+    ret = GetTempFileNameA(temp, "acl", 0, path);
+    ok(ret, "GetTempFileNameA failed: %lu.\n", GetLastError());
+    if (!ret) { path[0] = 0; goto done; }
+    ret = DeleteFileA(path);
+    ok(ret, "Removing temporary reservation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    if (strlen(path) + sizeof("\\protected") > ARRAY_SIZE(files[0]))
+    {
+        win_skip("Temporary path is too long for file ACL fixtures.\n");
+        goto done;
+    }
+    ret = CreateDirectoryA(path, &attributes);
+    ok(ret, "CreateDirectoryA failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    directory_created = TRUE;
+    parent = CreateFileA(path, READ_CONTROL | WRITE_DAC | FILE_LIST_DIRECTORY,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                         FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(parent != INVALID_HANDLE_VALUE, "Opening parent failed: %lu.\n", GetLastError());
+    if (parent == INVALID_HANDLE_VALUE) goto done;
+    sprintf(files[0], "%s\\existing", path);
+    sprintf(files[1], "%s\\protected", path);
+    sprintf(files[2], "%s\\explicit", path);
+    sprintf(files[3], "%s\\new", path);
+    for (i = 0; i < 3; ++i)
+    {
+        children[i] = CreateFileA(files[i], READ_CONTROL | WRITE_DAC | DELETE,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW,
+                                  FILE_ATTRIBUTE_NORMAL, NULL);
+        ok(children[i] != INVALID_HANDLE_VALUE, "Creating child %lu failed: %lu.\n", i, GetLastError());
+        if (children[i] == INVALID_HANDLE_VALUE) goto done;
+    }
+    res = SetSecurityInfo(children[1], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                          NULL, NULL, initial_acl, NULL);
+    ok(res == ERROR_SUCCESS, "Protecting child returned %lu.\n", res);
+    if (res) goto done;
+    res = SetNamedSecurityInfoA(files[2], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+                               NULL, NULL, explicit_acl, NULL);
+    ok(res == ERROR_SUCCESS, "Explicit unprotected child ACL returned %lu.\n", res);
+    if (res) goto done;
+    winetest_push_context("before parent update");
+    ret = check_acl_file_enforcement(children[0], files[0], token, previous, &everyone, FALSE, FALSE, FALSE, FALSE);
+    winetest_pop_context();
+    if (!ret) goto done;
+    winetest_push_context("explicit child before parent update");
+    ret = check_acl_file_enforcement(children[2], files[2], token, previous, &everyone, FALSE, FALSE, FALSE, TRUE);
+    winetest_pop_context();
+    if (!ret) goto done;
+    res = SetSecurityInfo(parent, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                          NULL, NULL, denied_acl, NULL);
+    ok(res == ERROR_SUCCESS, "Parent propagation returned %lu.\n", res);
+    if (res) goto done;
+    children[3] = CreateFileA(files[3], READ_CONTROL | WRITE_DAC | DELETE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+    ok(children[3] != INVALID_HANDLE_VALUE, "Creating new child failed: %lu.\n", GetLastError());
+    if (children[3] == INVALID_HANDLE_VALUE) goto done;
+    for (i = 0; i < ARRAY_SIZE(children); ++i)
+    {
+        winetest_push_context("after parent update child %lu", i);
+        ret = check_acl_file_enforcement(children[i], files[i], token, previous, &everyone, i != 1, i == 0 || i == 3, i == 1, i == 2);
+        winetest_pop_context();
+        if (!ret) goto done;
+    }
+    res = SetNamedSecurityInfoA(files[1], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+                               NULL, NULL, empty_acl, NULL);
+    ok(res == ERROR_SUCCESS, "Unprotecting child returned %lu.\n", res);
+    if (res) goto done;
+    winetest_push_context("unprotected child");
+    ret = check_acl_file_enforcement(children[1], files[1], token, previous, &everyone, TRUE, TRUE, FALSE, FALSE);
+    winetest_pop_context();
+    if (!ret) goto done;
+    res = SetSecurityInfo(parent, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                          NULL, NULL, initial_acl, NULL);
+    ok(res == ERROR_SUCCESS, "Parent allow propagation returned %lu.\n", res);
+    if (res) goto done;
+    for (i = 0; i < ARRAY_SIZE(children); ++i)
+    {
+        winetest_push_context("after deny removal child %lu", i);
+        ret = check_acl_file_enforcement(children[i], files[i], token, previous, &everyone, FALSE, FALSE, FALSE, i == 2);
+        winetest_pop_context();
+        if (!ret) goto done;
+    }
+
+done:
+    if (token)
+    {
+        ret = SetThreadToken(NULL, previous);
+        ok(ret, "Final thread token restoration failed: %lu.\n", GetLastError());
+    }
+    for (i = 0; i < ARRAY_SIZE(children); ++i)
+    {
+        if (children[i] == INVALID_HANDLE_VALUE) continue;
+        res = SetSecurityInfo(children[i], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                              NULL, NULL, initial_acl, NULL);
+        ok(res == ERROR_SUCCESS, "Cleanup ACL restore child %lu returned %lu.\n", i, res);
+        CloseHandle(children[i]);
+        ret = DeleteFileA(files[i]);
+        ok(ret, "Cleanup DeleteFileA child %lu failed: %lu.\n", i, GetLastError());
+    }
+    if (parent != INVALID_HANDLE_VALUE) CloseHandle(parent);
+    if (directory_created)
+    {
+        ret = RemoveDirectoryA(path);
+        ok(ret, "Cleanup RemoveDirectoryA failed: %lu.\n", GetLastError());
+    }
+    else if (path[0]) DeleteFileA(path);
+    if (source && source != previous) CloseHandle(source);
+    if (previous) CloseHandle(previous);
+    if (token) CloseHandle(token);
+    LocalFree(initial_acl);
+    LocalFree(denied_acl);
+    LocalFree(authorization_acl);
+    LocalFree(explicit_acl);
+    free(privileges);
 }
 
 static void test_SetEntriesInAclW(void)
@@ -3382,6 +6660,10 @@ static void test_SetEntriesInAclA(void)
 
     res = AddAccessAllowedAce(OldAcl, ACL_REVISION, KEY_READ, UsersSid);
     ok(res, "AddAccessAllowedAce failed with error %ld\n", GetLastError());
+#else
+    res = AddAccessAllowedAce(OldAcl, ACL_REVISION, KEY_READ, UsersSid);
+    ok(res, "AddAccessAllowedAce failed with error %ld\n", GetLastError());
+#endif
 
     ExplicitAccess.grfAccessPermissions = KEY_WRITE;
     ExplicitAccess.grfAccessMode = GRANT_ACCESS;
@@ -3902,6 +7184,9 @@ static void test_GetNamedSecurityInfoA(void)
         return;
     }
     ok(!error, "GetNamedSecurityInfo failed with error %ld\n", error);
+#ifdef __REACTOS__
+    if (error) goto file_security_done;
+#endif
 
     bret = GetAclInformation(pDacl, &acl_size, sizeof(acl_size), AclSizeInformation);
     ok(bret, "GetAclInformation failed\n");
@@ -3944,6 +7229,9 @@ static void test_GetNamedSecurityInfoA(void)
     error = GetNamedSecurityInfoA(tmpfile, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
             NULL, NULL, &pDacl, NULL, &pSD);
     ok(!error, "GetNamedSecurityInfo failed with error %ld\n", error);
+#ifdef __REACTOS__
+    if (error) goto file_security_done;
+#endif
 
     bret = GetAclInformation(pDacl, &acl_size, sizeof(acl_size), AclSizeInformation);
     ok(bret, "GetAclInformation failed\n");
@@ -3969,6 +7257,9 @@ static void test_GetNamedSecurityInfoA(void)
     error = GetNamedSecurityInfoA(tmpfile, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
                 NULL, NULL, &pDacl, NULL, &pSD);
     ok(!error, "GetNamedSecurityInfo failed with error %ld\n", error);
+#ifdef __REACTOS__
+    if (error) goto file_security_done;
+#endif
     todo_wine ok(!pDacl, "pDacl != NULL\n");
     LocalFree(pSD);
 
@@ -4044,6 +7335,9 @@ static void test_GetNamedSecurityInfoA(void)
             NULL, OPEN_EXISTING, 0, NULL);
     ok(h == INVALID_HANDLE_VALUE, "CreateFile error %ld\n", GetLastError());
     free(pDacl);
+#ifdef __REACTOS__
+file_security_done:
+#endif
     free(user);
     CloseHandle(hTemp);
 
@@ -4485,6 +7779,7 @@ static void test_SetSecurityDescriptorControl (PSECURITY_DESCRIPTOR sec)
         LPCSTR  strExpect = ((1 << bit) & immutable)
                           ? "ERROR_INVALID_PARAMETER" : "0xbebecaca";
 
+#ifdef __REACTOS__
         ctrl = ((1 << bit) & immutable) ? test : ref | mutable;
         setOrClear ^= bitsOfInterest;
         SetLastError (0xbebecaca);
@@ -4503,6 +7798,816 @@ static void test_SetSecurityDescriptorControl (PSECURITY_DESCRIPTOR sec)
     }
 }
 
+static ACCESS_MASK private_object_access(PSECURITY_DESCRIPTOR sd, HANDLE token,
+                                        GENERIC_MAPPING *mapping)
+{
+    PRIVILEGE_SET privileges;
+    DWORD size, granted, result = 0, bit;
+    BOOL access, ret;
+
+    for (bit = 1; bit <= 4; bit <<= 1)
+    {
+        size = sizeof(privileges);
+        granted = 0;
+        access = FALSE;
+        ret = AccessCheck(sd, token, bit, mapping, &privileges, &size, &granted, &access);
+        ok(ret, "AccessCheck failed: %lu\n", GetLastError());
+        if (ret && access) result |= bit;
+    }
+    return result;
+}
+
+static PSECURITY_DESCRIPTOR private_object_descriptor(const char *text)
+{
+    PSECURITY_DESCRIPTOR sd = NULL;
+    BOOL ret;
+
+    ret = ConvertStringSecurityDescriptorToSecurityDescriptorA(text, SDDL_REVISION_1, &sd, NULL);
+    ok(ret, "Descriptor conversion failed: %lu\n", GetLastError());
+    return sd;
+}
+
+static PACL private_object_dacl(PSECURITY_DESCRIPTOR sd, DWORD count,
+                               SECURITY_DESCRIPTOR_CONTROL required)
+{
+    SECURITY_DESCRIPTOR_CONTROL control;
+    DWORD revision;
+    BOOL present, defaulted, ret;
+    PACL acl = NULL;
+    ACCESS_ALLOWED_ACE *ace;
+    DWORD index;
+
+    ret = GetSecurityDescriptorDacl(sd, &present, &acl, &defaulted);
+    ok(ret && present && acl, "Missing DACL, error %lu\n", GetLastError());
+    if (!ret || !present || !acl) return NULL;
+    ok(acl->AceCount == count, "Got %u ACEs, expected %lu\n", acl->AceCount, count);
+    if (acl->AceCount != count)
+        for (index = 0; index < acl->AceCount; ++index)
+            if (GetAce(acl, index, (void **)&ace))
+                trace("Private DACL ACE %lu type %u flags %#x size %u mask %#lx\n",
+                      index, ace->Header.AceType, ace->Header.AceFlags, ace->Header.AceSize, ace->Mask);
+    ret = GetSecurityDescriptorControl(sd, &control, &revision);
+    ok(ret && (control & required) == required, "Unexpected control %#x\n", control);
+    return acl;
+}
+
+static void test_private_object_parent_inheritance(HANDLE token, GENERIC_MAPPING *mapping,
+        BOOL (WINAPI *create_security)(PSECURITY_DESCRIPTOR, PSECURITY_DESCRIPTOR,
+                                      PSECURITY_DESCRIPTOR *, GUID *, BOOL, ULONG, HANDLE, PGENERIC_MAPPING))
+{
+    SID world = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    union { ULONG_PTR align; BYTE bytes[sizeof(TOKEN_OWNER) + SECURITY_MAX_SID_SIZE]; } owner_buffer;
+    union { ULONG_PTR align; BYTE bytes[sizeof(TOKEN_PRIMARY_GROUP) + SECURITY_MAX_SID_SIZE]; } group_buffer;
+    TOKEN_OWNER *token_owner = (void *)owner_buffer.bytes;
+    TOKEN_PRIMARY_GROUP *token_group = (void *)group_buffer.bytes;
+    SECURITY_DESCRIPTOR parent_defaults;
+    PSECURITY_DESCRIPTOR parent, result;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    ACCESS_ALLOWED_ACE *ace;
+    PSID owner, group;
+    PACL acl;
+    NTSTATUS status;
+    DWORD api, inherit, defaults, i, revision, expected_control, acl_control, flags, size;
+    BOOL ret, owner_defaulted, group_defaulted, present, defaulted;
+
+    parent = private_object_descriptor("O:SYG:SYD:(D;OIIO;0x2;;;WD)(A;OICI;0x7;;;WD)");
+    if (!parent) return;
+    ret = GetTokenInformation(token, TokenOwner, owner_buffer.bytes, sizeof(owner_buffer), &size) &&
+          GetTokenInformation(token, TokenPrimaryGroup, group_buffer.bytes, sizeof(group_buffer), &size) &&
+          GetSecurityDescriptorDacl(parent, &present, &acl, &defaulted) && present && acl &&
+          InitializeSecurityDescriptor(&parent_defaults, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorOwner(&parent_defaults, token_owner->Owner, FALSE) &&
+          SetSecurityDescriptorGroup(&parent_defaults, token_group->PrimaryGroup, FALSE) &&
+          SetSecurityDescriptorDacl(&parent_defaults, TRUE, acl, FALSE);
+    ok(ret, "Constructor parent-default setup failed: %lu.\n", GetLastError());
+    if (!ret) { LocalFree(parent); return; }
+    for (api = 0; api < 2; ++api)
+    {
+        for (inherit = 0; inherit < 2; ++inherit)
+        {
+            for (defaults = 0; defaults < 2; ++defaults)
+            {
+                winetest_push_context("parent-only %s auto %lu defaults %s", api ? "RTL" : "public", inherit,
+                                      defaults ? "parent" : "token");
+                flags = (inherit ? SEF_DACL_AUTO_INHERIT : 0) |
+                        (defaults ? SEF_DEFAULT_OWNER_FROM_PARENT | SEF_DEFAULT_GROUP_FROM_PARENT : 0);
+                result = NULL;
+                if (api)
+                {
+                    status = RtlNewSecurityObjectEx(defaults ? &parent_defaults : parent, NULL, &result, NULL,
+                                                    FALSE, flags, token, mapping);
+                    ok(!status && result, "Constructor returned %#lx, SD %p.\n", (DWORD)status, result);
+                    ret = !status && result;
+                }
+                else
+                {
+                    ret = create_security(defaults ? &parent_defaults : parent, NULL, &result, NULL,
+                                           FALSE, flags, token, mapping);
+                    ok(ret && result, "Constructor returned %d, error %lu, SD %p.\n", ret, GetLastError(), result);
+                }
+                if (ret && result)
+                {
+                    ret = IsValidSecurityDescriptor(result);
+                    ok(ret, "Constructor descriptor is invalid.\n");
+                    if (!ret) goto release;
+                    ret = GetSecurityDescriptorControl(result, &control, &revision);
+                    ok(ret, "Constructor control query failed: %lu.\n", GetLastError());
+                    if (ret)
+                    {
+                        ok(control & SE_SELF_RELATIVE, "Constructor descriptor is not self-relative: %#x.\n", control);
+                        acl_control = SE_DACL_PRESENT | SE_DACL_DEFAULTED | SE_DACL_PROTECTED |
+                                      SE_DACL_AUTO_INHERIT_REQ | SE_DACL_AUTO_INHERITED;
+                        expected_control = SE_DACL_PRESENT | (inherit ? SE_DACL_AUTO_INHERITED : 0);
+                        ok((control & acl_control) == expected_control, "DACL control %#lx, expected %#lx.\n",
+                           control & acl_control, expected_control);
+                        ok(control == (expected_control | SE_SELF_RELATIVE), "Constructor full control %#x, expected %#lx.\n",
+                           control, expected_control | SE_SELF_RELATIVE);
+                    }
+                    ret = GetSecurityDescriptorOwner(result, &owner, &owner_defaulted) && owner && IsValidSid(owner);
+                    ok(ret, "Constructor owner is invalid.\n");
+                    if (ret && defaults) ok(EqualSid(owner, token_owner->Owner), "Constructor parent-default owner differs: %s.\n", debugstr_sid(owner));
+                    ret = GetSecurityDescriptorGroup(result, &group, &group_defaulted) && group && IsValidSid(group);
+                    ok(ret, "Constructor group is invalid.\n");
+                    if (ret && defaults) ok(EqualSid(group, token_group->PrimaryGroup), "Constructor parent-default group differs: %s.\n", debugstr_sid(group));
+                    acl = private_object_dacl(result, 2, SE_DACL_PRESENT);
+                    if (!acl) goto release;
+                    ret = IsValidAcl(acl);
+                    ok(ret, "Constructor DACL is invalid.\n");
+                    if (!ret) goto release;
+                    for (i = 0; i < acl->AceCount && i < 2; ++i)
+                    {
+                        ret = GetAce(acl, i, (void **)&ace);
+                        ok(ret, "Constructor ACE %lu query failed: %lu.\n", i, GetLastError());
+                        if (!ret) continue;
+                        ok(ace->Header.AceType == (i ? ACCESS_ALLOWED_ACE_TYPE : ACCESS_DENIED_ACE_TYPE),
+                           "Constructor ACE %lu type %u.\n", i, ace->Header.AceType);
+                        ok(ace->Header.AceFlags == (inherit ? INHERITED_ACE : 0),
+                           "Constructor ACE %lu flags %#x, expected %#x.\n", i, ace->Header.AceFlags,
+                           inherit ? INHERITED_ACE : 0);
+                        ok(ace->Header.AceSize >= FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(&world),
+                           "Constructor ACE %lu is too small: %u.\n", i, ace->Header.AceSize);
+                        if (ace->Header.AceSize < FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(&world)) continue;
+                        ok(ace->Mask == (i ? mapping->GenericAll : mapping->GenericWrite),
+                           "Constructor ACE %lu mask %#lx.\n", i, ace->Mask);
+                        ret = IsValidSid(&ace->SidStart);
+                        ok(ret && EqualSid(&ace->SidStart, &world), "Constructor ACE %lu World SID differs.\n", i);
+                    }
+                }
+release:
+                if (result)
+                {
+                    if (api)
+                    {
+                        status = RtlDeleteSecurityObject(&result);
+                        ok(!status, "RTL constructor cleanup returned %#lx.\n", (DWORD)status);
+                    }
+                    else
+                        ok(DestroyPrivateObjectSecurity(&result), "Public constructor cleanup failed: %lu.\n", GetLastError());
+                }
+                winetest_pop_context();
+            }
+        }
+    }
+    LocalFree(parent);
+}
+
+static void test_private_object_inheritance(void)
+{
+    BOOL (WINAPI *pCreatePrivateObjectSecurityEx)(PSECURITY_DESCRIPTOR, PSECURITY_DESCRIPTOR,
+        PSECURITY_DESCRIPTOR *, GUID *, BOOL, ULONG, HANDLE, PGENERIC_MAPPING);
+    BOOL (WINAPI *pSetPrivateObjectSecurityEx)(SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        PSECURITY_DESCRIPTOR *, ULONG, PGENERIC_MAPPING, HANDLE);
+    BOOL (WINAPI *pConvertToAutoInheritPrivateObjectSecurity)(PSECURITY_DESCRIPTOR, PSECURITY_DESCRIPTOR,
+        PSECURITY_DESCRIPTOR *, GUID *, BOOLEAN, PGENERIC_MAPPING);
+    HMODULE advapi = GetModuleHandleA("advapi32.dll");
+    static const ULONG avoid = SEF_AVOID_PRIVILEGE_CHECK | SEF_AVOID_OWNER_CHECK |
+                               SEF_AVOID_OWNER_RESTRICTION;
+    static const GENERIC_MAPPING file_mapping = {1, 2, 4, 7};
+    GENERIC_MAPPING mapping = file_mapping;
+    PSECURITY_DESCRIPTOR parent, creator, current, result = NULL, saved;
+    SECURITY_DESCRIPTOR modification;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    ACCESS_ALLOWED_ACE *ace;
+    HANDLE primary = NULL, token = NULL, restricted = NULL;
+    PACL acl;
+    BOOL ret, present, defaulted;
+    DWORD revision, error, size;
+    ACCESS_MASK before, after;
+    BYTE sid_buffer[SECURITY_MAX_SID_SIZE];
+    PSID world = sid_buffer;
+    ULONG index;
+    static const struct
+    {
+        const char *parent;
+        BOOL container;
+        DWORD count;
+        BYTE flags;
+    } propagation[] =
+    {
+        {"O:SYG:SYD:(A;OIIO;0x1;;;WD)", FALSE, 1, INHERITED_ACE},
+        {"O:SYG:SYD:(A;OINP;0x1;;;WD)", TRUE, 0, 0},
+        {"O:SYG:SYD:(A;CINP;0x1;;;WD)", TRUE, 1, INHERITED_ACE},
+        {"O:SYG:SYD:(A;OI;0x1;;;WD)", TRUE, 1, INHERITED_ACE | OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE},
+        {"O:SYG:SYD:(A;CI;0x1;;;WD)", FALSE, 0, 0}
+    };
+
+    pCreatePrivateObjectSecurityEx = (void *)GetProcAddress(advapi, "CreatePrivateObjectSecurityEx");
+    pSetPrivateObjectSecurityEx = (void *)GetProcAddress(advapi, "SetPrivateObjectSecurityEx");
+    pConvertToAutoInheritPrivateObjectSecurity = (void *)GetProcAddress(advapi, "ConvertToAutoInheritPrivateObjectSecurity");
+    if (!pCreatePrivateObjectSecurityEx || !pSetPrivateObjectSecurityEx ||
+        !pConvertToAutoInheritPrivateObjectSecurity)
+    {
+        win_skip("Private-object inheritance APIs are unavailable\n");
+        return;
+    }
+    ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &primary);
+    ok(ret, "OpenProcessToken failed: %lu\n", GetLastError());
+    if (!ret) return;
+    ret = DuplicateToken(primary, SecurityImpersonation, &token);
+    ok(ret, "DuplicateToken failed: %lu\n", GetLastError());
+    if (!ret) goto done;
+
+    test_private_object_parent_inheritance(token, &mapping, pCreatePrivateObjectSecurityEx);
+
+    parent = private_object_descriptor("O:SYG:SYD:(A;OICI;GR;;;CO)");
+    creator = private_object_descriptor("O:WDG:WDD:");
+    if (!parent || !creator) goto create_done;
+    ret = pCreatePrivateObjectSecurityEx(parent, creator, &result, NULL, FALSE,
+                                        avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+    ok(ret, "Leaf inheritance failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        acl = private_object_dacl(result, 1, SE_DACL_AUTO_INHERITED);
+        if (acl && acl->AceCount)
+        {
+            GetAce(acl, 0, (void **)&ace);
+            ok(ace->Mask == 1 && ace->Header.AceFlags == INHERITED_ACE,
+               "Leaf ACE mask %#lx flags %#x\n", ace->Mask, ace->Header.AceFlags);
+            size = sizeof(sid_buffer);
+            CreateWellKnownSid(WinWorldSid, NULL, world, &size);
+            ok(EqualSid(&ace->SidStart, world), "Creator owner was not substituted\n");
+        }
+        DestroyPrivateObjectSecurity(&result);
+    }
+    result = NULL;
+    ret = pCreatePrivateObjectSecurityEx(parent, creator, &result, NULL, TRUE,
+                                        avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+    ok(ret, "Container inheritance failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        acl = private_object_dacl(result, 2, SE_DACL_AUTO_INHERITED);
+        if (acl && acl->AceCount == 2)
+        {
+            GetAce(acl, 0, (void **)&ace);
+            ok(ace->Mask == 1 && !(ace->Header.AceFlags & INHERIT_ONLY_ACE),
+               "Missing effective mapped ACE\n");
+            GetAce(acl, 1, (void **)&ace);
+            ok(ace->Mask == GENERIC_READ && (ace->Header.AceFlags & INHERIT_ONLY_ACE),
+               "Missing inheritable generic ACE\n");
+        }
+        DestroyPrivateObjectSecurity(&result);
+    }
+    result = NULL;
+    ret = pCreatePrivateObjectSecurityEx(NULL, creator, &result, NULL, FALSE,
+                                        SEF_AVOID_PRIVILEGE_CHECK | SEF_AVOID_OWNER_RESTRICTION,
+                                        NULL, &mapping);
+    error = GetLastError();
+    ok(!ret && error == ERROR_NO_TOKEN, "Missing owner-validation token: %u, %lu\n", ret, error);
+    if (ret) DestroyPrivateObjectSecurity(&result);
+    result = NULL;
+    ret = pCreatePrivateObjectSecurityEx(NULL, creator, &result, NULL, FALSE,
+                                        SEF_AVOID_PRIVILEGE_CHECK | SEF_AVOID_OWNER_RESTRICTION,
+                                        primary, &mapping);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INVALID_OWNER, "Unassignable owner accepted: %u, %lu\n", ret, error);
+    if (ret) DestroyPrivateObjectSecurity(&result);
+    result = NULL;
+    SetSecurityDescriptorControl(creator, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ret = pCreatePrivateObjectSecurityEx(parent, creator, &result, NULL, FALSE,
+                                        avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+    ok(ret, "Protected empty ACL failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        private_object_dacl(result, 0, SE_DACL_PROTECTED);
+        DestroyPrivateObjectSecurity(&result);
+    }
+    result = NULL;
+    InitializeSecurityDescriptor(&modification, SECURITY_DESCRIPTOR_REVISION);
+    GetSecurityDescriptorOwner(creator, &modification.Owner, &defaulted);
+    GetSecurityDescriptorGroup(creator, &modification.Group, &defaulted);
+    SetSecurityDescriptorDacl(&modification, TRUE, NULL, FALSE);
+    SetSecurityDescriptorControl(&modification, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ret = pCreatePrivateObjectSecurityEx(parent, &modification, &result, NULL, FALSE,
+                                        avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+    ok(ret, "Protected NULL ACL failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        GetSecurityDescriptorDacl(result, &present, &acl, &defaulted);
+        ok(present && !acl, "NULL ACL became an empty ACL\n");
+        DestroyPrivateObjectSecurity(&result);
+    }
+    result = NULL;
+    ret = pCreatePrivateObjectSecurityEx(NULL, NULL, &result, NULL, FALSE,
+                                        SEF_AVOID_OWNER_RESTRICTION, primary, &mapping);
+    ok(ret, "Token-default descriptor failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        GetSecurityDescriptorOwner(result, &world, &defaulted);
+        ok(world && IsValidSid(world), "Missing token-default owner\n");
+        DestroyPrivateObjectSecurity(&result);
+    }
+create_done:
+    if (creator) LocalFree(creator);
+    if (parent) LocalFree(parent);
+
+    for (index = 0; index < ARRAY_SIZE(propagation); ++index)
+    {
+        parent = private_object_descriptor(propagation[index].parent);
+        creator = private_object_descriptor("O:WDG:WDD:");
+        result = NULL;
+        if (parent && creator)
+        {
+            ret = pCreatePrivateObjectSecurityEx(parent, creator, &result, NULL, propagation[index].container,
+                                                avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+            ok(ret, "Propagation case %lu failed: %lu\n", index, GetLastError());
+            if (ret)
+            {
+                acl = private_object_dacl(result, propagation[index].count, SE_DACL_AUTO_INHERITED);
+                if (acl && acl->AceCount)
+                {
+                    GetAce(acl, 0, (void **)&ace);
+                    ok(ace->Header.AceFlags == propagation[index].flags,
+                       "Propagation case %lu flags %#x, expected %#x\n",
+                       index, ace->Header.AceFlags, propagation[index].flags);
+                }
+                DestroyPrivateObjectSecurity(&result);
+            }
+        }
+        if (creator) LocalFree(creator);
+        if (parent) LocalFree(parent);
+    }
+
+    parent = private_object_descriptor("O:SYG:SYD:(A;OI;0x1;;;WD)(A;OI;0x2;;;WD)");
+    current = private_object_descriptor("O:SYG:SYD:(A;;0x3;;;WD)(A;;0x4;;;WD)");
+    if (parent && current)
+    {
+        before = private_object_access(current, token, &mapping);
+        result = NULL;
+        ret = pConvertToAutoInheritPrivateObjectSecurity(parent, current, &result, NULL, FALSE, &mapping);
+        ok(ret, "Combined-mask conversion failed: %lu\n", GetLastError());
+        if (ret)
+        {
+            after = private_object_access(result, token, &mapping);
+            ok(before == after && after == 7, "Conversion changed permissions %#lx -> %#lx\n", before, after);
+            acl = private_object_dacl(result, 3, SE_DACL_AUTO_INHERITED);
+            GetSecurityDescriptorControl(result, &control, &revision);
+            ok(!(control & SE_DACL_PROTECTED), "Equivalent conversion was protected\n");
+            if (acl && acl->AceCount == 3)
+            {
+                for (index = 0; index < 3; ++index)
+                {
+                    ret = GetAce(acl, index, (void **)&ace);
+                    ok(ret, "Converted ACE %lu query failed: %lu\n", index, GetLastError());
+                    if (!ret) continue;
+                    ok(ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE,
+                       "Converted ACE %lu type %u\n", index, ace->Header.AceType);
+                    ok(ace->Mask == (index ? 1u << (index - 1) : 4) &&
+                       ace->Header.AceFlags == (index ? INHERITED_ACE : 0),
+                       "Converted ACE %lu mask %#lx flags %#x\n", index, ace->Mask, ace->Header.AceFlags);
+                    ok(IsWellKnownSid(&ace->SidStart, WinWorldSid), "Converted ACE %lu SID changed\n", index);
+                }
+            }
+            DestroyPrivateObjectSecurity(&result);
+        }
+    }
+    if (current) LocalFree(current);
+    current = private_object_descriptor("O:SYG:SYD:(A;;0x3;;;WD)(D;;0x1;;;WD)");
+    if (parent && current)
+    {
+        before = private_object_access(current, token, &mapping);
+        result = NULL;
+        ret = pConvertToAutoInheritPrivateObjectSecurity(parent, current, &result, NULL, FALSE, &mapping);
+        ok(ret, "Order-preserving conversion failed: %lu\n", GetLastError());
+        if (ret)
+        {
+            after = private_object_access(result, token, &mapping);
+            ok(before == after && after == 3, "Protected fallback changed permissions %#lx -> %#lx\n", before, after);
+            private_object_dacl(result, 2, SE_DACL_AUTO_INHERITED | SE_DACL_PROTECTED);
+            DestroyPrivateObjectSecurity(&result);
+        }
+    }
+    if (current) LocalFree(current);
+    if (parent) LocalFree(parent);
+
+    creator = private_object_descriptor("O:WDG:WDD:(A;;0x2;;;WD)");
+    parent = private_object_descriptor("O:WDG:WDD:(A;OI;0x1;;;WD)");
+    result = NULL;
+    if (!creator || !parent) goto set_done;
+    ret = pCreatePrivateObjectSecurityEx(parent, creator, &result, NULL, FALSE,
+                                        avoid, NULL, &mapping);
+    ok(ret, "Explicit ACL without auto-inheritance failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        after = private_object_access(result, token, &mapping);
+        ok(after == 2, "Unexpected implicit merge: %#lx\n", after);
+        DestroyPrivateObjectSecurity(&result);
+    }
+    result = NULL;
+    ret = pCreatePrivateObjectSecurityEx(NULL, creator, &result, NULL, FALSE,
+                                        avoid | SEF_DACL_AUTO_INHERIT | SEF_DEFAULT_DESCRIPTOR_FOR_OBJECT,
+                                        NULL, &mapping);
+    ok(ret, "Default creator ACL failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        after = private_object_access(result, token, &mapping);
+        ok(after == 2, "Default creator ACL was lost without a parent: %#lx\n", after);
+        DestroyPrivateObjectSecurity(&result);
+    }
+    result = NULL;
+    InitializeSecurityDescriptor(&modification, SECURITY_DESCRIPTOR_REVISION);
+    GetSecurityDescriptorOwner(creator, &modification.Owner, &defaulted);
+    GetSecurityDescriptorGroup(creator, &modification.Group, &defaulted);
+    GetSecurityDescriptorDacl(creator, &present, &acl, &defaulted);
+    SetSecurityDescriptorDacl(&modification, present, acl, TRUE);
+    ret = pCreatePrivateObjectSecurityEx(parent, &modification, &result, NULL, FALSE,
+                                        avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+    ok(ret, "Defaulted creator ACL inheritance failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        after = private_object_access(result, token, &mapping);
+        ok(after == 1, "Defaulted creator overrode inherited permissions: %#lx\n", after);
+        private_object_dacl(result, 1, SE_DACL_AUTO_INHERITED);
+        DestroyPrivateObjectSecurity(&result);
+    }
+    result = NULL;
+    ret = pCreatePrivateObjectSecurityEx(parent, creator, &result, NULL, FALSE,
+                                        avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+    ok(ret, "Setter fixture creation failed: %lu\n", GetLastError());
+    if (!ret) goto set_done;
+    current = private_object_descriptor("O:WDG:WDD:(A;;0x4;;;WD)(A;ID;0x2;;;WD)");
+    if (!current) goto set_done;
+    ret = pSetPrivateObjectSecurityEx(DACL_SECURITY_INFORMATION, current, &result,
+                                     avoid | SEF_DACL_AUTO_INHERIT, &mapping, NULL);
+    ok(ret, "Private DACL update failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        after = private_object_access(result, token, &mapping);
+        ok(after == 5, "Inherited permissions were replaced by supplied inherited ACE: %#lx\n", after);
+        private_object_dacl(result, 2, SE_DACL_AUTO_INHERITED);
+    }
+    SetSecurityDescriptorControl(current, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    ret = pSetPrivateObjectSecurityEx(DACL_SECURITY_INFORMATION, current, &result,
+                                     avoid | SEF_DACL_AUTO_INHERIT, &mapping, NULL);
+    ok(ret, "Private protected DACL update failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        after = private_object_access(result, token, &mapping);
+        ok(after == 6, "Protected DACL did not replace old inheritance: %#lx\n", after);
+        acl = private_object_dacl(result, 2, SE_DACL_PROTECTED);
+        if (acl)
+            for (index = 0; index < acl->AceCount; ++index)
+            {
+                GetAce(acl, index, (void **)&ace);
+                ok(!(ace->Header.AceFlags & INHERITED_ACE), "Protected ACE remained inherited\n");
+            }
+    }
+    LocalFree(current);
+    current = private_object_descriptor("O:WDG:WDD:(A;ID;0x1;;;WD)(A;;0x4;;;WD)");
+    if (current)
+    {
+        ret = pSetPrivateObjectSecurityEx(DACL_SECURITY_INFORMATION, current, &result,
+                                         avoid | SEF_DACL_AUTO_INHERIT, &mapping, NULL);
+        ok(ret, "Unprotecting private DACL failed: %lu\n", GetLastError());
+        if (ret)
+        {
+            after = private_object_access(result, token, &mapping);
+            ok(after == 5, "Unprotecting lost supplied ACL: %#lx\n", after);
+            acl = private_object_dacl(result, 2, SE_DACL_AUTO_INHERITED);
+            GetSecurityDescriptorControl(result, &control, &revision);
+            ok(!(control & SE_DACL_PROTECTED), "Descriptor remained protected\n");
+            if (acl && acl->AceCount)
+            {
+                GetAce(acl, 0, (void **)&ace);
+                ok(ace->Header.AceFlags & INHERITED_ACE, "Supplied inherited marking was lost\n");
+            }
+        }
+        LocalFree(current);
+    }
+    saved = result;
+    InitializeSecurityDescriptor(&modification, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorOwner(&modification, NULL, FALSE);
+    ret = pSetPrivateObjectSecurityEx(OWNER_SECURITY_INFORMATION, &modification, &result,
+                                     avoid, &mapping, NULL);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INVALID_OWNER, "Invalid owner accepted: %u, %lu\n", ret, error);
+    ok(result == saved, "Failed update replaced the descriptor\n");
+set_done:
+    if (result) DestroyPrivateObjectSecurity(&result);
+    if (creator) LocalFree(creator);
+    if (parent) LocalFree(parent);
+
+
+    {
+        static const GUID type = {0x372ccb92, 0x5f48, 0x42fb, {0x95, 0x8d, 0x64, 0x2b, 0x7b, 0x9e, 0x12, 0x34}};
+        static const BYTE payload[] = {0x31, 0x45, 0x9c, 0x72, 0x18, 0x26, 0x5e, 0xa4};
+        DWORD ace_buffer[32], acl_buffer[40];
+        ACCESS_ALLOWED_CALLBACK_OBJECT_ACE *object_ace = (void *)ace_buffer;
+        ACCESS_ALLOWED_CALLBACK_OBJECT_ACE *inherited_ace;
+        SECURITY_DESCRIPTOR object_parent;
+        GUID selected_type = type;
+        DWORD sid_length, ace_length;
+        PACL object_acl = (void *)acl_buffer;
+
+        world = sid_buffer;
+        size = sizeof(sid_buffer);
+        ret = CreateWellKnownSid(WinWorldSid, NULL, world, &size);
+        ok(ret, "World SID creation failed: %lu\n", GetLastError());
+        sid_length = GetLengthSid(world);
+        ace_length = FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, SidStart) + sid_length + sizeof(payload);
+        memset(ace_buffer, 0, sizeof(ace_buffer));
+        object_ace->Header.AceType = ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE;
+        object_ace->Header.AceFlags = OBJECT_INHERIT_ACE;
+        object_ace->Header.AceSize = ace_length;
+        object_ace->Mask = GENERIC_READ;
+        object_ace->Flags = ACE_OBJECT_TYPE_PRESENT | ACE_INHERITED_OBJECT_TYPE_PRESENT;
+        object_ace->ObjectType = type;
+        object_ace->InheritedObjectType = type;
+        CopySid(sid_length, &object_ace->SidStart, world);
+        memcpy((BYTE *)&object_ace->SidStart + sid_length, payload, sizeof(payload));
+        InitializeAcl(object_acl, sizeof(acl_buffer), ACL_REVISION_DS);
+        ret = AddAce(object_acl, ACL_REVISION_DS, MAXDWORD, object_ace, ace_length);
+        ok(ret, "Callback object ACE fixture failed: %lu\n", GetLastError());
+        InitializeSecurityDescriptor(&object_parent, SECURITY_DESCRIPTOR_REVISION);
+        SetSecurityDescriptorOwner(&object_parent, world, FALSE);
+        SetSecurityDescriptorGroup(&object_parent, world, FALSE);
+        SetSecurityDescriptorDacl(&object_parent, TRUE, object_acl, FALSE);
+        creator = private_object_descriptor("O:WDG:WDD:");
+        result = NULL;
+        if (creator && ret)
+        {
+            ret = pCreatePrivateObjectSecurityEx(&object_parent, creator, &result, &selected_type, FALSE,
+                                                avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+            ok(ret, "Callback object inheritance failed: %lu\n", GetLastError());
+            if (ret)
+            {
+                acl = private_object_dacl(result, 1, SE_DACL_AUTO_INHERITED);
+                if (acl && acl->AceCount)
+                {
+                    ret = GetAce(acl, 0, (void **)&inherited_ace);
+                    ok(ret, "Callback GetAce failed: %lu\n", GetLastError());
+                    if (ret)
+                    {
+                        ok(inherited_ace->Header.AceSize == ace_length, "Callback object size changed\n");
+                        if (inherited_ace->Header.AceSize == ace_length)
+                        {
+                            ok(inherited_ace->Mask == GENERIC_READ, "Callback mask %#lx\n", inherited_ace->Mask);
+                            ok(inherited_ace->Flags == object_ace->Flags, "Callback object flags changed\n");
+                            ok(!memcmp((BYTE *)inherited_ace + FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ObjectType),
+                                       (BYTE *)object_ace + FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ObjectType),
+                                       ace_length - FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ObjectType)),
+                               "Callback GUIDs, SID, or opaque payload changed\n");
+                        }
+                    }
+                }
+                DestroyPrivateObjectSecurity(&result);
+            }
+            result = NULL;
+            selected_type.Data1 ^= 1;
+            ret = pCreatePrivateObjectSecurityEx(&object_parent, creator, &result, &selected_type, FALSE,
+                                                avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+            ok(ret, "Nonmatching object inheritance failed: %lu\n", GetLastError());
+            if (ret)
+            {
+                acl = private_object_dacl(result, 1, SE_DACL_AUTO_INHERITED);
+                if (acl && acl->AceCount == 1)
+                {
+                    ret = GetAce(acl, 0, (void **)&inherited_ace);
+                    ok(ret, "Nonmatching callback GetAce failed: %lu\n", GetLastError());
+                    if (ret)
+                    {
+                        ok(inherited_ace->Header.AceType == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE &&
+                           inherited_ace->Header.AceFlags == INHERITED_ACE &&
+                           inherited_ace->Header.AceSize == ace_length,
+                           "Nonmatching callback header type %u flags %#x size %u\n",
+                           inherited_ace->Header.AceType, inherited_ace->Header.AceFlags,
+                           inherited_ace->Header.AceSize);
+                        if (inherited_ace->Header.AceSize == ace_length)
+                            ok(!memcmp((BYTE *)inherited_ace + sizeof(ACE_HEADER),
+                                       (BYTE *)object_ace + sizeof(ACE_HEADER), ace_length - sizeof(ACE_HEADER)),
+                               "Nonmatching callback mask, GUIDs, SID, or payload changed\n");
+                    }
+                }
+                DestroyPrivateObjectSecurity(&result);
+            }
+        }
+        if (creator) LocalFree(creator);
+    }
+
+    {
+        SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
+        DWORD domain_buffer[8], acl_size, sd_size;
+        PSID domain = domain_buffer;
+        SECURITY_DESCRIPTOR large_parent, large_modification;
+        PACL large_acl;
+        BYTE *snapshot = NULL;
+
+        InitializeSid(domain, &authority, 5);
+        *GetSidSubAuthority(domain, 0) = 21;
+        *GetSidSubAuthority(domain, 1) = 1;
+        *GetSidSubAuthority(domain, 2) = 2;
+        *GetSidSubAuthority(domain, 3) = 3;
+        acl_size = sizeof(ACL) + 1024 * (FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + GetLengthSid(domain));
+        large_acl = HeapAlloc(GetProcessHeap(), 0, acl_size);
+        ok(large_acl != NULL, "Large ACL allocation failed\n");
+        creator = private_object_descriptor("O:WDG:WDD:");
+        result = NULL;
+        if (large_acl && creator)
+        {
+            InitializeAcl(large_acl, acl_size, ACL_REVISION);
+            for (index = 0; index < 1024; ++index)
+            {
+                *GetSidSubAuthority(domain, 4) = 1000 + index;
+                if (!AddAccessAllowedAceEx(large_acl, ACL_REVISION, OBJECT_INHERIT_ACE, 1, domain)) break;
+            }
+            ok(index == 1024, "Large ACL fixture stopped at %lu: %lu\n", index, GetLastError());
+            InitializeSecurityDescriptor(&large_parent, SECURITY_DESCRIPTOR_REVISION);
+            SetSecurityDescriptorDacl(&large_parent, TRUE, large_acl, FALSE);
+            if (index == 1024)
+            {
+                ret = pCreatePrivateObjectSecurityEx(&large_parent, creator, &result, NULL, FALSE,
+                                                    avoid | SEF_DACL_AUTO_INHERIT, NULL, &mapping);
+                ok(ret, "Large inherited ACL creation failed: %lu\n", GetLastError());
+                if (ret)
+                {
+                    for (index = 0; index < large_acl->AceCount; ++index)
+                    {
+                        GetAce(large_acl, index, (void **)&ace);
+                        ace->Header.AceFlags = 0;
+                    }
+                    sd_size = GetSecurityDescriptorLength(result);
+                    snapshot = HeapAlloc(GetProcessHeap(), 0, sd_size);
+                    ok(snapshot != NULL, "Descriptor snapshot allocation failed\n");
+                    if (snapshot)
+                    {
+                        memcpy(snapshot, result, sd_size);
+                        saved = result;
+                        InitializeSecurityDescriptor(&large_modification, SECURITY_DESCRIPTOR_REVISION);
+                        SetSecurityDescriptorDacl(&large_modification, TRUE, large_acl, FALSE);
+                        ret = pSetPrivateObjectSecurityEx(DACL_SECURITY_INFORMATION, &large_modification,
+                                                         &result, avoid | SEF_DACL_AUTO_INHERIT, &mapping, NULL);
+                        ok(!ret, "Oversized combined ACL was accepted\n");
+                        ok(result == saved && !memcmp(result, snapshot, sd_size),
+                           "Failed ACL-size allocation changed the original descriptor\n");
+                    }
+                    DestroyPrivateObjectSecurity(&result);
+                }
+            }
+        }
+        if (snapshot) HeapFree(GetProcessHeap(), 0, snapshot);
+        if (large_acl) HeapFree(GetProcessHeap(), 0, large_acl);
+        if (creator) LocalFree(creator);
+    }
+
+
+    {
+        DWORD acl_storage[32];
+        BYTE owner_rights_buffer[SECURITY_MAX_SID_SIZE];
+        SECURITY_DESCRIPTOR token_descriptor, object_descriptor;
+        TOKEN_STATISTICS statistics;
+        HANDLE managed_token = NULL, query_token = NULL, read_token = NULL;
+        PACL token_acl = (void *)acl_storage;
+        PSID owner_rights = owner_rights_buffer;
+        DWORD needed;
+#else
+        ctrl = ((1 << bit) & immutable) ? test : ref | mutable;
+        setOrClear ^= bitsOfInterest;
+        SetLastError (0xbebecaca);
+        SetSecurityDescriptorControl (sec, bitsOfInterest, setOrClear | (1 << bit));
+        ok (GetLastError () == dwExpect, fmt, strExpect, GetLastError ());
+        GetSecurityDescriptorControl(sec, &test, &dwRevision);
+        expect_eq(test, ctrl, int, "%x");
+#endif
+
+#ifdef __REACTOS__
+        world = sid_buffer;
+        size = sizeof(sid_buffer);
+        ret = CreateWellKnownSid(WinWorldSid, NULL, world, &size);
+        ok(ret, "Query-token world SID creation failed: %lu\n", GetLastError());
+        ret = DuplicateTokenEx(primary, TOKEN_QUERY | READ_CONTROL | WRITE_DAC, NULL,
+                               SecurityImpersonation, TokenPrimary, &managed_token);
+        ok(ret, "Query-token fixture duplication failed: %lu\n", GetLastError());
+        if (ret)
+        {
+            InitializeAcl(token_acl, sizeof(acl_storage), ACL_REVISION);
+            AddAccessAllowedAce(token_acl, ACL_REVISION, TOKEN_QUERY | READ_CONTROL, world);
+            InitializeSecurityDescriptor(&token_descriptor, SECURITY_DESCRIPTOR_REVISION);
+            SetSecurityDescriptorDacl(&token_descriptor, TRUE, token_acl, FALSE);
+            ret = SetKernelObjectSecurity(managed_token, DACL_SECURITY_INFORMATION, &token_descriptor);
+            ok(ret, "Readable token DACL setup failed: %lu\n", GetLastError());
+            if (ret)
+            {
+                ret = DuplicateHandle(GetCurrentProcess(), managed_token, GetCurrentProcess(),
+                                      &query_token, TOKEN_QUERY, FALSE, 0);
+                ok(ret, "Query-only handle creation failed: %lu\n", GetLastError());
+            }
+            if (ret)
+            {
+                ret = GetKernelObjectSecurity(query_token, DACL_SECURITY_INFORMATION, NULL, 0, &needed);
+                error = GetLastError();
+                ok(!ret && error == ERROR_ACCESS_DENIED,
+                   "Query-only source has READ_CONTROL: %u, %lu\n", ret, error);
+                InitializeSecurityDescriptor(&object_descriptor, SECURITY_DESCRIPTOR_REVISION);
+                for (index = 0; index < 2; ++index)
+                {
+                    result = NULL;
+                    ret = pCreatePrivateObjectSecurityEx(NULL, &object_descriptor, &result, NULL,
+                                                        FALSE, 0, query_token, &mapping);
+                    ok(ret, "Creation with TOKEN_QUERY only failed: %lu\n", GetLastError());
+                    if (ret)
+                    {
+                        ok(IsValidSecurityDescriptor(result), "Invalid query-token result\n");
+                        DestroyPrivateObjectSecurity(&result);
+                    }
+                    ret = GetTokenInformation(query_token, TokenStatistics, &statistics,
+                                              sizeof(statistics), &needed);
+                    ok(ret, "Source token was closed: %lu\n", GetLastError());
+                    ret = GetKernelObjectSecurity(query_token, DACL_SECURITY_INFORMATION, NULL, 0, &needed);
+                    error = GetLastError();
+                    ok(!ret && error == ERROR_ACCESS_DENIED,
+                       "Source handle access changed: %u, %lu\n", ret, error);
+                }
+
+                size = sizeof(owner_rights_buffer);
+                ret = CreateWellKnownSid(WinCreatorOwnerRightsSid, NULL, owner_rights, &size);
+                ok(ret, "Owner Rights SID creation failed: %lu\n", GetLastError());
+                if (ret)
+                {
+                    InitializeAcl(token_acl, sizeof(acl_storage), ACL_REVISION);
+                    AddAccessDeniedAce(token_acl, ACL_REVISION, READ_CONTROL, world);
+                    AddAccessAllowedAce(token_acl, ACL_REVISION, TOKEN_QUERY, world);
+                    AddAccessAllowedAce(token_acl, ACL_REVISION, 0, owner_rights);
+                    ret = SetKernelObjectSecurity(managed_token, DACL_SECURITY_INFORMATION, &token_descriptor);
+                    ok(ret, "Unreadable token DACL setup failed: %lu\n", GetLastError());
+                    if (ret)
+                    {
+                        ret = DuplicateHandle(GetCurrentProcess(), query_token, GetCurrentProcess(),
+                                              &read_token, READ_CONTROL, FALSE, 0);
+                        error = GetLastError();
+                        ok(!ret && error == ERROR_ACCESS_DENIED,
+                           "DuplicateHandle bypassed token DACL: %u, %lu\n", ret, error);
+                        if (ret) CloseHandle(read_token);
+                        result = (PSECURITY_DESCRIPTOR)(ULONG_PTR)0xdeadbeef;
+                        saved = result;
+                        ret = pCreatePrivateObjectSecurityEx(NULL, &object_descriptor, &result, NULL,
+                                                            FALSE, 0, query_token, &mapping);
+                        if (ret) DestroyPrivateObjectSecurity(&result);
+                        else ok(result == saved, "Failed restricted creation changed output\n");
+                        ret = GetTokenInformation(query_token, TokenStatistics, &statistics,
+                                                  sizeof(statistics), &needed);
+                        ok(ret, "Restricted source token was closed: %lu\n", GetLastError());
+                    }
+                }
+            }
+        }
+        if (query_token) CloseHandle(query_token);
+        if (managed_token) CloseHandle(managed_token);
+        result = NULL;
+    }
+
+    ret = CreateRestrictedToken(primary, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 0, NULL, &restricted);
+    ok(ret, "Privilege-test token failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        creator = private_object_descriptor("O:WDG:WDS:(AU;SA;0x1;;;WD)");
+        result = NULL;
+        if (creator)
+        {
+            ret = pCreatePrivateObjectSecurityEx(NULL, creator, &result, NULL, FALSE,
+                                                SEF_AVOID_OWNER_CHECK | SEF_AVOID_OWNER_RESTRICTION,
+                                                restricted, &mapping);
+            error = GetLastError();
+            ok(!ret && error == ERROR_PRIVILEGE_NOT_HELD, "SACL privilege check: %u, %lu\n", ret, error);
+            if (ret) DestroyPrivateObjectSecurity(&result);
+            LocalFree(creator);
+        }
+#else
+        ctrl = ((1 << bit) & immutable) ? test : ref | (1 << bit);
+        setOrClear ^= bitsOfInterest;
+        SetLastError (0xbebecaca);
+        SetSecurityDescriptorControl (sec, bitsOfInterest, setOrClear | (1 << bit));
+        ok (GetLastError () == dwExpect, fmt, strExpect, GetLastError ());
+        GetSecurityDescriptorControl(sec, &test, &dwRevision);
+        expect_eq(test, ctrl, int, "%x");
+#endif
+    }
+#ifdef __REACTOS__
+done:
+    if (restricted) CloseHandle(restricted);
+    if (token) CloseHandle(token);
+    if (primary) CloseHandle(primary);
+#endif
+}
+
 static void test_PrivateObjectSecurity(void)
 {
     SECURITY_INFORMATION sec_info = OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|SACL_SECURITY_INFORMATION;
@@ -4516,6 +8621,10 @@ static void test_PrivateObjectSecurity(void)
     PSECURITY_DESCRIPTOR buf;
     BOOL ret;
 
+#ifdef __REACTOS__
+    test_private_object_inheritance();
+
+#endif
     ok(ConvertStringSecurityDescriptorToSecurityDescriptorA(
         "O:SY"
         "G:S-1-5-21-93476-23408-4576"
@@ -4641,21 +8750,45 @@ static void test_InitializeAcl(void)
 static void test_GetSecurityInfo(void)
 {
     char domain_users_ptr[sizeof(TOKEN_USER) + sizeof(SID) + sizeof(DWORD)*SID_MAX_SUB_AUTHORITIES];
+#ifdef __REACTOS__
+    char domain_sid_buffer[SECURITY_MAX_SID_SIZE];
+    struct
+    {
+        TOKEN_PRIMARY_GROUP group;
+        BYTE sid[SECURITY_MAX_SID_SIZE];
+    } primary_group;
+#endif
     char b[sizeof(TOKEN_USER) + sizeof(SID) + sizeof(DWORD)*SID_MAX_SUB_AUTHORITIES];
     char admin_ptr[sizeof(SID)+sizeof(ULONG)*SID_MAX_SUB_AUTHORITIES], dacl[100];
+#ifdef __REACTOS__
+    PSID domain_users_sid = (PSID) domain_users_ptr;
+    int domain_users_ace_id = -1, admins_ace_id = -1, user_ace_id = -1, i;
+#else
     PSID domain_users_sid = (PSID) domain_users_ptr, domain_sid;
     SID_IDENTIFIER_AUTHORITY sia = { SECURITY_NT_AUTHORITY };
     int domain_users_ace_id = -1, admins_ace_id = -1, i;
+#endif
     DWORD sid_size = sizeof(admin_ptr), l = sizeof(b);
     SECURITY_ATTRIBUTES sa = {.nLength = sizeof(sa)};
     PSID admin_sid = (PSID) admin_ptr, user_sid;
     char sd[SECURITY_DESCRIPTOR_MIN_LENGTH];
+#ifdef __REACTOS__
+    char process_dacl[200], process_cmdline[2 * MAX_PATH];
+    SECURITY_DESCRIPTOR process_sd;
+    SECURITY_ATTRIBUTES process_sa = {.nLength = sizeof(process_sa)};
+    STARTUPINFOA startup = {.cb = sizeof(startup)};
+    PROCESS_INFORMATION process_info = {0};
+#endif
     BOOL owner_defaulted, group_defaulted;
     BOOL dacl_defaulted, dacl_present;
     ACL_SIZE_INFORMATION acl_size;
     PSECURITY_DESCRIPTOR pSD;
     ACCESS_ALLOWED_ACE *ace;
+#ifdef __REACTOS__
+    HANDLE token, obj, closed_obj;
+#else
     HANDLE token, obj;
+#endif
     PSID owner, group;
     BOOL bret = TRUE;
     PACL pDacl;
@@ -4692,7 +8825,14 @@ static void test_GetSecurityInfo(void)
     }
     bret = GetTokenInformation(token, TokenUser, b, l, &l);
     ok(bret, "GetTokenInformation(TokenUser) failed with error %ld\n", GetLastError());
+#ifdef __REACTOS__
+    bret = GetTokenInformation(token, TokenPrimaryGroup, &primary_group, sizeof(primary_group), &l);
+    ok(bret, "GetTokenInformation(TokenPrimaryGroup) failed with error %ld\n", GetLastError());
+#endif
     CloseHandle( token );
+#ifdef __REACTOS__
+    if (!bret) return;
+#endif
     user_sid = ((TOKEN_USER *)b)->User.Sid;
 
     /* Create something.  Files have lots of associated security info.  */
@@ -4786,58 +8926,174 @@ static void test_GetSecurityInfo(void)
     CloseHandle(obj);
 
     /* Obtain the "domain users" SID from the user SID */
+#ifdef __REACTOS__
+    sid_size = sizeof(domain_sid_buffer);
+    bret = GetWindowsAccountDomainSid(user_sid, domain_sid_buffer, &sid_size);
+    if (bret)
+#else
     if (!AllocateAndInitializeSid(&sia, 4, *GetSidSubAuthority(user_sid, 0),
                                   *GetSidSubAuthority(user_sid, 1),
                                   *GetSidSubAuthority(user_sid, 2),
                                   *GetSidSubAuthority(user_sid, 3), 0, 0, 0, 0, &domain_sid))
+#endif
     {
+#ifdef __REACTOS__
+        sid_size = sizeof(domain_users_ptr);
+        bret = CreateWellKnownSid(WinAccountDomainUsersSid, domain_sid_buffer, domain_users_sid, &sid_size);
+        ok(bret, "CreateWellKnownSid failed with error %ld\n", GetLastError());
+        if (!bret) return;
+#else
         win_skip("Failed to get current domain SID\n");
         return;
+#endif
     }
+#ifdef __REACTOS__
+    else
+    {
+        ok(GetLastError() == ERROR_NON_ACCOUNT_SID, "GetWindowsAccountDomainSid failed with error %ld\n", GetLastError());
+        sid_size = sizeof(domain_users_ptr);
+        bret = CreateWellKnownSid(WinBuiltinUsersSid, NULL, domain_users_sid, &sid_size);
+        ok(bret, "CreateWellKnownSid failed with error %ld\n", GetLastError());
+        if (!bret) return;
+    }
+
+    bret = InitializeAcl((PACL)process_dacl, sizeof(process_dacl), ACL_REVISION);
+    ok(bret, "InitializeAcl failed with error %ld\n", GetLastError());
+    if (!bret) return;
+    bret = AddAccessAllowedAceEx((PACL)process_dacl, ACL_REVISION, 0, PROCESS_ALL_ACCESS, user_sid);
+    ok(bret, "AddAccessAllowedAceEx(user) failed with error %ld\n", GetLastError());
+    if (!bret) return;
+    bret = AddAccessAllowedAceEx((PACL)process_dacl, ACL_REVISION, 0, PROCESS_ALL_ACCESS, admin_sid);
+    ok(bret, "AddAccessAllowedAceEx(administrators) failed with error %ld\n", GetLastError());
+    if (!bret) return;
+    bret = AddAccessAllowedAceEx((PACL)process_dacl, ACL_REVISION,
+                               INHERIT_ONLY_ACE | CONTAINER_INHERIT_ACE, GENERIC_READ, domain_users_sid);
+    ok(bret, "AddAccessAllowedAceEx(group) failed with error %ld\n", GetLastError());
+    if (!bret) return;
+    bret = InitializeSecurityDescriptor(&process_sd, SECURITY_DESCRIPTOR_REVISION);
+    ok(bret, "InitializeSecurityDescriptor failed with error %ld\n", GetLastError());
+    if (!bret) return;
+    bret = SetSecurityDescriptorOwner(&process_sd, user_sid, FALSE);
+    ok(bret, "SetSecurityDescriptorOwner failed with error %ld\n", GetLastError());
+    if (!bret) return;
+    bret = SetSecurityDescriptorGroup(&process_sd, primary_group.group.PrimaryGroup, FALSE);
+    ok(bret, "SetSecurityDescriptorGroup failed with error %ld\n", GetLastError());
+    if (!bret) return;
+    bret = SetSecurityDescriptorDacl(&process_sd, TRUE, (PACL)process_dacl, FALSE);
+    ok(bret, "SetSecurityDescriptorDacl failed with error %ld\n", GetLastError());
+    if (!bret) return;
+    process_sa.lpSecurityDescriptor = &process_sd;
+    snprintf(process_cmdline, sizeof(process_cmdline), "\"%s\" security descriptor", myARGV[0]);
+    bret = CreateProcessA(NULL, process_cmdline, &process_sa, NULL, FALSE, CREATE_SUSPENDED,
+                         NULL, NULL, &startup, &process_info);
+    ok(bret, "CreateProcessA failed with error %ld\n", GetLastError());
+    if (!bret) return;
+#else
     sid_size = sizeof(domain_users_ptr);
     CreateWellKnownSid(WinAccountDomainUsersSid, domain_sid, domain_users_sid, &sid_size);
     FreeSid(domain_sid);
+#endif
 
     /* Test querying the ownership of a process */
+#ifdef __REACTOS__
+    ret = GetSecurityInfo(process_info.hProcess, SE_KERNEL_OBJECT,
+#else
     ret = GetSecurityInfo(GetCurrentProcess(), SE_KERNEL_OBJECT,
+#endif
                            OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION,
                            NULL, NULL, NULL, NULL, &pSD);
     ok(!ret, "GetNamedSecurityInfo failed with error %ld\n", ret);
+#ifdef __REACTOS__
+    if (ret) goto process_done;
+#endif
 
     bret = GetSecurityDescriptorOwner(pSD, &owner, &owner_defaulted);
     ok(bret, "GetSecurityDescriptorOwner failed with error %ld\n", GetLastError());
     ok(owner != NULL, "owner should not be NULL\n");
+#ifdef __REACTOS__
+    ok(owner && EqualSid(owner, user_sid), "Process owner SID != supplied owner SID.\n");
+#else
     ok(EqualSid(owner, admin_sid) || EqualSid(owner, user_sid),
        "Process owner SID != Administrators SID.\n");
+#endif
 
     bret = GetSecurityDescriptorGroup(pSD, &group, &group_defaulted);
     ok(bret, "GetSecurityDescriptorGroup failed with error %ld\n", GetLastError());
     ok(group != NULL, "group should not be NULL\n");
+#ifdef __REACTOS__
+    ok(group && EqualSid(group, primary_group.group.PrimaryGroup), "Process group SID != token primary group SID.\n");
+#else
     ok(EqualSid(group, domain_users_sid), "Process group SID != Domain Users SID.\n");
+#endif
     LocalFree(pSD);
 
     /* Test querying the DACL of a process */
+#ifdef __REACTOS__
+    ret = GetSecurityInfo(process_info.hProcess, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION,
+#else
     ret = GetSecurityInfo(GetCurrentProcess(), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION,
+#endif
                                    NULL, NULL, NULL, NULL, &pSD);
     ok(!ret, "GetSecurityInfo failed with error %ld\n", ret);
+#ifdef __REACTOS__
+    if (ret) goto process_done;
+#endif
 
     bret = GetSecurityDescriptorDacl(pSD, &dacl_present, &pDacl, &dacl_defaulted);
     ok(bret, "GetSecurityDescriptorDacl failed with error %ld\n", GetLastError());
     ok(dacl_present, "DACL should be present\n");
     ok(pDacl && IsValidAcl(pDacl), "GetSecurityDescriptorDacl returned invalid DACL.\n");
+#ifdef __REACTOS__
+    if (!bret || !dacl_present || !pDacl || !IsValidAcl(pDacl))
+    {
+        LocalFree(pSD);
+        goto process_done;
+    }
+#endif
     bret = GetAclInformation(pDacl, &acl_size, sizeof(acl_size), AclSizeInformation);
     ok(bret, "GetAclInformation failed\n");
+#ifdef __REACTOS__
+    if (!bret)
+    {
+        LocalFree(pSD);
+        goto process_done;
+    }
+    ok(acl_size.AceCount == 3, "Process DACL has %lu ACEs, expected 3\n", acl_size.AceCount);
+#else
     ok(acl_size.AceCount != 0, "GetAclInformation returned no ACLs\n");
+#endif
     for (i=0; i<acl_size.AceCount; i++)
     {
         bret = GetAce(pDacl, i, (VOID **)&ace);
         ok(bret, "Failed to get ACE %d.\n", i);
+#ifdef __REACTOS__
+        if (!bret) continue;
+        ok(ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE, "Process ACE %d has type %u\n", i, ace->Header.AceType);
+        bret = domain_users_sid && EqualSid(&ace->SidStart, domain_users_sid);
+#else
         bret = EqualSid(&ace->SidStart, domain_users_sid);
+#endif
         if (bret) domain_users_ace_id = i;
         bret = EqualSid(&ace->SidStart, admin_sid);
         if (bret) admins_ace_id = i;
+#ifdef __REACTOS__
+        bret = EqualSid(&ace->SidStart, user_sid);
+        if (bret) user_ace_id = i;
+#endif
     }
+#ifdef __REACTOS__
+    ok(user_ace_id != -1, "Current User ACE not found.\n");
+    if (user_ace_id != -1)
+    {
+        bret = GetAce(pDacl, user_ace_id, (VOID **)&ace);
+        ok(bret, "Failed to get Current User ACE.\n");
+        ok(ace->Header.AceFlags == 0, "Current User ACE has unexpected flags %#x\n", ace->Header.AceFlags);
+        ok(ace->Mask == PROCESS_ALL_ACCESS, "Current User ACE has unexpected mask %#lx\n", ace->Mask);
+    }
+    ok(domain_users_ace_id != -1,
+#else
     ok(domain_users_ace_id != -1 || broken(domain_users_ace_id == -1) /* win2k */,
+#endif
        "Domain Users ACE not found.\n");
     if (domain_users_ace_id != -1)
     {
@@ -4855,7 +9111,11 @@ static void test_GetSecurityInfo(void)
                                       ace->Mask, GENERIC_READ);
 #endif
     }
+#ifdef __REACTOS__
+    ok(admins_ace_id != -1,
+#else
     ok(admins_ace_id != -1 || broken(admins_ace_id == -1) /* xp */,
+#endif
        "Builtin Admins ACE not found.\n");
     if (admins_ace_id != -1)
     {
@@ -4864,15 +9124,29 @@ static void test_GetSecurityInfo(void)
         flags = ((ACE_HEADER *)ace)->AceFlags;
         ok(flags == 0x0, "Builtin Admins ACE has unexpected flags (0x%x != 0x0)\n", flags);
 #ifdef __REACTOS__
-        ok(ace->Mask == PROCESS_ALL_ACCESS || broken(ace->Mask == 0x1f0fff) /* win2k */,
+        ok(ace->Mask == PROCESS_ALL_ACCESS,
            "Builtin Admins ACE has unexpected mask (0x%lx != 0x%lx)\n", ace->Mask, PROCESS_ALL_ACCESS);
 #else
+#ifdef __REACTOS__
+        ok(ace->Mask == PROCESS_ALL_ACCESS,
+#else
         ok(ace->Mask == PROCESS_ALL_ACCESS || broken(ace->Mask == 0x1f0fff) /* win2k */,
+#endif
            "Builtin Admins ACE has unexpected mask (0x%lx != 0x%x)\n", ace->Mask, PROCESS_ALL_ACCESS);
 #endif
     }
     LocalFree(pSD);
 
+#ifdef __REACTOS__
+process_done:
+    bret = TerminateProcess(process_info.hProcess, 0);
+    ok(bret, "TerminateProcess failed with error %lu\n", GetLastError());
+    ret = WaitForSingleObject(process_info.hProcess, 1000);
+    ok(ret == WAIT_OBJECT_0, "Waiting for controlled process returned %#lx\n", ret);
+    CloseHandle(process_info.hThread);
+    CloseHandle(process_info.hProcess);
+
+#endif
     ret = GetSecurityInfo(NULL, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, NULL, NULL, &pSD);
     ok(ret == ERROR_INVALID_HANDLE, "got error %lu\n", ret);
 
@@ -4883,6 +9157,10 @@ static void test_GetSecurityInfo(void)
 
     sa.lpSecurityDescriptor = sd;
     obj = CreateEventA(&sa, TRUE, TRUE, NULL);
+#ifdef __REACTOS__
+    ok(!!obj, "CreateEventA failed with error %lu\n", GetLastError());
+    if (!obj) return;
+#endif
     pDacl = (PACL)&dacl;
 
     for (size_t i = 0; i < ARRAY_SIZE(kernel_types); ++i)
@@ -4922,7 +9200,85 @@ static void test_GetSecurityInfo(void)
             DACL_SECURITY_INFORMATION, NULL, NULL, NULL, NULL, &pSD);
     todo_wine ok(ret == ERROR_INVALID_HANDLE, "got error %lu\n", ret);
 
+#ifdef __REACTOS__
+    sid_size = 0;
+    ret = RegGetKeySecurity((HKEY)obj, DACL_SECURITY_INFORMATION, NULL, &sid_size);
+    ok(ret == ERROR_INSUFFICIENT_BUFFER, "RegGetKeySecurity returned %lu\n", ret);
+    ok(sid_size >= SECURITY_DESCRIPTOR_MIN_LENGTH, "RegGetKeySecurity size %lu\n", sid_size);
+    pDacl = (PACL)dacl;
+    bret = InitializeAcl(pDacl, sizeof(dacl), ACL_REVISION);
+    ok(bret, "InitializeAcl failed with error %lu\n", GetLastError());
+    bret = AddAccessDeniedAce(pDacl, ACL_REVISION, EVENT_MODIFY_STATE, user_sid);
+    ok(bret, "AddAccessDeniedAce failed with error %lu\n", GetLastError());
+    bret = AddAccessAllowedAce(pDacl, ACL_REVISION, SYNCHRONIZE, user_sid);
+    ok(bret, "AddAccessAllowedAce failed with error %lu\n", GetLastError());
+    ret = RegSetKeySecurity((HKEY)obj, DACL_SECURITY_INFORMATION, sd);
+    ok(ret == ERROR_SUCCESS, "RegSetKeySecurity returned %lu\n", ret);
+
+    for (i = 0; i < 2; ++i)
+    {
+        pSD = NULL;
+        if (!i)
+        {
+            sid_size = 0;
+            ret = RegGetKeySecurity((HKEY)obj, DACL_SECURITY_INFORMATION, NULL, &sid_size);
+            ok(ret == ERROR_INSUFFICIENT_BUFFER, "RegGetKeySecurity returned %lu\n", ret);
+            if (ret != ERROR_INSUFFICIENT_BUFFER) continue;
+            pSD = LocalAlloc(LMEM_FIXED, sid_size);
+            ok(!!pSD, "Failed to allocate %lu bytes\n", sid_size);
+            if (!pSD) continue;
+            ret = RegGetKeySecurity((HKEY)obj, DACL_SECURITY_INFORMATION, pSD, &sid_size);
+            ok(ret == ERROR_SUCCESS, "RegGetKeySecurity returned %lu\n", ret);
+        }
+        else
+        {
+            ret = GetSecurityInfo(obj, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION,
+                                  NULL, NULL, NULL, NULL, &pSD);
+            ok(ret == ERROR_SUCCESS, "GetSecurityInfo after RegSetKeySecurity returned %lu\n", ret);
+        }
+        if (!ret)
+        {
+            pDacl = NULL;
+            dacl_present = FALSE;
+            bret = GetSecurityDescriptorDacl(pSD, &dacl_present, &pDacl, &dacl_defaulted);
+            ok(bret && dacl_present && pDacl && IsValidAcl(pDacl), "Getter %d returned invalid event DACL\n", i);
+            if (bret && dacl_present && pDacl && IsValidAcl(pDacl))
+            {
+                ok(pDacl->AceCount == 2, "Getter %d returned %u ACEs\n", i, pDacl->AceCount);
+                for (unsigned int j = 0; j < pDacl->AceCount && j < 2; ++j)
+                {
+                    bret = GetAce(pDacl, j, (void **)&ace);
+                    ok(bret, "GetAce %u failed with error %lu\n", j, GetLastError());
+                    if (!bret) continue;
+                    ok(ace->Header.AceType == (j ? ACCESS_ALLOWED_ACE_TYPE : ACCESS_DENIED_ACE_TYPE),
+                       "Getter %d ACE %u type %u\n", i, j, ace->Header.AceType);
+                    ok(!ace->Header.AceFlags, "Getter %d ACE %u flags %#x\n", i, j, ace->Header.AceFlags);
+                    ok(ace->Mask == (j ? SYNCHRONIZE : EVENT_MODIFY_STATE),
+                       "Getter %d ACE %u mask %#lx\n", i, j, ace->Mask);
+                    ok(EqualSid(&ace->SidStart, user_sid), "Getter %d ACE %u SID changed\n", i, j);
+                }
+            }
+        }
+        LocalFree(pSD);
+    }
+
+    pDacl = (PACL)dacl;
+    sid_size = 0;
+    ret = RegGetKeySecurity(NULL, DACL_SECURITY_INFORMATION, NULL, &sid_size);
+    ok(ret == ERROR_INVALID_HANDLE, "RegGetKeySecurity(NULL) returned %lu\n", ret);
+    ret = RegSetKeySecurity(NULL, DACL_SECURITY_INFORMATION, sd);
+    ok(ret == ERROR_INVALID_HANDLE, "RegSetKeySecurity(NULL) returned %lu\n", ret);
+
+    closed_obj = obj;
+#endif
     CloseHandle(obj);
+#ifdef __REACTOS__
+    sid_size = 0;
+    ret = RegGetKeySecurity((HKEY)closed_obj, DACL_SECURITY_INFORMATION, NULL, &sid_size);
+    ok(ret == ERROR_INVALID_HANDLE, "RegGetKeySecurity(closed) returned %lu\n", ret);
+    ret = RegSetKeySecurity((HKEY)closed_obj, DACL_SECURITY_INFORMATION, sd);
+    ok(ret == ERROR_INVALID_HANDLE, "RegSetKeySecurity(closed) returned %lu\n", ret);
+#endif
 
     for (size_t i = 0; i < ARRAY_SIZE(invalid_types); ++i)
     {
@@ -6296,6 +10652,9 @@ static void test_kernel_objects_security(void)
 static void test_TokenIntegrityLevel(void)
 {
     TOKEN_MANDATORY_LABEL *tml;
+#ifdef __REACTOS__
+    TOKEN_USER *user;
+#endif
     BYTE buffer[64];        /* using max. 28 byte in win7 x64 */
     HANDLE token;
     DWORD size;
@@ -6304,6 +10663,10 @@ static void test_TokenIntegrityLevel(void)
                                                     {SECURITY_MANDATORY_HIGH_RID}};
     static SID high_level = {SID_REVISION, 1, {SECURITY_MANDATORY_LABEL_AUTHORITY},
                                                     {SECURITY_MANDATORY_MEDIUM_RID}};
+#ifdef __REACTOS__
+    static SID system_level = {SID_REVISION, 1, {SECURITY_MANDATORY_LABEL_AUTHORITY},
+                                                    {SECURITY_MANDATORY_SYSTEM_RID}};
+#endif
 
     SetLastError(0xdeadbeef);
     res = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token);
@@ -6331,9 +10694,21 @@ static void test_TokenIntegrityLevel(void)
     ok(tml->Label.Attributes == (SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED),
         "got 0x%lx (expected 0x%x)\n", tml->Label.Attributes, (SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED));
 
+#ifdef __REACTOS__
+    user = get_alloc_token_user(token);
+    if (IsWellKnownSid(user->User.Sid, WinLocalSystemSid))
+        ok(EqualSid(tml->Label.Sid, &system_level), "Expected system integrity, got %s\n",
+           debugstr_sid(tml->Label.Sid));
+    else
+        ok(EqualSid(tml->Label.Sid, &medium_level) || EqualSid(tml->Label.Sid, &high_level),
+           "got %s (expected %s or %s)\n", debugstr_sid(tml->Label.Sid),
+           debugstr_sid(&medium_level), debugstr_sid(&high_level));
+    free(user);
+#else
     ok(EqualSid(tml->Label.Sid, &medium_level) || EqualSid(tml->Label.Sid, &high_level),
        "got %s (expected %s or %s)\n", debugstr_sid(tml->Label.Sid),
        debugstr_sid(&medium_level), debugstr_sid(&high_level));
+#endif
 
     CloseHandle(token);
 }
@@ -6343,9 +10718,17 @@ static void test_default_dacl_owner_group_sid(void)
     TOKEN_USER *token_user;
     TOKEN_OWNER *token_owner;
     TOKEN_PRIMARY_GROUP *token_primary_group;
+#ifdef __REACTOS__
+    TOKEN_DEFAULT_DACL *token_dacl;
+#endif
     HANDLE handle, token;
+#ifdef __REACTOS__
+    BOOL ret, defaulted, present, found, expected_found;
+    DWORD size = 0, index;
+#else
     BOOL ret, defaulted, present, found;
     DWORD size, index;
+#endif
     SECURITY_DESCRIPTOR *sd;
     SECURITY_ATTRIBUTES sa;
     PSID owner, group;
@@ -6359,7 +10742,19 @@ static void test_default_dacl_owner_group_sid(void)
     token_owner = get_alloc_token_owner( token );
     token_primary_group = get_alloc_token_primary_group( token );
 
+#ifdef __REACTOS__
+    ret = GetTokenInformation(token, TokenDefaultDacl, NULL, 0, &size);
+    ok(!ret && GetLastError() == ERROR_INSUFFICIENT_BUFFER,
+       "GetTokenInformation(TokenDefaultDacl) failed with error %ld\n", GetLastError());
+    token_dacl = malloc(size);
+    ret = GetTokenInformation(token, TokenDefaultDacl, token_dacl, size, &size);
+    ok(ret, "GetTokenInformation(TokenDefaultDacl) failed with error %ld\n", GetLastError());
+
+#endif
     CloseHandle( token );
+#ifdef __REACTOS__
+    if (!ret) goto done;
+#endif
 
     sd = malloc( SECURITY_DESCRIPTOR_MIN_LENGTH );
     ret = InitializeSecurityDescriptor( sd, SECURITY_DESCRIPTOR_REVISION );
@@ -6424,16 +10819,35 @@ static void test_default_dacl_owner_group_sid(void)
                 "expected ACCESS_ALLOWED_ACE_TYPE, got %d\n", ace->Header.AceType );
             if (EqualSid( &ace->SidStart, token_user->User.Sid )) found = TRUE;
         }
+#ifdef __REACTOS__
+        index = 0;
+        expected_found = FALSE;
+        while (token_dacl->DefaultDacl && GetAce(token_dacl->DefaultDacl, index++, (void **)&ace))
+        {
+            if (ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE &&
+                EqualSid(&ace->SidStart, token_user->User.Sid))
+                expected_found = TRUE;
+        }
+        ok(found == expected_found, "User ACE presence %d differs from token default DACL %d\n",
+           found, expected_found);
+#else
         ok( !found, "DACL shall not reference token user if it is different from token owner\n" );
+#endif
     }
 
     free( sa.lpSecurityDescriptor );
     free( sd );
     CloseHandle( handle );
 
+#ifdef __REACTOS__
+done:
+#endif
     free( token_primary_group );
     free( token_owner );
     free( token_user );
+#ifdef __REACTOS__
+    free( token_dacl );
+#endif
 }
 
 static void test_AdjustTokenPrivileges(void)
@@ -6874,16 +11288,29 @@ static void test_system_security_access(void)
 
 static void test_GetWindowsAccountDomainSid(void)
 {
+#ifdef __REACTOS__
+    char buffer1[SECURITY_MAX_SID_SIZE], buffer2[SECURITY_MAX_SID_SIZE];
+#else
     char *user, buffer1[SECURITY_MAX_SID_SIZE], buffer2[SECURITY_MAX_SID_SIZE];
+#endif
     SID_IDENTIFIER_AUTHORITY domain_ident = { SECURITY_NT_AUTHORITY };
     PSID domain_sid = (PSID *)&buffer1;
     PSID domain_sid2 = (PSID *)&buffer2;
     DWORD sid_size;
     PSID user_sid;
+#ifdef __REACTOS__
+    BOOL bret;
+#else
     HANDLE token;
     BOOL bret = TRUE;
+#endif
     int i;
 
+#ifdef __REACTOS__
+    bret = ConvertStringSidToSidA("S-1-5-21-1-2-3-4", &user_sid);
+    ok(bret, "ConvertStringSidToSidA failed with error %ld\n", GetLastError());
+    if (!bret) return;
+#else
     if (!OpenThreadToken(GetCurrentThread(), TOKEN_READ, TRUE, &token))
     {
         if (GetLastError() != ERROR_NO_TOKEN) bret = FALSE;
@@ -6903,6 +11330,7 @@ static void test_GetWindowsAccountDomainSid(void)
     ok(bret, "GetTokenInformation(TokenUser) failed with error %ld\n", GetLastError());
     CloseHandle(token);
     user_sid = ((TOKEN_USER *)user)->User.Sid;
+#endif
 
     SetLastError(0xdeadbeef);
     bret = GetWindowsAccountDomainSid(0, 0, 0);
@@ -6943,7 +11371,11 @@ static void test_GetWindowsAccountDomainSid(void)
     ok(EqualSid(domain_sid, domain_sid2), "unexpected domain sid %s != %s\n",
        debugstr_sid(domain_sid), debugstr_sid(domain_sid2));
 
+#ifdef __REACTOS__
+    LocalFree(user_sid);
+#else
     free(user);
+#endif
 }
 
 static void test_GetSidIdentifierAuthority(void)
@@ -6968,20 +11400,50 @@ static void test_GetSidIdentifierAuthority(void)
     ok(GetLastError() == ERROR_SUCCESS, "expected ERROR_SUCCESS, got %lu\n", GetLastError());
 }
 
+#ifdef __REACTOS__
+static void check_pseudo_token(HANDLE pseudo, HANDLE actual, NTSTATUS expected, unsigned int context)
+#else
 static void test_pseudo_tokens(void)
+#endif
 {
+#ifdef __REACTOS__
+    NTSTATUS (WINAPI *query_token)(HANDLE, TOKEN_INFORMATION_CLASS, void *, ULONG, ULONG *);
+    TOKEN_STATISTICS expected_stats, stats;
+    TOKEN_SOURCE expected_source, source;
+    HANDLE duplicate = NULL;
+    DWORD retlen, error;
+    NTSTATUS status;
+#else
     TOKEN_STATISTICS statistics1, statistics2;
     HANDLE token;
     DWORD retlen;
+#endif
     BOOL ret;
 
+#ifdef __REACTOS__
+    query_token = (void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationToken");
+    ok(query_token != NULL, "NtQueryInformationToken is missing\n");
+    if (!query_token) return;
+#else
     ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token);
     ok(ret, "OpenProcessToken failed with error %lu\n", GetLastError());
     memset(&statistics1, 0x11, sizeof(statistics1));
     ret = GetTokenInformation(token, TokenStatistics, &statistics1, sizeof(statistics1), &retlen);
     ok(ret, "GetTokenInformation failed with %lu\n", GetLastError());
     CloseHandle(token);
+#endif
 
+#ifdef __REACTOS__
+    if (actual)
+    {
+        ret = GetTokenInformation(actual, TokenStatistics, &expected_stats, sizeof(expected_stats), &retlen);
+        ok(ret, "Context %u: reference statistics failed with %lu\n", context, GetLastError());
+        if (!ret) return;
+        ret = GetTokenInformation(actual, TokenSource, &expected_source, sizeof(expected_source), &retlen);
+        ok(ret, "Context %u: reference source failed with %lu\n", context, GetLastError());
+        if (!ret) return;
+    }
+#else
     /* test GetCurrentProcessToken() */
     SetLastError(0xdeadbeef);
     memset(&statistics2, 0x22, sizeof(statistics2));
@@ -6993,7 +11455,28 @@ static void test_pseudo_tokens(void)
         ok(!memcmp(&statistics1, &statistics2, sizeof(statistics1)), "Token statistics do not match\n");
     else
         win_skip("CurrentProcessToken not supported, skipping test\n");
+#endif
 
+#ifdef __REACTOS__
+    memset(&stats, 0xcc, sizeof(stats));
+    status = query_token(pseudo, TokenStatistics, &stats, sizeof(stats), &retlen);
+    ok(status == expected, "Context %u handle %p: native query returned %#lx, expected %#lx\n",
+       context, pseudo, status, expected);
+    if (status == STATUS_SUCCESS && actual)
+    {
+        ok(retlen == sizeof(stats), "Context %u handle %p: statistics length %lu\n", context, pseudo, retlen);
+        ok(!memcmp(&stats.TokenId, &expected_stats.TokenId, sizeof(LUID)),
+           "Context %u handle %p: token identity differs\n", context, pseudo);
+        ok(!memcmp(&stats.AuthenticationId, &expected_stats.AuthenticationId, sizeof(LUID)),
+           "Context %u handle %p: authentication identity differs\n", context, pseudo);
+        ok(stats.TokenType == expected_stats.TokenType, "Context %u handle %p: token type %u, expected %u\n",
+           context, pseudo, stats.TokenType, expected_stats.TokenType);
+        if (stats.TokenType == TokenImpersonation)
+            ok(stats.ImpersonationLevel == expected_stats.ImpersonationLevel,
+               "Context %u handle %p: impersonation level %u, expected %u\n",
+               context, pseudo, stats.ImpersonationLevel, expected_stats.ImpersonationLevel);
+    }
+#else
     /* test GetCurrentThreadEffectiveToken() */
     SetLastError(0xdeadbeef);
     memset(&statistics2, 0x22, sizeof(statistics2));
@@ -7005,18 +11488,154 @@ static void test_pseudo_tokens(void)
         ok(!memcmp(&statistics1, &statistics2, sizeof(statistics1)), "Token statistics do not match\n");
     else
         win_skip("CurrentThreadEffectiveToken not supported, skipping test\n");
+#endif
 
     SetLastError(0xdeadbeef);
+#ifdef __REACTOS__
+    ret = GetTokenInformation(pseudo, TokenStatistics, &stats, sizeof(stats), &retlen);
+    error = GetLastError();
+    ok(ret == (expected == STATUS_SUCCESS), "Context %u handle %p: Win32 query returned %d, error %lu\n",
+       context, pseudo, ret, error);
+    if (expected != STATUS_SUCCESS)
+        ok(error == RtlNtStatusToDosError(expected), "Context %u handle %p: query error %lu\n",
+           context, pseudo, error);
+    if (ret && actual)
+        ok(!memcmp(&stats.TokenId, &expected_stats.TokenId, sizeof(LUID)),
+           "Context %u handle %p: Win32 token identity differs\n", context, pseudo);
+
+    memset(&source, 0xcc, sizeof(source));
+    status = query_token(pseudo, TokenSource, &source, sizeof(source), &retlen);
+    ok(status == expected, "Context %u handle %p: source query returned %#lx, expected %#lx\n",
+       context, pseudo, status, expected);
+    if (status == STATUS_SUCCESS && actual)
+    {
+        ok(retlen == sizeof(source), "Context %u handle %p: source length %lu\n", context, pseudo, retlen);
+        ok(!memcmp(&source, &expected_source, sizeof(source)),
+           "Context %u handle %p: token source differs\n", context, pseudo);
+    }
+#else
     ret = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
     ok(!ret, "OpenThreadToken should have failed\n");
     ok(GetLastError() == ERROR_NO_TOKEN, "Expected ERROR_NO_TOKEN, got %lu\n", GetLastError());
+#endif
 
+#ifndef __REACTOS__
     /* test GetCurrentThreadToken() */
+#endif
     SetLastError(0xdeadbeef);
+#ifdef __REACTOS__
+    ret = DuplicateTokenEx(pseudo, TOKEN_QUERY, NULL, SecurityImpersonation, TokenImpersonation, &duplicate);
+    error = GetLastError();
+    ok(!ret, "Context %u handle %p: pseudo-token duplication succeeded\n", context, pseudo);
+    ok(!ret && error == ERROR_INVALID_HANDLE, "Context %u handle %p: DuplicateTokenEx error %lu\n",
+       context, pseudo, error);
+    if (ret) CloseHandle(duplicate);
+    duplicate = NULL;
+    SetLastError(0xdeadbeef);
+    ret = DuplicateHandle(GetCurrentProcess(), pseudo, GetCurrentProcess(), &duplicate,
+                          0, FALSE, DUPLICATE_SAME_ACCESS);
+    error = GetLastError();
+    ok(!ret, "Context %u handle %p: pseudo-handle duplication succeeded\n", context, pseudo);
+    ok(!ret && error == ERROR_INVALID_HANDLE, "Context %u handle %p: DuplicateHandle error %lu\n",
+       context, pseudo, error);
+    if (ret) CloseHandle(duplicate);
+}
+
+static void test_pseudo_tokens(void)
+{
+    HANDLE process_token = NULL, thread_token = NULL, saved_token = NULL, limited = NULL;
+    TOKEN_STATISTICS statistics;
+    TOKEN_SOURCE source;
+    SECURITY_IMPERSONATION_LEVEL level;
+    BOOL ret;
+    DWORD error, retlen;
+
+    ret = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_IMPERSONATE, TRUE, &saved_token);
+    error = GetLastError();
+    ok(ret || error == ERROR_NO_TOKEN, "OpenThreadToken failed with %lu\n", error);
+    if (!ret && error != ERROR_NO_TOKEN) return;
+    ret = RevertToSelf();
+    ok(ret, "RevertToSelf failed with %lu\n", GetLastError());
+    if (!ret) goto done;
+    ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_QUERY_SOURCE | TOKEN_DUPLICATE,
+                           &process_token);
+    ok(ret, "OpenProcessToken failed with %lu\n", GetLastError());
+    if (!ret) goto done;
+
+    check_pseudo_token(GetCurrentProcessToken(), process_token, STATUS_SUCCESS, 0);
+    check_pseudo_token(GetCurrentThreadToken(), NULL, STATUS_NO_TOKEN, 0);
+    check_pseudo_token(GetCurrentThreadEffectiveToken(), process_token, STATUS_SUCCESS, 0);
+    ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &limited);
+    ok(ret, "Query-only token open failed with %lu\n", GetLastError());
+    if (ret)
+    {
+        ret = GetTokenInformation(limited, TokenStatistics, &statistics, sizeof(statistics), &retlen);
+        ok(ret, "Query-only statistics failed with %lu\n", GetLastError());
+        SetLastError(0xdeadbeef);
+        ret = GetTokenInformation(limited, TokenSource, &source, sizeof(source), &retlen);
+        error = GetLastError();
+        ok(!ret && error == ERROR_ACCESS_DENIED, "Query-only source returned %d, error %lu\n", ret, error);
+        CloseHandle(limited);
+        limited = NULL;
+    }
+    ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY_SOURCE, &limited);
+    ok(ret, "Source-only token open failed with %lu\n", GetLastError());
+    if (ret)
+    {
+        ret = GetTokenInformation(limited, TokenSource, &source, sizeof(source), &retlen);
+        ok(ret, "Source-only query failed with %lu\n", GetLastError());
+        SetLastError(0xdeadbeef);
+        ret = GetTokenInformation(limited, TokenStatistics, &statistics, sizeof(statistics), &retlen);
+        error = GetLastError();
+        ok(!ret && error == ERROR_ACCESS_DENIED, "Source-only statistics returned %d, error %lu\n", ret, error);
+        CloseHandle(limited);
+        limited = NULL;
+    }
+    limited = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ok(!!limited, "Event creation failed with %lu\n", GetLastError());
+    if (limited)
+    {
+        SetLastError(0xdeadbeef);
+        ret = GetTokenInformation(limited, TokenStatistics, &statistics, sizeof(statistics), &retlen);
+        error = GetLastError();
+        ok(!ret && error == ERROR_INVALID_HANDLE, "Event token query returned %d, error %lu\n", ret, error);
+        CloseHandle(limited);
+        limited = NULL;
+    }
+    for (level = SecurityAnonymous; level <= SecurityDelegation; ++level)
+    {
+        ret = DuplicateTokenEx(process_token, TOKEN_QUERY | TOKEN_QUERY_SOURCE | TOKEN_IMPERSONATE,
+                                NULL, level, TokenImpersonation, &thread_token);
+        ok(ret, "DuplicateTokenEx level %u failed with %lu\n", level, GetLastError());
+        if (!ret) continue;
+        ret = SetThreadToken(NULL, thread_token);
+        ok(ret, "SetThreadToken level %u failed with %lu\n", level, GetLastError());
+        if (ret)
+        {
+            check_pseudo_token(GetCurrentProcessToken(), process_token, STATUS_SUCCESS, level + 1);
+            check_pseudo_token(GetCurrentThreadToken(), thread_token,
+                               level == SecurityAnonymous ? STATUS_CANT_OPEN_ANONYMOUS : STATUS_SUCCESS, level + 1);
+            check_pseudo_token(GetCurrentThreadEffectiveToken(), thread_token,
+                               level == SecurityAnonymous ? STATUS_CANT_OPEN_ANONYMOUS : STATUS_SUCCESS, level + 1);
+            ret = RevertToSelf();
+            ok(ret, "RevertToSelf level %u failed with %lu\n", level, GetLastError());
+        }
+        CloseHandle(thread_token);
+        thread_token = NULL;
+        if (!ret) break;
+    }
+
+done:
+    ret = SetThreadToken(NULL, saved_token);
+    ok(ret, "Restoring thread token failed with %lu\n", GetLastError());
+    if (saved_token) CloseHandle(saved_token);
+    if (process_token) CloseHandle(process_token);
+#else
     ret = GetTokenInformation(GetCurrentThreadToken(), TokenStatistics,
                               &statistics2, sizeof(statistics2), &retlen);
     todo_wine ok(GetLastError() == ERROR_NO_TOKEN || broken(GetLastError() == ERROR_INVALID_HANDLE),
                  "Expected ERROR_NO_TOKEN, got %lu\n", GetLastError());
+#endif
 }
 
 static void test_maximum_allowed(void)
@@ -7057,12 +11676,20 @@ static void test_maximum_allowed(void)
     CloseHandle(handle);
 }
 
+#ifdef __REACTOS__
+static void check_token_label(HANDLE token, DWORD *level, BOOL sacl_inherited, BOOL system_token)
+#else
 static void check_token_label(HANDLE token, DWORD *level, BOOL sacl_inherited)
+#endif
 {
     static SID medium_sid = {SID_REVISION, 1, {SECURITY_MANDATORY_LABEL_AUTHORITY},
                              {SECURITY_MANDATORY_MEDIUM_RID}};
     static SID high_sid = {SID_REVISION, 1, {SECURITY_MANDATORY_LABEL_AUTHORITY},
                            {SECURITY_MANDATORY_HIGH_RID}};
+#ifdef __REACTOS__
+    static SID system_sid = {SID_REVISION, 1, {SECURITY_MANDATORY_LABEL_AUTHORITY},
+                             {SECURITY_MANDATORY_SYSTEM_RID}};
+#endif
     SECURITY_DESCRIPTOR_CONTROL control;
     SYSTEM_MANDATORY_LABEL_ACE *ace;
     BOOL ret, present, defaulted;
@@ -7122,7 +11749,14 @@ static void check_token_label(HANDLE token, DWORD *level, BOOL sacl_inherited)
 
     sid = (SID *)&ace->SidStart;
     ConvertSidToStringSidA(sid, &str);
+#ifdef __REACTOS__
+    if (system_token)
+        ok(EqualSid(sid, &system_sid), "Expected system integrity, got %s\n", str);
+    else
+        ok(EqualSid(sid, &medium_sid) || EqualSid(sid, &high_sid), "Got unexpected SID %s\n", str);
+#else
     ok(EqualSid(sid, &medium_sid) || EqualSid(sid, &high_sid), "Got unexpected SID %s\n", str);
+#endif
     *level = sid->SubAuthority[0];
     LocalFree(str);
 
@@ -7141,10 +11775,20 @@ static void test_token_label(void)
     SECURITY_ATTRIBUTES attr = {.nLength = sizeof(SECURITY_ATTRIBUTES)};
     ACL *sacl = (ACL *)sacl_buffer;
     TOKEN_LINKED_TOKEN linked;
+#ifdef __REACTOS__
+    TOKEN_ELEVATION_TYPE elevation_type;
+    TOKEN_USER *user;
+    DWORD level, level2, size, error;
+#else
     DWORD level, level2, size;
+#endif
     PSECURITY_DESCRIPTOR sd;
     HANDLE token, token2;
+#ifdef __REACTOS__
+    BOOL ret, system_token;
+#else
     BOOL ret;
+#endif
 
     if (!pAddMandatoryAce)
     {
@@ -7155,12 +11799,24 @@ static void test_token_label(void)
     ret = OpenProcessToken(GetCurrentProcess(), READ_CONTROL | TOKEN_QUERY | TOKEN_DUPLICATE, &token);
     ok(ret, "OpenProcessToken failed with error %lu\n", GetLastError());
 
+#ifdef __REACTOS__
+    user = get_alloc_token_user(token);
+    system_token = IsWellKnownSid(user->User.Sid, WinLocalSystemSid);
+    free(user);
+
+    check_token_label(token, &level, TRUE, system_token);
+#else
     check_token_label(token, &level, TRUE);
+#endif
 
     ret = DuplicateTokenEx(token, READ_CONTROL, NULL, SecurityAnonymous, TokenPrimary, &token2);
     ok(ret, "Failed to duplicate token, error %lu\n", GetLastError());
 
+#ifdef __REACTOS__
+    check_token_label(token2, &level2, TRUE, system_token);
+#else
     check_token_label(token2, &level2, TRUE);
+#endif
     ok(level2 == level, "Expected level %#lx, got %#lx.\n", level, level2);
 
     CloseHandle(token2);
@@ -7168,7 +11824,11 @@ static void test_token_label(void)
     ret = DuplicateTokenEx(token, READ_CONTROL, NULL, SecurityImpersonation, TokenImpersonation, &token2);
     ok(ret, "Failed to duplicate token, error %lu\n", GetLastError());
 
+#ifdef __REACTOS__
+    check_token_label(token2, &level2, TRUE, system_token);
+#else
     check_token_label(token2, &level2, TRUE);
+#endif
     ok(level2 == level, "Expected level %#lx, got %#lx.\n", level, level2);
 
     CloseHandle(token2);
@@ -7191,7 +11851,11 @@ static void test_token_label(void)
     ret = DuplicateTokenEx(token, TOKEN_ALL_ACCESS, &attr, SecurityImpersonation, TokenImpersonation, &token2);
     ok(ret, "Failed to duplicate token, error %lu\n", GetLastError());
 
+#ifdef __REACTOS__
+    check_token_label(token2, &level2, TRUE, system_token);
+#else
     check_token_label(token2, &level2, TRUE);
+#endif
     ok(level2 == level, "Expected level %#lx, got %#lx.\n", level, level2);
 
     /* Trying to set a SD on the token also claims success but has no effect. */
@@ -7199,20 +11863,48 @@ static void test_token_label(void)
     ret = SetKernelObjectSecurity(token2, LABEL_SECURITY_INFORMATION, sd);
     ok(ret, "Failed to set SD, error %lu\n", GetLastError());
 
+#ifdef __REACTOS__
+    check_token_label(token2, &level2, FALSE, system_token);
+#else
     check_token_label(token2, &level2, FALSE);
+#endif
     ok(level2 == level, "Expected level %#lx, got %#lx.\n", level, level2);
 
     free(sd);
 
     /* Test the linked token. */
 
+#ifdef __REACTOS__
+    ret = GetTokenInformation(token, TokenElevationType, &elevation_type, sizeof(elevation_type), &size);
+    ok(ret, "Failed to get elevation type, error %lu\n", GetLastError());
+    if (ret)
+    {
+        ret = GetTokenInformation(token, TokenLinkedToken, &linked, sizeof(linked), &size);
+        error = GetLastError();
+        if (system_token && elevation_type == TokenElevationTypeDefault)
+            ok(!ret && error == ERROR_NO_SUCH_LOGON_SESSION,
+               "Unsplit SYSTEM token linked query returned %d, error %lu\n", ret, error);
+        else
+            ok(ret, "Failed to get linked token, error %lu\n", error);
+#else
     ret = GetTokenInformation(token, TokenLinkedToken, &linked, sizeof(linked), &size);
     ok(ret, "Failed to get linked token, error %lu\n", GetLastError());
 
     check_token_label(linked.LinkedToken, &level2, TRUE);
     ok(level2 == level, "Expected level %#lx, got %#lx.\n", level, level2);
+#endif
 
+#ifdef __REACTOS__
+        if (ret)
+        {
+            check_token_label(linked.LinkedToken, &level2, TRUE, system_token);
+            ok(level2 == level, "Expected level %#lx, got %#lx.\n", level, level2);
+            CloseHandle(linked.LinkedToken);
+        }
+    }
+#else
     CloseHandle(linked.LinkedToken);
+#endif
 
     CloseHandle(token);
 }
@@ -7753,13 +12445,61 @@ static DWORD WINAPI duplicate_handle_access_thread(void *arg)
     return 0;
 }
 
+#ifdef __REACTOS__
+static BOOL check_token_group_attributes(HANDLE token, PSID sid, DWORD expected)
+{
+    TOKEN_GROUPS *groups;
+    DWORD size = 0, attributes = 0;
+    BOOL ret, found = FALSE;
+
+    ret = GetTokenInformation(token, TokenGroups, NULL, 0, &size);
+    ok(!ret && GetLastError() == ERROR_INSUFFICIENT_BUFFER,
+       "GetTokenInformation(TokenGroups) returned %d, error %lu\n", ret, GetLastError());
+    if (ret || GetLastError() != ERROR_INSUFFICIENT_BUFFER) return FALSE;
+    groups = malloc(size);
+    ok(!!groups, "Failed to allocate %lu bytes\n", size);
+    if (!groups) return FALSE;
+    ret = GetTokenInformation(token, TokenGroups, groups, size, &size);
+    ok(ret, "GetTokenInformation(TokenGroups) failed with error %lu\n", GetLastError());
+    if (ret)
+    {
+        for (DWORD i = 0; i < groups->GroupCount; ++i)
+        {
+            if (EqualSid(groups->Groups[i].Sid, sid))
+            {
+                found = TRUE;
+                attributes = groups->Groups[i].Attributes;
+                break;
+            }
+        }
+        ok(found, "Fixture group %s is absent from token\n", debugstr_sid(sid));
+        if (found)
+            ok((attributes & (SE_GROUP_ENABLED | SE_GROUP_USE_FOR_DENY_ONLY)) == expected,
+               "Fixture group %s attributes %#lx, expected %#lx\n", debugstr_sid(sid), attributes, expected);
+    }
+    free(groups);
+    return ret && found && (attributes & (SE_GROUP_ENABLED | SE_GROUP_USE_FOR_DENY_ONLY)) == expected;
+}
+
+#endif
 static void test_duplicate_handle_access(void)
 {
+#ifdef __REACTOS__
+    char acl_buffer[200], everyone_sid_buffer[100], cmdline[300];
+    union
+    {
+        SID sid;
+        BYTE buffer[SECURITY_MAX_SID_SIZE];
+    } group_sid;
+#else
     char acl_buffer[200], everyone_sid_buffer[100], local_sid_buffer[100], cmdline[300];
+#endif
     HANDLE token, restricted, impersonation, all_event, sync_event, event2, thread;
     SECURITY_ATTRIBUTES sa = {.nLength = sizeof(sa)};
     SID *everyone_sid = (SID *)everyone_sid_buffer;
+#ifndef __REACTOS__
     SID *local_sid = (SID *)local_sid_buffer;
+#endif
     ACL *acl = (ACL *)acl_buffer;
     SID_AND_ATTRIBUTES sid_attr;
     SECURITY_DESCRIPTOR sd;
@@ -7775,29 +12515,59 @@ static void test_duplicate_handle_access(void)
 
     ret = OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY, &token);
     ok(ret, "got error %lu\n", GetLastError());
+#ifdef __REACTOS__
+    if (!ret) return;
+
+    size = sizeof(group_sid);
+    ret = CreateWellKnownSid(WinAuthenticatedUserSid, NULL, &group_sid.sid, &size);
+    ok(ret, "CreateWellKnownSid failed with error %lu\n", GetLastError());
+    if (!ret || !check_token_group_attributes(token, &group_sid.sid, SE_GROUP_ENABLED))
+    {
+        CloseHandle(token);
+        return;
+    }
+#endif
 
     size = sizeof(everyone_sid_buffer);
     ret = CreateWellKnownSid(WinWorldSid, NULL, everyone_sid, &size);
     ok(ret, "got error %lu\n", GetLastError());
+#ifndef __REACTOS__
     size = sizeof(local_sid_buffer);
     ret = CreateWellKnownSid(WinLocalSid, NULL, local_sid, &size);
     ok(ret, "got error %lu\n", GetLastError());
+#endif
 
     InitializeAcl(acl, sizeof(acl_buffer), ACL_REVISION);
     ret = AddAccessAllowedAce(acl, ACL_REVISION, SYNCHRONIZE, everyone_sid);
     ok(ret, "got error %lu\n", GetLastError());
     InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+#ifdef __REACTOS__
+    ret = AddAccessAllowedAce(acl, ACL_REVISION, EVENT_MODIFY_STATE, &group_sid.sid);
+#else
     ret = AddAccessAllowedAce(acl, ACL_REVISION, EVENT_MODIFY_STATE, local_sid);
+#endif
     ok(ret, "got error %lu\n", GetLastError());
     InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
     ret = SetSecurityDescriptorDacl(&sd, TRUE, acl, FALSE);
     ok(ret, "got error %lu\n", GetLastError());
     sa.lpSecurityDescriptor = &sd;
 
+#ifdef __REACTOS__
+    sid_attr.Sid = &group_sid.sid;
+#else
     sid_attr.Sid = local_sid;
+#endif
     sid_attr.Attributes = 0;
     ret = CreateRestrictedToken(token, 0, 1, &sid_attr, 0, NULL, 0, NULL, &restricted);
     ok(ret, "got error %lu\n", GetLastError());
+#ifdef __REACTOS__
+    if (!ret)
+    {
+        CloseHandle(token);
+        return;
+    }
+    check_token_group_attributes(restricted, &group_sid.sid, SE_GROUP_USE_FOR_DENY_ONLY);
+#endif
     ret = DuplicateTokenEx(restricted, TOKEN_IMPERSONATE, NULL,
             SecurityImpersonation, TokenImpersonation, &impersonation);
     ok(ret, "got error %lu\n", GetLastError());
@@ -7933,24 +12703,58 @@ static void join_process_(int line, const PROCESS_INFORMATION *pi)
 
 static void test_create_process_token(void)
 {
+#ifdef __REACTOS__
+    static const SECURITY_IMPERSONATION_LEVEL levels[] = {SecurityAnonymous, SecurityIdentification};
+    unsigned int i;
+    char cmdline[300], acl_buffer[200];
+    union
+    {
+        SID sid;
+        BYTE buffer[SECURITY_MAX_SID_SIZE];
+    } group_sid;
+#else
     char cmdline[300], acl_buffer[200], sid_buffer[100];
+#endif
     SECURITY_ATTRIBUTES sa = {.nLength = sizeof(sa)};
     ACL *acl = (ACL *)acl_buffer;
+#ifndef __REACTOS__
     SID *sid = (SID *)sid_buffer;
+#endif
     SID_AND_ATTRIBUTES sid_attr;
     HANDLE event, token, token2;
     PROCESS_INFORMATION pi;
     SECURITY_DESCRIPTOR sd;
     STARTUPINFOA si = {0};
+#ifdef __REACTOS__
+    DWORD size, error;
+#else
     DWORD size;
+#endif
     BOOL ret;
 
+#ifdef __REACTOS__
+    ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token);
+#else
     size = sizeof(sid_buffer);
     ret = CreateWellKnownSid(WinLocalSid, NULL, sid, &size);
+#endif
     ok(ret, "got error %lu\n", GetLastError());
+#ifdef __REACTOS__
+    if (!ret) return;
+    size = sizeof(group_sid);
+    ret = CreateWellKnownSid(WinAuthenticatedUserSid, NULL, &group_sid.sid, &size);
+    ok(ret, "CreateWellKnownSid failed with error %lu\n", GetLastError());
+    if (ret) ret = check_token_group_attributes(token, &group_sid.sid, SE_GROUP_ENABLED);
+    CloseHandle(token);
+    if (!ret) return;
+#endif
     ret = InitializeAcl(acl, sizeof(acl_buffer), ACL_REVISION);
     ok(ret, "got error %lu\n", GetLastError());
+#ifdef __REACTOS__
+    ret = AddAccessAllowedAce(acl, ACL_REVISION, EVENT_MODIFY_STATE, &group_sid.sid);
+#else
     ret = AddAccessAllowedAce(acl, ACL_REVISION, EVENT_MODIFY_STATE, sid);
+#endif
     ok(ret, "got error %lu\n", GetLastError());
     InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
     ret = SetSecurityDescriptorDacl(&sd, TRUE, acl, FALSE);
@@ -7973,7 +12777,11 @@ static void test_create_process_token(void)
     ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY, &token);
     ok(ret, "got error %lu\n", GetLastError());
     ret = CreateProcessAsUserA(token, NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+#ifdef __REACTOS__
+    ok(ret, "got error %lu\n", GetLastError());
+#else
     ok(ret || broken(GetLastError() == ERROR_ACCESS_DENIED) /* < 7 */, "got error %lu\n", GetLastError());
+#endif
     if (ret) join_process(&pi);
     CloseHandle(token);
 
@@ -7998,15 +12806,52 @@ static void test_create_process_token(void)
             SecurityImpersonation, TokenImpersonation, &token2);
     ok(ret, "got error %lu\n", GetLastError());
     ret = CreateProcessAsUserA(token2, NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+#ifdef __REACTOS__
+    ok(ret, "got error %lu\n", GetLastError());
+#else
     ok(ret || broken(GetLastError() == ERROR_BAD_TOKEN_TYPE) /* < 7 */, "got error %lu\n", GetLastError());
+#endif
     if (ret) join_process(&pi);
     CloseHandle(token2);
 
+#ifdef __REACTOS__
+    for (i = 0; i < ARRAY_SIZE(levels); ++i)
+    {
+        ret = DuplicateTokenEx(token, TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY, NULL,
+                levels[i], TokenImpersonation, &token2);
+        ok(ret, "DuplicateTokenEx level %u failed with error %lu\n", levels[i], GetLastError());
+        if (!ret) continue;
+        sprintf(cmdline, "%s security restricted 0", myARGV[0]);
+        SetLastError(0xdeadbeef);
+        ret = CreateProcessAsUserA(token2, NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+        error = GetLastError();
+        ok(!ret, "CreateProcessAsUserA level %u returned %d, error %lu\n", levels[i], ret, error);
+        ok(error == ERROR_BAD_IMPERSONATION_LEVEL,
+                "CreateProcessAsUserA level %u returned error %lu, expected %u\n",
+                levels[i], error, ERROR_BAD_IMPERSONATION_LEVEL);
+        if (ret) join_process(&pi);
+        CloseHandle(token2);
+    }
+
+#endif
     sprintf(cmdline, "%s security restricted 1", myARGV[0]);
+#ifdef __REACTOS__
+    sid_attr.Sid = &group_sid.sid;
+#else
     sid_attr.Sid = sid;
+#endif
     sid_attr.Attributes = 0;
     ret = CreateRestrictedToken(token, 0, 1, &sid_attr, 0, NULL, 0, NULL, &token2);
     ok(ret, "got error %lu\n", GetLastError());
+#ifdef __REACTOS__
+    if (!ret)
+    {
+        CloseHandle(token);
+        CloseHandle(event);
+        return;
+    }
+    check_token_group_attributes(token2, &group_sid.sid, SE_GROUP_USE_FOR_DENY_ONLY);
+#endif
     ret = CreateProcessAsUserA(token2, NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
     ok(ret, "got error %lu\n", GetLastError());
     join_process(&pi);
@@ -8742,6 +13587,3732 @@ static void test_window_security(void)
     LocalFree(sd);
 }
 
+#ifdef __REACTOS__
+static PSECURITY_DESCRIPTOR query_registry_security(HKEY key)
+{
+    PSECURITY_DESCRIPTOR descriptor;
+    DWORD size = 0;
+    LONG ret;
+
+    ret = RegGetKeySecurity(key, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                           DACL_SECURITY_INFORMATION, NULL, &size);
+    ok(ret == ERROR_INSUFFICIENT_BUFFER, "Registry security size returned %ld.\n", ret);
+    if (ret != ERROR_INSUFFICIENT_BUFFER) return NULL;
+    descriptor = malloc(size);
+    if (!descriptor) return NULL;
+    ret = RegGetKeySecurity(key, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                           DACL_SECURITY_INFORMATION, descriptor, &size);
+    ok(!ret, "Registry security query returned %ld.\n", ret);
+    if (ret)
+    {
+        free(descriptor);
+        return NULL;
+    }
+    return descriptor;
+}
+
+static void test_registry_security_persistence(BOOL unicode, REGSAM view)
+{
+    static const char path[] = "Software\\Wine\\TestSecurityPersistence\\Parent";
+    static const WCHAR pathW[] = L"Software\\Wine\\TestSecurityPersistence\\Parent";
+    PSECURITY_DESCRIPTOR initial = NULL, queried = NULL;
+    SECURITY_DESCRIPTOR empty_sd;
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    SECURITY_ATTRIBUTES attributes;
+    ACCESS_ALLOWED_ACE *ace;
+    HKEY parent = NULL, child = NULL, sibling = NULL, reopened = NULL;
+    BOOL present, defaulted, result;
+    DWORD revision, disposition, flags = 0;
+    ACL empty_acl, *dacl;
+    LONG ret;
+
+    result = ConvertStringSecurityDescriptorToSecurityDescriptorA(
+            "D:P(A;CIID;KA;;;WD)", SDDL_REVISION_1, &initial, NULL);
+    ok(result, "Security descriptor creation failed: %lu.\n", GetLastError());
+    if (!result) return;
+    winetest_push_context("Registry %s, view %#lx", unicode ? "W" : "A", view);
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = initial;
+    attributes.bInheritHandle = TRUE;
+    if (unicode)
+        ret = RegCreateKeyExW(HKEY_CURRENT_USER, pathW, 0, NULL, REG_OPTION_VOLATILE,
+                              KEY_ALL_ACCESS | view, &attributes, &parent, &disposition);
+    else
+        ret = RegCreateKeyExA(HKEY_CURRENT_USER, path, 0, NULL, REG_OPTION_VOLATILE,
+                              KEY_ALL_ACCESS | view, &attributes, &parent, &disposition);
+    ok(!ret, "Parent creation returned %ld.\n", ret);
+    if (ret) goto done;
+    ok(disposition == REG_CREATED_NEW_KEY, "Parent disposition %lu.\n", disposition);
+    result = GetHandleInformation(parent, &flags);
+    ok(result && (flags & HANDLE_FLAG_INHERIT), "Created parent handle flags %#lx.\n", flags);
+    queried = query_registry_security(parent);
+    if (!queried) goto done;
+    result = GetSecurityDescriptorControl(queried, &control, &revision);
+    ok(result && (control & SE_DACL_PROTECTED), "Protected parent control %#x.\n", control);
+    result = GetSecurityDescriptorDacl(queried, &present, &dacl, &defaulted);
+    ok(result && present && dacl && dacl->AceCount == 1,
+       "Parent DACL was not retained.\n");
+    if (result && present && dacl && dacl->AceCount == 1)
+    {
+        result = GetAce(dacl, 0, (void **)&ace);
+        ok(result && ace->Mask == KEY_ALL_ACCESS &&
+           ace->Header.AceFlags == (CONTAINER_INHERIT_ACE | INHERITED_ACE),
+           "Parent ACE query %d, mask %#lx, flags %#x.\n", result,
+           result ? ace->Mask : 0, result ? ace->Header.AceFlags : 0);
+    }
+    free(queried);
+    queried = NULL;
+
+    InitializeSecurityDescriptor(&empty_sd, SECURITY_DESCRIPTOR_REVISION);
+    InitializeAcl(&empty_acl, sizeof(empty_acl), ACL_REVISION);
+    SetSecurityDescriptorDacl(&empty_sd, TRUE, &empty_acl, FALSE);
+    SetSecurityDescriptorControl(&empty_sd, SE_DACL_PROTECTED, SE_DACL_PROTECTED);
+    attributes.lpSecurityDescriptor = &empty_sd;
+    if (unicode)
+        ret = RegCreateKeyExW(HKEY_CURRENT_USER, pathW, 0, NULL, REG_OPTION_VOLATILE,
+                              KEY_ALL_ACCESS | view, &attributes, &reopened, &disposition);
+    else
+        ret = RegCreateKeyExA(HKEY_CURRENT_USER, path, 0, NULL, REG_OPTION_VOLATILE,
+                              KEY_ALL_ACCESS | view, &attributes, &reopened, &disposition);
+    ok(!ret, "Existing parent creation returned %ld.\n", ret);
+    if (ret) goto done;
+    ok(disposition == REG_OPENED_EXISTING_KEY, "Existing parent disposition %lu.\n", disposition);
+    result = GetHandleInformation(reopened, &flags);
+    ok(result && (flags & HANDLE_FLAG_INHERIT), "Existing parent handle flags %#lx.\n", flags);
+    queried = query_registry_security(reopened);
+    if (!queried) goto done;
+    result = GetSecurityDescriptorDacl(queried, &present, &dacl, &defaulted);
+    ok(result && present && dacl && dacl->AceCount == 1,
+       "Existing parent DACL was replaced.\n");
+    free(queried);
+    queried = NULL;
+    RegCloseKey(reopened);
+    reopened = NULL;
+    if (unicode)
+        ret = RegCreateKeyExW(HKEY_CURRENT_USER, pathW, 0, NULL, REG_OPTION_VOLATILE,
+                              KEY_ALL_ACCESS | view, NULL, &reopened, &disposition);
+    else
+        ret = RegCreateKeyExA(HKEY_CURRENT_USER, path, 0, NULL, REG_OPTION_VOLATILE,
+                              KEY_ALL_ACCESS | view, NULL, &reopened, &disposition);
+    ok(!ret, "Noninheritable parent open returned %ld.\n", ret);
+    if (ret) goto done;
+    result = GetHandleInformation(reopened, &flags);
+    ok(result && !(flags & HANDLE_FLAG_INHERIT), "Noninheritable parent handle flags %#lx.\n", flags);
+    RegCloseKey(reopened);
+    reopened = NULL;
+    result = GetHandleInformation(parent, &flags);
+    ok(result && (flags & HANDLE_FLAG_INHERIT), "Original parent handle flags changed to %#lx.\n", flags);
+
+    ret = RegCreateKeyExA(parent, "Child", 0, NULL, REG_OPTION_VOLATILE,
+                          KEY_ALL_ACCESS, NULL, &child, &disposition);
+    ok(!ret, "Child creation returned %ld.\n", ret);
+    if (ret) goto done;
+    ret = RegCreateKeyExA(parent, "Sibling", 0, NULL, REG_OPTION_VOLATILE,
+                          KEY_ALL_ACCESS, NULL, &sibling, &disposition);
+    ok(!ret, "Sibling creation returned %ld.\n", ret);
+    if (ret) goto done;
+    queried = query_registry_security(child);
+    if (!queried) goto done;
+    result = GetSecurityDescriptorDacl(queried, &present, &dacl, &defaulted);
+    ok(result && present && dacl && dacl->AceCount == 1,
+       "Child did not inherit parent DACL.\n");
+    if (result && present && dacl && dacl->AceCount == 1)
+    {
+        result = GetAce(dacl, 0, (void **)&ace);
+        ok(result && ace->Mask == KEY_ALL_ACCESS &&
+           ace->Header.AceFlags == CONTAINER_INHERIT_ACE,
+           "Child ACE query %d, mask %#lx, flags %#x.\n", result,
+           result ? ace->Mask : 0, result ? ace->Header.AceFlags : 0);
+    }
+    free(queried);
+    queried = NULL;
+
+    ret = RegSetKeySecurity(child, DACL_SECURITY_INFORMATION, &empty_sd);
+    ok(!ret, "Empty DACL update returned %ld.\n", ret);
+    ret = RegOpenKeyExA(parent, "Child", 0, KEY_QUERY_VALUE, &reopened);
+    ok(ret == ERROR_ACCESS_DENIED, "Denied child reopen returned %ld.\n", ret);
+    if (!ret) RegCloseKey(reopened);
+    reopened = NULL;
+    queried = query_registry_security(child);
+    if (queried)
+    {
+        result = GetSecurityDescriptorDacl(queried, &present, &dacl, &defaulted);
+        ok(result && present && dacl && !dacl->AceCount, "Empty DACL was not retained.\n");
+        free(queried);
+        queried = NULL;
+    }
+    ret = RegOpenKeyExA(parent, "Sibling", 0, KEY_QUERY_VALUE, &reopened);
+    ok(!ret, "Sibling access changed with child DACL: %ld.\n", ret);
+    if (!ret) RegCloseKey(reopened);
+    reopened = NULL;
+    ret = RegSetKeySecurity(child, DACL_SECURITY_INFORMATION, initial);
+    ok(!ret, "DACL restore returned %ld.\n", ret);
+    RegCloseKey(child);
+    child = NULL;
+    ret = RegOpenKeyExA(parent, "Child", 0, KEY_QUERY_VALUE, &reopened);
+    ok(!ret, "Restored child reopen returned %ld.\n", ret);
+
+done:
+    if (reopened) RegCloseKey(reopened);
+    if (sibling) RegCloseKey(sibling);
+    if (child)
+    {
+        RegSetKeySecurity(child, DACL_SECURITY_INFORMATION, initial);
+        RegCloseKey(child);
+    }
+    if (parent)
+    {
+        RegSetKeySecurity(parent, DACL_SECURITY_INFORMATION, initial);
+        RegDeleteKeyA(parent, "Child");
+        RegDeleteKeyA(parent, "Sibling");
+        RegCloseKey(parent);
+        RegDeleteKeyA(HKEY_CURRENT_USER, path);
+    }
+    RegDeleteKeyA(HKEY_CURRENT_USER, "Software\\Wine\\TestSecurityPersistence");
+    free(queried);
+    LocalFree(initial);
+    winetest_pop_context();
+}
+
+static void test_registry_acl_propagation(void)
+{
+    static const WCHAR path[] = L"Software\\Wine\\TestRegistryAclPropagation";
+    static WCHAR named_path[] = L"CURRENT_USER\\Software\\Wine\\TestRegistryAclPropagation";
+    static const WCHAR *names[] = {L"", L"Existing", L"Nested", L"Nested\\Grandchild",
+                                  L"Protected", L"Protected\\Grandchild", L"NewPublic",
+                                  L"NewRaw", L"RawRestored"};
+    const REGSAM access = READ_CONTROL | WRITE_DAC | DELETE | KEY_CREATE_SUB_KEY | KEY_ENUMERATE_SUB_KEYS;
+    SID everyone = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    PSECURITY_DESCRIPTOR initial = NULL, denied = NULL, queried = NULL, before[ARRAY_SIZE(names)] = {0};
+    HANDLE source = NULL, token = NULL, previous = NULL;
+    HKEY keys[ARRAY_SIZE(names)] = {0}, reopened = NULL;
+    BOOL created[ARRAY_SIZE(names)] = {0};
+    TOKEN_PRIVILEGES *privileges = NULL;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), NULL, FALSE};
+    SECURITY_DESCRIPTOR_CONTROL control, expected_control;
+    PSID owner, old_owner, group, old_group;
+    ACCESS_ALLOWED_ACE *ace;
+    ACL *initial_acl, *denied_acl, *dacl, *old_dacl;
+    WCHAR full_path[256];
+    DWORD size, capacity, error, disposition, revision, phase, i, j, value;
+    BOOL result, present, defaulted, old_present, old_defaulted, impersonating = FALSE, valid;
+    BOOL expect_denied, child_auto;
+    LONG ret;
+
+    winetest_push_context("Registry existing descendant DACL propagation");
+    result = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_IMPERSONATE, TRUE, &previous);
+    error = GetLastError();
+    ok(result || error == ERROR_NO_TOKEN, "Previous thread token query returned %d, error %lu.\n", result, error);
+    if (!result && error != ERROR_NO_TOKEN) goto done;
+    result = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &source);
+    ok(result, "Source token open failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    result = DuplicateTokenEx(source, TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES | TOKEN_IMPERSONATE,
+                              NULL, SecurityImpersonation, TokenImpersonation, &token);
+    ok(result, "Private token duplication failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    result = AdjustTokenPrivileges(token, TRUE, NULL, 0, NULL, NULL);
+    ok(result, "Private privilege disable failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    size = 0;
+    result = GetTokenInformation(token, TokenPrivileges, NULL, 0, &size);
+    error = GetLastError();
+    ok(!result && error == ERROR_INSUFFICIENT_BUFFER && size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges),
+       "Privilege sizing returned %d, error %lu, size %lu.\n", result, error, size);
+    if (result || error != ERROR_INSUFFICIENT_BUFFER || size < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) goto done;
+    capacity = size;
+    privileges = malloc(capacity);
+    ok(!!privileges, "Privilege buffer allocation failed.\n");
+    if (!privileges) goto done;
+    result = GetTokenInformation(token, TokenPrivileges, privileges, capacity, &size);
+    ok(result, "Private privilege query failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    valid = size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) && size <= capacity;
+    if (valid)
+        valid = privileges->PrivilegeCount <= (size - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES);
+    ok(valid, "Private privilege buffer size/count is invalid.\n");
+    if (!valid) goto done;
+    for (i = 0; i < privileges->PrivilegeCount; ++i)
+    {
+        ok(!(privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED), "Privilege %lu remains enabled.\n", i);
+        if (privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED) goto done;
+    }
+    result = SetThreadToken(NULL, token);
+    ok(result, "Private token impersonation failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    impersonating = TRUE;
+    result = ConvertStringSecurityDescriptorToSecurityDescriptorA("D:P(A;CI;KA;;;WD)",
+                                                                 SDDL_REVISION_1, &initial, NULL);
+    ok(result, "Initial DACL construction failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    result = ConvertStringSecurityDescriptorToSecurityDescriptorA("D:P(D;CI;0x2;;;WD)(A;CI;KA;;;WD)",
+                                                                 SDDL_REVISION_1, &denied, NULL);
+    ok(result, "Denied DACL construction failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    result = GetSecurityDescriptorDacl(initial, &present, &initial_acl, &defaulted);
+    ok(result && present && initial_acl, "Initial DACL is missing.\n");
+    if (!result || !present || !initial_acl) goto done;
+    result = GetSecurityDescriptorDacl(denied, &present, &denied_acl, &defaulted);
+    ok(result && present && denied_acl, "Denied DACL is missing.\n");
+    if (!result || !present || !denied_acl) goto done;
+    attributes.lpSecurityDescriptor = initial;
+    ret = RegCreateKeyExW(HKEY_CURRENT_USER, path, 0, NULL, REG_OPTION_VOLATILE,
+                          access, &attributes, &keys[0], &disposition);
+    ok(!ret, "Root creation returned %ld.\n", ret);
+    if (ret) goto done;
+    created[0] = disposition == REG_CREATED_NEW_KEY;
+    ok(created[0], "Root disposition %lu.\n", disposition);
+    if (!created[0]) goto done;
+    for (i = 1; i < 6; ++i)
+    {
+        attributes.lpSecurityDescriptor = i == 4 ? initial : NULL;
+        ret = RegCreateKeyExW(keys[0], names[i], 0, NULL, REG_OPTION_VOLATILE,
+                              access, i == 4 ? &attributes : NULL, &keys[i], &disposition);
+        ok(!ret, "Child %lu creation returned %ld.\n", i, ret);
+        if (ret) goto done;
+        created[i] = disposition == REG_CREATED_NEW_KEY;
+        ok(created[i], "Child %lu disposition %lu.\n", i, disposition);
+        if (!created[i]) goto done;
+    }
+    for (i = 0; i < 6; ++i)
+    {
+        before[i] = query_registry_security(keys[i]);
+        ok(!!before[i], "Initial descriptor %lu could not be queried.\n", i);
+        if (!before[i]) goto done;
+    }
+    for (phase = 0; phase < 5; ++phase)
+    {
+        winetest_push_context("phase %lu", phase);
+        if (phase == 1)
+            ret = SetNamedSecurityInfoW(named_path, SE_REGISTRY_KEY,
+                                        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                        NULL, NULL, denied_acl, NULL);
+        else if (phase == 2)
+            ret = SetSecurityInfo(keys[0], SE_REGISTRY_KEY,
+                                  DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                  NULL, NULL, initial_acl, NULL);
+        else if (phase == 3)
+            ret = RegSetKeySecurity(keys[0], DACL_SECURITY_INFORMATION, denied);
+        else if (phase == 4)
+            ret = RegSetKeySecurity(keys[0], DACL_SECURITY_INFORMATION, initial);
+        else ret = ERROR_SUCCESS;
+        ok(!ret, "Parent DACL update returned %ld.\n", ret);
+        if (ret)
+        {
+            winetest_pop_context();
+            goto done;
+        }
+        if (phase == 1 || phase == 3 || phase == 4)
+        {
+            i = phase == 1 ? 6 : phase == 3 ? 7 : 8;
+            ret = RegCreateKeyExW(keys[0], names[i], 0, NULL, REG_OPTION_VOLATILE,
+                                  access, NULL, &keys[i], &disposition);
+            ok(!ret, "New child %lu creation returned %ld.\n", i, ret);
+            if (ret)
+            {
+                winetest_pop_context();
+                goto done;
+            }
+            created[i] = disposition == REG_CREATED_NEW_KEY;
+            ok(created[i], "New child %lu disposition %lu.\n", i, disposition);
+            before[i] = query_registry_security(keys[i]);
+            ok(!!before[i], "New child %lu descriptor query failed.\n", i);
+            if (!created[i] || !before[i])
+            {
+                winetest_pop_context();
+                goto done;
+            }
+        }
+        for (i = 0; i < ARRAY_SIZE(keys); ++i)
+        {
+            if (!keys[i]) continue;
+            winetest_push_context("key %lu", i);
+            expect_denied = (phase == 1 && i != 4 && i != 5) ||
+                            (phase == 3 && (i == 0 || i == 7)) || (phase == 4 && i == 7);
+            child_auto = phase && i && i < 7 && i != 4 && i != 5;
+            expected_control = SE_SELF_RELATIVE | SE_DACL_PRESENT;
+            if (!i || i == 4) expected_control |= SE_DACL_PROTECTED;
+            if (child_auto || (!i && (phase == 1 || phase == 2)))
+                expected_control |= SE_DACL_AUTO_INHERITED;
+            queried = query_registry_security(keys[i]);
+            ok(!!queried, "Retained descriptor query failed.\n");
+            if (queried)
+            {
+                dacl = NULL;
+                present = FALSE;
+                result = GetSecurityDescriptorDacl(queried, &present, &dacl, &defaulted);
+                ok(result && present && dacl && dacl->AceCount == (expect_denied ? 2 : 1),
+                   "DACL query %d, present %d, ACL %p, expected %u ACEs.\n",
+                   result, present, dacl, expect_denied ? 2 : 1);
+                if (result && present && dacl)
+                {
+                    for (j = 0; j < dacl->AceCount; ++j)
+                    {
+                        result = GetAce(dacl, j, (void **)&ace);
+                        ok(result, "ACE %lu query failed: %lu.\n", j, GetLastError());
+                        if (!result) continue;
+                        ok(ace->Header.AceType == (expect_denied && !j ? ACCESS_DENIED_ACE_TYPE : ACCESS_ALLOWED_ACE_TYPE),
+                           "ACE %lu type %#x.\n", j, ace->Header.AceType);
+                        ok(ace->Mask == (expect_denied && !j ? KEY_SET_VALUE : KEY_ALL_ACCESS),
+                           "ACE %lu mask %#lx.\n", j, ace->Mask);
+                        ok(EqualSid(&ace->SidStart, &everyone), "ACE %lu SID differs from Everyone.\n", j);
+                        ok(ace->Header.AceFlags == (CONTAINER_INHERIT_ACE | (child_auto ? INHERITED_ACE : 0)),
+                           "ACE %lu flags %#x, expected %#x.\n", j, ace->Header.AceFlags,
+                           CONTAINER_INHERIT_ACE | (child_auto ? INHERITED_ACE : 0));
+                    }
+                    result = GetSecurityDescriptorControl(queried, &control, &revision);
+                    ok(result, "Descriptor control query failed.\n");
+                    if (result)
+                        ok(control == expected_control, "Descriptor control %#x, expected %#x.\n",
+                           control, expected_control);
+                    if (i == 4 || i == 5)
+                    {
+                        result = GetSecurityDescriptorDacl(before[i], &old_present, &old_dacl, &old_defaulted);
+                        ok(result && old_present && old_dacl && dacl->AclSize == old_dacl->AclSize &&
+                           !memcmp(dacl, old_dacl, dacl->AclSize), "Protected branch DACL changed.\n");
+                    }
+                }
+                owner = old_owner = group = old_group = NULL;
+                result = GetSecurityDescriptorOwner(queried, &owner, &defaulted) &&
+                         GetSecurityDescriptorOwner(before[i], &old_owner, &old_defaulted);
+                ok(result && !!owner == !!old_owner && defaulted == old_defaulted,
+                   "Owner presence/defaulting changed.\n");
+                if (result && owner && old_owner) ok(EqualSid(owner, old_owner), "Owner SID changed.\n");
+                result = GetSecurityDescriptorGroup(queried, &group, &defaulted) &&
+                         GetSecurityDescriptorGroup(before[i], &old_group, &old_defaulted);
+                ok(result && !!group == !!old_group && defaulted == old_defaulted,
+                   "Group presence/defaulting changed.\n");
+                if (result && group && old_group) ok(EqualSid(group, old_group), "Group SID changed.\n");
+                free(queried);
+                queried = NULL;
+            }
+            wcscpy(full_path, path);
+            if (i) { wcscat(full_path, L"\\"); wcscat(full_path, names[i]); }
+            ret = RegOpenKeyExW(HKEY_CURRENT_USER, full_path, 0, KEY_SET_VALUE, &reopened);
+            ok(ret == (expect_denied ? ERROR_ACCESS_DENIED : ERROR_SUCCESS),
+               "Fresh KEY_SET_VALUE open returned %ld, expected %ld.\n", ret,
+               (LONG)(expect_denied ? ERROR_ACCESS_DENIED : ERROR_SUCCESS));
+            if (!ret)
+            {
+                value = phase;
+                ret = RegSetValueExW(reopened, L"Value", 0, REG_DWORD, (BYTE *)&value, sizeof(value));
+                ok(!ret, "Actual value write returned %ld.\n", ret);
+                RegCloseKey(reopened);
+                reopened = NULL;
+            }
+            ret = RegOpenKeyExW(HKEY_CURRENT_USER, full_path, 0, KEY_QUERY_VALUE | READ_CONTROL, &reopened);
+            ok(!ret, "Fresh read/control open returned %ld.\n", ret);
+            if (!ret)
+            {
+                ret = RegQueryInfoKeyW(reopened, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+                ok(!ret, "Actual key information read returned %ld.\n", ret);
+                queried = query_registry_security(reopened);
+                ok(!!queried, "Fresh descriptor query failed.\n");
+                if (queried)
+                {
+                    result = GetSecurityDescriptorDacl(queried, &present, &dacl, &defaulted);
+                    ok(result && present && dacl && dacl->AceCount == (expect_denied ? 2 : 1),
+                       "Fresh DACL does not match retained-handle expectation.\n");
+                    free(queried);
+                    queried = NULL;
+                }
+                RegCloseKey(reopened);
+                reopened = NULL;
+            }
+            winetest_pop_context();
+        }
+        winetest_pop_context();
+    }
+
+done:
+    if (reopened) RegCloseKey(reopened);
+    if (created[0])
+        for (i = 0; i < ARRAY_SIZE(keys); ++i)
+            if (keys[i])
+            {
+                ret = RegSetKeySecurity(keys[i], DACL_SECURITY_INFORMATION, initial);
+                ok(!ret, "Cleanup DACL %lu restore returned %ld.\n", i, ret);
+            }
+    for (i = ARRAY_SIZE(keys); i-- > 1;)
+    {
+        if (keys[i]) RegCloseKey(keys[i]);
+        if (created[i])
+        {
+            ret = RegDeleteKeyW(keys[0], names[i]);
+            ok(!ret, "Child %lu cleanup returned %ld.\n", i, ret);
+        }
+    }
+    if (keys[0]) RegCloseKey(keys[0]);
+    if (created[0])
+    {
+        ret = RegDeleteKeyW(HKEY_CURRENT_USER, path);
+        ok(!ret, "Root cleanup returned %ld.\n", ret);
+    }
+    if (impersonating)
+    {
+        result = SetThreadToken(NULL, previous);
+        ok(result, "Previous thread token restore failed: %lu.\n", GetLastError());
+    }
+    if (token) CloseHandle(token);
+    if (source) CloseHandle(source);
+    if (previous) CloseHandle(previous);
+    for (i = 0; i < ARRAY_SIZE(before); ++i) free(before[i]);
+    free(queried);
+    free(privileges);
+    if (denied) LocalFree(denied);
+    if (initial) LocalFree(initial);
+    winetest_pop_context();
+}
+
+static HANDLE registry_matrix_token(HANDLE source, const LUID *security, UINT mode)
+{
+    TOKEN_PRIVILEGES adjust, *privileges = NULL;
+    HANDLE token = NULL;
+    DWORD size = 0, capacity, error, i;
+    BOOL ret, found = FALSE, valid = FALSE;
+
+    ret = DuplicateTokenEx(source, TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES | TOKEN_IMPERSONATE,
+                           NULL, SecurityImpersonation, TokenImpersonation, &token);
+    ok(ret, "Matrix token duplication failed: %lu.\n", GetLastError());
+    if (!ret) return NULL;
+    ret = AdjustTokenPrivileges(token, TRUE, NULL, 0, NULL, NULL);
+    ok(ret, "Matrix privilege disable failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    if (mode)
+    {
+        adjust.PrivilegeCount = 1;
+        adjust.Privileges[0].Luid = *security;
+        adjust.Privileges[0].Attributes = mode == 1 ? SE_PRIVILEGE_ENABLED : SE_PRIVILEGE_REMOVED;
+        SetLastError(0xdeadbeef);
+        ret = AdjustTokenPrivileges(token, FALSE, &adjust, 0, NULL, NULL);
+        error = GetLastError();
+        ok(ret && error == ERROR_SUCCESS, "Security privilege mode %u returned %d, error %lu.\n", mode, ret, error);
+        if (!ret || error != ERROR_SUCCESS) goto done;
+    }
+    ret = GetTokenInformation(token, TokenPrivileges, NULL, 0, &size);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INSUFFICIENT_BUFFER && size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges),
+       "Matrix privilege sizing returned %d, error %lu, size %lu.\n", ret, error, size);
+    if (ret || error != ERROR_INSUFFICIENT_BUFFER || size < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) goto done;
+    capacity = size;
+    privileges = malloc(capacity);
+    ok(!!privileges, "Matrix privilege allocation failed.\n");
+    if (!privileges) goto done;
+    ret = GetTokenInformation(token, TokenPrivileges, privileges, capacity, &size);
+    ok(ret, "Matrix privilege query failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    valid = size <= capacity && size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges);
+    if (valid) valid = privileges->PrivilegeCount <= (size - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES);
+    ok(valid, "Matrix privilege array is invalid.\n");
+    if (!valid) goto done;
+    for (i = 0; i < privileges->PrivilegeCount; ++i)
+    {
+        BOOL match = privileges->Privileges[i].Luid.LowPart == security->LowPart &&
+                     privileges->Privileges[i].Luid.HighPart == security->HighPart;
+        BOOL enabled = !!(privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED);
+        if (match) found = TRUE;
+        ok(enabled == (mode == 1 && match), "Matrix mode %u privilege %lu enabled %u.\n", mode, i, enabled);
+        if (enabled != (mode == 1 && match)) valid = FALSE;
+    }
+    ok(found == (mode != 2), "Matrix mode %u security privilege present %u.\n", mode, found);
+    valid = valid && found == (mode != 2);
+    trace("Registry matrix token mode %u: security present %u, enabled %u, other privileges disabled.\n",
+          mode, found, mode == 1);
+done:
+    free(privileges);
+    if (!valid) { CloseHandle(token); token = NULL; }
+    return token;
+}
+
+static PSECURITY_DESCRIPTOR registry_matrix_descriptor(HKEY key, BOOL sacl)
+{
+    SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    PSECURITY_DESCRIPTOR sd;
+    DWORD size = 0, capacity;
+    BOOL valid;
+    LONG ret;
+
+    if (sacl) information |= SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+    ret = RegGetKeySecurity(key, information, NULL, &size);
+    ok(ret == ERROR_INSUFFICIENT_BUFFER && size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE),
+       "Matrix descriptor sizing returned %ld, size %lu.\n", ret, size);
+    if (ret != ERROR_INSUFFICIENT_BUFFER || size < sizeof(SECURITY_DESCRIPTOR_RELATIVE)) return NULL;
+    capacity = size;
+    sd = malloc(capacity);
+    ok(!!sd, "Matrix descriptor allocation failed.\n");
+    if (!sd) return NULL;
+    ret = RegGetKeySecurity(key, information, sd, &size);
+    valid = !ret && size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= capacity;
+    if (valid) valid = RtlValidRelativeSecurityDescriptor(sd, size, information & ~LABEL_SECURITY_INFORMATION);
+    ok(valid, "Matrix descriptor query returned %ld, size %lu, capacity %lu.\n", ret, size, capacity);
+    if (!valid) { free(sd); return NULL; }
+    return sd;
+}
+
+static void registry_matrix_acl_text(ACL *acl, BOOL present, char *text, size_t capacity)
+{
+    SID everyone = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    SID owner_rights = {SID_REVISION, 1, {SECURITY_CREATOR_SID_AUTHORITY}, {SECURITY_CREATOR_OWNER_RIGHTS_RID}};
+    ACCESS_ALLOWED_ACE *ace;
+    const char *sid;
+    char label[32];
+    SID_IDENTIFIER_AUTHORITY mandatory = SECURITY_MANDATORY_LABEL_AUTHORITY;
+    DWORD i;
+    int length;
+    BOOL ret;
+
+    text[0] = 0;
+    if (!present || !acl)
+    {
+        snprintf(text, capacity, "%s", !present ? "absent" : "null");
+        return;
+    }
+    ret = IsValidAcl(acl);
+    ok(ret, "Matrix returned invalid ACL.\n");
+    if (!ret) return;
+    for (i = 0; i < acl->AceCount; ++i)
+    {
+        ret = GetAce(acl, i, (void **)&ace);
+        ok(ret, "Matrix ACE %lu query failed.\n", i);
+        if (!ret) return;
+        if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceType != ACCESS_DENIED_ACE_TYPE &&
+            ace->Header.AceType != SYSTEM_AUDIT_ACE_TYPE && ace->Header.AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+            length = snprintf(text, capacity, "%lu:%u/%02x/size%u;", i, ace->Header.AceType,
+                              ace->Header.AceFlags, ace->Header.AceSize);
+        else
+        {
+            ret = ace->Header.AceSize >= FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + FIELD_OFFSET(SID, SubAuthority);
+            ok(ret, "Matrix ACE %lu is too short for a SID.\n", i);
+            if (!ret) return;
+            ret = GetSidLengthRequired(*GetSidSubAuthorityCount(&ace->SidStart)) <=
+                  ace->Header.AceSize - FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart);
+            ok(ret, "Matrix ACE %lu SID exceeds its bounds.\n", i);
+            if (!ret) return;
+            ret = IsValidSid(&ace->SidStart);
+            ok(ret, "Matrix ACE %lu SID is invalid.\n", i);
+            if (!ret) return;
+            sid = EqualSid(&ace->SidStart, &everyone) ? "WD" :
+                  EqualSid(&ace->SidStart, &owner_rights) ? "OW" : "other";
+            if (!memcmp(GetSidIdentifierAuthority(&ace->SidStart), &mandatory, sizeof(mandatory)) &&
+                *GetSidSubAuthorityCount(&ace->SidStart) == 1)
+            {
+                snprintf(label, sizeof(label), "IL%lu", *GetSidSubAuthority(&ace->SidStart, 0));
+                sid = label;
+            }
+            ok(strcmp(sid, "other") != 0, "Matrix ACE %lu has an unexpected principal.\n", i);
+            length = snprintf(text, capacity, "%lu:%u/%02x/%08lx/%s;", i, ace->Header.AceType,
+                              ace->Header.AceFlags, ace->Mask, sid);
+        }
+        ok(length >= 0 && length < capacity, "Matrix ACL observation truncated.\n");
+        if (length < 0 || length >= capacity) return;
+        text += length;
+        capacity -= length;
+    }
+}
+
+static void registry_matrix_check_labels(PSECURITY_DESCRIPTOR before, PSECURITY_DESCRIPTOR after)
+{
+    ACL *old_acl = NULL, *new_acl = NULL;
+    ACE_HEADER *old_ace, *new_ace;
+    BOOL present, defaulted, ret;
+    DWORD i = 0, j = 0;
+
+    ret = GetSecurityDescriptorSacl(before, &present, &old_acl, &defaulted) &&
+          GetSecurityDescriptorSacl(after, &present, &new_acl, &defaulted);
+    ok(ret, "Matrix label ACL query failed.\n");
+    if (!ret) return;
+    for (;;)
+    {
+        old_ace = new_ace = NULL;
+        while (old_acl && i < old_acl->AceCount)
+        {
+            ret = GetAce(old_acl, i++, (void **)&old_ace);
+            ok(ret, "Matrix original label ACE %lu query failed.\n", i - 1);
+            if (!ret) return;
+            if (old_ace->AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE) break;
+            old_ace = NULL;
+        }
+        while (new_acl && j < new_acl->AceCount)
+        {
+            ret = GetAce(new_acl, j++, (void **)&new_ace);
+            ok(ret, "Matrix current label ACE %lu query failed.\n", j - 1);
+            if (!ret) return;
+            if (new_ace->AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE) break;
+            new_ace = NULL;
+        }
+        ok(!!old_ace == !!new_ace, "SACL update changed label ACE count.\n");
+        if (!old_ace || !new_ace) break;
+        ok(old_ace->AceSize == new_ace->AceSize && !memcmp(old_ace, new_ace, old_ace->AceSize),
+           "SACL update changed label ACE bytes.\n");
+    }
+}
+
+struct registry_matrix_result
+{
+    SECURITY_DESCRIPTOR_CONTROL control;
+    const char *dacl, *sacl;
+    LONG retained_write, fresh_read, read_value, fresh_write;
+};
+
+static void registry_matrix_snapshot(HKEY root, HKEY key, const WCHAR *name, UINT index,
+        PSECURITY_DESCRIPTOR before, BOOL sacl, const struct registry_matrix_result *expected)
+{
+    PSECURITY_DESCRIPTOR sd, fresh_sd = NULL;
+    SECURITY_DESCRIPTOR_CONTROL control, old_control;
+    DWORD revision, value = index, size;
+    ACL *dacl, *audit, *old_dacl;
+    PSID owner, old_owner, group, old_group;
+    HKEY fresh = NULL;
+    BOOL ret, present, defaulted, old_present, old_defaulted;
+    LONG retained, fresh_read, fresh_write, operation = ERROR_INVALID_HANDLE;
+    char dacl_text[1024], sacl_text[1024];
+
+    winetest_push_context("key %u", index);
+    sd = registry_matrix_descriptor(key, sacl);
+    if (!sd) goto done;
+    ret = GetSecurityDescriptorControl(sd, &control, &revision);
+    ok(ret, "Matrix descriptor control query failed.\n");
+    if (!ret) goto done;
+    ret = GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted);
+    ok(ret, "Matrix DACL query failed.\n");
+    if (!ret) goto done;
+    registry_matrix_acl_text(dacl, present, dacl_text, sizeof(dacl_text));
+    sacl_text[0] = 0;
+    if (sacl)
+    {
+        ret = GetSecurityDescriptorSacl(sd, &present, &audit, &defaulted);
+        ok(ret, "Matrix SACL query failed.\n");
+        if (ret) registry_matrix_acl_text(audit, present, sacl_text, sizeof(sacl_text));
+    }
+    if (before)
+    {
+        ret = GetSecurityDescriptorOwner(sd, &owner, &defaulted) &&
+              GetSecurityDescriptorOwner(before, &old_owner, &old_defaulted);
+        ok(ret && !!owner == !!old_owner && defaulted == old_defaulted, "Matrix owner presence/defaulting changed.\n");
+        if (ret && owner && old_owner)
+            ok(GetLengthSid(owner) == GetLengthSid(old_owner) && !memcmp(owner, old_owner, GetLengthSid(owner)),
+               "Matrix owner bytes changed.\n");
+        ret = GetSecurityDescriptorGroup(sd, &group, &defaulted) &&
+              GetSecurityDescriptorGroup(before, &old_group, &old_defaulted);
+        ok(ret && !!group == !!old_group && defaulted == old_defaulted, "Matrix group presence/defaulting changed.\n");
+        if (ret && group && old_group)
+            ok(GetLengthSid(group) == GetLengthSid(old_group) && !memcmp(group, old_group, GetLengthSid(group)),
+               "Matrix group bytes changed.\n");
+        if (sacl)
+        {
+            registry_matrix_check_labels(before, sd);
+            ret = GetSecurityDescriptorDacl(before, &old_present, &old_dacl, &old_defaulted) &&
+                  GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted);
+            ok(ret && present == old_present && defaulted == old_defaulted && !!dacl == !!old_dacl,
+               "SACL update changed DACL presence/defaulting.\n");
+            if (ret && dacl && old_dacl)
+                ok(dacl->AclSize == old_dacl->AclSize && !memcmp(dacl, old_dacl, dacl->AclSize),
+                   "SACL update changed DACL bytes.\n");
+            ret = GetSecurityDescriptorControl(before, &old_control, &revision);
+            ok(ret && !((control ^ old_control) & (SE_DACL_PRESENT | SE_DACL_DEFAULTED |
+               SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ)), "SACL update changed DACL control.\n");
+        }
+    }
+    retained = RegSetValueExW(key, L"MatrixValue", 0, REG_DWORD, (BYTE *)&value, sizeof(value));
+    fresh_read = RegOpenKeyExW(root, name, 0, KEY_QUERY_VALUE | READ_CONTROL, &fresh);
+    if (!fresh_read)
+    {
+        size = sizeof(value);
+        operation = RegQueryValueExW(fresh, L"MatrixValue", NULL, NULL, (BYTE *)&value, &size);
+        fresh_sd = registry_matrix_descriptor(fresh, FALSE);
+        if (fresh_sd)
+        {
+            ACL *fresh_dacl;
+            BOOL fresh_present, fresh_defaulted;
+            ret = GetSecurityDescriptorDacl(fresh_sd, &fresh_present, &fresh_dacl, &fresh_defaulted) &&
+                  GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted);
+            ok(ret && fresh_present == present && !!fresh_dacl == !!dacl, "Fresh descriptor DACL presence differs.\n");
+            if (ret && fresh_dacl && dacl)
+                ok(fresh_dacl->AclSize == dacl->AclSize && !memcmp(fresh_dacl, dacl, dacl->AclSize),
+                   "Fresh descriptor DACL bytes differ.\n");
+        }
+        RegCloseKey(fresh);
+        fresh = NULL;
+    }
+    fresh_write = RegOpenKeyExW(root, name, 0, KEY_SET_VALUE, &fresh);
+    if (!fresh_write)
+    {
+        value = index;
+        fresh_write = RegSetValueExW(fresh, L"MatrixValue", 0, REG_DWORD, (BYTE *)&value, sizeof(value));
+        RegCloseKey(fresh);
+        fresh = NULL;
+    }
+    ok(control == expected->control, "Descriptor control %#x, expected %#x.\n", control, expected->control);
+    ok(!strcmp(dacl_text, expected->dacl), "DACL [%s], expected [%s].\n", dacl_text, expected->dacl);
+    if (sacl) ok(!strcmp(sacl_text, expected->sacl), "SACL [%s], expected [%s].\n", sacl_text, expected->sacl);
+    ok(retained == expected->retained_write, "Retained write returned %ld, expected %ld.\n", retained, expected->retained_write);
+    ok(fresh_read == expected->fresh_read, "Fresh read open returned %ld, expected %ld.\n", fresh_read, expected->fresh_read);
+    if (!fresh_read) ok(operation == expected->read_value, "Value read returned %ld, expected %ld.\n", operation, expected->read_value);
+    ok(fresh_write == expected->fresh_write, "Fresh write returned %ld, expected %ld.\n", fresh_write, expected->fresh_write);
+done:
+    free(fresh_sd);
+    free(sd);
+    winetest_pop_context();
+}
+
+static void test_registry_dacl_rights_matrix(void)
+{
+    static const struct registry_matrix_result results[] =
+    {
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "", 0, 0, 0, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_DACL_AUTO_INHERITED,
+         "0:1/12/00000002/WD;1:0/12/000f003f/WD;", "", 0, 0, 0, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_DACL_PROTECTED,
+         "0:0/02/000f003f/WD;", "", 0, 0, 0, 0},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT,
+         "0:0/02/000f003f/WD;", "", 0, 0, 0, 0},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_DACL_PROTECTED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "", 0, 0, 0, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_DACL_AUTO_INHERITED,
+         "0:1/00/00000008/WD;1:1/12/00000002/WD;2:0/12/000f003f/WD;", "", 0, 0, 0, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT,
+         "0:1/00/00040000/WD;1:0/00/00020000/OW;2:0/02/000f003f/WD;", "", 0, 0, 0, 0},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_DACL_AUTO_INHERITED,
+         "0:1/00/00000001/WD;1:1/12/00000002/WD;2:0/12/000f003f/WD;", "", 0, ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_ACCESS_DENIED}
+    };
+    static const BYTE expected[][14] =
+    {
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1},
+        {4, 3, 3, 3, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3},
+        {0, 1, 1, 1, 2, 3, 5, 3, 1, 1, 1, 1, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 6, 1, 1, 1, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 7, 3, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1},
+        {0, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1, 1, 1}
+    };
+    static const WCHAR path[] = L"Software\\Wine\\TestRegistryRightsMatrix";
+    static WCHAR named[] = L"CURRENT_USER\\Software\\Wine\\TestRegistryRightsMatrix";
+    static const WCHAR *names[] = {L"", L"Existing", L"Nested", L"Nested\\Grandchild", L"Protected",
+        L"Protected\\Grandchild", L"NoEnum", L"NoEnum\\Grandchild", L"NoWriteDac", L"Sibling",
+        L"NoQuery", L"NoQuery\\Grandchild", L"OrdinaryLinkValue", L"OrdinaryLinkValue\\Grandchild"};
+    static const REGSAM access[] = {WRITE_DAC, READ_CONTROL | WRITE_DAC, KEY_ALL_ACCESS,
+        MAXIMUM_ALLOWED, READ_CONTROL, KEY_ALL_ACCESS, KEY_ALL_ACCESS, KEY_ALL_ACCESS,
+        KEY_ALL_ACCESS, KEY_ALL_ACCESS, KEY_ALL_ACCESS & ~KEY_QUERY_VALUE, KEY_ALL_ACCESS};
+    static const char *strings[] = {"D:P(A;CI;KA;;;WD)", "D:P(D;CI;0x2;;;WD)(A;CI;KA;;;WD)",
+        "D:(D;;0x8;;;WD)(A;CI;KA;;;WD)", "D:(D;;WD;;;WD)(A;;RC;;;OW)(A;CI;KA;;;WD)",
+        "D:(D;;0x1;;;WD)(A;CI;KA;;;WD)"};
+    static const WCHAR ordinary_value[] = L"Sibling";
+    PSECURITY_DESCRIPTOR descriptors[ARRAY_SIZE(strings)] = {0}, before[ARRAY_SIZE(names)] = {0};
+    HKEY keys[ARRAY_SIZE(names)] = {0}, setter = NULL, probe = NULL;
+    BOOL created[ARRAY_SIZE(names)] = {0}, present, defaulted, result;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), NULL, FALSE};
+    ACL *dacl;
+    DWORD disposition, i, phase, setters = 0;
+    LONG ret;
+
+    winetest_push_context("Registry DACL rights matrix");
+    for (i = 0; i < ARRAY_SIZE(strings); ++i)
+    {
+        result = ConvertStringSecurityDescriptorToSecurityDescriptorA(strings[i], SDDL_REVISION_1, &descriptors[i], NULL);
+        ok(result, "Matrix DACL %lu construction failed: %lu.\n", i, GetLastError());
+        if (!result) goto done;
+    }
+    for (i = 0; i < ARRAY_SIZE(names); ++i)
+    {
+        attributes.lpSecurityDescriptor = descriptors[0];
+        ret = RegCreateKeyExW(i ? keys[0] : HKEY_CURRENT_USER, i ? names[i] : path, 0, NULL,
+                              REG_OPTION_VOLATILE, KEY_ALL_ACCESS, i == 0 || i == 4 ? &attributes : NULL,
+                              &keys[i], &disposition);
+        ok(!ret, "Matrix key %lu creation returned %ld.\n", i, ret);
+        if (ret) goto done;
+        created[i] = disposition == REG_CREATED_NEW_KEY;
+        ok(created[i], "Matrix key %lu already existed.\n", i);
+        if (!created[i]) goto done;
+        before[i] = registry_matrix_descriptor(keys[i], FALSE);
+        if (!before[i]) goto done;
+    }
+    for (phase = 0; phase < ARRAY_SIZE(access); ++phase)
+    {
+        winetest_push_context("case %lu", phase);
+        for (i = 0; i < ARRAY_SIZE(names); ++i)
+        {
+            ret = RegSetKeySecurity(keys[i], DACL_SECURITY_INFORMATION |
+                  (i == 0 || i == 4 ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION), before[i]);
+            ok(!ret, "Matrix reset key %lu returned %ld.\n", i, ret);
+            if (ret) goto end_phase;
+        }
+        ret = RegDeleteValueW(keys[12], L"SymbolicLinkValue");
+        ok(ret == ERROR_SUCCESS || ret == ERROR_FILE_NOT_FOUND, "Matrix marker reset returned %ld.\n", ret);
+        if (ret != ERROR_SUCCESS && ret != ERROR_FILE_NOT_FOUND) goto end_phase;
+        if (phase >= 7 && phase <= 10)
+        {
+            UINT boundary = phase == 7 ? 6 : phase == 8 ? 8 : phase == 9 ? 10 : 0;
+            UINT descriptor = phase == 7 ? 2 : phase == 8 ? 3 : 4;
+            REGSAM denied = phase == 7 ? KEY_ENUMERATE_SUB_KEYS : phase == 8 ? WRITE_DAC : KEY_QUERY_VALUE;
+            ret = RegSetKeySecurity(keys[boundary], DACL_SECURITY_INFORMATION, descriptors[descriptor]);
+            ok(!ret, "Boundary key %u DACL setup returned %ld.\n", boundary, ret);
+            if (ret) goto end_phase;
+            ret = RegOpenKeyExW(keys[0], names[boundary], 0, denied, &probe);
+            ok(ret == ERROR_ACCESS_DENIED, "Boundary key %u access %#lx negative control returned %ld.\n", boundary, denied, ret);
+            if (!ret) { RegCloseKey(probe); probe = NULL; }
+            if (ret != ERROR_ACCESS_DENIED) goto end_phase;
+            ret = RegOpenKeyExW(keys[0], names[boundary], 0,
+                               (READ_CONTROL | WRITE_DAC | KEY_ENUMERATE_SUB_KEYS) & ~denied, &probe);
+            ok(!ret, "Boundary key %u remaining rights positive control returned %ld.\n", boundary, ret);
+            if (ret) goto end_phase;
+            RegCloseKey(probe);
+            probe = NULL;
+        }
+        if (phase == 11)
+        {
+            ret = RegSetValueExW(keys[12], L"SymbolicLinkValue", 0, REG_LINK,
+                                 (const BYTE *)ordinary_value, sizeof(ordinary_value) - sizeof(WCHAR));
+            ok(!ret, "Ordinary-key REG_LINK value setup returned %ld.\n", ret);
+            if (ret) goto end_phase;
+        }
+        ret = RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, access[phase], &setter);
+        ok(!ret, "Matrix root handle %#lx open returned %ld.\n", access[phase], ret);
+        if (ret) goto end_phase;
+        result = GetSecurityDescriptorDacl(descriptors[1], &present, &dacl, &defaulted);
+        ok(result && present && dacl, "Matrix target DACL missing.\n");
+        if (!result || !present || !dacl) goto end_phase;
+        if (phase == 5)
+            ret = SetNamedSecurityInfoW(named, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                        NULL, NULL, dacl, NULL);
+        else if (phase == 6)
+            ret = RegSetKeySecurity(setter, DACL_SECURITY_INFORMATION, descriptors[1]);
+        else ret = SetSecurityInfo(setter, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                    NULL, NULL, dacl, NULL);
+        ok(ret == ERROR_SUCCESS, "Registry DACL setter requested %#lx returned %ld.\n", access[phase], ret);
+        ++setters;
+        for (i = 0; i < ARRAY_SIZE(names); ++i)
+            registry_matrix_snapshot(keys[0], keys[i], names[i], i, before[i], FALSE, &results[expected[phase][i]]);
+end_phase:
+        if (setter) { RegCloseKey(setter); setter = NULL; }
+        winetest_pop_context();
+    }
+    ok(setters == ARRAY_SIZE(access), "Registry DACL matrix exercised %lu of %u setters.\n", setters, (UINT)ARRAY_SIZE(access));
+    trace("Registry DACL matrix exercised %lu of %u setters.\n", setters, (UINT)ARRAY_SIZE(access));
+done:
+    if (probe) RegCloseKey(probe);
+    if (setter) RegCloseKey(setter);
+    for (i = 0; i < ARRAY_SIZE(names); ++i)
+        if (created[i] && keys[i])
+        {
+            ret = RegSetKeySecurity(keys[i], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptors[0]);
+            ok(!ret, "Matrix cleanup DACL %lu returned %ld.\n", i, ret);
+        }
+    for (i = ARRAY_SIZE(names); i-- > 1;)
+    {
+        if (keys[i]) RegCloseKey(keys[i]);
+        if (created[i]) { ret = RegDeleteKeyW(keys[0], names[i]); ok(!ret, "Matrix cleanup key %lu returned %ld.\n", i, ret); }
+    }
+    if (keys[0]) RegCloseKey(keys[0]);
+    if (created[0]) { ret = RegDeleteKeyW(HKEY_CURRENT_USER, path); ok(!ret, "Matrix root cleanup returned %ld.\n", ret); }
+    for (i = 0; i < ARRAY_SIZE(before); ++i) free(before[i]);
+    for (i = 0; i < ARRAY_SIZE(descriptors); ++i) if (descriptors[i]) LocalFree(descriptors[i]);
+    winetest_pop_context();
+}
+
+static void test_registry_sacl_privilege_matrix(HANDLE *tokens)
+{
+    static const struct registry_matrix_result results[] =
+    {
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_PROTECTED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/40/00000001/WD;",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_SACL_PROTECTED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/40/00000001/WD;",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "absent",
+         ERROR_ACCESS_DENIED, ERROR_SUCCESS, ERROR_FILE_NOT_FOUND, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_PROTECTED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/c2/00000002/WD;",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/c2/00000002/WD;",
+         ERROR_ACCESS_DENIED, ERROR_SUCCESS, ERROR_FILE_NOT_FOUND, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/c2/00000002/WD;",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/40/00000001/WD;1:2/d2/00000002/WD;",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/d2/00000002/WD;",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_SACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/d2/00000002/WD;",
+         ERROR_ACCESS_DENIED, ERROR_SUCCESS, ERROR_FILE_NOT_FOUND, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "0:2/40/00000001/WD;",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "null",
+         ERROR_SUCCESS, ERROR_SUCCESS, ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_AUTO_INHERITED,
+         "0:1/02/00000002/WD;1:0/02/000f003f/WD;", "absent",
+         ERROR_ACCESS_DENIED, ERROR_SUCCESS, ERROR_FILE_NOT_FOUND, ERROR_ACCESS_DENIED}
+    };
+    static const BYTE expected[3][6][2][7] =
+    {
+        {
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{5, 1, 2, 2, 3, 2, 6}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}}
+        },
+        {
+            {{7, 8, 9, 9, 3, 2, 10}, {11, 12, 13, 13, 3, 2, 14}},
+            {{7, 8, 9, 9, 3, 2, 10}, {11, 12, 13, 13, 3, 2, 14}},
+            {{5, 1, 2, 2, 3, 2, 6}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{7, 8, 9, 9, 3, 2, 10}, {11, 12, 13, 13, 3, 2, 14}},
+            {{7, 8, 9, 9, 3, 2, 10}, {11, 12, 13, 13, 3, 2, 14}}
+        },
+        {
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{5, 1, 2, 2, 3, 2, 6}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}},
+            {{0, 1, 2, 2, 3, 2, 4}, {0, 1, 2, 2, 3, 2, 4}}
+        }
+    };
+    static const WCHAR path[] = L"Software\\Wine\\TestRegistrySaclMatrix";
+    static WCHAR named[] = L"CURRENT_USER\\Software\\Wine\\TestRegistrySaclMatrix";
+    static const WCHAR *names[] = {L"", L"Existing", L"Nested", L"Nested\\Grandchild", L"Protected", L"Protected\\Grandchild"};
+    static const char *strings[] = {"D:P(A;CI;KA;;;WD)S:P", "D:P(D;CI;0x2;;;WD)(A;CI;KA;;;WD)",
+        "S:(AU;SA;0x1;;;WD)", "S:P(AU;SA;0x1;;;WD)", "S:P(AU;CISAFA;0x2;;;WD)", "S:P",
+        "D:(D;CI;0x2;;;WD)(A;CI;KA;;;WD)", "S:"};
+    PSECURITY_DESCRIPTOR descriptors[ARRAY_SIZE(strings)] = {0}, before[ARRAY_SIZE(names)] = {0}, queried;
+    HKEY keys[ARRAY_SIZE(names)] = {0}, security_keys[ARRAY_SIZE(names)] = {0}, fresh = NULL, child = NULL;
+    HKEY security_only = NULL;
+    BOOL created[ARRAY_SIZE(names)] = {0}, result, present, defaulted, child_created = FALSE;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), NULL, FALSE};
+    ACL *audit;
+    SECURITY_DESCRIPTOR_CONTROL control, expected_control;
+    DWORD i, disposition, mode, kind, remove, revision, setters = 0;
+    LONG ret;
+
+    winetest_push_context("Registry SACL privilege matrix");
+    result = SetThreadToken(NULL, tokens[1]);
+    ok(result, "SACL setup impersonation failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    for (i = 0; i < ARRAY_SIZE(strings); ++i)
+    {
+        result = ConvertStringSecurityDescriptorToSecurityDescriptorA(strings[i], SDDL_REVISION_1, &descriptors[i], NULL);
+        ok(result, "SACL descriptor %lu construction failed: %lu.\n", i, GetLastError());
+        if (!result) goto done;
+    }
+    for (i = 0; i < ARRAY_SIZE(names); ++i)
+    {
+        attributes.lpSecurityDescriptor = descriptors[0];
+        ret = RegCreateKeyExW(i ? keys[0] : HKEY_CURRENT_USER, i ? names[i] : path, 0, NULL,
+                              REG_OPTION_VOLATILE, KEY_ALL_ACCESS, i == 0 || i == 4 ? &attributes : NULL,
+                              &keys[i], &disposition);
+        ok(!ret, "SACL key %lu creation returned %ld.\n", i, ret);
+        if (ret) goto done;
+        created[i] = disposition == REG_CREATED_NEW_KEY;
+        ok(created[i], "SACL key %lu already existed.\n", i);
+        if (!created[i]) goto done;
+        ret = RegOpenKeyExW(keys[0], names[i], 0, KEY_ALL_ACCESS | ACCESS_SYSTEM_SECURITY, &security_keys[i]);
+        ok(!ret, "SACL retained handle %lu open returned %ld.\n", i, ret);
+        if (ret) goto done;
+        ret = RegSetKeySecurity(security_keys[i], SACL_SECURITY_INFORMATION |
+              (i == 0 || i == 4 ? PROTECTED_SACL_SECURITY_INFORMATION : UNPROTECTED_SACL_SECURITY_INFORMATION),
+              descriptors[i == 1 ? 2 : i == 4 ? 3 : i == 0 ? 5 : 7]);
+        ok(!ret, "SACL initial key %lu set returned %ld.\n", i, ret);
+        if (ret) goto done;
+    }
+    ret = RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, ACCESS_SYSTEM_SECURITY, &security_only);
+    ok(!ret, "SACL-only retained handle open returned %ld.\n", ret);
+    if (ret) goto done;
+    for (i = 0; i < ARRAY_SIZE(names); ++i)
+    {
+        ret = RegSetKeySecurity(keys[i], DACL_SECURITY_INFORMATION |
+              (i == 4 ? UNPROTECTED_DACL_SECURITY_INFORMATION : PROTECTED_DACL_SECURITY_INFORMATION), descriptors[i == 4 ? 6 : 1]);
+        ok(!ret, "SACL negative DACL %lu setup returned %ld.\n", i, ret);
+        if (ret) goto done;
+        before[i] = registry_matrix_descriptor(security_keys[i], TRUE);
+        if (!before[i]) goto done;
+        result = GetSecurityDescriptorControl(before[i], &control, &revision);
+        expected_control = (i == 4 ? 0 : SE_DACL_PROTECTED) | (i == 0 || i == 4 ? SE_SACL_PROTECTED : 0);
+        ok(result && (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) == expected_control,
+           "SACL baseline key %lu protection %#x, expected %#x.\n", i, control, expected_control);
+        if (!result || (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) != expected_control) goto done;
+    }
+    for (mode = 0; mode < 3; ++mode)
+        for (kind = 0; kind < 6; ++kind)
+        {
+            winetest_push_context("token %lu setter %lu", mode, kind);
+            result = SetThreadToken(NULL, tokens[1]);
+            ok(result, "SACL reset impersonation failed: %lu.\n", GetLastError());
+            if (!result) goto end_case;
+            for (i = 0; i < ARRAY_SIZE(names); ++i)
+            {
+                ret = RegSetKeySecurity(security_keys[i], DACL_SECURITY_INFORMATION |
+                      (i == 4 ? UNPROTECTED_DACL_SECURITY_INFORMATION : PROTECTED_DACL_SECURITY_INFORMATION), before[i]);
+                ok(!ret, "SACL reset DACL %lu returned %ld.\n", i, ret);
+                if (ret) goto end_case;
+                ret = RegSetKeySecurity(security_keys[i], SACL_SECURITY_INFORMATION |
+                      (i == 0 || i == 4 ? PROTECTED_SACL_SECURITY_INFORMATION : UNPROTECTED_SACL_SECURITY_INFORMATION), before[i]);
+                ok(!ret, "SACL reset key %lu returned %ld.\n", i, ret);
+                if (ret) goto end_case;
+                queried = registry_matrix_descriptor(security_keys[i], TRUE);
+                if (!queried) goto end_case;
+                result = GetSecurityDescriptorControl(queried, &control, &revision);
+                expected_control = (i == 4 ? 0 : SE_DACL_PROTECTED) | (i == 0 || i == 4 ? SE_SACL_PROTECTED : 0);
+                ok(result && (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) == expected_control,
+                   "SACL reset key %lu protection %#x, expected %#x.\n", i, control, expected_control);
+                free(queried);
+                if (!result || (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) != expected_control) goto end_case;
+            }
+            for (remove = 0; remove < 2; ++remove)
+            {
+                winetest_push_context("remove %lu", remove);
+                result = SetThreadToken(NULL, tokens[mode]);
+                ok(result, "SACL case impersonation failed: %lu.\n", GetLastError());
+                if (!result) { winetest_pop_context(); goto end_case; }
+                for (i = 0; i < ARRAY_SIZE(names); ++i)
+                {
+                    ret = RegOpenKeyExW(keys[0], names[i], 0, KEY_SET_VALUE, &fresh);
+                    ok(ret == ERROR_ACCESS_DENIED, "SACL key %lu pre-update value-write negative control returned %ld.\n", i, ret);
+                    if (!ret) { RegCloseKey(fresh); fresh = NULL; }
+                    if (ret != ERROR_ACCESS_DENIED) { winetest_pop_context(); goto end_case; }
+                }
+                ret = RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, ACCESS_SYSTEM_SECURITY, &fresh);
+                ok(ret == (mode == 1 ? ERROR_SUCCESS : ERROR_ACCESS_DENIED), "Registry SACL fresh security open returned %ld.\n", ret);
+                if (!ret) { RegCloseKey(fresh); fresh = NULL; }
+                {
+                    OBJECT_ATTRIBUTES native_attributes;
+                    UNICODE_STRING native_name;
+                    HANDLE native_key = NULL;
+                    NTSTATUS status;
+
+                    RtlInitUnicodeString(&native_name, L"");
+                    InitializeObjectAttributes(&native_attributes, &native_name, OBJ_CASE_INSENSITIVE, keys[0], NULL);
+                    status = NtOpenKeyEx(&native_key, ACCESS_SYSTEM_SECURITY, &native_attributes, 0);
+                    ok(status == (mode == 1 ? STATUS_SUCCESS : STATUS_ACCESS_DENIED),
+                       "Registry SACL native root security open returned %#lx.\n", status);
+                    if (NT_SUCCESS(status)) NtClose(native_key);
+                    native_key = NULL;
+                    RtlInitUnicodeString(&native_name, L"Existing");
+                    status = NtOpenKeyEx(&native_key, ACCESS_SYSTEM_SECURITY, &native_attributes, 0);
+                    ok(status == (mode == 1 ? STATUS_SUCCESS : STATUS_ACCESS_DENIED),
+                       "Registry SACL native child security open returned %#lx.\n", status);
+                    if (NT_SUCCESS(status)) NtClose(native_key);
+                }
+                result = GetSecurityDescriptorSacl(descriptors[remove ? 5 : 4], &present, &audit, &defaulted);
+                ok(result && present && audit, "Matrix target SACL missing.\n");
+                if (!result || !present || !audit) { winetest_pop_context(); goto end_case; }
+                if (kind == 4)
+                    ret = SetNamedSecurityInfoW(named, SE_REGISTRY_KEY, SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION,
+                                                NULL, NULL, NULL, audit);
+                else if (kind == 2 || kind == 3)
+                    ret = RegSetKeySecurity(kind == 2 ? security_keys[0] : keys[0], SACL_SECURITY_INFORMATION, descriptors[remove ? 5 : 4]);
+                else ret = SetSecurityInfo(kind == 5 ? security_only : kind ? keys[0] : security_keys[0], SE_REGISTRY_KEY,
+                                           SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION, NULL, NULL, NULL, audit);
+                ok(ret == (kind == 2 || (mode == 1 && kind != 3) ? ERROR_SUCCESS : ERROR_ACCESS_DENIED),
+                   "Registry SACL setter returned %ld.\n", ret);
+                ++setters;
+                result = SetThreadToken(NULL, tokens[1]);
+                ok(result, "SACL observation impersonation failed: %lu.\n", GetLastError());
+                if (!result) { winetest_pop_context(); goto end_case; }
+                for (i = 0; i < ARRAY_SIZE(names); ++i)
+                    registry_matrix_snapshot(security_keys[0], security_keys[i], names[i], i, before[i], TRUE,
+                                             &results[expected[mode][kind][remove][i]]);
+                ret = RegCreateKeyExW(keys[0], L"NewChild", 0, NULL, REG_OPTION_VOLATILE,
+                                      READ_CONTROL | WRITE_DAC | DELETE | KEY_QUERY_VALUE | ACCESS_SYSTEM_SECURITY,
+                                      NULL, &child, &disposition);
+                ok(!ret, "SACL new child creation returned %ld.\n", ret);
+                if (!ret)
+                {
+                    child_created = disposition == REG_CREATED_NEW_KEY;
+                    ok(child_created, "SACL new child already existed.\n");
+                    if (child_created)
+                        registry_matrix_snapshot(security_keys[0], child, L"NewChild", ARRAY_SIZE(names), NULL, TRUE,
+                                                 &results[expected[mode][kind][remove][ARRAY_SIZE(names)]]);
+                    RegCloseKey(child);
+                    child = NULL;
+                    if (child_created)
+                    {
+                        ret = RegDeleteKeyW(keys[0], L"NewChild");
+                        ok(!ret, "SACL new child cleanup returned %ld.\n", ret);
+                        if (!ret) child_created = FALSE;
+                    }
+                }
+                winetest_pop_context();
+            }
+end_case:
+            winetest_pop_context();
+        }
+    ok(setters == 36, "Registry SACL matrix exercised %lu of 36 setters.\n", setters);
+    trace("Registry SACL matrix exercised %lu of 36 setters.\n", setters);
+done:
+    result = SetThreadToken(NULL, tokens[1]);
+    ok(result, "SACL cleanup impersonation failed: %lu.\n", GetLastError());
+    if (fresh) RegCloseKey(fresh);
+    if (child) RegCloseKey(child);
+    if (child_created) { ret = RegDeleteKeyW(keys[0], L"NewChild"); ok(!ret, "SACL remaining child cleanup returned %ld.\n", ret); }
+    for (i = ARRAY_SIZE(names); i-- > 1;)
+    {
+        if (security_keys[i]) RegCloseKey(security_keys[i]);
+        if (keys[i]) RegCloseKey(keys[i]);
+        if (created[i]) { ret = RegDeleteKeyW(keys[0], names[i]); ok(!ret, "SACL cleanup key %lu returned %ld.\n", i, ret); }
+    }
+    if (security_only) RegCloseKey(security_only);
+    if (security_keys[0]) RegCloseKey(security_keys[0]);
+    if (keys[0]) RegCloseKey(keys[0]);
+    if (created[0]) { ret = RegDeleteKeyW(HKEY_CURRENT_USER, path); ok(!ret, "SACL root cleanup returned %ld.\n", ret); }
+    for (i = 0; i < ARRAY_SIZE(before); ++i) free(before[i]);
+    for (i = 0; i < ARRAY_SIZE(descriptors); ++i) if (descriptors[i]) LocalFree(descriptors[i]);
+    winetest_pop_context();
+}
+
+static void test_registry_create_privilege_matrix(HANDLE *tokens)
+{
+    static const WCHAR path[] = L"Software\\Wine\\TestRegistryCreatePrivilege";
+    static const WCHAR *names[] = {L"Existing", L"RawMissing\\Leaf", L"PublicMissing\\Leaf"};
+    static const WCHAR *observed[] = {L"RawMissing", L"RawMissing\\Leaf", L"PublicMissing", L"PublicMissing\\Leaf"};
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), NULL, FALSE};
+    HKEY root = NULL, existing = NULL, key = NULL;
+    OBJECT_ATTRIBUTES object_attributes;
+    UNICODE_STRING name;
+    NTSTATUS status;
+    DWORD mode, kind, i, disposition;
+    LONG ret;
+    BOOL result, created = FALSE;
+
+    winetest_push_context("Registry create privilege matrix");
+    result = SetThreadToken(NULL, tokens[1]);
+    ok(result, "Create setup impersonation failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    result = ConvertStringSecurityDescriptorToSecurityDescriptorA("D:P(A;CI;KA;;;WD)",
+              SDDL_REVISION_1, &descriptor, NULL);
+    ok(result, "Create descriptor construction failed: %lu.\n", GetLastError());
+    if (!result) goto done;
+    attributes.lpSecurityDescriptor = descriptor;
+    ret = RegCreateKeyExW(HKEY_CURRENT_USER, path, 0, NULL, REG_OPTION_VOLATILE,
+                          KEY_ALL_ACCESS, &attributes, &root, &disposition);
+    ok(!ret, "Create fixture root returned %ld.\n", ret);
+    if (ret) goto done;
+    created = disposition == REG_CREATED_NEW_KEY;
+    ok(created, "Create fixture root already existed.\n");
+    if (!created) goto done;
+    ret = RegCreateKeyExW(root, L"Existing", 0, NULL, REG_OPTION_VOLATILE,
+                          KEY_ALL_ACCESS, NULL, &existing, &disposition);
+    ok(!ret, "Create existing fixture returned %ld.\n", ret);
+    if (ret) goto done;
+    for (mode = 0; mode < 3; ++mode)
+    {
+        winetest_push_context("token %lu", mode);
+        result = SetThreadToken(NULL, tokens[mode]);
+        ok(result, "Create case impersonation failed: %lu.\n", GetLastError());
+        if (!result) { winetest_pop_context(); goto done; }
+        for (kind = 0; kind < ARRAY_SIZE(names); ++kind)
+        {
+            disposition = 0xdeadbeef;
+            if (kind == 2)
+            {
+                ret = RegCreateKeyExW(root, names[kind], 0, NULL, REG_OPTION_VOLATILE,
+                                      KEY_READ | ACCESS_SYSTEM_SECURITY, NULL, &key, &disposition);
+                ok(ret == (mode == 1 ? ERROR_SUCCESS : ERROR_PRIVILEGE_NOT_HELD),
+                   "Public missing-path create returned %ld.\n", ret);
+                if (!ret)
+                {
+                    ok(disposition == REG_CREATED_NEW_KEY, "Public create disposition %#lx.\n", disposition);
+                    RegCloseKey(key);
+                }
+            }
+            else
+            {
+                RtlInitUnicodeString(&name, names[kind]);
+                InitializeObjectAttributes(&object_attributes, &name, OBJ_CASE_INSENSITIVE, root, NULL);
+                status = NtCreateKey((HANDLE *)&key, KEY_READ | ACCESS_SYSTEM_SECURITY, &object_attributes,
+                                     0, NULL, REG_OPTION_VOLATILE, &disposition);
+                ok(status == (kind ? STATUS_OBJECT_NAME_NOT_FOUND : mode == 1 ? STATUS_SUCCESS : STATUS_ACCESS_DENIED),
+                   "Raw create kind %lu returned %#lx.\n", kind, status);
+                if (NT_SUCCESS(status))
+                {
+                    ok(disposition == REG_OPENED_EXISTING_KEY, "Raw create disposition %#lx.\n", disposition);
+                    NtClose(key);
+                }
+            }
+            key = NULL;
+        }
+        result = SetThreadToken(NULL, tokens[1]);
+        ok(result, "Create observation impersonation failed: %lu.\n", GetLastError());
+        if (!result) { winetest_pop_context(); goto done; }
+        for (i = 0; i < ARRAY_SIZE(observed); ++i)
+        {
+            ret = RegOpenKeyExW(root, observed[i], 0, KEY_READ, &key);
+            ok(ret == (i < 2 ? ERROR_FILE_NOT_FOUND : ERROR_SUCCESS),
+               "Create path %lu observation returned %ld.\n", i, ret);
+            if (!ret) RegCloseKey(key);
+            key = NULL;
+        }
+        for (i = ARRAY_SIZE(observed); i-- > 0;)
+        {
+            ret = RegDeleteKeyW(root, observed[i]);
+            ok(!ret || ret == ERROR_FILE_NOT_FOUND || ret == ERROR_PATH_NOT_FOUND,
+               "Create path %lu cleanup returned %ld.\n", i, ret);
+        }
+        winetest_pop_context();
+    }
+done:
+    result = SetThreadToken(NULL, tokens[1]);
+    ok(result, "Create cleanup impersonation failed: %lu.\n", GetLastError());
+    if (key) RegCloseKey(key);
+    if (existing) RegCloseKey(existing);
+    if (created)
+    {
+        for (i = ARRAY_SIZE(observed); i-- > 0;) RegDeleteKeyW(root, observed[i]);
+        ret = RegDeleteKeyW(root, L"Existing");
+        ok(!ret || ret == ERROR_FILE_NOT_FOUND, "Create existing cleanup returned %ld.\n", ret);
+    }
+    if (root) RegCloseKey(root);
+    if (created)
+    {
+        ret = RegDeleteKeyW(HKEY_CURRENT_USER, path);
+        ok(!ret, "Create fixture root cleanup returned %ld.\n", ret);
+    }
+    if (descriptor) LocalFree(descriptor);
+    winetest_pop_context();
+}
+
+struct acl_group_netapi
+{
+    NET_API_STATUS (WINAPI *user_add)(LPCWSTR, DWORD, LPBYTE, LPDWORD);
+    NET_API_STATUS (WINAPI *user_get_info)(LPCWSTR, LPCWSTR, DWORD, LPBYTE *);
+    NET_API_STATUS (WINAPI *user_del)(LPCWSTR, LPCWSTR);
+    NET_API_STATUS (WINAPI *group_add)(LPCWSTR, DWORD, LPBYTE, LPDWORD);
+    NET_API_STATUS (WINAPI *group_del)(LPCWSTR, LPCWSTR);
+    NET_API_STATUS (WINAPI *group_get_members)(LPCWSTR, LPCWSTR, DWORD, LPBYTE *, DWORD, LPDWORD, LPDWORD, PDWORD_PTR);
+    NET_API_STATUS (WINAPI *group_add_members)(LPCWSTR, LPCWSTR, DWORD, LPBYTE, DWORD);
+    NET_API_STATUS (WINAPI *group_del_members)(LPCWSTR, LPCWSTR, DWORD, LPBYTE, DWORD);
+    NET_API_STATUS (WINAPI *buffer_free)(LPVOID);
+};
+
+static BOOL acl_group_resolve_account(const WCHAR *name, SID_NAME_USE expected_use, PSID *sid, WCHAR **qualified)
+{
+    DWORD sid_size = 0, domain_size = 0, domain_capacity, error, i, name_size = lstrlenW(name);
+    SID_NAME_USE use = SidTypeUnknown;
+    WCHAR *domain = NULL;
+    BOOL ret = FALSE;
+
+    *sid = NULL;
+    *qualified = NULL;
+    ret = LookupAccountNameW(NULL, name, NULL, &sid_size, NULL, &domain_size, &use);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INSUFFICIENT_BUFFER && sid_size && sid_size <= SECURITY_MAX_SID_SIZE &&
+       domain_size && domain_size <= USHRT_MAX / sizeof(WCHAR),
+       "Group fixture account sizing returned %d, error %lu, sizes %lu/%lu.\n", ret, error, sid_size, domain_size);
+    if (ret || error != ERROR_INSUFFICIENT_BUFFER || !sid_size || sid_size > SECURITY_MAX_SID_SIZE ||
+        !domain_size || domain_size > USHRT_MAX / sizeof(WCHAR)) return FALSE;
+    domain_capacity = domain_size;
+    *sid = calloc(1, SECURITY_MAX_SID_SIZE);
+    domain = malloc(domain_capacity * sizeof(*domain));
+    ok(!!*sid && !!domain, "Group fixture account allocation failed.\n");
+    if (!*sid || !domain) goto failed;
+    memset(domain, 0xff, domain_capacity * sizeof(*domain));
+    sid_size = SECURITY_MAX_SID_SIZE;
+    ret = LookupAccountNameW(NULL, name, *sid, &sid_size, domain, &domain_size, &use);
+    error = GetLastError();
+    for (i = 0; i < domain_capacity && domain[i]; ++i) {}
+    ret = ret && sid_size <= SECURITY_MAX_SID_SIZE && IsValidSid(*sid) &&
+          GetLengthSid(*sid) <= sid_size && use == expected_use && i && i < domain_capacity;
+    ok(ret, "Group fixture account lookup failed: error %lu, size %lu, use %u, domain length %lu.\n",
+       error, sid_size, use, i);
+    if (!ret) goto failed;
+    *qualified = malloc((i + name_size + 2) * sizeof(**qualified));
+    ok(!!*qualified, "Group fixture qualified account allocation failed.\n");
+    if (!*qualified) goto failed;
+    memcpy(*qualified, domain, i * sizeof(*domain));
+    (*qualified)[i] = '\\';
+    memcpy(*qualified + i + 1, name, (name_size + 1) * sizeof(*name));
+    free(domain);
+    return TRUE;
+failed:
+    free(domain);
+    free(*sid);
+    free(*qualified);
+    *sid = NULL;
+    *qualified = NULL;
+    return FALSE;
+}
+
+static BOOL acl_group_check_members(const struct acl_group_netapi *api, const WCHAR *group, PSID user, DWORD expected)
+{
+    LOCALGROUP_MEMBERS_INFO_0 *members;
+    DWORD read, total, i, count = 0, matches = 0;
+    DWORD_PTR resume = 0;
+    NET_API_STATUS status, free_status;
+    BOOL valid = TRUE, sid_valid;
+
+    do
+    {
+        members = NULL;
+        read = total = 0;
+        status = api->group_get_members(NULL, group, 0, (BYTE **)&members, MAX_PREFERRED_LENGTH, &read, &total, &resume);
+        ok(status == NERR_Success || status == ERROR_MORE_DATA, "Group fixture membership query returned %lu.\n", status);
+        if (status != NERR_Success && status != ERROR_MORE_DATA) valid = FALSE;
+        if (status == NERR_Success || status == ERROR_MORE_DATA)
+        {
+            ok(!read || !!members, "Group fixture membership query returned no buffer for %lu entries.\n", read);
+            if (read && !members) valid = FALSE;
+            if (members)
+            {
+                for (i = 0; i < read; ++i)
+                {
+                    sid_valid = members[i].lgrmi0_sid && IsValidSid(members[i].lgrmi0_sid);
+                    ok(sid_valid, "Group fixture member %lu has an invalid SID.\n", i);
+                    if (sid_valid && EqualSid(members[i].lgrmi0_sid, user)) ++matches;
+                    if (!sid_valid) valid = FALSE;
+                }
+            }
+            count += read;
+        }
+        if (members)
+        {
+            free_status = api->buffer_free(members);
+            ok(free_status == NERR_Success, "Group fixture membership buffer free returned %lu.\n", free_status);
+            if (free_status) valid = FALSE;
+        }
+    } while (status == ERROR_MORE_DATA);
+    ok(count == expected && matches == expected,
+       "Group fixture contains %lu entries, %lu user matches, expected %lu.\n", count, matches, expected);
+    return valid && count == expected && matches == expected;
+}
+
+static void test_acl_group_membership_queries(void)
+{
+    static const struct
+    {
+        DWORD effective_status;
+        ACCESS_MASK effective;
+        DWORD audit_status;
+        ACCESS_MASK success, failure;
+    } expected[3][3] =
+    {
+        {
+            {ERROR_SUCCESS, 0x0, ERROR_INVALID_ACL, 0x0, 0x0},
+            {ERROR_SUCCESS, 0x3, ERROR_INVALID_ACL, 0x0, 0x0},
+            {ERROR_INVALID_ACL, 0x0, ERROR_SUCCESS, 0x0, 0x0}
+        },
+        {
+            {ERROR_SUCCESS, 0x40, ERROR_INVALID_ACL, 0x0, 0x0},
+            {ERROR_SUCCESS, 0x2, ERROR_INVALID_ACL, 0x0, 0x0},
+            {ERROR_INVALID_ACL, 0x0, ERROR_SUCCESS, 0x80, 0x100}
+        },
+        {
+            {ERROR_SUCCESS, 0x0, ERROR_INVALID_ACL, 0x0, 0x0},
+            {ERROR_SUCCESS, 0x3, ERROR_INVALID_ACL, 0x0, 0x0},
+            {ERROR_INVALID_ACL, 0x0, ERROR_SUCCESS, 0x0, 0x0}
+        }
+    };
+    static const WCHAR alphabet[] = L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+    struct acl_group_netapi api = {0};
+    BOOLEAN (WINAPI *random_bytes)(PVOID, ULONG);
+    union { DWORD words[10]; BYTE bytes[40]; } random;
+    SID world = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    union { ACL acl; BYTE bytes[256]; } buffer;
+    BYTE saved_acl[sizeof(buffer)];
+    union { DWORD align; BYTE bytes[SECURITY_MAX_SID_SIZE]; } check_sid;
+    USER_INFO_1 user_info = {0}, *queried_user = NULL;
+    LOCALGROUP_INFO_0 group_info;
+    LOCALGROUP_MEMBERS_INFO_0 member;
+    struct { ACCESS_MASK before, value, after; } effective, success, failure;
+    TRUSTEE_A trustee_a;
+    TRUSTEE_W trustee_w;
+    WCHAR user_name[20], group_name[20], password[37], *user_qualified = NULL, *group_qualified = NULL;
+    WCHAR *roundtrip = NULL;
+    char check_domain[256], *user_ansi = NULL;
+    PSID user_sid = NULL, group_sid = NULL;
+    HMODULE module = NULL;
+    NET_API_STATUS status;
+    SID_NAME_USE use = SidTypeUnknown;
+    DWORD parameter = 0, sid_size, domain_size, effective_status, audit_status;
+    UINT phase, shape, form, i, calls = 0, phases = 0;
+    int ansi_size, name_size;
+    BOOL ret, user_created = FALSE, group_created = FALSE, membership_added = FALSE;
+
+    winetest_push_context("ACL group membership");
+    module = LoadLibraryA("netapi32.dll");
+    ok(!!module, "Group fixture could not load netapi32: %lu.\n", GetLastError());
+    if (!module) goto done;
+    api.user_add = (void *)GetProcAddress(module, "NetUserAdd");
+    api.user_get_info = (void *)GetProcAddress(module, "NetUserGetInfo");
+    api.user_del = (void *)GetProcAddress(module, "NetUserDel");
+    api.group_add = (void *)GetProcAddress(module, "NetLocalGroupAdd");
+    api.group_del = (void *)GetProcAddress(module, "NetLocalGroupDel");
+    api.group_get_members = (void *)GetProcAddress(module, "NetLocalGroupGetMembers");
+    api.group_add_members = (void *)GetProcAddress(module, "NetLocalGroupAddMembers");
+    api.group_del_members = (void *)GetProcAddress(module, "NetLocalGroupDelMembers");
+    api.buffer_free = (void *)GetProcAddress(module, "NetApiBufferFree");
+    ret = api.user_add && api.user_get_info && api.user_del && api.group_add && api.group_del &&
+          api.group_get_members && api.group_add_members && api.group_del_members && api.buffer_free;
+    ok(ret, "Group fixture requires every NetAPI entry point.\n");
+    if (!ret) goto done;
+    random_bytes = (void *)GetProcAddress(GetModuleHandleA("advapi32.dll"), "SystemFunction036");
+    ok(!!random_bytes, "Group fixture requires SystemFunction036.\n");
+    if (!random_bytes) goto done;
+    ret = random_bytes(&random, sizeof(random));
+    ok(ret, "Group fixture random generation failed.\n");
+    if (!ret) goto done;
+    swprintf(user_name, ARRAY_SIZE(user_name), L"lnu%08lx%08lx", random.words[0], random.words[1]);
+    swprintf(group_name, ARRAY_SIZE(group_name), L"lng%08lx%08lx", random.words[0], random.words[1]);
+    memcpy(password, L"Aa7!", 4 * sizeof(*password));
+    for (i = 0; i < 32; ++i) password[i + 4] = alphabet[random.bytes[i + 8] & 63];
+    password[36] = 0;
+    user_info.usri1_name = user_name;
+    user_info.usri1_password = password;
+    user_info.usri1_priv = USER_PRIV_USER;
+    user_info.usri1_flags = UF_SCRIPT | UF_ACCOUNTDISABLE;
+    status = api.user_add(NULL, 1, (BYTE *)&user_info, &parameter);
+    ok(status == NERR_Success, "Group fixture user creation returned %lu, parameter %lu.\n", status, parameter);
+    SecureZeroMemory(password, sizeof(password));
+    SecureZeroMemory(&random, sizeof(random));
+    if (status) goto done;
+    user_created = TRUE;
+    status = api.user_get_info(NULL, user_name, 1, (BYTE **)&queried_user);
+    ok(status == NERR_Success && !!queried_user, "Group fixture user query returned %lu.\n", status);
+    if (status || !queried_user) goto done;
+    ret = (queried_user->usri1_flags & (UF_SCRIPT | UF_ACCOUNTDISABLE | UF_NORMAL_ACCOUNT)) ==
+          (UF_SCRIPT | UF_ACCOUNTDISABLE | UF_NORMAL_ACCOUNT) && queried_user->usri1_priv == USER_PRIV_GUEST;
+    ok(ret, "Group fixture user flags %#lx, privilege %lu.\n", queried_user->usri1_flags, queried_user->usri1_priv);
+    if (!ret) goto done;
+    status = api.buffer_free(queried_user);
+    queried_user = NULL;
+    ok(status == NERR_Success, "Group fixture user buffer free returned %lu.\n", status);
+    if (status) goto done;
+    group_info.lgrpi0_name = group_name;
+    status = api.group_add(NULL, 0, (BYTE *)&group_info, &parameter);
+    ok(status == NERR_Success, "Group fixture local group creation returned %lu, parameter %lu.\n", status, parameter);
+    if (status) goto done;
+    group_created = TRUE;
+    if (!acl_group_resolve_account(user_name, SidTypeUser, &user_sid, &user_qualified) ||
+        !acl_group_resolve_account(group_name, SidTypeAlias, &group_sid, &group_qualified)) goto done;
+    ret = !EqualSid(user_sid, group_sid);
+    ok(ret, "Group fixture user and local group SIDs are equal.\n");
+    if (!ret) goto done;
+    name_size = lstrlenW(user_qualified) + 1;
+    ansi_size = WideCharToMultiByte(CP_ACP, 0, user_qualified, -1, NULL, 0, NULL, NULL);
+    ok(ansi_size > 0, "Group fixture ANSI name sizing failed: %lu.\n", GetLastError());
+    if (!ansi_size) goto done;
+    user_ansi = malloc(ansi_size);
+    roundtrip = malloc(name_size * sizeof(*roundtrip));
+    ok(!!user_ansi && !!roundtrip, "Group fixture name conversion allocation failed.\n");
+    if (!user_ansi || !roundtrip) goto done;
+    ret = WideCharToMultiByte(CP_ACP, 0, user_qualified, -1, user_ansi, ansi_size, NULL, NULL) == ansi_size &&
+          MultiByteToWideChar(CP_ACP, 0, user_ansi, -1, roundtrip, name_size) == name_size &&
+          !lstrcmpW(user_qualified, roundtrip);
+    ok(ret, "Group fixture account name did not round trip through ANSI.\n");
+    if (!ret) goto done;
+    sid_size = sizeof(check_sid);
+    domain_size = ARRAY_SIZE(check_domain);
+    ret = LookupAccountNameA(NULL, user_ansi, check_sid.bytes, &sid_size, check_domain, &domain_size, &use);
+    ret = ret && sid_size <= sizeof(check_sid) && IsValidSid(check_sid.bytes) && use == SidTypeUser &&
+          EqualSid(check_sid.bytes, user_sid);
+    ok(ret, "Group fixture qualified ANSI name did not resolve to the owned user: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    member.lgrmi0_sid = user_sid;
+    for (phase = 0; phase < 3; ++phase)
+    {
+        if (phase == 1)
+        {
+            status = api.group_add_members(NULL, group_name, 0, (BYTE *)&member, 1);
+            ok(status == NERR_Success, "Group fixture add member returned %lu.\n", status);
+            if (status) goto done;
+            membership_added = TRUE;
+        }
+        else if (phase == 2)
+        {
+            status = api.group_del_members(NULL, group_name, 0, (BYTE *)&member, 1);
+            ok(status == NERR_Success, "Group fixture remove member returned %lu.\n", status);
+            if (status) goto done;
+            membership_added = FALSE;
+        }
+        if (!acl_group_check_members(&api, group_name, user_sid, phase == 1)) goto done;
+        ++phases;
+        for (shape = 0; shape < 3; ++shape)
+        {
+            memset(&buffer, 0, sizeof(buffer));
+            ret = InitializeAcl(&buffer.acl, sizeof(buffer), ACL_REVISION);
+            if (ret && shape == 0)
+                ret = AddAccessAllowedAceEx(&buffer.acl, ACL_REVISION, 0, 0x40, group_sid);
+            else if (ret && shape == 1)
+                ret = AddAccessDeniedAceEx(&buffer.acl, ACL_REVISION, 0, 1, group_sid) &&
+                      AddAccessAllowedAceEx(&buffer.acl, ACL_REVISION, 0, 3, &world);
+            else if (ret)
+                ret = AddAuditAccessAceEx(&buffer.acl, ACL_REVISION, 0, 0x80, group_sid, TRUE, FALSE) &&
+                      AddAuditAccessAceEx(&buffer.acl, ACL_REVISION, 0, 0x100, group_sid, FALSE, TRUE);
+            ok(ret && IsValidAcl(&buffer.acl), "Group fixture phase %u shape %u ACL construction failed: %lu.\n",
+               phase, shape, GetLastError());
+            if (!ret || !IsValidAcl(&buffer.acl)) goto done;
+            memcpy(saved_acl, &buffer, sizeof(buffer));
+            for (form = 0; form < 4; ++form)
+            {
+                if (form < 2)
+                {
+                    BuildTrusteeWithSidA(&trustee_a, user_sid);
+                    BuildTrusteeWithSidW(&trustee_w, user_sid);
+                }
+                else
+                {
+                    BuildTrusteeWithNameA(&trustee_a, user_ansi);
+                    BuildTrusteeWithNameW(&trustee_w, user_qualified);
+                }
+                effective.before = success.before = failure.before = 0x11223344;
+                effective.value = success.value = failure.value = 0xdeadbeef;
+                effective.after = success.after = failure.after = 0x55667788;
+                effective_status = (form & 1) ? GetEffectiveRightsFromAclW(&buffer.acl, &trustee_w, &effective.value) :
+                                               GetEffectiveRightsFromAclA(&buffer.acl, &trustee_a, &effective.value);
+                ++calls;
+                ret = !memcmp(saved_acl, &buffer, sizeof(buffer));
+                ok(ret, "Group fixture phase %u shape %u form %u effective query changed its input ACL.\n", phase, shape, form);
+                if (!ret) goto done;
+                audit_status = (form & 1) ? GetAuditedPermissionsFromAclW(&buffer.acl, &trustee_w, &success.value, &failure.value) :
+                                           GetAuditedPermissionsFromAclA(&buffer.acl, &trustee_a, &success.value, &failure.value);
+                ++calls;
+                ret = !memcmp(saved_acl, &buffer, sizeof(buffer));
+                ok(ret, "Group fixture phase %u shape %u form %u audit query changed its input ACL.\n", phase, shape, form);
+                if (!ret) goto done;
+                ok(effective.before == 0x11223344 && effective.after == 0x55667788 &&
+                   success.before == 0x11223344 && success.after == 0x55667788 &&
+                   failure.before == 0x11223344 && failure.after == 0x55667788,
+                   "Group fixture phase %u shape %u form %u query overwrote a guard.\n", phase, shape, form);
+                ok(effective_status == expected[phase][shape].effective_status,
+                   "Group fixture phase %u shape %u form %u effective status %lu, expected %lu.\n",
+                   phase, shape, form, effective_status, expected[phase][shape].effective_status);
+                if (!effective_status && !expected[phase][shape].effective_status)
+                    ok(effective.value == expected[phase][shape].effective,
+                       "Group fixture phase %u shape %u form %u effective mask %#lx, expected %#lx.\n",
+                       phase, shape, form, effective.value, expected[phase][shape].effective);
+                ok(audit_status == expected[phase][shape].audit_status,
+                   "Group fixture phase %u shape %u form %u audit status %lu, expected %lu.\n",
+                   phase, shape, form, audit_status, expected[phase][shape].audit_status);
+                if (!audit_status && !expected[phase][shape].audit_status)
+                    ok(success.value == expected[phase][shape].success && failure.value == expected[phase][shape].failure,
+                       "Group fixture phase %u shape %u form %u audit masks %#lx/%#lx, expected %#lx/%#lx.\n",
+                       phase, shape, form, success.value, failure.value, expected[phase][shape].success,
+                       expected[phase][shape].failure);
+            }
+        }
+    }
+done:
+    if (membership_added)
+    {
+        status = api.group_del_members(NULL, group_name, 0, (BYTE *)&member, 1);
+        ok(status == NERR_Success, "Group fixture cleanup remove member returned %lu.\n", status);
+    }
+    if (queried_user)
+    {
+        status = api.buffer_free(queried_user);
+        ok(status == NERR_Success, "Group fixture cleanup user buffer free returned %lu.\n", status);
+    }
+    if (group_created)
+    {
+        status = api.group_del(NULL, group_name);
+        ok(status == NERR_Success, "Group fixture cleanup group deletion returned %lu.\n", status);
+    }
+    if (user_created)
+    {
+        status = api.user_del(NULL, user_name);
+        ok(status == NERR_Success, "Group fixture cleanup user deletion returned %lu.\n", status);
+    }
+    free(roundtrip);
+    free(user_ansi);
+    free(user_qualified);
+    free(group_qualified);
+    free(user_sid);
+    free(group_sid);
+    SecureZeroMemory(password, sizeof(password));
+    SecureZeroMemory(&random, sizeof(random));
+    if (module) FreeLibrary(module);
+    ok(phases == 3 && calls == 72, "ACL group fixture completed %u/3 phases and %u/72 calls.\n", phases, calls);
+    trace("ACL group fixture completed %u/3 phases and %u/72 calls.\n", phases, calls);
+    winetest_pop_context();
+}
+
+static void test_acl_object_rights_queries(void)
+{
+    static const struct
+    {
+        DWORD effective_status;
+        ACCESS_MASK effective;
+        DWORD audit_status;
+        ACCESS_MASK success, failure;
+    } results[] =
+    {
+        {ERROR_SUCCESS, 0x7, ERROR_INVALID_ACL, 0x0, 0x0},
+        {ERROR_INVALID_SID, 0x0, ERROR_INVALID_SID, 0x0, 0x0},
+        {ERROR_NONE_MAPPED, 0x0, ERROR_INVALID_ACL, 0x0, 0x0},
+        {ERROR_INVALID_ACL, 0x0, ERROR_SUCCESS, 0x1, 0x0},
+        {ERROR_INVALID_ACL, 0x0, ERROR_NONE_MAPPED, 0x0, 0x0},
+        {ERROR_UNKNOWN_PROPERTY, 0x0, ERROR_INVALID_ACL, 0x0, 0x0},
+        {ERROR_INVALID_ACL, 0x0, ERROR_INVALID_PARAMETER, 0x0, 0x0},
+        {ERROR_INVALID_ACL, 0x0, ERROR_SUCCESS, 0x0, 0x2}
+    };
+    static const BYTE expected[10][4][2] =
+    {
+        {{0, 0}, {1, 0}, {2, 2}, {2, 2}},
+        {{3, 3}, {1, 3}, {4, 4}, {4, 4}},
+        {{0, 0}, {1, 0}, {2, 2}, {2, 2}},
+        {{5, 5}, {1, 5}, {5, 5}, {5, 5}},
+        {{5, 5}, {1, 5}, {5, 5}, {5, 5}},
+        {{0, 0}, {1, 0}, {2, 2}, {2, 2}},
+        {{6, 6}, {1, 6}, {6, 6}, {6, 6}},
+        {{7, 7}, {1, 7}, {4, 4}, {4, 4}},
+        {{6, 6}, {1, 6}, {6, 6}, {6, 6}},
+        {{5, 5}, {1, 5}, {5, 5}, {5, 5}}
+    };
+    static const char *expected_acl[] =
+    {
+        "04000001010000000000140007000000010100000000000100000000",
+        "04000001010000000240140001000000010100000000000100000000",
+        "04000001010000000000140007000000010100000000000100000000",
+        "04000001010000000500280007000000010000000000000000000000c000000000000046010100000000000100000000",
+        "04000001010000000500380007000000030000000000000000000000c0000000000000460004020000000000c000000000000046010100000000000100000000",
+        "04000001020000000600280001000000010000000000000000000000c0000000000000460101000000000001000000000000140007000000010100000000000100000000",
+        "04000001010000000740280001000000010000000000000000000000c000000000000046010100000000000100000000",
+        "04000001010000000790280002000000020000000004020000000000c000000000000046010100000000000100000000",
+        "040000010100000007c0380004000000030000000000000000000000c0000000000000460004020000000000c000000000000046010100000000000100000000",
+        "04000001010000000508280007000000010000000000000000000000c000000000000046010100000000000100000000"
+    };
+    GUID object = {0, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
+    GUID other = {0x00020400, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
+    SID world = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    union { ACL acl; BYTE bytes[256]; } buffer;
+    BYTE saved_acl[sizeof(buffer)];
+    ACL_SIZE_INFORMATION information;
+    char acl_bytes[sizeof(buffer) * 2 + 1];
+    static const char hex[] = "0123456789abcdef";
+    struct { ACCESS_MASK before, value, after; } effective[2], success[2], failure[2];
+    TRUSTEE_A trustee_a;
+    TRUSTEE_W trustee_w;
+    OBJECTS_AND_SID objects_a, objects_w;
+    GUID empty = {0}, *type;
+    DWORD object_flags;
+    DWORD effective_status[2], audit_status[2];
+    UINT shape, trustee, form, index, result_index, calls = 0;
+    BOOL ret;
+
+    for (shape = 0; shape < 10; ++shape)
+    {
+        winetest_push_context("Object ACL rights case %u", shape);
+        memset(&buffer, 0, sizeof(buffer));
+        ret = InitializeAcl(&buffer.acl, sizeof(buffer), ACL_REVISION_DS);
+        ok(ret, "Object rights ACL initialization failed: %lu.\n", GetLastError());
+        if (!ret) goto next_case;
+        switch (shape)
+        {
+            case 0:
+                ret = AddAccessAllowedAceEx(&buffer.acl, ACL_REVISION_DS, 0, 7, &world);
+                break;
+            case 1:
+                ret = AddAuditAccessAceEx(&buffer.acl, ACL_REVISION_DS, 0, 1, &world, TRUE, FALSE);
+                break;
+            case 2:
+                ret = AddAccessAllowedObjectAce(&buffer.acl, ACL_REVISION_DS, 0, 7, NULL, NULL, &world);
+                break;
+            case 3:
+                ret = AddAccessAllowedObjectAce(&buffer.acl, ACL_REVISION_DS, 0, 7, &object, NULL, &world);
+                break;
+            case 4:
+                ret = AddAccessAllowedObjectAce(&buffer.acl, ACL_REVISION_DS, 0, 7, &object, &other, &world);
+                break;
+            case 5:
+                ret = AddAccessDeniedObjectAce(&buffer.acl, ACL_REVISION_DS, 0, 1, &object, NULL, &world);
+                if (ret) ret = AddAccessAllowedAceEx(&buffer.acl, ACL_REVISION_DS, 0, 7, &world);
+                break;
+            case 6:
+                ret = AddAuditAccessObjectAce(&buffer.acl, ACL_REVISION_DS, 0, 1, &object, NULL, &world, TRUE, FALSE);
+                break;
+            case 7:
+                ret = AddAuditAccessObjectAce(&buffer.acl, ACL_REVISION_DS, INHERITED_ACE, 2, NULL, &other, &world, FALSE, TRUE);
+                break;
+            case 8:
+                ret = AddAuditAccessObjectAce(&buffer.acl, ACL_REVISION_DS, 0, 4, &object, &other, &world, TRUE, TRUE);
+                break;
+            default:
+                ret = AddAccessAllowedObjectAce(&buffer.acl, ACL_REVISION_DS, INHERIT_ONLY_ACE, 7, &object, NULL, &world);
+                break;
+        }
+        ok(ret, "Object rights ACE construction failed: %lu.\n", GetLastError());
+        if (!ret) goto next_case;
+        ret = GetAclInformation(&buffer.acl, &information, sizeof(information), AclSizeInformation);
+        ok(ret && information.AclBytesInUse <= sizeof(buffer), "Object rights ACL size query failed.\n");
+        if (!ret || information.AclBytesInUse > sizeof(buffer)) goto next_case;
+        for (index = 0; index < information.AclBytesInUse; ++index)
+        {
+            acl_bytes[2 * index] = hex[buffer.bytes[index] >> 4];
+            acl_bytes[2 * index + 1] = hex[buffer.bytes[index] & 15];
+        }
+        acl_bytes[2 * index] = 0;
+        ok(!strcmp(acl_bytes, expected_acl[shape]), "Object rights ACL bytes %s, expected %s.\n",
+           acl_bytes, expected_acl[shape]);
+        memcpy(saved_acl, &buffer, sizeof(buffer));
+        for (trustee = 0; trustee < 4; ++trustee)
+        {
+            memset(&trustee_a, 0, sizeof(trustee_a));
+            memset(&trustee_w, 0, sizeof(trustee_w));
+            memset(&objects_a, 0, sizeof(objects_a));
+            memset(&objects_w, 0, sizeof(objects_w));
+            type = trustee == 1 ? NULL : trustee == 2 ? &object : &other;
+            if (!trustee)
+            {
+                BuildTrusteeWithSidA(&trustee_a, &world);
+                BuildTrusteeWithSidW(&trustee_w, &world);
+            }
+            else
+            {
+                BuildTrusteeWithObjectsAndSidA(&trustee_a, &objects_a, type, NULL, &world);
+                BuildTrusteeWithObjectsAndSidW(&trustee_w, &objects_w, type, NULL, &world);
+            }
+            ret = !trustee_a.pMultipleTrustee && !trustee_w.pMultipleTrustee &&
+                  trustee_a.MultipleTrusteeOperation == NO_MULTIPLE_TRUSTEE &&
+                  trustee_w.MultipleTrusteeOperation == NO_MULTIPLE_TRUSTEE &&
+                  trustee_a.TrusteeType == TRUSTEE_IS_UNKNOWN && trustee_w.TrusteeType == TRUSTEE_IS_UNKNOWN &&
+                  trustee_a.TrusteeForm == (trustee ? TRUSTEE_IS_OBJECTS_AND_SID : TRUSTEE_IS_SID) &&
+                  trustee_w.TrusteeForm == (trustee ? TRUSTEE_IS_OBJECTS_AND_SID : TRUSTEE_IS_SID) &&
+                  trustee_a.ptstrName == (char *)(trustee ? (void *)&objects_a : (void *)&world) &&
+                  trustee_w.ptstrName == (WCHAR *)(trustee ? (void *)&objects_w : (void *)&world);
+            ok(ret, "Trustee %u builder identity or default fields differ.\n", trustee);
+            if (!ret) goto next_case;
+            if (trustee)
+            {
+                object_flags = type ? ACE_OBJECT_TYPE_PRESENT : 0;
+                ret = objects_a.ObjectsPresent == object_flags && objects_w.ObjectsPresent == object_flags &&
+                      objects_a.pSid == &world && objects_w.pSid == &world &&
+                      !memcmp(&objects_a.ObjectTypeGuid, type ? type : &empty, sizeof(GUID)) &&
+                      !memcmp(&objects_w.ObjectTypeGuid, type ? type : &empty, sizeof(GUID)) &&
+                      !memcmp(&objects_a.InheritedObjectTypeGuid, &empty, sizeof(GUID)) &&
+                      !memcmp(&objects_w.InheritedObjectTypeGuid, &empty, sizeof(GUID));
+                ok(ret, "Trustee %u object builder SID, flags or GUIDs differ.\n", trustee);
+                if (!ret) goto next_case;
+            }
+            for (form = 0; form < 2; ++form)
+            {
+                effective[form].before = success[form].before = failure[form].before = 0x11223344;
+                effective[form].value = success[form].value = failure[form].value = 0xdeadbeef;
+                effective[form].after = success[form].after = failure[form].after = 0x55667788;
+                effective_status[form] = form ? GetEffectiveRightsFromAclW(&buffer.acl, &trustee_w, &effective[form].value) :
+                                               GetEffectiveRightsFromAclA(&buffer.acl, &trustee_a, &effective[form].value);
+                ok(!memcmp(saved_acl, &buffer, sizeof(buffer)), "Effective query changed its input ACL.\n");
+                audit_status[form] = form ? GetAuditedPermissionsFromAclW(&buffer.acl, &trustee_w, &success[form].value, &failure[form].value) :
+                                           GetAuditedPermissionsFromAclA(&buffer.acl, &trustee_a, &success[form].value, &failure[form].value);
+                ok(!memcmp(saved_acl, &buffer, sizeof(buffer)), "Audit query changed its input ACL.\n");
+                calls += 2;
+                ok(effective[form].before == 0x11223344 && effective[form].after == 0x55667788 &&
+                   success[form].before == 0x11223344 && success[form].after == 0x55667788 &&
+                   failure[form].before == 0x11223344 && failure[form].after == 0x55667788,
+                   "Trustee %u form %u object rights query overwrote a guard.\n", trustee, form);
+                result_index = expected[shape][trustee][form];
+                ok(effective_status[form] == results[result_index].effective_status,
+                   "Trustee %u form %u effective status %lu, expected %lu.\n", trustee, form,
+                   effective_status[form], results[result_index].effective_status);
+                if (!effective_status[form] && !results[result_index].effective_status)
+                    ok(effective[form].value == results[result_index].effective,
+                       "Trustee %u form %u effective mask %#lx, expected %#lx.\n", trustee, form,
+                       effective[form].value, results[result_index].effective);
+                ok(audit_status[form] == results[result_index].audit_status,
+                   "Trustee %u form %u audit status %lu, expected %lu.\n", trustee, form,
+                   audit_status[form], results[result_index].audit_status);
+                if (!audit_status[form] && !results[result_index].audit_status)
+                    ok(success[form].value == results[result_index].success &&
+                       failure[form].value == results[result_index].failure,
+                       "Trustee %u form %u audit masks %#lx/%#lx, expected %#lx/%#lx.\n", trustee, form,
+                       success[form].value, failure[form].value, results[result_index].success, results[result_index].failure);
+            }
+        }
+next_case:
+        winetest_pop_context();
+    }
+    ok(calls == 160, "Object ACL rights queries exercised %u/160 calls.\n", calls);
+    trace("Object ACL rights queries exercised %u/160 calls.\n", calls);
+}
+
+static void test_acl_rights_queries(void)
+{
+    static const struct
+    {
+        BYTE count;
+        struct { BYTE type, flags, sid; ACCESS_MASK mask; } aces[3];
+    } cases[] =
+    {
+        {0},
+        {1, {{ACCESS_ALLOWED_ACE_TYPE, 0, 0, 1}}},
+        {2, {{ACCESS_DENIED_ACE_TYPE, 0, 0, 1}, {ACCESS_ALLOWED_ACE_TYPE, 0, 0, 3}}},
+        {2, {{ACCESS_ALLOWED_ACE_TYPE, 0, 0, 3}, {ACCESS_DENIED_ACE_TYPE, 0, 0, 1}}},
+        {1, {{ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE, 0, 4}}},
+        {1, {{ACCESS_ALLOWED_ACE_TYPE, INHERITED_ACE, 0, 8}}},
+        {2, {{ACCESS_DENIED_ACE_TYPE, INHERITED_ACE, 0, 1}, {ACCESS_ALLOWED_ACE_TYPE, 0, 0, 3}}},
+        {1, {{ACCESS_ALLOWED_ACE_TYPE, 0, 1, 16}}},
+        {1, {{ACCESS_ALLOWED_ACE_TYPE, 0, 0, GENERIC_READ}}},
+        {1, {{SYSTEM_AUDIT_ACE_TYPE, SUCCESSFUL_ACCESS_ACE_FLAG, 0, 1}}},
+        {1, {{SYSTEM_AUDIT_ACE_TYPE, FAILED_ACCESS_ACE_FLAG, 0, 2}}},
+        {1, {{SYSTEM_AUDIT_ACE_TYPE, SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG, 0, 4}}},
+        {3, {{SYSTEM_AUDIT_ACE_TYPE, SUCCESSFUL_ACCESS_ACE_FLAG, 0, 1},
+             {SYSTEM_AUDIT_ACE_TYPE, FAILED_ACCESS_ACE_FLAG, 0, 2},
+             {SYSTEM_AUDIT_ACE_TYPE, SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG, 0, 4}}},
+        {1, {{SYSTEM_AUDIT_ACE_TYPE, INHERIT_ONLY_ACE | SUCCESSFUL_ACCESS_ACE_FLAG, 0, 8}}},
+        {1, {{SYSTEM_AUDIT_ACE_TYPE, INHERITED_ACE | FAILED_ACCESS_ACE_FLAG, 0, 16}}},
+        {1, {{SYSTEM_AUDIT_ACE_TYPE, SUCCESSFUL_ACCESS_ACE_FLAG, 1, 32}}},
+        {1, {{ACCESS_ALLOWED_ACE_TYPE, 0, 2, 0x40}}},
+        {2, {{ACCESS_DENIED_ACE_TYPE, 0, 2, 1}, {ACCESS_ALLOWED_ACE_TYPE, 0, 0, 3}}},
+        {1, {{SYSTEM_AUDIT_ACE_TYPE, SUCCESSFUL_ACCESS_ACE_FLAG, 2, 0x80}}}
+    };
+    static const struct
+    {
+        DWORD effective_status, audit_status;
+        ACCESS_MASK effective[3], success[3], failure[3];
+    } expected[] =
+    {
+        {ERROR_SUCCESS, ERROR_SUCCESS, {0x0, 0x0, 0x0}, {0x0, 0x0, 0x0}, {0x0, 0x0, 0x0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x1, 0x1, 0x1}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x2, 0x2, 0x2}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_INVALID_ACL, ERROR_INVALID_ACL, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x0, 0x0, 0x0}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x8, 0x8, 0x8}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x2, 0x2, 0x2}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x0, 0x10, 0x0}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x0, 0x0, 0x0}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_INVALID_ACL, ERROR_SUCCESS, {0, 0, 0}, {0x1, 0x1, 0x1}, {0x0, 0x0, 0x0}},
+        {ERROR_INVALID_ACL, ERROR_SUCCESS, {0, 0, 0}, {0x0, 0x0, 0x0}, {0x2, 0x2, 0x2}},
+        {ERROR_INVALID_ACL, ERROR_SUCCESS, {0, 0, 0}, {0x0, 0x0, 0x0}, {0x0, 0x0, 0x0}},
+        {ERROR_INVALID_ACL, ERROR_SUCCESS, {0, 0, 0}, {0x1, 0x1, 0x1}, {0x2, 0x2, 0x2}},
+        {ERROR_INVALID_ACL, ERROR_SUCCESS, {0, 0, 0}, {0x8, 0x8, 0x8}, {0x0, 0x0, 0x0}},
+        {ERROR_INVALID_ACL, ERROR_SUCCESS, {0, 0, 0}, {0x0, 0x0, 0x0}, {0x10, 0x10, 0x10}},
+        {ERROR_INVALID_ACL, ERROR_SUCCESS, {0, 0, 0}, {0x0, 0x20, 0x0}, {0x0, 0x0, 0x0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x0, 0x0, 0x40}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_SUCCESS, ERROR_INVALID_ACL, {0x3, 0x3, 0x2}, {0, 0, 0}, {0, 0, 0}},
+        {ERROR_INVALID_ACL, ERROR_SUCCESS, {0, 0, 0}, {0x0, 0x0, 0x80}, {0x0, 0x0, 0x0}}
+    };
+    SID world = {SID_REVISION, 1, {SECURITY_WORLD_SID_AUTHORITY}, {SECURITY_WORLD_RID}};
+    SID system = {SID_REVISION, 1, {SECURITY_NT_AUTHORITY}, {SECURITY_LOCAL_SYSTEM_RID}};
+    union { DWORD align; BYTE bytes[SECURITY_MAX_SID_SIZE]; } administrators;
+    PSID sids[] = {&world, &system, administrators.bytes};
+    union { ACL acl; BYTE bytes[256]; } buffer;
+    struct { ACCESS_MASK before, value, after; } effective[2], success[2], failure[2];
+    TRUSTEE_A trustee_a;
+    TRUSTEE_W trustee_w;
+    DWORD effective_status[2], audit_status[2];
+    UINT i, j, trustee, form, calls = 0;
+    DWORD sid_size = sizeof(administrators);
+    BYTE flags;
+    BOOL ret;
+
+    ret = CreateWellKnownSid(WinBuiltinAdministratorsSid, NULL, administrators.bytes, &sid_size);
+    ok(ret, "Administrators SID creation failed: %lu.\n", GetLastError());
+    if (!ret) return;
+    ret = sid_size <= sizeof(administrators) && IsValidSid(administrators.bytes);
+    ok(ret, "Administrators SID result is invalid, size %lu.\n", sid_size);
+    if (!ret) return;
+    for (i = 0; i < ARRAY_SIZE(cases); ++i)
+    {
+        winetest_push_context("ACL rights case %u", i);
+        ret = InitializeAcl(&buffer.acl, sizeof(buffer), ACL_REVISION);
+        ok(ret, "Rights ACL initialization failed: %lu.\n", GetLastError());
+        if (!ret) goto next_case;
+        for (j = 0; j < cases[i].count; ++j)
+        {
+            flags = cases[i].aces[j].flags;
+            if (cases[i].aces[j].type == ACCESS_ALLOWED_ACE_TYPE)
+                ret = AddAccessAllowedAceEx(&buffer.acl, ACL_REVISION, flags,
+                                           cases[i].aces[j].mask, sids[cases[i].aces[j].sid]);
+            else if (cases[i].aces[j].type == ACCESS_DENIED_ACE_TYPE)
+                ret = AddAccessDeniedAceEx(&buffer.acl, ACL_REVISION, flags,
+                                          cases[i].aces[j].mask, sids[cases[i].aces[j].sid]);
+            else
+                ret = AddAuditAccessAceEx(&buffer.acl, ACL_REVISION,
+                                         flags & ~(SUCCESSFUL_ACCESS_ACE_FLAG | FAILED_ACCESS_ACE_FLAG),
+                                         cases[i].aces[j].mask, sids[cases[i].aces[j].sid],
+                                         !!(flags & SUCCESSFUL_ACCESS_ACE_FLAG), !!(flags & FAILED_ACCESS_ACE_FLAG));
+            ok(ret, "Rights ACE %u construction failed: %lu.\n", j, GetLastError());
+            if (!ret) goto next_case;
+        }
+        for (trustee = 0; trustee < ARRAY_SIZE(sids); ++trustee)
+        {
+            BuildTrusteeWithSidA(&trustee_a, sids[trustee]);
+            BuildTrusteeWithSidW(&trustee_w, sids[trustee]);
+            for (form = 0; form < 2; ++form)
+            {
+                effective[form].before = success[form].before = failure[form].before = 0x11223344;
+                effective[form].value = success[form].value = failure[form].value = 0xdeadbeef;
+                effective[form].after = success[form].after = failure[form].after = 0x55667788;
+                effective_status[form] = form ? GetEffectiveRightsFromAclW(&buffer.acl, &trustee_w, &effective[form].value) :
+                                               GetEffectiveRightsFromAclA(&buffer.acl, &trustee_a, &effective[form].value);
+                audit_status[form] = form ? GetAuditedPermissionsFromAclW(&buffer.acl, &trustee_w, &success[form].value, &failure[form].value) :
+                                           GetAuditedPermissionsFromAclA(&buffer.acl, &trustee_a, &success[form].value, &failure[form].value);
+                calls += 2;
+                ok(effective_status[form] == expected[i].effective_status,
+                   "Trustee %u form %u effective status %lu, expected %lu.\n",
+                   trustee, form, effective_status[form], expected[i].effective_status);
+                if (!effective_status[form] && !expected[i].effective_status)
+                    ok(effective[form].value == expected[i].effective[trustee],
+                       "Trustee %u form %u effective mask %#lx, expected %#lx.\n",
+                       trustee, form, effective[form].value, expected[i].effective[trustee]);
+                ok(audit_status[form] == expected[i].audit_status,
+                   "Trustee %u form %u audit status %lu, expected %lu.\n",
+                   trustee, form, audit_status[form], expected[i].audit_status);
+                if (!audit_status[form] && !expected[i].audit_status)
+                    ok(success[form].value == expected[i].success[trustee] && failure[form].value == expected[i].failure[trustee],
+                       "Trustee %u form %u audit masks %#lx/%#lx, expected %#lx/%#lx.\n", trustee, form,
+                       success[form].value, failure[form].value, expected[i].success[trustee], expected[i].failure[trustee]);
+                ok(effective[form].before == 0x11223344 && effective[form].after == 0x55667788 &&
+                   success[form].before == 0x11223344 && success[form].after == 0x55667788 &&
+                   failure[form].before == 0x11223344 && failure[form].after == 0x55667788,
+                   "Trustee %u form %u rights query overwrote a guard.\n", trustee, form);
+            }
+            ok(effective_status[0] == effective_status[1], "Trustee %u A/W effective status differs: %lu/%lu.\n",
+               trustee, effective_status[0], effective_status[1]);
+            if (!effective_status[0] && !effective_status[1])
+                ok(effective[0].value == effective[1].value, "Trustee %u A/W effective masks differ.\n", trustee);
+            ok(audit_status[0] == audit_status[1], "Trustee %u A/W audit status differs: %lu/%lu.\n",
+               trustee, audit_status[0], audit_status[1]);
+            if (!audit_status[0] && !audit_status[1])
+                ok(success[0].value == success[1].value && failure[0].value == failure[1].value,
+                   "Trustee %u A/W audit masks differ.\n", trustee);
+        }
+next_case:
+        winetest_pop_context();
+    }
+    ok(calls == 228, "ACL rights queries exercised %u/228 calls.\n", calls);
+    trace("ACL rights queries exercised %u/228 calls.\n", calls);
+}
+
+static PSECURITY_DESCRIPTOR file_sacl_matrix_descriptor(HANDLE handle)
+{
+    SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                                       DACL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+    PSECURITY_DESCRIPTOR sd;
+    DWORD size = 0, capacity, error;
+    BOOL ret, valid;
+
+    ret = GetKernelObjectSecurity(handle, information, NULL, 0, &size);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INSUFFICIENT_BUFFER && size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE),
+       "File matrix descriptor sizing returned %d, error %lu, size %lu.\n", ret, error, size);
+    if (ret || error != ERROR_INSUFFICIENT_BUFFER || size < sizeof(SECURITY_DESCRIPTOR_RELATIVE)) return NULL;
+    capacity = size;
+    sd = malloc(capacity);
+    ok(!!sd, "File matrix descriptor allocation failed.\n");
+    if (!sd) return NULL;
+    ret = GetKernelObjectSecurity(handle, information, sd, capacity, &size);
+    valid = ret && size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= capacity;
+    if (valid) valid = RtlValidRelativeSecurityDescriptor(sd, size, information & ~LABEL_SECURITY_INFORMATION);
+    ok(valid, "File matrix descriptor query returned %d, error %lu, size %lu, capacity %lu.\n",
+       ret, GetLastError(), size, capacity);
+    if (!valid) { free(sd); return NULL; }
+    return sd;
+}
+
+static void file_sacl_matrix_preserved(PSECURITY_DESCRIPTOR before, PSECURITY_DESCRIPTOR after, BOOL full)
+{
+    SECURITY_DESCRIPTOR_CONTROL old_control = 0, control = 0;
+    ACL *old_acl, *acl;
+    PSID old_sid, sid;
+    BOOL old_present, present, old_defaulted, defaulted, ret;
+    DWORD revision;
+
+    ret = GetSecurityDescriptorOwner(before, &old_sid, &old_defaulted) &&
+          GetSecurityDescriptorOwner(after, &sid, &defaulted);
+    ok(ret && !!old_sid == !!sid && old_defaulted == defaulted, "File matrix owner presence/defaulting changed.\n");
+    if (ret && old_sid && sid)
+        ok(GetLengthSid(old_sid) == GetLengthSid(sid) && !memcmp(old_sid, sid, GetLengthSid(sid)),
+           "File matrix owner bytes changed.\n");
+    ret = GetSecurityDescriptorGroup(before, &old_sid, &old_defaulted) &&
+          GetSecurityDescriptorGroup(after, &sid, &defaulted);
+    ok(ret && !!old_sid == !!sid && old_defaulted == defaulted, "File matrix group presence/defaulting changed.\n");
+    if (ret && old_sid && sid)
+        ok(GetLengthSid(old_sid) == GetLengthSid(sid) && !memcmp(old_sid, sid, GetLengthSid(sid)),
+           "File matrix group bytes changed.\n");
+    ret = GetSecurityDescriptorDacl(before, &old_present, &old_acl, &old_defaulted) &&
+          GetSecurityDescriptorDacl(after, &present, &acl, &defaulted);
+    ok(ret && old_present == present && old_defaulted == defaulted && !!old_acl == !!acl,
+       "File matrix DACL presence/defaulting changed.\n");
+    if (ret && old_acl && acl)
+        ok(old_acl->AclSize == acl->AclSize && !memcmp(old_acl, acl, acl->AclSize), "File matrix DACL bytes changed.\n");
+    ret = GetSecurityDescriptorControl(before, &old_control, &revision) &&
+          GetSecurityDescriptorControl(after, &control, &revision);
+    ok(ret && !((old_control ^ control) & (SE_DACL_PRESENT | SE_DACL_DEFAULTED | SE_DACL_PROTECTED |
+       SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ)), "File matrix DACL control changed.\n");
+    registry_matrix_check_labels(before, after);
+    if (full)
+    {
+        ok(ret && old_control == control, "Fresh file descriptor control %#x differs from retained %#x.\n", control, old_control);
+        ret = GetSecurityDescriptorSacl(before, &old_present, &old_acl, &old_defaulted) &&
+              GetSecurityDescriptorSacl(after, &present, &acl, &defaulted);
+        ok(ret && old_present == present && old_defaulted == defaulted && !!old_acl == !!acl,
+           "Fresh file SACL presence/defaulting differs.\n");
+        if (ret && old_acl && acl)
+            ok(old_acl->AclSize == acl->AclSize && !memcmp(old_acl, acl, acl->AclSize), "Fresh file SACL bytes differ.\n");
+    }
+}
+
+struct file_sacl_matrix_result
+{
+    SECURITY_DESCRIPTOR_CONTROL control;
+    const char *dacl, *sacl;
+};
+
+static BOOL file_sacl_matrix_snapshot(HANDLE handle, const char *path, UINT index, BOOL directory,
+        PSECURITY_DESCRIPTOR before, const struct file_sacl_matrix_result *expected)
+{
+    PSECURITY_DESCRIPTOR sd = NULL, fresh_sd = NULL;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    HANDLE fresh = INVALID_HANDLE_VALUE;
+    ACL *dacl, *audit;
+    DWORD revision, bytes = 0, retained = ERROR_INVALID_HANDLE, read_error = ERROR_INVALID_HANDLE, write_error;
+    BYTE value = index, read_value = 0;
+    BOOL ret, present, defaulted, complete = FALSE;
+    char dacl_text[1024], sacl_text[1024];
+
+    winetest_push_context("file %u", index);
+    sd = file_sacl_matrix_descriptor(handle);
+    if (!sd) goto done;
+    ret = GetSecurityDescriptorControl(sd, &control, &revision) &&
+          GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted);
+    ok(ret, "File matrix descriptor fields unavailable.\n");
+    if (!ret) goto done;
+    registry_matrix_acl_text(dacl, present, dacl_text, sizeof(dacl_text));
+    ret = GetSecurityDescriptorSacl(sd, &present, &audit, &defaulted);
+    ok(ret, "File matrix SACL unavailable.\n");
+    if (!ret) goto done;
+    registry_matrix_acl_text(audit, present, sacl_text, sizeof(sacl_text));
+    if (before) file_sacl_matrix_preserved(before, sd, FALSE);
+    fresh = CreateFileA(path, READ_CONTROL | ACCESS_SYSTEM_SECURITY | FILE_READ_DATA,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                        FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(fresh != INVALID_HANDLE_VALUE, "Fresh file descriptor handle failed: %lu.\n", GetLastError());
+    if (fresh == INVALID_HANDLE_VALUE) goto done;
+    fresh_sd = file_sacl_matrix_descriptor(fresh);
+    if (!fresh_sd) goto done;
+    file_sacl_matrix_preserved(sd, fresh_sd, TRUE);
+    if (!directory)
+    {
+        if (before)
+        {
+            SetLastError(ERROR_SUCCESS);
+            ret = SetFilePointer(handle, 0, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER || GetLastError() == ERROR_SUCCESS;
+            ok(ret, "Retained file seek failed: %lu.\n", GetLastError());
+            if (!ret) goto done;
+            ret = WriteFile(handle, &value, sizeof(value), &bytes, NULL);
+            retained = ret ? ERROR_SUCCESS : GetLastError();
+            ok(ret && bytes == sizeof(value), "Retained file write returned %d, error %lu, bytes %lu.\n", ret, retained, bytes);
+        }
+        ret = ReadFile(fresh, &read_value, sizeof(read_value), &bytes, NULL);
+        read_error = ret ? ERROR_SUCCESS : GetLastError();
+        ok(ret && bytes == (before ? sizeof(read_value) : 0),
+           "Fresh file read returned %d, error %lu, bytes %lu.\n", ret, read_error, bytes);
+        if (ret && before && bytes == sizeof(read_value)) ok(read_value == value, "Fresh file data differs from retained write.\n");
+    }
+    CloseHandle(fresh);
+    fresh = INVALID_HANDLE_VALUE;
+    write_error = ERROR_INVALID_HANDLE;
+    if (!directory)
+    {
+        fresh = CreateFileA(path, FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            NULL, OPEN_EXISTING, 0, NULL);
+        write_error = fresh == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+        ok(write_error == ERROR_ACCESS_DENIED, "Post-update file write-open negative control returned %lu.\n", write_error);
+    }
+    ok(control == expected->control, "File descriptor control %#x, expected %#x.\n", control, expected->control);
+    ok(!strcmp(dacl_text, expected->dacl), "File DACL [%s], expected [%s].\n", dacl_text, expected->dacl);
+    ok(!strcmp(sacl_text, expected->sacl), "File SACL [%s], expected [%s].\n", sacl_text, expected->sacl);
+    complete = TRUE;
+done:
+    if (fresh != INVALID_HANDLE_VALUE) CloseHandle(fresh);
+    free(fresh_sd);
+    free(sd);
+    winetest_pop_context();
+    return complete;
+}
+
+static void test_file_sacl_privilege_matrix(HANDLE *tokens)
+{
+    static const struct file_sacl_matrix_result results[] =
+    {
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "0:2/c3/00000002/WD;"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED,
+         "0:1/00/00000002/WD;1:0/00/001f01ff/WD;", "0:2/40/00000001/WD;1:17/00/00000001/IL8192;"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "null"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED,
+         "0:1/00/00000002/WD;1:0/00/001f01ff/WD;", "null"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_SACL_PROTECTED,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "0:2/40/00000001/WD;"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "null"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT,
+         "0:1/00/00000002/WD;1:0/00/001f01ff/WD;", "null"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_SACL_AUTO_INHERITED,
+         "0:1/00/00000002/WD;1:0/00/001f01ff/WD;", "0:2/d0/00000002/WD;"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "null"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_AUTO_INHERITED,
+         "0:1/00/00000002/WD;1:0/00/001f01ff/WD;", "absent"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_PROTECTED,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "null"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT,
+         "0:1/00/00000002/WD;1:0/00/001f01ff/WD;", "absent"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_PROTECTED,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "0:2/c3/00000002/WD;"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT,
+         "0:1/00/00000002/WD;1:0/00/001f01ff/WD;", "0:2/c0/00000002/WD;"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "0:2/c3/00000002/WD;"},
+        {SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_SACL_AUTO_INHERITED,
+         "0:1/09/00000002/WD;1:0/03/001f01ff/WD;", "null"}
+    };
+    static const BYTE expected[3][6][2][9] =
+    {
+        {
+            {{0, 1, 2, 3, 4, 3, 5, 6, 7}, {8, 1, 2, 3, 4, 3, 5, 6, 9}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{12, 1, 2, 3, 4, 3, 5, 6, 13}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}}
+        },
+        {
+            {{0, 1, 2, 3, 4, 3, 5, 6, 7}, {8, 1, 2, 3, 4, 3, 5, 6, 9}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{12, 1, 2, 3, 4, 3, 5, 6, 13}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{0, 1, 2, 3, 4, 3, 5, 6, 7}, {8, 1, 2, 3, 4, 3, 5, 6, 9}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}}
+        },
+        {
+            {{0, 1, 2, 3, 4, 3, 5, 6, 7}, {8, 1, 2, 3, 4, 3, 5, 6, 9}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{12, 1, 2, 3, 4, 3, 5, 6, 13}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}},
+            {{10, 1, 2, 3, 4, 3, 5, 6, 11}, {10, 1, 2, 3, 4, 3, 5, 6, 11}}
+        }
+    };
+    static const BYTE unprotected_expected[2][9] =
+    {
+        {14, 1, 2, 3, 4, 3, 5, 6, 7},
+        {15, 1, 2, 3, 4, 3, 5, 6, 9}
+    };
+    static const char *names[] = {"", "explicit", "nested", "nested\\file", "protected", "protected\\file", "open", "open\\file", "new"};
+    static const BOOL directories[] = {TRUE, FALSE, TRUE, FALSE, TRUE, FALSE, TRUE, FALSE, FALSE};
+    static const char *strings[] = {"D:P(A;OICI;FA;;;WD)S:P", "D:P(D;OIIO;0x2;;;WD)(A;OICI;FA;;;WD)",
+        "D:P(D;;0x2;;;WD)(A;;FA;;;WD)", "D:(D;OIIO;0x2;;;WD)(A;OICI;FA;;;WD)",
+        "S:(AU;SA;0x1;;;WD)", "S:P(AU;SA;0x1;;;WD)", "S:", "S:P", "S:P(AU;OICISAFA;0x2;;;WD)",
+        "D:P(A;OICI;FA;;;WD)S:P(ML;;NW;;;ME)", "D:(D;;0x2;;;WD)(A;;FA;;;WD)"};
+    PSECURITY_DESCRIPTOR descriptors[ARRAY_SIZE(strings)] = {0}, before[8] = {0}, queried = NULL, unprotected_before = NULL;
+    HANDLE handles[8], ordinary = INVALID_HANDLE_VALUE, security_only = INVALID_HANDLE_VALUE;
+    HANDLE fresh = INVALID_HANDLE_VALUE, child = INVALID_HANDLE_VALUE, container_handle = INVALID_HANDLE_VALUE;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), NULL, FALSE};
+    SECURITY_DESCRIPTOR_CONTROL control = 0, expected_control;
+    OBJECT_BASIC_INFORMATION object_info;
+    BOOL created[ARRAY_SIZE(names)] = {0}, ret, present, defaulted, reserved = FALSE, container_created = FALSE;
+    char temp[MAX_PATH], container[MAX_PATH] = "", path[MAX_PATH] = "", paths[ARRAY_SIZE(names)][MAX_PATH];
+    char volume[MAX_PATH], filesystem[MAX_PATH];
+    DWORD size, flags, i, j, labels, mode, kind, remove, result, revision, setters = 0, snapshots = 0;
+    DWORD unprotected_setters = 0, unprotected_snapshots = 0;
+    ACCESS_MASK access;
+    ACL *audit;
+    ACE_HEADER *ace;
+    NTSTATUS status;
+
+    winetest_push_context("File SACL privilege matrix");
+    for (i = 0; i < ARRAY_SIZE(handles); ++i) handles[i] = INVALID_HANDLE_VALUE;
+    ret = SetThreadToken(NULL, tokens[1]);
+    ok(ret, "File SACL setup impersonation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    size = GetTempPathA(ARRAY_SIZE(temp), temp);
+    ok(size && size < ARRAY_SIZE(temp), "File SACL temporary path returned %lu.\n", size);
+    if (!size || size >= ARRAY_SIZE(temp)) goto done;
+    ret = GetVolumePathNameA(temp, volume, ARRAY_SIZE(volume));
+    ok(ret, "File SACL volume path failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = GetVolumeInformationA(volume, NULL, 0, NULL, NULL, &flags, filesystem, ARRAY_SIZE(filesystem));
+    ok(ret, "File SACL volume query failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    trace("File SACL fixture volume %s filesystem %s flags %#lx.\n", volume, filesystem, flags);
+    if (lstrcmpiA(filesystem, "NTFS") || (flags & FILE_READ_ONLY_VOLUME))
+    {
+        win_skip("File SACL matrix needs a writable NTFS temporary volume.\n");
+        goto done;
+    }
+    for (i = 0; i < ARRAY_SIZE(strings); ++i)
+    {
+        ret = ConvertStringSecurityDescriptorToSecurityDescriptorA(strings[i], SDDL_REVISION_1, &descriptors[i], NULL);
+        ok(ret, "File SACL descriptor %lu construction failed: %lu.\n", i, GetLastError());
+        if (!ret) goto done;
+    }
+    ret = GetTempFileNameA(temp, "sac", 0, container);
+    ok(ret, "File SACL temporary reservation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    reserved = TRUE;
+    ret = DeleteFileA(container);
+    ok(ret, "File SACL reservation removal failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    reserved = FALSE;
+    if (strlen(container) + sizeof("\\root\\protected\\file") > ARRAY_SIZE(paths[0]))
+    {
+        win_skip("File SACL temporary path is too long.\n");
+        goto done;
+    }
+    attributes.lpSecurityDescriptor = descriptors[0];
+    ret = CreateDirectoryA(container, &attributes);
+    ok(ret, "File SACL controlled container creation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    container_created = TRUE;
+    container_handle = CreateFileA(container, READ_CONTROL | WRITE_DAC | DELETE | FILE_LIST_DIRECTORY | ACCESS_SYSTEM_SECURITY,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                                   FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(container_handle != INVALID_HANDLE_VALUE, "File SACL controlled container handle failed: %lu.\n", GetLastError());
+    if (container_handle == INVALID_HANDLE_VALUE) goto done;
+    status = NtSetSecurityObject(container_handle, SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION, descriptors[7]);
+    ok(!status, "File SACL controlled container audit setup returned %#lx.\n", status);
+    if (status) goto done;
+    queried = file_sacl_matrix_descriptor(container_handle);
+    if (!queried) goto done;
+    ret = GetSecurityDescriptorControl(queried, &control, &revision) &&
+          GetSecurityDescriptorSacl(queried, &present, &audit, &defaulted);
+    ok(ret && (control & SE_SACL_PROTECTED) && present && (!audit || !audit->AceCount),
+       "File SACL controlled container audit is not protected and empty.\n");
+    if (!ret || !(control & SE_SACL_PROTECTED) || !present || (audit && audit->AceCount)) goto done;
+    free(queried);
+    queried = NULL;
+    sprintf(path, "%s\\root", container);
+    for (i = 0; i < ARRAY_SIZE(names); ++i)
+        if (i) sprintf(paths[i], "%s\\%s", path, names[i]);
+        else strcpy(paths[i], path);
+    for (i = 0; i < ARRAY_SIZE(handles); ++i)
+    {
+        attributes.lpSecurityDescriptor = descriptors[i == 1 ? 9 : 0];
+        access = READ_CONTROL | WRITE_DAC | DELETE | FILE_READ_DATA | ACCESS_SYSTEM_SECURITY;
+        if (directories[i])
+        {
+            ret = CreateDirectoryA(paths[i], &attributes);
+            ok(ret, "File SACL directory %lu creation failed: %lu.\n", i, GetLastError());
+            if (!ret) goto done;
+            created[i] = TRUE;
+        }
+        else access |= FILE_WRITE_DATA;
+        handles[i] = CreateFileA(paths[i], access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                directories[i] ? NULL : &attributes, directories[i] ? OPEN_EXISTING : CREATE_NEW,
+                                FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        ok(handles[i] != INVALID_HANDLE_VALUE, "File SACL retained handle %lu failed: %lu.\n", i, GetLastError());
+        if (handles[i] == INVALID_HANDLE_VALUE) goto done;
+        created[i] = TRUE;
+        status = NtQueryObject(handles[i], ObjectBasicInformation, &object_info, sizeof(object_info), &size);
+        ok(!status, "File SACL retained grant %lu query returned %#lx.\n", i, status);
+        if (status) goto done;
+        access |= SYNCHRONIZE | FILE_READ_ATTRIBUTES;
+        ok(object_info.GrantedAccess == access, "File SACL retained grant %lu is %#lx, expected %#lx.\n",
+           i, object_info.GrantedAccess, access);
+    }
+    ordinary = CreateFileA(path, READ_CONTROL | FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    security_only = CreateFileA(path, ACCESS_SYSTEM_SECURITY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    ok(ordinary != INVALID_HANDLE_VALUE && security_only != INVALID_HANDLE_VALUE, "File SACL setter handle setup failed: %lu.\n", GetLastError());
+    if (ordinary == INVALID_HANDLE_VALUE || security_only == INVALID_HANDLE_VALUE) goto done;
+    for (i = 0; i < 2; ++i)
+    {
+        status = NtQueryObject(i ? security_only : ordinary, ObjectBasicInformation, &object_info, sizeof(object_info), &size);
+        ok(!status, "File SACL setter grant %lu query returned %#lx.\n", i, status);
+        if (status) goto done;
+        ok(!!(object_info.GrantedAccess & ACCESS_SYSTEM_SECURITY) == !!i, "File SACL setter %lu has wrong SYS grant %#lx.\n", i, object_info.GrantedAccess);
+        if (i) ok(!(object_info.GrantedAccess & (READ_CONTROL | WRITE_DAC)),
+                  "File SACL SYS-only handle unexpectedly grants descriptor access %#lx.\n", object_info.GrantedAccess);
+        access = (i ? ACCESS_SYSTEM_SECURITY : READ_CONTROL | FILE_LIST_DIRECTORY) | SYNCHRONIZE | FILE_READ_ATTRIBUTES;
+        ok(object_info.GrantedAccess == access, "File SACL setter grant %lu is %#lx, expected %#lx.\n",
+           i, object_info.GrantedAccess, access);
+    }
+    for (i = 0; i < ARRAY_SIZE(handles); ++i)
+    {
+        status = NtSetSecurityObject(handles[i], DACL_SECURITY_INFORMATION |
+                  (i == 4 || i >= 6 ? UNPROTECTED_DACL_SECURITY_INFORMATION : PROTECTED_DACL_SECURITY_INFORMATION),
+                  descriptors[i == 4 || i == 6 ? 3 : i == 7 ? 10 : directories[i] ? 1 : 2]);
+        ok(!status, "File SACL negative DACL %lu setup returned %#lx.\n", i, status);
+        if (status) goto done;
+        status = NtSetSecurityObject(handles[i], SACL_SECURITY_INFORMATION |
+                  (i == 0 || i == 4 ? PROTECTED_SACL_SECURITY_INFORMATION : UNPROTECTED_SACL_SECURITY_INFORMATION),
+                  descriptors[i == 1 ? 4 : i == 4 ? 5 : i == 0 ? 7 : 6]);
+        ok(!status, "File SACL baseline %lu setup returned %#lx.\n", i, status);
+        if (status) goto done;
+        before[i] = file_sacl_matrix_descriptor(handles[i]);
+        if (!before[i]) goto done;
+        ret = GetSecurityDescriptorSacl(before[i], &present, &audit, &defaulted);
+        ok(ret, "File SACL baseline %lu ACL query failed.\n", i);
+        if (!ret) goto done;
+        labels = 0;
+        for (j = 0; audit && j < audit->AceCount; ++j)
+        {
+            ret = GetAce(audit, j, (void **)&ace);
+            ok(ret, "File SACL baseline %lu ACE %lu unavailable.\n", i, j);
+            if (!ret) goto done;
+            if (ace->AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE) ++labels;
+        }
+        if (i == 1)
+        {
+            ok(present && audit && labels == 1, "File SACL explicit label leaf has %lu labels, expected one.\n", labels);
+            if (!present || !audit || labels != 1) goto done;
+        }
+        ok(present && !!audit == (i == 1 || i == 4) && labels == (i == 1),
+           "File SACL baseline %lu present %u ACL %u labels %lu.\n", i, present, !!audit, labels);
+        ret = GetSecurityDescriptorControl(before[i], &control, &revision);
+        expected_control = (i == 4 || i >= 6 ? 0 : SE_DACL_PROTECTED) | (i == 0 || i == 4 ? SE_SACL_PROTECTED : 0);
+        ok(ret && (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) == expected_control,
+           "File SACL baseline %lu protection %#x, expected %#x.\n", i, control, expected_control);
+        if (!ret || (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) != expected_control) goto done;
+    }
+    for (mode = 0; mode < 3; ++mode)
+        for (kind = 0; kind < 6; ++kind)
+        {
+            winetest_push_context("token %lu setter %lu", mode, kind);
+            ret = SetThreadToken(NULL, tokens[1]);
+            ok(ret, "File SACL reset impersonation failed: %lu.\n", GetLastError());
+            if (!ret) goto end_case;
+            for (i = 0; i < ARRAY_SIZE(handles); ++i)
+            {
+                status = NtSetSecurityObject(handles[i], DACL_SECURITY_INFORMATION |
+                          (i == 4 || i >= 6 ? UNPROTECTED_DACL_SECURITY_INFORMATION : PROTECTED_DACL_SECURITY_INFORMATION), before[i]);
+                ok(!status, "File SACL reset DACL %lu returned %#lx.\n", i, status);
+                if (status) goto end_case;
+                status = NtSetSecurityObject(handles[i], SACL_SECURITY_INFORMATION |
+                          (i == 0 || i == 4 ? PROTECTED_SACL_SECURITY_INFORMATION : UNPROTECTED_SACL_SECURITY_INFORMATION), before[i]);
+                ok(!status, "File SACL reset audit %lu returned %#lx.\n", i, status);
+                if (status) goto end_case;
+                queried = file_sacl_matrix_descriptor(handles[i]);
+                if (!queried) goto end_case;
+                file_sacl_matrix_preserved(before[i], queried, TRUE);
+                free(queried);
+                queried = NULL;
+            }
+            for (remove = 0; remove < 2; ++remove)
+            {
+                winetest_push_context("remove %lu", remove);
+                ret = SetThreadToken(NULL, tokens[mode]);
+                ok(ret, "File SACL operation impersonation failed: %lu.\n", GetLastError());
+                if (!ret) { winetest_pop_context(); goto end_case; }
+                for (i = 0; i < ARRAY_SIZE(handles); ++i)
+                    if (!directories[i])
+                    {
+                        fresh = CreateFileA(paths[i], FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                            NULL, OPEN_EXISTING, 0, NULL);
+                        result = fresh == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+                        ok(result == ERROR_ACCESS_DENIED, "File SACL pre-update file %lu write-open negative control returned %lu.\n", i, result);
+                        if (fresh != INVALID_HANDLE_VALUE) { CloseHandle(fresh); fresh = INVALID_HANDLE_VALUE; }
+                        if (result != ERROR_ACCESS_DENIED) { winetest_pop_context(); goto end_case; }
+                    }
+                fresh = CreateFileA(path, ACCESS_SYSTEM_SECURITY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+                result = fresh == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+                ok(result == (mode == 1 ? ERROR_SUCCESS : ERROR_PRIVILEGE_NOT_HELD),
+                   "File SACL fresh SYS open returned %lu.\n", result);
+                if (fresh != INVALID_HANDLE_VALUE) { CloseHandle(fresh); fresh = INVALID_HANDLE_VALUE; }
+                ret = GetSecurityDescriptorSacl(descriptors[remove ? 7 : 8], &present, &audit, &defaulted);
+                ok(ret && present && audit, "File SACL target ACL missing.\n");
+                if (!ret || !present || !audit) { winetest_pop_context(); goto end_case; }
+                if (kind == 2 || kind == 3)
+                {
+                    status = NtSetSecurityObject(kind == 2 ? handles[0] : ordinary, SACL_SECURITY_INFORMATION, descriptors[remove ? 7 : 8]);
+                    ok(status == (kind == 2 ? STATUS_SUCCESS : STATUS_ACCESS_DENIED),
+                       "File SACL native setter returned %#lx.\n", status);
+                }
+                else
+                {
+                    if (kind == 4)
+                        result = SetNamedSecurityInfoA(path, SE_FILE_OBJECT, SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION,
+                                                       NULL, NULL, NULL, audit);
+                    else result = SetSecurityInfo(kind == 5 ? security_only : kind ? ordinary : handles[0], SE_FILE_OBJECT,
+                                                  SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION, NULL, NULL, NULL, audit);
+                    ok(result == (kind == 0 || (kind == 4 && mode == 1) ? ERROR_SUCCESS :
+                       kind == 4 ? ERROR_PRIVILEGE_NOT_HELD : ERROR_ACCESS_DENIED),
+                       "File SACL public setter returned %lu.\n", result);
+                }
+                ++setters;
+                ret = SetThreadToken(NULL, tokens[1]);
+                ok(ret, "File SACL observation impersonation failed: %lu.\n", GetLastError());
+                if (!ret) { winetest_pop_context(); goto end_case; }
+                for (i = 0; i < ARRAY_SIZE(handles); ++i)
+                    snapshots += file_sacl_matrix_snapshot(handles[i], paths[i], i, directories[i], before[i],
+                                             &results[expected[mode][kind][remove][i]]);
+                child = CreateFileA(paths[8], READ_CONTROL | ACCESS_SYSTEM_SECURITY | FILE_READ_DATA,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, 0, NULL);
+                ok(child != INVALID_HANDLE_VALUE, "File SACL new child creation failed: %lu.\n", GetLastError());
+                if (child != INVALID_HANDLE_VALUE)
+                {
+                    created[8] = TRUE;
+                    snapshots += file_sacl_matrix_snapshot(child, paths[8], 8, FALSE, NULL, &results[expected[mode][kind][remove][8]]);
+                    CloseHandle(child);
+                    child = INVALID_HANDLE_VALUE;
+                    ret = DeleteFileA(paths[8]);
+                    ok(ret, "File SACL new child cleanup failed: %lu.\n", GetLastError());
+                    if (ret) created[8] = FALSE;
+                }
+                winetest_pop_context();
+                if (created[8]) goto end_case;
+            }
+end_case:
+            winetest_pop_context();
+        }
+    ok(setters == 36 && snapshots == 324, "File SACL matrix exercised %lu/36 setters and %lu/324 snapshots.\n", setters, snapshots);
+    trace("File SACL matrix exercised %lu/36 setters and %lu/324 snapshots.\n", setters, snapshots);
+    for (kind = 0; kind < 2; ++kind)
+    {
+        winetest_push_context("unprotected setter %lu", kind);
+        ret = SetThreadToken(NULL, tokens[1]);
+        ok(ret, "Unprotected file SACL impersonation failed: %lu.\n", GetLastError());
+        if (!ret) goto end_unprotected_case;
+        for (i = 0; i < ARRAY_SIZE(handles); ++i)
+        {
+            status = NtSetSecurityObject(handles[i], DACL_SECURITY_INFORMATION |
+                      (i == 4 || i >= 6 ? UNPROTECTED_DACL_SECURITY_INFORMATION : PROTECTED_DACL_SECURITY_INFORMATION), before[i]);
+            ok(!status, "Unprotected file SACL reset DACL %lu returned %#lx.\n", i, status);
+            if (status) goto end_unprotected_case;
+            status = NtSetSecurityObject(handles[i], SACL_SECURITY_INFORMATION |
+                      (i == 0 || i == 4 ? PROTECTED_SACL_SECURITY_INFORMATION : UNPROTECTED_SACL_SECURITY_INFORMATION), before[i]);
+            ok(!status, "Unprotected file SACL reset audit %lu returned %#lx.\n", i, status);
+            if (status) goto end_unprotected_case;
+            queried = file_sacl_matrix_descriptor(handles[i]);
+            if (!queried) goto end_unprotected_case;
+            file_sacl_matrix_preserved(before[i], queried, TRUE);
+            free(queried);
+            queried = NULL;
+        }
+        status = NtSetSecurityObject(handles[0], SACL_SECURITY_INFORMATION | UNPROTECTED_SACL_SECURITY_INFORMATION, descriptors[6]);
+        ok(!status, "Unprotected file SACL root setup returned %#lx.\n", status);
+        if (status) goto end_unprotected_case;
+        unprotected_before = file_sacl_matrix_descriptor(handles[0]);
+        if (!unprotected_before) goto end_unprotected_case;
+        ret = GetSecurityDescriptorControl(unprotected_before, &control, &revision);
+        ok(ret && (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) == SE_DACL_PROTECTED,
+           "Unprotected file SACL root control %#x.\n", control);
+        if (!ret || (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) != SE_DACL_PROTECTED) goto end_unprotected_case;
+        file_sacl_matrix_preserved(before[0], unprotected_before, FALSE);
+        for (remove = 0; remove < 2; ++remove)
+        {
+            winetest_push_context("remove %lu", remove);
+            for (i = 0; i < ARRAY_SIZE(handles); ++i)
+                if (!directories[i])
+                {
+                    fresh = CreateFileA(paths[i], FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                        NULL, OPEN_EXISTING, 0, NULL);
+                    result = fresh == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+                    ok(result == ERROR_ACCESS_DENIED, "Unprotected file SACL pre-update file %lu write-open returned %lu.\n", i, result);
+                    if (fresh != INVALID_HANDLE_VALUE) { CloseHandle(fresh); fresh = INVALID_HANDLE_VALUE; }
+                    if (result != ERROR_ACCESS_DENIED) { winetest_pop_context(); goto end_unprotected_case; }
+                }
+            ret = GetSecurityDescriptorSacl(descriptors[remove ? 7 : 8], &present, &audit, &defaulted);
+            ok(ret && present && audit, "Unprotected file SACL target ACL missing.\n");
+            if (!ret || !present || !audit) { winetest_pop_context(); goto end_unprotected_case; }
+            if (kind)
+                result = SetNamedSecurityInfoA(path, SE_FILE_OBJECT, SACL_SECURITY_INFORMATION | UNPROTECTED_SACL_SECURITY_INFORMATION,
+                                               NULL, NULL, NULL, audit);
+            else result = SetSecurityInfo(handles[0], SE_FILE_OBJECT, SACL_SECURITY_INFORMATION | UNPROTECTED_SACL_SECURITY_INFORMATION,
+                                          NULL, NULL, NULL, audit);
+            ok(!result, "Unprotected file SACL setter returned %lu.\n", result);
+            ++unprotected_setters;
+            for (i = 0; i < ARRAY_SIZE(handles); ++i)
+                unprotected_snapshots += file_sacl_matrix_snapshot(handles[i], paths[i], i, directories[i],
+                                                                  i ? before[i] : unprotected_before,
+                                                                  &results[unprotected_expected[remove][i]]);
+            child = CreateFileA(paths[8], READ_CONTROL | ACCESS_SYSTEM_SECURITY | FILE_READ_DATA,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW, 0, NULL);
+            ok(child != INVALID_HANDLE_VALUE, "Unprotected file SACL new child creation failed: %lu.\n", GetLastError());
+            if (child != INVALID_HANDLE_VALUE)
+            {
+                created[8] = TRUE;
+                unprotected_snapshots += file_sacl_matrix_snapshot(child, paths[8], 8, FALSE, NULL,
+                                                                  &results[unprotected_expected[remove][8]]);
+                CloseHandle(child);
+                child = INVALID_HANDLE_VALUE;
+                ret = DeleteFileA(paths[8]);
+                ok(ret, "Unprotected file SACL new child cleanup failed: %lu.\n", GetLastError());
+                if (ret) created[8] = FALSE;
+            }
+            winetest_pop_context();
+            if (created[8]) goto end_unprotected_case;
+        }
+end_unprotected_case:
+        free(unprotected_before);
+        unprotected_before = NULL;
+        winetest_pop_context();
+    }
+    ok(unprotected_setters == 4 && unprotected_snapshots == 36,
+       "Unprotected file SACL matrix exercised %lu/4 setters and %lu/36 snapshots.\n", unprotected_setters, unprotected_snapshots);
+    trace("Unprotected file SACL matrix exercised %lu/4 setters and %lu/36 snapshots.\n", unprotected_setters, unprotected_snapshots);
+done:
+    ret = SetThreadToken(NULL, tokens[1]);
+    ok(ret, "File SACL cleanup impersonation failed: %lu.\n", GetLastError());
+    if (child != INVALID_HANDLE_VALUE) CloseHandle(child);
+    if (fresh != INVALID_HANDLE_VALUE) CloseHandle(fresh);
+    if (ordinary != INVALID_HANDLE_VALUE) CloseHandle(ordinary);
+    if (security_only != INVALID_HANDLE_VALUE) CloseHandle(security_only);
+    for (i = 0; i < ARRAY_SIZE(handles); ++i)
+        if (handles[i] != INVALID_HANDLE_VALUE)
+        {
+            status = NtSetSecurityObject(handles[i], DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptors[0]);
+            ok(!status, "File SACL cleanup DACL %lu restoration returned %#lx.\n", i, status);
+        }
+    if (container_handle != INVALID_HANDLE_VALUE)
+    {
+        status = NtSetSecurityObject(container_handle, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptors[0]);
+        ok(!status, "File SACL container cleanup DACL restoration returned %#lx.\n", status);
+        CloseHandle(container_handle);
+    }
+    for (i = ARRAY_SIZE(handles); i-- > 0;)
+        if (handles[i] != INVALID_HANDLE_VALUE) CloseHandle(handles[i]);
+    for (i = ARRAY_SIZE(created); i-- > 0;)
+        if (created[i])
+        {
+            ret = directories[i] ? RemoveDirectoryA(paths[i]) : DeleteFileA(paths[i]);
+            ok(ret, "File SACL object %lu cleanup failed: %lu.\n", i, GetLastError());
+        }
+    if (container_created) ok(RemoveDirectoryA(container), "File SACL controlled container cleanup failed: %lu.\n", GetLastError());
+    if (reserved) ok(DeleteFileA(container), "File SACL reservation cleanup failed: %lu.\n", GetLastError());
+    for (i = 0; i < ARRAY_SIZE(before); ++i) free(before[i]);
+    for (i = 0; i < ARRAY_SIZE(descriptors); ++i) if (descriptors[i]) LocalFree(descriptors[i]);
+    free(queried);
+    free(unprotected_before);
+    winetest_pop_context();
+}
+
+#ifndef TREE_SEC_INFO_SET
+#define TREE_SEC_INFO_SET 1
+#define TREE_SEC_INFO_RESET 2
+#define TREE_SEC_INFO_RESET_KEEP_EXPLICIT 3
+#endif
+
+#define ACL_TREE_PRE_POST_ERROR ((PROG_INVOKE_SETTING)6)
+
+typedef VOID (CALLBACK *acl_tree_progress_fn)(LPWSTR, DWORD, PPROG_INVOKE_SETTING, PVOID, BOOL);
+
+enum acl_tree_callback_mode
+{
+    ACL_TREE_CALLBACK_NONE,
+    ACL_TREE_CALLBACK_ROOT_FAILURE,
+    ACL_TREE_CALLBACK_FULL,
+    ACL_TREE_CALLBACK_ERRORS,
+    ACL_TREE_CALLBACK_STOP,
+    ACL_TREE_CALLBACK_CANCEL,
+    ACL_TREE_CALLBACK_RETRY
+};
+
+struct acl_tree_node_result
+{
+    SECURITY_DESCRIPTOR_CONTROL control;
+    const char *dacl;
+    DWORD read, write;
+};
+
+struct acl_tree_row_result
+{
+    BYTE registry, phase, variant, form;
+    DWORD status;
+    enum acl_tree_callback_mode callback_mode;
+    BYTE callback_count, nodes[6], callback_nodes[6];
+};
+
+static const struct acl_tree_node_result acl_tree_node_results[] =
+{
+    {SE_SELF_RELATIVE | SE_DACL_PROTECTED | SE_DACL_PRESENT, "0:0/03/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_PRESENT, "0:0/10/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_PRESENT, "0:1/00/00000002/WD;1:0/10/001f01ff/WD;", ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_PROTECTED | SE_DACL_PRESENT, "0:1/00/00040000/OW;1:1/00/00040000/WD;2:0/03/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/03/00000002/WD;1:0/03/001f01ff/WD;2:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/09/00000002/WD;1:0/03/001f01ff/WD;2:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/03/00120089/WD;1:0/03/001f01ff/WD;2:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/10/00120089/WD;1:0/10/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/03/001f01ff/WD;1:0/13/00120089/WD;2:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/10/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/13/00120089/WD;1:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000002/WD;1:0/10/00120089/WD;2:0/10/001f01ff/WD;", ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000001/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_ACCESS_DENIED, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000002/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000004/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000008/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000010/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000020/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/10/00120089/WD;1:0/10/001f01ff/WD;", ERROR_ACCESS_DENIED, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/03/001f01ff/WD;1:0/13/00120089/WD;2:0/13/001f01ff/WD;", ERROR_ACCESS_DENIED, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/10/001f01ff/WD;", ERROR_ACCESS_DENIED, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000040/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000080/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000100/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00010000/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00020000/OW;1:1/00/00020000/WD;2:0/03/00120089/WD;3:0/03/001f01ff/WD;4:0/13/001f01ff/WD;", ERROR_ACCESS_DENIED, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00040000/OW;1:1/00/00040000/WD;2:0/03/00120089/WD;3:0/03/001f01ff/WD;4:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00080000/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00100000/WD;1:0/03/00120089/WD;2:0/03/001f01ff/WD;3:0/13/001f01ff/WD;", ERROR_ACCESS_DENIED, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_PROTECTED | SE_DACL_PRESENT, "0:0/02/000f003f/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_PRESENT, "0:0/12/000f003f/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_PRESENT, "0:1/00/00000002/WD;1:0/12/000f003f/WD;", ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_PROTECTED | SE_DACL_PRESENT, "0:1/00/00040000/OW;1:1/00/00040000/WD;2:0/02/000f003f/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/02/00000002/WD;1:0/02/000f003f/WD;2:0/12/000f003f/WD;", ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/12/00000002/WD;1:0/12/000f003f/WD;", ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:1/00/00000002/WD;1:1/12/00000002/WD;2:0/12/000f003f/WD;", ERROR_SUCCESS, ERROR_ACCESS_DENIED},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/02/000f003f/WD;1:1/12/00000002/WD;2:0/12/000f003f/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+    {SE_SELF_RELATIVE | SE_DACL_AUTO_INHERITED | SE_DACL_PRESENT, "0:0/12/000f003f/WD;1:1/12/00000002/WD;", ERROR_SUCCESS, ERROR_SUCCESS},
+};
+
+static const struct acl_tree_row_result acl_tree_row_results[] =
+{
+    {0, 0, 0, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {0, 1, 2, 3, 1, 0}, {0, 0, 0, 0, 0, 0}},
+    {0, 0, 0, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {4, 1, 2, 3, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 0, 1, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {0, 1, 2, 3, 1, 0}, {0, 0, 0, 0, 0, 0}},
+    {0, 0, 1, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {4, 1, 2, 3, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 0, 2, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {0, 1, 2, 3, 1, 0}, {0, 0, 0, 0, 0, 0}},
+    {0, 0, 2, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {4, 1, 2, 3, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 0, 3, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {0, 1, 2, 3, 1, 0}, {0, 0, 0, 0, 0, 0}},
+    {0, 0, 3, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 1, {4, 1, 2, 3, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 0, 4, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {0, 1, 2, 3, 1, 0}, {0, 0, 0, 0, 0, 0}},
+    {0, 0, 4, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_NONE, 0, {4, 1, 2, 3, 1, 0}, {0, 0, 0, 0, 0, 0}},
+    {0, 1, 0, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {5, 1, 2, 3, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 1, 1, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {5, 1, 2, 3, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 1, 2, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {5, 1, 2, 3, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 1, 3, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 1, {5, 1, 2, 3, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 1, 4, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_NONE, 0, {5, 1, 2, 3, 1, 0}, {0, 0, 0, 0, 0, 0}},
+    {0, 2, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 2, 1, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 10, 7, 10}, {1, 1, 1, 1, 1, 1}},
+    {0, 2, 2, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_STOP, 1, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 2, 3, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_NONE, 0, {6, 7, 7, 10, 7, 10}, {0, 0, 0, 0, 0, 0}},
+    {0, 2, 4, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_NONE, 0, {6, 7, 7, 8, 9, 8}, {0, 0, 0, 0, 0, 0}},
+    {0, 3, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 11, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 3, 1, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 10, 7, 10}, {1, 1, 1, 1, 1, 1}},
+    {0, 4, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 7, {6, 7, 7, 3, 1, 8}, {1, 1, 1, 2, 0, 1}},
+    {0, 4, 1, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 7, {6, 7, 7, 3, 1, 10}, {1, 1, 1, 2, 0, 1}},
+    {0, 6, 0, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {6, 1, 1, 0, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 6, 1, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {6, 1, 1, 0, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 6, 2, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {6, 1, 1, 0, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 6, 3, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 6, 4, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 6, 5, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 7, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 7, 1, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 7, 2, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_ROOT_FAILURE, 2, {6, 1, 1, 0, 1, 0}, {2, 0, 0, 0, 0, 0}},
+    {0, 7, 3, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 7, 4, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 7, 5, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 7, 6, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 7, 7, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 7, 8, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {6, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {12, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 1, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {13, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 2, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {14, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 3, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {15, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 4, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {16, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 5, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {17, 18, 18, 19, 20, 19}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 6, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {21, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 7, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {22, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 8, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {23, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 9, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {24, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 10, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {25, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 11, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {26, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 12, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {27, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {0, 5, 13, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {28, 7, 7, 8, 9, 8}, {1, 1, 1, 1, 1, 1}},
+    {1, 0, 0, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {29, 30, 31, 32, 30, 29}, {0, 0, 0, 0, 0, 0}},
+    {1, 0, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 7, {33, 34, 35, 32, 30, 36}, {1, 1, 1, 2, 0, 1}},
+    {1, 0, 1, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {29, 30, 31, 32, 30, 29}, {0, 0, 0, 0, 0, 0}},
+    {1, 0, 1, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 7, {33, 34, 34, 32, 30, 34}, {1, 1, 1, 2, 0, 1}},
+    {1, 0, 2, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {29, 30, 31, 32, 30, 29}, {0, 0, 0, 0, 0, 0}},
+    {1, 0, 2, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_STOP, 1, {33, 34, 35, 32, 30, 36}, {1, 1, 1, 2, 0, 1}},
+    {1, 0, 3, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {29, 30, 31, 32, 30, 29}, {0, 0, 0, 0, 0, 0}},
+    {1, 0, 3, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_ERRORS, 1, {33, 34, 34, 32, 30, 34}, {0, 0, 0, 2, 0, 0}},
+    {1, 0, 4, 0, ERROR_CALL_NOT_IMPLEMENTED, ACL_TREE_CALLBACK_NONE, 0, {29, 30, 31, 32, 30, 29}, {0, 0, 0, 0, 0, 0}},
+    {1, 0, 4, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_NONE, 0, {33, 34, 35, 32, 30, 36}, {0, 0, 0, 0, 0, 0}},
+    {1, 1, 0, 1, ERROR_ACCESS_DENIED, ACL_TREE_CALLBACK_CANCEL, 1, {33, 30, 34, 32, 30, 29}, {1, 1, 1, 2, 0, 1}},
+    {1, 2, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_RETRY, 4, {33, 34, 34, 29, 30, 34}, {1, 1, 1, 2, 0, 1}},
+    {1, 3, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 7, {33, 35, 34, 32, 30, 36}, {1, 1, 1, 2, 0, 1}},
+    {1, 4, 0, 1, ERROR_SUCCESS, ACL_TREE_CALLBACK_FULL, 9, {33, 34, 35, 36, 37, 36}, {1, 1, 1, 1, 1, 1}},
+};
+
+static const BYTE acl_tree_registry_baseline[] = {29, 30, 31, 32, 30, 29};
+static const BYTE acl_tree_registry_reset[] = {33, 34, 34, 32, 30, 34};
+
+struct acl_tree_progress_state
+{
+    WCHAR (*paths)[MAX_PATH];
+    UINT count;
+    BOOL stop_notifications;
+    UINT action, action_count;
+    HANDLE repair_handle;
+    PSECURITY_DESCRIPTOR repair_descriptor;
+    DWORD repair_status;
+    struct { UINT node; DWORD status; PROG_INVOKE_SETTING setting; BOOL security_set; } records[32];
+};
+
+static struct acl_tree_progress_state *acl_tree_active_progress;
+static DWORD acl_tree_set_raw(BOOL registry, HANDLE handle, PSECURITY_DESCRIPTOR descriptor);
+
+static void CALLBACK acl_tree_progress(LPWSTR name, DWORD status, PPROG_INVOKE_SETTING setting,
+                                      PVOID args, BOOL security_set)
+{
+    struct acl_tree_progress_state *state = acl_tree_active_progress;
+    UINT i, node = 6, index;
+
+    ok(state && args == state && name && setting, "Tree callback arguments are invalid.\n");
+    if (!state || args != state || !name || !setting) return;
+    index = state->count++;
+    ok(index < ARRAY_SIZE(state->records), "Tree callback count exceeded its bound.\n");
+    if (index >= ARRAY_SIZE(state->records))
+    {
+        *setting = state->action ? ProgressCancelOperation : ProgressInvokeNever;
+        return;
+    }
+    for (i = 0; i < 6; ++i)
+        if (!lstrcmpiW(name, state->paths[i])) { node = i; break; }
+    state->records[index].node = node;
+    state->records[index].status = status;
+    state->records[index].setting = *setting;
+    state->records[index].security_set = security_set;
+    if (node == 6) trace("ACL_TREE_CALLBACK_NAME %s\n", wine_dbgstr_w(name));
+    if (state->stop_notifications) *setting = ProgressInvokeNever;
+    if (state->action == 1 && !state->action_count)
+    {
+        ++state->action_count;
+        *setting = ProgressCancelOperation;
+    }
+    if (state->action == 2)
+    {
+        *setting = ProgressInvokeEveryObject;
+        if (node == 3 && status && !state->action_count)
+        {
+            ++state->action_count;
+            state->repair_status = acl_tree_set_raw(TRUE, state->repair_handle, state->repair_descriptor);
+            ok(!state->repair_status, "Tree callback owned-node repair returned %lu.\n", state->repair_status);
+            *setting = state->repair_status ? ProgressCancelOperation : ProgressRetryOperation;
+        }
+    }
+}
+
+static void acl_tree_check_progress(const struct acl_tree_progress_state *state,
+                                    const struct acl_tree_row_result *expected, PROG_INVOKE_SETTING invocation)
+{
+    UINT counts[6] = {0}, starts[6] = {0}, ends[6] = {0}, parents[6] = {0, 0, 0, 0, 3, 0};
+    BOOL first_child[6] = {0}, seen_children[6] = {0}, seen_success[6] = {0}, failed_first[6] = {0};
+    UINT i, node, parent, kind, needed;
+    enum acl_tree_callback_mode mode = expected->callback_mode;
+
+    ok(state->count <= ARRAY_SIZE(state->records), "Tree callback output exceeds its bound.\n");
+    if (state->count > ARRAY_SIZE(state->records)) return;
+    if (mode != ACL_TREE_CALLBACK_FULL && mode != ACL_TREE_CALLBACK_RETRY)
+        ok(state->count == expected->callback_count, "Tree callback count %u, expected %u.\n",
+           state->count, expected->callback_count);
+    for (i = 0; i < state->count; ++i)
+    {
+        node = state->records[i].node;
+        ok(node < 6, "Tree callback %u has unknown node %u.\n", i, node);
+        if (node >= 6) continue;
+        ok(state->records[i].setting == invocation, "Tree callback %u setting %u, expected %u.\n",
+           i, state->records[i].setting, invocation);
+        if (mode == ACL_TREE_CALLBACK_ROOT_FAILURE)
+        {
+            ok(!node && state->records[i].status == ERROR_ACCESS_DENIED && state->records[i].security_set,
+               "Tree root failure callback %u returned node %u, status %lu, set %u.\n", i, node,
+               state->records[i].status, state->records[i].security_set);
+            continue;
+        }
+        kind = expected->callback_nodes[node];
+        ok(kind != 0, "Tree unexpected callback for node %u.\n", node);
+        ok(state->records[i].status == (kind == 2 ? ERROR_ACCESS_DENIED : ERROR_SUCCESS),
+           "Tree node %u callback status %lu, expected %u.\n", node, state->records[i].status,
+           kind == 2 ? ERROR_ACCESS_DENIED : ERROR_SUCCESS);
+        if (mode == ACL_TREE_CALLBACK_STOP || mode == ACL_TREE_CALLBACK_CANCEL)
+        {
+            ok(node && state->records[i].security_set == (kind == 1),
+               "Tree initial callback node %u set %u, expected %u.\n",
+               node, state->records[i].security_set, kind == 1);
+            continue;
+        }
+        if (mode == ACL_TREE_CALLBACK_ERRORS)
+        {
+            ok(kind == 2 && !state->records[i].security_set,
+               "Tree error-only callback node %u has kind %u, set %u.\n", node, kind, state->records[i].security_set);
+            ++counts[node];
+            continue;
+        }
+        if (mode != ACL_TREE_CALLBACK_FULL && mode != ACL_TREE_CALLBACK_RETRY) continue;
+        parent = parents[node];
+        if (!counts[node])
+        {
+            starts[node] = i;
+            if (node)
+            {
+                first_child[node] = !seen_children[parent];
+                if (kind == 2 && first_child[node]) failed_first[parent] = TRUE;
+                if (kind == 1)
+                {
+                    if (failed_first[parent] && !seen_success[parent])
+                    {
+                        first_child[node] = state->records[i].security_set;
+                        trace("INFO_NEEDED: Tree first successful child after an initial error may omit its pre-callback.\n");
+                    }
+                    seen_success[parent] = TRUE;
+                }
+                seen_children[parent] = TRUE;
+            }
+        }
+        needed = kind == 2 ? FALSE : !node || first_child[node] || counts[node] != 0;
+        ok(state->records[i].security_set == needed,
+           "Tree node %u callback %u set %u, expected %u.\n", node, counts[node], state->records[i].security_set, needed);
+        ++counts[node];
+        ends[node] = i;
+    }
+    if (mode == ACL_TREE_CALLBACK_FULL || mode == ACL_TREE_CALLBACK_RETRY || mode == ACL_TREE_CALLBACK_ERRORS)
+    {
+        for (node = 0; node < 6; ++node)
+        {
+            kind = expected->callback_nodes[node];
+            if (mode == ACL_TREE_CALLBACK_ERRORS) needed = kind == 2;
+            else if (mode == ACL_TREE_CALLBACK_RETRY && (!node || (!counts[node] && node != 3))) needed = 0;
+            else needed = !kind ? 0 : kind == 2 || !node || first_child[node] ? 1 : 2;
+            ok(counts[node] == needed, "Tree node %u callback count %u, expected %u.\n", node, counts[node], needed);
+            if (!node || !counts[node]) continue;
+            parent = parents[node];
+            if (counts[parent] && expected->callback_nodes[parent] == 1)
+            {
+                ok(ends[node] < ends[parent], "Tree child %u completed after parent %u.\n", node, parent);
+                if (counts[parent] == 2)
+                    ok(starts[parent] < starts[node], "Tree child %u began before parent %u pre-callback.\n", node, parent);
+            }
+        }
+    }
+    if (mode == ACL_TREE_CALLBACK_RETRY)
+        ok(state->count && state->records[state->count - 1].node == 3 &&
+           state->records[state->count - 1].status == ERROR_ACCESS_DENIED &&
+           !state->records[state->count - 1].security_set,
+           "Tree retry callback prefix did not end at the owned denied branch.\n");
+}
+
+static PSECURITY_DESCRIPTOR acl_tree_query(BOOL registry, HANDLE handle)
+{
+    const SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    PSECURITY_DESCRIPTOR descriptor;
+    DWORD size = 0, capacity, error;
+    BOOL ret;
+
+    if (registry) return registry_matrix_descriptor((HKEY)handle, FALSE);
+    ret = GetKernelObjectSecurity(handle, information, NULL, 0, &size);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INSUFFICIENT_BUFFER && size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE),
+       "Tree descriptor sizing returned %d, error %lu, size %lu.\n", ret, error, size);
+    if (ret || error != ERROR_INSUFFICIENT_BUFFER || size < sizeof(SECURITY_DESCRIPTOR_RELATIVE)) return NULL;
+    capacity = size;
+    descriptor = malloc(capacity);
+    ok(!!descriptor, "Tree descriptor allocation failed.\n");
+    if (!descriptor) return NULL;
+    ret = GetKernelObjectSecurity(handle, information, descriptor, capacity, &size);
+    ret = ret && size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= capacity;
+    if (ret) ret = RtlValidRelativeSecurityDescriptor(descriptor, size, information);
+    ok(ret, "Tree descriptor query or bounds validation failed.\n");
+    if (!ret) { free(descriptor); return NULL; }
+    return descriptor;
+}
+
+static DWORD acl_tree_set_raw(BOOL registry, HANDLE handle, PSECURITY_DESCRIPTOR descriptor)
+{
+    SECURITY_DESCRIPTOR_CONTROL control;
+    SECURITY_INFORMATION information = DACL_SECURITY_INFORMATION;
+    DWORD revision;
+    BOOL ret;
+
+    ret = GetSecurityDescriptorControl(descriptor, &control, &revision);
+    ok(ret, "Tree source descriptor control failed.\n");
+    if (!ret) return GetLastError();
+    information |= control & SE_DACL_PROTECTED ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION;
+    if (registry) return RegSetKeySecurity((HKEY)handle, information, descriptor);
+    if (SetKernelObjectSecurity(handle, information, descriptor)) return ERROR_SUCCESS;
+    return GetLastError();
+}
+
+static DWORD acl_tree_open(BOOL registry, const WCHAR *path, BOOL directory, ACCESS_MASK access, BOOL exercise)
+{
+    HANDLE handle;
+    HKEY key = NULL;
+    DWORD result, bytes, value = 0x12345678;
+    BOOL ret;
+
+    if (registry)
+    {
+        result = RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, access, &key);
+        if (!result && exercise)
+        {
+            if (access & KEY_SET_VALUE)
+                result = RegSetValueExW(key, L"TreeValue", 0, REG_DWORD, (BYTE *)&value, sizeof(value));
+            else result = RegQueryInfoKeyW(key, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+            ok(!result, "Tree granted registry operation returned %lu.\n", result);
+        }
+        if (key) RegCloseKey(key);
+        return result;
+    }
+    handle = CreateFileW(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, directory ? FILE_FLAG_BACKUP_SEMANTICS : 0, NULL);
+    if (handle == INVALID_HANDLE_VALUE) return GetLastError();
+    result = ERROR_SUCCESS;
+    if (exercise && !directory)
+    {
+        if (access & FILE_WRITE_DATA) ret = WriteFile(handle, &value, sizeof(value), &bytes, NULL);
+        else ret = ReadFile(handle, &value, sizeof(value), &bytes, NULL);
+        result = ret ? ERROR_SUCCESS : GetLastError();
+        ok(ret && ((access & FILE_WRITE_DATA) ? bytes == sizeof(value) : bytes <= sizeof(value)),
+           "Tree granted file operation returned %d, error %lu, bytes %lu.\n", ret, result, bytes);
+    }
+    CloseHandle(handle);
+    return result;
+}
+
+static BOOL acl_tree_snapshot(BOOL registry, HANDLE handle, const WCHAR *path, BOOL directory,
+                             PSECURITY_DESCRIPTOR before, UINT node, const struct acl_tree_node_result *expected)
+{
+    PSECURITY_DESCRIPTOR descriptor = acl_tree_query(registry, handle);
+    SECURITY_DESCRIPTOR_CONTROL control;
+    ACL *dacl;
+    PSID sid, old_sid;
+    BOOL ret, present, defaulted, old_defaulted;
+    DWORD revision, read_status, write_status;
+    char text[1024];
+
+    if (!descriptor) return FALSE;
+    ret = GetSecurityDescriptorOwner(descriptor, &sid, &defaulted) &&
+          GetSecurityDescriptorOwner(before, &old_sid, &old_defaulted);
+    ok(ret && sid && old_sid && EqualSid(sid, old_sid) && defaulted == old_defaulted,
+       "Tree owner changed at node %u.\n", node);
+    ret = GetSecurityDescriptorGroup(descriptor, &sid, &defaulted) &&
+          GetSecurityDescriptorGroup(before, &old_sid, &old_defaulted);
+    ok(ret && sid && old_sid && EqualSid(sid, old_sid) && defaulted == old_defaulted,
+       "Tree group changed at node %u.\n", node);
+    ret = GetSecurityDescriptorControl(descriptor, &control, &revision) &&
+          GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted);
+    ok(ret, "Tree descriptor fields failed at node %u.\n", node);
+    if (!ret) { free(descriptor); return FALSE; }
+    registry_matrix_acl_text(dacl, present, text, sizeof(text));
+    read_status = acl_tree_open(registry, path, directory, READ_CONTROL | (registry ? KEY_QUERY_VALUE : FILE_READ_DATA), TRUE);
+    write_status = acl_tree_open(registry, path, directory, registry ? KEY_SET_VALUE : FILE_WRITE_DATA, TRUE);
+    ok(control == expected->control, "Tree node %u control %#x, expected %#x.\n", node, control, expected->control);
+    ok(!strcmp(text, expected->dacl), "Tree node %u DACL [%s], expected [%s].\n", node, text, expected->dacl);
+    ok(read_status == expected->read, "Tree node %u read status %lu, expected %lu.\n", node, read_status, expected->read);
+    ok(write_status == expected->write, "Tree node %u write status %lu, expected %lu.\n", node, write_status, expected->write);
+    free(descriptor);
+    return TRUE;
+}
+
+static HANDLE acl_tree_context_token(HANDLE source, UINT mode)
+{
+    HANDLE token = NULL;
+    TOKEN_PRIVILEGES adjust, *privileges = NULL;
+    LUID change_notify;
+    DWORD size = 0, capacity, error, i, enabled = 0;
+    BOOL ret, valid = FALSE, found = FALSE;
+
+    ret = LookupPrivilegeValueA(NULL, SE_CHANGE_NOTIFY_NAME, &change_notify);
+    ok(ret, "Tree change-notify privilege lookup failed: %lu.\n", GetLastError());
+    if (!ret) return NULL;
+    ret = DuplicateTokenEx(source, TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES | TOKEN_IMPERSONATE,
+                           NULL, SecurityImpersonation, TokenImpersonation, &token);
+    ok(ret, "Tree context token duplication failed: %lu.\n", GetLastError());
+    if (!ret) return NULL;
+    if (mode < 2)
+    {
+        ret = AdjustTokenPrivileges(token, TRUE, NULL, 0, NULL, NULL);
+        ok(ret, "Tree context privilege disable failed: %lu.\n", GetLastError());
+        if (!ret) goto done;
+    }
+    if (mode == 1)
+    {
+        adjust.PrivilegeCount = 1;
+        adjust.Privileges[0].Luid = change_notify;
+        adjust.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        SetLastError(0xdeadbeef);
+        ret = AdjustTokenPrivileges(token, FALSE, &adjust, 0, NULL, NULL);
+        error = GetLastError();
+        ok(ret && !error, "Tree change-notify enable returned %d, error %lu.\n", ret, error);
+        if (!ret || error) goto done;
+    }
+    ret = GetTokenInformation(token, TokenPrivileges, NULL, 0, &size);
+    error = GetLastError();
+    ok(!ret && error == ERROR_INSUFFICIENT_BUFFER && size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges),
+       "Tree context privilege sizing returned %d, error %lu, size %lu.\n", ret, error, size);
+    if (ret || error != ERROR_INSUFFICIENT_BUFFER || size < FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) goto done;
+    capacity = size;
+    privileges = malloc(capacity);
+    ok(!!privileges, "Tree context privilege allocation failed.\n");
+    if (!privileges) goto done;
+    ret = GetTokenInformation(token, TokenPrivileges, privileges, capacity, &size);
+    valid = ret && size <= capacity && size >= FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges);
+    if (valid) valid = privileges->PrivilegeCount <= (size - FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges)) / sizeof(LUID_AND_ATTRIBUTES);
+    ok(valid, "Tree context privilege query or bounds failed.\n");
+    if (!valid) goto done;
+    for (i = 0; i < privileges->PrivilegeCount; ++i)
+    {
+        BOOL match = privileges->Privileges[i].Luid.LowPart == change_notify.LowPart &&
+                     privileges->Privileges[i].Luid.HighPart == change_notify.HighPart;
+        BOOL active = !!(privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED);
+        if (match) found = TRUE;
+        if (active) ++enabled;
+        if (mode < 2)
+        {
+            ok(active == (mode == 1 && match), "Tree context %u privilege %lu enabled %u.\n", mode, i, active);
+            if (active != (mode == 1 && match)) valid = FALSE;
+        }
+    }
+    ok(found, "Tree context change-notify privilege is absent.\n");
+    valid = valid && found;
+    ok(mode == 2 || enabled == mode, "Tree context %u enabled %lu privileges.\n", mode, enabled);
+done:
+    free(privileges);
+    if (!valid) { CloseHandle(token); token = NULL; }
+    return token;
+}
+
+static BOOL acl_tree_replace_handles(WCHAR paths[6][MAX_PATH], const BOOL *directories, const WCHAR *parent,
+                                     HANDLE handles[6], HANDLE *parent_handle, BOOL narrow)
+{
+    HANDLE replacements[7];
+    ACCESS_MASK access;
+    UINT i, j, count = 0;
+    BOOL ret;
+
+    for (i = 0; i < ARRAY_SIZE(replacements); ++i)
+    {
+        access = READ_CONTROL | WRITE_DAC;
+        if (!narrow) access |= i == 6 ? DELETE | FILE_LIST_DIRECTORY : DELETE | FILE_READ_DATA | FILE_WRITE_DATA;
+        replacements[i] = CreateFileW(i == 6 ? parent : paths[i], access,
+                                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                       NULL, OPEN_EXISTING, i == 6 || directories[i] ? FILE_FLAG_BACKUP_SEMANTICS : 0, NULL);
+        ok(replacements[i] != INVALID_HANDLE_VALUE, "Tree replacement handle %u narrow=%u failed: %lu.\n", i, narrow, GetLastError());
+        if (replacements[i] == INVALID_HANDLE_VALUE)
+        {
+            while (count) CloseHandle(replacements[--count]);
+            return FALSE;
+        }
+        ++count;
+    }
+    for (i = 0; i < 6; ++i)
+    {
+        ret = CloseHandle(handles[i]);
+        ok(ret, "Tree original handle %u close failed: %lu.\n", i, GetLastError());
+        if (!ret)
+        {
+            for (j = i; j < ARRAY_SIZE(replacements); ++j) CloseHandle(replacements[j]);
+            return FALSE;
+        }
+        handles[i] = replacements[i];
+    }
+    ret = CloseHandle(*parent_handle);
+    ok(ret, "Tree original parent handle close failed: %lu.\n", GetLastError());
+    if (!ret)
+    {
+        CloseHandle(replacements[6]);
+        return FALSE;
+    }
+    *parent_handle = replacements[6];
+    return TRUE;
+}
+
+static void acl_tree_file_controls(const WCHAR *root, const WCHAR *parent, UINT stage)
+{
+    static const ACCESS_MASK masks[] = {FILE_ALL_ACCESS, READ_CONTROL | WRITE_DAC, FILE_LIST_DIRECTORY};
+    static const WCHAR *names[] = {L".", L"..", L"Inherited", L"Explicit", L"Protected", L"WritableProtected"};
+    WCHAR pattern[MAX_PATH], ancestor[MAX_PATH];
+    WIN32_FIND_DATAW data;
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    HANDLE search;
+    DWORD attributes, result, revision, i, j, k, count = 0, ancestors = 0;
+    BOOL ret, seen[ARRAY_SIZE(names)] = {0};
+
+    attributes = GetFileAttributesW(root);
+    result = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_SUCCESS;
+    ok(!result && (attributes & FILE_ATTRIBUTE_DIRECTORY) && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT),
+       "Tree root stage %u attributes %#lx, error %lu.\n", stage, attributes, result);
+    for (i = 0; i < 2; ++i)
+    {
+        const WCHAR *path = i ? parent : root;
+        for (j = 0; j < ARRAY_SIZE(masks); ++j)
+        {
+            result = acl_tree_open(FALSE, path, TRUE, masks[j], FALSE);
+            ok(!result, "Tree stage %u parent %lu requested %#lx open returned %lu.\n", stage, i, masks[j], result);
+        }
+        result = GetNamedSecurityInfoW((WCHAR *)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                       NULL, NULL, NULL, NULL, &descriptor);
+        control = 0;
+        if (!result)
+        {
+            ret = descriptor && IsValidSecurityDescriptor(descriptor) &&
+                  GetSecurityDescriptorControl(descriptor, &control, &revision);
+            ok(ret, "Tree public descriptor control query failed.\n");
+        }
+        ok(!result && control == (SE_SELF_RELATIVE | SE_DACL_PRESENT |
+           (i || !stage ? SE_DACL_PROTECTED : SE_DACL_AUTO_INHERITED)),
+           "Tree stage %u parent %lu descriptor returned %lu, control %#x.\n", stage, i, result, control);
+        if (descriptor) { LocalFree(descriptor); descriptor = NULL; }
+    }
+    ret = lstrlenW(root) + 3 <= ARRAY_SIZE(pattern);
+    ok(ret, "Tree enumeration pattern exceeds its bound.\n");
+    if (!ret) return;
+    wcscpy(pattern, root);
+    wcscat(pattern, L"\\*");
+    search = FindFirstFileW(pattern, &data);
+    result = search == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    ok(!result, "Tree stage %u public enumeration failed: %lu.\n", stage, result);
+    if (search != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            ++count;
+            for (k = 0; k < ARRAY_SIZE(names); ++k)
+                if (!lstrcmpW(data.cFileName, names[k])) break;
+            ok(k < ARRAY_SIZE(names), "Tree enumeration returned unknown name %s.\n", wine_dbgstr_w(data.cFileName));
+            if (k < ARRAY_SIZE(names))
+            {
+                ok(!seen[k], "Tree enumeration repeated %s.\n", wine_dbgstr_w(data.cFileName));
+                seen[k] = TRUE;
+                ok(!!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == (k < 2 || k >= 4),
+                   "Tree enumeration name %s has attributes %#lx.\n", wine_dbgstr_w(data.cFileName), data.dwFileAttributes);
+            }
+            if (count >= 16) break;
+            ret = FindNextFileW(search, &data);
+            if (!ret) result = GetLastError();
+        } while (ret);
+        ok(count < 16, "Tree public enumeration exceeded its owned-tree bound.\n");
+        ok(FindClose(search), "Tree public enumeration close failed: %lu.\n", GetLastError());
+    }
+    ok(count == ARRAY_SIZE(names) && result == ERROR_NO_MORE_FILES,
+       "Tree stage %u enumeration completed %lu entries, status %lu.\n", stage, count, result);
+    for (k = 0; k < ARRAY_SIZE(names); ++k)
+        ok(seen[k], "Tree enumeration did not return %s.\n", wine_dbgstr_w(names[k]));
+    wcscpy(ancestor, root);
+    for (i = 0; root[i]; ++i)
+        if (root[i] == '\\' || root[i] == '/')
+        {
+            if (ancestors >= MAX_PATH / 2)
+            {
+                ok(FALSE, "Tree ancestor controls exceeded their bound.\n");
+                break;
+            }
+            ancestor[i + 1] = 0;
+            result = acl_tree_open(FALSE, ancestor, TRUE, FILE_TRAVERSE, FALSE);
+            ok(!result, "Tree stage %u ancestor %lu requested FILE_TRAVERSE returned %lu.\n", stage, ancestors++, result);
+            wcscpy(ancestor, root);
+        }
+}
+
+static void test_acl_tree_operations(HANDLE token, HANDLE source)
+{
+    static const WCHAR *names[] = {L"", L"Inherited", L"Explicit", L"Protected", L"Protected\\Child", L"WritableProtected"};
+    static const BOOL directories[] = {TRUE, FALSE, FALSE, TRUE, FALSE, TRUE};
+    static const char *file_strings[] =
+    {
+        "D:P(A;OICI;FA;;;WD)", "D:AI(A;ID;FA;;;WD)", "D:AI(D;;0x2;;;WD)(A;ID;FA;;;WD)",
+        "D:P(D;;0x40000;;;OW)(D;;0x40000;;;WD)(A;OICI;FA;;;WD)",
+        "D:(D;OICI;0x2;;;WD)(A;OICI;FA;;;WD)",
+        "D:(D;OIIO;0x2;;;WD)(A;OICI;FA;;;WD)",
+        "D:(A;OICI;FR;;;WD)(A;OICI;FA;;;WD)"
+    };
+    static const char *key_strings[] =
+    {
+        "D:P(A;CI;KA;;;WD)", "D:AI(A;CIID;KA;;;WD)", "D:AI(D;;0x2;;;WD)(A;CIID;KA;;;WD)",
+        "D:P(D;;0x40000;;;OW)(D;;0x40000;;;WD)(A;CI;KA;;;WD)",
+        "D:(D;CI;0x2;;;WD)(A;CI;KA;;;WD)"
+    };
+    static const BYTE baseline[] = {0, 1, 2, 3, 1, 0};
+    static const ACCESS_MASK root_rights[] =
+    {
+        FILE_LIST_DIRECTORY, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_READ_EA, FILE_WRITE_EA,
+        FILE_TRAVERSE, FILE_DELETE_CHILD, FILE_READ_ATTRIBUTES, FILE_WRITE_ATTRIBUTES,
+        DELETE, READ_CONTROL, WRITE_DAC, WRITE_OWNER, SYNCHRONIZE
+    };
+    static const ACCESS_MASK sharing_rights[] = {FILE_READ_DATA, FILE_WRITE_DATA, DELETE};
+    static const DWORD actions[] = {TREE_SEC_INFO_SET, TREE_SEC_INFO_RESET, TREE_SEC_INFO_RESET_KEEP_EXPLICIT};
+    static const PROG_INVOKE_SETTING settings[5][2] =
+    {
+        {ProgressInvokeNever, ProgressInvokeEveryObject},
+        {ProgressInvokeOnError, ACL_TREE_PRE_POST_ERROR},
+        {ProgressInvokeEveryObject, ProgressInvokeEveryObject},
+        {ProgressInvokeOnError, ProgressInvokeOnError},
+        {ProgressInvokeEveryObject, ProgressInvokeNever}
+    };
+    DWORD (WINAPI *set_a)(LPSTR, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID, PSID, PACL, PACL, DWORD,
+                          acl_tree_progress_fn, PROG_INVOKE_SETTING, PVOID);
+    DWORD (WINAPI *set_w)(LPWSTR, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID, PSID, PACL, PACL, DWORD,
+                          acl_tree_progress_fn, PROG_INVOKE_SETTING, PVOID);
+    DWORD (WINAPI *reset_a)(LPSTR, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID, PSID, PACL, PACL, BOOL,
+                            acl_tree_progress_fn, PROG_INVOKE_SETTING, PVOID);
+    DWORD (WINAPI *reset_w)(LPWSTR, SE_OBJECT_TYPE, SECURITY_INFORMATION, PSID, PSID, PACL, PACL, BOOL,
+                            acl_tree_progress_fn, PROG_INVOKE_SETTING, PVOID);
+    struct acl_tree_progress_state progress;
+    const struct acl_tree_row_result *expected;
+    const struct acl_tree_node_result *expected_node;
+    PSECURITY_DESCRIPTOR descriptors[7] = {0}, before[6] = {0}, queried = NULL, target = NULL;
+    SECURITY_ATTRIBUTES attributes = {sizeof(attributes), NULL, FALSE};
+    SECURITY_DESCRIPTOR_CONTROL control;
+    WCHAR paths[6][MAX_PATH], callback_paths[6][MAX_PATH], root[MAX_PATH], named[MAX_PATH];
+    WCHAR temp[MAX_PATH], roundtrip[MAX_PATH], container[MAX_PATH];
+    char named_a[MAX_PATH * 2], target_sddl[256];
+    HANDLE handles[6], container_handle, context_tokens[3] = {0}, sharing_handle = INVALID_HANDLE_VALUE;
+    HKEY key;
+    ACL *dacl, *actual;
+    BOOL created[6] = {0}, reserved, container_created, ret, present, defaulted, clean_success = FALSE;
+    DWORD result, disposition, revision, i, j, registry, phase, phase_index, variant, form, action_variant, source_index;
+    DWORD operations = 0, snapshots = 0, snapshot_start, callback_actions = 0, context_rows = 0, sharing_rows = 0, expected_index;
+    PROG_INVOKE_SETTING invocation;
+    int saved_debug = winetest_debug;
+
+    winetest_push_context("ACL tree matrix");
+    if (winetest_debug < 1) winetest_debug = 1;
+    set_a = (void *)GetProcAddress(hmod, "TreeSetNamedSecurityInfoA");
+    set_w = (void *)GetProcAddress(hmod, "TreeSetNamedSecurityInfoW");
+    reset_a = (void *)GetProcAddress(hmod, "TreeResetNamedSecurityInfoA");
+    reset_w = (void *)GetProcAddress(hmod, "TreeResetNamedSecurityInfoW");
+    ok(!!set_a, "TreeSetNamedSecurityInfoA export missing.\n");
+    ok(!!set_w, "TreeSetNamedSecurityInfoW export missing.\n");
+    ok(!!reset_a, "TreeResetNamedSecurityInfoA export missing.\n");
+    ok(!!reset_w, "TreeResetNamedSecurityInfoW export missing.\n");
+    if (!set_a || !set_w || !reset_a || !reset_w) goto done;
+    ret = SetThreadToken(NULL, token);
+    ok(ret, "Tree private token activation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    for (registry = 0; registry < 2; ++registry)
+    {
+        winetest_push_context("object %lu", registry);
+        reserved = container_created = FALSE;
+        container_handle = INVALID_HANDLE_VALUE;
+        memset(created, 0, sizeof(created));
+        for (i = 0; i < ARRAY_SIZE(handles); ++i) handles[i] = INVALID_HANDLE_VALUE;
+        for (i = 0; i < (registry ? ARRAY_SIZE(key_strings) : ARRAY_SIZE(file_strings)); ++i)
+        {
+            ret = ConvertStringSecurityDescriptorToSecurityDescriptorA(registry ? key_strings[i] : file_strings[i],
+                                                                        SDDL_REVISION_1, &descriptors[i], NULL);
+            ok(ret, "Tree descriptor %lu creation failed: %lu.\n", i, GetLastError());
+            if (!ret) goto cleanup_tree;
+        }
+        if (registry)
+            swprintf(container, ARRAY_SIZE(container), L"Software\\WineTree%08lx%08lx", GetCurrentProcessId(), GetTickCount());
+        else
+        {
+            result = GetTempPathW(ARRAY_SIZE(temp), temp);
+            ok(result && result < ARRAY_SIZE(temp), "Tree temporary path length %lu.\n", result);
+            if (!result || result >= ARRAY_SIZE(temp)) goto cleanup_tree;
+            ret = GetTempFileNameW(temp, L"act", 0, container) != 0;
+            ok(ret, "Tree temporary reservation failed: %lu.\n", GetLastError());
+            if (!ret) goto cleanup_tree;
+            reserved = TRUE;
+            ret = DeleteFileW(container);
+            ok(ret, "Tree reservation deletion failed: %lu.\n", GetLastError());
+            if (!ret) goto cleanup_tree;
+            reserved = FALSE;
+        }
+        ret = lstrlenW(container) + ARRAY_SIZE(L"\\Root\\WritableProtected") + ARRAY_SIZE(L"CURRENT_USER\\") < MAX_PATH;
+        ok(ret, "Tree root path exceeds fixture bounds.\n");
+        if (!ret) goto cleanup_tree;
+        attributes.lpSecurityDescriptor = descriptors[0];
+        if (registry)
+        {
+            key = NULL;
+            disposition = 0;
+            result = RegCreateKeyExW(HKEY_CURRENT_USER, container, 0, NULL, REG_OPTION_VOLATILE,
+                                     KEY_ALL_ACCESS, &attributes, &key, &disposition);
+            ok(!result && disposition == REG_CREATED_NEW_KEY,
+               "Tree parent creation returned %lu, disposition %lu.\n", result, disposition);
+            if (result) goto cleanup_tree;
+            container_handle = key;
+            if (disposition != REG_CREATED_NEW_KEY) goto cleanup_tree;
+            container_created = TRUE;
+        }
+        else
+        {
+            ret = CreateDirectoryW(container, &attributes);
+            ok(ret, "Tree parent creation failed: %lu.\n", GetLastError());
+            if (!ret) goto cleanup_tree;
+            container_created = TRUE;
+            container_handle = CreateFileW(container, READ_CONTROL | WRITE_DAC | DELETE | FILE_LIST_DIRECTORY,
+                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+            ok(container_handle != INVALID_HANDLE_VALUE, "Tree parent handle failed: %lu.\n", GetLastError());
+            if (container_handle == INVALID_HANDLE_VALUE) goto cleanup_tree;
+        }
+        queried = acl_tree_query(registry, container_handle);
+        if (!queried) goto cleanup_tree;
+        ret = GetSecurityDescriptorControl(queried, &control, &revision) && (control & SE_DACL_PROTECTED) &&
+              GetSecurityDescriptorDacl(queried, &present, &actual, &defaulted) && present && actual &&
+              GetSecurityDescriptorDacl(descriptors[0], &present, &dacl, &defaulted) && present && dacl &&
+              actual->AclSize == dacl->AclSize && !memcmp(actual, dacl, dacl->AclSize);
+        ok(ret, "Tree parent DACL/protection differs from controlled setup.\n");
+        free(queried); queried = NULL;
+        if (!ret) goto cleanup_tree;
+        wcscpy(root, container);
+        wcscat(root, L"\\Root");
+        for (i = 0; i < ARRAY_SIZE(handles); ++i)
+        {
+            wcscpy(paths[i], root);
+            if (i) { wcscat(paths[i], L"\\"); wcscat(paths[i], names[i]); }
+            if (registry)
+            {
+                key = NULL;
+                disposition = 0;
+                result = RegCreateKeyExW(i ? (HKEY)handles[0] : HKEY_CURRENT_USER, i ? names[i] : root,
+                                         0, NULL, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, &attributes, &key, &disposition);
+                ok(!result && disposition == REG_CREATED_NEW_KEY, "Tree key %lu creation returned %lu, disposition %lu.\n",
+                   i, result, disposition);
+                if (result) goto cleanup_tree;
+                handles[i] = key;
+                if (disposition != REG_CREATED_NEW_KEY) goto cleanup_tree;
+                created[i] = TRUE;
+                wcscpy(callback_paths[i], L"CURRENT_USER\\");
+                wcscat(callback_paths[i], paths[i]);
+            }
+            else
+            {
+                if (directories[i])
+                {
+                    ret = CreateDirectoryW(paths[i], &attributes);
+                    ok(ret, "Tree directory %lu creation failed: %lu.\n", i, GetLastError());
+                    if (!ret) goto cleanup_tree;
+                    created[i] = TRUE;
+                }
+                handles[i] = CreateFileW(paths[i], READ_CONTROL | WRITE_DAC | DELETE | FILE_READ_DATA | FILE_WRITE_DATA,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &attributes,
+                                         directories[i] ? OPEN_EXISTING : CREATE_NEW,
+                                         directories[i] ? FILE_FLAG_BACKUP_SEMANTICS : 0, NULL);
+                ok(handles[i] != INVALID_HANDLE_VALUE, "Tree file handle %lu failed: %lu.\n", i, GetLastError());
+                if (handles[i] == INVALID_HANDLE_VALUE) goto cleanup_tree;
+                created[i] = TRUE;
+                wcscpy(callback_paths[i], paths[i]);
+            }
+            before[i] = acl_tree_query(registry, handles[i]);
+            if (!before[i]) goto cleanup_tree;
+        }
+        wcscpy(named, callback_paths[0]);
+        ret = WideCharToMultiByte(CP_ACP, 0, named, -1, named_a, sizeof(named_a), NULL, NULL) &&
+              MultiByteToWideChar(CP_ACP, 0, named_a, -1, roundtrip, ARRAY_SIZE(roundtrip)) && !lstrcmpW(named, roundtrip);
+        ok(ret, "Tree ANSI root does not round trip.\n");
+        if (!ret) goto cleanup_tree;
+        for (phase_index = 0; phase_index < (registry ? 5 : 8); ++phase_index)
+        {
+        phase = !registry && phase_index == 5 ? 6 : !registry && phase_index == 6 ? 7 :
+                !registry && phase_index == 7 ? 5 : phase_index;
+        for (variant = 0; variant < (registry ? (phase ? 1 : 5) :
+                                    phase == 7 ? 9 : phase == 6 ? 6 : phase == 5 ? ARRAY_SIZE(root_rights) : phase >= 3 ? 2 : 5); ++variant)
+            for (form = phase ? 1 : 0; form < 2; ++form)
+            {
+                winetest_push_context("phase %lu variant %lu form %lu", phase, variant, form);
+                expected = NULL;
+                for (j = 0; j < ARRAY_SIZE(acl_tree_row_results); ++j)
+                    if (acl_tree_row_results[j].registry == registry && acl_tree_row_results[j].phase == phase &&
+                        acl_tree_row_results[j].variant == variant && acl_tree_row_results[j].form == form)
+                    {
+                        expected = &acl_tree_row_results[j];
+                        break;
+                    }
+                ok(!!expected, "Tree operation has no native expectation.\n");
+                if (!expected) { winetest_pop_context(); goto cleanup_tree; }
+                if (!registry && phase == 5 && !clean_success)
+                {
+                    ok(FALSE, "Tree root-right matrix requires a complete successful clean SET control.\n");
+                    winetest_pop_context();
+                    goto cleanup_tree;
+                }
+                action_variant = registry && phase ? (phase >= 3 ? 0 : 1) : !registry && phase >= 5 ? 0 : variant;
+                invocation = registry && phase ? (phase == 1 ? ACL_TREE_PRE_POST_ERROR : ProgressInvokeEveryObject) :
+                                                  settings[action_variant][form];
+                if (!registry && phase >= 2 && phase != 6)
+                {
+                    result = acl_tree_set_raw(FALSE, container_handle, descriptors[0]);
+                    ok(!result, "Tree narrow parent DACL restoration returned %lu.\n", result);
+                    if (result) { winetest_pop_context(); goto cleanup_tree; }
+                    for (i = 0; i < ARRAY_SIZE(handles); ++i)
+                    {
+                        result = acl_tree_set_raw(FALSE, handles[i], descriptors[0]);
+                        ok(!result, "Tree narrow node %lu DACL restoration returned %lu.\n", i, result);
+                        if (result) { winetest_pop_context(); goto cleanup_tree; }
+                    }
+                    ret = acl_tree_replace_handles(paths, directories, container, handles, &container_handle, TRUE);
+                    if (!ret) { winetest_pop_context(); goto cleanup_tree; }
+                }
+                for (i = 0; i < ARRAY_SIZE(handles); ++i)
+                {
+                    source_index = baseline[i];
+                    if (registry && phase == 3 && (i == 1 || i == 2)) source_index = 3 - i;
+                    if (registry && phase == 4 && i == 3) source_index = 0;
+                    if (!registry && phase >= 2)
+                    {
+                        if (i == 2 && phase != 3) source_index = 1;
+                        if (i == 3 && phase != 4) source_index = 0;
+                    }
+                    result = acl_tree_set_raw(registry, handles[i], descriptors[source_index]);
+                    ok(!result, "Tree node %lu reset returned %lu.\n", i, result);
+                    if (result) { winetest_pop_context(); goto cleanup_tree; }
+                    queried = acl_tree_query(registry, handles[i]);
+                    if (!queried) { winetest_pop_context(); goto cleanup_tree; }
+                    ret = GetSecurityDescriptorControl(queried, &control, &revision) &&
+                          GetSecurityDescriptorDacl(queried, &present, &actual, &defaulted) && present && actual &&
+                          GetSecurityDescriptorDacl(descriptors[source_index], &present, &dacl, &defaulted);
+                    ret = ret && !!(control & SE_DACL_PROTECTED) == (i == 0 || i == 3 || i == 5) &&
+                          actual->AclSize == dacl->AclSize && !memcmp(actual, dacl, dacl->AclSize);
+                    ok(ret, "Tree node %lu reset did not retain its exact DACL/protection.\n", i);
+                    free(queried); queried = NULL;
+                    if (!ret) { winetest_pop_context(); goto cleanup_tree; }
+                    result = acl_tree_open(registry, paths[i], directories[i], registry ? KEY_SET_VALUE : FILE_WRITE_DATA, TRUE);
+                    ok(result == (source_index == 2 ? ERROR_ACCESS_DENIED : ERROR_SUCCESS),
+                       "Tree node %lu initial write control returned %lu.\n", i, result);
+                    if (result != (source_index == 2 ? ERROR_ACCESS_DENIED : ERROR_SUCCESS))
+                    { winetest_pop_context(); goto cleanup_tree; }
+                }
+                result = acl_tree_open(registry, paths[3], TRUE, WRITE_DAC, FALSE);
+                ok(result == ((registry ? phase != 4 : phase < 2 || phase == 4) ? ERROR_ACCESS_DENIED : ERROR_SUCCESS),
+                   "Tree protected branch WRITE_DAC control returned %lu.\n", result);
+                if (result != ((registry ? phase != 4 : phase < 2 || phase == 4) ? ERROR_ACCESS_DENIED : ERROR_SUCCESS))
+                { winetest_pop_context(); goto cleanup_tree; }
+                result = acl_tree_open(registry, paths[1], FALSE, WRITE_DAC, FALSE);
+                ok(!result, "Tree accessible sibling WRITE_DAC returned %lu.\n", result);
+                if (result) { winetest_pop_context(); goto cleanup_tree; }
+                if (!registry && phase == 6)
+                {
+                    if (!context_tokens[variant % 3]) context_tokens[variant % 3] = acl_tree_context_token(source, variant % 3);
+                    if (!context_tokens[variant % 3]) { winetest_pop_context(); goto cleanup_tree; }
+                    ret = acl_tree_replace_handles(paths, directories, container, handles, &container_handle, variant >= 3);
+                    if (!ret) { winetest_pop_context(); goto cleanup_tree; }
+                    ret = SetThreadToken(NULL, context_tokens[variant % 3]);
+                    ok(ret, "Tree context token activation failed: %lu.\n", GetLastError());
+                    if (!ret) { winetest_pop_context(); goto cleanup_tree; }
+                    acl_tree_file_controls(paths[0], container, 0);
+                }
+                if (!registry && phase == 5)
+                {
+                    if (root_rights[variant] & (READ_CONTROL | WRITE_DAC))
+                        snprintf(target_sddl, sizeof(target_sddl), "D:(D;;0x%lx;;;OW)(D;;0x%lx;;;WD)(A;OICI;FR;;;WD)(A;OICI;FA;;;WD)",
+                                 root_rights[variant], root_rights[variant]);
+                    else
+                        snprintf(target_sddl, sizeof(target_sddl), "D:(D;;0x%lx;;;WD)(A;OICI;FR;;;WD)(A;OICI;FA;;;WD)",
+                                 root_rights[variant]);
+                    ret = ConvertStringSecurityDescriptorToSecurityDescriptorA(target_sddl, SDDL_REVISION_1, &target, NULL);
+                    ok(ret, "Tree root-right target creation failed: %lu.\n", GetLastError());
+                    if (!ret) { winetest_pop_context(); goto cleanup_tree; }
+                }
+                ret = GetSecurityDescriptorDacl(target ? target : descriptors[registry || !phase ? 4 : phase == 1 ? 5 : 6],
+                                                &present, &dacl, &defaulted);
+                ok(ret && present && dacl, "Tree target DACL missing.\n");
+                if (!ret || !present || !dacl) { winetest_pop_context(); goto cleanup_tree; }
+                if (!registry && phase == 7)
+                {
+                    sharing_handle = CreateFileW(variant / 3 == 2 ? container : paths[variant / 3 == 1 ? 2 : 0],
+                                                  sharing_rights[variant % 3],
+                                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                                  NULL, OPEN_EXISTING, variant / 3 == 1 ? 0 : FILE_FLAG_BACKUP_SEMANTICS, NULL);
+                    ok(sharing_handle != INVALID_HANDLE_VALUE, "Tree sharing-control handle failed: %lu.\n", GetLastError());
+                    if (sharing_handle == INVALID_HANDLE_VALUE) { winetest_pop_context(); goto cleanup_tree; }
+                }
+                memset(&progress, 0, sizeof(progress));
+                progress.paths = callback_paths;
+                progress.stop_notifications = action_variant == 2 && form == 1;
+                progress.action = registry && phase < 3 ? phase : 0;
+                progress.repair_handle = handles[3];
+                progress.repair_descriptor = descriptors[0];
+                acl_tree_active_progress = &progress;
+                if (action_variant < 3)
+                    result = form ? set_w(named, registry ? SE_REGISTRY_KEY : SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                           NULL, NULL, dacl, NULL, actions[action_variant], acl_tree_progress, invocation, &progress) :
+                                    set_a(named_a, registry ? SE_REGISTRY_KEY : SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                           NULL, NULL, dacl, NULL, actions[action_variant], acl_tree_progress, invocation, &progress);
+                else
+                    result = form ? reset_w(named, registry ? SE_REGISTRY_KEY : SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                             NULL, NULL, dacl, NULL, action_variant == 4, acl_tree_progress, invocation, &progress) :
+                                    reset_a(named_a, registry ? SE_REGISTRY_KEY : SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                             NULL, NULL, dacl, NULL, action_variant == 4, acl_tree_progress, invocation, &progress);
+                acl_tree_active_progress = NULL;
+                ++operations;
+                if (sharing_handle != INVALID_HANDLE_VALUE)
+                {
+                    ret = CloseHandle(sharing_handle);
+                    ok(ret, "Tree sharing-control handle close failed: %lu.\n", GetLastError());
+                    if (!ret) { winetest_pop_context(); goto cleanup_tree; }
+                    sharing_handle = INVALID_HANDLE_VALUE;
+                    ++sharing_rows;
+                }
+                if (invocation == ProgressInvokeNever)
+                    ok(!progress.count, "Tree Never setting invoked %u callbacks.\n", progress.count);
+                ok(result == expected->status, "Tree operation status %lu, expected %lu.\n", result, expected->status);
+                acl_tree_check_progress(&progress, expected, invocation);
+                if (progress.action)
+                {
+                    ok(progress.action_count == 1, "Tree callback action %u occurred %u times.\n", progress.action, progress.action_count);
+                    callback_actions += progress.action_count == 1;
+                    if (progress.action == 2)
+                        ok(!progress.repair_status, "Tree callback repair status %lu.\n", progress.repair_status);
+                }
+                snapshot_start = snapshots;
+                for (i = 0; i < ARRAY_SIZE(handles); ++i)
+                {
+                    expected_index = expected->nodes[i];
+                    if (expected->callback_mode == ACL_TREE_CALLBACK_CANCEL && i)
+                        expected_index = progress.count == 1 && progress.records[0].node == i &&
+                                         progress.records[0].security_set && !progress.records[0].status ?
+                                         acl_tree_registry_reset[i] : acl_tree_registry_baseline[i];
+                    expected_node = &acl_tree_node_results[expected_index];
+                    snapshots += acl_tree_snapshot(registry, handles[i], paths[i], directories[i], before[i], i, expected_node);
+                }
+                if (!registry && phase == 6)
+                {
+                    acl_tree_file_controls(paths[0], container, 1);
+                    ++context_rows;
+                    ret = SetThreadToken(NULL, token);
+                    ok(ret, "Tree base token restoration failed: %lu.\n", GetLastError());
+                    if (!ret) { winetest_pop_context(); goto cleanup_tree; }
+                    result = acl_tree_set_raw(FALSE, container_handle, descriptors[0]);
+                    ok(!result, "Tree context parent DACL restoration returned %lu.\n", result);
+                    if (result) { winetest_pop_context(); goto cleanup_tree; }
+                    for (i = 0; i < ARRAY_SIZE(handles); ++i)
+                    {
+                        result = acl_tree_set_raw(FALSE, handles[i], descriptors[i == 0 || i == 3 || i == 5 ? 0 : 1]);
+                        ok(!result, "Tree context node %lu DACL restoration returned %lu.\n", i, result);
+                        if (result) { winetest_pop_context(); goto cleanup_tree; }
+                    }
+                    ret = acl_tree_replace_handles(paths, directories, container, handles, &container_handle, TRUE);
+                    if (!ret) { winetest_pop_context(); goto cleanup_tree; }
+                }
+                if (!registry && phase == 2 && !variant)
+                {
+                    clean_success = !result && snapshots - snapshot_start == ARRAY_SIZE(handles);
+                    ok(clean_success, "Tree clean SET control returned %lu with %lu snapshots.\n", result, snapshots - snapshot_start);
+                }
+                if (!registry && phase == 5)
+                {
+                    result = acl_tree_open(FALSE, paths[0], TRUE, root_rights[variant], FALSE);
+                    ok(result == (root_rights[variant] == FILE_READ_ATTRIBUTES || root_rights[variant] == DELETE ?
+                                  ERROR_SUCCESS : ERROR_ACCESS_DENIED),
+                       "Tree root requested-right %#lx open returned %lu.\n", root_rights[variant], result);
+                }
+                if (target) { LocalFree(target); target = NULL; }
+                winetest_pop_context();
+            }
+        }
+cleanup_tree:
+        if (sharing_handle != INVALID_HANDLE_VALUE)
+        {
+            ok(CloseHandle(sharing_handle), "Tree sharing-control cleanup close failed: %lu.\n", GetLastError());
+            sharing_handle = INVALID_HANDLE_VALUE;
+        }
+        ret = SetThreadToken(NULL, token);
+        ok(ret, "Tree cleanup base token restoration failed: %lu.\n", GetLastError());
+        if (container_created && container_handle != INVALID_HANDLE_VALUE)
+        {
+            result = acl_tree_set_raw(registry, container_handle, descriptors[0]);
+            ok(!result, "Tree parent cleanup DACL restore returned %lu.\n", result);
+        }
+        for (i = 0; i < ARRAY_SIZE(handles); ++i)
+            if (created[i] && handles[i] != INVALID_HANDLE_VALUE && descriptors[0])
+            {
+                result = acl_tree_set_raw(registry, handles[i], descriptors[0]);
+                ok(!result, "Tree cleanup DACL %lu restore returned %lu.\n", i, result);
+            }
+        for (i = ARRAY_SIZE(handles); i-- > 0;)
+        {
+            if (handles[i] != INVALID_HANDLE_VALUE)
+            {
+                if (registry) RegCloseKey((HKEY)handles[i]);
+                else CloseHandle(handles[i]);
+                handles[i] = INVALID_HANDLE_VALUE;
+            }
+            if (created[i])
+            {
+                if (registry) result = RegDeleteKeyW(HKEY_CURRENT_USER, paths[i]);
+                else result = (directories[i] ? RemoveDirectoryW(paths[i]) : DeleteFileW(paths[i])) ? ERROR_SUCCESS : GetLastError();
+                ok(!result, "Tree node %lu cleanup returned %lu.\n", i, result);
+            }
+            free(before[i]); before[i] = NULL;
+        }
+        if (container_handle != INVALID_HANDLE_VALUE)
+        {
+            if (registry) RegCloseKey((HKEY)container_handle);
+            else CloseHandle(container_handle);
+        }
+        if (container_created)
+        {
+            if (registry) result = RegDeleteKeyW(HKEY_CURRENT_USER, container);
+            else result = RemoveDirectoryW(container) ? ERROR_SUCCESS : GetLastError();
+            ok(!result, "Tree parent cleanup returned %lu.\n", result);
+        }
+        if (reserved) ok(DeleteFileW(container), "Tree reservation cleanup failed: %lu.\n", GetLastError());
+        for (i = 0; i < ARRAY_SIZE(descriptors); ++i)
+        {
+            if (descriptors[i]) LocalFree(descriptors[i]);
+            descriptors[i] = NULL;
+        }
+        free(queried); queried = NULL;
+        if (target) { LocalFree(target); target = NULL; }
+        winetest_pop_context();
+    }
+done:
+    for (i = 0; i < ARRAY_SIZE(context_tokens); ++i) if (context_tokens[i]) CloseHandle(context_tokens[i]);
+    ok(operations == 67 && snapshots == 402 && callback_actions == 2 && context_rows == 6 && sharing_rows == 9,
+       "ACL tree matrix completed %lu/67 operations, %lu/402 snapshots, %lu/2 callback actions, %lu/6 context rows and %lu/9 sharing rows.\n",
+       operations, snapshots, callback_actions, context_rows, sharing_rows);
+    trace("ACL tree matrix completed %lu/67 operations, %lu/402 snapshots, %lu/2 callback actions, %lu/6 context rows and %lu/9 sharing rows.\n",
+          operations, snapshots, callback_actions, context_rows, sharing_rows);
+    winetest_debug = saved_debug;
+    winetest_pop_context();
+}
+
+static void test_registry_security_matrix(void)
+{
+    HANDLE previous = NULL, source = NULL, tokens[3] = {0};
+    DWORD error;
+    UINT i;
+    LUID security;
+    BOOL ret, impersonating = FALSE;
+    ret = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_IMPERSONATE, TRUE, &previous);
+    error = GetLastError();
+    ok(ret || error == ERROR_NO_TOKEN, "Matrix saved thread token returned %d, error %lu.\n", ret, error);
+    if (!ret && error != ERROR_NO_TOKEN) goto done;
+    ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &source);
+    ok(ret, "Matrix source token open failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    ret = LookupPrivilegeValueA(NULL, SE_SECURITY_NAME, &security);
+    ok(ret, "Matrix security privilege lookup failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    for (i = 0; i < ARRAY_SIZE(tokens); ++i)
+    {
+        tokens[i] = registry_matrix_token(source, &security, i);
+        if (!tokens[i]) goto done;
+    }
+    ret = SetThreadToken(NULL, tokens[0]);
+    ok(ret, "DACL matrix impersonation failed: %lu.\n", GetLastError());
+    if (!ret) goto done;
+    impersonating = TRUE;
+    test_registry_dacl_rights_matrix();
+    test_registry_sacl_privilege_matrix(tokens);
+    test_registry_create_privilege_matrix(tokens);
+    test_file_sacl_privilege_matrix(tokens);
+    test_acl_tree_operations(tokens[0], source);
+done:
+    if (impersonating)
+    {
+        ret = SetThreadToken(NULL, previous);
+        ok(ret, "Matrix original thread token restoration failed: %lu.\n", GetLastError());
+    }
+    for (i = 0; i < ARRAY_SIZE(tokens); ++i) if (tokens[i]) CloseHandle(tokens[i]);
+    if (source) CloseHandle(source);
+    if (previous) CloseHandle(previous);
+}
+
+#endif
 START_TEST(security)
 {
     init();
@@ -8761,6 +17332,9 @@ START_TEST(security)
     }
     test_kernel_objects_security();
     test_ConvertStringSidToSid();
+#ifdef __REACTOS__
+    test_sddl_domain_aliases();
+#endif
     test_trustee();
     test_allocateLuid();
     test_lookupPrivilegeName();
@@ -8777,8 +17351,23 @@ START_TEST(security)
     test_impersonation_level();
     test_SetEntriesInAclW();
     test_SetEntriesInAclA();
+#ifdef __REACTOS__
+    test_acl_constructor_output();
+    test_acl_rights_queries();
+    test_acl_object_rights_queries();
+    test_acl_group_membership_queries();
+    test_acl_file_propagation();
+#endif
     test_CreateDirectoryA();
     test_GetNamedSecurityInfoA();
+#ifdef __REACTOS__
+    test_registry_security_persistence(FALSE, 0);
+    test_registry_security_persistence(TRUE, 0);
+    test_registry_security_persistence(FALSE, KEY_WOW64_32KEY);
+    test_registry_security_persistence(TRUE, KEY_WOW64_32KEY);
+    test_registry_acl_propagation();
+    test_registry_security_matrix();
+#endif
     test_ConvertStringSecurityDescriptor();
     test_ConvertSecurityDescriptorToString();
     test_PrivateObjectSecurity();

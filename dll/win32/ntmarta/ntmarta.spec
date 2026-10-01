@@ -7,7 +7,7 @@
 @ stdcall AccRewriteSetEntriesInAcl(long ptr ptr ptr)
 @ stdcall AccRewriteSetHandleRights(ptr long long ptr)
 @ stdcall AccRewriteSetNamedRights(wstr long long ptr)
-@ stdcall AccTreeResetNamedSecurityInfo(wstr long long ptr ptr ptr ptr long ptr ptr ptr)
+@ stdcall AccTreeResetNamedSecurityInfo(wstr long long ptr ptr ptr ptr long ptr long ptr)
 ;AccConvertAccessMaskToActrlAccess
 ;AccConvertAccessToSD
 ;AccConvertAccessToSecurityDescriptor
@@ -40,3 +40,4 @@
 ;AccSetEntriesInAList
 ;EventGuidToName
 ;EventNameFree
+@ stdcall TreeSetNamedSecurityInfoW(wstr long long ptr ptr ptr ptr long ptr long ptr)

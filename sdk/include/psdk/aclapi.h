@@ -190,6 +190,67 @@ SetEntriesInAclW(
 DWORD WINAPI SetNamedSecurityInfoA(_In_ LPSTR, _In_ SE_OBJECT_TYPE, _In_ SECURITY_INFORMATION, _In_opt_ PSID, _In_opt_ PSID, _In_opt_ PACL, _In_opt_ PACL);
 DWORD WINAPI SetNamedSecurityInfoW(_In_ LPWSTR, _In_ SE_OBJECT_TYPE, _In_ SECURITY_INFORMATION, _In_opt_ PSID, _In_opt_ PSID, _In_opt_ PACL, _In_opt_ PACL);
 DWORD WINAPI SetSecurityInfo(_In_ HANDLE, _In_ SE_OBJECT_TYPE, _In_ SECURITY_INFORMATION, _In_opt_ PSID, _In_opt_ PSID, _In_opt_ PACL, _In_opt_ PACL);
+
+DWORD
+WINAPI
+TreeResetNamedSecurityInfoA(
+  _In_ LPSTR pObjectName,
+  _In_ SE_OBJECT_TYPE ObjectType,
+  _In_ SECURITY_INFORMATION SecurityInfo,
+  _In_opt_ PSID pOwner,
+  _In_opt_ PSID pGroup,
+  _In_opt_ PACL pDacl,
+  _In_opt_ PACL pSacl,
+  _In_ BOOL KeepExplicit,
+  _In_opt_ FN_PROGRESS fnProgress,
+  _In_ PROG_INVOKE_SETTING ProgressInvokeSetting,
+  _In_opt_ PVOID Args);
+
+DWORD
+WINAPI
+TreeResetNamedSecurityInfoW(
+  _In_ LPWSTR pObjectName,
+  _In_ SE_OBJECT_TYPE ObjectType,
+  _In_ SECURITY_INFORMATION SecurityInfo,
+  _In_opt_ PSID pOwner,
+  _In_opt_ PSID pGroup,
+  _In_opt_ PACL pDacl,
+  _In_opt_ PACL pSacl,
+  _In_ BOOL KeepExplicit,
+  _In_opt_ FN_PROGRESS fnProgress,
+  _In_ PROG_INVOKE_SETTING ProgressInvokeSetting,
+  _In_opt_ PVOID Args);
+
+DWORD
+WINAPI
+TreeSetNamedSecurityInfoA(
+  _In_ LPSTR pObjectName,
+  _In_ SE_OBJECT_TYPE ObjectType,
+  _In_ SECURITY_INFORMATION SecurityInfo,
+  _In_opt_ PSID pOwner,
+  _In_opt_ PSID pGroup,
+  _In_opt_ PACL pDacl,
+  _In_opt_ PACL pSacl,
+  _In_ DWORD dwAction,
+  _In_opt_ FN_PROGRESS fnProgress,
+  _In_ PROG_INVOKE_SETTING ProgressInvokeSetting,
+  _In_opt_ PVOID Args);
+
+DWORD
+WINAPI
+TreeSetNamedSecurityInfoW(
+  _In_ LPWSTR pObjectName,
+  _In_ SE_OBJECT_TYPE ObjectType,
+  _In_ SECURITY_INFORMATION SecurityInfo,
+  _In_opt_ PSID pOwner,
+  _In_opt_ PSID pGroup,
+  _In_opt_ PACL pDacl,
+  _In_opt_ PACL pSacl,
+  _In_ DWORD dwAction,
+  _In_opt_ FN_PROGRESS fnProgress,
+  _In_ PROG_INVOKE_SETTING ProgressInvokeSetting,
+  _In_opt_ PVOID Args);
+
 VOID WINAPI BuildImpersonateExplicitAccessWithNameA(_Inout_ PEXPLICIT_ACCESS_A, _In_opt_ LPSTR, _In_opt_ PTRUSTEE_A, _In_ DWORD, _In_ ACCESS_MODE, _In_ DWORD);
 VOID WINAPI BuildImpersonateExplicitAccessWithNameW(_Inout_ PEXPLICIT_ACCESS_W, _In_opt_ LPWSTR, _In_opt_ PTRUSTEE_W, _In_ DWORD, _In_ ACCESS_MODE, _In_ DWORD);
 VOID WINAPI BuildImpersonateTrusteeA(_Inout_ PTRUSTEE_A, _In_opt_ PTRUSTEE_A);
@@ -217,6 +278,8 @@ MULTIPLE_TRUSTEE_OPERATION WINAPI GetMultipleTrusteeOperationW(_In_opt_ PTRUSTEE
 #define LookupSecurityDescriptorParts  LookupSecurityDescriptorPartsW
 #define SetEntriesInAcl  SetEntriesInAclW
 #define SetNamedSecurityInfo  SetNamedSecurityInfoW
+#define TreeResetNamedSecurityInfo TreeResetNamedSecurityInfoW
+#define TreeSetNamedSecurityInfo TreeSetNamedSecurityInfoW
 #define BuildImpersonateExplicitAccessWithName  BuildImpersonateExplicitAccessWithNameW
 #define BuildImpersonateTrustee  BuildImpersonateTrusteeW
 #define GetMultipleTrustee  GetMultipleTrusteeW
@@ -239,6 +302,8 @@ MULTIPLE_TRUSTEE_OPERATION WINAPI GetMultipleTrusteeOperationW(_In_opt_ PTRUSTEE
 #define LookupSecurityDescriptorParts  LookupSecurityDescriptorPartsA
 #define SetEntriesInAcl  SetEntriesInAclA
 #define SetNamedSecurityInfo  SetNamedSecurityInfoA
+#define TreeResetNamedSecurityInfo TreeResetNamedSecurityInfoA
+#define TreeSetNamedSecurityInfo TreeSetNamedSecurityInfoA
 #define BuildImpersonateExplicitAccessWithName  BuildImpersonateExplicitAccessWithNameA
 #define BuildImpersonateTrustee  BuildImpersonateTrusteeA
 #define GetMultipleTrustee  GetMultipleTrusteeA

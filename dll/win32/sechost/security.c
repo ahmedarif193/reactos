@@ -26,6 +26,10 @@
 #include "winbase.h"
 #include "sddl.h"
 #include "iads.h"
+#ifdef __REACTOS__
+#include "winternl.h"
+#include "ntsecapi.h"
+#endif
 
 #include "wine/debug.h"
 
@@ -593,6 +597,78 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertSecurityDescriptorToStringSecurityDescripto
     return TRUE;
 }
 
+#ifdef __REACTOS__
+struct sddl_domain_context
+{
+    struct max_sid sid[2];
+    BOOL valid[2];
+};
+
+static SID *get_domain_sid( struct sddl_domain_context *context, WELL_KNOWN_SID_TYPE type )
+{
+    NTSTATUS (NTAPI *open_policy)(PLSA_UNICODE_STRING, PLSA_OBJECT_ATTRIBUTES, ACCESS_MASK, PLSA_HANDLE);
+    NTSTATUS (NTAPI *query_policy)(LSA_HANDLE, POLICY_INFORMATION_CLASS, PVOID *);
+    NTSTATUS (NTAPI *free_memory)(PVOID);
+    NTSTATUS (NTAPI *close_policy)(LSA_HANDLE);
+    BOOL local = type == WinAccountAdministratorSid || type == WinAccountGuestSid;
+    unsigned int index = local ? 0 : 1;
+    LSA_OBJECT_ATTRIBUTES attributes = {0};
+    LSA_HANDLE policy = NULL;
+    HMODULE module;
+    void *information = NULL;
+    PSID sid;
+    NTSTATUS status;
+    DWORD error = ERROR_INVALID_SID;
+
+    if (context->valid[index]) return (SID *)&context->sid[index];
+
+    module = LoadLibraryExW( L"advapi32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32 );
+    if (!module) return NULL;
+
+    open_policy = (void *)GetProcAddress( module, "LsaOpenPolicy" );
+    query_policy = (void *)GetProcAddress( module, "LsaQueryInformationPolicy" );
+    free_memory = (void *)GetProcAddress( module, "LsaFreeMemory" );
+    close_policy = (void *)GetProcAddress( module, "LsaClose" );
+    if (!open_policy || !query_policy || !free_memory || !close_policy)
+    {
+        error = ERROR_PROC_NOT_FOUND;
+        goto done;
+    }
+
+    attributes.Length = sizeof(attributes);
+    status = open_policy( NULL, &attributes, POLICY_VIEW_LOCAL_INFORMATION, &policy );
+    if (status)
+    {
+        error = RtlNtStatusToDosError( status );
+        goto done;
+    }
+
+    status = query_policy( policy, local ? PolicyAccountDomainInformation : PolicyDnsDomainInformation,
+                           &information );
+    if (status)
+    {
+        error = RtlNtStatusToDosError( status );
+        goto done;
+    }
+
+    if (!information) goto done;
+    sid = local ? ((POLICY_ACCOUNT_DOMAIN_INFO *)information)->DomainSid :
+                  ((POLICY_DNS_DOMAIN_INFO *)information)->Sid;
+    if (!sid || !IsValidSid( sid ) || *GetSidSubAuthorityCount( sid ) >= SID_MAX_SUB_AUTHORITIES)
+        goto done;
+
+    memcpy( &context->sid[index], sid, GetLengthSid( sid ) );
+    context->valid[index] = TRUE;
+    error = ERROR_SUCCESS;
+
+done:
+    if (information) free_memory( information );
+    if (policy) close_policy( policy );
+    FreeLibrary( module );
+    SetLastError( error );
+    return error ? NULL : (SID *)&context->sid[index];
+}
+#else
 static BOOL get_computer_sid( PSID sid )
 {
     static const struct /* same fields as struct SID */
@@ -607,6 +683,7 @@ static BOOL get_computer_sid( PSID sid )
     memcpy( sid, &computer_sid, sizeof(computer_sid) );
     return TRUE;
 }
+#endif
 
 static BOOL parse_token( const WCHAR *string, const WCHAR **end, DWORD *result )
 {
@@ -633,7 +710,11 @@ static BOOL parse_token( const WCHAR *string, const WCHAR **end, DWORD *result )
     return FALSE;
 }
 
+#ifdef __REACTOS__
+static DWORD get_sid_size( struct sddl_domain_context *context, const WCHAR *string, const WCHAR **end )
+#else
 static DWORD get_sid_size( const WCHAR *string, const WCHAR **end )
+#endif
 {
     if ((string[0] == 'S' || string[0] == 's') && string[1] == '-') /* S-R-I(-S)+ */
     {
@@ -668,9 +749,15 @@ static DWORD get_sid_size( const WCHAR *string, const WCHAR **end )
         {
             if (!wcsnicmp( well_known_rids[i].str, string, 2 ))
             {
+#ifdef __REACTOS__
+                SID *domain = get_domain_sid( context, well_known_rids[i].type );
+                if (!domain) return 0;
+                return GetSidLengthRequired( domain->SubAuthorityCount + 1 );
+#else
                 struct max_sid local;
                 get_computer_sid(&local);
                 return GetSidLengthRequired( *GetSidSubAuthorityCount(&local) + 1 );
+#endif
             }
         }
     }
@@ -678,12 +765,22 @@ static DWORD get_sid_size( const WCHAR *string, const WCHAR **end )
     return GetSidLengthRequired( 0 );
 }
 
+#ifdef __REACTOS__
+static BOOL parse_sid( struct sddl_domain_context *context, const WCHAR *string, const WCHAR **end,
+                       SID *pisid, DWORD *size )
+#else
 static BOOL parse_sid( const WCHAR *string, const WCHAR **end, SID *pisid, DWORD *size )
+#endif
 {
     while (*string == ' ')
         string++;
 
+#ifdef __REACTOS__
+    *size = get_sid_size( context, string, end );
+    if (!*size) return FALSE;
+#else
     *size = get_sid_size( string, end );
+#endif
     if (!pisid) /* Simply compute the size */
         return TRUE;
 
@@ -697,7 +794,11 @@ static BOOL parse_sid( const WCHAR *string, const WCHAR **end, SID *pisid, DWORD
         parse_token( string, &string, &token );
         pisid->Revision = token;
 
+#ifdef __REACTOS__
+        if (token && pisid->Revision != SDDL_REVISION)
+#else
         if (pisid->Revision != SDDL_REVISION)
+#endif
         {
             TRACE("Revision %d is unknown\n", pisid->Revision);
             SetLastError( ERROR_INVALID_SID );
@@ -761,7 +862,13 @@ static BOOL parse_sid( const WCHAR *string, const WCHAR **end, SID *pisid, DWORD
         {
             if (!wcsnicmp(well_known_rids[i].str, string, 2))
             {
+#ifdef __REACTOS__
+                SID *domain = get_domain_sid( context, well_known_rids[i].type );
+                if (!domain) return FALSE;
+                memcpy( pisid, domain, GetLengthSid( domain ) );
+#else
                 get_computer_sid(pisid);
+#endif
                 pisid->SubAuthority[pisid->SubAuthorityCount] = well_known_rids[i].rid;
                 pisid->SubAuthorityCount++;
                 return TRUE;
@@ -779,6 +886,11 @@ static BOOL parse_sid( const WCHAR *string, const WCHAR **end, SID *pisid, DWORD
  */
 BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSidToSidW( const WCHAR *string, PSID *sid )
 {
+#ifdef __REACTOS__
+    struct sddl_domain_context context = {0};
+    SID *parsed_sid;
+    DWORD error;
+#endif
     DWORD size;
     const WCHAR *string_end;
 
@@ -796,7 +908,11 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSidToSidW( const WCHAR *string, PSID 
         return FALSE;
     }
 
+#ifdef __REACTOS__
+    if (!parse_sid( &context, string, &string_end, NULL, &size ))
+#else
     if (!parse_sid( string, &string_end, NULL, &size ))
+#endif
         return FALSE;
 
     if (*string_end)
@@ -805,6 +921,24 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSidToSidW( const WCHAR *string, PSID 
         return FALSE;
     }
 
+#ifdef __REACTOS__
+    parsed_sid = LocalAlloc( 0, size );
+    if (!parsed_sid)
+    {
+        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+        return FALSE;
+    }
+
+    if (!parse_sid( &context, string, NULL, parsed_sid, &size ))
+    {
+        error = GetLastError();
+        LocalFree( parsed_sid );
+        SetLastError( error );
+        return FALSE;
+    }
+    *sid = parsed_sid;
+    SetLastError( ERROR_SUCCESS );
+#else
     *sid = LocalAlloc( 0, size );
 
     if (!parse_sid( string, NULL, *sid, &size ))
@@ -812,6 +946,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSidToSidW( const WCHAR *string, PSID 
         LocalFree( *sid );
         return FALSE;
     }
+#endif
     return TRUE;
 }
 
@@ -967,7 +1102,12 @@ static DWORD parse_ace_rights( const WCHAR **string_ptr )
     return rights;
 }
 
+#ifdef __REACTOS__
+static BOOL parse_acl( struct sddl_domain_context *context, const WCHAR *string, DWORD *flags,
+                       ACL *acl, DWORD *ret_size )
+#else
 static BOOL parse_acl( const WCHAR *string, DWORD *flags, ACL *acl, DWORD *ret_size )
+#endif
 {
     DWORD val;
     DWORD sidlen;
@@ -1037,8 +1177,18 @@ static BOOL parse_acl( const WCHAR *string, DWORD *flags, ACL *acl, DWORD *ret_s
         string++;
 
         /* Parse ACE account sid */
+#ifdef __REACTOS__
+        if (!parse_sid( context, string, &string, ace ? (SID *)&ace->SidStart : NULL, &sidlen ))
+            return FALSE;
+        if (ace && !IsValidSid( &ace->SidStart ))
+        {
+            SetLastError( ERROR_INVALID_SID );
+            return FALSE;
+        }
+#else
         if (!parse_sid( string, &string, ace ? (SID *)&ace->SidStart : NULL, &sidlen ))
             goto err;
+#endif
 
         while (*string == ' ')
             string++;
@@ -1084,7 +1234,12 @@ err:
     return FALSE;
 }
 
+#ifdef __REACTOS__
+static BOOL parse_sd( struct sddl_domain_context *context, const WCHAR *string,
+                      SECURITY_DESCRIPTOR_RELATIVE *sd, DWORD *size )
+#else
 static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWORD *size)
+#endif
 {
     BOOL ret = FALSE;
     WCHAR toktype;
@@ -1139,7 +1294,11 @@ static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWO
             {
                 DWORD bytes;
 
+#ifdef __REACTOS__
+                if (!parse_sid( context, tok, NULL, (SID *)next, &bytes ))
+#else
                 if (!parse_sid( tok, NULL, (SID *)next, &bytes ))
+#endif
                     goto out;
 
                 if (sd)
@@ -1157,7 +1316,11 @@ static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWO
             {
                 DWORD bytes;
 
+#ifdef __REACTOS__
+                if (!parse_sid( context, tok, NULL, (SID *)next, &bytes ))
+#else
                 if (!parse_sid( tok, NULL, (SID *)next, &bytes ))
+#endif
                     goto out;
 
                 if (sd)
@@ -1176,7 +1339,11 @@ static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWO
                 DWORD flags;
                 DWORD bytes;
 
+#ifdef __REACTOS__
+                if (!parse_acl( context, tok, &flags, (ACL *)next, &bytes ))
+#else
                 if (!parse_acl( tok, &flags, (ACL *)next, &bytes ))
+#endif
                     goto out;
 
                 if (sd)
@@ -1196,12 +1363,20 @@ static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWO
                 DWORD flags;
                 DWORD bytes;
 
+#ifdef __REACTOS__
+                if (!parse_acl( context, tok, &flags, (ACL *)next, &bytes ))
+#else
                 if (!parse_acl( tok, &flags, (ACL *)next, &bytes ))
+#endif
                     goto out;
 
                 if (sd)
                 {
+#ifdef __REACTOS__
+                    sd->Control |= SE_SACL_PRESENT | (flags << 1);
+#else
                     sd->Control |= SE_SACL_PRESENT | flags;
+#endif
                     sd->Sacl = next - (BYTE *)sd;
                     next += bytes; /* Advance to next token */
                 }
@@ -1233,6 +1408,10 @@ out:
 BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSecurityDescriptorToSecurityDescriptorW(
         const WCHAR *string, DWORD revision, PSECURITY_DESCRIPTOR *sd, ULONG *ret_size )
 {
+#ifdef __REACTOS__
+    struct sddl_domain_context context = {0};
+    DWORD error;
+#endif
     DWORD size;
     SECURITY_DESCRIPTOR *psd;
 
@@ -1253,12 +1432,23 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSecurityDescriptorToSecurityDescripto
         SetLastError(ERROR_UNKNOWN_REVISION);
         return FALSE;
     }
+#ifdef __REACTOS__
+    if (ret_size) *ret_size = 0;
+#endif
 
     /* Compute security descriptor length */
+#ifdef __REACTOS__
+    if (!parse_sd( &context, string, NULL, &size ))
+#else
     if (!parse_sd( string, NULL, &size ))
+#endif
         return FALSE;
 
+#ifdef __REACTOS__
+    psd = LocalAlloc( GMEM_ZEROINIT, size );
+#else
     psd = *sd = LocalAlloc( GMEM_ZEROINIT, size );
+#endif
     if (!psd)
     {
         SetLastError( ERROR_NOT_ENOUGH_MEMORY );
@@ -1268,11 +1458,23 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSecurityDescriptorToSecurityDescripto
     psd->Revision = SID_REVISION;
     psd->Control |= SE_SELF_RELATIVE;
 
+#ifdef __REACTOS__
+    if (!parse_sd( &context, string, (SECURITY_DESCRIPTOR_RELATIVE *)psd, &size ))
+    {
+        error = GetLastError();
+        LocalFree(psd);
+        SetLastError( error );
+        return FALSE;
+    }
+    *sd = psd;
+    SetLastError( ERROR_SUCCESS );
+#else
     if (!parse_sd( string, (SECURITY_DESCRIPTOR_RELATIVE *)psd, &size ))
     {
         LocalFree(psd);
         return FALSE;
     }
+#endif
 
     if (ret_size) *ret_size = size;
     return TRUE;

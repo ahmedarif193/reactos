@@ -3223,6 +3223,7 @@ BOOL WINAPI SaferCloseLevel(SAFER_LEVEL_HANDLE handle)
 /******************************************************************************
  * TreeSetNamedSecurityInfoW   [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 DWORD WINAPI TreeSetNamedSecurityInfoW(WCHAR *name, SE_OBJECT_TYPE type, SECURITY_INFORMATION info,
                                        SID *owner, SID *group, ACL *dacl, ACL *sacl, DWORD action,
                                        FN_PROGRESS progress, PROG_INVOKE_SETTING pis, void *args)
@@ -3232,6 +3233,7 @@ DWORD WINAPI TreeSetNamedSecurityInfoW(WCHAR *name, SE_OBJECT_TYPE type, SECURIT
 
     return ERROR_SUCCESS;
 }
+#endif
 
 /******************************************************************************
  * TreeResetNamedSecurityInfoW   [ADVAPI32.@]

@@ -206,7 +206,11 @@ static HKEY get_perflib_key( HANDLE key )
 
 static NTSTATUS open_key( HKEY *retkey, HKEY root, UNICODE_STRING *name, DWORD options, ACCESS_MASK access, BOOL create );
 
+#ifdef __REACTOS__
+static NTSTATUS open_subkey( HKEY *subkey, HKEY root, UNICODE_STRING *name, DWORD options, ACCESS_MASK access, BOOL create )
+#else
 static NTSTATUS open_subkey( HKEY *subkey, HKEY root, UNICODE_STRING *name, DWORD options, ACCESS_MASK access )
+#endif
 {
     BOOL is_wow64_key = (is_win64 && (access & KEY_WOW64_32KEY)) || (is_wow64 && !(access & KEY_WOW64_64KEY));
     ACCESS_MASK access_64 = (access & ~KEY_WOW64_32KEY) | KEY_WOW64_64KEY;
@@ -225,6 +229,15 @@ static NTSTATUS open_subkey( HKEY *subkey, HKEY root, UNICODE_STRING *name, DWOR
     if (i < len)
         options &= ~REG_OPTION_OPEN_LINK;
 
+#ifdef __REACTOS__
+    if (create)
+    {
+        DWORD next = i;
+
+        while (next < len && buffer[next] == '\\') next++;
+        if (next < len) access_64 = KEY_CREATE_SUB_KEY | (access_64 & KEY_WOW64_RES);
+    }
+#endif
     status = open_key( subkey, root, &str, options, access_64, FALSE );
     if (status == STATUS_OBJECT_NAME_NOT_FOUND && root && is_wow64_key)
     {
@@ -297,7 +310,11 @@ static NTSTATUS open_wow6432node_parent( HKEY *retkey, HKEY root, DWORD options,
     /* Obtain the parent Wow6432Node if it exists */
     while (!status && name.Length)
     {
+#ifdef __REACTOS__
+        status = open_subkey( retkey, root, &name, options & ~REG_OPTION_OPEN_LINK, access, FALSE );
+#else
         status = open_subkey( retkey, root, &name, options & ~REG_OPTION_OPEN_LINK, access );
+#endif
         if (root) NtClose( root );
         root = *retkey;
     }
@@ -347,7 +364,11 @@ static NTSTATUS open_key( HKEY *retkey, HKEY root, UNICODE_STRING *name, DWORD o
     while (!status && (name->Length || !subkey))
     {
         was_wow6432node = is_wow6432node( name );
+#ifdef __REACTOS__
+        status = open_subkey( &subkey, subkey_root, name, options, access, create );
+#else
         status = open_subkey( &subkey, subkey_root, name, options, access );
+#endif
         if (subkey && subkey_root && subkey_root != root) NtClose( subkey_root );
         if (subkey) subkey_root = subkey;
     }
@@ -390,6 +411,9 @@ static NTSTATUS create_subkey( HKEY *subkey, HKEY root, UNICODE_STRING *name, DW
 
     next = i;
     while (next < len && buffer[next] == '\\') next++;
+#ifdef __REACTOS__
+    if (next < len) access_64 = KEY_CREATE_SUB_KEY | (access_64 & KEY_WOW64_RES);
+#endif
     status = create_key( subkey, root, str, options, access_64, class,
                          next == len ? sa : NULL, dispos );
     if (!status)
@@ -2783,6 +2807,7 @@ LSTATUS WINAPI RegUnLoadKeyA( HKEY hkey, LPCSTR lpSubKey )
 }
 
 
+#ifndef __REACTOS__
 static NTSTATUS validate_key_security_handle( HKEY hkey )
 {
     static const UNICODE_STRING key_type = RTL_CONSTANT_STRING(L"Key");
@@ -2803,6 +2828,7 @@ static NTSTATUS validate_key_security_handle( HKEY hkey )
 }
 
 
+#endif
 /******************************************************************************
  * RegSetKeySecurity (kernelbase.@)
  *
@@ -2820,8 +2846,10 @@ static NTSTATUS validate_key_security_handle( HKEY hkey )
 LSTATUS WINAPI RegSetKeySecurity( HKEY hkey, SECURITY_INFORMATION SecurityInfo,
                                   PSECURITY_DESCRIPTOR pSecurityDesc )
 {
+#ifndef __REACTOS__
     NTSTATUS status;
 
+#endif
     TRACE("(%p,%ld,%p)\n",hkey,SecurityInfo,pSecurityDesc);
 
     /* It seems to perform this check before the hkey check */
@@ -2837,7 +2865,9 @@ LSTATUS WINAPI RegSetKeySecurity( HKEY hkey, SECURITY_INFORMATION SecurityInfo,
         return ERROR_INVALID_PARAMETER;
 
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifndef __REACTOS__
     if ((status = validate_key_security_handle( hkey ))) return RtlNtStatusToDosError( status );
+#endif
 
     return RtlNtStatusToDosError( NtSetSecurityObject( hkey, SecurityInfo, pSecurityDesc ) );
 }
@@ -2862,13 +2892,17 @@ LSTATUS WINAPI RegGetKeySecurity( HKEY hkey, SECURITY_INFORMATION SecurityInform
                                   PSECURITY_DESCRIPTOR pSecurityDescriptor,
                                   LPDWORD lpcbSecurityDescriptor )
 {
+#ifndef __REACTOS__
     NTSTATUS status;
 
+#endif
     TRACE("(%p,%ld,%p,%ld)\n",hkey,SecurityInformation,pSecurityDescriptor,
           *lpcbSecurityDescriptor);
 
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
+#ifndef __REACTOS__
     if ((status = validate_key_security_handle( hkey ))) return RtlNtStatusToDosError( status );
+#endif
 
     return RtlNtStatusToDosError( NtQuerySecurityObject( hkey,
                 SecurityInformation, pSecurityDescriptor,

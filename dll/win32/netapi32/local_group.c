@@ -1405,6 +1405,10 @@ NetLocalGroupGetMembers(
         if (ApiStatus != NERR_Success)
             goto done;
 
+#ifdef __REACTOS__
+        ZeroMemory(EnumContext, sizeof(*EnumContext));
+#endif
+
         /* Connect to the SAM Server */
         Status = SamConnect((servername != NULL) ? &ServerName : NULL,
                             &EnumContext->ServerHandle,
@@ -1443,6 +1447,9 @@ NetLocalGroupGetMembers(
         {
             if (EnumContext->DomainHandle != NULL)
                 SamCloseHandle(EnumContext->DomainHandle);
+#ifdef __REACTOS__
+            EnumContext->DomainHandle = NULL;
+#endif
 
             /* Open the Acount Domain */
             Status = OpenAccountDomain(EnumContext->ServerHandle,

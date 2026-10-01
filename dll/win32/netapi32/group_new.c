@@ -1171,12 +1171,7 @@ NetGroupGetUsers(
         if (ApiStatus != NERR_Success)
             goto done;
 
-        EnumContext->MemberCount = 0;
-        EnumContext->MemberIds = NULL;
-        EnumContext->Attributes = NULL;
-        EnumContext->Names = NULL;
-        EnumContext->Start = 0;
-        EnumContext->Count = 0;
+        ZeroMemory(EnumContext, sizeof(*EnumContext));
 
         /* Connect to the SAM Server */
         Status = SamConnect((servername != NULL) ? &ServerName : NULL,

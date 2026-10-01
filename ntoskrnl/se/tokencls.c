@@ -805,12 +805,48 @@ NtQueryInformationToken(
         return Status;
     }
 
-    Status = ObReferenceObjectByHandle(TokenHandle,
-                                       (TokenInformationClass == TokenSource) ? TOKEN_QUERY_SOURCE : TOKEN_QUERY,
-                                       SeTokenObjectType,
-                                       PreviousMode,
-                                       (PVOID*)&Token,
-                                       NULL);
+    if (TokenHandle == (HANDLE)(LONG_PTR)-4)
+    {
+        Token = PsReferencePrimaryToken(PsGetCurrentProcess());
+        Status = STATUS_SUCCESS;
+    }
+    else if (TokenHandle == (HANDLE)(LONG_PTR)-5 || TokenHandle == (HANDLE)(LONG_PTR)-6)
+    {
+        BOOLEAN CopyOnOpen, EffectiveOnly;
+        SECURITY_IMPERSONATION_LEVEL ImpersonationLevel;
+
+        Token = PsReferenceImpersonationToken(PsGetCurrentThread(),
+                                             &CopyOnOpen,
+                                             &EffectiveOnly,
+                                             &ImpersonationLevel);
+        if (Token)
+        {
+            if (ImpersonationLevel == SecurityAnonymous)
+            {
+                ObDereferenceObject(Token);
+                return STATUS_CANT_OPEN_ANONYMOUS;
+            }
+            Status = STATUS_SUCCESS;
+        }
+        else if (TokenHandle == (HANDLE)(LONG_PTR)-6)
+        {
+            Token = PsReferencePrimaryToken(PsGetCurrentProcess());
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            Status = STATUS_NO_TOKEN;
+        }
+    }
+    else
+    {
+        Status = ObReferenceObjectByHandle(TokenHandle,
+                                           (TokenInformationClass == TokenSource) ? TOKEN_QUERY_SOURCE : TOKEN_QUERY,
+                                           SeTokenObjectType,
+                                           PreviousMode,
+                                           (PVOID*)&Token,
+                                           NULL);
+    }
     if (NT_SUCCESS(Status))
     {
         /* Lock the token */

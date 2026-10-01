@@ -664,6 +664,10 @@ LookupAccountNameW(LPCWSTR lpSystemName,
         return FALSE;
     }
 
+#ifdef __REACTOS__
+    if (!lpAccountName || !*lpAccountName)
+        lpAccountName = L"BUILTIN";
+#endif
     RtlInitUnicodeString(&AccountName,
                          lpAccountName);
 
@@ -684,9 +688,15 @@ LookupAccountNameW(LPCWSTR lpSystemName,
     {
         pDomainSid = ReferencedDomains->Domains[TranslatedSid->DomainIndex].Sid;
         nSubAuthorities = *GetSidSubAuthorityCount(pDomainSid);
+#ifdef __REACTOS__
+        dwSidLength = GetSidLengthRequired(nSubAuthorities + (TranslatedSid->Use != SidTypeDomain));
+
+        dwDomainNameLength = ReferencedDomains->Domains[TranslatedSid->DomainIndex].Name.Length / sizeof(WCHAR);
+#else
         dwSidLength = GetSidLengthRequired(nSubAuthorities + 1);
 
         dwDomainNameLength = ReferencedDomains->Domains->Name.Length / sizeof(WCHAR);
+#endif
 
         if (*cbSid < dwSidLength ||
             *cchReferencedDomainName < dwDomainNameLength + 1)
@@ -699,10 +709,21 @@ LookupAccountNameW(LPCWSTR lpSystemName,
         else
         {
             CopySid(*cbSid, Sid, pDomainSid);
+#ifdef __REACTOS__
+            if (TranslatedSid->Use != SidTypeDomain)
+            {
+                *GetSidSubAuthorityCount(Sid) = nSubAuthorities + 1;
+                *GetSidSubAuthority(Sid, (DWORD)nSubAuthorities) = TranslatedSid->RelativeId;
+            }
+
+            RtlCopyMemory(ReferencedDomainName, ReferencedDomains->Domains[TranslatedSid->DomainIndex].Name.Buffer,
+                          dwDomainNameLength * sizeof(WCHAR));
+#else
             *GetSidSubAuthorityCount(Sid) = nSubAuthorities + 1;
             *GetSidSubAuthority(Sid, (DWORD)nSubAuthorities) = TranslatedSid->RelativeId;
 
             RtlCopyMemory(ReferencedDomainName, ReferencedDomains->Domains->Name.Buffer, dwDomainNameLength * sizeof(WCHAR));
+#endif
             ReferencedDomainName[dwDomainNameLength] = L'\0';
 
             *cchReferencedDomainName = dwDomainNameLength;
@@ -1558,7 +1579,7 @@ TreeResetNamedSecurityInfoW(LPWSTR pObjectName,
     return ErrorCode;
 }
 
-#ifdef HAS_FN_PROGRESSW
+#if defined(HAS_FN_PROGRESSW) && !defined(__REACTOS__)
 
 typedef struct _INTERNAL_FNPROGRESSW_DATA
 {
@@ -1635,6 +1656,9 @@ TreeResetNamedSecurityInfoA(LPSTR pObjectName,
                             PROG_INVOKE_SETTING ProgressInvokeSetting,
                             PVOID Args)
 {
+#ifdef __REACTOS__
+    return ERROR_CALL_NOT_IMPLEMENTED;
+#else
 #ifndef HAS_FN_PROGRESSW
     /* That's all this function does, at least up to w2k3... Even MS was too
        lazy to implement it... */
@@ -1668,6 +1692,26 @@ TreeResetNamedSecurityInfoA(LPSTR pObjectName,
 
     return Ret;
 #endif
+#endif
 }
+
+#ifdef __REACTOS__
+DWORD
+WINAPI
+TreeSetNamedSecurityInfoA(LPSTR pObjectName,
+                         SE_OBJECT_TYPE ObjectType,
+                         SECURITY_INFORMATION SecurityInfo,
+                         PSID pOwner,
+                         PSID pGroup,
+                         PACL pDacl,
+                         PACL pSacl,
+                         DWORD Action,
+                         FN_PROGRESS Progress,
+                         PROG_INVOKE_SETTING InvokeSetting,
+                         PVOID Args)
+{
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+#endif
 
 /* EOF */

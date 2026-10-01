@@ -243,8 +243,19 @@ LsapCreateDatabaseObjects(VOID)
     PSID AccountDomainSid = NULL;
     PSECURITY_DESCRIPTOR PolicySd = NULL;
     ULONG PolicySdSize = 0;
+    struct
+    {
+        UNICODE_STRING Name;
+        WCHAR Buffer[MAX_COMPUTERNAME_LENGTH + 1];
+    } DomainName = {0};
+    DWORD NameLength = ARRAYSIZE(DomainName.Buffer);
     ULONG i;
     NTSTATUS Status;
+
+    if (!GetComputerNameW(DomainName.Buffer, &NameLength))
+        return STATUS_UNSUCCESSFUL;
+    RtlInitUnicodeString(&DomainName.Name, DomainName.Buffer);
+    DomainName.Name.Buffer = (PWSTR)((ULONG_PTR)DomainName.Buffer - (ULONG_PTR)&DomainName);
 
     /* Initialize the default quota limits */
     QuotaInfo.QuotaLimits.PagedPoolLimit = 0x2000000;
@@ -314,10 +325,12 @@ LsapCreateDatabaseObjects(VOID)
                            0);
 
     /* Set the Account Domain Name attribute */
-    LsapSetObjectAttribute(PolicyObject,
-                           L"PolAcDmN",
-                           NULL,
-                           0);
+    Status = LsapSetObjectAttribute(PolicyObject,
+                                    L"PolAcDmN",
+                                    &DomainName,
+                                    sizeof(DomainName.Name) + DomainName.Name.MaximumLength);
+    if (!NT_SUCCESS(Status))
+        goto done;
 
     /* Set the Account Domain SID attribute */
     LsapSetObjectAttribute(PolicyObject,

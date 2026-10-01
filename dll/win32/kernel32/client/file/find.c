@@ -787,7 +787,7 @@ FindFirstFileExW(IN LPCWSTR lpFileName,
                             FILE_LIST_DIRECTORY | SYNCHRONIZE,
                             &ObjectAttributes,
                             &IoStatusBlock,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                             FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
 
         if (!NT_SUCCESS(Status))

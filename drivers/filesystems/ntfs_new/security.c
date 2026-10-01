@@ -11,6 +11,58 @@
 #pragma alloc_text(PAGE, NtfsFsdSetSecurity)
 #endif
 
+NTSTATUS
+NtfsCheckRecordAccess(
+    _In_ PNtfsFileRecord File,
+    _In_ PSECURITY_SUBJECT_CONTEXT SubjectContext,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ACCESS_MASK PreviouslyGrantedAccess,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _Out_ PACCESS_MASK GrantedAccess,
+    _Out_ PPRIVILEGE_SET* Privileges)
+{
+    PUCHAR Descriptor;
+    ULONG DescriptorLength = 0;
+    NTSTATUS Status;
+
+    *Privileges = NULL;
+    if (!DesiredAccess)
+    {
+        *GrantedAccess = PreviouslyGrantedAccess;
+        return STATUS_SUCCESS;
+    }
+
+    Status = NtfsFileRecordReadSecurityDescriptor(File, NULL, &DescriptorLength);
+    if (Status == STATUS_NOT_FOUND)
+    {
+        *GrantedAccess = PreviouslyGrantedAccess | (DesiredAccess & ~MAXIMUM_ALLOWED);
+        if (DesiredAccess & MAXIMUM_ALLOWED)
+            *GrantedAccess |= FILE_ALL_ACCESS;
+        return STATUS_SUCCESS;
+    }
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+        return Status;
+    Descriptor = ExAllocatePoolWithTag(PagedPool, DescriptorLength, TAG_NTFS);
+    if (!Descriptor)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = NtfsFileRecordReadSecurityDescriptor(File, Descriptor, &DescriptorLength);
+    if (NT_SUCCESS(Status))
+    {
+        SeAccessCheck(Descriptor,
+                       SubjectContext,
+                       FALSE,
+                       DesiredAccess,
+                       PreviouslyGrantedAccess,
+                       Privileges,
+                       IoGetFileObjectGenericMapping(),
+                       AccessMode,
+                       GrantedAccess,
+                       &Status);
+    }
+    ExFreePoolWithTag(Descriptor, TAG_NTFS);
+    return Status;
+}
+
 static NTSTATUS
 NtfsQuerySecurityDescriptor(
     _In_ PFileContextBlock FileCB,
@@ -133,11 +185,13 @@ NtfsFsdQuerySecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     KeEnterCriticalRegion();
     ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
     NtfsAcquireMetadata(VolCB);
-    Status = NtfsQuerySecurityDescriptor(FileCB,
-                                         SecurityInformation,
-                                         Output,
-                                         OutputLength,
-                                         &ResultLength);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (NT_SUCCESS(Status))
+        Status = NtfsQuerySecurityDescriptor(FileCB,
+                                             SecurityInformation,
+                                             Output,
+                                             OutputLength,
+                                             &ResultLength);
     NtfsReleaseMetadata(VolCB);
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
@@ -157,10 +211,33 @@ NtfsSetSecurityDescriptor(
     _In_ PSECURITY_DESCRIPTOR ModificationDescriptor)
 {
     PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
+    SECURITY_DESCRIPTOR NormalizedDescriptor;
     SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PACL Sacl;
+    BOOLEAN Present, Defaulted;
     PUCHAR RawDescriptor = NULL;
     ULONG RawLength = 0;
     NTSTATUS Status;
+
+    if (SecurityInformation & SACL_SECURITY_INFORMATION)
+    {
+        Status = RtlGetSaclSecurityDescriptor(ModificationDescriptor, &Present, &Sacl, &Defaulted);
+        if (!NT_SUCCESS(Status)) return Status;
+        if (Present && Sacl && !Sacl->AceCount)
+        {
+            Status = RtlCreateSecurityDescriptor(&NormalizedDescriptor, SECURITY_DESCRIPTOR_REVISION);
+            if (!NT_SUCCESS(Status)) return Status;
+            NormalizedDescriptor.Control = ((PISECURITY_DESCRIPTOR)ModificationDescriptor)->Control & ~SE_SELF_RELATIVE;
+            NormalizedDescriptor.Sbz1 = ((PISECURITY_DESCRIPTOR)ModificationDescriptor)->Sbz1;
+            Status = RtlGetOwnerSecurityDescriptor(ModificationDescriptor, &NormalizedDescriptor.Owner, &Defaulted);
+            if (!NT_SUCCESS(Status)) return Status;
+            Status = RtlGetGroupSecurityDescriptor(ModificationDescriptor, &NormalizedDescriptor.Group, &Defaulted);
+            if (!NT_SUCCESS(Status)) return Status;
+            Status = RtlGetDaclSecurityDescriptor(ModificationDescriptor, &Present, &NormalizedDescriptor.Dacl, &Defaulted);
+            if (!NT_SUCCESS(Status)) return Status;
+            ModificationDescriptor = &NormalizedDescriptor;
+        }
+    }
 
     Status = NtfsFileRecordReadSecurityDescriptor(FileCB->FileRec,
                                                   NULL,
@@ -297,9 +374,15 @@ NtfsFsdSetSecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     NtfsAcquireMetadata(VolCB);
-    Status = NtfsSetSecurityDescriptor(FileCB,
-                                       SecurityInformation,
-                                       IrpSp->Parameters.SetSecurity.SecurityDescriptor);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtfsSetSecurityDescriptor(FileCB,
+                                           SecurityInformation,
+                                           IrpSp->Parameters.SetSecurity.SecurityDescriptor);
+        if (NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY)
+            InterlockedIncrement(&VolCB->DirGeneration);
+    }
     NtfsReleaseMetadata(VolCB);
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();

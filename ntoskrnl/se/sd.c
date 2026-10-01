@@ -187,7 +187,7 @@ SepAssignAcl(
     if (ParentAcl)
     {
         Status = SepPropagateAcl(NULL, &InheritedLength, ParentAcl, Owner, Group,
-                                 TRUE, IsDirectoryObject, ObjectType, GenericMapping);
+                                 TRUE, TRUE, IsDirectoryObject, ObjectType, GenericMapping);
         if (Status != STATUS_BUFFER_TOO_SMALL) return Status;
         if (InheritedLength > sizeof(ACL))
         {
@@ -195,7 +195,7 @@ SepAssignAcl(
             InheritedAcl = ExAllocatePoolWithTag(PagedPool, InheritedLength, TAG_ACL);
             if (!InheritedAcl) return STATUS_INSUFFICIENT_RESOURCES;
             Status = SepPropagateAcl(InheritedAcl, &InheritedLength, ParentAcl, Owner,
-                                     Group, TRUE, IsDirectoryObject, ObjectType, GenericMapping);
+                                     Group, TRUE, TRUE, IsDirectoryObject, ObjectType, GenericMapping);
             if (!NT_SUCCESS(Status)) goto Done;
         }
         else InheritedLength = 0;
@@ -234,7 +234,7 @@ SepAssignAcl(
             }
         }
         Status = SepPropagateAcl(NULL, &ExplicitLength, FilteredAcl, Owner, Group,
-                                 FALSE, IsDirectoryObject, ObjectType, GenericMapping);
+                                 FALSE, FALSE, IsDirectoryObject, ObjectType, GenericMapping);
         if (Status != STATUS_BUFFER_TOO_SMALL) goto Done;
     }
 
@@ -265,7 +265,7 @@ SepAssignAcl(
     if (FilteredAcl)
     {
         Status = SepPropagateAcl(CombinedAcl, &ExplicitLength, FilteredAcl, Owner,
-                                 Group, FALSE, IsDirectoryObject, ObjectType, GenericMapping);
+                                 Group, FALSE, FALSE, IsDirectoryObject, ObjectType, GenericMapping);
         if (!NT_SUCCESS(Status)) goto Done;
     }
     else
@@ -971,11 +971,11 @@ SeQuerySecurityDescriptorInfo(
         {
             SaclLength = ROUND_UP(Sacl->AclSize, 4);
         }
-
         Control |= (ObjectSd->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT |
-                                         SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ |
+                                         SE_SACL_AUTO_INHERIT_REQ |
                                          SE_SACL_PROTECTED));
     }
+    if (SaclInfo) Control |= ObjectSd->Control & SE_SACL_AUTO_INHERITED;
 
     SdLength = OwnerLength + GroupLength + DaclLength +
     SaclLength + sizeof(SECURITY_DESCRIPTOR_RELATIVE);
@@ -1239,6 +1239,13 @@ SeSetSecurityDescriptorInfoEx(
         Control |= (SecurityDescriptor->Control & (SE_DACL_DEFAULTED | SE_DACL_PRESENT |
                                                     SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ |
                                                     SE_DACL_PROTECTED));
+        if (!(AutoInheritFlags & SEF_DACL_AUTO_INHERIT))
+        {
+            Control &= ~(SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ);
+            if ((SecurityDescriptor->Control & (SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ)) ==
+                (SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ))
+                Control |= SE_DACL_AUTO_INHERITED;
+        }
     }
     else
     {
@@ -1272,16 +1279,24 @@ SeSetSecurityDescriptorInfoEx(
         PACL OldSacl = SepGetSaclFromDescriptor(ObjectSd);
         PACL NewSacl = SepGetSaclFromDescriptor(SecurityDescriptor);
 
-        if (SaclInfo & LABEL_SECURITY_INFORMATION)
-            MergedSacl = SepBuildMergedSacl(NewSacl, OldSacl);
+        if (SaclInfo == SACL_SECURITY_INFORMATION && !NewSacl && !SepAclHasMandatoryLabel(OldSacl))
+            Sacl = NULL;
         else
-            MergedSacl = SepBuildMergedSacl(OldSacl, NewSacl);
-        if (!MergedSacl)
-            return STATUS_INSUFFICIENT_RESOURCES;
-        Sacl = MergedSacl;
-        Control |= SE_SACL_PRESENT;
-        Control |= ((SaclInfo & SACL_SECURITY_INFORMATION ? SecurityDescriptor->Control : ObjectSd->Control) &
-                    (SE_SACL_DEFAULTED | SE_SACL_PROTECTED));
+        {
+            if (SaclInfo & LABEL_SECURITY_INFORMATION)
+                MergedSacl = SepBuildMergedSacl(NewSacl, OldSacl);
+            else
+                MergedSacl = SepBuildMergedSacl(OldSacl, NewSacl);
+            if (!MergedSacl)
+                return STATUS_INSUFFICIENT_RESOURCES;
+            Sacl = MergedSacl;
+            Control |= SE_SACL_PRESENT;
+        }
+        if (SaclInfo & SACL_SECURITY_INFORMATION)
+            Control |= SecurityDescriptor->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT |
+                        SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ | SE_SACL_PROTECTED);
+        else
+            Control |= ObjectSd->Control & (SE_SACL_DEFAULTED | SE_SACL_PROTECTED);
     }
     if (SecurityInformation & PROTECTED_SACL_SECURITY_INFORMATION) Control |= SE_SACL_PROTECTED;
     if (SecurityInformation & UNPROTECTED_SACL_SECURITY_INFORMATION) Control &= ~SE_SACL_PROTECTED;
@@ -1843,8 +1858,8 @@ SeAssignSecurityEx(
     if (SaclPresent)
     {
         Control |= SE_SACL_PRESENT;
-        if (AutoInheritFlags & SEF_SACL_AUTO_INHERIT) Control |= SE_SACL_AUTO_INHERITED;
     }
+    if (AutoInheritFlags & SEF_SACL_AUTO_INHERIT) Control |= SE_SACL_AUTO_INHERITED;
     if (ExplicitDescriptor) Control |= ExplicitDescriptor->Control & SE_SACL_PROTECTED;
     ASSERT(SaclLength % sizeof(ULONG) == 0);
 
@@ -1915,6 +1930,7 @@ SeAssignSecurityEx(
                                      Owner,
                                      Group,
                                      SaclIsInherited,
+                                     !!(AutoInheritFlags & SEF_SACL_AUTO_INHERIT),
                                      IsDirectoryObject,
                                      ObjectType,
                                      GenericMapping);
@@ -1949,6 +1965,7 @@ SeAssignSecurityEx(
                                  Owner,
                                  Group,
                                  DaclIsInherited,
+                                 !!(AutoInheritFlags & SEF_DACL_AUTO_INHERIT),
                                  IsDirectoryObject,
                                  ObjectType,
                                  GenericMapping);

@@ -1139,8 +1139,29 @@ ObpIncrementHandleCount(IN PVOID Object,
         /* Check if the caller is trying to access system security */
         if (AccessState->RemainingDesiredAccess & ACCESS_SYSTEM_SECURITY)
         {
-            /* FIXME: TODO */
-            DPRINT1("ACCESS_SYSTEM_SECURITY not validated!\n");
+            ACCESS_MASK RequestedAccess = ACCESS_SYSTEM_SECURITY;
+            ACCESS_MASK PrivilegeGrantedAccess = 0;
+            PPRIVILEGE_SET Privileges = NULL;
+
+            SeLockSubjectContext(&AccessState->SubjectSecurityContext);
+            Status = SePrivilegePolicyCheck(&RequestedAccess,
+                                            &PrivilegeGrantedAccess,
+                                            &AccessState->SubjectSecurityContext,
+                                            NULL,
+                                            &Privileges,
+                                            ProbeMode);
+            SeUnlockSubjectContext(&AccessState->SubjectSecurityContext);
+            if (!NT_SUCCESS(Status)) goto Quickie;
+
+            if (Privileges)
+            {
+                Status = SeAppendPrivileges(AccessState, Privileges);
+                SeFreePrivileges(Privileges);
+                if (!NT_SUCCESS(Status)) goto Quickie;
+            }
+
+            AccessState->RemainingDesiredAccess &= ~PrivilegeGrantedAccess;
+            AccessState->PreviouslyGrantedAccess |= PrivilegeGrantedAccess;
         }
     }
 

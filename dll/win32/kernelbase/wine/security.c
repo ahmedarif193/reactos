@@ -35,6 +35,15 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(security);
 
+#ifdef __REACTOS__
+NTSYSAPI NTSTATUS NTAPI NtAccessCheckByType(PSECURITY_DESCRIPTOR, PSID, HANDLE, ACCESS_MASK,
+                                         POBJECT_TYPE_LIST, ULONG, PGENERIC_MAPPING,
+                                         PPRIVILEGE_SET, PULONG, PACCESS_MASK, PNTSTATUS);
+NTSYSAPI NTSTATUS NTAPI NtAccessCheckByTypeResultList(PSECURITY_DESCRIPTOR, PSID, HANDLE, ACCESS_MASK,
+                                                   POBJECT_TYPE_LIST, ULONG, PGENERIC_MAPPING,
+                                                   PPRIVILEGE_SET, PULONG, PACCESS_MASK, PNTSTATUS);
+
+#endif
 NTSYSAPI NTSTATUS WINAPI RtlSetSecurityObject(SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
                                              PSECURITY_DESCRIPTOR *, PGENERIC_MAPPING, HANDLE);
 NTSYSAPI NTSTATUS WINAPI RtlSetSecurityObjectEx(SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
@@ -117,6 +126,17 @@ static const WELLKNOWNSID WellKnownSids[] =
     { WinSystemLabelSid, { SID_REVISION, 1, { SECURITY_MANDATORY_LABEL_AUTHORITY}, { SECURITY_MANDATORY_SYSTEM_RID } } },
     { WinBuiltinAnyPackageSid, { SID_REVISION, 2, { SECURITY_APP_PACKAGE_AUTHORITY }, { SECURITY_APP_PACKAGE_BASE_RID, SECURITY_BUILTIN_PACKAGE_ANY_PACKAGE } } },
 #ifdef __REACTOS__
+    { WinBuiltinIUsersSid, { SID_REVISION, 2, { SECURITY_NT_AUTHORITY }, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_IUSERS } } },
+    { WinIUserSid, { SID_REVISION, 1, { SECURITY_NT_AUTHORITY }, { SECURITY_IUSER_RID } } },
+    { WinBuiltinCryptoOperatorsSid, { SID_REVISION, 2, { SECURITY_NT_AUTHORITY }, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_CRYPTO_OPERATORS } } },
+    { WinUntrustedLabelSid, { SID_REVISION, 1, { SECURITY_MANDATORY_LABEL_AUTHORITY }, { SECURITY_MANDATORY_UNTRUSTED_RID } } },
+    { WinWriteRestrictedCodeSid, { SID_REVISION, 1, { SECURITY_NT_AUTHORITY }, { SECURITY_WRITE_RESTRICTED_CODE_RID } } },
+    { WinEnterpriseReadonlyControllersSid, { SID_REVISION, 1, { SECURITY_NT_AUTHORITY }, { SECURITY_ENTERPRISE_READONLY_CONTROLLERS_RID } } },
+    { WinBuiltinEventLogReadersGroup, { SID_REVISION, 2, { SECURITY_NT_AUTHORITY }, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_EVENT_LOG_READERS_GROUP } } },
+    { WinBuiltinCertSvcDComAccessGroup, { SID_REVISION, 2, { SECURITY_NT_AUTHORITY }, { SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_CERTSVC_DCOM_ACCESS_GROUP } } },
+    { WinMediumPlusLabelSid, { SID_REVISION, 1, { SECURITY_MANDATORY_LABEL_AUTHORITY }, { SECURITY_MANDATORY_MEDIUM_RID + 0x100 } } },
+    { WinConsoleLogonSid, { SID_REVISION, 1, { SECURITY_LOCAL_SID_AUTHORITY }, { SECURITY_LOCAL_LOGON_RID } } },
+    { WinThisOrganizationCertificateSid, { SID_REVISION, 2, { SECURITY_NT_AUTHORITY }, { SECURITY_CRED_TYPE_BASE_RID, SECURITY_CRED_TYPE_THIS_ORG_CERT_RID } } },
     { WinCapabilityInternetClientSid, { SID_REVISION, 2, { SECURITY_APP_PACKAGE_AUTHORITY }, { SECURITY_CAPABILITY_BASE_RID, SECURITY_CAPABILITY_INTERNET_CLIENT } } },
     { WinCapabilityInternetClientServerSid, { SID_REVISION, 2, { SECURITY_APP_PACKAGE_AUTHORITY }, { SECURITY_CAPABILITY_BASE_RID, SECURITY_CAPABILITY_INTERNET_CLIENT_SERVER } } },
     { WinCapabilityPrivateNetworkClientServerSid, { SID_REVISION, 2, { SECURITY_APP_PACKAGE_AUTHORITY }, { SECURITY_CAPABILITY_BASE_RID, SECURITY_CAPABILITY_PRIVATE_NETWORK_CLIENT_SERVER } } },
@@ -154,6 +174,12 @@ static const WELLKNOWNRID WellKnownRids[] =
     { WinAccountEnterpriseAdminsSid, DOMAIN_GROUP_RID_ENTERPRISE_ADMINS },
     { WinAccountPolicyAdminsSid,     DOMAIN_GROUP_RID_POLICY_ADMINS },
     { WinAccountRasAndIasServersSid, DOMAIN_ALIAS_RID_RAS_SERVERS },
+#ifdef __REACTOS__
+    { WinCacheablePrincipalsGroupSid, DOMAIN_ALIAS_RID_CACHEABLE_PRINCIPALS_GROUP },
+    { WinNonCacheablePrincipalsGroupSid, DOMAIN_ALIAS_RID_NON_CACHEABLE_PRINCIPALS_GROUP },
+    { WinAccountReadonlyControllersSid, DOMAIN_GROUP_RID_READONLY_CONTROLLERS },
+    { WinNewEnterpriseReadonlyControllersSid, DOMAIN_GROUP_RID_ENTERPRISE_READONLY_DOMAIN_CONTROLLERS },
+#endif
 };
 
 static NTSTATUS open_file( LPCWSTR name, DWORD access, HANDLE *file )
@@ -400,7 +426,11 @@ BOOL WINAPI GetWindowsAccountDomainSid( PSID sid, PSID domain_sid, DWORD *size )
 
     if (*GetSidSubAuthorityCount( sid ) < 4)
     {
+#ifdef __REACTOS__
+        SetLastError( ERROR_NON_ACCOUNT_SID );
+#else
         SetLastError( ERROR_INVALID_SID );
+#endif
         return FALSE;
     }
 
@@ -523,6 +553,19 @@ BOOL WINAPI IsWellKnownSid( PSID sid, WELL_KNOWN_SID_TYPE type )
         if (WellKnownSids[i].Type == type)
             if (EqualSid(sid, (PSID)&WellKnownSids[i].Sid.Revision))
                 return TRUE;
+
+#ifdef __REACTOS__
+    if (IsValidSid(sid) && *GetSidSubAuthorityCount(sid) == 5)
+    {
+        static const SID_IDENTIFIER_AUTHORITY authority = { SECURITY_NT_AUTHORITY };
+
+        if (!memcmp(GetSidIdentifierAuthority(sid), &authority, sizeof(authority)) &&
+            *GetSidSubAuthority(sid, 0) == SECURITY_NT_NON_UNIQUE)
+            for (i = 0; i < ARRAY_SIZE(WellKnownRids); ++i)
+                if (WellKnownRids[i].Type == type)
+                    return *GetSidSubAuthority(sid, 4) == WellKnownRids[i].Rid;
+    }
+#endif
 
     return FALSE;
 }
@@ -929,7 +972,11 @@ BOOL WINAPI SetTokenInformation( HANDLE token, TOKEN_INFORMATION_CLASS class, LP
 BOOL WINAPI ConvertToAutoInheritPrivateObjectSecurity( PSECURITY_DESCRIPTOR parent,
                                                        PSECURITY_DESCRIPTOR current,
                                                        PSECURITY_DESCRIPTOR *descr,
+#ifdef __REACTOS__
+                                                       GUID *type, BOOLEAN is_dir,
+#else
                                                        GUID *type, BOOL is_dir,
+#endif
                                                        PGENERIC_MAPPING mapping )
 {
     return set_ntstatus( RtlConvertToAutoInheritSecurityObject( parent, current, descr, type, is_dir, mapping ));
@@ -1288,9 +1335,32 @@ BOOL WINAPI AccessCheckByType( PSECURITY_DESCRIPTOR descr, PSID sid, HANDLE toke
                                POBJECT_TYPE_LIST types, DWORD types_len, PGENERIC_MAPPING mapping,
                                PPRIVILEGE_SET priv, LPDWORD priv_len, LPDWORD granted, LPBOOL status )
 {
+#ifdef __REACTOS__
+    NTSTATUS access_status;
+    BOOL ret = set_ntstatus( NtAccessCheckByType( descr, sid, token, access, types, types_len,
+                                                mapping, priv, priv_len, granted, &access_status ));
+    if (ret) *status = set_ntstatus( access_status );
+    return ret;
+}
+
+BOOL WINAPI AccessCheckByTypeResultList( PSECURITY_DESCRIPTOR descr, PSID sid, HANDLE token, DWORD access,
+                                          POBJECT_TYPE_LIST types, DWORD types_len, PGENERIC_MAPPING mapping,
+                                          PPRIVILEGE_SET priv, LPDWORD priv_len, LPDWORD granted, LPDWORD status )
+{
+    DWORD i;
+    BOOL ret = set_ntstatus( NtAccessCheckByTypeResultList( descr, sid, token, access, types, types_len,
+                                                         mapping, priv, priv_len, granted, (PNTSTATUS)status ));
+    if (ret)
+    {
+        for (i = 0; i < types_len; ++i)
+            status[i] = RtlNtStatusToDosError( (NTSTATUS)status[i] );
+    }
+    return ret;
+#else
     FIXME("stub\n");
     *status = TRUE;
     return !*status;
+#endif
 }
 
 /******************************************************************************
