@@ -89,7 +89,7 @@ FileRecord::GetBasicInformation(
     Information->ChangeTime =
         Standard->ChangeTime;
     Information->FileAttributes =
-        Standard->FilePermissions;
+        Standard->FilePermissions & ~(ULONG)FILE_PERM_NORMAL;
     if (Header->Flags & FR_IS_DIRECTORY)
     {
         Information->FileAttributes |=
@@ -360,8 +360,7 @@ FileRecord::SetBasicInformation(
          * on a file that has ARCHIVE set arrives as NORMAL|ARCHIVE|READONLY -
          * and the request is honoured with NORMAL dropped, not refused.
          */
-        if (RequestedAttributes != FILE_PERM_NORMAL)
-            RequestedAttributes &= ~(ULONG)FILE_PERM_NORMAL;
+        RequestedAttributes &= ~(ULONG)FILE_PERM_NORMAL;
 
         /*
          * Basic information may replace user-settable flags. Structural

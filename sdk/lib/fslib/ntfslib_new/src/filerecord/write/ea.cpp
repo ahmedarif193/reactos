@@ -539,14 +539,12 @@ FileRecord::ReplaceListedExtendedAttributes(
     PAttribute NewEaAttribute = NULL;
     PAttribute NewInformationAttribute = NULL;
     PAttribute OldAttribute;
-    PAttribute StandardAttribute;
     PDataRun NewEaRuns = NULL;
     PDataRun OldEaRuns = NULL;
     PFileRecord EaOwner;
     PFileRecord InformationOwner;
     PFileRecord NewOwner = NULL;
     PFileRecord OldOwner = NULL;
-    PStandardInformationEx Standard;
     PUCHAR BaseRecordBackup = NULL;
     PUCHAR NewList = NULL;
     PUCHAR OldList = NULL;
@@ -1056,17 +1054,8 @@ FileRecord::ReplaceListedExtendedAttributes(
         }
     }
 
-    Status = GetStandardInformationForUpdate(
-        &StandardAttribute,
-        &Standard);
-    if (!NT_SUCCESS(Status))
-        goto RestoreBase;
-    UNREFERENCED_PARAMETER(StandardAttribute);
-    Standard->FilePermissions |= FILE_PERM_ARCHIVE;
-
     Status = SynchronizeFileNameInformation(
-        NTFS_FILE_NAME_UPDATE_EA_SIZE |
-            NTFS_FILE_NAME_UPDATE_ARCHIVE,
+        NTFS_FILE_NAME_UPDATE_EA_SIZE,
         0,
         0,
         FinalInformation->PackedEASize,
@@ -1550,17 +1539,8 @@ FileRecord::UpdateExtendedAttributes(
         }
     }
 
-    Status = GetStandardInformationForUpdate(
-        &StandardAttribute,
-        &Standard);
-    if (!NT_SUCCESS(Status))
-        goto Restore;
-    UNREFERENCED_PARAMETER(StandardAttribute);
-    Standard->FilePermissions |= FILE_PERM_ARCHIVE;
-
     Status = SynchronizeFileNameInformation(
-        NTFS_FILE_NAME_UPDATE_EA_SIZE |
-            NTFS_FILE_NAME_UPDATE_ARCHIVE,
+        NTFS_FILE_NAME_UPDATE_EA_SIZE,
         0,
         0,
         FinalInformation.PackedEASize,

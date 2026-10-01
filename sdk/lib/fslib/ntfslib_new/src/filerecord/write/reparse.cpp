@@ -409,13 +409,6 @@ FileRecord::UpdateReparsePoint(
     if (Delete)
         FileNameFields |=
             NTFS_FILE_NAME_UPDATE_EA_SIZE;
-    if (!IsDirectory)
-    {
-        Standard->FilePermissions |=
-            FILE_PERM_ARCHIVE;
-        FileNameFields |=
-            NTFS_FILE_NAME_UPDATE_ARCHIVE;
-    }
 
     Status = SynchronizeFileNameInformation(
         FileNameFields,
