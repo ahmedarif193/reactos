@@ -46,10 +46,12 @@
 #define MI_LEAF_PFN_CACHE         0x80 /* Resolve MDL cache attributes per physical page. */
 #define MI_LEAF_CACHE_MASK        (MI_LEAF_NOCACHE | MI_LEAF_WRITECOMBINE | MI_LEAF_DEVICE)
 
+/* Entries are as wide as the architecture's descriptors, not its pointers: a
+ * 32-bit address space may still use 64-bit entries. */
 #if defined(MI_ARCH_PTE_BYTES) && MI_ARCH_PTE_BYTES == 4
 typedef ULONG MI_PTE, *PMI_PTE;
 #else
-typedef ULONG_PTR MI_PTE, *PMI_PTE;
+typedef ULONG64 MI_PTE, *PMI_PTE;
 #endif
 
 #define MI_SOFT_KIND_SHIFT        1
@@ -144,6 +146,10 @@ BOOLEAN MiArchPteIsAccessed(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsUser(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsLeafDescriptor(_In_ MI_PTE Pte);
 BOOLEAN MiArchIsSelfMapAddress(_In_ ULONG64 VirtualAddress);
+#ifdef MI_ARCH_HAS_TRANSLATION_WINDOW
+/* Resolve an address in a window the processor maps without page tables. */
+BOOLEAN MiArchTranslateWindow(_In_ ULONG64 VirtualAddress, _Out_ PULONG64 PhysicalAddress, _Out_opt_ PMI_PTE LeafPte);
+#endif
 BOOLEAN MiArchPteIsExecutable(_In_ MI_PTE Pte, _In_ BOOLEAN UserMode);
 MI_PTE MiArchPteSetDirty(_In_ MI_PTE Pte, _In_ BOOLEAN Dirty);
 MI_PTE MiArchPteSetAccessed(_In_ MI_PTE Pte, _In_ BOOLEAN Accessed);
