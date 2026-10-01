@@ -924,7 +924,8 @@ Return Value:
     //
     // Validate the Settings parameter
     //
-    if (PowerFrameworkSettings->Size != sizeof(WDF_POWER_FRAMEWORK_SETTINGS)) {
+    if (PowerFrameworkSettings->Size != sizeof(WDF_POWER_FRAMEWORK_SETTINGS) &&
+        PowerFrameworkSettings->Size != FIELD_OFFSET(WDF_POWER_FRAMEWORK_SETTINGS, PoFxDeviceFlags)) {
         status = STATUS_INFO_LENGTH_MISMATCH;
         DoTraceLevelMessage(
             pFxDriverGlobals, TRACE_LEVEL_ERROR, TRACINGDEVICE,
