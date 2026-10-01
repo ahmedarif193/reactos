@@ -577,6 +577,7 @@ IoReportDetectedDevice(
     if (DeviceObject && *DeviceObject)
         PnpRootRegisterDevice(*DeviceObject);
 
+    ObReferenceObject(Pdo);
     PiInsertDevNode(DeviceNode, IopRootDeviceNode);
     PiSetDevNodeFlag(DeviceNode, DNF_MADEUP | DNF_ENUMERATED);
 

@@ -381,6 +381,8 @@ PiControlInitializeDevice(
     // Finish the root device registration
     PnpRootRegisterDevice(DeviceObject);
 
+    ObReferenceObject(DeviceObject);
+
     /* Insert as a root enumerated device node */
     PiInsertDevNode(DeviceNode, IopRootDeviceNode);
 
