@@ -808,6 +808,8 @@ MiResolveImageReferences(IN PVOID ImageBase,
                          OUT PLOAD_IMPORTS *LoadImports)
 {
     static UNICODE_STRING DriversFolderName = RTL_CONSTANT_STRING(L"drivers\\");
+    static UNICODE_STRING SystemDriversFolderName =
+        RTL_CONSTANT_STRING(L"\\SystemRoot\\System32\\drivers\\");
     PCHAR MissingApiBuffer = *MissingApi, ImportName;
     PIMAGE_IMPORT_DESCRIPTOR ImportDescriptor, CurrentImport;
     ULONG ImportSize, ImportCount = 0, LoadedImportsSize, ExportSize;
@@ -1083,6 +1085,34 @@ CheckDllState:
                 RtlCopyUnicodeString(&DllName, ImageFileDirectory);
                 RtlAppendUnicodeStringToString(&DllName, &DriversFolderName);
 
+                RtlAppendUnicodeStringToString(&DllName, &NameString);
+
+                Status = MmLoadSystemImage(&DllName,
+                                           NamePrefix,
+                                           NULL,
+                                           FALSE,
+                                           (PVOID *)&DllEntry,
+                                           &DllBase);
+            }
+
+            if ((Status == STATUS_OBJECT_NAME_NOT_FOUND) ||
+                (Status == STATUS_OBJECT_PATH_NOT_FOUND))
+            {
+                ExFreePoolWithTag(DllName.Buffer, TAG_LDR_WSTR);
+
+                DllName.MaximumLength = SystemDriversFolderName.Length +
+                                        NameString.Length +
+                                        sizeof(UNICODE_NULL);
+                DllName.Buffer = ExAllocatePoolWithTag(NonPagedPool,
+                                                       DllName.MaximumLength,
+                                                       TAG_LDR_WSTR);
+                if (!DllName.Buffer)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    goto Failure;
+                }
+
+                RtlCopyUnicodeString(&DllName, &SystemDriversFolderName);
                 RtlAppendUnicodeStringToString(&DllName, &NameString);
 
                 Status = MmLoadSystemImage(&DllName,
