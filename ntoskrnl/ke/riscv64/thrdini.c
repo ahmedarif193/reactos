@@ -104,36 +104,6 @@ KiInitializeContextThread(
     Thread->TrapFrame = TrapFrame;
 }
 
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-/* Publish the old stack only after this processor has switched away. */
-static
-VOID
-KiRiscvCompleteThreadSwitch(
-    _In_ PKTHREAD OldThread,
-    _In_ PKTHREAD NewThread)
-{
-    BOOLEAN ReadyTransition, ReapThread;
-
-    NewThread->Running = TRUE;
-    KeMemoryBarrier();
-
-    KiAcquireThreadLock(OldThread);
-    OldThread->Running = FALSE;
-    KeMemoryBarrier();
-    ReadyTransition = OldThread->ReadyTransition;
-    OldThread->ReadyTransition = FALSE;
-    ReapThread = (OldThread->State == Terminated);
-    ASSERT(!ReadyTransition || (OldThread->State == DeferredReady));
-    ASSERT(!ReadyTransition || !ReapThread);
-    KiReleaseThreadLock(OldThread);
-
-    if (ReadyTransition)
-        KiDeferredReadyThread(OldThread);
-    else if (ReapThread)
-        KiQueueThreadForReaping(OldThread);
-}
-#endif
-
 /* Runs on the incoming thread's stack with the outgoing frame published. */
 BOOLEAN
 NTAPI
@@ -166,8 +136,8 @@ KiSwapContextResume(
 #endif
     Prcb->KeContextSwitches++;
     NewThread->ContextSwitches++;
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-    KiRiscvCompleteThreadSwitch(OldThread, NewThread);
+#if KI_THREAD_HANDOFF_USES_RUNNING
+    KiCompleteThreadSwitch(OldThread, NewThread);
 #endif
 
     if (NewThread->ApcState.KernelApcPending)

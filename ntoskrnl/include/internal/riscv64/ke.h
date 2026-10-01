@@ -19,6 +19,9 @@ KiRiscvCallUserMode(
 /* TODO(riscv64): initialize scheduler sub-nodes and maintain their idle sets
  * before enabling KI_CORE_PARKING. */
 
+/* The switch backend completes the outgoing-thread handoff on the new stack. */
+#define KI_ARCH_THREAD_HANDOFF_USES_RUNNING 1
+
 /* Software synchronization priority, below the clock and IPI levels. */
 #define SYNCH_LEVEL 12
 

@@ -11,6 +11,14 @@ extern "C"
 {
 #endif
 
+/* The switch backend declares how it publishes the outgoing stack. This
+ * scheduler contract is independent of pointer width. */
+#ifndef KI_ARCH_THREAD_HANDOFF_USES_RUNNING
+#define KI_ARCH_THREAD_HANDOFF_USES_RUNNING 0
+#endif
+#define KI_THREAD_HANDOFF_USES_RUNNING \
+    ((NTDDI_VERSION >= NTDDI_WIN7) && KI_ARCH_THREAD_HANDOFF_USES_RUNNING)
+
 #if !defined(_M_ARM) && !defined(_M_ARM64)
 FORCEINLINE
 KPROCESSOR_MODE
@@ -1809,13 +1817,43 @@ KiWaitForThreadSwapOut(IN PKTHREAD Thread)
     {
         YieldProcessor();
     }
-#elif defined(_M_AMD64) || defined(_M_RISCV64)
+#elif KI_THREAD_HANDOFF_USES_RUNNING
     ASSERT(!Thread->Running);
 #else
     UNREFERENCED_PARAMETER(Thread);
 #endif
     KeMemoryBarrier();
 }
+
+#if KI_THREAD_HANDOFF_USES_RUNNING
+/* Called on the incoming stack after the architecture switch has completed. */
+FORCEINLINE
+VOID
+KiCompleteThreadSwitch(
+    _In_ PKTHREAD OldThread,
+    _In_ PKTHREAD NewThread)
+{
+    BOOLEAN ReadyTransition, ReapThread;
+
+    NewThread->Running = TRUE;
+    KeMemoryBarrier();
+
+    KiAcquireThreadLock(OldThread);
+    OldThread->Running = FALSE;
+    KeMemoryBarrier();
+    ReadyTransition = OldThread->ReadyTransition;
+    OldThread->ReadyTransition = FALSE;
+    ReapThread = (OldThread->State == Terminated);
+    ASSERT(!ReadyTransition || (OldThread->State == DeferredReady));
+    ASSERT(!ReadyTransition || !ReapThread);
+    KiReleaseThreadLock(OldThread);
+
+    if (ReadyTransition)
+        KiDeferredReadyThread(OldThread);
+    else if (ReapThread)
+        KiQueueThreadForReaping(OldThread);
+}
+#endif
 
 //
 // This routine queues a thread that is ready on the PRCB's ready lists.
