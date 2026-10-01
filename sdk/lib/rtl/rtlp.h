@@ -14,6 +14,8 @@
 #include "arm64/raise.h"
 #elif defined(_M_RISCV64)
 #include "riscv64/raise.h"
+#elif defined(_M_PPC)
+#include "ppc/raise.h"
 #endif
 
 #if defined(RTLP_RAISE_EXCEPTION_NEEDS_CALLER_CONTEXT) || defined(RTLP_RAISE_STATUS_NEEDS_CALLER_CONTEXT)
@@ -31,7 +33,7 @@ extern VOID FASTCALL CHECK_PAGED_CODE_RTL(char *file, int line);
 #define PAGED_CODE_RTL()
 #endif
 
-#ifdef _PPC_
+#if defined(_PPC_) && defined(__BIG_ENDIAN__)
 #define SWAPD(x) ((((x)&0xff)<<24)|(((x)&0xff00)<<8)|(((x)>>8)&0xff00)|(((x)>>24)&0xff))
 #define SWAPW(x) ((((x)&0xff)<<8)|(((x)>>8)&0xff))
 #define SWAPQ(x) ((SWAPD((x)&0xffffffff) << 32) | (SWAPD((x)>>32)))
@@ -243,16 +245,16 @@ RtlpExecuteHandlerForUnwind(PEXCEPTION_RECORD ExceptionRecord,
                             PCONTEXT Context,
                             PVOID DispatcherContext,
                             PEXCEPTION_ROUTINE ExceptionHandler);
-#elif !defined(_M_ARM64) && !defined(_M_RISCV64)
+#elif !defined(RTLP_EXECUTE_HANDLER_TAKES_ROUTINE)
 EXCEPTION_DISPOSITION
 NTAPI
 RtlpExecuteHandlerForUnwind(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _In_ PVOID DispatcherContext);
 
 #endif
 
-/* arm64/except_asm.S */
+/* <arch>/except_asm.S */
 
-#if defined(_M_ARM64) || defined(_M_RISCV64)
+#ifdef RTLP_EXECUTE_HANDLER_TAKES_ROUTINE
 EXCEPTION_DISPOSITION
 NTAPI
 RtlpExecuteHandlerForException(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _Inout_ PDISPATCHER_CONTEXT DispatcherContext, _In_ PEXCEPTION_ROUTINE ExceptionRoutine);

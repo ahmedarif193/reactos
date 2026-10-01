@@ -173,6 +173,14 @@ elseif(ARCH STREQUAL "riscv64")
         riscv64/dispatch.c
         riscv64/unwind.c
         riscv64/slist.c)
+elseif(ARCH STREQUAL "ppc")
+    list(APPEND ASM_SOURCE
+        ppc/context_asm.S)
+    list(APPEND SOURCE
+        byteswap.c
+        mem.c
+        ppc/except.c
+        ppc/unwind.c)
 endif()
 
 add_asm_files(rtl_asm ${ASM_SOURCE})
