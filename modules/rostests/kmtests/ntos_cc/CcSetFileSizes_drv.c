@@ -155,6 +155,7 @@ PerformTest(
     PTEST_FCB Fcb;
     LARGE_INTEGER Offset;
     IO_STATUS_BLOCK IoStatus;
+    CC_FILE_SIZES InitialFileSizes;
 
     ok_eq_pointer(TestFileObject, NULL);
     ok_eq_pointer(TestDeviceObject, NULL);
@@ -185,8 +186,18 @@ PerformTest(
                 Fcb->Header.AllocationSize.QuadPart = VACB_MAPPING_GRANULARITY - PAGE_SIZE;
             }
 
+            InitialFileSizes = *(PCC_FILE_SIZES)&Fcb->Header.AllocationSize;
+            if (TestId == 8)
+            {
+                /* A volume stream initially exposes only its BPB. The backing
+                 * device already contains valid bytes beyond this mapping. */
+                InitialFileSizes.AllocationSize.QuadPart = 62;
+                InitialFileSizes.FileSize.QuadPart = 62;
+                InitialFileSizes.ValidDataLength.QuadPart = MAXLONGLONG;
+            }
+
             KmtStartSeh();
-            CcInitializeCacheMap(TestFileObject, (PCC_FILE_SIZES)&Fcb->Header.AllocationSize, TRUE, &Callbacks, NULL);
+            CcInitializeCacheMap(TestFileObject, &InitialFileSizes, TRUE, &Callbacks, NULL);
             KmtEndSeh(STATUS_SUCCESS);
 
             if (!skip(CcIsFileCached(TestFileObject) == TRUE, "CcInitializeCacheMap failed\n"))
@@ -335,6 +346,33 @@ PerformTest(
 
                     if (Ret == TRUE)
                         CcUnpinData(Bcb);
+                }
+                else if (TestId == 8)
+                {
+                    Offset.QuadPart = 0;
+                    KmtStartSeh();
+                    Ret = CcPinRead(TestFileObject, &Offset, 62, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
+                    KmtEndSeh(STATUS_SUCCESS);
+                    if (!skip(Ret == TRUE, "Initial metadata pin failed\n"))
+                    {
+                        ok_eq_ulong(Buffer[0], 0xBABABABA);
+                        CcUnpinData(Bcb);
+                    }
+
+                    InitialFileSizes.AllocationSize.QuadPart = PAGE_SIZE;
+                    InitialFileSizes.FileSize.QuadPart = PAGE_SIZE;
+                    KmtStartSeh();
+                    CcSetFileSizes(TestFileObject, &InitialFileSizes);
+                    Ret = CcPinRead(TestFileObject, &Offset, PAGE_SIZE, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
+                    KmtEndSeh(STATUS_SUCCESS);
+                    if (!skip(Ret == TRUE, "Extended metadata pin failed\n"))
+                    {
+                        /* Includes the boot signature and the following sector. */
+                        ok_eq_ulong(Buffer[508 / sizeof(ULONG)], 0xBABABABA);
+                        ok_eq_ulong(Buffer[512 / sizeof(ULONG)], 0xBABABABA);
+                        ok_eq_ulong(Buffer[(PAGE_SIZE - sizeof(ULONG)) / sizeof(ULONG)], 0xBABABABA);
+                        CcUnpinData(Bcb);
+                    }
                 }
                 else if (TestId == 7)
                 {

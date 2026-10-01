@@ -9,6 +9,23 @@
 
 #include "ccnt.h"
 
+static
+ULONG64
+CcNtSectionSize(_In_ PCC_FILE_SIZES FileSizes)
+{
+    ULONG64 Size = (ULONG64)max(FileSizes->AllocationSize.QuadPart,
+                              FileSizes->FileSize.QuadPart);
+
+    /* Metadata streams use an unbounded VDL: their current size limits the
+     * mapped range, not the valid bytes on disk. Preserve the whole last page
+     * when faulting it in. FAT initially maps only its 62-byte BPB and then
+     * extends that same stream to cover the boot sector and allocation table. */
+    if (FileSizes->ValidDataLength.QuadPart == MAXLONGLONG)
+        Size = ROUND_UP(Size, (ULONG64)PAGE_SIZE);
+
+    return Size ? Size : PAGE_SIZE;
+}
+
 VOID
 NTAPI
 CcInitializeCacheMap(
@@ -47,9 +64,7 @@ CcInitializeCacheMap(
         Fresh->AllocationSize = FileSizes->AllocationSize;
         Fresh->ReferenceCount = 1;
 
-        SectionSize = (ULONG64)max(FileSizes->AllocationSize.QuadPart, FileSizes->FileSize.QuadPart);
-        if (SectionSize == 0)
-            SectionSize = PAGE_SIZE;
+        SectionSize = CcNtSectionSize(FileSizes);
 
         Status = MiCreateDataControlArea(FileObject, SectionSize, &Fresh->Control);
         if (!NT_SUCCESS(Status))
@@ -166,7 +181,7 @@ CcSetFileSizes(
     if (NtMap == NULL)
         return;
 
-    SectionSize = (ULONG64)max(FileSizes->AllocationSize.QuadPart, FileSizes->FileSize.QuadPart);
+    SectionSize = CcNtSectionSize(FileSizes);
     if (SectionSize < NtMap->Map.SectionSize)
         SectionSize = NtMap->Map.SectionSize;
 
