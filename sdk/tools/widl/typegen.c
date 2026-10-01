@@ -464,6 +464,7 @@ static unsigned int get_stack_size( const var_t *var, unsigned int *stack_align,
             by_val = 1;
             break;
         case CPU_i386:
+        case CPU_POWERPC:
             align = pointer_size;
             by_val = 1;
             break;
@@ -1670,6 +1671,7 @@ static void write_proc_func_interp( FILE *file, int indent, const type_t *iface,
         break;
     }
     case CPU_i386:
+    case CPU_POWERPC:
         print_file( file, indent, "0x%02x,\n", extra_size );
         print_file( file, indent, "0x%02x,\n", ext_flags );
         print_file( file, indent, "NdrFcShort(0x0),\n" );  /* server corr hint */

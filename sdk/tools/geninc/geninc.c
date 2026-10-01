@@ -12,6 +12,7 @@
 #define IMAGE_FILE_MACHINE_ARMNT 0x01c4
 #define IMAGE_FILE_MACHINE_ARM64 0xaa64
 #define IMAGE_FILE_MACHINE_RISCV64 0x5064
+#define IMAGE_FILE_MACHINE_POWERPC 0x01f0
 
 #ifdef _MSC_VER
 #define PRIx64 "I64x"
@@ -121,7 +122,8 @@ int main(int argc, char* argv[])
         (Machine != IMAGE_FILE_MACHINE_AMD64) &&
         (Machine != IMAGE_FILE_MACHINE_ARMNT) &&
         (Machine != IMAGE_FILE_MACHINE_ARM64) &&
-        (Machine != IMAGE_FILE_MACHINE_RISCV64))
+        (Machine != IMAGE_FILE_MACHINE_RISCV64) &&
+        (Machine != IMAGE_FILE_MACHINE_POWERPC))
     {
         fprintf(stderr, "Invalid Machine: 0x%x.\n", Machine);
         goto quit;

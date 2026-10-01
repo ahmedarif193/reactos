@@ -33,6 +33,7 @@ config ARCH
     value i386  "IA-32 / x86"
     value arm64 "AArch64"
     value riscv64 "RISC-V 64"
+    value ppc   "PowerPC (little-endian NT)"
     default amd64
     meta
     help
