@@ -239,15 +239,9 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
         add_definitions(-DDBG=0)
     endif()
 
+    option(PCH "Whether to use precompiled headers" OFF)
     if(ENABLE_CCACHE)
-        message(STATUS "Disabling precompiled headers support (ccache).")
-        option(PCH "Whether to use precompiled headers" OFF)
         set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
-    elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS_EQUAL 15)
-        message(STATUS "-- Disabling precompiled headers on GCC <= 15 by default CORE-17108.")
-        option(PCH "Whether to use precompiled headers" OFF)
-    else()
-        option(PCH "Whether to use precompiled headers" ON)
     endif()
 
     # Version Options (REACTOS_TARGET_NTDDI is computed unconditionally above
