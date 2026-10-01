@@ -1226,7 +1226,7 @@ PciCreateDeviceDescriptionString(PUNICODE_STRING DeviceDescription,
 
                 default:
                 case PCI_SUBCLASS_PRE_20_NON_VGA:
-                    Description = L"PCI device";
+                    Description = L"PCI Device";
                     break;
             }
             break;
