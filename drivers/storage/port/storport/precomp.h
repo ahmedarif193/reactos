@@ -40,6 +40,7 @@
 #define TAG_DEVICE_RELATION 'RDtS'
 #define TAG_PNP_ID          'IPtS'
 #define TAG_DUMP_CONTEXT    'CptS'
+#define TAG_DMA_BUFFER      'DBtS'
 
 typedef enum
 {
@@ -114,6 +115,11 @@ typedef struct _FDO_DEVICE_EXTENSION
     DEVICE_STATE PnpState;
     LIST_ENTRY AdapterListEntry;
     MINIPORT Miniport;
+    PDMA_ADAPTER DmaAdapter;
+    KSPIN_LOCK DmaBufferLock;
+    LIST_ENTRY DmaBuffers;
+    SLIST_HEADER FreeSrbExtensions;
+    PVOID SrbExtensionPool;
     ULONG PortNumber;
     ULONG BusNumber;
     ULONG SlotNumber;
@@ -135,14 +141,9 @@ typedef struct _FDO_DEVICE_EXTENSION
     ULONG PerfConcurrentChannels;
     BOOLEAN PerfConfigured;
 
-    /*
-     * Per-request state comes from lookasides once the adapter is up: the
-     * SRB extension must stay physically contiguous, so its list allocates
-     * with MmAllocateContiguousMemory underneath.
-     */
+    /* CPU-only per-request state. Device-visible extensions use DMA buffers. */
     NPAGED_LOOKASIDE_LIST SrbContextLookaside;
     NPAGED_LOOKASIDE_LIST MiniportSrbLookaside;
-    NPAGED_LOOKASIDE_LIST SrbExtensionLookaside;
     NPAGED_LOOKASIDE_LIST SglLookaside;
     ULONG SglLookasideSize;
     BOOLEAN RequestPoolsReady;
@@ -181,6 +182,19 @@ typedef struct _FDO_DEVICE_EXTENSION
     volatile BOOLEAN DumpMode;
 } FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
 
+NTSTATUS PortInitializeDma(_In_ PFDO_DEVICE_EXTENSION FdoExtension,
+                          _In_ PPORT_CONFIGURATION_INFORMATION Config);
+PVOID PortAllocateDmaBuffer(_In_ PFDO_DEVICE_EXTENSION FdoExtension,
+                           _In_ ULONG Length,
+                           _In_ BOOLEAN CacheEnabled,
+                           _Out_ PPHYSICAL_ADDRESS LogicalAddress);
+VOID PortFreeDmaBuffer(_In_ PFDO_DEVICE_EXTENSION FdoExtension,
+                      _In_ PVOID Buffer);
+BOOLEAN PortGetDmaAddress(_In_ PFDO_DEVICE_EXTENSION FdoExtension,
+                          _In_ PVOID Buffer,
+                          _Out_ PPHYSICAL_ADDRESS LogicalAddress,
+                          _Out_ PULONG Length);
+
 
 typedef struct _PDO_DEVICE_EXTENSION
 {
@@ -214,6 +228,8 @@ typedef struct _STOR_SRB_CONTEXT
     PSTORAGE_REQUEST_BLOCK MiniportSrb;
     PSCSI_REQUEST_BLOCK LegacySrb;
     PSTOR_SCATTER_GATHER_LIST Sgl;
+    PSCATTER_GATHER_LIST DmaList;
+    BOOLEAN WriteToDevice;
     ULONG SglAllocationSize;
     ULONG SrbExtensionSize;
     struct _FDO_DEVICE_EXTENSION* FdoExtension;
@@ -257,6 +273,8 @@ typedef struct _PORT_DUMP_CONTEXT
     STOR_SRB_CONTEXT SrbContext;
     PORT_DUMP_SGL Sgl;
     PVOID SrbExtension;
+    PVOID DataBuffer;
+    PHYSICAL_ADDRESS DataAddress;
     volatile LONG Completed;
     NTSTATUS Status;
     ULONG BytesPerSector;
@@ -266,7 +284,7 @@ typedef struct _PORT_DUMP_CONTEXT
 
 VOID PortFreeSrbContext(_In_ PIRP Irp);
 
-VOID PortFdoInitializeRequestPools(_In_ PFDO_DEVICE_EXTENSION FdoExtension);
+NTSTATUS PortFdoInitializeRequestPools(_In_ PFDO_DEVICE_EXTENSION FdoExtension);
 
 NTSTATUS PortSrbStatusToNtStatus(_In_ UCHAR SrbStatus);
 

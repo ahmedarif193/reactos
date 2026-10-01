@@ -2330,7 +2330,6 @@ StorPortGetPhysicalAddress(
     PMINIPORT_DEVICE_EXTENSION MiniportExtension;
     PFDO_DEVICE_EXTENSION DeviceExtension;
     STOR_PHYSICAL_ADDRESS PhysicalAddress;
-    ULONG_PTR Offset;
 
     DPRINT("StorPortGetPhysicalAddress(%p %p %p %p)\n",
            HwDeviceExtension, Srb, VirtualAddress, Length);
@@ -2344,26 +2343,33 @@ StorPortGetPhysicalAddress(
 
     DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
 
-    /* Inside of the uncached extension? */
-    if (((ULONG_PTR)VirtualAddress >= (ULONG_PTR)DeviceExtension->UncachedExtensionVirtualBase) &&
-        ((ULONG_PTR)VirtualAddress < (ULONG_PTR)DeviceExtension->UncachedExtensionVirtualBase + DeviceExtension->UncachedExtensionSize))
-    {
-        Offset = (ULONG_PTR)VirtualAddress - (ULONG_PTR)DeviceExtension->UncachedExtensionVirtualBase;
-
-        PhysicalAddress.QuadPart = DeviceExtension->UncachedExtensionPhysicalBase.QuadPart + Offset;
-        *Length = DeviceExtension->UncachedExtensionSize - Offset;
-
+    if (PortGetDmaAddress(DeviceExtension, VirtualAddress, &PhysicalAddress, Length))
         return PhysicalAddress;
+
+    /* Request data is mapped for the lifetime of its SRB. */
+    if (Srb)
+    {
+        PVOID DataBuffer = PortIsExtendedSrb(Srb) ?
+            ((PSTORAGE_REQUEST_BLOCK)Srb)->DataBuffer : Srb->DataBuffer;
+        PSTOR_SCATTER_GATHER_LIST Sgl = StorPortGetScatterGatherList(HwDeviceExtension, Srb);
+        ULONG_PTR Offset = (ULONG_PTR)VirtualAddress - (ULONG_PTR)DataBuffer;
+        ULONG Index;
+        for (Index = 0; DataBuffer && (ULONG_PTR)VirtualAddress >= (ULONG_PTR)DataBuffer &&
+             Sgl && Index < Sgl->NumberOfElements; Index++)
+        {
+            if (Offset < Sgl->List[Index].Length)
+            {
+                PhysicalAddress.QuadPart = Sgl->List[Index].PhysicalAddress.QuadPart + Offset;
+                *Length = Sgl->List[Index].Length - Offset;
+                return PhysicalAddress;
+            }
+            Offset -= Sgl->List[Index].Length;
+        }
     }
 
-    /*
-     * Driver-owned nonpaged buffers are valid DMA sources as well.  Report
-     * the physically contiguous remainder of the current page so a miniport
-     * can construct an SG list without assuming that virtual contiguity also
-     * means physical contiguity.
-     */
-    PhysicalAddress = MmGetPhysicalAddress(VirtualAddress);
-    *Length = PAGE_SIZE - BYTE_OFFSET(VirtualAddress);
+    /* An unmapped CPU pointer does not have a device DMA address. */
+    PhysicalAddress.QuadPart = 0;
+    *Length = 0;
 
     return PhysicalAddress;
 }
@@ -2432,7 +2438,6 @@ StorPortGetUncachedExtension(
 {
     PMINIPORT_DEVICE_EXTENSION MiniportExtension;
     PFDO_DEVICE_EXTENSION DeviceExtension;
-    PHYSICAL_ADDRESS LowestAddress, HighestAddress, Alignment;
 
     DPRINT1("StorPortGetUncachedExtension(%p %p %lu)\n",
             HwDeviceExtension, ConfigInfo, NumberOfBytes);
@@ -2450,23 +2455,14 @@ StorPortGetUncachedExtension(
     if (DeviceExtension->UncachedExtensionVirtualBase != NULL)
         return DeviceExtension->UncachedExtensionVirtualBase;
 
-    // FIXME: Set DMA stuff here?
+    if (!NT_SUCCESS(PortInitializeDma(DeviceExtension, ConfigInfo)))
+        return NULL;
 
-    /* Allocate the uncached extension */
-    Alignment.QuadPart = 0;
-    LowestAddress.QuadPart = 0;
-    HighestAddress.QuadPart = 0x00000000FFFFFFFF;
-    /* Cached: the miniport treats this common buffer as normal memory, which
-     * a Device-memory mapping would forbid on ARM64 */
-    DeviceExtension->UncachedExtensionVirtualBase = MmAllocateContiguousMemorySpecifyCache(NumberOfBytes,
-                                                                                           LowestAddress,
-                                                                                           HighestAddress,
-                                                                                           Alignment,
-                                                                                           MmCached);
+    DeviceExtension->UncachedExtensionVirtualBase = PortAllocateDmaBuffer(
+        DeviceExtension, NumberOfBytes, FALSE, &DeviceExtension->UncachedExtensionPhysicalBase);
     if (DeviceExtension->UncachedExtensionVirtualBase == NULL)
         return NULL;
 
-    DeviceExtension->UncachedExtensionPhysicalBase = MmGetPhysicalAddress(DeviceExtension->UncachedExtensionVirtualBase);
     DeviceExtension->UncachedExtensionSize = NumberOfBytes;
 
     return DeviceExtension->UncachedExtensionVirtualBase;
