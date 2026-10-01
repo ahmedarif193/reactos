@@ -1836,8 +1836,34 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
 
             Tag->FileAttributes = Basic.FileAttributes ? Basic.FileAttributes
                                                        : FILE_ATTRIBUTE_NORMAL;
-            /* Reparse points are not surfaced yet, so the tag is always zero. */
             Tag->ReparseTag = 0;
+            if (Basic.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            {
+                PReparsePointEx ReparseData;
+                ULONG ReparseLength = 0;
+
+                Status = NtfsFileRecordReadReparsePoint(FileCB->FileRec, NULL, &ReparseLength);
+                if (Status != STATUS_BUFFER_TOO_SMALL)
+                {
+                    if (NT_SUCCESS(Status))
+                        Status = STATUS_FILE_CORRUPT_ERROR;
+                    break;
+                }
+                ReparseData = ExAllocatePoolWithTag(PagedPool, ReparseLength, TAG_NTFS);
+                if (!ReparseData)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    break;
+                }
+                Status = NtfsFileRecordReadReparsePoint(FileCB->FileRec,
+                                                        (PUCHAR)ReparseData,
+                                                        &ReparseLength);
+                if (NT_SUCCESS(Status))
+                    Tag->ReparseTag = ReparseData->ReparseType;
+                ExFreePoolWithTag(ReparseData, TAG_NTFS);
+                if (!NT_SUCCESS(Status))
+                    break;
+            }
             BufferLength -= sizeof(FILE_ATTRIBUTE_TAG_INFORMATION);
             break;
         }
