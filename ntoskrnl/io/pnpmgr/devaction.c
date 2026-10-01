@@ -3327,6 +3327,8 @@ PipRunDeviceActionRequest(
 
         case PiActionRemoveDevice:
             status = PipQueryAndRemoveDevice(Request->DeviceObject, NULL);
+            if (deviceNode->State == DeviceNodeRemoved && deviceNode->Parent == IopRootDeviceNode)
+                PnpRootRetireDevice(Request->DeviceObject);
             break;
 
         default:

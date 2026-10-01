@@ -164,6 +164,56 @@ PnpRootRegisterDevice(
     return STATUS_SUCCESS;
 }
 
+VOID
+PnpRootRetireDevice(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    PPNPROOT_FDO_DEVICE_EXTENSION FdoDeviceExtension = &PnpRootDOExtension;
+    PPNPROOT_PDO_DEVICE_EXTENSION DeviceExtension;
+    PPNPROOT_DEVICE DeviceInfo = NULL;
+    PLIST_ENTRY NextEntry;
+    BOOLEAN Owned = DeviceObject->DriverObject == IopRootDriverObject;
+
+    KeAcquireGuardedMutex(&FdoDeviceExtension->DeviceListLock);
+    for (NextEntry = FdoDeviceExtension->DeviceListHead.Flink;
+         NextEntry != &FdoDeviceExtension->DeviceListHead;
+         NextEntry = NextEntry->Flink)
+    {
+        PPNPROOT_DEVICE Device = CONTAINING_RECORD(NextEntry, PNPROOT_DEVICE, ListEntry);
+
+        if (Device->Pdo == DeviceObject)
+        {
+            DeviceInfo = Device;
+            break;
+        }
+    }
+    if (!DeviceInfo)
+    {
+        KeReleaseGuardedMutex(&FdoDeviceExtension->DeviceListLock);
+        return;
+    }
+    RemoveEntryList(&DeviceInfo->ListEntry);
+    FdoDeviceExtension->DeviceListCount--;
+    if (Owned)
+    {
+        DeviceExtension = DeviceObject->DeviceExtension;
+        DeviceExtension->DeviceInfo = NULL;
+    }
+    KeReleaseGuardedMutex(&FdoDeviceExtension->DeviceListLock);
+
+    RtlFreeUnicodeString(&DeviceInfo->DeviceDescription);
+    RtlFreeUnicodeString(&DeviceInfo->DeviceID);
+    RtlFreeUnicodeString(&DeviceInfo->InstanceID);
+    if (DeviceInfo->ResourceRequirementsList != NULL)
+        ExFreePool(DeviceInfo->ResourceRequirementsList);
+    if (DeviceInfo->ResourceList != NULL)
+        ExFreePool(DeviceInfo->ResourceList);
+    ExFreePool(DeviceInfo);
+
+    if (Owned)
+        IoDeleteDevice(DeviceObject);
+}
+
 NTSTATUS
 PnpRootCreateDeviceObject(
     OUT PDEVICE_OBJECT *DeviceObject)
@@ -1282,14 +1332,11 @@ PnpRootPdoPnpControl(
   IN PDEVICE_OBJECT DeviceObject,
   IN PIRP Irp)
 {
-    PPNPROOT_DEVICE DeviceInfo;
     PPNPROOT_PDO_DEVICE_EXTENSION DeviceExtension;
-    PPNPROOT_FDO_DEVICE_EXTENSION FdoDeviceExtension;
     PIO_STACK_LOCATION IrpSp;
     NTSTATUS Status;
 
     DeviceExtension = DeviceObject->DeviceExtension;
-    FdoDeviceExtension = &PnpRootDOExtension;
     Status = Irp->IoStatus.Status;
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
 
@@ -1342,40 +1389,6 @@ PnpRootPdoPnpControl(
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            /* Retire the device info once, even if the PDO receives another remove. */
-            KeAcquireGuardedMutex(&FdoDeviceExtension->DeviceListLock);
-            DeviceInfo = DeviceExtension->DeviceInfo;
-            if (!DeviceInfo)
-            {
-                KeReleaseGuardedMutex(&FdoDeviceExtension->DeviceListLock);
-                Status = STATUS_SUCCESS;
-                break;
-            }
-            DeviceExtension->DeviceInfo = NULL;
-            RemoveEntryList(&DeviceInfo->ListEntry);
-            FdoDeviceExtension->DeviceListCount--;
-            KeReleaseGuardedMutex(&FdoDeviceExtension->DeviceListLock);
-
-            /* Free some strings we created */
-            RtlFreeUnicodeString(&DeviceInfo->DeviceDescription);
-            RtlFreeUnicodeString(&DeviceInfo->DeviceID);
-            RtlFreeUnicodeString(&DeviceInfo->InstanceID);
-
-            /* Free the resource requirements list */
-            if (DeviceInfo->ResourceRequirementsList != NULL)
-            ExFreePool(DeviceInfo->ResourceRequirementsList);
-
-            /* Free the boot resources list */
-            if (DeviceInfo->ResourceList != NULL)
-            ExFreePool(DeviceInfo->ResourceList);
-
-            /* Free the device info */
-            ExFreePool(DeviceInfo);
-
-            /* Finally, delete the device object */
-            IoDeleteDevice(DeviceObject);
-
-            /* Return success */
             Status = STATUS_SUCCESS;
             break;
 

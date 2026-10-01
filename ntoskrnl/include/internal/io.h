@@ -1229,6 +1229,10 @@ PnpRootRegisterDevice(
     IN PDEVICE_OBJECT DeviceObject);
 
 VOID
+PnpRootRetireDevice(
+    _In_ PDEVICE_OBJECT DeviceObject);
+
+VOID
 PnpRootInitializeDevExtension(VOID);
 
 //
