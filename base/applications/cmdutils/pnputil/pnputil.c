@@ -269,39 +269,110 @@ GetDriverKeyString(
     return TRUE;
 }
 
-static DWORD
-CountDevicesUsingInf(
-    _In_ PCWSTR PublishedName,
-    _In_ BOOL Remove)
+static VOID
+PrintHeader(VOID)
+{
+    ConPuts(StdOut, L"LiberNT PnP Utility\n\n");
+}
+
+static BOOL
+IsUsingInf(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ PCWSTR PublishedName)
+{
+    WCHAR InfPath[MAX_PATH];
+
+    return GetDriverKeyString(DeviceInfoSet, DeviceInfoData, REGSTR_VAL_INFPATH, InfPath, _countof(InfPath)) &&
+           _wcsicmp(InfPath, PublishedName) == 0;
+}
+
+static PWSTR
+GetDevicesUsingInf(
+    _In_ PCWSTR PublishedName)
 {
     SP_DEVINFO_DATA DeviceInfoData;
     HDEVINFO DeviceInfoSet;
-    DWORD Count = 0;
+    PWSTR List, NewList;
+    SIZE_T Used = 0, Size = 1024;
     DWORD Index;
 
-    DeviceInfoSet = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | (Remove ? 0 : DIGCF_PRESENT));
+    List = malloc(Size * sizeof(WCHAR));
+    if (!List)
+        return NULL;
+    List[0] = UNICODE_NULL;
+
+    DeviceInfoSet = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
     if (DeviceInfoSet == INVALID_HANDLE_VALUE)
-        return 0;
+        return List;
 
     DeviceInfoData.cbSize = sizeof(DeviceInfoData);
     for (Index = 0; SetupDiEnumDeviceInfo(DeviceInfoSet, Index, &DeviceInfoData); Index++)
     {
-        WCHAR InfPath[MAX_PATH];
+        WCHAR InstanceId[MAX_DEVICE_ID_LEN + 1];
+        SIZE_T Length;
 
-        if (!GetDriverKeyString(DeviceInfoSet, &DeviceInfoData, REGSTR_VAL_INFPATH, InfPath, _countof(InfPath)) ||
-            _wcsicmp(InfPath, PublishedName) != 0)
+        if (!IsUsingInf(DeviceInfoSet, &DeviceInfoData, PublishedName) ||
+            !SetupDiGetDeviceInstanceIdW(DeviceInfoSet, &DeviceInfoData, InstanceId, _countof(InstanceId), NULL))
         {
             continue;
         }
 
-        if (Remove && !SetupDiCallClassInstaller(DIF_REMOVE, DeviceInfoSet, &DeviceInfoData))
-            continue;
+        Length = wcslen(InstanceId) + 1;
+        if (Used + Length + 1 > Size)
+        {
+            Size = (Used + Length + 1) * 2;
+            NewList = realloc(List, Size * sizeof(WCHAR));
+            if (!NewList)
+                break;
+            List = NewList;
+        }
 
-        Count++;
+        wcscpy(List + Used, InstanceId);
+        Used += Length;
+        List[Used] = UNICODE_NULL;
     }
 
     SetupDiDestroyDeviceInfoList(DeviceInfoSet);
-    return Count;
+    return List;
+}
+
+static BOOL
+ListContains(
+    _In_opt_ PCWSTR List,
+    _In_ PCWSTR InstanceId)
+{
+    if (!List)
+        return FALSE;
+
+    for (; *List; List += wcslen(List) + 1)
+    {
+        if (_wcsicmp(List, InstanceId) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static VOID
+RemoveDevicesUsingInf(
+    _In_ PCWSTR PublishedName)
+{
+    SP_DEVINFO_DATA DeviceInfoData;
+    HDEVINFO DeviceInfoSet;
+    DWORD Index;
+
+    DeviceInfoSet = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+    if (DeviceInfoSet == INVALID_HANDLE_VALUE)
+        return;
+
+    DeviceInfoData.cbSize = sizeof(DeviceInfoData);
+    for (Index = 0; SetupDiEnumDeviceInfo(DeviceInfoSet, Index, &DeviceInfoData); Index++)
+    {
+        if (IsUsingInf(DeviceInfoSet, &DeviceInfoData, PublishedName))
+            SetupDiCallClassInstaller(DIF_REMOVE, DeviceInfoSet, &DeviceInfoData);
+    }
+
+    SetupDiDestroyDeviceInfoList(DeviceInfoSet);
 }
 
 static VOID
@@ -313,54 +384,120 @@ ScanDevices(VOID)
         CM_Reenumerate_DevNode(Root, CM_REENUMERATE_SYNCHRONOUS);
 }
 
-static VOID
-AddDriverPackage(
-    _In_ PCWSTR InfPath,
-    _Inout_ PADD_CONTEXT Context)
+static BOOL
+IsSystemInf(
+    _In_ PCWSTR InfPath)
 {
-    WCHAR Published[MAX_PATH];
-    PWSTR Component = NULL;
-    PCWSTR Name = wcsrchr(InfPath, L'\\');
+    WCHAR Directory[MAX_PATH];
+    SIZE_T Length;
+    UINT Result;
+
+    Result = GetSystemWindowsDirectoryW(Directory, _countof(Directory));
+    if (Result == 0 || Result + 6 >= _countof(Directory))
+        return FALSE;
+    wcscat(Directory, L"\\inf\\");
+
+    Length = wcslen(Directory);
+    return _wcsnicmp(InfPath, Directory, Length) == 0 && !wcschr(InfPath + Length, L'\\');
+}
+
+static VOID
+InstallDriverPackage(
+    _In_ PCWSTR InfPath,
+    _In_ PCWSTR PublishedName,
+    _In_ BOOL SystemInf,
+    _Inout_ PADD_CONTEXT Context,
+    _Out_ PBOOL Succeeded)
+{
+    PWSTR Before, After, Device;
     BOOL NeedReboot = FALSE;
+    DWORD Installed = 0, Current = 0;
 
-    Name = Name ? Name + 1 : InfPath;
-    Context->Total++;
-    ConPrintf(StdOut, L"Adding driver package:  %ls\n", Name);
+    Before = GetDevicesUsingInf(PublishedName);
 
-    if (!SetupCopyOEMInfW(InfPath, NULL, SPOST_NONE, 0, Published, _countof(Published), NULL, &Component))
+    if (!DiInstallDriverW(NULL, InfPath, SystemInf ? DIIRFLAG_INF_ALREADY_COPIED : 0, &NeedReboot))
     {
         Context->Error = GetLastError();
-        PrintError(L"Failed to add driver package", Context->Error);
-        ConPuts(StdOut, L"\n");
+        PrintError(L"Failed to install driver package", Context->Error);
+        *Succeeded = FALSE;
+        free(Before);
         return;
     }
 
-    if (!Component)
-        Component = Published;
-
-    Context->Added++;
-    ConPuts(StdOut, L"Driver package added successfully.\n");
-    ConPrintf(StdOut, L"Published Name:         %ls\n", Component);
-
-    if (Context->Install)
+    After = GetDevicesUsingInf(PublishedName);
+    for (Device = After; Device && *Device; Device += wcslen(Device) + 1)
     {
-        if (!DiInstallDriverW(NULL, InfPath, 0, &NeedReboot))
+        if (ListContains(Before, Device))
         {
-            Context->Error = GetLastError();
-            PrintError(L"Failed to install driver package", Context->Error);
-        }
-        else if (CountDevicesUsingInf(Component, FALSE) != 0)
-        {
-            ConPuts(StdOut, L"Driver package installed on matching devices.\n");
+            ConPrintf(StdOut, L"Driver package is up-to-date on device: %ls\n", Device);
+            Current++;
         }
         else
         {
-            ConPuts(StdOut, L"No matching devices are present.\n");
+            ConPrintf(StdOut, L"Driver package installed on device: %ls\n", Device);
+            Installed++;
         }
-
-        if (NeedReboot)
-            Context->NeedReboot = TRUE;
     }
+
+    if (Installed == 0 && Current != 0)
+    {
+        Context->Error = ERROR_NO_MORE_ITEMS;
+        *Succeeded = FALSE;
+    }
+
+    if (NeedReboot)
+        Context->NeedReboot = TRUE;
+
+    free(Before);
+    free(After);
+}
+
+static VOID
+AddDriverPackage(
+    _In_ PCWSTR InfPath,
+    _In_ PCWSTR DisplayName,
+    _Inout_ PADD_CONTEXT Context)
+{
+    WCHAR Published[MAX_PATH];
+    PCWSTR Component;
+    BOOL SystemInf = IsSystemInf(InfPath);
+    BOOL Existed = FALSE;
+    BOOL Succeeded = TRUE;
+
+    Context->Total++;
+    ConPrintf(StdOut, L"Adding driver package:  %ls\n", DisplayName);
+
+    if (SystemInf)
+    {
+        wcscpy(Published, InfPath);
+    }
+    else if (!SetupCopyOEMInfW(InfPath, NULL, SPOST_NONE, SP_COPY_NOOVERWRITE, Published, _countof(Published), NULL, NULL))
+    {
+        if (GetLastError() != ERROR_FILE_EXISTS)
+        {
+            Context->Error = GetLastError();
+            PrintError(L"Failed to add driver package", Context->Error);
+            ConPuts(StdOut, L"\n");
+            return;
+        }
+        Existed = TRUE;
+    }
+
+    Component = wcsrchr(Published, L'\\');
+    Component = Component ? Component + 1 : Published;
+
+    if (!SystemInf)
+    {
+        ConPrintf(StdOut, L"Driver package added successfully.%ls\n",
+                  Existed ? L" (Already exists in the system)" : L"");
+    }
+    ConPrintf(StdOut, L"Published Name:         %ls\n", Component);
+
+    if (Context->Install)
+        InstallDriverPackage(InfPath, Component, SystemInf, Context, &Succeeded);
+
+    if (Succeeded)
+        Context->Added++;
 
     ConPuts(StdOut, L"\n");
 }
@@ -368,6 +505,7 @@ AddDriverPackage(
 static VOID
 AddDriverPackages(
     _In_ PCWSTR Specification,
+    _In_ SIZE_T BaseLength,
     _Inout_ PADD_CONTEXT Context)
 {
     WCHAR Pattern[MAX_PATH], Directory[MAX_PATH], Path[MAX_PATH], Name[MAX_PATH];
@@ -375,20 +513,17 @@ AddDriverPackages(
     PWSTR FilePart = NULL;
     HANDLE hFind;
     DWORD Length;
-    BOOL Found = FALSE;
 
     Length = GetFullPathNameW(Specification, _countof(Pattern), Pattern, &FilePart);
     if (Length == 0 || Length >= _countof(Pattern) || !FilePart)
-    {
-        Context->Total++;
-        Context->Error = ERROR_FILE_NOT_FOUND;
-        PrintError(L"Failed to add driver package", Context->Error);
         return;
-    }
 
     wcscpy(Name, FilePart);
     wcsncpy(Directory, Pattern, FilePart - Pattern);
     Directory[FilePart - Pattern] = UNICODE_NULL;
+
+    if (BaseLength == 0)
+        BaseLength = wcslen(Directory);
 
     hFind = FindFirstFileW(Pattern, &FindData);
     if (hFind != INVALID_HANDLE_VALUE)
@@ -402,50 +537,38 @@ AddDriverPackages(
 
             wcscpy(Path, Directory);
             wcscat(Path, FindData.cFileName);
-            Found = TRUE;
-            AddDriverPackage(Path, Context);
+            AddDriverPackage(Path, Path + BaseLength, Context);
         } while (FindNextFileW(hFind, &FindData));
         FindClose(hFind);
     }
 
-    if (Context->SubDirs)
+    if (!Context->SubDirs || wcslen(Directory) + 1 >= _countof(Path))
+        return;
+
+    wcscpy(Path, Directory);
+    wcscat(Path, L"*");
+    hFind = FindFirstFileW(Path, &FindData);
+    if (hFind == INVALID_HANDLE_VALUE)
+        return;
+
+    do
     {
-        if (wcslen(Directory) + 1 >= _countof(Path))
-            return;
+        if (!(FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            !wcscmp(FindData.cFileName, L".") ||
+            !wcscmp(FindData.cFileName, L".."))
+        {
+            continue;
+        }
+        if (wcslen(Directory) + wcslen(FindData.cFileName) + 1 + wcslen(Name) >= _countof(Path))
+            continue;
 
         wcscpy(Path, Directory);
-        wcscat(Path, L"*");
-        hFind = FindFirstFileW(Path, &FindData);
-        if (hFind != INVALID_HANDLE_VALUE)
-        {
-            do
-            {
-                if (!(FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
-                    !wcscmp(FindData.cFileName, L".") ||
-                    !wcscmp(FindData.cFileName, L".."))
-                {
-                    continue;
-                }
-                if (wcslen(Directory) + wcslen(FindData.cFileName) + 1 + wcslen(Name) >= _countof(Path))
-                    continue;
-
-                wcscpy(Path, Directory);
-                wcscat(Path, FindData.cFileName);
-                wcscat(Path, L"\\");
-                wcscat(Path, Name);
-                AddDriverPackages(Path, Context);
-            } while (FindNextFileW(hFind, &FindData));
-            FindClose(hFind);
-        }
-    }
-    else if (!Found)
-    {
-        Context->Total++;
-        Context->Error = ERROR_FILE_NOT_FOUND;
-        ConPrintf(StdOut, L"Adding driver package:  %ls\n", Name);
-        PrintError(L"Failed to add driver package", Context->Error);
-        ConPuts(StdOut, L"\n");
-    }
+        wcscat(Path, FindData.cFileName);
+        wcscat(Path, L"\\");
+        wcscat(Path, Name);
+        AddDriverPackages(Path, BaseLength, Context);
+    } while (FindNextFileW(hFind, &FindData));
+    FindClose(hFind);
 }
 
 static INT
@@ -477,7 +600,14 @@ CommandAddDriver(
     if (!Specification)
         return ERROR_INVALID_PARAMETER;
 
-    AddDriverPackages(Specification, &Context);
+    PrintHeader();
+    AddDriverPackages(Specification, 0, &Context);
+
+    if (Context.Total == 0)
+    {
+        Context.Error = ERROR_FILE_NOT_FOUND;
+        ConPuts(StdOut, L"Failed to add driver package: Missing or invalid driver package specified.\n\n");
+    }
 
     ConPrintf(StdOut, L"Total driver packages:  %lu\n", Context.Total);
     ConPrintf(StdOut, L"Added driver packages:  %lu\n", Context.Added);
@@ -515,8 +645,19 @@ CommandDeleteDriver(
     if (!Name)
         return ERROR_INVALID_PARAMETER;
 
+    PrintHeader();
+
+    if (Uninstall && Force)
+    {
+        ConPuts(StdOut, L"Ignoring /force when used with /uninstall to delete driver package.\n");
+        Force = FALSE;
+    }
+
     if (Uninstall)
-        CountDevicesUsingInf(Name, TRUE);
+    {
+        RemoveDevicesUsingInf(Name);
+        ConPuts(StdOut, L"Driver package uninstalled.\n");
+    }
 
     if (SetupUninstallOEMInfW(Name, Force ? SUOI_FORCEDELETE : 0, NULL))
     {
@@ -525,6 +666,9 @@ CommandDeleteDriver(
     else
     {
         Error = GetLastError();
+        if (Error == ERROR_FILE_NOT_FOUND)
+            Error = ERROR_NOT_AN_INSTALLED_OEM_INF;
+
         if (Error == ERROR_INF_IN_USE_BY_DEVICES)
             ConPuts(StdOut, L"Failed to delete driver package: One or more devices are presently installed using the specified INF.\n");
         else if (Error == ERROR_NOT_AN_INSTALLED_OEM_INF)
@@ -553,11 +697,13 @@ GetInfVersionValue(
 static INT
 CommandEnumDrivers(VOID)
 {
-    WCHAR Pattern[MAX_PATH], Path[MAX_PATH], Store[MAX_PATH], Value[MAX_PATH], Description[LINE_LEN];
+    WCHAR Pattern[MAX_PATH], Path[MAX_PATH], Store[MAX_PATH], Value[MAX_PATH], ClassName[MAX_CLASS_NAME_LEN];
     WIN32_FIND_DATAW FindData;
     HANDLE hFind;
     UINT Length;
     DWORD Count = 0;
+
+    PrintHeader();
 
     Length = GetSystemWindowsDirectoryW(Pattern, _countof(Pattern));
     if (Length == 0 || Length + 16 >= _countof(Pattern))
@@ -599,18 +745,11 @@ CommandEnumDrivers(VOID)
             ConPrintf(StdOut, L"Provider Name:      %ls\n", Value);
 
             GetInfVersionValue(hInf, L"ClassGUID", Value, _countof(Value));
-            Description[0] = UNICODE_NULL;
-            if (Value[0] == L'{' && wcslen(Value) == 38)
-            {
-                WCHAR Guid[40];
-
-                wcscpy(Guid, Value);
-                if (CLSIDFromString(Guid, &ClassGuid) == S_OK)
-                    SetupDiGetClassDescriptionW(&ClassGuid, Description, _countof(Description), NULL);
-            }
-            if (!Description[0])
-                GetInfVersionValue(hInf, L"Class", Description, _countof(Description));
-            ConPrintf(StdOut, L"Class Name:         %ls\n", Description);
+            GetInfVersionValue(hInf, L"Class", ClassName, _countof(ClassName));
+            if (!ClassName[0] && CLSIDFromString(Value, &ClassGuid) == S_OK)
+                SetupDiClassNameFromGuidW(&ClassGuid, ClassName, _countof(ClassName), NULL);
+            CharLowerW(Value);
+            ConPrintf(StdOut, L"Class Name:         %ls\n", ClassName);
             ConPrintf(StdOut, L"Class GUID:         %ls\n", Value);
 
             GetInfVersionValue(hInf, L"DriverVer", Value, _countof(Value));
@@ -635,7 +774,8 @@ PrintDeviceProperty(
     _In_ HDEVINFO DeviceInfoSet,
     _In_ PSP_DEVINFO_DATA DeviceInfoData,
     _In_ DWORD Property,
-    _In_ PCWSTR Label)
+    _In_ PCWSTR Label,
+    _In_opt_ PCWSTR Default)
 {
     WCHAR Buffer[1024];
     DWORD Type;
@@ -649,11 +789,19 @@ PrintDeviceProperty(
                                            sizeof(Buffer) - 2 * sizeof(WCHAR),
                                            NULL))
     {
+        if (Default)
+            ConPrintf(StdOut, L"%-28ls%ls\n", Label, Default);
         return;
     }
 
     if (Type == REG_SZ)
     {
+        if (Property == SPDRP_CLASSGUID)
+        {
+            CharLowerW(Buffer);
+            if (Default && wcscmp(Buffer, L"{4d36e97e-e325-11ce-bfc1-08002be10318}") == 0)
+                wcscpy(Buffer, Default);
+        }
         ConPrintf(StdOut, L"%-28ls%ls\n", Label, Buffer);
     }
     else if (Type == REG_MULTI_SZ)
@@ -734,6 +882,8 @@ CommandEnumDevices(
         }
     }
 
+    PrintHeader();
+
     DeviceInfoSet = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES);
     if (DeviceInfoSet == INVALID_HANDLE_VALUE)
         return (INT)GetLastError();
@@ -772,13 +922,13 @@ CommandEnumDevices(
             State = L"Stopped";
 
         ConPrintf(StdOut, L"%-28ls%ls\n", L"Instance ID:", InstanceId);
-        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_DEVICEDESC, L"Device Description:");
-        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASS, L"Class Name:");
-        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASSGUID, L"Class GUID:");
-        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_MFG, L"Manufacturer Name:");
+        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_DEVICEDESC, L"Device Description:", NULL);
+        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASS, L"Class Name:", L"Unknown");
+        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASSGUID, L"Class GUID:", L"Unknown");
+        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_MFG, L"Manufacturer Name:", L"Unknown");
         ConPrintf(StdOut, L"%-28ls%ls\n", L"Status:", State);
 
-        if (Present && (Status & DN_HAS_PROBLEM))
+        if (Present && (Status & DN_HAS_PROBLEM) && Problem != CM_PROB_DISABLED)
         {
             PCWSTR Name = L"";
 
@@ -795,8 +945,8 @@ CommandEnumDevices(
 
         if (Filter.Ids)
         {
-            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_HARDWAREID, L"Hardware IDs:");
-            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_COMPATIBLEIDS, L"Compatible IDs:");
+            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_HARDWAREID, L"Hardware IDs:", NULL);
+            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_COMPATIBLEIDS, L"Compatible IDs:", NULL);
         }
 
         ConPuts(StdOut, L"\n");
@@ -846,15 +996,23 @@ CommandDevice(
     if (!InstanceId)
         return ERROR_INVALID_PARAMETER;
 
-    ConPrintf(StdOut, L"%-22ls%ls\n", Progress, InstanceId);
+    PrintHeader();
 
     DeviceInfoSet = SetupDiCreateDeviceInfoList(NULL, NULL);
     if (DeviceInfoSet == INVALID_HANDLE_VALUE)
         return (INT)GetLastError();
 
     DeviceInfoData.cbSize = sizeof(DeviceInfoData);
-    Result = SetupDiOpenDeviceInfoW(DeviceInfoSet, InstanceId, NULL, 0, &DeviceInfoData);
-    if (Result && Function == DIF_PROPERTYCHANGE)
+    if (!SetupDiOpenDeviceInfoW(DeviceInfoSet, InstanceId, NULL, 0, &DeviceInfoData))
+    {
+        SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+        return ERROR_SUCCESS;
+    }
+
+    ConPrintf(StdOut, L"%ls%ls\n", Progress, InstanceId);
+
+    Result = TRUE;
+    if (Function == DIF_PROPERTYCHANGE)
     {
         SP_PROPCHANGE_PARAMS PropChange;
 
@@ -901,6 +1059,7 @@ CommandDevice(
     {
         ConPrintf(StdOut, L"%ls\n", Success);
     }
+    ConPuts(StdOut, L"\n");
 
     SetupDiDestroyDeviceInfoList(DeviceInfoSet);
     return FinishOperation(Error, NeedReboot, Reboot);
@@ -909,9 +1068,10 @@ CommandDevice(
 static INT
 CommandScanDevices(VOID)
 {
+    PrintHeader();
     ConPuts(StdOut, L"Scanning for device hardware changes.\n");
     ScanDevices();
-    ConPuts(StdOut, L"Scan complete.\n");
+    ConPuts(StdOut, L"Scan complete.\n\n");
     return ERROR_SUCCESS;
 }
 
@@ -924,7 +1084,6 @@ wmain(
     INT Result;
 
     ConInitStdStreams();
-    ConPuts(StdOut, L"LiberNT PnP Utility\n\n");
 
     if (argc < 2 || IsOption(argv[1], L"?") || IsOption(argv[1], L"h") || IsOption(argv[1], L"help"))
     {
@@ -967,25 +1126,25 @@ wmain(
     else if (IsOption(Command, L"restart-device"))
     {
         Result = CommandDevice(DIF_PROPERTYCHANGE, DICS_PROPCHANGE,
-                               L"Restarting device:", L"Device restarted successfully.",
+                               L"Restarting device:         ", L"Device restarted successfully.",
                                L"Failed to restart device", argc, argv);
     }
     else if (IsOption(Command, L"disable-device"))
     {
         Result = CommandDevice(DIF_PROPERTYCHANGE, DICS_DISABLE,
-                               L"Disabling device:", L"Device disabled successfully.",
+                               L"Disabling device:          ", L"Device disabled successfully.",
                                L"Failed to disable device", argc, argv);
     }
     else if (IsOption(Command, L"enable-device"))
     {
         Result = CommandDevice(DIF_PROPERTYCHANGE, DICS_ENABLE,
-                               L"Enabling device:", L"Device enabled successfully.",
+                               L"Enabling device:          ", L"Device enabled successfully.",
                                L"Failed to enable device", argc, argv);
     }
     else if (IsOption(Command, L"remove-device"))
     {
         Result = CommandDevice(DIF_REMOVE, 0,
-                               L"Removing device:", L"Device removed successfully.",
+                               L"Removing device:          ", L"Device removed successfully.",
                                L"Failed to remove device", argc, argv);
     }
     else
@@ -995,8 +1154,8 @@ wmain(
 
     if (Result == ERROR_INVALID_PARAMETER)
     {
-        ConPuts(StdOut, L"Invalid command line.\n\n");
         ConPuts(StdOut, UsageText);
+        Result = 1;
     }
 
     return Result;
