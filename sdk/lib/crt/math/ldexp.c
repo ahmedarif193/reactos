@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS CRT library
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     ARM64 implementation of ldexp()
+ * PURPOSE:     Portable implementation of ldexp()
  * COPYRIGHT:   Imported from musl libc
  *              https://git.musl-libc.org/cgit/musl/tree/src/math/ldexp.c
  *              See https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT

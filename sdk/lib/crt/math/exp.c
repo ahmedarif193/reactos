@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS CRT library
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     ARM64 implementation of exp()
+ * PURPOSE:     Portable implementation of exp()
  * COPYRIGHT:   Imported from fdlibm / FreeBSD msun (e_exp.c)
  *
  * ====================================================

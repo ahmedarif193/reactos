@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS CRT library
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     ARM64 implementation of atan()
+ * PURPOSE:     Portable implementation of atan()
  * COPYRIGHT:   Imported from fdlibm / FreeBSD msun (s_atan.c)
  *
  * ====================================================

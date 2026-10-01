@@ -1,5 +1,5 @@
 /*
- * Natural logarithm for ARM64 CRT.
+ * Portable natural logarithm.
  * Based on the classic fdlibm formulation used across multiple libm ports.
  */
 

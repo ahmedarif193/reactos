@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS CRT library
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     ARM64 implementation of _logb/_logbf (and logb/logbf)
+ * PURPOSE:     Portable implementation of _logb/_logbf (and logb/logbf)
  * COPYRIGHT:   Derived from musl libc ilogb (bit-manipulation on IEEE-754)
  *              See https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
  *

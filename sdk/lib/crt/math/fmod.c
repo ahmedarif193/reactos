@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS CRT library
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     ARM64 implementation of fmod()
+ * PURPOSE:     Portable implementation of fmod()
  * COPYRIGHT:   Imported from musl libc
  *              https://git.musl-libc.org/cgit/musl/tree/src/math/fmod.c
  *              See https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
@@ -11,7 +11,7 @@
  * to a call to fmod() itself -- infinite self-recursion that overflowed the
  * stack. This is the classic exponent-aligned integer remainder loop. The
  * isnan() test is expressed directly as an IEEE-754 bit test so the file stays
- * self-contained (matching the sibling arm64/log.c style).
+ * self-contained (matching the sibling log.c style).
  */
 
 #include <math.h>

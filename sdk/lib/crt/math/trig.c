@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS CRT library
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     ARM64 sine, cosine, and tangent implementations
+ * PURPOSE:     Portable sine, cosine, and tangent implementations
  * COPYRIGHT:   Adapted from musl libc trigonometric kernels
  *              https://git.musl-libc.org/cgit/musl/tree/src/math
  *              See https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT

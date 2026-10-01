@@ -1,5 +1,5 @@
 /*
- * Base-10 logarithm for ARM64 CRT, using the natural log core.
+ * Portable base-10 logarithm, using the natural log core.
  */
 
 #include <math.h>
