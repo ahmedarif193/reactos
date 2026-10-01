@@ -4227,6 +4227,35 @@ HalpArm64GetMdlOffset(
 }
 
 static NTSTATUS
+HalpArm64GetScatterGatherListSize(
+    _In_ ULONG MapRegisters,
+    _Out_ PULONG ScatterGatherListSize,
+    _Out_opt_ PULONG ContextOffset)
+{
+    ULONG ListSize;
+    ULONG PrivateOffset;
+
+    if (MapRegisters >
+        (MAXULONG - FIELD_OFFSET(SCATTER_GATHER_LIST, Elements)) /
+            sizeof(SCATTER_GATHER_ELEMENT))
+    {
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
+    ListSize = FIELD_OFFSET(SCATTER_GATHER_LIST, Elements) +
+               MapRegisters * sizeof(SCATTER_GATHER_ELEMENT);
+    PrivateOffset = ALIGN_UP_BY(ListSize, sizeof(PVOID));
+    if (PrivateOffset > MAXULONG - sizeof(HAL_ARM64_SCATTER_GATHER_CONTEXT))
+        return STATUS_INTEGER_OVERFLOW;
+
+    *ScatterGatherListSize = PrivateOffset +
+                             sizeof(HAL_ARM64_SCATTER_GATHER_CONTEXT);
+    if (ContextOffset)
+        *ContextOffset = PrivateOffset;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
 HalpArm64GetScatterGatherRequirements(
     _In_ PMDL Mdl,
     _In_ ULONGLONG Offset,
@@ -4238,8 +4267,6 @@ HalpArm64GetScatterGatherRequirements(
     ULONGLONG CurrentOffset = Offset;
     ULONG MapRegisters = 0;
     ULONG Remaining = Length;
-    ULONG ListSize;
-    ULONG PrivateOffset;
 
     if (!Mdl || !Length || !NumberOfMapRegisters || !ScatterGatherListSize)
         return STATUS_INVALID_PARAMETER;
@@ -4269,25 +4296,10 @@ HalpArm64GetScatterGatherRequirements(
     if (Remaining || !MapRegisters)
         return STATUS_INVALID_PARAMETER;
 
-    if (MapRegisters >
-        (MAXULONG - FIELD_OFFSET(SCATTER_GATHER_LIST, Elements)) /
-            sizeof(SCATTER_GATHER_ELEMENT))
-    {
-        return STATUS_INTEGER_OVERFLOW;
-    }
-
-    ListSize = FIELD_OFFSET(SCATTER_GATHER_LIST, Elements) +
-               MapRegisters * sizeof(SCATTER_GATHER_ELEMENT);
-    PrivateOffset = ALIGN_UP_BY(ListSize, sizeof(PVOID));
-    if (PrivateOffset > MAXULONG - sizeof(HAL_ARM64_SCATTER_GATHER_CONTEXT))
-        return STATUS_INTEGER_OVERFLOW;
-
     *NumberOfMapRegisters = MapRegisters;
-    *ScatterGatherListSize = PrivateOffset +
-                             sizeof(HAL_ARM64_SCATTER_GATHER_CONTEXT);
-    if (ContextOffset)
-        *ContextOffset = PrivateOffset;
-    return STATUS_SUCCESS;
+    return HalpArm64GetScatterGatherListSize(MapRegisters,
+                                             ScatterGatherListSize,
+                                             ContextOffset);
 }
 
 static NTSTATUS NTAPI
@@ -4305,10 +4317,27 @@ HalpArm64CalculateScatterGatherListSize(
 
     if (!AdapterObject ||
         AdapterObject->Signature != HAL_ARM64_DMA_ADAPTER_SIGNATURE ||
-        !ScatterGatherListSize || !Mdl || Length == 0)
+        !ScatterGatherListSize || Length == 0)
     {
         if (NumberOfMapRegisters) *NumberOfMapRegisters = 0;
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!Mdl)
+    {
+        ULONG MapRegisters = (ULONG)ADDRESS_AND_SIZE_TO_SPAN_PAGES(CurrentVa, Length);
+
+        Status = HalpArm64GetScatterGatherListSize(MapRegisters,
+                                                   ScatterGatherListSize,
+                                                   NULL);
+        if (NT_SUCCESS(Status) &&
+            MapRegisters > AdapterObject->MapRegistersPerChannel)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        if (NumberOfMapRegisters)
+            *NumberOfMapRegisters = NT_SUCCESS(Status) ? MapRegisters : 0;
+        return Status;
     }
 
     Status = HalpArm64GetMdlOffset(Mdl, CurrentVa, &Offset);
@@ -4968,6 +4997,8 @@ HalGetAdapter(
     MapRegisterCount = (MaximumLength + (2 * PAGE_SIZE - 2)) >> PAGE_SHIFT;
     if (!MapRegisterCount)
         MapRegisterCount = 1;
+    if (MapRegisterCount > (MAXULONG >> PAGE_SHIFT))
+        MapRegisterCount = MAXULONG >> PAGE_SHIFT;
     MapRegisters = (ULONG)MapRegisterCount;
 
     HalpArm64InitializeDmaOperations();
