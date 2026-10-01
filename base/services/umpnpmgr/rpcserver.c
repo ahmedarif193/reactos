@@ -333,6 +333,10 @@ DisableDeviceInstance(
     {
         ret = NtStatusToCrError(Status);
     }
+    else
+    {
+        SetDeviceStatus(pszDeviceInstance, DN_HAS_PROBLEM, CM_PROB_DISABLED);
+    }
 
     return ret;
 }
@@ -3456,6 +3460,9 @@ SetupDeviceInstance(
 
     if (ulStatus & DN_HAS_PROBLEM)
     {
+        if (ulProblem == CM_PROB_DISABLED)
+            goto done;
+
         ret = ClearDeviceStatus(pszDeviceInstance,
                                 DN_HAS_PROBLEM,
                                 ulProblem);
@@ -3487,9 +3494,17 @@ EnableDeviceInstance(
 {
     PLUGPLAY_CONTROL_DEVICE_CONTROL_DATA ControlData;
     CONFIGRET ret = CR_SUCCESS;
+    DWORD ulStatus, ulProblem;
     NTSTATUS Status;
 
     DPRINT("Enable device instance %S\n", pszDeviceInstance);
+
+    if (GetDeviceStatus(pszDeviceInstance, &ulStatus, &ulProblem) == CR_SUCCESS &&
+        (ulStatus & DN_HAS_PROBLEM) &&
+        ulProblem == CM_PROB_DISABLED)
+    {
+        ClearDeviceStatus(pszDeviceInstance, DN_HAS_PROBLEM, ulProblem);
+    }
 
     RtlInitUnicodeString(&ControlData.DeviceInstance, pszDeviceInstance);
     Status = NtPlugPlayControl(PlugPlayControlStartDevice, &ControlData, sizeof(ControlData));
