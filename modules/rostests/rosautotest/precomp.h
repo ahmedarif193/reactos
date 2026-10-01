@@ -34,6 +34,7 @@ using namespace std;
 
 /* Class includes */
 #include "auto_array_ptr.h"
+#include "CCategories.h"
 #include "CConfiguration.h"
 #include "CFatalException.h"
 #include "CInvalidParameterException.h"

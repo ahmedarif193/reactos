@@ -1,6 +1,8 @@
 
 list(APPEND SOURCE
     auto_array_ptr.h
+    CCategories.cpp
+    CCategories.h
     CConfiguration.cpp
     CConfiguration.h
     CFatalException.cpp

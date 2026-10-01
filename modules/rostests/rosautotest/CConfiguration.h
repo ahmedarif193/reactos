@@ -16,12 +16,16 @@ private:
     bool m_Shutdown;
     bool m_Submit;
     bool m_ListModules;
+    bool m_ListCategories;
+    vector<string> m_Categories;
     string m_Comment;
     wstring m_Module;
     string m_Test;
 
     string m_AuthenticationRequestString;
     string m_SystemInfoRequestString;
+
+    void SelectCategories(const string& Names);
 
 public:
     CConfiguration();
@@ -37,6 +41,8 @@ public:
     bool IsReactOS() const { return m_IsReactOS; }
     unsigned long GetRepeatCount() const { return m_RepeatCount; }
     bool ListModulesOnly() const { return m_ListModules; }
+    bool ListCategoriesOnly() const { return m_ListCategories; }
+    const vector<string>& GetCategories() const { return m_Categories; }
     const string& GetComment() const { return m_Comment; }
     const wstring& GetModule() const { return m_Module; }
     const string& GetTest() const { return m_Test; }

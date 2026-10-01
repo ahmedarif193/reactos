@@ -270,6 +270,14 @@ CWineTest::GetNextTestInfo()
 {
     while(!m_CurrentFile.empty() || GetNextFile())
     {
+        string Program = UnicodeToAscii(m_CurrentFile.substr(0, m_CurrentFile.find_last_of(L'.')));
+
+        if (!CCategories::WantsProgram(Configuration.GetCategories(), Program))
+        {
+            m_CurrentFile.clear();
+            continue;
+        }
+
         /* The user asked for a list of all modules */
         if (Configuration.ListModulesOnly())
         {
@@ -286,6 +294,9 @@ CWineTest::GetNextTestInfo()
             {
                 /* If the user specified a test through the command line, check this here */
                 if(!Configuration.GetTest().empty() && Configuration.GetTest() != m_CurrentTest)
+                    continue;
+
+                if (!CCategories::WantsTest(Configuration.GetCategories(), Program, m_CurrentTest))
                     continue;
 
                 {

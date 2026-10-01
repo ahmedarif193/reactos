@@ -24,7 +24,8 @@ CConfiguration::CConfiguration()
       m_RepeatCount(1),
       m_Shutdown(false),
       m_Submit(false),
-      m_ListModules(false)
+      m_ListModules(false),
+      m_ListCategories(false)
 {
     WCHAR Interactive[32];
 
@@ -35,6 +36,42 @@ CConfiguration::CConfiguration()
 
     if(GetEnvironmentVariableW(L"WINETEST_INTERACTIVE", Interactive, _countof(Interactive)))
         m_IsInteractive = _wtoi(Interactive);
+}
+
+void
+CConfiguration::SelectCategories(const string& Names)
+{
+    size_t Start = 0;
+
+    if (Names == "?")
+    {
+        m_ListCategories = true;
+        return;
+    }
+
+    while (Start <= Names.length())
+    {
+        size_t End = Names.find(',', Start);
+
+        if (End == string::npos)
+            End = Names.length();
+
+        string Name = Names.substr(Start, End - Start);
+
+        for (size_t i = 0; i < Name.length(); i++)
+            Name[i] = (char)tolower((unsigned char)Name[i]);
+
+        if (!CCategories::IsKnown(Name))
+        {
+            stringstream ss;
+
+            ss << "Unknown test category \"" << Name << "\"." << endl << CCategories::Describe();
+            SSEXCEPTION;
+        }
+
+        m_Categories.push_back(Name);
+        Start = End + 1;
+    }
 }
 
 /**
@@ -66,6 +103,14 @@ CConfiguration::ParseParameters(int argc, wchar_t* argv[])
                     }
 
                     m_Comment = UnicodeToAscii(argv[i]);
+                    break;
+                case 'g':
+                    ++i;
+                    if (i >= argc)
+                    {
+                        throw CInvalidParameterException();
+                    }
+                    SelectCategories(UnicodeToAscii(argv[i]));
                     break;
 
                 case 'n':
