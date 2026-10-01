@@ -33,6 +33,8 @@ class CFSDropTarget :
 {
     private:
         UINT m_cfShellIDList;    /* clipboardformat for IDropTarget */
+        UINT m_cfFileDescriptor;
+        UINT m_cfFileContents;
         BOOL m_fAcceptFmt;       /* flag for pending Drop */
         LPWSTR m_sPathTarget;
         HWND m_hwndSite;
@@ -44,6 +46,8 @@ class CFSDropTarget :
         BOOL _QueryDrop (DWORD dwKeyState, LPDWORD pdwEffect);
         HRESULT _DoDrop(IDataObject *pDataObject, DWORD dwKeyState, POINTL pt, DWORD *pdwEffect);
         HRESULT _CopyItems(IDataObject *pDO, IShellFolder *pSFFrom, UINT cidl, LPCITEMIDLIST *apidl, BOOL bCopy);
+        BOOL _HasFileContents(IDataObject *pDataObject);
+        HRESULT _CopyFileContents(IDataObject *pDataObject);
         BOOL _GetUniqueFileName(LPCWSTR pwszBasePath, LPCWSTR pwszExt, LPWSTR pwszTarget, BOOL bShortcut);
         static DWORD WINAPI _DoDropThreadProc(LPVOID lpParameter);
         HRESULT _GetEffectFromMenu(IDataObject *pDataObject, POINTL pt, DWORD *pdwEffect, DWORD dwAvailableEffects);

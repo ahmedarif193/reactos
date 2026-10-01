@@ -57,6 +57,8 @@ extern zlib_filefunc64_def g_FFunc;
 HRESULT _CEnumZipContents_CreateInstance(IZip* zip, DWORD flags, PCWSTR prefix, REFIID riid, LPVOID * ppvOut);
 HRESULT _CExplorerCommandProvider_CreateInstance(IContextMenu* zipObject, REFIID riid, LPVOID * ppvOut);
 HRESULT _CFolderViewCB_CreateInstance(REFIID riid, LPVOID * ppvOut);
+HRESULT _CZipDataObject_CreateInstance(PCWSTR ZipFile, PCWSTR ZipDir, HWND hwnd, PCIDLIST_ABSOLUTE pidlFolder,
+                                       UINT cidl, PCUITEMID_CHILD_ARRAY apidl, REFIID riid, LPVOID *ppvOut);
 void _CZipExtract_runWizard(PCWSTR Filename);
 
 enum eZipPasswordResponse

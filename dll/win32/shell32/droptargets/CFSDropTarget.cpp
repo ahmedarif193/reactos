@@ -154,8 +154,191 @@ cleanup:
     return ret;
 }
 
+int SHELL_ConfirmMsgBox(HWND hWnd, LPWSTR lpszText, LPWSTR lpszCaption, HICON hIcon, BOOL bYesToAll);
+
+static bool SHELL_IsSafeRelativeName(LPCWSTR Name)
+{
+    if (!*Name || *Name == L'\\' || *Name == L'/' || wcschr(Name, L':'))
+        return false;
+
+    for (LPCWSTR Part = Name; *Part;)
+    {
+        size_t Length = wcscspn(Part, L"\\/");
+        if (Length == 0 ||
+            (Length == 1 && Part[0] == L'.') ||
+            (Length == 2 && Part[0] == L'.' && Part[1] == L'.'))
+        {
+            return false;
+        }
+        Part += Length;
+        if (*Part)
+            ++Part;
+    }
+    return true;
+}
+
+static int SHELL_ConfirmOverwriteFile(HWND hWnd, LPCWSTR pszPath, BOOL bYesToAll)
+{
+    WCHAR szCaption[255], szText[255], szBuffer[MAX_PATH + 256];
+    DWORD_PTR args[1] = { (DWORD_PTR)PathFindFileNameW(pszPath) };
+
+    LoadStringW(shell32_hInstance, IDS_OVERWRITEFILE_CAPTION, szCaption, _countof(szCaption));
+    LoadStringW(shell32_hInstance, IDS_OVERWRITEFILE_TEXT, szText, _countof(szText));
+    FormatMessageW(FORMAT_MESSAGE_FROM_STRING | FORMAT_MESSAGE_ARGUMENT_ARRAY,
+                   szText, 0, 0, szBuffer, _countof(szBuffer), (va_list*)args);
+    HICON hIcon = LoadIconW(shell32_hInstance, MAKEINTRESOURCEW(IDI_SHELL_FOLDER_MOVE2));
+    return SHELL_ConfirmMsgBox(hWnd, szBuffer, szCaption, hIcon, bYesToAll);
+}
+
+struct FILECONTENTS_PROGRESS
+{
+    IOperationsProgressDialog *pDialog;
+    ULONGLONG TotalSize;
+    ULONGLONG TotalItems;
+    ULONGLONG DoneSize;
+    ULONGLONG DoneItems;
+
+    void Update()
+    {
+        if (!pDialog)
+            return;
+        pDialog->UpdateProgress(TotalSize ? DoneSize : DoneItems, TotalSize ? TotalSize : TotalItems,
+                                DoneSize, TotalSize, DoneItems, TotalItems);
+    }
+
+    bool Cancelled()
+    {
+        if (!pDialog)
+            return false;
+
+        PDOPSTATUS Status = PDOPS_RUNNING;
+        while (SUCCEEDED(pDialog->GetOperationStatus(&Status)) && Status == PDOPS_PAUSED)
+            Sleep(50);
+        return Status == PDOPS_CANCELLED || Status == PDOPS_STOPPED;
+    }
+
+    void Block(BOOL bBlocked)
+    {
+        if (!pDialog)
+            return;
+
+        if (bBlocked)
+        {
+            pDialog->SetMode((PDMODE)(PDM_RUN | PDM_ERRORSBLOCKING));
+            pDialog->PauseTimer();
+        }
+        else
+        {
+            pDialog->ResumeTimer();
+            pDialog->SetMode(PDM_RUN);
+        }
+    }
+};
+
+static HRESULT
+SHELL_SaveFileContents(LPCWSTR pszPath, DWORD dwDisposition, const FILEDESCRIPTORW &Descriptor,
+                       STGMEDIUM &Medium, FILECONTENTS_PROGRESS &Progress)
+{
+    const ULONG cbBuffer = 0x10000;
+    CHeapPtr<BYTE> Buffer;
+    if (!Buffer.Allocate(cbBuffer))
+        return E_OUTOFMEMORY;
+
+    HANDLE hFile = CreateFileW(pszPath, GENERIC_WRITE, 0, NULL, dwDisposition, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    HRESULT hr = S_OK;
+    DWORD cbWritten;
+    if (Medium.tymed == TYMED_ISTREAM)
+    {
+        for (;;)
+        {
+            ULONG cbRead = 0;
+            hr = Medium.pstm->Read(Buffer, cbBuffer, &cbRead);
+            if (FAILED(hr) || !cbRead)
+                break;
+
+            if (!WriteFile(hFile, Buffer, cbRead, &cbWritten, NULL))
+            {
+                hr = HRESULT_FROM_WIN32(GetLastError());
+                break;
+            }
+            if (cbWritten != cbRead)
+            {
+                hr = HRESULT_FROM_WIN32(ERROR_DISK_FULL);
+                break;
+            }
+
+            Progress.DoneSize += cbRead;
+            Progress.Update();
+            if (Progress.Cancelled())
+            {
+                hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+                break;
+            }
+        }
+        if (SUCCEEDED(hr))
+            hr = S_OK;
+    }
+    else if (Medium.tymed == TYMED_HGLOBAL)
+    {
+        SIZE_T cbData = GlobalSize(Medium.hGlobal);
+        if ((Descriptor.dwFlags & FD_FILESIZE) && !Descriptor.nFileSizeHigh && Descriptor.nFileSizeLow < cbData)
+            cbData = Descriptor.nFileSizeLow;
+
+        PVOID pData = GlobalLock(Medium.hGlobal);
+        if (!pData && cbData)
+        {
+            hr = E_FAIL;
+        }
+        else if (cbData > MAXDWORD)
+        {
+            hr = HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE);
+        }
+        else if (cbData && !WriteFile(hFile, pData, (DWORD)cbData, &cbWritten, NULL))
+        {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+        }
+        else
+        {
+            Progress.DoneSize += cbData;
+            Progress.Update();
+        }
+        if (pData)
+            GlobalUnlock(Medium.hGlobal);
+    }
+    else
+    {
+        hr = DV_E_TYMED;
+    }
+
+    if (SUCCEEDED(hr))
+    {
+        SetFileTime(hFile,
+                    (Descriptor.dwFlags & FD_CREATETIME) ? &Descriptor.ftCreationTime : NULL,
+                    (Descriptor.dwFlags & FD_ACCESSTIME) ? &Descriptor.ftLastAccessTime : NULL,
+                    (Descriptor.dwFlags & FD_WRITESTIME) ? &Descriptor.ftLastWriteTime : NULL);
+    }
+    CloseHandle(hFile);
+
+    if (FAILED(hr))
+    {
+        DeleteFileW(pszPath);
+        return hr;
+    }
+
+    const DWORD dwSettable = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN |
+                             FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE;
+    if ((Descriptor.dwFlags & FD_ATTRIBUTES) && (Descriptor.dwFileAttributes & dwSettable))
+        SetFileAttributesW(pszPath, Descriptor.dwFileAttributes & dwSettable);
+    return S_OK;
+}
+
 CFSDropTarget::CFSDropTarget():
     m_cfShellIDList(0),
+    m_cfFileDescriptor(0),
+    m_cfFileContents(0),
     m_fAcceptFmt(FALSE),
     m_sPathTarget(NULL),
     m_hwndSite(NULL),
@@ -173,7 +356,182 @@ HRESULT CFSDropTarget::Initialize(LPWSTR PathTarget)
     if (!m_cfShellIDList)
         return E_FAIL;
 
+    m_cfFileDescriptor = RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW);
+    m_cfFileContents = RegisterClipboardFormatW(CFSTR_FILECONTENTSW);
+
     return SHStrDupW(PathTarget, &m_sPathTarget);
+}
+
+BOOL CFSDropTarget::_HasFileContents(IDataObject *pDataObject)
+{
+    FORMATETC fmt;
+
+    InitFormatEtc(fmt, CF_HDROP, TYMED_HGLOBAL);
+    if (pDataObject->QueryGetData(&fmt) == S_OK)
+        return FALSE;
+
+    InitFormatEtc(fmt, m_cfFileDescriptor, TYMED_HGLOBAL);
+    if (pDataObject->QueryGetData(&fmt) != S_OK)
+        return FALSE;
+
+    InitFormatEtc(fmt, m_cfFileContents, TYMED_ISTREAM);
+    if (pDataObject->QueryGetData(&fmt) == S_OK)
+        return TRUE;
+
+    InitFormatEtc(fmt, m_cfFileContents, TYMED_HGLOBAL);
+    return pDataObject->QueryGetData(&fmt) == S_OK;
+}
+
+HRESULT CFSDropTarget::_CopyFileContents(IDataObject *pDataObject)
+{
+    FORMATETC fmt;
+    STGMEDIUM medium;
+
+    InitFormatEtc(fmt, m_cfFileDescriptor, TYMED_HGLOBAL);
+    HRESULT hr = pDataObject->GetData(&fmt, &medium);
+    if (FAILED_UNEXPECTEDLY(hr))
+        return hr;
+
+    FILEGROUPDESCRIPTORW *pGroup = (FILEGROUPDESCRIPTORW*)GlobalLock(medium.hGlobal);
+    SIZE_T cbGroup = GlobalSize(medium.hGlobal);
+    if (!pGroup || cbGroup < FIELD_OFFSET(FILEGROUPDESCRIPTORW, fgd) ||
+        pGroup->cItems > (cbGroup - FIELD_OFFSET(FILEGROUPDESCRIPTORW, fgd)) / sizeof(FILEDESCRIPTORW))
+    {
+        if (pGroup)
+            GlobalUnlock(medium.hGlobal);
+        ReleaseStgMedium(&medium);
+        return E_INVALIDARG;
+    }
+
+    FILECONTENTS_PROGRESS Progress = {};
+    BOOL bProgressUI = FALSE;
+    Progress.TotalItems = pGroup->cItems;
+    for (UINT i = 0; i < pGroup->cItems; ++i)
+    {
+        const FILEDESCRIPTORW &Descriptor = pGroup->fgd[i];
+        if (Descriptor.dwFlags & FD_PROGRESSUI)
+            bProgressUI = TRUE;
+        if (Descriptor.dwFlags & FD_FILESIZE)
+            Progress.TotalSize += ((ULONGLONG)Descriptor.nFileSizeHigh << 32) | Descriptor.nFileSizeLow;
+    }
+
+    CComPtr<IOperationsProgressDialog> pDialog;
+    if (bProgressUI &&
+        SUCCEEDED(CoCreateInstance(CLSID_ProgressDialog, NULL, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARG(IOperationsProgressDialog, &pDialog))) &&
+        SUCCEEDED(pDialog->StartProgressDialog(m_hwndSite, OPPROGDLG_DEFAULT)))
+    {
+        CComPtr<IShellItem> psiTarget;
+        SHCreateItemFromParsingName(m_sPathTarget, NULL, IID_PPV_ARG(IShellItem, &psiTarget));
+
+        pDialog->SetOperation(SPACTION_COPYING);
+        pDialog->SetMode(PDM_RUN);
+        pDialog->ResetTimer();
+        pDialog->UpdateLocations(NULL, psiTarget, NULL);
+        Progress.pDialog = pDialog;
+        Progress.Update();
+    }
+
+    BOOL bYesToAll = FALSE;
+    for (UINT i = 0; SUCCEEDED(hr) && i < pGroup->cItems; ++i)
+    {
+        const FILEDESCRIPTORW &Descriptor = pGroup->fgd[i];
+        WCHAR szPath[MAX_PATH], szFolder[MAX_PATH];
+
+        if (wcsnlen(Descriptor.cFileName, _countof(Descriptor.cFileName)) == _countof(Descriptor.cFileName) ||
+            !SHELL_IsSafeRelativeName(Descriptor.cFileName) ||
+            !PathCombineW(szPath, m_sPathTarget, Descriptor.cFileName))
+        {
+            hr = HRESULT_FROM_WIN32(ERROR_INVALID_NAME);
+            break;
+        }
+
+        if ((Descriptor.dwFlags & FD_ATTRIBUTES) && (Descriptor.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            int err = SHCreateDirectoryExW(NULL, szPath, NULL);
+            if (err != ERROR_SUCCESS && err != ERROR_ALREADY_EXISTS && err != ERROR_FILE_EXISTS)
+                hr = HRESULT_FROM_WIN32(err);
+            Progress.DoneItems++;
+            Progress.Update();
+            continue;
+        }
+
+        StringCchCopyW(szFolder, _countof(szFolder), szPath);
+        PathRemoveFileSpecW(szFolder);
+        if (!PathIsDirectoryW(szFolder))
+        {
+            int err = SHCreateDirectoryExW(NULL, szFolder, NULL);
+            if (err != ERROR_SUCCESS && err != ERROR_ALREADY_EXISTS && err != ERROR_FILE_EXISTS)
+            {
+                hr = HRESULT_FROM_WIN32(err);
+                break;
+            }
+        }
+
+        ULONGLONG ItemSize = 0;
+        if (Descriptor.dwFlags & FD_FILESIZE)
+            ItemSize = ((ULONGLONG)Descriptor.nFileSizeHigh << 32) | Descriptor.nFileSizeLow;
+        ULONGLONG ItemEnd = Progress.DoneSize + ItemSize;
+
+        DWORD dwDisposition = CREATE_NEW;
+        if (PathFileExistsW(szPath))
+        {
+            if (!bYesToAll)
+            {
+                Progress.Block(TRUE);
+                int Answer = SHELL_ConfirmOverwriteFile(m_hwndSite, szPath, pGroup->cItems > 1);
+                Progress.Block(FALSE);
+                if (Answer == IDC_YESTOALL)
+                {
+                    bYesToAll = TRUE;
+                }
+                else if (Answer == IDNO)
+                {
+                    Progress.DoneSize = ItemEnd;
+                    Progress.DoneItems++;
+                    Progress.Update();
+                    continue;
+                }
+                else if (Answer != IDYES)
+                {
+                    hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+                    break;
+                }
+            }
+            dwDisposition = CREATE_ALWAYS;
+        }
+
+        STGMEDIUM contents;
+        FORMATETC fmtContents = { (CLIPFORMAT)m_cfFileContents, NULL, DVASPECT_CONTENT, (LONG)i,
+                                  TYMED_ISTREAM | TYMED_HGLOBAL };
+        hr = pDataObject->GetData(&fmtContents, &contents);
+        if (FAILED(hr))
+            break;
+
+        if (dwDisposition == CREATE_ALWAYS)
+            SetFileAttributesW(szPath, FILE_ATTRIBUTE_NORMAL);
+
+        hr = SHELL_SaveFileContents(szPath, dwDisposition, Descriptor, contents, Progress);
+        ReleaseStgMedium(&contents);
+        if (FAILED(hr))
+            break;
+
+        SHChangeNotify(dwDisposition == CREATE_NEW ? SHCNE_CREATE : SHCNE_UPDATEITEM, SHCNF_PATHW, szPath, NULL);
+        if (Progress.DoneSize < ItemEnd)
+            Progress.DoneSize = ItemEnd;
+        Progress.DoneItems++;
+        Progress.Update();
+    }
+
+    if (pDialog)
+        pDialog->StopProgressDialog();
+
+    GlobalUnlock(medium.hGlobal);
+    ReleaseStgMedium(&medium);
+
+    if (FAILED(hr) && hr != HRESULT_FROM_WIN32(ERROR_CANCELLED))
+        SHELL_ErrorBox(m_hwndSite, hr);
+    return hr;
 }
 
 CFSDropTarget::~CFSDropTarget()
@@ -398,6 +756,12 @@ HRESULT WINAPI CFSDropTarget::DragEnter(IDataObject *pDataObject,
     else if (SUCCEEDED(pDataObject->QueryGetData(&fmt2)))
         m_fAcceptFmt = TRUE;
 
+    if (_HasFileContents(pDataObject))
+    {
+        m_fAcceptFmt = TRUE;
+        *pdwEffect &= DROPEFFECT_COPY;
+    }
+
     m_grfKeyState = dwKeyState;
 
     SHELL_LimitDropEffectToItemAttributes(pDataObject, pdwEffect);
@@ -586,6 +950,9 @@ HRESULT CFSDropTarget::_DoDrop(IDataObject *pDataObject,
         if ((*pdwEffect & DROPEFFECT_LINK) == DROPEFFECT_LINK)
             bLinking = TRUE;
     }
+
+    if (_HasFileContents(pDataObject))
+        return _CopyFileContents(pDataObject);
 
     if (SUCCEEDED(hr = pDataObject->QueryGetData(&fmt)))
     {

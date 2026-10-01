@@ -16,6 +16,7 @@ list(APPEND SOURCE
     CFolderViewCB.cpp
     CSendToZip.cpp
     CZipCreator.cpp
+    CZipDataObject.cpp
     CZipEnumerator.hpp
     CZipEnumerator.cpp
     CZipExtract.cpp

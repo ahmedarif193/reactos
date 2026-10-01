@@ -125,6 +125,7 @@ CCopyMoveToMenu::DoRealFileOp(const CIDA *pCIDA, LPCMINVOKECOMMANDINFO lpici, PC
 {
     CStringW strFiles;
     WCHAR szPath[MAX_PATH];
+    BOOL bVirtual = FALSE;
     for (UINT n = 0; n < pCIDA->cidl; ++n)
     {
         CComHeapPtr<ITEMIDLIST> pidlCombine(SHELL_CIDA_ILCloneFull(pCIDA, n));
@@ -132,7 +133,12 @@ CCopyMoveToMenu::DoRealFileOp(const CIDA *pCIDA, LPCMINVOKECOMMANDINFO lpici, PC
             return E_FAIL;
 
         if (!SHGetPathFromIDListW(pidlCombine, szPath))
-            return E_FAIL;
+        {
+            if (GetFileOp() != FO_COPY)
+                return E_FAIL;
+            bVirtual = TRUE;
+            break;
+        }
 
         if (n > 0)
             strFiles += L'|';
@@ -155,6 +161,18 @@ CCopyMoveToMenu::DoRealFileOp(const CIDA *pCIDA, LPCMINVOKECOMMANDINFO lpici, PC
     {
         ERR("Too long path\n");
         return E_FAIL;
+    }
+
+    if (bVirtual)
+    {
+        CComPtr<IDropTarget> pDropTarget;
+        HRESULT hr = CFSDropTarget_CreateInstance(szPath, IID_PPV_ARG(IDropTarget, &pDropTarget));
+        if (FAILED_UNEXPECTEDLY(hr))
+            return hr;
+
+        IUnknown_SetSite(pDropTarget, m_pSite);
+        SHSimulateDrop(pDropTarget, m_pDataObject, MK_CONTROL, NULL, NULL);
+        return S_OK;
     }
 
     SHFILEOPSTRUCTW op = { lpici->hwnd, GetFileOp(), strFiles, szPath };
