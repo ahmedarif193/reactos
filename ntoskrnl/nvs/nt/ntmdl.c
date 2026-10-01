@@ -352,6 +352,7 @@ MmMapLockedPagesSpecifyCache(
     PPFN_NUMBER Pages = MmGetMdlPfnArray(Mdl);
     ULONG Count = MiMdlPages(Mdl);
     ULONG Protection = (Priority & MdlMappingNoWrite) ? MI_PROT_READONLY : MI_PROT_READWRITE;
+    ULONG Attempts = 0;
     NTSTATUS Status;
     ULONG64 Base;
 
@@ -362,9 +363,11 @@ MmMapLockedPagesSpecifyCache(
         ASSERT(!(Mdl->MdlFlags & (MDL_MAPPED_TO_SYSTEM_VA | MDL_PARTIAL_HAS_BEEN_MAPPED)));
         ASSERT(Mdl->MdlFlags & (MDL_PAGES_LOCKED | MDL_PARTIAL | MDL_IO_SPACE | MDL_SOURCE_IS_NONPAGED_POOL));
 
-        Status = MiMapFrames(&MiSystem, (const MI_FRAME_NUMBER *)Pages, Count,
-                             MiCacheTypeFromNt(CacheType),
-                             Protection, &Base);
+        do
+        {
+            Status = MiMapFrames(&MiSystem, (const MI_FRAME_NUMBER *)Pages, Count,
+                                 MiCacheTypeFromNt(CacheType), Protection, &Base);
+        } while (Status == STATUS_NO_MEMORY && NT_SUCCESS(MiWaitForMemory(Status, &Attempts)));
         if (!NT_SUCCESS(Status))
         {
             if (BugCheckOnFailure)

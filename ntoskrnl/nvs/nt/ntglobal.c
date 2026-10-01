@@ -71,6 +71,7 @@ MiWaitForMemory(
     _Inout_ PULONG Attempts)
 {
     LARGE_INTEGER Timeout;
+    ULONG Frame;
 
     if (Status != STATUS_NO_MEMORY)
         return STATUS_SUCCESS;
@@ -78,8 +79,18 @@ MiWaitForMemory(
     if (++*Attempts > 64 || KeGetCurrentIrql() > APC_LEVEL)
         return STATUS_NO_MEMORY;
 
-    if (MiBalanceMemory(&MiSystem, &MiProcessManager) != 0)
+    MiBalanceMemory(&MiSystem, &MiProcessManager);
+
+    /* Trimming may leave all available pages on standby. The failed caller
+     * can need a free page while holding a lock that forbids reclamation
+     * (for example, system-PTE population). Reclaim outside those locks and
+     * return the frame to the free cache before retrying the allocation. */
+    Frame = MiPfnAllocatePage(&MiSystem.Pfn, 0);
+    if (Frame != MI_FRAME_INVALID)
+    {
+        MiPfnFreePage(&MiSystem.Pfn, Frame);
         return STATUS_SUCCESS;
+    }
 
     if (!MiMemoryEventReady)
         return STATUS_NO_MEMORY;

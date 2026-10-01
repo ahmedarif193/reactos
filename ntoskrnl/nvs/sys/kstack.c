@@ -83,9 +83,9 @@ MiCreateKernelStack(
         }
     }
 
-    Base = MiReserveSystemPtes(System, ReservePages + 1);
-    if (Base == 0)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = MiReserveSystemPtesEx(System, ReservePages + 1, &Base);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     Top = Base + ((ULONG64)ReservePages + 1) * PAGE_SIZE;
 
