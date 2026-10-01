@@ -66,6 +66,14 @@ NewDevSetFailedInstall(
     IN BOOLEAN Set)
 {
     DWORD dwType, dwSize, dwFlags = 0;
+    ULONG ulDevStatus, ulDevProblem;
+
+    if (Set && DevInfoData &&
+        CM_Get_DevNode_Status(&ulDevStatus, &ulDevProblem, DevInfoData->DevInst, 0) == CR_SUCCESS &&
+        (ulDevStatus & (DN_DRIVER_LOADED | DN_STARTED)))
+    {
+        return TRUE;
+    }
 
     dwSize = sizeof(dwFlags);
     if (!SetupDiGetDeviceRegistryProperty(DeviceInfoSet,
