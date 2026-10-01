@@ -20,6 +20,10 @@
  *
  */
 
+#ifdef __REACTOS__
+#include "precomp.h"
+#endif
+
 #include <stdarg.h>
 #include <stdlib.h>
 #include <time.h>

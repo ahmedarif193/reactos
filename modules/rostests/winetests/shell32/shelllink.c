@@ -19,6 +19,10 @@
  *
  */
 
+#ifdef __REACTOS__
+#include "precomp.h"
+#endif
+
 #define COBJMACROS
 
 #include "initguid.h"
