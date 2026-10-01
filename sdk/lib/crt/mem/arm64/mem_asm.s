@@ -25,7 +25,7 @@ memmove:
 1:  sub     x3, x1, x0               // overlap distance
 2:  eor     x4, x0, x1
     tst     x4, #7
-    b.ne    .Lcpy_fwd_c4
+    b.ne    .Lcpy_fwd_shift
     ands    x5, x0, #7
     b.eq    .Lcpy_fwd_a8
     mov     x6, #8
@@ -63,6 +63,100 @@ memmove:
     str     x4, [x0], #8
     sub     x2, x2, #8
     b       .Lcpy_fwd_a8_small
+
+.Lcpy_fwd_shift:
+    cmp     x2, #32
+    b.lo    .Lcpy_fwd_c4
+    ands    x5, x0, #7
+    b.eq    2f
+    mov     x6, #8
+    sub     x5, x6, x5
+1:  ldrb    w7, [x1], #1
+    strb    w7, [x0], #1
+    sub     x2, x2, #1
+    subs    x5, x5, #1
+    b.ne    1b
+2:  and     x5, x1, #7
+    mov     x6, #8
+    sub     x14, x6, x5
+    mov     x11, #0
+    mov     x12, x14
+    lsl     x13, x5, #3
+3:  ldrb    w7, [x1], #1
+    lsl     x7, x7, x13
+    orr     x11, x11, x7
+    add     x13, x13, #8
+    subs    x12, x12, #1
+    b.ne    3b
+    adr     x6, .Lcpy_fwd_shift_table
+    add     x6, x6, x5, lsl #2
+    br      x6
+.Lcpy_fwd_shift_table:
+    b       .Lcpy_ret
+    b       .Lcpy_fwd_shift_1
+    b       .Lcpy_fwd_shift_2
+    b       .Lcpy_fwd_shift_3
+    b       .Lcpy_fwd_shift_4
+    b       .Lcpy_fwd_shift_5
+    b       .Lcpy_fwd_shift_6
+    b       .Lcpy_fwd_shift_7
+
+.macro CPY_FWD_SHIFT k
+.Lcpy_fwd_shift_\k:
+    cmp     x2, #72
+    b.lo    1f
+    ldp     x4, x5, [x1]
+    ldp     x6, x7, [x1, #16]
+    ldp     x8, x9, [x1, #32]
+    ldp     x10, x12, [x1, #48]
+    extr    x11, x4, x11, #(8 * \k)
+    extr    x4, x5, x4, #(8 * \k)
+    stp     x11, x4, [x0]
+    extr    x5, x6, x5, #(8 * \k)
+    extr    x6, x7, x6, #(8 * \k)
+    stp     x5, x6, [x0, #16]
+    extr    x7, x8, x7, #(8 * \k)
+    extr    x8, x9, x8, #(8 * \k)
+    stp     x7, x8, [x0, #32]
+    extr    x9, x10, x9, #(8 * \k)
+    extr    x10, x12, x10, #(8 * \k)
+    stp     x9, x10, [x0, #48]
+    mov     x11, x12
+    add     x1, x1, #64
+    add     x0, x0, #64
+    sub     x2, x2, #64
+    b       .Lcpy_fwd_shift_\k
+1:  cmp     x2, #16
+    b.lo    2f
+    ldr     x4, [x1], #8
+    extr    x11, x4, x11, #(8 * \k)
+    str     x11, [x0], #8
+    mov     x11, x4
+    sub     x2, x2, #8
+    b       1b
+2:  lsr     x11, x11, #(8 * \k)
+    b       .Lcpy_fwd_shift_tail
+.endm
+
+    CPY_FWD_SHIFT 1
+    CPY_FWD_SHIFT 2
+    CPY_FWD_SHIFT 3
+    CPY_FWD_SHIFT 4
+    CPY_FWD_SHIFT 5
+    CPY_FWD_SHIFT 6
+    CPY_FWD_SHIFT 7
+
+.Lcpy_fwd_shift_tail:
+    strb    w11, [x0], #1
+    lsr     x11, x11, #8
+    sub     x2, x2, #1
+    subs    x14, x14, #1
+    b.ne    .Lcpy_fwd_shift_tail
+1:  cbz     x2, .Lcpy_ret
+    ldrb    w7, [x1], #1
+    strb    w7, [x0], #1
+    sub     x2, x2, #1
+    b       1b
 
 .Lcpy_fwd_c4:
     tst     x4, #3
