@@ -1784,6 +1784,52 @@ IoGetDeviceProperty(IN PDEVICE_OBJECT DeviceObject,
     return Status;
 }
 
+static
+VOID
+IopCreateKeyPath(
+    _In_ PUNICODE_STRING RootPath,
+    _In_ PCUNICODE_STRING RelativePath)
+{
+    HANDLE Parent = NULL, Key;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyName;
+    PCWSTR Current, Last;
+    NTSTATUS Status;
+
+    Status = IopOpenRegistryKeyEx(&Parent, NULL, RootPath, KEY_CREATE_SUB_KEY);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Current = KeyName.Buffer = RelativePath->Buffer;
+    Last = &RelativePath->Buffer[RelativePath->Length / sizeof(WCHAR)];
+    while (Current <= Last)
+    {
+        if (Current != Last && *Current != L'\\')
+        {
+            Current++;
+            continue;
+        }
+
+        KeyName.MaximumLength = KeyName.Length = (USHORT)((ULONG_PTR)Current - (ULONG_PTR)KeyName.Buffer);
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &KeyName,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                   Parent,
+                                   NULL);
+        Status = ZwCreateKey(&Key, KEY_CREATE_SUB_KEY, &ObjectAttributes, 0, NULL, REG_OPTION_NON_VOLATILE, NULL);
+        ZwClose(Parent);
+        if (!NT_SUCCESS(Status))
+            return;
+
+        Parent = Key;
+        if (Current == Last)
+            break;
+        Current++;
+        KeyName.Buffer = (PWSTR)Current;
+    }
+    ZwClose(Parent);
+}
+
 /**
  * @name IoOpenDeviceRegistryKey
  *
@@ -1917,6 +1963,21 @@ IoOpenDeviceRegistryKey(IN PDEVICE_OBJECT DeviceObject,
         }
     }
 
+    if ((DevInstKeyType & (PLUGPLAY_REGKEY_CURRENT_HWPROFILE | PLUGPLAY_REGKEY_DRIVER)) == PLUGPLAY_REGKEY_CURRENT_HWPROFILE)
+    {
+        static const WCHAR CurrentProfile[] = L"Hardware Profiles\\Current";
+        UNICODE_STRING ProfileRoot, Relative;
+
+        ProfileRoot.Buffer = KeyNameBuffer;
+        ProfileRoot.Length = sizeof(RootKeyName) - sizeof(UNICODE_NULL) +
+                             sizeof(CurrentProfile) - sizeof(UNICODE_NULL);
+        ProfileRoot.MaximumLength = ProfileRoot.Length;
+        Relative.Buffer = KeyNameBuffer + ProfileRoot.Length / sizeof(WCHAR) + 1;
+        Relative.Length = KeyName.Length - ProfileRoot.Length - sizeof(WCHAR);
+        Relative.MaximumLength = Relative.Length;
+        IopCreateKeyPath(&ProfileRoot, &Relative);
+    }
+
     /*
      * Open the base key.
      */
@@ -1933,7 +1994,7 @@ IoOpenDeviceRegistryKey(IN PDEVICE_OBJECT DeviceObject,
      * For driver key we're done now.
      */
 
-    if (DevInstKeyType & PLUGPLAY_REGKEY_DRIVER)
+    if (DevInstKeyType & (PLUGPLAY_REGKEY_DRIVER | PLUGPLAY_REGKEY_CURRENT_HWPROFILE))
         return Status;
 
     /*
