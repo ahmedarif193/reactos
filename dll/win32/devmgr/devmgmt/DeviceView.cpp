@@ -313,7 +313,8 @@ CDeviceView::OnAction(
         case IDM_UPDATE_DRV:
         {
             bool NeedsReboot;
-            UpdateSelectedDevice(NeedsReboot);
+            if (UpdateSelectedDevice(NeedsReboot))
+                Refresh(GetCurrentView(), false, true);
             break;
         }
 
@@ -922,10 +923,11 @@ CDeviceView::UpdateSelectedDevice(
     if (Node == nullptr)
         return false;
 
-    DWORD dwReboot;
+    DWORD dwReboot = 0;
+    NeedsReboot = false;
     if (InstallDevInst(m_hMainWnd, Node->GetDeviceId(), TRUE, &dwReboot))
     {
-        NeedsReboot = false;
+        NeedsReboot = (dwReboot & (DI_NEEDRESTART | DI_NEEDREBOOT)) != 0;
         return true;
     }
 

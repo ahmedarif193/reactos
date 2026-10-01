@@ -535,8 +535,7 @@ UpdateDriver(
 {
     TOKEN_PRIVILEGES Privileges;
     HANDLE hToken;
-    DWORD dwReboot;
-    BOOL NeedReboot = FALSE;
+    DWORD dwReboot = 0;
 
     // Better use InstallDevInst:
     //     BOOL
@@ -551,7 +550,7 @@ UpdateDriver(
     if (!InstallDevInst(hwndDlg, dap->szDeviceID, TRUE, &dwReboot))
         return;
 
-    if (NeedReboot == FALSE)
+    if (!(dwReboot & (DI_NEEDRESTART | DI_NEEDREBOOT)))
         return;
 
     //FIXME: load text from resource file
