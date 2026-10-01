@@ -51,3 +51,6 @@
 ; Timeouts
 @ stdcall PcRegisterIoTimeout(ptr ptr ptr)
 @ stdcall PcUnregisterIoTimeout(ptr ptr ptr)
+
+@ stdcall PcAddStreamResource(ptr ptr ptr ptr)
+@ stdcall PcRemoveStreamResource(ptr)

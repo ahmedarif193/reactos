@@ -2742,6 +2742,49 @@ PcRegisterPhysicalConnectionToExternal(
   IN PUNICODE_STRING ToString,
   IN ULONG ToPin);
 
+DECLARE_HANDLE(PCSTREAMRESOURCE);
+
+typedef enum _PcStreamResourceType {
+  ePcStreamResourceInterrupt,
+  ePcStreamResourceThread,
+  ePcStreamResourceSet
+} PcStreamResourceType, *PPcStreamResourceType;
+
+typedef struct _PCSTREAMRESOURCE_DESCRIPTOR {
+  ULONG Size;
+  ULONG Flags;
+  PDEVICE_OBJECT Pdo;
+  PcStreamResourceType Type;
+  union {
+    struct {
+      ULONG Version;
+      PVOID Generic;
+    } Interrupt;
+    PETHREAD Thread;
+    PVOID ResourceSet;
+  } Resource;
+} PCSTREAMRESOURCE_DESCRIPTOR, *PPCSTREAMRESOURCE_DESCRIPTOR;
+
+FORCEINLINE
+VOID
+PCSTREAMRESOURCE_DESCRIPTOR_INIT(
+  OUT PPCSTREAMRESOURCE_DESCRIPTOR Resource)
+{
+  RtlZeroMemory(Resource, sizeof(PCSTREAMRESOURCE_DESCRIPTOR));
+  Resource->Size = sizeof(PCSTREAMRESOURCE_DESCRIPTOR);
+}
+
+PORTCLASSAPI NTSTATUS NTAPI
+PcAddStreamResource(
+  IN PDEVICE_OBJECT PhysicalDeviceObject,
+  IN PVOID ResourceSet,
+  IN PPCSTREAMRESOURCE_DESCRIPTOR ResourceDescriptor,
+  OUT PCSTREAMRESOURCE *ResourceHandle);
+
+PORTCLASSAPI NTSTATUS NTAPI
+PcRemoveStreamResource(
+  IN PCSTREAMRESOURCE ResourceHandle);
+
 /* ===============================================================
     Misc
 */
