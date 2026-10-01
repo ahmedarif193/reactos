@@ -953,6 +953,7 @@ IoGetDeviceInterfaces(IN CONST GUID *InterfaceClassGuid,
     UNICODE_STRING KeyName;
     OBJECT_ATTRIBUTES ObjectAttributes;
     BOOLEAN FoundRightPDO = FALSE;
+    USHORT InstanceLength;
     ULONG i = 0, j, Size, NeededLength, ActualLength, LinkedValue;
     UNICODE_STRING ReturnBuffer = { 0, 0, NULL };
     NTSTATUS Status;
@@ -1072,7 +1073,8 @@ IoGetDeviceInterfaces(IN CONST GUID *InterfaceClassGuid,
                     ExFreePool(PartialInfo);
                     goto cleanup;
                 }
-                if (PartialInfo->DataLength == InstanceDevicePath->Length)
+                PnpRegSzToString((PWCHAR)PartialInfo->Data, PartialInfo->DataLength, &InstanceLength);
+                if (InstanceLength == InstanceDevicePath->Length)
                 {
                     if (RtlCompareMemory(PartialInfo->Data, InstanceDevicePath->Buffer, InstanceDevicePath->Length) == InstanceDevicePath->Length)
                     {
@@ -1440,6 +1442,7 @@ IoRegisterDeviceInterface(IN PDEVICE_OBJECT PhysicalDeviceObject,
                           OUT PUNICODE_STRING SymbolicLinkName)
 {
     PUNICODE_STRING InstancePath;
+    PWCHAR InstanceString;
     UNICODE_STRING GuidString;
     UNICODE_STRING SubKeyName;
     UNICODE_STRING InterfaceKeyName;
@@ -1605,13 +1608,24 @@ IoRegisterDeviceInterface(IN PDEVICE_OBJECT PhysicalDeviceObject,
     }
 
     /* Write DeviceInstance entry. Value is InstancePath */
-    Status = ZwSetValueKey(
-        InterfaceKey,
-        &DeviceInstance,
-        0, /* TileIndex */
-        REG_SZ,
-        InstancePath->Buffer,
-        InstancePath->Length);
+    InstanceString = ExAllocatePoolWithTag(PagedPool, InstancePath->Length + sizeof(UNICODE_NULL), TAG_IO);
+    if (InstanceString)
+    {
+        RtlCopyMemory(InstanceString, InstancePath->Buffer, InstancePath->Length);
+        InstanceString[InstancePath->Length / sizeof(WCHAR)] = UNICODE_NULL;
+        Status = ZwSetValueKey(
+            InterfaceKey,
+            &DeviceInstance,
+            0, /* TileIndex */
+            REG_SZ,
+            InstanceString,
+            InstancePath->Length + sizeof(UNICODE_NULL));
+        ExFreePoolWithTag(InstanceString, TAG_IO);
+    }
+    else
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+    }
     if (!NT_SUCCESS(Status))
     {
         DPRINT("ZwSetValueKey() failed with status 0x%08lx\n", Status);
