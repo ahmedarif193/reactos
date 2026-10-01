@@ -25,6 +25,9 @@
 #define NDEBUG
 #include <debug.h>
 
+#define HEAP_DECOMMIT_MINIMUM_BLOCK 0x8000
+#define HEAP_DECOMMIT_COMMITTED_DIVISOR 8
+
 /* Bitmaps stuff */
 
 /* How many least significant bits are clear */
@@ -1179,6 +1182,33 @@ RtlpCoalesceHeap(PHEAP Heap)
 {
     UNIMPLEMENTED;
     return NULL;
+}
+
+static
+BOOLEAN
+RtlpShouldDeCommitFreeBlock(PHEAP Heap,
+                            SIZE_T BlockSize)
+{
+    SIZE_T CommittedPages = 0;
+    ULONG Index;
+
+    if (BlockSize < Heap->DeCommitFreeBlockThreshold ||
+        BlockSize < (HEAP_DECOMMIT_MINIMUM_BLOCK >> HEAP_ENTRY_SHIFT) ||
+        Heap->TotalFreeSize + BlockSize < Heap->DeCommitTotalFreeThreshold)
+    {
+        return FALSE;
+    }
+
+    for (Index = 0; Index < HEAP_SEGMENTS; Index++)
+    {
+        if (Heap->Segments[Index] != NULL)
+        {
+            CommittedPages += Heap->Segments[Index]->NumberOfPages -
+                              Heap->Segments[Index]->NumberOfUnCommittedPages;
+        }
+    }
+
+    return BlockSize >= (CommittedPages << (PAGE_SHIFT - HEAP_ENTRY_SHIFT)) / HEAP_DECOMMIT_COMMITTED_DIVISOR;
 }
 
 PHEAP_FREE_ENTRY NTAPI
@@ -2463,8 +2493,7 @@ BOOLEAN NTAPI RtlFreeHeap(
         }
 
         /* See if we should decommit this block */
-        if ((BlockSize >= Heap->DeCommitFreeBlockThreshold) ||
-            (Heap->TotalFreeSize + BlockSize >= Heap->DeCommitTotalFreeThreshold))
+        if (RtlpShouldDeCommitFreeBlock(Heap, BlockSize))
         {
             RtlpDeCommitFreeBlock(Heap, (PHEAP_FREE_ENTRY)HeapEntry, BlockSize);
         }
