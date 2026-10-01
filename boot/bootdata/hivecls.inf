@@ -381,7 +381,7 @@ HKCR,"inffile","FriendlyTypeName",0x00020000,"@%SystemRoot%\system32\setupapi.dl
 HKCR,"inffile\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-151"
 HKCR,"inffile\shell\open\command","",0x00000000,"notepad.exe ""%1"""
 HKCR,"inffile\shell\Install","",0x00000000,%INSTALL%
-HKCR,"inffile\shell\Install\command","",0x00020000,"%SystemRoot%\system32\rundll32.exe setupapi,InstallHinfSection DefaultInstall 132 %1"
+HKCR,"inffile\shell\Install\command","",0x00020000,"%SystemRoot%\system32\InfDefaultInstall.exe ""%1"""
 
 ; Show icons for shortcuts in shell views (lnkfile is handled specially in shell32)
 ; Don't display extension for shortcuts
