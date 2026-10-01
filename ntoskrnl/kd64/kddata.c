@@ -561,12 +561,12 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     PtrToUL64(RtlpBreakWithStatusInstruction),
     0,
     FIELD_OFFSET(KTHREAD, CallbackStack),
-#if defined(_M_ARM) || defined(_M_AMD64) || defined(_M_RISCV64) || (defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN8))
-    0,
-    0,
-#else
+#if defined(_M_IX86) || (defined(_M_ARM64) && (NTDDI_VERSION < NTDDI_WIN8))
     FIELD_OFFSET(KCALLOUT_FRAME, CallbackStack),
     FIELD_OFFSET(KCALLOUT_FRAME, CBSTACK_FRAME_POINTER),
+#else
+    0,
+    0,
 #endif
     FALSE,
     PtrToUL64(KI_USER_MODE_CALLBACK_ENTRY),
@@ -665,13 +665,13 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     // Win11 arm64 KPRCB has no CpuType/VendorString; closest equivalents
     FIELD_OFFSET(KPRCB, ProcessorModel),
     FIELD_OFFSET(KPRCB, ProcessorVendorString),
-#elif defined(_M_RISCV64)
-    // ReactOS-private RISC-V KPRCB carries no CPU type or vendor string
-    0,
-    0,
-#else
+#elif defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM)
     FIELD_OFFSET(KPRCB, CpuType),
     FIELD_OFFSET(KPRCB, VendorString),
+#else
+    // The other ReactOS-private KPRCBs carry no CPU type or vendor string
+    0,
+    0,
 #endif
     FIELD_OFFSET(KPRCB, ProcessorState.ContextFrame),
     FIELD_OFFSET(KPRCB, Number),

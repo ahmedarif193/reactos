@@ -1154,9 +1154,9 @@ typedef struct _XSTATE_SAVE {
   struct _KTHREAD* Thread;
   UCHAR Level;
   XSTATE_CONTEXT XStateContext;
-#elif defined(_IA64_) || defined(_ARM_) || defined(_ARM64_) || defined(_RISCV64_)
+#elif !defined(_X86_)
   ULONG Dummy;
-#elif defined(_X86_)
+#else
   _ANONYMOUS_UNION union {
     _ANONYMOUS_STRUCT struct {
       LONG64 Reserved1;
