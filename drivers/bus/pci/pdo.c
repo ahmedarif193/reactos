@@ -2387,6 +2387,45 @@ PciPdoInitializeBarRequirement(
 }
 
 static
+ULONGLONG
+PciPdoPreferredBarBase(
+    _In_opt_ PFDO_DEVICE_EXTENSION FdoExtension,
+    _In_ ULONGLONG Base,
+    _In_ ULONGLONG Length,
+    _In_ ULONG Flags,
+    _In_ BOOLEAN DecodeEnabled)
+{
+    PPCI_ADDRESS_WINDOW Windows;
+    ULONG WindowCount;
+    ULONG i;
+
+    if (DecodeEnabled)
+        return Base;
+
+    if (!FdoExtension || Base == 0 || Length == 0 || Base > MAXULONGLONG - (Length - 1))
+        return 0;
+
+    if (Flags & PCI_ADDRESS_IO_SPACE)
+    {
+        Windows = FdoExtension->IoWindows;
+        WindowCount = FdoExtension->IoWindowCount;
+    }
+    else
+    {
+        Windows = FdoExtension->MemoryWindows;
+        WindowCount = FdoExtension->MemoryWindowCount;
+    }
+
+    for (i = 0; i < WindowCount; i++)
+    {
+        if (Base >= Windows[i].Start && Base + Length - 1 <= Windows[i].End)
+            return Base;
+    }
+
+    return 0;
+}
+
+static
 PIO_RESOURCE_DESCRIPTOR
 PciPdoAppendBarRequirements(
     _In_opt_ PFDO_DEVICE_EXTENSION FdoExtension,
@@ -2631,7 +2670,7 @@ PdoQueryResourceRequirements(
             if (!PCI_PDO_EXPOSE_IO_BARS && (Flags & PCI_ADDRESS_IO_SPACE))
                 continue;
 
-            Descriptor = PciPdoAppendBarRequirements(FdoExtension, Descriptor, BaseDescriptors + RTL_NUMBER_OF(BaseDescriptors), ((Flags & PCI_ADDRESS_IO_SPACE) ? IoDecode : MemDecode) ? Base : 0, Length, Flags, MaximumAddress);
+            Descriptor = PciPdoAppendBarRequirements(FdoExtension, Descriptor, BaseDescriptors + RTL_NUMBER_OF(BaseDescriptors), PciPdoPreferredBarBase(FdoExtension, Base, Length, Flags, (Flags & PCI_ADDRESS_IO_SPACE) ? IoDecode : MemDecode), Length, Flags, MaximumAddress);
             if (Descriptor < BaseDescriptors + RTL_NUMBER_OF(BaseDescriptors))
             {
                 RtlZeroMemory(Descriptor, sizeof(*Descriptor));
@@ -2669,7 +2708,7 @@ PdoQueryResourceRequirements(
             if (!PCI_PDO_EXPOSE_IO_BARS && (Flags & PCI_ADDRESS_IO_SPACE))
                 continue;
 
-            Descriptor = PciPdoAppendBarRequirements(FdoExtension, Descriptor, BaseDescriptors + RTL_NUMBER_OF(BaseDescriptors), ((Flags & PCI_ADDRESS_IO_SPACE) ? IoDecode : MemDecode) ? Base : 0, Length, Flags, MaximumAddress);
+            Descriptor = PciPdoAppendBarRequirements(FdoExtension, Descriptor, BaseDescriptors + RTL_NUMBER_OF(BaseDescriptors), PciPdoPreferredBarBase(FdoExtension, Base, Length, Flags, (Flags & PCI_ADDRESS_IO_SPACE) ? IoDecode : MemDecode), Length, Flags, MaximumAddress);
             if (Descriptor < BaseDescriptors + RTL_NUMBER_OF(BaseDescriptors))
             {
                 RtlZeroMemory(Descriptor, sizeof(*Descriptor));
