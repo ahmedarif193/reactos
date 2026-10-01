@@ -12918,6 +12918,7 @@ DxgkAdapterStart(
     /* Call miniport start. */
     DXGKRNL_TRACE("DxgkAdapterStart: calling DxgkDdiStartDevice MiniportCtx=%p\n",
                   Adapter->MiniportDeviceContext);
+    InterlockedExchange(&Adapter->MiniportStartFailed, 0);
     StepStart100ns = DxgkpTraceNow100ns();
     Status = Adapter->MiniportContext->InitData.s.DxgkDdiStartDevice(
                  Adapter->MiniportDeviceContext,
@@ -12936,6 +12937,7 @@ DxgkAdapterStart(
                     Status, Adapter->InterruptCount,
                     Adapter->InterruptVector, Adapter->InterruptMessageBased,
                     Adapter->MapMemoryCallCount);
+        InterlockedExchange(&Adapter->MiniportStartFailed, 1);
         /* Do not call another miniport DDI from this failure path.  StartDevice
          * can nevertheless leave MiniportDeviceContext-owned objects alive
          * for DxgkDdiRemoveDevice, and those objects may still own allocations
@@ -14600,6 +14602,11 @@ DxgkpMiniportPnpDispatch(
                              Stack->Parameters.StartDevice.AllocatedResources,
                              Stack->Parameters.StartDevice.AllocatedResourcesTranslated);
                 AdapterStartUs = DxgkpTraceElapsedUs(LowerStart100ns);
+                if (!NT_SUCCESS(Status) &&
+                    InterlockedCompareExchange(&Adapter->MiniportStartFailed, 0, 0) != 0)
+                {
+                    Status = STATUS_SUCCESS;
+                }
             }
 
             Irp->IoStatus.Status = Status;
@@ -14730,6 +14737,11 @@ DxgkpMiniportPnpDispatch(
                 Irp->IoStatus.Status = STATUS_SUCCESS;
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
                 return STATUS_SUCCESS;
+            }
+            if (InterlockedCompareExchange(&Adapter->MiniportStartFailed, 0, 0) != 0)
+            {
+                Irp->IoStatus.Information |= PNP_DEVICE_FAILED;
+                Irp->IoStatus.Status = STATUS_SUCCESS;
             }
             return DxgkpForwardIrp(Adapter, Irp);
         }
