@@ -1,0 +1,6 @@
+#include <windef.h>
+
+#define REACTOS_STR_FILE_DESCRIPTION    "LiberNT PnP Utility"
+#define REACTOS_STR_INTERNAL_NAME       "pnputil"
+#define REACTOS_STR_ORIGINAL_FILENAME   "pnputil.exe"
+#include <reactos/version.rc>
