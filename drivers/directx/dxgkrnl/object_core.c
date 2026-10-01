@@ -181,6 +181,7 @@ DxgkCapsCoreInterfaceVersionToLevel(
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_3;
         case 0x9006:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_4;
+        case 0xA007:
         case 0xA00B:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_5;
         case 0xB004:
