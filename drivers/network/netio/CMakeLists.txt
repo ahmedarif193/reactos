@@ -14,6 +14,8 @@ list(APPEND SOURCE
     netio.c
     nmr_stubs.c
     fwp_stubs.c
+    fwp_ipsec.c
+    iphlp.c
     ../tdihelpers/tdi.c
     ../tdihelpers/tdiconn.c
     ${CMAKE_CURRENT_BINARY_DIR}/netio.def)

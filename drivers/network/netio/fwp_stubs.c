@@ -81,6 +81,37 @@ FwpsCalloutRegister0(
 }
 
 NTSTATUS NTAPI
+FwpsCalloutRegister3(
+    _Inout_ void* deviceObject,
+    _In_ const void* callout,
+    _Out_opt_ UINT32* calloutId)
+{
+    KIRQL oldIrql;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(deviceObject);
+    if (callout == NULL) return STATUS_INVALID_PARAMETER;
+
+    FwpEnsureInitialized();
+    KeAcquireSpinLock(&g_FwpLock, &oldIrql);
+    for (i = 0; i < FWP_MAX_CALLOUTS; i++)
+    {
+        if (!g_FwpCallouts[i].InUse)
+        {
+            g_FwpCallouts[i].InUse = TRUE;
+            g_FwpCallouts[i].CalloutId = g_FwpNextCalloutId++;
+            RtlZeroMemory(&g_FwpCallouts[i].Callout, sizeof(g_FwpCallouts[i].Callout));
+            RtlCopyMemory(&g_FwpCallouts[i].Callout.calloutKey, callout, sizeof(GUID));
+            if (calloutId) *calloutId = g_FwpCallouts[i].CalloutId;
+            KeReleaseSpinLock(&g_FwpLock, oldIrql);
+            return STATUS_SUCCESS;
+        }
+    }
+    KeReleaseSpinLock(&g_FwpLock, oldIrql);
+    return STATUS_INSUFFICIENT_RESOURCES;
+}
+
+NTSTATUS NTAPI
 FwpsCalloutUnregisterById0(
     _In_ const UINT32 calloutId)
 {
