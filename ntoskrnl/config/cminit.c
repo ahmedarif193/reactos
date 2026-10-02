@@ -490,7 +490,7 @@ CmpLoadAppHive(POBJECT_ATTRIBUTES TargetKey,
     if (AccessMode != KernelMode) Attributes.Attributes |= OBJ_FORCE_ACCESS_CHECK;
     Attributes.SecurityDescriptor = NULL;
     Attributes.SecurityQualityOfService = NULL;
-    Status = ZwOpenFile(&Probe, 0, &Attributes, &IoStatus,
+    Status = ZwOpenFile(&Probe, FILE_READ_ATTRIBUTES, &Attributes, &IoStatus,
                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         FILE_NON_DIRECTORY_FILE);
     if (NT_SUCCESS(Status))

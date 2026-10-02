@@ -989,7 +989,7 @@ FindFirstStreamW(IN LPCWSTR lpFileName,
                                NULL);
 
     Status = NtCreateFile(&FileHandle,
-                          0,
+                          FILE_READ_ATTRIBUTES,
                           &ObjectAttributes,
                           &IoStatusBlock,
                           NULL, 0,
