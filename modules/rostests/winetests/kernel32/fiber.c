@@ -952,15 +952,11 @@ static void subtest_fiber_actctx_preservation(HANDLE current_actctx, HANDLE chil
     CloseHandle(thread);
 
     /* The exited thread has been converted to a fiber */
-#if defined(__REACTOS__) && defined(_M_AMD64)
-    skip("FIXME: SwitchToFiber() is unimplemented on AMD64 ReactOS\n");
-#else
     SwitchToFiber(fibers[1]);
     check_current_actctx_is(current_actctx, FALSE);
 
     DeleteFiber(fibers[1]);
     fibers[1] = NULL;
-#endif
 }
 
 static HANDLE create_actctx_from_module_manifest(void)
