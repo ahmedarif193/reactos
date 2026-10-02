@@ -4601,13 +4601,26 @@ NtSetInformationThread(
                 break;
             }
 
-            /* Reference the thread.
-             * NOTE: Win10+ uses THREAD_SET_LIMITED_INFORMATION instead;
-             * however some tools misuse thread names to perform suspicious
-             * operations; therefore we try to mess with these by requiring
-             * a bit more of access rights. */
+            _SEH2_TRY
+            {
+                CapturedThreadName = *(PUNICODE_STRING)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if ((CapturedThreadName.Length != 0) && (CapturedThreadName.Buffer == NULL))
+            {
+                Status = STATUS_ACCESS_VIOLATION;
+                break;
+            }
+
+            /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               THREAD_SET_INFORMATION,
+                                               THREAD_SET_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5164,7 +5177,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5211,7 +5224,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5340,7 +5353,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5457,7 +5470,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5603,8 +5616,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-            // FIXME: Use THREAD_QUERY_LIMITED_INFORMATION when implemented
-                                               THREAD_QUERY_INFORMATION,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5645,7 +5657,9 @@ NtQueryInformationThread(
                 }
                 else
                 {
-                    RtlInitEmptyUnicodeString(&NameInfo->ThreadName, NULL, 0);
+                    RtlInitEmptyUnicodeString(&NameInfo->ThreadName,
+                                              (PWCH)(&NameInfo->ThreadName + 1),
+                                              0);
                 }
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
