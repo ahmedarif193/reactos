@@ -2516,6 +2516,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     PLDR_DATA_TABLE_ENTRY NtLdrEntry;
     PWCHAR Current;
     ULONG ExecuteOptions = 0;
+    ULONG CurrentExecuteOptions = 0;
     PVOID ViewBase;
     BOOLEAN IsWow64 = FALSE;
 #if defined(_M_ARM64)
@@ -3287,14 +3288,22 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     {
         ExecuteOptions = MEM_EXECUTE_OPTION_ENABLE | MEM_EXECUTE_OPTION_PERMANENT;
     }
-    Status = NtSetInformationProcess(NtCurrentProcess(),
-                                     ProcessExecuteFlags,
-                                     &ExecuteOptions,
-                                     sizeof(ExecuteOptions));
-    if (!NT_SUCCESS(Status))
+    Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                       ProcessExecuteFlags,
+                                       &CurrentExecuteOptions,
+                                       sizeof(CurrentExecuteOptions),
+                                       NULL);
+    if (!NT_SUCCESS(Status) || !(CurrentExecuteOptions & MEM_EXECUTE_OPTION_PERMANENT))
     {
-        DPRINT1("LDR: Could not set process execute flags 0x%x; status %x\n",
-                ExecuteOptions, Status);
+        Status = NtSetInformationProcess(NtCurrentProcess(),
+                                         ProcessExecuteFlags,
+                                         &ExecuteOptions,
+                                         sizeof(ExecuteOptions));
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("LDR: Could not set process execute flags 0x%x; status %x\n",
+                    ExecuteOptions, Status);
+        }
     }
 
     // FIXME: Should be done by Application Compatibility features,
