@@ -1049,6 +1049,9 @@ HaliQuerySystemInformation(
         case HalSecondaryInterruptInformation:
             return HalpSecondaryQueryInformation(BufferSize, Buffer, ReturnedLength);
 
+        case HalProcessorBrandString:
+            return STATUS_NOT_SUPPORTED;
+
         case HalFrameBufferCachingInformation:
         case HalDisplayBiosInformation:
         case HalQueryAMLIIllegalIOPortAddresses:

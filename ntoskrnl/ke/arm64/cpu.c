@@ -496,7 +496,7 @@ ULONG
 NTAPI
 KeGetRecommendedSharedDataAlignment(VOID)
 {
-    return KeLargestCacheLine;
+    return max(KeLargestCacheLine, SYSTEM_CACHE_ALIGNMENT_SIZE);
 }
 
 VOID
