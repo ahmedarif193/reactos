@@ -456,6 +456,7 @@ LdrLoadDll(
     WCHAR StringBuffer[MAX_PATH];
     UNICODE_STRING StaticString, DynamicString;
     BOOLEAN RedirectedDll = FALSE;
+    BOOLEAN ApiSetRedirected = FALSE;
 #if defined(_M_ARM64)
     UNICODE_STRING ChpeDynamicString;
 #endif
@@ -471,7 +472,7 @@ LdrLoadDll(
     RtlInitEmptyUnicodeString(&ChpeDynamicString, NULL, 0);
 #endif
 
-    Status = LdrpApplyFileNameRedirection(DllName, &LdrApiDefaultExtension, &StaticString, &DynamicString, &DllName, &RedirectedDll, NULL);
+    Status = LdrpApplyFileNameRedirection(DllName, &LdrApiDefaultExtension, &StaticString, &DynamicString, &DllName, &RedirectedDll, &ApiSetRedirected);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -488,6 +489,7 @@ LdrLoadDll(
         {
             DllName = &ChpeDynamicString;
             RedirectedDll = TRUE;
+            ApiSetRedirected = FALSE;
         }
     }
 #endif
@@ -539,7 +541,7 @@ LdrLoadDll(
         LdrpTopLevelDllBeingLoaded = DllName;
 
         /* Load the DLL */
-        Status = LdrpLoadDll(RedirectedDll,
+        Status = LdrpLoadDll(RedirectedDll && !ApiSetRedirected,
                              SearchPath,
                              DllCharacteristics,
                              DllName,

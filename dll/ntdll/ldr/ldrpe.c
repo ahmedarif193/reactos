@@ -1033,6 +1033,7 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
     PTEB Teb = NtCurrentTeb();
     UNICODE_STRING RedirectedImpDescName;
     BOOLEAN RedirectedDll;
+    BOOLEAN ApiSetRedirected = FALSE;
 #if LDRP_CHPE_IMPORT_REDIRECTION
     UNICODE_STRING ChpeImpDescName;
     BOOLEAN ChpeRedirectedDll;
@@ -1097,7 +1098,7 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
     }
 
     /* Check if the SxS Assemblies specify another file */
-    Status = LdrpApplyFileNameRedirection(ImpDescName, &LdrApiDefaultExtension, NULL, &RedirectedImpDescName, &ImpDescName, &RedirectedDll, NULL);
+    Status = LdrpApplyFileNameRedirection(ImpDescName, &LdrApiDefaultExtension, NULL, &RedirectedImpDescName, &ImpDescName, &RedirectedDll, &ApiSetRedirected);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("LDR: LdrpApplyFileNameRedirection failed with status %x for dll %wZ\n", Status, ImpDescName);
@@ -1116,6 +1117,7 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
             ImpDescName = &ChpeImpDescName;
             RedirectedDll = TRUE;
             ChpeRedirectedDll = TRUE;
+            ApiSetRedirected = FALSE;
         }
     }
 #endif
@@ -1152,7 +1154,7 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
                         ImpDescName->Buffer,
                         NULL,
                         TRUE,
-                        RedirectedDll,
+                        RedirectedDll && !ApiSetRedirected,
                         DataTableEntry);
     if (!NT_SUCCESS(Status))
     {
@@ -1519,7 +1521,7 @@ FailurePath:
             {
                 WCHAR StringBuffer[MAX_PATH];
                 UNICODE_STRING StaticString, *RedirectedImportName;
-                BOOLEAN Redirected = FALSE;
+                BOOLEAN Redirected = FALSE, ApiSetRedirected = FALSE;
 #if LDRP_CHPE_IMPORT_REDIRECTION
                 WCHAR ForwarderDllBuffer[MAX_PATH];
                 UNICODE_STRING ForwarderDllName, ChpeImportName;
@@ -1528,7 +1530,7 @@ FailurePath:
 
                 RtlInitEmptyUnicodeString(&StaticString, StringBuffer, sizeof(StringBuffer));
                 RedirectedImportName = &TempUString;
-                Status = LdrpApplyFileNameRedirection(&TempUString, &LdrApiDefaultExtension, &StaticString, NULL, &RedirectedImportName, &Redirected, NULL);
+                Status = LdrpApplyFileNameRedirection(&TempUString, &LdrApiDefaultExtension, &StaticString, NULL, &RedirectedImportName, &Redirected, &ApiSetRedirected);
 
 #if LDRP_CHPE_IMPORT_REDIRECTION
                 RtlInitEmptyUnicodeString(&ForwarderDllName, ForwarderDllBuffer, sizeof(ForwarderDllBuffer));
@@ -1553,6 +1555,7 @@ FailurePath:
                         {
                             RedirectedImportName = &ChpeImportName;
                             Redirected = TRUE;
+                            ApiSetRedirected = FALSE;
                         }
                     }
                 }
@@ -1574,7 +1577,7 @@ FailurePath:
                     }
                     else
                     {
-                        Status = LdrpLoadDll(Redirected, DllPath, NULL, RedirectedImportName, &ForwarderHandle, FALSE);
+                        Status = LdrpLoadDll(Redirected && !ApiSetRedirected, DllPath, NULL, RedirectedImportName, &ForwarderHandle, FALSE);
                         ForwarderReferenced = NT_SUCCESS(Status);
                     }
                 }
