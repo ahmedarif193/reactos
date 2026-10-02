@@ -92,6 +92,7 @@ list(APPEND SOURCE
     boundary.c
     slist.c
     splaytree.c
+    sxsmanifest.c
     sysvol.c
     thread.c
     time.c

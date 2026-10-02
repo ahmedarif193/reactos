@@ -661,6 +661,10 @@ static const WCHAR winrtv1W[] = L"urn:schemas-microsoft-com:winrt.v1";
 static const WCHAR compatibilityNSW[] = L"urn:schemas-microsoft-com:compatibility.v1";
 static const WCHAR windowsSettings2005NSW[] = L"http://schemas.microsoft.com/SMI/2005/WindowsSettings";
 static const WCHAR windowsSettings2011NSW[] = L"http://schemas.microsoft.com/SMI/2011/WindowsSettings";
+#ifdef __REACTOS__
+static const WCHAR windowsSettings2013NSW[] = L"http://schemas.microsoft.com/SMI/2013/WindowsSettings";
+static const WCHAR windowsSettings2024NSW[] = L"http://schemas.microsoft.com/SMI/2024/WindowsSettings";
+#endif
 static const WCHAR windowsSettings2016NSW[] = L"http://schemas.microsoft.com/SMI/2016/WindowsSettings";
 static const WCHAR windowsSettings2017NSW[] = L"http://schemas.microsoft.com/SMI/2017/WindowsSettings";
 static const WCHAR windowsSettings2019NSW[] = L"http://schemas.microsoft.com/SMI/2019/WindowsSettings";
@@ -1362,6 +1366,32 @@ static BOOL next_xml_elem( xmlbuf_t *xmlbuf, struct xml_elem *elem, const struct
             }
             xmlbuf->ptr = ptr + 3;
         }
+#ifdef __REACTOS__
+        else if (ptr + 8 <= xmlbuf->end && !wcsncmp( ptr, L"![CDATA[", 8 ))
+        {
+            for (ptr += 8; ptr + 3 <= xmlbuf->end; ptr++)
+                if (ptr[0] == ']' && ptr[1] == ']' && ptr[2] == '>') break;
+
+            if (ptr + 3 > xmlbuf->end)
+            {
+                xmlbuf->ptr = xmlbuf->end;
+                return set_error( xmlbuf );
+            }
+            xmlbuf->ptr = ptr + 3;
+        }
+        else if (ptr < xmlbuf->end && ptr[0] == '?')
+        {
+            for (ptr++; ptr + 2 <= xmlbuf->end; ptr++)
+                if (ptr[0] == '?' && ptr[1] == '>') break;
+
+            if (ptr + 2 > xmlbuf->end)
+            {
+                xmlbuf->ptr = xmlbuf->end;
+                return set_error( xmlbuf );
+            }
+            xmlbuf->ptr = ptr + 2;
+        }
+#endif
         else break;
     }
 
@@ -1473,15 +1503,24 @@ static void parse_expect_no_attr(xmlbuf_t* xmlbuf, BOOL* end)
     }
 }
 
+#ifdef __REACTOS__
+static void parse_unknown_elem(xmlbuf_t *xmlbuf, const struct xml_elem *parent);
+#endif
+
 static void parse_expect_end_elem( xmlbuf_t *xmlbuf, const struct xml_elem *parent )
 {
     struct xml_elem elem;
 
+#ifdef __REACTOS__
+    while (next_xml_elem(xmlbuf, &elem, parent))
+        parse_unknown_elem(xmlbuf, &elem);
+#else
     if (next_xml_elem(xmlbuf, &elem, parent))
     {
         FIXME( "unexpected element %s\n", debugstr_xml_elem(&elem) );
         set_error( xmlbuf );
     }
+#endif
 }
 
 static void parse_unknown_elem(xmlbuf_t *xmlbuf, const struct xml_elem *parent)
@@ -1636,7 +1675,11 @@ static void parse_com_class_progid(xmlbuf_t *xmlbuf, struct entity *entity, cons
     BOOL end = FALSE;
 
     parse_expect_no_attr(xmlbuf, &end);
+#ifdef __REACTOS__
+    if (end) return;
+#else
     if (end) set_error( xmlbuf );
+#endif
     if (!parse_text_content(xmlbuf, &content)) return;
 
     if (!com_class_add_progid(&content, entity)) set_error( xmlbuf );
@@ -1884,7 +1927,9 @@ static BOOL parse_typelib_version(const xmlstr_t *str, struct entity *entity)
         if (*curr >= '0' && *curr <= '9')
         {
             ver[pos] = ver[pos] * 10 + *curr - '0';
+#ifndef __REACTOS__
             if (ver[pos] >= 0x10000) goto error;
+#endif
         }
         else if (*curr == '.')
         {
@@ -1975,10 +2020,17 @@ static void parse_window_class_elem( xmlbuf_t *xmlbuf, struct dll_redirect *dll,
     {
         if (xml_attr_cmp(&attr, L"versioned"))
         {
+#ifdef __REACTOS__
+            if (xmlstr_cmpi(&attr.value, L"no") || xmlstr_cmpi(&attr.value, L"false"))
+                entity->u.class.versioned = FALSE;
+            else if (!xmlstr_cmpi(&attr.value, L"yes") && !xmlstr_cmpi(&attr.value, L"true"))
+                set_error( xmlbuf );
+#else
             if (xmlstr_cmpi(&attr.value, L"no"))
                 entity->u.class.versioned = FALSE;
             else if (!xmlstr_cmpi(&attr.value, L"yes"))
                 set_error( xmlbuf );
+#endif
         }
         else if (!is_xmlns_attr( &attr ))
         {
@@ -2268,6 +2320,9 @@ static void parse_dependency_elem( xmlbuf_t *xmlbuf, struct actctx_loader *acl,
         if (xml_attr_cmp(&attr, L"optional"))
         {
             optional = xmlstr_cmpi( &attr.value, L"yes" );
+#ifdef __REACTOS__
+            if (xmlstr_cmpi( &attr.value, L"true" )) optional = TRUE;
+#endif
             TRACE("optional=%s\n", debugstr_xmlstr(&attr.value));
         }
         else if (!is_xmlns_attr( &attr ))
@@ -2515,6 +2570,12 @@ static void parse_compatibility_application_elem(xmlbuf_t *xmlbuf, struct assemb
                                                  struct actctx_loader* acl, const struct xml_elem *parent)
 {
     struct xml_elem elem;
+#ifdef __REACTOS__
+    BOOL end = FALSE;
+
+    parse_expect_no_attr(xmlbuf, &end);
+    if (end) return;
+#endif
 
     while (next_xml_elem(xmlbuf, &elem, parent))
     {
@@ -2540,6 +2601,12 @@ static void parse_compatibility_elem(xmlbuf_t *xmlbuf, struct assembly *assembly
                                      struct actctx_loader* acl, const struct xml_elem *parent)
 {
     struct xml_elem elem;
+#ifdef __REACTOS__
+    BOOL end = FALSE;
+
+    parse_expect_no_attr(xmlbuf, &end);
+    if (end) return;
+#endif
 
     while (next_xml_elem(xmlbuf, &elem, parent))
     {
@@ -2595,6 +2662,12 @@ static void parse_windows_settings_elem( xmlbuf_t *xmlbuf, struct assembly *asse
                                          struct actctx_loader *acl, const struct xml_elem *parent )
 {
     struct xml_elem elem;
+#ifdef __REACTOS__
+    BOOL end = FALSE;
+
+    parse_expect_no_attr(xmlbuf, &end);
+    if (end) return;
+#endif
 
     while (next_xml_elem( xmlbuf, &elem, parent ))
     {
@@ -2606,11 +2679,19 @@ static void parse_windows_settings_elem( xmlbuf_t *xmlbuf, struct assembly *asse
             xml_elem_cmp( &elem, L"dpiAwareness", windowsSettings2016NSW ) ||
             xml_elem_cmp( &elem, L"gdiScaling", windowsSettings2017NSW ) ||
             xml_elem_cmp( &elem, L"heapType", windowsSettings2020NSW ) ||
+#ifdef __REACTOS__
+            xml_elem_cmp( &elem, L"highResolutionScrollingAware", windowsSettings2013NSW ) ||
+            xml_elem_cmp( &elem, L"longPathAware", windowsSettings2016NSW ) ||
+            xml_elem_cmp( &elem, L"printerDriverIsolation", windowsSettings2011NSW ) ||
+            xml_elem_cmp( &elem, L"supportedArchitectures", windowsSettings2024NSW ) ||
+            xml_elem_cmp( &elem, L"ultraHighResolutionScrollingAware", windowsSettings2013NSW ))
+#else
             xml_elem_cmp( &elem, L"highResolutionScrollingAware", windowsSettings2017NSW ) ||
             xml_elem_cmp( &elem, L"longPathAware", windowsSettings2016NSW ) ||
             xml_elem_cmp( &elem, L"magicFutureSetting", windowsSettings2017NSW ) ||
             xml_elem_cmp( &elem, L"printerDriverIsolation", windowsSettings2011NSW ) ||
             xml_elem_cmp( &elem, L"ultraHighResolutionScrollingAware", windowsSettings2017NSW ))
+#endif
         {
             parse_settings_elem( xmlbuf, assembly, acl, &elem );
         }
@@ -2699,6 +2780,12 @@ static void parse_requested_privileges_elem( xmlbuf_t *xmlbuf, struct assembly *
                                              struct actctx_loader *acl, const struct xml_elem *parent )
 {
     struct xml_elem elem;
+#ifdef __REACTOS__
+    BOOL end = FALSE;
+
+    parse_expect_no_attr(xmlbuf, &end);
+    if (end) return;
+#endif
 
     while (next_xml_elem(xmlbuf, &elem, parent))
     {
@@ -2718,6 +2805,12 @@ static void parse_security_elem( xmlbuf_t *xmlbuf, struct assembly *assembly,
                                  struct actctx_loader *acl, const struct xml_elem *parent )
 {
     struct xml_elem elem;
+#ifdef __REACTOS__
+    BOOL end = FALSE;
+
+    parse_expect_no_attr(xmlbuf, &end);
+    if (end) return;
+#endif
 
     while (next_xml_elem(xmlbuf, &elem, parent))
     {
@@ -2737,6 +2830,12 @@ static void parse_trust_info_elem( xmlbuf_t *xmlbuf, struct assembly *assembly,
                                    struct actctx_loader *acl, const struct xml_elem *parent )
 {
     struct xml_elem elem;
+#ifdef __REACTOS__
+    BOOL end = FALSE;
+
+    parse_expect_no_attr(xmlbuf, &end);
+    if (end) return;
+#endif
 
     while (next_xml_elem(xmlbuf, &elem, parent))
     {
@@ -2920,6 +3019,34 @@ static NTSTATUS parse_manifest_buffer( struct actctx_loader* acl, struct assembl
     return STATUS_SUCCESS;
 }
 
+#ifdef __REACTOS__
+static BOOL is_structural_utf8( const void *buffer, SIZE_T size )
+{
+    const BYTE *bytes = buffer;
+    SIZE_T i = 0, count;
+
+    while (i < size)
+    {
+        if (bytes[i] < 0x80) count = 0;
+        else if ((bytes[i] & 0xe0) == 0xc0) count = 1;
+        else if ((bytes[i] & 0xf0) == 0xe0) count = 2;
+        else if ((bytes[i] & 0xf8) == 0xf0) count = 3;
+        else return FALSE;
+
+        if (count >= size - i) return FALSE;
+        for (i++; count; count--, i++)
+            if ((bytes[i] & 0xc0) != 0x80) return FALSE;
+    }
+    return TRUE;
+}
+
+static NTSTATUS validate_manifest( const xmlbuf_t *xmlbuf, SIZE_T size, BOOL utf16, BOOL application )
+{
+    if (size & 1) return STATUS_SXS_CANT_GEN_ACTCTX;
+    return RtlpValidateSxsManifest( xmlbuf->ptr, xmlbuf->end - xmlbuf->ptr, utf16, application );
+}
+#endif
+
 static NTSTATUS parse_manifest( struct actctx_loader* acl, struct assembly_identity* ai,
                                 LPCWSTR filename, HANDLE module, LPCWSTR directory, BOOL shared,
                                 const void *buffer, SIZE_T size )
@@ -2930,6 +3057,10 @@ static NTSTATUS parse_manifest( struct actctx_loader* acl, struct assembly_ident
     int unicode_tests;
 
     TRACE( "parsing manifest loaded from %s base dir %s\n", debugstr_w(filename), debugstr_w(directory) );
+
+#ifdef __REACTOS__
+    if (size < 5) return STATUS_INVALID_PARAMETER;
+#endif
 
     if (!(assembly = add_assembly(acl->actctx, shared ? ASSEMBLY_SHARED_MANIFEST : ASSEMBLY_MANIFEST)))
         return STATUS_SXS_CANT_GEN_ACTCTX;
@@ -2953,6 +3084,10 @@ static NTSTATUS parse_manifest( struct actctx_loader* acl, struct assembly_ident
     {
         xmlbuf.ptr = buffer;
         xmlbuf.end = xmlbuf.ptr + size / sizeof(WCHAR);
+#ifdef __REACTOS__
+        status = validate_manifest( &xmlbuf, size, TRUE, !ai );
+        if (NT_SUCCESS(status))
+#endif
         status = parse_manifest_buffer( acl, assembly, ai, &xmlbuf );
     }
     else if (unicode_tests & IS_TEXT_UNICODE_REVERSE_SIGNATURE)
@@ -2967,6 +3102,10 @@ static NTSTATUS parse_manifest( struct actctx_loader* acl, struct assembly_ident
             new_buff[i] = RtlUshortByteSwap( buf[i] );
         xmlbuf.ptr = new_buff;
         xmlbuf.end = xmlbuf.ptr + size / sizeof(WCHAR);
+#ifdef __REACTOS__
+        status = validate_manifest( &xmlbuf, size, TRUE, !ai );
+        if (NT_SUCCESS(status))
+#endif
         status = parse_manifest_buffer( acl, assembly, ai, &xmlbuf );
         RtlFreeHeap( GetProcessHeap(), 0, new_buff );
     }
@@ -2975,6 +3114,9 @@ static NTSTATUS parse_manifest( struct actctx_loader* acl, struct assembly_ident
         DWORD len;
         WCHAR *new_buff;
 
+#ifdef __REACTOS__
+        if (!is_structural_utf8( buffer, size )) return STATUS_SXS_CANT_GEN_ACTCTX;
+#endif
         /* let's assume utf-8 for now */
         status = RtlUTF8ToUnicodeN( NULL, 0, &len, buffer, size );
         if (!NT_SUCCESS(status))
@@ -2993,6 +3135,10 @@ static NTSTATUS parse_manifest( struct actctx_loader* acl, struct assembly_ident
 
         xmlbuf.ptr = new_buff;
         xmlbuf.end = xmlbuf.ptr + len / sizeof(WCHAR);
+#ifdef __REACTOS__
+        status = validate_manifest( &xmlbuf, 0, FALSE, !ai );
+        if (NT_SUCCESS(status))
+#endif
         status = parse_manifest_buffer( acl, assembly, ai, &xmlbuf );
         RtlFreeHeap( GetProcessHeap(), 0, new_buff );
     }

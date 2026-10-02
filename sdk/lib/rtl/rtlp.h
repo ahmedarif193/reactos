@@ -58,6 +58,14 @@ RtlpSafeCopyMemory(
    _In_reads_bytes_(Length) CONST VOID UNALIGNED *Source,
    _In_ SIZE_T Length);
 
+NTSTATUS
+NTAPI
+RtlpValidateSxsManifest(
+    _In_reads_(Length) PCWSTR Text,
+    _In_ SIZE_T Length,
+    _In_ BOOLEAN Utf16Source,
+    _In_ BOOLEAN ApplicationManifest);
+
 #ifdef _M_RISCV64
 /* Environment hooks for exception dispatch and unwinding. The reader must
  * not rely on SEH: it runs inside the dispatcher itself. */
