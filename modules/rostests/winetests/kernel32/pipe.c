@@ -3462,12 +3462,7 @@ static void test_namedpipe_process_id(void)
     ULONG pid;
     BOOL ret;
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    /* FIXME: GetNamedPipeClientProcessId is a STUB on ReactOS. */
-    if (is_reactos() || !pGetNamedPipeClientProcessId)
-#else
     if (!pGetNamedPipeClientProcessId)
-#endif
     {
         win_skip("GetNamedPipeClientProcessId not available\n");
         return;
@@ -3605,12 +3600,7 @@ static void test_namedpipe_session_id(void)
     ULONG id;
     BOOL ret;
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    /* FIXME: GetNamedPipeClientSessionId is a STUB on ReactOS. */
-    if (is_reactos() || !pGetNamedPipeClientSessionId)
-#else
     if (!pGetNamedPipeClientSessionId)
-#endif
     {
         win_skip("GetNamedPipeClientSessionId not available\n");
         return;
