@@ -246,25 +246,4 @@ NtMapViewOfSectionEx(HANDLE SectionHandle,
     return Status;
 }
 
-#if defined(_WIN64) && !defined(_M_ARM64)
-NTSTATUS
-NTAPI
-NtSetInformationVirtualMemory(HANDLE ProcessHandle,
-                              VIRTUAL_MEMORY_INFORMATION_CLASS InformationClass,
-                              ULONG_PTR NumberOfEntries,
-                              PMEMORY_RANGE_ENTRY VirtualAddresses,
-                              PVOID Information,
-                              ULONG InformationLength)
-{
-    UNREFERENCED_PARAMETER(ProcessHandle);
-    UNREFERENCED_PARAMETER(InformationClass);
-    UNREFERENCED_PARAMETER(Information);
-    UNREFERENCED_PARAMETER(InformationLength);
-
-    if (NumberOfEntries && !VirtualAddresses)
-        return STATUS_INVALID_PARAMETER;
-    return STATUS_NOT_SUPPORTED;
-}
-#endif
-
 #endif /* _WIN64 */
