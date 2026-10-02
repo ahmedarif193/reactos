@@ -56,9 +56,7 @@ static BOOL   (WINAPI *pIsWow64Process)(HANDLE, PBOOL);
 static NTSTATUS (WINAPI *pNtProtectVirtualMemory)(HANDLE, PVOID *, SIZE_T *, ULONG, ULONG *);
 static NTSTATUS (WINAPI *pNtReadVirtualMemory)(HANDLE,const void *,void *,SIZE_T, SIZE_T *);
 static NTSTATUS (WINAPI *pNtWriteVirtualMemory)(HANDLE, void *, const void *, SIZE_T, SIZE_T *);
-#ifndef __REACTOS__ // TODO: Enable when kernelbase is fixed. ROSTESTS-414
 static BOOL  (WINAPI *pPrefetchVirtualMemory)(HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
-#endif
 
 /* ############################### */
 
@@ -4546,9 +4544,6 @@ static void test_shared_memory_ro(BOOL is_child, DWORD child_access)
 
 static void test_PrefetchVirtualMemory(void)
 {
-#ifdef __REACTOS__
-    skip("Cannot build test_PrefetchVirtualMemory() until kernelbase is synced.\n");
-#else
     WIN32_MEMORY_RANGE_ENTRY entries[2];
     char stackmem[] = "Test stack mem";
     static char testmem[] = "Test memory range data";
@@ -4589,7 +4584,6 @@ static void test_PrefetchVirtualMemory(void)
     ret = pPrefetchVirtualMemory( GetCurrentProcess(), 2, entries, 0 );
     ok( ret ||broken( is_wow64 && GetLastError() == ERROR_INVALID_PARAMETER ) /* win10 1507 */,
         "PrefetchVirtualMemory unexpected status on 2 page-aligned entries: %ld\n", GetLastError() );
-#endif
 }
 
 static void test_ReadProcessMemory(void)
@@ -4696,9 +4690,7 @@ START_TEST(virtual)
     pNtProtectVirtualMemory = (void *)GetProcAddress( hntdll, "NtProtectVirtualMemory" );
     pNtReadVirtualMemory = (void *)GetProcAddress( hntdll, "NtReadVirtualMemory" );
     pNtWriteVirtualMemory = (void *)GetProcAddress( hntdll, "NtWriteVirtualMemory" );
-#ifndef __REACTOS__ // TODO: Enable when kernelbase is fixed. ROSTESTS-414
     pPrefetchVirtualMemory = (void *)GetProcAddress( hkernelbase, "PrefetchVirtualMemory" );
-#endif
 
     GetSystemInfo(&si);
     trace("system page size %#lx\n", si.dwPageSize);
