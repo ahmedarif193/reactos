@@ -39,10 +39,26 @@
 #define NULL 0
 #endif
 
+#include "ntfscasetable.h"
+
 static inline WCHAR
 RtlUpcaseUnicodeChar(WCHAR Character)
 {
-    return (WCHAR)towupper((wint_t)(UINT16)Character);
+    const unsigned char* Table = NtfsCaseTable + 2 * sizeof(UINT16);
+    UINT16 Value = (UINT16)Character;
+    UINT16 Offset;
+
+    if (Value < 'a')
+        return Character;
+    if (Value <= 'z')
+        return (WCHAR)(Value - ('a' - 'A'));
+    Offset = Value >> 8;
+    Offset = (UINT16)(Table[2 * Offset] | (Table[2 * Offset + 1] << 8));
+    Offset = (UINT16)(Offset + ((Value >> 4) & 0xF));
+    Offset = (UINT16)(Table[2 * Offset] | (Table[2 * Offset + 1] << 8));
+    Offset = (UINT16)(Offset + (Value & 0xF));
+    Offset = (UINT16)(Table[2 * Offset] | (Table[2 * Offset + 1] << 8));
+    return (WCHAR)(Value + Offset);
 }
 
 #else /* NTFSLIB_PORTABLE */

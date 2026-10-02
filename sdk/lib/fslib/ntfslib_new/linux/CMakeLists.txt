@@ -83,6 +83,8 @@ target_include_directories(ntfslib_format_host PUBLIC
     "${NTFSLIB_ROOT}/include/public"
     "${NTFSLIB_ROOT}/src/format"
 )
+include("${NTFSLIB_ROOT}/src/format/casetable.cmake")
+ntfslib_add_case_table(ntfslib_format_host)
 
 target_compile_features(ntfslib_linux PUBLIC cxx_std_17)
 target_compile_definitions(ntfslib_linux

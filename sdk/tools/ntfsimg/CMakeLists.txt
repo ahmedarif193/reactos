@@ -74,6 +74,8 @@ target_compile_options(ntfslib_format_host PUBLIC
 target_include_directories(ntfslib_format_host
     PUBLIC ${NTFSLIB_ROOT}/include/public
     PRIVATE ${NTFSLIB_ROOT}/src/format)
+include(${NTFSLIB_ROOT}/src/format/casetable.cmake)
+ntfslib_add_case_table(ntfslib_format_host)
 
 add_host_tool(ntfsimg
     ${NTFSLIB_ROOT}/linux/fuse/ntfslib_fuse.cpp)
