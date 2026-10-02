@@ -1007,6 +1007,23 @@ static BOOL is_matching_identity( const struct assembly_identity *id1,
     return TRUE;
 }
 
+#ifdef __REACTOS__
+static BOOL is_neutral_language( const WCHAR *language )
+{
+    return !language || !language[0] || !wcscmp( language, L"*" ) || !wcsicmp( language, L"neutral" );
+}
+
+static BOOL is_expected_identity( const struct assembly_identity *expected, const struct assembly_identity *found )
+{
+    if (!is_matching_string( expected->name, found->name )) return FALSE;
+    if (!is_matching_string( expected->type, found->type )) return FALSE;
+    if (!is_matching_string( expected->arch, found->arch )) return FALSE;
+    if (!is_matching_string( expected->public_key, found->public_key )) return FALSE;
+    if (is_neutral_language( expected->language )) return is_neutral_language( found->language );
+    return is_matching_string( expected->language, found->language );
+}
+#endif
+
 static BOOL add_dependent_assembly_id(struct actctx_loader* acl,
                                       struct assembly_identity* ai)
 {
@@ -1014,7 +1031,11 @@ static BOOL add_dependent_assembly_id(struct actctx_loader* acl,
 
     /* check if we already have that assembly */
 
+#ifdef __REACTOS__
+    for (i = 1; i < acl->actctx->num_assemblies; i++)
+#else
     for (i = 0; i < acl->actctx->num_assemblies; i++)
+#endif
         if (is_matching_identity( ai, &acl->actctx->assemblies[i].id ))
         {
             TRACE( "reusing existing assembly for %s arch %s version %u.%u.%u.%u\n",
@@ -2932,6 +2953,10 @@ static void parse_assembly_elem( xmlbuf_t *xmlbuf, struct assembly* assembly,
 
             if (!xmlbuf->error && expected_ai)
             {
+#ifdef __REACTOS__
+                if (!is_expected_identity( expected_ai, &assembly->id )) set_error( xmlbuf );
+                else
+#endif
                 /* FIXME: more tests */
                 if (assembly->type == ASSEMBLY_MANIFEST &&
                     memcmp(&assembly->id.version, &expected_ai->version, sizeof(assembly->id.version)))
@@ -3151,9 +3176,70 @@ static NTSTATUS open_nt_file( HANDLE *handle, UNICODE_STRING *name )
     IO_STATUS_BLOCK io;
 
     InitializeObjectAttributes( &attr, name, OBJ_CASE_INSENSITIVE, 0, NULL );
+#ifdef __REACTOS__
+    return NtOpenFile( handle, GENERIC_READ | SYNCHRONIZE, &attr, &io,
+                       FILE_SHARE_READ | FILE_SHARE_DELETE, FILE_SYNCHRONOUS_IO_ALERT | FILE_NON_DIRECTORY_FILE );
+#else
     return NtOpenFile( handle, GENERIC_READ | SYNCHRONIZE, &attr, &io,
                        FILE_SHARE_READ | FILE_SHARE_DELETE, FILE_SYNCHRONOUS_IO_ALERT );
+#endif
 }
+
+#ifdef __REACTOS__
+static BOOL is_pe_file( HANDLE file )
+{
+    IMAGE_DOS_HEADER dos;
+    IO_STATUS_BLOCK io;
+    LARGE_INTEGER offset;
+    DWORD signature;
+
+    offset.QuadPart = 0;
+    if (NtReadFile( file, NULL, NULL, NULL, &io, &dos, sizeof(dos), &offset, NULL ) || io.Information != sizeof(dos))
+        return FALSE;
+    if (dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 0) return FALSE;
+
+    offset.QuadPart = dos.e_lfanew;
+    if (NtReadFile( file, NULL, NULL, NULL, &io, &signature, sizeof(signature), &offset, NULL ) ||
+        io.Information != sizeof(signature))
+        return FALSE;
+    return signature == IMAGE_NT_SIGNATURE;
+}
+
+static NTSTATUS set_application_directory( ACTIVATION_CONTEXT *actctx, const ACTCTXW *params,
+                                           const WCHAR *source, HMODULE module )
+{
+    UNICODE_STRING dir;
+    NTSTATUS status;
+    WCHAR *path, *p;
+    SIZE_T len;
+
+    if (params->dwFlags & ACTCTX_FLAG_ASSEMBLY_DIRECTORY_VALID)
+    {
+        len = wcslen( params->lpAssemblyDirectory );
+        if (!(path = RtlAllocateHeap( GetProcessHeap(), 0, (len + 2) * sizeof(WCHAR) ))) return STATUS_NO_MEMORY;
+        memcpy( path, params->lpAssemblyDirectory, len * sizeof(WCHAR) );
+        if (len && path[len - 1] != '\\') path[len++] = '\\';
+        path[len] = 0;
+    }
+    else if (source)
+    {
+        if (!(path = strdupW( source + 4 ))) return STATUS_NO_MEMORY;
+        if ((p = wcsrchr( path, '\\' ))) p[1] = 0;
+    }
+    else
+    {
+        status = get_module_filename( module, &dir, 0 );
+        if (status == STATUS_NO_MORE_ENTRIES) status = STATUS_DLL_NOT_FOUND;
+        if (status) return status;
+        if ((p = wcsrchr( dir.Buffer, '\\' ))) p[1] = 0;
+        path = dir.Buffer;
+    }
+
+    RtlFreeHeap( GetProcessHeap(), 0, actctx->appdir.info );
+    actctx->appdir.info = path;
+    return STATUS_SUCCESS;
+}
+#endif
 
 static NTSTATUS find_first_manifest_resource_in_module( HANDLE hModule, const WCHAR **resname )
 {
@@ -3640,7 +3726,11 @@ static NTSTATUS open_manifest_file( struct actctx_loader *acl, struct assembly_i
     nameW.Buffer = NULL;
     if (*lang) p += swprintf( p, len - (p - buffer), L"%s\\", lang );
 
+#ifdef __REACTOS__
+    swprintf( p, len - (p - buffer), L"%s.DLL", ai->name );
+#else
     swprintf( p, len - (p - buffer), L"%s.dll", ai->name );
+#endif
     if (RtlDosPathNameToNtPathName_U( buffer, &nameW, NULL, NULL ))
     {
         status = open_nt_file( &file, &nameW );
@@ -3653,7 +3743,11 @@ static NTSTATUS open_manifest_file( struct actctx_loader *acl, struct assembly_i
         RtlFreeUnicodeString( &nameW );
     }
 
+#ifdef __REACTOS__
+    swprintf( p, len - (p - buffer), L"%s.MANIFEST", ai->name );
+#else
     swprintf( p, len - (p - buffer), L"%s.manifest", ai->name );
+#endif
     if (RtlDosPathNameToNtPathName_U( buffer, &nameW, NULL, NULL ))
     {
         status = open_nt_file( &file, &nameW );
@@ -3715,6 +3809,9 @@ static NTSTATUS lookup_assembly(struct actctx_loader* acl,
 
     swprintf( buffer, total, L"%s%s\\", acl->actctx->appdir.info, ai->name );
     status = open_manifest_file( acl, ai, lang, directory, buffer, total );
+#ifdef __REACTOS__
+    goto done;
+#endif
     if (status != STATUS_SXS_ASSEMBLY_NOT_FOUND) goto done;
 
     if (RtlGetFullPathName_U( acl->actctx->assemblies->manifest.info, len * sizeof(WCHAR), buffer, &p ))
@@ -4061,7 +4158,7 @@ static NTSTATUS build_assemblyinfo_section(ACTIVATION_CONTEXT *actctx, struct st
             total_len = 0;
             break;
         }
-        total_len += aligned_string_len(assemblyinfo_string_len(assembly->id.name) + sizeof(WCHAR));
+        total_len += aligned_string_len((i ? assemblyinfo_string_len(assembly->id.name) : 0) + sizeof(WCHAR));
         total_len += aligned_string_len(sizeof(*info) + assemblyinfo_string_len(ids[i]) +
                                         assemblyinfo_string_len(assembly->manifest.info) + sizeof(WCHAR) +
                                         assemblyinfo_string_len(assembly->directory) + sizeof(WCHAR) +
@@ -4103,7 +4200,7 @@ static NTSTATUS build_assemblyinfo_section(ACTIVATION_CONTEXT *actctx, struct st
     {
         struct assembly *assembly = &actctx->assemblies[i];
 
-        name_len = assemblyinfo_string_len(assembly->id.name);
+        name_len = i ? assemblyinfo_string_len(assembly->id.name) : 0;
         id_len = assemblyinfo_string_len(ids[i]);
         path_len = assemblyinfo_string_len(assembly->manifest.info);
         dir_len = assemblyinfo_string_len(assembly->directory);
@@ -4115,7 +4212,7 @@ static NTSTATUS build_assemblyinfo_section(ACTIVATION_CONTEXT *actctx, struct st
         if (name_len) memcpy(base + offset, assembly->id.name, name_len);
         str.Buffer = (WCHAR *)(base + offset);
         str.Length = str.MaximumLength = (USHORT)name_len;
-        RtlHashUnicodeString(&str, TRUE, HASH_STRING_ALGORITHM_X65599, &index->hash);
+        if (name_len) RtlHashUnicodeString(&str, TRUE, HASH_STRING_ALGORITHM_X65599, &index->hash);
         offset += aligned_string_len(name_len + sizeof(WCHAR));
 
         info = (ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION *)(base + offset);
@@ -4124,6 +4221,8 @@ static NTSTATUS build_assemblyinfo_section(ACTIVATION_CONTEXT *actctx, struct st
 
         info->Size = sizeof(*info);
         info->Flags = i ? 0 : ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION_ROOT_ASSEMBLY;
+        if (assembly->type != ASSEMBLY_SHARED_MANIFEST)
+            info->Flags |= ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION_PRIVATE_ASSEMBLY;
         info->ManifestPathType = path_len ? ACTIVATION_CONTEXT_PATH_TYPE_WIN32_FILE : ACTIVATION_CONTEXT_PATH_TYPE_NONE;
         info->PolicyPathType = ACTIVATION_CONTEXT_PATH_TYPE_NONE;
         info->ManifestVersionMajor = 1;
@@ -5936,6 +6035,9 @@ RtlCreateActivationContext(IN ULONG Flags,
     NTSTATUS status = STATUS_NO_MEMORY;
     HANDLE file = 0;
     struct actctx_loader acl;
+#ifdef __REACTOS__
+    HMODULE source_module;
+#endif
 
     TRACE("%p %08lx\n", pActCtx, pActCtx ? pActCtx->dwFlags : 0);
 
@@ -5954,6 +6056,11 @@ RtlCreateActivationContext(IN ULONG Flags,
     if ((pActCtx->dwFlags & ACTCTX_FLAG_RESOURCE_NAME_VALID) && !pActCtx->lpResourceName)
         return STATUS_INVALID_PARAMETER;
 
+#ifdef __REACTOS__
+    source_module = NtCurrentTeb()->ProcessEnvironmentBlock->ImageBaseAddress;
+    if ((pActCtx->dwFlags & ACTCTX_FLAG_HMODULE_VALID) && pActCtx->hModule) source_module = pActCtx->hModule;
+#endif
+
     if (!(actctx = RtlAllocateHeap( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*actctx) )))
         return STATUS_NO_MEMORY;
 
@@ -5962,6 +6069,17 @@ RtlCreateActivationContext(IN ULONG Flags,
     actctx->config.type = ACTIVATION_CONTEXT_PATH_TYPE_NONE;
     actctx->config.info = NULL;
     actctx->appdir.type = ACTIVATION_CONTEXT_PATH_TYPE_WIN32_FILE;
+#ifdef __REACTOS__
+    if (pActCtx->dwFlags & ACTCTX_FLAG_HMODULE_VALID)
+    {
+        UNICODE_STRING module_name;
+
+        status = get_module_filename( source_module, &module_name, 0 );
+        if (status == STATUS_NO_MORE_ENTRIES) status = STATUS_DLL_NOT_FOUND;
+        if (!NT_SUCCESS(status)) goto error;
+        RtlFreeUnicodeString( &module_name );
+    }
+#else
     if (pActCtx->dwFlags & ACTCTX_FLAG_APPLICATION_NAME_VALID)
     {
         if (!(actctx->appdir.info = strdupW( pActCtx->lpApplicationName ))) goto error;
@@ -5980,6 +6098,7 @@ RtlCreateActivationContext(IN ULONG Flags,
         if ((p = wcsrchr( dir.Buffer, '\\' ))) p[1] = 0;
         actctx->appdir.info = dir.Buffer;
     }
+#endif
 
     nameW.Buffer = NULL;
 
@@ -6023,17 +6142,70 @@ RtlCreateActivationContext(IN ULONG Flags,
         }
     }
 
+#ifdef __REACTOS__
+    status = set_application_directory( actctx, pActCtx, nameW.Buffer, source_module );
+    if (!NT_SUCCESS(status))
+    {
+        RtlFreeUnicodeString( &nameW );
+        goto error;
+    }
+#endif
+
     acl.actctx = actctx;
     acl.dependencies = NULL;
     acl.num_dependencies = 0;
     acl.allocated_dependencies = 0;
 
     if (pActCtx->dwFlags & ACTCTX_FLAG_LANGID_VALID) lang = pActCtx->wLangId;
+#ifndef __REACTOS__
     if (pActCtx->dwFlags & ACTCTX_FLAG_ASSEMBLY_DIRECTORY_VALID) directory = pActCtx->lpAssemblyDirectory;
+#endif
 
     if (pActCtx->dwFlags & ACTCTX_FLAG_RESOURCE_NAME_VALID)
     {
         /* if we have a resource it's a PE file */
+#ifdef __REACTOS__
+        NTSTATUS resource_status;
+
+        if (pActCtx->dwFlags & ACTCTX_FLAG_HMODULE_VALID)
+        {
+            status = get_manifest_in_module( &acl, NULL, NULL, directory, FALSE, source_module,
+                                             pActCtx->lpResourceName, lang );
+            if (status && status != STATUS_SXS_CANT_GEN_ACTCTX)
+            {
+                resource_status = status;
+                status = get_manifest_in_associated_manifest( &acl, NULL, NULL, directory,
+                                                              source_module, pActCtx->lpResourceName );
+                if (status == STATUS_RESOURCE_NAME_NOT_FOUND) status = resource_status;
+            }
+        }
+        else if (pActCtx->lpSource && pActCtx->lpResourceName)
+        {
+            status = get_manifest_in_pe_file( &acl, NULL, nameW.Buffer, directory, FALSE,
+                                              file, pActCtx->lpResourceName, lang );
+            if (status && status != STATUS_SXS_CANT_GEN_ACTCTX)
+            {
+                resource_status = status;
+                status = get_manifest_in_associated_manifest( &acl, NULL, nameW.Buffer, directory,
+                                                              NULL, pActCtx->lpResourceName );
+                if (status == STATUS_RESOURCE_NAME_NOT_FOUND) status = resource_status;
+            }
+        }
+        else status = STATUS_INVALID_PARAMETER;
+    }
+    else if (pActCtx->dwFlags & ACTCTX_FLAG_HMODULE_VALID)
+    {
+        status = STATUS_RESOURCE_TYPE_NOT_FOUND;
+    }
+    else if (file && is_pe_file( file ))
+    {
+        status = STATUS_RESOURCE_TYPE_NOT_FOUND;
+    }
+    else
+    {
+        status = get_manifest_in_manifest_file( &acl, NULL, nameW.Buffer, directory, FALSE, file );
+    }
+#else
         if (pActCtx->dwFlags & ACTCTX_FLAG_HMODULE_VALID)
         {
             status = get_manifest_in_module( &acl, NULL, NULL, directory, FALSE, pActCtx->hModule,
@@ -6057,6 +6229,7 @@ RtlCreateActivationContext(IN ULONG Flags,
     {
         status = get_manifest_in_manifest_file( &acl, NULL, nameW.Buffer, directory, FALSE, file );
     }
+#endif
 
     if (file) NtClose( file );
     RtlFreeUnicodeString( &nameW );
@@ -6375,7 +6548,13 @@ NTSTATUS WINAPI RtlQueryInformationActivationContext( ULONG flags, HANDLE handle
                 return STATUS_BUFFER_TOO_SMALL;
             }
 
+#ifdef __REACTOS__
+            afdi->ulFlags = index == 1 ? ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION_ROOT_ASSEMBLY : 0;
+            if (assembly->type != ASSEMBLY_SHARED_MANIFEST)
+                afdi->ulFlags |= ACTIVATION_CONTEXT_DATA_ASSEMBLY_INFORMATION_PRIVATE_ASSEMBLY;
+#else
             afdi->ulFlags = 0;  /* FIXME */
+#endif
             afdi->ulEncodedAssemblyIdentityLength = (id_len - 1) * sizeof(WCHAR);
             afdi->ulManifestPathType = assembly->manifest.type;
             afdi->ulManifestPathLength = assembly->manifest.info ? (path_len - 1) * sizeof(WCHAR) : 0;
