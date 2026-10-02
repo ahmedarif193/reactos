@@ -3715,7 +3715,10 @@ ExpQueryLogicalProcessorInformationEx(
     ULONG r;
     BOOLEAN WantAll = (RelationshipType == RelationAll);
     BOOLEAN WantCaches = WantAll || (RelationshipType == RelationCache);
-    BOOLEAN WantPackages = WantAll || (RelationshipType == RelationProcessorPackage);
+    BOOLEAN WantDies = (RelationshipType == RelationProcessorDie);
+    BOOLEAN WantPackages = WantAll || WantDies || (RelationshipType == RelationProcessorPackage);
+    BOOLEAN WantCores = WantAll || (RelationshipType == RelationProcessorCore);
+    BOOLEAN WantModules = WantAll || (RelationshipType == RelationProcessorModule);
     PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Info;
 
 #define EXP_LPI_EX_EMIT(RawSize)                                            \
@@ -3741,7 +3744,7 @@ ExpQueryLogicalProcessorInformationEx(
      sizeof(GROUP_AFFINITY))
 
     /* processor cores */
-    if (WantAll || (RelationshipType == RelationProcessorCore))
+    if (WantCores || WantModules)
     {
         i = 0;
         CurrentProc = KeActiveProcessors;
@@ -3750,15 +3753,29 @@ ExpQueryLogicalProcessorInformationEx(
             Prcb = KiProcessorBlock[i];
             if ((CurrentProc & 1) && (Prcb == Prcb->MultiThreadSetMaster))
             {
-                EXP_LPI_EX_EMIT(EXP_LPI_EX_PROCESSOR_SIZE);
-                if (Info != NULL)
+                if (WantCores)
                 {
-                    ExpFillProcessorRelationship(
-                        Info,
-                        RelationProcessorCore,
-                        (Prcb->SetMember != Prcb->MultiThreadProcessorSet)
-                            ? LTP_PC_SMT : 0,
-                        Prcb->MultiThreadProcessorSet);
+                    EXP_LPI_EX_EMIT(EXP_LPI_EX_PROCESSOR_SIZE);
+                    if (Info != NULL)
+                    {
+                        ExpFillProcessorRelationship(
+                            Info,
+                            RelationProcessorCore,
+                            (Prcb->SetMember != Prcb->MultiThreadProcessorSet)
+                                ? LTP_PC_SMT : 0,
+                            Prcb->MultiThreadProcessorSet);
+                    }
+                }
+                if (WantModules)
+                {
+                    EXP_LPI_EX_EMIT(EXP_LPI_EX_PROCESSOR_SIZE);
+                    if (Info != NULL)
+                    {
+                        ExpFillProcessorRelationship(Info,
+                                                     RelationProcessorModule,
+                                                     0,
+                                                     Prcb->MultiThreadProcessorSet);
+                    }
                 }
             }
             CurrentProc >>= 1;
@@ -3791,6 +3808,7 @@ ExpQueryLogicalProcessorInformationEx(
                     Info->Cache.LineSize = Topology.CacheRecords[r].Descriptor.LineSize;
                     Info->Cache.CacheSize = Topology.CacheRecords[r].Descriptor.Size;
                     Info->Cache.Type = Topology.CacheRecords[r].Descriptor.Type;
+                    Info->Cache.GroupCount = 1;
                     Info->Cache.GroupMask.Group = 0;
                     Info->Cache.GroupMask.Mask = Topology.CacheRecords[r].ProcessorSet;
                 }
@@ -3802,7 +3820,7 @@ ExpQueryLogicalProcessorInformationEx(
                 if (Info != NULL)
                 {
                     ExpFillProcessorRelationship(Info,
-                                                 RelationProcessorPackage,
+                                                 WantDies ? RelationProcessorDie : RelationProcessorPackage,
                                                  0,
                                                  Topology.PackageSets[r]);
                 }
@@ -3816,7 +3834,7 @@ ExpQueryLogicalProcessorInformationEx(
     }
 
     /* NUMA nodes */
-    if (WantAll || (RelationshipType == RelationNumaNode))
+    if (WantAll || (RelationshipType == RelationNumaNode) || (RelationshipType == RelationNumaNodeEx))
     {
         for (i = 0; i < KeNumberNodes; ++i)
         {
@@ -3832,6 +3850,7 @@ ExpQueryLogicalProcessorInformationEx(
             {
                 Info->Relationship = RelationNumaNode;
                 Info->NumaNode.NodeNumber = i;
+                Info->NumaNode.GroupCount = 1;
                 Info->NumaNode.GroupMask.Group = 0;
                 Info->NumaNode.GroupMask.Mask = NodeMask;
             }
@@ -4047,13 +4066,9 @@ NtQuerySystemInformationEx(
 
                 Relationship = *(volatile LOGICAL_PROCESSOR_RELATIONSHIP*)InputBuffer;
                 if ((Relationship != RelationAll) &&
-                    (Relationship != RelationProcessorCore) &&
-                    (Relationship != RelationNumaNode) &&
-                    (Relationship != RelationCache) &&
-                    (Relationship != RelationProcessorPackage) &&
-                    (Relationship != RelationGroup))
+                    (Relationship > RelationProcessorModule))
                 {
-                    _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+                    _SEH2_YIELD(return STATUS_UNSUCCESSFUL);
                 }
 
                 Status = ExpQueryLogicalProcessorInformationEx(Relationship,
