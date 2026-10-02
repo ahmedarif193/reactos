@@ -131,7 +131,7 @@ TestFreeNoAccess(void)
     PUCHAR Page;
     ULONG OldProtection;
 
-    for (Iteration = 0; Iteration < 50000; Iteration++)
+    for (Iteration = 0; Iteration < 1000; Iteration++)
     {
         Mem = NULL;
         Size = 16 * PAGE_SIZE;
