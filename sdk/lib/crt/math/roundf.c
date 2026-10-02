@@ -11,6 +11,7 @@ float roundf(float arg)
 {
     if (arg < 0.0)
         return ceilf(arg - 0.5);
-    else
+    else if (arg > 0.0)
         return floorf(arg + 0.5);
+    return arg;
 }

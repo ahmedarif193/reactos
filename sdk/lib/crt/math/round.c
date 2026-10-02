@@ -11,6 +11,7 @@ double round(double arg)
 {
     if (arg < 0.0)
         return ceil(arg - 0.5);
-    else
+    else if (arg > 0.0)
         return floor(arg + 0.5);
+    return arg;
 }
