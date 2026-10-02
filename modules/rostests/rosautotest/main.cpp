@@ -56,7 +56,13 @@ IntPrintUsage()
          << "    all tests of the specified module are run." << endl
          << endl
          << "  test:" << endl
-         << "    The test to be run. Needs to be a test of the specified module." << endl;
+         << "    The test to be run. Needs to be a test of the specified module." << endl
+         << endl
+         << "  environment:" << endl
+         << "    ROSAUTOTEST_TIMEOUT     - Seconds a test may print nothing before it is" << endl
+         << "                              ended (1-3600, 30 when not set)." << endl
+         << "    ROSAUTOTEST_RUN_TIMEOUT - Seconds a test may run before it is ended" << endl
+         << "                              (1-3600, 170 when not set)." << endl;
 }
 
 static

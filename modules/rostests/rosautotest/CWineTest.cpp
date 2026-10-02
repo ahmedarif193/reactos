@@ -11,7 +11,22 @@ static const DWORD ListTimeout = 10000;
 
 // This value needs to be lower than the <timeout> configured in sysreg.xml! (usually 180000)
 // Otherwise, sysreg2 kills the VM before we can kill the process.
-static const DWORD ProcessActivityTimeout = 170000;
+static DWORD ProcessActivityTimeout = 30000;
+static DWORD ProcessRunTimeout = 170000;
+
+static VOID
+ReadTimeout(PCWSTR pwszName, DWORD& dwMilliseconds)
+{
+    WCHAR wszSeconds[16];
+
+    if (GetEnvironmentVariableW(pwszName, wszSeconds, ARRAYSIZE(wszSeconds)))
+    {
+        DWORD dwSeconds = wcstoul(wszSeconds, NULL, 10);
+
+        if (dwSeconds >= 1 && dwSeconds <= 3600)
+            dwMilliseconds = dwSeconds * 1000;
+    }
+}
 
 
 /**
@@ -37,6 +52,9 @@ CWineTest::CWineTest()
         m_TestPath = wszDirectory;
         m_TestPath += L"\\bin\\";
     }
+
+    ReadTimeout(L"ROSAUTOTEST_TIMEOUT", ProcessActivityTimeout);
+    ReadTimeout(L"ROSAUTOTEST_RUN_TIMEOUT", ProcessRunTimeout);
 }
 
 /**
@@ -379,7 +397,7 @@ CWineTest::RunTest(CTestInfo* TestInfo)
         /* Receive all the data from the pipe */
         for (;;)
         {
-            if (GetTickCount() - StartTime >= ProcessActivityTimeout)
+            if (GetTickCount() - StartTime >= ProcessRunTimeout)
                 TESTEXCEPTION("Timeout while waiting for the test process (wall clock)\n");
             DWORD dwReadResult = Pipe.Read(Buffer, sizeof(Buffer) - 1, &BytesAvailable, ProcessActivityTimeout);
             if (dwReadResult == ERROR_SUCCESS)
