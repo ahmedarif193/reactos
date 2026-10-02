@@ -3370,18 +3370,12 @@ CreateProcessInternalW(IN HANDLE hUserToken,
         AnsiEnv.MaximumLength = (USHORT)EnvironmentLength;
 
         /* Allocate memory for the Unicode Environment */
-        UnicodeEnv.Buffer = NULL;
         RegionSize = AnsiEnv.MaximumLength * sizeof(WCHAR);
-        Status = NtAllocateVirtualMemory(NtCurrentProcess(),
-                                         (PVOID)&UnicodeEnv.Buffer,
-                                         0,
-                                         &RegionSize,
-                                         MEM_COMMIT,
-                                         PAGE_READWRITE);
-        if (!NT_SUCCESS(Status))
+        UnicodeEnv.Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, RegionSize);
+        if (!UnicodeEnv.Buffer)
         {
             /* Fail */
-            BaseSetLastNTError(Status);
+            BaseSetLastNTError(STATUS_NO_MEMORY);
             return FALSE;
         }
 
@@ -3391,10 +3385,7 @@ CreateProcessInternalW(IN HANDLE hUserToken,
         if (!NT_SUCCESS(Status))
         {
             /* Fail */
-            NtFreeVirtualMemory(NtCurrentProcess(),
-                                (PVOID)&UnicodeEnv.Buffer,
-                                &RegionSize,
-                                MEM_RELEASE);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, UnicodeEnv.Buffer);
             BaseSetLastNTError(Status);
             return FALSE;
         }
