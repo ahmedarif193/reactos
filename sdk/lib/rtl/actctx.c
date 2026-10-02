@@ -6436,14 +6436,6 @@ NTSTATUS WINAPI RtlFindActivationContextSectionString( ULONG flags, const GUID *
     }
 
     status = STATUS_SXS_KEY_NOT_FOUND;
-
-    /* if there is no data, but params are valid,
-       we return that sxs key is not found to be at least somehow compatible */
-    if (!data)
-    {
-        DPRINT("RtlFindActivationContextSectionString() failed with status %x\n", status);
-        return status;
-    }
 #else
     if (guid)
     {
