@@ -5779,10 +5779,11 @@ ULONG_PTR NTAPI ChpeStubRtlPrepareForProcessCloning(VOID)
     return 0;
 }
 
-ULONG_PTR NTAPI ChpeStubRtlProcessFlsData(ULONG a0, ULONG a1)
+VOID NTAPI ChpeAutoRtlProcessFlsData(PVOID a0, ULONG a1)
 {
-    return 0;
+    RtlProcessFlsData(a0, a1);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlProcessFlsData), __typeof__(&RtlProcessFlsData)), "RtlProcessFlsData bridge signature mismatch");
 
 PVOID NTAPI ChpeAutoRtlProtectHeap(PVOID a0, BOOLEAN a1)
 {

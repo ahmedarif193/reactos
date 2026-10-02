@@ -50,11 +50,6 @@ static BOOL (WINAPI *Kernel32BaseQueryModuleData)(IN LPSTR ModuleName, IN LPSTR 
 
 RTL_BITMAP TlsBitMap;
 RTL_BITMAP TlsExpansionBitMap;
-#if defined(_M_ARM64) || defined(_M_ARM64EC)
-extern RTL_BITMAP FlsBitMap;
-#else
-RTL_BITMAP FlsBitMap;
-#endif
 BOOLEAN LdrpImageHasTls;
 LIST_ENTRY LdrpTlsList;
 ULONG LdrpNumberOfTlsEntries;
@@ -691,6 +686,8 @@ LdrpInitializeThread(IN PCONTEXT Context)
             NtCurrentTeb()->RealClientId.UniqueProcess,
             NtCurrentTeb()->RealClientId.UniqueThread);
 
+    NtCurrentTeb()->FlsData = RtlpAllocateFlsData();
+
     /* Acquire the loader Lock */
     RtlEnterCriticalSection(&LdrpLoaderLock);
 
@@ -1178,6 +1175,8 @@ LdrShutdownProcess(VOID)
     LdrpShutdownThreadId = NtCurrentTeb()->RealClientId.UniqueThread;
     LdrpShutdownInProgress = TRUE;
 
+    RtlProcessFlsData(NtCurrentTeb()->FlsData, 1);
+
     /* Enter the Loader Lock */
     RtlEnterCriticalSection(&LdrpLoaderLock);
 
@@ -1324,32 +1323,7 @@ LdrShutdownThread(VOID)
     }
 
     /* FLS callbacks may use static TLS and must precede thread-detach callbacks. */
-    if (Teb->FlsData)
-    {
-        /* Mimic BaseRundownFls */
-        ULONG n, FlsHighIndex;
-        PRTL_FLS_DATA pFlsData;
-        PFLS_CALLBACK_FUNCTION lpCallback;
-
-        pFlsData = Teb->FlsData;
-
-        RtlAcquirePebLock();
-        FlsHighIndex = NtCurrentPeb()->FlsHighIndex;
-        RemoveEntryList(&pFlsData->ListEntry);
-        RtlReleasePebLock();
-
-        for (n = 1; n <= FlsHighIndex; ++n)
-        {
-            lpCallback = NtCurrentPeb()->FlsCallback[2 * n];
-            if (lpCallback && pFlsData->Data[n])
-            {
-                RtlpCallFlsCallback(lpCallback, pFlsData->Data[n]);
-            }
-        }
-
-        RtlFreeHeap(RtlGetProcessHeap(), 0, pFlsData);
-        Teb->FlsData = NULL;
-    }
+    RtlProcessFlsData(Teb->FlsData, 1);
 
     /* Get the Ldr Lock */
     RtlEnterCriticalSection(&LdrpLoaderLock);
@@ -1462,6 +1436,9 @@ LdrShutdownThread(VOID)
         /* Free expansion slots */
         RtlFreeHeap(RtlGetProcessHeap(), 0, Teb->TlsExpansionSlots);
     }
+
+    RtlProcessFlsData(Teb->FlsData, 2);
+    Teb->FlsData = NULL;
 
     /* Check for Fiber data */
 #if (NTDDI_VERSION >= NTDDI_WIN7)
@@ -2709,16 +2686,8 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     RtlpInitializeVectoredExceptionHandling();
 
     /* Set TLS/FLS Bitmap data */
-    Peb->FlsBitmap = &FlsBitMap;
     Peb->TlsBitmap = &TlsBitMap;
     Peb->TlsExpansionBitmap = &TlsExpansionBitMap;
-
-    /* Initialize FLS Bitmap */
-    RtlInitializeBitMap(&FlsBitMap,
-                        Peb->FlsBitmapBits,
-                        FLS_MAXIMUM_AVAILABLE);
-    RtlSetBit(&FlsBitMap, 0);
-    InitializeListHead(&Peb->FlsListHead);
 
     /* Initialize TLS Bitmap */
     RtlInitializeBitMap(&TlsBitMap,
@@ -3262,6 +3231,8 @@ LdrpInitializeProcess(IN PCONTEXT Context,
                 Status);
         return Status;
     }
+
+    NtCurrentTeb()->FlsData = RtlpAllocateFlsData();
 
     /* FIXME Mark the DLL Ranges for Stack Traces later */
 

@@ -41,37 +41,9 @@ C_ASSERT(FIELD_OFFSET(FIBER, GuaranteedStackBytes) == 0x2E0);
 C_ASSERT(FIELD_OFFSET(FIBER, FlsData) == 0x2E4);
 C_ASSERT(FIELD_OFFSET(FIBER, ActivationContextStackPointer) == 0x2E8);
 #endif
-C_ASSERT(RTL_FLS_MAXIMUM_AVAILABLE == FLS_MAXIMUM_AVAILABLE);
 #endif // _M_IX86
 
 /* PRIVATE FUNCTIONS **********************************************************/
-
-VOID
-WINAPI
-BaseRundownFls(_In_ PVOID FlsData)
-{
-    ULONG n, FlsHighIndex;
-    PRTL_FLS_DATA pFlsData;
-    PFLS_CALLBACK_FUNCTION lpCallback;
-
-    pFlsData = FlsData;
-
-    RtlAcquirePebLock();
-    FlsHighIndex = NtCurrentPeb()->FlsHighIndex;
-    RemoveEntryList(&pFlsData->ListEntry);
-    RtlReleasePebLock();
-
-    for (n = 1; n <= FlsHighIndex; ++n)
-    {
-        lpCallback = NtCurrentPeb()->FlsCallback[2 * n];
-        if (lpCallback && pFlsData->Data[n])
-        {
-            lpCallback(pFlsData->Data[n]);
-        }
-    }
-
-    RtlFreeHeap(RtlGetProcessHeap(), 0, FlsData);
-}
 
 /* PUBLIC FUNCTIONS ***********************************************************/
 
@@ -330,7 +302,7 @@ DeleteFiber(_In_ LPVOID lpFiber)
                         MEM_RELEASE);
 
     /* Get rid of FLS */
-    if (Fiber->FlsData) BaseRundownFls(Fiber->FlsData);
+    RtlProcessFlsData(Fiber->FlsData, 3);
 
     /* Get rid of the activation context stack */
     RtlFreeActivationContextStack(Fiber->ActivationContextStackPointer);

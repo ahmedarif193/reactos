@@ -1725,6 +1725,14 @@ RtlFlsSetValue(
 );
 
 NTSYSAPI
+VOID
+NTAPI
+RtlProcessFlsData(
+    _In_opt_ PVOID FlsData,
+    _In_ ULONG Flags
+);
+
+NTSYSAPI
 NTSTATUS
 NTAPI
 RtlQueryInformationAcl(

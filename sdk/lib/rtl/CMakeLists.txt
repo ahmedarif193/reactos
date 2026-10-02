@@ -56,6 +56,7 @@ list(APPEND SOURCE
     env.c
     error.c
     exception.c
+    fls.c
     generictable.c
     hashtable.c
     handle.c

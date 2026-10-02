@@ -1261,12 +1261,32 @@ typedef struct _RTL_DEBUG_INFORMATION
 //
 // Fiber local storage data
 //
-#define RTL_FLS_MAXIMUM_AVAILABLE 128
-typedef struct _RTL_FLS_DATA
+#ifdef NTOS_MODE_USER
+typedef struct _FLS_CALLBACK
 {
-    LIST_ENTRY ListEntry;
-    PVOID Data[RTL_FLS_MAXIMUM_AVAILABLE];
-} RTL_FLS_DATA, *PRTL_FLS_DATA;
+    PVOID Unknown;
+    PFLS_CALLBACK_FUNCTION Callback;
+} FLS_CALLBACK, *PFLS_CALLBACK;
+
+typedef struct _FLS_INFO_CHUNK
+{
+    ULONG Count;
+    FLS_CALLBACK Callbacks[ANYSIZE_ARRAY];
+} FLS_INFO_CHUNK, *PFLS_INFO_CHUNK;
+
+typedef struct _GLOBAL_FLS_DATA
+{
+    PFLS_INFO_CHUNK FlsCallbackChunks[8];
+    LIST_ENTRY FlsListHead;
+    ULONG FlsHighIndex;
+} GLOBAL_FLS_DATA, *PGLOBAL_FLS_DATA;
+
+typedef struct _TEB_FLS_DATA
+{
+    LIST_ENTRY FlsListEntry;
+    PVOID *FlsDataChunks[8];
+} TEB_FLS_DATA, *PTEB_FLS_DATA;
+#endif /* NTOS_MODE_USER */
 
 
 //

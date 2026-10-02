@@ -1181,7 +1181,7 @@
 @ stdcall RtlPrefixString(ptr ptr long)
 @ stdcall RtlPrefixUnicodeString(ptr ptr long)
 @ stdcall -stub -version=0x600+ -arch=win64 RtlPrepareForProcessCloning()
-@ stdcall -stub -version=0x600+ RtlProcessFlsData(long long)
+@ stdcall -version=0x600+ RtlProcessFlsData(ptr long)
 @ stdcall RtlProtectHeap(ptr long)
 @ stdcall RtlPushFrame(ptr)
 @ stdcall -version=0x600+ RtlQueryActivationContextApplicationSettings(long ptr wstr wstr ptr ptr ptr)

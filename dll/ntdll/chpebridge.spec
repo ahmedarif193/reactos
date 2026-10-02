@@ -1191,7 +1191,7 @@
 1096 stdcall RtlPrefixString(ptr ptr long) ChpeAutoRtlPrefixString
 1097 stdcall RtlPrefixUnicodeString(ptr ptr long) ChpeAutoRtlPrefixUnicodeString
 1098 stdcall -version=0x600+ RtlPrepareForProcessCloning() ChpeStubRtlPrepareForProcessCloning
-1099 stdcall -version=0x600+ RtlProcessFlsData(long long) ChpeStubRtlProcessFlsData
+1099 stdcall -version=0x600+ RtlProcessFlsData(ptr long) ChpeAutoRtlProcessFlsData
 1100 stdcall RtlProtectHeap(ptr long) ChpeAutoRtlProtectHeap
 1101 stdcall RtlPushFrame(ptr) ChpeAutoRtlPushFrame
 1102 stdcall -version=0x600+ RtlQueryActivationContextApplicationSettings(long ptr wstr wstr ptr ptr ptr) ChpeAutoRtlQueryActivationContextApplicationSettings
