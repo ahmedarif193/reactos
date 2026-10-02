@@ -322,6 +322,8 @@ Lsin_sse2_cleanup:
 
 ALIGN 16
 Lsin_sse2_absx_lt_piby4:
+    cmp     r10,L_two_to_neg_27
+    jb      Lsin_sse2_cleanup
 ;          sin = sin_piby4(x, 0.0);
 
 ;  x2 = r * r;
@@ -357,7 +359,7 @@ ALIGN 16
 Lsin_reduce_precise:
 ;   Reduce x into range [-pi/4, pih/4]
     cmp     r10,L__inf_mask_64
-    jae     Lsin_x_naninf
+    jae     Lsin_sse2_x_naninf
     mov     QWORD PTR p_temp[rsp], r11
     call    __remainder_piby2_forAsm
     mov     r11, QWORD PTR p_temp[rsp]
@@ -371,6 +373,8 @@ Lsin_reduce_precise:
 
 
 ALIGN 16
+Lsin_sse2_x_naninf:
+    movd    xmm0, rdx
 Lsin_x_naninf:
     call    fname_special
     StackDeallocate stack_size

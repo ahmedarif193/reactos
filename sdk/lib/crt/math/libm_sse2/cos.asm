@@ -382,7 +382,7 @@ ALIGN 16
 Lcos_reduce_precise:
 ;   Reduce x into range [-pi/4, pi/4]
     cmp     r10, L__inf_mask_64
-    jae     Lcos_x_naninf
+    jae     Lcos_sse2_x_naninf
     call    __remainder_piby2_forAsm
 
     ; At this point xmm0 has r, xmm1 has rr, rax has region
@@ -394,6 +394,8 @@ Lcos_reduce_precise:
 
 
 ALIGN 16
+Lcos_sse2_x_naninf:
+    movd    xmm0, rdx
 Lcos_x_naninf:
     call    fname_special
     StackDeallocate stack_size
