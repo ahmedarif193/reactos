@@ -236,4 +236,4 @@ list(APPEND SOURCE
 )
 
 add_library(uuid ${SOURCE})
-add_dependencies(uuid psdk)
+add_dependencies(uuid psdk xdk bugcodes)
