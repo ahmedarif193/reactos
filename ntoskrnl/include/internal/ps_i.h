@@ -181,7 +181,7 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     IQS
     (
         PROCESS_PRIORITY_CLASS,
-        ULONG,
+        CHAR,
         PROCESS_PRIORITY_CLASS,
         CHAR,
         ICIF_QUERY | ICIF_SET
