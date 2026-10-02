@@ -165,13 +165,7 @@ RtlFlsGetValue(
         return STATUS_INVALID_PARAMETER;
 
     if (!FlsData)
-    {
-        if (!RtlAreBitsSet(RtlpGetFlsBitmap(NtCurrentPeb()), Index, 1))
-            return STATUS_INVALID_PARAMETER;
-
-        *Data = NULL;
-        return STATUS_SUCCESS;
-    }
+        return STATUS_INVALID_PARAMETER;
 
     *Data = FlsData->Data[Index];
     return STATUS_SUCCESS;
