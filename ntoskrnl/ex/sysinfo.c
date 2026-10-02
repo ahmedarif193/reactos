@@ -1677,6 +1677,8 @@ QSI_DEF(SystemHandleInformation)
 
                         HandleInformation->Handles[Index].HandleAttributes =
                             HandleTableEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
+                        if (HandleTableEntry->GrantedAccess & ObpAccessProtectCloseBit)
+                            HandleInformation->Handles[Index].HandleAttributes |= OBJ_PROTECT_CLOSE;
 
                         HandleInformation->Handles[Index].HandleValue =
                             (ULONG_PTR)Handle.GenericHandleOverlay;
@@ -1695,7 +1697,7 @@ QSI_DEF(SystemHandleInformation)
             }
 
             /* Go to the next entry */
-            Handle.Value += sizeof(HANDLE);
+            Handle.Value += 1 << HANDLE_TAG_BITS;
         }
     }
 
@@ -2952,6 +2954,8 @@ QSI_DEF(SystemExtendedHandleInformation)
 
                         HandleInformation->Handles[Index].HandleAttributes =
                             HandleTableEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
+                        if (HandleTableEntry->GrantedAccess & ObpAccessProtectCloseBit)
+                            HandleInformation->Handles[Index].HandleAttributes |= OBJ_PROTECT_CLOSE;
 
                         HandleInformation->Handles[Index].HandleValue =
                             (USHORT)(ULONG_PTR) Handle.GenericHandleOverlay;
@@ -2972,7 +2976,7 @@ QSI_DEF(SystemExtendedHandleInformation)
             }
 
             /* Go to the next entry */
-            Handle.Value += sizeof(HANDLE);
+            Handle.Value += 1 << HANDLE_TAG_BITS;
         }
     }
 
