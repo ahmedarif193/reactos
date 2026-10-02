@@ -1,19 +1,17 @@
 /*
  * PROJECT:     LiberNT Kernel
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     ARM64 data-export definitions for Windows export-table parity.
+ * PURPOSE:     Data-export definitions for Windows export-table parity.
  *
- * Windows 11 ARM64 ntoskrnl.exe exports a number of data symbols (object-type
+ * Windows 11 ntoskrnl.exe exports a number of data symbols (object-type
  * pointers, debugger flags, build identifiers) that ReactOS does not implement
  * yet. They are defined here as zero-initialised placeholders so the matching
- * "@ extern -arch=arm64 <name>" lines in ntoskrnl.spec resolve; a consumer sees
+ * "@ extern <name>" lines in ntoskrnl.spec resolve; a consumer sees
  * a NULL object type (and fails cleanly) rather than an unresolved import.
  *
  * Intentionally header-independent (raw C types only) so a definition here never
  * clashes with a future typed declaration and never needs the kernel PCH.
  */
-
-#ifdef _M_ARM64
 
 /*
  * Object-type pointers and pointer-sized data exports.
@@ -28,6 +26,7 @@ void *ExActivationObjectType = 0;
 void *ExCompositionObjectType = 0;
 void *ExCoreMessagingObjectType = 0;
 void *ExRawInputManagerObjectType = 0;
+void *IoRingObjectType = 0;
 void *PsSiloContextNonPagedType = 0;
 void *PsSiloContextPagedType = 0;
 void *TmEnlistmentObjectType = 0;
@@ -53,5 +52,3 @@ unsigned char PsUILanguageComitted = 0;
 
 /* Build GUID (16 bytes). */
 unsigned char NtBuildGUID[16] = { 0 };
-
-#endif /* _M_ARM64 */
