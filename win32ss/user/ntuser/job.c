@@ -475,16 +475,17 @@ FASTCALL
 IntIsJobUiLimited(_In_ ULONG Limit)
 {
     PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
-    PEJOB pEJob;
+    BOOL Limited = FALSE;
 
-    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED) || ppi->peProcess == NULL)
+    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED))
         return FALSE;
 
-    pEJob = PsGetProcessJob(ppi->peProcess);
-    if (pEJob == NULL)
-        return FALSE;
+    UserEnterShared();
+    if (ppi->pW32Job != NULL)
+        Limited = (ppi->pW32Job->UIRestrictions & Limit) != 0;
+    UserLeave();
 
-    return (PsGetJobUIRestrictionsClass(pEJob) & Limit) != 0;
+    return Limited;
 }
 
 BOOL
@@ -495,21 +496,20 @@ IntIsJobHandleAccessible(
 {
     PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
     PJOBINFO pJobInfo;
-    PEJOB pEJob;
+    BOOL Accessible = TRUE;
 
-    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED) || ppi->peProcess == NULL)
+    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED))
         return TRUE;
     if (ppiOwner == NULL || ppiOwner == ppi)
         return TRUE;
 
-    pEJob = PsGetProcessJob(ppi->peProcess);
-    if (pEJob == NULL || !(PsGetJobUIRestrictionsClass(pEJob) & JOB_OBJECT_UILIMIT_HANDLES))
-        return TRUE;
-    if (ppiOwner->peProcess != NULL && PsGetProcessJob(ppiOwner->peProcess) == pEJob)
-        return TRUE;
+    UserEnterShared();
+    pJobInfo = ppi->pW32Job;
+    if (pJobInfo != NULL && ppiOwner->pW32Job != pJobInfo)
+        Accessible = IntIsHandleGrantedToJob(pJobInfo, hUserHandle);
+    UserLeave();
 
-    pJobInfo = IntFindJobInfo(pEJob);
-    return pJobInfo != NULL && IntIsHandleGrantedToJob(pJobInfo, hUserHandle);
+    return Accessible;
 }
 
 PVOID
@@ -518,19 +518,14 @@ Win32kGlobalAtomTableCallout(VOID)
 {
     PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
     PJOBINFO pJobInfo;
-    PEJOB pEJob;
     PRTL_ATOM_TABLE pAtomTable = NULL;
 
-    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED) || ppi->peProcess == NULL)
-        return NULL;
-
-    pEJob = PsGetProcessJob(ppi->peProcess);
-    if (pEJob == NULL || !(PsGetJobUIRestrictionsClass(pEJob) & JOB_OBJECT_UILIMIT_GLOBALATOMS))
+    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED))
         return NULL;
 
     UserEnterShared();
-    pJobInfo = IntFindJobInfo(pEJob);
-    if (pJobInfo != NULL)
+    pJobInfo = ppi->pW32Job;
+    if (pJobInfo != NULL && (pJobInfo->UIRestrictions & JOB_OBJECT_UILIMIT_GLOBALATOMS))
         pAtomTable = pJobInfo->pAtomTable;
     UserLeave();
 

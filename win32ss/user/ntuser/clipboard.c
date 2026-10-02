@@ -1150,6 +1150,12 @@ NtUserGetClipboardData(UINT fmt, PGETCLIPBDATA pgcd)
         goto cleanup;
     }
 
+    if (pWinStaObj->spwndClipOwner &&
+        !IntIsJobHandleAccessible(UserHMGetHandle(pWinStaObj->spwndClipOwner), pWinStaObj->spwndClipOwner->head.pti->ppi))
+    {
+        goto cleanup;
+    }
+
     pElement = IntGetFormatElement(pWinStaObj, fmt);
     if (!pElement)
         goto cleanup;

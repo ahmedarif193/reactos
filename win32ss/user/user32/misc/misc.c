@@ -249,6 +249,17 @@ static const BOOL g_ObjectHeapTypeShared[TYPE_CTYPES] =
     FALSE, /* TYPE_GESTUREINFOOBJ */
 };
 
+static
+BOOL
+IsHandleUsable(HANDLE handle, PUSER_HANDLE_ENTRY pEntry, UINT uType)
+{
+    if (uType != TYPE_WINDOW || !(GetWin32ClientInfo()->dwTIFlags & TIF_JOBRESTRICTED))
+        return TRUE;
+    if (pEntry->pti == NtCurrentTeb()->Win32ThreadInfo)
+        return TRUE;
+    return NtUserValidateHandleSecure(handle);
+}
+
 //
 // Validate Handle and return the pointer to the object.
 //
@@ -275,7 +286,8 @@ ValidateHandle(HANDLE handle, UINT uType)
   if ( (!pEntry) ||
         (pEntry->type != uType) ||
         !pEntry->ptr ||
-        (pEntry->flags & HANDLEENTRY_DESTROY) || (pEntry->flags & HANDLEENTRY_INDESTROY) )
+        (pEntry->flags & HANDLEENTRY_DESTROY) || (pEntry->flags & HANDLEENTRY_INDESTROY) ||
+        !IsHandleUsable(handle, pEntry, uType) )
   {
      switch ( uType )
      {  // Test (with wine too) confirms these results!
@@ -332,6 +344,9 @@ ValidateHandleNoErr(HANDLE handle, UINT uType)
 
 // Must have an entry and must be the same type!
   if ( (!pEntry) || (pEntry->type != uType) || !pEntry->ptr )
+    return NULL;
+
+  if (!IsHandleUsable(handle, pEntry, uType))
     return NULL;
 
   if (g_ObjectHeapTypeShared[uType])

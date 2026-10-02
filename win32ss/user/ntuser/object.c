@@ -923,6 +923,9 @@ NtUserValidateHandleSecure(
 
    // Same process job returns TRUE.
    if (gptiCurrent->ppi->pW32Job == ppi->pW32Job) Ret = TRUE;
+   else if (uType == TYPE_WINDOW && entry->ptr &&
+            (((PWND)entry->ptr)->fnid == FNID_DESKTOP || ((PWND)entry->ptr)->fnid == FNID_MESSAGEWND)) Ret = TRUE;
+   else Ret = IntIsJobHandleAccessible(handle, ppi);
 
 Exit:
    UserDomainUnlockShared(DLT_HANDLEMANAGER);
