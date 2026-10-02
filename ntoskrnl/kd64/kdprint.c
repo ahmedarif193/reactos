@@ -14,6 +14,7 @@
 #include <debug.h>
 
 #define KD_PRINT_MAX_BYTES 512
+#define KD_PRINT_PREFIX_BYTES 32
 #define KD_100NS_PER_SECOND 10000000ULL
 #define KD_100NS_PER_MICROSECOND 10ULL
 
@@ -555,7 +556,7 @@ KdpPrint(
     NTSTATUS Status;
     KIRQL PrintIrql;
     STRING OutputString;
-    CHAR OutputBuffer[KD_PRINT_MAX_BYTES];
+    CHAR OutputBuffer[KD_PRINT_MAX_BYTES + KD_PRINT_PREFIX_BYTES];
     USHORT PrefixLength, OutputLength;
 
     if (NtQueryDebugFilterState(ComponentId, Level) == (NTSTATUS)FALSE)
@@ -590,7 +591,7 @@ KdpPrint(
     }
 
     /* Build the timestamp prefix directly into the output buffer */
-    PrefixLength = KdpBuildTimestampPrefix(OutputBuffer, sizeof(OutputBuffer));
+    PrefixLength = KdpBuildTimestampPrefix(OutputBuffer, KD_PRINT_PREFIX_BYTES);
 
     /* Keep the complete entry in the fixed-size KD print buffer. */
     OutputLength = Length;
