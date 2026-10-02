@@ -20,6 +20,7 @@ typedef struct _RTLP_WAIT
 {
     HANDLE Object;
     BOOLEAN CallbackInProgress;
+    HANDLE CallbackThread;
     HANDLE CancelEvent;
     LONG DeleteCount;
     HANDLE CompletionEvent;
@@ -28,6 +29,8 @@ typedef struct _RTLP_WAIT
     PVOID Context;
     ULONG Milliseconds;
 } RTLP_WAIT, *PRTLP_WAIT;
+
+static RTL_SRWLOCK RtlpWaitThreadLock = RTL_SRWLOCK_INIT;
 
 /* PRIVATE FUNCTIONS *******************************************************/
 
@@ -77,8 +80,25 @@ Wait_thread_proc(LPVOID Arg)
     //                Wait->Context );
                 TimerOrWaitFired = TRUE;
             }
+            Wait->CallbackThread = NtCurrentTeb()->ClientId.UniqueThread;
             Wait->CallbackInProgress = TRUE;
-            RtlpCallWaitOrTimerCallback( Wait->Callback, Wait->Context, TimerOrWaitFired );
+            if (Wait->Flags & WT_EXECUTEINWAITTHREAD)
+            {
+                RtlAcquireSRWLockExclusive( &RtlpWaitThreadLock );
+                _SEH2_TRY
+                {
+                    RtlpCallWaitOrTimerCallback( Wait->Callback, Wait->Context, TimerOrWaitFired );
+                }
+                _SEH2_FINALLY
+                {
+                    RtlReleaseSRWLockExclusive( &RtlpWaitThreadLock );
+                }
+                _SEH2_END;
+            }
+            else
+            {
+                RtlpCallWaitOrTimerCallback( Wait->Callback, Wait->Context, TimerOrWaitFired );
+            }
             Wait->CallbackInProgress = FALSE;
 
             if (Wait->Flags & WT_EXECUTEONLYONCE)
@@ -151,6 +171,7 @@ RtlRegisterWait(PHANDLE NewWaitObject,
     Wait->Milliseconds = Milliseconds;
     Wait->Flags = Flags;
     Wait->CallbackInProgress = FALSE;
+    Wait->CallbackThread = NULL;
     Wait->DeleteCount = 0;
     Wait->CompletionEvent = NULL;
 
@@ -169,18 +190,19 @@ RtlRegisterWait(PHANDLE NewWaitObject,
     Flags = Flags & (WT_EXECUTEINIOTHREAD | WT_EXECUTEINPERSISTENTTHREAD |
                      WT_EXECUTELONGFUNCTION | WT_TRANSFER_IMPERSONATION);
 
+    *NewWaitObject = Wait;
     Status = RtlQueueWorkItem( Wait_thread_proc,
                                Wait,
                                Flags );
 
     if (Status != STATUS_SUCCESS)
     {
+        *NewWaitObject = NULL;
         NtClose( Wait->CancelEvent );
         RtlFreeHeap( RtlGetProcessHeap(), 0, Wait );
         return Status;
     }
 
-    *NewWaitObject = Wait;
     return Status;
 }
 
@@ -222,7 +244,8 @@ RtlDeregisterWaitEx(HANDLE WaitHandle,
 
     NtSetEvent( Wait->CancelEvent, NULL );
 
-    if (Wait->CallbackInProgress && !Synchronous)
+    if (Wait->CallbackInProgress && !Synchronous &&
+        Wait->CallbackThread != NtCurrentTeb()->ClientId.UniqueThread)
         Status = STATUS_PENDING;
 
     DeleteCount = InterlockedIncrement( &Wait->DeleteCount );
