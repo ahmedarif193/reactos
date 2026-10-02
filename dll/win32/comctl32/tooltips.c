@@ -2245,7 +2245,11 @@ TOOLTIPS_OnWMGetText (const TOOLTIPS_INFO *infoPtr, WPARAM size, LPWSTR pszText)
 static LRESULT
 TOOLTIPS_Timer (TOOLTIPS_INFO *infoPtr, INT iTimer)
 {
+#ifdef __REACTOS__
+    INT nOldTool, nTool;
+#else
     INT nOldTool;
+#endif
 
     TRACE("timer %d (%p) expired\n", iTimer, infoPtr->hwndSelf);
 
@@ -2253,7 +2257,14 @@ TOOLTIPS_Timer (TOOLTIPS_INFO *infoPtr, INT iTimer)
     case ID_TIMERSHOW:
         KillTimer (infoPtr->hwndSelf, ID_TIMERSHOW);
 	nOldTool = infoPtr->nTool;
+#ifdef __REACTOS__
+        if (nOldTool == -1) break;
+        nTool = TOOLTIPS_CheckTool(infoPtr, TRUE);
+        if (infoPtr->nTool != nOldTool) break;
+	if ((infoPtr->nTool = nTool) == nOldTool)
+#else
 	if ((infoPtr->nTool = TOOLTIPS_CheckTool (infoPtr, TRUE)) == nOldTool)
+#endif
 	    TOOLTIPS_Show (infoPtr, FALSE);
 	break;
 
@@ -2263,7 +2274,18 @@ TOOLTIPS_Timer (TOOLTIPS_INFO *infoPtr, INT iTimer)
 
     case ID_TIMERLEAVE:
         nOldTool = infoPtr->nTool;
+#ifdef __REACTOS__
+        if (nOldTool == -1)
+        {
+            KillTimer(infoPtr->hwndSelf, ID_TIMERLEAVE);
+            break;
+        }
+        nTool = TOOLTIPS_CheckTool(infoPtr, FALSE);
+        if (infoPtr->nTool != nOldTool) break;
+	infoPtr->nTool = nTool;
+#else
 	infoPtr->nTool = TOOLTIPS_CheckTool (infoPtr, FALSE);
+#endif
 	TRACE("tool (%p) %d %d %d\n", infoPtr->hwndSelf, nOldTool,
 	      infoPtr->nTool, infoPtr->nCurrentTool);
 	if (infoPtr->nTool != nOldTool) {
