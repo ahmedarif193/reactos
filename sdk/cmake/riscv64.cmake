@@ -99,7 +99,7 @@ set(CMAKE_ASM_COMPILE_OBJECT
 set(CMAKE_RC_COMPILE_OBJECT
     "<CMAKE_RC_COMPILER> -O coff <INCLUDES> <FLAGS> -DRC_INVOKED -D__WIN32__=1 -D__FLAT__=1 ${I18N_DEFS} <DEFINES> <SOURCE> <OBJECT>")
 set(CMAKE_DEPFILE_FLAGS_RC
-    "--preprocessor=\"${CMAKE_C_COMPILER}\" --preprocessor-arg=--target=${CMAKE_C_COMPILER_TARGET} --preprocessor-arg=-E --preprocessor-arg=-nostdlibinc --preprocessor-arg=-xc-header --preprocessor-arg=-MMD --preprocessor-arg=-MF --preprocessor-arg=<DEPFILE> --preprocessor-arg=-MT --preprocessor-arg=<OBJECT>")
+    "--preprocessor=\"${CMAKE_C_COMPILER}\" --preprocessor-arg=--target=${CMAKE_C_COMPILER_TARGET} --preprocessor-arg=-E --preprocessor-arg=-nostdlibinc --preprocessor-arg=-xc-header --preprocessor-arg=-MMD --preprocessor-arg=-MF --preprocessor-arg=<OBJECT>.d --preprocessor-arg=-MT --preprocessor-arg=<OBJECT>")
 
 # ReactOS creates import libraries from module specifications. Use the same
 # explicit link recipes as the other Clang architectures so CMake's MinGW
