@@ -1887,10 +1887,38 @@ NtQueryObject(IN HANDLE ObjectHandle,
 
             /* Information about all types */
             case ObjectTypesInformation:
-                DPRINT1("NOT IMPLEMENTED!\n");
-                InfoLength = Length;
-                Status = STATUS_NOT_IMPLEMENTED;
+            {
+                POBJECT_ALL_TYPES_INFORMATION TypesInfo = ObjectInformation;
+                POBJECT_TYPE_INFORMATION TypeInfo;
+                ULONG Index, Count = 0, Used;
+
+                InfoLength = ALIGN_UP(sizeof(OBJECT_ALL_TYPES_INFORMATION), ULONG_PTR);
+                for (Index = 0; Index < RTL_NUMBER_OF(ObTypeIndexTable); Index++)
+                {
+                    if (!ObTypeIndexTable[Index]) continue;
+                    InfoLength += sizeof(OBJECT_TYPE_INFORMATION) +
+                                  ALIGN_UP(ObTypeIndexTable[Index]->Name.Length + sizeof(UNICODE_NULL), ULONG_PTR);
+                    Count++;
+                }
+                if (Length < InfoLength)
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                    break;
+                }
+
+                TypesInfo->NumberOfTypes = Count;
+                Used = ALIGN_UP(sizeof(OBJECT_ALL_TYPES_INFORMATION), ULONG_PTR);
+                Status = STATUS_SUCCESS;
+                for (Index = 0; Index < RTL_NUMBER_OF(ObTypeIndexTable); Index++)
+                {
+                    if (!ObTypeIndexTable[Index]) continue;
+                    TypeInfo = (POBJECT_TYPE_INFORMATION)((PUCHAR)ObjectInformation + Used);
+                    Status = ObQueryTypeInfo(ObTypeIndexTable[Index], TypeInfo, Length, &Used);
+                    if (!NT_SUCCESS(Status)) break;
+                    TypeInfo->TypeName.MaximumLength = TypeInfo->TypeName.Length + sizeof(UNICODE_NULL);
+                }
                 break;
+            }
 
             /* Information about the handle flags */
             case ObjectHandleFlagInformation:
