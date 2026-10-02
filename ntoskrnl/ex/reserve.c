@@ -35,7 +35,6 @@ ExpInitializeReserveObjectTypes(VOID)
     ObjectTypeInitializer.PoolType = NonPagedPool;
     ObjectTypeInitializer.ValidAccessMask = STANDARD_RIGHTS_REQUIRED | 0x3;
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
-    ObjectTypeInitializer.UseDefaultObject = TRUE;
 
     RtlInitUnicodeString(&Name, L"UserApcReserve");
     Status = ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ExUserApcReserveObjectType);
