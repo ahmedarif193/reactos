@@ -13,6 +13,16 @@
 #include <debug.h>
 #include "amd64/ketypes.h"
 
+static
+VOID
+NTAPI
+RtlpUserThreadStartup(
+    _In_ PTHREAD_START_ROUTINE StartAddress,
+    _In_opt_ PVOID Parameter)
+{
+    RtlExitUserThread(StartAddress(Parameter));
+}
+
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*
@@ -64,6 +74,10 @@ RtlInitializeContext(
         ThreadContext->SegFs = KGDT64_R3_CMTEB |  RPL_MASK;
         ThreadContext->SegGs = KGDT64_R3_DATA |  RPL_MASK;
         ThreadContext->SegSs = KGDT64_R3_DATA |  RPL_MASK;
+
+        ThreadContext->Rip = (ULONG64)RtlpUserThreadStartup;
+        ThreadContext->Rcx = (ULONG64)ThreadStartAddress;
+        ThreadContext->Rdx = (ULONG64)ThreadStartParam;
     }
 
     ThreadContext->MxCsr = INITIAL_MXCSR;
