@@ -291,7 +291,7 @@ ObpReferenceProcessObjectByHandle(IN HANDLE Handle,
         ObjectHeader = ObpGetHandleObject(HandleEntry);
 
         /* Get the granted access and validate it */
-        GrantedAccess = HandleEntry->GrantedAccess;
+        GrantedAccess = HandleEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
 
         /* Mask out the internal attributes */
         Attributes = HandleEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
@@ -360,7 +360,7 @@ ObpEnumFindHandleProcedure(IN PHANDLE_TABLE_ENTRY HandleEntry,
     if (FindData->HandleInformation)
     {
         /* Get the granted access and attributes */
-        GrantedAccess = HandleEntry->GrantedAccess;
+        GrantedAccess = HandleEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
         HandleAttributes = HandleEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
 
         /* Attempt to match them */
@@ -2194,7 +2194,7 @@ ObpDuplicateHandleCallback(IN PEPROCESS Process,
         ExUnlockHandleTableEntry(HandleTable, OldEntry);
 
         /* Setup the access state */
-        AccessState.PreviouslyGrantedAccess = HandleTableEntry->GrantedAccess;
+        AccessState.PreviouslyGrantedAccess = HandleTableEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
 
         /* Call the shared routine for incrementing handles */
         Status = ObpIncrementHandleCount(&ObjectHeader->Body,

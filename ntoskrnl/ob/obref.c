@@ -697,7 +697,7 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
         if (!(ObjectType) || (ObjectType == ObpGetObjectTypeFromHeader(ObjectHeader)))
         {
             /* Get the granted access and validate it */
-            GrantedAccess = HandleEntry->GrantedAccess;
+            GrantedAccess = HandleEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
 
             /* Validate access */
             /* ~GrantedAccess = RefusedAccess.*/

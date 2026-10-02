@@ -1684,7 +1684,7 @@ QSI_DEF(SystemHandleInformation)
                         HandleInformation->Handles[Index].Object = &ObjectHeader->Body;
 
                         HandleInformation->Handles[Index].GrantedAccess =
-                            HandleTableEntry->GrantedAccess;
+                            HandleTableEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
 
                         ++Index;
                     }
@@ -2959,7 +2959,7 @@ QSI_DEF(SystemExtendedHandleInformation)
                         HandleInformation->Handles[Index].Object = &ObjectHeader->Body;
 
                         HandleInformation->Handles[Index].GrantedAccess =
-                            HandleTableEntry->GrantedAccess;
+                            HandleTableEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
 
                         HandleInformation->Handles[Index].Reserved = 0;
 
