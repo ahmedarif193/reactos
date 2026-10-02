@@ -9,8 +9,8 @@
 
 #define DEFAULT_SECURITY_COOKIE ((ULONG_PTR)0x00002B992DDFA232ULL)
 
-ULONG_PTR __security_cookie = DEFAULT_SECURITY_COOKIE;
-ULONG_PTR __security_cookie_complement = ~DEFAULT_SECURITY_COOKIE;
+uintptr_t __security_cookie = DEFAULT_SECURITY_COOKIE;
+uintptr_t __security_cookie_complement = ~DEFAULT_SECURITY_COOKIE;
 
 VOID
 __cdecl
