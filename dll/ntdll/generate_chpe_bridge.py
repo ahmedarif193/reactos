@@ -345,7 +345,7 @@ def source_wrapper(name, spec, declaration):
     if ("..." in signature or len(arguments) != len(declaration["params"])
             or any(arg not in STUB_ARGUMENT_TYPES for arg in arguments)):
         return None
-    if result_type == "TRACEHANDLE":
+    if result_type in ("TRACEHANDLE", "ULONG64"):
         result_type = "ULONGLONG"
     elif result_type.startswith("P") and result_type != "PVOID":
         result_type = "PVOID"
@@ -585,7 +585,9 @@ def choose_spec(entries):
     for entry in entries:
         arch = next((value.split("=", 1)[1] for value in entry["options"]
                      if value.startswith("-arch=")), None)
-        if arch is None or "arm64" in arch.split(","):
+        if arch is None or any(
+                (token.lstrip("!") in ("arm64", "win64")) != token.startswith("!")
+                for token in arch.split(",")):
             return entry
     return None
 
