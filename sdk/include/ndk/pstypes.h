@@ -2589,6 +2589,83 @@ typedef struct _PS_JOB_TOKEN_FILTER
     ULONG CapturedPrivilegesLength;
 } PS_JOB_TOKEN_FILTER, *PPS_JOB_TOKEN_FILTER;
 
+typedef struct _PROCESS_DISK_COUNTERS
+{
+    ULONGLONG BytesRead;
+    ULONGLONG BytesWritten;
+    ULONGLONG ReadOperationCount;
+    ULONGLONG WriteOperationCount;
+    ULONGLONG FlushOperationCount;
+} PROCESS_DISK_COUNTERS, *PPROCESS_DISK_COUNTERS;
+
+typedef struct _PROCESS_NETWORK_COUNTERS
+{
+    ULONGLONG BytesIn;
+    ULONGLONG BytesOut;
+} PROCESS_NETWORK_COUNTERS, *PPROCESS_NETWORK_COUNTERS;
+
+typedef struct _PS_JOB_WAKE_INFORMATION
+{
+    ULONGLONG NotificationChannel;
+    ULONGLONG WakeCounters[7];
+    ULONGLONG NoWakeCounter;
+} PS_JOB_WAKE_INFORMATION, *PPS_JOB_WAKE_INFORMATION;
+
+typedef struct _EPROCESS_VALUES
+{
+    ULONGLONG KernelTime;
+    ULONGLONG UserTime;
+    ULONGLONG ReadyTime;
+    ULONGLONG CycleTime;
+    ULONGLONG ContextSwitches;
+    LONGLONG ReadOperationCount;
+    LONGLONG WriteOperationCount;
+    LONGLONG OtherOperationCount;
+    LONGLONG ReadTransferCount;
+    LONGLONG WriteTransferCount;
+    LONGLONG OtherTransferCount;
+    ULONGLONG KernelWaitTime;
+    ULONGLONG UserWaitTime;
+} EPROCESS_VALUES, *PEPROCESS_VALUES;
+
+typedef struct _JOB_RATE_CONTROL_HEADER
+{
+    PVOID RateControlQuotaReference;
+    RTL_BITMAP OverQuotaHistory;
+    PUCHAR BitMapBuffer;
+    SIZE_T BitMapBufferSize;
+} JOB_RATE_CONTROL_HEADER, *PJOB_RATE_CONTROL_HEADER;
+
+typedef struct _PS_IO_CONTROL_ENTRY
+{
+    union
+    {
+        RTL_BALANCED_NODE VolumeTreeNode;
+        struct
+        {
+            LIST_ENTRY FreeListEntry;
+            ULONG_PTR ReservedForParentValue;
+        };
+    };
+    ULONG_PTR VolumeKey;
+    EX_RUNDOWN_REF Rundown;
+    PVOID IoControl;
+    PVOID VolumeIoAttribution;
+} PS_IO_CONTROL_ENTRY, *PPS_IO_CONTROL_ENTRY;
+
+typedef struct _JOBOBJECT_ENERGY_TRACKING_STATE
+{
+    union
+    {
+        ULONGLONG Value;
+        struct
+        {
+            ULONG UpdateMask;
+            ULONG DesiredState;
+        };
+    };
+} JOBOBJECT_ENERGY_TRACKING_STATE, *PJOBOBJECT_ENERGY_TRACKING_STATE;
+
 //
 // Executive Job (EJOB)
 //
@@ -2600,27 +2677,28 @@ typedef struct _EJOB
     ERESOURCE JobLock;
     LARGE_INTEGER TotalUserTime;
     LARGE_INTEGER TotalKernelTime;
+    LARGE_INTEGER TotalCycleTime;
     LARGE_INTEGER ThisPeriodTotalUserTime;
     LARGE_INTEGER ThisPeriodTotalKernelTime;
+    ULONGLONG TotalContextSwitches;
     ULONG TotalPageFaultCount;
     ULONG TotalProcesses;
     ULONG ActiveProcesses;
     ULONG TotalTerminatedProcesses;
     LARGE_INTEGER PerProcessUserTimeLimit;
     LARGE_INTEGER PerJobUserTimeLimit;
+    ULONGLONG MinimumWorkingSetSize;
+    ULONGLONG MaximumWorkingSetSize;
     ULONG LimitFlags;
-    ULONG MinimumWorkingSetSize;
-    ULONG MaximumWorkingSetSize;
     ULONG ActiveProcessLimit;
-    KAFFINITY Affinity;
-    UCHAR PriorityClass;
+    KAFFINITY_EX Affinity;
+    struct _JOB_ACCESS_STATE *AccessState;
+    PVOID AccessStateQuotaReference;
     ULONG UIRestrictionsClass;
-    ULONG SecurityLimitFlags;
-    PVOID Token;
-    PPS_JOB_TOKEN_FILTER Filter;
     ULONG EndOfJobTimeAction;
     PVOID CompletionPort;
     PVOID CompletionKey;
+    ULONGLONG CompletionCount;
     ULONG SessionId;
     ULONG SchedulingClass;
     ULONGLONG ReadOperationCount;
@@ -2629,23 +2707,284 @@ typedef struct _EJOB
     ULONGLONG ReadTransferCount;
     ULONGLONG WriteTransferCount;
     ULONGLONG OtherTransferCount;
-    IO_COUNTERS IoInfo;
-    ULONG ProcessMemoryLimit;
-    ULONG JobMemoryLimit;
-    ULONG PeakProcessMemoryUsed;
-    ULONG PeakJobMemoryUsed;
-    ULONG CurrentJobMemoryUsed;
-#if (NTDDI_VERSION >= NTDDI_WINXP) && (NTDDI_VERSION < NTDDI_WS03)
-    FAST_MUTEX MemoryLimitsLock;
-#elif (NTDDI_VERSION >= NTDDI_WS03) && (NTDDI_VERSION < NTDDI_LONGHORN)
-    KGUARDED_MUTEX MemoryLimitsLock;
-#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    PROCESS_DISK_COUNTERS DiskIoInfo;
+    PROCESS_NETWORK_COUNTERS NetworkIoInfo;
+    ULONGLONG ProcessMemoryLimit;
+    ULONGLONG JobMemoryLimit;
+    ULONGLONG JobTotalMemoryLimit;
+    ULONGLONG PeakProcessMemoryUsed;
+    ULONGLONG PeakJobMemoryUsed;
+    KAFFINITY_EX EffectiveAffinity;
+    LARGE_INTEGER EffectivePerProcessUserTimeLimit;
+    ULONGLONG EffectiveMinimumWorkingSetSize;
+    ULONGLONG EffectiveMaximumWorkingSetSize;
+    ULONGLONG EffectiveProcessMemoryLimit;
+    struct _EJOB *EffectiveProcessMemoryLimitJob;
+    struct _EJOB *EffectivePerProcessUserTimeLimitJob;
+    struct _EJOB *EffectiveNetIoRateLimitJob;
+    struct _EJOB *EffectiveHeapAttributionJob;
+    ULONG EffectiveLimitFlags;
+    ULONG EffectiveSchedulingClass;
+    ULONG EffectiveFreezeCount;
+    ULONG EffectiveGraphicsFreezeCount;
+    ULONG EffectiveBackgroundCount;
+    ULONG EffectiveSwapCount;
+    ULONG EffectiveNotificationLimitCount;
+    ULONG EffectiveIoPriorityLimit;
+    ULONG IoPriorityLimit;
+    ULONG EffectivePagePriorityLimit;
+    ULONG PagePriorityLimit;
+    UCHAR EffectivePriorityClass;
+    UCHAR PriorityClass;
+    UCHAR NestingDepth;
+    UCHAR Reserved1[1];
+    ULONG CompletionFilter;
+    union
+    {
+        WNF_STATE_NAME WakeChannel;
+        PS_JOB_WAKE_INFORMATION WakeInfo;
+    };
+    JOBOBJECT_WAKE_FILTER WakeFilter;
+    ULONG LowEdgeLatchFilter;
+    struct _EJOB *NotificationLink;
+    ULONGLONG CurrentJobMemoryUsed;
+    struct _JOB_NOTIFICATION_INFORMATION *NotificationInfo;
+    PVOID NotificationInfoQuotaReference;
+    struct _IO_MINI_COMPLETION_PACKET_USER *NotificationPacket;
+    struct _JOB_CPU_RATE_CONTROL *CpuRateControl;
+    PVOID EffectiveSchedulingGroup;
+    ULONGLONG ReadyTime;
     EX_PUSH_LOCK MemoryLimitsLock;
-#endif
-    LIST_ENTRY JobSetLinks;
-    ULONG MemberLevel;
-    ULONG JobFlags;
+    LIST_ENTRY SiblingJobLinks;
+    LIST_ENTRY ChildJobListHead;
+    struct _EJOB *ParentJob;
+    struct _EJOB *RootJob;
+    LIST_ENTRY IteratorListHead;
+    ULONG_PTR AncestorCount;
+    union
+    {
+        struct _EJOB **Ancestors;
+        PVOID SessionObject;
+    };
+    EPROCESS_VALUES Accounting;
+    ULONG ShadowActiveProcessCount;
+    ULONG ActiveAuxiliaryProcessCount;
+    ULONG SequenceNumber;
+    ULONG JobId;
+    GUID ContainerId;
+    GUID ContainerTelemetryId;
+    struct _ESERVERSILO_GLOBALS *ServerSiloGlobals;
+    PS_PROPERTY_SET PropertySet;
+    struct _PSP_STORAGE *Storage;
+    struct _JOB_NET_RATE_CONTROL *NetRateControl;
+    union
+    {
+        ULONG JobFlags;
+        struct
+        {
+            ULONG CloseDone : 1;
+            ULONG MultiGroup : 1;
+            ULONG OutstandingNotification : 1;
+            ULONG NotificationInProgress : 1;
+            ULONG UILimits : 1;
+            ULONG CpuRateControlActive : 1;
+            ULONG OwnCpuRateControl : 1;
+            ULONG Terminating : 1;
+            ULONG WorkingSetLock : 1;
+            ULONG JobFrozen : 1;
+            ULONG Background : 1;
+            ULONG WakeNotificationAllocated : 1;
+            ULONG WakeNotificationEnabled : 1;
+            ULONG WakeNotificationPending : 1;
+            ULONG LimitNotificationRequired : 1;
+            ULONG ZeroCountNotificationRequired : 1;
+            ULONG CycleTimeNotificationRequired : 1;
+            ULONG CycleTimeNotificationPending : 1;
+            ULONG TimersVirtualized : 1;
+            ULONG JobSwapped : 1;
+            ULONG ViolationDetected : 1;
+            ULONG EmptyJobNotified : 1;
+            ULONG NoSystemCharge : 1;
+            ULONG DropNoWakeCharges : 1;
+            ULONG NoWakeChargePolicyDecided : 1;
+            ULONG NetRateControlActive : 1;
+            ULONG OwnNetRateControl : 1;
+            ULONG IoRateControlActive : 1;
+            ULONG OwnIoRateControl : 1;
+            ULONG DisallowNewProcesses : 1;
+            ULONG Silo : 1;
+            ULONG ContainerTelemetryIdSet : 1;
+        };
+    };
+    union
+    {
+        ULONG JobFlags2;
+        struct
+        {
+            ULONG ParentLocked : 1;
+            ULONG EnableUsermodeSiloThreadImpersonation : 1;
+            ULONG DisallowUsermodeSiloThreadImpersonation : 1;
+            ULONG JobGraphicsFreezeOptimized : 1;
+        };
+    };
+    struct _PROCESS_EXTENDED_ENERGY_VALUES_V1 *EnergyValues;
+    volatile ULONGLONG SharedCommitCharge;
+    ULONG DiskIoAttributionUserRefCount;
+    ULONG DiskIoAttributionRefCount;
+    union
+    {
+        PVOID DiskIoAttributionContext;
+        struct _EJOB *DiskIoAttributionOwnerJob;
+    };
+    JOB_RATE_CONTROL_HEADER IoRateControlHeader;
+    PS_IO_CONTROL_ENTRY GlobalIoControl;
+    volatile LONG IoControlStateLock;
+    RTL_RB_TREE VolumeIoControlTree;
+    ULONGLONG IoRateOverQuotaHistory;
+    ULONG IoRateCurrentGeneration;
+    ULONG IoRateLastQueryGeneration;
+    ULONG IoRateGenerationLength;
+    ULONG IoRateOverQuotaNotifySequenceId;
+    ULONGLONG LastThrottledIoTime;
+    EX_PUSH_LOCK IoControlLock;
+    LONGLONG SiloHardReferenceCount;
+    WORK_QUEUE_ITEM RundownWorkItem;
+    PVOID PartitionObject;
+    struct _EJOB *PartitionOwnerJob;
+    JOBOBJECT_ENERGY_TRACKING_STATE EnergyTrackingState;
+    ULONGLONG KernelWaitTime;
+    ULONGLONG UserWaitTime;
 } EJOB, *PEJOB;
+
+#if defined(_M_ARM64) && !defined(__ASSEMBLER__)
+C_ASSERT(sizeof(EJOB) == 0x728);
+C_ASSERT(FIELD_OFFSET(EJOB, Event) == 0x000);
+C_ASSERT(FIELD_OFFSET(EJOB, JobLinks) == 0x018);
+C_ASSERT(FIELD_OFFSET(EJOB, ProcessListHead) == 0x028);
+C_ASSERT(FIELD_OFFSET(EJOB, JobLock) == 0x038);
+C_ASSERT(FIELD_OFFSET(EJOB, TotalUserTime) == 0x0A0);
+C_ASSERT(FIELD_OFFSET(EJOB, TotalKernelTime) == 0x0A8);
+C_ASSERT(FIELD_OFFSET(EJOB, TotalCycleTime) == 0x0B0);
+C_ASSERT(FIELD_OFFSET(EJOB, ThisPeriodTotalUserTime) == 0x0B8);
+C_ASSERT(FIELD_OFFSET(EJOB, ThisPeriodTotalKernelTime) == 0x0C0);
+C_ASSERT(FIELD_OFFSET(EJOB, TotalContextSwitches) == 0x0C8);
+C_ASSERT(FIELD_OFFSET(EJOB, TotalPageFaultCount) == 0x0D0);
+C_ASSERT(FIELD_OFFSET(EJOB, TotalProcesses) == 0x0D4);
+C_ASSERT(FIELD_OFFSET(EJOB, ActiveProcesses) == 0x0D8);
+C_ASSERT(FIELD_OFFSET(EJOB, TotalTerminatedProcesses) == 0x0DC);
+C_ASSERT(FIELD_OFFSET(EJOB, PerProcessUserTimeLimit) == 0x0E0);
+C_ASSERT(FIELD_OFFSET(EJOB, PerJobUserTimeLimit) == 0x0E8);
+C_ASSERT(FIELD_OFFSET(EJOB, MinimumWorkingSetSize) == 0x0F0);
+C_ASSERT(FIELD_OFFSET(EJOB, MaximumWorkingSetSize) == 0x0F8);
+C_ASSERT(FIELD_OFFSET(EJOB, LimitFlags) == 0x100);
+C_ASSERT(FIELD_OFFSET(EJOB, ActiveProcessLimit) == 0x104);
+C_ASSERT(FIELD_OFFSET(EJOB, Affinity) == 0x108);
+C_ASSERT(FIELD_OFFSET(EJOB, AccessState) == 0x210);
+C_ASSERT(FIELD_OFFSET(EJOB, AccessStateQuotaReference) == 0x218);
+C_ASSERT(FIELD_OFFSET(EJOB, UIRestrictionsClass) == 0x220);
+C_ASSERT(FIELD_OFFSET(EJOB, EndOfJobTimeAction) == 0x224);
+C_ASSERT(FIELD_OFFSET(EJOB, CompletionPort) == 0x228);
+C_ASSERT(FIELD_OFFSET(EJOB, CompletionKey) == 0x230);
+C_ASSERT(FIELD_OFFSET(EJOB, CompletionCount) == 0x238);
+C_ASSERT(FIELD_OFFSET(EJOB, SessionId) == 0x240);
+C_ASSERT(FIELD_OFFSET(EJOB, SchedulingClass) == 0x244);
+C_ASSERT(FIELD_OFFSET(EJOB, ReadOperationCount) == 0x248);
+C_ASSERT(FIELD_OFFSET(EJOB, WriteOperationCount) == 0x250);
+C_ASSERT(FIELD_OFFSET(EJOB, OtherOperationCount) == 0x258);
+C_ASSERT(FIELD_OFFSET(EJOB, ReadTransferCount) == 0x260);
+C_ASSERT(FIELD_OFFSET(EJOB, WriteTransferCount) == 0x268);
+C_ASSERT(FIELD_OFFSET(EJOB, OtherTransferCount) == 0x270);
+C_ASSERT(FIELD_OFFSET(EJOB, DiskIoInfo) == 0x278);
+C_ASSERT(FIELD_OFFSET(EJOB, NetworkIoInfo) == 0x2A0);
+C_ASSERT(FIELD_OFFSET(EJOB, ProcessMemoryLimit) == 0x2B0);
+C_ASSERT(FIELD_OFFSET(EJOB, JobMemoryLimit) == 0x2B8);
+C_ASSERT(FIELD_OFFSET(EJOB, JobTotalMemoryLimit) == 0x2C0);
+C_ASSERT(FIELD_OFFSET(EJOB, PeakProcessMemoryUsed) == 0x2C8);
+C_ASSERT(FIELD_OFFSET(EJOB, PeakJobMemoryUsed) == 0x2D0);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveAffinity) == 0x2D8);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectivePerProcessUserTimeLimit) == 0x3E0);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveMinimumWorkingSetSize) == 0x3E8);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveMaximumWorkingSetSize) == 0x3F0);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveProcessMemoryLimit) == 0x3F8);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveProcessMemoryLimitJob) == 0x400);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectivePerProcessUserTimeLimitJob) == 0x408);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveNetIoRateLimitJob) == 0x410);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveHeapAttributionJob) == 0x418);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveLimitFlags) == 0x420);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveSchedulingClass) == 0x424);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveFreezeCount) == 0x428);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveGraphicsFreezeCount) == 0x42C);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveBackgroundCount) == 0x430);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveSwapCount) == 0x434);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveNotificationLimitCount) == 0x438);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveIoPriorityLimit) == 0x43C);
+C_ASSERT(FIELD_OFFSET(EJOB, IoPriorityLimit) == 0x440);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectivePagePriorityLimit) == 0x444);
+C_ASSERT(FIELD_OFFSET(EJOB, PagePriorityLimit) == 0x448);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectivePriorityClass) == 0x44C);
+C_ASSERT(FIELD_OFFSET(EJOB, PriorityClass) == 0x44D);
+C_ASSERT(FIELD_OFFSET(EJOB, NestingDepth) == 0x44E);
+C_ASSERT(FIELD_OFFSET(EJOB, Reserved1) == 0x44F);
+C_ASSERT(FIELD_OFFSET(EJOB, CompletionFilter) == 0x450);
+C_ASSERT(FIELD_OFFSET(EJOB, WakeChannel) == 0x458);
+C_ASSERT(FIELD_OFFSET(EJOB, WakeInfo) == 0x458);
+C_ASSERT(FIELD_OFFSET(EJOB, WakeFilter) == 0x4A0);
+C_ASSERT(FIELD_OFFSET(EJOB, LowEdgeLatchFilter) == 0x4A8);
+C_ASSERT(FIELD_OFFSET(EJOB, NotificationLink) == 0x4B0);
+C_ASSERT(FIELD_OFFSET(EJOB, CurrentJobMemoryUsed) == 0x4B8);
+C_ASSERT(FIELD_OFFSET(EJOB, NotificationInfo) == 0x4C0);
+C_ASSERT(FIELD_OFFSET(EJOB, NotificationInfoQuotaReference) == 0x4C8);
+C_ASSERT(FIELD_OFFSET(EJOB, NotificationPacket) == 0x4D0);
+C_ASSERT(FIELD_OFFSET(EJOB, CpuRateControl) == 0x4D8);
+C_ASSERT(FIELD_OFFSET(EJOB, EffectiveSchedulingGroup) == 0x4E0);
+C_ASSERT(FIELD_OFFSET(EJOB, ReadyTime) == 0x4E8);
+C_ASSERT(FIELD_OFFSET(EJOB, MemoryLimitsLock) == 0x4F0);
+C_ASSERT(FIELD_OFFSET(EJOB, SiblingJobLinks) == 0x4F8);
+C_ASSERT(FIELD_OFFSET(EJOB, ChildJobListHead) == 0x508);
+C_ASSERT(FIELD_OFFSET(EJOB, ParentJob) == 0x518);
+C_ASSERT(FIELD_OFFSET(EJOB, RootJob) == 0x520);
+C_ASSERT(FIELD_OFFSET(EJOB, IteratorListHead) == 0x528);
+C_ASSERT(FIELD_OFFSET(EJOB, AncestorCount) == 0x538);
+C_ASSERT(FIELD_OFFSET(EJOB, Ancestors) == 0x540);
+C_ASSERT(FIELD_OFFSET(EJOB, SessionObject) == 0x540);
+C_ASSERT(FIELD_OFFSET(EJOB, Accounting) == 0x548);
+C_ASSERT(FIELD_OFFSET(EJOB, ShadowActiveProcessCount) == 0x5B0);
+C_ASSERT(FIELD_OFFSET(EJOB, ActiveAuxiliaryProcessCount) == 0x5B4);
+C_ASSERT(FIELD_OFFSET(EJOB, SequenceNumber) == 0x5B8);
+C_ASSERT(FIELD_OFFSET(EJOB, JobId) == 0x5BC);
+C_ASSERT(FIELD_OFFSET(EJOB, ContainerId) == 0x5C0);
+C_ASSERT(FIELD_OFFSET(EJOB, ContainerTelemetryId) == 0x5D0);
+C_ASSERT(FIELD_OFFSET(EJOB, ServerSiloGlobals) == 0x5E0);
+C_ASSERT(FIELD_OFFSET(EJOB, PropertySet) == 0x5E8);
+C_ASSERT(FIELD_OFFSET(EJOB, Storage) == 0x600);
+C_ASSERT(FIELD_OFFSET(EJOB, NetRateControl) == 0x608);
+C_ASSERT(FIELD_OFFSET(EJOB, JobFlags) == 0x610);
+C_ASSERT(FIELD_OFFSET(EJOB, JobFlags2) == 0x614);
+C_ASSERT(FIELD_OFFSET(EJOB, EnergyValues) == 0x618);
+C_ASSERT(FIELD_OFFSET(EJOB, SharedCommitCharge) == 0x620);
+C_ASSERT(FIELD_OFFSET(EJOB, DiskIoAttributionUserRefCount) == 0x628);
+C_ASSERT(FIELD_OFFSET(EJOB, DiskIoAttributionRefCount) == 0x62C);
+C_ASSERT(FIELD_OFFSET(EJOB, DiskIoAttributionContext) == 0x630);
+C_ASSERT(FIELD_OFFSET(EJOB, DiskIoAttributionOwnerJob) == 0x630);
+C_ASSERT(FIELD_OFFSET(EJOB, IoRateControlHeader) == 0x638);
+C_ASSERT(FIELD_OFFSET(EJOB, GlobalIoControl) == 0x660);
+C_ASSERT(FIELD_OFFSET(EJOB, IoControlStateLock) == 0x698);
+C_ASSERT(FIELD_OFFSET(EJOB, VolumeIoControlTree) == 0x6A0);
+C_ASSERT(FIELD_OFFSET(EJOB, IoRateOverQuotaHistory) == 0x6B0);
+C_ASSERT(FIELD_OFFSET(EJOB, IoRateCurrentGeneration) == 0x6B8);
+C_ASSERT(FIELD_OFFSET(EJOB, IoRateLastQueryGeneration) == 0x6BC);
+C_ASSERT(FIELD_OFFSET(EJOB, IoRateGenerationLength) == 0x6C0);
+C_ASSERT(FIELD_OFFSET(EJOB, IoRateOverQuotaNotifySequenceId) == 0x6C4);
+C_ASSERT(FIELD_OFFSET(EJOB, LastThrottledIoTime) == 0x6C8);
+C_ASSERT(FIELD_OFFSET(EJOB, IoControlLock) == 0x6D0);
+C_ASSERT(FIELD_OFFSET(EJOB, SiloHardReferenceCount) == 0x6D8);
+C_ASSERT(FIELD_OFFSET(EJOB, RundownWorkItem) == 0x6E0);
+C_ASSERT(FIELD_OFFSET(EJOB, PartitionObject) == 0x700);
+C_ASSERT(FIELD_OFFSET(EJOB, PartitionOwnerJob) == 0x708);
+C_ASSERT(FIELD_OFFSET(EJOB, EnergyTrackingState) == 0x710);
+C_ASSERT(FIELD_OFFSET(EJOB, KernelWaitTime) == 0x718);
+C_ASSERT(FIELD_OFFSET(EJOB, UserWaitTime) == 0x720);
+#endif
 
 //
 // Job Information Structures for NtQueryInformationJobObject

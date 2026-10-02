@@ -208,13 +208,13 @@ PspComputeQuantumAndPriority(IN PEPROCESS Process,
     {
         /* Does the process have a job? */
         if ((Process->Job) &&
-            (Process->Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
-            (Process->Job->SchedulingClass < PSP_JOB_SCHEDULING_CLASSES) &&
+            (Process->Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
+            (Process->Job->EffectiveSchedulingClass < PSP_JOB_SCHEDULING_CLASSES) &&
             (PspUseJobSchedulingClasses))
         {
             /* Use job quantum */
             LocalQuantum = PspJobSchedulingClasses[Process->Job->
-                                                   SchedulingClass];
+                                                   EffectiveSchedulingClass];
         }
         else
         {
@@ -322,12 +322,12 @@ PsChangeQuantumTable(IN BOOLEAN Immediate,
             {
                 /* Does the process have a job? */
                 if ((Process->Job) &&
-                    (Process->Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
-                    (Process->Job->SchedulingClass < PSP_JOB_SCHEDULING_CLASSES) &&
+                    (Process->Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
+                    (Process->Job->EffectiveSchedulingClass < PSP_JOB_SCHEDULING_CLASSES) &&
                     (PspUseJobSchedulingClasses))
                 {
                     /* Use job quantum */
-                    Quantum = PspJobSchedulingClasses[Process->Job->SchedulingClass];
+                    Quantum = PspJobSchedulingClasses[Process->Job->EffectiveSchedulingClass];
                 }
                 else
                 {
@@ -765,28 +765,28 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     /* Check if we need to audit */
     if (SeDetailedAuditingWithToken(NULL)) SeAuditProcessCreate(Process);
 
-    /*
-     * Attach the process to parent's job if:
-     *  a) parent exists,
-     *  b) parent has a job,
-     *  c) parent's job does NOT allow silent breakaway.
-     */
-    if (Parent && Parent->Job &&
-        !FlagOn(Parent->Job->LimitFlags, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK))
+    if (Parent && Parent->Job)
     {
         PEJOB ParentJob = Parent->Job;
 
         /* If caller explicitly requested breakaway from the job */
-        if (FlagOn(Flags, PROCESS_CREATE_FLAGS_BREAKAWAY))
+        if (FlagOn(Flags, PROCESS_CREATE_FLAGS_BREAKAWAY) &&
+            !FlagOn(ParentJob->LimitFlags, JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK))
         {
             /* Deny if the job forbids breakaway */
-            if (!FlagOn(ParentJob->LimitFlags, JOB_OBJECT_LIMIT_BREAKAWAY_OK))
-            {
-                Status = STATUS_ACCESS_DENIED;
-                goto CleanupWithRef;
-            }
+            Status = STATUS_ACCESS_DENIED;
+            goto CleanupWithRef;
         }
-        else
+
+        while (ParentJob &&
+               (FlagOn(ParentJob->LimitFlags, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK) ||
+                (FlagOn(Flags, PROCESS_CREATE_FLAGS_BREAKAWAY) &&
+                 FlagOn(ParentJob->LimitFlags, JOB_OBJECT_LIMIT_BREAKAWAY_OK))))
+        {
+            ParentJob = ParentJob->ParentJob;
+        }
+
+        if (ParentJob)
         {
             /* Under normal conditions, child should join a parent's job */
             Status = PspAssignProcessToJob(Process, ParentJob);

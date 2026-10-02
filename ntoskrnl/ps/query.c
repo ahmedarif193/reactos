@@ -3175,8 +3175,8 @@ NtSetInformationProcess(
             {
                 KeEnterGuardedRegion();
                 ExAcquireResourceSharedLite(&Job->JobLock, TRUE);
-                JobLimitFlags = Job->LimitFlags;
-                JobAffinity = Job->Affinity;
+                JobLimitFlags = Job->EffectiveLimitFlags;
+                JobAffinity = Job->EffectiveAffinity.Bitmap[0];
 
                 if (JobLimitFlags & JOB_OBJECT_LIMIT_AFFINITY)
                 {

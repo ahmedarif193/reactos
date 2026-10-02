@@ -719,7 +719,6 @@ PsImpersonateClient(IN PETHREAD Thread,
     PTOKEN OldToken = NULL, ProcessToken = NULL;
     BOOLEAN CopiedToken = FALSE;
     PACCESS_TOKEN NewToken, ImpersonationToken;
-    PEJOB Job;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -821,41 +820,6 @@ PsImpersonateClient(IN PETHREAD Thread,
 
         /* We no longer need the process' token */
         ObFastDereferenceObject(&((PEPROCESS)Thread->ThreadsProcess)->Token, ProcessToken);
-
-        /* Check if this is a job */
-        Job = ((PEPROCESS)Thread->ThreadsProcess)->Job;
-        if (Job != NULL)
-        {
-            /* No admin allowed in this job */
-            if ((Job->SecurityLimitFlags & JOB_OBJECT_SECURITY_NO_ADMIN) &&
-                SeTokenIsAdmin(ImpersonationToken))
-            {
-                if (CopiedToken)
-                {
-                    ObDereferenceObject(ImpersonationToken);
-                }
-
-                return STATUS_ACCESS_DENIED;
-            }
-
-            /* No restricted tokens allowed in this job */
-            if ((Job->SecurityLimitFlags & JOB_OBJECT_SECURITY_RESTRICTED_TOKEN) &&
-                SeTokenIsRestricted(ImpersonationToken))
-            {
-                if (CopiedToken)
-                {
-                    ObDereferenceObject(ImpersonationToken);
-                }
-
-                return STATUS_ACCESS_DENIED;
-            }
-
-            /* We don't support job filters yet */
-            if (Job->Filter != NULL)
-            {
-                ASSERT(Job->Filter == NULL);
-            }
-        }
 
         /* Lock thread security */
         PspLockThreadSecurityExclusive(Thread);

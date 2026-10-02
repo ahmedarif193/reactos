@@ -600,6 +600,12 @@ PspExitProcessFromJob(
 
 VOID
 NTAPI
+PspNotifyJobProcessExit(
+    _In_ PEPROCESS Process
+);
+
+VOID
+NTAPI
 PspRemoveProcessFromJob(
     _In_ PEPROCESS Process
 );

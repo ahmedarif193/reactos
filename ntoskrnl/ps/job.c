@@ -24,6 +24,7 @@ POBJECT_TYPE PsJobType = NULL;
 
 LIST_ENTRY PsJobListHead;
 static FAST_MUTEX PsJobListLock;
+static ERESOURCE PspJobTreeLock;
 
 BOOLEAN PspUseJobSchedulingClasses;
 
@@ -98,6 +99,7 @@ ULONG PspJobInfoAlign[] =
 typedef struct PSP_TERMINATE_PROCESS_CONTEXT
 {
     PEJOB Job;
+    PEJOB TerminatedJob;
     NTSTATUS ExitStatus;
 } PSP_TERMINATE_PROCESS_CONTEXT, *PPSP_TERMINATE_PROCESS_CONTEXT;
 
@@ -129,6 +131,249 @@ PspInitializeJobStructures(VOID)
 {
     InitializeListHead(&PsJobListHead);
     ExInitializeFastMutex(&PsJobListLock);
+    (VOID)ExInitializeResourceLite(&PspJobTreeLock);
+}
+
+static
+BOOLEAN
+PspIsJobInChain(
+    _In_ PEJOB Ancestor,
+    _In_opt_ PEJOB Job)
+{
+    while (Job)
+    {
+        if (Job == Ancestor)
+            return TRUE;
+
+        Job = Job->ParentJob;
+    }
+
+    return FALSE;
+}
+
+static
+PEJOB
+PspGetNextJobTopDown(
+    _In_ PEJOB Root,
+    _In_ PEJOB Job)
+{
+    PLIST_ENTRY Entry;
+
+    if (!IsListEmpty(&Job->ChildJobListHead))
+        return CONTAINING_RECORD(Job->ChildJobListHead.Flink, EJOB, SiblingJobLinks);
+
+    while (Job != Root)
+    {
+        Entry = Job->SiblingJobLinks.Flink;
+        if (Entry != &Job->ParentJob->ChildJobListHead)
+            return CONTAINING_RECORD(Entry, EJOB, SiblingJobLinks);
+
+        Job = Job->ParentJob;
+    }
+
+    return NULL;
+}
+
+static
+PEJOB
+PspGetFirstJobBottomUp(
+    _In_ PEJOB Root)
+{
+    PEJOB Job = Root;
+
+    while (!IsListEmpty(&Job->ChildJobListHead))
+        Job = CONTAINING_RECORD(Job->ChildJobListHead.Flink, EJOB, SiblingJobLinks);
+
+    return Job;
+}
+
+static
+PEJOB
+PspGetNextJobBottomUp(
+    _In_ PEJOB Root,
+    _In_ PEJOB Job)
+{
+    PLIST_ENTRY Entry;
+
+    if (Job == Root)
+        return NULL;
+
+    Entry = Job->SiblingJobLinks.Flink;
+    if (Entry != &Job->ParentJob->ChildJobListHead)
+        return PspGetFirstJobBottomUp(CONTAINING_RECORD(Entry, EJOB, SiblingJobLinks));
+
+    return Job->ParentJob;
+}
+
+static
+ULONG
+PspGetPriorityClassRank(
+    _In_ UCHAR PriorityClass)
+{
+    switch (PriorityClass)
+    {
+        case PROCESS_PRIORITY_CLASS_IDLE:
+            return 1;
+        case PROCESS_PRIORITY_CLASS_BELOW_NORMAL:
+            return 2;
+        case PROCESS_PRIORITY_CLASS_NORMAL:
+            return 3;
+        case PROCESS_PRIORITY_CLASS_ABOVE_NORMAL:
+            return 4;
+        case PROCESS_PRIORITY_CLASS_HIGH:
+            return 5;
+        case PROCESS_PRIORITY_CLASS_REALTIME:
+            return 6;
+        default:
+            return 0;
+    }
+}
+
+static
+VOID
+PspComputeEffectiveJobLimits(
+    _Inout_ PEJOB Job)
+{
+    PEJOB ParentJob = Job->ParentJob;
+    ULONG ParentFlags;
+
+    Job->EffectiveLimitFlags = Job->LimitFlags;
+    Job->EffectiveAffinity = Job->Affinity;
+    Job->EffectivePriorityClass = Job->PriorityClass;
+    Job->EffectiveSchedulingClass = Job->SchedulingClass;
+    Job->EffectiveProcessMemoryLimit = Job->ProcessMemoryLimit;
+    Job->EffectivePerProcessUserTimeLimit = Job->PerProcessUserTimeLimit;
+    Job->EffectiveMinimumWorkingSetSize = Job->MinimumWorkingSetSize;
+    Job->EffectiveMaximumWorkingSetSize = Job->MaximumWorkingSetSize;
+
+    if (!ParentJob)
+        return;
+
+    ParentFlags = ParentJob->EffectiveLimitFlags;
+
+    if (ParentFlags & JOB_OBJECT_LIMIT_AFFINITY)
+    {
+        if (!(Job->LimitFlags & JOB_OBJECT_LIMIT_AFFINITY) ||
+            (Job->Affinity.Bitmap[0] & ~ParentJob->EffectiveAffinity.Bitmap[0]))
+        {
+            Job->EffectiveAffinity = ParentJob->EffectiveAffinity;
+            Job->EffectiveLimitFlags &= ~JOB_OBJECT_LIMIT_SUBSET_AFFINITY;
+            Job->EffectiveLimitFlags |= ParentFlags & (JOB_OBJECT_LIMIT_AFFINITY | JOB_OBJECT_LIMIT_SUBSET_AFFINITY);
+        }
+    }
+
+    if (ParentFlags & JOB_OBJECT_LIMIT_PRIORITY_CLASS)
+    {
+        if (!(Job->LimitFlags & JOB_OBJECT_LIMIT_PRIORITY_CLASS) ||
+            PspGetPriorityClassRank(ParentJob->EffectivePriorityClass) < PspGetPriorityClassRank(Job->PriorityClass))
+        {
+            Job->EffectivePriorityClass = ParentJob->EffectivePriorityClass;
+            Job->EffectiveLimitFlags |= JOB_OBJECT_LIMIT_PRIORITY_CLASS;
+        }
+    }
+
+    if (ParentFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
+    {
+        if (!(Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) ||
+            ParentJob->EffectiveSchedulingClass < Job->SchedulingClass)
+        {
+            Job->EffectiveSchedulingClass = ParentJob->EffectiveSchedulingClass;
+            Job->EffectiveLimitFlags |= JOB_OBJECT_LIMIT_SCHEDULING_CLASS;
+        }
+    }
+
+    if (ParentFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY)
+    {
+        if (!(Job->LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) ||
+            ParentJob->EffectiveProcessMemoryLimit < Job->ProcessMemoryLimit)
+        {
+            Job->EffectiveProcessMemoryLimit = ParentJob->EffectiveProcessMemoryLimit;
+            Job->EffectiveLimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        }
+    }
+
+    if (ParentFlags & JOB_OBJECT_LIMIT_PROCESS_TIME)
+    {
+        if (!(Job->LimitFlags & JOB_OBJECT_LIMIT_PROCESS_TIME) ||
+            ParentJob->EffectivePerProcessUserTimeLimit.QuadPart < Job->PerProcessUserTimeLimit.QuadPart)
+        {
+            Job->EffectivePerProcessUserTimeLimit = ParentJob->EffectivePerProcessUserTimeLimit;
+            Job->EffectiveLimitFlags |= JOB_OBJECT_LIMIT_PROCESS_TIME;
+        }
+    }
+
+    if (ParentFlags & JOB_OBJECT_LIMIT_WORKINGSET)
+    {
+        if (!(Job->LimitFlags & JOB_OBJECT_LIMIT_WORKINGSET) ||
+            ParentJob->EffectiveMinimumWorkingSetSize < Job->MinimumWorkingSetSize)
+        {
+            Job->EffectiveMinimumWorkingSetSize = ParentJob->EffectiveMinimumWorkingSetSize;
+        }
+
+        if (!(Job->LimitFlags & JOB_OBJECT_LIMIT_WORKINGSET) ||
+            ParentJob->EffectiveMaximumWorkingSetSize < Job->MaximumWorkingSetSize)
+        {
+            Job->EffectiveMaximumWorkingSetSize = ParentJob->EffectiveMaximumWorkingSetSize;
+        }
+
+        Job->EffectiveLimitFlags |= JOB_OBJECT_LIMIT_WORKINGSET;
+    }
+
+    Job->EffectiveLimitFlags |= ParentFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+}
+
+static
+VOID
+PspApplyEffectiveJobLimits(
+    _In_ PEJOB Root)
+{
+    PEJOB Job;
+    PLIST_ENTRY Entry;
+    PEPROCESS Process;
+    ULONG OldLimitFlags, OldSchedulingClass;
+    KAFFINITY OldAffinity;
+    BOOLEAN ApplyAffinity, UpdateScheduling;
+    UCHAR Quantum;
+
+    ASSERT(ExIsResourceAcquiredExclusiveLite(&PspJobTreeLock) != 0);
+
+    for (Job = Root; Job; Job = PspGetNextJobTopDown(Root, Job))
+    {
+        ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+
+        OldLimitFlags = Job->EffectiveLimitFlags;
+        OldAffinity = Job->EffectiveAffinity.Bitmap[0];
+        OldSchedulingClass = Job->EffectiveSchedulingClass;
+
+        PspComputeEffectiveJobLimits(Job);
+
+        ApplyAffinity = ((Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_AFFINITY) &&
+                         (!(OldLimitFlags & JOB_OBJECT_LIMIT_AFFINITY) ||
+                          OldAffinity != Job->EffectiveAffinity.Bitmap[0] ||
+                          ((OldLimitFlags & JOB_OBJECT_LIMIT_SUBSET_AFFINITY) &&
+                           !(Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_SUBSET_AFFINITY))));
+        UpdateScheduling = (((OldLimitFlags ^ Job->EffectiveLimitFlags) & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) ||
+                            ((Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
+                             OldSchedulingClass != Job->EffectiveSchedulingClass));
+        if (ApplyAffinity || UpdateScheduling || (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION))
+        {
+            for (Entry = Job->ProcessListHead.Flink; Entry != &Job->ProcessListHead; Entry = Entry->Flink)
+            {
+                Process = CONTAINING_RECORD(Entry, EPROCESS, JobLinks);
+                if (ApplyAffinity)
+                    KeSetAffinityProcess(&Process->Pcb, Job->EffectiveAffinity.Bitmap[0]);
+                if (UpdateScheduling)
+                {
+                    (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
+                    KeSetQuantumProcess(&Process->Pcb, Quantum);
+                }
+                if (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
+                    Process->DefaultHardErrorProcessing |= SEM_NOGPFAULTERRORBOX;
+            }
+        }
+
+        ExReleaseResourceLite(&Job->JobLock);
+    }
 }
 
 /*!
@@ -257,7 +502,7 @@ PspGetNextProcessInJob(
      */
     if (PreviousProcess != NULL)
     {
-        ObDereferenceObject(PreviousProcess);
+        ObDereferenceObjectDeferDelete(PreviousProcess);
     }
 
     return NextProcess;
@@ -308,7 +553,7 @@ PspEnumerateProcessesInJob(
              * On successful iteration, PspGetNextProcessInJob consumes
              * this reference. On failure, it must be released explicitly.
              */
-            ObDereferenceObject(Process);
+            ObDereferenceObjectDeferDelete(Process);
             break;
         }
     }
@@ -395,17 +640,37 @@ PspEnumerateProcessesInJobLocked(
 static
 VOID
 PspUpdateJobPeak(
-    _Inout_ PULONG Peak,
-    _In_ ULONG Value)
+    _Inout_ PULONGLONG Peak,
+    _In_ ULONGLONG Value)
 {
-    LONG Old;
+    LONG64 Old;
 
     do
     {
-        Old = (LONG)*Peak;
-        if ((ULONG)Old >= Value)
+        Old = (LONG64)*Peak;
+        if ((ULONGLONG)Old >= Value)
             return;
-    } while (InterlockedCompareExchange((PLONG)Peak, (LONG)Value, Old) != Old);
+    } while (InterlockedCompareExchange64((PLONG64)Peak, (LONG64)Value, Old) != Old);
+}
+
+static
+VOID
+PspReturnJobChainCommitment(
+    _In_opt_ PEJOB Job,
+    _In_opt_ PEJOB StopJob,
+    _In_ SIZE_T PageCount)
+{
+    LONG64 OldUsed;
+    ULONG64 NewUsed;
+
+    for (; Job && Job != StopJob; Job = Job->ParentJob)
+    {
+        do
+        {
+            OldUsed = (LONG64)Job->CurrentJobMemoryUsed;
+            NewUsed = ((ULONG64)OldUsed > PageCount) ? (ULONG64)OldUsed - PageCount : 0;
+        } while (InterlockedCompareExchange64((PLONG64)&Job->CurrentJobMemoryUsed, (LONG64)NewUsed, OldUsed) != OldUsed);
+    }
 }
 
 NTSTATUS
@@ -415,52 +680,70 @@ PsChargeJobCommitment(
     _In_ SIZE_T PageCount)
 {
     PEJOB Job = Process->Job;
+    PEJOB ChainJob;
     SIZE_T ProcessCommit;
-    LONG OldUsed;
-    ULONG NewUsed, Message = 0;
+    LONG64 OldUsed;
+    ULONG64 NewUsed;
+    ULONG Message = 0;
 
     if (!Job || PageCount == 0)
         return STATUS_SUCCESS;
 
     ProcessCommit = Process->CommitCharge + PageCount;
-    if (ProcessCommit < PageCount || ProcessCommit > MAXULONG || PageCount > MAXULONG)
+    if (ProcessCommit < PageCount)
         return STATUS_COMMITMENT_LIMIT;
 
-    if ((Job->LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) &&
-        ProcessCommit > Job->ProcessMemoryLimit)
+    ChainJob = Job;
+    if ((Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) &&
+        ProcessCommit > Job->EffectiveProcessMemoryLimit)
     {
         Message = JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT;
     }
     else
     {
-        do
+        for (; ChainJob; ChainJob = ChainJob->ParentJob)
         {
-            OldUsed = (LONG)Job->CurrentJobMemoryUsed;
-            NewUsed = (ULONG)OldUsed + (ULONG)PageCount;
-            if (NewUsed < (ULONG)OldUsed)
-                return STATUS_COMMITMENT_LIMIT;
-            if ((Job->LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) && NewUsed > Job->JobMemoryLimit)
+            do
             {
-                Message = JOB_OBJECT_MSG_JOB_MEMORY_LIMIT;
+                OldUsed = (LONG64)ChainJob->CurrentJobMemoryUsed;
+                NewUsed = (ULONG64)OldUsed + PageCount;
+                if (NewUsed < (ULONG64)OldUsed)
+                {
+                    PspReturnJobChainCommitment(Job, ChainJob, PageCount);
+                    return STATUS_COMMITMENT_LIMIT;
+                }
+                if ((ChainJob->LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) && NewUsed > ChainJob->JobMemoryLimit)
+                {
+                    Message = JOB_OBJECT_MSG_JOB_MEMORY_LIMIT;
+                    break;
+                }
+            } while (InterlockedCompareExchange64((PLONG64)&ChainJob->CurrentJobMemoryUsed, (LONG64)NewUsed, OldUsed) != OldUsed);
+
+            if (Message)
                 break;
-            }
-        } while (InterlockedCompareExchange((PLONG)&Job->CurrentJobMemoryUsed, (LONG)NewUsed, OldUsed) != OldUsed);
+
+            PspUpdateJobPeak(&ChainJob->PeakProcessMemoryUsed, ProcessCommit);
+            PspUpdateJobPeak(&ChainJob->PeakJobMemoryUsed, NewUsed);
+        }
     }
 
     if (Message)
     {
-        if (Job->CompletionPort)
+        PspReturnJobChainCommitment(Job, ChainJob, PageCount);
+
+        for (; ChainJob; ChainJob = ChainJob->ParentJob)
         {
-            ExEnterCriticalRegionAndAcquireResourceShared(&Job->JobLock);
-            if (Job->CompletionPort)
-                PspSendJobMessageLocked(Job, Message, Process->UniqueProcessId, TRUE);
-            ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+            if (ChainJob->CompletionPort)
+            {
+                ExEnterCriticalRegionAndAcquireResourceShared(&ChainJob->JobLock);
+                if (ChainJob->CompletionPort)
+                    PspSendJobMessageLocked(ChainJob, Message, Process->UniqueProcessId, TRUE);
+                ExReleaseResourceAndLeaveCriticalRegion(&ChainJob->JobLock);
+            }
         }
         return STATUS_COMMITMENT_LIMIT;
     }
 
-    PspUpdateJobPeak(&Job->PeakProcessMemoryUsed, (ULONG)ProcessCommit);
-    PspUpdateJobPeak(&Job->PeakJobMemoryUsed, NewUsed);
     return STATUS_SUCCESS;
 }
 
@@ -470,18 +753,10 @@ PsReturnJobCommitment(
     _In_ PEPROCESS Process,
     _In_ SIZE_T PageCount)
 {
-    PEJOB Job = Process->Job;
-    LONG OldUsed;
-    ULONG NewUsed;
-
-    if (!Job || PageCount == 0)
+    if (PageCount == 0)
         return;
 
-    do
-    {
-        OldUsed = (LONG)Job->CurrentJobMemoryUsed;
-        NewUsed = ((ULONG)OldUsed > PageCount) ? (ULONG)OldUsed - (ULONG)PageCount : 0;
-    } while (InterlockedCompareExchange((PLONG)&Job->CurrentJobMemoryUsed, (LONG)NewUsed, OldUsed) != OldUsed);
+    PspReturnJobChainCommitment(Process->Job, NULL, PageCount);
 }
 
 NTSTATUS
@@ -528,7 +803,9 @@ PspAssignProcessToJob(
 {
     NTSTATUS Status = STATUS_SUCCESS;
     NTSTATUS CalloutStatus = STATUS_SUCCESS;
-    PVOID PreviousJob;
+    PEJOB CurrentJob, ChainJob;
+    SIZE_T CommitCharge;
+    BOOLEAN Assigned = FALSE;
     UCHAR Quantum;
 
     if (!ExAcquireRundownProtection(&Process->RundownProtect))
@@ -536,15 +813,25 @@ PspAssignProcessToJob(
         return STATUS_PROCESS_IS_TERMINATING;
     }
 
-    ExEnterCriticalRegionAndAcquireResourceExclusive(&Job->JobLock);
+    ExEnterCriticalRegionAndAcquireResourceExclusive(&PspJobTreeLock);
+
+    CurrentJob = Process->Job;
+
+    if (PspIsJobInChain(Job, CurrentJob))
+    {
+        goto Exit;
+    }
 
     /* https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject:
        "If the job or any of its parent jobs in the job chain is terminating
        when AssignProcessToJob is called, the function fails" */
-    if (FlagOn(Job->JobFlags, PSP_JOB_TERMINATING))
+    for (ChainJob = Job; ChainJob; ChainJob = ChainJob->ParentJob)
     {
-        Status = STATUS_INVALID_PARAMETER;
-        goto Exit;
+        if (FlagOn(ChainJob->JobFlags, PSP_JOB_TERMINATING))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Exit;
+        }
     }
 
     /* Prevent processes from being added to the job if it is flagged
@@ -556,91 +843,132 @@ PspAssignProcessToJob(
         goto Exit;
     }
 
-    /* Check if the job has a limit on the number of active processes */
-    if (FlagOn(Job->LimitFlags, JOB_OBJECT_LIMIT_ACTIVE_PROCESS) &&
-        Job->ActiveProcesses >= Job->ActiveProcessLimit)
+    if (CurrentJob)
     {
-        /* Check if job limit on active processes has been reached */
-        if (Job->CompletionPort)
+        if (Job->ParentJob ? !PspIsJobInChain(CurrentJob, Job->ParentJob) : Job->TotalProcesses != 0)
         {
-            /* If the job has a completion port, notify the job that the
-               limit on the number of active processes has been exceeded */
-            (VOID)PspSendJobMessageLocked(Job,
-                                          JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT,
-                                          NULL,
-                                          TRUE);
+            Status = STATUS_ACCESS_DENIED;
+            goto Exit;
         }
 
-        Status = STATUS_QUOTA_EXCEEDED;
-        goto Exit;
+        if (Job->UIRestrictionsClass != 0)
+        {
+            Status = STATUS_ACCESS_DENIED;
+            goto Exit;
+        }
+
+        for (ChainJob = CurrentJob; ChainJob; ChainJob = ChainJob->ParentJob)
+        {
+            if (ChainJob->UIRestrictionsClass != 0)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                goto Exit;
+            }
+        }
     }
 
-    /* Acquire the reference owned by Process->Job before publishing the pointer.
-       This ensures that every observable non-NULL Process->Job is already
-       backed by its lifetime reference. If another assignment wins the race,
-       release the unused reference. */
+    for (ChainJob = Job; ChainJob && ChainJob != CurrentJob; ChainJob = ChainJob->ParentJob)
+    {
+        ExAcquireResourceExclusiveLite(&ChainJob->JobLock, TRUE);
+
+        if (FlagOn(ChainJob->LimitFlags, JOB_OBJECT_LIMIT_ACTIVE_PROCESS) &&
+            ChainJob->ActiveProcesses >= ChainJob->ActiveProcessLimit)
+        {
+            if (ChainJob->CompletionPort)
+            {
+                (VOID)PspSendJobMessageLocked(ChainJob,
+                                              JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT,
+                                              NULL,
+                                              TRUE);
+            }
+
+            Status = STATUS_QUOTA_EXCEEDED;
+        }
+
+        ExReleaseResourceLite(&ChainJob->JobLock);
+
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+    }
+
+    if (CurrentJob && !Job->ParentJob)
+    {
+        ObReferenceObject(CurrentJob);
+        Job->ParentJob = CurrentJob;
+        InsertTailList(&CurrentJob->ChildJobListHead, &Job->SiblingJobLinks);
+        PspApplyEffectiveJobLimits(Job);
+    }
+
     ObReferenceObject(Job);
 
-    /* JobLock protects the target job, but another caller may simultaneously
-       hold a different job's lock while trying to assign the same process */
-    PreviousJob = InterlockedCompareExchangePointer((PVOID)&Process->Job,
-                                                    Job,
-                                                    NULL);
-    if (PreviousJob)
+    if (CurrentJob)
     {
-        ObDereferenceObject(Job);
-        Status = STATUS_ACCESS_DENIED;
-        goto Exit;
+        ExAcquireResourceExclusiveLite(&CurrentJob->JobLock, TRUE);
+        RemoveEntryList(&Process->JobLinks);
+        InitializeListHead(&Process->JobLinks);
+        ExReleaseResourceLite(&CurrentJob->JobLock);
     }
-
-    /* Assignment is committed at this point. No subsequent structural
-       operation may fail.
-
-       Readers of Job->ProcessListHead are blocked by JobLock until the list
-       and counters are complete. */
 
     ASSERT(IsListEmpty(&Process->JobLinks));
 
+    CommitCharge = MmQueryProcessCommitCharge(Process);
+
+    ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+    InterlockedExchangePointer((PVOID)&Process->Job, Job);
     InsertTailList(&Job->ProcessListHead, &Process->JobLinks);
+    Process->CommitCharge = CommitCharge;
+    ExReleaseResourceLite(&Job->JobLock);
 
-    Job->TotalProcesses++;
-    Job->ActiveProcesses++;
-    Process->CommitCharge = MmQueryProcessCommitCharge(Process);
-    InterlockedExchangeAdd((PLONG)&Job->CurrentJobMemoryUsed, (LONG)Process->CommitCharge);
-    PspUpdateJobPeak(&Job->PeakProcessMemoryUsed, (ULONG)Process->CommitCharge);
-    PspUpdateJobPeak(&Job->PeakJobMemoryUsed, Job->CurrentJobMemoryUsed);
+    for (ChainJob = Job; ChainJob != CurrentJob; ChainJob = ChainJob->ParentJob)
+    {
+        ExAcquireResourceExclusiveLite(&ChainJob->JobLock, TRUE);
 
-    if (Job->LimitFlags & JOB_OBJECT_LIMIT_AFFINITY)
-        KeSetAffinityProcess(&Process->Pcb, Job->Affinity);
-    if (Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
+        ChainJob->TotalProcesses++;
+        ChainJob->ActiveProcesses++;
+        InterlockedExchangeAdd64((PLONG64)&ChainJob->CurrentJobMemoryUsed, (LONG64)CommitCharge);
+        PspUpdateJobPeak(&ChainJob->PeakProcessMemoryUsed, CommitCharge);
+        PspUpdateJobPeak(&ChainJob->PeakJobMemoryUsed, ChainJob->CurrentJobMemoryUsed);
+
+        if (ChainJob->CompletionPort && Process->UniqueProcessId)
+        {
+            (VOID)PspSendJobMessageLocked(ChainJob,
+                                          JOB_OBJECT_MSG_NEW_PROCESS,
+                                          Process->UniqueProcessId,
+                                          FALSE);
+        }
+
+        ExReleaseResourceLite(&ChainJob->JobLock);
+    }
+
+    if (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_AFFINITY)
+        KeSetAffinityProcess(&Process->Pcb, Job->EffectiveAffinity.Bitmap[0]);
+    if (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
     {
         (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
         KeSetQuantumProcess(&Process->Pcb, Quantum);
     }
-    if (Job->LimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
+    if (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
         Process->DefaultHardErrorProcessing |= SEM_NOGPFAULTERRORBOX;
 
-    if (Job->CompletionPort && Process->UniqueProcessId)
-    {
-        /* If the job has a completion port and the process has a unique ID,
-           notify the job of the new process */
-        (VOID)PspSendJobMessageLocked(Job,
-                                      JOB_OBJECT_MSG_NEW_PROCESS,
-                                      Process->UniqueProcessId,
-                                      FALSE);
-    }
+    Assigned = TRUE;
+
+Exit:
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
+
+    if (Assigned && CurrentJob)
+        ObDereferenceObject(CurrentJob);
 
     /* Hand the process to win32k, which enforces the UI restrictions. One
        that has not connected to win32k yet is picked up when it does. */
-    if (Job->UIRestrictionsClass != 0 && Process->Win32Process != NULL)
+    if (Assigned && Job->UIRestrictionsClass != 0 && Process->Win32Process != NULL)
     {
+        ExEnterCriticalRegionAndAcquireResourceExclusive(&Job->JobLock);
         CalloutStatus = PspInvokeW32JobCallout(Job,
                                                PsW32JobCalloutAddProcess,
                                                Process->Win32Process);
+        ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
     }
 
-Exit:
-    ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
     ExReleaseRundownProtection(&Process->RundownProtect);
 
     /* The assignment is committed, but win32k will not be enforcing the UI
@@ -701,6 +1029,58 @@ PspDeactivateProcessFromJobLocked(
     return Job->ActiveProcesses == 0;
 }
 
+static
+VOID
+PspDeactivateProcessFromParentJobs(
+    _In_ PEJOB Job,
+    _In_opt_ PEJOB TerminatedJob)
+{
+    PEJOB ParentJob;
+
+    for (ParentJob = Job->ParentJob; ParentJob; ParentJob = ParentJob->ParentJob)
+    {
+        ExEnterCriticalRegionAndAcquireResourceExclusive(&ParentJob->JobLock);
+
+        ASSERT(ParentJob->ActiveProcesses != 0);
+
+        ParentJob->ActiveProcesses--;
+
+        if (ParentJob->ActiveProcesses == 0)
+        {
+            if (ParentJob == TerminatedJob)
+            {
+                KeSetEvent(&ParentJob->Event, IO_NO_INCREMENT, FALSE);
+            }
+
+            if (ParentJob->CompletionPort)
+            {
+                (VOID)PspSendJobMessageLocked(ParentJob,
+                                              JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO,
+                                              NULL,
+                                              FALSE);
+            }
+        }
+
+        ExReleaseResourceAndLeaveCriticalRegion(&ParentJob->JobLock);
+    }
+}
+
+static
+VOID
+PspFoldProcessValuesIntoJob(
+    _Inout_ PEJOB Job,
+    _In_ PPROCESS_VALUES Values)
+{
+    Job->TotalUserTime.QuadPart += Values->TotalUserTime.QuadPart;
+    Job->TotalKernelTime.QuadPart += Values->TotalKernelTime.QuadPart;
+    Job->ReadOperationCount += Values->IoInfo.ReadOperationCount;
+    Job->WriteOperationCount += Values->IoInfo.WriteOperationCount;
+    Job->OtherOperationCount += Values->IoInfo.OtherOperationCount;
+    Job->ReadTransferCount += Values->IoInfo.ReadTransferCount;
+    Job->WriteTransferCount += Values->IoInfo.WriteTransferCount;
+    Job->OtherTransferCount += Values->IoInfo.OtherTransferCount;
+}
+
 /*!
  * Removes a process from its assigned job.
  *
@@ -718,7 +1098,9 @@ PspRemoveProcessFromJob(
 )
 {
     PEJOB Job;
-    BOOLEAN ActiveProcessZero;
+    BOOLEAN ActiveProcessZero, WasActive;
+
+    ExEnterCriticalRegionAndAcquireResourceShared(&PspJobTreeLock);
 
     Job = Process->Job;
     ASSERT(Job != NULL);
@@ -736,6 +1118,7 @@ PspRemoveProcessFromJob(
     PsReturnJobCommitment(Process, Process->CommitCharge);
 
     /* Decrement the job's active process count if it is still active */
+    WasActive = !FlagOn(Process->JobStatus, PSP_JOB_NOT_REALLY_ACTIVE);
     ActiveProcessZero = PspDeactivateProcessFromJobLocked(Job, Process);
 
     /* TODO: Ensure that job limits are respected */
@@ -750,6 +1133,13 @@ PspRemoveProcessFromJob(
     }
 
     ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+
+    if (WasActive)
+    {
+        PspDeactivateProcessFromParentJobs(Job, NULL);
+    }
+
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
 }
 
 /*!
@@ -768,33 +1158,29 @@ PspExitProcessFromJob(
     _In_ PEPROCESS Process
 )
 {
-    PEJOB Job;
-    BOOLEAN ActiveProcessZero;
+    PEJOB Job, ParentJob;
+    BOOLEAN ActiveProcessZero, WasActive, Folded = FALSE;
     PROCESS_VALUES Values;
+
+    ExEnterCriticalRegionAndAcquireResourceExclusive(&PspJobTreeLock);
 
     Job = Process->Job;
     ASSERT(Job != NULL);
 
     ExEnterCriticalRegionAndAcquireResourceExclusive(&Job->JobLock);
 
-    /* Job membership is immutable in the current implementation */
     ASSERT(Process->Job == Job);
 
     if (!(Process->JobStatus & PSP_JOB_ACCOUNTING_FOLDED))
     {
         KeQueryValuesProcess(&Process->Pcb, &Values);
-        Job->TotalUserTime.QuadPart += Values.TotalUserTime.QuadPart;
-        Job->TotalKernelTime.QuadPart += Values.TotalKernelTime.QuadPart;
-        Job->ReadOperationCount += Values.IoInfo.ReadOperationCount;
-        Job->WriteOperationCount += Values.IoInfo.WriteOperationCount;
-        Job->OtherOperationCount += Values.IoInfo.OtherOperationCount;
-        Job->ReadTransferCount += Values.IoInfo.ReadTransferCount;
-        Job->WriteTransferCount += Values.IoInfo.WriteTransferCount;
-        Job->OtherTransferCount += Values.IoInfo.OtherTransferCount;
+        PspFoldProcessValuesIntoJob(Job, &Values);
         InterlockedOr((PLONG)&Process->JobStatus, PSP_JOB_ACCOUNTING_FOLDED);
+        Folded = TRUE;
     }
 
     /* Decrement the job's active process count if the process is still active */
+    WasActive = !FlagOn(Process->JobStatus, PSP_JOB_NOT_REALLY_ACTIVE);
     ActiveProcessZero = PspDeactivateProcessFromJobLocked(Job, Process);
 
     /* If no active processes remain, notify the job completion port */
@@ -809,6 +1195,52 @@ PspExitProcessFromJob(
     /* TODO: Ensure that job limits are respected */
 
     ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+
+    if (Folded)
+    {
+        for (ParentJob = Job->ParentJob; ParentJob; ParentJob = ParentJob->ParentJob)
+        {
+            ExEnterCriticalRegionAndAcquireResourceExclusive(&ParentJob->JobLock);
+            PspFoldProcessValuesIntoJob(ParentJob, &Values);
+            ExReleaseResourceAndLeaveCriticalRegion(&ParentJob->JobLock);
+        }
+    }
+
+    if (WasActive)
+    {
+        PspDeactivateProcessFromParentJobs(Job, NULL);
+    }
+
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
+}
+
+VOID
+NTAPI
+PspNotifyJobProcessExit(
+    _In_ PEPROCESS Process
+)
+{
+    PEJOB Job;
+
+    ExEnterCriticalRegionAndAcquireResourceShared(&PspJobTreeLock);
+
+    for (Job = Process->Job; Job; Job = Job->ParentJob)
+    {
+        ExEnterCriticalRegionAndAcquireResourceExclusive(&Job->JobLock);
+
+        if (Job->CompletionPort &&
+            !FlagOn(Process->JobStatus, PSP_JOB_NOT_REALLY_ACTIVE))
+        {
+            (VOID)PspSendJobMessageLocked(Job,
+                                          JOB_OBJECT_MSG_EXIT_PROCESS,
+                                          Process->UniqueProcessId,
+                                          FALSE);
+        }
+
+        ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+    }
+
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
 }
 
 /*!
@@ -837,9 +1269,10 @@ PspTerminateProcessCallback(
 )
 {
     NTSTATUS Status;
-    BOOLEAN ActiveProcessZero;
+    BOOLEAN ActiveProcessZero, Deactivated = FALSE;
     PPSP_TERMINATE_PROCESS_CONTEXT TerminateContext = (PPSP_TERMINATE_PROCESS_CONTEXT)Context;
     PEJOB Job = TerminateContext->Job;
+    PEJOB TerminatedJob = TerminateContext->TerminatedJob;
     NTSTATUS ExitStatus = TerminateContext->ExitStatus;
 
     ASSERT(Job != NULL);
@@ -869,6 +1302,7 @@ PspTerminateProcessCallback(
 
     /* Decrement the job's active process count if the process is still active */
     ActiveProcessZero = PspDeactivateProcessFromJobLocked(Job, Process);
+    Deactivated = TRUE;
 
     /* If there are no active processes left in the job, notify anyone waiting
        for the job object by signaling completion */
@@ -876,7 +1310,10 @@ PspTerminateProcessCallback(
     {
         /* It is intended that the event is set to a signaled
            state only in the termination path */
-        KeSetEvent(&Job->Event, IO_NO_INCREMENT, FALSE);
+        if (Job == TerminatedJob)
+        {
+            KeSetEvent(&Job->Event, IO_NO_INCREMENT, FALSE);
+        }
 
         if (Job->CompletionPort)
         {
@@ -890,6 +1327,11 @@ PspTerminateProcessCallback(
 Exit:
 
     ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+
+    if (Deactivated)
+    {
+        PspDeactivateProcessFromParentJobs(Job, TerminatedJob);
+    }
 
     return STATUS_SUCCESS;
 }
@@ -916,6 +1358,7 @@ PspTerminateJobObject(
 {
     NTSTATUS Status;
     LONG PreviousFlags;
+    PEJOB ChildJob;
     PSP_TERMINATE_PROCESS_CONTEXT Context;
 
     PreviousFlags = InterlockedOr((PLONG)&Job->JobFlags, PSP_JOB_TERMINATING);
@@ -927,7 +1370,23 @@ PspTerminateJobObject(
     }
 
     Context.Job = Job;
+    Context.TerminatedJob = Job;
     Context.ExitStatus = ExitStatus;
+
+    ExEnterCriticalRegionAndAcquireResourceShared(&PspJobTreeLock);
+
+    for (ChildJob = PspGetFirstJobBottomUp(Job);
+         ChildJob != Job;
+         ChildJob = PspGetNextJobBottomUp(Job, ChildJob))
+    {
+        Context.Job = ChildJob;
+
+        (VOID)PspEnumerateProcessesInJob(ChildJob,
+                                         PspTerminateProcessCallback,
+                                         &Context);
+    }
+
+    Context.Job = Job;
 
     Status = PspEnumerateProcessesInJob(Job,
                                         PspTerminateProcessCallback,
@@ -936,6 +1395,8 @@ PspTerminateJobObject(
     /* The termination callback always returns STATUS_SUCCESS because
        per-process termination failures are handled locally */
     ASSERT(NT_SUCCESS(Status));
+
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
 
     InterlockedAnd((PLONG)&Job->JobFlags, ~PSP_JOB_TERMINATING);
 
@@ -1028,8 +1489,28 @@ NTAPI
 PspDeleteJob(_In_ PVOID ObjectBody)
 {
     PEJOB Job = (PEJOB)ObjectBody;
+    PEJOB ParentJob;
 
     PAGED_CODE();
+
+    ExEnterCriticalRegionAndAcquireResourceExclusive(&PspJobTreeLock);
+
+    ASSERT(IsListEmpty(&Job->ChildJobListHead));
+
+    ParentJob = Job->ParentJob;
+    if (ParentJob)
+    {
+        RemoveEntryList(&Job->SiblingJobLinks);
+        InitializeListHead(&Job->SiblingJobLinks);
+        Job->ParentJob = NULL;
+    }
+
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
+
+    if (ParentJob)
+    {
+        ObDereferenceObjectDeferDelete(ParentJob);
+    }
 
     /* Let win32k tear down any per-job state it keeps for UI restrictions */
     if (Job->UIRestrictionsClass != 0)
@@ -1090,12 +1571,6 @@ PspSetJobLimitsBasicOrExtended(
 {
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG AllowedFlags;
-    ULONG OldLimitFlags, OldSchedulingClass;
-    KAFFINITY OldAffinity;
-    BOOLEAN ApplyAffinity, UpdateScheduling;
-    PLIST_ENTRY Entry;
-    PEPROCESS Process;
-    UCHAR Quantum;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
 
     ASSERT(KeAreAllApcsDisabled());
@@ -1126,11 +1601,10 @@ PspSetJobLimitsBasicOrExtended(
         return STATUS_INVALID_PARAMETER;
     }
 
+    ExAcquireResourceExclusiveLite(&PspJobTreeLock, TRUE);
+
     /* Acquire the job lock */
     ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
-    OldLimitFlags = Job->LimitFlags;
-    OldAffinity = Job->Affinity;
-    OldSchedulingClass = Job->SchedulingClass;
 
     /*
      * Basic Limits
@@ -1191,7 +1665,8 @@ PspSetJobLimitsBasicOrExtended(
             goto ExitFromBasicLimits;
         }
 
-        Job->Affinity = ExtendedLimit->BasicLimitInformation.Affinity;
+        KeInitializeAffinityEx(&Job->Affinity);
+        Job->Affinity.Bitmap[0] = ExtendedLimit->BasicLimitInformation.Affinity;
     }
 
     if (ExtendedLimit->BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PRIORITY_CLASS)
@@ -1286,34 +1761,16 @@ PspSetJobLimitsBasicOrExtended(
     KeReleaseGuardedMutexUnsafe(&Job->MemoryLimitsLock);
 #endif
 
-    ApplyAffinity = ((Job->LimitFlags & JOB_OBJECT_LIMIT_AFFINITY) &&
-                     (!(OldLimitFlags & JOB_OBJECT_LIMIT_AFFINITY) ||
-                      OldAffinity != Job->Affinity ||
-                      ((OldLimitFlags & JOB_OBJECT_LIMIT_SUBSET_AFFINITY) &&
-                       !(Job->LimitFlags & JOB_OBJECT_LIMIT_SUBSET_AFFINITY))));
-    UpdateScheduling = (((OldLimitFlags ^ Job->LimitFlags) & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) ||
-                        ((Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
-                         OldSchedulingClass != Job->SchedulingClass));
-    if (ApplyAffinity || UpdateScheduling || (Job->LimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION))
-    {
-        for (Entry = Job->ProcessListHead.Flink; Entry != &Job->ProcessListHead; Entry = Entry->Flink)
-        {
-            Process = CONTAINING_RECORD(Entry, EPROCESS, JobLinks);
-            if (ApplyAffinity)
-                KeSetAffinityProcess(&Process->Pcb, Job->Affinity);
-            if (UpdateScheduling)
-            {
-                (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
-                KeSetQuantumProcess(&Process->Pcb, Quantum);
-            }
-            if (Job->LimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
-                Process->DefaultHardErrorProcessing |= SEM_NOGPFAULTERRORBOX;
-        }
-    }
-
 ExitFromBasicLimits:
 
     ExReleaseResourceLite(&Job->JobLock);
+
+    if (NT_SUCCESS(Status))
+    {
+        PspApplyEffectiveJobLimits(Job);
+    }
+
+    ExReleaseResourceLite(&PspJobTreeLock);
 
     return Status;
 }
@@ -1347,7 +1804,7 @@ PspAssociateCompletionPortCallback(
 
     Job = (PEJOB)Context;
 
-    ASSERT(Process->Job == Job);
+    ASSERT(PspIsJobInChain(Job, Process->Job));
     ASSERT(Job->CompletionPort != NULL);
 
     ASSERT(ExIsResourceAcquiredExclusiveLite(&Job->JobLock) != 0);
@@ -1396,6 +1853,7 @@ PspAssociateCompletionPortWithJob(
     NTSTATUS Status;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     HANDLE IoCompletion;
+    PEJOB ChildJob;
 
     ASSERT(KeAreAllApcsDisabled());
 
@@ -1415,12 +1873,14 @@ PspAssociateCompletionPortWithJob(
         return Status;
     }
 
+    ExAcquireResourceSharedLite(&PspJobTreeLock, TRUE);
     ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
 
     /* Check if the job already has a completion port or is in a final state */
     if (Job->CompletionPort || FlagOn(Job->JobFlags, PSP_JOB_CLOSE_DONE))
     {
         ExReleaseResourceLite(&Job->JobLock);
+        ExReleaseResourceLite(&PspJobTreeLock);
         ObDereferenceObject(IoCompletion);
         return STATUS_INVALID_PARAMETER;
     }
@@ -1437,12 +1897,44 @@ PspAssociateCompletionPortWithJob(
 
     ASSERT(NT_SUCCESS(Status));
 
+    for (ChildJob = PspGetNextJobTopDown(Job, Job);
+         ChildJob != NULL;
+         ChildJob = PspGetNextJobTopDown(Job, ChildJob))
+    {
+        ExAcquireResourceSharedLite(&ChildJob->JobLock, TRUE);
+
+        Status = PspEnumerateProcessesInJobLocked(ChildJob,
+                                                  PspAssociateCompletionPortCallback,
+                                                  Job);
+
+        ASSERT(NT_SUCCESS(Status));
+
+        ExReleaseResourceLite(&ChildJob->JobLock);
+    }
+
     ExReleaseResourceLite(&Job->JobLock);
+    ExReleaseResourceLite(&PspJobTreeLock);
 
     /* The completion port association is committed at this point. Initial process
        notifications are best-effort and a failure to queue one must not turn
        a successful association into a failure. */
     return STATUS_SUCCESS;
+}
+
+static
+VOID
+PspAddProcessValuesToAccounting(
+    _Inout_ PJOBOBJECT_BASIC_AND_IO_ACCOUNTING_INFORMATION BasicAndIo,
+    _In_ PPROCESS_VALUES Values)
+{
+    BasicAndIo->BasicInfo.TotalUserTime.QuadPart += Values->TotalUserTime.QuadPart;
+    BasicAndIo->BasicInfo.TotalKernelTime.QuadPart += Values->TotalKernelTime.QuadPart;
+    BasicAndIo->IoInfo.ReadOperationCount += Values->IoInfo.ReadOperationCount;
+    BasicAndIo->IoInfo.WriteOperationCount += Values->IoInfo.WriteOperationCount;
+    BasicAndIo->IoInfo.OtherOperationCount += Values->IoInfo.OtherOperationCount;
+    BasicAndIo->IoInfo.ReadTransferCount += Values->IoInfo.ReadTransferCount;
+    BasicAndIo->IoInfo.WriteTransferCount += Values->IoInfo.WriteTransferCount;
+    BasicAndIo->IoInfo.OtherTransferCount += Values->IoInfo.OtherTransferCount;
 }
 
 /*!
@@ -1469,9 +1961,12 @@ PspQueryJobBasicAccountingInfo(
 {
     PLIST_ENTRY NextEntry;
     PROCESS_VALUES Values;
+    PEJOB ChildJob;
 
     /* Zero the basic accounting information */
     RtlZeroMemory(&BasicAndIo->BasicInfo, sizeof(BasicAndIo->BasicInfo));
+
+    ExEnterCriticalRegionAndAcquireResourceShared(&PspJobTreeLock);
 
     /* Lock the job object */
     ExEnterCriticalRegionAndAcquireResourceShared(&Job->JobLock);
@@ -1505,21 +2000,36 @@ PspQueryJobBasicAccountingInfo(
         if (!FlagOn(Process->JobStatus, PSP_JOB_ACCOUNTING_FOLDED))
         {
             KeQueryValuesProcess(&Process->Pcb, &Values);
-
-            /* Accumulate user and kernel times, and I/O counts */
-            BasicAndIo->BasicInfo.TotalUserTime.QuadPart += Values.TotalUserTime.QuadPart;
-            BasicAndIo->BasicInfo.TotalKernelTime.QuadPart += Values.TotalKernelTime.QuadPart;
-            BasicAndIo->IoInfo.ReadOperationCount += Values.IoInfo.ReadOperationCount;
-            BasicAndIo->IoInfo.WriteOperationCount += Values.IoInfo.WriteOperationCount;
-            BasicAndIo->IoInfo.OtherOperationCount += Values.IoInfo.OtherOperationCount;
-            BasicAndIo->IoInfo.ReadTransferCount += Values.IoInfo.ReadTransferCount;
-            BasicAndIo->IoInfo.WriteTransferCount += Values.IoInfo.WriteTransferCount;
-            BasicAndIo->IoInfo.OtherTransferCount += Values.IoInfo.OtherTransferCount;
+            PspAddProcessValuesToAccounting(BasicAndIo, &Values);
         }
     }
 
     /* Release the job lock */
     ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+
+    for (ChildJob = PspGetNextJobTopDown(Job, Job);
+         ChildJob != NULL;
+         ChildJob = PspGetNextJobTopDown(Job, ChildJob))
+    {
+        ExEnterCriticalRegionAndAcquireResourceShared(&ChildJob->JobLock);
+
+        for (NextEntry = ChildJob->ProcessListHead.Flink;
+             NextEntry != &ChildJob->ProcessListHead;
+             NextEntry = NextEntry->Flink)
+        {
+            PEPROCESS Process = CONTAINING_RECORD(NextEntry, EPROCESS, JobLinks);
+
+            if (!FlagOn(Process->JobStatus, PSP_JOB_ACCOUNTING_FOLDED))
+            {
+                KeQueryValuesProcess(&Process->Pcb, &Values);
+                PspAddProcessValuesToAccounting(BasicAndIo, &Values);
+            }
+        }
+
+        ExReleaseResourceAndLeaveCriticalRegion(&ChildJob->JobLock);
+    }
+
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
 
     return STATUS_SUCCESS;
 }
@@ -1558,12 +2068,12 @@ PspQueryJobLimitInformation(
 
     /* Copy basic limit information */
     ExtendedLimit->BasicLimitInformation.LimitFlags = Job->LimitFlags;
-    ExtendedLimit->BasicLimitInformation.MinimumWorkingSetSize = Job->MinimumWorkingSetSize;
-    ExtendedLimit->BasicLimitInformation.MaximumWorkingSetSize = Job->MaximumWorkingSetSize;
+    ExtendedLimit->BasicLimitInformation.MinimumWorkingSetSize = (SIZE_T)Job->MinimumWorkingSetSize;
+    ExtendedLimit->BasicLimitInformation.MaximumWorkingSetSize = (SIZE_T)Job->MaximumWorkingSetSize;
     ExtendedLimit->BasicLimitInformation.ActiveProcessLimit = Job->ActiveProcessLimit;
     ExtendedLimit->BasicLimitInformation.PriorityClass = Job->PriorityClass;
     ExtendedLimit->BasicLimitInformation.SchedulingClass = Job->SchedulingClass;
-    ExtendedLimit->BasicLimitInformation.Affinity = Job->Affinity;
+    ExtendedLimit->BasicLimitInformation.Affinity = Job->Affinity.Bitmap[0];
     ExtendedLimit->BasicLimitInformation.PerProcessUserTimeLimit.QuadPart = Job->PerProcessUserTimeLimit.QuadPart;
     ExtendedLimit->BasicLimitInformation.PerJobUserTimeLimit.QuadPart = Job->PerJobUserTimeLimit.QuadPart;
 
@@ -1692,6 +2202,7 @@ PspQueryJobProcessIdList(
 {
     NTSTATUS Status;
     PSP_QUERY_JOB_PROCESS_ID_CONTEXT QueryContext;
+    PEJOB ChildJob;
 
     /* Check if the buffer provided is large enough to hold at least the
        fixed portion of JOBOBJECT_BASIC_PROCESS_ID_LIST */
@@ -1707,6 +2218,7 @@ PspQueryJobProcessIdList(
 
     Status = STATUS_SUCCESS;
 
+    ExEnterCriticalRegionAndAcquireResourceShared(&PspJobTreeLock);
     ExEnterCriticalRegionAndAcquireResourceShared(&Job->JobLock);
 
     _SEH2_TRY
@@ -1725,6 +2237,29 @@ PspQueryJobProcessIdList(
     _SEH2_END;
 
     ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+
+    for (ChildJob = PspGetNextJobTopDown(Job, Job);
+         NT_SUCCESS(Status) && ChildJob != NULL;
+         ChildJob = PspGetNextJobTopDown(Job, ChildJob))
+    {
+        ExEnterCriticalRegionAndAcquireResourceShared(&ChildJob->JobLock);
+
+        _SEH2_TRY
+        {
+            Status = PspEnumerateProcessesInJobLocked(ChildJob,
+                                                      PspQueryJobProcessIdListCallback,
+                                                      &QueryContext);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        ExReleaseResourceAndLeaveCriticalRegion(&ChildJob->JobLock);
+    }
+
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
 
     if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW)
     {
@@ -1953,8 +2488,10 @@ NtCreateJobObject(
 
     RtlZeroMemory(Job, sizeof(*Job));
 
-    InitializeListHead(&Job->JobSetLinks);
     InitializeListHead(&Job->ProcessListHead);
+    InitializeListHead(&Job->SiblingJobLinks);
+    InitializeListHead(&Job->ChildJobListHead);
+    InitializeListHead(&Job->IteratorListHead);
 
     /* Make sure that early destruction doesn't attempt to remove
        the object from the list before it even gets added */
@@ -1978,6 +2515,7 @@ NtCreateJobObject(
 
     /* Set the scheduling class */
     Job->SchedulingClass = PSP_JOB_SCHEDULING_CLASS_DEFAULT;
+    PspComputeEffectiveJobLimits(Job);
 
     /* Link the object into the global job list */
     ExAcquireFastMutex(&PsJobListLock);
@@ -2150,10 +2688,8 @@ NtAssignProcessToJobObject(
     /* Get the session ID - it must match the process and the job creator */
     SessionId = PsGetProcessSessionId(Process);
 
-    if (Process->Job != NULL || SessionId != Job->SessionId)
+    if (SessionId != Job->SessionId)
     {
-        /* Return STATUS_ACCESS_DENIED if the process is already assigned
-           to a job or the session ID is different */
         ObDereferenceObject(Job);
         ObDereferenceObject(Process);
         return STATUS_ACCESS_DENIED;
@@ -2251,7 +2787,7 @@ NtIsProcessInJob(
             if (NT_SUCCESS(Status))
             {
                 /* Compare the job objects */
-                if (ProcessJob == JobObjectFromHandle)
+                if (PspIsJobInChain(JobObjectFromHandle, ProcessJob))
                 {
                     Status = STATUS_PROCESS_IN_JOB;
                 }
