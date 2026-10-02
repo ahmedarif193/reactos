@@ -530,7 +530,6 @@ Mx::MxCreateDeviceSecure(
       _Out_     MdDeviceObject *DeviceObject
     )
 {
-#ifndef __REACTOS__ // we don't have wdmsec.lib
     return IoCreateDeviceSecure(DriverObject,
                 DeviceExtensionSize,
                 DeviceName,
@@ -540,16 +539,6 @@ Mx::MxCreateDeviceSecure(
                 DefaultSDDLString,
                 DeviceClassGuid,
                 DeviceObject);
-#else
-    return IoCreateDevice(
-                DriverObject,
-                DeviceExtensionSize,
-                DeviceName,
-                DeviceType,
-                DeviceCharacteristics,
-                Exclusive,
-                DeviceObject);
-#endif
 }
 
 __inline

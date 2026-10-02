@@ -143,6 +143,7 @@ typedef struct _ADDRESS_FILE {
     HANDLE ProcessId;                     /* Creator process ID */
     PVOID SubProcessTag;                  /* Creator process tag */
     LARGE_INTEGER CreationTime;           /* Time of creation */
+    ULONG64 WfpEndpointId;
 
     /* The following members are used to control event notification */
 
@@ -276,6 +277,7 @@ typedef struct _CONNECTION_ENDPOINT {
 
     volatile LONG PendingRecvCredit;
     volatile LONG CreditFlushQueued;
+    ULONG64 WfpEndpointId;
 
     struct _CONNECTION_ENDPOINT *Next; /* Next connection in address file list */
 } CONNECTION_ENDPOINT, *PCONNECTION_ENDPOINT;

@@ -74,7 +74,8 @@ usage() {
 	echo "  makefiles            Use Unix Makefiles generator (default: Ninja)"
 	echo "  menuconfig           Open the interactive configuration UI first;"
 	echo "                       selections persist in the output tree"
-	echo "  --no-feeds-update    Do not fetch the source feeds declared in feeds.conf"
+	echo "  --no-feeds-update    Do not fetch the source feeds declared in feeds.conf;"
+	echo "                       components whose feed is not checked out are skipped"
 	echo "  -D<var>=<val>        Pass option to CMake"
 	exit 1
 }
@@ -269,6 +270,7 @@ kdb_zydis_enabled() {
 }
 
 verify_kdb_sources() {
+	[ "$SKIP_FEEDS_UPDATE" = "0" ] || return 0
 	kdb_zydis_enabled || return 0
 
 	KDB_FEX_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
@@ -285,6 +287,7 @@ verify_arm64_sources() {
 		echo "FEX ARM64EC disabled by configuration; skipping its source check."
 		return 0
 	fi
+	[ "$SKIP_FEEDS_UPDATE" = "0" ] || return 0
 
 	FEX_CHECKOUT_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
 	[ -f "$FEX_CHECKOUT_DIR/CMakeLists.txt" ] &&

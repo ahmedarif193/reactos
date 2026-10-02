@@ -1865,6 +1865,8 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Initialize Cache Views */
     if (!CcInitializeCacheManager()) KeBugCheck(CACHE_INITIALIZATION_FAILED);
 
+    if (!TmpInitSystem()) KeBugCheckEx(PHASE1_INITIALIZATION_FAILED, STATUS_UNSUCCESSFUL, 9, 0, 0);
+
     /* Initialize the Registry */
     if (!CmInitSystem1()) KeBugCheck(CONFIG_INITIALIZATION_FAILED);
 

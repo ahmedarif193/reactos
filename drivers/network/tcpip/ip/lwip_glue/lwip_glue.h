@@ -117,6 +117,7 @@ err_t       LibTCPClose(PCONNECTION_ENDPOINT Connection, const int safe, const i
 err_t       LibTCPGetPeerName(PTCP_PCB pcb, ip4_addr_t *const ipaddr, u16_t *const port);
 err_t       LibTCPGetHostName(PTCP_PCB pcb, ip4_addr_t *const ipaddr, u16_t *const port);
 void        LibTCPAccept(PTCP_PCB pcb, struct tcp_pcb *listen_pcb, void *arg);
+void        LibTCPWfpEstablish(PCONNECTION_ENDPOINT Connection, PTCP_PCB pcb, BOOLEAN Outbound);
 NTSTATUS    LibTCPDeferAcceptLocked(PCONNECTION_ENDPOINT Connection, PTCP_PCB pcb);
 void        LibTCPDrainPendingAccept(PCONNECTION_ENDPOINT Connection);
 void        LibTCPSetNoDelay(PTCP_PCB pcb, BOOLEAN Set);

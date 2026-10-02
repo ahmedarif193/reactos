@@ -30,4 +30,5 @@
 ;; stdcall USBD_RemoveDevice
 ;; stdcall USBD_RestoreDevice
 ;; stdcall USBD_SetSuspendPowerState
+@ stdcall USBD_ValidateConfigurationDescriptor(ptr long long ptr long)
 ;; stdcall USBD_WaitDeviceMutex

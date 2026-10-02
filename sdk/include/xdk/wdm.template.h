@@ -271,6 +271,535 @@ $include (halfuncs.h)
 $include (nttmapi.h)
 $include (zwfuncs.h)
 
+#if ((NTDDI_VERSION >= NTDDI_WIN11_GA))
+
+typedef enum _POWER_LIMIT_TYPES {
+    PowerLimitContinuous = 0,
+    PowerLimitBurst,
+    PowerLimitRapid,
+    PowerLimitPreemptive,
+    PowerLimitPreemptiveOffset,
+    PowerLimitTypeMax
+} POWER_LIMIT_TYPES, *PPOWER_LIMIT_TYPES;
+
+typedef struct _POWER_LIMIT_ATTRIBUTES {
+    POWER_LIMIT_TYPES   Type;
+    ULONG               DomainId;
+    ULONG               MaxValue;
+    ULONG               MinValue;
+    ULONG               MinTimeParameter;
+    ULONG               MaxTimeParameter;
+    ULONG               DefaultACValue;
+    ULONG               DefaultDCValue;
+    union {
+        struct {
+            ULONG       SupportTimeParameter : 1;
+            ULONG       Reserved : 31;
+        };
+        ULONG           AsUlong;
+    } Flags;
+} POWER_LIMIT_ATTRIBUTES, *PPOWER_LIMIT_ATTRIBUTES;
+
+typedef struct _POWER_LIMIT_VALUE {
+    POWER_LIMIT_TYPES Type;
+    ULONG DomainId;
+    ULONG TargetValue;
+    ULONG TimeParameter;
+} POWER_LIMIT_VALUE, *PPOWER_LIMIT_VALUE;
+
+#define POWER_LIMIT_VALUE_NO_CONTROL            ULONG_MAX
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+CmCallbackGetKeyObjectIDEx (
+    _In_ PLARGE_INTEGER Cookie,
+    _In_ PVOID Object,
+    _Out_opt_ PULONG_PTR ObjectID,
+    _Outptr_opt_ PCUNICODE_STRING *ObjectName,
+    _In_ ULONG Flags
+    );
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+CmCallbackReleaseKeyObjectIDEx (
+    _In_ PCUNICODE_STRING ObjectName
+    );
+
+#endif
+
+typedef struct _BDCB_IMAGE_INFORMATION *PBDCB_IMAGE_INFORMATION;
+
+#if ((NTDDI_VERSION >= NTDDI_WIN11_GA))
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoCreatePowerLimitRequest (
+    _Outptr_ PVOID *PowerLimitRequest,
+    _In_ PDEVICE_OBJECT TargetDeviceObject,
+    _In_ PDEVICE_OBJECT PolicyDeviceObject,
+    _In_ PCOUNTED_REASON_CONTEXT Context
+    );
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoQueryPowerLimitAttributes (
+    _Inout_ PVOID PowerLimitRequest,
+    _In_ ULONG BufferCount,
+    _Inout_updates_opt_(BufferCount) PPOWER_LIMIT_ATTRIBUTES Buffer,
+    _Out_ PULONG AttributeCount
+    );
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoSetPowerLimitValue (
+    _Inout_ PVOID PowerLimitRequest,
+    _In_opt_ PCOUNTED_REASON_CONTEXT Reason,
+    _In_ ULONG ValueCount,
+    _In_reads_(ValueCount) PPOWER_LIMIT_VALUE Values
+    );
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoQueryPowerLimitValue (
+    _Inout_ PVOID PowerLimitRequest,
+    _In_ ULONG ValueCount,
+    _Inout_updates_(ValueCount) PPOWER_LIMIT_VALUE Values
+    );
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoDeletePowerLimitRequest (
+    _Inout_ PVOID PowerLimitRequest
+    );
+
+#endif
+
+typedef struct _KTRANSACTION KTRANSACTION, *PKTRANSACTION, *RESTRICTED_POINTER PRKTRANSACTION;
+
+typedef struct _KENLISTMENT KENLISTMENT, *PKENLISTMENT, *RESTRICTED_POINTER PRKENLISTMENT;
+
+typedef struct _KRESOURCEMANAGER KRESOURCEMANAGER, *PKRESOURCEMANAGER, *RESTRICTED_POINTER PRKRESOURCEMANAGER;
+
+typedef struct _KTM KTM, *PKTM, *RESTRICTED_POINTER PRKTM;
+
+typedef
+NTSTATUS
+(NTAPI *PTM_RM_NOTIFICATION) (
+    _In_     PKENLISTMENT EnlistmentObject,
+    _In_     PVOID RMContext,
+    _In_     PVOID TransactionContext,
+    _In_     ULONG TransactionNotification,
+    _Inout_  PLARGE_INTEGER TmVirtualClock,
+    _In_     ULONG ArgumentLength,
+    _In_     PVOID Argument
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmCommitComplete (
+    _In_ PKENLISTMENT Enlistment,
+    _In_opt_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmRollbackComplete (
+    _In_ PKENLISTMENT Enlistment,
+    _In_opt_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmEnableCallbacks (
+    _In_ PKRESOURCEMANAGER ResourceManager,
+    _In_ PTM_RM_NOTIFICATION CallbackRoutine,
+    _In_opt_ PVOID RMKey
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmInitializeTransactionManager (
+    _In_ PRKTM TransactionManager,
+    _In_opt_ PCUNICODE_STRING LogFileName,
+    _In_opt_ PGUID TmId,
+    _In_ ULONG CreateOptions
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmRenameTransactionManager (
+    _In_ PUNICODE_STRING LogFileName,
+    _In_ LPGUID ExistingTransactionManagerGuid
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmRecoverTransactionManager (
+    _In_ PKTM Tm,
+    _In_ PLARGE_INTEGER TargetVirtualClock
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmCommitTransaction (
+    _In_ PKTRANSACTION Transaction,
+    _In_ BOOLEAN       Wait
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmRollbackTransaction (
+    _In_ PKTRANSACTION Transaction,
+    _In_ BOOLEAN       Wait
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmCreateEnlistment (
+    _Out_ PHANDLE           EnlistmentHandle,
+    _In_ KPROCESSOR_MODE    PreviousMode,
+    _In_ ACCESS_MASK        DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ PRKRESOURCEMANAGER ResourceManager,
+    _In_ PKTRANSACTION      Transaction,
+    _In_opt_ ULONG          CreateOptions,
+    _In_ NOTIFICATION_MASK  NotificationMask,
+    _In_opt_ PVOID          EnlistmentKey
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmRecoverEnlistment (
+    _In_ PKENLISTMENT Enlistment,
+    _In_ PVOID        EnlistmentKey
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmPrePrepareEnlistment (
+    _In_ PKENLISTMENT Enlistment,
+    _In_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmPrepareEnlistment (
+    _In_ PKENLISTMENT Enlistment,
+    _In_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmCommitEnlistment (
+    _In_ PKENLISTMENT Enlistment,
+    _In_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmRollbackEnlistment (
+    _In_ PKENLISTMENT Enlistment,
+    _In_opt_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmPrePrepareComplete (
+    _In_ PKENLISTMENT Enlistment,
+    _In_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmPrepareComplete (
+    _In_ PKENLISTMENT Enlistment,
+    _In_opt_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmReadOnlyEnlistment (
+    _In_ PKENLISTMENT Enlistment,
+    _In_opt_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmReferenceEnlistmentKey (
+    _In_ PKENLISTMENT Enlistment,
+    _Out_ PVOID *Key
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmDereferenceEnlistmentKey (
+    _In_ PKENLISTMENT Enlistment,
+    _Out_opt_ PBOOLEAN LastReference
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmSinglePhaseReject (
+    _In_ PKENLISTMENT Enlistment,
+    _In_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmRequestOutcomeEnlistment (
+    _In_ PKENLISTMENT Enlistment,
+    _In_ PLARGE_INTEGER TmVirtualClock
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmRecoverResourceManager (
+    _In_ PKRESOURCEMANAGER ResourceManager
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmPropagationComplete (
+    _In_  PKRESOURCEMANAGER ResourceManager,
+    _In_  ULONG             RequestCookie,
+    _In_  ULONG             BufferLength,
+    _In_  PVOID             Buffer
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+TmPropagationFailed (
+    _In_  PKRESOURCEMANAGER ResourceManager,
+    _In_  ULONG             RequestCookie,
+    _In_  NTSTATUS          Status
+    );
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+TmGetTransactionId (
+    _In_  PKTRANSACTION Transaction,
+    _Out_ PUOW TransactionId
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+TmIsTransactionActive (
+    _In_ PKTRANSACTION Transaction
+    );
+
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+
+#define DEVICE_RESET_INTERFACE_VERSION  1
+
+typedef enum _DEVICE_RESET_TYPE
+{
+    FunctionLevelDeviceReset,
+    PlatformLevelDeviceReset
+} DEVICE_RESET_TYPE;
+
+typedef union _DEVICE_BUS_SPECIFIC_RESET_TYPE {
+    struct {
+        ULONGLONG FunctionLevelDeviceReset:1;
+        ULONGLONG PlatformLevelDeviceReset:1;
+        ULONGLONG SecondaryBusReset:1;
+        ULONGLONG PowerControllerReset:1;
+        ULONGLONG NoOpReset:1;
+        ULONGLONG Reserved:59;
+    } Pci;
+    struct {
+        ULONGLONG FunctionLevelDeviceReset:1;
+        ULONGLONG PlatformLevelDeviceReset:1;
+        ULONGLONG Reserved:62;
+    } Acpi;
+    ULONGLONG AsULONGLONG;
+} DEVICE_BUS_SPECIFIC_RESET_TYPE, *PDEVICE_BUS_SPECIFIC_RESET_TYPE;
+
+typedef
+_IRQL_requires_same_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Function_class_(DEVICE_RESET_HANDLER)
+NTSTATUS
+NTAPI
+DEVICE_RESET_HANDLER(
+    _In_ PVOID InterfaceContext,
+    _In_ DEVICE_RESET_TYPE ResetType,
+    _In_ ULONG Flags,
+    _In_opt_ PVOID ResetParameters
+    );
+
+typedef DEVICE_RESET_HANDLER *PDEVICE_RESET_HANDLER;
+
+#if ((NTDDI_VERSION >= NTDDI_WIN10_FE))
+
+typedef struct _DEVICE_BUS_SPECIFIC_RESET_INFO {
+    GUID BusTypeGuid;
+    DEVICE_BUS_SPECIFIC_RESET_TYPE ResetTypeSupported;
+} DEVICE_BUS_SPECIFIC_RESET_INFO, *PDEVICE_BUS_SPECIFIC_RESET_INFO;
+
+typedef
+_IRQL_requires_same_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Function_class_(DEVICE_QUERY_BUS_SPECIFIC_RESET_HANDLER)
+NTSTATUS
+NTAPI
+DEVICE_QUERY_BUS_SPECIFIC_RESET_HANDLER(
+    _In_ PVOID InterfaceContext,
+    _Out_ PULONG ResetInfoCount,
+    _Out_ PDEVICE_BUS_SPECIFIC_RESET_INFO ResetInfoSupported
+);
+
+typedef DEVICE_QUERY_BUS_SPECIFIC_RESET_HANDLER *PDEVICE_QUERY_BUS_SPECIFIC_RESET_HANDLER;
+
+typedef union _BUS_SPECIFIC_RESET_FLAGS {
+    struct {
+        ULONGLONG KeepStackReset:1;
+        ULONGLONG Reserved:63;
+    } u;
+    ULONGLONG AsUlonglong;
+} BUS_SPECIFIC_RESET_FLAGS, *PBUS_SPECIFIC_RESET_FLAGS;
+
+typedef
+_IRQL_requires_same_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Function_class_(DEVICE_BUS_SPECIFIC_RESET_HANDLER)
+NTSTATUS
+NTAPI
+DEVICE_BUS_SPECIFIC_RESET_HANDLER(
+    _In_ PVOID InterfaceContext,
+    _In_ CONST GUID *BusType,
+    _In_ DEVICE_BUS_SPECIFIC_RESET_TYPE ResetTypeSelected,
+    _In_ PBUS_SPECIFIC_RESET_FLAGS Flags,
+    _In_ PVOID ResetParameters
+);
+
+typedef DEVICE_BUS_SPECIFIC_RESET_HANDLER *PDEVICE_BUS_SPECIFIC_RESET_HANDLER;
+
+typedef union _DEVICE_RESET_STATUS_FLAGS {
+    struct {
+        ULONGLONG KeepStackReset:1;
+        ULONGLONG RecoveringFromBusError:1;
+        ULONGLONG Reserved:62;
+    } u;
+    ULONGLONG AsUlonglong;
+} DEVICE_RESET_STATUS_FLAGS, *PDEVICE_RESET_STATUS_FLAGS;
+
+typedef
+_IRQL_requires_same_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Function_class_(GET_DEVICE_RESET_STATUS)
+NTSTATUS
+NTAPI
+GET_DEVICE_RESET_STATUS(
+    _In_ PVOID InterfaceContext,
+    _Out_ PBOOLEAN IsResetting,
+    _Out_ PDEVICE_BUS_SPECIFIC_RESET_TYPE ResetTypeSelected,
+    _Out_ PDEVICE_RESET_STATUS_FLAGS Flags
+);
+
+typedef GET_DEVICE_RESET_STATUS *PGET_DEVICE_RESET_STATUS;
+
+#endif
+
+typedef struct _DEVICE_RESET_INTERFACE_STANDARD {
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    PDEVICE_RESET_HANDLER DeviceReset;
+    ULONG SupportedResetTypes;
+    PVOID Reserved;
+#if (NTDDI_VERSION >= NTDDI_WIN10_FE)
+    PDEVICE_QUERY_BUS_SPECIFIC_RESET_HANDLER QueryBusSpecificResetInfo;
+    PDEVICE_BUS_SPECIFIC_RESET_HANDLER DeviceBusSpecificReset;
+    PGET_DEVICE_RESET_STATUS GetDeviceResetStatus;
+#endif
+} DEVICE_RESET_INTERFACE_STANDARD, *PDEVICE_RESET_INTERFACE_STANDARD;
+
+#endif
+
 #ifdef __cplusplus
 }
 #endif

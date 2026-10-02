@@ -874,7 +874,7 @@ MiDeleteSection(
     }
     else
     {
-        if (!Section->Control->Image && Section->Control->FileObject != NULL)
+        if (!Section->Control->Image && Section->Control->FileObject != NULL && !Section->DataScan)
             MI_ATOMIC_ADD32(&Section->Control->Segment->SectionObjects, -1);
         MiDereferenceControlArea(Section->Control);
     }
@@ -983,8 +983,10 @@ MiSectionInitialize(VOID)
 
 NTSTATUS
 NTAPI
-MmCreateSection(
+MiCreateSectionWithMode(
     _Out_ PVOID *SectionObject,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _In_ BOOLEAN DataScan,
     _In_ ACCESS_MASK DesiredAccess,
     _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
     _Inout_ PLARGE_INTEGER MaximumSize,
@@ -993,7 +995,6 @@ MmCreateSection(
     _In_opt_ HANDLE FileHandle,
     _In_opt_ PFILE_OBJECT FileObject)
 {
-    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PFILE_OBJECT File = FileObject;
     PMI_CONTROL_AREA Control = NULL;
     PMI_SECTION_OBJECT Section;
@@ -1184,7 +1185,8 @@ MmCreateSection(
 
     RtlZeroMemory(Section, sizeof(*Section));
     Section->Control = Control;
-    if (!Control->Image && Control->FileObject != NULL)
+    Section->DataScan = DataScan;
+    if (!Control->Image && Control->FileObject != NULL && !DataScan)
         MI_ATOMIC_ADD32(&Control->Segment->SectionObjects, 1);
     Section->SizeOfSection.QuadPart = (LONGLONG)Size;
     Section->InitialProtection = SectionPageProtection;
@@ -1195,6 +1197,22 @@ MmCreateSection(
     *SectionObject = Section;
     UNREFERENCED_PARAMETER(DesiredAccess);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+MmCreateSection(
+    _Out_ PVOID *SectionObject,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _Inout_ PLARGE_INTEGER MaximumSize,
+    _In_ ULONG SectionPageProtection,
+    _In_ ULONG AllocationAttributes,
+    _In_opt_ HANDLE FileHandle,
+    _In_opt_ PFILE_OBJECT FileObject)
+{
+    return MiCreateSectionWithMode(SectionObject, ExGetPreviousMode(), FALSE, DesiredAccess, ObjectAttributes,
+                                   MaximumSize, SectionPageProtection, AllocationAttributes, FileHandle, FileObject);
 }
 
 BOOLEAN

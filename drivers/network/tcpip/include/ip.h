@@ -88,6 +88,8 @@ typedef struct _IP_PACKET {
     PNDIS_PACKET NdisPacket;            /* Pointer to NDIS packet */
     IP_ADDRESS SrcAddr;                 /* Source address */
     IP_ADDRESS DstAddr;                 /* Destination address */
+    WFP_SHIM_TAG WfpTag;
+    BOOLEAN WfpAccepted;
 } IP_PACKET, *PIP_PACKET;
 
 #define IP_PACKET_FLAG_RAW      0x01    /* Raw IP packet */
@@ -100,6 +102,7 @@ typedef struct _PACKET_CONTEXT {
 					   * in a queue */
     PVOID Context;                        /* Context information for handler */
     UINT  PacketType;                     /* Type of packet */
+    WFP_SHIM_TAG WfpTag;
 } PACKET_CONTEXT, *PPACKET_CONTEXT;
 
 /* The ProtocolReserved field is structured as a PACKET_CONTEXT */

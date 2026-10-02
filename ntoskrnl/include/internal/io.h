@@ -103,12 +103,14 @@
 //
 #define IOP_USE_TOP_LEVEL_DEVICE_HINT       0x01
 #define IOP_CREATE_FILE_OBJECT_EXTENSION    0x02
+#define IOP_TRAVERSED_MOUNT_POINT           0x04
 
 
 typedef struct _FILE_OBJECT_EXTENSION
 {
     PDEVICE_OBJECT TopDeviceObjectHint;
     PVOID FilterContext;
+    ULONG FoExtFlags;
 
 } FILE_OBJECT_EXTENSION, *PFILE_OBJECT_EXTENSION;
 
@@ -352,6 +354,58 @@ typedef struct _IOP_MINI_COMPLETION_PACKET
 
 VOID NTAPI IopReleaseWaitCompletionPacket(PIOP_MINI_COMPLETION_PACKET Packet);
 
+#define IOP_IRP_EXTENSION_ACTIVITY_ID 0x0001
+
+typedef struct _IOP_IRP_EXTENSION
+{
+    union
+    {
+        USHORT ExtensionFlags;
+        struct
+        {
+            USHORT Allocated : 1;
+            USHORT PropagateId : 1;
+            USHORT SpareBits : 14;
+        };
+    };
+    USHORT TypesAllocated;
+    UCHAR GenericExtension[4];
+    PVOID VerifierContext;
+    ULONG64 DiskIoAttributionHandle;
+    GUID ActivityId;
+    union
+    {
+        LARGE_INTEGER Timestamp;
+        ULONG ZeroingOffset;
+        struct
+        {
+            PVOID FsTrackOffsetBlob;
+            LONGLONG FsTrackedOffset;
+        };
+        PVOID AdapterCryptoParameters;
+    };
+    union
+    {
+        ULONG64 Value;
+        struct
+        {
+            ULONG64 UserFlags : 32;
+            ULONG64 SystemFlags : 16;
+            ULONG64 UserFlagsId : 16;
+        };
+    } DriverFlags;
+    COPY_INFORMATION CopyInformation;
+} IOP_IRP_EXTENSION, *PIOP_IRP_EXTENSION;
+
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(IRP, Tail.Overlay.IrpExtension) == 0xC8);
+C_ASSERT(sizeof(PVOID) != 8 || sizeof(IRP) == 0xD0);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(IOP_IRP_EXTENSION, ActivityId) == 0x18);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(IOP_IRP_EXTENSION, DriverFlags) == 0x38);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(IOP_IRP_EXTENSION, CopyInformation) == 0x40);
+C_ASSERT(sizeof(PVOID) != 8 || sizeof(IOP_IRP_EXTENSION) == 0x50);
+
+VOID NTAPI IopFreeIrpExtension(_Inout_ PIRP Irp);
+
 //
 // I/O Completion Context for IoSetIoCompletionRoutineEx
 //
@@ -429,8 +483,12 @@ typedef struct _OPEN_PACKET
     NTSTATUS FinalStatus;
     ULONG_PTR Information;
     ULONG ParseCheck;
-    PFILE_OBJECT RelatedFileObject;
-    OBJECT_ATTRIBUTES OriginalAttributes;
+    union
+    {
+        PFILE_OBJECT RelatedFileObject;
+        PDEVICE_OBJECT ReferencedDeviceObject;
+    };
+    POBJECT_ATTRIBUTES OriginalAttributes;
     LARGE_INTEGER AllocationSize;
     ULONG CreateOptions;
     USHORT FileAttributes;
@@ -441,17 +499,34 @@ typedef struct _OPEN_PACKET
     ULONG Disposition;
     PFILE_BASIC_INFORMATION BasicInformation;
     PFILE_NETWORK_OPEN_INFORMATION NetworkInformation;
+    PVOID FileInformation;
     CREATE_FILE_TYPE CreateFileType;
-    PVOID ExtraCreateParameters;
+    PVOID MailslotOrPipeParameters;
     BOOLEAN Override;
     BOOLEAN QueryOnly;
     BOOLEAN DeleteOnly;
     BOOLEAN FullAttributes;
     PDUMMY_FILE_OBJECT LocalFileObject;
-    BOOLEAN TraversedMountPoint;
     ULONG InternalFlags;
-    PDEVICE_OBJECT TopDeviceObjectHint;
+    KPROCESSOR_MODE AccessMode;
+    IO_DRIVER_CREATE_CONTEXT DriverCreateContext;
+    FILE_INFORMATION_CLASS FileInformationClass;
+    ULONG FileInformationLength;
+    BOOLEAN FilterQuery;
+    LONGLONG ExtendedCreateFlags;
 } OPEN_PACKET, *POPEN_PACKET;
+
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, RelatedFileObject) == 0x28);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, AllocationSize) == 0x38);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, CreateFileType) == 0x78);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, MailslotOrPipeParameters) == 0x80);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, LocalFileObject) == 0x90);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, InternalFlags) == 0x98);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, AccessMode) == 0x9c);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, DriverCreateContext) == 0xa0);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, FileInformationClass) == 0xc8);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(OPEN_PACKET, ExtendedCreateFlags) == 0xd8);
+C_ASSERT(sizeof(PVOID) != 8 || sizeof(OPEN_PACKET) == 0xe0);
 
 //
 // Boot Driver List Entry
@@ -589,6 +664,7 @@ typedef enum _DEVICE_ACTION
     PiActionQueryState,
     PiActionRemoveDevice,
     PiActionQueryRemoveDevice,
+    PiActionCloseRemovedDevice,
 } DEVICE_ACTION;
 
 //
@@ -1033,6 +1109,12 @@ IopDereferenceDeviceObject(
     IN BOOLEAN ForceUnload
 );
 
+VOID
+NTAPI
+PiDeviceObjectClosed(
+    _In_ PDEVICE_OBJECT DeviceObject
+);
+
 NTSTATUS
 NTAPI
 IopGetRelatedTargetDevice(
@@ -1234,6 +1316,19 @@ PnpRootRetireDevice(
 
 VOID
 PnpRootInitializeDevExtension(VOID);
+
+VOID
+NTAPI
+IopBootDriverStatusUpdate(
+    _In_ BDCB_STATUS_UPDATE_TYPE StatusType
+);
+
+BOOLEAN
+NTAPI
+IopBootImageAllowed(
+    _In_ PCUNICODE_STRING ImageName,
+    _In_opt_ PCUNICODE_STRING RegistryPath
+);
 
 //
 // Driver Routines
@@ -1453,6 +1548,24 @@ IopAcquireFileObjectLock(
     _In_ KPROCESSOR_MODE AccessMode,
     _In_ BOOLEAN Alertable,
     _Out_ PBOOLEAN LockFailed
+);
+
+VOID
+NTAPI
+FsRtlpMarkCallerEcps(
+    IN struct _ECP_LIST *EcpList
+);
+
+VOID
+NTAPI
+FsRtlpFreeAddedEcps(
+    IN struct _ECP_LIST *EcpList
+);
+
+NTSTATUS
+NTAPI
+IopAllocateFileObjectExtension(
+    IN PFILE_OBJECT FileObject
 );
 
 PVOID

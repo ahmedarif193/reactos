@@ -1540,7 +1540,15 @@ IopInitializeBootDrivers(VOID)
     PDRIVER_INFORMATION DriverInfo, DriverInfoTag;
     HANDLE KeyHandle;
     PBOOT_DRIVER_LIST_ENTRY BootEntry;
+    LIST_ENTRY EarlyLaunchList, CoreList;
+    PKEY_VALUE_FULL_INFORMATION GroupInformation;
+    UNICODE_STRING GroupName;
+    static UNICODE_STRING EarlyLaunchGroup = RTL_CONSTANT_STRING(L"Early-Launch");
+    static UNICODE_STRING CoreGroup = RTL_CONSTANT_STRING(L"WdfLoadGroup");
     DPRINT("IopInitializeBootDrivers()\n");
+
+    InitializeListHead(&EarlyLaunchList);
+    InitializeListHead(&CoreList);
 
     /* Create the RAW FS built-in driver */
     RtlInitUnicodeString(&DriverName, L"\\FileSystem\\RAW");
@@ -1570,25 +1578,6 @@ IopInitializeBootDrivers(VOID)
 
     /* Initialize the group table lists */
     for (i = 0; i < IopGroupIndex; i++) InitializeListHead(&IopGroupTable[i]);
-
-    /* Loop the boot modules */
-    ListHead = &KeLoaderBlock->LoadOrderListHead;
-    for (NextEntry = ListHead->Flink;
-         NextEntry != ListHead;
-         NextEntry = NextEntry->Flink)
-    {
-        /* Get the entry */
-        LdrEntry = CONTAINING_RECORD(NextEntry,
-                                     LDR_DATA_TABLE_ENTRY,
-                                     InLoadOrderLinks);
-
-        /* Check if the DLL needs to be initialized */
-        if (LdrEntry->Flags & LDRP_DRIVER_DEPENDENT_DLL)
-        {
-            /* Call its entrypoint */
-            MmCallDllInitialize(LdrEntry, NULL);
-        }
-    }
 
     /* Loop the boot drivers */
     ListHead = &KeLoaderBlock->BootDriverListHead;
@@ -1640,6 +1629,32 @@ IopInitializeBootDrivers(VOID)
                 /* Save the handle */
                 DriverInfo->ServiceHandle = KeyHandle;
 
+                if (NT_SUCCESS(IopGetRegistryValue(KeyHandle, L"Group", &GroupInformation)))
+                {
+                    BOOLEAN EarlyLaunch = FALSE, Core = FALSE;
+
+                    if (GroupInformation->Type == REG_SZ && GroupInformation->DataLength != 0)
+                    {
+                        GroupName.Buffer = (PWCHAR)((ULONG_PTR)GroupInformation + GroupInformation->DataOffset);
+                        PnpRegSzToString(GroupName.Buffer, GroupInformation->DataLength, &GroupName.Length);
+                        GroupName.MaximumLength = (USHORT)GroupInformation->DataLength;
+                        EarlyLaunch = RtlEqualUnicodeString(&GroupName, &EarlyLaunchGroup, TRUE);
+                        Core = RtlEqualUnicodeString(&GroupName, &CoreGroup, TRUE);
+                    }
+                    ExFreePool(GroupInformation);
+
+                    if (EarlyLaunch)
+                    {
+                        InsertTailList(&EarlyLaunchList, &DriverInfo->Link);
+                        continue;
+                    }
+                    if (Core)
+                    {
+                        InsertTailList(&CoreList, &DriverInfo->Link);
+                        continue;
+                    }
+                }
+
                 /* Get the group oder index */
                 Index = PpInitGetGroupOrderIndex(KeyHandle);
 
@@ -1674,6 +1689,58 @@ IopInitializeBootDrivers(VOID)
         }
     }
 
+    /* Loop the boot modules */
+    ListHead = &KeLoaderBlock->LoadOrderListHead;
+    for (NextEntry = ListHead->Flink;
+         NextEntry != ListHead;
+         NextEntry = NextEntry->Flink)
+    {
+        /* Get the entry */
+        LdrEntry = CONTAINING_RECORD(NextEntry,
+                                     LDR_DATA_TABLE_ENTRY,
+                                     InLoadOrderLinks);
+
+        /* Check if the DLL needs to be initialized */
+        if (LdrEntry->Flags & LDRP_DRIVER_DEPENDENT_DLL)
+        {
+            /* Call its entrypoint */
+            MmCallDllInitialize(LdrEntry, NULL);
+        }
+    }
+
+    for (NextEntry = CoreList.Flink;
+         NextEntry != &CoreList;
+         NextEntry = NextEntry->Flink)
+    {
+        DriverInfo = CONTAINING_RECORD(NextEntry, DRIVER_INFORMATION, Link);
+        IopInitializeBuiltinDriver(DriverInfo->DataTableEntry->LdrEntry);
+    }
+
+    for (NextEntry = EarlyLaunchList.Flink;
+         NextEntry != &EarlyLaunchList;
+         NextEntry = NextEntry->Flink)
+    {
+        DriverInfo = CONTAINING_RECORD(NextEntry, DRIVER_INFORMATION, Link);
+        IopInitializeBuiltinDriver(DriverInfo->DataTableEntry->LdrEntry);
+    }
+
+    IopBootDriverStatusUpdate(BdCbStatusPrepareForDependencyLoad);
+
+    for (NextEntry = ListHead->Flink;
+         NextEntry != ListHead;
+         NextEntry = NextEntry->Flink)
+    {
+        LdrEntry = CONTAINING_RECORD(NextEntry,
+                                     LDR_DATA_TABLE_ENTRY,
+                                     InLoadOrderLinks);
+        if (LdrEntry->Flags & LDRP_DRIVER_DEPENDENT_DLL)
+        {
+            (VOID)IopBootImageAllowed(&LdrEntry->FullDllName, NULL);
+        }
+    }
+
+    IopBootDriverStatusUpdate(BdCbStatusPrepareForDriverLoad);
+
     /* Loop each group index */
     for (i = 0; i < IopGroupIndex; i++)
     {
@@ -1690,10 +1757,18 @@ IopInitializeBootDrivers(VOID)
             /* Get the driver loader entry */
             LdrEntry = DriverInfo->DataTableEntry->LdrEntry;
 
+            if (!IopBootImageAllowed(&DriverInfo->DataTableEntry->FilePath,
+                                     &DriverInfo->DataTableEntry->RegistryPath))
+            {
+                continue;
+            }
+
             /* Initialize it */
             IopInitializeBuiltinDriver(LdrEntry);
         }
     }
+
+    IopBootDriverStatusUpdate(BdCbStatusPrepareForUnload);
 
     /* HAL Root Bus is being initialized before loading the boot drivers so this may cause issues
      * when some devices are not being initialized with their drivers. This flag is used to delay

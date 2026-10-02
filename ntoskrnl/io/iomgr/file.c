@@ -296,9 +296,9 @@ IopCheckTopDeviceHint(IN OUT PDEVICE_OBJECT * DeviceObject,
     }
 
     /* Verify the hint and if it's OK, return it */
-    if (IopVerifyDeviceObjectOnStack(LocalDevice, OpenPacket->TopDeviceObjectHint))
+    if (IopVerifyDeviceObjectOnStack(LocalDevice, OpenPacket->DriverCreateContext.DeviceObjectHint))
     {
-        *DeviceObject = OpenPacket->TopDeviceObjectHint;
+        *DeviceObject = OpenPacket->DriverCreateContext.DeviceObjectHint;
         return STATUS_SUCCESS;
     }
 
@@ -306,9 +306,9 @@ IopCheckTopDeviceHint(IN OUT PDEVICE_OBJECT * DeviceObject,
     /* If we thought was had come through a mount point,
      * actually update we didn't and return the error
      */
-    if (OpenPacket->TraversedMountPoint)
+    if (OpenPacket->InternalFlags & IOP_TRAVERSED_MOUNT_POINT)
     {
-        OpenPacket->TraversedMountPoint = FALSE;
+        OpenPacket->InternalFlags &= ~IOP_TRAVERSED_MOUNT_POINT;
         return STATUS_MOUNT_POINT_NOT_RESOLVED;
     }
 
@@ -364,7 +364,7 @@ IopParseDevice(IN PVOID ParseObject,
         if (!IopValidateOpenPacket(OpenPacket)) return STATUS_OBJECT_TYPE_MISMATCH;
 
         /* Valide reparse point in case we traversed a mountpoint */
-        if (OpenPacket->TraversedMountPoint)
+        if (OpenPacket->InternalFlags & IOP_TRAVERSED_MOUNT_POINT)
         {
             /* This is a reparse point we understand */
             ASSERT(OpenPacket->Information == IO_REPARSE_TAG_MOUNT_POINT);
@@ -665,9 +665,9 @@ IopParseDevice(IN PVOID ParseObject,
         }
 
         /* If we traversed a mount point, reset the information */
-        if (OpenPacket->TraversedMountPoint)
+        if (OpenPacket->InternalFlags & IOP_TRAVERSED_MOUNT_POINT)
         {
-            OpenPacket->TraversedMountPoint = FALSE;
+            OpenPacket->InternalFlags &= ~IOP_TRAVERSED_MOUNT_POINT;
         }
 
         /* Check if this is a secure FSD */
@@ -762,6 +762,7 @@ IopParseDevice(IN PVOID ParseObject,
         Irp->Cancel = FALSE;
         Irp->CancelRoutine = NULL;
         Irp->Tail.Overlay.AuxiliaryBuffer = NULL;
+        Irp->UserBuffer = &OpenPacket->DriverCreateContext.ExtraCreateParameter;
 
         /* Setup the security context */
         SecurityContext.SecurityQos = SecurityQos;
@@ -793,7 +794,7 @@ IopParseDevice(IN PVOID ParseObject,
 
                 /* Set the named pipe MJ and set the parameters */
                 StackLoc->MajorFunction = IRP_MJ_CREATE_NAMED_PIPE;
-                StackLoc->Parameters.CreatePipe.Parameters = OpenPacket->ExtraCreateParameters;
+                StackLoc->Parameters.CreatePipe.Parameters = OpenPacket->MailslotOrPipeParameters;
                 break;
 
             /* Mailslot */
@@ -801,7 +802,7 @@ IopParseDevice(IN PVOID ParseObject,
 
                 /* Set the mailslot MJ and set the parameters */
                 StackLoc->MajorFunction = IRP_MJ_CREATE_MAILSLOT;
-                StackLoc->Parameters.CreateMailslot.Parameters = OpenPacket->ExtraCreateParameters;
+                StackLoc->Parameters.CreateMailslot.Parameters = OpenPacket->MailslotOrPipeParameters;
                 break;
         }
 
@@ -917,6 +918,7 @@ IopParseDevice(IN PVOID ParseObject,
                 /* Initialize file object extension */
                 FileObjectExtension = (PFILE_OBJECT_EXTENSION)(FileObject + 1);
                 FileObject->FileObjectExtension = FileObjectExtension;
+                FileObjectExtension->FoExtFlags = OpenPacket->Options & IO_IGNORE_SHARE_ACCESS_CHECK;
 
                 /* Add the top level device which we'll send the request to */
                 if (OpenPacket->InternalFlags & IOP_USE_TOP_LEVEL_DEVICE_HINT)
@@ -1177,7 +1179,7 @@ IopParseDevice(IN PVOID ParseObject,
                 /* Inform we traversed a mount point for later attempt */
                 if (OpenPacket->Information == IO_REPARSE_TAG_MOUNT_POINT)
                 {
-                    OpenPacket->TraversedMountPoint = 1;
+                    OpenPacket->InternalFlags |= IOP_TRAVERSED_MOUNT_POINT;
                 }
 
                 /* In case we override checks, but got this on volume open, fail hard */
@@ -1504,6 +1506,11 @@ IopDeleteFile(IN PVOID ObjectBody)
         {
             /* Release filter context structure if any */
             FsRtlPTeardownPerFileObjectContexts(FileObject);
+
+            if (FileObject->FileObjectExtension != (PVOID)(FileObject + 1))
+            {
+                ExFreePoolWithTag(FileObject->FileObjectExtension, TAG_IO);
+            }
         }
 
         /* Check if dereference has been done yet */
@@ -2483,6 +2490,10 @@ IopQueryAttributesFile(IN POBJECT_ATTRIBUTES ObjectAttributes,
                                 FILE_READ_ATTRIBUTES,
                                 &OpenPacket,
                                 &Handle);
+    if (OpenPacket.DriverCreateContext.ExtraCreateParameter != NULL)
+    {
+        FsRtlFreeExtraCreateParameterList(OpenPacket.DriverCreateContext.ExtraCreateParameter);
+    }
     if (OpenPacket.ParseCheck == FALSE)
     {
         /* Parse failed */
@@ -2565,6 +2576,33 @@ IopAcquireFileObjectLock(
     return Status;
 }
 
+NTSTATUS
+NTAPI
+IopAllocateFileObjectExtension(IN PFILE_OBJECT FileObject)
+{
+    PFILE_OBJECT_EXTENSION FileObjectExtension;
+
+    if (BooleanFlagOn(FileObject->Flags, FO_FILE_OBJECT_HAS_EXTENSION))
+    {
+        return STATUS_SUCCESS;
+    }
+
+    FileObjectExtension = ExAllocatePoolWithTag(NonPagedPool, sizeof(*FileObjectExtension), TAG_IO);
+    if (!FileObjectExtension)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(FileObjectExtension, sizeof(*FileObjectExtension));
+    if (InterlockedCompareExchangePointer(&FileObject->FileObjectExtension, FileObjectExtension, NULL) != NULL)
+    {
+        ExFreePoolWithTag(FileObjectExtension, TAG_IO);
+    }
+
+    InterlockedOr((PLONG)&FileObject->Flags, FO_FILE_OBJECT_HAS_EXTENSION);
+    return STATUS_SUCCESS;
+}
+
 PVOID
 NTAPI
 IoGetFileObjectFilterContext(IN PFILE_OBJECT FileObject)
@@ -2640,8 +2678,9 @@ IopCreateFile(OUT PHANDLE FileHandle,
               IN PVOID ExtraCreateParameters OPTIONAL,
               IN ULONG Options,
               IN ULONG Flags,
-              IN PDEVICE_OBJECT DeviceObject OPTIONAL)
+              IN PIO_DRIVER_CREATE_CONTEXT DriverContext OPTIONAL)
 {
+    struct _ECP_LIST *CallerEcpList = NULL, *EcpList;
     KPROCESSOR_MODE AccessMode;
     HANDLE LocalHandle = 0;
     LARGE_INTEGER SafeAllocationSize = {0};
@@ -2929,9 +2968,21 @@ IopCreateFile(OUT PHANDLE FileHandle,
     OpenPacket->Options = Options;
     OpenPacket->Disposition = Disposition;
     OpenPacket->CreateFileType = CreateFileType;
-    OpenPacket->ExtraCreateParameters = ExtraCreateParameters;
+    OpenPacket->MailslotOrPipeParameters = ExtraCreateParameters;
     OpenPacket->InternalFlags = Flags;
-    OpenPacket->TopDeviceObjectHint = DeviceObject;
+    OpenPacket->AccessMode = AccessMode;
+    OpenPacket->DriverCreateContext.Size = sizeof(IO_DRIVER_CREATE_CONTEXT);
+    if (DriverContext != NULL)
+    {
+        OpenPacket->DriverCreateContext.ExtraCreateParameter = DriverContext->ExtraCreateParameter;
+        OpenPacket->DriverCreateContext.DeviceObjectHint = DriverContext->DeviceObjectHint;
+        OpenPacket->DriverCreateContext.TxnParameters = DriverContext->TxnParameters;
+        CallerEcpList = DriverContext->ExtraCreateParameter;
+    }
+    if (CallerEcpList != NULL)
+    {
+        FsRtlpMarkCallerEcps(CallerEcpList);
+    }
 
     /* Update the operation count */
     IopUpdateOperationCount(IopOtherTransfer);
@@ -2951,6 +3002,19 @@ IopCreateFile(OUT PHANDLE FileHandle,
                                 DesiredAccess,
                                 OpenPacket,
                                 &LocalHandle);
+
+    EcpList = OpenPacket->DriverCreateContext.ExtraCreateParameter;
+    if (EcpList != NULL)
+    {
+        if (EcpList == CallerEcpList)
+        {
+            FsRtlpFreeAddedEcps(EcpList);
+        }
+        else
+        {
+            FsRtlFreeExtraCreateParameterList(EcpList);
+        }
+    }
 
     /* Free the EA Buffer */
     if (OpenPacket->EaBuffer) ExFreePool(OpenPacket->EaBuffer);
@@ -3134,9 +3198,13 @@ IoCreateFileSpecifyDeviceObjectHint(OUT PHANDLE FileHandle,
                                     IN ULONG Options,
                                     IN PVOID DeviceObject)
 {
+    IO_DRIVER_CREATE_CONTEXT DriverContext;
     ULONG Flags = 0;
 
     PAGED_CODE();
+
+    IoInitializeDriverCreateContext(&DriverContext);
+    DriverContext.DeviceObjectHint = DeviceObject;
 
     /* Check if we were passed a device to send the create request to*/
     if (DeviceObject)
@@ -3160,7 +3228,91 @@ IoCreateFileSpecifyDeviceObjectHint(OUT PHANDLE FileHandle,
                          ExtraCreateParameters,
                          Options | IO_NO_PARAMETER_CHECKING,
                          Flags,
-                         DeviceObject);
+                         &DriverContext);
+}
+
+NTSTATUS
+NTAPI
+IoCreateFileEx(OUT PHANDLE FileHandle,
+               IN ACCESS_MASK DesiredAccess,
+               IN POBJECT_ATTRIBUTES ObjectAttributes,
+               OUT PIO_STATUS_BLOCK IoStatusBlock,
+               IN PLARGE_INTEGER AllocationSize OPTIONAL,
+               IN ULONG FileAttributes,
+               IN ULONG ShareAccess,
+               IN ULONG Disposition,
+               IN ULONG CreateOptions,
+               IN PVOID EaBuffer OPTIONAL,
+               IN ULONG EaLength,
+               IN CREATE_FILE_TYPE CreateFileType,
+               IN PVOID InternalParameters OPTIONAL,
+               IN ULONG Options,
+               IN PIO_DRIVER_CREATE_CONTEXT DriverContext OPTIONAL)
+{
+    ULONG Flags = 0;
+
+    PAGED_CODE();
+
+    if (DriverContext != NULL)
+    {
+        if (!IO_DRIVER_CREATE_CONTEXT_IS_MIN_SIZE(DriverContext))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (DriverContext->DeviceObjectHint != NULL)
+        {
+            Flags = (IOP_CREATE_FILE_OBJECT_EXTENSION | IOP_USE_TOP_LEVEL_DEVICE_HINT);
+        }
+    }
+
+    return IopCreateFile(FileHandle,
+                         DesiredAccess,
+                         ObjectAttributes,
+                         IoStatusBlock,
+                         AllocationSize,
+                         FileAttributes,
+                         ShareAccess,
+                         Disposition,
+                         CreateOptions,
+                         EaBuffer,
+                         EaLength,
+                         CreateFileType,
+                         InternalParameters,
+                         Options,
+                         Flags,
+                         DriverContext);
+}
+
+NTSTATUS
+NTAPI
+IoReplaceFileObjectName(IN PFILE_OBJECT FileObject,
+                        IN PWSTR NewFileName,
+                        IN USHORT FileNameLength)
+{
+    PWSTR Buffer;
+
+    if (FileObject->FileName.Buffer == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (FileNameLength > FileObject->FileName.MaximumLength)
+    {
+        Buffer = ExAllocatePoolWithTag(PagedPool, FileNameLength, TAG_IO_NAME);
+        if (Buffer == NULL)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        ExFreePoolWithTag(FileObject->FileName.Buffer, 0);
+        FileObject->FileName.Buffer = Buffer;
+        FileObject->FileName.MaximumLength = FileNameLength;
+    }
+
+    RtlCopyMemory(FileObject->FileName.Buffer, NewFileName, FileNameLength);
+    FileObject->FileName.Length = FileNameLength;
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -3398,6 +3550,10 @@ IoFastQueryNetworkAttributes(IN POBJECT_ATTRIBUTES ObjectAttributes,
                                 DesiredAccess,
                                 &OpenPacket,
                                 &Handle);
+    if (OpenPacket.DriverCreateContext.ExtraCreateParameter != NULL)
+    {
+        FsRtlFreeExtraCreateParameterList(OpenPacket.DriverCreateContext.ExtraCreateParameter);
+    }
     if (OpenPacket.ParseCheck == FALSE)
     {
         /* Parse failed */
@@ -3428,7 +3584,7 @@ IoUpdateShareAccess(IN PFILE_OBJECT FileObject,
     if (FileObject->Flags & FO_FILE_OBJECT_HAS_EXTENSION)
     {
         /* Check if caller specified to ignore access checks */
-        //if (FileObject->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK)
+        if (((PFILE_OBJECT_EXTENSION)FileObject->FileObjectExtension)->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK)
         {
             /* Don't update share access */
             return;
@@ -3486,7 +3642,7 @@ IoCheckShareAccess(IN ACCESS_MASK DesiredAccess,
     if (FileObject->Flags & FO_FILE_OBJECT_HAS_EXTENSION)
     {
         /* Check if caller specified to ignore access checks */
-        //if (FileObject->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK)
+        if (((PFILE_OBJECT_EXTENSION)FileObject->FileObjectExtension)->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK)
         {
             /* Don't check share access */
             return STATUS_SUCCESS;
@@ -3555,7 +3711,7 @@ IoRemoveShareAccess(IN PFILE_OBJECT FileObject,
     if (FileObject->Flags & FO_FILE_OBJECT_HAS_EXTENSION)
     {
         /* Check if caller specified to ignore access checks */
-        //if (FileObject->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK)
+        if (((PFILE_OBJECT_EXTENSION)FileObject->FileObjectExtension)->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK)
         {
             /* Don't update share access */
             return;
@@ -3607,7 +3763,7 @@ IoSetShareAccess(IN ACCESS_MASK DesiredAccess,
     if (FileObject->Flags & FO_FILE_OBJECT_HAS_EXTENSION)
     {
         /* Check if caller specified to ignore access checks */
-        //if (FileObject->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK)
+        if (((PFILE_OBJECT_EXTENSION)FileObject->FileObjectExtension)->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK)
         {
             /* Don't update share access */
             Update = FALSE;
@@ -4556,10 +4712,24 @@ NtDeleteFile(IN POBJECT_ATTRIBUTES ObjectAttributes)
                                 DELETE,
                                 &OpenPacket,
                                 &Handle);
+    if (OpenPacket.DriverCreateContext.ExtraCreateParameter != NULL)
+    {
+        FsRtlFreeExtraCreateParameterList(OpenPacket.DriverCreateContext.ExtraCreateParameter);
+    }
     if (OpenPacket.ParseCheck == FALSE) return Status;
 
     /* Retrn the Io status */
     return OpenPacket.FinalStatus;
+}
+
+PTXN_PARAMETER_BLOCK
+NTAPI
+IoGetTransactionParameterBlock(
+    _In_ PFILE_OBJECT FileObject)
+{
+    UNREFERENCED_PARAMETER(FileObject);
+
+    return NULL;
 }
 
 /* EOF */

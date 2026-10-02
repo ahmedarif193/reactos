@@ -1178,4 +1178,157 @@ NdisMQueueDpcEx(
     return ScheduledProcessors;
 }
 
+#define NDIS6_SHARED_MEMORY_SIGNATURE 'mSdN'
+
+typedef struct _NDIS6_SHARED_MEMORY
+{
+    ULONG Signature;
+    ULONG Length;
+    PVOID VirtualAddress;
+    BOOLEAN Contiguous;
+} NDIS6_SHARED_MEMORY, *PNDIS6_SHARED_MEMORY;
+
+static
+ULONG
+Ndis6DescribeSharedMemory(
+    _In_ PVOID VirtualAddress,
+    _In_ ULONG Length,
+    _Out_writes_opt_(Capacity) PSCATTER_GATHER_ELEMENT Elements,
+    _In_ ULONG Capacity)
+{
+    PUCHAR Current = VirtualAddress;
+    ULONG Remaining = Length, Count = 0, Chunk;
+    PHYSICAL_ADDRESS Address;
+
+    while (Remaining != 0)
+    {
+        Chunk = min(Remaining, PAGE_SIZE - BYTE_OFFSET(Current));
+        Address = MmGetPhysicalAddress(Current);
+        if (Count != 0 && Elements != NULL && Count <= Capacity &&
+            Elements[Count - 1].Address.QuadPart + Elements[Count - 1].Length == Address.QuadPart)
+        {
+            Elements[Count - 1].Length += Chunk;
+        }
+        else
+        {
+            if (Elements != NULL && Count < Capacity)
+            {
+                Elements[Count].Address = Address;
+                Elements[Count].Length = Chunk;
+                Elements[Count].Reserved = 0;
+            }
+            Count++;
+        }
+        Current += Chunk;
+        Remaining -= Chunk;
+    }
+    return Count;
+}
+
+NDIS_STATUS
+NTAPI
+NdisAllocateSharedMemory(
+    _In_ NDIS_HANDLE NdisHandle,
+    _Inout_ PNDIS_SHARED_MEMORY_PARAMETERS SharedMemoryParameters,
+    _Out_ PNDIS_HANDLE pAllocationHandle)
+{
+    PHYSICAL_ADDRESS Lowest, Highest, Boundary;
+    PNDIS6_SHARED_MEMORY Memory;
+    PSCATTER_GATHER_LIST List;
+    ULONG Capacity, Count;
+
+    if (pAllocationHandle == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+    *pAllocationHandle = NULL;
+
+    if (NdisHandle == NULL || SharedMemoryParameters == NULL ||
+        SharedMemoryParameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT ||
+        SharedMemoryParameters->Header.Revision < NDIS_SHARED_MEMORY_PARAMETERS_REVISION_1 ||
+        SharedMemoryParameters->Header.Size < NDIS_SIZEOF_SHARED_MEMORY_PARAMETERS_REVISION_1 ||
+        SharedMemoryParameters->Length == 0 ||
+        (SharedMemoryParameters->SGListBuffer != NULL &&
+         SharedMemoryParameters->SGListBufferLength < FIELD_OFFSET(SCATTER_GATHER_LIST, Elements)))
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    Memory = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*Memory), NDIS6_SHARED_MEMORY_SIGNATURE);
+    if (Memory == NULL)
+    {
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    Memory->Signature = NDIS6_SHARED_MEMORY_SIGNATURE;
+    Memory->Length = SharedMemoryParameters->Length;
+    Memory->Contiguous = (SharedMemoryParameters->Flags & NDIS_SHARED_MEM_PARAMETERS_CONTIGUOUS) != 0;
+    if (Memory->Contiguous)
+    {
+        Lowest.QuadPart = 0;
+        Highest.QuadPart = MAXLONGLONG;
+        Boundary.QuadPart = 0;
+        Memory->VirtualAddress = MmAllocateContiguousMemorySpecifyCache(Memory->Length, Lowest, Highest, Boundary, MmCached);
+    }
+    else
+    {
+        Memory->VirtualAddress = ExAllocatePoolWithTag(NonPagedPoolNx,
+                                                       ROUND_TO_PAGES(Memory->Length),
+                                                       NDIS6_SHARED_MEMORY_SIGNATURE);
+    }
+    if (Memory->VirtualAddress == NULL)
+    {
+        ExFreePoolWithTag(Memory, NDIS6_SHARED_MEMORY_SIGNATURE);
+        return NDIS_STATUS_RESOURCES;
+    }
+    RtlZeroMemory(Memory->VirtualAddress, Memory->Length);
+
+    List = SharedMemoryParameters->SGListBuffer;
+    if (List != NULL)
+    {
+        Capacity = (SharedMemoryParameters->SGListBufferLength - FIELD_OFFSET(SCATTER_GATHER_LIST, Elements)) /
+                   sizeof(SCATTER_GATHER_ELEMENT);
+        Count = Ndis6DescribeSharedMemory(Memory->VirtualAddress, Memory->Length, List->Elements, Capacity);
+        if (Count > Capacity)
+        {
+            NdisFreeSharedMemory(NdisHandle, Memory);
+            return NDIS_STATUS_INVALID_PARAMETER;
+        }
+        List->NumberOfElements = Count;
+        List->Reserved = 0;
+    }
+
+    SharedMemoryParameters->VirtualAddress = Memory->VirtualAddress;
+    SharedMemoryParameters->SharedMemoryHandle = Memory;
+    *pAllocationHandle = Memory;
+    return NDIS_STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+NdisFreeSharedMemory(
+    _In_ NDIS_HANDLE NdisHandle,
+    _In_ NDIS_HANDLE AllocationHandle)
+{
+    PNDIS6_SHARED_MEMORY Memory = AllocationHandle;
+
+    UNREFERENCED_PARAMETER(NdisHandle);
+
+    if (Memory == NULL || Memory->Signature != NDIS6_SHARED_MEMORY_SIGNATURE)
+    {
+        return;
+    }
+
+    Memory->Signature = 0;
+    if (Memory->Contiguous)
+    {
+        MmFreeContiguousMemory(Memory->VirtualAddress);
+    }
+    else
+    {
+        ExFreePoolWithTag(Memory->VirtualAddress, NDIS6_SHARED_MEMORY_SIGNATURE);
+    }
+    ExFreePoolWithTag(Memory, NDIS6_SHARED_MEMORY_SIGNATURE);
+}
+
 /* EOF */

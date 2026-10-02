@@ -53,4 +53,106 @@ typedef struct _BTH_DEVICE_INFO_LIST
 
 #pragma pack(pop)
 
+#if ((NTDDI_VERSION >= NTDDI_VISTA))
+
+#define BTH_IOCTL_BASE      0
+
+#define BTH_CTL(id)         CTL_CODE(FILE_DEVICE_BLUETOOTH,  \
+                                     (id), \
+                                     METHOD_BUFFERED,  \
+                                     FILE_ANY_ACCESS)
+
+#define BTH_KERNEL_CTL(id)  CTL_CODE(FILE_DEVICE_BLUETOOTH,  \
+                                     (id), \
+                                     METHOD_NEITHER,  \
+                                     FILE_ANY_ACCESS)
+
+#define IOCTL_INTERNAL_BTH_SUBMIT_BRB       BTH_KERNEL_CTL(BTH_IOCTL_BASE+0x00)
+
+#define IOCTL_INTERNAL_BTHENUM_GET_DEVINFO  BTH_KERNEL_CTL(BTH_IOCTL_BASE+0x02)
+
+#define IOCTL_BTH_SDP_CONNECT               BTH_CTL(BTH_IOCTL_BASE+0x80)
+
+#define IOCTL_BTH_SDP_DISCONNECT            BTH_CTL(BTH_IOCTL_BASE+0x81)
+
+#define IOCTL_BTH_SDP_SERVICE_ATTRIBUTE_SEARCH \
+                                            BTH_CTL(BTH_IOCTL_BASE+0x84)
+
+#define IOCTL_BTH_SDP_SUBMIT_RECORD         BTH_CTL(BTH_IOCTL_BASE+0x85)
+
+#define IOCTL_BTH_SDP_REMOVE_RECORD         BTH_CTL(BTH_IOCTL_BASE+0x86)
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define IOCTL_BTH_GET_HOST_SUPPORTED_FEATURES BTH_CTL(BTH_IOCTL_BASE+0x88)
+
+#endif
+
+#define SDP_REQUEST_TO_DEFAULT      (0)
+
+#if !defined(HANDLE_SDP_TYPE)
+
+typedef ULONGLONG HANDLE_SDP, *PHANDLE_SDP;
+
+#define HANDLE_SDP_TYPE         HANDLE_SDP
+
+#define HANDLE_SDP_FIELD_NAME   hConnection
+
+#define HANDLE_SDP_NULL     ((HANDLE_SDP)0x0)
+
+#endif
+
+#include <pshpack1.h>
+typedef struct _BTH_SDP_CONNECT
+{
+    BTH_ADDR     bthAddress;
+    ULONG       fSdpConnect;
+    HANDLE_SDP_TYPE HANDLE_SDP_FIELD_NAME;
+    UCHAR       requestTimeout;
+} BTH_SDP_CONNECT,  *PBTH_SDP_CONNECT;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _BTH_SDP_DISCONNECT
+{
+    HANDLE_SDP_TYPE HANDLE_SDP_FIELD_NAME;
+} BTH_SDP_DISCONNECT, *PBTH_SDP_DISCONNECT;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _BTH_SDP_SERVICE_ATTRIBUTE_SEARCH_REQUEST
+{
+    HANDLE_SDP_TYPE HANDLE_SDP_FIELD_NAME;
+    ULONG searchFlags;
+    SdpQueryUuid uuids[MAX_UUIDS_IN_QUERY];
+    SdpAttributeRange range[1];
+} BTH_SDP_SERVICE_ATTRIBUTE_SEARCH_REQUEST,
+  *PBTH_SDP_SERVICE_ATTRIBUTE_SEARCH_REQUEST;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _BTH_SDP_STREAM_RESPONSE
+{
+    ULONG requiredSize;
+    ULONG responseSize;
+    UCHAR response[1];
+} BTH_SDP_STREAM_RESPONSE, *PBTH_SDP_STREAM_RESPONSE;
+#include <poppack.h>
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define BTH_HOST_FEATURE_ENHANCED_RETRANSMISSION_MODE          (0x0000000000000001)
+
+#include <pshpack1.h>
+typedef struct _BTH_HOST_FEATURE_MASK
+{
+    ULONGLONG Mask;
+    ULONGLONG Reserved1;
+    ULONGLONG Reserved2;
+} BTH_HOST_FEATURE_MASK, *PBTH_HOST_FEATURE_MASK;
+#include <poppack.h>
+
+#endif
+#endif
+
 #endif /* __BTHIOCTL_H__ */

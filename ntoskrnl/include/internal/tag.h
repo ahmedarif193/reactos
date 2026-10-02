@@ -89,6 +89,7 @@
 #define TAG_REINIT              'iRoI'
 #define TAG_IOWI                'IWOI'
 #define TAG_IRP                 ' prI'
+#define TAG_IRP_EXTENSION       'xprI'
 #define TAG_IOBUF               'UBOI'
 #define TAG_IO_INTERRUPT        'nioI'
 #define TAG_MDL                 ' LDM'

@@ -186,6 +186,10 @@ set(COMPAT_RUNTIME_MODULES
     xaudio2_9
     xmllite)
 
+if(NOT EXISTS "${REACTOS_SOURCE_DIR}/submodules/mesa/include/vulkan/vulkan.h")
+    list(REMOVE_ITEM COMPAT_RUNTIME_MODULES vulkan-1)
+endif()
+
 # These targets share an output basename with a regular module. Package them
 # only under these aliases so they cannot overwrite the regular DLL.
 set(COMPAT_RUNTIME_AUXILIARY_MODULES

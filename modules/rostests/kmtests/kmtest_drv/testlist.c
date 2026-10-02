@@ -72,6 +72,7 @@ KMT_TESTFUNC Test_ExHardErrorInteractive;
 KMT_TESTFUNC Test_ExHandleTable;
 KMT_TESTFUNC Test_ExInterlocked;
 KMT_TESTFUNC Test_ExPoolBench;
+KMT_TESTFUNC Test_ExPool2;
 KMT_TESTFUNC Test_ExPools;
 KMT_TESTFUNC Test_ExCallbackExtra;
 KMT_TESTFUNC Test_ExFastMutexExtra;
@@ -215,6 +216,8 @@ KMT_TESTFUNC Test_KeDpc;
 KMT_TESTFUNC Test_KeEvent;
 KMT_TESTFUNC Test_KeFloatPointState;
 KMT_TESTFUNC Test_KeGuardedMutex;
+KMT_TESTFUNC Test_CmCallbacks;
+KMT_TESTFUNC Test_CmTransactions;
 KMT_TESTFUNC Test_CmKeyKM;
 KMT_TESTFUNC Test_EtwRegisterKM;
 KMT_TESTFUNC Test_IoBuildIoctlKM;
@@ -261,6 +264,7 @@ KMT_TESTFUNC Test_NpfsCreate;
 KMT_TESTFUNC Test_NpfsFileInfo;
 KMT_TESTFUNC Test_NpfsReadWrite;
 KMT_TESTFUNC Test_NpfsVolumeInfo;
+KMT_TESTFUNC Test_ObCallbacks;
 KMT_TESTFUNC Test_ObHandle;
 KMT_TESTFUNC Test_ObQuery;
 KMT_TESTFUNC Test_ObReference;
@@ -271,6 +275,8 @@ KMT_TESTFUNC Test_ObTypeClean;
 KMT_TESTFUNC Test_ObTypeNoClean;
 KMT_TESTFUNC Test_ObTypes;
 KMT_TESTFUNC Test_PoFxState;
+KMT_TESTFUNC Test_PoPowerLimit;
+KMT_TESTFUNC Test_TmTransactions;
 KMT_TESTFUNC Test_PoPowerSettings;
 KMT_TESTFUNC Test_PsNotify;
 KMT_TESTFUNC Test_PsQuota;
@@ -292,6 +298,11 @@ KMT_TESTFUNC Test_MmPhysical;
 KMT_TESTFUNC Test_MmPrefetchPages;
 KMT_TESTFUNC Test_MmPrivatePages;
 KMT_TESTFUNC Test_IoStackKM;
+KMT_TESTFUNC Test_IoActivityId;
+KMT_TESTFUNC Test_IoAcpiIoctl;
+KMT_TESTFUNC Test_IoStackLimits;
+KMT_TESTFUNC Test_SmcLib;
+KMT_TESTFUNC Test_SmcLibRemove;
 KMT_TESTFUNC Test_KeCriticalRegionKM;
 KMT_TESTFUNC Test_ObOpenByPointer;
 KMT_TESTFUNC Test_ObSecurityDescKM;
@@ -301,6 +312,7 @@ KMT_TESTFUNC Test_RtlGuidKM;
 KMT_TESTFUNC Test_RtlHashTableKM;
 KMT_TESTFUNC Test_RtlTimeKM;
 KMT_TESTFUNC Test_RtlGenericTableKM;
+KMT_TESTFUNC Test_RtlTableElementKM;
 KMT_TESTFUNC Test_RtlMemory;
 KMT_TESTFUNC Test_RtlRangeList;
 KMT_TESTFUNC Test_RtlCmResource;
@@ -382,6 +394,7 @@ const KMT_TEST TestList[] =
     { "ExHandleTable",                      Test_ExHandleTable },
     { "ExInterlocked",                      Test_ExInterlocked },
     { "-ExPoolBench",                       Test_ExPoolBench },
+    { "ExPool2",                            Test_ExPool2 },
     { "ExPools",                            Test_ExPools },
     { "ExLookaside",                        Test_ExLookaside },
     { "ExCallbackExtra",                    Test_ExCallbackExtra },
@@ -444,6 +457,8 @@ const KMT_TEST TestList[] =
     { "ExWddmWindow",                      Test_ExWddmWindow },
     { "IoLargeMemoryResource",              Test_IoLargeMemoryResource },
     { "IoCancelKM",                         Test_IoCancelKM },
+    { "CmCallbacks",                        Test_CmCallbacks },
+    { "CmTransactions",                     Test_CmTransactions },
     { "CmKeyKM",                            Test_CmKeyKM },
     { "EtwRegisterKM",                      Test_EtwRegisterKM },
     { "IoBuildIoctlKM",                     Test_IoBuildIoctlKM },
@@ -451,6 +466,11 @@ const KMT_TEST TestList[] =
     { "IoNullDeviceKM",                     Test_IoNullDeviceKM },
     { "IoMdl",                              Test_IoMdl },
     { "IoModern",                           Test_IoModern },
+    { "IoActivityId",                       Test_IoActivityId },
+    { "IoAcpiIoctl",                        Test_IoAcpiIoctl },
+    { "IoStackLimits",                      Test_IoStackLimits },
+    { "SmcLib",                             Test_SmcLib },
+    { "SmcLibRemove",                       Test_SmcLibRemove },
     { "IoDeviceNumaNode",                    Test_IoDeviceNumaNode },
     { "IoReportRootDevice",                 Test_IoReportRootDevice },
     { "IoVolume",                           Test_IoVolume },
@@ -552,6 +572,7 @@ const KMT_TEST TestList[] =
     { "NpfsFileInfo",                       Test_NpfsFileInfo },
     { "NpfsReadWrite",                      Test_NpfsReadWrite },
     { "NpfsVolumeInfo",                     Test_NpfsVolumeInfo },
+    { "ObCallbacks",                        Test_ObCallbacks },
     { "ObHandle",                           Test_ObHandle },
     { "ObOpenByPointer",                    Test_ObOpenByPointer },
     { "ObQuery",                            Test_ObQuery },
@@ -564,6 +585,8 @@ const KMT_TEST TestList[] =
     { "ObTypeNoClean",                      Test_ObTypeNoClean },
     { "ObTypes",                            Test_ObTypes },
     { "PoFxState",                          Test_PoFxState },
+    { "PoPowerLimit",                       Test_PoPowerLimit },
+    { "TmTransactions",                     Test_TmTransactions },
     { "PoPowerSettings",                    Test_PoPowerSettings },
     { "PsNotify",                           Test_PsNotify },
     { "PsEnergy",                           Test_PsEnergy },
@@ -591,6 +614,7 @@ const KMT_TEST TestList[] =
     { "PsSystemThread",                     Test_PsSystemThread },
     { "RtlBitmapKM",                        Test_RtlBitmapKM },
     { "RtlGenericTableKM",                  Test_RtlGenericTableKM },
+    { "RtlTableElementKM",                  Test_RtlTableElementKM },
     { "RtlGuidKM",                          Test_RtlGuidKM },
     { "RtlImageKM",                         Test_RtlImageKM },
     { "RtlRandomKM",                        Test_RtlRandomKM },

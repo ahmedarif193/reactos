@@ -3432,13 +3432,13 @@ typedef struct _KTHREAD
 
 #endif
 
-#if defined(KDPC_HAS_PROCESSOR_HISTORY) && !defined(__ASSEMBLER__)
+#if !defined(__ASSEMBLER__)
 /* Both Win11 26100 AMD64 and ARM64 PDBs give this KDPC shape. */
-C_ASSERT(sizeof(KDPC) == 0x40);
-C_ASSERT(FIELD_OFFSET(KDPC, DpcListEntry) == 0x08);
-C_ASSERT(FIELD_OFFSET(KDPC, ProcessorHistory) == 0x10);
-C_ASSERT(FIELD_OFFSET(KDPC, DeferredRoutine) == 0x18);
-C_ASSERT(FIELD_OFFSET(KDPC, DpcData) == 0x38);
+C_ASSERT(sizeof(KDPC) == 8 * sizeof(PVOID));
+C_ASSERT(FIELD_OFFSET(KDPC, DpcListEntry) == sizeof(PVOID));
+C_ASSERT(FIELD_OFFSET(KDPC, ProcessorHistory) == 2 * sizeof(PVOID));
+C_ASSERT(FIELD_OFFSET(KDPC, DeferredRoutine) == 3 * sizeof(PVOID));
+C_ASSERT(FIELD_OFFSET(KDPC, DpcData) == 7 * sizeof(PVOID));
 #endif
 
 #if defined(KERNEL_LAYOUT_WIN11_ARM64) && !defined(__ASSEMBLER__)

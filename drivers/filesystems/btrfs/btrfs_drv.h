@@ -166,10 +166,6 @@ typedef struct _FILE_ID_128 {
 #define FILE_CS_FLAG_CASE_SENSITIVE_DIR                 1
 #endif
 #else
-typedef struct _FILE_ID_128 {
-    UCHAR Identifier[16];
-} FILE_ID_128, *PFILE_ID_128;
-
 #define FILE_CS_FLAG_CASE_SENSITIVE_DIR                 1
 #endif // __REACTOS__
 

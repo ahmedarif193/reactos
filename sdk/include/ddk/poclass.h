@@ -190,6 +190,78 @@ typedef enum _THERMAL_DEVICE_INTERFACE_FLAGS {
 
 #endif /* !_WINDOWS_ */
 
+DEFINE_GUID(GUID_DEVINTERFACE_POWER_LIMIT,
+0x8f366301, 0x091e, 0x4056, 0xb9, 0x2f, 0x95, 0x8b, 0x27, 0x62, 0x5f, 0xce);
+
+#define BATTERY_UNKNOWN_CURRENT 0xFFFFFFFF
+
+#define UNKNOWN_CURRENT BATTERY_UNKNOWN_CURRENT
+
+typedef enum _BATTERY_CHARGING_SOURCE_TYPE {
+    BatteryChargingSourceType_AC = 1,
+    BatteryChargingSourceType_USB,
+    BatteryChargingSourceType_Wireless,
+    BatteryChargingSourceType_Max
+} BATTERY_CHARGING_SOURCE_TYPE, *PBATTERY_CHARGING_SOURCE_TYPE;
+
+typedef struct _BATTERY_CHARGING_SOURCE {
+    BATTERY_CHARGING_SOURCE_TYPE Type;
+    ULONG MaxCurrent;
+} BATTERY_CHARGING_SOURCE, *PBATTERY_CHARGING_SOURCE;
+
+#if !defined(_WINDOWS_)
+
+typedef
+_Function_class_(QUERY_POWER_LIMIT_ATTRIBUTES)
+NTSTATUS
+NTAPI
+QUERY_POWER_LIMIT_ATTRIBUTES (
+    _Inout_opt_ PVOID Context,
+    _In_ ULONG BufferCount,
+    _Inout_opt_ PVOID Buffer,
+    _Out_ PULONG AttributeCount
+    );
+
+typedef QUERY_POWER_LIMIT_ATTRIBUTES *PQUERY_POWER_LIMIT_ATTRIBUTES;
+
+typedef
+_Function_class_(SET_POWER_LIMIT)
+NTSTATUS
+NTAPI
+SET_POWER_LIMIT (
+    _Inout_opt_ PVOID Context,
+    _In_ ULONG ValueCount,
+    _In_ PVOID Values
+    );
+
+typedef SET_POWER_LIMIT *PSET_POWER_LIMIT;
+
+typedef
+_Function_class_(QUERY_POWER_LIMIT)
+NTSTATUS
+NTAPI
+QUERY_POWER_LIMIT (
+    _Inout_opt_ PVOID Context,
+    _In_ ULONG ValueCount,
+    _Inout_ PVOID Values
+    );
+
+typedef QUERY_POWER_LIMIT *PQUERY_POWER_LIMIT;
+
+typedef struct _POWER_LIMIT_INTERFACE {
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE    InterfaceReference;
+    PINTERFACE_DEREFERENCE  InterfaceDereference;
+    ULONG DomainCount;
+    PQUERY_POWER_LIMIT_ATTRIBUTES QueryAttributes;
+    PSET_POWER_LIMIT              SetPowerLimit;
+    PQUERY_POWER_LIMIT            QueryPowerLimit;
+} POWER_LIMIT_INTERFACE, *PPOWER_LIMIT_INTERFACE;
+
+#endif
+
 #ifdef __cplusplus
 }
 #endif

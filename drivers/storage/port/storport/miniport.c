@@ -337,7 +337,7 @@ MiniportFindAdapter(
     DPRINT1("MiniportFindAdapter(%p)\n", Miniport);
 
     /* Call the miniport HwFindAdapter routine */
-    Result = Miniport->InitData->HwFindAdapter(&Miniport->MiniportExtension->HwDeviceExtension,
+    Result = ((PHW_FIND_ADAPTER)Miniport->InitData->HwFindAdapter)(&Miniport->MiniportExtension->HwDeviceExtension,
                                                NULL,
                                                NULL,
                                                NULL,

@@ -730,4 +730,552 @@ typedef struct _GP_LOG_NCQ_COMMAND_ERROR {
 
 #define IDE_GP_LOG_SECTOR_SIZE                      0x200
 
+#define IDE_SATA_FEATURE_DEVICE_INITIATED_POWER_MANAGEMENT  0x3
+
+#define IDE_SATA_FEATURE_ASYNCHRONOUS_NOTIFICATION          0x5
+
+#define IDE_SATA_FEATURE_HYBRID_INFORMATION                 0xa
+
+#define IDE_SMART_READ_LOG                      0xD5
+
+#define IDE_DSM_FEATURE_TRIM                  0x0001
+
+#define IDE_NCQ_NON_DATA_HYBRID_DEMOTE_BY_SIZE          0x02
+
+#define IDE_NCQ_NON_DATA_HYBRID_CHANGE_BY_LBA_RANGE     0x03
+
+#define IDE_NCQ_NON_DATA_HYBRID_CONTROL                 0x04
+
+#define IDE_NCQ_SEND_HYBRID_EVICT                       0x01
+
+#include <pshpack1.h>
+typedef union _ATA_HYBRID_INFO_FIELDS {
+    struct {
+        UCHAR   HybridPriority  : 4;
+        UCHAR   Reserved0       : 1;
+        UCHAR   InfoValid       : 1;
+        UCHAR   Reserved1       : 2;
+    };
+    UCHAR   AsUchar;
+} ATA_HYBRID_INFO_FIELDS, *PATA_HYBRID_INFO_FIELDS;
+#include <poppack.h>
+
+#define IDE_GP_LOG_DIRECTORY_ADDRESS                0x00
+
+#define IDE_GP_SUMMARY_SMART_ERROR                  0x01
+
+#define IDE_GP_COMPREHENSIVE_SMART_ERROR            0x02
+
+#define IDE_GP_EXTENDED_COMPREHENSIVE_SMART_ERROR   0x03
+
+#define IDE_GP_LOG_DEVICE_STATISTICS_ADDRESS        0x04
+
+#define IDE_GP_SMART_SELF_TEST                      0x06
+
+#define IDE_GP_EXTENDED_SMART_SELF_TEST             0x07
+
+#define IDE_GP_LOG_POWER_CONDITIONS                 0x08
+
+#define IDE_GP_SELECTIVE_SELF_TEST                  0x09
+
+#define IDE_GP_DEVICE_STATISTICS_NOTIFICATION       0x0A
+
+#define IDE_GP_LPS_MISALIGNMENT                     0x0D
+
+#define IDE_GP_LOG_NCQ_NON_DATA_ADDRESS             0x12
+
+#define IDE_GP_LOG_NCQ_SEND_RECEIVE_ADDRESS         0x13
+
+#define IDE_GP_LOG_HYBRID_INFO_ADDRESS              0x14
+
+#define IDE_GP_LOG_WRITE_STREAM_ERROR               0x21
+
+#define IDE_GP_LOG_READ_STREAM_ERROR                0x22
+
+#define IDE_GP_LOG_CURRENT_DEVICE_INTERNAL_STATUS   0x24
+
+#define IDE_GP_LOG_SAVED_DEVICE_INTERNAL_STATUS     0x25
+
+#define IDE_GP_LOG_IDENTIFY_DEVICE_DATA_ADDRESS     0x30
+
+#define IDE_GP_LOG_SCT_COMMAND_STATUS               0xE0
+
+#define IDE_GP_LOG_SCT_DATA_TRANSFER                0xE1
+
+#define IDE_GP_LOG_VERSION                          0x0001
+
+#define IDE_GP_LOG_SUPPORTED_PAGES                  0x00
+
+#define IDE_GP_LOG_IDENTIFY_DEVICE_DATA_SUPPORTED_CAPABILITIES_PAGE     0x03
+
+#define IDE_GP_LOG_IDENTIFY_DEVICE_DATA_SATA_PAGE                       0x08
+
+#include <pshpack1.h>
+typedef struct _IDENTIFY_DEVICE_DATA_LOG_PAGE_HEADER {
+    ULONGLONG   RevisionNumber : 16;
+    ULONGLONG   PageNumber : 8;
+    ULONGLONG   Reserved : 39;
+    ULONGLONG   Valid : 1;
+} IDENTIFY_DEVICE_DATA_LOG_PAGE_HEADER, *PIDENTIFY_DEVICE_DATA_LOG_PAGE_HEADER;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _IDENTIFY_DEVICE_DATA_LOG_PAGE_SUPPORTED_CAPABILITIES {
+    IDENTIFY_DEVICE_DATA_LOG_PAGE_HEADER Header;
+    struct {
+        ULONGLONG WRV : 1;
+        ULONGLONG WriteUncorrectable : 1;
+        ULONGLONG GplDma : 1;
+        ULONGLONG DmMode3 : 1;
+        ULONGLONG FreeFall : 1;
+        ULONGLONG SenseData : 1;
+        ULONGLONG EPC : 1;
+        ULONGLONG SmartErrorLogging : 1;
+        ULONGLONG SmartSelfTest : 1;
+        ULONGLONG Reserved9 : 1;
+        ULONGLONG Streaming : 1;
+        ULONGLONG GPL : 1;
+        ULONGLONG WriteFuaExt : 1;
+        ULONGLONG Unload : 1;
+        ULONGLONG DownloadMicrocode : 1;
+        ULONGLONG Reserved15ForCFA : 1;
+        ULONGLONG APM : 1;
+        ULONGLONG PUIS : 1;
+        ULONGLONG SpinUp : 1;
+        ULONGLONG Reserved19 : 1;
+        ULONGLONG Cmd48Bit : 1;
+        ULONGLONG Reserved21 : 1;
+        ULONGLONG FlushCacheExt : 1;
+        ULONGLONG Smart : 1;
+        ULONGLONG VolatileWriteCache : 1;
+        ULONGLONG ReadLookahead : 1;
+        ULONGLONG Reserved26 : 1;
+        ULONGLONG WriteBuffer : 1;
+        ULONGLONG ReadBuffer : 1;
+        ULONGLONG NOP : 1;
+        ULONGLONG Reserved30 : 1;
+        ULONGLONG RZAT : 1;
+        ULONGLONG Cmd28bit : 1;
+        ULONGLONG DownloadMicrocodeDma : 1;
+        ULONGLONG Reserved34 : 1;
+        ULONGLONG WriteBufferDma : 1;
+        ULONGLONG ReadBufferDma : 1;
+        ULONGLONG Reserved37 : 1;
+        ULONGLONG LpsMisalignmentReporting : 1;
+        ULONGLONG DRAT : 1;
+        ULONGLONG Reserved40ForCFA : 1;
+        ULONGLONG AmaxAddr : 1;
+        ULONGLONG SetEpcPowerSource : 1;
+        ULONGLONG LowPowerStandby : 1;
+        ULONGLONG DSN : 1;
+        ULONGLONG RequestSenseDeviceFault: 1;
+        ULONGLONG Reserved : 17;
+        ULONGLONG Valid : 1;
+    } SupportedCapabilities;
+    struct {
+        ULONGLONG DmMinTransferSize : 16;
+        ULONGLONG DmMaxTransferSize : 16;
+        ULONGLONG DmOffsetsImmediateSupported : 1;
+        ULONGLONG DmImmediateSupported : 1;
+        ULONGLONG DmOffsetsDeferredSupported : 1;
+        ULONGLONG Reserved : 28;
+        ULONGLONG Valid : 1;
+    } DownloadMicrocodeCapabilities;
+    struct {
+        ULONGLONG Rate : 16;
+        ULONGLONG Reserved : 47;
+        ULONGLONG Valid : 1;
+    } NominalMediaRotationRate;
+    struct {
+        ULONGLONG Factor : 4;
+        ULONGLONG Reserved : 59;
+        ULONGLONG Valid : 1;
+    } NominalFormFactor;
+    struct {
+        ULONGLONG Count : 32;
+        ULONGLONG Reserved : 31;
+        ULONGLONG Valid : 1;
+    } WRVSectorCountMode3;
+    struct {
+        ULONGLONG Count : 32;
+        ULONGLONG Reserved : 31;
+        ULONGLONG Valid : 1;
+    } WRVSectorCountMode2;
+    struct {
+        ULONGLONG Name;
+        ULONGLONG Reserved : 63;
+        ULONGLONG Valid : 1;
+    } WorldWideName;
+    struct {
+        ULONGLONG TrimSupported : 1;
+        ULONGLONG Reserved : 62;
+        ULONGLONG Valid : 1;
+    } DataSetManagement;
+    struct {
+        ULONGLONG UtilizationA : 32;
+        ULONGLONG UtilizationB : 32;
+        ULONGLONG Reserved0 : 32;
+        ULONGLONG UtilizationInterval : 8;
+        ULONGLONG UtilizationUnit : 8;
+        ULONGLONG UtilizationType : 8;
+        ULONGLONG Reserved1 : 7;
+        ULONGLONG Valid : 1;
+    } UtilizationPerUnitTime;
+    struct {
+        ULONGLONG DateTimeRateBasisSupported : 1;
+        ULONGLONG Reserved0 : 3;
+        ULONGLONG PowerOnHoursRateBasisSupported : 1;
+        ULONGLONG Reserved1 : 3;
+        ULONGLONG SincePowerOnRateBasisSupported : 1;
+        ULONGLONG Reserved2 : 14;
+        ULONGLONG SettingRateBasisSupported : 1;
+        ULONGLONG Reserved3 : 39;
+        ULONGLONG Valid : 1;
+    } UtilizationUsageRateSupport;
+    struct {
+        ULONGLONG Zoned : 2;
+        ULONGLONG Reserved : 61;
+        ULONGLONG Valid : 1;
+    } ZonedCapabilities;
+    struct {
+        ULONGLONG ReportZonesExtSupported : 1;
+        ULONGLONG NonDataOpenZoneExtSupported : 1;
+        ULONGLONG NonDataCloseZoneExtSupported : 1;
+        ULONGLONG NonDataFinishZoneExtSupported : 1;
+        ULONGLONG NonDataResetWritePointersExtSupported : 1;
+        ULONGLONG Reserved : 58;
+        ULONGLONG Valid : 1;
+    } SupportedZacCapabilities;
+    UCHAR  Reserved[392];
+} IDENTIFY_DEVICE_DATA_LOG_PAGE_SUPPORTED_CAPABILITIES, *PIDENTIFY_DEVICE_DATA_LOG_PAGE_SUPPORTED_CAPABILITIES;
+#include <poppack.h>
+
+#define CURRENT_DEVICE_INTERNAL_STATUS_DATA_LOG_ADDRESS 0x24
+
+#include <pshpack1.h>
+typedef struct _CURRENT_DEVICE_INTERNAL_STATUS_LOG {
+    UCHAR   LogAddress;
+    UCHAR   Reserved0[3];
+    ULONG   OrganizationID;
+    USHORT  Area1LastLogPage;
+    USHORT  Area2LastLogPage;
+    USHORT  Area3LastLogPage;
+    UCHAR   Reserved2[368];
+    UCHAR   SavedDataAvailable;
+    UCHAR   SavedDataGenerationNumber;
+    UCHAR   ReasonIdentifier[128];
+} CURRENT_DEVICE_INTERNAL_STATUS_LOG, *PCURRENT_DEVICE_INTERNAL_STATUS_LOG;
+#include <poppack.h>
+
+#define IDE_GP_LOG_DEVICE_STATISTICS_GENERAL_PAGE           0x01
+
+#define IDE_GP_LOG_DEVICE_STATISTICS_TEMPERATURE_PAGE       0x05
+
+#include <pshpack1.h>
+typedef struct _DEVICE_STATISTICS_LOG_PAGE_HEADER {
+    ULONGLONG   RevisionNumber : 16;
+    ULONGLONG   PageNumber : 8;
+    ULONGLONG   Reserved : 40;
+} DEVICE_STATISTICS_LOG_PAGE_HEADER, *PDEVICE_STATISTICS_LOG_PAGE_HEADER;
+#include <poppack.h>
+
+#define GP_LOG_DEVICE_STATISTICS_FLAGS \
+    ULONGLONG ReservedFlags : 3; \
+    ULONGLONG MonitoredConditionMet : 1; \
+    ULONGLONG StatisticsSupportsDsn : 1; \
+    ULONGLONG Normalized    : 1; \
+    ULONGLONG ValidValue    : 1; \
+    ULONGLONG Supported     : 1
+
+#include <pshpack1.h>
+typedef struct _GP_LOG_GENERAL_STATISTICS {
+    DEVICE_STATISTICS_LOG_PAGE_HEADER Header;
+    struct {
+        ULONGLONG Count : 32;
+        ULONGLONG Reserved : 24;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } LifeTimePoweronResets;
+    struct {
+        ULONGLONG Count : 32;
+        ULONGLONG Reserved : 24;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } PoweronHours;
+    struct {
+        ULONGLONG Count : 48;
+        ULONGLONG Reserved : 8;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } LogicalSectorsWritten;
+    struct {
+        ULONGLONG Count : 48;
+        ULONGLONG Reserved : 8;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } WriteCommandCount;
+    struct {
+        ULONGLONG Count : 48;
+        ULONGLONG Reserved : 8;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } LogicalSectorsRead;
+    struct {
+        ULONGLONG Count : 48;
+        ULONGLONG Reserved : 8;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } ReadCommandCount;
+    struct {
+        ULONGLONG TimeStamp : 48;
+        ULONGLONG Reserved : 8;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } DateAndTime;
+    struct {
+        ULONGLONG Count : 32;
+        ULONGLONG Reserved : 24;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } PendingErrorCount;
+    struct {
+        ULONGLONG Value : 16;
+        ULONGLONG Reserved : 40;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } WorkloadUtilizaton;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved0 : 28;
+        ULONGLONG RateBasis : 4;
+        ULONGLONG RateValidity : 8;
+        ULONGLONG Reserved1 : 8;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } UtilizationUsageRate;
+    UCHAR Reserved[424];
+} GP_LOG_GENERAL_STATISTICS, *PGP_LOG_GENERAL_STATISTICS;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _GP_LOG_TEMPERATURE_STATISTICS {
+    DEVICE_STATISTICS_LOG_PAGE_HEADER Header;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } CurrentTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } AverageShortTermTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } AverageLongTermTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } HighestTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } LowestTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } HighestAverageShortTermTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } LowestAverageShortTermTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } HighstAverageLongTermTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } LowestAverageLongTermTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } TimeInOverTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } SpecifiedMaximumOperatingTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } TimeInUnderTemperature;
+    struct {
+        ULONGLONG Value : 8;
+        ULONGLONG Reserved : 48;
+        GP_LOG_DEVICE_STATISTICS_FLAGS;
+    } SpecifiedMinimumOperatingTemperature;
+    UCHAR Reserved[400];
+} GP_LOG_TEMPERATURE_STATISTICS, *PGP_LOG_TEMPERATURE_STATISTICS;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _GP_LOG_NCQ_NON_DATA {
+    struct {
+        ULONG   AbortNcq            : 1;
+        ULONG   AbortAll            : 1;
+        ULONG   AbortStreaming      : 1;
+        ULONG   AbortNonStreaming   : 1;
+        ULONG   AbortSelectedTTag   : 1;
+        ULONG   Reserved            : 27;
+    } SubCmd0;
+    struct {
+        ULONG   DeadlineHandling        : 1;
+        ULONG   WriteDataNotContinue    : 1;
+        ULONG   ReadDataNotContinue     : 1;
+        ULONG   Reserved                : 29;
+    } SubCmd1;
+    struct {
+        ULONG   HybridDemoteBySize  : 1;
+        ULONG   Reserved            : 31;
+    } SubCmd2;
+    struct {
+        ULONG   HybridChangeByLbaRange  : 1;
+        ULONG   Reserved                : 31;
+    } SubCmd3;
+    struct {
+        ULONG   HybridControl   : 1;
+        ULONG   Reserved        : 31;
+    } SubCmd4;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmd5;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmd6;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmd7;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmd8;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmd9;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmdA;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmdB;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmdC;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmdD;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmdE;
+    struct {
+        ULONG   Reserved        : 32;
+    } SubCmdF;
+    ULONG   Reserved[112];
+} GP_LOG_NCQ_NON_DATA, *PGP_LOG_NCQ_NON_DATA;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _GP_LOG_NCQ_SEND_RECEIVE {
+    struct {
+        ULONG   DataSetManagement   : 1;
+        ULONG   HybridEvict         : 1;
+        ULONG   Reserved            : 30;
+    } SubCmd;
+    struct {
+        ULONG   Trim        : 1;
+        ULONG   Reserved    : 31;
+    } DataSetManagement;
+    ULONG   Reserved[126];
+} GP_LOG_NCQ_SEND_RECEIVE, *PGP_LOG_NCQ_SEND_RECEIVE;
+#include <poppack.h>
+
+#define HYBRID_INFORMATION_DISABLED             0x00
+
+#define HYBRID_INFORMATION_DISABLE_IN_PROCESS   0x80
+
+#define HYBRID_INFORMATION_ENABLED              0xFF
+
+#include <pshpack1.h>
+typedef struct _GP_LOG_HYBRID_INFORMATION_HEADER {
+    USHORT  HybridInfoDescrCount        : 4;
+    USHORT  Reserved0                   : 12;
+    UCHAR   Enabled;
+    UCHAR   HybridHealth;
+    UCHAR   DirtyLowThreshold;
+    UCHAR   DirtyHighThreshold;
+    UCHAR   OptimalWriteGranularity;
+    UCHAR   MaximumHybridPriorityLevel  : 4;
+    UCHAR   Reserved1                   : 4;
+    UCHAR   PowerCondidtion;
+    UCHAR   CachingMediumEnabled ;
+    struct {
+        UCHAR   MaximumPriorityBehavior : 1;
+        UCHAR   SupportCacheBehavior    : 1;
+        UCHAR   Reserved                : 6;
+    } SupportedOptions;
+    UCHAR   Reserved2;
+    ULONG       TimeSinceEnabled;
+    ULONGLONG   NVMSize;
+    ULONGLONG   EnableCount;
+    USHORT  MaximumEvictionCommands : 5;
+    USHORT  Reserved3               : 11;
+    USHORT  MaximumEvictionDataBlocks;
+    UCHAR   Reserved[28];
+} GP_LOG_HYBRID_INFORMATION_HEADER, *PGP_LOG_HYBRID_INFORMATION_HEADER;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _GP_LOG_HYBRID_INFORMATION_DESCRIPTOR {
+    UCHAR   HybridPriority;
+    UCHAR   ConsumedNVMSizeFraction;
+    UCHAR   ConsumedMappingResourcesFraction;
+    UCHAR   ConsumedNVMSizeForDirtyDataFraction;
+    UCHAR   ConsumedMappingResourcesForDirtyDataFraction;
+    UCHAR   Reserved[11];
+} GP_LOG_HYBRID_INFORMATION_DESCRIPTOR, *PGP_LOG_HYBRID_INFORMATION_DESCRIPTOR;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _GP_LOG_HYBRID_INFORMATION {
+    GP_LOG_HYBRID_INFORMATION_HEADER        Header;
+    GP_LOG_HYBRID_INFORMATION_DESCRIPTOR    Descriptor[0];
+} GP_LOG_HYBRID_INFORMATION, *PGP_LOG_HYBRID_INFORMATION;
+#include <poppack.h>
+
+#define ATA_DEVICE_SIGNATURE_ATA                0x00000101
+
+#define ATA_DEVICE_SIGNATURE_ATAPI              0xEB140101
+
+#include <pshpack1.h>
+typedef struct _ATA_PHYSICAL_ELEMENT_STATUS_DESCRIPTOR {
+    UCHAR Reserved1[4];
+    ULONG ElementIdentifier;
+    UCHAR Reserved2[6];
+    UCHAR PhysicalElementType;
+    UCHAR PhysicalElementHealth;
+    ULONGLONG AssociatedCapacity;
+    UCHAR Reserved3[8];
+} ATA_PHYSICAL_ELEMENT_STATUS_DESCRIPTOR, *PATA_PHYSICAL_ELEMENT_STATUS_DESCRIPTOR;
+#include <poppack.h>
+
+#include <pshpack1.h>
+typedef struct _ATA_GET_PHYSICAL_ELEMENT_STATUS_PARAMETER_DATA {
+    ULONG NumberOfDescriptors;
+    ULONG NumberOfDescriptorsReturned;
+    ULONG ElementIdentifierBeingDepoped;
+    UCHAR Reserved[20];
+    ATA_PHYSICAL_ELEMENT_STATUS_DESCRIPTOR Descriptors[ANYSIZE_ARRAY];
+} ATA_GET_PHYSICAL_ELEMENT_STATUS_PARAMETER_DATA, *PATA_GET_PHYSICAL_ELEMENT_STATUS_PARAMETER_DATA;
+#include <poppack.h>
+
 #endif

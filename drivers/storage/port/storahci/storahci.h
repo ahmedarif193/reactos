@@ -633,7 +633,7 @@ VOID AhciProcessSrb(__in PAHCI_PORT_EXTENSION PortExtension, __in PSCSI_REQUEST_
 
 VOID AhciInterruptHandler(__in PAHCI_PORT_EXTENSION PortExtension);
 
-VOID AhciErrorRecoveryDpcRoutine(__in PSTOR_DPC Dpc, __in PVOID HwDeviceExtension, __in PVOID SystemArgument1, __in PVOID SystemArgument2);
+VOID NTAPI AhciErrorRecoveryDpcRoutine(__in PSTOR_DPC Dpc, __in PVOID HwDeviceExtension, __in PVOID SystemArgument1, __in PVOID SystemArgument2);
 
 VOID NTAPI AhciRecoveryTimer(__in PVOID DeviceExtension);
 

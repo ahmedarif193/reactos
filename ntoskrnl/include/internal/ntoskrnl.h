@@ -145,6 +145,7 @@
 #include "io.h"
 #include "po.h"
 #include "se.h"
+#include "tm.h"
 #include "ldr.h"
 #ifndef _WINKD_
 #include "kd.h"

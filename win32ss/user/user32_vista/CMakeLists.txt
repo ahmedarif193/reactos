@@ -19,7 +19,7 @@ list(APPEND SOURCE
 # These are just for Vista+ support
 add_library(user32_optional_vista
             ${VISTA_SOURCE})
-if(ARCH STREQUAL "arm64" AND NOT ARM64EC_RUNTIME)
+if(NOT ARM64EC_RUNTIME)
     target_link_libraries(user32_optional_vista wine)
 else()
     target_link_libraries(user32_optional_vista wine win32ksys)
@@ -33,7 +33,7 @@ endif()
 # These are required for WINE imports
 add_library(user32_vista_static
             ${SOURCE})
-if(NOT (ARCH STREQUAL "arm64" AND NOT ARM64EC_RUNTIME))
+if(ARM64EC_RUNTIME)
     target_link_libraries(user32_vista_static win32ksys)
 endif()
 add_dependencies(user32_vista_static psdk)

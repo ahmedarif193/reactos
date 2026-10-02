@@ -725,6 +725,7 @@ $if (_WDMDDK_)
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSYSAPI
 NTSTATUS
+NTAPI
 ZwCreateKeyTransacted(
   _Out_ PHANDLE KeyHandle,
   _In_ ACCESS_MASK DesiredAccess,

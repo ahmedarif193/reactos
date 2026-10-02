@@ -121,6 +121,36 @@ WmiFireEvent(
 
 #endif /* (NTDDI_VERSION >= NTDDI_WIN2K) */
 
+_Function_class_(WMI_QUERY_REGINFO_CALLBACK)
+_IRQL_requires_same_
+_Must_inspect_result_
+typedef
+NTSTATUS
+WMI_QUERY_REGINFO_CALLBACK (
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PULONG RegFlags,
+    _Inout_ PUNICODE_STRING InstanceName,
+    _Outptr_result_maybenull_ PUNICODE_STRING *RegistryPath,
+    _Inout_ PUNICODE_STRING MofResourceName,
+    _Outptr_result_maybenull_ PDEVICE_OBJECT *Pdo
+    );
+
+_Function_class_(WMI_QUERY_DATABLOCK_CALLBACK)
+_IRQL_requires_same_
+_Must_inspect_result_
+typedef
+NTSTATUS
+WMI_QUERY_DATABLOCK_CALLBACK (
+    _Inout_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ ULONG GuidIndex,
+    _In_ ULONG InstanceIndex,
+    _In_ ULONG InstanceCount,
+    _Out_writes_opt_(InstanceCount) PULONG InstanceLengthArray,
+    _In_ ULONG BufferAvail,
+    _Out_writes_bytes_opt_(BufferAvail) PUCHAR Buffer
+    );
+
 #ifdef __cplusplus
 }
 #endif

@@ -23,6 +23,10 @@
 #ifndef __WINE_MMREG_H
 #define __WINE_MMREG_H
 
+#ifndef _INC_MMREG
+#define _INC_MMREG 158
+#endif
+
 #pragma pack(push,1)
 
 /***********************************************************************

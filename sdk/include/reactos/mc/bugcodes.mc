@@ -1762,6 +1762,14 @@ Language=English
 The display driver failed to recover from a timeout.
 .
 
+MessageId=0x121
+Severity=Success
+Facility=System
+SymbolicName=DRIVER_VIOLATION
+Language=English
+A driver has caused a violation.
+.
+
 MessageId=0x141
 Severity=Success
 Facility=System

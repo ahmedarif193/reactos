@@ -164,6 +164,13 @@ elseif(_REACTOS_KD_DEBUGGER STREQUAL "EXTERNAL")
     endif()
 endif()
 
+if(KDBG AND _REACTOS_KD_DEBUGGER STREQUAL "AUTO" AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64") AND
+   NOT EXISTS "${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec/External/zydis/dependencies/zycore/src/API/Memory.c")
+    message(STATUS "KDBG: the fex-arm64ec feed is not checked out; building without the integrated debugger. "
+        "Run scripts/feeds update fex-arm64ec to build it.")
+    set(KDBG FALSE)
+endif()
+
 if(GDB)
     if(NOT (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64"))
         message(FATAL_ERROR "KDGDB is only supported on i386, amd64 and arm64")
@@ -228,9 +235,9 @@ cmake_dependent_option(ENABLE_FFMPEG
                        "Build the LGPL FFmpeg libraries behind the H.264 and AAC Media Foundation decoders" OFF
                        "ARCH STREQUAL i386 OR ARCH STREQUAL amd64 OR ARCH STREQUAL arm64;CMAKE_C_COMPILER_ID STREQUAL Clang;NOT MSVC" OFF)
 
-set(_wow64_default OFF)
-if(ARCH STREQUAL "arm64" AND NOT ARM64EC_RUNTIME)
-    set(_wow64_default ON)
+set(_wow64_default ON)
+if(ARM64EC_RUNTIME)
+    set(_wow64_default OFF)
 endif()
 # TODO(riscv64): add riscv64 to the ENABLE_WOW64 host list once an x86 CPU backend exists
 cmake_dependent_option(ENABLE_WOW64 "Whether to build the 32-bit WoW64 subsystem." ${_wow64_default}

@@ -275,6 +275,7 @@ TCPAcceptEventHandler(void *arg, PTCP_PCB newpcb)
             UnlockObject(Bucket->AssociatedEndpoint);
 
             LibTCPAccept(newpcb, (PTCP_PCB)Connection->SocketContext, Bucket->AssociatedEndpoint);
+            LibTCPWfpEstablish(Bucket->AssociatedEndpoint, newpcb, FALSE);
         }
 
         DereferenceObject(Bucket->AssociatedEndpoint);

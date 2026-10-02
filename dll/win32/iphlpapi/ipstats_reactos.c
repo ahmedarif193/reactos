@@ -555,16 +555,20 @@ RouteTable *getRouteTable(void)
 
     for (i = 0; routesAdded < out_route_table->numRoutes; i++) {
         int j;
-        IPRouteEntry *route_set;
+        IPRouteEntry *route_set = NULL;
 
-        getNthIpEntity(tcpFile, i, &ent);
+        if (!NT_SUCCESS(getNthIpEntity(tcpFile, i, &ent)))
+            break;
 
-        tdiGetRoutesForIpEntity(tcpFile, &ent, &route_set, &numRoutes);
-        if (!route_set) {
+        status = tdiGetRoutesForIpEntity(tcpFile, &ent, &route_set, &numRoutes);
+        if (!NT_SUCCESS(status) || !route_set) {
             closeTcpFile(tcpFile);
             HeapFree(GetProcessHeap(), 0, out_route_table);
             return 0;
         }
+
+        if (numRoutes > out_route_table->numRoutes - routesAdded)
+            numRoutes = out_route_table->numRoutes - routesAdded;
 
         TRACE("%lu routes in instance %d\n", numRoutes, i);
 #if 0
@@ -591,6 +595,8 @@ RouteTable *getRouteTable(void)
 
         routesAdded += numRoutes;
     }
+
+    out_route_table->numRoutes = routesAdded;
 
     closeTcpFile(tcpFile);
     TRACE("status = 0x%08lx, out_route_table = 0x%p\n", status, out_route_table);
@@ -690,7 +696,7 @@ PMIB_IPNETTABLE getArpTable(void)
                 &returnSize);
 
             if (status == STATUS_SUCCESS) {
-                for (TmpIdx = 0; TmpIdx < returnSize; TmpIdx++, CurrIdx++)
+                for (TmpIdx = 0; TmpIdx < returnSize && CurrIdx < totalNumber; TmpIdx++, CurrIdx++)
                     IpArpTable->table[CurrIdx] = AdapterArpTable[TmpIdx];
                 tdiFreeThingSet(AdapterArpTable);
             }

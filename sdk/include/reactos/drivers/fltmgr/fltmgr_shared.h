@@ -27,18 +27,8 @@ typedef struct _FILTER_NAME
 
 typedef struct _FILTER_PORT_DATA
 {
-    PUNICODE_STRING PortName;
-    PUNICODE_STRING64 PortName64;
+    USHORT PortNameLength;
     USHORT ContextSize;
-    UCHAR Reserved[6];
+    WCHAR PortName[ANYSIZE_ARRAY];
 
 } FILTER_PORT_DATA, *PFILTER_PORT_DATA;
-
-typedef struct _FILTER_PORT_DATA32
-{
-    ULONG PortName;
-    ULONG PortName64;
-    USHORT ContextSize;
-    UCHAR Reserved[6];
-
-} FILTER_PORT_DATA32, *PFILTER_PORT_DATA32;

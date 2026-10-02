@@ -13,6 +13,7 @@ add_subdirectory(ntos_io)
 add_subdirectory(ntos_mm)
 add_subdirectory(ntos_po)
 add_subdirectory(tcpip)
+add_subdirectory(wfp)
 
 list(APPEND COMMON_SOURCE
     example/GuardedMemory.c
@@ -117,8 +118,10 @@ list(APPEND KMTEST_DRV_SOURCE
     npfs/NpfsReadWrite.c
     npfs/NpfsVolumeInfo.c
     novp_fsrtl/FsRtlRemoveDotsFromPath.c
+    ntos_cm/CmCallbacks.c
     ntos_cm/CmKeyKM.c
     ntos_cm/CmSecurity.c
+    ntos_cm/CmTransactions.c
     ntos_etw/EtwRegisterKM.c
     ntos_ex/ExCallback.c
     ntos_ex/ExCallbackExtra.c
@@ -131,6 +134,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExLookaside.c
     ntos_ex/ExPoolExtra.c
     ntos_ex/ExPoolBench.c
+    ntos_ex/ExPool2.c
     ntos_ex/ExPools.c
     ntos_ex/ExPushLock.c
     ntos_ex/ExResource.c
@@ -166,6 +170,9 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoIrp.c
     ntos_io/IoWaitCompletionPacket.c
     ntos_io/IoStackKM.c
+    ntos_io/IoActivityId.c
+    ntos_io/IoAcpiIoctl.c
+    ntos_io/IoStackLimits.c
     ntos_io/IoMdl.c
     ntos_io/IoModern.c
     ntos_io/IoNullDeviceKM.c
@@ -219,6 +226,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_zw/ZwSystemInfoKM.c
     ntos_mm/ZwCreateSection.c
     ntos_mm/ZwMapViewOfSection.c
+    ntos_ob/ObCallbacks.c
     ntos_ob/ObHandle.c
     ntos_ob/ObOpenByPointer.c
     ntos_ob/ObQuery.c
@@ -229,8 +237,10 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ob/ObType.cpp
     ntos_ob/ObTypes.cpp
     ntos_ob/ObWait.c
+    smclib/SmcLib.c
     ntos_po/PoFxState.c
     ntos_po/PoFxState_pnp.c
+    ntos_po/PoPowerLimit.c
     ntos_po/PoPowerSettings.c
     ntos_ps/PsNotify.c
     ntos_ps/PsNotifyKM.c
@@ -247,9 +257,11 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_se/SeLogonSession.c
     ntos_se/SeQueryInfoToken.c
     ntos_se/SeTokenFiltering.c
+    ntos_tm/TmTransactions.c
     rtl/RtlBitmapKM.c
     rtl/RtlAtomEx.c
     rtl/RtlGenericTableKM.c
+    rtl/RtlTableElementKM.c
     rtl/RtlGuidKM.c
     rtl/RtlImageKM.c
     rtl/RtlHashTableKM.c
@@ -400,7 +412,7 @@ else()
     target_link_options(kmtest_drv PRIVATE -Wl,--forceinteg)
 endif()
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp poguid wdmguid ${PSEH_LIB})
-add_importlibs(kmtest_drv ksecdd ndis ntoskrnl hal)
+add_importlibs(kmtest_drv ksecdd ndis smclib ntoskrnl hal)
 if(REACTOS_USE_WDDM)
     add_importlibs(kmtest_drv dxgkrnl dxgmms2)
 endif()
@@ -450,6 +462,9 @@ list(APPEND KMTEST_SOURCE
 
     example/Example_user.c
 
+    fltmgr/fltmgr_io/fltmgr_io_user.c
+    fltmgr/fltmgr_scan/fltmgr_scan_user.c
+    fltmgr/fltmgr_tx/fltmgr_tx_user.c
     fltmgr/fltmgr_load/fltmgr_user.c
     fltmgr/fltmgr_register/fltmgr_reg_user.c
 
@@ -474,6 +489,9 @@ list(APPEND KMTEST_SOURCE
     ntos_po/PoIrp_user.c
     ntos_po/PoFxState_user.c
     tcpip/TcpIp_user.c
+    wfp/wfp_tcp/wfp_tcp_user.c
+    wfp/wfp_udp/wfp_udp_user.c
+    wfp/wfp_user/wfp_user_user.c
     ${COMMON_SOURCE}
 
     kmtest/kmtest.rc)
@@ -483,7 +501,7 @@ set_module_type(kmtest win32cui)
 target_link_libraries(kmtest ${PSEH_LIB})
 # kmtest/filter.c resolves fltlib.dll at runtime so kmtest still starts on
 # NT 5.x systems without Filter Manager.
-add_importlibs(kmtest advapi32 ws2_32 setupapi newdev msvcrt kernel32 ntdll)
+add_importlibs(kmtest advapi32 ws2_32 setupapi newdev fwpuclnt user32 msvcrt kernel32 ntdll)
 target_compile_definitions(kmtest PRIVATE KMT_USER_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest include/kmt_test.h)
 add_rostests_file(TARGET kmtest)
@@ -500,6 +518,7 @@ add_dependencies(kmtest_drivers
     kmtest_drv
     example_drv
     FltMgrLoad_drv
+    fltmgrio_drv
     fltmgr_create
     fltmgrreg_drv
     hidp_drv

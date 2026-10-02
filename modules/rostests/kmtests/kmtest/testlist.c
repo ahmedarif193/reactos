@@ -15,6 +15,9 @@ KMT_TESTFUNC Test_CcSetFileSizes;
 KMT_TESTFUNC Test_Example;
 KMT_TESTFUNC Test_FileAttributes;
 KMT_TESTFUNC Test_FindFile;
+KMT_TESTFUNC Test_FltMgrIo;
+KMT_TESTFUNC Test_FltMgrScan;
+KMT_TESTFUNC Test_FltMgrTx;
 KMT_TESTFUNC Test_FltMgrLoad;
 KMT_TESTFUNC Test_FltMgrReg;
 KMT_TESTFUNC Test_HidPDescription;
@@ -45,6 +48,9 @@ KMT_TESTFUNC Test_RtlUnicodeString;
 KMT_TESTFUNC Test_TcpIpIoctl;
 KMT_TESTFUNC Test_TcpIpTdi;
 KMT_TESTFUNC Test_TcpIpConnect;
+KMT_TESTFUNC Test_WfpTcp;
+KMT_TESTFUNC Test_WfpUdp;
+KMT_TESTFUNC Test_WfpUser;
 
 /* tests with a leading '-' will not be listed */
 const KMT_TEST TestList[] =
@@ -58,6 +64,9 @@ const KMT_TEST TestList[] =
     { "-Example",                     Test_Example },
     { "FileAttributes",               Test_FileAttributes },
     { "FindFile",                     Test_FindFile },
+    { "FltMgrIo",                     Test_FltMgrIo },
+    { "FltMgrScan",                   Test_FltMgrScan },
+    { "FltMgrTx",                     Test_FltMgrTx },
     { "-FltMgrLoad",                  Test_FltMgrLoad }, // TODO: WIP/untested/crashes.
     { "-FltMgrReg",                   Test_FltMgrReg }, // TODO: WIP/untested/crashes.
     { "HidPDescription",              Test_HidPDescription },
@@ -86,6 +95,9 @@ const KMT_TEST TestList[] =
     { "RtlUnicodeString",             Test_RtlUnicodeString },
     { "TcpIpTdi",                     Test_TcpIpTdi },
     { "TcpIpConnect",                 Test_TcpIpConnect },
+    { "WfpTcp",                       Test_WfpTcp },
+    { "WfpUdp",                       Test_WfpUdp },
+    { "WfpUser",                      Test_WfpUser },
 #ifdef _M_AMD64
     { "RtlCaptureContextUM",          Test_RtlCaptureContext },
 #endif

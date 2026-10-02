@@ -13,7 +13,7 @@
 #include <specstrings.h>
 #endif
 
-//#include "sdv_driverspecs.h"
+#include "sdv_driverspecs.h"
 #include <concurrencysal.h>
 
 #ifdef _PREFAST_

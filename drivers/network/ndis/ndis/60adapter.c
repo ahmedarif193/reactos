@@ -125,6 +125,109 @@ Ndis6AllocateInterfaceIdentity(
     Ext->NetLuid.Info.NetLuidIndex = (ULONG64)(ULONG)Next;
 }
 
+typedef struct _NDIS6_IF_STACK_ENTRY
+{
+    SINGLE_LIST_ENTRY Link;
+    NET_IFINDEX HigherLayerIfIndex;
+    NET_IFINDEX LowerLayerIfIndex;
+} NDIS6_IF_STACK_ENTRY, *PNDIS6_IF_STACK_ENTRY;
+
+static SINGLE_LIST_ENTRY Ndis6IfStackTable;
+static KSPIN_LOCK Ndis6IfStackLock;
+
+static BOOLEAN
+Ndis6IsRegisteredInterfaceIndex(
+    _In_ NET_IFINDEX IfIndex)
+{
+    LONG Last = InterlockedCompareExchange(&Ndis6NextInterfaceIndex, 0, 0);
+
+    return IfIndex != 0 && (LONG)IfIndex <= Last;
+}
+
+NDIS_STATUS
+NTAPI
+NdisIfAddIfStackEntry(
+    _In_ NET_IFINDEX HigherLayerIfIndex,
+    _In_ NET_IFINDEX LowerLayerIfIndex)
+{
+    PNDIS6_IF_STACK_ENTRY Entry;
+    PNDIS6_IF_STACK_ENTRY NewEntry;
+    PSINGLE_LIST_ENTRY Link;
+    KIRQL OldIrql;
+
+    if (!Ndis6IsRegisteredInterfaceIndex(HigherLayerIfIndex) ||
+        !Ndis6IsRegisteredInterfaceIndex(LowerLayerIfIndex))
+    {
+        return NDIS_STATUS_INTERFACE_NOT_FOUND;
+    }
+
+    NewEntry = ExAllocatePoolWithTag(NonPagedPool, sizeof(*NewEntry), 'sIdN');
+    if (NewEntry == NULL)
+        return NDIS_STATUS_RESOURCES;
+
+    NewEntry->HigherLayerIfIndex = HigherLayerIfIndex;
+    NewEntry->LowerLayerIfIndex = LowerLayerIfIndex;
+
+    KeAcquireSpinLock(&Ndis6IfStackLock, &OldIrql);
+    for (Link = Ndis6IfStackTable.Next; Link != NULL; Link = Link->Next)
+    {
+        Entry = CONTAINING_RECORD(Link, NDIS6_IF_STACK_ENTRY, Link);
+        if (Entry->HigherLayerIfIndex == HigherLayerIfIndex &&
+            Entry->LowerLayerIfIndex == LowerLayerIfIndex)
+        {
+            KeReleaseSpinLock(&Ndis6IfStackLock, OldIrql);
+            ExFreePoolWithTag(NewEntry, 'sIdN');
+            return NDIS_STATUS_SUCCESS;
+        }
+    }
+    PushEntryList(&Ndis6IfStackTable, &NewEntry->Link);
+    KeReleaseSpinLock(&Ndis6IfStackLock, OldIrql);
+
+    return NDIS_STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+NdisIfDeleteIfStackEntry(
+    _In_ NET_IFINDEX HigherLayerIfIndex,
+    _In_ NET_IFINDEX LowerLayerIfIndex)
+{
+    PNDIS6_IF_STACK_ENTRY Entry = NULL;
+    PSINGLE_LIST_ENTRY Previous;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Ndis6IfStackLock, &OldIrql);
+    for (Previous = &Ndis6IfStackTable; Previous->Next != NULL; Previous = Previous->Next)
+    {
+        Entry = CONTAINING_RECORD(Previous->Next, NDIS6_IF_STACK_ENTRY, Link);
+        if (Entry->HigherLayerIfIndex == HigherLayerIfIndex &&
+            Entry->LowerLayerIfIndex == LowerLayerIfIndex)
+        {
+            Previous->Next = Entry->Link.Next;
+            break;
+        }
+        Entry = NULL;
+    }
+    KeReleaseSpinLock(&Ndis6IfStackLock, OldIrql);
+
+    if (Entry != NULL)
+        ExFreePoolWithTag(Entry, 'sIdN');
+}
+
+NDIS_STATUS
+NTAPI
+NdisFGetOptionalSwitchHandlers(
+    _In_ NDIS_HANDLE NdisFilterHandle,
+    _Out_ PNDIS_SWITCH_CONTEXT NdisSwitchContext,
+    _Inout_ PNDIS_SWITCH_OPTIONAL_HANDLERS NdisSwitchHandlers)
+{
+    UNREFERENCED_PARAMETER(NdisFilterHandle);
+    UNREFERENCED_PARAMETER(NdisSwitchContext);
+    UNREFERENCED_PARAMETER(NdisSwitchHandlers);
+
+    return NDIS_STATUS_NOT_SUPPORTED;
+}
+
 /* ============================================================================
  *  Ndis6ReadExportName — read "\Device\{NetCfgInstanceId}" from the
  *  device's Class\<GUID>\<Instance>\Linkage key in the registry.

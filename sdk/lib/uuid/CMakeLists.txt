@@ -210,6 +210,7 @@ list(APPEND SOURCE
     cmdtreeiid.c
     ctffunc_g.c
     devpkey.c
+    fwpguid.c
 #    ctfspui_g.c
 #    hnclsid.c
     ieguids.c
@@ -235,4 +236,4 @@ list(APPEND SOURCE
 )
 
 add_library(uuid ${SOURCE})
-add_dependencies(uuid psdk)
+add_dependencies(uuid psdk xdk bugcodes)

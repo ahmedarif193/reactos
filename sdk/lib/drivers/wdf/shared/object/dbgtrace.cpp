@@ -29,6 +29,53 @@ Revision History:
 
 #if !defined(EVENT_TRACING)
 
+#if DBG && FX_CORE_MODE==FX_CORE_KERNEL_MODE
+static
+VOID
+FxTranslateTraceFormat(
+    __in PCSTR Source,
+    __out_ecount(Size) PSTR Destination,
+    __in size_t Size
+    )
+{
+    PCSTR end, replacement;
+    size_t used = 0, length;
+
+    while (*Source != '\0' && used + 1 < Size) {
+        end = (Source[0] == '%' && Source[1] == '!') ? strchr(Source + 2, '!') : NULL;
+        if (end == NULL) {
+            Destination[used++] = *Source++;
+            continue;
+        }
+
+        length = end - (Source + 2);
+        if (length == 4 && _strnicmp(Source + 2, "FUNC", 4) == 0) {
+            replacement = "";
+        }
+        else if (length == 2 && _strnicmp(Source + 2, "wZ", 2) == 0) {
+            replacement = "%wZ";
+        }
+        else if (length == 4 && _strnicmp(Source + 2, "GUID", 4) == 0) {
+            replacement = "%p";
+        }
+        else {
+            replacement = "0x%x";
+        }
+
+        length = strlen(replacement);
+        if (used + length >= Size) {
+            break;
+        }
+
+        RtlCopyMemory(Destination + used, replacement, length);
+        used += length;
+        Source = end + 1;
+    }
+
+    Destination[used] = '\0';
+}
+#endif
+
 VOID
 __cdecl
 DoTraceLevelMessage(
@@ -63,6 +110,14 @@ Return Value:
     va_list    list;
     CHAR       debugMessageBuffer[TEMP_BUFFER_SIZE];
     NTSTATUS   status;
+#if FX_CORE_MODE==FX_CORE_KERNEL_MODE
+    CHAR       format[TEMP_BUFFER_SIZE];
+
+    if (DebugPrintLevel > DebugLevel ||
+        ((DebugPrintFlag & DebugFlag) != DebugPrintFlag)) {
+        return;
+    }
+#endif
 
     va_start(list, DebugMessage);
 
@@ -74,9 +129,10 @@ Return Value:
         // is longer than the buffer.
         //
 #if FX_CORE_MODE==FX_CORE_KERNEL_MODE
+        FxTranslateTraceFormat(DebugMessage, format, sizeof(format));
         status = RtlStringCbVPrintfA( debugMessageBuffer,
                                       sizeof(debugMessageBuffer),
-                                      DebugMessage,
+                                      format,
                                       list );
 #else
         HRESULT hr;

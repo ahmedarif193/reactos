@@ -11,6 +11,7 @@ include_directories(
 add_definitions(
     -D_NTOSKRNL_
     -D_NTSYSTEM_
+    -DEX_LEGACY_PUSH_LOCKS
     -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 set_source_files_properties(${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdwatchdog.c PROPERTIES COMPILE_DEFINITIONS "KD_LOG_WATCHDOG_DEFAULT_SECONDS=${_KD_LOG_WATCHDOG_DEFAULT_SECONDS}")
 
@@ -41,6 +42,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmse.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmsecach.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmsysini.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmtrans.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmvalche.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmwraprs.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/ntapi.c
@@ -76,7 +78,6 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/sysinfo.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/transaction.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/uuid.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/wddm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/win32k.c
@@ -88,6 +89,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/fastio.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/faulttol.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/bytelock.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/cancelwait.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/filter.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/filtrctx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/fsfilter.c
@@ -115,6 +117,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/controller.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/device.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/deviface.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/bootcb.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/driver.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/error.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/file.c
@@ -210,6 +213,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exquota.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exquery.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/devicemap.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obcallback.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obdir.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obhandle.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obinit.c
@@ -227,6 +231,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/pep.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/pofx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/power.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/po/powerlimit.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/thermal.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/ttm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/apiset.c
@@ -274,6 +279,10 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/tokenadj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/tokencls.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/tokenlif.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/enlist.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/rm.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tm.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/driver.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/guidobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/pcw.c

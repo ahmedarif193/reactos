@@ -125,6 +125,7 @@ $include(arm/ke.h)
 $include(arm/mm.h)
 #elif defined(_M_ARM64)
 $include(arm64/ke.h)
+$include(arm64/mm.h)
 #elif defined(_M_RISCV64)
 $include(riscv64/ke.h)
 $include(riscv64/mm.h)
@@ -264,6 +265,86 @@ BOOLEAN
 NTAPI
 FsRtlIsTotalDeviceFailure(
   _In_ NTSTATUS Status);
+#endif
+
+#if ((_WIN32_WINNT >= _WIN32_WINNT_WIN10_RS1))
+
+#define FILE_DISPOSITION_DELETE                     0x00000001
+
+#define FILE_DISPOSITION_ON_CLOSE                   0x00000008
+
+typedef struct _FILE_DISPOSITION_INFORMATION_EX {
+    ULONG Flags;
+} FILE_DISPOSITION_INFORMATION_EX, *PFILE_DISPOSITION_INFORMATION_EX;
+
+#endif
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define BDCB_IMAGEFLAGS_FAILED_CODE_INTEGRITY   (1UL << 0)
+
+typedef enum _BDCB_CALLBACK_TYPE {
+    BdCbStatusUpdate,
+    BdCbInitializeImage,
+} BDCB_CALLBACK_TYPE, *PBDCB_CALLBACK_TYPE;
+
+typedef enum _BDCB_CLASSIFICATION {
+    BdCbClassificationUnknownImage,
+    BdCbClassificationKnownGoodImage,
+    BdCbClassificationKnownBadImage,
+    BdCbClassificationKnownBadImageBootCritical,
+    BdCbClassificationEnd,
+} BDCB_CLASSIFICATION, *PBDCB_CLASSIFICATION;
+
+typedef enum _BDCB_STATUS_UPDATE_TYPE {
+    BdCbStatusPrepareForDependencyLoad,
+    BdCbStatusPrepareForDriverLoad,
+    BdCbStatusPrepareForUnload,
+} BDCB_STATUS_UPDATE_TYPE, *PBDCB_STATUS_UPDATE_TYPE;
+
+typedef struct _BDCB_STATUS_UPDATE_CONTEXT {
+    BDCB_STATUS_UPDATE_TYPE StatusType;
+} BDCB_STATUS_UPDATE_CONTEXT, *PBDCB_STATUS_UPDATE_CONTEXT;
+
+typedef struct _BDCB_IMAGE_INFORMATION {
+    BDCB_CLASSIFICATION Classification;
+    ULONG ImageFlags;
+    UNICODE_STRING ImageName;
+    UNICODE_STRING RegistryPath;
+    UNICODE_STRING CertificatePublisher;
+    UNICODE_STRING CertificateIssuer;
+    PVOID ImageHash;
+    PVOID CertificateThumbprint;
+    ULONG ImageHashAlgorithm;
+    ULONG ThumbprintHashAlgorithm;
+    ULONG ImageHashLength;
+    ULONG CertificateThumbprintLength;
+} BDCB_IMAGE_INFORMATION, *PBDCB_IMAGE_INFORMATION;
+
+typedef
+VOID
+NTAPI
+BOOT_DRIVER_CALLBACK_FUNCTION (
+    _In_opt_ PVOID CallbackContext,
+    _In_ BDCB_CALLBACK_TYPE Classification,
+    _Inout_ PBDCB_IMAGE_INFORMATION ImageInformation
+    );
+
+typedef BOOT_DRIVER_CALLBACK_FUNCTION *PBOOT_DRIVER_CALLBACK_FUNCTION;
+
+PVOID
+NTAPI
+IoRegisterBootDriverCallback (
+    _In_ PBOOT_DRIVER_CALLBACK_FUNCTION CallbackFunction,
+    _In_opt_ PVOID CallbackContext
+    );
+
+VOID
+NTAPI
+IoUnregisterBootDriverCallback (
+    _In_ PVOID CallbackHandle
+    );
+
 #endif
 
 #ifdef __cplusplus

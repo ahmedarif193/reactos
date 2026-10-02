@@ -21,6 +21,10 @@
 #ifndef __WINE_MMSYSTEM_H
 #define __WINE_MMSYSTEM_H
 
+#ifndef _INC_MMSYSTEM
+#define _INC_MMSYSTEM
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

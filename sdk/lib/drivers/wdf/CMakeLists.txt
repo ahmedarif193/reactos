@@ -194,7 +194,6 @@ add_cd_file(TARGET wdf01000 DESTINATION reactos/system32/drivers NO_CAB FOR all)
 add_registry_inf(wdf01000_reg.inf)
 
 target_compile_definitions(wdf01000
-    PUBLIC WDF_DEVICE_NO_WDMSEC_H
     PRIVATE FX_CORE_MODE=1 FX_CORE_KERNEL_MODE=1 WDF_EVERYTHING_ALWAYS_AVAILABLE
     PRIVATE __WDF_MAJOR_VERSION=1 __WDF_MINOR_VERSION=33 __WDF_BUILD_NUMBER=22000
     PRIVATE __WDF_MAJOR_VERSION_STRING=01 __WDF_MINOR_VERSION_STRING=33
@@ -221,7 +220,7 @@ target_include_directories(wdf01000
         shared/irphandlers/pnp/km # pnpprivkm.hpp
     )
 
-target_link_libraries(wdf01000 aux_klib usbdex ntoskrnl_vista ${PSEH_LIB})
+target_link_libraries(wdf01000 aux_klib usbdex wdmsec ntoskrnl_vista ${PSEH_LIB})
 add_importlibs(wdf01000 wdfldr ntoskrnl hal)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")

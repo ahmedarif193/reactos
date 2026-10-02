@@ -1505,3 +1505,26 @@ ClassScanForSpecial(
   _In_ PFUNCTIONAL_DEVICE_EXTENSION FdoExtension,
   _In_ CLASSPNP_SCAN_FOR_SPECIAL_INFO DeviceList[],
   _In_ PCLASS_SCAN_FOR_SPECIAL_HANDLER Function);
+#if ((NTDDI_VERSION >= NTDDI_WINBLUE))
+
+SCSIPORT_API
+ULONG
+ClassModeSenseEx(
+    _In_ PDEVICE_OBJECT Fdo,
+    _In_reads_bytes_(Length) PCHAR ModeSenseBuffer,
+    _In_ ULONG Length,
+    _In_ UCHAR PageMode,
+    _In_ UCHAR PageControl
+    );
+
+SCSIPORT_API
+NTSTATUS
+ClassModeSelect(
+    _In_ PDEVICE_OBJECT Fdo,
+    _In_reads_bytes_(Length) PCHAR ModeSelectBuffer,
+    _In_ ULONG Length,
+    _In_ BOOLEAN SavePages
+    );
+
+#endif
+

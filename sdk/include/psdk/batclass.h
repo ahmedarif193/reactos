@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <poclass.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -130,10 +132,13 @@ typedef struct _BATTERY_MANUFACTURE_DATE {
   USHORT Year;
 } BATTERY_MANUFACTURE_DATE, *PBATTERY_MANUFACTURE_DATE;
 
-typedef enum _BATTERY_SET_INFORMATION_LEVEL {
-  BatteryCriticalBias = 0,
-  BatteryCharge,
-  BatteryDischarge
+typedef enum {
+    BatteryCriticalBias,
+    BatteryCharge,
+    BatteryDischarge,
+    BatteryChargingSource,
+    BatteryChargerId,
+    BatteryChargerStatus
 } BATTERY_SET_INFORMATION_LEVEL;
 
 typedef struct _BATTERY_SET_INFORMATION {
@@ -391,6 +396,27 @@ BatteryClassUnload(
 #endif /* _WINDOWS_H */
 
 #endif /* _BATCLASS_ */
+
+#if !defined(_WINDOWS_)
+
+typedef struct {
+    USHORT                          MajorVersion;
+    USHORT                          MinorVersion;
+    PVOID                           Context;
+    BCLASS_QUERY_TAG                QueryTag;
+    BCLASS_QUERY_INFORMATION        QueryInformation;
+    BCLASS_SET_INFORMATION          SetInformation;
+    BCLASS_QUERY_STATUS             QueryStatus;
+    BCLASS_SET_STATUS_NOTIFY        SetStatusNotify;
+    BCLASS_DISABLE_STATUS_NOTIFY    DisableStatusNotify;
+    PDEVICE_OBJECT                  Pdo;
+    PUNICODE_STRING                 DeviceName;
+    PDEVICE_OBJECT                  Fdo;
+} BATTERY_MINIPORT_INFO_V1_1, *PBATTERY_MINIPORT_INFO_V1_1;
+
+#define BATTERY_CLASS_MINOR_VERSION_1   0x0001
+
+#endif
 
 #ifdef __cplusplus
 }

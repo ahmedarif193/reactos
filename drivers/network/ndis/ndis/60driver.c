@@ -103,8 +103,8 @@ Ndis6ValidateMiniportDriverCharacteristics(
     ULONG RequiredSize;
     UCHAR RequiredRevision;
 
-    if (Characteristics->Header.Type !=
-        NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS)
+    if (Characteristics->Header.Type != NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS &&
+        Characteristics->Header.Type != NDIS_OBJECT_TYPE_DEFAULT)
     {
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
@@ -685,6 +685,9 @@ NdisMSetMiniportAttributes(
             Ext->GeneralAttrs = NewGen;
             Ext->GeneralAttrsValid = TRUE;
             Adapter->NdisMiniportBlock.MediaType = Gen->MediaType;
+            Adapter->NdisMiniportBlock.MacOptions = Gen->MacOptions;
+            if (Gen->MediaType == NdisMedium802_3)
+                Adapter->MediumHeaderSize = 14;
             if (OldOidList != NULL)
                 ExFreePoolWithTag(OldOidList, NDIS6_ATTR_TAG);
 

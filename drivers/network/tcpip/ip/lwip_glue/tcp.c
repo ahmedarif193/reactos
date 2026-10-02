@@ -223,6 +223,54 @@ WaitForEventSafely(PRKEVENT Event)
     }
 }
 
+void
+LibTCPWfpEstablish(PCONNECTION_ENDPOINT Connection, PTCP_PCB pcb, BOOLEAN Outbound)
+{
+    WFP_SHIM_FLOW Flow;
+
+    if (!WfpShimStreamActive())
+        return;
+
+    RtlZeroMemory(&Flow, sizeof(Flow));
+    Flow.EndpointId = Connection->WfpEndpointId;
+    Flow.Outbound = Outbound;
+    Flow.Protocol = IPPROTO_TCP;
+    Flow.LocalAddress = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(&pcb->local_ip)));
+    Flow.RemoteAddress = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(&pcb->remote_ip)));
+    Flow.LocalPort = pcb->local_port;
+    Flow.RemotePort = pcb->remote_port;
+    Flow.Loopback = (Flow.RemoteAddress >> 24) == IP_LOOPBACKNET || Flow.RemoteAddress == Flow.LocalAddress;
+    Flow.InterfaceType = Flow.Loopback ? IF_TYPE_SOFTWARE_LOOPBACK : IF_TYPE_ETHERNET_CSMACD;
+    if (Connection->AddressFile)
+        Flow.ProcessId = Connection->AddressFile->ProcessId;
+
+    WfpShimEstablishFlow(&Flow);
+}
+
+static
+BOOLEAN
+LibTCPWfpReceive(PCONNECTION_ENDPOINT Connection, struct pbuf *p)
+{
+    ULONG Flags = (p->flags & PBUF_FLAG_PUSH) ? WFP_SHIM_STREAM_PUSH : 0;
+    BOOLEAN Permit;
+    PVOID Buffer;
+
+    if (!WfpShimStreamActive())
+        return TRUE;
+
+    if (p->next == NULL)
+        return WfpShimClassifyStream(Connection->WfpEndpointId, Flags, p->payload, p->len);
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, p->tot_len, PACKET_BUFFER_TAG);
+    if (!Buffer)
+        return TRUE;
+
+    pbuf_copy_partial(p, Buffer, p->tot_len, 0);
+    Permit = WfpShimClassifyStream(Connection->WfpEndpointId, Flags, Buffer, p->tot_len);
+    ExFreePoolWithTag(Buffer, PACKET_BUFFER_TAG);
+    return Permit;
+}
+
 static
 err_t
 InternalSendEventHandler(void *arg, PTCP_PCB pcb, const u16_t space)
@@ -252,12 +300,21 @@ InternalRecvEventHandler(void *arg, PTCP_PCB pcb, struct pbuf *p, const err_t er
 
     if (p)
     {
+        if (!LibTCPWfpReceive(Connection, p))
+        {
+            tcp_recved(pcb, p->tot_len);
+            pbuf_free(p);
+            return ERR_OK;
+        }
+
         LibTCPEnqueuePacket(Connection, p);
 
         TCPRecvEventHandler(arg);
     }
     else if (err == ERR_OK)
     {
+        WfpShimClassifyStream(Connection->WfpEndpointId, WFP_SHIM_STREAM_DISCONNECT, NULL, 0);
+
         /* Complete pending reads with 0 bytes to indicate a graceful closure,
          * but note that send is still possible in this state so we don't close the
          * whole socket here (by calling tcp_close()) as that would violate TCP specs
@@ -427,6 +484,9 @@ InternalConnectEventHandler(void *arg, PTCP_PCB pcb, const err_t err)
     /* Make sure the socket didn't get closed */
     if (!arg)
         return ERR_OK;
+
+    if (err == ERR_OK)
+        LibTCPWfpEstablish(arg, pcb, TRUE);
 
     TCPConnectEventHandler(arg, err);
 
@@ -651,6 +711,16 @@ LibTCPSendCallback(void *arg)
         SendFlags |= TCP_WRITE_FLAG_MORE;
     }
 
+    if (!WfpShimClassifyStream(msg->Input.Send.Connection->WfpEndpointId,
+                               WFP_SHIM_STREAM_SEND,
+                               msg->Input.Send.Data,
+                               SendLength))
+    {
+        msg->Output.Send.Error = ERR_OK;
+        msg->Output.Send.Information = SendLength;
+        goto done;
+    }
+
     msg->Output.Send.Error = tcp_write(pcb,
                                        msg->Input.Send.Data,
                                        SendLength,
@@ -762,6 +832,14 @@ LibTCPShutdownCallback(void *arg)
      * PCB without telling us if we shutdown TX and RX. To avoid these problems, we'll clear the
      * socket context if we have called shutdown for TX and RX.
      */
+    if (msg->Input.Shutdown.shut_tx && !msg->Input.Shutdown.Connection->SendShutdown)
+    {
+        WfpShimClassifyStream(msg->Input.Shutdown.Connection->WfpEndpointId,
+                              WFP_SHIM_STREAM_SEND | WFP_SHIM_STREAM_DISCONNECT,
+                              NULL,
+                              0);
+    }
+
     if (msg->Input.Shutdown.shut_rx != msg->Input.Shutdown.shut_tx) {
         if (msg->Input.Shutdown.shut_rx) {
             msg->Output.Shutdown.Error = tcp_shutdown(pcb, TRUE, FALSE);
@@ -885,6 +963,14 @@ LibTCPCloseCallback(void *arg)
     {
         msg->Output.Close.Error = ERR_OK;
         goto done;
+    }
+
+    if (!msg->Input.Close.Connection->SendShutdown && pcb->state == ESTABLISHED)
+    {
+        WfpShimClassifyStream(msg->Input.Close.Connection->WfpEndpointId,
+                              WFP_SHIM_STREAM_SEND | WFP_SHIM_STREAM_DISCONNECT,
+                              NULL,
+                              0);
     }
 
     /* Clear the PCB pointer and stop callbacks */

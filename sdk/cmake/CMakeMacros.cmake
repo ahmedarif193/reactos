@@ -967,7 +967,7 @@ function(set_module_type MODULE TYPE)
         endif()
 
         add_importlibs(${MODULE} wdfldr)
-        target_link_libraries(${MODULE} ${_wdfdriverentry_target})
+        target_link_libraries(${MODULE} ${_wdfdriverentry_target} wdmsec)
     endif()
 
     if(${TYPE} STREQUAL win32ocx)

@@ -555,10 +555,10 @@ ULONG_PTR NTAPI ChpeStubEtwpNotificationThread(VOID)
 #ifdef KiRaiseUserExceptionDispatcher
 #undef KiRaiseUserExceptionDispatcher
 #endif
-VOID NTAPI KiRaiseUserExceptionDispatcher(VOID);
-VOID NTAPI ChpeAutoKiRaiseUserExceptionDispatcher(VOID)
+NTSTATUS NTAPI KiRaiseUserExceptionDispatcher(VOID);
+NTSTATUS NTAPI ChpeAutoKiRaiseUserExceptionDispatcher(VOID)
 {
-    KiRaiseUserExceptionDispatcher();
+    return KiRaiseUserExceptionDispatcher();
 }
 
 /* Native definition: dll/ntdll/dispatch/dispatch.c */
@@ -1207,19 +1207,25 @@ NTSTATUS NTAPI ChpeAutoNtCompareObjects(HANDLE a0, HANDLE a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCompareObjects), __typeof__(&NtCompareObjects)), "NtCompareObjects bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtCommitComplete(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCommitComplete(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtCommitComplete(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtCommitComplete(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtCommitEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCommitEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtCommitEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtCommitEnlistment(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtCommitTransaction(PVOID a0, ULONG a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCommitTransaction(PVOID a0, ULONG a1);
+NTSTATUS NTAPI ChpeAutoNtCommitTransaction(PVOID a0, ULONG a1)
 {
-    return 0;
+    return NtCommitTransaction(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoNtCompactKeys(ULONG a0, PHANDLE a1)
@@ -1270,9 +1276,11 @@ NTSTATUS NTAPI ChpeAutoNtCreateDirectoryObject(PHANDLE a0, ACCESS_MASK a1, POBJE
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateDirectoryObject), __typeof__(&NtCreateDirectoryObject)), "NtCreateDirectoryObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtCreateEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, PVOID a7)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCreateEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, PVOID a7);
+NTSTATUS NTAPI ChpeAutoNtCreateEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, PVOID a7)
 {
-    return 0;
+    return NtCreateEnlistment(a0, a1, a2, a3, a4, a5, a6, a7);
 }
 
 NTSTATUS NTAPI ChpeAutoNtCreateEvent(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, EVENT_TYPE a3, BOOLEAN a4)
@@ -1305,10 +1313,11 @@ NTSTATUS NTAPI ChpeAutoNtCreateJobSet(ULONG a0, PJOB_SET_ARRAY a1, ULONG a2)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateJobSet), __typeof__(&NtCreateJobSet)), "NtCreateJobSet bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtCreateKeyTransacted(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4, ULONG a5, ULONG a6, PVOID a7)
+NTSTATUS NTAPI ChpeAutoNtCreateKeyTransacted(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, ULONG a3, PUNICODE_STRING a4, ULONG a5, HANDLE a6, PULONG a7)
 {
-    return 0;
+    return NtCreateKeyTransacted(a0, a1, a2, a3, a4, a5, a6, a7);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateKeyTransacted), __typeof__(&NtCreateKeyTransacted)), "NtCreateKeyTransacted bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoNtCreateKeyedEvent(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, ULONG a3)
 {
@@ -1340,10 +1349,11 @@ NTSTATUS NTAPI ChpeAutoNtCreatePort(PHANDLE a0, POBJECT_ATTRIBUTES a1, ULONG a2,
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreatePort), __typeof__(&NtCreatePort)), "NtCreatePort bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtCreatePrivateNamespace(PVOID a0, ULONG a1, PVOID a2, PVOID a3)
+NTSTATUS NTAPI ChpeAutoNtCreatePrivateNamespace(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, PVOID a3)
 {
-    return 0;
+    return NtCreatePrivateNamespace(a0, a1, a2, a3);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreatePrivateNamespace), __typeof__(&NtCreatePrivateNamespace)), "NtCreatePrivateNamespace bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoNtCreateProcess(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, HANDLE a3, BOOLEAN a4, HANDLE a5, HANDLE a6, HANDLE a7)
 {
@@ -1363,9 +1373,11 @@ NTSTATUS NTAPI ChpeAutoNtCreateProfile(PHANDLE a0, HANDLE a1, PVOID a2, SIZE_T a
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateProfile), __typeof__(&NtCreateProfile)), "NtCreateProfile bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtCreateResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, PCWSTR a6)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCreateResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6);
+NTSTATUS NTAPI ChpeAutoNtCreateResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6)
 {
-    return 0;
+    return NtCreateResourceManager(a0, a1, a2, a3, a4, a5, a6);
 }
 
 NTSTATUS NTAPI ChpeAutoNtCreateSection(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, PLARGE_INTEGER a3, ULONG a4, ULONG a5, HANDLE a6)
@@ -1396,6 +1408,12 @@ NTSTATUS NTAPI ChpeAutoNtCreateSymbolicLinkObject(PHANDLE a0, ACCESS_MASK a1, PO
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateSymbolicLinkObject), __typeof__(&NtCreateSymbolicLinkObject)), "NtCreateSymbolicLinkObject bridge signature mismatch");
 
+NTSTATUS NTAPI ChpeAutoNtCreateThreadEx(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, HANDLE a3, PVOID a4, PVOID a5, ULONG a6, SIZE_T a7, SIZE_T a8, SIZE_T a9, PPS_ATTRIBUTE_LIST a10)
+{
+    return NtCreateThreadEx(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateThreadEx), __typeof__(&NtCreateThreadEx)), "NtCreateThreadEx bridge signature mismatch");
+
 NTSTATUS NTAPI ChpeAutoNtCreateTimer(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, TIMER_TYPE a3)
 {
     return NtCreateTimer(a0, a1, a2, a3);
@@ -1408,21 +1426,19 @@ NTSTATUS NTAPI ChpeAutoNtCreateToken(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBU
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateToken), __typeof__(&NtCreateToken)), "NtCreateToken bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtCreateTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, ULONG a7, PVOID a8, PCWSTR a9)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCreateTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, ULONG a7, PVOID a8, PVOID a9);
+NTSTATUS NTAPI ChpeAutoNtCreateTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, ULONG a7, PVOID a8, PVOID a9)
 {
-    return 0;
+    return NtCreateTransaction(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9);
 }
 
-ULONG_PTR NTAPI ChpeStubNtCreateTransactionManager(PVOID a0, ULONG a1, PVOID a2, PCWSTR a3, ULONG a4, ULONG a5)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCreateTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, ULONG a4, ULONG a5);
+NTSTATUS NTAPI ChpeAutoNtCreateTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, ULONG a4, ULONG a5)
 {
-    return 0;
+    return NtCreateTransactionManager(a0, a1, a2, a3, a4, a5);
 }
-
-NTSTATUS NTAPI ChpeAutoNtCreateThreadEx(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, HANDLE a3, PVOID a4, PVOID a5, ULONG a6, SIZE_T a7, SIZE_T a8, SIZE_T a9, PPS_ATTRIBUTE_LIST a10)
-{
-    return NtCreateThreadEx(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
-}
-_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateThreadEx), __typeof__(&NtCreateThreadEx)), "NtCreateThreadEx bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoNtCreateUserProcess(PHANDLE a0, PHANDLE a1, ACCESS_MASK a2, ACCESS_MASK a3, POBJECT_ATTRIBUTES a4, POBJECT_ATTRIBUTES a5, ULONG a6, ULONG a7, PRTL_USER_PROCESS_PARAMETERS a8, PPS_CREATE_INFO a9, PPS_ATTRIBUTE_LIST a10)
 {
@@ -1496,10 +1512,11 @@ NTSTATUS NTAPI ChpeAutoNtDeleteObjectAuditAlarm(PUNICODE_STRING a0, PVOID a1, BO
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtDeleteObjectAuditAlarm), __typeof__(&NtDeleteObjectAuditAlarm)), "NtDeleteObjectAuditAlarm bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtDeletePrivateNamespace(ULONG a0)
+NTSTATUS NTAPI ChpeAutoNtDeletePrivateNamespace(HANDLE a0)
 {
-    return 0;
+    return NtDeletePrivateNamespace(a0);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtDeletePrivateNamespace), __typeof__(&NtDeletePrivateNamespace)), "NtDeletePrivateNamespace bridge signature mismatch");
 
 /* No public prototype: ABI slots and arity from native ntdll.spec. */
 NTSTATUS NTAPI NtDeleteWnfStateData(PVOID a0, PVOID a1);
@@ -1551,6 +1568,13 @@ NTSTATUS NTAPI ChpeAutoNtEnumerateSystemEnvironmentValuesEx(ULONG a0, PVOID a1, 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtEnumerateSystemEnvironmentValuesEx), __typeof__(&NtEnumerateSystemEnvironmentValuesEx)), "NtEnumerateSystemEnvironmentValuesEx bridge signature mismatch");
 
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtEnumerateTransactionObject(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoNtEnumerateTransactionObject(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
+{
+    return NtEnumerateTransactionObject(a0, a1, a2, a3, a4);
+}
+
 NTSTATUS NTAPI ChpeAutoNtExtendSection(HANDLE a0, PLARGE_INTEGER a1)
 {
     return NtExtendSection(a0, a1);
@@ -1562,6 +1586,12 @@ NTSTATUS NTAPI ChpeAutoNtFilterToken(HANDLE a0, ULONG a1, PTOKEN_GROUPS a2, PTOK
     return NtFilterToken(a0, a1, a2, a3, a4, a5);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtFilterToken), __typeof__(&NtFilterToken)), "NtFilterToken bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoNtCreateLowBoxToken(PHANDLE a0, HANDLE a1, ACCESS_MASK a2, POBJECT_ATTRIBUTES a3, PSID a4, ULONG a5, PSID_AND_ATTRIBUTES a6, ULONG a7, HANDLE * a8)
+{
+    return NtCreateLowBoxToken(a0, a1, a2, a3, a4, a5, a6, a7, a8);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtCreateLowBoxToken), __typeof__(&NtCreateLowBoxToken)), "NtCreateLowBoxToken bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoNtFindAtom(PWSTR a0, ULONG a1, PRTL_ATOM a2)
 {
@@ -1652,9 +1682,11 @@ NTSTATUS NTAPI ChpeAutoNtGetNlsSectionPtr(ULONG a0, ULONG a1, PVOID a2, PVOID a3
     return NtGetNlsSectionPtr(a0, a1, a2, a3, a4);
 }
 
-ULONG_PTR NTAPI ChpeStubNtGetNotificationResourceManager(PVOID a0, PVOID a1, ULONG a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtGetNotificationResourceManager(PVOID a0, PVOID a1, ULONG a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6);
+NTSTATUS NTAPI ChpeAutoNtGetNotificationResourceManager(PVOID a0, PVOID a1, ULONG a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6)
 {
-    return 0;
+    return NtGetNotificationResourceManager(a0, a1, a2, a3, a4, a5, a6);
 }
 
 NTSTATUS NTAPI ChpeAutoNtGetPlugPlayEvent(ULONG a0, ULONG a1, PPLUGPLAY_EVENT_BLOCK a2, ULONG a3)
@@ -1845,9 +1877,11 @@ NTSTATUS NTAPI ChpeAutoNtOpenDirectoryObject(PHANDLE a0, ACCESS_MASK a1, POBJECT
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtOpenDirectoryObject), __typeof__(&NtOpenDirectoryObject)), "NtOpenDirectoryObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtOpenEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtOpenEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoNtOpenEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
 {
-    return 0;
+    return NtOpenEnlistment(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoNtOpenEvent(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2)
@@ -1874,20 +1908,17 @@ NTSTATUS NTAPI ChpeAutoNtOpenJobObject(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRI
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtOpenJobObject), __typeof__(&NtOpenJobObject)), "NtOpenJobObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtOpenKeyTransacted(PVOID a0, ULONG a1, PVOID a2, PVOID a3)
+NTSTATUS NTAPI ChpeAutoNtOpenKeyTransacted(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, HANDLE a3)
 {
-    return 0;
+    return NtOpenKeyTransacted(a0, a1, a2, a3);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtOpenKeyTransacted), __typeof__(&NtOpenKeyTransacted)), "NtOpenKeyTransacted bridge signature mismatch");
 
-/* Native definition: dll/ntdll/rtl/registry.c */
-#ifdef NtOpenKeyTransactedEx
-#undef NtOpenKeyTransactedEx
-#endif
-NTSTATUS NTAPI NtOpenKeyTransactedEx(PVOID a0, ULONG a1, PVOID a2, ULONG a3, ULONG a4);
-NTSTATUS NTAPI ChpeAutoNtOpenKeyTransactedEx(PVOID a0, ULONG a1, PVOID a2, ULONG a3, ULONG a4)
+NTSTATUS NTAPI ChpeAutoNtOpenKeyTransactedEx(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, ULONG a3, HANDLE a4)
 {
     return NtOpenKeyTransactedEx(a0, a1, a2, a3, a4);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtOpenKeyTransactedEx), __typeof__(&NtOpenKeyTransactedEx)), "NtOpenKeyTransactedEx bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoNtOpenKeyedEvent(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2)
 {
@@ -1907,10 +1938,11 @@ NTSTATUS NTAPI ChpeAutoNtOpenObjectAuditAlarm(PUNICODE_STRING a0, PVOID a1, PUNI
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtOpenObjectAuditAlarm), __typeof__(&NtOpenObjectAuditAlarm)), "NtOpenObjectAuditAlarm bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtOpenPrivateNamespace(PVOID a0, ULONG a1, PVOID a2, PVOID a3)
+NTSTATUS NTAPI ChpeAutoNtOpenPrivateNamespace(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, PVOID a3)
 {
-    return 0;
+    return NtOpenPrivateNamespace(a0, a1, a2, a3);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtOpenPrivateNamespace), __typeof__(&NtOpenPrivateNamespace)), "NtOpenPrivateNamespace bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoNtOpenProcess(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, PCLIENT_ID a3)
 {
@@ -1930,9 +1962,11 @@ NTSTATUS NTAPI ChpeAutoNtOpenProcessTokenEx(HANDLE a0, ACCESS_MASK a1, ULONG a2,
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtOpenProcessTokenEx), __typeof__(&NtOpenProcessTokenEx)), "NtOpenProcessTokenEx bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtOpenResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtOpenResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoNtOpenResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
 {
-    return 0;
+    return NtOpenResourceManager(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoNtOpenSection(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2)
@@ -1982,14 +2016,18 @@ NTSTATUS NTAPI ChpeAutoNtOpenTimer(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTE
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtOpenTimer), __typeof__(&NtOpenTimer)), "NtOpenTimer bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtOpenTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtOpenTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoNtOpenTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
 {
-    return 0;
+    return NtOpenTransaction(a0, a1, a2, a3, a4);
 }
 
-ULONG_PTR NTAPI ChpeStubNtOpenTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtOpenTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5);
+NTSTATUS NTAPI ChpeAutoNtOpenTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5)
 {
-    return 0;
+    return NtOpenTransactionManager(a0, a1, a2, a3, a4, a5);
 }
 
 NTSTATUS NTAPI ChpeAutoNtPlugPlayControl(PLUGPLAY_CONTROL_CLASS a0, PVOID a1, ULONG a2)
@@ -2004,24 +2042,32 @@ NTSTATUS NTAPI ChpeAutoNtPowerInformation(POWER_INFORMATION_LEVEL a0, PVOID a1, 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtPowerInformation), __typeof__(&NtPowerInformation)), "NtPowerInformation bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtPrePrepareComplete(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPrePrepareComplete(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtPrePrepareComplete(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtPrePrepareComplete(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtPrePrepareEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPrePrepareEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtPrePrepareEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtPrePrepareEnlistment(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtPrepareComplete(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPrepareComplete(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtPrepareComplete(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtPrepareComplete(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtPrepareEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPrepareEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtPrepareEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtPrepareEnlistment(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoNtPrivilegeCheck(HANDLE a0, PPRIVILEGE_SET a1, PBOOLEAN a2)
@@ -2042,14 +2088,18 @@ NTSTATUS NTAPI ChpeAutoNtPrivilegedServiceAuditAlarm(PUNICODE_STRING a0, PUNICOD
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtPrivilegedServiceAuditAlarm), __typeof__(&NtPrivilegedServiceAuditAlarm)), "NtPrivilegedServiceAuditAlarm bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtPropagationComplete(PVOID a0, ULONG a1, ULONG a2, PVOID a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPropagationComplete(PVOID a0, ULONG a1, ULONG a2, PVOID a3);
+NTSTATUS NTAPI ChpeAutoNtPropagationComplete(PVOID a0, ULONG a1, ULONG a2, PVOID a3)
 {
-    return 0;
+    return NtPropagationComplete(a0, a1, a2, a3);
 }
 
-ULONG_PTR NTAPI ChpeStubNtPropagationFailed(PVOID a0, ULONG a1, ULONG a2)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPropagationFailed(PVOID a0, ULONG a1, ULONG a2);
+NTSTATUS NTAPI ChpeAutoNtPropagationFailed(PVOID a0, ULONG a1, ULONG a2)
 {
-    return 0;
+    return NtPropagationFailed(a0, a1, a2);
 }
 
 NTSTATUS NTAPI ChpeAutoNtPulseEvent(HANDLE a0, PLONG a1)
@@ -2143,9 +2193,11 @@ NTSTATUS NTAPI ChpeAutoNtQueryInformationByName(POBJECT_ATTRIBUTES a0, PIO_STATU
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtQueryInformationByName), __typeof__(&NtQueryInformationByName)), "NtQueryInformationByName bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtQueryInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtQueryInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoNtQueryInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtQueryInformationEnlistment(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoNtQueryInformationJobObject(HANDLE a0, JOBOBJECTINFOCLASS a1, PVOID a2, ULONG a3, PULONG a4)
@@ -2160,9 +2212,11 @@ NTSTATUS NTAPI ChpeAutoNtQueryInformationPort(HANDLE a0, PORT_INFORMATION_CLASS 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtQueryInformationPort), __typeof__(&NtQueryInformationPort)), "NtQueryInformationPort bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtQueryInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtQueryInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoNtQueryInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtQueryInformationResourceManager(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoNtQueryInformationToken(HANDLE a0, TOKEN_INFORMATION_CLASS a1, PVOID a2, ULONG a3, PULONG a4)
@@ -2171,14 +2225,18 @@ NTSTATUS NTAPI ChpeAutoNtQueryInformationToken(HANDLE a0, TOKEN_INFORMATION_CLAS
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtQueryInformationToken), __typeof__(&NtQueryInformationToken)), "NtQueryInformationToken bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtQueryInformationTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtQueryInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoNtQueryInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtQueryInformationTransaction(a0, a1, a2, a3, a4);
 }
 
-ULONG_PTR NTAPI ChpeStubNtQueryInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtQueryInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoNtQueryInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtQueryInformationTransactionManager(a0, a1, a2, a3, a4);
 }
 
 ULONG_PTR NTAPI ChpeStubNtQueryInformationWorkerFactory(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
@@ -2356,9 +2414,11 @@ NTSTATUS NTAPI ChpeAutoNtReadFileScatter(HANDLE a0, HANDLE a1, PIO_APC_ROUTINE a
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtReadFileScatter), __typeof__(&NtReadFileScatter)), "NtReadFileScatter bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtReadOnlyEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtReadOnlyEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtReadOnlyEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtReadOnlyEnlistment(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoNtReadRequestData(HANDLE a0, PPORT_MESSAGE a1, ULONG a2, PVOID a3, ULONG a4, PULONG a5)
@@ -2367,24 +2427,32 @@ NTSTATUS NTAPI ChpeAutoNtReadRequestData(HANDLE a0, PPORT_MESSAGE a1, ULONG a2, 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtReadRequestData), __typeof__(&NtReadRequestData)), "NtReadRequestData bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtRecoverEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRecoverEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtRecoverEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRecoverEnlistment(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtRecoverResourceManager(PVOID a0)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRecoverResourceManager(PVOID a0);
+NTSTATUS NTAPI ChpeAutoNtRecoverResourceManager(PVOID a0)
 {
-    return 0;
+    return NtRecoverResourceManager(a0);
 }
 
-ULONG_PTR NTAPI ChpeStubNtRecoverTransactionManager(PVOID a0)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRecoverTransactionManager(PVOID a0);
+NTSTATUS NTAPI ChpeAutoNtRecoverTransactionManager(PVOID a0)
 {
-    return 0;
+    return NtRecoverTransactionManager(a0);
 }
 
-ULONG_PTR NTAPI ChpeStubNtRegisterProtocolAddressInformation(PVOID a0, PVOID a1, ULONG a2, PVOID a3, ULONG a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRegisterProtocolAddressInformation(PVOID a0, PVOID a1, ULONG a2, PVOID a3, ULONG a4);
+NTSTATUS NTAPI ChpeAutoNtRegisterProtocolAddressInformation(PVOID a0, PVOID a1, ULONG a2, PVOID a3, ULONG a4)
 {
-    return 0;
+    return NtRegisterProtocolAddressInformation(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoNtRegisterThreadTerminatePort(HANDLE a0)
@@ -2445,9 +2513,11 @@ NTSTATUS NTAPI ChpeAutoNtRenameKey(HANDLE a0, PUNICODE_STRING a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtRenameKey), __typeof__(&NtRenameKey)), "NtRenameKey bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtRenameTransactionManager(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRenameTransactionManager(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtRenameTransactionManager(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRenameTransactionManager(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoNtReplaceKey(POBJECT_ATTRIBUTES a0, HANDLE a1, POBJECT_ATTRIBUTES a2)
@@ -2533,24 +2603,32 @@ NTSTATUS NTAPI ChpeAutoNtResumeProcess(HANDLE a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtResumeProcess), __typeof__(&NtResumeProcess)), "NtResumeProcess bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtRollbackComplete(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRollbackComplete(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtRollbackComplete(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRollbackComplete(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtRollbackEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRollbackEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtRollbackEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRollbackEnlistment(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtRollbackTransaction(PVOID a0, ULONG a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRollbackTransaction(PVOID a0, ULONG a1);
+NTSTATUS NTAPI ChpeAutoNtRollbackTransaction(PVOID a0, ULONG a1)
 {
-    return 0;
+    return NtRollbackTransaction(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubNtRollforwardTransactionManager(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRollforwardTransactionManager(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtRollforwardTransactionManager(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRollforwardTransactionManager(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoNtSaveKey(HANDLE a0, HANDLE a1)
@@ -2656,9 +2734,11 @@ NTSTATUS NTAPI ChpeAutoNtSetInformationDebugObject(HANDLE a0, DEBUGOBJECTINFOCLA
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtSetInformationDebugObject), __typeof__(&NtSetInformationDebugObject)), "NtSetInformationDebugObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtSetInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSetInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3);
+NTSTATUS NTAPI ChpeAutoNtSetInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
 {
-    return 0;
+    return NtSetInformationEnlistment(a0, a1, a2, a3);
 }
 
 NTSTATUS NTAPI ChpeAutoNtSetInformationFile(HANDLE a0, PIO_STATUS_BLOCK a1, PVOID a2, ULONG a3, FILE_INFORMATION_CLASS a4)
@@ -2691,9 +2771,11 @@ NTSTATUS NTAPI ChpeAutoNtSetInformationProcess(HANDLE a0, PROCESSINFOCLASS a1, P
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtSetInformationProcess), __typeof__(&NtSetInformationProcess)), "NtSetInformationProcess bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtSetInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSetInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3);
+NTSTATUS NTAPI ChpeAutoNtSetInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
 {
-    return 0;
+    return NtSetInformationResourceManager(a0, a1, a2, a3);
 }
 
 NTSTATUS NTAPI ChpeAutoNtSetInformationThread(HANDLE a0, THREADINFOCLASS a1, PVOID a2, ULONG a3)
@@ -2714,14 +2796,18 @@ NTSTATUS NTAPI ChpeAutoNtSetInformationToken(HANDLE a0, TOKEN_INFORMATION_CLASS 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtSetInformationToken), __typeof__(&NtSetInformationToken)), "NtSetInformationToken bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtSetInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSetInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3);
+NTSTATUS NTAPI ChpeAutoNtSetInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
 {
-    return 0;
+    return NtSetInformationTransaction(a0, a1, a2, a3);
 }
 
-ULONG_PTR NTAPI ChpeStubNtSetInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSetInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3);
+NTSTATUS NTAPI ChpeAutoNtSetInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
 {
-    return 0;
+    return NtSetInformationTransactionManager(a0, a1, a2, a3);
 }
 
 ULONG_PTR NTAPI ChpeStubNtSetInformationWorkerFactory(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
@@ -2848,9 +2934,11 @@ NTSTATUS NTAPI ChpeAutoNtSignalAndWaitForSingleObject(HANDLE a0, HANDLE a1, BOOL
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoNtSignalAndWaitForSingleObject), __typeof__(&NtSignalAndWaitForSingleObject)), "NtSignalAndWaitForSingleObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubNtSinglePhaseReject(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSinglePhaseReject(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoNtSinglePhaseReject(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtSinglePhaseReject(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoNtStartProfile(HANDLE a0)
@@ -3260,10 +3348,17 @@ ULONG NTAPI ChpeAutoRtlAddRefMemoryStream(struct IStream * a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlAddRefMemoryStream), __typeof__(&RtlAddRefMemoryStream)), "RtlAddRefMemoryStream bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlAddSIDToBoundaryDescriptor(PVOID a0, PVOID a1)
+NTSTATUS NTAPI ChpeAutoRtlAddSIDToBoundaryDescriptor(PVOID * a0, PSID a1)
 {
-    return 0;
+    return RtlAddSIDToBoundaryDescriptor(a0, a1);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlAddSIDToBoundaryDescriptor), __typeof__(&RtlAddSIDToBoundaryDescriptor)), "RtlAddSIDToBoundaryDescriptor bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoRtlAddIntegrityLabelToBoundaryDescriptor(PVOID * a0, PSID a1)
+{
+    return RtlAddIntegrityLabelToBoundaryDescriptor(a0, a1);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlAddIntegrityLabelToBoundaryDescriptor), __typeof__(&RtlAddIntegrityLabelToBoundaryDescriptor)), "RtlAddIntegrityLabelToBoundaryDescriptor bridge signature mismatch");
 
 ULONG_PTR NTAPI ChpeStubRtlAddressInSectionTable(PVOID a0, PVOID a1, ULONG a2)
 {
@@ -3752,10 +3847,11 @@ NTSTATUS NTAPI ChpeAutoRtlCreateBootStatusDataFile(VOID)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlCreateBootStatusDataFile), __typeof__(&RtlCreateBootStatusDataFile)), "RtlCreateBootStatusDataFile bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlCreateBoundaryDescriptor(PVOID a0, ULONG a1)
+PVOID NTAPI ChpeAutoRtlCreateBoundaryDescriptor(PUNICODE_STRING a0, ULONG a1)
 {
-    return 0;
+    return RtlCreateBoundaryDescriptor(a0, a1);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlCreateBoundaryDescriptor), __typeof__(&RtlCreateBoundaryDescriptor)), "RtlCreateBoundaryDescriptor bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoRtlCreateEnvironment(BOOLEAN a0, PWSTR * a1)
 {
@@ -3830,6 +3926,36 @@ NTSTATUS NTAPI ChpeAutoRtlDeriveCapabilitySidsFromName(PUNICODE_STRING a0, PSID 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlDeriveCapabilitySidsFromName), __typeof__(&RtlDeriveCapabilitySidsFromName)), "RtlDeriveCapabilitySidsFromName bridge signature mismatch");
 
+BOOLEAN NTAPI ChpeAutoRtlIsCapabilitySid(PSID a0)
+{
+    return RtlIsCapabilitySid(a0);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlIsCapabilitySid), __typeof__(&RtlIsCapabilitySid)), "RtlIsCapabilitySid bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoRtlGetAppContainerSidType(PSID a0, PULONG a1)
+{
+    return RtlGetAppContainerSidType(a0, a1);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetAppContainerSidType), __typeof__(&RtlGetAppContainerSidType)), "RtlGetAppContainerSidType bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoRtlGetAppContainerParent(PSID a0, PSID * a1)
+{
+    return RtlGetAppContainerParent(a0, a1);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetAppContainerParent), __typeof__(&RtlGetAppContainerParent)), "RtlGetAppContainerParent bridge signature mismatch");
+
+BOOLEAN NTAPI ChpeAutoRtlIsParentOfChildAppContainer(PSID a0, PSID a1)
+{
+    return RtlIsParentOfChildAppContainer(a0, a1);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlIsParentOfChildAppContainer), __typeof__(&RtlIsParentOfChildAppContainer)), "RtlIsParentOfChildAppContainer bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoRtlCheckTokenMembershipEx(HANDLE a0, PSID a1, ULONG a2, PBOOLEAN a3)
+{
+    return RtlCheckTokenMembershipEx(a0, a1, a2, a3);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlCheckTokenMembershipEx), __typeof__(&RtlCheckTokenMembershipEx)), "RtlCheckTokenMembershipEx bridge signature mismatch");
+
 /* Native definition: sdk/lib/rtl/sysvol.c */
 #ifdef RtlCreateSystemVolumeInformationFolder
 #undef RtlCreateSystemVolumeInformationFolder
@@ -3886,10 +4012,14 @@ NTSTATUS NTAPI ChpeAutoRtlCreateUserSecurityObject(PVOID a0, ULONG a1, PVOID a2,
     return RtlCreateUserSecurityObject(a0, a1, a2, a3, a4, a5, a6);
 }
 
-NTSTATUS NTAPI RtlCreateUserStack(SIZE_T, SIZE_T, ULONG, SIZE_T, SIZE_T, PINITIAL_TEB);
-ULONG_PTR NTAPI ChpeStubRtlCreateUserStack(ULONG_PTR a0, ULONG_PTR a1, ULONG a2, ULONG_PTR a3, ULONG_PTR a4, PVOID a5)
+/* Native definition: sdk/lib/rtl/thread.c */
+#ifdef RtlCreateUserStack
+#undef RtlCreateUserStack
+#endif
+NTSTATUS NTAPI RtlCreateUserStack(SIZE_T a0, SIZE_T a1, ULONG a2, SIZE_T a3, SIZE_T a4, PVOID a5);
+NTSTATUS NTAPI ChpeAutoRtlCreateUserStack(SIZE_T a0, SIZE_T a1, ULONG a2, SIZE_T a3, SIZE_T a4, PVOID a5)
 {
-    return (ULONG_PTR)RtlCreateUserStack(a0, a1, a2, a3, a4, (PINITIAL_TEB)a5);
+    return RtlCreateUserStack(a0, a1, a2, a3, a4, a5);
 }
 
 BOOLEAN NTAPI ChpeAutoRtlCultureNameToLCID(PCUNICODE_STRING a0, PLCID a1)
@@ -3991,10 +4121,11 @@ ULONG_PTR NTAPI ChpeStubRtlDeleteBarrier(ULONG a0)
     return 0;
 }
 
-ULONG_PTR NTAPI ChpeStubRtlDeleteBoundaryDescriptor(PVOID a0)
+void NTAPI ChpeAutoRtlDeleteBoundaryDescriptor(PVOID a0)
 {
-    return 0;
+    RtlDeleteBoundaryDescriptor(a0);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlDeleteBoundaryDescriptor), __typeof__(&RtlDeleteBoundaryDescriptor)), "RtlDeleteBoundaryDescriptor bridge signature mismatch");
 
 BOOLEAN NTAPI ChpeAutoRtlDeleteElementGenericTable(PRTL_GENERIC_TABLE a0, PVOID a1)
 {
@@ -4376,6 +4507,16 @@ NTSTATUS NTAPI ChpeAutoRtlWow64GetCurrentCpuArea(USHORT * a0, void ** a1, void *
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlWow64GetCurrentCpuArea), __typeof__(&RtlWow64GetCurrentCpuArea)), "RtlWow64GetCurrentCpuArea bridge signature mismatch");
 
+/* Native definition: dll/ntdll/chpe.c */
+#ifdef ChpeMarkEcCodeRange
+#undef ChpeMarkEcCodeRange
+#endif
+BOOLEAN NTAPI ChpeMarkEcCodeRange(PVOID a0, SIZE_T a1);
+BOOLEAN NTAPI ChpeAutoChpeMarkEcCodeRange(PVOID a0, SIZE_T a1)
+{
+    return ChpeMarkEcCodeRange(a0, a1);
+}
+
 BOOLEAN NTAPI ChpeAutoChpeCanContinueToGuest(VOID)
 {
     return ChpeCanContinueToGuest();
@@ -4426,6 +4567,16 @@ BOOLEAN NTAPI ChpeAutoRtlWow64PushCrossProcessWorkOntoFreeList(PCROSS_PROCESS_WO
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlWow64PushCrossProcessWorkOntoFreeList), __typeof__(&RtlWow64PushCrossProcessWorkOntoFreeList)), "RtlWow64PushCrossProcessWorkOntoFreeList bridge signature mismatch");
 
+/* Native definition: dll/ntdll/rtl/xstate_wow64.c */
+#ifdef RtlLocateLegacyContext
+#undef RtlLocateLegacyContext
+#endif
+PVOID NTAPI RtlLocateLegacyContext(PVOID a0, PVOID a1);
+PVOID NTAPI ChpeAutoRtlLocateLegacyContext(PVOID a0, PVOID a1)
+{
+    return RtlLocateLegacyContext(a0, a1);
+}
+
 /* Native definition: dll/ntdll/rtl/exit.c */
 #ifdef RtlExitUserProcess
 #undef RtlExitUserProcess
@@ -4461,12 +4612,6 @@ ULONG_PTR NTAPI ChpeStubRtlExtendMemoryZone(ULONG a0, ULONG a1)
 {
     return 0;
 }
-
-LARGE_INTEGER NTAPI ChpeAutoRtlExtendedLargeIntegerDivide(LARGE_INTEGER a0, ULONG a1, PULONG a2)
-{
-    return RtlExtendedLargeIntegerDivide(a0, a1, a2);
-}
-_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlExtendedLargeIntegerDivide), __typeof__(&RtlExtendedLargeIntegerDivide)), "RtlExtendedLargeIntegerDivide bridge signature mismatch");
 
 void NTAPI ChpeAutoRtlFillMemoryUlong(PVOID a0, SIZE_T a1, ULONG a2)
 {
@@ -4653,11 +4798,14 @@ void NTAPI ChpeAutoRtlFreeThreadActivationContextStack(VOID)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlFreeThreadActivationContextStack), __typeof__(&RtlFreeThreadActivationContextStack)), "RtlFreeThreadActivationContextStack bridge signature mismatch");
 
-VOID NTAPI RtlFreeUserStack(PVOID);
-ULONG_PTR NTAPI ChpeStubRtlFreeUserStack(PVOID a0)
+/* Native definition: sdk/lib/rtl/thread.c */
+#ifdef RtlFreeUserStack
+#undef RtlFreeUserStack
+#endif
+VOID NTAPI RtlFreeUserStack(PVOID a0);
+VOID NTAPI ChpeAutoRtlFreeUserStack(PVOID a0)
 {
     RtlFreeUserStack(a0);
-    return 0;
 }
 
 NTSTATUS NTAPI ChpeAutoRtlGUIDFromString(PUNICODE_STRING a0, GUID * a1)
@@ -4733,6 +4881,12 @@ void NTAPI ChpeAutoRtlGetDeviceFamilyInfoEnum(PULONGLONG a0, PULONG a1, PULONG a
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetDeviceFamilyInfoEnum), __typeof__(&RtlGetDeviceFamilyInfoEnum)), "RtlGetDeviceFamilyInfoEnum bridge signature mismatch");
 
+ULONG64 NTAPI ChpeAutoRtlGetEnabledExtendedFeatures(ULONG64 a0)
+{
+    return RtlGetEnabledExtendedFeatures(a0);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetEnabledExtendedFeatures), __typeof__(&RtlGetEnabledExtendedFeatures)), "RtlGetEnabledExtendedFeatures bridge signature mismatch");
+
 PVOID NTAPI ChpeAutoRtlGetElementGenericTable(PRTL_GENERIC_TABLE a0, ULONG a1)
 {
     return RtlGetElementGenericTable(a0, a1);
@@ -4763,6 +4917,16 @@ NTSTATUS NTAPI RtlGetExtendedContextLength2(ULONG a0, PVOID a1, ULONGLONG a2);
 NTSTATUS NTAPI ChpeAutoRtlGetExtendedContextLength2(ULONG a0, PVOID a1, ULONGLONG a2)
 {
     return RtlGetExtendedContextLength2(a0, a1, a2);
+}
+
+/* Native definition: dll/ntdll/rtl/xstate_wow64.c */
+#ifdef RtlGetExtendedFeaturesMask
+#undef RtlGetExtendedFeaturesMask
+#endif
+ULONGLONG NTAPI RtlGetExtendedFeaturesMask(PVOID a0);
+ULONGLONG NTAPI ChpeAutoRtlGetExtendedFeaturesMask(PVOID a0)
+{
+    return RtlGetExtendedFeaturesMask(a0);
 }
 
 ULONG_PTR NTAPI ChpeStubRtlGetFileMUIPath(ULONG a0, ULONG a1, PVOID a2, PVOID a3, ULONG a4, ULONG a5, PVOID a6)
@@ -4879,10 +5043,11 @@ NTSTATUS NTAPI ChpeAutoRtlGetSetBootStatusData(HANDLE a0, BOOLEAN a1, RTL_BSD_IT
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetSetBootStatusData), __typeof__(&RtlGetSetBootStatusData)), "RtlGetSetBootStatusData bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlGetSystemPreferredUILanguages(ULONG a0, PVOID a1, PVOID a2, PVOID a3, PVOID a4)
+NTSTATUS NTAPI ChpeAutoRtlGetSystemPreferredUILanguages(DWORD a0, ULONG a1, PULONG a2, PWSTR a3, PULONG a4)
 {
-    return (ULONG_PTR)RtlGetSystemPreferredUILanguages(a0, (ULONG)(ULONG_PTR)a1, (PULONG)a2, (PWSTR)a3, (PULONG)a4);
+    return RtlGetSystemPreferredUILanguages(a0, a1, a2, a3, a4);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetSystemPreferredUILanguages), __typeof__(&RtlGetSystemPreferredUILanguages)), "RtlGetSystemPreferredUILanguages bridge signature mismatch");
 
 ULONG NTAPI ChpeAutoRtlGetThreadErrorMode(VOID)
 {
@@ -4895,10 +5060,11 @@ ULONG_PTR NTAPI ChpeStubRtlGetThreadLangIdByIndex(ULONG a0, ULONG a1, PVOID a2, 
     return 0;
 }
 
-ULONG_PTR NTAPI ChpeStubRtlGetThreadPreferredUILanguages(ULONG a0, PVOID a1, PVOID a2, PVOID a3)
+NTSTATUS NTAPI ChpeAutoRtlGetThreadPreferredUILanguages(DWORD a0, PULONG a1, PWSTR a2, PULONG a3)
 {
-    return (ULONG_PTR)RtlGetThreadPreferredUILanguages(a0, (PULONG)a1, (PWSTR)a2, (PULONG)a3);
+    return RtlGetThreadPreferredUILanguages(a0, a1, a2, a3);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlGetThreadPreferredUILanguages), __typeof__(&RtlGetThreadPreferredUILanguages)), "RtlGetThreadPreferredUILanguages bridge signature mismatch");
 
 ULONG_PTR NTAPI ChpeStubRtlGetUILanguageInfo(ULONG a0, PVOID a1, ULONG a2, PVOID a3, PVOID a4)
 {
@@ -5138,10 +5304,11 @@ void NTAPI ChpeAutoRtlInitializeHandleTable(ULONG a0, ULONG a1, PRTL_HANDLE_TABL
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlInitializeHandleTable), __typeof__(&RtlInitializeHandleTable)), "RtlInitializeHandleTable bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlInitializeNtUserPfn(PCWSTR a0, ULONG a1, PVOID a2, ULONG a3, PCWSTR a4, PVOID a5)
+NTSTATUS NTAPI ChpeAutoRtlInitializeNtUserPfn(const void * a0, ULONG a1, const void * a2, ULONG a3, const void * a4, ULONG a5)
 {
-    return 0;
+    return RtlInitializeNtUserPfn(a0, a1, a2, a3, a4, a5);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlInitializeNtUserPfn), __typeof__(&RtlInitializeNtUserPfn)), "RtlInitializeNtUserPfn bridge signature mismatch");
 
 /* Native definition: sdk/lib/rtl/rxact.c */
 #ifdef RtlInitializeRXact
@@ -5817,6 +5984,12 @@ ULONG_PTR NTAPI ChpeStubRtlQueryCriticalSectionOwner(PVOID a0)
     return 0;
 }
 
+NTSTATUS NTAPI ChpeAutoRtlQueryDynamicTimeZoneInformation(PRTL_DYNAMIC_TIME_ZONE_INFORMATION a0)
+{
+    return RtlQueryDynamicTimeZoneInformation(a0);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlQueryDynamicTimeZoneInformation), __typeof__(&RtlQueryDynamicTimeZoneInformation)), "RtlQueryDynamicTimeZoneInformation bridge signature mismatch");
+
 ULONG_PTR NTAPI ChpeStubRtlQueryElevationFlags(PVOID a0)
 {
     return 0;
@@ -5913,12 +6086,6 @@ PWSTR NTAPI ChpeAutoRtlQueryTagHeap(PVOID a0, ULONG a1, USHORT a2, BOOLEAN a3, P
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlQueryTagHeap), __typeof__(&RtlQueryTagHeap)), "RtlQueryTagHeap bridge signature mismatch");
 
-NTSTATUS NTAPI ChpeAutoRtlQueryDynamicTimeZoneInformation(PRTL_DYNAMIC_TIME_ZONE_INFORMATION a0)
-{
-    return RtlQueryDynamicTimeZoneInformation(a0);
-}
-_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlQueryDynamicTimeZoneInformation), __typeof__(&RtlQueryDynamicTimeZoneInformation)), "RtlQueryDynamicTimeZoneInformation bridge signature mismatch");
-
 NTSTATUS NTAPI ChpeAutoRtlQueryTimeZoneInformation(PRTL_TIME_ZONE_INFORMATION a0)
 {
     return RtlQueryTimeZoneInformation(a0);
@@ -5975,7 +6142,7 @@ NTSTATUS NTAPI ChpeAutoRtlRegisterSecureMemoryCacheCallback(PRTL_SECURE_MEMORY_C
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlRegisterSecureMemoryCacheCallback), __typeof__(&RtlRegisterSecureMemoryCacheCallback)), "RtlRegisterSecureMemoryCacheCallback bridge signature mismatch");
 
-/* Native definition: dll/ntdll/ldr/ldrguard.c */
+/* Native definition: dll/ntdll/ldr/ldrcfg.c */
 #ifdef RtlRegisterCfgTargetRange
 #undef RtlRegisterCfgTargetRange
 #endif
@@ -6041,16 +6208,23 @@ ULONG_PTR NTAPI ChpeStubRtlResetMemoryZone(ULONG a0)
     return 0;
 }
 
+NTSTATUS NTAPI ChpeAutoRtlResetNtUserPfn(VOID)
+{
+    return RtlResetNtUserPfn();
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlResetNtUserPfn), __typeof__(&RtlResetNtUserPfn)), "RtlResetNtUserPfn bridge signature mismatch");
+
 void NTAPI ChpeAutoRtlResetRtlTranslations(PNLSTABLEINFO a0)
 {
     RtlResetRtlTranslations(a0);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlResetRtlTranslations), __typeof__(&RtlResetRtlTranslations)), "RtlResetRtlTranslations bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlRetrieveNtUserPfn(PVOID a0, PVOID a1, PVOID a2)
+NTSTATUS NTAPI ChpeAutoRtlRetrieveNtUserPfn(const void ** a0, const void ** a1, const void ** a2)
 {
-    return 0;
+    return RtlRetrieveNtUserPfn(a0, a1, a2);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlRetrieveNtUserPfn), __typeof__(&RtlRetrieveNtUserPfn)), "RtlRetrieveNtUserPfn bridge signature mismatch");
 
 HRESULT NTAPI ChpeAutoRtlRevertMemoryStream(struct IStream * a0)
 {
@@ -6139,7 +6313,7 @@ void NTAPI ChpeAutoRtlSetBits(PRTL_BITMAP a0, ULONG a1, ULONG a2)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlSetBits), __typeof__(&RtlSetBits)), "RtlSetBits bridge signature mismatch");
 
-/* Native definition: dll/ntdll/ldr/ldrguard.c */
+/* Native definition: dll/ntdll/ldr/ldrcfg.c */
 #ifdef RtlSetCfgTargetValidity
 #undef RtlSetCfgTargetValidity
 #endif
@@ -6161,7 +6335,7 @@ NTSTATUS NTAPI ChpeAutoRtlSetCurrentDirectory_U(PUNICODE_STRING a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlSetCurrentDirectory_U), __typeof__(&RtlSetCurrentDirectory_U)), "RtlSetCurrentDirectory_U bridge signature mismatch");
 
-VOID NTAPI ChpeAutoRtlSetCurrentEnvironment(PWSTR a0, PWSTR *a1)
+void NTAPI ChpeAutoRtlSetCurrentEnvironment(PWSTR a0, PWSTR * a1)
 {
     RtlSetCurrentEnvironment(a0, a1);
 }
@@ -6203,6 +6377,16 @@ NTSTATUS NTAPI ChpeAutoRtlSetEnvironmentVariable(PWSTR * a0, PUNICODE_STRING a1,
     return RtlSetEnvironmentVariable(a0, a1, a2);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlSetEnvironmentVariable), __typeof__(&RtlSetEnvironmentVariable)), "RtlSetEnvironmentVariable bridge signature mismatch");
+
+/* Native definition: dll/ntdll/rtl/xstate_wow64.c */
+#ifdef RtlSetExtendedFeaturesMask
+#undef RtlSetExtendedFeaturesMask
+#endif
+VOID NTAPI RtlSetExtendedFeaturesMask(PVOID a0, ULONGLONG a1);
+VOID NTAPI ChpeAutoRtlSetExtendedFeaturesMask(PVOID a0, ULONGLONG a1)
+{
+    RtlSetExtendedFeaturesMask(a0, a1);
+}
 
 NTSTATUS NTAPI ChpeAutoRtlSetGroupSecurityDescriptor(PSECURITY_DESCRIPTOR a0, PSID a1, BOOLEAN a2)
 {
@@ -6590,6 +6774,12 @@ ULONG NTAPI ChpeAutoRtlUnicodeStringToAnsiSize(PCUNICODE_STRING a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlUnicodeStringToAnsiSize), __typeof__(&RtlxUnicodeStringToAnsiSize)), "RtlUnicodeStringToAnsiSize bridge signature mismatch");
 
+NTSTATUS NTAPI ChpeAutoRtlUnicodeToUTF8N(PCHAR a0, ULONG a1, PULONG a2, PCWCH a3, ULONG a4)
+{
+    return RtlUnicodeToUTF8N(a0, a1, a2, a3, a4);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlUnicodeToUTF8N), __typeof__(&RtlUnicodeToUTF8N)), "RtlUnicodeToUTF8N bridge signature mismatch");
+
 NTSTATUS NTAPI ChpeAutoRtlUnicodeStringToAnsiString(PANSI_STRING a0, PCUNICODE_STRING a1, BOOLEAN a2)
 {
     return RtlUnicodeStringToAnsiString(a0, a1, a2);
@@ -6692,7 +6882,7 @@ ULONG_PTR NTAPI ChpeStubRtlUnlockModuleSection(ULONG a0)
     return 0;
 }
 
-/* Native definition: dll/ntdll/ldr/ldrguard.c */
+/* Native definition: dll/ntdll/ldr/ldrcfg.c */
 #ifdef RtlUnregisterCfgTargetRange
 #undef RtlUnregisterCfgTargetRange
 #endif
@@ -6838,6 +7028,12 @@ NTSTATUS NTAPI ChpeAutoRtlVerifyVersionInfo(PRTL_OSVERSIONINFOEXW a0, ULONG a1, 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlVerifyVersionInfo), __typeof__(&RtlVerifyVersionInfo)), "RtlVerifyVersionInfo bridge signature mismatch");
 
+NTSTATUS NTAPI ChpeAutoRtlVirtualUnwind2(ULONG a0, ULONG_PTR a1, ULONG_PTR a2, PRUNTIME_FUNCTION a3, PCONTEXT a4, PBOOLEAN a5, PVOID * a6, PULONG_PTR a7, PKNONVOLATILE_CONTEXT_POINTERS a8, PULONG_PTR a9, PULONG_PTR a10, PEXCEPTION_ROUTINE * a11, ULONG a12)
+{
+    return RtlVirtualUnwind2(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlVirtualUnwind2), __typeof__(&RtlVirtualUnwind2)), "RtlVirtualUnwind2 bridge signature mismatch");
+
 ULONG NTAPI ChpeAutoRtlWalkFrameChain(PVOID * a0, ULONG a1, ULONG a2)
 {
     return RtlWalkFrameChain(a0, a1, a2);
@@ -6941,9 +7137,14 @@ NTSTATUS NTAPI ChpeAutoRtlWow64SetThreadContext(HANDLE a0, PWOW64_CONTEXT a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlWow64SetThreadContext), __typeof__(&RtlWow64SetThreadContext)), "RtlWow64SetThreadContext bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlWow64SuspendThread(ULONG a0, ULONG a1)
+/* Native definition: dll/ntdll/wow64.c */
+#ifdef RtlWow64SuspendThread
+#undef RtlWow64SuspendThread
+#endif
+NTSTATUS NTAPI RtlWow64SuspendThread(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoRtlWow64SuspendThread(PVOID a0, PVOID a1)
 {
-    return 0;
+    return RtlWow64SuspendThread(a0, a1);
 }
 
 HRESULT NTAPI ChpeAutoRtlWriteMemoryStream(struct IStream * a0, const void * a1, ULONG a2, PULONG a3)
@@ -7427,9 +7628,14 @@ ULONG_PTR NTAPI ChpeStubWinSqmEndSession(PVOID a0)
     return 0;
 }
 
-ULONG_PTR NTAPI ChpeStubWinSqmEventEnabled(ULONG a0, PVOID a1)
+/* Native definition: dll/ntdll/rtl/wnf.c */
+#ifdef WinSqmEventEnabled
+#undef WinSqmEventEnabled
+#endif
+BOOL NTAPI WinSqmEventEnabled(ULONG a0, PVOID a1);
+BOOL NTAPI ChpeAutoWinSqmEventEnabled(ULONG a0, PVOID a1)
 {
-    return 0;
+    return WinSqmEventEnabled(a0, a1);
 }
 
 ULONG_PTR NTAPI ChpeStubWinSqmEventWrite(ULONG a0, ULONG a1, ULONG a2)
@@ -7437,9 +7643,14 @@ ULONG_PTR NTAPI ChpeStubWinSqmEventWrite(ULONG a0, ULONG a1, ULONG a2)
     return 0;
 }
 
-ULONG_PTR NTAPI ChpeStubWinSqmIsOptedIn(VOID)
+/* Native definition: dll/ntdll/rtl/wnf.c */
+#ifdef WinSqmIsOptedIn
+#undef WinSqmIsOptedIn
+#endif
+BOOL NTAPI WinSqmIsOptedIn(VOID);
+BOOL NTAPI ChpeAutoWinSqmIsOptedIn(VOID)
 {
-    return 0;
+    return WinSqmIsOptedIn();
 }
 
 ULONG_PTR NTAPI ChpeStubWinSqmSetDWORD(PVOID a0, ULONG a1, ULONG a2)
@@ -7796,19 +8007,25 @@ NTSTATUS NTAPI ChpeAutoZwCloseObjectAuditAlarm(PUNICODE_STRING a0, PVOID a1, BOO
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCloseObjectAuditAlarm), __typeof__(&ZwCloseObjectAuditAlarm)), "ZwCloseObjectAuditAlarm bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwCommitComplete(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCommitComplete(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwCommitComplete(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtCommitComplete(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwCommitEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCommitEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwCommitEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtCommitEnlistment(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwCommitTransaction(PVOID a0, ULONG a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCommitTransaction(PVOID a0, ULONG a1);
+NTSTATUS NTAPI ChpeAutoZwCommitTransaction(PVOID a0, ULONG a1)
 {
-    return 0;
+    return NtCommitTransaction(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoZwCompactKeys(ULONG a0, PHANDLE a1)
@@ -7859,9 +8076,11 @@ NTSTATUS NTAPI ChpeAutoZwCreateDirectoryObject(PHANDLE a0, ACCESS_MASK a1, POBJE
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreateDirectoryObject), __typeof__(&ZwCreateDirectoryObject)), "ZwCreateDirectoryObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwCreateEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, PVOID a7)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCreateEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, PVOID a7);
+NTSTATUS NTAPI ChpeAutoZwCreateEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, PVOID a7)
 {
-    return 0;
+    return NtCreateEnlistment(a0, a1, a2, a3, a4, a5, a6, a7);
 }
 
 NTSTATUS NTAPI ChpeAutoZwCreateEvent(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, EVENT_TYPE a3, BOOLEAN a4)
@@ -7924,10 +8143,11 @@ NTSTATUS NTAPI ChpeAutoZwCreateKey(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTE
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreateKey), __typeof__(&ZwCreateKey)), "ZwCreateKey bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwCreateKeyTransacted(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4, ULONG a5, PVOID a6, PVOID a7)
+NTSTATUS NTAPI ChpeAutoZwCreateKeyTransacted(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, ULONG a3, PUNICODE_STRING a4, ULONG a5, HANDLE a6, PULONG a7)
 {
-    return 0;
+    return NtCreateKeyTransacted(a0, a1, a2, a3, a4, a5, a6, a7);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreateKeyTransacted), __typeof__(&NtCreateKeyTransacted)), "ZwCreateKeyTransacted bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoZwCreateKeyedEvent(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, ULONG a3)
 {
@@ -7983,9 +8203,11 @@ NTSTATUS NTAPI ChpeAutoZwCreateProfile(PHANDLE a0, HANDLE a1, PVOID a2, ULONG a3
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreateProfile), __typeof__(&ZwCreateProfile)), "ZwCreateProfile bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwCreateResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, PCWSTR a6)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCreateResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6);
+NTSTATUS NTAPI ChpeAutoZwCreateResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6)
 {
-    return 0;
+    return NtCreateResourceManager(a0, a1, a2, a3, a4, a5, a6);
 }
 
 NTSTATUS NTAPI ChpeAutoZwCreateSection(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, PLARGE_INTEGER a3, ULONG a4, ULONG a5, HANDLE a6)
@@ -8030,14 +8252,18 @@ NTSTATUS NTAPI ChpeAutoZwCreateToken(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBU
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreateToken), __typeof__(&ZwCreateToken)), "ZwCreateToken bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwCreateTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, ULONG a7, PVOID a8, PCWSTR a9)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCreateTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, ULONG a7, PVOID a8, PVOID a9);
+NTSTATUS NTAPI ChpeAutoZwCreateTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5, ULONG a6, ULONG a7, PVOID a8, PVOID a9)
 {
-    return 0;
+    return NtCreateTransaction(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9);
 }
 
-ULONG_PTR NTAPI ChpeStubZwCreateTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, ULONG a4, ULONG a5)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtCreateTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, ULONG a4, ULONG a5);
+NTSTATUS NTAPI ChpeAutoZwCreateTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, ULONG a4, ULONG a5)
 {
-    return 0;
+    return NtCreateTransactionManager(a0, a1, a2, a3, a4, a5);
 }
 
 NTSTATUS NTAPI ChpeAutoZwCreateUserProcess(PHANDLE a0, PHANDLE a1, ACCESS_MASK a2, ACCESS_MASK a3, POBJECT_ATTRIBUTES a4, POBJECT_ATTRIBUTES a5, ULONG a6, ULONG a7, PRTL_USER_PROCESS_PARAMETERS a8, PPS_CREATE_INFO a9, PPS_ATTRIBUTE_LIST a10)
@@ -8118,10 +8344,11 @@ NTSTATUS NTAPI ChpeAutoZwDeleteObjectAuditAlarm(PUNICODE_STRING a0, PVOID a1, BO
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwDeleteObjectAuditAlarm), __typeof__(&ZwDeleteObjectAuditAlarm)), "ZwDeleteObjectAuditAlarm bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwDeletePrivateNamespace(PVOID a0)
+NTSTATUS NTAPI ChpeAutoZwDeletePrivateNamespace(HANDLE a0)
 {
-    return 0;
+    return NtDeletePrivateNamespace(a0);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwDeletePrivateNamespace), __typeof__(&NtDeletePrivateNamespace)), "ZwDeletePrivateNamespace bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoZwDeleteValueKey(HANDLE a0, PUNICODE_STRING a1)
 {
@@ -8191,9 +8418,11 @@ NTSTATUS NTAPI ChpeAutoZwEnumerateSystemEnvironmentValuesEx(ULONG a0, PVOID a1, 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwEnumerateSystemEnvironmentValuesEx), __typeof__(&NtEnumerateSystemEnvironmentValuesEx)), "ZwEnumerateSystemEnvironmentValuesEx bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwEnumerateTransactionObject(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtEnumerateTransactionObject(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoZwEnumerateTransactionObject(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtEnumerateTransactionObject(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoZwEnumerateValueKey(HANDLE a0, ULONG a1, KEY_VALUE_INFORMATION_CLASS a2, PVOID a3, ULONG a4, PULONG a5)
@@ -8213,6 +8442,18 @@ NTSTATUS NTAPI ChpeAutoZwFilterToken(HANDLE a0, ULONG a1, PTOKEN_GROUPS a2, PTOK
     return NtFilterToken(a0, a1, a2, a3, a4, a5);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwFilterToken), __typeof__(&NtFilterToken)), "ZwFilterToken bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoZwCreateLowBoxToken(PHANDLE a0, HANDLE a1, ACCESS_MASK a2, POBJECT_ATTRIBUTES a3, PSID a4, ULONG a5, PSID_AND_ATTRIBUTES a6, ULONG a7, HANDLE * a8)
+{
+    return NtCreateLowBoxToken(a0, a1, a2, a3, a4, a5, a6, a7, a8);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreateLowBoxToken), __typeof__(&NtCreateLowBoxToken)), "ZwCreateLowBoxToken bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoZwCreatePrivateNamespace(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, PVOID a3)
+{
+    return NtCreatePrivateNamespace(a0, a1, a2, a3);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwCreatePrivateNamespace), __typeof__(&NtCreatePrivateNamespace)), "ZwCreatePrivateNamespace bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoZwFindAtom(PWSTR a0, ULONG a1, PRTL_ATOM a2)
 {
@@ -8342,9 +8583,11 @@ NTSTATUS NTAPI ChpeAutoZwGetNlsSectionPtr(ULONG a0, ULONG a1, PVOID a2, PVOID a3
     return NtGetNlsSectionPtr(a0, a1, a2, a3, a4);
 }
 
-ULONG_PTR NTAPI ChpeStubZwGetNotificationResourceManager(PVOID a0, PVOID a1, ULONG a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtGetNotificationResourceManager(PVOID a0, PVOID a1, ULONG a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6);
+NTSTATUS NTAPI ChpeAutoZwGetNotificationResourceManager(PVOID a0, PVOID a1, ULONG a2, PVOID a3, PVOID a4, ULONG a5, PVOID a6)
 {
-    return 0;
+    return NtGetNotificationResourceManager(a0, a1, a2, a3, a4, a5, a6);
 }
 
 NTSTATUS NTAPI ChpeAutoZwGetPlugPlayEvent(ULONG a0, ULONG a1, PPLUGPLAY_EVENT_BLOCK a2, ULONG a3)
@@ -8542,9 +8785,11 @@ NTSTATUS NTAPI ChpeAutoZwOpenDirectoryObject(PHANDLE a0, ACCESS_MASK a1, POBJECT
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwOpenDirectoryObject), __typeof__(&ZwOpenDirectoryObject)), "ZwOpenDirectoryObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwOpenEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtOpenEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoZwOpenEnlistment(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
 {
-    return 0;
+    return NtOpenEnlistment(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoZwOpenEvent(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2)
@@ -8583,10 +8828,17 @@ NTSTATUS NTAPI ChpeAutoZwOpenKey(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwOpenKey), __typeof__(&ZwOpenKey)), "ZwOpenKey bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwOpenKeyTransacted(PVOID a0, ULONG a1, PVOID a2, PVOID a3)
+NTSTATUS NTAPI ChpeAutoZwOpenKeyEx(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, ULONG a3)
 {
-    return 0;
+    return NtOpenKeyEx(a0, a1, a2, a3);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwOpenKeyEx), __typeof__(&NtOpenKeyEx)), "ZwOpenKeyEx bridge signature mismatch");
+
+NTSTATUS NTAPI ChpeAutoZwOpenKeyTransacted(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, HANDLE a3)
+{
+    return NtOpenKeyTransacted(a0, a1, a2, a3);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwOpenKeyTransacted), __typeof__(&NtOpenKeyTransacted)), "ZwOpenKeyTransacted bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoZwOpenKeyedEvent(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2)
 {
@@ -8606,10 +8858,11 @@ NTSTATUS NTAPI ChpeAutoZwOpenObjectAuditAlarm(PUNICODE_STRING a0, PVOID a1, PUNI
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwOpenObjectAuditAlarm), __typeof__(&ZwOpenObjectAuditAlarm)), "ZwOpenObjectAuditAlarm bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwOpenPrivateNamespace(PVOID a0, ULONG a1, PVOID a2, PVOID a3)
+NTSTATUS NTAPI ChpeAutoZwOpenPrivateNamespace(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, PVOID a3)
 {
-    return 0;
+    return NtOpenPrivateNamespace(a0, a1, a2, a3);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwOpenPrivateNamespace), __typeof__(&NtOpenPrivateNamespace)), "ZwOpenPrivateNamespace bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoZwOpenProcess(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2, PCLIENT_ID a3)
 {
@@ -8629,9 +8882,11 @@ NTSTATUS NTAPI ChpeAutoZwOpenProcessTokenEx(HANDLE a0, ACCESS_MASK a1, ULONG a2,
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwOpenProcessTokenEx), __typeof__(&ZwOpenProcessTokenEx)), "ZwOpenProcessTokenEx bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwOpenResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtOpenResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoZwOpenResourceManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
 {
-    return 0;
+    return NtOpenResourceManager(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoZwOpenSection(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTES a2)
@@ -8681,14 +8936,18 @@ NTSTATUS NTAPI ChpeAutoZwOpenTimer(PHANDLE a0, ACCESS_MASK a1, POBJECT_ATTRIBUTE
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwOpenTimer), __typeof__(&ZwOpenTimer)), "ZwOpenTimer bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwOpenTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtOpenTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoZwOpenTransaction(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4)
 {
-    return 0;
+    return NtOpenTransaction(a0, a1, a2, a3, a4);
 }
 
-ULONG_PTR NTAPI ChpeStubZwOpenTransactionManager(PVOID a0, ULONG a1, PVOID a2, PCWSTR a3, PVOID a4, ULONG a5)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtOpenTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5);
+NTSTATUS NTAPI ChpeAutoZwOpenTransactionManager(PVOID a0, ULONG a1, PVOID a2, PVOID a3, PVOID a4, ULONG a5)
 {
-    return 0;
+    return NtOpenTransactionManager(a0, a1, a2, a3, a4, a5);
 }
 
 NTSTATUS NTAPI ChpeAutoZwPlugPlayControl(PLUGPLAY_CONTROL_CLASS a0, PVOID a1, ULONG a2)
@@ -8703,24 +8962,32 @@ NTSTATUS NTAPI ChpeAutoZwPowerInformation(POWER_INFORMATION_LEVEL a0, PVOID a1, 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwPowerInformation), __typeof__(&ZwPowerInformation)), "ZwPowerInformation bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwPrePrepareComplete(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPrePrepareComplete(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwPrePrepareComplete(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtPrePrepareComplete(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwPrePrepareEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPrePrepareEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwPrePrepareEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtPrePrepareEnlistment(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwPrepareComplete(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPrepareComplete(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwPrepareComplete(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtPrepareComplete(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwPrepareEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPrepareEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwPrepareEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtPrepareEnlistment(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoZwPrivilegeCheck(HANDLE a0, PPRIVILEGE_SET a1, PBOOLEAN a2)
@@ -8741,14 +9008,18 @@ NTSTATUS NTAPI ChpeAutoZwPrivilegedServiceAuditAlarm(PUNICODE_STRING a0, PUNICOD
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwPrivilegedServiceAuditAlarm), __typeof__(&ZwPrivilegedServiceAuditAlarm)), "ZwPrivilegedServiceAuditAlarm bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwPropagationComplete(PVOID a0, ULONG a1, ULONG a2, PVOID a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPropagationComplete(PVOID a0, ULONG a1, ULONG a2, PVOID a3);
+NTSTATUS NTAPI ChpeAutoZwPropagationComplete(PVOID a0, ULONG a1, ULONG a2, PVOID a3)
 {
-    return 0;
+    return NtPropagationComplete(a0, a1, a2, a3);
 }
 
-ULONG_PTR NTAPI ChpeStubZwPropagationFailed(PVOID a0, ULONG a1, ULONG a2)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtPropagationFailed(PVOID a0, ULONG a1, ULONG a2);
+NTSTATUS NTAPI ChpeAutoZwPropagationFailed(PVOID a0, ULONG a1, ULONG a2)
 {
-    return 0;
+    return NtPropagationFailed(a0, a1, a2);
 }
 
 NTSTATUS NTAPI ChpeAutoZwProtectVirtualMemory(HANDLE a0, PVOID * a1, SIZE_T * a2, ULONG a3, PULONG a4)
@@ -8854,9 +9125,11 @@ NTSTATUS NTAPI ChpeAutoZwQueryInformationByName(POBJECT_ATTRIBUTES a0, PIO_STATU
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwQueryInformationByName), __typeof__(&ZwQueryInformationByName)), "ZwQueryInformationByName bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwQueryInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtQueryInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoZwQueryInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtQueryInformationEnlistment(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoZwQueryInformationFile(HANDLE a0, PIO_STATUS_BLOCK a1, PVOID a2, ULONG a3, FILE_INFORMATION_CLASS a4)
@@ -8883,9 +9156,11 @@ NTSTATUS NTAPI ChpeAutoZwQueryInformationProcess(HANDLE a0, PROCESSINFOCLASS a1,
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwQueryInformationProcess), __typeof__(&ZwQueryInformationProcess)), "ZwQueryInformationProcess bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwQueryInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtQueryInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoZwQueryInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtQueryInformationResourceManager(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoZwQueryInformationThread(HANDLE a0, THREADINFOCLASS a1, PVOID a2, ULONG a3, PULONG a4)
@@ -8900,14 +9175,18 @@ NTSTATUS NTAPI ChpeAutoZwQueryInformationToken(HANDLE a0, TOKEN_INFORMATION_CLAS
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwQueryInformationToken), __typeof__(&ZwQueryInformationToken)), "ZwQueryInformationToken bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwQueryInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtQueryInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoZwQueryInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtQueryInformationTransaction(a0, a1, a2, a3, a4);
 }
 
-ULONG_PTR NTAPI ChpeStubZwQueryInformationTransactionManager(PVOID a0)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtQueryInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4);
+NTSTATUS NTAPI ChpeAutoZwQueryInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
 {
-    return 0;
+    return NtQueryInformationTransactionManager(a0, a1, a2, a3, a4);
 }
 
 ULONG_PTR NTAPI ChpeStubZwQueryInformationWorkerFactory(PVOID a0, ULONG a1, PVOID a2, ULONG a3, PVOID a4)
@@ -9121,9 +9400,11 @@ NTSTATUS NTAPI ChpeAutoZwReadFileScatter(HANDLE a0, HANDLE a1, PIO_APC_ROUTINE a
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwReadFileScatter), __typeof__(&ZwReadFileScatter)), "ZwReadFileScatter bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwReadOnlyEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtReadOnlyEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwReadOnlyEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtReadOnlyEnlistment(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoZwReadRequestData(HANDLE a0, PPORT_MESSAGE a1, ULONG a2, PVOID a3, ULONG a4, PULONG a5)
@@ -9138,24 +9419,32 @@ NTSTATUS NTAPI ChpeAutoZwReadVirtualMemory(HANDLE a0, PVOID a1, PVOID a2, SIZE_T
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwReadVirtualMemory), __typeof__(&ZwReadVirtualMemory)), "ZwReadVirtualMemory bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwRecoverEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRecoverEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwRecoverEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRecoverEnlistment(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwRecoverResourceManager(PVOID a0)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRecoverResourceManager(PVOID a0);
+NTSTATUS NTAPI ChpeAutoZwRecoverResourceManager(PVOID a0)
 {
-    return 0;
+    return NtRecoverResourceManager(a0);
 }
 
-ULONG_PTR NTAPI ChpeStubZwRecoverTransactionManager(PVOID a0)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRecoverTransactionManager(PVOID a0);
+NTSTATUS NTAPI ChpeAutoZwRecoverTransactionManager(PVOID a0)
 {
-    return 0;
+    return NtRecoverTransactionManager(a0);
 }
 
-ULONG_PTR NTAPI ChpeStubZwRegisterProtocolAddressInformation(PVOID a0, PVOID a1, ULONG a2, PVOID a3, ULONG a4)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRegisterProtocolAddressInformation(PVOID a0, PVOID a1, ULONG a2, PVOID a3, ULONG a4);
+NTSTATUS NTAPI ChpeAutoZwRegisterProtocolAddressInformation(PVOID a0, PVOID a1, ULONG a2, PVOID a3, ULONG a4)
 {
-    return 0;
+    return NtRegisterProtocolAddressInformation(a0, a1, a2, a3, a4);
 }
 
 NTSTATUS NTAPI ChpeAutoZwRegisterThreadTerminatePort(HANDLE a0)
@@ -9216,9 +9505,11 @@ NTSTATUS NTAPI ChpeAutoZwRenameKey(HANDLE a0, PUNICODE_STRING a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwRenameKey), __typeof__(&NtRenameKey)), "ZwRenameKey bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwRenameTransactionManager(PCWSTR a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRenameTransactionManager(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwRenameTransactionManager(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRenameTransactionManager(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoZwReplaceKey(POBJECT_ATTRIBUTES a0, HANDLE a1, POBJECT_ATTRIBUTES a2)
@@ -9310,24 +9601,32 @@ NTSTATUS NTAPI ChpeAutoZwResumeThread(HANDLE a0, PULONG a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwResumeThread), __typeof__(&ZwResumeThread)), "ZwResumeThread bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwRollbackComplete(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRollbackComplete(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwRollbackComplete(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRollbackComplete(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwRollbackEnlistment(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRollbackEnlistment(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwRollbackEnlistment(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRollbackEnlistment(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwRollbackTransaction(PVOID a0, ULONG a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRollbackTransaction(PVOID a0, ULONG a1);
+NTSTATUS NTAPI ChpeAutoZwRollbackTransaction(PVOID a0, ULONG a1)
 {
-    return 0;
+    return NtRollbackTransaction(a0, a1);
 }
 
-ULONG_PTR NTAPI ChpeStubZwRollforwardTransactionManager(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtRollforwardTransactionManager(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwRollforwardTransactionManager(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtRollforwardTransactionManager(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoZwSaveKey(HANDLE a0, HANDLE a1)
@@ -9439,9 +9738,11 @@ NTSTATUS NTAPI ChpeAutoZwSetInformationDebugObject(HANDLE a0, DEBUGOBJECTINFOCLA
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwSetInformationDebugObject), __typeof__(&ZwSetInformationDebugObject)), "ZwSetInformationDebugObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwSetInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSetInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3);
+NTSTATUS NTAPI ChpeAutoZwSetInformationEnlistment(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
 {
-    return 0;
+    return NtSetInformationEnlistment(a0, a1, a2, a3);
 }
 
 NTSTATUS NTAPI ChpeAutoZwSetInformationFile(HANDLE a0, PIO_STATUS_BLOCK a1, PVOID a2, ULONG a3, FILE_INFORMATION_CLASS a4)
@@ -9474,9 +9775,11 @@ NTSTATUS NTAPI ChpeAutoZwSetInformationProcess(HANDLE a0, PROCESSINFOCLASS a1, P
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwSetInformationProcess), __typeof__(&ZwSetInformationProcess)), "ZwSetInformationProcess bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwSetInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSetInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3);
+NTSTATUS NTAPI ChpeAutoZwSetInformationResourceManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
 {
-    return 0;
+    return NtSetInformationResourceManager(a0, a1, a2, a3);
 }
 
 NTSTATUS NTAPI ChpeAutoZwSetInformationThread(HANDLE a0, THREADINFOCLASS a1, PVOID a2, ULONG a3)
@@ -9491,14 +9794,18 @@ NTSTATUS NTAPI ChpeAutoZwSetInformationToken(HANDLE a0, TOKEN_INFORMATION_CLASS 
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwSetInformationToken), __typeof__(&ZwSetInformationToken)), "ZwSetInformationToken bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwSetInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSetInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3);
+NTSTATUS NTAPI ChpeAutoZwSetInformationTransaction(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
 {
-    return 0;
+    return NtSetInformationTransaction(a0, a1, a2, a3);
 }
 
-ULONG_PTR NTAPI ChpeStubZwSetInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSetInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3);
+NTSTATUS NTAPI ChpeAutoZwSetInformationTransactionManager(PVOID a0, ULONG a1, PVOID a2, ULONG a3)
 {
-    return 0;
+    return NtSetInformationTransactionManager(a0, a1, a2, a3);
 }
 
 NTSTATUS NTAPI ChpeAutoZwSetInformationVirtualMemory(HANDLE a0, VIRTUAL_MEMORY_INFORMATION_CLASS a1, ULONG_PTR a2, PMEMORY_RANGE_ENTRY a3, PVOID a4, ULONG a5)
@@ -9637,9 +9944,11 @@ NTSTATUS NTAPI ChpeAutoZwSignalAndWaitForSingleObject(HANDLE a0, HANDLE a1, BOOL
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoZwSignalAndWaitForSingleObject), __typeof__(&ZwSignalAndWaitForSingleObject)), "ZwSignalAndWaitForSingleObject bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubZwSinglePhaseReject(PVOID a0, PVOID a1)
+/* No public prototype: ABI slots and arity from native ntdll.spec. */
+NTSTATUS NTAPI NtSinglePhaseReject(PVOID a0, PVOID a1);
+NTSTATUS NTAPI ChpeAutoZwSinglePhaseReject(PVOID a0, PVOID a1)
 {
-    return 0;
+    return NtSinglePhaseReject(a0, a1);
 }
 
 NTSTATUS NTAPI ChpeAutoZwStartProfile(HANDLE a0)
@@ -10347,13 +10656,13 @@ errno_t NTAPI ChpeAutostrncpy_s(char * a0, size_t a1, const char * a2, size_t a3
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutostrncpy_s), __typeof__(&strncpy_s)), "strncpy_s bridge signature mismatch");
 
-size_t NTAPI ChpeAutostrcspn(const char * a0, const char * a1)
+unsigned long long NTAPI ChpeAutostrcspn(const char * a0, const char * a1)
 {
     return strcspn(a0, a1);
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutostrcspn), __typeof__(&strcspn)), "strcspn bridge signature mismatch");
 
-size_t NTAPI ChpeAutostrlen(const char * a0)
+unsigned long long NTAPI ChpeAutostrlen(const char * a0)
 {
     return strlen(a0);
 }
@@ -10389,7 +10698,7 @@ char * NTAPI ChpeAutostrrchr(const char * a0, int a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutostrrchr), __typeof__(&strrchr)), "strrchr bridge signature mismatch");
 
-size_t NTAPI ChpeAutostrspn(const char * a0, const char * a1)
+unsigned long long NTAPI ChpeAutostrspn(const char * a0, const char * a1)
 {
     return strspn(a0, a1);
 }
@@ -10479,7 +10788,7 @@ size_t NTAPI ChpeAutowcscspn(const wchar_t * a0, const wchar_t * a1)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutowcscspn), __typeof__(&wcscspn)), "wcscspn bridge signature mismatch");
 
-size_t NTAPI ChpeAutowcslen(const wchar_t * a0)
+unsigned long long NTAPI ChpeAutowcslen(const wchar_t * a0)
 {
     return wcslen(a0);
 }

@@ -70,7 +70,7 @@ HalpBroadcastIpiSpecifyVector(
 
 VOID
 NTAPI
-HalRequestIpiSpecifyVector(
+HalpRequestIpiSpecifyVector(
     _In_ KAFFINITY TargetSet,
     _In_ UCHAR Vector);
 

@@ -183,9 +183,10 @@ FsRtlInsertPerFileObjectContext(IN PFILE_OBJECT FileObject,
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (!(FileObject->Flags & FO_FILE_OBJECT_HAS_EXTENSION))
+    Status = IopAllocateFileObjectExtension(FileObject);
+    if (!NT_SUCCESS(Status))
     {
-        return STATUS_INVALID_DEVICE_REQUEST;
+        return Status;
     }
 
     /* Get filter contexts */
@@ -408,4 +409,155 @@ FsRtlTeardownPerStreamContexts(IN PFSRTL_ADVANCED_FCB_HEADER AdvFcbHeader)
         }
     }
     _SEH2_END;
+}
+
+typedef struct _FSRTL_PER_FILE_CONTEXT_CONTROL
+{
+    FAST_MUTEX Mutex;
+    LIST_ENTRY Contexts;
+} FSRTL_PER_FILE_CONTEXT_CONTROL, *PFSRTL_PER_FILE_CONTEXT_CONTROL;
+
+static
+PFSRTL_PER_FILE_CONTEXT
+FsRtlpFindPerFileContext(IN PFSRTL_PER_FILE_CONTEXT_CONTROL Control,
+                         IN PVOID OwnerId OPTIONAL,
+                         IN PVOID InstanceId OPTIONAL)
+{
+    PFSRTL_PER_FILE_CONTEXT Context;
+    PLIST_ENTRY Entry;
+
+    for (Entry = Control->Contexts.Flink; Entry != &Control->Contexts; Entry = Entry->Flink)
+    {
+        Context = CONTAINING_RECORD(Entry, FSRTL_PER_FILE_CONTEXT, Links);
+        if ((OwnerId == NULL || Context->OwnerId == OwnerId) &&
+            (InstanceId == NULL || Context->InstanceId == InstanceId))
+        {
+            return Context;
+        }
+    }
+
+    return NULL;
+}
+
+NTSTATUS
+NTAPI
+FsRtlInsertPerFileContext(IN PVOID *PerFileContextPointer,
+                          IN PFSRTL_PER_FILE_CONTEXT Ptr)
+{
+    PFSRTL_PER_FILE_CONTEXT_CONTROL Control;
+
+    if (PerFileContextPointer == NULL)
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    Control = *PerFileContextPointer;
+    if (Control == NULL)
+    {
+        Control = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Control), 'cfSF');
+        if (Control == NULL)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        ExInitializeFastMutex(&Control->Mutex);
+        InitializeListHead(&Control->Contexts);
+        if (InterlockedCompareExchangePointer(PerFileContextPointer, Control, NULL) != NULL)
+        {
+            ExFreePoolWithTag(Control, 'cfSF');
+            Control = *PerFileContextPointer;
+        }
+    }
+
+    ExAcquireFastMutex(&Control->Mutex);
+    InsertHeadList(&Control->Contexts, &Ptr->Links);
+    ExReleaseFastMutex(&Control->Mutex);
+    return STATUS_SUCCESS;
+}
+
+PFSRTL_PER_FILE_CONTEXT
+NTAPI
+FsRtlLookupPerFileContext(IN PVOID *PerFileContextPointer,
+                          IN PVOID OwnerId OPTIONAL,
+                          IN PVOID InstanceId OPTIONAL)
+{
+    PFSRTL_PER_FILE_CONTEXT_CONTROL Control;
+    PFSRTL_PER_FILE_CONTEXT Context;
+
+    if (PerFileContextPointer == NULL || *PerFileContextPointer == NULL)
+    {
+        return NULL;
+    }
+
+    Control = *PerFileContextPointer;
+    ExAcquireFastMutex(&Control->Mutex);
+    Context = FsRtlpFindPerFileContext(Control, OwnerId, InstanceId);
+    ExReleaseFastMutex(&Control->Mutex);
+    return Context;
+}
+
+PFSRTL_PER_FILE_CONTEXT
+NTAPI
+FsRtlRemovePerFileContext(IN PVOID *PerFileContextPointer,
+                          IN PVOID OwnerId OPTIONAL,
+                          IN PVOID InstanceId OPTIONAL)
+{
+    PFSRTL_PER_FILE_CONTEXT_CONTROL Control;
+    PFSRTL_PER_FILE_CONTEXT Context;
+
+    if (PerFileContextPointer == NULL || *PerFileContextPointer == NULL)
+    {
+        return NULL;
+    }
+
+    Control = *PerFileContextPointer;
+    ExAcquireFastMutex(&Control->Mutex);
+    Context = FsRtlpFindPerFileContext(Control, OwnerId, InstanceId);
+    if (Context != NULL)
+    {
+        RemoveEntryList(&Context->Links);
+    }
+    ExReleaseFastMutex(&Control->Mutex);
+    return Context;
+}
+
+VOID
+NTAPI
+FsRtlTeardownPerFileContexts(IN PVOID *PerFileContextPointer)
+{
+    PFSRTL_PER_FILE_CONTEXT_CONTROL Control;
+    PFSRTL_PER_FILE_CONTEXT Context;
+
+    if (PerFileContextPointer == NULL)
+    {
+        return;
+    }
+
+    Control = InterlockedExchangePointer(PerFileContextPointer, NULL);
+    if (Control == NULL)
+    {
+        return;
+    }
+
+    for (;;)
+    {
+        Context = NULL;
+
+        ExAcquireFastMutex(&Control->Mutex);
+        if (!IsListEmpty(&Control->Contexts))
+        {
+            Context = CONTAINING_RECORD(RemoveHeadList(&Control->Contexts), FSRTL_PER_FILE_CONTEXT, Links);
+        }
+        ExReleaseFastMutex(&Control->Mutex);
+
+        if (Context == NULL)
+        {
+            break;
+        }
+
+        ASSERT(Context->FreeCallback);
+        Context->FreeCallback(Context);
+    }
+
+    ExFreePoolWithTag(Control, 'cfSF');
 }

@@ -3248,6 +3248,12 @@ ChpeAutoVDbgPrintReturnControlC(PCCH Format, va_list Arguments)
     return ChpeVDbgPrintReturnControlC(Format, Arguments);
 }
 
+int * CDECL
+ChpeErrno(VOID)
+{
+    return (int *)&NtCurrentTeb()->TlsSlots[16];
+}
+
 typedef int (CDECL *PCHPE_COMPARE)(const void *, const void *);
 
 PVOID CDECL
@@ -3489,11 +3495,6 @@ ChpeRtlReleaseMemoryStream(struct IStream *This)
 
     return Result;
 }
-
-NTSTATUS NTAPI NtCreateTransactionManager(PHANDLE TmHandle, ACCESS_MASK DesiredAccess,
-                                          POBJECT_ATTRIBUTES ObjectAttributes,
-                                          PUNICODE_STRING LogFileName, ULONG CreateOptions,
-                                          ULONG CommitStrength);
 
 #define CHPE_PARAMS_0 VOID
 #define CHPE_PARAMS_1 ULONG_PTR a0

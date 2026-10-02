@@ -65,6 +65,18 @@ NdisAllocateMemoryWithTagPriority(
   return ExAllocatePoolWithTagPriority(NonPagedPool, Length, Tag, Priority);
 }
 
+VOID
+EXPORT
+NdisFreeMemoryWithTagPriority(
+    IN NDIS_HANDLE      NdisHandle,
+    IN PVOID            VirtualAddress,
+    IN ULONG            Tag)
+{
+  UNREFERENCED_PARAMETER(NdisHandle);
+
+  ExFreePoolWithTag(VirtualAddress, Tag);
+}
+
 /*
  * @implemented
  */
@@ -424,51 +436,5 @@ NdisMAllocateSharedMemoryAsync(
 
   return NDIS_STATUS_PENDING;
 }
-
-/*
- * @implemented
- */
-VOID
-EXPORT
-NdisAllocateSharedMemory(
-    IN  NDIS_HANDLE             NdisAdapterHandle,
-    IN  ULONG                   Length,
-    IN  BOOLEAN                 Cached,
-    OUT PVOID                   *VirtualAddress,
-    OUT PNDIS_PHYSICAL_ADDRESS  PhysicalAddress)
-{
-    NdisMAllocateSharedMemory(NdisAdapterHandle,
-                              Length,
-                              Cached,
-                              VirtualAddress,
-                              PhysicalAddress);
-}
-
-
-/*
- * @implemented
- */
-VOID
-EXPORT
-NdisFreeSharedMemory(
-    IN NDIS_HANDLE              NdisAdapterHandle,
-    IN ULONG                    Length,
-    IN BOOLEAN                  Cached,
-    IN PVOID                    VirtualAddress,
-    IN NDIS_PHYSICAL_ADDRESS    PhysicalAddress)
-/*
- * FUNCTION:
- * ARGUMENTS:
- * NOTES:
- *    NDIS 4.0
- */
-{
-    NdisMFreeSharedMemory(NdisAdapterHandle,
-                          Length,
-                          Cached,
-                          VirtualAddress,
-                          PhysicalAddress);
-}
-
 
 /* EOF */

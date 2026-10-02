@@ -70,6 +70,7 @@ VOID LoopTransmit(
             IPInitializePacket(IPPacket, 0);
 
             IPPacket->NdisPacket = XmitPacket;
+            IPPacket->WfpTag = PC(NdisPacket)->WfpTag;
 
             GetDataPtr(IPPacket->NdisPacket,
                        0,

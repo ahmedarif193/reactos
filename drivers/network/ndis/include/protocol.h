@@ -66,6 +66,10 @@ typedef struct _NDIS_REQUEST_MAC_BLOCK {
 
 #define GET_ADAPTER_BINDING(Handle)((PADAPTER_BINDING)Handle)
 
+PLOGICAL_ADAPTER
+Ndis6AdapterFromBindingHandle(
+    NDIS_HANDLE NdisBindingHandle);
+
 
 extern LIST_ENTRY ProtocolListHead;
 extern KSPIN_LOCK ProtocolListLock;

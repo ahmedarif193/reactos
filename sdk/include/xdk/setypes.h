@@ -1052,7 +1052,7 @@ typedef enum _AUDIT_EVENT_TYPE {
 #define ACCESS_DS_OBJECT_TYPE_NAME_A "Directory Service Object"
 #define ACCESS_DS_OBJECT_TYPE_NAME_W L"Directory Service Object"
 
-#define ACCESS_REASON_TYPE_MASK 0xffff0000
+#define ACCESS_REASON_TYPE_MASK 0x00ff0000
 #define ACCESS_REASON_DATA_MASK 0x0000ffff
 
 typedef enum _ACCESS_REASON_TYPE {

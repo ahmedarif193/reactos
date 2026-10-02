@@ -2139,6 +2139,7 @@ NTAPI
 IopSendRemoveDevice(IN PDEVICE_OBJECT DeviceObject)
 {
     PDEVICE_NODE DeviceNode = IopGetDeviceNode(DeviceObject);
+    BOOLEAN Notified = DeviceNode->PreviousState == DeviceNodeRemovePendingCloses;
 
     ASSERT(DeviceNode->State == DeviceNodeAwaitingQueuedRemoval);
 
@@ -2157,7 +2158,8 @@ IopSendRemoveDevice(IN PDEVICE_OBJECT DeviceObject)
     }
 
     PiSetDevNodeState(DeviceNode, DeviceNodeRemoved);
-    PiNotifyTargetDeviceChange(&GUID_TARGET_DEVICE_REMOVE_COMPLETE, DeviceObject, NULL);
+    if (!Notified)
+        PiNotifyTargetDeviceChange(&GUID_TARGET_DEVICE_REMOVE_COMPLETE, DeviceObject, NULL);
     LONG_PTR refCount = ObDereferenceObject(DeviceObject);
     if (refCount != 0)
     {
@@ -2485,6 +2487,76 @@ IopPrepareDeviceForRemoval(IN PDEVICE_OBJECT DeviceObject, BOOLEAN Force)
     return STATUS_SUCCESS;
 }
 
+static LONG PiRemovePendingCloses;
+
+static
+BOOLEAN
+PiDeviceStackIsOpen(
+    _In_ PDEVICE_OBJECT PhysicalDeviceObject)
+{
+    PDEVICE_OBJECT Device;
+    BOOLEAN Open = FALSE;
+    KIRQL OldIrql;
+
+    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    for (Device = PhysicalDeviceObject; Device != NULL; Device = Device->AttachedDevice)
+    {
+        if (Device->ReferenceCount != 0)
+        {
+            Open = TRUE;
+            break;
+        }
+    }
+    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    return Open;
+}
+
+VOID
+NTAPI
+PiDeviceObjectClosed(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    PDEVICE_OBJECT Base = DeviceObject;
+    PDEVICE_NODE DeviceNode;
+    KIRQL OldIrql;
+
+    KeMemoryBarrier();
+    if (PiRemovePendingCloses == 0)
+        return;
+
+    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    while (IoGetDevObjExtension(Base)->AttachedTo != NULL)
+        Base = IoGetDevObjExtension(Base)->AttachedTo;
+    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+
+    DeviceNode = IopGetDeviceNode(Base);
+    if (DeviceNode == NULL ||
+        DeviceNode->State != DeviceNodeRemovePendingCloses ||
+        PiDeviceStackIsOpen(Base))
+    {
+        return;
+    }
+
+    PiQueueDeviceAction(Base, PiActionCloseRemovedDevice, NULL, NULL);
+}
+
+static
+VOID
+PiCloseRemovedDevice(
+    _In_ PDEVICE_NODE DeviceNode)
+{
+    if (DeviceNode->State != DeviceNodeRemovePendingCloses ||
+        PiDeviceStackIsOpen(DeviceNode->PhysicalDeviceObject))
+    {
+        return;
+    }
+
+    InterlockedDecrement(&PiRemovePendingCloses);
+    PiSetDevNodeState(DeviceNode, DeviceNodeAwaitingQueuedRemoval);
+    IopSendRemoveDevice(DeviceNode->PhysicalDeviceObject);
+    IopQueueTargetDeviceEvent(&GUID_DEVICE_SAFE_REMOVAL, &DeviceNode->InstancePath);
+}
+
 static
 NTSTATUS
 IopRemoveDevice(PDEVICE_NODE DeviceNode)
@@ -2498,7 +2570,9 @@ IopRemoveDevice(PDEVICE_NODE DeviceNode)
 
     DPRINT("Removing device: %wZ\n", &DeviceNode->InstancePath);
 
-    BOOLEAN surpriseRemoval = (_Bool)(DeviceNode->Flags & DNF_DEVICE_GONE);
+    BOOLEAN surpriseRemoval = (_Bool)(DeviceNode->Flags & DNF_DEVICE_GONE) ||
+                              ((DeviceNode->Flags & DNF_HAS_PROBLEM) &&
+                               DeviceNode->Problem == CM_PROB_FAILED_POST_START);
 
     Status = IopPrepareDeviceForRemoval(DeviceNode->PhysicalDeviceObject, surpriseRemoval);
 
@@ -2506,6 +2580,18 @@ IopRemoveDevice(PDEVICE_NODE DeviceNode)
     {
         IopSendSurpriseRemoval(DeviceNode->PhysicalDeviceObject);
         IopQueueTargetDeviceEvent(&GUID_DEVICE_SURPRISE_REMOVAL, &DeviceNode->InstancePath);
+        if (NT_SUCCESS(Status))
+        {
+            PiNotifyTargetDeviceChange(&GUID_TARGET_DEVICE_REMOVE_COMPLETE, DeviceNode->PhysicalDeviceObject, NULL);
+            InterlockedIncrement(&PiRemovePendingCloses);
+            PiSetDevNodeState(DeviceNode, DeviceNodeRemovePendingCloses);
+            KeMemoryBarrier();
+            if (PiDeviceStackIsOpen(DeviceNode->PhysicalDeviceObject))
+                return STATUS_SUCCESS;
+
+            PiCloseRemovedDevice(DeviceNode);
+            return STATUS_SUCCESS;
+        }
     }
 
     if (NT_SUCCESS(Status))
@@ -3183,6 +3269,8 @@ ActionToStr(
             return "PiActionRemoveDevice";
         case PiActionQueryRemoveDevice:
             return "PiActionQueryRemoveDevice";
+        case PiActionCloseRemovedDevice:
+            return "PiActionCloseRemovedDevice";
         default:
             return "(request unknown)";
     }
@@ -3326,6 +3414,11 @@ PipRunDeviceActionRequest(
             if (deviceNode->State == DeviceNodeInitialized)
                 break;
             status = PipQueryAndRemoveDevice(Request->DeviceObject, Request->RemoveData);
+            break;
+
+        case PiActionCloseRemovedDevice:
+            PiCloseRemovedDevice(deviceNode);
+            status = STATUS_SUCCESS;
             break;
 
         case PiActionRemoveDevice:

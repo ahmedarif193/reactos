@@ -307,3 +307,110 @@ KiInitializeXStateConfiguration(
         }
     }
 }
+
+#define TAG_XSTATE_SAVE 'SsXK'
+
+#ifdef __clang__
+__attribute__((target("xsave,fxsr")))
+#endif
+NTSTATUS
+NTAPI
+KeSaveExtendedProcessorState(
+    _In_ ULONG64 Mask,
+    _Out_ PXSTATE_SAVE XStateSave)
+{
+    ULONG64 FeatureMask;
+    ULONG Length;
+    PVOID Buffer;
+    PXSAVE_AREA Area;
+    PKTHREAD Thread = KeGetCurrentThread();
+    CPUID_EXTENDED_STATE_MAIN_LEAF_REGS ExtStateMain;
+
+    if (KeFeatureBits & KF_XSTATE)
+    {
+        FeatureMask = Mask & SharedUserData->XState.EnabledFeatures;
+        __cpuidex(ExtStateMain.AsInt32,
+                  CPUID_EXTENDED_STATE,
+                  CPUID_EXTENDED_STATE_MAIN_LEAF);
+        Length = ExtStateMain.Ebx;
+    }
+    else
+    {
+        FeatureMask = Mask & XSTATE_MASK_LEGACY;
+        Length = sizeof(XSAVE_FORMAT);
+    }
+
+    RtlZeroMemory(XStateSave, sizeof(*XStateSave));
+    XStateSave->Thread = Thread;
+    XStateSave->Level = KeGetCurrentIrql();
+
+    if (FeatureMask == 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPoolNx, Length + XSAVE_ALIGN, TAG_XSTATE_SAVE);
+    if (Buffer == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Area = ALIGN_UP_POINTER_BY(Buffer, XSAVE_ALIGN);
+    RtlZeroMemory(Area, Length);
+
+    if ((XStateSave->Level < DISPATCH_LEVEL) && (Thread->NpxState == 0))
+    {
+        Thread->NpxState = SharedUserData->XState.EnabledFeatures;
+    }
+
+    if (KeFeatureBits & KF_XSTATE)
+    {
+        _xsave64(Area, FeatureMask);
+    }
+    else
+    {
+        _fxsave64(Area);
+    }
+
+    XStateSave->XStateContext.Mask = FeatureMask;
+    XStateSave->XStateContext.Length = Length;
+    XStateSave->XStateContext.Area = Area;
+    XStateSave->XStateContext.Buffer = Buffer;
+    return STATUS_SUCCESS;
+}
+
+#ifdef __clang__
+__attribute__((target("xsave,fxsr")))
+#endif
+VOID
+NTAPI
+KeRestoreExtendedProcessorState(
+    _In_ PXSTATE_SAVE XStateSave)
+{
+    PVOID Buffer = XStateSave->XStateContext.Buffer;
+
+    if (Buffer == NULL)
+    {
+        return;
+    }
+
+    if (KeFeatureBits & KF_XSTATE)
+    {
+        _xrstor64(XStateSave->XStateContext.Area, XStateSave->XStateContext.Mask);
+    }
+    else
+    {
+        _fxrstor64(XStateSave->XStateContext.Area);
+    }
+
+    XStateSave->XStateContext.Buffer = NULL;
+    ExFreePoolWithTag(Buffer, TAG_XSTATE_SAVE);
+}
+
+ULONG64
+NTAPI
+RtlGetEnabledExtendedFeatures(
+    _In_ ULONG64 FeatureMask)
+{
+    return SharedUserData->XState.EnabledFeatures & FeatureMask;
+}

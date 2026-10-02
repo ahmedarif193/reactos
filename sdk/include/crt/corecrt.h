@@ -30,6 +30,14 @@ typedef struct localeinfo_struct
 #define DEFINED_localeinfo_struct 1
 #endif
 
+#ifndef _CRT_SECURE_CPP_OVERLOAD_SECURE_NAMES
+    #if __STDC_WANT_SECURE_LIB__
+        #define _CRT_SECURE_CPP_OVERLOAD_SECURE_NAMES 1
+    #else
+        #define _CRT_SECURE_CPP_OVERLOAD_SECURE_NAMES 0
+    #endif
+#endif
+
 #ifndef RC_INVOKED
     #if defined __cplusplus && _CRT_SECURE_CPP_OVERLOAD_SECURE_NAMES
 

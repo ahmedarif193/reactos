@@ -3309,6 +3309,10 @@ NtQueryInformationByName(IN POBJECT_ATTRIBUTES ObjectAttributes,
                                 FILE_READ_ATTRIBUTES,
                                 &OpenPacket,
                                 &Handle);
+    if (OpenPacket.DriverCreateContext.ExtraCreateParameter != NULL)
+    {
+        FsRtlFreeExtraCreateParameterList(OpenPacket.DriverCreateContext.ExtraCreateParameter);
+    }
 
     /* Now check for Ob or Io failure */
     if (!(NT_SUCCESS(Status)) || (OpenPacket.ParseCheck == FALSE))

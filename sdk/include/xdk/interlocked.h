@@ -174,9 +174,7 @@ _InlineInterlockedAdd(
 /* No release here */
 #define InterlockedExchangeNoFence __NF_(_InterlockedExchange)
 
-#if (_MSC_VER >= 1600)
 #define InterlockedExchange8 _InterlockedExchange8
-#endif // (_MSC_VER >= 1600)
 
 #define InterlockedExchange16 _InterlockedExchange16
 /* No release here */

@@ -509,6 +509,204 @@ USBD_GetInterfaceLength(
     return Length;
 }
 
+static
+USBD_STATUS
+USBDP_ValidateInterfaceEndpoints(
+    _In_opt_ PUSB_INTERFACE_DESCRIPTOR InterfaceDescriptor,
+    _In_ ULONG EndpointCount,
+    _In_ USHORT Level,
+    _Out_ PUCHAR *Offset)
+{
+    if (Level >= 3 &&
+        InterfaceDescriptor != NULL &&
+        InterfaceDescriptor->bNumEndpoints != EndpointCount)
+    {
+        *Offset = (PUCHAR)InterfaceDescriptor;
+        return USBD_STATUS_BAD_NUMBER_OF_ENDPOINTS;
+    }
+
+    return USBD_STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+USBD_STATUS
+NTAPI
+USBD_ValidateConfigurationDescriptor(
+    _In_reads_bytes_(BufferLength) PUSB_CONFIGURATION_DESCRIPTOR ConfigDesc,
+    _In_ ULONG BufferLength,
+    _In_ USHORT Level,
+    _Out_ PUCHAR *Offset,
+    _In_opt_ ULONG Tag)
+{
+    PUCHAR Start = (PUCHAR)ConfigDesc;
+    PUCHAR End;
+    PUCHAR Current;
+    PUSB_COMMON_DESCRIPTOR CommonDescriptor;
+    PUSB_INTERFACE_DESCRIPTOR InterfaceDescriptor = NULL;
+    PUSB_ENDPOINT_DESCRIPTOR EndpointDescriptor;
+    PULONG SettingBuffer;
+    RTL_BITMAP Settings;
+    RTL_BITMAP Interfaces;
+    RTL_BITMAP Endpoints;
+    ULONG InterfaceBuffer[256 / 32];
+    ULONG EndpointBuffer[1];
+    ULONG InterfaceCount = 0;
+    ULONG EndpointCount = 0;
+    ULONG Setting;
+    ULONG Endpoint;
+    USBD_STATUS Status;
+
+    if (ConfigDesc == NULL || Offset == NULL || Level < 1 || Level > 3)
+        return USBD_STATUS_INVALID_PARAMETER;
+
+    *Offset = Start;
+
+    if (BufferLength < sizeof(USB_CONFIGURATION_DESCRIPTOR))
+        return USBD_STATUS_BAD_CONFIG_DESC_LENGTH;
+    if (ConfigDesc->bLength < sizeof(USB_CONFIGURATION_DESCRIPTOR))
+        return USBD_STATUS_BAD_DESCRIPTOR_BLEN;
+    if (ConfigDesc->bDescriptorType != USB_CONFIGURATION_DESCRIPTOR_TYPE)
+        return USBD_STATUS_BAD_DESCRIPTOR_TYPE;
+    if (ConfigDesc->wTotalLength < ConfigDesc->bLength ||
+        ConfigDesc->wTotalLength > BufferLength)
+    {
+        return USBD_STATUS_BAD_CONFIG_DESC_LENGTH;
+    }
+
+    if (Level == 1)
+        return USBD_STATUS_SUCCESS;
+
+    if (Level >= 3 && ConfigDesc->bLength != sizeof(USB_CONFIGURATION_DESCRIPTOR))
+        return USBD_STATUS_BAD_DESCRIPTOR_BLEN;
+
+    SettingBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                          (256 * 256) / 8,
+                                          Tag != 0 ? Tag : 'DBSU');
+    if (SettingBuffer == NULL)
+        return USBD_STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlInitializeBitMap(&Settings, SettingBuffer, 256 * 256);
+    RtlClearAllBits(&Settings);
+    RtlInitializeBitMap(&Interfaces, InterfaceBuffer, 256);
+    RtlClearAllBits(&Interfaces);
+    RtlInitializeBitMap(&Endpoints, EndpointBuffer, 32);
+    RtlClearAllBits(&Endpoints);
+
+    Status = USBD_STATUS_SUCCESS;
+    End = Start + ConfigDesc->wTotalLength;
+    Current = Start + ConfigDesc->bLength;
+
+    while (Current < End)
+    {
+        CommonDescriptor = (PUSB_COMMON_DESCRIPTOR)Current;
+        *Offset = Current;
+
+        if ((ULONG_PTR)(End - Current) < sizeof(USB_COMMON_DESCRIPTOR) ||
+            CommonDescriptor->bLength < sizeof(USB_COMMON_DESCRIPTOR) ||
+            CommonDescriptor->bLength > (ULONG_PTR)(End - Current))
+        {
+            Status = USBD_STATUS_BAD_DESCRIPTOR_BLEN;
+            break;
+        }
+
+        if (CommonDescriptor->bDescriptorType == USB_INTERFACE_DESCRIPTOR_TYPE)
+        {
+            Status = USBDP_ValidateInterfaceEndpoints(InterfaceDescriptor,
+                                                      EndpointCount,
+                                                      Level,
+                                                      Offset);
+            if (Status != USBD_STATUS_SUCCESS)
+                break;
+
+            InterfaceDescriptor = (PUSB_INTERFACE_DESCRIPTOR)Current;
+            if (InterfaceDescriptor->bLength < sizeof(USB_INTERFACE_DESCRIPTOR) ||
+                (Level >= 3 && InterfaceDescriptor->bLength != sizeof(USB_INTERFACE_DESCRIPTOR)))
+            {
+                Status = USBD_STATUS_BAD_INTERFACE_DESCRIPTOR;
+                break;
+            }
+
+            if (InterfaceDescriptor->bInterfaceNumber >= ConfigDesc->bNumInterfaces)
+            {
+                Status = USBD_STATUS_BAD_INTERFACE_DESCRIPTOR;
+                break;
+            }
+
+            Setting = (InterfaceDescriptor->bInterfaceNumber << 8) |
+                      InterfaceDescriptor->bAlternateSetting;
+            if (RtlCheckBit(&Settings, Setting))
+            {
+                Status = USBD_STATUS_BAD_INTERFACE_DESCRIPTOR;
+                break;
+            }
+            RtlSetBit(&Settings, Setting);
+
+            if (!RtlCheckBit(&Interfaces, InterfaceDescriptor->bInterfaceNumber))
+            {
+                if (Level >= 3 && InterfaceDescriptor->bInterfaceNumber != InterfaceCount)
+                {
+                    Status = USBD_STATUS_BAD_INTERFACE_DESCRIPTOR;
+                    break;
+                }
+
+                RtlSetBit(&Interfaces, InterfaceDescriptor->bInterfaceNumber);
+                InterfaceCount++;
+            }
+
+            RtlClearAllBits(&Endpoints);
+            EndpointCount = 0;
+        }
+        else if (CommonDescriptor->bDescriptorType == USB_ENDPOINT_DESCRIPTOR_TYPE)
+        {
+            EndpointDescriptor = (PUSB_ENDPOINT_DESCRIPTOR)Current;
+            if (InterfaceDescriptor == NULL ||
+                EndpointDescriptor->bLength < sizeof(USB_ENDPOINT_DESCRIPTOR))
+            {
+                Status = USBD_STATUS_BAD_ENDPOINT_DESCRIPTOR;
+                break;
+            }
+
+            Endpoint = EndpointDescriptor->bEndpointAddress & 0x0F;
+            if (Endpoint == 0 || (EndpointDescriptor->bEndpointAddress & 0x70) != 0)
+            {
+                Status = USBD_STATUS_BAD_ENDPOINT_ADDRESS;
+                break;
+            }
+
+            if (USB_ENDPOINT_DIRECTION_IN(EndpointDescriptor->bEndpointAddress))
+                Endpoint += 16;
+            if (RtlCheckBit(&Endpoints, Endpoint))
+            {
+                Status = USBD_STATUS_BAD_ENDPOINT_ADDRESS;
+                break;
+            }
+            RtlSetBit(&Endpoints, Endpoint);
+            EndpointCount++;
+        }
+
+        Current += CommonDescriptor->bLength;
+    }
+
+    if (Status == USBD_STATUS_SUCCESS)
+    {
+        Status = USBDP_ValidateInterfaceEndpoints(InterfaceDescriptor,
+                                                  EndpointCount,
+                                                  Level,
+                                                  Offset);
+    }
+
+    if (Status == USBD_STATUS_SUCCESS && InterfaceCount != ConfigDesc->bNumInterfaces)
+    {
+        *Offset = Start;
+        Status = USBD_STATUS_BAD_NUMBER_OF_INTERFACES;
+    }
+
+    ExFreePoolWithTag(SettingBuffer, Tag != 0 ? Tag : 'DBSU');
+    return Status;
+}
+
 /*
  * @implemented
  */

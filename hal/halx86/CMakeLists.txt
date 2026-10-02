@@ -22,6 +22,7 @@ function(add_hal _halname)
     endforeach()
     add_library(${_halname} MODULE
         ${_haldata_SOURCES}
+        ${CMAKE_CURRENT_BINARY_DIR}/${_halname}_stubs.c
         ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 
     if(${_halname} STREQUAL "hal")

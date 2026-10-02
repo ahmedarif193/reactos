@@ -690,6 +690,64 @@ ObGetProcessHandleCount(
     IN PEPROCESS Process
 );
 
+typedef struct _OBP_HANDLE_CALLBACK_ITEM
+{
+    struct _OBP_CALLBACK_ENTRY *Entry;
+    PVOID CallContext;
+} OBP_HANDLE_CALLBACK_ITEM, *POBP_HANDLE_CALLBACK_ITEM;
+
+typedef struct _OBP_HANDLE_CALLBACK_STATE
+{
+    ULONG Count;
+    OB_OPERATION Operation;
+    POBJECT_TYPE ObjectType;
+    PVOID Object;
+    BOOLEAN PreCalled;
+    BOOLEAN KernelHandle;
+    POBP_HANDLE_CALLBACK_ITEM Items;
+    OBP_HANDLE_CALLBACK_ITEM InlineItems[4];
+} OBP_HANDLE_CALLBACK_STATE, *POBP_HANDLE_CALLBACK_STATE;
+
+BOOLEAN
+NTAPI
+ObpIsValidAltitude(
+    _In_ PCUNICODE_STRING Altitude
+);
+
+LONG
+NTAPI
+ObpCompareAltitude(
+    _In_ PCUNICODE_STRING First,
+    _In_ PCUNICODE_STRING Second
+);
+
+NTSTATUS
+NTAPI
+ObpBeginHandleCallbacks(
+    _Out_ POBP_HANDLE_CALLBACK_STATE State,
+    _In_ POBJECT_TYPE ObjectType,
+    _In_ OB_OPERATION Operation
+);
+
+VOID
+NTAPI
+ObpCallPreHandleCallbacks(
+    _Inout_ POBP_HANDLE_CALLBACK_STATE State,
+    _In_ PVOID Object,
+    _In_ BOOLEAN KernelHandle,
+    _Inout_ PACCESS_MASK DesiredAccess,
+    _In_opt_ PEPROCESS SourceProcess,
+    _In_opt_ PEPROCESS TargetProcess
+);
+
+VOID
+NTAPI
+ObpEndHandleCallbacks(
+    _Inout_ POBP_HANDLE_CALLBACK_STATE State,
+    _In_ NTSTATUS ReturnStatus,
+    _In_ ACCESS_MASK GrantedAccess
+);
+
 //
 // Global data inside the Object Manager
 //

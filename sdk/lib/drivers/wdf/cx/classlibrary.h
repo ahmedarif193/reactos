@@ -199,6 +199,41 @@ WdfCxQueryConnectionProperties(
 
 static
 NTSTATUS
+WdfCxSendIoctlToDevice(
+    _In_ WDFDEVICE Device,
+    _In_ ULONG Code,
+    _In_ PVOID Input,
+    _In_ ULONG InputLength,
+    _Out_opt_ PVOID Output,
+    _In_ ULONG OutputLength)
+{
+    PDEVICE_OBJECT Top = IoGetAttachedDeviceReference(WdfDeviceWdmGetDeviceObject(Device));
+    IO_STATUS_BLOCK IoStatus;
+    NTSTATUS Status;
+    KEVENT Event;
+    PIRP Irp;
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(Code, Top, Input, InputLength, Output, OutputLength, FALSE, &Event, &IoStatus);
+    if (Irp == NULL)
+    {
+        ObDereferenceObject(Top);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Status = IoCallDriver(Top, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+
+    ObDereferenceObject(Top);
+    return Status;
+}
+
+static
+NTSTATUS
 WdfCxBindClient(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
     _Inout_ PWDF_COMPONENT_GLOBALS *ClientGlobals,
