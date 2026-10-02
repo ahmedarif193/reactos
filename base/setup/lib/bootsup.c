@@ -493,6 +493,21 @@ IsThereAValidBootSector(
         /* Check for the first instruction encoded on three bytes */
         IsValid = (((*(PULONG)BootSector.BootCode) & 0x00FFFFFF) != 0x00000000);
     }
+    if (IsValid)
+    {
+        PUCHAR Code = (PUCHAR)BootSector.BootCode;
+        ULONG Index;
+
+        IsValid = FALSE;
+        for (Index = 0x60; Index < 0x1FE; Index++)
+        {
+            if (Code[Index] != 0)
+            {
+                IsValid = TRUE;
+                break;
+            }
+        }
+    }
 
     /* Free the bootsector and return */
     FreeBootCode(&BootSector);
@@ -604,21 +619,21 @@ InstallBootCodeToDisk(
     LockStatus = NtFsControlFile(PartitionHandle, NULL, NULL, NULL, &IoStatusBlock, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0);
     if (!NT_SUCCESS(LockStatus))
     {
-        DPRINT1("Unable to lock the volume before installing boot code. Status 0x%08x. Expect problems.\n", LockStatus);
+        DPRINT1("Unable to lock the volume before installing boot code. Status 0x%08x.\n", LockStatus);
+    }
+
+    Status = NtFsControlFile(PartitionHandle, NULL, NULL, NULL, &IoStatusBlock, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Unable to dismount the volume before installing boot code. Status 0x%08x.\n", Status);
     }
 
     /* Install the bootcode (MBR, VBR) */
     Status = InstallBootCode(SrcPath, PartitionHandle, PartitionHandle);
 
-    /* dismount & Unlock the volume */
+    /* Unlock the volume */
     if (NT_SUCCESS(LockStatus))
     {
-        LockStatus = NtFsControlFile(PartitionHandle, NULL, NULL, NULL, &IoStatusBlock, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0);
-        if (!NT_SUCCESS(LockStatus))
-        {
-            DPRINT1("Unable to dismount the volume after installing boot code. Status 0x%08x. Expect problems.\n", LockStatus);
-        }
-
         LockStatus = NtFsControlFile(PartitionHandle, NULL, NULL, NULL, &IoStatusBlock, FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0);
         if (!NT_SUCCESS(LockStatus))
         {
