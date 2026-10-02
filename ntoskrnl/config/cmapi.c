@@ -1555,6 +1555,7 @@ CmpQueryNameInformation(
 NTSTATUS
 NTAPI
 CmQueryKey(_In_ PCM_KEY_CONTROL_BLOCK Kcb,
+           _In_opt_ PVOID Transaction,
            _In_ KEY_INFORMATION_CLASS KeyInformationClass,
            _Out_opt_ PVOID KeyInformation,
            _In_ ULONG Length,
@@ -1564,6 +1565,8 @@ CmQueryKey(_In_ PCM_KEY_CONTROL_BLOCK Kcb,
     PHHIVE Hive;
     PCM_KEY_NODE Parent;
     HV_TRACK_CELL_REF CellReferences = {0};
+    PKEY_CACHED_INFORMATION CachedInformation = KeyInformation;
+    PKEY_FULL_INFORMATION FullInformation = KeyInformation;
 
     /* Acquire hive lock */
     CmpLockRegistry();
@@ -1658,6 +1661,19 @@ CmQueryKey(_In_ PCM_KEY_CONTROL_BLOCK Kcb,
                 break;
             }
         }
+
+        if (CmpTransUoWCount != 0 && (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW))
+        {
+            if (KeyInformationClass == KeyFullInformation &&
+                Length >= FIELD_OFFSET(KEY_FULL_INFORMATION, Class))
+            {
+                CmpTransAdjustKeyCounts(Kcb, Transaction, &FullInformation->SubKeys, &FullInformation->Values);
+            }
+            else if (KeyInformationClass == KeyCachedInformation && Length >= sizeof(*CachedInformation))
+            {
+                CmpTransAdjustKeyCounts(Kcb, Transaction, &CachedInformation->SubKeys, &CachedInformation->Values);
+            }
+        }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -1680,6 +1696,7 @@ Quickie:
 NTSTATUS
 NTAPI
 CmEnumerateKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
+               IN PVOID Transaction,
                IN ULONG Index,
                IN KEY_INFORMATION_CLASS KeyInformationClass,
                IN PVOID KeyInformation,
@@ -1712,7 +1729,7 @@ CmEnumerateKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
     ASSERT(Parent);
 
     /* Get the child cell */
-    ChildCell = CmpFindSubKeyByNumber(Hive, Parent, Index);
+    ChildCell = CmpTransFindSubKeyByNumber(Hive, Parent, Index, Transaction);
 
     /* Release the parent cell */
     HvReleaseCell(Hive, Kcb->KeyCell);
@@ -2004,19 +2021,15 @@ Exit:
 
 NTSTATUS
 NTAPI
-CmDeleteKey(IN PCM_KEY_BODY KeyBody)
+CmDeleteKey(IN PCM_KEY_CONTROL_BLOCK Kcb)
 {
     NTSTATUS Status;
     PHHIVE Hive;
     PCM_KEY_NODE Node, Parent;
     HCELL_INDEX Cell, ParentCell;
-    PCM_KEY_CONTROL_BLOCK Kcb;
 
     /* Acquire hive lock */
     CmpLockRegistry();
-
-    /* Get the kcb */
-    Kcb = KeyBody->KeyControlBlock;
 
     /* Don't allow deleting the root */
     if (!Kcb->ParentKcb)
@@ -2713,7 +2726,6 @@ CmpEnumerateOpenSubKeys(
     return SubKeys;
 }
 
-static
 NTSTATUS
 CmpCopyKeySecurity(IN PHHIVE SourceHive,
                     IN HCELL_INDEX SourceCell,

@@ -116,13 +116,29 @@ CmpDeleteKeyObject(PVOID DeletedObject)
     PCM_KEY_BODY KeyBody = (PCM_KEY_BODY)DeletedObject;
     PCM_KEY_CONTROL_BLOCK Kcb = NULL;
     REG_KEY_HANDLE_CLOSE_INFORMATION KeyHandleCloseInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
+    BOOLEAN Notified = FALSE;
+    NTSTATUS Status;
     PAGED_CODE();
 
     /* First off, prepare the handle close information callback */
-    PostOperationInfo.Object = KeyBody;
-    KeyHandleCloseInfo.Object = KeyBody;
-    CmiCallRegisteredCallbacks(RegNtPreKeyHandleClose, &KeyHandleCloseInfo);
+    if (KeyBody->Type == CM_KEY_BODY_TYPE)
+    {
+        KeyHandleCloseInfo.Object = KeyBody;
+        KeyHandleCloseInfo.CallContext = NULL;
+        KeyHandleCloseInfo.ObjectContext = NULL;
+        KeyHandleCloseInfo.Reserved = NULL;
+        Notified = CmpPreCallbacks(&CallbackCall,
+                                   RegNtPreKeyHandleClose,
+                                   RegNtPostKeyHandleClose,
+                                   &KeyHandleCloseInfo,
+                                   &KeyHandleCloseInfo.CallContext,
+                                   &KeyHandleCloseInfo.ObjectContext,
+                                   KeyBody,
+                                   NULL,
+                                   &Status);
+        CmpCleanupKeyBodyContexts(KeyBody);
+    }
 
     /* Acquire hive lock */
     CmpLockRegistry();
@@ -145,9 +161,13 @@ CmpDeleteKeyObject(PVOID DeletedObject)
     /* Release the registry lock */
     CmpUnlockRegistry();
 
+    if (KeyBody->Type == CM_KEY_BODY_TYPE)
+    {
+        CmpTransUnbindKeyBody(KeyBody);
+    }
+
     /* Do the post callback */
-    PostOperationInfo.Status = STATUS_SUCCESS;
-    CmiCallRegisteredCallbacks(RegNtPostKeyHandleClose, &PostOperationInfo);
+    if (Notified) CmpPostCallbacks(&CallbackCall, STATUS_SUCCESS);
     if (Kcb)
     {
         if ((((PCMHIVE)Kcb->KeyHive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE) &&
@@ -205,11 +225,14 @@ CmpOpenKeyObject(OB_OPEN_REASON Reason,
     PCM_KEY_BODY Body = ObjectBody;
     PCMHIVE Hive = (PCMHIVE)Body->KeyControlBlock->KeyHive;
     NTSTATUS Status = STATUS_SUCCESS;
-    UNREFERENCED_PARAMETER(Reason);
     UNREFERENCED_PARAMETER(AccessMode);
     UNREFERENCED_PARAMETER(Process);
     UNREFERENCED_PARAMETER(GrantedAccess);
     UNREFERENCED_PARAMETER(HandleCount);
+    if (Reason == ObOpenHandle && Body == CmpRegistryRootObject)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     if (Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE)
     {
         CmpLockRegistry();
@@ -1198,6 +1221,9 @@ CmpCreateRegistryRoot(VOID)
     /* Initialize the object */
     RootKey->KeyControlBlock = Kcb;
     RootKey->Type = CM_KEY_BODY_TYPE;
+    RootKey->Trans.TransPtr = NULL;
+    RootKey->KtmUow = NULL;
+    InitializeListHead(&RootKey->ContextListHead);
     RootKey->NotifyBlock = NULL;
     RootKey->ProcessID = PsGetCurrentProcessId();
     RootKey->KcbLocked = FALSE;
@@ -1229,6 +1255,8 @@ CmpCreateRegistryRoot(VOID)
         ObDereferenceObject(RootKey);
         return FALSE;
     }
+
+    CmpRegistryRootObject = RootKey;
 
     /* Completely successful */
     return TRUE;
@@ -1674,6 +1702,7 @@ CmInitSystem1(VOID)
 
     /* Initialize callbacks */
     CmpInitCallback();
+    CmpInitTransactions();
 
     /* Initialize self healing */
     KeInitializeGuardedMutex(&CmpSelfHealQueueLock);

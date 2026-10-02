@@ -69,6 +69,7 @@ USHORT CmpUnknownBusCount;
 ULONG CmpTypeCount[MaximumType + 1];
 
 HANDLE CmpRegistryRootHandle;
+PCM_KEY_BODY CmpRegistryRootObject;
 
 DATA_SEG("INITDATA") UNICODE_STRING CmClassName[MaximumClass + 1] =
 {

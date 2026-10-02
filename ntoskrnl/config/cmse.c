@@ -490,6 +490,15 @@ CmpSecurityMethod(IN PVOID ObjectBody,
 
     Kcb = ((PCM_KEY_BODY)ObjectBody)->KeyControlBlock;
 
+    if (OperationCode == SetSecurityDescriptor)
+    {
+        Status = CmpTransPrepareWrite((PCM_KEY_BODY)ObjectBody);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+
     /* Acquire the hive lock */
     CmpLockRegistry();
 

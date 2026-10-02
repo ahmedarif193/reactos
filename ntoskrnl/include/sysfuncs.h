@@ -356,6 +356,9 @@
     SVC_(RegisterProtocolAddressInformation, 5)
     SVC_(PropagationComplete, 4)
     SVC_(PropagationFailed, 3)
+    SVC_(CreateKeyTransacted, 8)
+    SVC_(OpenKeyTransacted, 4)
+    SVC_(OpenKeyTransactedEx, 5)
 #endif
     SVC_(CompareObjects, 2)
     SVC_(AlertMultipleThreadByThreadId, 4)

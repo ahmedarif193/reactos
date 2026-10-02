@@ -2093,14 +2093,14 @@
 @ stub -arch=win64 CcUnmapFileOffsetFromSystemCache
 @ stub -arch=win64 CcUnregisterExternalCache
 @ stub -arch=win64 CcZeroDataOnDisk
-@ stub -arch=arm64 CmCallbackGetKeyObjectID
-@ stub -arch=arm64 CmCallbackGetKeyObjectIDEx
-@ stub -arch=arm64 CmCallbackReleaseKeyObjectIDEx
-@ stub -arch=arm64 CmGetBoundTransaction
-@ stub -arch=arm64 CmGetCallbackVersion
-@ stub -arch=arm64 CmRegisterCallbackEx
+@ stdcall CmCallbackGetKeyObjectID(ptr ptr ptr ptr)
+@ stdcall CmCallbackGetKeyObjectIDEx(ptr ptr ptr ptr long)
+@ stdcall CmCallbackReleaseKeyObjectIDEx(ptr)
+@ stdcall CmGetBoundTransaction(ptr ptr)
+@ stdcall CmGetCallbackVersion(ptr ptr)
+@ stdcall CmRegisterCallbackEx(ptr ptr ptr ptr ptr ptr)
 @ stub -arch=win64 CmRegisterMachineHiveLoadedNotification
-@ stub -arch=arm64 CmSetCallbackObjectContext
+@ stdcall CmSetCallbackObjectContext(ptr ptr ptr ptr)
 @ stub -arch=win64 CmUnregisterMachineHiveLoadedNotification
 @ stub -arch=win64 DbgSetDebugPrintCallback
 @ stdcall -arch=i386,win64 DbgkLkmdRegisterCallback(ptr ptr long)
@@ -3358,7 +3358,7 @@
 @ stub -arch=win64 ZwCreateCpuPartition
 @ stub -arch=win64 ZwCreateCrossVmEvent
 @ stdcall ZwCreateEnlistment(ptr long ptr ptr ptr long long ptr)
-@ stub -arch=arm64 ZwCreateKeyTransacted
+@ stdcall ZwCreateKeyTransacted(ptr long ptr long ptr long ptr ptr)
 @ stub -arch=win64 ZwCreatePartition
 @ stub -arch=arm64 ZwCreateProfileEx
 @ stub -arch=win64 ZwCreateRegistryTransaction
@@ -3383,8 +3383,8 @@
 @ stub -arch=win64 ZwOpenCpuPartition
 @ stdcall ZwOpenEnlistment(ptr long ptr ptr ptr)
 @ stdcall -version=0x601+ ZwOpenKeyEx(ptr long ptr long)
-@ stub -arch=arm64 ZwOpenKeyTransacted
-@ stub -arch=arm64 ZwOpenKeyTransactedEx
+@ stdcall ZwOpenKeyTransacted(ptr long ptr ptr)
+@ stdcall ZwOpenKeyTransactedEx(ptr long ptr long ptr)
 @ stdcall -arch=i386,win64 ZwOpenPartition(ptr long ptr)
 @ stub -arch=win64 ZwOpenRegistryTransaction
 @ stdcall ZwOpenResourceManager(ptr long ptr ptr ptr)

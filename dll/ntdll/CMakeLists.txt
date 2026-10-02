@@ -48,7 +48,6 @@ list(APPEND SOURCE
     rtl/exit.c
     rtl/mui.c
     rtl/nls.c
-    rtl/registry.c
     rtl/telemetry.c
     rtl/userpfn.c
     rtl/wnf.c

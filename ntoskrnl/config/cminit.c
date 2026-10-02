@@ -558,6 +558,7 @@ CmpLoadAppHive(POBJECT_ATTRIBUTES TargetKey,
     if (!NT_SUCCESS(Status)) goto Exit;
     RtlZeroMemory(Body, sizeof(*Body));
     Body->Type = CM_KEY_BODY_TYPE;
+    InitializeListHead(&Body->ContextListHead);
     Body->ProcessID = PsGetCurrentProcessId();
     RootCell = Hive->Hive.BaseBlock->RootCell;
     Node = (PCM_KEY_NODE)HvGetCell(&Hive->Hive, RootCell);

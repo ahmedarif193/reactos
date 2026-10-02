@@ -252,6 +252,7 @@ CmpDoCreateChild(IN PHHIVE Hive,
     /* Get the storage type */
     StorageType = Stable;
     if (ParseContext->CreateOptions & REG_OPTION_VOLATILE) StorageType = Volatile;
+    if (ParseContext->EffectiveTransaction) StorageType = Volatile;
 
     /* Allocate the child */
     *KeyCell = HvAllocateCell(Hive,
@@ -313,6 +314,9 @@ CmpDoCreateChild(IN PHHIVE Hive,
     KeyBody->NotifyClosed = FALSE;
     KeyBody->KeyControlBlock = NULL;
     KeyBody->KcbLocked = FALSE;
+    KeyBody->Trans.TransPtr = NULL;
+    KeyBody->KtmUow = NULL;
+    InitializeListHead(&KeyBody->ContextListHead);
 
     /* Check if we had a class */
     if (ParseContext->Class.Length > 0)
@@ -415,7 +419,10 @@ CmpDoCreateChild(IN PHHIVE Hive,
     if (NT_SUCCESS(Status))
     {
         /* Send notification to registered callbacks */
-        CmpReportNotify(Kcb, Hive, Kcb->KeyCell, REG_NOTIFY_CHANGE_NAME);
+        if (!ParseContext->EffectiveTransaction)
+        {
+            CmpReportNotify(Kcb, Hive, Kcb->KeyCell, REG_NOTIFY_CHANGE_NAME);
+        }
     }
     else
     {
@@ -502,8 +509,16 @@ CmpDoCreate(IN PHHIVE Hive,
     /* Sanity check */
     ASSERT(Cell == ParentKcb->KeyCell);
 
+    Status = CmpTransCheckCreate(ParentKcb,
+                                 ParseContext->EffectiveTransaction,
+                                 &ParseContext->ConflictEnlistment);
+    if (!NT_SUCCESS(Status))
+    {
+        goto Exit;
+    }
+
     /* Get the parent type */
-    ParentType = HvGetCellType(Cell);
+    ParentType = CmpTransParentStorage(ParentKcb, ParseContext->EffectiveTransaction, HvGetCellType(Cell));
     if ((ParentType == Volatile) &&
         !(ParseContext->CreateOptions & REG_OPTION_VOLATILE))
     {
@@ -628,6 +643,22 @@ CmpDoCreate(IN PHHIVE Hive,
             CellData->u.KeyNode.Flags |= KEY_SYM_LINK;
             KeyBody->KeyControlBlock->Flags = CellData->u.KeyNode.Flags;
             HvReleaseCell(Hive, KeyCell);
+        }
+
+        if (ParseContext->EffectiveTransaction)
+        {
+            Status = CmpTransAddKey(KeyBody->KeyControlBlock,
+                                    ParseContext->EffectiveTransaction,
+                                    (ParseContext->CreateOptions & REG_OPTION_VOLATILE) ? Volatile : Stable);
+            if (!NT_SUCCESS(Status))
+            {
+                CmpFreeKeyByCell(Hive, KeyCell, TRUE);
+                CmpCleanUpSubKeyInfo(ParentKcb);
+                KeyBody->KeyControlBlock->Delete = TRUE;
+                CmpRemoveKeyControlBlock(KeyBody->KeyControlBlock);
+                ObDereferenceObjectDeferDelete(*Object);
+                *Object = NULL;
+            }
         }
     }
 
@@ -831,6 +862,9 @@ CmpDoOpen(IN PHHIVE Hive,
         KeyBody->KeyControlBlock = Kcb;
         KeyBody->Type = CM_KEY_BODY_TYPE;
         KeyBody->NotifyClosed = FALSE;
+        KeyBody->Trans.TransPtr = NULL;
+        KeyBody->KtmUow = NULL;
+        InitializeListHead(&KeyBody->ContextListHead);
         KeyBody->ProcessID = PsGetCurrentProcessId();
         KeyBody->NotifyBlock = NULL;
 
@@ -1946,6 +1980,7 @@ CmpParseKey(IN PVOID ParseObject,
     PULONG LockedKcbs;
     BOOLEAN IsKeyCached = FALSE;
     BOOLEAN Result, Last;
+    PVOID Transaction = NULL;
     PAGED_CODE();
 
     /* Loop path separators at the end */
@@ -1963,6 +1998,19 @@ CmpParseKey(IN PVOID ParseObject,
     /* Copy the remaining name */
     Current = *RemainingName;
 
+    if (ParseContext && ParseContext->Transaction)
+    {
+        Transaction = ParseContext->Transaction;
+    }
+    else if (((PCM_KEY_BODY)ParseObject)->Type == CM_KEY_BODY_TYPE)
+    {
+        Transaction = (PVOID)((ULONG_PTR)((PCM_KEY_BODY)ParseObject)->Trans.TransPtr & ~(ULONG_PTR)1);
+    }
+    if (ParseContext)
+    {
+        ParseContext->EffectiveTransaction = Transaction;
+    }
+
     /* Check if this is a create */
     if (!ParseContext || !ParseContext->CreateOperation)
     {
@@ -1979,6 +2027,15 @@ CmpParseKey(IN PVOID ParseObject,
     /* Fail if the key was marked as deleted */
     if (Kcb->Delete)
         return STATUS_KEY_DELETED;
+
+    if (Transaction)
+    {
+        Status = CmpTransCheckActive(Transaction);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
 
     if (Kcb->KeyHive == &CmiVolatileHive->Hive && Kcb->ParentKcb == NULL)
     {
@@ -2016,6 +2073,12 @@ CmpParseKey(IN PVOID ParseObject,
 
     /* Don't do anything if we're being deleted */
     if (Kcb->Delete)
+    {
+        Status = STATUS_OBJECT_NAME_NOT_FOUND;
+        goto Quickie;
+    }
+
+    if (!CmpTransIsKcbVisible(Kcb, Transaction))
     {
         Status = STATUS_OBJECT_NAME_NOT_FOUND;
         goto Quickie;
@@ -2137,6 +2200,12 @@ CmpParseKey(IN PVOID ParseObject,
                 NextCell = CmpFindSubKeyByName(Hive, Node, &NextName);
                 if (NextCell != HCELL_NIL)
                 {
+                    if (!CmpTransIsCellVisible(Hive, NextCell, Transaction))
+                    {
+                        Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                        break;
+                    }
+
                     /* Get the new node */
                     Cell = NextCell;
                     Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
@@ -2379,6 +2448,11 @@ KeyCachedOpenNow:
         }
     }
 
+    if (Status == STATUS_SUCCESS && Transaction && *Object)
+    {
+        CmpTransBindKeyBody(*Object, Transaction);
+    }
+
 Quickie:
     /* Unlock all the KCBs */
     if (LockedKcbs != NULL)
@@ -2392,6 +2466,107 @@ Quickie:
 
     /* Unlock the registry */
     CmpUnlockRegistry();
+    return Status;
+}
+
+static
+NTSTATUS
+CmpParseKeyNotify(
+    IN PVOID ParseObject,
+    IN PVOID ObjectType,
+    IN OUT PACCESS_STATE AccessState,
+    IN KPROCESSOR_MODE AccessMode,
+    IN ULONG Attributes,
+    IN OUT PUNICODE_STRING CompleteName,
+    IN OUT PUNICODE_STRING RemainingName,
+    IN OUT PCM_PARSE_CONTEXT ParseContext OPTIONAL,
+    IN PSECURITY_QUALITY_OF_SERVICE SecurityQos OPTIONAL,
+    IN REG_NOTIFY_CLASS PreClass,
+    IN REG_NOTIFY_CLASS PostClass,
+    OUT PVOID *Object)
+{
+    REG_CREATE_KEY_INFORMATION_V1 Information;
+    CMP_CALLBACK_CALL CallbackCall;
+    PVOID ResultObject = NULL, ParsedObject;
+    UNICODE_STRING RelativeName;
+    ULONG Disposition = 0;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Information, sizeof(Information));
+    Information.CompleteName = CompleteName;
+    Information.RootObject = ParseObject;
+    Information.ObjectType = CmpKeyObjectType;
+    Information.Options = ParseContext ? ParseContext->CreateOptions : 0;
+    Information.Class = (ParseContext && ParseContext->CreateOperation && ParseContext->Class.Length) ? &ParseContext->Class : NULL;
+    Information.SecurityDescriptor = AccessState->SecurityDescriptor;
+    Information.SecurityQualityOfService = SecurityQos;
+    Information.DesiredAccess = AccessState->OriginalDesiredAccess;
+    Information.GrantedAccess = AccessState->RemainingDesiredAccess | AccessState->PreviouslyGrantedAccess;
+    Information.Disposition = ParseContext ? &ParseContext->Disposition : &Disposition;
+    Information.ResultObject = &ResultObject;
+    Information.Version = 1;
+    RelativeName = *RemainingName;
+    while (RelativeName.Length != 0 && RelativeName.Buffer[0] == OBJ_NAME_PATH_SEPARATOR)
+    {
+        RelativeName.Buffer++;
+        RelativeName.Length -= sizeof(WCHAR);
+        RelativeName.MaximumLength -= sizeof(WCHAR);
+    }
+    Information.RemainingName = &RelativeName;
+    Information.Wow64Flags = ParseContext ? ParseContext->Wow64Flags : 0;
+    Information.Transaction = ParseContext ? ParseContext->Transaction : NULL;
+    Information.Attributes = Attributes;
+    Information.CheckAccessMode = AccessMode;
+
+    if (!CmpPreCallbacks(&CallbackCall,
+                         PreClass,
+                         PostClass,
+                         &Information,
+                         &Information.CallContext,
+                         &Information.RootObjectContext,
+                         ParseObject,
+                         &ResultObject,
+                         &Status))
+    {
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        if (ResultObject == NULL)
+        {
+            return STATUS_UNSUCCESSFUL;
+        }
+        AccessState->PreviouslyGrantedAccess = Information.GrantedAccess;
+        AccessState->RemainingDesiredAccess = 0;
+        *Object = ResultObject;
+        return STATUS_SUCCESS;
+    }
+
+    Status = CmpParseKey(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, ParseContext, SecurityQos, &ResultObject);
+    if (!NT_SUCCESS(Status))
+    {
+        ResultObject = NULL;
+    }
+    ParsedObject = ResultObject;
+    Information.GrantedAccess = AccessState->RemainingDesiredAccess | AccessState->PreviouslyGrantedAccess;
+
+    Status = CmpPostCallbacks(&CallbackCall, Status);
+    if (!NT_SUCCESS(Status))
+    {
+        *Object = NULL;
+        return Status;
+    }
+
+    if (ResultObject != ParsedObject)
+    {
+        AccessState->PreviouslyGrantedAccess = Information.GrantedAccess;
+        AccessState->RemainingDesiredAccess = 0;
+        if (Status == STATUS_REPARSE)
+        {
+            Status = STATUS_SUCCESS;
+        }
+    }
+    *Object = ResultObject;
     return Status;
 }
 
@@ -2410,6 +2585,39 @@ CmpParseKeyEx(
     IN POB_EXTENDED_PARSE_PARAMETERS ExtendedParameters,
     OUT PVOID *Object)
 {
+    PCM_PARSE_CONTEXT ParseContext = Context;
+    CM_PARSE_CONTEXT OpenContext;
+    PVOID OpenObject = NULL;
+    NTSTATUS Status;
+
     UNREFERENCED_PARAMETER(ExtendedParameters);
-    return CmpParseKey(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, Context, SecurityQos, Object);
+
+    if (CmpCallBackCount == 0 ||
+        ObjectType != CmpKeyObjectType ||
+        ((PCM_KEY_BODY)ParseObject)->Type != CM_KEY_BODY_TYPE)
+    {
+        return CmpParseKey(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, Context, SecurityQos, Object);
+    }
+
+    if (ParseContext == NULL || !ParseContext->CreateOperation)
+    {
+        return CmpParseKeyNotify(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, ParseContext, SecurityQos, RegNtPreOpenKeyEx, RegNtPostOpenKeyEx, Object);
+    }
+
+    if (!ParseContext->CreateLink && !(ParseContext->CreateOptions & REG_OPTION_CREATE_LINK))
+    {
+        OpenContext = *ParseContext;
+        OpenContext.CreateOperation = FALSE;
+        Status = CmpParseKeyNotify(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, &OpenContext, SecurityQos, RegNtPreOpenKeyEx, RegNtPostOpenKeyEx, &OpenObject);
+        if (Status == STATUS_REPARSE)
+        {
+            return Status;
+        }
+        if (NT_SUCCESS(Status) && OpenObject != NULL)
+        {
+            ObDereferenceObject(OpenObject);
+        }
+    }
+
+    return CmpParseKeyNotify(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, ParseContext, SecurityQos, RegNtPreCreateKeyEx, RegNtPostCreateKeyEx, Object);
 }

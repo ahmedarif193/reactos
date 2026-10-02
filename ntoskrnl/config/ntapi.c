@@ -235,20 +235,53 @@ CmpConvertHandleToKernelHandle(
 
 /* FUNCTIONS *****************************************************************/
 
+static
 NTSTATUS
-NTAPI
-NtCreateKey(OUT PHANDLE KeyHandle,
-            IN ACCESS_MASK DesiredAccess,
-            IN POBJECT_ATTRIBUTES ObjectAttributes,
-            IN ULONG TitleIndex,
-            IN PUNICODE_STRING Class OPTIONAL,
-            IN ULONG CreateOptions,
-            OUT PULONG Disposition OPTIONAL)
+CmpReferenceTransaction(
+    _In_ HANDLE TransactionHandle,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _Out_ PVOID *Transaction)
+{
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle(TransactionHandle,
+                                       TRANSACTION_ENLIST,
+                                       TmTransactionObjectType,
+                                       PreviousMode,
+                                       Transaction,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        *Transaction = NULL;
+        return Status;
+    }
+
+    Status = CmpTransEnlist(*Transaction);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(*Transaction);
+        *Transaction = NULL;
+    }
+    return Status;
+}
+
+static
+NTSTATUS
+CmpCreateKey(OUT PHANDLE KeyHandle,
+             IN ACCESS_MASK DesiredAccess,
+             IN POBJECT_ATTRIBUTES ObjectAttributes,
+             IN ULONG TitleIndex,
+             IN PUNICODE_STRING Class OPTIONAL,
+             IN ULONG CreateOptions,
+             IN PVOID Transaction OPTIONAL,
+             OUT PULONG Disposition OPTIONAL)
 {
     NTSTATUS Status;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     CM_PARSE_CONTEXT ParseContext = {0};
+    UNICODE_STRING CapturedClass = {0};
     HANDLE Handle;
+    ULONG Retries = 0;
     PAGED_CODE();
 
     DPRINT("NtCreateKey(Path: %wZ, Root %x, Access: %x, CreateOptions %x)\n",
@@ -256,6 +289,7 @@ NtCreateKey(OUT PHANDLE KeyHandle,
             DesiredAccess, CreateOptions);
 
     /* Ignore the WOW64 flag, it's not valid in the kernel */
+    ParseContext.Wow64Flags = DesiredAccess & KEY_WOW64_RES;
     DesiredAccess &= ~KEY_WOW64_RES;
 
     /* Check for user-mode caller */
@@ -264,16 +298,6 @@ NtCreateKey(OUT PHANDLE KeyHandle,
         /* Prepare to probe parameters */
         _SEH2_TRY
         {
-            /* Check if we have a class */
-            if (Class)
-            {
-                /* Probe it */
-                ParseContext.Class = ProbeForReadUnicodeString(Class);
-                ProbeForRead(ParseContext.Class.Buffer,
-                             ParseContext.Class.Length,
-                             sizeof(WCHAR));
-            }
-
             /* Probe the key handle */
             ProbeForWriteHandle(KeyHandle);
             *KeyHandle = NULL;
@@ -293,6 +317,13 @@ NtCreateKey(OUT PHANDLE KeyHandle,
             _SEH2_YIELD(return _SEH2_GetExceptionCode());
         }
         _SEH2_END;
+
+        if (Class)
+        {
+            Status = ProbeAndCaptureUnicodeString(&CapturedClass, PreviousMode, Class);
+            if (!NT_SUCCESS(Status)) return Status;
+            ParseContext.Class = CapturedClass;
+        }
     }
     else
     {
@@ -303,15 +334,33 @@ NtCreateKey(OUT PHANDLE KeyHandle,
     /* Setup the parse context */
     ParseContext.CreateOperation = TRUE;
     ParseContext.CreateOptions = CreateOptions;
+    ParseContext.Transaction = Transaction;
 
     /* Do the create */
-    Status = ObOpenObjectByName(ObjectAttributes,
-                                CmpKeyObjectType,
-                                PreviousMode,
-                                NULL,
-                                DesiredAccess,
-                                &ParseContext,
-                                &Handle);
+    for (;;)
+    {
+        ParseContext.ConflictEnlistment = NULL;
+        Status = ObOpenObjectByName(ObjectAttributes,
+                                    CmpKeyObjectType,
+                                    PreviousMode,
+                                    NULL,
+                                    DesiredAccess,
+                                    &ParseContext,
+                                    &Handle);
+        if (ParseContext.ConflictEnlistment == NULL)
+        {
+            break;
+        }
+
+        CmpTransResolveConflict(ParseContext.ConflictEnlistment);
+        if (NT_SUCCESS(Status) || ++Retries > 8)
+        {
+            break;
+        }
+    }
+
+    if (CapturedClass.Buffer)
+        ReleaseCapturedUnicodeString(&CapturedClass, PreviousMode);
 
     _SEH2_TRY
     {
@@ -334,10 +383,64 @@ NtCreateKey(OUT PHANDLE KeyHandle,
 
 NTSTATUS
 NTAPI
-NtOpenKeyEx(OUT PHANDLE KeyHandle,
+NtCreateKey(OUT PHANDLE KeyHandle,
             IN ACCESS_MASK DesiredAccess,
             IN POBJECT_ATTRIBUTES ObjectAttributes,
-            IN ULONG OpenOptions)
+            IN ULONG TitleIndex,
+            IN PUNICODE_STRING Class OPTIONAL,
+            IN ULONG CreateOptions,
+            OUT PULONG Disposition OPTIONAL)
+{
+    return CmpCreateKey(KeyHandle,
+                        DesiredAccess,
+                        ObjectAttributes,
+                        TitleIndex,
+                        Class,
+                        CreateOptions,
+                        NULL,
+                        Disposition);
+}
+
+NTSTATUS
+NTAPI
+NtCreateKeyTransacted(OUT PHANDLE KeyHandle,
+                      IN ACCESS_MASK DesiredAccess,
+                      IN POBJECT_ATTRIBUTES ObjectAttributes,
+                      IN ULONG TitleIndex,
+                      IN PUNICODE_STRING Class OPTIONAL,
+                      IN ULONG CreateOptions,
+                      IN HANDLE TransactionHandle,
+                      OUT PULONG Disposition OPTIONAL)
+{
+    PVOID Transaction;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    Status = CmpReferenceTransaction(TransactionHandle, ExGetPreviousMode(), &Transaction);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = CmpCreateKey(KeyHandle,
+                          DesiredAccess,
+                          ObjectAttributes,
+                          TitleIndex,
+                          Class,
+                          CreateOptions,
+                          Transaction,
+                          Disposition);
+    ObDereferenceObject(Transaction);
+    return Status;
+}
+
+static
+NTSTATUS
+CmpOpenKey(OUT PHANDLE KeyHandle,
+           IN ACCESS_MASK DesiredAccess,
+           IN POBJECT_ATTRIBUTES ObjectAttributes,
+           IN ULONG OpenOptions,
+           IN PVOID Transaction OPTIONAL)
 {
     CM_PARSE_CONTEXT ParseContext = {0};
     HANDLE Handle;
@@ -349,8 +452,10 @@ NtOpenKeyEx(OUT PHANDLE KeyHandle,
         return STATUS_NOT_SUPPORTED;
 
     ParseContext.CreateOptions = OpenOptions;
+    ParseContext.Transaction = Transaction;
 
     /* Ignore the WOW64 flag, it's not valid in the kernel */
+    ParseContext.Wow64Flags = DesiredAccess & KEY_WOW64_RES;
     DesiredAccess &= ~KEY_WOW64_RES;
 
     /* Check for user-mode caller */
@@ -411,11 +516,54 @@ NtOpenKeyEx(OUT PHANDLE KeyHandle,
 
 NTSTATUS
 NTAPI
+NtOpenKeyEx(OUT PHANDLE KeyHandle,
+            IN ACCESS_MASK DesiredAccess,
+            IN POBJECT_ATTRIBUTES ObjectAttributes,
+            IN ULONG OpenOptions)
+{
+    return CmpOpenKey(KeyHandle, DesiredAccess, ObjectAttributes, OpenOptions, NULL);
+}
+
+NTSTATUS
+NTAPI
 NtOpenKey(OUT PHANDLE KeyHandle,
           IN ACCESS_MASK DesiredAccess,
           IN POBJECT_ATTRIBUTES ObjectAttributes)
 {
     return NtOpenKeyEx(KeyHandle, DesiredAccess, ObjectAttributes, 0);
+}
+
+NTSTATUS
+NTAPI
+NtOpenKeyTransactedEx(OUT PHANDLE KeyHandle,
+                      IN ACCESS_MASK DesiredAccess,
+                      IN POBJECT_ATTRIBUTES ObjectAttributes,
+                      IN ULONG OpenOptions,
+                      IN HANDLE TransactionHandle)
+{
+    PVOID Transaction;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    Status = CmpReferenceTransaction(TransactionHandle, ExGetPreviousMode(), &Transaction);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = CmpOpenKey(KeyHandle, DesiredAccess, ObjectAttributes, OpenOptions, Transaction);
+    ObDereferenceObject(Transaction);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+NtOpenKeyTransacted(OUT PHANDLE KeyHandle,
+                    IN ACCESS_MASK DesiredAccess,
+                    IN POBJECT_ATTRIBUTES ObjectAttributes,
+                    IN HANDLE TransactionHandle)
+{
+    return NtOpenKeyTransactedEx(KeyHandle, DesiredAccess, ObjectAttributes, 0, TransactionHandle);
 }
 
 
@@ -426,7 +574,7 @@ NtDeleteKey(IN HANDLE KeyHandle)
     PCM_KEY_BODY KeyObject;
     NTSTATUS Status;
     REG_DELETE_KEY_INFORMATION DeleteKeyInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
     PAGED_CODE();
     DPRINT("NtDeleteKey(KH 0x%p)\n", KeyHandle);
 
@@ -440,10 +588,19 @@ NtDeleteKey(IN HANDLE KeyHandle)
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Setup the callback */
-    PostOperationInfo.Object = (PVOID)KeyObject;
     DeleteKeyInfo.Object = (PVOID)KeyObject;
-    Status = CmiCallRegisteredCallbacks(RegNtPreDeleteKey, &DeleteKeyInfo);
-    if (NT_SUCCESS(Status))
+    DeleteKeyInfo.CallContext = NULL;
+    DeleteKeyInfo.ObjectContext = NULL;
+    DeleteKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreDeleteKey,
+                        RegNtPostDeleteKey,
+                        &DeleteKeyInfo,
+                        &DeleteKeyInfo.CallContext,
+                        &DeleteKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
         /* Check if we are read-only */
         if ((KeyObject->KeyControlBlock->ExtFlags & CM_KCB_READ_ONLY_KEY) ||
@@ -455,12 +612,11 @@ NtDeleteKey(IN HANDLE KeyHandle)
         else
         {
             /* Call the internal API */
-            Status = CmDeleteKey(KeyObject);
+            Status = CmpTransDeleteKey(KeyObject);
         }
 
         /* Do post callback */
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostDeleteKey, &PostOperationInfo);
+        Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
     /* Dereference and return status */
@@ -481,7 +637,7 @@ NtEnumerateKey(IN HANDLE KeyHandle,
     NTSTATUS Status;
     PCM_KEY_BODY KeyObject;
     REG_ENUMERATE_KEY_INFORMATION EnumerateKeyInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
     PAGED_CODE();
     DPRINT("NtEnumerateKey() KH 0x%p, Index 0x%x, KIC %d, Length %lu\n",
            KeyHandle, Index, KeyInformationClass, Length);
@@ -523,28 +679,37 @@ NtEnumerateKey(IN HANDLE KeyHandle,
     }
 
     /* Setup the callback */
-    PostOperationInfo.Object = (PVOID)KeyObject;
     EnumerateKeyInfo.Object = (PVOID)KeyObject;
     EnumerateKeyInfo.Index = Index;
     EnumerateKeyInfo.KeyInformationClass = KeyInformationClass;
+    EnumerateKeyInfo.KeyInformation = KeyInformation;
     EnumerateKeyInfo.Length = Length;
     EnumerateKeyInfo.ResultLength = ResultLength;
 
     /* Do the callback */
-    Status = CmiCallRegisteredCallbacks(RegNtPreEnumerateKey, &EnumerateKeyInfo);
-    if (NT_SUCCESS(Status))
+    EnumerateKeyInfo.CallContext = NULL;
+    EnumerateKeyInfo.ObjectContext = NULL;
+    EnumerateKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreEnumerateKey,
+                        RegNtPostEnumerateKey,
+                        &EnumerateKeyInfo,
+                        &EnumerateKeyInfo.CallContext,
+                        &EnumerateKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
         /* Call the internal API */
-        Status = CmEnumerateKey(KeyObject->KeyControlBlock,
-                                Index,
-                                KeyInformationClass,
-                                KeyInformation,
-                                Length,
-                                ResultLength);
+        Status = CmpTransEnumerateKey(KeyObject,
+                                      Index,
+                                      KeyInformationClass,
+                                      KeyInformation,
+                                      Length,
+                                      ResultLength);
 
         /* Do the post callback */
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostEnumerateKey, &PostOperationInfo);
+        Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
     /* Dereference and return status */
@@ -566,7 +731,7 @@ NtEnumerateValueKey(IN HANDLE KeyHandle,
     NTSTATUS Status;
     PCM_KEY_BODY KeyObject;
     REG_ENUMERATE_VALUE_KEY_INFORMATION EnumerateValueKeyInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
 
     PAGED_CODE();
 
@@ -612,7 +777,6 @@ NtEnumerateValueKey(IN HANDLE KeyHandle,
     }
 
     /* Setup the callback */
-    PostOperationInfo.Object = (PVOID)KeyObject;
     EnumerateValueKeyInfo.Object = (PVOID)KeyObject;
     EnumerateValueKeyInfo.Index = Index;
     EnumerateValueKeyInfo.KeyValueInformationClass = KeyValueInformationClass;
@@ -621,21 +785,29 @@ NtEnumerateValueKey(IN HANDLE KeyHandle,
     EnumerateValueKeyInfo.ResultLength = ResultLength;
 
     /* Do the callback */
-    Status = CmiCallRegisteredCallbacks(RegNtPreEnumerateValueKey,
-                                        &EnumerateValueKeyInfo);
-    if (NT_SUCCESS(Status))
+    EnumerateValueKeyInfo.CallContext = NULL;
+    EnumerateValueKeyInfo.ObjectContext = NULL;
+    EnumerateValueKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreEnumerateValueKey,
+                        RegNtPostEnumerateValueKey,
+                        &EnumerateValueKeyInfo,
+                        &EnumerateValueKeyInfo.CallContext,
+                        &EnumerateValueKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
         /* Call the internal API */
-        Status = CmEnumerateValueKey(KeyObject->KeyControlBlock,
-                                     Index,
-                                     KeyValueInformationClass,
-                                     KeyValueInformation,
-                                     Length,
-                                     ResultLength);
+        Status = CmpTransEnumerateValueKey(KeyObject,
+                                           Index,
+                                           KeyValueInformationClass,
+                                           KeyValueInformation,
+                                           Length,
+                                           ResultLength);
 
         /* Do the post callback */
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostEnumerateValueKey, &PostOperationInfo);
+        Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
     /* Dereference and return status */
@@ -655,7 +827,7 @@ NtQueryKey(IN HANDLE KeyHandle,
     NTSTATUS Status;
     PCM_KEY_BODY KeyObject;
     REG_QUERY_KEY_INFORMATION QueryKeyInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
     OBJECT_HANDLE_INFORMATION HandleInfo;
     PAGED_CODE();
     DPRINT("NtQueryKey() KH 0x%p, KIC %d, Length %lu\n",
@@ -727,7 +899,6 @@ NtQueryKey(IN HANDLE KeyHandle,
     }
 
     /* Setup the callback */
-    PostOperationInfo.Object = (PVOID)KeyObject;
     QueryKeyInfo.Object = (PVOID)KeyObject;
     QueryKeyInfo.KeyInformationClass = KeyInformationClass;
     QueryKeyInfo.KeyInformation = KeyInformation;
@@ -735,19 +906,28 @@ NtQueryKey(IN HANDLE KeyHandle,
     QueryKeyInfo.ResultLength = ResultLength;
 
     /* Do the callback */
-    Status = CmiCallRegisteredCallbacks(RegNtPreQueryKey, &QueryKeyInfo);
-    if (NT_SUCCESS(Status))
+    QueryKeyInfo.CallContext = NULL;
+    QueryKeyInfo.ObjectContext = NULL;
+    QueryKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreQueryKey,
+                        RegNtPostQueryKey,
+                        &QueryKeyInfo,
+                        &QueryKeyInfo.CallContext,
+                        &QueryKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
         /* Call the internal API */
-        Status = CmQueryKey(KeyObject->KeyControlBlock,
-                            KeyInformationClass,
-                            KeyInformation,
-                            Length,
-                            ResultLength);
+        Status = CmpTransQueryKey(KeyObject,
+                                  KeyInformationClass,
+                                  KeyInformation,
+                                  Length,
+                                  ResultLength);
 
         /* Do the post callback */
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostQueryKey, &PostOperationInfo);
+        Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
     /* Dereference and return status */
@@ -768,7 +948,7 @@ NtQueryValueKey(IN HANDLE KeyHandle,
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PCM_KEY_BODY KeyObject;
     REG_QUERY_VALUE_KEY_INFORMATION QueryValueKeyInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
     UNICODE_STRING ValueNameCopy;
 
     PAGED_CODE();
@@ -837,28 +1017,37 @@ NtQueryValueKey(IN HANDLE KeyHandle,
     }
 
     /* Setup the callback */
-    PostOperationInfo.Object = (PVOID)KeyObject;
     QueryValueKeyInfo.Object = (PVOID)KeyObject;
     QueryValueKeyInfo.ValueName = &ValueNameCopy;
     QueryValueKeyInfo.KeyValueInformationClass = KeyValueInformationClass;
+    QueryValueKeyInfo.KeyValueInformation = KeyValueInformation;
     QueryValueKeyInfo.Length = Length;
     QueryValueKeyInfo.ResultLength = ResultLength;
 
     /* Do the callback */
-    Status = CmiCallRegisteredCallbacks(RegNtPreQueryValueKey, &QueryValueKeyInfo);
-    if (NT_SUCCESS(Status))
+    QueryValueKeyInfo.CallContext = NULL;
+    QueryValueKeyInfo.ObjectContext = NULL;
+    QueryValueKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreQueryValueKey,
+                        RegNtPostQueryValueKey,
+                        &QueryValueKeyInfo,
+                        &QueryValueKeyInfo.CallContext,
+                        &QueryValueKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
         /* Call the internal API */
-        Status = CmQueryValueKey(KeyObject->KeyControlBlock,
-                                 ValueNameCopy,
-                                 KeyValueInformationClass,
-                                 KeyValueInformation,
-                                 Length,
-                                 ResultLength);
+        Status = CmpTransQueryValueKey(KeyObject,
+                                       &ValueNameCopy,
+                                       KeyValueInformationClass,
+                                       KeyValueInformation,
+                                       Length,
+                                       ResultLength);
 
         /* Do the post callback */
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostQueryValueKey, &PostOperationInfo);
+        Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
 Quit:
@@ -883,7 +1072,7 @@ NtSetValueKey(IN HANDLE KeyHandle,
     KPROCESSOR_MODE PreviousMode;
     PCM_KEY_BODY KeyObject;
     REG_SET_VALUE_KEY_INFORMATION SetValueKeyInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
     UNICODE_STRING ValueNameCopy;
 
     PAGED_CODE();
@@ -989,7 +1178,6 @@ NtSetValueKey(IN HANDLE KeyHandle,
     }
 
     /* Setup callback */
-    PostOperationInfo.Object = (PVOID)KeyObject;
     SetValueKeyInfo.Object = (PVOID)KeyObject;
     SetValueKeyInfo.ValueName = &ValueNameCopy;
     SetValueKeyInfo.TitleIndex = TitleIndex;
@@ -998,19 +1186,28 @@ NtSetValueKey(IN HANDLE KeyHandle,
     SetValueKeyInfo.DataSize = DataSize;
 
     /* Do the callback */
-    Status = CmiCallRegisteredCallbacks(RegNtPreSetValueKey, &SetValueKeyInfo);
-    if (NT_SUCCESS(Status))
+    SetValueKeyInfo.CallContext = NULL;
+    SetValueKeyInfo.ObjectContext = NULL;
+    SetValueKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreSetValueKey,
+                        RegNtPostSetValueKey,
+                        &SetValueKeyInfo,
+                        &SetValueKeyInfo.CallContext,
+                        &SetValueKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
         /* Call the internal API */
-        Status = CmSetValueKey(KeyObject->KeyControlBlock,
-                               &ValueNameCopy,
-                               Type,
-                               Data,
-                               DataSize);
+        Status = CmpTransSetValueKey(KeyObject,
+                                     &ValueNameCopy,
+                                     Type,
+                                     Data,
+                                     DataSize);
 
         /* Do the post-callback */
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostSetValueKey, &PostOperationInfo);
+        Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
 Quit:
@@ -1033,7 +1230,7 @@ NtDeleteValueKey(IN HANDLE KeyHandle,
     NTSTATUS Status;
     PCM_KEY_BODY KeyObject;
     REG_DELETE_VALUE_KEY_INFORMATION DeleteValueKeyInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     UNICODE_STRING ValueNameCopy;
 
@@ -1072,19 +1269,25 @@ NtDeleteValueKey(IN HANDLE KeyHandle,
 
     /* Do the callback */
     DeleteValueKeyInfo.Object = (PVOID)KeyObject;
-    DeleteValueKeyInfo.ValueName = ValueName;
-    Status = CmiCallRegisteredCallbacks(RegNtPreDeleteValueKey,
-                                        &DeleteValueKeyInfo);
-    if (NT_SUCCESS(Status))
+    DeleteValueKeyInfo.ValueName = &ValueNameCopy;
+    DeleteValueKeyInfo.CallContext = NULL;
+    DeleteValueKeyInfo.ObjectContext = NULL;
+    DeleteValueKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreDeleteValueKey,
+                        RegNtPostDeleteValueKey,
+                        &DeleteValueKeyInfo,
+                        &DeleteValueKeyInfo.CallContext,
+                        &DeleteValueKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
         /* Call the internal API */
-        Status = CmDeleteValueKey(KeyObject->KeyControlBlock, ValueNameCopy);
+        Status = CmpTransDeleteValueKey(KeyObject, &ValueNameCopy);
 
         /* Do the post callback */
-        PostOperationInfo.Object = (PVOID)KeyObject;
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostDeleteValueKey,
-                                   &PostOperationInfo);
+        Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
 Quit:
@@ -1102,6 +1305,8 @@ NtFlushKey(IN HANDLE KeyHandle)
 {
     NTSTATUS Status;
     PCM_KEY_BODY KeyObject;
+    REG_FLUSH_KEY_INFORMATION FlushKeyInfo;
+    CMP_CALLBACK_CALL CallbackCall;
     PAGED_CODE();
 
     /* Get the key object */
@@ -1113,27 +1318,44 @@ NtFlushKey(IN HANDLE KeyHandle)
                                        NULL);
     if (!NT_SUCCESS(Status)) return Status;
 
-    /* Lock the registry */
-    CmpLockRegistry();
-
-    /* Lock the KCB */
-    CmpAcquireKcbLockShared(KeyObject->KeyControlBlock);
-
-    /* Make sure KCB isn't deleted */
-    if (KeyObject->KeyControlBlock->Delete)
+    FlushKeyInfo.Object = KeyObject;
+    FlushKeyInfo.CallContext = NULL;
+    FlushKeyInfo.ObjectContext = NULL;
+    FlushKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreFlushKey,
+                        RegNtPostFlushKey,
+                        &FlushKeyInfo,
+                        &FlushKeyInfo.CallContext,
+                        &FlushKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
-        /* Fail */
-        Status = STATUS_KEY_DELETED;
-    }
-    else
-    {
-        /* Call the internal API */
-        Status = CmFlushKey(KeyObject->KeyControlBlock, FALSE);
-    }
+        /* Lock the registry */
+        CmpLockRegistry();
 
-    /* Release the locks */
-    CmpReleaseKcbLock(KeyObject->KeyControlBlock);
-    CmpUnlockRegistry();
+        /* Lock the KCB */
+        CmpAcquireKcbLockShared(KeyObject->KeyControlBlock);
+
+        /* Make sure KCB isn't deleted */
+        if (KeyObject->KeyControlBlock->Delete)
+        {
+            /* Fail */
+            Status = STATUS_KEY_DELETED;
+        }
+        else
+        {
+            /* Call the internal API */
+            Status = CmFlushKey(KeyObject->KeyControlBlock, FALSE);
+        }
+
+        /* Release the locks */
+        CmpReleaseKcbLock(KeyObject->KeyControlBlock);
+        CmpUnlockRegistry();
+
+        Status = CmpPostCallbacks(&CallbackCall, Status);
+    }
 
     /* Dereference the object and return status */
     ObDereferenceObject(KeyObject);
@@ -1771,7 +1993,7 @@ NtRenameKey(IN HANDLE KeyHandle,
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PCM_KEY_BODY KeyObject;
     REG_RENAME_KEY_INFORMATION RenameKeyInfo;
-    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    CMP_CALLBACK_CALL CallbackCall;
     UNICODE_STRING NewName;
     NTSTATUS Status;
     ULONG i;
@@ -1799,15 +2021,27 @@ NtRenameKey(IN HANDLE KeyHandle,
     Status = ObReferenceObjectByHandle(KeyHandle, KEY_WRITE, CmpKeyObjectType, PreviousMode, (PVOID*)&KeyObject, NULL);
     if (!NT_SUCCESS(Status)) goto Exit;
 
-    PostOperationInfo.Object = KeyObject;
     RenameKeyInfo.Object = KeyObject;
     RenameKeyInfo.NewName = &NewName;
-    Status = CmiCallRegisteredCallbacks(RegNtPreRenameKey, &RenameKeyInfo);
-    if (NT_SUCCESS(Status))
+    RenameKeyInfo.CallContext = NULL;
+    RenameKeyInfo.ObjectContext = NULL;
+    RenameKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreRenameKey,
+                        RegNtPostRenameKey,
+                        &RenameKeyInfo,
+                        &RenameKeyInfo.CallContext,
+                        &RenameKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
     {
-        Status = CmRenameKey(KeyObject->KeyControlBlock, &NewName);
-        PostOperationInfo.Status = Status;
-        CmiCallRegisteredCallbacks(RegNtPostRenameKey, &PostOperationInfo);
+        Status = CmpTransPrepareWrite(KeyObject);
+        if (NT_SUCCESS(Status))
+        {
+            Status = CmRenameKey(KeyObject->KeyControlBlock, &NewName);
+        }
+        Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
     ObDereferenceObject(KeyObject);

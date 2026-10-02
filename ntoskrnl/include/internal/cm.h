@@ -69,7 +69,6 @@
 #if 0 // See sdk/lib/cmlib/cmlib.h
 #define CMP_SECURITY_HASH_LISTS                         64
 #endif
-#define CMP_MAX_CALLBACKS                               100
 
 //
 // Hashing Constants
@@ -235,9 +234,16 @@ typedef struct _CM_INDEX_HINT_BLOCK
 //
 // Key Body
 //
+typedef union _CM_TRANS_PTR
+{
+    ULONG_PTR LightWeight : 1;
+    PVOID TransPtr;
+} CM_TRANS_PTR, *PCM_TRANS_PTR;
+
 typedef struct _CM_KEY_BODY
 {
     ULONG Type;
+    USHORT AccessCheckedLayerHeight;
     struct _CM_KEY_CONTROL_BLOCK *KeyControlBlock;
     struct _CM_NOTIFY_BLOCK *NotifyBlock;
     HANDLE ProcessID;
@@ -246,7 +252,38 @@ typedef struct _CM_KEY_BODY
     /* ReactOS specific -- boolean flag to avoid recursive locking of the KCB */
     BOOLEAN KcbLocked;
     BOOLEAN NotifyClosed;
+    CM_TRANS_PTR Trans;
+    GUID *KtmUow;
+    LIST_ENTRY ContextListHead;
 } CM_KEY_BODY, *PCM_KEY_BODY;
+
+C_ASSERT(FIELD_OFFSET(CM_KEY_BODY, AccessCheckedLayerHeight) == 0x4);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KEY_BODY, KeyControlBlock) == 0x8);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KEY_BODY, NotifyBlock) == 0x10);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KEY_BODY, ProcessID) == 0x18);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KEY_BODY, KeyBodyList) == 0x20);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KEY_BODY, Trans) == 0x38);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KEY_BODY, KtmUow) == 0x40);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KEY_BODY, ContextListHead) == 0x48);
+
+typedef struct _CMP_CALLBACK_ITEM
+{
+    struct _CM_CALLBACK_ENTRY *Entry;
+    PVOID CallContext;
+} CMP_CALLBACK_ITEM, *PCMP_CALLBACK_ITEM;
+
+typedef struct _CMP_CALLBACK_CALL
+{
+    ULONG Count;
+    REG_NOTIFY_CLASS PostClass;
+    PVOID PreInformation;
+    PVOID *CallContext;
+    PVOID *ObjectContext;
+    PCM_KEY_BODY KeyBody;
+    PVOID *ResultObject;
+    PCMP_CALLBACK_ITEM Items;
+    CMP_CALLBACK_ITEM InlineItems[4];
+} CMP_CALLBACK_CALL, *PCMP_CALLBACK_CALL;
 
 //
 // Name Control Block (NCB)
@@ -448,7 +485,140 @@ typedef struct _CM_PARSE_CONTEXT
     BOOLEAN CreateLink;
     BOOLEAN CreateOperation;
     PCMHIVE OriginatingPoint;
+    ULONG Wow64Flags;
+    PVOID Transaction;
+    PVOID EffectiveTransaction;
+    PVOID ConflictEnlistment;
 } CM_PARSE_CONTEXT, *PCM_PARSE_CONTEXT;
+
+typedef enum _UoWActionType
+{
+    UoWAddThisKey = 0,
+    UoWAddChildKey = 1,
+    UoWDeleteThisKey = 2,
+    UoWDeleteChildKey = 3,
+    UoWSetValueNew = 4,
+    UoWSetValueExisting = 5,
+    UoWDeleteValue = 6,
+    UoWSetKeyUserFlags = 7,
+    UoWSetLastWriteTime = 8,
+    UoWSetSecurityDescriptor = 9,
+    UoWRenameSubKeyObsolete = 10,
+    UoWRenameOldSubKeyObsolete = 11,
+    UoWRenameNewSubKeyObsolete = 12,
+    UoWIsolation = 13,
+    UoWTestFail = 14,
+    UoWRecreateKey = 15,
+    UoWInvalid = 16
+} UoWActionType;
+
+typedef struct _CM_INTENT_LOCK
+{
+    ULONG OwnerCount;
+    struct _CM_KCB_UOW **OwnerTable;
+} CM_INTENT_LOCK, *PCM_INTENT_LOCK;
+
+typedef struct _CM_UOW_SET_VALUE_KEY_DATA
+{
+    HCELL_INDEX PreparedCell;
+    HCELL_INDEX OldValueCell;
+    USHORT NameLength;
+    ULONG DataSize;
+} CM_UOW_SET_VALUE_KEY_DATA, *PCM_UOW_SET_VALUE_KEY_DATA;
+
+typedef struct _CM_TRANS
+{
+    LIST_ENTRY TransactionListEntry;
+    LIST_ENTRY KCBUoWListHead;
+    LIST_ENTRY LazyCommitListEntry;
+    union
+    {
+        struct
+        {
+            ULONG Prepared : 1;
+            ULONG Aborted : 1;
+            ULONG Committed : 1;
+            ULONG Initializing : 1;
+            ULONG Invalid : 1;
+            ULONG UseReservation : 1;
+            ULONG TmCallbacksActive : 1;
+            ULONG LightWeight : 1;
+            ULONG Freed1 : 1;
+            ULONG Freed2 : 1;
+            ULONG Spare1 : 2;
+            ULONG Freed : 1;
+            ULONG Spare : 19;
+        };
+        ULONG TransState;
+    };
+    CM_TRANS_PTR Trans;
+    struct _CM_RM *CmRm;
+    struct _KENLISTMENT *KtmEnlistmentObject;
+    HANDLE KtmEnlistmentHandle;
+    GUID KtmUow;
+    ULONGLONG StartLsn;
+    ULONG HiveCount;
+    PCMHIVE HiveArray[8];
+} CM_TRANS, *PCM_TRANS;
+
+typedef struct _CM_KCB_UOW
+{
+    LIST_ENTRY TransactionListEntry;
+    PCM_INTENT_LOCK KCBLock;
+    PCM_INTENT_LOCK KeyLock;
+    LIST_ENTRY KCBListEntry;
+    struct _CM_KEY_CONTROL_BLOCK *KeyControlBlock;
+    PCM_TRANS Transaction;
+    ULONG UoWState;
+    UoWActionType ActionType;
+    HSTORAGE_TYPE StorageType;
+    struct _CM_KCB_UOW *ParentUoW;
+    union
+    {
+        struct _CM_KEY_CONTROL_BLOCK *ChildKCB;
+        HCELL_INDEX VolatileKeyCell;
+        struct
+        {
+            HCELL_INDEX OldValueCell;
+            HCELL_INDEX NewValueCell;
+        };
+        ULONG UserFlags;
+        LARGE_INTEGER LastWriteTime;
+        struct
+        {
+            PVOID TxCachedSecurity;
+            HCELL_INDEX TxSecurityCell;
+            BOOLEAN UpdateEntireSecurity;
+        };
+    };
+    union
+    {
+        PVOID PrepareDataPointer;
+        PVOID SecurityData;
+        PVOID ModifyKeysData;
+        PVOID SetValueData;
+    };
+    union
+    {
+        PCM_UOW_SET_VALUE_KEY_DATA ValueData;
+        PVOID DiscardReplaceContext;
+    };
+} CM_KCB_UOW, *PCM_KCB_UOW;
+
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_TRANS, TransState) == 0x30);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_TRANS, Trans) == 0x38);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_TRANS, KtmEnlistmentObject) == 0x48);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_TRANS, KtmUow) == 0x58);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_TRANS, HiveArray) == 0x78);
+C_ASSERT(sizeof(PVOID) != 8 || sizeof(CM_TRANS) == 0xb8);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KCB_UOW, KCBListEntry) == 0x20);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KCB_UOW, KeyControlBlock) == 0x30);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KCB_UOW, ActionType) == 0x44);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KCB_UOW, ParentUoW) == 0x50);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KCB_UOW, ChildKCB) == 0x58);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KCB_UOW, PrepareDataPointer) == 0x68);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(CM_KCB_UOW, ValueData) == 0x70);
+C_ASSERT(sizeof(PVOID) != 8 || sizeof(CM_KCB_UOW) == 0x78);
 
 //
 // MultiFunction Adapter Recognizer Structure
@@ -500,7 +670,34 @@ typedef struct _KEY_INFORMATION
 //
 // BUGBUG Old Hive Stuff for Temporary Support
 //
-NTSTATUS CmiCallRegisteredCallbacks(IN REG_NOTIFY_CLASS Argument1, IN PVOID Argument2);
+extern ULONG CmpCallBackCount;
+
+BOOLEAN
+NTAPI
+CmpPreCallbacks(
+    _Out_ PCMP_CALLBACK_CALL Call,
+    _In_ REG_NOTIFY_CLASS PreClass,
+    _In_ REG_NOTIFY_CLASS PostClass,
+    _In_ PVOID PreInformation,
+    _In_opt_ PVOID *CallContext,
+    _In_opt_ PVOID *ObjectContext,
+    _In_opt_ PCM_KEY_BODY KeyBody,
+    _In_opt_ PVOID *ResultObject,
+    _Out_ PNTSTATUS Status
+);
+
+NTSTATUS
+NTAPI
+CmpPostCallbacks(
+    _Inout_ PCMP_CALLBACK_CALL Call,
+    _In_ NTSTATUS Status
+);
+
+VOID
+NTAPI
+CmpCleanupKeyBodyContexts(
+    _In_ PCM_KEY_BODY KeyBody
+);
 ///////////////////////////////////////////////////////////////////////////////
 
 //
@@ -1350,6 +1547,7 @@ CmSetValueKey(
 NTSTATUS
 NTAPI
 CmQueryKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN PVOID Transaction,
     IN KEY_INFORMATION_CLASS KeyInformationClass,
     IN PVOID KeyInformation,
     IN ULONG Length,
@@ -1359,6 +1557,7 @@ CmQueryKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
 NTSTATUS
 NTAPI
 CmEnumerateKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN PVOID Transaction,
     IN ULONG Index,
     IN KEY_INFORMATION_CLASS KeyInformationClass,
     IN PVOID KeyInformation,
@@ -1369,8 +1568,142 @@ CmEnumerateKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
 NTSTATUS
 NTAPI
 CmDeleteKey(
-    IN PCM_KEY_BODY KeyBody
+    IN PCM_KEY_CONTROL_BLOCK Kcb
 );
+
+NTSTATUS
+CmpCopyKeySecurity(
+    IN PHHIVE SourceHive,
+    IN HCELL_INDEX SourceCell,
+    IN PHHIVE DestinationHive,
+    IN HSTORAGE_TYPE StorageType,
+    IN OUT PHCELL_INDEX AnchorCell,
+    OUT PHCELL_INDEX NewCell);
+
+extern ULONG CmpTransUoWCount;
+
+VOID
+CmpInitTransactions(VOID);
+
+NTSTATUS
+CmpTransEnlist(
+    _In_ PVOID Transaction);
+
+NTSTATUS
+CmpTransCheckActive(
+    _In_ PVOID Transaction);
+
+BOOLEAN
+CmpTransIsCellVisible(
+    _In_ PHHIVE Hive,
+    _In_ HCELL_INDEX Cell,
+    _In_opt_ PVOID Transaction);
+
+BOOLEAN
+CmpTransIsKcbVisible(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb,
+    _In_opt_ PVOID Transaction);
+
+HCELL_INDEX
+CmpTransFindSubKeyByNumber(
+    _In_ PHHIVE Hive,
+    _In_ PCM_KEY_NODE Parent,
+    _In_ ULONG Index,
+    _In_opt_ PVOID Transaction);
+
+VOID
+CmpTransAdjustKeyCounts(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb,
+    _In_opt_ PVOID Transaction,
+    _Inout_ PULONG SubKeys,
+    _Inout_ PULONG Values);
+
+HSTORAGE_TYPE
+CmpTransParentStorage(
+    _In_ PCM_KEY_CONTROL_BLOCK ParentKcb,
+    _In_opt_ PVOID Transaction,
+    _In_ HSTORAGE_TYPE CellType);
+
+NTSTATUS
+CmpTransCheckCreate(
+    _In_ PCM_KEY_CONTROL_BLOCK ParentKcb,
+    _In_opt_ PVOID Transaction,
+    _Out_ PVOID *ConflictEnlistment);
+
+NTSTATUS
+CmpTransAddKey(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb,
+    _In_ PVOID Transaction,
+    _In_ HSTORAGE_TYPE StorageType);
+
+VOID
+CmpTransBindKeyBody(
+    _Inout_ PCM_KEY_BODY KeyBody,
+    _In_ PVOID Transaction);
+
+VOID
+CmpTransUnbindKeyBody(
+    _Inout_ PCM_KEY_BODY KeyBody);
+
+VOID
+CmpTransResolveConflict(
+    _In_ PVOID Enlistment);
+
+NTSTATUS
+CmpTransPrepareWrite(
+    _In_ PCM_KEY_BODY KeyBody);
+
+NTSTATUS
+CmpTransSetValueKey(
+    _In_ PCM_KEY_BODY KeyBody,
+    _In_ PUNICODE_STRING ValueName,
+    _In_ ULONG Type,
+    _In_reads_bytes_opt_(DataSize) PVOID Data,
+    _In_ ULONG DataSize);
+
+NTSTATUS
+CmpTransDeleteValueKey(
+    _In_ PCM_KEY_BODY KeyBody,
+    _In_ PUNICODE_STRING ValueName);
+
+NTSTATUS
+CmpTransQueryValueKey(
+    _In_ PCM_KEY_BODY KeyBody,
+    _In_ PUNICODE_STRING ValueName,
+    _In_ KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass,
+    _Out_writes_bytes_(Length) PVOID KeyValueInformation,
+    _In_ ULONG Length,
+    _Out_ PULONG ResultLength);
+
+NTSTATUS
+CmpTransEnumerateValueKey(
+    _In_ PCM_KEY_BODY KeyBody,
+    _In_ ULONG Index,
+    _In_ KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass,
+    _Out_writes_bytes_(Length) PVOID KeyValueInformation,
+    _In_ ULONG Length,
+    _Out_ PULONG ResultLength);
+
+NTSTATUS
+CmpTransQueryKey(
+    _In_ PCM_KEY_BODY KeyBody,
+    _In_ KEY_INFORMATION_CLASS KeyInformationClass,
+    _Out_writes_bytes_(Length) PVOID KeyInformation,
+    _In_ ULONG Length,
+    _Out_ PULONG ResultLength);
+
+NTSTATUS
+CmpTransEnumerateKey(
+    _In_ PCM_KEY_BODY KeyBody,
+    _In_ ULONG Index,
+    _In_ KEY_INFORMATION_CLASS KeyInformationClass,
+    _Out_writes_bytes_(Length) PVOID KeyInformation,
+    _In_ ULONG Length,
+    _Out_ PULONG ResultLength);
+
+NTSTATUS
+CmpTransDeleteKey(
+    _In_ PCM_KEY_BODY KeyBody);
 
 NTSTATUS
 NTAPI
@@ -1544,6 +1877,7 @@ extern ULONG CmpBootType;
 extern ULONG CmSelfHeal;
 extern BOOLEAN CmpSelfHeal;
 extern HANDLE CmpRegistryRootHandle;
+extern PCM_KEY_BODY CmpRegistryRootObject;
 extern BOOLEAN ExpInTextModeSetup;
 extern BOOLEAN InitIsWinPEMode;
 extern ULONG CmpHashTableSize;

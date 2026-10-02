@@ -215,6 +215,8 @@ KMT_TESTFUNC Test_KeDpc;
 KMT_TESTFUNC Test_KeEvent;
 KMT_TESTFUNC Test_KeFloatPointState;
 KMT_TESTFUNC Test_KeGuardedMutex;
+KMT_TESTFUNC Test_CmCallbacks;
+KMT_TESTFUNC Test_CmTransactions;
 KMT_TESTFUNC Test_CmKeyKM;
 KMT_TESTFUNC Test_EtwRegisterKM;
 KMT_TESTFUNC Test_IoBuildIoctlKM;
@@ -448,6 +450,8 @@ const KMT_TEST TestList[] =
     { "ExWddmWindow",                      Test_ExWddmWindow },
     { "IoLargeMemoryResource",              Test_IoLargeMemoryResource },
     { "IoCancelKM",                         Test_IoCancelKM },
+    { "CmCallbacks",                        Test_CmCallbacks },
+    { "CmTransactions",                     Test_CmTransactions },
     { "CmKeyKM",                            Test_CmKeyKM },
     { "EtwRegisterKM",                      Test_EtwRegisterKM },
     { "IoBuildIoctlKM",                     Test_IoBuildIoctlKM },

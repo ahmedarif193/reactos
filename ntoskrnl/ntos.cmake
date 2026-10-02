@@ -41,6 +41,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmse.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmsecach.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmsysini.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmtrans.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmvalche.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/cmwraprs.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/config/ntapi.c
