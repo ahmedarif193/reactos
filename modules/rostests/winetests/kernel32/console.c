@@ -107,23 +107,23 @@ static HANDLE create_unbound_handle(BOOL output, BOOL test_status)
     return status ? NULL : handle;
 }
 
-/* FIXME: this could be optimized on a speed point of view */
 static void resetContent(HANDLE hCon, COORD sbSize, BOOL content)
 {
     COORD       c;
-    WORD        attr = DEFAULT_ATTRIB;
-    char        ch;
+    WORD        *attrs = malloc(sbSize.X * sizeof(*attrs));
+    char        *chars = malloc(sbSize.X);
     DWORD       len;
 
-    for (c.X = 0; c.X < sbSize.X; c.X++)
+    for (c.X = 0; c.X < sbSize.X; c.X++) attrs[c.X] = DEFAULT_ATTRIB;
+    for (c.Y = 0; c.Y < sbSize.Y; c.Y++)
     {
-        for (c.Y = 0; c.Y < sbSize.Y; c.Y++)
-        {
-            ch = (content) ? CONTENT(c) : ' ';
-            WriteConsoleOutputAttribute(hCon, &attr, 1, c, &len);
-            WriteConsoleOutputCharacterA(hCon, &ch, 1, c, &len);
-        }
+        for (c.X = 0; c.X < sbSize.X; c.X++) chars[c.X] = (content) ? CONTENT(c) : ' ';
+        c.X = 0;
+        WriteConsoleOutputAttribute(hCon, attrs, sbSize.X, c, &len);
+        WriteConsoleOutputCharacterA(hCon, chars, sbSize.X, c, &len);
     }
+    free(attrs);
+    free(chars);
 }
 
 /* dummy console ctrl handler to test reset of ctrl handler's list */
