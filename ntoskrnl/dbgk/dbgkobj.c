@@ -81,6 +81,8 @@ DbgkpQueueMessage(IN PEPROCESS Process,
         DebugEvent = &LocalDebugEvent;
         DebugEvent->Flags = Flags;
 
+        KeEnterCriticalRegion();
+
         /* Acquire the port lock */
         ExAcquireFastMutex(&DbgkpProcessDebugPortMutex);
 
@@ -181,6 +183,8 @@ DbgkpQueueMessage(IN PEPROCESS Process,
             /* Set return status */
             Status = DebugEvent->Status;
         }
+
+        KeLeaveCriticalRegion();
     }
     else
     {
