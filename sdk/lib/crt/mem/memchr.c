@@ -9,9 +9,9 @@ void* __cdecl memchr(const void *s, int c, size_t n)
 {
     if (n)
     {
-        const char *p = s;
+        const unsigned char *p = s;
         do {
-            if (*p++ == c)
+            if (*p++ == (unsigned char)c)
                 return (void *)(p-1);
         } while (--n != 0);
     }
