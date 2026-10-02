@@ -521,6 +521,10 @@ IopDereferenceDeviceObject(IN PDEVICE_OBJECT DeviceObject,
         /* Unload it */
         IopUnloadDevice(DeviceObject);
     }
+    else if (!(DeviceObject->ReferenceCount))
+    {
+        PiDeviceObjectClosed(DeviceObject);
+    }
 }
 
 VOID
