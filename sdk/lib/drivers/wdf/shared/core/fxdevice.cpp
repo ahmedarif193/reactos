@@ -1030,8 +1030,7 @@ FxDevice::CreateDevice(
             // administrator complete control over the device. No other users
             // may access the device.
             //
-            // pSddl = (PUNICODE_STRING) &SDDL_DEVOBJ_SYS_ALL_ADM_ALL;
-            pSddl = NULL; // __REACTOS__ : wdmsec.lib is not supported
+            pSddl = (PUNICODE_STRING) &SDDL_DEVOBJ_SYS_ALL_ADM_ALL;
         }
 
         status = Mx::MxCreateDeviceSecure(

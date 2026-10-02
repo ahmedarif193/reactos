@@ -27,7 +27,7 @@ Revision History:
 
 #include <ntddk.h>
 // #include <procgrp.h>
-// #include <wdmsec.h>
+#include <wdmsec.h>
 
 // #include <wmikm.h>
 // #include <ntwmi.h>

@@ -12,7 +12,6 @@ function(add_wdfdriverentry_version _target _minor)
     endif()
 
     target_compile_definitions(${_target}
-        PUBLIC WDF_DEVICE_NO_WDMSEC_H
         PRIVATE
             WDF_STUB
             WDF_STUB_VERSION=${_minor}

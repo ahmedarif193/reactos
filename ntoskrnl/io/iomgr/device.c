@@ -1282,6 +1282,180 @@ IoCreateDevice(IN PDRIVER_OBJECT DriverObject,
     return STATUS_SUCCESS;
 }
 
+static
+VOID
+IopQueryDeviceClassOverrides(
+    _In_ LPCGUID DeviceClassGuid,
+    _Inout_ DEVICE_TYPE *DeviceType,
+    _Inout_ PULONG DeviceCharacteristics,
+    _Inout_ PBOOLEAN Exclusive,
+    _Outptr_result_maybenull_ PKEY_VALUE_FULL_INFORMATION *Security)
+{
+    UNICODE_STRING ClassKeyName = RTL_CONSTANT_STRING(
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Class");
+    UNICODE_STRING PropertiesKeyName = RTL_CONSTANT_STRING(REGSTR_KEY_DEVICE_PROPERTIES);
+    UNICODE_STRING GuidString;
+    PKEY_VALUE_FULL_INFORMATION Information;
+    HANDLE ClassRootKey, ClassKey, PropertiesKey;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    *Security = NULL;
+
+    Status = RtlStringFromGUID(DeviceClassGuid, &GuidString);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = IopOpenRegistryKeyEx(&ClassRootKey, NULL, &ClassKeyName, KEY_READ);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeUnicodeString(&GuidString);
+        return;
+    }
+
+    Status = IopOpenRegistryKeyEx(&ClassKey, ClassRootKey, &GuidString, KEY_READ);
+    ZwClose(ClassRootKey);
+    RtlFreeUnicodeString(&GuidString);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = IopOpenRegistryKeyEx(&PropertiesKey, ClassKey, &PropertiesKeyName, KEY_READ);
+    ZwClose(ClassKey);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = IopGetRegistryValue(PropertiesKey, REGSTR_VAL_DEVICE_TYPE, &Information);
+    if (NT_SUCCESS(Status))
+    {
+        if (Information->Type == REG_DWORD && Information->DataLength == sizeof(ULONG))
+            *DeviceType = *(PULONG)((PUCHAR)Information + Information->DataOffset);
+        ExFreePool(Information);
+    }
+
+    Status = IopGetRegistryValue(PropertiesKey, REGSTR_VAL_DEVICE_CHARACTERISTICS, &Information);
+    if (NT_SUCCESS(Status))
+    {
+        if (Information->Type == REG_DWORD && Information->DataLength == sizeof(ULONG))
+            *DeviceCharacteristics = *(PULONG)((PUCHAR)Information + Information->DataOffset);
+        ExFreePool(Information);
+    }
+
+    Status = IopGetRegistryValue(PropertiesKey, REGSTR_VAL_DEVICE_EXCLUSIVE, &Information);
+    if (NT_SUCCESS(Status))
+    {
+        if (Information->Type == REG_DWORD && Information->DataLength == sizeof(ULONG))
+            *Exclusive = *(PULONG)((PUCHAR)Information + Information->DataOffset) != 0;
+        ExFreePool(Information);
+    }
+
+    Status = IopGetRegistryValue(PropertiesKey, REGSTR_VAL_DEVICE_SECURITY_DESCRIPTOR, &Information);
+    if (NT_SUCCESS(Status))
+    {
+        if (Information->Type == REG_BINARY &&
+            RtlValidRelativeSecurityDescriptor((PUCHAR)Information + Information->DataOffset,
+                                               Information->DataLength,
+                                               DACL_SECURITY_INFORMATION))
+        {
+            *Security = Information;
+        }
+        else
+        {
+            ExFreePool(Information);
+        }
+    }
+
+    ZwClose(PropertiesKey);
+}
+
+NTSTATUS
+NTAPI
+IoCreateDeviceSecure(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ ULONG DeviceExtensionSize,
+    _In_opt_ PUNICODE_STRING DeviceName,
+    _In_ DEVICE_TYPE DeviceType,
+    _In_ ULONG DeviceCharacteristics,
+    _In_ BOOLEAN Exclusive,
+    _In_ PCUNICODE_STRING DefaultSDDLString,
+    _In_opt_ LPCGUID DeviceClassGuid,
+    _Out_ PDEVICE_OBJECT *DeviceObject)
+{
+    PKEY_VALUE_FULL_INFORMATION ClassSecurity = NULL;
+    PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
+    PSECURITY_DESCRIPTOR ConvertedDescriptor = NULL;
+    PWSTR SddlString;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    *DeviceObject = NULL;
+
+    if (DeviceClassGuid != NULL)
+    {
+        IopQueryDeviceClassOverrides(DeviceClassGuid,
+                                     &DeviceType,
+                                     &DeviceCharacteristics,
+                                     &Exclusive,
+                                     &ClassSecurity);
+    }
+
+    if (ClassSecurity != NULL)
+    {
+        SecurityDescriptor = (PUCHAR)ClassSecurity + ClassSecurity->DataOffset;
+    }
+    else
+    {
+        if (DefaultSDDLString == NULL || DefaultSDDLString->Buffer == NULL)
+            return STATUS_INVALID_PARAMETER;
+
+        SddlString = ExAllocatePoolWithTag(PagedPool,
+                                           DefaultSDDLString->Length + sizeof(UNICODE_NULL),
+                                           TAG_IO);
+        if (SddlString == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        RtlCopyMemory(SddlString, DefaultSDDLString->Buffer, DefaultSDDLString->Length);
+        SddlString[DefaultSDDLString->Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+        Status = SeConvertStringSecurityDescriptorToSecurityDescriptor(SddlString,
+                                                                       1,
+                                                                       &ConvertedDescriptor,
+                                                                       NULL);
+        ExFreePoolWithTag(SddlString, TAG_IO);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        SecurityDescriptor = ConvertedDescriptor;
+    }
+
+    Status = IoCreateDevice(DriverObject,
+                            DeviceExtensionSize,
+                            DeviceName,
+                            DeviceType,
+                            DeviceCharacteristics,
+                            Exclusive,
+                            DeviceObject);
+    if (NT_SUCCESS(Status))
+    {
+        Status = ObSetSecurityObjectByPointer(*DeviceObject,
+                                              DACL_SECURITY_INFORMATION,
+                                              SecurityDescriptor);
+        if (!NT_SUCCESS(Status))
+        {
+            IoDeleteDevice(*DeviceObject);
+            *DeviceObject = NULL;
+        }
+    }
+
+    if (ConvertedDescriptor != NULL)
+        ExFreePoolWithTag(ConvertedDescriptor, TAG_SD);
+    if (ClassSecurity != NULL)
+        ExFreePool(ClassSecurity);
+
+    return Status;
+}
+
 /*
  * IoDeleteDevice
  *

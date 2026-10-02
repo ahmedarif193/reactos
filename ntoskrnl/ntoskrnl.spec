@@ -394,6 +394,7 @@
 @ stdcall IoConnectInterruptEx(ptr)
 @ stdcall IoCreateController(long)
 @ stdcall IoCreateDevice(ptr long ptr long long long ptr)
+@ stdcall IoCreateDeviceSecure(ptr long ptr long long long ptr ptr ptr)
 @ stdcall IoCreateDisk(ptr ptr)
 @ stdcall IoCreateDriver(ptr ptr)
 @ stdcall IoCreateFile(ptr long ptr ptr ptr long long long long ptr long long ptr long)
@@ -2402,7 +2403,6 @@
 @ stub -arch=win64 HvlUpdatePerformanceStateCountersForLp
 @ stdcall -arch=i386,win64 InbvNotifyDisplayOwnershipChange(long)
 @ stdcall -arch=i386,win64 InbvSetVirtualFrameBuffer(ptr)
-@ stub -arch=arm64 IoCreateDeviceSecure
 @ stub -arch=win64 InterlockedPushListSList
 @ stub -arch=win64 IoAcquireKsrPersistentMemory
 @ stub -arch=win64 IoAcquireKsrPersistentMemoryEx
