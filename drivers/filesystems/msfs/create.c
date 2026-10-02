@@ -227,12 +227,12 @@ MsfsCreateMailslot(PDEVICE_OBJECT DeviceObject,
 
         KeUnlockMutex(&DeviceExtension->FcbListLock);
 
-        Irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
+        Irp->IoStatus.Status = STATUS_OBJECT_NAME_COLLISION;
         Irp->IoStatus.Information = 0;
 
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
-        return STATUS_UNSUCCESSFUL;
+        return STATUS_OBJECT_NAME_COLLISION;
     }
     else
     {
