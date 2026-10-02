@@ -1613,12 +1613,62 @@ static int get_locale_info( const NLS_LOCALE_DATA *locale, LCID lcid, LCTYPE typ
 }
 
 
+#ifdef __REACTOS__
+struct japanese_era
+{
+    UINT  year;
+    WCHAR name[32];
+    WCHAR abbrev[32];
+};
+
+static BOOL get_japanese_era( struct japanese_era *era )
+{
+    WCHAR date[32], data[128], *p, *end;
+    DWORD date_len, data_len, type, index = 0;
+    UINT start, today, best = 0;
+    SYSTEMTIME st;
+    LSTATUS status;
+    HKEY key;
+
+    if (RegOpenKeyExW( nls_key, L"Calendars\\Japanese\\Eras", 0, KEY_READ, &key )) return FALSE;
+    GetLocalTime( &st );
+    today = st.wYear * 10000 + st.wMonth * 100 + st.wDay;
+    for (;;)
+    {
+        date_len = ARRAY_SIZE(date);
+        data_len = sizeof(data) - sizeof(WCHAR);
+        status = RegEnumValueW( key, index++, date, &date_len, NULL, &type, (BYTE *)data, &data_len );
+        if (status == ERROR_MORE_DATA) continue;
+        if (status) break;
+        if (type != REG_SZ) continue;
+        data[data_len / sizeof(WCHAR)] = 0;
+        start = wcstoul( date, &p, 10 ) * 10000;
+        start += wcstoul( p, &p, 10 ) * 100;
+        start += wcstoul( p, &p, 10 );
+        if (start <= best || start > today) continue;
+        if (!(p = wcschr( data, '_' ))) continue;
+        if (!(end = wcschr( p + 1, '_' ))) continue;
+        *p++ = 0;
+        *end = 0;
+        best = start;
+        era->year = start / 10000;
+        lstrcpynW( era->name, data, ARRAY_SIZE(era->name) );
+        lstrcpynW( era->abbrev, p, ARRAY_SIZE(era->abbrev) );
+    }
+    RegCloseKey( key );
+    return best != 0;
+}
+#endif
+
 /* get calendar information from the locale.nls file */
 static int get_calendar_info( const NLS_LOCALE_DATA *locale, CALID id, CALTYPE type,
                               WCHAR *buffer, int len, DWORD *value )
 {
     unsigned int i, val = 0;
     const struct calendar *cal;
+#ifdef __REACTOS__
+    struct japanese_era era;
+#endif
 
     if (type & CAL_RETURN_NUMBER)
     {
@@ -1643,6 +1693,10 @@ static int get_calendar_info( const NLS_LOCALE_DATA *locale, CALID id, CALTYPE t
         return locale_return_strarray( locale->calnames, id - 1, type, buffer, len );
 
     case CAL_IYEAROFFSETRANGE:
+#ifdef __REACTOS__
+        if (id == CAL_JAPAN && get_japanese_era( &era ))
+            return cal_return_number( era.year, type, buffer, len, value );
+#endif
         if (cal->iyearoffsetrange)
         {
             const DWORD *array = (const DWORD *)(locale_strings + cal->iyearoffsetrange + 1);
@@ -1653,6 +1707,10 @@ static int get_calendar_info( const NLS_LOCALE_DATA *locale, CALID id, CALTYPE t
 
     case CAL_SERASTRING:
         if (id == CAL_GREGORIAN) return locale_return_string( locale->serastring, type, buffer, len );
+#ifdef __REACTOS__
+        if (id == CAL_JAPAN && get_japanese_era( &era ))
+            return locale_return_data( era.name, wcslen( era.name ) + 1, type, buffer, len );
+#endif
         if (cal->iyearoffsetrange)
         {
             const DWORD *array = (const DWORD *)(locale_strings + cal->iyearoffsetrange + 1);
@@ -1747,6 +1805,10 @@ static int get_calendar_info( const NLS_LOCALE_DATA *locale, CALID id, CALTYPE t
 
     case CAL_SABBREVERASTRING:
         if (id == CAL_GREGORIAN) return locale_return_string( locale->sabbreverastring, type, buffer, len );
+#ifdef __REACTOS__
+        if (id == CAL_JAPAN && get_japanese_era( &era ))
+            return locale_return_data( era.abbrev, wcslen( era.abbrev ) + 1, type, buffer, len );
+#endif
         if (cal->iyearoffsetrange)
         {
             const DWORD *array = (const DWORD *)(locale_strings + cal->iyearoffsetrange + 1);
@@ -5616,6 +5678,7 @@ BOOL WINAPI GetCPInfoExW( UINT codepage, DWORD flags, CPINFOEXW *cpinfo )
     return TRUE;
 }
 
+#endif
 
 /***********************************************************************
  *	GetCalendarInfoW   (kernelbase.@)
@@ -5655,6 +5718,7 @@ INT WINAPI DECLSPEC_HOTPATCH GetCalendarInfoEx( const WCHAR *name, CALID calenda
     return get_calendar_info( locale, calendar, type, buffer, len, value );
 }
 
+#ifndef __REACTOS__
 
 static CRITICAL_SECTION tzname_section;
 static CRITICAL_SECTION_DEBUG tzname_section_debug =
@@ -5742,6 +5806,8 @@ done:
     return ret;
 }
 
+
+#endif
 
 #define MUI_SIGNATURE 0xfecdfecd
 struct mui_resource
@@ -5960,6 +6026,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetFileMUIInfo( DWORD flags, const WCHAR *path,
     return TRUE;
 }
 
+#ifndef __REACTOS__
 
 /******************************************************************************
  *	GetFileMUIPath   (kernelbase.@)

@@ -89,6 +89,9 @@
 @ stdcall DnsHostnameToComputerNameExW(wstr ptr ptr)
 @ stdcall DuplicateToken(long long ptr)
 @ stdcall DuplicateTokenEx(long long ptr long long ptr)
+@ stdcall EnumCalendarInfoExEx(ptr wstr long wstr long long)
+@ stdcall EnumCalendarInfoExW(ptr long long long)
+@ stdcall EnumCalendarInfoW(ptr long long long)
 @ stdcall EnumSystemGeoID(long long ptr)
 @ stdcall EnumSystemLocalesA(ptr long)
 @ stdcall EnumSystemLocalesEx(ptr long long ptr)
@@ -127,6 +130,8 @@
 @ stdcall GetAppContainerAce(ptr long ptr ptr)
 @ stdcall GetAppContainerNamedObjectPath(ptr ptr long ptr ptr)
 @ stdcall GetApplicationUserModelIdFromToken(ptr ptr ptr)
+@ stdcall GetCalendarInfoEx(wstr long ptr long ptr long ptr)
+@ stdcall GetCalendarInfoW(long long long ptr long ptr)
 @ stdcall GetComputerNameExA(long ptr ptr)
 @ stdcall GetComputerNameExW(long ptr ptr)
 @ stdcall GetConsoleAliasA(str str long str)
@@ -161,6 +166,7 @@
 @ stdcall GetCurrentThreadStackLimits(ptr ptr)
 @ stdcall GetExitCodeProcess(long ptr) kernel32.GetExitCodeProcess
 @ stdcall GetExitCodeThread(long ptr) kernel32.GetExitCodeThread
+@ stdcall GetFileMUIInfo(long wstr ptr ptr)
 @ stdcall GetFileSecurityW(wstr long ptr long ptr)
 @ stdcall GetFileVersionInfoA(str long long ptr)
 @ stdcall GetFileVersionInfoExA(long str long long ptr)
@@ -239,6 +245,7 @@
 @ stdcall -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr) kernel32.InitializeProcThreadAttributeList
 @ stdcall InitializeSecurityDescriptor(ptr long)
 @ stdcall InitializeSid(ptr ptr long)
+@ stdcall Internal_EnumCalendarInfo(ptr ptr long long long long long long)
 @ stdcall IsInternetESCEnabled()
 @ stdcall IsNLSDefinedString(long long ptr wstr long)
 @ stdcall IsNormalizedString(long wstr long)
@@ -260,6 +267,7 @@
 @ stdcall MakeAbsoluteSD(ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall MakeSelfRelativeSD(ptr ptr ptr)
 @ stdcall MapGenericMask(ptr ptr)
+@ stdcall NlsValidateLocale(ptr long)
 @ stdcall NormalizeString(long wstr long ptr long)
 @ stdcall ObjectCloseAuditAlarmW(wstr ptr long)
 @ stdcall ObjectDeleteAuditAlarmW(wstr ptr long)

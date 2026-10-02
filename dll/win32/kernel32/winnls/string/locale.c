@@ -6288,18 +6288,6 @@ BOOL WINAPI GetFileMUIPath(DWORD flags, PCWSTR filepath, PWSTR language, PULONG 
 }
 
 /******************************************************************************
- *           GetFileMUIInfo (KERNEL32.@)
- */
-
-BOOL WINAPI GetFileMUIInfo(DWORD flags, PCWSTR path, FILEMUIINFO *info, DWORD *size)
-{
-    FIXME("stub: %u, %s, %p, %p\n", flags, debugstr_w(path), info, size);
-
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-/******************************************************************************
  *           ResolveLocaleName (KERNEL32.@)
  */
 

@@ -47,20 +47,8 @@ struct enumtimeformats_context {
 	BOOL   unicode; /* A vs W callback type, only for regular and Ex callbacks */
 };
 
-struct enumcalendar_context {
-	enum enum_callback_type type;  /* callback kind */
-	union {
-		CALINFO_ENUMPROCW    callback;     /* user callback pointer */
-		CALINFO_ENUMPROCEXW  callbackex;
-		CALINFO_ENUMPROCEXEX callbackexex;
-	} u;
-	LCID    lcid;     /* locale of interest */
-	CALID   calendar; /* specific calendar or ENUM_ALL_CALENDARS */
-	CALTYPE caltype;  /* calendar information type */
-	LPARAM  lParam;   /* user input parameter passed to callback, for ExEx case only */
-	BOOL    unicode;  /* A vs W callback type, only for regular and Ex callbacks */
-};
-
 extern BOOL NLS_EnumDateFormats(const struct enumdateformats_context *ctxt);
 extern BOOL NLS_EnumTimeFormats(struct enumtimeformats_context *ctxt);
-extern BOOL NLS_EnumCalendarInfo(const struct enumcalendar_context *ctxt);
+extern const void * WINAPI NlsValidateLocale(LCID *lcid, ULONG flags);
+extern BOOL WINAPI Internal_EnumCalendarInfo(CALINFO_ENUMPROCW proc, const void *locale, CALID id,
+                                             CALTYPE type, BOOL unicode, BOOL ex, BOOL exex, LPARAM lparam);

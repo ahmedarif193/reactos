@@ -275,18 +275,10 @@ BOOL WINAPI EnumTimeFormatsA(TIMEFMT_ENUMPROCA proc, LCID lcid, DWORD flags)
 BOOL WINAPI EnumCalendarInfoA(CALINFO_ENUMPROCA calinfoproc, LCID locale,
                               CALID calendar, CALTYPE caltype)
 {
-  struct enumcalendar_context ctxt;
-
   TRACE("(%p,0x%08x,0x%08x,0x%08x)\n", calinfoproc, locale, calendar, caltype);
 
-  ctxt.type = CALLBACK_ENUMPROC;
-  ctxt.u.callback = (CALINFO_ENUMPROCW)calinfoproc;
-  ctxt.lcid = locale;
-  ctxt.calendar = calendar;
-  ctxt.caltype = caltype;
-  ctxt.lParam = 0;
-  ctxt.unicode = FALSE;
-  return NLS_EnumCalendarInfo(&ctxt);
+  return Internal_EnumCalendarInfo((CALINFO_ENUMPROCW)calinfoproc, NlsValidateLocale(&locale, 0),
+                                   calendar, caltype, FALSE, FALSE, FALSE, 0);
 }
 
 /**************************************************************************
@@ -295,18 +287,10 @@ BOOL WINAPI EnumCalendarInfoA(CALINFO_ENUMPROCA calinfoproc, LCID locale,
 BOOL WINAPI EnumCalendarInfoExA(CALINFO_ENUMPROCEXA calinfoproc, LCID locale,
                                 CALID calendar, CALTYPE caltype)
 {
-  struct enumcalendar_context ctxt;
-
   TRACE("(%p,0x%08x,0x%08x,0x%08x)\n", calinfoproc, locale, calendar, caltype);
 
-  ctxt.type = CALLBACK_ENUMPROCEX;
-  ctxt.u.callbackex = (CALINFO_ENUMPROCEXW)calinfoproc;
-  ctxt.lcid = locale;
-  ctxt.calendar = calendar;
-  ctxt.caltype = caltype;
-  ctxt.lParam = 0;
-  ctxt.unicode = FALSE;
-  return NLS_EnumCalendarInfo(&ctxt);
+  return Internal_EnumCalendarInfo((CALINFO_ENUMPROCW)calinfoproc, NlsValidateLocale(&locale, 0),
+                                   calendar, caltype, FALSE, TRUE, FALSE, 0);
 }
 
 /*********************************************************************
@@ -315,8 +299,7 @@ BOOL WINAPI EnumCalendarInfoExA(CALINFO_ENUMPROCEXA calinfoproc, LCID locale,
 int WINAPI GetCalendarInfoA(LCID lcid, CALID Calendar, CALTYPE CalType,
                             LPSTR lpCalData, int cchData, LPDWORD lpValue)
 {
-    int ret, cchDataW = cchData;
-    LPWSTR lpCalDataW = NULL;
+    WCHAR buffer[256];
 #ifdef __REACTOS__
     DWORD cp = CP_ACP;
     if (!(CalType & CAL_USE_CP_ACP))
@@ -334,23 +317,16 @@ int WINAPI GetCalendarInfoA(LCID lcid, CALID Calendar, CALTYPE CalType,
     }
 #endif
 
-    if (!cchData && !(CalType & CAL_RETURN_NUMBER))
-        cchDataW = GetCalendarInfoW(lcid, Calendar, CalType, NULL, 0, NULL);
-    if (!(lpCalDataW = HeapAlloc(GetProcessHeap(), 0, cchDataW*sizeof(WCHAR))))
+    if (CalType & CAL_RETURN_NUMBER)
+        return GetCalendarInfoW(lcid, Calendar, CalType, (LPWSTR)lpCalData, cchData, lpValue) * sizeof(WCHAR);
+
+    if (!GetCalendarInfoW(lcid, Calendar, CalType, buffer, ARRAY_SIZE(buffer), lpValue))
         return 0;
-
-    ret = GetCalendarInfoW(lcid, Calendar, CalType, lpCalDataW, cchDataW, lpValue);
-    if(ret && lpCalDataW && lpCalData)
 #ifdef __REACTOS__
-        ret = WideCharToMultiByte(cp, 0, lpCalDataW, -1, lpCalData, cchData, NULL, NULL);
+    return WideCharToMultiByte(cp, 0, buffer, -1, lpCalData, cchData, NULL, NULL);
 #else
-        ret = WideCharToMultiByte(CP_ACP, 0, lpCalDataW, -1, lpCalData, cchData, NULL, NULL);
+    return WideCharToMultiByte(CP_ACP, 0, buffer, -1, lpCalData, cchData, NULL, NULL);
 #endif
-    else if (CalType & CAL_RETURN_NUMBER)
-        ret *= sizeof(WCHAR);
-    HeapFree(GetProcessHeap(), 0, lpCalDataW);
-
-    return ret;
 }
 
 /*********************************************************************

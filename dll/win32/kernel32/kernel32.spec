@@ -237,9 +237,9 @@
 @ stdcall EnterCriticalSection(ptr) ntdll.RtlEnterCriticalSection
 @ stdcall EnumCalendarInfoA(ptr long long long)
 @ stdcall EnumCalendarInfoExA(ptr long long long)
-@ stdcall -version=0x600+ EnumCalendarInfoExEx(ptr wstr long wstr long long)
-@ stdcall EnumCalendarInfoExW(ptr long long long)
-@ stdcall EnumCalendarInfoW(ptr long long long)
+@ stdcall -version=0x600+ EnumCalendarInfoExEx(ptr wstr long wstr long long) kernelbase.EnumCalendarInfoExEx
+@ stdcall EnumCalendarInfoExW(ptr long long long) kernelbase.EnumCalendarInfoExW
+@ stdcall EnumCalendarInfoW(ptr long long long) kernelbase.EnumCalendarInfoW
 @ stdcall EnumDateFormatsA(ptr long long)
 @ stdcall EnumDateFormatsExA(ptr long long)
 @ stdcall -version=0x600+ EnumDateFormatsExEx(ptr wstr long long)
@@ -386,8 +386,8 @@
 @ stub -version=0x600+ GetCalendarDaysInMonth
 @ stub -version=0x600+ GetCalendarDifferenceInDays
 @ stdcall GetCalendarInfoA(long long long ptr long ptr)
-@ stdcall -version=0x600+ GetCalendarInfoEx(wstr long wstr long wstr long ptr)
-@ stdcall GetCalendarInfoW(long long long ptr long ptr)
+@ stdcall -version=0x600+ GetCalendarInfoEx(wstr long wstr long wstr long ptr) kernelbase.GetCalendarInfoEx
+@ stdcall GetCalendarInfoW(long long long ptr long ptr) kernelbase.GetCalendarInfoW
 @ stub -version=0x600+ GetCalendarMonthsInYear
 @ stub -version=0x600+ GetCalendarSupportedDateRange
 @ stub -version=0x600+ GetCalendarWeekNumber
@@ -504,7 +504,7 @@
 @ stdcall -version=0x600+ GetFileBandwidthReservation(ptr ptr ptr ptr ptr ptr)
 @ stdcall GetFileInformationByHandle(long ptr)
 @ stdcall -version=0x600+ GetFileInformationByHandleEx(ptr long ptr long)
-@ stdcall -version=0x600+ GetFileMUIInfo(long wstr ptr ptr)
+@ stdcall -version=0x600+ GetFileMUIInfo(long wstr ptr ptr) kernelbase.GetFileMUIInfo
 @ stdcall -version=0x600+ GetFileMUIPath(long wstr wstr ptr wstr ptr ptr)
 @ stdcall GetFileSize(long ptr)
 @ stdcall GetFileSizeEx(long ptr)
