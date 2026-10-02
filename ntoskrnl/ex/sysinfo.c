@@ -1140,7 +1140,7 @@ ExpQuerySystemProcessInformation(
     _In_ BOOLEAN Extended)
 {
     const ULONG ThreadInfoSize = Extended ? sizeof(SYSTEM_EXTENDED_THREAD_INFORMATION) : sizeof(SYSTEM_THREAD_INFORMATION);
-    PSYSTEM_PROCESS_INFORMATION SpiCurrent;
+    PSYSTEM_PROCESS_INFORMATION SpiCurrent, SpiLast = NULL;
     PSYSTEM_THREAD_INFORMATION ThreadInfo;
     PSYSTEM_EXTENDED_THREAD_INFORMATION ThreadInfoEx;
     PEPROCESS Process = NULL, SystemProcess;
@@ -1287,7 +1287,9 @@ ExpQuerySystemProcessInformation(
                     RtlInitUnicodeString(&SpiCurrent->ImageName, NULL);
                 }
 
+                SpiLast = SpiCurrent;
                 SpiCurrent->BasePriority = Process->Pcb.BasePriority;
+                SpiCurrent->SessionId = MmGetSessionId(Process);
                 SpiCurrent->UniqueProcessId = Process->UniqueProcessId;
                 SpiCurrent->InheritedFromUniqueProcessId = Process->InheritedFromUniqueProcessId;
                 SpiCurrent->CycleTime = KeQueryTotalCycleTimeProcess(&Process->Pcb, NULL);
@@ -1370,8 +1372,8 @@ Skip:
             ThreadsCount = 0;
             if ((Process == SystemProcess) || (Process == NULL))
             {
-                if (!Overflow)
-                    SpiCurrent->NextEntryOffset = 0;
+                if (!Overflow && SpiLast != NULL)
+                    SpiLast->NextEntryOffset = 0;
                 break;
             }
             else
