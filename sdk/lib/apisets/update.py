@@ -52,6 +52,7 @@ CONTRACT_HOST_OVERRIDES = {
     'api-ms-win-eventing-provider-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-security-base-l1-1-0.dll': 'advapi32.dll',
     'api-ms-win-security-base-l1-2-0.dll': 'advapi32.dll',
+    'api-ms-win-shcore-obsolete-l1-1-0.dll': 'shcore.dll',
     'api-ms-win-shcore-scaling-l1-1-0.dll': 'shcore.dll',
     'api-ms-win-shcore-scaling-l1-1-1.dll': 'shcore.dll',
     'api-ms-win-shcore-scaling-l1-1-2.dll': 'shcore.dll',
