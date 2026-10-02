@@ -20,12 +20,7 @@
  *
  */
 
-#ifndef _NTDDSER_
-#define _NTDDSER_
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#ifdef DEFINE_GUID
 
 /* GUIDs */
 
@@ -39,6 +34,8 @@ DEFINE_GUID(GUID_DEVINTERFACE_SERENUM_BUS_ENUMERATOR,
 
 #define GUID_SERENUM_BUS_ENUMERATOR GUID_DEVINTERFACE_SERENUM_BUS_ENUMERATOR
 
+#endif
+
 #ifdef DEFINE_DEVPROPKEY
 DEFINE_DEVPROPKEY(DEVPKEY_DeviceInterface_Serial_UsbVendorId,
   0x4c6bf15c, 0x4c03, 0x4aac, 0x91, 0xf5, 0x64, 0xc0, 0xf8, 0x52, 0xbc, 0xf4, 2);
@@ -46,6 +43,13 @@ DEFINE_DEVPROPKEY(DEVPKEY_DeviceInterface_Serial_UsbProductId,
   0x4c6bf15c, 0x4c03, 0x4aac, 0x91, 0xf5, 0x64, 0xc0, 0xf8, 0x52, 0xbc, 0xf4, 3);
 DEFINE_DEVPROPKEY(DEVPKEY_DeviceInterface_Serial_PortName,
   0x4c6bf15c, 0x4c03, 0x4aac, 0x91, 0xf5, 0x64, 0xc0, 0xf8, 0x52, 0xbc, 0xf4, 4);
+#endif
+
+#ifndef _NTDDSER_
+#define _NTDDSER_
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 #define IOCTL_SERIAL_CLEAR_STATS \

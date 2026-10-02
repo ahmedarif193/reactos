@@ -155,13 +155,8 @@ Abstract:
                                                             // Windows 10.0.27548-27686 / 25H1 / "Dilithium"
 #define NTDDI_WIN11_SE                      0x0A000011      // Windows 10.0.27695-?     / 25H2 / Selenium
 
-/*
- * Keep the default WDK target conservative. This is only used when a caller
- * explicitly opts into a Windows 10 _WIN32_WINNT value without selecting a
- * more specific NTDDI level.
- */
 #ifndef WDK_NTDDI_VERSION
-#define WDK_NTDDI_VERSION                   NTDDI_WIN10_RS5
+#define WDK_NTDDI_VERSION                   NTDDI_WIN11_GE
 #endif
 
 /* Version Fields in NTDDI_VERSION */
@@ -184,7 +179,7 @@ Abstract:
 
 /* Select Default _WIN32_WINNT Value */
 #if !defined(_WIN32_WINNT) && !defined(_CHICAGO_)
-#define _WIN32_WINNT    0x0600 /* 0x0502 */
+#define _WIN32_WINNT    0x0A00
 #endif
 
 /* Choose NTDDI Version */
@@ -196,7 +191,7 @@ Abstract:
 #define NTDDI_VERSION   WDK_NTDDI_VERSION
 #endif
 #else
-#define NTDDI_VERSION   0x06000000 /* NTDDI_WS03SP4 */
+#define NTDDI_VERSION   0x0A000010
 #endif
 #endif
 

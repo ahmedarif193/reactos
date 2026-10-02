@@ -12,6 +12,7 @@
 */
 #ifndef _WINDOWS_H
 #define _WINDOWS_H
+#define _WINDOWS_
 
 #ifdef __GNUC__
 #include <msvctarget.h>

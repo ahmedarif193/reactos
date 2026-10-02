@@ -30,4 +30,15 @@
 /* We don't want this one */
 #undef _INTSAFE_H_INCLUDED_
 
+#if !defined(LODWORD)
+
+#define LODWORD(_qw)    ((DWORD)(_qw))
+
+#endif
+#if !defined(HIDWORD)
+
+#define HIDWORD(_qw)    ((DWORD)(((_qw) >> 32) & 0xffffffff))
+
+#endif
+
 #endif // !_NTINTSAFE_H_INCLUDED_
