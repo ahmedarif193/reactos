@@ -83,6 +83,95 @@ PfnLockIrql(PMI_PFN_DATABASE Db)
     CHECK(MiHostIrql == 0);
 }
 
+static ULONG PfnFreeNotifications;
+
+static
+VOID
+PfnCountFreeNotify(PMI_PFN_DATABASE Db)
+{
+    UNREFERENCED_PARAMETER(Db);
+    PfnFreeNotifications++;
+}
+
+static
+VOID
+PfnZeroPages(VOID)
+{
+    static TEST_WORLD World;
+    PMI_PFN_DATABASE Db;
+    ULONG Frames[3 * MI_PFN_CACHE_DEPTH];
+    ULONG64 Available, Free;
+    LONG64 OnDemand;
+    ULONG i, j;
+
+    WorldCreate(&World, MI_PFN_SHARDS << 12, 1, 100000);
+    Db = &World.System.Pfn;
+    Available = MiPfnAvailablePages(Db);
+
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+    {
+        Frames[i] = MiPfnAllocatePage(Db, 0);
+        CHECK(Frames[i] != MI_FRAME_INVALID);
+        memset(MachineFrame(&World.Machine, Frames[i]), 0xC5, PAGE_SIZE);
+    }
+    Db->FreeNotify = PfnCountFreeNotify;
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+        MiPfnShareDecrement(Db, Frames[i], TRUE);
+    CHECK(PfnFreeNotifications >= 2);
+    Db->FreeNotify = NULL;
+    MiPfnDrainCaches(Db);
+    CHECK(MiPfnAvailablePages(Db) == Available && MiPfnListCount(Db, MiPageZeroed) == 0);
+    Free = MiPfnListCount(Db, MiPageFree);
+
+    CHECK(MiPfnZeroFreePages(Db, 100) == 100);
+    CHECK(MiPfnListCount(Db, MiPageZeroed) == 100 && MiPfnListCount(Db, MiPageFree) == Free - 100);
+    CHECK(MiPfnDbCheck(Db) == 0);
+    while (MiPfnZeroFreePages(Db, 4096) != 0)
+    {
+    }
+    CHECK(MiPfnListCount(Db, MiPageFree) == 0 && MiPfnListCount(Db, MiPageZeroed) == Free);
+    CHECK(MiPfnZeroFreePages(Db, 1) == 0);
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+    {
+        PUCHAR Bytes = MachineFrame(&World.Machine, Frames[i]);
+
+        CHECK(Db->Pfn[Frames[i]].State == MiPageZeroed);
+        for (j = 0; j < PAGE_SIZE; j += 257)
+            CHECK(Bytes[j] == 0);
+    }
+
+    OnDemand = Db->ZeroedOnDemand;
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+    {
+        Frames[i] = MiPfnAllocatePage(Db, MI_ALLOCATE_ZEROED);
+        CHECK(Frames[i] != MI_FRAME_INVALID && Db->Pfn[Frames[i]].State == MiPageActive);
+    }
+    CHECK(Db->ZeroedOnDemand == OnDemand);
+    CHECK(MiPfnDbCheck(Db) == 0);
+
+    {
+        ULONG Plain = MiPfnAllocatePage(Db, 0);
+
+        CHECK(Plain != MI_FRAME_INVALID && Db->ZeroedOnDemand == OnDemand);
+        MiPfnShareDecrement(Db, Plain, TRUE);
+    }
+    {
+        ULONG Clean = MiPfnAllocatePage(Db, MI_ALLOCATE_ZEROED);
+
+        CHECK(Clean != MI_FRAME_INVALID && Db->ZeroedOnDemand == OnDemand);
+        CHECK(*MachineFrame(&World.Machine, Clean) == 0);
+        MiPfnShareDecrement(Db, Clean, TRUE);
+    }
+
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+        MiPfnShareDecrement(Db, Frames[i], TRUE);
+    MiPfnDrainCaches(Db);
+    CHECK(MiPfnDbCheck(Db) == 0);
+    CHECK(MiPfnAvailablePages(Db) == Available);
+
+    WorldDestroy(&World);
+}
+
 void
 TestPfn(void)
 {
@@ -91,6 +180,8 @@ TestPfn(void)
     ULONG Frames[64];
     LONG64 Baseline;
     ULONG i;
+
+    PfnZeroPages();
 
     WorldCreate(&World, 4096, 4, 100000);
     Db = &World.System.Pfn;

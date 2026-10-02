@@ -280,14 +280,17 @@ ULONG
 MiPfnCacheRefill(
     _Inout_ PMI_PFN_DATABASE Db,
     _Inout_ PMI_PFN_CPU_CACHE Cache,
-    _In_ ULONG StartShard)
+    _In_ ULONG StartShard,
+    _In_ UCHAR State,
+    _Inout_ PULONG Frames,
+    _Inout_ PULONG Depth)
 {
     ULONG Attempt;
 
-    for (Attempt = 0; Attempt < MI_PFN_SHARDS && Cache->Depth < MI_PFN_CACHE_BATCH; Attempt++)
+    for (Attempt = 0; Attempt < MI_PFN_SHARDS && *Depth < MI_PFN_CACHE_BATCH; Attempt++)
     {
         PMI_PFN_SHARD Shard = &Db->Shard[(StartShard + Attempt) & (MI_PFN_SHARDS - 1)];
-        PMI_PFN_LIST List = &Shard->List[MiPageFree];
+        PMI_PFN_LIST List = &Shard->List[State];
         KIRQL OldIrql;
 
         if (MI_PEEK(List->Count) == 0)
@@ -295,7 +298,7 @@ MiPfnCacheRefill(
 
         MI_SPIN_ACQUIRE(&Shard->Lock, &OldIrql);
 
-        while (List->Head != MI_FRAME_INVALID && Cache->Depth < MI_PFN_CACHE_BATCH)
+        while (List->Head != MI_FRAME_INVALID && *Depth < MI_PFN_CACHE_BATCH)
         {
             ULONG Frame = List->Head;
             PMI_PFN Entry = &Db->Pfn[Frame];
@@ -309,14 +312,14 @@ MiPfnCacheRefill(
             List->Count--;
             Entry->State = MiPageCached;
             Entry->Flink = Entry->Blink = MI_FRAME_INVALID;
-            Cache->Frame[Cache->Depth++] = Frame;
+            Frames[(*Depth)++] = Frame;
         }
 
         MI_SPIN_RELEASE(&Shard->Lock, OldIrql);
     }
 
     Cache->Refills++;
-    return Cache->Depth;
+    return *Depth;
 }
 
 static
@@ -442,25 +445,29 @@ MiPfnAllocatePage(
             Frame = MiPfnReclaimStandby(Db, Cpu, MI_PFN_SHARDS);
     }
 
-    if (Frame == MI_FRAME_INVALID && (Flags & MI_ALLOCATE_ZEROED))
-    {
-        Frame = MiPfnListPop(Db, MiPageZeroed, Cpu, 0);
-        IsZero = (Frame != MI_FRAME_INVALID);
-    }
-
     if (Frame == MI_FRAME_INVALID)
     {
         MI_SPIN_ACQUIRE(&Cache->Lock, &OldIrql);
-        if (Cache->Depth != 0 || MiPfnCacheRefill(Db, Cache, Cpu) != 0)
+        if ((Flags & MI_ALLOCATE_ZEROED) &&
+            (Cache->ZeroDepth != 0 ||
+             MiPfnCacheRefill(Db, Cache, Cpu, MiPageZeroed, Cache->ZeroFrame, &Cache->ZeroDepth) != 0))
+        {
+            Frame = Cache->ZeroFrame[--Cache->ZeroDepth];
+            IsZero = TRUE;
+        }
+        else if (Cache->Depth != 0 || MiPfnCacheRefill(Db, Cache, Cpu, MiPageFree, Cache->Frame, &Cache->Depth) != 0)
+        {
             Frame = Cache->Frame[--Cache->Depth];
+        }
+        else if (!(Flags & MI_ALLOCATE_ZEROED) &&
+                 (Cache->ZeroDepth != 0 ||
+                  MiPfnCacheRefill(Db, Cache, Cpu, MiPageZeroed, Cache->ZeroFrame, &Cache->ZeroDepth) != 0))
+        {
+            Frame = Cache->ZeroFrame[--Cache->ZeroDepth];
+            IsZero = TRUE;
+        }
         Cache->Allocations++;
         MI_SPIN_RELEASE(&Cache->Lock, OldIrql);
-    }
-
-    if (Frame == MI_FRAME_INVALID && !(Flags & MI_ALLOCATE_ZEROED))
-    {
-        Frame = MiPfnListPop(Db, MiPageZeroed, Cpu, 0);
-        IsZero = (Frame != MI_FRAME_INVALID);
     }
 
     if (Frame == MI_FRAME_INVALID)
@@ -471,12 +478,19 @@ MiPfnAllocatePage(
         {
             PMI_PFN_CPU_CACHE Victim = &Db->Cache[Other];
 
-            if (MI_PEEK(Victim->Depth) == 0)
+            if (MI_PEEK(Victim->Depth) == 0 && MI_PEEK(Victim->ZeroDepth) == 0)
                 continue;
 
             MI_SPIN_ACQUIRE(&Victim->Lock, &OldIrql);
             if (Victim->Depth != 0)
+            {
                 Frame = Victim->Frame[--Victim->Depth];
+            }
+            else if (Victim->ZeroDepth != 0)
+            {
+                Frame = Victim->ZeroFrame[--Victim->ZeroDepth];
+                IsZero = TRUE;
+            }
             MI_SPIN_RELEASE(&Victim->Lock, OldIrql);
         }
     }
@@ -777,6 +791,7 @@ MiPfnFreeLocked(
 {
     PMI_PFN_CPU_CACHE Cache = &Db->Cache[MI_CURRENT_CPU() % Db->CacheCount];
     PMI_PFN Entry = &Db->Pfn[Frame];
+    BOOLEAN Drained = FALSE;
     KIRQL OldIrql;
 
     MiPfnRestoreCache(Db, Frame);
@@ -798,9 +813,15 @@ MiPfnFreeLocked(
 
     MI_SPIN_ACQUIRE(&Cache->Lock, &OldIrql);
     if (Cache->Depth == MI_PFN_CACHE_DEPTH)
+    {
         MiPfnCacheDrain(Db, Cache, MI_PFN_CACHE_DEPTH - MI_PFN_CACHE_BATCH);
+        Drained = TRUE;
+    }
     Cache->Frame[Cache->Depth++] = Frame;
     MI_SPIN_RELEASE(&Cache->Lock, OldIrql);
+
+    if (Drained && Db->FreeNotify != NULL)
+        Db->FreeNotify(Db);
 }
 
 VOID
@@ -822,11 +843,49 @@ MiPfnDrainCaches(
     for (i = 0; i < Db->CacheCount; i++)
     {
         KIRQL OldIrql;
+        ULONG Slot;
 
         MI_SPIN_ACQUIRE(&Db->Cache[i].Lock, &OldIrql);
         MiPfnCacheDrain(Db, &Db->Cache[i], 0);
+        for (Slot = 0; Slot < Db->Cache[i].ZeroDepth; Slot++)
+            MiPfnListInsert(Db, Db->Cache[i].ZeroFrame[Slot], MiPageZeroed, TRUE);
+        Db->Cache[i].ZeroDepth = 0;
         MI_SPIN_RELEASE(&Db->Cache[i].Lock, OldIrql);
     }
+}
+
+ULONG
+MiPfnZeroFreePages(
+    _Inout_ PMI_PFN_DATABASE Db,
+    _In_ ULONG MaximumPages)
+{
+    ULONG Zeroed = 0;
+    ULONG Shard;
+
+    for (Shard = 0; Shard < MiPfnShardCount(Db) && Zeroed < MaximumPages; Shard++)
+    {
+        PMI_PFN_LIST List = &Db->Shard[Shard].List[MiPageFree];
+
+        while (Zeroed < MaximumPages && MI_PEEK(List->Count) != 0)
+        {
+            ULONG Frame;
+            KIRQL OldIrql;
+
+            MI_SPIN_ACQUIRE(&Db->Shard[Shard].Lock, &OldIrql);
+            Frame = List->Head;
+            MI_SPIN_RELEASE(&Db->Shard[Shard].Lock, OldIrql);
+
+            if (Frame == MI_FRAME_INVALID || !MiPfnListRemove(Db, Frame, MiPageFree))
+                break;
+
+            MiPfnRestoreCache(Db, Frame);
+            MiPfnZeroFrame(Db, Frame);
+            MiPfnListInsert(Db, Frame, MiPageZeroed, FALSE);
+            Zeroed++;
+        }
+    }
+
+    return Zeroed;
 }
 
 ULONG64
@@ -862,7 +921,7 @@ MiPfnAvailablePages(
         KIRQL OldIrql;
 
         MI_SPIN_ACQUIRE(&Db->Cache[i].Lock, &OldIrql);
-        Total += Db->Cache[i].Depth;
+        Total += Db->Cache[i].Depth + Db->Cache[i].ZeroDepth;
         MI_SPIN_RELEASE(&Db->Cache[i].Lock, OldIrql);
     }
 
@@ -1189,6 +1248,20 @@ MiPfnDbCheck(
         for (l = 0; l < Db->Cache[s].Depth; l++)
         {
             ULONG Frame = Db->Cache[s].Frame[l];
+
+            if (Frame >= Db->FrameCount || Db->Pfn[Frame].State != MiPageCached)
+                Errors++;
+        }
+
+        if (Db->Cache[s].ZeroDepth > MI_PFN_CACHE_BATCH)
+        {
+            Errors++;
+            continue;
+        }
+
+        for (l = 0; l < Db->Cache[s].ZeroDepth; l++)
+        {
+            ULONG Frame = Db->Cache[s].ZeroFrame[l];
 
             if (Frame >= Db->FrameCount || Db->Pfn[Frame].State != MiPageCached)
                 Errors++;

@@ -9,8 +9,12 @@
 
 #include <nvs/nt/mint.h>
 
+#define MI_ZERO_PAGE_BATCH 64
+
 static KEVENT MiBalanceEvent;
 static KEVENT MiModifiedWriterEvent;
+static KEVENT MiZeroPageEvent;
+static volatile LONG MiZeroPageWaiting;
 
 static
 VOID
@@ -104,6 +108,17 @@ MiWorkerThreadsInitialize(VOID)
     return Status;
 }
 
+static
+VOID
+MiZeroPageNotify(
+    _Inout_ PMI_PFN_DATABASE Db)
+{
+    UNREFERENCED_PARAMETER(Db);
+
+    if (InterlockedCompareExchange(&MiZeroPageWaiting, 0, 1) == 1)
+        KeSetEvent(&MiZeroPageEvent, 0, FALSE);
+}
+
 VOID
 NTAPI
 MmZeroPageThread(VOID)
@@ -112,7 +127,15 @@ MmZeroPageThread(VOID)
 
     Period.QuadPart = -10 * 1000 * 1000;
     KeSetPriorityThread(KeGetCurrentThread(), 0);
+    KeInitializeEvent(&MiZeroPageEvent, SynchronizationEvent, FALSE);
+    MiSystem.Pfn.FreeNotify = MiZeroPageNotify;
 
     for (;;)
-        KeDelayExecutionThread(KernelMode, FALSE, &Period);
+    {
+        InterlockedExchange(&MiZeroPageWaiting, 1);
+        if (MiPfnZeroFreePages(&MiSystem.Pfn, MI_ZERO_PAGE_BATCH) != 0)
+            continue;
+
+        KeWaitForSingleObject(&MiZeroPageEvent, WrFreePage, KernelMode, FALSE, &Period);
+    }
 }

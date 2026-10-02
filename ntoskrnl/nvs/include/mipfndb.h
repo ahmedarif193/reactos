@@ -91,10 +91,12 @@ typedef struct _MI_PFN_CPU_CACHE
 {
     MI_SPINLOCK Lock;
     ULONG Depth;
+    ULONG ZeroDepth;
     ULONG64 Allocations;
     ULONG64 Refills;
     ULONG64 Drains;
     ULONG Frame[MI_PFN_CACHE_DEPTH];
+    ULONG ZeroFrame[MI_PFN_CACHE_BATCH];
 } MI_CACHE_ALIGNED MI_PFN_CPU_CACHE, *PMI_PFN_CPU_CACHE;
 
 typedef struct _MI_PFN_WINDOW
@@ -114,6 +116,7 @@ typedef struct _MI_PFN_WINDOW
 struct _MI_PFN_DATABASE;
 
 typedef VOID (*MI_PFN_REPURPOSE_ROUTINE)(_Inout_ struct _MI_PFN_DATABASE *Db, _In_ ULONG Frame);
+typedef VOID (*MI_PFN_NOTIFY_ROUTINE)(_Inout_ struct _MI_PFN_DATABASE *Db);
 
 typedef struct _MI_PFN_DATABASE
 {
@@ -121,6 +124,7 @@ typedef struct _MI_PFN_DATABASE
     ULONG FrameCount;
     ULONG CacheCount;
     MI_PFN_REPURPOSE_ROUTINE Repurpose;
+    MI_PFN_NOTIFY_ROUTINE FreeNotify;
     PVOID Owner;
     ULONG DirectFrames;
     MI_PFN_WINDOW Window;
@@ -211,4 +215,5 @@ ULONG64 MiPfnListCount(_In_ PMI_PFN_DATABASE Db, _In_ UCHAR State);
 ULONG64 MiPfnAvailablePages(_In_ PMI_PFN_DATABASE Db);
 ULONG64 MiPfnAllocationCount(_In_ PMI_PFN_DATABASE Db);
 VOID MiPfnDrainCaches(_Inout_ PMI_PFN_DATABASE Db);
+ULONG MiPfnZeroFreePages(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG MaximumPages);
 ULONG MiPfnDbCheck(_In_ PMI_PFN_DATABASE Db);
