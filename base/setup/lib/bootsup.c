@@ -881,6 +881,91 @@ InstallBootloaderFiles(
 
 static
 NTSTATUS
+InstallEfiLoaderFiles(
+    _In_ PCUNICODE_STRING SystemRootPath,
+    _In_ PCUNICODE_STRING SourceRootPath)
+{
+    NTSTATUS Status;
+    UNICODE_STRING Name;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    HANDLE DirectoryHandle;
+    BOOLEAN RestartScan = TRUE;
+    WCHAR SrcDir[MAX_PATH];
+    WCHAR DstDir[MAX_PATH];
+    WCHAR SrcPath[MAX_PATH];
+    WCHAR DstPath[MAX_PATH];
+    WCHAR FileName[MAX_PATH];
+    union
+    {
+        FILE_DIRECTORY_INFORMATION Info;
+        UCHAR Buffer[sizeof(FILE_DIRECTORY_INFORMATION) + MAX_PATH * sizeof(WCHAR)];
+    } Entry;
+
+    CombinePaths(SrcDir, ARRAYSIZE(SrcDir), 2, SourceRootPath->Buffer, L"efi\\boot");
+    CombinePaths(DstDir, ARRAYSIZE(DstDir), 2, SystemRootPath->Buffer, L"EFI\\BOOT");
+
+    RtlInitUnicodeString(&Name, SrcDir);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &Name,
+                               OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+    Status = NtOpenFile(&DirectoryHandle,
+                        FILE_LIST_DIRECTORY | SYNCHRONIZE,
+                        &ObjectAttributes,
+                        &IoStatusBlock,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+    if (!NT_SUCCESS(Status))
+    {
+        if (Status != STATUS_OBJECT_NAME_NOT_FOUND && Status != STATUS_OBJECT_PATH_NOT_FOUND)
+            DPRINT1("NtOpenFile(%S) failed (Status 0x%08lx)\n", SrcDir, Status);
+        return STATUS_SUCCESS;
+    }
+
+    Status = SetupCreateDirectory(DstDir);
+    while (NT_SUCCESS(Status))
+    {
+        Status = NtQueryDirectoryFile(DirectoryHandle,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      &IoStatusBlock,
+                                      &Entry,
+                                      sizeof(Entry),
+                                      FileDirectoryInformation,
+                                      TRUE,
+                                      NULL,
+                                      RestartScan);
+        if (Status == STATUS_NO_MORE_FILES)
+        {
+            Status = STATUS_SUCCESS;
+            break;
+        }
+        if (!NT_SUCCESS(Status))
+            break;
+
+        RestartScan = FALSE;
+        if (Entry.Info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+
+        RtlStringCchCopyNW(FileName, ARRAYSIZE(FileName),
+                           Entry.Info.FileName,
+                           Entry.Info.FileNameLength / sizeof(WCHAR));
+        CombinePaths(SrcPath, ARRAYSIZE(SrcPath), 2, SrcDir, FileName);
+        CombinePaths(DstPath, ARRAYSIZE(DstPath), 2, DstDir, FileName);
+
+        DPRINT1("Copy: %S ==> %S\n", SrcPath, DstPath);
+        Status = SetupCopyFile(SrcPath, DstPath, FALSE);
+    }
+
+    NtClose(DirectoryHandle);
+    return Status;
+}
+
+static
+NTSTATUS
 InstallFatBootcodeToPartition(
     _In_ PCUNICODE_STRING SystemRootPath,
     _In_ PCUNICODE_STRING SourceRootPath,
@@ -900,6 +985,13 @@ InstallFatBootcodeToPartition(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("InstallBootloaderFiles() failed (Status %lx)\n", Status);
+        return Status;
+    }
+
+    Status = InstallEfiLoaderFiles(SystemRootPath, SourceRootPath);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("InstallEfiLoaderFiles() failed (Status %lx)\n", Status);
         return Status;
     }
 

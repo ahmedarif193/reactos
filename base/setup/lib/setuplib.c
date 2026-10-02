@@ -758,6 +758,9 @@ InitSystemPartition(
         ASSERT(FALSE);
     }
 
+    if (!PartitionList->SystemPartition)
+        PartitionList->SystemPartition = SystemPartition;
+
     /*
      * In all cases, whether or not we are going to perform a formatting,
      * we must perform a filesystem check of the system partition.
@@ -921,6 +924,20 @@ InitDestinationPaths(
                              PartEntry->OnDiskPartitionNumber);
 #endif
             DPRINT1("Fixed disk found by BIOS, using MULTI ARC path '%S'\n", PathBuffer);
+        }
+        else if (DiskEntry->PartList->SystemPartition == PartEntry)
+        {
+            PathBuffer[0] = UNICODE_NULL;
+            Status = STATUS_SUCCESS;
+            DPRINT1("Fixed disk not found by BIOS, using a path relative to the system partition\n");
+        }
+        else if (DiskEntry->PartList->SystemPartition &&
+                 DiskEntry->PartList->SystemPartition->DiskEntry == DiskEntry)
+        {
+            Status = RtlStringCchPrintfW(PathBuffer, ARRAYSIZE(PathBuffer),
+                             L"partition(%lu)\\",
+                             PartEntry->OnDiskPartitionNumber);
+            DPRINT1("Fixed disk not found by BIOS, using system disk relative path '%S'\n", PathBuffer);
         }
         else
         {

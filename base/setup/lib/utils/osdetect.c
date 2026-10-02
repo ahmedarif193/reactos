@@ -60,6 +60,7 @@ typedef struct _ENUM_INSTALLS_DATA
 {
     _Inout_ PGENERIC_LIST List;
     _In_ PPARTLIST PartList;
+    _In_ PVOLENTRY Volume;
 } ENUM_INSTALLS_DATA, *PENUM_INSTALLS_DATA;
 
 // PENUM_BOOT_ENTRIES_ROUTINE
@@ -76,6 +77,7 @@ EnumerateInstallations(
 
     ULONG DiskNumber = 0, PartitionNumber = 0;
     PCWSTR PathComponent = NULL;
+    BOOLEAN IsRelativePath;
 
     UNICODE_STRING SystemRootPath;
     WCHAR SystemRoot[MAX_PATH];
@@ -123,7 +125,8 @@ EnumerateInstallations(
      * Check whether we already have an installation with this ARC path.
      * If this is the case, stop there.
      */
-    NtOsInstall = FindExistingNTOSInstall(Data->List, Options->OsLoadPath, NULL);
+    IsRelativePath = (wcschr(Options->OsLoadPath, L')') == NULL);
+    NtOsInstall = IsRelativePath ? NULL : FindExistingNTOSInstall(Data->List, Options->OsLoadPath, NULL);
     if (NtOsInstall)
     {
         DPRINT("    An NTOS installation with name \"%S\" from vendor \"%S\" already exists in SystemRoot '%wZ'\n",
@@ -138,7 +141,22 @@ EnumerateInstallations(
      * as well as verifying whether it is indeed an NTOS installation.
      */
     RtlInitEmptyUnicodeString(&SystemRootPath, SystemRoot, sizeof(SystemRoot));
-    if (!ArcPathToNtPath(&SystemRootPath, Options->OsLoadPath, Data->PartList))
+    if (IsRelativePath)
+    {
+        PPARTENTRY PartEntry = Data->Volume->PartEntry;
+
+        if (!NT_SUCCESS(RtlStringCchPrintfW(SystemRoot, ARRAYSIZE(SystemRoot),
+                                            L"\\Device\\Harddisk%lu\\Partition%lu%s%s",
+                                            PartEntry->DiskEntry->DiskNumber,
+                                            PartEntry->PartitionNumber,
+                                            (*Options->OsLoadPath == OBJ_NAME_PATH_SEPARATOR) ? L"" : L"\\",
+                                            Options->OsLoadPath)))
+        {
+            return STATUS_SUCCESS;
+        }
+        SystemRootPath.Length = (USHORT)(wcslen(SystemRoot) * sizeof(WCHAR));
+    }
+    else if (!ArcPathToNtPath(&SystemRootPath, Options->OsLoadPath, Data->PartList))
     {
         DPRINT1("ArcPathToNtPath(%S) failed, skip the installation.\n", Options->OsLoadPath);
         /* Continue the enumeration */
@@ -722,6 +740,7 @@ FindNTOSInstallations(
 
     Data.List = List;
     Data.PartList = PartList;
+    Data.Volume = Volume;
 
     /* Try to see whether we recognize some NT boot loaders */
     for (Type = FreeLdr; Type < BldrTypeMax; ++Type)
