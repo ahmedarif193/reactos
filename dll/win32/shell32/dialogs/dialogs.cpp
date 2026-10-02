@@ -556,6 +556,9 @@ static INT_PTR CALLBACK RunDlgProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
 
             SHAutoComplete(hwndEdit, SHACF_FILESYSTEM | SHACF_FILESYS_ONLY | SHACF_URLALL);
 
+#ifdef __REACTOS__
+            SetForegroundWindow(hwnd);
+#endif
             SetFocus(hwndCombo);
             return TRUE;
 
