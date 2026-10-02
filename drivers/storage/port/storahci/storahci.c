@@ -505,7 +505,7 @@ BOOLEAN AhciStartPort(__in PAHCI_PORT_EXTENSION PortExtension)
  * @param SystemArgument1
  * @param SystemArgument2
  */
-VOID AhciCommandCompletionDpcRoutine(__in PSTOR_DPC Dpc, __in PVOID HwDeviceExtension, __in PVOID SystemArgument1, __in PVOID SystemArgument2)
+VOID NTAPI AhciCommandCompletionDpcRoutine(__in PSTOR_DPC Dpc, __in PVOID HwDeviceExtension, __in PVOID SystemArgument1, __in PVOID SystemArgument2)
 {
     BOOLEAN CommandSucceeded;
     PSCSI_REQUEST_BLOCK Srb;
@@ -573,7 +573,7 @@ VOID AhciCommandCompletionDpcRoutine(__in PSTOR_DPC Dpc, __in PVOID HwDeviceExte
  * @return
  * return TRUE if intialization was successful
  */
-BOOLEAN AhciHwPassiveInitialize(__in PVOID DeviceExtension)
+BOOLEAN NTAPI AhciHwPassiveInitialize(__in PVOID DeviceExtension)
 {
     ULONG index;
     PAHCI_ADAPTER_EXTENSION AdapterExtension;
@@ -1592,6 +1592,7 @@ VOID NTAPI AhciRecoveryTimer(__in PVOID DeviceExtension)
 }
 
 VOID
+NTAPI
 AhciErrorRecoveryDpcRoutine(
     __in PSTOR_DPC Dpc,
     __in PVOID HwDeviceExtension,

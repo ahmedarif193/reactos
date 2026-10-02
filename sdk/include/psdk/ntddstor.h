@@ -1213,6 +1213,149 @@ typedef struct _STORAGE_HW_FIRMWARE_ACTIVATE {
 
 #endif /* NTDDI_VERSION >= NTDDI_WINTHRESHOLD */
 
+#define IOCTL_STORAGE_FAILURE_PREDICTION_CONFIG CTL_CODE(IOCTL_STORAGE_BASE, 0x0441, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _STORAGE_FAILURE_PREDICTION_CONFIG {
+    ULONG Version;
+    ULONG Size;
+    BOOLEAN Set;
+    BOOLEAN Enabled;
+    USHORT Reserved;
+} STORAGE_FAILURE_PREDICTION_CONFIG, *PSTORAGE_FAILURE_PREDICTION_CONFIG;
+
+#define STORAGE_FAILURE_PREDICTION_CONFIG_V1 1
+
+typedef enum _STORAGE_PROTOCOL_TYPE {
+    ProtocolTypeUnknown = 0x00,
+    ProtocolTypeScsi,
+    ProtocolTypeAta,
+    ProtocolTypeNvme,
+    ProtocolTypeSd,
+    ProtocolTypeUfs,
+    ProtocolTypeProprietary = 0x7E,
+    ProtocolTypeMaxReserved = 0x7F
+} STORAGE_PROTOCOL_TYPE, *PSTORAGE_PROTOCOL_TYPE;
+
+typedef enum _STORAGE_PROTOCOL_ATA_DATA_TYPE {
+    AtaDataTypeUnknown = 0,
+    AtaDataTypeIdentify,
+    AtaDataTypeLogPage,
+} STORAGE_PROTOCOL_ATA_DATA_TYPE, *PSTORAGE_PROTOCOL_ATA_DATA_TYPE;
+
+typedef struct _STORAGE_PROTOCOL_SPECIFIC_DATA {
+    STORAGE_PROTOCOL_TYPE ProtocolType;
+    ULONG   DataType;
+    ULONG   ProtocolDataRequestValue;
+    ULONG   ProtocolDataRequestSubValue;
+    ULONG   ProtocolDataOffset;
+    ULONG   ProtocolDataLength;
+    ULONG   FixedProtocolReturnData;
+    ULONG   ProtocolDataRequestSubValue2;
+    ULONG   ProtocolDataRequestSubValue3;
+    ULONG   ProtocolDataRequestSubValue4;
+} STORAGE_PROTOCOL_SPECIFIC_DATA, *PSTORAGE_PROTOCOL_SPECIFIC_DATA;
+
+typedef struct _STORAGE_PROTOCOL_DATA_DESCRIPTOR {
+    ULONG   Version;
+    ULONG   Size;
+    STORAGE_PROTOCOL_SPECIFIC_DATA ProtocolSpecificData;
+} STORAGE_PROTOCOL_DATA_DESCRIPTOR, *PSTORAGE_PROTOCOL_DATA_DESCRIPTOR;
+
+#define STORAGE_COMPONENT_ROLE_DATA         0x00000004
+
+typedef enum _STORAGE_DEVICE_FORM_FACTOR {
+    FormFactorUnknown = 0,
+    FormFactor3_5,
+    FormFactor2_5,
+    FormFactor1_8,
+    FormFactor1_8Less,
+    FormFactorEmbedded,
+    FormFactorMemoryCard,
+    FormFactormSata,
+    FormFactorM_2,
+    FormFactorPCIeBoard,
+    FormFactorDimm,
+} STORAGE_DEVICE_FORM_FACTOR, *PSTORAGE_DEVICE_FORM_FACTOR;
+
+typedef enum _STORAGE_COMPONENT_HEALTH_STATUS {
+    HealthStatusUnknown = 0,
+    HealthStatusNormal,
+    HealthStatusThrottled,
+    HealthStatusWarning,
+    HealthStatusDisabled,
+    HealthStatusFailed,
+} STORAGE_COMPONENT_HEALTH_STATUS, *PSTORAGE_COMPONENT_HEALTH_STATUS;
+
+typedef union _STORAGE_SPEC_VERSION {
+    struct {
+        union {
+            struct {
+                UCHAR   SubMinor;
+                UCHAR   Minor;
+            } DUMMYSTRUCTNAME;
+            USHORT  AsUshort;
+        } MinorVersion;
+        USHORT  MajorVersion;
+    } DUMMYSTRUCTNAME;
+    ULONG   AsUlong;
+} STORAGE_SPEC_VERSION, *PSTORAGE_SPEC_VERSION;
+
+typedef struct _STORAGE_PHYSICAL_DEVICE_DATA {
+    ULONG       DeviceId;
+    ULONG       Role;
+    STORAGE_COMPONENT_HEALTH_STATUS HealthStatus;
+    STORAGE_PROTOCOL_TYPE           CommandProtocol;
+    STORAGE_SPEC_VERSION            SpecVersion;
+    STORAGE_DEVICE_FORM_FACTOR      FormFactor;
+    UCHAR       Vendor[8];
+    UCHAR       Model[40];
+    UCHAR       FirmwareRevision[16];
+    ULONGLONG   Capacity;
+    UCHAR       PhysicalLocation[32];
+    ULONG       Reserved[2];
+} STORAGE_PHYSICAL_DEVICE_DATA, *PSTORAGE_PHYSICAL_DEVICE_DATA;
+
+typedef struct _STORAGE_PHYSICAL_ADAPTER_DATA {
+    ULONG       AdapterId;
+    STORAGE_COMPONENT_HEALTH_STATUS HealthStatus;
+    STORAGE_PROTOCOL_TYPE           CommandProtocol;
+    STORAGE_SPEC_VERSION            SpecVersion;
+    UCHAR       Vendor[8];
+    UCHAR       Model[40];
+    UCHAR       FirmwareRevision[16];
+    UCHAR       PhysicalLocation[32];
+    BOOLEAN     ExpanderConnected;
+    UCHAR       Reserved0[3];
+    ULONG       Reserved1[3];
+} STORAGE_PHYSICAL_ADAPTER_DATA, *PSTORAGE_PHYSICAL_ADAPTER_DATA;
+
+typedef struct _STORAGE_PHYSICAL_NODE_DATA {
+    ULONG       NodeId;
+    ULONG       AdapterCount;
+    ULONG       AdapterDataLength;
+    ULONG       AdapterDataOffset;
+    ULONG       DeviceCount;
+    ULONG       DeviceDataLength;
+    ULONG       DeviceDataOffset;
+    ULONG       Reserved[3];
+} STORAGE_PHYSICAL_NODE_DATA, *PSTORAGE_PHYSICAL_NODE_DATA;
+
+typedef struct _STORAGE_PHYSICAL_TOPOLOGY_DESCRIPTOR {
+    ULONG       Version;
+    ULONG       Size;
+    ULONG       NodeCount;
+    ULONG       Reserved;
+    STORAGE_PHYSICAL_NODE_DATA Node[ANYSIZE_ARRAY];
+} STORAGE_PHYSICAL_TOPOLOGY_DESCRIPTOR, *PSTORAGE_PHYSICAL_TOPOLOGY_DESCRIPTOR;
+
+typedef struct _DEVICE_DSM_NVCACHE_CHANGE_PRIORITY_PARAMETERS {
+    ULONG Size;
+    UCHAR TargetPriority;
+    UCHAR Reserved[3];
+} DEVICE_DSM_NVCACHE_CHANGE_PRIORITY_PARAMETERS, *PDEVICE_DSM_NVCACHE_CHANGE_PRIORITY_PARAMETERS;
+
+#define TC_PUBLIC_DEVICEDUMP_CONTENT_GPLOG_MAX  16
+
 #ifdef __cplusplus
 }
 #endif
