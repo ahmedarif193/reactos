@@ -41,11 +41,27 @@ BOOLEAN MmLargeSystemCache;
 
 static ULONG MiExecuteOptions;
 
+static
+BOOLEAN
+MiExecuteOptionsArePermanent(
+    _In_ PEPROCESS Process)
+{
+    return sizeof(ULONG_PTR) == sizeof(ULONG64) && PsGetProcessWow64Process(Process) == NULL;
+}
+
 NTSTATUS
 NTAPI
 MmGetExecuteOptions(
     _Out_ PULONG ExecuteOptions)
 {
+    if (MiExecuteOptionsArePermanent(PsGetCurrentProcess()))
+    {
+        *ExecuteOptions = MEM_EXECUTE_OPTION_DISABLE |
+                          MEM_EXECUTE_OPTION_DISABLE_THUNK_EMULATION |
+                          MEM_EXECUTE_OPTION_PERMANENT;
+        return STATUS_SUCCESS;
+    }
+
     *ExecuteOptions = MiExecuteOptions;
     return STATUS_SUCCESS;
 }
@@ -55,6 +71,9 @@ NTAPI
 MmSetExecuteOptions(
     _In_ ULONG ExecuteOptions)
 {
+    if (MiExecuteOptionsArePermanent(PsGetCurrentProcess()))
+        return STATUS_INVALID_PARAMETER;
+
     MiExecuteOptions = ExecuteOptions;
     return STATUS_SUCCESS;
 }
