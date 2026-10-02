@@ -438,8 +438,13 @@ static void test__lcreat( void )
     filehandle=_lcreat (slashname, 0); /* illegal name */
     ok( filehandle == HFILE_ERROR, "succeeded\n" );
     err=GetLastError ();
+#ifdef __REACTOS__
+    ok(err == ERROR_DIRECTORY,
+       "creating file \"%s\" failed with error %d\n", slashname, err);
+#else
     ok (err==ERROR_INVALID_NAME || err==ERROR_PATH_NOT_FOUND,
         "creating file \"%s\" failed with error %d\n", slashname, err);
+#endif
 
     filehandle=_lcreat (filename, 8); /* illegal attribute */
     if (HFILE_ERROR==filehandle)
@@ -6382,10 +6387,116 @@ static void test_eof(void)
     ok(ret, "failed to delete %s, error %lu\n", debugstr_a(filename), GetLastError());
 }
 
+#ifdef __REACTOS__
+static BOOL file_test_selected(const char *selection, const char *name)
+{
+    const char *end;
+    SIZE_T length = strlen(name);
+
+    if (!selection) return TRUE;
+    for (;;)
+    {
+        end = strchr(selection, ',');
+        if ((end ? (SIZE_T)(end - selection) : strlen(selection)) == length &&
+            !strncmp(selection, name, length))
+            return TRUE;
+        if (!end) return FALSE;
+        selection = end + 1;
+    }
+}
+
+static BOOL validate_file_tests(const char *selection)
+{
+    static const char *const names[] =
+    {
+        "test__hread",
+        "test__hwrite",
+        "test__lclose",
+        "test__lcreat",
+        "test__llseek",
+        "test__llopen",
+        "test__lread",
+        "test__lwrite",
+        "test_GetTempFileNameA",
+        "test_CopyFileA",
+        "test_CopyFileW",
+        "test_CopyFile2",
+        "test_CopyFileEx",
+        "test_CreateFile",
+        "test_CreateFileA",
+        "test_CreateFileW",
+        "test_CreateFile2",
+        "test_DeleteFileA",
+        "test_DeleteFileW",
+        "test_MoveFileA",
+        "test_MoveFileW",
+        "test_FindFirstFileA",
+        "test_FindNextFileA",
+        "test_FindFirstFile_wildcards",
+        "test_FindFirstFileExA",
+        "test_LockFile",
+        "test_file_sharing",
+        "test_offset_in_overlapped_structure",
+        "test_MapFile",
+        "test_GetFileType",
+        "test_async_file_errors",
+        "test_read_write",
+        "test_OpenFile",
+        "test_overlapped",
+        "test_RemoveDirectory",
+        "test_ReplaceFileA",
+        "test_ReplaceFileW",
+        "test_GetFileInformationByHandleEx",
+        "test_OpenFileById",
+        "test_SetFileValidData",
+        "test_WriteFileGather",
+        "test_file_access",
+        "test_GetFinalPathNameByHandleA",
+        "test_GetFinalPathNameByHandleW",
+        "test_SetFileInformationByHandle",
+        "test_SetFileRenameInfo",
+        "test_GetFileAttributesExW",
+        "test_post_completion",
+        "test_overlapped_read",
+        "test_file_readonly_access",
+        "test_find_file_stream",
+        "test_SetFileTime",
+        "test_ReOpenFile",
+        "test_hard_link",
+        "test_move_file",
+        "test_eof",
+    };
+    const char *end;
+    SIZE_T length;
+    unsigned int i;
+
+    if (!selection) return TRUE;
+    for (;;)
+    {
+        end = strchr(selection, ',');
+        length = end ? (SIZE_T)(end - selection) : strlen(selection);
+        for (i = 0; i < ARRAY_SIZE(names); ++i)
+            if (length == strlen(names[i]) && !strncmp(selection, names[i], length))
+                break;
+        if (!length || i == ARRAY_SIZE(names))
+        {
+            ok(0, "Unknown or empty ROS_FILE_TESTS entry.\n");
+            return FALSE;
+        }
+        if (!end) return TRUE;
+        selection = end + 1;
+    }
+}
+#endif
 START_TEST(file)
 {
     char temp_path[MAX_PATH];
     DWORD ret;
+#ifdef __REACTOS__
+    const char *selection = getenv("ROS_FILE_TESTS");
+
+    if (!validate_file_tests(selection)) return;
+#endif
 
     InitFunctionPointers();
 
@@ -6396,6 +6507,78 @@ START_TEST(file)
     ret = DeleteFileA(filename);
     ok(ret != 0, "DeleteFile error %lu\n", GetLastError());
 
+#ifdef __REACTOS__
+#define run_file_test(func, ...) do { \
+    if (file_test_selected(selection, #func)) { \
+        trace("Running %s...\n", #func); \
+        func(__VA_ARGS__); \
+    } \
+} while (0)
+    run_file_test(test__hread);
+    run_file_test(test__hwrite);
+    run_file_test(test__lclose);
+    run_file_test(test__lcreat);
+    run_file_test(test__llseek);
+    run_file_test(test__llopen);
+    run_file_test(test__lread);
+    run_file_test(test__lwrite);
+    run_file_test(test_GetTempFileNameA);
+    run_file_test(test_CopyFileA);
+    run_file_test(test_CopyFileW);
+    run_file_test(test_CopyFile2);
+    run_file_test(test_CopyFileEx);
+    run_file_test(test_CreateFile);
+    run_file_test(test_CreateFileA);
+    run_file_test(test_CreateFileW);
+    run_file_test(test_CreateFile2);
+    run_file_test(test_DeleteFileA);
+    run_file_test(test_DeleteFileW);
+    run_file_test(test_MoveFileA);
+    run_file_test(test_MoveFileW);
+    run_file_test(test_FindFirstFileA);
+    run_file_test(test_FindNextFileA);
+    run_file_test(test_FindFirstFile_wildcards);
+    run_file_test(test_FindFirstFileExA, FindExInfoStandard, 0, 0);
+    run_file_test(test_FindFirstFileExA, FindExInfoStandard, 0, FIND_FIRST_EX_CASE_SENSITIVE);
+    run_file_test(test_FindFirstFileExA, FindExInfoStandard, 0, FIND_FIRST_EX_LARGE_FETCH);
+    run_file_test(test_FindFirstFileExA, FindExInfoBasic, 0, 0);
+    run_file_test(test_FindFirstFileExA, FindExInfoStandard, FindExSearchLimitToDirectories, 0);
+    run_file_test(test_FindFirstFileExA, FindExInfoStandard, FindExSearchLimitToDirectories, FIND_FIRST_EX_CASE_SENSITIVE);
+    run_file_test(test_FindFirstFileExA, FindExInfoStandard, FindExSearchLimitToDirectories, FIND_FIRST_EX_LARGE_FETCH);
+    run_file_test(test_FindFirstFileExA, FindExInfoBasic, FindExSearchLimitToDirectories, 0);
+    run_file_test(test_LockFile);
+    run_file_test(test_file_sharing);
+    run_file_test(test_offset_in_overlapped_structure);
+    run_file_test(test_MapFile);
+    run_file_test(test_GetFileType);
+    run_file_test(test_async_file_errors);
+    run_file_test(test_read_write);
+    run_file_test(test_OpenFile);
+    run_file_test(test_overlapped);
+    run_file_test(test_RemoveDirectory);
+    run_file_test(test_ReplaceFileA);
+    run_file_test(test_ReplaceFileW);
+    run_file_test(test_GetFileInformationByHandleEx);
+    run_file_test(test_OpenFileById);
+    run_file_test(test_SetFileValidData);
+    run_file_test(test_WriteFileGather);
+    run_file_test(test_file_access);
+    run_file_test(test_GetFinalPathNameByHandleA);
+    run_file_test(test_GetFinalPathNameByHandleW);
+    run_file_test(test_SetFileInformationByHandle);
+    run_file_test(test_SetFileRenameInfo);
+    run_file_test(test_GetFileAttributesExW);
+    run_file_test(test_post_completion);
+    run_file_test(test_overlapped_read);
+    run_file_test(test_file_readonly_access);
+    run_file_test(test_find_file_stream);
+    run_file_test(test_SetFileTime);
+    run_file_test(test_ReOpenFile);
+    run_file_test(test_hard_link);
+    run_file_test(test_move_file);
+    run_file_test(test_eof);
+#undef run_file_test
+#else
     test__hread(  );
     test__hwrite(  );
     test__lclose(  );
@@ -6460,4 +6643,5 @@ START_TEST(file)
     test_hard_link();
     test_move_file();
     test_eof();
+#endif
 }

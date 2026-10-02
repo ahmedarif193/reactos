@@ -31,6 +31,9 @@
 #include "winuser.h"
 #include "excpt.h"
 #include "wine/test.h"
+#ifdef __REACTOS__
+#include "psapi.h"
+#endif
 
 #define NUM_THREADS 4
 #define MAPPING_SIZE 0x100000
@@ -4249,12 +4252,162 @@ static void test_mapping( HANDLE hfile, DWORD sec_flags, BOOL readonly )
     }
 }
 
+#ifdef __REACTOS__
+static void check_image_views(BYTE *views[2], DWORD protection, BOOL written, const DWORD neighbor_protection[2],
+        BOOL (WINAPI *query_working_set)(HANDLE, void *, DWORD))
+{
+    MEMORY_BASIC_INFORMATION info;
+    PSAPI_WORKING_SET_EX_INFORMATION working;
+    SIZE_T count;
+    BOOL ret, readable;
+    UINT view, page;
+    DWORD expected;
+
+    for (view = 0; view < 2; ++view)
+    {
+        for (page = 0; page < 2; ++page)
+        {
+            winetest_push_context("view %u page %u", view, page);
+            memset(&info, 0, sizeof(info));
+            memset(&working, 0, sizeof(working));
+            working.VirtualAddress = views[view] + page * si.dwPageSize;
+            count = VirtualQuery(working.VirtualAddress, &info, sizeof(info));
+            ok(count == sizeof(info), "VirtualQuery returned %Iu, error %lu.\n", count, GetLastError());
+            if (count != sizeof(info)) goto next;
+            expected = page ? neighbor_protection[view] : view ? PAGE_READONLY : protection;
+            ok(info.State == MEM_COMMIT, "Unexpected state %#lx.\n", info.State);
+            ok(info.Type == MEM_IMAGE, "Unexpected type %#lx.\n", info.Type);
+            ok(info.AllocationProtect == PAGE_EXECUTE_WRITECOPY, "Unexpected allocation protection %#lx.\n",
+                    info.AllocationProtect);
+            ok(info.Protect == expected, "Protection %#lx, expected %#lx.\n", info.Protect, expected);
+            if (expected == PAGE_NOACCESS) goto next;
+            readable = count && info.State == MEM_COMMIT && !(info.Protect & PAGE_GUARD) &&
+                    (info.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                    PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+            ok(readable, "Image page is not readable, protection %#lx.\n", info.Protect);
+            if (!readable) goto next;
+            (void)*(volatile BYTE *)working.VirtualAddress;
+            ret = query_working_set(GetCurrentProcess(), &working, sizeof(working));
+            ok(ret, "QueryWorkingSetEx failed %lu.\n", GetLastError());
+            if (!ret) goto next;
+            ok(working.VirtualAttributes.Valid, "Read image page is not resident.\n");
+            if (!working.VirtualAttributes.Valid) goto next;
+            ok(working.VirtualAttributes.Shared == !(written && !view && !page),
+                    "Unexpected shared state %u.\n", (unsigned)working.VirtualAttributes.Shared);
+            ok(working.VirtualAttributes.Win32Protection == expected,
+                    "Working-set protection %#lx, expected %#lx.\n",
+                    (DWORD)working.VirtualAttributes.Win32Protection, expected);
+        next:
+            winetest_pop_context();
+        }
+    }
+}
+
+static void test_image_view_protection(const WCHAR *path, DWORD maximum_size, DWORD access,
+        BOOL (WINAPI *query_working_set)(HANDLE, void *, DWORD))
+{
+    static const DWORD protections[] = {PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY};
+    HANDLE file, mapping;
+    BYTE *views[2];
+    MEMORY_BASIC_INFORMATION info;
+    BYTE original, other;
+    DWORD old_protection, expected_protection, neighbor_protection[2];
+    SIZE_T count;
+    BOOL ret;
+    UINT mode, step, view;
+
+    file = CreateFileW(path, GENERIC_READ | GENERIC_EXECUTE, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    ok(file != INVALID_HANDLE_VALUE, "Open image %s failed %lu.\n", wine_dbgstr_w(path), GetLastError());
+    if (file == INVALID_HANDLE_VALUE) return;
+    mapping = CreateFileMappingW(file, NULL, SEC_IMAGE | PAGE_READONLY, 0, maximum_size, NULL);
+    ok(mapping != NULL, "Create image mapping failed %lu.\n", GetLastError());
+    if (!mapping)
+    {
+        CloseHandle(file);
+        return;
+    }
+    for (mode = 0; mode < 2; ++mode)
+    {
+        winetest_push_context("image %s size %lu access %#lx mode %u", wine_dbgstr_w(path), maximum_size, access, mode);
+        views[0] = MapViewOfFile(mapping, access, 0, 0, 0);
+        views[1] = MapViewOfFile(mapping, access, 0, 0, 0);
+        ok(views[0] != NULL && views[1] != NULL, "Map image views failed %lu.\n", GetLastError());
+        if (!views[0] || !views[1]) goto done;
+        for (view = 0; view < 2; ++view)
+        {
+            count = VirtualQuery(views[view] + si.dwPageSize, &info, sizeof(info));
+            ok(count == sizeof(info), "Query neighbor %u failed %lu.\n", view, GetLastError());
+            if (count != sizeof(info)) goto done;
+            neighbor_protection[view] = info.Protect;
+        }
+        ok(neighbor_protection[0] == neighbor_protection[1], "Neighbor protections differ: %#lx, %#lx.\n",
+                neighbor_protection[0], neighbor_protection[1]);
+        expected_protection = PAGE_READONLY;
+        check_image_views(views, expected_protection, FALSE, neighbor_protection, query_working_set);
+        for (step = mode ? 3 : 0; step < ARRAY_SIZE(protections); ++step)
+        {
+            winetest_push_context("protect %#lx", protections[step]);
+            old_protection = 0xdeadbeef;
+            ret = VirtualProtect(views[0], si.dwPageSize, protections[step], &old_protection);
+            ok(ret, "Protect image %#lx failed %lu.\n", protections[step], GetLastError());
+            ok(old_protection == expected_protection, "Old protection %#lx, expected %#lx.\n",
+                    old_protection, expected_protection);
+            expected_protection = map_prot_no_write(protections[step]);
+            if (ret) check_image_views(views, expected_protection, FALSE, neighbor_protection, query_working_set);
+            winetest_pop_context();
+            if (!ret) goto done;
+        }
+        original = views[0][FIELD_OFFSET(IMAGE_DOS_HEADER, e_res)];
+        other = views[1][FIELD_OFFSET(IMAGE_DOS_HEADER, e_res)];
+        ok(original == other, "Image views have different reserved header bytes %#x, %#x.\n", original, other);
+        *(volatile BYTE *)(views[0] + FIELD_OFFSET(IMAGE_DOS_HEADER, e_res)) = original ^ 0x5a;
+        ok(*(volatile BYTE *)(views[1] + FIELD_OFFSET(IMAGE_DOS_HEADER, e_res)) == other,
+                "Image write changed the independent view.\n");
+        check_image_views(views, PAGE_READWRITE, TRUE, neighbor_protection, query_working_set);
+        *(volatile BYTE *)(views[0] + FIELD_OFFSET(IMAGE_DOS_HEADER, e_res)) = original;
+    done:
+        if (views[1]) UnmapViewOfFile(views[1]);
+        if (views[0]) UnmapViewOfFile(views[0]);
+        winetest_pop_context();
+    }
+    CloseHandle(mapping);
+    CloseHandle(file);
+}
+
+static void test_image_protection_state(void)
+{
+    static const DWORD accesses[] = {FILE_MAP_READ, FILE_MAP_COPY};
+    HMODULE psapi;
+    BOOL (WINAPI *query_working_set)(HANDLE, void *, DWORD);
+    WCHAR path[MAX_PATH];
+    UINT length, size, access;
+
+    psapi = LoadLibraryW(L"psapi.dll");
+    ok(psapi != NULL, "Load psapi failed %lu.\n", GetLastError());
+    if (!psapi) return;
+    query_working_set = (void *)GetProcAddress(psapi, "QueryWorkingSetEx");
+    ok(query_working_set != NULL, "QueryWorkingSetEx export is missing.\n");
+    if (query_working_set)
+    {
+        length = GetModuleFileNameW(NULL, path, ARRAY_SIZE(path));
+        ok(length && length < ARRAY_SIZE(path), "Get test image path returned %u.\n", length);
+        if (length && length < ARRAY_SIZE(path))
+            for (size = 0; size < 2; ++size)
+                for (access = 0; access < ARRAY_SIZE(accesses); ++access)
+                    test_image_view_protection(path, 2 * size * si.dwPageSize, accesses[access], query_working_set);
+    }
+    FreeLibrary(psapi);
+}
+#endif
 static void test_mappings(void)
 {
     char temp_path[MAX_PATH];
     char file_name[MAX_PATH];
     DWORD data, num_bytes;
     HANDLE hfile;
+#ifdef __REACTOS__
+    DWORD length;
+#endif
 
     GetTempPathA(MAX_PATH, temp_path);
     GetTempFileNameA(temp_path, "map", 0, file_name);
@@ -4284,8 +4437,14 @@ static void test_mappings(void)
     DeleteFileA( file_name );
 
     /* SEC_IMAGE mapping */
+#ifdef __REACTOS__
+    length = GetModuleFileNameA(NULL, file_name, ARRAY_SIZE(file_name));
+    ok(length && length < ARRAY_SIZE(file_name), "Get test image path returned %lu.\n", length);
+    if (!length || length >= ARRAY_SIZE(file_name)) return;
+#else
     GetSystemDirectoryA( file_name, MAX_PATH );
     strcat( file_name, "\\kernel32.dll" );
+#endif
 
     hfile = CreateFileA( file_name, GENERIC_READ|GENERIC_EXECUTE, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
     ok(hfile != INVALID_HANDLE_VALUE, "CreateFile(%s) error %ld\n", file_name, GetLastError());
@@ -4551,6 +4710,9 @@ START_TEST(virtual)
     test_shared_memory_ro(FALSE, FILE_MAP_COPY);
     test_shared_memory_ro(FALSE, FILE_MAP_COPY|FILE_MAP_WRITE);
     test_mappings();
+#ifdef __REACTOS__
+    test_image_protection_state();
+#endif
     test_CreateFileMapping_protection();
     test_VirtualAlloc_protection();
     test_VirtualProtect();
