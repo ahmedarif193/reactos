@@ -128,7 +128,7 @@
 
 #else /* __REACTOS__ */
 
-#if defined(ACPI_APPLICATION) || defined(_M_ARM64)
+#if defined(ACPI_APPLICATION) || !defined(_M_AMD64)
 #define ACPI_FLUSH_CPU_CACHE()
 #else
 #define ACPI_FLUSH_CPU_CACHE()  __wbinvd()
