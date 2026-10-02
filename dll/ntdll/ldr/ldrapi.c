@@ -703,7 +703,8 @@ LdrGetDllHandleEx(
     if (DllHandle) *DllHandle = NULL;
 
     /* Check for a valid flag combination */
-    if ((Flags & ~(LDR_GET_DLL_HANDLE_EX_PIN | LDR_GET_DLL_HANDLE_EX_UNCHANGED_REFCOUNT)) ||
+    if ((Flags & ~(LDR_GET_DLL_HANDLE_EX_PIN | LDR_GET_DLL_HANDLE_EX_UNCHANGED_REFCOUNT | 0x00000004)) ||
+        ((Flags & LDR_GET_DLL_HANDLE_EX_PIN) && (Flags & LDR_GET_DLL_HANDLE_EX_UNCHANGED_REFCOUNT)) ||
         (!DllHandle && !(Flags & LDR_GET_DLL_HANDLE_EX_PIN)))
     {
         DPRINT1("Flags are invalid or no DllHandle given\n");
