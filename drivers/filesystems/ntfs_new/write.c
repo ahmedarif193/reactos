@@ -83,6 +83,7 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     if (FileObj->PrivateCacheMap != NULL)
         CcSetFileSizes(FileObj, (PCC_FILE_SIZES)&Header->AllocationSize);
     FileObj->Flags |= FO_FILE_SIZE_CHANGED;
+    FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_SIZE;
     return TRUE;
 }
 
@@ -212,6 +213,7 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
             if (EndOffset > Header->ValidDataLength.QuadPart)
                 Header->ValidDataLength.QuadPart = EndOffset;
             FileObj->Flags |= FO_FILE_MODIFIED;
+            FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_LAST_WRITE;
             if (FileObj->Flags & FO_SYNCHRONOUS_IO)
                 FileObj->CurrentByteOffset.QuadPart = ByteOffset->QuadPart + Length;
             Irp->IoStatus.Information = Length;
@@ -503,6 +505,8 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         FileObj->Flags |=
             FO_FILE_MODIFIED |
             FO_FILE_SIZE_CHANGED;
+        if (!PagingIo)
+            FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE;
 
         /* A cache flush must not change the application's file pointer. */
         if (!PagingIo && (IrpSp->FileObject->Flags & FO_SYNCHRONOUS_IO))

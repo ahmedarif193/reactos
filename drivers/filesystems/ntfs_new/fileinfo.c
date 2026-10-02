@@ -1407,6 +1407,126 @@ Failure:
 
 static
 NTSTATUS
+NtfsCaptureNotifyName(_In_ PVolumeContextBlock VolCB,
+                      _In_ PFileContextBlock FileCB)
+{
+    ULONG Capacity = MAXUSHORT / sizeof(WCHAR) - 1;
+    ULONG Length = 0;
+    PWCHAR Buffer;
+    PWCHAR Name;
+    PWCHAR OldName;
+    NTSTATUS Status;
+
+    Buffer = ExAllocatePoolWithTag(PagedPool, MAXUSHORT, TAG_NTFS);
+    if (!Buffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = NtfsMasterFileTableGetPathFromFileReference(NtfsVolumeGetMft(VolCB->DiskVolume),
+                                                         FileCB->StreamCB->FileReference,
+                                                         Buffer,
+                                                         Capacity,
+                                                         &Length);
+    if (NT_SUCCESS(Status) && Length == 0)
+        Status = STATUS_OBJECT_PATH_INVALID;
+    if (NT_SUCCESS(Status))
+    {
+        Name = ExAllocatePoolWithTag(PagedPool, Length * sizeof(WCHAR), TAG_NTFS);
+        if (!Name)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else
+        {
+            RtlCopyMemory(Name, Buffer, Length * sizeof(WCHAR));
+            OldName = FileCB->NotifyName.Buffer;
+            FileCB->NotifyName.Buffer = Name;
+            FileCB->NotifyName.Length = (USHORT)(Length * sizeof(WCHAR));
+            FileCB->NotifyName.MaximumLength = FileCB->NotifyName.Length;
+            if (OldName)
+                ExFreePoolWithTag(OldName, TAG_NTFS);
+        }
+    }
+    ExFreePoolWithTag(Buffer, TAG_NTFS);
+    return Status;
+}
+
+VOID
+NtfsReportNameChange(_In_ PVolumeContextBlock VolCB,
+                     _In_ ULONGLONG ParentReference,
+                     _In_ PCUNICODE_STRING LeafName,
+                     _In_ ULONG FilterMatch,
+                     _In_ ULONG Action)
+{
+    ULONG Capacity = MAXUSHORT / sizeof(WCHAR) - 1;
+    ULONG Length = 0;
+    UNICODE_STRING FullName;
+    PWCHAR Buffer;
+
+    if (!VolCB->NotifySync || !VolCB->DiskVolume || LeafName->Length == 0 ||
+        IsListEmpty(&VolCB->NotifyList))
+    {
+        return;
+    }
+    Buffer = ExAllocatePoolWithTag(PagedPool, MAXUSHORT, TAG_NTFS);
+    if (!Buffer)
+        return;
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    if (NT_SUCCESS(NtfsMasterFileTableGetPathFromFileReference(NtfsVolumeGetMft(VolCB->DiskVolume),
+                                                               ParentReference,
+                                                               Buffer,
+                                                               Capacity,
+                                                               &Length)) &&
+        Length != 0 &&
+        Length + 1 + LeafName->Length / sizeof(WCHAR) <= Capacity)
+    {
+        if (Length != 1)
+            Buffer[Length++] = L'\\';
+        RtlCopyMemory(&Buffer[Length], LeafName->Buffer, LeafName->Length);
+        FullName.Buffer = Buffer;
+        FullName.Length = (USHORT)(Length * sizeof(WCHAR) + LeafName->Length);
+        FullName.MaximumLength = FullName.Length;
+        FsRtlNotifyFullReportChange(VolCB->NotifySync,
+                                    &VolCB->NotifyList,
+                                    (PSTRING)&FullName,
+                                    (USHORT)(Length * sizeof(WCHAR)),
+                                    NULL,
+                                    NULL,
+                                    FilterMatch,
+                                    Action,
+                                    NULL);
+    }
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
+    ExFreePoolWithTag(Buffer, TAG_NTFS);
+}
+
+VOID
+NtfsReportFileChange(_In_ PVolumeContextBlock VolCB,
+                     _In_ PFileContextBlock FileCB,
+                     _In_ ULONG FilterMatch,
+                     _In_ ULONG Action)
+{
+    PNTFS_NATIVE_LCB Lcb;
+
+    if (!VolCB->NotifySync || IsListEmpty(&VolCB->NotifyList))
+        return;
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    Lcb = FileCB->NativeCcb.Lcb;
+    if (Lcb)
+    {
+        NtfsReportNameChange(VolCB,
+                             CONTAINING_RECORD(Lcb->ParentScb, StreamContextBlock, NativeScb)->FileReference,
+                             &Lcb->FileName,
+                             FilterMatch,
+                             Action);
+    }
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
+}
+
+static
+NTSTATUS
 NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
                          _In_ PFileContextBlock FileCB,
                          _In_ PFILE_OBJECT FileObject,
@@ -1438,6 +1558,9 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     BOOLEAN RootParent;
     BOOLEAN ReplaceIfExists;
     BOOLEAN ExistingIsDirectory;
+    BOOLEAN IsDirectory;
+    BOOLEAN SameParent = FALSE;
+    ULONG NameFilter;
 
     if (BufferLength < FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) || RenameInfo->FileNameLength == 0 || (RenameInfo->FileNameLength & (sizeof(WCHAR) - 1)) != 0 || BufferLength - FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) < RenameInfo->FileNameLength)
         return STATUS_INVALID_PARAMETER;
@@ -1622,6 +1745,18 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
         goto Finish;
     }
 
+    IsDirectory = !!(NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY);
+    NameFilter = IsDirectory ? FILE_NOTIFY_CHANGE_DIR_NAME : FILE_NOTIFY_CHANGE_FILE_NAME;
+    if (Lcb)
+    {
+        SameParent = Lcb->ParentScb == &NewParent->NativeScb;
+        NtfsReportNameChange(VolCB,
+                             CONTAINING_RECORD(Lcb->ParentScb, StreamContextBlock, NativeScb)->FileReference,
+                             &Lcb->FileName,
+                             NameFilter,
+                             SameParent ? FILE_ACTION_RENAMED_OLD_NAME : FILE_ACTION_REMOVED);
+    }
+
     for (NameIndex = 0; NameIndex < RenamedCount; NameIndex++)
     {
         PFileContextBlock Other = RenamedFiles[NameIndex];
@@ -1649,6 +1784,28 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
         NewLeafBuffer = NULL;
         NewParent = NULL;
         NtfsDereferenceStreamContext(VolCB, OldParent);
+        NtfsReportNameChange(VolCB,
+                             CONTAINING_RECORD(Lcb->ParentScb, StreamContextBlock, NativeScb)->FileReference,
+                             &Lcb->FileName,
+                             NameFilter,
+                             SameParent ? FILE_ACTION_RENAMED_NEW_NAME : FILE_ACTION_ADDED);
+    }
+    if (IsDirectory && FileCB->StreamCB)
+    {
+        PLIST_ENTRY Entry;
+
+        for (Entry = FileCB->StreamCB->NativeScb.CcbList.Flink;
+             Entry != &FileCB->StreamCB->NativeScb.CcbList;
+             Entry = Entry->Flink)
+        {
+            PFileContextBlock Other =
+                CONTAINING_RECORD(CONTAINING_RECORD(Entry, NTFS_NATIVE_CCB, StreamEntry),
+                                  FileContextBlock,
+                                  NativeCcb);
+
+            if (Other->NotifyName.Buffer)
+                (void)NtfsCaptureNotifyName(VolCB, Other);
+        }
     }
     NtfsForgetMissingName(VolCB, NewName.Buffer, NewName.Length / sizeof(WCHAR));
     InterlockedIncrement(&VolCB->DirGeneration);
@@ -2185,6 +2342,14 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             if (NT_SUCCESS(Status) &&
                 BasicInformation.Fields != 0)
             {
+                if (BasicInformation.Fields & NTFS_BASIC_INFO_FILE_ATTRIBUTES)
+                    FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_ATTRIBUTES;
+                if (BasicInformation.Fields & NTFS_BASIC_INFO_CREATION_TIME)
+                    FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_CREATION;
+                if (BasicInformation.Fields & NTFS_BASIC_INFO_LAST_ACCESS_TIME)
+                    FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_LAST_ACCESS;
+                if (BasicInformation.Fields & NTFS_BASIC_INFO_LAST_WRITE_TIME)
+                    FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_LAST_WRITE;
                 FileObject->Flags |= FO_FILE_MODIFIED;
                 if (NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY)
                     InterlockedIncrement(&VolCB->DirGeneration);
@@ -2258,6 +2423,19 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     FileCB->StreamCB->DeletePending = !!Disposition->DeleteFile;
                 FileObject->DeletePending = FileCB->DeletePending ||
                                            !!Disposition->DeleteFile;
+            }
+            if (Disposition->DeleteFile && FileCB->FileDir && VolCB->NotifySync)
+            {
+                FsRtlNotifyFullChangeDirectory(VolCB->NotifySync,
+                                               &VolCB->NotifyList,
+                                               FileObject->FsContext,
+                                               NULL,
+                                               FALSE,
+                                               FALSE,
+                                               0,
+                                               NULL,
+                                               NULL,
+                                               NULL);
             }
             Status = STATUS_SUCCESS;
             goto Complete;
@@ -2424,6 +2602,7 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         FileObject->Flags |=
             FO_FILE_MODIFIED |
             FO_FILE_SIZE_CHANGED;
+        FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE;
     }
 
 Complete:
@@ -2471,7 +2650,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     SystemBuffer = GetBuffer(Irp);
     BufferLength = IrpSp->Parameters.QueryDirectory.Length;
 
-    if (!SystemBuffer)
+    if (!SystemBuffer && IrpSp->MinorFunction == IRP_MN_QUERY_DIRECTORY)
     {
         Status = STATUS_INVALID_USER_BUFFER;
         Irp->IoStatus.Information = 0;
@@ -2557,7 +2736,7 @@ DirectoryDone:
     {
         if (IrpSp->MinorFunction == IRP_MN_NOTIFY_CHANGE_DIRECTORY)
         {
-            if (!FileCB || !FileCB->FileDir || !VolCB->NotifySync)
+            if (!FileCB || !FileCB->FileDir || !FileCB->StreamCB || !VolCB->NotifySync)
             {
                 Status = STATUS_INVALID_PARAMETER;
             }
@@ -2565,20 +2744,25 @@ DirectoryDone:
             {
                 KeEnterCriticalRegion();
                 NtfsAcquireMetadata(VolCB);
-                FsRtlNotifyFullChangeDirectory(
-                    VolCB->NotifySync,
-                    &VolCB->NotifyList,
-                    FileCB,
-                    (PSTRING)&FileCB->FileName,
-                    BooleanFlagOn(IrpSp->Flags, SL_WATCH_TREE),
-                    FALSE,
-                    IrpSp->Parameters.NotifyDirectory.CompletionFilter,
-                    Irp,
-                    NULL,
-                    NULL);
+                Status = FileCB->NotifyName.Buffer ? STATUS_SUCCESS : NtfsCaptureNotifyName(VolCB, FileCB);
+                if (NT_SUCCESS(Status))
+                {
+                    FsRtlNotifyFullChangeDirectory(
+                        VolCB->NotifySync,
+                        &VolCB->NotifyList,
+                        FileCB,
+                        (PSTRING)&FileCB->NotifyName,
+                        BooleanFlagOn(IrpSp->Flags, SL_WATCH_TREE),
+                        FALSE,
+                        IrpSp->Parameters.NotifyDirectory.CompletionFilter,
+                        Irp,
+                        NULL,
+                        NULL);
+                }
                 NtfsReleaseMetadata(VolCB);
                 KeLeaveCriticalRegion();
-                return STATUS_PENDING;
+                if (NT_SUCCESS(Status))
+                    return STATUS_PENDING;
             }
         }
 

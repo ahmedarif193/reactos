@@ -113,6 +113,8 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             /* The per-open half of the block is zeroed on reuse. */
             if (FileCB->DirSearchPattern.Buffer)
                 ExFreePoolWithTag(FileCB->DirSearchPattern.Buffer, TAG_NTFS);
+            if (FileCB->NotifyName.Buffer)
+                ExFreePoolWithTag(FileCB->NotifyName.Buffer, TAG_NTFS);
 
             /* Keep the block, with its resources, for the next open. */
             {

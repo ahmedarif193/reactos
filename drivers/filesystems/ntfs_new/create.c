@@ -3205,6 +3205,19 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         Irp->IoStatus.Information = FILE_OPENED;
     }
+    if (!OpenTargetDirectory && !FileExisted)
+    {
+        NtfsReportFileChange(VolCB,
+                             FileCB,
+                             (NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY)
+                                 ? FILE_NOTIFY_CHANGE_DIR_NAME
+                                 : FILE_NOTIFY_CHANGE_FILE_NAME,
+                             FILE_ACTION_ADDED);
+    }
+    else if (Overwritten)
+    {
+        FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE;
+    }
     Irp->IoStatus.Status = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_DISK_INCREMENT);
     return STATUS_SUCCESS;

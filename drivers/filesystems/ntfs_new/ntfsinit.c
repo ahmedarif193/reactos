@@ -531,6 +531,13 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
     }
     if (Deleted)
         NtfsRecordNameMissing(VolCB, DeletePath, (USHORT)DeletePathLength);
+    if (Deleted && !StreamOnly)
+    {
+        NtfsReportFileChange(VolCB,
+                             FileCB,
+                             IsDirectory ? FILE_NOTIFY_CHANGE_DIR_NAME : FILE_NOTIFY_CHANGE_FILE_NAME,
+                             FILE_ACTION_REMOVED);
+    }
 
 DeleteDone:
     if (!MetadataAcquired)
@@ -774,6 +781,19 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 {
                     FileCB->StreamCB->DeletePending = TRUE;
                 }
+                if (FileCB->FileDir && VolCB->NotifySync)
+                {
+                    FsRtlNotifyFullChangeDirectory(VolCB->NotifySync,
+                                                   &VolCB->NotifyList,
+                                                   IrpSp->FileObject->FsContext,
+                                                   NULL,
+                                                   FALSE,
+                                                   FALSE,
+                                                   0,
+                                                   NULL,
+                                                   NULL,
+                                                   NULL);
+                }
             }
             if (FileCB->NativeCcb.Lcb)
             {
@@ -813,6 +833,17 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 /* TRUE also tears down the shared map, which outlives the
                  * private one and is what keeps retrying the write-back. */
             NtfsFinalizePendingDelete(VolCB, FileCB, IrpSp->FileObject, DeleteLink);
+        }
+
+        if (FirstCleanup && FileCB->NotifyFilter)
+        {
+            ULONG NotifyFilter = FileCB->NotifyFilter;
+
+            FileCB->NotifyFilter = 0;
+            if (FileCB->RequestedStream && FileCB->RequestedStream[0])
+                NotifyFilter &= ~FILE_NOTIFY_CHANGE_SIZE;
+            if (NotifyFilter && !(FileCB->StreamCB && FileCB->StreamCB->Deleted))
+                NtfsReportFileChange(VolCB, FileCB, NotifyFilter, FILE_ACTION_MODIFIED);
         }
 
         /* The cache holds a file-object reference, so waiting for CLOSE to

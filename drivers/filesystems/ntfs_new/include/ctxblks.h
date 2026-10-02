@@ -332,6 +332,9 @@ typedef struct _FCB
      * every later query without a name reuses it. */
     UNICODE_STRING DirSearchPattern;
 
+    UNICODE_STRING NotifyName;
+    ULONG NotifyFilter;
+
     /* Non-NULL when FileRec is on loan from the volume's record cache. */
     struct _NtfsCachedRecord* CachedRecord;
 
@@ -440,6 +443,19 @@ NtfsCheckDirectoryOpenChildren(_In_ PVolumeContextBlock VolCB,
 NTSTATUS
 NtfsRefreshDirectoryRecord(_In_ PVolumeContextBlock VolCB,
                             _In_ PFileContextBlock FileCB);
+
+VOID
+NtfsReportNameChange(_In_ PVolumeContextBlock VolCB,
+                     _In_ ULONGLONG ParentReference,
+                     _In_ PCUNICODE_STRING LeafName,
+                     _In_ ULONG FilterMatch,
+                     _In_ ULONG Action);
+
+VOID
+NtfsReportFileChange(_In_ PVolumeContextBlock VolCB,
+                     _In_ PFileContextBlock FileCB,
+                     _In_ ULONG FilterMatch,
+                     _In_ ULONG Action);
 
 /* Exported by ntoskrnl, but not declared by the DDK headers. */
 NTKERNELAPI VOID FASTCALL
