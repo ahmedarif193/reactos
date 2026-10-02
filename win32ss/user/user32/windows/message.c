@@ -1626,7 +1626,7 @@ IntCallWindowProcW(BOOL IsAnsiProc,
   Hook = BeginIfHookedUserApiHook();
   if (Hook)
   {
-     if (Dialog)
+     if (Dialog && (WndProc == DefDlgProcW || WndProc == DefDlgProcA))
         DlgOverride = IsMsgOverride( Msg, &guah.DlgProcArray);
      MsgOverride = IsMsgOverride( Msg, &guah.WndProcArray);
   }
@@ -1795,7 +1795,7 @@ IntCallWindowProcA(BOOL IsAnsiProc,
   Hook = BeginIfHookedUserApiHook();
   if (Hook)
   {
-     if (Dialog)
+     if (Dialog && (WndProc == DefDlgProcW || WndProc == DefDlgProcA))
         DlgOverride = IsMsgOverride( Msg, &guah.DlgProcArray);
      MsgOverride = IsMsgOverride( Msg, &guah.WndProcArray);
   }
