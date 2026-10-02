@@ -111,7 +111,7 @@
 #endif /* __GNUC__ */
 
 /* Returns the type's alignment */
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__cplusplus)
  #define TYPE_ALIGNMENT(t) __alignof(t)
 #else
  #define TYPE_ALIGNMENT(t) FIELD_OFFSET(struct { char x; t test; }, test)

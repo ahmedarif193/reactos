@@ -1797,6 +1797,118 @@ RtlSetSaclSecurityDescriptor (
 
 #endif
 
+#define FILE_INVALID_FILE_ID               ((LONGLONG)-1LL)
+
+typedef struct _FILE_ID_128 {
+    UCHAR Identifier[16];
+} FILE_ID_128, *PFILE_ID_128;
+
+typedef struct _FILE_ID_INFORMATION {
+    ULONGLONG VolumeSerialNumber;
+    FILE_ID_128 FileId;
+} FILE_ID_INFORMATION, *PFILE_ID_INFORMATION;
+
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS1))
+
+#define FILE_RENAME_REPLACE_IF_EXISTS                     0x00000001
+
+#endif
+#if ((_WIN32_WINNT >= _WIN32_WINNT_WIN7))
+
+typedef enum _CSV_CONTROL_OP {
+    CsvControlStartRedirectFile                  = 0x02,
+    CsvControlStopRedirectFile                   = 0x03,
+    CsvControlQueryRedirectState                 = 0x04,
+    CsvControlQueryFileRevision                  = 0x06,
+    CsvControlQueryMdsPath                       = 0x08,
+    CsvControlQueryFileRevisionFileId128         = 0x09,
+    CsvControlQueryVolumeRedirectState           = 0x0a,
+    CsvControlEnableUSNRangeModificationTracking = 0x0d,
+    CsvControlMarkHandleLocalVolumeMount         = 0x0e,
+    CsvControlUnmarkHandleLocalVolumeMount       = 0x0f,
+    CsvControlGetCsvFsMdsPathV2                  = 0x12,
+    CsvControlDisableCaching                     = 0x13,
+    CsvControlEnableCaching                      = 0x14,
+    CsvControlStartForceDFO                      = 0x15,
+    CsvControlStopForceDFO                       = 0x16,
+    CsvControlQueryMdsPathNoPause                = 0x17,
+    CsvControlSetVolumeId                        = 0x18,
+    CsvControlQueryVolumeId                      = 0x19,
+} CSV_CONTROL_OP, *PCSV_CONTROL_OP;
+
+typedef struct _CSV_CONTROL_PARAM {
+    CSV_CONTROL_OP Operation;
+    LONGLONG Unused;
+} CSV_CONTROL_PARAM, *PCSV_CONTROL_PARAM;
+
+typedef struct _CSV_QUERY_FILE_REVISION {
+    LONGLONG FileId;
+    LONGLONG FileRevision[3];
+} CSV_QUERY_FILE_REVISION, *PCSV_QUERY_FILE_REVISION;
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+DEFINE_GUID( GUID_ECP_CSV_DOWN_LEVEL_OPEN,
+             0x4248be44,
+             0x647f,
+             0x488f,
+             0x8b, 0xe5, 0xa0, 0x8a, 0xaf, 0x70, 0xf0, 0x28);
+
+DEFINE_GUID(GUID_ECP_CSV_QUERY_FILE_REVISION,
+            0x44aec90b,
+            0xde65,
+            0x4d46,
+            0x8f, 0xbf, 0x76, 0x3f, 0x9d, 0x97, 0xb, 0x1d);
+
+typedef struct _CSV_QUERY_FILE_REVISION_ECP_CONTEXT {
+    LONGLONG FileId;
+    LONGLONG FileRevision[3];
+} CSV_QUERY_FILE_REVISION_ECP_CONTEXT, *PCSV_QUERY_FILE_REVISION_ECP_CONTEXT;
+
+#endif
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_VB)
+
+typedef struct _COPY_INFORMATION {
+    PFILE_OBJECT SourceFileObject;
+    LONGLONG SourceFileOffset;
+} COPY_INFORMATION, *PCOPY_INFORMATION;
+
+NTSTATUS
+NTAPI
+IoGetCopyInformationExtension (
+    _In_ PIRP Irp,
+    _Out_ PCOPY_INFORMATION CopyInformation
+    );
+
+#endif
+
+#define OPEN_REPARSE_POINT_VERSION_EX                                           (0x80000000)
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS4) || (defined(INCLUDE_OPEN_REPARSE_SUPPORT))
+#define OPEN_REPARSE_POINT_REPARSE_IF_NON_FINAL_COMPONENT                       (0x00000016)
+#define OPEN_REPARSE_POINT_REPARSE_IF_DIRECTORY_FINAL_COMPONENT_ALWAYS          (0x00000048)
+#define OPEN_REPARSE_POINT_REPARSE_IF_NON_DIRECTORY_NON_FINAL_COMPONENT_ALWAYS  (0x00000050)
+#define OPEN_REPARSE_POINT_REPARSE_IF_NON_DIRECTORY_FINAL_COMPONENT_ALWAYS      (0x00000060)
+#define OPEN_REPARSE_POINT_REPARSE_IF_FINAL_COMPONENT                           (0x00000028)
+#define OPEN_REPARSE_POINT_REPARSE_IF_FINAL_COMPONENT_ALWAYS                    (0x00000068)
+#define OPEN_REPARSE_POINT_REPARSE_ALWAYS                                       (0x0000007E)
+#endif
+
+typedef struct _OPEN_REPARSE_LIST_ENTRY {
+    LIST_ENTRY OpenReparseListEntry;
+    ULONG      ReparseTag;
+    ULONG      Flags;
+    GUID       ReparseGuid;
+    USHORT     Size;
+    USHORT     RemainingLength;
+} OPEN_REPARSE_LIST_ENTRY, *POPEN_REPARSE_LIST_ENTRY;
+
+typedef struct _OPEN_REPARSE_LIST {
+    LIST_ENTRY OpenReparseList;
+} OPEN_REPARSE_LIST, *POPEN_REPARSE_LIST;
+
 #ifdef __cplusplus
 }
 #endif

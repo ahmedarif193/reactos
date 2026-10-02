@@ -31,10 +31,12 @@
 #define FileLinkInformationEx (enum _FILE_INFORMATION_CLASS)72
 #define FileStorageReserveIdInformation (enum _FILE_INFORMATION_CLASS)74
 
+#ifndef __REACTOS__
 typedef struct _FILE_ID_INFORMATION {
     ULONGLONG VolumeSerialNumber;
     FILE_ID_128 FileId;
 } FILE_ID_INFORMATION, *PFILE_ID_INFORMATION;
+#endif
 
 typedef struct _FILE_STAT_INFORMATION {
     LARGE_INTEGER FileId;
@@ -86,9 +88,11 @@ typedef struct _FILE_RENAME_INFORMATION_EX {
     WCHAR FileName[1];
 } FILE_RENAME_INFORMATION_EX, *PFILE_RENAME_INFORMATION_EX;
 
+#ifndef __REACTOS__
 typedef struct _FILE_DISPOSITION_INFORMATION_EX {
     ULONG Flags;
 } FILE_DISPOSITION_INFORMATION_EX, *PFILE_DISPOSITION_INFORMATION_EX;
+#endif
 
 typedef struct _FILE_LINK_INFORMATION_EX {
     union {

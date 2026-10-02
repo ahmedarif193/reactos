@@ -1375,6 +1375,12 @@ FsRtlAcknowledgeEcp(
   _In_ PVOID EcpContext);
 
 _IRQL_requires_max_(APC_LEVEL)
+VOID
+NTAPI
+FsRtlPrepareToReuseEcp(
+  _In_ PVOID EcpContext);
+
+_IRQL_requires_max_(APC_LEVEL)
 NTKERNELAPI
 BOOLEAN
 NTAPI
@@ -1709,7 +1715,7 @@ extern const UCHAR * const *FsRtlLegalAnsiCharacterArray;
     (PSC)->FreeCallback = (FC))
 
 #define FsRtlSupportsPerStreamContexts(FO)                                     \
-    ((BOOLEAN)((NULL != FsRtlGetPerStreamContextPointer(FO) &&                 \
+    ((BOOLEAN)((NULL != FsRtlGetPerStreamContextPointer(FO)) &&                \
                FlagOn(FsRtlGetPerStreamContextPointer(FO)->Flags2,             \
                FSRTL_FLAG2_SUPPORTS_FILTER_CONTEXTS)))
 

@@ -126,32 +126,36 @@ typedef struct _LOOKASIDE_LIST_EX *PLOOKASIDE_LIST_EX;
 _IRQL_requires_same_
 _Function_class_(ALLOCATE_FUNCTION)
 typedef PVOID
-(NTAPI *PALLOCATE_FUNCTION)(
+(NTAPI ALLOCATE_FUNCTION)(
     _In_ POOL_TYPE PoolType,
     _In_ SIZE_T NumberOfBytes,
     _In_ ULONG Tag);
+typedef ALLOCATE_FUNCTION *PALLOCATE_FUNCTION;
 
 _IRQL_requires_same_
 _Function_class_(ALLOCATE_FUNCTION_EX)
 typedef PVOID
-(NTAPI *PALLOCATE_FUNCTION_EX)(
+(NTAPI ALLOCATE_FUNCTION_EX)(
     _In_ POOL_TYPE PoolType,
     _In_ SIZE_T NumberOfBytes,
     _In_ ULONG Tag,
     _Inout_ PLOOKASIDE_LIST_EX Lookaside);
+typedef ALLOCATE_FUNCTION_EX *PALLOCATE_FUNCTION_EX;
 
 _IRQL_requires_same_
 _Function_class_(FREE_FUNCTION)
 typedef VOID
-(NTAPI *PFREE_FUNCTION)(
+(NTAPI FREE_FUNCTION)(
     _In_ PVOID Buffer);
+typedef FREE_FUNCTION *PFREE_FUNCTION;
 
 _IRQL_requires_same_
 _Function_class_(FREE_FUNCTION_EX)
 typedef VOID
-(NTAPI *PFREE_FUNCTION_EX)(
+(NTAPI FREE_FUNCTION_EX)(
     _In_ PVOID Buffer,
     _Inout_ PLOOKASIDE_LIST_EX Lookaside);
+typedef FREE_FUNCTION_EX *PFREE_FUNCTION_EX;
 
 _IRQL_requires_same_
 _Function_class_(CALLBACK_FUNCTION)
