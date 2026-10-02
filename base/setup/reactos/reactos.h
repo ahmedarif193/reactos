@@ -27,6 +27,7 @@
 
 #include <commctrl.h>
 #include <windowsx.h>
+#include <dwmapi.h>
 
 #define EnableDlgItem(hDlg, nID, bEnable)   \
     EnableWindow(GetDlgItem((hDlg), (nID)), (bEnable))

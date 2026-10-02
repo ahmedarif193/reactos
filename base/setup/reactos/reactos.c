@@ -349,6 +349,32 @@ SetWindowResPrintfW(
     va_end(args);
 }
 
+static VOID
+ExtendFrameIntoWatermark(
+    IN HWND hwndDlg,
+    IN PSETUPDATA pSetupData,
+    IN BOOL bExtend)
+{
+    MARGINS Margins = {0, 0, 0, 0};
+    HBITMAP hbmWatermark;
+    BITMAP bm;
+
+    if (bExtend)
+    {
+        hbmWatermark = LoadImageW(pSetupData->hInstance,
+                                  MAKEINTRESOURCEW(IDB_WATERMARK),
+                                  IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
+        if (hbmWatermark)
+        {
+            if (GetObjectW(hbmWatermark, sizeof(bm), &bm))
+                Margins.cxLeftWidth = bm.bmWidth;
+            DeleteObject(hbmWatermark);
+        }
+    }
+
+    DwmExtendFrameIntoClientArea(GetParent(hwndDlg), &Margins);
+}
+
 static INT_PTR CALLBACK
 StartDlgProc(
     IN HWND hwndDlg,
@@ -395,6 +421,7 @@ StartDlgProc(
                     PropSheet_SetWizButtons(GetParent(hwndDlg), PSWIZB_NEXT);
                     // PropSheet_ShowWizButtons(GetParent(hwndDlg), 0, PSWIZB_BACK);
                     ShowDlgItem(GetParent(hwndDlg), ID_WIZBACK, SW_HIDE);
+                    ExtendFrameIntoWatermark(hwndDlg, pSetupData, TRUE);
                     break;
                 }
 
@@ -403,6 +430,7 @@ StartDlgProc(
                     /* Show "Back" button */
                     // PropSheet_ShowWizButtons(GetParent(hwndDlg), PSWIZB_BACK, PSWIZB_BACK);
                     ShowDlgItem(GetParent(hwndDlg), ID_WIZBACK, SW_SHOW);
+                    ExtendFrameIntoWatermark(hwndDlg, pSetupData, FALSE);
                     break;
                 }
 
@@ -2624,6 +2652,7 @@ FinishDlgProc(
                     // PropSheet_ShowWizButtons(hWndParent, 0, PSWIZB_BACK | PSWIZB_NEXT | PSWIZB_CANCEL);
                     ShowDlgItem(hWndParent, ID_WIZBACK, SW_HIDE);
                     ShowDlgItem(hWndParent, ID_WIZNEXT, SW_HIDE);
+                    ExtendFrameIntoWatermark(hwndDlg, pSetupData, TRUE);
 
                     /* Change the "Finish" button text to "Restart" */
                     SetWindowResTextW(GetDlgItem(hWndParent, ID_WIZFINISH),
