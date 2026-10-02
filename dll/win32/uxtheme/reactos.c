@@ -3,9 +3,20 @@
 #include "uxthemep.h"
 
 #include <uxundoc.h>
+#include <imm.h>
+#include <immdev.h>
+#include <imm32_undoc.h>
+#include <ddeml.h>
+#include <ntusrtyp.h>
+#include <ntuser.h>
 
 HINSTANCE hDllInst;
 DWORD gdwErrorInfoTlsIndex = TLS_OUT_OF_INDEXES;
+
+BOOL UXTHEME_UsesDefaultSysColors(void)
+{
+    return (BOOL)NtUserCallNoParam(NOPARAM_ROUTINE_ROS_ISDEFAULTSYSCOLORS);
+}
 
 static BOOL CALLBACK send_theme_changed(HWND hwnd, LPARAM enable)
 {

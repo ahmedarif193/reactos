@@ -854,8 +854,15 @@ static HTHEME open_theme_data(HWND hwnd, LPCWSTR pszClassList, DWORD flags, UINT
         if(!pszUseClassList)
             pszUseClassList = pszClassList;
 
+#ifdef __REACTOS__
+        if (pszUseClassList)
+            hTheme = MSSTYLES_OpenThemeClassForApp(pszAppName,
+                                                   UXTHEME_UsesDefaultSysColors() ? L"ContentLight" : NULL,
+                                                   pszUseClassList, dpi);
+#else
         if (pszUseClassList)
             hTheme = MSSTYLES_OpenThemeClass(pszAppName, pszUseClassList, dpi);
+#endif
 #ifdef __REACTOS__
         UXTHEME_ApplyLiquidProperties(hwnd, pszUseClassList, flags, dpi);
 #endif

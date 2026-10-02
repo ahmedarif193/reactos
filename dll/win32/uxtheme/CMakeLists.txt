@@ -1,5 +1,6 @@
 
 add_definitions(-D__WINESRC__ -D_UXTHEME_)
+include_directories(${REACTOS_SOURCE_DIR}/win32ss/include)
 
 spec2def(uxtheme.dll uxtheme.spec ADD_IMPORTLIB)
 
@@ -42,7 +43,7 @@ add_library(uxtheme MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/uxtheme.def)
 
 set_module_type(uxtheme win32dll)
-target_link_libraries(uxtheme wine ${PSEH_LIB})
+target_link_libraries(uxtheme wine win32ksys ${PSEH_LIB})
 add_delay_importlibs(uxtheme msimg32 dwmapi)
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     add_importlibs(uxtheme user32_vista user32 advapi32 gdiplus gdi32 shlwapi msvcrt kernel32 ntdll)

@@ -81,6 +81,7 @@ NtUserCallNoParam(DWORD Routine)
         case NOPARAM_ROUTINE_GETMSESSAGEPOS:
         case NOPARAM_ROUTINE_GETIMESHOWSTATUS:
         case NOPARAM_ROUTINE_ISCONSOLEMODE:
+        case NOPARAM_ROUTINE_ROS_ISDEFAULTSYSCOLORS:
         case NOPARAM_ROUTINE_MSQCLEARWAKEMASK:
             UserEnterShared();
             break;
@@ -148,6 +149,14 @@ NtUserCallNoParam(DWORD Routine)
         case NOPARAM_ROUTINE_ISCONSOLEMODE:
             Result = (ScreenDeviceContext == NULL);
             break;
+
+        case NOPARAM_ROUTINE_ROS_ISDEFAULTSYSCOLORS:
+        {
+            PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
+
+            Result = ppi && (ppi->W32PF_flags & W32PF_DEFAULTSYSCOLORS);
+            break;
+        }
 
         case NOPARAM_ROUTINE_UPDATEPERUSERIMMENABLING:
             if (UserIsIMMEnabled())

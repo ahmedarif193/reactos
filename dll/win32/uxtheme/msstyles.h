@@ -96,6 +96,8 @@ HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics);
 BOOL MSSTYLES_ReapplyActiveThemeMetrics(void);
 PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, UINT dpi);
 #ifdef __REACTOS__
+PTHEME_CLASS MSSTYLES_OpenThemeClassForApp(LPCWSTR pszAppName, LPCWSTR pszDefaultAppName,
+                                           LPCWSTR pszClassList, UINT dpi);
 PTHEME_CLASS MSSTYLES_OpenThemeClassFromFile(PTHEME_FILE tf, LPCWSTR pszAppName,
                                              LPCWSTR pszClassList, UINT dpi);
 #endif

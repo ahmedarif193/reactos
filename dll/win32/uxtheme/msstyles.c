@@ -1122,8 +1122,28 @@ static void parse_app_class_name(LPCWSTR name, LPWSTR app_name, LPWSTR class_nam
  *     pszClassList        List of requested classes, semicolon delimited
  *     dpi                 DPI for theme parts
  */
+#ifdef __REACTOS__
+static PTHEME_CLASS MSSTYLES_FindAppClass(PTHEME_FILE tf, LPCWSTR pszAppName,
+                                          LPCWSTR pszDefaultAppName, LPCWSTR pszClassName)
+{
+    PTHEME_CLASS cls = NULL;
+
+    if (pszAppName)
+        cls = MSSTYLES_FindClass(tf, pszAppName, pszClassName);
+    if (!cls && pszDefaultAppName)
+        cls = MSSTYLES_FindClass(tf, pszDefaultAppName, pszClassName);
+    if (!cls)
+        cls = MSSTYLES_FindClass(tf, NULL, pszClassName);
+    return cls;
+}
+
+static PTHEME_CLASS open_theme_class(PTHEME_FILE theme, LPCWSTR pszAppName,
+                                     LPCWSTR pszDefaultAppName,
+                                     LPCWSTR pszClassList, UINT dpi)
+#else
 static PTHEME_CLASS open_theme_class(PTHEME_FILE theme, LPCWSTR pszAppName,
                                      LPCWSTR pszClassList, UINT dpi)
+#endif
 {
     PTHEME_CLASS cls = NULL;
     WCHAR buf[MAX_THEME_APP_NAME + MAX_THEME_CLASS_NAME];
@@ -1153,9 +1173,14 @@ static PTHEME_CLASS open_theme_class(PTHEME_FILE theme, LPCWSTR pszAppName,
         if (szAppName[0] && pszAppName)
             return NULL;
 
+#ifdef __REACTOS__
+        cls = MSSTYLES_FindAppClass(theme, szAppName[0] ? szAppName : pszAppName,
+                                    pszDefaultAppName, szClassName);
+#else
         cls = MSSTYLES_FindClass(theme, szAppName[0] ? szAppName : pszAppName, szClassName);
         /* Fall back to default class if the specified subclass is not found */
         if (!cls) cls = MSSTYLES_FindClass(theme, NULL, szClassName);
+#endif
 
         if(cls) break;
     }
@@ -1166,9 +1191,14 @@ static PTHEME_CLASS open_theme_class(PTHEME_FILE theme, LPCWSTR pszAppName,
         if (szAppName[0] && pszAppName)
             return NULL;
 
+#ifdef __REACTOS__
+        cls = MSSTYLES_FindAppClass(theme, szAppName[0] ? szAppName : pszAppName,
+                                    pszDefaultAppName, szClassName);
+#else
         cls = MSSTYLES_FindClass(theme, szAppName[0] ? szAppName : pszAppName, szClassName);
         /* Fall back to default class if the specified subclass is not found */
         if (!cls) cls = MSSTYLES_FindClass(theme, NULL, szClassName);
+#endif
     }
     if(cls) {
         PTHEME_CLASS handle;
@@ -1208,16 +1238,26 @@ static PTHEME_CLASS open_theme_class(PTHEME_FILE theme, LPCWSTR pszAppName,
 
 PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, UINT dpi)
 {
+#ifdef __REACTOS__
+    return open_theme_class(tfActiveTheme, pszAppName, NULL, pszClassList, dpi);
+#else
     return open_theme_class(tfActiveTheme, pszAppName, pszClassList, dpi);
+#endif
 }
 
 #ifdef __REACTOS__
+PTHEME_CLASS MSSTYLES_OpenThemeClassForApp(LPCWSTR pszAppName, LPCWSTR pszDefaultAppName,
+                                           LPCWSTR pszClassList, UINT dpi)
+{
+    return open_theme_class(tfActiveTheme, pszAppName, pszDefaultAppName, pszClassList, dpi);
+}
+
 PTHEME_CLASS MSSTYLES_OpenThemeClassFromFile(PTHEME_FILE tf, LPCWSTR pszAppName,
                                              LPCWSTR pszClassList, UINT dpi)
 {
     if (tf && !tf->classes)
         MSSTYLES_ParseThemeIni(tf, FALSE);
-    return open_theme_class(tf, pszAppName, pszClassList, dpi);
+    return open_theme_class(tf, pszAppName, NULL, pszClassList, dpi);
 }
 #endif
 
