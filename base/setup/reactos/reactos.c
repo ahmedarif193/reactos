@@ -2121,7 +2121,13 @@ PrepareAndDoCopyThread(
                                  pSetupData->SelectedLanguageId,
                                  RegistryStatus,
                                  NULL /* SubstSettings */);
-    DBG_UNREFERENCED_PARAMETER(ErrorNumber);
+    if (ErrorNumber != NOT_AN_ERROR)
+    {
+        DisplayMessage(GetParent(hwndDlg), MB_ICONERROR, L"Error", L"Setup failed to update the registry (error %lu).\n", (ULONG)ErrorNumber);
+
+        PropSheet_SetWizButtons(GetParent(hwndDlg), PSWIZB_NEXT);
+        return 1;
+    }
     SendMessageW(UiContext.hWndProgress, PBM_SETPOS, 100, 0);
 
     /*
