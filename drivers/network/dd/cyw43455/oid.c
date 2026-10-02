@@ -215,7 +215,7 @@ CywBuildBssList(
 
     ByteArray = (PDOT11_BYTE_ARRAY)Buffer;
     ByteArray->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
-    ByteArray->Header.Revision = DOT11_BYTE_ARRAY_REVISION_1;
+    ByteArray->Header.Revision = DOT11_BSS_ENTRY_BYTE_ARRAY_REVISION_1;
     ByteArray->Header.Size = sizeof(DOT11_BYTE_ARRAY);
     ByteArray->uNumOfBytes = PayloadSize;
     ByteArray->uTotalNumOfBytes = PayloadSize;
