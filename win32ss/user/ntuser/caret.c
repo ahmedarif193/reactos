@@ -224,8 +224,6 @@ co_IntSetCaretPos(int X, int Y)
       if(ThreadQueue->CaretInfo.Pos.x != X || ThreadQueue->CaretInfo.Pos.y != Y)
       {
          UserRefObjectCo(pWnd, &Ref);
-         if (ThreadQueue->CaretInfo.Showing)
-            co_IntHideCaret(&ThreadQueue->CaretInfo);
          if (ValidateHwndNoErr(ThreadQueue->CaretInfo.hWnd) != pWnd ||
              (pWnd->state & WNDS_DESTROYED))
          {
