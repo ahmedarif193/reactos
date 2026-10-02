@@ -1,7 +1,7 @@
-@ stub FwpmCalloutAdd0
+@ stdcall FwpmCalloutAdd0(ptr ptr ptr ptr)
 @ stub FwpmCalloutCreateEnumHandle0
-@ stub FwpmCalloutDeleteById0
-@ stub FwpmCalloutDeleteByKey0
+@ stdcall FwpmCalloutDeleteById0(ptr long)
+@ stdcall FwpmCalloutDeleteByKey0(ptr ptr)
 @ stub FwpmCalloutDestroyEnumHandle0
 @ stub FwpmCalloutEnum0
 @ stub FwpmCalloutGetById0
@@ -24,8 +24,8 @@
 @ stub FwpmEventProviderIsNetEventTypeEnabled0
 @ stdcall FwpmFilterAdd0(ptr ptr ptr ptr)
 @ stdcall FwpmFilterCreateEnumHandle0(ptr ptr ptr)
-@ stub FwpmFilterDeleteById0
-@ stub FwpmFilterDeleteByKey0
+@ stdcall FwpmFilterDeleteById0(ptr int64)
+@ stdcall FwpmFilterDeleteByKey0(ptr ptr)
 @ stdcall FwpmFilterDestroyEnumHandle0(ptr ptr)
 @ stdcall FwpmFilterEnum0(ptr ptr long ptr ptr)
 @ stub FwpmFilterGetById0
@@ -36,7 +36,7 @@
 @ stub FwpmFilterSubscriptionsGet0
 @ stub FwpmFilterUnsubscribeChanges0
 @ stdcall FwpmFreeMemory0(ptr)
-@ stub FwpmGetAppIdFromFileName0
+@ stdcall FwpmGetAppIdFromFileName0(wstr ptr)
 @ stub FwpmIPsecTunnelAdd0
 @ stub FwpmIPsecTunnelDeleteByKey0
 @ stub FwpmLayerCreateEnumHandle0
@@ -51,7 +51,7 @@
 @ stub FwpmNetEventEnum0
 @ stub FwpmNetEventsGetSecurityInfo0
 @ stub FwpmNetEventsSetSecurityInfo0
-@ stub FwpmProviderAdd0
+@ stdcall FwpmProviderAdd0(ptr ptr ptr)
 @ stub FwpmProviderContextAdd0
 @ stub FwpmProviderContextCreateEnumHandle0
 @ stub FwpmProviderContextDeleteById0
@@ -66,7 +66,7 @@
 @ stub FwpmProviderContextSubscriptionsGet0
 @ stub FwpmProviderContextUnsubscribeChanges0
 @ stub FwpmProviderCreateEnumHandle0
-@ stub FwpmProviderDeleteByKey0
+@ stdcall FwpmProviderDeleteByKey0(ptr ptr)
 @ stub FwpmProviderDestroyEnumHandle0
 @ stub FwpmProviderEnum0
 @ stub FwpmProviderGetByKey0
@@ -80,7 +80,7 @@
 @ stub FwpmSessionEnum0
 @ stdcall FwpmSubLayerAdd0(ptr ptr ptr)
 @ stub FwpmSubLayerCreateEnumHandle0
-@ stub FwpmSubLayerDeleteByKey0
+@ stdcall FwpmSubLayerDeleteByKey0(ptr ptr)
 @ stub FwpmSubLayerDestroyEnumHandle0
 @ stub FwpmSubLayerEnum0
 @ stdcall FwpmSubLayerGetByKey0(ptr ptr ptr)
@@ -90,9 +90,9 @@
 @ stub FwpmSubLayerSubscriptionsGet0
 @ stub FwpmSubLayerUnsubscribeChanges0
 @ stub FwpmTraceRestoreDefaults0
-@ stub FwpmTransactionAbort0
-@ stub FwpmTransactionBegin0
-@ stub FwpmTransactionCommit0
+@ stdcall FwpmTransactionAbort0(ptr)
+@ stdcall FwpmTransactionBegin0(ptr long)
+@ stdcall FwpmTransactionCommit0(ptr)
 @ stub FwpsAleExplicitCredentialsQuery0
 @ stub FwpsClassifyUser0
 @ stub FwpsFreeMemory0
