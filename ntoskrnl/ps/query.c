@@ -880,8 +880,7 @@ NtQueryInformationProcess(
                 QuotaLimits.Flags |= (Process->Vm.Instance.Flags.MinimumWorkingSetHard ?
                     QUOTA_LIMITS_HARDWS_MIN_ENABLE : QUOTA_LIMITS_HARDWS_MIN_DISABLE);
 
-                /* FIXME: Get the correct information */
-                //QuotaLimits.WorkingSetLimit = (SIZE_T)-1; // Not used on Win2k3, it is set to 0
+                QuotaLimits.WorkingSetLimit = (SIZE_T)-1;
                 QuotaLimits.CpuRateLimit.RateData = 0;
             }
 
@@ -994,9 +993,6 @@ NtQueryInformationProcess(
                 break;
             }
 
-            /* Set the return length */
-            Length = sizeof(HANDLE);
-
             /* Reference the process */
             Status = ObReferenceObjectByHandle(ProcessHandle,
                                                PROCESS_QUERY_INFORMATION,
@@ -1012,6 +1008,7 @@ NtQueryInformationProcess(
                 /* Return whether or not we have a debug port */
                 *(PHANDLE)ProcessInformation = (Process->DebugPort ?
                                                 (HANDLE)-1 : NULL);
+                Length = sizeof(HANDLE);
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -1150,7 +1147,8 @@ NtQueryInformationProcess(
 
             /* Validate the input length */
             if ((ProcessInformationLength != sizeof(VM_COUNTERS)) &&
-                (ProcessInformationLength != sizeof(VM_COUNTERS_EX)))
+                (ProcessInformationLength != sizeof(VM_COUNTERS_EX)) &&
+                (ProcessInformationLength != sizeof(VM_COUNTERS_EX2)))
             {
                 Status = STATUS_INFO_LENGTH_MISMATCH;
                 break;
@@ -1177,8 +1175,14 @@ NtQueryInformationProcess(
                 VmCounters->QuotaNonPagedPoolUsage = Process->ProcessQuotaUsage[PsNonPagedPool];
                 VmCounters->PagefileUsage = Process->CommitCharge << PAGE_SHIFT;
                 VmCounters->PeakPagefileUsage = Process->CommitChargePeak << PAGE_SHIFT;
-                //VmCounters->PrivateUsage = Process->CommitCharge << PAGE_SHIFT;
-                //
+                if (ProcessInformationLength >= sizeof(VM_COUNTERS_EX))
+                    ((PVM_COUNTERS_EX)VmCounters)->PrivateUsage = Process->CommitCharge << PAGE_SHIFT;
+                if (ProcessInformationLength >= sizeof(VM_COUNTERS_EX2))
+                {
+                    ((PVM_COUNTERS_EX2)VmCounters)->PrivateWorkingSetSize =
+                        min(Process->NumberOfPrivatePages, Process->Vm.Instance.WorkingSetSize) << PAGE_SHIFT;
+                    ((PVM_COUNTERS_EX2)VmCounters)->SharedCommitUsage = 0;
+                }
 
                 /* Set the return length */
                 Length = ProcessInformationLength;
@@ -1902,9 +1906,6 @@ NtQueryInformationProcess(
                 break;
             }
 
-            /* Set the return length */
-            Length = sizeof(HANDLE);
-
             /* Reference the process */
             Status = ObReferenceObjectByHandle(ProcessHandle,
                                                PROCESS_QUERY_INFORMATION,
@@ -1925,6 +1926,7 @@ NtQueryInformationProcess(
             {
                 /* Return debug port's handle */
                 *(PHANDLE)ProcessInformation = DebugPort;
+                Length = sizeof(HANDLE);
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {

@@ -118,6 +118,12 @@ typedef struct _VM_COUNTERS_EX {
   SIZE_T PrivateUsage;
 } VM_COUNTERS_EX, *PVM_COUNTERS_EX;
 
+typedef struct _VM_COUNTERS_EX2 {
+  VM_COUNTERS_EX CountersEx;
+  SIZE_T PrivateWorkingSetSize;
+  ULONGLONG SharedCommitUsage;
+} VM_COUNTERS_EX2, *PVM_COUNTERS_EX2;
+
 #define MAX_HW_COUNTERS 16
 #define THREAD_PROFILING_FLAG_DISPATCH  0x00000001
 
