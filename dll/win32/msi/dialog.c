@@ -931,9 +931,17 @@ static UINT dialog_control_event( MSIRECORD *rec, void *param )
         event = MSI_RecordGetString( rec, 3 );
         arg = MSI_RecordGetString( rec, 4 );
         if (event[0] == '[')
+#ifdef __REACTOS__
+            return dialog_set_property_event( dialog, event, arg );
+#else
             dialog_set_property_event( dialog, event, arg );
+#endif
         else
+#ifdef __REACTOS__
+            return dialog_send_event( dialog, event, arg );
+#else
             dialog_send_event( dialog, event, arg );
+#endif
     }
     return ERROR_SUCCESS;
 }
@@ -960,7 +968,12 @@ static UINT dialog_button_handler( msi_dialog *dialog, struct control *control, 
     /* dialog control events must be processed last regardless of ordering */
     if (dialog->pending_event)
     {
+#ifdef __REACTOS__
+        if (r == ERROR_SUCCESS)
+            r = dialog->pending_event( dialog, dialog->pending_argument );
+#else
         r = dialog->pending_event( dialog, dialog->pending_argument );
+#endif
 
         free( dialog->pending_argument );
         dialog->pending_event = NULL;
