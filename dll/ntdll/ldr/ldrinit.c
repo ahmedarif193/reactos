@@ -898,7 +898,7 @@ LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL)
          * for it) before any of its code can touch thread-locals — even on
          * rounds that call no init routines (LdrRootEntry == NULL), because
          * LDRP_ENTRY_PROCESSED is set below regardless */
-        if (!(LdrEntry->Flags & LDRP_ENTRY_PROCESSED))
+        if (!(LdrEntry->Flags & LDRP_ENTRY_PROCESSED) && (LdrEntry->Flags & LDRP_IMAGE_DLL))
         {
             Status = LdrpHandleTlsData(LdrEntry);
             if (!NT_SUCCESS(Status))
