@@ -159,6 +159,12 @@ ExAllocatePoolWithTagPriority(
     return ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag);
 }
 
+#define EX_POOL2_TYPE_FLAGS \
+    (POOL_FLAG_NON_PAGED | POOL_FLAG_NON_PAGED_EXECUTE | POOL_FLAG_PAGED)
+#define EX_POOL2_ACCEPTED_FLAGS \
+    (EX_POOL2_TYPE_FLAGS | POOL_FLAG_USE_QUOTA | POOL_FLAG_UNINITIALIZED | POOL_FLAG_SESSION | \
+     POOL_FLAG_CACHE_ALIGNED | POOL_FLAG_RAISE_ON_FAILURE | POOL_FLAG_RESERVED2)
+
 PVOID
 NTAPI
 ExAllocatePool2(
@@ -168,10 +174,14 @@ ExAllocatePool2(
 {
     ULONG HeapIndex = (Flags & POOL_FLAG_PAGED) ? EX_POOL_HEAP_PAGED :
                       (Flags & POOL_FLAG_NON_PAGED_EXECUTE) ? EX_POOL_HEAP_EXECUTABLE : EX_POOL_HEAP_NONPAGED;
+    POOL_FLAGS TypeFlags = Flags & EX_POOL2_TYPE_FLAGS;
     ULONG HeapFlags = 0;
     PVOID Block;
 
-    if (Tag == 0 || NumberOfBytes == 0)
+    if (Tag == 0 ||
+        TypeFlags == 0 ||
+        (TypeFlags & (TypeFlags - 1)) != 0 ||
+        (Flags & POOL_FLAG_REQUIRED_MASK & ~EX_POOL2_ACCEPTED_FLAGS) != 0)
     {
         if (Flags & POOL_FLAG_RAISE_ON_FAILURE)
             ExRaiseStatus(STATUS_INVALID_PARAMETER);
