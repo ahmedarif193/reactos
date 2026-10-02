@@ -2181,7 +2181,8 @@ lookinhash:
             CurEntry = CONTAINING_RECORD(ListEntry, LDR_DATA_TABLE_ENTRY, HashLinks);
 
             /* Check base name of that module */
-            if (RtlEqualUnicodeString(DllName, &CurEntry->BaseDllName, TRUE))
+            if (RtlEqualUnicodeString(DllName, &CurEntry->BaseDllName, TRUE) &&
+                !(CurEntry->Flags & LDRP_REDIRECTED))
             {
                 /* It matches, return it */
                 *LdrEntry = CurEntry;
