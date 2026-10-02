@@ -99,6 +99,8 @@ VOID ConnectionFree(PVOID Object)
     RemoveEntryList(&Connection->ListEntry);
     TcpipReleaseSpinLock(&ConnectionEndpointListLock, OldIrql);
 
+    WfpShimEndpointClosed(Connection->WfpEndpointId);
+
     ExDeleteResourceLite(&Connection->Resource);
     IoFreeWorkItem(Connection->DisconnectWorkItem);
 
@@ -143,6 +145,7 @@ PCONNECTION_ENDPOINT TCPAllocateConnectionEndpoint( PVOID ClientContext )
 
     Connection->RefCount = 1;
     Connection->Free = ConnectionFree;
+    Connection->WfpEndpointId = InterlockedIncrement64(&NextWfpEndpointId);
 
     /* Add connection endpoint to global list */
     ExInterlockedInsertTailList(&ConnectionEndpointListHead,

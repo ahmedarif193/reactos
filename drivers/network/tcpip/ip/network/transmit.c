@@ -186,6 +186,7 @@ NTSTATUS SendFragments(
     }
 
     GetDataPtr( IFC->NdisPacket, 0, (PCHAR *)&Data, &InSize );
+    PC(IFC->NdisPacket)->WfpTag = IPPacket->WfpTag;
 
     IFC->Header       = ((PCHAR)Data);
     IFC->Datagram     = IPPacket->NdisPacket;

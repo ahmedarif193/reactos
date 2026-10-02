@@ -51,6 +51,7 @@
 
 #endif
 
+#include <drivers/wfp/wfpshim.h>
 #include <titypes.h>
 #include <ticonsts.h>
 

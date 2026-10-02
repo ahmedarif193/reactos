@@ -24,6 +24,7 @@ KSPIN_LOCK AddressFileListLock;
 /* List of all connection endpoint file objects managed by this driver */
 LIST_ENTRY ConnectionEndpointListHead;
 KSPIN_LOCK ConnectionEndpointListLock;
+LONG64 NextWfpEndpointId;
 
 /*
  * FUNCTION: Takes a reference on an address file that is still live
@@ -353,6 +354,31 @@ PADDRESS_FILE AddrSearchNext(
     return Current;
 }
 
+PADDRESS_FILE AddrFindByWfpEndpointId(
+    ULONG64 EndpointId)
+{
+    PADDRESS_FILE Current, Found = NULL;
+    PLIST_ENTRY CurrentEntry;
+    KIRQL OldIrql;
+
+    TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
+    for (CurrentEntry = AddressFileListHead.Flink;
+         CurrentEntry != &AddressFileListHead;
+         CurrentEntry = CurrentEntry->Flink)
+    {
+        Current = CONTAINING_RECORD(CurrentEntry, ADDRESS_FILE, ListEntry);
+        if (Current->WfpEndpointId == EndpointId)
+        {
+            if (AddrFileReferenceLive(Current))
+                Found = Current;
+            break;
+        }
+    }
+    TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
+
+    return Found;
+}
+
 VOID AddrFileFree(
     PVOID Object)
 /*
@@ -376,6 +402,8 @@ VOID AddrFileFree(
   TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
   RemoveEntryList(&AddrFile->ListEntry);
   TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
+
+  WfpShimEndpointClosed(AddrFile->WfpEndpointId);
 
   /* FIXME: Kill TCP connections on this address file object */
 
@@ -495,6 +523,7 @@ NTSTATUS FileOpenAddress(
   AddrFile->BCast = 1;
   AddrFile->HeaderIncl = 1;
   AddrFile->ProcessId = PsGetCurrentProcessId();
+  AddrFile->WfpEndpointId = InterlockedIncrement64(&NextWfpEndpointId);
 
   _SEH2_TRY {
       PTEB Teb;
