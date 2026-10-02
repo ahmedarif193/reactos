@@ -456,6 +456,9 @@ list(APPEND KMTEST_SOURCE
 
     example/Example_user.c
 
+    fltmgr/fltmgr_io/fltmgr_io_user.c
+    fltmgr/fltmgr_scan/fltmgr_scan_user.c
+    fltmgr/fltmgr_tx/fltmgr_tx_user.c
     fltmgr/fltmgr_load/fltmgr_user.c
     fltmgr/fltmgr_register/fltmgr_reg_user.c
 
@@ -506,6 +509,7 @@ add_dependencies(kmtest_drivers
     kmtest_drv
     example_drv
     FltMgrLoad_drv
+    fltmgrio_drv
     fltmgr_create
     fltmgrreg_drv
     hidp_drv

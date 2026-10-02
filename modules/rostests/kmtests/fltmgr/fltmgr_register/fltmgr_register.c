@@ -11,7 +11,6 @@
 
 #include <kmt_test.h>
 #include <fltkernel.h>
-#include <fltmgrint.h>
 
 //#define NDEBUG
 #include <debug.h>
@@ -39,6 +38,15 @@ static PDRIVER_OBJECT TestDriverObject;
 static FLT_REGISTRATION FilterRegistration;
 static PFLT_FILTER TestFilter = NULL;
 
+static
+VOID
+NTAPI
+TestOldDriverUnload(
+    _In_ PDRIVER_OBJECT DriverObject)
+{
+    UNREFERENCED_PARAMETER(DriverObject);
+}
+
 
 
 
@@ -47,9 +55,16 @@ TestFltRegisterFilter(_In_ PDRIVER_OBJECT DriverObject)
 {
     UNICODE_STRING Altitude;
     UNICODE_STRING Name;
+    UNICODE_STRING Actual;
     PFLT_FILTER Filter = NULL;
     PFLT_FILTER Temp = NULL;
     NTSTATUS Status;
+    ULONG BytesReturned;
+    union
+    {
+        FILTER_AGGREGATE_STANDARD_INFORMATION Info;
+        UCHAR Buffer[512];
+    } Aggregate;
 
     RESET_REGISTRATION(FALSE);
 #if 0
@@ -107,15 +122,26 @@ TestFltRegisterFilter(_In_ PDRIVER_OBJECT DriverObject)
     ok_eq_hex(Status, STATUS_FLT_INSTANCE_ALTITUDE_COLLISION);
 
 
-    ok_eq_hex(Filter->Base.Flags, FLT_OBFL_TYPE_FILTER);
+    RtlZeroMemory(&Aggregate, sizeof(Aggregate));
+    Status = FltGetFilterInformation(Filter,
+                                     FilterAggregateStandardInformation,
+                                     &Aggregate,
+                                     sizeof(Aggregate),
+                                     &BytesReturned);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_hex(Aggregate.Info.Flags, FLTFL_ASI_IS_MINIFILTER);
 
     /* Check we have the right filter name */
     RtlInitUnicodeString(&Name, L"Kmtest-FltMgrReg");
-    ok_eq_long(RtlCompareUnicodeString(&Filter->Name, &Name, FALSE), 0);
+    Actual.Length = Actual.MaximumLength = Aggregate.Info.Type.MiniFilter.FilterNameLength;
+    Actual.Buffer = (PWCH)((PUCHAR)&Aggregate + Aggregate.Info.Type.MiniFilter.FilterNameBufferOffset);
+    ok_eq_long(RtlCompareUnicodeString(&Actual, &Name, FALSE), 0);
 
     /* And the altitude is corect */
     RtlInitUnicodeString(&Altitude, L"123456");
-    ok_eq_long(RtlCompareUnicodeString(&Filter->DefaultAltitude, &Altitude, FALSE), 0);
+    Actual.Length = Actual.MaximumLength = Aggregate.Info.Type.MiniFilter.FilterAltitudeLength;
+    Actual.Buffer = (PWCH)((PUCHAR)&Aggregate + Aggregate.Info.Type.MiniFilter.FilterAltitudeBufferOffset);
+    ok_eq_long(RtlCompareUnicodeString(&Actual, &Altitude, FALSE), 0);
 
     //
     // FIXME: More checks
@@ -131,21 +157,15 @@ TestFltRegisterFilter(_In_ PDRIVER_OBJECT DriverObject)
     RESET_REGISTRATION(TRUE);
 
     /* Set a fake unload routine we'll use to test */
-    DriverObject->DriverUnload = (PDRIVER_UNLOAD)0x1234FFFF;
+    DriverObject->DriverUnload = TestOldDriverUnload;
 
     FilterRegistration.FilterUnloadCallback = TestRegFilterUnload;
     Status = FltRegisterFilter(DriverObject, &FilterRegistration, &TestFilter);
     ok_eq_hex(Status, STATUS_SUCCESS);
 
     /* Test all the unlod routines */
-    ok_eq_pointer(TestFilter->FilterUnload, TestRegFilterUnload);
-    ok_eq_pointer(TestFilter->OldDriverUnload, (PFLT_FILTER_UNLOAD_CALLBACK)0x1234FFFF);
-
-    // This should equal the fltmgr's private unload routine, but there's no easy way of testing it...
-    //ok_eq_pointer(DriverObject->DriverUnload, FltpMiniFilterDriverUnload);
-
-    /* Make sure our test address is never actually called */
-    TestFilter->OldDriverUnload = (PFLT_FILTER_UNLOAD_CALLBACK)NULL;
+    ok(DriverObject->DriverUnload != NULL, "DriverUnload is NULL\n");
+    ok(DriverObject->DriverUnload != TestOldDriverUnload, "DriverUnload was not replaced\n");
 
     return TRUE;
 }
