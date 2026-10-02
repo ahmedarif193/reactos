@@ -502,6 +502,10 @@ IopParseDevice(IN PVOID ParseObject,
                                        UserMode,
                                        &AccessState->GenerateOnClose);
             }
+            else if (!DesiredAccess)
+            {
+                AccessGranted = FALSE;
+            }
             else
             {
                 /* Check if we need to do traverse validation */
