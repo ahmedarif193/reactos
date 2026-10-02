@@ -668,12 +668,13 @@ LdrpCreateDllSection(IN PUNICODE_STRING FullName,
         HardErrorParameters[0] = (ULONG_PTR)FullName;
 
         /* Raise the error */
-        ZwRaiseHardError(STATUS_INVALID_IMAGE_FORMAT,
-                         1,
-                         1,
-                         HardErrorParameters,
-                         OptionOk,
-                         &Response);
+        if (LdrpInLdrInit)
+            ZwRaiseHardError(STATUS_INVALID_IMAGE_FORMAT,
+                             1,
+                             1,
+                             HardErrorParameters,
+                             OptionOk,
+                             &Response);
 
         /* Increment the error count */
         if (LdrpInLdrInit) LdrpFatalHardErrorCount++;
