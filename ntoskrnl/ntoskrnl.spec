@@ -2593,8 +2593,8 @@
 @ stub -arch=arm64 KeGetClockTimerResolution
 @ stdcall -arch=win64 KeGetEffectiveIrql()
 @ stub -arch=arm64 KeGetNextClockTickDuration
-@ stdcall -arch=win64 KeGetProcessorIndexFromNumber(ptr)
-@ stdcall -arch=win64 KeGetProcessorNumberFromIndex(long ptr)
+@ stdcall KeGetProcessorIndexFromNumber(ptr)
+@ stdcall KeGetProcessorNumberFromIndex(long ptr)
 @ stub -arch=win64 KeHwPolicyLocateResource
 @ stdcall -arch=win64 KeInitializeAffinityEx(ptr)
 @ stdcall -arch=win64 KeInitializeAffinityEx2(ptr long)
