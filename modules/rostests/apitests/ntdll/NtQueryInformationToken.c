@@ -909,7 +909,7 @@ QueryTokenSessionIdTests(
                                      sizeof(ULONG),
                                      &BufferLength);
     ok_ntstatus(Status, STATUS_SUCCESS);
-    ok(SessionId == 0, "The session ID of current token must be 0 (current session %lu)!\n", SessionId);
+    ok(SessionId == NtCurrentPeb()->SessionId, "The session ID of current token must be %lu (current session %lu)!\n", NtCurrentPeb()->SessionId, SessionId);
 }
 
 static
