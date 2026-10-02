@@ -45,5 +45,6 @@ add_wdfcx_library(msgpioclx gpioclx.c)
 add_wdfcx_library(spbcx spbcx.c)
 add_wdfcx_library(sercx2 sercx2.c)
 add_wdfcx_library(mshwnclx hwnclx.c)
+add_wdfcx_library(ucmcx ucmcx.c)
 
 add_registry_inf(wdfcx_reg.inf)
