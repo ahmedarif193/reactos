@@ -108,6 +108,9 @@ static LSTATUS open_key( HKEY root, const WCHAR *key, REGSAM access, BOOL open, 
 
 static LSTATUS query_value( HKEY hkey, const WCHAR *value, WCHAR *buffer, DWORD len )
 {
+#ifdef __REACTOS__
+    len *= sizeof(WCHAR);
+#endif
     return RegQueryValueExW( hkey, value, NULL, NULL, (BYTE *)buffer, &len );
 }
 
