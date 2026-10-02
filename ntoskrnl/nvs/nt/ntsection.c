@@ -1758,12 +1758,17 @@ MiQuerySectionName(
                 ProbeForWriteSize_t(ReturnLength);
         }
 
-        if (MemoryInformationLength < sizeof(MEMORY_SECTION_NAME) + ModuleName.Length + sizeof(WCHAR))
+        if (MemoryInformationLength < sizeof(MEMORY_SECTION_NAME))
+        {
+            Status = STATUS_INFO_LENGTH_MISMATCH;
+        }
+        else if (MemoryInformationLength < sizeof(MEMORY_SECTION_NAME) + ModuleName.Length + sizeof(WCHAR))
         {
             Status = STATUS_BUFFER_OVERFLOW;
         }
         else
         {
+            RtlZeroMemory(SectionName, sizeof(*SectionName));
             SectionName->SectionFileName.Buffer = (PWSTR)(SectionName + 1);
             SectionName->SectionFileName.Length = ModuleName.Length;
             SectionName->SectionFileName.MaximumLength = ModuleName.Length + sizeof(WCHAR);
