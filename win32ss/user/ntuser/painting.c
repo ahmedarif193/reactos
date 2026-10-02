@@ -2575,7 +2575,6 @@ NtUserInvalidateRect(
     if (!hWnd)
     {
        flags = RDW_ALLCHILDREN | RDW_INVALIDATE | RDW_FRAME | RDW_ERASE | RDW_ERASENOW;
-       lpUnsafeRect = NULL;
     }
     return NtUserRedrawWindow(hWnd, lpUnsafeRect, NULL, flags);
 }
