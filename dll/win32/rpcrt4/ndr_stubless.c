@@ -918,6 +918,9 @@ LONG_PTR WINAPI NdrpClientCall2( PMIDL_STUB_DESC pStubDesc, PFORMAT_STRING pForm
     }
     else
     {
+#ifdef __REACTOS__
+        stubMsg.StubDesc = pStubDesc;
+#endif
         pFormat = convert_old_args( &stubMsg, pFormat, stack_size,
                                     pProcHeader->Oi_flags & Oi_OBJECT_PROC,
                                     old_args, sizeof(old_args), &number_of_params );
