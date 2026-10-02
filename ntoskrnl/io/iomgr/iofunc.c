@@ -197,9 +197,16 @@ IopPerformSynchronousRequest(IN PDEVICE_OBJECT DeviceObject,
     PKNORMAL_ROUTINE NormalRoutine;
     PVOID NormalContext = NULL;
     KIRQL OldIrql;
+    BOOLEAN PortPacket;
     PAGED_CODE();
     IOTRACE(IO_API_DEBUG, "IRP: %p. DO: %p. FO: %p\n",
             Irp, DeviceObject, FileObject);
+
+    PortPacket = !SynchIo &&
+                 (FileObject->Flags & FO_SKIP_COMPLETION_PORT) &&
+                 (FileObject->CompletionContext != NULL) &&
+                 (Irp->Overlay.AsynchronousParameters.UserApcRoutine == NULL) &&
+                 (Irp->Overlay.AsynchronousParameters.UserApcContext != NULL);
 
     /* Queue the IRP */
     IopQueueIrpToThread(Irp);
@@ -255,6 +262,10 @@ IopPerformSynchronousRequest(IN PDEVICE_OBJECT DeviceObject,
 
         /* Release the file lock */
         IopUnlockFileObject(FileObject);
+    }
+    else if (PortPacket && NT_WARNING(Status))
+    {
+        Status = STATUS_PENDING;
     }
 
     /* Return status */
