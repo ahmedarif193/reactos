@@ -631,7 +631,7 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
     if (!FileDir)
         return STATUS_NOT_FOUND;
 
-    FileNameFilter = NtfsCaptureDirSearchPattern(FileCB, FileNameFilter);
+    FileNameFilter = NtfsCaptureDirSearchPattern(FileCB, InitialQuery ? FileNameFilter : NULL);
 
     if (RestartScan)
     {
