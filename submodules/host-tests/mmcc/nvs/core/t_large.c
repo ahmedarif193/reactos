@@ -32,7 +32,10 @@ LargeLifecycle(void)
     Size = 2 * Large;
     Available = MiPfnAvailablePages(&World.System.Pfn);
     for (ULONG Frame = 512; Frame < World.System.Pfn.FrameCount; Frame++)
-        memset(MachineFrame(&World.Machine, Frame), 0xD3, PAGE_SIZE);
+    {
+        if (World.System.Pfn.Pfn[Frame].State != MiPageActive)
+            memset(MachineFrame(&World.Machine, Frame), 0xD3, PAGE_SIZE);
+    }
     Status = MiAllocateVirtualMemory(&Space, &Base, &Size, LARGE_FLAGS, MI_PROT_READWRITE);
     CHECK(NT_SUCCESS(Status));
     if (!NT_SUCCESS(Status))

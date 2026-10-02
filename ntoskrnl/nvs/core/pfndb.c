@@ -19,7 +19,7 @@ MiPfnShardOf(PMI_PFN_DATABASE Db, ULONG Frame, UCHAR State)
     if (State == MiPageStandby || State == MiPageModified)
         return &Db->Shard[Zone + ((Frame >> MI_PFN_LIST_SHARD_SHIFT) & (MI_PFN_SHARDS - 1))];
 
-    return &Db->Shard[Zone + ((Frame >> MI_PFN_SHARD_SHIFT) & (MI_PFN_SHARDS - 1))];
+    return &Db->Shard[Zone + ((Frame >> Db->RegionShift) & (MI_PFN_SHARDS - 1))];
 }
 
 FORCEINLINE
@@ -187,6 +187,19 @@ MiPfnListPop(
     return MI_FRAME_INVALID;
 }
 
+static
+VOID
+MiPfnSetRegionShift(
+    _Inout_ PMI_PFN_DATABASE Db)
+{
+    Db->RegionShift = MI_PFN_SHARD_SHIFT;
+    if (!Db->RegionRotation)
+        return;
+
+    while (Db->DirectFrames != 0 && ((Db->DirectFrames - 1) >> Db->RegionShift) >= MI_PFN_SHARDS)
+        Db->RegionShift++;
+}
+
 VOID
 MiPfnDbInitialize(
     _Out_ PMI_PFN_DATABASE Db,
@@ -201,6 +214,7 @@ MiPfnDbInitialize(
     Db->FrameCount = FrameCount;
     Db->DirectFrames = FrameCount;
     Db->CacheCount = (CpuCount == 0) ? 1 : ((CpuCount > MI_PFN_CPU_CACHES) ? MI_PFN_CPU_CACHES : CpuCount);
+    MiPfnSetRegionShift(Db);
 
     for (i = 0; i < MI_PFN_ZONES * MI_PFN_SHARDS; i++)
     {
@@ -210,7 +224,10 @@ MiPfnDbInitialize(
     }
 
     for (i = 0; i < MI_PFN_CPU_CACHES; i++)
+    {
         MI_SPIN_INIT(&Db->Cache[i].Lock);
+        Db->Cache[i].Rotor = i;
+    }
 
     for (i = 0; i < FrameCount; i++)
     {
@@ -277,6 +294,73 @@ MiPfnRestoreCache(PMI_PFN_DATABASE Db, ULONG Frame)
 
 static
 ULONG
+MiPfnCacheRefillRotated(
+    _Inout_ PMI_PFN_DATABASE Db,
+    _Inout_ PMI_PFN_CPU_CACHE Cache,
+    _In_ UCHAR State,
+    _Inout_ PULONG Frames,
+    _Inout_ PULONG Depth)
+{
+    ULONG Run[MI_PFN_CACHE_BATCH];
+    ULONG Start = Cache->Rotor;
+    ULONG Wanted = (*Depth < MI_PFN_CACHE_BATCH) ? MI_PFN_CACHE_BATCH - *Depth : 0;
+    ULONG Count = 0;
+    ULONG Taken;
+
+    do
+    {
+        ULONG Attempt;
+
+        Taken = 0;
+        for (Attempt = 0; Attempt < MI_PFN_SHARDS && Count < Wanted; Attempt++)
+        {
+            ULONG Index = Start + 2 * Attempt + Attempt / (MI_PFN_SHARDS / 2);
+            PMI_PFN_SHARD Shard = &Db->Shard[Index & (MI_PFN_SHARDS - 1)];
+            PMI_PFN_LIST List = &Shard->List[State];
+            ULONG Limit = (Wanted - Count < MI_PFN_CACHE_RUN) ? Wanted : Count + MI_PFN_CACHE_RUN;
+            KIRQL OldIrql;
+
+            if (MI_PEEK(List->Count) == 0)
+                continue;
+
+            MI_SPIN_ACQUIRE(&Shard->Lock, &OldIrql);
+
+            while (List->Head != MI_FRAME_INVALID && Count < Limit)
+            {
+                ULONG Frame = List->Head;
+                PMI_PFN Entry = &Db->Pfn[Frame];
+
+                List->Head = Entry->Flink;
+                if (List->Head != MI_FRAME_INVALID)
+                    Db->Pfn[List->Head].Blink = MI_FRAME_INVALID;
+                else
+                    List->Tail = MI_FRAME_INVALID;
+
+                List->Count--;
+                Entry->State = MiPageCached;
+                Entry->Flink = Entry->Blink = MI_FRAME_INVALID;
+                Run[Count++] = Frame;
+                Taken++;
+            }
+
+            MI_SPIN_RELEASE(&Shard->Lock, OldIrql);
+        }
+    } while (Taken != 0 && Count < Wanted);
+
+    if (Count != 0)
+    {
+        Cache->Rotor++;
+        Cache->Refills++;
+    }
+
+    while (Count != 0)
+        Frames[(*Depth)++] = Run[--Count];
+
+    return *Depth;
+}
+
+static
+ULONG
 MiPfnCacheRefill(
     _Inout_ PMI_PFN_DATABASE Db,
     _Inout_ PMI_PFN_CPU_CACHE Cache,
@@ -286,6 +370,9 @@ MiPfnCacheRefill(
     _Inout_ PULONG Depth)
 {
     ULONG Attempt;
+
+    if (Db->RegionRotation)
+        return MiPfnCacheRefillRotated(Db, Cache, State, Frames, Depth);
 
     for (Attempt = 0; Attempt < MI_PFN_SHARDS && *Depth < MI_PFN_CACHE_BATCH; Attempt++)
     {
@@ -859,31 +946,43 @@ MiPfnZeroFreePages(
     _Inout_ PMI_PFN_DATABASE Db,
     _In_ ULONG MaximumPages)
 {
+    ULONG RunLength = Db->RegionRotation ? MI_PFN_CACHE_RUN : MaximumPages;
     ULONG Zeroed = 0;
-    ULONG Shard;
+    ULONG Taken;
 
-    for (Shard = 0; Shard < MiPfnShardCount(Db) && Zeroed < MaximumPages; Shard++)
+    do
     {
-        PMI_PFN_LIST List = &Db->Shard[Shard].List[MiPageFree];
+        ULONG Shard;
 
-        while (Zeroed < MaximumPages && MI_PEEK(List->Count) != 0)
+        Taken = 0;
+        for (Shard = 0; Shard < MiPfnShardCount(Db) && Zeroed < MaximumPages; Shard++)
         {
-            ULONG Frame;
-            KIRQL OldIrql;
+            ULONG Run;
 
-            MI_SPIN_ACQUIRE(&Db->Shard[Shard].Lock, &OldIrql);
-            Frame = List->Head;
-            MI_SPIN_RELEASE(&Db->Shard[Shard].Lock, OldIrql);
+            for (Run = 0; Run < RunLength && Zeroed < MaximumPages; Run++)
+            {
+                PMI_PFN_LIST List = &Db->Shard[Shard].List[MiPageFree];
+                ULONG Frame;
+                KIRQL OldIrql;
 
-            if (Frame == MI_FRAME_INVALID || !MiPfnListRemove(Db, Frame, MiPageFree))
-                break;
+                if (MI_PEEK(List->Count) == 0)
+                    break;
 
-            MiPfnRestoreCache(Db, Frame);
-            MiPfnZeroFrame(Db, Frame);
-            MiPfnListInsert(Db, Frame, MiPageZeroed, FALSE);
-            Zeroed++;
+                MI_SPIN_ACQUIRE(&Db->Shard[Shard].Lock, &OldIrql);
+                Frame = List->Head;
+                MI_SPIN_RELEASE(&Db->Shard[Shard].Lock, OldIrql);
+
+                if (Frame == MI_FRAME_INVALID || !MiPfnListRemove(Db, Frame, MiPageFree))
+                    break;
+
+                MiPfnRestoreCache(Db, Frame);
+                MiPfnZeroFrame(Db, Frame);
+                MiPfnListInsert(Db, Frame, MiPageZeroed, FALSE);
+                Zeroed++;
+                Taken++;
+            }
         }
-    }
+    } while (Taken != 0 && Zeroed < MaximumPages);
 
     return Zeroed;
 }
@@ -1280,6 +1379,16 @@ MiPfnDbSetDirectFrames(
         DirectFrames = Db->FrameCount;
 
     Db->DirectFrames = (ULONG)DirectFrames;
+    MiPfnSetRegionShift(Db);
+}
+
+VOID
+MiPfnDbSetRegionRotation(
+    _Inout_ PMI_PFN_DATABASE Db,
+    _In_ BOOLEAN Enable)
+{
+    Db->RegionRotation = Enable;
+    MiPfnSetRegionShift(Db);
 }
 
 #define MI_WINDOW_CLEAN 0

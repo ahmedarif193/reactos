@@ -119,11 +119,14 @@ SysReservedMapping(void)
     ULONG64 Prefix, Header, Physical;
     PVOID Address;
     PMI_PTE First, Second;
+    ULONG Spacer;
     ULONG i;
 
     SysWorldCreate(&World, 1024, 1);
     MiMappingTestSystem = &World.System;
     Prefix = MiReserveSystemPtes(&World.System, 511);
+    Spacer = MiPfnAllocatePage(&World.System.Pfn, 0);
+    CHECK(Spacer != MI_FRAME_INVALID);
     Address = MmAllocateMappingAddress(256 * PAGE_SIZE, Tag);
     CHECK(Address != NULL);
     Header = (ULONG64)(ULONG_PTR)Address - 2 * PAGE_SIZE;
@@ -167,6 +170,7 @@ SysReservedMapping(void)
     MmFreeMappingAddress(Address, Tag);
     for (i = 0; i < 2; i++)
         MiPfnShareDecrement(&World.System.Pfn, (ULONG)Buffer.Frames[i], TRUE);
+    MiPfnShareDecrement(&World.System.Pfn, Spacer, TRUE);
     MiReleaseSystemPtes(&World.System, Prefix, 511);
     SysWorldDestroy(&World, 1024);
     MiMappingTestSystem = NULL;

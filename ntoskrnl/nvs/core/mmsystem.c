@@ -119,6 +119,7 @@ MiSystemInitialize(
     System->CommitLimit = CommitLimit;
     MiPfnDbInitialize(&System->Pfn, PfnArray, FrameCount, CpuCount);
     MiPfnDbSetDirectFrames(&System->Pfn, System->Arch->DirectFrameCount);
+    MiPfnDbSetRegionRotation(&System->Pfn, System->Arch->PrefersRegionRotation);
     System->Pfn.Owner = System;
     MI_SPIN_INIT(&System->SegmentListLock);
     InitializeListHead(&System->SegmentList);

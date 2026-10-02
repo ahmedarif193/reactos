@@ -19,6 +19,7 @@ typedef ULONG_PTR MI_FRAME_NUMBER, *PMI_FRAME_NUMBER;
 #define MI_PFN_CPU_CACHES         64
 #define MI_PFN_CACHE_DEPTH        64
 #define MI_PFN_CACHE_BATCH        32
+#define MI_PFN_CACHE_RUN          4
 
 #define MI_PFN_FLAG_LOCK          0x01
 #define MI_PFN_FLAG_MODIFIED      0x02
@@ -91,6 +92,7 @@ typedef struct _MI_PFN_CPU_CACHE
 {
     MI_SPINLOCK Lock;
     ULONG Depth;
+    ULONG Rotor;
     ULONG ZeroDepth;
     ULONG64 Allocations;
     ULONG64 Refills;
@@ -123,6 +125,8 @@ typedef struct _MI_PFN_DATABASE
     PMI_PFN Pfn;
     ULONG FrameCount;
     ULONG CacheCount;
+    ULONG RegionShift;
+    BOOLEAN RegionRotation;
     MI_PFN_REPURPOSE_ROUTINE Repurpose;
     MI_PFN_NOTIFY_ROUTINE FreeNotify;
     PVOID Owner;
@@ -160,6 +164,7 @@ MiPfnMappingFlags(_In_ PMI_PFN_DATABASE Db, _In_ MI_FRAME_NUMBER Frame, _In_ ULO
 
 VOID MiPfnDbInitialize(_Out_ PMI_PFN_DATABASE Db, _In_ PMI_PFN Array, _In_ ULONG FrameCount, _In_ ULONG CpuCount);
 VOID MiPfnDbSetDirectFrames(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG64 DirectFrames);
+VOID MiPfnDbSetRegionRotation(_Inout_ PMI_PFN_DATABASE Db, _In_ BOOLEAN Enable);
 VOID MiPfnWindowAttach(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG64 Base, _In_ PMI_PTE *Slots, _In_ PUCHAR States,
                        _In_ ULONG SlotCount);
 PVOID MiPfnWindowMap(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);

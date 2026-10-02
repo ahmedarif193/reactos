@@ -83,6 +83,69 @@ PfnLockIrql(PMI_PFN_DATABASE Db)
     CHECK(MiHostIrql == 0);
 }
 
+static
+VOID
+PfnRegionRotation(VOID)
+{
+    static TEST_WORLD World;
+    PMI_PFN_DATABASE Db;
+    ULONG Frames[4 * MI_PFN_CACHE_BATCH];
+    ULONG Seen = 0, Streak = 1, Changes = 0;
+    ULONG i;
+
+    WorldRegionRotation = TRUE;
+    WorldCreate(&World, MI_PFN_SHARDS << 12, 1, 100000);
+    WorldRegionRotation = FALSE;
+    Db = &World.System.Pfn;
+    CHECK(Db->RegionRotation);
+    CHECK(((Db->DirectFrames - 1) >> Db->RegionShift) == MI_PFN_SHARDS - 1);
+
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+    {
+        Frames[i] = MiPfnAllocatePage(Db, 0);
+        CHECK(Frames[i] != MI_FRAME_INVALID);
+        Seen |= 1UL << (Frames[i] >> Db->RegionShift);
+        if (i == 0)
+            continue;
+
+        if ((Frames[i] >> Db->RegionShift) == (Frames[i - 1] >> Db->RegionShift))
+        {
+            if (Db->DirectFrames == Db->FrameCount)
+                CHECK(Frames[i] == Frames[i - 1] + 1);
+            Streak++;
+            CHECK(Streak <= MI_PFN_CACHE_RUN);
+        }
+        else
+        {
+            ULONG Distance = ((Frames[i] >> Db->RegionShift) - (Frames[i - 1] >> Db->RegionShift)) &
+                             (MI_PFN_SHARDS - 1);
+
+            CHECK(Distance != 1 && Distance != MI_PFN_SHARDS - 1);
+            Streak = 1;
+            Changes++;
+        }
+    }
+    CHECK(Seen == (1UL << MI_PFN_SHARDS) - 1);
+    CHECK(Changes >= RTL_NUMBER_OF(Frames) / MI_PFN_CACHE_RUN - 1);
+
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+        MiPfnShareDecrement(Db, Frames[i], TRUE);
+    MiPfnDrainCaches(Db);
+    CHECK(MiPfnDbCheck(Db) == 0);
+
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+    {
+        Frames[i] = MiPfnAllocatePage(Db, 0);
+        CHECK(Frames[i] != MI_FRAME_INVALID);
+    }
+    for (i = MI_PFN_CACHE_RUN; i < RTL_NUMBER_OF(Frames); i++)
+        CHECK((Frames[i] >> Db->RegionShift) != (Frames[i - MI_PFN_CACHE_RUN] >> Db->RegionShift));
+    for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
+        MiPfnShareDecrement(Db, Frames[i], TRUE);
+
+    WorldDestroy(&World);
+}
+
 static ULONG PfnFreeNotifications;
 
 static
@@ -106,6 +169,8 @@ PfnZeroPages(VOID)
 
     WorldCreate(&World, MI_PFN_SHARDS << 12, 1, 100000);
     Db = &World.System.Pfn;
+    CHECK(Db->RegionRotation == World.System.Arch->PrefersRegionRotation);
+    CHECK(Db->RegionRotation || Db->RegionShift == MI_PFN_SHARD_SHIFT);
     Available = MiPfnAvailablePages(Db);
 
     for (i = 0; i < RTL_NUMBER_OF(Frames); i++)
@@ -145,6 +210,8 @@ PfnZeroPages(VOID)
     {
         Frames[i] = MiPfnAllocatePage(Db, MI_ALLOCATE_ZEROED);
         CHECK(Frames[i] != MI_FRAME_INVALID && Db->Pfn[Frames[i]].State == MiPageActive);
+        if (Db->RegionRotation && i >= MI_PFN_CACHE_RUN)
+            CHECK((Frames[i] >> Db->RegionShift) != (Frames[i - MI_PFN_CACHE_RUN] >> Db->RegionShift));
     }
     CHECK(Db->ZeroedOnDemand == OnDemand);
     CHECK(MiPfnDbCheck(Db) == 0);
@@ -181,6 +248,7 @@ TestPfn(void)
     LONG64 Baseline;
     ULONG i;
 
+    PfnRegionRotation();
     PfnZeroPages();
 
     WorldCreate(&World, 4096, 4, 100000);

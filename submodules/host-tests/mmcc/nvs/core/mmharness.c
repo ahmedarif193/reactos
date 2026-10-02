@@ -80,6 +80,8 @@ WorldEnableFaults(TEST_WORLD *World)
     World->Machine.FaultContext = World;
 }
 
+BOOLEAN WorldRegionRotation;
+
 void
 WorldCreate(TEST_WORLD *World, ULONG Frames, ULONG Cpus, LONG64 CommitLimit)
 {
@@ -97,6 +99,8 @@ WorldCreateZoned(TEST_WORLD *World, ULONG Frames, ULONG DirectFrames, ULONG Cpus
     MachineCreate(&World->Machine, Frames, Cpus);
     World->PfnArray = calloc(Frames, sizeof(MI_PFN));
     MiSystemInitialize(&World->System, World->PfnArray, Frames, Cpus, CommitLimit);
+    if (WorldRegionRotation)
+        MiPfnDbSetRegionRotation(&World->System.Pfn, TRUE);
     if (DirectFrames != 0)
     {
         World->Machine.DirectFrames = DirectFrames;

@@ -66,6 +66,7 @@ typedef struct _TEST_WORLD
 #define TEST_FRAMES(n) (n)
 #endif
 
+extern BOOLEAN WorldRegionRotation;
 void WorldCreate(TEST_WORLD *World, ULONG Frames, ULONG Cpus, LONG64 CommitLimit);
 void WorldCreateZoned(TEST_WORLD *World, ULONG Frames, ULONG DirectFrames, ULONG Cpus, LONG64 CommitLimit);
 void WorldDestroy(TEST_WORLD *World);
