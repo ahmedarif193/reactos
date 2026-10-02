@@ -3504,6 +3504,7 @@ typedef struct DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT) _IRP {
         } DUMMYUNIONNAME;
       } DUMMYSTRUCTNAME;
       struct _FILE_OBJECT *OriginalFileObject;
+      PVOID IrpExtension;
     } Overlay;
     KAPC Apc;
     PVOID CompletionKey;

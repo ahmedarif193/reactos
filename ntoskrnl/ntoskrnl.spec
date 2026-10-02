@@ -2419,8 +2419,8 @@
 @ stub -arch=win64 IoCheckLinkShareAccess
 @ stub -arch=win64 IoCheckRedirectionTrustLevel
 @ stub -arch=win64 IoCheckShareAccessEx
-@ stub -arch=win64 IoCleanupIrp
-@ stub -arch=win64 IoClearActivityIdThread
+@ stdcall IoCleanupIrp(ptr)
+@ stdcall IoClearActivityIdThread(ptr)
 @ stub -arch=win64 IoClearAdapterCryptoEngineExtension
 @ stub -arch=win64 IoClearFsTrackOffsetState
 @ stdcall IoClearIrpExtraCreateParameter(ptr)
@@ -2441,7 +2441,7 @@
 @ stub -arch=win64 IoFreeMiniCompletionPacket
 @ stub -arch=win64 IoFreeSfioStreamIdentifier
 @ stdcall IoGetActivityIdIrp(ptr ptr)
-@ stub -arch=win64 IoGetActivityIdThread
+@ stdcall IoGetActivityIdThread()
 @ stub -arch=win64 IoGetAdapterCryptoEngineExtension
 @ stub -arch=win64 IoGetAffinityInterrupt
 @ stub -arch=win64 IoGetBootDiskInformationLite
@@ -2481,7 +2481,7 @@
 @ stub -arch=win64 IoMakeAssociatedIrpEx
 @ stub -arch=win64 IoMapKsrPersistentMemoryEx
 @ stdcall -arch=i386,win64 IoOpenDriverRegistryKey(ptr long long long ptr)
-@ stub -arch=win64 IoPropagateActivityIdToThread
+@ stdcall IoPropagateActivityIdToThread(ptr ptr ptr)
 @ stub -arch=win64 IoPropagateIrpExtension
 @ stub -arch=win64 IoPropagateIrpExtensionEx
 @ stdcall -arch=i386,win64 IoQueryFullDriverPath(ptr ptr)
@@ -2511,8 +2511,8 @@
 @ stub -arch=win64 IoReserveKsrPersistentMemory
 @ stub -arch=win64 IoReserveKsrPersistentMemoryEx
 @ stub -arch=win64 IoResolveDependency
-@ stub -arch=win64 IoSetActivityIdIrp
-@ stub -arch=win64 IoSetActivityIdThread
+@ stdcall IoSetActivityIdIrp(ptr ptr)
+@ stdcall IoSetActivityIdThread(ptr)
 @ stub -arch=win64 IoSetAdapterCryptoEngineExtension
 @ stub -arch=win64 IoSetDependency
 @ stub -arch=win64 IoSetFileObjectIgnoreSharing
@@ -2547,7 +2547,7 @@
 @ stub -arch=win64 IoUpdateLinkShareAccessEx
 @ stub -arch=win64 IoVolumeDeviceNameToGuid
 @ stub -arch=win64 IoVolumeDeviceNameToGuidPath
-@ stub -arch=win64 IoWithinStackLimits
+@ stdcall IoWithinStackLimits(ptr ptr)
 @ stub -arch=win64 IoWriteKsrPersistentMemory
 @ stub -arch=win64 IofGetDriverProxyWrapperFromEndpoint
 @ stub -arch=arm64 KdAcquireDebuggerLock

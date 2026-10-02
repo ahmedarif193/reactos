@@ -28,16 +28,36 @@ IopFreeIrpKernelApc(IN PKAPC Apc,
                     IN PVOID *SystemArgument1,
                     IN PVOID *SystemArgument2)
 {
+    PIRP Irp = CONTAINING_RECORD(Apc, IRP, Tail.Apc);
+
     /* Free the IRP */
-    IoFreeIrp(CONTAINING_RECORD(Apc, IRP, Tail.Apc));
+    Irp->Tail.Overlay.IrpExtension = NULL;
+    IoFreeIrp(Irp);
 }
 
 VOID
 NTAPI
 IopAbortIrpKernelApc(IN PKAPC Apc)
 {
+    PIRP Irp = CONTAINING_RECORD(Apc, IRP, Tail.Apc);
+
     /* Free the IRP */
-    IoFreeIrp(CONTAINING_RECORD(Apc, IRP, Tail.Apc));
+    Irp->Tail.Overlay.IrpExtension = NULL;
+    IoFreeIrp(Irp);
+}
+
+VOID
+NTAPI
+IopFreeIrpExtension(
+    _Inout_ PIRP Irp)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if (Extension != NULL)
+    {
+        Irp->Tail.Overlay.IrpExtension = NULL;
+        ExFreePoolWithTag(Extension, TAG_IRP_EXTENSION);
+    }
 }
 
 NTSTATUS
@@ -250,6 +270,7 @@ IopCompleteRequest(IN PKAPC Apc,
     /* Get data from the APC */
     FileObject = (PFILE_OBJECT)*SystemArgument1;
     Irp = CONTAINING_RECORD(Apc, IRP, Tail.Apc);
+    Irp->Tail.Overlay.IrpExtension = NULL;
     IOTRACE(IO_IRP_DEBUG,
             "%s - Completing IRP %p for %p\n",
             __FUNCTION__,
@@ -1491,6 +1512,8 @@ IofCompleteRequest(IN PIRP Irp,
         }
     }
 
+    IopFreeIrpExtension(Irp);
+
     /* Check if the IRP is an associated IRP */
     if (Irp->Flags & IRP_ASSOCIATED_IRP)
     {
@@ -1777,6 +1800,8 @@ IoFreeIrp(IN PIRP Irp)
     ASSERT(Irp->Type == IO_TYPE_IRP);
     ASSERT(IsListEmpty(&Irp->ThreadListEntry));
     ASSERT(Irp->CurrentLocation >= Irp->StackCount);
+
+    IopFreeIrpExtension(Irp);
 
     /* Get the PRCB */
     Prcb = KeGetCurrentPrcb();
@@ -2072,6 +2097,7 @@ IoReuseIrp(IN OUT PIRP Irp,
            IN NTSTATUS Status)
 {
     UCHAR AllocationFlags;
+    PVOID IrpExtension;
     IOTRACE(IO_IRP_DEBUG,
             "%s - Reusing IRP %p\n",
             __FUNCTION__,
@@ -2083,6 +2109,7 @@ IoReuseIrp(IN OUT PIRP Irp,
 
     /* Get the old flags */
     AllocationFlags = Irp->AllocationFlags;
+    IrpExtension = Irp->Tail.Overlay.IrpExtension;
 
     /* Reinitialize the IRP */
     IoInitializeIrp(Irp, Irp->Size, Irp->StackCount);
@@ -2090,6 +2117,7 @@ IoReuseIrp(IN OUT PIRP Irp,
     /* Duplicate the data */
     Irp->IoStatus.Status = Status;
     Irp->AllocationFlags = AllocationFlags;
+    Irp->Tail.Overlay.IrpExtension = IrpExtension;
 }
 
 /*
@@ -2154,8 +2182,102 @@ IoGetActivityIdIrp(
     _In_ PIRP Irp,
     _Out_ LPGUID Guid)
 {
+    PIOP_IRP_EXTENSION Extension;
+
     if ((Irp == NULL) || (Guid == NULL))
         return STATUS_INVALID_PARAMETER;
 
-    return STATUS_NOT_FOUND;
+    Extension = Irp->Tail.Overlay.IrpExtension;
+    if ((Extension == NULL) || !(Extension->TypesAllocated & IOP_IRP_EXTENSION_ACTIVITY_ID))
+        return STATUS_NOT_FOUND;
+
+    *Guid = Extension->ActivityId;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+IoSetActivityIdIrp(
+    _Inout_ PIRP Irp,
+    _In_opt_ LPCGUID Guid)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if (Guid == NULL)
+    {
+        if (Extension != NULL)
+        {
+            Extension->TypesAllocated &= ~IOP_IRP_EXTENSION_ACTIVITY_ID;
+            if (Extension->TypesAllocated == 0)
+                IopFreeIrpExtension(Irp);
+        }
+
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (Extension == NULL)
+    {
+        Extension = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Extension), TAG_IRP_EXTENSION);
+        if (Extension == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        Extension->Allocated = 1;
+        Irp->Tail.Overlay.IrpExtension = Extension;
+    }
+
+    Extension->ActivityId = *Guid;
+    Extension->TypesAllocated |= IOP_IRP_EXTENSION_ACTIVITY_ID;
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+IoCleanupIrp(
+    _Inout_ PIRP Irp)
+{
+    IopFreeIrpExtension(Irp);
+}
+
+LPCGUID
+NTAPI
+IoGetActivityIdThread(VOID)
+{
+    return PsGetCurrentThread()->ActivityId;
+}
+
+LPCGUID
+NTAPI
+IoSetActivityIdThread(
+    _In_ LPCGUID ActivityId)
+{
+    PETHREAD Thread = PsGetCurrentThread();
+    LPCGUID OriginalId = Thread->ActivityId;
+
+    Thread->ActivityId = ActivityId;
+    return OriginalId;
+}
+
+VOID
+NTAPI
+IoClearActivityIdThread(
+    _In_ LPCGUID OriginalId)
+{
+    PsGetCurrentThread()->ActivityId = OriginalId;
+}
+
+NTSTATUS
+NTAPI
+IoPropagateActivityIdToThread(
+    _In_ PIRP Irp,
+    _Out_ LPGUID PropagatedId,
+    _Outptr_ LPCGUID *OriginalId)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if ((Extension == NULL) || !(Extension->TypesAllocated & IOP_IRP_EXTENSION_ACTIVITY_ID))
+        return STATUS_NOT_FOUND;
+
+    *PropagatedId = Extension->ActivityId;
+    *OriginalId = IoSetActivityIdThread(PropagatedId);
+    return STATUS_SUCCESS;
 }

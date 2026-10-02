@@ -1955,6 +1955,15 @@ IoReuseIrp(
   _Inout_ PIRP Irp,
   _In_ NTSTATUS Status);
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS1)
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+IoCleanupIrp(
+  _Inout_ PIRP Irp);
+#endif
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTKERNELAPI
@@ -2921,6 +2930,46 @@ NTAPI
 IoGetActivityIdIrp(
   _In_ PIRP Irp,
   _Out_ LPGUID Guid);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoSetActivityIdIrp(
+  _Inout_ PIRP Irp,
+  _In_opt_ LPCGUID Guid);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoPropagateActivityIdToThread(
+  _In_ PIRP Irp,
+  _Out_ LPGUID PropagatedId,
+  _Outptr_ LPCGUID *OriginalId);
+
+NTKERNELAPI
+LPCGUID
+NTAPI
+IoSetActivityIdThread(
+  _In_ LPCGUID ActivityId);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoClearActivityIdThread(
+  _In_ LPCGUID OriginalId);
+
+NTKERNELAPI
+LPCGUID
+NTAPI
+IoGetActivityIdThread(
+  VOID);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoTransferActivityId(
+  _In_ LPCGUID ActivityId,
+  _In_ LPCGUID RelatedActivityId);
 #endif
 
 $endif (_NTDDK_)

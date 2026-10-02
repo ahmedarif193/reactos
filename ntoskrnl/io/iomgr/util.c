@@ -107,6 +107,20 @@ IoGetStackLimits(OUT PULONG_PTR LowLimit,
     }
 }
 
+LOGICAL
+NTAPI
+IoWithinStackLimits(
+    _In_ ULONG_PTR RegionStart,
+    _In_ SIZE_T RegionSize)
+{
+    ULONG_PTR LowLimit, HighLimit;
+
+    IoGetStackLimits(&LowLimit, &HighLimit);
+
+    return (RegionStart >= LowLimit) &&
+           (RegionStart + RegionSize <= HighLimit);
+}
+
 /*
  * @implemented
  */

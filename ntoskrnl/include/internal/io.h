@@ -354,6 +354,58 @@ typedef struct _IOP_MINI_COMPLETION_PACKET
 
 VOID NTAPI IopReleaseWaitCompletionPacket(PIOP_MINI_COMPLETION_PACKET Packet);
 
+#define IOP_IRP_EXTENSION_ACTIVITY_ID 0x0001
+
+typedef struct _IOP_IRP_EXTENSION
+{
+    union
+    {
+        USHORT ExtensionFlags;
+        struct
+        {
+            USHORT Allocated : 1;
+            USHORT PropagateId : 1;
+            USHORT SpareBits : 14;
+        };
+    };
+    USHORT TypesAllocated;
+    UCHAR GenericExtension[4];
+    PVOID VerifierContext;
+    ULONG64 DiskIoAttributionHandle;
+    GUID ActivityId;
+    union
+    {
+        LARGE_INTEGER Timestamp;
+        ULONG ZeroingOffset;
+        struct
+        {
+            PVOID FsTrackOffsetBlob;
+            LONGLONG FsTrackedOffset;
+        };
+        PVOID AdapterCryptoParameters;
+    };
+    union
+    {
+        ULONG64 Value;
+        struct
+        {
+            ULONG64 UserFlags : 32;
+            ULONG64 SystemFlags : 16;
+            ULONG64 UserFlagsId : 16;
+        };
+    } DriverFlags;
+    COPY_INFORMATION CopyInformation;
+} IOP_IRP_EXTENSION, *PIOP_IRP_EXTENSION;
+
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(IRP, Tail.Overlay.IrpExtension) == 0xC8);
+C_ASSERT(sizeof(PVOID) != 8 || sizeof(IRP) == 0xD0);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(IOP_IRP_EXTENSION, ActivityId) == 0x18);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(IOP_IRP_EXTENSION, DriverFlags) == 0x38);
+C_ASSERT(sizeof(PVOID) != 8 || FIELD_OFFSET(IOP_IRP_EXTENSION, CopyInformation) == 0x40);
+C_ASSERT(sizeof(PVOID) != 8 || sizeof(IOP_IRP_EXTENSION) == 0x50);
+
+VOID NTAPI IopFreeIrpExtension(_Inout_ PIRP Irp);
+
 //
 // I/O Completion Context for IoSetIoCompletionRoutineEx
 //
