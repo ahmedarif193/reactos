@@ -1137,6 +1137,8 @@ LdrpMapDll(IN PWSTR SearchPath OPTIONAL,
     UNICODE_STRING IllegalDll;
     PVOID RelocData;
     ULONG RelocDataSize = 0;
+    SECTION_IMAGE_INFORMATION ImageInformation;
+    BOOLEAN DataImage = FALSE;
 
     // FIXME: AppCompat stuff is missing
 
@@ -1313,8 +1315,21 @@ SkipCheck:
         return STATUS_INVALID_IMAGE_FORMAT;
     }
 
+    if (sizeof(PVOID) == sizeof(ULONG64) &&
+        NtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
+        NT_SUCCESS(NtQuerySection(SectionHandle,
+                                  SectionImageInformation,
+                                  &ImageInformation,
+                                  sizeof(ImageInformation),
+                                  NULL)) &&
+        !ImageInformation.ImageContainsCode)
+    {
+        DataImage = TRUE;
+        Status = STATUS_SUCCESS;
+    }
+
 #ifdef _WIN64
-    if (NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    if (!DataImage && NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
 #else
     if (NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
 #endif
@@ -1431,7 +1446,7 @@ SkipCheck:
     else
     {
         /* The image was valid. Is it a DLL? */
-        if (NtHeaders->FileHeader.Characteristics & IMAGE_FILE_DLL)
+        if ((NtHeaders->FileHeader.Characteristics & IMAGE_FILE_DLL) && !DataImage)
         {
             /* Set the DLL Flag */
             LdrEntry->Flags |= LDRP_IMAGE_DLL;

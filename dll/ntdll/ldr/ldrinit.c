@@ -585,11 +585,13 @@ NTAPI
 LdrpFetchAddressOfSecurityCookie(PVOID BaseAddress, ULONG SizeOfImage)
 {
     PIMAGE_LOAD_CONFIG_DIRECTORY ConfigDir;
+    PIMAGE_NT_HEADERS NtHeaders;
     ULONG DirSize;
     PVOID Cookie = NULL;
 
     /* Check NT header first */
-    if (!RtlImageNtHeader(BaseAddress)) return NULL;
+    NtHeaders = RtlImageNtHeader(BaseAddress);
+    if (!NtHeaders || NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR_MAGIC) return NULL;
 
     /* Get the pointer to the config directory */
     ConfigDir = RtlImageDirectoryEntryToData(BaseAddress,
