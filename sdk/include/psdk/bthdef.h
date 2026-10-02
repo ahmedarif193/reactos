@@ -8,6 +8,12 @@
 
 #include <_mingw_unicode.h>
 
+#ifndef GUID_DEFS_ONLY
+#ifndef NO_BTHSDPDEF_INC
+#include <bthsdpdef.h>
+#endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -635,6 +641,14 @@ typedef enum _AUTHENTICATION_REQUIREMENTS {
 #define LMP_POWER_CONTROL(X) GET_BIT(X, 18)
 #define LMP_TRANSPARENT_SCO_DATA(X) GET_BIT(X, 19)
 #define LMP_FLOW_CONTROL_LAG(X) GET_BITS(X, 20, 0x3)
+
+#if ((NTDDI_VERSION >= NTDDI_WINXPSP2))
+#if !defined(GUID_DEFS_ONLY)
+
+#define BTH_MAX_SERVICE_NAME_SIZE   (256)
+
+#endif
+#endif
 
 #ifdef __cplusplus
 }
