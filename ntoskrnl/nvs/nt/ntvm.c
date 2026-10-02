@@ -1374,21 +1374,21 @@ MiReadWriteVirtualMemory(
     {
         Status = ObReferenceObjectByHandle(ProcessHandle, Write ? PROCESS_VM_WRITE : PROCESS_VM_READ, PsProcessType,
                                            PreviousMode, (PVOID *)&Process, NULL);
-        if (!NT_SUCCESS(Status))
-            return Status;
-
-        if (Write)
+        if (NT_SUCCESS(Status))
         {
-            Status = MmCopyVirtualMemory(PsGetCurrentProcess(), Buffer, Process, BaseAddress, NumberOfBytes,
-                                         PreviousMode, &Done);
-        }
-        else
-        {
-            Status = MmCopyVirtualMemory(Process, BaseAddress, PsGetCurrentProcess(), Buffer, NumberOfBytes,
-                                         PreviousMode, &Done);
-        }
+            if (Write)
+            {
+                Status = MmCopyVirtualMemory(PsGetCurrentProcess(), Buffer, Process, BaseAddress, NumberOfBytes,
+                                             PreviousMode, &Done);
+            }
+            else
+            {
+                Status = MmCopyVirtualMemory(Process, BaseAddress, PsGetCurrentProcess(), Buffer, NumberOfBytes,
+                                             PreviousMode, &Done);
+            }
 
-        ObDereferenceObject(Process);
+            ObDereferenceObject(Process);
+        }
     }
 
     if (NumberOfBytesDone != NULL)
