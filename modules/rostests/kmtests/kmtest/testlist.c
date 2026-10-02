@@ -48,6 +48,9 @@ KMT_TESTFUNC Test_RtlUnicodeString;
 KMT_TESTFUNC Test_TcpIpIoctl;
 KMT_TESTFUNC Test_TcpIpTdi;
 KMT_TESTFUNC Test_TcpIpConnect;
+KMT_TESTFUNC Test_WfpTcp;
+KMT_TESTFUNC Test_WfpUdp;
+KMT_TESTFUNC Test_WfpUser;
 
 /* tests with a leading '-' will not be listed */
 const KMT_TEST TestList[] =
@@ -92,6 +95,9 @@ const KMT_TEST TestList[] =
     { "RtlUnicodeString",             Test_RtlUnicodeString },
     { "TcpIpTdi",                     Test_TcpIpTdi },
     { "TcpIpConnect",                 Test_TcpIpConnect },
+    { "WfpTcp",                       Test_WfpTcp },
+    { "WfpUdp",                       Test_WfpUdp },
+    { "WfpUser",                      Test_WfpUser },
 #ifdef _M_AMD64
     { "RtlCaptureContextUM",          Test_RtlCaptureContext },
 #endif
