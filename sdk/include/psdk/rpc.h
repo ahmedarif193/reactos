@@ -1,5 +1,5 @@
 
-#if !defined( RPC_NO_WINDOWS_H ) && !defined( MAC ) && !defined( _MAC )
+#if !defined( RPC_NO_WINDOWS_H ) && !defined( MAC ) && !defined( _MAC ) && !defined(_KRPCENV_)
 #ifndef _INC_WINDOWS
 #include <windows.h>
 #endif /* _INC_WINDOWS */
@@ -116,7 +116,9 @@ typedef int RPC_STATUS;
     /* #include <rpcnsi.h> */
     #include <rpcnterr.h>
     #include <excpt.h>
+#if !defined(_KRPCENV_)
     #include <winerror.h>
+#endif
 
     #define RpcTryExcept _SEH2_TRY
     #define RpcExcept(expr) _SEH2_EXCEPT((expr))
@@ -132,7 +134,7 @@ typedef int RPC_STATUS;
     #include <poppack.h>
 #endif
 
-#ifndef RPC_NO_WINDOWS_H
+#if !defined(RPC_NO_WINDOWS_H) && !defined(_KRPCENV_)
 #include <rpcasync.h>
 #endif
 

@@ -218,6 +218,8 @@ typedef struct _RPC_POLICY
   ULONG NICFlags;
 } RPC_POLICY,  *PRPC_POLICY;
 
+#ifndef _AUTH_IDENTITY_DEFINED
+#define _AUTH_IDENTITY_DEFINED
 typedef struct _SEC_WINNT_AUTH_IDENTITY_W
 {
     unsigned short* User;
@@ -228,6 +230,7 @@ typedef struct _SEC_WINNT_AUTH_IDENTITY_W
     ULONG PasswordLength;
     ULONG Flags;
 } SEC_WINNT_AUTH_IDENTITY_W, *PSEC_WINNT_AUTH_IDENTITY_W;
+#endif
 
 typedef struct _SEC_WINNT_AUTH_IDENTITY_A
 {

@@ -210,6 +210,7 @@ list(APPEND SOURCE
     cmdtreeiid.c
     ctffunc_g.c
     devpkey.c
+    fwpguid.c
 #    ctfspui_g.c
 #    hnclsid.c
     ieguids.c
