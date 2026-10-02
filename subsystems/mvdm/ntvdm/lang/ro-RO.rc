@@ -12,7 +12,7 @@ STRINGTABLE
 BEGIN
     IDS_CAPTURE_MOUSE, "&Captează indicatorul de mouse"
     IDS_RELEASE_MOUSE, "&Eliberează indicatorul de mouse"
-    IDS_VDM_MENU     , "ReactOS &VDM"
+    IDS_VDM_MENU     , "LiberNT &VDM"
 END
 
 STRINGTABLE
@@ -21,7 +21,7 @@ BEGIN
     IDS_VDM_DUMPMEM_BIN ,   "Captură memorie (&binară)"
     IDS_VDM_MOUNT_FLOPPY,   "Introduceți o dischetă în discul %d <%s>..."
     IDS_VDM_EJECT_FLOPPY,   "Scoateți discheta din discul %d"
-    IDS_VDM_QUIT        ,   "I&eșire din ReactOS VDM"
+    IDS_VDM_QUIT        ,   "I&eșire din LiberNT VDM"
 END
 
 STRINGTABLE

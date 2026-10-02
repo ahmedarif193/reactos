@@ -288,7 +288,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "ReactOS Geräte-Manager"
+  IDS_APPNAME               "LiberNT Geräte-Manager"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Dieses Gerät zu deaktivieren wird dessen Funktion einstellen.\nWollen Sie es wirklich deaktivieren?"
   IDS_CONFIRM_UNINSTALL     "Warnung: Sie sind dabei, dieses Gerät deinstallieren\nMöchten Sie den Vorgang fortsetzen?"
@@ -335,7 +335,7 @@ BEGIN
   IDS_HINT_UPDATE       " Startet den Treibersoftware aktualisieren Assistenten für das ausgewählte Gerät."
   IDS_HINT_UNINSTALL    " Deinstalliert den Treiber für das ausgewählte Gerät."
   IDS_HINT_ADD          " Fügt ein Legacy (nicht Plug & Play) Gerät dem Computer hinzu."
-  IDS_HINT_ABOUT        " Über ReactOS Geräte-Manager."
+  IDS_HINT_ABOUT        " Über LiberNT Geräte-Manager."
   IDS_HINT_EXIT         " Beendet das Programm."
 
   IDS_HINT_DEV_BY_TYPE  " Zeigt Geräte nach Hardwaretyp an."

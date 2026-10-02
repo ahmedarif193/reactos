@@ -340,6 +340,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "ReactOS Explorer"
-    IDS_PARSE_ADDR_ERR_TEXT "ReactOS Explorer cannot find '%1'. Check the spelling and try again."
+    IDS_PARSE_ADDR_ERR_TITLE "LiberNT Explorer"
+    IDS_PARSE_ADDR_ERR_TEXT "LiberNT Explorer cannot find '%1'. Check the spelling and try again."
 END

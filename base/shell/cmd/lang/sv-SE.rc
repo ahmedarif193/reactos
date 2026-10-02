@@ -310,7 +310,7 @@ Ledetexten kan bli satt sammen av normale tegn och følgende spesielle koder:\n\
   $Q   = (likhetstegn)\n\
   $S   (space)\n\
   $T   aktuell klokkeslett\n\
-  $V   Versionsnummer för ReactOS\n\
+  $V   Versionsnummer för LiberNT\n\
   $_   Retur och linjeskift\n\
   $$   $ (dollar tegn)\n"
     STRING_PROMPT_HELP2 "  $+   Visa aktuell dybde av mappstakken"
@@ -497,10 +497,10 @@ tittel        ny tittel\n"
     STRING_ERROR_UNEXPECTED "%s was unexpected.\n"
     STRING_ERROR_WHILE_PROCESSING "Error occurred while processing: %s.\n"
     STRING_SET_ENV_ERROR "Environment variable '%s' is not defined\n"
-    STRING_CMD_INFOLINE "  ReactOS Command Prompt                                      Type HELP = Help  "
+    STRING_CMD_INFOLINE "  LiberNT Command Prompt                                      Type HELP = Help  "
     STRING_CMD_COPYRIGHT "(C) Copyright 2026 LiberNT Team.\n(C) Copyright 1996-%s ReactOS Team.\n"
     STRING_REACTOS_VERSION "LiberNT [Version %s %s]\n"
-    STRING_CMD_SHELLINFO "\nReactOS Kommandotolk\nVersion %s %s"
+    STRING_CMD_SHELLINFO "\nLiberNT Kommandotolk\nVersion %s %s"
     STRING_VERSION_RUNNING_ON "Körs på: "
     STRING_VERSION_RUNVER "%s [Version %d.%d.%d] %s"
     STRING_COPY_FILE "        %d file(r) kopierades\n"

@@ -11,7 +11,7 @@ LANGUAGE LANG_GERMAN, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nReactOS-IP-Konfiguration\n\n"
+    IDS_HEADER "\nLiberNT-IP-Konfiguration\n\n"
     IDS_HOSTNAME            "\tHostname. . . . . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tPrimäres DNS-Suffix . . . . . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tKnotentyp . . . . . . . . . . . . : Broadcast\n"

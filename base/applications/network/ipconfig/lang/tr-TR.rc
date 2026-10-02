@@ -10,7 +10,7 @@ LANGUAGE LANG_TURKISH, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nReactOS IP Configuration\n\n"
+    IDS_HEADER "\nLiberNT IP Configuration\n\n"
     IDS_HOSTNAME            "\tHost Name . . . . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tPrimary DNS Suffix. . . . . . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tNode Type . . . . . . . . . . . . : Yayın\n"

@@ -10,7 +10,7 @@ LANGUAGE LANG_SLOVAK, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "Zobrazovač obrázkov a faxov systému ReactOS"
+    IDS_APPTITLE "Zobrazovač obrázkov a faxov systému LiberNT"
     IDS_SETASDESKBG "Nastaviť ako pozadie pracovnej plochy"
     IDS_NOPREVIEW "Náhľad nie je k dispozícii."
     IDS_PREVIEW "Náhľad"

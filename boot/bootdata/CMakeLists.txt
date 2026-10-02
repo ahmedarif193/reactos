@@ -167,7 +167,7 @@ add_livecd_shortcut("Read Me"
     "shell:windows\\readme.txt"
     ICON "${envvar_systemroot}\\system32\\shell32.dll" ICON_INDEX -152
     DESTINATION "${dir_allusers_desktop}")
-add_livecd_shortcut("ReactOS Explorer"
+add_livecd_shortcut("LiberNT Explorer"
     "shell:windows\\explorer.exe" ICON_INDEX 1
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_programs}" "${dir_quicklaunch}")

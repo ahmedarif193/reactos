@@ -13,7 +13,7 @@ LANGUAGE LANG_TURKISH, SUBLANG_DEFAULT
 /* Basic application information */
 STRINGTABLE
 BEGIN
-    IDS_APP_HEADER "ReactOS DiskPart"
+    IDS_APP_HEADER "LiberNT DiskPart"
     IDS_APP_USAGE "\nDisk Bölümlendirme Yorumlayıcısı.\n\n\
 Kullanım: DISKPART [/S dosya adı] [/T zaman aşımı] [/?]\n\n\
 /S dosya adı\tVerilen betiği çalıştırır.\n\

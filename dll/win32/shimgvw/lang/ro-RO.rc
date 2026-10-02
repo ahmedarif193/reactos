@@ -10,7 +10,7 @@ LANGUAGE LANG_ROMANIAN, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "Vizualizator ReactOS de imagini şi fax"
+    IDS_APPTITLE "Vizualizator LiberNT de imagini şi fax"
     IDS_SETASDESKBG "&Stabilire ca fundal pentru desktop"
     IDS_NOPREVIEW "Examinarea nu e disponibilă."
     IDS_PREVIEW "E&xaminare"

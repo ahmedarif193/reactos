@@ -942,7 +942,7 @@ OwnerPageDlgProc(HWND hwndDlg,
                     {
                         if (0 == LoadStringW(hDllInstance, IDS_REACTOS_SETUP, Title, ARRAYSIZE(Title)))
                         {
-                            wcscpy(Title, L"ReactOS Setup");
+                            wcscpy(Title, L"LiberNT Setup");
                         }
                         if (0 == LoadStringW(hDllInstance, IDS_WZD_NAME, ErrorName, ARRAYSIZE(ErrorName)))
                         {
@@ -998,7 +998,7 @@ WriteComputerSettings(WCHAR * ComputerName, HWND hwndDlg)
         {
             if (0 == LoadStringW(hDllInstance, IDS_REACTOS_SETUP, Title, ARRAYSIZE(Title)))
             {
-                wcscpy(Title, L"ReactOS Setup");
+                wcscpy(Title, L"LiberNT Setup");
             }
             if (0 == LoadStringW(hDllInstance, IDS_WZD_SETCOMPUTERNAME, ErrorComputerName,
                                  ARRAYSIZE(ErrorComputerName)))
@@ -1144,7 +1144,7 @@ ComputerPageDlgProc(HWND hwndDlg,
 
     if (0 == LoadStringW(hDllInstance, IDS_REACTOS_SETUP, Title, ARRAYSIZE(Title)))
     {
-        wcscpy(Title, L"ReactOS Setup");
+        wcscpy(Title, L"LiberNT Setup");
     }
 
     switch (uMsg)
@@ -1961,7 +1961,7 @@ WriteDateTimeSettings(HWND hwndDlg, PSETUPDATA SetupData)
     {
         if (0 == LoadStringW(hDllInstance, IDS_REACTOS_SETUP, Title, ARRAYSIZE(Title)))
         {
-            wcscpy(Title, L"ReactOS Setup");
+            wcscpy(Title, L"LiberNT Setup");
         }
         if (0 == LoadStringW(hDllInstance, IDS_WZD_LOCALTIME, ErrorLocalTime,
                              ARRAYSIZE(ErrorLocalTime)))
@@ -2574,7 +2574,7 @@ ShowItemError(
         if (LoadStringW(hDllInstance, IDS_REACTOS_SETUP,
                         Title, ARRAYSIZE(Title)) == 0)
         {
-            wcscpy(Title, L"ReactOS Setup");
+            wcscpy(Title, L"LiberNT Setup");
         }
 
         MessageBoxW(hwndDlg, ErrorMessage, Title, MB_ICONERROR | MB_OK);
@@ -2618,7 +2618,7 @@ ShowStepError(
         if (LoadStringW(hDllInstance, IDS_REACTOS_SETUP,
                         Title, ARRAYSIZE(Title)) == 0)
         {
-            wcscpy(Title, L"ReactOS Setup");
+            wcscpy(Title, L"LiberNT Setup");
         }
 
         MessageBoxW(hwndDlg, ErrorMessage,
@@ -3494,7 +3494,7 @@ InstallWizard(VOID)
         LogItem(NULL, L"SetupData allocation failed!");
         MessageBoxW(NULL,
                     L"Setup failed to allocate global data!",
-                    L"ReactOS Setup",
+                    L"LiberNT Setup",
                     MB_ICONERROR | MB_OK);
         goto done;
     }
@@ -3524,7 +3524,7 @@ InstallWizard(VOID)
         LogItem(NULL, L"Page array allocation failed!");
         MessageBoxW(NULL,
                     L"Setup failed to allocate page array!",
-                    L"ReactOS Setup",
+                    L"LiberNT Setup",
                     MB_ICONERROR | MB_OK);
         goto done;
     }

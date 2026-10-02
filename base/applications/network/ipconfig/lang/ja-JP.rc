@@ -9,7 +9,7 @@ LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nReactOS IP 設定\n\n"
+    IDS_HEADER "\nLiberNT IP 設定\n\n"
     IDS_HOSTNAME            "\tホスト名  . . . . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tプライマリ DNS サフィックス . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tノードの種類  . . . . . . . . . . : ブロードキャスト\n"

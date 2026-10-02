@@ -350,6 +350,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "ReactOS Gezgini"
-    IDS_PARSE_ADDR_ERR_TEXT "ReactOS Gezgini '%1' ögesini bulamadı. Girdiğiniz değeri kontrol edin ve yeniden arayın."
+    IDS_PARSE_ADDR_ERR_TITLE "LiberNT Gezgini"
+    IDS_PARSE_ADDR_ERR_TEXT "LiberNT Gezgini '%1' ögesini bulamadı. Girdiğiniz değeri kontrol edin ve yeniden arayın."
 END

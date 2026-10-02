@@ -314,7 +314,7 @@ BEGIN
     IDS_HINT_DETAILS " Visa information om varje objekt i ett fönster."
     IDS_HINT_CUST " Anpassa vy."
     IDS_HINT_HELP " Visa hjälpfönstret."
-    IDS_HINT_ABOUT " Om ReactOS tjänster."
+    IDS_HINT_ABOUT " Om LiberNT tjänster."
     IDS_HINT_SYS_RESTORE " Återställ fönstret till normal storlek."
     IDS_HINT_SYS_MOVE " Flytta detta fönstret."
     IDS_HINT_SYS_SIZE " Ändra storleken på dette fönstret."
@@ -326,7 +326,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "ReactOS tjänster"
+    IDS_APPNAME "LiberNT tjänster"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

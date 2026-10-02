@@ -231,8 +231,8 @@ static void NavSystem(HDC hdc, int x, int *py, int cx)
 {
     int y = *py;
     y += DrawLinkText(hdc, x, y, cx, L"Device Manager", g_f.hfText, LA_COMMAND, 0, NULL, L"%SystemRoot%\\system32\\devmgmt.exe", L"View and update your hardware's settings and driver software.", TRUE) + S(6);
-    y += DrawLinkText(hdc, x, y, cx, L"Remote settings", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(6);
-    y += DrawLinkText(hdc, x, y, cx, L"System protection", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(6);
+    y += DrawLinkText(hdc, x, y, cx, L"Remote settings", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(6);
+    y += DrawLinkText(hdc, x, y, cx, L"System protection", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(6);
     y += DrawLinkText(hdc, x, y, cx, L"Advanced system settings", g_f.hfText, LA_COMMAND, 0, NULL, L"%SystemRoot%\\system32\\rundll32.exe shell32.dll,Control_RunDLL sysdm.cpl,,2", L"Performance, user profiles, environment variables, startup and recovery.", TRUE) + S(6);
     *py = y;
 }
@@ -487,10 +487,10 @@ static void NavPower(HDC hdc, int x, int *py, int cx, LPCWSTR pszPage)
     int adv = AdvancedTabIndex();
     WCHAR szCmd[128];
     StringCchPrintfW(szCmd, _countof(szCmd), L"%%SystemRoot%%\\system32\\rundll32.exe shell32.dll,Control_RunDLL powercfg.cpl,,%d", adv);
-    y += DrawLinkText(hdc, x, y, cx, L"Require a password on wakeup", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(6);
+    y += DrawLinkText(hdc, x, y, cx, L"Require a password on wakeup", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(6);
     y += DrawLinkText(hdc, x, y, cx, L"Choose what the power buttons do", g_f.hfText, LA_COMMAND, 0, NULL, szCmd, NULL, TRUE) + S(6);
     y += DrawLinkText(hdc, x, y, cx, L"Choose what closing the lid does", g_f.hfText, s_bHasBattery ? LA_COMMAND : LA_NONE, 0, NULL, szCmd, s_bHasBattery ? NULL : L"This computer has no lid", s_bHasBattery) + S(6);
-    y += DrawLinkText(hdc, x, y, cx, L"Create a power plan", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(6);
+    y += DrawLinkText(hdc, x, y, cx, L"Create a power plan", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(6);
     y += DrawLinkText(hdc, x, y, cx, L"Choose when to turn off the display", g_f.hfText, LA_HUBPAGE, HUB_POWER, NULL, L"pagePlanSettings", NULL, TRUE) + S(6);
     y += DrawLinkText(hdc, x, y, cx, L"Change when the computer sleeps", g_f.hfText, LA_HUBPAGE, HUB_POWER, NULL, L"pagePlanSettings", NULL, TRUE) + S(6);
     *py = y;
@@ -689,7 +689,7 @@ static int PaintNetwork(HDC hdc, int x, int y, int cx)
     }
     SelectObject(hdc, oldF);
     y += iconSz + S(44);
-    DrawLinkText(hdc, x + cx - S(160), y - S(20), S(160), L"See full map", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE);
+    DrawLinkText(hdc, x + cx - S(160), y - S(20), S(160), L"See full map", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE);
     y += S(6);
 
     y += SectionTitle(hdc, x, y, cx, L"View your active networks");
@@ -726,13 +726,13 @@ static int PaintNetwork(HDC hdc, int x, int y, int cx)
 
     y += SectionTitle(hdc, x, y, cx, L"Change your networking settings");
     int lx = x + S(16), lcx = cx - S(16);
-    y += DrawLinkText(hdc, lx, y, lcx, L"Set up a new connection or network", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(2);
+    y += DrawLinkText(hdc, lx, y, lcx, L"Set up a new connection or network", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(2);
     y += DrawWrapped(hdc, lx + S(16), y, lcx - S(16), L"Set up a wireless, broadband, dial-up, ad hoc, or VPN connection; or set up a router or access point.", g_f.hfSmall, g_f.pal.DimText) + S(10);
     y += DrawLinkText(hdc, lx, y, lcx, L"Connect to a network", g_f.hfText, LA_COMMAND, 0, NULL, L"%SystemRoot%\\system32\\control.exe netconnections", NULL, s_bAnyAdapter) + S(2);
     y += DrawWrapped(hdc, lx + S(16), y, lcx - S(16), L"Connect or reconnect to a wireless, wired, dial-up, or VPN network connection.", g_f.hfSmall, g_f.pal.DimText) + S(10);
-    y += DrawLinkText(hdc, lx, y, lcx, L"Choose homegroup and sharing options", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(2);
+    y += DrawLinkText(hdc, lx, y, lcx, L"Choose homegroup and sharing options", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(2);
     y += DrawWrapped(hdc, lx + S(16), y, lcx - S(16), L"Access files and printers located on other network computers, or change sharing settings.", g_f.hfSmall, g_f.pal.DimText) + S(10);
-    y += DrawLinkText(hdc, lx, y, lcx, L"Troubleshoot problems", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(2);
+    y += DrawLinkText(hdc, lx, y, lcx, L"Troubleshoot problems", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(2);
     y += DrawWrapped(hdc, lx + S(16), y, lcx - S(16), L"Diagnose and repair network problems, or get troubleshooting information.", g_f.hfSmall, g_f.pal.DimText) + S(10);
     return y;
 }
@@ -741,7 +741,7 @@ static void NavNetwork(HDC hdc, int x, int *py, int cx)
 {
     int y = *py;
     y += DrawLinkText(hdc, x, y, cx, L"Change adapter settings", g_f.hfText, LA_COMMAND, 0, NULL, L"%SystemRoot%\\system32\\control.exe netconnections", NULL, TRUE) + S(6);
-    y += DrawLinkText(hdc, x, y, cx, L"Change advanced sharing settings", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(6);
+    y += DrawLinkText(hdc, x, y, cx, L"Change advanced sharing settings", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(6);
     *py = y;
 }
 
@@ -895,9 +895,9 @@ static int PaintPersonalization(HDC hdc, int x, int y, int cx)
 static void NavPersonalization(HDC hdc, int x, int *py, int cx)
 {
     int y = *py;
-    y += DrawLinkText(hdc, x, y, cx, L"Change desktop icons", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(6);
+    y += DrawLinkText(hdc, x, y, cx, L"Change desktop icons", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(6);
     y += DrawLinkText(hdc, x, y, cx, L"Change mouse pointers", g_f.hfText, LA_COMMAND, 0, NULL, L"%SystemRoot%\\system32\\rundll32.exe shell32.dll,Control_RunDLL main.cpl,@0,1", NULL, TRUE) + S(6);
-    y += DrawLinkText(hdc, x, y, cx, L"Change your account picture", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in ReactOS yet", FALSE) + S(6);
+    y += DrawLinkText(hdc, x, y, cx, L"Change your account picture", g_f.hfText, LA_NONE, 0, NULL, NULL, L"Not available in LiberNT yet", FALSE) + S(6);
     *py = y;
 }
 
@@ -918,7 +918,7 @@ static void SeeAlso(HDC hdc, int x, int *py, int cx, LPCWSTR const *ppsz, int n)
     {
         CPITEM *pItem = Catalog_FindByCanonical(ppsz[i]);
         if (!pItem) continue;
-        y += DrawLinkText(hdc, x, y, cx, pItem->szName, g_f.hfText, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in ReactOS yet", pItem->bEnabled) + S(6);
+        y += DrawLinkText(hdc, x, y, cx, pItem->szName, g_f.hfText, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in LiberNT yet", pItem->bEnabled) + S(6);
     }
     *py = y;
 }

@@ -168,9 +168,9 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "ReactOS programhanterare"
+    IDS_APPTITLE "LiberNT programhanterare"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
-    IDS_WELCOME_TITLE "Välkommen till ReactOS programhanterare!"
+    IDS_WELCOME_TITLE "Välkommen till LiberNT programhanterare!"
     IDS_WELCOME_TEXT "Välj en kategori till vänster, och sedan ett program för att installera eller avinstallera.\nReactOS Web sida: "
     IDS_WELCOME_URL "https://reactos.org"
 

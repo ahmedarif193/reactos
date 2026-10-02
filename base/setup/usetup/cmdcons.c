@@ -1174,7 +1174,7 @@ RecoveryConsole(VOID)
     CONSOLE_ClearScreen();
     CONSOLE_SetCursorXY(0, 0);
 
-    CONSOLE_ConOutPrintf("ReactOS Recovery Console\n\nEnter HELP to get a list of commands.\n\n");
+    CONSOLE_ConOutPrintf("LiberNT Recovery Console\n\nEnter HELP to get a list of commands.\n\n");
 
     while (!State.bExit)
     {

@@ -14,14 +14,14 @@ static MUI_ENTRY svSESetupInitPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         0,
         20,
-        "Please wait while the ReactOS Setup initializes itself",
+        "Please wait while the LiberNT Setup initializes itself",
         TEXT_STYLE_NORMAL | TEXT_ALIGN_CENTER,
         TEXT_ID_STATIC
     },
@@ -52,7 +52,7 @@ static MUI_ENTRY svSELanguagePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -104,21 +104,21 @@ static MUI_ENTRY svSEWelcomePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "V\204lkommen till ReactOS Setup!",
+        "V\204lkommen till LiberNT Setup!",
         TEXT_STYLE_HIGHLIGHT,
         TEXT_ID_STATIC
     },
     {
         6,
         11,
-        "Denna del av installationen kopierar ReactOS till eran",
+        "Denna del av installationen kopierar LiberNT till eran",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -132,28 +132,28 @@ static MUI_ENTRY svSEWelcomePageEntries[] =
     {
         8,
         15,
-        "\x07  Press ENTER to install or upgrade ReactOS.",
+        "\x07  Press ENTER to install or upgrade LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         17,
-        "\x07  Tryck p\206 R f\224r att reparera ReactOS.",
+        "\x07  Tryck p\206 R f\224r att reparera LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         19,
-        "\x07  Tryck p\206 L f\224r att l\204sa licensavtalet till ReactOS.",
+        "\x07  Tryck p\206 L f\224r att l\204sa licensavtalet till LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         21,
-        "\x07  Tryck p\206 F3 f\224r att avbryta installationen av ReactOS.",
+        "\x07  Tryck p\206 F3 f\224r att avbryta installationen av LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -191,21 +191,21 @@ static MUI_ENTRY svSEIntroPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "ReactOS Version Status",
+        "LiberNT Version Status",
         TEXT_STYLE_HIGHLIGHT,
         TEXT_ID_STATIC
     },
     {
         6,
         11,
-        "ReactOS is in Alpha stage, meaning it is not feature-complete",
+        "LiberNT is in Alpha stage, meaning it is not feature-complete",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -233,21 +233,21 @@ static MUI_ENTRY svSEIntroPageEntries[] =
     {
         6,
         16,
-        "to run ReactOS on real hardware.",
+        "to run LiberNT on real hardware.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         19,
-        "\x07  Press ENTER to continue ReactOS Setup.",
+        "\x07  Press ENTER to continue LiberNT Setup.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         21,
-        "\x07  Press F3 to quit without installing ReactOS.",
+        "\x07  Press F3 to quit without installing LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -271,7 +271,7 @@ static MUI_ENTRY svSELicensePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -414,7 +414,7 @@ static MUI_ENTRY svSEDevicePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -521,14 +521,14 @@ static MUI_ENTRY svSERepairPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "ReactOS Setup \204r i en tidig utvecklingsfas och saknar d\204rf\224r ett antal",
+        "LiberNT Setup \204r i en tidig utvecklingsfas och saknar d\204rf\224r ett antal",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -549,7 +549,7 @@ static MUI_ENTRY svSERepairPageEntries[] =
     {
         8,
         15,
-        "\x07  Tryck p\206 U f\224r att uppdatera ReactOS.",
+        "\x07  Tryck p\206 U f\224r att uppdatera LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -594,21 +594,21 @@ static MUI_ENTRY svSEUpgradePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "The ReactOS Setup can upgrade one of the available ReactOS installations",
+        "The LiberNT Setup can upgrade one of the available LiberNT installations",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         6,
         9,
-        "listed below, or, if a ReactOS installation is damaged, the Setup program",
+        "listed below, or, if a LiberNT installation is damaged, the Setup program",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -650,7 +650,7 @@ static MUI_ENTRY svSEUpgradePageEntries[] =
     {
         8,
         21,
-        "\x07  Press F3 to quit without installing ReactOS.",
+        "\x07  Press F3 to quit without installing LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -674,7 +674,7 @@ static MUI_ENTRY svSEComputerPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -733,7 +733,7 @@ static MUI_ENTRY svSEFlushPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -778,14 +778,14 @@ static MUI_ENTRY svSEQuitPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         10,
         6,
-        "Installationen av ReactOS har inte slutf\224rts.",
+        "Installationen av LiberNT har inte slutf\224rts.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -830,7 +830,7 @@ static MUI_ENTRY svSEDisplayPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -889,14 +889,14 @@ static MUI_ENTRY svSESuccessPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         10,
         6,
-        "ReactOS har nu installerats p\206 datorn.",
+        "LiberNT har nu installerats p\206 datorn.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -941,7 +941,7 @@ static MUI_ENTRY svSESelectPartitionEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -969,7 +969,7 @@ static MUI_ENTRY svSESelectPartitionEntries[] =
     {
         8,
         13,
-        "\x07  Tryck ENTER f\224r att installerara ReactOS till vald partition.",
+        "\x07  Tryck ENTER f\224r att installerara LiberNT till vald partition.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1015,7 +1015,7 @@ static MUI_ENTRY svSEChangeSystemPartition[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1036,14 +1036,14 @@ static MUI_ENTRY svSEChangeSystemPartition[] =
     {
         6,
         16,
-        "uses a format not supported by ReactOS.",
+        "uses a format not supported by LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         6,
         18,
-        "In order to successfully install ReactOS, the Setup program must change",
+        "In order to successfully install LiberNT, the Setup program must change",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1113,7 +1113,7 @@ static MUI_ENTRY svSEChangeSystemPartition[] =
     {
         6,
         35,
-        "to the original one after finishing the installation of ReactOS.",
+        "to the original one after finishing the installation of LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1137,7 +1137,7 @@ static MUI_ENTRY svSEConfirmDeleteSystemPartitionEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1158,7 +1158,7 @@ static MUI_ENTRY svSEConfirmDeleteSystemPartitionEntries[] =
     {
         6,
         11,
-        "programs, programs to start an operating system (like ReactOS) or other",
+        "programs, programs to start an operating system (like LiberNT) or other",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1193,7 +1193,7 @@ static MUI_ENTRY svSEConfirmDeleteSystemPartitionEntries[] =
     {
         6,
         17,
-        "computer from the harddisk until you finished the ReactOS Setup.",
+        "computer from the harddisk until you finished the LiberNT Setup.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1245,7 +1245,7 @@ static MUI_ENTRY svSEFormatPartitionEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1283,7 +1283,7 @@ static MUI_ENTRY svSECheckFSEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1314,21 +1314,21 @@ static MUI_ENTRY svSEInstallDirectoryEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "ReactOS installeras till vald partition. V\204lj en",
+        "LiberNT installeras till vald partition. V\204lj en",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         6,
         9,
-        "mapp som du vill installera ReactOS till.:",
+        "mapp som du vill installera LiberNT till.:",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1342,7 +1342,7 @@ static MUI_ENTRY svSEInstallDirectoryEntries[] =
     {
         6,
         15,
-        "bokst\204ver och skriv sedan in mappen dit du vill att ReactOS ska bli",
+        "bokst\204ver och skriv sedan in mappen dit du vill att LiberNT ska bli",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1373,14 +1373,14 @@ static MUI_ENTRY svSEFileCopyEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         11,
         12,
-        "Var v\204nlig v\204nta medans ReactOS Setup kopieras till din ReactOS.",
+        "Var v\204nlig v\204nta medans LiberNT Setup kopieras till din LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1418,7 +1418,7 @@ static MUI_ENTRY svSEBootLoaderSelectPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1477,7 +1477,7 @@ static MUI_ENTRY svSEBootLoaderInstallPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1508,7 +1508,7 @@ static MUI_ENTRY svSEBootLoaderRemovableDiskPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1554,7 +1554,7 @@ static MUI_ENTRY svSEKeyboardSettingsEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1613,7 +1613,7 @@ static MUI_ENTRY svSELayoutSettingsEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1673,14 +1673,14 @@ static MUI_ENTRY svSEPrepareCopyEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "Setup f\224rbereder din dator f\224r kopiering av ReactOS filer.",
+        "Setup f\224rbereder din dator f\224r kopiering av LiberNT filer.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1705,7 +1705,7 @@ static MUI_ENTRY svSESelectFSEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1753,7 +1753,7 @@ static MUI_ENTRY svSEDeletePartitionEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1805,7 +1805,7 @@ static MUI_ENTRY svSERegistryEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1840,9 +1840,9 @@ MUI_ERROR svSEErrorEntries[] =
     },
     {
         // ERROR_NOT_INSTALLED
-        "ReactOS installerades inte fullst\204ndigt p\206 din\n"
+        "LiberNT installerades inte fullst\204ndigt p\206 din\n"
         "dator. Om du avslutar Setup nu, kommer du att beh\224va\n"
-        "k\224ra Setup igen f\224r att installera ReactOS.\n"
+        "k\224ra Setup igen f\224r att installera LiberNT.\n"
         "\n"
         "  \x07  Tryck ENTER f\224r att forts\204tta Setup.\n"
         "  \x07  Tryck F3 f\224r att avsluta Setup.",
@@ -1850,7 +1850,7 @@ MUI_ERROR svSEErrorEntries[] =
     },
     {
         // ERROR_NO_BUILD_PATH
-        "Failed to build the installation paths for the ReactOS installation directory!\n"
+        "Failed to build the installation paths for the LiberNT installation directory!\n"
         "ENTER = Reboot computer"
     },
     {
@@ -1860,7 +1860,7 @@ MUI_ERROR svSEErrorEntries[] =
     },
     {
         // ERROR_SOURCE_DIR
-        "You cannot install ReactOS within the installation source directory!\n"
+        "You cannot install LiberNT within the installation source directory!\n"
         "ENTER = Reboot computer"
     },
     {
@@ -2052,7 +2052,7 @@ MUI_ERROR svSEErrorEntries[] =
     },
     {
         // ERROR_INSUFFICIENT_PARTITION_SIZE,
-        "The selected partition is not large enough to install ReactOS.\n"
+        "The selected partition is not large enough to install LiberNT.\n"
         "The install partition must have a size of at least %lu MB.\n"
         "\n"
         "  * Tryck valfri tangent f\224r att forts\204tta.",
@@ -2238,13 +2238,13 @@ MUI_STRING svSEStrings[] =
     {STRING_PARTFORMAT,
     "Denna Partition kommer att bli formaterad h\204rn\204st."},
     {STRING_NONFORMATTEDPART,
-    "Du valde att installera ReactOS p\206 en oformaterad partition."},
+    "Du valde att installera LiberNT p\206 en oformaterad partition."},
     {STRING_NONFORMATTEDSYSTEMPART,
     "The system partition is not formatted yet."},
     {STRING_NONFORMATTEDOTHERPART,
     "The new partition is not formatted yet."},
     {STRING_INSTALLONPART,
-    "Setup installerar ReactOS till Partitionen"},
+    "Setup installerar LiberNT till Partitionen"},
     {STRING_CONTINUE,
     "ENTER = Forts\204tt"},
     {STRING_QUITCONTINUE,

@@ -169,9 +169,9 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "ReactOS 程式管理員"
+    IDS_APPTITLE "LiberNT 程式管理員"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
-    IDS_WELCOME_TITLE "歡迎來到 ReactOS 程式管理員！"
+    IDS_WELCOME_TITLE "歡迎來到 LiberNT 程式管理員！"
     IDS_WELCOME_TEXT "從左側欄目選擇一個類別，然後選擇要安裝或解除安裝的程式。\nReactOS 網站︰"
     IDS_WELCOME_URL "https://reactos.org"
 

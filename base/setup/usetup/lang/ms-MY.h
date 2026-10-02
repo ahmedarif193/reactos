@@ -5,14 +5,14 @@ static MUI_ENTRY msMYSetupInitPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         0,
         20,
-        "Please wait while the ReactOS Setup initializes itself",
+        "Please wait while the LiberNT Setup initializes itself",
         TEXT_STYLE_NORMAL | TEXT_ALIGN_CENTER,
         TEXT_ID_STATIC
     },
@@ -43,7 +43,7 @@ static MUI_ENTRY msMYLanguagePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -95,21 +95,21 @@ static MUI_ENTRY msMYWelcomePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "Selamat datang ke persediaan ReactOS",
+        "Selamat datang ke persediaan LiberNT",
         TEXT_STYLE_HIGHLIGHT,
         TEXT_ID_STATIC
     },
     {
         6,
         11,
-        "Bahagian persediaan salinan sistem pengendalian ReactOS ke",
+        "Bahagian persediaan salinan sistem pengendalian LiberNT ke",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -123,28 +123,28 @@ static MUI_ENTRY msMYWelcomePageEntries[] =
     {
         8,
         15,
-        "\x07  Press ENTER to install or upgrade ReactOS.",
+        "\x07  Press ENTER to install or upgrade LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         17,
-        "\x07  Tekan R untuk memperbaiki atau mengemaskini ReactOS.",
+        "\x07  Tekan R untuk memperbaiki atau mengemaskini LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         19,
-        "\x07  Tekan L untuk melihat syarat-syarat dan terma-terma Pelesenan ReactOS.",
+        "\x07  Tekan L untuk melihat syarat-syarat dan terma-terma Pelesenan LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         21,
-        "\x07  Tekan F3 untuk keluar tanpa memasang ReactOS.",
+        "\x07  Tekan F3 untuk keluar tanpa memasang LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -182,21 +182,21 @@ static MUI_ENTRY msMYIntroPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "ReactOS Version Status",
+        "LiberNT Version Status",
         TEXT_STYLE_HIGHLIGHT,
         TEXT_ID_STATIC
     },
     {
         6,
         11,
-        "ReactOS is in Alpha stage, meaning it is not feature-complete",
+        "LiberNT is in Alpha stage, meaning it is not feature-complete",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -224,21 +224,21 @@ static MUI_ENTRY msMYIntroPageEntries[] =
     {
         6,
         16,
-        "to run ReactOS on real hardware.",
+        "to run LiberNT on real hardware.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         19,
-        "\x07  Press ENTER to continue ReactOS Setup.",
+        "\x07  Press ENTER to continue LiberNT Setup.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         8,
         21,
-        "\x07  Press F3 to quit without installing ReactOS.",
+        "\x07  Press F3 to quit without installing LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -262,7 +262,7 @@ static MUI_ENTRY msMYLicensePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -405,7 +405,7 @@ static MUI_ENTRY msMYDevicePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -512,14 +512,14 @@ static MUI_ENTRY msMYRepairPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "ReactOS persediaan sedang untuk fasa pembangunan awal. Ia belum lagi",
+        "LiberNT persediaan sedang untuk fasa pembangunan awal. Ia belum lagi",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -540,7 +540,7 @@ static MUI_ENTRY msMYRepairPageEntries[] =
     {
         8,
         15,
-        "\x07  Tekan U untuk mengemaskini ReactOS.",
+        "\x07  Tekan U untuk mengemaskini LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -585,21 +585,21 @@ static MUI_ENTRY msMYUpgradePageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "The ReactOS Setup can upgrade one of the available ReactOS installations",
+        "The LiberNT Setup can upgrade one of the available LiberNT installations",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         6,
         9,
-        "listed below, or, if a ReactOS installation is damaged, the Setup program",
+        "listed below, or, if a LiberNT installation is damaged, the Setup program",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -641,7 +641,7 @@ static MUI_ENTRY msMYUpgradePageEntries[] =
     {
         8,
         21,
-        "\x07  Press F3 to quit without installing ReactOS.",
+        "\x07  Press F3 to quit without installing LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -665,7 +665,7 @@ static MUI_ENTRY msMYComputerPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -724,7 +724,7 @@ static MUI_ENTRY msMYFlushPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -769,14 +769,14 @@ static MUI_ENTRY msMYQuitPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         10,
         6,
-        "ReactOS tidak dipasang sepenuhnya.",
+        "LiberNT tidak dipasang sepenuhnya.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -821,7 +821,7 @@ static MUI_ENTRY msMYDisplayPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -880,14 +880,14 @@ static MUI_ENTRY msMYSuccessPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         10,
         6,
-        "Komponen-komponen asas ReactOS telah berjaya dipasang.",
+        "Komponen-komponen asas LiberNT telah berjaya dipasang.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -932,7 +932,7 @@ static MUI_ENTRY msMYSelectPartitionEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -960,7 +960,7 @@ static MUI_ENTRY msMYSelectPartitionEntries[] =
     {
         8,
         13,
-        "\x07  Tekan ENTER untuk memasang ReactOS ke sekatan yang dipilih.",
+        "\x07  Tekan ENTER untuk memasang LiberNT ke sekatan yang dipilih.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1005,7 +1005,7 @@ static MUI_ENTRY msMYChangeSystemPartition[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1026,14 +1026,14 @@ static MUI_ENTRY msMYChangeSystemPartition[] =
     {
         6,
         16,
-        "uses a format not supported by ReactOS.",
+        "uses a format not supported by LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         6,
         18,
-        "In order to successfully install ReactOS, the Setup program must change",
+        "In order to successfully install LiberNT, the Setup program must change",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1103,7 +1103,7 @@ static MUI_ENTRY msMYChangeSystemPartition[] =
     {
         6,
         35,
-        "to the original one after finishing the installation of ReactOS.",
+        "to the original one after finishing the installation of LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1127,7 +1127,7 @@ static MUI_ENTRY msMYConfirmDeleteSystemPartitionEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1148,7 +1148,7 @@ static MUI_ENTRY msMYConfirmDeleteSystemPartitionEntries[] =
     {
         6,
         11,
-        "programs, programs to start an operating system (like ReactOS) or other",
+        "programs, programs to start an operating system (like LiberNT) or other",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1183,7 +1183,7 @@ static MUI_ENTRY msMYConfirmDeleteSystemPartitionEntries[] =
     {
         6,
         17,
-        "computer from the harddisk until you finished the ReactOS Setup.",
+        "computer from the harddisk until you finished the LiberNT Setup.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1235,7 +1235,7 @@ static MUI_ENTRY msMYFormatPartitionEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1273,7 +1273,7 @@ static MUI_ENTRY msMYCheckFSEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1304,21 +1304,21 @@ static MUI_ENTRY msMYInstallDirectoryEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "Persediaan memasang ReactOS fail ke sekatan yang dipilih. Pilih satu",
+        "Persediaan memasang LiberNT fail ke sekatan yang dipilih. Pilih satu",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
     {
         6,
         9,
-        "direktori di mana anda mahu ReactOS untuk dipasang:",
+        "direktori di mana anda mahu LiberNT untuk dipasang:",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1332,7 +1332,7 @@ static MUI_ENTRY msMYInstallDirectoryEntries[] =
     {
         6,
         15,
-        "ciri-ciri dan kemudian taip direktori di mana anda mahu ReactOS untuk",
+        "ciri-ciri dan kemudian taip direktori di mana anda mahu LiberNT untuk",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1363,21 +1363,21 @@ static MUI_ENTRY msMYFileCopyEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         0,
         12,
-        "Sila tunggu sementara fail salinan ReactOS persediaan",
+        "Sila tunggu sementara fail salinan LiberNT persediaan",
         TEXT_STYLE_NORMAL | TEXT_ALIGN_CENTER,
         TEXT_ID_STATIC
     },
     {
         0,
         13,
-        "untuk ReactOS folder pemasangan anda.",
+        "untuk LiberNT folder pemasangan anda.",
         TEXT_STYLE_NORMAL | TEXT_ALIGN_CENTER,
         TEXT_ID_STATIC
     },
@@ -1408,7 +1408,7 @@ static MUI_ENTRY msMYBootLoaderSelectPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1467,7 +1467,7 @@ static MUI_ENTRY msMYBootLoaderInstallPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Setup ",
+        " LiberNT " KERNEL_VERSION_STR " Setup ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1498,7 +1498,7 @@ static MUI_ENTRY msMYBootLoaderRemovableDiskPageEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1544,7 +1544,7 @@ static MUI_ENTRY msMYKeyboardSettingsEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1603,7 +1603,7 @@ static MUI_ENTRY msMYLayoutSettingsEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1663,14 +1663,14 @@ static MUI_ENTRY msMYPrepareCopyEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
     {
         6,
         8,
-        "Persediaan menyediakan komputer awda untuk menyalin fail-fail ReactOS.",
+        "Persediaan menyediakan komputer awda untuk menyalin fail-fail LiberNT.",
         TEXT_STYLE_NORMAL,
         TEXT_ID_STATIC
     },
@@ -1695,7 +1695,7 @@ static MUI_ENTRY msMYSelectFSEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1743,7 +1743,7 @@ static MUI_ENTRY msMYDeletePartitionEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1795,7 +1795,7 @@ static MUI_ENTRY msMYRegistryEntries[] =
     {
         4,
         3,
-        " ReactOS " KERNEL_VERSION_STR " Persediaan ",
+        " LiberNT " KERNEL_VERSION_STR " Persediaan ",
         TEXT_STYLE_UNDERLINE,
         TEXT_ID_STATIC
     },
@@ -1830,9 +1830,9 @@ MUI_ERROR msMYErrorEntries[] =
     },
     {
         // ERROR_NOT_INSTALLED
-        "ReactOS tidak benar-benar dipasang pada\n"
+        "LiberNT tidak benar-benar dipasang pada\n"
         "komputer anda. Jika anda berhenti persediaan sekarang, anda akan perlu\n"
-        "untuk menjalankan persediaan untuk memasang ReactOS lagi.\n"
+        "untuk menjalankan persediaan untuk memasang LiberNT lagi.\n"
         "\n"
         "  \x07  Tekan ENTER untuk meneruskan persediaan.\n"
         "  \x07  Tekan F3 untuk keluar persediaan.",
@@ -1840,7 +1840,7 @@ MUI_ERROR msMYErrorEntries[] =
     },
     {
         // ERROR_NO_BUILD_PATH
-        "Failed to build the installation paths for the ReactOS installation directory!\n"
+        "Failed to build the installation paths for the LiberNT installation directory!\n"
         "ENTER = Reboot computer"
     },
     {
@@ -1850,7 +1850,7 @@ MUI_ERROR msMYErrorEntries[] =
     },
     {
         // ERROR_SOURCE_DIR
-        "You cannot install ReactOS within the installation source directory!\n"
+        "You cannot install LiberNT within the installation source directory!\n"
         "ENTER = Reboot computer"
     },
     {
@@ -2042,7 +2042,7 @@ MUI_ERROR msMYErrorEntries[] =
     },
     {
         // ERROR_INSUFFICIENT_PARTITION_SIZE,
-        "Partition yang dipilih adalah tidak cukup besar untuk memasang ReactOS.\n"
+        "Partition yang dipilih adalah tidak cukup besar untuk memasang LiberNT.\n"
         "Partition yang pasang hendaklah mempunyai saiz sekurang-kurangnya %lu MB.\n"
         "\n"
         "  * Tekan sebarang kunci untuk meneruskan.",
@@ -2220,13 +2220,13 @@ MUI_STRING msMYStrings[] =
     {STRING_PARTFORMAT,
     "Partition ini akan diformat seterusnya."},
     {STRING_NONFORMATTEDPART,
-    "Anda telah memilih untuk memasang ReactOS pada Partition yang baru atau tidak diformat."},
+    "Anda telah memilih untuk memasang LiberNT pada Partition yang baru atau tidak diformat."},
     {STRING_NONFORMATTEDSYSTEMPART,
     "Partition sistem tidak diformat lagi."},
     {STRING_NONFORMATTEDOTHERPART,
     "Partition baru tidak diformat lagi."},
     {STRING_INSTALLONPART,
-    "Persediaan memasang ReactOS ke Partition"},
+    "Persediaan memasang LiberNT ke Partition"},
     {STRING_CONTINUE,
     "ENTER = Teruskan"},
     {STRING_QUITCONTINUE,

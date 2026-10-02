@@ -307,7 +307,7 @@ BEGIN
     IDS_HINT_DETAILS " Zobrazit služby jako podrobný seznam."
     IDS_HINT_CUST " Upravit zobrazení."
     IDS_HINT_HELP " Zobrazit nápovědu."
-    IDS_HINT_ABOUT " O ReactOS Správci služeb."
+    IDS_HINT_ABOUT " O LiberNT Správci služeb."
     IDS_HINT_SYS_RESTORE " Obnovit normální velikost tohoto okna."
     IDS_HINT_SYS_MOVE " Přesunout okno."
     IDS_HINT_SYS_SIZE " Změnit velikost okna."
@@ -319,7 +319,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "ReactOS Správce služeb"
+    IDS_APPNAME "LiberNT Správce služeb"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

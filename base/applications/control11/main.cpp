@@ -806,7 +806,7 @@ static int PaintCategory(HDC hdc, const RECT *prc, int cat)
         DrawIconAt(hdc, x, y, pItem->hIcon32, iconSz, pItem->bEnabled);
         int tx = x + iconSz + S(12);
         int tcx = cx - iconSz - S(12);
-        y += DrawLinkText(hdc, tx, y + S(2), tcx, pItem->szName, g_f.hfTitle, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in ReactOS yet", pItem->bEnabled) + S(4);
+        y += DrawLinkText(hdc, tx, y + S(2), tcx, pItem->szName, g_f.hfTitle, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in LiberNT yet", pItem->bEnabled) + S(4);
         GUID tasks[16];
         int cTasks = 0;
         for (int t = 0; t < g_cTasks && cTasks < 16; t++)
@@ -843,7 +843,7 @@ static int PaintAll(HDC hdc, const RECT *prc)
             int ty = y + rr * tileH;
             RECT r = { tx, ty, tx + tileW - S(8), ty + tileH - S(4) };
             int idx = g_f.cLinks;
-            AddLink(&r, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in ReactOS yet", pItem->bEnabled);
+            AddLink(&r, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in LiberNT yet", pItem->bEnabled);
             if (g_f.hotLink == idx && pItem->bEnabled)
             {
                 HBRUSH hb = CreateSolidBrush(Blend(g_f.pal.Window, g_f.pal.Accent, 12));
@@ -876,7 +876,7 @@ static int PaintAll(HDC hdc, const RECT *prc)
             int tx = x + c * colW, ty = y + r * rowH;
             RECT rc = { tx, ty, tx + colW - S(8), ty + rowH };
             int idx = g_f.cLinks;
-            AddLink(&rc, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in ReactOS yet", pItem->bEnabled);
+            AddLink(&rc, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in LiberNT yet", pItem->bEnabled);
             if (g_f.hotLink == idx && pItem->bEnabled)
             {
                 HBRUSH hb = CreateSolidBrush(Blend(g_f.pal.Window, g_f.pal.Accent, 12));
@@ -926,7 +926,7 @@ static int PaintSearch(HDC hdc, const RECT *prc, LPCWSTR pszQuery)
         DrawIconAt(hdc, x, y, pItem->hIcon32, iconSz, pItem->bEnabled);
         int tx = x + iconSz + S(12);
         int tcx = cx - iconSz - S(12);
-        y += DrawLinkText(hdc, tx, y + S(2), tcx, pItem->szName, g_f.hfTitle, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in ReactOS yet", pItem->bEnabled) + S(4);
+        y += DrawLinkText(hdc, tx, y + S(2), tcx, pItem->szName, g_f.hfTitle, LA_ITEM, 0, pItem, NULL, pItem->bEnabled ? pItem->szInfoTip : L"Not available in LiberNT yet", pItem->bEnabled) + S(4);
         if (cTasks)
             PaintTaskLinks(hdc, tx, &y, tcx, tasks, cTasks, FALSE);
         if (y < top + iconSz + S(6)) y = top + iconSz + S(6);

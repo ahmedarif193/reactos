@@ -10,7 +10,7 @@ LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nReactOS IP Configuration\n\n"
+    IDS_HEADER "\nLiberNT IP Configuration\n\n"
     IDS_HOSTNAME            "\tHost Name . . . . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tPrimary DNS Suffix. . . . . . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tNode Type . . . . . . . . . . . . : 广播\n"

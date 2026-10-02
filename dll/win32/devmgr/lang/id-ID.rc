@@ -289,7 +289,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "Manajer Perangkat ReactOS"
+  IDS_APPNAME               "Manajer Perangkat LiberNT"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Mematikan perangkat ini akan menyebabkan fungsionalitasnya berhenti.\nYakin ingin mematikannya?"
   IDS_CONFIRM_UNINSTALL     "Peringatan: Anda akan mencopot perangkat ini dari sistem anda.\nIngin melanjutkan?"
@@ -336,7 +336,7 @@ BEGIN
   IDS_HINT_UPDATE       " Meluncurkan penuntun Pembaruan Perangkat Lunak Driver untuk perangkat terpilih."
   IDS_HINT_UNINSTALL    " Membongkar driver untuk perangkat terpilih."
   IDS_HINT_ADD          " Tambahkan perangkat lawas (non-PnP) ke komputer."
-  IDS_HINT_ABOUT        " Tentang Manajer Perangkat ReactOS."
+  IDS_HINT_ABOUT        " Tentang Manajer Perangkat LiberNT."
   IDS_HINT_EXIT         " Keluar program."
 
   IDS_HINT_DEV_BY_TYPE  " Menampilkan jenis perangkat."

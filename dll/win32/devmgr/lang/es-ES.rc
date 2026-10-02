@@ -296,7 +296,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "Administrador de dispositivos de ReactOS"
+  IDS_APPNAME               "Administrador de dispositivos de LiberNT"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Deshabilitar este dispositivo hará que deje de funcionar.\n¿Seguro que quiere deshabilitarlo?"
   IDS_CONFIRM_UNINSTALL     "Advertencia: Está a punto de desinstalar este dispositivo de su equipo.\n¿Seguro que quiere continuar?"
@@ -343,7 +343,7 @@ BEGIN
   IDS_HINT_UPDATE       " Inicia el asistente de actualización de controladores para el dispositivo seleccionado."
   IDS_HINT_UNINSTALL    " Desinstala el controlador del dispositivo seleccionado."
   IDS_HINT_ADD          " Añade un dispositivo antiguo (sin PnP) al equipo."
-  IDS_HINT_ABOUT        " Acerca del administrador de dispositivos de ReactOS."
+  IDS_HINT_ABOUT        " Acerca del administrador de dispositivos de LiberNT."
   IDS_HINT_EXIT         " Salir del programa."
 
   IDS_HINT_DEV_BY_TYPE  " Ordena los dispositivos por tipo de hardware."

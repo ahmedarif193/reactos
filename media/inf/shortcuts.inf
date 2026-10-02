@@ -84,13 +84,13 @@ COMMUNICATIONS=Communications
 GAMES=Games
 
 README_TITLE=Read Me
-README_DESC=ReactOS Read-Me file
+README_DESC=LiberNT Read-Me file
 
 CMD_TITLE=Command Prompt
 CMD_DESC=Open command prompt
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=Launch Explorer
-RAPPS_TITLE=ReactOS Applications Manager
+RAPPS_TITLE=LiberNT Applications Manager
 RAPPS_TITLE_SHORT=Applications Manager
 RAPPS_DESC=Download and install various applications
 SERVMAN_TITLE=Service Manager
@@ -223,13 +223,13 @@ COMMUNICATIONS=通訊
 GAMES=遊樂場
 
 README_TITLE=讀我檔案
-README_DESC=ReactOS 讀我檔案
+README_DESC=LiberNT 讀我檔案
 
 CMD_TITLE=命令提示字元
 CMD_DESC=啟動命令提示字元
-EXPLORER_TITLE=ReactOS 檔案總管
+EXPLORER_TITLE=LiberNT 檔案總管
 EXPLORER_DESC=啟動檔案總管
-RAPPS_TITLE=ReactOS 應用程式管理員
+RAPPS_TITLE=LiberNT 應用程式管理員
 RAPPS_TITLE_SHORT=應用程式管理員
 RAPPS_DESC=下載並安裝其它應用程式
 SERVMAN_TITLE=服務管理員
@@ -297,9 +297,9 @@ GAMES=Hry
 
 CMD_TITLE=Příkazový řádek
 CMD_DESC=Otevřít Příkazový řádek
-EXPLORER_TITLE=ReactOS Průzkumník
+EXPLORER_TITLE=LiberNT Průzkumník
 EXPLORER_DESC=Spustit Průzkumníka
-RAPPS_TITLE=ReactOS Správce aplikací
+RAPPS_TITLE=LiberNT Správce aplikací
 RAPPS_TITLE_SHORT=Správce aplikací
 RAPPS_DESC=Stáhnout a nainstalovat další aplikace
 SERVMAN_TITLE=Správce služeb
@@ -360,13 +360,13 @@ COMMUNICATIONS=Kommunikation
 GAMES=Spiele
 
 README_TITLE=Lies Mich
-README_DESC=Lies-Mich Datei für ReactOS
+README_DESC=Lies-Mich Datei für LiberNT
 
 CMD_TITLE=Eingabeaufforderung
 CMD_DESC=Öffne Kommandozeilenfenster
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=Starte Explorer
-RAPPS_TITLE=ReactOS Anwendungsmanager
+RAPPS_TITLE=LiberNT Anwendungsmanager
 RAPPS_TITLE_SHORT=Anwendungsmanager
 RAPPS_DESC=Herunterladen und Installieren verschiedener Anwendungen
 SERVMAN_TITLE=Dienste-Manager
@@ -430,9 +430,9 @@ GAMES=Παιχνίδια
 
 CMD_TITLE=Γραμμή εντολών
 CMD_DESC=Open command prompt
-EXPLORER_TITLE=Εξερεύνηση του ReactOS
+EXPLORER_TITLE=Εξερεύνηση του LiberNT
 EXPLORER_DESC=Εξερευνητής
-RAPPS_TITLE=ReactOS Applications Manager
+RAPPS_TITLE=LiberNT Applications Manager
 RAPPS_TITLE_SHORT=Applications Manager
 RAPPS_DESC=Download and install various applications
 SERVMAN_TITLE=Υπηρεσίες
@@ -493,13 +493,13 @@ COMMUNICATIONS=Comunicaciones
 GAMES=Juegos
 
 README_TITLE=Léame
-README_DESC=Documento Léame de ReactOS
+README_DESC=Documento Léame de LiberNT
 
 CMD_TITLE=Consola
 CMD_DESC=Abre una consola de comandos
-EXPLORER_TITLE=Explorador de ReactOS
+EXPLORER_TITLE=Explorador de LiberNT
 EXPLORER_DESC=Ejecuta una nueva ventana del explorador de archivos
-RAPPS_TITLE=Administrador de aplicaciones de ReactOS
+RAPPS_TITLE=Administrador de aplicaciones de LiberNT
 RAPPS_TITLE_SHORT=Administrador de aplicaciones
 RAPPS_DESC=Descarga e instala varias aplicaciones
 SERVMAN_TITLE=Administrador de servicios
@@ -527,7 +527,7 @@ MSPAINT_DESC=Ejecuta un sencillo programa de edición de imágenes
 CHARMAP_TITLE=Mapa de caracteres
 CHARMAP_DESC=Ejecuta el mapa de caracteres
 CLIPBRD_TITLE=Visor del Portapapeles
-CLIPBRD_DESC=Controla lo que copias y pegas en el visor del portapapeles de ReactOS
+CLIPBRD_DESC=Controla lo que copias y pegas en el visor del portapapeles de LiberNT
 KBSWITCH_TITLE=Ajustes de distribución de teclado
 KBSWITCH_DESC=Cambia la distribución de teclas del equipo
 REGEDIT_TITLE=Editor del Registro
@@ -564,13 +564,13 @@ COMMUNICATIONS=Kommunikatsioon
 GAMES=Mängud
 
 README_TITLE=Loe mind
-README_DESC=ReactOS'i Loe-mind fail
+README_DESC=LiberNT'i Loe-mind fail
 
 CMD_TITLE=Käsurida
 CMD_DESC=Ava käsurida
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=Ava sirvija
-RAPPS_TITLE=ReactOS'i Rakenduste Haldur
+RAPPS_TITLE=LiberNT'i Rakenduste Haldur
 RAPPS_TITLE_SHORT=Rakenduste Haldur
 RAPPS_DESC=Laadi alla ja paigalda erinevaid rakendusi
 SERVMAN_TITLE=Service Manager
@@ -633,13 +633,13 @@ COMMUNICATIONS=Communications
 GAMES=Jeux
 
 README_TITLE=Lisez-Moi
-README_DESC=Fichier Lisez-Moi pour ReactOS
+README_DESC=Fichier Lisez-Moi pour LiberNT
 
 CMD_TITLE=Invite de commandes
 CMD_DESC=Ouvrir l'invite de commandes
-EXPLORER_TITLE=Explorateur ReactOS
+EXPLORER_TITLE=Explorateur LiberNT
 EXPLORER_DESC=Lancer Explorer
-RAPPS_TITLE=ReactOS Applications Manager
+RAPPS_TITLE=LiberNT Applications Manager
 RAPPS_TITLE_SHORT=Applications Manager
 RAPPS_DESC=Télécharger et installer diverses applications
 SERVMAN_TITLE=Gestionnaire de services
@@ -707,9 +707,9 @@ GAMES=משחקים
 
 CMD_TITLE=שורת הפקודה
 CMD_DESC=שורת הפקודה
-EXPLORER_TITLE=סייר ReactOS
+EXPLORER_TITLE=סייר LiberNT
 EXPLORER_DESC=סייר
-RAPPS_TITLE=מנהל היישומים של ReactOS
+RAPPS_TITLE=מנהל היישומים של LiberNT
 RAPPS_TITLE_SHORT=מנהל היישומים
 RAPPS_DESC=הורד והתקן תכניות
 SERVMAN_TITLE=מנהל השירותים
@@ -774,13 +774,13 @@ COMMUNICATIONS=Kommunikáció
 GAMES=Játékok
 
 README_TITLE=Olvass el
-README_DESC=ReactOS Olvass-el fájl
+README_DESC=LiberNT Olvass-el fájl
 
 CMD_TITLE=Parancssor
 CMD_DESC=Parancssor megnyitása
-EXPLORER_TITLE=ReactOS Intéző
+EXPLORER_TITLE=LiberNT Intéző
 EXPLORER_DESC=Intéző indítása
-RAPPS_TITLE=ReactOS Alkalmazáskezelő
+RAPPS_TITLE=LiberNT Alkalmazáskezelő
 RAPPS_TITLE_SHORT=Alkalmazáskezelő
 RAPPS_DESC=Alkalmazások letöltése és telepítése
 SERVMAN_TITLE=Szolgáltatáskezelő
@@ -846,9 +846,9 @@ GAMES=Permainan
 
 CMD_TITLE=Perintah Cepat
 CMD_DESC=Buka Perintah Cepat
-EXPLORER_TITLE=Penjelajah ReactOS
+EXPLORER_TITLE=Penjelajah LiberNT
 EXPLORER_DESC=Jalankan Penjelajah
-RAPPS_TITLE=Manajer Aplikasi ReactOS
+RAPPS_TITLE=Manajer Aplikasi LiberNT
 RAPPS_TITLE_SHORT=Manajer Aplikasi
 RAPPS_DESC=Unduh dan pasang berbagai aplikasi
 SERVMAN_TITLE=Manajer Layanan
@@ -909,13 +909,13 @@ COMMUNICATIONS=Comunicazioni
 GAMES=Giochi
 
 README_TITLE=Leggimi
-README_DESC=File Leggimi per ReactOS
+README_DESC=File Leggimi per LiberNT
 
 CMD_TITLE=Prompt dei comandi
 CMD_DESC=Apri la finestra dei comandi
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=Avvia Explorer
-RAPPS_TITLE=ReactOS gestione applicazioni
+RAPPS_TITLE=LiberNT gestione applicazioni
 RAPPS_TITLE_SHORT=Gestione applicazioni
 RAPPS_DESC=Scarica e installa varie applicazioni
 SERVMAN_TITLE=Gestione servizi
@@ -977,9 +977,9 @@ GAMES=ゲーム
 
 CMD_TITLE=コマンド プロンプト
 CMD_DESC=コマンド プロンプトを開きます
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=エクスプローラを起動します
-RAPPS_TITLE=ReactOS アプリ マネージャ
+RAPPS_TITLE=LiberNT アプリ マネージャ
 RAPPS_TITLE_SHORT=アプリ マネージャ
 RAPPS_DESC=様々なアプリケーションのダウンロードとインストールを行います
 SERVMAN_TITLE=サービス マネージャ
@@ -1040,13 +1040,13 @@ COMMUNICATIONS=Communications
 GAMES=Games
 
 README_TITLE=Lees Mij
-README_DESC=LeesMij bestand voor ReactOS
+README_DESC=LeesMij bestand voor LiberNT
 
 CMD_TITLE=Command Prompt
 CMD_DESC=Open command prompt
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=Launch Explorer
-RAPPS_TITLE=ReactOS Applications Manager
+RAPPS_TITLE=LiberNT Applications Manager
 RAPPS_TITLE_SHORT=Applications Manager
 RAPPS_DESC=Download and install various applications
 SERVMAN_TITLE=Service Manager
@@ -1108,9 +1108,9 @@ GAMES=Spill
 
 CMD_TITLE=Command Prompt
 CMD_DESC=Åpne Kommandolinje
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=Start Utforsker
-RAPPS_TITLE=ReactOS Applications Manager
+RAPPS_TITLE=LiberNT Applications Manager
 RAPPS_TITLE_SHORT=Applications Manager
 RAPPS_DESC=Last ned og innstaller forskjellige applikasjoner
 SERVMAN_TITLE=Service Manager
@@ -1171,13 +1171,13 @@ COMMUNICATIONS=Komunikacja
 GAMES=Gry
 
 README_TITLE=Przeczytaj Mnie
-README_DESC=Plik Przeczytaj Mnie ReactOS
+README_DESC=Plik Przeczytaj Mnie LiberNT
 
 CMD_TITLE=Wiersz polecenia
 CMD_DESC=Uruchom konsolę
-EXPLORER_TITLE=Eksplorator ReactOS
+EXPLORER_TITLE=Eksplorator LiberNT
 EXPLORER_DESC=Uruchom Eksplorator
-RAPPS_TITLE=Menedżer aplikacji ReactOS
+RAPPS_TITLE=Menedżer aplikacji LiberNT
 RAPPS_TITLE_SHORT=Menedżer aplikacji
 RAPPS_DESC=Pobierz i zainstaluj inne aplikacje
 SERVMAN_TITLE=Menedżer usług
@@ -1242,13 +1242,13 @@ COMMUNICATIONS=Communications
 GAMES=Jogos
 
 README_TITLE=Leia-Me
-README_DESC=Arquivo de informações para ReactOS
+README_DESC=Arquivo de informações para LiberNT
 
 CMD_TITLE=Command Prompt
 CMD_DESC=Abrir prompt de comando
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=Iniciar Explorer
-RAPPS_TITLE=ReactOS Applications Manager
+RAPPS_TITLE=LiberNT Applications Manager
 RAPPS_TITLE_SHORT=Applications Manager
 RAPPS_DESC=Faça o download e instale várias aplicações
 SERVMAN_TITLE=Service Manager
@@ -1309,13 +1309,13 @@ COMMUNICATIONS=Comunicações
 GAMES=Jogos
 
 README_TITLE=Leia-Me
-README_DESC=Arquivo de informações para o ReactOS
+README_DESC=Arquivo de informações para o LiberNT
 
 CMD_TITLE=Linha de Comandos
 CMD_DESC=Abrir Linha de comando
-EXPLORER_TITLE=Explorador do ReactOS
+EXPLORER_TITLE=Explorador do LiberNT
 EXPLORER_DESC=Iniciar Explorador
-RAPPS_TITLE=Gestor de Aplicações ReactOS
+RAPPS_TITLE=Gestor de Aplicações LiberNT
 RAPPS_TITLE_SHORT=Gestor de Aplicações
 RAPPS_DESC=Faça o download e instale várias aplicações
 SERVMAN_TITLE=Gestor de Serviços
@@ -1376,17 +1376,17 @@ COMMUNICATIONS=Communicații
 GAMES=Jocuri
 
 README_TITLE=De citit
-README_DESC=Fișier de informare ReactOS
+README_DESC=Fișier de informare LiberNT
 
 CMD_TITLE=Linie de comandă
 CMD_DESC=Efectuează funcții de tip text (linie de comandă)
-EXPLORER_TITLE=ReactOS Explorer
+EXPLORER_TITLE=LiberNT Explorer
 EXPLORER_DESC=Afișează fișierele și folderele de pe computer
-RAPPS_TITLE=Managerul de aplicații ReactOS
+RAPPS_TITLE=Managerul de aplicații LiberNT
 RAPPS_TITLE_SHORT=Manager de aplicații
 RAPPS_DESC=Program pentru a descărca și instala diverse programe
 SERVMAN_TITLE=Gestionar de servicii
-SERVMAN_DESC=Pornește, oprește și configurează serviciile ReactOS
+SERVMAN_DESC=Pornește, oprește și configurează serviciile LiberNT
 DEVMGMT_TITLE=Manager dispozitive
 DEVMGMT_DESC=Vizualizați și actualizați setările hardware și software-ul pentru drivere
 TASKMGR11_TITLE=Task Manager
@@ -1445,13 +1445,13 @@ COMMUNICATIONS=Связь
 GAMES=Игры
 
 README_TITLE=Прочти Меня
-README_DESC=файл ReadMe для ReactOS
+README_DESC=файл ReadMe для LiberNT
 
 CMD_TITLE=Командная строка
 CMD_DESC=Используется для выполнения вводимых с клавиатуры команд
-EXPLORER_TITLE=Проводник ReactOS
+EXPLORER_TITLE=Проводник LiberNT
 EXPLORER_DESC=Отображает файлы и папки на компьютере
-RAPPS_TITLE=Менеджер приложений ReactOS
+RAPPS_TITLE=Менеджер приложений LiberNT
 RAPPS_TITLE_SHORT=Менеджер приложений
 RAPPS_DESC=Скачать и установить другие приложения
 SERVMAN_TITLE=Диспетчер служб
@@ -1517,9 +1517,9 @@ GAMES=Hry
 
 CMD_TITLE=Príkazový riadok
 CMD_DESC=Otvoriť Príkazový riadok
-EXPLORER_TITLE=Prieskumník systému ReactOS
+EXPLORER_TITLE=Prieskumník systému LiberNT
 EXPLORER_DESC=Spustiť Prieskumníka
-RAPPS_TITLE=Manažér aplikácií systému ReactOS
+RAPPS_TITLE=Manažér aplikácií systému LiberNT
 RAPPS_TITLE_SHORT=Manažér aplikácií systému
 RAPPS_DESC=Stiahnuť a nainštalovať ďalšie aplikácie
 SERVMAN_TITLE=Správca služieb
@@ -1580,13 +1580,13 @@ COMMUNICATIONS=İletişim
 GAMES=Oyunlar
 
 README_TITLE=Benioku
-README_DESC=ReactOS Benioku
+README_DESC=LiberNT Benioku
 
 CMD_TITLE=Komut İstemi
 CMD_DESC=Komut İstemi'ni aç
-EXPLORER_TITLE=ReactOS Gezgini
+EXPLORER_TITLE=LiberNT Gezgini
 EXPLORER_DESC=Gezgin'i başlat
-RAPPS_TITLE=ReactOS Uygulama Yöneticisi
+RAPPS_TITLE=LiberNT Uygulama Yöneticisi
 RAPPS_TITLE_SHORT=Uygulama Yöneticisi
 RAPPS_DESC=Çeşitli uygulamaları indir ve kur
 SERVMAN_TITLE=Hizmet Yöneticisi
@@ -1651,13 +1651,13 @@ COMMUNICATIONS=Зв'язок
 GAMES=Ігри
 
 README_TITLE=Прочитай мене
-README_DESC=Файл ReadMe для ReactOS
+README_DESC=Файл ReadMe для LiberNT
 
 CMD_TITLE=Командний рядок
 CMD_DESC=Відкрити командний рядок
-EXPLORER_TITLE=Провідник ReactOS
+EXPLORER_TITLE=Провідник LiberNT
 EXPLORER_DESC=Запустити провідник
-RAPPS_TITLE=Менеджер програм ReactOS
+RAPPS_TITLE=Менеджер програм LiberNT
 RAPPS_TITLE_SHORT=Менеджер програм
 RAPPS_DESC=Завантаження і встановлення різних додатків
 SERVMAN_TITLE=Диспетчер служб
@@ -1720,14 +1720,14 @@ COMMUNICATIONS=Komunikazioak
 GAMES=Jolasak
 
 README_TITLE=Irakurri hau
-README_DESC=ReactOS gidaliburua irakurtzeko
+README_DESC=LiberNT gidaliburua irakurtzeko
 
 CMD_TITLE=Kontsola
 CMD_DESC=Ireki komanduen konstsola
-EXPLORER_TITLE=ReactOS Esploradorea
+EXPLORER_TITLE=LiberNT Esploradorea
 EXPLORER_DESC=Ireki fitxategi-esploradore lehio bat
-RAPPS_TITLE=ReactOS aplikazio denda eta eragilea
-RAPPS_TITLE_SHORT=ReactOS app denda
+RAPPS_TITLE=LiberNT aplikazio denda eta eragilea
+RAPPS_TITLE_SHORT=LiberNT app denda
 RAPPS_DESC=Deskargatu eta instalatu nahibaduzun aplikazioak
 SERVMAN_TITLE=Konfiguratu zerbitzaria
 SERVMAN_DESC=Hasi Zerbitzu kudeaketa
@@ -1754,7 +1754,7 @@ MSPAINT_DESC=Hasi irudiaren editore funtsezkoa
 CHARMAP_TITLE=Karaktere-mapa
 CHARMAP_DESC=Karaktere-mapa hasi
 CLIPBRD_TITLE=Arbel-ikustailea
-CLIPBRD_DESC=Controla lo que copias y pegas en el visor del portapapeles de ReactOS
+CLIPBRD_DESC=Controla lo que copias y pegas en el visor del portapapeles de LiberNT
 KBSWITCH_TITLE=Teklatuen diztribuzio aukerak
 KBSWITCH_DESC=Cambia la distribución de teclas del equipo
 REGEDIT_TITLE=Erregistro editorea
@@ -1791,13 +1791,13 @@ COMMUNICATIONS=通讯
 GAMES=游戏
 
 README_TITLE=自述文件
-README_DESC=ReactOS 自述文件
+README_DESC=LiberNT 自述文件
 
 CMD_TITLE=命令提示符
 CMD_DESC=命令提示符
-EXPLORER_TITLE=ReactOS 资源管理器
-EXPLORER_DESC=ReactOS 资源管理器
-RAPPS_TITLE=ReactOS 应用程序管理器
+EXPLORER_TITLE=LiberNT 资源管理器
+EXPLORER_DESC=LiberNT 资源管理器
+RAPPS_TITLE=LiberNT 应用程序管理器
 RAPPS_TITLE_SHORT=应用程序管理器
 RAPPS_DESC=下载并安装其它应用程序
 SERVMAN_TITLE=服务
@@ -1860,13 +1860,13 @@ COMMUNICATIONS=通訊
 GAMES=遊樂場
 
 README_TITLE=讀我檔案
-README_DESC=ReactOS 讀我檔案
+README_DESC=LiberNT 讀我檔案
 
 CMD_TITLE=命令提示字元
 CMD_DESC=啟動命令提示字元
-EXPLORER_TITLE=ReactOS 檔案總管
+EXPLORER_TITLE=LiberNT 檔案總管
 EXPLORER_DESC=啟動檔案總管
-RAPPS_TITLE=ReactOS 應用程式管理員
+RAPPS_TITLE=LiberNT 應用程式管理員
 RAPPS_TITLE_SHORT=應用程式管理員
 RAPPS_DESC=下載並安裝其它應用程式
 SERVMAN_TITLE=服務管理員

@@ -328,7 +328,7 @@ des caractères spéciaux suivants:\n\n\
   $Q   = (signe égale)\n\
   $S   (espace)\n\
   $T   Heure courante\n\
-  $V   Numéro de version de ReactOS\n\
+  $V   Numéro de version de LiberNT\n\
   $_   Retour chariot/saut de ligne\n\
   $$   $ (signe dollar)"
     STRING_PROMPT_HELP2 "  $+   Affiche la hauteur de la pile de répertoires"
@@ -516,10 +516,10 @@ titre         titre de la fenêtre"
     STRING_ERROR_UNEXPECTED "%s n'était pas attendu.\n"
     STRING_ERROR_WHILE_PROCESSING "Une erreur est apparue lors du traitement : %s.\n"
     STRING_SET_ENV_ERROR "Variable d'environnement '%s' non définie\n"
-    STRING_CMD_INFOLINE "  ReactOS Command Prompt                                      Type HELP = Help  "
+    STRING_CMD_INFOLINE "  LiberNT Command Prompt                                      Type HELP = Help  "
     STRING_CMD_COPYRIGHT "(C) Copyright 2026 LiberNT Team.\n(C) Copyright 1996-%s ReactOS Team.\n"
     STRING_REACTOS_VERSION "LiberNT [Version %s %s]\n"
-    STRING_CMD_SHELLINFO "\nInterpréteur de ligne de commandes ReactOS\nVersion %s %s"
+    STRING_CMD_SHELLINFO "\nInterpréteur de ligne de commandes LiberNT\nVersion %s %s"
     STRING_VERSION_RUNNING_ON "Fonctionnant sous: "
     STRING_VERSION_RUNVER "%s [Version %d.%d.%d] %s"
     STRING_COPY_FILE "        %d fichier(s) copié(s)\n"

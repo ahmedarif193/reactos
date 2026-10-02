@@ -176,7 +176,7 @@ END
 STRINGTABLE
 BEGIN
 /* Please note that explicit TAB characters '\t' are used to fix the alignment of the message in the MessageBox */
-    IDS_USAGE "Vizualizatorul de evenimente ReactOS\n\
+    IDS_USAGE "Vizualizatorul de evenimente LiberNT\n\
 \n\
 EventVwr [numele computerului] [/L:<fișier de jurnal de evenimente>] [/?]\n\
 \n\

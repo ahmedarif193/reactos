@@ -150,7 +150,7 @@ wmain(int argc, WCHAR *argv[])
     UNREFERENCED_PARAMETER(argc);
     UNREFERENCED_PARAMETER(argv);
 
-    wprintf(L"ReactOS Native WiFi scan\n\n");
+    wprintf(L"LiberNT Native WiFi scan\n\n");
 
     dwResult = WlanOpenHandle(WLAN_API_VERSION_2_0, NULL, &dwVersion, &hClient);
     if (dwResult != ERROR_SUCCESS)

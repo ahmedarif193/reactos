@@ -336,7 +336,7 @@ BEGIN
     BEGIN
         MENUITEM "&Témakörök", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "A ReactOS &Számológépről", IDM_HELP_ABOUT
+        MENUITEM "A LiberNT &Számológépről", IDM_HELP_ABOUT
     END
 END
 
@@ -369,7 +369,7 @@ BEGIN
     BEGIN
         MENUITEM "&Témakörök", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "A ReactOS &Számológépről", IDM_HELP_ABOUT
+        MENUITEM "A LiberNT &Számológépről", IDM_HELP_ABOUT
     END
 END
 
@@ -392,7 +392,7 @@ BEGIN
     BEGIN
         MENUITEM "&Témakörök", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "A ReactOS &Számológépről", IDM_HELP_ABOUT
+        MENUITEM "A LiberNT &Számológépről", IDM_HELP_ABOUT
     END
 END
 
@@ -407,7 +407,7 @@ END
 /* About */
 STRINGTABLE
 BEGIN
-    IDS_CALC_NAME "ReactOS Számológép"
+    IDS_CALC_NAME "LiberNT Számológép"
     IDS_AUTHOR "Írta Carlo Bramini"
 END
 

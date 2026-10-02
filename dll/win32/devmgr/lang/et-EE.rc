@@ -294,7 +294,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "ReactOS Seadmehaldur"
+  IDS_APPNAME               "LiberNT Seadmehaldur"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Selle seadme keelamine põhjustab selle töötamise lakkamise.\nKas soovite kindlasti seda keelata?"
   IDS_CONFIRM_UNINSTALL     "Hoiatus: Hakkate seda seadet süsteemist desinstallima.\nKas soovite jätkata?"
@@ -341,7 +341,7 @@ BEGIN
   IDS_HINT_UPDATE       " Käivitab valitud seadme jaoks draiveritarkvara värskendamise viisardi."
   IDS_HINT_UNINSTALL    " Desinstallib valitud seadme draiveri."
   IDS_HINT_ADD          " Lisage arvutisse pärandseade (mitteisehäälestuv)."
-  IDS_HINT_ABOUT        " Teave programmi ReactOS Seadmehaldur kohta."
+  IDS_HINT_ABOUT        " Teave programmi LiberNT Seadmehaldur kohta."
   IDS_HINT_EXIT         " Väljub programmist."
 
   IDS_HINT_DEV_BY_TYPE  " Kuvab seadmed riistvaratüübi järgi."

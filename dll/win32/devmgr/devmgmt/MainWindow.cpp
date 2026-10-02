@@ -661,7 +661,7 @@ CDeviceManager::OnCommand(_In_ WPARAM wParam,
             CAtlStringW szAppAuthors;
 
             if (!szAppName.LoadStringW(g_hThisInstance, IDS_APPNAME))
-                szAppName = L"ReactOS Device Manager";
+                szAppName = L"LiberNT Device Manager";
             if (!szAppAuthors.LoadStringW(g_hThisInstance, IDS_APP_AUTHORS))
                 szAppAuthors = L"";
             ShellAboutW(m_hMainWnd, szAppName, szAppAuthors,

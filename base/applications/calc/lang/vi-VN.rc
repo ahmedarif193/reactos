@@ -336,7 +336,7 @@ BEGIN
     BEGIN
         MENUITEM "Các chủ đề &trợ giúp", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "&Giới thiệu về Máy tính ReactOS", IDM_HELP_ABOUT
+        MENUITEM "&Giới thiệu về Máy tính LiberNT", IDM_HELP_ABOUT
     END
 END
 
@@ -369,7 +369,7 @@ BEGIN
     BEGIN
         MENUITEM "Các chủ đề &trợ giúp", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "&Giới thiệu về Máy tính ReactOS", IDM_HELP_ABOUT
+        MENUITEM "&Giới thiệu về Máy tính LiberNT", IDM_HELP_ABOUT
     END
 END
 
@@ -392,7 +392,7 @@ BEGIN
     BEGIN
         MENUITEM "Các chủ đề &trợ giúp", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "&Giới thiệu về Máy tính ReactOS", IDM_HELP_ABOUT
+        MENUITEM "&Giới thiệu về Máy tính LiberNT", IDM_HELP_ABOUT
     END
 END
 
@@ -407,7 +407,7 @@ END
 /* About */
 STRINGTABLE
 BEGIN
-    IDS_CALC_NAME "Máy tính ReactOS"
+    IDS_CALC_NAME "Máy tính LiberNT"
     IDS_AUTHOR "Viết bởi Carlo Bramini"
 END
 

@@ -728,7 +728,7 @@ LocaleDlgProc(
                         static WCHAR szMsg[RC_STRING_MAX_SIZE];
                         INT ret;
                         LoadStringW(GetModuleHandle(NULL), IDS_CANCEL_CONFIRM, szMsg, ARRAYSIZE(szMsg));
-                        ret = MessageBoxW(hwndDlg, szMsg, L"ReactOS LiveCD", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2);
+                        ret = MessageBoxW(hwndDlg, szMsg, L"LiberNT LiveCD", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2);
                         if (ret == IDOK || ret == IDYES)
                         {
                             pState->NextPage = DONE;
@@ -826,7 +826,7 @@ StartDlgProc(
                             static WCHAR szMsg[RC_STRING_MAX_SIZE];
                             INT ret;
                             LoadStringW(GetModuleHandle(NULL), IDS_CANCEL_CONFIRM, szMsg, ARRAYSIZE(szMsg));
-                            ret = MessageBoxW(hwndDlg, szMsg, L"ReactOS LiveCD", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2);
+                            ret = MessageBoxW(hwndDlg, szMsg, L"LiberNT LiveCD", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2);
                             if (ret == IDOK || ret == IDYES)
                             {
                                 pState->NextPage = DONE;

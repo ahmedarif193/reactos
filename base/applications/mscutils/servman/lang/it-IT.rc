@@ -307,7 +307,7 @@ BEGIN
     IDS_HINT_DETAILS " Visualizza le informazioni degli elementi."
     IDS_HINT_CUST " Personalizza la vista."
     IDS_HINT_HELP " Visualizza Aiuto."
-    IDS_HINT_ABOUT " Informazioni su ReactOS Gestione servizi."
+    IDS_HINT_ABOUT " Informazioni su LiberNT Gestione servizi."
     IDS_HINT_SYS_RESTORE " Ripristina la dimensione normale della finestra."
     IDS_HINT_SYS_MOVE " Muova la finestra."
     IDS_HINT_SYS_SIZE " Modifica la dimensione della finestra."
@@ -319,7 +319,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "Gestione dei servizi di ReactOS"
+    IDS_APPNAME "Gestione dei servizi di LiberNT"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

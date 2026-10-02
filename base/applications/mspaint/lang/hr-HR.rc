@@ -238,7 +238,7 @@ STRINGTABLE
 BEGIN
     IDS_PROGRAMNAME "Paint"
     IDS_WINDOWTITLE "%s - Paint"
-    IDS_INFOTITLE "Paint za ReactOS"
+    IDS_INFOTITLE "Paint za LiberNT"
     IDS_INFOTEXT "Dostupno pod GNU Lesser General Public License (LGPL, vidi www.gnu.org)"
     IDS_SAVEPROMPTTEXT "Želite li spremiti promjene u %s?"
     IDS_DEFAULTFILENAME "Bez naziva"

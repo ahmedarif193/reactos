@@ -237,7 +237,7 @@ STRINGTABLE
 BEGIN
     IDS_PROGRAMNAME "Paint"
     IDS_WINDOWTITLE "%s - Paint"
-    IDS_INFOTITLE "ReactOS-ko Paint"
+    IDS_INFOTITLE "LiberNT-ko Paint"
     IDS_INFOTEXT "Available under the GNU Lesser General Public License (LGPL, ver www.gnu.org)"
     IDS_SAVEPROMPTTEXT "%s aldaketak gorde nahi duzu?"
     IDS_DEFAULTFILENAME "Izegabea"

@@ -288,7 +288,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "ReactOS Eszközkezelő"
+  IDS_APPNAME               "LiberNT Eszközkezelő"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Az eszköz letiltás után nem fog működni.\nBiztosan letiltja?"
   IDS_CONFIRM_UNINSTALL     "Figyelem: arra készül hogy eltávolítsa ezt az eszközt a rendszerből.\nFolytatni szeretné?"
@@ -335,7 +335,7 @@ BEGIN
   IDS_HINT_UPDATE       " Elindítja az illesztőprogram-frissítés varázslót a kijelölt eszközhöz."
   IDS_HINT_UNINSTALL    " Eltávolítja a kijelölt eszközhöz tartozó illesztőprogramot."
   IDS_HINT_ADD          " Hozzáad egy régi (nem Plug and Play) eszközt a számítógéphez."
-  IDS_HINT_ABOUT        " A ReactOS Eszközkezelő névjegye."
+  IDS_HINT_ABOUT        " A LiberNT Eszközkezelő névjegye."
   IDS_HINT_EXIT         " Kilépés a programból."
 
   IDS_HINT_DEV_BY_TYPE  " Hardvertípus szerint jeleníti meg az eszközöket."

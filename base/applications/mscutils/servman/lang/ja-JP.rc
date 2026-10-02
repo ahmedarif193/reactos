@@ -307,7 +307,7 @@ BEGIN
     IDS_HINT_DETAILS " 各アイテムの情報をウィンドウに表示します。"
     IDS_HINT_CUST " 表示をカスタマイズします。"
     IDS_HINT_HELP " ヘルプ ウィンドウを表示します。"
-    IDS_HINT_ABOUT " ReactOS サービス マネージャについて表示します。"
+    IDS_HINT_ABOUT " LiberNT サービス マネージャについて表示します。"
     IDS_HINT_SYS_RESTORE " このウィンドウを通常の大きさに復元します。"
     IDS_HINT_SYS_MOVE " このウィンドウを移動します。"
     IDS_HINT_SYS_SIZE " このウィンドウの大きさを変更します。"
@@ -319,7 +319,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "ReactOS サービス マネージャ"
+    IDS_APPNAME "LiberNT サービス マネージャ"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

@@ -559,7 +559,7 @@ LoadLocalizedResourcesFromINI(LCID Locale, LPTSTR lpResPath)
     }
 
     /* Try to load the default localized strings */
-    GetPrivateProfileString(TEXT("Defaults"), TEXT("AppTitle"), TEXT("ReactOS - Welcome") /* default */,
+    GetPrivateProfileString(TEXT("Defaults"), TEXT("AppTitle"), TEXT("LiberNT - Welcome") /* default */,
                             szAppTitle, ARRAYSIZE(szAppTitle), szIniPath);
     GetPrivateProfileString(TEXT("Defaults"), TEXT("DefaultTopicTitle"), TEXT("") /* default */,
                             szDefaultTitle, ARRAYSIZE(szDefaultTitle), szIniPath);
@@ -654,7 +654,7 @@ LoadConfiguration(VOID)
      * They can be redefined by the localized INI files.
      */
     if (!LoadString(hInstance, IDS_APPTITLE, szAppTitle, ARRAYSIZE(szAppTitle)))
-        StringCchCopy(szAppTitle, ARRAYSIZE(szAppTitle), TEXT("ReactOS - Welcome"));
+        StringCchCopy(szAppTitle, ARRAYSIZE(szAppTitle), TEXT("LiberNT - Welcome"));
     if (!LoadString(hInstance, IDS_DEFAULT_TOPIC_TITLE, szDefaultTitle, ARRAYSIZE(szDefaultTitle)))
         *szDefaultTitle = 0;
     if (!LoadString(hInstance, IDS_DEFAULT_TOPIC_DESC, szDefaultDesc, ARRAYSIZE(szDefaultDesc)))
@@ -1006,7 +1006,7 @@ RunAction(INT nTopic)
 
         if (!_tcsnicmp(Command, TEXT("<msg>"), 5))
         {
-            MessageBox(hWndMain, Command + 5, TEXT("ReactOS"), MB_OK | MB_TASKMODAL);
+            MessageBox(hWndMain, Command + 5, TEXT("LiberNT"), MB_OK | MB_TASKMODAL);
             return TRUE;
         }
     }
@@ -1356,7 +1356,7 @@ OnPaint(HWND hWnd, WPARAM wParam, LPARAM lParam)
 
     /* Draw version information */
     StringCchCopy(szVersion, ARRAYSIZE(szVersion),
-                  TEXT("ReactOS ") TEXT(KERNEL_VERSION_STR));
+                  TEXT("LiberNT ") TEXT(KERNEL_VERSION_STR));
 
     /*
      * Compute the original rect (position & size) of the version info,

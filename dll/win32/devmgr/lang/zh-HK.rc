@@ -295,7 +295,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "ReactOS 裝置管理員"
+  IDS_APPNAME               "LiberNT 裝置管理員"
   IDS_APP_AUTHORS           "2015 Ged Murphy 版權所有"
   IDS_CONFIRM_DISABLE       "停用這個裝置會使其停止運作。\n你真的想要停用它嗎？"
   IDS_CONFIRM_UNINSTALL     "警告：您將要從系統中解除安裝這個裝置。\n你想要繼續嗎？"
@@ -342,7 +342,7 @@ BEGIN
   IDS_HINT_UPDATE       " 啟動所選裝置的更新驅動程式軟件精靈。"
   IDS_HINT_UNINSTALL    " 解除安裝所選裝置的驅動程式。"
   IDS_HINT_ADD          " 新增一個舊的（非隨插即用）裝置到電腦。"
-  IDS_HINT_ABOUT        " 關於 ReactOS 裝置管理員。"
+  IDS_HINT_ABOUT        " 關於 LiberNT 裝置管理員。"
   IDS_HINT_EXIT         " 結束程式。"
 
   IDS_HINT_DEV_BY_TYPE  " 按硬件類型顯示裝置。"

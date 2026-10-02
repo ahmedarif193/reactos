@@ -68,7 +68,7 @@ BEGIN
     IDS_TOOLTIP_SEEKFORW "Sök framåt"
     IDS_TOOLTIP_FORWARD "Spola fremåt"
     IDS_TOOLTIP_PAUSE "Pause"
-    IDS_APPTITLE "ReactOS Multimediaspelare"
+    IDS_APPTITLE "LiberNT Multimediaspelare"
     IDS_PLAY "Play"
     IDS_DEFAULTMCIERRMSG "No description is available for this error."
 END

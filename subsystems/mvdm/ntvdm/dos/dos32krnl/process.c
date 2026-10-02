@@ -858,7 +858,7 @@ WORD DosCreateProcess(IN LPCSTR ProgramName,
 
                 DisplayMessage(L"Trying to load '%S'.\n"
                                L"WOW16 applications are not supported internally by NTVDM at the moment.\n"
-                               L"Consider installing WineVDM from the ReactOS Applications Manager in\n'%S'.\n\n"
+                               L"Consider installing WineVDM from the LiberNT Applications Manager in\n'%S'.\n\n"
                                L"Click on OK to continue.",
                                ProgramName, ExpName);
             }

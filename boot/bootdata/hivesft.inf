@@ -345,7 +345,7 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Propertie
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","wined3dcfg.cpl",0x00010001,1
 
 ; Cursors Schemes
-HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes","ReactOS Default",0x00020000,""",,,,,,,,,,,,,"""
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes","LiberNT Default",0x00020000,""",,,,,,,,,,,,,"""
 
 ; Advanced
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced",,0x00000012

@@ -26,7 +26,7 @@ END
 /* Topic titles */
 STRINGTABLE
 BEGIN
-    IDS_TOPIC_TITLE0 "Инсталиране на ReactOSS"
+    IDS_TOPIC_TITLE0 "Инсталиране на LiberNTS"
     IDS_TOPIC_TITLE1 "Разгледай това CD"
     IDS_TOPIC_TITLE2 "Изход"
 END

@@ -300,7 +300,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "Menedźer urządzeń ReactOS"
+  IDS_APPNAME               "Menedźer urządzeń LiberNT"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Wyłączenie tego urządzenia spowoduje, że przestanie ono funkcjonować.\nCzy na pewno chcesz je wyłączyć?"
   IDS_CONFIRM_UNINSTALL     "Ostrzeżenie: Urządzenie to zostanie zaraz odinstalowane z systemu.\nCzy chcesz kontynuować?"
@@ -347,7 +347,7 @@ BEGIN
   IDS_HINT_UPDATE       " Uruchamia Kreatora aktualizacji sprzętu dla wybranego sterownika."
   IDS_HINT_UNINSTALL    " Odinstalowuje sterownik dla wybranego urządzenia."
   IDS_HINT_ADD          " Dodaje starsze (niezgodne ze standardem Plug and Play) urządzenie do komputera."
-  IDS_HINT_ABOUT        " O menedżerze urządzeń ReactOS."
+  IDS_HINT_ABOUT        " O menedżerze urządzeń LiberNT."
   IDS_HINT_EXIT         " Zamyka program."
 
   IDS_HINT_DEV_BY_TYPE  " Wyświetla urządzenia według typów sprzętu."

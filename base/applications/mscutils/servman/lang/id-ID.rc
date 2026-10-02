@@ -307,7 +307,7 @@ BEGIN
     IDS_HINT_DETAILS " Menampilkan informasi mengenai setiap item dalam jendela."
     IDS_HINT_CUST " Mengkustomisasi tampilan."
     IDS_HINT_HELP " Menampilkan jendela bantuan."
-    IDS_HINT_ABOUT " Tentang Manajer Layanan ReactOS."
+    IDS_HINT_ABOUT " Tentang Manajer Layanan LiberNT."
     IDS_HINT_SYS_RESTORE " Mengembalikan jendela ini ke ukuran normal."
     IDS_HINT_SYS_MOVE " Memindahkan jendela ini."
     IDS_HINT_SYS_SIZE " Mengukur ulang jendela ini."
@@ -319,7 +319,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "ReactOS Service Manager"
+    IDS_APPNAME "LiberNT Service Manager"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

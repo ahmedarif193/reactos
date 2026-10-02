@@ -353,10 +353,10 @@ ROSDATA VSC_LPWSTR extended_key_names[] = {
   { 0x51, L"PAGE DOWN" },
   { 0x52, L"INS" },
   { 0x53, L"DEL" },
-  { 0x54, L"<ReactOS>" },
+  { 0x54, L"<LiberNT>" },
   { 0x56, L"HJELP" },
-  { 0x5b, L"VENSTRE <ReactOS>" },
-  { 0x5c, L"H\x00D8YRE <ReactOS>" },
+  { 0x5b, L"VENSTRE <LiberNT>" },
+  { 0x5c, L"H\x00D8YRE <LiberNT>" },
   { 0x5d, L"Program" },
   { 0, NULL }
 };

@@ -2599,7 +2599,7 @@ Status RunCatalogGui(SourceManager &source, const std::string &initialQuery)
     UpdateStatusBar(state);
 
     MessageBoxW(window,
-                L"The winget catalog contains applications published for Windows. Some packages may not install or run correctly on ReactOS yet.",
+                L"The winget catalog contains applications published for Windows. Some packages may not install or run correctly on LiberNT yet.",
                 L"rosget compatibility notice", MB_OK | MB_ICONWARNING);
 
     if (!state.worker.Start(window, &source))

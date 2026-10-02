@@ -330,7 +330,7 @@ DmMainWndShowAboutDialog(
 
     StringCchPrintfW(Text,
                      ARRAYSIZE(Text),
-                     L"ReactOS Disk Management\n\n"
+                     L"LiberNT Disk Management\n\n"
                      L"Current support:\n"
                      L"- Read-only disk and volume enumeration\n"
                      L"- Windows-style top list and bottom disk map\n"

@@ -15,7 +15,7 @@ CAPTION "LiberNT Kur"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "LiberNT Kur Sihirbazına'na Hoş Geldiniz", IDC_WELCOMETITLE, 115, 8, 195, 24
-    LTEXT "Bu sihirbaz LiberNT'u bilgisayarınıza kurar.\nReactOS Kurulum Sihirbazı, LiberNT'u düzgünce kurmak için siz ve bilgisayarınız hakkında bazı bilgiler toplamaya gerek duymaktadır.", IDC_STATIC, 115, 40, 195, 50
+    LTEXT "Bu sihirbaz LiberNT'u bilgisayarınıza kurar.\nLiberNT Kurulum Sihirbazı, LiberNT'u düzgünce kurmak için siz ve bilgisayarınız hakkında bazı bilgiler toplamaya gerek duymaktadır.", IDC_STATIC, 115, 40, 195, 50
     LTEXT "Kuruluma devam etmek için İleri'ye tıklayınız.", IDC_STATIC, 115, 169, 195, 17
 END
 

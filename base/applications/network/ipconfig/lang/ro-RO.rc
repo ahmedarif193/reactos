@@ -10,7 +10,7 @@ LANGUAGE LANG_ROMANIAN, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nConfigurația IP a ReactOS\n\n"
+    IDS_HEADER "\nConfigurația IP a LiberNT\n\n"
     IDS_HOSTNAME            "\tNumele gazdei . . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tSufixul primar DNS. . . . . . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tTipul nodului . . . . . . . . . . : Difuzare\n"

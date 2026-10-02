@@ -45,6 +45,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "Consola de gestiune ReactOS"
+    IDS_APPTITLE "Consola de gestiune LiberNT"
     IDS_CONSOLETITLE "Consola%1!u!"
 END

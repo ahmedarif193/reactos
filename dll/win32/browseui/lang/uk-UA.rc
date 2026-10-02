@@ -349,6 +349,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "ReactOS Explorer"
-    IDS_PARSE_ADDR_ERR_TEXT "ReactOS Explorer не може знайти '%1'. Перевірте правильність написання та спробуйте ще раз."
+    IDS_PARSE_ADDR_ERR_TITLE "LiberNT Explorer"
+    IDS_PARSE_ADDR_ERR_TEXT "LiberNT Explorer не може знайти '%1'. Перевірте правильність написання та спробуйте ще раз."
 END

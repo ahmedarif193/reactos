@@ -171,9 +171,9 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "Менеджер додатків ReactOS"
+    IDS_APPTITLE "Менеджер додатків LiberNT"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
-    IDS_WELCOME_TITLE "Ласкаво просимо в Менеджер додатків ReactOS!"
+    IDS_WELCOME_TITLE "Ласкаво просимо в Менеджер додатків LiberNT!"
     IDS_WELCOME_TEXT "Виберіть категорію зліва, а потім виберіть програми для встановлення чи видалення.\nСторінка LiberNT: "
     IDS_WELCOME_URL "https://reactos.org"
 

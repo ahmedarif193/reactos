@@ -239,7 +239,7 @@ STRINGTABLE
 BEGIN
     IDS_PROGRAMNAME "צייר"
     IDS_WINDOWTITLE "%s - צייר"
-    IDS_INFOTITLE "צייר עבור ReactOS"
+    IDS_INFOTITLE "צייר עבור LiberNT"
     IDS_INFOTEXT "Available under the GNU Lesser General Public License (LGPL, see www.gnu.org)"
     IDS_SAVEPROMPTTEXT "האם ברצונך לשמור את השינויים של %s?"
     IDS_DEFAULTFILENAME "ללא שם"

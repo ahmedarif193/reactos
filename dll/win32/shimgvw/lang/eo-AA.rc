@@ -9,7 +9,7 @@ LANGUAGE LANG_ESPERANTO, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "Montrilo de Bildoj kaj Faksoj de ReactOS"
+    IDS_APPTITLE "Montrilo de Bildoj kaj Faksoj de LiberNT"
     IDS_SETASDESKBG "Agordi kiel fono de labortablo"
     IDS_NOPREVIEW "Antaŭrigardo nedisponebla."
     IDS_PREVIEW "Antaŭrigardo"

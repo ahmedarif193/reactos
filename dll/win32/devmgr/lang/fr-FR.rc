@@ -288,7 +288,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "Gestionnaire de périphériques ReactOS"
+  IDS_APPNAME               "Gestionnaire de périphériques LiberNT"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Désactiver ce périphérique va le rendre inopérant.\nVoulez-vous réellement le désactiver ?"
   IDS_CONFIRM_UNINSTALL     "Attention : vous êtes sur le point de désinstaller ce périphérique de votre système.\nVoulez-vous continuer ?"
@@ -335,7 +335,7 @@ BEGIN
   IDS_HINT_UPDATE       " Lance l'assistant de mise à jour de pilote logiciel pour le périphérique sélectionné."
   IDS_HINT_UNINSTALL    " Désinstalle le pilote pour le périphérique sélectionné."
   IDS_HINT_ADD          " Ajoute un périphérique ancien (non 'plug and play') à l'ordinateur."
-  IDS_HINT_ABOUT        " À propos du gestionnaire de périphérique ReactOS."
+  IDS_HINT_ABOUT        " À propos du gestionnaire de périphérique LiberNT."
   IDS_HINT_EXIT         " Quitte le programme."
 
   IDS_HINT_DEV_BY_TYPE  " Affiche les périphériques par type de matériel."

@@ -358,6 +358,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "ReactOS エクスプローラ"
-    IDS_PARSE_ADDR_ERR_TEXT "ReactOS エクスプローラは '%1' を見つけられませんでした。スペルを確認してやり直して下さい。"
+    IDS_PARSE_ADDR_ERR_TITLE "LiberNT エクスプローラ"
+    IDS_PARSE_ADDR_ERR_TEXT "LiberNT エクスプローラは '%1' を見つけられませんでした。スペルを確認してやり直して下さい。"
 END

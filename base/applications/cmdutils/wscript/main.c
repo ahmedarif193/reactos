@@ -407,7 +407,7 @@ void schedule_timeout(LONG seconds)
 static void print_banner(void)
 {
 #ifdef __REACTOS__
-    const WCHAR *header = L"ReactOS Script Host";
+    const WCHAR *header = L"LiberNT Script Host";
 #else
     const char * (CDECL *wine_get_version)(void);
     WCHAR header[64];

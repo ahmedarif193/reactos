@@ -52,7 +52,7 @@ WinNtVdmBiosReset(LPWORD Stack)
     DisplayMessage(L"You are loading Windows NTVDM BIOS!\n");
     // Bios32Post(Stack);
 
-    DisplayMessage(L"ReactOS NTVDM doesn't support Windows NTVDM BIOS at the moment. The VDM will shut down.");
+    DisplayMessage(L"LiberNT NTVDM doesn't support Windows NTVDM BIOS at the moment. The VDM will shut down.");
     EmulatorTerminate();
 }
 

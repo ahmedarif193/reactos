@@ -278,7 +278,7 @@ BEGIN
     5851 "「開始」選單"
     IDS_REACTOS_LOGOFF "LiberNT 登出"
     IDS_REACTOS_LOGON "LiberNT 登入"
-    5854 "ReactOS 檔案總管"
+    5854 "LiberNT 檔案總管"
     IDS_BROWSE_FOR_SOUND "搜尋新的聲音"
     IDS_WAVE_FILES_FILTER "Wave 檔案 (*.wav)|*.wav|"
 END

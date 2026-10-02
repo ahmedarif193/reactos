@@ -309,7 +309,7 @@ BEGIN
     IDS_HINT_DETAILS " 각 항목에 대한 정보창을 엽니다."
     IDS_HINT_CUST " 뷰를 커스터마이즈 합니다."
     IDS_HINT_HELP " 도움말을 엽니다."
-    IDS_HINT_ABOUT " ReactOS 서비스 관리자에 대해."
+    IDS_HINT_ABOUT " LiberNT 서비스 관리자에 대해."
     IDS_HINT_SYS_RESTORE " 이 창을 보통 크기로 맞춥니다."
     IDS_HINT_SYS_MOVE " 창을 옮깁니다."
     IDS_HINT_SYS_SIZE " 창의 크기를 조정합니다."
@@ -321,7 +321,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "ReactOS 서비스 관리자"
+    IDS_APPNAME "LiberNT 서비스 관리자"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

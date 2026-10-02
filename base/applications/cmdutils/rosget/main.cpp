@@ -39,7 +39,7 @@ struct CommandOptions
 void PrintHelp()
 {
     std::printf(
-        "rosget %.*s - ReactOS package manager for the WinGet community repository\n\n"
+        "rosget %.*s - LiberNT package manager for the WinGet community repository\n\n"
         "Usage:\n"
         "  rosget search [[-q] <query>] [--id|--name|--moniker|--tag|--command <value>] [-e] [-n <count>]\n"
         "  rosget show <query> [--id <id>] [-e]\n"

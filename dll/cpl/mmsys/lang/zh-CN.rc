@@ -280,7 +280,7 @@ BEGIN
     5851 "“开始”菜单"
     IDS_REACTOS_LOGOFF "LiberNT 注销"
     IDS_REACTOS_LOGON "LiberNT 登录"
-    5854 "ReactOS 资源管理器"
+    5854 "LiberNT 资源管理器"
     IDS_BROWSE_FOR_SOUND "搜索新声音文件"
     IDS_WAVE_FILES_FILTER "波形声音 (*.wav)|*.wav|"
 END

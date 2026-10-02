@@ -364,6 +364,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "ReactOS 檔案總管"
-    IDS_PARSE_ADDR_ERR_TEXT "ReactOS 檔案總管找不到「%1」。請檢查拼寫並再試一次。"
+    IDS_PARSE_ADDR_ERR_TITLE "LiberNT 檔案總管"
+    IDS_PARSE_ADDR_ERR_TEXT "LiberNT 檔案總管找不到「%1」。請檢查拼寫並再試一次。"
 END

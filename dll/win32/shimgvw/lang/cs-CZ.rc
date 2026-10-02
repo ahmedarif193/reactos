@@ -10,7 +10,7 @@ LANGUAGE LANG_CZECH, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "ReactOS prohlížeč obrázků a faxů"
+    IDS_APPTITLE "LiberNT prohlížeč obrázků a faxů"
     IDS_SETASDESKBG "Nastavit jako pozadí plochy"
     IDS_NOPREVIEW "Náhled není k dispozici."
     IDS_PREVIEW "Náhled"

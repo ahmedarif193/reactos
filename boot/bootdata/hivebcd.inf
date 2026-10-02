@@ -10,7 +10,7 @@ BCD,"BCD00000000\Description\Control","KeyName",,"BCD00000000"
 ; ReactOS Boot Manager
 ;
 BCD,"BCD00000000\Objects\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\Description","Type",0x00010001,0x10100002                                       ; identifier={bootmgr}
-BCD,"BCD00000000\Objects\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\Elements\12000004","Element",,"ReactOS Boot Manager"                            ; description
+BCD,"BCD00000000\Objects\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\Elements\12000004","Element",,"LiberNT Boot Manager"                            ; description
 BCD,"BCD00000000\Objects\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\Elements\12000005","Element",,"en-US"                                           ; locale="en-US"
 BCD,"BCD00000000\Objects\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\Elements\14000006","Element",0x10000,"{7ea2e1ac-2e61-4728-aaa3-896d9d0a9f0e}"   ; inherit={globalsettings}
 BCD,"BCD00000000\Objects\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\Elements\23000003","Element",,"{7619dcc9-fafe-11d9-b411-000476eba25f}"          ; default={winload}
@@ -32,7 +32,7 @@ BCD,"BCD00000000\Objects\{7619dcc9-fafe-11d9-b411-000476eba25f}\Elements\1100000
     00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,\
     00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 BCD,"BCD00000000\Objects\{7619dcc9-fafe-11d9-b411-000476eba25f}\Elements\12000002","Element",,"\reactos\system32\boot\rosload.efi"              ; path
-BCD,"BCD00000000\Objects\{7619dcc9-fafe-11d9-b411-000476eba25f}\Elements\12000004","Element",,"ReactOS Setup"                                   ; description
+BCD,"BCD00000000\Objects\{7619dcc9-fafe-11d9-b411-000476eba25f}\Elements\12000004","Element",,"LiberNT Setup"                                   ; description
 BCD,"BCD00000000\Objects\{7619dcc9-fafe-11d9-b411-000476eba25f}\Elements\12000005","Element",,"en-US"                                           ; locale="en-US"
 BCD,"BCD00000000\Objects\{7619dcc9-fafe-11d9-b411-000476eba25f}\Elements\14000006","Element",0x10000,"{6efb52bf-1766-41db-a6b3-0ee5eff72bd7}"   ; inherit={bootloadersettings}
 BCD,"BCD00000000\Objects\{7619dcc9-fafe-11d9-b411-000476eba25f}\Elements\16000060","Element",0x1,0x01                                           ; isolatedcontext=Yes

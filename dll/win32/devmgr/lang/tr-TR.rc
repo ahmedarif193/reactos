@@ -289,7 +289,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "ReactOS Aygıt Yöneticisi"
+  IDS_APPNAME               "LiberNT Aygıt Yöneticisi"
   IDS_APP_AUTHORS           "Telif Hakkı: 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Bu aygıtı devre dışı bırakmak, işleyişinin durmasına neden olacaktır.\nAygıtı devre dışı bırakmayı gerçekten istiyor musunuz?"
   IDS_CONFIRM_UNINSTALL     "Uyarı: Bu aygıtı sisteminizden kaldırmak üzeresiniz.\nDevam etmek istiyor musunuz?"
@@ -336,7 +336,7 @@ BEGIN
   IDS_HINT_UPDATE       " Seçili aygıt için Sürücü Yazılımını Güncelleştir sihirbazını başlatır."
   IDS_HINT_UNINSTALL    " Seçili aygıt için sürücüyü kaldırır."
   IDS_HINT_ADD          " Bilgisayara eski (Tak ve Çalıştır uyumsuz) bir aygıt ekler."
-  IDS_HINT_ABOUT        " ReactOS Aygıt Yöneticisi hakkında"
+  IDS_HINT_ABOUT        " LiberNT Aygıt Yöneticisi hakkında"
   IDS_HINT_EXIT         " Programdan çıkar."
 
   IDS_HINT_DEV_BY_TYPE  " Aygıtları donanım türüne göre görüntüler."

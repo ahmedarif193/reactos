@@ -9,7 +9,7 @@ LANGUAGE LANG_PORTUGUESE, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "Visualizador de imagens e faxes do ReactOS"
+    IDS_APPTITLE "Visualizador de imagens e faxes do LiberNT"
     IDS_SETASDESKBG "Definir como plano de fundo da área de trabalho"
     IDS_NOPREVIEW "Nenhuma pré-visualização disponível."
     IDS_PREVIEW "Pré-visualizar"

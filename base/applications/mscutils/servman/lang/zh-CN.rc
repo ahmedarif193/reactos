@@ -309,7 +309,7 @@ BEGIN
     IDS_HINT_DETAILS " 在窗口中显示每个条目的信息。"
     IDS_HINT_CUST " 自定义视图。"
     IDS_HINT_HELP " 显示帮助窗口。"
-    IDS_HINT_ABOUT " 关于 ReactOS 服务管理器。"
+    IDS_HINT_ABOUT " 关于 LiberNT 服务管理器。"
     IDS_HINT_SYS_RESTORE " 将这个窗口恢复到普通大小。"
     IDS_HINT_SYS_MOVE " 移动这个窗口。"
     IDS_HINT_SYS_SIZE " 调整这个窗口的大小。"
@@ -321,7 +321,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "ReactOS 服务管理器"
+    IDS_APPNAME "LiberNT 服务管理器"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

@@ -13,6 +13,6 @@
 #define REACTOS_STR_INTERNAL_NAME     "uniata.sys"
 #define REACTOS_STR_ORIGINAL_FILENAME "uniata.sys"
 #define REACTOS_STR_LEGAL_COPYRIGHT   "Copyright 1999-" UNIATA_VER_YEAR_STR " AlterWare, Copyright 2010 ReactOS Team"
-#define REACTOS_STR_PRODUCT_NAME      "UniATA Driver for ReactOS"
+#define REACTOS_STR_PRODUCT_NAME      "UniATA Driver for LiberNT"
 #define REACTOS_STR_PRODUCT_VERSION   VERSION_STR
 #include <reactos/version.rc>

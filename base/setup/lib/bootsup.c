@@ -332,7 +332,7 @@ SkipThisEntry:
         RtlStringCchPrintfW(Data->SectionName, ARRAYSIZE(Data->SectionName),
                             L"ReactOS_%lu", Data->i);
         RtlStringCchPrintfW(Data->OsName, ARRAYSIZE(Data->OsName),
-                            L"\"ReactOS %lu\"", Data->i);
+                            L"\"LiberNT %lu\"", Data->i);
         Data->i++;
     }
     return STATUS_SUCCESS;
@@ -362,7 +362,7 @@ UpdateFreeLoaderIni(
     Data.i = 1;
     Data.ArcPath = ArcPath;
     RtlStringCchCopyW(Data.SectionName, ARRAYSIZE(Data.SectionName), L"ReactOS");
-    RtlStringCchCopyW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"ReactOS\"");
+    RtlStringCchCopyW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"LiberNT\"");
 
     //
     // FIXME: We temporarily use EnumerateBootStoreEntries, until
@@ -374,7 +374,7 @@ UpdateFreeLoaderIni(
     if (!Data.UseExistingEntry)
     {
         // RtlStringCchPrintfW(Data.SectionName, ARRAYSIZE(Data.SectionName), L"ReactOS_%lu", Data.i);
-        // RtlStringCchPrintfW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"ReactOS %lu\"", Data.i);
+        // RtlStringCchPrintfW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"LiberNT %lu\"", Data.i);
 
         BootEntry->Version = FreeLdr;
         BootEntry->BootFilePath = NULL;
@@ -424,7 +424,7 @@ UpdateBootIni(
     // Data.i = 1;
     Data.ArcPath = EntryName;
     // RtlStringCchCopyW(Data.SectionName, ARRAYSIZE(Data.SectionName), L"ReactOS");
-    RtlStringCchCopyW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"ReactOS\"");
+    RtlStringCchCopyW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"LiberNT\"");
 
     //
     // FIXME: We temporarily use EnumerateBootStoreEntries, until
@@ -1073,7 +1073,7 @@ InstallFatBootcodeToPartition(
         DPRINT1("Update 'boot.ini'\n");
         Status = UpdateBootIni(SystemRootPath->Buffer,
                                L"C:\\bootsect.ros",
-                               L"\"ReactOS\"");
+                               L"\"LiberNT\"");
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("UpdateBootIni() failed (Status %lx)\n", Status);

@@ -989,7 +989,7 @@ BEGIN
     IDS_DEFAULT_CLUSTER_SIZE "Esleitutako tamaina lehenetsia"
     IDS_COPY_OF "Zeren kopia"
 
-    IDS_SHLEXEC_NOASSOC "Ez dago programarik konfiguratuta ReactOSen fitxategi mota hau irekitzeko."
+    IDS_SHLEXEC_NOASSOC "Ez dago programarik konfiguratuta LiberNTen fitxategi mota hau irekitzeko."
 
     IDS_FILE_DETAILS "«%s» fitxategi motaren xehetasunak:"
     IDS_FILE_DETAILSADV "Luzapen «%s» duten fitxategiak «%s» motakoak dira. Fitxategien ezarpenak aldatzeko «%s», sakatu Ezarpen aurreratuak"

@@ -9,7 +9,7 @@ LANGUAGE LANG_ROMANIAN, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_USAGE "Utilitatea Timeout de ReactOS\n\
+    IDS_USAGE "Utilitatea Timeout de LiberNT\n\
 \n\
 TIMEOUT [/?] [/T] timp [/NOBREAK]\n\
 \n\

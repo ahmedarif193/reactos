@@ -329,7 +329,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "Menedżer usług ReactOS"
+    IDS_APPNAME "Menedżer usług LiberNT"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

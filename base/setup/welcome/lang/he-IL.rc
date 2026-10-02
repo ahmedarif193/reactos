@@ -7,7 +7,7 @@ LANGUAGE LANG_HEBREW, SUBLANG_DEFAULT
  * in front of the FileDescription value of the version stamping.
  */
 #undef REACTOS_STR_FILE_DESCRIPTION
-#define REACTOS_STR_FILE_DESCRIPTION    L"\x200e\x200e" L"ReactOS-Welcome"
+#define REACTOS_STR_FILE_DESCRIPTION    L"\x200e\x200e" L"LiberNT-Welcome"
 #include <reactos/version.rc>
 
 /* String Tables */

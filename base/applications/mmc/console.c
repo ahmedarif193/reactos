@@ -140,7 +140,7 @@ FrameOnCreate(HWND hwnd,
     {
         /* FIXME */
         Info->AppAuthorMode = TRUE;
-//        Info->lpConsoleTitle = TEXT("ReactOS Management Console");
+//        Info->lpConsoleTitle = TEXT("LiberNT Management Console");
     }
     else
     {
@@ -151,7 +151,7 @@ FrameOnCreate(HWND hwnd,
     SetMenu(Info->hwnd,
             Info->hMenuConsoleSmall);
 
-    SetWindowText(Info->hwnd, TEXT("ReactOS Management Console"));
+    SetWindowText(Info->hwnd, TEXT("LiberNT Management Console"));
 
     ccs.hWindowMenu = GetSubMenu(Info->hMenuConsoleLarge, 1);
     ccs.idFirstChild = IDM_MDI_FIRSTCHILD;

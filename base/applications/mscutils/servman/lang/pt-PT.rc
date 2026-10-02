@@ -307,7 +307,7 @@ BEGIN
     IDS_HINT_DETAILS " Mostra informações acerca de cada item numa janela."
     IDS_HINT_CUST " Personalizar a vista."
     IDS_HINT_HELP " Mostrar a janela de ajuda."
-    IDS_HINT_ABOUT " Acerca do Gestor de Serviços ReactOS."
+    IDS_HINT_ABOUT " Acerca do Gestor de Serviços LiberNT."
     IDS_HINT_SYS_RESTORE " Repor esta janela no tamanho normal."
     IDS_HINT_SYS_MOVE " Move esta janela."
     IDS_HINT_SYS_SIZE " Reajusta o tamanho desta janela."
@@ -319,7 +319,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "Gestor de Serviços ReactOS"
+    IDS_APPNAME "Gestor de Serviços LiberNT"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

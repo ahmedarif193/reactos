@@ -312,7 +312,7 @@ BEGIN
     IDS_HINT_DETAILS " Shfaq informacionet e secilit send ne nje dritare."
     IDS_HINT_CUST " Modifiko veshtruesin."
     IDS_HINT_HELP " Shfaq dritaren e ndihmës."
-    IDS_HINT_ABOUT " Rreth Menaxherit të shërbimeve të ReactOS."
+    IDS_HINT_ABOUT " Rreth Menaxherit të shërbimeve të LiberNT."
     IDS_HINT_SYS_RESTORE " Kthe kete dritare ne mase normale."
     IDS_HINT_SYS_MOVE " Leviz kete dritare."
     IDS_HINT_SYS_SIZE " Ndryshon permasen e dritares."
@@ -324,7 +324,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "Menaxhues i shërbimeve të ReactOS"
+    IDS_APPNAME "Menaxhues i shërbimeve të LiberNT"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

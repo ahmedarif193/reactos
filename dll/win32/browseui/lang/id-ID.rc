@@ -359,6 +359,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "Penjelajah ReactOS"
-    IDS_PARSE_ADDR_ERR_TEXT "Penjelajah ReactOS tidak menemukan '%1'. Cek pengejaannya dan coba lagi."
+    IDS_PARSE_ADDR_ERR_TITLE "Penjelajah LiberNT"
+    IDS_PARSE_ADDR_ERR_TEXT "Penjelajah LiberNT tidak menemukan '%1'. Cek pengejaannya dan coba lagi."
 END

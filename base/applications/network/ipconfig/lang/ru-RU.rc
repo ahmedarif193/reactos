@@ -10,7 +10,7 @@ LANGUAGE LANG_RUSSIAN, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nНастройка протокола IP для ReactOS\n\n"
+    IDS_HEADER "\nНастройка протокола IP для LiberNT\n\n"
     IDS_HOSTNAME            "\tИмя компьютера. . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tОсновной DNS-суффикс. . . . . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tТип узла. . . . . . . . . . . . . : Широковещательный\n"

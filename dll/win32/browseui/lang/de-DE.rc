@@ -348,6 +348,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "ReactOS Explorer"
+    IDS_PARSE_ADDR_ERR_TITLE "LiberNT Explorer"
     IDS_PARSE_ADDR_ERR_TEXT "'%1' kann nicht gefunden werden."
 END

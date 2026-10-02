@@ -733,7 +733,7 @@ DelReg = registry.inf,DelReg
 AddReg = registry.inf,AddReg
 
 [Strings]
-cdname      = "ReactOS Installation Media"
-productname = "ReactOS"
+cdname      = "LiberNT Installation Media"
+productname = "LiberNT"
 
 ; EOF

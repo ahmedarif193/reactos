@@ -9,7 +9,7 @@ LANGUAGE LANG_TURKISH, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_USAGE "ReactOS Zaman Aşımı Yardımcı Programı\n\
+    IDS_USAGE "LiberNT Zaman Aşımı Yardımcı Programı\n\
 \n\
 TIMEOUT [/?] [/T] gecikme [/NOBREAK]\n\
 \n\

@@ -296,7 +296,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "ReactOS 设备管理器"
+  IDS_APPNAME               "LiberNT 设备管理器"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "禁用此设备会使其停止运行。\n你真的想要禁用它吗？"
   IDS_CONFIRM_UNINSTALL     "警告: 您将要从系统中卸载此设备。\n你想要继续吗？"
@@ -343,7 +343,7 @@ BEGIN
   IDS_HINT_UPDATE       " 启动所选设备的更新驱动程序软件向导。"
   IDS_HINT_UNINSTALL    " 卸载所选设备的驱动程序。"
   IDS_HINT_ADD          " 将一个旧的（非即插即用）设备添加到计算机。"
-  IDS_HINT_ABOUT        " 关于 ReactOS 设备管理器。"
+  IDS_HINT_ABOUT        " 关于 LiberNT 设备管理器。"
   IDS_HINT_EXIT         " 退出程序。"
 
   IDS_HINT_DEV_BY_TYPE  " 按硬件类型显示设备。"

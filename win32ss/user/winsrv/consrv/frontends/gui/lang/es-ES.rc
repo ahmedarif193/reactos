@@ -28,7 +28,7 @@ BEGIN
     IDS_SCROLLUP "Desplazar arriba"
     IDS_SCROLLDOWN "Desplazar abajo"
 */
-    IDS_TERMINAL_TITLE "Consola de ReactOS"
+    IDS_TERMINAL_TITLE "Consola de LiberNT"
 END
 
 STRINGTABLE

@@ -768,7 +768,7 @@ ConSrvInitConsole(OUT PHANDLE NewConsoleHandle,
         }
         else
         {
-            ConsoleCreateUnicodeString(&Console->Title, L"ReactOS Console");
+            ConsoleCreateUnicodeString(&Console->Title, L"LiberNT Console");
         }
     }
     else

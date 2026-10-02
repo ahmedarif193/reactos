@@ -69,7 +69,7 @@ BEGIN
     IDS_TOOLTIP_SEEKFORW "Перемотування вперед"
     IDS_TOOLTIP_FORWARD "Вперед"
     IDS_TOOLTIP_PAUSE "Pause"
-    IDS_APPTITLE "Програвач ReactOS"
+    IDS_APPTITLE "Програвач LiberNT"
     IDS_PLAY "Відтворити"
     IDS_DEFAULTMCIERRMSG "No description is available for this error."
 END

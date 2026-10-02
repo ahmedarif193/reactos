@@ -60,7 +60,7 @@ BEGIN
     IDS_INETTIMESUCSYNC "Kellaaeg on edukalt sünkroonitud serveriga %s kuupäeval %s kell %s"
     IDS_INETTIMENEXTSYNC "Next synchronization: %s at %s"
     IDS_INETTIMESYNCING "Palun oodake, kuni LiberNT sünkroonib serveriga %s"
-    IDS_INETTIMEERROR "ReactOSi sünkroonimisel serveriga %s ilmnes tõrge."
+    IDS_INETTIMEERROR "LiberNTi sünkroonimisel serveriga %s ilmnes tõrge."
     IDS_INETTIMESUCFILL "Please type an NTP server name in order to synchronize the time"
     IDS_INETTIMEWELCOME "Select an NTP server from the list or type an NTP server name to synchronize the computer's time"
 END

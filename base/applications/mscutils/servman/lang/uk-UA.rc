@@ -315,7 +315,7 @@ BEGIN
     IDS_HINT_DETAILS " Показ інформації про кожен елемент у вікні."
     IDS_HINT_CUST " Настройка вигляду."
     IDS_HINT_HELP " Відображення вікна довідки."
-    IDS_HINT_ABOUT " Про програму Диспетчер керування службами ReactOS."
+    IDS_HINT_ABOUT " Про програму Диспетчер керування службами LiberNT."
     IDS_HINT_SYS_RESTORE " Відновлення вихідних розмірів вікна."
     IDS_HINT_SYS_MOVE " Зміна розташування вікна."
     IDS_HINT_SYS_SIZE " Зміна розмірів вікна."
@@ -327,7 +327,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "Диспетчер керування службами ReactOS"
+    IDS_APPNAME "Диспетчер керування службами LiberNT"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

@@ -358,6 +358,6 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "Explorateur ReactOS"
-    IDS_PARSE_ADDR_ERR_TEXT "ReactOS ne parvient pas à trouver '%1'. Vérifiez l'orthographe et réessayer."
+    IDS_PARSE_ADDR_ERR_TITLE "Explorateur LiberNT"
+    IDS_PARSE_ADDR_ERR_TEXT "LiberNT ne parvient pas à trouver '%1'. Vérifiez l'orthographe et réessayer."
 END

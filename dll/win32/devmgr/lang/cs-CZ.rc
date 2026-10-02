@@ -292,7 +292,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "Správce zařízení ReactOS"
+  IDS_APPNAME               "Správce zařízení LiberNT"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Zakázáním tohoto zařízení dojde k ukončení jeho činnosti.\nOpravdu si jej přejete zakázat?"
   IDS_CONFIRM_UNINSTALL     "Varování: Chystáte se odebrat toto zařízení ze systému.\nPřejete si pokračovat?"

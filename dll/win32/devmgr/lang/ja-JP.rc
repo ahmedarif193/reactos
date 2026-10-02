@@ -287,7 +287,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "ReactOS デバイス マネージャ"
+  IDS_APPNAME               "LiberNT デバイス マネージャ"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "このデバイスを無効にすると、機能が止まります。\nこれを本当に無効にしたいですか？"
   IDS_CONFIRM_UNINSTALL     "警告: あなたのシステムからこのデバイスをアンインストールしようとしています。\n続行したいですか？"
@@ -334,7 +334,7 @@ BEGIN
   IDS_HINT_UPDATE       " 選択中のデバイスに対するデバイス更新ソフトウェア ウィザードを起動します。"
   IDS_HINT_UNINSTALL    " 選択中のデバイスに対するドライバをアンインストールします。"
   IDS_HINT_ADD          " レガシー (非プラグ アンド プレイ) デバイスをコンピュータに追加します。"
-  IDS_HINT_ABOUT        " ReactOS デバイス マネージャについて."
+  IDS_HINT_ABOUT        " LiberNT デバイス マネージャについて."
   IDS_HINT_EXIT         " プログラムを終了します。"
 
   IDS_HINT_DEV_BY_TYPE  " ハードウェアの種類別にデバイスを表示します。"

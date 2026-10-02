@@ -289,7 +289,7 @@ END
 
 STRINGTABLE
 BEGIN
-  IDS_APPNAME               "Диспетчер устройств ReactOS"
+  IDS_APPNAME               "Диспетчер устройств LiberNT"
   IDS_APP_AUTHORS           "Copyright 2015 Ged Murphy"
   IDS_CONFIRM_DISABLE       "Отключение устройства означает, что оно перестанет работать.\nОтключить устройство?"
   IDS_CONFIRM_UNINSTALL     "Предупреждение: Сейчас устройство будет удалено из системы.\nВы хотите продолжить?"
@@ -336,7 +336,7 @@ BEGIN
   IDS_HINT_UPDATE       " Запуск мастера обновления драйверов для выделенного устройства."
   IDS_HINT_UNINSTALL    " Удаление драйвера для выбранного устройства."
   IDS_HINT_ADD          " Добавить старое (не Plug-and-Play) устройство на этот компьютер."
-  IDS_HINT_ABOUT        " О программе ""Диспетчер устройств ReactOS""."
+  IDS_HINT_ABOUT        " О программе ""Диспетчер устройств LiberNT""."
   IDS_HINT_EXIT         " Выход из программы."
 
   IDS_HINT_DEV_BY_TYPE  " Показывает устройства, отсортированные по типу оборудования."

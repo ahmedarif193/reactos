@@ -170,7 +170,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "ReactOS Gestione applicazioni"
+    IDS_APPTITLE "LiberNT Gestione applicazioni"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
     IDS_WELCOME_TITLE "Benvenuto!"
     IDS_WELCOME_TEXT "Scegliere una categoria a sinistra, poi scegliere una applicazione da installare o disinstallare.\nReactOS Web Site: "

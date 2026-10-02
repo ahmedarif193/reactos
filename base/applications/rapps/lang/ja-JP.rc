@@ -170,9 +170,9 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "ReactOS アプリ マネージャ"
+    IDS_APPTITLE "LiberNT アプリ マネージャ"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
-    IDS_WELCOME_TITLE "ReactOS アプリ マネージャへようこそ!"
+    IDS_WELCOME_TITLE "LiberNT アプリ マネージャへようこそ!"
     IDS_WELCOME_TEXT "左側からカテゴリを選択し、インストールまたはアンインストールするアプリを選んでください。\nReactOS ウェブ サイト: "
     IDS_WELCOME_URL "https://reactos.org"
 

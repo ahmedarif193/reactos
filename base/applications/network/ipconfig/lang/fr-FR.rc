@@ -12,7 +12,7 @@ LANGUAGE LANG_FRENCH, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nConfiguration IP de ReactOS\n\n"
+    IDS_HEADER "\nConfiguration IP de LiberNT\n\n"
     IDS_HOSTNAME            "\tNom d'hôte. . . . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tSuffixe DNS Primaire. . . . . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tType de noeud . . . . . . . . . . : Broadcast\n"

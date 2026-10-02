@@ -374,7 +374,7 @@ CCharMapWindow::DialogProc(
         {
         case ID_ABOUT:
             MessageBoxW(This->m_hMainWnd,
-                        L"ReactOS Character Map\nCopyright Ged Murphy 2015",
+                        L"LiberNT Character Map\nCopyright Ged Murphy 2015",
                         L"About",
                         MB_OK | MB_APPLMODAL);
             break;

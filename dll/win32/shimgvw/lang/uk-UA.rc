@@ -10,7 +10,7 @@ LANGUAGE LANG_UKRAINIAN, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "Програма перегляду зображень і факсів ReactOS"
+    IDS_APPTITLE "Програма перегляду зображень і факсів LiberNT"
     IDS_SETASDESKBG "Встановити як фон робочого столу"
     IDS_NOPREVIEW "No preview available."
     IDS_PREVIEW "Перегляд"

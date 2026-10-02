@@ -30,7 +30,7 @@ END
 /* Information and error messages */
 STRINGTABLE
 BEGIN
-    IDS_USAGE "ReactOS シャットダウン ユーティリティ\n\
+    IDS_USAGE "LiberNT シャットダウン ユーティリティ\n\
 \n\
 使い方: shutdown [/?] [/i | /l | /s | /r | /g | /a | /p | /h | /e] [/f]\n\
         [/m \\\\コンピュータ][/t xxx][/d [p|u:]xx:yy [/c ""コメント""]]\n\

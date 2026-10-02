@@ -24,7 +24,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYS
 CAPTION "Expert de instalare LiberNT"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Echipa ReactOS aduce mulțumiri următoarelor proiecte FOSS ce au fost utilizate la crearea ReactOS:", IDC_STATIC, 15, 7, 286, 19
+    LTEXT "Echipa LiberNT aduce mulțumiri următoarelor proiecte FOSS ce au fost utilizate la crearea LiberNT:", IDC_STATIC, 15, 7, 286, 19
     LISTBOX IDC_PROJECTS, 15, 30, 286, 75, LBS_NOSEL | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_VSCROLL
     LTEXT "LiberNT este oferit sub licența GPL, astfel reutilizarea sau redistribuția sa (sau a părților sale componente), cere respectarea licenței GPL.", IDC_STATIC, 15, 110, 234, 19
     PUSHBUTTON "Afișează &GPL", IDC_VIEWGPL, 251, 110, 50, 19

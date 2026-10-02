@@ -307,7 +307,7 @@ BEGIN
     IDS_HINT_DETAILS " Zeigt Informationen über jeden Dienst im Fenster an."
     IDS_HINT_CUST " Passt die Ansicht an."
     IDS_HINT_HELP " Öffnet die Hilfe."
-    IDS_HINT_ABOUT " Info über den ReactOS Dienst-Manager."
+    IDS_HINT_ABOUT " Info über den LiberNT Dienst-Manager."
     IDS_HINT_SYS_RESTORE " Stellt die Normalgröße dieses Fensters wieder her."
     IDS_HINT_SYS_MOVE " Verschiebt dieses Fenster."
     IDS_HINT_SYS_SIZE " Ändert die Größe dieses Fensters."
@@ -319,7 +319,7 @@ END
 /* Application title */
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "ReactOS Dienst-Manager"
+    IDS_APPNAME "LiberNT Dienst-Manager"
     IDS_APPAUTHORS "Copyright (C) 2005-2007 by Ged Murphy (gedmurphy@reactos.org)"
 END
 

@@ -61,7 +61,7 @@ BEGIN
     IDS_TOOLTIP_SEEKFORW "前へシーク"
     IDS_TOOLTIP_FORWARD "前へスキップ"
     IDS_TOOLTIP_PAUSE "一時停止"
-    IDS_APPTITLE "ReactOS マルチメディア プレーヤー"
+    IDS_APPTITLE "LiberNT マルチメディア プレーヤー"
     IDS_PLAY "再生"
     IDS_DEFAULTMCIERRMSG "このエラーの説明はありません。"
 END
