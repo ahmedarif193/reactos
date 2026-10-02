@@ -379,6 +379,8 @@ CWineTest::RunTest(CTestInfo* TestInfo)
         /* Receive all the data from the pipe */
         for (;;)
         {
+            if (GetTickCount() - StartTime >= ProcessActivityTimeout)
+                TESTEXCEPTION("Timeout while waiting for the test process (wall clock)\n");
             DWORD dwReadResult = Pipe.Read(Buffer, sizeof(Buffer) - 1, &BytesAvailable, ProcessActivityTimeout);
             if (dwReadResult == ERROR_SUCCESS)
             {
