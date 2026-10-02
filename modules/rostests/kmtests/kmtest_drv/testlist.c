@@ -261,6 +261,7 @@ KMT_TESTFUNC Test_NpfsCreate;
 KMT_TESTFUNC Test_NpfsFileInfo;
 KMT_TESTFUNC Test_NpfsReadWrite;
 KMT_TESTFUNC Test_NpfsVolumeInfo;
+KMT_TESTFUNC Test_ObCallbacks;
 KMT_TESTFUNC Test_ObHandle;
 KMT_TESTFUNC Test_ObQuery;
 KMT_TESTFUNC Test_ObReference;
@@ -553,6 +554,7 @@ const KMT_TEST TestList[] =
     { "NpfsFileInfo",                       Test_NpfsFileInfo },
     { "NpfsReadWrite",                      Test_NpfsReadWrite },
     { "NpfsVolumeInfo",                     Test_NpfsVolumeInfo },
+    { "ObCallbacks",                        Test_ObCallbacks },
     { "ObHandle",                           Test_ObHandle },
     { "ObOpenByPointer",                    Test_ObOpenByPointer },
     { "ObQuery",                            Test_ObQuery },

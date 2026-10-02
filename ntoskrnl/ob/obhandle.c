@@ -1518,6 +1518,7 @@ ObpCreateUnnamedHandle(IN PVOID Object,
     NTSTATUS Status;
     ACCESS_MASK GrantedAccess;
     POBJECT_TYPE ObjectType;
+    OBP_HANDLE_CALLBACK_STATE CallbackState;
     PAGED_CODE();
 
     /* Get the object header and type */
@@ -1529,6 +1530,9 @@ ObpCreateUnnamedHandle(IN PVOID Object,
             Object,
             ObjectHeader->HandleCount,
             ObjectHeader->PointerCount);
+
+    Status = ObpBeginHandleCallbacks(&CallbackState, ObjectType, OB_OPERATION_HANDLE_CREATE);
+    if (!NT_SUCCESS(Status)) return Status;
 
     /* Save the object header */
     NewEntry.Object = ObjectHeader;
@@ -1570,6 +1574,7 @@ ObpCreateUnnamedHandle(IN PVOID Object,
          * detach and return
          */
         if (AttachedToProcess) KeUnstackDetachProcess(&ApcState);
+        ObpEndHandleCallbacks(&CallbackState, Status, 0);
         return Status;
     }
 
@@ -1584,6 +1589,8 @@ ObpCreateUnnamedHandle(IN PVOID Object,
         InterlockedExchangeAddSizeT(&ObjectHeader->PointerCount,
                                     AdditionalReferences);
     }
+
+    ObpCallPreHandleCallbacks(&CallbackState, Object, KernelHandle, &GrantedAccess, NULL, NULL);
 
     /* Save the access mask */
     NewEntry.GrantedAccess = GrantedAccess;
@@ -1627,6 +1634,7 @@ ObpCreateUnnamedHandle(IN PVOID Object,
                 Handle,
                 ObjectHeader->HandleCount,
                 ObjectHeader->PointerCount);
+        ObpEndHandleCallbacks(&CallbackState, STATUS_SUCCESS, GrantedAccess);
         return STATUS_SUCCESS;
     }
 
@@ -1645,6 +1653,7 @@ ObpCreateUnnamedHandle(IN PVOID Object,
 
     /* Detach and fail */
     if (AttachedToProcess) KeUnstackDetachProcess(&ApcState);
+    ObpEndHandleCallbacks(&CallbackState, STATUS_INSUFFICIENT_RESOURCES, 0);
     return STATUS_INSUFFICIENT_RESOURCES;
 }
 
@@ -1708,6 +1717,7 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
     NTSTATUS Status;
     ACCESS_MASK DesiredAccess, GrantedAccess;
     PAUX_ACCESS_DATA AuxData;
+    OBP_HANDLE_CALLBACK_STATE CallbackState;
     PAGED_CODE();
 
     /* Get the object header and type */
@@ -1727,6 +1737,13 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
         /* They don't, cleanup */
         if (Context) ObpReleaseLookupContext(Context);
         return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+
+    Status = ObpBeginHandleCallbacks(&CallbackState, ObjectType, OB_OPERATION_HANDLE_CREATE);
+    if (!NT_SUCCESS(Status))
+    {
+        if (Context) ObpReleaseLookupContext(Context);
+        return Status;
     }
 
     /* Save the object header */
@@ -1768,6 +1785,7 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
          */
         if (Context) ObpReleaseLookupContext(Context);
         if (AttachedToProcess) KeUnstackDetachProcess(&ApcState);
+        ObpEndHandleCallbacks(&CallbackState, Status, 0);
         return Status;
     }
 
@@ -1805,6 +1823,9 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
 
     /* Now we can release the object */
     if (Context) ObpReleaseLookupContext(Context);
+
+    ObpCallPreHandleCallbacks(&CallbackState, Object, KernelHandle, &GrantedAccess, NULL, NULL);
+    AccessState->PreviouslyGrantedAccess = GrantedAccess;
 
     /* Save the access mask */
     NewEntry.GrantedAccess = GrantedAccess;
@@ -1875,6 +1896,7 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
                 Handle,
                 ObjectHeader->HandleCount,
                 ObjectHeader->PointerCount);
+        ObpEndHandleCallbacks(&CallbackState, STATUS_SUCCESS, GrantedAccess);
         return STATUS_SUCCESS;
     }
 
@@ -1900,6 +1922,7 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
 
     /* Detach if necessary and fail */
     if (AttachedToProcess) KeUnstackDetachProcess(&ApcState);
+    ObpEndHandleCallbacks(&CallbackState, STATUS_INSUFFICIENT_RESOURCES, 0);
     return STATUS_INSUFFICIENT_RESOURCES;
 }
 
@@ -2501,8 +2524,10 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
     OBJECT_HANDLE_INFORMATION HandleInformation;
     ULONG AuditMask;
     BOOLEAN KernelHandle = FALSE;
+    OBP_HANDLE_CALLBACK_STATE CallbackState;
 
     PAGED_CODE();
+    CallbackState.Count = 0;
     OBTRACE(OB_HANDLE_DEBUG,
             "%s - Duplicating handle: %p for %p into %p\n",
             __FUNCTION__,
@@ -2677,6 +2702,11 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         Status = STATUS_SUCCESS;
     }
 
+    if (NT_SUCCESS(Status))
+    {
+        Status = ObpBeginHandleCallbacks(&CallbackState, ObjectType, OB_OPERATION_HANDLE_DUPLICATE);
+    }
+
     /* Make sure the access state was created OK */
     if (NT_SUCCESS(Status))
     {
@@ -2717,9 +2747,13 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         ObDereferenceProcessHandleTable(TargetProcess);
 
         /* Dereference the source object */
+        ObpEndHandleCallbacks(&CallbackState, Status, 0);
         ObDereferenceObject(SourceObject);
         return Status;
     }
+
+    ObpCallPreHandleCallbacks(&CallbackState, SourceObject, KernelHandle, &TargetAccess, SourceProcess, TargetProcess);
+    NewHandleEntry.GrantedAccess = TargetAccess;
 
     if (NewHandleEntry.ObAttributes & OBJ_PROTECT_CLOSE)
     {
@@ -2744,6 +2778,8 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
     {
         ObpChargeHandleCachedReferences(HandleTable, NewHandle, ObjectHeader);
     }
+
+    ObpEndHandleCallbacks(&CallbackState, Status, NT_SUCCESS(Status) ? TargetAccess : 0);
 
     /* Mark it as a kernel handle if requested */
     if (KernelHandle && NewHandle)

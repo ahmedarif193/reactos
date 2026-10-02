@@ -219,6 +219,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_zw/ZwSystemInfoKM.c
     ntos_mm/ZwCreateSection.c
     ntos_mm/ZwMapViewOfSection.c
+    ntos_ob/ObCallbacks.c
     ntos_ob/ObHandle.c
     ntos_ob/ObOpenByPointer.c
     ntos_ob/ObQuery.c

@@ -210,6 +210,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exquota.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exquery.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/devicemap.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obcallback.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obdir.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obhandle.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obinit.c

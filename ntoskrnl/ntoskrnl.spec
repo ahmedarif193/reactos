@@ -2787,15 +2787,15 @@
 @ stub -arch=win64 NtTraceControl
 @ stdcall -arch=arm64 NtWaitForAlertByThreadId(ptr ptr)
 @ stub -arch=win64 ObDereferenceObjectDeferDeleteWithTag
-@ stub -arch=arm64 ObGetFilterVersion
+@ stdcall ObGetFilterVersion()
 @ stub -arch=win64 ObIsDosDeviceLocallyMapped
 @ stub -arch=win64 ObOpenObjectByNameEx
 @ stub -arch=win64 ObOpenObjectByPointerWithTag
 @ stdcall -arch=i386,win64 ObReferenceObjectByHandleWithTag(ptr long ptr long long ptr ptr)
 @ stub -arch=win64 ObReferenceObjectByPointerWithTag
 @ stub -arch=win64 ObReferenceObjectSafeWithTag
-@ stub -arch=arm64 ObRegisterCallbacks
-@ stub -arch=arm64 ObUnRegisterCallbacks
+@ stdcall ObRegisterCallbacks(ptr ptr)
+@ stdcall ObUnRegisterCallbacks(ptr)
 @ stdcall -arch=i386,win64 ObWaitForMultipleObjects(long ptr long long long long ptr)
 @ stdcall -arch=i386,win64 ObWaitForSingleObject(ptr long long long ptr)
 @ fastcall -arch=i386,win64 ObfDereferenceObjectWithTag(ptr long)
