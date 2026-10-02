@@ -349,9 +349,11 @@ AddSectionToCopyQueueCab(
                pSetupData->SourceRootDir.Buffer,
                TargetDir, TargetFileName);
 
-        Status = CombinePaths(FileDstPath, ARRAYSIZE(FileDstPath), 2,
-                              pSetupData->DestinationPath.Buffer,
-                              TargetDir);
+        Status = BuildFullDirectoryPath(pSetupData->DestinationRootPath.Buffer,
+                                        pSetupData->InstallPath.Buffer,
+                                        TargetDir,
+                                        FileDstPath,
+                                        ARRAYSIZE(FileDstPath));
         UNREFERENCED_PARAMETER(Status);
         DPRINT("  --> FileDstPath = '%S'\n", FileDstPath);
 
@@ -467,9 +469,11 @@ AddSectionToCopyQueue(
 
         INF_FreeData(SourceRootPath);
 
-        Status = CombinePaths(FileDstPath, ARRAYSIZE(FileDstPath), 2,
-                              pSetupData->DestinationPath.Buffer,
-                              TargetDirectory);
+        Status = BuildFullDirectoryPath(pSetupData->DestinationRootPath.Buffer,
+                                        pSetupData->InstallPath.Buffer,
+                                        TargetDirectory,
+                                        FileDstPath,
+                                        ARRAYSIZE(FileDstPath));
         UNREFERENCED_PARAMETER(Status);
         // DPRINT1("Could not build the full path for '%S', skipping...\n", TargetDirectory);
         DPRINT("  --> FileDstPath = '%S'\n", FileDstPath);
