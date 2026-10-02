@@ -26,11 +26,7 @@
 
 #define KI_MAXIMUM_DPCS_PER_BATCH 32
 
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
 #define KI_DPC_TARGET_PROCESSOR_OFFSET 0x800
-#else
-#define KI_DPC_TARGET_PROCESSOR_OFFSET MAXIMUM_PROCESSORS
-#endif
 
 ULONG KiMaximumDpcQueueDepth = 4;
 ULONG KiMinimumDpcRate = 3;
@@ -44,13 +40,12 @@ ULONG KiDPCTimeout = 110;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
 
 static PVOID volatile KiActiveDpc[MAXIMUM_PROCESSORS];
 
 static __inline__ VOID KiBeginDpcExecution(_In_ PKPRCB Prcb, _In_ PKDPC Dpc)
 {
-    InterlockedOr64((volatile LONG64 *)&Dpc->ProcessorHistory, (LONG64)AFFINITY_MASK(Prcb->Number));
+    InterlockedOrAffinity((volatile LONG_PTR *)&Dpc->ProcessorHistory, (LONG_PTR)AFFINITY_MASK(Prcb->Number));
     InterlockedExchangePointer(&KiActiveDpc[Prcb->Number], Dpc);
 }
 
@@ -59,7 +54,6 @@ static __inline__ VOID KiEndDpcExecution(_In_ PKPRCB Prcb, _In_ PKDPC Dpc)
     InterlockedCompareExchangePointer(&KiActiveDpc[Prcb->Number], NULL, Dpc);
 }
 
-#endif
 
 VOID
 NTAPI
@@ -277,13 +271,9 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
                         /* Call the DPC */
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
                         KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
-#endif
                         DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
                         KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
-#endif
                     }
 
                     /* Reset accounting */
@@ -328,13 +318,9 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
                         /* Call the DPC */
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
                         KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
-#endif
                         DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
                         KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
-#endif
                     }
 
                     /* Reset accounting */
@@ -369,13 +355,9 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
             /* Call the DPC */
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
             KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
-#endif
             DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
             KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
-#endif
         }
 
         /* Lower IRQL if we need to */
@@ -489,13 +471,9 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
 #endif
 
             /* Call the DPC */
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
             KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
-#endif
             DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
             KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
-#endif
         }
 
         /* Lower IRQL */
@@ -722,9 +700,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
 #endif
 
                 /* Clear its DPC data and save its parameters */
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
                 KiBeginDpcExecution(Prcb, Dpc);
-#endif
                 Dpc->DpcData = NULL;
                 DeferredRoutine = Dpc->DeferredRoutine;
                 DeferredContext = Dpc->DeferredContext;
@@ -747,9 +723,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
                 /* Call the DPC */
                 DeferredRoutine(Dpc, DeferredContext, SystemArgument1, SystemArgument2);
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
                 KiEndDpcExecution(Prcb, Dpc);
-#endif
                 ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
 
                 /* Disable interrupts and keep looping */
@@ -829,9 +803,7 @@ KiInitializeDpc(IN PKDPC Dpc,
     Dpc->DeferredRoutine = DeferredRoutine;
     Dpc->DeferredContext = DeferredContext;
     Dpc->DpcData = NULL;
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
     Dpc->ProcessorHistory = 0;
-#endif
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/
@@ -915,9 +887,7 @@ KeInsertQueueDpc(IN PKDPC Dpc,
     if (!InterlockedCompareExchangePointer(&Dpc->DpcData, DpcData, NULL))
     {
         /* Now we can play with the DPC safely */
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
-        InterlockedOr64((volatile LONG64 *)&Dpc->ProcessorHistory, (LONG64)AFFINITY_MASK(Cpu));
-#endif
+        InterlockedOrAffinity((volatile LONG_PTR *)&Dpc->ProcessorHistory, (LONG_PTR)AFFINITY_MASK(Cpu));
         Dpc->SystemArgument1 = SystemArgument1;
         Dpc->SystemArgument2 = SystemArgument2;
         DpcData->DpcQueueDepth++;
@@ -1104,14 +1074,9 @@ BOOLEAN
 NTAPI
 KeRemoveQueueDpc(IN PKDPC Dpc)
 {
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
     return KeRemoveQueueDpcEx(Dpc, FALSE);
-#else
-    return KiRemoveQueueDpc(Dpc);
-#endif
 }
 
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
 
 /*
  * @implemented
@@ -1131,7 +1096,7 @@ KeRemoveQueueDpcEx(
     if (!WaitIfActive || (KeGetCurrentIrql() >= DISPATCH_LEVEL))
         return Removed;
 
-    ProcessorHistory = (ULONG_PTR)InterlockedCompareExchange64((volatile LONG64 *)&Dpc->ProcessorHistory, 0, 0);
+    ProcessorHistory = (ULONG_PTR)InterlockedCompareExchangePointer((PVOID volatile *)&Dpc->ProcessorHistory, NULL, NULL);
     CurrentProcessor = KeGetCurrentProcessorNumber();
     for (Processor = 0; Processor < KeNumberProcessors; Processor++)
     {
@@ -1145,7 +1110,6 @@ KeRemoveQueueDpcEx(
     return Removed;
 }
 
-#endif
 
 /*
  * @implemented
@@ -1247,10 +1211,8 @@ KeSetTargetProcessorDpc(IN PKDPC Dpc,
 {
     /* Set a target CPU */
     ASSERT_DPC(Dpc);
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
     if ((Number < 0) || ((UCHAR)Number >= (UCHAR)KeNumberProcessors) || (Dpc->DpcData != NULL))
         return;
-#endif
     Dpc->Number = Number + KI_DPC_TARGET_PROCESSOR_OFFSET;
 }
 

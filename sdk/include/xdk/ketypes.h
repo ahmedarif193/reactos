@@ -824,7 +824,6 @@ typedef enum _KDPC_IMPORTANCE {
 } KDPC_IMPORTANCE;
 
 typedef struct _KDPC {
-#ifdef KDPC_HAS_PROCESSOR_HISTORY
   /* Shared Win11 26100 layout (sizeof 0x40). */
   _ANONYMOUS_UNION union {
     ULONG TargetInfoAsUlong;
@@ -835,13 +834,7 @@ typedef struct _KDPC {
     } DUMMYSTRUCTNAME;
   } DUMMYUNIONNAME;
   SINGLE_LIST_ENTRY DpcListEntry;
-  ULONG_PTR ProcessorHistory;
-#else
-  UCHAR Type;
-  UCHAR Importance;
-  volatile USHORT Number;
-  LIST_ENTRY DpcListEntry;
-#endif
+  KAFFINITY ProcessorHistory;
   PKDEFERRED_ROUTINE DeferredRoutine;
   PVOID DeferredContext;
   PVOID SystemArgument1;
@@ -875,6 +868,10 @@ typedef struct _KDEVICE_QUEUE {
 # endif
 } KDEVICE_QUEUE, *PKDEVICE_QUEUE, *RESTRICTED_POINTER PRKDEVICE_QUEUE;
 
+#if defined(_X86_)
+#define KENCODED_TIMER_PROCESSOR        1
+#endif
+
 #define TIMER_EXPIRED_INDEX_BITS        6
 #define TIMER_PROCESSOR_INDEX_BITS      5
 
@@ -886,17 +883,10 @@ typedef struct _DISPATCHER_HEADER {
         _ANONYMOUS_UNION union {
           UCHAR TimerControlFlags;
           _ANONYMOUS_STRUCT struct {
-#ifdef KERNEL_LAYOUT_WIN11_ARM64
             /* Win11 layout */
             UCHAR Absolute:1;
             UCHAR Wake:1;
             UCHAR EncodedTolerableDelay:6;
-#else
-            UCHAR Absolute:1;
-            UCHAR Coalescable:1;
-            UCHAR KeepShifting:1;
-            UCHAR EncodedTolerableDelay:5;
-#endif
           } DUMMYSTRUCTNAME;
         } DUMMYUNIONNAME;
         UCHAR Abandoned;
@@ -1001,12 +991,10 @@ typedef struct _KTIMER {
   ULARGE_INTEGER DueTime;
   LIST_ENTRY TimerListEntry;
   struct _KDPC *Dpc;
-#ifdef KERNEL_LAYOUT_WIN11_ARM64
+#if ((NTDDI_VERSION >= NTDDI_WIN7) || defined(KERNEL_LAYOUT_WIN11_ARM64)) && !defined(KENCODED_TIMER_PROCESSOR)
   /* Shared Win11 26100 layout. */
   USHORT Processor;
   USHORT TimerType;
-#elif (NTDDI_VERSION >= NTDDI_WIN7) && !defined(_X86_)
-  ULONG Processor;
 #endif
   ULONG Period;
 } KTIMER, *PKTIMER, *RESTRICTED_POINTER PRKTIMER;
