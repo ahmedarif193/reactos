@@ -14,6 +14,7 @@ g_Rcx:
 g_SegSs:
     .short 0
 
+.code
 .code64
 
 EXTERN RtlCaptureContext:PROC
