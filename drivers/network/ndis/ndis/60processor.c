@@ -94,6 +94,61 @@ Ndis6GetProcessorVendor(VOID)
 
 NDIS_STATUS
 NTAPI
+NdisGetRssProcessorInformation(
+    _In_ NDIS_HANDLE NdisHandle,
+    _Out_writes_bytes_to_opt_(*Size, *Size) PNDIS_RSS_PROCESSOR_INFO RssProcessorInfo,
+    _Inout_ PSIZE_T Size)
+{
+    PNDIS_RSS_PROCESSOR Processors;
+    PROCESSOR_NUMBER Number;
+    SIZE_T Required;
+    ULONG Count, Index;
+
+    UNREFERENCED_PARAMETER(NdisHandle);
+
+    if (Size == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    Count = KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+    Required = sizeof(*RssProcessorInfo) + (SIZE_T)Count * sizeof(*Processors);
+    if (RssProcessorInfo == NULL || *Size < Required)
+    {
+        *Size = Required;
+        return NDIS_STATUS_BUFFER_TOO_SHORT;
+    }
+
+    RtlZeroMemory(RssProcessorInfo, Required);
+    RssProcessorInfo->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    RssProcessorInfo->Header.Revision = NDIS_RSS_PROCESSOR_INFO_REVISION_2;
+    RssProcessorInfo->Header.Size = NDIS_SIZEOF_RSS_PROCESSOR_INFO_REVISION_2;
+    RssProcessorInfo->MaxNumRssProcessors = Count;
+    RssProcessorInfo->RssProcessorArrayOffset = sizeof(*RssProcessorInfo);
+    RssProcessorInfo->RssProcessorCount = Count;
+    RssProcessorInfo->RssProcessorEntrySize = sizeof(*Processors);
+    RssProcessorInfo->RssProfile = NdisRssProfileClosest;
+
+    Processors = (PNDIS_RSS_PROCESSOR)(RssProcessorInfo + 1);
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (!NT_SUCCESS(KeGetProcessorNumberFromIndex(Index, &Number)))
+        {
+            RtlZeroMemory(&Number, sizeof(Number));
+        }
+        Processors[Index].ProcNum = Number;
+        Processors[Index].PreferenceIndex = (USHORT)Index;
+        if (Index == 0)
+        {
+            RssProcessorInfo->RssBaseProcessor = Number;
+        }
+        RssProcessorInfo->RssMaxProcessor = Number;
+    }
+
+    *Size = Required;
+    return NDIS_STATUS_SUCCESS;
+}
+
+NDIS_STATUS
+NTAPI
 NdisGetProcessorInformationEx(
     _In_opt_ NDIS_HANDLE                    NdisHandle,
     _Out_opt_ PNDIS_SYSTEM_PROCESSOR_INFO_EX SystemProcessorInfo,

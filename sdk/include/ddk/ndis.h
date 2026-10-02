@@ -32,6 +32,60 @@
 #ifndef _NDIS_
 #define _NDIS_
 
+#ifdef NETCX_ADAPTER_2
+
+#if ( \
+    defined(NDIS689_MINIPORT) || \
+    defined(NDIS688_MINIPORT) || \
+    defined(NDIS687_MINIPORT) || \
+    defined(NDIS686_MINIPORT) || \
+    defined(NDIS685_MINIPORT) || \
+    defined(NDIS684_MINIPORT) || \
+    defined(NDIS683_MINIPORT) || \
+    defined(NDIS682_MINIPORT) || \
+    defined(NDIS681_MINIPORT) || \
+    defined(NDIS680_MINIPORT) || \
+    defined(NDIS670_MINIPORT) || \
+    defined(NDIS660_MINIPORT) || \
+    defined(NDIS651_MINIPORT) || \
+    defined(NDIS650_MINIPORT) || \
+    defined(NDIS640_MINIPORT) || \
+    defined(NDIS630_MINIPORT) || \
+    defined(NDIS620_MINIPORT) || \
+    defined(NDIS61_MINIPORT) || \
+    defined(NDIS60_MINIPORT) || \
+    defined(NDIS51_MINIPORT) || \
+    defined(NDIS50_MINIPORT))
+#error NDISXXX_MINIPORT macros are reserved
+#endif
+
+#if ((defined(NET_VERSION_MAJOR) && defined(NET_VERSION_MINOR)) && \
+    (NET_VERSION_MAJOR == 2 && NET_VERSION_MINOR >= 5))
+#define NDIS689_MINIPORT 1
+#elif ((defined(NET_VERSION_MAJOR) && defined(NET_VERSION_MINOR)) && \
+      (NET_VERSION_MAJOR == 2 && NET_VERSION_MINOR == 4))
+#define NDIS688_MINIPORT 1
+#else
+#define NDIS685_MINIPORT 1
+#endif
+
+#ifdef NDIS_MINIPORT_DRIVER
+#error NDIS_MINIPORT_DRIVER macro is reserved
+#endif
+#define NDIS_MINIPORT_DRIVER 1
+
+#ifdef NDIS_WDF
+#error NDIS_WDF macro is reserved
+#endif
+#define NDIS_WDF 1
+
+#ifdef NDIS_WDM
+#undef NDIS_WDM
+#endif
+#define NDIS_WDM 1
+
+#endif
+
 #ifndef NDIS_WDM
 #define NDIS_WDM 0
 #endif
@@ -3210,6 +3264,11 @@ struct _NDIS_OPEN_BLOCK
 
 #define NDIS_M_MAX_LOOKAHEAD           526
 
+
+typedef PVOID NDIS_MINIPORT_DRIVER_CONTEXT;
+typedef PVOID NDIS_MINIPORT_DRIVER_HANDLE;
+typedef PVOID NDIS_MINIPORT_ADAPTER_CONTEXT;
+typedef PVOID NDIS_MINIPORT_ADAPTER_HANDLE;
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NDISAPI
 VOID
@@ -8037,19 +8096,19 @@ typedef MINIPORT_MESSAGE_INTERRUPT_DPC (*MINIPORT_MESSAGE_INTERRUPT_DPC_HANDLER)
  * field types use the function-pointer typedefs above. */
 typedef VOID
 (NTAPI MINIPORT_PROCESS_SG_LIST)(
-  _In_ PVOID       pDevice,
-  _In_ PVOID       Reserved,
-  _In_ PVOID       pSGL,
-  _In_ PVOID       Context);
+  _In_ PDEVICE_OBJECT       pDO,
+  _In_ PVOID                Reserved,
+  _In_ PSCATTER_GATHER_LIST pSGL,
+  _In_ PVOID                Context);
 typedef MINIPORT_PROCESS_SG_LIST (*MINIPORT_PROCESS_SG_LIST_HANDLER);
 
 typedef VOID
 (NTAPI MINIPORT_ALLOCATE_SHARED_MEM_COMPLETE)(
   _In_ NDIS_HANDLE          MiniportAdapterContext,
   _In_ PVOID                VirtualAddress,
-  _In_ NDIS_PHYSICAL_ADDRESS PhysicalAddress,
+  _In_ PNDIS_PHYSICAL_ADDRESS PhysicalAddress,
   _In_ ULONG                Length,
-  _In_opt_ PVOID            Context);
+  _In_ PVOID                Context);
 typedef MINIPORT_ALLOCATE_SHARED_MEM_COMPLETE (*MINIPORT_ALLOCATE_SHARED_MEM_COMPLETE_HANDLER);
 
 typedef struct _NDIS_SG_DMA_DESCRIPTION {
@@ -9542,6 +9601,9 @@ typedef enum _NDIS_SHARED_MEMORY_USAGE
     NdisSharedMemoryUsageMax
 }NDIS_SHARED_MEMORY_USAGE, *PNDIS_SHARED_MEMORY_USAGE;
 
+#define NDIS_SHARED_MEM_PARAMETERS_CONTIGUOUS       0x00000001
+#define NDIS_SHARED_MEM_PARAMETERS_CONTIGOUS        NDIS_SHARED_MEM_PARAMETERS_CONTIGUOUS
+
 #define NDIS_SHARED_MEMORY_PARAMETERS_REVISION_1    1
 
 typedef struct _NDIS_SHARED_MEMORY_PARAMETERS
@@ -9563,6 +9625,21 @@ typedef struct _NDIS_SHARED_MEMORY_PARAMETERS
 
 #define NDIS_SIZEOF_SHARED_MEMORY_PARAMETERS_REVISION_1     \
     RTL_SIZEOF_THROUGH_FIELD(NDIS_SHARED_MEMORY_PARAMETERS, SGListBuffer)
+
+_IRQL_requires_(PASSIVE_LEVEL)
+NDIS_STATUS
+NDISAPI
+NdisAllocateSharedMemory(
+    _In_    NDIS_HANDLE                     NdisHandle,
+    _Inout_ PNDIS_SHARED_MEMORY_PARAMETERS  SharedMemoryParameters,
+    _Out_   PNDIS_HANDLE                    pAllocationHandle);
+
+_IRQL_requires_(PASSIVE_LEVEL)
+VOID
+NDISAPI
+NdisFreeSharedMemory(
+    _In_  NDIS_HANDLE                     NdisHandle,
+    _In_  NDIS_HANDLE                     AllocationHandle);
 
 VOID
 NDISAPI
@@ -9605,6 +9682,11 @@ typedef struct _NDIS_SWITCH_NIC_STATUS_INDICATION
     RTL_SIZEOF_THROUGH_FIELD(NDIS_SWITCH_NIC_STATUS_INDICATION, StatusIndication)
 
 #endif
+
+#ifndef AFFINITY_MASK
+#define AFFINITY_MASK(n) ((KAFFINITY)1 << (n))
+#endif
+
 #if ((NDIS_SUPPORT_NDIS650))
 
 typedef struct _NDIS_PD_QUEUE NDIS_PD_QUEUE;
@@ -10517,6 +10599,34 @@ NdisIfDeleteIfStackEntry(
 #endif
 
 #endif /* NDIS_SUPPORT_NDIS6 */
+
+#if ((NTDDI_VERSION >= NTDDI_VISTA))
+#if ((NDIS_LEGACY_DRIVER || NDIS_SUPPORT_NDIS6))
+
+typedef struct _NDIS_FILTER_INTERFACE
+{
+    NDIS_OBJECT_HEADER       Header;
+    ULONG                    Flags;
+    ULONG                    FilterType;
+    ULONG                    FilterRunType;
+    NET_IFINDEX              IfIndex;
+    NET_LUID                 NetLuid;
+    NDIS_STRING              FilterClass;
+    NDIS_STRING              FilterInstanceName;
+} NDIS_FILTER_INTERFACE, *PNDIS_FILTER_INTERFACE;
+
+typedef struct _NDIS_ENUM_FILTERS
+{
+    NDIS_OBJECT_HEADER              Header;
+    ULONG                           Flags;
+    ULONG                           NumberOfFilters;
+    ULONG                           OffsetFirstFilter;
+    _Field_size_(NumberOfFilters)
+    NDIS_FILTER_INTERFACE           Filter[1];
+} NDIS_ENUM_FILTERS, *PNDIS_ENUM_FILTERS;
+
+#endif
+#endif
 
 #ifdef __cplusplus
 }

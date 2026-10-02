@@ -1226,4 +1226,32 @@ NdisRequestPoll(
         KeInsertQueueDpc(&Poll->Dpc, NULL, NULL);
 }
 
+PNDIS_GENERIC_OBJECT
+NTAPI
+NdisAllocateGenericObject(
+    _In_opt_ PDRIVER_OBJECT DriverObject,
+    _In_ ULONG Tag,
+    _In_ USHORT Size)
+{
+    PNDIS_GENERIC_OBJECT Object;
+
+    Object = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*Object) + Size, Tag);
+    if (Object == NULL)
+        return NULL;
+
+    RtlZeroMemory(Object, sizeof(*Object) + Size);
+    Object->Header.Size = sizeof(*Object);
+    Object->Caller = _ReturnAddress();
+    Object->DriverObject = DriverObject;
+    return Object;
+}
+
+VOID
+NTAPI
+NdisFreeGenericObject(
+    _In_ PNDIS_GENERIC_OBJECT NdisObject)
+{
+    ExFreePoolWithTag(NdisObject, 0);
+}
+
 /* EOF */
