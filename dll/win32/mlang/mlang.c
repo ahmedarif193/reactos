@@ -987,7 +987,11 @@ HRESULT WINAPI ConvertINetMultiByteToUnicode(
     case CP_UNICODE:
         if (*pcSrcSize == -1)
             *pcSrcSize = lstrlenW((LPCWSTR)pSrcStr);
+#ifdef __REACTOS__
+        *pcDstSize = pDstStr ? min(*pcSrcSize, *pcDstSize) : *pcSrcSize;
+#else
         *pcDstSize = min(*pcSrcSize, *pcDstSize);
+#endif
         *pcSrcSize *= sizeof(WCHAR);
         if (pDstStr)
             memmove(pDstStr, pSrcStr, *pcDstSize * sizeof(WCHAR));
@@ -3044,7 +3048,11 @@ static HRESULT WINAPI fnIMultiLanguage3_ConvertStringInIStream(
     if (FAILED(hr)) goto exit;
 
     hr = ConvertINetString(pdwMode, dwSrcEncoding, dwDstEncoding, src, &srclen, NULL, &dstlen);
+#ifdef __REACTOS__
+    if (hr != S_OK) goto exit;
+#else
     if (FAILED(hr)) goto exit;
+#endif
 
     if (!(dst = malloc(dstlen)))
     {
@@ -3052,7 +3060,11 @@ static HRESULT WINAPI fnIMultiLanguage3_ConvertStringInIStream(
         goto exit;
     }
     hr = ConvertINetString(pdwMode, dwSrcEncoding, dwDstEncoding, src, &srclen, dst, &dstlen);
+#ifdef __REACTOS__
+    if (hr != S_OK) goto exit;
+#else
     if (FAILED(hr)) goto exit;
+#endif
 
     hr = IStream_Write(pstmOut, dst, dstlen, NULL);
 
