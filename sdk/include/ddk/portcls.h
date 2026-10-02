@@ -3008,4 +3008,448 @@ typedef IPortClsStreamResourceManager2 *PPORTCLSStreamResourceManager2;
 
 #endif
 
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS2))
+
+typedef struct _PCNOTIFICATION_BUFFER
+{
+    UCHAR NotificationBuffer[1];
+} PCNOTIFICATION_BUFFER, *PPCNOTIFICATION_BUFFER;
+
+DECLARE_INTERFACE_(IPortClsNotifications,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    STDMETHOD_(NTSTATUS, AllocNotificationBuffer)
+    (   THIS_
+        _In_    POOL_TYPE               PoolType,
+        _In_    USHORT                  NumberOfBytes,
+        _Out_   PPCNOTIFICATION_BUFFER* NotificationBuffer
+    )   PURE;
+    STDMETHOD_(void, FreeNotificationBuffer)
+    (   THIS_
+        _In_    PPCNOTIFICATION_BUFFER  NotificationBuffer
+    )   PURE;
+    STDMETHOD_(void, SendNotification)
+    (   THIS_
+        _In_    const GUID*             NotificationId,
+        _In_    PPCNOTIFICATION_BUFFER  NotificationBuffer
+    )   PURE;
+};
+
+typedef IPortClsNotifications *PPORTCLSNOTIFICATIONS;
+
+#endif
+
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
+
+typedef enum{
+    PcRebalanceNotSupported = 0,
+    PcRebalanceRemoveSubdevices
+} PC_REBALANCE_TYPE;
+
+typedef enum _PC_EXIT_LATENCY {
+    PcExitLatencyInstant = 0,
+    PcExitLatencyFast,
+    PcExitLatencyResponsive
+} PC_EXIT_LATENCY, *PPC_EXIT_LATENCY;
+
+#define DEFINE_ABSTRACT_ADAPTERPNPMANAGEMENT()                  \
+    STDMETHOD_(PC_REBALANCE_TYPE, GetSupportedRebalanceType)    \
+    (   THIS                                                    \
+    )   PURE;                                                   \
+    STDMETHOD_(void, PnpQueryStop)                              \
+    (   THIS                                                    \
+    )   PURE;                                                   \
+    STDMETHOD_(void, PnpCancelStop)                             \
+    (   THIS                                                    \
+    )   PURE;                                                   \
+    STDMETHOD_(void, PnpStop)                                   \
+    (   THIS                                                    \
+    )   PURE;
+
+#define DEFINE_ABSTRACT_ADAPTERPOWERMANAGEMENT()                \
+    STDMETHOD_(void,PowerChangeState)                           \
+    (   THIS_                                                   \
+        _In_      POWER_STATE     NewState                      \
+    )   PURE;                                                   \
+    STDMETHOD_(NTSTATUS,QueryPowerChangeState)                  \
+    (   THIS_                                                   \
+        _In_      POWER_STATE     NewStateQuery                 \
+    )   PURE;                                                   \
+    STDMETHOD_(NTSTATUS,QueryDeviceCapabilities)                \
+    (   THIS_                                                   \
+        _Inout_updates_bytes_(sizeof(DEVICE_CAPABILITIES)) PDEVICE_CAPABILITIES    PowerDeviceCaps       \
+    )   PURE;
+
+#define DEFINE_ABSTRACT_ADAPTERPOWERMANAGEMENT2()               \
+    STDMETHOD_(void,PowerChangeState2)                          \
+    (   THIS_                                                   \
+        _In_      DEVICE_POWER_STATE    NewDeviceState,         \
+        _In_      SYSTEM_POWER_STATE    NewSystemState          \
+    )   PURE;
+
+#define DEFINE_ABSTRACT_MINIPORTPNPNOTIFY()                     \
+    STDMETHOD_(void, PnpStop)                                   \
+    (   THIS                                                    \
+    )   PURE;
+
+DEFINE_GUID(IID_IPortWMIRegistration,
+0xd80b18e7, 0x804c, 0x4e1e, 0x82, 0xd3, 0x24, 0x61, 0xec, 0x6, 0xe7, 0xc7);
+
+DEFINE_GUID(IID_IPortClsSubdeviceEx,
+0xc3d5e80c, 0x7f55, 0x40c5, 0x88, 0xb2, 0x62, 0x10, 0xd0, 0xcb, 0x2b, 0x59);
+
+DEFINE_GUID(IID_IPinName,
+0x29cc9ab1, 0xe89d, 0x413c, 0xb6, 0xb2, 0xf6, 0xd5, 0x0, 0x5, 0xd0, 0x63);
+
+DEFINE_GUID(IID_IAdapterPnpManagement,
+0x706f2368L, 0x4086, 0x47f5, 0xb9, 0x13, 0x57, 0xb7, 0x6e, 0xed, 0x1a, 0x32);
+
+DEFINE_GUID(IID_IMiniportPnpNotify,
+0x6b735365L, 0x9487, 0x464c, 0x93, 0xe3, 0xfa, 0x2c, 0x63, 0x91, 0xd5, 0xa4);
+
+DEFINE_GUID(IID_IPortClsPnp,
+0x0485791b, 0x17f5, 0x4b73, 0x90, 0x2a, 0x20, 0x34, 0x48, 0x60, 0xb9, 0xca);
+
+DEFINE_GUID(IID_IAdapterPowerManagement2,
+0xE0F92E5DL, 0x67F5, 0x48EE, 0xB5, 0x7A, 0x7D, 0x1E, 0x90, 0xC5, 0xF4, 0x3D);
+
+DEFINE_GUID(IID_IAdapterPowerManagement3,
+0xA8C7303EL, 0xF80C, 0x4BC9, 0xB2, 0xE3, 0xFB, 0x2D, 0x08, 0xBE, 0x92, 0x0F);
+
+DEFINE_GUID(IID_IWaveCyclicClock,
+0xdec1ec78L, 0x419a, 0x11d1, 0xad, 0x09, 0x00, 0xc0, 0x4f, 0xb9, 0x1b, 0xc4);
+
+DEFINE_GUID(IID_IWavePciClock,
+0xd5d7a256L, 0x5d10, 0x11d1, 0xad, 0xae, 0x00, 0xc0, 0x4f, 0xb9, 0x1b, 0xc4);
+
+DEFINE_GUID(IID_IMiniportStreamAudioEngineNode,
+0xbd6eeb4b, 0xe6e5, 0x40fd, 0x8d, 0x5a, 0x5b, 0x1d, 0xcd, 0xe2, 0xc, 0x42);
+
+DEFINE_GUID(IID_IMiniportStreamAudioEngineNode2,
+0xaeb7f86a, 0x6cba, 0x44cf, 0xa2, 0xd2, 0xb3, 0xfa, 0x5b, 0x69, 0x68, 0x17);
+
+DEFINE_GUID(IID_IPortClsNotifications,
+0x1E092CE2L, 0xDB25, 0x483B, 0x84, 0x46, 0xB0, 0x96, 0x12, 0x15, 0x25, 0x8B);
+
+DECLARE_INTERFACE_(IAdapterPnpManagement,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    DEFINE_ABSTRACT_ADAPTERPNPMANAGEMENT()
+};
+
+typedef IAdapterPnpManagement *PADAPTERPNPMANAGEMENT;
+
+#define IMP_IAdapterPnpManagement                               \
+    STDMETHODIMP_(PC_REBALANCE_TYPE) GetSupportedRebalanceType  \
+    (                                                           \
+    );                                                          \
+    STDMETHODIMP_(void) PnpQueryStop                            \
+    (                                                           \
+    );                                                          \
+    STDMETHODIMP_(void) PnpCancelStop                           \
+    (                                                           \
+    );                                                          \
+    STDMETHODIMP_(void) PnpStop                                 \
+    (                                                           \
+    )
+
+DECLARE_INTERFACE_(IMiniportPnpNotify,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    DEFINE_ABSTRACT_MINIPORTPNPNOTIFY()
+};
+
+typedef IMiniportPnpNotify *PMINIPORTPNPNOTIFY;
+
+#define IMP_IMiniportPnpNotify                                  \
+    STDMETHODIMP_(void) PnpStop                                 \
+    (                                                           \
+    )
+
+DECLARE_INTERFACE_(IPortClsPnp,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS,RegisterAdapterPnpManagement)
+    (  THIS_
+        _In_      PUNKNOWN        pUnknown,
+        _In_      PDEVICE_OBJECT  DeviceObject
+    )   PURE;
+    STDMETHOD_(NTSTATUS,UnregisterAdapterPnpManagement)
+    (  THIS_
+        _In_      PDEVICE_OBJECT  DeviceObject
+    )   PURE;
+};
+
+typedef IPortClsPnp *PPORTCLSPNP;
+
+DECLARE_INTERFACE_(IAdapterPowerManagement2,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    DEFINE_ABSTRACT_ADAPTERPOWERMANAGEMENT()
+
+    STDMETHOD_(void,PowerChangeState2)
+    (   THIS_
+        _In_      DEVICE_POWER_STATE     NewDeviceState,
+        _In_      SYSTEM_POWER_STATE     NewSystemState
+    )   PURE;
+};
+
+typedef IAdapterPowerManagement2 *PADAPTERPOWERMANAGEMENT2;
+
+#define IMP_IAdapterPowerManagement2\
+    IMP_IAdapterPowerManagement;\
+    STDMETHODIMP_(void) PowerChangeState2\
+    (   _In_      DEVICE_POWER_STATE     NewDeviceState,\
+        _In_      SYSTEM_POWER_STATE     NewSystemState\
+    );\
+
+
+DECLARE_INTERFACE_(IAdapterPowerManagement3,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    DEFINE_ABSTRACT_ADAPTERPOWERMANAGEMENT()
+    DEFINE_ABSTRACT_ADAPTERPOWERMANAGEMENT2()
+
+    STDMETHOD_(void,PowerChangeState3)
+    (   THIS_
+        _In_    DEVICE_POWER_STATE      NewDeviceState,
+        _In_    SYSTEM_POWER_STATE      NewSystemState,
+        _In_    PC_EXIT_LATENCY         D3ExitLatency
+    )   PURE;
+
+    STDMETHOD_(NTSTATUS,D3ExitLatencyChanged)
+    (   THIS_
+        _In_      PC_EXIT_LATENCY       NewD3ExitLatency
+    )   PURE;
+};
+
+typedef IAdapterPowerManagement3 *PADAPTERPOWERMANAGEMENT3;
+
+#define IMP_IAdapterPowerManagement3\
+    IMP_IAdapterPowerManagement2;\
+    STDMETHODIMP_(void) PowerChangeState3\
+    (   _In_    DEVICE_POWER_STATE      NewDeviceState,\
+        _In_    SYSTEM_POWER_STATE      NewSystemState,\
+        _In_    PC_EXIT_LATENCY         D3ExitLatency\
+    );\
+    STDMETHODIMP_(NTSTATUS) D3ExitLatencyChanged\
+    (   _In_    PC_EXIT_LATENCY         NewD3ExitLatency\
+    );\
+
+
+DECLARE_INTERFACE_(IPortClsSubdeviceEx,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS, UpdatePinDescriptor)
+    (
+        _In_      ULONG             _ulPinId,
+        _In_      ULONG             _ulFlags,
+        _In_      PPCPIN_DESCRIPTOR _pPinDescriptor
+    ) PURE;
+};
+
+#define PCUPDATE_PIN_DESC_FLAG_DATARANGES 0x00000001
+
+typedef IPortClsSubdeviceEx *PPORTCLSSubdeviceEx;
+
+DECLARE_INTERFACE_(IPortWMIRegistration,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS,RegisterWMIProvider)
+    (   THIS_
+        PDEVICE_OBJECT,
+        PVOID
+    ) PURE;
+    STDMETHOD_(NTSTATUS,UnregisterWMIProvider)
+    (
+        THIS_
+        PDEVICE_OBJECT
+    ) PURE;
+};
+
+typedef IPortWMIRegistration *PPORTWMIREGISTRATION;
+
+DECLARE_INTERFACE_(IPinName,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS,GetPinName)
+    (   THIS_
+        _In_      PIRP            Irp,
+        _In_      PKSP_PIN        Pin,
+        _Out_     PVOID           Data
+    )   PURE;
+};
+
+typedef IPinName *PIPINNAME;
+
+#define IMP_IPinName                        \
+    STDMETHODIMP_(NTSTATUS) GetPinName      \
+    (       _In_      PIRP            Irp,  \
+            _In_      PKSP_PIN        Pin,  \
+            _Out_     PVOID           Data  \
+    );
+
+DECLARE_INTERFACE_(IMiniportStreamAudioEngineNode,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS,GetLfxState)
+    (   THIS_
+        _Out_ BOOL *pbEnable
+    )   PURE;
+    STDMETHOD_(NTSTATUS,SetLfxState)
+    (   THIS_
+        _In_ BOOL bEnable
+    )   PURE;
+    STDMETHOD_(NTSTATUS,GetStreamChannelCount)
+    (   THIS_
+        _In_ eChannelTargetType targetType,
+        _Out_ UINT32 *pulChannelCount
+    )   PURE;
+    STDMETHOD_(NTSTATUS,GetStreamAttributeSteppings)
+    (   THIS_
+        _In_ eChannelTargetType targetType,
+        _Out_ PKSPROPERTY_STEPPING_LONG pKsPropStepLong,
+        _In_ UINT32 ui32DataSize
+    )   PURE;
+    STDMETHOD_(NTSTATUS,GetStreamChannelVolume)
+    (   THIS_
+        _In_ UINT32 ulChannel,
+        _Out_ LONG     *plValue
+    )   PURE;
+     STDMETHOD_(NTSTATUS,SetStreamChannelVolume)
+    (   THIS_
+        _In_ UINT32                                 Channel,
+        _In_ LONG                                   TargetVolume,
+        _In_ AUDIO_CURVE_TYPE                       CurveType,
+        _In_ ULONGLONG                              CurveDuration
+    )   PURE;
+    STDMETHOD_(NTSTATUS,GetStreamChannelMute)
+    (   THIS_
+        _In_ UINT32 ulChannel,
+        _Out_ BOOL    *pbMute
+    )   PURE;
+    STDMETHOD_(NTSTATUS,SetStreamChannelMute)
+    (   THIS_
+        _In_ UINT32 ulChannel,
+        _In_ BOOL    bMute
+    )   PURE;
+    STDMETHOD_(NTSTATUS,GetStreamChannelPeakMeter)
+    (   THIS_
+        _In_ UINT32 ulChannel,
+        _Out_ LONG     *plPeakMeter
+    )   PURE;
+    STDMETHOD_(NTSTATUS,GetStreamPresentationPosition)
+    (   THIS_
+        _Out_ KSAUDIO_PRESENTATION_POSITION *pPresentationPosition
+    )   PURE;
+    STDMETHOD_(NTSTATUS,SetStreamCurrentWritePosition)
+    (   THIS_
+        _In_ ULONG ulCurrentWritePosition
+    )   PURE;
+    STDMETHOD_(NTSTATUS,GetStreamLinearBufferPosition)
+    (   THIS_
+        _Out_ ULONGLONG *pullLinearBufferPosition
+    )   PURE;
+    STDMETHOD_(NTSTATUS,SetStreamLoopbackProtection)
+    (   THIS_
+        _In_ CONSTRICTOR_OPTION ProtectionOption
+    )   PURE;
+};
+
+typedef IMiniportStreamAudioEngineNode *PIMINIPORTStreamAudioEngineNode;
+
+#define IMP_IMiniportStreamAudioEngineNode                    \
+    STDMETHODIMP_(NTSTATUS) GetLfxState  \
+    (       \
+        _Out_ BOOL *pbEnable\
+    );\
+    STDMETHODIMP_(NTSTATUS) SetLfxState  \
+    (       \
+        _In_ BOOL bEnable\
+    );\
+    STDMETHODIMP_(NTSTATUS) GetStreamChannelCount  \
+    (       \
+        _In_ eChannelTargetType targetType,\
+        _Out_ UINT32 *pulChannelCount\
+    );\
+    STDMETHODIMP_(NTSTATUS) GetStreamAttributeSteppings  \
+    (       \
+        _In_ eChannelTargetType targetType,\
+        _Out_ PKSPROPERTY_STEPPING_LONG pKsPropStepLong,\
+        _In_ UINT32 ui32DataSize\
+    );\
+    STDMETHODIMP_(NTSTATUS) GetStreamChannelVolume  \
+    (       \
+        _In_ UINT32 ulChannel,\
+        _Out_ LONG *plVolume\
+    );\
+    STDMETHODIMP_(NTSTATUS) SetStreamChannelVolume  \
+    (       \
+        _In_ UINT32                                 Channel, \
+        _In_ LONG                                   TargetVolume, \
+        _In_ AUDIO_CURVE_TYPE                       CurveType, \
+        _In_ ULONGLONG                              CurveDuration \
+    );\
+    STDMETHODIMP_(NTSTATUS) GetStreamChannelMute  \
+    (       \
+        _In_ UINT32 ulChannel,\
+        _Out_ BOOL *pbMute\
+    );\
+    STDMETHODIMP_(NTSTATUS) SetStreamChannelMute  \
+    (       \
+        _In_ UINT32 ulChannel,\
+        _In_ BOOL bMute\
+    );\
+    STDMETHODIMP_(NTSTATUS) GetStreamChannelPeakMeter  \
+    (       \
+        _In_ UINT32 ulChannel,\
+        _Out_ LONG    *plPeakMeter\
+    );\
+    STDMETHODIMP_(NTSTATUS) GetStreamPresentationPosition  \
+    (       \
+        _Out_ KSAUDIO_PRESENTATION_POSITION *pPresentationPosition\
+    );\
+    STDMETHODIMP_(NTSTATUS) SetStreamCurrentWritePosition  \
+    (       \
+        _In_ ULONG ulCurrentWritePosition\
+    );\
+    STDMETHODIMP_(NTSTATUS) GetStreamLinearBufferPosition  \
+    (       \
+        _Out_ ULONGLONG *pullLinearBufferPosition\
+    );\
+    STDMETHODIMP_(NTSTATUS) SetStreamLoopbackProtection  \
+    (       \
+        _In_ CONSTRICTOR_OPTION ProtectionOption\
+    );
+
+DECLARE_INTERFACE_(IMiniportStreamAudioEngineNode2,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    STDMETHOD_(NTSTATUS,SetStreamCurrentWritePositionForLastBuffer)
+    (   THIS_
+        _In_ ULONG _ulWritePosition
+    )   PURE;
+};
+
+typedef IMiniportStreamAudioEngineNode2 *PIMINIPORTStreamAudioEngineNode2;
+
+#define IMP_IMiniportStreamAudioEngineNode2  \
+    STDMETHODIMP_(NTSTATUS) SetStreamCurrentWritePositionForLastBuffer  \
+    (   \
+        _In_ ULONG _ulWritePosition\
+        \
+    );
+
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+
+
+#endif
+
+#endif
+
 #endif /* PORTCLS_H */
