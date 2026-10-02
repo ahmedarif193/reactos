@@ -999,7 +999,8 @@ ObpIncrementHandleCount(IN PVOID Object,
                         IN KPROCESSOR_MODE AccessMode,
                         IN ULONG HandleAttributes,
                         IN PEPROCESS Process,
-                        IN OB_OPEN_REASON OpenReason)
+                        IN OB_OPEN_REASON OpenReason,
+                        IN OUT PACCESS_MASK GrantedAccess OPTIONAL)
 {
     POBJECT_HEADER ObjectHeader;
     POBJECT_TYPE ObjectType;
@@ -1011,7 +1012,7 @@ ObpIncrementHandleCount(IN PVOID Object,
     KIRQL CalloutIrql;
     KPROCESSOR_MODE ProbeMode;
     ACCESS_MASK LocalGrantedAccess = 0;
-    PACCESS_MASK GrantedAccess;
+    ACCESS_MASK RequestedAccess;
     ULONG Total;
     PAGED_CODE();
 
@@ -1200,10 +1201,24 @@ ObpIncrementHandleCount(IN PVOID Object,
     if (ObjectType->TypeInfo.OpenProcedure)
     {
         /* Call it */
-        GrantedAccess = AccessState ? &AccessState->PreviouslyGrantedAccess : &LocalGrantedAccess;
+        if (AccessState)
+        {
+            LocalGrantedAccess = AccessState->PreviouslyGrantedAccess;
+            if (OpenReason == ObCreateHandle)
+                LocalGrantedAccess |= AccessState->RemainingDesiredAccess;
+        }
+        else if (GrantedAccess)
+        {
+            LocalGrantedAccess = *GrantedAccess;
+        }
+        RequestedAccess = LocalGrantedAccess;
         ObpCalloutStart(&CalloutIrql);
-        Status = ObjectType->TypeInfo.OpenProcedure(OpenReason, ProbeMode, Process, Object, GrantedAccess, ProcessHandleCount);
+        Status = ObjectType->TypeInfo.OpenProcedure(OpenReason, ProbeMode, Process, Object, &LocalGrantedAccess, ProcessHandleCount);
         ObpCalloutEnd(CalloutIrql, "Open", ObjectType, Object);
+        if (AccessState)
+            AccessState->PreviouslyGrantedAccess |= LocalGrantedAccess & ~RequestedAccess;
+        if (GrantedAccess)
+            *GrantedAccess |= LocalGrantedAccess & ~RequestedAccess;
 
         /* Check if the open procedure failed */
         if (!NT_SUCCESS(Status))
@@ -1759,7 +1774,8 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
                                      AccessMode,
                                      HandleAttributes,
                                      PsGetCurrentProcess(),
-                                     OpenReason);
+                                     OpenReason,
+                                     NULL);
     if (!NT_SUCCESS(Status))
     {
         /*
@@ -2186,7 +2202,8 @@ ObpDuplicateHandleCallback(IN PEPROCESS Process,
                                          KernelMode,
                                          HandleTableEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES,
                                          Process,
-                                         ObInheritHandle);
+                                         ObInheritHandle,
+                                         NULL);
         if (!NT_SUCCESS(Status))
         {
             /* Return failure */
@@ -2686,7 +2703,10 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
                                          PreviousMode,
                                          HandleAttributes,
                                          PsGetCurrentProcess(),
-                                         ObDuplicateHandle);
+                                         ObDuplicateHandle,
+                                         &TargetAccess);
+        NewHandleEntry.GrantedAccess = TargetAccess & (ObjectType->TypeInfo.ValidAccessMask |
+                                                       ACCESS_SYSTEM_SECURITY);
     }
 
     /* Check if we were attached */
