@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <nvs/nt/mmkernel.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -16,7 +17,7 @@
 
 /*++
  * @name FsRtlCreateSectionForDataScan
- * @unimplemented
+ * @implemented
  *
  * FILLME
  *
@@ -68,8 +69,62 @@ FsRtlCreateSectionForDataScan(OUT PHANDLE SectionHandle,
                               IN ULONG AllocationAttributes,
                               IN ULONG Flags)
 {
-    /* Unimplemented */
-    KeBugCheck(FILE_SYSTEM);
-    return STATUS_NOT_IMPLEMENTED;
+    LARGE_INTEGER FileSize, Size;
+    PVOID Section;
+    HANDLE Handle;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(MaximumSize);
+    UNREFERENCED_PARAMETER(Flags);
+
+    if (SectionPageProtection != PAGE_READONLY && SectionPageProtection != PAGE_READWRITE)
+    {
+        return STATUS_INVALID_PARAMETER_8;
+    }
+    if (!(AllocationAttributes & SEC_COMMIT) || (AllocationAttributes & ~(SEC_COMMIT | SEC_FILE)))
+    {
+        return STATUS_INVALID_PARAMETER_9;
+    }
+
+    Status = FsRtlGetFileSize(FileObject, &FileSize);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    if (FileSize.QuadPart == 0)
+    {
+        return STATUS_END_OF_FILE;
+    }
+
+    Size.QuadPart = 0;
+    Status = MiCreateSectionWithMode(&Section,
+                                     KernelMode,
+                                     TRUE,
+                                     DesiredAccess,
+                                     ObjectAttributes,
+                                     &Size,
+                                     SectionPageProtection,
+                                     SEC_COMMIT,
+                                     NULL,
+                                     FileObject);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = ObInsertObject(Section, NULL, DesiredAccess, 1, SectionObject, &Handle);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    *SectionHandle = Handle;
+    if (SectionFileSize != NULL)
+    {
+        *SectionFileSize = FileSize;
+    }
+    return STATUS_SUCCESS;
 }
 

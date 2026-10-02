@@ -80,6 +80,20 @@ extern BOOLEAN MmMakeLowMemory;
 extern BOOLEAN MmEnforceWriteProtection;
 extern BOOLEAN MmZeroPageFile;
 
+NTSTATUS
+NTAPI
+MiCreateSectionWithMode(
+    _Out_ PVOID *SectionObject,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _In_ BOOLEAN DataScan,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _Inout_ PLARGE_INTEGER MaximumSize,
+    _In_ ULONG SectionPageProtection,
+    _In_ ULONG AllocationAttributes,
+    _In_opt_ HANDLE FileHandle,
+    _In_opt_ PFILE_OBJECT FileObject);
+
 FORCEINLINE
 BOOLEAN
 MiIsMemoryTypeInvisible(
