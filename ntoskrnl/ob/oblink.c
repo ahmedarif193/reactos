@@ -720,6 +720,8 @@ NtCreateSymbolicLinkObject(OUT PHANDLE LinkHandle,
 
             /* Probe the return handle */
             ProbeForWriteHandle(LinkHandle);
+
+            (VOID)ProbeForReadUlong(&ObjectAttributes->Length);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {

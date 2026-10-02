@@ -283,6 +283,7 @@ NtCreateKey(OUT PHANDLE KeyHandle,
                          sizeof(OBJECT_ATTRIBUTES),
                          sizeof(ULONG));
             (VOID)ProbeForReadUlong(&ObjectAttributes->Length);
+            (VOID)ProbeForReadUnicodeString(ObjectAttributes->ObjectName);
 
             if (Disposition)
                 ProbeForWriteUlong(Disposition);
@@ -368,6 +369,7 @@ NtOpenKeyEx(OUT PHANDLE KeyHandle,
                          sizeof(OBJECT_ATTRIBUTES),
                          sizeof(ULONG));
             (VOID)ProbeForReadUlong(&ObjectAttributes->Length);
+            (VOID)ProbeForReadUnicodeString(ObjectAttributes->ObjectName);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {

@@ -436,6 +436,7 @@ NtOpenDirectoryObject(OUT PHANDLE DirectoryHandle,
         {
             /* Probe the return handle */
             ProbeForWriteHandle(DirectoryHandle);
+            *DirectoryHandle = NULL;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {

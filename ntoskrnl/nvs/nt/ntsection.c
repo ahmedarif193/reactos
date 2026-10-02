@@ -1956,7 +1956,10 @@ NtOpenSection(
     _SEH2_TRY
     {
         if (PreviousMode != KernelMode)
+        {
             ProbeForWriteHandle(SectionHandle);
+            *SectionHandle = NULL;
+        }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
