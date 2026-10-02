@@ -25,6 +25,49 @@
 #define TCPCI_POWER_CONTROL_DETACHED 0x60
 #define TCPCI_POWER_CONTROL_VCONN 0x03
 
+#define TCPCI_HEADER_SOURCE 0x0B
+#define TCPCI_HEADER_SINK 0x02
+#define TCPCI_RECEIVE_MESSAGES 0x21
+#define TCPCI_RECEIVE_RESET_ONLY 0x20
+#define TCPCI_TRANSMIT_MESSAGE 0x30
+#define TCPCI_TRANSMIT_HARD_RESET 0x05
+
+#define TCPCI_CAPABILITIES_DELAY_MS 150
+#define TCPCI_CAPABILITIES_ATTEMPTS 52
+#define TCPCI_TRANSITION_DELAY_MS 30
+#define TCPCI_SINK_WAIT_DELAY_MS 465
+#define TCPCI_HARD_RESET_DELAY_MS 750
+#define TCPCI_SENDER_RESPONSE_DELAY_MS 27
+#define TCPCI_SUPPLY_TRANSITION_DELAY_MS 500
+#define TCPCI_SOURCE_RESET_DELAY_MS 27
+#define TCPCI_SOURCE_RECOVER_DELAY_MS 757
+#define TCPCI_SWAP_SOURCE_START_DELAY_MS 20
+#define TCPCI_HARD_RESET_ATTEMPTS 3
+
+#define TCPCI_PD_ACCEPT 3
+#define TCPCI_PD_REJECT 4
+#define TCPCI_PD_PS_READY 6
+#define TCPCI_PD_GET_SOURCE_CAPABILITIES 7
+#define TCPCI_PD_GET_SINK_CAPABILITIES 8
+#define TCPCI_PD_DATA_ROLE_SWAP 9
+#define TCPCI_PD_POWER_ROLE_SWAP 10
+#define TCPCI_PD_VCONN_SWAP 11
+#define TCPCI_PD_WAIT 12
+#define TCPCI_PD_SOURCE_CAPABILITIES 1
+#define TCPCI_PD_REQUEST 2
+#define TCPCI_PD_SINK_CAPABILITIES 4
+#define TCPCI_PD_VENDOR_DEFINED 15
+#define TCPCI_PDO_FIXED_FLAGS 0x26000000
+#define TCPCI_REQUEST_FLAGS 0x03000000
+#define TCPCI_DISCOVER_IDENTITY 0xFF008001
+#define TCPCI_DISCOVER_SVIDS 0xFF008002
+#define TCPCI_VDM_STRUCTURED 0x00008000
+#define TCPCI_VDM_COMMAND_TYPE 0x000000C0
+#define TCPCI_VDM_ACKNOWLEDGE 0x00000040
+#define TCPCI_VDM_REFUSE 0x00000080
+#define TCPCI_IDENTITY_HEADER 0xD400045E
+#define TCPCI_IDENTITY_PRODUCT 0x06510100
+
 #define TCPCI_SEND_IDLE 0
 #define TCPCI_SEND_SENDING 1
 #define TCPCI_SEND_COMPLETED 2
@@ -49,7 +92,13 @@ typedef enum _TCPCI_EVENT_TYPE
     TcpciEventCc,
     TcpciEventPower,
     TcpciEventFault,
-    TcpciEventDebounce
+    TcpciEventDebounce,
+    TcpciEventDeliveryStart,
+    TcpciEventDeliveryTimer,
+    TcpciEventSent,
+    TcpciEventNotSent,
+    TcpciEventReceived,
+    TcpciEventReset
 } TCPCI_EVENT_TYPE;
 
 typedef enum _TCPCI_PROGRAM
@@ -60,8 +109,50 @@ typedef enum _TCPCI_PROGRAM
     TcpciProgramUnattach,
     TcpciProgramRestart,
     TcpciProgramAttachSource,
-    TcpciProgramAttachSink
+    TcpciProgramAttachSink,
+    TcpciProgramDelivery
 } TCPCI_PROGRAM;
+
+typedef enum _TCPCI_DELIVERY
+{
+    TcpciDeliveryOff,
+    TcpciDeliverySourceCapabilitiesSent,
+    TcpciDeliverySourceCapabilitiesWait,
+    TcpciDeliverySourceWaitRequest,
+    TcpciDeliverySourceAcceptSent,
+    TcpciDeliverySourceTransition,
+    TcpciDeliverySourceReadySent,
+    TcpciDeliveryDiscoverDelay,
+    TcpciDeliveryDiscoverSent,
+    TcpciDeliveryWaitDiscover,
+    TcpciDeliverySvidsSent,
+    TcpciDeliveryWaitSvids,
+    TcpciDeliveryReady,
+    TcpciDeliveryReplySent,
+    TcpciDeliveryDataSwapSent,
+    TcpciDeliveryVconnSwapSent,
+    TcpciDeliveryVconnWaitReady,
+    TcpciDeliveryPowerSwapSent,
+    TcpciDeliveryPowerSwapDelay,
+    TcpciDeliveryPowerSwapOff,
+    TcpciDeliveryPowerSwapReadySent,
+    TcpciDeliveryPowerSwapWaitSource,
+    TcpciDeliveryPowerSwapSinkSent,
+    TcpciDeliveryPowerSwapSinkWaitReady,
+    TcpciDeliveryPowerSwapSourceOn,
+    TcpciDeliveryPowerSwapSourceReadySent,
+    TcpciDeliveryPowerSwapSourceStart,
+    TcpciDeliverySourceResetSent,
+    TcpciDeliverySourceResetDelay,
+    TcpciDeliverySourceResetOff,
+    TcpciDeliverySourceResetOn,
+    TcpciDeliverySinkWaitCapabilities,
+    TcpciDeliverySinkRequestSent,
+    TcpciDeliverySinkWaitAccept,
+    TcpciDeliverySinkWaitReady,
+    TcpciDeliverySinkResetSent,
+    TcpciDeliverySinkResetWait
+} TCPCI_DELIVERY;
 
 typedef enum _TCPCI_CANDIDATE
 {
@@ -72,10 +163,18 @@ typedef enum _TCPCI_CANDIDATE
     TcpciCandidateUnsupported
 } TCPCI_CANDIDATE;
 
+typedef struct _TCPCI_MESSAGE
+{
+    USHORT Header;
+    UCHAR Count;
+    ULONG Objects[7];
+} TCPCI_MESSAGE, *PTCPCI_MESSAGE;
+
 typedef struct _TCPCI_EVENT
 {
     TCPCI_EVENT_TYPE Type;
     ULONG Value;
+    TCPCI_MESSAGE Message;
 } TCPCI_EVENT, *PTCPCI_EVENT;
 
 typedef struct _TCPCI_STEP
@@ -83,6 +182,7 @@ typedef struct _TCPCI_STEP
     ULONG Code;
     ULONG Type;
     ULONG Value;
+    TCPCI_MESSAGE Message;
 } TCPCI_STEP, *PTCPCI_STEP;
 
 typedef struct _TCPCI_CONNECTOR
@@ -138,6 +238,27 @@ typedef struct _TCPCI_PORT_CONTEXT
     ULONGLONG ArmTime;
     KTIMER Timer;
     KDPC Dpc;
+    PTCPCI_CONNECTOR Connector;
+    BOOLEAN DeliveryCapable;
+    BOOLEAN DeliveryTimerArmed;
+    BOOLEAN Source;
+    BOOLEAN Dfp;
+    BOOLEAN VconnSource;
+    BOOLEAN IdentityQueried;
+    BOOLEAN Recovering;
+    BOOLEAN VbusDropped;
+    BOOLEAN SecondPin;
+    UCHAR HardResets;
+    TCPCI_DELIVERY Delivery;
+    UCHAR PowerControl;
+    UCHAR MessageId;
+    ULONG CapabilitiesSent;
+    ULONG DeliveryDelay;
+    ULONGLONG DeliveryArmTime;
+    KTIMER DeliveryTimer;
+    KDPC DeliveryDpc;
+    WDFWORKITEM DeliveryWork;
+    UCMTCPCI_PORT_CONTROLLER_TRANSMIT_BUFFER Transmit;
 } TCPCI_PORT_CONTEXT, *PTCPCI_PORT_CONTEXT;
 
 typedef struct _TCPCI_DEVICE_CONTEXT
@@ -155,6 +276,8 @@ static const UCHAR TcpciConnectorUuid[16] =
 };
 
 static VOID TcpciRun(_Inout_ PTCPCI_PORT_CONTEXT Port);
+static VOID TcpciPost(_Inout_ PTCPCI_PORT_CONTEXT Port, _In_ TCPCI_EVENT_TYPE Type, _In_ ULONG Value,
+                      _In_opt_ PTCPCI_MESSAGE Message);
 
 static
 NTSTATUS
@@ -598,6 +721,87 @@ TcpciBegin(
 
 static
 VOID
+TcpciAddMessage(
+    _Inout_ PTCPCI_PORT_CONTEXT Port,
+    _In_ UCHAR Type,
+    _In_ UCHAR Count,
+    _In_reads_opt_(Count) const ULONG *Objects)
+{
+    PTCPCI_STEP Step;
+    UCHAR Index;
+
+    if (Port->StepCount + 2 > TCPCI_MAX_STEPS)
+        return;
+
+    Step = &Port->Steps[Port->StepCount];
+    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_TRANSMIT_BUFFER, 0, 0);
+    Step->Message.Header = (USHORT)(Type | 0x0040 | (Port->Dfp ? 0x0020 : 0) | (Port->Source ? 0x0100 : 0) |
+                                    (Port->MessageId << 9) | (Count << 12));
+    Step->Message.Count = Count;
+    for (Index = 0; Index < Count; Index++)
+        Step->Message.Objects[Index] = Objects[Index];
+    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_TRANSMIT, 0, TCPCI_TRANSMIT_MESSAGE);
+}
+
+static
+VOID
+TcpciAddCapabilities(
+    _Inout_ PTCPCI_PORT_CONTEXT Port,
+    _In_ BOOLEAN Sink)
+{
+    const ULONG *List = Sink ? Port->Connector->SinkPdos : Port->Connector->SourcePdos;
+    ULONG Objects[7];
+    UCHAR Count = (UCHAR)min(Sink ? Port->Connector->SinkPdoCount : Port->Connector->SourcePdoCount, RTL_NUMBER_OF(Objects));
+    UCHAR Index;
+
+    for (Index = 0; Index < Count; Index++)
+        Objects[Index] = List[Index];
+    if (Count != 0)
+        Objects[0] |= TCPCI_PDO_FIXED_FLAGS;
+    TcpciAddMessage(Port, Sink ? TCPCI_PD_SINK_CAPABILITIES : TCPCI_PD_SOURCE_CAPABILITIES, Count, Objects);
+}
+
+static
+VOID
+TcpciAddHeaderInfo(
+    _Inout_ PTCPCI_PORT_CONTEXT Port)
+{
+    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_MESSAGE_HEADER_INFO, 0,
+                 (Port->Source ? 0x01 : 0) | 0x02 | (Port->Dfp ? 0x08 : 0));
+}
+
+static
+VOID
+TcpciArmDelivery(
+    _Inout_ PTCPCI_PORT_CONTEXT Port,
+    _In_ ULONG Milliseconds)
+{
+    LARGE_INTEGER Due;
+
+    Port->DeliveryDelay = Milliseconds;
+    Port->DeliveryArmTime = KeQueryInterruptTime();
+    Port->DeliveryTimerArmed = TRUE;
+    Due.QuadPart = -10000LL * Milliseconds;
+    KeSetTimer(&Port->DeliveryTimer, Due, &Port->DeliveryDpc);
+}
+
+static
+VOID
+TcpciStopDelivery(
+    _Inout_ PTCPCI_PORT_CONTEXT Port)
+{
+    Port->Delivery = TcpciDeliveryOff;
+    Port->DeliveryTimerArmed = FALSE;
+    Port->MessageId = 0;
+    Port->CapabilitiesSent = 0;
+    Port->IdentityQueried = FALSE;
+    Port->Recovering = FALSE;
+    Port->VbusDropped = FALSE;
+    KeCancelTimer(&Port->DeliveryTimer);
+}
+
+static
+VOID
 TcpciAddUnattach(
     _Inout_ PTCPCI_PORT_CONTEXT Port)
 {
@@ -656,9 +860,10 @@ TcpciLoadAttach(
         TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerRoleControl, TCPCI_ROLE_RD_RD);
     }
 
+    Port->SecondPin = Second;
     TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerTcpcControl, Second ? 1 : 0);
-    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
-                 TCPCI_POWER_CONTROL_ATTACHED | (Vconn ? TCPCI_POWER_CONTROL_VCONN : 0));
+    Port->PowerControl = TCPCI_POWER_CONTROL_ATTACHED | (Vconn ? TCPCI_POWER_CONTROL_VCONN : 0);
+    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl, Port->PowerControl);
     if (Port->Candidate == TcpciCandidateSource)
     {
         TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_COMMAND, 0,
@@ -673,15 +878,18 @@ TcpciLoadDetach(
     _In_ BOOLEAN Source,
     _In_ BOOLEAN Pending)
 {
+    TcpciStopDelivery(Port);
     TcpciBegin(Port, TcpciProgramUnattach);
+    if (Port->DeliveryCapable)
+        TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_DISPLAYPORT_DISPLAY_OUT_STATUS_CHANGED, 0, 0);
     if (Pending)
         TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_COMMAND, 0, UcmTcpciPortControllerCommandDisableSourceVbus);
-    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
-                 TCPCI_POWER_CONTROL_ATTACHED);
+    Port->PowerControl &= ~TCPCI_POWER_CONTROL_VCONN;
+    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl, Port->PowerControl);
     if (Source)
         TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_COMMAND, 0, UcmTcpciPortControllerCommandDisableSourceVbus);
-    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
-                 TCPCI_POWER_CONTROL_DETACHED);
+    Port->PowerControl = TCPCI_POWER_CONTROL_DETACHED;
+    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl, Port->PowerControl);
     TcpciAddUnattach(Port);
 }
 
@@ -768,7 +976,7 @@ TcpciOnCc(
     _Inout_ PTCPCI_PORT_CONTEXT Port,
     _In_ UCHAR Cc)
 {
-    UCMTCPCI_PORT_CONTROLLER_CC_STATUS Status, Attached;
+    UCMTCPCI_PORT_CONTROLLER_CC_STATUS Status;
     TCPCI_CANDIDATE Candidate = TcpciClassify(Cc);
 
     Port->Cc = Cc;
@@ -814,12 +1022,18 @@ TcpciOnCc(
 
         case TcpciSourceWaitVbus:
         case TcpciAttachedSource:
-            Attached.AsUInt8 = Port->CandidateCc;
             if (Status.Looking4Connection ||
-                (Attached.CC2State == UcmTcpciPortControllerCCStateSrcRd ? Status.CC2State : Status.CC1State) !=
-                    UcmTcpciPortControllerCCStateSrcRd)
+                (Port->SecondPin ? Status.CC2State : Status.CC1State) != UcmTcpciPortControllerCCStateSrcRd)
             {
                 TcpciLoadDetach(Port, TRUE, Port->State == TcpciSourceWaitVbus);
+                Port->State = TcpciUnattached;
+            }
+            break;
+
+        case TcpciAttachedSink:
+            if (Candidate == TcpciCandidateOpen && Port->VbusDropped && Port->Delivery == TcpciDeliverySinkResetWait)
+            {
+                TcpciLoadDetach(Port, FALSE, FALSE);
                 Port->State = TcpciUnattached;
             }
             break;
@@ -829,6 +1043,8 @@ TcpciOnCc(
     }
 }
 
+static BOOLEAN TcpciDeliveryPower(_Inout_ PTCPCI_PORT_CONTEXT Port, _In_ UCHAR Power);
+
 static
 VOID
 TcpciOnPower(
@@ -836,6 +1052,9 @@ TcpciOnPower(
     _In_ UCHAR Power)
 {
     Port->Power = Power;
+    if ((Port->State == TcpciAttachedSource || Port->State == TcpciAttachedSink) && TcpciDeliveryPower(Port, Power))
+        return;
+
     switch (Port->State)
     {
         case TcpciWaitDetection:
@@ -853,7 +1072,11 @@ TcpciOnPower(
 
         case TcpciSourceWaitVbus:
             if ((Power & TCPCI_POWER_VBUS) != 0)
+            {
                 Port->State = TcpciAttachedSource;
+                if (Port->DeliveryCapable)
+                    WdfWorkItemEnqueue(Port->DeliveryWork);
+            }
             break;
 
         case TcpciAttachedSink:
@@ -871,12 +1094,709 @@ TcpciOnPower(
 
 static
 VOID
+TcpciCancelDeliveryTimer(
+    _Inout_ PTCPCI_PORT_CONTEXT Port)
+{
+    Port->DeliveryTimerArmed = FALSE;
+    KeCancelTimer(&Port->DeliveryTimer);
+}
+
+static
+VOID
+TcpciDeliveryStart(
+    _Inout_ PTCPCI_PORT_CONTEXT Port)
+{
+    if (Port->Delivery != TcpciDeliveryOff && Port->Delivery != TcpciDeliverySourceResetOn)
+        return;
+
+    Port->MessageId = 0;
+    Port->CapabilitiesSent = 0;
+    if (Port->State == TcpciAttachedSource)
+    {
+        Port->Source = Port->Dfp = Port->VconnSource = TRUE;
+        TcpciBegin(Port, TcpciProgramDelivery);
+        if (Port->Recovering)
+            TcpciAddHeaderInfo(Port);
+        Port->Recovering = FALSE;
+        TcpciAddHeaderInfo(Port);
+        TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_RECEIVE_DETECT, 0, TCPCI_RECEIVE_MESSAGES);
+        TcpciAddCapabilities(Port, FALSE);
+        Port->CapabilitiesSent = 1;
+        Port->Delivery = TcpciDeliverySourceCapabilitiesSent;
+    }
+    else if (Port->State == TcpciAttachedSink)
+    {
+        Port->Source = Port->Dfp = Port->VconnSource = FALSE;
+        TcpciBegin(Port, TcpciProgramDelivery);
+        TcpciAddHeaderInfo(Port);
+        TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_RECEIVE_DETECT, 0, TCPCI_RECEIVE_MESSAGES);
+        Port->Delivery = TcpciDeliverySinkWaitCapabilities;
+        TcpciArmDelivery(Port, TCPCI_SINK_WAIT_DELAY_MS);
+    }
+}
+
+static
+VOID
+TcpciDeliverySinkReset(
+    _Inout_ PTCPCI_PORT_CONTEXT Port)
+{
+    Port->MessageId = 0;
+    Port->PowerControl = TCPCI_POWER_CONTROL_DETACHED;
+    Port->VbusDropped = FALSE;
+    Port->Dfp = Port->VconnSource = FALSE;
+    TcpciBegin(Port, TcpciProgramDelivery);
+    TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl, Port->PowerControl);
+    TcpciAddHeaderInfo(Port);
+    Port->Delivery = TcpciDeliverySinkResetWait;
+    TcpciArmDelivery(Port, TCPCI_HARD_RESET_DELAY_MS);
+}
+
+static
+VOID
+TcpciDeliveryTimer(
+    _Inout_ PTCPCI_PORT_CONTEXT Port)
+{
+    ULONG Object;
+
+    if (!Port->DeliveryTimerArmed ||
+        KeQueryInterruptTime() - Port->DeliveryArmTime < 10000ULL * (Port->DeliveryDelay - 1))
+    {
+        return;
+    }
+
+    Port->DeliveryTimerArmed = FALSE;
+    TcpciBegin(Port, TcpciProgramDelivery);
+    switch (Port->Delivery)
+    {
+        case TcpciDeliverySourceCapabilitiesWait:
+            if (Port->CapabilitiesSent >= TCPCI_CAPABILITIES_ATTEMPTS)
+            {
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_RECEIVE_DETECT, 0, TCPCI_RECEIVE_RESET_ONLY);
+                Port->Delivery = TcpciDeliveryReady;
+            }
+            else
+            {
+                TcpciAddCapabilities(Port, FALSE);
+                Port->CapabilitiesSent++;
+                Port->Delivery = TcpciDeliverySourceCapabilitiesSent;
+            }
+            break;
+
+        case TcpciDeliverySourceWaitRequest:
+            TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_TRANSMIT, 0, TCPCI_TRANSMIT_HARD_RESET);
+            Port->Delivery = TcpciDeliverySourceResetSent;
+            break;
+
+        case TcpciDeliverySourceTransition:
+            TcpciAddMessage(Port, TCPCI_PD_PS_READY, 0, NULL);
+            Port->Delivery = TcpciDeliverySourceReadySent;
+            break;
+
+        case TcpciDeliveryDiscoverDelay:
+            Object = TCPCI_DISCOVER_IDENTITY;
+            TcpciAddMessage(Port, TCPCI_PD_VENDOR_DEFINED, 1, &Object);
+            Port->Delivery = TcpciDeliveryDiscoverSent;
+            break;
+
+        case TcpciDeliveryPowerSwapDelay:
+            TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_COMMAND, 0, UcmTcpciPortControllerCommandDisableSourceVbus);
+            Port->Delivery = TcpciDeliveryPowerSwapOff;
+            break;
+
+        case TcpciDeliverySourceResetDelay:
+            Port->PowerControl = TCPCI_POWER_CONTROL_DETACHED;
+            TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                         Port->PowerControl);
+            TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_COMMAND, 0, UcmTcpciPortControllerCommandDisableSourceVbus);
+            Port->Delivery = TcpciDeliverySourceResetOff;
+            TcpciArmDelivery(Port, TCPCI_SOURCE_RECOVER_DELAY_MS);
+            break;
+
+        case TcpciDeliverySourceResetOff:
+            Port->PowerControl = TCPCI_POWER_CONTROL_ATTACHED;
+            TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                         Port->PowerControl);
+            TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_COMMAND, 0,
+                         UcmTcpciPortControllerCommandSourceVbusDefaultVoltage);
+            Port->Recovering = TRUE;
+            Port->Delivery = TcpciDeliverySourceResetOn;
+            break;
+
+        case TcpciDeliverySinkWaitCapabilities:
+        case TcpciDeliverySinkWaitAccept:
+        case TcpciDeliverySinkWaitReady:
+            if (Port->HardResets >= TCPCI_HARD_RESET_ATTEMPTS)
+            {
+                Port->Program = TcpciProgramNone;
+                break;
+            }
+
+            Port->HardResets++;
+            TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_TRANSMIT, 0, TCPCI_TRANSMIT_HARD_RESET);
+            Port->Delivery = TcpciDeliverySinkResetSent;
+            break;
+
+        case TcpciDeliveryPowerSwapSourceStart:
+            TcpciAddCapabilities(Port, FALSE);
+            Port->CapabilitiesSent = 1;
+            Port->Delivery = TcpciDeliverySourceCapabilitiesSent;
+            break;
+
+        case TcpciDeliverySinkResetWait:
+            TcpciAddHeaderInfo(Port);
+            TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_RECEIVE_DETECT, 0, TCPCI_RECEIVE_MESSAGES);
+            Port->Delivery = TcpciDeliverySinkWaitCapabilities;
+            TcpciArmDelivery(Port, TCPCI_SINK_WAIT_DELAY_MS);
+            break;
+
+        default:
+            Port->Program = TcpciProgramNone;
+            break;
+    }
+}
+
+static
+VOID
+TcpciDeliverySent(
+    _Inout_ PTCPCI_PORT_CONTEXT Port,
+    _In_ BOOLEAN Sent)
+{
+    switch (Port->Delivery)
+    {
+        case TcpciDeliverySourceCapabilitiesSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            if (Sent)
+            {
+                Port->Delivery = TcpciDeliverySourceWaitRequest;
+                TcpciArmDelivery(Port, TCPCI_SENDER_RESPONSE_DELAY_MS);
+            }
+            else
+            {
+                Port->Delivery = TcpciDeliverySourceCapabilitiesWait;
+                TcpciArmDelivery(Port, TCPCI_CAPABILITIES_DELAY_MS);
+            }
+            break;
+
+        case TcpciDeliverySourceAcceptSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            if (Sent)
+            {
+                Port->Delivery = TcpciDeliverySourceTransition;
+                TcpciArmDelivery(Port, TCPCI_TRANSITION_DELAY_MS);
+            }
+            else
+            {
+                Port->Delivery = TcpciDeliveryReady;
+            }
+            break;
+
+        case TcpciDeliverySourceReadySent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            if (Sent && Port->Dfp && !Port->IdentityQueried)
+            {
+                Port->IdentityQueried = TRUE;
+                Port->Delivery = TcpciDeliveryDiscoverDelay;
+                TcpciArmDelivery(Port, TCPCI_TRANSITION_DELAY_MS);
+            }
+            else
+            {
+                Port->Delivery = TcpciDeliveryReady;
+            }
+            break;
+
+        case TcpciDeliveryDiscoverSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            Port->Delivery = Sent ? TcpciDeliveryWaitDiscover : TcpciDeliveryReady;
+            break;
+
+        case TcpciDeliverySvidsSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            Port->Delivery = Sent ? TcpciDeliveryWaitSvids : TcpciDeliveryReady;
+            break;
+
+        case TcpciDeliveryReplySent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            Port->Delivery = TcpciDeliveryReady;
+            break;
+
+        case TcpciDeliveryDataSwapSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            Port->Delivery = TcpciDeliveryReady;
+            if (Sent)
+            {
+                Port->Dfp = !Port->Dfp;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddHeaderInfo(Port);
+                if (Port->Dfp)
+                {
+                    Port->IdentityQueried = TRUE;
+                    Port->Delivery = TcpciDeliveryDiscoverDelay;
+                    TcpciArmDelivery(Port, TCPCI_TRANSITION_DELAY_MS);
+                }
+            }
+            break;
+
+        case TcpciDeliveryVconnSwapSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            if (!Sent)
+            {
+                Port->Delivery = TcpciDeliveryReady;
+            }
+            else if (Port->VconnSource)
+            {
+                Port->Delivery = TcpciDeliveryVconnWaitReady;
+            }
+            else
+            {
+                Port->VconnSource = TRUE;
+                Port->PowerControl |= TCPCI_POWER_CONTROL_VCONN;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                             Port->PowerControl);
+                TcpciAddMessage(Port, TCPCI_PD_PS_READY, 0, NULL);
+                Port->Delivery = TcpciDeliveryReplySent;
+            }
+            break;
+
+        case TcpciDeliveryPowerSwapSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            if (Sent)
+            {
+                Port->Delivery = TcpciDeliveryPowerSwapDelay;
+                TcpciArmDelivery(Port, TCPCI_TRANSITION_DELAY_MS);
+            }
+            else
+            {
+                Port->Delivery = TcpciDeliveryReady;
+            }
+            break;
+
+        case TcpciDeliveryPowerSwapReadySent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            Port->Delivery = TcpciDeliveryPowerSwapWaitSource;
+            break;
+
+        case TcpciDeliveryPowerSwapSinkSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            Port->Delivery = Sent ? TcpciDeliveryPowerSwapSinkWaitReady : TcpciDeliveryReady;
+            break;
+
+        case TcpciDeliveryPowerSwapSourceReadySent:
+            Port->MessageId = 0;
+            TcpciBegin(Port, TcpciProgramDelivery);
+            TcpciAddHeaderInfo(Port);
+            Port->Delivery = TcpciDeliveryPowerSwapSourceStart;
+            TcpciArmDelivery(Port, TCPCI_SWAP_SOURCE_START_DELAY_MS);
+            break;
+
+        case TcpciDeliverySourceResetSent:
+            Port->MessageId = 0;
+            Port->Delivery = TcpciDeliverySourceResetDelay;
+            TcpciArmDelivery(Port, TCPCI_SOURCE_RESET_DELAY_MS);
+            break;
+
+        case TcpciDeliverySinkRequestSent:
+            Port->MessageId = (Port->MessageId + 1) & 7;
+            if (Sent)
+            {
+                Port->Delivery = TcpciDeliverySinkWaitAccept;
+                TcpciArmDelivery(Port, TCPCI_SENDER_RESPONSE_DELAY_MS);
+            }
+            else
+            {
+                Port->Delivery = TcpciDeliverySinkWaitCapabilities;
+                TcpciArmDelivery(Port, TCPCI_SINK_WAIT_DELAY_MS);
+            }
+            break;
+
+        case TcpciDeliverySinkResetSent:
+            TcpciDeliverySinkReset(Port);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static
+VOID
+TcpciDeliveryRequest(
+    _Inout_ PTCPCI_PORT_CONTEXT Port,
+    _In_ PTCPCI_MESSAGE Capabilities)
+{
+    ULONG Current, Offered, Object;
+
+    Port->HardResets = 0;
+    Offered = Capabilities->Objects[0] & 0x3FF;
+    Current = Port->Connector->SinkPdoCount != 0 ? (Port->Connector->SinkPdos[0] & 0x3FF) : Offered;
+    Current = min(Current, Offered);
+    Object = (1UL << 28) | TCPCI_REQUEST_FLAGS | (Current << 10) | Current;
+    TcpciBegin(Port, TcpciProgramDelivery);
+    TcpciAddMessage(Port, TCPCI_PD_REQUEST, 1, &Object);
+    Port->Delivery = TcpciDeliverySinkRequestSent;
+}
+
+static
+VOID
+TcpciDeliveryIdle(
+    _Inout_ PTCPCI_PORT_CONTEXT Port,
+    _In_ PTCPCI_MESSAGE Message)
+{
+    UCHAR Type = (UCHAR)(Message->Header & 0x1F);
+    ULONG Objects[4];
+
+    if (Message->Count != 0)
+    {
+        if (Type == TCPCI_PD_SOURCE_CAPABILITIES && !Port->Source)
+        {
+            TcpciDeliveryRequest(Port, Message);
+        }
+        else if (Type == TCPCI_PD_VENDOR_DEFINED &&
+                 (Message->Objects[0] & TCPCI_VDM_STRUCTURED) != 0 &&
+                 (Message->Objects[0] & TCPCI_VDM_COMMAND_TYPE) == 0)
+        {
+            TcpciBegin(Port, TcpciProgramDelivery);
+            if ((Message->Objects[0] & 0x1F) == 1)
+            {
+                Objects[0] = Message->Objects[0] | TCPCI_VDM_ACKNOWLEDGE;
+                Objects[1] = TCPCI_IDENTITY_HEADER;
+                Objects[2] = 0;
+                Objects[3] = TCPCI_IDENTITY_PRODUCT;
+                TcpciAddMessage(Port, TCPCI_PD_VENDOR_DEFINED, 4, Objects);
+            }
+            else
+            {
+                Objects[0] = Message->Objects[0] | TCPCI_VDM_REFUSE;
+                TcpciAddMessage(Port, TCPCI_PD_VENDOR_DEFINED, 1, Objects);
+            }
+            Port->Delivery = TcpciDeliveryReplySent;
+        }
+        return;
+    }
+
+    switch (Type)
+    {
+        case TCPCI_PD_GET_SOURCE_CAPABILITIES:
+            TcpciBegin(Port, TcpciProgramDelivery);
+            TcpciAddCapabilities(Port, FALSE);
+            Port->CapabilitiesSent = 1;
+            Port->Delivery = Port->Source ? TcpciDeliverySourceCapabilitiesSent : TcpciDeliveryReplySent;
+            break;
+
+        case TCPCI_PD_GET_SINK_CAPABILITIES:
+            TcpciBegin(Port, TcpciProgramDelivery);
+            TcpciAddCapabilities(Port, TRUE);
+            Port->Delivery = TcpciDeliveryReplySent;
+            break;
+
+        case TCPCI_PD_DATA_ROLE_SWAP:
+            TcpciBegin(Port, TcpciProgramDelivery);
+            TcpciAddMessage(Port, TCPCI_PD_ACCEPT, 0, NULL);
+            Port->Delivery = TcpciDeliveryDataSwapSent;
+            break;
+
+        case TCPCI_PD_VCONN_SWAP:
+            TcpciBegin(Port, TcpciProgramDelivery);
+            TcpciAddMessage(Port, TCPCI_PD_ACCEPT, 0, NULL);
+            Port->Delivery = TcpciDeliveryVconnSwapSent;
+            break;
+
+        case TCPCI_PD_POWER_ROLE_SWAP:
+            TcpciBegin(Port, TcpciProgramDelivery);
+            if (Port->Source)
+            {
+                Port->PowerControl = TCPCI_POWER_CONTROL_DETACHED;
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                             Port->PowerControl);
+                TcpciAddMessage(Port, TCPCI_PD_ACCEPT, 0, NULL);
+                Port->Delivery = TcpciDeliveryPowerSwapSent;
+            }
+            else
+            {
+                Port->PowerControl = TCPCI_POWER_CONTROL_DETACHED;
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                             Port->PowerControl);
+                TcpciAddMessage(Port, TCPCI_PD_ACCEPT, 0, NULL);
+                Port->Delivery = TcpciDeliveryPowerSwapSinkSent;
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+static
+VOID
+TcpciDeliveryReceived(
+    _Inout_ PTCPCI_PORT_CONTEXT Port,
+    _In_ PTCPCI_MESSAGE Message)
+{
+    UCHAR Type = (UCHAR)(Message->Header & 0x1F);
+    ULONG Object, Position;
+
+    switch (Port->Delivery)
+    {
+        case TcpciDeliverySourceWaitRequest:
+            if (Message->Count == 1 && Type == TCPCI_PD_REQUEST)
+            {
+                TcpciCancelDeliveryTimer(Port);
+                Position = (Message->Objects[0] >> 28) & 7;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                if (Position >= 1 && Position <= Port->Connector->SourcePdoCount)
+                {
+                    TcpciAddMessage(Port, TCPCI_PD_ACCEPT, 0, NULL);
+                    Port->Delivery = TcpciDeliverySourceAcceptSent;
+                }
+                else
+                {
+                    TcpciAddMessage(Port, TCPCI_PD_REJECT, 0, NULL);
+                    Port->Delivery = TcpciDeliveryReplySent;
+                }
+            }
+            break;
+
+        case TcpciDeliveryWaitDiscover:
+            if (Message->Count != 0 && Type == TCPCI_PD_VENDOR_DEFINED)
+            {
+                Port->Delivery = TcpciDeliveryReady;
+                if ((Message->Objects[0] & TCPCI_VDM_COMMAND_TYPE) == TCPCI_VDM_ACKNOWLEDGE &&
+                    (Message->Objects[0] & 0x1F) == 1)
+                {
+                    Object = TCPCI_DISCOVER_SVIDS;
+                    TcpciBegin(Port, TcpciProgramDelivery);
+                    TcpciAddMessage(Port, TCPCI_PD_VENDOR_DEFINED, 1, &Object);
+                    Port->Delivery = TcpciDeliverySvidsSent;
+                }
+            }
+            break;
+
+        case TcpciDeliveryWaitSvids:
+            if (Message->Count != 0 && Type == TCPCI_PD_VENDOR_DEFINED)
+                Port->Delivery = TcpciDeliveryReady;
+            break;
+
+        case TcpciDeliveryVconnWaitReady:
+            if (Message->Count == 0 && Type == TCPCI_PD_PS_READY)
+            {
+                Port->VconnSource = FALSE;
+                Port->PowerControl &= ~TCPCI_POWER_CONTROL_VCONN;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                             Port->PowerControl);
+                Port->Delivery = TcpciDeliveryReady;
+            }
+            break;
+
+        case TcpciDeliveryPowerSwapWaitSource:
+            if (Message->Count == 0 && Type == TCPCI_PD_PS_READY)
+            {
+                Port->MessageId = 0;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddHeaderInfo(Port);
+                Port->Delivery = TcpciDeliverySinkWaitCapabilities;
+                TcpciArmDelivery(Port, TCPCI_SINK_WAIT_DELAY_MS);
+            }
+            break;
+
+        case TcpciDeliveryPowerSwapSinkWaitReady:
+            if (Message->Count == 0 && Type == TCPCI_PD_PS_READY)
+            {
+                Port->PowerControl = TCPCI_POWER_CONTROL_ATTACHED;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerRoleControl,
+                             TCPCI_ROLE_RP_RP | (Port->RpValue << 4));
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                             Port->PowerControl);
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_COMMAND, 0,
+                             UcmTcpciPortControllerCommandSourceVbusDefaultVoltage);
+                Port->Delivery = TcpciDeliveryPowerSwapSourceOn;
+            }
+            break;
+
+        case TcpciDeliverySinkWaitCapabilities:
+            if (Message->Count != 0 && Type == TCPCI_PD_SOURCE_CAPABILITIES)
+            {
+                TcpciCancelDeliveryTimer(Port);
+                TcpciDeliveryRequest(Port, Message);
+            }
+            break;
+
+        case TcpciDeliverySinkWaitAccept:
+            if (Message->Count == 0 && Type == TCPCI_PD_ACCEPT)
+            {
+                Port->Delivery = TcpciDeliverySinkWaitReady;
+                TcpciArmDelivery(Port, TCPCI_SUPPLY_TRANSITION_DELAY_MS);
+            }
+            else if (Message->Count == 0 && (Type == TCPCI_PD_REJECT || Type == TCPCI_PD_WAIT))
+            {
+                Port->Delivery = TcpciDeliverySinkWaitCapabilities;
+                TcpciArmDelivery(Port, TCPCI_SINK_WAIT_DELAY_MS);
+            }
+            break;
+
+        case TcpciDeliverySinkWaitReady:
+            if (Message->Count == 0 && Type == TCPCI_PD_PS_READY)
+            {
+                TcpciCancelDeliveryTimer(Port);
+                Port->Delivery = TcpciDeliveryReady;
+            }
+            break;
+
+        case TcpciDeliveryReady:
+            TcpciDeliveryIdle(Port, Message);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static
+VOID
+TcpciDeliveryReset(
+    _Inout_ PTCPCI_PORT_CONTEXT Port)
+{
+    if (!Port->DeliveryCapable || Port->Delivery == TcpciDeliveryOff)
+        return;
+
+    TcpciCancelDeliveryTimer(Port);
+    if (Port->Source)
+    {
+        Port->MessageId = 0;
+        Port->Delivery = TcpciDeliverySourceResetDelay;
+        TcpciArmDelivery(Port, TCPCI_SOURCE_RESET_DELAY_MS);
+    }
+    else
+    {
+        TcpciDeliverySinkReset(Port);
+    }
+}
+
+static
+BOOLEAN
+TcpciDeliveryPower(
+    _Inout_ PTCPCI_PORT_CONTEXT Port,
+    _In_ UCHAR Power)
+{
+    BOOLEAN Present = (Power & TCPCI_POWER_VBUS) != 0;
+
+    switch (Port->Delivery)
+    {
+        case TcpciDeliverySinkResetSent:
+        case TcpciDeliverySinkResetWait:
+            if (!Present)
+            {
+                if (TcpciClassify(Port->Cc) == TcpciCandidateOpen)
+                {
+                    TcpciLoadDetach(Port, FALSE, FALSE);
+                    Port->State = TcpciUnattached;
+                    return TRUE;
+                }
+
+                Port->VbusDropped = TRUE;
+                TcpciCancelDeliveryTimer(Port);
+            }
+            else if (Port->VbusDropped && Port->Delivery == TcpciDeliverySinkResetWait)
+            {
+                Port->VbusDropped = FALSE;
+                Port->PowerControl = TCPCI_POWER_CONTROL_ATTACHED;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                             Port->PowerControl);
+                TcpciAddHeaderInfo(Port);
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_RECEIVE_DETECT, 0, TCPCI_RECEIVE_MESSAGES);
+                Port->Delivery = TcpciDeliverySinkWaitCapabilities;
+                TcpciArmDelivery(Port, TCPCI_SINK_WAIT_DELAY_MS);
+            }
+            return TRUE;
+
+        case TcpciDeliverySourceResetSent:
+        case TcpciDeliverySourceResetDelay:
+        case TcpciDeliverySourceResetOff:
+        case TcpciDeliveryPowerSwapSinkSent:
+        case TcpciDeliveryPowerSwapSinkWaitReady:
+            return TRUE;
+
+        case TcpciDeliveryPowerSwapReadySent:
+        case TcpciDeliveryPowerSwapWaitSource:
+            if (Present && Port->PowerControl != TCPCI_POWER_CONTROL_ATTACHED)
+            {
+                Port->PowerControl = TCPCI_POWER_CONTROL_ATTACHED;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerPowerControl,
+                             Port->PowerControl);
+            }
+            return TRUE;
+
+        case TcpciDeliveryPowerSwapSourceOn:
+            if (Present)
+            {
+                Port->Source = TRUE;
+                Port->State = TcpciAttachedSource;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddHeaderInfo(Port);
+                TcpciAddMessage(Port, TCPCI_PD_PS_READY, 0, NULL);
+                Port->Delivery = TcpciDeliveryPowerSwapSourceReadySent;
+            }
+            return TRUE;
+
+        case TcpciDeliverySourceResetOn:
+            if (Present)
+                WdfWorkItemEnqueue(Port->DeliveryWork);
+            return TRUE;
+
+        case TcpciDeliveryPowerSwapOff:
+            if (!Present)
+            {
+                Port->Source = FALSE;
+                Port->State = TcpciAttachedSink;
+                TcpciBegin(Port, TcpciProgramDelivery);
+                TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_CONTROL, UcmTcpciPortControllerRoleControl,
+                             TCPCI_ROLE_RD_RD);
+                TcpciAddHeaderInfo(Port);
+                TcpciAddMessage(Port, TCPCI_PD_PS_READY, 0, NULL);
+                Port->Delivery = TcpciDeliveryPowerSwapReadySent;
+            }
+            return TRUE;
+
+        default:
+            return FALSE;
+    }
+}
+
+static
+VOID
 TcpciHandleEvent(
     _Inout_ PTCPCI_PORT_CONTEXT Port,
     _In_ PTCPCI_EVENT Event)
 {
     switch (Event->Type)
     {
+        case TcpciEventDeliveryStart:
+            TcpciDeliveryStart(Port);
+            break;
+
+        case TcpciEventDeliveryTimer:
+            TcpciDeliveryTimer(Port);
+            break;
+
+        case TcpciEventSent:
+            TcpciDeliverySent(Port, TRUE);
+            break;
+
+        case TcpciEventNotSent:
+            TcpciDeliverySent(Port, FALSE);
+            break;
+
+        case TcpciEventReceived:
+            TcpciDeliveryReceived(Port, &Event->Message);
+            break;
+
+        case TcpciEventReset:
+            TcpciDeliveryReset(Port);
+            break;
+
         case TcpciEventStart:
             TcpciBegin(Port, TcpciProgramStart);
             TcpciAddStep(Port, IOCTL_UCMTCPCI_PORT_CONTROLLER_GET_STATUS, 0, 0);
@@ -951,6 +1871,8 @@ TcpciProgramDone(
 
         case TcpciProgramAttachSink:
             Port->State = TcpciAttachedSink;
+            if (Port->DeliveryCapable)
+                WdfWorkItemEnqueue(Port->DeliveryWork);
             break;
 
         default:
@@ -1017,6 +1939,11 @@ TcpciSend(
     PUCMTCPCI_PORT_CONTROLLER_SET_CONTROL_IN_PARAMS Control = (PVOID)Port->Buffer;
     PUCMTCPCI_PORT_CONTROLLER_SET_COMMAND_IN_PARAMS Command = (PVOID)Port->Buffer;
     PUCMTCPCI_PORT_CONTROLLER_GET_STATUS_IN_PARAMS Status = (PVOID)Port->Buffer;
+    PUCMTCPCI_PORT_CONTROLLER_SET_MESSAGE_HEADER_INFO_IN_PARAMS HeaderInfo = (PVOID)Port->Buffer;
+    PUCMTCPCI_PORT_CONTROLLER_SET_RECEIVE_DETECT_IN_PARAMS ReceiveDetect = (PVOID)Port->Buffer;
+    PUCMTCPCI_PORT_CONTROLLER_SET_TRANSMIT_BUFFER_IN_PARAMS TransmitBuffer = (PVOID)Port->Buffer;
+    PUCMTCPCI_PORT_CONTROLLER_SET_TRANSMIT_IN_PARAMS Transmit = (PVOID)Port->Buffer;
+    PUCMTCPCI_PORT_CONTROLLER_DISPLAYPORT_DISPLAY_OUT_STATUS_CHANGED_IN_PARAMS DisplayOut = (PVOID)Port->Buffer;
     PTCPCI_STEP Step = &Port->Steps[Port->StepNext];
     ULONG InputLength, OutputLength = 0;
     PIO_STACK_LOCATION Stack;
@@ -1037,6 +1964,41 @@ TcpciSend(
             Command->PortControllerObject = Port->Handle;
             Command->Command = Step->Value;
             InputLength = sizeof(*Command);
+            break;
+
+        case IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_MESSAGE_HEADER_INFO:
+            HeaderInfo->PortControllerObject = Port->Handle;
+            HeaderInfo->MessageHeaderInfo.AsUInt8 = (UINT8)Step->Value;
+            InputLength = sizeof(*HeaderInfo);
+            break;
+
+        case IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_RECEIVE_DETECT:
+            ReceiveDetect->PortControllerObject = Port->Handle;
+            ReceiveDetect->ReceiveDetect.AsUInt8 = (UINT8)Step->Value;
+            InputLength = sizeof(*ReceiveDetect);
+            break;
+
+        case IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_TRANSMIT:
+            Transmit->PortControllerObject = Port->Handle;
+            Transmit->Transmit.AsUInt8 = (UINT8)Step->Value;
+            InputLength = sizeof(*Transmit);
+            break;
+
+        case IOCTL_UCMTCPCI_PORT_CONTROLLER_SET_TRANSMIT_BUFFER:
+            Port->Transmit.TransmitByteCount = (UINT8)(2 + 4 * Step->Message.Count);
+            Port->Transmit.Header[0] = (UINT8)Step->Message.Header;
+            Port->Transmit.Header[1] = (UINT8)(Step->Message.Header >> 8);
+            RtlCopyMemory(Port->Transmit.DataObjects, Step->Message.Objects, 4 * Step->Message.Count);
+            TransmitBuffer->PortControllerObject = Port->Handle;
+            TransmitBuffer->TransmitBuffer = Port->Transmit;
+            InputLength = sizeof(*TransmitBuffer);
+            break;
+
+        case IOCTL_UCMTCPCI_PORT_CONTROLLER_DISPLAYPORT_DISPLAY_OUT_STATUS_CHANGED:
+            DisplayOut->PortControllerObject = Port->Handle;
+            DisplayOut->DisplayOutStatus = UcmTcpciPortControllerDisplayOutStatusOff;
+            DisplayOut->PinAssignment = UcmTcpciPortControllerPinAssignmentInvalid;
+            InputLength = sizeof(*DisplayOut);
             break;
 
         default:
@@ -1129,16 +2091,21 @@ VOID
 TcpciPost(
     _Inout_ PTCPCI_PORT_CONTEXT Port,
     _In_ TCPCI_EVENT_TYPE Type,
-    _In_ ULONG Value)
+    _In_ ULONG Value,
+    _In_opt_ PTCPCI_MESSAGE Message)
 {
+    PTCPCI_EVENT Event;
     BOOLEAN Run = FALSE;
     KIRQL Irql;
 
     KeAcquireSpinLock(&Port->Lock, &Irql);
     if (Port->State != TcpciStopped && Port->EventCount < TCPCI_MAX_EVENTS)
     {
-        Port->Events[(Port->EventHead + Port->EventCount) % TCPCI_MAX_EVENTS].Type = Type;
-        Port->Events[(Port->EventHead + Port->EventCount) % TCPCI_MAX_EVENTS].Value = Value;
+        Event = &Port->Events[(Port->EventHead + Port->EventCount) % TCPCI_MAX_EVENTS];
+        Event->Type = Type;
+        Event->Value = Value;
+        if (Message != NULL)
+            Event->Message = *Message;
         Port->EventCount++;
         if (!Port->Busy)
         {
@@ -1167,7 +2134,34 @@ TcpciDebounceDpc(
     UNREFERENCED_PARAMETER(Argument1);
     UNREFERENCED_PARAMETER(Argument2);
 
-    TcpciPost(Port, TcpciEventDebounce, 0);
+    TcpciPost(Port, TcpciEventDebounce, 0, NULL);
+}
+
+static
+VOID
+NTAPI
+TcpciDeliveryDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID Context,
+    _In_opt_ PVOID Argument1,
+    _In_opt_ PVOID Argument2)
+{
+    PTCPCI_PORT_CONTEXT Port = Context;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Argument1);
+    UNREFERENCED_PARAMETER(Argument2);
+
+    TcpciPost(Port, TcpciEventDeliveryTimer, 0, NULL);
+}
+
+static
+VOID
+NTAPI
+TcpciEvtDeliveryWork(
+    _In_ WDFWORKITEM WorkItem)
+{
+    TcpciPost(TcpciGetPortContext(WdfWorkItemGetParentObject(WorkItem)), TcpciEventDeliveryStart, 0, NULL);
 }
 
 static
@@ -1182,8 +2176,13 @@ TcpciHalt(
     Port->EventCount = 0;
     KeReleaseSpinLock(&Port->Lock, Irql);
     KeCancelTimer(&Port->Timer);
+    KeCancelTimer(&Port->DeliveryTimer);
+    if (Port->DeliveryWork != NULL)
+        WdfWorkItemFlush(Port->DeliveryWork);
     KeFlushQueuedDpcs();
     KeWaitForSingleObject(&Port->IdleEvent, Executive, KernelMode, FALSE, NULL);
+    Port->Delivery = TcpciDeliveryOff;
+    Port->DeliveryTimerArmed = FALSE;
 }
 
 static
@@ -1210,8 +2209,9 @@ TcpciPortControllerCreate(
     _In_opt_ PWDF_OBJECT_ATTRIBUTES Attributes,
     _Out_ UCMTCPCIPORTCONTROLLER *PortControllerObject)
 {
-    WDF_OBJECT_ATTRIBUTES ObjectAttributes, ContextAttributes;
+    WDF_OBJECT_ATTRIBUTES ObjectAttributes, ContextAttributes, WorkAttributes;
     PTCPCI_DEVICE_CONTEXT DeviceContext;
+    WDF_WORKITEM_CONFIG WorkConfig;
     PTCPCI_PORT_CONTEXT Port;
     WDFOBJECT Object;
     NTSTATUS Status;
@@ -1254,6 +2254,10 @@ TcpciPortControllerCreate(
     KeInitializeEvent(&Port->StartEvent, NotificationEvent, FALSE);
     KeInitializeTimer(&Port->Timer);
     KeInitializeDpc(&Port->Dpc, TcpciDebounceDpc, Port);
+    KeInitializeTimer(&Port->DeliveryTimer);
+    KeInitializeDpc(&Port->DeliveryDpc, TcpciDeliveryDpc, Port);
+    Port->Connector = &DeviceContext->Connector;
+    Port->PowerControl = TCPCI_POWER_CONTROL_DETACHED;
     if (Config->Identification != NULL)
         Port->Identification = *Config->Identification;
     if (Config->Capabilities != NULL)
@@ -1264,6 +2268,18 @@ TcpciPortControllerCreate(
         Port->RpValue = UcmTcpciPortControllerRoleControlRp1500mA;
     else
         Port->RpValue = UcmTcpciPortControllerRoleControlRpDefault;
+
+    Port->DeliveryCapable = Port->Capabilities.IsPowerDeliveryCapable && DeviceContext->Connector.PowerDelivery != 0;
+    WDF_WORKITEM_CONFIG_INIT(&WorkConfig, TcpciEvtDeliveryWork);
+    WorkConfig.AutomaticSerialization = FALSE;
+    WDF_OBJECT_ATTRIBUTES_INIT(&WorkAttributes);
+    WorkAttributes.ParentObject = Object;
+    Status = WdfWorkItemCreate(&WorkConfig, &WorkAttributes, &Port->DeliveryWork);
+    if (!NT_SUCCESS(Status))
+    {
+        WdfObjectDelete(Object);
+        return Status;
+    }
 
     DeviceContext->Port = Port->Handle;
     *PortControllerObject = Port->Handle;
@@ -1315,7 +2331,7 @@ TcpciPortControllerStart(
     Port->EventHead = Port->EventCount = 0;
     KeClearEvent(&Port->StartEvent);
     KeReleaseSpinLock(&Port->Lock, Irql);
-    TcpciPost(Port, TcpciEventStart, 0);
+    TcpciPost(Port, TcpciEventStart, 0, NULL);
     KeWaitForSingleObject(&Port->StartEvent, Executive, KernelMode, FALSE, NULL);
     return STATUS_SUCCESS;
 }
@@ -1342,7 +2358,9 @@ TcpciPortControllerAlert(
     _In_reads_(NumberOfAlerts) PUCMTCPCI_PORT_CONTROLLER_ALERT_DATA AlertData,
     _In_ size_t NumberOfAlerts)
 {
+    PUCMTCPCI_PORT_CONTROLLER_RECEIVE_BUFFER Received;
     PTCPCI_PORT_CONTEXT Port;
+    TCPCI_MESSAGE Message;
     size_t Index;
 
     UNREFERENCED_PARAMETER(DriverGlobals);
@@ -1356,15 +2374,41 @@ TcpciPortControllerAlert(
         switch (AlertData[Index].AlertType)
         {
             case UcmTcpciPortControllerAlertCCStatus:
-                TcpciPost(Port, TcpciEventCc, AlertData[Index].CCStatus.AsUInt8);
+                TcpciPost(Port, TcpciEventCc, AlertData[Index].CCStatus.AsUInt8, NULL);
                 break;
 
             case UcmTcpciPortControllerAlertPowerStatus:
-                TcpciPost(Port, TcpciEventPower, AlertData[Index].PowerStatus.AsUInt8);
+                TcpciPost(Port, TcpciEventPower, AlertData[Index].PowerStatus.AsUInt8, NULL);
                 break;
 
             case UcmTcpciPortControllerAlertFault:
-                TcpciPost(Port, TcpciEventFault, AlertData[Index].FaultStatus.AsUInt8);
+                TcpciPost(Port, TcpciEventFault, AlertData[Index].FaultStatus.AsUInt8, NULL);
+                break;
+
+            case UcmTcpciPortControllerAlertReceivedHardReset:
+                TcpciPost(Port, TcpciEventReset, 0, NULL);
+                break;
+
+            case UcmTcpciPortControllerAlertTransmitSOPMessageSuccessful:
+                TcpciPost(Port, TcpciEventSent, 0, NULL);
+                break;
+
+            case UcmTcpciPortControllerAlertTransmitSOPMessageFailed:
+            case UcmTcpciPortControllerAlertTransmitSOPMessageDiscarded:
+                TcpciPost(Port, TcpciEventNotSent, 0, NULL);
+                break;
+
+            case UcmTcpciPortControllerAlertReceiveSOPMessageStatus:
+                Received = AlertData[Index].ReceiveBuffer;
+                if (Received != NULL && Received->ReceivedFrameType == UcmTcpciPortControllerReceivedSOP &&
+                    Received->ReceiveByteCount >= 3)
+                {
+                    RtlZeroMemory(&Message, sizeof(Message));
+                    Message.Header = (USHORT)(Received->Header[0] | (Received->Header[1] << 8));
+                    Message.Count = (UCHAR)min((Message.Header >> 12) & 7, (Received->ReceiveByteCount - 3) / 4);
+                    RtlCopyMemory(Message.Objects, Received->DataObjects, 4 * Message.Count);
+                    TcpciPost(Port, TcpciEventReceived, 0, &Message);
+                }
                 break;
 
             default:
