@@ -496,14 +496,7 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     {
         if (pProperties->dwCharacter & NCCF_SHOW_ICON)
         {
-            nid.hIcon = (HICON)LoadImageW(netshell_hInstance,
-                                          MAKEINTRESOURCEW(pContext->Status),
-                                          IMAGE_ICON,
-                                          ShellTrayIconSize(),
-                                          ShellTrayIconSize(), 0);
-
-            if (nid.hIcon)
-                nid.uFlags |= NIF_ICON;
+            nid.uFlags |= NIF_ICON;
 
             NetShellSetTrayRank(pContext->uID, nid.hWnd,
                                 NetShellRankConnection(IfEntry.dwOperStatus, Conn, IfEntry.dwType, nQuality));
@@ -538,10 +531,29 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
         NetShellClearTrayRank(pContext->uID, nid.hWnd);
     }
 
-    Shell_NotifyIconW(NIM_MODIFY, &nid);
+    if (pContext->TrayStatus != pContext->Status || pContext->TrayFlags != nid.uFlags ||
+        wcscmp(pContext->TrayTip, nid.szTip) != 0)
+    {
+        pContext->TrayStatus = pContext->Status;
+        pContext->TrayFlags = nid.uFlags;
+        wcscpy(pContext->TrayTip, nid.szTip);
 
-    if (nid.uFlags & NIF_ICON)
-        DestroyIcon(nid.hIcon);
+        if (nid.uFlags & NIF_ICON)
+        {
+            nid.hIcon = (HICON)LoadImageW(netshell_hInstance,
+                                          MAKEINTRESOURCEW(pContext->Status),
+                                          IMAGE_ICON,
+                                          ShellTrayIconSize(),
+                                          ShellTrayIconSize(), 0);
+            if (!nid.hIcon)
+                nid.uFlags &= ~NIF_ICON;
+        }
+
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
+
+        if (nid.uFlags & NIF_ICON)
+            DestroyIcon(nid.hIcon);
+    }
 
     pContext->dwInOctets = IfEntry.dwInOctets;
     pContext->dwOutOctets = IfEntry.dwOutOctets;

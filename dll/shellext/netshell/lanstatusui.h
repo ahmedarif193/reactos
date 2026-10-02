@@ -32,6 +32,9 @@ typedef struct
     DWORD Gateway;
     UINT uID;
     UINT Status;
+    UINT TrayStatus;
+    UINT TrayFlags;
+    WCHAR TrayTip[128];
 } LANSTATUSUI_CONTEXT;
 
 class CLanStatus:
