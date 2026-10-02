@@ -9,7 +9,7 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 #include <reactos/version.rc>
 
 /* Icons */
-1  ICON "res/01.ico"
+1  ICON "res/01vdm.ico"
 2  ICON "res/02.ico"
 3  ICON "res/03.ico"
 4  ICON "res/04.ico"

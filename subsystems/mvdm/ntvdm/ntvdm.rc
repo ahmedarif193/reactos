@@ -26,7 +26,7 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 9  ICON "res/ntvdm_pc_xt_3d.ico"
 10 ICON "res/pc_xt.ico"
 /* Embedded products */
-11 ICON "res/ros_dos.ico"
+11 ICON "res/vdm_dos.ico"
 12 ICON "res/vdm_dos.ico"
 
 
