@@ -233,6 +233,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ob/ObType.cpp
     ntos_ob/ObTypes.cpp
     ntos_ob/ObWait.c
+    smclib/SmcLib.c
     ntos_po/PoFxState.c
     ntos_po/PoFxState_pnp.c
     ntos_po/PoPowerLimit.c
@@ -407,7 +408,7 @@ else()
     target_link_options(kmtest_drv PRIVATE -Wl,--forceinteg)
 endif()
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp poguid wdmguid ${PSEH_LIB})
-add_importlibs(kmtest_drv ksecdd ndis ntoskrnl hal)
+add_importlibs(kmtest_drv ksecdd ndis smclib ntoskrnl hal)
 if(REACTOS_USE_WDDM)
     add_importlibs(kmtest_drv dxgkrnl dxgmms2)
 endif()

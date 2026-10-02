@@ -297,6 +297,8 @@ KMT_TESTFUNC Test_MmPhysical;
 KMT_TESTFUNC Test_MmPrefetchPages;
 KMT_TESTFUNC Test_MmPrivatePages;
 KMT_TESTFUNC Test_IoStackKM;
+KMT_TESTFUNC Test_SmcLib;
+KMT_TESTFUNC Test_SmcLibRemove;
 KMT_TESTFUNC Test_KeCriticalRegionKM;
 KMT_TESTFUNC Test_ObOpenByPointer;
 KMT_TESTFUNC Test_ObSecurityDescKM;
@@ -459,6 +461,8 @@ const KMT_TEST TestList[] =
     { "IoNullDeviceKM",                     Test_IoNullDeviceKM },
     { "IoMdl",                              Test_IoMdl },
     { "IoModern",                           Test_IoModern },
+    { "SmcLib",                             Test_SmcLib },
+    { "SmcLibRemove",                       Test_SmcLibRemove },
     { "IoDeviceNumaNode",                    Test_IoDeviceNumaNode },
     { "IoReportRootDevice",                 Test_IoReportRootDevice },
     { "IoVolume",                           Test_IoVolume },
