@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <wchar.h>
 #include <tlhelp32.h>
+#include <apitest.h>
 static DWORD ProcessId;
 static HWND MainWindow;
 static BOOL CALLBACK FindWindowForProcess(HWND window, LPARAM unused)
@@ -47,7 +48,7 @@ static void SampleThread(HANDLE thread, HANDLE process)
         CloseHandle(snapshot);
     }
 }
-int main(void)
+START_TEST(fanlaunch)
 {
     STARTUPINFOW startup = {sizeof(startup)};
     PROCESS_INFORMATION process;
@@ -56,11 +57,18 @@ int main(void)
     DWORD_PTR response;
     RECT client;
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (!CreateProcessW(NULL, command, NULL, NULL, TRUE, 0, NULL, L"D:\\RPi5FanControl\\GUI", &startup, &process)) { printf("FAN_START_FAILED error=%lu\n", GetLastError()); return 1; }
+    if (!CreateProcessW(NULL, command, NULL, NULL, TRUE, 0, NULL, L"D:\\RPi5FanControl\\GUI", &startup, &process))
+    {
+        code = GetLastError();
+        printf("FAN_START_FAILED error=%lu\n", code);
+        if (code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND || code == ERROR_DIRECTORY) skip("RPi5FanControl is not on drive D\n");
+        else ok(0, "CreateProcessW failed with error %lu\n", code);
+        return;
+    }
     ProcessId = process.dwProcessId;
     for (i = 0; i < 50; ++i)
     {
-        if (WaitForSingleObject(process.hProcess, 100) == WAIT_OBJECT_0) { GetExitCodeProcess(process.hProcess, &code); printf("FAN_EXIT_BEFORE_READY code=%lx\n", code); return 1; }
+        if (WaitForSingleObject(process.hProcess, 100) == WAIT_OBJECT_0) { GetExitCodeProcess(process.hProcess, &code); printf("FAN_EXIT_BEFORE_READY code=%lx\n", code); ok(0, "the process exited with code %lx before its window was ready\n", code); return; }
         if (i == 10)
         {
             THREADENTRY32 entry = {sizeof(entry)};
@@ -87,11 +95,12 @@ int main(void)
             {
                 printf("FAN_WINDOW_READY title=Raspberry Pi 5 Fan Control client=%ldx%ld pid=%lu\n", client.right, client.bottom, ProcessId);
                 CloseHandle(process.hThread); CloseHandle(process.hProcess);
-                return 0;
+                ok(MainWindow != NULL, "no main window\n");
+                return;
             }
         }
     }
     puts("FAN_WINDOW_NOT_READY");
     CloseHandle(process.hThread); CloseHandle(process.hProcess);
-    return 1;
+    ok(0, "the window was not ready after 5 seconds\n");
 }

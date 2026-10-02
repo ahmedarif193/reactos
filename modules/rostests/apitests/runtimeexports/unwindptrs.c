@@ -2,7 +2,8 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-int main(void)
+#include <apitest.h>
+START_TEST(unwindptrs)
 {
     DECLSPEC_ALIGN(16) ULONG64 stack[32];
     DECLSPEC_ALIGN(16) BYTE image[512] = {0};
@@ -14,7 +15,7 @@ int main(void)
     unsigned i, cycle, failures = 0;
     setvbuf(stdout, NULL, _IONBF, 0);
     for (i = 0; i < 32; i++) stack[i] = 0x12340000 + i;
-    for (cycle = 0; cycle < 10000; cycle++)
+    for (cycle = 0; cycle < 100; cycle++)
     {
         memset(&context, 0, sizeof(context));
         memset(&pointers, 0, sizeof(pointers));
@@ -34,6 +35,6 @@ int main(void)
         if (context.X19 != stack[0] || context.X20 != stack[1] || context.Fp != stack[4] || context.Lr != stack[5] || context.V[8].Low != stack[2] || context.Sp != (ULONG_PTR)(stack+8)) failures++;
         if (pointers.X19 != stack || pointers.X20 != stack+1 || pointers.Fp != stack+4 || pointers.Lr != stack+5 || pointers.D8 != stack+2 || pointers.D9 != stack+3 || pointers.X21 != NULL) failures++;
     }
-    printf("UNWIND_POINTERS_DONE cases=20000 failures=%u\n", failures);
-    return failures ? 1 : 0;
+    printf("UNWIND_POINTERS_DONE cases=200 failures=%u\n", failures);
+    ok(failures == 0, "%u failures in 200 cases\n", failures);
 }

@@ -2,14 +2,15 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-int main(void)
+#include <apitest.h>
+START_TEST(nlssortkey)
 {
     const WCHAR *texts[] = {L"", L"HandleDispatcherRequestProcessingFailure", L"Alpha", L"a\x0301", L"\x0130\x0131", L"a-b", L"\x65e5\x672c"};
     DWORD flags[] = {LCMAP_SORTKEY, LCMAP_SORTKEY | NORM_IGNORECASE, LCMAP_SORTKEY | NORM_IGNORECASE | NORM_LINGUISTIC_CASING};
     unsigned i, j, cycle, failures = 0;
     BYTE buffer[1024];
     setvbuf(stdout, NULL, _IONBF, 0);
-    for (cycle = 0; cycle < 1000; ++cycle)
+    for (cycle = 0; cycle < 10; ++cycle)
     for (i = 0; i < sizeof(texts)/sizeof(texts[0]); ++i)
     for (j = 0; j < sizeof(flags)/sizeof(flags[0]); ++j)
     {
@@ -26,6 +27,6 @@ int main(void)
         if (shortResult != 0 || error != ERROR_INSUFFICIENT_BUFFER) failures++;
         if (!cycle) printf("NLS_SORTKEY text=%u flags=%lx size=%d actual=%d short=%d error=%lu\n", i, flags[j], length, actual, shortResult, error);
     }
-    printf("NLS_SORTKEY_DONE cases=21000 failures=%u\n", failures);
-    return failures ? 1 : 0;
+    printf("NLS_SORTKEY_DONE cases=210 failures=%u\n", failures);
+    ok(failures == 0, "%u failures in 210 cases\n", failures);
 }

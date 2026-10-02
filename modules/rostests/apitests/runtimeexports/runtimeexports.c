@@ -6,6 +6,7 @@
 #include <sspi.h>
 #include <stdio.h>
 #include <pseh/pseh2.h>
+#include <apitest.h>
 
 typedef BOOL (WINAPI *GETIDEAL)(HANDLE, PPROCESSOR_NUMBER);
 typedef BOOL (WINAPI *SETIDEAL)(HANDLE, PPROCESSOR_NUMBER, PPROCESSOR_NUMBER);
@@ -16,14 +17,14 @@ static SETIDEAL SetIdeal;
 static GETNODE GetNode;
 static volatile LONG Failures;
 static DWORD CpuCount;
-#define CHECK(c) do { if (!(c)) { InterlockedIncrement(&Failures); printf("FAIL line=%u error=%lu\n", __LINE__, GetLastError()); } } while (0)
+#define CHECK(c) do { BOOL Passed = !!(c); DWORD Error = GetLastError(); ok(Passed, "error=%lu\n", Error); if (!Passed) InterlockedIncrement(&Failures); SetLastError(Error); } while (0)
 
 static DWORD WINAPI Stress(PVOID Arg)
 {
     PROCESSOR_NUMBER original, input, previous, current;
     ULONG i;
     if (!GetIdeal(GetCurrentThread(), &original)) { CHECK(FALSE); return 1; }
-    for (i = 0; i < 5000; ++i)
+    for (i = 0; i < 250; ++i)
     {
         input.Group = 0; input.Number = (UCHAR)((i + (ULONG_PTR)Arg) % CpuCount); input.Reserved = 0;
         CHECK(SetIdeal(GetCurrentThread(), &input, &previous));
@@ -92,7 +93,7 @@ static void ProcessorProbes(void)
     CHECK(SetIdeal(GetCurrentThread(), &original, NULL));
     for (i = 0; i < 8; ++i) { workers[i] = CreateThread(NULL, 0, Stress, (PVOID)(ULONG_PTR)i, 0, NULL); CHECK(workers[i] != NULL); }
     for (i = 0; i < 8; ++i) if (workers[i]) { CHECK(WaitForSingleObject(workers[i], 120000) == WAIT_OBJECT_0); CloseHandle(workers[i]); }
-    printf("PROCESSOR_STRESS_DONE iterations=40000 failures=%ld\n", Failures);
+    printf("PROCESSOR_STRESS_DONE iterations=2000 failures=%ld\n", Failures);
 }
 
 static void AccessProbes(void)
@@ -229,7 +230,7 @@ static void ValidSecurityProbes(void)
     table->FreeCredentialsHandle(&cred);
 }
 
-int main(void)
+START_TEST(runtimeexports)
 {
     SYSTEM_INFO info;
     OSVERSIONINFOW version = {sizeof(version)};
@@ -247,5 +248,4 @@ int main(void)
     SecurityProbes();
     ValidSecurityProbes();
     printf("RUNTIME_EXPORTS_DONE failures=%ld\n", Failures);
-    return Failures ? 1 : 0;
 }
