@@ -1921,12 +1921,6 @@ static void test_find_surrogate(HANDLE handle, const GUID *clsid, const WCHAR *n
     ACTCTX_SECTION_KEYED_DATA data;
     BOOL ret;
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: This test crashes on ReactOS\n");
-        return;
-    }
-#endif
     memset(&data, 0xfe, sizeof(data));
     data.cbSize = sizeof(data);
 
