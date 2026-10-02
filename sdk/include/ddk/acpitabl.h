@@ -13,6 +13,30 @@ extern "C" {
 #endif
 
 #include <pshpack1.h>
+typedef struct _ACPI_PLD_BUFFER {
+    UINT32 Revision:7;
+    UINT32 IgnoreColor:1;
+    UINT32 Color:24;
+    UINT32 Width:16;
+    UINT32 Height:16;
+    UINT32 UserVisible:1;
+    UINT32 Dock:1;
+    UINT32 Lid:1;
+    UINT32 Panel:3;
+    UINT32 VerticalPosition:2;
+    UINT32 HorizontalPosition:2;
+    UINT32 Shape:4;
+    UINT32 GroupOrientation:1;
+    UINT32 GroupToken:8;
+    UINT32 GroupPosition:8;
+    UINT32 Bay:1;
+    UINT32 Ejectable:1;
+    UINT32 EjectionRequired:1;
+    UINT32 CabinetNumber:8;
+    UINT32 CardCageNumber:8;
+    UINT32 Reserved:14;
+} ACPI_PLD_BUFFER, *PACPI_PLD_BUFFER;
+
 typedef struct _ACPI_PLD_V2_BUFFER {
     UINT32 Revision:7;
     UINT32 IgnoreColor:1;
