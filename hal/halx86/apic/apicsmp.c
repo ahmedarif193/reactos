@@ -173,7 +173,7 @@ HalpBroadcastIpiSpecifyVector(
  */
 VOID
 NTAPI
-HalRequestIpiSpecifyVector(
+HalpRequestIpiSpecifyVector(
     _In_ KAFFINITY TargetSet,
     _In_ UCHAR Vector)
 {
@@ -231,7 +231,7 @@ HalpRequestIpi(
     _In_ KAFFINITY TargetSet)
 {
     /* Request the IPI vector */
-    HalRequestIpiSpecifyVector(TargetSet, APIC_IPI_VECTOR);
+    HalpRequestIpiSpecifyVector(TargetSet, APIC_IPI_VECTOR);
 }
 
 #ifdef _M_AMD64
@@ -266,7 +266,7 @@ HalpSendSoftwareInterrupt(
     }
 
     /* Request the IPI with the specified vector */
-    HalRequestIpiSpecifyVector(TargetSet, Vector);
+    HalpRequestIpiSpecifyVector(TargetSet, Vector);
 }
 
 /*!
