@@ -14,13 +14,53 @@
 
 /* FUNCTIONS *****************************************************************/
 
-VOID NTAPI
-MsfsInsertIrp(PIO_CSQ Csq, PIRP Irp)
+VOID
+MsfsDereferenceFcb(PMSFS_FCB Fcb)
+{
+    if (InterlockedDecrement(&Fcb->MemoryReferences) == 0)
+        ExFreePoolWithTag(Fcb, 'fFsM');
+}
+
+static
+VOID
+MsfsDereferenceContext(PMSFS_DPC_CTX Context)
 {
     PMSFS_FCB Fcb;
 
+    if (InterlockedDecrement(&Context->ReferenceCount) != 0)
+        return;
+
+    Fcb = Context->Fcb;
+    ExFreePoolWithTag(Context, 'NFsM');
+    MsfsDereferenceFcb(Fcb);
+}
+
+VOID
+MsfsReleaseIrpContext(PIRP Irp)
+{
+    PMSFS_DPC_CTX Context = Irp->Tail.Overlay.DriverContext[0];
+
+    if (Context->UseTimer && KeCancelTimer(&Context->Timer))
+        MsfsDereferenceContext(Context);
+
+    MsfsDereferenceContext(Context);
+}
+
+NTSTATUS NTAPI
+MsfsInsertIrpEx(PIO_CSQ Csq, PIRP Irp, PVOID InsertContext)
+{
+    PMSFS_FCB Fcb;
+    PMSFS_DPC_CTX Context = InsertContext;
+
     Fcb = CONTAINING_RECORD(Csq, MSFS_FCB, CancelSafeQueue);
     InsertTailList(&Fcb->PendingIrpQueue, &Irp->Tail.Overlay.ListEntry);
+    if (Context->UseTimer)
+    {
+        InterlockedIncrement(&Context->ReferenceCount);
+        KeSetTimer(&Context->Timer, Context->Timeout, &Context->Dpc);
+    }
+
+    return STATUS_SUCCESS;
 }
 
 VOID NTAPI
@@ -82,7 +122,7 @@ MsfsAcquireLock(PIO_CSQ Csq, PKIRQL Irql)
     PMSFS_FCB Fcb;
 
     Fcb = CONTAINING_RECORD(Csq, MSFS_FCB, CancelSafeQueue);
-    KeAcquireSpinLock(&Fcb->QueueLock, Irql);
+    KeAcquireSpinLock(&Fcb->MessageListLock, Irql);
 }
 
 
@@ -92,7 +132,7 @@ MsfsReleaseLock(PIO_CSQ Csq, KIRQL Irql)
     PMSFS_FCB Fcb;
 
     Fcb = CONTAINING_RECORD(Csq, MSFS_FCB, CancelSafeQueue);
-    KeReleaseSpinLock(&Fcb->QueueLock, Irql);
+    KeReleaseSpinLock(&Fcb->MessageListLock, Irql);
 }
 
 VOID NTAPI
@@ -101,6 +141,7 @@ MsfsCompleteCanceledIrp(PIO_CSQ Csq, PIRP Irp)
 
     UNREFERENCED_PARAMETER(Csq);
 
+    MsfsReleaseIrpContext(Irp);
     Irp->IoStatus.Status = STATUS_CANCELLED;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -121,16 +162,13 @@ MsfsTimeout(PKDPC Dpc,
     Irp = IoCsqRemoveIrp(Context->Csq, &Context->CsqContext);
     if (Irp != NULL)
     {
-        /* It timed out, complete it (it's ours) and free context */
         Irp->IoStatus.Status = STATUS_IO_TIMEOUT;
+        Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
-        ExFreePoolWithTag(Context, 'NFsM');
+        MsfsDereferenceContext(Context);
     }
-    else
-    {
-        /* We were racing with writing and failed, signal we're done */
-        KeSetEvent(&Context->Event, IO_NO_INCREMENT, FALSE);
-    }
+
+    MsfsDereferenceContext(Context);
 }
 
 /* EOF */

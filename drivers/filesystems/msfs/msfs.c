@@ -32,6 +32,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject,
     DriverObject->MajorFunction[IRP_MJ_CREATE] = MsfsCreate;
     DriverObject->MajorFunction[IRP_MJ_CREATE_MAILSLOT] =
         MsfsCreateMailslot;
+    DriverObject->MajorFunction[IRP_MJ_CLEANUP] = MsfsCleanup;
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = MsfsClose;
     DriverObject->MajorFunction[IRP_MJ_READ] = MsfsRead;
     DriverObject->MajorFunction[IRP_MJ_WRITE] = MsfsWrite;

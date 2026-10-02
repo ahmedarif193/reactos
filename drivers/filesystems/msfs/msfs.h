@@ -30,14 +30,16 @@ typedef struct _MSFS_FCB
     LIST_ENTRY CcbListHead;
     struct _MSFS_CCB *ServerCcb;
     ULONG ReferenceCount;
+    LONG MemoryReferences;
     LARGE_INTEGER TimeOut;
     ULONG MaxMessageSize;
+    ULONG MailslotQuota;
     ULONG MessageCount;
     KSPIN_LOCK MessageListLock;
     LIST_ENTRY MessageListHead;
     IO_CSQ CancelSafeQueue;
-    KSPIN_LOCK QueueLock;
     LIST_ENTRY PendingIrpQueue;
+    FAST_MUTEX IoLock;
 } MSFS_FCB, *PMSFS_FCB;
 
 
@@ -46,7 +48,10 @@ typedef struct _MSFS_DPC_CTX
     KTIMER Timer;
     KDPC Dpc;
     PIO_CSQ Csq;
-    KEVENT Event;
+    struct _MSFS_FCB *Fcb;
+    LONG ReferenceCount;
+    BOOLEAN UseTimer;
+    LARGE_INTEGER Timeout;
     IO_CSQ_IRP_CONTEXT CsqContext;
 } MSFS_DPC_CTX, *PMSFS_DPC_CTX;
 
@@ -80,6 +85,9 @@ NTSTATUS DEFAULTAPI MsfsCreate(PDEVICE_OBJECT DeviceObject, PIRP Irp);
 DRIVER_DISPATCH MsfsCreateMailslot;
 NTSTATUS DEFAULTAPI MsfsCreateMailslot(PDEVICE_OBJECT DeviceObject, PIRP Irp);
 
+DRIVER_DISPATCH MsfsCleanup;
+NTSTATUS DEFAULTAPI MsfsCleanup(PDEVICE_OBJECT DeviceObject, PIRP Irp);
+
 DRIVER_DISPATCH MsfsClose;
 NTSTATUS DEFAULTAPI MsfsClose(PDEVICE_OBJECT DeviceObject, PIRP Irp);
 
@@ -102,9 +110,15 @@ NTSTATUS NTAPI
 DriverEntry(PDRIVER_OBJECT DriverObject,
             PUNICODE_STRING RegistryPath);
 
-IO_CSQ_INSERT_IRP MsfsInsertIrp;
-VOID NTAPI
-MsfsInsertIrp(PIO_CSQ Csq, PIRP Irp);
+IO_CSQ_INSERT_IRP_EX MsfsInsertIrpEx;
+NTSTATUS NTAPI
+MsfsInsertIrpEx(PIO_CSQ Csq, PIRP Irp, PVOID InsertContext);
+
+VOID
+MsfsDereferenceFcb(PMSFS_FCB Fcb);
+
+VOID
+MsfsReleaseIrpContext(PIRP Irp);
 
 IO_CSQ_REMOVE_IRP MsfsRemoveIrp;
 VOID NTAPI

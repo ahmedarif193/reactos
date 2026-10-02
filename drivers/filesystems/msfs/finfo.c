@@ -31,6 +31,7 @@ MsfsQueryMailslotInformation(PMSFS_FCB Fcb,
         return STATUS_BUFFER_OVERFLOW;
 
     Buffer->MaximumMessageSize = Fcb->MaxMessageSize;
+    Buffer->MailslotQuota = Fcb->MailslotQuota;
     Buffer->ReadTimeout = Fcb->TimeOut;
 
     KeAcquireSpinLock(&Fcb->MessageListLock, &oldIrql);
@@ -76,7 +77,6 @@ MsfsQueryInformation(PDEVICE_OBJECT DeviceObject,
     FILE_INFORMATION_CLASS FileInformationClass;
     PFILE_OBJECT FileObject;
     PMSFS_FCB Fcb;
-    PMSFS_CCB Ccb;
     PVOID SystemBuffer;
     ULONG BufferLength;
     NTSTATUS Status;
@@ -88,7 +88,6 @@ MsfsQueryInformation(PDEVICE_OBJECT DeviceObject,
     FileInformationClass = IoStack->Parameters.QueryFile.FileInformationClass;
     FileObject = IoStack->FileObject;
     Fcb = (PMSFS_FCB)FileObject->FsContext;
-    Ccb = (PMSFS_CCB)FileObject->FsContext2;
 
     if (!Fcb)
     {
@@ -123,19 +122,6 @@ MsfsQueryInformation(PDEVICE_OBJECT DeviceObject,
 
         Irp->IoStatus.Status = Status;
         Irp->IoStatus.Information = Length;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-
-        return Status;
-    }
-
-    /* querying information is not permitted on client side */
-    if (Fcb->ServerCcb != Ccb)
-    {
-        Status = STATUS_ACCESS_DENIED;
-
-        Irp->IoStatus.Status = Status;
-        Irp->IoStatus.Information = 0;
-
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
         return Status;
