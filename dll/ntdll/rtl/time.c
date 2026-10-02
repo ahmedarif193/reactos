@@ -124,6 +124,23 @@ SlowPath:
     return NT_SUCCESS(Status);
 }
 
+BOOL
+WINAPI
+RtlQueryUnbiasedInterruptTime(PULONGLONG UnbiasedTime)
+{
+    LARGE_INTEGER InterruptTime;
+
+    if (!UnbiasedTime)
+    {
+        RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    InterruptTime = KiReadSystemTime(&SharedUserData->InterruptTime);
+    *UnbiasedTime = (ULONGLONG)InterruptTime.QuadPart - SharedUserData->InterruptTimeBias;
+    return TRUE;
+}
+
 VOID
 WINAPI
 RtlQuerySystemTime(PLARGE_INTEGER SystemTime)

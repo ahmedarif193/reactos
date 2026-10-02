@@ -902,6 +902,7 @@
 @ stdcall -version=0x600+ -arch=win64 RtlLocateLegacyContext(ptr ptr)
 @ stdcall RtlQueryPerformanceCounter(ptr)
 @ stdcall RtlQueryPerformanceFrequency(ptr)
+@ stdcall -version=0x601+ RtlQueryUnbiasedInterruptTime(ptr)
 @ stdcall RtlQuerySystemTime(ptr)
 @ stdcall RtlSystemTimeToTimeFields(ptr ptr)
 @ stdcall RtlExitUserProcess(long)

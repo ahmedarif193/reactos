@@ -4993,6 +4993,13 @@ BOOL
 NTAPI
 RtlQueryPerformanceFrequency(
     _Out_ PLARGE_INTEGER PerformanceFrequency);
+
+_Success_(return != FALSE)
+NTSYSAPI
+BOOL
+NTAPI
+RtlQueryUnbiasedInterruptTime(
+    _Out_ PULONGLONG UnbiasedTime);
 #endif
 
 NTSYSAPI
