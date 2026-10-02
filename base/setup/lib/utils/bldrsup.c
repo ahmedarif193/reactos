@@ -392,7 +392,7 @@ CreateCommonFreeLdrSections(
     IniSection = IniAddSection(BootStore->IniCache, L"Display");
 
     /* TitleText and MinimalUI */
-    IniAddKey(IniSection, L"TitleText", L"ReactOS Boot Manager");
+    IniAddKey(IniSection, L"TitleText", L"LiberNT Boot Manager");
     IniAddKey(IniSection, L"MinimalUI", L"Yes");
 
     /*

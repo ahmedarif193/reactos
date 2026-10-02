@@ -155,7 +155,7 @@ set(dir_quicklaunch             "reactos/system32/config/systemprofile/AppData/R
 
 cmdenvvar(envvar_systemdrive "SystemDrive" TRUE)
 cmdenvvar(envvar_archdir     "PROCESSOR_ARCHITECTURE:x86=I386" TRUE)
-add_livecd_shortcut("Install ReactOS"
+add_livecd_shortcut("Install LiberNT"
     "shell:system\\cmd.exe"
     CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\reactos.exe\""
     ICON "${envvar_systemdrive}\\icon.ico"

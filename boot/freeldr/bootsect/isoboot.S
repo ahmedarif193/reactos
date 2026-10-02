@@ -1064,7 +1064,7 @@ pollchar_and_empty:
 
 /* INITIALIZED VARIABLES *****************************************************/
 presskey_msg:
-    .ascii "Press any key to boot from the ReactOS medium", NUL
+    .ascii "Press any key to boot from the LiberNT medium", NUL
 dot_msg:
     .ascii ".", NUL
 isoboot_str:
