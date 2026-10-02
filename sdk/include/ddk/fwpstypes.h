@@ -176,6 +176,120 @@ enum FWPS_CALLOUT_NOTIFY_TYPE_
         FWPS_CALLOUT_NOTIFY_TYPE_MAX	= ( FWPS_CALLOUT_NOTIFY_ADD_FILTER_POST_COMMIT + 1 )
     } 	FWPS_CALLOUT_NOTIFY_TYPE;
 
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+typedef struct FWPM_PROVIDER_CONTEXT2_ FWPM_PROVIDER_CONTEXT2;
+
+typedef struct FWPS_FILTER2_
+    {
+    UINT64 filterId;
+    FWP_VALUE0 weight;
+    UINT16 subLayerWeight;
+    UINT16 flags;
+    UINT32 numFilterConditions;
+     FWPS_FILTER_CONDITION0 *filterCondition;
+    FWPS_ACTION0 action;
+    UINT64 context;
+     FWPM_PROVIDER_CONTEXT2 *providerContext;
+    } 	FWPS_FILTER2;
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+typedef struct FWPS_ALE_ENDPOINT_PROPERTIES0_
+    {
+    UINT64 endpointId;
+    FWP_IP_VERSION ipVersion;
+     union
+        {
+         UINT32 localV4Address;
+         UINT8 localV6Address[ 16 ];
+        } 	;
+     union
+        {
+         UINT32 remoteV4Address;
+         UINT8 remoteV6Address[ 16 ];
+        } 	;
+    UINT8 ipProtocol;
+    UINT16 localPort;
+    UINT16 remotePort;
+    UINT64 localTokenModifiedId;
+    UINT64 mmSaId;
+    UINT64 qmSaId;
+    UINT32 ipsecStatus;
+    UINT32 flags;
+    FWP_BYTE_BLOB appId;
+    } 	FWPS_ALE_ENDPOINT_PROPERTIES0;
+
+typedef struct FWPS_ALE_ENDPOINT_ENUM_TEMPLATE0_
+    {
+    FWP_CONDITION_VALUE0 localSubNet;
+    FWP_CONDITION_VALUE0 remoteSubNet;
+    FWP_CONDITION_VALUE0 ipProtocol;
+    FWP_CONDITION_VALUE0 localPort;
+    FWP_CONDITION_VALUE0 remotePort;
+    } 	FWPS_ALE_ENDPOINT_ENUM_TEMPLATE0;
+
+#endif
+
+#define FWPS_FILTER_FLAG_PERMIT_IF_CALLOUT_UNREGISTERED   (0x0002)
+
+#define FWPS_FILTER_FLAG_OR_CONDITIONS   (0x0004)
+
+#define FWPS_FILTER_FLAG_HAS_SECURITY_REALM_PROVIDER_CONTEXT (0x0008)
+
+#define FWPS_FILTER_FLAG_SILENT_MODE     (0x0010)
+
+#define FWPS_FILTER_FLAG_IPSEC_NO_ACQUIRE_INITIATE (0x0020)
+
+#define FWPS_FILTER_FLAG_RESERVED0 (0x0040)
+
+#define FWPS_FILTER_FLAG_RESERVED1 (0x0080)
+
+#define FWPS_FILTER_FLAG_RESERVED2 (0x0100)
+
+#define FWPS_INCOMING_FLAG_CACHE_SAFE                         (0x00000001)
+
+#define FWPS_INCOMING_FLAG_ENFORCE_QUERY                      (0x00000002)
+
+#define FWPS_INCOMING_FLAG_ABSORB                             (0x00000004)
+
+#define FWPS_INCOMING_FLAG_CONNECTION_FAILING_INDICATION      (0x00000008)
+
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+#define FWPS_INCOMING_FLAG_MID_STREAM_INSPECTION              (0x00000010)
+
+#define FWPS_INCOMING_FLAG_RECLASSIFY                         (0x00000020)
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define FWPS_INCOMING_FLAG_IS_LOOSE_SOURCE_FLOW               (0x00000040)
+
+#define FWPS_INCOMING_FLAG_IS_LOCAL_ONLY_FLOW                 (0x00000080)
+
+#define FWPS_L2_INCOMING_FLAG_IS_RAW_IPV4_FRAMING             (0x00000001)
+
+#define FWPS_L2_INCOMING_FLAG_IS_RAW_IPV6_FRAMING             (0x00000002)
+
+#if ((NTDDI_VERSION >= NTDDI_WIN10_19H1))
+
+#define FWPS_INCOMING_FLAG_RESERVED0                          (0x00000100)
+
+#endif
+#endif
+#endif
+
+#define FWPS_CLASSIFY_OUT_FLAG_ALE_FAST_CACHE_CHECK           (0x00000008)
+
+#define FWPS_CLASSIFY_OUT_FLAG_ALE_FAST_CACHE_POSSIBLE        (0x00000010)
+
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+#define FWPS_ALE_ENDPOINT_FLAG_IPSEC_SECURED   (0x00000001)
+
+#endif
+
 #ifdef __cplusplus
 }
 #endif

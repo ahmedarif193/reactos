@@ -203,27 +203,7 @@ WfpDereferencePacket(
     _In_ PWFP_PACKET Packet);
 
 NTSTATUS
-NTAPI
-FwpsCalloutRegister1(
-    _Inout_ void *deviceObject,
-    _In_ const FWPS_CALLOUT3 *callout,
-    _Out_opt_ UINT32 *calloutId);
-
-NTSTATUS
-NTAPI
-FwpsCalloutRegister2(
-    _Inout_ void *deviceObject,
-    _In_ const FWPS_CALLOUT3 *callout,
-    _Out_opt_ UINT32 *calloutId);
-
-NTSTATUS
 WfpCreateDevice(
     _In_ PDRIVER_OBJECT DriverObject);
-
-NTSTATUS
-NTAPI
-FwpmSubLayerDeleteByKey0(
-    _In_ HANDLE engineHandle,
-    _In_ const GUID *key);
 
 #endif

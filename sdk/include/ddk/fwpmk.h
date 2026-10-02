@@ -2870,6 +2870,991 @@ FwpmFilterGetByKey0(
 #endif
 #endif
 
+#if ((NTDDI_VERSION >= NTDDI_WIN6))
+#if !defined(GUID_DEFS_ONLY)
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmEngineGetOption0(
+   _In_ HANDLE engineHandle,
+   _In_ FWPM_ENGINE_OPTION option,
+   _Outptr_ FWP_VALUE0** value
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmEngineSetOption0(
+   _In_ HANDLE engineHandle,
+   _In_ FWPM_ENGINE_OPTION option,
+   _In_ const FWP_VALUE0* newValue
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmEngineGetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmEngineSetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSessionCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_SESSION_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSessionEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_SESSION0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSessionDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderGetByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key,
+   _Outptr_ FWPM_PROVIDER0** provider
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_PROVIDER_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_PROVIDER0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderGetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderSetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextAdd0(
+   _In_ HANDLE engineHandle,
+   _In_ const FWPM_PROVIDER_CONTEXT0* providerContext,
+   _In_opt_ PSECURITY_DESCRIPTOR sd,
+   _Out_opt_ UINT64* id
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextAdd1(
+   _In_ HANDLE engineHandle,
+   _In_ const FWPM_PROVIDER_CONTEXT1* providerContext,
+   _In_opt_ PSECURITY_DESCRIPTOR sd,
+   _Out_opt_ UINT64* id
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextAdd2(
+   _In_ HANDLE engineHandle,
+   _In_ const FWPM_PROVIDER_CONTEXT2* providerContext,
+   _In_opt_ PSECURITY_DESCRIPTOR sd,
+   _Out_opt_ UINT64* id
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextAdd3(
+   _In_ HANDLE engineHandle,
+   _In_ const FWPM_PROVIDER_CONTEXT3* providerContext,
+   _In_opt_ PSECURITY_DESCRIPTOR sd,
+   _Out_opt_ UINT64* id
+   );
+
+#endif
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextDeleteById0(
+   _In_ HANDLE engineHandle,
+   _In_ UINT64 id
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextDeleteByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetById0(
+   _In_ HANDLE engineHandle,
+   _In_ UINT64 id,
+   _Outptr_ FWPM_PROVIDER_CONTEXT0** providerContext
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetById1(
+   _In_ HANDLE engineHandle,
+   _In_ UINT64 id,
+   _Outptr_ FWPM_PROVIDER_CONTEXT1** providerContext
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetById2(
+   _In_ HANDLE engineHandle,
+   _In_ UINT64 id,
+   _Outptr_ FWPM_PROVIDER_CONTEXT2** providerContext
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetById3(
+   _In_ HANDLE engineHandle,
+   _In_ UINT64 id,
+   _Outptr_ FWPM_PROVIDER_CONTEXT3** providerContext
+   );
+
+#endif
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key,
+   _Outptr_ FWPM_PROVIDER_CONTEXT0** providerContext
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetByKey1(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key,
+   _Outptr_ FWPM_PROVIDER_CONTEXT1** providerContext
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetByKey2(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key,
+   _Outptr_ FWPM_PROVIDER_CONTEXT2** providerContext
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetByKey3(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key,
+   _Outptr_ FWPM_PROVIDER_CONTEXT3** providerContext
+   );
+
+#endif
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_PROVIDER_CONTEXT_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned)
+      FWPM_PROVIDER_CONTEXT0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextEnum1(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned)
+      FWPM_PROVIDER_CONTEXT1*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextEnum2(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned)
+      FWPM_PROVIDER_CONTEXT2*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextEnum3(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned)
+      FWPM_PROVIDER_CONTEXT3*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#endif
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextGetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmProviderContextSetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSubLayerDeleteByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSubLayerGetByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key,
+   _Outptr_ FWPM_SUBLAYER0** subLayer
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSubLayerCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_SUBLAYER_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSubLayerEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_SUBLAYER0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSubLayerDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSubLayerGetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmSubLayerSetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmLayerGetById0(
+   _In_ HANDLE engineHandle,
+   _In_ UINT16 id,
+   _Outptr_ FWPM_LAYER0** layer
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmLayerGetByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key,
+   _Outptr_ FWPM_LAYER0** layer
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmLayerCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_LAYER_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmLayerEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_LAYER0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmLayerDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmLayerGetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmLayerSetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmCalloutGetByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key,
+   _Outptr_ FWPM_CALLOUT0** callout
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmCalloutCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_CALLOUT_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmCalloutEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_CALLOUT0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmCalloutDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmCalloutGetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmCalloutSetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmFilterCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_FILTER_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmFilterEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_FILTER0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmFilterDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmFilterGetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmFilterSetSecurityInfoByKey0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const GUID* key,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmIPsecTunnelAdd0(
+   _In_ HANDLE engineHandle,
+   _In_ UINT32 flags,
+   _In_opt_ const FWPM_PROVIDER_CONTEXT0* mainModePolicy,
+   _In_ const FWPM_PROVIDER_CONTEXT0* tunnelPolicy,
+   _In_ UINT32 numFilterConditions,
+   _In_reads_(numFilterConditions)
+      const FWPM_FILTER_CONDITION0* filterConditions,
+   _In_opt_ PSECURITY_DESCRIPTOR sd
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmIPsecTunnelAdd1(
+   _In_ HANDLE engineHandle,
+   _In_ UINT32 flags,
+   _In_opt_ const FWPM_PROVIDER_CONTEXT1* mainModePolicy,
+   _In_ const FWPM_PROVIDER_CONTEXT1* tunnelPolicy,
+   _In_ UINT32 numFilterConditions,
+   _In_reads_(numFilterConditions)
+      const FWPM_FILTER_CONDITION0* filterConditions,
+   _In_opt_ const GUID* keyModKey,
+   _In_opt_ PSECURITY_DESCRIPTOR sd
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmIPsecTunnelAdd2(
+   _In_ HANDLE engineHandle,
+   _In_ UINT32 flags,
+   _In_opt_ const FWPM_PROVIDER_CONTEXT2* mainModePolicy,
+   _In_ const FWPM_PROVIDER_CONTEXT2* tunnelPolicy,
+   _In_ UINT32 numFilterConditions,
+   _In_reads_(numFilterConditions)
+      const FWPM_FILTER_CONDITION0* filterConditions,
+   _In_opt_ const GUID* keyModKey,
+   _In_opt_ PSECURITY_DESCRIPTOR sd
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmIPsecTunnelAdd3(
+   _In_ HANDLE engineHandle,
+   _In_ UINT32 flags,
+   _In_opt_ const FWPM_PROVIDER_CONTEXT3* mainModePolicy,
+   _In_ const FWPM_PROVIDER_CONTEXT3* tunnelPolicy,
+   _In_ UINT32 numFilterConditions,
+   _In_reads_(numFilterConditions)
+      const FWPM_FILTER_CONDITION0* filterConditions,
+   _In_opt_ const GUID* keyModKey,
+   _In_opt_ PSECURITY_DESCRIPTOR sd
+   );
+
+#endif
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmIPsecTunnelDeleteByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_NET_EVENT_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_NET_EVENT0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventEnum1(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_NET_EVENT1*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventEnum2(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_NET_EVENT2*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventEnum3(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_NET_EVENT3*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS4))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventEnum4(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_NET_EVENT4*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS5))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventEnum5(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPM_NET_EVENT5*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+#endif
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventsGetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmNetEventsSetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmConnectionGetById0(
+   _In_ HANDLE engineHandle,
+   _In_ UINT64 id,
+   _Outptr_ FWPM_CONNECTION0** connection
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmConnectionEnum0(
+    _In_ HANDLE engineHandle,
+    _In_ HANDLE enumHandle,
+    _In_ UINT32 numEntriesRequested,
+    _Outptr_result_buffer_(*numEntriesReturned) FWPM_CONNECTION0*** entries,
+    _Out_ UINT32 *numEntriesReturned
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmConnectionCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPM_CONNECTION_ENUM_TEMPLATE0 *enumTemplate,
+   _Out_ HANDLE *enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmConnectionDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle
+   );
+
+#endif
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmConnectionGetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmConnectionSetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmvSwitchEventsGetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmvSwitchEventsSetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN11_ZN))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmConnectionPolicyAdd0(
+   _In_ HANDLE engineHandle,
+   _In_ const FWPM_PROVIDER_CONTEXT3* connectionPolicy,
+   _In_ FWP_IP_VERSION ipVersion,
+   _In_ UINT64 weight,
+   _In_ UINT32 numFilterConditions,
+   _In_reads_(numFilterConditions)
+      const FWPM_FILTER_CONDITION0* filterConditions,
+   _In_opt_ PSECURITY_DESCRIPTOR sd
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpmConnectionPolicyDeleteByKey0(
+   _In_ HANDLE engineHandle,
+   _In_ const GUID* key
+   );
+
+#endif
+#endif
+#endif
+
 #ifdef __cplusplus
 }
 #endif

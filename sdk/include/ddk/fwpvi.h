@@ -272,6 +272,289 @@ extern "C" {
 
 #endif
 
+#if ((NTDDI_VERSION >= NTDDI_WIN6))
+
+#define FwpmEngineGetOption FwpmEngineGetOption0
+
+#define FwpmEngineSetOption FwpmEngineSetOption0
+
+#define FwpmEngineGetSecurityInfo FwpmEngineGetSecurityInfo0
+
+#define FwpmEngineSetSecurityInfo FwpmEngineSetSecurityInfo0
+
+#define FwpmSessionCreateEnumHandle FwpmSessionCreateEnumHandle0
+
+#define FwpmSessionEnum FwpmSessionEnum0
+
+#define FwpmSessionDestroyEnumHandle FwpmSessionDestroyEnumHandle0
+
+#define FwpmProviderGetByKey FwpmProviderGetByKey0
+
+#define FwpmProviderCreateEnumHandle FwpmProviderCreateEnumHandle0
+
+#define FwpmProviderEnum FwpmProviderEnum0
+
+#define FwpmProviderDestroyEnumHandle FwpmProviderDestroyEnumHandle0
+
+#define FwpmProviderGetSecurityInfoByKey FwpmProviderGetSecurityInfoByKey0
+
+#define FwpmProviderSetSecurityInfoByKey FwpmProviderSetSecurityInfoByKey0
+
+#define FwpmProviderSubscribeChanges FwpmProviderSubscribeChanges0
+
+#define FwpmProviderUnsubscribeChanges FwpmProviderUnsubscribeChanges0
+
+#define FwpmProviderSubscriptionsGet FwpmProviderSubscriptionsGet0
+
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+#define FwpmProviderContextAdd FwpmProviderContextAdd3
+
+#define FwpmProviderContextGetById FwpmProviderContextGetById3
+
+#define FwpmProviderContextGetByKey FwpmProviderContextGetByKey3
+
+#define FwpmProviderContextEnum FwpmProviderContextEnum3
+
+#endif
+
+#define FwpmProviderContextDeleteById FwpmProviderContextDeleteById0
+
+#define FwpmProviderContextDeleteByKey FwpmProviderContextDeleteByKey0
+
+#define FwpmProviderContextCreateEnumHandle FwpmProviderContextCreateEnumHandle0
+
+#define FwpmProviderContextDestroyEnumHandle FwpmProviderContextDestroyEnumHandle0
+
+#define FwpmProviderContextGetSecurityInfoByKey FwpmProviderContextGetSecurityInfoByKey0
+
+#define FwpmProviderContextSetSecurityInfoByKey FwpmProviderContextSetSecurityInfoByKey0
+
+#define FwpmProviderContextSubscribeChanges FwpmProviderContextSubscribeChanges0
+
+#define FwpmProviderContextUnsubscribeChanges FwpmProviderContextUnsubscribeChanges0
+
+#define FwpmProviderContextSubscriptionsGet FwpmProviderContextSubscriptionsGet0
+
+#define FwpmSubLayerCreateEnumHandle FwpmSubLayerCreateEnumHandle0
+
+#define FwpmSubLayerEnum FwpmSubLayerEnum0
+
+#define FwpmSubLayerDestroyEnumHandle FwpmSubLayerDestroyEnumHandle0
+
+#define FwpmSubLayerGetSecurityInfoByKey FwpmSubLayerGetSecurityInfoByKey0
+
+#define FwpmSubLayerSetSecurityInfoByKey FwpmSubLayerSetSecurityInfoByKey0
+
+#define FwpmSubLayerSubscribeChanges FwpmSubLayerSubscribeChanges0
+
+#define FwpmSubLayerUnsubscribeChanges FwpmSubLayerUnsubscribeChanges0
+
+#define FwpmSubLayerSubscriptionsGet FwpmSubLayerSubscriptionsGet0
+
+#define FwpmLayerGetById FwpmLayerGetById0
+
+#define FwpmLayerGetByKey FwpmLayerGetByKey0
+
+#define FwpmLayerCreateEnumHandle FwpmLayerCreateEnumHandle0
+
+#define FwpmLayerEnum FwpmLayerEnum0
+
+#define FwpmLayerDestroyEnumHandle FwpmLayerDestroyEnumHandle0
+
+#define FwpmLayerGetSecurityInfoByKey FwpmLayerGetSecurityInfoByKey0
+
+#define FwpmLayerSetSecurityInfoByKey FwpmLayerSetSecurityInfoByKey0
+
+#define FwpmCalloutGetByKey FwpmCalloutGetByKey0
+
+#define FwpmCalloutCreateEnumHandle FwpmCalloutCreateEnumHandle0
+
+#define FwpmCalloutEnum FwpmCalloutEnum0
+
+#define FwpmCalloutDestroyEnumHandle FwpmCalloutDestroyEnumHandle0
+
+#define FwpmCalloutGetSecurityInfoByKey FwpmCalloutGetSecurityInfoByKey0
+
+#define FwpmCalloutSetSecurityInfoByKey FwpmCalloutSetSecurityInfoByKey0
+
+#define FwpmCalloutSubscribeChanges FwpmCalloutSubscribeChanges0
+
+#define FwpmCalloutUnsubscribeChanges FwpmCalloutUnsubscribeChanges0
+
+#define FwpmCalloutSubscriptionsGet FwpmCalloutSubscriptionsGet0
+
+#define FwpmFilterCreateEnumHandle FwpmFilterCreateEnumHandle0
+
+#define FwpmFilterEnum FwpmFilterEnum0
+
+#define FwpmFilterDestroyEnumHandle FwpmFilterDestroyEnumHandle0
+
+#define FwpmFilterGetSecurityInfoByKey FwpmFilterGetSecurityInfoByKey0
+
+#define FwpmFilterSetSecurityInfoByKey FwpmFilterSetSecurityInfoByKey0
+
+#define FwpmFilterSubscribeChanges FwpmFilterSubscribeChanges0
+
+#define FwpmFilterUnsubscribeChanges FwpmFilterUnsubscribeChanges0
+
+#define FwpmFilterSubscriptionsGet FwpmFilterSubscriptionsGet0
+
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+#define FwpmIPsecTunnelAdd FwpmIPsecTunnelAdd3
+
+#endif
+
+#define FwpmIPsecTunnelDeleteByKey FwpmIPsecTunnelDeleteByKey0
+
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+
+#define FwpsVirtualIfTunnelInfoGet FwpsVirtualIfTunnelInfoGet0
+
+#define FwpsVirtualIfTunnelInfoSet FwpsVirtualIfTunnelInfoSet0
+
+#endif
+
+#define FwpmNetEventCreateEnumHandle FwpmNetEventCreateEnumHandle0
+
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS5))
+
+#define FwpmNetEventEnum FwpmNetEventEnum5
+
+#endif
+
+#define FwpmNetEventDestroyEnumHandle FwpmNetEventDestroyEnumHandle0
+
+#define FwpmNetEventsGetSecurityInfo FwpmNetEventsGetSecurityInfo0
+
+#define FwpmNetEventsSetSecurityInfo FwpmNetEventsSetSecurityInfo0
+
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS5))
+
+#define FwpmNetEventSubscribe FwpmNetEventSubscribe4
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+#define FwpmNetEventUnsubscribe FwpmNetEventUnsubscribe0
+
+#define FwpmNetEventSubscriptionsGet FwpmNetEventSubscriptionsGet0
+
+#define FwpmSystemPortsGet FwpmSystemPortsGet0
+
+#define FwpmSystemPortsSubscribe FwpmSystemPortsSubscribe0
+
+#define FwpmSystemPortsUnsubscribe FwpmSystemPortsUnsubscribe0
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_CO))
+
+#define FwpmDynamicKeywordSubscribe FwpmDynamicKeywordSubscribe0
+
+#define FwpmDynamicKeywordUnsubscribe FwpmDynamicUnsubscribe0
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define FwpmConnectionSubscribe FwpmConnectionSubscribe0
+
+#define FwpmConnectionUnsubscribe FwpmConnectionUnsubscribe0
+
+#define FwpmConnectionGetById FwpmConnectionGetById0
+
+#define FwpmConnectionEnum FwpmConnectionEnum0
+
+#define FwpmConnectionCreateEnumHandle FwpmConnectionCreateEnumHandle0
+
+#define FwpmConnectionDestroyEnumHandle FwpmConnectionDestroyEnumHandle0
+
+#define FwpmConnectionSubscriptionsGet FwpmConnectionSubscriptionsGet0
+
+#define FwpmConnectionGetSecurityInfo FwpmConnectionGetSecurityInfo0
+
+#define FwpmConnectionSetSecurityInfo FwpmConnectionSetSecurityInfo0
+
+#define FwpmvSwitchEventSubscribe FwpmvSwitchEventSubscribe0
+
+#define FwpmvSwitchEventUnsubscribe FwpmvSwitchEventUnsubscribe0
+
+#define FwpmvSwitchEventsGetSecurityInfo FwpmvSwitchEventsGetSecurityInfo0
+
+#define FwpmvSwitchEventsSetSecurityInfo FwpmvSwitchEventsSetSecurityInfo0
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN11_ZN))
+
+#define FwpmConnectionPolicyAdd FwpmConnectionPolicyAdd0
+
+#define FwpmConnectionPolicyDeleteByKey FwpmConnectionPolicyDeleteByKey0
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define FWPS_VSWITCH_EVENT_DISPATCH_TABLE FWPS_VSWITCH_EVENT_DISPATCH_TABLE0
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN10_RS3))
+
+#define FwpsvSwitchEventsSubscribe FwpsvSwitchEventsSubscribe0
+
+#define FwpsvSwitchEventsUnsubscribe FwpsvSwitchEventsUnsubscribe0
+
+#define FwpsvSwitchNotifyComplete FwpsvSwitchNotifyComplete0
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define FwpsNetBufferListAssociateContext FwpsNetBufferListAssociateContext1
+
+#define FwpsFlowAbort FwpsFlowAbort0
+
+#endif
+#if !((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define FwpsNetBufferListAssociateContext FwpsNetBufferListAssociateContext0
+
+#endif
+
+#define FwpsNetBufferListGetTagForContext FwpsNetBufferListGetTagForContext0
+
+#define FwpsNetBufferListRetrieveContext FwpsNetBufferListRetrieveContext0
+
+#define FwpsNetBufferListRemoveContext FwpsNetBufferListRemoveContext0
+
+#define FwpsOpenToken FwpsOpenToken0
+
+#define FwpsAleEndpointGetById FwpsAleEndpointGetById0
+
+#define FwpsAleEndpointCreateEnumHandle FwpsAleEndpointCreateEnumHandle0
+
+#define FwpsAleEndpointEnum FwpsAleEndpointEnum0
+
+#define FwpsAleEndpointDestroyEnumHandle FwpsAleEndpointDestroyEnumHandle0
+
+#define FwpsAleEndpointGetSecurityInfo FwpsAleEndpointGetSecurityInfo0
+
+#define FwpsAleEndpointSetSecurityInfo FwpsAleEndpointSetSecurityInfo0
+
+#endif
+
+#define FwpsClassifyOptionSet FwpsClassifyOptionSet0
+
+#define FwpsReassembleForwardFragmentGroup FwpsReassembleForwardFragmentGroup0
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+#define FwpsQueryConnectionSioFormatRedirectRecords FwpsQueryConnectionSioFormatRedirectRecords0
+
+#endif
+
+#define FwpsStreamContinue FwpsStreamContinue0
+
+#endif
+
 #ifdef __cplusplus
 }
 #endif

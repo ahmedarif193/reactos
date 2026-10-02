@@ -604,7 +604,7 @@ FwpsInjectTransportSendAsync0(
     _In_opt_ HANDLE injectionContext,
     _In_ UINT64 endpointHandle,
     _In_ UINT32 flags,
-    _In_opt_ FWPS_TRANSPORT_SEND_PARAMS1 *sendArgs,
+    _In_opt_ FWPS_TRANSPORT_SEND_PARAMS0 *sendArgs,
     _In_ ADDRESS_FAMILY addressFamily,
     _In_ COMPARTMENT_ID compartmentId,
     _Inout_ NET_BUFFER_LIST *netBufferList,

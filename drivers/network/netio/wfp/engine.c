@@ -1999,20 +1999,20 @@ NTSTATUS
 NTAPI
 FwpsCalloutRegister1(
     _Inout_ void *deviceObject,
-    _In_ const FWPS_CALLOUT3 *callout,
+    _In_ const FWPS_CALLOUT1 *callout,
     _Out_opt_ UINT32 *calloutId)
 {
-    return WfpRegisterCallout3(deviceObject, callout, 1, calloutId);
+    return WfpRegisterCallout3(deviceObject, (const FWPS_CALLOUT3 *)callout, 1, calloutId);
 }
 
 NTSTATUS
 NTAPI
 FwpsCalloutRegister2(
     _Inout_ void *deviceObject,
-    _In_ const FWPS_CALLOUT3 *callout,
+    _In_ const FWPS_CALLOUT2 *callout,
     _Out_opt_ UINT32 *calloutId)
 {
-    return WfpRegisterCallout3(deviceObject, callout, 2, calloutId);
+    return WfpRegisterCallout3(deviceObject, (const FWPS_CALLOUT3 *)callout, 2, calloutId);
 }
 
 NTSTATUS

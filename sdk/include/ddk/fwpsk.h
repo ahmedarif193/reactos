@@ -2302,6 +2302,475 @@ FwpsDiscardClonedStreamData0(
 
 #endif
 
+#if ((NTDDI_VERSION >= NTDDI_WIN6))
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+typedef void (NTAPI *FWPS_CALLOUT_CLASSIFY_FN2)(
+                        _In_ const FWPS_INCOMING_VALUES0* inFixedValues,
+                        _In_ const FWPS_INCOMING_METADATA_VALUES0* inMetaValues,
+                        _Inout_opt_ void* layerData,
+                        _In_opt_ const void* classifyContext,
+                        _In_ const FWPS_FILTER2* filter,
+                        _In_ UINT64 flowContext,
+                        _Inout_ FWPS_CLASSIFY_OUT0* classifyOut
+                        );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+typedef NTSTATUS (NTAPI *FWPS_CALLOUT_NOTIFY_FN1)(
+                            _In_ FWPS_CALLOUT_NOTIFY_TYPE notifyType,
+                            _In_ const GUID* filterKey,
+                            _Inout_ FWPS_FILTER1* filter
+                            );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+typedef NTSTATUS (NTAPI *FWPS_CALLOUT_NOTIFY_FN2)(
+                            _In_ FWPS_CALLOUT_NOTIFY_TYPE notifyType,
+                            _In_ const GUID* filterKey,
+                            _Inout_ FWPS_FILTER2* filter
+                            );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+typedef struct FWPS_CALLOUT1_
+{
+   GUID calloutKey;
+   UINT32 flags;
+   FWPS_CALLOUT_CLASSIFY_FN1 classifyFn;
+   FWPS_CALLOUT_NOTIFY_FN1 notifyFn;
+   FWPS_CALLOUT_FLOW_DELETE_NOTIFY_FN0 flowDeleteFn;
+} FWPS_CALLOUT1;
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+typedef struct FWPS_CALLOUT2_
+{
+   GUID calloutKey;
+   UINT32 flags;
+   FWPS_CALLOUT_CLASSIFY_FN2 classifyFn;
+   FWPS_CALLOUT_NOTIFY_FN2 notifyFn;
+   FWPS_CALLOUT_FLOW_DELETE_NOTIFY_FN0 flowDeleteFn;
+} FWPS_CALLOUT2;
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsCalloutRegister1(
+   _Inout_ void* deviceObject,
+   _In_ const FWPS_CALLOUT1* callout,
+   _Out_opt_ UINT32* calloutId
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsCalloutRegister2(
+   _Inout_ void* deviceObject,
+   _In_ const FWPS_CALLOUT2* callout,
+   _Out_opt_ UINT32* calloutId
+   );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsFlowAbort0(
+          _In_ UINT64 flowId
+          );
+
+#endif
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsClassifyOptionSet0(
+   _In_ const FWPS_INCOMING_METADATA_VALUES0* inMetadataValues,
+   _In_ const FWP_CLASSIFY_OPTION_TYPE option,
+   _In_ const FWP_VALUE0* newValue
+   );
+
+typedef struct FWPS_TRANSPORT_SEND_PARAMS0_
+{
+   UCHAR* remoteAddress;
+   SCOPE_ID remoteScopeId;
+   WSACMSGHDR* controlData OPTIONAL;
+   ULONG controlDataLength OPTIONAL;
+} FWPS_TRANSPORT_SEND_PARAMS0;
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsAllocateDeepCloneNetBufferList0(
+   _Inout_ NET_BUFFER_LIST* originalNetBufferList,
+   _In_opt_ NDIS_HANDLE netBufferListPoolHandle,
+   _In_opt_ NDIS_HANDLE netBufferPoolHandle,
+   _Outptr_ NET_BUFFER_LIST** netBufferList
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN6SP1))
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsReassembleForwardFragmentGroup0(
+   _In_ ADDRESS_FAMILY addressFamily,
+   _Inout_ NET_BUFFER_LIST* fragmentGroupNblChain,
+   _In_opt_ NDIS_HANDLE netBufferAndNetBufferListPoolHandle,
+   _In_ ULONG dataBackFill,
+   _In_ ULONG flags,
+   _Outptr_ NET_BUFFER_LIST** reassembledNbl
+   );
+
+#endif
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsInjectTransportSendAsync0(
+   _In_ HANDLE injectionHandle,
+   _In_opt_ HANDLE injectionContext,
+   _In_ UINT64 endpointHandle,
+   _In_ UINT32 flags,
+   _In_opt_ FWPS_TRANSPORT_SEND_PARAMS0* sendArgs,
+   _In_ ADDRESS_FAMILY addressFamily,
+   _In_ COMPARTMENT_ID compartmentId,
+   _Inout_ NET_BUFFER_LIST* netBufferList,
+   _In_ FWPS_INJECT_COMPLETE0 completionFn,
+   _In_opt_ HANDLE completionContext
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+_IRQL_requires_min_(PASSIVE_LEVEL)
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsQueryConnectionSioFormatRedirectRecords0(
+   _In_ HANDLE RedirectRecords,
+   _Out_opt_ PVOID OutputBuffer,
+   _In_ SIZE_T OutputBufferLength,
+   _Out_opt_ PSIZE_T BytesTransferred
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+typedef enum FWPS_NET_BUFFER_LIST_EVENT_TYPE0_
+{
+   FWPS_NET_BUFFER_LIST_ENTERED_NETIO,
+   FWPS_NET_BUFFER_LIST_CLONED_BY_NETIO,
+   FWPS_NET_BUFFER_LIST_CLONED_VIA_WFP_API,
+   FWPS_NET_BUFFER_LIST_DUPLICATED_BY_NETIO,
+   FWPS_NET_BUFFER_LIST_EXIT_NETIO,
+   FWPS_NET_BUFFER_LIST_CONTEXT_REMOVED,
+   FWPS_NET_BUFFER_LIST_NDIS_SEND_COMPLETE,
+   FWPS_NET_BUFFER_LIST_NDIS_RECV_COMPLETE
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+   ,
+   FWPS_NET_BUFFER_LIST_NDIS_ETHERNET_SEND_COMPLETE = FWPS_NET_BUFFER_LIST_NDIS_SEND_COMPLETE,
+   FWPS_NET_BUFFER_LIST_NDIS_ETHERNET_RECV_COMPLETE = FWPS_NET_BUFFER_LIST_NDIS_RECV_COMPLETE,
+   FWPS_NET_BUFFER_LIST_NDIS_NATIVE_SEND_COMPLETE,
+   FWPS_NET_BUFFER_LIST_NDIS_NATIVE_RECV_COMPLETE,
+   FWPS_NET_BUFFER_LIST_NDIS_VSWITCH_INGRESS_COMPLETE,
+   FWPS_NET_BUFFER_LIST_NDIS_VSWITCH_EGRESS_COMPLETE,
+   FWPS_NET_BUFFER_LIST_CLONED_BY_NDIS
+   ,
+   FWPS_NET_BUFFER_LIST_REASSEMBLED_FRAGMENT,
+   FWPS_NET_BUFFER_LIST_REASSEMBLY_COMPLETE
+#endif
+} FWPS_NET_BUFFER_LIST_EVENT_TYPE0;
+
+typedef void (NTAPI *FWPS_NET_BUFFER_LIST_NOTIFY_FN0)(
+                        _In_ FWPS_NET_BUFFER_LIST_EVENT_TYPE0 eventType,
+                        _Inout_opt_ NET_BUFFER_LIST* netBufferList,
+                        _Inout_opt_ NET_BUFFER_LIST* newNetBufferList,
+                        _In_ UINT16 layerId,
+                        _In_ UINT64 context,
+                        _In_ UINT64 contextTag
+                        );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+UINT64
+NTAPI
+FwpsNetBufferListGetTagForContext0();
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsNetBufferListAssociateContext0(
+   _Inout_ NET_BUFFER_LIST* netBufferList,
+   _In_ UINT16 layerId,
+   _In_ UINT64 context,
+   _In_ UINT64 contextTag,
+   _In_ GUID* providerGuid,
+   _Inout_ void* deviceObject,
+   _In_ FWPS_NET_BUFFER_LIST_NOTIFY_FN0 notifyFn,
+   _In_ UINT32 flags
+   );
+
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+typedef NTSTATUS (NTAPI *FWPS_NET_BUFFER_LIST_NOTIFY_FN1)(
+                           _In_ FWPS_NET_BUFFER_LIST_EVENT_TYPE0 eventType,
+                           _Inout_ _When_(eventType == FWPS_NET_BUFFER_LIST_CONTEXT_REMOVED, _Maybenull_)
+                           NET_BUFFER_LIST* netBufferList,
+                           _Inout_opt_ NET_BUFFER_LIST* newNetBufferList,
+                           _In_ UINT16 layerId,
+                           _In_ UINT64 context,
+                           _In_ UINT64 contextTag
+                           );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsNetBufferListAssociateContext1(
+   _Inout_ NET_BUFFER_LIST* netBufferList,
+   _In_ UINT16 layerId,
+   _In_ UINT64 context,
+   _In_  UINT64 contextTag,
+   _In_  GUID* providerGuid,
+   _Inout_ void* deviceObject,
+   _In_  FWPS_NET_BUFFER_LIST_NOTIFY_FN1 notifyFn,
+   _In_  UINT32 flags
+   );
+
+#endif
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsNetBufferListRetrieveContext0(
+   _Inout_ NET_BUFFER_LIST* netBufferList,
+   _In_ UINT64 contextTag,
+   _In_ BOOLEAN removeContext,
+   _In_ UINT32 flags,
+   _Out_ UINT64* context
+   );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsNetBufferListRemoveContext0(
+   _Inout_opt_ NET_BUFFER_LIST* netBufferList,
+   _In_ UINT64 contextTag,
+   _In_ UINT32 flags
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+#if ((NDIS_SUPPORT_NDIS630))
+
+typedef NTSTATUS (NTAPI *FWPS_VSWITCH_INTERFACE_EVENT_CALLBACK0)(
+                            _In_opt_ void* notifyContext,
+                            _In_ void* completionContext,
+                            _In_ FWPS_VSWITCH_EVENT_TYPE eventType,
+                            _In_ const NDIS_SWITCH_PARAMETERS* vSwitch,
+                            _In_ const NDIS_SWITCH_NIC_PARAMETERS* vSwitchNic
+                            );
+
+typedef NTSTATUS (NTAPI *FWPS_VSWITCH_FILTER_ENGINE_REORDER_CALLBACK0)(
+                           _In_opt_ void* notifyContext,
+                           _In_ void* completionContext,
+                           _In_ BOOLEAN isInRequiredPosition,
+                           _In_ const NDIS_ENUM_FILTERS* vSwitchExtensionLwfList
+                           );
+
+typedef NTSTATUS (NTAPI *FWPS_VSWITCH_POLICY_EVENT_CALLBACK0)(
+                           _In_opt_ void* notifyContext,
+                           _In_ void* completionContext,
+                           _In_ FWPS_VSWITCH_EVENT_TYPE eventType,
+                           _In_ const NDIS_SWITCH_PARAMETERS* vSwitch,
+                           _In_opt_ _When_(eventType == FWPS_VSWITCH_EVENT_POLICY_DELETE, _Null_) const NDIS_SWITCH_PORT_PROPERTY_PARAMETERS* vSwitchPortProperty,
+                           _In_opt_ _When_(eventType == FWPS_VSWITCH_EVENT_POLICY_DELETE, _Notnull_) const NDIS_SWITCH_PORT_PROPERTY_DELETE_PARAMETERS* vSwitchPortPropertyDelete
+                           );
+
+typedef NTSTATUS (NTAPI *FWPS_VSWITCH_RUNTIME_STATE_SAVE_CALLBACK0)(
+                           _In_opt_ void* notifyContext,
+                           _In_ void* completionContext,
+                           _In_ FWPS_VSWITCH_EVENT_TYPE eventType,
+                           _In_ const NDIS_SWITCH_PARAMETERS* vSwitch,
+                           _In_ NDIS_SWITCH_PORT_ID portId,
+                           _Outptr_result_buffer_(*runtimeStateLength) void** runtimeState,
+                           _Out_ SIZE_T* runtimeStateLength
+                           );
+
+typedef NTSTATUS (NTAPI *FWPS_VSWITCH_RUNTIME_STATE_RESTORE_CALLBACK0)(
+                           _In_opt_ void* notifyContext,
+                           _In_ void* completionContext,
+                           _In_ FWPS_VSWITCH_EVENT_TYPE eventType,
+                           _In_ const NDIS_SWITCH_PARAMETERS* vSwitch,
+                           _In_ NDIS_SWITCH_PORT_ID portId,
+                           _In_reads_bytes_(runtimeStateLength) void* runtimeState,
+                           _In_ SIZE_T runtimeStateLength
+                           );
+
+typedef struct FWPS_VSWITCH_EVENT_DISPATCH_TABLE0_
+{
+   _Maybenull_
+   FWPS_VSWITCH_LIFETIME_EVENT_CALLBACK0 vSwitchLifetimeNotifyFn;
+   _Maybenull_
+   FWPS_VSWITCH_PORT_EVENT_CALLBACK0 vSwitchPortEventNotifyFn;
+   _Maybenull_
+   FWPS_VSWITCH_INTERFACE_EVENT_CALLBACK0 vSwitchInterfaceEventNotifyFn;
+   _Maybenull_
+   FWPS_VSWITCH_FILTER_ENGINE_REORDER_CALLBACK0 vSwitchFilterEngineReorderNotifyRn;
+   _Maybenull_
+   FWPS_VSWITCH_POLICY_EVENT_CALLBACK0 vSwitchPolicyEventNotifyFn;
+   _Maybenull_
+   FWPS_VSWITCH_RUNTIME_STATE_SAVE_CALLBACK0 vSwitchRuntimeStateSaveNotifyFn;
+   _Maybenull_
+   FWPS_VSWITCH_RUNTIME_STATE_RESTORE_CALLBACK0 vSwitchRuntimeStateRestoreNotifyFn;
+}FWPS_VSWITCH_EVENT_DISPATCH_TABLE0;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Check_return_
+NTSTATUS
+NTAPI
+FwpsvSwitchEventsSubscribe0(
+   _In_opt_ const GUID* providerGuid,
+   _In_opt_ void* notifyContext,
+   _Reserved_ UINT32 flags,
+   _Reserved_ void* reserved,
+   _In_ const FWPS_VSWITCH_EVENT_DISPATCH_TABLE* eventDispatchTable,
+   _Out_ UINT32* subscriptionId
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+void
+NTAPI
+FwpsvSwitchEventsUnsubscribe0(
+   _In_ UINT32 subscriptionId,
+   _Reserved_ UINT32 flags,
+   _Reserved_ void* reserved
+   );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+void
+NTAPI
+FwpsvSwitchNotifyComplete0(
+   _In_ void* completionContext,
+   _In_ NTSTATUS status,
+   _Reserved_ UINT32 flags,
+   _Reserved_ void* reserved
+   );
+
+#endif
+#endif
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+FwpsStreamContinue0(
+    _In_ UINT64 flowId,
+    _In_ UINT32 calloutId,
+    _In_ UINT16 layerId,
+    _In_ UINT32 streamFlags
+    );
+
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+
+NTSTATUS
+NTAPI
+FwpsVirtualIfTunnelInfoGet0(
+   _In_ const FWPS_INCOMING_METADATA_VALUES0* metadata,
+   _Out_ IPSEC_VIRTUAL_IF_TUNNEL_INFO0* virtualIfTunnelInfo
+   );
+
+NTSTATUS
+NTAPI
+FwpsVirtualIfTunnelInfoSet0(
+   _Inout_ NET_BUFFER_LIST* netBufferList,
+   _In_ const IPSEC_VIRTUAL_IF_TUNNEL_INFO0* virtualIfTunnelInfo
+   );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN7))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsOpenToken0(
+   IN HANDLE engineHandle,
+   IN LUID modifiedId,
+   IN DWORD desiredAccess,
+   OUT HANDLE* accessToken
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsAleEndpointGetById0(
+   _In_ HANDLE engineHandle,
+   _In_ UINT64 endpointId,
+   _Out_ FWPS_ALE_ENDPOINT_PROPERTIES0** properties
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsAleEndpointCreateEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _In_opt_ const FWPS_ALE_ENDPOINT_ENUM_TEMPLATE0* enumTemplate,
+   _Out_ HANDLE* enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsAleEndpointEnum0(
+   _In_ HANDLE engineHandle,
+   _In_ HANDLE enumHandle,
+   _In_ UINT32 numEntriesRequested,
+   _Outptr_result_buffer_(*numEntriesReturned) FWPS_ALE_ENDPOINT_PROPERTIES0*** entries,
+   _Out_ UINT32* numEntriesReturned
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsAleEndpointDestroyEnumHandle0(
+   _In_ HANDLE engineHandle,
+   _Inout_ HANDLE enumHandle
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsAleEndpointGetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _Outptr_result_maybenull_ PSID* sidOwner,
+   _Outptr_result_maybenull_ PSID* sidGroup,
+   _Outptr_result_maybenull_ PACL* dacl,
+   _Outptr_result_maybenull_ PACL* sacl,
+   _Outptr_ PSECURITY_DESCRIPTOR* securityDescriptor
+   );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+FwpsAleEndpointSetSecurityInfo0(
+   _In_ HANDLE engineHandle,
+   _In_ SECURITY_INFORMATION securityInfo,
+   _In_opt_ const SID* sidOwner,
+   _In_opt_ const SID* sidGroup,
+   _In_opt_ const ACL* dacl,
+   _In_opt_ const ACL* sacl
+   );
+
+#endif
+#endif
+
 #ifdef __cplusplus
 }
 #endif
