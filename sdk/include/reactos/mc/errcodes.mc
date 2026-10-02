@@ -18,6 +18,7 @@ SeverityNames=(Success=0x0:STATUS_SEVERITY_SUCCESS
 FacilityNames=(System=0x0:FACILITY_SYSTEM
                ITF=0x4:FACILITY_ITF
                WIN32=0x7:FACILITY_GENERAL
+               CERT=0xB:FACILITY_CERT
               )
 
 LanguageNames=(English=0x409:MSG00409
@@ -42976,7 +42977,7 @@ Language=Japanese
 指定されたチャネルパスが、複数のチャネルのインスタンスを選択する。この操作では、1 つのチャネルのみが選択される必要があります。1つのインスタンスのみを選択するために、チャネルパスを version / publicKeyToken にスコープする必要があるかもしれません。
 .
 
-MessageId=0x0001
+MessageId=0x4001
 Severity=Warning
 Facility=System
 SymbolicName=E_NOTIMPL
@@ -43838,4 +43839,644 @@ Class is not licensed for use
 .
 Language=Japanese
 クラスの使用が許可されていません。
+.
+
+MessageId=0x0001
+Severity=Warning
+Facility=CERT
+SymbolicName=TRUST_E_PROVIDER_UNKNOWN
+Language=English
+Unknown trust provider.
+.
+Language=Russian
+Unknown trust provider.
+.
+Language=Polish
+Unknown trust provider.
+.
+Language=Romanian
+Unknown trust provider.
+.
+Language=Japanese
+Unknown trust provider.
+.
+
+MessageId=0x0002
+Severity=Warning
+Facility=CERT
+SymbolicName=TRUST_E_ACTION_UNKNOWN
+Language=English
+The trust verification action specified is not supported by the specified trust provider.
+.
+Language=Russian
+The trust verification action specified is not supported by the specified trust provider.
+.
+Language=Polish
+The trust verification action specified is not supported by the specified trust provider.
+.
+Language=Romanian
+The trust verification action specified is not supported by the specified trust provider.
+.
+Language=Japanese
+The trust verification action specified is not supported by the specified trust provider.
+.
+
+MessageId=0x0003
+Severity=Warning
+Facility=CERT
+SymbolicName=TRUST_E_SUBJECT_FORM_UNKNOWN
+Language=English
+The form specified for the subject is not one supported or known by the specified trust provider.
+.
+Language=Russian
+The form specified for the subject is not one supported or known by the specified trust provider.
+.
+Language=Polish
+The form specified for the subject is not one supported or known by the specified trust provider.
+.
+Language=Romanian
+The form specified for the subject is not one supported or known by the specified trust provider.
+.
+Language=Japanese
+The form specified for the subject is not one supported or known by the specified trust provider.
+.
+
+MessageId=0x0004
+Severity=Warning
+Facility=CERT
+SymbolicName=TRUST_E_SUBJECT_NOT_TRUSTED
+Language=English
+The subject is not trusted for the specified action.
+.
+Language=Russian
+The subject is not trusted for the specified action.
+.
+Language=Polish
+The subject is not trusted for the specified action.
+.
+Language=Romanian
+The subject is not trusted for the specified action.
+.
+Language=Japanese
+The subject is not trusted for the specified action.
+.
+
+MessageId=0x0005
+Severity=Warning
+Facility=CERT
+SymbolicName=DIGSIG_E_ENCODE
+Language=English
+Error due to problem in ASN.1 encoding process.
+.
+Language=Russian
+Error due to problem in ASN.1 encoding process.
+.
+Language=Polish
+Error due to problem in ASN.1 encoding process.
+.
+Language=Romanian
+Error due to problem in ASN.1 encoding process.
+.
+Language=Japanese
+Error due to problem in ASN.1 encoding process.
+.
+
+MessageId=0x0006
+Severity=Warning
+Facility=CERT
+SymbolicName=DIGSIG_E_DECODE
+Language=English
+Error due to problem in ASN.1 decoding process.
+.
+Language=Russian
+Error due to problem in ASN.1 decoding process.
+.
+Language=Polish
+Error due to problem in ASN.1 decoding process.
+.
+Language=Romanian
+Error due to problem in ASN.1 decoding process.
+.
+Language=Japanese
+Error due to problem in ASN.1 decoding process.
+.
+
+MessageId=0x0007
+Severity=Warning
+Facility=CERT
+SymbolicName=DIGSIG_E_EXTENSIBILITY
+Language=English
+Reading / writing Extensions where Attributes are appropriate, and vice versa.
+.
+Language=Russian
+Reading / writing Extensions where Attributes are appropriate, and vice versa.
+.
+Language=Polish
+Reading / writing Extensions where Attributes are appropriate, and vice versa.
+.
+Language=Romanian
+Reading / writing Extensions where Attributes are appropriate, and vice versa.
+.
+Language=Japanese
+Reading / writing Extensions where Attributes are appropriate, and vice versa.
+.
+
+MessageId=0x0008
+Severity=Warning
+Facility=CERT
+SymbolicName=DIGSIG_E_CRYPTO
+Language=English
+Unspecified cryptographic failure.
+.
+Language=Russian
+Unspecified cryptographic failure.
+.
+Language=Polish
+Unspecified cryptographic failure.
+.
+Language=Romanian
+Unspecified cryptographic failure.
+.
+Language=Japanese
+Unspecified cryptographic failure.
+.
+
+MessageId=0x0009
+Severity=Warning
+Facility=CERT
+SymbolicName=PERSIST_E_SIZEDEFINITE
+Language=English
+The size of the data could not be determined.
+.
+Language=Russian
+The size of the data could not be determined.
+.
+Language=Polish
+The size of the data could not be determined.
+.
+Language=Romanian
+The size of the data could not be determined.
+.
+Language=Japanese
+The size of the data could not be determined.
+.
+
+MessageId=0x000A
+Severity=Warning
+Facility=CERT
+SymbolicName=PERSIST_E_SIZEINDEFINITE
+Language=English
+The size of the indefinite-sized data could not be determined.
+.
+Language=Russian
+The size of the indefinite-sized data could not be determined.
+.
+Language=Polish
+The size of the indefinite-sized data could not be determined.
+.
+Language=Romanian
+The size of the indefinite-sized data could not be determined.
+.
+Language=Japanese
+The size of the indefinite-sized data could not be determined.
+.
+
+MessageId=0x000B
+Severity=Warning
+Facility=CERT
+SymbolicName=PERSIST_E_NOTSELFSIZING
+Language=English
+This object does not read and write self-sizing data.
+.
+Language=Russian
+This object does not read and write self-sizing data.
+.
+Language=Polish
+This object does not read and write self-sizing data.
+.
+Language=Romanian
+This object does not read and write self-sizing data.
+.
+Language=Japanese
+This object does not read and write self-sizing data.
+.
+
+MessageId=0x0100
+Severity=Warning
+Facility=CERT
+SymbolicName=TRUST_E_NOSIGNATURE
+Language=English
+No signature was present in the subject.
+.
+Language=Russian
+No signature was present in the subject.
+.
+Language=Polish
+No signature was present in the subject.
+.
+Language=Romanian
+No signature was present in the subject.
+.
+Language=Japanese
+No signature was present in the subject.
+.
+
+MessageId=0x0101
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_EXPIRED
+Language=English
+A required certificate is not within its validity period when verifying against the current system clock or the timestamp in the signed file.
+.
+Language=Russian
+A required certificate is not within its validity period when verifying against the current system clock or the timestamp in the signed file.
+.
+Language=Polish
+A required certificate is not within its validity period when verifying against the current system clock or the timestamp in the signed file.
+.
+Language=Romanian
+A required certificate is not within its validity period when verifying against the current system clock or the timestamp in the signed file.
+.
+Language=Japanese
+A required certificate is not within its validity period when verifying against the current system clock or the timestamp in the signed file.
+.
+
+MessageId=0x0102
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_VALIDITYPERIODNESTING
+Language=English
+The validity periods of the certification chain do not nest correctly.
+.
+Language=Russian
+The validity periods of the certification chain do not nest correctly.
+.
+Language=Polish
+The validity periods of the certification chain do not nest correctly.
+.
+Language=Romanian
+The validity periods of the certification chain do not nest correctly.
+.
+Language=Japanese
+The validity periods of the certification chain do not nest correctly.
+.
+
+MessageId=0x0103
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_ROLE
+Language=English
+A certificate that can only be used as an end-entity is being used as a CA or vice versa.
+.
+Language=Russian
+A certificate that can only be used as an end-entity is being used as a CA or vice versa.
+.
+Language=Polish
+A certificate that can only be used as an end-entity is being used as a CA or vice versa.
+.
+Language=Romanian
+A certificate that can only be used as an end-entity is being used as a CA or vice versa.
+.
+Language=Japanese
+A certificate that can only be used as an end-entity is being used as a CA or vice versa.
+.
+
+MessageId=0x0104
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_PATHLENCONST
+Language=English
+A path length constraint in the certification chain has been violated.
+.
+Language=Russian
+A path length constraint in the certification chain has been violated.
+.
+Language=Polish
+A path length constraint in the certification chain has been violated.
+.
+Language=Romanian
+A path length constraint in the certification chain has been violated.
+.
+Language=Japanese
+A path length constraint in the certification chain has been violated.
+.
+
+MessageId=0x0105
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_CRITICAL
+Language=English
+A certificate contains an unknown extension that is marked 'critical'.
+.
+Language=Russian
+A certificate contains an unknown extension that is marked 'critical'.
+.
+Language=Polish
+A certificate contains an unknown extension that is marked 'critical'.
+.
+Language=Romanian
+A certificate contains an unknown extension that is marked 'critical'.
+.
+Language=Japanese
+A certificate contains an unknown extension that is marked 'critical'.
+.
+
+MessageId=0x0106
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_PURPOSE
+Language=English
+A certificate being used for a purpose other than the ones specified by its CA.
+.
+Language=Russian
+A certificate being used for a purpose other than the ones specified by its CA.
+.
+Language=Polish
+A certificate being used for a purpose other than the ones specified by its CA.
+.
+Language=Romanian
+A certificate being used for a purpose other than the ones specified by its CA.
+.
+Language=Japanese
+A certificate being used for a purpose other than the ones specified by its CA.
+.
+
+MessageId=0x0107
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_ISSUERCHAINING
+Language=English
+A parent of a given certificate in fact did not issue that child certificate.
+.
+Language=Russian
+A parent of a given certificate in fact did not issue that child certificate.
+.
+Language=Polish
+A parent of a given certificate in fact did not issue that child certificate.
+.
+Language=Romanian
+A parent of a given certificate in fact did not issue that child certificate.
+.
+Language=Japanese
+A parent of a given certificate in fact did not issue that child certificate.
+.
+
+MessageId=0x0108
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_MALFORMED
+Language=English
+A certificate is missing or has an empty value for an important field, such as a subject or issuer name.
+.
+Language=Russian
+A certificate is missing or has an empty value for an important field, such as a subject or issuer name.
+.
+Language=Polish
+A certificate is missing or has an empty value for an important field, such as a subject or issuer name.
+.
+Language=Romanian
+A certificate is missing or has an empty value for an important field, such as a subject or issuer name.
+.
+Language=Japanese
+A certificate is missing or has an empty value for an important field, such as a subject or issuer name.
+.
+
+MessageId=0x0109
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_UNTRUSTEDROOT
+Language=English
+A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.
+.
+Language=Russian
+A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.
+.
+Language=Polish
+A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.
+.
+Language=Romanian
+A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.
+.
+Language=Japanese
+A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider.
+.
+
+MessageId=0x010A
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_CHAINING
+Language=English
+A certificate chain could not be built to a trusted root authority.
+.
+Language=Russian
+A certificate chain could not be built to a trusted root authority.
+.
+Language=Polish
+A certificate chain could not be built to a trusted root authority.
+.
+Language=Romanian
+A certificate chain could not be built to a trusted root authority.
+.
+Language=Japanese
+A certificate chain could not be built to a trusted root authority.
+.
+
+MessageId=0x010B
+Severity=Warning
+Facility=CERT
+SymbolicName=TRUST_E_FAIL
+Language=English
+Generic trust failure.
+.
+Language=Russian
+Generic trust failure.
+.
+Language=Polish
+Generic trust failure.
+.
+Language=Romanian
+Generic trust failure.
+.
+Language=Japanese
+Generic trust failure.
+.
+
+MessageId=0x010C
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_REVOKED
+Language=English
+A certificate was explicitly revoked by its issuer.
+.
+Language=Russian
+A certificate was explicitly revoked by its issuer.
+.
+Language=Polish
+A certificate was explicitly revoked by its issuer.
+.
+Language=Romanian
+A certificate was explicitly revoked by its issuer.
+.
+Language=Japanese
+A certificate was explicitly revoked by its issuer.
+.
+
+MessageId=0x010D
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_UNTRUSTEDTESTROOT
+Language=English
+The certification path terminates with the test root which is not trusted with the current policy settings.
+.
+Language=Russian
+The certification path terminates with the test root which is not trusted with the current policy settings.
+.
+Language=Polish
+The certification path terminates with the test root which is not trusted with the current policy settings.
+.
+Language=Romanian
+The certification path terminates with the test root which is not trusted with the current policy settings.
+.
+Language=Japanese
+The certification path terminates with the test root which is not trusted with the current policy settings.
+.
+
+MessageId=0x010E
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_REVOCATION_FAILURE
+Language=English
+The revocation process could not continue - the certificate(s) could not be checked.
+.
+Language=Russian
+The revocation process could not continue - the certificate(s) could not be checked.
+.
+Language=Polish
+The revocation process could not continue - the certificate(s) could not be checked.
+.
+Language=Romanian
+The revocation process could not continue - the certificate(s) could not be checked.
+.
+Language=Japanese
+The revocation process could not continue - the certificate(s) could not be checked.
+.
+
+MessageId=0x010F
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_CN_NO_MATCH
+Language=English
+The certificate's CN name does not match the passed value.
+.
+Language=Russian
+The certificate's CN name does not match the passed value.
+.
+Language=Polish
+The certificate's CN name does not match the passed value.
+.
+Language=Romanian
+The certificate's CN name does not match the passed value.
+.
+Language=Japanese
+The certificate's CN name does not match the passed value.
+.
+
+MessageId=0x0110
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_WRONG_USAGE
+Language=English
+The certificate is not valid for the requested usage.
+.
+Language=Russian
+The certificate is not valid for the requested usage.
+.
+Language=Polish
+The certificate is not valid for the requested usage.
+.
+Language=Romanian
+The certificate is not valid for the requested usage.
+.
+Language=Japanese
+The certificate is not valid for the requested usage.
+.
+
+MessageId=0x0111
+Severity=Warning
+Facility=CERT
+SymbolicName=TRUST_E_EXPLICIT_DISTRUST
+Language=English
+The certificate was explicitly marked as untrusted by the user.
+.
+Language=Russian
+The certificate was explicitly marked as untrusted by the user.
+.
+Language=Polish
+The certificate was explicitly marked as untrusted by the user.
+.
+Language=Romanian
+The certificate was explicitly marked as untrusted by the user.
+.
+Language=Japanese
+The certificate was explicitly marked as untrusted by the user.
+.
+
+MessageId=0x0112
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_UNTRUSTEDCA
+Language=English
+A certification chain processed correctly, but one of the CA certificates is not trusted by the policy provider.
+.
+Language=Russian
+A certification chain processed correctly, but one of the CA certificates is not trusted by the policy provider.
+.
+Language=Polish
+A certification chain processed correctly, but one of the CA certificates is not trusted by the policy provider.
+.
+Language=Romanian
+A certification chain processed correctly, but one of the CA certificates is not trusted by the policy provider.
+.
+Language=Japanese
+A certification chain processed correctly, but one of the CA certificates is not trusted by the policy provider.
+.
+
+MessageId=0x0113
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_INVALID_POLICY
+Language=English
+The certificate has invalid policy.
+.
+Language=Russian
+The certificate has invalid policy.
+.
+Language=Polish
+The certificate has invalid policy.
+.
+Language=Romanian
+The certificate has invalid policy.
+.
+Language=Japanese
+The certificate has invalid policy.
+.
+
+MessageId=0x0114
+Severity=Warning
+Facility=CERT
+SymbolicName=CERT_E_INVALID_NAME
+Language=English
+The certificate has an invalid name. The name is not included in the permitted list or is explicitly excluded.
+.
+Language=Russian
+The certificate has an invalid name. The name is not included in the permitted list or is explicitly excluded.
+.
+Language=Polish
+The certificate has an invalid name. The name is not included in the permitted list or is explicitly excluded.
+.
+Language=Romanian
+The certificate has an invalid name. The name is not included in the permitted list or is explicitly excluded.
+.
+Language=Japanese
+The certificate has an invalid name. The name is not included in the permitted list or is explicitly excluded.
 .
