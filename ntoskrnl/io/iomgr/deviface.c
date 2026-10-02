@@ -1949,7 +1949,7 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
 
     PhysicalDeviceObject = IopGetDeviceObjectFromDeviceInstance(&DeviceInstance);
 
-    if (!PhysicalDeviceObject)
+    if (!PhysicalDeviceObject && Enable)
     {
         DPRINT1("IopGetDeviceObjectFromDeviceInstance failed to find device object for %wZ\n", &DeviceInstance);
         ExFreePoolWithTag(DeviceInstance.Buffer, TAG_IO);
@@ -1963,7 +1963,8 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
     PiNotifyDeviceInterfaceChange(EventGuid, &DeviceGuid, SymbolicLinkName);
     IopQueueDeviceChangeEvent(EventGuid, &DeviceGuid, SymbolicLinkName);
 
-    ObDereferenceObject(PhysicalDeviceObject);
+    if (PhysicalDeviceObject)
+        ObDereferenceObject(PhysicalDeviceObject);
     DPRINT("Status %x\n", Status);
     return STATUS_SUCCESS;
 }
