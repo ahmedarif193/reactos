@@ -198,10 +198,7 @@ Test_ThreadHideFromDebuggerClass(void)
                                     ThreadHideFromDebugger,
                                     &IsThreadHidden,
                                     sizeof(IsThreadHidden));
-    if (IsWow64)
-        ok_ntstatus(Status, STATUS_DATATYPE_MISALIGNMENT);
-    else
-        ok_ntstatus(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok_ntstatus(Status, STATUS_DATATYPE_MISALIGNMENT);
 
     /* The thread is still debuggable */
     IsThreadHidden = 0xCC;

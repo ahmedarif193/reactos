@@ -80,7 +80,7 @@ START_TEST(DefaultActCtx)
                        &buffer,
                        sizeof(buffer),
                        NULL);
-    ok(res == TRUE, "Expected success\n"); /* This is FALSE in win10 */
+    ok(res == FALSE, "Expected failure\n");
     if (res)
     {
         ok(details->lpAssemblyEncodedAssemblyIdentity == NULL, "Expected null lpAssemblyEncodedAssemblyIdentity, got %S\n", details->lpAssemblyEncodedAssemblyIdentity);

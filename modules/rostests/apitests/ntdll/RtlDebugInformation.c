@@ -73,7 +73,7 @@ static void Test_Buffersizes()
     ok_hex(Status, STATUS_SUCCESS);
 
     Buffer = RtlCreateQueryDebugBuffer(0x7fffffff, FALSE);
-    ok(Buffer == NULL, "Got a valid thing?\n");
+    ok((Buffer == NULL) == (sizeof(PVOID) == 4), "Got %p\n", Buffer);
     if (Buffer)
     {
         Status = RtlDestroyQueryDebugBuffer(Buffer);

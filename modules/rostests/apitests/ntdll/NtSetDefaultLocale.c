@@ -58,13 +58,13 @@ START_TEST(NtSetDefaultLocale)
     }
 
     Status = NtSetDefaultLocale(TRUE, 1);
-    ok_ntstatus(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+    ok_ntstatus(Status, ExpectedStatus);
 
     Status = NtSetDefaultLocale(TRUE, 0x0C);
-    ok_ntstatus(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+    ok_ntstatus(Status, ExpectedStatus);
 
     Status = NtSetDefaultLocale(TRUE, 0x1000);
-    ok_ntstatus(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+    ok_ntstatus(Status, ExpectedStatus);
 
     if (NT_SUCCESS(QueryStatus))
         NtSetDefaultLocale(TRUE, OriginalLocale);
