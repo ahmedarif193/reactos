@@ -75,6 +75,16 @@ if(FREELDR_HTTP_BOOT)
                               "HttpBoot")
 endif()
 
+set(FREELDR_PREINSTALL_OPTIONS "" CACHE STRING
+    "Boot options appended to the boot entry of the preinstalled disk image")
+if(FREELDR_PREINSTALL_OPTIONS)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FREELDR_PREINSTALL_INI}")
+    file(READ "${FREELDR_PREINSTALL_INI}" _contents)
+    string(REGEX REPLACE "(Options=[^\r\n]*)" "\\1 ${FREELDR_PREINSTALL_OPTIONS}" _contents "${_contents}")
+    set(FREELDR_PREINSTALL_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/preinstall_options.ini")
+    file(CONFIGURE OUTPUT "${FREELDR_PREINSTALL_INI}" CONTENT "${_contents}" @ONLY)
+endif()
+
 # On x86 hal.dll is the UP PIC HAL, unlike the SMP HAL named hal.dll on
 # amd64. Pair our SMP media entries explicitly without changing other
 # architectures or overriding a HAL explicitly requested by an entry.
