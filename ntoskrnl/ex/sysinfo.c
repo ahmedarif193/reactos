@@ -870,7 +870,7 @@ QSI_DEF(SystemProcessorInformation)
 
     /* Older clients still pass the 12-byte structure, even on NT10. Do not
      * reject it or overwrite the caller's buffer with the extended field. */
-    *ReqSize = Size == LegacySize ? LegacySize : sizeof(SYSTEM_PROCESSOR_INFORMATION);
+    *ReqSize = LegacySize;
 
     /* Check user buffer's size */
     if (Size < *ReqSize)
@@ -883,7 +883,7 @@ QSI_DEF(SystemProcessorInformation)
 #if (NTDDI_VERSION < NTDDI_WIN8)
     Spi->Reserved = 0;
 #else
-    Spi->MaximumProcessors = 0;
+    Spi->MaximumProcessors = (USHORT)KeNumberProcessors;
 #endif
 
     /* According to Geoff Chappell, on Win 8.1 x64 / Win 10 x86, where this
@@ -891,7 +891,7 @@ QSI_DEF(SystemProcessorInformation)
        bits. For the full value, use SYSTEM_PROCESSOR_FEATURES_INFORMATION.
        See https://www.geoffchappell.com/studies/windows/km/ntoskrnl/api/ex/sysinfo/processor.htm
      */
-    if (Size == LegacySize)
+    if (Size < sizeof(SYSTEM_PROCESSOR_INFORMATION))
         RtlCopyMemory(&Spi->ProcessorFeatureBits, &FeatureBits, sizeof(FeatureBits));
     else
         Spi->ProcessorFeatureBits = FeatureBits;
@@ -914,16 +914,18 @@ QSI_DEF(SystemPerformanceInformation)
 #endif
     PKPRCB Prcb;
     SIZE_T PeakCommitment;
-    PSYSTEM_PERFORMANCE_INFORMATION Spi
-        = (PSYSTEM_PERFORMANCE_INFORMATION) Buffer;
+    SYSTEM_PERFORMANCE_INFORMATION Info;
+    PSYSTEM_PERFORMANCE_INFORMATION Spi = &Info;
 
     *ReqSize = sizeof(SYSTEM_PERFORMANCE_INFORMATION);
 
     /* Check user buffer's size */
-    if (Size < sizeof(SYSTEM_PERFORMANCE_INFORMATION))
+    if (Size < RTL_SIZEOF_THROUGH_FIELD(SYSTEM_PERFORMANCE_INFORMATION, SystemCalls))
     {
         return STATUS_INFO_LENGTH_MISMATCH;
     }
+
+    RtlZeroMemory(&Info, sizeof(Info));
 
 #if defined(_M_ARM64)
     /*
@@ -1073,6 +1075,8 @@ QSI_DEF(SystemPerformanceInformation)
         }
     }
 
+    *ReqSize = min(Size, sizeof(Info));
+    RtlCopyMemory(Buffer, &Info, *ReqSize);
     return STATUS_SUCCESS;
 }
 
@@ -1088,6 +1092,7 @@ QSI_DEF(SystemTimeOfDayInformation)
     /* Check user buffer's size */
     if (Size > sizeof(SYSTEM_TIMEOFDAY_INFORMATION))
     {
+        *ReqSize = sizeof(SYSTEM_TIMEOFDAY_INFORMATION);
         return STATUS_INFO_LENGTH_MISMATCH;
     }
 
@@ -1452,19 +1457,22 @@ QSI_DEF(SystemProcessorPerformanceInformation)
     PSYSTEM_PROCESSOR_PERFORMANCE_INFORMATION Spi
         = (PSYSTEM_PROCESSOR_PERFORMANCE_INFORMATION) Buffer;
 
-    LONG i;
+    LONG i, Count;
     ULONG TotalTime;
     PKPRCB Prcb;
 
     *ReqSize = KeNumberProcessors * sizeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION);
 
     /* Check user buffer's size */
-    if (Size < *ReqSize)
+    if ((Size == 0) || (Size % sizeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION)))
     {
         return STATUS_INFO_LENGTH_MISMATCH;
     }
 
-    for (i = 0; i < KeNumberProcessors; i++)
+    Count = min((LONG)(Size / sizeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION)), (LONG)KeNumberProcessors);
+    *ReqSize = Count * sizeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION);
+
+    for (i = 0; i < Count; i++)
     {
         /* Get the PRCB on this processor */
         Prcb = KiProcessorBlock[i];
@@ -2828,7 +2836,7 @@ QSI_DEF(SystemEmulationBasicInformation)
 
     Status = QSISystemBasicInformation(Buffer, Size, ReqSize);
 #ifdef WOW64_SUPPORTED
-    if (NT_SUCCESS(Status))
+    if (NT_SUCCESS(Status) && PsGetCurrentProcess()->WoW64Process != NULL)
     {
         PSYSTEM_BASIC_INFORMATION Sbi = (PSYSTEM_BASIC_INFORMATION)Buffer;
 
@@ -3434,6 +3442,27 @@ QSI_DEF(SystemProcessorBrandString)
     return STATUS_SUCCESS;
 }
 
+QSI_DEF(SystemNativeBasicInformation)
+{
+    return QSISystemBasicInformation(Buffer, Size, ReqSize);
+}
+
+QSI_DEF(SystemProcessorFeaturesInformation)
+{
+    SYSTEM_PROCESSOR_FEATURES_INFORMATION Info;
+
+    *ReqSize = sizeof(Info);
+    if (Size < sizeof(Info))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.ProcessorFeatureBits = KeFeatureBits;
+    RtlCopyMemory(Buffer, &Info, sizeof(Info));
+    return STATUS_SUCCESS;
+}
+
 /* Class 90 - Boot Environment Information */
 QSI_DEF(SystemBootEnvironmentInformation)
 {
@@ -3578,6 +3607,8 @@ CallQS[] =
     SI_QX(SystemBootEnvironmentInformation),
     SI_QX(SystemDynamicTimeZoneInformation),
     SI_QX(SystemProcessorBrandString),
+    SI_QX(SystemNativeBasicInformation),
+    SI_QX(SystemProcessorFeaturesInformation),
 
     // Win10 RS4 and later (gaps in between stay NULL and fail
     // with STATUS_NOT_IMPLEMENTED)
@@ -3637,9 +3668,6 @@ NtQuerySystemInformation(
                 ProbeForWriteUlong(ReturnLength);
         }
 
-        if (ReturnLength)
-            *ReturnLength = 0;
-
 #if (NTDDI_VERSION < NTDDI_VISTA)
         /*
          * Check whether the request is valid.
@@ -3661,6 +3689,10 @@ NtQuerySystemInformation(
             /* Save the result length to the caller */
             if (ReturnLength)
                 *ReturnLength = CapturedResultLength;
+        }
+        else if (SystemInformationClass == SystemCpuSetInformation)
+        {
+            Status = STATUS_INVALID_PARAMETER;
         }
     }
     _SEH2_EXCEPT(ExSystemExceptionFilter())
