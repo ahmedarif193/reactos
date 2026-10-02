@@ -704,9 +704,9 @@
 @ stdcall GetUserGeoID(long) kernelbase.GetUserGeoID
 @ stdcall -version=0x600+ GetUserPreferredUILanguages(long ptr wstr ptr) kernelbase.GetUserPreferredUILanguages
 @ stdcall GetVDMCurrentDirectories(long long)
-@ stdcall GetVersion()
-@ stdcall GetVersionExA(ptr)
-@ stdcall GetVersionExW(ptr)
+@ stdcall GetVersion() kernelbase.GetVersion
+@ stdcall GetVersionExA(ptr) kernelbase.GetVersionExA
+@ stdcall GetVersionExW(ptr) kernelbase.GetVersionExW
 @ stdcall GetVolumeInformationA(str ptr long ptr ptr ptr ptr long)
 @ stdcall -version=0x600+ GetVolumeInformationByHandleW(ptr ptr long ptr ptr ptr ptr long) kernelbase.GetVolumeInformationByHandleW
 @ stdcall GetVolumeInformationW(wstr ptr long ptr ptr ptr ptr long)
