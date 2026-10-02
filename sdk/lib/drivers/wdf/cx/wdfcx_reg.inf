@@ -24,6 +24,10 @@ HKLM,"SYSTEM\CurrentControlSet\Services\UcmCx","ErrorControl",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Services\UcmCx","ImagePath",0x00020000,"system32\drivers\ucmcx.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\UcmCx","Start",0x00010001,3
 HKLM,"SYSTEM\CurrentControlSet\Services\UcmCx","Type",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\UcmUcsiCx","ErrorControl",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\UcmUcsiCx","ImagePath",0x00020000,"system32\drivers\ucmucsicx.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\UcmUcsiCx","Start",0x00010001,3
+HKLM,"SYSTEM\CurrentControlSet\Services\UcmUcsiCx","Type",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Services\WindowsTrustedRT","ErrorControl",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Services\WindowsTrustedRT","ImagePath",0x00020000,"system32\drivers\windowstrustedrt.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\WindowsTrustedRT","Start",0x00010001,3
@@ -31,6 +35,7 @@ HKLM,"SYSTEM\CurrentControlSet\Services\WindowsTrustedRT","Type",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\GPIOClx\Versions\1\1","Service",0x00000000,"GPIOClx0101"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\UcmCx\Versions\1\1","Service",0x00000000,"UcmCx"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\WindowsTrustedRT\Versions\1\1","Service",0x00000000,"WindowsTrustedRT"
+HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\UcmUcsiCx\Versions\1\1","Service",0x00000000,"UcmUcsiCx"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\HwNClx\Versions\1\1","Service",0x00000000,"HwNClx0101"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\SPBCx\Versions\1\1","Service",0x00000000,"spbcx"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\SerCx\Versions\2\1","Service",0x00000000,"sercx2"

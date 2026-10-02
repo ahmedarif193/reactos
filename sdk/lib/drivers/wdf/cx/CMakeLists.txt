@@ -47,5 +47,8 @@ add_wdfcx_library(sercx2 sercx2.c)
 add_wdfcx_library(mshwnclx hwnclx.c)
 add_wdfcx_library(ucmcx ucmcx.c)
 add_wdfcx_library(windowstrustedrt treeclx.c)
+add_wdfcx_library(ucmucsicx ucmucsicx.c)
+target_include_directories(ucmucsicx PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/ddk/UcmUcsi/1.0)
+target_compile_definitions(ucmucsicx PRIVATE static_assert=_Static_assert)
 
 add_registry_inf(wdfcx_reg.inf)
