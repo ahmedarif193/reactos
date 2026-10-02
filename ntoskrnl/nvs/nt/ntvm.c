@@ -370,9 +370,22 @@ MiAllocateVirtualMemoryNt(
         return STATUS_CONFLICTING_ADDRESSES;
 
     if (BaseAddress != NULL)
+    {
         Highest = (ULONG64)(ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
+    }
     else if (Highest + 1 < PAGE_SIZE)
+    {
         return STATUS_INVALID_PARAMETER;
+    }
+    else if (ZeroBits != 0)
+    {
+        ULONG64 Needed = ((ULONG64)RegionSize + PAGE_SIZE - 1) & ~((ULONG64)PAGE_SIZE - 1);
+
+        if (Needed > Highest + 1)
+            return STATUS_INVALID_PARAMETER;
+        if (Needed == Highest + 1)
+            return STATUS_CONFLICTING_ADDRESSES;
+    }
 
     Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
     if (!NT_SUCCESS(Status))
