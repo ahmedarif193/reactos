@@ -1556,7 +1556,8 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
            InputBuffer, InputBufferLength,
            OutputBuffer, OutputBufferLength);
 
-    if (PowerInformationLevel == SystemPowerInformation &&
+    if ((PowerInformationLevel == SystemPowerInformation ||
+         PowerInformationLevel == ProcessorInformation) &&
         (!OutputBuffer || !OutputBufferLength))
         return STATUS_INVALID_PARAMETER;
 
@@ -1789,12 +1790,9 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
 
             if (InputBuffer != NULL)
                 return STATUS_INVALID_PARAMETER;
-            if (OutputBufferLength < sizeof(PROCESSOR_POWER_INFORMATION))
+            ProcessorCount = (ULONG)KeNumberProcessors;
+            if (OutputBufferLength < ProcessorCount * sizeof(PROCESSOR_POWER_INFORMATION))
                 return STATUS_BUFFER_TOO_SMALL;
-
-            /* Return an entry for each processor the output buffer can hold */
-            ProcessorCount = min((ULONG)KeNumberProcessors,
-                                 OutputBufferLength / sizeof(PROCESSOR_POWER_INFORMATION));
 
             for (i = 0; i < ProcessorCount; i++)
             {
