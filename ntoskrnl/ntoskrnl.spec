@@ -2491,7 +2491,7 @@
 @ stub -arch=win64 IoQueryKsrPersistentMemorySizeEx
 @ stub -arch=win64 IoQueueWorkItemToNode
 @ stub -arch=win64 IoRecordIoAttribution
-@ stub -arch=arm64 IoRegisterBootDriverCallback
+@ stdcall IoRegisterBootDriverCallback(ptr ptr)
 @ stub -arch=win64 IoRegisterContainerNotification
 @ stub -arch=win64 IoRegisterDriverProxyEndpoints
 @ stub -arch=win64 IoRegisterFsRegistrationChangeMountAware
@@ -2538,7 +2538,7 @@
 @ stub -arch=win64 IoTransferActivityId
 @ stub -arch=win64 IoTryQueueWorkItem
 @ stdcall IoUninitializeWorkItem(ptr)
-@ stub -arch=arm64 IoUnregisterBootDriverCallback
+@ stdcall IoUnregisterBootDriverCallback(ptr)
 @ stub -arch=win64 IoUnregisterContainerNotification
 @ stub -arch=win64 IoUnregisterIoTracking
 @ stdcall -arch=win64 IoUnregisterPlugPlayNotificationEx(ptr)
