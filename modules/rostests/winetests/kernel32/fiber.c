@@ -332,12 +332,7 @@ static void test_FiberLocalStorage(void)
         /* FLS limits are increased since Win10 18312. */
         ok(count && (count <= 127 || (count > 4000 && count < 4096)), "Got unexpected count %u.\n", count);
 
-#if defined(__REACTOS__) && defined(_WIN64)
-        /* peb layout is different on ReactOS x64 */
-        if (!is_reactos() && !peb->FlsCallback)
-#else
         if (!peb->FlsCallback)
-#endif
         {
             ok(pRtlFlsSetValue && pRtlFlsGetValue, "Missing RtlFlsGetValue / RtlFlsSetValue.\n");
             ok(!peb->FlsBitmap, "Got unexpected FlsBitmap %p.\n", peb->FlsBitmap);
@@ -540,12 +535,7 @@ static void test_FiberLocalStorage(void)
             ok(!status, "Got unexpected status %#lx, i %u.\n", status, i);
         }
 
-#if defined(__REACTOS__) && defined(_WIN64)
-        /* peb layout is different on ReactOS x64 */
-        if (!is_reactos() && !peb->FlsCallback)
-#else
         if (!peb->FlsCallback)
-#endif
         {
             ok(g_fls_data->fls_high_index == 0xfef, "Got unexpected fls_high_index %#lx.\n",
                     g_fls_data->fls_high_index);

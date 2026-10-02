@@ -778,12 +778,7 @@ static void test_GetDynamicTimeZoneInformation(void)
     TIME_ZONE_INFORMATION tzinfo;
     DWORD ret, ret2;
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    /* FIXME: GetDynamicTimeZoneInformation is a STUB on ReactOS */
-    if (is_reactos() || !pGetDynamicTimeZoneInformation)
-#else
     if (!pGetDynamicTimeZoneInformation)
-#endif
     {
         win_skip("GetDynamicTimeZoneInformation() is not supported.\n");
         return;
@@ -998,12 +993,7 @@ static void test_GetTimeZoneInformationForYear(void)
         { L"Altai Standard Time",         2018, -420, 0, -60,  0,  0, 0,  0 },
     };
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    /* FIXME: GetTimeZoneInformationForYear and GetDynamicTimeZoneInformation are STUBS on ReactOS */
-    if (is_reactos() || !pGetTimeZoneInformationForYear || !pGetDynamicTimeZoneInformation)
-#else
     if (!pGetTimeZoneInformationForYear || !pGetDynamicTimeZoneInformation)
-#endif
     {
         win_skip("GetTimeZoneInformationForYear not available\n");
         return;
@@ -1162,9 +1152,6 @@ static void test_QueryUnbiasedInterruptTime(void)
 
 static void test_processor_idle_cycle_time(void)
 {
-#ifdef __REACTOS__
-    skip("Cannot build test_processor_idle_cycle_time() until kernelbase is synced.\n");
-#else
     unsigned int cpu_count = NtCurrentTeb()->Peb->NumberOfProcessors;
     ULONG64 buffer[64];
     ULONG size;
@@ -1228,7 +1215,6 @@ static void test_processor_idle_cycle_time(void)
     err = GetLastError();
     ok( bret == TRUE && err == 0xdeadbeef, "got %d, %ld.\n", bret, err );
     ok( size == cpu_count * sizeof(ULONG64), "got %lu.\n", size );
-#endif
 }
 
 START_TEST(time)

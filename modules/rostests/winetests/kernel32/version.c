@@ -81,12 +81,7 @@ static void test_GetProductInfo(void)
 
     DWORD *entry = table;
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    /* FIXME: GetProductInfo is a STUB on ReactOS */
-    if (is_reactos() || !pGetProductInfo)
-#else
     if (!pGetProductInfo)
-#endif
     {
         /* Not present before Vista */
         win_skip("GetProductInfo() not available\n");

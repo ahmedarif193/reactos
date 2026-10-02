@@ -3534,12 +3534,7 @@ static void test_settings(void)
     HANDLE handle;
     BOOL ret;
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    /* FIXME: QueryActCtxSettingsW() is a STUB on ReactOS. */
-    if (is_reactos() || !pQueryActCtxSettingsW)
-#else
     if (!pQueryActCtxSettingsW)
-#endif
     {
         win_skip( "QueryActCtxSettingsW is missing\n" );
         return;

@@ -4389,8 +4389,8 @@ START_TEST(pipe)
     test_nowait(PIPE_TYPE_MESSAGE);
     test_GetOverlappedResultEx();
 #ifdef __REACTOS__
-    if (is_reactos() || GetNTVersion() <= _WIN32_WINNT_WS03) {
-        skip("These next tests crash or hang on ReactOS and Windows Server 2003.\n");
+    if (GetNTVersion() <= _WIN32_WINNT_WS03) {
+        skip("These next tests crash or hang on Windows Server 2003.\n");
         return;
     }
 #endif
