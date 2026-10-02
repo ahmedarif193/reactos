@@ -77,6 +77,8 @@ RtlInsertElementGenericTableFullAvl(IN PRTL_AVL_TABLE Table,
         /* Insert the node in the tree */
         RtlZeroMemory(NewNode, sizeof(RTL_BALANCED_LINKS));
         RtlpInsertAvlTreeNode(Table, NewNode, NodeOrParent, SearchResult);
+        Table->WhichOrderedElement = 0;
+        Table->OrderedPointer = NULL;
 
         /* Copy user buffer */
         RtlCopyMemory(UserData, Buffer, BufferSize);
@@ -278,15 +280,41 @@ RtlEnumerateGenericTableWithoutSplayingAvl(IN PRTL_AVL_TABLE Table,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 PVOID
 NTAPI
 RtlGetElementGenericTableAvl(IN PRTL_AVL_TABLE Table,
                              IN ULONG I)
 {
-    UNIMPLEMENTED;
-	return NULL;
+    PRTL_BALANCED_LINKS Node = Table->OrderedPointer;
+    ULONG Current = Table->WhichOrderedElement;
+    ULONG Target = I + 1;
+
+    if ((I == MAXULONG) || (Target > Table->NumberGenericTableElements)) return NULL;
+
+    if (!Node || !Current)
+    {
+        for (Node = RtlRightChildAvl(&Table->BalancedRoot);
+             RtlLeftChildAvl(Node);
+             Node = RtlLeftChildAvl(Node));
+        Current = 1;
+    }
+
+    while (Current < Target)
+    {
+        Node = RtlRealSuccessorAvl(Node);
+        Current++;
+    }
+    while (Current > Target)
+    {
+        Node = RtlRealPredecessorAvl(Node);
+        Current--;
+    }
+
+    Table->OrderedPointer = Node;
+    Table->WhichOrderedElement = Target;
+    return &((PTABLE_ENTRY_HEADER)Node)->UserData;
 }
 
 /*

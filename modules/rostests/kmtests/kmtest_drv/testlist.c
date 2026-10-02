@@ -301,6 +301,7 @@ KMT_TESTFUNC Test_RtlGuidKM;
 KMT_TESTFUNC Test_RtlHashTableKM;
 KMT_TESTFUNC Test_RtlTimeKM;
 KMT_TESTFUNC Test_RtlGenericTableKM;
+KMT_TESTFUNC Test_RtlTableElementKM;
 KMT_TESTFUNC Test_RtlMemory;
 KMT_TESTFUNC Test_RtlRangeList;
 KMT_TESTFUNC Test_RtlCmResource;
@@ -591,6 +592,7 @@ const KMT_TEST TestList[] =
     { "PsSystemThread",                     Test_PsSystemThread },
     { "RtlBitmapKM",                        Test_RtlBitmapKM },
     { "RtlGenericTableKM",                  Test_RtlGenericTableKM },
+    { "RtlTableElementKM",                  Test_RtlTableElementKM },
     { "RtlGuidKM",                          Test_RtlGuidKM },
     { "RtlImageKM",                         Test_RtlImageKM },
     { "RtlRandomKM",                        Test_RtlRandomKM },

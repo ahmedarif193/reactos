@@ -463,11 +463,12 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
         {
             /* Follow the list directly instead */
             OrderedNode = &Table->InsertOrderList;
-            while (NextI)
+            DeltaUp = NextI;
+            while (DeltaUp)
             {
                 /* Get next node */
                 OrderedNode = OrderedNode->Flink;
-                NextI--;
+                DeltaUp--;
             }
         }
     }
@@ -484,7 +485,7 @@ RtlGetElementGenericTable(IN PRTL_GENERIC_TABLE Table,
             while (DeltaUp)
             {
                 /* Get next node */
-                OrderedNode = OrderedNode->Blink;
+                OrderedNode = OrderedNode->Flink;
                 DeltaUp--;
             }
         }

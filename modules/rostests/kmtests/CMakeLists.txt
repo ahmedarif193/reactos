@@ -250,6 +250,7 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlBitmapKM.c
     rtl/RtlAtomEx.c
     rtl/RtlGenericTableKM.c
+    rtl/RtlTableElementKM.c
     rtl/RtlGuidKM.c
     rtl/RtlImageKM.c
     rtl/RtlHashTableKM.c
