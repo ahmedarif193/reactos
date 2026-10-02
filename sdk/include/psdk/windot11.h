@@ -27,7 +27,7 @@
 #include <ntddndis.h>
 #endif
 
-#include <WlanTypes.h>
+#include <wlantypes.h>
 
 #if defined(__midl) || defined(__WIDL__)
     typedef struct _DOT11_MAC_ADDRESS {
