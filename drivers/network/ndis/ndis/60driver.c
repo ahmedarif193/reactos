@@ -103,8 +103,8 @@ Ndis6ValidateMiniportDriverCharacteristics(
     ULONG RequiredSize;
     UCHAR RequiredRevision;
 
-    if (Characteristics->Header.Type !=
-        NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS)
+    if (Characteristics->Header.Type != NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS &&
+        Characteristics->Header.Type != NDIS_OBJECT_TYPE_DEFAULT)
     {
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }

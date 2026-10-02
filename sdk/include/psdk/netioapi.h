@@ -19,6 +19,10 @@
 #ifndef __WINE_NETIOAPI_H
 #define __WINE_NETIOAPI_H
 
+#include <ws2def.h>
+#include <ws2ipdef.h>
+#include <ifdef.h>
+#include <nldef.h>
 #include <ntddndis.h>
 
 #ifndef IPHLPAPI_DLL_LINKAGE

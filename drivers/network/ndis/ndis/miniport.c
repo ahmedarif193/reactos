@@ -3856,7 +3856,10 @@ NdisQueryAdapterInstanceName(
  */
 {
     PADAPTER_BINDING AdapterBinding = NdisBindingHandle;
-    PLOGICAL_ADAPTER Adapter = AdapterBinding->Adapter;
+    PLOGICAL_ADAPTER Adapter = Ndis6AdapterFromBindingHandle(NdisBindingHandle);
+
+    if (Adapter == NULL)
+        Adapter = AdapterBinding->Adapter;
 
     return NdisMQueryAdapterInstanceName(AdapterInstanceName,
                                          Adapter);
@@ -3963,7 +3966,10 @@ NdisIMGetBindingContext(
  */
 {
     PADAPTER_BINDING AdapterBinding = NdisBindingHandle;
-    PLOGICAL_ADAPTER Adapter = AdapterBinding->Adapter;
+    PLOGICAL_ADAPTER Adapter = Ndis6AdapterFromBindingHandle(NdisBindingHandle);
+
+    if (Adapter == NULL)
+        Adapter = AdapterBinding->Adapter;
 
     NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 

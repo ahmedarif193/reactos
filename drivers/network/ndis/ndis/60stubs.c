@@ -154,7 +154,7 @@ Ndis6ValidateFilterCharacteristics(
             return NDIS_STATUS_BAD_VERSION;
     }
 
-    if (Characteristics->Header.Size != RequiredSize ||
+    if (Characteristics->Header.Size < RequiredSize ||
         RequiredSize > sizeof(*Characteristics) ||
         Characteristics->AttachHandler == NULL ||
         Characteristics->DetachHandler == NULL ||
@@ -313,9 +313,11 @@ NdisFRegisterFilterDriver(
 
     if (Block->Characteristics.SetOptionsHandler != NULL)
     {
+        *NdisFilterDriverHandle = (NDIS_HANDLE)Block;
         Status = Block->Characteristics.SetOptionsHandler((NDIS_HANDLE)Block, FilterDriverContext);
         if (Status != NDIS_STATUS_SUCCESS)
         {
+            *NdisFilterDriverHandle = NULL;
             Ndis6FreeFilterDriverBlock(Block);
             return Status;
         }
@@ -989,8 +991,8 @@ Ndis6ValidateProtocolCharacteristics(
     ULONG RequiredSize;
     UCHAR RequiredRevision;
 
-    if (Characteristics->Header.Type !=
-        NDIS_OBJECT_TYPE_PROTOCOL_DRIVER_CHARACTERISTICS)
+    if (Characteristics->Header.Type != NDIS_OBJECT_TYPE_PROTOCOL_DRIVER_CHARACTERISTICS &&
+        Characteristics->Header.Type != NDIS_OBJECT_TYPE_DEFAULT)
     {
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
@@ -1010,7 +1012,7 @@ Ndis6ValidateProtocolCharacteristics(
     if (Characteristics->Header.Revision != RequiredRevision)
         return NDIS_STATUS_BAD_VERSION;
 
-    if (Characteristics->Header.Size != RequiredSize ||
+    if (Characteristics->Header.Size < RequiredSize ||
         RequiredSize > sizeof(*Characteristics) ||
         Characteristics->BindAdapterHandlerEx == NULL ||
         Characteristics->UnbindAdapterHandlerEx == NULL)
@@ -1158,6 +1160,57 @@ NdisCompleteBindAdapterEx(
     }
 }
 
+PLOGICAL_ADAPTER
+Ndis6AdapterFromBindingHandle(
+    NDIS_HANDLE NdisBindingHandle)
+{
+    PNDIS6_PROTOCOL_BINDING Binding = NdisBindingHandle;
+
+    if (Binding == NULL || Binding->Signature != NDIS6_PROTOCOL_BINDING_SIGNATURE)
+        return NULL;
+
+    return Binding->Adapter;
+}
+
+static const WCHAR Ndis6ServicesKey[] = L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\";
+static const WCHAR Ndis6ParametersKey[] = L"\\Parameters";
+
+static NDIS_STATUS
+Ndis6BuildProtocolSection(
+    _In_ PNDIS6_PROTOCOL_DRIVER_BLOCK Block,
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _Out_ PUNICODE_STRING ProtocolSection)
+{
+    static const UNICODE_STRING DevicePrefix = RTL_CONSTANT_STRING(L"\\Device\\");
+    UNICODE_STRING AdapterKey;
+
+    AdapterKey = Adapter->NdisMiniportBlock.MiniportName;
+    if (RtlPrefixUnicodeString(&DevicePrefix, &AdapterKey, TRUE))
+    {
+        AdapterKey.Buffer += DevicePrefix.Length / sizeof(WCHAR);
+        AdapterKey.Length -= DevicePrefix.Length;
+        AdapterKey.MaximumLength = AdapterKey.Length;
+    }
+
+    ProtocolSection->Length = 0;
+    ProtocolSection->MaximumLength = (USHORT)(sizeof(Ndis6ServicesKey) + AdapterKey.Length +
+                                              sizeof(Ndis6ParametersKey) + sizeof(WCHAR) +
+                                              Block->Characteristics.Name.Length);
+    ProtocolSection->Buffer = ExAllocatePoolWithTag(PagedPool, ProtocolSection->MaximumLength, NDIS6_TAG);
+    if (ProtocolSection->Buffer == NULL)
+    {
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    RtlZeroMemory(ProtocolSection->Buffer, ProtocolSection->MaximumLength);
+    RtlAppendUnicodeToString(ProtocolSection, Ndis6ServicesKey);
+    RtlAppendUnicodeStringToString(ProtocolSection, &AdapterKey);
+    RtlAppendUnicodeToString(ProtocolSection, Ndis6ParametersKey);
+    RtlAppendUnicodeToString(ProtocolSection, L"\\");
+    RtlAppendUnicodeStringToString(ProtocolSection, &Block->Characteristics.Name);
+    return NDIS_STATUS_SUCCESS;
+}
+
 static NDIS_STATUS
 Ndis6InvokeProtocolBind(
     _In_ PNDIS6_PROTOCOL_DRIVER_BLOCK Block,
@@ -1165,13 +1218,39 @@ Ndis6InvokeProtocolBind(
 {
     NDIS6_BIND_OPERATION Operation;
     NDIS_BIND_PARAMETERS Params;
+    NDIS_PNP_CAPABILITIES PnpCapabilities;
+    UNICODE_STRING ProtocolSection;
     NDIS_STATUS Status;
     NTSTATUS WaitStatus;
+    PLIST_ENTRY Entry;
+    BOOLEAN Bound = FALSE;
+    KIRQL OldIrql;
 
     if (Block == NULL || Adapter == NULL ||
         Block->Characteristics.BindAdapterHandlerEx == NULL)
     {
         return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    KeAcquireSpinLock(&Block->BindingListLock, &OldIrql);
+    for (Entry = Block->BindingList.Flink; Entry != &Block->BindingList; Entry = Entry->Flink)
+    {
+        if (CONTAINING_RECORD(Entry, NDIS6_PROTOCOL_BINDING, ListEntry)->Adapter == Adapter)
+        {
+            Bound = TRUE;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Block->BindingListLock, OldIrql);
+    if (Bound)
+    {
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    Status = Ndis6BuildProtocolSection(Block, Adapter, &ProtocolSection);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        return Status;
     }
 
     RtlZeroMemory(&Operation, sizeof(Operation));
@@ -1181,6 +1260,12 @@ Ndis6InvokeProtocolBind(
     KeInitializeEvent(&Operation.CompleteEvent, NotificationEvent, FALSE);
 
     Ndis6BuildBindParameters(Adapter, Block, &Params);
+    Params.ProtocolSection = &ProtocolSection;
+    if (Params.PowerManagementCapabilities == NULL)
+    {
+        RtlZeroMemory(&PnpCapabilities, sizeof(PnpCapabilities));
+        Params.PowerManagementCapabilities = &PnpCapabilities;
+    }
     Status = Block->Characteristics.BindAdapterHandlerEx(Block->ProtocolDriverContext, (NDIS_HANDLE)&Operation, &Params);
 
     if (Status == NDIS_STATUS_PENDING)
@@ -1192,6 +1277,7 @@ Ndis6InvokeProtocolBind(
     }
 
     Operation.Signature = 0;
+    ExFreePoolWithTag(ProtocolSection.Buffer, NDIS6_TAG);
     return Status;
 }
 
@@ -1379,6 +1465,28 @@ Exit:
     KeReleaseMutex(&g_Ndis6ProtocolLifecycleMutex, FALSE);
 }
 
+static VOID
+NTAPI
+Ndis6ProtocolBindWorker(
+    _In_ PVOID Context)
+{
+    PNDIS6_PROTOCOL_DRIVER_BLOCK Block = Context;
+    KIRQL OldIrql;
+
+    (VOID)KeWaitForSingleObject(&g_Ndis6ProtocolLifecycleMutex, Executive, KernelMode, FALSE, NULL);
+    if (InterlockedCompareExchange(&Block->Closing, 0, 0) == 0)
+    {
+        KeAcquireSpinLock(&g_Ndis6ProtocolDriverListLock, &OldIrql);
+        InsertTailList(&g_Ndis6ProtocolDriverList, &Block->ListEntry);
+        KeReleaseSpinLock(&g_Ndis6ProtocolDriverListLock, OldIrql);
+
+        Ndis6BindProtocolToAllAdaptersLocked(Block);
+    }
+    KeReleaseMutex(&g_Ndis6ProtocolLifecycleMutex, FALSE);
+
+    KeSetEvent(&Block->BindWorkDone, IO_NO_INCREMENT, FALSE);
+}
+
 NDIS_STATUS
 EXPORT
 NdisRegisterProtocolDriver(
@@ -1390,7 +1498,6 @@ NdisRegisterProtocolDriver(
     NDIS_STATUS Status;
     ULONG CopySize;
     ULONG NameBytes;
-    KIRQL OldIrql;
 
     if (ProtocolDriverCharacteristics == NULL || NdisProtocolHandle == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -1435,9 +1542,11 @@ NdisRegisterProtocolDriver(
 
     if (Block->Characteristics.SetOptionsHandler != NULL)
     {
+        *NdisProtocolHandle = (NDIS_HANDLE)Block;
         Status = Block->Characteristics.SetOptionsHandler((NDIS_HANDLE)Block, ProtocolDriverContext);
         if (Status != NDIS_STATUS_SUCCESS)
         {
+            *NdisProtocolHandle = NULL;
             Block->Signature = 0;
             if (Block->NameBuffer != NULL)
                 ExFreePoolWithTag(Block->NameBuffer, NDIS6_PROTOCOL_DRIVER_TAG);
@@ -1446,18 +1555,11 @@ NdisRegisterProtocolDriver(
         }
     }
 
-    (VOID)KeWaitForSingleObject(&g_Ndis6ProtocolLifecycleMutex, Executive, KernelMode, FALSE, NULL);
-    KeAcquireSpinLock(&g_Ndis6ProtocolDriverListLock, &OldIrql);
-    InsertTailList(&g_Ndis6ProtocolDriverList, &Block->ListEntry);
-    KeReleaseSpinLock(&g_Ndis6ProtocolDriverListLock, OldIrql);
-
     *NdisProtocolHandle = (NDIS_HANDLE)Block;
 
-    /* Publish and perform the initial adapter walk as one lifecycle operation.
-     * Otherwise adapter startup can observe the newly published block and bind
-     * it before this walk, causing the same protocol to bind twice. */
-    Ndis6BindProtocolToAllAdaptersLocked(Block);
-    KeReleaseMutex(&g_Ndis6ProtocolLifecycleMutex, FALSE);
+    KeInitializeEvent(&Block->BindWorkDone, NotificationEvent, FALSE);
+    ExInitializeWorkItem(&Block->BindWorkItem, Ndis6ProtocolBindWorker, Block);
+    ExQueueWorkItem(&Block->BindWorkItem, DelayedWorkQueue);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -1999,6 +2101,7 @@ NdisDeregisterProtocolDriver(
     }
 
     ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    (VOID)KeWaitForSingleObject(&Block->BindWorkDone, Executive, KernelMode, FALSE, NULL);
     (VOID)KeWaitForSingleObject(&g_Ndis6ProtocolLifecycleMutex, Executive, KernelMode, FALSE, NULL);
 
     KeAcquireSpinLock(&g_Ndis6ProtocolDriverListLock, &OldIrql);
@@ -3165,15 +3268,44 @@ NdisGetDeviceReservedExtension(
  * existing NdisReadConfiguration/NdisCloseConfiguration implementation, so it
  * must be a MINIPORT_CONFIGURATION_CONTEXT holding the adapter's driver key.
  */
+static NTSTATUS
+Ndis6OpenParametersKey(
+    _In_ PCWSTR Prefix,
+    _In_ PCUNICODE_STRING Name,
+    _Out_ PHANDLE KeyHandle)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyName;
+    NTSTATUS Status;
+
+    KeyName.Length = 0;
+    KeyName.MaximumLength = (USHORT)(wcslen(Prefix) * sizeof(WCHAR) + Name->Length + sizeof(Ndis6ParametersKey));
+    KeyName.Buffer = ExAllocatePoolWithTag(PagedPool, KeyName.MaximumLength, NDIS6_TAG);
+    if (KeyName.Buffer == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlAppendUnicodeToString(&KeyName, Prefix);
+    RtlAppendUnicodeStringToString(&KeyName, Name);
+    RtlAppendUnicodeToString(&KeyName, Ndis6ParametersKey);
+    InitializeObjectAttributes(&ObjectAttributes, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenKey(KeyHandle, KEY_ALL_ACCESS, &ObjectAttributes);
+    ExFreePoolWithTag(KeyName.Buffer, NDIS6_TAG);
+    return Status;
+}
+
 NDIS_STATUS
 NTAPI
 NdisOpenConfigurationEx(
-    _In_  PVOID         ConfigObject,
+    _In_  PNDIS_CONFIGURATION_OBJECT ConfigObject,
     _Out_ PNDIS_HANDLE  ConfigurationHandle)
 {
-    PNDIS_CONFIGURATION_OBJECT Obj = (PNDIS_CONFIGURATION_OBJECT)ConfigObject;
+    PNDIS_CONFIGURATION_OBJECT Obj = ConfigObject;
     PMINIPORT_CONFIGURATION_CONTEXT Ctx;
     PLOGICAL_ADAPTER Adapter;
+    UNICODE_STRING Name;
+    ULONG Signature;
     HANDLE KeyHandle;
     NTSTATUS Status;
 
@@ -3181,23 +3313,64 @@ NdisOpenConfigurationEx(
         return NDIS_STATUS_INVALID_PARAMETER;
 
     *ConfigurationHandle = NULL;
+    Signature = *(PULONG)Obj->NdisHandle;
 
-    Adapter = GET_LOGICAL_ADAPTER(Obj->NdisHandle);
-    if (!Adapter->IsNdis6 ||
-        Adapter->NdisMiniportBlock.DeviceObject == NULL ||
-        Adapter->NdisMiniportBlock.PhysicalDeviceObject == NULL)
+    if (Signature == NDIS6_PROTOCOL_BINDING_SIGNATURE)
     {
-        return NDIS_STATUS_INVALID_PARAMETER;
+        PNDIS6_PROTOCOL_BINDING Binding = Obj->NdisHandle;
+        OBJECT_ATTRIBUTES ObjectAttributes;
+
+        if (Ndis6BuildProtocolSection(Binding->DriverBlock, Binding->Adapter, &Name) != NDIS_STATUS_SUCCESS)
+            return NDIS_STATUS_RESOURCES;
+
+        InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+        Status = ZwOpenKey(&KeyHandle, KEY_ALL_ACCESS, &ObjectAttributes);
+        ExFreePoolWithTag(Name.Buffer, NDIS6_TAG);
+    }
+    else if (Signature == NDIS6_PROTOCOL_DRIVER_SIGNATURE)
+    {
+        PNDIS6_PROTOCOL_DRIVER_BLOCK Block = Obj->NdisHandle;
+
+        Status = Ndis6OpenParametersKey(Ndis6ServicesKey, &Block->Characteristics.Name, &KeyHandle);
+    }
+    else if (Signature == NDIS6_DRIVER_BLOCK_SIGNATURE)
+    {
+        PNDIS6_DRIVER_BLOCK Block = Obj->NdisHandle;
+
+        Status = Ndis6OpenParametersKey(L"", &Block->RegistryPath, &KeyHandle);
+    }
+    else if (Signature == NDIS6_FILTER_MODULE_SIGNATURE || Signature == NDIS6_FILTER_DRIVER_SIGNATURE)
+    {
+        PNDIS6_FILTER_DRIVER_BLOCK Block;
+
+        if (Signature == NDIS6_FILTER_MODULE_SIGNATURE)
+            Block = ((PNDIS6_FILTER_MODULE)Obj->NdisHandle)->DriverBlock;
+        else
+            Block = Obj->NdisHandle;
+
+        RtlInitUnicodeString(&Name, Block->ServiceNameBuffer);
+        Status = Ndis6OpenParametersKey(Ndis6ServicesKey, &Name, &KeyHandle);
+    }
+    else
+    {
+        Adapter = GET_LOGICAL_ADAPTER(Obj->NdisHandle);
+        if (!Adapter->IsNdis6 ||
+            Adapter->NdisMiniportBlock.DeviceObject == NULL ||
+            Adapter->NdisMiniportBlock.PhysicalDeviceObject == NULL)
+        {
+            return NDIS_STATUS_INVALID_PARAMETER;
+        }
+
+        Status = IoOpenDeviceRegistryKey(
+            Adapter->NdisMiniportBlock.PhysicalDeviceObject,
+            PLUGPLAY_REGKEY_DRIVER,
+            KEY_ALL_ACCESS,
+            &KeyHandle);
     }
 
-    Status = IoOpenDeviceRegistryKey(
-        Adapter->NdisMiniportBlock.PhysicalDeviceObject,
-        PLUGPLAY_REGKEY_DRIVER,
-        KEY_ALL_ACCESS,
-        &KeyHandle);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("NDIS6: failed to open adapter driver key (0x%08X)\n", Status);
+        DbgPrint("NDIS6: failed to open the configuration key (0x%08X)\n", Status);
         return NDIS_STATUS_FAILURE;
     }
 

@@ -974,14 +974,6 @@ Ndis6FilterTerminalDirectOidRequest(
 /* NDIS 6 spin-based RW lock; LOCK_STATE_EX is a three-byte public ABI. */
 typedef struct _NDIS_RW_LOCK_EX NDIS_RW_LOCK_EX, *PNDIS_RW_LOCK_EX;
 
-typedef struct _LOCK_STATE_EX
-{
-    KIRQL OldIrql;
-    UCHAR LockState;
-    UCHAR Flags;
-} LOCK_STATE_EX, *PLOCK_STATE_EX;
-
-#define NDIS_RWL_AT_DISPATCH_LEVEL 1
 
 PNDIS_RW_LOCK_EX NTAPI
 NdisAllocateRWLock(
@@ -1035,11 +1027,11 @@ NdisCloseAdapterEx(
  * ============================================================================ */
 typedef struct _NDIS6_FILTER_DRIVER_BLOCK
 {
+    ULONG                               Signature;
     LIST_ENTRY                          ListEntry;
     LIST_ENTRY                          ModuleList;
     KSPIN_LOCK                          ModuleListLock;
     EX_RUNDOWN_REF                      CallbackRundown;
-    ULONG                               Signature;
     volatile LONG                       Closing;
     PDRIVER_OBJECT                      DriverObject;
     NDIS_HANDLE                         FilterDriverContext;
@@ -1083,6 +1075,8 @@ typedef struct _NDIS6_PROTOCOL_DRIVER_BLOCK
     volatile LONG                           Closing;
     PWCHAR                                  NameBuffer;
     NDIS_HANDLE                             ProtocolDriverContext;
+    WORK_QUEUE_ITEM                         BindWorkItem;
+    KEVENT                                  BindWorkDone;
     NDIS_PROTOCOL_DRIVER_CHARACTERISTICS    Characteristics;
 } NDIS6_PROTOCOL_DRIVER_BLOCK, *PNDIS6_PROTOCOL_DRIVER_BLOCK;
 
