@@ -24,14 +24,6 @@ GENERIC_MAPPING DbgkDebugObjectMapping =
     DEBUG_OBJECT_ALL_ACCESS
 };
 
-static const INFORMATION_CLASS_INFO DbgkpDebugObjectInfoClass[] =
-{
-    /* DebugObjectUnusedInformation */
-    IQS_SAME(ULONG, ULONG, 0),
-    /* DebugObjectKillProcessOnExitInformation */
-    IQS_SAME(DEBUG_OBJECT_KILL_PROCESS_ON_EXIT_INFORMATION, ULONG, ICIF_SET),
-};
-
 /* PRIVATE FUNCTIONS *********************************************************/
 
 NTSTATUS
@@ -1946,39 +1938,44 @@ NtSetInformationDebugObject(IN HANDLE DebugHandle,
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
     PDEBUG_OBJECT_KILL_PROCESS_ON_EXIT_INFORMATION DebugInfo = DebugInformation;
+    ULONG Flags = 0;
     PAGED_CODE();
 
     /* Check buffers and parameters */
-    Status = DefaultSetInfoBufferCheck(DebugObjectInformationClass,
-                                       DbgkpDebugObjectInfoClass,
-                                       sizeof(DbgkpDebugObjectInfoClass) /
-                                       sizeof(DbgkpDebugObjectInfoClass[0]),
-                                       DebugInformation,
-                                       DebugInformationLength,
-                                       PreviousMode);
-    if (!NT_SUCCESS(Status)) return Status;
-
-    /* Check if the caller wanted the return length */
-    if (ReturnLength)
+    _SEH2_TRY
     {
-        /* Enter SEH for probe */
-        _SEH2_TRY
+        if (PreviousMode != KernelMode)
         {
-            /* Return required length to user-mode */
-            ProbeForWriteUlong(ReturnLength);
-            *ReturnLength = sizeof(*DebugInfo);
+            ProbeForRead(DebugInformation, DebugInformationLength, sizeof(ULONG));
+            if (ReturnLength) ProbeForWriteUlong(ReturnLength);
         }
-        _SEH2_EXCEPT(ExSystemExceptionFilter())
+
+        if (ReturnLength) *ReturnLength = 0;
+
+        if (DebugObjectInformationClass != DebugObjectKillProcessOnExitInformation)
         {
-            /* Return the exception code */
-            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+            _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
         }
-        _SEH2_END;
+
+        if (DebugInformationLength != sizeof(*DebugInfo))
+        {
+            if (ReturnLength) *ReturnLength = sizeof(*DebugInfo);
+            _SEH2_YIELD(return STATUS_INFO_LENGTH_MISMATCH);
+        }
+
+        Flags = DebugInfo->KillProcessOnExit;
     }
+    _SEH2_EXCEPT(ExSystemExceptionFilter())
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Flags & ~DBGK_ALL_FLAGS) return STATUS_INVALID_PARAMETER;
 
     /* Open the Object */
     Status = ObReferenceObjectByHandle(DebugHandle,
-                                       DEBUG_OBJECT_WAIT_STATE_CHANGE,
+                                       DEBUG_OBJECT_SET_INFORMATION,
                                        DbgkDebugObjectType,
                                        PreviousMode,
                                        (PVOID*)&DebugObject,
@@ -1989,7 +1986,7 @@ NtSetInformationDebugObject(IN HANDLE DebugHandle,
         ExAcquireFastMutex(&DebugObject->Mutex);
 
         /* Set the proper flag */
-        if (DebugInfo->KillProcessOnExit)
+        if (Flags & DBGK_KILL_PROCESS_ON_EXIT)
         {
             /* Enable killing the process */
             DebugObject->KillProcessOnExit = TRUE;
