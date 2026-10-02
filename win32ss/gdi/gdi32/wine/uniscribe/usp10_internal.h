@@ -269,7 +269,11 @@ void SHAPE_ApplyDefaultOpentypeFeatures(HDC hdc, ScriptCache *psc, SCRIPT_ANALYS
 void SHAPE_ApplyOpenTypePositions(HDC hdc, ScriptCache *psc, SCRIPT_ANALYSIS *psa,
                                   const WORD *glyphs, INT cGlyphs, int *piAdvance, GOFFSET *goffset );
 HRESULT SHAPE_CheckFontForRequiredFeatures(HDC hdc, ScriptCache *psc, SCRIPT_ANALYSIS *psa);
+#ifdef __REACTOS__
+HRESULT SHAPE_CharGlyphProp(HDC hdc, ScriptCache *psc, SCRIPT_ANALYSIS *psa, const WCHAR *pwcChars,
+#else
 void SHAPE_CharGlyphProp(HDC hdc, ScriptCache *psc, SCRIPT_ANALYSIS *psa, const WCHAR *pwcChars,
+#endif
                          const INT cChars, const WORD* pwGlyphs, const INT cGlyphs, WORD *pwLogClust,
                          SCRIPT_CHARPROP *pCharProp, SCRIPT_GLYPHPROP *pGlyphProp);
 INT SHAPE_does_GSUB_feature_apply_to_chars(HDC hdc, SCRIPT_ANALYSIS *psa, ScriptCache *psc,
@@ -291,7 +295,11 @@ void Indic_ParseSyllables(HDC hdc, SCRIPT_ANALYSIS *psa, ScriptCache *psc, const
                           unsigned int cChar, IndicSyllable **syllables, int *syllable_count,
                           lexical_function lex, BOOL modern);
 
+#ifdef __REACTOS__
+HRESULT BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT_LOGATTR *la);
+#else
 void BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT_LOGATTR *la);
+#endif
 
 DWORD OpenType_CMAP_GetGlyphIndex(HDC hdc, ScriptCache *psc, DWORD utf32c, LPWORD pgi, DWORD flags);
 void OpenType_GDEF_UpdateGlyphProps(ScriptCache *psc, const WORD *pwGlyphs, const WORD cGlyphs,

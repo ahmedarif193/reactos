@@ -75,7 +75,11 @@ static inline void else_break(short* before, short class)
     if (*before == 0)  *before = class;
 }
 
+#ifdef __REACTOS__
+HRESULT BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT_LOGATTR *la)
+#else
 void BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT_LOGATTR *la)
+#endif
 {
     int i,j;
     short *break_class;
@@ -85,6 +89,14 @@ void BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT
 
     break_class = malloc(count * sizeof(*break_class));
     break_before = malloc(count * sizeof(*break_before));
+#ifdef __REACTOS__
+    if (!break_class || !break_before)
+    {
+        free(break_class);
+        free(break_before);
+        return E_OUTOFMEMORY;
+    }
+#endif
 
     for (i = 0; i < count; i++)
     {
@@ -225,14 +237,22 @@ void BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT
                     else_break(&break_before[i+1],b_x);
                     i++;
                 }
+#ifdef __REACTOS__
+                if (i < count-1) else_break(&break_before[i+1],b_x);
+#else
                 else_break(&break_before[i+1],b_x);
+#endif
                 break;
             /* LB15 */
             case b_QU:
                 j = i+1;
                 while (j < count-1 && break_class[j] == b_SP)
                     j++;
+#ifdef __REACTOS__
+                if (j < count && break_class[j] == b_OP)
+#else
                 if (break_class[j] == b_OP)
+#endif
                 {
                     for (; j > i; j--)
                         else_break(&break_before[j],b_x);
@@ -243,7 +263,11 @@ void BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT
                 j = i-1;
                 while(j > 0 && break_class[j] == b_SP)
                     j--;
+#ifdef __REACTOS__
+                if (j >= 0 && (break_class[j] == b_CL || break_class[j] == b_CP))
+#else
                 if (break_class[j] == b_CL || break_class[j] == b_CP)
+#endif
                 {
                     for (j++; j <= i; j++)
                         else_break(&break_before[j],b_x);
@@ -254,7 +278,11 @@ void BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT
                 j = i+1;
                 while (j < count && break_class[j] == b_SP)
                     j++;
+#ifdef __REACTOS__
+                if (j < count && break_class[j] == b_B2)
+#else
                 if (break_class[j] == b_B2)
+#endif
                 {
                     for (; j > i; j--)
                         else_break(&break_before[j],b_x);
@@ -445,4 +473,7 @@ void BREAK_line(const WCHAR *chars, int count, const SCRIPT_ANALYSIS *sa, SCRIPT
 
     free(break_before);
     free(break_class);
+#ifdef __REACTOS__
+    return S_OK;
+#endif
 }

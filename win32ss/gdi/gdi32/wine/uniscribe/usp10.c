@@ -829,12 +829,31 @@ static HRESULT init_script_cache(const HDC hdc, SCRIPT_CACHE *psc)
     if (size)
     {
         sc->otm = malloc(size);
+#ifdef __REACTOS__
+        if (!sc->otm)
+        {
+            free(sc);
+            return E_OUTOFMEMORY;
+        }
+#endif
         sc->otm->otmSize = size;
+#ifdef __REACTOS__
+        if (!GetOutlineTextMetricsW(hdc, size, sc->otm))
+        {
+            free(sc->otm);
+            free(sc);
+            return E_INVALIDARG;
+        }
+#else
         GetOutlineTextMetricsW(hdc, size, sc->otm);
+#endif
     }
     sc->sfnt = (NtGdiGetFontData(hdc, MS_MAKE_TAG('h','e','a','d'), 0, NULL, 0) != GDI_ERROR);
     if (!set_cache_font_properties(hdc, sc))
     {
+#ifdef __REACTOS__
+        free(sc->otm);
+#endif
         free(sc);
         return E_INVALIDARG;
     }
@@ -849,9 +868,16 @@ static HRESULT init_script_cache(const HDC hdc, SCRIPT_CACHE *psc)
         if (sc != *psc && !memcmp(&sc->lf, &lf, sizeof(lf)))
         {
             /* Another thread won the race. Use their cache instead of ours */
+#ifdef __REACTOS__
+            list_remove(&((ScriptCache *)*psc)->entry);
+#else
             list_remove(&sc->entry);
+#endif
             sc->refcount++;
             LeaveCriticalSection(&cs_script_cache);
+#ifdef __REACTOS__
+            free(((ScriptCache *)*psc)->otm);
+#endif
             free(*psc);
             *psc = sc;
             return S_OK;
@@ -3009,9 +3035,13 @@ HRESULT WINAPI ScriptBreak(const WCHAR *chars, int count, const SCRIPT_ANALYSIS 
     if (count < 0 || !la) return E_INVALIDARG;
     if (count == 0) return E_FAIL;
 
+#ifdef __REACTOS__
+    return BREAK_line(chars, count, sa, la);
+#else
     BREAK_line(chars, count, sa, la);
 
     return S_OK;
+#endif
 }
 
 /***********************************************************************
@@ -3204,7 +3234,16 @@ HRESULT WINAPI ScriptShapeOpenType( HDC hdc, SCRIPT_CACHE *psc,
             return hr;
         }
         SHAPE_ApplyDefaultOpentypeFeatures(hdc, (ScriptCache *)*psc, psa, pwOutGlyphs, pcGlyphs, cMaxGlyphs, cChars, pwLogClust);
+#ifdef __REACTOS__
+        hr = SHAPE_CharGlyphProp(hdc, (ScriptCache *)*psc, psa, pwcChars, cChars, pwOutGlyphs, *pcGlyphs, pwLogClust, pCharProps, pOutGlyphProps);
+        if (FAILED(hr))
+        {
+            free(rChars);
+            return hr;
+        }
+#else
         SHAPE_CharGlyphProp(hdc, (ScriptCache *)*psc, psa, pwcChars, cChars, pwOutGlyphs, *pcGlyphs, pwLogClust, pCharProps, pOutGlyphProps);
+#endif
 
         for (i = 0; i < cChars; ++i)
         {
