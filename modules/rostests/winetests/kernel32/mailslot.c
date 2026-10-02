@@ -400,20 +400,12 @@ static int mailslot_test(void)
     ok( io.Status == 0xdeadbeef, "got status %#lx\n", io.Status );
     ok( io.Information == 0xdeadbeef, "got size %Iu\n", io.Information );
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: This often bugchecks on ReactOS. This does not bugcheck on checked Windows builds.\n");
-    } else {
-#endif
     io.Status = 0xdeadbeef;
     io.Information = 0xdeadbeef;
     ret = NtReadFile( hSlot, NULL, NULL, NULL, &io, buffer, sizeof(buffer), NULL, NULL );
     ok( ret == STATUS_PENDING, "got %#x\n", ret );
     ok( io.Status == 0xdeadbeef, "got status %#lx\n", io.Status );
     ok( io.Information == 0xdeadbeef, "got size %Iu\n", io.Information );
-#ifdef __REACTOS__
-    }
-#endif
 
     ret = WaitForSingleObject( hSlot, 0 );
     ok( ret == WAIT_TIMEOUT, "got %d\n", ret );
