@@ -432,10 +432,20 @@ $endif (_NTDDK_)
 $if (_NTIFS_)
 #define INVALID_PROCESSOR_INDEX     0xffffffff
 
+$endif (_NTIFS_)
+$if (_WDMDDK_)
 #define EX_PUSH_LOCK ULONG_PTR
 #define PEX_PUSH_LOCK PULONG_PTR
 
-$endif (_NTIFS_)
+#ifndef EX_NO_PUSH_LOCKS
+#if (NTDDI_VERSION < NTDDI_WINBLUE)
+#ifndef EX_LEGACY_PUSH_LOCKS
+#define EX_LEGACY_PUSH_LOCKS
+#endif
+#endif
+#endif
+
+$endif (_WDMDDK_)
 
 $if (_NTIFS_ || _WDMDDK_)
 typedef volatile LONG EX_SPIN_LOCK, *PEX_SPIN_LOCK;

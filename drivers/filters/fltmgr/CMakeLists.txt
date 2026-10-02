@@ -3,6 +3,8 @@ include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/drivers/fltmgr
     includes)
 
+add_definitions(-DEX_LEGACY_PUSH_LOCKS)
+
 spec2def(fltmgr.sys fltmgr.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE

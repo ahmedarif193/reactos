@@ -2154,8 +2154,8 @@
 @ stdcall -arch=i386,win64 ExAcquireFastResourceShared(ptr ptr long) ExpAcquireFastResourceShared
 @ stub -arch=win64 ExAcquireFastResourceSharedStarveExclusive
 @ stub -arch=win64 ExAcquireFastResourceWithFlags
-@ fastcall -arch=win64 ExAcquirePushLockExclusiveEx(ptr long)
-@ fastcall -arch=win64 ExAcquirePushLockSharedEx(ptr long)
+@ fastcall -arch=i386,win64 ExAcquirePushLockExclusiveEx(ptr long)
+@ fastcall -arch=i386,win64 ExAcquirePushLockSharedEx(ptr long)
 @ stdcall -arch=i386,win64 ExAcquireSpinLockExclusive(ptr)
 @ stdcall -arch=i386,win64 ExAcquireSpinLockExclusiveAtDpcLevel(ptr)
 @ stdcall -arch=i386,win64 ExAcquireSpinLockShared(ptr)
@@ -2231,7 +2231,7 @@
 @ stub -arch=win64 ExReleaseFastResourceExclusive
 @ stub -arch=win64 ExReleaseFastResourceShared
 @ fastcall -arch=win64 ExReleasePushLockEx(ptr long)
-@ fastcall -arch=win64 ExReleasePushLockExclusiveEx(ptr long)
+@ fastcall -arch=i386,win64 ExReleasePushLockExclusiveEx(ptr long)
 @ fastcall -arch=i386,win64 ExReleasePushLockSharedEx(ptr long)
 @ stub -arch=win64 ExReleaseResourceAndLeavePriorityRegion
 @ stdcall -arch=i386,win64 ExReleaseSpinLockExclusive(ptr long)

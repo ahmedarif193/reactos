@@ -11,6 +11,7 @@ include_directories(
 add_definitions(
     -D_NTOSKRNL_
     -D_NTSYSTEM_
+    -DEX_LEGACY_PUSH_LOCKS
     -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 set_source_files_properties(${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdwatchdog.c PROPERTIES COMPILE_DEFINITIONS "KD_LOG_WATCHDOG_DEFAULT_SECONDS=${_KD_LOG_WATCHDOG_DEFAULT_SECONDS}")
 

@@ -37,7 +37,8 @@ include_directories(
 
 add_definitions(
     -DLANGPACK
-    -D_WIN32K_)
+    -D_WIN32K_
+    -DEX_LEGACY_PUSH_LOCKS)
 
 # win32k and dxgkrnl exchange the D3DKMT_* structures by pointer, so both must
 # compile them at the SAME DXGKDDI_INTERFACE_VERSION. dxgkrnl builds at the

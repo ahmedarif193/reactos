@@ -416,12 +416,105 @@ $if (_NTIFS_)
 
 #define ExDisableResourceBoost ExDisableResourceBoostLite
 
+$endif (_NTIFS_)
+$if (_WDMDDK_)
+#ifndef EX_NO_PUSH_LOCKS
+
 VOID
 NTAPI
 ExInitializePushLock(
   _Out_ PEX_PUSH_LOCK PushLock);
 
-$endif (_NTIFS_)
+#if !defined(EX_LEGACY_PUSH_LOCKS)
+
+_IRQL_requires_max_(APC_LEVEL)
+_Requires_lock_held_(_Global_critical_region_)
+NTKERNELAPI
+VOID
+FASTCALL
+ExAcquirePushLockExclusiveEx(
+  _Inout_ _Requires_lock_not_held_(*_Curr_) _Acquires_lock_(*_Curr_)
+  PEX_PUSH_LOCK PushLock,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(APC_LEVEL)
+_Requires_lock_held_(_Global_critical_region_)
+NTKERNELAPI
+VOID
+FASTCALL
+ExAcquirePushLockSharedEx(
+  _Inout_ _Requires_lock_not_held_(*_Curr_) _Acquires_lock_(*_Curr_)
+  PEX_PUSH_LOCK PushLock,
+  _In_ ULONG Flags);
+
+_Must_inspect_result_
+_IRQL_requires_max_(APC_LEVEL)
+_Requires_lock_held_(_Global_critical_region_)
+_Post_satisfies_(return == 0 || return == 1)
+NTKERNELAPI
+BOOLEAN
+FASTCALL
+ExTryAcquirePushLockExclusiveEx(
+  _When_(return!=0, _Requires_lock_not_held_(*_Curr_) _Acquires_lock_(*_Curr_))
+  _Inout_ PEX_PUSH_LOCK PushLock,
+  _In_ ULONG Flags);
+
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Requires_lock_held_(_Global_critical_region_)
+_Post_satisfies_(return == 0 || return == 1)
+NTKERNELAPI
+BOOLEAN
+FASTCALL
+ExTryAcquirePushLockSharedEx(
+  _When_(return!=0, _Requires_lock_not_held_(*_Curr_) _Acquires_lock_(*_Curr_))
+  _Inout_ PEX_PUSH_LOCK PushLock,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Requires_lock_held_(_Global_critical_region_)
+NTKERNELAPI
+VOID
+FASTCALL
+ExReleasePushLockExclusiveEx(
+  _Inout_ _Requires_lock_held_(*_Curr_) _Releases_lock_(*_Curr_)
+  PEX_PUSH_LOCK PushLock,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Requires_lock_held_(_Global_critical_region_)
+NTKERNELAPI
+VOID
+FASTCALL
+ExReleasePushLockSharedEx(
+  _Inout_ _Requires_lock_held_(*_Curr_) _Releases_lock_(*_Curr_)
+  PEX_PUSH_LOCK PushLock,
+  _In_ ULONG Flags);
+
+#define EX_DEFAULT_PUSH_LOCK_FLAGS 0
+
+#define ExAcquirePushLockExclusive(Lock) \
+    ExAcquirePushLockExclusiveEx(Lock, EX_DEFAULT_PUSH_LOCK_FLAGS)
+
+#define ExAcquirePushLockShared(Lock) \
+    ExAcquirePushLockSharedEx(Lock, EX_DEFAULT_PUSH_LOCK_FLAGS)
+
+#define ExTryAcquirePushLockExclusive(Lock) \
+    ExTryAcquirePushLockExclusiveEx(Lock, EX_DEFAULT_PUSH_LOCK_FLAGS)
+
+#define ExTryAcquirePushLockShared(Lock) \
+    ExTryAcquirePushLockSharedEx(Lock, EX_DEFAULT_PUSH_LOCK_FLAGS)
+
+#define ExReleasePushLockExclusive(Lock) \
+    ExReleasePushLockExclusiveEx(Lock, EX_DEFAULT_PUSH_LOCK_FLAGS)
+
+#define ExReleasePushLockShared(Lock) \
+    ExReleasePushLockSharedEx(Lock, EX_DEFAULT_PUSH_LOCK_FLAGS)
+
+#endif
+#endif
+
+$endif (_WDMDDK_)
 
 $if (_NTIFS_ || _WDMDDK_)
 NTKERNELAPI
