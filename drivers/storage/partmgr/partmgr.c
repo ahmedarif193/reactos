@@ -195,6 +195,24 @@ PartMgrIsDiskSuperFloppy(
 static
 CODE_SEG("PAGE")
 VOID
+PartMgrSetDiskData(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PDRIVE_LAYOUT_INFORMATION_EX Layout)
+{
+    PAGED_CODE();
+
+    FdoExtension->DiskData.PartitionStyle = Layout->PartitionStyle;
+    if (Layout->PartitionStyle == PARTITION_STYLE_MBR)
+        FdoExtension->DiskData.Mbr.Signature = Layout->Mbr.Signature;
+    else if (Layout->PartitionStyle == PARTITION_STYLE_GPT)
+        FdoExtension->DiskData.Gpt.DiskId = Layout->Gpt.DiskId;
+
+    FdoExtension->IsSuperFloppy = PartMgrIsDiskSuperFloppy(FdoExtension);
+}
+
+static
+CODE_SEG("PAGE")
+VOID
 PartMgrUpdatePartitionDevices(
     _In_ PFDO_EXTENSION FdoExtension,
     _Inout_ PDRIVE_LAYOUT_INFORMATION_EX NewLayout)
@@ -202,6 +220,8 @@ PartMgrUpdatePartitionDevices(
     NTSTATUS status;
     PSINGLE_LIST_ENTRY curEntry, prevEntry;
     UINT32 totalPartitions = 0;
+
+    PAGED_CODE();
 
     // Clear the partition numbers from the list entries
     for (UINT32 i = 0; i < NewLayout->PartitionCount; i++)
@@ -247,6 +267,12 @@ PartMgrUpdatePartitionDevices(
                 continue;
             }
 
+            if (NewLayout->PartitionStyle == PARTITION_STYLE_GPT &&
+                !IsEqualGUID(&partEntry->Gpt.PartitionId, &partExt->Gpt.PartitionId))
+            {
+                continue;
+            }
+
             // found matching partition - processing it
             found = TRUE;
             break;
@@ -259,11 +285,12 @@ PartMgrUpdatePartitionDevices(
             {
                 partExt->Mbr.PartitionType = partEntry->Mbr.PartitionType;
                 partExt->Mbr.BootIndicator = partEntry->Mbr.BootIndicator;
+                partExt->Mbr.RecognizedPartition = partEntry->Mbr.RecognizedPartition;
+                partExt->Mbr.HiddenSectors = partEntry->Mbr.HiddenSectors;
             }
             else
             {
                 partExt->Gpt.PartitionType = partEntry->Gpt.PartitionType;
-                partExt->Gpt.PartitionId = partEntry->Gpt.PartitionId;
                 partExt->Gpt.Attributes = partEntry->Gpt.Attributes;
 
                 RtlCopyMemory(partExt->Gpt.Name, partEntry->Gpt.Name, sizeof(partExt->Gpt.Name));
@@ -279,6 +306,8 @@ PartMgrUpdatePartitionDevices(
             prevEntry->Next = curEntry->Next;
             curEntry = prevEntry;
             partExt->Attached = FALSE;
+            InterlockedExchange(&partExt->Removed, TRUE);
+            PartitionDeleteSymlink(partExt);
 
             // enumerated PDOs will receive IRP_MN_REMOVE_DEVICE
             if (!partExt->IsEnumerated)
@@ -317,8 +346,7 @@ PartMgrUpdatePartitionDevices(
 
         // find the first free PDO index
         for (PSINGLE_LIST_ENTRY curEntry = FdoExtension->PartitionList.Next;
-             curEntry != NULL;
-             curEntry = curEntry->Next)
+             curEntry != NULL;)
         {
             PPARTITION_EXTENSION partExt = CONTAINING_RECORD(curEntry,
                                                              PARTITION_EXTENSION,
@@ -329,6 +357,10 @@ PartMgrUpdatePartitionDevices(
                 // found a matching pdo number - restart the search
                 curEntry = FdoExtension->PartitionList.Next;
                 pdoNumber++;
+            }
+            else
+            {
+                curEntry = curEntry->Next;
             }
         }
 
@@ -426,19 +458,7 @@ PartMgrGetDriveLayout(
 
     FdoExtension->LayoutCache = layoutEx;
     FdoExtension->LayoutValid = TRUE;
-
-    FdoExtension->DiskData.PartitionStyle = layoutEx->PartitionStyle;
-    if (FdoExtension->DiskData.PartitionStyle == PARTITION_STYLE_MBR)
-    {
-        FdoExtension->DiskData.Mbr.Signature = layoutEx->Mbr.Signature;
-        // FdoExtension->DiskData.Mbr.Checksum = geometryEx.Partition.Mbr.CheckSum;
-    }
-    else
-    {
-        FdoExtension->DiskData.Gpt.DiskId = layoutEx->Gpt.DiskId;
-    }
-
-    FdoExtension->IsSuperFloppy = PartMgrIsDiskSuperFloppy(FdoExtension);
+    PartMgrSetDiskData(FdoExtension, layoutEx);
 
     *DriveLayout = layoutEx;
     return status;
@@ -726,7 +746,7 @@ FdoIoctlDiskSetDriveLayout(
             part->PartitionNumber = layoutEx->PartitionEntry[i].PartitionNumber;
         }
 
-        FdoExtension->IsSuperFloppy = PartMgrIsDiskSuperFloppy(FdoExtension);
+        PartMgrSetDiskData(FdoExtension, layoutEx);
     }
     else
     {
@@ -773,12 +793,26 @@ FdoIoctlDiskSetDriveLayoutEx(
         return STATUS_INFO_LENGTH_MISMATCH;
     }
 
-    size_t layoutSize = FIELD_OFFSET(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry[0]);
-    layoutSize += layoutUser->PartitionCount * sizeof(PARTITION_INFORMATION_EX);
+    ULONG layoutSize;
+    if (!NT_SUCCESS(RtlULongMult(layoutUser->PartitionCount,
+                                 sizeof(PARTITION_INFORMATION_EX),
+                                 &layoutSize)) ||
+        !NT_SUCCESS(RtlULongAdd(layoutSize,
+                                FIELD_OFFSET(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry[0]),
+                                &layoutSize)))
+    {
+        return STATUS_INTEGER_OVERFLOW;
+    }
 
     if (!VerifyIrpInBufferSize(Irp, layoutSize))
     {
         return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    if (layoutUser->PartitionStyle != PARTITION_STYLE_MBR &&
+        layoutUser->PartitionStyle != PARTITION_STYLE_GPT)
+    {
+        return STATUS_NOT_SUPPORTED;
     }
 
     // we need to copy the structure from the IRP input buffer
@@ -827,16 +861,6 @@ FdoIoctlDiskSetDriveLayoutEx(
 
         // write the partition table to the disk
         status = IoWritePartitionTableEx(FdoExtension->LowerDevice, layoutEx);
-        if (NT_SUCCESS(status))
-        {
-            // set updated partition numbers
-            for (UINT32 i = 0; i < layoutEx->PartitionCount; i++)
-            {
-                PPARTITION_INFORMATION_EX part = &layoutEx->PartitionEntry[i];
-
-                part->PartitionNumber = layoutEx->PartitionEntry[i].PartitionNumber;
-            }
-        }
     }
 
     // update the layout cache
@@ -848,8 +872,7 @@ FdoIoctlDiskSetDriveLayoutEx(
         }
         FdoExtension->LayoutCache = layoutEx;
         FdoExtension->LayoutValid = TRUE;
-
-        FdoExtension->IsSuperFloppy = PartMgrIsDiskSuperFloppy(FdoExtension);
+        PartMgrSetDiskData(FdoExtension, layoutEx);
     }
     else
     {
@@ -876,6 +899,114 @@ FdoIoctlDiskSetDriveLayoutEx(
                                            NULL);
 
     Irp->IoStatus.Information = NT_SUCCESS(status) ? layoutSize : 0;
+    return status;
+}
+
+static
+CODE_SEG("PAGE")
+NTSTATUS
+FdoIoctlDiskGrowPartition(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PIRP Irp)
+{
+    PDISK_GROW_PARTITION growInfo = Irp->AssociatedIrp.SystemBuffer;
+    PDRIVE_LAYOUT_INFORMATION_EX layoutEx;
+    PPARTITION_INFORMATION_EX partEntry = NULL;
+    PPARTITION_EXTENSION partExt = NULL;
+    NTSTATUS status;
+
+    PAGED_CODE();
+
+    if (!VerifyIrpInBufferSize(Irp, sizeof(*growInfo)))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    PartMgrAcquireLayoutLock(FdoExtension);
+
+    status = PartMgrGetDriveLayout(FdoExtension, &layoutEx);
+    if (!NT_SUCCESS(status))
+    {
+        PartMgrReleaseLayoutLock(FdoExtension);
+        return status;
+    }
+
+    for (PSINGLE_LIST_ENTRY curEntry = FdoExtension->PartitionList.Next;
+         curEntry != NULL;
+         curEntry = curEntry->Next)
+    {
+        PPARTITION_EXTENSION candidate = CONTAINING_RECORD(curEntry,
+                                                           PARTITION_EXTENSION,
+                                                           ListEntry);
+
+        if (candidate->DetectedNumber == (UINT32)growInfo->PartitionNumber)
+        {
+            partExt = candidate;
+            break;
+        }
+    }
+
+    if (partExt)
+    {
+        for (UINT32 i = 0; i < layoutEx->PartitionCount; i++)
+        {
+            if ((UINT64)layoutEx->PartitionEntry[i].StartingOffset.QuadPart == partExt->StartingOffset &&
+                (UINT64)layoutEx->PartitionEntry[i].PartitionLength.QuadPart == partExt->PartitionLength)
+            {
+                partEntry = &layoutEx->PartitionEntry[i];
+                break;
+            }
+        }
+    }
+
+    if (!partEntry)
+    {
+        PartMgrReleaseLayoutLock(FdoExtension);
+        return STATUS_NO_SUCH_DEVICE;
+    }
+
+    UINT64 oldEnd = partExt->StartingOffset + partExt->PartitionLength;
+    UINT64 growth = (UINT64)growInfo->BytesToGrow.QuadPart;
+
+    if (growInfo->BytesToGrow.QuadPart <= 0 ||
+        oldEnd > FdoExtension->DiskData.DiskSize ||
+        growth > FdoExtension->DiskData.DiskSize - oldEnd)
+    {
+        PartMgrReleaseLayoutLock(FdoExtension);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    for (UINT32 i = 0; i < layoutEx->PartitionCount; i++)
+    {
+        PPARTITION_INFORMATION_EX other = &layoutEx->PartitionEntry[i];
+        UINT64 otherStart = (UINT64)other->StartingOffset.QuadPart;
+
+        if (other == partEntry || other->PartitionLength.QuadPart == 0)
+            continue;
+
+        if (otherStart >= oldEnd && otherStart < oldEnd + growth)
+        {
+            PartMgrReleaseLayoutLock(FdoExtension);
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    partEntry->PartitionLength.QuadPart += growth;
+    partEntry->RewritePartition = TRUE;
+
+    status = IoWritePartitionTableEx(FdoExtension->LowerDevice, layoutEx);
+    if (NT_SUCCESS(status))
+    {
+        partExt->PartitionLength += growth;
+    }
+    else
+    {
+        FdoExtension->LayoutValid = FALSE;
+    }
+
+    PartMgrReleaseLayoutLock(FdoExtension);
+
+    Irp->IoStatus.Information = 0;
     return status;
 }
 
@@ -1037,6 +1168,8 @@ FdoHandleStartDevice(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ PIRP Irp)
 {
+    PAGED_CODE();
+
     // Obtain the disk device number.
     // It is not expected to change, thus not in PartMgrRefreshDiskData().
     STORAGE_DEVICE_NUMBER deviceNumber;
@@ -1136,22 +1269,22 @@ FdoHandleDeviceRelations(
     {
         PartMgrAcquireLayoutLock(FdoExtension);
 
+        DRIVE_LAYOUT_INFORMATION_EX emptyLayout = { .PartitionStyle = PARTITION_STYLE_RAW };
+        PDRIVE_LAYOUT_INFORMATION_EX layoutEx = &emptyLayout;
+
         NTSTATUS status = PartMgrRefreshDiskData(FdoExtension);
-        if (!NT_SUCCESS(status))
+        if (NT_SUCCESS(status))
         {
-            PartMgrReleaseLayoutLock(FdoExtension);
-            Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-            Irp->IoStatus.Information = 0;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            return Irp->IoStatus.Status;
+            INFO("Partition style %u\n", FdoExtension->DiskData.PartitionStyle);
+
+            // PartMgrRefreshDiskData() calls PartMgrGetDriveLayout() inside
+            // so we're sure here that it returns only the cached layout.
+            PartMgrGetDriveLayout(FdoExtension, &layoutEx);
         }
-
-        INFO("Partition style %u\n", FdoExtension->DiskData.PartitionStyle);
-
-        // PartMgrRefreshDiskData() calls PartMgrGetDriveLayout() inside
-        // so we're sure here that it returns only the cached layout.
-        PDRIVE_LAYOUT_INFORMATION_EX layoutEx;
-        PartMgrGetDriveLayout(FdoExtension, &layoutEx);
+        else
+        {
+            FdoExtension->LayoutValid = FALSE;
+        }
 
         PartMgrUpdatePartitionDevices(FdoExtension, layoutEx);
 
@@ -1353,6 +1486,11 @@ PartMgrDeviceControl(
     INFO("IRP_MJ_DEVICE_CONTROL %p Irp %p IOCTL %x isFdo: %u\n",
         DeviceObject, Irp, ioStack->Parameters.DeviceIoControl.IoControlCode, fdoExtension->IsFDO);
 
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return ForwardIrpAndForget(DeviceObject, Irp);
+    }
+
     if (!fdoExtension->IsFDO)
     {
         return PartitionHandleDeviceControl(DeviceObject, Irp);
@@ -1407,7 +1545,15 @@ PartMgrDeviceControl(
         case IOCTL_DISK_DELETE_DRIVE_LAYOUT:
             status = FdoIoctlDiskDeleteDriveLayout(fdoExtension, Irp);
             break;
-        // case IOCTL_DISK_GROW_PARTITION: // todo
+
+        case IOCTL_DISK_GROW_PARTITION:
+            status = FdoIoctlDiskGrowPartition(fdoExtension, Irp);
+            break;
+
+        case IOCTL_DISK_SET_PARTITION_INFO:
+            status = STATUS_INVALID_DEVICE_REQUEST;
+            break;
+
         default:
             return ForwardIrpAndForget(DeviceObject, Irp);
     }
@@ -1557,6 +1703,16 @@ PartMgrReadWrite(
             return STATUS_DEVICE_DOES_NOT_EXIST;
         }
 
+        ULONG length = ioStack->Parameters.Read.Length;
+        UINT64 offset = (UINT64)ioStack->Parameters.Read.ByteOffset.QuadPart;
+
+        if (length != 0 &&
+            (offset >= partExt->PartitionLength ||
+             length > partExt->PartitionLength - offset))
+        {
+            return PartMgrFailIrp(Irp, STATUS_INVALID_PARAMETER);
+        }
+
         ioStack->Parameters.Read.ByteOffset.QuadPart += partExt->StartingOffset;
         return ForwardIrpAndForget(DeviceObject, Irp);
     }
@@ -1696,7 +1852,7 @@ PartMgrDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     {
         if (extension->Removed)
         {
-            status = STATUS_DEVICE_REMOVED;
+            status = extension->IsFDO ? STATUS_DEVICE_REMOVED : STATUS_NO_SUCH_DEVICE;
             goto Reject;
         }
         if (!extension->IsFDO)
@@ -1735,8 +1891,26 @@ PartMgrDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         case IRP_MJ_POWER:
             status = PartMgrPower(DeviceObject, Irp);
             break;
-        default:
+        case IRP_MJ_SYSTEM_CONTROL:
+            if (extension->IsFDO)
+            {
+                status = ForwardIrpAndForget(DeviceObject, Irp);
+            }
+            else
+            {
+                status = Irp->IoStatus.Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            }
+            break;
+        case IRP_MJ_CREATE:
+        case IRP_MJ_CLOSE:
             status = ForwardIrpAndForget(DeviceObject, Irp);
+            break;
+        default:
+            if (extension->IsFDO)
+                status = ForwardIrpAndForget(DeviceObject, Irp);
+            else
+                status = PartMgrFailIrp(Irp, STATUS_INVALID_DEVICE_REQUEST);
             break;
     }
     goto Release;
@@ -1773,15 +1947,8 @@ DriverEntry(
 {
     DriverObject->DriverUnload = PartMgrUnload;
     DriverObject->DriverExtension->AddDevice = PartMgrAddDevice;
-    DriverObject->MajorFunction[IRP_MJ_CREATE]         = PartMgrDispatch;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE]          = PartMgrDispatch;
-    DriverObject->MajorFunction[IRP_MJ_READ]           = PartMgrDispatch;
-    DriverObject->MajorFunction[IRP_MJ_WRITE]          = PartMgrDispatch;
-    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = PartMgrDispatch;
-    DriverObject->MajorFunction[IRP_MJ_PNP]            = PartMgrDispatch;
-    DriverObject->MajorFunction[IRP_MJ_SHUTDOWN]       = PartMgrDispatch;
-    DriverObject->MajorFunction[IRP_MJ_FLUSH_BUFFERS]  = PartMgrDispatch;
-    DriverObject->MajorFunction[IRP_MJ_POWER]          = PartMgrDispatch;
+    for (ULONG i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++)
+        DriverObject->MajorFunction[i] = PartMgrDispatch;
 
     return STATUS_SUCCESS;
 }

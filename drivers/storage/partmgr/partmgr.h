@@ -12,6 +12,7 @@
 #include <mountdev.h>
 #include <ntddvol.h>
 #include <ntdddisk.h>
+#include <ntintsafe.h>
 #include <ndk/psfuncs.h>
 #include <ndk/section_attribs.h>
 #include <ioevent.h>
@@ -173,6 +174,11 @@ PartitionCreateDevice(
     _In_ UINT32 OnDiskNumber,
     _In_ PARTITION_STYLE PartitionStyle,
     _Out_ PDEVICE_OBJECT *PDO);
+
+CODE_SEG("PAGE")
+VOID
+PartitionDeleteSymlink(
+    _In_ PPARTITION_EXTENSION PartExt);
 
 CODE_SEG("PAGE")
 NTSTATUS
