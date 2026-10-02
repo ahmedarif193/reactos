@@ -2846,4 +2846,166 @@ PcGetContentRights(
   IN ULONG ContentId,
   OUT PDRMRIGHTS DrmRights);
 
+#if ((NTDDI_VERSION >= NTDDI_VISTA))
+
+DEFINE_GUID(IID_IPortClsRuntimePower,
+0xe057c351, 0x430, 0x4dbc, 0xb1, 0x72, 0xc7, 0x11, 0xd4, 0xa, 0x23, 0x73);
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+
+DEFINE_GUID(IID_IMiniportWaveRTInputStream,
+0xcd8e756a, 0x5fc7, 0x4624, 0x98, 0x4b, 0x2a, 0xf0, 0x29, 0x25, 0xb9, 0x1f);
+
+DEFINE_GUID(IID_IPortClsStreamResourceManager,
+0xe1cd9915, 0xcab1, 0x4103, 0xbb, 0x2f, 0x7d, 0xc0, 0x9c, 0x9b, 0xe9, 0x42);
+
+DEFINE_GUID(IID_IPortClsStreamResourceManager2,
+0x0d500bae, 0xd565, 0x469d, 0xa0, 0xe2, 0xf2, 0x83, 0x76, 0x0d, 0x71, 0x48);
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_VISTA))
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+
+DECLARE_INTERFACE_(IMiniportWaveRTInputStream, IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+    STDMETHOD_(NTSTATUS, GetReadPacket)
+        (THIS_
+        _Out_ ULONG     *PacketNumber,
+        _Out_ DWORD     *Flags,
+        _Out_ ULONG64   *PerformanceCounterValue,
+        _Out_ BOOL      *MoreData
+        )   PURE;
+};
+
+typedef IMiniportWaveRTInputStream *PMINIPORTWAVERTINPUTSTREAM;
+
+#define IMP_IMiniportWaveRTInputStream                          \
+    _IRQL_requires_max_(PASSIVE_LEVEL)                          \
+    STDMETHODIMP_(NTSTATUS) GetReadPacket                       \
+    (                                                           \
+        _Out_ ULONG     *PacketNumber,                          \
+        _Out_ DWORD     *Flags,                                 \
+        _Out_ ULONG64   *PerformanceCounterValue,               \
+        _Out_ BOOL      *MoreData                               \
+    );
+
+#endif
+
+DECLARE_INTERFACE_(IMiniportAudioSignalProcessing,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    STDMETHOD_(NTSTATUS,GetModes)
+    (   THIS_
+        _In_                                        ULONG   Pin,
+        _Out_writes_opt_(*NumSignalProcessingModes) GUID*   SignalProcessingModes,
+        _Inout_                                     ULONG*  NumSignalProcessingModes
+    )   PURE;
+};
+
+typedef IMiniportAudioSignalProcessing *PMINIPORTAudioSignalProcessing;
+
+#define IMP_IMiniportAudioSignalProcessing\
+    STDMETHODIMP_(NTSTATUS) GetModes\
+    (\
+        _In_                                        ULONG   Pin,\
+        _Out_writes_opt_(*NumSignalProcessingModes) GUID*   SignalProcessingModes,\
+        _Inout_                                     ULONG*  NumSignalProcessingModes\
+    );
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WINXP))
+
+typedef
+NTSTATUS
+_IRQL_requires_max_(DISPATCH_LEVEL)
+(*PCPFNRUNTIME_POWER_CONTROL_CALLBACK)
+(
+    _In_        LPCGUID PowerControlCode,
+    _In_opt_    PVOID   InBuffer,
+    _In_        SIZE_T  InBufferSize,
+    _Out_opt_   PVOID   OutBuffer,
+    _In_        SIZE_T  OutBufferSize,
+    _Out_opt_   PSIZE_T BytesReturned,
+    _In_opt_    PVOID   Context
+);
+
+DECLARE_INTERFACE_(IPortClsRuntimePower,IUnknown)
+{
+    STDMETHOD_(NTSTATUS,SendPowerControl)
+    (
+        _In_        PDEVICE_OBJECT  _DeviceObject,
+        _In_        LPCGUID         _PowerControlCode,
+        _In_opt_    PVOID           _InBuffer,
+        _In_        SIZE_T          _InBufferSize,
+        _Out_opt_   PVOID           _OutBuffer,
+        _In_        SIZE_T          _OutBufferSize,
+        _Out_opt_   PSIZE_T         _BytesReturned
+    )   PURE;
+    STDMETHOD_(NTSTATUS,RegisterPowerControlCallback)
+    (
+        _In_        PDEVICE_OBJECT                      _DeviceObject,
+        _In_        PCPFNRUNTIME_POWER_CONTROL_CALLBACK _Callback,
+        _In_opt_    PVOID                               _Context
+    ) PURE;
+    STDMETHOD_(NTSTATUS,UnregisterPowerControlCallback)
+    (
+        _In_        PDEVICE_OBJECT  _DeviceObject
+    ) PURE;
+};
+
+typedef IPortClsRuntimePower *PPORTCLSRUNTIMEPOWER;
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WIN8))
+
+DEFINE_GUID(IID_IMiniportAudioSignalProcessing,
+0xb532678c, 0xbe50, 0x472d, 0x99, 0x73, 0x8a, 0x6f, 0x16, 0x59, 0x49, 0x89);
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+#if (!defined(DEFINE_ABSTRACT_IPORTCLSSTREAMRESOURCEMANAGER))
+
+#define DEFINE_ABSTRACT_IPORTCLSSTREAMRESOURCEMANAGER()         \
+    STDMETHOD_(NTSTATUS,AddStreamResource)                      \
+    (   THIS_                                                   \
+        _In_  PVOID             ResourceSet,                    \
+        _In_  PPCSTREAMRESOURCE_DESCRIPTOR ResourceDescriptor,  \
+        _Out_ PCSTREAMRESOURCE* ResourceHandle                  \
+    ) PURE;                                                     \
+    STDMETHOD_(NTSTATUS,RemoveStreamResource)                   \
+    (                                                           \
+        THIS_                                                   \
+        _In_ PCSTREAMRESOURCE   ResourceHandle                  \
+    ) PURE;
+
+#endif
+
+DECLARE_INTERFACE_(IPortClsStreamResourceManager,IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    DEFINE_ABSTRACT_IPORTCLSSTREAMRESOURCEMANAGER()
+};
+
+typedef IPortClsStreamResourceManager *PPORTCLSStreamResourceManager;
+
+DECLARE_INTERFACE_(IPortClsStreamResourceManager2,IPortClsStreamResourceManager)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+    DEFINE_ABSTRACT_IPORTCLSSTREAMRESOURCEMANAGER()
+    STDMETHOD_(NTSTATUS,AddStreamResource2)
+    (   THIS_
+        _In_  PDEVICE_OBJECT    PhysicalDeviceObject,
+        _In_  PVOID             ResourceSet,
+        _In_  PPCSTREAMRESOURCE_DESCRIPTOR ResourceDescriptor,
+        _Out_ PCSTREAMRESOURCE* ResourceHandle
+    ) PURE;
+};
+
+typedef IPortClsStreamResourceManager2 *PPORTCLSStreamResourceManager2;
+
+#endif
+
 #endif /* PORTCLS_H */

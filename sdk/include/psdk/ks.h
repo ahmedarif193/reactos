@@ -4968,6 +4968,15 @@ KsDeviceRegisterAggregatedClientUnknown(
 
 #if defined(_UNKNOWN_H_) || defined(__IUnknown_INTERFACE_DEFINED__)
 
+#if !defined(DEFINE_ABSTRACT_UNKNOWN)
+#define DEFINE_ABSTRACT_UNKNOWN() \
+    STDMETHOD_(NTSTATUS, QueryInterface)(THIS_ \
+        _In_ REFIID InterfaceId, \
+        _COM_Outptr_ PVOID* Interface) PURE; \
+    STDMETHOD_(ULONG,AddRef)(THIS) PURE; \
+    STDMETHOD_(ULONG,Release)(THIS) PURE;
+#endif
+
 typedef interface IKsReferenceClock* PIKSREFERENCECLOCK;
 
 #undef INTERFACE
@@ -5206,6 +5215,238 @@ KsFilterReleaseProcessingMutex(
 
 /* etc. */
 #endif /* avstream */
+
+#define STATIC_KSCATEGORY_VIDEO_CAMERA \
+    0xe5323777, 0xf976, 0x4f5b, 0x9b, 0x55, 0xb9, 0x46, 0x99, 0xc4, 0x6e, 0x44
+
+#define STATIC_KS_TYPE_DONT_CARE    STATIC_GUID_NULL
+
+#define STATIC_KSMEMORY_TYPE_KERNEL_NONPAGED \
+    0x4a6d5fc4L, 0x7895, 0x11d1, 0xb0, 0x69, 0x00, 0xa0, 0xc9, 0x06, 0x28, 0x02
+
+#define DECLARE_SIMPLE_FRAMING_EX(FramingExName, MemoryType, Flags, Frames, Alignment, MinFrameSize, MaxFrameSize) \
+    const KSALLOCATOR_FRAMING_EX FramingExName = \
+    {\
+        1, \
+        0, \
+        {\
+            1, \
+            1, \
+            0 \
+        }, \
+        0, \
+        {\
+            {\
+                MemoryType, \
+                STATIC_KS_TYPE_DONT_CARE, \
+                0, \
+                0, \
+                Flags, \
+                Frames, \
+                Alignment, \
+                0, \
+                {\
+                    0, \
+                    (ULONG)-1, \
+                    1 \
+                }, \
+                {\
+                    {\
+                        MinFrameSize, \
+                        MaxFrameSize, \
+                        1 \
+                    }, \
+                    0, \
+                    0  \
+                }\
+            }\
+        }\
+    }
+
+#define NANOSECONDS 10000000
+
+#define KSCONVERT_PERFORMANCE_TIME(Frequency, PerformanceTime) \
+    ((((ULONGLONG)(ULONG)(PerformanceTime).HighPart * NANOSECONDS / (Frequency)) << 32) + \
+    ((((((ULONGLONG)(ULONG)(PerformanceTime).HighPart * NANOSECONDS) % (Frequency)) << 32) + \
+    ((ULONGLONG)(PerformanceTime).LowPart * NANOSECONDS)) / (Frequency)))
+
+#if ((NTDDI_VERSION >= NTDDI_WINXP))
+#if (defined(_NTDDK_))
+
+#define KSDEVICE_DESCRIPTOR_VERSION (0x100)
+
+#define DEFINE_KSFILTER_DESCRIPTOR_TABLE(table)\
+    const KSFILTER_DESCRIPTOR*const table[] =
+
+#endif
+#endif
+#if (defined(_NTDDK_))
+#if ((NTDDI_VERSION >= NTDDI_WINXP))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+PKSDEVICE __inline
+KsPinGetDevice(
+    _In_ PKSPIN Pin
+    )
+{
+    return KsGetDevice((PVOID) Pin);
+}
+
+#define KsEdit(Object,PointerToPointer,Tag)\
+    _KsEdit(\
+        (Object)->Bag,\
+        (PVOID*)(PointerToPointer),\
+        sizeof(**(PointerToPointer)),\
+        sizeof(**(PointerToPointer)),\
+        (Tag))
+
+#if (defined(_UNKNOWN_H_) || defined(__IUnknown_INTERFACE_DEFINED__))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+KSDDKAPI
+NTSTATUS
+NTAPI
+KsPinGetReferenceClockInterface(
+    _In_ PKSPIN Pin,
+    _Out_ PIKSREFERENCECLOCK* Interface
+    );
+
+#endif
+#endif
+#endif
+
+#define KSSTREAM_HEADER_OPTIONSF_METADATA           0x00001000
+
+#define KSSTREAM_HEADER_OPTIONSF_ENDOFPHOTOSEQUENCE 0x00002000
+
+typedef struct {
+    ULONG       BufferSize;
+    ULONG       UsedSize;
+    _Field_size_bytes_(BufferSize)
+    PVOID       Data;
+    _Field_size_bytes_(BufferSize)
+    PVOID       SystemVa;
+    ULONG       Flags;
+    ULONG       Reserved;
+} KSSTREAM_METADATA_INFO, *PKSSTREAM_METADATA_INFO;
+
+typedef struct
+{
+	ULONG       PresentationTimeStamp;
+	ULONG       SourceClockReference;
+	union
+	{
+		struct
+		{
+			USHORT	Counter : 11;
+			USHORT  Reserved : 5;
+		};
+		USHORT	SCRToken;
+	};
+	USHORT      Reserved0;
+	ULONG       Reserved1;
+} KSSTREAM_UVC_METADATATYPE_TIMESTAMP, *PKSSTREAM_UVC_METADATATYPE_TIMESTAMP;
+
+typedef struct {
+    KSSTREAM_UVC_METADATATYPE_TIMESTAMP StartOfFrameTimestamp;
+    KSSTREAM_UVC_METADATATYPE_TIMESTAMP EndOfFrameTimestamp;
+} KSSTREAM_UVC_METADATA, *PKSSTREAM_UVC_METADATA;
+
+#if (defined(_NTDDK_))
+
+#define DEFINE_KSPROPERTY_SET(Set,\
+                              PropertiesCount,\
+                              PropertyItem,\
+                              FastIoCount,\
+                              FastIoTable)\
+{\
+    Set,\
+    PropertiesCount,\
+    PropertyItem,\
+    FastIoCount,\
+    FastIoTable\
+}
+
+#define DEFINE_KSPROPERTY_SET_TABLE(tablename)\
+    const KSPROPERTY_SET tablename[] =
+
+#define DEFINE_KSEVENT_TABLE(tablename)\
+    const KSEVENT_ITEM tablename[] =
+
+#define DEFINE_KSEVENT_ITEM(EventId, DataInput, ExtraEntryData,\
+                            AddHandler, RemoveHandler, SupportHandler)\
+{\
+    EventId,\
+    DataInput,\
+    ExtraEntryData,\
+    AddHandler,\
+    RemoveHandler,\
+    SupportHandler\
+}
+
+#define DEFINE_KSEVENT_SET(Set,\
+                           EventsCount,\
+                           EventItem)\
+{\
+    Set, EventsCount, EventItem\
+}
+
+#define DEFINE_KSEVENT_SET_TABLE(tablename)\
+    const KSEVENT_SET tablename[] =
+
+#endif
+#if ((NTDDI_VERSION >= NTDDI_WINXP))
+#if (defined(_NTDDK_))
+
+#define DEFINE_KSAUTOMATION_TABLE(table)\
+    const KSAUTOMATION_TABLE table =
+
+#define DEFINE_KSAUTOMATION_PROPERTIES(table)\
+    SIZEOF_ARRAY(table),\
+    sizeof(KSPROPERTY_ITEM),\
+    table
+
+#define DEFINE_KSAUTOMATION_EVENTS(table)\
+    SIZEOF_ARRAY(table),\
+    sizeof(KSEVENT_ITEM),\
+    table
+
+#define DEFINE_KSAUTOMATION_METHODS_NULL\
+    0,\
+    sizeof(KSMETHOD_ITEM),\
+    NULL
+
+#endif
+#endif
+#if (defined(_NTDDK_))
+#if ((NTDDI_VERSION >= NTDDI_WINXP))
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+KSDDKAPI
+PUNICODE_STRING
+NTAPI
+KsFilterFactoryGetSymbolicLink(
+    _In_ PKSFILTERFACTORY FilterFactory
+    );
+
+#if ((NTDDI_VERSION >= NTDDI_WINTHRESHOLD))
+
+typedef struct _KSDEVICE_PROFILE_INFO
+KSDEVICE_PROFILE_INFO, *PKSDEVICE_PROFILE_INFO;
+
+#endif
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+PKSDEVICE __inline
+KsFilterGetDevice(
+    _In_ PKSFILTER Filter
+    )
+{
+    return KsGetDevice((PVOID) Filter);
+}
+
+#endif
+#endif
 
 #ifdef __cplusplus
 }
