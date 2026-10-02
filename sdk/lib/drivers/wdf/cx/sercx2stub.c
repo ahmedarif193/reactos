@@ -9,8 +9,12 @@
 #include "wdf.h"
 #include <fxldr.h>
 
+#define WDFCX_STRING2(_Text) #_Text
+#define WDFCX_STRING(_Text) WDFCX_STRING2(_Text)
+#define WDFCX_SYMBOL_PREFIX WDFCX_STRING(__USER_LABEL_PREFIX__)
+
 #pragma section(".kmdfclassbind$b", read, write)
-#pragma comment(linker, "/include:_SerCx_BIND_INFO")
+#pragma comment(linker, "/include:" WDFCX_SYMBOL_PREFIX "_SerCx_BIND_INFO")
 
 PVOID SercxDriverGlobals;
 PVOID SercxFunctions[35];
