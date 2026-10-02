@@ -1841,7 +1841,15 @@ FsRtlpGetResourceForModWrite(_In_ PFSRTL_COMMON_FCB_HEADER FcbHeader,
     }
 
     /* We force exclusive lock if this write modifies the valid data length */
-    return (EndingOffset->QuadPart > FcbHeader->ValidDataLength.QuadPart);
+    if (EndingOffset->QuadPart > FcbHeader->ValidDataLength.QuadPart &&
+        FcbHeader->FileSize.QuadPart > FcbHeader->ValidDataLength.QuadPart)
+    {
+        if (FcbHeader->Resource != NULL)
+            *ResourceToAcquire = FcbHeader->Resource;
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 /**
