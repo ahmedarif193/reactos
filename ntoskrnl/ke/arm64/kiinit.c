@@ -555,6 +555,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         /* ARM64 uses 16-byte SLIST headers and 128-bit CAS */
         RtlpUse16ByteSLists = TRUE;
         MmWriteableSharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128] = TRUE;
+        MmWriteableSharedUserData->NXSupportPolicy = NX_SUPPORT_POLICY_OPTIN;
 
         /* Publish the architectural instruction features exposed by NT. */
         MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_VFP_32_REGISTERS_AVAILABLE] =

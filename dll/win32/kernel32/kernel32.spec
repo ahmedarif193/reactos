@@ -645,7 +645,7 @@
 @ stdcall GetStringTypeExW(long long wstr long ptr) kernelbase.GetStringTypeExW
 @ stdcall GetStringTypeW(long wstr long ptr) kernelbase.GetStringTypeW
 @ stdcall -version=0xA00+ GetSystemCpuSetInformation(ptr long ptr ptr long) kernelbase.GetSystemCpuSetInformation
-@ stub -version=0x600+ GetSystemDEPPolicy
+@ stdcall -version=0x600+ GetSystemDEPPolicy()
 @ stdcall GetSystemDefaultLCID()
 @ stdcall GetSystemDefaultLangID()
 @ stdcall -version=0x600+ GetSystemDefaultLocaleName(ptr long)

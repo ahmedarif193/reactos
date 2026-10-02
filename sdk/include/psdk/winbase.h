@@ -2300,6 +2300,7 @@ FARPROC WINAPI GetProcAddress(HINSTANCE,LPCSTR);
 BOOL WINAPI GetProcessAffinityMask(_In_ HANDLE, _Out_ PDWORD_PTR, _Out_ PDWORD_PTR);
 #if (_WIN32_WINNT >= 0x0600)
 WINBASEAPI BOOL WINAPI GetProcessDEPPolicy(_In_ HANDLE hProcess, _Out_ LPDWORD lpFlags, _Out_ PBOOL lpPermanent);
+WINBASEAPI DEP_SYSTEM_POLICY_TYPE WINAPI GetSystemDEPPolicy(VOID);
 #if (_WIN32_WINNT >= 0x0602)
 WINBASEAPI BOOL WINAPI GetProcessMitigationPolicy(_In_ HANDLE hProcess, _In_ PROCESS_MITIGATION_POLICY MitigationPolicy, _Out_writes_bytes_(dwLength) PVOID lpBuffer, _In_ SIZE_T dwLength);
 WINBASEAPI BOOL WINAPI SetProcessMitigationPolicy(_In_ PROCESS_MITIGATION_POLICY MitigationPolicy, _In_reads_bytes_(dwLength) PVOID lpBuffer, _In_ SIZE_T dwLength);

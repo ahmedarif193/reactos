@@ -67,13 +67,6 @@ GetProcessDEPPolicy(
     _Out_ LPDWORD lpFlags,
     _Out_ PBOOL lpPermanent)
 {
-#ifdef _WIN64
-    UNREFERENCED_PARAMETER(hProcess);
-    UNREFERENCED_PARAMETER(lpFlags);
-    UNREFERENCED_PARAMETER(lpPermanent);
-    SetLastError(ERROR_NOT_SUPPORTED);
-    return FALSE;
-#else
     ULONG ExecuteFlags = 0;
     NTSTATUS Status;
 
@@ -102,7 +95,13 @@ GetProcessDEPPolicy(
 
     *lpPermanent = (ExecuteFlags & MEM_EXECUTE_OPTION_PERMANENT) ? TRUE : FALSE;
     return TRUE;
-#endif
+}
+
+DEP_SYSTEM_POLICY_TYPE
+WINAPI
+GetSystemDEPPolicy(VOID)
+{
+    return (DEP_SYSTEM_POLICY_TYPE)SharedUserData->NXSupportPolicy;
 }
 
 VOID
