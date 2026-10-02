@@ -59,6 +59,9 @@ K32ValidateAttribute(
         case PROC_THREAD_ATTRIBUTE_COMPONENT_FILTER:
             return Size == sizeof(COMPONENT_FILTER) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
 
+        case PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE:
+            return Size == sizeof(HANDLE) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
         default:
             return ERROR_NOT_SUPPORTED;
     }
@@ -72,6 +75,7 @@ InitializeProcThreadAttributeList(
     _In_ DWORD dwFlags,
     _Inout_ PSIZE_T lpSize)
 {
+    PK32_PROC_THREAD_ATTRIBUTE_LIST List = (PK32_PROC_THREAD_ATTRIBUTE_LIST)lpAttributeList;
     SIZE_T Needed;
 
     if (dwFlags != 0 || !lpSize)
@@ -89,8 +93,10 @@ InitializeProcThreadAttributeList(
     }
 
     *lpSize = Needed;
-    RtlZeroMemory(lpAttributeList, Needed);
-    ((PK32_PROC_THREAD_ATTRIBUTE_LIST)lpAttributeList)->Size = dwAttributeCount;
+    List->Mask = 0;
+    List->Size = dwAttributeCount;
+    List->Count = 0;
+    List->ExtendedFlagsAttribute = NULL;
     return TRUE;
 }
 

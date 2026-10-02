@@ -2556,6 +2556,11 @@ BasepCaptureExtendedAttributes(
         if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_PARENT_PROCESS)
         {
             *ParentProcess = *(PHANDLE)Attribute->Value;
+            if (!*ParentProcess)
+            {
+                SetLastError(ERROR_INVALID_HANDLE);
+                return FALSE;
+            }
         }
         else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY)
         {
