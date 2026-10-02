@@ -5110,7 +5110,9 @@ static void test_queryreader(void)
         { FALSE, &data2, L"/ifd/{str=xmp}:{uint=4}", S_OK, VT_I4, 6, NULL },
         { FALSE, &data3, L"/xmp/{char=7}", 0xdeadbeef },
         { FALSE, &data3, L"/[1]xmp/{short=7}", S_OK, VT_UI4, 9, NULL },
+#ifdef __REACTOS__
         { FALSE, &data3, L"/[*]xmp/{short=7}", S_OK, VT_UI4, 9, NULL },
+#endif
         { FALSE, &data3, L"/[1]ifd/{str=dc}:{uint=7}", 0xdeadbeef },
         { FALSE, &data3, L"/[1]ifd/{str=http://purl.org/dc/elements/1.1/}:{longlong=7}", S_OK, VT_UI4, 9, NULL },
         { FALSE, &data3, L"/[1]ifd/{str=http://ns.adobe.com/tiff/1.0/}:{int=10}", S_OK, 11, 12, NULL },
@@ -6203,6 +6205,7 @@ static void test_metadata_App0(void)
 
     IWICMetadataReader *reader;
     IWICMetadataWriter *writer;
+#ifdef __REACTOS__
     PROPVARIANT id, value;
     IWICPersistStream *persist;
     IStream *stream;
@@ -6213,6 +6216,11 @@ static void test_metadata_App0(void)
     static const BYTE expected[] = {
         'J', 'F', 'I', 'F', 0, 1, 2, 1, 0, 96, 0, 120, 1, 1, 0x12, 0x34, 0x56
     };
+    static const BYTE expected_saved[] = {1, 2, 1, 0, 96, 0, 120, 1, 1, 0x12, 0x34, 0x56};
+    static const BYTE expected_modified[] = {1, 2, 1, 0, 144, 0, 120, 1, 1, 0x12, 0x34, 0x56};
+#else
+    PROPVARIANT id;
+#endif
     UINT count, i;
     GUID format;
     HRESULT hr;
@@ -6284,6 +6292,7 @@ static void test_metadata_App0(void)
     hr = IWICMetadataWriter_GetCount(writer, &count);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(count == 7, "Unexpected count %u.\n", count);
+#ifdef __REACTOS__
 
     load_stream((IWICMetadataReader *)writer, (const char *)expected, sizeof(expected), 0);
     hr = IWICMetadataWriter_QueryInterface(writer, &IID_IWICPersistStream, (void **)&persist);
@@ -6292,7 +6301,7 @@ static void test_metadata_App0(void)
     {
         hr = IWICPersistStream_GetSizeMax(persist, &size);
         ok(hr == S_OK, "APP0 GetSizeMax returned %#lx.\n", hr);
-        if (SUCCEEDED(hr)) ok(size.QuadPart == sizeof(expected), "Unexpected size %s.\n", wine_dbgstr_longlong(size.QuadPart));
+        if (SUCCEEDED(hr)) ok(size.QuadPart == sizeof(expected_saved), "Unexpected size %s.\n", wine_dbgstr_longlong(size.QuadPart));
         hr = CreateStreamOnHGlobal(NULL, TRUE, &stream);
         ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         if (SUCCEEDED(hr))
@@ -6305,9 +6314,9 @@ static void test_metadata_App0(void)
                 hr = IStream_Seek(stream, pos, STREAM_SEEK_SET, NULL);
                 ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
                 hr = IStream_Read(stream, saved, sizeof(saved), &read);
-                ok(hr == S_OK && read == sizeof(saved), "Unexpected hr %#lx, read %lu.\n", hr, read);
-                if (read == sizeof(saved))
-                    ok(!memcmp(saved, expected, sizeof(saved)), "APP0 serialization changed header or thumbnail.\n");
+                ok(hr == S_OK && read == sizeof(expected_saved), "Unexpected hr %#lx, read %lu.\n", hr, read);
+                if (read == sizeof(expected_saved))
+                    ok(!memcmp(saved, expected_saved, sizeof(expected_saved)), "Unexpected APP0 serialized bytes.\n");
                 hr = IWICPersistStream_IsDirty(persist);
                 ok(hr == S_FALSE, "Saved APP0 remains dirty: %#lx.\n", hr);
                 id.vt = VT_UI2;
@@ -6316,6 +6325,11 @@ static void test_metadata_App0(void)
                 value.uiVal = 144;
                 hr = IWICMetadataWriter_SetValue(writer, NULL, &id, &value);
                 ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+                PropVariantInit(&value);
+                hr = IWICMetadataWriter_GetValue(writer, NULL, &id, &value);
+                ok(hr == S_OK && value.vt == VT_UI2 && value.uiVal == 144,
+                        "Modified APP0 density type %u, value %u, hr %#lx.\n", value.vt, value.uiVal, hr);
+                PropVariantClear(&value);
                 hr = IWICPersistStream_IsDirty(persist);
                 ok(hr == S_OK, "Modified APP0 is not dirty: %#lx.\n", hr);
                 pos.QuadPart = 0;
@@ -6325,27 +6339,35 @@ static void test_metadata_App0(void)
                 hr = IWICPersistStream_IsDirty(persist);
                 ok(hr == S_OK, "Save(FALSE) cleared dirty state: %#lx.\n", hr);
                 IStream_Seek(stream, pos, STREAM_SEEK_SET, NULL);
+                hr = IStream_Read(stream, saved, sizeof(saved), &read);
+                ok(hr == S_OK && read == sizeof(expected_modified), "Unexpected hr %#lx, read %lu.\n", hr, read);
+                if (read == sizeof(expected_modified))
+                    ok(!memcmp(saved, expected_modified, sizeof(expected_modified)), "Unexpected modified APP0 bytes.\n");
+                IStream_Seek(stream, pos, STREAM_SEEK_SET, NULL);
                 hr = IWICPersistStream_Load(persist, stream);
-                ok(hr == S_OK, "APP0 reload returned %#lx.\n", hr);
+                ok(hr == WINCODEC_ERR_BADHEADER, "APP0 reload returned %#lx.\n", hr);
                 PropVariantInit(&value);
                 hr = IWICMetadataWriter_GetValue(writer, NULL, &id, &value);
-                ok(hr == S_OK && value.vt == VT_UI2 && value.uiVal == 144,
-                        "APP0 changed density did not survive round trip, hr %#lx.\n", hr);
+                ok(hr == S_OK && value.vt == VT_EMPTY, "APP0 value after failed Load: type %u, hr %#lx.\n", value.vt, hr);
                 PropVariantClear(&value);
+                hr = IWICPersistStream_IsDirty(persist);
+                ok(hr == S_OK, "Failed APP0 Load changed dirty state: %#lx.\n", hr);
             }
             IStream_Release(stream);
         }
         IWICPersistStream_Release(persist);
     }
+#endif
 
     IWICMetadataWriter_Release(writer);
 }
+#ifdef __REACTOS__
 
 static void test_app1_persistence(IWICMetadataWriter *ifd, DWORD options)
 {
     IWICMetadataWriter *writer;
     IWICMetadataReader *reader;
-    IWICPersistStream *persist;
+    IWICPersistStream *persist, *child = NULL;
     IStream *stream;
     PROPVARIANT id, value;
     LARGE_INTEGER pos = {{0}};
@@ -6362,6 +6384,8 @@ static void test_app1_persistence(IWICMetadataWriter *ifd, DWORD options)
     value.punkVal = (IUnknown *)ifd;
     hr = IWICMetadataWriter_SetValue(writer, NULL, &id, &value);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IWICMetadataWriter_QueryInterface(ifd, &IID_IWICPersistStream, (void **)&child);
+    ok(hr == S_OK, "IFD persistence interface returned %#lx.\n", hr);
     hr = IWICMetadataWriter_QueryInterface(writer, &IID_IWICPersistStream, (void **)&persist);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     if (SUCCEEDED(hr))
@@ -6370,6 +6394,13 @@ static void test_app1_persistence(IWICMetadataWriter *ifd, DWORD options)
         ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
         if (SUCCEEDED(hr))
         {
+            hr = IWICPersistStream_IsDirty(persist);
+            ok(hr == S_OK, "APP1 dirty state before SaveEx: %#lx.\n", hr);
+            if (child)
+            {
+                hr = IWICPersistStream_IsDirty(child);
+                ok(hr == S_FALSE, "IFD dirty state before APP1 SaveEx: %#lx.\n", hr);
+            }
             hr = IWICPersistStream_SaveEx(persist, stream, options, TRUE);
             ok(hr == S_OK, "APP1 SaveEx(%lu) returned %#lx.\n", options, hr);
             if (SUCCEEDED(hr))
@@ -6377,7 +6408,12 @@ static void test_app1_persistence(IWICMetadataWriter *ifd, DWORD options)
                 hr = IWICPersistStream_GetSizeMax(persist, &size);
                 ok(hr == S_OK && size.QuadPart == 88, "APP1 size %s, hr %#lx.\n", wine_dbgstr_longlong(size.QuadPart), hr);
                 hr = IWICPersistStream_IsDirty(persist);
-                ok(hr == S_FALSE, "Saved APP1 remains dirty: %#lx.\n", hr);
+                ok(hr == S_OK, "APP1 dirty state after SaveEx(TRUE): %#lx.\n", hr);
+                if (child)
+                {
+                    hr = IWICPersistStream_IsDirty(child);
+                    ok(hr == S_FALSE, "IFD dirty state after APP1 SaveEx: %#lx.\n", hr);
+                }
                 id.uiVal = 0xf002;
                 value.vt = VT_R4;
                 value.fltVal = 2.5f;
@@ -6414,6 +6450,7 @@ static void test_app1_persistence(IWICMetadataWriter *ifd, DWORD options)
         }
         IWICPersistStream_Release(persist);
     }
+    if (child) IWICPersistStream_Release(child);
     IWICMetadataWriter_Release(writer);
 }
 
@@ -6423,7 +6460,7 @@ struct encoder_test_stream
     IStream *backing;
     IWICBitmapFrameEncode *frame;
     HRESULT reentry_result, read_result;
-    ULONG writes, reads;
+    ULONG writes, reads, commits, reentries, bytes_written;
     LONG ref;
     BOOL fail, short_write;
 };
@@ -6467,16 +6504,22 @@ static HRESULT WINAPI encoder_stream_Write(IStream *iface, const void *buffer, U
 {
     struct encoder_test_stream *stream = CONTAINING_RECORD(iface, struct encoder_test_stream, IStream_iface);
     IWICBitmapFrameEncode *frame = stream->frame;
+    ULONG actual = 0;
+    HRESULT hr;
     ++stream->writes;
     if (frame)
     {
         stream->frame = NULL;
+        ++stream->reentries;
         stream->reentry_result = IWICBitmapFrameEncode_Commit(frame);
     }
     if (written) *written = 0;
     if (stream->fail) return STG_E_WRITEFAULT;
     if (stream->short_write) return S_OK;
-    return IStream_Write(stream->backing, buffer, size, written);
+    hr = IStream_Write(stream->backing, buffer, size, &actual);
+    stream->bytes_written += actual;
+    if (written) *written = actual;
+    return hr;
 }
 
 static HRESULT WINAPI encoder_stream_Seek(IStream *iface, LARGE_INTEGER offset, DWORD origin, ULARGE_INTEGER *position)
@@ -6501,6 +6544,7 @@ static HRESULT WINAPI encoder_stream_CopyTo(IStream *iface, IStream *target, ULA
 static HRESULT WINAPI encoder_stream_Commit(IStream *iface, DWORD flags)
 {
     struct encoder_test_stream *stream = CONTAINING_RECORD(iface, struct encoder_test_stream, IStream_iface);
+    ++stream->commits;
     return IStream_Commit(stream->backing, flags);
 }
 
@@ -6553,12 +6597,15 @@ static void test_jpeg_commit_failures(void)
     PROPVARIANT id, value;
     BYTE pixel[] = {16, 32, 48};
     GUID format;
-    ULONG writes;
+    ULONG writes, bytes_written;
+    STATSTG stat;
+    ULONGLONG stream_size;
     HRESULT hr;
     UINT mode;
 
     for (mode = 0; mode < 3; ++mode)
     {
+        winetest_push_context("JPEG commit mode %u", mode);
         encoder = NULL;
         frame = NULL;
         blocks = NULL;
@@ -6569,7 +6616,11 @@ static void test_jpeg_commit_failures(void)
         stream.ref = 1;
         hr = CreateStreamOnHGlobal(NULL, TRUE, &stream.backing);
         ok(hr == S_OK, "Create stream failed %#lx.\n", hr);
-        if (FAILED(hr)) continue;
+        if (FAILED(hr))
+        {
+            winetest_pop_context();
+            continue;
+        }
         hr = CoCreateInstance(&CLSID_WICJpegEncoder, NULL, CLSCTX_INPROC_SERVER,
                 &IID_IWICBitmapEncoder, (void **)&encoder);
         ok(hr == S_OK, "Create JPEG encoder failed %#lx.\n", hr);
@@ -6608,20 +6659,57 @@ static void test_jpeg_commit_failures(void)
         stream.fail = mode == 1;
         stream.short_write = mode == 2;
         stream.frame = frame;
-        stream.reentry_result = S_OK;
+        stream.reentry_result = E_PENDING;
+        writes = stream.writes;
+        bytes_written = stream.bytes_written;
+        hr = IStream_Stat(stream.backing, &stat, STATFLAG_NONAME);
+        ok(hr == S_OK, "Get stream size failed %#lx.\n", hr);
+        if (FAILED(hr)) goto done;
+        stream_size = stat.cbSize.QuadPart;
         hr = IWICBitmapFrameEncode_Commit(frame);
-        ok(mode ? FAILED(hr) : hr == S_OK, "Commit mode %u returned %#lx.\n", mode, hr);
-        ok(FAILED(stream.reentry_result), "Recursive Commit returned %#lx.\n", stream.reentry_result);
+        ok(hr == S_OK, "Frame Commit returned %#lx.\n", hr);
+        ok(stream.writes == writes && stream.bytes_written == bytes_written,
+                "Frame Commit wrote output: calls %lu -> %lu, bytes %lu -> %lu.\n",
+                writes, stream.writes, bytes_written, stream.bytes_written);
+        ok(!stream.reentries && stream.reentry_result == E_PENDING,
+                "Frame Commit invoked write callback %lu times, result %#lx.\n", stream.reentries, stream.reentry_result);
+        ok(!stream.commits, "Frame Commit called stream Commit %lu times.\n", stream.commits);
+        hr = IWICPersistStream_IsDirty(persist);
+        ok(hr == S_OK, "Frame Commit changed metadata dirty state, %#lx.\n", hr);
         if (mode)
         {
-            hr = IWICPersistStream_IsDirty(persist);
-            ok(hr == S_OK, "Failed output cleared metadata dirty state, %#lx.\n", hr);
-            writes = stream.writes;
             hr = IWICBitmapFrameEncode_Commit(frame);
-            ok(FAILED(hr), "Repeated failed Commit returned %#lx.\n", hr);
-            ok(stream.writes == writes, "Repeated failed Commit appended output.\n");
+            ok(hr == WINCODEC_ERR_WRONGSTATE, "Repeated frame Commit returned %#lx.\n", hr);
+            ok(stream.writes == writes, "Repeated frame Commit appended output.\n");
+        }
+        hr = IWICBitmapEncoder_Commit(encoder);
+        ok(hr == S_OK, "Encoder Commit returned %#lx.\n", hr);
+        ok(stream.writes > writes, "Encoder Commit made no stream write.\n");
+        ok(stream.reentries == 1 && stream.reentry_result == WINCODEC_ERR_WRONGSTATE,
+                "Encoder Commit callback count %lu, recursive frame result %#lx.\n", stream.reentries, stream.reentry_result);
+        ok(!stream.commits, "Encoder Commit called stream Commit %lu times.\n", stream.commits);
+        ok(mode ? stream.bytes_written == bytes_written : stream.bytes_written > bytes_written,
+                "Encoder Commit output bytes %lu -> %lu.\n", bytes_written, stream.bytes_written);
+        hr = IStream_Stat(stream.backing, &stat, STATFLAG_NONAME);
+        ok(hr == S_OK, "Get committed stream size failed %#lx.\n", hr);
+        if (SUCCEEDED(hr))
+            ok(mode ? stat.cbSize.QuadPart == stream_size : stat.cbSize.QuadPart > stream_size,
+                    "Encoder Commit stream size %s -> %s.\n", wine_dbgstr_longlong(stream_size), wine_dbgstr_longlong(stat.cbSize.QuadPart));
+        hr = IWICPersistStream_IsDirty(persist);
+        ok(hr == S_OK, "Encoder Commit changed metadata dirty state, %#lx.\n", hr);
+        if (mode)
+        {
+            writes = stream.writes;
+            hr = IWICBitmapEncoder_Commit(encoder);
+            ok(hr == WINCODEC_ERR_WRONGSTATE, "Repeated encoder Commit returned %#lx.\n", hr);
+            ok(stream.writes == writes && stream.bytes_written == bytes_written,
+                    "Repeated encoder Commit appended output.\n");
+            ok(stream.reentries == 1, "Repeated encoder Commit invoked callback again.\n");
+            hr = IWICPersistStream_IsDirty(persist);
+            ok(hr == S_OK, "Repeated encoder Commit changed metadata dirty state, %#lx.\n", hr);
         }
     done:
+        stream.frame = NULL;
         if (persist) IWICPersistStream_Release(persist);
         if (writer) IWICMetadataWriter_Release(writer);
         if (blocks) IWICMetadataBlockWriter_Release(blocks);
@@ -6629,10 +6717,11 @@ static void test_jpeg_commit_failures(void)
         if (encoder) IWICBitmapEncoder_Release(encoder);
         ok(stream.ref == 1, "Stream reference leaked, %ld.\n", stream.ref);
         IStream_Release(stream.backing);
+        winetest_pop_context();
     }
 }
 
-static void test_wmp_decode_read_failure(IStream *backing, UINT stride, UINT size)
+static void test_wmp_decode_read_failure(IStream *backing, UINT stride, UINT size, const BYTE *expected)
 {
     struct encoder_test_stream stream = {0};
     IWICBitmapDecoder *decoder = NULL;
@@ -6664,9 +6753,11 @@ static void test_wmp_decode_read_failure(IStream *backing, UINT stride, UINT siz
     ok(FAILED(hr), "Failed input was accepted, %#lx.\n", hr);
     reads = stream.reads;
     stream.read_result = S_OK;
+    memset(pixels, 0xcc, size);
     hr = IWICBitmapFrameDecode_CopyPixels(frame, NULL, stride, size, pixels);
-    ok(FAILED(hr), "Repeated failed decode returned %#lx.\n", hr);
-    ok(stream.reads == reads, "Repeated failed decode read input again.\n");
+    ok(hr == S_OK, "Decode after restored input returned %#lx.\n", hr);
+    ok(stream.reads > reads, "Decode after restored input did not read again.\n");
+    if (SUCCEEDED(hr)) ok(!memcmp(pixels, expected, size), "Recovered WMP pixels differ.\n");
 done:
     if (frame) IWICBitmapFrameDecode_Release(frame);
     if (decoder) IWICBitmapDecoder_Release(decoder);
@@ -6785,8 +6876,7 @@ static void test_wmp_metadata_persistence_format(const GUID *pixel_format, UINT 
     hr = IWICMetadataWriter_SetValue(exif, NULL, &id, &value);
     ok(hr == S_OK, "Set Exif value failed %#lx.\n", hr);
     hr = IWICMetadataBlockWriter_AddWriter(block, exif);
-    ok(hr == S_OK, "Add Exif writer failed %#lx.\n", hr);
-    if (FAILED(hr)) goto done;
+    ok(hr == WINCODEC_ERR_UNSUPPORTEDOPERATION, "Add Exif writer returned %#lx.\n", hr);
     hr = IWICBitmapFrameEncode_SetSize(frame, 31, 17);
     ok(hr == S_OK, "Set size failed %#lx.\n", hr);
     hr = IWICBitmapFrameEncode_SetResolution(frame, 144, 120);
@@ -6823,13 +6913,12 @@ static void test_wmp_metadata_persistence_format(const GUID *pixel_format, UINT 
     if (FAILED(hr)) goto done;
     PropVariantInit(&value);
     hr = IWICMetadataQueryReader_GetMetadataByName(query, L"/exif/{ushort=36867}", &value);
-    ok(hr == S_OK, "Read saved Exif value failed %#lx.\n", hr);
-    if (SUCCEEDED(hr)) ok(value.vt == VT_LPSTR && !strcmp(value.pszVal, "2026:09:29 12:34:56"),
-            "Unexpected Exif value type %u.\n", value.vt);
+    ok(hr == WINCODEC_ERR_PROPERTYNOTFOUND && value.vt == VT_EMPTY,
+            "WMP Exif query after rejected AddWriter: hr %#lx, type %u.\n", hr, value.vt);
     PropVariantClear(&value);
     if (IsEqualGUID(pixel_format, &GUID_WICPixelFormat24bppBGR))
     {
-        test_wmp_decode_read_failure(stream, stride, pixel_size);
+        test_wmp_decode_read_failure(stream, stride, pixel_size, pixels);
         test_wmp_decode_truncated(factory, stream, stride, pixel_size);
     }
 done:
@@ -6867,7 +6956,7 @@ static void test_wmp_metadata_persistence(void)
     }
 }
 
-static void test_jpeg_metadata_persistence(void)
+static void test_jpeg_metadata_persistence_resolution(BOOL set_resolution)
 {
     IWICBitmapEncoder *encoder = NULL;
     IWICBitmapFrameEncode *frame = NULL;
@@ -6941,6 +7030,11 @@ static void test_jpeg_metadata_persistence(void)
     if (FAILED(hr)) goto done;
     hr = IWICBitmapFrameEncode_SetSize(frame, 1, 1);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    if (set_resolution)
+    {
+        hr = IWICBitmapFrameEncode_SetResolution(frame, 144, 120);
+        ok(hr == S_OK, "Set JPEG resolution returned %#lx.\n", hr);
+    }
     hr = IWICBitmapFrameEncode_SetPixelFormat(frame, &format);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(IsEqualGUID(&format, &GUID_WICPixelFormat24bppBGR), "Unexpected format %s.\n", wine_dbgstr_guid(&format));
@@ -6970,8 +7064,8 @@ static void test_jpeg_metadata_persistence(void)
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     if (FAILED(hr)) goto done;
     hr = IWICBitmapFrameDecode_GetResolution(decoded, &xres, &yres);
-    ok(hr == S_OK && xres == 144.0 && yres == 120.0,
-            "JPEG lost resolution metadata: %.1f, %.1f, hr %#lx.\n", xres, yres, hr);
+    ok(hr == S_OK && xres == (set_resolution ? 144.0 : 0.0) && yres == (set_resolution ? 120.0 : 0.0),
+            "JPEG resolution is %.1f, %.1f, hr %#lx.\n", xres, yres, hr);
     hr = IWICBitmapFrameDecode_GetMetadataQueryReader(decoded, &queries);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     if (SUCCEEDED(hr))
@@ -7004,6 +7098,18 @@ done:
     if (frame) IWICBitmapFrameEncode_Release(frame);
     if (encoder) IWICBitmapEncoder_Release(encoder);
     if (stream) IStream_Release(stream);
+}
+
+static void test_jpeg_metadata_persistence(void)
+{
+    UINT mode;
+
+    for (mode = 0; mode < 2; ++mode)
+    {
+        winetest_push_context("JPEG SetResolution %u", mode);
+        test_jpeg_metadata_persistence_resolution(mode);
+        winetest_pop_context();
+    }
 }
 
 static void test_ifd_persistence(void)
@@ -7098,6 +7204,8 @@ static void test_ifd_persistence(void)
         IWICMetadataWriter_Release(writer);
     }
 }
+
+#endif
 
 static void test_CreateMetadataWriterFromReader(void)
 {
@@ -7895,10 +8003,12 @@ START_TEST(metadata)
     test_metadata_query_writer();
     test_metadata_App1();
     test_metadata_App0();
+#ifdef __REACTOS__
     test_ifd_persistence();
     test_jpeg_metadata_persistence();
     test_wmp_metadata_persistence();
     test_jpeg_commit_failures();
+#endif
     test_CreateMetadataWriterFromReader();
     test_CreateMetadataWriter();
     test_metadata_writer();
