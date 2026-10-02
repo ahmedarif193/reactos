@@ -30,8 +30,6 @@ typedef struct _RTLP_WAIT
     ULONG Milliseconds;
 } RTLP_WAIT, *PRTLP_WAIT;
 
-static RTL_SRWLOCK RtlpWaitThreadLock = RTL_SRWLOCK_INIT;
-
 /* PRIVATE FUNCTIONS *******************************************************/
 
 static inline PLARGE_INTEGER get_nt_timeout( PLARGE_INTEGER pTime, ULONG timeout )
@@ -82,23 +80,7 @@ Wait_thread_proc(LPVOID Arg)
             }
             Wait->CallbackThread = NtCurrentTeb()->ClientId.UniqueThread;
             Wait->CallbackInProgress = TRUE;
-            if (Wait->Flags & WT_EXECUTEINWAITTHREAD)
-            {
-                RtlAcquireSRWLockExclusive( &RtlpWaitThreadLock );
-                _SEH2_TRY
-                {
-                    RtlpCallWaitOrTimerCallback( Wait->Callback, Wait->Context, TimerOrWaitFired );
-                }
-                _SEH2_FINALLY
-                {
-                    RtlReleaseSRWLockExclusive( &RtlpWaitThreadLock );
-                }
-                _SEH2_END;
-            }
-            else
-            {
-                RtlpCallWaitOrTimerCallback( Wait->Callback, Wait->Context, TimerOrWaitFired );
-            }
+            RtlpCallWaitOrTimerCallback( Wait->Callback, Wait->Context, TimerOrWaitFired );
             Wait->CallbackInProgress = FALSE;
 
             if (Wait->Flags & WT_EXECUTEONLYONCE)
