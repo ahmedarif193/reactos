@@ -2670,7 +2670,14 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
     NewHandleEntry.GrantedAccess = TargetAccess;
 
     /* Check if we're asking for new access */
-    if (TargetAccess & ~SourceAccess)
+    if (DesiredAccess & ~(SPECIFIC_RIGHTS_ALL |
+                          STANDARD_RIGHTS_ALL |
+                          ACCESS_SYSTEM_SECURITY |
+                          MAXIMUM_ALLOWED))
+    {
+        Status = STATUS_ACCESS_DENIED;
+    }
+    else if (TargetAccess & ~SourceAccess)
     {
         /* We are. We need the security procedure to validate this */
         if (ObjectType->TypeInfo.SecurityProcedure == SeDefaultObjectMethod)
