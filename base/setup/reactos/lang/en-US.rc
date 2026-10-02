@@ -11,13 +11,12 @@ BEGIN
     LTEXT "This wizard will install or upgrade LiberNT on your computer, \
 and prepare the second part of the setup.", IDC_STATIC, 115, 40, 195, 27
 ////
-    GROUPBOX " IMPORTANT INFORMATION ", IDC_WARNTEXT1, 115, 70, 195, 90, BS_CENTER
-    LTEXT "LiberNT is in Alpha stage: it is not feature- complete and is \
-under heavy development. It is recommended to use it only for \
-evaluation and testing and not as your daily-usage OS.\n\
-It may corrupt your data or damage your hardware.", IDC_WARNTEXT2, 120, 80, 185, 50, SS_CENTER
-    LTEXT "Backup your data or test on a secondary computer \
-if you attempt to run LiberNT on real hardware.", IDC_WARNTEXT3, 120, 130, 185, 27, SS_CENTER
+    GROUPBOX " IMPORTANT INFORMATION ", IDC_WARNTEXT1, 115, 70, 195, 92, BS_CENTER
+    LTEXT "LiberNT is under active development and is not feature-complete. \
+Use it for evaluation and testing, not as your main operating system.\n\
+It may corrupt your data or damage your hardware.", IDC_WARNTEXT2, 120, 81, 185, 52, SS_CENTER
+    LTEXT "Back up your data, or use a spare computer, \
+before installing LiberNT on real hardware.", IDC_WARNTEXT3, 120, 136, 185, 22, SS_CENTER
 ////
     LTEXT "Click Next to continue with Setup.", IDC_STATIC, 115, 169, 195, 17
 END
@@ -122,25 +121,19 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYS
 CAPTION "LiberNT Setup"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Installation type:", IDC_STATIC, 18, 5, 74, 11
-    EDITTEXT IDC_INSTALLTYPE, 95, 4, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "Installation source:", IDC_STATIC, 18, 17, 74, 11
-    EDITTEXT IDC_INSTALLSOURCE, 95, 16, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "Architecture:", IDC_STATIC, 18, 29, 74, 11
-    EDITTEXT IDC_ARCHITECTURE, 95, 28, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "Computer:", IDC_STATIC, 18, 41, 74, 11
-    EDITTEXT IDC_COMPUTER, 95, 40, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "Display:", IDC_STATIC, 18, 53, 74, 11
-    EDITTEXT IDC_DISPLAY, 95, 52, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "Keyboard:", IDC_STATIC, 18, 65, 74, 11
-    EDITTEXT IDC_KEYBOARD, 95, 64, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "Destination volume:", IDC_STATIC, 18, 77, 74, 11
-    EDITTEXT IDC_DESTDRIVE, 95, 76, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "Destination directory:", IDC_STATIC, 18, 89, 74, 11
-    EDITTEXT IDC_PATH, 95, 88, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
-    AUTOCHECKBOX "I confirm that all the installation settings are correct. I also acknowledge that\nReactOS is alpha-quality software and may break on my computer or corrupt my data.",
-        IDC_CONFIRM_INSTALL, 7, 104, 303, 18, BS_MULTILINE | WS_TABSTOP
-    LTEXT "Please confirm that all the installation settings are correct,\nthen click on Install to start the installation process.", IDC_STATIC, 7, 124, 303, 18
+    LTEXT "Installation type:", IDC_STATIC, 18, 9, 74, 11
+    EDITTEXT IDC_INSTALLTYPE, 95, 8, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
+    LTEXT "Installation source:", IDC_STATIC, 18, 25, 74, 11
+    EDITTEXT IDC_INSTALLSOURCE, 95, 24, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
+    LTEXT "Architecture:", IDC_STATIC, 18, 41, 74, 11
+    EDITTEXT IDC_ARCHITECTURE, 95, 40, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
+    LTEXT "Destination volume:", IDC_STATIC, 18, 57, 74, 11
+    EDITTEXT IDC_DESTDRIVE, 95, 56, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
+    LTEXT "Destination directory:", IDC_STATIC, 18, 73, 74, 11
+    EDITTEXT IDC_PATH, 95, 72, 210, 13, ES_READONLY | ES_AUTOHSCROLL | WS_VISIBLE | NOT WS_BORDER | NOT WS_TABSTOP
+    AUTOCHECKBOX "I confirm that all the installation settings are correct. I also acknowledge that\nLiberNT is under development and may break on my computer or corrupt my data.",
+        IDC_CONFIRM_INSTALL, 7, 100, 303, 18, BS_MULTILINE | WS_TABSTOP
+    LTEXT "Check the box above, then click Install to start the installation.", IDC_STATIC, 7, 124, 303, 18
 END
 
 IDD_PROCESSPAGE DIALOGEX 0, 0, 317, 143
@@ -148,8 +141,8 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYS
 CAPTION "LiberNT Setup"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "Install files...", IDC_ACTIVITY, 20, 50, 277, 10
-    LTEXT "test.txt", IDC_ITEM, 30, 80, 257, 10
+    LTEXT "Preparing the installation...", IDC_ACTIVITY, 20, 50, 277, 10
+    LTEXT "", IDC_ITEM, 30, 80, 257, 10
     CONTROL "", IDC_PROCESSPROGRESS, "msctls_progress32", PBS_SMOOTH | WS_CHILD | WS_VISIBLE | WS_BORDER, 7, 120, 303, 8
 END
 
@@ -162,7 +155,7 @@ BEGIN
     LTEXT "The first LiberNT installation step has completed successfully.", IDC_STATIC, 115, 40, 195, 24
     // The following text can be replaced by IDS_FINISH_NO_REBOOT at runtime;
     // please ensure it can hold in the text control!
-    LTEXT "Setup will now restart your computer to continue with the second installation step.\n\nYour computer will automatically restart in 15 seconds or when you click on Restart.", IDC_FINISHTEXT, 115, 78, 195, 56
+    LTEXT "Setup will now restart your computer to continue with the second installation step. Do not start from the installation media again.\n\nYour computer will automatically restart in 15 seconds or when you click on Restart.", IDC_FINISHTEXT, 115, 70, 195, 64
     CONTROL "", IDC_RESTART_PROGRESS, "msctls_progress32", PBS_SMOOTH | WS_CHILD | WS_VISIBLE | WS_BORDER, 115, 135, 188, 12
 END
 
@@ -190,16 +183,16 @@ BEGIN
     IDS_UPDATESUBTITLE "Choose which existing LiberNT installation you want to update or repair."
     IDS_DEVICETITLE "Setup the basic devices"
     IDS_DEVICESUBTITLE "Set the settings of display and keyboard."
-    IDS_DRIVETITLE "Setup the installation partition and system folder"
-    IDS_DRIVESUBTITLE "Prepare installation partition, system folder and bootloader."
+    IDS_DRIVETITLE "Where do you want to install LiberNT?"
+    IDS_DRIVESUBTITLE "Select a partition or unpartitioned space, then click Next. Unpartitioned space is partitioned and formatted for you."
     IDS_SUMMARYTITLE "Installation Summary"
-    IDS_SUMMARYSUBTITLE "List installation properties to check before apply to the installation device."
-    IDS_PROCESSTITLE "Setup partition, copy files and setup system"
-    IDS_PROCESSSUBTITLE "Create and format partition, copy files, install and setup bootloader."
+    IDS_SUMMARYSUBTITLE "Review these settings before the installation changes your disk."
+    IDS_PROCESSTITLE "Installing LiberNT"
+    IDS_PROCESSSUBTITLE "Setup prepares the disk, copies the files and installs the bootloader. This can take a few minutes."
     IDS_ABORTSETUP "LiberNT is not completely installed on your computer. If you quit Setup now, you will need to run Setup again to install LiberNT. Really quit?"
     IDS_ABORTSETUP2 "Abort installation?"
     IDS_NO_TXTSETUP_SIF "Unable to find 'txtsetup.sif'.\nSetup is unable to continue."
-    IDS_FINISH_NO_REBOOT "Setup needs to restart your computer to continue with the second installation step.\n\nClick on Restart to immediately restart your computer.\nClick on Postpone to quit the installer and restart your computer at a later time."
+    IDS_FINISH_NO_REBOOT "Setup needs to restart your computer to continue with the second installation step. Do not start from the installation media again.\n\nClick on Restart to immediately restart your computer.\nClick on Postpone to quit the installer and restart your computer at a later time."
     IDS_ABORT_NO_REBOOT "Click on Restart to immediately restart your computer.\nClick on Close to quit the installer."
     IDS_INSTALLBTN "&Install"
     IDS_RESTARTBTN "&Restart"

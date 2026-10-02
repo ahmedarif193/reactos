@@ -539,7 +539,7 @@ TypeDlgProc(
                     {
                         pSetupData->CurrentInstallation = NULL;
                         pSetupData->RepairUpdateFlag = FALSE;
-                        SetWindowLongPtrW(hwndDlg, DWLP_MSGRESULT, IDD_DEVICEPAGE);
+                        SetWindowLongPtrW(hwndDlg, DWLP_MSGRESULT, IDD_DRIVEPAGE);
                     }
 
                     return TRUE;
@@ -864,7 +864,7 @@ UpgradeRepairDlgProc(
                     /* Skip the upgrade and do the usual new-installation workflow */
                     pSetupData->CurrentInstallation = NULL;
                     pSetupData->RepairUpdateFlag = FALSE;
-                    PropSheet_SetCurSelByID(GetParent(hwndDlg), IDD_DEVICEPAGE);
+                    PropSheet_SetCurSelByID(GetParent(hwndDlg), IDD_DRIVEPAGE);
                     return TRUE;
                 }
             }
@@ -1139,6 +1139,7 @@ SummaryDlgProc(
                 case PSN_SETACTIVE:
                 {
                     WCHAR CurrentItemText[256];
+                    PWSTR Separator;
 
                     ASSERT(InstallPartition);
 
@@ -1155,12 +1156,32 @@ SummaryDlgProc(
                     else
                     {
                         StringCchCopyW(CurrentItemText, ARRAYSIZE(CurrentItemText),
-                                       L"New ReactOS installation");
+                                       L"New LiberNT installation");
                     }
                     SetDlgItemTextW(hwndDlg, IDC_INSTALLTYPE, CurrentItemText);
 
-                    SetDlgItemTextW(hwndDlg, IDC_INSTALLSOURCE, L"n/a");
-                    SetDlgItemTextW(hwndDlg, IDC_ARCHITECTURE, L"n/a");
+                    Separator = NULL;
+                    if (GetModuleFileNameW(NULL, CurrentItemText, ARRAYSIZE(CurrentItemText)) != 0)
+                        Separator = wcsrchr(CurrentItemText, L'\\');
+                    if (Separator != NULL)
+                    {
+                        *Separator = UNICODE_NULL;
+                        SetDlgItemTextW(hwndDlg, IDC_INSTALLSOURCE, CurrentItemText);
+                    }
+                    else
+                    {
+                        SetDlgItemTextW(hwndDlg, IDC_INSTALLSOURCE, L"n/a");
+                    }
+
+                    if (GetEnvironmentVariableW(L"PROCESSOR_ARCHITECTURE", CurrentItemText,
+                                                ARRAYSIZE(CurrentItemText)) != 0)
+                    {
+                        SetDlgItemTextW(hwndDlg, IDC_ARCHITECTURE, CurrentItemText);
+                    }
+                    else
+                    {
+                        SetDlgItemTextW(hwndDlg, IDC_ARCHITECTURE, L"n/a");
+                    }
 
                     GetSettingDescription(GetCurrentListEntry(pSetupData->USetupData.ComputerList),
                                           CurrentItemText,

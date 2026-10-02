@@ -831,6 +831,71 @@ GetSelectedPartition(
     return PartItem;
 }
 
+static
+HTLITEM
+FindDefaultInstallRegion(
+    _In_ HWND hTreeList)
+{
+    HTLITEM hDisk;
+    HTLITEM hRegion;
+    HTLITEM hBest = NULL;
+    ULONGLONG BestSize = 0;
+
+    for (hDisk = TreeList_GetNextItem(hTreeList, NULL, TVGN_ROOT);
+         hDisk;
+         hDisk = TreeList_GetNextSibling(hTreeList, hDisk))
+    {
+        for (hRegion = TreeList_GetChild(hTreeList, hDisk);
+             hRegion;
+             hRegion = TreeList_GetNextSibling(hTreeList, hRegion))
+        {
+            PPARTITEM PartItem = GetItemPartition(hTreeList, hRegion);
+            PPARTENTRY PartEntry;
+            ULONGLONG Size;
+
+            if (!PartItem)
+                continue;
+
+            PartEntry = PartItem->PartEntry;
+            if (PartEntry->IsPartitioned ||
+                PartitionCreateChecks(PartEntry, 0ULL, 0) != NOT_AN_ERROR)
+            {
+                continue;
+            }
+
+            Size = GetPartEntrySizeInBytes(PartEntry);
+            if (Size > BestSize)
+            {
+                BestSize = Size;
+                hBest = hRegion;
+            }
+        }
+    }
+
+    return hBest;
+}
+
+static
+VOID
+UpdateWizardButtons(
+    _In_ HWND hwndDlg,
+    _In_ HWND hTreeList)
+{
+    PPARTITEM PartItem = GetSelectedPartition(hTreeList, NULL);
+    PPARTENTRY PartEntry = PartItem ? PartItem->PartEntry : NULL;
+
+    if (PartEntry &&
+        ((PartEntry->IsPartitioned && PartEntry->Volume) ||
+         (!PartEntry->IsPartitioned && (PartitionCreateChecks(PartEntry, 0ULL, 0) == NOT_AN_ERROR))))
+    {
+        PropSheet_SetWizButtons(GetParent(hwndDlg), PSWIZB_BACK | PSWIZB_NEXT);
+    }
+    else
+    {
+        PropSheet_SetWizButtons(GetParent(hwndDlg), PSWIZB_BACK);
+    }
+}
+
 PVOL_CREATE_INFO
 FindVolCreateInTreeByVolume(
     _In_ HWND hTreeList,
@@ -1973,16 +2038,23 @@ DisableWizNext:
                 {
                     /* Keep the "Next" button disabled. It will be enabled
                      * only when the user selects a valid partition. */
-                    PropSheet_SetWizButtons(GetParent(hwndDlg), PSWIZB_BACK);
+                    UpdateWizardButtons(hwndDlg, GetDlgItem(hwndDlg, IDC_PARTITION));
                     break;
                 }
 
                 case PSN_QUERYINITIALFOCUS:
                 {
                     /* Give the focus on and select the first item */
+                    HTLITEM hDefault;
+
                     hList = GetDlgItem(hwndDlg, IDC_PARTITION);
                     // TreeList_SetFocusItem(hList, 1, 1);
-                    TreeList_SelectItem(hList, 1);
+                    hDefault = FindDefaultInstallRegion(hList);
+                    if (hDefault)
+                        TreeList_SelectItem(hList, hDefault);
+                    else
+                        TreeList_SelectItem(hList, 1);
+                    UpdateWizardButtons(hwndDlg, hList);
                     SetWindowLongPtr(hwndDlg, DWLP_MSGRESULT, (LONG_PTR)hList);
                     return TRUE;
                 }
@@ -2000,6 +2072,12 @@ DisableWizNext:
 
                     /* Do not close the wizard too soon */
                     SetWindowLongPtrW(hwndDlg, DWLP_MSGRESULT, TRUE);
+                    return TRUE;
+                }
+
+                case PSN_WIZBACK:
+                {
+                    SetWindowLongPtrW(hwndDlg, DWLP_MSGRESULT, IDD_TYPEPAGE);
                     return TRUE;
                 }
 
