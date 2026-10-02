@@ -1,7 +1,7 @@
 /*
- * PROJECT:     Kernel Mode Device Framework
+ * PROJECT:     LiberNT PSDK
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Missing headers (usbspec.h)
+ * PURPOSE:     USB specification definitions
  * COPYRIGHT:   2020 Victor Perevertkin (victor.perevertkin@reactos.org)
  */
 

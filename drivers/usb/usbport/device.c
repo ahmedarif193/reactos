@@ -10,16 +10,6 @@
 #define NDEBUG
 #include <debug.h>
 
-#define USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR_TYPE 0x30
-
-typedef struct _USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR {
-    UCHAR bLength;
-    UCHAR bDescriptorType;
-    UCHAR bMaxBurst;
-    UCHAR bmAttributes;
-    USHORT wBytesPerInterval;
-} USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR, *PUSB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR;
-
 static
 VOID
 USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
@@ -618,7 +608,7 @@ SkipSetInterface:
 
                 PipeHandle->SsCompanionValid = TRUE;
                 PipeHandle->SsCompanionMaxBurst = SsCompanion->bMaxBurst;
-                PipeHandle->SsCompanionAttributes = SsCompanion->bmAttributes;
+                PipeHandle->SsCompanionAttributes = SsCompanion->bmAttributes.AsUchar;
                 PipeHandle->SsCompanionBytesPerInterval = SsCompanion->wBytesPerInterval;
             }
         }
