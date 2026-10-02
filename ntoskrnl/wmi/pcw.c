@@ -16,7 +16,7 @@
 typedef struct _PCW_REGISTRATION
 {
     ULONG Reserved;
-} PCW_REGISTRATION, *PPCW_REGISTRATION;
+} PCW_REGISTRATION;
 
 typedef struct _PCW_INSTANCE
 {
@@ -24,7 +24,7 @@ typedef struct _PCW_INSTANCE
     UNICODE_STRING Name;
     ULONG Count;
     PVOID Data;
-} PCW_INSTANCE, *PPCW_INSTANCE;
+} PCW_INSTANCE;
 
 /* FUNCTIONS *****************************************************************/
 
@@ -32,7 +32,7 @@ NTSTATUS
 NTAPI
 PcwRegister(
     _Outptr_ PPCW_REGISTRATION *Registration,
-    _In_ PVOID RegistrationInformation)
+    _In_ PPCW_REGISTRATION_INFORMATION RegistrationInformation)
 {
     PPCW_REGISTRATION NewRegistration;
 
@@ -53,7 +53,7 @@ PcwRegister(
 VOID
 NTAPI
 PcwUnregister(
-    _In_opt_ PPCW_REGISTRATION Registration)
+    _In_ PPCW_REGISTRATION Registration)
 {
     if (Registration != NULL)
         ExFreePoolWithTag(Registration, 'wcPP');
@@ -62,11 +62,11 @@ PcwUnregister(
 NTSTATUS
 NTAPI
 PcwAddInstance(
-    _In_ PVOID Buffer,
+    _In_ PPCW_BUFFER Buffer,
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG Id,
     _In_ ULONG Count,
-    _In_reads_opt_(Count) PVOID Data)
+    _In_reads_(Count) PPCW_DATA Data)
 {
     UNREFERENCED_PARAMETER(Buffer);
     UNREFERENCED_PARAMETER(Name);
@@ -88,7 +88,7 @@ PcwCreateInstance(
     _In_ PPCW_REGISTRATION Registration,
     _In_ PCUNICODE_STRING Name,
     _In_ ULONG Count,
-    _In_reads_opt_(Count) PVOID Data)
+    _In_reads_(Count) PPCW_DATA Data)
 {
     PPCW_INSTANCE NewInstance;
     SIZE_T AllocationSize;
@@ -121,7 +121,7 @@ PcwCreateInstance(
 VOID
 NTAPI
 PcwCloseInstance(
-    _In_opt_ PPCW_INSTANCE Instance)
+    _In_ PPCW_INSTANCE Instance)
 {
     if (Instance != NULL)
         ExFreePoolWithTag(Instance, 'icPP');
