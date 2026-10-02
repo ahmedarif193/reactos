@@ -118,6 +118,10 @@ FUNC InternalDispatchException
     xor rax, rax
     mov [rcx + EXCEPTION_RECORD_ExceptionRecord], rax
     mov rax, [rbp + KTRAP_FRAME_Rip]
+    cmp dword ptr [rcx + EXCEPTION_RECORD_ExceptionCode], STATUS_BREAKPOINT
+    jne InternalDispatchExceptionAddress
+    dec rax
+InternalDispatchExceptionAddress:
     mov [rcx + EXCEPTION_RECORD_ExceptionAddress], rax
     mov [rcx + EXCEPTION_RECORD_NumberParameters], edx
     mov [rcx + EXCEPTION_RECORD_ExceptionInformation + HEX(00)], r9
@@ -263,7 +267,7 @@ FUNC KiBreakpointTrap
 
 KiBreakpointTrapKMode:
     /* Dispatch the exception */
-    DispatchException STATUS_BREAKPOINT, 3, BREAKPOINT_BREAK, 0, 0
+    DispatchException STATUS_BREAKPOINT, 1, BREAKPOINT_BREAK, 0, 0
 
     /* Return */
     ExitTrap TF_SAVE_ALL
