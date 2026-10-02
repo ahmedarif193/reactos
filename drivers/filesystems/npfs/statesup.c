@@ -195,11 +195,17 @@ NpSetListeningPipeState(IN PNP_CCB Ccb,
     {
         case FILE_PIPE_DISCONNECTED_STATE:
 
-            Status = NpCancelWaiter(&NpVcb->WaitQueue,
-                                    &Ccb->Fcb->FullName,
-                                    STATUS_SUCCESS,
-                                    List);
-            if (!NT_SUCCESS(Status)) return Status;
+            if (Ccb->Fcb->FullName.Length != 0)
+            {
+                Status = NpCancelWaiter(&NpVcb->WaitQueue,
+                                        &Ccb->Fcb->FullName,
+                                        STATUS_SUCCESS,
+                                        List);
+                if (!NT_SUCCESS(Status)) return Status;
+            }
+
+            RemoveEntryList(&Ccb->CcbEntry);
+            InsertTailList(&Ccb->Fcb->CcbList, &Ccb->CcbEntry);
 
         //
         // Drop down on purpose

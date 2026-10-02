@@ -153,7 +153,7 @@ NpSetClientProcess(IN PDEVICE_OBJECT DeviceObject,
     /* Only kernel calls are allowed! */
     if (IoStackLocation->MinorFunction != IRP_MN_KERNEL_CALL)
     {
-        return STATUS_ACCESS_DENIED;
+        return STATUS_NOT_SUPPORTED;
     }
 
     /* Decode the file object and check the node type */
@@ -213,8 +213,7 @@ NTAPI
 NpAssignEvent(IN PDEVICE_OBJECT DeviceObject,
               IN PIRP Irp)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return STATUS_NOT_SUPPORTED;
 }
 
 NTSTATUS
@@ -222,8 +221,71 @@ NTAPI
 NpQueryEvent(IN PDEVICE_OBJECT DeviceObject,
              IN PIRP Irp)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return STATUS_NOT_SUPPORTED;
+}
+
+static
+NTSTATUS
+NpGetConnectionAttribute(IN PDEVICE_OBJECT DeviceObject,
+                         IN PIRP Irp)
+{
+    static const struct
+    {
+        PCSTR Name;
+        BOOLEAN Client;
+        BOOLEAN Session;
+    } Attributes[] =
+    {
+        { "ClientProcessId", TRUE, FALSE },
+        { "ClientSessionId", TRUE, TRUE },
+        { "ServerProcessId", FALSE, FALSE },
+        { "ServerSessionId", FALSE, TRUE },
+    };
+    PIO_STACK_LOCATION IoStack;
+    NODE_TYPE_CODE NodeTypeCode;
+    ULONG NamedPipeEnd, NameLength, i;
+    PNP_CCB Ccb;
+    PCSTR Name;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    NodeTypeCode = NpDecodeFileObject(IoStack->FileObject, NULL, &Ccb, &NamedPipeEnd);
+    if (NodeTypeCode == 0) return STATUS_PIPE_DISCONNECTED;
+    if (NodeTypeCode != NPFS_NTC_CCB) return STATUS_INVALID_PARAMETER;
+
+    Name = Irp->AssociatedIrp.SystemBuffer;
+    NameLength = IoStack->Parameters.FileSystemControl.InputBufferLength;
+    if (!Name || !NameLength || Name[NameLength - 1] != ANSI_NULL) return STATUS_INVALID_PARAMETER;
+
+    for (i = 0; i < RTL_NUMBER_OF(Attributes); i++)
+    {
+        if (strcmp(Name, Attributes[i].Name) == 0) break;
+    }
+    if (i == RTL_NUMBER_OF(Attributes)) return STATUS_NOT_FOUND;
+
+    if (NamedPipeEnd == FILE_PIPE_CLIENT_END)
+    {
+        if (Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE) return STATUS_PIPE_DISCONNECTED;
+    }
+    else if (Attributes[i].Client &&
+             (Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE ||
+              Ccb->NamedPipeState == FILE_PIPE_LISTENING_STATE))
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    if (IoStack->Parameters.FileSystemControl.OutputBufferLength < sizeof(ULONG))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    if (Attributes[i].Client)
+        *(PULONG)Irp->AssociatedIrp.SystemBuffer = Attributes[i].Session ? Ccb->ClientSessionId : Ccb->ClientProcessId;
+    else
+        *(PULONG)Irp->AssociatedIrp.SystemBuffer = Attributes[i].Session ? Ccb->ServerSessionId : Ccb->ServerProcessId;
+
+    Irp->IoStatus.Information = sizeof(ULONG);
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -840,6 +902,11 @@ NpCommonFileSystemControl(IN PDEVICE_OBJECT DeviceObject,
         case FSCTL_PIPE_SET_CLIENT_PROCESS:
             NpAcquireExclusiveVcb();
             Status = NpSetClientProcess(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE:
+            NpAcquireSharedVcb();
+            Status = NpGetConnectionAttribute(DeviceObject, Irp);
             break;
 
         default:

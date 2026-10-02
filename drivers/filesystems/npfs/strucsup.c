@@ -69,22 +69,33 @@ NpDeleteFcb(IN PNP_FCB Fcb,
     Dcb = Fcb->ParentDcb;
     if (Fcb->CurrentInstances) NpBugCheck(0, 0, 0);
 
-    NpCancelWaiter(&NpVcb->WaitQueue,
-                   &Fcb->FullName,
-                   STATUS_OBJECT_NAME_NOT_FOUND,
-                   ListEntry);
-
-    RemoveEntryList(&Fcb->DcbEntry);
+    if (!IsListEmpty(&Fcb->DcbEntry)) NpUnlinkFcb(Fcb, ListEntry);
 
     if (Fcb->SecurityDescriptor)
     {
         ObDereferenceSecurityDescriptor(Fcb->SecurityDescriptor, 1);
     }
 
-    RtlRemoveUnicodePrefix(&NpVcb->PrefixTable, &Fcb->PrefixTableEntry);
-    ExFreePool(Fcb->FullName.Buffer);
+    if (Fcb->FullName.Buffer) ExFreePool(Fcb->FullName.Buffer);
     ExFreePool(Fcb);
     NpCheckForNotify(Dcb, TRUE, ListEntry);
+}
+
+VOID
+NTAPI
+NpUnlinkFcb(IN PNP_FCB Fcb,
+            IN PLIST_ENTRY ListEntry)
+{
+    PAGED_CODE();
+
+    NpCancelWaiter(&NpVcb->WaitQueue,
+                   &Fcb->FullName,
+                   STATUS_OBJECT_NAME_NOT_FOUND,
+                   ListEntry);
+
+    RemoveEntryList(&Fcb->DcbEntry);
+    InitializeListHead(&Fcb->DcbEntry);
+    RtlRemoveUnicodePrefix(&NpVcb->PrefixTable, &Fcb->PrefixTableEntry);
 }
 
 VOID
@@ -224,6 +235,24 @@ NpCreateFcb(IN PNP_DCB Dcb,
     Length = PipeName->Length;
     MaximumLength = Length + sizeof(UNICODE_NULL);
 
+    if (Length == 0)
+    {
+        Fcb = ExAllocatePoolWithTag(PagedPool, sizeof(*Fcb), NPFS_FCB_TAG);
+        if (!Fcb) return STATUS_INSUFFICIENT_RESOURCES;
+
+        RtlZeroMemory(Fcb, sizeof(*Fcb));
+        Fcb->MaximumInstances = MaximumInstances;
+        Fcb->Timeout = Timeout;
+        Fcb->NodeType = NPFS_NTC_FCB;
+        Fcb->ParentDcb = Dcb;
+        InitializeListHead(&Fcb->CcbList);
+        InitializeListHead(&Fcb->DcbEntry);
+        Fcb->NamedPipeConfiguration = NamedPipeConfiguration;
+        Fcb->NamedPipeType = NamedPipeType;
+        *NewFcb = Fcb;
+        return STATUS_SUCCESS;
+    }
+
     if ((Length < sizeof(WCHAR)) || (MaximumLength < Length))
     {
         return STATUS_INVALID_PARAMETER;
@@ -336,6 +365,8 @@ NpCreateCcb(IN PNP_FCB Fcb,
     Ccb->NamedPipeState = State;
     Ccb->ReadMode[FILE_PIPE_SERVER_END] = ReadMode;
     Ccb->CompletionMode[FILE_PIPE_SERVER_END] = CompletionMode;
+    Ccb->ServerProcessId = HandleToUlong(PsGetCurrentProcessId());
+    Ccb->ServerSessionId = PsGetProcessSessionId(PsGetCurrentProcess());
 
     Status = NpInitializeDataQueue(&Ccb->DataQueue[FILE_PIPE_INBOUND], InQuota);
     if (!NT_SUCCESS(Status))

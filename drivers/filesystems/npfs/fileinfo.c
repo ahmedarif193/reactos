@@ -232,6 +232,7 @@ NpQueryNameInfo(IN PNP_CCB Ccb,
     {
         NameLength = Ccb->Fcb->FullName.Length;
         Name = Ccb->Fcb->FullName.Buffer;
+        if (NameLength == 0) return STATUS_OBJECT_PATH_INVALID;
     }
 
     InfoBuffer->FileNameLength = NameLength;
@@ -352,7 +353,7 @@ NpQueryPipeLocalInfo(IN PNP_FCB Fcb,
         {
             InfoBuffer->ReadDataAvailable = OutQueue->BytesInQueue - OutQueue->ByteOffset;
         }
-        InfoBuffer->WriteQuotaAvailable = OutQueue->Quota - InQueue->QuotaUsed;
+        InfoBuffer->WriteQuotaAvailable = InQueue->Quota - InQueue->QuotaUsed;
     }
 
     return STATUS_SUCCESS;

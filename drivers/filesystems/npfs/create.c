@@ -207,6 +207,8 @@ NpCreateClientEnd(IN PNP_FCB Fcb,
 
     Ccb->ClientSession = NULL;
     Ccb->Process = IoThreadToProcess(Thread);
+    Ccb->ClientProcessId = HandleToUlong(PsGetProcessId(Ccb->Process));
+    Ccb->ClientSessionId = PsGetProcessSessionId(Ccb->Process);
 
     IoStatus.Information = FILE_OPENED;
     IoStatus.Status = STATUS_SUCCESS;
@@ -629,10 +631,10 @@ NpCreateExistingNamedPipe(IN PNP_FCB Fcb,
                                   &Ccb);
     if (!NT_SUCCESS(IoStatus.Status)) return IoStatus;
 
-    IoStatus.Status = NpCancelWaiter(&NpVcb->WaitQueue,
-                                     &Fcb->FullName,
-                                     FALSE,
-                                     List);
+    IoStatus.Status = Fcb->FullName.Length ? NpCancelWaiter(&NpVcb->WaitQueue,
+                                                            &Fcb->FullName,
+                                                            FALSE,
+                                                            List) : STATUS_SUCCESS;
     if (!NT_SUCCESS(IoStatus.Status))
     {
         --Ccb->Fcb->CurrentInstances;
@@ -825,6 +827,24 @@ NpFsdCreateNamedPipe(IN PDEVICE_OBJECT DeviceObject,
     if (RelatedFileObject)
     {
         Fcb = (PNP_FCB)((ULONG_PTR)RelatedFileObject->FsContext & ~1);
+        if (Fcb && (Fcb->NodeType == NPFS_NTC_ROOT_DCB) && (FileName.Length == 0))
+        {
+            IoStatus.Status = NpCreateNewNamedPipe((PNP_DCB)Fcb,
+                                                   FileObject,
+                                                   FileName,
+                                                   IoStack->Parameters.CreatePipe.
+                                                   SecurityContext->DesiredAccess,
+                                                   IoStack->Parameters.CreatePipe.
+                                                   SecurityContext->AccessState,
+                                                   Disposition,
+                                                   ShareAccess,
+                                                   Parameters,
+                                                   Process,
+                                                   &DeferredList,
+                                                   &IoStatus);
+            goto Quickie;
+        }
+
         if (!(Fcb) ||
             (Fcb->NodeType != NPFS_NTC_ROOT_DCB) ||
             (FileName.Length < sizeof(WCHAR)) ||
@@ -902,6 +922,27 @@ NpFsdCreateNamedPipe(IN PDEVICE_OBJECT DeviceObject,
             goto Quickie;
         }
         IoStatus.Status = STATUS_OBJECT_NAME_INVALID;
+        goto Quickie;
+    }
+
+    if (!Fcb->ServerOpenCount)
+    {
+        PNP_DCB Dcb = Fcb->ParentDcb;
+
+        NpUnlinkFcb(Fcb, &DeferredList);
+        IoStatus.Status = NpCreateNewNamedPipe(Dcb,
+                                               FileObject,
+                                               FileName,
+                                               IoStack->Parameters.CreatePipe.
+                                               SecurityContext->DesiredAccess,
+                                               IoStack->Parameters.CreatePipe.
+                                               SecurityContext->AccessState,
+                                               Disposition,
+                                               ShareAccess,
+                                               Parameters,
+                                               Process,
+                                               &DeferredList,
+                                               &IoStatus);
         goto Quickie;
     }
 

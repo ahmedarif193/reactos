@@ -197,7 +197,7 @@ CreatePipe(PHANDLE hReadPipe,
 
     /* Now try opening it for write access */
     Status = NtOpenFile(&WritePipeHandle,
-                        FILE_GENERIC_WRITE,
+                        FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES,
                         &ObjectAttributes,
                         &StatusBlock,
                         FILE_SHARE_READ,
@@ -1410,7 +1410,7 @@ NpGetPipeAttribute(IN HANDLE hNamedPipe,
     IO_STATUS_BLOCK Iosb;
     NTSTATUS Status;
 
-    Status = NtFsControlFile(hNamedPipe, NULL, NULL, NULL, &Iosb, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, (PVOID)AttributeName, AttributeNameSize, AttributeValue, sizeof(*AttributeValue));
+    Status = NtFsControlFile(hNamedPipe, NULL, NULL, NULL, &Iosb, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, (PVOID)AttributeName, AttributeNameSize, AttributeValue, AttributeValue ? sizeof(*AttributeValue) : 0);
     if (Status == STATUS_PENDING)
     {
         Status = NtWaitForSingleObject(hNamedPipe, FALSE, NULL);

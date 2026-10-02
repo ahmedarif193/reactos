@@ -18,5 +18,5 @@ BOOL WINAPI GetNamedPipeClientProcessId( HANDLE pipe, ULONG *id )
 
     return set_ntstatus( NtFsControlFile( pipe, NULL, NULL, NULL, &iosb,
                                           FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, (void *)"ClientProcessId",
-                                          sizeof("ClientProcessId"), id, sizeof(*id) ));
+                                          sizeof("ClientProcessId"), id, id ? sizeof(*id) : 0 ));
 }
