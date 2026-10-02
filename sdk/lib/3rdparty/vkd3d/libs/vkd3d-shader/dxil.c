@@ -1049,9 +1049,13 @@ static uint32_t sm6_parser_read_bits(struct sm6_parser *sm6, unsigned int length
     if (!length)
         return 0;
 
+#ifdef __REACTOS__
+    if (length > 32 || sm6->bitpos >= 32 || sm6_parser_is_end(sm6))
+#else
     VKD3D_ASSERT(length < 32);
 
     if (sm6_parser_is_end(sm6))
+#endif
     {
         sm6->p.status = VKD3D_ERROR_INVALID_SHADER;
         return 0;
@@ -1063,18 +1067,37 @@ static uint32_t sm6_parser_read_bits(struct sm6_parser *sm6, unsigned int length
     if (l <= length)
     {
         ++sm6->ptr;
+#ifdef __REACTOS__
+        if (l < length)
+#else
         if (sm6_parser_is_end(sm6) && l < length)
+#endif
         {
+#ifdef __REACTOS__
+            if (sm6_parser_is_end(sm6))
+            {
+                sm6->p.status = VKD3D_ERROR_INVALID_SHADER;
+                return bits;
+            }
+            bits |= *sm6->ptr << l;
+#else
             sm6->p.status = VKD3D_ERROR_INVALID_SHADER;
             return bits;
+#endif
         }
         sm6->bitpos = 0;
+#ifndef __REACTOS__
         bits |= *sm6->ptr << l;
+#endif
         prev_len = l;
     }
     sm6->bitpos += length - prev_len;
 
+#ifdef __REACTOS__
+    return length == 32 ? bits : bits & ((1u << length) - 1);
+#else
     return bits & ((1 << length) - 1);
+#endif
 }
 
 static uint64_t sm6_parser_read_vbr(struct sm6_parser *sm6, unsigned int length)
@@ -1085,13 +1108,21 @@ static uint64_t sm6_parser_read_vbr(struct sm6_parser *sm6, unsigned int length)
     if (!length)
         return 0;
 
+#ifdef __REACTOS__
+    if (length > 32 || sm6_parser_is_end(sm6))
+#else
     if (sm6_parser_is_end(sm6))
+#endif
     {
         sm6->p.status = VKD3D_ERROR_INVALID_SHADER;
         return 0;
     }
 
+#ifdef __REACTOS__
+    flag = 1u << (length - 1);
+#else
     flag = 1 << (length - 1);
+#endif
     mask = flag - 1;
     do
     {
@@ -1273,6 +1304,10 @@ static enum vkd3d_result dxil_abbrev_init(struct dxil_abbrev *abbrev, unsigned i
             case ABBREV_FIXED:
             case ABBREV_VBR:
                 abbrev->operands[i].context = sm6_parser_read_vbr(sm6, 5);
+#ifdef __REACTOS__
+                if (abbrev->operands[i].context > 32)
+                    return VKD3D_ERROR_INVALID_SHADER;
+#endif
                 abbrev->operands[i].read_operand = (type == ABBREV_FIXED) ? sm6_parser_read_fixed_operand
                         : sm6_parser_read_vbr_operand;
                 break;
@@ -5392,6 +5427,15 @@ static bool sm6_parser_emit_reg_composite_construct(struct sm6_parser *sm6,
     bool all_constant = true;
     unsigned int i;
 
+#ifdef __REACTOS__
+    if (!component_count)
+    {
+        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND_COUNT,
+                "Cannot construct a zero-component vector.");
+        return false;
+    }
+
+#endif
     if (component_count == 1)
     {
         *reg = operand_regs[0];
@@ -5461,14 +5505,31 @@ static bool sm6_parser_emit_coordinate_construct(struct sm6_parser *sm6, const s
         struct function_emission_state *state, struct vsir_operand *reg)
 {
     struct vsir_operand operand_regs[VKD3D_VEC4_SIZE];
+#ifdef __REACTOS__
+    unsigned int i, component_count = max_operands;
+#else
     unsigned int component_count;
+#endif
 
+#ifdef __REACTOS__
+    if (!z_operand)
+#else
     for (component_count = 0; component_count < max_operands; ++component_count)
+#endif
     {
+#ifdef __REACTOS__
+        while (component_count > 1 && operands[component_count - 1]->value_type == VALUE_TYPE_UNDEFINED)
+            --component_count;
+#else
         if (!z_operand && operands[component_count]->value_type == VALUE_TYPE_UNDEFINED)
             break;
         vsir_operand_from_dxil_value(&operand_regs[component_count], operands[component_count], 0, sm6);
+#endif
     }
+#ifdef __REACTOS__
+    for (i = 0; i < component_count; ++i)
+        vsir_operand_from_dxil_value(&operand_regs[i], operands[i], 0, sm6);
+#endif
 
     if (z_operand)
         vsir_operand_from_dxil_value(&operand_regs[component_count++], z_operand, 0, sm6);
@@ -9115,7 +9176,11 @@ static const struct sm6_metadata_value *sm6_parser_metadata_get_value(const stru
         index -= sm6->metadata_tables[i].count;
     }
 
+#ifdef __REACTOS__
+    return (i < ARRAY_SIZE(sm6->metadata_tables)) ? &sm6->metadata_tables[i].values[index] : NULL;
+#else
     return (index < sm6->metadata_tables[i].count) ? &sm6->metadata_tables[i].values[index] : NULL;
+#endif
 }
 
 static bool metadata_node_get_unary_uint(const struct sm6_metadata_node *node, unsigned int *operand,
