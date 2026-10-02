@@ -898,7 +898,8 @@ RtlpUnwindInternal(
                                      NULL);
 
                     /* Restore the context pointer and establisher frame. */
-                    DispatcherContext.ContextRecord = &UnwindContext;
+                    DispatcherContext.ContextRecord =
+                        (HandlerType == UNW_FLAG_UHANDLER) ? ContextRecord : &UnwindContext;
                     EstablisherFrame = DispatcherContext.EstablisherFrame;
 
                     /* Set the exception flags to indicate that we collided
@@ -906,6 +907,10 @@ RtlpUnwindInternal(
                        will run any additional handlers from the previous
                        unwind. */
                     ExceptionRecord->ExceptionFlags |= EXCEPTION_COLLIDED_UNWIND;
+                    if (EstablisherFrame == (ULONG64)TargetFrame)
+                    {
+                        ExceptionRecord->ExceptionFlags |= EXCEPTION_TARGET_UNWIND;
+                    }
                     continue;
                 }
 
