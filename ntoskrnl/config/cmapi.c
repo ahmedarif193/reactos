@@ -2489,7 +2489,7 @@ CmUnloadKey(
     HvFree(Hive);
 
     /* Free the hive */
-    CmpFree(CmHive, TAG_CM);
+    CmpDereferenceHive(CmHive);
 
     return STATUS_SUCCESS;
 }
@@ -2508,7 +2508,11 @@ CmpDereferenceHive(PCMHIVE Hive)
 {
     ASSERT(Hive->ReferenceCount > 0);
     if (InterlockedDecrement(&Hive->ReferenceCount) != 0) return;
-    ASSERT(Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE);
+    if (!(Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE))
+    {
+        CmpFree(Hive, TAG_CM);
+        return;
+    }
     ASSERT(Hive->RootKcb == NULL);
     CmpCloseHiveFiles(Hive);
     if (Hive->DeletedKcbTable) CmpFree(Hive->DeletedKcbTable, TAG_CM);

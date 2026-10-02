@@ -164,6 +164,7 @@ CmpInitializeHive(
     }
 
     Hive->Hive.HiveFlags |= HiveFlags & HIVE_NOLAZYFLUSH;
+    Hive->ReferenceCount = 1;
 
     /* Lock the hive list */
     ExAcquirePushLockExclusive(&CmpHiveListHeadLock);
@@ -519,7 +520,6 @@ CmpLoadAppHive(POBJECT_ATTRIBUTES TargetKey,
         if (!NT_SUCCESS(Status)) goto Exit;
         Primary = Log = NULL;
         Hive->Flags |= CMHIVE_FLAG_APPLICATION_HIVE;
-        Hive->ReferenceCount = 1;
         Hive->Hive.HiveFlags |= HIVE_NOLAZYFLUSH;
         Constructed = TRUE;
         Hive->DeletedKcbTable = ExAllocatePoolWithTag(PagedPool,

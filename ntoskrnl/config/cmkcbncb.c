@@ -681,7 +681,7 @@ CmpCleanUpKcbCacheWithLock(IN PCM_KEY_CONTROL_BLOCK Kcb,
             CmpDereferenceKeyControlBlockWithLock(Parent,LockHeldExclusively) :
             CmpDelayDerefKeyControlBlock(Parent);
     }
-    if (Hive->Flags & CMHIVE_FLAG_APPLICATION_HIVE) CmpDereferenceHive(Hive);
+    CmpDereferenceHive(Hive);
 }
 
 VOID
@@ -1034,9 +1034,10 @@ CmpCreateKeyControlBlock(IN PHHIVE Hive,
         }
     }
 
-    if (Kcb && !FoundKcb && (((PCMHIVE)Hive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE))
+    if (Kcb && !FoundKcb)
     {
-        Kcb->ExtFlags |= CM_KCB_NO_DELAY_CLOSE;
+        if (((PCMHIVE)Hive)->Flags & CMHIVE_FLAG_APPLICATION_HIVE)
+            Kcb->ExtFlags |= CM_KCB_NO_DELAY_CLOSE;
         CmpReferenceHive((PCMHIVE)Hive);
     }
 
