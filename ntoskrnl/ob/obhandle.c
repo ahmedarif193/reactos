@@ -3407,6 +3407,8 @@ ObInsertObject(IN PVOID Object,
             }
             else
             {
+                POBJECT_TYPE FoundType = ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(InsertObject));
+
                 /* Check if this was a symbolic link */
                 if (ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(InsertObject)) ==
                     ObpSymbolicLinkObjectType)
@@ -3416,7 +3418,8 @@ ObInsertObject(IN PVOID Object,
                 }
 
                 /* Caller wanted to create a new object, fail */
-                Status = STATUS_OBJECT_NAME_COLLISION;
+                Status = (FoundType != ObjectType) ? STATUS_OBJECT_TYPE_MISMATCH :
+                                                     STATUS_OBJECT_NAME_COLLISION;
             }
         }
 

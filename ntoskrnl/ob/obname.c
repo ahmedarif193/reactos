@@ -549,7 +549,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
             {
                 /* We can't parse a name if we don't have a parse routine */
                 ObDereferenceObject(RootDirectory);
-                return STATUS_INVALID_HANDLE;
+                return STATUS_OBJECT_TYPE_MISMATCH;
             }
 
             /* Set default parse count */
