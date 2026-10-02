@@ -3423,7 +3423,7 @@
 @ stub -arch=arm64 ZwSetInformationEnlistment
 @ stub -arch=arm64 ZwSetInformationResourceManager
 @ stub -arch=arm64 ZwSetInformationTransaction
-@ stdcall -arch=arm64 ZwSetInformationVirtualMemory()
+@ stdcall ZwSetInformationVirtualMemory(ptr long ptr ptr ptr long)
 @ stub -arch=win64 ZwSetTimerEx
 @ stub -arch=win64 ZwTraceControl
 @ stdcall -version=0x602+ -arch=win64 ZwUpdateWnfStateData(ptr ptr long ptr ptr long long)

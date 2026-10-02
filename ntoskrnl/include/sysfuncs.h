@@ -254,9 +254,7 @@
     SVC_(SetInformationProcess, 4)
     SVC_(SetInformationThread, 4)
     SVC_(SetInformationToken, 4)
-#if SYSFUNCS_TARGET_ARM64 && !defined(SYSFUNCS_WOW64)
     SVC_WRAP_(SetInformationVirtualMemory, 6)
-#endif
     SVC_(SetIntervalProfile, 2)
     SVC_(SetIoCompletion, 5)
     SVC_(SetLdtEntries, 6)
