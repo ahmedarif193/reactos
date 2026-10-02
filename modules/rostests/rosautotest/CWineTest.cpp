@@ -242,6 +242,8 @@ CWineTest::GetNextTest()
 
         /* Move the pointer to the first test */
         pStart = strchr(m_ListBuffer, '\n');
+        if (!pStart || strncmp(m_ListBuffer, "Valid test names:", 17) != 0)
+            TESTEXCEPTION("The --list command did not print a test list\n");
         pStart += 5;
     }
 
