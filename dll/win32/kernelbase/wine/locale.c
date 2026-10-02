@@ -302,9 +302,7 @@ struct norm_table
 
 static CPTABLEINFO ansi_cpinfo;
 static CPTABLEINFO oem_cpinfo;
-#ifndef __REACTOS__
 static UINT unix_cp = CP_UTF8;
-#endif
 static LCID system_lcid;
 static LCID user_lcid;
 static HKEY intl_key;
@@ -5431,11 +5429,7 @@ static const WCHAR *get_message( DWORD flags, const void *src, UINT id, UINT lan
         {
             HMODULE module = (HMODULE)src;
             if (!module) module = GetModuleHandleW( 0 );
-#ifdef __REACTOS__
-            status = RtlFindMessage( module, (ULONG_PTR)RT_MESSAGETABLE, lang, id, &entry );
-#else
             status = RtlFindMessage( module, RT_MESSAGETABLE, lang, id, &entry );
-#endif
         }
         if (status && (flags & FORMAT_MESSAGE_FROM_SYSTEM))
         {
@@ -5443,7 +5437,7 @@ static const WCHAR *get_message( DWORD flags, const void *src, UINT id, UINT lan
             if (HRESULT_SEVERITY(id) == SEVERITY_ERROR && HRESULT_FACILITY(id) == FACILITY_WIN32)
                 id = HRESULT_CODE( id );
 #ifdef __REACTOS__
-            status = RtlFindMessage( GetModuleHandleW( L"kernel32.dll" ), (ULONG_PTR)RT_MESSAGETABLE, lang, id, &entry );
+            status = RtlFindMessage( GetModuleHandleW( L"kernel32.dll" ), RT_MESSAGETABLE, lang, id, &entry );
 #else
             status = RtlFindMessage( kernelbase_handle, RT_MESSAGETABLE, lang, id, &entry );
 #endif
