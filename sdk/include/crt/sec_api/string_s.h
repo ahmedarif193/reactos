@@ -8,6 +8,7 @@
 #define _INC_STRING_S
 
 #include <string.h>
+#include <corecrt.h>
 
 #if defined(MINGW_HAS_SECURE_API)
 
@@ -306,6 +307,13 @@ extern "C" {
 
 #ifdef __cplusplus
 }
+#endif
+
+#if defined(__cplusplus) && defined(__DEFINE_CPP_OVERLOAD_SECURE_FUNC_0_2)
+__DEFINE_CPP_OVERLOAD_SECURE_FUNC_0_1(errno_t, strcat_s, char, _Dst, const char *, _Src)
+__DEFINE_CPP_OVERLOAD_SECURE_FUNC_0_1(errno_t, strcpy_s, char, _Dst, const char *, _Src)
+__DEFINE_CPP_OVERLOAD_SECURE_FUNC_0_2(errno_t, strncat_s, char, _Dst, const char *, _Src, size_t, _MaxCount)
+__DEFINE_CPP_OVERLOAD_SECURE_FUNC_0_2(errno_t, strncpy_s, char, _Dst, const char *, _Src, size_t, _MaxCount)
 #endif
 
 #endif /* MINGW_HAS_SECURE_API */

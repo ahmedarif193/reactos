@@ -543,6 +543,52 @@ WRITE_REGISTER_BUFFER_ULONG(
     *Dst = *Buffer++;
   __asm__ __volatile__("dsb st" ::: "memory");
 }
+
+FORCEINLINE
+ULONG64
+READ_REGISTER_ULONG64(
+  IN volatile ULONG64 *Register)
+{
+  ULONG64 Value = *(volatile ULONG64 * const)Register;
+  __asm__ __volatile__("dsb ld" ::: "memory");
+  return Value;
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_BUFFER_ULONG64(
+  IN volatile ULONG64 *Register,
+  IN PULONG64 Buffer,
+  IN ULONG Count)
+{
+  volatile const ULONG64 *Src = (volatile const ULONG64 *)Register;
+  while (Count--)
+    *Buffer++ = *Src;
+  __asm__ __volatile__("dsb ld" ::: "memory");
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_ULONG64(
+  IN volatile ULONG64 *Register,
+  IN ULONG64 Value)
+{
+  *(volatile ULONG64 *)Register = Value;
+  __asm__ __volatile__("dsb st" ::: "memory");
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_BUFFER_ULONG64(
+  IN volatile ULONG64 *Register,
+  IN PULONG64 Buffer,
+  IN ULONG Count)
+{
+  volatile ULONG64 *Dst = (volatile ULONG64 *)Register;
+  while (Count--)
+    *Dst = *Buffer++;
+  __asm__ __volatile__("dsb st" ::: "memory");
+}
 #endif
 
 #if defined(_M_RISCV64) && !defined(NO_PORT_MACROS)
@@ -691,6 +737,56 @@ VOID
 WRITE_REGISTER_BUFFER_ULONG(
   IN volatile ULONG *Register,
   IN PULONG Buffer,
+  IN ULONG Count)
+{
+  _RISCV64_REGISTER_FENCE();
+  while (Count--)
+    *Register = *Buffer++;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+ULONG64
+READ_REGISTER_ULONG64(
+  IN volatile ULONG64 *Register)
+{
+  ULONG64 Value;
+
+  _RISCV64_REGISTER_FENCE();
+  Value = *Register;
+  _RISCV64_REGISTER_FENCE();
+  return Value;
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_BUFFER_ULONG64(
+  IN volatile ULONG64 *Register,
+  OUT PULONG64 Buffer,
+  IN ULONG Count)
+{
+  _RISCV64_REGISTER_FENCE();
+  while (Count--)
+    *Buffer++ = *Register;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_ULONG64(
+  IN volatile ULONG64 *Register,
+  IN ULONG64 Value)
+{
+  _RISCV64_REGISTER_FENCE();
+  *Register = Value;
+  _RISCV64_REGISTER_FENCE();
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_BUFFER_ULONG64(
+  IN volatile ULONG64 *Register,
+  IN PULONG64 Buffer,
   IN ULONG Count)
 {
   _RISCV64_REGISTER_FENCE();
@@ -962,6 +1058,60 @@ WRITE_REGISTER_USHORT(
 #endif
   InterlockedOr(&Sync, 1);
 }
+
+#if defined(_WIN64)
+
+FORCEINLINE
+ULONG64
+READ_REGISTER_ULONG64(
+  IN volatile ULONG64 *Register)
+{
+#if defined(__GNUC__)
+  ULONG64 Value;
+  __asm__ __volatile__("movq %1, %0" : "=r"(Value) : "m"(*Register) : "memory");
+  return Value;
+#else
+  return *Register;
+#endif
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_BUFFER_ULONG64(
+  IN volatile ULONG64 *Register,
+  IN PULONG64 Buffer,
+  IN ULONG Count)
+{
+  __movsq(Buffer, (const ULONG64 *)Register, Count);
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_ULONG64(
+  IN volatile ULONG64 *Register,
+  IN ULONG64 Value)
+{
+  LONG Synch;
+#if defined(__GNUC__)
+  __asm__ __volatile__("movq %1, %0" : "=m"(*Register) : "r"(Value) : "memory");
+#else
+  *Register = Value;
+#endif
+  InterlockedOr(&Synch, 1);
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_BUFFER_ULONG64(
+  IN volatile ULONG64 *Register,
+  IN PULONG64 Buffer,
+  IN ULONG Count)
+{
+  __movsq((ULONG64 *)Register, Buffer, Count);
+  KeMemoryBarrier();
+}
+#endif
+
 #endif
 
 #if defined(USE_DMA_MACROS) && !defined(_NTHAL_) && \

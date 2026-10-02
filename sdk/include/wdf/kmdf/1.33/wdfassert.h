@@ -72,7 +72,7 @@ RtlAssert(
 //
 #define WDFVERIFY(exp) {                                            \
     if ((WdfDriverGlobals->DriverFlags & WdfVerifyOn) && !(exp)) {  \
-        RtlAssert( #exp, __FILE__, __LINE__, NULL );                \
+        RtlAssert( (PVOID)#exp, (PVOID)__FILE__, __LINE__, NULL );  \
     }                                                               \
 }
 

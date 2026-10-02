@@ -24,7 +24,11 @@
 #define _MINIPORT_
 
 #ifndef _NTDDK_
+#define DEVICE_FLAGS CM_DEVICE_FLAGS
+#define PDEVICE_FLAGS PCM_DEVICE_FLAGS
 #include <ntddk.h>
+#undef DEVICE_FLAGS
+#undef PDEVICE_FLAGS
 #endif
 
 #ifdef __cplusplus

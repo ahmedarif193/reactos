@@ -1157,7 +1157,15 @@ VOID
 ExInitializeSetTimerParameters(
   _Out_ PEXT_SET_PARAMETERS Parameters)
 {
-  ASSERT(FALSE);
+  RtlZeroMemory(Parameters, sizeof(*Parameters));
+}
+
+FORCEINLINE
+VOID
+ExInitializeDeleteTimerParameters(
+  _Out_ PEXT_DELETE_PARAMETERS Parameters)
+{
+  RtlZeroMemory(Parameters, sizeof(*Parameters));
 }
 
 #endif // NTDDI_WINBLUE

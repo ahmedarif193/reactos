@@ -106,8 +106,10 @@
 /* Returns the byte offset of the specified structure's member */
 #if !defined(__GNUC__) && !defined(__clang__)
  #define FIELD_OFFSET(Type, Field) ((LONG)(LONG_PTR)&(((Type*) 0)->Field))
+ #define UFIELD_OFFSET(Type, Field) ((ULONG)(LONG_PTR)&(((Type*) 0)->Field))
 #else
  #define FIELD_OFFSET(Type, Field) ((LONG)__builtin_offsetof(Type, Field))
+ #define UFIELD_OFFSET(Type, Field) ((ULONG)__builtin_offsetof(Type, Field))
 #endif /* __GNUC__ */
 
 /* Returns the type's alignment */
@@ -710,8 +712,8 @@ extern "C++" {
  #define RTL_NUMBER_OF_V2(A) sizeof(SAFE_RTL_NUMBER_OF(A))
 #elif defined(__GNUC__)
  #define RTL_NUMBER_OF_V2(A) \
-     (({ int _check_array_type[__builtin_types_compatible_p(typeof(A), typeof(&A[0])) ? -1 : 1]; (void)_check_array_type; }), \
-     RTL_NUMBER_OF_V1(A))
+     (RTL_NUMBER_OF_V1(A) + \
+      0 * sizeof(char[__builtin_types_compatible_p(typeof(A), typeof(&A[0])) ? -1 : 1]))
 #else
  #define RTL_NUMBER_OF_V2(A) RTL_NUMBER_OF_V1(A)
 #endif
