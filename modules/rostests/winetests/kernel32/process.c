@@ -5753,12 +5753,6 @@ START_TEST(process)
      *  console:        check if console creation parameters work
      */
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: ReactOS's job support is too basic for these tests.\n");
-        return;
-    }
-#endif
     if (!pCreateJobObjectW)
     {
         win_skip("No job object support\n");
