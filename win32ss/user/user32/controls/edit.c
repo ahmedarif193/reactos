@@ -3851,15 +3851,38 @@ static LRESULT EDIT_WM_LButtonDown(EDITSTATE *es, DWORD keys, INT x, INT y)
 	BOOL after_wrap;
 
 #ifdef __REACTOS__
+	HWND hwnd = es->hwndSelf;
+	BOOL hide_caret;
+
 	if (!(es->style & ES_MULTILINE) && !(es->flags & EF_FOCUSED))
-            SetFocus(es->hwndSelf);
+	{
+            SetFocus(hwnd);
+            if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 0;
+	}
 #endif
 	es->bCaptureState = TRUE;
 	SetCapture(es->hwndSelf);
+#ifdef __REACTOS__
+	if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 0;
+	hide_caret = !(es->style & ES_MULTILINE) && (es->flags & EF_FOCUSED);
+	if (hide_caret) hide_caret = HideCaret(hwnd);
+	if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 0;
+#endif
 	EDIT_ConfinePoint(es, &x, &y);
 	e = EDIT_CharFromPos(es, x, y, &after_wrap);
 	EDIT_EM_SetSel(es, (keys & MK_SHIFT) ? es->selection_start : e, e, after_wrap);
+#ifdef __REACTOS__
+	if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 0;
+#endif
 	EDIT_EM_ScrollCaret(es);
+#ifdef __REACTOS__
+	if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 0;
+	if (hide_caret && (es->flags & EF_FOCUSED))
+	{
+	    ShowCaret(hwnd);
+	    if ((EDITSTATE *)GetWindowLongPtrW(hwnd, 0) != es) return 0;
+	}
+#endif
 	es->region_posx = es->region_posy = 0;
 	SetTimer(es->hwndSelf, 0, 100, NULL);
 
