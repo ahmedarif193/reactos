@@ -1246,7 +1246,7 @@ HANDLE
 NTAPI
 PsGetCurrentProcessId(VOID)
 {
-    return (HANDLE)PsGetCurrentProcess()->UniqueProcessId;
+    return PsGetCurrentThread()->Cid.UniqueProcess;
 }
 
 /*
