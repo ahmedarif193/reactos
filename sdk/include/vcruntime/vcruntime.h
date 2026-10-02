@@ -250,7 +250,7 @@ _CRT_BEGIN_C_HEADER
  #define _NODISCARD
 #endif // _HAS_NODISCARD
 
-#if defined _M_X64 || defined _M_ARM || defined _M_ARM64
+#if !defined(_M_IX86) && !defined(__i386__)
     #define _UNALIGNED __unaligned
 #else
     #define _UNALIGNED

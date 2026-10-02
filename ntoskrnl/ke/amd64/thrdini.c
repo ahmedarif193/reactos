@@ -179,9 +179,6 @@ KiSwapContextResume(
     PKIPCR Pcr = (PKIPCR)KeGetPcr();
     PKPROCESS OldProcess, NewProcess;
     PVOID CompatTeb = NULL;
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-    BOOLEAN ReadyTransition, ReapThread;
-#endif
 
     /* Setup ring 0 stack pointer */
     Pcr->TssBase->Rsp0 = (ULONG64)NewThread->InitialStack;
@@ -241,27 +238,7 @@ KiSwapContextResume(
 #if (NTDDI_VERSION < NTDDI_WIN7)
     OldThread->SwapBusy = FALSE;
 #else
-    NewThread->Running = TRUE;
-    KeMemoryBarrier();
-
-    KiAcquireThreadLock(OldThread);
-    OldThread->Running = FALSE;
-    KeMemoryBarrier();
-    ReadyTransition = OldThread->ReadyTransition;
-    OldThread->ReadyTransition = FALSE;
-    ReapThread = (OldThread->State == Terminated);
-    ASSERT(!ReadyTransition || (OldThread->State == DeferredReady));
-    ASSERT(!ReadyTransition || !ReapThread);
-    KiReleaseThreadLock(OldThread);
-
-    if (ReadyTransition)
-    {
-        KiDeferredReadyThread(OldThread);
-    }
-    else if (ReapThread)
-    {
-        KiQueueThreadForReaping(OldThread);
-    }
+    KiCompleteThreadSwitch(OldThread, NewThread);
 #endif
 
     /* Kernel APCs may be pending */

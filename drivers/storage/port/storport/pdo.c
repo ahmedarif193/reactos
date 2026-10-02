@@ -133,27 +133,36 @@ typedef struct _PORT_SRBEX_REQUEST
     SRBEX_DATA_SCSI_CDB16 Scsi;
 } PORT_SRBEX_REQUEST, *PPORT_SRBEX_REQUEST;
 
-static PVOID NTAPI PortAllocateContiguousBlock(_In_ POOL_TYPE PoolType, _In_ SIZE_T NumberOfBytes, _In_ ULONG Tag)
+NTSTATUS PortFdoInitializeRequestPools(_In_ PFDO_DEVICE_EXTENSION FdoExtension)
 {
-    PHYSICAL_ADDRESS HighestAddress;
-
-    UNREFERENCED_PARAMETER(PoolType);
-    UNREFERENCED_PARAMETER(Tag);
-    HighestAddress.QuadPart = MAXULONGLONG;
-    return MmAllocateContiguousMemory(NumberOfBytes, HighestAddress);
-}
-
-static VOID NTAPI PortFreeContiguousBlock(_In_ PVOID Buffer)
-{
-    MmFreeContiguousMemory(Buffer);
-}
-
-VOID PortFdoInitializeRequestPools(_In_ PFDO_DEVICE_EXTENSION FdoExtension)
-{
-    ULONG MaximumPages;
+    ULONG MaximumPages, Size, Count, Index;
+    PHYSICAL_ADDRESS Address;
 
     if (FdoExtension->RequestPoolsReady)
-        return;
+        return STATUS_SUCCESS;
+
+    /* Common buffers must be allocated at PASSIVE_LEVEL. Reserve the
+     * device-visible request extensions here, before paging/interrupt I/O. */
+    InitializeSListHead(&FdoExtension->FreeSrbExtensions);
+    Size = FdoExtension->Miniport.PortConfig.SrbExtensionSize;
+    if (Size)
+    {
+        if (Size > MAXULONG - (PAGE_SIZE - 1))
+            return STATUS_INVALID_PARAMETER;
+        Size = ROUND_TO_PAGES(Size);
+        Count = FdoExtension->Miniport.PortConfig.MaxNumberOfIO;
+        if (!Count || Count == SP_UNINITIALIZED_VALUE)
+            Count = 256;
+        if (Count > MAXULONG / Size)
+            return STATUS_INVALID_PARAMETER;
+        FdoExtension->SrbExtensionPool = PortAllocateDmaBuffer(
+            FdoExtension, Count * Size, FALSE, &Address);
+        if (!FdoExtension->SrbExtensionPool)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        for (Index = 0; Index < Count; Index++)
+            InterlockedPushEntrySList(&FdoExtension->FreeSrbExtensions,
+                (PSLIST_ENTRY)((PUCHAR)FdoExtension->SrbExtensionPool + Index * Size));
+    }
 
     MaximumPages = FdoExtension->Miniport.PortConfig.NumberOfPhysicalBreaks + 2;
     FdoExtension->SglLookasideSize = FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, List) + MaximumPages * sizeof(STOR_SCATTER_GATHER_ELEMENT);
@@ -161,84 +170,59 @@ VOID PortFdoInitializeRequestPools(_In_ PFDO_DEVICE_EXTENSION FdoExtension)
     ExInitializeNPagedLookasideList(&FdoExtension->SrbContextLookaside, NULL, NULL, 0, sizeof(STOR_SRB_CONTEXT), TAG_SRB_CONTEXT, 0);
     ExInitializeNPagedLookasideList(&FdoExtension->MiniportSrbLookaside, NULL, NULL, 0, sizeof(PORT_SRBEX_REQUEST), TAG_SRB_CONTEXT, 0);
     ExInitializeNPagedLookasideList(&FdoExtension->SglLookaside, NULL, NULL, 0, FdoExtension->SglLookasideSize, TAG_SGL, 0);
-    if (FdoExtension->Miniport.PortConfig.SrbExtensionSize != 0)
-    {
-        ExInitializeNPagedLookasideList(&FdoExtension->SrbExtensionLookaside,
-                                        PortAllocateContiguousBlock,
-                                        PortFreeContiguousBlock,
-                                        0,
-                                        FdoExtension->Miniport.PortConfig.SrbExtensionSize,
-                                        TAG_SRB_CONTEXT,
-                                        0);
-    }
     FdoExtension->RequestPoolsReady = TRUE;
+    return STATUS_SUCCESS;
 }
 
-static PSTOR_SCATTER_GATHER_LIST PortBuildScatterGatherList(_In_ PFDO_DEVICE_EXTENSION FdoExtension, _In_ PMDL Mdl, _In_ ULONG TransferLength, _Out_ PULONG AllocationSize)
+/* The DMA adapter owns map registers until request completion. Its callback
+ * may run synchronously or later, always at DISPATCH_LEVEL. */
+static VOID NTAPI
+PortDmaListControl(PDEVICE_OBJECT DeviceObject, PIRP UnusedIrp,
+                   PSCATTER_GATHER_LIST DmaList, PVOID Context)
 {
-    PSTOR_SCATTER_GATHER_LIST Sgl;
-    STOR_PHYSICAL_ADDRESS Address;
-    PPFN_NUMBER Pfn;
-    ULONG PageCount, Index, Offset, Remaining, Length, Elements, Size;
+    PIRP Irp = Context;
+    PSTOR_SRB_CONTEXT Request = PortGetSrbContext(Irp);
+    PFDO_DEVICE_EXTENSION Fdo = Request->FdoExtension;
+    PVOID Srb = Request->MiniportSrb ? (PVOID)Request->MiniportSrb : Request->LegacySrb;
+    ULONG Size, Index;
 
-    *AllocationSize = 0;
-
-    if ((Mdl == NULL) || (TransferLength == 0))
-        return NULL;
-
-    Offset = MmGetMdlByteOffset(Mdl);
-    PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl), TransferLength);
-    Pfn = MmGetMdlPfnArray(Mdl);
-
-    /* Worst case is one element per page. */
-    Size = FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, List) + PageCount * sizeof(STOR_SCATTER_GATHER_ELEMENT);
-
-    if (FdoExtension->RequestPoolsReady && Size <= FdoExtension->SglLookasideSize)
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(UnusedIrp);
+    Request->DmaList = DmaList;
+    if (DmaList->NumberOfElements >
+        (MAXULONG - FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, List)) /
+        sizeof(STOR_SCATTER_GATHER_ELEMENT))
+        goto Fail;
+    Size = FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, List) +
+           DmaList->NumberOfElements * sizeof(STOR_SCATTER_GATHER_ELEMENT);
+    if (Fdo->RequestPoolsReady && Size <= Fdo->SglLookasideSize)
     {
-        Size = FdoExtension->SglLookasideSize;
-        Sgl = ExAllocateFromNPagedLookasideList(&FdoExtension->SglLookaside);
+        Size = Fdo->SglLookasideSize;
+        Request->Sgl = ExAllocateFromNPagedLookasideList(&Fdo->SglLookaside);
     }
     else
+        Request->Sgl = ExAllocatePoolWithTag(NonPagedPool, Size, TAG_SGL);
+    if (!Request->Sgl)
+        goto Fail;
+    Request->SglAllocationSize = Size;
+    RtlZeroMemory(Request->Sgl, Size);
+    Request->Sgl->NumberOfElements = DmaList->NumberOfElements;
+    for (Index = 0; Index < DmaList->NumberOfElements; Index++)
     {
-        Sgl = ExAllocatePoolWithTag(NonPagedPool, Size, TAG_SGL);
+        Request->Sgl->List[Index].PhysicalAddress = DmaList->Elements[Index].Address;
+        Request->Sgl->List[Index].Length = DmaList->Elements[Index].Length;
     }
-    if (Sgl == NULL)
-        return NULL;
+    if (MiniportBuildIo(&Fdo->Miniport, Srb))
+        MiniportStartIo(&Fdo->Miniport, Srb);
+    return;
 
-    RtlZeroMemory(Sgl, Size);
-
-    Elements = 0;
-    Remaining = TransferLength;
-
-    for (Index = 0; (Index < PageCount) && (Remaining > 0); Index++)
-    {
-        Length = PAGE_SIZE - Offset;
-        if (Length > Remaining)
-            Length = Remaining;
-
-        Address.QuadPart = ((ULONGLONG)Pfn[Index] << PAGE_SHIFT) + Offset;
-
-        if ((Elements > 0) && ((Sgl->List[Elements - 1].PhysicalAddress.QuadPart + Sgl->List[Elements - 1].Length) == Address.QuadPart))
-        {
-            Sgl->List[Elements - 1].Length += Length;
-        }
-        else
-        {
-            Sgl->List[Elements].PhysicalAddress = Address;
-            Sgl->List[Elements].Length = Length;
-            Elements++;
-        }
-
-        Remaining -= Length;
-        Offset = 0;
-    }
-
-    Sgl->NumberOfElements = Elements;
-    *AllocationSize = Size;
-
-    DPRINT("PortBuildScatterGatherList: %lu bytes -> %lu element(s)\n", TransferLength, Elements);
-
-    return Sgl;
+Fail:
+    Request->LegacySrb->SrbStatus = SRB_STATUS_ERROR;
+    Request->LegacySrb->SrbExtension = NULL;
+    PortFreeSrbContext(Irp);
+    Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
 }
 
 
@@ -309,10 +293,14 @@ static NTSTATUS PortDumpSubmit(_In_ PPORT_DUMP_CONTEXT DumpContext, _In_ UCHAR F
     {
         DumpContext->Srb.SrbFlags = SRB_FLAGS_DATA_OUT | SRB_FLAGS_DISABLE_SYNCH_TRANSFER | SRB_FLAGS_NO_QUEUE_FREEZE;
         DumpContext->Srb.DataTransferLength = Length;
-        DumpContext->Srb.DataBuffer = MmGetVirtualForPhysical(Buffer);
+        /* The dump path cannot allocate map registers. Its page-sized
+         * common buffer was mapped during normal device initialization. */
+        RtlCopyMemory(DumpContext->DataBuffer, MmGetVirtualForPhysical(Buffer), Length);
+        KeMemoryBarrier();
+        DumpContext->Srb.DataBuffer = DumpContext->DataBuffer;
 
         DumpContext->Sgl.NumberOfElements = 1;
-        DumpContext->Sgl.List[0].PhysicalAddress = Buffer;
+        DumpContext->Sgl.List[0].PhysicalAddress = DumpContext->DataAddress;
         DumpContext->Sgl.List[0].Length = Length;
 
         BlockAddress = DiskByteOffset / DumpContext->BytesPerSector;
@@ -376,7 +364,9 @@ VOID PortFreeDumpContext(_In_opt_ PPORT_DUMP_CONTEXT DumpContext)
     if (DumpContext->Irp != NULL)
         IoFreeIrp(DumpContext->Irp);
     if (DumpContext->SrbExtension != NULL)
-        MmFreeContiguousMemory(DumpContext->SrbExtension);
+        PortFreeDmaBuffer(DumpContext->PdoExtension->FdoExtension, DumpContext->SrbExtension);
+    if (DumpContext->DataBuffer != NULL)
+        PortFreeDmaBuffer(DumpContext->PdoExtension->FdoExtension, DumpContext->DataBuffer);
 
     ExFreePoolWithTag(DumpContext, TAG_DUMP_CONTEXT);
 }
@@ -385,7 +375,7 @@ NTSTATUS PortGetDumpInterface(_In_ PPDO_DEVICE_EXTENSION PdoExtension, _Out_ PRO
 {
     PFDO_DEVICE_EXTENSION FdoExtension;
     PPORT_DUMP_CONTEXT DumpContext;
-    PHYSICAL_ADDRESS HighestAddress;
+    PHYSICAL_ADDRESS LogicalAddress;
     ULONG SrbExtensionSize;
     ULONG BytesPerSector;
 
@@ -412,11 +402,16 @@ NTSTATUS PortGetDumpInterface(_In_ PPDO_DEVICE_EXTENSION PdoExtension, _Out_ PRO
         SrbExtensionSize = FdoExtension->Miniport.PortConfig.SrbExtensionSize;
         if (SrbExtensionSize != 0)
         {
-            HighestAddress.QuadPart = MAXULONGLONG;
-            DumpContext->SrbExtension = MmAllocateContiguousMemory(SrbExtensionSize, HighestAddress);
+            DumpContext->SrbExtension = PortAllocateDmaBuffer(
+                FdoExtension, SrbExtensionSize, FALSE, &LogicalAddress);
             if (DumpContext->SrbExtension == NULL)
                 goto Failure;
         }
+
+        DumpContext->DataBuffer = PortAllocateDmaBuffer(
+            FdoExtension, PAGE_SIZE, FALSE, &DumpContext->DataAddress);
+        if (!DumpContext->DataBuffer)
+            goto Failure;
 
         DumpContext->SrbContext.SrbExtensionAllocation = DumpContext->SrbExtension;
         DumpContext->SrbContext.Sgl = (PSTOR_SCATTER_GATHER_LIST)&DumpContext->Sgl;
@@ -540,6 +535,15 @@ VOID PortFreeSrbContext(_In_ PIRP Irp)
     FdoExtension = SrbContext->FdoExtension;
     Pooled = FdoExtension != NULL && FdoExtension->RequestPoolsReady;
 
+    if (SrbContext->DmaList)
+    {
+        KIRQL OldIrql;
+        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+        FdoExtension->DmaAdapter->DmaOperations->PutScatterGatherList(
+            FdoExtension->DmaAdapter, SrbContext->DmaList, SrbContext->WriteToDevice);
+        KeLowerIrql(OldIrql);
+    }
+
     if (SrbContext->Sgl != NULL)
     {
         if (Pooled && SrbContext->SglAllocationSize == FdoExtension->SglLookasideSize)
@@ -550,10 +554,8 @@ VOID PortFreeSrbContext(_In_ PIRP Irp)
 
     if (SrbContext->SrbExtensionAllocation != NULL)
     {
-        if (Pooled)
-            ExFreeToNPagedLookasideList(&FdoExtension->SrbExtensionLookaside, SrbContext->SrbExtensionAllocation);
-        else
-            MmFreeContiguousMemory(SrbContext->SrbExtensionAllocation);
+        InterlockedPushEntrySList(&FdoExtension->FreeSrbExtensions,
+                                 SrbContext->SrbExtensionAllocation);
     }
 
     if (SrbContext->MiniportSrb != NULL)
@@ -585,10 +587,10 @@ PortPdoScsi(
     PSTOR_SRB_CONTEXT SrbContext;
     PSCSI_REQUEST_BLOCK Srb;
     PVOID MiniportSrb;
-    PHYSICAL_ADDRESS HighestAddress;
     ULONG SrbExtensionSize;
     NTSTATUS Status;
     KIRQL Irql;
+    BOOLEAN Pending = FALSE;
     KLOCK_QUEUE_HANDLE LockHandle;
 
     DPRINT("PortPdoScsi(%p %p)\n", DeviceObject, Irp);
@@ -676,12 +678,8 @@ PortPdoScsi(
     SrbExtensionSize = FdoExtension->Miniport.PortConfig.SrbExtensionSize;
     if (SrbExtensionSize != 0)
     {
-        HighestAddress.QuadPart = MAXULONGLONG;
-
-        if (FdoExtension->RequestPoolsReady)
-            SrbContext->SrbExtensionAllocation = ExAllocateFromNPagedLookasideList(&FdoExtension->SrbExtensionLookaside);
-        else
-            SrbContext->SrbExtensionAllocation = MmAllocateContiguousMemory(SrbExtensionSize, HighestAddress);
+        SrbContext->SrbExtensionAllocation =
+            InterlockedPopEntrySList(&FdoExtension->FreeSrbExtensions);
         if (SrbContext->SrbExtensionAllocation == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -702,12 +700,6 @@ PortPdoScsi(
             goto Fail;
         }
 
-        SrbContext->Sgl = PortBuildScatterGatherList(FdoExtension, Irp->MdlAddress, Srb->DataTransferLength, &SrbContext->SglAllocationSize);
-        if (SrbContext->Sgl == NULL)
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Fail;
-        }
     }
 
     MiniportSrb = Srb;
@@ -725,6 +717,29 @@ PortPdoScsi(
      * StorPortNotification(RequestComplete), which completes this IRP.
      */
     IoMarkIrpPending(Irp);
+    Pending = TRUE;
+
+    if (Srb->DataTransferLength && Irp->MdlAddress)
+    {
+        PDMA_ADAPTER Adapter = FdoExtension->DmaAdapter;
+        if (Adapter->DmaOperations->Size <
+                FIELD_OFFSET(DMA_OPERATIONS, CalculateScatterGatherList) ||
+            !Adapter->DmaOperations->GetScatterGatherList ||
+            !Adapter->DmaOperations->PutScatterGatherList)
+        {
+            Status = STATUS_NOT_SUPPORTED;
+            goto Fail;
+        }
+        SrbContext->WriteToDevice = !!(Srb->SrbFlags & SRB_FLAGS_DATA_OUT);
+        KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+        Status = Adapter->DmaOperations->GetScatterGatherList(Adapter, DeviceObject,
+            Irp->MdlAddress, MmGetMdlVirtualAddress(Irp->MdlAddress),
+            Srb->DataTransferLength, PortDmaListControl, Irp, SrbContext->WriteToDevice);
+        KeLowerIrql(Irql);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+        return STATUS_PENDING;
+    }
 
     if (!MiniportBuildIo(&FdoExtension->Miniport, MiniportSrb))
         return STATUS_PENDING;
@@ -739,7 +754,10 @@ Fail:
     DPRINT1("PortPdoScsi: failing request (0x%08lx)\n", Status);
 
     if (Srb != NULL)
+    {
         Srb->SrbStatus = SRB_STATUS_ERROR;
+        Srb->SrbExtension = NULL;
+    }
 
     PortFreeSrbContext(Irp);
 
@@ -747,7 +765,7 @@ Fail:
     Irp->IoStatus.Status = Status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
-    return Status;
+    return Pending ? STATUS_PENDING : Status;
 }
 
 

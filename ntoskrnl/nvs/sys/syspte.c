@@ -29,14 +29,19 @@ ULONG64
 MiSysPteRangeReserve(
     _Inout_ PMI_SYSTEM_PTES Ptes,
     _In_ ULONG64 Count,
-    _In_ ULONG64 Alignment)
+    _In_ ULONG64 Alignment,
+    _Out_ NTSTATUS *FailureStatus)
 {
     PMI_VAD_NODE Node = MI_ALLOCATE(sizeof(*Node));
     ULONG64 Index = ~0ULL;
     KIRQL OldIrql;
 
+    *FailureStatus = STATUS_INSUFFICIENT_RESOURCES;
     if (Node == NULL)
+    {
+        *FailureStatus = STATUS_NO_MEMORY;
         return Index;
+    }
     RtlZeroMemory(Node, sizeof(*Node));
 
     MI_SPIN_ACQUIRE(&Ptes->Lock, &OldIrql);
@@ -208,17 +213,20 @@ MiSystemPteCacheHits(
     return Total;
 }
 
-ULONG64
-MiReserveSystemPtes(
+NTSTATUS
+MiReserveSystemPtesEx(
     _Inout_ PMI_SYSTEM System,
-    _In_ ULONG PageCount)
+    _In_ ULONG PageCount,
+    _Out_ PULONG64 Base)
 {
     PMI_SYSTEM_PTES Ptes = System->SystemPtes;
     ULONG64 Pages = PageCount;
     ULONG64 Index;
+    NTSTATUS FailureStatus;
 
+    *Base = 0;
     if (Ptes == NULL || PageCount == 0)
-        return 0;
+        return STATUS_INSUFFICIENT_RESOURCES;
 
     if (PageCount <= MI_SYSPTE_CLASS_MAX_PAGES)
     {
@@ -239,12 +247,17 @@ MiReserveSystemPtes(
         MI_SPIN_RELEASE(&Cache->Lock, OldIrql);
 
         if (Va != 0)
-            return Va;
+        {
+            *Base = Va;
+            return STATUS_SUCCESS;
+        }
     }
 
-    Index = MiSysPteRangeReserve(Ptes, Pages, (Pages <= MI_SYSPTE_CLASS_MAX_PAGES) ? Pages : 1);
+    Index = MiSysPteRangeReserve(Ptes, Pages,
+                                 (Pages <= MI_SYSPTE_CLASS_MAX_PAGES) ? Pages : 1,
+                                 &FailureStatus);
     if (Index == ~0ULL)
-        return 0;
+        return FailureStatus;
 
     {
         KIRQL OldIrql;
@@ -261,11 +274,23 @@ MiReserveSystemPtes(
         if (!NT_SUCCESS(Status))
         {
             MiSysPteRangeRelease(Ptes, Index, Pages);
-            return 0;
+            return Status;
         }
     }
     MI_ATOMIC_ADD64(&Ptes->FreePages, -(LONG64)Pages);
-    return Ptes->Base + (Index << PAGE_SHIFT);
+    *Base = Ptes->Base + (Index << PAGE_SHIFT);
+    return STATUS_SUCCESS;
+}
+
+ULONG64
+MiReserveSystemPtes(
+    _Inout_ PMI_SYSTEM System,
+    _In_ ULONG PageCount)
+{
+    ULONG64 Base;
+
+    MiReserveSystemPtesEx(System, PageCount, &Base);
+    return Base;
 }
 
 VOID

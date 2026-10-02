@@ -1776,99 +1776,7 @@ RtlUnwindEx(
     _In_opt_ PUNWIND_HISTORY_TABLE HistoryTable);
 
 #elif defined(_PPC_)
-#define CONTEXT_CONTROL    1L
-#define CONTEXT_FLOATING_POINT    2L
-#define CONTEXT_INTEGER    4L
-#define CONTEXT_DEBUG_REGISTERS    8L
-#define CONTEXT_FULL (CONTEXT_CONTROL|CONTEXT_FLOATING_POINT|CONTEXT_INTEGER)
-typedef struct _FLOATING_SAVE_AREA
-{
-    double Fpr0;
-    double Fpr1;
-    double Fpr2;
-    double Fpr3;
-    double Fpr4;
-    double Fpr5;
-    double Fpr6;
-    double Fpr7;
-    double Fpr8;
-    double Fpr9;
-    double Fpr10;
-    double Fpr11;
-    double Fpr12;
-    double Fpr13;
-    double Fpr14;
-    double Fpr15;
-    double Fpr16;
-    double Fpr17;
-    double Fpr18;
-    double Fpr19;
-    double Fpr20;
-    double Fpr21;
-    double Fpr22;
-    double Fpr23;
-    double Fpr24;
-    double Fpr25;
-    double Fpr26;
-    double Fpr27;
-    double Fpr28;
-    double Fpr29;
-    double Fpr30;
-    double Fpr31;
-    double Fpscr;
-} FLOATING_SAVE_AREA;
-
-typedef struct _CONTEXT {
-        FLOATING_SAVE_AREA FloatSave;
-    DWORD Gpr0;
-    DWORD Gpr1;
-    DWORD Gpr2;
-    DWORD Gpr3;
-    DWORD Gpr4;
-    DWORD Gpr5;
-    DWORD Gpr6;
-    DWORD Gpr7;
-    DWORD Gpr8;
-    DWORD Gpr9;
-    DWORD Gpr10;
-    DWORD Gpr11;
-    DWORD Gpr12;
-    DWORD Gpr13;
-    DWORD Gpr14;
-    DWORD Gpr15;
-    DWORD Gpr16;
-    DWORD Gpr17;
-    DWORD Gpr18;
-    DWORD Gpr19;
-    DWORD Gpr20;
-    DWORD Gpr21;
-    DWORD Gpr22;
-    DWORD Gpr23;
-    DWORD Gpr24;
-    DWORD Gpr25;
-    DWORD Gpr26;
-    DWORD Gpr27;
-    DWORD Gpr28;
-    DWORD Gpr29;
-    DWORD Gpr30;
-    DWORD Gpr31;
-    DWORD Cr;
-    DWORD Xer;
-    DWORD Msr;
-    DWORD Iar;
-    DWORD Lr;
-    DWORD Ctr;
-    DWORD ContextFlags;
-    DWORD Fill[3];
-    DWORD Dr0;
-    DWORD Dr1;
-    DWORD Dr2;
-    DWORD Dr3;
-    DWORD Dr4;
-    DWORD Dr5;
-    DWORD Dr6;
-    DWORD Dr7;
-} CONTEXT;
+$include(ppc/ketypes.h)
 #elif defined(_ALPHA_)
 #define CONTEXT_ALPHA    0x20000
 #define CONTEXT_CONTROL    (CONTEXT_ALPHA|1L)
@@ -5339,23 +5247,17 @@ FORCEINLINE PVOID GetCurrentFiber(VOID)
 #endif
 }
 #elif defined(_M_PPC)
-FORCEINLINE unsigned long _read_teb_dword(const unsigned long Offset)
-{
-    unsigned long result;
-    __asm__("\tadd 7,13,%1\n"
-            "\tlwz %0,0(7)\n"
-            : "=r" (result)
-            : "r" (Offset)
-            : "r7");
-    return result;
-}
+/* Windows NT PowerPC keeps the TEB address in r13. */
 FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
 {
-    return (struct _TEB *)_read_teb_dword(0x18);
+    struct _TEB *Teb;
+    __asm__("mr %0, 13" : "=r"(Teb));
+    return Teb;
 }
 FORCEINLINE PVOID GetCurrentFiber(VOID)
 {
-    return _read_teb_dword(0x10);
+    /* NT_TIB.FiberData, which is an anonymous union member. */
+    return *(PVOID *)((PUCHAR)NtCurrentTeb() + 0x10);
 }
 #elif defined(_M_RISCV64)
 /* ReactOS-private NT TEB register; not ELF thread-pointer-relative TLS. */

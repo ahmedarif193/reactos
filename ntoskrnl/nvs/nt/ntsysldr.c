@@ -74,9 +74,14 @@ MiAllocateSystemImage(
 
     *ImageBase = NULL;
 
-    Base = MiReserveSystemPtes(&MiSystem, Pages);
-    if (Base == 0)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    do
+    {
+        Status = MiReserveSystemPtesEx(&MiSystem, Pages, &Base);
+    } while (Status == STATUS_NO_MEMORY && NT_SUCCESS(MiWaitForMemory(Status, &Attempts)));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Attempts = 0;
 
     do
     {
@@ -2815,4 +2820,3 @@ MmGetSystemRoutineAddress(IN PUNICODE_STRING SystemRoutineName)
     RtlFreeAnsiString(&AnsiRoutineName);
     return ProcAddress;
 }
-

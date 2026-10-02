@@ -20,6 +20,15 @@
 
 #include <w32ksvc64.h>
 
+#elif defined(_M_PPC)
+
+    .text
+    .set SyscallId, 0x1000
+
+#define SVC_(name, argcount) STUB_U name, argcount
+
+#include <w32ksvc32.h>
+
 #else
 
 .code

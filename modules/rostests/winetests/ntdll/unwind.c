@@ -33,7 +33,9 @@
 #include "rtlsupportapi.h"
 #include "wine/test.h"
 
-#ifndef __i386__
+/* These cases encode the ARM/ARM64/AMD64 packed runtime-function ABI.
+ * NT PowerPC uses a different function table and public unwind contract. */
+#if defined(__arm__) || defined(__aarch64__) || defined(__x86_64__)
 
 static void *code_mem;
 static HMODULE ntdll;
@@ -3450,10 +3452,10 @@ START_TEST(unwind)
     test_dynamic_unwind();
 }
 
-#else  /* !__i386__ */
+#else  /* supported packed runtime-function ABI */
 
 START_TEST(unwind)
 {
 }
 
-#endif  /* !__i386__ */
+#endif  /* supported packed runtime-function ABI */

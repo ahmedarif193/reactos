@@ -12,7 +12,13 @@ NTAPI
 Kii386SpinOnSpinLock(PKSPIN_LOCK SpinLock, ULONG Flags);
 #endif
 
-#if defined(_WIN64)
+/* The legacy x86/ARM HAL entry points still store ordinary spinlock state.
+ * Keep their kernel counterparts compatible until both sides are converted.
+ * All other providers use the pointer-sized MCS queue below, on either width. */
+#if defined(_M_IX86) || defined(_M_ARM)
+#define KX_LEGACY_HAL_QUEUED_LOCKS
+#endif
+
 FORCEINLINE
 ULONG_PTR
 KxLoadAcquirePointer(
@@ -29,8 +35,6 @@ KxStoreReleasePointer(
 {
     WritePointerRelease(Address, Value);
 }
-#endif
-
 //
 // Spinlock Acquisition at IRQL >= DISPATCH_LEVEL
 //
@@ -122,8 +126,6 @@ KxReleaseSpinLock(
        memory accesses across the borders of spinlocks */
     KeMemoryBarrierWithoutFence();
 }
-
-#if defined(_WIN64)
 
 #define KX_LOCK_QUEUE_WAIT  ((ULONG_PTR)LOCK_QUEUE_WAIT)
 #define KX_LOCK_QUEUE_OWNER ((ULONG_PTR)LOCK_QUEUE_OWNER)
@@ -262,5 +264,3 @@ KxTryToAcquireQueuedSpinLock(
     return TRUE;
 #endif
 }
-
-#endif /* defined(_WIN64) */

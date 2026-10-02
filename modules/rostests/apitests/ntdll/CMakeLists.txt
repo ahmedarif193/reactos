@@ -122,6 +122,7 @@ list(APPEND SOURCE
     probelib.c
     RtlAllocateHeap.c
     RtlBitmap.c
+    RtlSList.c
     RtlComputePrivatizedDllName_U.c
     RtlConditionVariable.c
     RtlCopyMappedMemory.c

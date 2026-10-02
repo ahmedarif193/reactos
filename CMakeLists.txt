@@ -12,10 +12,6 @@ endif()
 
 project(REACTOS)
 
-if(ARCH STREQUAL "riscv64" AND CMAKE_CROSSCOMPILING)
-    set(PCH OFF CACHE BOOL "Whether to use precompiled headers")
-endif()
-
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_INCLUDE_DIRECTORIES_PROJECT_BEFORE ON)
 set(CMAKE_SHARED_LIBRARY_PREFIX "")
@@ -30,7 +26,7 @@ set(CMAKE_CXX_STANDARD 11)
 
 # check that the ARCH (target architecture) variable is defined
 if(NOT ARCH)
-    message(FATAL_ERROR "Target architecture (ARCH) is not defined. Please, choose one of: i386, amd64, arm, arm64, riscv64")
+    message(FATAL_ERROR "Target architecture (ARCH) is not defined. Please, choose one of: i386, amd64, arm, arm64, riscv64, ppc")
 endif()
 # Now the ARCH variable will be in lowercase.
 # It is needed because STREQUAL comparison
@@ -40,7 +36,7 @@ endif()
 string(TOLOWER ${ARCH} ARCH)
 
 # set possible values for cmake GUI
-set_property(CACHE ARCH PROPERTY STRINGS "i386" "amd64" "arm" "arm64" "riscv64")
+set_property(CACHE ARCH PROPERTY STRINGS "i386" "amd64" "arm" "arm64" "riscv64" "ppc")
 
 # Alternative WinNT-compatible architecture string
 if(ARCH STREQUAL "i386")
@@ -305,6 +301,9 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     elseif(ARCH STREQUAL "riscv64")
         # Clang defines _M_RISCV64 with the Microsoft-compatible value (100).
         add_compile_definitions(_RISCV64_ _WIN64)
+    elseif(ARCH STREQUAL "ppc")
+        # Clang defines _M_PPC with the Microsoft-compatible CPU value.
+        add_compile_definitions(_PPC_ WIN32)
     elseif(ARCH STREQUAL "arm64")
         if(ARM64EC_RUNTIME)
             # ARM64EC has the x64 ABI/type model while emitting ARM64 code.
@@ -323,13 +322,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     add_definitions(-D_NEW_DELETE_OPERATORS_)
     if(ARCH STREQUAL "i386")
         add_definitions(-DUSE_COMPILER_EXCEPTIONS -D_USE_32BIT_TIME_T)
-    elseif(ARCH STREQUAL "amd64")
-        add_compile_definitions(USE_COMPILER_EXCEPTIONS)
-    elseif(ARCH STREQUAL "arm")
-        add_compile_definitions(USE_COMPILER_EXCEPTIONS)
-    elseif(ARCH STREQUAL "arm64")
-        add_compile_definitions(USE_COMPILER_EXCEPTIONS)
-    elseif(ARCH STREQUAL "riscv64")
+    else()
         add_compile_definitions(USE_COMPILER_EXCEPTIONS)
     endif()
 
@@ -352,6 +345,8 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     # Compiler specific definitions and macros
     if(ARCH STREQUAL "riscv64")
         include(sdk/cmake/riscv64.cmake)
+    elseif(ARCH STREQUAL "ppc")
+        include(sdk/cmake/ppc.cmake)
     elseif(MSVC)
         include(sdk/cmake/msvc.cmake)
     elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")

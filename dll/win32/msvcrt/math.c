@@ -990,6 +990,75 @@ static void _setfp( unsigned int *cw, unsigned int cw_mask,
 #endif
 #elif defined(__x86_64__)
     _setfp_sse(cw, cw_mask, sw, sw_mask);
+#elif defined(_M_PPC)
+    union { double d; ULONGLONG bits; } value;
+    unsigned int old_fpscr, fpscr, flags, updated;
+
+    __asm__ __volatile__("mffs %0" : "=f"(value.d));
+    old_fpscr = fpscr = (unsigned int)value.bits;
+
+    if (sw)
+    {
+        flags = 0;
+        if (fpscr & 0x20000000) flags |= _SW_INVALID;
+        if (fpscr & 0x10000000) flags |= _SW_OVERFLOW;
+        if (fpscr & 0x08000000) flags |= _SW_UNDERFLOW;
+        if (fpscr & 0x04000000) flags |= _SW_ZERODIVIDE;
+        if (fpscr & 0x02000000) flags |= _SW_INEXACT;
+        sw_mask &= _MCW_EM;
+        updated = (flags & ~sw_mask) | (*sw & sw_mask);
+        *sw = flags;
+        if (updated != flags)
+        {
+            /* VX is a summary of the invalid-operation causes. Use VXSOFT
+             * to set it, and clear every cause when clearing the status. */
+            fpscr &= ~0xfff80700u;
+            if (updated & _SW_INVALID) fpscr |= 0x00000400;
+            if (updated & _SW_OVERFLOW) fpscr |= 0x10000000;
+            if (updated & _SW_UNDERFLOW) fpscr |= 0x08000000;
+            if (updated & _SW_ZERODIVIDE) fpscr |= 0x04000000;
+            if (updated & _SW_INEXACT) fpscr |= 0x02000000;
+            if (updated) fpscr |= 0x80000000; /* FX */
+        }
+    }
+
+    if (cw)
+    {
+        /* PPC has no separate denormal-operand exception. The IEEE enables
+         * in FPSCR have the opposite polarity to the CRT exception masks. */
+        flags = _EM_DENORMAL;
+        if (!(fpscr & 0x80)) flags |= _EM_INVALID;
+        if (!(fpscr & 0x40)) flags |= _EM_OVERFLOW;
+        if (!(fpscr & 0x20)) flags |= _EM_UNDERFLOW;
+        if (!(fpscr & 0x10)) flags |= _EM_ZERODIVIDE;
+        if (!(fpscr & 0x08)) flags |= _EM_INEXACT;
+        switch (fpscr & 3)
+        {
+        case 1: flags |= _RC_CHOP; break;
+        case 2: flags |= _RC_UP; break;
+        case 3: flags |= _RC_DOWN; break;
+        }
+        cw_mask &= (_MCW_EM & ~_EM_DENORMAL) | _MCW_RC;
+        *cw = (flags & ~cw_mask) | (*cw & cw_mask);
+        fpscr &= ~0xfbu;
+        if (!(*cw & _EM_INVALID)) fpscr |= 0x80;
+        if (!(*cw & _EM_OVERFLOW)) fpscr |= 0x40;
+        if (!(*cw & _EM_UNDERFLOW)) fpscr |= 0x20;
+        if (!(*cw & _EM_ZERODIVIDE)) fpscr |= 0x10;
+        if (!(*cw & _EM_INEXACT)) fpscr |= 0x08;
+        switch (*cw & _MCW_RC)
+        {
+        case _RC_CHOP: fpscr |= 1; break;
+        case _RC_UP: fpscr |= 2; break;
+        case _RC_DOWN: fpscr |= 3; break;
+        }
+    }
+
+    if (fpscr != old_fpscr)
+    {
+        value.bits = fpscr;
+        __asm__ __volatile__("mtfsf 0xff, %0" :: "f"(value.d));
+    }
 #elif defined(__aarch64__)
     ULONG_PTR old_fpsr = 0, fpsr = 0, old_fpcr = 0, fpcr = 0;
     unsigned int flags;

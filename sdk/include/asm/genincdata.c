@@ -71,6 +71,8 @@ ASMGENDATA Table[] =
 #include "ksarm64.template.h"
 #elif defined(_M_RISCV64)
 #include "ksriscv64.template.h"
+#elif defined(_M_PPC)
+#include "ksppc.template.h"
 #endif
 
 /* PORTABLE CONSTANTS ********************************************************/

@@ -29,13 +29,8 @@ PVOID LdrpWow64PrepareForException = NULL;
  */
 VOID
 NTAPI
-#if defined(_M_ARM64) || defined(_M_RISCV64)
 KiUserExceptionDispatcherWorker(PEXCEPTION_RECORD ExceptionRecord,
                                 PCONTEXT Context)
-#else
-KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
-                          PCONTEXT Context)
-#endif
 {
     EXCEPTION_RECORD NestedExceptionRecord;
     NTSTATUS Status;

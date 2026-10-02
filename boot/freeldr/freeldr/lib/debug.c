@@ -209,6 +209,9 @@ Done:
     EarlyUartInitialize(0);
 #endif
     DebugPort |= RS232;
+#elif defined(OFWBOOT)
+    /* The Open Firmware console is the serial port on PReP. */
+    DebugPort |= RS232;
 #else
     /* Try to initialize the port; if it fails, remove the corresponding flag */
     if (DebugPort & RS232)
@@ -231,6 +234,8 @@ VOID DebugPrintChar(UCHAR Character)
             DebugUefiSerialPutChar('\r');
 
         DebugUefiSerialPutChar(Character);
+#elif defined(OFWBOOT)
+        MachConsPutChar(Character);
 #else
         if (Character == '\n')
             Rs232PortPutByte('\r');

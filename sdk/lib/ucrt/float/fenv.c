@@ -239,6 +239,85 @@ static void fenv_hw_reset(void)
     __asm__ __volatile__("fsflags zero");
 }
 
+#elif defined(_M_PPC)
+
+#define FENV_UNITS 1
+
+/*
+ * The FPSCR accrues the five IEEE exception conditions and holds the
+ * rounding mode. Trap enables also need MSR[FE0/FE1] from the kernel, so
+ * exceptions read masked and only the rounding mode is controllable.
+ */
+static const struct { unsigned char flag_shift, rc_shift; unsigned short extra; unsigned long cw_mask; }
+fenv_unit[FENV_UNITS] =
+{
+    { 0, 0, 0, _MCW_RC },
+};
+
+#define PPC_FPSCR_VX     0x20000000 /* invalid operation summary */
+#define PPC_FPSCR_OX     0x10000000
+#define PPC_FPSCR_UX     0x08000000
+#define PPC_FPSCR_ZX     0x04000000
+#define PPC_FPSCR_XX     0x02000000
+#define PPC_FPSCR_VXSOFT 0x00000400 /* software-requested invalid operation */
+#define PPC_FPSCR_RN     0x00000003
+
+static unsigned int ppc_read_fpscr(void)
+{
+    union { double d; unsigned long long u; } v;
+    __asm__ __volatile__("mffs %0" : "=f"(v.d));
+    return (unsigned int)v.u;
+}
+
+static void ppc_write_fpscr(unsigned int fpscr)
+{
+    union { double d; unsigned long long u; } v;
+    v.u = fpscr;
+    __asm__ __volatile__("mtfsf 0xff, %0" :: "f"(v.d));
+}
+
+static void fenv_hw_get(unsigned int* ctl, unsigned int* stat)
+{
+    unsigned int fpscr = ppc_read_fpscr();
+
+    ctl[0] = FENV_FLAG_MASK;
+    switch (fpscr & PPC_FPSCR_RN)
+    {
+        case 1: ctl[0] |= FE_TOWARDZERO; break;
+        case 2: ctl[0] |= FE_UPWARD; break;
+        case 3: ctl[0] |= FE_DOWNWARD; break;
+    }
+    stat[0] = 0;
+    if (fpscr & PPC_FPSCR_XX) stat[0] |= FE_INEXACT;
+    if (fpscr & PPC_FPSCR_UX) stat[0] |= FE_UNDERFLOW;
+    if (fpscr & PPC_FPSCR_OX) stat[0] |= FE_OVERFLOW;
+    if (fpscr & PPC_FPSCR_ZX) stat[0] |= FE_DIVBYZERO;
+    if (fpscr & PPC_FPSCR_VX) stat[0] |= FE_INVALID;
+}
+
+static void fenv_hw_set(const unsigned int* ctl, const unsigned int* stat)
+{
+    unsigned int fpscr = 0;
+
+    switch (ctl[0] & FE_ROUND_MASK)
+    {
+        case FE_TOWARDZERO: fpscr |= 1; break;
+        case FE_UPWARD: fpscr |= 2; break;
+        case FE_DOWNWARD: fpscr |= 3; break;
+    }
+    if (stat[0] & FE_INEXACT) fpscr |= PPC_FPSCR_XX;
+    if (stat[0] & FE_UNDERFLOW) fpscr |= PPC_FPSCR_UX;
+    if (stat[0] & FE_OVERFLOW) fpscr |= PPC_FPSCR_OX;
+    if (stat[0] & FE_DIVBYZERO) fpscr |= PPC_FPSCR_ZX;
+    if (stat[0] & FE_INVALID) fpscr |= PPC_FPSCR_VXSOFT;
+    ppc_write_fpscr(fpscr);
+}
+
+static void fenv_hw_reset(void)
+{
+    ppc_write_fpscr(0);
+}
+
 #elif defined(_M_AMD64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
 
 #ifdef _MSC_VER

@@ -103,6 +103,17 @@ _dump_context(PCONTEXT pc)
     DbgPrint("S4:  %I64x   S5:  %I64x   S6:  %I64x   S7:  %I64x\n", pc->S4, pc->S5, pc->S6, pc->S7);
     DbgPrint("S8:  %I64x   S9:  %I64x   S10: %I64x   S11: %I64x\n", pc->S8, pc->S9, pc->S10, pc->S11);
     DbgPrint("T3:  %I64x   T4:  %I64x   T5:  %I64x   T6:  %I64x   FCSR: %08lx\n", pc->T3, pc->T4, pc->T5, pc->T6, pc->Fcsr);
+#elif defined(_M_PPC)
+    DbgPrint("IAR: %08lx   LR:  %08lx   CTR: %08lx   MSR: %08lx\n", pc->Iar, pc->Lr, pc->Ctr, pc->Msr);
+    DbgPrint("CR:  %08lx   XER: %08lx\n", pc->Cr, pc->Xer);
+    DbgPrint("R0:  %08lx   R1:  %08lx   R2:  %08lx   R3:  %08lx\n", pc->Gpr0, pc->Gpr1, pc->Gpr2, pc->Gpr3);
+    DbgPrint("R4:  %08lx   R5:  %08lx   R6:  %08lx   R7:  %08lx\n", pc->Gpr4, pc->Gpr5, pc->Gpr6, pc->Gpr7);
+    DbgPrint("R8:  %08lx   R9:  %08lx   R10: %08lx   R11: %08lx\n", pc->Gpr8, pc->Gpr9, pc->Gpr10, pc->Gpr11);
+    DbgPrint("R12: %08lx   R13: %08lx   R14: %08lx   R15: %08lx\n", pc->Gpr12, pc->Gpr13, pc->Gpr14, pc->Gpr15);
+    DbgPrint("R16: %08lx   R17: %08lx   R18: %08lx   R19: %08lx\n", pc->Gpr16, pc->Gpr17, pc->Gpr18, pc->Gpr19);
+    DbgPrint("R20: %08lx   R21: %08lx   R22: %08lx   R23: %08lx\n", pc->Gpr20, pc->Gpr21, pc->Gpr22, pc->Gpr23);
+    DbgPrint("R24: %08lx   R25: %08lx   R26: %08lx   R27: %08lx\n", pc->Gpr24, pc->Gpr25, pc->Gpr26, pc->Gpr27);
+    DbgPrint("R28: %08lx   R29: %08lx   R30: %08lx   R31: %08lx\n", pc->Gpr28, pc->Gpr29, pc->Gpr30, pc->Gpr31);
 #else
     #error "Unknown architecture"
 #endif

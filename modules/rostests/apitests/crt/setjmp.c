@@ -60,6 +60,13 @@ static void TEST_setjmp_normal(void)
             break;
         case 3:
             ok_int(value, 333);
+#if defined(_M_PPC)
+            /* NT PowerPC's ordinary setjmp has Type == 0: longjmp restores
+             * the saved registers without unwinding SEH.  _setjmpex is the
+             * separate ABI entry that runs termination handlers. */
+            ok_int(finally_called, FALSE);
+            ok_int(abnormal, FALSE);
+#else
 #ifdef _M_AMD64 // This is broken on Windows 2003 x64
             if (NtCurrentPeb()->OSMajorVersion >= 6)
 #endif
@@ -67,6 +74,7 @@ static void TEST_setjmp_normal(void)
                 ok_int(finally_called, TRUE);
                 ok_int(abnormal, TRUE);
             }
+#endif
             stage = 4;
             _SEH2_TRY
             {

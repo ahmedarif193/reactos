@@ -27,6 +27,7 @@
 #include "winternl.h"
 #include <psapi.h>
 #include "wine/test.h"
+#include "native_machine.h"
 
 static DWORD (WINAPI *pGetDllDirectoryA)(DWORD,LPSTR);
 static DWORD (WINAPI *pGetDllDirectoryW)(DWORD,LPWSTR);
@@ -74,17 +75,7 @@ static const struct
     {
         IMAGE_NT_SIGNATURE, /* Signature */
         {
-#if defined __i386__
-            IMAGE_FILE_MACHINE_I386, /* Machine */
-#elif defined __x86_64__
-            IMAGE_FILE_MACHINE_AMD64, /* Machine */
-#elif defined __arm__
-            IMAGE_FILE_MACHINE_ARMNT, /* Machine */
-#elif defined __aarch64__
-            IMAGE_FILE_MACHINE_ARM64, /* Machine */
-#else
-# error You must specify the machine type
-#endif
+            WINETEST_IMAGE_FILE_MACHINE, /* Machine */
             1, /* NumberOfSections */
             0, /* TimeDateStamp */
             0, /* PointerToSymbolTable */

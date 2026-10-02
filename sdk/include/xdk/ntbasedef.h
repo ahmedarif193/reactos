@@ -68,7 +68,7 @@
  #pragma strict_gs_check(push, on)
 #endif
 
-#if defined(_M_MRX000) || defined(_M_ALPHA) || defined(_M_PPC) || defined(_M_IA64) || defined(_M_ARM) || defined(_WIN64)
+#if !defined(_M_IX86) && !defined(__i386__)
  #define ALIGNMENT_MACHINE
  #define UNALIGNED __unaligned
  #if defined(_WIN64)
@@ -119,10 +119,8 @@
 
 #if defined(_AMD64_) || defined(_X86_)
  #define PROBE_ALIGNMENT(_s) TYPE_ALIGNMENT($ULONG)
-#elif defined(_IA64_) || defined(_ARM_) || defined(_ARM64_) || defined(_RISCV64_)
+#else
  #define PROBE_ALIGNMENT(_s) max(TYPE_ALIGNMENT(_s), TYPE_ALIGNMENT($ULONG))
-#elif !defined(RC_INVOKED)
- #error "Unknown architecture"
 #endif
 
 #if defined(_WIN64)
@@ -667,6 +665,9 @@ typedef struct _PROCESSOR_NUMBER {
 } PROCESSOR_NUMBER, *PPROCESSOR_NUMBER;
 
 #define ALL_PROCESSOR_GROUPS 0xffff
+
+struct _EXCEPTION_RECORD;
+struct _CONTEXT;
 
 typedef
 _IRQL_requires_same_

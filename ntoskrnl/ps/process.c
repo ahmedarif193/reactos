@@ -3441,6 +3441,20 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     ThreadContext.Pc = (ULONG64)ImageInformation.TransferAddress;
     ThreadContext.Sp = (ULONG64)InitialTeb.StackBase & ~15ULL;
     ThreadContext.A0 = (ULONG64)ProcessBasicInfo.PebBaseAddress;
+#elif defined(_M_PPC)
+    /* The image entry is a function descriptor {code, TOC} in the new
+     * process. Leave a 64-byte frame header below the stack base. */
+    {
+        ULONG Descriptor[2] = {0, 0};
+
+        Status = ZwReadVirtualMemory(hProcess, ImageInformation.TransferAddress, Descriptor, sizeof(Descriptor), NULL);
+        if (!NT_SUCCESS(Status)) goto Cleanup;
+        ThreadContext.Iar = Descriptor[0];
+        ThreadContext.Gpr2 = Descriptor[1];
+    }
+    ThreadContext.Gpr1 = ((ULONG)(ULONG_PTR)InitialTeb.StackBase - 64) & ~15UL;
+    ThreadContext.Gpr3 = (ULONG)(ULONG_PTR)ProcessBasicInfo.PebBaseAddress;
+    ThreadContext.Msr = PPC_USER_MSR;
 #else
 #error "Unsupported architecture"
 #endif

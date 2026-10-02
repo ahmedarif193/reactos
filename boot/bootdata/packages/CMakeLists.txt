@@ -76,6 +76,14 @@ elseif(ARCH STREQUAL "riscv64")
 90 = winsxs\riscv64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef
 91 = system32\spool\prtprocs\riscv64
 ]=])
+elseif(ARCH STREQUAL "ppc")
+    string(APPEND REACTOS_DFF_ARCH_DIRECTORIES [=[
+92 = winsxs\ppc_microsoft.windows.common-controls_6595b64144ccf1df_5.82.2600.2982_none_deadbeef
+93 = winsxs\ppc_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef
+94 = winsxs\ppc_microsoft.windows.gdiplus_6595b64144ccf1df_1.1.7601.23038_none_deadbeef
+95 = winsxs\ppc_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef
+96 = system32\spool\prtprocs\ppc
+]=])
 endif()
 
 configure_file(

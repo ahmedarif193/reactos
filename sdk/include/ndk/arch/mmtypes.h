@@ -25,7 +25,7 @@ Author:
 #if defined(_M_IX86)
 #include <i386/mmtypes.h>
 #elif defined(_M_PPC)
-#include <powerpc/mmtypes.h>
+#include <ppc/mmtypes.h>
 #elif defined(_M_ARM)
 #include <arm/mmtypes.h>
 #elif  defined(_M_AMD64)

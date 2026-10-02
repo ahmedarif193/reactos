@@ -196,7 +196,20 @@ SysPtePopulationFailure(void)
     MiPfnShareDecrement(&World.System.Pfn, Held[--Count], TRUE);
 
     MI_RAISE_TO_DISPATCH(&OldIrql);
-    CHECK(MiReserveSystemPtes(&World.System, 2048) == 0);
+    Va = ~0ULL;
+    CHECK(MiReserveSystemPtesEx(&World.System, 2048, &Va) == STATUS_NO_MEMORY);
+    CHECK(Va == 0);
+    Va = ~0ULL;
+    CHECK(MiCreateKernelStack(&World.System, 2048, 6, &Va) == STATUS_NO_MEMORY);
+    CHECK(Va == 0);
+    /* The MDL path must preserve physical exhaustion so eligible callers
+     * can retry it, without confusing it with exhausted virtual capacity. */
+    Va = ~0ULL;
+    CHECK(MiMapFrames(&World.System, NULL, 2048, MiCacheFull, MI_PROT_READWRITE, &Va) == STATUS_NO_MEMORY);
+    CHECK(Va == 0);
+    Va = ~0ULL;
+    CHECK(MiReserveSystemPtesEx(&World.System, SYSPTE_PAGES + 1, &Va) == STATUS_INSUFFICIENT_RESOURCES);
+    CHECK(Va == 0);
     CHECK(MiHostIrql == 2);
     MI_RESTORE_IRQL(OldIrql);
     CHECK(World.System.SystemPtes->Allocations.NodeCount == 0);

@@ -13,6 +13,8 @@
 #include <mmcc/nvs/env/mihost.h>
 #else
 #include <nvs/env/km/mikm.h>
+/* The kernel build puts the target's nvs/arch directory on the include path. */
+#include <archdef.h>
 #endif
 
 #include <nvs/include/miarch.h>

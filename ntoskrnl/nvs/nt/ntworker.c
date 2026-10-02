@@ -69,6 +69,10 @@ MiModifiedPageWriter(
 VOID
 MiWakeBalanceSetManager(VOID)
 {
+    /* Pool commits can fail before phase 1 creates the balance set manager
+     * and initializes its event; there is nobody to wake yet. */
+    if (MiBalanceEvent.Header.Type != SynchronizationEvent)
+        return;
     KeSetEvent(&MiBalanceEvent, 0, FALSE);
 }
 

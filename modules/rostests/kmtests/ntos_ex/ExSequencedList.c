@@ -5,10 +5,12 @@
  * PROGRAMMER:      Thomas Faber <thomas.faber@reactos.org>
  */
 
+#ifdef _M_IX86
 struct _SINGLE_LIST_ENTRY;
 union _SLIST_HEADER;
 struct _SINGLE_LIST_ENTRY *__fastcall ExInterlockedPushEntrySList(union _SLIST_HEADER *, struct _SINGLE_LIST_ENTRY *, unsigned long *);
 struct _SINGLE_LIST_ENTRY *__fastcall ExInterlockedPopEntrySList(union _SLIST_HEADER *, unsigned long *);
+#endif
 
 #include <kmt_test.h>
 
@@ -44,10 +46,14 @@ struct _SINGLE_LIST_ENTRY *__fastcall ExInterlockedPopEntrySList(union _SLIST_HE
 #define TestXListFunctional TestSListFunctional
 #include "ExXList.h"
 
+#ifdef _M_IX86
+/* These legacy fastcall exports exist only on x86. Other targets use
+ * the ExpInterlocked entry points selected by the DDK above. */
 #undef ExInterlockedPushEntrySList
 #undef ExInterlockedPopEntrySList
 #define TestXListFunctional TestSListFunctionalExports
 #include "ExXList.h"
+#endif
 #endif
 
 START_TEST(ExSequencedList)
@@ -67,9 +73,14 @@ START_TEST(ExSequencedList)
     pSpinLock = NULL;
 #endif
 
-    /* make sure stuff is as un-aligned as possible ;) */
+    /* Keep the header naturally aligned on strict-alignment machines.
+     * x86 additionally exercises its legacy unaligned implementation. */
     Buffer = ExAllocatePoolWithTag(NonPagedPool, sizeof *ListHead + EntriesSize + 1, 'TLqS');
+#ifdef _M_IX86
     ListHead = (PVOID)&Buffer[1];
+#else
+    ListHead = (PVOID)Buffer;
+#endif
     Entries = (PVOID)&ListHead[1];
     KeRaiseIrql(HIGH_LEVEL, &Irql);
 
@@ -83,7 +94,11 @@ START_TEST(ExSequencedList)
     RtlFillMemory(ListHead, sizeof *ListHead, 0x55);
     ExInitializeSListHead(ListHead);
     CheckSListHeader(ListHead, NULL, 0);
+#ifdef _M_IX86
     TestSListFunctionalExports(ListHead, Entries, pSpinLock);
+#else
+    TestSListFunctional(ListHead, Entries, pSpinLock);
+#endif
 
     KeLowerIrql(Irql);
     ExFreePoolWithTag(Buffer, 'TLqS');

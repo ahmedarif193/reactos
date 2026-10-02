@@ -1248,7 +1248,7 @@ static void test_peb_teb(void)
 
 static void test_selectors(void)
 {
-#ifndef __arm__
+#if defined(_WIN64) || defined(__i386__)
     THREAD_DESCRIPTOR_INFORMATION info;
     NTSTATUS status;
     ULONG base, limit, sel, retlen;
@@ -1417,7 +1417,7 @@ static void test_selectors(void)
     else skip( "NtSetLdtEntries not supported\n" );
 
 #undef GET_ENTRY
-#endif /* __arm__ */
+#endif /* native x86 selectors or 64-bit x86 emulation */
 }
 
 static void test_image_mappings(void)

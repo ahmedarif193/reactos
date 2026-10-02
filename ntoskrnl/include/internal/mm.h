@@ -237,27 +237,22 @@ MiInitializeKernelVaLayout(
 //
 // Wait entry for marking pages that are being serviced
 //
-#ifdef _M_IX86
+#ifndef _WIN64
 #define MM_WAIT_ENTRY            0x7ffffc00
-#elif defined(_WIN64)
+#else
 #define MM_WAIT_ENTRY            0x7FFFFFFFFFFFFC00ULL
-#else
-#error Unsupported architecture!
 #endif
 
-#ifdef _M_AMD64
+/* The PTE width is independent of the pointer width (for example PAE). */
 #define InterlockedCompareExchangePte(PointerPte, Exchange, Comperand) \
-    InterlockedCompareExchange64((PLONG64)(PointerPte), Exchange, Comperand)
+    (sizeof(*(PointerPte)) == sizeof(LONG64) ? \
+        InterlockedCompareExchange64((PLONG64)(PointerPte), Exchange, Comperand) : \
+        InterlockedCompareExchange((PLONG)(PointerPte), Exchange, Comperand))
 
 #define InterlockedExchangePte(PointerPte, Value) \
-    InterlockedExchange64((PLONG64)(PointerPte), Value)
-#else
-#define InterlockedCompareExchangePte(PointerPte, Exchange, Comperand) \
-    InterlockedCompareExchange((PLONG)(PointerPte), Exchange, Comperand)
-
-#define InterlockedExchangePte(PointerPte, Value) \
-    InterlockedExchange((PLONG)(PointerPte), Value)
-#endif
+    (sizeof(*(PointerPte)) == sizeof(LONG64) ? \
+        InterlockedExchange64((PLONG64)(PointerPte), Value) : \
+        InterlockedExchange((PLONG)(PointerPte), Value))
 
 typedef struct _MM_SECTION_SEGMENT
 {

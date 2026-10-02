@@ -122,7 +122,7 @@
 #endif
 
 #ifndef UNALIGNED
-#if defined(__ia64__) || defined(__x86_64) || defined(__arm__) || defined(__arm64__) || defined(_WIN64)
+#if !defined(_M_IX86) && !defined(__i386__)
 #define UNALIGNED __unaligned
 #else
 #define UNALIGNED

@@ -690,6 +690,8 @@ KdSendPacket(
                     (ULONG)ContextRecord->X0;
 #elif defined(_M_RISCV64)
                     (ULONG)ContextRecord->A0;
+#elif defined(_M_PPC)
+                    ContextRecord->Gpr3;
 #else
 #error Unknown architecture
 #endif

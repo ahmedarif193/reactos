@@ -55,6 +55,30 @@ RtlUnwind(_In_opt_ PVOID TargetFrame, _In_opt_ PVOID TargetIp, _In_opt_ PEXCEPTI
      * restore instead. */
 }
 
+#ifdef _M_PPC
+ULONG
+NTAPI
+RtlVirtualUnwind(
+    _In_ ULONG_PTR ControlPc,
+    _In_opt_ PRUNTIME_FUNCTION FunctionEntry,
+    _Inout_ PCONTEXT ContextRecord,
+    _Out_ PBOOLEAN InFunction,
+    _Out_ PULONG EstablisherFrame,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers,
+    _In_ ULONG LowStackLimit,
+    _In_ ULONG HighStackLimit)
+{
+    UNREFERENCED_PARAMETER(ControlPc);
+    UNREFERENCED_PARAMETER(FunctionEntry);
+    UNREFERENCED_PARAMETER(ContextRecord);
+    UNREFERENCED_PARAMETER(InFunction);
+    UNREFERENCED_PARAMETER(EstablisherFrame);
+    UNREFERENCED_PARAMETER(ContextPointers);
+    UNREFERENCED_PARAMETER(LowStackLimit);
+    UNREFERENCED_PARAMETER(HighStackLimit);
+    return 0;
+}
+#else
 PEXCEPTION_ROUTINE
 NTAPI
 RtlVirtualUnwind(
@@ -77,6 +101,7 @@ RtlVirtualUnwind(
     UNREFERENCED_PARAMETER(ContextPointers);
     return NULL;
 }
+#endif
 
 /* __chkstk is not stubbed here: the compiler runtime already provides the
  * AArch64 implementation the compiler actually calls (size in x15, clobbering

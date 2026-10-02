@@ -203,7 +203,7 @@ elseif(ARCH STREQUAL "arm")
         math/fabsf.c
         math/floorf.c
         math/fmodf.c
-        math/arm64/ldexp.c
+        math/ldexp.c
         math/modff.c
         math/sinf.c
         math/sinhf.c
@@ -230,24 +230,25 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND CRT_MATH_ASM_SOURCE
         math/arm/_logb.s
     )
-elseif(ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64")
+else()
+    # Portable C math is the fallback; only FP status access depends on the ISA.
     list(APPEND LIBCNTPR_MATH_SOURCE
-        math/arm64/atan.c
+        math/atan.c
         math/${ARCH}/_set_statfp.c
         math/libm_sse2/_handle_error.c
         math/libm_sse2/atan2.c
-        math/arm64/ceil.c
-        math/arm64/exp.c
+        math/ceil.c
+        math/exp.c
         math/fabs.c
-        math/arm64/floor.c
-        math/arm64/fmod.c
-        math/arm64/logb.c
-        math/arm64/log.c
-        math/arm64/log10.c
-        math/arm64/pow.c
+        math/floor.c
+        math/fmod.c
+        math/logb.c
+        math/log.c
+        math/log10.c
+        math/pow.c
         math/libm_sse2/remainder_piby2.c
         math/sqrt.c
-        math/arm64/trig.c
+        math/trig.c
     )
     list(APPEND CRT_MATH_SOURCE
         math/_hypotf.c
@@ -261,7 +262,7 @@ elseif(ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64")
         math/fabsf.c
         math/floorf.c
         math/fmodf.c
-        math/arm64/ldexp.c
+        math/ldexp.c
         math/modff.c
         math/sinf.c
         math/sinhf.c
@@ -326,7 +327,8 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND ATAN2_SOURCE math/_invoke_matherr.c math/amd64/_set_statfp.c math/libm_sse2/_handle_error.c math/libm_sse2/atan2.c)
 elseif(ARCH STREQUAL "arm")
     list(APPEND ATAN2_ASM_SOURCE math/arm/atan2.s)
-elseif(ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64")
+else()
+    # Portable C math is the fallback; only FP status access depends on the ISA.
     list(APPEND ATAN2_SOURCE
         math/_invoke_matherr.c
         math/${ARCH}/_set_statfp.c

@@ -731,8 +731,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 #endif
     ASSERT((Thread->Priority >= 0) && (Thread->Priority <= HIGH_PRIORITY));
 
-#if defined(CONFIG_SMP) && (defined(_M_AMD64) || defined(_M_RISCV64)) && \
-    (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(CONFIG_SMP) && KI_THREAD_HANDOFF_USES_RUNNING
     /* Publish a migrating thread only after its old stack is detached. */
     KiAcquireThreadLock(Thread);
     if (Thread->Running)

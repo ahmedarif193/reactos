@@ -299,6 +299,17 @@ macro(dir_to_num dir var)
     elseif(${dir} STREQUAL reactos/winsxs/riscv64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef)
         set(${var} 90)
 
+    elseif(${dir} STREQUAL reactos/system32/spool/prtprocs/ppc)
+        set(${var} 96)
+    elseif(${dir} STREQUAL reactos/winsxs/ppc_microsoft.windows.common-controls_6595b64144ccf1df_5.82.2600.2982_none_deadbeef)
+        set(${var} 92)
+    elseif(${dir} STREQUAL reactos/winsxs/ppc_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef)
+        set(${var} 93)
+    elseif(${dir} STREQUAL reactos/winsxs/ppc_microsoft.windows.gdiplus_6595b64144ccf1df_1.1.7601.23038_none_deadbeef)
+        set(${var} 94)
+    elseif(${dir} STREQUAL reactos/winsxs/ppc_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef)
+        set(${var} 95)
+
     else()
         message(FATAL_ERROR "Wrong destination: ${dir}")
     endif()
@@ -1416,6 +1427,22 @@ else()
     macro(add_pch _target _pch _skip_list)
     endmacro()
 endif()
+
+# Some targets rely on declarations in their PCH source even when PCH is
+# disabled. Include it for only the sources that normally receive the PCH;
+# callers leave their PCH_SKIP_SOURCE files out of the list.
+function(add_pch_fallback _header)
+    if(PCH)
+        return()
+    endif()
+
+    if(MSVC)
+        set(_include_option "/FI${CMAKE_CURRENT_SOURCE_DIR}/${_header}")
+    else()
+        set(_include_option "-include;${CMAKE_CURRENT_SOURCE_DIR}/${_header}")
+    endif()
+    set_source_files_properties(${ARGN} PROPERTIES COMPILE_OPTIONS "${_include_option}")
+endfunction()
 
 function(set_target_cpp_properties _target)
     cmake_parse_arguments(_CPP "WITH_EXCEPTIONS;WITH_RTTI" "" "" ${ARGN})

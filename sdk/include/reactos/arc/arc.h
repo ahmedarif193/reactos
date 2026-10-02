@@ -753,10 +753,81 @@ typedef struct _I386_LOADER_BLOCK
     ULONG VirtualBias;
 } I386_LOADER_BLOCK, *PI386_LOADER_BLOCK;
 
+/*
+ * Windows NT PowerPC (little-endian) loader contract.
+ *
+ * The loader enters the kernel with MSR = ME | IR | DR | ILE | LE and no
+ * pending firmware state. KSEG0 maps physical memory linearly at
+ * PPC_LOADER_KSEG0_BASE through IBAT0/DBAT0 and is also described by the
+ * software page tables. Every structure the kernel touches before it
+ * installs its exception vectors (images, loader block, PCR, stacks) lives
+ * in KSEG0, so no hashed page table miss can occur before then.
+ *
+ * Software page tables use 64-bit PAE-format entries in three levels: a
+ * 4-entry root indexed by VA[31:30], then two 512-entry levels.
+ * Supervisor segment registers 8-15 hold PPC_KERNEL_VSID(n); the boot
+ * address space uses PPC_BOOT_USER_VSID(n) for segments 0-7.
+ */
+#define PPC_LOADER_BLOCK_VERSION        1
+#define PPC_LOADER_KSEG0_BASE           0x80000000UL
+#define PPC_LOADER_KSEG0_SIZE           0x10000000UL
+/* DBAT1: cache-inhibited, guarded window onto the PReP I/O space. */
+#define PPC_LOADER_IO_WINDOW_BASE       0xB0000000UL
+#define PPC_LOADER_IO_WINDOW_SIZE       0x01000000UL
+/* The loader populates only the top-level slot 0x80000000-0xBFFFFFFF, which
+ * the memory manager adopts whole; 0xC0000000 and above stay dynamic. */
+#define PPC_LOADER_SYSTEM_SLOT_END      0xC0000000UL
+#define PPC_KERNEL_VSID(Segment)        (0x00FFFFF0UL | (Segment))
+#define PPC_BOOT_USER_VSID(Segment)     (0x00FFFFE0UL | (Segment))
+
+#define PPC_MACHINE_UNKNOWN             0
+#define PPC_MACHINE_PREP                1
+
+#define PPC_LOADER_FLAG_HASH_TABLE      0x00000001
+#define PPC_LOADER_FLAG_FRAMEBUFFER     0x00000002
+#define PPC_LOADER_FLAG_EARLY_CONSOLE   0x00000004
+
 typedef struct _PPC_LOADER_BLOCK
 {
+#if defined(_PPC_) || defined(_M_PPC)
+    ULONG Version;
+    ULONG Size;
+    ULONG Flags;
+    ULONG MachineType;                  /* PPC_MACHINE_* */
+    ULONG ProcessorVersion;             /* PVR */
+    ULONG ProcessorFrequency;           /* Hz */
+    ULONG BusFrequency;                 /* Hz */
+    ULONG TimebaseFrequency;            /* Hz */
+    ULONG DcacheLineSize;
+    ULONG IcacheLineSize;
+    ULONG DcacheSize;
+    ULONG IcacheSize;
+    ULONG HashTable;                    /* Physical base programmed into SDR1. */
+    ULONG HashTableSize;                /* Bytes, a power of two >= 64 KiB. */
+    ULONG PageTableRoot;                /* Physical root of the boot address space. */
+    ULONG Kseg0Base;
+    ULONG Kseg0Size;
+    ULONG HighestMappedPhysicalAddress; /* Highest RAM byte inside KSEG0. */
+    ULONG PcrPage;                      /* Physical page of the boot KPCR. */
+    ULONG PanicStack;                   /* KSEG0 top of stack. */
+    ULONG DpcStack;                     /* KSEG0 top of stack. */
+    ULONG SharedUserDataPage;           /* Physical page mapped at KI_USER_SHARED_DATA. */
+    ULONG IsaIoPhysicalBase;            /* PReP: ISA/PCI I/O window. */
+    ULONG IsaIoVirtualBase;             /* PPC_LOADER_IO_WINDOW_BASE when mapped. */
+    ULONG PciMemoryPhysicalBase;        /* PReP: PCI memory window. */
+    ULONG PciDmaOffset;                 /* Bus address of physical page 0. */
+    ULONG EarlyConsolePort;             /* ISA port of a 16550 console, 0 if none. */
+    ULONG EarlyConsoleBaud;
+    ULONG FramebufferPhysical;
+    ULONG FramebufferWidth;
+    ULONG FramebufferHeight;
+    ULONG FramebufferPitch;
+    ULONG FramebufferDepth;
+    ULONG ResidualData;                 /* PReP residual data (KSEG0), 0 if none. */
+#else
     PVOID BootInfo;
     ULONG MachineType;
+#endif
 } PPC_LOADER_BLOCK, *PPPC_LOADER_BLOCK;
 
 typedef struct _ARM_LOADER_BLOCK

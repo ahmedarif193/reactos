@@ -41,6 +41,8 @@ elseif(ARCH STREQUAL "arm64")
     set(_filename ksarm64.h)
 elseif(ARCH STREQUAL "riscv64")
     set(_filename ksriscv64.h)
+elseif(ARCH STREQUAL "ppc")
+    set(_filename ksppc.h)
 endif()
 
 add_custom_command(

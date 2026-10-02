@@ -1,11 +1,8 @@
 
-if(NOT (ARCH STREQUAL "arm" OR ARCH STREQUAL "riscv64"))
-    # RISC-V currently discovers its platform through the device tree. Its
-    # HAL does not implement the ACPI interrupt and PCI routing interfaces.
-    add_subdirectory(acpi)
-endif()
+add_subdirectory(acpi)
+# ISA PnP accesses resources through the HAL; the bus determines its presence.
+add_subdirectory(isapnp)
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
-    add_subdirectory(isapnp)
     add_subdirectory(inteli2c)
 endif()
 add_subdirectory(pci)

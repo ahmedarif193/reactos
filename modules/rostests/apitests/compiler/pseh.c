@@ -20,6 +20,8 @@
 	DEALINGS IN THE SOFTWARE.
 */
 
+/* Collided-unwind tests require longjmp to run termination handlers. */
+#include <setjmpex.h>
 #include <pseh/pseh2.h>
 
 #ifdef __cplusplus
@@ -1594,7 +1596,8 @@ int verify_xpointers(struct _EXCEPTION_POINTERS * ep, DWORD code, DWORD flags, D
 		ep->ExceptionRecord &&
 		ep->ContextRecord &&
 		ep->ExceptionRecord->ExceptionCode == code &&
-		ep->ExceptionRecord->ExceptionFlags == flags &&
+		/* RtlRaiseException may mark a software-originated exception. */
+		(ep->ExceptionRecord->ExceptionFlags & ~EXCEPTION_SOFTWARE_ORIGINATE) == flags &&
 		ep->ExceptionRecord->NumberParameters == argc &&
 		(argv || !argc) &&
 		memcmp(ep->ExceptionRecord->ExceptionInformation, argv, sizeof(argv[0]) * argc) == 0;
@@ -3036,7 +3039,9 @@ START_TEST(pseh)
     Test_structs_seh_finally();
     Test_structs_seh_nested();
 #endif
+    trace("Running Test_collided_unwind\n");
     Test_collided_unwind();
+    trace("Running Test_nested_from_except\n");
     Test_nested_from_except();
 
 	const struct subtest testsuite[] =
@@ -3167,7 +3172,10 @@ START_TEST(pseh)
 	size_t i;
 
 	for(i = 0; i < sizeof(testsuite) / sizeof(testsuite[0]); ++ i)
+	{
+		subtest_(__FILE__, __LINE__)(testsuite[i].name);
 		ok(call_test(testsuite[i].func), "%s failed\n", testsuite[i].name);
+	}
 }
 
 /* EOF */

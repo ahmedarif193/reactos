@@ -26,6 +26,7 @@ GetStoreArchitecture(VOID)
         case PROCESSOR_ARCHITECTURE_ARM64: return L"arm64";
         case PROCESSOR_ARCHITECTURE_IA64:  return L"ia64";
         case PROCESSOR_ARCHITECTURE_RISCV64: return L"riscv64";
+        case PROCESSOR_ARCHITECTURE_PPC:   return L"ppc";
         default:                           return L"unknown";
     }
 }

@@ -42,7 +42,7 @@
 #define USBPORT_RESOURCES_INTERRUPT 2
 #define USBPORT_RESOURCES_MEMORY    4
 
-#if defined(_M_IX86)
+#ifndef _WIN64
 #include <pshpack4.h>
 #endif
 
@@ -85,7 +85,7 @@ typedef struct _USBPORT_RESOURCES {
   ULONG PciFunctionNumber;
 } USBPORT_RESOURCES, *PUSBPORT_RESOURCES;
 
-#if defined(_M_IX86)
+#ifndef _WIN64
 #include <poppack.h>
 #endif
 

@@ -8,12 +8,16 @@
 #ifdef _M_IX86
 __declspec(dllimport) void __stdcall KeRaiseIrql(unsigned char, unsigned char *);
 __declspec(dllimport) void __stdcall KeLowerIrql(unsigned char);
-#else
-#define CLOCK1_LEVEL CLOCK_LEVEL
-#define CLOCK2_LEVEL CLOCK_LEVEL
 #endif
 
 #include <kmt_test.h>
+
+#ifndef CLOCK1_LEVEL
+#define CLOCK1_LEVEL CLOCK_LEVEL
+#endif
+#ifndef CLOCK2_LEVEL
+#define CLOCK2_LEVEL CLOCK_LEVEL
+#endif
 
 #define NDEBUG
 #include <debug.h>
@@ -54,7 +58,10 @@ START_TEST(KeIrql)
     /* some Irqls MUST work */
     {
     const KIRQL Irqls[] = { LOW_LEVEL, PASSIVE_LEVEL, APC_LEVEL, DISPATCH_LEVEL,
-                            CMCI_LEVEL, CLOCK1_LEVEL, CLOCK2_LEVEL, CLOCK_LEVEL,
+#ifdef CMCI_LEVEL
+                            CMCI_LEVEL,
+#endif
+                            CLOCK1_LEVEL, CLOCK2_LEVEL, CLOCK_LEVEL,
                             PROFILE_LEVEL, IPI_LEVEL, /*POWER_LEVEL,*/ SynchIrql, HIGH_LEVEL };
     int i;
     for (i = 0; i < sizeof Irqls / sizeof Irqls[0]; ++i)

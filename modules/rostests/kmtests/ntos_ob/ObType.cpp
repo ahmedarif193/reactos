@@ -332,7 +332,11 @@ ObtCreateObjectTypeForVersion<NTDDI_WIN11_GE>(
 
     if (Index != NUM_OBTYPES - 1) return ObCreateObjectType(TypeName, (POBJECT_TYPE_INITIALIZER)&TypeInitializer, NULL, (POBJECT_TYPE*)ObjectType);
 
+#ifdef _WIN64
     static_assert(sizeof(ExtendedInitializer) == 128, "Unexpected extended object type initializer size");
+#else
+    static_assert(sizeof(ExtendedInitializer) == 96, "Unexpected extended object type initializer size");
+#endif
     RtlZeroMemory(&ExtendedInitializer, sizeof(ExtendedInitializer));
     ExtendedInitializer.TypeInitializer = TypeInitializer;
     ExtendedInitializer.TypeInitializer.Length = sizeof(ExtendedInitializer);

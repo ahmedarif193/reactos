@@ -91,6 +91,7 @@ NTSTATUS MiSystemProtect(_Inout_ PMI_SYSTEM System, _In_ ULONG64 VirtualAddress,
 NTSTATUS MiSystemPtesInitialize(_Inout_ PMI_SYSTEM System, _In_ ULONG64 PageCount, _In_ ULONG CpuCount);
 VOID MiSystemPtesUninitialize(_Inout_ PMI_SYSTEM System);
 ULONG64 MiReserveSystemPtes(_Inout_ PMI_SYSTEM System, _In_ ULONG PageCount);
+NTSTATUS MiReserveSystemPtesEx(_Inout_ PMI_SYSTEM System, _In_ ULONG PageCount, _Out_ PULONG64 Base);
 ULONG64 MiSystemPteCacheHits(_In_ PMI_SYSTEM System);
 VOID MiReleaseSystemPtes(_Inout_ PMI_SYSTEM System, _In_ ULONG64 VirtualAddress, _In_ ULONG PageCount);
 

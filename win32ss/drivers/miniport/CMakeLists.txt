@@ -1,5 +1,5 @@
 
-if(NOT ARCH STREQUAL "riscv64")
+if(NOT ARCH STREQUAL "riscv64" AND NOT ARCH STREQUAL "ppc")
     add_subdirectory(bochs)
     add_subdirectory(vbe)
     add_subdirectory(vga)
@@ -13,7 +13,7 @@ if(REACTOS_USE_XPDM)
 endif()
 
 if(REACTOS_USE_XPDM)
-    if(NOT ARCH STREQUAL "riscv64")
+    if(NOT ARCH STREQUAL "riscv64" AND NOT ARCH STREQUAL "ppc")
         add_subdirectory(vmx_svga)
     endif()
     add_subdirectory(virtgpu)

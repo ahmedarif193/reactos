@@ -80,6 +80,8 @@ else()
     if(ARCH STREQUAL "riscv64")
         include_directories(${REACTOS_SOURCE_DIR}/sdk/lib/rtl)
         list(APPEND SOURCE cpu_riscv64.c)
+    elseif(ARCH STREQUAL "ppc")
+        list(APPEND SOURCE cpu_ppc.c)
     endif()
 
     add_library(dbghelp MODULE

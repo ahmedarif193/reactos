@@ -1,0 +1,9 @@
+config PROFILE_PPC
+    prompt "Target profile"
+    type choice
+    var ROSCONFIG_PROFILE
+    value generic "Generic PowerPC"
+    default generic
+    depends ARCH=ppc
+    help
+      Select the generic Windows NT PowerPC target without board-specific packages.

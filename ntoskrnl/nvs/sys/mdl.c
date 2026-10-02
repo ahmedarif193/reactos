@@ -188,9 +188,9 @@ MiMapFrames(
                                              : ((CacheType == MiCacheWriteCombined) ? MI_LEAF_WRITECOMBINE : 0);
     NTSTATUS Status;
 
-    *Base = MiReserveSystemPtes(System, PageCount);
-    if (*Base == 0)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = MiReserveSystemPtesEx(System, PageCount, Base);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     Status = MiSystemMapFrames(System, *Base, Frames, PageCount, Protection, Flags | MI_LEAF_PFN_CACHE, FALSE);
     if (!NT_SUCCESS(Status))

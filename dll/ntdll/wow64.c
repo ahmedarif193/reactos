@@ -56,6 +56,8 @@ RtlpNativeMachine(VOID)
     return IMAGE_FILE_MACHINE_I386;
 #elif defined(_M_ARM)
     return IMAGE_FILE_MACHINE_ARMNT;
+#elif defined(_M_PPC)
+    return IMAGE_FILE_MACHINE_POWERPC;
 #else
     return IMAGE_FILE_MACHINE_UNKNOWN;
 #endif

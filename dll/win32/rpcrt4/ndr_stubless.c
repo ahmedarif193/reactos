@@ -1087,6 +1087,20 @@ __ASM_GLOBAL_FUNC( NdrClientCall2,
                    __ASM_SEH(".seh_set_cfa x2, 0\n\t")
                    "ret\n\t"
                    __ASM_SEH(".seh_endepilogue") )
+#elif defined(__powerpc__) && !defined(__powerpc64__)
+/* NT PowerPC va_list addresses the contiguous parameter-word image. Let the
+ * compiler home the registers and handle the hidden aggregate-result pointer
+ * for CLIENT_CALL_RETURN; that pointer is not part of the NDR argument image. */
+CLIENT_CALL_RETURN RPC_VAR_ENTRY NdrClientCall2( PMIDL_STUB_DESC desc, PFORMAT_STRING fmt, ... )
+{
+    CLIENT_CALL_RETURN result;
+    va_list args;
+
+    va_start( args, fmt );
+    result.Simple = NdrpClientCall2( desc, fmt, (void **)args, FALSE );
+    va_end( args );
+    return result;
+}
 #endif
 
 #if defined(__aarch64__) || defined(__arm__)
@@ -2006,6 +2020,33 @@ __ASM_GLOBAL_FUNC( NdrAsyncClientCall,
                    __ASM_SEH(".seh_set_cfa x2, 0\n\t")
                    "ret\n\t"
                    __ASM_SEH(".seh_endepilogue") )
+#elif defined(__powerpc__) && !defined(__powerpc64__)
+/* The variadic arguments follow desc and fmt in the homed register image at
+ * 32(r1), contiguous with the stack arguments at 56(r1). */
+__asm__( ".text\n\t"
+         ".p2align 2\n\t"
+         ".globl ..NdrAsyncClientCall\n"
+         "..NdrAsyncClientCall:\n\t"
+         "stw 3,24(1)\n\tstw 4,28(1)\n\tstw 5,32(1)\n\tstw 6,36(1)\n\t"
+         "stw 7,40(1)\n\tstw 8,44(1)\n\tstw 9,48(1)\n\tstw 10,52(1)\n\t"
+         "mflr 0\n\t"
+         "stw 0,8(1)\n\t"
+         "stwu 1,-64(1)\n\t"
+         "stw 2,4(1)\n\t"
+         "addi 5,1,64+32\n\t"
+         "bl ..ndr_async_client_call\n\t"
+         "lwz 2,4(1)\n\t"
+         "addi 1,1,64\n\t"
+         "lwz 0,8(1)\n\t"
+         "mtlr 0\n\t"
+         "blr\n\t"
+         ".section .rdata,\"dr\"\n\t"
+         ".p2align 2\n\t"
+         ".globl NdrAsyncClientCall\n"
+         "NdrAsyncClientCall:\n\t"
+         ".long ..NdrAsyncClientCall\n\t"
+         ".long .toc\n\t"
+         ".text" );
 #endif
 
 RPCRTAPI LONG RPC_ENTRY NdrAsyncStubCall(struct IRpcStubBuffer* pThis,

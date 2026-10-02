@@ -63,8 +63,10 @@ VOID
 TestProcessFlags(VOID)
 {
     ok_bool_false(PsIsSystemThread(PsGetCurrentThread()), "ioctl thread is system");
+#ifdef _WIN64
     ok_bool_false(PsGetCurrentProcessWow64Process() != NULL, "wow64 process");
     ok_eq_pointer(PsGetProcessWow64Process(PsGetCurrentProcess()), NULL);
+#endif
     ok_eq_pointer(PsGetCurrentThreadProcess(), PsGetCurrentProcess());
     ok_eq_pointer(PsGetCurrentThreadProcessId(), PsGetCurrentProcessId());
 }

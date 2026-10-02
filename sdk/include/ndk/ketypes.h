@@ -3314,7 +3314,7 @@ typedef struct _KTHREAD
     union
     {
         KAPC SchedulerApc;
-#if defined(__REACTOS__) && defined(_M_IX86)
+#if defined(__REACTOS__) && !defined(_WIN64)
         KAPC SuspendApc;
 #endif
         struct
@@ -3353,7 +3353,7 @@ typedef struct _KTHREAD
     union
     {
         KEVENT SuspendEvent;
-#if defined(__REACTOS__) && defined(_M_IX86)
+#if defined(__REACTOS__) && !defined(_WIN64)
         KEVENT SuspendSemaphore;
 #endif
     };
@@ -3420,7 +3420,7 @@ typedef struct _KTHREAD
     ULONG64 NpxState;
 #endif
 #endif
-#if defined(__REACTOS__) && defined(_M_IX86) && (NTDDI_VERSION >= NTDDI_WIN10)
+#if defined(__REACTOS__) && !defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN10)
     /* ReactOS-private state absent from the public NT10 x86 layout. */
     KSPIN_LOCK ApcQueueLock;
     PKAPC_STATE ApcStatePointer[2];

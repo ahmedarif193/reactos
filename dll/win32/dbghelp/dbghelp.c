@@ -165,12 +165,18 @@ extern struct cpu       cpu_i386, cpu_x86_64, cpu_arm, cpu_arm64;
 #if defined(__riscv) && __riscv_xlen == 64
 extern struct cpu       cpu_riscv64;
 #endif
+#if defined(__powerpc__) && !defined(__powerpc64__)
+extern struct cpu       cpu_ppc;
+#endif
 
 #if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
 static struct cpu*      dbghelp_cpus[] = {
     &cpu_i386, &cpu_x86_64, &cpu_arm, &cpu_arm64,
 #if defined(__riscv) && __riscv_xlen == 64
     &cpu_riscv64,
+#endif
+#if defined(__powerpc__) && !defined(__powerpc64__)
+    &cpu_ppc,
 #endif
     NULL
 };
@@ -200,6 +206,8 @@ struct cpu*             dbghelp_current_cpu =
     &cpu_arm64
 #elif defined(__riscv) && __riscv_xlen == 64
     &cpu_riscv64
+#elif defined(__powerpc__) && !defined(__powerpc64__)
+    &cpu_ppc
 #else
 #error define support for your CPU
 #endif

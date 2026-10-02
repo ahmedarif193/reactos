@@ -140,6 +140,9 @@ elseif(ARCH STREQUAL "arm64")
 elseif(ARCH STREQUAL "riscv64")
     list(APPEND SOURCE
         client/riscv64/fiber.c)
+elseif(ARCH STREQUAL "ppc")
+    list(APPEND SOURCE
+        client/ppc/fiber.c)
 endif()
 
 add_asm_files(kernel32_asm ${ASM_SOURCE})
@@ -163,7 +166,7 @@ set_subsystem(kernel32 console)
 target_link_libraries(kernel32 psapi_static kernel32_vista_static kernel32_shared wine chkstk ${PSEH_LIB})
 add_importlibs(kernel32 kernelbase ntdll)
 add_pch(kernel32 k32.h SOURCE)
-if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64") AND CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
+if(CLANG_NATIVE_SEH AND CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
     set_property(SOURCE client/except.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
     set_property(SOURCE client/except.c APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
 endif()

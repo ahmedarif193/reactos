@@ -11,7 +11,6 @@
 #endif
 
 #if (defined(_X86_) && !defined(__x86_64))
-  __declspec(noreturn) __MINGW_NOTHROW void __cdecl _longjmpex(jmp_buf _Buf,int _Value);
 #define setjmp _setjmp
 #define longjmp _longjmpex
 #else
@@ -32,4 +31,13 @@
 #endif
 
 #include <setjmp.h>
+
+#if (defined(_X86_) && !defined(__x86_64))
+/* jmp_buf and the CRT declaration macros must be defined first. Keep this
+ * declaration even when setjmp.h was included before setjmpex.h. */
+#ifdef __cplusplus
+extern "C"
+#endif
+  __declspec(noreturn) __MINGW_NOTHROW void __cdecl _longjmpex(jmp_buf _Buf,int _Value);
+#endif
 #endif

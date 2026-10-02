@@ -344,7 +344,7 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 #endif
 
-#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__) || defined(_M_RISCV64)
+#if !defined(_M_IX86) && !defined(_M_AMD64) && !defined(_M_ARM)
     {
         PFN_NUMBER StartPage = (ULONG_PTR)WinLdrSystemBlock >> PAGE_SHIFT;
         PFN_NUMBER EndPage = ((ULONG_PTR)WinLdrSystemBlock +

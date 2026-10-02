@@ -207,8 +207,14 @@ PortFdoStartMiniport(
         return Status;
     }
 
+    Status = PortInitializeDma(DeviceExtension, &DeviceExtension->Miniport.PortConfig);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     /* The request sizes are settled now; back them with lookasides. */
-    PortFdoInitializeRequestPools(DeviceExtension);
+    Status = PortFdoInitializeRequestPools(DeviceExtension);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     /* Connect the configured interrupt */
     Status = PortFdoConnectInterrupt(DeviceExtension);

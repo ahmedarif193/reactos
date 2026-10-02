@@ -61,7 +61,13 @@ if(USE_DUMMY_PSEH)
     add_definitions(-D_USE_DUMMY_PSEH=1)
 endif()
 
-if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND NOT USE_DUMMY_PSEH)
+# Clang implements native SEH for these targets (riscv64.cmake and ppc.cmake
+# set it for theirs).
+if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+    set(CLANG_NATIVE_SEH TRUE)
+endif()
+
+if(CLANG_NATIVE_SEH AND NOT USE_DUMMY_PSEH)
     add_definitions(-D_USE_NATIVE_SEH=1)
     # Native SEH must also cover loads and stores, not only calls. The MinGW
     # driver ignores -fasync-exceptions, so pass it directly to cc1. Keep this

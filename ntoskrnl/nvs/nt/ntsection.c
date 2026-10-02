@@ -428,7 +428,8 @@ MiIsImageMachine32Bit(
     return (BOOLEAN)(Machine == IMAGE_FILE_MACHINE_I386 ||
                      Machine == IMAGE_FILE_MACHINE_ARMV7 ||
                      Machine == IMAGE_FILE_MACHINE_ARM ||
-                     Machine == IMAGE_FILE_MACHINE_THUMB);
+                     Machine == IMAGE_FILE_MACHINE_THUMB ||
+                     Machine == IMAGE_FILE_MACHINE_POWERPC);
 }
 
 static

@@ -28,8 +28,9 @@ START_TEST(CcSetFileSizes)
      * 5: dirty VACB - FS & AS
      * 6: CcSetFileSizes with mapped data at tail of file
      * 7: purge a page range that only partially overlaps a VACB
+     * 8: extend a metadata mapping after pinning a partial first page
      */
-    for (TestId = 0; TestId < 8; ++TestId)
+    for (TestId = 0; TestId < 9; ++TestId)
     {
         Ret = KmtSendUlongToDriver(IOCTL_START_TEST, TestId);
         ok(Ret == ERROR_SUCCESS, "KmtSendUlongToDriver failed: %lx\n", Ret);

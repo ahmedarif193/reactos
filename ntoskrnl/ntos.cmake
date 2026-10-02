@@ -478,6 +478,39 @@ elseif(ARCH STREQUAL "riscv64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/riscv64/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/riscv64/rtlexcpt.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/riscv64/slist.c)
+elseif(ARCH STREQUAL "ppc")
+    list(REMOVE_ITEM SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ipi.c)
+    list(APPEND ASM_SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/ctxswitch.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/entry.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/stack.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/syscall.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/trap.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/usercall.S)
+    list(APPEND SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/config/ppc/cmhardwr.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/ppc/ioaccess.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/ppc/kdsup.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/atomic64.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/cache.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/console.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/context.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/cpu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/interrupt.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/irql.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/kiinit.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/mmu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/mp.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/spinlock.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/stack.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/stubs.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/syscall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/thrdini.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/trap.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/usercall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ppc/usercopy.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/ppc/psctx.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/ppc/rtlexcpt.c)
 endif()
 
 if(NOT _WINKD_)
@@ -505,6 +538,8 @@ endif()
             list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/kdb_help.S)
             list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/arm64-dis.c)
         endif()
+    elseif(ARCH STREQUAL "ppc")
+        list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/ppc/kdserial.c)
     elseif(ARCH STREQUAL "riscv64")
         list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/riscv64/kdserial.c)
         if(KDBG)

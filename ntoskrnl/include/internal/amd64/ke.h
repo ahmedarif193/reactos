@@ -1,6 +1,8 @@
 #ifndef __NTOSKRNL_INCLUDE_INTERNAL_AMD64_KE_H
 #define __NTOSKRNL_INCLUDE_INTERNAL_AMD64_KE_H
 
+/* The switch backend completes the outgoing-thread handoff on the new stack. */
+#define KI_ARCH_THREAD_HANDOFF_USES_RUNNING 1
 #ifdef __cplusplus
 extern "C" {
 #endif
