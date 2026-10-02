@@ -759,11 +759,6 @@ static void test_mui(void)
     ok( info->pServiceChecksum[0] == 's', "pServiceChecksum = %s\n",
             wine_dbgstr_an((char *)info->pServiceChecksum, sizeof(info->pServiceChecksum)) );
     ok( info->dwLanguageNameOffset == 72, "dwLanguageNameOffset = %ld\n", info->dwLanguageNameOffset );
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: These tests crash on ReactOS!\n");
-    } else {
-#endif
     str = (WCHAR *)(buf + info->dwLanguageNameOffset);
     ok( !wcscmp(str, L"en-US"), "language name = %s\n", wine_dbgstr_w(str) );
     ok( info->dwTypeIDMainSize == 1, "dwTypeIDMainSize = %ld\n", info->dwTypeIDMainSize );
@@ -784,9 +779,6 @@ static void test_mui(void)
     ok( !wcscmp(str, L"MUI"), "type name MUI[0] = %s\n", wine_dbgstr_w(str) );
     str += wcslen(str) + 1;
     ok( !str[0], "string list is not NULL terminated: %s\n", wine_dbgstr_w(str) );
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    }
-#endif
 
     res = BeginUpdateResourceW( en_dll, TRUE );
     ok( res != NULL, "BeginUpdateResourceW failed: %ld\n", GetLastError() );
@@ -810,11 +802,6 @@ static void test_mui(void)
     ok( info->pServiceChecksum[0] == 's', "pServiceChecksum = %s\n",
             wine_dbgstr_an((char *)info->pServiceChecksum, sizeof(info->pServiceChecksum)) );
     ok( info->dwLanguageNameOffset == 72, "dwLanguageNameOffset = %ld\n", info->dwLanguageNameOffset );
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: These tests crash on ReactOS!\n");
-    } else {
-#endif
     str = (WCHAR *)(buf + info->dwLanguageNameOffset);
     ok( !wcscmp(str, L"en-US"), "language name = %s\n", wine_dbgstr_w(str) );
     ok( !info->dwTypeIDMainSize, "dwTypeIDMainSize = %ld\n", info->dwTypeIDMainSize );
@@ -829,9 +816,6 @@ static void test_mui(void)
     ok( !wcscmp(str, L"MUI"), "type name MUI[0] = %s\n", wine_dbgstr_w(str) );
     str += wcslen(str) + 1;
     ok( !str[0], "string list is not NULL terminated: %s\n", wine_dbgstr_w(str) );
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    }
-#endif
 
     DeleteFileW( ln_dll );
     DeleteFileW( en_dll );
