@@ -1338,6 +1338,7 @@ CmpLoadHiveThread(IN PVOID StartContext)
 
         /* Set the hive flags and newly allocated hive pointer */
         CmHive->Flags = CmpMachineHiveList[i].CmHiveFlags;
+        CmHive->Hive.HiveFlags &= ~HIVE_NOLAZYFLUSH;
         CmpMachineHiveList[i].CmHive2 = CmHive;
     }
     else
