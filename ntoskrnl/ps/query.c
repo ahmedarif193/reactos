@@ -1179,8 +1179,7 @@ NtQueryInformationProcess(
                     ((PVM_COUNTERS_EX)VmCounters)->PrivateUsage = Process->CommitCharge << PAGE_SHIFT;
                 if (ProcessInformationLength >= sizeof(VM_COUNTERS_EX2))
                 {
-                    ((PVM_COUNTERS_EX2)VmCounters)->PrivateWorkingSetSize =
-                        min(Process->NumberOfPrivatePages, Process->Vm.Instance.WorkingSetSize) << PAGE_SHIFT;
+                    ((PVM_COUNTERS_EX2)VmCounters)->PrivateWorkingSetSize = 0;
                     ((PVM_COUNTERS_EX2)VmCounters)->SharedCommitUsage = 0;
                 }
 
@@ -4620,7 +4619,6 @@ NtSetInformationThread(
                 break;
             }
 
-            /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
                                                THREAD_SET_LIMITED_INFORMATION,
                                                PsThreadType,
