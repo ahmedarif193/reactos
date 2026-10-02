@@ -75,6 +75,23 @@ SPEC_TYPED_SYSCALLS = {
     "NtSubscribeWnfStateChange", "NtSystemDebugControl",
     "NtUnsubscribeWnfStateChange", "NtUpdateWnfStateData",
     "ZwGetNlsSectionPtr",
+    "NtCommitComplete", "NtCommitEnlistment", "NtCommitTransaction",
+    "NtCreateEnlistment", "NtCreateKeyTransacted", "NtCreateResourceManager",
+    "NtCreateTransaction", "NtCreateTransactionManager",
+    "NtEnumerateTransactionObject", "NtGetNotificationResourceManager",
+    "NtOpenEnlistment", "NtOpenKeyTransacted", "NtOpenKeyTransactedEx",
+    "NtOpenResourceManager", "NtOpenTransaction", "NtOpenTransactionManager",
+    "NtPrePrepareComplete", "NtPrePrepareEnlistment", "NtPrepareComplete",
+    "NtPrepareEnlistment", "NtPropagationComplete", "NtPropagationFailed",
+    "NtQueryInformationEnlistment", "NtQueryInformationResourceManager",
+    "NtQueryInformationTransaction", "NtQueryInformationTransactionManager",
+    "NtReadOnlyEnlistment", "NtRecoverEnlistment", "NtRecoverResourceManager",
+    "NtRecoverTransactionManager", "NtRegisterProtocolAddressInformation",
+    "NtRenameTransactionManager", "NtRollbackComplete",
+    "NtRollbackEnlistment", "NtRollbackTransaction",
+    "NtRollforwardTransactionManager", "NtSetInformationEnlistment",
+    "NtSetInformationResourceManager", "NtSetInformationTransaction",
+    "NtSetInformationTransactionManager", "NtSinglePhaseReject",
 }
 
 

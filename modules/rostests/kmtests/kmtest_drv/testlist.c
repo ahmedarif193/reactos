@@ -273,6 +273,7 @@ KMT_TESTFUNC Test_ObTypeNoClean;
 KMT_TESTFUNC Test_ObTypes;
 KMT_TESTFUNC Test_PoFxState;
 KMT_TESTFUNC Test_PoPowerLimit;
+KMT_TESTFUNC Test_TmTransactions;
 KMT_TESTFUNC Test_PoPowerSettings;
 KMT_TESTFUNC Test_PsNotify;
 KMT_TESTFUNC Test_PsQuota;
@@ -569,6 +570,7 @@ const KMT_TEST TestList[] =
     { "ObTypes",                            Test_ObTypes },
     { "PoFxState",                          Test_PoFxState },
     { "PoPowerLimit",                       Test_PoPowerLimit },
+    { "TmTransactions",                     Test_TmTransactions },
     { "PoPowerSettings",                    Test_PoPowerSettings },
     { "PsNotify",                           Test_PsNotify },
     { "PsEnergy",                           Test_PsEnergy },

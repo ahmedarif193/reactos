@@ -2736,52 +2736,52 @@
 @ stub -arch=win64 MmSetPermanentCacheAttribute
 @ stub -arch=arm64 MmUnlockPreChargedPagedPool
 @ stdcall -arch=arm64 NtAlertThreadByThreadId(ptr)
-@ stub -arch=arm64 NtCommitComplete
-@ stub -arch=arm64 NtCommitEnlistment
-@ stub -arch=arm64 NtCommitTransaction
+@ stdcall NtCommitComplete(ptr ptr)
+@ stdcall NtCommitEnlistment(ptr ptr)
+@ stdcall NtCommitTransaction(ptr long)
 @ stub -arch=win64 NtCompareSigningLevels
 @ stub -arch=win64 NtCopyFileChunk
 @ stub -arch=win64 NtCreateCrossVmEvent
-@ stub -arch=arm64 NtCreateEnlistment
-@ stub -arch=arm64 NtCreateResourceManager
-@ stub -arch=arm64 NtCreateTransaction
+@ stdcall NtCreateEnlistment(ptr long ptr ptr ptr long long ptr)
+@ stdcall NtCreateResourceManager(ptr long ptr ptr ptr long ptr)
+@ stdcall NtCreateTransaction(ptr long ptr ptr ptr long long long ptr ptr)
 @ stdcall NtCreateTransactionManager(ptr long ptr ptr long long)
-@ stub -arch=arm64 NtEnumerateTransactionObject
+@ stdcall NtEnumerateTransactionObject(ptr long ptr long ptr)
 @ stub -arch=win64 NtFreezeTransactions
 @ stub -arch=win64 NtGetEnvironmentVariableEx
-@ stub -arch=arm64 NtGetNotificationResourceManager
+@ stdcall NtGetNotificationResourceManager(ptr ptr long ptr ptr long ptr)
 @ stub -arch=win64 NtImageInfo
 @ stdcall -arch=win64 NtNotifyChangeDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long long)
-@ stub -arch=arm64 NtOpenEnlistment
-@ stub -arch=arm64 NtOpenResourceManager
-@ stub -arch=arm64 NtOpenTransaction
-@ stub -arch=arm64 NtOpenTransactionManager
-@ stub -arch=arm64 NtPrePrepareComplete
-@ stub -arch=arm64 NtPrePrepareEnlistment
-@ stub -arch=arm64 NtPrepareComplete
-@ stub -arch=arm64 NtPrepareEnlistment
-@ stub -arch=arm64 NtPropagationComplete
-@ stub -arch=arm64 NtPropagationFailed
+@ stdcall NtOpenEnlistment(ptr long ptr ptr ptr)
+@ stdcall NtOpenResourceManager(ptr long ptr ptr ptr)
+@ stdcall NtOpenTransaction(ptr long ptr ptr ptr)
+@ stdcall NtOpenTransactionManager(ptr long ptr ptr ptr long)
+@ stdcall NtPrePrepareComplete(ptr ptr)
+@ stdcall NtPrePrepareEnlistment(ptr ptr)
+@ stdcall NtPrepareComplete(ptr ptr)
+@ stdcall NtPrepareEnlistment(ptr ptr)
+@ stdcall NtPropagationComplete(ptr long long ptr)
+@ stdcall NtPropagationFailed(ptr long long)
 @ stdcall -arch=win64 NtQueryDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long ptr)
 @ stub -arch=win64 NtQueryEnvironmentVariableInfoEx
 @ stdcall -arch=win64 NtQueryInformationByName(ptr ptr ptr long long)
-@ stub -arch=arm64 NtQueryInformationEnlistment
-@ stub -arch=arm64 NtQueryInformationResourceManager
-@ stub -arch=arm64 NtQueryInformationTransaction
-@ stub -arch=arm64 NtQueryInformationTransactionManager
+@ stdcall NtQueryInformationEnlistment(ptr long ptr long ptr)
+@ stdcall NtQueryInformationResourceManager(ptr long ptr long ptr)
+@ stdcall NtQueryInformationTransaction(ptr long ptr long ptr)
+@ stdcall NtQueryInformationTransactionManager(ptr long ptr long ptr)
 @ stub -arch=win64 NtQuerySecurityAttributesToken
 @ stdcall -version=0x601+ -arch=win64 NtQuerySystemInformationEx(long ptr long ptr long ptr)
-@ stub -arch=arm64 NtReadOnlyEnlistment
-@ stub -arch=arm64 NtRecoverEnlistment
-@ stub -arch=arm64 NtRecoverResourceManager
-@ stub -arch=arm64 NtRecoverTransactionManager
-@ stub -arch=arm64 NtRollbackComplete
-@ stub -arch=arm64 NtRollbackEnlistment
-@ stub -arch=arm64 NtRollbackTransaction
+@ stdcall NtReadOnlyEnlistment(ptr ptr)
+@ stdcall NtRecoverEnlistment(ptr ptr)
+@ stdcall NtRecoverResourceManager(ptr)
+@ stdcall NtRecoverTransactionManager(ptr)
+@ stdcall NtRollbackComplete(ptr ptr)
+@ stdcall NtRollbackEnlistment(ptr ptr)
+@ stdcall NtRollbackTransaction(ptr long)
 @ stub -arch=win64 NtSetCachedSigningLevel
-@ stub -arch=arm64 NtSetInformationEnlistment
-@ stub -arch=arm64 NtSetInformationResourceManager
-@ stub -arch=arm64 NtSetInformationTransaction
+@ stdcall NtSetInformationEnlistment(ptr long ptr long)
+@ stdcall NtSetInformationResourceManager(ptr long ptr long)
+@ stdcall NtSetInformationTransaction(ptr long ptr long)
 @ stdcall -arch=win64 NtSetInformationVirtualMemory(ptr long ptr ptr ptr long)
 @ stub -arch=win64 NtThawTransactions
 @ stub -arch=win64 NtTraceControl
@@ -3250,39 +3250,39 @@
 @ stub -arch=win64 SkQuerySecureKernelInformation
 @ stub -arch=win64 SkReleasePushLockExclusive
 @ stub -arch=win64 TmCancelPropagationRequest
-@ stub -arch=arm64 TmCommitComplete
-@ stub -arch=arm64 TmCommitEnlistment
-@ stub -arch=arm64 TmCommitTransaction
-@ stub -arch=arm64 TmCreateEnlistment
+@ stdcall TmCommitComplete(ptr ptr)
+@ stdcall TmCommitEnlistment(ptr ptr)
+@ stdcall TmCommitTransaction(ptr long)
+@ stdcall TmCreateEnlistment(ptr long long ptr ptr ptr long long ptr)
 @ stub -arch=win64 TmCurrentTransaction
-@ stub -arch=arm64 TmDereferenceEnlistmentKey
-@ stub -arch=arm64 TmEnableCallbacks
+@ stdcall TmDereferenceEnlistmentKey(ptr ptr)
+@ stdcall TmEnableCallbacks(ptr ptr ptr)
 @ stub -arch=win64 TmEndPropagationRequest
 @ stub -arch=win64 TmFreezeTransactions
-@ stub -arch=arm64 TmGetTransactionId
+@ stdcall TmGetTransactionId(ptr ptr)
 @ stub -arch=win64 TmInitSystem
 @ stub -arch=win64 TmInitSystemPhase2
-@ stub -arch=arm64 TmInitializeTransactionManager
+@ stdcall TmInitializeTransactionManager(ptr ptr ptr long)
 @ stub -arch=win64 TmIsKTMCommitCoordinator
-@ stub -arch=arm64 TmIsTransactionActive
-@ stub -arch=arm64 TmPrePrepareComplete
-@ stub -arch=arm64 TmPrePrepareEnlistment
-@ stub -arch=arm64 TmPrepareComplete
-@ stub -arch=arm64 TmPrepareEnlistment
-@ stub -arch=arm64 TmPropagationComplete
-@ stub -arch=arm64 TmPropagationFailed
-@ stub -arch=arm64 TmReadOnlyEnlistment
-@ stub -arch=arm64 TmRecoverEnlistment
-@ stub -arch=arm64 TmRecoverResourceManager
-@ stub -arch=arm64 TmRecoverTransactionManager
-@ stub -arch=arm64 TmReferenceEnlistmentKey
-@ stub -arch=arm64 TmRenameTransactionManager
-@ stub -arch=arm64 TmRequestOutcomeEnlistment
-@ stub -arch=arm64 TmRollbackComplete
-@ stub -arch=arm64 TmRollbackEnlistment
-@ stub -arch=arm64 TmRollbackTransaction
+@ stdcall TmIsTransactionActive(ptr)
+@ stdcall TmPrePrepareComplete(ptr ptr)
+@ stdcall TmPrePrepareEnlistment(ptr ptr)
+@ stdcall TmPrepareComplete(ptr ptr)
+@ stdcall TmPrepareEnlistment(ptr ptr)
+@ stdcall TmPropagationComplete(ptr long long ptr)
+@ stdcall TmPropagationFailed(ptr long long)
+@ stdcall TmReadOnlyEnlistment(ptr ptr)
+@ stdcall TmRecoverEnlistment(ptr ptr)
+@ stdcall TmRecoverResourceManager(ptr)
+@ stdcall TmRecoverTransactionManager(ptr ptr)
+@ stdcall TmReferenceEnlistmentKey(ptr ptr)
+@ stdcall TmRenameTransactionManager(ptr ptr)
+@ stdcall TmRequestOutcomeEnlistment(ptr ptr)
+@ stdcall TmRollbackComplete(ptr ptr)
+@ stdcall TmRollbackEnlistment(ptr ptr)
+@ stdcall TmRollbackTransaction(ptr long)
 @ stub -arch=win64 TmSetCurrentTransaction
-@ stub -arch=arm64 TmSinglePhaseReject
+@ stdcall TmSinglePhaseReject(ptr ptr)
 @ stub -arch=win64 TmThawTransactions
 @ stdcall -arch=i386,win64 TtmNotifyDeviceArrival(long ptr ptr long ptr)
 @ stdcall -arch=i386,win64 TtmNotifyDeviceDeparture(long ptr)
@@ -3351,78 +3351,78 @@
 @ stdcall -arch=arm64 ZwAlertThreadByThreadId(ptr)
 @ stdcall -arch=i386,win64 ZwAssociateWaitCompletionPacket(ptr ptr ptr ptr ptr long ptr ptr)
 @ stdcall -arch=i386,win64 ZwCancelWaitCompletionPacket(ptr long)
-@ stub -arch=arm64 ZwCommitComplete
-@ stub -arch=arm64 ZwCommitEnlistment
+@ stdcall ZwCommitComplete(ptr ptr)
+@ stdcall ZwCommitEnlistment(ptr ptr)
 @ stub -arch=win64 ZwCommitRegistryTransaction
-@ stub -arch=arm64 ZwCommitTransaction
+@ stdcall ZwCommitTransaction(ptr long)
 @ stub -arch=win64 ZwCreateCpuPartition
 @ stub -arch=win64 ZwCreateCrossVmEvent
-@ stub -arch=arm64 ZwCreateEnlistment
+@ stdcall ZwCreateEnlistment(ptr long ptr ptr ptr long long ptr)
 @ stub -arch=arm64 ZwCreateKeyTransacted
 @ stub -arch=win64 ZwCreatePartition
 @ stub -arch=arm64 ZwCreateProfileEx
 @ stub -arch=win64 ZwCreateRegistryTransaction
-@ stub -arch=arm64 ZwCreateResourceManager
+@ stdcall ZwCreateResourceManager(ptr long ptr ptr ptr long ptr)
 @ stub -arch=win64 ZwCreateSectionEx
-@ stub -arch=arm64 ZwCreateTransaction
+@ stdcall ZwCreateTransaction(ptr long ptr ptr ptr long long long ptr ptr)
 @ stdcall ZwCreateTransactionManager(ptr long ptr ptr long long)
 @ stdcall -arch=i386,win64 ZwCreateWaitCompletionPacket(ptr long ptr)
 @ stdcall -version=0x602+ -arch=win64 ZwCreateWnfStateName(ptr long long long ptr long ptr)
 @ stdcall -version=0x602+ -arch=win64 ZwDeleteWnfStateData(ptr ptr)
 @ stdcall -version=0x602+ -arch=win64 ZwDeleteWnfStateName(ptr)
-@ stub -arch=arm64 ZwEnumerateTransactionObject
+@ stdcall ZwEnumerateTransactionObject(ptr long ptr long ptr)
 @ stdcall -arch=win64 ZwFlushBuffersFileEx(ptr long ptr long ptr)
 @ stub -arch=win64 ZwGetCachedSigningLevel
 @ stub -arch=win64 ZwGetNextProcess
 @ stdcall -version=0x600+ ZwGetNextThread(ptr ptr long long long ptr)
-@ stub -arch=arm64 ZwGetNotificationResourceManager
+@ stdcall ZwGetNotificationResourceManager(ptr ptr long ptr ptr long ptr)
 @ stdcall -arch=i386,win64 ZwManagePartition(ptr ptr long ptr long)
 @ stub -arch=win64 ZwMapViewOfSectionEx
 @ stdcall -arch=win64 ZwNotifyChangeDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long long)
 @ stub -arch=win64 ZwNotifyChangeSession
 @ stub -arch=win64 ZwOpenCpuPartition
-@ stub -arch=arm64 ZwOpenEnlistment
+@ stdcall ZwOpenEnlistment(ptr long ptr ptr ptr)
 @ stdcall -version=0x601+ ZwOpenKeyEx(ptr long ptr long)
 @ stub -arch=arm64 ZwOpenKeyTransacted
 @ stub -arch=arm64 ZwOpenKeyTransactedEx
 @ stdcall -arch=i386,win64 ZwOpenPartition(ptr long ptr)
 @ stub -arch=win64 ZwOpenRegistryTransaction
-@ stub -arch=arm64 ZwOpenResourceManager
+@ stdcall ZwOpenResourceManager(ptr long ptr ptr ptr)
 @ stub -arch=win64 ZwOpenSession
-@ stub -arch=arm64 ZwOpenTransaction
-@ stub -arch=arm64 ZwOpenTransactionManager
-@ stub -arch=arm64 ZwPrePrepareComplete
-@ stub -arch=arm64 ZwPrePrepareEnlistment
-@ stub -arch=arm64 ZwPrepareComplete
-@ stub -arch=arm64 ZwPrepareEnlistment
-@ stub -arch=arm64 ZwPropagationComplete
-@ stub -arch=arm64 ZwPropagationFailed
+@ stdcall ZwOpenTransaction(ptr long ptr ptr ptr)
+@ stdcall ZwOpenTransactionManager(ptr long ptr ptr ptr long)
+@ stdcall ZwPrePrepareComplete(ptr ptr)
+@ stdcall ZwPrePrepareEnlistment(ptr ptr)
+@ stdcall ZwPrepareComplete(ptr ptr)
+@ stdcall ZwPrepareEnlistment(ptr ptr)
+@ stdcall ZwPropagationComplete(ptr long long ptr)
+@ stdcall ZwPropagationFailed(ptr long long)
 @ stdcall -arch=win64 ZwQueryDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long ptr)
 @ stdcall -arch=win64 ZwQueryInformationByName(ptr ptr ptr long long)
 @ stub -arch=win64 ZwQueryInformationCpuPartition
-@ stub -arch=arm64 ZwQueryInformationEnlistment
-@ stub -arch=arm64 ZwQueryInformationResourceManager
-@ stub -arch=arm64 ZwQueryInformationTransaction
-@ stub -arch=arm64 ZwQueryInformationTransactionManager
+@ stdcall ZwQueryInformationEnlistment(ptr long ptr long ptr)
+@ stdcall ZwQueryInformationResourceManager(ptr long ptr long ptr)
+@ stdcall ZwQueryInformationTransaction(ptr long ptr long ptr)
+@ stdcall ZwQueryInformationTransactionManager(ptr long ptr long ptr)
 @ stdcall -arch=i386,win64 ZwQueryLicenseValue(ptr ptr ptr long ptr)
 @ stub -arch=win64 ZwQuerySecurityAttributesToken
 @ stub -arch=win64 ZwQuerySecurityPolicy
 @ stdcall -version=0x601+ -arch=win64 ZwQuerySystemInformationEx(long ptr long ptr long ptr)
 @ stdcall -version=0x602+ -arch=win64 ZwQueryWnfStateData(ptr ptr ptr ptr ptr ptr)
 @ stdcall -version=0x602+ -arch=win64 ZwQueryWnfStateNameInformation(ptr long ptr ptr long)
-@ stub -arch=arm64 ZwReadOnlyEnlistment
-@ stub -arch=arm64 ZwRecoverEnlistment
-@ stub -arch=arm64 ZwRecoverResourceManager
-@ stub -arch=arm64 ZwRecoverTransactionManager
-@ stub -arch=arm64 ZwRollbackComplete
-@ stub -arch=arm64 ZwRollbackEnlistment
+@ stdcall ZwReadOnlyEnlistment(ptr ptr)
+@ stdcall ZwRecoverEnlistment(ptr ptr)
+@ stdcall ZwRecoverResourceManager(ptr)
+@ stdcall ZwRecoverTransactionManager(ptr)
+@ stdcall ZwRollbackComplete(ptr ptr)
+@ stdcall ZwRollbackEnlistment(ptr ptr)
 @ stub -arch=win64 ZwRollbackRegistryTransaction
-@ stub -arch=arm64 ZwRollbackTransaction
+@ stdcall ZwRollbackTransaction(ptr long)
 @ stub -arch=win64 ZwSetCachedSigningLevel
 @ stub -arch=win64 ZwSetInformationCpuPartition
-@ stub -arch=arm64 ZwSetInformationEnlistment
-@ stub -arch=arm64 ZwSetInformationResourceManager
-@ stub -arch=arm64 ZwSetInformationTransaction
+@ stdcall ZwSetInformationEnlistment(ptr long ptr long)
+@ stdcall ZwSetInformationResourceManager(ptr long ptr long)
+@ stdcall ZwSetInformationTransaction(ptr long ptr long)
 @ stdcall ZwSetInformationVirtualMemory(ptr long ptr ptr ptr long)
 @ stub -arch=win64 ZwSetTimerEx
 @ stub -arch=win64 ZwTraceControl

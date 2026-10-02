@@ -289,12 +289,62 @@ typedef struct
     ULONG            Buffer;
 } PLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA32;
 
+typedef struct
+{
+    ULONG         TransactionKey;
+    ULONG         TransactionNotification;
+    LARGE_INTEGER TmVirtualClock;
+    ULONG         ArgumentLength;
+} TRANSACTION_NOTIFICATION32;
+
+typedef struct
+{
+    void         *TransactionKey;
+    ULONG         TransactionNotification;
+    LARGE_INTEGER TmVirtualClock;
+    ULONG         ArgumentLength;
+} TRANSACTION_NOTIFICATION64;
+
 /**********************************************************************
  * Syscall prototypes not present in the Wine headers.  Signatures
  * follow the ReactOS NDK; enums are declared as ULONG and opaque
  * flat structures as void pointers.
  */
 
+NTSYSAPI NTSTATUS WINAPI NtCommitComplete( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtCommitEnlistment( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtCreateEnlistment( HANDLE *, ULONG, HANDLE, HANDLE, OBJECT_ATTRIBUTES *, ULONG, ULONG, void * );
+NTSYSAPI NTSTATUS WINAPI NtCreateResourceManager( HANDLE *, ULONG, HANDLE, void *, OBJECT_ATTRIBUTES *, ULONG, UNICODE_STRING * );
+NTSYSAPI NTSTATUS WINAPI NtEnumerateTransactionObject( HANDLE, ULONG, void *, ULONG, void * );
+NTSYSAPI NTSTATUS WINAPI NtGetNotificationResourceManager( HANDLE, void *, ULONG, LARGE_INTEGER *, ULONG *, ULONG, ULONG_PTR );
+NTSYSAPI NTSTATUS WINAPI NtOpenEnlistment( HANDLE *, ULONG, HANDLE, void *, OBJECT_ATTRIBUTES * );
+NTSYSAPI NTSTATUS WINAPI NtOpenResourceManager( HANDLE *, ULONG, HANDLE, void *, OBJECT_ATTRIBUTES * );
+NTSYSAPI NTSTATUS WINAPI NtOpenTransaction( HANDLE *, ULONG, OBJECT_ATTRIBUTES *, void *, HANDLE );
+NTSYSAPI NTSTATUS WINAPI NtOpenTransactionManager( HANDLE *, ULONG, OBJECT_ATTRIBUTES *, UNICODE_STRING *, void *, ULONG );
+NTSYSAPI NTSTATUS WINAPI NtPrePrepareComplete( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtPrePrepareEnlistment( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtPrepareComplete( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtPrepareEnlistment( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtPropagationComplete( HANDLE, ULONG, ULONG, void * );
+NTSYSAPI NTSTATUS WINAPI NtPropagationFailed( HANDLE, ULONG, ULONG );
+NTSYSAPI NTSTATUS WINAPI NtQueryInformationEnlistment( HANDLE, ULONG, void *, ULONG, void * );
+NTSYSAPI NTSTATUS WINAPI NtQueryInformationResourceManager( HANDLE, ULONG, void *, ULONG, void * );
+NTSYSAPI NTSTATUS WINAPI NtQueryInformationTransaction( HANDLE, ULONG, void *, ULONG, void * );
+NTSYSAPI NTSTATUS WINAPI NtQueryInformationTransactionManager( HANDLE, ULONG, void *, ULONG, void * );
+NTSYSAPI NTSTATUS WINAPI NtReadOnlyEnlistment( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtRecoverEnlistment( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtRecoverResourceManager( HANDLE );
+NTSYSAPI NTSTATUS WINAPI NtRecoverTransactionManager( HANDLE );
+NTSYSAPI NTSTATUS WINAPI NtRegisterProtocolAddressInformation( HANDLE, void *, ULONG, void *, ULONG );
+NTSYSAPI NTSTATUS WINAPI NtRenameTransactionManager( UNICODE_STRING *, void * );
+NTSYSAPI NTSTATUS WINAPI NtRollbackComplete( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtRollbackEnlistment( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtRollforwardTransactionManager( HANDLE, void * );
+NTSYSAPI NTSTATUS WINAPI NtSetInformationEnlistment( HANDLE, ULONG, void *, ULONG );
+NTSYSAPI NTSTATUS WINAPI NtSetInformationResourceManager( HANDLE, ULONG, void *, ULONG );
+NTSYSAPI NTSTATUS WINAPI NtSetInformationTransaction( HANDLE, ULONG, void *, ULONG );
+NTSYSAPI NTSTATUS WINAPI NtSetInformationTransactionManager( HANDLE, ULONG, void *, ULONG );
+NTSYSAPI NTSTATUS WINAPI NtSinglePhaseReject( HANDLE, void * );
 NTSYSAPI NTSTATUS WINAPI NtAccessCheckByType( SECURITY_DESCRIPTOR *, SID *, HANDLE, ACCESS_MASK, OBJECT_TYPE_LIST *, ULONG, GENERIC_MAPPING *, PRIVILEGE_SET *, ULONG *, ACCESS_MASK *, NTSTATUS * );
 NTSYSAPI NTSTATUS WINAPI NtAccessCheckByTypeResultList( SECURITY_DESCRIPTOR *, SID *, HANDLE, ACCESS_MASK, OBJECT_TYPE_LIST *, ULONG, GENERIC_MAPPING *, PRIVILEGE_SET *, ULONG *, ACCESS_MASK *, NTSTATUS * );
 NTSYSAPI NTSTATUS WINAPI NtAccessCheckByTypeResultListAndAuditAlarm( UNICODE_STRING *, void *, UNICODE_STRING *, UNICODE_STRING *, SECURITY_DESCRIPTOR *, SID *, ACCESS_MASK, ULONG, ULONG, OBJECT_TYPE_LIST *, ULONG, GENERIC_MAPPING *, BOOLEAN, ACCESS_MASK *, NTSTATUS *, BOOLEAN * );
@@ -2176,4 +2226,532 @@ NTSTATUS WINAPI wow64_NtWaitLowEventPair( UINT *args )
     HANDLE handle = get_handle( &args );
 
     return NtWaitLowEventPair( handle );
+}
+
+
+/**********************************************************************
+ *           wow64_NtCommitComplete
+ */
+NTSTATUS WINAPI wow64_NtCommitComplete( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtCommitComplete( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtCommitEnlistment
+ */
+NTSTATUS WINAPI wow64_NtCommitEnlistment( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtCommitEnlistment( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtCreateEnlistment
+ */
+NTSTATUS WINAPI wow64_NtCreateEnlistment( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ULONG access = get_ulong( &args );
+    HANDLE rm = get_handle( &args );
+    HANDLE transaction = get_handle( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    ULONG options = get_ulong( &args );
+    ULONG mask = get_ulong( &args );
+    void *key = get_ptr( &args );
+
+    struct object_attr64 attr;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtCreateEnlistment( &handle, access, rm, transaction, objattr_32to64( &attr, attr32 ), options, mask, key );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtCreateResourceManager
+ */
+NTSTATUS WINAPI wow64_NtCreateResourceManager( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ULONG access = get_ulong( &args );
+    HANDLE tm = get_handle( &args );
+    void *guid = get_ptr( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    ULONG options = get_ulong( &args );
+    UNICODE_STRING32 *str32 = get_ptr( &args );
+
+    struct object_attr64 attr;
+    UNICODE_STRING str;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtCreateResourceManager( &handle, access, tm, guid, objattr_32to64( &attr, attr32 ), options, unicode_str_32to64( &str, str32 ) );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtEnumerateTransactionObject
+ */
+NTSTATUS WINAPI wow64_NtEnumerateTransactionObject( UINT *args )
+{
+    HANDLE root = get_handle( &args );
+    ULONG type = get_ulong( &args );
+    void *cursor = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+    void *retlen = get_ptr( &args );
+
+    return NtEnumerateTransactionObject( root, type, cursor, len, retlen );
+}
+
+
+/**********************************************************************
+ *           wow64_NtGetNotificationResourceManager
+ */
+NTSTATUS WINAPI wow64_NtGetNotificationResourceManager( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    TRANSACTION_NOTIFICATION32 *notification32 = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+    LARGE_INTEGER *timeout = get_ptr( &args );
+    ULONG *retlen = get_ptr( &args );
+    ULONG async = get_ulong( &args );
+    ULONG context = get_ulong( &args );
+
+    TRANSACTION_NOTIFICATION64 notification;
+    NTSTATUS status;
+
+    if (len < sizeof(*notification32))
+    {
+        if (retlen) *retlen = sizeof(*notification32);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    status = NtGetNotificationResourceManager( handle, &notification, sizeof(notification), timeout, NULL, async, context );
+    if (status == STATUS_SUCCESS)
+    {
+        notification32->TransactionKey = PtrToUlong( notification.TransactionKey );
+        notification32->TransactionNotification = notification.TransactionNotification;
+        notification32->TmVirtualClock = notification.TmVirtualClock;
+        notification32->ArgumentLength = notification.ArgumentLength;
+        if (retlen) *retlen = sizeof(*notification32);
+    }
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtOpenEnlistment
+ */
+NTSTATUS WINAPI wow64_NtOpenEnlistment( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ULONG access = get_ulong( &args );
+    HANDLE rm = get_handle( &args );
+    void *guid = get_ptr( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+
+    struct object_attr64 attr;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtOpenEnlistment( &handle, access, rm, guid, objattr_32to64( &attr, attr32 ) );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtOpenResourceManager
+ */
+NTSTATUS WINAPI wow64_NtOpenResourceManager( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ULONG access = get_ulong( &args );
+    HANDLE tm = get_handle( &args );
+    void *guid = get_ptr( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+
+    struct object_attr64 attr;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtOpenResourceManager( &handle, access, tm, guid, objattr_32to64( &attr, attr32 ) );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtOpenTransaction
+ */
+NTSTATUS WINAPI wow64_NtOpenTransaction( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ULONG access = get_ulong( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    void *guid = get_ptr( &args );
+    HANDLE tm = get_handle( &args );
+
+    struct object_attr64 attr;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtOpenTransaction( &handle, access, objattr_32to64( &attr, attr32 ), guid, tm );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtOpenTransactionManager
+ */
+NTSTATUS WINAPI wow64_NtOpenTransactionManager( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ULONG access = get_ulong( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    UNICODE_STRING32 *str32 = get_ptr( &args );
+    void *guid = get_ptr( &args );
+    ULONG options = get_ulong( &args );
+
+    struct object_attr64 attr;
+    UNICODE_STRING str;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtOpenTransactionManager( &handle, access, objattr_32to64( &attr, attr32 ), unicode_str_32to64( &str, str32 ), guid, options );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtPrePrepareComplete
+ */
+NTSTATUS WINAPI wow64_NtPrePrepareComplete( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtPrePrepareComplete( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtPrePrepareEnlistment
+ */
+NTSTATUS WINAPI wow64_NtPrePrepareEnlistment( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtPrePrepareEnlistment( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtPrepareComplete
+ */
+NTSTATUS WINAPI wow64_NtPrepareComplete( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtPrepareComplete( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtPrepareEnlistment
+ */
+NTSTATUS WINAPI wow64_NtPrepareEnlistment( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtPrepareEnlistment( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtPropagationComplete
+ */
+NTSTATUS WINAPI wow64_NtPropagationComplete( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG cookie = get_ulong( &args );
+    ULONG len = get_ulong( &args );
+    void *buffer = get_ptr( &args );
+
+    return NtPropagationComplete( handle, cookie, len, buffer );
+}
+
+
+/**********************************************************************
+ *           wow64_NtPropagationFailed
+ */
+NTSTATUS WINAPI wow64_NtPropagationFailed( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG cookie = get_ulong( &args );
+    ULONG prop_status = get_ulong( &args );
+
+    return NtPropagationFailed( handle, cookie, prop_status );
+}
+
+
+/**********************************************************************
+ *           wow64_NtQueryInformationEnlistment
+ */
+NTSTATUS WINAPI wow64_NtQueryInformationEnlistment( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+    void *retlen = get_ptr( &args );
+
+    return NtQueryInformationEnlistment( handle, class, info, len, retlen );
+}
+
+
+/**********************************************************************
+ *           wow64_NtQueryInformationResourceManager
+ */
+NTSTATUS WINAPI wow64_NtQueryInformationResourceManager( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+    void *retlen = get_ptr( &args );
+
+    return NtQueryInformationResourceManager( handle, class, info, len, retlen );
+}
+
+
+/**********************************************************************
+ *           wow64_NtQueryInformationTransaction
+ */
+NTSTATUS WINAPI wow64_NtQueryInformationTransaction( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+    void *retlen = get_ptr( &args );
+
+    return NtQueryInformationTransaction( handle, class, info, len, retlen );
+}
+
+
+/**********************************************************************
+ *           wow64_NtQueryInformationTransactionManager
+ */
+NTSTATUS WINAPI wow64_NtQueryInformationTransactionManager( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+    void *retlen = get_ptr( &args );
+
+    return NtQueryInformationTransactionManager( handle, class, info, len, retlen );
+}
+
+
+/**********************************************************************
+ *           wow64_NtReadOnlyEnlistment
+ */
+NTSTATUS WINAPI wow64_NtReadOnlyEnlistment( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtReadOnlyEnlistment( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRecoverEnlistment
+ */
+NTSTATUS WINAPI wow64_NtRecoverEnlistment( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *key = get_ptr( &args );
+
+    return NtRecoverEnlistment( handle, key );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRecoverResourceManager
+ */
+NTSTATUS WINAPI wow64_NtRecoverResourceManager( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+
+    return NtRecoverResourceManager( handle );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRecoverTransactionManager
+ */
+NTSTATUS WINAPI wow64_NtRecoverTransactionManager( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+
+    return NtRecoverTransactionManager( handle );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRegisterProtocolAddressInformation
+ */
+NTSTATUS WINAPI wow64_NtRegisterProtocolAddressInformation( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *protocol = get_ptr( &args );
+    ULONG size = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG options = get_ulong( &args );
+
+    return NtRegisterProtocolAddressInformation( handle, protocol, size, info, options );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRenameTransactionManager
+ */
+NTSTATUS WINAPI wow64_NtRenameTransactionManager( UINT *args )
+{
+    UNICODE_STRING32 *str32 = get_ptr( &args );
+    void *guid = get_ptr( &args );
+
+    UNICODE_STRING str;
+
+    return NtRenameTransactionManager( unicode_str_32to64( &str, str32 ), guid );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRollbackComplete
+ */
+NTSTATUS WINAPI wow64_NtRollbackComplete( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtRollbackComplete( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRollbackEnlistment
+ */
+NTSTATUS WINAPI wow64_NtRollbackEnlistment( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtRollbackEnlistment( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtRollforwardTransactionManager
+ */
+NTSTATUS WINAPI wow64_NtRollforwardTransactionManager( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtRollforwardTransactionManager( handle, clock );
+}
+
+
+/**********************************************************************
+ *           wow64_NtSetInformationEnlistment
+ */
+NTSTATUS WINAPI wow64_NtSetInformationEnlistment( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+
+    return NtSetInformationEnlistment( handle, class, info, len );
+}
+
+
+/**********************************************************************
+ *           wow64_NtSetInformationResourceManager
+ */
+NTSTATUS WINAPI wow64_NtSetInformationResourceManager( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+
+    return NtSetInformationResourceManager( handle, class, info, len );
+}
+
+
+/**********************************************************************
+ *           wow64_NtSetInformationTransaction
+ */
+NTSTATUS WINAPI wow64_NtSetInformationTransaction( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+
+    return NtSetInformationTransaction( handle, class, info, len );
+}
+
+
+/**********************************************************************
+ *           wow64_NtSetInformationTransactionManager
+ */
+NTSTATUS WINAPI wow64_NtSetInformationTransactionManager( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    ULONG class = get_ulong( &args );
+    void *info = get_ptr( &args );
+    ULONG len = get_ulong( &args );
+
+    return NtSetInformationTransactionManager( handle, class, info, len );
+}
+
+
+/**********************************************************************
+ *           wow64_NtSinglePhaseReject
+ */
+NTSTATUS WINAPI wow64_NtSinglePhaseReject( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    void *clock = get_ptr( &args );
+
+    return NtSinglePhaseReject( handle, clock );
 }

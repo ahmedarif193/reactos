@@ -76,7 +76,6 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/sysinfo.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer.c
-    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/transaction.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/uuid.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/wddm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/win32k.c
@@ -278,6 +277,10 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/tokenadj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/tokencls.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/tokenlif.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/enlist.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/rm.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tm.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/driver.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/guidobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/pcw.c
