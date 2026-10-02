@@ -341,12 +341,16 @@ DereferenceSocket(_In_ PWSK_SOCKET_INTERNAL Socket)
     DereferenceSocketSynchronous(Socket);
 }
 
+NTSTATUS
+WfpCreateDevice(
+    _In_ PDRIVER_OBJECT DriverObject);
+
 NTSTATUS NTAPI
 DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
     FUNCTION_TRACE;
 
-    return STATUS_SUCCESS;
+    return WfpCreateDevice(DriverObject);
 }
 
 static NTSTATUS WSKAPI

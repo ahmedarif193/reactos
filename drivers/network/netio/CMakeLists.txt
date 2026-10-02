@@ -13,7 +13,11 @@ include_directories(
 list(APPEND SOURCE
     netio.c
     nmr_stubs.c
-    fwp_stubs.c
+    wfp/device.c
+    wfp/engine.c
+    wfp/flow.c
+    wfp/packet.c
+    wfp/layers.c
     fwp_ipsec.c
     iphlp.c
     ../tdihelpers/tdi.c
@@ -21,14 +25,9 @@ list(APPEND SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/netio.def)
 
 add_library(netio MODULE ${SOURCE})
-target_link_libraries(netio ${PSEH_LIB})
-# NETIO.SYS builds for the NT 6.1 target. Override the global NT target
-# explicitly without triggering command-line macro redefinition warnings.
-target_compile_options(netio PRIVATE
-    -UNTDDI_VERSION -DNTDDI_VERSION=0x06010000
-    -U_WIN32_WINNT -D_WIN32_WINNT=0x0601
-    -UWINVER -DWINVER=0x0601)
+target_link_libraries(netio wdmsec ${PSEH_LIB})
+target_compile_definitions(netio PRIVATE NDIS620)
 set_module_type(netio kernelmodedriver)
-add_importlibs(netio ntoskrnl hal)
+add_importlibs(netio ndis ntoskrnl hal)
 add_cd_file(TARGET netio DESTINATION reactos/system32/drivers FOR all)
 add_registry_inf(netio_reg.inf)

@@ -1946,7 +1946,7 @@
 @ stdcall -arch=win64 RtlValidateUnicodeString()
 @ stdcall -arch=win64 SeCaptureSubjectContextEx()
 @ stdcall -arch=win64 SeCreateAccessStateEx()
-@ stdcall -arch=arm64 SeLocateProcessImageName()
+@ stdcall SeLocateProcessImageName(ptr ptr)
 @ stdcall SeTokenIsWriteRestricted(ptr)
 @ stdcall ZwAllocateLocallyUniqueId(ptr)
 @ stdcall -arch=win64 ZwCompareTokens()

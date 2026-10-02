@@ -17,11 +17,6 @@ typedef enum _NETIO_FWPM_SERVICE_STATE
     NetioFwpmServiceRunning
 } NETIO_FWPM_SERVICE_STATE;
 
-typedef enum _NETIO_FWPS_PACKET_INJECTION_STATE
-{
-    NetioFwpsPacketNotInjected = 0
-} NETIO_FWPS_PACKET_INJECTION_STATE;
-
 typedef VOID (NTAPI *NETIO_FWPM_SERVICE_STATE_CHANGE_CALLBACK)(
     _Inout_ PVOID Context,
     _In_ NETIO_FWPM_SERVICE_STATE NewState);
@@ -84,21 +79,6 @@ FwpmBfeStateUnsubscribeChanges0(
 
 NTSTATUS
 NTAPI
-FwpmSubLayerAdd0(
-    _In_ HANDLE EngineHandle,
-    _In_ CONST VOID *SubLayer,
-    _In_opt_ PSECURITY_DESCRIPTOR Sd)
-{
-    UNREFERENCED_PARAMETER(EngineHandle);
-    UNREFERENCED_PARAMETER(Sd);
-
-    if (SubLayer == NULL)
-        return STATUS_INVALID_PARAMETER;
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
 FwpmProviderContextAdd3(
     _In_ HANDLE EngineHandle,
     _In_ CONST VOID *ProviderContext,
@@ -126,29 +106,6 @@ FwpmProviderContextDeleteById0(
     UNREFERENCED_PARAMETER(EngineHandle);
     UNREFERENCED_PARAMETER(Id);
     return STATUS_SUCCESS;
-}
-
-NETIO_FWPS_PACKET_INJECTION_STATE
-NTAPI
-FwpsQueryPacketInjectionState0(
-    _In_ HANDLE InjectionHandle,
-    _In_ CONST VOID *NetBufferList,
-    _Out_opt_ HANDLE *InjectionContext)
-{
-    UNREFERENCED_PARAMETER(InjectionHandle);
-    UNREFERENCED_PARAMETER(NetBufferList);
-
-    if (InjectionContext != NULL)
-        *InjectionContext = NULL;
-    return NetioFwpsPacketNotInjected;
-}
-
-VOID
-NTAPI
-FwpsFreeNetBufferList0(
-    _In_ PVOID NetBufferList)
-{
-    UNREFERENCED_PARAMETER(NetBufferList);
 }
 
 NTSTATUS

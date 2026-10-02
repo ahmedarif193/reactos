@@ -4,6 +4,7 @@ spec2def(fwpkclnt.sys fwpkclnt.spec ADD_IMPORTLIB)
 add_library(fwpkclnt MODULE
     fwpkclnt.c
     fwpkclnt.rc
+    ${CMAKE_CURRENT_BINARY_DIR}/fwpkclnt_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/fwpkclnt.def)
 
 set_module_type(fwpkclnt kernelmodedriver)
