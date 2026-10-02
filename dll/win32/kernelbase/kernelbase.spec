@@ -122,6 +122,8 @@
 @ stdcall FindStringOrdinal(long wstr long wstr long long)
 @ stdcall FlushConsoleInputBuffer(long)
 @ stdcall -version=0x600+ FlushProcessWriteBuffers() kernel32.FlushProcessWriteBuffers
+@ stdcall FormatMessageA(long ptr long long ptr long ptr)
+@ stdcall FormatMessageW(long ptr long long ptr long ptr)
 @ stdcall FreeConsole()
 @ stdcall FreeSid(ptr)
 @ stdcall GenerateConsoleCtrlEvent(long long)

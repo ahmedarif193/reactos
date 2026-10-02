@@ -5415,6 +5415,7 @@ INT WINAPI DECLSPEC_HOTPATCH FoldStringW( DWORD flags, LPCWSTR src, INT srclen, 
     return len;
 }
 
+#endif
 
 static const WCHAR *get_message( DWORD flags, const void *src, UINT id, UINT lang,
                                  BOOL ansi, WCHAR **buffer )
@@ -5430,14 +5431,22 @@ static const WCHAR *get_message( DWORD flags, const void *src, UINT id, UINT lan
         {
             HMODULE module = (HMODULE)src;
             if (!module) module = GetModuleHandleW( 0 );
+#ifdef __REACTOS__
+            status = RtlFindMessage( module, (ULONG_PTR)RT_MESSAGETABLE, lang, id, &entry );
+#else
             status = RtlFindMessage( module, RT_MESSAGETABLE, lang, id, &entry );
+#endif
         }
         if (status && (flags & FORMAT_MESSAGE_FROM_SYSTEM))
         {
             /* Fold win32 hresult to its embedded error code. */
             if (HRESULT_SEVERITY(id) == SEVERITY_ERROR && HRESULT_FACILITY(id) == FACILITY_WIN32)
                 id = HRESULT_CODE( id );
+#ifdef __REACTOS__
+            status = RtlFindMessage( GetModuleHandleW( L"kernel32.dll" ), (ULONG_PTR)RT_MESSAGETABLE, lang, id, &entry );
+#else
             status = RtlFindMessage( kernelbase_handle, RT_MESSAGETABLE, lang, id, &entry );
+#endif
         }
         if (!set_ntstatus( status )) return NULL;
 
@@ -5615,6 +5624,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH FormatMessageW( DWORD flags, const void *source, 
     return retsize / sizeof(WCHAR) - 1;
 }
 
+#ifndef __REACTOS__
 
 /******************************************************************************
  *	GetACP   (kernelbase.@)

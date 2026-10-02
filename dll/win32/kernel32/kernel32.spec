@@ -356,8 +356,8 @@
 @ stdcall FlushViewOfFile(ptr long)
 @ stdcall FoldStringA(long str long ptr long)
 @ stdcall FoldStringW(long wstr long ptr long)
-@ stdcall FormatMessageA(long ptr long long ptr long ptr)
-@ stdcall FormatMessageW(long ptr long long ptr long ptr)
+@ stdcall FormatMessageA(long ptr long long ptr long ptr) kernelbase.FormatMessageA
+@ stdcall FormatMessageW(long ptr long long ptr long ptr) kernelbase.FormatMessageW
 @ stdcall FreeConsole() kernelbase.FreeConsole
 @ stdcall FreeEnvironmentStringsA(ptr)
 @ stdcall FreeEnvironmentStringsW(ptr)

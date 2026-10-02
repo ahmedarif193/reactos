@@ -101,7 +101,6 @@ list(APPEND SOURCE
     winnls/string/collation.c
     winnls/string/digitmap.c
     winnls/string/fold.c
-    winnls/string/format_msg.c
     winnls/string/japanese.c
     winnls/string/locale.c
     winnls/string/localeansi.c
