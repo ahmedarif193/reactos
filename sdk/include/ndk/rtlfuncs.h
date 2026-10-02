@@ -5085,6 +5085,13 @@ BOOLEAN
 NTAPI
 RtlGetNtProductType(_Out_ PNT_PRODUCT_TYPE ProductType);
 
+#ifndef NTOS_MODE_USER
+NTSYSAPI
+VOID
+NTAPI
+RtlSetActiveConsoleId(_In_ ULONG ActiveConsoleId);
+#endif
+
 #if (_WIN32_WINNT >= _WIN32_WINNT_VISTA)
 //
 // Synchronization functions

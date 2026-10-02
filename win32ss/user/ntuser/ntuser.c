@@ -324,6 +324,8 @@ NtUserInitialize(
 
     /* Initialize USER */
     Status = UserInitialize();
+    if (NT_SUCCESS(Status))
+        RtlSetActiveConsoleId(PsGetCurrentProcessSessionId());
 
     /* Return */
     UserLeave();

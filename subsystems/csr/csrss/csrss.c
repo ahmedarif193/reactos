@@ -87,7 +87,7 @@ _main(int argc,
     CsrpSetDefaultProcessHardErrorMode();
 
     /* If this is Session 0, make sure killing us bugchecks the system */
-    if (NtCurrentPeb()->SessionId == 0) RtlSetProcessIsCritical(TRUE, NULL, FALSE);
+    RtlSetProcessIsCritical(TRUE, NULL, FALSE);
 
     /* Kill this thread. CSRSRV keeps us going */
     NtTerminateThread(NtCurrentThread(), Status);

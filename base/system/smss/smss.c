@@ -361,7 +361,7 @@ SmpExecuteInitialCommand(IN ULONG MuSessionId,
 
     /* Return PID to the caller, and set this as the initial command PID */
     if (ReturnPid) *ReturnPid = ProcessInfo.ClientId.UniqueProcess;
-    if (!MuSessionId) SmpInitialCommandProcessId = ProcessInfo.ClientId.UniqueProcess;
+    if (!SmpInitialCommandProcessId) SmpInitialCommandProcessId = ProcessInfo.ClientId.UniqueProcess;
 
     /* Now call our server execution function to wrap up its initialization */
     Status = SmExecPgm(SmApiPort, &ProcessInfo, FALSE);
@@ -490,7 +490,10 @@ _main(IN INT argc,
         }
 
         /* Execute the initial command (Winlogon.exe) */
-        Status = SmpExecuteInitialCommand(0, &InitialCommand, &Handles[1], NULL);
+        Status = SmpExecuteInitialCommand((AttachedSessionId != -1) ? AttachedSessionId : 0,
+                                          &InitialCommand,
+                                          &Handles[1],
+                                          NULL);
         if (!NT_SUCCESS(Status))
         {
             /* Fail and raise a hard error */

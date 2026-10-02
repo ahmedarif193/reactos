@@ -285,6 +285,32 @@ Quit:
     if (SystemSid) RtlFreeSid(SystemSid);
 }
 
+static
+VOID
+BaseSrvCreateGlobalLink(_In_ HANDLE Directory,
+                        _In_ PCWSTR Name,
+                        _In_ PCWSTR Target,
+                        _In_ PSECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    UNICODE_STRING LinkName, LinkTarget;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE Link;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&LinkName, Name);
+    RtlInitUnicodeString(&LinkTarget, Target);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &LinkName,
+                               OBJ_OPENIF | OBJ_PERMANENT | OBJ_CASE_INSENSITIVE,
+                               Directory,
+                               SecurityDescriptor);
+    Status = NtCreateSymbolicLinkObject(&Link,
+                                        SYMBOLIC_LINK_ALL_ACCESS,
+                                        &ObjectAttributes,
+                                        &LinkTarget);
+    if (NT_SUCCESS(Status)) NtClose(Link);
+}
+
 NTSTATUS
 NTAPI
 CreateBaseAcls(OUT PACL* Dacl,
@@ -686,6 +712,29 @@ BaseInitializeStaticServerData(IN PCSR_SERVER_DLL LoadedServerDll)
         ASSERT(NT_SUCCESS(Status));
     }
 
+    if (SessionId != 0)
+    {
+        HANDLE GlobalDirectory;
+
+        RtlInitUnicodeString(&DirectoryName, L"\\BaseNamedObjects");
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &DirectoryName,
+                                   OBJ_OPENIF | OBJ_PERMANENT | OBJ_CASE_INSENSITIVE,
+                                   NULL,
+                                   BnoSd);
+        Status = NtCreateDirectoryObject(&GlobalDirectory,
+                                         DIRECTORY_ALL_ACCESS,
+                                         &ObjectAttributes);
+        ASSERT(NT_SUCCESS(Status));
+        if (NT_SUCCESS(Status))
+        {
+            BaseSrvCreateGlobalLink(GlobalDirectory, L"Global", L"\\BaseNamedObjects", BnoSd);
+            BaseSrvCreateGlobalLink(GlobalDirectory, L"Local", L"\\BaseNamedObjects", BnoSd);
+            BaseSrvCreateGlobalLink(GlobalDirectory, L"Session", L"\\Sessions\\BNOLINKS", BnoSd);
+            NtClose(GlobalDirectory);
+        }
+    }
+
     /* Create the BNO directory */
     InitializeObjectAttributes(&ObjectAttributes,
                                &BnoString,
@@ -747,7 +796,6 @@ BaseInitializeStaticServerData(IN PCSR_SERVER_DLL LoadedServerDll)
 
         /* Make local point back to \Sessions\x\BNO */
         RtlInitUnicodeString(&DirectoryName, L"Local");
-        ASSERT(SessionId == 0);
         InitializeObjectAttributes(&ObjectAttributes,
                                    &DirectoryName,
                                    OBJ_OPENIF | OBJ_PERMANENT | OBJ_CASE_INSENSITIVE,

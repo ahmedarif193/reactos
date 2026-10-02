@@ -580,6 +580,8 @@ CsrParseServerCommandLine(IN ULONG ArgumentCount,
     ULONG i, DllIndex;
     ANSI_STRING AnsiString;
     OBJECT_ATTRIBUTES ObjectAttributes;
+    CHAR SessionDirectory[MAX_PATH];
+    INT Length;
 
     /* Set the Defaults */
     CsrTotalPerProcessDataLength = 0;
@@ -592,6 +594,12 @@ CsrParseServerCommandLine(IN ULONG ArgumentCount,
 
     /* Save our Session ID, and create a Directory for it */
     SessionId = NtCurrentPeb()->SessionId;
+    if (SessionId != 0)
+    {
+        Status = CsrCreateSessionObjectDirectory(0);
+        if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_COLLISION)
+            return Status;
+    }
     Status = CsrCreateSessionObjectDirectory(SessionId);
     if (!NT_SUCCESS(Status))
     {
@@ -619,8 +627,14 @@ CsrParseServerCommandLine(IN ULONG ArgumentCount,
             /* Check if a session ID is specified */
             if (SessionId != 0)
             {
-                DPRINT1("Sessions not yet implemented\n");
-                ASSERT(SessionId);
+                Length = _snprintf(SessionDirectory,
+                                   sizeof(SessionDirectory),
+                                   "\\Sessions\\%lu%s",
+                                   SessionId,
+                                   ParameterValue);
+                if (Length < 0 || Length >= (INT)sizeof(SessionDirectory))
+                    return STATUS_NAME_TOO_LONG;
+                ParameterValue = SessionDirectory;
             }
 
             /* Initialize the directory name */

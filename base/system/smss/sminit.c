@@ -2372,6 +2372,31 @@ Quickie:
     return Status;
 }
 
+static
+NTSTATUS
+SmpReserveSystemSession(VOID)
+{
+    ULONG SessionId = 0;
+    PVOID State;
+    NTSTATUS Status;
+
+    Status = SmpAcquirePrivilege(SE_LOAD_DRIVER_PRIVILEGE, &State);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = NtSetSystemInformation(SystemSessionCreate,
+                                    &SessionId,
+                                    sizeof(SessionId));
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtSetSystemInformation(SystemSessionDetach,
+                                        &SessionId,
+                                        sizeof(SessionId));
+    }
+
+    SmpReleasePrivilege(State);
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 SmpLoadDataFromRegistry(OUT PUNICODE_STRING InitialCommand)
@@ -2569,11 +2594,17 @@ SmpLoadDataFromRegistry(OUT PUNICODE_STRING InitialCommand)
         return Status;
     }
 
+    Status = SmpReserveSystemSession();
+    if (!NT_SUCCESS(Status))
+    {
+        SMSS_CHECKPOINT(SmpReserveSystemSession, Status);
+        return Status;
+    }
+
     /* And finally load all the subsystems for our first session! */
     Status = SmpLoadSubSystemsForMuSession(&MuSessionId,
                                            &SmpWindowsSubSysProcessId,
                                            InitialCommand);
-    ASSERT(MuSessionId == 0);
     if (!NT_SUCCESS(Status)) SMSS_CHECKPOINT(SmpLoadSubSystemsForMuSession, Status);
     return Status;
 }

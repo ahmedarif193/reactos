@@ -151,6 +151,7 @@ SmpLoadSubSystem(IN PUNICODE_STRING FileName,
     PVOID State;
     PSB_CREATE_PROCESS_MSG CreateProcess = &SbApiMsg.u.CreateProcess;
     PSB_CREATE_SESSION_MSG CreateSession = &SbApiMsg.u.CreateSession;
+    BOOLEAN InitialSubsystem = FALSE;
 
     /* Make sure this is a found subsystem */
     if (Flags & SMP_INVALID_PATH)
@@ -305,8 +306,9 @@ SmpLoadSubSystem(IN PUNICODE_STRING FileName,
         if ((ProcessId) && !(*ProcessId)) *ProcessId = SubSysProcessId;
 
         /* Was this the initial CSRSS on Session 0? */
-        if (!MuSessionId)
+        if (!SmpWindowsSubSysProcess)
         {
+            InitialSubsystem = TRUE;
             /* Then save it in the global variables */
             SmpWindowsSubSysProcessId = SubSysProcessId;
             SmpWindowsSubSysProcess = ProcessInformation.ProcessHandle;
@@ -402,7 +404,7 @@ SmpLoadSubSystem(IN PUNICODE_STRING FileName,
     }
 
     /* Check if this was the subsystem for a different session */
-    if (MuSessionId)
+    if (!InitialSubsystem)
     {
         /* Wait up to 60 seconds for it to initialize */
         Timeout.QuadPart = -600000000;
