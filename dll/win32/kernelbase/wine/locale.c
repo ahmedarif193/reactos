@@ -302,7 +302,9 @@ struct norm_table
 
 static CPTABLEINFO ansi_cpinfo;
 static CPTABLEINFO oem_cpinfo;
+#ifndef __REACTOS__
 static UINT unix_cp = CP_UTF8;
+#endif
 static LCID system_lcid;
 static LCID user_lcid;
 static HKEY intl_key;
@@ -7096,7 +7098,6 @@ LCID WINAPI DECLSPEC_HOTPATCH LocaleNameToLCID( const WCHAR *name, DWORD flags )
     return lcid;
 }
 
-#ifndef __REACTOS__
 
 
 /******************************************************************************
@@ -7108,7 +7109,11 @@ INT WINAPI DECLSPEC_HOTPATCH MultiByteToWideChar( UINT codepage, DWORD flags, co
     const CPTABLEINFO *info;
     int ret;
 
+#ifdef __REACTOS__
+    if (!src || !srclen || (!dst && dstlen) || dstlen < 0 || (dstlen && (const void *)src == (const void *)dst))
+#else
     if (!src || !srclen || (!dst && dstlen) || dstlen < 0)
+#endif
     {
         SetLastError( ERROR_INVALID_PARAMETER );
         return 0;
@@ -7123,9 +7128,11 @@ INT WINAPI DECLSPEC_HOTPATCH MultiByteToWideChar( UINT codepage, DWORD flags, co
     case CP_UTF7:
         ret = mbstowcs_utf7( flags, src, srclen, dst, dstlen );
         break;
+#ifndef __REACTOS__
     case CP_UNIXCP:
         codepage = unix_cp;
         /* fall through */
+#endif
     default:
         if (!(info = get_codepage_table( codepage )))
         {
@@ -7147,8 +7154,6 @@ INT WINAPI DECLSPEC_HOTPATCH MultiByteToWideChar( UINT codepage, DWORD flags, co
     return ret;
 }
 
-
-#endif
 
 /******************************************************************************
  *	NormalizeString   (kernelbase.@)
@@ -7464,6 +7469,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH VerLanguageNameW( DWORD lang, LPWSTR buffer, DWOR
     return GetLocaleInfoW( MAKELCID( lang, SORT_DEFAULT ), LOCALE_SENGLANGUAGE, buffer, size );
 }
 
+#endif /* !__REACTOS__ */
 
 /***********************************************************************
  *	WideCharToMultiByte   (kernelbase.@)
@@ -7474,7 +7480,11 @@ INT WINAPI DECLSPEC_HOTPATCH WideCharToMultiByte( UINT codepage, DWORD flags, LP
     const CPTABLEINFO *info;
     int ret;
 
+#ifdef __REACTOS__
+    if (!src || !srclen || (!dst && dstlen) || dstlen < 0 || (const void *)src == (const void *)dst)
+#else
     if (!src || !srclen || (!dst && dstlen) || dstlen < 0)
+#endif
     {
         SetLastError( ERROR_INVALID_PARAMETER );
         return 0;
@@ -7490,9 +7500,11 @@ INT WINAPI DECLSPEC_HOTPATCH WideCharToMultiByte( UINT codepage, DWORD flags, LP
     case CP_UTF7:
         ret = wcstombs_utf7( flags, src, srclen, dst, dstlen, defchar, used );
         break;
+#ifndef __REACTOS__
     case CP_UNIXCP:
         codepage = unix_cp;
         /* fall through */
+#endif
     default:
         if (!(info = get_codepage_table( codepage )))
         {
@@ -7518,7 +7530,6 @@ INT WINAPI DECLSPEC_HOTPATCH WideCharToMultiByte( UINT codepage, DWORD flags, LP
 
 /* kernel32 forwards these two exports to kernelbase, so their Wine
  * implementations must remain active on ReactOS to avoid circular imports. */
-#endif /* !__REACTOS__ */
 
 /***********************************************************************
  *	GetUserDefaultGeoName  (kernelbase.@)
