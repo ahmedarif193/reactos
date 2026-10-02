@@ -2757,9 +2757,7 @@ NtUserOpenDesktop(
     NTSTATUS Status;
     HDESK Desktop;
 
-    /* A zero-access desktop handle is still usable for enumeration. */
-    if (!dwDesiredAccess)
-        dwDesiredAccess = DESKTOP_READOBJECTS;
+    dwDesiredAccess |= DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS;
 
     Status = ObOpenObjectByName(
                  ObjectAttributes,
@@ -2805,6 +2803,7 @@ HDESK UserOpenInputDesktop(DWORD dwFlags,
     }
 
     if (fInherit) HandleAttributes = OBJ_INHERIT;
+    dwDesiredAccess |= DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS;
 
     /* Create a new handle to the object */
     Status = ObOpenObjectByPointer(
