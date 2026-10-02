@@ -265,7 +265,8 @@ ObReferenceFileObjectForWrite(IN HANDLE Handle,
 
             HandleInformation->GrantedAccess = GrantedAccess;
 
-            HandleInformation->HandleAttributes = HandleEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
+            HandleInformation->HandleAttributes = HandleEntry->ObAttributes & (OBJ_INHERIT | OBJ_AUDIT_OBJECT_CLOSE);
+            if (HandleEntry->GrantedAccess & ObpAccessProtectCloseBit) HandleInformation->HandleAttributes |= OBJ_PROTECT_CLOSE;
 
             /* Do granted and desired access match? */
             if (GrantedAccess & DesiredAccess)
@@ -710,7 +711,8 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
                 ObpReferenceObjectByHandleEntry(HandleTable, Handle, HandleEntry, ObjectHeader);
 
                 /* Mask out the internal attributes */
-                Attributes = HandleEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
+                Attributes = HandleEntry->ObAttributes & (OBJ_INHERIT | OBJ_AUDIT_OBJECT_CLOSE);
+                if (HandleEntry->GrantedAccess & ObpAccessProtectCloseBit) Attributes |= OBJ_PROTECT_CLOSE;
 
                 /* Check if the caller wants handle information */
                 if (HandleInformation)

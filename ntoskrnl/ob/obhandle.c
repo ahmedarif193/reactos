@@ -294,7 +294,8 @@ ObpReferenceProcessObjectByHandle(IN HANDLE Handle,
         GrantedAccess = HandleEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
 
         /* Mask out the internal attributes */
-        Attributes = HandleEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
+        Attributes = HandleEntry->ObAttributes & (OBJ_INHERIT | OBJ_AUDIT_OBJECT_CLOSE);
+        if (HandleEntry->GrantedAccess & ObpAccessProtectCloseBit) Attributes |= OBJ_PROTECT_CLOSE;
 
         /* Fill out the information */
         HandleInformation->HandleAttributes = Attributes;
@@ -361,7 +362,8 @@ ObpEnumFindHandleProcedure(IN PHANDLE_TABLE_ENTRY HandleEntry,
     {
         /* Get the granted access and attributes */
         GrantedAccess = HandleEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
-        HandleAttributes = HandleEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
+        HandleAttributes = HandleEntry->ObAttributes & (OBJ_INHERIT | OBJ_AUDIT_OBJECT_CLOSE);
+        if (HandleEntry->GrantedAccess & ObpAccessProtectCloseBit) HandleAttributes |= OBJ_PROTECT_CLOSE;
 
         /* Attempt to match them */
         if ((FindData->HandleInformation->HandleAttributes != HandleAttributes) ||
