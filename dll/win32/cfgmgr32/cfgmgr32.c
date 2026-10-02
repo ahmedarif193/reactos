@@ -457,7 +457,17 @@ static LSTATUS enum_device_interface_list( GUID *class, DEVINSTID_W instance_id,
     if (instance_id && !*instance_id) instance_id = NULL;
 
     guid_string( class, iface.class, ARRAY_SIZE(iface.class) );
+#ifdef __REACTOS__
+    err = open_device_classes_key( HKEY_LOCAL_MACHINE, iface.class, KEY_ENUMERATE_SUB_KEYS, TRUE, &class_key );
+    if (err == ERROR_FILE_NOT_FOUND)
+    {
+        callback( NULL, NULL, L"", 1, context );
+        return ERROR_SUCCESS;
+    }
+    if (err) return err;
+#else
     if ((err = open_device_classes_key( HKEY_LOCAL_MACHINE, iface.class, KEY_ENUMERATE_SUB_KEYS, TRUE, &class_key ))) return err;
+#endif
     err = enum_class_device_interfaces( class_key, &iface, instance_id, all, callback, context );
     RegCloseKey( class_key );
 
