@@ -934,7 +934,7 @@ HRESULT STDMETHODCALLTYPE CShellLink::Save(IStream *stm, BOOL fClearDirty)
      * already set in accordance by the different mutator member functions.
      * The other flags will be determined now by the presence or absence of data.
      */
-    UINT NT6SimpleFlags = LOBYTE(GetVersion()) > 6 ? (0x00040000 | 0x00400000 | 0x00800000 | 0x02000000) : 0;
+    UINT NT6SimpleFlags = 0x00040000 | 0x00400000 | 0x00800000 | 0x02000000;
     m_Header.dwFlags &= (SLDF_RUN_WITH_SHIMLAYER | SLDF_RUNAS_USER | SLDF_RUN_IN_SEPARATE |
                          SLDF_HAS_DARWINID | SLDF_FORCE_NO_LINKINFO | NT6SimpleFlags |
 #if (NTDDI_VERSION < NTDDI_LONGHORN)
