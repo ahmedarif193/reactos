@@ -5876,12 +5876,7 @@ static void test_Idn(void)
 {
     FILE *f;
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    /* FIXME: Idn functions are STUBS on ReactOS */
-    if (is_reactos() || !pIdnToAscii || !pIdnToUnicode || !pIdnToNameprepUnicode)
-#else
     if (!pIdnToAscii || !pIdnToUnicode || !pIdnToNameprepUnicode)
-#endif
     {
         win_skip("Idn support is not available\n");
         return;

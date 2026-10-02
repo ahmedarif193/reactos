@@ -1060,9 +1060,9 @@
 943 stdcall RtlHashUnicodeString(ptr long long ptr) ChpeAutoRtlHashUnicodeString
 944 stdcall -version=0x600+ RtlHeapTrkInitialize(ptr) ChpeStubRtlHeapTrkInitialize
 945 stdcall RtlIdentifierAuthoritySid(ptr) ChpeAutoRtlIdentifierAuthoritySid
-946 stdcall -version=0x600+ RtlIdnToAscii(long long long long long) ChpeStubRtlIdnToAscii
-947 stdcall -version=0x600+ RtlIdnToNameprepUnicode(long long long long long) ChpeStubRtlIdnToNameprepUnicode
-948 stdcall -version=0x600+ RtlIdnToUnicode(long long long long long) ChpeStubRtlIdnToUnicode
+946 stdcall -version=0x600+ RtlIdnToAscii(long wstr long ptr ptr) ChpeAutoRtlIdnToAscii
+947 stdcall -version=0x600+ RtlIdnToNameprepUnicode(long wstr long ptr ptr) ChpeAutoRtlIdnToNameprepUnicode
+948 stdcall -version=0x600+ RtlIdnToUnicode(long wstr long ptr ptr) ChpeAutoRtlIdnToUnicode
 949 stdcall RtlImageDirectoryEntryToData(ptr long long ptr) ChpeAutoRtlImageDirectoryEntryToData
 950 stdcall RtlImageNtHeader(long) ChpeAutoRtlImageNtHeader
 951 stdcall RtlImageNtHeaderEx(long ptr double ptr) ChpeAutoRtlImageNtHeaderEx

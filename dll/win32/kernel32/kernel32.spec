@@ -764,9 +764,9 @@
 @ stdcall -version=0x351-0x502 HeapUsage(long long long long ptr)
 @ stdcall HeapValidate(long long ptr)
 @ stdcall HeapWalk(long ptr)
-@ stdcall -version=0x600+ IdnToAscii(long wstr long ptr long) normaliz.IdnToAscii
-@ stdcall -version=0x600+ IdnToNameprepUnicode(long wstr long ptr long) normaliz.IdnToNameprepUnicode
-@ stdcall -version=0x600+ IdnToUnicode(long wstr long ptr long) normaliz.IdnToUnicode
+@ stdcall -version=0x600+ IdnToAscii(long wstr long ptr long) kernelbase.IdnToAscii
+@ stdcall -version=0x600+ IdnToNameprepUnicode(long wstr long ptr long) kernelbase.IdnToNameprepUnicode
+@ stdcall -version=0x600+ IdnToUnicode(long wstr long ptr long) kernelbase.IdnToUnicode
 @ stdcall InitAtomTable(long)
 @ stdcall -version=0x600+ InitOnceBeginInitialize(ptr long ptr ptr)
 @ stdcall -version=0x600+ InitOnceComplete(ptr long ptr)

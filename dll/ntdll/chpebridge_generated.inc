@@ -4944,20 +4944,23 @@ PSID_IDENTIFIER_AUTHORITY NTAPI ChpeAutoRtlIdentifierAuthoritySid(PSID a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlIdentifierAuthoritySid), __typeof__(&RtlIdentifierAuthoritySid)), "RtlIdentifierAuthoritySid bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlIdnToAscii(ULONG a0, ULONG a1, ULONG a2, ULONG a3, ULONG a4)
+NTSTATUS NTAPI ChpeAutoRtlIdnToAscii(ULONG a0, PCWSTR a1, LONG a2, PWSTR a3, PLONG a4)
 {
-    return 0;
+    return RtlIdnToAscii(a0, a1, a2, a3, a4);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlIdnToAscii), __typeof__(&RtlIdnToAscii)), "RtlIdnToAscii bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlIdnToNameprepUnicode(ULONG a0, ULONG a1, ULONG a2, ULONG a3, ULONG a4)
+NTSTATUS NTAPI ChpeAutoRtlIdnToNameprepUnicode(ULONG a0, PCWSTR a1, LONG a2, PWSTR a3, PLONG a4)
 {
-    return 0;
+    return RtlIdnToNameprepUnicode(a0, a1, a2, a3, a4);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlIdnToNameprepUnicode), __typeof__(&RtlIdnToNameprepUnicode)), "RtlIdnToNameprepUnicode bridge signature mismatch");
 
-ULONG_PTR NTAPI ChpeStubRtlIdnToUnicode(ULONG a0, ULONG a1, ULONG a2, ULONG a3, ULONG a4)
+NTSTATUS NTAPI ChpeAutoRtlIdnToUnicode(ULONG a0, PCWSTR a1, LONG a2, PWSTR a3, PLONG a4)
 {
-    return 0;
+    return RtlIdnToUnicode(a0, a1, a2, a3, a4);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlIdnToUnicode), __typeof__(&RtlIdnToUnicode)), "RtlIdnToUnicode bridge signature mismatch");
 
 PVOID NTAPI ChpeAutoRtlImageDirectoryEntryToData(PVOID a0, BOOLEAN a1, USHORT a2, PULONG a3)
 {

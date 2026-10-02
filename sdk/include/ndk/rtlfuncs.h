@@ -2001,6 +2001,36 @@ RtlIsNormalizedString(
     _In_ PCWSTR SourceString,
     _In_ LONG SourceStringLength,
     _Out_ PBOOLEAN Normalized);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlIdnToAscii(
+    _In_ ULONG Flags,
+    _In_ PCWSTR SourceString,
+    _In_ LONG SourceStringLength,
+    _Out_writes_to_(*DestinationStringLength, *DestinationStringLength) PWSTR DestinationString,
+    _Inout_ PLONG DestinationStringLength);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlIdnToUnicode(
+    _In_ ULONG Flags,
+    _In_ PCWSTR SourceString,
+    _In_ LONG SourceStringLength,
+    _Out_writes_to_(*DestinationStringLength, *DestinationStringLength) PWSTR DestinationString,
+    _Inout_ PLONG DestinationStringLength);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlIdnToNameprepUnicode(
+    _In_ ULONG Flags,
+    _In_ PCWSTR SourceString,
+    _In_ LONG SourceStringLength,
+    _Out_writes_to_(*DestinationStringLength, *DestinationStringLength) PWSTR DestinationString,
+    _Inout_ PLONG DestinationStringLength);
 #endif
 
 NTSYSAPI

@@ -6552,8 +6552,6 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetUserPreferredUILanguages( DWORD flags, ULONG *c
     return set_ntstatus( RtlGetUserPreferredUILanguages( flags, 0, count, buffer, size ));
 }
 
-#ifndef __REACTOS__
-
 
 /******************************************************************************
  *	IdnToAscii   (kernelbase.@)
@@ -6589,6 +6587,8 @@ INT WINAPI DECLSPEC_HOTPATCH IdnToUnicode( DWORD flags, const WCHAR *src, INT sr
     if (!set_ntstatus( status )) return 0;
     return dstlen;
 }
+
+#ifndef __REACTOS__
 
 
 /******************************************************************************
