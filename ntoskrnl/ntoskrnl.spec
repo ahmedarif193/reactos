@@ -2808,9 +2808,9 @@
 @ stub -arch=win64 PfFileInfoNotify
 @ stub -arch=win64 PoClearPowerRequest
 @ stub -arch=win64 PoCpuIdledSinceLastCallImprecise
-@ stub -arch=arm64 PoCreatePowerLimitRequest
+@ stdcall PoCreatePowerLimitRequest(ptr ptr ptr ptr)
 @ stub -arch=win64 PoCreatePowerRequest
-@ stub -arch=arm64 PoDeletePowerLimitRequest
+@ stdcall PoDeletePowerLimitRequest(ptr)
 @ stub -arch=win64 PoDeletePowerRequest
 @ stub -arch=arm64 PoDirectedDripsClearDeviceFlags
 @ stub -arch=arm64 PoDirectedDripsSetDeviceFlags
@@ -2840,15 +2840,15 @@
 @ stdcall -arch=i386,win64 PoLatencySensitivityHint(long)
 @ stub -arch=win64 PoNotifyMediaBuffering
 @ stdcall -arch=i386,win64 PoNotifyVSyncChange(long)
-@ stub -arch=arm64 PoQueryPowerLimitAttributes
-@ stub -arch=arm64 PoQueryPowerLimitValue
+@ stdcall PoQueryPowerLimitAttributes(ptr long ptr ptr)
+@ stdcall PoQueryPowerLimitValue(ptr long ptr)
 @ stub -arch=win64 PoReenableSleepStates
 @ stub -arch=win64 PoRegisterCoalescingCallback
 @ stub -arch=win64 PoRegisterForEffectivePowerModeNotifications
 @ stub -arch=win64 PoSetDeviceBusyEx
 @ stub -arch=win64 PoSetFixedWakeSource
 @ stub -arch=win64 PoSetPowerButtonHoldState
-@ stub -arch=arm64 PoSetPowerLimitValue
+@ stdcall PoSetPowerLimitValue(ptr ptr long ptr)
 @ stub -arch=win64 PoSetPowerRequest
 @ stub -arch=win64 PoSetSystemWakeDevice
 @ stdcall -arch=i386,win64 PoSetUserPresent(long)
