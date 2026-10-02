@@ -25,6 +25,9 @@
 
 #include "wine/list.h"
 
+#ifdef __REACTOS__
+#include <limits.h>
+#endif
 #include <time.h>
 
 #include "winineti.h"
@@ -93,10 +96,18 @@ typedef struct
 BOOL is_valid_netconn(netconn_t *);
 void close_netconn(netconn_t *);
 
+#ifdef __REACTOS__
+static inline WCHAR *strndupW(const WCHAR *str, size_t max_len)
+#else
 static inline WCHAR *strndupW(const WCHAR *str, UINT max_len)
+#endif
 {
     LPWSTR ret;
+#ifdef __REACTOS__
+    size_t len;
+#else
     UINT len;
+#endif
 
     if(!str)
         return NULL;
@@ -105,20 +116,52 @@ static inline WCHAR *strndupW(const WCHAR *str, UINT max_len)
         if(str[len] == '\0')
             break;
 
+#ifdef __REACTOS__
+    if (len >= (size_t)-1 / sizeof(WCHAR))
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        return NULL;
+    }
+#endif
     ret = malloc(sizeof(WCHAR) * (len + 1));
     if(ret) {
         memcpy(ret, str, sizeof(WCHAR)*len);
         ret[len] = '\0';
     }
+#ifdef __REACTOS__
+    else SetLastError(ERROR_OUTOFMEMORY);
+#endif
 
     return ret;
 }
 
+#ifdef __REACTOS__
+static inline WCHAR *strndupAtoW(const char *str, DWORD len_a, DWORD *len_w)
+#else
 static inline WCHAR *strndupAtoW(const char *str, int len_a, DWORD *len_w)
+#endif
 {
     WCHAR *ret = NULL;
 
     if(str) {
+#ifdef __REACTOS__
+        size_t bytes = len_a == ~0u ? strlen(str) : strnlen(str, len_a);
+        int len;
+
+        if (bytes > INT_MAX)
+        {
+            SetLastError(ERROR_OUTOFMEMORY);
+            return NULL;
+        }
+        len = bytes ? MultiByteToWideChar(CP_ACP, 0, str, bytes, NULL, 0) : 0;
+        if (bytes && !len) return NULL;
+        if ((size_t)len >= (size_t)-1 / sizeof(WCHAR))
+        {
+            SetLastError(ERROR_OUTOFMEMORY);
+            return NULL;
+        }
+        ret = malloc(((size_t)len + 1) * sizeof(WCHAR));
+#else
         size_t len;
         if(len_a < 0)
             len_a = strlen(str);
@@ -126,11 +169,25 @@ static inline WCHAR *strndupAtoW(const char *str, int len_a, DWORD *len_w)
             len_a = strnlen(str, len_a);
         len = MultiByteToWideChar(CP_ACP, 0, str, len_a, NULL, 0);
         ret = malloc((len + 1) * sizeof(WCHAR));
+#endif
         if(ret) {
+#ifdef __REACTOS__
+            if (bytes && !MultiByteToWideChar(CP_ACP, 0, str, bytes, ret, len))
+            {
+                DWORD error = GetLastError();
+                free(ret);
+                SetLastError(error);
+                return NULL;
+            }
+#else
             MultiByteToWideChar(CP_ACP, 0, str, len_a, ret, len);
+#endif
             ret[len] = 0;
             *len_w = len;
         }
+#ifdef __REACTOS__
+        else SetLastError(ERROR_OUTOFMEMORY);
+#endif
     }
 
     return ret;
@@ -144,9 +201,32 @@ static inline WCHAR *strdupAtoW(const char *str)
         DWORD len;
 
         len = MultiByteToWideChar(CP_ACP, 0, str, -1, NULL, 0);
+#ifdef __REACTOS__
+        if (!len) return NULL;
+        if ((size_t)len > (size_t)-1 / sizeof(WCHAR))
+        {
+            SetLastError(ERROR_OUTOFMEMORY);
+            return NULL;
+        }
+        ret = malloc((size_t)len * sizeof(WCHAR));
+#else
         ret = malloc(len * sizeof(WCHAR));
+#endif
         if(ret)
+#ifdef __REACTOS__
+        {
+            if (!MultiByteToWideChar(CP_ACP, 0, str, -1, ret, len))
+            {
+                DWORD error = GetLastError();
+                free(ret);
+                SetLastError(error);
+                return NULL;
+            }
+        }
+        else SetLastError(ERROR_OUTOFMEMORY);
+#else
             MultiByteToWideChar(CP_ACP, 0, str, -1, ret, len);
+#endif
     }
 
     return ret;
@@ -158,9 +238,25 @@ static inline char *strdupWtoA(const WCHAR *str)
 
     if(str) {
         DWORD size = WideCharToMultiByte(CP_ACP, 0, str, -1, NULL, 0, NULL, NULL);
+#ifdef __REACTOS__
+        if (!size) return NULL;
+#endif
         ret = malloc(size);
         if(ret)
+#ifdef __REACTOS__
+        {
+            if (!WideCharToMultiByte(CP_ACP, 0, str, -1, ret, size, NULL, NULL))
+            {
+                DWORD error = GetLastError();
+                free(ret);
+                SetLastError(error);
+                return NULL;
+            }
+        }
+        else SetLastError(ERROR_OUTOFMEMORY);
+#else
             WideCharToMultiByte(CP_ACP, 0, str, -1, ret, size, NULL, NULL);
+#endif
     }
 
     return ret;
@@ -234,7 +330,11 @@ typedef struct {
     DWORD (*ReadFile)(object_header_t*,void*,DWORD,DWORD*,DWORD,DWORD_PTR);
     DWORD (*WriteFile)(object_header_t*,const void*,DWORD,DWORD*);
     DWORD (*QueryDataAvailable)(object_header_t*,DWORD*,DWORD,DWORD_PTR);
+#ifdef __REACTOS__
+    DWORD (*FindNextFileW)(object_header_t*,void*,BOOL);
+#else
     DWORD (*FindNextFileW)(object_header_t*,void*);
+#endif
     DWORD (*LockRequestFile)(object_header_t*,req_file_t**);
 } object_vtbl_t;
 
@@ -360,10 +460,16 @@ typedef void (*async_task_proc_t)(task_header_t*);
 struct task_header_t
 {
     async_task_proc_t proc;
+#ifdef __REACTOS__
+    async_task_proc_t destroy;
+#endif
     object_header_t *hdr;
 };
 
 void *alloc_async_task(object_header_t*,async_task_proc_t,size_t);
+#ifdef __REACTOS__
+void free_async_task(task_header_t*);
+#endif
 
 void *alloc_object(object_header_t*,const object_vtbl_t*,size_t);
 object_header_t *get_handle_object( HINTERNET hinternet );

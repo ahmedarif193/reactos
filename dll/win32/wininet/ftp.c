@@ -177,7 +177,11 @@ static BOOL FTP_SendPort(ftp_session_t*);
 static BOOL FTP_DoPassive(ftp_session_t*);
 static BOOL FTP_SendPortOrPasv(ftp_session_t*);
 static BOOL FTP_ParsePermission(LPCSTR lpszPermission, LPFILEPROPERTIESW lpfp);
+#ifdef __REACTOS__
+static DWORD FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERTIESW fileprop);
+#else
 static BOOL FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERTIESW fileprop);
+#endif
 static BOOL FTP_ParseDirectory(ftp_session_t*, INT nSocket, LPCWSTR lpszSearchFile,
         LPFILEPROPERTIESW *lpafp, LPDWORD dwfp);
 static HINTERNET FTP_ReceiveFileList(ftp_session_t*, INT nSocket, LPCWSTR lpszSearchFile,
@@ -189,9 +193,17 @@ static BOOL FTP_FtpPutFileW(ftp_session_t*, LPCWSTR lpszLocalFile,
 static BOOL FTP_FtpSetCurrentDirectoryW(ftp_session_t*, LPCWSTR lpszDirectory);
 static BOOL FTP_FtpCreateDirectoryW(ftp_session_t*, LPCWSTR lpszDirectory);
 static HINTERNET FTP_FtpFindFirstFileW(ftp_session_t*,
+#ifdef __REACTOS__
+        LPCWSTR lpszSearchFile, void *lpFindFileData, DWORD dwFlags, DWORD_PTR dwContext, BOOL unicode);
+static HINTERNET FTP_FindFirstFile(HINTERNET, LPCWSTR, void *, DWORD, DWORD_PTR, BOOL);
+static BOOL FTP_FtpGetCurrentDirectoryW(ftp_session_t*, void *lpszCurrentDirectory,
+        LPDWORD lpdwCurrentDirectory, BOOL unicode);
+static BOOL FTP_GetCurrentDirectory(HINTERNET, void *, DWORD *, BOOL);
+#else
         LPCWSTR lpszSearchFile, LPWIN32_FIND_DATAW lpFindFileData, DWORD dwFlags, DWORD_PTR dwContext);
 static BOOL FTP_FtpGetCurrentDirectoryW(ftp_session_t*, LPWSTR lpszCurrentDirectory,
         LPDWORD lpdwCurrentDirectory);
+#endif
 static BOOL FTP_FtpRenameFileW(ftp_session_t*, LPCWSTR lpszSrc, LPCWSTR lpszDest);
 static BOOL FTP_FtpRemoveDirectoryW(ftp_session_t*, LPCWSTR lpszDirectory);
 static BOOL FTP_FtpDeleteFileW(ftp_session_t*, LPCWSTR lpszFileName);
@@ -220,16 +232,35 @@ static BOOL res_to_le(DWORD res)
 BOOL WINAPI FtpPutFileA(HINTERNET hConnect, LPCSTR lpszLocalFile,
     LPCSTR lpszNewRemoteFile, DWORD dwFlags, DWORD_PTR dwContext)
 {
+#ifdef __REACTOS__
+    LPWSTR lpwzLocalFile = NULL;
+    LPWSTR lpwzNewRemoteFile = NULL;
+    BOOL ret = FALSE;
+    DWORD error;
+#else
     LPWSTR lpwzLocalFile;
     LPWSTR lpwzNewRemoteFile;
     BOOL ret;
+#endif
     
+#ifdef __REACTOS__
+    if (lpszLocalFile && !(lpwzLocalFile = strdupAtoW(lpszLocalFile))) goto done;
+    if (lpszNewRemoteFile && !(lpwzNewRemoteFile = strdupAtoW(lpszNewRemoteFile))) goto done;
+#else
     lpwzLocalFile = strdupAtoW(lpszLocalFile);
     lpwzNewRemoteFile = strdupAtoW(lpszNewRemoteFile);
+#endif
     ret = FtpPutFileW(hConnect, lpwzLocalFile, lpwzNewRemoteFile,
                       dwFlags, dwContext);
+#ifdef __REACTOS__
+done:
+    error = GetLastError();
+#endif
     free(lpwzLocalFile);
     free(lpwzNewRemoteFile);
+#ifdef __REACTOS__
+    if (!ret) INTERNET_SetLastError(error);
+#endif
     return ret;
 }
 
@@ -251,6 +282,14 @@ static void AsyncFtpPutFileProc(task_header_t *hdr)
     FTP_FtpPutFileW(session, task->local_file, task->remote_file,
                task->flags, task->context);
 
+#ifdef __REACTOS__
+}
+
+static void FreeFtpPutFileTask(task_header_t *hdr)
+{
+    put_file_task_t *task = (put_file_task_t*)hdr;
+
+#endif
     free(task->local_file);
     free(task->remote_file);
 }
@@ -271,6 +310,9 @@ BOOL WINAPI FtpPutFileW(HINTERNET hConnect, LPCWSTR lpszLocalFile,
     ftp_session_t *lpwfs;
     appinfo_t *hIC = NULL;
     BOOL r = FALSE;
+#ifdef __REACTOS__
+    DWORD error;
+#endif
 
     if (!lpszLocalFile || !lpszNewRemoteFile)
     {
@@ -307,9 +349,25 @@ BOOL WINAPI FtpPutFileW(HINTERNET hConnect, LPCWSTR lpszLocalFile,
     if (hIC->hdr.dwFlags & INTERNET_FLAG_ASYNC)
     {
         put_file_task_t *task = alloc_async_task(&lpwfs->hdr, AsyncFtpPutFileProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpPutFileTask;
+#endif
 
         task->local_file = wcsdup(lpszLocalFile);
         task->remote_file = wcsdup(lpszNewRemoteFile);
+#ifdef __REACTOS__
+        if (!task->local_file || !task->remote_file)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
         task->flags = dwFlags;
         task->context = dwContext;
 
@@ -322,7 +380,14 @@ BOOL WINAPI FtpPutFileW(HINTERNET hConnect, LPCWSTR lpszLocalFile,
     }
 
 lend:
+#ifdef __REACTOS__
+    error = r ? ERROR_SUCCESS : INTERNET_GetLastError();
+#endif
     WININET_Release( &lpwfs->hdr );
+#ifdef __REACTOS__
+    if (!r)
+        INTERNET_SetLastError(error);
+#endif
 
     return r;
 }
@@ -342,8 +407,15 @@ static BOOL FTP_FtpPutFileW(ftp_session_t *lpwfs, LPCWSTR lpszLocalFile,
 {
     HANDLE hFile;
     BOOL bSuccess = FALSE;
+#ifdef __REACTOS__
+    appinfo_t *hIC = lpwfs->lpAppInfo;
+#else
     appinfo_t *hIC = NULL;
+#endif
     INT nResCode;
+#ifdef __REACTOS__
+    DWORD result_error;
+#endif
 
     TRACE(" lpszLocalFile(%s) lpszNewRemoteFile(%s)\n", debugstr_w(lpszLocalFile), debugstr_w(lpszNewRemoteFile));
 
@@ -353,10 +425,19 @@ static BOOL FTP_FtpPutFileW(ftp_session_t *lpwfs, LPCWSTR lpszLocalFile,
     /* Open file to be uploaded */
     if (INVALID_HANDLE_VALUE ==
         (hFile = CreateFileW(lpszLocalFile, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0)))
+#ifdef __REACTOS__
+    {
+#endif
         /* Let CreateFile set the appropriate error */
+#ifdef __REACTOS__
+        INTERNET_SetLastError(GetLastError());
+        goto done;
+    }
+#else
         return FALSE;
 
     hIC = lpwfs->lpAppInfo;
+#endif
 
     INTERNET_SendCallback(&lpwfs->hdr, lpwfs->hdr.dwContext, INTERNET_STATUS_SENDING_REQUEST, NULL, 0);
 
@@ -367,10 +448,22 @@ static BOOL FTP_FtpPutFileW(ftp_session_t *lpwfs, LPCWSTR lpszLocalFile,
         /* Get data socket to server */
         if (FTP_GetDataSocket(lpwfs, &nDataSocket))
         {
+#ifdef __REACTOS__
+            BOOL transferred = FTP_SendData(lpwfs, nDataSocket, hFile);
+            DWORD error = transferred ? ERROR_SUCCESS : INTERNET_GetLastError();
+
+#else
             FTP_SendData(lpwfs, nDataSocket, hFile);
+#endif
             closesocket(nDataSocket);
 	    nResCode = FTP_ReceiveResponse(lpwfs, dwContext);
+#ifdef __REACTOS__
+            if (!transferred)
+                INTERNET_SetLastError(error);
+	    else if (nResCode)
+#else
 	    if (nResCode)
+#endif
 	    {
 	        if (nResCode == 226)
 		    bSuccess = TRUE;
@@ -386,17 +479,34 @@ static BOOL FTP_FtpPutFileW(ftp_session_t *lpwfs, LPCWSTR lpszLocalFile,
         lpwfs->lstnSocket = -1;
     }
 
+#ifdef __REACTOS__
+done:
+    result_error = bSuccess ? ERROR_SUCCESS : INTERNET_GetLastError();
+    if (!bSuccess && !result_error)
+        result_error = ERROR_INTERNET_EXTENDED_ERROR;
+#endif
     if (hIC->hdr.dwFlags & INTERNET_FLAG_ASYNC)
     {
         INTERNET_ASYNC_RESULT iar;
 
         iar.dwResult = (DWORD)bSuccess;
+#ifdef __REACTOS__
+        iar.dwError = result_error;
+#else
         iar.dwError = bSuccess ? ERROR_SUCCESS : INTERNET_GetLastError();
+#endif
         INTERNET_SendCallback(&lpwfs->hdr, lpwfs->hdr.dwContext, INTERNET_STATUS_REQUEST_COMPLETE,
             &iar, sizeof(INTERNET_ASYNC_RESULT));
     }
 
+#ifdef __REACTOS__
+    if (hFile != INVALID_HANDLE_VALUE)
+        CloseHandle(hFile);
+    if (!bSuccess)
+        INTERNET_SetLastError(result_error);
+#else
     CloseHandle(hFile);
+#endif
 
     return bSuccess;
 }
@@ -418,6 +528,13 @@ BOOL WINAPI FtpSetCurrentDirectoryA(HINTERNET hConnect, LPCSTR lpszDirectory)
     BOOL ret;
 
     lpwzDirectory = strdupAtoW(lpszDirectory);
+#ifdef __REACTOS__
+    if (lpszDirectory && !lpwzDirectory)
+    {
+        INTERNET_SetLastError(GetLastError());
+        return FALSE;
+    }
+#endif
     ret = FtpSetCurrentDirectoryW(hConnect, lpwzDirectory);
     free(lpwzDirectory);
     return ret;
@@ -436,6 +553,14 @@ static void AsyncFtpSetCurrentDirectoryProc(task_header_t *hdr)
     TRACE("%p\n", session);
 
     FTP_FtpSetCurrentDirectoryW(session, task->directory);
+#ifdef __REACTOS__
+}
+
+static void FreeFtpDirectoryTask(task_header_t *hdr)
+{
+    directory_task_t *task = (directory_task_t*)hdr;
+
+#endif
     free(task->directory);
 }
 
@@ -482,7 +607,23 @@ BOOL WINAPI FtpSetCurrentDirectoryW(HINTERNET hConnect, LPCWSTR lpszDirectory)
         directory_task_t *task;
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpSetCurrentDirectoryProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpDirectoryTask;
+#endif
         task->directory = wcsdup(lpszDirectory);
+#ifdef __REACTOS__
+        if (!task->directory)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
 
         r = res_to_le(INTERNET_AsyncCall(&task->hdr));
     }
@@ -565,6 +706,13 @@ BOOL WINAPI FtpCreateDirectoryA(HINTERNET hConnect, LPCSTR lpszDirectory)
     BOOL ret;
 
     lpwzDirectory = strdupAtoW(lpszDirectory);
+#ifdef __REACTOS__
+    if (lpszDirectory && !lpwzDirectory)
+    {
+        INTERNET_SetLastError(GetLastError());
+        return FALSE;
+    }
+#endif
     ret = FtpCreateDirectoryW(hConnect, lpwzDirectory);
     free(lpwzDirectory);
     return ret;
@@ -579,7 +727,9 @@ static void AsyncFtpCreateDirectoryProc(task_header_t *hdr)
     TRACE(" %p\n", session);
 
     FTP_FtpCreateDirectoryW(session, task->directory);
+#ifndef __REACTOS__
     free(task->directory);
+#endif
 }
 
 /***********************************************************************
@@ -629,7 +779,23 @@ BOOL WINAPI FtpCreateDirectoryW(HINTERNET hConnect, LPCWSTR lpszDirectory)
         directory_task_t *task;
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpCreateDirectoryProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpDirectoryTask;
+#endif
         task->directory = wcsdup(lpszDirectory);
+#ifdef __REACTOS__
+        if (!task->directory)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
 
         r = res_to_le(INTERNET_AsyncCall(&task->hdr));
     }
@@ -706,27 +872,47 @@ HINTERNET WINAPI FtpFindFirstFileA(HINTERNET hConnect,
     LPCSTR lpszSearchFile, LPWIN32_FIND_DATAA lpFindFileData, DWORD dwFlags, DWORD_PTR dwContext)
 {
     LPWSTR lpwzSearchFile;
+#ifndef __REACTOS__
     WIN32_FIND_DATAW wfd;
     LPWIN32_FIND_DATAW lpFindFileDataW;
+#endif
     HINTERNET ret;
 
     lpwzSearchFile = strdupAtoW(lpszSearchFile);
+#ifdef __REACTOS__
+    if (lpszSearchFile && !lpwzSearchFile)
+    {
+        INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+        return NULL;
+    }
+    ret = FTP_FindFirstFile(hConnect, lpwzSearchFile, lpFindFileData, dwFlags, dwContext, FALSE);
+#else
     lpFindFileDataW = lpFindFileData?&wfd:NULL;
     ret = FtpFindFirstFileW(hConnect, lpwzSearchFile, lpFindFileDataW, dwFlags, dwContext);
+#endif
     free(lpwzSearchFile);
 
+#ifndef __REACTOS__
     if (ret && lpFindFileData)
         WININET_find_data_WtoA(lpFindFileDataW, lpFindFileData);
 
+#endif
     return ret;
 }
 
 typedef struct {
     task_header_t hdr;
     WCHAR *search_file;
+#ifdef __REACTOS__
+    void *find_file_data;
+#else
     WIN32_FIND_DATAW *find_file_data;
+#endif
     DWORD flags;
     DWORD_PTR context;
+#ifdef __REACTOS__
+    BOOL unicode;
+#endif
 } find_first_file_task_t;
 
 static void AsyncFtpFindFirstFileProc(task_header_t *hdr)
@@ -736,7 +922,18 @@ static void AsyncFtpFindFirstFileProc(task_header_t *hdr)
 
     TRACE("%p\n", session);
 
+#ifdef __REACTOS__
+    FTP_FtpFindFirstFileW(session, task->search_file, task->find_file_data, task->flags, task->context,
+                        task->unicode);
+}
+
+static void FreeFtpFindFirstFileTask(task_header_t *hdr)
+{
+    find_first_file_task_t *task = (find_first_file_task_t*)hdr;
+
+#else
     FTP_FtpFindFirstFileW(session, task->search_file, task->find_file_data, task->flags, task->context);
+#endif
     free(task->search_file);
 }
 
@@ -752,10 +949,21 @@ static void AsyncFtpFindFirstFileProc(task_header_t *hdr)
  */
 HINTERNET WINAPI FtpFindFirstFileW(HINTERNET hConnect,
     LPCWSTR lpszSearchFile, LPWIN32_FIND_DATAW lpFindFileData, DWORD dwFlags, DWORD_PTR dwContext)
+#ifdef __REACTOS__
+{
+    return FTP_FindFirstFile(hConnect, lpszSearchFile, lpFindFileData, dwFlags, dwContext, TRUE);
+}
+
+static HINTERNET FTP_FindFirstFile(HINTERNET hConnect, LPCWSTR lpszSearchFile, void *lpFindFileData,
+                                 DWORD dwFlags, DWORD_PTR dwContext, BOOL unicode)
+#endif
 {
     ftp_session_t *lpwfs;
     appinfo_t *hIC = NULL;
     HINTERNET r = NULL;
+#ifdef __REACTOS__
+    DWORD error;
+#endif
 
     lpwfs = (ftp_session_t*) get_handle_object( hConnect );
     if (NULL == lpwfs || WH_HFTPSESSION != lpwfs->hdr.htype)
@@ -774,24 +982,61 @@ HINTERNET WINAPI FtpFindFirstFileW(HINTERNET hConnect,
     if (hIC->hdr.dwFlags & INTERNET_FLAG_ASYNC)
     {
         find_first_file_task_t *task;
+#ifdef __REACTOS__
+        DWORD res;
+#endif
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpFindFirstFileProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpFindFirstFileTask;
+        task->search_file = lpszSearchFile ? wcsdup(lpszSearchFile) : NULL;
+        if (lpszSearchFile && !task->search_file)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#else
         task->search_file = wcsdup(lpszSearchFile);
+#endif
         task->find_file_data = lpFindFileData;
         task->flags = dwFlags;
         task->context = dwContext;
+#ifdef __REACTOS__
+        task->unicode = unicode;
+#endif
 
+#ifdef __REACTOS__
+        res = INTERNET_AsyncCall(&task->hdr);
+        INTERNET_SetLastError(res);
+#else
         INTERNET_AsyncCall(&task->hdr);
+#endif
         r = NULL;
     }
     else
     {
         r = FTP_FtpFindFirstFileW(lpwfs, lpszSearchFile, lpFindFileData,
+#ifdef __REACTOS__
+            dwFlags, dwContext, unicode);
+#else
             dwFlags, dwContext);
+#endif
     }
 lend:
+#ifdef __REACTOS__
+    error = INTERNET_GetLastError();
+#endif
     if( lpwfs )
         WININET_Release( &lpwfs->hdr );
+#ifdef __REACTOS__
+    if (!r) INTERNET_SetLastError(error);
+#endif
 
     return r;
 }
@@ -808,12 +1053,19 @@ lend:
  *
  */
 static HINTERNET FTP_FtpFindFirstFileW(ftp_session_t *lpwfs,
+#ifdef __REACTOS__
+    LPCWSTR lpszSearchFile, void *lpFindFileData, DWORD dwFlags, DWORD_PTR dwContext, BOOL unicode)
+#else
     LPCWSTR lpszSearchFile, LPWIN32_FIND_DATAW lpFindFileData, DWORD dwFlags, DWORD_PTR dwContext)
+#endif
 {
     INT nResCode;
     appinfo_t *hIC = NULL;
     HINTERNET hFindNext = NULL;
     LPWSTR lpszSearchPath = NULL;
+#ifdef __REACTOS__
+    WIN32_FIND_DATAW find_data;
+#endif
 
     TRACE("\n");
 
@@ -838,6 +1090,13 @@ static HINTERNET FTP_FtpFindFirstFileW(ftp_session_t *lpwfs,
         if (name != lpszSearchFile)
         {
             lpszSearchPath = strndupW(lpszSearchFile, name - lpszSearchFile);
+#ifdef __REACTOS__
+            if (!lpszSearchPath)
+            {
+                INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+                goto lend;
+            }
+#endif
             lpszSearchFile = name;
         }
     }
@@ -856,10 +1115,27 @@ static HINTERNET FTP_FtpFindFirstFileW(ftp_session_t *lpwfs,
             /* Get data socket to server */
             if (FTP_GetDataSocket(lpwfs, &nDataSocket))
             {
+#ifdef __REACTOS__
+                DWORD list_error;
+
+                hFindNext = FTP_ReceiveFileList(lpwfs, nDataSocket, lpszSearchFile,
+                                              unicode || !lpFindFileData ? lpFindFileData : &find_data,
+                                              dwContext);
+                list_error = hFindNext ? ERROR_SUCCESS : INTERNET_GetLastError();
+                if (hFindNext && lpFindFileData && !unicode)
+                    WININET_find_data_WtoA(&find_data, lpFindFileData);
+#else
                 hFindNext = FTP_ReceiveFileList(lpwfs, nDataSocket, lpszSearchFile, lpFindFileData, dwContext);
+#endif
                 closesocket(nDataSocket);
                 nResCode = FTP_ReceiveResponse(lpwfs, lpwfs->hdr.dwContext);
+#ifdef __REACTOS__
+                if (!hFindNext)
+                    INTERNET_SetLastError(list_error);
+                else if (nResCode != 226 && nResCode != 250)
+#else
                 if (nResCode != 226 && nResCode != 250)
+#endif
                     INTERNET_SetLastError(ERROR_NO_MORE_FILES);
             }
         }
@@ -912,6 +1188,9 @@ lend:
 BOOL WINAPI FtpGetCurrentDirectoryA(HINTERNET hFtpSession, LPSTR lpszCurrentDirectory,
     LPDWORD lpdwCurrentDirectory)
 {
+#ifdef __REACTOS__
+    return FTP_GetCurrentDirectory(hFtpSession, lpszCurrentDirectory, lpdwCurrentDirectory, FALSE);
+#else
     WCHAR *dir = NULL;
     DWORD len;
     BOOL ret;
@@ -936,12 +1215,20 @@ BOOL WINAPI FtpGetCurrentDirectoryA(HINTERNET hFtpSession, LPSTR lpszCurrentDire
     if (lpdwCurrentDirectory) *lpdwCurrentDirectory = len;
     free(dir);
     return ret;
+#endif
 }
 
 typedef struct {
     task_header_t hdr;
+#ifdef __REACTOS__
+    void *directory;
+#else
     WCHAR *directory;
+#endif
     DWORD *directory_len;
+#ifdef __REACTOS__
+    BOOL unicode;
+#endif
 } get_current_dir_task_t;
 
 static void AsyncFtpGetCurrentDirectoryProc(task_header_t *hdr)
@@ -951,7 +1238,11 @@ static void AsyncFtpGetCurrentDirectoryProc(task_header_t *hdr)
 
     TRACE("%p\n", session);
 
+#ifdef __REACTOS__
+    FTP_FtpGetCurrentDirectoryW(session, task->directory, task->directory_len, task->unicode);
+#else
     FTP_FtpGetCurrentDirectoryW(session, task->directory, task->directory_len);
+#endif
 }
 
 /***********************************************************************
@@ -966,6 +1257,14 @@ static void AsyncFtpGetCurrentDirectoryProc(task_header_t *hdr)
  */
 BOOL WINAPI FtpGetCurrentDirectoryW(HINTERNET hFtpSession, LPWSTR lpszCurrentDirectory,
     LPDWORD lpdwCurrentDirectory)
+#ifdef __REACTOS__
+{
+    return FTP_GetCurrentDirectory(hFtpSession, lpszCurrentDirectory, lpdwCurrentDirectory, TRUE);
+}
+
+static BOOL FTP_GetCurrentDirectory(HINTERNET hFtpSession, void *lpszCurrentDirectory,
+                                   DWORD *lpdwCurrentDirectory, BOOL unicode)
+#endif
 {
     ftp_session_t *lpwfs;
     appinfo_t *hIC = NULL;
@@ -1010,15 +1309,29 @@ BOOL WINAPI FtpGetCurrentDirectoryW(HINTERNET hFtpSession, LPWSTR lpszCurrentDir
         get_current_dir_task_t *task;
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpGetCurrentDirectoryProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
         task->directory = lpszCurrentDirectory;
         task->directory_len = lpdwCurrentDirectory;
+#ifdef __REACTOS__
+        task->unicode = unicode;
+#endif
 
         r = res_to_le(INTERNET_AsyncCall(&task->hdr));
     }
     else
     {
         r = FTP_FtpGetCurrentDirectoryW(lpwfs, lpszCurrentDirectory,
+#ifdef __REACTOS__
+            lpdwCurrentDirectory, unicode);
+#else
             lpdwCurrentDirectory);
+#endif
     }
 
 lend:
@@ -1039,8 +1352,13 @@ lend:
  *    FALSE on failure
  *
  */
+#ifdef __REACTOS__
+static BOOL FTP_FtpGetCurrentDirectoryW(ftp_session_t *lpwfs, void *lpszCurrentDirectory,
+        LPDWORD lpdwCurrentDirectory, BOOL unicode)
+#else
 static BOOL FTP_FtpGetCurrentDirectoryW(ftp_session_t *lpwfs, LPWSTR lpszCurrentDirectory,
 	LPDWORD lpdwCurrentDirectory)
+#endif
 {
     INT nResCode;
     appinfo_t *hIC = NULL;
@@ -1059,28 +1377,91 @@ static BOOL FTP_FtpGetCurrentDirectoryW(ftp_session_t *lpwfs, LPWSTR lpszCurrent
     {
         if (nResCode == 257) /* Extract directory name */
         {
+#ifdef __REACTOS__
+            DWORD len;
+#else
             DWORD firstpos, lastpos, len;
+#endif
             WCHAR *lpszResponseBuffer = strdupAtoW(INTERNET_GetResponseBuffer());
+#ifdef __REACTOS__
+            WCHAR *first, *last;
+#endif
 
-            for (firstpos = 0, lastpos = 0; lpszResponseBuffer[lastpos]; lastpos++)
+#ifdef __REACTOS__
+            if (!lpszResponseBuffer)
             {
+                INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+                goto lend;
+            }
+
+            first = wcschr(lpszResponseBuffer, '"');
+            last = first ? wcschr(first + 1, '"') : NULL;
+            if (!last)
+            {
+                free(lpszResponseBuffer);
+                INTERNET_SetLastError(ERROR_INTERNET_EXTENDED_ERROR);
+                goto lend;
+            }
+            *last = 0;
+            first++;
+            len = unicode ? last - first + 1 : WideCharToMultiByte(CP_ACP, 0, first, -1, NULL, 0, NULL, NULL);
+            if (!len)
+#else
+            for (firstpos = 0, lastpos = 0; lpszResponseBuffer[lastpos]; lastpos++)
+#endif
+            {
+#ifdef __REACTOS__
+                INTERNET_SetLastError(GetLastError());
+                free(lpszResponseBuffer);
+                goto lend;
+            }
+            if (*lpdwCurrentDirectory >= len)
+            {
+                if (unicode)
+#else
                 if ('"' == lpszResponseBuffer[lastpos])
+#endif
                 {
+#ifdef __REACTOS__
+                    memcpy(lpszCurrentDirectory, first, len * sizeof(WCHAR));
+                    bSuccess = TRUE;
+#else
                     if (!firstpos)
                         firstpos = lastpos;
                     else
                         break;
+#endif
                 }
+#ifdef __REACTOS__
+                else
+                    bSuccess = WideCharToMultiByte(CP_ACP, 0, first, -1, lpszCurrentDirectory, len,
+                                                  NULL, NULL) != 0;
+                if (bSuccess)
+                    *lpdwCurrentDirectory = len;
+                else
+                    INTERNET_SetLastError(GetLastError());
+#endif
             }
+#ifdef __REACTOS__
+            else
+#else
             len = lastpos - firstpos;
             if (*lpdwCurrentDirectory >= len)
+#endif
             {
+#ifdef __REACTOS__
+                *lpdwCurrentDirectory = unicode ? len * sizeof(WCHAR) : len;
+                INTERNET_SetLastError(ERROR_INSUFFICIENT_BUFFER);
+#else
                 memcpy(lpszCurrentDirectory, &lpszResponseBuffer[firstpos + 1], len * sizeof(WCHAR));
                 lpszCurrentDirectory[len - 1] = 0;
                 *lpdwCurrentDirectory = len;
                 bSuccess = TRUE;
+#endif
             }
+#ifndef __REACTOS__
             else INTERNET_SetLastError(ERROR_INSUFFICIENT_BUFFER);
+#endif
 
             free(lpszResponseBuffer);
         }
@@ -1089,12 +1470,20 @@ static BOOL FTP_FtpGetCurrentDirectoryW(ftp_session_t *lpwfs, LPWSTR lpszCurrent
     }
 
 lend:
+#ifdef __REACTOS__
+    if (!bSuccess && !INTERNET_GetLastError())
+        INTERNET_SetLastError(ERROR_INTERNET_EXTENDED_ERROR);
+#endif
     if (hIC->hdr.dwFlags & INTERNET_FLAG_ASYNC)
     {
         INTERNET_ASYNC_RESULT iar;
 
         iar.dwResult = bSuccess;
+#ifdef __REACTOS__
+        iar.dwError = bSuccess ? ERROR_SUCCESS : INTERNET_GetLastError();
+#else
         iar.dwError = bSuccess ? ERROR_SUCCESS : ERROR_INTERNET_EXTENDED_ERROR;
+#endif
         INTERNET_SendCallback(&lpwfs->hdr, lpwfs->hdr.dwContext, INTERNET_STATUS_REQUEST_COMPLETE,
             &iar, sizeof(INTERNET_ASYNC_RESULT));
     }
@@ -1234,7 +1623,11 @@ static void FTP_ReceiveRequestData(ftp_file_t *file, BOOL first_notif)
         iar.dwError = first_notif ? 0 : available;
     }else {
         iar.dwResult = 0;
+#ifdef __REACTOS__
+        iar.dwError = WSAGetLastError();
+#else
         iar.dwError = INTERNET_GetLastError();
+#endif
     }
 
     INTERNET_SendCallback(&file->hdr, file->hdr.dwContext, INTERNET_STATUS_REQUEST_COMPLETE, &iar,
@@ -1272,9 +1665,15 @@ static DWORD FTPFILE_QueryDataAvailable(object_header_t *hdr, DWORD *available, 
             task_header_t *task;
 
             task = alloc_async_task(&file->hdr, FTPFILE_AsyncQueryDataAvailableProc, sizeof(*task));
+#ifdef __REACTOS__
+            if (!task)
+                return ERROR_OUTOFMEMORY;
+            return INTERNET_AsyncCall(task);
+#else
             INTERNET_AsyncCall(task);
 
             return ERROR_IO_PENDING;
+#endif
         }
     }
 
@@ -1319,6 +1718,10 @@ static HINTERNET FTP_FtpOpenFileW(ftp_session_t *lpwfs,
     BOOL bSuccess = FALSE;
     ftp_file_t *lpwh = NULL;
     appinfo_t *hIC = NULL;
+#ifdef __REACTOS__
+    HINTERNET handle = NULL;
+    DWORD error;
+#endif
 
     TRACE("\n");
 
@@ -1337,9 +1740,25 @@ static HINTERNET FTP_FtpOpenFileW(ftp_session_t *lpwfs,
     }
 
     /* Get data socket to server */
+#ifdef __REACTOS__
+    if (bSuccess)
+        bSuccess = FTP_GetDataSocket(lpwfs, &nDataSocket);
+    if (bSuccess)
+#else
     if (bSuccess && FTP_GetDataSocket(lpwfs, &nDataSocket))
+#endif
     {
         lpwh = alloc_object(&lpwfs->hdr, &FTPFILEVtbl, sizeof(ftp_file_t));
+#ifdef __REACTOS__
+        if (!lpwh)
+        {
+            closesocket(nDataSocket);
+            FTP_ReceiveResponse(lpwfs, lpwfs->hdr.dwContext);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            bSuccess = FALSE;
+            goto finished;
+        }
+#endif
         lpwh->hdr.htype = WH_HFILE;
         lpwh->hdr.dwFlags = dwFlags;
         lpwh->hdr.dwContext = dwContext;
@@ -1350,12 +1769,22 @@ static HINTERNET FTP_FtpOpenFileW(ftp_session_t *lpwfs,
 
         WININET_AddRef( &lpwfs->hdr );
         lpwh->lpFtpSession = lpwfs;
+#ifdef __REACTOS__
+        WININET_AddRef(&lpwh->hdr);
+#endif
         list_add_head( &lpwfs->hdr.children, &lpwh->hdr.entry );
 	
 	/* Indicate that a download is currently in progress */
 	lpwfs->download_in_progress = lpwh;
+#ifdef __REACTOS__
+        handle = lpwh->hdr.hInternet;
+#endif
     }
 
+#ifdef __REACTOS__
+finished:
+    error = bSuccess ? ERROR_SUCCESS : INTERNET_GetLastError();
+#endif
     if (lpwfs->lstnSocket != -1)
     {
         closesocket(lpwfs->lstnSocket);
@@ -1366,7 +1795,11 @@ static HINTERNET FTP_FtpOpenFileW(ftp_session_t *lpwfs,
     {
         WCHAR filename[MAX_PATH + 1];
         URL_COMPONENTSW uc;
+#ifdef __REACTOS__
+        DWORD len = 0;
+#else
         DWORD len;
+#endif
 
         memset(&uc, 0, sizeof(uc));
         uc.dwStructSize = sizeof(uc);
@@ -1376,15 +1809,26 @@ static HINTERNET FTP_FtpOpenFileW(ftp_session_t *lpwfs,
         uc.lpszUserName = lpwfs->lpszUserName;
         uc.lpszUrlPath  = wcsdup(lpszFileName);
 
+#ifdef __REACTOS__
+        if (uc.lpszUrlPath && !InternetCreateUrlW(&uc, 0, NULL, &len) &&
+            GetLastError() == ERROR_INSUFFICIENT_BUFFER && (size_t)len <= (size_t)-1 / sizeof(WCHAR))
+#else
         if (!InternetCreateUrlW(&uc, 0, NULL, &len) && GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+#endif
         {
             WCHAR *url = malloc(len * sizeof(WCHAR));
 
             if (url && InternetCreateUrlW(&uc, 0, url, &len) && CreateUrlCacheEntryW(url, 0, NULL, filename, 0))
             {
                 lpwh->cache_file = wcsdup(filename);
+#ifdef __REACTOS__
+                if (lpwh->cache_file)
+                    lpwh->cache_file_handle = CreateFileW(filename, GENERIC_WRITE, FILE_SHARE_READ,
+                                                          NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+#else
                 lpwh->cache_file_handle = CreateFileW(filename, GENERIC_WRITE, FILE_SHARE_READ,
                                                       NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+#endif
                 if (lpwh->cache_file_handle == INVALID_HANDLE_VALUE)
                 {
                     WARN("Could not create cache file: %lu\n", GetLastError());
@@ -1406,24 +1850,50 @@ static HINTERNET FTP_FtpOpenFileW(ftp_session_t *lpwfs,
 	{
             iar.dwResult = (DWORD_PTR)lpwh->hdr.hInternet;
             iar.dwError = ERROR_SUCCESS;
+#ifdef __REACTOS__
+            INTERNET_SendCallback(&lpwfs->hdr, dwContext, INTERNET_STATUS_HANDLE_CREATED,
+#else
             INTERNET_SendCallback(&lpwfs->hdr, lpwfs->hdr.dwContext, INTERNET_STATUS_HANDLE_CREATED,
+#endif
                 &iar, sizeof(INTERNET_ASYNC_RESULT));
 	}
 
+#ifdef __REACTOS__
+        if (lpwh && !lpwh->hdr.valid_handle)
+        {
+            bSuccess = FALSE;
+            handle = NULL;
+            error = ERROR_INTERNET_OPERATION_CANCELLED;
+        }
+        if (bSuccess && fdwAccess == GENERIC_READ) {
+#else
         if(bSuccess) {
+#endif
             FTP_ReceiveRequestData(lpwh, TRUE);
         }else {
+#ifdef __REACTOS__
+            iar.dwResult = (DWORD_PTR)handle;
+            iar.dwError = error;
+            INTERNET_SendCallback(lpwh ? &lpwh->hdr : &lpwfs->hdr, dwContext, INTERNET_STATUS_REQUEST_COMPLETE,
+#else
             iar.dwResult = 0;
             iar.dwError = INTERNET_GetLastError();
             INTERNET_SendCallback(&lpwfs->hdr, lpwfs->hdr.dwContext, INTERNET_STATUS_REQUEST_COMPLETE,
+#endif
                     &iar, sizeof(INTERNET_ASYNC_RESULT));
         }
     }
 
+#ifdef __REACTOS__
+    if (lpwh) WININET_Release(&lpwh->hdr);
+    if (!bSuccess) INTERNET_SetLastError(error);
+    return handle;
+#else
     if(!bSuccess)
         return FALSE;
 
     return lpwh->hdr.hInternet;
+#endif
 }
 
 
@@ -1445,6 +1915,13 @@ HINTERNET WINAPI FtpOpenFileA(HINTERNET hFtpSession,
     HINTERNET ret;
 
     lpwzFileName = strdupAtoW(lpszFileName);
+#ifdef __REACTOS__
+    if (lpszFileName && !lpwzFileName)
+    {
+        INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+        return NULL;
+    }
+#endif
     ret = FtpOpenFileW(hFtpSession, lpwzFileName, fdwAccess, dwFlags, dwContext);
     free(lpwzFileName);
     return ret;
@@ -1465,7 +1942,19 @@ static void AsyncFtpOpenFileProc(task_header_t *hdr)
 
     TRACE("%p\n", session);
 
+#ifdef __REACTOS__
+    if (!FTP_FtpOpenFileW(session, task->file_name, task->access, task->flags, task->context) &&
+        (session->hdr.dwInternalFlags & INET_OPENURL))
+        InternetCloseHandle(session->hdr.hInternet);
+}
+
+static void FreeFtpOpenFileTask(task_header_t *hdr)
+{
+    open_file_task_t *task = (open_file_task_t*)hdr;
+
+#else
     FTP_FtpOpenFileW(session, task->file_name, task->access, task->flags, task->context);
+#endif
     free(task->file_name);
 }
 
@@ -1486,6 +1975,9 @@ HINTERNET WINAPI FtpOpenFileW(HINTERNET hFtpSession,
     ftp_session_t *lpwfs;
     appinfo_t *hIC = NULL;
     HINTERNET r = NULL;
+#ifdef __REACTOS__
+    DWORD error;
+#endif
 
     TRACE("(%p,%s,0x%08lx,0x%08lx,0x%08Ix)\n", hFtpSession,
         debugstr_w(lpszFileName), fdwAccess, dwFlags, dwContext);
@@ -1521,14 +2013,38 @@ HINTERNET WINAPI FtpOpenFileW(HINTERNET hFtpSession,
     if (hIC->hdr.dwFlags & INTERNET_FLAG_ASYNC)
     {
         open_file_task_t *task;
+#ifdef __REACTOS__
+        DWORD res;
+#endif
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpOpenFileProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpOpenFileTask;
+#endif
         task->file_name = wcsdup(lpszFileName);
+#ifdef __REACTOS__
+        if (!task->file_name)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
         task->access = fdwAccess;
         task->flags = dwFlags;
         task->context = dwContext;
 
+#ifdef __REACTOS__
+        res = INTERNET_AsyncCall(&task->hdr);
+        INTERNET_SetLastError(res);
+#else
         INTERNET_AsyncCall(&task->hdr);
+#endif
         r = NULL;
     }
     else
@@ -1537,7 +2053,13 @@ HINTERNET WINAPI FtpOpenFileW(HINTERNET hFtpSession,
     }
 
 lend:
+#ifdef __REACTOS__
+    error = INTERNET_GetLastError();
+#endif
     WININET_Release( &lpwfs->hdr );
+#ifdef __REACTOS__
+    if (!r) INTERNET_SetLastError(error);
+#endif
 
     return r;
 }
@@ -1557,16 +2079,35 @@ BOOL WINAPI FtpGetFileA(HINTERNET hInternet, LPCSTR lpszRemoteFile, LPCSTR lpszN
     BOOL fFailIfExists, DWORD dwLocalFlagsAttribute, DWORD dwInternetFlags,
     DWORD_PTR dwContext)
 {
+#ifdef __REACTOS__
+    LPWSTR lpwzRemoteFile = NULL;
+    LPWSTR lpwzNewFile = NULL;
+    BOOL ret = FALSE;
+    DWORD error;
+#else
     LPWSTR lpwzRemoteFile;
     LPWSTR lpwzNewFile;
     BOOL ret;
+#endif
     
+#ifdef __REACTOS__
+    if (lpszRemoteFile && !(lpwzRemoteFile = strdupAtoW(lpszRemoteFile))) goto done;
+    if (lpszNewFile && !(lpwzNewFile = strdupAtoW(lpszNewFile))) goto done;
+#else
     lpwzRemoteFile = strdupAtoW(lpszRemoteFile);
     lpwzNewFile = strdupAtoW(lpszNewFile);
+#endif
     ret = FtpGetFileW(hInternet, lpwzRemoteFile, lpwzNewFile, fFailIfExists,
         dwLocalFlagsAttribute, dwInternetFlags, dwContext);
+#ifdef __REACTOS__
+done:
+    error = GetLastError();
+#endif
     free(lpwzRemoteFile);
     free(lpwzNewFile);
+#ifdef __REACTOS__
+    if (!ret) INTERNET_SetLastError(error);
+#endif
     return ret;
 }
 
@@ -1589,6 +2130,14 @@ static void AsyncFtpGetFileProc(task_header_t *hdr)
 
     FTP_FtpGetFileW(session, task->remote_file, task->new_file, task->fail_if_exists,
              task->local_attr, task->flags, task->context);
+#ifdef __REACTOS__
+}
+
+static void FreeFtpGetFileTask(task_header_t *hdr)
+{
+    get_file_task_t *task = (get_file_task_t*)hdr;
+
+#endif
     free(task->remote_file);
     free(task->new_file);
 }
@@ -1611,6 +2160,9 @@ BOOL WINAPI FtpGetFileW(HINTERNET hInternet, LPCWSTR lpszRemoteFile, LPCWSTR lps
     ftp_session_t *lpwfs;
     appinfo_t *hIC = NULL;
     BOOL r = FALSE;
+#ifdef __REACTOS__
+    DWORD error;
+#endif
 
     if (!lpszRemoteFile || !lpszNewFile)
     {
@@ -1649,8 +2201,24 @@ BOOL WINAPI FtpGetFileW(HINTERNET hInternet, LPCWSTR lpszRemoteFile, LPCWSTR lps
         get_file_task_t *task;
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpGetFileProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpGetFileTask;
+#endif
         task->remote_file = wcsdup(lpszRemoteFile);
         task->new_file = wcsdup(lpszNewFile);
+#ifdef __REACTOS__
+        if (!task->remote_file || !task->new_file)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
         task->local_attr = dwLocalFlagsAttribute;
         task->fail_if_exists = fFailIfExists;
         task->flags = dwInternetFlags;
@@ -1665,7 +2233,14 @@ BOOL WINAPI FtpGetFileW(HINTERNET hInternet, LPCWSTR lpszRemoteFile, LPCWSTR lps
     }
 
 lend:
+#ifdef __REACTOS__
+    error = r ? ERROR_SUCCESS : INTERNET_GetLastError();
+#endif
     WININET_Release( &lpwfs->hdr );
+#ifdef __REACTOS__
+    if (!r)
+        INTERNET_SetLastError(error);
+#endif
 
     return r;
 }
@@ -1688,6 +2263,9 @@ static BOOL FTP_FtpGetFileW(ftp_session_t *lpwfs, LPCWSTR lpszRemoteFile, LPCWST
     BOOL bSuccess = FALSE;
     HANDLE hFile;
     appinfo_t *hIC = NULL;
+#ifdef __REACTOS__
+    DWORD result_error;
+#endif
 
     TRACE("lpszRemoteFile(%s) lpszNewFile(%s)\n", debugstr_w(lpszRemoteFile), debugstr_w(lpszNewFile));
 
@@ -1698,7 +2276,14 @@ static BOOL FTP_FtpGetFileW(ftp_session_t *lpwfs, LPCWSTR lpszRemoteFile, LPCWST
     hFile = CreateFileW(lpszNewFile, GENERIC_WRITE, 0, 0, fFailIfExists ?
         CREATE_NEW : CREATE_ALWAYS, dwLocalFlagsAttribute, 0);
     if (INVALID_HANDLE_VALUE == hFile)
+#ifdef __REACTOS__
+    {
+        INTERNET_SetLastError(GetLastError());
+        goto done;
+    }
+#else
         return FALSE;
+#endif
 
     /* Set up socket to retrieve data */
     if (FTP_SendRetrieve(lpwfs, lpszRemoteFile, dwInternetFlags))
@@ -1709,13 +2294,28 @@ static BOOL FTP_FtpGetFileW(ftp_session_t *lpwfs, LPCWSTR lpszRemoteFile, LPCWST
         if (FTP_GetDataSocket(lpwfs, &nDataSocket))
         {
             INT nResCode;
+#ifdef __REACTOS__
+            BOOL transferred;
+            DWORD error;
+#endif
 
             /* Receive data */
+#ifdef __REACTOS__
+            transferred = FTP_RetrieveFileData(lpwfs, nDataSocket, hFile);
+            error = transferred ? ERROR_SUCCESS : INTERNET_GetLastError();
+#else
             FTP_RetrieveFileData(lpwfs, nDataSocket, hFile);
+#endif
             closesocket(nDataSocket);
 
             nResCode = FTP_ReceiveResponse(lpwfs, dwContext);
+#ifdef __REACTOS__
+            if (!transferred)
+                INTERNET_SetLastError(error);
+            else if (nResCode)
+#else
             if (nResCode)
+#endif
             {
                 if (nResCode == 226)
                     bSuccess = TRUE;
@@ -1731,7 +2331,16 @@ static BOOL FTP_FtpGetFileW(ftp_session_t *lpwfs, LPCWSTR lpszRemoteFile, LPCWST
         lpwfs->lstnSocket = -1;
     }
 
+#ifdef __REACTOS__
+done:
+    result_error = bSuccess ? ERROR_SUCCESS : INTERNET_GetLastError();
+    if (!bSuccess && !result_error)
+        result_error = ERROR_INTERNET_EXTENDED_ERROR;
+    if (hFile != INVALID_HANDLE_VALUE)
+        CloseHandle(hFile);
+#else
     CloseHandle(hFile);
+#endif
 
     hIC = lpwfs->lpAppInfo;
     if (hIC->hdr.dwFlags & INTERNET_FLAG_ASYNC)
@@ -1739,12 +2348,25 @@ static BOOL FTP_FtpGetFileW(ftp_session_t *lpwfs, LPCWSTR lpszRemoteFile, LPCWST
         INTERNET_ASYNC_RESULT iar;
 
         iar.dwResult = (DWORD)bSuccess;
+#ifdef __REACTOS__
+        iar.dwError = result_error;
+#else
         iar.dwError = bSuccess ? ERROR_SUCCESS : INTERNET_GetLastError();
+#endif
         INTERNET_SendCallback(&lpwfs->hdr, lpwfs->hdr.dwContext, INTERNET_STATUS_REQUEST_COMPLETE,
             &iar, sizeof(INTERNET_ASYNC_RESULT));
     }
 
+#ifdef __REACTOS__
+    if (!bSuccess)
+    {
+        if (hFile != INVALID_HANDLE_VALUE)
+            DeleteFileW(lpszNewFile);
+        INTERNET_SetLastError(result_error);
+    }
+#else
     if (!bSuccess) DeleteFileW(lpszNewFile);
+#endif
     return bSuccess;
 }
 
@@ -1777,6 +2399,13 @@ BOOL WINAPI FtpDeleteFileA(HINTERNET hFtpSession, LPCSTR lpszFileName)
     BOOL ret;
 
     lpwzFileName = strdupAtoW(lpszFileName);
+#ifdef __REACTOS__
+    if (lpszFileName && !lpwzFileName)
+    {
+        INTERNET_SetLastError(GetLastError());
+        return FALSE;
+    }
+#endif
     ret = FtpDeleteFileW(hFtpSession, lpwzFileName);
     free(lpwzFileName);
     return ret;
@@ -1795,6 +2424,14 @@ static void AsyncFtpDeleteFileProc(task_header_t *hdr)
     TRACE("%p\n", session);
 
     FTP_FtpDeleteFileW(session, task->file_name);
+#ifdef __REACTOS__
+}
+
+static void FreeFtpDeleteFileTask(task_header_t *hdr)
+{
+    delete_file_task_t *task = (delete_file_task_t*)hdr;
+
+#endif
     free(task->file_name);
 }
 
@@ -1845,7 +2482,23 @@ BOOL WINAPI FtpDeleteFileW(HINTERNET hFtpSession, LPCWSTR lpszFileName)
         delete_file_task_t *task;
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpDeleteFileProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpDeleteFileTask;
+#endif
         task->file_name = wcsdup(lpszFileName);
+#ifdef __REACTOS__
+        if (!task->file_name)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
 
         r = res_to_le(INTERNET_AsyncCall(&task->hdr));
     }
@@ -1924,6 +2577,13 @@ BOOL WINAPI FtpRemoveDirectoryA(HINTERNET hFtpSession, LPCSTR lpszDirectory)
     BOOL ret;
 
     lpwzDirectory = strdupAtoW(lpszDirectory);
+#ifdef __REACTOS__
+    if (lpszDirectory && !lpwzDirectory)
+    {
+        INTERNET_SetLastError(GetLastError());
+        return FALSE;
+    }
+#endif
     ret = FtpRemoveDirectoryW(hFtpSession, lpwzDirectory);
     free(lpwzDirectory);
     return ret;
@@ -1937,7 +2597,9 @@ static void AsyncFtpRemoveDirectoryProc(task_header_t *hdr)
     TRACE("%p\n", session);
 
     FTP_FtpRemoveDirectoryW(session, task->directory);
+#ifndef __REACTOS__
     free(task->directory);
+#endif
 }
 
 /***********************************************************************
@@ -1987,7 +2649,23 @@ BOOL WINAPI FtpRemoveDirectoryW(HINTERNET hFtpSession, LPCWSTR lpszDirectory)
         directory_task_t *task;
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpRemoveDirectoryProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpDirectoryTask;
+#endif
         task->directory = wcsdup(lpszDirectory);
+#ifdef __REACTOS__
+        if (!task->directory)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
 
         r = res_to_le(INTERNET_AsyncCall(&task->hdr));
     }
@@ -2063,15 +2741,34 @@ lend:
  */
 BOOL WINAPI FtpRenameFileA(HINTERNET hFtpSession, LPCSTR lpszSrc, LPCSTR lpszDest)
 {
+#ifdef __REACTOS__
+    LPWSTR lpwzSrc = NULL;
+    LPWSTR lpwzDest = NULL;
+    BOOL ret = FALSE;
+    DWORD error;
+#else
     LPWSTR lpwzSrc;
     LPWSTR lpwzDest;
     BOOL ret;
+#endif
 
+#ifdef __REACTOS__
+    if (lpszSrc && !(lpwzSrc = strdupAtoW(lpszSrc))) goto done;
+    if (lpszDest && !(lpwzDest = strdupAtoW(lpszDest))) goto done;
+#else
     lpwzSrc = strdupAtoW(lpszSrc);
     lpwzDest = strdupAtoW(lpszDest);
+#endif
     ret = FtpRenameFileW(hFtpSession, lpwzSrc, lpwzDest);
+#ifdef __REACTOS__
+done:
+    error = GetLastError();
+#endif
     free(lpwzSrc);
     free(lpwzDest);
+#ifdef __REACTOS__
+    if (!ret) INTERNET_SetLastError(error);
+#endif
     return ret;
 }
 
@@ -2089,6 +2786,14 @@ static void AsyncFtpRenameFileProc(task_header_t *hdr)
     TRACE("%p\n", session);
 
     FTP_FtpRenameFileW(session, task->src_file, task->dst_file);
+#ifdef __REACTOS__
+}
+
+static void FreeFtpRenameFileTask(task_header_t *hdr)
+{
+    rename_file_task_t *task = (rename_file_task_t*)hdr;
+
+#endif
     free(task->src_file);
     free(task->dst_file);
 }
@@ -2140,8 +2845,24 @@ BOOL WINAPI FtpRenameFileW(HINTERNET hFtpSession, LPCWSTR lpszSrc, LPCWSTR lpszD
         rename_file_task_t *task;
 
         task = alloc_async_task(&lpwfs->hdr, AsyncFtpRenameFileProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+        task->hdr.destroy = FreeFtpRenameFileTask;
+#endif
         task->src_file = wcsdup(lpszSrc);
         task->dst_file = wcsdup(lpszDest);
+#ifdef __REACTOS__
+        if (!task->src_file || !task->dst_file)
+        {
+            free_async_task(&task->hdr);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            goto lend;
+        }
+#endif
 
         r = res_to_le(INTERNET_AsyncCall(&task->hdr));
     }
@@ -2432,7 +3153,13 @@ HINTERNET FTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
     socklen_t sock_namelen;
     BOOL bSuccess = FALSE;
     ftp_session_t *lpwfs = NULL;
+#ifdef __REACTOS__
+    server_addr_t *server_addr = NULL;
+    HINTERNET handle;
+    DWORD error;
+#else
     server_addr_t *server_addr;
+#endif
 
     TRACE("%p  Server(%s) Port(%d) User(%s) Paswd(%s)\n",
 	    hIC, debugstr_w(lpszServerName),
@@ -2440,6 +3167,13 @@ HINTERNET FTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
 
     assert( hIC->hdr.htype == WH_HINIT );
 
+#ifdef __REACTOS__
+    if (!lpszServerName || !*lpszServerName)
+    {
+        INTERNET_SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+#endif
     if ((!lpszUserName || !*lpszUserName) && lpszPassword && *lpszPassword)
     {
 	INTERNET_SetLastError(ERROR_INVALID_PARAMETER);
@@ -2469,6 +3203,9 @@ HINTERNET FTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
 
     WININET_AddRef( &hIC->hdr );
     lpwfs->lpAppInfo = hIC;
+#ifdef __REACTOS__
+    WININET_AddRef(&lpwfs->hdr);
+#endif
     list_add_head( &hIC->hdr.children, &lpwfs->hdr.entry );
 
     if(hIC->proxy && hIC->accessType == INTERNET_OPEN_TYPE_PROXY) {
@@ -2479,21 +3216,44 @@ HINTERNET FTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
     }
     if (!lpszUserName || !lpszUserName[0]) {
         HKEY key;
+#ifdef __REACTOS__
+        WCHAR szPassword[MAX_PATH + 1];
+        DWORD len = sizeof(szPassword) - sizeof(WCHAR), type;
+        LONG res;
+#else
         WCHAR szPassword[MAX_PATH];
         DWORD len = sizeof(szPassword);
+#endif
 
         lpwfs->lpszUserName = wcsdup(L"anonymous");
 
+#ifdef __REACTOS__
+        res = RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", &key);
+        if (!res)
+        {
+            res = RegQueryValueExW(key, L"EmailName", NULL, &type, (LPBYTE)szPassword, &len);
+            if (!res && (type != REG_SZ || len % sizeof(WCHAR))) res = ERROR_INVALID_DATA;
+            if (!res) szPassword[len / sizeof(WCHAR)] = 0;
+            RegCloseKey(key);
+        }
+        if (res) {
+#else
         RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", &key);
         if (RegQueryValueExW(key, L"EmailName", NULL, NULL, (LPBYTE)szPassword, &len)) {
+#endif
             /* Nothing in the registry, get the username and use that as the password */
+#ifdef __REACTOS__
+            len = ARRAY_SIZE(szPassword);
+#endif
             if (!GetUserNameW(szPassword, &len)) {
                 /* Should never get here, but use an empty password as failsafe */
                 lstrcpyW(szPassword, L"");
             }
         }
+#ifndef __REACTOS__
         RegCloseKey(key);
 
+#endif
         TRACE("Password used for anonymous ftp : (%s)\n", debugstr_w(szPassword));
         lpwfs->lpszPassword = wcsdup(szPassword);
     }
@@ -2502,6 +3262,13 @@ HINTERNET FTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
         lpwfs->lpszPassword = wcsdup(lpszPassword ? lpszPassword : L"");
     }
     lpwfs->servername = wcsdup(lpszServerName);
+#ifdef __REACTOS__
+    if (!lpwfs->lpszUserName || !lpwfs->lpszPassword || !lpwfs->servername)
+    {
+        INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+        goto lerror;
+    }
+#endif
 
     /* Don't send a handle created callback if this handle was created with InternetOpenUrl */
     if (!(lpwfs->hdr.dwInternalFlags & INET_OPENURL))
@@ -2539,7 +3306,15 @@ HINTERNET FTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
         TRACE("Connected to server\n");
 	lpwfs->sndSocket = nsocket;
 	sock_namelen = sizeof(lpwfs->socketAddress);
+#ifdef __REACTOS__
+        if (getsockname(nsocket, (struct sockaddr *) &lpwfs->socketAddress, &sock_namelen) == -1)
+        {
+            INTERNET_SetLastError(WSAGetLastError());
+            goto lerror;
+        }
+#else
 	getsockname(nsocket, (struct sockaddr *) &lpwfs->socketAddress, &sock_namelen);
+#endif
 
         if (FTP_ConnectToHost(lpwfs))
         {
@@ -2549,14 +3324,35 @@ HINTERNET FTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
     }
 
 lerror:
+#ifdef __REACTOS__
+    error = bSuccess ? ERROR_SUCCESS : INTERNET_GetLastError();
+#endif
     free(server_addr);
+#ifdef __REACTOS__
+    if (bSuccess && !lpwfs->hdr.valid_handle)
+#else
     if (!bSuccess)
+#endif
     {
+#ifdef __REACTOS__
+        bSuccess = FALSE;
+        error = ERROR_INTERNET_OPERATION_CANCELLED;
+#else
         WININET_Release(&lpwfs->hdr);
         return NULL;
+#endif
     }
+#ifdef __REACTOS__
+    handle = bSuccess ? lpwfs->hdr.hInternet : NULL;
+    if (!bSuccess)
+        InternetCloseHandle(lpwfs->hdr.hInternet);
+    WININET_Release(&lpwfs->hdr);
+    if (!bSuccess) INTERNET_SetLastError(error);
+    return handle;
+#else
 
     return lpwfs->hdr.hInternet;
+#endif
 }
 
 
@@ -2618,41 +3414,99 @@ static LPSTR FTP_GetNextLine(INT nSocket, LPDWORD dwLen)
     struct timeval tv = {RESPONSE_TIMEOUT,0};
     FD_SET set;
     INT nRecv = 0;
+#ifdef __REACTOS__
+    LPSTR lpszBuffer;
+#else
     LPSTR lpszBuffer = INTERNET_GetResponseBuffer();
+#endif
 
     TRACE("\n");
 
+#ifdef __REACTOS__
+    lpszBuffer = INTERNET_GetResponseBuffer();
+    if (!lpszBuffer) return NULL;
+    lpszBuffer[0] = '\0';
+
+#endif
     FD_ZERO(&set);
     FD_SET(nSocket, &set);
 
+#ifdef __REACTOS__
+    for (;;)
+#else
     while (nRecv < MAX_REPLY_LEN)
+#endif
     {
+#ifdef __REACTOS__
+        char ch;
+        int res = select(0, &set, NULL, NULL, &tv);
+
+        if (res > 0)
+#else
         if (select(nSocket+1, &set, NULL, NULL, &tv) > 0)
+#endif
         {
+#ifdef __REACTOS__
+            res = sock_recv(nSocket, &ch, 1, 0);
+            if (res <= 0)
+#else
             if (sock_recv(nSocket, &lpszBuffer[nRecv], 1, 0) <= 0)
+#endif
             {
+#ifdef __REACTOS__
+                INTERNET_SetLastError(res < 0 ? WSAGetLastError() :
+                                      nRecv ? ERROR_INTERNET_CONNECTION_ABORTED : ERROR_NO_MORE_FILES);
+#else
                 INTERNET_SetLastError(ERROR_FTP_TRANSFER_IN_PROGRESS);
+#endif
                 return NULL;
             }
 
+#ifdef __REACTOS__
+            if (ch == '\n')
+#else
             if (lpszBuffer[nRecv] == '\n')
+#endif
             {
+#ifdef __REACTOS__
+                *dwLen = nRecv;
+#else
                 lpszBuffer[nRecv] = '\0';
                 *dwLen = nRecv - 1;
+#endif
                 TRACE(":%d %s\n", nRecv, lpszBuffer);
                 return lpszBuffer;
             }
+#ifdef __REACTOS__
+            if (ch != '\r')
+            {
+                if (nRecv == MAX_REPLY_LEN - 1)
+                {
+                    INTERNET_SetLastError(ERROR_INTERNET_EXTENDED_ERROR);
+                    return NULL;
+                }
+                lpszBuffer[nRecv++] = ch;
+                lpszBuffer[nRecv] = '\0';
+            }
+#else
             if (lpszBuffer[nRecv] != '\r')
                 nRecv++;
+#endif
         }
 	else
 	{
+#ifdef __REACTOS__
+            INTERNET_SetLastError(res < 0 ? WSAGetLastError() : ERROR_INTERNET_TIMEOUT);
+#else
             INTERNET_SetLastError(ERROR_INTERNET_TIMEOUT);
+#endif
             return NULL;
         }
     }
+#ifndef __REACTOS__
 
     return NULL;
+#endif
 }
 
 /***********************************************************************
@@ -2668,11 +3522,19 @@ static LPSTR FTP_GetNextLine(INT nSocket, LPDWORD dwLen)
 static BOOL FTP_SendCommandA(INT nSocket, FTP_COMMAND ftpCmd, LPCSTR lpszParam,
 	INTERNET_STATUS_CALLBACK lpfnStatusCB, object_header_t *hdr, DWORD_PTR dwContext)
 {
+#ifdef __REACTOS__
+	size_t len, param_len;
+#else
     	DWORD len;
+#endif
 	CHAR *buf;
 	DWORD nBytesSent = 0;
+#ifdef __REACTOS__
+        DWORD error = ERROR_SUCCESS;
+#else
 	int nRC = 0;
 	DWORD dwParamLen;
+#endif
 
 	TRACE("%d: (%s) %d\n", ftpCmd, debugstr_a(lpszParam), nSocket);
 
@@ -2681,20 +3543,51 @@ static BOOL FTP_SendCommandA(INT nSocket, FTP_COMMAND ftpCmd, LPCSTR lpszParam,
             lpfnStatusCB(hdr->hInternet, dwContext, INTERNET_STATUS_SENDING_REQUEST, NULL, 0);
         }
 
+#ifdef __REACTOS__
+	param_len = lpszParam ? strlen(lpszParam) : 0;
+	len = strlen(szFtpCommands[ftpCmd]) + strlen(szCRLF) + !!lpszParam;
+        if (param_len > INT_MAX - len)
+        {
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+            return FALSE;
+        }
+        len += param_len;
+#else
 	dwParamLen = lpszParam?strlen(lpszParam)+1:0;
 	len = dwParamLen + strlen(szFtpCommands[ftpCmd]) + strlen(szCRLF);
+#endif
 	if (NULL == (buf = malloc(len + 1)))
 	{
 	    INTERNET_SetLastError(ERROR_OUTOFMEMORY);
 	    return FALSE;
 	}
+#ifdef __REACTOS__
+	sprintf(buf, "%s%s%s%s", szFtpCommands[ftpCmd], lpszParam ? " " : "",
+		lpszParam ? lpszParam : "", szCRLF);
+#else
 	sprintf(buf, "%s%s%s%s", szFtpCommands[ftpCmd], dwParamLen ? " " : "",
 		dwParamLen ? lpszParam : "", szCRLF);
+#endif
 
+#ifdef __REACTOS__
+	TRACE("Sending (%s) len(%Iu)\n", debugstr_a(buf), len);
+	while (nBytesSent < len)
+#else
 	TRACE("Sending (%s) len(%ld)\n", debugstr_a(buf), len);
 	while((nBytesSent < len) && (nRC != -1))
+#endif
 	{
+#ifdef __REACTOS__
+		int nRC = sock_send(nSocket, buf+nBytesSent, len - nBytesSent, 0);
+
+                if (nRC <= 0)
+                {
+                    error = nRC < 0 ? WSAGetLastError() : ERROR_INTERNET_CONNECTION_ABORTED;
+                    break;
+                }
+#else
 		nRC = sock_send(nSocket, buf+nBytesSent, len - nBytesSent, 0);
+#endif
 		nBytesSent += nRC;
 	}
     free(buf);
@@ -2706,7 +3599,12 @@ static BOOL FTP_SendCommandA(INT nSocket, FTP_COMMAND ftpCmd, LPCSTR lpszParam,
         }
 
 	TRACE("Sent %ld bytes\n", nBytesSent);
+#ifdef __REACTOS__
+        if (error != ERROR_SUCCESS) INTERNET_SetLastError(error);
+	return error == ERROR_SUCCESS;
+#else
 	return (nRC != -1);
+#endif
 }
 
 /***********************************************************************
@@ -2724,6 +3622,13 @@ static BOOL FTP_SendCommand(INT nSocket, FTP_COMMAND ftpCmd, LPCWSTR lpszParam,
 {
     BOOL ret;
     char *lpszParamA = strdupWtoA(lpszParam);
+#ifdef __REACTOS__
+    if (lpszParam && !lpszParamA)
+    {
+        INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+#endif
     ret = FTP_SendCommandA(nSocket, ftpCmd, lpszParamA, lpfnStatusCB, hdr, dwContext);
     free(lpszParamA);
     return ret;
@@ -2741,8 +3646,15 @@ static BOOL FTP_SendCommand(INT nSocket, FTP_COMMAND ftpCmd, LPCWSTR lpszParam,
  */
 INT FTP_ReceiveResponse(ftp_session_t *lpwfs, DWORD_PTR dwContext)
 {
+#ifdef __REACTOS__
+    LPSTR lpszResponse;
+#else
     LPSTR lpszResponse = INTERNET_GetResponseBuffer();
+#endif
     DWORD nRecv;
+#ifdef __REACTOS__
+    DWORD error = ERROR_SUCCESS;
+#endif
     INT rc = 0;
     char firstprefix[5];
     BOOL multiline = FALSE;
@@ -2753,13 +3665,37 @@ INT FTP_ReceiveResponse(ftp_session_t *lpwfs, DWORD_PTR dwContext)
 
     while(1)
     {
+#ifdef __REACTOS__
+	lpszResponse = FTP_GetNextLine(lpwfs->sndSocket, &nRecv);
+        if (!lpszResponse)
+        {
+            error = INTERNET_GetLastError();
+            if (error == ERROR_NO_MORE_FILES) error = ERROR_INTERNET_CONNECTION_ABORTED;
+            goto lerror;
+        }
+#else
 	if (!FTP_GetNextLine(lpwfs->sndSocket, &nRecv))
 	    goto lerror;
+#endif
 
+#ifdef __REACTOS__
+        if (nRecv >= 4)
+#else
         if (nRecv >= 3)
+#endif
 	{
 	    if(!multiline)
 	    {
+#ifdef __REACTOS__
+                if (lpszResponse[0] < '1' || lpszResponse[0] > '5' ||
+                    lpszResponse[1] < '0' || lpszResponse[1] > '9' ||
+                    lpszResponse[2] < '0' || lpszResponse[2] > '9' ||
+                    (lpszResponse[3] != ' ' && lpszResponse[3] != '-'))
+                {
+                    error = ERROR_INTERNET_EXTENDED_ERROR;
+                    goto lerror;
+                }
+#endif
 	        if(lpszResponse[3] != '-')
 		    break;
 		else
@@ -2776,11 +3712,26 @@ INT FTP_ReceiveResponse(ftp_session_t *lpwfs, DWORD_PTR dwContext)
 		    break;
 	    }
 	}
+#ifdef __REACTOS__
+        else if (!multiline)
+        {
+            error = ERROR_INTERNET_EXTENDED_ERROR;
+            goto lerror;
+        }
+#endif
     }
 
+#ifdef __REACTOS__
+    if (nRecv >= 4)
+#else
     if (nRecv >= 3)
+#endif
     {
+#ifdef __REACTOS__
+        rc = (lpszResponse[0] - '0') * 100 + (lpszResponse[1] - '0') * 10 + lpszResponse[2] - '0';
+#else
         rc = atoi(lpszResponse);
+#endif
 
         INTERNET_SendCallback(&lpwfs->hdr, dwContext, INTERNET_STATUS_RESPONSE_RECEIVED,
 		    &nRecv, sizeof(DWORD));
@@ -2788,6 +3739,9 @@ INT FTP_ReceiveResponse(ftp_session_t *lpwfs, DWORD_PTR dwContext)
 
 lerror:
     TRACE("return %d\n", rc);
+#ifdef __REACTOS__
+    if (!rc) INTERNET_SetLastError(error);
+#endif
     return rc;
 }
 
@@ -2930,6 +3884,9 @@ static BOOL FTP_InitListenSocket(ftp_session_t *lpwfs)
     lpwfs->lstnSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (lpwfs->lstnSocket == -1)
     {
+#ifdef __REACTOS__
+        INTERNET_SetLastError(WSAGetLastError());
+#endif
         TRACE("Unable to create listening socket\n");
             goto lend;
     }
@@ -2942,18 +3899,28 @@ static BOOL FTP_InitListenSocket(ftp_session_t *lpwfs)
 
     if (bind(lpwfs->lstnSocket,(struct sockaddr *) &lpwfs->lstnSocketAddress, sizeof(lpwfs->lstnSocketAddress)) == -1)
     {
+#ifdef __REACTOS__
+        INTERNET_SetLastError(WSAGetLastError());
+#endif
         TRACE("Unable to bind socket\n");
         goto lend;
     }
 
     if (listen(lpwfs->lstnSocket, MAX_BACKLOG) == -1)
     {
+#ifdef __REACTOS__
+        INTERNET_SetLastError(WSAGetLastError());
+#endif
         TRACE("listen failed\n");
         goto lend;
     }
 
     if (getsockname(lpwfs->lstnSocket, (struct sockaddr *) &lpwfs->lstnSocketAddress, &namelen) != -1)
         bSuccess = TRUE;
+#ifdef __REACTOS__
+    else
+        INTERNET_SetLastError(WSAGetLastError());
+#endif
 
 lend:
     if (!bSuccess && lpwfs->lstnSocket != -1)
@@ -3035,6 +4002,9 @@ static BOOL FTP_GetFileSize(ftp_session_t *lpwfs, LPCWSTR lpszRemoteFile, DWORD 
 	    int i;
 	    LPSTR lpszResponseBuffer = INTERNET_GetResponseBuffer();
 
+#ifdef __REACTOS__
+	    if (!lpszResponseBuffer) return FALSE;
+#endif
 	    for (i = 0; (lpszResponseBuffer[i] != ' ') && (lpszResponseBuffer[i] != '\0'); i++) ;
 	    if (lpszResponseBuffer[i] == '\0') return FALSE;
 	    *dwSize = atol(&(lpszResponseBuffer[i + 1]));
@@ -3126,15 +4096,40 @@ static BOOL FTP_DoPassive(ftp_session_t *lpwfs)
 	    INT nsocket = -1;
 	    struct sockaddr_in dataSocketAddress;
 
+#ifdef __REACTOS__
+	    if (!lpszResponseBuffer) goto lend;
+#endif
 	    p = lpszResponseBuffer+4; /* skip status code */
 	    while (*p != '\0' && (*p < '0' || *p > '9')) p++;
 
 	    if (*p == '\0')
 	    {
+#ifdef __REACTOS__
+		INTERNET_SetLastError(ERROR_INTERNET_EXTENDED_ERROR);
+#endif
 		ERR("no address found in response, aborting\n");
 		goto lend;
 	    }
 
+#ifdef __REACTOS__
+            for (i = 0; i < 6; i++)
+            {
+                char *end;
+                unsigned long value;
+
+                while (isspace((unsigned char)*p)) p++;
+                value = strtoul(p, &end, 10);
+                if (*p < '0' || *p > '9' || value > 0xff || (i < 5 && *end != ','))
+                {
+                    INTERNET_SetLastError(ERROR_INTERNET_EXTENDED_ERROR);
+                    ERR("unknown response address format '%s', aborting\n", p);
+                    goto lend;
+                }
+                f[i] = value;
+                p = end;
+                if (i < 5) p++;
+            }
+#else
 	    if (sscanf(p, "%d,%d,%d,%d,%d,%d",  &f[0], &f[1], &f[2], &f[3],
 				    		&f[4], &f[5]) != 6)
 	    {
@@ -3143,6 +4138,7 @@ static BOOL FTP_DoPassive(ftp_session_t *lpwfs)
 	    }
 	    for (i=0; i < 6; i++)
 		f[i] = f[i] & 0xff;
+#endif
 
 	    dataSocketAddress = lpwfs->socketAddress;
 	    pAddr = (char *)&(dataSocketAddress.sin_addr.S_un.S_addr);
@@ -3156,10 +4152,20 @@ static BOOL FTP_DoPassive(ftp_session_t *lpwfs)
 
             nsocket = socket(AF_INET,SOCK_STREAM,0);
             if (nsocket == -1)
+#ifdef __REACTOS__
+            {
+                INTERNET_SetLastError(WSAGetLastError());
+#endif
                 goto lend;
+#ifdef __REACTOS__
+            }
+#endif
 
 	    if (connect(nsocket, (struct sockaddr *)&dataSocketAddress, sizeof(dataSocketAddress)))
             {
+#ifdef __REACTOS__
+                INTERNET_SetLastError(WSAGetLastError());
+#endif
 	        ERR("can't connect passive FTP data port.\n");
                 closesocket(nsocket);
 	        goto lend;
@@ -3215,10 +4221,16 @@ static BOOL FTP_GetDataSocket(ftp_session_t *lpwfs, LPINT nDataSocket)
     {
 	*nDataSocket = lpwfs->pasvSocket;
 	lpwfs->pasvSocket = -1;
+#ifdef __REACTOS__
+        if (*nDataSocket == -1) INTERNET_SetLastError(ERROR_INTERNET_INCORRECT_HANDLE_STATE);
+#endif
     }
     else
     {
         *nDataSocket = accept(lpwfs->lstnSocket, (struct sockaddr *) &saddr, &addrlen);
+#ifdef __REACTOS__
+        if (*nDataSocket == -1) INTERNET_SetLastError(WSAGetLastError());
+#endif
         closesocket(lpwfs->lstnSocket);
         lpwfs->lstnSocket = -1;
     }
@@ -3239,6 +4251,9 @@ static BOOL FTP_GetDataSocket(ftp_session_t *lpwfs, LPINT nDataSocket)
 static BOOL FTP_SendData(ftp_session_t *lpwfs, INT nDataSocket, HANDLE hFile)
 {
     BY_HANDLE_FILE_INFORMATION fi;
+#ifdef __REACTOS__
+    BOOL have_file_info;
+#endif
     DWORD nBytesRead = 0;
     DWORD nBytesSent = 0;
     DWORD nTotalSent = 0;
@@ -3250,9 +4265,20 @@ static BOOL FTP_SendData(ftp_session_t *lpwfs, INT nDataSocket, HANDLE hFile)
 
     TRACE("\n");
     lpszBuffer = calloc(DATA_PACKET_SIZE, 1);
+#ifdef __REACTOS__
+    if (!lpszBuffer)
+    {
+        INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+#endif
 
     /* Get the size of the file. */
+#ifdef __REACTOS__
+    have_file_info = GetFileInformationByHandle(hFile, &fi);
+#else
     GetFileInformationByHandle(hFile, &fi);
+#endif
     time(&s_long_time);
 
     do
@@ -3264,7 +4290,16 @@ static BOOL FTP_SendData(ftp_session_t *lpwfs, INT nDataSocket, HANDLE hFile)
             /* Read data from file. */
             nBytesSent = 0;
             if (!ReadFile(hFile, lpszBuffer, DATA_PACKET_SIZE, &nBytesRead, 0))
+#ifdef __REACTOS__
+            {
+                INTERNET_SetLastError(GetLastError());
+                ERR("Failed reading from file\n");
+                nRC = -1;
+                break;
+            }
+#else
             ERR("Failed reading from file\n");
+#endif
 
             if (nBytesRead > 0)
                 nBytesToSend = nBytesRead;
@@ -3274,15 +4309,35 @@ static BOOL FTP_SendData(ftp_session_t *lpwfs, INT nDataSocket, HANDLE hFile)
 
         nLen = DATA_PACKET_SIZE < nBytesToSend ?
             DATA_PACKET_SIZE : nBytesToSend;
+#ifdef __REACTOS__
+        nRC  = sock_send(nDataSocket, lpszBuffer + nBytesSent, nLen, 0);
+#else
         nRC  = sock_send(nDataSocket, lpszBuffer, nLen, 0);
+#endif
 
+#ifdef __REACTOS__
+        if (nRC > 0)
+#else
         if (nRC != -1)
+#endif
         {
             nBytesSent += nRC;
             nTotalSent += nRC;
         }
+#ifdef __REACTOS__
+        else
+        {
+            INTERNET_SetLastError(nRC == -1 ? WSAGetLastError() : ERROR_INTERNET_CONNECTION_ABORTED);
+            nRC = -1;
+            break;
+        }
+#endif
 
         /* Do some computation to display the status. */
+#ifdef __REACTOS__
+        if (!have_file_info || !fi.nFileSizeLow || !nTotalSent)
+            continue;
+#endif
         time(&e_long_time);
         nSeconds = e_long_time - s_long_time;
         if( nSeconds / 60 > 0 )
@@ -3302,7 +4357,11 @@ static BOOL FTP_SendData(ftp_session_t *lpwfs, INT nDataSocket, HANDLE hFile)
     TRACE("file transfer complete!\n");
 
     free(lpszBuffer);
+#ifdef __REACTOS__
+    return nRC != -1;
+#else
     return nTotalSent;
+#endif
 }
 
 
@@ -3382,11 +4441,38 @@ static BOOL FTP_RetrieveFileData(ftp_session_t *lpwfs, INT nDataSocket, HANDLE h
         nRC = sock_recv(nDataSocket, lpszBuffer, DATA_PACKET_SIZE, 0);
         if (nRC != -1)
         {
+#ifdef __REACTOS__
+            DWORD offset = 0;
+
+#endif
             /* other side closed socket. */
             if (nRC == 0)
                 goto recv_end;
+#ifdef __REACTOS__
+            while (offset < nRC)
+            {
+                if (!WriteFile(hFile, lpszBuffer + offset, nRC - offset, &nBytesWritten, NULL))
+                {
+                    INTERNET_SetLastError(GetLastError());
+                    nRC = -1;
+                    goto recv_end;
+                }
+                if (!nBytesWritten)
+                {
+                    INTERNET_SetLastError(ERROR_WRITE_FAULT);
+                    nRC = -1;
+                    goto recv_end;
+                }
+                offset += nBytesWritten;
+            }
+#else
             WriteFile(hFile, lpszBuffer, nRC, &nBytesWritten, NULL);
+#endif
         }
+#ifdef __REACTOS__
+        else
+            INTERNET_SetLastError(WSAGetLastError());
+#endif
     }
 
     TRACE("Data transfer complete\n");
@@ -3417,9 +4503,17 @@ static void FTPFINDNEXT_Destroy(object_header_t *hdr)
     free(lpwfn->lpafp);
 }
 
+#ifdef __REACTOS__
+static DWORD FTPFINDNEXT_FindNextFileProc(WININETFTPFINDNEXTW *find, LPVOID data, BOOL unicode)
+#else
 static DWORD FTPFINDNEXT_FindNextFileProc(WININETFTPFINDNEXTW *find, LPVOID data)
+#endif
 {
+#ifdef __REACTOS__
+    WIN32_FIND_DATAW converted_data, *find_data = unicode ? data : &converted_data;
+#else
     WIN32_FIND_DATAW *find_data = data;
+#endif
     DWORD res = ERROR_SUCCESS;
 
     TRACE("index(%ld) size(%ld)\n", find->index, find->size);
@@ -3431,11 +4525,19 @@ static DWORD FTPFINDNEXT_FindNextFileProc(WININETFTPFINDNEXTW *find, LPVOID data
         find->index++;
 
         TRACE("Name: %s\nSize: %ld\n", debugstr_w(find_data->cFileName), find_data->nFileSizeLow);
+#ifdef __REACTOS__
+        if (!unicode)
+            WININET_find_data_WtoA(find_data, data);
+#endif
     }else {
         res = ERROR_NO_MORE_FILES;
     }
 
+#ifdef __REACTOS__
+    if (find->lpFtpSession->lpAppInfo->hdr.dwFlags & INTERNET_FLAG_ASYNC)
+#else
     if (find->hdr.dwFlags & INTERNET_FLAG_ASYNC)
+#endif
     {
         INTERNET_ASYNC_RESULT iar;
 
@@ -3452,14 +4554,23 @@ static DWORD FTPFINDNEXT_FindNextFileProc(WININETFTPFINDNEXTW *find, LPVOID data
 
 typedef struct {
     task_header_t hdr;
+#ifdef __REACTOS__
+    void *find_data;
+    BOOL unicode;
+#else
     WIN32_FIND_DATAW *find_data;
+#endif
 } find_next_task_t;
 
 static void FTPFINDNEXT_AsyncFindNextFileProc(task_header_t *hdr)
 {
     find_next_task_t *task = (find_next_task_t*)hdr;
 
+#ifdef __REACTOS__
+    FTPFINDNEXT_FindNextFileProc((WININETFTPFINDNEXTW*)task->hdr.hdr, task->find_data, task->unicode);
+#else
     FTPFINDNEXT_FindNextFileProc((WININETFTPFINDNEXTW*)task->hdr.hdr, task->find_data);
+#endif
 }
 
 static DWORD FTPFINDNEXT_QueryOption(object_header_t *hdr, DWORD option, void *buffer, DWORD *size, BOOL unicode)
@@ -3479,7 +4590,11 @@ static DWORD FTPFINDNEXT_QueryOption(object_header_t *hdr, DWORD option, void *b
     return INET_QueryOption(hdr, option, buffer, size, unicode);
 }
 
+#ifdef __REACTOS__
+static DWORD FTPFINDNEXT_FindNextFileW(object_header_t *hdr, void *data, BOOL unicode)
+#else
 static DWORD FTPFINDNEXT_FindNextFileW(object_header_t *hdr, void *data)
+#endif
 {
     WININETFTPFINDNEXTW *find = (WININETFTPFINDNEXTW*)hdr;
 
@@ -3488,13 +4603,28 @@ static DWORD FTPFINDNEXT_FindNextFileW(object_header_t *hdr, void *data)
         find_next_task_t *task;
 
         task = alloc_async_task(&find->hdr, FTPFINDNEXT_AsyncFindNextFileProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+            return ERROR_OUTOFMEMORY;
+#endif
         task->find_data = data;
+#ifdef __REACTOS__
+        task->unicode = unicode;
+#endif
 
+#ifdef __REACTOS__
+        return INTERNET_AsyncCall(&task->hdr);
+#else
         INTERNET_AsyncCall(&task->hdr);
         return ERROR_SUCCESS;
+#endif
     }
 
+#ifdef __REACTOS__
+    return FTPFINDNEXT_FindNextFileProc(find, data, unicode);
+#else
     return FTPFINDNEXT_FindNextFileProc(find, data);
+#endif
 }
 
 static const object_vtbl_t FTPFINDNEXTVtbl = {
@@ -3546,6 +4676,17 @@ static HINTERNET FTP_ReceiveFileList(ftp_session_t *lpwfs, INT nSocket, LPCWSTR 
             lpwfn->lpFtpSession = lpwfs;
             list_add_head( &lpwfs->hdr.children, &lpwfn->hdr.entry );
         }
+#ifdef __REACTOS__
+        else
+        {
+            DWORD i;
+
+            for (i = 0; i < dwSize; i++)
+                free(lpafp[i].lpszName);
+            free(lpafp);
+            INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+        }
+#endif
     }
 
     TRACE("Matched %ld files\n", dwSize);
@@ -3600,7 +4741,11 @@ static BOOL FTP_ConvertFileProp(LPFILEPROPERTIESW lpafp, LPWIN32_FIND_DATAW lpFi
  *   TRUE on success
  *   FALSE on failure
  */
+#ifdef __REACTOS__
+static DWORD FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERTIESW lpfp)
+#else
 static BOOL FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERTIESW lpfp)
+#endif
 {
     static const char szSpace[] = " \t";
     DWORD nBufLen;
@@ -3613,16 +4758,28 @@ static BOOL FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERT
     lpfp->lpszName = NULL;
     do {
         if(!(pszLine = FTP_GetNextLine(nSocket, &nBufLen)))
+#ifdef __REACTOS__
+            return INTERNET_GetLastError();
+#else
             return FALSE;
+#endif
     
         pszToken = strtok(pszLine, szSpace);
+#ifdef __REACTOS__
+        if (!pszToken)
+            continue;
+#endif
         /* ls format
          * <Permissions> <NoLinks> <owner>   <group> <size> <date>  <time or year> <filename>
          *
          * For instance:
          * drwx--s---     2         pcarrier  ens     512    Sep 28  1995           pcarrier
          */
+#ifdef __REACTOS__
+        if(!isdigit((unsigned char)pszToken[0]) && 10 == strlen(pszToken)) {
+#else
         if(!isdigit(pszToken[0]) && 10 == strlen(pszToken)) {
+#endif
             if(!FTP_ParsePermission(pszToken, lpfp))
                 lpfp->bIsDirectory = FALSE;
             for(i=0; i<=3; i++) {
@@ -3681,6 +4838,9 @@ static BOOL FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERT
             pszToken = strtok(NULL, szSpace);
             if(!pszToken) continue;
             lpfp->lpszName = strdupAtoW(pszToken);
+#ifdef __REACTOS__
+            if (!lpfp->lpszName) return ERROR_OUTOFMEMORY;
+#endif
             TRACE("File: %s\n", debugstr_w(lpfp->lpszName));
         }
         /* NT way of parsing ... :
@@ -3688,11 +4848,20 @@ static BOOL FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERT
                 07-13-03  08:55PM       <DIR>          sakpatch
                 05-09-03  06:02PM             12656686 2003-04-21bgm_cmd_e.rgz
         */
+#ifdef __REACTOS__
+        else if(isdigit((unsigned char)pszToken[0]) && 8 == strlen(pszToken)) {
+#else
         else if(isdigit(pszToken[0]) && 8 == strlen(pszToken)) {
+#endif
             int mon, mday, year, hour, min;
             lpfp->permissions = 0xFFFF; /* No idea, put full permission :-) */
             
+#ifdef __REACTOS__
+            if (sscanf(pszToken, "%d-%d-%d", &mon, &mday, &year) != 3)
+                continue;
+#else
             sscanf(pszToken, "%d-%d-%d", &mon, &mday, &year);
+#endif
             lpfp->tmLastModified.wDay   = mday;
             lpfp->tmLastModified.wMonth = mon;
             lpfp->tmLastModified.wYear  = year;
@@ -3702,7 +4871,12 @@ static BOOL FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERT
 
             pszToken = strtok(NULL, szSpace);
             if(!pszToken) continue;
+#ifdef __REACTOS__
+            if (strlen(pszToken) < 7 || sscanf(pszToken, "%2d:%2d", &hour, &min) != 2)
+                continue;
+#else
             sscanf(pszToken, "%d:%d", &hour, &min);
+#endif
             lpfp->tmLastModified.wHour   = hour;
             lpfp->tmLastModified.wMinute = min;
             if((pszToken[5] == 'P') && (pszToken[6] == 'M')) {
@@ -3730,6 +4904,9 @@ static BOOL FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERT
             pszToken = strtok(NULL, szSpace);
             if(!pszToken) continue;
             lpfp->lpszName = strdupAtoW(pszToken);
+#ifdef __REACTOS__
+            if (!lpfp->lpszName) return ERROR_OUTOFMEMORY;
+#endif
             TRACE("Name: %s\n", debugstr_w(lpfp->lpszName));
         }
         /* EPLF format - http://cr.yp.to/ftp/list/eplf.html */
@@ -3749,7 +4926,11 @@ static BOOL FTP_ParseNextFile(INT nSocket, LPCWSTR lpszSearchFile, LPFILEPROPERT
             }
         }
     } while(!found);
+#ifdef __REACTOS__
+    return ERROR_SUCCESS;
+#else
     return TRUE;
+#endif
 }
 
 /***********************************************************************
@@ -3767,23 +4948,45 @@ static BOOL FTP_ParseDirectory(ftp_session_t *lpwfs, INT nSocket, LPCWSTR lpszSe
     BOOL bSuccess = TRUE;
     INT sizeFilePropArray = 500;/*20; */
     INT indexFilePropArray = -1;
+#ifdef __REACTOS__
+    DWORD res = ERROR_NO_MORE_FILES;
+#endif
 
     TRACE("\n");
 
     /* Allocate initial file properties array */
     *lpafp = calloc(sizeFilePropArray, sizeof(FILEPROPERTIESW));
     if (!*lpafp)
+#ifdef __REACTOS__
+    {
+        INTERNET_SetLastError(ERROR_OUTOFMEMORY);
+#endif
         return FALSE;
+#ifdef __REACTOS__
+    }
+#endif
 
     do {
         if (indexFilePropArray+1 >= sizeFilePropArray)
         {
             LPFILEPROPERTIESW tmpafp;
 
+#ifdef __REACTOS__
+            if (sizeFilePropArray > MAXLONG / 2 ||
+                (size_t)sizeFilePropArray > (size_t)-1 / sizeof(FILEPROPERTIESW) / 2)
+            {
+                bSuccess = FALSE;
+                res = ERROR_OUTOFMEMORY;
+                break;
+            }
+#endif
             tmpafp = realloc(*lpafp, sizeof(FILEPROPERTIESW) * sizeFilePropArray * 2);
             if (NULL == tmpafp)
             {
                 bSuccess = FALSE;
+#ifdef __REACTOS__
+                res = ERROR_OUTOFMEMORY;
+#endif
                 break;
             }
             memset(tmpafp + sizeFilePropArray, 0, sizeof(FILEPROPERTIESW) * sizeFilePropArray);
@@ -3792,7 +4995,14 @@ static BOOL FTP_ParseDirectory(ftp_session_t *lpwfs, INT nSocket, LPCWSTR lpszSe
             sizeFilePropArray *= 2;
         }
         indexFilePropArray++;
+#ifdef __REACTOS__
+        res = FTP_ParseNextFile(nSocket, lpszSearchFile, &(*lpafp)[indexFilePropArray]);
+    } while (res == ERROR_SUCCESS);
+
+    if (res != ERROR_NO_MORE_FILES) bSuccess = FALSE;
+#else
     } while (FTP_ParseNextFile(nSocket, lpszSearchFile, &(*lpafp)[indexFilePropArray]));
+#endif
 
     if (bSuccess && indexFilePropArray)
     {
@@ -3808,8 +5018,19 @@ static BOOL FTP_ParseDirectory(ftp_session_t *lpwfs, INT nSocket, LPCWSTR lpszSe
     }
     else
     {
+#ifdef __REACTOS__
+        INT i;
+
+        for (i = 0; i <= indexFilePropArray; i++)
+            free((*lpafp)[i].lpszName);
+#endif
         free(*lpafp);
+#ifdef __REACTOS__
+        *lpafp = NULL;
+        INTERNET_SetLastError(bSuccess ? ERROR_NO_MORE_FILES : res);
+#else
         INTERNET_SetLastError(ERROR_NO_MORE_FILES);
+#endif
         bSuccess = FALSE;
     }
 

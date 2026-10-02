@@ -118,7 +118,11 @@ static LPWSTR * HTTP_InterpretHttpHeader(LPCWSTR buffer);
 static DWORD HTTP_InsertCustomHeader(http_request_t *req, LPHTTPHEADERW lpHdr);
 static INT HTTP_GetCustomHeaderIndex(http_request_t *req, LPCWSTR lpszField, INT index, BOOL Request);
 static BOOL HTTP_DeleteCustomHeader(http_request_t *req, DWORD index);
+#ifdef __REACTOS__
+static LPWSTR HTTP_build_req( LPCWSTR *list, size_t len );
+#else
 static LPWSTR HTTP_build_req( LPCWSTR *list, int len );
+#endif
 static DWORD HTTP_HttpQueryInfoW(http_request_t*, DWORD, LPVOID, LPDWORD, LPDWORD);
 static UINT HTTP_DecodeBase64(LPCWSTR base64, LPSTR bin);
 static DWORD drain_content(http_request_t*,BOOL);
@@ -205,6 +209,9 @@ server_t *get_server(substr_t name, INTERNET_PORT port, BOOL is_https, BOOL do_c
             if(server->name && process_host_port(server)) {
                 list_add_head(&connection_pool, &server->entry);
             }else {
+#ifdef __REACTOS__
+                free(server->name);
+#endif
                 free(server);
                 server = NULL;
             }
@@ -502,7 +509,11 @@ static void HTTP_FreeTokens(LPWSTR * token_array)
     free(token_array);
 }
 
+#ifdef __REACTOS__
+static BOOL HTTP_FixURL(http_request_t *request)
+#else
 static void HTTP_FixURL(http_request_t *request)
+#endif
 {
     /* If we don't have a path we set it to root */
     if (NULL == request->path)
@@ -522,16 +533,30 @@ static void HTTP_FixURL(http_request_t *request)
         }
     }
 
+#ifdef __REACTOS__
+    if (!request->path) return FALSE;
+#endif
     if(CSTR_EQUAL != CompareStringW( LOCALE_INVARIANT, NORM_IGNORECASE,
                        request->path, lstrlenW(request->path), L"http://", lstrlenW(L"http://") )
        && request->path[0] != '/') /* not an absolute path ?? --> fix it !! */
     {
+#ifdef __REACTOS__
+        size_t len = wcslen(request->path);
+        WCHAR *fixurl;
+        if (len > ~(size_t)0 / sizeof(WCHAR) - 2) return FALSE;
+        fixurl = malloc((len + 2) * sizeof(WCHAR));
+        if (!fixurl) return FALSE;
+#else
         WCHAR *fixurl = malloc((wcslen(request->path) + 2) * sizeof(WCHAR));
+#endif
         *fixurl = '/';
         lstrcpyW(fixurl + 1, request->path);
         free(request->path);
         request->path = fixurl;
     }
+#ifdef __REACTOS__
+    return TRUE;
+#endif
 }
 
 static WCHAR* build_request_header(http_request_t *request, const WCHAR *verb,
@@ -688,12 +713,18 @@ static void strip_spaces(LPWSTR start)
     if (str != start)
         memmove(start, str, sizeof(WCHAR) * (lstrlenW(str) + 1));
 
+#ifdef __REACTOS__
+    end = start + lstrlenW(start);
+    while (end > start && end[-1] == ' ')
+        *--end = '\0';
+#else
     end = start + lstrlenW(start) - 1;
     while (end >= start && *end == ' ')
     {
         *end = '\0';
         end--;
     }
+#endif
 }
 
 static inline BOOL is_basic_auth_value( LPCWSTR pszAuthValue, LPWSTR *pszRealm )
@@ -708,8 +739,15 @@ static inline BOOL is_basic_auth_value( LPCWSTR pszAuthValue, LPWSTR *pszRealm )
         LPCWSTR token;
         LPCWSTR ptr = &pszAuthValue[ARRAY_SIZE(szBasic)];
         LPCWSTR realm;
+#ifndef __REACTOS__
         ptr++;
+#endif
         *pszRealm=NULL;
+#ifdef __REACTOS__
+        if (!*ptr)
+            return TRUE;
+        ptr++;
+#endif
         token = wcschr(ptr,'=');
         if (!token)
             return TRUE;
@@ -725,7 +763,12 @@ static inline BOOL is_basic_auth_value( LPCWSTR pszAuthValue, LPWSTR *pszRealm )
             if (*token == '\0')
                 return TRUE;
             *pszRealm = wcsdup(token);
+#ifdef __REACTOS__
+            if (*pszRealm)
+                strip_spaces(*pszRealm);
+#else
             strip_spaces(*pszRealm);
+#endif
         }
     }
 
@@ -746,6 +789,30 @@ static void destroy_authinfo( struct HttpAuthInfo *authinfo )
     free(authinfo);
 }
 
+#ifdef __REACTOS__
+static WCHAR *decode_basic_credential(const char *data, size_t len)
+{
+    WCHAR *ret;
+    int count;
+
+    if (len > INT_MAX)
+        return NULL;
+    count = len ? MultiByteToWideChar(CP_UTF8, 0, data, len, NULL, 0) : 0;
+    if ((len && !count) || (size_t)count >= (size_t)-1 / sizeof(WCHAR))
+        return NULL;
+    ret = malloc(((size_t)count + 1) * sizeof(WCHAR));
+    if (!ret)
+        return NULL;
+    if (count && !MultiByteToWideChar(CP_UTF8, 0, data, len, ret, count))
+    {
+        free(ret);
+        return NULL;
+    }
+    ret[count] = 0;
+    return ret;
+}
+
+#endif
 static UINT retrieve_cached_basic_authorization(http_request_t *req, const WCHAR *host, const WCHAR *realm, char **auth_data)
 {
     basicAuthorizationData *ad;
@@ -758,24 +825,64 @@ static UINT retrieve_cached_basic_authorization(http_request_t *req, const WCHAR
     {
         if (!wcsicmp(host, ad->host) && (!realm || !wcscmp(realm, ad->realm)))
         {
+#ifdef __REACTOS__
+            char *colon, *copy;
+            WCHAR *username, *password;
+#else
             char *colon;
+#endif
             DWORD length;
 
             TRACE("Authorization found in cache\n");
+#ifdef __REACTOS__
+            copy = malloc(ad->authorizationLen);
+            if (!copy)
+                break;
+            memcpy(copy, ad->authorization, ad->authorizationLen);
+#else
             *auth_data = malloc(ad->authorizationLen);
             memcpy(*auth_data,ad->authorization,ad->authorizationLen);
             rc = ad->authorizationLen;
+#endif
 
             /* update session username and password to reflect current credentials */
+#ifdef __REACTOS__
+            colon = memchr(ad->authorization, ':', ad->authorizationLen);
+            if (!colon)
+            {
+                free(copy);
+                break;
+            }
+#else
             colon = strchr(ad->authorization, ':');
+#endif
             length = colon - ad->authorization;
 
+#ifdef __REACTOS__
+            username = decode_basic_credential(ad->authorization, length);
+            password = decode_basic_credential(colon + 1, ad->authorizationLen - length - 1);
+            if (!username || !password)
+            {
+                free(username);
+                free(password);
+                free(copy);
+                break;
+            }
+
+#endif
             free(req->session->userName);
             free(req->session->password);
 
+#ifdef __REACTOS__
+            req->session->userName = username;
+            req->session->password = password;
+            *auth_data = copy;
+            rc = ad->authorizationLen;
+#else
             req->session->userName = strndupAtoW(ad->authorization, length, &length);
             length++;
             req->session->password = strndupAtoW(&ad->authorization[length], ad->authorizationLen - length, &length);
+#endif
             break;
         }
     }
@@ -787,6 +894,9 @@ static void cache_basic_authorization(LPWSTR host, LPWSTR realm, LPSTR auth_data
 {
     struct list *cursor;
     basicAuthorizationData* ad = NULL;
+#ifdef __REACTOS__
+    char *authorization;
+#endif
 
     TRACE("caching authorization for %s:%s = %s\n",debugstr_w(host),debugstr_w(realm),debugstr_an(auth_data,auth_data_len));
 
@@ -801,25 +911,60 @@ static void cache_basic_authorization(LPWSTR host, LPWSTR realm, LPSTR auth_data
         }
     }
 
+#ifdef __REACTOS__
+    authorization = malloc(auth_data_len);
+    if (!authorization)
+        goto done;
+    memcpy(authorization, auth_data, auth_data_len);
+
+#endif
     if (ad)
     {
         TRACE("Found match in cache, replacing\n");
         free(ad->authorization);
+#ifdef __REACTOS__
+        ad->authorization = authorization;
+#else
         ad->authorization = malloc(auth_data_len);
         memcpy(ad->authorization, auth_data, auth_data_len);
+#endif
         ad->authorizationLen = auth_data_len;
     }
     else
     {
         ad = malloc(sizeof(basicAuthorizationData));
+#ifdef __REACTOS__
+        if (!ad)
+        {
+            free(authorization);
+            goto done;
+        }
+#endif
         ad->host = wcsdup(host);
         ad->realm = wcsdup(realm);
+#ifdef __REACTOS__
+        ad->authorization = authorization;
+#else
         ad->authorization = malloc(auth_data_len);
         memcpy(ad->authorization, auth_data, auth_data_len);
+#endif
         ad->authorizationLen = auth_data_len;
+#ifdef __REACTOS__
+        if (!ad->host || !ad->realm)
+        {
+            free(ad->host);
+            free(ad->realm);
+            free(ad->authorization);
+            free(ad);
+            goto done;
+        }
+#endif
         list_add_head(&basicAuthorizationCache,&ad->entry);
         TRACE("authorization cached\n");
     }
+#ifdef __REACTOS__
+done:
+#endif
     LeaveCriticalSection(&authcache_cs);
 }
 
@@ -1051,8 +1196,12 @@ static BOOL HTTP_DoAuthorization( http_request_t *request, LPCWSTR pszAuthValue,
             {
                 WARN("AcquireCredentialsHandleW for scheme %s failed with error 0x%08lx\n",
                      debugstr_w(pAuthInfo->scheme), sec_status);
+#ifdef __REACTOS__
+                destroy_authinfo(pAuthInfo);
+#else
                 free(pAuthInfo->scheme);
                 free(pAuthInfo);
+#endif
                 return FALSE;
             }
         }
@@ -1062,7 +1211,12 @@ static BOOL HTTP_DoAuthorization( http_request_t *request, LPCWSTR pszAuthValue,
         return FALSE;
 
     if ((lstrlenW(pszAuthValue) < lstrlenW(pAuthInfo->scheme)) ||
+#ifdef __REACTOS__
+        wcsnicmp(pszAuthValue, pAuthInfo->scheme, lstrlenW(pAuthInfo->scheme)) ||
+        (pszAuthValue[lstrlenW(pAuthInfo->scheme)] && pszAuthValue[lstrlenW(pAuthInfo->scheme)] != ' '))
+#else
         wcsnicmp(pszAuthValue, pAuthInfo->scheme, lstrlenW(pAuthInfo->scheme)))
+#endif
     {
         ERR("authentication scheme changed from %s to %s\n",
             debugstr_w(pAuthInfo->scheme), debugstr_w(pszAuthValue));
@@ -1090,21 +1244,53 @@ static BOOL HTTP_DoAuthorization( http_request_t *request, LPCWSTR pszAuthValue,
         }
         else
         {
+#ifdef __REACTOS__
+            int userchars = lstrlenW(domain_and_username), passchars = lstrlenW(password);
+
+            userlen = userchars ? WideCharToMultiByte(CP_UTF8, 0, domain_and_username, userchars, NULL, 0, NULL, NULL) : 0;
+            passlen = passchars ? WideCharToMultiByte(CP_UTF8, 0, password, passchars, NULL, 0, NULL, NULL) : 0;
+            if ((userchars && !userlen) || (passchars && !passlen))
+            {
+                free(szRealm);
+                return FALSE;
+            }
+#else
             userlen = WideCharToMultiByte(CP_UTF8, 0, domain_and_username, lstrlenW(domain_and_username), NULL, 0, NULL, NULL);
             passlen = WideCharToMultiByte(CP_UTF8, 0, password, lstrlenW(password), NULL, 0, NULL, NULL);
+#endif
 
             /* length includes a nul terminator, which will be re-used for the ':' */
+#ifdef __REACTOS__
+            auth_data = malloc((size_t)userlen + 1 + passlen);
+#else
             auth_data = malloc(userlen + 1 + passlen);
+#endif
             if (!auth_data)
             {
                 free(szRealm);
                 return FALSE;
             }
 
+#ifdef __REACTOS__
+            if ((userlen && !WideCharToMultiByte(CP_UTF8, 0, domain_and_username, userchars,
+                                               auth_data, userlen, NULL, NULL)) ||
+                (passlen && !WideCharToMultiByte(CP_UTF8, 0, password, passchars,
+                                               &auth_data[userlen + 1], passlen, NULL, NULL)))
+            {
+                free(auth_data);
+                free(szRealm);
+                return FALSE;
+            }
+#else
             WideCharToMultiByte(CP_UTF8, 0, domain_and_username, -1, auth_data, userlen, NULL, NULL);
+#endif
             auth_data[userlen] = ':';
+#ifdef __REACTOS__
+            auth_data_len = (UINT)userlen + 1 + passlen;
+#else
             WideCharToMultiByte(CP_UTF8, 0, password, -1, &auth_data[userlen+1], passlen, NULL, NULL);
             auth_data_len = userlen + 1 + passlen;
+#endif
             if (host && szRealm)
                 cache_basic_authorization(host, szRealm, auth_data, auth_data_len);
         }
@@ -1136,12 +1322,29 @@ static BOOL HTTP_DoAuthorization( http_request_t *request, LPCWSTR pszAuthValue,
         if (*pszAuthData == ' ')
         {
             pszAuthData++;
+#ifdef __REACTOS__
+            if (*pszAuthData)
+            {
+                in.cbBuffer = HTTP_DecodeBase64(pszAuthData, NULL);
+                if (!in.cbBuffer || !(in.pvBuffer = malloc(in.cbBuffer)))
+                    goto failed;
+                HTTP_DecodeBase64(pszAuthData, in.pvBuffer);
+            }
+#else
             in.cbBuffer = HTTP_DecodeBase64(pszAuthData, NULL);
             in.pvBuffer = malloc(in.cbBuffer);
             HTTP_DecodeBase64(pszAuthData, in.pvBuffer);
+#endif
         }
 
         buffer = malloc(pAuthInfo->max_token);
+#ifdef __REACTOS__
+        if (!buffer)
+        {
+            free(in.pvBuffer);
+            goto failed;
+        }
+#endif
 
         out.BufferType = SECBUFFER_TOKEN;
         out.cbBuffer = pAuthInfo->max_token;
@@ -1176,13 +1379,23 @@ static BOOL HTTP_DoAuthorization( http_request_t *request, LPCWSTR pszAuthValue,
         {
             ERR("InitializeSecurityContextW returned error 0x%08lx\n", sec_status);
             free(out.pvBuffer);
+#ifdef __REACTOS__
+            goto failed;
+#else
             destroy_authinfo(pAuthInfo);
             *ppAuthInfo = NULL;
             return FALSE;
+#endif
         }
     }
 
     return TRUE;
+#ifdef __REACTOS__
+failed:
+    destroy_authinfo(pAuthInfo);
+    *ppAuthInfo = NULL;
+    return FALSE;
+#endif
 }
 
 /***********************************************************************
@@ -1202,7 +1415,13 @@ static DWORD HTTP_HttpAddRequestHeadersW(http_request_t *request,
         len = lstrlenW(lpszHeader);
     else
         len = dwHeaderLength;
+#ifdef __REACTOS__
+    if (len >= INT_MAX || (size_t)len >= ~(size_t)0 / sizeof(WCHAR)) return ERROR_OUTOFMEMORY;
+    buffer = malloc(sizeof(WCHAR) * ((size_t)len + 1));
+    if (!buffer) return ERROR_OUTOFMEMORY;
+#else
     buffer = malloc(sizeof(WCHAR) * (len + 1));
+#endif
     lstrcpynW( buffer, lpszHeader, len + 1);
 
     lpszStart = buffer;
@@ -1308,7 +1527,14 @@ BOOL WINAPI HttpAddRequestHeadersA(HINTERNET hHttpRequest,
     TRACE("%p, %s, %lu, %08lx\n", hHttpRequest, debugstr_an(lpszHeader, dwHeaderLength), dwHeaderLength, dwModifier);
 
     if(lpszHeader)
+#ifdef __REACTOS__
+    {
+#endif
         headers = strndupAtoW(lpszHeader, dwHeaderLength, &dwHeaderLength);
+#ifdef __REACTOS__
+        if (!headers) return FALSE;
+    }
+#endif
 
     r = HttpAddRequestHeadersW(hHttpRequest, headers, dwHeaderLength, dwModifier);
 
@@ -1329,14 +1555,27 @@ static void free_accept_types( WCHAR **accept_types )
     free(accept_types);
 }
 
+#ifdef __REACTOS__
+static DWORD convert_accept_types( const char **accept_types, WCHAR ***ret )
+#else
 static WCHAR **convert_accept_types( const char **accept_types )
+#endif
 {
+#ifdef __REACTOS__
+    size_t count;
+#else
     unsigned int count;
+#endif
     const char **types = accept_types;
     WCHAR **typesW;
     BOOL invalid_pointer = FALSE;
 
+#ifdef __REACTOS__
+    *ret = NULL;
+    if (!types) return ERROR_SUCCESS;
+#else
     if (!types) return NULL;
+#endif
     count = 0;
     while (*types)
     {
@@ -1357,17 +1596,42 @@ static WCHAR **convert_accept_types( const char **accept_types )
         __ENDTRY;
         types++;
     }
+#ifdef __REACTOS__
+    if (invalid_pointer) return ERROR_SUCCESS;
+    if (count >= (size_t)-1 / sizeof(*typesW)) return ERROR_OUTOFMEMORY;
+    if (!(typesW = malloc(sizeof(*typesW) * (count + 1)))) return ERROR_OUTOFMEMORY;
+#else
     if (invalid_pointer) return NULL;
     if (!(typesW = malloc(sizeof(WCHAR *) * (count + 1)))) return NULL;
+#endif
     count = 0;
     types = accept_types;
     while (*types)
     {
+#ifdef __REACTOS__
+        if (*types && **types)
+        {
+            typesW[count] = strdupAtoW(*types);
+            if (!typesW[count])
+            {
+                DWORD error = GetLastError();
+                free_accept_types(typesW);
+                return error;
+            }
+            count++;
+        }
+#else
         if (*types && **types) typesW[count++] = strdupAtoW(*types);
+#endif
         types++;
     }
     typesW[count] = NULL;
+#ifdef __REACTOS__
+    *ret = typesW;
+    return ERROR_SUCCESS;
+#else
     return typesW;
+#endif
 }
 
 /***********************************************************************
@@ -1388,6 +1652,9 @@ HINTERNET WINAPI HttpOpenRequestA(HINTERNET hHttpSession,
     LPWSTR szVerb = NULL, szObjectName = NULL;
     LPWSTR szVersion = NULL, szReferrer = NULL, *szAcceptTypes = NULL;
     HINTERNET rc = NULL;
+#ifdef __REACTOS__
+    DWORD error;
+#endif
 
     TRACE("(%p, %s, %s, %s, %s, %p, %08lx, %08Ix)\n", hHttpSession,
           debugstr_a(lpszVerb), debugstr_a(lpszObjectName),
@@ -1422,16 +1689,31 @@ HINTERNET WINAPI HttpOpenRequestA(HINTERNET hHttpSession,
             goto end;
     }
 
+#ifdef __REACTOS__
+    error = convert_accept_types(lpszAcceptTypes, &szAcceptTypes);
+    if (error != ERROR_SUCCESS)
+    {
+        SetLastError(error);
+        goto end;
+    }
+#else
     szAcceptTypes = convert_accept_types( lpszAcceptTypes );
+#endif
     rc = HttpOpenRequestW(hHttpSession, szVerb, szObjectName, szVersion, szReferrer,
                           (const WCHAR **)szAcceptTypes, dwFlags, dwContext);
 
 end:
+#ifdef __REACTOS__
+    error = GetLastError();
+#endif
     free_accept_types(szAcceptTypes);
     free(szReferrer);
     free(szVersion);
     free(szObjectName);
     free(szVerb);
+#ifdef __REACTOS__
+    if (!rc) SetLastError(error);
+#endif
     return rc;
 }
 
@@ -1516,7 +1798,11 @@ static UINT HTTP_DecodeBase64( LPCWSTR base64, LPSTR bin )
 
         if ((base64[2] == '=') && (base64[3] == '='))
             break;
+#ifdef __REACTOS__
+        if (base64[2] >= ARRAY_SIZE(HTTP_Base64Dec) ||
+#else
         if (base64[2] > ARRAY_SIZE(HTTP_Base64Dec) ||
+#endif
             ((in[2] = HTTP_Base64Dec[base64[2]]) == -1))
         {
             WARN("invalid base64: %s\n", debugstr_w(&base64[2]));
@@ -1528,7 +1814,11 @@ static UINT HTTP_DecodeBase64( LPCWSTR base64, LPSTR bin )
 
         if (base64[3] == '=')
             break;
+#ifdef __REACTOS__
+        if (base64[3] >= ARRAY_SIZE(HTTP_Base64Dec) ||
+#else
         if (base64[3] > ARRAY_SIZE(HTTP_Base64Dec) ||
+#endif
             ((in[3] = HTTP_Base64Dec[base64[3]]) == -1))
         {
             WARN("invalid base64: %s\n", debugstr_w(&base64[3]));
@@ -3213,8 +3503,12 @@ static DWORD async_read(http_request_t *req, void *buf, DWORD size, DWORD read_p
     task->read_pos = read_pos;
     task->ret_read = ret_read;
 
+#ifdef __REACTOS__
+    return INTERNET_AsyncCall(&task->hdr);
+#else
     INTERNET_AsyncCall(&task->hdr);
     return ERROR_IO_PENDING;
+#endif
 }
 
 static DWORD HTTPREQ_SetFilePointer(object_header_t *hdr, LONG lDistanceToMove, DWORD dwMoveContext)
@@ -3469,7 +3763,11 @@ static DWORD HTTP_HttpOpenRequestW(http_session_t *session,
 {
     appinfo_t *hIC = session->appInfo;
     http_request_t *request;
+#ifdef __REACTOS__
+    DWORD port, len, res;
+#else
     DWORD port, len;
+#endif
 
     TRACE("-->\n");
 
@@ -3497,6 +3795,9 @@ static DWORD HTTP_HttpOpenRequestW(http_session_t *session,
 
     WININET_AddRef( &session->hdr );
     request->session = session;
+#ifdef __REACTOS__
+    WININET_AddRef(&request->hdr);
+#endif
     list_add_head( &session->hdr.children, &request->hdr.entry );
 
     port = session->hostPort;
@@ -3506,8 +3807,13 @@ static DWORD HTTP_HttpOpenRequestW(http_session_t *session,
 
     request->server = get_server(substrz(session->hostName), port, (dwFlags & INTERNET_FLAG_SECURE) != 0, TRUE);
     if(!request->server) {
+#ifdef __REACTOS__
+        res = ERROR_OUTOFMEMORY;
+        goto failed;
+#else
         WININET_Release(&request->hdr);
         return ERROR_OUTOFMEMORY;
+#endif
     }
 
     if (dwFlags & INTERNET_FLAG_IGNORE_CERT_CN_INVALID)
@@ -3523,20 +3829,53 @@ static DWORD HTTP_HttpOpenRequestW(http_session_t *session,
         rc = UrlCanonicalizeW(lpszObjectName, &dummy, &len, URL_ESCAPE_SPACES_ONLY);
         if (rc != E_POINTER)
             len = lstrlenW(lpszObjectName)+1;
+#ifdef __REACTOS__
+        if ((size_t)len > (size_t)-1 / sizeof(WCHAR))
+        {
+            res = ERROR_OUTOFMEMORY;
+            goto failed;
+        }
+#endif
         request->path = malloc(len * sizeof(WCHAR));
+#ifdef __REACTOS__
+        if (!request->path)
+        {
+            res = ERROR_OUTOFMEMORY;
+            goto failed;
+        }
+#endif
         rc = UrlCanonicalizeW(lpszObjectName, request->path, &len,
                    URL_ESCAPE_SPACES_ONLY);
         if (rc != S_OK)
         {
             ERR("Unable to escape string!(%s) (%ld)\n",debugstr_w(lpszObjectName),rc);
+#ifdef __REACTOS__
+            free(request->path);
+            request->path = wcsdup(lpszObjectName);
+#else
             lstrcpyW(request->path,lpszObjectName);
+#endif
         }
     }else {
         request->path = wcsdup(L"/");
     }
+#ifdef __REACTOS__
+    if (!request->path)
+    {
+        res = ERROR_OUTOFMEMORY;
+        goto failed;
+    }
+#endif
 
     if (lpszReferrer && *lpszReferrer)
+#ifdef __REACTOS__
+    {
+        res = HTTP_ProcessHeader(request, L"Referer", lpszReferrer, HTTP_ADDREQ_FLAG_ADD | HTTP_ADDHDR_FLAG_REQ);
+        if (res != ERROR_SUCCESS) goto failed;
+    }
+#else
         HTTP_ProcessHeader(request, L"Referer", lpszReferrer, HTTP_ADDREQ_FLAG_ADD | HTTP_ADDHDR_FLAG_REQ);
+#endif
 
     if (lpszAcceptTypes)
     {
@@ -3544,15 +3883,29 @@ static DWORD HTTP_HttpOpenRequestW(http_session_t *session,
         for (i = 0; lpszAcceptTypes[i]; i++)
         {
             if (!*lpszAcceptTypes[i]) continue;
+#ifdef __REACTOS__
+            res = HTTP_ProcessHeader(request, L"Accept", lpszAcceptTypes[i],
+#else
             HTTP_ProcessHeader(request, L"Accept", lpszAcceptTypes[i],
+#endif
                                HTTP_ADDREQ_FLAG_COALESCE_WITH_COMMA |
                                HTTP_ADDHDR_FLAG_REQ |
                                (i == 0 ? (HTTP_ADDREQ_FLAG_REPLACE | HTTP_ADDREQ_FLAG_ADD) : 0));
+#ifdef __REACTOS__
+            if (res != ERROR_SUCCESS) goto failed;
+#endif
         }
     }
 
     request->verb = wcsdup(lpszVerb && *lpszVerb ? lpszVerb : L"GET");
     request->version = wcsdup(lpszVersion && *lpszVersion ? lpszVersion : L"HTTP/1.1");
+#ifdef __REACTOS__
+    if (!request->verb || !request->version)
+    {
+        res = ERROR_OUTOFMEMORY;
+        goto failed;
+    }
+#endif
 
     if (hIC->proxy && hIC->proxy[0] && !HTTP_ShouldBypassProxy(hIC, session->hostName))
         HTTP_DealWithProxy( hIC, session, request );
@@ -3563,8 +3916,20 @@ static DWORD HTTP_HttpOpenRequestW(http_session_t *session,
 
     TRACE("<-- (%p)\n", request);
 
+#ifdef __REACTOS__
+    res = request->hdr.valid_handle ? ERROR_SUCCESS : ERROR_INTERNET_OPERATION_CANCELLED;
+    if (res == ERROR_SUCCESS) *ret = request->hdr.hInternet;
+    WININET_Release(&request->hdr);
+    return res;
+
+failed:
+    InternetCloseHandle(request->hdr.hInternet);
+    WININET_Release(&request->hdr);
+    return res;
+#else
     *ret = request->hdr.hInternet;
     return ERROR_SUCCESS;
+#endif
 }
 
 /***********************************************************************
@@ -4266,7 +4631,11 @@ static DWORD HTTP_HandleRedirect(http_request_t *request, WCHAR *url)
         urlComponents.dwUserNameLength = 1;
         urlComponents.dwUrlPathLength = 1;
         if(!InternetCrackUrlW(url, url_len, 0, &urlComponents))
+#ifdef __REACTOS__
+            return GetLastError();
+#else
             return INTERNET_GetLastError();
+#endif
 
         if(!urlComponents.dwHostNameLength)
             return ERROR_INTERNET_INVALID_URL;
@@ -4364,16 +4733,37 @@ static DWORD HTTP_HandleRedirect(http_request_t *request, WCHAR *url)
  *
  *  concatenate all the strings in the request together
  */
+#ifdef __REACTOS__
+static LPWSTR HTTP_build_req( LPCWSTR *list, size_t len )
+#else
 static LPWSTR HTTP_build_req( LPCWSTR *list, int len )
+#endif
 {
     LPCWSTR *t;
     LPWSTR str;
 
+#ifdef __REACTOS__
+    if (len >= (size_t)-1 / sizeof(WCHAR))
+        return NULL;
+#endif
     for( t = list; *t ; t++  )
+#ifdef __REACTOS__
+    {
+        size_t part = wcslen(*t);
+        if (part > (size_t)-1 / sizeof(WCHAR) - len - 1)
+            return NULL;
+        len += part;
+    }
+#else
         len += lstrlenW( *t );
+#endif
     len++;
 
     str = malloc(len * sizeof(WCHAR));
+#ifdef __REACTOS__
+    if (!str)
+        return NULL;
+#endif
     *str = 0;
 
     for( t = list; *t ; t++ )
@@ -4382,18 +4772,36 @@ static LPWSTR HTTP_build_req( LPCWSTR *list, int len )
     return str;
 }
 
+#ifdef __REACTOS__
+static DWORD HTTP_InsertCookies(http_request_t *request)
+#else
 static void HTTP_InsertCookies(http_request_t *request)
+#endif
 {
     WCHAR *cookies;
     DWORD res;
 
     res = get_cookie_header(request->server->name, request->path, &cookies);
+#ifdef __REACTOS__
+    if(res == ERROR_NO_MORE_ITEMS) return ERROR_SUCCESS;
+#endif
     if(res != ERROR_SUCCESS || !cookies)
+#ifdef __REACTOS__
+        return res;
+#else
         return;
+#endif
 
+#ifdef __REACTOS__
+    res = HTTP_HttpAddRequestHeadersW(request, cookies, lstrlenW(cookies),
+#else
     HTTP_HttpAddRequestHeadersW(request, cookies, lstrlenW(cookies),
+#endif
                                 HTTP_ADDREQ_FLAG_REPLACE | HTTP_ADDREQ_FLAG_ADD);
     free(cookies);
+#ifdef __REACTOS__
+    return res;
+#endif
 }
 
 static WORD HTTP_ParseWkday(LPCWSTR day)
@@ -4683,7 +5091,11 @@ static BOOL HTTP_ParseRfc850Date(LPCWSTR value, FILETIME *ft)
     else if (ptr - value < ARRAY_SIZE(day))
     {
         memcpy(day, value, (ptr - value) * sizeof(WCHAR));
+#ifdef __REACTOS__
+        day[ptr - value] = 0;
+#else
         day[ptr - value + 1] = 0;
+#endif
         st.wDayOfWeek = HTTP_ParseWeekday(day);
         if (st.wDayOfWeek > 6)
         {
@@ -4717,7 +5129,11 @@ static BOOL HTTP_ParseRfc850Date(LPCWSTR value, FILETIME *ft)
     }
     ptr++;
 
+#ifdef __REACTOS__
+    for (monthPtr = month; *ptr && *ptr != '-' && monthPtr - month < ARRAY_SIZE(month) - 1;
+#else
     for (monthPtr = month; *ptr != '-' && monthPtr - month < ARRAY_SIZE(month) - 1;
+#endif
          monthPtr++, ptr++)
         *monthPtr = *ptr;
     *monthPtr = 0;
@@ -4980,8 +5396,18 @@ static char *build_ascii_request( const WCHAR *str, void *data, DWORD data_len, 
     int len = WideCharToMultiByte( CP_ACP, 0, str, -1, NULL, 0, NULL, NULL );
     char *ret;
 
+#ifdef __REACTOS__
+    if (!len || data_len > MAXDWORD - len || (size_t)data_len > ~(size_t)0 - len) return NULL;
+    if (!(ret = malloc( (size_t)len + data_len ))) return NULL;
+    if (!WideCharToMultiByte( CP_ACP, 0, str, -1, ret, len, NULL, NULL ))
+    {
+        free(ret);
+        return NULL;
+    }
+#else
     if (!(ret = malloc( len + data_len ))) return NULL;
     WideCharToMultiByte( CP_ACP, 0, str, -1, ret, len, NULL, NULL );
+#endif
     if (data_len) memcpy( ret + len - 1, data, data_len );
     *out_len = len + data_len - 1;
     ret[*out_len] = 0;
@@ -5027,7 +5453,15 @@ static DWORD create_request(http_request_t *request, void *optional, DWORD optle
             LeaveCriticalSection( &request->headers_section );
         }
 
+#ifdef __REACTOS__
+        if (!HTTP_FixURL(request))
+        {
+            res = ERROR_OUTOFMEMORY;
+            break;
+        }
+#else
         HTTP_FixURL(request);
+#endif
         if (request->hdr.dwFlags & INTERNET_FLAG_KEEP_CONNECTION)
         {
             HTTP_ProcessHeader(request, L"Connection", L"Keep-Alive",
@@ -5036,8 +5470,15 @@ static DWORD create_request(http_request_t *request, void *optional, DWORD optle
         HTTP_InsertAuthorization(request, request->authInfo, L"Authorization");
         HTTP_InsertAuthorization(request, request->proxyAuthInfo, L"Proxy-Authorization");
 
+#ifdef __REACTOS__
+        if (!(request->hdr.dwFlags & INTERNET_FLAG_NO_COOKIES)) {
+            res = HTTP_InsertCookies(request);
+            if(res != ERROR_SUCCESS) break;
+        }
+#else
         if (!(request->hdr.dwFlags & INTERNET_FLAG_NO_COOKIES))
             HTTP_InsertCookies(request);
+#endif
 
         res = open_http_connection(request, &reusing_connection);
         if (res != ERROR_SUCCESS)
@@ -5088,6 +5529,13 @@ static DWORD create_request(http_request_t *request, void *optional, DWORD optle
 
         ascii_req = build_ascii_request(request_header, optional, data_len, &len);
         free(request_header);
+#ifdef __REACTOS__
+        if (!ascii_req)
+        {
+            res = ERROR_OUTOFMEMORY;
+            break;
+        }
+#endif
         TRACE("full request -> %s\n", debugstr_a(ascii_req) );
 
         INTERNET_SendCallback(&request->hdr, request->hdr.dwContext,
@@ -5292,7 +5740,18 @@ static DWORD HTTP_HttpSendRequestW(http_request_t *request, LPCWSTR lpszHeaders,
 
     /* if the verb is NULL default to GET */
     if (!request->verb)
+#ifdef __REACTOS__
+    {
+#endif
         request->verb = wcsdup(L"GET");
+#ifdef __REACTOS__
+        if (!request->verb)
+        {
+            res = ERROR_OUTOFMEMORY;
+            goto completed;
+        }
+    }
+#endif
 
     HTTP_ProcessHeader(request, L"Host", request->server->canon_host_port,
                        HTTP_ADDREQ_FLAG_ADD_IF_NEW | HTTP_ADDHDR_FLAG_REQ);
@@ -5308,10 +5767,31 @@ static DWORD HTTP_HttpSendRequestW(http_request_t *request, LPCWSTR lpszHeaders,
     if (appinfo_agent && *appinfo_agent)
     {
         WCHAR *agent_header;
+#ifdef __REACTOS__
+        size_t len, extra = lstrlenW(L"User-Agent: %s\r\n");
+#else
         int len;
+#endif
 
+#ifdef __REACTOS__
+        len = wcslen(appinfo_agent);
+        if (len > INT_MAX - extra || len > (size_t)-1 / sizeof(WCHAR) - extra)
+        {
+            res = ERROR_OUTOFMEMORY;
+            goto completed;
+        }
+        len += extra;
+#else
         len = lstrlenW(appinfo_agent) + lstrlenW(L"User-Agent: %s\r\n");
+#endif
         agent_header = malloc(len * sizeof(WCHAR));
+#ifdef __REACTOS__
+        if (!agent_header)
+        {
+            res = ERROR_OUTOFMEMORY;
+            goto completed;
+        }
+#endif
         swprintf(agent_header, len, L"User-Agent: %s\r\n", appinfo_agent);
 
         HTTP_HttpAddRequestHeadersW(request, agent_header, lstrlenW(agent_header), HTTP_ADDREQ_FLAG_ADD_IF_NEW);
@@ -5344,6 +5824,9 @@ static DWORD HTTP_HttpSendRequestW(http_request_t *request, LPCWSTR lpszHeaders,
     if(res == ERROR_SUCCESS)
         create_cache_entry(request);
 
+#ifdef __REACTOS__
+completed:
+#endif
     if (request->session->appInfo->hdr.dwFlags & INTERNET_FLAG_ASYNC)
     {
         if (res == ERROR_SUCCESS) {
@@ -5385,10 +5868,35 @@ static void AsyncHttpSendRequestProc(task_header_t *hdr)
 
     HTTP_HttpSendRequestW(request, task->headers, task->headers_len, task->optional,
             task->optional_len, task->content_len, task->end_request);
+#ifdef __REACTOS__
+}
+
+static void FreeHttpSendRequestTask(task_header_t *hdr)
+{
+    send_request_task_t *task = (send_request_task_t*)hdr;
+#endif
 
     free(task->headers);
 }
 
+#ifdef __REACTOS__
+static WCHAR *copy_request_headers(const WCHAR *headers, DWORD length)
+{
+    size_t len = length && length != ~0u ? length : wcslen(headers);
+    WCHAR *copy;
+
+    if (len >= (size_t)-1 / sizeof(WCHAR))
+        return NULL;
+    copy = malloc((len + 1) * sizeof(WCHAR));
+    if (copy)
+    {
+        memcpy(copy, headers, len * sizeof(WCHAR));
+        copy[len] = 0;
+    }
+    return copy;
+}
+
+#endif
 
 static DWORD HTTP_HttpEndRequestW(http_request_t *request, DWORD dwFlags, DWORD_PTR dwContext)
 {
@@ -5542,11 +6050,25 @@ BOOL WINAPI HttpEndRequestW(HINTERNET hRequest,
         end_request_task_t *task;
 
         task = alloc_async_task(&request->hdr, AsyncHttpEndRequestProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+            res = ERROR_OUTOFMEMORY;
+        else
+        {
+            task->flags = dwFlags;
+            task->context = dwContext;
+#else
         task->flags = dwFlags;
         task->context = dwContext;
+#endif
 
+#ifdef __REACTOS__
+            res = INTERNET_AsyncCall(&task->hdr);
+        }
+#else
         INTERNET_AsyncCall(&task->hdr);
         res = ERROR_IO_PENDING;
+#endif
     }
     else
         res = HTTP_HttpEndRequestW(request, dwFlags, dwContext);
@@ -5573,7 +6095,11 @@ BOOL WINAPI HttpSendRequestExA(HINTERNET hRequest,
 			       LPINTERNET_BUFFERSA lpBuffersOut,
 			       DWORD dwFlags, DWORD_PTR dwContext)
 {
+#ifdef __REACTOS__
+    INTERNET_BUFFERSW BuffersInW = {0};
+#else
     INTERNET_BUFFERSW BuffersInW;
+#endif
     BOOL rc = FALSE;
     DWORD headerlen;
     LPWSTR header = NULL;
@@ -5583,7 +6109,11 @@ BOOL WINAPI HttpSendRequestExA(HINTERNET hRequest,
 
     if (lpBuffersIn)
     {
+#ifdef __REACTOS__
+        BuffersInW.dwStructSize = sizeof(BuffersInW);
+#else
         BuffersInW.dwStructSize = sizeof(LPINTERNET_BUFFERSW);
+#endif
         if (lpBuffersIn->lpcszHeader)
         {
             if (lpBuffersIn->dwHeadersLength == 0 && *lpBuffersIn->lpcszHeader != '\0')
@@ -5660,12 +6190,31 @@ BOOL WINAPI HttpSendRequestExW(HINTERNET hRequest,
         send_request_task_t *task;
 
         task = alloc_async_task(&request->hdr, AsyncHttpSendRequestProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            res = ERROR_OUTOFMEMORY;
+            goto lend;
+        }
+        task->hdr.destroy = FreeHttpSendRequestTask;
+#endif
         if (lpBuffersIn)
         {
+#ifndef __REACTOS__
             DWORD size = 0;
 
+#endif
             if (lpBuffersIn->lpcszHeader)
             {
+#ifdef __REACTOS__
+                task->headers = copy_request_headers(lpBuffersIn->lpcszHeader, lpBuffersIn->dwHeadersLength);
+                if (!task->headers)
+                {
+                    free_async_task(&task->hdr);
+                    res = ERROR_OUTOFMEMORY;
+                    goto lend;
+                }
+#else
                 if (lpBuffersIn->dwHeadersLength == ~0u)
                     size = (lstrlenW( lpBuffersIn->lpcszHeader ) + 1) * sizeof(WCHAR);
                 else
@@ -5673,10 +6222,15 @@ BOOL WINAPI HttpSendRequestExW(HINTERNET hRequest,
 
                 task->headers = malloc(size);
                 memcpy(task->headers, lpBuffersIn->lpcszHeader, size);
+#endif
             }
             else task->headers = NULL;
 
+#ifdef __REACTOS__
+            task->headers_len = task->headers ? lpBuffersIn->dwHeadersLength : 0;
+#else
             task->headers_len = size / sizeof(WCHAR);
+#endif
             task->optional = lpBuffersIn->lpvBuffer;
             task->optional_len = lpBuffersIn->dwBufferLength;
             task->content_len = lpBuffersIn->dwBufferTotal;
@@ -5692,8 +6246,12 @@ BOOL WINAPI HttpSendRequestExW(HINTERNET hRequest,
 
         task->end_request = FALSE;
 
+#ifdef __REACTOS__
+        res = INTERNET_AsyncCall(&task->hdr);
+#else
         INTERNET_AsyncCall(&task->hdr);
         res = ERROR_IO_PENDING;
+#endif
     }
     else
     {
@@ -5761,8 +6319,25 @@ BOOL WINAPI HttpSendRequestW(HINTERNET hHttpRequest, LPCWSTR lpszHeaders,
         send_request_task_t *task;
 
         task = alloc_async_task(&request->hdr, AsyncHttpSendRequestProc, sizeof(*task));
+#ifdef __REACTOS__
+        if (!task)
+        {
+            res = ERROR_OUTOFMEMORY;
+            goto lend;
+        }
+        task->hdr.destroy = FreeHttpSendRequestTask;
+#endif
         if (lpszHeaders)
         {
+#ifdef __REACTOS__
+            task->headers = copy_request_headers(lpszHeaders, dwHeaderLength);
+            if (!task->headers)
+            {
+                free_async_task(&task->hdr);
+                res = ERROR_OUTOFMEMORY;
+                goto lend;
+            }
+#else
             DWORD size;
 
             if (dwHeaderLength == ~0u) size = (lstrlenW(lpszHeaders) + 1) * sizeof(WCHAR);
@@ -5770,6 +6345,7 @@ BOOL WINAPI HttpSendRequestW(HINTERNET hHttpRequest, LPCWSTR lpszHeaders,
 
             task->headers = malloc(size);
             memcpy(task->headers, lpszHeaders, size);
+#endif
         }
         else
             task->headers = NULL;
@@ -5779,8 +6355,12 @@ BOOL WINAPI HttpSendRequestW(HINTERNET hHttpRequest, LPCWSTR lpszHeaders,
         task->content_len = dwOptionalLength;
         task->end_request = TRUE;
 
+#ifdef __REACTOS__
+        res = INTERNET_AsyncCall(&task->hdr);
+#else
         INTERNET_AsyncCall(&task->hdr);
         res = ERROR_IO_PENDING;
+#endif
     }
     else
     {
@@ -5930,6 +6510,9 @@ DWORD HTTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
         DWORD dwInternalFlags, HINTERNET *ret)
 {
     http_session_t *session = NULL;
+#ifdef __REACTOS__
+    DWORD res;
+#endif
 
     TRACE("-->\n");
 
@@ -5954,12 +6537,26 @@ DWORD HTTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
 
     WININET_AddRef( &hIC->hdr );
     session->appInfo = hIC;
+#ifdef __REACTOS__
+    WININET_AddRef(&session->hdr);
+#endif
     list_add_head( &hIC->hdr.children, &session->hdr.entry );
 
     session->hostName = wcsdup(lpszServerName);
     if (lpszUserName && lpszUserName[0])
         session->userName = wcsdup(lpszUserName);
+#ifdef __REACTOS__
+    session->password = lpszPassword ? wcsdup(lpszPassword) : NULL;
+    if (!session->hostName || ((lpszUserName && *lpszUserName) && !session->userName) ||
+        (lpszPassword && !session->password))
+    {
+        InternetCloseHandle(session->hdr.hInternet);
+        WININET_Release(&session->hdr);
+        return ERROR_OUTOFMEMORY;
+    }
+#else
     session->password = wcsdup(lpszPassword);
+#endif
     session->hostPort = serverPort;
     session->hdr.connect_timeout = hIC->hdr.connect_timeout;
     session->hdr.send_timeout = hIC->hdr.send_timeout;
@@ -5980,8 +6577,15 @@ DWORD HTTP_Connect(appinfo_t *hIC, LPCWSTR lpszServerName,
 
     TRACE("%p --> %p\n", hIC, session);
 
+#ifdef __REACTOS__
+    res = session->hdr.valid_handle ? ERROR_SUCCESS : ERROR_INTERNET_OPERATION_CANCELLED;
+    if (res == ERROR_SUCCESS) *ret = session->hdr.hInternet;
+    WININET_Release(&session->hdr);
+    return res;
+#else
     *ret = session->hdr.hInternet;
     return ERROR_SUCCESS;
+#endif
 }
 
 /***********************************************************************
@@ -6158,6 +6762,10 @@ static LPWSTR * HTTP_InterpretHttpHeader(LPCWSTR buffer)
     INT len;
 
     pTokenPair = calloc(3, sizeof(*pTokenPair));
+#ifdef __REACTOS__
+    if (!pTokenPair)
+        return NULL;
+#endif
 
     pszColon = wcschr(buffer, ':');
     /* must have two tokens */
