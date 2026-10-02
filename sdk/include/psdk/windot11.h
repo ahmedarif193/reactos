@@ -74,7 +74,8 @@ typedef enum _DOT11_PHY_TYPE {
     dot11_phy_type_eht = 11,
     dot11_phy_type_IHV_start = 0x80000000,
     dot11_phy_type_IHV_end = 0xffffffff
-} DOT11_PHY_TYPE, * PDOT11_PHY_TYPE;
+} DOT11_PHY_TYPE;
+typedef DOT11_PHY_TYPE *PDOT11_PHY_TYPE;
 
 #define AKM_FROM_TYPE(_prefix, _akm) (_prefix + (_akm << 24))
 
@@ -162,8 +163,14 @@ typedef struct
 
 #define DOT11_RATE_SET_MAX_LENGTH               126
 typedef struct _DOT11_RATE_SET {
-    _Field_range_(<=, DOT11_RATE_SET_MAX_LENGTH) ULONG uRateSetLength;
-    _Field_size_part_(DOT11_RATE_SET_MAX_LENGTH, uRateSetLength) UCHAR ucRateSet[DOT11_RATE_SET_MAX_LENGTH];
+#if !defined(__midl) && !defined(__WIDL__)
+    _Field_range_(<=, DOT11_RATE_SET_MAX_LENGTH)
+#endif
+    ULONG uRateSetLength;
+#if !defined(__midl) && !defined(__WIDL__)
+    _Field_size_part_(DOT11_RATE_SET_MAX_LENGTH, uRateSetLength)
+#endif
+    UCHAR ucRateSet[DOT11_RATE_SET_MAX_LENGTH];
 } DOT11_RATE_SET, * PDOT11_RATE_SET;
 
 typedef struct
@@ -188,8 +195,14 @@ typedef UCHAR DOT11_WFD_SERVICE_HASH[6];
 #define DOT11_MAX_REQUESTED_SERVICE_INFORMATION_LENGTH 255
 #define DOT11_WFD_SESSION_INFO_MAX_LENGTH 144
 typedef struct _DOT11_WFD_SESSION_INFO {
-    _Field_range_(<= , DOT11_WFD_SESSION_INFO_MAX_LENGTH) USHORT uSessionInfoLength;
-    _Field_size_part_(DOT11_WFD_SESSION_INFO_MAX_LENGTH, uSessionInfoLength) UCHAR ucSessionInfo[DOT11_WFD_SESSION_INFO_MAX_LENGTH];
+#if !defined(__midl) && !defined(__WIDL__)
+    _Field_range_(<= , DOT11_WFD_SESSION_INFO_MAX_LENGTH)
+#endif
+    USHORT uSessionInfoLength;
+#if !defined(__midl) && !defined(__WIDL__)
+    _Field_size_part_(DOT11_WFD_SESSION_INFO_MAX_LENGTH, uSessionInfoLength)
+#endif
+    UCHAR ucSessionInfo[DOT11_WFD_SESSION_INFO_MAX_LENGTH];
 } DOT11_WFD_SESSION_INFO, *PDOT11_WFD_SESSION_INFO;
 
 #if (NTDDI_VERSION >= NTDDI_WIN8 || NDIS_SUPPORT_NDIS630)
@@ -708,7 +721,10 @@ typedef struct _DOT11_UPDATE_IE {
 #define OID_DOT11_SUPPORTED_POWER_LEVELS            (OID_DOT11_NDIS_START + 44)
     typedef struct _DOT11_SUPPORTED_POWER_LEVELS {
         ULONG uNumOfSupportedPowerLevels;
-        _Field_size_part_(8, uNumOfSupportedPowerLevels) ULONG uTxPowerLevelValues[8];
+#if !defined(__midl) && !defined(__WIDL__)
+        _Field_size_part_(8, uNumOfSupportedPowerLevels)
+#endif
+        ULONG uTxPowerLevelValues[8];
     } DOT11_SUPPORTED_POWER_LEVELS, * PDOT11_SUPPORTED_POWER_LEVELS;
 
 #define OID_DOT11_CURRENT_TX_POWER_LEVEL            (OID_DOT11_NDIS_START + 45)
@@ -1214,7 +1230,10 @@ typedef struct DOT11_BYTE_ARRAY {
         NDIS_OBJECT_HEADER Header;
         ULONG uNumOfEntries;
         ULONG uTotalNumOfEntries;
-        _Field_size_(uNumOfEntries) DOT11_AUTH_CIPHER_PAIR AuthCipherPairs[1];
+#if !defined(__midl) && !defined(__WIDL__)
+        _Field_size_(uNumOfEntries)
+#endif
+        DOT11_AUTH_CIPHER_PAIR AuthCipherPairs[1];
     } DOT11_AUTH_CIPHER_PAIR_LIST, * PDOT11_AUTH_CIPHER_PAIR_LIST;
 
 #define OID_DOT11_ENABLED_UNICAST_CIPHER_ALGORITHM  NWF_DEFINE_OID(0x87, NWF_OPERATIONAL_OID, NWF_MANDATORY_OID)
@@ -1386,7 +1405,9 @@ typedef struct DOT11_BYTE_ARRAY {
         #define DOT11_DATA_RATE_MAPPING_TABLE_REVISION_1  1
         NDIS_OBJECT_HEADER Header;
         ULONG uDataRateMappingLength;
+#if !defined(__midl) && !defined(__WIDL__)
         _Field_size_part_(DOT11_RATE_SET_MAX_LENGTH, uDataRateMappingLength)
+#endif
             DOT11_DATA_RATE_MAPPING_ENTRY DataRateMappingEntries[DOT11_RATE_SET_MAX_LENGTH];
     } DOT11_DATA_RATE_MAPPING_TABLE, * PDOT11_DATA_RATE_MAPPING_TABLE;
     #define DOT11_DATA_RATE_NON_STANDARD        0x01U
@@ -1494,7 +1515,7 @@ typedef struct _DOT11_PER_MSDU_COUNTERS {
     } DOT11_OFDM_PHY_ATTRIBUTES, * PDOT11_OFDM_PHY_ATTRIBUTES;
 
     typedef struct DOT11_ERP_PHY_ATTRIBUTES {
-        #ifdef __cplusplus
+        #if defined(__cplusplus) || defined(__WIDL__)
             DOT11_HRDSSS_PHY_ATTRIBUTES HRDSSSAttributes;
         #else
             DOT11_HRDSSS_PHY_ATTRIBUTES;
@@ -2094,6 +2115,7 @@ typedef struct DOT11_EXTSTA_RECV_CONTEXT {
 
 #define OID_DOT11_MAXIMUM_LIST_SIZE                 (OID_DOT11_PRIVATE_OIDS_START + 5)
 
+#if !defined(__midl) && !defined(__WIDL__)
 #define DEFINE_NWF_GUID(name,ord)   \
     DEFINE_GUID(name, 0x6cb9a43e + (ord), 0xc45f, 0x4039, 0x9f, 0xe6, 0xd0, 0x8c, 0xb0, 0x57, 0x18, 0x4c)
 
@@ -2253,6 +2275,7 @@ DEFINE_NWF_GUID(GUID_NWF_CURRENT_ADDRESS,1024+2);
 DEFINE_NWF_GUID(GUID_NWF_PERMANENT_ADDRESS,1024+3);
 DEFINE_NWF_GUID(GUID_NWF_MULTICAST_LIST,1024+4);
 DEFINE_NWF_GUID(GUID_NWF_MAXIMUM_LIST_SIZE,1024+5);
+#endif
 
 #endif
 
