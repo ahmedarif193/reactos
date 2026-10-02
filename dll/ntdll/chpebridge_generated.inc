@@ -5796,15 +5796,11 @@ void NTAPI ChpeAutoRtlPushFrame(PTEB_ACTIVE_FRAME a0)
 }
 _Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlPushFrame), __typeof__(&RtlPushFrame)), "RtlPushFrame bridge signature mismatch");
 
-/* Native definition: sdk/lib/rtl/actctx.c */
-#ifdef RtlQueryActivationContextApplicationSettings
-#undef RtlQueryActivationContextApplicationSettings
-#endif
-NTSTATUS NTAPI RtlQueryActivationContextApplicationSettings(DWORD a0, PVOID a1, PCWSTR a2, PCWSTR a3, PVOID a4, SIZE_T a5, PVOID a6);
-NTSTATUS NTAPI ChpeAutoRtlQueryActivationContextApplicationSettings(DWORD a0, PVOID a1, PCWSTR a2, PCWSTR a3, PVOID a4, SIZE_T a5, PVOID a6)
+NTSTATUS NTAPI ChpeAutoRtlQueryActivationContextApplicationSettings(DWORD a0, HANDLE a1, PCWSTR a2, PCWSTR a3, PWSTR a4, SIZE_T a5, SIZE_T * a6)
 {
     return RtlQueryActivationContextApplicationSettings(a0, a1, a2, a3, a4, a5, a6);
 }
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeAutoRtlQueryActivationContextApplicationSettings), __typeof__(&RtlQueryActivationContextApplicationSettings)), "RtlQueryActivationContextApplicationSettings bridge signature mismatch");
 
 NTSTATUS NTAPI ChpeAutoRtlQueryAtomInAtomTable(PRTL_ATOM_TABLE a0, RTL_ATOM a1, PULONG a2, PULONG a3, PWSTR a4, PULONG a5)
 {

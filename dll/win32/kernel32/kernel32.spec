@@ -969,14 +969,15 @@
 @ stdcall -version=0x603+ PssQuerySnapshot(ptr long ptr long) kernelbase.PssQuerySnapshot
 @ stdcall PulseEvent(long)
 @ stdcall PurgeComm(long long)
-@ stub -version=0x600+ QueryActCtxSettingsW
+@ stdcall -version=0x600+ QueryActCtxSettingsW(long ptr wstr wstr ptr long ptr)
 @ stdcall QueryActCtxW(long ptr ptr long ptr long ptr)
 @ stdcall QueryDepthSList(ptr) ntdll.RtlQueryDepthSList
 @ stdcall QueryDosDeviceA(str ptr long)
 @ stdcall QueryDosDeviceW(wstr ptr long)
 @ stdcall -version=0x600+ QueryFullProcessImageNameA(ptr long ptr ptr)
 @ stdcall -version=0x600+ QueryFullProcessImageNameW(ptr long ptr ptr)
-@ stub -version=0x600+ QueryIdleProcessorCycleTime
+@ stdcall -version=0x600+ QueryIdleProcessorCycleTime(ptr ptr)
+@ stdcall -version=0x601+ QueryIdleProcessorCycleTimeEx(long ptr ptr)
 @ stdcall QueryInformationJobObject(long long ptr long ptr)
 @ stdcall QueryMemoryResourceNotification(ptr ptr)
 @ stdcall QueryPerformanceCounter(ptr)

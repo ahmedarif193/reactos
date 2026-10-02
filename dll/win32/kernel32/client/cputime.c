@@ -44,3 +44,42 @@ QueryProcessCycleTime(IN HANDLE ProcessHandle,
     *CycleTime = CycleInfo.AccumulatedCycles;
     return TRUE;
 }
+
+BOOL
+WINAPI
+QueryIdleProcessorCycleTime(IN OUT PULONG BufferLength,
+                            OUT PULONG64 ProcessorIdleCycleTime)
+{
+    ULONG ReturnLength;
+    NTSTATUS Status;
+
+    Status = NtQuerySystemInformation(SystemProcessorIdleCycleTimeInformation,
+                                      ProcessorIdleCycleTime,
+                                      *BufferLength,
+                                      &ReturnLength);
+    if (!*BufferLength || !Status)
+        *BufferLength = ReturnLength;
+
+    return TRUE;
+}
+
+BOOL
+WINAPI
+QueryIdleProcessorCycleTimeEx(IN USHORT Group,
+                              IN OUT PULONG BufferLength,
+                              OUT PULONG64 ProcessorIdleCycleTime)
+{
+    ULONG ReturnLength;
+    NTSTATUS Status;
+
+    Status = NtQuerySystemInformationEx(SystemProcessorIdleCycleTimeInformation,
+                                        &Group,
+                                        sizeof(Group),
+                                        ProcessorIdleCycleTime,
+                                        *BufferLength,
+                                        &ReturnLength);
+    if (!*BufferLength || !Status)
+        *BufferLength = ReturnLength;
+
+    return TRUE;
+}

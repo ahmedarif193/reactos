@@ -4411,6 +4411,19 @@ RtlQueryInformationActiveActivationContext(
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlQueryActivationContextApplicationSettings(
+    _In_ DWORD dwFlags,
+    _In_opt_ HANDLE Context,
+    _In_opt_ PCWSTR SettingsNameSpace,
+    _In_ PCWSTR SettingName,
+    _Out_writes_opt_(Size) PWSTR Buffer,
+    _In_ SIZE_T Size,
+    _Out_opt_ SIZE_T *WrittenOrRequired
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlZombifyActivationContext(
     PVOID Context
 );

@@ -2904,6 +2904,37 @@ QueryActCtxW(
   _Out_opt_ SIZE_T *pcbWrittenOrRequired);
 #endif
 
+#if (_WIN32_WINNT >= 0x0600)
+WINBASEAPI
+BOOL
+WINAPI
+QueryActCtxSettingsW(
+  _In_opt_ DWORD dwFlags,
+  _In_opt_ HANDLE hActCtx,
+  _In_opt_ PCWSTR settingsNameSpace,
+  _In_ PCWSTR settingName,
+  _Out_writes_bytes_to_opt_(dwBuffer, *pdwWrittenOrRequired) PWSTR pvBuffer,
+  _In_ SIZE_T dwBuffer,
+  _Out_opt_ SIZE_T *pdwWrittenOrRequired);
+
+WINBASEAPI
+BOOL
+WINAPI
+QueryIdleProcessorCycleTime(
+  _Inout_ PULONG BufferLength,
+  _Out_writes_bytes_opt_(*BufferLength) PULONG64 ProcessorIdleCycleTime);
+#endif
+
+#if (_WIN32_WINNT >= 0x0601)
+WINBASEAPI
+BOOL
+WINAPI
+QueryIdleProcessorCycleTimeEx(
+  _In_ USHORT Group,
+  _Inout_ PULONG BufferLength,
+  _Out_writes_bytes_opt_(*BufferLength) PULONG64 ProcessorIdleCycleTime);
+#endif
+
 DWORD
 WINAPI
 QueryDosDeviceA(

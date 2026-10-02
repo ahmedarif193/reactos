@@ -285,6 +285,20 @@ BOOL WINAPI FindActCtxSectionGuid(DWORD dwFlags, const GUID* lpExtGuid,
     return TRUE;
 }
 
+BOOL WINAPI QueryActCtxSettingsW( DWORD flags, HANDLE ctx, const WCHAR *ns, const WCHAR *settings,
+                                  WCHAR *buffer, SIZE_T size, SIZE_T *written )
+{
+    NTSTATUS status;
+
+    if ((status = RtlQueryActivationContextApplicationSettings( flags, ctx, ns, settings,
+                                                                buffer, size, written )))
+    {
+        SetLastError( RtlNtStatusToDosError( status ));
+        return FALSE;
+    }
+    return TRUE;
+}
+
 #ifndef __REACTOS__
 /***********************************************************************
  * QueryActCtxW (KERNEL32.@)
