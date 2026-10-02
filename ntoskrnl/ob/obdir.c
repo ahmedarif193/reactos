@@ -794,7 +794,7 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
                         IN POBJECT_ATTRIBUTES ObjectAttributes)
 {
     POBJECT_DIRECTORY Directory;
-    HANDLE NewHandle;
+    HANDLE NewHandle = NULL;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
 #ifdef _M_ARM64
@@ -809,6 +809,7 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
         {
             /* Probe the return handle */
             ProbeForWriteHandle(DirectoryHandle);
+            *DirectoryHandle = NULL;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
