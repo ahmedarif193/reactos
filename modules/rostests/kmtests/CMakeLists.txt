@@ -171,6 +171,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoWaitCompletionPacket.c
     ntos_io/IoStackKM.c
     ntos_io/IoActivityId.c
+    ntos_io/IoAcpiIoctl.c
     ntos_io/IoStackLimits.c
     ntos_io/IoMdl.c
     ntos_io/IoModern.c
