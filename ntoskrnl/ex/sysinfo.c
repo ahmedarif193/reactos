@@ -3502,6 +3502,123 @@ QSI_DEF(SystemPhysicalMemoryInformation)
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+ExpQueryProcessorCycleTimes(
+    _Out_ PVOID Buffer,
+    _In_ ULONG Size,
+    _Out_ PULONG ReqSize,
+    _In_ BOOLEAN IdleOnly)
+{
+    ULONG64 CycleTime;
+    ULONG Count, Index;
+    PKPRCB Prcb;
+
+    *ReqSize = KeNumberProcessors * sizeof(ULONG64);
+    if (Size < sizeof(ULONG64))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    Count = min(Size / (ULONG)sizeof(ULONG64), (ULONG)KeNumberProcessors);
+    for (Index = 0; Index < Count; Index++)
+    {
+        Prcb = KiProcessorBlock[Index];
+        CycleTime = IdleOnly ? KeQueryTotalCycleTimeThread(Prcb->IdleThread, NULL) : Prcb->CycleTime;
+        RtlCopyMemory((PUCHAR)Buffer + Index * sizeof(ULONG64), &CycleTime, sizeof(CycleTime));
+    }
+
+    return Count < (ULONG)KeNumberProcessors ? STATUS_INFO_LENGTH_MISMATCH : STATUS_SUCCESS;
+}
+
+QSI_DEF(SystemProcessorIdleCycleTimeInformation)
+{
+    return ExpQueryProcessorCycleTimes(Buffer, Size, ReqSize, TRUE);
+}
+
+QSI_DEF(SystemProcessorCycleTimeInformation)
+{
+    return ExpQueryProcessorCycleTimes(Buffer, Size, ReqSize, FALSE);
+}
+
+static
+NTSTATUS
+ExpQueryProcessIdInformation(
+    _Inout_ PVOID Buffer,
+    _In_ ULONG Size,
+    _Out_opt_ PULONG ReturnLength)
+{
+    PSYSTEM_PROCESS_ID_INFORMATION IdInfo = Buffer;
+    PUNICODE_STRING ImageName = NULL;
+    UNICODE_STRING Name;
+    HANDLE ProcessId;
+    PEPROCESS Process;
+    USHORT Required;
+    NTSTATUS Status;
+
+    if (Size != sizeof(*IdInfo))
+    {
+        if (ReturnLength)
+            *ReturnLength = sizeof(*IdInfo);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    ProcessId = IdInfo->ProcessId;
+    Name = IdInfo->ImageName;
+    if ((Name.Length != 0) || (Name.MaximumLength & 1))
+        return STATUS_INVALID_PARAMETER;
+
+    if (ExGetPreviousMode() != KernelMode)
+        ProbeForRead(Name.Buffer, Name.MaximumLength, sizeof(WCHAR));
+
+    Status = PsLookupProcessByProcessId(ProcessId, &Process);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_CID;
+
+    Status = SeLocateProcessImageName(Process, &ImageName);
+    ObDereferenceObject(Process);
+    if (!NT_SUCCESS(Status))
+        ImageName = NULL;
+
+    Status = STATUS_SUCCESS;
+    _SEH2_TRY
+    {
+        if (ReturnLength)
+            *ReturnLength = sizeof(*IdInfo);
+
+        if ((ImageName == NULL) || (ImageName->Length == 0))
+        {
+            IdInfo->ImageName.Length = 0;
+            IdInfo->ImageName.MaximumLength = 0;
+            IdInfo->ImageName.Buffer = NULL;
+        }
+        else
+        {
+            Required = ImageName->Length + sizeof(WCHAR);
+            if (Name.MaximumLength < Required)
+            {
+                IdInfo->ImageName.MaximumLength = Required;
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            }
+            else
+            {
+                IdInfo->ImageName.Length = ImageName->Length;
+                IdInfo->ImageName.MaximumLength = Required;
+                RtlCopyMemory(Name.Buffer, ImageName->Buffer, ImageName->Length);
+                Name.Buffer[ImageName->Length / sizeof(WCHAR)] = UNICODE_NULL;
+            }
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (ImageName != NULL)
+        ExFreePoolWithTag(ImageName, TAG_SEPA);
+
+    return Status;
+}
+
 /* Query/Set Calls Table */
 typedef
 struct _QSSI_CALLS
@@ -3607,6 +3724,8 @@ CallQS[] =
     SI_QX(SystemBootEnvironmentInformation),
     SI_QX(SystemDynamicTimeZoneInformation),
     SI_QX(SystemProcessorBrandString),
+    SI_QX(SystemProcessorIdleCycleTimeInformation),
+    SI_QX(SystemProcessorCycleTimeInformation),
     SI_QX(SystemNativeBasicInformation),
     SI_QX(SystemProcessorFeaturesInformation),
 
@@ -3679,7 +3798,13 @@ NtQuerySystemInformation(
         }
 #endif
 
-        if (CallQS[SystemInformationClass].Query != NULL)
+        if (SystemInformationClass == SystemProcessIdInformation)
+        {
+            Status = ExpQueryProcessIdInformation(SystemInformation,
+                                                  SystemInformationLength,
+                                                  ReturnLength);
+        }
+        else if (CallQS[SystemInformationClass].Query != NULL)
         {
             /* Hand the request to a subhandler */
             Status = CallQS[SystemInformationClass].Query(SystemInformation,
@@ -3988,6 +4113,8 @@ NtQuerySystemInformationEx(
     ULONG CapturedResultLength = 0;
     LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
     KPROCESSOR_MODE PreviousMode;
+    ULONG InputAlignment = TYPE_ALIGNMENT(ULONG);
+    BOOLEAN CycleTimeClass = FALSE;
 
     PAGED_CODE();
 
@@ -3996,11 +4123,18 @@ NtQuerySystemInformationEx(
     if (InputBuffer == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    if ((SystemInformationClass == SystemProcessorIdleCycleTimeInformation) ||
+        (SystemInformationClass == SystemProcessorCycleTimeInformation))
+    {
+        InputAlignment = TYPE_ALIGNMENT(USHORT);
+        CycleTimeClass = TRUE;
+    }
+
     _SEH2_TRY
     {
         if (PreviousMode != KernelMode)
         {
-            ProbeForRead(InputBuffer, InputBufferLength, TYPE_ALIGNMENT(ULONG));
+            ProbeForRead(InputBuffer, InputBufferLength, InputAlignment);
             if (SystemInformation != NULL)
             {
                 ProbeForWrite(SystemInformation,
@@ -4011,7 +4145,7 @@ NtQuerySystemInformationEx(
                 ProbeForWriteUlong(ReturnLength);
         }
 
-        if (ReturnLength && SystemInformationClass != SystemCpuSetInformation)
+        if (ReturnLength && SystemInformationClass != SystemCpuSetInformation && !CycleTimeClass)
             *ReturnLength = 0;
 
         switch (SystemInformationClass)
@@ -4107,6 +4241,27 @@ NtQuerySystemInformationEx(
                                                                SystemInformation,
                                                                SystemInformationLength,
                                                                &CapturedResultLength);
+                if (ReturnLength)
+                    *ReturnLength = CapturedResultLength;
+                break;
+            }
+
+            case SystemProcessorIdleCycleTimeInformation:
+            case SystemProcessorCycleTimeInformation:
+            {
+                if (InputBufferLength < sizeof(USHORT))
+                    _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+
+                if (*(volatile USHORT *)InputBuffer >= KeQueryActiveGroupCount())
+                    _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+
+                if ((SystemInformation == NULL) && (SystemInformationLength != 0))
+                    _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
+
+                Status = ExpQueryProcessorCycleTimes(SystemInformation,
+                                                     SystemInformationLength,
+                                                     &CapturedResultLength,
+                                                     SystemInformationClass == SystemProcessorIdleCycleTimeInformation);
                 if (ReturnLength)
                     *ReturnLength = CapturedResultLength;
                 break;
