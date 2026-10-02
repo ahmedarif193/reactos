@@ -445,38 +445,16 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     OBJECT_ATTRIBUTES ObjectAttributes;
     HANDLE SysThreadHandle;
     PETHREAD SysThread;
-    MM_SYSTEMSIZE SystemSize;
     UNICODE_STRING Name;
     OBP_EXTENDED_OBJECT_TYPE_INITIALIZER ObjectTypeInitializerEx;
     POBJECT_TYPE_INITIALIZER ObjectTypeInitializer = &ObjectTypeInitializerEx.TypeInfo;
     ULONG i;
 
 
-    /* Get the system size */
-    SystemSize = MmQuerySystemSize();
-
     /* Setup some memory options */
     PspDefaultPagefileLimit = -1;
-    switch (SystemSize)
-    {
-        /* Medimum systems */
-        case MmMediumSystem:
-
-            /* Increase the WS sizes a bit */
-            PsMinimumWorkingSet += 10;
-            PsMaximumWorkingSet += 100;
-
-        /* Large systems */
-        case MmLargeSystem:
-
-            /* Increase the WS sizes a bit more */
-            PsMinimumWorkingSet += 30;
-            PsMaximumWorkingSet += 300;
-
-        /* Small and other systems */
-        default:
-            break;
-    }
+    PsMinimumWorkingSet = 50;
+    PsMaximumWorkingSet = 345;
 
     /* Setup callbacks */
     for (i = 0; i < PSP_MAX_CREATE_THREAD_NOTIFY; i++)
