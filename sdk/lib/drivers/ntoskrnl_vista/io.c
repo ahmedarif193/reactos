@@ -701,9 +701,38 @@ IoGetIrpExtraCreateParameter(IN PIRP Irp,
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* If so, return user buffer */
-    *ExtraCreateParameter = Irp->UserBuffer;
+    /* If so, return the list the user buffer refers to */
+    *ExtraCreateParameter = Irp->UserBuffer ? *(PECP_LIST *)Irp->UserBuffer : NULL;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+IoSetIrpExtraCreateParameter(IN OUT PIRP Irp,
+                             IN PECP_LIST ExtraCreateParameter)
+{
+    if (!BooleanFlagOn(Irp->Flags, IRP_CREATE_OPERATION) || Irp->UserBuffer == NULL)
+    {
+        return STATUS_INVALID_PARAMETER_2;
+    }
+
+    if (*(PECP_LIST *)Irp->UserBuffer != NULL)
+    {
+        return STATUS_INVALID_PARAMETER_3;
+    }
+
+    *(PECP_LIST *)Irp->UserBuffer = ExtraCreateParameter;
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+IoClearIrpExtraCreateParameter(IN OUT PIRP Irp)
+{
+    if (BooleanFlagOn(Irp->Flags, IRP_CREATE_OPERATION) && Irp->UserBuffer != NULL)
+    {
+        *(PECP_LIST *)Irp->UserBuffer = NULL;
+    }
 }
 
 _Function_class_(IO_WORKITEM_ROUTINE)

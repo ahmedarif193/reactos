@@ -2271,17 +2271,17 @@
 @ stub -arch=win64 ExUpdateLicenseData
 @ stub -arch=win64 ExfTryAcquirePushLockShared
 @ cdecl -arch=i386,win64 FirstEntrySList(ptr)
-@ stub -arch=arm64 FsRtlAcknowledgeEcp
+@ stdcall FsRtlAcknowledgeEcp(ptr)
 @ stub -arch=win64 FsRtlAcquireEofLock
 @ stub -arch=win64 FsRtlAcquireHeaderMutex
 @ stub -arch=win64 FsRtlAddBaseMcbEntryEx
 @ stub -arch=win64 FsRtlAddToTunnelCacheEx
 @ stub -arch=win64 FsRtlAllocateAePushLock
-@ stub -arch=arm64 FsRtlAllocateExtraCreateParameter
-@ stub -arch=arm64 FsRtlAllocateExtraCreateParameterFromLookasideList
-@ stub -arch=arm64 FsRtlAllocateExtraCreateParameterList
-@ stub -arch=arm64 FsRtlCancellableWaitForMultipleObjects
-@ stub -arch=arm64 FsRtlCancellableWaitForSingleObject
+@ stdcall FsRtlAllocateExtraCreateParameter(ptr long long ptr long ptr)
+@ stdcall FsRtlAllocateExtraCreateParameterFromLookasideList(ptr long long ptr ptr ptr)
+@ stdcall FsRtlAllocateExtraCreateParameterList(long ptr)
+@ stdcall FsRtlCancellableWaitForMultipleObjects(long ptr long ptr ptr ptr)
+@ stdcall FsRtlCancellableWaitForSingleObject(ptr ptr ptr)
 @ stub -arch=win64 FsRtlChangeBackingFileObject
 @ stub -arch=win64 FsRtlCheckFileSystemFilterCallbacksRegistered
 @ stub -arch=win64 FsRtlCheckOplockEx2
@@ -2292,13 +2292,13 @@
 @ stub -arch=win64 FsRtlDedupChangeLogOverwriteOrFree
 @ stub -arch=win64 FsRtlDedupChangeLogWrite
 @ stub -arch=win64 FsRtlDedupChangeUninit
-@ stub -arch=arm64 FsRtlDeleteExtraCreateParameterLookasideList
+@ stdcall FsRtlDeleteExtraCreateParameterLookasideList(ptr long)
 @ stub -arch=win64 FsRtlDisallowLegacyFilterOnDevice
-@ stub -arch=arm64 FsRtlFindExtraCreateParameter
+@ stdcall FsRtlFindExtraCreateParameter(ptr ptr ptr ptr)
 @ stub -arch=win64 FsRtlFindInTunnelCacheEx
 @ stub -arch=win64 FsRtlFreeAePushLock
-@ stub -arch=arm64 FsRtlFreeExtraCreateParameter
-@ stub -arch=arm64 FsRtlFreeExtraCreateParameterList
+@ stdcall FsRtlFreeExtraCreateParameter(ptr)
+@ stdcall FsRtlFreeExtraCreateParameterList(ptr)
 @ stub -arch=win64 FsRtlGetCurrentProcessLoaderList
 @ stub -arch=win64 FsRtlGetDirectImageOriginalBase
 @ stub -arch=win64 FsRtlGetFileExtents
@@ -2311,18 +2311,18 @@
 @ stub -arch=win64 FsRtlHeatLogTierMove
 @ stub -arch=win64 FsRtlHeatUninit
 @ stub -arch=win64 FsRtlIncrementCcFastMdlReadWait
-@ stub -arch=arm64 FsRtlInitExtraCreateParameterLookasideList
+@ stdcall FsRtlInitExtraCreateParameterLookasideList(ptr long ptr long)
 @ stub -arch=win64 FsRtlInitializeBaseMcbEx
 @ stub -arch=win64 FsRtlInitializeEofLock
-@ stub -arch=arm64 FsRtlInitializeExtraCreateParameter
-@ stub -arch=arm64 FsRtlInitializeExtraCreateParameterList
-@ stub -arch=arm64 FsRtlInsertExtraCreateParameter
-@ stub -arch=arm64 FsRtlInsertPerFileContext
+@ stdcall FsRtlInitializeExtraCreateParameter(ptr long ptr long ptr ptr)
+@ stdcall FsRtlInitializeExtraCreateParameterList(ptr)
+@ stdcall FsRtlInsertExtraCreateParameter(ptr ptr)
+@ stdcall FsRtlInsertPerFileContext(ptr ptr)
 @ stub -arch=win64 FsRtlInsertPerFileContextWithReserve
 @ stub -arch=win64 FsRtlIs32BitProcess
 @ stub -arch=win64 FsRtlIsDaxVolume
-@ stub -arch=arm64 FsRtlIsEcpAcknowledged
-@ stub -arch=arm64 FsRtlIsEcpFromUserMode
+@ stdcall FsRtlIsEcpAcknowledged(ptr)
+@ stdcall FsRtlIsEcpFromUserMode(ptr)
 @ stub -arch=win64 FsRtlIsExtentDangling
 @ stub -arch=win64 FsRtlIsMobileOS
 @ stub -arch=win64 FsRtlIsNameInUnUpcasedExpression
@@ -2331,7 +2331,7 @@
 @ stub -arch=win64 FsRtlIssueDeviceIoControl
 @ stub -arch=win64 FsRtlKernelFsControlFile
 @ stub -arch=win64 FsRtlLogCcFlushError
-@ stub -arch=arm64 FsRtlLookupPerFileContext
+@ stdcall FsRtlLookupPerFileContext(ptr ptr ptr)
 @ stub -arch=win64 FsRtlMdlReadEx
 @ stub -arch=win64 FsRtlMupGetProviderIdFromName
 @ stub -arch=win64 FsRtlMupGetProviderInfoFromFileObject
@@ -2347,7 +2347,7 @@
 @ stub -arch=win64 FsRtlOplockGetAnyBreakOwnerProcess
 @ stub -arch=win64 FsRtlOplockKeysEqual
 @ stub -arch=win64 FsRtlPrepareMdlWriteEx
-@ stub -arch=arm64 FsRtlPrepareToReuseEcp
+@ stdcall FsRtlPrepareToReuseEcp(ptr)
 @ stub -arch=win64 FsRtlQueryCachedVdl
 @ stub -arch=win64 FsRtlQueryInformationFile
 @ stub -arch=win64 FsRtlQueryKernelEaFile
@@ -2359,14 +2359,14 @@
 @ stub -arch=win64 FsRtlReleaseEofLock
 @ stub -arch=win64 FsRtlReleaseFileNameInformation
 @ stub -arch=win64 FsRtlReleaseHeaderMutex
-@ stub -arch=arm64 FsRtlRemoveExtraCreateParameter
-@ stub -arch=arm64 FsRtlRemovePerFileContext
+@ stdcall FsRtlRemoveExtraCreateParameter(ptr ptr ptr ptr)
+@ stdcall FsRtlRemovePerFileContext(ptr ptr ptr)
 @ stub -arch=win64 FsRtlRemovePerFileContextWithReserve
 @ stub -arch=win64 FsRtlSendModernAppTermination
 @ stub -arch=win64 FsRtlSetDriverBacking
-@ stub -arch=arm64 FsRtlSetEcpListIntoIrp
+@ stdcall FsRtlSetEcpListIntoIrp(ptr ptr)
 @ stub -arch=win64 FsRtlSetKernelEaFile
-@ stub -arch=arm64 FsRtlTeardownPerFileContexts
+@ stdcall FsRtlTeardownPerFileContexts(ptr)
 @ stub -arch=win64 FsRtlTryToAcquireHeaderMutex
 @ stub -arch=win64 FsRtlUpperOplockFsctrl
 @ stub -arch=win64 FsRtlVolumeDeviceToCorrelationId
@@ -2423,13 +2423,13 @@
 @ stub -arch=win64 IoClearActivityIdThread
 @ stub -arch=win64 IoClearAdapterCryptoEngineExtension
 @ stub -arch=win64 IoClearFsTrackOffsetState
-@ stub -arch=arm64 IoClearIrpExtraCreateParameter
+@ stdcall IoClearIrpExtraCreateParameter(ptr)
 @ stub -arch=win64 IoComputeRedirectionTrustLevel
 @ stub -arch=win64 IoConvertFileHandleToKernelHandle
 @ stub -arch=win64 IoCopyDeviceObjectHint
 @ stub -arch=win64 IoCreateArcName
 @ stub -arch=win64 IoCreateDriverProxyExtension
-@ stub -arch=arm64 IoCreateFileEx
+@ stdcall IoCreateFileEx(ptr long ptr ptr ptr long long long long ptr long long ptr long ptr)
 @ stub -arch=win64 IoCreateStreamFileObjectEx2
 @ stub -arch=win64 IoCreateSymbolicLink2
 @ stub -arch=win64 IoCreateSystemThread
@@ -2468,7 +2468,7 @@
 @ stub -arch=win64 IoGetSilo
 @ stub -arch=win64 IoGetSiloParameters
 @ stub -arch=win64 IoGetSymlinkSupportInformation
-@ stub -arch=arm64 IoGetTransactionParameterBlock
+@ stdcall IoGetTransactionParameterBlock(ptr)
 @ stub -arch=win64 IoIncrementKeepAliveCount
 @ stub -arch=win64 IoInitializeIrpEx
 @ stub -arch=win64 IoInitializeMiniCompletionPacket
@@ -2500,7 +2500,7 @@
 @ stub -arch=win64 IoRemoveIoCompletion
 @ stub -arch=win64 IoRemoveLinkShareAccess
 @ stub -arch=win64 IoRemoveLinkShareAccessEx
-@ stub -arch=arm64 IoReplaceFileObjectName
+@ stdcall IoReplaceFileObjectName(ptr ptr long)
 @ stub -arch=win64 IoReplacePartitionUnit
 @ stdcall IoReportInterruptActive(ptr)
 @ stdcall IoReportInterruptInactive(ptr)
@@ -2526,7 +2526,7 @@
 @ stub -arch=win64 IoSetIoPriorityHint
 @ stub -arch=win64 IoSetIoPriorityHintIntoFileObject
 @ stub -arch=win64 IoSetIoPriorityHintIntoThread
-@ stub -arch=arm64 IoSetIrpExtraCreateParameter
+@ stdcall IoSetIrpExtraCreateParameter(ptr ptr)
 @ stub -arch=win64 IoSetLinkShareAccess
 @ stub -arch=win64 IoSetShadowFileInformation
 @ stub -arch=win64 IoSetShareAccessEx
