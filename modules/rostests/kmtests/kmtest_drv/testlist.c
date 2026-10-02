@@ -72,6 +72,7 @@ KMT_TESTFUNC Test_ExHardErrorInteractive;
 KMT_TESTFUNC Test_ExHandleTable;
 KMT_TESTFUNC Test_ExInterlocked;
 KMT_TESTFUNC Test_ExPoolBench;
+KMT_TESTFUNC Test_ExPool2;
 KMT_TESTFUNC Test_ExPools;
 KMT_TESTFUNC Test_ExCallbackExtra;
 KMT_TESTFUNC Test_ExFastMutexExtra;
@@ -297,6 +298,8 @@ KMT_TESTFUNC Test_MmPhysical;
 KMT_TESTFUNC Test_MmPrefetchPages;
 KMT_TESTFUNC Test_MmPrivatePages;
 KMT_TESTFUNC Test_IoStackKM;
+KMT_TESTFUNC Test_IoActivityId;
+KMT_TESTFUNC Test_IoStackLimits;
 KMT_TESTFUNC Test_SmcLib;
 KMT_TESTFUNC Test_SmcLibRemove;
 KMT_TESTFUNC Test_KeCriticalRegionKM;
@@ -390,6 +393,7 @@ const KMT_TEST TestList[] =
     { "ExHandleTable",                      Test_ExHandleTable },
     { "ExInterlocked",                      Test_ExInterlocked },
     { "-ExPoolBench",                       Test_ExPoolBench },
+    { "ExPool2",                            Test_ExPool2 },
     { "ExPools",                            Test_ExPools },
     { "ExLookaside",                        Test_ExLookaside },
     { "ExCallbackExtra",                    Test_ExCallbackExtra },
@@ -461,6 +465,8 @@ const KMT_TEST TestList[] =
     { "IoNullDeviceKM",                     Test_IoNullDeviceKM },
     { "IoMdl",                              Test_IoMdl },
     { "IoModern",                           Test_IoModern },
+    { "IoActivityId",                       Test_IoActivityId },
+    { "IoStackLimits",                      Test_IoStackLimits },
     { "SmcLib",                             Test_SmcLib },
     { "SmcLibRemove",                       Test_SmcLibRemove },
     { "IoDeviceNumaNode",                    Test_IoDeviceNumaNode },

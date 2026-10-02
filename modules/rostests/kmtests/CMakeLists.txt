@@ -134,6 +134,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExLookaside.c
     ntos_ex/ExPoolExtra.c
     ntos_ex/ExPoolBench.c
+    ntos_ex/ExPool2.c
     ntos_ex/ExPools.c
     ntos_ex/ExPushLock.c
     ntos_ex/ExResource.c
@@ -169,6 +170,8 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoIrp.c
     ntos_io/IoWaitCompletionPacket.c
     ntos_io/IoStackKM.c
+    ntos_io/IoActivityId.c
+    ntos_io/IoStackLimits.c
     ntos_io/IoMdl.c
     ntos_io/IoModern.c
     ntos_io/IoNullDeviceKM.c
