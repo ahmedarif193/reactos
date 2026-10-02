@@ -2483,6 +2483,17 @@ NtSetInformationProcess(
     {
         Access = PROCESS_QUERY_INFORMATION;
     }
+    else if (ProcessInformationClass == ProcessThreadStackAllocation)
+    {
+        if (ProcessInformationLength != sizeof(PROCESS_STACK_ALLOCATION_INFORMATION) &&
+            ProcessInformationLength != sizeof(PROCESS_STACK_ALLOCATION_INFORMATION_EX))
+        {
+            return STATUS_INFO_LENGTH_MISMATCH;
+        }
+
+        if (ProcessHandle != NtCurrentProcess())
+            return STATUS_INVALID_PARAMETER;
+    }
 
     /* Reference the process */
     Status = ObReferenceObjectByHandle(ProcessHandle,
@@ -3662,6 +3673,75 @@ NtSetInformationProcess(
             InterlockedExchange(&EnergyContext->PowerThrottlingControlMask, (LONG)PowerThrottlingState.ControlMask);
             InterlockedExchange(&EnergyContext->PowerThrottlingStateMask, (LONG)PowerThrottlingState.StateMask);
             Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case ProcessThreadStackAllocation:
+        {
+            PPROCESS_STACK_ALLOCATION_INFORMATION StackAllocation = ProcessInformation;
+            PPROCESS_STACK_ALLOCATION_INFORMATION_EX StackAllocationEx = ProcessInformation;
+            PROCESS_STACK_ALLOCATION_INFORMATION StackInfo;
+            PVOID StackBase = NULL;
+            SIZE_T StackSize;
+
+            RtlZeroMemory(&StackInfo, sizeof(StackInfo));
+            _SEH2_TRY
+            {
+                if (ProcessInformationLength == sizeof(PROCESS_STACK_ALLOCATION_INFORMATION_EX))
+                {
+                    if (StackAllocationEx->PreferredNode > KeNumberNodes ||
+                        StackAllocationEx->Reserved0 != 0 ||
+                        StackAllocationEx->Reserved1 != 0 ||
+                        StackAllocationEx->Reserved2 != 0)
+                    {
+                        Status = STATUS_INVALID_PARAMETER;
+                        _SEH2_LEAVE;
+                    }
+
+                    StackAllocation = &StackAllocationEx->AllocInfo;
+                }
+
+                if (PreviousMode != KernelMode)
+                    ProbeForWrite(StackAllocation, sizeof(*StackAllocation), sizeof(ULONG_PTR));
+
+                StackInfo = *StackAllocation;
+                if (StackInfo.ReserveSize == 0)
+                    Status = STATUS_INVALID_PARAMETER;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (!NT_SUCCESS(Status))
+                break;
+
+            StackSize = StackInfo.ReserveSize;
+            Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                             &StackBase,
+                                             StackInfo.ZeroBits,
+                                             &StackSize,
+                                             MEM_RESERVE,
+                                             PAGE_READWRITE);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            _SEH2_TRY
+            {
+                StackAllocation->StackBase = StackBase;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (!NT_SUCCESS(Status))
+            {
+                StackSize = 0;
+                ZwFreeVirtualMemory(NtCurrentProcess(), &StackBase, &StackSize, MEM_RELEASE);
+            }
             break;
         }
 

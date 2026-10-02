@@ -355,7 +355,11 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     IQS_NONE,
 
     /* ProcessThreadStackAllocation */
-    IQS_NONE,
+    IQS_NO_TYPE_LENGTH
+    (
+        ULONG_PTR,
+        ICIF_SET | ICIF_SET_SIZE_VARIABLE
+    ),
 
     /* ProcessWorkingSetWatchEx */
     IQS_NONE,
