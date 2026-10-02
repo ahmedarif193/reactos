@@ -509,6 +509,12 @@ DWORD WINAPI FormatMessageA(
             *(LPSTR *)lpBuffer = NULL;
     }
 
+    if (nSize >= 32768)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
     if (dwFlags & FORMAT_MESSAGE_ARGUMENT_ARRAY)
     {
         format_args.args = (ULONG_PTR *)args;
