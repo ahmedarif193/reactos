@@ -2623,6 +2623,108 @@ Complete:
     return Status;
 }
 
+static
+ULONG
+NtfsDirectoryNameOffset(_In_ FILE_INFORMATION_CLASS InformationClass)
+{
+    switch (InformationClass)
+    {
+        case FileDirectoryInformation:
+            return FIELD_OFFSET(FILE_DIRECTORY_INFORMATION, FileName);
+        case FileFullDirectoryInformation:
+            return FIELD_OFFSET(FILE_FULL_DIR_INFORMATION, FileName);
+        case FileBothDirectoryInformation:
+            return FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName);
+        case FileNamesInformation:
+            return FIELD_OFFSET(FILE_NAMES_INFORMATION, FileName);
+        case FileIdBothDirectoryInformation:
+            return FIELD_OFFSET(FILE_ID_BOTH_DIR_INFORMATION, FileName);
+        case FileIdFullDirectoryInformation:
+            return FIELD_OFFSET(FILE_ID_FULL_DIR_INFORMATION, FileName);
+        default:
+            return 0;
+    }
+}
+
+static
+ULONG
+NtfsDirectoryNameLength(_In_ FILE_INFORMATION_CLASS InformationClass,
+                        _In_ PVOID Entry)
+{
+    if (InformationClass == FileNamesInformation)
+        return ((PFILE_NAMES_INFORMATION)Entry)->FileNameLength;
+    return ((PFILE_DIRECTORY_INFORMATION)Entry)->FileNameLength;
+}
+
+static
+ULONG
+NtfsDirectoryBytesUsed(_In_ FILE_INFORMATION_CLASS InformationClass,
+                       _In_reads_bytes_(Written) PVOID Buffer,
+                       _In_ ULONG Written)
+{
+    ULONG NameOffset = NtfsDirectoryNameOffset(InformationClass);
+    ULONG Offset = 0;
+    ULONG Next;
+    ULONG Used;
+
+    if (!NameOffset || Written < NameOffset)
+        return Written;
+    for (;;)
+    {
+        Next = ((PFILE_NAMES_INFORMATION)((PUCHAR)Buffer + Offset))->NextEntryOffset;
+        if (!Next || Next > Written - Offset || Written - Offset - Next < NameOffset)
+            break;
+        Offset += Next;
+    }
+    Used = Offset + NameOffset + NtfsDirectoryNameLength(InformationClass, (PUCHAR)Buffer + Offset);
+    return min(Used, Written);
+}
+
+static
+NTSTATUS
+NtfsStoreTruncatedDirectoryEntry(_In_ PFileContextBlock FileCB,
+                                 _In_ FILE_INFORMATION_CLASS InformationClass,
+                                 _Out_ PVOID Buffer,
+                                 _Inout_ PULONG Length)
+{
+    ULONG NameOffset = NtfsDirectoryNameOffset(InformationClass);
+    ULONG Capacity = ALIGN_UP_BY(FIELD_OFFSET(FILE_ID_BOTH_DIR_INFORMATION, FileName) +
+                                     NTFS_MAX_FILE_NAME_LENGTH * sizeof(WCHAR),
+                                 sizeof(ULONGLONG));
+    ULONG Remaining = Capacity;
+    ULONG EntryLength;
+    ULONG Copied;
+    PVOID Entry;
+    NTSTATUS Status;
+
+    if (!NameOffset || *Length < NameOffset)
+        return STATUS_BUFFER_OVERFLOW;
+    Entry = ExAllocatePoolZero(PagedPool, Capacity, TAG_NTFS);
+    if (!Entry)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = NtfsDirectoryGetFileBothDirInfo(FileCB->FileDir,
+                                             TRUE,
+                                             FALSE,
+                                             FileCB->DirSearchPattern.Buffer ? &FileCB->DirSearchPattern : NULL,
+                                             InformationClass,
+                                             Entry,
+                                             &Remaining);
+    if (NT_SUCCESS(Status) && Remaining == Capacity)
+        Status = STATUS_BUFFER_OVERFLOW;
+    else if (NT_SUCCESS(Status))
+    {
+        EntryLength = NameOffset + NtfsDirectoryNameLength(InformationClass, Entry);
+        Copied = min(*Length, EntryLength);
+        ((PFILE_NAMES_INFORMATION)Entry)->NextEntryOffset = 0;
+        RtlCopyMemory(Buffer, Entry, Copied);
+        *Length -= Copied;
+        if (Copied != EntryLength)
+            Status = STATUS_BUFFER_OVERFLOW;
+    }
+    ExFreePoolWithTag(Entry, TAG_NTFS);
+    return Status;
+}
+
 _Function_class_(IRP_MJ_DIRECTORY_CONTROL)
 _Function_class_(DRIVER_DISPATCH)
 NTSTATUS
@@ -2661,7 +2763,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     if (IrpSp->MinorFunction == IRP_MN_QUERY_DIRECTORY)
     {
-        if (!FileCB)
+        if (!FileCB || !FileCB->FileDir)
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Complete;
@@ -2707,6 +2809,13 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                                          FileInformationRequest,
                                                          SystemBuffer,
                                                          &BufferLength);
+                if (NT_SUCCESS(Status) && BufferLength == IrpSp->Parameters.QueryDirectory.Length)
+                {
+                    Status = NtfsStoreTruncatedDirectoryEntry(FileCB,
+                                                              FileInformationRequest,
+                                                              SystemBuffer,
+                                                              &BufferLength);
+                }
                 break;
             case FileDirectoryInformation:
                 Status = GetFileDirectoryInformation(
@@ -2774,7 +2883,14 @@ DirectoryDone:
 
 Complete:
     // Set to number of bytes written
-    if (NT_SUCCESS(Status))
+    if (NT_SUCCESS(Status) && IrpSp->MinorFunction == IRP_MN_QUERY_DIRECTORY)
+    {
+        Irp->IoStatus.Information =
+            NtfsDirectoryBytesUsed(IrpSp->Parameters.QueryDirectory.FileInformationClass,
+                                   SystemBuffer,
+                                   IrpSp->Parameters.QueryDirectory.Length - BufferLength);
+    }
+    else if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW)
     {
         Irp->IoStatus.Information = IrpSp->Parameters.QueryDirectory.Length - BufferLength;
     }
