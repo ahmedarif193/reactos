@@ -297,11 +297,7 @@ RtlWow64GetThreadSelectorEntry(HANDLE handle,
         goto done;
 
     if (selector & 0x04)
-    {
-        NTSTATUS status = NtQueryInformationThread(handle, ThreadDescriptorTableEntry, info, size, NULL);
-
-        return status == STATUS_NOT_IMPLEMENTED ? STATUS_NO_LDT : status;
-    }
+        return NtQueryInformationThread(handle, ThreadDescriptorTableEntry, info, size, NULL);
 
     code_selector = context.SegCs;
     data_selector = context.SegSs;
