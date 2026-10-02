@@ -218,6 +218,13 @@ NtSystemDebugControl(
     ULONG Length = 0;
     NTSTATUS Status;
 
+    if (KdPitchDebugger &&
+        (Command != SysDbgGetTriageDump) &&
+        (Command != SysDbgGetLiveKernelDump))
+    {
+        return STATUS_DEBUGGER_INACTIVE;
+    }
+
     /* Debugger controlling requires the debug privilege */
     if (!SeSinglePrivilegeCheck(SeDebugPrivilege, PreviousMode))
         return STATUS_ACCESS_DENIED;
@@ -419,6 +426,12 @@ NtSystemDebugControl(
                 break;
 
             case SysDbgSetKdBlockEnable:
+                if (InputBufferLength != sizeof(BOOLEAN))
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                    break;
+                }
+
                 Status = KdChangeOption(KD_OPTION_SET_BLOCK_ENABLE,
                                         InputBufferLength,
                                         InputBuffer,
@@ -437,13 +450,32 @@ NtSystemDebugControl(
                 break;
 #endif
 
+            case SysDbgKdPullRemoteFile:
+                if (InputBufferLength != sizeof(UNICODE_STRING))
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                }
+                else if (((PUNICODE_STRING)InputBuffer)->Length == 0)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                }
+                else
+                {
+                    Status = STATUS_NOT_IMPLEMENTED;
+                }
+                break;
+
             default:
                 Status = STATUS_INVALID_INFO_CLASS;
                 break;
         }
 
-        if (ReturnLength)
+        if (ReturnLength &&
+            (Status != STATUS_INFO_LENGTH_MISMATCH) &&
+            (Status != STATUS_NOT_IMPLEMENTED))
+        {
             *ReturnLength = Length;
+        }
 
         _SEH2_YIELD(return Status);
     }
