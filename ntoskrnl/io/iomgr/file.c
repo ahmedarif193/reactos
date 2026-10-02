@@ -2009,8 +2009,29 @@ IopQueryNameInternal(IN PVOID ObjectBody,
                               LocalInfo,
                               sizeof(OBJECT_NAME_INFORMATION),
                               &LocalReturnLength);
-            ExFreePoolWithTag(LocalInfo, TAG_IO);
             *ReturnLength = LocalReturnLength;
+
+            LocalFileInfo = (PFILE_NAME_INFORMATION)LocalInfo;
+            if (PreviousMode == KernelMode &&
+                BooleanFlagOn(FileObject->Flags, FO_SYNCHRONOUS_IO))
+            {
+                Status = IopGetFileInformation(FileObject,
+                                               sizeof(OBJECT_NAME_INFORMATION),
+                                               FileNameInformation,
+                                               LocalFileInfo,
+                                               &FileLength);
+            }
+            else
+            {
+                Status = IoQueryFileInformation(FileObject,
+                                                FileNameInformation,
+                                                sizeof(OBJECT_NAME_INFORMATION),
+                                                LocalFileInfo,
+                                                &FileLength);
+            }
+            if (NT_SUCCESS(Status) || (Status == STATUS_BUFFER_OVERFLOW))
+                *ReturnLength += LocalFileInfo->FileNameLength;
+            ExFreePoolWithTag(LocalInfo, TAG_IO);
         }
         else
         {
