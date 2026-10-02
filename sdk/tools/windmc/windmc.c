@@ -416,6 +416,41 @@ static int find_lang_index(const char *name)
 
 /* Parse from lines[*pos] onwards. The first line contains '(' and possibly ')'.
    Reads lines until ')' is found. Updates *pos to past the last consumed line. */
+static int parse_message_fields(Message *m, const char *line)
+{
+    static const char *keys[] = { "Severity", "Facility", "SymbolicName" };
+    int matched = 0;
+
+    for (;;)
+    {
+        const char *value = NULL;
+        char token[128];
+        size_t len = 0;
+        int k;
+
+        while (*line && isspace((unsigned char)*line)) line++;
+        for (k = 0; k < 3; k++)
+        {
+            value = match_assignment(line, keys[k]);
+            if (value) break;
+        }
+        if (!value) break;
+
+        while (value[len] && !isspace((unsigned char)value[len]) && len < sizeof(token) - 1) len++;
+        memcpy(token, value, len);
+        token[len] = '\0';
+
+        if (k == 0) m->severity = find_severity(token);
+        else if (k == 1) m->facility = find_facility(token);
+        else copy_trunc(m->symbolic_name, sizeof(m->symbolic_name), token);
+
+        line = value + len;
+        matched = 1;
+    }
+
+    return matched;
+}
+
 static void parse_name_value_list_from_lines(int *pos,
     void (*callback)(const char *name, uint32_t value, const char *define_name))
 {
@@ -1466,6 +1501,12 @@ int main(int argc, char **argv)
             m->severity = 0;
             m->facility = 0;
             copy_trunc(m->type_def, sizeof(m->type_def), current_typedef);
+            {
+                const char *rest = match_assignment(trimmed, "MessageId");
+                while (rest && *rest && !isspace((unsigned char)*rest)) rest++;
+                if (rest)
+                    parse_message_fields(m, rest);
+            }
             pos++;
 
             /* Read sub-directives */
@@ -1474,32 +1515,10 @@ int main(int argc, char **argv)
                 trimmed = get_trimmed(pos);
                 if (trimmed[0] == '\0') { pos++; continue; }
 
+                if (parse_message_fields(m, trimmed))
                 {
-                    const char *value = match_assignment(trimmed, "Severity");
-                    if (value)
-                    {
-                        m->severity = find_severity(value);
-                        pos++;
-                        continue;
-                    }
-                }
-                {
-                    const char *value = match_assignment(trimmed, "Facility");
-                    if (value)
-                    {
-                        m->facility = find_facility(value);
-                        pos++;
-                        continue;
-                    }
-                }
-                {
-                    const char *value = match_assignment(trimmed, "SymbolicName");
-                    if (value)
-                    {
-                        copy_trunc(m->symbolic_name, sizeof(m->symbolic_name), value);
-                        pos++;
-                        continue;
-                    }
+                    pos++;
+                    continue;
                 }
                 {
                     const char *value = match_assignment(trimmed, "Language");
