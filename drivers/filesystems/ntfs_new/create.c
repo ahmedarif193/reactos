@@ -2363,7 +2363,11 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 }
                 while (FileObject->FileName.Length > sizeof(WCHAR) &&
                        FileObject->FileName.Buffer[FileObject->FileName.Length / sizeof(WCHAR) - 1] == L'\\')
+                {
+                    if (FullNameLength == FileObject->FileName.Length)
+                        FullNameLength -= sizeof(WCHAR);
                     FileObject->FileName.Length -= sizeof(WCHAR);
+                }
 
                 /* In these cases, create the file and open it.
                  * Algorithm will probably be something like:
