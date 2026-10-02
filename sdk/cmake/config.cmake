@@ -164,6 +164,13 @@ elseif(_REACTOS_KD_DEBUGGER STREQUAL "EXTERNAL")
     endif()
 endif()
 
+if(KDBG AND _REACTOS_KD_DEBUGGER STREQUAL "AUTO" AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64") AND
+   NOT EXISTS "${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec/External/zydis/dependencies/zycore/src/API/Memory.c")
+    message(STATUS "KDBG: the fex-arm64ec feed is not checked out; building without the integrated debugger. "
+        "Run scripts/feeds update fex-arm64ec to build it.")
+    set(KDBG FALSE)
+endif()
+
 if(GDB)
     if(NOT (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64"))
         message(FATAL_ERROR "KDGDB is only supported on i386, amd64 and arm64")
