@@ -685,6 +685,9 @@ NdisMSetMiniportAttributes(
             Ext->GeneralAttrs = NewGen;
             Ext->GeneralAttrsValid = TRUE;
             Adapter->NdisMiniportBlock.MediaType = Gen->MediaType;
+            Adapter->NdisMiniportBlock.MacOptions = Gen->MacOptions;
+            if (Gen->MediaType == NdisMedium802_3)
+                Adapter->MediumHeaderSize = 14;
             if (OldOidList != NULL)
                 ExFreePoolWithTag(OldOidList, NDIS6_ATTR_TAG);
 
