@@ -5958,12 +5958,13 @@ void WINAPI RtlReleaseActivationContext( HANDLE handle )
  */
 NTSTATUS WINAPI RtlZombifyActivationContext( HANDLE handle )
 {
-    FIXME("%p: stub\n", handle);
-
     if (handle == ACTCTX_FAKE_HANDLE)
         return STATUS_SUCCESS;
 
-    return STATUS_NOT_IMPLEMENTED;
+    if (!check_actctx( handle ))
+        return STATUS_INVALID_PARAMETER;
+
+    return STATUS_SUCCESS;
 }
 
 /******************************************************************
