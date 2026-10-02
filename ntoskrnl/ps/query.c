@@ -2768,9 +2768,11 @@ NtSetInformationProcess(
             }
 
             /* Check if we have a job */
-            if (Process->Job)
+            if (Process->Job &&
+                (Process->Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_PRIORITY_CLASS))
             {
-                DPRINT1("Jobs not yet supported\n");
+                Status = STATUS_SUCCESS;
+                break;
             }
 
             /* Set process priority class */
@@ -3186,7 +3188,7 @@ NtSetInformationProcess(
                         {
                             ExReleaseResourceLite(&Job->JobLock);
                             KeLeaveGuardedRegion();
-                            Status = STATUS_INVALID_PARAMETER;
+                            Status = STATUS_SUCCESS;
                             break;
                         }
                     }
@@ -3194,7 +3196,7 @@ NtSetInformationProcess(
                     {
                         ExReleaseResourceLite(&Job->JobLock);
                         KeLeaveGuardedRegion();
-                        Status = STATUS_INVALID_PARAMETER;
+                        Status = STATUS_SUCCESS;
                         break;
                     }
                 }

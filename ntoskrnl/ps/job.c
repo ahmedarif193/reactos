@@ -332,8 +332,8 @@ PspApplyEffectiveJobLimits(
     PEPROCESS Process;
     ULONG OldLimitFlags, OldSchedulingClass;
     KAFFINITY OldAffinity;
-    BOOLEAN ApplyAffinity, UpdateScheduling;
-    UCHAR Quantum;
+    BOOLEAN ApplyAffinity, UpdateScheduling, ApplyPriorityClass;
+    UCHAR Quantum, OldPriorityClass;
 
     ASSERT(ExIsResourceAcquiredExclusiveLite(&PspJobTreeLock) != 0);
 
@@ -344,6 +344,7 @@ PspApplyEffectiveJobLimits(
         OldLimitFlags = Job->EffectiveLimitFlags;
         OldAffinity = Job->EffectiveAffinity.Bitmap[0];
         OldSchedulingClass = Job->EffectiveSchedulingClass;
+        OldPriorityClass = Job->EffectivePriorityClass;
 
         PspComputeEffectiveJobLimits(Job);
 
@@ -355,13 +356,22 @@ PspApplyEffectiveJobLimits(
         UpdateScheduling = (((OldLimitFlags ^ Job->EffectiveLimitFlags) & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) ||
                             ((Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
                              OldSchedulingClass != Job->EffectiveSchedulingClass));
-        if (ApplyAffinity || UpdateScheduling || (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION))
+        ApplyPriorityClass = ((Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_PRIORITY_CLASS) &&
+                              (!(OldLimitFlags & JOB_OBJECT_LIMIT_PRIORITY_CLASS) ||
+                               OldPriorityClass != Job->EffectivePriorityClass));
+        if (ApplyAffinity || UpdateScheduling || ApplyPriorityClass ||
+            (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION))
         {
             for (Entry = Job->ProcessListHead.Flink; Entry != &Job->ProcessListHead; Entry = Entry->Flink)
             {
                 Process = CONTAINING_RECORD(Entry, EPROCESS, JobLinks);
                 if (ApplyAffinity)
                     KeSetAffinityProcess(&Process->Pcb, Job->EffectiveAffinity.Bitmap[0]);
+                if (ApplyPriorityClass)
+                {
+                    Process->PriorityClass = Job->EffectivePriorityClass;
+                    PsSetProcessPriorityByClass(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground);
+                }
                 if (UpdateScheduling)
                 {
                     (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
@@ -942,6 +952,11 @@ PspAssignProcessToJob(
 
     if (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_AFFINITY)
         KeSetAffinityProcess(&Process->Pcb, Job->EffectiveAffinity.Bitmap[0]);
+    if (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_PRIORITY_CLASS)
+    {
+        Process->PriorityClass = Job->EffectivePriorityClass;
+        PsSetProcessPriorityByClass(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground);
+    }
     if (Job->EffectiveLimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
     {
         (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Instance.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
@@ -1681,7 +1696,9 @@ PspSetJobLimitsBasicOrExtended(
         /* https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information:
            "The calling process must enable the SE_INC_BASE_PRIORITY_NAME
            privilege" */
-        if (SeCheckPrivilegedObject(SeIncreaseBasePriorityPrivilege,
+        if ((ExtendedLimit->BasicLimitInformation.PriorityClass != PROCESS_PRIORITY_CLASS_HIGH &&
+             ExtendedLimit->BasicLimitInformation.PriorityClass != PROCESS_PRIORITY_CLASS_REALTIME) ||
+            SeCheckPrivilegedObject(SeIncreaseBasePriorityPrivilege,
                                     Job,
                                     JOB_OBJECT_SET_ATTRIBUTES,
                                     PreviousMode))
