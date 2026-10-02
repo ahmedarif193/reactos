@@ -615,7 +615,7 @@ IntImmActivateLayout(
     else
     {
         /* Remember old keyboard layout to switch back for Chinese IMEs */
-        pti->hklPrev = pti->KeyboardLayout->hkl;
+        pti->hklPrev = pti->KeyboardLayout ? pti->KeyboardLayout->hkl : NULL;
 
         if (pti->spDefaultImc)
         {
