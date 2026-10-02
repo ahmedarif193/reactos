@@ -1133,8 +1133,8 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
                                                    DISPATCHER_CONTEXT_ARM64 *dispatch )
 #endif
 {
-    const SCOPE_TABLE *table = dispatch_handler_data(dispatch);
-    ULONG_PTR base = dispatch_image_base(dispatch);
+    const SCOPE_TABLE *table = dispatch->HandlerData;
+    ULONG_PTR base = dispatch->ImageBase;
     ULONG_PTR pc = dispatch->ControlPc;
     unsigned int i;
     void *handler;
@@ -1222,8 +1222,8 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
 EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *frame,
                                                    CONTEXT *context, DISPATCHER_CONTEXT *dispatch )
 {
-    const SCOPE_TABLE *table = dispatch_handler_data(dispatch);
-    ULONG_PTR base = dispatch_image_base(dispatch);
+    const SCOPE_TABLE *table = dispatch->HandlerData;
+    ULONG_PTR base = dispatch->ImageBase;
     ULONG_PTR pc = dispatch->ControlPc;
     unsigned int i;
     void *handler;
@@ -1307,8 +1307,8 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
 EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *frame, CONTEXT *context,
                                                    DISPATCHER_CONTEXT *dispatch )
 {
-    const SCOPE_TABLE *table = dispatch_handler_data(dispatch);
-    ULONG_PTR base = dispatch_image_base(dispatch);
+    const SCOPE_TABLE *table = dispatch->HandlerData;
+    ULONG_PTR base = dispatch->ImageBase;
     ULONG_PTR pc = dispatch->ControlPc;
     unsigned int i;
 
