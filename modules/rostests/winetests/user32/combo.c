@@ -799,7 +799,13 @@ static void test_listbox_size(DWORD style)
 
         todo_wine_if(info_test->todo)
         ok(expected_height_list == height_list,
+#ifdef __REACTOS__
+           "Test %d, style %#lx, expected list height %d, got %d, item %d, text %s, list %s, client %s\n",
+           test, style, expected_height_list, height_list, height_item, wine_dbgstr_rect(&cbInfo.rcItem),
+           wine_dbgstr_rect(&rect_list_complete), wine_dbgstr_rect(&rect_list_client));
+#else
            "Test %d, expected list height to be %d, got %d\n", test, expected_height_list, height_list);
+#endif
 
         DestroyWindow(hCombo);
     }

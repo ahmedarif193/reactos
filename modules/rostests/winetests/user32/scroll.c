@@ -768,6 +768,10 @@ static void test_subclass(void)
 
     hwnd = CreateWindowExA( 0, "MyTestSubclass2", "Scroll", WS_OVERLAPPEDWINDOW,
                             CW_USEDEFAULT, CW_USEDEFAULT, 100, 100, NULL, NULL, GetModuleHandleA(NULL), 0 );
+#ifdef __REACTOS__
+    ok(!hwnd, "Created scrollbar subclass with insufficient extra bytes: %p\n", hwnd);
+    if (hwnd) DestroyWindow(hwnd);
+#else
     ok(hwnd != NULL, "Failed to create window: %lu\n", GetLastError());
 
     memset(&scroll_info, 0xcc, sizeof(scroll_info));
@@ -783,6 +787,7 @@ static void test_subclass(void)
     ok(set_scrollinfo.nPos == 1, "nPos = %x\n", set_scrollinfo.nPos);
 
     DestroyWindow(hwnd);
+#endif
 }
 
 static void read_process(HWND hMainWnd)

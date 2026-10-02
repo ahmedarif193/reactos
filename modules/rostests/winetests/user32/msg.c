@@ -2803,7 +2803,9 @@ static BOOL messages_equal(const struct message *expected, const struct recvd_me
     int todo = (expected->flags & msg_todo) != 0;
     int msg_wine_only = (expected->flags & wine_only) != 0;
     const int message_type_flags = hook|winevent_hook|kbd_hook;
+#ifndef __REACTOS__
     static int todo_reported;
+#endif
 
     if (!todo && can_skip_message(expected))
         expect_equal = FALSE;
@@ -2815,7 +2817,11 @@ static BOOL messages_equal(const struct message *expected, const struct recvd_me
     }
 
     if (!expected->message || !actual->message) {
+#ifdef __REACTOS__
+        if (expect_equal)
+#else
         if (expect_equal && (!todo || !todo_reported++))
+#endif
             todo_wine_if(todo || msg_wine_only)
             ok_( file, line) (msg_wine_only, "the msg sequence is not complete: expected %s %04x - actual %s %04x\n",
                               message_type_name(expected->flags), expected->message, message_type_name(actual->flags), actual->message);
@@ -2825,7 +2831,11 @@ static BOOL messages_equal(const struct message *expected, const struct recvd_me
     if (expected->message != actual->message ||
         (expected->flags & message_type_flags) != (actual->flags & message_type_flags))
     {
+#ifdef __REACTOS__
+        if (expect_equal)
+#else
         if (expect_equal && (!todo || !todo_reported++))
+#endif
             todo_wine_if(todo || msg_wine_only)
             ok_( file, line) (msg_wine_only, "the %s 0x%04x was expected, but got %s 0x%04x instead\n",
                               message_type_name(expected->flags), expected->message, message_type_name(actual->flags), actual->message);
@@ -4298,13 +4308,94 @@ static void mdi_register_classes(void)
     register_class(&cls);
 }
 
+#ifdef __REACTOS__
+static void test_mdi_menu_resources(void)
+{
+    CLIENTCREATESTRUCT client_cs = {0, MDI_FIRST_CHILD_ID};
+    HWND frame, child, active;
+    HMENU menu;
+    HICON icon;
+    LONG_PTR child_id;
+    DWORD before = 0, after;
+    unsigned int i;
+
+    mdi_client = NULL;
+    menu = CreateMenu();
+    ok(!!menu, "Failed to create MDI frame menu, error %lu.\n", GetLastError());
+    if (!menu) return;
+    frame = CreateWindowA("MDI_frame_class", "MDI menu resources", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                          100, 100, 400, 300, NULL, menu, GetModuleHandleA(NULL), NULL);
+    ok(!!frame, "Failed to create MDI frame, error %lu.\n", GetLastError());
+    if (!frame)
+    {
+        DestroyMenu(menu);
+        return;
+    }
+    mdi_client = CreateWindowA("MDI_client_class", NULL, WS_CHILD | WS_VISIBLE,
+                               0, 0, 300, 200, frame, NULL, GetModuleHandleA(NULL), &client_cs);
+    ok(!!mdi_client, "Failed to create MDI client, error %lu.\n", GetLastError());
+    if (!mdi_client) goto done;
+    child = CreateWindowExA(WS_EX_MDICHILD, "MDI_child_class", "MDI child",
+                            WS_CHILD | WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+                            0, 0, 100, 100, mdi_client, NULL, GetModuleHandleA(NULL), NULL);
+    ok(!!child, "Failed to create MDI child, error %lu.\n", GetLastError());
+    if (!child) goto done;
+    icon = LoadIconA(NULL, (LPCSTR)IDI_APPLICATION);
+    ok(!!icon, "Failed to load shared MDI icon, error %lu.\n", GetLastError());
+    if (!icon) goto done;
+    SendMessageA(child, WM_SETICON, ICON_SMALL, (LPARAM)icon);
+
+    SetLastError(0);
+    child_id = SetWindowLongPtrW(child, GWLP_ID, MDI_FIRST_CHILD_ID + 1);
+    ok(child_id || !GetLastError(), "Failed to change MDI child identifier, error %lu.\n", GetLastError());
+    ok(GetWindowLongPtrW(child, GWLP_ID) == MDI_FIRST_CHILD_ID + 1,
+       "MDI child identifier was not changed.\n");
+    SendMessageA(frame, WM_COMMAND, MDI_FIRST_CHILD_ID, 0);
+    active = (HWND)SendMessageA(mdi_client, WM_MDIGETACTIVE, 0, 0);
+    ok(active == child, "Unknown child command changed active child to %p.\n", active);
+    ok(IsWindow(child), "Unknown child command destroyed the MDI child.\n");
+    SetWindowLongPtrW(child, GWLP_ID, child_id);
+    flush_sequence();
+
+    for (i = 0; i < 16; ++i)
+    {
+        if (i == 8)
+        {
+            SetLastError(0);
+            before = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+            ok(before || !GetLastError(), "Failed to count GDI objects, error %lu.\n", GetLastError());
+        }
+        ShowWindow(child, SW_MAXIMIZE);
+        ok(IsZoomed(child), "MDI child was not maximized at iteration %u.\n", i);
+        ok(GetMenuItemCount(menu) > 0, "Maximized MDI child has no frame menu items at iteration %u.\n", i);
+        ShowWindow(child, SW_RESTORE);
+        ok(!IsZoomed(child), "MDI child was not restored at iteration %u.\n", i);
+        ok(!GetMenuItemCount(menu), "Restored MDI child left frame menu items at iteration %u.\n", i);
+        flush_sequence();
+    }
+    SetLastError(0);
+    after = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+    ok(after || !GetLastError(), "Failed to count GDI objects, error %lu.\n", GetLastError());
+    ok(after <= before, "MDI maximize/restore leaked GDI objects: %lu -> %lu.\n", before, after);
+
+done:
+    DestroyWindow(frame);
+    mdi_client = NULL;
+    flush_sequence();
+}
+
+#endif
 static void test_mdi_messages(void)
 {
     MDICREATESTRUCTA mdi_cs;
     CLIENTCREATESTRUCT client_cs;
     HWND mdi_frame, mdi_child, mdi_child2, active_child;
     BOOL zoomed;
+#ifdef __REACTOS__
+    RECT rc, child_rect;
+#else
     RECT rc;
+#endif
     HMENU hMenu = CreateMenu();
     LONG val;
 
@@ -4818,6 +4909,17 @@ static void test_mdi_messages(void)
     ok(mdi_child != 0, "MDI child creation failed\n");
     ok_sequence(WmCreateMDIchildVisibleMaxSeq3, "WM_MDICREATE for maximized visible MDI child window", TRUE);
 
+#ifdef __REACTOS__
+    if (GetClientRect(mdi_client, &rc) && GetClientRect(mdi_child, &child_rect))
+    {
+        MapWindowPoints(mdi_child, mdi_client, (POINT *)&child_rect, 2);
+        ok(EqualRect(&child_rect, &rc), "Maximized child client %s does not fill MDI client %s.\n",
+           wine_dbgstr_rect(&child_rect), wine_dbgstr_rect(&rc));
+    }
+    else
+        ok(0, "Failed to obtain MDI client rectangles, error %lu.\n", GetLastError());
+
+#endif
     ok(GetMenuItemID(hMenu, GetMenuItemCount(hMenu) - 1) == SC_CLOSE, "SC_CLOSE menu item not found\n");
 
     active_child = (HWND)SendMessageA(mdi_client, WM_MDIGETACTIVE, 0, (LPARAM)&zoomed);
@@ -4883,6 +4985,10 @@ static void test_mdi_messages(void)
 
     DestroyWindow(mdi_frame);
     ok_sequence(WmDestroyMDIframeSeq, "Destroy MDI frame window", FALSE);
+#ifdef __REACTOS__
+
+    test_mdi_menu_resources();
+#endif
 }
 /************************* End of MDI test **********************************/
 
@@ -5325,6 +5431,10 @@ static void test_showwindow(void)
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     flush_events();
 #ifdef __REACTOS__
+    ok(GetActiveWindow() == hwnd2, "Nonactivating restore changed the active window\n");
+    ok(GetFocus() == hwnd2, "Nonactivating restore changed the focus window\n");
+#endif
+#ifdef __REACTOS__
     if (GetNTVersion() >= _WIN32_WINNT_VISTA)
 #endif
     ok_sequence(WmShowNoActivateMinimizedOverlappedSeq,
@@ -5666,6 +5776,10 @@ static void test_msg_setpos_(const struct message *expected_list, UINT flags, BO
 {
     HWND hwnd;
 
+#ifdef __REACTOS__
+    trace("Testing SetWindowPos flags %#x.\n", flags);
+
+#endif
     flush_events();
     flush_sequence();
     hwnd = CreateWindowExA(0, "TestWindowClass", "Test Popup", WS_POPUP,
@@ -8721,8 +8835,20 @@ static void test_paint_messages(void)
      */
     SetRectEmpty( &rect );
     ok(InvalidateRect(0, &rect, FALSE), "InvalidateRect(0, &rc, FALSE) failed\n");
+#ifdef __REACTOS__
+    check_update_rgn( hwnd, 0 );
+    ok_sequence( WmEmptySeq, "InvalidateRect(NULL, empty, FALSE)", FALSE );
+    flush_events();
+    ok_sequence( WmEmptySeq, "Paint after invalidating an empty rectangle", FALSE );
+
+    ok(InvalidateRect(hwnd, NULL, FALSE), "InvalidateRect(hwnd, NULL, FALSE) failed\n");
+#endif
     check_update_rgn( hwnd, hrgn );
+#ifdef __REACTOS__
+    ok_sequence( WmEmptySeq, "InvalidateRect(hwnd, NULL, FALSE)", FALSE );
+#else
     ok_sequence( WmInvalidateErase, "InvalidateErase", FALSE );
+#endif
     flush_events();
     ok_sequence( WmPaint, "Paint", FALSE );
     RedrawWindow( hwnd, NULL, NULL, RDW_VALIDATE );
@@ -13083,10 +13209,20 @@ static const struct message ScrollWindowExSeq[] = {
     { 0 }
 };
 
+#ifdef __REACTOS__
+static const struct message ScrollWindowExPartialSeq[] = {
+    { WM_MOVE, sent|optional },
+    { 0 }
+};
+
+#endif
 static void test_scrollwindowex(void)
 {
     HWND hwnd, hchild;
     RECT rect={0,0,130,130};
+#ifdef __REACTOS__
+    RECT child_before, child_after;
+#endif
     int ret;
 
     hwnd = CreateWindowExA(0, "TestWindowClass", "Test Scroll",
@@ -13130,13 +13266,24 @@ static void test_scrollwindowex(void)
 
     /* now scroll the child window as well */
     if (winetest_debug > 1) trace("start scroll\n");
+#ifdef __REACTOS__
+    GetWindowRect(hchild, &child_before);
+#endif
     ret = ScrollWindowEx( hwnd, 10, 10, &rect, NULL, NULL, NULL,
             SW_SCROLLCHILDREN|SW_ERASE|SW_INVALIDATE);
     todo_wine
     ok(ret == COMPLEXREGION, "got %d\n", ret);
     /* wine sends WM_POSCHANGING, WM_POSCHANGED messages */
     /* windows sometimes a WM_MOVE */
+#ifdef __REACTOS__
+    ok_sequence(ScrollWindowExPartialSeq, "ScrollWindowEx", TRUE);
+    GetWindowRect(hchild, &child_after);
+    OffsetRect(&child_before, 10, 10);
+    ok(EqualRect(&child_before, &child_after), "Child position %s, expected %s\n",
+       wine_dbgstr_rect(&child_after), wine_dbgstr_rect(&child_before));
+#else
     ok_sequence(WmEmptySeq, "ScrollWindowEx", TRUE);
+#endif
     if (winetest_debug > 1) trace("end scroll\n");
     flush_sequence();
     flush_events();
@@ -13168,10 +13315,21 @@ static void test_scrollwindowex(void)
     flush_sequence();
     flush_events();
 
+#ifdef __REACTOS__
+    GetWindowRect(hchild, &child_before);
+#endif
     ret = ScrollWindowEx(hwnd, 10, 10, &rect, NULL, NULL, NULL,
             SW_SCROLLCHILDREN|SW_ERASE|SW_INVALIDATE);
     ok(ret == NULLREGION, "got %d\n", ret);
+#ifdef __REACTOS__
+    ok_sequence(ScrollWindowExPartialSeq, "ScrollWindowEx", TRUE);
+    GetWindowRect(hchild, &child_after);
+    OffsetRect(&child_before, 10, 10);
+    ok(EqualRect(&child_before, &child_after), "Hidden child position %s, expected %s\n",
+       wine_dbgstr_rect(&child_after), wine_dbgstr_rect(&child_before));
+#else
     ok_sequence(WmEmptySeq, "ScrollWindowEx", TRUE);
+#endif
     flush_events();
     flush_sequence();
 
@@ -13182,6 +13340,17 @@ static void test_scrollwindowex(void)
     flush_events();
     flush_sequence();
 
+#ifdef __REACTOS__
+    GetWindowRect(hchild, &child_before);
+    SetRect(&rect, 0, 0, 1, 1);
+    ret = ScrollWindowEx(hwnd, 10, 10, &rect, NULL, NULL, NULL, SW_SCROLLCHILDREN);
+    ok(ret == NULLREGION, "got %d\n", ret);
+    GetWindowRect(hchild, &child_after);
+    ok(EqualRect(&child_before, &child_after), "Nonintersecting child moved from %s to %s\n",
+       wine_dbgstr_rect(&child_before), wine_dbgstr_rect(&child_after));
+    ok_sequence(WmEmptySeq, "ScrollWindowEx outside child", FALSE);
+
+#endif
     ok(DestroyWindow(hchild), "failed to destroy window\n");
     ok(DestroyWindow(hwnd), "failed to destroy window\n");
     flush_sequence();
@@ -16379,6 +16548,182 @@ static const struct message WmCreateDialogParamSeq_4[] = {
     { 0 }
 };
 
+#ifdef __REACTOS__
+static HWND caret_visibility_window;
+static UINT caret_hide_events;
+static UINT caret_hidden_flags;
+static BOOL caret_destroy_on_hide;
+static enum
+{
+    CARET_REENTER_NONE,
+    CARET_REENTER_CREATE,
+    CARET_REENTER_MOVE,
+    CARET_REENTER_CREATE_SHOW
+} caret_reenter_action;
+static UINT caret_reenter_calls;
+
+static void CALLBACK caret_visibility_hook(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
+                                          LONG object, LONG child, DWORD thread, DWORD time)
+{
+    GUITHREADINFO info = { sizeof(info) };
+
+    if (hwnd != caret_visibility_window || object != OBJID_CARET || event != EVENT_OBJECT_HIDE)
+        return;
+    ++caret_hide_events;
+    if (GetGUIThreadInfo(GetCurrentThreadId(), &info))
+        caret_hidden_flags |= info.flags & GUI_CARETBLINKING;
+    if (caret_reenter_action && ++caret_reenter_calls == 1)
+    {
+        if (caret_reenter_action == CARET_REENTER_MOVE)
+            SetCaretPos(30, 10);
+        else
+        {
+            CreateCaret(hwnd, NULL, 2, 8);
+            if (caret_reenter_action == CARET_REENTER_CREATE_SHOW)
+                ShowCaret(hwnd);
+        }
+    }
+    if (caret_destroy_on_hide)
+    {
+        caret_destroy_on_hide = FALSE;
+        DestroyWindow(hwnd);
+    }
+}
+
+static void test_caret_visibility(void)
+{
+    const COLORREF background = RGB(0x12, 0x34, 0x56);
+    HWND hwnd;
+    HDC dc;
+    UINT blink_time = GetCaretBlinkTime();
+    COLORREF color;
+    DWORD deadline;
+    BOOL stayed_hidden;
+    HWINEVENTHOOK hook = NULL;
+    MSG msg;
+
+    hwnd = CreateWindowExA(0, "TestWindowClass", "Caret visibility",
+                          WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                          50, 50, 120, 120, NULL, NULL, NULL, NULL);
+    ok(hwnd != NULL, "CreateWindowEx failed: %lu\n", GetLastError());
+    if (!hwnd) return;
+    caret_visibility_window = hwnd;
+    caret_hide_events = 0;
+    caret_hidden_flags = 0;
+    caret_destroy_on_hide = FALSE;
+    caret_reenter_action = CARET_REENTER_NONE;
+    if (pSetWinEventHook)
+        hook = pSetWinEventHook(EVENT_OBJECT_HIDE, EVENT_OBJECT_HIDE, GetModuleHandleA(NULL),
+                               caret_visibility_hook, GetCurrentProcessId(), GetCurrentThreadId(),
+                               WINEVENT_INCONTEXT);
+    SetForegroundWindow(hwnd);
+    UpdateWindow(hwnd);
+    flush_events();
+    dc = GetDC(hwnd);
+    ok(dc != NULL, "GetDC failed: %lu\n", GetLastError());
+    if (dc)
+    {
+        ok(SetCaretBlinkTime(100), "SetCaretBlinkTime failed: %lu\n", GetLastError());
+        ok(CreateCaret(hwnd, NULL, 2, 8), "CreateCaret failed: %lu\n", GetLastError());
+        ok(SetCaretPos(10, 10), "SetCaretPos failed: %lu\n", GetLastError());
+        color = SetPixel(dc, 10, 10, background);
+        ok(color == background, "SetPixel returned %#lx\n", color);
+        stayed_hidden = TRUE;
+        deadline = GetTickCount() + 250;
+        do
+        {
+            MsgWaitForMultipleObjects(0, NULL, FALSE, 20, QS_ALLINPUT);
+            while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
+            if (GetPixel(dc, 10, 10) != background) stayed_hidden = FALSE;
+        } while ((INT)(deadline - GetTickCount()) > 0);
+        ok(stayed_hidden, "A newly created hidden caret flashed\n");
+        ok(ShowCaret(hwnd), "ShowCaret failed: %lu\n", GetLastError());
+        color = GetPixel(dc, 10, 10);
+        ok(color == (background ^ 0xffffff), "Caret was not drawn immediately: %#lx\n", color);
+        ok(HideCaret(hwnd), "HideCaret failed: %lu\n", GetLastError());
+        color = GetPixel(dc, 10, 10);
+        ok(color == background, "Caret was not erased: %#lx\n", color);
+        if (hook)
+            ok(caret_hide_events == 1, "Expected one caret hide event, got %u\n", caret_hide_events);
+        ok(ShowCaret(hwnd), "ShowCaret failed: %lu\n", GetLastError());
+        deadline = GetTickCount() + 1000;
+        do
+        {
+            MsgWaitForMultipleObjects(0, NULL, FALSE, 20, QS_ALLINPUT);
+            while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
+            color = GetPixel(dc, 10, 10);
+        } while (color != background && (INT)(deadline - GetTickCount()) > 0);
+        ok(color == background, "Caret did not blink off: %#lx\n", color);
+        if (hook)
+            ok(caret_hide_events == 1, "Blinking generated %u caret hide events\n", caret_hide_events - 1);
+        ok(HideCaret(hwnd), "HideCaret during off phase failed: %lu\n", GetLastError());
+        if (hook)
+        {
+            ok(caret_hide_events == 2, "Expected off-phase caret hide event, got %u total\n", caret_hide_events);
+            ok(!caret_hidden_flags, "Caret was still logically visible during its hide event\n");
+        }
+        color = GetPixel(dc, 10, 10);
+        ok(color == background, "Off-phase HideCaret drew the caret: %#lx\n", color);
+        DestroyCaret();
+        SetCaretBlinkTime(blink_time);
+        ReleaseDC(hwnd, dc);
+    }
+    if (hook)
+    {
+        UINT action, x;
+        POINT pos = {0};
+
+        dc = GetDC(hwnd);
+        ok(dc != NULL, "GetDC failed: %lu\n", GetLastError());
+        SetCaretBlinkTime(10000);
+        for (action = CARET_REENTER_CREATE; action <= CARET_REENTER_CREATE_SHOW; ++action)
+        {
+            ok(CreateCaret(hwnd, NULL, 2, 8), "CreateCaret failed: %lu\n", GetLastError());
+            ok(SetCaretPos(10, 10), "SetCaretPos failed: %lu\n", GetLastError());
+            if (dc)
+                for (x = 10; x <= 30; x += 10) SetPixel(dc, x, 10, background);
+            ok(ShowCaret(hwnd), "ShowCaret failed: %lu\n", GetLastError());
+            caret_reenter_calls = 0;
+            caret_reenter_action = action;
+            if (action == CARET_REENTER_MOVE)
+                ok(SetCaretPos(20, 10), "SetCaretPos failed: %lu\n", GetLastError());
+            else
+                CreateCaret(hwnd, NULL, 2, 8);
+            caret_reenter_action = CARET_REENTER_NONE;
+            ok(caret_reenter_calls == (action == CARET_REENTER_MOVE ? 0 : 1),
+               "Caret action %u reentered its HIDE hook %u times\n",
+               action, caret_reenter_calls);
+            if (action == CARET_REENTER_MOVE)
+            {
+                ok(GetCaretPos(&pos), "GetCaretPos failed: %lu\n", GetLastError());
+                ok(pos.x == 20 && pos.y == 10, "Expected caret at 20,10, got %ld,%ld\n", pos.x, pos.y);
+            }
+            HideCaret(hwnd);
+            if (dc)
+                for (x = 10; x <= 30; x += 10)
+                {
+                    color = GetPixel(dc, x, 10);
+                    ok(color == background, "Caret action %u left a pixel at %u: %#lx\n", action, x, color);
+                }
+            DestroyCaret();
+        }
+        SetCaretBlinkTime(blink_time);
+        if (dc) ReleaseDC(hwnd, dc);
+        ok(CreateCaret(hwnd, NULL, 2, 8), "CreateCaret failed: %lu\n", GetLastError());
+        ok(ShowCaret(hwnd), "ShowCaret failed: %lu\n", GetLastError());
+        caret_destroy_on_hide = TRUE;
+        HideCaret(hwnd);
+        ok(!IsWindow(hwnd), "Caret hide hook did not destroy its window\n");
+        caret_destroy_on_hide = FALSE;
+    }
+    if (hook) pUnhookWinEvent(hook);
+    caret_visibility_window = NULL;
+    DestroyWindow(hwnd);
+    flush_events();
+    flush_sequence();
+}
+
+#endif
 static void test_dialog_messages(void)
 {
     WNDCLASSA cls;
@@ -19366,16 +19711,41 @@ static DWORD CALLBACK wait_idle_thread( void *arg )
 static void test_WaitForInputIdle( char *argv0 )
 {
     char path[MAX_PATH];
+#ifdef __REACTOS__
+    char case_filter[32], *filter_end;
+#endif
     PROCESS_INFORMATION pi;
     STARTUPINFOA startup;
     BOOL ret;
     HANDLE start_event, end_event, thread;
     unsigned int i;
+#ifdef __REACTOS__
+    unsigned int first_case = 0, last_case = ARRAY_SIZE(wait_idle_expect);
+#endif
     DWORD id;
     const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)GetModuleHandleA(0);
     const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)((const char *)dos + dos->e_lfanew);
     BOOL console_app = (nt->OptionalHeader.Subsystem != IMAGE_SUBSYSTEM_WINDOWS_GUI);
 
+#ifdef __REACTOS__
+    id = GetEnvironmentVariableA("ROS_MSG_IDLE_CASE", case_filter, sizeof(case_filter));
+    if (id >= sizeof(case_filter))
+    {
+        ok(FALSE, "ROS_MSG_IDLE_CASE exceeds the filter buffer.\n");
+        return;
+    }
+    if (id)
+    {
+        first_case = strtoul(case_filter, &filter_end, 10);
+        if (filter_end == case_filter || *filter_end || first_case >= last_case)
+        {
+            ok(FALSE, "Invalid ROS_MSG_IDLE_CASE.\n");
+            return;
+        }
+        last_case = first_case + 1;
+    }
+
+#endif
     if (console_app)  /* build the test with -mwindows for better coverage */
         trace( "not built as a GUI app, WaitForInputIdle may not be fully tested\n" );
 
@@ -19391,7 +19761,11 @@ static void test_WaitForInputIdle( char *argv0 )
 
     thread = CreateThread( NULL, 0, wait_idle_thread, NULL, 0, &id );
 
+#ifdef __REACTOS__
+    for (i = first_case; i < last_case; i++)
+#else
     for (i = 0; i < ARRAY_SIZE(wait_idle_expect); i++)
+#endif
     {
         ResetEvent( start_event );
         ResetEvent( end_event );
@@ -20988,6 +21362,74 @@ static void test_DoubleSetCapture(void)
     DestroyWindow(hwnd);
 }
 
+#ifdef __REACTOS__
+static void check_minimized_activation(HWND hwnd, BOOL active)
+{
+    UINT activate = 0, ncactivate = 0;
+    WPARAM expected = MAKEWPARAM(active ? WA_ACTIVE : WA_INACTIVE, 0x20);
+    int i;
+
+    EnterCriticalSection(&sequence_cs);
+    for (i = 0; i < sequence_cnt; ++i)
+    {
+        if (sequence[i].hwnd != hwnd || !(sequence[i].flags & sent)) continue;
+        if (sequence[i].message == WM_ACTIVATE)
+        {
+            ++activate;
+            ok(sequence[i].wParam == expected, "Minimized WM_ACTIVATE: expected %#Ix, got %#Ix\n",
+               expected, sequence[i].wParam);
+        }
+        if (sequence[i].message == WM_NCACTIVATE)
+        {
+            ++ncactivate;
+            ok(sequence[i].wParam == (active ? expected : 0),
+               "Minimized WM_NCACTIVATE: expected %#Ix, got %#Ix\n",
+               active ? expected : 0, sequence[i].wParam);
+        }
+    }
+    LeaveCriticalSection(&sequence_cs);
+    ok(activate == 1, "Expected one WM_ACTIVATE, got %u\n", activate);
+    ok(ncactivate == 1, "Expected one WM_NCACTIVATE, got %u\n", ncactivate);
+}
+
+static void test_minimized_activation(void)
+{
+    HWND hwnd, other, previous;
+
+    hwnd = CreateWindowExA(0, "TestWindowClass", "Minimized activation",
+                           WS_OVERLAPPEDWINDOW | WS_VISIBLE, 100, 100, 200, 200,
+                           NULL, NULL, NULL, NULL);
+    other = CreateWindowExA(0, "TestWindowClass", "Other activation",
+                            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 350, 100, 200, 200,
+                            NULL, NULL, NULL, NULL);
+    ok(hwnd != NULL && other != NULL, "Could not create activation windows\n");
+    if (!hwnd || !other) goto done;
+    SetForegroundWindow(other);
+    ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+    flush_events();
+    ok(IsIconic(hwnd), "Window is not minimized\n");
+    ok(GetActiveWindow() == other, "Other window is not active\n");
+    flush_sequence();
+
+    previous = SetActiveWindow(hwnd);
+    ok(previous == other, "Unexpected previous active window %p\n", previous);
+    ok(GetActiveWindow() == hwnd, "Minimized window is not active\n");
+    ok(IsIconic(hwnd), "Activating the minimized window restored it\n");
+    check_minimized_activation(hwnd, TRUE);
+    flush_sequence();
+
+    previous = SetActiveWindow(other);
+    ok(previous == hwnd, "Unexpected previous active window %p\n", previous);
+    check_minimized_activation(hwnd, FALSE);
+
+done:
+    if (hwnd) DestroyWindow(hwnd);
+    if (other) DestroyWindow(other);
+    flush_events();
+    flush_sequence();
+}
+
+#endif
 static const struct message WmRestoreMinimizedSeq[] =
 {
     { HCBT_ACTIVATE, hook },
@@ -21583,6 +22025,37 @@ static void test_defwinproc_wm_print(void)
     DestroyWindow(hwnd);
 }
 
+#ifdef __REACTOS__
+static BOOL msg_test_selected(const char *name)
+{
+    char filter[2048];
+    const char *start, *end;
+    DWORD size = GetEnvironmentVariableA("ROS_MSG_TESTS", filter, sizeof(filter));
+    BOOL selected = !size;
+
+    if (size >= sizeof(filter))
+    {
+        ok(FALSE, "ROS_MSG_TESTS exceeds the filter buffer.\n");
+        return FALSE;
+    }
+    if (size)
+    {
+        for (start = filter; *start; start = *end ? end + 1 : end)
+        {
+            end = strchr(start, ',');
+            if (!end) end = start + strlen(start);
+            if (strlen(name) == end - start && !strncmp(start, name, end - start))
+            {
+                selected = TRUE;
+                break;
+            }
+        }
+    }
+    if (selected) trace("Running %s...\n", name);
+    return selected;
+}
+
+#endif
 START_TEST(msg)
 {
     char **test_argv;
@@ -21636,6 +22109,48 @@ START_TEST(msg)
 
     start_foreground_window_thread();
 
+#ifdef __REACTOS__
+    if (msg_test_selected("test_winevents")) test_winevents();
+    if (msg_test_selected("test_SendMessage_other_thread")) test_SendMessage_other_thread();
+    if (msg_test_selected("test_setparent_status")) test_setparent_status();
+    if (msg_test_selected("test_InSendMessage")) test_InSendMessage();
+    if (msg_test_selected("test_SetFocus")) test_SetFocus();
+    if (msg_test_selected("test_radiobutton_focus")) test_radiobutton_focus();
+    if (msg_test_selected("test_SetParent")) test_SetParent();
+    if (msg_test_selected("test_PostMessage")) test_PostMessage();
+    if (msg_test_selected("test_broadcast")) test_broadcast();
+    if (msg_test_selected("test_ShowWindow")) test_ShowWindow();
+    if (msg_test_selected("test_PeekMessage")) test_PeekMessage();
+    if (msg_test_selected("test_PeekMessage2")) test_PeekMessage2();
+    if (msg_test_selected("test_PeekMessage3")) test_PeekMessage3();
+    if (msg_test_selected("test_WaitForInputIdle")) test_WaitForInputIdle( test_argv[0] );
+    if (msg_test_selected("test_scrollwindowex")) test_scrollwindowex();
+    if (msg_test_selected("test_messages")) test_messages();
+    if (msg_test_selected("test_setwindowpos")) test_setwindowpos();
+    if (msg_test_selected("test_showwindow")) test_showwindow();
+    if (msg_test_selected("invisible_parent_tests")) invisible_parent_tests();
+    if (msg_test_selected("test_mdi_messages")) test_mdi_messages();
+    if (msg_test_selected("test_button_messages")) test_button_messages();
+    if (msg_test_selected("test_button_bm_get_set_image")) test_button_bm_get_set_image();
+    if (msg_test_selected("test_button_style")) test_button_style();
+    if (msg_test_selected("test_autoradio_BM_CLICK")) test_autoradio_BM_CLICK();
+    if (msg_test_selected("test_autoradio_kbd_move")) test_autoradio_kbd_move();
+    if (msg_test_selected("test_static_messages")) test_static_messages();
+    if (msg_test_selected("test_listbox_messages")) test_listbox_messages();
+    if (msg_test_selected("test_combobox_messages")) test_combobox_messages();
+    if (msg_test_selected("test_wmime_keydown_message")) test_wmime_keydown_message();
+    if (msg_test_selected("test_paint_messages")) test_paint_messages();
+    if (msg_test_selected("test_swp_paint_regions")) run_in_temp_desktop(test_swp_paint_regions);
+    if (msg_test_selected("test_swp_paint_region_on_show")) run_in_temp_desktop(test_swp_paint_region_on_show);
+    if (msg_test_selected("test_swp_paint_region_on_extend_zerosize")) run_in_temp_desktop(test_swp_paint_region_on_extend_zerosize);
+    if (msg_test_selected("test_hvredraw")) run_in_temp_desktop(test_hvredraw);
+    if (msg_test_selected("test_interthread_messages")) test_interthread_messages();
+    if (msg_test_selected("test_message_conversion")) test_message_conversion();
+    if (msg_test_selected("test_accelerators")) test_accelerators();
+    if (msg_test_selected("test_timers")) test_timers();
+    if (msg_test_selected("test_timers_no_wnd")) test_timers_no_wnd();
+    if (msg_test_selected("test_timers_exceptions")) test_timers_exceptions();
+#else
     test_winevents();
     test_SendMessage_other_thread();
     test_setparent_status();
@@ -21676,11 +22191,32 @@ START_TEST(msg)
     test_timers();
     test_timers_no_wnd();
     test_timers_exceptions();
+#endif
     if (hCBT_hook)
     {
+#ifdef __REACTOS__
+        if (msg_test_selected("test_set_hook")) test_set_hook();
+        if (msg_test_selected("test_recursive_hook")) test_recursive_hook();
+#else
         test_set_hook();
         test_recursive_hook();
+#endif
     }
+#ifdef __REACTOS__
+    if (msg_test_selected("test_recursive_messages")) test_recursive_messages();
+    if (msg_test_selected("test_DestroyWindow")) test_DestroyWindow();
+    if (msg_test_selected("test_DispatchMessage")) test_DispatchMessage();
+    if (msg_test_selected("test_SendMessageTimeout")) test_SendMessageTimeout();
+    if (msg_test_selected("test_edit_messages")) test_edit_messages();
+    if (msg_test_selected("test_quit_message")) test_quit_message();
+    if (msg_test_selected("test_notify_message")) test_notify_message();
+    if (msg_test_selected("test_SetActiveWindow")) test_SetActiveWindow();
+    if (msg_test_selected("test_minimized_activation")) test_minimized_activation();
+    if (msg_test_selected("test_restore_messages")) test_restore_messages();
+    if (msg_test_selected("test_invalid_window")) test_invalid_window();
+    if (msg_test_selected("test_menu_messages")) test_menu_messages();
+    if (msg_test_selected("test_paintingloop")) test_paintingloop();
+#else
     test_recursive_messages();
     test_DestroyWindow();
     test_DispatchMessage();
@@ -21693,10 +22229,23 @@ START_TEST(msg)
     test_invalid_window();
     test_menu_messages();
     test_paintingloop();
+#endif
 
     if (!pTrackMouseEvent)
         win_skip("TrackMouseEvent is not available\n");
     else
+#ifdef __REACTOS__
+        if (msg_test_selected("test_TrackMouseEvent")) test_TrackMouseEvent();
+
+    if (msg_test_selected("test_SetWindowRgn")) test_SetWindowRgn();
+    if (msg_test_selected("test_sys_menu")) test_sys_menu();
+    if (msg_test_selected("test_caret_visibility")) test_caret_visibility();
+    if (msg_test_selected("test_dialog_messages")) test_dialog_messages();
+    if (msg_test_selected("test_EndDialog")) test_EndDialog();
+    if (msg_test_selected("test_nullCallback")) test_nullCallback();
+    if (msg_test_selected("test_dbcs_wm_char")) test_dbcs_wm_char();
+    if (msg_test_selected("test_unicode_wm_char")) test_unicode_wm_char();
+#else
         test_TrackMouseEvent();
 
     test_SetWindowRgn();
@@ -21706,32 +22255,34 @@ START_TEST(msg)
     test_nullCallback();
     test_dbcs_wm_char();
     test_unicode_wm_char();
+#endif
 #ifdef __REACTOS__
-    trace("Running test_defwinproc()...\n");
-    test_defwinproc();
-    test_defwinproc_wm_print();
-    trace("Running test_desktop_winproc()...\n");
-    test_desktop_winproc();
-    trace("Running test_clipboard_viewers()...\n");
-    test_clipboard_viewers();
-    trace("Running test_keyflags()...\n");
-    test_keyflags();
-    trace("Running test_hotkey()...\n");
-    test_hotkey();
-    trace("Running test_layered_window()...\n");
-    test_layered_window();
-    trace("Running test_TrackPopupMenu()...\n");
-    test_TrackPopupMenu();
-    trace("Running test_TrackPopupMenuEmpty()...\n");
-    test_TrackPopupMenuEmpty();
-    trace("Running test_DoubleSetCapture()...\n");
-    test_DoubleSetCapture();
-    trace("Running test_create_name()...\n");
-    test_create_name();
-    trace("Running test_hook_changing_window_proc()...\n");
-    test_hook_changing_window_proc();
-    trace("Running test_hook_cleanup()...\n");
-    test_hook_cleanup();
+    if (msg_test_selected("test_defwinproc")) test_defwinproc();
+    if (msg_test_selected("test_defwinproc_wm_print")) test_defwinproc_wm_print();
+    if (msg_test_selected("test_desktop_winproc")) test_desktop_winproc();
+    if (msg_test_selected("test_clipboard_viewers")) test_clipboard_viewers();
+    if (msg_test_selected("test_keyflags")) test_keyflags();
+    if (msg_test_selected("test_hotkey")) test_hotkey();
+    if (msg_test_selected("test_layered_window")) test_layered_window();
+    if (msg_test_selected("test_TrackPopupMenu")) test_TrackPopupMenu();
+    if (msg_test_selected("test_TrackPopupMenuEmpty")) test_TrackPopupMenuEmpty();
+    if (msg_test_selected("test_DoubleSetCapture")) test_DoubleSetCapture();
+    if (msg_test_selected("test_create_name")) test_create_name();
+    if (msg_test_selected("test_hook_changing_window_proc")) test_hook_changing_window_proc();
+    if (msg_test_selected("test_hook_cleanup")) test_hook_cleanup();
+#else
+#ifdef __REACTOS__
+    if (msg_test_selected("test_defwinproc")) test_defwinproc();
+    if (msg_test_selected("test_desktop_winproc")) test_desktop_winproc();
+    if (msg_test_selected("test_clipboard_viewers")) test_clipboard_viewers();
+    if (msg_test_selected("test_keyflags")) test_keyflags();
+    if (msg_test_selected("test_hotkey")) test_hotkey();
+    if (msg_test_selected("test_layered_window")) test_layered_window();
+    if (msg_test_selected("test_TrackPopupMenu")) test_TrackPopupMenu();
+    if (msg_test_selected("test_TrackPopupMenuEmpty")) test_TrackPopupMenuEmpty();
+    if (msg_test_selected("test_DoubleSetCapture")) test_DoubleSetCapture();
+    if (msg_test_selected("test_create_name")) test_create_name();
+    if (msg_test_selected("test_hook_changing_window_proc")) test_hook_changing_window_proc();
 #else
     test_defwinproc();
     test_desktop_winproc();
@@ -21745,14 +22296,20 @@ START_TEST(msg)
     test_create_name();
     test_hook_changing_window_proc();
 #endif
+#endif
     /* keep it the last test, under Windows it tends to break the tests
      * which rely on active/foreground windows being correct.
      */
+#ifdef __REACTOS__
+    if (msg_test_selected("test_SetForegroundWindow")) test_SetForegroundWindow();
+    if (msg_test_selected("test_WM_COPYDATA")) test_WM_COPYDATA(test_argv);
+#else
 #ifdef __REACTOS__
     trace("Running test_SetForegroundWindow()...");
 #endif
     test_SetForegroundWindow();
     test_WM_COPYDATA(test_argv);
+#endif
 
     UnhookWindowsHookEx(hCBT_hook);
     if (pUnhookWinEvent && hEvent_hook)
