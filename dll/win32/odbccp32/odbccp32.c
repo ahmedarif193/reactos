@@ -590,8 +590,16 @@ BOOL WINAPI SQLConfigDataSource(HWND hwnd, WORD request, LPCSTR driver, LPCSTR a
             TRACE("Calling ConfigDSNW\n");
 
             attr = SQLInstall_strdup_multi(attributes);
+#ifdef __REACTOS__
+            if (!attributes || attr)
+#else
             if(attr)
+#endif
                 ret = pConfigDSNW(hwnd, mapped_request, driverW, attr);
+#ifdef __REACTOS__
+            else
+                push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+#endif
             free(attr);
         }
     }
@@ -1113,22 +1121,225 @@ BOOL WINAPI SQLInstallDriver(LPCSTR lpszInfFile, LPCSTR lpszDriver,
                               pcbPathOut, ODBC_INSTALL_COMPLETE, &usage);
 }
 
+#ifdef __REACTOS__
+static BOOL get_install_path(const WCHAR *driver, const WCHAR *file_key, const WCHAR *path_in,
+                             WCHAR *path, DWORD *usage_count, BOOL *installed)
+{
+    HKEY root, key = NULL;
+    WCHAR *filename = NULL, *separator, *slash;
+    DWORD error = ODBC_ERROR_GENERAL_ERR;
+    DWORD size, capacity;
+    size_t len;
+    LONG status;
+    BOOL ret = FALSE;
+
+    *usage_count = 0;
+    *installed = FALSE;
+    if (!driver || !*driver)
+    {
+        error = ODBC_ERROR_INVALID_PARAM_SEQUENCE;
+        goto done;
+    }
+
+    status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\ODBC\\ODBCINST.INI", 0, KEY_READ, &root);
+    if (status == ERROR_FILE_NOT_FOUND) goto default_path;
+    if (status != ERROR_SUCCESS) goto done;
+    status = RegOpenKeyExW(root, driver, 0, KEY_READ, &key);
+    RegCloseKey(root);
+    if (status != ERROR_SUCCESS)
+    {
+        key = NULL;
+        if (status == ERROR_FILE_NOT_FOUND) goto default_path;
+        goto done;
+    }
+
+    size = sizeof(*usage_count);
+    status = RegGetValueW(key, NULL, L"UsageCount", RRF_RT_DWORD, NULL, usage_count, &size);
+    if (status == ERROR_FILE_NOT_FOUND)
+        *usage_count = 1;
+    else if (status != ERROR_SUCCESS || size != sizeof(*usage_count))
+    {
+        error = ODBC_ERROR_USAGE_UPDATE_FAILED;
+        goto done;
+    }
+
+    size = 0;
+    status = RegGetValueW(key, NULL, file_key, RRF_RT_REG_SZ, NULL, NULL, &size);
+    if (status == ERROR_FILE_NOT_FOUND) goto default_path;
+    if (status != ERROR_SUCCESS) goto done;
+    if (!size || size % sizeof(WCHAR))
+    {
+        error = ODBC_ERROR_INVALID_PATH;
+        goto done;
+    }
+    if (size > MAXDWORD - sizeof(WCHAR))
+    {
+        error = ODBC_ERROR_OUT_OF_MEM;
+        goto done;
+    }
+    capacity = size + sizeof(WCHAR);
+    filename = malloc(capacity);
+    if (!filename)
+    {
+        error = ODBC_ERROR_OUT_OF_MEM;
+        goto done;
+    }
+    status = RegGetValueW(key, NULL, file_key, RRF_RT_REG_SZ, NULL, filename, &capacity);
+    if (status != ERROR_SUCCESS || !capacity || capacity % sizeof(WCHAR) || capacity > size + sizeof(WCHAR))
+        goto done;
+    filename[capacity / sizeof(WCHAR) - 1] = 0;
+    separator = wcsrchr(filename, '\\');
+    slash = wcsrchr(filename, '/');
+    if (slash && (!separator || slash > separator)) separator = slash;
+    if (!separator || !separator[1])
+    {
+        error = ODBC_ERROR_INVALID_PATH;
+        goto done;
+    }
+    len = separator - filename;
+    if (len && separator[-1] == ':') len++;
+    if (!len || len >= MAX_PATH)
+    {
+        error = ODBC_ERROR_INVALID_PATH;
+        goto done;
+    }
+    memcpy(path, filename, len * sizeof(WCHAR));
+    path[len] = 0;
+    *installed = TRUE;
+    ret = TRUE;
+    goto done;
+
+default_path:
+    if (path_in)
+    {
+        len = wcslen(path_in);
+        if (!len || len >= MAX_PATH)
+        {
+            error = ODBC_ERROR_INVALID_PATH;
+            goto done;
+        }
+        memcpy(path, path_in, (len + 1) * sizeof(WCHAR));
+    }
+    else
+    {
+        len = GetSystemDirectoryW(path, MAX_PATH);
+        if (!len || len >= MAX_PATH) goto done;
+    }
+    ret = TRUE;
+done:
+    free(filename);
+    if (key) RegCloseKey(key);
+    if (!ret) push_error(error, L"Failed to read installation path");
+    return ret;
+}
+
+static BOOL copy_install_path(const WCHAR *path, void *buffer, WORD capacity, WORD *length,
+                              BOOL unicode, BOOL inquiry)
+{
+    size_t len;
+    int size;
+    char *converted;
+
+    if (unicode)
+    {
+        len = wcslen(path);
+        if (len > USHRT_MAX) goto invalid_buffer;
+        if (length) *length = len;
+        if (!buffer || !capacity)
+        {
+            if (inquiry) return TRUE;
+            goto invalid_buffer;
+        }
+        memcpy(buffer, path, min(len, capacity - 1) * sizeof(WCHAR));
+        ((WCHAR *)buffer)[min(len, capacity - 1)] = 0;
+        if (len >= capacity) goto invalid_buffer;
+    }
+    else
+    {
+        size = WideCharToMultiByte(CP_ACP, 0, path, -1, NULL, 0, NULL, NULL);
+        if (!size) goto conversion_failed;
+        if (size - 1 > USHRT_MAX) goto invalid_buffer;
+        if (length) *length = size - 1;
+        if (!buffer || !capacity)
+        {
+            if (inquiry) return TRUE;
+            goto invalid_buffer;
+        }
+        if (size <= capacity)
+        {
+            if (!WideCharToMultiByte(CP_ACP, 0, path, -1, buffer, capacity, NULL, NULL))
+                goto conversion_failed;
+        }
+        else
+        {
+            if (!(converted = malloc(size)))
+            {
+                push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+                return FALSE;
+            }
+            if (!WideCharToMultiByte(CP_ACP, 0, path, -1, converted, size, NULL, NULL))
+            {
+                free(converted);
+                goto conversion_failed;
+            }
+            memcpy(buffer, converted, capacity - 1);
+            ((char *)buffer)[capacity - 1] = 0;
+            free(converted);
+            goto invalid_buffer;
+        }
+    }
+    return TRUE;
+
+invalid_buffer:
+    push_error(ODBC_ERROR_INVALID_BUFF_LEN, L"Invalid buffer length");
+    return FALSE;
+conversion_failed:
+    push_error(ODBC_ERROR_GENERAL_ERR, L"Failed to convert installation path");
+    return FALSE;
+}
+
+static BOOL write_registry_values(const WCHAR *regkey, const WCHAR *driver, const WCHAR *path,
+                                  BOOL installed, DWORD *usage_count)
+#else
 static void write_registry_values(const WCHAR *regkey, const WCHAR *driver, const  WCHAR *path_in, WCHAR *path,
                                   DWORD *usage_count)
+#endif
 {
     HKEY hkey, hkeydriver;
+#ifdef __REACTOS__
+    DWORD error = ODBC_ERROR_GENERAL_ERR, disposition;
+    size_t pathlen = wcslen(path);
+    LONG status;
+    BOOL ret = FALSE;
+#endif
 
     if (RegCreateKeyW(HKEY_LOCAL_MACHINE, L"Software\\ODBC\\ODBCINST.INI\\", &hkey) == ERROR_SUCCESS)
     {
         if (RegCreateKeyW(hkey, regkey, &hkeydriver) == ERROR_SUCCESS)
         {
+#ifdef __REACTOS__
+            status = RegSetValueExW(hkeydriver, driver, 0, REG_SZ, (BYTE*)L"Installed", sizeof(L"Installed"));
+            if (status != ERROR_SUCCESS)
+#else
             if(RegSetValueExW(hkeydriver, driver, 0, REG_SZ, (BYTE*)L"Installed", sizeof(L"Installed")) != ERROR_SUCCESS)
+#endif
                 ERR("Failed to write registry installed key\n");
 
             RegCloseKey(hkeydriver);
+#ifdef __REACTOS__
+            if (status != ERROR_SUCCESS) goto done;
+#endif
         }
+#ifdef __REACTOS__
+        else goto done;
+#endif
 
+#ifdef __REACTOS__
+        if (RegCreateKeyExW(hkey, driver, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_READ | KEY_WRITE,
+                            NULL, &hkeydriver, &disposition) == ERROR_SUCCESS)
+#else
         if (RegCreateKeyW(hkey, driver, &hkeydriver) == ERROR_SUCCESS)
+#endif
         {
             WCHAR entry[1024];
             const WCHAR *p;
@@ -1137,32 +1348,70 @@ static void write_registry_values(const WCHAR *regkey, const WCHAR *driver, cons
 
             /* Skip name entry */
             p = driver;
+#ifdef __REACTOS__
+            p += wcslen(p) + 1;
+#else
             p += lstrlenW(p) + 1;
 
             if (!path_in)
                 GetSystemDirectoryW(path, MAX_PATH);
             else
                 lstrcpyW(path, path_in);
+#endif
 
             /* Store Usage */
             size = sizeof(usagecount);
+#ifdef __REACTOS__
+            status = RegGetValueA(hkeydriver, NULL, "UsageCount", RRF_RT_DWORD, &type, &usagecount, &size);
+            if (status == ERROR_FILE_NOT_FOUND)
+                usagecount = disposition == REG_OPENED_EXISTING_KEY ? 1 : 0;
+            else if (status != ERROR_SUCCESS || size != sizeof(usagecount) || usagecount == MAXDWORD)
+            {
+                error = ODBC_ERROR_USAGE_UPDATE_FAILED;
+                goto driver_done;
+            }
+#else
             RegGetValueA(hkeydriver, NULL, "UsageCount", RRF_RT_DWORD, &type, &usagecount, &size);
+#endif
             TRACE("Usage count %ld\n", usagecount);
 
+#ifdef __REACTOS__
+            for (; *p && (!installed || disposition == REG_CREATED_NEW_KEY); p += wcslen(p) + 1)
+#else
             for (; *p; p += lstrlenW(p) + 1)
+#endif
             {
                 WCHAR *divider = wcschr(p,'=');
 
                 if (divider)
                 {
                     WCHAR *value;
+#ifdef __REACTOS__
+                    size_t len;
+
+                    if (divider == p || divider - p >= ARRAY_SIZE(entry))
+                    {
+                        error = ODBC_ERROR_INVALID_KEYWORD_VALUE;
+                        goto driver_done;
+                    }
+#else
                     int len;
+#endif
 
                     /* Write pair values to the registry. */
                     lstrcpynW(entry, p, divider - p + 1);
 
                     divider++;
                     TRACE("Writing pair %s,%s\n", debugstr_w(entry), debugstr_w(divider));
+#ifdef __REACTOS__
+                    len = wcslen(divider);
+                    if (len >= MAXDWORD / sizeof(WCHAR))
+                    {
+                        error = ODBC_ERROR_OUT_OF_MEM;
+                        goto driver_done;
+                    }
+                    len++;
+#endif
 
                     /* Driver, Setup, Translator entries use the system path unless a path is specified. */
                     if(lstrcmpiW(L"Driver", entry) == 0 || lstrcmpiW(L"Setup", entry) == 0 ||
@@ -1170,14 +1419,30 @@ static void write_registry_values(const WCHAR *regkey, const WCHAR *driver, cons
                     {
                         if(GetFileAttributesW(divider) == INVALID_FILE_ATTRIBUTES)
                         {
+#ifdef __REACTOS__
+                            if (len > MAXDWORD / sizeof(WCHAR) - pathlen - 1)
+                            {
+                                error = ODBC_ERROR_OUT_OF_MEM;
+                                goto driver_done;
+                            }
+                            len += pathlen + 1;
+#else
                             int pathlen = lstrlenW(path);
                             len = pathlen + 1 + lstrlenW(divider) + 1;
+#endif
                             value = malloc(len * sizeof(WCHAR));
                             if(!value)
                             {
+#ifndef __REACTOS__
                                 RegCloseKey(hkeydriver);
+#endif
                                 ERR("Out of memory\n");
+#ifdef __REACTOS__
+                                error = ODBC_ERROR_OUT_OF_MEM;
+                                goto driver_done;
+#else
                                 return;
+#endif
                             }
 
                             lstrcpyW(value, path);
@@ -1186,62 +1451,171 @@ static void write_registry_values(const WCHAR *regkey, const WCHAR *driver, cons
                         }
                         else
                         {
+#ifdef __REACTOS__
+                            value = calloc(1, len * sizeof(WCHAR));
+#else
                             value = calloc(1, (lstrlenW(divider)+1) * sizeof(WCHAR));
+#endif
                             if(!value)
                             {
+#ifndef __REACTOS__
                                 RegCloseKey(hkeydriver);
+#endif
                                 ERR("Out of memory\n");
+#ifdef __REACTOS__
+                                error = ODBC_ERROR_OUT_OF_MEM;
+                                goto driver_done;
+#else
                                 return;
+#endif
                             }
                         }
                         lstrcatW(value, divider);
                     }
                     else
                     {
+#ifndef __REACTOS__
                         len = lstrlenW(divider) + 1;
+#endif
                         value = malloc(len * sizeof(WCHAR));
+#ifdef __REACTOS__
+                        if (!value)
+                        {
+                            error = ODBC_ERROR_OUT_OF_MEM;
+                            goto driver_done;
+                        }
+#endif
                         lstrcpyW(value, divider);
                     }
 
+#ifdef __REACTOS__
+                    status = RegSetValueExW(hkeydriver, entry, 0, REG_SZ, (BYTE*)value,
+                                           (wcslen(value) + 1) * sizeof(WCHAR));
+                    if (status != ERROR_SUCCESS)
+#else
                     if (RegSetValueExW(hkeydriver, entry, 0, REG_SZ, (BYTE*)value,
                                     (lstrlenW(value)+1)*sizeof(WCHAR)) != ERROR_SUCCESS)
+#endif
                         ERR("Failed to write registry data %s %s\n", debugstr_w(entry), debugstr_w(value));
                     free(value);
+#ifdef __REACTOS__
+                    if (status != ERROR_SUCCESS) goto driver_done;
+#endif
                 }
                 else
                 {
                     ERR("No pair found. %s\n", debugstr_w(p));
+#ifdef __REACTOS__
+                    error = ODBC_ERROR_INVALID_KEYWORD_VALUE;
+                    goto driver_done;
+#else
                     break;
+#endif
                 }
             }
 
             /* Set Usage Count */
             usagecount++;
             if (RegSetValueExA(hkeydriver, "UsageCount", 0, REG_DWORD, (BYTE*)&usagecount, sizeof(usagecount)) != ERROR_SUCCESS)
+#ifdef __REACTOS__
+            {
+#endif
                 ERR("Failed to write registry UsageCount key\n");
+#ifdef __REACTOS__
+                error = ODBC_ERROR_USAGE_UPDATE_FAILED;
+                goto driver_done;
+            }
+#endif
 
             if (usage_count)
                 *usage_count = usagecount;
+#ifdef __REACTOS__
+            ret = TRUE;
+#endif
 
+#ifdef __REACTOS__
+driver_done:
+#endif
             RegCloseKey(hkeydriver);
         }
 
+#ifdef __REACTOS__
+done:
+#endif
         RegCloseKey(hkey);
     }
+#ifdef __REACTOS__
+    if (!ret) push_error(error, L"Driver or translator installation failed");
+    return ret;
+}
+
+static BOOL install_component(const WCHAR *regkey, const WCHAR *file_key, const WCHAR *driver,
+                               const WCHAR *path_in, void *path_out, WORD capacity, WORD *length,
+                               WORD request, DWORD *usage_count, BOOL unicode)
+{
+    WCHAR path[MAX_PATH];
+    const WCHAR *p, *divider;
+    DWORD usage;
+    WORD required;
+    BOOL installed;
+
+    if (request != ODBC_INSTALL_INQUIRY && request != ODBC_INSTALL_COMPLETE)
+    {
+        push_error(ODBC_ERROR_INVALID_REQUEST_TYPE, L"Invalid request type");
+        return FALSE;
+    }
+    if (request == ODBC_INSTALL_COMPLETE && (!path_out || !capacity))
+    {
+        push_error(ODBC_ERROR_INVALID_BUFF_LEN, L"Invalid buffer length");
+        return FALSE;
+    }
+    if (!driver || !*driver || !*(p = driver + wcslen(driver) + 1))
+    {
+        push_error(ODBC_ERROR_INVALID_PARAM_SEQUENCE, L"Invalid parameter sequence");
+        return FALSE;
+    }
+    for (; *p; p += wcslen(p) + 1)
+    {
+        divider = wcschr(p, '=');
+        if (!divider || divider == p)
+        {
+            push_error(ODBC_ERROR_INVALID_KEYWORD_VALUE, L"Invalid keyword-value pair");
+            return FALSE;
+        }
+    }
+    if (!get_install_path(driver, file_key, path_in, path, &usage, &installed)) return FALSE;
+    if (request == ODBC_INSTALL_INQUIRY)
+    {
+        if (!copy_install_path(path, path_out, capacity, length, unicode, TRUE)) return FALSE;
+        if (usage_count) *usage_count = usage;
+        return TRUE;
+    }
+    if (!copy_install_path(path, NULL, 0, &required, unicode, TRUE)) return FALSE;
+    if (capacity <= required)
+        return copy_install_path(path, path_out, capacity, length, unicode, FALSE);
+    if (!write_registry_values(regkey, driver, path, installed, usage_count)) return FALSE;
+    return copy_install_path(path, path_out, capacity, length, unicode, FALSE);
+#endif
 }
 
 BOOL WINAPI SQLInstallDriverExW(LPCWSTR lpszDriver, LPCWSTR lpszPathIn,
                LPWSTR lpszPathOut, WORD cbPathOutMax, WORD *pcbPathOut,
                WORD fRequest, LPDWORD lpdwUsageCount)
 {
+#ifndef __REACTOS__
     UINT len;
     WCHAR path[MAX_PATH];
 
+#endif
     clear_errors();
     TRACE("%s %s %p %d %p %d %p\n", debugstr_w(lpszDriver),
           debugstr_w(lpszPathIn), lpszPathOut, cbPathOutMax, pcbPathOut,
           fRequest, lpdwUsageCount);
 
+#ifdef __REACTOS__
+    return install_component(L"ODBC Drivers", L"Driver", lpszDriver, lpszPathIn, lpszPathOut,
+                             cbPathOutMax, pcbPathOut, fRequest, lpdwUsageCount, TRUE);
+#else
     write_registry_values(L"ODBC Drivers", lpszDriver, lpszPathIn, path, lpdwUsageCount);
 
     len = lstrlenW(path);
@@ -1255,6 +1629,7 @@ BOOL WINAPI SQLInstallDriverExW(LPCWSTR lpszDriver, LPCWSTR lpszPathIn,
         return TRUE;
     }
     return FALSE;
+#endif
 }
 
 BOOL WINAPI SQLInstallDriverEx(LPCSTR lpszDriver, LPCSTR lpszPathIn,
@@ -1262,9 +1637,13 @@ BOOL WINAPI SQLInstallDriverEx(LPCSTR lpszDriver, LPCSTR lpszPathIn,
                WORD fRequest, LPDWORD lpdwUsageCount)
 {
     LPWSTR driver, pathin;
+#ifdef __REACTOS__
+    BOOL ret = FALSE;
+#else
     WCHAR pathout[MAX_PATH];
     BOOL ret;
     WORD cbOut = 0;
+#endif
 
     clear_errors();
     TRACE("%s %s %p %d %p %d %p\n", debugstr_a(lpszDriver),
@@ -1273,11 +1652,19 @@ BOOL WINAPI SQLInstallDriverEx(LPCSTR lpszDriver, LPCSTR lpszPathIn,
 
     driver = SQLInstall_strdup_multi(lpszDriver);
     pathin = SQLInstall_strdup(lpszPathIn);
+#ifdef __REACTOS__
+    if ((lpszDriver && !driver) || (lpszPathIn && !pathin))
+#else
 
     ret = SQLInstallDriverExW(driver, pathin, pathout, MAX_PATH, &cbOut,
                               fRequest, lpdwUsageCount);
     if (ret)
+#endif
     {
+#ifdef __REACTOS__
+        push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+        goto out;
+#else
         int len =  WideCharToMultiByte(CP_ACP, 0, pathout, -1, lpszPathOut,
                                        0, NULL, NULL);
         if (len)
@@ -1293,8 +1680,14 @@ BOOL WINAPI SQLInstallDriverEx(LPCSTR lpszDriver, LPCSTR lpszPathIn,
             len =  WideCharToMultiByte(CP_ACP, 0, pathout, -1, lpszPathOut,
                                        cbPathOutMax, NULL, NULL);
         }
+#endif
     }
 
+#ifdef __REACTOS__
+    ret = install_component(L"ODBC Drivers", L"Driver", driver, pathin, lpszPathOut,
+                            cbPathOutMax, pcbPathOut, fRequest, lpdwUsageCount, FALSE);
+
+#endif
 out:
     free(driver);
     free(pathin);
@@ -1309,41 +1702,78 @@ BOOL WINAPI SQLInstallDriverManagerW(LPWSTR lpszPath, WORD cbPathMax,
 
     TRACE("(%p %d %p)\n", lpszPath, cbPathMax, pcbPathOut);
 
+#ifndef __REACTOS__
     if (cbPathMax < MAX_PATH)
         return FALSE;
 
+#endif
     clear_errors();
+#ifdef __REACTOS__
+    if (!lpszPath || cbPathMax < MAX_PATH)
+    {
+        push_error(ODBC_ERROR_INVALID_BUFF_LEN, L"Invalid buffer length");
+        return FALSE;
+    }
+#endif
 
     len = GetSystemDirectoryW(path, MAX_PATH);
+#ifdef __REACTOS__
+    if (!len || len >= ARRAY_SIZE(path))
+#else
 
     if (pcbPathOut)
         *pcbPathOut = len;
 
     if (lpszPath && cbPathMax > len)
+#endif
     {
+#ifdef __REACTOS__
+        push_error(ODBC_ERROR_GENERAL_ERR, L"Failed to read system directory");
+        return FALSE;
+#else
     	lstrcpyW(lpszPath, path);
     	return TRUE;
+#endif
     }
+#ifdef __REACTOS__
+    return copy_install_path(path, lpszPath, cbPathMax, pcbPathOut, TRUE, FALSE);
+#else
     return FALSE;
+#endif
 }
 
 BOOL WINAPI SQLInstallDriverManager(LPSTR lpszPath, WORD cbPathMax,
                WORD *pcbPathOut)
 {
+#ifdef __REACTOS__
+    UINT len;
+#else
     BOOL ret;
     WORD len, cbOut = 0;
+#endif
     WCHAR path[MAX_PATH];
 
     TRACE("(%p %d %p)\n", lpszPath, cbPathMax, pcbPathOut);
 
+#ifndef __REACTOS__
     if (cbPathMax < MAX_PATH)
         return FALSE;
 
+#endif
     clear_errors();
+#ifdef __REACTOS__
+    if (!lpszPath || cbPathMax < MAX_PATH)
+#else
 
     ret = SQLInstallDriverManagerW(path, MAX_PATH, &cbOut);
     if (ret)
+#endif
     {
+#ifdef __REACTOS__
+        push_error(ODBC_ERROR_INVALID_BUFF_LEN, L"Invalid buffer length");
+        return FALSE;
+    }
+#else
         len =  WideCharToMultiByte(CP_ACP, 0, path, -1, lpszPath, 0,
                                    NULL, NULL);
         if (len)
@@ -1353,12 +1783,25 @@ BOOL WINAPI SQLInstallDriverManager(LPSTR lpszPath, WORD cbPathMax,
 
             if (!lpszPath || cbPathMax < len)
                 return FALSE;
+#endif
 
+#ifdef __REACTOS__
+    len = GetSystemDirectoryW(path, MAX_PATH);
+    if (!len || len >= ARRAY_SIZE(path))
+    {
+        push_error(ODBC_ERROR_GENERAL_ERR, L"Failed to read system directory");
+        return FALSE;
+#else
             len =  WideCharToMultiByte(CP_ACP, 0, path, -1, lpszPath,
                                        cbPathMax, NULL, NULL);
         }
+#endif
     }
+#ifdef __REACTOS__
+    return copy_install_path(path, lpszPath, cbPathMax, pcbPathOut, FALSE, FALSE);
+#else
     return ret;
+#endif
 }
 
 BOOL WINAPI SQLInstallODBCW(HWND hwndParent, LPCWSTR lpszInfFile,
@@ -1485,14 +1928,20 @@ BOOL WINAPI SQLInstallTranslatorExW(LPCWSTR lpszTranslator, LPCWSTR lpszPathIn,
                LPWSTR lpszPathOut, WORD cbPathOutMax, WORD *pcbPathOut,
                WORD fRequest, LPDWORD lpdwUsageCount)
 {
+#ifndef __REACTOS__
     UINT len;
     WCHAR path[MAX_PATH];
 
+#endif
     clear_errors();
     TRACE("%s %s %p %d %p %d %p\n", debugstr_w(lpszTranslator),
           debugstr_w(lpszPathIn), lpszPathOut, cbPathOutMax, pcbPathOut,
           fRequest, lpdwUsageCount);
 
+#ifdef __REACTOS__
+    return install_component(L"ODBC Translators", L"Translator", lpszTranslator, lpszPathIn,
+                             lpszPathOut, cbPathOutMax, pcbPathOut, fRequest, lpdwUsageCount, TRUE);
+#else
     write_registry_values(L"ODBC Translators", lpszTranslator, lpszPathIn, path, lpdwUsageCount);
 
     len = lstrlenW(path);
@@ -1506,6 +1955,7 @@ BOOL WINAPI SQLInstallTranslatorExW(LPCWSTR lpszTranslator, LPCWSTR lpszPathIn,
         return TRUE;
     }
     return FALSE;
+#endif
 }
 
 BOOL WINAPI SQLInstallTranslatorEx(LPCSTR lpszTranslator, LPCSTR lpszPathIn,
@@ -1514,25 +1964,41 @@ BOOL WINAPI SQLInstallTranslatorEx(LPCSTR lpszTranslator, LPCSTR lpszPathIn,
 {
     LPCSTR p;
     LPWSTR translator, pathin;
+#ifdef __REACTOS__
+    BOOL ret = FALSE;
+#else
     WCHAR pathout[MAX_PATH];
     BOOL ret;
     WORD cbOut = 0;
+#endif
 
     clear_errors();
     TRACE("%s %s %p %d %p %d %p\n", debugstr_a(lpszTranslator),
           debugstr_a(lpszPathIn), lpszPathOut, cbPathOutMax, pcbPathOut,
           fRequest, lpdwUsageCount);
 
+#ifdef __REACTOS__
+    for (p = lpszTranslator; p && *p; p += strlen(p) + 1)
+#else
     for (p = lpszTranslator; *p; p += lstrlenA(p) + 1)
+#endif
         TRACE("%s\n", debugstr_a(p));
 
     translator = SQLInstall_strdup_multi(lpszTranslator);
     pathin = SQLInstall_strdup(lpszPathIn);
+#ifdef __REACTOS__
+    if ((lpszTranslator && !translator) || (lpszPathIn && !pathin))
+#else
 
     ret = SQLInstallTranslatorExW(translator, pathin, pathout, MAX_PATH,
                                   &cbOut, fRequest, lpdwUsageCount);
     if (ret)
+#endif
     {
+#ifdef __REACTOS__
+        push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+        goto out;
+#else
         int len =  WideCharToMultiByte(CP_ACP, 0, pathout, -1, lpszPathOut,
                                        0, NULL, NULL);
         if (len)
@@ -1548,8 +2014,14 @@ BOOL WINAPI SQLInstallTranslatorEx(LPCSTR lpszTranslator, LPCSTR lpszPathIn,
             len =  WideCharToMultiByte(CP_ACP, 0, pathout, -1, lpszPathOut,
                                        cbPathOutMax, NULL, NULL);
         }
+#endif
     }
 
+#ifdef __REACTOS__
+    ret = install_component(L"ODBC Translators", L"Translator", translator, pathin, lpszPathOut,
+                            cbPathOutMax, pcbPathOut, fRequest, lpdwUsageCount, FALSE);
+
+#endif
 out:
     free(translator);
     free(pathin);
@@ -2106,26 +2578,57 @@ BOOL WINAPI SQLWritePrivateProfileStringW(LPCWSTR lpszSection, LPCWSTR lpszEntry
                LPCWSTR lpszString, LPCWSTR lpszFilename)
 {
     LONG ret;
+#ifdef __REACTOS__
+    HKEY hkey, root = HKEY_CURRENT_USER;
+#else
     HKEY hkey;
+#endif
     WCHAR *regpath;
+#ifdef __REACTOS__
+    size_t filename_len, section_len, value_len = 0;
+    size_t prefix_len = wcslen(L"Software\\ODBC\\");
+    BOOL write = lpszEntry && lpszString;
+#endif
 
     clear_errors();
     TRACE("%s %s %s %s\n", debugstr_w(lpszSection), debugstr_w(lpszEntry),
                 debugstr_w(lpszString), debugstr_w(lpszFilename));
 
+#ifdef __REACTOS__
+    if(!lpszFilename || !*lpszFilename || !lpszSection || !*lpszSection)
+#else
     if(!lpszFilename || !*lpszFilename)
+#endif
     {
         push_error(ODBC_ERROR_INVALID_STR, L"Invalid parameter string");
         return FALSE;
     }
 
+#ifdef __REACTOS__
+    filename_len = wcslen(lpszFilename);
+    section_len = wcslen(lpszSection);
+    if (filename_len > (size_t)-1 / sizeof(WCHAR) - prefix_len - 2 ||
+        section_len > (size_t)-1 / sizeof(WCHAR) - prefix_len - 2 - filename_len)
+        goto no_memory;
+    if (write)
+#else
     regpath = malloc ( (wcslen(L"Software\\ODBC\\") + wcslen(lpszFilename) + wcslen(L"\\")
                             + wcslen(lpszSection) + 1) * sizeof(WCHAR));
     if (!regpath)
+#endif
     {
+#ifdef __REACTOS__
+        value_len = wcslen(lpszString);
+        if (value_len >= MAXDWORD / sizeof(WCHAR)) goto no_memory;
+#else
         push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
         return FALSE;
+#endif
     }
+#ifdef __REACTOS__
+    regpath = malloc((prefix_len + filename_len + section_len + 2) * sizeof(WCHAR));
+    if (!regpath) goto no_memory;
+#endif
     wcscpy(regpath, L"Software\\ODBC\\");
     wcscat(regpath, lpszFilename);
     wcscat(regpath, L"\\");
@@ -2133,47 +2636,117 @@ BOOL WINAPI SQLWritePrivateProfileStringW(LPCWSTR lpszSection, LPCWSTR lpszEntry
 
     /* odbcinit.ini is only for drivers, so default to local Machine */
     if (!wcsicmp(lpszFilename, L"ODBCINST.INI") || config_mode == ODBC_SYSTEM_DSN)
+#ifdef __REACTOS__
+    {
+        root = HKEY_LOCAL_MACHINE;
+        ret = write ? RegCreateKeyW(root, regpath, &hkey) : RegOpenKeyW(root, regpath, &hkey);
+    }
+#else
         ret = RegCreateKeyW(HKEY_LOCAL_MACHINE, regpath, &hkey);
+#endif
     else if (config_mode == ODBC_USER_DSN)
+#ifdef __REACTOS__
+        ret = write ? RegCreateKeyW(root, regpath, &hkey) : RegOpenKeyW(root, regpath, &hkey);
+#else
         ret = RegCreateKeyW(HKEY_CURRENT_USER, regpath, &hkey);
+#endif
     else
     {
         /* Check existing keys first */
+#ifdef __REACTOS__
+        if ((ret = RegOpenKeyW(root, regpath, &hkey)) != ERROR_SUCCESS)
+        {
+            root = HKEY_LOCAL_MACHINE;
+            ret = RegOpenKeyW(root, regpath, &hkey);
+        }
+#else
         if ((ret = RegOpenKeyW(HKEY_CURRENT_USER, regpath, &hkey)) != ERROR_SUCCESS)
             ret = RegOpenKeyW(HKEY_LOCAL_MACHINE, regpath, &hkey);
+#endif
 
+#ifdef __REACTOS__
+        if (ret != ERROR_SUCCESS && write)
+        {
+            root = HKEY_CURRENT_USER;
+            ret = RegCreateKeyW(root, regpath, &hkey);
+        }
+#else
         if (ret != ERROR_SUCCESS)
             ret = RegCreateKeyW(HKEY_CURRENT_USER, regpath, &hkey);
+#endif
     }
 
+#ifndef __REACTOS__
     free(regpath);
 
+#endif
     if (ret == ERROR_SUCCESS)
     {
+#ifdef __REACTOS__
+        if (!lpszEntry)
+            ret = RegDeleteTreeW(root, regpath);
+        else if (!lpszString)
+            ret = RegDeleteValueW(hkey, lpszEntry);
+#else
         if(lpszString)
             ret = RegSetValueExW(hkey, lpszEntry, 0, REG_SZ, (BYTE*)lpszString, (lstrlenW(lpszString)+1)*sizeof(WCHAR));
+#endif
         else
+#ifdef __REACTOS__
+            ret = RegSetValueExW(hkey, lpszEntry, 0, REG_SZ, (BYTE*)lpszString,
+                                 (value_len + 1) * sizeof(WCHAR));
+        RegCloseKey(hkey);
+#else
             ret = RegSetValueExW(hkey, lpszEntry, 0, REG_SZ, (BYTE*)L"", sizeof(L""));
          RegCloseKey(hkey);
+#endif
     }
+#ifdef __REACTOS__
+    free(regpath);
+#endif
 
+#ifdef __REACTOS__
+    if (ret != ERROR_SUCCESS) push_error(ODBC_ERROR_REQUEST_FAILED, L"Request failed");
+#endif
     return ret == ERROR_SUCCESS;
+#ifdef __REACTOS__
+
+no_memory:
+    push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+    return FALSE;
+#endif
 }
 
 BOOL WINAPI SQLWritePrivateProfileString(LPCSTR lpszSection, LPCSTR lpszEntry,
                LPCSTR lpszString, LPCSTR lpszFilename)
 {
+#ifdef __REACTOS__
+    BOOL ret = FALSE;
+#else
     BOOL ret;
+#endif
     WCHAR *sect, *entry, *string, *file;
     clear_errors();
     TRACE("%s %s %s %s\n", lpszSection, lpszEntry, lpszString, lpszFilename);
 
     sect = strdupAtoW(lpszSection);
     entry = strdupAtoW(lpszEntry);
+#ifdef __REACTOS__
+    string = lpszEntry ? strdupAtoW(lpszString) : NULL;
+#else
     string = strdupAtoW(lpszString);
+#endif
     file = strdupAtoW(lpszFilename);
 
+#ifdef __REACTOS__
+    if ((lpszSection && !sect) || (lpszEntry && !entry) ||
+        (lpszEntry && lpszString && !string) || (lpszFilename && !file))
+        push_error(ODBC_ERROR_OUT_OF_MEM, L"Out of memory");
+    else
+        ret = SQLWritePrivateProfileStringW(sect, entry, string, file);
+#else
     ret = SQLWritePrivateProfileStringW(sect, entry, string, file);
+#endif
 
     free(sect);
     free(entry);
