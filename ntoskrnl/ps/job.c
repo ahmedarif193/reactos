@@ -861,17 +861,11 @@ PspAssignProcessToJob(
             goto Exit;
         }
 
-        if (Job->UIRestrictionsClass != 0)
-        {
-            Status = STATUS_ACCESS_DENIED;
-            goto Exit;
-        }
-
-        for (ChainJob = CurrentJob; ChainJob; ChainJob = ChainJob->ParentJob)
+        for (ChainJob = CurrentJob; ChainJob && Job->UIRestrictionsClass != 0; ChainJob = ChainJob->ParentJob)
         {
             if (ChainJob->UIRestrictionsClass != 0)
             {
-                Status = STATUS_ACCESS_DENIED;
+                Status = STATUS_NOT_SUPPORTED;
                 goto Exit;
             }
         }
@@ -2409,11 +2403,35 @@ PspSetJobUIRestrictions(
 )
 {
     NTSTATUS Status = STATUS_SUCCESS;
+    PEJOB ChainJob;
 
     /* Reject restrictions we do not know about */
     if (UIRestrictionsClass & ~JOB_OBJECT_UILIMIT_ALL)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    ExEnterCriticalRegionAndAcquireResourceExclusive(&PspJobTreeLock);
+
+    if (UIRestrictionsClass != 0)
+    {
+        for (ChainJob = Job->ParentJob; ChainJob; ChainJob = ChainJob->ParentJob)
+        {
+            if (ChainJob->UIRestrictionsClass != 0)
+                Status = STATUS_NOT_SUPPORTED;
+        }
+
+        for (ChainJob = PspGetNextJobTopDown(Job, Job); ChainJob; ChainJob = PspGetNextJobTopDown(Job, ChainJob))
+        {
+            if (ChainJob->UIRestrictionsClass != 0)
+                Status = STATUS_NOT_SUPPORTED;
+        }
+
+        if (!NT_SUCCESS(Status))
+        {
+            ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
+            return Status;
+        }
     }
 
     ExEnterCriticalRegionAndAcquireResourceExclusive(&Job->JobLock);
@@ -2431,6 +2449,7 @@ PspSetJobUIRestrictions(
     }
 
     ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+    ExReleaseResourceAndLeaveCriticalRegion(&PspJobTreeLock);
 
     return Status;
 }
@@ -3058,6 +3077,7 @@ NtQueryInformationJobObject(
     {
         UiRestrictions.UIRestrictionsClass = Job->UIRestrictionsClass;
         JobInfoBuffer = &UiRestrictions;
+        Status = STATUS_SUCCESS;
         break;
     }
     case JobObjectSecurityLimitInformation:
