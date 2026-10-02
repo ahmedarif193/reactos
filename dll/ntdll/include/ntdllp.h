@@ -126,6 +126,10 @@ VOID NTAPI LdrpEnsureLoaderLockIsHeld(VOID);
 NTSTATUS NTAPI LdrpInitializeGuard(IN PLDR_DATA_TABLE_ENTRY LdrEntry);
 
 /* ldrpe.c */
+VOID
+NTAPI
+LdrpReleaseForwarderReferences(IN PVOID OwnerBase);
+
 NTSTATUS
 NTAPI
 LdrpSnapThunk(IN PVOID ExportBase,

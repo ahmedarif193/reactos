@@ -1700,6 +1700,7 @@ LdrUnloadDll(
         }
 
         LdrpReleaseTlsData(LdrEntry);
+        LdrpReleaseForwarderReferences(LdrEntry->DllBase);
 
         /* Remove it from the list */
         RemoveEntryList(&CurrentEntry->InLoadOrderLinks);

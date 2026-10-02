@@ -1196,6 +1196,113 @@ done:
     return Status;
 }
 
+typedef struct _LDRP_FORWARDER_REFERENCE
+{
+    LIST_ENTRY Links;
+    PVOID OwnerBase;
+    PVOID TargetBase;
+} LDRP_FORWARDER_REFERENCE, *PLDRP_FORWARDER_REFERENCE;
+
+static LIST_ENTRY LdrpForwarderReferenceList = { &LdrpForwarderReferenceList, &LdrpForwarderReferenceList };
+
+static
+BOOLEAN
+LdrpIsForwarderReferenced(
+    _In_ PVOID OwnerBase,
+    _In_ PVOID TargetBase)
+{
+    PLDRP_FORWARDER_REFERENCE Reference;
+    PLIST_ENTRY Entry;
+
+    for (Entry = LdrpForwarderReferenceList.Flink; Entry != &LdrpForwarderReferenceList; Entry = Entry->Flink)
+    {
+        Reference = CONTAINING_RECORD(Entry, LDRP_FORWARDER_REFERENCE, Links);
+        if (Reference->OwnerBase == OwnerBase && Reference->TargetBase == TargetBase)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+VOID
+LdrpAddForwarderReference(
+    _In_ PVOID OwnerBase,
+    _In_ PVOID TargetBase)
+{
+    PLDRP_FORWARDER_REFERENCE Reference;
+
+    Reference = RtlAllocateHeap(LdrpHeap, 0, sizeof(*Reference));
+    if (!Reference)
+        return;
+
+    Reference->OwnerBase = OwnerBase;
+    Reference->TargetBase = TargetBase;
+    InsertTailList(&LdrpForwarderReferenceList, &Reference->Links);
+}
+
+VOID
+NTAPI
+LdrpReleaseForwarderReferences(IN PVOID OwnerBase)
+{
+    PLDRP_FORWARDER_REFERENCE Reference;
+    PLIST_ENTRY Entry;
+    PVOID TargetBase;
+
+    Entry = LdrpForwarderReferenceList.Flink;
+    while (Entry != &LdrpForwarderReferenceList)
+    {
+        Reference = CONTAINING_RECORD(Entry, LDRP_FORWARDER_REFERENCE, Links);
+        if (Reference->OwnerBase != OwnerBase)
+        {
+            Entry = Entry->Flink;
+            continue;
+        }
+
+        TargetBase = Reference->TargetBase;
+        RemoveEntryList(&Reference->Links);
+        RtlFreeHeap(LdrpHeap, 0, Reference);
+
+        LdrUnloadDll(TargetBase);
+
+        Entry = LdrpForwarderReferenceList.Flink;
+    }
+}
+
+static
+BOOLEAN
+LdrpFindLoadedForwarder(
+    _In_opt_ PWSTR DllPath,
+    _In_ PUNICODE_STRING DllName,
+    _In_ BOOLEAN Redirected,
+    _Out_ PLDR_DATA_TABLE_ENTRY *LdrEntry)
+{
+    WCHAR NameBuffer[MAX_PATH + 6];
+    UNICODE_STRING RawDllName;
+    const WCHAR *p;
+
+    if (DllName->Length >= sizeof(NameBuffer))
+        return FALSE;
+
+    RtlInitEmptyUnicodeString(&RawDllName, NameBuffer, sizeof(NameBuffer));
+    RtlCopyUnicodeString(&RawDllName, DllName);
+
+    for (p = DllName->Buffer + DllName->Length / sizeof(WCHAR); p > DllName->Buffer; p--)
+    {
+        if (p[-1] == L'.')
+            return LdrpCheckForLoadedDll(DllPath, &RawDllName, FALSE, Redirected, LdrEntry);
+
+        if (p[-1] == L'\\')
+            break;
+    }
+
+    if ((DllName->Length + LdrApiDefaultExtension.Length + sizeof(UNICODE_NULL)) >= sizeof(NameBuffer))
+        return FALSE;
+
+    (VOID)RtlAppendUnicodeStringToString(&RawDllName, &LdrApiDefaultExtension);
+    return LdrpCheckForLoadedDll(DllPath, &RawDllName, FALSE, Redirected, LdrEntry);
+}
+
 NTSTATUS
 NTAPI
 LdrpSnapThunk(IN PVOID ExportBase,
@@ -1227,6 +1334,9 @@ LdrpSnapThunk(IN PVOID ExportBase,
     ANSI_STRING ForwarderName;
     PANSI_STRING ForwardName;
     PVOID ForwarderHandle = NULL;
+    PVOID ForwarderOwner = Static ? ImportBase : ExportBase;
+    PLDR_DATA_TABLE_ENTRY ForwarderLdrEntry;
+    BOOLEAN ForwarderReferenced = FALSE;
     ULONG ForwardOrdinal;
 #if LDRP_CHPE_IMPORT_REDIRECTION
     ULONG_PTR NativeFunction;
@@ -1282,7 +1392,7 @@ LdrpSnapThunk(IN PVOID ExportBase,
     {
 FailurePath:
         /* Check if we loeaded a forwarder DLL */
-        if (ForwarderHandle != NULL)
+        if (ForwarderReferenced)
         {
             /* Unload the forwarder DLL */
             LdrUnloadDll(ForwarderHandle);
@@ -1456,7 +1566,18 @@ FailurePath:
 
                 /* Load the forwarder */
                 if (NT_SUCCESS(Status))
-                    Status = LdrpLoadDll(Redirected, DllPath, NULL, RedirectedImportName, &ForwarderHandle, FALSE);
+                {
+                    if (LdrpFindLoadedForwarder(DllPath, RedirectedImportName, Redirected, &ForwarderLdrEntry) &&
+                        LdrpIsForwarderReferenced(ForwarderOwner, ForwarderLdrEntry->DllBase))
+                    {
+                        ForwarderHandle = ForwarderLdrEntry->DllBase;
+                    }
+                    else
+                    {
+                        Status = LdrpLoadDll(Redirected, DllPath, NULL, RedirectedImportName, &ForwarderHandle, FALSE);
+                        ForwarderReferenced = NT_SUCCESS(Status);
+                    }
+                }
 
 #if LDRP_CHPE_IMPORT_REDIRECTION
                 if (ChpeImportName.Buffer)
@@ -1502,6 +1623,9 @@ FailurePath:
                                              DllPath);
             /* If this fails, then error out */
             if (!NT_SUCCESS(Status)) goto FailurePath;
+
+            if (ForwarderReferenced)
+                LdrpAddForwarderReference(ForwarderOwner, ForwarderHandle);
         }
         else
         {
