@@ -17,24 +17,24 @@ static int crt_vsnprintf_s(char *buf, crt_size_t size, crt_size_t count, const c
 {
     crt_size_t maxchars; int r;
     if (buf == 0 || size == 0 || fmt == 0) { if (buf && size) buf[0] = 0; return -1; }
-    maxchars = size - 1;
-    if (count != CRT_TRUNCATE && count < maxchars) maxchars = count;
+    maxchars = count == CRT_TRUNCATE ? size - 1 : (count < size ? count : size);
     r = _vsnprintf(buf, maxchars, fmt, ap);
-    if (r < 0 || (crt_size_t)r > maxchars) { buf[maxchars] = 0; return -1; }
-    buf[r] = 0;
-    return r;
+    if (r >= 0 && (crt_size_t)r < size) { buf[r] = 0; return r; }
+    if (r < 0 && maxchars < size) { buf[maxchars] = 0; return -1; }
+    buf[0] = 0;
+    return -1;
 }
 
 static int crt_vsnwprintf_s(crt_wchar_t *buf, crt_size_t size, crt_size_t count, const crt_wchar_t *fmt, __builtin_va_list ap)
 {
     crt_size_t maxchars; int r;
     if (buf == 0 || size == 0 || fmt == 0) { if (buf && size) buf[0] = 0; return -1; }
-    maxchars = size - 1;
-    if (count != CRT_TRUNCATE && count < maxchars) maxchars = count;
+    maxchars = count == CRT_TRUNCATE ? size - 1 : (count < size ? count : size);
     r = _vsnwprintf(buf, maxchars, fmt, ap);
-    if (r < 0 || (crt_size_t)r > maxchars) { buf[maxchars] = 0; return -1; }
-    buf[r] = 0;
-    return r;
+    if (r >= 0 && (crt_size_t)r < size) { buf[r] = 0; return r; }
+    if (r < 0 && maxchars < size) { buf[maxchars] = 0; return -1; }
+    buf[0] = 0;
+    return -1;
 }
 
 int __cdecl sprintf_s(char *buf, crt_size_t size, const char *fmt, ...)
