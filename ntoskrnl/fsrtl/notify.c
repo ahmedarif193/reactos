@@ -271,7 +271,7 @@ FsRtlCheckNotifyForDelete(IN PLIST_ENTRY NotifyList,
         {
             NotifyChange = CONTAINING_RECORD(NextEntry, NOTIFY_CHANGE, NotifyList);
             /* If the current record matches with the given context, it's the good one */
-            if (NotifyChange->FsContext == FsContext && !IsListEmpty(&(NotifyChange->NotifyIrps)))
+            if (NotifyChange->StreamID == FsContext && !IsListEmpty(&(NotifyChange->NotifyIrps)))
             {
                 FsRtlNotifyCompleteIrpList(NotifyChange, STATUS_DELETE_PENDING);
             }
@@ -425,7 +425,7 @@ FsRtlNotifyCompleteIrpList(IN PNOTIFY_CHANGE NotifyChange,
 
     DataLength = NotifyChange->DataLength;
 
-    NotifyChange->Flags &= (NOTIFY_IMMEDIATELY | WATCH_TREE);
+    NotifyChange->Flags &= (NOTIFY_IMMEDIATELY | WATCH_TREE | WATCH_ROOT);
     NotifyChange->DataLength = 0;
     NotifyChange->LastEntry = 0;
 
@@ -1217,6 +1217,7 @@ FsRtlNotifyFilterReportChange(IN PNOTIFY_SYNC NotifySync,
                                 }
                                 /* Now, we start looking for matching parts (unless we watch root) */
                                 TargetNumberOfParts = 0;
+                                LastPartOffset = 0;
                                 if (!(NotifyChange->Flags & WATCH_ROOT))
                                 {
                                     FullNumberOfParts = 1;
@@ -1411,6 +1412,10 @@ FsRtlNotifyFilterReportChange(IN PNOTIFY_SYNC NotifySync,
                             NotifyChange->ThisBufferLength = 0;
                         }
                     }
+                }
+                else
+                {
+                    NotifyChange->Flags |= NOTIFY_IMMEDIATELY;
                 }
             }
 
