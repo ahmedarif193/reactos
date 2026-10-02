@@ -1245,11 +1245,10 @@ GetProcessImageFileNameA(HANDLE hProcess,
 
     /* Copy name */
     Len = WideCharToMultiByte(CP_ACP, 0, ImageFileName->Buffer,
-                              ImageFileName->Length, lpImageFileName, nSize, NULL, NULL);
-    /* If conversion was successful, don't return len with added \0 */
-    if (Len != 0)
+                              ImageFileName->Length / sizeof(WCHAR), lpImageFileName, nSize, NULL, NULL);
+    if (Len < nSize)
     {
-        Len -= sizeof(ANSI_NULL);
+        lpImageFileName[Len] = ANSI_NULL;
     }
 
     LocalFree(ImageFileName);
