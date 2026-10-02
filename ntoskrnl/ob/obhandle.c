@@ -2725,7 +2725,7 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
     }
 
     /* Check if we have to close the source handle */
-    if ((Options & DUPLICATE_CLOSE_SOURCE) && SourceProcess != TargetProcess)
+    if (Options & DUPLICATE_CLOSE_SOURCE)
     {
         /* Attach and close */
         KeStackAttachProcess(&SourceProcess->Pcb, &ApcState);
