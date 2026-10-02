@@ -3,6 +3,7 @@ add_compile_definitions(_GCC_SAL_CHECK_RETURN)
 
 add_subdirectory(arbiter)
 add_subdirectory(aux_klib)
+add_subdirectory(bufferoverflowk)
 add_subdirectory(copysup)
 add_subdirectory(csq)
 if(REACTOS_USE_WDDM)
