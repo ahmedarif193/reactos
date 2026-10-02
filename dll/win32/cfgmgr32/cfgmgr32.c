@@ -717,8 +717,64 @@ static const struct property_desc device_properties[] =
     { &DEVPKEY_Device_SafeRemovalRequiredOverride,  DEVPROP_TYPE_BOOLEAN },
 };
 
+#ifdef __REACTOS__
+static HMODULE kernel_device_property_provider(void)
+{
+    static HMODULE provider;
+    HMODULE module = InterlockedCompareExchangePointer( (void **)&provider, NULL, NULL );
+
+    if (!module && (module = LoadLibraryW( L"setupapi.dll" )) &&
+        InterlockedCompareExchangePointer( (void **)&provider, module, NULL ))
+    {
+        FreeLibrary( module );
+        module = provider;
+    }
+    return module;
+}
+
+static LSTATUS query_kernel_device_property( const struct device *dev, ULONG property, struct property *prop )
+{
+    CONFIGRET (WINAPI *locate)( DEVINST *, DEVINSTID_W, ULONG );
+    CONFIGRET (WINAPI *get_property)( DEVINST, ULONG, ULONG *, void *, ULONG *, ULONG );
+    WCHAR instance_id[3 * MAX_PATH];
+    ULONG value, size = sizeof(value);
+    LSTATUS err = ERROR_NOT_FOUND;
+    HMODULE setupapi;
+    DEVINST node;
+    UINT len;
+
+    if (!(setupapi = kernel_device_property_provider())) return ERROR_NOT_FOUND;
+    locate = (void *)GetProcAddress( setupapi, "CM_Locate_DevNodeW" );
+    get_property = (void *)GetProcAddress( setupapi, "CM_Get_DevNode_Registry_PropertyW" );
+
+    len = swprintf( instance_id, ARRAY_SIZE(instance_id), L"%s", dev->enumerator );
+    if (*dev->device)
+        len += swprintf( instance_id + len, ARRAY_SIZE(instance_id) - len, L"\\%s", dev->device );
+    if (*dev->instance)
+        swprintf( instance_id + len, ARRAY_SIZE(instance_id) - len, L"\\%s", dev->instance );
+
+    if (locate && get_property && !locate( &node, instance_id, CM_LOCATE_DEVNODE_NORMAL ) &&
+        !get_property( node, property, NULL, &value, &size, 0 ) && size == sizeof(value))
+    {
+        err = *prop->size >= sizeof(value) ? ERROR_SUCCESS : ERROR_MORE_DATA;
+        if (!err && prop->buffer) memcpy( prop->buffer, &value, sizeof(value) );
+        *prop->size = sizeof(value);
+        if (prop->type) *prop->type = DEVPROP_TYPE_UINT32;
+        if (prop->reg_type) *prop->reg_type = REG_DWORD;
+    }
+
+    return err;
+}
+#endif
+
 static LSTATUS query_device_property( HKEY hkey, const struct device *dev, struct property *prop )
 {
+#ifdef __REACTOS__
+    if (!memcmp( &DEVPKEY_Device_BusNumber, &prop->key, sizeof(prop->key) ))
+        return query_kernel_device_property( dev, CM_DRP_BUSNUMBER, prop );
+    if (!memcmp( &DEVPKEY_Device_Address, &prop->key, sizeof(prop->key) ))
+        return query_kernel_device_property( dev, CM_DRP_ADDRESS, prop );
+#endif
     if (!memcmp( &DEVPKEY_Device_InstanceId, &prop->key, sizeof(prop->key) ))
     {
         WCHAR instance_id[3 * MAX_PATH];
