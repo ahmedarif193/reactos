@@ -1532,7 +1532,10 @@ FltGetContexts(
     _In_ FLT_CONTEXT_TYPE DesiredContexts,
     _Out_ PFLT_RELATED_CONTEXTS Contexts)
 {
-    (VOID)FltGetContextsEx(FltObjects, DesiredContexts & ~FLT_SECTION_CONTEXT, sizeof(*Contexts), (PFLT_RELATED_CONTEXTS_EX)Contexts);
+    if (!NT_SUCCESS(FltGetContextsEx(FltObjects, DesiredContexts & ~FLT_SECTION_CONTEXT, sizeof(*Contexts), (PFLT_RELATED_CONTEXTS_EX)Contexts)))
+    {
+        RtlZeroMemory(Contexts, sizeof(*Contexts));
+    }
 }
 
 VOID

@@ -273,13 +273,19 @@ FltpCreateInstance(
 
     if (RetInstance != NULL)
     {
-        (VOID)ExAcquireRundownProtection(&Instance->Base.RundownRef);
-        *RetInstance = Instance;
+        if (ExAcquireRundownProtection(&Instance->Base.RundownRef))
+        {
+            *RetInstance = Instance;
+        }
+        else
+        {
+            Status = STATUS_FLT_DELETING_OBJECT;
+        }
     }
 
     InterlockedAnd((PLONG)&Instance->Flags, ~FLTP_INSTANCE_INITIALIZING);
     FltpDereferencePointer(&Instance->Base);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 VOID
