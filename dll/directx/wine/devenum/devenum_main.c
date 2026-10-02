@@ -128,6 +128,10 @@ HRESULT WINAPI DllRegisterServer(void)
 
     res = CoCreateInstance(&CLSID_FilterMapper2, NULL, CLSCTX_INPROC,
                            &IID_IFilterMapper2,  &mapvptr);
+#ifdef __REACTOS__
+    if (res == REGDB_E_CLASSNOTREG)
+        return S_OK;
+#endif
     if (SUCCEEDED(res))
     {
         pMapper = mapvptr;

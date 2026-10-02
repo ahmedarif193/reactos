@@ -61,6 +61,7 @@ AddReg=Classes
 11,,ddraw.dll,1
 11,,evr.dll,1
 11,,winegstreamer.dll,1
+11,,devenum.dll,1
 11,,quartz.dll,1
 11,,devenum.dll,1
 11,,dinput.dll,1
