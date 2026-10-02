@@ -100,7 +100,6 @@ list(APPEND SOURCE
     unicodeprefix.c
     vectoreh.c
     version.c
-    wait.c
     workitem.c
     rtl.h)
 

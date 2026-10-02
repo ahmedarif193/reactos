@@ -329,6 +329,9 @@ struct threadpool_object
             HANDLE          duped_handle;
             DWORD           flags;
             RTL_WAITORTIMERCALLBACKFUNC rtl_callback;
+#ifdef __REACTOS__
+            struct list     rtl_callers;
+#endif
         } wait;
         struct
         {
@@ -4007,11 +4010,31 @@ NTSTATUS WINAPI TpQueryPoolStackInformation( TP_POOL *pool, TP_POOL_STACK_INFORM
     return STATUS_SUCCESS;
 }
 
-#ifndef __REACTOS__
+#ifdef __REACTOS__
+struct rtl_wait_caller
+{
+    struct list entry;
+    HANDLE      thread;
+};
+#endif
+
 static void CALLBACK rtl_wait_callback( TP_CALLBACK_INSTANCE *instance, void *userdata, TP_WAIT *wait, TP_WAIT_RESULT result )
 {
     struct threadpool_object *object = impl_from_TP_WAIT(wait);
+#ifdef __REACTOS__
+    struct rtl_wait_caller caller;
+
+    caller.thread = NtCurrentTeb()->ClientId.UniqueThread;
+    RtlEnterCriticalSection( &object->pool->cs );
+    list_add_tail( &object->u.wait.rtl_callers, &caller.entry );
+    RtlLeaveCriticalSection( &object->pool->cs );
+#endif
     object->u.wait.rtl_callback( userdata, result != STATUS_WAIT_0 );
+#ifdef __REACTOS__
+    RtlEnterCriticalSection( &object->pool->cs );
+    list_remove( &caller.entry );
+    RtlLeaveCriticalSection( &object->pool->cs );
+#endif
 }
 
 /***********************************************************************
@@ -4062,6 +4085,9 @@ NTSTATUS WINAPI RtlRegisterWait( HANDLE *out, HANDLE handle, RTL_WAITORTIMERCALL
 
     object = impl_from_TP_WAIT(wait);
     object->u.wait.rtl_callback = callback;
+#ifdef __REACTOS__
+    list_init( &object->u.wait.rtl_callers );
+#endif
 
     RtlEnterCriticalSection( &waitqueue.cs );
     TpSetWait( (TP_WAIT *)object, handle, get_nt_timeout( &timeout, milliseconds ) );
@@ -4089,6 +4115,10 @@ NTSTATUS WINAPI RtlDeregisterWaitEx( HANDLE handle, HANDLE event )
 {
     struct threadpool_object *object = handle;
     NTSTATUS status;
+#ifdef __REACTOS__
+    struct rtl_wait_caller *caller;
+    LONG own = 0;
+#endif
 
     TRACE( "handle %p, event %p\n", handle, event );
 
@@ -4104,8 +4134,15 @@ NTSTATUS WINAPI RtlDeregisterWaitEx( HANDLE handle, HANDLE event )
     }
 
     RtlEnterCriticalSection( &object->pool->cs );
+#ifdef __REACTOS__
+    LIST_FOR_EACH_ENTRY( caller, &object->u.wait.rtl_callers, struct rtl_wait_caller, entry )
+        if (caller->thread == NtCurrentTeb()->ClientId.UniqueThread) own += 2;
+    if (object->num_pending_callbacks + object->num_running_callbacks
+        + object->num_associated_callbacks > own) status = STATUS_PENDING;
+#else
     if (object->num_pending_callbacks + object->num_running_callbacks
         + object->num_associated_callbacks) status = STATUS_PENDING;
+#endif
     else status = STATUS_SUCCESS;
     RtlLeaveCriticalSection( &object->pool->cs );
 
@@ -4130,7 +4167,6 @@ NTSTATUS WINAPI RtlDeregisterWait(HANDLE WaitHandle)
 {
     return RtlDeregisterWaitEx(WaitHandle, NULL);
 }
-#endif
 
 #ifdef __REACTOS__
 VOID
