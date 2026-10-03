@@ -2619,6 +2619,8 @@ CmpEnumerateOpenSubKeys(
     /* Ensure the registry is locked exclusively for the calling thread */
     CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK();
 
+    CmpRunDownDelayDerefKCBEngine();
+
     /* The root key is the only referenced key. There are no referenced sub keys. */
     if (RootKcb->RefCount == 1)
     {

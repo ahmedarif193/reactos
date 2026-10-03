@@ -946,6 +946,12 @@ CmpDelayDerefKeyControlBlock(
 
 VOID
 NTAPI
+CmpRunDownDelayDerefKCBEngine(
+    VOID
+);
+
+VOID
+NTAPI
 CmpAddToDelayedClose(
     IN PCM_KEY_CONTROL_BLOCK Kcb,
     IN BOOLEAN LockHeldExclusively
