@@ -685,6 +685,20 @@ CopySystemProfile(
         goto done;
     }
 
+    cchSize = GetSystemWow64DirectoryW(szProfilePath, ARRAYSIZE(szProfilePath));
+    if (cchSize != 0 && cchSize < ARRAYSIZE(szProfilePath) &&
+        GetFileAttributesW(szProfilePath) != INVALID_FILE_ATTRIBUTES &&
+        SUCCEEDED(StringCchCatW(szProfilePath, ARRAYSIZE(szProfilePath), L"\\config")))
+    {
+        CreateDirectoryW(szProfilePath, NULL);
+        if (SUCCEEDED(StringCchCatW(szProfilePath, ARRAYSIZE(szProfilePath), L"\\systemprofile")) &&
+            (CreateDirectoryW(szProfilePath, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) &&
+            !CopyDirectory(szProfilePath, szDefaultProfilePath))
+        {
+            DPRINT1("Failed to copy the default profile to the WoW64 system profile (Error %lu)\n", GetLastError());
+        }
+    }
+
     bResult = TRUE;
 
 done:

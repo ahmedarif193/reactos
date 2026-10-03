@@ -331,6 +331,9 @@ add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Users")
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Users" "Default")
 # Mini setup runs the shell as LocalSystem, whose profile is resolved by token.
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "reactos/system32/config" "systemprofile")
+if(ENABLE_WOW64)
+    add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "reactos/SysWOW64/config" "systemprofile")
+endif()
 
 # Optional build-local payload for LiveCD images. Each non-comment line uses
 # the same "image/path=host/path" format as livecd.cmake.lst. This keeps
@@ -455,6 +458,9 @@ add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "User
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Users" "Default")
 # Mini setup does not run CopySystemProfile from a full installation.
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "reactos/system32/config" "systemprofile")
+if(ENABLE_WOW64)
+    add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "reactos/SysWOW64/config" "systemprofile")
+endif()
 
 # Optional build-local payload for preinstalled disk images. Each non-comment
 # line uses the same "image/path=host/path" format as preinstall.cmake.lst.
