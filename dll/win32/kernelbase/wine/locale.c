@@ -302,7 +302,9 @@ struct norm_table
 
 static CPTABLEINFO ansi_cpinfo;
 static CPTABLEINFO oem_cpinfo;
+#ifndef __REACTOS__
 static UINT unix_cp = CP_UTF8;
+#endif
 static LCID system_lcid;
 static LCID user_lcid;
 static HKEY intl_key;
