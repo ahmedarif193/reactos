@@ -179,7 +179,7 @@ static const MIME_CP_INFO central_european_cp[] =
             MIMECONTF_SAVABLE_MAILNEWS | MIMECONTF_SAVABLE_BROWSER |
             MIMECONTF_EXPORT | MIMECONTF_VALID | MIMECONTF_VALID_NLS |
             MIMECONTF_MIME_LATEST,
-      L"windows-1250", L"windows-1250", L"windows-1250" },
+      L"windows-1250", L"windows-1250", L"iso-8859-2" },
     { L"Central European (Mac)",
       10029, MIMECONTF_IMPORT | MIMECONTF_EXPORT | MIMECONTF_VALID |
              MIMECONTF_VALID_NLS | MIMECONTF_MIME_LATEST,
@@ -212,7 +212,7 @@ static const MIME_CP_INFO cyrillic_cp[] =
       1251, MIMECONTF_MAILNEWS | MIMECONTF_BROWSER | MIMECONTF_IMPORT |
             MIMECONTF_SAVABLE_MAILNEWS | MIMECONTF_SAVABLE_BROWSER |
             MIMECONTF_EXPORT | MIMECONTF_VALID_NLS | MIMECONTF_MIME_LATEST,
-      L"windows-1251", L"windows-1251", L"windows-1251" },
+      L"windows-1251", L"windows-1251", L"koi8-r" },
     { L"Cyrillic (Mac)",
       10007, MIMECONTF_IMPORT | MIMECONTF_EXPORT | MIMECONTF_VALID_NLS |
              MIMECONTF_MIME_LATEST,
@@ -254,7 +254,7 @@ static const MIME_CP_INFO greek_cp[] =
       1253, MIMECONTF_MAILNEWS | MIMECONTF_BROWSER | MIMECONTF_IMPORT |
             MIMECONTF_SAVABLE_MAILNEWS | MIMECONTF_SAVABLE_BROWSER |
             MIMECONTF_EXPORT | MIMECONTF_VALID_NLS | MIMECONTF_MIME_LATEST,
-      L"windows-1253", L"windows-1253", L"windows-1253" },
+      L"windows-1253", L"windows-1253", L"iso-8859-7" },
     { L"Greek (Mac)",
       10006, MIMECONTF_IMPORT | MIMECONTF_EXPORT | MIMECONTF_VALID_NLS |
              MIMECONTF_MIME_LATEST,
@@ -347,8 +347,11 @@ static const MIME_CP_INFO korean_cp[] =
 static const MIME_CP_INFO thai_cp[] =
 {
     { L"Thai (Windows)",
-      874, MIMECONTF_IMPORT | MIMECONTF_EXPORT | MIMECONTF_MIME_LATEST,
-      L"ibm-thai", L"ibm-thai", L"ibm-thai" }
+      874, MIMECONTF_MAILNEWS | MIMECONTF_BROWSER | MIMECONTF_MINIMAL |
+           MIMECONTF_IMPORT | MIMECONTF_SAVABLE_MAILNEWS |
+           MIMECONTF_SAVABLE_BROWSER | MIMECONTF_EXPORT | MIMECONTF_VALID |
+           MIMECONTF_VALID_NLS | MIMECONTF_MIME_LATEST,
+      L"windows-874", L"windows-874", L"windows-874" }
 };
 static const MIME_CP_INFO turkish_cp[] =
 {
@@ -365,7 +368,7 @@ static const MIME_CP_INFO turkish_cp[] =
             MIMECONTF_IMPORT | MIMECONTF_SAVABLE_MAILNEWS |
             MIMECONTF_SAVABLE_BROWSER | MIMECONTF_EXPORT | MIMECONTF_VALID |
             MIMECONTF_VALID_NLS | MIMECONTF_MIME_LATEST,
-      L"windows-1254", L"windows-1254", L"windows-1254" },
+      L"windows-1254", L"windows-1254", L"iso-8859-9" },
     { L"Turkish (Mac)",
       10081, MIMECONTF_IMPORT | MIMECONTF_EXPORT | MIMECONTF_VALID |
              MIMECONTF_VALID_NLS | MIMECONTF_MIME_LATEST,
@@ -431,7 +434,7 @@ static const MIME_CP_INFO western_cp[] =
             MIMECONTF_IMPORT | MIMECONTF_SAVABLE_MAILNEWS |
             MIMECONTF_SAVABLE_BROWSER | MIMECONTF_EXPORT | MIMECONTF_VALID |
             MIMECONTF_VALID_NLS | MIMECONTF_MIME_LATEST,
-      L"windows-1252", L"windows-1252", L"iso-8859-1" },
+      L"Windows-1252", L"Windows-1252", L"iso-8859-1" },
     { L"Western European (Mac)",
       10000, MIMECONTF_IMPORT | MIMECONTF_EXPORT | MIMECONTF_VALID |
              MIMECONTF_VALID_NLS | MIMECONTF_MIME_LATEST,
@@ -3855,10 +3858,13 @@ static HRESULT WINAPI MLangConvertCharset_Initialize(IMLangConvertCharset *iface
     if (prop)
         FIXME("property 0x%08lx not supported\n", prop);
 
+    if (src_cp == This->src_cp && dst_cp == This->dst_cp)
+        return S_OK;
+
     This->src_cp = src_cp;
     This->dst_cp = dst_cp;
 
-    return S_OK;
+    return IsConvertINetStringAvailable(src_cp, dst_cp);
 }
 
 static HRESULT WINAPI MLangConvertCharset_GetSourceCodePage(IMLangConvertCharset *iface, UINT *src_cp)
@@ -3975,6 +3981,8 @@ static HRESULT MLangConvertCharset_create(IUnknown *outer, void **obj)
 
     convert->IMLangConvertCharset_iface.lpVtbl = &MLangConvertCharsetVtbl;
     convert->ref = 1;
+    convert->src_cp = 0;
+    convert->dst_cp = 0;
 
     *obj = &convert->IMLangConvertCharset_iface;
 
@@ -3990,9 +3998,183 @@ HRESULT WINAPI DllCanUnloadNow(void)
     return dll_count == 0 ? S_OK : S_FALSE;
 }
 
+struct font_link_global
+{
+    IUnknown IUnknown_iface;
+    IMLangFontLink IMLangFontLink_iface;
+    LONG ref;
+    IMLangFontLink *inner;
+};
+
+static inline struct font_link_global *impl_from_global_IUnknown(IUnknown *iface)
+{
+    return CONTAINING_RECORD(iface, struct font_link_global, IUnknown_iface);
+}
+
+static inline struct font_link_global *impl_from_global_IMLangFontLink(IMLangFontLink *iface)
+{
+    return CONTAINING_RECORD(iface, struct font_link_global, IMLangFontLink_iface);
+}
+
+static HRESULT WINAPI font_link_global_QueryInterface(IUnknown *iface, REFIID riid, void **obj)
+{
+    struct font_link_global *This = impl_from_global_IUnknown(iface);
+
+    TRACE("(%p)->(%s %p)\n", This, debugstr_guid(riid), obj);
+
+    if (IsEqualGUID(riid, &IID_IUnknown))
+        *obj = &This->IUnknown_iface;
+    else if (IsEqualGUID(riid, &IID_IMLangCodePages) || IsEqualGUID(riid, &IID_IMLangFontLink))
+        *obj = &This->IMLangFontLink_iface;
+    else
+    {
+        *obj = NULL;
+        return E_NOINTERFACE;
+    }
+
+    IUnknown_AddRef((IUnknown *)*obj);
+    return S_OK;
+}
+
+static ULONG WINAPI font_link_global_AddRef(IUnknown *iface)
+{
+    struct font_link_global *This = impl_from_global_IUnknown(iface);
+    return InterlockedIncrement(&This->ref);
+}
+
+static ULONG WINAPI font_link_global_Release(IUnknown *iface)
+{
+    struct font_link_global *This = impl_from_global_IUnknown(iface);
+    ULONG ref = InterlockedDecrement(&This->ref);
+
+    if (!ref)
+    {
+        IMLangFontLink_Release(This->inner);
+        free(This);
+    }
+    return ref;
+}
+
+static const IUnknownVtbl font_link_global_unk_vtbl =
+{
+    font_link_global_QueryInterface,
+    font_link_global_AddRef,
+    font_link_global_Release
+};
+
+static HRESULT WINAPI font_link_global_fl_QueryInterface(IMLangFontLink *iface, REFIID riid, void **obj)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return font_link_global_QueryInterface(&This->IUnknown_iface, riid, obj);
+}
+
+static ULONG WINAPI font_link_global_fl_AddRef(IMLangFontLink *iface)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return font_link_global_AddRef(&This->IUnknown_iface);
+}
+
+static ULONG WINAPI font_link_global_fl_Release(IMLangFontLink *iface)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return font_link_global_Release(&This->IUnknown_iface);
+}
+
+static HRESULT WINAPI font_link_global_GetCharCodePages(IMLangFontLink *iface, WCHAR ch, DWORD *codepages)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return IMLangFontLink_GetCharCodePages(This->inner, ch, codepages);
+}
+
+static HRESULT WINAPI font_link_global_GetStrCodePages(IMLangFontLink *iface, const WCHAR *src, LONG src_len,
+                                                       DWORD priority_cp, DWORD *codepages, LONG *ret_len)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return IMLangFontLink_GetStrCodePages(This->inner, src, src_len, priority_cp, codepages, ret_len);
+}
+
+static HRESULT WINAPI font_link_global_CodePageToCodePages(IMLangFontLink *iface, UINT codepage, DWORD *codepages)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return IMLangFontLink_CodePageToCodePages(This->inner, codepage, codepages);
+}
+
+static HRESULT WINAPI font_link_global_CodePagesToCodePage(IMLangFontLink *iface, DWORD codepages, UINT def_codepage,
+                                                           UINT *codepage)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return IMLangFontLink_CodePagesToCodePage(This->inner, codepages, def_codepage, codepage);
+}
+
+static HRESULT WINAPI font_link_global_GetFontCodePages(IMLangFontLink *iface, HDC hdc, HFONT hfont, DWORD *codepages)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return IMLangFontLink_GetFontCodePages(This->inner, hdc, hfont, codepages);
+}
+
+static HRESULT WINAPI font_link_global_MapFont(IMLangFontLink *iface, HDC hdc, DWORD codepages, HFONT src_font,
+                                               HFONT *dst_font)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return IMLangFontLink_MapFont(This->inner, hdc, codepages, src_font, dst_font);
+}
+
+static HRESULT WINAPI font_link_global_ReleaseFont(IMLangFontLink *iface, HFONT hfont)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return IMLangFontLink_ReleaseFont(This->inner, hfont);
+}
+
+static HRESULT WINAPI font_link_global_ResetFontMapping(IMLangFontLink *iface)
+{
+    struct font_link_global *This = impl_from_global_IMLangFontLink(iface);
+    return IMLangFontLink_ResetFontMapping(This->inner);
+}
+
+static const IMLangFontLinkVtbl font_link_global_fl_vtbl =
+{
+    font_link_global_fl_QueryInterface,
+    font_link_global_fl_AddRef,
+    font_link_global_fl_Release,
+    font_link_global_GetCharCodePages,
+    font_link_global_GetStrCodePages,
+    font_link_global_CodePageToCodePages,
+    font_link_global_CodePagesToCodePage,
+    font_link_global_GetFontCodePages,
+    font_link_global_MapFont,
+    font_link_global_ReleaseFont,
+    font_link_global_ResetFontMapping
+};
+
 static BOOL WINAPI allocate_font_link_cb(PINIT_ONCE init_once, PVOID args, PVOID *context)
 {
-    return SUCCEEDED(MultiLanguage_create(NULL, (void**)&font_link_global));
+    struct font_link_global *global;
+    IUnknown *mlang;
+    HRESULT hr;
+
+    global = malloc(sizeof(*global));
+    if (!global) return FALSE;
+
+    hr = MultiLanguage_create(NULL, (void **)&mlang);
+    if (FAILED(hr))
+    {
+        free(global);
+        return FALSE;
+    }
+
+    hr = IUnknown_QueryInterface(mlang, &IID_IMLangFontLink, (void **)&global->inner);
+    IUnknown_Release(mlang);
+    if (FAILED(hr))
+    {
+        free(global);
+        return FALSE;
+    }
+
+    global->IUnknown_iface.lpVtbl = &font_link_global_unk_vtbl;
+    global->IMLangFontLink_iface.lpVtbl = &font_link_global_fl_vtbl;
+    global->ref = 1;
+    font_link_global = &global->IUnknown_iface;
+    return TRUE;
 }
 
 HRESULT WINAPI GetGlobalFontLinkObject(IMLangFontLink **obj)
