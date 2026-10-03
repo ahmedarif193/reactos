@@ -41,6 +41,7 @@ add_library(ucrtbase SHARED
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/rintf.c
     ucrtbase_stubs.c
     ucrtbase.def
+    ucrtbase.rc
 )
 
 if(ARCH STREQUAL "arm64" AND ARM64EC_RUNTIME)
