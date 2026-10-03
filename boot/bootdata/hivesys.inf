@@ -1546,7 +1546,7 @@ HKLM,"SYSTEM\CurrentControlSet\Control\ProductOptions\LicenseInformation","Kerne
 HKLM,"SYSTEM\CurrentControlSet\Control\ProductOptions\LicenseInformation","Kernel-MUI-Number-Allowed",0x00010001,1
 ; ReactOS specific - by default we report ourselves as Workstation for the user,
 ; but we can also report as Server if some application needs it.
-HKLM,"SYSTEM\CurrentControlSet\Control\ReactOS\Settings\Version","ReportAsWorkstation",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Control\ReactOS\Settings\Version","ReportAsWorkstation",0x00010001,0x00000001
 ; Some installers check for SP2
 HKLM,"SYSTEM\CurrentControlSet\Control\Windows","CSDReleaseType",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Control\Windows","CSDVersion",0x00010001,0x00000200
