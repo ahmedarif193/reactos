@@ -229,7 +229,7 @@ cmake_dependent_option(ENABLE_FFMPEG
                        "ARCH STREQUAL i386 OR ARCH STREQUAL amd64 OR ARCH STREQUAL arm64;CMAKE_C_COMPILER_ID STREQUAL Clang;NOT MSVC" OFF)
 
 set(_wow64_default OFF)
-if(ARCH STREQUAL "arm64" AND NOT ARM64EC_RUNTIME)
+if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND NOT ARM64EC_RUNTIME)
     set(_wow64_default ON)
 endif()
 # TODO(riscv64): add riscv64 to the ENABLE_WOW64 host list once an x86 CPU backend exists

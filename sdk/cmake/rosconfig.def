@@ -326,7 +326,8 @@ config ENABLE_WOW64
     depends ARCH=amd64 || ARCH=arm64
     help
       Build the WoW64 subsystem: the support DLLs plus the ntdll and kernel
-      paths that run 32-bit x86 applications. "auto" enables it on ARM64.
+      paths that run 32-bit x86 applications. "auto" enables it on amd64
+      and ARM64.
 
 config ENABLE_FEX_ARM64EC
     prompt "FEX ARM64EC emulator (run x86-64 applications)"
