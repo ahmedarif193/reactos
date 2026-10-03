@@ -20,12 +20,19 @@
 */
 
 #include <math.h>
+#include <errno.h>
 
 #ifdef _MSC_VER
 #pragma function(acos)
 #endif
 
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
+
 double acos(double __x)
 {
+    if (isnan(__x))
+        return __x + __x;
+    if (__x > 1.0 || __x < -1.0)
+        return __acrt_report_math_error(_DOMAIN, "acos", __x, 0, -NAN, EDOM);
     return atan2(sqrt(1.0 - __x * __x), __x);
 }

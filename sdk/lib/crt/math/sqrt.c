@@ -6,7 +6,10 @@
  */
 
 #include <math.h>
+#include <errno.h>
 #include <assert.h>
+
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
 
 double
 __cdecl
@@ -25,7 +28,7 @@ sqrt(
     }
     else if (x < 0.0)
     {
-        return -NAN;
+        return __acrt_report_math_error(_DOMAIN, "sqrt", x, 0, -NAN, EDOM);
     }
 
     /* Convert into a 64  bit integer */

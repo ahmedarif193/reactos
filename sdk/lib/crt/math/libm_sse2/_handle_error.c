@@ -16,6 +16,8 @@ _invoke_matherr(
     double arg2,
     double retval);
 
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
+
 /*!
  * @brief Handles an error condition.
  * @param fname - The name of the function that caused the error.
@@ -44,9 +46,7 @@ _handle_error(
 {
     double retval = *(double*)&value;
 
-    _invoke_matherr(type, fname, arg1, arg2, retval);
-
-    return retval;
+    return __acrt_report_math_error(type, fname, arg1, arg2, retval, error);
 }
 
 
@@ -66,7 +66,5 @@ _handle_errorf(
 {
     float retval = *(float*)&value;
 
-    _invoke_matherr(type, fname, arg1, arg2, retval);
-
-    return retval;
+    return (float)__acrt_report_math_error(type, fname, arg1, arg2, retval, error);
 }

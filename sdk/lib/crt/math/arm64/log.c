@@ -4,6 +4,7 @@
  */
 
 #include <math.h>
+#include <errno.h>
 #include <stdint.h>
 
 #define asuint64(x) ((union { double f; uint64_t i; }){(x)}.i)
@@ -19,6 +20,8 @@ static const double Lg5 = 1.818357216161805012e-01;       /* 0x3fc7466496cb03de 
 static const double Lg6 = 1.531383769920937332e-01;       /* 0x3fc39a09d078c69f */
 static const double Lg7 = 1.479819860511658591e-01;       /* 0x3fc2f112df3e5244 */
 
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
+
 double log(double x)
 {
     union { double f; uint64_t i; } u = { x };
@@ -28,9 +31,9 @@ double log(double x)
 
     /* Handle subnormals, zero and negative values up-front. */
     if ((ix << 1) == 0)
-        return -INFINITY;
+        return __acrt_report_math_error(0, "log", x, 0, -INFINITY, ERANGE);
     if (ix >> 63)
-        return isnan(x) ? x + x : -NAN;
+        return isnan(x) ? x + x : __acrt_report_math_error(0, "log", x, 0, -NAN, EDOM);
     if (ix < 0x0010000000000000ULL) {
         k -= 54;
         x *= 0x1p54;

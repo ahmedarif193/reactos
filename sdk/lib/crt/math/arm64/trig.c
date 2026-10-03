@@ -8,6 +8,7 @@
  */
 
 #include <math.h>
+#include <errno.h>
 #include <stdint.h>
 
 void __remainder_piby2(double x, double *r, double *rr, int *region);
@@ -205,6 +206,8 @@ static int TrigRemPio2(double x, double *y)
     return region;
 }
 
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
+
 double sin(double x)
 {
     double y[2];
@@ -218,7 +221,7 @@ double sin(double x)
         return TrigKernelSin(x, 0.0, 0);
     }
     if (ix >= 0x7ff00000)
-        return isnan(x) ? x - x : -NAN;
+        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "sin", x, 0, -NAN, EDOM);
 
     n = TrigRemPio2(x, y);
     switch (n & 3)
@@ -243,7 +246,7 @@ double cos(double x)
         return TrigKernelCos(x, 0.0);
     }
     if (ix >= 0x7ff00000)
-        return isnan(x) ? x - x : -NAN;
+        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "cos", x, 0, -NAN, EDOM);
 
     n = TrigRemPio2(x, y);
     switch (n & 3)
@@ -268,7 +271,7 @@ double tan(double x)
         return TrigKernelTan(x, 0.0, 0);
     }
     if (ix >= 0x7ff00000)
-        return isnan(x) ? x - x : -NAN;
+        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "tan", x, 0, -NAN, EDOM);
 
     n = TrigRemPio2(x, y);
     return TrigKernelTan(y[0], y[1], n & 1);

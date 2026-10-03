@@ -13,6 +13,11 @@ double __cdecl acosh(double x)
 
 	/* x < 1 domain error is handled in the called functions */
 
+	if (x < 1)
+	{
+		errno = EDOM;
+		return NAN;
+	}
 	if (e < 0x3ff + 1)
 		/* |x| < 2, up to 2ulp error in [1,1.125] */
 		return log1p(x-1 + sqrt((x-1)*(x-1)+2*(x-1)));

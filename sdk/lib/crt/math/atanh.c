@@ -12,6 +12,17 @@ double __cdecl atanh(double x)
 	u.i &= (uint64_t)-1/2;
 	y = u.f;
 
+	if (y > 1)
+	{
+		errno = EDOM;
+		return NAN;
+	}
+	if (y == 1)
+	{
+		errno = ERANGE;
+		return s ? -INFINITY : INFINITY;
+	}
+
 	if (e < 0x3ff - 1) {
 		if (e < 0x3ff - 32) {
 			fp_barrier(y + 0x1p120f);

@@ -3,6 +3,7 @@
  */
 
 #include <math.h>
+#include <errno.h>
 #include <stdint.h>
 
 #define asuint64(x) ((union { double f; uint64_t i; }){(x)}.i)
@@ -20,6 +21,8 @@ static const double Lg5 = 1.818357216161805012e-01;
 static const double Lg6 = 1.531383769920937332e-01;
 static const double Lg7 = 1.479819860511658591e-01;
 
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
+
 double log10(double x)
 {
     uint64_t ix = asuint64(x);
@@ -27,9 +30,9 @@ double log10(double x)
     int k = 0;
 
     if ((ix << 1) == 0)
-        return -INFINITY;
+        return __acrt_report_math_error(_SING, "log10", x, 0, -INFINITY, ERANGE);
     if (ix >> 63)
-        return isnan(x) ? x + x : -NAN;
+        return isnan(x) ? x + x : __acrt_report_math_error(_DOMAIN, "log10", x, 0, -NAN, EDOM);
     if (ix >= 0x7ff0000000000000ULL)
         return x + x;
     if (ix < 0x0010000000000000ULL)

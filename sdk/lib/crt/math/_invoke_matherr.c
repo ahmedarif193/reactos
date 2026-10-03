@@ -6,6 +6,7 @@
  */
 
 #include <math.h>
+#include <errno.h>
 
 /* MS headers have this in corecrt_startup.h */
 typedef int (*_UserMathErrorFunctionPointer)(struct _exception *);
@@ -42,4 +43,33 @@ _invoke_matherr(
     {
         return 0;
     }
+}
+
+double
+__cdecl
+__acrt_report_math_error(
+    int type,
+    char const* name,
+    double arg1,
+    double arg2,
+    double retval,
+    int error)
+{
+    struct _exception excpt;
+
+    excpt.type = type;
+    excpt.name = (char*)name;
+    excpt.arg1 = arg1;
+    excpt.arg2 = arg2;
+    excpt.retval = retval;
+
+    if (type && user_matherr != NULL && user_matherr(&excpt))
+        return excpt.retval;
+
+#ifndef _LIBCNT_
+    if (error)
+        *_errno() = error;
+#endif
+
+    return excpt.retval;
 }

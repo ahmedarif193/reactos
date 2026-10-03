@@ -19,6 +19,7 @@
 
 /* Correct musl scalbn() lives in sdk/lib/crt/math/scalbn.c (same libraries). */
 double scalbn(double x, int n);
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
 
 double ldexp(double x, int exp)
 {
@@ -26,7 +27,9 @@ double ldexp(double x, int exp)
 
     if (_isnan(x))
         errno = EDOM;
-    else if (_finite(x) && x != 0.0 && (!_finite(result) || result == 0.0))
-        errno = ERANGE;
+    else if (_finite(x) && x != 0.0 && !_finite(result))
+        return __acrt_report_math_error(_OVERFLOW, "ldexp", x, exp, result, ERANGE);
+    else if (_finite(x) && x != 0.0 && result == 0.0)
+        return __acrt_report_math_error(_UNDERFLOW, "ldexp", x, exp, result, 0);
     return result;
 }

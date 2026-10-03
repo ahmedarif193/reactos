@@ -13,7 +13,10 @@
  */
 
 #include <math.h>
+#include <errno.h>
 #include <stdint.h>
+
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
 
 double _logb(double x)
 {
@@ -24,7 +27,7 @@ double _logb(double x)
     if (!e) {                       /* zero or subnormal */
         m <<= 12;                   /* drop sign+exponent, keep mantissa */
         if (m == 0)
-            return -1.0 / (x * x);  /* logb(+-0) = -inf, raise div-by-zero */
+            return __acrt_report_math_error(_SING, "_logb", x, 0, -1.0 / (x * x), ERANGE);
         /* subnormal: normalize to find the true exponent */
         for (e = -0x3ff; m >> 63 == 0; e--, m <<= 1)
             ;

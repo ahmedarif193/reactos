@@ -55,6 +55,7 @@
 
 #include <float.h>
 #include <math.h>
+#include <errno.h>
 #include <stdint.h>
 
 double scalbn(double x, int n);
@@ -111,8 +112,8 @@ ivln2    =  1.44269504088896338700e+00, /* 0x3FF71547, 0x652B82FE =1/ln2 */
 ivln2_h  =  1.44269502162933349609e+00, /* 0x3FF71547, 0x60000000 =24b 1/ln2*/
 ivln2_l  =  1.92596299112661746887e-08; /* 0x3E54AE0B, 0xF85DDF44 =1/ln2 tail*/
 
-double
-pow(double x, double y)
+static double
+pow_core(double x, double y)
 {
 	double z,ax,z_h,z_l,p_h,p_l;
 	double y1,t1,t2,r,s,t,u,v,w;
@@ -325,4 +326,21 @@ pow(double x, double y)
 	if((j>>20)<=0) z = scalbn(z,n);	/* subnormal output */
 	else SET_HIGH_WORD(z,j);
 	return s*z;
+}
+
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
+
+double
+pow(double x, double y)
+{
+    double z = pow_core(x, y);
+
+    if (_finite(x) && _finite(y))
+    {
+        if (_isnan(z))
+            return __acrt_report_math_error(0, "pow", x, y, z, EDOM);
+        if (!_finite(z) || (z == 0.0 && x != 0.0))
+            return __acrt_report_math_error(0, "pow", x, y, z, ERANGE);
+    }
+    return z;
 }

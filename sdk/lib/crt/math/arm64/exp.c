@@ -20,6 +20,7 @@
  */
 
 #include <math.h>
+#include <errno.h>
 #include <stdint.h>
 
 /* Endian-neutral IEEE-754 double word access (top/low 32 bits). */
@@ -54,6 +55,8 @@ static const double
 huge        = 1.0e+300,
 twom1000    = 9.33263618503218878990e-302;   /* 2**-1000=0x01700000,0 */
 
+double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
+
 double exp(double x)    /* default IEEE double exp */
 {
     double y, hi = 0.0, lo = 0.0, c, t;
@@ -74,8 +77,8 @@ double exp(double x)    /* default IEEE double exp */
             else
                 return (xsb == 0) ? x : 0.0;/* exp(+-inf)={inf,0} */
         }
-        if (x > o_threshold) return huge * huge;         /* overflow */
-        if (x < u_threshold) return twom1000 * twom1000; /* underflow */
+        if (x > o_threshold) return __acrt_report_math_error(0, "exp", x, 0, huge * huge, ERANGE);         /* overflow */
+        if (x < u_threshold) return __acrt_report_math_error(0, "exp", x, 0, twom1000 * twom1000, ERANGE); /* underflow */
     }
 
     /* argument reduction */
