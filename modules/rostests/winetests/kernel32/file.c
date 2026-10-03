@@ -438,13 +438,8 @@ static void test__lcreat( void )
     filehandle=_lcreat (slashname, 0); /* illegal name */
     ok( filehandle == HFILE_ERROR, "succeeded\n" );
     err=GetLastError ();
-#ifdef __REACTOS__
-    ok(err == ERROR_DIRECTORY,
-       "creating file \"%s\" failed with error %d\n", slashname, err);
-#else
     ok (err==ERROR_INVALID_NAME || err==ERROR_PATH_NOT_FOUND,
         "creating file \"%s\" failed with error %d\n", slashname, err);
-#endif
 
     filehandle=_lcreat (filename, 8); /* illegal attribute */
     if (HFILE_ERROR==filehandle)
