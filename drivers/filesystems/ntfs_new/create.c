@@ -1844,7 +1844,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     OpenTargetDirectory = BooleanFlagOn(IrpSp->Flags, SL_OPEN_TARGET_DIRECTORY);
     FileAttributes =
         IrpSp->Parameters.Create.FileAttributes &
-        FILE_ATTRIBUTE_VALID_FLAGS;
+        FILE_ATTRIBUTE_VALID_SET_FLAGS;
     if (FileAttributes & ~FILE_ATTRIBUTE_NORMAL)
         FileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
     if (!(CreateOptions & FILE_DIRECTORY_FILE))
