@@ -27,6 +27,9 @@
 
 #define HEAP_DECOMMIT_MINIMUM_BLOCK 0x8000
 #define HEAP_DECOMMIT_COMMITTED_DIVISOR 8
+#define HEAP_INITIAL_REGION 0x10000
+#define HEAP_INITIAL_COMMIT_ALIGN (0x400 * sizeof(PVOID))
+#define HEAP_MAX_GROW_SIZE 0xFD0000
 
 /* Bitmaps stuff */
 
@@ -1399,7 +1402,7 @@ RtlpExtendHeap(PHEAP Heap,
         /* Proceed only if it's success */
         if (NT_SUCCESS(Status))
         {
-            Heap->SegmentReserve += ReserveSize;
+            Heap->SegmentReserve = min(Heap->SegmentReserve * 2, HEAP_MAX_GROW_SIZE);
 
             /* Now commit the memory */
             if ((Size + PAGE_SIZE) <= Heap->SegmentCommit)
@@ -1565,7 +1568,7 @@ RtlCreateHeap(ULONG Flags,
     if (!Parameters->MaximumAllocationSize)
         Parameters->MaximumAllocationSize = MaximumUserModeAddress - (ULONG_PTR)0x10000 - PAGE_SIZE;
 
-    MaxBlockSize = 0x80000 - PAGE_SIZE;
+    MaxBlockSize = HEAP_MAX_BLOCK_SIZE << HEAP_ENTRY_SHIFT;
 
     if (!Parameters->VirtualMemoryThreshold ||
         Parameters->VirtualMemoryThreshold > MaxBlockSize)
@@ -1581,7 +1584,17 @@ RtlCreateHeap(ULONG Flags,
     }
 
     /* Check reserve/commit sizes and set default values */
-    if (!CommitSize)
+    if (!Addr)
+    {
+        CommitSize = ROUND_UP(CommitSize, HEAP_INITIAL_COMMIT_ALIGN);
+        if (!TotalSize)
+            TotalSize = ROUND_UP(CommitSize + 1, HEAP_INITIAL_REGION);
+        if (!CommitSize)
+            CommitSize = HEAP_INITIAL_REGION;
+        TotalSize = ROUND_UP(max(TotalSize, CommitSize), PAGE_SIZE);
+        CommitSize = min(TotalSize, ROUND_UP(CommitSize, HEAP_INITIAL_REGION));
+    }
+    else if (!CommitSize)
     {
         CommitSize = PAGE_SIZE;
         if (TotalSize)
