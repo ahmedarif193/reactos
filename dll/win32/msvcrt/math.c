@@ -159,6 +159,15 @@ double math_error(int type, const char *name, double arg1, double arg2, double r
     return exception.retval;
 }
 
+#ifdef __REACTOS__
+double CDECL __acrt_report_math_error(int type, const char *name, double arg1, double arg2, double retval, int error)
+{
+    if (type) return math_error(type, name, arg1, arg2, retval);
+    if (error) *_errno() = error;
+    return retval;
+}
+#endif
+
 /*********************************************************************
  *      __setusermatherr (MSVCRT.@)
  */
