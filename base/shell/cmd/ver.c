@@ -135,10 +135,15 @@ INT cmd_ver (LPTSTR param)
         return 0;
     }
 
-    ConOutResPrintf(STRING_CMD_SHELLINFO, _T(KERNEL_VERSION_STR), _T(KERNEL_VERSION_BUILD_STR));
-    ConOutChar(_T('\n'));
-    ConOutResPuts(STRING_VERSION_RUNNING_ON);
-    PrintOSVersion();
+    /*
+     * Application compatibility: installers and batch scripts parse this line
+     * by token position (e.g. "for /f "tokens=6 delims=[]. " %%G in ('ver')"),
+     * so it must keep the exact Windows 11 shape and wording. The name is an
+     * interoperability string only, not a product claim; this is LiberNT.
+     */
+    ConOutPrintf(_T("\nMicrosoft Windows [Version %lu.%lu.%lu.%lu]"),
+                 osvi.dwMajorVersion, osvi.dwMinorVersion,
+                 osvi.dwBuildNumber, (ULONG)VER_PRODUCTBUILD_QFE);
 
     /* Basic copyright notice */
     if (param[0] != _T('\0'))
