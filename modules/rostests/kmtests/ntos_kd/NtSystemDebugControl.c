@@ -22,29 +22,6 @@
 #define ok_neq_hex_test(testid, value, expected) \
     ok_neq_print_test(testid, value, expected, "0x%08lx")
 
-ULONG
-GetNtDdiVersion(VOID)
-{
-    RTL_OSVERSIONINFOEXW verInfo;
-    NTSTATUS Status;
-    ULONG Version;
-
-    verInfo.dwOSVersionInfoSize = sizeof(verInfo);
-    Status = RtlGetVersion((PRTL_OSVERSIONINFOW)&verInfo);
-    if (!NT_SUCCESS(Status))
-    {
-        trace("RtlGetVersion() returned 0x%08lx\n", Status);
-        return 0;
-    }
-
-    Version = ((((verInfo.dwMajorVersion & 0xFF)  << 8)  |
-                 (verInfo.dwMinorVersion & 0xFF)) << 16) |
-              (((verInfo.wServicePackMajor & 0xFF) << 8) |
-                (verInfo.wServicePackMinor & 0xFF));
-
-    return Version;
-}
-
 static
 NTSTATUS
 TestSystemDebugControl(
@@ -72,7 +49,7 @@ START_TEST(NtSystemDebugControl)
 
     /* Test for OS version: KdSystemDebugControl()
      * exists only on NT 5.2 SP1 and higher */
-    Version = GetNtDdiVersion();
+    Version = GetNTDDIVersion();
     if (skip(Version != 0, "GetNtDdiVersion() returned 0\n"))
         return;
 
