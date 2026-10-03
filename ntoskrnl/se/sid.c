@@ -22,6 +22,7 @@ SID_IDENTIFIER_AUTHORITY SeCreatorSidAuthority = {SECURITY_CREATOR_SID_AUTHORITY
 SID_IDENTIFIER_AUTHORITY SeNtSidAuthority = {SECURITY_NT_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY SeMandatoryLabelAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY SeAppPackageAuthority = {SECURITY_APP_PACKAGE_AUTHORITY};
+SID_IDENTIFIER_AUTHORITY SeProcessTrustAuthority = {SECURITY_PROCESS_TRUST_AUTHORITY};
 
 PSID SeNullSid = NULL;
 PSID SeWorldSid = NULL;
@@ -61,6 +62,10 @@ PSID SeHighMandatorySid = NULL;
 PSID SeSystemMandatorySid = NULL;
 PSID SeAllAppPackagesSid = NULL;
 PSID SeAllRestrictedAppPackagesSid = NULL;
+PSID SeIUserSid = NULL;
+PSID SeUserModeDriversSid = NULL;
+PSID SeProcTrustWinTcbSid = NULL;
+PSID SeTrustedInstallerSid = NULL;
 
 typedef struct _SID_VALIDATE
 {
@@ -117,6 +122,10 @@ FreeInitializedSids(VOID)
     if (SeAuthenticatedUsersSid) ExFreePoolWithTag(SeAuthenticatedUsersSid, TAG_SID);
     if (SeRestrictedSid) ExFreePoolWithTag(SeRestrictedSid, TAG_SID);
     if (SeAnonymousLogonSid) ExFreePoolWithTag(SeAnonymousLogonSid, TAG_SID);
+    if (SeIUserSid) ExFreePoolWithTag(SeIUserSid, TAG_SID);
+    if (SeUserModeDriversSid) ExFreePoolWithTag(SeUserModeDriversSid, TAG_SID);
+    if (SeProcTrustWinTcbSid) ExFreePoolWithTag(SeProcTrustWinTcbSid, TAG_SID);
+    if (SeTrustedInstallerSid) ExFreePoolWithTag(SeTrustedInstallerSid, TAG_SID);
 }
 
 /**
@@ -180,6 +189,10 @@ SepInitSecurityIDs(VOID)
     SeSystemMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeAllAppPackagesSid = ExAllocatePoolWithTag(PagedPool, SidLength2, TAG_SID);
     SeAllRestrictedAppPackagesSid = ExAllocatePoolWithTag(PagedPool, SidLength2, TAG_SID);
+    SeIUserSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
+    SeUserModeDriversSid = ExAllocatePoolWithTag(PagedPool, RtlLengthRequiredSid(SECURITY_USERMODEDRIVERHOST_ID_RID_COUNT), TAG_SID);
+    SeProcTrustWinTcbSid = ExAllocatePoolWithTag(PagedPool, SidLength2, TAG_SID);
+    SeTrustedInstallerSid = ExAllocatePoolWithTag(PagedPool, RtlLengthRequiredSid(SECURITY_SERVICE_ID_RID_COUNT), TAG_SID);
 
     if (SeNullSid == NULL || SeWorldSid == NULL ||
         SeLocalSid == NULL || SeCreatorOwnerSid == NULL ||
@@ -199,7 +212,9 @@ SepInitSecurityIDs(VOID)
         SeNetworkServiceSid == NULL || SeUntrustedMandatorySid == NULL ||
         SeLowMandatorySid == NULL || SeMediumMandatorySid == NULL ||
         SeHighMandatorySid == NULL || SeSystemMandatorySid == NULL ||
-        SeAllAppPackagesSid == NULL || SeAllRestrictedAppPackagesSid == NULL)
+        SeAllAppPackagesSid == NULL || SeAllRestrictedAppPackagesSid == NULL ||
+        SeIUserSid == NULL || SeUserModeDriversSid == NULL ||
+        SeProcTrustWinTcbSid == NULL || SeTrustedInstallerSid == NULL)
     {
         FreeInitializedSids();
         return FALSE;
@@ -334,6 +349,26 @@ SepInitSecurityIDs(VOID)
     *SubAuthority = SECURITY_LOCAL_SERVICE_RID;
     SubAuthority = RtlSubAuthoritySid(SeNetworkServiceSid, 0);
     *SubAuthority = SECURITY_NETWORK_SERVICE_RID;
+
+    RtlInitializeSid(SeIUserSid, &SeNtSidAuthority, 1);
+    *RtlSubAuthoritySid(SeIUserSid, 0) = SECURITY_IUSER_RID;
+    RtlInitializeSid(SeUserModeDriversSid, &SeNtSidAuthority, SECURITY_USERMODEDRIVERHOST_ID_RID_COUNT);
+    *RtlSubAuthoritySid(SeUserModeDriversSid, 0) = SECURITY_USERMODEDRIVERHOST_ID_BASE_RID;
+    *RtlSubAuthoritySid(SeUserModeDriversSid, 1) = 0;
+    *RtlSubAuthoritySid(SeUserModeDriversSid, 2) = 0;
+    *RtlSubAuthoritySid(SeUserModeDriversSid, 3) = 0;
+    *RtlSubAuthoritySid(SeUserModeDriversSid, 4) = 0;
+    *RtlSubAuthoritySid(SeUserModeDriversSid, 5) = 0;
+    RtlInitializeSid(SeProcTrustWinTcbSid, &SeProcessTrustAuthority, SECURITY_PROCESS_TRUST_AUTHORITY_RID_COUNT);
+    *RtlSubAuthoritySid(SeProcTrustWinTcbSid, 0) = SECURITY_PROCESS_PROTECTION_TYPE_FULL_RID;
+    *RtlSubAuthoritySid(SeProcTrustWinTcbSid, 1) = SECURITY_PROCESS_PROTECTION_LEVEL_WINTCB_RID;
+    RtlInitializeSid(SeTrustedInstallerSid, &SeNtSidAuthority, SECURITY_SERVICE_ID_RID_COUNT);
+    *RtlSubAuthoritySid(SeTrustedInstallerSid, 0) = SECURITY_SERVICE_ID_BASE_RID;
+    *RtlSubAuthoritySid(SeTrustedInstallerSid, 1) = SECURITY_TRUSTED_INSTALLER_RID1;
+    *RtlSubAuthoritySid(SeTrustedInstallerSid, 2) = SECURITY_TRUSTED_INSTALLER_RID2;
+    *RtlSubAuthoritySid(SeTrustedInstallerSid, 3) = SECURITY_TRUSTED_INSTALLER_RID3;
+    *RtlSubAuthoritySid(SeTrustedInstallerSid, 4) = SECURITY_TRUSTED_INSTALLER_RID4;
+    *RtlSubAuthoritySid(SeTrustedInstallerSid, 5) = SECURITY_TRUSTED_INSTALLER_RID5;
 
     return TRUE;
 }

@@ -96,6 +96,22 @@ SepInitExports(VOID)
     SepExports.SeManageVolumePrivilege = SeManageVolumePrivilege;
     SepExports.SeImpersonatePrivilege = SeImpersonatePrivilege;
     SepExports.SeCreateGlobalPrivilege = SeCreateGlobalPrivilege;
+    SepExports.SeTrustedCredManAccessPrivilege = SeTrustedCredmanPrivilege;
+    SepExports.SeRelabelPrivilege = SeRelabelPrivilege;
+    SepExports.SeIncreaseWorkingSetPrivilege = SeIncreaseWorkingSetPrivilege;
+    SepExports.SeTimeZonePrivilege = SeTimeZonePrivilege;
+    SepExports.SeCreateSymbolicLinkPrivilege = SeCreateSymbolicLinkPrivilege;
+
+    SepExports.SeIUserSid = SeIUserSid;
+    SepExports.SeUntrustedMandatorySid = SeUntrustedMandatorySid;
+    SepExports.SeLowMandatorySid = SeLowMandatorySid;
+    SepExports.SeMediumMandatorySid = SeMediumMandatorySid;
+    SepExports.SeHighMandatorySid = SeHighMandatorySid;
+    SepExports.SeSystemMandatorySid = SeSystemMandatorySid;
+    SepExports.SeAllAppPackagesSid = SeAllAppPackagesSid;
+    SepExports.SeUserModeDriversSid = SeUserModeDriversSid;
+    SepExports.SeProcTrustWinTcbSid = SeProcTrustWinTcbSid;
+    SepExports.SeTrustedInstallerSid = SeTrustedInstallerSid;
 
     SeExports = &SepExports;
     return TRUE;
