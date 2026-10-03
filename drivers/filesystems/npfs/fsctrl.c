@@ -380,7 +380,8 @@ NpListen(IN PDEVICE_OBJECT DeviceObject,
 
             Status = NpSetListeningPipeState(Ccb, Irp, List);
 
-            NpUninitializeSecurity(Ccb);
+            if (Status != STATUS_PIPE_CONNECTED && Status != STATUS_PIPE_CLOSING)
+                NpUninitializeSecurity(Ccb);
 
             ExReleaseResourceLite(&Ccb->NonPagedCcb->Lock);
         }
