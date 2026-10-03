@@ -221,7 +221,7 @@ double sin(double x)
         return TrigKernelSin(x, 0.0, 0);
     }
     if (ix >= 0x7ff00000)
-        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "sin", x, 0, -NAN, EDOM);
+        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "sin", x, 0, x - x, EDOM);
 
     n = TrigRemPio2(x, y);
     switch (n & 3)
@@ -246,7 +246,7 @@ double cos(double x)
         return TrigKernelCos(x, 0.0);
     }
     if (ix >= 0x7ff00000)
-        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "cos", x, 0, -NAN, EDOM);
+        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "cos", x, 0, x - x, EDOM);
 
     n = TrigRemPio2(x, y);
     switch (n & 3)
@@ -271,7 +271,7 @@ double tan(double x)
         return TrigKernelTan(x, 0.0, 0);
     }
     if (ix >= 0x7ff00000)
-        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "tan", x, 0, -NAN, EDOM);
+        return isnan(x) ? x - x : __acrt_report_math_error(_DOMAIN, "tan", x, 0, x - x, EDOM);
 
     n = TrigRemPio2(x, y);
     return TrigKernelTan(y[0], y[1], n & 1);

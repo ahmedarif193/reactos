@@ -33,6 +33,6 @@ double asin(double __x)
     if (isnan(__x))
         return __x + __x;
     if (__x > 1.0 || __x < -1.0)
-        return __acrt_report_math_error(_DOMAIN, "asin", __x, 0, -NAN, EDOM);
+        return __acrt_report_math_error(_DOMAIN, "asin", __x, 0, (__x - __x) / (__x - __x), EDOM);
     return atan2(__x, sqrt(1.0 - __x * __x));
 }

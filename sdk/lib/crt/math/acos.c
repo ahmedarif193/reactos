@@ -33,6 +33,6 @@ double acos(double __x)
     if (isnan(__x))
         return __x + __x;
     if (__x > 1.0 || __x < -1.0)
-        return __acrt_report_math_error(_DOMAIN, "acos", __x, 0, -NAN, EDOM);
+        return __acrt_report_math_error(_DOMAIN, "acos", __x, 0, (__x - __x) / (__x - __x), EDOM);
     return atan2(sqrt(1.0 - __x * __x), __x);
 }

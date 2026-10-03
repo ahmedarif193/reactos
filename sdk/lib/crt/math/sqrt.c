@@ -28,7 +28,7 @@ sqrt(
     }
     else if (x < 0.0)
     {
-        return __acrt_report_math_error(_DOMAIN, "sqrt", x, 0, -NAN, EDOM);
+        return __acrt_report_math_error(_DOMAIN, "sqrt", x, 0, (x - x) / (x - x), EDOM);
     }
 
     /* Convert into a 64  bit integer */

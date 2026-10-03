@@ -30,9 +30,9 @@ double log10(double x)
     int k = 0;
 
     if ((ix << 1) == 0)
-        return __acrt_report_math_error(_SING, "log10", x, 0, -INFINITY, ERANGE);
+        return __acrt_report_math_error(_SING, "log10", x, 0, -1.0 / (x * x), ERANGE);
     if (ix >> 63)
-        return isnan(x) ? x + x : __acrt_report_math_error(_DOMAIN, "log10", x, 0, -NAN, EDOM);
+        return isnan(x) ? x + x : __acrt_report_math_error(_DOMAIN, "log10", x, 0, (x - x) / (x - x), EDOM);
     if (ix >= 0x7ff0000000000000ULL)
         return x + x;
     if (ix < 0x0010000000000000ULL)
