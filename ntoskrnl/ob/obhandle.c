@@ -2493,6 +2493,77 @@ ObKillProcess(IN PEPROCESS Process)
     ExDestroyHandleTable(HandleTable, NULL);
 }
 
+static
+BOOLEAN
+ObpReplaceSourceHandle(
+    _In_ PEPROCESS SourceProcess,
+    _In_ HANDLE SourceHandle,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _In_ POBJECT_HEADER ObjectHeader,
+    _In_ PHANDLE_TABLE_ENTRY NewHandleEntry)
+{
+    POBJECT_TYPE ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
+    PHANDLE_TABLE_ENTRY HandleEntry;
+    PHANDLE_TABLE HandleTable;
+    PEPROCESS Owner;
+    HANDLE Handle;
+    KAPC_STATE ApcState;
+    KIRQL CalloutIrql;
+    ACCESS_MASK GrantedAccess;
+    BOOLEAN Replaced = FALSE;
+    BOOLEAN ProcessTable = FALSE;
+
+    if (ObpIsKernelHandle(SourceHandle, PreviousMode))
+    {
+        Owner = PsInitialSystemProcess;
+        HandleTable = ObpKernelHandleTable;
+        Handle = ObKernelHandleToHandle(SourceHandle);
+    }
+    else
+    {
+        Owner = SourceProcess;
+        HandleTable = ObReferenceProcessHandleTable(SourceProcess);
+        if (!HandleTable) return FALSE;
+        ProcessTable = TRUE;
+        Handle = SourceHandle;
+    }
+
+    GrantedAccess = NewHandleEntry->GrantedAccess;
+    if (NewHandleEntry->ObAttributes & OBJ_PROTECT_CLOSE) GrantedAccess |= ObpAccessProtectCloseBit;
+
+    KeStackAttachProcess(&Owner->Pcb, &ApcState);
+    KeEnterCriticalRegion();
+    HandleEntry = ExMapHandleToPointer(HandleTable, Handle);
+    if (HandleEntry)
+    {
+        if ((ObpGetHandleObject(HandleEntry) == ObjectHeader) &&
+            !(HandleEntry->GrantedAccess & ObpAccessProtectCloseBit))
+        {
+            Replaced = TRUE;
+            if (ObjectType->TypeInfo.OkayToCloseProcedure)
+            {
+                ObpCalloutStart(&CalloutIrql);
+                Replaced = ObjectType->TypeInfo.OkayToCloseProcedure(Owner, &ObjectHeader->Body, SourceHandle, PreviousMode);
+                ObpCalloutEnd(CalloutIrql, "NtDuplicateObject", ObjectType, &ObjectHeader->Body);
+            }
+
+            if (Replaced)
+            {
+                HandleEntry->GrantedAccess = GrantedAccess;
+                HandleEntry->ObAttributes = (HandleEntry->ObAttributes & ~(OBJ_INHERIT | OBJ_AUDIT_OBJECT_CLOSE)) |
+                                            (NewHandleEntry->ObAttributes & (OBJ_INHERIT | OBJ_AUDIT_OBJECT_CLOSE));
+            }
+        }
+
+        ExUnlockHandleTableEntry(HandleTable, HandleEntry);
+    }
+    KeLeaveCriticalRegion();
+    KeUnstackDetachProcess(&ApcState);
+
+    if (ProcessTable) ObDereferenceProcessHandleTable(SourceProcess);
+    return Replaced;
+}
+
 NTSTATUS
 NTAPI
 ObDuplicateObject(IN PEPROCESS SourceProcess,
@@ -2520,6 +2591,8 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
     OBJECT_HANDLE_INFORMATION HandleInformation;
     ULONG AuditMask;
     BOOLEAN KernelHandle = FALSE;
+    BOOLEAN WantKernelHandle = (PreviousMode == KernelMode) && (HandleAttributes & OBJ_KERNEL_HANDLE);
+    BOOLEAN Replaced = FALSE;
 
     PAGED_CODE();
     OBTRACE(OB_HANDLE_DEBUG,
@@ -2726,8 +2799,16 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         AttachedToProcess = FALSE;
     }
 
+    if ((Options & DUPLICATE_CLOSE_SOURCE) &&
+        NT_SUCCESS(Status) &&
+        (SourceProcess == TargetProcess) &&
+        (!!ObpIsKernelHandle(SourceHandle, PreviousMode) == WantKernelHandle))
+    {
+        Replaced = ObpReplaceSourceHandle(SourceProcess, SourceHandle, PreviousMode, ObjectHeader, &NewHandleEntry);
+    }
+
     /* Check if we have to close the source handle */
-    if (Options & DUPLICATE_CLOSE_SOURCE)
+    if ((Options & DUPLICATE_CLOSE_SOURCE) && !Replaced)
     {
         /* Attach and close */
         KeStackAttachProcess(&SourceProcess->Pcb, &ApcState);
@@ -2748,6 +2829,14 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         /* Dereference the source object */
         ObDereferenceObject(SourceObject);
         return Status;
+    }
+
+    if (Replaced)
+    {
+        ObpDecrementHandleCount(SourceObject, TargetProcess, ObjectType);
+        ObDereferenceObject(SourceObject);
+        NewHandle = SourceHandle;
+        goto Exit;
     }
 
     if (NewHandleEntry.ObAttributes & OBJ_PROTECT_CLOSE)
@@ -2774,6 +2863,7 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         ObpChargeHandleCachedReferences(HandleTable, NewHandle, ObjectHeader);
     }
 
+Exit:
     /* Mark it as a kernel handle if requested */
     if (KernelHandle && NewHandle)
     {
