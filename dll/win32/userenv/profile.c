@@ -1960,6 +1960,42 @@ cleanup:
 }
 
 
+static
+BOOL
+GetProfileListImagePath(
+    _In_ PCWSTR pszSid,
+    _Out_writes_(cchPath) PWSTR pszPath,
+    _In_ DWORD cchPath)
+{
+    WCHAR szKeyName[MAX_PATH];
+    WCHAR szRawPath[MAX_PATH];
+    HKEY hKey;
+    DWORD dwType, dwSize;
+    LONG lError;
+
+    if (FAILED(StringCchPrintfW(szKeyName, ARRAYSIZE(szKeyName),
+                                L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\%s",
+                                pszSid)))
+    {
+        return FALSE;
+    }
+
+    lError = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szKeyName, 0, KEY_QUERY_VALUE, &hKey);
+    if (lError != ERROR_SUCCESS)
+        return FALSE;
+
+    dwSize = sizeof(szRawPath) - sizeof(WCHAR);
+    lError = RegQueryValueExW(hKey, L"ProfileImagePath", NULL, &dwType, (PBYTE)szRawPath, &dwSize);
+    RegCloseKey(hKey);
+    if (lError != ERROR_SUCCESS || (dwType != REG_SZ && dwType != REG_EXPAND_SZ) || dwSize < sizeof(WCHAR))
+        return FALSE;
+    szRawPath[dwSize / sizeof(WCHAR)] = UNICODE_NULL;
+
+    dwSize = ExpandEnvironmentStringsW(szRawPath, pszPath, cchPath);
+    return (dwSize != 0 && dwSize <= cchPath);
+}
+
+
 BOOL
 WINAPI
 LoadUserProfileW(
@@ -1967,6 +2003,9 @@ LoadUserProfileW(
     _Inout_ LPPROFILEINFOW lpProfileInfo)
 {
     WCHAR szUserHivePath[MAX_PATH];
+    WCHAR szProfileListPath[MAX_PATH];
+    WCHAR szDefaultProfilePath[MAX_PATH];
+    BOOL bProfileListPath = FALSE;
     DWORD dwLength;
     PTOKEN_USER UserSid = NULL;
     UNICODE_STRING SidString = { 0, 0, NULL };
@@ -2028,6 +2067,11 @@ LoadUserProfileW(
             /* Use the caller's specified roaming user profile path */
             StringCbCopyW(szUserHivePath, sizeof(szUserHivePath), lpProfileInfo->lpProfilePath);
         }
+        else if (GetProfileListImagePath(SidString.Buffer, szProfileListPath, ARRAYSIZE(szProfileListPath)))
+        {
+            StringCbCopyW(szUserHivePath, sizeof(szUserHivePath), szProfileListPath);
+            bProfileListPath = TRUE;
+        }
         else
         {
             /* Build a default user profile path */
@@ -2046,7 +2090,28 @@ LoadUserProfileW(
         DPRINT("szUserHivePath: %S\n", szUserHivePath);
 
         /* Create user profile directory if needed */
-        if (GetFileAttributesW(szUserHivePath) == INVALID_FILE_ATTRIBUTES)
+        if (bProfileListPath && GetFileAttributesW(szUserHivePath) == INVALID_FILE_ATTRIBUTES)
+        {
+            if (!CreateDirectoryPath(szProfileListPath, NULL))
+            {
+                DPRINT1("CreateDirectoryPath(%S) failed (Error %lu)\n", szProfileListPath, GetLastError());
+                goto cleanup;
+            }
+
+            dwLength = ARRAYSIZE(szDefaultProfilePath);
+            if (!GetDefaultUserProfileDirectoryW(szDefaultProfilePath, &dwLength))
+            {
+                DPRINT1("GetDefaultUserProfileDirectoryW() failed (Error %lu)\n", GetLastError());
+                goto cleanup;
+            }
+
+            if (!CopyDirectory(szProfileListPath, szDefaultProfilePath))
+            {
+                DPRINT1("CopyDirectory(%S, %S) failed (Error %lu)\n", szProfileListPath, szDefaultProfilePath, GetLastError());
+                goto cleanup;
+            }
+        }
+        else if (GetFileAttributesW(szUserHivePath) == INVALID_FILE_ATTRIBUTES)
         {
             /* Get user sid */
             if (GetTokenInformation(hToken, TokenUser, NULL, 0, &dwLength) ||
