@@ -75,6 +75,7 @@ HANDLE WINAPI CreateFileW (LPCWSTR			lpFileName,
    PVOID EaBuffer = NULL;
    ULONG EaLength = 0;
    BOOLEAN TrailingBackslash;
+   SECURITY_QUALITY_OF_SERVICE Qos;
 
    if (!lpFileName || !lpFileName[0])
    {
@@ -294,6 +295,16 @@ HANDLE WINAPI CreateFileW (LPCWSTR			lpFileName,
 
    if(!(dwFlagsAndAttributes & FILE_FLAG_POSIX_SEMANTICS))
     ObjectAttributes.Attributes |= OBJ_CASE_INSENSITIVE;
+
+   if (dwFlagsAndAttributes & SECURITY_SQOS_PRESENT)
+   {
+      Qos.Length = sizeof(Qos);
+      Qos.ImpersonationLevel = (dwFlagsAndAttributes >> 16) & 0x3;
+      Qos.ContextTrackingMode = (dwFlagsAndAttributes & SECURITY_CONTEXT_TRACKING) ? SECURITY_DYNAMIC_TRACKING
+                                                                                   : SECURITY_STATIC_TRACKING;
+      Qos.EffectiveOnly = (dwFlagsAndAttributes & SECURITY_EFFECTIVE_ONLY) != 0;
+      ObjectAttributes.SecurityQualityOfService = &Qos;
+   }
 
    /* perform the call */
    Status = NtCreateFile (&FileHandle,
