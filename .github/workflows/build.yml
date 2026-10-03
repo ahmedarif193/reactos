@@ -99,6 +99,11 @@ jobs:
         CFG_LOWER=$(echo "${{matrix.config}}" | tr '[:upper:]' '[:lower:]')
         echo "outdir=output-$ENV_NAME-${{matrix.arch}}-$CFG_LOWER" >> "$GITHUB_OUTPUT"
 
+    - name: Build submodules
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        ninja -C ${{steps.configure.outputs.outdir}} submodules
+
     - name: Build images
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
