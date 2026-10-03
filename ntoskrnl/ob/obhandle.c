@@ -2802,7 +2802,7 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
     if ((Options & DUPLICATE_CLOSE_SOURCE) &&
         NT_SUCCESS(Status) &&
         (SourceProcess == TargetProcess) &&
-        (!!ObpIsKernelHandle(SourceHandle, PreviousMode) == WantKernelHandle))
+        (ObpIsKernelHandle(SourceHandle, PreviousMode) == WantKernelHandle))
     {
         Replaced = ObpReplaceSourceHandle(SourceProcess, SourceHandle, PreviousMode, ObjectHeader, &NewHandleEntry);
     }
